@@ -10896,6 +10896,15 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             <span id="pav-3d-hl-group" style="display:none;align-items:center;">
                 <button type="button" id="pav-btn-3d-hiddenline" class="btn btn-default btn-xs" title="透視顯示：切換成線框模式，可見邊線深色、被遮蔽的邊線淺灰，可直接看穿模型內部"><i class="fa fa-cube"></i> 透視</button>
             </span>
+            <!-- 3D 專用：剖面（唯一實作見 resource/js/eg_3d_viewer_tools.js）-->
+            <span id="pav-3d-section-group" style="display:none;align-items:center;gap:3px;">
+                <button type="button" id="pav-btn-3d-section" class="btn btn-default btn-xs" title="剖面模式：沿選定的軸切一刀，只顯示切面的一側，可看到內部中空結構"><i class="fa fa-cut"></i> 剖面</button>
+                <select id="pav-3d-section-axis" class="form-control input-xs" style="display:none;width:48px;height:22px;padding:0 2px;" title="沿哪個軸切">
+                    <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+                </select>
+                <input id="pav-3d-section-pos" type="range" min="0" max="100" value="50" style="display:none;width:90px;vertical-align:middle;" title="拖曳調整剖面位置">
+                <button type="button" id="pav-btn-3d-section-flip" class="btn btn-default btn-xs" style="display:none;" title="翻轉保留側"><i class="fa fa-exchange"></i></button>
+            </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
                 <span id="pav-zoom-label" style="font-size:11px;color:#555;min-width:36px;text-align:center;">100%</span>
@@ -20547,6 +20556,8 @@ var _pav3dColorMode  = false;  // 上色模式開關：開啟時點模型表面�
 var _pav3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重建一份
 var _pav3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
 var _pav3dHLState = null;      // 透視（隱藏線）模式目前的疊加物件狀態，null＝未開啟
+var _pav3dSectionState = null; // 剖面模式目前的狀態，null＝未開啟
+var _pav3dSectionOpts = { axis: 'x', ratio: 0.5, flip: false };
 
 function _pavShowUploadBtn(show) {
     var upLabel = document.querySelector('#partAttachViewModal label[title="上傳附件"]');
@@ -21401,6 +21412,11 @@ function pavSelectFile(idx) {
     if (pav3dHLGroupReset) pav3dHLGroupReset.style.display = 'none';
     _pav3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
     $('#pav-btn-3d-hiddenline').removeClass('btn-info');
+    var pav3dSectionGroupReset = document.getElementById('pav-3d-section-group');
+    if (pav3dSectionGroupReset) pav3dSectionGroupReset.style.display = 'none';
+    _pav3dSectionState = null;
+    $('#pav-btn-3d-section').removeClass('btn-info');
+    $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').hide();
     // 報價附件唯讀：隱藏刪除/編輯鈕
     var isQuote = file.source === 'quote';
     var btnDel  = document.getElementById('pav-btn-delete');
@@ -21472,6 +21488,11 @@ function pavSelectFile(idx) {
         $('#pav-btn-3d-hiddenline').removeClass('btn-info');
         var pav3dHLGroup = document.getElementById('pav-3d-hl-group');
         if (pav3dHLGroup) pav3dHLGroup.style.display = 'inline-flex';
+        _pav3dSectionState = null;
+        $('#pav-btn-3d-section').removeClass('btn-info');
+        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').hide();
+        var pav3dSectionGroup = document.getElementById('pav-3d-section-group');
+        if (pav3dSectionGroup) pav3dSectionGroup.style.display = 'inline-flex';
         preview.style.display = 'block';
         preview.style.position = 'relative';
         preview.innerHTML = '<div id="pav-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>'
@@ -21727,6 +21748,37 @@ $(document).on('click', '#pav-btn-3d-hiddenline', function() {
         if (_pav3dHLState) $(this).addClass('btn-info');
         else alert('這個模型沒有偵測到可顯示的邊線（例如完全平滑的曲面），無法切換透視顯示');
     }
+});
+
+// ── 3D 剖面（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+$(document).on('click', '#pav-btn-3d-section', function() {
+    if (!_pav3dViewer) return;
+    if (_pav3dSectionState) {
+        EG3DTools.clearSectionMode(_pav3dViewer, _pav3dSectionState);
+        _pav3dSectionState = null;
+        $(this).removeClass('btn-info');
+        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').hide();
+    } else {
+        _pav3dSectionState = EG3DTools.setSectionMode(_pav3dViewer, _pav3dSectionOpts);
+        if (_pav3dSectionState) {
+            $(this).addClass('btn-info');
+            $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').css('display', 'inline-block');
+        } else {
+            alert('這個模型量不出包圍盒範圍，無法切換剖面顯示');
+        }
+    }
+});
+$(document).on('change', '#pav-3d-section-axis', function() {
+    _pav3dSectionOpts.axis = $(this).val();
+    if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
+});
+$(document).on('input', '#pav-3d-section-pos', function() {
+    _pav3dSectionOpts.ratio = (+$(this).val()) / 100;
+    if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
+});
+$(document).on('click', '#pav-btn-3d-section-flip', function() {
+    _pav3dSectionOpts.flip = !_pav3dSectionOpts.flip;
+    if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
 });
 // 批圖編輯器（3D 專用）：截圖目前畫面（含目前上色結果）寄進 localStorage 帶入新分頁，
 // 與 bom_viewer.php 共用同一套機制（見 eg_3d_viewer_tools.js）。

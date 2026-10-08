@@ -898,6 +898,88 @@ var EG3DTools = (function () {
         viewer.Render();
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 剖面（切面）：沿 X/Y/Z 任一軸切一刀，只保留切面的一側（stretch goal，
+    // 使用者原話「如果還可以就繼續做」）
+    // ══════════════════════════════════════════════════════════════════════
+    // 查證發現 o3dv.min.js 打包的 Three.js 內建完整的材質切平面（material.clippingPlanes）
+    // 支援，裁切運算整段在標準 shader chunk 裡（UNION_CLIPPING_PLANES／NUM_CLIPPING_PLANES），
+    // 不需要自己刻 shader。更重要的是**不需要全域 THREE.Plane 建構子**——內部套用切平面時
+    // 是呼叫 `scratchPlane.copy(materialClippingPlanes[i])`，Plane.copy() 只會讀來源物件的
+    // `.normal`（再丟給 Vector3.copy 讀 .x/.y/.z）與 `.constant` 兩個屬性，純粹鴨子定型，
+    // 所以傳一個「長得像」的陽春物件 `{normal:{x,y,z}, constant:N}` 完全可行（已實測確認：
+    // 一個三角錐模型乾淨被切開，不需要借任何既有實例的建構子）。
+    // 限制（已知、刻意不做）：這是單純裁切，不是「封頂」剖面——切開的剖面是鏤空的，看得
+    // 到內部中空結構，但不會在切口處畫一個實心色塊；真正的封頂需要額外的模板緩衝兩階段
+    // 算法，工時與風險都高出一截，鏤空版已足以達成「看到內部」的實際需求。
+    //
+    // ★符號陷阱（已實測踩到、務必記住）：Three.js 的 Plane 不是「normal·point = constant」
+    // 這種直覺寫法，而是「normal·point + constant = 0」——也就是 **constant 的符號跟直覺
+    // 相反**。一開始用 `constant = planePos` 在 X／Z 軸測試「看起來」完全正常，是因為這兩
+    // 軸的包圍盒剛好左右對稱（中點為 0，0 跟 -0 沒有差別，符號錯了也看不出來）；一換成
+    // Y 軸（包圍盒是 0~34.9，不對稱）就整個不會動——这是由 50%、extreme 值一路二分搜尋
+    // 才揪出來的，純看程式碼或 shader 原始碼推不出來。正確公式是 `constant = -planePos
+    // * normalSign`（normalSign 即 normal[axis] 的 ±1），兩個方向都已實測驗證正確。
+    function setSectionMode(embeddedViewer, opts) {
+        opts = opts || {};
+        var axis = opts.axis || 'x';
+        var ratio = opts.ratio == null ? 0.5 : opts.ratio;
+        var flip = !!opts.flip;
+        var viewer = embeddedViewer.GetViewer();
+        var mm = viewer.mainModel;
+        var bbox = mm.GetBoundingBox(function () { return true; });
+        if (!bbox) return null;
+        var min = bbox.min[axis], max = bbox.max[axis];
+        var planePos = min + (max - min) * ratio;
+        var normal = { x: 0, y: 0, z: 0 };
+        var normalSign = flip ? -1 : 1;
+        normal[axis] = normalSign;
+        var constant = -planePos * normalSign;   // Three.js Plane 慣例：normal·point + constant = 0（見上方註解）
+        var plane = { normal: normal, constant: constant };
+
+        viewer.renderer.localClippingEnabled = true;
+        var touchedMats = [];
+        mm.EnumerateMeshes(function (o) {
+            var mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(function (mt) {
+                mt.clippingPlanes = [plane];
+                mt.needsUpdate = true;
+                touchedMats.push(mt);
+            });
+        });
+        viewer.Render();
+        return { touchedMats: touchedMats, plane: plane, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
+    }
+    // 調整現有剖面（換軸／拖曳位置／翻轉保留側）不必重新掃描全部 mesh，但**一定要建一個
+    // 全新的 plane 物件、重新指派整個 clippingPlanes 陣列**，不可以沿用舊物件只改屬性值——
+    // 已實測踩到這個坑：Three.js 的 WebGLClipping 內部對 clippingState 有快取機制，單純
+    // mutate 同一個 plane 物件的 normal/constant（即使材質 needsUpdate=true）在某些情況下
+    // 畫面完全不會更新（X 軸測試正常，切到 Y 軸後滑桿/切換卻看起來像沒反應，一度以為是
+    // change 事件沒綁好，查過 _bom3dSectionOpts 確認狀態其實有正確更新，問題出在渲染端
+    // 讀到的還是舊的裁切面）；改成每次都發新物件＋重新指派陣列參照後才穩定重現切面。
+    function updateSectionMode(embeddedViewer, state, opts) {
+        if (!state || !state.bbox) return;
+        opts = opts || {};
+        var axis = opts.axis || 'x';
+        var ratio = opts.ratio == null ? 0.5 : opts.ratio;
+        var flip = !!opts.flip;
+        var min = state.bbox.min[axis], max = state.bbox.max[axis];
+        var planePos = min + (max - min) * ratio;
+        var normal = { x: 0, y: 0, z: 0 };
+        var normalSign = flip ? -1 : 1;
+        normal[axis] = normalSign;
+        var constant = -planePos * normalSign;   // 同 setSectionMode：Three.js Plane 慣例 normal·point + constant = 0
+        var plane = { normal: normal, constant: constant };
+        state.plane = plane;
+        state.touchedMats.forEach(function (mt) { mt.clippingPlanes = [plane]; mt.needsUpdate = true; });
+        embeddedViewer.GetViewer().Render();
+    }
+    function clearSectionMode(embeddedViewer, state) {
+        if (!embeddedViewer || !state) return;
+        (state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.needsUpdate = true; });
+        embeddedViewer.GetViewer().Render();
+    }
+
     function escHtml3d(s) {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
@@ -915,6 +997,9 @@ var EG3DTools = (function () {
         MeasureState: MeasureState,
         attachMeasureInteraction: attachMeasureInteraction,
         setHiddenLineMode: setHiddenLineMode,
-        clearHiddenLineMode: clearHiddenLineMode
+        clearHiddenLineMode: clearHiddenLineMode,
+        setSectionMode: setSectionMode,
+        updateSectionMode: updateSectionMode,
+        clearSectionMode: clearSectionMode
     };
 })();
