@@ -124,6 +124,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         <div class="it"><div class="lb">最近一次備份</div><div class="vl" style="font-size:14px;"><span id="stLast">—</span></div></div>
         <div class="it"><div class="lb">雲端自動 push</div><div class="vl" style="font-size:14px;"><span id="stPush">—</span></div></div>
         <div class="it"><div class="lb">NAS 複製路徑</div><div class="vl" style="font-size:12px;word-break:break-all;max-width:260px;"><span id="stNas">—</span></div></div>
+        <div class="it"><div class="lb">NAS 複本保留</div><div class="vl"><span id="stNasRetain">—</span></div></div>
       </div>
       <div id="errNote" class="err-note" style="display:none;"></div>
     </div>
@@ -390,6 +391,8 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
     <div class="form-inline-row"><label>工作區保留份數</label><input type="number" min="1" max="200" id="cfKeep" class="form-control" style="width:120px;">
       <span style="font-size:12px;color:#9a7b4f;">超過的舊備份會從工作區移除，但仍留在 Git 歷史可還原</span></div>
     <div class="form-inline-row"><label>NAS 複製路徑</label><input type="text" id="cfNas" class="form-control" style="flex:1;min-width:200px;" placeholder="例：\\excellentnas\資料夾 或 Z:\DBbackup（留空=不複製）"></div>
+    <div class="form-inline-row"><label>NAS 複本保留天數</label><input type="number" min="0" max="3650" id="cfNasRetain" class="form-control" style="width:120px;">
+      <span style="font-size:12px;color:#9a7b4f;">每次備份後自動清掉 NAS 複本裡超過這個天數的舊檔（0=不清理）；只會動本模組產生的 EGsystem_開頭檔案，同資料夾其他檔案不受影響</span></div>
     <div class="form-inline-row"><label>雲端自動 push</label>
       <label style="min-width:auto;"><input type="checkbox" id="cfPush"> 每次備份後自動 push 到私有 GitHub</label></div>
     <hr>
@@ -507,10 +510,11 @@ function loadList(){
     $('#stKeep').text(c.keep_count);
     $('#stPush').text(c.auto_push?'開啟':'關閉');
     $('#stNas').text(c.nas_path||'（未設定）');
+    $('#stNasRetain').text(c.nas_retain_days>0?(c.nas_retain_days+' 天'):'不清理');
     if(c.last_error){ $('#errNote').show().html('<i class="fa fa-exclamation-triangle"></i> 上次錯誤：'+esc(c.last_error)); } else { $('#errNote').hide(); }
     // settings modal 帶入
     $('#cfInterval').val(c.interval_days); $('#cfKeep').val(c.keep_count);
-    $('#cfNas').val(c.nas_path||''); $('#cfPush').prop('checked',!!c.auto_push);
+    $('#cfNas').val(c.nas_path||''); $('#cfNasRetain').val(c.nas_retain_days); $('#cfPush').prop('checked',!!c.auto_push);
     $('#pwTableSet').html(c.pw_table_set?'<span style="color:#4d6b2e;">已設定</span>':'<span style="color:#a3341f;">未設定（無法還原）</span>');
     $('#pwPartialSet').html(c.pw_partial_set?'<span style="color:#4d6b2e;">已設定</span>':'<span style="color:#a3341f;">未設定</span>');
 
@@ -565,7 +569,7 @@ $('#btnReload').on('click', loadList);
 function openSettings(){ $('#pwTable').val(''); $('#pwPartial').val(''); $('#settingsModal').modal('show'); }
 $('#btnSaveSettings').on('click', function(){
   $.post(API, {action:'save_settings', interval_days:$('#cfInterval').val(), keep_count:$('#cfKeep').val(),
-    nas_path:$('#cfNas').val(), auto_push:$('#cfPush').is(':checked')?'1':'0'}, function(res){
+    nas_path:$('#cfNas').val(), nas_retain_days:$('#cfNasRetain').val(), auto_push:$('#cfPush').is(':checked')?'1':'0'}, function(res){
     alert(res.message||''); if(res.success) loadList();
   },'json');
 });

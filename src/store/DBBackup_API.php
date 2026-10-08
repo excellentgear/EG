@@ -77,6 +77,7 @@ switch ($action) {
                 'interval_days' => (int)($cfg['interval_days'] ?? 7),
                 'keep_count'    => (int)($cfg['keep_count'] ?? 10),
                 'nas_path'      => $cfg['nas_path'] ?? '',
+                'nas_retain_days'=> (int)($cfg['nas_retain_days'] ?? 60),
                 'auto_push'     => ($cfg['auto_push'] ?? '1') === '1',
                 'last_error'    => $cfg['last_error'] ?? '',
                 'pw_table_set'  => !empty($cfg['pw_table_restore']),
@@ -111,6 +112,7 @@ switch ($action) {
         $interval = max(1, min(365, (int)($_POST['interval_days'] ?? 7)));
         $keep     = max(1, min(200, (int)($_POST['keep_count'] ?? 10)));
         $nas      = trim((string)($_POST['nas_path'] ?? ''));
+        $nasRetain= max(0, min(3650, (int)($_POST['nas_retain_days'] ?? 60)));
         $push     = (($_POST['auto_push'] ?? '1') === '1') ? '1' : '0';
         // NAS 路徑若有填，用「實際寫入探測檔」驗證（is_writable 在 Windows UNC 網路共享上會誤報，不可信）
         $nasWarn = '';
@@ -129,6 +131,7 @@ switch ($action) {
         eg_bk_cfg_set($pdo, 'interval_days', (string)$interval, $by);
         eg_bk_cfg_set($pdo, 'keep_count',    (string)$keep, $by);
         eg_bk_cfg_set($pdo, 'nas_path',      $nas, $by);
+        eg_bk_cfg_set($pdo, 'nas_retain_days', (string)$nasRetain, $by);
         eg_bk_cfg_set($pdo, 'auto_push',     $push, $by);
         out(['success'=>true,'message'=>'設定已儲存' . $nasWarn]);
     }

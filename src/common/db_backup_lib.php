@@ -224,6 +224,9 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
                 if (!@copy($absPath, $nasDir . DIRECTORY_SEPARATOR . $filename)) $nasNote = 'NAS 複製失敗';
                 // 前置腳本一起複製；失敗不影響主備份（沒有它只是新機器要多打兩行 SQL）
                 if ($setupPath) @copy($setupPath, $nasDir . DIRECTORY_SEPARATOR . $filename . '.setup.sql');
+                // 清掉 NAS 複本裡過舊的（只動 EGsystem_*.sql 命名的備份檔，不碰同資料夾裡其他人放的東西）
+                $retainDays = (int)eg_bk_cfg_get($pdo, 'nas_retain_days', '60');
+                if ($retainDays > 0) eg_bk_nas_cleanup($nasDir, $retainDays);
             } else {
                 $nasNote = 'NAS 路徑不存在';
             }
@@ -278,6 +281,27 @@ function eg_bk_prune(PDO $pdo): void {
         eg_bk_git(['commit', '-m', 'prune: 保留最新 ' . $keep . ' 個備份']);
         if (eg_bk_cfg_get($pdo, 'auto_push', '1') === '1') eg_bk_git(['push', 'origin', 'HEAD']);
     } catch (Throwable $e) { /* prune 失敗不影響備份本身 */ }
+}
+
+// ── 清掉 NAS 複本裡過舊的備份檔（只認檔名符合 EGsystem_YYYYMMDD_HHMMSS(.sql|.sql.setup.sql) 的，
+//    不動同資料夾裡其他人放的任何東西；判斷用「檔名裡的日期」不用檔案系統的修改時間，
+//    因為搬家/複製常把 mtime 改成搬動當下）──
+function eg_bk_nas_cleanup(string $nasDir, int $retainDays): array {
+    $deleted = []; $kept = 0;
+    try {
+        if ($retainDays <= 0 || !@is_dir($nasDir)) return ['deleted'=>$deleted,'kept'=>$kept];
+        $cutoff = time() - $retainDays * 86400;
+        $files = glob(rtrim($nasDir, "\\/") . DIRECTORY_SEPARATOR . 'EGsystem_*.sql*') ?: [];
+        foreach ($files as $f) {
+            $base = basename($f);
+            if (!preg_match('/^EGsystem_(\d{8})_(\d{6})\.sql(\.setup\.sql)?$/', $base, $m)) continue; // 不是本模組命名的檔一律不碰
+            $ts = strtotime($m[1] . $m[2]); // YYYYMMDDHHMMSS
+            if ($ts === false) continue;
+            if ($ts < $cutoff) { if (@unlink($f)) $deleted[] = $base; }
+            else $kept++;
+        }
+    } catch (Throwable $e) { /* 清理失敗不影響備份本身 */ }
+    return ['deleted'=>$deleted,'kept'=>$kept];
 }
 
 // ── 取得某筆備份的 SQL 檔路徑（工作區有就用；否則從 git 歷史還原到暫存檔）──
