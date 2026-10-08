@@ -62,13 +62,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
            標頭：單號+日期（左）／廠商／電話傳真／聯絡人／分類／詢價人（依序往右）／操作鈕（最右）；
            分隔線下方是項目表（料號/規格/數量/回填價格）；最下方是備註（可切換顯示）。 */
         #gList { display:flex; flex-direction:column; gap:8px; }
-        #gList.compact { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; align-items:start; }
-        #gList.compact .iq-doc-card { font-size:12px; }
-        #gList.compact .iq-doc-hd { padding:6px 8px; gap:7px; }
-        #gList.compact .iq-doc-no .l1 { font-size:12px; }
-        #gList.compact .iq-doc-vendor { font-size:12px; max-width:110px; }
-        #gList.compact table.iq-doc-items th, #gList.compact table.iq-doc-items td { padding:3px 6px; font-size:11px; }
-        #gList.compact .iq-doc-ops .iq-op { padding:2px 6px; font-size:11px; }
         #gList.hide-note .iq-doc-note { display:none; }
         .iq-doc-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; overflow:visible; }
         .iq-doc-hd { display:flex; align-items:center; gap:14px; padding:8px 12px; flex-wrap:wrap; }
@@ -101,6 +94,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         table.iq-doc-items th { background:#FDF3E3; color:#8a6d45; font-weight:normal; font-size:11.5px; padding:4px 10px; text-align:left; }
         table.iq-doc-items th.num, table.iq-doc-items td.num { text-align:right; }
         table.iq-doc-items td { padding:5px 10px; border-top:1px solid #F8F1E3; }
+        /* 單張詢價單項目超過4筆：料號/規格/數量/價格合成一個區塊，改三欄排列、區塊內間距縮短 */
+        .iq-item-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:5px 8px; padding:7px 12px; }
+        .iq-item-block { border:1px solid #F2EAD9; border-radius:4px; padding:4px 7px; background:#FDFBF6; font-size:11.5px; line-height:1.45; }
+        .iq-item-block .ib-part { font-weight:bold; color:#5b3a1e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .iq-item-block .ib-spec { color:#8a6d45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .iq-item-block .ib-row { display:flex; justify-content:space-between; gap:6px; color:#5b3a1e; }
+        .iq-item-block .ib-row .ib-price { font-weight:bold; }
         .iq-doc-note { padding:6px 12px; font-size:12px; color:#8a6d45; border-top:1px solid #F2EAD9; }
         .iq-doc-note:empty { display:none; }
         .iq-doc-fillinfo { padding:4px 12px 0; font-size:11px; color:#999; }
@@ -112,8 +112,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .iq-op.warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .iq-op.warm:hover { background:#d98a33; }
         .iq-badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; }
-        .iq-badge.follow { display:none; }
-        .iq-badge.detach { background:#F3EADB; color:#8a6d45; }
         .iq-badge.open { background:#F7E0BD; color:#8A5A2B; }
         .iq-badge.replied { background:#E7F0E3; color:#4a7a3a; }
         .iq-badge.void { background:#EFE7D8; color:#999; }
@@ -529,13 +527,21 @@ function priceDisp(v){ return (v!=null && v!=='') ? money(v) : '—'; }
 
 function renderList(){
     var $list = $('#gList').empty();
-    var flat = [];
-    GROUPS.forEach(function(g){ (g.docs||[]).forEach(function(d){ flat.push({d:d, g:g}); }); });
-    if (!flat.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價單</div>'); $('#pager').empty(); return; }
-    $list.toggleClass('compact', flat.length > 4);
-    var total = flat.length, pages = Math.max(1, Math.ceil(total/PSIZE));
+    // 同一個詢價案（母單）底下的子單一定要排在一起，分頁不可把它們拆到兩頁去——
+    // 逐案累加，這一案整批放不下才翻頁（單一案子單數超過一頁容量時仍整批放同一頁，不切）。
+    var pagesArr = [], curPage = [], curCount = 0;
+    GROUPS.forEach(function(g){
+        var docs = g.docs || [];
+        if (!docs.length) return;
+        if (curCount > 0 && curCount + docs.length > PSIZE) { pagesArr.push(curPage); curPage = []; curCount = 0; }
+        docs.forEach(function(d){ curPage.push({d:d, g:g}); });
+        curCount += docs.length;
+    });
+    if (curPage.length) pagesArr.push(curPage);
+    if (!pagesArr.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價單</div>'); $('#pager').empty(); return; }
+    var pages = pagesArr.length;
     if (PAGE > pages) PAGE = pages;
-    var slice = flat.slice((PAGE-1)*PSIZE, PAGE*PSIZE);
+    var slice = pagesArr[PAGE-1] || [];
     slice.forEach(function(x){ $list.append(renderDocCard(x.d, x.g)); });
     var pg = $('#pager').empty();
     for (var i=1;i<=pages;i++){ (function(i){ var b=$('<button>'+i+'</button>').toggleClass('on', i===PAGE).on('click', function(){ PAGE=i; renderList(); }); pg.append(b); })(i); }
@@ -560,11 +566,12 @@ function renderDocCard(d, g){
     var hd = $('<div class="iq-doc-hd"></div>');
     hd.append('<div class="iq-doc-no"><div class="l1">'+esc(d.doc_no)+'</div><div class="l2">'+esc(egFmtDate(g.inquiry_date))+'</div></div>');
     hd.append('<div class="iq-doc-vendor" title="'+esc(d.vendor_name||'')+'">'+esc(d.vendor_name||'')+'</div>');
-    hd.append('<div class="iq-doc-telfax"><div class="l1">'+esc(d.contact_phone||'')+'</div><div class="l2">'+esc(d.contact_fax||'')+'</div></div>');
+    var telLine = d.contact_phone ? ('TEL：'+esc(d.contact_phone)) : '';
+    var faxLine = d.contact_fax ? ('FAX：'+esc(d.contact_fax)) : '';
+    hd.append('<div class="iq-doc-telfax"><div class="l1">'+telLine+'</div><div class="l2">'+faxLine+'</div></div>');
     hd.append('<div class="iq-doc-contact">'+esc(d.contact_person||'')+'</div>');
     hd.append('<span class="iq-doc-cat">'+DEPT_LABEL[g.source_dept]+'</span>');
     hd.append('<div class="iq-doc-who">'+esc(g.requester_name)+'</div>');
-    if (!d.follow_parent) hd.append('<span class="iq-badge detach">已脫離母單</span>');
     hd.append('<span class="iq-badge '+d.status+'">'+({open:'等待報價',replied:'已回覆',void:'不再使用'}[d.status]||d.status)+'</span>');
 
     var ops = $('<div class="iq-doc-ops"></div>');
@@ -592,18 +599,33 @@ function renderDocCard(d, g){
     card.append(hd);
     card.append('<div class="iq-doc-divider"></div>');
 
-    var tbl = $('<table class="iq-doc-items"></table>');
-    tbl.append('<thead><tr><th>料號</th><th>規格</th><th class="num">數量</th><th class="num">回填價格</th></tr></thead>');
-    var tb = $('<tbody></tbody>').appendTo(tbl);
-    (d.items||[]).forEach(function(it){
-        var row = $('<tr></tr>');
-        row.append('<td>'+esc(it.part_no_text || (it.bom?('BOM:'+it.bom):'（未填料號）'))+'</td>');
-        row.append('<td>'+esc(it.spec_text||'')+'</td>');
-        row.append('<td class="num">'+qtyDisp(it.qty)+'</td>');
-        row.append('<td class="num" title="'+esc(it.vendor_note||'')+'">'+priceDisp(it.unit_price)+'</td>');
-        tb.append(row);
-    });
-    card.append(tbl);
+    var items = d.items || [];
+    if (items.length > 4) {
+        // 項目超過4筆：料號/規格/數量/價格合成一個區塊，改三欄排列、區塊內間距縮短（使用者明確要求：
+        // 這是「單張詢價單的項目」超過4筆才切換，不是詢價單本身的數量）
+        var grid = $('<div class="iq-item-grid"></div>');
+        items.forEach(function(it){
+            var block = $('<div class="iq-item-block"></div>');
+            block.append('<div class="ib-part">'+esc(it.part_no_text || (it.bom?('BOM:'+it.bom):'（未填料號）'))+'</div>');
+            block.append('<div class="ib-spec">'+esc(it.spec_text||'')+'</div>');
+            block.append('<div class="ib-row"><span>'+qtyDisp(it.qty)+'</span><span class="ib-price" title="'+esc(it.vendor_note||'')+'">'+priceDisp(it.unit_price)+'</span></div>');
+            grid.append(block);
+        });
+        card.append(grid);
+    } else {
+        var tbl = $('<table class="iq-doc-items"></table>');
+        tbl.append('<thead><tr><th>料號</th><th>規格</th><th class="num">數量</th><th class="num">回填價格</th></tr></thead>');
+        var tb = $('<tbody></tbody>').appendTo(tbl);
+        items.forEach(function(it){
+            var row = $('<tr></tr>');
+            row.append('<td>'+esc(it.part_no_text || (it.bom?('BOM:'+it.bom):'（未填料號）'))+'</td>');
+            row.append('<td>'+esc(it.spec_text||'')+'</td>');
+            row.append('<td class="num">'+qtyDisp(it.qty)+'</td>');
+            row.append('<td class="num" title="'+esc(it.vendor_note||'')+'">'+priceDisp(it.unit_price)+'</td>');
+            tb.append(row);
+        });
+        card.append(tbl);
+    }
 
     if (d.price_filled_at) {
         card.append('<div class="iq-doc-fillinfo">回填：'+esc(d.price_filled_by_name||'')+'　'+esc(egFmtDate(d.price_filled_at))+'</div>');
