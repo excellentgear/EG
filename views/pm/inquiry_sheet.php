@@ -127,6 +127,30 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .item-del { color:#DD5138; cursor:pointer; }
         .vendor-box { border:1px solid #D8BE93; border-radius:4px; max-height:220px; overflow:auto; padding:6px; background:#fff; }
         .vendor-box label { display:block; font-weight:normal; font-size:13px; margin:2px 0; cursor:pointer; }
+        .vendor-box .vi-proc { color:#999; font-size:11.5px; }
+        .iq-selvendor { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; min-height:0; }
+        .iq-selvendor:empty { display:none; }
+        .iq-selvendor .chip { display:inline-flex; align-items:center; gap:5px; background:#F0A24B; color:#fff;
+            border-radius:11px; padding:2px 6px 2px 11px; font-size:12px; }
+        .iq-selvendor .chip .x { cursor:pointer; opacity:.85; font-weight:bold; }
+        .iq-selvendor .chip .x:hover { opacity:1; }
+        /* 項目列的 BOM/製程綁定 */
+        td.bom-cell { min-width:110px; }
+        .bom-bind-btn { font-size:11px; padding:3px 7px; border-radius:3px; border:1px solid #D8BE93; background:#fff; color:#8A5A2B; cursor:pointer; }
+        .bom-bind-btn:hover { background:#F7E0BD; }
+        .bom-bound-tag { font-size:11px; line-height:1.5; color:#5b3a1e; text-align:left; }
+        .bom-bound-tag b { color:#8A5A2B; }
+        .bom-bound-tag .x { color:#DD5138; cursor:pointer; margin-left:4px; }
+        .part-link { color:#b5762a; text-decoration:underline; cursor:pointer; }
+        .part-link:hover { color:#8A5A2B; }
+        /* BOM 綁定挑選跳窗 */
+        .bom-pick-step { margin-bottom:10px; }
+        .bom-proc-row { display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid #EADFC8; border-radius:5px;
+            margin-bottom:5px; cursor:pointer; font-size:13px; }
+        .bom-proc-row:hover { background:#FDF3E3; }
+        .bom-proc-row .nm { font-weight:bold; color:#5b3a1e; width:90px; flex:none; }
+        .bom-proc-row .sp { flex:1; color:#777; font-size:12px; }
+        .bom-proc-row .sg { font-size:10.5px; padding:1px 7px; border-radius:9px; background:#E7F0E3; color:#4a7a3a; flex:none; }
         .ac-list { position:fixed; z-index:9999; background:#fff; border:1px solid #D8BE93; border-radius:4px; box-shadow:0 4px 14px rgba(0,0,0,.2);
             max-height:220px; overflow:auto; font-size:12.5px; display:none; text-align:left; }
         .ac-list div { padding:5px 9px; cursor:pointer; }
@@ -195,22 +219,24 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <div style="margin-top:10px;">
             <label>綁定對象（選填，可之後再補）</label>
             <div style="display:flex;gap:8px;align-items:center;">
-                <select id="gBindType" style="width:120px;"><option value="">不綁定</option><option value="bom">BOM</option><option value="purchase_request">請購單</option></select>
+                <select id="gBindType" style="width:120px;"><option value="">不綁定</option><option value="purchase_request">請購單</option></select>
                 <input type="text" id="gBindKw" placeholder="輸入關鍵字搜尋…" style="flex:1;" disabled>
                 <span id="gBindTag" style="display:none;" class="iq-bindtag"></span>
                 <button type="button" id="gBindClear" class="btn" style="display:none;height:32px;">清除</button>
             </div>
+            <div class="iq-hint">料號的 BOM／製程綁定改在下方逐項目設定（一張詢價單可以同時問好幾張不同 BOM）。</div>
         </div>
         <div style="margin-top:12px;">
             <label>詢價項目</label>
             <table class="item-tbl" id="gItemTbl">
-                <thead><tr><th style="width:26px;">項次</th><th>產品編號</th><th>規格</th><th style="width:90px;">數量</th><th style="width:30px;"></th></tr></thead>
+                <thead><tr><th style="width:26px;">項次</th><th id="gBomColHead" style="width:120px;display:none;">BOM／製程</th><th>產品編號</th><th>規格</th><th style="width:90px;">數量</th><th style="width:30px;"></th></tr></thead>
                 <tbody data-eg-row-add="gItemAdd" data-eg-row-del="gItemDel"></tbody>
             </table>
             <div class="iq-hint" id="gItemHint"></div>
         </div>
         <div id="gVendorWrap" style="margin-top:12px;">
             <label>廠商（可多選，建立後自動展開成多張詢價單）</label>
+            <div class="iq-selvendor" id="gVendorSel"></div>
             <div class="iq-cat-wrap" id="gVendorCats"></div>
             <input type="text" id="gVendorKw" placeholder="輸入廠商名稱或代號篩選…" style="margin-bottom:6px;">
             <div class="vendor-box" id="gVendorBox"></div>
@@ -230,12 +256,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     <div class="m-head"><span>新增廠商</span><span class="m-close" onclick="closeMask('avMask')">✕</span></div>
     <div class="m-body">
         <div class="iq-hint">會依這個詢價案目前的項目內容，各自展開成一張新的詢價單（跟隨母單）。</div>
+        <div class="iq-selvendor" id="avVendorSel"></div>
         <div class="iq-cat-wrap" id="avVendorCats"></div>
         <input type="text" id="avVendorKw" placeholder="輸入廠商名稱或代號篩選…" style="margin-bottom:6px;">
         <div class="vendor-box" id="avVendorBox"></div>
         <div class="iq-err" id="avErr"></div>
     </div>
     <div class="m-foot"><button onclick="closeMask('avMask')">取消</button><button class="b-ok" id="avSave">新增</button></div>
+</div></div>
+
+<!-- ══ 綁定 BOM／製程（詢價項目用） ══ -->
+<div class="iq-mask" id="bomPickMask"><div class="iq-modal narrow">
+    <div class="m-head"><span>綁定 BOM／製程</span><span class="m-close" onclick="closeMask('bomPickMask')">✕</span></div>
+    <div class="m-body">
+        <div class="bom-pick-step">
+            <label>①先選 BOM</label>
+            <input type="text" id="bpBomKw" placeholder="輸入 BOM 編號或料號搜尋…">
+            <div id="bpBomPicked" class="iq-hint" style="display:none;"></div>
+        </div>
+        <div class="bom-pick-step" id="bpProcWrap" style="display:none;">
+            <label>②選擇這張 BOM 內的製程（規格會自動帶入；標「建議」是管理員設定的常見詢價製程，<b>其他製程一樣可以選</b>）</label>
+            <div id="bpProcList"></div>
+            <button type="button" id="bpNoProc" style="margin-top:4px;height:30px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">只綁定 BOM，不指定特定製程</button>
+        </div>
+        <div class="iq-err" id="bpErr"></div>
+    </div>
+    <div class="m-foot"><button onclick="closeMask('bomPickMask')">取消</button><button class="b-ok" id="bpClear" style="background:#DD5138;border-color:#C4442D;">清除綁定</button></div>
 </div></div>
 
 <!-- ══ 編輯子單（廠商回覆） ══ -->
@@ -250,7 +296,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         </div>
         <div class="iq-hint" id="dFollowHint"></div>
         <table class="item-tbl" id="dItemTbl">
-            <thead><tr><th style="width:26px;">項次</th><th>產品編號</th><th>規格</th><th style="width:85px;">數量</th><th style="width:110px;">單價</th><th style="width:30px;"></th></tr></thead>
+            <thead><tr><th style="width:26px;">項次</th><th id="dBomColHead" style="width:120px;display:none;">BOM／製程</th><th>產品編號</th><th>規格</th><th style="width:85px;">數量</th><th style="width:110px;">單價</th><th style="width:30px;"></th></tr></thead>
             <tbody data-eg-row-add="dItemAdd" data-eg-row-del="dItemDel"></tbody>
         </table>
         <div class="iq-hint" id="dItemHint"></div>
@@ -276,6 +322,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         </div>
         <label>各部門使用規則</label>
         <div id="deptSetRows"></div>
+        <label style="margin-top:14px;display:block;">生管詢價建議的製程大項<span style="font-weight:normal;color:#999;">（軟性建議，勾選的會在挑選 BOM 製程時標「建議」優先顯示；沒勾的製程照樣可以選，只是不特別標示）</span></label>
+        <div class="iq-cat-wrap" id="procTypeRows" style="margin-top:6px;"></div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('setMask')">關閉</button></div>
 </div></div>
@@ -312,8 +360,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <b>直接編輯某一張子單的項目內容</b>會讓那一張自動脫離跟隨，之後母單再怎麼改都不會動到它；可以再按「重新跟隨母單」接回去
         （會立刻用母單目前內容整批覆蓋，單價會被清空）。單價只存在子單，是廠商回覆的資料，母單本身不會有單價。</p>
         <h4>綁定對象（可選、可後補）</h4>
-        <p>業務通常把「產品編號」綁到實際料號主檔；生管可以把整個詢價案綁到一張 BOM；採購可以綁到一張請購單。
-        三種都不是必填，之後隨時可以在編輯畫面補上或改掉。</p>
+        <p>業務通常把「產品編號」綁到實際料號主檔；採購可以把整個詢價案綁到一張請購單。三種都不是必填，之後隨時可以在編輯畫面補上或改掉。</p>
+        <h4>生管：逐項目綁定 BOM／製程</h4>
+        <p>生管身分建立詢價時，每一列詢價項目都可以各自綁定不同的 BOM（一張詢價單可以同時問好幾張不同 BOM）。
+        綁了 BOM 之後可以進一步指定是哪一關製程——選了製程會自動帶出該關的規格備註，料號一律由 BOM 帶出；
+        不指定製程也可以，這時只會帶出料號。<b>同一張詢價單裡，有綁製程的項目必須屬於同一個廠商加工大類</b>
+        （例如都是「加工廠」底下的製程，不能混加工廠跟耗材供應商），避免同一份清單寄給廠商時出現看不懂的項目。
+        管理員可在「模組設定」勾選哪些製程大項要優先標示「建議」，但<b>沒被勾選的製程照樣可以選</b>，這只是方便尋找的標記，不是限制。</p>
+        <h4>廠商清單</h4>
+        <p>廠商勾選框右側會顯示該廠商登記的加工項目說明（主檔管理裡的資料），方便確認是不是要找的廠商；
+        上方「已選廠商」會即時列出目前勾選的廠商，點 × 可以直接取消。</p>
+        <h4>查看料號圖面</h4>
+        <p>詢價項目一旦填了料號（不論是綁料號主檔、綁 BOM，還是自己打字），產品編號欄旁會出現放大鏡圖示，
+        點一下另開一個可自由移動縮放的瀏覽器視窗顯示該料號的圖面，方便邊填邊核對。</p>
         <h4>部門使用規則（管理員可設定）</h4>
         <p>管理員可以在「模組設定」逐部門（業務／生管／採購）決定：是否允許用「非實際存在的料號」詢價（產品編號可以純打字不綁主檔），
         以及是否允許自訂規格（不是由料號主檔帶出的唯讀文字）。兩者預設都關閉（要求綁真實料號、規格由主檔帶出）。</p>
@@ -477,19 +536,76 @@ function docOp(act, did){
 }
 
 /* ───────────────────── 項目列表編輯（共用於新增/母單編輯/子單編輯） ───────────────────── */
-function itemRowHtml(seq, it, deptSet, showPrice){
+/* allowBom：這個部門（目前只有生管）才顯示「BOM／製程」欄，業務/採購沿用原本的純料號輸入 */
+function itemRowHtml(seq, it, deptSet, showPrice, allowBom){
     it = it || {};
-    var lockSpec = !!deptSet && !deptSet.allow_custom_spec && (it.part_id||it.part_no_text);
-    var row = '<tr data-part-id="'+(it.part_id||'')+'" data-gi="'+(it.group_item_id||'')+'">'
-        +'<td>'+seq+'</td>'
-        +'<td><input type="text" class="it-part" value="'+esc(it.part_no_text||'')+'" placeholder="輸入料號搜尋…"></td>'
+    var hasBom = !!(it.bom);
+    var lockSpec = !!deptSet && !deptSet.allow_custom_spec && (it.part_id||it.part_no_text||hasBom);
+    var lockPart = hasBom;   // 料號由 BOM 帶出時鎖定，不給手改（要改請先清除綁定）
+    var row = '<tr data-part-id="'+(it.part_id||'')+'" data-gi="'+(it.group_item_id||'')+'"'
+        +' data-bom="'+esc(it.bom||'')+'" data-bom-ing-fid="'+(it.bom_ing_fid||'')+'"'
+        +' data-main-cat-id="'+(it._main_cat_id||'')+'" data-main-cat-name="'+esc(it._main_cat_name||'')+'"'
+        +' data-proc-name="'+esc(it._proc_name||'')+'">'
+        +'<td class="rseq">'+seq+'</td>';
+    if (allowBom) row += '<td class="bom-cell">'+bomCellHtml(it)+'</td>';
+    row += '<td><input type="text" class="it-part" value="'+esc(it.part_no_text||'')+'" placeholder="輸入料號搜尋…"'+(lockPart?' readonly':'')+'>'
+        + (it.part_no_text ? ' <span class="part-link fa fa-search" title="開啟料號圖面"></span>' : '') + '</td>'
         +'<td><input type="text" class="it-spec" value="'+esc(it.spec_text||'')+'"'+(lockSpec?' readonly':'')+'></td>'
         +'<td><input type="number" step="0.001" class="it-qty" value="'+(it.qty!=null?it.qty:'')+'"></td>';
     if (showPrice) row += '<td><input type="number" step="0.0001" class="it-price" value="'+(it.unit_price!=null?it.unit_price:'')+'"></td>';
     row += '<td><span class="item-del fa fa-times" title="刪除這一列"></span></td></tr>';
     return row;
 }
-function renumberItems($tbody){ $tbody.find('tr').each(function(i){ $(this).find('td:first').text(i+1); }); }
+function bomCellHtml(it){
+    if (it.bom) {
+        return '<div class="bom-bound-tag"><b>'+esc(it.bom)+'</b><br>'
+            + (it.bom_ing_fid ? esc(it._proc_name||('製程#'+it.bom_ing_fid)) : '（未指定製程）')
+            + '<span class="x fa fa-times" title="清除綁定"></span></div>';
+    }
+    return '<button type="button" class="bom-bind-btn">+綁定BOM</button>';
+}
+function renumberItems($tbody){ $tbody.find('tr').each(function(i){ $(this).find('td.rseq').text(i+1); }); }
+function openPartViewerPopup(partNo, bom){
+    if (!partNo) return;
+    // 比照 OreadyReply_ForPm_BaseOfTime.php 開料號圖面的做法：用一般瀏覽器彈出視窗（天生可移動、可縮放），
+    // 不自己刻一個「可移動」的自訂跳窗（鐵律4，沿用同一套既有模式）。
+    var w = Math.min(1100, Math.round(screen.availWidth * 0.8));
+    var h = Math.min(900, Math.round(screen.availHeight * 0.88));
+    var l = Math.round((screen.availWidth - w) / 2);
+    var t = Math.round((screen.availHeight - h) / 2);
+    var url = '../pm/part_viewer.php?d_id=' + encodeURIComponent(partNo) + (bom ? '&bom=' + encodeURIComponent(bom) : '');
+    window.open(url, 'inq_part_' + partNo, 'width=' + w + ',height=' + h + ',left=' + l + ',top=' + t + ',resizable=yes,scrollbars=yes');
+}
+/* 同一張單（同一個 $tbody）已綁定 BOM 製程的其他列，製程大類是否跟 newMainCatId 衝突（排除 $excludeTr 自己） */
+function rowMainCatConflict($tbody, $excludeTr, newMainCatId, newMainCatName){
+    if (!newMainCatId) return null;
+    var hit = null;
+    $tbody.find('tr').each(function(){
+        if (this === $excludeTr[0]) return;
+        var mc = $(this).attr('data-main-cat-id');
+        if (mc && mc !== String(newMainCatId)) { hit = {name: $(this).attr('data-main-cat-name'), part: $(this).find('.it-part').val()}; return false; }
+    });
+    return hit;
+}
+function wireItemRow($tr, deptSet, allowBom){
+    if (!$tr.attr('data-bom')) { bindPartSearch($tr.find('.it-part'), deptSet); }
+    $tr.find('.item-del').on('click', function(){ var $tb=$tr.closest('tbody'); if ($tb.find('tr').length>1) { $tr.remove(); renumberItems($tb); } });
+    $tr.find('.part-link').on('click', function(){ openPartViewerPopup($tr.find('.it-part').val(), $tr.attr('data-bom')); });
+    if (allowBom) { wireBomCell($tr, deptSet); }
+}
+/* 「綁定BOM」鈕／已綁定時「清除」的事件，獨立出來以便清除綁定後只重綁這一小塊、不重複綁整列 */
+function wireBomCell($tr, deptSet){
+    $tr.find('.bom-bind-btn').off('click').on('click', function(){ openBomPick($tr, deptSet); });
+    $tr.find('.bom-bound-tag .x').off('click').on('click', function(e){
+        e.stopPropagation();
+        $tr.attr('data-bom','').attr('data-bom-ing-fid','').attr('data-main-cat-id','').attr('data-main-cat-name','').attr('data-proc-name','');
+        $tr.find('.bom-cell').html(bomCellHtml({}));
+        $tr.find('.it-part').prop('readonly', false).removeClass('ro-auto');
+        $tr.find('.it-spec').prop('readonly', !!deptSet && !deptSet.allow_custom_spec && !!$tr.find('.it-part').val()).toggleClass('ro-auto', !!deptSet && !deptSet.allow_custom_spec);
+        bindPartSearch($tr.find('.it-part'), deptSet);
+        wireBomCell($tr, deptSet);
+    });
+}
 function bindPartSearch($input, deptSet, specLockTarget){
     var $list = $('<div class="ac-list"></div>').appendTo('body');
     var timer = null;
@@ -526,11 +642,10 @@ function bindPartSearch($input, deptSet, specLockTarget){
     });
     $input.on('blur', function(){ setTimeout(hide, 200); });
 }
-function addItemRow($tbody, deptSet, showPrice){
+function addItemRow($tbody, deptSet, showPrice, allowBom){
     var seq = $tbody.find('tr').length+1;
-    var $tr = $(itemRowHtml(seq, {}, deptSet, showPrice)).appendTo($tbody);
-    bindPartSearch($tr.find('.it-part'), deptSet);
-    $tr.find('.item-del').on('click', function(){ if ($tbody.find('tr').length>1) { $tr.remove(); renumberItems($tbody); } });
+    var $tr = $(itemRowHtml(seq, {}, deptSet, showPrice, allowBom)).appendTo($tbody);
+    wireItemRow($tr, deptSet, allowBom);
     return $tr;
 }
 function collectItems($tbody, showPrice){
@@ -540,13 +655,17 @@ function collectItems($tbody, showPrice){
         var partNo = $tr.find('.it-part').val().trim();
         var spec = $tr.find('.it-spec').val().trim();
         var qty = $tr.find('.it-qty').val();
-        if (!partNo && !spec && !qty) return;
+        var bom = $tr.attr('data-bom') || '';
+        var bomIngFid = $tr.attr('data-bom-ing-fid') || '';
+        if (!partNo && !spec && !qty && !bom) return;
         var it = {
             part_id: $tr.attr('data-part-id') || '',
             part_no_text: partNo,
             spec_text: spec,
             qty: qty === '' ? '' : qty,
-            group_item_id: $tr.attr('data-gi') || ''
+            group_item_id: $tr.attr('data-gi') || '',
+            bom: bom,
+            bom_ing_fid: bomIngFid
         };
         if (showPrice) it.unit_price = $tr.find('.it-price').val();
         out.push(it);
@@ -555,9 +674,9 @@ function collectItems($tbody, showPrice){
 }
 
 /* window.gItemAdd / gItemDel / dItemAdd / dItemDel —— 供共用檔 eg_input_rules.js 的鍵盤↓↑增刪列呼叫（無參數） */
-window.gItemAdd = function(){ var ds = DEPT_SET[$('#gDept').val()] || {}; addItemRow($('#gItemTbl tbody'), ds, false); };
+window.gItemAdd = function(){ var dept=$('#gDept').val(); var ds = DEPT_SET[dept] || {}; addItemRow($('#gItemTbl tbody'), ds, false, dept==='pmc'); };
 window.gItemDel = function(){ var $tb=$('#gItemTbl tbody'); if ($tb.find('tr').length>1){ $tb.find('tr').last().remove(); renumberItems($tb); } };
-window.dItemAdd = function(){ var ds = CUR_GROUP ? (DEPT_SET[CUR_GROUP.source_dept]||{}) : {}; addItemRow($('#dItemTbl tbody'), ds, true); };
+window.dItemAdd = function(){ var dept = CUR_GROUP ? CUR_GROUP.source_dept : ''; var ds = DEPT_SET[dept]||{}; addItemRow($('#dItemTbl tbody'), ds, true, dept==='pmc'); };
 window.dItemDel = function(){ var $tb=$('#dItemTbl tbody'); if ($tb.find('tr').length>1){ $tb.find('tr').last().remove(); renumberItems($tb); } };
 
 /* ───────────────────── 廠商多選框 ───────────────────── */
@@ -572,11 +691,31 @@ function renderVendorBox($box, rows, checkedIds, disabledIds){
     rows.forEach(function(v){
         var dis = disabledIds.indexOf(v.maker_id_no) >= 0;
         var chk = checkedIds.indexOf(v.maker_id_no) >= 0;
-        var lb = $('<label></label>').attr('data-cats', (v.sub_cat_ids||[]).join(',')).append(
+        var procTxt = (v.m_process_items||'').trim();
+        var lb = $('<label></label>').attr('data-cats', (v.sub_cat_ids||[]).join(',')).attr('data-name', v.maker_id).append(
             $('<input type="checkbox">').val(v.maker_id_no).prop('checked', chk).prop('disabled', dis)
-        ).append(' ' + v.maker_id_no + '　' + esc(v.maker_id) + (dis ? '（已在詢價案內）' : ''));
+        ).append(' ' + v.maker_id_no + '　' + esc(v.maker_id) + (dis ? '（已在詢價案內）' : ''))
+         .append(procTxt ? $('<span class="vi-proc"></span>').text('　' + procTxt) : '');
         $box.append(lb);
     });
+}
+/* 「已選廠商」摘要區：勾選框一變動就重畫，點 × 等同取消勾選那一家（鐵律：篩選/選取狀態要讓使用者一眼看到）。 */
+function wireSelectedVendors($box, $sel){
+    function render(){
+        $sel.empty();
+        $box.find('input:checked').each(function(){
+            var vid = $(this).val();
+            var $lb = $(this).closest('label');
+            var chip = $('<span class="chip"></span>').append($('<span></span>').text(vid+' '+$lb.attr('data-name')));
+            var $x = $('<span class="x fa fa-times"></span>').on('click', function(){
+                $box.find('input').filter(function(){ return $(this).val()===vid; }).prop('checked', false).trigger('change');
+            });
+            chip.append($x);
+            $sel.append(chip);
+        });
+    }
+    $box.off('change.sel').on('change.sel', 'input[type=checkbox]', render);
+    render();
 }
 /* 關鍵字與加工類別標籤一起篩（AND）；標籤本身是「符合任一個已選標籤」（OR）。
    不要求一次篩選就要勾選完——這裡只是顯示/隱藏，已勾選的 checkbox 狀態完全不受影響。 */
@@ -660,25 +799,42 @@ function openNewGroup(){
     $('#gVendorWrap').show();
     $('#gErr').text('');
     $('#gVendorKw').val('');
+    $('#gVendorSel').empty();
     $('#gNoteTpl').show();
     var $tb = $('#gItemTbl tbody').empty();
+    $('#gBomColHead').toggle($('#gDept').val()==='pmc');
     loadDeptSettings(function(){
-        addItemRow($tb, DEPT_SET[$('#gDept').val()]||{}, false);
+        addItemRow($tb, DEPT_SET[$('#gDept').val()]||{}, false, $('#gDept').val()==='pmc');
         loadVendors(function(rows){
             renderVendorBox($('#gVendorBox'), rows, [], []);
             renderCatChips($('#gVendorCats'), $('#gVendorBox'), $('#gVendorKw'));
+            wireSelectedVendors($('#gVendorBox'), $('#gVendorSel'));
         });
     });
     renderNoteTplChips();
     $('#gSave').off('click').on('click', saveNewGroup);
     openMask('gMask');
 }
+/* 部門切換（只有新增詢價時才能切）：BOM／製程欄只有生管才有，切換部門時把目前項目重新渲染一次
+   （保留已填的料號/規格/數量；離開生管身分的話綁定的 BOM／製程沒有意義，一併清掉）。 */
 function refreshGDeptUI(){
-    var ds = DEPT_SET[$('#gDept').val()] || {};
-    $('#gItemTbl tbody tr').each(function(){
-        var $tr = $(this);
-        $tr.find('.it-spec').prop('readonly', !ds.allow_custom_spec && ($tr.attr('data-part-id')||$tr.find('.it-part').val())).toggleClass('ro-auto', !ds.allow_custom_spec);
-    });
+    var dept = $('#gDept').val(), ds = DEPT_SET[dept] || {}, allowBom = (dept==='pmc');
+    var wasAllowBom = $('#gBomColHead').is(':visible');
+    $('#gBomColHead').toggle(allowBom);
+    if (allowBom !== wasAllowBom) {
+        var items = collectItems($('#gItemTbl tbody'), false);
+        var $tb = $('#gItemTbl tbody').empty();
+        if (!allowBom) { items.forEach(function(it){ it.bom=''; it.bom_ing_fid=''; }); }
+        (items.length ? items : [{}]).forEach(function(it){
+            var $tr = $(itemRowHtml($tb.find('tr').length+1, it, ds, false, allowBom)).appendTo($tb);
+            wireItemRow($tr, ds, allowBom);
+        });
+    } else {
+        $('#gItemTbl tbody tr').each(function(){
+            var $tr = $(this);
+            $tr.find('.it-spec').prop('readonly', !ds.allow_custom_spec && !!($tr.attr('data-part-id')||$tr.find('.it-part').val())).toggleClass('ro-auto', !ds.allow_custom_spec);
+        });
+    }
     renderNoteTplChips();
 }
 function saveNewGroup(){
@@ -712,17 +868,37 @@ function openGroupEdit(gid){
         $('#gNoteTpl').show();
         renderNoteTplChips(g.source_dept);
         $('#gErr').text('');
+        var allowBom = (g.source_dept === 'pmc');
+        $('#gBomColHead').toggle(allowBom);
         loadDeptSettings(function(){
             var ds = DEPT_SET[g.source_dept] || {};
-            var $tb = $('#gItemTbl tbody').empty();
-            (g.items.length ? g.items : [{}]).forEach(function(it, i){
-                var $tr = $(itemRowHtml(i+1, it, ds, false)).appendTo($tb);
-                bindPartSearch($tr.find('.it-part'), ds);
-                $tr.find('.item-del').on('click', function(){ if ($tb.find('tr').length>1) { $tr.remove(); renumberItems($tb); } });
+            enrichItemsProcNames(g.items, function(items){
+                var $tb = $('#gItemTbl tbody').empty();
+                (items.length ? items : [{}]).forEach(function(it, i){
+                    var $tr = $(itemRowHtml(i+1, it, ds, false, allowBom)).appendTo($tb);
+                    wireItemRow($tr, ds, allowBom);
+                });
             });
         });
         $('#gSave').off('click').on('click', function(){ saveGroupEdit(g.id); });
         openMask('gMask');
+    });
+}
+/* 項目列若綁了 bom_ing_fid，補上該製程的名稱文字（給 BOM/製程欄顯示用，不影響送出的資料）。
+   逐一相異的 BOM 各查一次製程清單，項目列數通常很少，不會是效能問題。 */
+function enrichItemsProcNames(items, cb){
+    var boms = [];
+    items.forEach(function(it){ if (it.bom_ing_fid && boms.indexOf(it.bom) < 0) boms.push(it.bom); });
+    if (!boms.length) { cb(items); return; }
+    var map = {}, left = boms.length;
+    boms.forEach(function(bom){
+        $.getJSON(API, {action:'bom_processes', bom:bom}, function(res){
+            (res.rows||[]).forEach(function(p){ map[p.bom_ing_fid] = p.process_name; });
+            if (--left === 0) {
+                items.forEach(function(it){ if (it.bom_ing_fid) it._proc_name = map[it.bom_ing_fid] || ''; });
+                cb(items);
+            }
+        });
     });
 }
 function saveGroupEdit(gid){
@@ -733,6 +909,118 @@ function saveGroupEdit(gid){
         id: gid, items: JSON.stringify(items), currency: $('#gCurr').val(), note: $('#gNote').val()
     }, function(){ closeMask('gMask'); loadList(); });
 }
+
+/* ───────────────────── 詢價項目綁定 BOM／製程（只有生管身分看得到這個欄位） ───────────────────── */
+var BOM_PICK_TR = null, BOM_PICK_DEPTSET = null, BOM_PICK_PART = null;
+function openBomPick($tr, deptSet){
+    BOM_PICK_TR = $tr; BOM_PICK_DEPTSET = deptSet; BOM_PICK_PART = null;
+    $('#bpBomKw').val('').prop('disabled', false);
+    $('#bpBomPicked').hide().text('');
+    $('#bpProcWrap').hide();
+    $('#bpProcList').empty();
+    $('#bpErr').text('');
+    $('#bpClear').toggle(!!$tr.attr('data-bom'));
+    openMask('bomPickMask');
+    setTimeout(function(){ $('#bpBomKw').trigger('focus'); }, 50);
+}
+function bomPickSelectBom(bom){
+    $('#bpBomKw').prop('disabled', true);
+    $('#bpErr').text('');
+    $.getJSON(API, {action:'bom_part', bom:bom}, function(res){
+        if (!res.success) { $('#bpErr').text(res.message||'找不到這張 BOM'); return; }
+        BOM_PICK_PART = res;
+        $('#bpBomPicked').html('已選 BOM：<b>'+esc(bom)+'</b>　料號：'+esc(res.part_no||'（無）')+'　<span class="iq-note-manage" id="bpReBom">重選</span>').show();
+        $('#bpReBom').on('click', function(){ openBomPick(BOM_PICK_TR, BOM_PICK_DEPTSET); });
+        $.getJSON(API, {action:'bom_processes', bom:bom}, function(res2){
+            var $list = $('#bpProcList').empty();
+            (res2.rows||[]).forEach(function(p){
+                var row = $('<div class="bom-proc-row"></div>')
+                    .append('<span class="nm">'+esc(p.process_name||('製程#'+p.process_no))+'</span>')
+                    .append('<span class="sp">'+esc(p.single_bet_ps||'（無規格備註）')+'</span>');
+                if (p.suggested) row.append('<span class="sg">建議</span>');
+                row.on('click', function(){ bomPickApply(bom, p); });
+                $list.append(row);
+            });
+            if (!res2.rows || !res2.rows.length) $list.append('<div class="iq-hint">這張 BOM 目前沒有任何製程紀錄。</div>');
+            $('#bpProcWrap').show();
+        });
+    });
+}
+function bomPickApply(bom, proc){
+    var mainCatId = proc && proc.cat ? proc.cat.main_cat_id : null;
+    var mainCatName = proc && proc.cat ? proc.cat.main_cat_name : '';
+    var conflict = rowMainCatConflict(BOM_PICK_TR.closest('tbody'), BOM_PICK_TR, mainCatId, mainCatName);
+    if (conflict) {
+        $('#bpErr').text('製程類別跟這張單裡已經綁定的「'+conflict.part+'」（'+conflict.name+'）不一致，同一張詢價單的 BOM 製程必須是同一個加工類別大類，請改選同大類的製程，或另開一張詢價單。');
+        return;
+    }
+    BOM_PICK_TR.attr('data-bom', bom)
+        .attr('data-bom-ing-fid', proc ? proc.bom_ing_fid : '')
+        .attr('data-main-cat-id', mainCatId || '')
+        .attr('data-main-cat-name', mainCatName || '')
+        .attr('data-proc-name', proc ? proc.process_name : '');
+    var partId = BOM_PICK_PART ? BOM_PICK_PART.part_id : null;
+    var partNo = BOM_PICK_PART ? BOM_PICK_PART.part_no : '';
+    BOM_PICK_TR.attr('data-part-id', partId || '');
+    BOM_PICK_TR.find('.it-part').val(partNo).prop('readonly', true).addClass('ro-auto');
+    var specVal = proc ? (proc.single_bet_ps || '') : '';
+    var lockSpec = !BOM_PICK_DEPTSET || !BOM_PICK_DEPTSET.allow_custom_spec || !specVal;
+    if (specVal || !BOM_PICK_TR.find('.it-spec').val()) { BOM_PICK_TR.find('.it-spec').val(specVal); }
+    BOM_PICK_TR.find('.it-spec').prop('readonly', lockSpec).toggleClass('ro-auto', lockSpec);
+    if (!BOM_PICK_TR.find('.it-qty').val() && BOM_PICK_PART && BOM_PICK_PART.sqty) { BOM_PICK_TR.find('.it-qty').val(BOM_PICK_PART.sqty); }
+    BOM_PICK_TR.find('.bom-cell').html(bomCellHtml({bom:bom, bom_ing_fid: proc ? proc.bom_ing_fid : null, _proc_name: proc ? proc.process_name : ''}));
+    wireBomCell(BOM_PICK_TR, BOM_PICK_DEPTSET);
+    BOM_PICK_TR.find('.part-link').remove();
+    if (partNo) { BOM_PICK_TR.find('.it-part').after(' <span class="part-link fa fa-search" title="開啟料號圖面"></span>'); BOM_PICK_TR.find('.part-link').on('click', function(){ openPartViewerPopup(partNo, bom); }); }
+    // 若目前視窗有廠商加工類別篩選區（新增詢價時），自動依這個製程的分類展開/勾選，方便直接看到相關廠商
+    if (mainCatId && $('#gVendorCats').is(':visible')) { autoApplyVendorCat(mainCatId, proc.cat.sub_cat_id); }
+    closeMask('bomPickMask');
+}
+function autoApplyVendorCat(mainCatId, subCatId){
+    $('#gVendorCats .iq-cat-main-chip').each(function(){
+        var txt = $(this).text().replace(' ▾','');
+        var grp = (VENDOR_CATS||[]).find(function(g){ return g.main_cat_name===txt; });
+        if (grp && grp.main_cat_id===mainCatId && !$(this).hasClass('act')) { $(this).trigger('click'); }
+    });
+    setTimeout(function(){
+        $('#gVendorCats .iq-cat-sub-row .iq-chip').each(function(){
+            if ($(this).data('id')===subCatId && !$(this).hasClass('on')) { $(this).trigger('click'); }
+        });
+    }, 30);
+}
+(function(){
+    var $list = $('<div class="ac-list"></div>').appendTo('body');
+    var timer = null;
+    $('#bpBomKw').on('input', function(){
+        clearTimeout(timer);
+        var kw = $(this).val();
+        if (!kw) { $list.hide(); return; }
+        timer = setTimeout(function(){
+            $.getJSON(API, {action:'bom_search', kw:kw}, function(res){
+                if (!res.success) return;
+                $list.empty();
+                (res.rows||[]).forEach(function(r){
+                    var d = $('<div></div>').text(r.label).on('click', function(){ $list.hide(); bomPickSelectBom(r.bom); });
+                    $list.append(d);
+                });
+                if (!res.rows || !res.rows.length) $list.append('<div style="color:#999;">查無符合的 BOM／料號</div>');
+                var r0 = document.getElementById('bpBomKw').getBoundingClientRect();
+                $list.css({left:r0.left+'px', top:(r0.bottom+2)+'px', width:Math.max(260,r0.width)+'px'}).show();
+            });
+        }, 280);
+    });
+    $('#bpBomKw').on('blur', function(){ setTimeout(function(){ $list.hide(); }, 200); });
+})();
+$('#bpNoProc').on('click', function(){
+    if (!BOM_PICK_PART) return;
+    var bom = $('#bpBomPicked').find('b').text();
+    bomPickApply(bom, null);
+});
+$('#bpClear').on('click', function(){
+    if (!BOM_PICK_TR) return;
+    BOM_PICK_TR.find('.bom-bound-tag .x').trigger('click');
+    closeMask('bomPickMask');
+});
 
 /* ───────────────────── 綑定 BOM／請購單 ───────────────────── */
 function openBind(gid){
@@ -802,10 +1090,12 @@ function openAddVendor(gid){
     $('#avErr').text('');
     var g = GROUPS.find(function(x){return x.id===gid;});
     var existing = (g.docs||[]).map(function(d){return d.vendor_id;});
+    $('#avVendorSel').empty();
     loadVendors(function(rows){
         renderVendorBox($('#avVendorBox'), rows, [], existing);
         $('#avVendorKw').val('');
         renderCatChips($('#avVendorCats'), $('#avVendorBox'), $('#avVendorKw'));
+        wireSelectedVendors($('#avVendorBox'), $('#avVendorSel'));
     });
     openMask('avMask');
 }
@@ -817,8 +1107,7 @@ $('#avSave').on('click', function(){
 
 /* ───────────────────── 編輯子單 ───────────────────── */
 function openDocEdit(did){
-    $.getJSON(API, {action:'get', id: 0}, function(){}); // no-op guard
-    // 子單細節走 group list 快取即可（list 已回傳 docs+items），但求保險改即時打一次 get 以母單帶出
+    // 子單細節走 group list 快取即可（list 已回傳 docs+items）
     var found = null, parentG = null;
     GROUPS.forEach(function(g){ (g.docs||[]).forEach(function(d){ if (d.id===did) { found=d; parentG=g; } }); });
     if (!found) return;
@@ -831,12 +1120,16 @@ function openDocEdit(did){
     $('#dStatus').val(found.status);
     $('#dFollowHint').text(found.follow_parent ? '目前跟隨母單，母單異動時項目會自動同步。' : '目前已脫離母單跟隨，母單異動不會影響這張。');
     $('#dErr').text('');
-    var ds = parentG ? (DEPT_SET[parentG.source_dept]||{}) : {};
-    var $tb = $('#dItemTbl tbody').empty();
-    (found.items.length ? found.items : [{}]).forEach(function(it, i){
-        var $tr = $(itemRowHtml(i+1, it, ds, true)).appendTo($tb);
-        bindPartSearch($tr.find('.it-part'), ds);
-        $tr.find('.item-del').on('click', function(){ if ($tb.find('tr').length>1) { $tr.remove(); renumberItems($tb); } });
+    var dept = parentG ? parentG.source_dept : '';
+    var ds = DEPT_SET[dept] || {};
+    var allowBom = (dept === 'pmc');
+    $('#dBomColHead').toggle(allowBom);
+    enrichItemsProcNames(found.items, function(items){
+        var $tb = $('#dItemTbl tbody').empty();
+        (items.length ? items : [{}]).forEach(function(it, i){
+            var $tr = $(itemRowHtml(i+1, it, ds, true, allowBom)).appendTo($tb);
+            wireItemRow($tr, ds, allowBom);
+        });
     });
     $('#dSave').off('click').on('click', function(){ saveDocEdit(did); });
     openMask('dMask');
@@ -1022,9 +1315,27 @@ function renderDeptSetRows(){
         box.append(row);
     });
 }
+function renderProcTypeRows(){
+    $.getJSON(API, {action:'process_type_list'}, function(res){
+        var box = $('#procTypeRows').empty();
+        (res.rows||[]).forEach(function(pt){
+            var chip = $('<span class="iq-chip"></span>').text(pt.process_type)
+                .toggleClass('on', !!pt.enabled)
+                .attr('title', pt.cat ? ('對應廠商類別：'+pt.cat.main_cat_name+'／'+pt.cat.sub_cat_name) : '（沒有對應的廠商加工類別）');
+            chip.on('click', function(){
+                var next = !chip.hasClass('on');
+                post('process_type_setting_save', {process_type_id:pt.process_type_id, enabled: next?1:0}, function(){
+                    chip.toggleClass('on', next);
+                });
+            });
+            box.append(chip);
+        });
+    });
+}
 $('#btnSettings').on('click', function(){
     loadAsDocCurrent();
     loadDeptSettings(renderDeptSetRows);
+    renderProcTypeRows();
     openMask('setMask');
 });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });

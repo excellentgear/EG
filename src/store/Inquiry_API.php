@@ -75,6 +75,27 @@ case 'bom_search': {
     jout(true, ['rows' => inq_bom_search($db, (string)($_GET['kw'] ?? ''))]);
 }
 
+case 'bom_processes': {
+    jout(true, ['rows' => inq_bom_processes($db, (string)($_GET['bom'] ?? ''))]);
+}
+
+case 'bom_part': {
+    $r = inq_bom_part($db, (string)($_GET['bom'] ?? ''));
+    if (!$r) jerr('找不到這張 BOM');
+    jout(true, $r);
+}
+
+case 'process_type_list': {
+    jout(true, ['rows' => inq_process_type_list($db)]);
+}
+
+case 'process_type_setting_save': {
+    if (!$perms['canAdmin']) jerr('沒有管理員權限');
+    $ok = inq_process_type_setting_save($db, (int)($_POST['process_type_id'] ?? 0), (bool)($_POST['enabled'] ?? 0), $uid);
+    if (!$ok) jerr('儲存失敗');
+    jout(true, ['rows' => inq_process_type_list($db)]);
+}
+
 case 'preq_search': {
     jout(true, ['rows' => inq_preq_search($db, (string)($_GET['kw'] ?? ''))]);
 }
