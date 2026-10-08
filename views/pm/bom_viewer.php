@@ -827,6 +827,17 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <div id="bom-quote-detail" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
             <!-- 照片相簿的九宮格（點縮圖可放大；元件為三頁共用的 eg_photo_album.js）-->
             <div id="album-grid-wrap" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
+            <!-- 3D 模型檢視（STP/STEP/STL/OBJ/IGS/IGES；與 master_data_management.php
+                 同一套開源函式庫 o3dv.min.js，本機內建檔案不依賴 CDN；但 STEP/IGES 的
+                 解析元件是函式庫自己在瀏覽器當下即時向外部 CDN 下載的，使用者電腦要能
+                 連外網這兩種格式才讀得動，STL/OBJ 不受影響） -->
+            <div id="bom-3d-wrap" style="display:none;position:absolute;inset:0;background:#f8f9fa;">
+                <div id="bom-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>
+                <div id="bom-3d-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#aaa;font-size:13px;z-index:2;pointer-events:none;">
+                    <i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>載入中...</div>
+                <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">
+                    <i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放</div>
+            </div>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
         </div>
     </div>
@@ -960,6 +971,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻）-->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
 <script src="../../resource/js/eg_quote_tier.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_quote_tier.js') ?>"></script>
+<script src="../../resource/js/o3dv.min.js"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
@@ -988,6 +1000,8 @@ var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
 var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PDF」鈕使用
+var _d3Exts      = ['stp','step','stl','obj','igs','iges'];   // 3D 模型副檔名（與 master_data_management.php 同一份清單）
+var _bom3dViewer = null;
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1030,7 +1044,7 @@ function showFile(path, type, name) {
     if (_rotBust[path]) viewPath += (viewPath.indexOf('?') >= 0 ? '&' : '?') + '_r=' + _rotBust[path];
 
     $('#viewer-title').text(_currentName);
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
@@ -1067,6 +1081,41 @@ function showFile(path, type, name) {
                     .html('<i class="fa fa-exclamation-triangle"></i> DWG 轉檔暫時無法使用，<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載原始檔</a>')
                     .show();
             });
+    } else if (_d3Exts.indexOf(_currentType) !== -1) {
+        // 3D 模型（STP/STEP/STL/OBJ/IGS/IGES）：與 master_data_management.php 同一套
+        // o3dv.min.js（開源，本機內建檔案，不走 CDN），寫法完全比照那邊已經驗證過的版本。
+        _bom3dViewer = null;
+        $('#bom-3d-loading').show();
+        $('#bom-3d-wrap').show();
+        $('#btn-save').show();
+        if (typeof OV !== 'undefined') {
+            var container3d = document.getElementById('bom-3d-viewer');
+            _bom3dViewer = new OV.EmbeddedViewer(container3d, {
+                backgroundColor: new OV.RGBAColor(248, 249, 250, 255),
+                defaultColor:    new OV.RGBColor(180, 180, 180),
+                edgeSettings:    new OV.EdgeSettings(false, new OV.RGBColor(0,0,0), 1)
+            });
+            var _v3ref = _bom3dViewer;
+            var fname3d = _currentName || ('model.' + _currentType);
+            fetch(viewPath, { credentials: 'same-origin' })
+                .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+                .then(function(blob) {
+                    if (_v3ref !== _bom3dViewer) return;   // 使用者已經切到別的檔案
+                    $('#bom-3d-loading').hide();
+                    _v3ref.LoadModelFromFileList([new File([blob], fname3d)]);
+                })
+                .catch(function() {
+                    if (_v3ref !== _bom3dViewer) return;
+                    $('#bom-3d-loading').hide();
+                    $('#bom-3d-viewer').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:10px;color:#888;">'
+                        + '<i class="fa fa-exclamation-triangle" style="font-size:30px;color:#e74c3c;"></i>'
+                        + '<div style="font-size:13px;">3D 模型載入失敗</div>'
+                        + '<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載</a></div>');
+                });
+        } else {
+            $('#bom-3d-loading').hide();
+            $('#bom-3d-viewer').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:13px;">3D 檢視器尚未載入，請稍後再試</div>');
+        }
     } else if (_isImg) {
         $('#bom-zoom-img').attr('src', viewPath);
         $('#img-zoom-wrap').css('display', 'flex');
@@ -1494,7 +1543,7 @@ $(document).on('click', '.att-album-item', function(e) {
 function showAlbumGrid(key) {
     var g = _albumPhotos[String(key)];
     if (!g) return;
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text((key === '__none__' ? '未分相簿' : g.name) + '（' + g.photos.length + ' 張）');
@@ -1568,7 +1617,7 @@ function makeAttItem(att, showSource, hideName) {
 }
 
 function showEmpty(msg) {
-    $('#img-zoom-wrap, #bom-pdf-frame, #bom-quote-detail, #album-grid-wrap').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text('');
@@ -1820,7 +1869,7 @@ function showQuoteDetail(qno) {
     $('#bom-file-list .bom-file-item').removeClass('active');
     $('#bom-file-list .bom-quote-head').css('background', '#faf1e0');
     $('#bom-file-list .bom-quote-head[data-qno="' + qno + '"]').css('background', '#f2dcb8');
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-title').text(qno === '__unknown__' ? '（未知報價單）' : qno);
