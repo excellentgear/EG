@@ -815,6 +815,10 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 <button id="btn-3d-measure-face" type="button" class="btn btn-default btn-xs" title="量測模式：點一下自動判定整個面，顯示該面面積，並與上一筆量測算距離"><i class="fa fa-square-o"></i> 面</button>
                 <button id="btn-3d-measure-clear" type="button" class="btn btn-default btn-xs" title="清除目前量測標記"><i class="fa fa-eraser"></i> 清除量測</button>
             </span>
+            <!-- 3D 專用：透視（隱藏線）顯示——被遮蔽的邊線以淺灰顯示（非虛線，見 eg_3d_viewer_tools.js 說明）-->
+            <span id="bom-3d-hl-group" style="display:none;align-items:center;">
+                <button id="btn-3d-hiddenline" type="button" class="btn btn-default btn-xs" title="透視顯示：切換成線框模式，可見邊線深色、被遮蔽的邊線淺灰，可直接看穿模型內部"><i class="fa fa-cube"></i> 透視</button>
+            </span>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
             <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
@@ -1023,6 +1027,7 @@ var _bom3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重�
 var _bom3dColorMode  = false;  // 上色模式開關：開啟時點模型上的零件即換色
 var _bom3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重建一份
 var _bom3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
+var _bom3dHLState = null;      // 透視（隱藏線）模式目前的疊加物件狀態，null＝未開啟
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1067,12 +1072,14 @@ function showFile(path, type, name) {
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
-    $('#bom-3d-color-group, #bom-3d-measure-group').hide();
+    $('#bom-3d-color-group, #bom-3d-measure-group, #bom-3d-hl-group').hide();
     $('#bom-3d-measure-result').hide();
     _bom3dColorMode = false;
     $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
     _bom3dMeasureMode = null;
     $('#btn-3d-measure-point, #btn-3d-measure-edge, #btn-3d-measure-face').removeClass('btn-info');
+    _bom3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
+    $('#btn-3d-hiddenline').removeClass('btn-info');
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
 
@@ -1122,6 +1129,9 @@ function showFile(path, type, name) {
         _bom3dMeasureMode = null;
         $('#btn-3d-measure-point, #btn-3d-measure-edge, #btn-3d-measure-face').removeClass('btn-info');
         $('#bom-3d-measure-group').css('display', 'inline-flex');
+        _bom3dHLState = null;
+        $('#btn-3d-hiddenline').removeClass('btn-info');
+        $('#bom-3d-hl-group').css('display', 'inline-flex');
         $('#btn-print, #btn-image-editor').show();
         var _need3dConvert = _d3NeedConvertExts.indexOf(_currentType) !== -1;
         var _fetchUrl3d = _need3dConvert ? viewPath.replace('action=download', 'action=preview_3d') : viewPath;
@@ -1273,6 +1283,22 @@ EG3DTools.attachMeasureInteraction(
     function () { return _bom3dMeasureMode; },
     function (measureState) { $('#bom-3d-measure-result').html(measureState.getSummaryHtml()); }
 );
+
+// ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js）────────
+// 純粹的顯示模式切換，不影響上色／量測互動（兩者仍可同時使用，只是上色效果在
+// 透視模式下暫時看不到——線框模式本來就不顯示實體面材質，切回一般顯示即恢復）。
+$('#btn-3d-hiddenline').on('click', function() {
+    if (!_bom3dViewer) return;
+    if (_bom3dHLState) {
+        EG3DTools.clearHiddenLineMode(_bom3dViewer, _bom3dHLState);
+        _bom3dHLState = null;
+        $(this).removeClass('btn-info');
+    } else {
+        _bom3dHLState = EG3DTools.setHiddenLineMode(_bom3dViewer);
+        if (_bom3dHLState) $(this).addClass('btn-info');
+        else alert('這個模型沒有偵測到可顯示的邊線（例如完全平滑的曲面），無法切換透視顯示');
+    }
+});
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────
 (function() {

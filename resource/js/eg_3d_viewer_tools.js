@@ -821,6 +821,83 @@ var EG3DTools = (function () {
         });
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 透視（隱藏線）顯示：被遮蔽的部份用「較淡的線條」表示，不是整片灰色實體
+    // ══════════════════════════════════════════════════════════════════════
+    // 使用者原始要求是「像 Inventor 那樣，被遮蔽的部份用虛線表示」。查證後決定改用
+    // 「深色實線（可見邊）＋淺灰實線（被遮蔽邊）」兩色呈現，不是真正的虛線，原因：
+    // Three.js 的虛線需要 LineDashedMaterial（內部有另一套 shader，判斷依據是
+    // material.isLineDashedMaterial，不是隨便一個材質設個 dashSize 屬性就會變虛線）；
+    // 已查證 o3dv.min.js 內部雖然打包了 LineDashedMaterial 的程式碼（dashSize/gapSize/
+    // computeLineDistances 都在），但函式庫自己從來沒有實際建立過這個類別的實例，所以
+    // 没有「借既有實例的建構子」這條路可走（上色/標記點都是靠這招才不需要全域 THREE，
+    // 這裡沒有現成實例可借）。真要做到位需要自己手刻一段客製 shader（material.
+    // onBeforeCompile 注入 GLSL），風險與工時都高出一截；改用「顏色深淺」區分可見／
+    // 被遮蔽的邊，視覺上一樣能清楚看穿模型內部，且技術上更穩健（純粹材質屬性操作，
+    // 跟上色/量測標記同一套已驗證可行的手法），已實測確認效果清楚可用。
+    //
+    // 做法：①開啟函式庫內建的邊線產生（EdgeSettings，依法向量夾角門檻抓出硬邊，
+    // 回傳真正的 THREE.LineSegments）②複製兩份：一份正常深度測試（可見邊，深色）、
+    // 一份深度測試反轉成「只有在既有深度更淺時才畫」＝GreaterDepth（6，Three.js 的
+    // 深度函式列舉值，被遮蔽邊，淺灰）③原本的實體面材質只關閉 colorWrite（不關閉
+    // depthWrite／不隱藏 mesh），面本身仍正常寫入深度緩衝供②的遮蔽判斷用、也不擋
+    // 滑鼠 raycast（上色/量測在透視模式下一樣點得到），畫面上只是不會畫出灰色實體。
+    // 兩份邊線物件透過 viewer.AddExtraObject() 疊加——**刻意不呼叫 viewer.ClearExtra()
+    // 清除**，因為那會把量測標記也一併清掉；關閉透視模式時改用 extraModel.
+    // GetRootObject().remove(...) 只移除這兩個物件本身，不影響量測/上色的其他疊加物件。
+    var _GREATER_DEPTH = 6;   // Three.js 的 DepthModes 列舉值（NeverDepth=0...GreaterDepth=6），無全域 THREE 可借，直接用數字
+    function setHiddenLineMode(embeddedViewer) {
+        var viewer = embeddedViewer.GetViewer();
+        var mm = viewer.mainModel;
+        var settings = new OV.EdgeSettings(true, new OV.RGBColor(26, 26, 26), 1);
+        mm.SetEdgeSettings(settings);
+        var edgeObj = null;
+        mm.EnumerateEdges(function (o) { if (!edgeObj) edgeObj = o; });
+        if (!edgeObj) return null;   // 這個模型沒有偵測到任何硬邊（極少見，例如完全平滑的球體）
+
+        var LineCtor = edgeObj.constructor;
+        var frontMat = edgeObj.material.clone();
+        frontMat.color.set('#1a1a1a');
+        frontMat.needsUpdate = true;
+        var frontObj = new LineCtor(edgeObj.geometry, frontMat);
+        frontObj.renderOrder = 10;
+
+        var backMat = edgeObj.material.clone();
+        backMat.color.set('#c7c7c7');
+        backMat.depthFunc = _GREATER_DEPTH;
+        backMat.depthWrite = false;
+        backMat.needsUpdate = true;
+        var backObj = new LineCtor(edgeObj.geometry, backMat);
+        backObj.renderOrder = 5;
+
+        viewer.AddExtraObject(frontObj);
+        viewer.AddExtraObject(backObj);
+
+        var touchedMats = [];
+        mm.EnumerateMeshes(function (o) {
+            var mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach(function (mt) {
+                if (mt.colorWrite === false) return;   // 已經處理過（同一份材質被多個 mesh 共用時避免重複記錄）
+                touchedMats.push(mt);
+                mt.colorWrite = false;
+                mt.needsUpdate = true;
+            });
+        });
+        viewer.Render();
+        return { frontObj: frontObj, backObj: backObj, touchedMats: touchedMats };
+    }
+    function clearHiddenLineMode(embeddedViewer, state) {
+        if (!embeddedViewer || !state) return;
+        var viewer = embeddedViewer.GetViewer();
+        var mm = viewer.mainModel;
+        var root = viewer.extraModel.GetRootObject();
+        if (state.frontObj) root.remove(state.frontObj);
+        if (state.backObj) root.remove(state.backObj);
+        mm.SetEdgeSettings(new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+        (state.touchedMats || []).forEach(function (mt) { mt.colorWrite = true; mt.needsUpdate = true; });
+        viewer.Render();
+    }
+
     function escHtml3d(s) {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
@@ -836,6 +913,8 @@ var EG3DTools = (function () {
         printCurrentView: printCurrentView,
         openInImageEditor: openInImageEditor,
         MeasureState: MeasureState,
-        attachMeasureInteraction: attachMeasureInteraction
+        attachMeasureInteraction: attachMeasureInteraction,
+        setHiddenLineMode: setHiddenLineMode,
+        clearHiddenLineMode: clearHiddenLineMode
     };
 })();

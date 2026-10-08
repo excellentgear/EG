@@ -10892,6 +10892,10 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <button type="button" id="pav-btn-3d-measure-face" class="btn btn-default btn-xs" title="量測模式：點一下自動判定整個面，顯示該面面積，並與上一筆量測算距離"><i class="fa fa-square-o"></i> 面</button>
                 <button type="button" id="pav-btn-3d-measure-clear" class="btn btn-default btn-xs" title="清除目前量測標記"><i class="fa fa-eraser"></i> 清除量測</button>
             </span>
+            <!-- 3D 專用：透視（隱藏線）顯示——被遮蔽的邊線以淺灰顯示（非虛線，見 eg_3d_viewer_tools.js 說明）-->
+            <span id="pav-3d-hl-group" style="display:none;align-items:center;">
+                <button type="button" id="pav-btn-3d-hiddenline" class="btn btn-default btn-xs" title="透視顯示：切換成線框模式，可見邊線深色、被遮蔽的邊線淺灰，可直接看穿模型內部"><i class="fa fa-cube"></i> 透視</button>
+            </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
                 <span id="pav-zoom-label" style="font-size:11px;color:#555;min-width:36px;text-align:center;">100%</span>
@@ -20542,6 +20546,7 @@ var _pav3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重�
 var _pav3dColorMode  = false;  // 上色模式開關：開啟時點模型表面即幫該面上色
 var _pav3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重建一份
 var _pav3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
+var _pav3dHLState = null;      // 透視（隱藏線）模式目前的疊加物件狀態，null＝未開啟
 
 function _pavShowUploadBtn(show) {
     var upLabel = document.querySelector('#partAttachViewModal label[title="上傳附件"]');
@@ -21392,6 +21397,10 @@ function pavSelectFile(idx) {
     if (pav3dMeasureGroupReset) pav3dMeasureGroupReset.style.display = 'none';
     _pav3dMeasureMode = null;
     $('#pav-btn-3d-measure-point, #pav-btn-3d-measure-edge, #pav-btn-3d-measure-face').removeClass('btn-info');
+    var pav3dHLGroupReset = document.getElementById('pav-3d-hl-group');
+    if (pav3dHLGroupReset) pav3dHLGroupReset.style.display = 'none';
+    _pav3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
+    $('#pav-btn-3d-hiddenline').removeClass('btn-info');
     // 報價附件唯讀：隱藏刪除/編輯鈕
     var isQuote = file.source === 'quote';
     var btnDel  = document.getElementById('pav-btn-delete');
@@ -21459,6 +21468,10 @@ function pavSelectFile(idx) {
         var pav3dMeasureGroup = document.getElementById('pav-3d-measure-group');
         if (pav3dMeasureGroup) pav3dMeasureGroup.style.display = 'inline-flex';
         $('#pav-btn-3d-measure-point, #pav-btn-3d-measure-edge, #pav-btn-3d-measure-face').removeClass('btn-info');
+        _pav3dHLState = null;
+        $('#pav-btn-3d-hiddenline').removeClass('btn-info');
+        var pav3dHLGroup = document.getElementById('pav-3d-hl-group');
+        if (pav3dHLGroup) pav3dHLGroup.style.display = 'inline-flex';
         preview.style.display = 'block';
         preview.style.position = 'relative';
         preview.innerHTML = '<div id="pav-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>'
@@ -21701,6 +21714,20 @@ EG3DTools.attachMeasureInteraction(
     function () { return _pav3dMeasureMode; },
     function (measureState) { $('#pav-3d-measure-result').html(measureState.getSummaryHtml()); }
 );
+
+// ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+$(document).on('click', '#pav-btn-3d-hiddenline', function() {
+    if (!_pav3dViewer) return;
+    if (_pav3dHLState) {
+        EG3DTools.clearHiddenLineMode(_pav3dViewer, _pav3dHLState);
+        _pav3dHLState = null;
+        $(this).removeClass('btn-info');
+    } else {
+        _pav3dHLState = EG3DTools.setHiddenLineMode(_pav3dViewer);
+        if (_pav3dHLState) $(this).addClass('btn-info');
+        else alert('這個模型沒有偵測到可顯示的邊線（例如完全平滑的曲面），無法切換透視顯示');
+    }
+});
 // 批圖編輯器（3D 專用）：截圖目前畫面（含目前上色結果）寄進 localStorage 帶入新分頁，
 // 與 bom_viewer.php 共用同一套機制（見 eg_3d_viewer_tools.js）。
 function pavOpenImageEditorFor3D() {
