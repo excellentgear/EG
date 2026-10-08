@@ -4280,6 +4280,11 @@ foreach($dCounts as $c) {
            左邊加一道分隔線、用不同的暖色（深棕）跟對象按鈕的橘色區分開。 */
         .ate-tp-note-btn { margin-left:6px; padding-left:10px; border-left:1px dashed #D8CBB8; }
         .ate-tp-note-btn.active { background:#8a4b12; border-color:#6b3a0e; color:#fff; font-weight:700; }
+        /* 備註(PS) 開啟時，對象按鈕與挑選欄一併變灰、不可互動（2026-10-08 使用者要求：
+           備註不需要指定對象）。 */
+        .ate-tp-btn-disabled, .ate-tp-btn-disabled.active { background:#F3EFE6; border-color:#E2D9C8;
+            color:#b3a78f; font-weight:400; cursor:not-allowed; }
+        .ate-tp-note-hint { font-size:11px; color:#b3a78f; font-style:italic; }
         .ate-tp-body { min-height:24px; }
         .ate-tp-body select.ate-tp-sel { width:100%; font-size:12px; height:28px; }
         .ate-tp-search input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
@@ -9037,10 +9042,13 @@ foreach($dCounts as $c) {
                     + '</div>';
             }
             // 備註(PS) 徽章：is_note=1 時這一條不列入待處理問題計數，純粹記錄內容
-            // （2026-10-08 使用者要求），與 ateQStatusBadge() 的狀態徽章並列顯示。
+            // （2026-10-08 使用者要求），與 ateQStatusBadge() 的狀態徽章並列顯示；備註項目
+            // 的 target_type 本來就是空的（建立時被清掉），不再額外顯示一次「PS」對象文字，
+            // 否則會變成「備註 PS」兩個字樣重複出現。
             var noteBadge = it.is_note ? '<span class="ate-q-note-badge" title="備註：不列入待處理問題計數"><i class="fa fa-sticky-note-o"></i> 備註</span>' : '';
+            var targetSpan = it.is_note ? '' : '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>';
             return '<div class="ate-q-item">'
-                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + noteBadge + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>'
+                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + noteBadge + targetSpan
                 + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + ' 提出</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
                 + repliesHtml
@@ -9178,9 +9186,14 @@ foreach($dCounts as $c) {
             var opts = [['user', '業務'], ['maker', '廠商'], ['customer', '客戶'], ['other', '其他']];
             if (allowSelf && ATE_Q.curUser) opts = [['self', '本人']].concat(opts);
             var html = '<div class="ate-tp-btns">';
+            // 備註(PS) 開啟時，對象按鈕不需要可以選，變灰色且不可點（2026-10-08 使用者要求）；
+            // 這裡只負責外觀與擋互動，底層 target_type 的清空/還原在 ateQNoteToggleClick() 做。
+            var noteOn = !!st.is_note;
             opts.forEach(function(o) {
-                html += '<button type="button" class="ate-tp-btn' + (st.target_type === o[0] ? ' active' : '') + '" '
-                      + 'onclick="ateQTpSetType(\'' + ns + '\',\'' + o[0] + '\')">' + o[1] + '</button>';
+                html += '<button type="button" class="ate-tp-btn' + (st.target_type === o[0] ? ' active' : '')
+                      + (noteOn ? ' ate-tp-btn-disabled' : '') + '" '
+                      + (noteOn ? 'disabled' : ('onclick="ateQTpSetType(\'' + ns + '\',\'' + o[0] + '\')"'))
+                      + '>' + o[1] + '</button>';
             });
             if (noteToggle) {
                 html += '<button type="button" class="ate-tp-btn ate-tp-note-btn' + (st.is_note ? ' active' : '') + '" '
@@ -9193,9 +9206,22 @@ foreach($dCounts as $c) {
 
         // 切換「備註(PS)」：composer 的 state 就是 r，直接改 r.is_note 再呼叫 onChange
         // （composer 是 ateQRedrawComposer，整個重繪一次，與其他對象按鈕的既有行為一致）。
+        // 開啟時備註不需要對象，把目前選的對象先記住再清空（按鈕與挑選欄跟著變灰/隱藏）；
+        // 關閉時若之前記住過就復原，使用者不會因為點錯一下就把選好的對象弄丟
+        // （2026-10-08 使用者要求：備註開啟時對象完全不需要選）。
         function ateQNoteToggleClick(ns) {
             var st = ATE_Q.tpState[ns]; if (!st) return;
             st.is_note = !st.is_note;
+            if (st.is_note) {
+                st._savedTp = { target_type: st.target_type, target_id: st.target_id, target_label: st.target_label,
+                                 target_post: st.target_post, target_contact: st.target_contact };
+                st.target_type = ''; st.target_id = ''; st.target_label = ''; st.target_post = ''; st.target_contact = '';
+            } else if (st._savedTp) {
+                st.target_type = st._savedTp.target_type; st.target_id = st._savedTp.target_id;
+                st.target_label = st._savedTp.target_label; st.target_post = st._savedTp.target_post;
+                st.target_contact = st._savedTp.target_contact;
+                delete st._savedTp;
+            }
             var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
 
@@ -9219,6 +9245,9 @@ foreach($dCounts as $c) {
         }
 
         function ateQTpBodyHtml(ns, st) {
+            // 備註(PS) 開啟時不需要指定對象，不渲染下拉/搜尋，只留一行灰字說明
+            // （2026-10-08 使用者要求：按下備註左側的對象按鈕與下方挑選欄一併變灰、不用選）。
+            if (st.is_note) return '<span class="ate-tp-note-hint">備註不需要指定對象</span>';
             var t = st.target_type;
             if (t === 'self') {
                 // 「本人」是直接帶入目前登入者，不必再挑一次——既不是下拉也不是打字搜尋，
@@ -9389,7 +9418,15 @@ foreach($dCounts as $c) {
         //    （data-eg-row-add/del）；設計備註(note)凍結後不給新增，composer 直接清空。
         function ateQRedrawComposer() {
             if (!window.OT_CAN_DESIGN_QA || (ATE_Q.kind === 'note' && ATE_Q.frozen)) { $('#ate-q-composer-wrap').html(''); return; }
-            var addTitle = (ATE_Q.kind === 'process') ? '新增紀錄' : '新增問題';
+            // 標題隨目前所有列的備註(PS)狀態變動：全部都勾了就顯示「新增備註」，否則「新增問題」
+            // （2026-10-08 使用者要求）；製程中紀錄沒有備註概念，維持固定「新增紀錄」。
+            var addTitle;
+            if (ATE_Q.kind === 'process') {
+                addTitle = '新增紀錄';
+            } else {
+                var allNotes = ATE_Q.rows.length > 0 && ATE_Q.rows.every(function(r) { return !!r.is_note; });
+                addTitle = allNotes ? '新增備註' : '新增問題';
+            }
             var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> ' + addTitle + '</div>'
                 + '<table class="ate-q-add-table"><tbody data-eg-row-add="ateQRowAdd" data-eg-row-del="ateQRowDel">';
             ATE_Q.rows.forEach(function(r, idx) { html += ateQRowHtml(r, idx); });
