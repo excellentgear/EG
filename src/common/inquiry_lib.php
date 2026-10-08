@@ -273,12 +273,47 @@ function inq_dept_setting_save(PDO $db, string $key, bool $allowFreePart, bool $
 /* ════════════════════════════════════════════════════════════════════════
    子單編號：廠商代號＋民國年3碼＋MM＋DD＋流水3碼（同一天同一家廠商各自接續）
    ════════════════════════════════════════════════════════════════════════ */
-function inq_next_doc_no(PDO $db, string $vendorIdNo, string $date): string {
+define('EG_INQ_DOC_PREFIX_DEFAULT', 'RFQ');
+/** 單號前綴（管理員可設定，預設 RFQ），存 system_parameters，唯一寫入點 inq_doc_prefix_save() */
+function inq_doc_prefix_get(PDO $db): string {
+    try {
+        // system_parameters.param_value 欄位型別是 JSON，一律要 json_encode/json_decode，
+        // 不能當純字串直接塞（會因為不是合法 JSON 而寫入失敗）
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='INQUIRY' AND param_key='doc_no_prefix' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false) return EG_INQ_DOC_PREFIX_DEFAULT;
+        $decoded = json_decode((string)$v, true);
+        $s = is_string($decoded) ? trim($decoded) : trim((string)$v);
+        return $s !== '' ? $s : EG_INQ_DOC_PREFIX_DEFAULT;
+    } catch (Throwable $e) { return EG_INQ_DOC_PREFIX_DEFAULT; }
+}
+function inq_doc_prefix_save(PDO $db, string $prefix, int $uid): array {
+    $prefix = strtoupper(trim($prefix));
+    if ($prefix === '') return ['success'=>false, 'message'=>'前綴不可空白'];
+    if (!preg_match('/^[A-Z0-9]{1,8}$/', $prefix)) return ['success'=>false, 'message'=>'前綴只能是英文字母或數字，最多 8 碼'];
+    try {
+        $json = json_encode($prefix, JSON_UNESCAPED_UNICODE);
+        $st = $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE param_group='INQUIRY' AND param_key='doc_no_prefix'");
+        $st->execute([$json, $uid]);
+        if ($st->rowCount() === 0) {
+            $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by) VALUES ('INQUIRY','doc_no_prefix',?,?,?)")
+               ->execute([$json, '詢價單單號前綴', $uid]);
+        }
+        return ['success'=>true, 'prefix'=>$prefix];
+    } catch (Throwable $e) { error_log('[inq] doc_prefix_save: ' . $e->getMessage()); return ['success'=>false, 'message'=>'儲存失敗']; }
+}
+
+/**
+ * 子單單號＝前綴＋YYYYMMDD＋流水3碼（使用者明確要求，前綴可由管理員設定，預設 RFQ）。
+ * **同一天所有子單共用同一組流水號，不分廠商**（使用者原話「子單也要依照規則跳號」）——
+ * 同一次詢價展開給 3 家廠商，號碼就是連續的 RFQ20261008001/002/003，不是各廠商各自起跳。
+ */
+function inq_next_doc_no(PDO $db, string $date): string {
     $d = $date !== '' ? $date : date('Y-m-d');
-    $roc = str_pad((string)((int)substr($d, 0, 4) - 1911), 3, '0', STR_PAD_LEFT);
-    $mm  = substr($d, 5, 2);
-    $dd  = substr($d, 8, 2);
-    $key = $vendorIdNo . $roc . $mm . $dd;
+    $ymd = str_replace('-', '', substr($d, 0, 10));
+    $prefix = inq_doc_prefix_get($db);
+    $key = $prefix . $ymd;
     $db->prepare("INSERT INTO inq_doc_seq (seq_key, seq_no) VALUES (?, 1) ON DUPLICATE KEY UPDATE seq_no = seq_no + 1")
        ->execute([$key]);
     $st = $db->prepare("SELECT seq_no FROM inq_doc_seq WHERE seq_key=?");
@@ -717,7 +752,7 @@ function inq_group_create(PDO $db, array $p, int $uid, string $uname): array {
         foreach ($vendorIds as $vid) {
             $snap = inq_vendor_snapshot($db, $vid);
             if (!$snap) continue;   // 不存在的廠商代號直接略過
-            $docNo = inq_next_doc_no($db, $vid, $date);
+            $docNo = inq_next_doc_no($db, $date);
             $docIns->execute([$groupId, $docNo, $snap['vendor_id'], $snap['vendor_name'], $snap['contact_person'], $snap['contact_phone'], $snap['contact_fax'], $uid, $uid]);
             $docId = (int)$db->lastInsertId();
             $docIds[] = $docId;
@@ -758,7 +793,7 @@ function inq_group_add_vendors(PDO $db, int $groupId, array $vendorIds, int $uid
         foreach ($vendorIds as $vid) {
             $snap = inq_vendor_snapshot($db, $vid);
             if (!$snap) continue;
-            $docNo = inq_next_doc_no($db, $vid, $g['inquiry_date']);
+            $docNo = inq_next_doc_no($db, $g['inquiry_date']);
             $docIns->execute([$groupId, $docNo, $snap['vendor_id'], $snap['vendor_name'], $snap['contact_person'], $snap['contact_phone'], $snap['contact_fax'], $uid, $uid]);
             $docId = (int)$db->lastInsertId();
             $newIds[] = $docId;

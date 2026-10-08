@@ -46,7 +46,8 @@ case 'list': {
     ];
     $rows = inq_group_list($db, $opt);
     foreach ($rows as &$r) {
-        $r['docs'] = inq_group_docs($db, (int)$r['id']);
+        $r['items'] = inq_group_items($db, (int)$r['id']);   // 清單頁「項目摘要」要用，先前漏掉過（一律印「無項目」）
+        $r['docs']  = inq_group_docs($db, (int)$r['id']);
         foreach ($r['docs'] as &$d) { $d['items'] = inq_doc_items($db, (int)$d['id']); }
     }
     jout(true, ['rows' => $rows, 'dept_set' => inq_dept_settings_all($db)]);
@@ -264,6 +265,16 @@ case 'dept_setting_save': {
     $ok = inq_dept_setting_save($db, $key, (bool)($_POST['allow_free_part'] ?? 0), (bool)($_POST['allow_custom_spec'] ?? 0), $uid);
     if (!$ok) jerr('儲存失敗');
     jout(true, ['dept_set' => inq_dept_settings_all($db)]);
+}
+
+case 'doc_prefix_get': {
+    jout(true, ['prefix' => inq_doc_prefix_get($db)]);
+}
+case 'doc_prefix_save': {
+    if (!$perms['canAdmin']) jerr('沒有管理員權限');
+    $res = inq_doc_prefix_save($db, (string)($_POST['prefix'] ?? ''), $uid);
+    if (!$res['success']) jerr($res['message']);
+    jout(true, $res);
 }
 
 /* ── 備註常用用語：只要能新增詢價單就能新增/編輯/刪除自己設定的，管理員額外可管別人的 ── */
