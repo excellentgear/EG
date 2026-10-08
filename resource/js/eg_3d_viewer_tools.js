@@ -1454,10 +1454,13 @@ var EG3DTools = (function () {
         geo.setAttribute('normal', new PosAttrCtor(new Float32Array(normals), 3));
         return geo;
     }
-    // 封頂面材質固定用暖色調（ai-rules/10），DoubleSide（已用 CDP 直接查證這個模型本身材質
-    // side=2=DoubleSide，封頂沿用同一慣例，三角形纏繞方向不管是哪一面朝鏡頭都看得見，不
-    // 依賴 _earClipTriangulate 的 CCW 統一方向一定對應到「鏡頭這一面」）。
-    function _buildCapMaterial(sampleMesh) {
+    // 封頂色固定用暖色調（ai-rules/10）兩種：單軸只有一個封頂用第一色；雙軸（3/4剖面）
+    // 兩個封頂各自不同色——2026-10-08 使用者回報「大圓又變成中空的」，實際查證後發現
+    // 封頂本身是實心的（已用 CDP 把兩個封頂分別標成對比色直接驗證過，兩塊都確實填滿），
+    // 真正的原因是雙軸模式下兩個封頂原本同一個顏色，從某些角度兩塊緊鄰、肉眼分不出
+    // 「這裡是封頂A還是封頂B的邊界」，誤以為是鏤空；分開上色之後這個視覺混淆就不會再發生。
+    var _EG_CAP_COLORS = ['#E8742E', '#DD5138'];
+    function _buildCapMaterial(sampleMesh, colorIdx) {
         var baseMat = Array.isArray(sampleMesh.material) ? sampleMesh.material[0] : sampleMesh.material;
         // 這時候 baseMat.clippingPlanes 已經被 setSectionMode 設成本檔鴨子定型的陽春物件
         // （{normal:{x,y,z},constant}，不是真正的 THREE.Plane 實例）——Three.js 的
@@ -1467,9 +1470,9 @@ var EG3DTools = (function () {
         baseMat.clippingPlanes = null;
         var mat = baseMat.clone();
         baseMat.clippingPlanes = savedPlanes;
-        // 封頂色刻意選偏亮、飽和度較高的暖橘色（ai-rules/10 暖色系），跟模型本身的灰色調
+        // 封頂色刻意選偏亮、飽和度較高的暖色調（ai-rules/10 暖色系），跟模型本身的灰色調
         // 明顯區隔，使用者一眼就能認出「這塊是斷面封頂、不是原本的灰色材質背面」。
-        mat.color.set('#E8742E');
+        mat.color.set(_EG_CAP_COLORS[colorIdx % _EG_CAP_COLORS.length]);
         if (mat.specular) mat.specular.set('#332211');   // Phong 材質若保留原本高反光度，封頂色會被鏡面反射洗淡，降低一點
         mat.shininess = 8;
         mat.side = 2;   // THREE.DoubleSide（已用 CDP 實測確認此數值，函式庫未暴露全域 THREE 列舉）
@@ -1490,7 +1493,7 @@ var EG3DTools = (function () {
         planes.forEach(function (plane, i) {
             var geo = _buildCapGeometry(mm, plane);
             if (!geo) return;
-            var mat = _buildCapMaterial(sampleMesh);
+            var mat = _buildCapMaterial(sampleMesh, i);
             var others = planes.filter(function (_, j) { return j !== i; });
             if (others.length) mat.clippingPlanes = others;
             var capObj = new MeshCtor(geo, mat);
