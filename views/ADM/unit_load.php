@@ -193,7 +193,7 @@ body { background:#F3F6EC; }
 .ul-status-badge { display:inline-block; font-size:10.5px; line-height:16px; padding:0 6px; border-radius:9px;
                     margin:1px 2px 1px 0; white-space:nowrap; }
 .ul-status-badge.leave { background:var(--overload-bg); color:var(--overload-text); }
-.ul-status-badge.trip, .ul-status-badge.training, .ul-status-badge.meeting { background:#F0F4E6; color:var(--green-d); }
+.ul-status-badge.trip, .ul-status-badge.training, .ul-status-badge.meeting, .ul-status-badge.calendar { background:#F0F4E6; color:var(--green-d); }
 
 /* KPI 卡內嵌的「過重理由」（2026-10-07 取代獨立的「部門負荷總表」，理由直接併進卡片本身） */
 .kpi-reasons { font-size:11px; color:var(--overload-text); margin-top:6px; text-align:left; }
@@ -1190,7 +1190,11 @@ function statusBadgeHtml(items){
   if (!items || !items.length) return '';
   return items.map(function(it){
     var cls = (it.source==='leave') ? 'leave' : (it.source||'');
-    return '<span class="ul-status-badge '+esc(cls)+'" title="'+esc(it.text||'')+'">'+esc(it.label||'')+'</span>';
+    // 2026-10-08 使用者回報：原本時間只放在滑鼠停留才看得到的 title 提示裡，徽章本身看不出
+    // 開了多久——改把 it.time（'全天' 或 'HH:MM~HH:MM'，eg_psched_for_users() 已經算好）
+    // 直接印在徽章上，完整說明（含事由）仍保留在 title。
+    var timeTxt = it.time ? '　' + it.time : '';
+    return '<span class="ul-status-badge '+esc(cls)+'" title="'+esc(it.text||'')+'">'+esc(it.label||'')+esc(timeTxt)+'</span>';
   }).join('');
 }
 /** 待驗/包裝「最長/最短前5筆」小表格，withProcess=true 時多印一欄製程名稱。

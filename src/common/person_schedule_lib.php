@@ -32,6 +32,15 @@ if (!function_exists('eg_psched_sources')) {
             'trip'     => ['label'=>'公出/外出', 'desc'=>'公出單（已送簽核／已核准）',            'blocks'=>0, 'default'=>1],
             'training' => ['label'=>'教育訓練',  'desc'=>'內訓／外訓已排定的受訓人員',            'blocks'=>0, 'default'=>1],
             'meeting'  => ['label'=>'其他會議',  'desc'=>'同一天已被排入的其他會議',              'blocks'=>0, 'default'=>1],
+            // 2026-10-08 新增（使用者回報：行事曆上明明有「AS稽核-復評」這種會議類別事件，
+            // 逐人每日工作量卻沒顯示）——查證發現現場有兩條平行路徑在記「這個人那天有
+            // 會議」：走正式會議紀錄管理模組的（上面 'meeting' 來源，讀 meeting_record）、
+            // 跟直接在行事曆（evenement，走 category_id=2「會議」等分類）記一筆事件、挑
+            // 參與人員（evenement_actor）的——後者完全沒有來源涵蓋到。'calendar' 一般
+            // 行事曆事件：**刻意排除 category_id=1（休假）**，那一類已經由上面的 'leave'
+            // 來源讀 leave_request 涵蓋（leave_calendar_lib.php 已把行事曆的休假事件雙向
+            // 同步成請假單），這裡再讀一次會重複顯示同一件事。
+            'calendar' => ['label'=>'行事曆事件', 'desc'=>'一般行事曆事件，例如會議／課程／公出／客戶來訪等分類（休假類別已由「請假」來源涵蓋，不重複）', 'blocks'=>0, 'default'=>1],
         ];
     }
 }
@@ -193,6 +202,32 @@ if (!function_exists('eg_psched_for_users')) {
                     $subj = trim((string)$r['subject']);
                     $push((int)$r['user_id'], 'meeting', $s, $e, ($s === '' && $e === ''),
                           '會議' . ($subj !== '' ? '（' . $subj . '）' : ''));
+                }
+            } catch (Throwable $e) { }
+        }
+
+        // ── 一般行事曆事件（2026-10-08 新增，見 eg_psched_sources() 的 'calendar' 註解）：
+        // evenement 多日事件的 start/end 可能橫跨好幾天且是 datetime，判斷「這一天是不是
+        // 整天都在」的邏輯跟上面請假那段同一個道理——起訖日不等於當天的，那一天視同全天。
+        if (!empty($on['calendar'])) {
+            try {
+                $st = $db->prepare("SELECT ea.user_id, e.title, e.start, e.end, e.allday, ec.category_name
+                                    FROM evenement_actor ea
+                                    JOIN evenement e ON e.id = ea.event_id
+                                    LEFT JOIN event_category ec ON ec.id = e.category_id
+                                    WHERE ea.user_id IN ($in) AND (e.category_id IS NULL OR e.category_id <> 1)
+                                      AND e.start < ? AND e.end > ?");
+                $st->execute([$date . ' 23:59:59', $date . ' 00:00:00']);
+                foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $ds = substr((string)$r['start'], 0, 10);
+                    $de = substr((string)$r['end'], 0, 10);
+                    $allday = !empty($r['allday']) || $ds < $date || $de > $date;
+                    $cat = trim((string)($r['category_name'] ?: '行事曆'));
+                    $title = trim((string)$r['title']);
+                    $push((int)$r['user_id'], 'calendar',
+                          $ds === $date ? substr((string)$r['start'], 11, 5) : '00:00',
+                          $de === $date ? substr((string)$r['end'],   11, 5) : '23:59',
+                          $allday, $cat . ($title !== '' ? '：' . $title : ''));
                 }
             } catch (Throwable $e) { }
         }
