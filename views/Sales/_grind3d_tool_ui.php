@@ -92,6 +92,16 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
           box-shadow:0 0 0 2px rgba(199,122,48,.18); }
 .g3d-ni.g3d-err { border-color:var(--g3d-bad); background:#FDEDEA; }
 .g3d-hint { font-size:11px; color:#8a7560; line-height:1.5; margin:2px 0 6px; }
+.g3d-fx { width:100%; border-collapse:collapse; font-size:12px; }
+.g3d-fx th { font-weight:600; font-size:11px; color:#8a7560; text-align:center;
+             padding:2px 3px; border-bottom:1px solid var(--g3d-line); }
+.g3d-fx td { padding:2px 3px; }
+.g3d-fx td.g3d-fx-n { text-align:center; color:#8a7560; font-size:11px; }
+.g3d-fx .g3d-ni { padding:2px 5px; }
+.g3d-fx-del { border:none; background:none; color:#b9a287; cursor:pointer;
+              font-size:14px; line-height:1; padding:0 2px; }
+.g3d-fx-del:hover { color:var(--g3d-bad); }
+.g3d-kv tr.g3d-bind > div { background:#FDF0EA; }
 .g3d-badhint { font-size:11px; color:var(--g3d-bad); font-weight:600;
           line-height:1.5; margin:2px 0 6px; display:none; }
 
@@ -251,6 +261,32 @@ var EGGrind3D = (function () {
         p.H  = p.Rs - p.Rr;                       /* 肩部高出齒底徑多少 */
         p.Hf = Math.min(p.Hf, p.Rw * 0.9);        /* 刃高不可超過砂輪半徑 */
         p.Tb = p.Tw + 2 * p.Hf * Math.tan(p.pa * Math.PI / 180);  /* 砂輪本體厚度 */
+
+        /* ── 治具：多段直徑，從肩部外端往外依序接（使用者 2026-10-12 拍板的輸入方式）
+           第 1 段＝最靠近肩部的那一段。直徑或長度沒填（<=0）的列直接略過，
+           讓使用者可以留著空列不必刪。 */
+        p.fx = [];
+        var raw = Array.isArray(o.fx) ? o.fx : [];
+        for (var i = 0; i < raw.length && p.fx.length < 12; i++) {
+            var d = parseFloat(raw[i] && raw[i].d), L = parseFloat(raw[i] && raw[i].len);
+            if (!isFinite(d) || !isFinite(L) || d <= 0 || L <= 0) continue;
+            p.fx.push({ d: Math.min(d, 4000), len: Math.min(L, 4000) });
+        }
+
+        /* ── 障礙物清單：砂輪**不可以碰到**的每一塊實體，一律表示成
+              (軸向 x0~x1, 半徑 <= R) 的矩形（工件與治具都是迴轉體，所以在
+              (軸向, 半徑) 平面上就是矩形）。肩部與治具用同一種表示法，下面的
+              求解、染色、間隙全部共用一條路徑，不會變成兩套規則（鐵律4）。
+              **齒段不在這個清單裡**：那是要被磨的料，砂輪本來就該碰到它。 */
+        p.obs = [{ x0: -p.Lsh, x1: 0, R: p.Rs, name: '肩部', kind: 'shoulder' }];
+        var cur = -p.Lsh;
+        for (var k = 0; k < p.fx.length; k++) {
+            var x1 = cur, x0 = cur - p.fx[k].len;
+            p.obs.push({ x0: x0, x1: x1, R: p.fx[k].d / 2,
+                         name: '治具第' + (k + 1) + '段', kind: 'fixture', idx: k });
+            cur = x0;
+        }
+        p.fxTotal = -p.Lsh - cur;                 /* 治具總長 */
         return p;
     }
 
@@ -273,6 +309,28 @@ var EGGrind3D = (function () {
        頭尾都落在軸線 r=0，所以迴轉後是封閉實體。 */
     function wpProfile(p) {
         return [[0,-p.Lsh],[p.Rs,-p.Lsh],[p.Rs,0],[p.Rr,0],[p.Rr,p.Lsp],[0,p.Lsp]];
+    }
+
+    /* 治具輪廓（接在肩部外端 x=-Lsh 往外）。revolveZ 要求 z 由小到大，所以從
+       最外端往肩部方向排。相鄰兩段同直徑時會產生零面積三角形（法向量算出來
+       是 NaN），所以要去掉重複點。 */
+    function fxProfile(p) {
+        if (!p.obs) return null;
+        var segs = p.obs.filter(function (o) { return o.kind === 'fixture'; });
+        if (!segs.length) return null;
+        var prof = [[0, segs[segs.length - 1].x0]];
+        for (var i = segs.length - 1; i >= 0; i--) {
+            prof.push([segs[i].R, segs[i].x0]);
+            prof.push([segs[i].R, segs[i].x1]);
+        }
+        prof.push([0, segs[0].x1]);
+        var out = [];
+        for (var k = 0; k < prof.length; k++) {
+            var a = out[out.length - 1];
+            if (a && Math.abs(a[0] - prof[k][0]) < 1e-9 && Math.abs(a[1] - prof[k][1]) < 1e-9) continue;
+            out.push(prof[k]);
+        }
+        return out.length >= 3 ? out : null;
     }
 
     /* ══ 二、砂輪（迴轉體輪廓，局部座標 (rho, t)，t 即砂輪軸向）════════════
@@ -326,10 +384,11 @@ var EGGrind3D = (function () {
         return rings;
     }
 
-    /* ══ 四、單一圈能逼近肩部到哪裡（解析解，見檔頭推導③）══════════════════
-       回傳這一圈要求的 cx 下限；-Infinity＝這一圈永遠碰不到肩部。 */
-    function ringLimit(rho, t, p, cg, sg, cy) {
-        var Rs2 = p.Rs * p.Rs;
+    /* ══ 四、單一圈能逼近「半徑 R 的障礙物」到哪裡（解析解，見檔頭推導③）══
+       回傳 max(-Xlocal)（相對砂輪中心）；-Infinity＝這一圈永遠碰不到這個半徑。
+       R 是參數而不是寫死肩部半徑，肩部與治具每一段才能共用同一條路徑。 */
+    function ringLimit(rho, t, cg, sg, cy, R) {
+        var Rs2 = R * R;
         function r2(th) {
             var a = rho * Math.sin(th) + cy;
             var b = rho * Math.cos(th) * sg - t * cg;
@@ -338,7 +397,7 @@ var EGGrind3D = (function () {
         function cand(th) { return -(rho * Math.cos(th) * cg + t * sg); }
 
         var mid = 1.5 * Math.PI;              /* phi = 270°：砂輪最深的那一點 */
-        if (r2(mid) > Rs2) return -Infinity;  /* 連最深處都碰不到肩部 */
+        if (r2(mid) > Rs2) return -Infinity;  /* 連最深處都碰不到這個半徑 */
 
         /* 從 270° 往 180° 掃，找第一次離開可行區（r > Rs）的那一小段再二分。
            刻意先粗掃再二分、不直接對整個 [180°,270°] 二分：r(phi) 絕大多數情況
@@ -367,15 +426,25 @@ var EGGrind3D = (function () {
         return [ x * cg + z * sg + cx,  y + cy,  -x * sg + z * cg ];
     }
 
-    /* ══ 六、禁區（肩部實體）的有號距離 ═══════════════════════════════════
-       在 (軸向 x, 半徑 r) 平面上，肩部就是矩形 x in [-Lsh,0]、r in [0,Rs]。
-       回傳 >0 = 侵入深度；<=0 = 在外面（絕對值＝到肩部的距離）。
-       只用在「3D 上哪些三角形要塗紅色」，數字結論一律用上面的解析解。 */
-    function shoulderSD(x, r, p) {
-        var dxL = -p.Lsh - x, dxR = x, dr = r - p.Rs;
+    /* ══ 六、禁區的有號距離 ═══════════════════════════════════════════════
+       工件與治具都是迴轉體，所以在 (軸向 x, 半徑 r) 平面上每一塊都是矩形。
+       回傳 >0 = 侵入深度；<=0 = 在外面（絕對值＝到該矩形的距離）。
+       **只用在「3D 上哪些三角形要塗紅色」**，畫面上的數字結論一律用解析解，
+       兩者不會互相矛盾（解析解 = 0 的瞬間這裡也剛好 = 0）。 */
+    function rectSD(x, r, o) {
+        var dxL = o.x0 - x, dxR = x - o.x1, dr = r - o.R;
         if (dxL <= 0 && dxR <= 0 && dr <= 0) return Math.min(-dxL, -dxR, -dr);
         var ox = Math.max(dxL, 0, dxR), oy = Math.max(dr, 0);
         return -Math.sqrt(ox * ox + oy * oy);
+    }
+    /** 對整份障礙物清單取最大（落在任何一塊裡面就算干涉） */
+    function obsSD(x, r, p) {
+        var best = -Infinity;
+        for (var i = 0; i < p.obs.length; i++) {
+            var d = rectSD(x, r, p.obs[i]);
+            if (d > best) best = d;
+        }
+        return best;
     }
 
     /* ══ 七、主分析 ════════════════════════════════════════════════════════ */
@@ -386,11 +455,28 @@ var EGGrind3D = (function () {
 
         var g = p.tilt * Math.PI / 180, cg = Math.cos(g), sg = Math.sin(g);
         var cy = p.Rr + p.Rw;          /* 解析解，與傾角無關（檔頭推導①）*/
+        var rings = wheelRings(p), i;
 
-        var rings = wheelRings(p), lim = -Infinity, i;
-        for (i = 0; i < rings.length; i++) {
-            var v = ringLimit(rings[i][0], rings[i][1], p, cg, sg, cy);
-            if (v > lim) lim = v;
+        /** 砂輪在半徑 R 這一圈高度上，最多能往 -X 伸多遠（相對砂輪中心）。
+            障礙物右端面在 x1 時，它要求的 cx 下限 = x1 + reach(R)。 */
+        function reach(R) {
+            var m = -Infinity;
+            for (var k = 0; k < rings.length; k++) {
+                var v = ringLimit(rings[k][0], rings[k][1], cg, sg, cy, R);
+                if (v > m) m = v;
+            }
+            return m;
+        }
+
+        /* 逐一障礙物算出「砂輪中心最多能靠到哪個軸向位置」，整體取最大。
+           會卡住的不一定是肩部——砂輪夠大時常常是治具某一段先撞到，
+           所以要記住是哪一塊在卡（binding），畫面上要指名道姓。 */
+        var lim = -Infinity, bind = null;
+        for (i = 0; i < p.obs.length; i++) {
+            var o = p.obs[i];
+            var rc = reach(o.R);
+            o.cxLimit = isFinite(rc) ? (o.x1 + rc) : -Infinity;
+            if (o.cxLimit > lim) { lim = o.cxLimit; bind = o; }
         }
         if (!isFinite(lim)) lim = 0;   /* 理論上不會發生（最深點恆可達齒底徑）*/
 
@@ -399,13 +485,34 @@ var EGGrind3D = (function () {
         out.cg      = cg;
         out.sg      = sg;
         out.rings   = rings;
+        out.reach   = reach;
+        out.bind    = bind;
         out.cxLimit = lim;
         out.tail    = lim;             /* 最深點恆在 x = cx（檔頭推導②）*/
         out.tailTot = lim + p.U;
+        /* 2D 公式只描述「肩部」這一塊，治具不在它的模型裡，所以兩者只有在
+           肩部就是卡住的那一塊、而且傾角 0 時才會相同——畫面上要講明。 */
         out.tail2d  = Math.sqrt(Math.max(p.Rw * p.Rw - (p.Rw - p.H) * (p.Rw - p.H), 0));
         out.tail2dT = out.tail2d + p.U;
         out.diff    = out.tail - out.tail2d;
         return out;
+    }
+
+    /* ══ 七之二、某一塊障礙物的「徑向間隙」═══════════════════════════════
+       ＝這一塊還可以再長高多少，砂輪才會剛好碰到它（截圖上那個 10 就是這個）。
+       用同一支解析解反解：把 R 往上加到它要求的 cx 下限正好等於目前的 cx，
+       多出來的半徑就是間隙。這樣做的好處是**與軸向餘裕保證一致**——兩個數字
+       會在同一瞬間同時變成 0，不會出現「說有間隙卻判干涉」這種自相矛盾。
+       回傳 >0＝還有間隙；<0＝已經吃進去多少半徑。 */
+    function radialGap(res, o, cx) {
+        var lo = 0, hi = res.p.Rw + res.cy;           /* 高到一定會碰到 */
+        /* 單調性：R 越大，reach(R) 越大、cxLimit 越大 → 越容易被判干涉 */
+        if (o.x1 + res.reach(hi) < cx) return hi - o.R;   /* 怎麼長都碰不到 */
+        for (var k = 0; k < 48; k++) {
+            var m = (lo + hi) / 2;
+            if (o.x1 + res.reach(m) < cx) lo = m; else hi = m;
+        }
+        return (lo + hi) / 2 - o.R;
     }
 
     /* 指定砂輪位置時的狀況。
@@ -520,8 +627,9 @@ var EGGrind3D = (function () {
         var p = res.p;
         var model = new OV.Model();
         var mWp   = model.AddMaterial(phong(214, 198, 176, wpOpacity));   /* 工件：砂色 */
+        var mFx   = model.AddMaterial(phong(150, 124,  96, wpOpacity));   /* 治具：暖棕 */
         var mBody = model.AddMaterial(phong(150, 150, 155));              /* 砂輪本體：灰 */
-        var mHit  = model.AddMaterial(phong(221,  81,  56));              /* 干涉肩部：紅 */
+        var mHit  = model.AddMaterial(phong(221,  81,  56));              /* 干涉：紅 */
         /* 原本還有一個「正在切削齒段」的琥珀色，已移除：工件畫的是**加工完成後**的
            齒底徑，砂輪在正確磨削位置只會與齒底圓相切、不會侵入，所以那個顏色實際上
            永遠不會出現（實測染色統計確認 0 個三角形）。留著等於在畫面上承諾一個不會
@@ -532,7 +640,7 @@ var EGGrind3D = (function () {
         function classify(lx, ly, lz) {
             var w = placed([lx, ly, lz], res.cg, res.sg, cx, res.cy);
             var r = Math.sqrt(w[1] * w[1] + w[2] * w[2]);
-            return shoulderSD(w[0], r, p) > 0 ? mHit : mBody;
+            return obsSD(w[0], r, p) > 0 ? mHit : mBody;
         }
 
         var wp = revolveZ(wpProfile(p), SEG, mWp, '工件', null);
@@ -541,6 +649,18 @@ var EGGrind3D = (function () {
         nw.AddMeshIndex(iw);
         nw.SetTransformation(new OV.Transformation(mtx(0, 1, 0, 0, 0)));  /* R_y(90°) */
         model.GetRootNode().AddChildNode(nw);
+
+        /* 治具：另外一支 mesh、另外一個材質（暖棕），與工件分得開才看得出是撞到
+           哪一邊；沒填治具時 fxProfile() 回 null，整段不畫。 */
+        var fxp = fxProfile(p);
+        if (fxp) {
+            var fxm = revolveZ(fxp, SEG, mFx, '治具', null);
+            var ifx = model.AddMesh(fxm);
+            var nfx = new OV.Node();
+            nfx.AddMeshIndex(ifx);
+            nfx.SetTransformation(new OV.Transformation(mtx(0, 1, 0, 0, 0)));  /* R_y(90°) */
+            model.GetRootNode().AddChildNode(nfx);
+        }
 
         var wh = revolveZ(whProfile(p), SEG, mBody, '砂輪', classify);
         var ih = model.AddMesh(wh);
@@ -694,12 +814,26 @@ var EGGrind3D = (function () {
         h.push(fieldHtml(NUMF[9]));
         h.push('</div>');
 
+        /* ── 治具：多段直徑（使用者 2026-10-12 拍板的輸入方式）──────────────
+           第 1 段＝最靠近肩部的那一段，往外依序接。留白的列會被忽略，不必刪。 */
+        h.push('<div class="g3d-sec"><h4>治具'
+            + '<span style="font-weight:400;font-size:11px;color:#8a7560">'
+            + '（第 1 段最靠近肩部，往外依序）</span></h4>'
+            + '<table class="g3d-fx"><thead><tr>'
+            + '<th style="width:26px">段</th><th>直徑 mm</th><th>長度 mm</th><th style="width:26px"></th>'
+            + '</tr></thead><tbody id="g3dFxBody"></tbody></table>'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dFxAdd" '
+            + 'style="width:100%;margin-top:5px">＋ 新增一段</button>'
+            + '<div class="g3d-hint">沒填就只算肩部干涉。砂輪夠大時，先撞到的常常不是'
+            + '肩部而是治具，結果區會指名是哪一段在卡。</div>'
+            + '</div>');
+
         h.push('<div class="g3d-badhint" id="g3dErr"></div>');
 
         h.push('<div class="g3d-sec"><h4>砂輪位置</h4>'
             + '<div class="g3d-slider"><label>軸向位置</label>'
             + '<input type="range" id="g3dCx"><span id="g3dCxV">—</span></div>'
-            + '<div class="g3d-hint">砂輪中心到肩部端面的軸向距離。往左拖會壓進肩部，'
+            + '<div class="g3d-hint">砂輪中心到肩部端面的軸向距離。往左拖會壓進肩部或治具，'
             + '壓到的部分在 3D 上以紅色標示。</div>'
             + '<button type="button" class="g3d-btn g3d-btn-main" id="g3dToLimit" '
             + 'style="width:100%">移到不干涉的極限位置</button>'
@@ -708,8 +842,8 @@ var EGGrind3D = (function () {
         h.push('<div class="g3d-sec"><h4>顯示</h4>'
             + '<div class="g3d-row"><label style="flex:1 1 auto">'
             + '<input type="checkbox" id="g3dTrans" checked> 工件半透明</label></div>'
-            + '<div class="g3d-hint">干涉時砂輪是埋在肩部裡面的，工件不透明就看不到紅色區域，'
-            + '所以預設半透明。要看實體外觀再取消勾選。</div>'
+            + '<div class="g3d-hint">干涉時砂輪是埋在肩部或治具裡面的，不透明就看不到紅色'
+            + '區域，所以工件與治具預設半透明。要看實體外觀再取消勾選。</div>'
             + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dRefit" '
             + 'style="width:100%">重設視角</button>'
             + '</div>');
@@ -775,6 +909,7 @@ var EGGrind3D = (function () {
             var el = $1('#g3d_' + f[0]);
             o[f[0]] = el ? el.value : DEF[f[0]];
         });
+        o.fx = readFx();
         return o;
     }
 
@@ -782,6 +917,41 @@ var EGGrind3D = (function () {
         NUMF.forEach(function (f) {
             var el = $1('#g3d_' + f[0]);
             if (el) el.value = (o && o[f[0]] !== undefined) ? o[f[0]] : DEF[f[0]];
+        });
+        renderFx((o && Array.isArray(o.fx)) ? o.fx : []);
+    }
+
+    /* ── 治具段落表 ──────────────────────────────────────────────────────
+       刻意留著「全空的列」不自動刪：使用者可能只是還沒填完，列一消失游標就跑掉。
+       空列在 norm() 會被略過，不影響計算。 */
+    function readFx() {
+        var out = [], tb = $1('#g3dFxBody');
+        if (!tb) return out;
+        Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
+            var d = tr.querySelector('[data-fxk=d]'), L = tr.querySelector('[data-fxk=len]');
+            out.push({ d: d ? d.value : '', len: L ? L.value : '' });
+        });
+        return out;
+    }
+    function renderFx(rows) {
+        var tb = $1('#g3dFxBody');
+        if (!tb) return;
+        if (!rows.length) rows = [{ d: '', len: '' }];
+        tb.innerHTML = rows.map(function (r, i) {
+            return '<tr><td class="g3d-fx-n">' + (i + 1) + '</td>'
+                 + '<td><input type="number" class="g3d-ni" step="any" data-fxk="d" value="'
+                 + esc(r.d === undefined || r.d === null ? '' : r.d) + '"></td>'
+                 + '<td><input type="number" class="g3d-ni" step="any" data-fxk="len" value="'
+                 + esc(r.len === undefined || r.len === null ? '' : r.len) + '"></td>'
+                 + '<td><button type="button" class="g3d-fx-del" title="刪除這一段">×</button></td></tr>';
+        }).join('');
+    }
+    function fxRenumber() {
+        var tb = $1('#g3dFxBody');
+        if (!tb) return;
+        Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr, i) {
+            var c = tr.querySelector('.g3d-fx-n');
+            if (c) c.textContent = String(i + 1);
         });
     }
 
@@ -859,32 +1029,57 @@ var EGGrind3D = (function () {
         var a = at(res, ST.cx);
         var sl = $1('#g3dCxV');
         if (sl) sl.textContent = fx(ST.cx, 2);
+        /* 先卡住的是哪一塊：砂輪夠大時常常是治具某一段，不是肩部。結論列一定要
+           指名道姓，不然使用者會以為只要把肩部改小就解決得了。 */
+        var bindName = res.bind ? res.bind.name : '肩部';
         var v = $1('#g3dVerdict');
         if (v) {
             if (a.hit) {
                 v.className = 'g3d-verdict g3d-v-bad';
                 v.innerHTML = '<i class="fa fa-times-circle"></i> 會干涉：砂輪必須往外退 '
-                            + fx(a.pen) + ' mm 才不會碰到肩部';
+                            + fx(a.pen) + ' mm 才不會碰到<b>' + esc(bindName) + '</b>';
             } else {
                 v.className = 'g3d-verdict g3d-v-ok';
-                v.innerHTML = '<i class="fa fa-check-circle"></i> 不干涉：還可以再往肩部靠近 '
-                            + fx(a.clr) + ' mm';
+                v.innerHTML = '<i class="fa fa-check-circle"></i> 不干涉：還可以再靠近 '
+                            + fx(a.clr) + ' mm（最先碰到的是<b>' + esc(bindName) + '</b>）';
             }
         }
-        var d2 = res.diff;
+        var d2 = res.diff, shoulderBind = !res.bind || res.bind.kind === 'shoulder';
         var rows = [
             ['砂輪中心軸向位置',                      fx(ST.cx) + ' mm'],
-            ['不干涉的極限位置',                      fx(res.cxLimit) + ' mm'],
+            ['不干涉的極限位置<span class="g3d-k-sub">（由' + esc(bindName) + '決定）</span>',
+                                                      fx(res.cxLimit) + ' mm'],
             ['<b>出尾長度</b><span class="g3d-k-sub">（本工具，含傾角 '
-              + fx(p.tilt, 1) + '°）</span>',         '<b>' + fx(res.tail) + ' mm</b>'],
+              + fx(p.tilt, 1) + '°' + (shoulderBind ? '' : '，含治具') + '）</span>',
+                                                      '<b>' + fx(res.tail) + ' mm</b>'],
             ['出尾長度＋退刀量 ' + fx(p.U, 2) + ' mm', fx(res.tailTot) + ' mm'],
-            ['2D 公式值<span class="g3d-k-sub">（齒輪計算工具的出尾計算，只在傾角 0 成立）</span>',
+            ['2D 公式值<span class="g3d-k-sub">（齒輪計算工具的出尾計算，只算肩部、只在傾角 0 成立）</span>',
                                                       fx(res.tail2d) + ' mm'],
-            ['2D 公式低估／高估了',                   (d2 >= 0 ? '+' : '') + fx(d2) + ' mm'],
+            ['2D 公式低估／高估了' + (shoulderBind ? ''
+                : '<span class="g3d-k-sub">（這次是治具在卡，2D 公式根本沒有算它）</span>'),
+                                                      (d2 >= 0 ? '+' : '') + fx(d2) + ' mm'],
             ['砂輪中心高度<span class="g3d-k-sub">（距工件軸心）</span>', fx(res.cy) + ' mm'],
             ['肩部高出齒底徑',                        fx(p.H) + ' mm'],
             ['砂輪本體厚度<span class="g3d-k-sub">（含側面角張開）</span>', fx(p.Tb) + ' mm']
         ];
+
+        /* 逐一列出每一塊障礙物：軸向餘裕（還能再靠近多少）與徑向間隙（這一塊還能
+           再長高多少才會碰到＝截圖上那個 10）。兩個數字由同一支解析解推出來，
+           保證同時變 0，不會出現「說有間隙卻判干涉」。 */
+        p.obs.forEach(function (o) {
+            var am = ST.cx - o.cxLimit;
+            var rg = radialGap(res, o, ST.cx);
+            var tag = (o === res.bind) ? '　← 最先碰到' : '';
+            rows.push([
+                '<b>' + esc(o.name) + '</b><span class="g3d-k-sub"> Ø' + fx(o.R * 2, 1)
+                    + '　軸向 ' + fx(o.x0, 1) + '～' + fx(o.x1, 1) + esc(tag) + '</span>',
+                (am < 0 ? '<span style="color:var(--g3d-bad)">軸向 ' + fx(am) + '</span>'
+                        : '軸向 +' + fx(am))
+                + '　/　'
+                + (rg < 0 ? '<span style="color:var(--g3d-bad)">徑向 ' + fx(rg) + '</span>'
+                          : '徑向 +' + fx(rg)) + ' mm'
+            ]);
+        });
         var kv = $1('#g3dKv');
         if (kv) {
             /* 這裡刻意不過 esc()：rows 的兩欄都是本檔自己組出來的靜態說明與
@@ -916,6 +1111,38 @@ var EGGrind3D = (function () {
                 clearTimeout(ST.timer);
                 ST.timer = setTimeout(function () { recompute(false); }, 120);
             });
+        });
+
+        /* 治具表：輸入即重算；＋ 新增一段；× 刪除（事件委派，新增的列也涵蓋） */
+        var fxb = $1('#g3dFxBody');
+        if (fxb) {
+            fxb.addEventListener('input', function (e) {
+                if (!e.target.getAttribute || !e.target.getAttribute('data-fxk')) return;
+                clearTimeout(ST.timer);
+                ST.timer = setTimeout(function () { recompute(true); }, 150);
+            });
+            fxb.addEventListener('click', function (e) {
+                if (!e.target.classList || !e.target.classList.contains('g3d-fx-del')) return;
+                var tr = e.target.closest('tr');
+                if (!tr) return;
+                if (fxb.querySelectorAll('tr').length <= 1) {
+                    /* 只剩一列時不刪掉列、只清空：整張表消失會讓人以為功能不見了 */
+                    Array.prototype.forEach.call(tr.querySelectorAll('input'),
+                        function (x) { x.value = ''; });
+                } else {
+                    tr.parentNode.removeChild(tr);
+                }
+                fxRenumber();
+                recompute(true);
+            });
+        }
+        var fxAdd = $1('#g3dFxAdd');
+        if (fxAdd) fxAdd.addEventListener('click', function () {
+            var rows = readFx();
+            rows.push({ d: '', len: '' });
+            renderFx(rows);
+            var all = $1('#g3dFxBody').querySelectorAll('[data-fxk=d]');
+            if (all.length) all[all.length - 1].focus();
         });
 
         var sl = $1('#g3dCx');
@@ -1208,7 +1435,34 @@ var EGGrind3D = (function () {
              + '  縮小=' + (e1 / Math.max(e2, 1e-12)).toFixed(1) + '倍');
         });
 
-        out.push('【四】退化與邊界情形要被擋下、不可以畫出看起來正常的圖');
+        out.push('【四】治具干涉（使用者截圖的實例：砂輪 Ø300、治具 Ø118x50 + Ø90x30）');
+        var FXC = { Dw:300, Dr:40, Ds:70, Tw:6, Lsh:20, Lsp:80, tilt:0,
+                    fx:[{d:118,len:50},{d:90,len:30}] };
+        var rF = analyze(FXC);
+        var rN = analyze({ Dw:300, Dr:40, Ds:70, Tw:6, Lsh:20, Lsp:80, tilt:0 });
+        ck('有治具時障礙物 = 肩部 + 2 段', rF.p.obs.length === 3,
+           rF.p.obs.map(function (o) { return o.name + '(Ø' + (o.R*2) + ')'; }).join(' '));
+        ck('治具段的軸向位置接在肩部外端往外排',
+           Math.abs(rF.p.obs[1].x1 - (-20)) < 1e-9 && Math.abs(rF.p.obs[1].x0 - (-70)) < 1e-9
+             && Math.abs(rF.p.obs[2].x1 - (-70)) < 1e-9 && Math.abs(rF.p.obs[2].x0 - (-100)) < 1e-9,
+           '第1段 -70~-20、第2段 -100~-70');
+        ck('治具把極限位置往外推（比只有肩部時遠）', rF.cxLimit > rN.cxLimit + 1e-6,
+           '只有肩部=' + rN.cxLimit.toFixed(3) + '  加治具=' + rF.cxLimit.toFixed(3));
+        ck('會指出是治具在卡，不是肩部', rF.bind && rF.bind.kind === 'fixture',
+           '最先碰到 = ' + (rF.bind ? rF.bind.name : '(無)'));
+        /* 徑向間隙與軸向餘裕必須同時為 0：這是兩個數字一致性的關鍵檢查 */
+        var atLim = { p: rF.p, cy: rF.cy, cg: rF.cg, sg: rF.sg, rings: rF.rings, reach: rF.reach };
+        var gapAtLimit = radialGap(atLim, rF.bind, rF.cxLimit);
+        ck('在極限位置時，卡住那一段的徑向間隙恰為 0', Math.abs(gapAtLimit) < 1e-3,
+           '徑向間隙 = ' + gapAtLimit.toExponential(2));
+        var gapOut = radialGap(atLim, rF.bind, rF.cxLimit + 10);
+        ck('砂輪往外退 10mm 後徑向間隙應為正', gapOut > 0, '徑向間隙 = ' + gapOut.toFixed(4) + ' mm');
+        /* 空的治具列要被忽略，不可以當成 Ø0 的障礙物 */
+        var rE = analyze({ Dw:300, Dr:40, Ds:70, Tw:6, Lsh:20, Lsp:80,
+                           fx:[{d:'',len:''},{d:0,len:50},{d:118,len:0}] });
+        ck('沒填完的治具列被忽略', rE.p.obs.length === 1 && Math.abs(rE.cxLimit - rN.cxLimit) < 1e-9);
+
+        out.push('【五】退化與邊界情形要被擋下、不可以畫出看起來正常的圖');
         ck('肩部直徑 <= 齒底徑', !analyze({ Dr:40, Ds:40 }).ok);
         ck('肩部高度 >= 砂輪半徑', !analyze({ Dw:20, Dr:10, Ds:40 }).ok);
         ck('極小肩部（H=0.1）仍算得出來',
@@ -1221,7 +1475,7 @@ var EGGrind3D = (function () {
     return {
         mount: mount, open: open, close: close,
         analyze: analyze, at: at, selfTest: selfTest,
-        DEF: DEF, _norm: norm, _shoulderSD: shoulderSD, _placed: placed,
+        DEF: DEF, _norm: norm, _obsSD: obsSD, _placed: placed, _radialGap: radialGap,
         _brute: bruteLimit, _wpProfile: wpProfile, _whProfile: whProfile,
         _buildModel: buildModel
     };
