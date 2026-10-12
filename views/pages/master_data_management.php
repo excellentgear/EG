@@ -11138,6 +11138,10 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomFit()" title="還原 1:1" style="font-size:10px;padding:1px 6px;">⊡</button>
             </span>
             <button type="button" id="pav-btn-markup" class="btn btn-xs btn-info" onclick="pavOpenWithPaint()" style="display:none;white-space:nowrap;" title="用 Windows 小畫家開啟（需一次性安裝）"><i class="fa fa-paint-brush"></i> 小畫家</button>
+            <?php if ($imgeditCanUse): ?>
+            <!-- 批圖編輯器（2D：圖片／PDF／DWG）；3D 另有自己那顆在上面的上色群組內（走截圖帶入） -->
+            <button type="button" id="pav-btn-image-editor" onclick="pavOpenImageEditor()" style="display:none;white-space:nowrap;background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;" class="btn btn-xs" title="用批圖編輯器開啟這張圖（可標註、改圖後存回料號附件）"><i class="fa fa-pencil-square-o"></i> 批圖編輯器</button>
+            <?php endif; ?>
             <a id="pav-btn-paint" href="#" target="_blank" class="btn btn-xs btn-default" style="display:none;white-space:nowrap;" title="在新視窗開啟"><i class="fa fa-external-link"></i> 開啟</a>
             <?php if ($can_part_attach): ?>
             <button type="button" class="btn btn-xs" id="pav-btn-edit" onclick="pavEditMeta()" title="編輯標籤/備註" style="display:none;background:#f1c40f;color:#5d4037;border:1px solid #e6b800;"><i class="fa fa-pencil"></i> 編輯</button>
@@ -20868,6 +20872,15 @@ function loadActiveCatsForUpload(cb) {
 // ── 附件瀏覽器 Modal ───────────────────────────────────────────────────────
 var _pav = { dId:0, partNo:'', mode:'all', catId:0, allFiles:[], filteredFiles:[], currentFile:null, quoteSummaries:{},
              albums:[], albumCatIds:[], canAlbumEdit:false, albumKey:null, albumSelMode:false };
+var _pavCanDl = true;   // 目前這個附件允不允許下載（後端算好的 can_dl，見 pavSelectFile）
+/* 另存／下載用的網址：一定要帶 dl=1（不帶＝後端視為 inline 預覽，下載權限那道門擋不到），
+   並帶 dl_name 指定檔名——Chrome 會讓伺服器的 Content-Disposition 蓋掉 <a download>。 */
+function pavDlUrl(file) {
+    var u = file.url || '';
+    if (!u) return '#';
+    return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'dl=1&dl_name='
+         + encodeURIComponent(file.original_name || file.filename || 'file');
+}
 var _pav3dViewer = null;
 var _pav3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 pavSelectFile 3D 分支）
 var _pav3dColorMode  = false;  // 上色模式開關：開啟時點模型表面即幫該面上色
@@ -21704,8 +21717,16 @@ function pavSelectFile(idx) {
     if (actions) actions.style.display = '';
     var nameBar = document.getElementById('pav-file-name-bar');
     if (nameBar) nameBar.textContent = file.original_name || file.filename || '';
+    // 下載權限（2026-10-12）：can_dl 由後端算好（唯一實作 attach_download_perm_lib），
+    // 沒權限就不顯示「另存／下載PDF／小畫家」——小畫家一樣會把檔案抓到本機。
+    // 另存網址一定要帶 dl=1：不帶的話後端視為 inline 預覽、那道門根本擋不到（鐵律8）。
+    _pavCanDl = (file.can_dl === 0) ? false : true;
     var btnSave = document.getElementById('pav-btn-save');
-    if (btnSave) { btnSave.href = file.url; btnSave.download = file.original_name || file.filename || 'file'; }
+    if (btnSave) {
+        btnSave.href = pavDlUrl(file);
+        btnSave.download = file.original_name || file.filename || 'file';
+        btnSave.style.display = _pavCanDl ? '' : 'none';
+    }
     var btnSavePdf = document.getElementById('pav-btn-save-pdf');
     if (btnSavePdf) btnSavePdf.style.display = 'none';   // dwg 分支轉檔成功後才顯示並補 href
     var ext = (file.filename||'').split('.').pop().toLowerCase();
@@ -21713,7 +21734,11 @@ function pavSelectFile(idx) {
     var isImg = imgExts.indexOf(ext) >= 0;
     var btnPaint  = document.getElementById('pav-btn-paint');
     var btnMarkup = document.getElementById('pav-btn-markup');
-    if (btnPaint)  { btnPaint.href = file.url; btnPaint.style.display  = isImg ? '' : 'none'; }
+    if (btnPaint)  { btnPaint.href = file.url; btnPaint.style.display  = (isImg && _pavCanDl) ? '' : 'none'; }
+    // 批圖編輯器（2D）：圖片／PDF／DWG 才出現；3D 用上色群組裡它自己那顆（走截圖帶入）。
+    // 刻意不受下載權限限制——那是在系統裡開圖編輯，不是把檔案帶走（bom_viewer.php 同樣不擋）。
+    var btnImgEd = document.getElementById('pav-btn-image-editor');
+    if (btnImgEd) btnImgEd.style.display = (isImg || ext === 'pdf' || ext === 'dwg') ? '' : 'none';
     if (btnMarkup) { btnMarkup.style.display = isImg ? '' : 'none'; }
     var pav3dViewGroup = document.getElementById('pav-3d-view-group');
     if (pav3dViewGroup) pav3dViewGroup.style.display = 'none';
@@ -21779,7 +21804,8 @@ function pavSelectFile(idx) {
                 var blobUrl = URL.createObjectURL(blob);
                 preview.innerHTML = '<iframe id="pav-preview-frame" src="'+blobUrl+'" style="width:100%;height:100%;border:none;"></iframe>';
                 var btnSavePdf2 = document.getElementById('pav-btn-save-pdf');
-                if (btnSavePdf2) {
+                // 轉出來的 PDF 內容等同原圖，沒有下載權限的人一樣不給（預覽本身不受限）
+                if (btnSavePdf2 && _pavCanDl) {
                     btnSavePdf2.href = blobUrl;
                     btnSavePdf2.download = (file.original_name||file.filename||'file').replace(/\.dwg$/i,'') + '.pdf';
                     btnSavePdf2.style.display = '';
@@ -21790,7 +21816,7 @@ function pavSelectFile(idx) {
                 preview.innerHTML = '<div style="text-align:center;color:#888;">'
                     + '<i class="fa fa-exclamation-triangle" style="font-size:40px;color:#e0a84b;display:block;margin-bottom:10px;"></i>'
                     + '<div style="font-size:13px;">DWG 轉檔暫時無法使用</div>'
-                    + '<a href="'+escHtml(dwgOrigUrl)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default" style="margin-top:8px;"><i class="fa fa-download"></i> 下載原始檔</a>'
+                    + (_pavCanDl ? '<a href="'+escHtml(pavDlUrl(file))+'" target="_blank" class="btn btn-sm btn-default" style="margin-top:8px;"><i class="fa fa-download"></i> 下載原始檔</a>' : '')
                     + '</div>';
             });
     } else if (d3Exts.indexOf(ext) >= 0 || d3NeedConvertExts.indexOf(ext) >= 0) {
@@ -21854,7 +21880,7 @@ function pavSelectFile(idx) {
                     if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:10px;color:#888;">'
                         + '<i class="fa fa-exclamation-triangle" style="font-size:30px;color:#e74c3c;"></i>'
                         + '<div style="font-size:13px;">3D 模型載入失敗' + (need3dConvert ? '（轉檔暫時無法使用）' : '') + '</div>'
-                        + '<a href="'+escHtml(file.url)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載原始檔</a>'
+                        + (_pavCanDl ? '<a href="'+escHtml(pavDlUrl(file))+'" target="_blank" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載原始檔</a>' : '')
                         + '</div>';
                 });
         } else {
@@ -21863,7 +21889,7 @@ function pavSelectFile(idx) {
                 '<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:10px;color:#888;">'
                 + '<i class="fa fa-cube" style="font-size:40px;color:#ccc;"></i>'
                 + '<div style="font-size:13px;">3D 檢視器尚未載入，請稍後再試</div>'
-                + '<a href="'+escHtml(file.url)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載開啟</a>'
+                + (_pavCanDl ? '<a href="'+escHtml(pavDlUrl(file))+'" target="_blank" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載開啟</a>' : '')
                 + '</div>';
         }
     } else {
@@ -21872,7 +21898,7 @@ function pavSelectFile(idx) {
             + '<i class="fa '+fIcon+'" style="font-size:64px;color:#aaa;display:block;margin-bottom:12px;"></i>'
             + '<div style="font-size:13px;font-weight:600;">'+escHtml(file.original_name||file.filename||'')+'</div>'
             + '<div style="font-size:12px;color:#aaa;margin:6px 0;">'+escHtml((file.file_size||''))+'</div>'
-            + '<a href="'+escHtml(file.url)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-primary" style="margin-top:8px;"><i class="fa fa-download"></i> 下載開啟</a>'
+            + (_pavCanDl ? '<a href="'+escHtml(pavDlUrl(file))+'" target="_blank" class="btn btn-sm btn-primary" style="margin-top:8px;"><i class="fa fa-download"></i> 下載開啟</a>' : '')
             + '</div>';
     }
     // ── 作廢 overlay ──────────────────────────────────────────────
@@ -22136,6 +22162,40 @@ function pavOpenImageEditorFor3D() {
         partNo: _pav.partNo || '',
         partDId: _pav.dId || ''
     });
+}
+
+/* 批圖編輯器（2D：圖片／PDF／DWG）——2026-10-12 使用者要求「料號附件應該要比照
+   bom_viewer.php 有批圖編輯器編輯圖檔功能」。本頁原本只有 3D 模型那顆（上面那支，
+   走截圖）；圖片/PDF/DWG 完全沒有入口。
+   做法與 bom_viewer.php 的 openImageEditor() 一致（**同一套規則，不要各寫一份**）：
+     ‧圖片直接帶入；PDF 也帶入（編輯器端用 pdf.js 轉圖，多頁會問要開哪幾頁）
+     ‧DWG 瀏覽器讀不懂，改帶「轉檔後的 PDF 預覽網址」(action=preview_dwg) 並註明 preload_type=pdf
+       ——走 API 端點的網址不一定有 .pdf 副檔名，不註明編輯器會認不出來
+     ‧本頁在 views/pages/、編輯器在 views/Sales/，相對路徑不共用，一律換算成絕對 URL
+     ‧**一定要帶 part_d_id（料號主檔 PK）**：同一個料號文字在主檔常有好幾筆（不同客戶），
+       只帶文字的話編輯器的存檔下拉會出現兩個一模一樣的選項、存到別家去（記憶 2026-09-14）。 */
+function pavOpenImageEditor() {
+    var f = _pav.currentFile;
+    if (!f) { showToast('請先選一個檔案','error'); return; }
+    var ext = String((f.filename || '').split('.').pop() || '').toLowerCase();
+    // 3D 檔沿用既有那條（截圖帶入），不重複一套判斷
+    if (_pav3dViewer && (d3Exts.indexOf(ext) >= 0 || d3NeedConvertExts.indexOf(ext) >= 0)) {
+        pavOpenImageEditorFor3D();
+        return;
+    }
+    var url = '../Sales/image_editor.php', params = [];
+    var imgTypes = ['jpg','jpeg','png','gif','bmp'];
+    if (f.url && (imgTypes.indexOf(ext) !== -1 || ext === 'pdf' || ext === 'dwg')) {
+        var srcPath = (ext === 'dwg') ? f.url.replace('action=download', 'action=preview_dwg') : f.url;
+        params.push('preload=' + encodeURIComponent(new URL(srcPath, window.location.href).href));
+        params.push('preload_name=' + encodeURIComponent(String(f.original_name || f.filename || '').replace(/\.dwg$/i, '.pdf')));
+        if (ext === 'pdf' || ext === 'dwg') params.push('preload_type=pdf');
+    }
+    if (_pav.partNo) params.push('part_no=' + encodeURIComponent(_pav.partNo));
+    if (_pav.dId > 0) params.push('part_d_id=' + encodeURIComponent(_pav.dId));
+    if (params.length) url += '?' + params.join('&');
+    window.open(url, 'egImgEditor_' + Date.now(),
+        'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
 }
 
 function pavPrint() {

@@ -287,6 +287,7 @@ switch ($action) {
         usort($data, function($a, $b) { return strcmp($b['uploaded_at'], $a['uploaded_at']); });
 
         $qDlBase = '../../src/store/Quotation_File_API.php';
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';   // 下方逐筆算 can_dl 要用
         foreach ($data as &$row) {
             if ($row['source'] === 'part') {
                 // 走本 API 讀檔（inline 輸出，可直接餵 <img>／PDF 檢視），不再用 Apache 的
@@ -296,6 +297,12 @@ switch ($action) {
             } else {
                 $row['url'] = $qDlBase . '?action=download&quote_no=' . urlencode($row['quote_no']) . '&filename=' . urlencode($row['filename']);
             }
+            // 下載權限（2026-10-12）：呼叫端要據此決定「下載／另存」按鈕顯不顯示。
+            // 判定走唯一實作 attach_download_perm_lib（2D/3D 看副檔名、客供/內部看標籤），
+            // 前端只讀這個旗標、不自己判（鐵律4）；真正的守門在 download 分支（鐵律8）。
+            $row['can_dl'] = eg_adp_user_can($pdo, (int)($_SESSION['id'] ?? 0), false,
+                                             eg_adp_is_3d_ext($row['filename']),
+                                             eg_adp_compute_is_customer($pdo, $row['category_ids'] ?? '')) ? 1 : 0;
         }
         unset($row);
         // 相簿：哪些標籤要用九宮格檢視（逐標籤勾選，不寫死標籤名稱）＋這個料號目前有哪些相簿

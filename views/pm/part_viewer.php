@@ -17,6 +17,27 @@ if (!isset($_SESSION['userName'])) {
  *      bom_viewer.php 完全相同。
  * ===================================================================== */
 
+/**
+ * 下載權限（2026-10-12）：沒權限的人不顯示「儲存／小畫家」按鈕。
+ * 判定一律走唯一實作 attach_download_perm_lib（2D/3D 看副檔名、客供/內部看標籤），
+ * 後端算好 can_dl 交給前端，前端只讀旗標不自己判（鐵律4）；真正的守門在附件 API
+ * 與 bom_download.php／bom_open_token.php（鐵律8）。做法與 bom_viewer.php 同一套。
+ */
+function pvDlMatrix(PDO $db): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+    try { $m = eg_adp_user_matrix($db, (int)($_SESSION['id'] ?? 0), false); }
+    catch (Throwable $e) { $m = ['enforced' => false, 'codes' => []]; }
+    return $m;
+}
+/** 單一檔案能不能下載：$catIds 傳 null＝沒有附件紀錄的 NAS 圖面（一律視為公司內部） */
+function pvCanDl(PDO $db, string $filename, ?string $catIds): bool {
+    require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+    $isCust = ($catIds === null) ? false : eg_adp_compute_is_customer($db, $catIds);
+    return eg_adp_matrix_allow(pvDlMatrix($db), $filename, $isCust);
+}
+
 // ── AJAX：取得檔名標籤設定 ────────────────────────────────────────────────
 if (isset($_POST['action']) && $_POST['action'] === 'get_file_tags_setting') {
     header('Content-Type: application/json');
@@ -119,6 +140,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                             'path'    => $url_dir . $fn,
                             'type'    => $ext,
                             'is_plus' => $isPlus,
+                            // NAS 掃描圖沒有附件紀錄＝沒有標籤，一律算公司內部（2D/3D 仍看副檔名）
+                            'can_dl'  => pvCanDl($pdo2, $fn, null) ? 1 : 0,
                             'mtime'   => filemtime($scan_dir . $fn),
                         ];
                     }
@@ -169,6 +192,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                     'name'       => $f_utf8,
                     'path'       => '/nas/ERP/' . rawurlencode('資材(生管and業務)') . '/BOM/' . rawurlencode($f_utf8),
                     'type'       => $ext,
+                    'can_dl'     => pvCanDl($pdo2, $f_utf8, null) ? 1 : 0,
                     'tags'       => $file_tags,
                     'mtime'      => $ef['mtime'],
                     'match_type' => 'bom',
@@ -275,6 +299,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'album_name'     => ($r['album_id'] && isset($albumNameOf[(int)$r['album_id']])) ? $albumNameOf[(int)$r['album_id']] : '',
                 'display_name'   => $r['original_name'] ?: $r['filename'],
                 'url'            => $fileUrl,
+                'can_dl'         => pvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
                 'type'           => $type,
                 'file_size'      => $r['file_size'] ?: '',
@@ -555,6 +580,7 @@ var _partCands  = <?php
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
+var _currentCanDl = true;  // 目前這個檔案允不允許下載（後端算好的 can_dl）
 var _currentName = '';
 
 // ── 工具函數 ──────────────────────────────────────────────────────────────
@@ -570,10 +596,13 @@ function applyTransform() {
 function resetTransform() { _sc = 1; _tx = 0; _ty = 0; applyTransform(); }
 
 // ── 檔案切換顯示 ─────────────────────────────────────────────────────────
-function showFile(path, type, name) {
+function showFile(path, type, name, canDl) {
     _currentPath = path;
     _currentName = name || path;
     _currentType = (type || '').toLowerCase();
+    // 下載權限（2026-10-12）：沒權限就不顯示「儲存／小畫家」——小畫家一樣會把檔案抓到本機，
+    // 藏了下載卻留著它等於沒擋。沒帶這個參數（舊呼叫端）一律視為可下載，行為與改版前相同。
+    _currentCanDl = (canDl === undefined || canDl === null) ? true : !(canDl === 0 || canDl === '0' || canDl === false);
     var _isImg = ['jpg','jpeg','png','gif','bmp'].indexOf(_currentType) !== -1;
 
     $('#viewer-title').text(_currentName);
@@ -599,6 +628,7 @@ function showFile(path, type, name) {
         $('#btn-save').show();
     }
     if (_isPaintable) { $('#btn-paint').show(); }
+    if (!_currentCanDl) $('#btn-save, #btn-paint').hide();
 }
 
 /* ── 照片相簿（2026-08-25）：左側點相簿 → 右側九宮格 → 點縮圖放大 ─────────
@@ -773,7 +803,7 @@ $(document).on('click', '.bom-file-item', function(e) {
     $('.bom-file-item').removeClass('active');
     $(this).addClass('active');
     var isObs = $(this).data('obsolete') === '1' || $(this).data('obsolete') === 1;
-    showFile($(this).data('path'), $(this).data('type'), $(this).data('name'));
+    showFile($(this).data('path'), $(this).data('type'), $(this).data('name'), $(this).data('can-dl'));
     // 作廢 overlay
     $('#viewer-content .bom-obsolete-overlay').remove();
     if (isObs) {
@@ -841,6 +871,7 @@ function renderPrefAttach(list) {
         h += '<a href="#" class="list-group-item bom-file-item pref-file-item"'
             + ' data-path="' + escapeHtml(att.url) + '"'
             + ' data-type="' + escapeHtml(att.ext) + '"'
+            + ' data-can-dl="' + (att.can_dl === 0 ? '0' : '1') + '"'
             + ' data-name="' + escapeHtml(att.display_name) + '"'
             + ' data-obsolete="0">'
             + '<p class="list-group-item-text">'
@@ -853,7 +884,7 @@ function renderPrefAttach(list) {
     if (!$('.bom-file-item.active').length) {
         var f = list[0];
         $('.pref-file-item').first().addClass('active');
-        showFile(f.url, f.ext, f.display_name);
+        showFile(f.url, f.ext, f.display_name, f.can_dl);
     }
 }
 
@@ -876,6 +907,7 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
         return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
             +' data-path="'+escapeHtml(f.path)+'"'
             +' data-type="'+escapeHtml(f.type)+'"'
+            +' data-can-dl="'+(f.can_dl === 0 ? '0' : '1')+'"'
             +' data-name="'+escapeHtml(f.name)+'">'
             +'<p class="list-group-item-text">'+label+escapeHtml(f.name)+'</p></a>';
     }
@@ -905,7 +937,7 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
 
     if (hasFiles && listHtml) {
         $('#bom-file-list').html(listHtml);
-        if (firstItem) showFile(firstItem.path, firstItem.type, firstItem.name);
+        if (firstItem) showFile(firstItem.path, firstItem.type, firstItem.name, firstItem.can_dl);
         // 深連結開啟的報告常常排在 ERP/資材報告那一段、清單上面還有一堆圖面，捲過去才看得到
         if (openHit) {
             var $act = $('#bom-file-list .bom-file-item.active');
@@ -968,6 +1000,7 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
                 attHtml += '<a href="#" class="list-group-item bom-file-item att-file-item"'
                     + ' data-path="' + escapeHtml(att.url) + '"'
                     + ' data-type="' + escapeHtml(att.ext) + '"'
+                    + ' data-can-dl="' + (att.can_dl === 0 ? '0' : '1') + '"'
                     + ' data-name="' + escapeHtml(att.display_name) + '"'
                     + ' data-obsolete="' + (isObs ? '1' : '0') + '"'
                     + ' style="' + attItemStyle + '">'
