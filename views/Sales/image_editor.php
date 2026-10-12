@@ -1994,7 +1994,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
-                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。每一列（標示名稱可自行命名，不限固定代號）分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm），③<b>建議車床（加工）尺寸</b>＝系統自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值，您可以再填車床自己要用的公差、系統會檢查公差會不會超出安全範圍，④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。右上角「<b>建立反向列</b>」可以快速帶出研磨方向相反、研磨量相同的下一列（同一個研磨面通常會讓兩側一增一減）。按「<b>＋新增一列</b>」處理更多段尺寸，「清除」清空全部重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。預設先給<b>「尺寸A」「尺寸B」兩列</b>（標示名稱可自行改成任何文字，不限固定代號），每一列分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm）——<b>第1／2列、第3／4列……相鄰兩列是一對，其中一列選了方向，配對的那一列會自動改成相反方向</b>（同一個研磨面通常同時讓兩側一增一減，增減量仍各自填），③<b>建議車床（加工）尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值，可再填車床自己要用的公差、系統會檢查公差會不會超出安全範圍，④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。填完都是即時自動算，標題列「<b>計算</b>」可再手動重算一次；「<b>建立反向列</b>」可快速多加一對（方向相反、研磨量相同）處理更多段尺寸，「清除」恢復成預設的尺寸A／B兩列重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8439,6 +8439,7 @@ include __DIR__ . '/_gear_tool_ui.php';
     <div id="lr-tool-hdr">
         <span class="lr-hdr-title"><i class="fa fa-arrows-h"></i> 車床預留量計算</span>
         <div class="lr-hdr-btns">
+            <button onclick="lrCalc()"><i class="fa fa-calculator"></i> 計算</button>
             <button onclick="clearLenTool()">清除</button>
             <button onclick="closeLenTool()">✕ 關閉</button>
         </div>
@@ -8513,7 +8514,7 @@ include __DIR__ . '/_gear_tool_ui.php';
             '<div class="lr-blk lr-blk-grind">' +
               '<div class="lr-blk-h">② 研磨影響（這一面研磨「後」）</div>' +
               '<div class="lr-blk-body">' +
-                '<select class="lr-dir" onchange="lrCalc()">' +
+                '<select class="lr-dir" onchange="lrDirSelectChanged(this)">' +
                   '<option value="">－請選擇方向－</option>' +
                   '<option value="inc">尺寸會增加</option>' +
                   '<option value="dec">尺寸會減少</option>' +
@@ -8687,6 +8688,28 @@ include __DIR__ . '/_gear_tool_ui.php';
         document.querySelectorAll('#lr-rows .lr-row').forEach(lrCalcRow);
     };
 
+    // 配對列：第1/2列一對、第3/4列一對……同一個研磨面通常同時影響相鄰兩段尺寸，
+    // 選其中一列的研磨方向時，自動把配對列的方向設成相反（僅同步「方向」，增減量仍各自填）。
+    function lrPairOf(row) {
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#lr-rows .lr-row'));
+        var idx = rows.indexOf(row);
+        if (idx < 0) return null;
+        var pairIdx = (idx % 2 === 0) ? idx + 1 : idx - 1;
+        return rows[pairIdx] || null;
+    }
+    window.lrDirSelectChanged = function(sel) {
+        var row = sel.closest('.lr-row');
+        var val = sel.value;
+        if (row && val) {
+            var pair = lrPairOf(row);
+            if (pair) {
+                var pairSel = pair.querySelector('.lr-dir');
+                if (pairSel) pairSel.value = (val === 'inc') ? 'dec' : 'inc';
+            }
+        }
+        lrCalc();
+    };
+
     function initLrDelegation() {
         var body = document.getElementById('lr-tool-body');
         if (!body) return;
@@ -8750,7 +8773,15 @@ include __DIR__ . '/_gear_tool_ui.php';
         }
         initLrDrag();
         initLrDelegation();
-        lrAddRow();
+        lrInitDefaultRows();
+    }
+
+    // 預設先給「尺寸A／尺寸B」兩列（最常見的情境：同一個研磨面同時影響相鄰兩段尺寸），
+    // 標示名稱仍可自行改成任何文字，不是固定代號；不夠用時按「新增一列」繼續加。
+    function lrInitDefaultRows() {
+        var r1 = lrAddRow(), r2 = lrAddRow();
+        if (r1) { var l1 = r1.querySelector('.lr-label'); if (l1) l1.value = '尺寸A'; }
+        if (r2) { var l2 = r2.querySelector('.lr-label'); if (l2) l2.value = '尺寸B'; }
     }
 
     window.openLenTool = function() {
@@ -8769,7 +8800,8 @@ include __DIR__ . '/_gear_tool_ui.php';
     window.clearLenTool = function() {
         var wrap = document.getElementById('lr-rows');
         if (wrap) wrap.innerHTML = '';
-        lrAddRow();
+        lrInitDefaultRows();
+        lrCalc();
         var el = document.querySelector('#lr-rows .lr-row:first-child .lr-nom');
         if (el) el.focus();
     };
