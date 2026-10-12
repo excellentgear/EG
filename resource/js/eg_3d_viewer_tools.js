@@ -48,6 +48,43 @@
  */
 var EG3DTools = (function () {
 
+    // 剖面（section）開啟時，材質的 clippingPlanes 只是渲染端（shader 逐 fragment）的
+    // 效果——函式庫自己的 GetMeshIntersectionUnderMouse 是標準 Three.js Raycaster，完全
+    // 不知道 clippingPlanes 這回事，對已經「看不到」的被切除區域照樣能命中（那些三角形
+    // 在幾何上其實還在，只是渲染時被剪掉），所以點一下剖面切開的洞裡面，實際上會選到
+    // 洞「對面」或「裡面」那些原本該被隱藏的三角形——這正是 2026-10-12 使用者回報「剖面
+    // 是否無法自動辨識被剖開的是實心面」背後的真因：點了看起來空的地方，上色卻跑到奇怪
+    // 的地方去。修法：命中結果的世界座標點，逐一代入該 mesh 材質目前的 clippingPlanes
+    // 公式驗證是否會被剪掉，會的話一律當成沒點到（不是去猜下一個更近的交點，函式庫沒有
+    // 開放拿到完整交點清單，這個已經足夠解決「點了卻跑到別處」的誤導）。
+    function _hitIsClipped(hit) {
+        if (!hit || !hit.object || !hit.point) return false;
+        var mats = Array.isArray(hit.object.material) ? hit.object.material : [hit.object.material];
+        var px = hit.point.x, py = hit.point.y, pz = hit.point.z;
+        for (var i = 0; i < mats.length; i++) {
+            var mt = mats[i];
+            var planes = mt && mt.clippingPlanes;
+            if (!planes || !planes.length) continue;
+            if (mt.clipIntersection) {
+                // AND 語意（雙平面楔形/象限剖面）：每一個平面都判定「切除」才真的切除
+                var allDiscard = true;
+                for (var j = 0; j < planes.length; j++) {
+                    var pl = planes[j];
+                    var d = pl.normal.x * px + pl.normal.y * py + pl.normal.z * pz + pl.constant;
+                    if (d >= 0) { allDiscard = false; break; }
+                }
+                if (allDiscard) return true;
+            } else {
+                // OR 語意（單平面剖面）：任一平面判定切除就切除
+                for (var k = 0; k < planes.length; k++) {
+                    var pl2 = planes[k];
+                    var d2 = pl2.normal.x * px + pl2.normal.y * py + pl2.normal.z * pz + pl2.constant;
+                    if (d2 < 0) return true;
+                }
+            }
+        }
+        return false;
+    }
     // ── 滑鼠座標 → 畫布像素座標 → 命中結果（含 .object/.face/.faceIndex）────────
     function pickMesh(embeddedViewer, canvasEl, clientX, clientY) {
         if (!embeddedViewer || typeof OV === 'undefined') return null;
@@ -57,7 +94,9 @@ var EG3DTools = (function () {
         var y = clientY - rect.top;
         var size = viewer.GetCanvasSize();
         if (x < 0 || y < 0 || x > size.width || y > size.height) return null;
-        return viewer.GetMeshIntersectionUnderMouse(OV.IntersectionMode.MeshOnly, { x: x, y: y });
+        var hit = viewer.GetMeshIntersectionUnderMouse(OV.IntersectionMode.MeshOnly, { x: x, y: y });
+        if (_hitIsClipped(hit)) return null;
+        return hit;
     }
 
     // ── 三角形鄰接圖＋法向量（每個 mesh 第一次用到才建，之後快取）────────────────
@@ -287,7 +326,8 @@ var EG3DTools = (function () {
     };
     ColorState.prototype.hasAny = function () { return this.meshStates.size > 0; };
 
-    // ── 整合滑鼠互動：單點＝點一下自動判定同一面，拖曳（超過門檻像素）＝框選 ──────
+    // ── 整合滑鼠互動：單點＝點一下自動判定同一面，按住 Ctrl 拖曳＝框選，純拖曳（不按
+    // Ctrl）＝正常旋轉視角 ──────────────────────────────────────────────────
     // containerEl：3D 檢視器外層容器（需 position:relative/absolute，拖曳方框疊加其上，
     //   兩頁的 #bom-3d-wrap／#pav-preview 都是靜態存在、不會被 innerHTML 整個換掉的容器，
     //   所以可以在頁面載入時綁定一次，不必像內層 canvas 容器那樣擔心換檔後失聯）。
@@ -295,12 +335,20 @@ var EG3DTools = (function () {
     // getCtx()：互動當下即時回傳 {embeddedViewer, colorState, hexColor}（每次切檔案這三個
     //   都會換，所以用函式取得當下最新值，不要傳入當下的值）。
     // isActiveFn()：回傳目前是否處於上色模式（呼叫端自己的開關按鈕狀態）。
+    //
+    // 2026-10-12 使用者回報「上色時無法左鍵旋轉」：原本上色模式一開，整個 mousedown
+    // 在捕獲階段就被攔下（stopPropagation），不管是不是真的要拖框選都先擋掉，等於上色中
+    // 完全沒辦法用滑鼠左鍵轉視角、要轉得先關掉上色模式再開回來，體驗很差。改成**只有按住
+    // Ctrl（或 Mac 的 Cmd）才攔截**：放開 Ctrl 的純拖曳完全不呼叫 preventDefault／
+    // stopPropagation，原生事件照常傳給 o3dv 的旋轉互動；按住 Ctrl 拖曳才是框選上色（維持
+    // 原本行為不變）；不管有沒有按 Ctrl，只要「幾乎沒有移動」（沒超過 dragThreshold）都
+    // 視為單純點一下＝點一下上色同一面（這是最常用的操作，兩種手勢都應該可以觸發）。
     function attachColorInteraction(containerEl, canvasSelector, getCtx, isActiveFn, opts) {
         if (!containerEl) return;
         opts = opts || {};
         var angleDeg = opts.angleDeg;
         var dragThreshold = opts.dragThreshold || 5;
-        var rectEl = null, startX = 0, startY = 0, dragging = false, moved = false;
+        var rectEl = null, startX = 0, startY = 0, dragging = false, moved = false, rectMode = false;
 
         function ensureRectEl() {
             if (rectEl && rectEl.parentNode === containerEl) return rectEl;
@@ -321,22 +369,23 @@ var EG3DTools = (function () {
         }
         function hideRect() { if (rectEl) rectEl.style.display = 'none'; }
 
-        // 用「捕獲階段」(capture:true) 攔截，一定要搶在 o3dv 自己掛在 canvas 上的滑鼠事件
-        // （視角旋轉／平移）之前擋下——實測沒加 capture 時，拖曳框選的同時視角也會跟著轉
-        // （bubble 階段時事件已經先傳到 canvas、o3dv 自己的拖曳旋轉已經先啟動了）；
-        // stopPropagation() 在捕獲階段會讓事件根本到不了 canvas，o3dv 的拖曳旋轉就永遠
-        // 不會被觸發，而不是「兩者都觸發、事後才去擋」。
+        // 用「捕獲階段」(capture:true) 只是為了比 o3dv 早一步讀到這次 mousedown 按沒按
+        // Ctrl——真的要攔截（框選模式）才呼叫 preventDefault／stopPropagation；純拖曳
+        // （沒按 Ctrl）完全不擋，事件原封不動繼續往下傳給 o3dv 自己的旋轉處理。
         containerEl.addEventListener('mousedown', function (e) {
             if (!isActiveFn() || e.button !== 0) return;
             dragging = true; moved = false; startX = e.clientX; startY = e.clientY;
-            e.preventDefault();
-            e.stopPropagation();
+            rectMode = !!(e.ctrlKey || e.metaKey);
+            if (rectMode) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
         }, true);
         window.addEventListener('mousemove', function (e) {
             if (!dragging) return;
             if (Math.abs(e.clientX - startX) > dragThreshold || Math.abs(e.clientY - startY) > dragThreshold) {
                 moved = true;
-                updateRect(startX, startY, e.clientX, e.clientY);
+                if (rectMode) updateRect(startX, startY, e.clientX, e.clientY);
             }
         });
         window.addEventListener('mouseup', function (e) {
@@ -344,6 +393,7 @@ var EG3DTools = (function () {
             dragging = false;
             hideRect();
             if (!isActiveFn()) return;
+            if (moved && !rectMode) return;   // 純拖曳旋轉視角，已經由 o3dv 原生處理，這裡不做任何上色動作
             var ctx = getCtx();
             if (!ctx || !ctx.embeddedViewer || !ctx.colorState) return;
             var canvasEl = containerEl.querySelector(canvasSelector);
@@ -1696,6 +1746,71 @@ var EG3DTools = (function () {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 標準視角（2026-10-12 使用者要求：像繪圖軟體一樣可以快速翻到前/後/上/下/左/右/
+    // 等角視圖，不想每次都要自己手動拖曳旋轉）。
+    // ══════════════════════════════════════════════════════════════════════
+    // 這裡刻意不做成「可互動點擊的立體導航方塊」（ViewCube）——查證過函式庫本身完全沒有
+    // 這個元件、也沒有任何「切到標準視角」的內建 API（已 grep 全部原始碼確認），要做出
+    // 一顆完整的立體方塊（含面/邊/角 26 種可點擊區域各自對應一個視角、hover 高亮、跟相機
+    // 即時同步旋轉）是一個份量很大的全新 UI 元件，而使用者實際要解決的問題是「沒辦法
+    // 快速翻到想要的角度」，一排「前/後/左/右/上/下/等角」按鈕已經能滿足同樣的實際需求、
+    // 風險遠低很多。
+    //
+    // 技術上刻意跟先前「對準剖切面法向量」的相機朝向技術（openInImageEditor 一類）分開：
+    // 那個技術依賴**模型當下的幾何特徵**（剖切面在哪、法向量朝哪）去算相機角度，已實測
+    // 對複雜模型會算出退化／切線方向的視角而不可靠；這裡的六個標準方向與等角視圖是**固定
+    // 的世界座標軸方向**，跟模型長什麼樣子完全無關，純粹是相機位置的三角函數計算，不會有
+    // 同一種不可靠的問題。
+    //
+    // 寫法沿用 2026-10-08 以來已經多處驗證可行的「借既有實例的建構子」技巧（函式庫沒有
+    // 把 THREE 掛在全域，不能 `new THREE.Vector3()`）：camera.eye.constructor 借
+    // Vector3、camera.constructor 借相機類別本身（查證過是 `(eye, center, up, fov)`
+    // 四個參數的建構子）。
+    var _STD_VIEWS = {
+        front:  { dir: [0, 0, 1],  up: [0, 1, 0] },
+        back:   { dir: [0, 0, -1], up: [0, 1, 0] },
+        right:  { dir: [1, 0, 0],  up: [0, 1, 0] },
+        left:   { dir: [-1, 0, 0], up: [0, 1, 0] },
+        top:    { dir: [0, 1, 0],  up: [0, 0, -1] },
+        bottom: { dir: [0, -1, 0], up: [0, 0, 1] },
+        iso:    { dir: [1, 1, 1],  up: [0, 1, 0] }
+    };
+    function setStandardView(embeddedViewer, viewName) {
+        if (!embeddedViewer) return false;
+        var cfg = _STD_VIEWS[viewName];
+        if (!cfg) return false;
+        var viewer = embeddedViewer.GetViewer();
+        var mm = viewer.mainModel;
+        var bbox = mm.GetBoundingBox(function () { return true; });
+        if (!bbox) return false;
+        var center = {
+            x: (bbox.min.x + bbox.max.x) / 2,
+            y: (bbox.min.y + bbox.max.y) / 2,
+            z: (bbox.min.z + bbox.max.z) / 2
+        };
+        var camera = viewer.navigation && viewer.navigation.GetCamera();
+        if (!camera || !camera.eye) return false;
+        // 距離沿用目前相機跟中心的距離（保留使用者目前縮放的程度），退化成 0（例如剛
+        // 載入、eye 剛好跟 center 一樣）時改用包圍盒對角線長度推一個合理值。注意不可以
+        // 用 _vecLen3（它對長度 0 的向量回傳 1 不是 0，是給別處避免除以 0 用的，這裡
+        // 剛好要分辨「真的是 0」才能正確觸發下面的備援距離，兩者用途不同不能共用）。
+        var ex = camera.eye.x - camera.center.x, ey = camera.eye.y - camera.center.y, ez = camera.eye.z - camera.center.z;
+        var curDist = Math.sqrt(ex * ex + ey * ey + ez * ez);
+        var dist = curDist > 1e-6 ? curDist : _vecLen3([bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z]) * 1.5;
+        var dlen = _vecLen3(cfg.dir);
+        var nx = cfg.dir[0] / dlen, ny = cfg.dir[1] / dlen, nz = cfg.dir[2] / dlen;
+        var Vec3Ctor = camera.eye.constructor;
+        var CamCtor = camera.constructor;
+        var newEye = new Vec3Ctor(center.x + nx * dist, center.y + ny * dist, center.z + nz * dist);
+        var newCenter = new Vec3Ctor(center.x, center.y, center.z);
+        var newUp = new Vec3Ctor(cfg.up[0], cfg.up[1], cfg.up[2]);
+        var newCam = new CamCtor(newEye, newCenter, newUp, camera.fov);
+        viewer.navigation.SetCamera(newCam);
+        viewer.Render();
+        return true;
+    }
+
     return {
         pickMesh: pickMesh,
         sameFaceTriangles: sameFaceTriangles,
@@ -1713,6 +1828,7 @@ var EG3DTools = (function () {
         applySectionClipToHiddenLine: applySectionClipToHiddenLine,
         setSectionMode: setSectionMode,
         updateSectionMode: updateSectionMode,
-        clearSectionMode: clearSectionMode
+        clearSectionMode: clearSectionMode,
+        setStandardView: setStandardView
     };
 })();

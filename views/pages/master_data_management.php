@@ -11070,9 +11070,23 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             <!-- 只有 DWG 轉出來的預覽才需要「下載 PDF」——原檔下載已經在「另存」鈕 -->
             <a id="pav-btn-save-pdf" href="#" target="_blank" download class="btn btn-xs btn-default" style="white-space:nowrap;display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「另存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載PDF</a>
             <button type="button" class="btn btn-xs btn-default" onclick="pavPrint()" title="列印"><i class="fa fa-print"></i> 列印</button>
+            <!-- 3D 專用：標準視角（唯一實作見 resource/js/eg_3d_viewer_tools.js 的 setStandardView，
+                 與 bom_viewer.php 共用；2026-10-12 使用者要求比照繪圖軟體可快速翻到固定角度）-->
+            <span id="pav-3d-view-group" style="display:none;align-items:center;">
+                <select id="pav-3d-view-select" class="form-control input-xs" style="width:84px;height:22px;padding:0 2px;" title="快速翻到標準視角（前/後/左/右/上/下/等角），不必自己手動拖曳旋轉">
+                    <option value="" selected>標準視角</option>
+                    <option value="front">前視圖</option>
+                    <option value="back">後視圖</option>
+                    <option value="right">右視圖</option>
+                    <option value="left">左視圖</option>
+                    <option value="top">上視圖</option>
+                    <option value="bottom">下視圖</option>
+                    <option value="iso">等角視圖</option>
+                </select>
+            </span>
             <!-- 3D 專用：上色＋批圖編輯器（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）-->
             <span id="pav-3d-color-group" style="display:none;align-items:center;gap:4px;">
-                <button type="button" id="pav-btn-3d-color" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型表面即可幫該面上色（單一三角面，不是整個零件），方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
+                <button type="button" id="pav-btn-3d-color" class="btn btn-warning btn-xs" title="上色模式：點一下模型表面即可幫該面上色；純拖曳仍可正常旋轉視角；按住 Ctrl 拖曳＝框選範圍內全部面一次上色"><i class="fa fa-paint-brush"></i> 上色</button>
                 <input id="pav-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
                 <button type="button" id="pav-btn-3d-color-reset" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
                 <?php if ($imgeditCanUse): ?>
@@ -21675,6 +21689,10 @@ function pavSelectFile(idx) {
     var btnMarkup = document.getElementById('pav-btn-markup');
     if (btnPaint)  { btnPaint.href = file.url; btnPaint.style.display  = isImg ? '' : 'none'; }
     if (btnMarkup) { btnMarkup.style.display = isImg ? '' : 'none'; }
+    var pav3dViewGroup = document.getElementById('pav-3d-view-group');
+    if (pav3dViewGroup) pav3dViewGroup.style.display = 'none';
+    var pav3dViewSelect = document.getElementById('pav-3d-view-select');
+    if (pav3dViewSelect) pav3dViewSelect.value = '';
     var pav3dColorGroup = document.getElementById('pav-3d-color-group');
     if (pav3dColorGroup) pav3dColorGroup.style.display = 'none';
     _pav3dColorMode = false;
@@ -21751,6 +21769,7 @@ function pavSelectFile(idx) {
             });
     } else if (d3Exts.indexOf(ext) >= 0 || d3NeedConvertExts.indexOf(ext) >= 0) {
         var need3dConvert = d3NeedConvertExts.indexOf(ext) >= 0;
+        if (pav3dViewGroup) pav3dViewGroup.style.display = 'inline-flex';
         _pav3dColorState = new EG3DTools.ColorState();
         if (pav3dColorGroup) pav3dColorGroup.style.display = 'inline-flex';
         _pav3dHLState = null;
@@ -21955,14 +21974,24 @@ function _pavLogPrint(f, isObs) {
     } catch (e) {}
 }
 
+// ── 3D 標準視角（唯一實作見 resource/js/eg_3d_viewer_tools.js 的 setStandardView，
+// 與 bom_viewer.php 共用）──
+$(document).on('change', '#pav-3d-view-select', function() {
+    var v = $(this).val();
+    if (v && _pav3dViewer) EG3DTools.setStandardView(_pav3dViewer, v);
+    $(this).val('');
+});
+
 // ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
-// 點一下＝自動判定「同一面」整面上色；拖曳成一個框＝框選範圍內全部面一次上色。
-// #pav-3d-viewer 每次切檔案都會被 innerHTML 整個換新（見 pavSelectFile），所以框選
-// 互動要綁在「不會被換掉的外層容器」#pav-preview 上，由共用檔內部用事件代理處理。
+// 點一下＝自動判定「同一面」整面上色；純拖曳＝正常旋轉視角；按住 Ctrl 拖曳＝框選
+// 範圍內全部面一次上色（2026-10-12 使用者回報上色中無法旋轉視角後改成純拖曳不再
+// 攔截）。#pav-3d-viewer 每次切檔案都會被 innerHTML 整個換新（見 pavSelectFile），
+// 所以框選互動要綁在「不會被換掉的外層容器」#pav-preview 上，由共用檔內部用事件
+// 代理處理。
 $(document).on('click', '#pav-btn-3d-color', function() {
     _pav3dColorMode = !_pav3dColorMode;
     $(this).toggleClass('btn-warning', !_pav3dColorMode).toggleClass('btn-success', _pav3dColorMode)
-        .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
+        .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下上色／Ctrl+拖曳框選／純拖曳仍可旋轉）' : '上色'));
 });
 EG3DTools.attachColorInteraction(
     document.getElementById('pav-preview'), '#pav-3d-viewer canvas',

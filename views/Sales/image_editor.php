@@ -1994,7 +1994,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
-                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面<b>一組＝左右兩欄並排</b>（預設「尺寸A」在左、「尺寸B」在右，標示名稱可自行改成任何文字，不限固定代號），最上方可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示A＋B總長時填寫其基準值與上下公差）。每欄分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm）——<b>左右兩欄互為配對，其中一欄選了方向，另一欄自動改成相反方向；填了增減量，另一欄的增減量也會自動帶成同一個數字</b>（同一個研磨面理論上兩側增減量相等，仍可各自再改；沒填增減量或沒選方向時③④欄會提示「暫時算不出來」），③<b>建議車床（加工）尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值（公差預設帶入 <strong>±0.02</strong>，可自行改），④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。左右兩欄下方的<b>「總長」</b>會顯示成品總長範圍、建議車床總長範圍與<b>建議車床基準值合計</b>；<b>填了「原圖總長尺寸」時，③的建議基準值會自動依總長公差重新調整</b>（讓A、B兩者加總落在原圖總長公差內，調整成功會標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時會標示「✗」並說明），填了雙方的手動驗算值也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。填完都是即時自動算，標題列「<b>計算</b>」可再手動重算一次；按「<b>＋新增一組尺寸</b>」繼續加下一組（尺寸C／D、E／F……依序命名），「清除」恢復成預設的尺寸A／B一組重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面兩欄並排，依序為<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一列後其餘會自動往前遞補保持連續），按「<b>＋新增尺寸</b>」一次加一列。每欄分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，其中一欄選了方向，配對欄自動改成相反方向；填了增減量，配對欄的增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；沒填增減量或沒選方向時③④欄會提示「暫時算不出來」），③<b>建議車床（加工）尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值（公差預設帶入 <strong>±0.02</strong>，可自行改），④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。<b>每一對欄位（A/B、C/D……）下方都會接一塊橫跨全寬的「總長」</b>：最上面可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示這兩欄總長時填寫其基準值與上下公差），下方顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，③的建議基準值會自動依總長公差重新調整</b>（讓這兩欄加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），填了雙方的手動驗算值也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，③④要調整時再自行點進去；標題列「<b>計算</b>」可手動重算一次，「清除」恢復成預設的尺寸A／B兩欄重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8376,14 +8376,11 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-diagram-dims { display:flex; margin-top:4px; font-size:11px; }
     .lr-diagram-dims > div { flex:1; text-align:center; }
     .lr-diagram-cap { text-align:center; font-size:9.5px; color:#a08a6f; margin-top:4px; }
-    /* 一組＝左右兩段尺寸（尺寸A／尺寸B）＋底下的總長 */
-    .lr-pair { border:1.5px solid #d8c7b0; border-radius:7px; margin-bottom:10px; overflow:hidden; background:#fff; }
-    .lr-pair-dtotal { padding:8px 8px 0; }
-    .lr-pair-rows { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:8px 8px 0; }
-    .lr-row { border:1px solid #e4d3bc; border-radius:5px; overflow:hidden; }
-    .lr-row-hdr { display:flex; flex-wrap:wrap; align-items:center; gap:4px; background:#faf6f0; padding:4px 6px; border-bottom:1px solid #d8c7b0; }
-    .lr-row-no { font-size:10.5px; color:#8a5a2b; font-weight:700; flex-shrink:0; }
-    .lr-label { flex:1; min-width:60px; font-size:12px; padding:3px 5px; border:1px solid #d8c7b0; border-radius:3px; color:#333; }
+    /* 一列＝一段尺寸，兩欄並排連續往下加（尺寸A、B、C、D……）；每兩列底下接一塊橫跨全寬的「總長」 */
+    #lr-rows { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .lr-row { border:1px solid #e4d3bc; border-radius:5px; overflow:hidden; background:#fff; }
+    .lr-row-hdr { display:flex; align-items:center; justify-content:space-between; gap:6px; background:#faf6f0; padding:4px 8px; border-bottom:1px solid #d8c7b0; }
+    .lr-row-label { font-size:12px; font-weight:700; color:#5a3410; }
     .lr-mini-btn { font-size:11px; padding:2px 8px; border:1px solid #d8c7b0; background:#fff; border-radius:3px; cursor:pointer; color:#6b471a; white-space:nowrap; }
     .lr-mini-btn:hover { background:#f4ede2; }
     .lr-del-btn { color:#a2342a; border-color:#e0b3ac; flex-shrink:0; }
@@ -8440,17 +8437,17 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-verify-badge { font-size:10px; font-weight:700; margin-top:4px; display:none; border-radius:3px; padding:3px 6px; }
     .lr-verify-badge.show-ok  { display:block; background:#F7E0BD; border:1px solid #E4C293; color:#6B471A; }
     .lr-verify-badge.show-bad { display:block; background:#DD5138; border:1px solid #BE3C25; color:#fff; }
-    /* 總長（尺寸A＋尺寸B）：一組底下橫跨全寬 */
-    .lr-pair-total { margin:8px 8px 8px; padding-top:7px; border-top:2px dashed #d8c7b0; }
-    .lr-pair-total.hidden { display:none; }
+    /* 總長（每兩列一對）：橫跨全寬，含選填的「原圖總長尺寸」輸入 */
+    .lr-pair-total { grid-column:1 / -1; border:1.5px solid #d8c7b0; border-radius:7px; padding:8px; background:#faf6f0; }
+    .lr-pair-total-dtot { margin-bottom:8px; }
     .lr-pair-total-h { font-size:11px; font-weight:700; color:#5a3410; margin-bottom:4px; }
-    .lr-pair-total-body { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:10.5px; color:#555; align-items:center; }
+    .lr-pair-total-body { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:10.5px; color:#555; align-items:center; margin-top:7px; padding-top:7px; border-top:2px dashed #d8c7b0; }
     .lr-pair-total-row { display:flex; align-items:center; gap:4px; }
-    .lr-pair-total .lr-warn, .lr-pair-total .lr-verify-badge { margin-top:0; }
+    .lr-pair-total .lr-warn, .lr-pair-total .lr-verify-badge { margin-top:4px; }
     #lr-add-row-btn { margin-top:2px; }
     @media (max-width:860px) {
         #lr-tool-window { width:98vw; top:10px; }
-        .lr-pair-rows { grid-template-columns:1fr; }
+        #lr-rows { grid-template-columns:1fr; }
         .lr-row-body { grid-template-columns:1fr; }
     }
 </style>
@@ -8464,7 +8461,7 @@ include __DIR__ . '/_gear_tool_ui.php';
         </div>
     </div>
     <div id="lr-tool-body">
-        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。左右兩欄＝尺寸A／尺寸B，分別填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>與兩段合計的<strong>總長</strong>；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。</div>
+        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……兩欄並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；每兩欄底下會合算<strong>總長</strong>；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。</div>
         <div class="lr-diagram">
             <div class="lr-diagram-bar">
                 <div class="lr-dbar-half"></div>
@@ -8479,7 +8476,7 @@ include __DIR__ . '/_gear_tool_ui.php';
             <div class="lr-diagram-cap">研磨會移除研磨面上的材料：面往哪一側移動，該側尺寸就縮短、另一側相對增長——方向與增減量請在下方左右兩欄分別填寫</div>
         </div>
         <div id="lr-rows"></div>
-        <button type="button" class="lr-mini-btn" id="lr-add-row-btn" onclick="lrAddPair()"><i class="fa fa-plus"></i> 新增一組尺寸（左右各一）</button>
+        <button type="button" class="lr-mini-btn" id="lr-add-row-btn" onclick="lrAddRow()"><i class="fa fa-plus"></i> 新增尺寸</button>
     </div>
 </div></template>
 <div id="lr-tool-container"></div>
@@ -8508,11 +8505,12 @@ include __DIR__ . '/_gear_tool_ui.php';
         return isNaN(v) ? null : v;
     }
 
-    var LR_PAIR_HTML =
-        '<div class="lr-pair">' +
-          '<div class="lr-pair-dtotal">' +
+    // 每兩列（一對）底下接一塊橫跨全寬的「總長」，含選填的「原圖總長尺寸」輸入。
+    var LR_TOTAL_HTML =
+        '<div class="lr-pair-total">' +
+          '<div class="lr-pair-total-dtot">' +
             '<div class="lr-blk lr-blk-fin">' +
-              '<div class="lr-blk-h">原圖總長尺寸（選填，原圖另有標示A＋B總長時填寫，會據此調整下方A／B的建議車床基準值）</div>' +
+              '<div class="lr-blk-h">原圖總長尺寸（選填，原圖另有標示這兩欄的總長時填寫，會據此調整建議車床基準值）</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
                   '<input type="number" step="any" class="lr-dtot-nom" oninput="lrCalc()" placeholder="總長基準值">' +
@@ -8525,26 +8523,22 @@ include __DIR__ . '/_gear_tool_ui.php';
               '</div>' +
             '</div>' +
           '</div>' +
-          '<div class="lr-pair-rows"></div>' +
-          '<div class="lr-pair-total hidden">' +
-            '<div class="lr-pair-total-h">總長</div>' +
-            '<div class="lr-pair-total-body">' +
-              '<div class="lr-pair-total-row">成品總長範圍：<span class="lr-out lr-pair-total-fin">—</span></div>' +
-              '<div class="lr-pair-total-row">建議車床總長範圍：<span class="lr-out lr-pair-total-turn">—</span></div>' +
-              '<div class="lr-pair-total-row">建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>' +
-              '<div class="lr-pair-total-row">手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>' +
-            '</div>' +
-            '<div class="lr-warn lr-pair-total-warn"></div>' +
-            '<div class="lr-warn lr-pair-total-dconflict"></div>' +
-            '<div class="lr-verify-badge lr-pair-total-dok"></div>' +
+          '<div class="lr-pair-total-h">總長</div>' +
+          '<div class="lr-pair-total-body">' +
+            '<div class="lr-pair-total-row">成品總長範圍：<span class="lr-out lr-pair-total-fin">—</span></div>' +
+            '<div class="lr-pair-total-row">建議車床總長範圍：<span class="lr-out lr-pair-total-turn">—</span></div>' +
+            '<div class="lr-pair-total-row">建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>' +
+            '<div class="lr-pair-total-row">手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>' +
           '</div>' +
+          '<div class="lr-warn lr-pair-total-warn"></div>' +
+          '<div class="lr-warn lr-pair-total-dconflict"></div>' +
+          '<div class="lr-verify-badge lr-pair-total-dok"></div>' +
         '</div>';
 
     var LR_ROW_HTML =
         '<div class="lr-row">' +
           '<div class="lr-row-hdr">' +
-            '<span class="lr-row-no"></span>' +
-            '<input type="text" class="lr-label" placeholder="標示名稱">' +
+            '<span class="lr-row-label"></span>' +
             '<button type="button" class="lr-mini-btn lr-del-btn" onclick="lrDelRow(this)" title="刪除這一列">✕ 刪除</button>' +
           '</div>' +
           '<div class="lr-row-body">' +
@@ -8552,10 +8546,10 @@ include __DIR__ . '/_gear_tool_ui.php';
               '<div class="lr-blk-h">① 成品尺寸（原圖標示）</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
-                  '<input type="number" step="any" class="lr-nom" oninput="lrCalc()" placeholder="基準值">' +
+                  '<input type="number" step="any" class="lr-nom" data-lr-tab="1" oninput="lrCalc()" placeholder="基準值">' +
                   '<div class="lr-tc">' +
-                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-utol" oninput="lrCalc()"></div>' +
-                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-ltol" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-utol" data-lr-tab="1" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-ltol" data-lr-tab="1" oninput="lrCalc()"></div>' +
                   '</div>' +
                 '</div>' +
                 '<div class="lr-rangeline">範圍：<span class="lr-out lr-fin-range">—</span></div>' +
@@ -8564,14 +8558,14 @@ include __DIR__ . '/_gear_tool_ui.php';
             '<div class="lr-blk lr-blk-grind">' +
               '<div class="lr-blk-h">② 研磨影響（這一面研磨「後」）</div>' +
               '<div class="lr-blk-body">' +
-                '<select class="lr-dir" onchange="lrDirSelectChanged(this)">' +
+                '<select class="lr-dir" data-lr-tab="1" onchange="lrDirSelectChanged(this)">' +
                   '<option value="">－請選擇方向－</option>' +
                   '<option value="inc">尺寸會增加</option>' +
                   '<option value="dec">尺寸會減少</option>' +
                 '</select>' +
                 '<div class="lr-dr" style="margin-top:5px;">' +
                   '<span class="lr-tlbl" style="width:auto;margin-right:2px;">增減量</span>' +
-                  '<input type="number" step="any" class="lr-gmag" oninput="lrGmagChanged(this)" placeholder="mm">' +
+                  '<input type="number" step="any" class="lr-gmag" data-lr-tab="1" oninput="lrGmagChanged(this)" placeholder="mm">' +
                 '</div>' +
                 '<div class="lr-grind-hint"></div>' +
               '</div>' +
@@ -8604,10 +8598,12 @@ include __DIR__ . '/_gear_tool_ui.php';
           '</div>' +
         '</div>';
 
-    function lrRenumber() {
+    // 標示名稱固定依序取字母（尺寸A／B／C／D……），不開放使用者自行改名；刪除列後
+    // 重新整理也會跟著往前遞補，保持連續不留空隙。
+    function lrRelabel() {
         document.querySelectorAll('#lr-rows .lr-row').forEach(function(row, i) {
-            var noEl = row.querySelector('.lr-row-no');
-            if (noEl) noEl.textContent = '第 ' + (i + 1) + ' 列';
+            var lbl = row.querySelector('.lr-row-label');
+            if (lbl) lbl.textContent = '尺寸' + LR_LETTERS[i % LR_LETTERS.length];
         });
     }
 
@@ -8621,32 +8617,47 @@ include __DIR__ . '/_gear_tool_ui.php';
         return row;
     }
 
-    // 一組＝左右各一段尺寸（尺寸A／尺寸B），預設標示名稱依序取字母，仍可自行改成任何文字。
-    window.lrAddPair = function() {
+    // 確保每兩列（一對）底下都接著一塊「總長」；reset=true 時全部清空重建
+    // （刪除列造成配對重新洗牌時，不要把舊的「原圖總長尺寸」誤套到新的配對上）。
+    function lrSyncPairTotals(reset) {
+        var wrap = document.getElementById('lr-rows');
+        if (!wrap) return;
+        var existingTotals = Array.prototype.slice.call(wrap.querySelectorAll('.lr-pair-total'));
+        if (reset) {
+            existingTotals.forEach(function(p) { p.remove(); });
+            existingTotals = [];
+        }
+        var rows = Array.prototype.slice.call(wrap.querySelectorAll('.lr-row'));
+        var idx = 0;
+        for (var i = 0; i + 1 < rows.length; i += 2) {
+            var r2 = rows[i + 1];
+            var panel = existingTotals[idx];
+            if (!panel) {
+                var div = document.createElement('div');
+                div.innerHTML = LR_TOTAL_HTML;
+                panel = div.firstElementChild;
+            }
+            if (panel.previousElementSibling !== r2) wrap.insertBefore(panel, r2.nextSibling);
+            idx++;
+        }
+        for (; idx < existingTotals.length; idx++) existingTotals[idx].remove();
+    }
+
+    window.lrAddRow = function() {
         var wrap = document.getElementById('lr-rows');
         if (!wrap) return null;
-        var pairCount = wrap.querySelectorAll('.lr-pair').length;
-        var i1 = (pairCount * 2)     % LR_LETTERS.length;
-        var i2 = (pairCount * 2 + 1) % LR_LETTERS.length;
-        var pdiv = document.createElement('div');
-        pdiv.innerHTML = LR_PAIR_HTML;
-        var pairEl = pdiv.firstElementChild;
-        var rowsWrap = pairEl.querySelector('.lr-pair-rows');
-        var r1 = lrMakeRow(), r2 = lrMakeRow();
-        r1.querySelector('.lr-label').value = '尺寸' + LR_LETTERS[i1];
-        r2.querySelector('.lr-label').value = '尺寸' + LR_LETTERS[i2];
-        rowsWrap.appendChild(r1);
-        rowsWrap.appendChild(r2);
-        wrap.appendChild(pairEl);
-        lrRenumber();
-        return pairEl;
+        var row = lrMakeRow();
+        wrap.appendChild(row);
+        lrRelabel();
+        lrSyncPairTotals(false);
+        lrCalc();
+        return row;
     };
 
     window.lrDelRow = function(btn) {
         var row = btn.closest('.lr-row');
-        var pairEl = btn.closest('.lr-pair');
         var wrap = document.getElementById('lr-rows');
-        if (!row || !pairEl || !wrap) return;
+        if (!row || !wrap) return;
         var totalRows = wrap.querySelectorAll('.lr-row').length;
         if (totalRows <= 1) {
             // 全部只剩這一列時不刪除，改清空這一列（至少留一列可填）
@@ -8656,8 +8667,8 @@ include __DIR__ . '/_gear_tool_ui.php';
             return;
         }
         row.remove();
-        if (pairEl.querySelectorAll('.lr-row').length === 0) pairEl.remove();
-        lrRenumber();
+        lrRelabel();
+        lrSyncPairTotals(true);
         lrCalc();
     };
 
@@ -8763,10 +8774,14 @@ include __DIR__ . '/_gear_tool_ui.php';
 
     // 總長（尺寸A＋尺寸B）：同一組兩列合計的成品／建議車床／手動驗算範圍。
     // 若填了「原圖總長尺寸」，會回頭調整A、B的建議車床基準值，讓兩者加總落在原圖總長公差內。
-    function lrCalcPairTotal(pairEl) {
-        var totalWrap = pairEl.querySelector('.lr-pair-total');
-        var dtotWrap  = pairEl.querySelector('.lr-pair-dtotal');
-        var rows = pairEl.querySelectorAll('.lr-row');
+    // panel＝緊接在某一對兩列（A、B）後面的「總長」面板；兩列直接由 DOM 相鄰關係取得
+    // （lrSyncPairTotals 保證面板一定緊接在這一對的第二列之後）。
+    function lrCalcPairTotal(panel) {
+        var rB = panel.previousElementSibling;
+        var rA = rB ? rB.previousElementSibling : null;
+        if (!rA || !rB || !rA.classList || !rA.classList.contains('lr-row') || !rB.classList.contains('lr-row')) return;
+        var totalWrap = panel;
+        var dtotWrap  = panel.querySelector('.lr-pair-total-dtot');
 
         var dNom = null, dLow = null, dHigh = null;
         if (dtotWrap) {
@@ -8778,24 +8793,12 @@ include __DIR__ . '/_gear_tool_ui.php';
             if (dRangeEl) dRangeEl.textContent = lrFmtRange(dLow, dHigh);
         }
 
-        if (rows.length < 2) {
-            // 落單一欄：沒有另一欄可以合計，沿用這一欄自己的安全範圍中點
-            rows.forEach(function(r) {
-                var st = lrRowState(r);
-                var sug = (st.turnLow !== null) ? (st.turnLow + st.turnHigh) / 2 : null;
-                lrApplySuggestedNom(r, st, sug);
-            });
-            if (totalWrap) totalWrap.classList.add('hidden');
-            return;
-        }
-        if (totalWrap) totalWrap.classList.remove('hidden');
-        var rA = rows[0], rB = rows[1];
         var A = lrRowState(rA), B = lrRowState(rB);
 
         var hEl = totalWrap.querySelector('.lr-pair-total-h');
         if (hEl) {
-            var l1 = (rA.querySelector('.lr-label').value || '').trim() || '第1列';
-            var l2 = (rB.querySelector('.lr-label').value || '').trim() || '第2列';
+            var l1 = (rA.querySelector('.lr-row-label').textContent || '').trim() || '第1列';
+            var l2 = (rB.querySelector('.lr-row-label').textContent || '').trim() || '第2列';
             hEl.textContent = '總長（' + l1 + ' ＋ ' + l2 + '）';
         }
 
@@ -8905,18 +8908,26 @@ include __DIR__ . '/_gear_tool_ui.php';
     }
 
     window.lrCalc = function() {
-        document.querySelectorAll('#lr-rows .lr-row').forEach(lrCalcRow);
-        document.querySelectorAll('#lr-rows .lr-pair').forEach(lrCalcPairTotal);
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#lr-rows .lr-row'));
+        rows.forEach(lrCalcRow); // 算①②④（不含③建議值，③要等配對/總長算完才知道）
+        document.querySelectorAll('#lr-rows .lr-pair-total').forEach(lrCalcPairTotal); // 算配對列的③＋總長
+        // 總數為奇數時，最後落單一列沒有總長面板可用，③改用自己的安全範圍中點
+        if (rows.length % 2 === 1) {
+            var lone = rows[rows.length - 1];
+            var st = lrRowState(lone);
+            var sug = (st.turnLow !== null) ? (st.turnLow + st.turnHigh) / 2 : null;
+            lrApplySuggestedNom(lone, st, sug);
+        }
     };
 
-    // 同一組（左右兩欄）互為配對：選其中一欄的研磨方向時，自動把另一欄設成相反方向
-    // （同一個研磨面通常同時讓兩側一增一減；僅同步「方向」，增減量仍各自填）。
+    // 每兩列（第1/2列、第3/4列……）互為配對：選其中一列的研磨方向時，自動把配對列
+    // 設成相反方向（同一個研磨面通常同時讓兩側一增一減；僅同步「方向」，增減量另見下方）。
     function lrPartnerOf(row) {
-        var pairEl = row.closest('.lr-pair');
-        if (!pairEl) return null;
-        var rows = pairEl.querySelectorAll('.lr-row');
-        for (var i = 0; i < rows.length; i++) { if (rows[i] !== row) return rows[i]; }
-        return null;
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#lr-rows .lr-row'));
+        var idx = rows.indexOf(row);
+        if (idx < 0) return null;
+        var pairIdx = (idx % 2 === 0) ? idx + 1 : idx - 1;
+        return rows[pairIdx] || null;
     }
     window.lrDirSelectChanged = function(sel) {
         var row = sel.closest('.lr-row');
@@ -8951,10 +8962,13 @@ include __DIR__ . '/_gear_tool_ui.php';
         body.addEventListener('keydown', function(e) {
             if (e.key !== 'Enter') return;
             var t = e.target;
-            if (t.tagName !== 'INPUT' && t.tagName !== 'SELECT') return;
+            // 只有①②（成品尺寸／研磨影響）的欄位掛了 data-lr-tab，Enter 依序跳下一欄：
+            // 這一列②填完接著跳下一列①，③④（建議車床／手動驗算）是次要欄位不排進這個鏈，
+            // 要填自己點進去——這樣可以很快連續輸入一長串尺寸A、B、C、D……的成品尺寸與研磨影響。
+            if (!t.hasAttribute('data-lr-tab')) return;
             e.preventDefault();
             var focusables = Array.prototype.slice.call(
-                body.querySelectorAll('input, select')
+                body.querySelectorAll('[data-lr-tab]')
             );
             var idx = focusables.indexOf(t);
             if (idx >= 0 && idx < focusables.length - 1) focusables[idx + 1].focus();
@@ -9008,7 +9022,8 @@ include __DIR__ . '/_gear_tool_ui.php';
         }
         initLrDrag();
         initLrDelegation();
-        lrAddPair();
+        lrAddRow(); // 尺寸A
+        lrAddRow(); // 尺寸B
     }
 
     window.openLenTool = function() {
@@ -9027,8 +9042,8 @@ include __DIR__ . '/_gear_tool_ui.php';
     window.clearLenTool = function() {
         var wrap = document.getElementById('lr-rows');
         if (wrap) wrap.innerHTML = '';
-        lrAddPair();
-        lrCalc();
+        lrAddRow(); // 尺寸A
+        lrAddRow(); // 尺寸B
         var el = document.querySelector('#lr-rows .lr-row:first-child .lr-nom');
         if (el) el.focus();
     };

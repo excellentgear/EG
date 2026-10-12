@@ -802,9 +802,23 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <!-- 只有 DWG 轉出來的預覽才需要「另存 PDF」——原檔下載已經在「儲存」鈕 -->
             <button id="btn-save-pdf"   class="btn btn-success btn-xs" style="display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「儲存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載 PDF</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
+            <!-- 3D 專用：標準視角（唯一實作見 resource/js/eg_3d_viewer_tools.js 的 setStandardView，
+                 兩頁共用；2026-10-12 使用者要求比照繪圖軟體可快速翻到固定角度）-->
+            <span id="bom-3d-view-group" style="display:none;align-items:center;">
+                <select id="bom-3d-view-select" class="form-control input-xs" style="width:84px;height:22px;padding:0 2px;" title="快速翻到標準視角（前/後/左/右/上/下/等角），不必自己手動拖曳旋轉">
+                    <option value="" selected>標準視角</option>
+                    <option value="front">前視圖</option>
+                    <option value="back">後視圖</option>
+                    <option value="right">右視圖</option>
+                    <option value="left">左視圖</option>
+                    <option value="top">上視圖</option>
+                    <option value="bottom">下視圖</option>
+                    <option value="iso">等角視圖</option>
+                </select>
+            </span>
             <!-- 3D 專用：上色（唯一實作見 resource/js/eg_3d_viewer_tools.js，兩頁共用）-->
             <span id="bom-3d-color-group" style="display:none;align-items:center;gap:4px;">
-                <button id="btn-3d-color" type="button" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型表面即可幫該面上色（單一三角面，不是整個零件），方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
+                <button id="btn-3d-color" type="button" class="btn btn-warning btn-xs" title="上色模式：點一下模型表面即可幫該面上色；純拖曳仍可正常旋轉視角；按住 Ctrl 拖曳＝框選範圍內全部面一次上色"><i class="fa fa-paint-brush"></i> 上色</button>
                 <input id="bom-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
                 <button id="btn-3d-color-reset" type="button" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
             </span>
@@ -1081,7 +1095,7 @@ function showFile(path, type, name) {
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
-    $('#bom-3d-color-group, #bom-3d-hl-group, #bom-3d-section-group').hide();
+    $('#bom-3d-view-group, #bom-3d-color-group, #bom-3d-hl-group, #bom-3d-section-group').hide();
     _bom3dColorMode = false;
     $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
     _bom3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
@@ -1132,6 +1146,8 @@ function showFile(path, type, name) {
         // 慢很多〈約9~10秒〉，上傳當下已背景預轉過，這裡多半直接命中快取）都用同一套
         // o3dv.min.js（開源，本機內建檔案，不走 CDN，與 master_data_management.php 同版本）。
         _bom3dViewer = null;
+        $('#bom-3d-view-select').val('');
+        $('#bom-3d-view-group').css('display', 'inline-flex');
         _bom3dColorState = new EG3DTools.ColorState();
         _bom3dColorMode = false;
         $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
@@ -1244,14 +1260,22 @@ function openImageEditor() {
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
 }
 
+// ── 3D 標準視角（唯一實作見 resource/js/eg_3d_viewer_tools.js 的 setStandardView）──
+$('#bom-3d-view-select').on('change', function() {
+    var v = $(this).val();
+    if (v && _bom3dViewer) EG3DTools.setStandardView(_bom3dViewer, v);
+    $(this).val('');   // 選完立刻跳回預設顯示文字，下次還能選同一個視角
+});
+
 // ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js）──────────────
-// 點一下＝自動判定「同一面」整面上色；拖曳成一個框＝框選範圍內全部面（各自延伸到
-// 整面）一次上色（使用者 2026-10-08 要求）。互動邏輯整支在共用檔，這裡只接上當下
-// 狀態的 getter，換檔案時 _bom3dViewer/_bom3dColorState 本來就會重建，不必重新綁定。
+// 點一下＝自動判定「同一面」整面上色；純拖曳＝正常旋轉視角；按住 Ctrl 拖曳＝框選
+// 範圍內全部面一次上色（2026-10-08 使用者要求框選、2026-10-12 使用者回報上色中無法
+// 旋轉視角後改成純拖曳不再攔截）。互動邏輯整支在共用檔，這裡只接上當下狀態的
+// getter，換檔案時 _bom3dViewer/_bom3dColorState 本來就會重建，不必重新綁定。
 $('#btn-3d-color').on('click', function() {
     _bom3dColorMode = !_bom3dColorMode;
     $(this).toggleClass('btn-warning', !_bom3dColorMode).toggleClass('btn-success', _bom3dColorMode)
-        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
+        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下上色／Ctrl+拖曳框選／純拖曳仍可旋轉）' : '上色'));
 });
 EG3DTools.attachColorInteraction(
     document.getElementById('bom-3d-wrap'), '#bom-3d-viewer canvas',
