@@ -827,14 +827,15 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 </select>
                 <input id="bom-3d-section-pos" type="range" min="0" max="100" value="50" style="display:none;width:90px;vertical-align:middle;" title="拖曳調整剖面位置">
                 <button id="btn-3d-section-flip" type="button" class="btn btn-default btn-xs" style="display:none;" title="翻轉保留側"><i class="fa fa-exchange"></i></button>
-                <label id="bom-3d-section-dual-wrap" style="display:none;font-size:11px;margin:0 0 0 4px;white-space:nowrap;cursor:pointer;" title="同時沿第二軸切一刀，只切除兩個剖切面重疊的那個象限（1/4），形成類似工程圖常見的「3/4剖視圖」">
-                    <input type="checkbox" id="bom-3d-section-dual" style="vertical-align:middle;"> 3/4剖面
+                <label id="bom-3d-section-dual-wrap" style="display:none;font-size:11px;margin:0 0 0 4px;white-space:nowrap;cursor:pointer;" title="楔形剖面（3/4剖視圖）：繞一條共用軸線切出一個楔形缺口，角度可調（像鐘面上兩指針之間較窄的夾角被挖空），常見於工程圖的3/4剖視圖">
+                    <input type="checkbox" id="bom-3d-section-dual" style="vertical-align:middle;"> 楔形剖面
                 </label>
-                <select id="bom-3d-section-axis2" class="form-control input-xs" style="display:none;width:48px;height:22px;padding:0 2px;" title="第二軸">
+                <select id="bom-3d-section-axis2" class="form-control input-xs" style="display:none;width:48px;height:22px;padding:0 2px;" title="楔形繞哪個軸旋轉（共用的軸線）">
                     <option value="z">Z</option><option value="x">X</option><option value="y">Y</option>
                 </select>
-                <input id="bom-3d-section-pos2" type="range" min="0" max="100" value="50" style="display:none;width:90px;vertical-align:middle;" title="拖曳調整第二剖面位置">
-                <button id="btn-3d-section-flip2" type="button" class="btn btn-default btn-xs" style="display:none;" title="翻轉第二軸保留側"><i class="fa fa-exchange"></i></button>
+                <input id="bom-3d-section-pos2" type="range" min="0" max="100" value="25" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形起始角度">
+                <input id="bom-3d-section-pos3" type="range" min="0" max="100" value="50" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形寬度（挖空範圍的角度大小）">
+                <button id="btn-3d-section-flip2" type="button" class="btn btn-default btn-xs" style="display:none;" title="切到起始角度的另一側"><i class="fa fa-exchange"></i></button>
             </span>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
@@ -1046,7 +1047,7 @@ var _bom3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重
 var _bom3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
 var _bom3dHLState = null;      // 透視（隱藏線）模式目前的疊加物件狀態，null＝未開啟
 var _bom3dSectionState = null; // 剖面模式目前的狀態，null＝未開啟
-var _bom3dSectionOpts = { axis: 'x', ratio: 0.5, flip: false, axis2: 'none', ratio2: 0.5, flip2: false };
+var _bom3dSectionOpts = { axis: 'x', ratio: 0.5, flip: false, axis2: 'none', ratio2: 0.25, ratio3: 0.5, flip2: false };
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1101,7 +1102,7 @@ function showFile(path, type, name) {
     $('#btn-3d-hiddenline').removeClass('btn-info');
     _bom3dSectionState = null;
     $('#btn-3d-section').removeClass('btn-info');
-    $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #btn-3d-section-flip2').hide();
+    $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').hide();
     $('#bom-3d-section-dual').prop('checked', false);
     _bom3dSectionOpts.axis2 = 'none';
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
@@ -1158,7 +1159,7 @@ function showFile(path, type, name) {
         $('#bom-3d-hl-group').css('display', 'inline-flex');
         _bom3dSectionState = null;
         $('#btn-3d-section').removeClass('btn-info');
-        $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #btn-3d-section-flip2').hide();
+        $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').hide();
         $('#bom-3d-section-dual').prop('checked', false);
         _bom3dSectionOpts.axis2 = 'none';
         $('#bom-3d-section-group').css('display', 'inline-flex');
@@ -1339,14 +1340,15 @@ $('#btn-3d-section').on('click', function() {
         EG3DTools.clearSectionMode(_bom3dViewer, _bom3dSectionState);
         _bom3dSectionState = null;
         $(this).removeClass('btn-info');
-        $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #btn-3d-section-flip2').hide();
+        $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').hide();
         $('#bom-3d-section-dual').prop('checked', false);
         _bom3dSectionOpts.axis2 = 'none';
     } else {
         _bom3dSectionState = EG3DTools.setSectionMode(_bom3dViewer, _bom3dSectionOpts);
         if (_bom3dSectionState) {
             $(this).addClass('btn-info');
-            $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap').css('display', 'inline-block');
+            $('#bom-3d-section-dual-wrap').css('display', 'inline-block');
+            $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip').css('display', 'inline-block');
         } else {
             alert('這個模型量不出包圍盒範圍，無法切換剖面顯示');
         }
@@ -1360,11 +1362,15 @@ $('#bom-3d-section-pos').on('input', function() {
     _bom3dSectionOpts.ratio = (+$(this).val()) / 100;
     if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
 });
-// ── 3/4 剖面（雙軸同時剖切，唯一實作見 eg_3d_viewer_tools.js setSectionMode/updateSectionMode）──
+// ── 楔形剖面（3/4剖視圖，繞共用軸線挖出可調角度的楔形缺口，唯一實作見
+// eg_3d_viewer_tools.js setSectionMode/updateSectionMode 的 _computeSectionPlanes）──
+// 楔形模式會完全取代單軸剖面（不是疊加），開啟時把單軸的軸別/位置/翻轉控制項藏起來，
+// 避免使用者以為兩種切法同時生效。
 $('#bom-3d-section-dual').on('change', function() {
     var on = $(this).is(':checked');
     _bom3dSectionOpts.axis2 = on ? $('#bom-3d-section-axis2').val() : 'none';
-    $('#bom-3d-section-axis2, #bom-3d-section-pos2, #btn-3d-section-flip2').css('display', on ? 'inline-block' : 'none');
+    $('#bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').css('display', on ? 'inline-block' : 'none');
+    $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip').css('display', on ? 'none' : 'inline-block');
     if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
 });
 $('#bom-3d-section-axis2').on('change', function() {
@@ -1372,7 +1378,11 @@ $('#bom-3d-section-axis2').on('change', function() {
     if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
 });
 $('#bom-3d-section-pos2').on('input', function() {
-    _bom3dSectionOpts.ratio2 = (+$(this).val()) / 100;
+    _bom3dSectionOpts.ratio2 = (+$(this).val()) / 100;   // 楔形起始角度（0~100 對應 0~360 度）
+    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+});
+$('#bom-3d-section-pos3').on('input', function() {
+    _bom3dSectionOpts.ratio3 = (+$(this).val()) / 100;   // 楔形寬度（0~100 對應 1~179 度）
     if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
 });
 $('#btn-3d-section-flip2').on('click', function() {

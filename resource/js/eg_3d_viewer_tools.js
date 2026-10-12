@@ -1051,6 +1051,7 @@ var EG3DTools = (function () {
 
         var frontObjs = [], backObjs = [];
         var meshFrontMat = new Map();   // mesh → 可見邊材質，輪廓邊重用同一份材質（視覺風格要一致）
+        var meshBackMat = new Map();    // mesh → 被遮蔽邊材質（虛線＋反轉深度測試），輪廓邊的被遮蔽部分重用同一份
         mm.EnumerateMeshes(function (mesh) {
             // 角度門檻刻意用 20 度，比上色功能的預設 12 度更寬鬆——這裡只是要畫「視覺輪廓」
             // 不是要精準選出單一 CAD 面，兩者目的不同。已用真實模型做角度掃描實測校準：
@@ -1078,6 +1079,7 @@ var EG3DTools = (function () {
             var backMat = _buildDashedLineMaterial(baseLineMat, '#8a8a8a', dashSize, gapSize);
             backMat.depthFunc = _GREATER_DEPTH;
             backMat.depthWrite = false;
+            meshBackMat.set(mesh, backMat);
             var backObj = new LineCtor(geo, backMat);
             backObj.renderOrder = 5;
             viewer.AddExtraObject(backObj);
@@ -1113,14 +1115,26 @@ var EG3DTools = (function () {
             if (!camera || !camera.eye) return;
             var eyeWorld = [camera.eye.x, camera.eye.y, camera.eye.z];
             mm.EnumerateMeshes(function (mesh) {
-                var mat = meshFrontMat.get(mesh);
-                if (!mat) return;   // 完全沒有特徵邊的 mesh（如整顆平滑球）不處理輪廓邊
+                var fmat = meshFrontMat.get(mesh);
+                var bmat = meshBackMat.get(mesh);
+                if (!fmat || !bmat) return;   // 完全沒有特徵邊的 mesh（如整顆平滑球）不處理輪廓邊
                 var geo = _buildSilhouetteGeometry(mesh, eyeWorld);
                 if (!geo) return;
-                var obj = new LineCtor(geo, mat);
-                obj.renderOrder = 10;
-                viewer.AddExtraObject(obj);
-                silhouetteObjs.push(obj);
+                // 輪廓邊同樣要分「可見／被遮蔽」兩個 pass（2026-10-12 使用者回報：孔洞內壁
+                // 的輪廓線——連接上下兩個圓孔邊緣的那兩條側邊線——被遮蔽時應顯示虛線，但
+                // 先前輪廓邊一律只用 frontMat 畫成實線，沒有對應的虛線版本。外凸輪廓（例如
+                // 柱體外側）本來就不可能被自己擋住，用一般深度測試＋實心材質時自然永遠通過
+                // 可見那一關；但凹陷特徵（孔洞內壁）的輪廓線確實會被孔口近側內壁擋住，一律
+                // 套用跟一般特徵邊相同的「同一份幾何、兩份材質（一般深度測試=實線可見／反轉
+                // 深度測試=虛線被遮蔽）」寫法，不需要額外判斷凹凸，兩種情況自動各自正確顯示。
+                var fObj = new LineCtor(geo, fmat);
+                fObj.renderOrder = 10;
+                viewer.AddExtraObject(fObj);
+                silhouetteObjs.push(fObj);
+                var bObj = new LineCtor(geo, bmat);
+                bObj.renderOrder = 5;
+                viewer.AddExtraObject(bObj);
+                silhouetteObjs.push(bObj);
             });
         }
         var silhouettePending = false;
@@ -1512,32 +1526,75 @@ var EG3DTools = (function () {
         var constant = -planePos * normalSign;   // Three.js Plane 慣例：normal·point + constant = 0（見上方註解）
         return { normal: normal, constant: constant };
     }
-    // 3/4 剖面（雙軸同時剖切，2026-10-08 使用者要求）：同時啟用兩個互相垂直的剖切平面，
-    // 只切掉兩個半空間「重疊」的那個象限（1/4），外觀保留 3/4。查證確認 Three.js 原生
-    // 支援 `material.clippingPlanes` 放多個平面，且 `material.clipIntersection` 這個旗標
-    // 剛好決定了多平面的組合方式（函式庫內建 shader 邏輯，不是魔改）：預設 false＝「聯集」
-    // 語意（任一平面判定要切除就切除＝保留區是兩個保留半空間的交集，單一平面本來就等價
-    // 不受影響）；true＝「交集」語意（兩個平面都判定要切除才真正切除＝保留區是兩個保留
-    // 半空間的聯集）——3/4剖面正是要「只切掉同時落在兩個切除半空間裡的那個象限、其餘
-    // 全部保留」，所以雙軸模式一律要把 clipIntersection 設成 true；單軸只有一個平面時
-    // 這個旗標不影響結果，維持 false 即可。
-    function setSectionMode(embeddedViewer, opts) {
-        opts = opts || {};
+    // ──「楔形剖面」（3/4剖視，2026-10-12 使用者更正）────────────────────────
+    // 使用者最初的「3/4剖面」要求，先前誤理解成「兩個互相垂直、各自獨立的軸向剖切面，
+    // 只切掉重疊的那個象限（固定90度）」。使用者看過截圖後用時鐘面比喻更正：3/4剖視圖
+    // 的正確畫法是「兩把剖切面共用同一條軸線（像鐘面指針共用圓心），兩者之間夾出的
+    // 那個**角度可調、通常遠小於90度**的楔形範圍被挖空」——參考圖2（標準工程圖3/4剖視）
+    // 正是沿著一條旋轉軸，切出一個窄楔形缺口露出內部孔／軸結構，其餘外觀保持完整立體。
+    // 幾何作法：挑一個旋轉軸（X/Y/Z），兩個剖切面都**通過模型包圍盒中心、且都平行於該
+    // 旋轉軸**（滿足「共用同一條軸線」），差別只在繞軸旋轉的角度不同；楔形寬度＝兩個角
+    // 度的差，使用者可調（1～179度），不再限定固定90度。
+    //
+    // 法向量推導（已用代入驗證，見下方 _buildWedgePlane）：設垂直於旋轉軸的平面上一點
+    // 的角度為 φ（繞軸測量），平面在角度 θ 處、法向量取 N(θ)=(sinθ,-cosθ)（在該垂直平面
+    // 內的兩個分量），則 dot(N(θ),方向(φ)) = -sin(φ-θ)，<0 時 φ∈(θ,θ+180°)。兩個楔形面
+    // 分別取 θ1（which=1）與 θ2（which=2，法向量取反號 N'(θ)=(-sinθ,cosθ)，使 dot<0 時
+    // φ∈(θ-180°,θ)），兩者的「切除」交集恰好是 φ∈(θ1,θ2)（前提 0<θ2-θ1<180°）——這正是
+    // 要挖空的那個楔形，故跟舊版象限剖面一樣要用 clipIntersection=true（AND 語意：兩面
+    // 都判定切除才真正切除）。
+    function _perpAxes3d(axis) {
+        if (axis === 'x') return ['y', 'z'];
+        if (axis === 'y') return ['z', 'x'];
+        return ['x', 'y'];
+    }
+    function _buildWedgePlane(center, axis, angleDeg, which) {
+        var rad = angleDeg * Math.PI / 180;
+        var ax = _perpAxes3d(axis);
+        var normal = { x: 0, y: 0, z: 0 };
+        if (which === 1) {
+            normal[ax[0]] = Math.sin(rad);
+            normal[ax[1]] = -Math.cos(rad);
+        } else {
+            normal[ax[0]] = -Math.sin(rad);
+            normal[ax[1]] = Math.cos(rad);
+        }
+        var constant = -(normal.x * center.x + normal.y * center.y + normal.z * center.z);
+        return { normal: normal, constant: constant };
+    }
+    function _buildWedgePlanes(bbox, axis, startDeg, widthDeg, flip) {
+        var center = {
+            x: (bbox.min.x + bbox.max.x) / 2,
+            y: (bbox.min.y + bbox.max.y) / 2,
+            z: (bbox.min.z + bbox.max.z) / 2
+        };
+        var w = Math.max(1, Math.min(179, widthDeg));
+        var a1 = startDeg, a2 = startDeg + (flip ? -w : w);
+        if (a2 < a1) { var t = a1; a1 = a2; a2 = t; }
+        return [_buildWedgePlane(center, axis, a1, 1), _buildWedgePlane(center, axis, a2, 2)];
+    }
+    // 統一算出目前該用哪幾個剖切平面——楔形模式（opts.axis2 有指定旋轉軸）完全取代單軸
+    // 剖切（不是疊加），兩者是互斥的兩種顯示模式，不是「再加切一刀」。
+    function _computeSectionPlanes(bbox, opts) {
+        var wedge = !!(opts.axis2 && opts.axis2 !== 'none');
+        if (wedge) {
+            var startDeg = (opts.ratio2 == null ? 0.25 : opts.ratio2) * 360;
+            var widthDeg = 1 + (opts.ratio3 == null ? 0.5 : opts.ratio3) * 178;
+            return { planes: _buildWedgePlanes(bbox, opts.axis2, startDeg, widthDeg, !!opts.flip2), dual: true };
+        }
         var axis = opts.axis || 'x';
         var ratio = opts.ratio == null ? 0.5 : opts.ratio;
         var flip = !!opts.flip;
+        return { planes: [_buildClipPlane(bbox, axis, ratio, flip)], dual: false };
+    }
+    function setSectionMode(embeddedViewer, opts) {
+        opts = opts || {};
         var viewer = embeddedViewer.GetViewer();
         var mm = viewer.mainModel;
         var bbox = mm.GetBoundingBox(function () { return true; });
         if (!bbox) return null;
-        var plane = _buildClipPlane(bbox, axis, ratio, flip);
-        var dual = !!(opts.axis2 && opts.axis2 !== 'none' && opts.axis2 !== axis);
-        var plane2 = null;
-        var planes = [plane];
-        if (dual) {
-            plane2 = _buildClipPlane(bbox, opts.axis2, opts.ratio2 == null ? 0.5 : opts.ratio2, !!opts.flip2);
-            planes.push(plane2);
-        }
+        var pc = _computeSectionPlanes(bbox, opts);
+        var planes = pc.planes, dual = pc.dual;
 
         viewer.renderer.localClippingEnabled = true;
         var touchedMats = [];
@@ -1552,9 +1609,9 @@ var EG3DTools = (function () {
         });
         var capObjs = _rebuildCaps(viewer, mm, planes);
         viewer.Render();
-        return { touchedMats: touchedMats, plane: plane, plane2: plane2, dual: dual, capObjs: capObjs, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
+        return { touchedMats: touchedMats, plane: planes[0], plane2: planes[1] || null, dual: dual, capObjs: capObjs, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
     }
-    // 調整現有剖面（換軸／拖曳位置／翻轉保留側／切換雙軸）不必重新掃描全部 mesh，但**一定
+    // 調整現有剖面（換軸／拖曳位置／翻轉保留側／切換楔形）不必重新掃描全部 mesh，但**一定
     // 要建一組全新的 plane 物件、重新指派整個 clippingPlanes 陣列**，不可以沿用舊物件只
     // 改屬性值——已實測踩到這個坑：Three.js 的 WebGLClipping 內部對 clippingState 有快取
     // 機制，單純 mutate 同一個 plane 物件的 normal/constant（即使材質 needsUpdate=true）
@@ -1565,18 +1622,9 @@ var EG3DTools = (function () {
     function updateSectionMode(embeddedViewer, state, opts) {
         if (!state || !state.bbox) return;
         opts = opts || {};
-        var axis = opts.axis || 'x';
-        var ratio = opts.ratio == null ? 0.5 : opts.ratio;
-        var flip = !!opts.flip;
-        var plane = _buildClipPlane(state.bbox, axis, ratio, flip);
-        var dual = !!(opts.axis2 && opts.axis2 !== 'none' && opts.axis2 !== axis);
-        var plane2 = null;
-        var planes = [plane];
-        if (dual) {
-            plane2 = _buildClipPlane(state.bbox, opts.axis2, opts.ratio2 == null ? 0.5 : opts.ratio2, !!opts.flip2);
-            planes.push(plane2);
-        }
-        state.plane = plane; state.plane2 = plane2; state.dual = dual;
+        var pc = _computeSectionPlanes(state.bbox, opts);
+        var planes = pc.planes, dual = pc.dual;
+        state.plane = planes[0]; state.plane2 = planes[1] || null; state.dual = dual;
         state.touchedMats.forEach(function (mt) {
             mt.clippingPlanes = planes;
             mt.clipIntersection = dual;

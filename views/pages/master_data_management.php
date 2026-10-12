@@ -11098,14 +11098,15 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 </select>
                 <input id="pav-3d-section-pos" type="range" min="0" max="100" value="50" style="display:none;width:90px;vertical-align:middle;" title="拖曳調整剖面位置">
                 <button type="button" id="pav-btn-3d-section-flip" class="btn btn-default btn-xs" style="display:none;" title="翻轉保留側"><i class="fa fa-exchange"></i></button>
-                <label id="pav-3d-section-dual-wrap" style="display:none;font-size:11px;margin:0 0 0 4px;white-space:nowrap;cursor:pointer;" title="同時沿第二軸切一刀，只切除兩個剖切面重疊的那個象限（1/4），形成類似工程圖常見的「3/4剖視圖」">
-                    <input type="checkbox" id="pav-3d-section-dual" style="vertical-align:middle;"> 3/4剖面
+                <label id="pav-3d-section-dual-wrap" style="display:none;font-size:11px;margin:0 0 0 4px;white-space:nowrap;cursor:pointer;" title="楔形剖面（3/4剖視圖）：繞一條共用軸線切出一個楔形缺口，角度可調（像鐘面上兩指針之間較窄的夾角被挖空），常見於工程圖的3/4剖視圖">
+                    <input type="checkbox" id="pav-3d-section-dual" style="vertical-align:middle;"> 楔形剖面
                 </label>
-                <select id="pav-3d-section-axis2" class="form-control input-xs" style="display:none;width:48px;height:22px;padding:0 2px;" title="第二軸">
+                <select id="pav-3d-section-axis2" class="form-control input-xs" style="display:none;width:48px;height:22px;padding:0 2px;" title="楔形繞哪個軸旋轉（共用的軸線）">
                     <option value="z">Z</option><option value="x">X</option><option value="y">Y</option>
                 </select>
-                <input id="pav-3d-section-pos2" type="range" min="0" max="100" value="50" style="display:none;width:90px;vertical-align:middle;" title="拖曳調整第二剖面位置">
-                <button type="button" id="pav-btn-3d-section-flip2" class="btn btn-default btn-xs" style="display:none;" title="翻轉第二軸保留側"><i class="fa fa-exchange"></i></button>
+                <input id="pav-3d-section-pos2" type="range" min="0" max="100" value="25" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形起始角度">
+                <input id="pav-3d-section-pos3" type="range" min="0" max="100" value="50" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形寬度（挖空範圍的角度大小）">
+                <button type="button" id="pav-btn-3d-section-flip2" class="btn btn-default btn-xs" style="display:none;" title="切到起始角度的另一側"><i class="fa fa-exchange"></i></button>
             </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
@@ -20841,7 +20842,7 @@ var _pav3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重
 var _pav3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
 var _pav3dHLState = null;      // 透視（隱藏線）模式目前的疊加物件狀態，null＝未開啟
 var _pav3dSectionState = null; // 剖面模式目前的狀態，null＝未開啟
-var _pav3dSectionOpts = { axis: 'x', ratio: 0.5, flip: false, axis2: 'none', ratio2: 0.5, flip2: false };
+var _pav3dSectionOpts = { axis: 'x', ratio: 0.5, flip: false, axis2: 'none', ratio2: 0.25, ratio3: 0.5, flip2: false };
 
 function _pavShowUploadBtn(show) {
     var upLabel = document.querySelector('#partAttachViewModal label[title="上傳附件"]');
@@ -21700,7 +21701,7 @@ function pavSelectFile(idx) {
     if (pav3dSectionGroupReset) pav3dSectionGroupReset.style.display = 'none';
     _pav3dSectionState = null;
     $('#pav-btn-3d-section').removeClass('btn-info');
-    $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-btn-3d-section-flip2').hide();
+    $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-3d-section-pos3, #pav-btn-3d-section-flip2').hide();
     $('#pav-3d-section-dual').prop('checked', false);
     _pav3dSectionOpts.axis2 = 'none';
     // 報價附件唯讀：隱藏刪除/編輯鈕
@@ -21776,7 +21777,7 @@ function pavSelectFile(idx) {
         if (pav3dHLGroup) pav3dHLGroup.style.display = 'inline-flex';
         _pav3dSectionState = null;
         $('#pav-btn-3d-section').removeClass('btn-info');
-        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-btn-3d-section-flip2').hide();
+        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-3d-section-pos3, #pav-btn-3d-section-flip2').hide();
         $('#pav-3d-section-dual').prop('checked', false);
         _pav3dSectionOpts.axis2 = 'none';
         var pav3dSectionGroup = document.getElementById('pav-3d-section-group');
@@ -22045,14 +22046,15 @@ $(document).on('click', '#pav-btn-3d-section', function() {
         EG3DTools.clearSectionMode(_pav3dViewer, _pav3dSectionState);
         _pav3dSectionState = null;
         $(this).removeClass('btn-info');
-        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-btn-3d-section-flip2').hide();
+        $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap, #pav-3d-section-axis2, #pav-3d-section-pos2, #pav-3d-section-pos3, #pav-btn-3d-section-flip2').hide();
         $('#pav-3d-section-dual').prop('checked', false);
         _pav3dSectionOpts.axis2 = 'none';
     } else {
         _pav3dSectionState = EG3DTools.setSectionMode(_pav3dViewer, _pav3dSectionOpts);
         if (_pav3dSectionState) {
             $(this).addClass('btn-info');
-            $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip, #pav-3d-section-dual-wrap').css('display', 'inline-block');
+            $('#pav-3d-section-dual-wrap').css('display', 'inline-block');
+            $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').css('display', 'inline-block');
         } else {
             alert('這個模型量不出包圍盒範圍，無法切換剖面顯示');
         }
@@ -22070,11 +22072,15 @@ $(document).on('click', '#pav-btn-3d-section-flip', function() {
     _pav3dSectionOpts.flip = !_pav3dSectionOpts.flip;
     if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
 });
-// ── 3/4 剖面（雙軸同時剖切，唯一實作見 eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+// ── 楔形剖面（3/4剖視圖，繞共用軸線挖出可調角度的楔形缺口，唯一實作見
+// eg_3d_viewer_tools.js setSectionMode/updateSectionMode 的 _computeSectionPlanes，與
+// bom_viewer.php 共用）。楔形模式完全取代單軸剖面（不是疊加），開啟時把單軸的軸別/
+// 位置/翻轉控制項藏起來，避免使用者以為兩種切法同時生效。
 $(document).on('change', '#pav-3d-section-dual', function() {
     var on = $(this).is(':checked');
     _pav3dSectionOpts.axis2 = on ? $('#pav-3d-section-axis2').val() : 'none';
-    $('#pav-3d-section-axis2, #pav-3d-section-pos2, #pav-btn-3d-section-flip2').css('display', on ? 'inline-block' : 'none');
+    $('#pav-3d-section-axis2, #pav-3d-section-pos2, #pav-3d-section-pos3, #pav-btn-3d-section-flip2').css('display', on ? 'inline-block' : 'none');
+    $('#pav-3d-section-axis, #pav-3d-section-pos, #pav-btn-3d-section-flip').css('display', on ? 'none' : 'inline-block');
     if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
 });
 $(document).on('change', '#pav-3d-section-axis2', function() {
@@ -22082,7 +22088,11 @@ $(document).on('change', '#pav-3d-section-axis2', function() {
     if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
 });
 $(document).on('input', '#pav-3d-section-pos2', function() {
-    _pav3dSectionOpts.ratio2 = (+$(this).val()) / 100;
+    _pav3dSectionOpts.ratio2 = (+$(this).val()) / 100;   // 楔形起始角度（0~100 對應 0~360 度）
+    if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
+});
+$(document).on('input', '#pav-3d-section-pos3', function() {
+    _pav3dSectionOpts.ratio3 = (+$(this).val()) / 100;   // 楔形寬度（0~100 對應 1~179 度）
     if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
 });
 $(document).on('click', '#pav-btn-3d-section-flip2', function() {
