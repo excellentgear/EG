@@ -2237,7 +2237,86 @@ var EG3DTools = (function () {
         return true;
     }
 
+    // ──「組合檔零件」：清單／顯示隱藏／爆炸圖 ─────────────────────────────────
+    // 2026-10-12 使用者要求組合圖（.iam）要能像繪圖軟體那樣隱藏個別零件、拉開零件距離。
+    // 組合檔是先轉成 STEP 再由 o3dv 載入的，STEP 會把每個零件保留成獨立的 product，
+    // o3dv 讀進來就是一個個獨立的 mesh，`mesh.name` 正是零件名稱（實測有保留中文），
+    // 所以這裡不需要另外解析組合結構，直接列舉 mesh 即可。
+    function _egCompMeshes(embeddedViewer) {
+        var viewer = embeddedViewer && embeddedViewer.GetViewer ? embeddedViewer.GetViewer() : embeddedViewer;
+        if (!viewer || !viewer.mainModel) return [];
+        var list = [];
+        viewer.mainModel.EnumerateMeshes(function (m) { list.push(m); });
+        return list;
+    }
+    /** 零件清單：[{key, name, visible, verts}]，key 是穩定的索引字串供畫面對應 */
+    function listComponents(embeddedViewer) {
+        return _egCompMeshes(embeddedViewer).map(function (m, i) {
+            return {
+                key: String(i),
+                name: (m.name && String(m.name).trim()) || ('零件 ' + (i + 1)),
+                visible: m.visible !== false,
+                verts: (m.geometry && m.geometry.attributes && m.geometry.attributes.position) ? m.geometry.attributes.position.count : 0
+            };
+        });
+    }
+    /** 顯示／隱藏某一個零件（key 來自 listComponents） */
+    function setComponentVisible(embeddedViewer, key, visible) {
+        var viewer = embeddedViewer && embeddedViewer.GetViewer ? embeddedViewer.GetViewer() : embeddedViewer;
+        var ms = _egCompMeshes(embeddedViewer);
+        var idx = parseInt(key, 10);
+        if (!(idx >= 0) || idx >= ms.length) return false;
+        ms[idx].visible = !!visible;
+        if (viewer && viewer.Render) viewer.Render();
+        return true;
+    }
+    /**
+     * 爆炸圖：依每個零件相對於「整個組合中心」的方向，等比例往外平移。
+     * factor 0＝完全復位、1＝拉開到組合尺度的一半（經驗值，看起來剛好散得開又不會飛走）。
+     * 原始位置記在 mesh.userData 裡，factor 回到 0 一定完全還原（不是反向再平移一次，
+     * 那樣累積浮點誤差會讓零件回不到原位）。
+     */
+    function setExplode(embeddedViewer, factor) {
+        var viewer = embeddedViewer && embeddedViewer.GetViewer ? embeddedViewer.GetViewer() : embeddedViewer;
+        var ms = _egCompMeshes(embeddedViewer);
+        if (!ms.length) return false;
+        var f = Math.max(0, Math.min(1, Number(factor) || 0));
+        // 組合整體中心與尺度（用未爆炸時的原始位置算，否則拉開後中心會跟著跑）
+        var cs = [], gmin = [Infinity, Infinity, Infinity], gmax = [-Infinity, -Infinity, -Infinity];
+        ms.forEach(function (m) {
+            if (!m.userData.__egExpBase) m.userData.__egExpBase = { x: m.position.x, y: m.position.y, z: m.position.z };
+            m.geometry.computeBoundingBox();
+            var bb = m.geometry.boundingBox;
+            var b = m.userData.__egExpBase;
+            var c = [(bb.min.x + bb.max.x) / 2 + b.x, (bb.min.y + bb.max.y) / 2 + b.y, (bb.min.z + bb.max.z) / 2 + b.z];
+            cs.push(c);
+            for (var k = 0; k < 3; k++) {
+                var lo = [bb.min.x, bb.min.y, bb.min.z][k] + [b.x, b.y, b.z][k];
+                var hi = [bb.max.x, bb.max.y, bb.max.z][k] + [b.x, b.y, b.z][k];
+                if (lo < gmin[k]) gmin[k] = lo;
+                if (hi > gmax[k]) gmax[k] = hi;
+            }
+        });
+        var ctr = [(gmin[0]+gmax[0])/2, (gmin[1]+gmax[1])/2, (gmin[2]+gmax[2])/2];
+        var scale = Math.sqrt(Math.pow(gmax[0]-gmin[0],2) + Math.pow(gmax[1]-gmin[1],2) + Math.pow(gmax[2]-gmin[2],2)) * 0.5;
+        ms.forEach(function (m, i) {
+            var b = m.userData.__egExpBase;
+            var d = [cs[i][0]-ctr[0], cs[i][1]-ctr[1], cs[i][2]-ctr[2]];
+            var len = Math.sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+            // 剛好落在組合中心的零件（例如中心軸）沒有方向可推，給它一個固定方向才不會原地不動
+            if (len < 1e-6) { d = [0, 1, 0]; len = 1; }
+            var s = f * scale / len;
+            m.position.set(b.x + d[0]*s, b.y + d[1]*s, b.z + d[2]*s);
+            m.updateMatrixWorld(true);
+        });
+        if (viewer && viewer.Render) viewer.Render();
+        return true;
+    }
+
     return {
+        listComponents: listComponents,
+        setComponentVisible: setComponentVisible,
+        setExplode: setExplode,
         pickMesh: pickMesh,
         sameFaceTriangles: sameFaceTriangles,
         pickFaceGroup: pickFaceGroup,

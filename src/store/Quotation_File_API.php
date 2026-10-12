@@ -354,7 +354,10 @@ switch ($action) {
             if ($extUp === 'dwg') {
                 require_once __DIR__ . '/../common/dwg_preview_lib.php';
                 eg_dwg_preview_trigger_async($pdo, $dir . $safeName);
-            } elseif ($extUp === 'ipt' || $extUp === 'x_t') {
+            // 報價附件是以「真實檔名」存在每張報價單自己的資料夾裡，組合檔(.iam)要用到的
+            // 零件檔就在同一個資料夾旁邊，Inventor 會自動解析到——不需要像料號／訂單附件
+            // 那樣先把亂碼檔名還原成原始檔名複製到暫存資料夾（見 inventor_preview_lib）
+            } elseif ($extUp === 'ipt' || $extUp === 'x_t' || $extUp === 'iam') {
                 require_once __DIR__ . '/../common/inventor_preview_lib.php';
                 eg_inventor_preview_trigger_async($pdo, $dir . $safeName);
             }
@@ -673,7 +676,7 @@ switch ($action) {
         $filename = basename($_GET['filename'] ?? '');
         $base     = getUploadBase($pdo);
         $ext3d = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-        if (empty($quoteNo) || empty($filename) || empty($base) || !in_array($ext3d, ['ipt','x_t'], true)) {
+        if (empty($quoteNo) || empty($filename) || empty($base) || !in_array($ext3d, ['ipt','x_t','iam'], true)) {
             http_response_code(400); exit;
         }
         $filepath    = quoteDir($base, $quoteNo) . $filename;

@@ -138,6 +138,22 @@ function oaPurgeExpired(PDO $pdo, string $dir): void {
 
 oaInitTable($pdo);
 $dir = eg_attach_dir($pdo, 'order_attach_dir', '訂單');
+
+/**
+ * 組合檔（.iam）轉檔用：同一張訂單底下其他的 Inventor 零件／子組合檔。
+ * 選件規則走共用庫的唯一實作 eg_inventor_companion_map()，三支附件 API 一致。
+ */
+function orderInventorCompanions(PDO $pdo, string $dir, int $orderId, string $selfFs): array {
+    require_once __DIR__ . '/../common/inventor_preview_lib.php';
+    if ($orderId <= 0) return [];
+    $st = $pdo->prepare("SELECT filename, original_name FROM order_attachments WHERE order_id=? AND status='active' ORDER BY id");
+    $st->execute([$orderId]);
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $rows[] = ['original_name' => $r['original_name'] ?: $r['filename'], 'fs_path' => $dir . $r['filename']];
+    }
+    return eg_inventor_companion_map($rows, $selfFs);
+}
 eg_attach_ensure_dir($dir);
 oaPurgeExpired($pdo, $dir);
 
@@ -248,9 +264,12 @@ switch ($action) {
         if ($ext === 'dwg') {
             require_once __DIR__ . '/../common/dwg_preview_lib.php';
             eg_dwg_preview_trigger_async($pdo, $dir . $fname);
-        } elseif ($ext === 'ipt' || $ext === 'x_t') {
+        } elseif ($ext === 'ipt' || $ext === 'x_t' || $ext === 'iam') {
             require_once __DIR__ . '/../common/inventor_preview_lib.php';
-            eg_inventor_preview_trigger_async($pdo, $dir . $fname);
+            // 組合檔（.iam）要連同「同一張訂單底下的零件檔」一起傳給轉檔，否則 Inventor
+            // 找不到元件會安靜地輸出一個零幾何的空 STEP（見 inventor_preview_lib 說明）
+            $comp = ($ext === 'iam') ? orderInventorCompanions($pdo, $dir, $orderId, $dir . $fname) : [];
+            eg_inventor_preview_trigger_async($pdo, $dir . $fname, $comp, $orig);
         }
         echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
         break;
@@ -673,16 +692,17 @@ switch ($action) {
     case 'preview_3d': {
         $attId = intval($_GET['id'] ?? 0);
         if (!$attId) { http_response_code(404); exit; }
-        $st = $pdo->prepare("SELECT filename, original_name FROM order_attachments WHERE id=?");
+        $st = $pdo->prepare("SELECT filename, original_name, order_id FROM order_attachments WHERE id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) { http_response_code(404); exit; }
         $fp = $dir . $row['filename'];
         $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
-        if (!is_file($fp) || !in_array($ext3d, ['ipt','x_t'], true)) { http_response_code(404); exit; }
+        if (!is_file($fp) || !in_array($ext3d, ['ipt','x_t','iam'], true)) { http_response_code(404); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
-        $stepFp = eg_inventor_preview_step($pdo, $fp);
-        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T 轉檔失敗或暫時無法使用'; exit; }
+        $comp3d = ($ext3d === 'iam') ? orderInventorCompanions($pdo, $dir, (int)($row['order_id'] ?? 0), $fp) : [];
+        $stepFp = eg_inventor_preview_step($pdo, $fp, $comp3d, (string)($row['original_name'] ?: ''));
+        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T/IAM 轉檔失敗或暫時無法使用'; exit; }
         header('Content-Type: application/step');
         header('Cache-Control: private, max-age=300');
         eg_attach_send_disposition(pathinfo($row['original_name'] ?: $row['filename'], PATHINFO_FILENAME) . '.stp');

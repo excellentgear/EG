@@ -11489,6 +11489,12 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <input id="pav-3d-section-pos3" type="range" min="0" max="100" value="50" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形寬度（挖空範圍的角度大小）">
                 <button type="button" id="pav-btn-3d-section-flip2" class="btn btn-default btn-xs" style="display:none;" title="切到起始角度的另一側"><i class="fa fa-exchange"></i></button>
             </span>
+            <!-- 3D 專用：組合檔（.iam）零件清單與爆炸圖（唯一實作見 eg_3d_viewer_tools.js，兩頁共用）-->
+            <span id="pav-3d-asm-group" style="display:none;align-items:center;gap:3px;">
+                <button type="button" id="pav-btn-3d-asm" class="btn btn-default btn-xs" title="零件清單：勾選顯示／隱藏組合中的個別零件"><i class="fa fa-cubes"></i> 零件</button>
+                <span style="font-size:11px;white-space:nowrap;color:#666;">拉開</span>
+                <input id="pav-3d-explode" type="range" min="0" max="100" value="0" style="width:80px;vertical-align:middle;" title="拉開零件距離（爆炸圖）：依每個零件相對於組合中心的方向等比例往外移，拉回 0 完全復位">
+            </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
                 <span id="pav-zoom-label" style="font-size:11px;color:#555;min-width:36px;text-align:center;">100%</span>
@@ -22293,6 +22299,8 @@ function pavSelectFile(idx) {
     if (pav3dHLGroupReset) pav3dHLGroupReset.style.display = 'none';
     _pav3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
     $('#pav-btn-3d-hiddenline').removeClass('btn-info');
+    var pav3dAsmGroupReset = document.getElementById('pav-3d-asm-group');
+    if (pav3dAsmGroupReset) pav3dAsmGroupReset.style.display = 'none';
     var pav3dSectionGroupReset = document.getElementById('pav-3d-section-group');
     if (pav3dSectionGroupReset) pav3dSectionGroupReset.style.display = 'none';
     _pav3dSectionState = null;
@@ -22311,7 +22319,7 @@ function pavSelectFile(idx) {
     if (!preview) return;
     if (_pav3dViewer) { try { _pav3dViewer.Destroy(); } catch(e){} _pav3dViewer = null; }
     var d3Exts = ['stp','step','stl','obj','igs','iges'];
-    var d3NeedConvertExts = ['ipt','x_t'];   // 瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
+    var d3NeedConvertExts = ['ipt','x_t','iam'];   // 瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
     // Reset any 3D-mode style overrides（還原為置中的 flex；3D 模式才會改成 block）
     preview.style.display = 'flex';
     preview.style.position = '';
@@ -22383,7 +22391,15 @@ function pavSelectFile(idx) {
             + (need3dConvert ? ('正在轉換 ' + ext.toUpperCase() + '，可能需要 10~20 秒，請稍候…') : '載入中...') + '</div>'
             + '<div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">'
             + '<i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放'
-            + '</div>';
+            + '</div>'
+            + '<div id="pav-3d-asm-panel" style="display:none;position:absolute;top:8px;left:8px;z-index:3;background:#fff;border:1px solid #d6d6d6;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.18);width:240px;max-height:calc(100% - 60px);flex-direction:column;font-size:12px;">'
+            +   '<div style="padding:6px 8px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:6px;">'
+            +     '<strong style="flex:1;">零件清單</strong>'
+            +     '<a href="javascript:void(0)" id="pav-3d-asm-all" style="font-size:11px;">全選</a>'
+            +     '<a href="javascript:void(0)" id="pav-3d-asm-none" style="font-size:11px;">全不選</a>'
+            +     '<a href="javascript:void(0)" id="pav-3d-asm-close" style="font-size:11px;color:#888;">✕</a>'
+            +   '</div><div id="pav-3d-asm-list" style="overflow:auto;padding:4px 8px;"></div></div>'
+            + '<div id="pav-3d-asm-warn" style="display:none;position:absolute;top:8px;right:8px;z-index:3;max-width:330px;background:#FBEEDC;border:1px solid #E6B77A;color:#7A4A12;border-radius:4px;padding:6px 10px;font-size:11px;line-height:1.5;"></div>';
         if (typeof OV !== 'undefined') {
             var container3d = document.getElementById('pav-3d-viewer');
             _pav3dViewer = new OV.EmbeddedViewer(container3d, {
@@ -22401,7 +22417,7 @@ function pavSelectFile(idx) {
             var _v3ref = _pav3dViewer;
             // IPT/X_T 轉完是 STEP，副檔名跟著換，否則編輯器/系統看檔名猜格式會猜錯
             var fname3d = need3dConvert
-                ? (file.original_name || file.filename || 'model').replace(/\.(ipt|x_t)$/i, '') + '.stp'
+                ? (file.original_name || file.filename || 'model').replace(/\.(ipt|x_t|iam)$/i, '') + '.stp'
                 : (file.original_name || file.filename || 'model.stp');
             // IPT/X_T 瀏覽器讀不懂，伺服器端先轉成 STEP（唯一轉檔實作見
             // src/common/inventor_preview_lib.php）；preview_3d 是同一支附件 API 多加的
@@ -22413,6 +22429,7 @@ function pavSelectFile(idx) {
                     var lEl = document.getElementById('pav-3d-loading');
                     if (lEl) lEl.style.display = 'none';
                     if (_v3ref === _pav3dViewer) _v3ref.LoadModelFromFileList([new File([blob], fname3d)]);
+                    if (_v3ref === _pav3dViewer) _pav3dWhenModelReady(_v3ref, function () { _pav3dSetupAssembly(ext, file); });
                 })
                 .catch(function() {
                     if (_v3ref !== _pav3dViewer) return;
@@ -22595,6 +22612,85 @@ $(document).on('click', '#pav-btn-3d-color-reset', function() {
     if (!confirm('確定要清除全部上色，恢復模型原始顏色？')) return;
     _pav3dColorState.resetAll();
     if (_pav3dViewer) _pav3dViewer.GetViewer().Render();
+});
+
+// ── 組合檔（.iam）：零件清單／顯示隱藏／爆炸圖（唯一實作見 eg_3d_viewer_tools.js，
+// 與 bom_viewer.php 共用同一套；2026-10-12 使用者要求組合圖要能像繪圖軟體那樣隱藏
+// 個別零件、拉開零件距離）────────────────────────────────────────────────
+function _pav3dResetAsm() {
+    $('#pav-3d-asm-group').hide();
+    $('#pav-3d-asm-panel').hide();
+    $('#pav-3d-asm-warn').hide().empty();
+    $('#pav-3d-explode').val(0);
+}
+// 模型是非同步載入的，零件清單要等它真的進來才列得出來
+function _pav3dWhenModelReady(ref, cb) {
+    var tries = 0;
+    (function tick() {
+        if (ref !== _pav3dViewer) return;   // 使用者已經切到別的檔案
+        var ok = false;
+        try { ok = EG3DTools.listComponents(ref).length > 0; } catch (e) {}
+        if (ok) { cb(); return; }
+        if (++tries > 120) return;          // 最多等 30 秒
+        setTimeout(tick, 250);
+    })();
+}
+function _pav3dRenderAsmList() {
+    if (!_pav3dViewer) return;
+    var h = '';
+    EG3DTools.listComponents(_pav3dViewer).forEach(function (c) {
+        h += '<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;">'
+           + '<input type="checkbox" class="pav-3d-asm-chk" data-key="' + escHtml(c.key) + '"' + (c.visible ? ' checked' : '') + '>'
+           + '<span style="flex:1;word-break:break-all;">' + escHtml(c.name) + '</span></label>';
+    });
+    $('#pav-3d-asm-list').html(h || '<div style="color:#999;padding:6px 0;">沒有可列出的零件</div>');
+}
+function _pav3dSetupAssembly(ext, file) {
+    if (!_pav3dViewer) return;
+    var cnt = 0;
+    try { cnt = EG3DTools.listComponents(_pav3dViewer).length; } catch (e) { return; }
+    // 只有組合檔、或本來就不只一個物件的模型才需要零件清單
+    if (String(ext).toLowerCase() !== 'iam' && cnt < 2) return;
+    $('#pav-3d-asm-group').css('display', 'inline-flex');
+    _pav3dRenderAsmList();
+    if (String(ext).toLowerCase() !== 'iam') return;
+    // 缺零件時明白標示（使用者拍板：能顯示多少就顯示多少，並標示不完整）。
+    // 刻意在模型載入完成之後才問，那時 STEP 必定已轉好進快取，不會再觸發一次 9 秒轉檔。
+    var m = /[?&]id=(\d+)/.exec((file && file.url) || '');
+    if (!m) return;
+    $.getJSON('../../src/store/Part_Attachment_API.php', { action: 'assembly_info', id: m[1] }, function (res) {
+        if (!res || !res.success || !res.is_assembly || !res.missing || !res.missing.length) return;
+        var found = (res.refs ? res.refs.length : 0) - res.missing.length;
+        $('#pav-3d-asm-warn').html(
+            '<i class="fa fa-exclamation-triangle"></i> <strong>組合不完整</strong>：這個組合參照 '
+            + (res.refs ? res.refs.length : 0) + ' 個零件檔，目前只找得到 ' + found
+            + ' 個，畫面上只顯示找得到的部分。<br>缺少：'
+            + res.missing.map(function (x) { return escHtml(x); }).join('、')
+            + '<br><span style="color:#8a6a3a;">把這些零件檔也上傳到同一個料號，重新開啟即會自動補齊。</span>'
+        ).show();
+    });
+}
+$(document).on('click', '#pav-btn-3d-asm', function () {
+    var p = $('#pav-3d-asm-panel');
+    if (p.is(':visible')) { p.hide(); return; }
+    _pav3dRenderAsmList();
+    p.css('display', 'flex');
+});
+$(document).on('click', '#pav-3d-asm-close', function () { $('#pav-3d-asm-panel').hide(); });
+$(document).on('change', '.pav-3d-asm-chk', function () {
+    EG3DTools.setComponentVisible(_pav3dViewer, $(this).attr('data-key'), this.checked);
+});
+$(document).on('click', '#pav-3d-asm-all, #pav-3d-asm-none', function () {
+    var on = (this.id === 'pav-3d-asm-all');
+    $('.pav-3d-asm-chk').prop('checked', on).each(function () {
+        EG3DTools.setComponentVisible(_pav3dViewer, $(this).attr('data-key'), on);
+    });
+});
+$(document).on('input change', '#pav-3d-explode', function () {
+    if (!_pav3dViewer) return;
+    EG3DTools.setExplode(_pav3dViewer, (parseInt(this.value, 10) || 0) / 100);
+    // 零件被移動之後，剖面的封頂是依世界座標算的，必須重算一次才不會留在原位
+    if (_pav3dSectionState) { EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts); _pav3dSyncHLClip(); }
 });
 
 // ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──

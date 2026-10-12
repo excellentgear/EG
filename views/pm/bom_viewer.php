@@ -889,6 +889,12 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 <input id="bom-3d-section-pos3" type="range" min="0" max="100" value="50" style="display:none;width:70px;vertical-align:middle;" title="拖曳調整楔形寬度（挖空範圍的角度大小）">
                 <button id="btn-3d-section-flip2" type="button" class="btn btn-default btn-xs" style="display:none;" title="切到起始角度的另一側"><i class="fa fa-exchange"></i></button>
             </span>
+            <!-- 3D 專用：組合檔（.iam）零件清單與爆炸圖（唯一實作見 eg_3d_viewer_tools.js，兩頁共用）-->
+            <span id="bom-3d-asm-group" style="display:none;align-items:center;gap:3px;">
+                <button id="btn-3d-asm" type="button" class="btn btn-default btn-xs" title="零件清單：勾選顯示／隱藏組合中的個別零件"><i class="fa fa-cubes"></i> 零件</button>
+                <span style="font-size:11px;white-space:nowrap;color:#666;">拉開</span>
+                <input id="bom-3d-explode" type="range" min="0" max="100" value="0" style="width:80px;vertical-align:middle;" title="拉開零件距離（爆炸圖）：依每個零件相對於組合中心的方向等比例往外移，拉回 0 完全復位">
+            </span>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
             <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
@@ -932,6 +938,18 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                     <i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>載入中...</div>
                 <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">
                     <i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放</div>
+                <!-- 組合檔（.iam）：零件清單。浮在 3D 畫面左上角，不佔工具列空間 -->
+                <div id="bom-3d-asm-panel" style="display:none;position:absolute;top:8px;left:8px;z-index:3;background:#fff;border:1px solid #d6d6d6;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.18);width:240px;max-height:calc(100% - 60px);flex-direction:column;font-size:12px;">
+                    <div style="padding:6px 8px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:6px;">
+                        <strong style="flex:1;">零件清單</strong>
+                        <a href="javascript:void(0)" id="bom-3d-asm-all" style="font-size:11px;">全選</a>
+                        <a href="javascript:void(0)" id="bom-3d-asm-none" style="font-size:11px;">全不選</a>
+                        <a href="javascript:void(0)" id="bom-3d-asm-close" style="font-size:11px;color:#888;">✕</a>
+                    </div>
+                    <div id="bom-3d-asm-list" style="overflow:auto;padding:4px 8px;"></div>
+                </div>
+                <!-- 組合檔缺零件時的提示（使用者拍板：能顯示多少就顯示多少，並標示不完整）-->
+                <div id="bom-3d-asm-warn" style="display:none;position:absolute;top:8px;right:8px;z-index:3;max-width:330px;background:#FBEEDC;border:1px solid #E6B77A;color:#7A4A12;border-radius:4px;padding:6px 10px;font-size:11px;line-height:1.5;"></div>
             </div>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
         </div>
@@ -978,6 +996,8 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         <li><b>小畫家</b>：用 Windows 小畫家開啟目前這張圖（第一次使用要先照提示列下載安裝程式，一次性安裝）。PDF 不會出現這顆——小畫家開不了 PDF，請改用批圖編輯器。</li>
         <li><b>儲存</b>：下載到自己電腦，可自訂檔名（不會動到伺服器上的原檔）。</li>
         <li><b>列印</b>：列印當下會另外產生一張縮小版餵給印表機，避免超大圖卡在「準備列印時出現錯誤」。</li>
+        <li><b>3D 檔（STP／STEP／STL／OBJ／IGS／IPT／X_T／IAM）</b>：可<b>上色</b>（點面上色、Ctrl+拖曳框選，純拖曳仍可旋轉）、<b>透視</b>（線框，看得穿內部）、<b>剖面</b>（含「楔形剖面」＝工程圖的 3/4 剖視；斷面會畫成淺灰底＋45 度斜線）、<b>標準視角</b>（前/後/左/右/上/下/等角）。</li>
+        <li><b>零件（組合檔專用）</b>：開啟 <b>.iam 組合圖</b>或本來就含多個物件的模型時，工具列會多出「零件」鈕與「拉開」滑桿——按「零件」會在畫面左上角列出每個零件，可逐一<b>勾選顯示／隱藏</b>（也可全選／全不選）；「拉開」滑桿是<b>爆炸圖</b>，依每個零件相對於組合中心的方向等比例往外移，拉回 0 會完全復位。</li>
         <li><b>設定標籤</b>：設定 ERP／資材報告的檔名後綴要顯示成什麼標籤。</li>
         <li><b>批圖編輯器</b>：遮蓋客戶資料、加註標示、多圖合併等（需「批圖使用者」角色才看得到這顆）。</li>
         <li><b>前往編輯附件</b>：本頁的附件<u>一律唯讀</u>（新增/刪除/改標籤都不能在這裡做），按這顆會<b>開新分頁</b>到「主檔管理」，自動定位到目前這筆料號主檔並打開附件跳窗，直接在那邊修改（需「附件上傳/編輯/刪除」其中一項權限才看得到這顆）。</li>
@@ -997,6 +1017,14 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         <b>圖面清單上標「未綁主檔」是什麼意思。</b>
         那張 BOM 沒有登記屬於哪一筆料號主檔（舊資料多半如此），所以系統無法判斷它是哪個客戶的，
         <b>一律仍然列出來</b>（寧可多看到也不要憑空少一張圖），並把 BOM 上寫的客戶名附在後面供參考。
+      </div>
+      <div class="tip">
+        <b>組合圖（.iam）一定要連零件檔一起上傳。</b>
+        組合檔本身只是一張「用到哪些零件」的參照清單，零件的實體形狀在各自的 .ipt 裡。
+        系統開啟組合檔時會自動去找<b>同一個料號底下</b>的零件檔；少了哪幾個，畫面右上角會出現
+        橘色提示明白列出缺少的檔名，並只顯示找得到的那部分（不會假裝完整）。
+        把缺少的零件檔也上傳到同一個料號、重新開啟即會自動補齊。
+        組合圖的<b>下載管控與 2D/3D 檔完全相同</b>。
       </div>
       <div class="tip">
         <b>旋轉是永久的，而且是給所有人看的。</b>它不是只改自己畫面上的角度——原檔會被覆蓋。
@@ -1099,7 +1127,7 @@ var _currentPath = '';
 var _currentCanDl = true;  // 目前這個檔案允不允許下載（後端算好的 can_dl，見 syncDlBtns()）
 var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PDF」鈕使用
 var _d3Exts      = ['stp','step','stl','obj','igs','iges'];   // 3D 模型副檔名（與 master_data_management.php 同一份清單）
-var _d3NeedConvertExts = ['ipt','x_t'];   // 這些副檔名瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
+var _d3NeedConvertExts = ['ipt','x_t','iam'];   // 這些副檔名瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
 var _bom3dViewer = null;
 var _bom3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 showFile 3D 分支）
 var _bom3dColorMode  = false;  // 上色模式開關：開啟時點模型上的零件即換色
@@ -1156,6 +1184,7 @@ function showFile(path, type, name, canDl) {
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
     $('#bom-3d-view-group, #bom-3d-color-group, #bom-3d-hl-group, #bom-3d-section-group').hide();
+    _bom3dResetAsm();
     _bom3dColorMode = false;
     $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
     _bom3dHLState = null;   // 舊 viewer 即將被換掉，物件參照本來就會失效，不必呼叫 clearHiddenLineMode 復原材質
@@ -1244,7 +1273,7 @@ function showFile(path, type, name, canDl) {
             setTimeout(function(){ if (_v3refResize === _bom3dViewer && _bom3dViewer.Resize) _bom3dViewer.Resize(); }, 150);
             var _v3ref = _bom3dViewer;
             var fname3d = _need3dConvert
-                ? (_currentName || 'model').replace(/\.(ipt|x_t)$/i, '') + '.stp'
+                ? (_currentName || 'model').replace(/\.(ipt|x_t|iam)$/i, '') + '.stp'
                 : (_currentName || ('model.' + _currentType));
             fetch(_fetchUrl3d, { credentials: 'same-origin' })
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
@@ -1252,6 +1281,7 @@ function showFile(path, type, name, canDl) {
                     if (_v3ref !== _bom3dViewer) return;   // 使用者已經切到別的檔案
                     $('#bom-3d-loading').hide();
                     _v3ref.LoadModelFromFileList([new File([blob], fname3d)]);
+                    _bom3dWhenModelReady(_v3ref, function () { _bom3dSetupAssembly(_fetchUrl3d); });
                 })
                 .catch(function() {
                     if (_v3ref !== _bom3dViewer) return;
@@ -1369,6 +1399,86 @@ $('#btn-3d-color-reset').on('click', function() {
 // ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js）────────
 // 純粹的顯示模式切換，不影響上色／量測互動（兩者仍可同時使用，只是上色效果在
 // 透視模式下暫時看不到——線框模式本來就不顯示實體面材質，切回一般顯示即恢復）。
+// ── 組合檔（.iam）：零件清單／顯示隱藏／爆炸圖 ──────────────────────────────
+// 2026-10-12 使用者要求組合圖要能像繪圖軟體那樣隱藏個別零件、拉開零件距離。
+// 幾何操作的唯一實作在 EG3DTools（listComponents／setComponentVisible／setExplode），
+// 兩個檢視頁共用；這裡只負責畫面與事件。
+function _bom3dResetAsm() {
+    $('#bom-3d-asm-group').hide();
+    $('#bom-3d-asm-panel').hide();
+    $('#bom-3d-asm-warn').hide().empty();
+    $('#bom-3d-explode').val(0);
+}
+// 模型是非同步載入的，零件清單要等它真的進來才列得出來
+function _bom3dWhenModelReady(ref, cb) {
+    var tries = 0;
+    (function tick() {
+        if (ref !== _bom3dViewer) return;   // 使用者已經切到別的檔案
+        var ok = false;
+        try { ok = EG3DTools.listComponents(ref).length > 0; } catch (e) {}
+        if (ok) { cb(); return; }
+        if (++tries > 120) return;          // 最多等 30 秒
+        setTimeout(tick, 250);
+    })();
+}
+function _bom3dRenderAsmList() {
+    if (!_bom3dViewer) return;
+    var h = '';
+    EG3DTools.listComponents(_bom3dViewer).forEach(function (c) {
+        h += '<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;">'
+           + '<input type="checkbox" class="bom-3d-asm-chk" data-key="' + escapeHtml(c.key) + '"' + (c.visible ? ' checked' : '') + '>'
+           + '<span style="flex:1;word-break:break-all;">' + escapeHtml(c.name) + '</span></label>';
+    });
+    $('#bom-3d-asm-list').html(h || '<div style="color:#999;padding:6px 0;">沒有可列出的零件</div>');
+}
+function _bom3dSetupAssembly(url3d) {
+    if (!_bom3dViewer) return;
+    var n = 0;
+    try { n = EG3DTools.listComponents(_bom3dViewer).length; } catch (e) { return; }
+    // 只有組合檔、或本來就不只一個物件的模型才需要零件清單
+    if (_currentType !== 'iam' && n < 2) return;
+    $('#bom-3d-asm-group').css('display', 'inline-flex');
+    _bom3dRenderAsmList();
+    if (_currentType !== 'iam') return;
+    // 缺零件時明白標示（使用者拍板：能顯示多少就顯示多少，並標示不完整）。
+    // 刻意在模型載入完成之後才問，那時 STEP 必定已轉好進快取，不會再觸發一次 9 秒轉檔。
+    var m = /[?&]id=(\d+)/.exec(url3d || '');
+    if (!m) return;
+    $.getJSON('../../src/store/Part_Attachment_API.php', { action: 'assembly_info', id: m[1] }, function (res) {
+        if (!res || !res.success || !res.is_assembly || !res.missing || !res.missing.length) return;
+        var found = (res.refs ? res.refs.length : 0) - res.missing.length;
+        $('#bom-3d-asm-warn').html(
+            '<i class="fa fa-exclamation-triangle"></i> <strong>組合不完整</strong>：這個組合參照 '
+            + (res.refs ? res.refs.length : 0) + ' 個零件檔，目前只找得到 ' + found
+            + ' 個，畫面上只顯示找得到的部分。<br>缺少：'
+            + res.missing.map(function (x) { return escapeHtml(x); }).join('、')
+            + '<br><span style="color:#8a6a3a;">把這些零件檔也上傳到同一個料號，重新開啟即會自動補齊。</span>'
+        ).show();
+    });
+}
+$('#btn-3d-asm').on('click', function () {
+    var p = $('#bom-3d-asm-panel');
+    if (p.is(':visible')) { p.hide(); return; }
+    _bom3dRenderAsmList();
+    p.css('display', 'flex');
+});
+$('#bom-3d-asm-close').on('click', function () { $('#bom-3d-asm-panel').hide(); });
+$(document).on('change', '.bom-3d-asm-chk', function () {
+    EG3DTools.setComponentVisible(_bom3dViewer, $(this).attr('data-key'), this.checked);
+});
+$('#bom-3d-asm-all, #bom-3d-asm-none').on('click', function () {
+    var on = (this.id === 'bom-3d-asm-all');
+    $('.bom-3d-asm-chk').prop('checked', on).each(function () {
+        EG3DTools.setComponentVisible(_bom3dViewer, $(this).attr('data-key'), on);
+    });
+});
+$('#bom-3d-explode').on('input change', function () {
+    if (!_bom3dViewer) return;
+    EG3DTools.setExplode(_bom3dViewer, (parseInt(this.value, 10) || 0) / 100);
+    // 零件被移動之後，剖面的封頂是依世界座標算的，必須重算一次才不會留在原位
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
+});
+
 // ── 透視＋剖面同時開啟時的裁切同步（2026-10-12 使用者回報：切掉的那一側看起來
 // 還是空心看得穿）：剖面只把 clippingPlanes 設在實體面材質上，透視模式另外建立的
 // 那批邊線物件完全不知道目前有沒有剖面、剖到哪——被切除掉的那部分幾何的邊線照樣
