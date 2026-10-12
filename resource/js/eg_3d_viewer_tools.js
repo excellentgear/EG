@@ -1693,6 +1693,26 @@ var EG3DTools = (function () {
         baseMat.clippingPlanes = null;
         var mat = baseMat.clone();
         baseMat.clippingPlanes = savedPlanes;
+        // ★ 封頂是本檔自己算出來的新幾何，只有 position/normal，沒有模型本體那些額外屬性
+        //   與貼圖；但材質是「複製模型材質」來的，會把那些設定一併帶過來。最嚴重的是
+        //   vertexColors——2026-10-12 使用者回報「剖面還是完全沒有改善」，截圖裡斷面是整片
+        //   純黑：根因是他先用過「上色」功能，上色模式會把模型材質改成 vertexColors=true
+        //   （見 ColorState._ensureMeshState，顏色改由每個頂點的 color 屬性決定、材質色固定
+        //   白色），複製過來的封頂材質因此也要求頂點色，而封頂幾何根本沒有 color 屬性，
+        //   WebGL 對未提供的屬性一律餵 (0,0,0)，於是下面設的淺灰被乘成 0＝整片黑。
+        //   （這也是為什麼「沒上過色的模型」怎麼測都正常、一上色就黑——同一支程式的兩種狀態。）
+        //   一律把這類「屬於模型本體、不屬於封頂」的設定歸零，不要只修 vertexColors 一項。
+        mat.vertexColors = false;
+        ['map','lightMap','aoMap','emissiveMap','specularMap','alphaMap','bumpMap','normalMap',
+         'displacementMap','roughnessMap','metalnessMap','envMap'].forEach(function (k) {
+            if (mat[k]) mat[k] = null;
+        });
+        if (mat.emissive) mat.emissive.set('#000000');
+        if (mat.metalness !== undefined) mat.metalness = 0;      // 金屬度 1 又沒有環境貼圖時也會算成黑
+        if (mat.roughness !== undefined) mat.roughness = 0.85;
+        mat.transparent = false;
+        mat.opacity = 1;
+        mat.flatShading = false;
         mat.color.set(_EG_CAP_BASE_COLOR);
         if (mat.specular) mat.specular.set('#222222');   // Phong 材質若保留原本高反光度，淺灰底會被鏡面反射洗成死白，降低一點
         mat.shininess = 6;
