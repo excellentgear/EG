@@ -620,6 +620,7 @@ try {
 // 其他附件：過渡期 — 未指派 master_data 角色者維持開放；已指派則需 md_attach_view。
 $canQuoteView = false;
 $canOtherView = true;
+$canPartAttachEdit = false;
 try {
     require_once __DIR__ . '/../../src/common/rbac.php';
     if (empty($pdoPerm)) {
@@ -634,7 +635,14 @@ try {
     $rq->execute([$uidF]);
     $hasMdRole = (bool)$rq->fetchColumn();
     $canOtherView = $isAdminF || !$hasMdRole || rbac_has($featsF, 'md_attach_view');
-} catch (Exception $_e) { $canQuoteView = false; $canOtherView = true; }
+    // 「前往編輯附件」按鈕（開新分頁到 master_data_management.php）：本頁附件一律唯讀，
+    // 沒有編輯權限的人點過去也只會看到一樣的唯讀畫面，故按鈕本身要卡權限、不是卡在對岸頁面
+    // （2026-10-12 使用者交辦）。權限碼與 master_data_management.php 的 $can_part_attach 同一套。
+    $canPartAttachEdit = $isAdminF
+        || rbac_has($featsF, 'md_attach_upload')
+        || rbac_has($featsF, 'md_attach_edit')
+        || rbac_has($featsF, 'md_attach_delete');
+} catch (Exception $_e) { $canQuoteView = false; $canOtherView = true; $canPartAttachEdit = false; }
 
 // 開啟時預選分頁：?tab=drawing|quote|other|order_attach（預設自動挑第一個有資料的分頁）
 $initTab = trim($_GET['tab'] ?? '');
@@ -852,6 +860,14 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）——開啟時自動帶入目前預覽的圖檔；PDF 會自動轉成圖檔開啟，多頁會問要開哪一頁"
                 class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
             <?php endif; ?>
+            <?php if ($canPartAttachEdit): ?>
+            <!-- 前往編輯附件：開新分頁到主檔管理，自動篩選到這個料號主檔並開啟附件跳窗（本頁附件唯讀，
+                 新增/刪除/改標籤要去那邊；沒有附件編輯權限者不顯示此鈕，見 $canPartAttachEdit） -->
+            <button id="btn-goto-attach-edit" type="button"
+                onclick="openPartAttachEditor()"
+                title="開新分頁到「主檔管理」，自動定位到這個料號主檔並開啟附件跳窗，可直接新增／刪除／修改標籤"
+                class="btn btn-xs" style="background:linear-gradient(135deg,#8d6e63,#bcaaa4);color:#fff;border:none;font-weight:600;"><i class="fa fa-pencil-square-o"></i> 前往編輯附件</button>
+            <?php endif; ?>
             <button id="btnPageHelp" class="page-help-btn" type="button"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <!-- 小畫家提示列（每次點擊都顯示，讓使用者可視需要重新安裝） -->
@@ -927,6 +943,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         <li><b>列印</b>：列印當下會另外產生一張縮小版餵給印表機，避免超大圖卡在「準備列印時出現錯誤」。</li>
         <li><b>設定標籤</b>：設定 ERP／資材報告的檔名後綴要顯示成什麼標籤。</li>
         <li><b>批圖編輯器</b>：遮蓋客戶資料、加註標示、多圖合併等（需「批圖使用者」角色才看得到這顆）。</li>
+        <li><b>前往編輯附件</b>：本頁的附件<u>一律唯讀</u>（新增/刪除/改標籤都不能在這裡做），按這顆會<b>開新分頁</b>到「主檔管理」，自動定位到目前這筆料號主檔並打開附件跳窗，直接在那邊修改（需「附件上傳/編輯/刪除」其中一項權限才看得到這顆）。</li>
       </ul>
 
       <h4>重要行為／常見疑問</h4>
@@ -1258,6 +1275,14 @@ function openImageEditor() {
     if (params.length) url += '?' + params.join('&');
     window.open(url, 'egImgEditor_' + Date.now(),
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
+}
+
+// ── 前往編輯附件：開新分頁到主檔管理，自動定位到目前鎖定的這筆料號主檔並開啟附件跳窗 ──
+// 按鈕本身已經依 $canPartAttachEdit 卡過權限（沒有附件編輯權限者看不到這顆鈕）；_pk 會隨頂端
+// 「料號主檔切換器」即時更新，所以這裡每次點擊都重新讀取，不要存成固定值。
+function openPartAttachEditor() {
+    if (_mode !== 'did' || !_pk) { alert('目前這個檢視沒有對應到單一的料號主檔，無法前往編輯附件。'); return; }
+    window.open('../pages/master_data_management.php?open_attach=' + encodeURIComponent(_pk), '_blank');
 }
 
 // ── 3D 標準視角（唯一實作見 resource/js/eg_3d_viewer_tools.js 的 setStandardView）──
