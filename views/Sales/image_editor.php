@@ -131,6 +131,13 @@ $is_gear_admin  = gear_tool_is_admin();
 require_once __DIR__ . '/../../src/common/keyway_tool_lib.php';
 $can_keyway_calc = (isset($pdo) && $pdo) ? keyway_tool_can_use($pdo, $uid) : false;
 
+// ── 車床預留量計算（底部狀態列那顆「預留量計算」，在鍵槽計算右側）─────────────
+// 純前端計算（成品尺寸＋研磨後增減量 ⇒ 建議車床尺寸／驗算手填車床尺寸），沒有後端
+// API、不讀寫任何資料表，本頁是唯一消費端，故不比照齒輪／鍵槽工具另抽共用檔
+// （鐵律8：目前只有一個呼叫端，提前抽成共用元件屬於為假設性需求做設計）。
+// 權限沿用本頁基本使用權限即可，不另開新角色。
+$can_len_reserve = $canUse;
+
 // ── 標籤實體檔 NAS 儲存 ─────────────────────────────────────────────────
 // 路徑可於 使用者權限管理頁 設定（system_settings: imgedit_label_nas_dir）。
 // 子資料夾前綴避免使用者ID與部門ID衝突：U<使用者ID>＝私人、D<部門ID>＝部門、company＝公司共用。
@@ -1468,6 +1475,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php if ($can_keyway_calc): ?>
             <button class="tb-btn" onclick="openKwTool()" title="開啟鍵槽計算工具：與訂單追蹤頁同一個工具、同一套算法。軸件分頁＝軸上鍵槽（軸徑、槽寬、槽深與圓心到槽底），片狀分頁＝孔內鍵槽；填公稱值與上下偏差自動算出極限值與加工尺寸"><i class="fa fa-key"></i> 鍵槽計算</button>
 <?php endif; ?>
+<?php if ($can_len_reserve): ?>
+            <button class="tb-btn" onclick="openLenTool()" title="開啟車床預留量計算：填入成品尺寸（基準值＋上下公差）與這一面研磨後會增加／減少多少，自動算出建議的車床（加工）尺寸；也可以直接輸入已經標好的車床尺寸，驗算研磨後是否仍符合成品公差"><i class="fa fa-arrows-h"></i> 預留量計算</button>
+<?php endif; ?>
             <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
         </div>
     </div>
@@ -1982,6 +1992,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php endif; ?>
 <?php if ($can_keyway_calc): ?>
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
+<?php endif; ?>
+<?php if ($can_len_reserve): ?>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。每一列（標示名稱可自行命名，不限固定代號）分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm），③<b>建議車床（加工）尺寸</b>＝系統自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值，您可以再填車床自己要用的公差、系統會檢查公差會不會超出安全範圍，④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。右上角「<b>建立反向列</b>」可以快速帶出研磨方向相反、研磨量相同的下一列（同一個研磨面通常會讓兩側一增一減）。按「<b>＋新增一列</b>」處理更多段尺寸，「清除」清空全部重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8328,6 +8341,441 @@ $gear_tool_dock_default = true;
 $gear_tool_dock_offset = '#label-lib';   // 標籤庫也貼右緣：它一打開，齒輪面板自動往左讓開並排
 include __DIR__ . '/_gear_tool_ui.php';
 ?>
+
+<?php if ($can_len_reserve): ?>
+<style>
+    /* ── 車床預留量計算工具（純前端，唯一消費端即本頁，不抽共用檔）────────────── */
+    #lr-tool-window {
+        position:fixed; z-index:10400; display:none;
+        width:700px; max-width:96vw; top:58px; left:50%; transform:translateX(-50%);
+        background:#fff; border-radius:8px;
+        box-shadow:0 12px 40px rgba(0,0,0,.35); border:1px solid #d8c7b0;
+        color:#333; font-family:"Microsoft JhengHei","PingFang TC","Segoe UI",sans-serif;
+        font-weight:400; line-height:1.5; text-align:left;
+    }
+    #lr-tool-window *, #lr-tool-window *::before, #lr-tool-window *::after { box-sizing:border-box; }
+    #lr-tool-window input, #lr-tool-window select, #lr-tool-window button { font-family:inherit; }
+    #lr-tool-hdr {
+        border-radius:8px 8px 0 0;
+        background:linear-gradient(135deg,#5a3410,#8a5a2b);
+        color:#fff; padding:9px 14px; cursor:move;
+        display:flex; align-items:center; justify-content:space-between; user-select:none;
+    }
+    #lr-tool-hdr .lr-hdr-title { font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px; }
+    #lr-tool-hdr .lr-hdr-btns  { display:flex; gap:6px; }
+    #lr-tool-hdr button { background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.3); color:#fff; border-radius:4px; padding:2px 10px; font-size:12px; cursor:pointer; }
+    #lr-tool-hdr button:hover { background:rgba(255,255,255,.3); }
+    #lr-tool-body { padding:10px 12px 12px; max-height:80vh; overflow-y:auto; }
+    .lr-note { font-size:10.5px; color:#6B471A; margin-bottom:8px; background:#F7E0BD; border:1px solid #E4C293; border-radius:4px; padding:5px 9px; }
+    /* 示意圖 */
+    .lr-diagram { max-width:620px; margin:0 auto 10px; }
+    .lr-diagram-bar { display:flex; align-items:stretch; height:44px; border:2px solid #8a5a2b; background:#faf6f0; border-radius:4px; overflow:hidden; }
+    .lr-diagram-bar .lr-dbar-half { flex:1; }
+    .lr-diagram-bar .lr-dbar-face { width:3px; position:relative; background:repeating-linear-gradient(to bottom,#DD5138 0 4px,transparent 4px 8px); }
+    .lr-diagram-bar .lr-dbar-face span { position:absolute; top:-17px; left:50%; transform:translateX(-50%); font-size:10.5px; color:#BE3C25; font-weight:700; white-space:nowrap; }
+    .lr-diagram-dims { display:flex; margin-top:4px; font-size:11px; }
+    .lr-diagram-dims > div { flex:1; text-align:center; }
+    .lr-diagram-cap { text-align:center; font-size:9.5px; color:#a08a6f; margin-top:4px; }
+    /* 列（一列＝一段成品尺寸） */
+    #lr-rows {}
+    .lr-row { border:1.5px solid #d8c7b0; border-radius:6px; margin-bottom:9px; overflow:hidden; }
+    .lr-row-hdr { display:flex; align-items:center; gap:6px; background:#faf6f0; padding:5px 8px; border-bottom:1px solid #d8c7b0; }
+    .lr-row-no { font-size:11px; color:#8a5a2b; font-weight:700; flex-shrink:0; }
+    .lr-label { flex:1; min-width:0; font-size:12px; padding:3px 6px; border:1px solid #d8c7b0; border-radius:3px; color:#333; }
+    .lr-mini-btn { font-size:11px; padding:2px 8px; border:1px solid #d8c7b0; background:#fff; border-radius:3px; cursor:pointer; color:#6b471a; white-space:nowrap; }
+    .lr-mini-btn:hover { background:#f4ede2; }
+    .lr-del-btn { color:#a2342a; border-color:#e0b3ac; }
+    .lr-row-body { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:8px; }
+    .lr-blk { border:1px solid #e4d3bc; border-radius:4px; overflow:hidden; }
+    .lr-blk-h { font-size:11px; font-weight:700; color:#fff; padding:4px 8px; }
+    .lr-blk-fin    .lr-blk-h { background:#8a5a2b; }
+    .lr-blk-grind  .lr-blk-h { background:#A34E2A; }
+    .lr-blk-sug    .lr-blk-h { background:#B06F27; }
+    .lr-blk-verify .lr-blk-h { background:#7A4A34; }
+    .lr-blk-body { padding:6px 8px; }
+    .lr-dr { display:flex; align-items:center; gap:4px; }
+    .lr-nom, .lr-gmag, .lr-manual-nom {
+        font-family:"Consolas","Courier New",monospace; font-size:15px; font-weight:700;
+        text-align:center; border:1px solid #c9b79a; border-radius:3px; padding:4px 2px;
+        background:#efe7db; color:#222; box-sizing:border-box; width:78px; flex-shrink:0;
+        appearance:textfield; -moz-appearance:textfield;
+    }
+    .lr-nom:focus, .lr-gmag:focus, .lr-manual-nom:focus { outline:none; background:#fff; border-color:#8a5a2b; }
+    .lr-nom::-webkit-outer-spin-button, .lr-nom::-webkit-inner-spin-button,
+    .lr-gmag::-webkit-outer-spin-button, .lr-gmag::-webkit-inner-spin-button,
+    .lr-manual-nom::-webkit-outer-spin-button, .lr-manual-nom::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+    .lr-no-box {
+        width:78px; flex-shrink:0; display:inline-block; text-align:center;
+        font-family:"Consolas","Courier New",monospace; font-size:15px; font-weight:700;
+        background:#f3e4c8; color:#8a5a2b; border:1px solid #e4d3bc; border-radius:3px;
+        padding:4px 2px; box-sizing:border-box;
+    }
+    .lr-tc { display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; margin-left:6px; }
+    .lr-tr { display:flex; align-items:center; gap:4px; }
+    .lr-tlbl { font-size:10px; color:#a08a6f; width:36px; flex-shrink:0; }
+    .lr-utol, .lr-ltol, .lr-tutol, .lr-tltol {
+        width:0; flex:1; min-width:0; font-family:"Consolas","Courier New",monospace; font-size:11px;
+        text-align:center; border:1px solid #c9b79a; border-radius:2px; padding:3px 2px;
+        background:#efe7db; color:#333; box-sizing:border-box;
+        appearance:textfield; -moz-appearance:textfield;
+    }
+    .lr-utol:focus, .lr-ltol:focus, .lr-tutol:focus, .lr-tltol:focus { outline:none; background:#fff; border-color:#8a5a2b; }
+    .lr-utol::-webkit-outer-spin-button,.lr-utol::-webkit-inner-spin-button,
+    .lr-ltol::-webkit-outer-spin-button,.lr-ltol::-webkit-inner-spin-button,
+    .lr-tutol::-webkit-outer-spin-button,.lr-tutol::-webkit-inner-spin-button,
+    .lr-tltol::-webkit-outer-spin-button,.lr-tltol::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+    .lr-dir { width:100%; font-size:12px; padding:4px; border:1px solid #c9b79a; border-radius:3px; background:#fff; color:#333; }
+    .lr-rangeline { font-size:10.5px; color:#555; margin-top:5px; }
+    .lr-out { font-family:"Consolas","Courier New",monospace; font-weight:700; color:#333; }
+    .lr-warn { font-size:10.5px; margin-top:4px; display:none; border-radius:3px; padding:3px 6px; }
+    .lr-warn.show { display:block; background:#F0A24B; border:1px solid #D6851F; color:#4E2C0B; }
+    .lr-verify-badge { font-size:10.5px; font-weight:700; margin-top:4px; display:none; border-radius:3px; padding:3px 6px; }
+    .lr-verify-badge.show-ok  { display:block; background:#F7E0BD; border:1px solid #E4C293; color:#6B471A; }
+    .lr-verify-badge.show-bad { display:block; background:#DD5138; border:1px solid #BE3C25; color:#fff; }
+    #lr-add-row-btn { margin-top:2px; }
+    @media (max-width:768px) { #lr-tool-window { width:98vw; top:10px; } .lr-row-body { grid-template-columns:1fr; } }
+</style>
+<template id="lr-tool-tpl"><div id="lr-tool-window">
+    <div id="lr-tool-hdr">
+        <span class="lr-hdr-title"><i class="fa fa-arrows-h"></i> 車床預留量計算</span>
+        <div class="lr-hdr-btns">
+            <button onclick="clearLenTool()">清除</button>
+            <button onclick="closeLenTool()">✕ 關閉</button>
+        </div>
+    </div>
+    <div id="lr-tool-body">
+        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。每一列填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。</div>
+        <div class="lr-diagram">
+            <div class="lr-diagram-bar">
+                <div class="lr-dbar-half"></div>
+                <div class="lr-dbar-face"><span>研磨面</span></div>
+                <div class="lr-dbar-half"></div>
+            </div>
+            <div class="lr-diagram-dims">
+                <div style="color:#8a5a2b;">◄── 尺寸A（成品，研磨面左側）──►</div>
+                <div style="width:3px;"></div>
+                <div style="color:#7A4A34;">◄── 尺寸B（成品，研磨面右側）──►</div>
+            </div>
+            <div class="lr-diagram-cap">研磨會移除研磨面上的材料：面往哪一側移動，該側尺寸就縮短、另一側相對增長——實際增減方向請在下方各列分別選擇（僅單側受影響時，只填一列即可）</div>
+        </div>
+        <div id="lr-rows"></div>
+        <button type="button" class="lr-mini-btn" id="lr-add-row-btn" onclick="lrAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
+    </div>
+</div></template>
+<div id="lr-tool-container"></div>
+<script>
+(function(){
+    'use strict';
+    var _lrDomInited = false;
+    var _lrRowSeq = 0;
+
+    function lrFmt(v) {
+        if (v === null || v === undefined || isNaN(v)) return '—';
+        var r = Math.round(v * 1000) / 1000;
+        var s = r.toString();
+        if (s.indexOf('.') !== -1) s = s.replace(/0+$/, '').replace(/\.$/, '');
+        if (s === '-0') s = '0';
+        return s;
+    }
+    function lrFmtRange(lo, hi) {
+        if (lo === null || hi === null || isNaN(lo) || isNaN(hi)) return '—';
+        return lrFmt(lo) + ' ～ ' + lrFmt(hi);
+    }
+    function lrNum(root, sel) {
+        var el = root.querySelector(sel);
+        if (!el) return null;
+        var v = parseFloat(el.value);
+        return isNaN(v) ? null : v;
+    }
+
+    var LR_ROW_HTML =
+        '<div class="lr-row">' +
+          '<div class="lr-row-hdr">' +
+            '<span class="lr-row-no"></span>' +
+            '<input type="text" class="lr-label" placeholder="標示名稱（選填，例如：左側長度，不限固定代號）">' +
+            '<button type="button" class="lr-mini-btn" onclick="lrMirrorRow(this)" title="在下方建立一列：研磨方向相反、研磨量相同（同一個研磨面同時影響兩側尺寸時用）"><i class="fa fa-exchange"></i> 建立反向列</button>' +
+            '<button type="button" class="lr-mini-btn lr-del-btn" onclick="lrDelRow(this)" title="刪除這一列">✕ 刪除</button>' +
+          '</div>' +
+          '<div class="lr-row-body">' +
+            '<div class="lr-blk lr-blk-fin">' +
+              '<div class="lr-blk-h">① 成品尺寸（原圖標示）</div>' +
+              '<div class="lr-blk-body">' +
+                '<div class="lr-dr">' +
+                  '<input type="number" step="any" class="lr-nom" oninput="lrCalc()" placeholder="基準值">' +
+                  '<div class="lr-tc">' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-utol" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-ltol" oninput="lrCalc()"></div>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="lr-rangeline">範圍：<span class="lr-out lr-fin-range">—</span></div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="lr-blk lr-blk-grind">' +
+              '<div class="lr-blk-h">② 研磨影響（這一面研磨「後」）</div>' +
+              '<div class="lr-blk-body">' +
+                '<select class="lr-dir" onchange="lrCalc()">' +
+                  '<option value="">－請選擇方向－</option>' +
+                  '<option value="inc">尺寸會增加</option>' +
+                  '<option value="dec">尺寸會減少</option>' +
+                '</select>' +
+                '<div class="lr-dr" style="margin-top:5px;">' +
+                  '<span class="lr-tlbl" style="width:auto;margin-right:2px;">增減量</span>' +
+                  '<input type="number" step="any" class="lr-gmag" oninput="lrCalc()" placeholder="mm" style="width:72px;">' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="lr-blk lr-blk-sug">' +
+              '<div class="lr-blk-h">③ 建議車床（加工）尺寸</div>' +
+              '<div class="lr-blk-body">' +
+                '<div class="lr-dr">' +
+                  '<span class="lr-no-box lr-sug-nom">—</span>' +
+                  '<div class="lr-tc">' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-tutol" oninput="lrCalc()" placeholder="如 0.02"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-tltol" oninput="lrCalc()" placeholder="如 -0.02"></div>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="lr-rangeline">安全範圍：<span class="lr-out lr-safe-range">—</span></div>' +
+                '<div class="lr-warn"></div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="lr-blk lr-blk-verify">' +
+              '<div class="lr-blk-h">④ 手動驗算（選填）</div>' +
+              '<div class="lr-blk-body">' +
+                '<div class="lr-dr">' +
+                  '<span class="lr-tlbl" style="width:auto;margin-right:2px;">實際基準值</span>' +
+                  '<input type="number" step="any" class="lr-manual-nom" oninput="lrCalc()" placeholder="留空＝採建議值" style="width:84px;">' +
+                '</div>' +
+                '<div class="lr-rangeline">研磨後範圍：<span class="lr-out lr-verify-range">—</span></div>' +
+                '<div class="lr-verify-badge"></div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+    function lrRenumber() {
+        document.querySelectorAll('#lr-rows .lr-row').forEach(function(row, i) {
+            var noEl = row.querySelector('.lr-row-no');
+            if (noEl) noEl.textContent = '第 ' + (i + 1) + ' 列';
+        });
+    }
+
+    window.lrAddRow = function() {
+        var wrap = document.getElementById('lr-rows');
+        if (!wrap) return null;
+        var div = document.createElement('div');
+        div.innerHTML = LR_ROW_HTML;
+        var row = div.firstElementChild;
+        wrap.appendChild(row);
+        _lrRowSeq++;
+        lrRenumber();
+        return row;
+    };
+
+    window.lrDelRow = function(btn) {
+        var row = btn.closest('.lr-row');
+        var wrap = document.getElementById('lr-rows');
+        if (!row || !wrap) return;
+        if (wrap.children.length <= 1) {
+            // 只剩一列時不刪除，改清空這一列（至少留一列可填）
+            row.querySelectorAll('input').forEach(function(el){ el.value = ''; });
+            row.querySelectorAll('select').forEach(function(el){ el.value = ''; });
+            lrCalc();
+            return;
+        }
+        row.remove();
+        lrRenumber();
+        lrCalc();
+    };
+
+    window.lrMirrorRow = function(btn) {
+        var row = btn.closest('.lr-row');
+        if (!row) return;
+        var dir  = row.querySelector('.lr-dir').value;
+        var gmag = row.querySelector('.lr-gmag').value;
+        var newRow = window.lrAddRow();
+        if (!newRow) return;
+        var wrap = document.getElementById('lr-rows');
+        wrap.insertBefore(newRow, row.nextSibling); // 搬到緊接在這一列之後
+        lrRenumber();
+        if (dir) newRow.querySelector('.lr-dir').value = (dir === 'inc') ? 'dec' : 'inc';
+        if (gmag !== '') newRow.querySelector('.lr-gmag').value = gmag;
+        lrCalc();
+        var lbl = newRow.querySelector('.lr-label');
+        if (lbl) lbl.focus();
+    };
+
+    function lrCalcRow(row) {
+        var nomF  = lrNum(row, '.lr-nom');
+        var uTolF = lrNum(row, '.lr-utol'); if (uTolF === null) uTolF = 0;
+        var lTolF = lrNum(row, '.lr-ltol'); if (lTolF === null) lTolF = 0;
+        var finRangeEl = row.querySelector('.lr-fin-range');
+
+        var lowF = null, highF = null;
+        if (nomF !== null) {
+            lowF  = nomF + Math.min(uTolF, lTolF);
+            highF = nomF + Math.max(uTolF, lTolF);
+        }
+        if (finRangeEl) finRangeEl.textContent = lrFmtRange(lowF, highF);
+
+        var dir  = row.querySelector('.lr-dir').value;
+        var gRaw = lrNum(row, '.lr-gmag');
+        var gmag = (gRaw === null) ? null : Math.abs(gRaw);
+        var delta = null;
+        if (dir && gmag !== null) delta = (dir === 'inc') ? gmag : -gmag;
+
+        var turnLow = null, turnHigh = null;
+        if (lowF !== null && delta !== null) {
+            turnLow  = lowF  - delta;
+            turnHigh = highF - delta;
+        }
+        var safeEl = row.querySelector('.lr-safe-range');
+        if (safeEl) safeEl.textContent = (turnLow !== null) ? lrFmtRange(turnLow, turnHigh) : '—';
+
+        var sugNom = (turnLow !== null) ? (turnLow + turnHigh) / 2 : null;
+        var sugEl = row.querySelector('.lr-sug-nom');
+        if (sugEl) sugEl.textContent = (sugNom !== null) ? lrFmt(sugNom) : '—';
+
+        var tUtol = lrNum(row, '.lr-tutol');
+        var tLtol = lrNum(row, '.lr-tltol');
+        var warnEl = row.querySelector('.lr-warn');
+        if (warnEl) {
+            warnEl.className = 'lr-warn';
+            warnEl.textContent = '';
+            if (sugNom !== null && turnLow !== null && (tUtol !== null || tLtol !== null)) {
+                var tu = (tUtol === null) ? 0 : tUtol;
+                var tl = (tLtol === null) ? 0 : tLtol;
+                var candLow  = sugNom + Math.min(tu, tl);
+                var candHigh = sugNom + Math.max(tu, tl);
+                if (candLow < turnLow - 1e-9 || candHigh > turnHigh + 1e-9) {
+                    warnEl.className = 'lr-warn show';
+                    warnEl.textContent = '⚠ 填的公差超出安全範圍（' + lrFmtRange(turnLow, turnHigh) + '），研磨後可能不符成品公差，建議縮小公差或改用建議基準值。';
+                }
+            }
+        }
+
+        var manualNom = lrNum(row, '.lr-manual-nom');
+        var vRangeEl = row.querySelector('.lr-verify-range');
+        var badgeEl  = row.querySelector('.lr-verify-badge');
+        if (manualNom !== null && delta !== null && lowF !== null) {
+            var mtu = (tUtol === null) ? 0 : tUtol;
+            var mtl = (tLtol === null) ? 0 : tLtol;
+            var mLow  = manualNom + Math.min(mtu, mtl);
+            var mHigh = manualNom + Math.max(mtu, mtl);
+            var fLow  = mLow  + delta;
+            var fHigh = mHigh + delta;
+            if (vRangeEl) vRangeEl.textContent = lrFmtRange(fLow, fHigh);
+            var ok = (fLow >= lowF - 1e-9) && (fHigh <= highF + 1e-9);
+            if (badgeEl) {
+                if (ok) {
+                    badgeEl.className = 'lr-verify-badge show-ok';
+                    badgeEl.textContent = '✓ 符合成品公差（餘裕：上 ' + lrFmt(highF - fHigh) + '　下 ' + lrFmt(fLow - lowF) + '）';
+                } else {
+                    var over = [];
+                    if (fLow  < lowF  - 1e-9) over.push('下限超出 ' + lrFmt(lowF - fLow));
+                    if (fHigh > highF + 1e-9) over.push('上限超出 ' + lrFmt(fHigh - highF));
+                    badgeEl.className = 'lr-verify-badge show-bad';
+                    badgeEl.textContent = '✗ 不符成品公差（' + over.join('，') + '），請調整車床基準值或公差。';
+                }
+            }
+        } else {
+            if (vRangeEl) vRangeEl.textContent = '—';
+            if (badgeEl) { badgeEl.className = 'lr-verify-badge'; badgeEl.textContent = ''; }
+        }
+    }
+
+    window.lrCalc = function() {
+        document.querySelectorAll('#lr-rows .lr-row').forEach(lrCalcRow);
+    };
+
+    function initLrDelegation() {
+        var body = document.getElementById('lr-tool-body');
+        if (!body) return;
+        body.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter') return;
+            var t = e.target;
+            if (t.tagName !== 'INPUT' && t.tagName !== 'SELECT') return;
+            e.preventDefault();
+            var focusables = Array.prototype.slice.call(
+                body.querySelectorAll('input, select')
+            );
+            var idx = focusables.indexOf(t);
+            if (idx >= 0 && idx < focusables.length - 1) focusables[idx + 1].focus();
+        });
+        body.addEventListener('focus', function(e) {
+            if (e.target.tagName === 'INPUT' && e.target.type === 'number') e.target.select();
+        }, true);
+        body.addEventListener('dblclick', function(e) {
+            var t = e.target;
+            if ((t.tagName === 'INPUT') && t.value !== '') {
+                t.value = '';
+                lrCalc();
+            }
+        });
+    }
+
+    function initLrDrag() {
+        var hdr = document.getElementById('lr-tool-hdr');
+        var win = document.getElementById('lr-tool-window');
+        if (!hdr || !win) return;
+        var sx, sy, sl, st;
+        hdr.addEventListener('mousedown', function(e) {
+            if (e.target.tagName === 'BUTTON' || e.target.tagName === 'I') return;
+            sx = e.clientX; sy = e.clientY;
+            sl = parseInt(win.style.left) || win.getBoundingClientRect().left;
+            st = parseInt(win.style.top)  || win.getBoundingClientRect().top;
+            win.style.transform = 'none';
+            win.style.left = sl + 'px'; win.style.top = st + 'px';
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', onDrop);
+            e.preventDefault();
+        });
+        function onDrag(e) {
+            win.style.left = (sl + e.clientX - sx) + 'px';
+            win.style.top  = (st + e.clientY - sy) + 'px';
+        }
+        function onDrop() {
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', onDrop);
+        }
+    }
+
+    function ensureLrDom() {
+        if (_lrDomInited) return;
+        _lrDomInited = true;
+        var tpl  = document.getElementById('lr-tool-tpl');
+        var cont = document.getElementById('lr-tool-container');
+        if (tpl && cont) {
+            cont.appendChild(document.importNode(tpl.content, true));
+            if (tpl.parentNode) tpl.parentNode.removeChild(tpl);
+        }
+        initLrDrag();
+        initLrDelegation();
+        lrAddRow();
+    }
+
+    window.openLenTool = function() {
+        ensureLrDom();
+        var w = document.getElementById('lr-tool-window');
+        if (w) w.style.display = 'block';
+        setTimeout(function() {
+            var el = document.querySelector('#lr-rows .lr-row:first-child .lr-nom');
+            if (el) el.focus();
+        }, 60);
+    };
+    window.closeLenTool = function() {
+        var w = document.getElementById('lr-tool-window');
+        if (w) w.style.display = 'none';
+    };
+    window.clearLenTool = function() {
+        var wrap = document.getElementById('lr-rows');
+        if (wrap) wrap.innerHTML = '';
+        lrAddRow();
+        var el = document.querySelector('#lr-rows .lr-row:first-child .lr-nom');
+        if (el) el.focus();
+    };
+})();
+</script>
+<?php endif; ?>
 
 <?php
 // 鍵槽計算工具視窗（CSS＋HTML＋JS）：與訂單追蹤頁共用同一份，禁止在本頁複製一套（鐵律4）
