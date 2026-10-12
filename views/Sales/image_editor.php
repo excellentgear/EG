@@ -8469,10 +8469,13 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-verify-badge.show-bad { display:block; background:#DD5138; border:1px solid #BE3C25; color:#fff; }
     /* 總長（每兩列一對）：橫跨全寬，含選填的「原圖總長尺寸」輸入 */
     .lr-pair-total { grid-column:1 / -1; border:1.5px solid #d8c7b0; border-radius:7px; padding:8px; background:#faf6f0; }
-    .lr-pair-total-dtot { margin-bottom:8px; }
+    /* 左：原圖總長尺寸輸入（窄，固定寬）；右：範圍＋總長摘要（吃剩餘寬度），並排省垂直空間 */
+    .lr-pair-total-row-top { display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+    .lr-pair-total-dtot { flex:0 0 auto; width:190px; }
+    .lr-pair-total-summary { flex:1; min-width:170px; }
     .lr-pair-total-h { font-size:11px; font-weight:700; color:#5a3410; margin-bottom:4px; }
-    .lr-pair-total-body { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:10.5px; color:#555; align-items:center; margin-top:7px; padding-top:7px; border-top:2px dashed #d8c7b0; }
-    .lr-pair-total-row { display:flex; align-items:center; gap:4px; }
+    .lr-pair-total-body { display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:#555; }
+    .lr-pair-total-row { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
     .lr-pair-total .lr-warn, .lr-pair-total .lr-verify-badge { margin-top:4px; }
     #lr-add-row-btn { margin-top:2px; }
     @media (max-width:860px) {
@@ -8523,31 +8526,35 @@ include __DIR__ . '/_gear_tool_ui.php';
     // 總長面板含選填的「原圖總長尺寸」輸入。
     var LR_TOTAL_HTML =
         '<div class="lr-pair-total">' +
-          '<div class="lr-pair-total-dtot">' +
-            '<div class="lr-blk lr-blk-fin">' +
-              '<div class="lr-blk-h">原圖總長尺寸（選填，原圖另有標示這兩欄的總長時填寫，會據此調整建議車床基準值）</div>' +
-              '<div class="lr-blk-body">' +
-                '<div class="lr-dr">' +
-                  '<input type="number" step="any" class="lr-dtot-nom" data-lr-tab="1" oninput="lrCalc()" placeholder="總長基準值">' +
-                  '<div class="lr-tc">' +
-                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-dtot-utol" data-lr-tab="1" oninput="lrCalc()"></div>' +
-                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-dtot-ltol" data-lr-tab="1" oninput="lrCalc()"></div>' +
+          '<div class="lr-pair-total-row-top">' +
+            '<div class="lr-pair-total-dtot">' +
+              '<div class="lr-blk lr-blk-fin">' +
+                '<div class="lr-blk-h" title="原圖另有標示這兩欄的總長時填寫，會據此調整建議車床基準值">原圖總長尺寸（選填）</div>' +
+                '<div class="lr-blk-body">' +
+                  '<div class="lr-dr">' +
+                    '<input type="number" step="any" class="lr-dtot-nom" data-lr-tab="1" oninput="lrCalc()" placeholder="總長基準值">' +
+                    '<div class="lr-tc">' +
+                      '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-dtot-utol" data-lr-tab="1" oninput="lrCalc()"></div>' +
+                      '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-dtot-ltol" data-lr-tab="1" oninput="lrCalc()"></div>' +
+                    '</div>' +
                   '</div>' +
                 '</div>' +
-                '<div class="lr-rangeline">範圍：<span class="lr-out lr-dtot-range">—</span></div>' +
               '</div>' +
             '</div>' +
+            '<div class="lr-pair-total-summary">' +
+              '<div class="lr-pair-total-h">總長</div>' +
+              '<div class="lr-pair-total-body">' +
+                '<div class="lr-pair-total-row">原圖總長範圍：<span class="lr-out lr-dtot-range">—</span></div>' +
+                '<div class="lr-pair-total-row">成品總長範圍：<span class="lr-out lr-pair-total-fin">—</span></div>' +
+                '<div class="lr-pair-total-row">建議車床總長範圍：<span class="lr-out lr-pair-total-turn">—</span></div>' +
+                '<div class="lr-pair-total-row">建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>' +
+                '<div class="lr-pair-total-row">手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>' +
+              '</div>' +
+              '<div class="lr-warn lr-pair-total-warn"></div>' +
+              '<div class="lr-warn lr-pair-total-dconflict"></div>' +
+              '<div class="lr-verify-badge lr-pair-total-dok"></div>' +
+            '</div>' +
           '</div>' +
-          '<div class="lr-pair-total-h">總長</div>' +
-          '<div class="lr-pair-total-body">' +
-            '<div class="lr-pair-total-row">成品總長範圍：<span class="lr-out lr-pair-total-fin">—</span></div>' +
-            '<div class="lr-pair-total-row">建議車床總長範圍：<span class="lr-out lr-pair-total-turn">—</span></div>' +
-            '<div class="lr-pair-total-row">建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>' +
-            '<div class="lr-pair-total-row">手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>' +
-          '</div>' +
-          '<div class="lr-warn lr-pair-total-warn"></div>' +
-          '<div class="lr-warn lr-pair-total-dconflict"></div>' +
-          '<div class="lr-verify-badge lr-pair-total-dok"></div>' +
         '</div>';
 
     var LR_ROW_HTML =
@@ -8810,7 +8817,7 @@ include __DIR__ . '/_gear_tool_ui.php';
             var dU = lrNum(dtotWrap, '.lr-dtot-utol'); if (dU === null) dU = 0;
             var dL = lrNum(dtotWrap, '.lr-dtot-ltol'); if (dL === null) dL = 0;
             if (dNom !== null) { dLow = dNom + Math.min(dU, dL); dHigh = dNom + Math.max(dU, dL); }
-            var dRangeEl = dtotWrap.querySelector('.lr-dtot-range');
+            var dRangeEl = totalWrap.querySelector('.lr-dtot-range');
             if (dRangeEl) dRangeEl.textContent = lrFmtRange(dLow, dHigh);
         }
 
