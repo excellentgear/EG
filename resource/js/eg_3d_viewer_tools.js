@@ -1328,25 +1328,61 @@ var EG3DTools = (function () {
     // 外圍方向；本實作另外把封頂材質設成 DoubleSide（見下方），即使定向方向不如預期也
     // 不影響可不可見，只有「偶數層/奇數層」這個分類邏輯需要迴圈方向一致，而不是要求
     // CCW/CW 對應特定的可見面。
-    function _triPlaneIntersectSeg(v0, v1, v2, plane) {
+    // ★ 2026-10-12：頂點「剛好落在剖切平面上」一定要單獨處理，否則剖在模型對稱中心時整個
+    //   斷面會消失。舊版把 da<=0 當一側、da>0 當另一側，頂點正好在平面上（d=0，對稱零件
+    //   剖在正中央時成千上萬個頂點都是這種）會被硬歸到「保留側」，於是三角形被判定成沒有
+    //   跨過平面、一條交線都收不到——實測 Z 軸 50%（平面正好通過模型中心）斷面完全不見。
+    //   改成先用容差把「幾乎在平面上」的 d 歸零，再依零的個數分四種情形處理，這是三角形
+    //   網格等值面抽取的標準作法。
+    function _triPlaneIntersectSeg(v0, v1, v2, plane, eps) {
         var nx = plane.normal.x, ny = plane.normal.y, nz = plane.normal.z, c = plane.constant;
         function side(p) { return p[0]*nx + p[1]*ny + p[2]*nz + c; }
         var verts = [v0, v1, v2], d = [side(v0), side(v1), side(v2)];
-        var crossPts = [];
-        for (var i = 0; i < 3; i++) {
-            var a = verts[i], b = verts[(i+1)%3];
-            var da = d[i], db = d[(i+1)%3];
-            if ((da <= 0) !== (db <= 0) && Math.abs(da - db) > 1e-12) {
-                var t = da / (da - db);
-                crossPts.push({ p: [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t], fromKeep: da <= 0 });
-            }
+        var i;
+        eps = eps || 0;
+        for (i = 0; i < 3; i++) { if (Math.abs(d[i]) <= eps) d[i] = 0; }
+        var zeros = [];
+        for (i = 0; i < 3; i++) { if (d[i] === 0) zeros.push(i); }
+        if (zeros.length === 3) return null;        // 整片三角形貼在平面上（輪廓由它的鄰居負責，這裡收了反而會重複）
+        if (zeros.length === 2) {                   // 剛好有一條邊落在平面上＝那條邊就是輪廓線
+            return { a: verts[zeros[0]].slice(), b: verts[zeros[1]].slice() };
         }
-        if (crossPts.length !== 2) return null;   // 三角形沒有真的跨過平面，或貼在面上的退化情形
-        return crossPts[0].fromKeep ? { a: crossPts[0].p, b: crossPts[1].p } : { a: crossPts[1].p, b: crossPts[0].p };
+        var pts = [];
+        if (zeros.length === 1) {
+            var zi = zeros[0], o1 = (zi+1)%3, o2 = (zi+2)%3;
+            if ((d[o1] > 0) === (d[o2] > 0)) return null;   // 只有一個角「碰到」平面，不算穿過
+            pts.push(verts[zi].slice());
+        }
+        for (i = 0; i < 3; i++) {
+            var a = verts[i], b = verts[(i+1)%3], da = d[i], db = d[(i+1)%3];
+            if (da === 0 || db === 0) continue;
+            if ((da < 0) === (db < 0)) continue;
+            var t = da / (da - db);
+            pts.push([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]);
+        }
+        if (pts.length !== 2) return null;
+        return { a: pts[0], b: pts[1] };
     }
     // 整個模型與一個剖切平面求交，把所有三角形各自算出的小線段接成一條條封閉迴圈（世界座標）
     function _buildCapLoops3d(mm, plane) {
         var segs = [];
+        // 「頂點剛好落在平面上」的判定容差，依模型尺度換算（見 _triPlaneIntersectSeg 註解）
+        var mbb = mm.GetBoundingBox(function () { return true; });
+        var planeEps = mbb
+            ? Math.max(1e-7, Math.sqrt(
+                  (mbb.max.x-mbb.min.x)*(mbb.max.x-mbb.min.x) +
+                  (mbb.max.y-mbb.min.y)*(mbb.max.y-mbb.min.y) +
+                  (mbb.max.z-mbb.min.z)*(mbb.max.z-mbb.min.z)) * 1e-6)
+            : 1e-5;
+        // 剖切平面剛好落在「一整排頂點」上時（對稱零件剖在正中央、或剖在 CAD 鑲嵌的接縫
+        // 上）會冒出大量退化三角形，輪廓抽取結果不可靠——實測 Z 軸 50%（平面正好通過模型
+        // 中心）有 206 個頂點正好在平面上、54 個三角形整條邊貼在平面上，算出來的輪廓是壞的，
+        // 斷面整片消失。把「用來抽輪廓的」平面沿法線往保留側挪一個極小量（模型尺度的百萬分
+        // 之幾，這個零件上約 0.002mm，肉眼與量測都看不出來）就能完全避開這一整類退化情形；
+        // 乘上 17.3 這種非整數倍率是刻意的，避免挪完又剛好落在另一排整數座標的頂點上。
+        // 封頂最後仍是用原本的 plane 基底重建（見 _buildCapGeometry），所以畫出來的位置
+        // 還是在真正的剖切面上，不會偏移。
+        var cutPlane = { normal: plane.normal, constant: plane.constant - planeEps * 17.3 };
         mm.EnumerateMeshes(function (mesh) {
             var geo = mesh.geometry;
             var posAttr = geo.attributes.position;
@@ -1363,37 +1399,113 @@ var EG3DTools = (function () {
             else { triCount = Math.floor(posAttr.count/3); getTri = function (i) { return [i*3, i*3+1, i*3+2]; }; }
             for (var t = 0; t < triCount; t++) {
                 var v = getTri(t);
-                var seg = _triPlaneIntersectSeg(toWorld(v[0]), toWorld(v[1]), toWorld(v[2]), plane);
+                var seg = _triPlaneIntersectSeg(toWorld(v[0]), toWorld(v[1]), toWorld(v[2]), cutPlane, planeEps);
                 if (seg) segs.push(seg);
             }
         });
         if (!segs.length) return [];
-        function key3(p) { return Math.round(p[0]*1e3)+','+Math.round(p[1]*1e3)+','+Math.round(p[2]*1e3); }
-        var startMap = new Map();
-        segs.forEach(function (s, i) { var k = key3(s.a); if (!startMap.has(k)) startMap.set(k, []); startMap.get(k).push(i); });
-        var used = new Uint8Array(segs.length);
+        // ── 端點焊接（welding）────────────────────────────────────────────────
+        // ★ 2026-10-12 這裡原本是整個剖面功能真正的病灶，而且症狀完全不像幾何錯：
+        //   舊版用「座標四捨五入到 0.001 當字典鍵」去配對相鄰線段的端點——**四捨五入不是
+        //   容差**。同一個實際頂點由相鄰兩個三角形各自內插算出來時會差到浮點誤差等級
+        //   （頂點是 float32，還要再乘世界矩陣），只要那個值剛好落在 0.0005 的進位邊界
+        //   附近，兩邊就會被分到不同的鍵而配不起來；鏈一斷，舊版「沒有閉合就整條丟掉」
+        //   的判斷會把那一整段輪廓**無聲地**扔掉，連錯誤訊息都沒有。
+        //   實測：Y 軸 22% 的截面本該是一整片圓盤，卻只剩外緣六片細月牙（其餘迴圈全被
+        //   丟棄），平常又剛好被模型外壁擋住，使用者看到的就是「斷面不見了／空心」。
+        //   這也終於解釋了前幾輪的「拖一下滑桿就正常了」——換個剖切位置只是剛好沒踩到
+        //   進位邊界而已，不是什麼 z-fighting 被矯正。
+        //   改成真正的容差配對：空間雜湊（格子邊長＝容差），查詢時連同周圍 26 格一起找，
+        //   才不會發生「兩點明明只差 1e-9 卻因為落在不同格子而配不起來」。
+        var minX=Infinity, minY=Infinity, minZ=Infinity, maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
+        segs.forEach(function (s) {
+            [s.a, s.b].forEach(function (p) {
+                if (p[0]<minX) minX=p[0]; if (p[0]>maxX) maxX=p[0];
+                if (p[1]<minY) minY=p[1]; if (p[1]>maxY) maxY=p[1];
+                if (p[2]<minZ) minZ=p[2]; if (p[2]>maxZ) maxZ=p[2];
+            });
+        });
+        function _dist3(a, b) { var dx=a[0]-b[0], dy=a[1]-b[1], dz=a[2]-b[2]; return Math.sqrt(dx*dx+dy*dy+dz*dz); }
+        var diag = _dist3([minX,minY,minZ], [maxX,maxY,maxZ]);
+        // 容差取截面尺度的十萬分之二：遠大於 float32 內插誤差，又遠小於任何真實幾何特徵
+        var tol = Math.max(1e-6, diag * 2e-5);
+        var cell = tol * 2;
+        var nodes = [], grid = new Map();
+        function _cellKey(p, ox, oy, oz) {
+            return (Math.floor(p[0]/cell)+ox) + ',' + (Math.floor(p[1]/cell)+oy) + ',' + (Math.floor(p[2]/cell)+oz);
+        }
+        function _weld(p) {
+            for (var ox=-1; ox<=1; ox++) for (var oy=-1; oy<=1; oy++) for (var oz=-1; oz<=1; oz++) {
+                var bucket = grid.get(_cellKey(p, ox, oy, oz));
+                if (!bucket) continue;
+                for (var bi=0; bi<bucket.length; bi++) {
+                    var q = nodes[bucket[bi]];
+                    if (Math.abs(q[0]-p[0])<tol && Math.abs(q[1]-p[1])<tol && Math.abs(q[2]-p[2])<tol) return bucket[bi];
+                }
+            }
+            var id = nodes.length;
+            nodes.push([p[0], p[1], p[2]]);
+            var k = _cellKey(p, 0, 0, 0);
+            if (!grid.has(k)) grid.set(k, []);
+            grid.get(k).push(id);
+            return id;
+        }
+        var edges = [];
+        segs.forEach(function (s) {
+            var a = _weld(s.a), b = _weld(s.b);
+            if (a !== b) edges.push([a, b]);   // 兩端焊成同一點＝長度在容差內的退化線段，丟掉
+        });
+        if (!edges.length) return [];
+        // ── 串成迴圈 ─────────────────────────────────────────────────────────
+        // 刻意改成「無方向」走訪：線段的方向性只對「哪一側是保留側」有意義，而下游的巢狀
+        // 判定（_pointInPoly2d 是奇偶跨越法）與耳切（_earClipTriangulate 自己會統一成 CCW）
+        // 都不吃迴圈方向；無方向走訪對法向量不一致、有翻面三角形的網格容錯高很多。
+        var adj = new Map();
+        edges.forEach(function (e, i) {
+            if (!adj.has(e[0])) adj.set(e[0], []);
+            adj.get(e[0]).push(i);
+            if (!adj.has(e[1])) adj.set(e[1], []);
+            adj.get(e[1]).push(i);
+        });
+        var used = new Uint8Array(edges.length);
+        function _pickAt(node) {
+            var list = adj.get(node);
+            if (list) { for (var i=0; i<list.length; i++) { if (!used[list[i]]) return list[i]; } }
+            return -1;
+        }
+        function _other(ei, node) { return edges[ei][0] === node ? edges[ei][1] : edges[ei][0]; }
         var loops = [];
-        for (var i = 0; i < segs.length; i++) {
-            if (used[i]) continue;
-            used[i] = 1;
-            var loopPts = [segs[i].a.slice(), segs[i].b.slice()];
-            var curB = segs[i].b;
-            var startKey = key3(segs[i].a);
-            var guard = 0;
-            while (guard++ < segs.length + 5) {
-                if (key3(curB) === startKey) break;   // 封閉
-                var cands = startMap.get(key3(curB));
-                var found = -1;
-                if (cands) { for (var j = 0; j < cands.length; j++) { if (!used[cands[j]]) { found = cands[j]; break; } } }
-                if (found < 0) break;   // 斷鏈（理論上不該發生在封閉實體網格，容錯直接結束這條不強求）
-                used[found] = 1;
-                loopPts.push(segs[found].b.slice());
-                curB = segs[found].b;
+        for (var si = 0; si < edges.length; si++) {
+            if (used[si]) continue;
+            used[si] = 1;
+            var head = edges[si][0];
+            var path = [head, edges[si][1]];
+            var cur = edges[si][1], closed = false, guard = 0;
+            while (guard++ < edges.length + 5) {
+                if (cur === head) { path.pop(); closed = true; break; }
+                var ni = _pickAt(cur);
+                if (ni < 0) break;
+                used[ni] = 1; cur = _other(ni, cur); path.push(cur);
             }
-            if (loopPts.length >= 4 && key3(loopPts[0]) === key3(loopPts[loopPts.length-1])) {
-                loopPts.pop();   // 收尾那點跟起點重複，去掉
-                loops.push(loopPts);
+            if (!closed) {   // 起點可能落在鏈的中間，往反方向再延伸一次
+                cur = head; guard = 0;
+                while (guard++ < edges.length + 5) {
+                    var ni2 = _pickAt(cur);
+                    if (ni2 < 0) break;
+                    used[ni2] = 1; cur = _other(ni2, cur); path.unshift(cur);
+                    if (cur === path[path.length-1]) { path.pop(); closed = true; break; }
+                }
             }
+            if (path.length < 3) continue;
+            if (!closed) {
+                // 容錯：網格本身有破洞時會留下開放鏈。頭尾已經很接近就視同閉合補起來；
+                // 真的缺一大段的寧可不畫，也不要硬填出一塊形狀是錯的實心面。
+                var p0 = nodes[path[0]], pn = nodes[path[path.length-1]];
+                var gap = _dist3(p0, pn), span = 0;
+                for (var pi = 1; pi < path.length; pi++) span += _dist3(nodes[path[pi-1]], nodes[path[pi]]);
+                if (gap > Math.max(tol*20, span*0.05)) continue;
+            }
+            loops.push(path.map(function (id) { return nodes[id].slice(); }));
         }
         return loops;
     }
@@ -1403,6 +1515,11 @@ var EG3DTools = (function () {
             return [dx*basis.u[0]+dy*basis.u[1]+dz*basis.u[2], dx*basis.v[0]+dy*basis.v[1]+dz*basis.v[2]];
         });
     }
+    // ── 以下五支（_signedArea2d／_centroid2d／_pointInPoly2d／_pts2dEq／_seg2dIntersect／
+    //    _bridgeHolesInto／_pointInTri2d／_earClipTriangulate）自 2026-10-12 起**已不再被
+    //    呼叫**：封頂三角化改用 _buildCapTriangles2d 裡的掃描線梯形分解（原因見該函式的
+    //    註解——橋接＋耳切在有孔截面上會無聲地只畫出碎片）。保留原始碼僅供對照，要改封頂
+    //    填充請改掃描線那一段，不要再接回這條路。
     function _signedArea2d(pts) {
         var a = 0;
         for (var i = 0; i < pts.length; i++) { var p = pts[i], q = pts[(i+1)%pts.length]; a += p[0]*q[1] - q[0]*p[1]; }
@@ -1502,36 +1619,68 @@ var EG3DTools = (function () {
         if (idx.length === 3) tris.push([pts[idx[0]], pts[idx[1]], pts[idx[2]]]);
         return tris;
     }
-    // 把所有迴圈依「被包住幾層」分出實心邊界與洞（偶數層=填、奇數層=洞），各自的洞橋接
-    // 併入直屬的那個偶數層邊界後耳切三角化，彙總成整個封頂面的 2D 三角形清單。
+    // 把全部迴圈（外圍與洞一視同仁）填成 2D 三角形清單——「掃描線梯形分解」。
+    //
+    // ★ 2026-10-12：這裡原本是「巢狀判定分出實心/洞 → 把洞橋接併入外圍 → 耳切三角化
+    //   (ear clipping)」，那套是**這個 3D 剖面功能一路以來「斷面空心」的真正病灶**，
+    //   而且症狀完全不像三角化壞掉：
+    //   橋接會在多邊形上製造「自我接觸」的重複頂點（橋的兩端各出現兩次），而耳切判斷
+    //   一個角能不能當耳朵時要檢查「三角形內不可含其他頂點」，`_pointInTri2d` 連落在
+    //   **邊界上**的點都算「在裡面」——橋上的那些重複頂點正好落在候選耳朵的邊上，於是
+    //   每一個跨過橋的耳朵都被否決；洞一多（這個法蘭截面有 6 個螺栓孔）就完全找不到
+    //   耳朵，`if (!earFound) break;` 直接放棄剩下的部份，**只剩最外圈幾片碎片**，而且
+    //   不會丟任何錯誤。實測 Y 軸 22% 的截面本該是一整片圓盤，只畫出外緣六片細月牙，
+    //   平常又剛好被模型外壁擋住 → 使用者看到的就是「斷面不見了／看起來空心」。
+    //   「有孔的截面才壞、沒孔的正常」「換個剖切位置就好了」也都是同一個原因。
+    //
+    //   改用掃描線梯形分解，從根本上繞開這整類問題：
+    //   ①不需要分辨誰是外圍誰是洞——用偶奇填充（even-odd）規則自然成立，巢狀幾層都對；
+    //   ②不需要橋接，也就沒有自我接觸的重複頂點；
+    //   ③不需要找耳朵，不會有「找不到就放棄一半」這種無聲失敗。
+    //   作法：把所有邊收集起來，依**每一個頂點的 y** 切成一條條水平帶（所以帶內任何一條
+    //   邊都不會有端點、必定是直線穿過整條帶 → 梯形的斜邊與原本的邊完全重合，分解是
+    //   精確的不是近似），每條帶取中線求出所有交點、由左到右排序後兩兩配對成梯形，
+    //   每個梯形切兩個三角形。
     function _buildCapTriangles2d(loops2d) {
-        var n = loops2d.length;
-        if (!n) return [];
-        var centroids = loops2d.map(_centroid2d);
-        var containCount = new Array(n).fill(0);
-        var containers = [];
-        for (var i = 0; i < n; i++) containers.push([]);
-        for (var i = 0; i < n; i++) {
-            for (var j = 0; j < n; j++) {
-                if (i === j) continue;
-                if (_pointInPoly2d(centroids[i], loops2d[j])) { containCount[i]++; containers[i].push(j); }
+        var edges = [], ys = [];
+        (loops2d || []).forEach(function (loop) {
+            if (!loop || loop.length < 3) return;
+            for (var i = 0; i < loop.length; i++) {
+                var a = loop[i], b = loop[(i+1) % loop.length];
+                ys.push(a[1]);
+                if (a[1] === b[1]) continue;   // 水平邊不會貢獻交點，只貢獻一條帶的邊界（已由 ys 收走）
+                edges.push(a[1] < b[1] ? { x0:a[0], y0:a[1], x1:b[0], y1:b[1] } : { x0:b[0], y0:b[1], x1:a[0], y1:a[1] });
             }
-        }
+        });
+        if (edges.length < 2) return [];
+        ys.sort(function (p, q) { return p - q; });
+        var spanY = ys[ys.length-1] - ys[0];
+        if (!(spanY > 0)) return [];
+        var yEps = spanY * 1e-9;
+        var bands = [ys[0]];
+        for (var i = 1; i < ys.length; i++) { if (ys[i] - bands[bands.length-1] > yEps) bands.push(ys[i]); }
+        if (bands.length < 2) return [];
         var tris = [];
-        for (var i = 0; i < n; i++) {
-            if (containCount[i] % 2 !== 0) continue;   // 奇數層＝洞的邊界，併到它的直屬實心層處理，這裡跳過
-            var myHoles = [];
-            for (var h = 0; h < n; h++) {
-                if (containCount[h] % 2 === 0) continue;
-                if (containers[h].indexOf(i) < 0) continue;
-                var evenContainers = containers[h].filter(function (k) { return containCount[k] % 2 === 0; });
-                var parent = evenContainers.reduce(function (best, k) {
-                    return (best === null || Math.abs(_signedArea2d(loops2d[k])) < Math.abs(_signedArea2d(loops2d[best]))) ? k : best;
-                }, null);
-                if (parent === i) myHoles.push(loops2d[h]);
+        for (var bi = 0; bi < bands.length - 1; bi++) {
+            var yTop = bands[bi], yBot = bands[bi+1];
+            if (yBot - yTop <= yEps) continue;
+            var yMid = (yTop + yBot) / 2;
+            var xs = [];
+            for (var ei = 0; ei < edges.length; ei++) {
+                var e = edges[ei];
+                if (e.y0 > yMid || e.y1 < yMid) continue;   // 帶的切點落在每個頂點上，所以邊不是整條穿過就是完全沒碰到
+                var inv = (e.x1 - e.x0) / (e.y1 - e.y0);
+                xs.push({ mid: e.x0 + (yMid - e.y0) * inv, top: e.x0 + (yTop - e.y0) * inv, bot: e.x0 + (yBot - e.y0) * inv });
             }
-            var simple = myHoles.length ? _bridgeHolesInto(loops2d[i], myHoles) : loops2d[i].slice();
-            tris = tris.concat(_earClipTriangulate(simple));
+            if (xs.length < 2) continue;
+            xs.sort(function (p, q) { return p.mid - q.mid; });
+            for (var k = 0; k + 1 < xs.length; k += 2) {   // 偶奇填充：第1↔2、第3↔4…之間才是實心材料
+                var L = xs[k], R = xs[k+1];
+                if (Math.abs(R.top - L.top) < 1e-12 && Math.abs(R.bot - L.bot) < 1e-12) continue;
+                var tl = [L.top, yTop], tr = [R.top, yTop], br = [R.bot, yBot], bl = [L.bot, yBot];
+                tris.push([tl, tr, br]);
+                tris.push([tl, br, bl]);
+            }
         }
         return tris;
     }
@@ -1621,14 +1770,31 @@ var EG3DTools = (function () {
         var start = Math.floor(minOff / spacing) * spacing;
         for (var off = start; off <= maxOff + spacing; off += spacing) {
             var p0 = [nrm[0]*off, nrm[1]*off];
+            var ranges = [];
             for (var t = 0; t < tris2d.length; t++) {
                 var tri = tris2d[t];
                 var range = _line2dTriClip(p0, dir, tri[0], tri[1], tri[2]);
-                if (!range) continue;
-                segments.push([
-                    [p0[0] + dir[0]*range[0], p0[1] + dir[1]*range[0]],
-                    [p0[0] + dir[0]*range[1], p0[1] + dir[1]*range[1]]
-                ]);
+                if (range) ranges.push(range);
+            }
+            if (!ranges.length) continue;
+            // 合併同一條斜線上首尾相接的區間：封頂的三角化是「掃描線梯形帶」，一條斜線
+            // 會被切成上百個相鄰小段，不合併的話每一小段都要產生一條極窄三角面帶，頂點數
+            // 會暴增十倍以上（而且相鄰段的接縫在畫面上還可能出現細微鋸齒）。
+            ranges.sort(function (a, b) { return a[0] - b[0]; });
+            var joinTol = spacing * 1e-3;
+            var cur = ranges[0].slice();
+            for (var ri = 1; ri <= ranges.length; ri++) {
+                if (ri < ranges.length && ranges[ri][0] <= cur[1] + joinTol) {
+                    if (ranges[ri][1] > cur[1]) cur[1] = ranges[ri][1];
+                    continue;
+                }
+                if (cur[1] - cur[0] > joinTol) {
+                    segments.push([
+                        [p0[0] + dir[0]*cur[0], p0[1] + dir[1]*cur[0]],
+                        [p0[0] + dir[0]*cur[1], p0[1] + dir[1]*cur[1]]
+                    ]);
+                }
+                if (ri < ranges.length) cur = ranges[ri].slice();
             }
         }
         return segments;
