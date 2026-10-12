@@ -116,6 +116,21 @@ if (!$canUse) {
 // ── 管理者判定（status 9/90 或系統 admin 角色，前面已計算進 $roleLabel）──
 $isMgr = ($isAdmin || $roleLabel === '管理者');
 
+// ── 存成料號附件時偵測到舊版本：是否顯示「前往主檔管理確認舊版」的按鈕/深連結 ──
+// 與 bom_viewer.php 的「前往編輯附件」按鈕同一套權限碼、同一個深連結（?open_attach=d_id），
+// 本頁刻意不做自動作廢——作廢需要人工確認，見 master_data_management.php 的 $can_part_attach。
+$canPartAttachEdit = false;
+try {
+    if (isset($pdo) && $pdo) {
+        require_once __DIR__ . '/../../src/common/rbac.php';
+        $featsE = rbac_user_features($pdo, $uid);
+        $canPartAttachEdit = $isMgr
+            || rbac_has($featsE, 'md_attach_upload')
+            || rbac_has($featsE, 'md_attach_edit')
+            || rbac_has($featsE, 'md_attach_delete');
+    }
+} catch (Exception $e) { $canPartAttachEdit = false; }
+
 // ── 齒輪／花鍵計算工具（底部狀態列那顆「齒輪計算」）────────────────────────────
 // 與訂單追蹤頁（NewOrder_Track.php）共用同一個工具視窗與同一份預留量／花鍵公差資料，
 // 唯一實作在 src/common/gear_tool_lib.php ＋ views/Sales/_gear_tool_ui.php，本頁不自刻。
@@ -802,9 +817,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $visible = (int)$shareChk->fetchColumn() > 0;
                 }
                 if (!$visible) continue;
+                // 自己存的暫存工作檔自己要刪得掉（2026-10-12 使用者交辦）：$canDeleteWorkfile 那個角色
+                // 管的是「刪別人的」，不該連「刪自己的」都一併卡住；最新那份仍不給刪（is_latest）。
+                $isOwnWf = ((int)$r['uploaded_by_id'] === $uid);
                 $out[] = ['id' => $r['id'], 'original_name' => $r['original_name'], 'uploaded_by' => $r['uploaded_by'],
                           'uploaded_at' => $r['uploaded_at'], 'scope' => $ownerType,
-                          'is_latest' => ($i === 0), 'can_delete' => ($canDeleteWorkfile && $i !== 0)];
+                          'is_latest' => ($i === 0), 'is_own' => $isOwnWf,
+                          'can_delete' => (($canDeleteWorkfile || $isOwnWf) && $i !== 0)];
             }
             echo json_encode(['success' => true, 'works' => $out]);
         } elseif ($act === 'load_workfile') {
@@ -2140,6 +2159,8 @@ const CAN_DEPT_STAMP = <?= $canDeptStamp ? 'true' : 'false' ?>;
 let deptStampColorHex = <?= json_encode($deptStampColor === 'red' ? '#cf3a2b' : '#2b4a9b') ?>;
 const CAN_DELETE_WORKFILE = <?= $canDeleteWorkfile ? 'true' : 'false' ?>;
 const WORKFILE_MAX_COUNT = <?= (int)$workfileMaxCount ?>;
+// 存檔偵測到舊版本時，是否提供「前往主檔管理確認作廢」深連結（見 $canPartAttachEdit）
+const CAN_GOTO_ATTACH_EDIT = <?= $canPartAttachEdit ? 'true' : 'false' ?>;
 const USER_PREFS = <?= json_encode($userPrefs, JSON_UNESCAPED_UNICODE) ?>;
 const RESIZE_PRESETS = <?= json_encode($resizePresets, JSON_UNESCAPED_UNICODE) ?>;
 const RESIZE_DEFAULT_IDX = <?= (int)$resizeDefaultIdx ?>;
@@ -7167,6 +7188,21 @@ async function pfSave() {
         } else if (v.kind === 'first') {
             toast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面）');
         }
+        // 舊版本是否需要確認作廢：只要這次比對到前一版（change/change_logged/same/older
+        // 皆算，v.prev_name 一定有值），一律問一次——這裡刻意不做「直接變作廢」的功能，
+        // 作廢一定要人工到附件跳窗確認過才能動（2026-10-12 使用者交辦）。
+        if (v.prev_name) {
+            if (CAN_GOTO_ATTACH_EDIT) {
+                const goEdit = confirm('這個標籤／製程底下，原本已經有一版圖面：\n'
+                    + v.prev_name + '（' + egFmtDate(v.prev_date) + '）' + (v.prev_other_note || '') + '\n\n'
+                    + '新版已經存檔成功；舊版是否需要人工確認作廢？\n'
+                    + '（系統不會自動作廢；按「確定」會另開「主檔管理」分頁並自動定位到這個料號的附件跳窗，請自行確認後手動標記；\n'
+                    + '　按「取消」也沒關係，之後要處理可以再到料號附件跳窗自己搜尋）');
+                if (goEdit) window.open('../pages/master_data_management.php?open_attach=' + encodeURIComponent(d), '_blank');
+            } else {
+                toast('提醒：此料號原本已有一版圖面（' + v.prev_name + '），舊版是否作廢需要有附件編輯權限的人到主檔管理確認');
+            }
+        }
         pfLoadWorkfiles();
     } catch (e) {
         toast('儲存失敗：' + (e.message || ''));
@@ -8370,16 +8406,7 @@ include __DIR__ . '/_gear_tool_ui.php';
     #lr-tool-hdr button:hover { background:rgba(255,255,255,.3); }
     #lr-tool-body { padding:10px 12px 12px; max-height:82vh; overflow-y:auto; }
     .lr-note { font-size:10.5px; color:#6B471A; margin-bottom:8px; background:#F7E0BD; border:1px solid #E4C293; border-radius:4px; padding:5px 9px; }
-    /* 示意圖 */
-    .lr-diagram { max-width:620px; margin:0 auto 10px; }
-    .lr-diagram-bar { display:flex; align-items:stretch; height:44px; border:2px solid #8a5a2b; background:#faf6f0; border-radius:4px; overflow:hidden; }
-    .lr-diagram-bar .lr-dbar-half { flex:1; }
-    .lr-diagram-bar .lr-dbar-face { width:3px; position:relative; background:repeating-linear-gradient(to bottom,#DD5138 0 4px,transparent 4px 8px); }
-    .lr-diagram-bar .lr-dbar-face span { position:absolute; top:-17px; left:50%; transform:translateX(-50%); font-size:10.5px; color:#BE3C25; font-weight:700; white-space:nowrap; }
-    .lr-diagram-dims { display:flex; margin-top:4px; font-size:11px; }
-    .lr-diagram-dims > div { flex:1; text-align:center; }
-    .lr-diagram-cap { text-align:center; font-size:9.5px; color:#a08a6f; margin-top:4px; }
-    /* 一列＝一段尺寸，兩欄並排連續往下加（尺寸A、B、C、D……）；每兩列底下接一塊橫跨全寬的「總長」 */
+    /* 一列＝一段尺寸，並排連續往下加（尺寸A、B、C、D……）；每兩列前面接一塊橫跨全寬的「總長」 */
     #lr-rows { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px; }
     .lr-row { border:1px solid #e4d3bc; border-radius:5px; overflow:hidden; background:#fff; }
     .lr-row-hdr { display:flex; align-items:center; justify-content:space-between; gap:6px; background:#faf6f0; padding:4px 8px; border-bottom:1px solid #d8c7b0; }
@@ -8461,20 +8488,7 @@ include __DIR__ . '/_gear_tool_ui.php';
         </div>
     </div>
     <div id="lr-tool-body">
-        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；每相鄰兩欄最上面先是合算的<strong>總長</strong>、底下接著是那兩欄本身；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。填寫即時自動算，不必另外按計算。</div>
-        <div class="lr-diagram">
-            <div class="lr-diagram-bar">
-                <div class="lr-dbar-half"></div>
-                <div class="lr-dbar-face"><span>研磨面</span></div>
-                <div class="lr-dbar-half"></div>
-            </div>
-            <div class="lr-diagram-dims">
-                <div style="color:#8a5a2b;">◄── 尺寸A（成品，研磨面左側）──►</div>
-                <div style="width:3px;"></div>
-                <div style="color:#7A4A34;">◄── 尺寸B（成品，研磨面右側）──►</div>
-            </div>
-            <div class="lr-diagram-cap">研磨會移除研磨面上的材料：面往哪一側移動，該側尺寸就縮短、另一側相對增長——方向與增減量請在下方左右兩欄分別填寫</div>
-        </div>
+        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；每相鄰兩欄最上面先是合算的<strong>總長</strong>、底下接著是那兩欄本身；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。填寫即時自動算，不必另外按計算。（研磨會移除材料，同一研磨面常讓相鄰兩欄一側縮短、另一側增長，方向請各自選）</div>
         <div id="lr-rows"></div>
         <button type="button" class="lr-mini-btn" id="lr-add-row-btn" onclick="lrAddRow()"><i class="fa fa-plus"></i> 新增尺寸</button>
     </div>
@@ -8514,10 +8528,10 @@ include __DIR__ . '/_gear_tool_ui.php';
               '<div class="lr-blk-h">原圖總長尺寸（選填，原圖另有標示這兩欄的總長時填寫，會據此調整建議車床基準值）</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
-                  '<input type="number" step="any" class="lr-dtot-nom" oninput="lrCalc()" placeholder="總長基準值">' +
+                  '<input type="number" step="any" class="lr-dtot-nom" data-lr-tab="1" oninput="lrCalc()" placeholder="總長基準值">' +
                   '<div class="lr-tc">' +
-                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-dtot-utol" oninput="lrCalc()"></div>' +
-                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-dtot-ltol" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-dtot-utol" data-lr-tab="1" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-dtot-ltol" data-lr-tab="1" oninput="lrCalc()"></div>' +
                   '</div>' +
                 '</div>' +
                 '<div class="lr-rangeline">範圍：<span class="lr-out lr-dtot-range">—</span></div>' +
@@ -8561,6 +8575,7 @@ include __DIR__ . '/_gear_tool_ui.php';
               '<div class="lr-blk-body">' +
                 '<select class="lr-dir" data-lr-tab="1" onchange="lrDirSelectChanged(this)">' +
                   '<option value="">－請選擇方向－</option>' +
+                  '<option value="none">無影響（研磨不影響此尺寸）</option>' +
                   '<option value="inc">尺寸會增加</option>' +
                   '<option value="dec">尺寸會減少</option>' +
                 '</select>' +
@@ -8688,7 +8703,9 @@ include __DIR__ . '/_gear_tool_ui.php';
         var dir  = row.querySelector('.lr-dir').value;
         var gRaw = lrNum(row, '.lr-gmag');
         var gmag = (gRaw === null) ? null : Math.abs(gRaw);
-        var delta = (dir && gmag !== null) ? ((dir === 'inc') ? gmag : -gmag) : null;
+        var delta = null;
+        if (dir === 'none') delta = 0; // 無影響：增減量欄位無論填什麼都不採用
+        else if (dir && gmag !== null) delta = (dir === 'inc') ? gmag : -gmag;
         var turnLow = null, turnHigh = null;
         if (lowF !== null && delta !== null) { turnLow = lowF - delta; turnHigh = highF - delta; }
         var tUtol = lrNum(row, '.lr-tutol');
