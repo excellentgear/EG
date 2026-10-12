@@ -2016,7 +2016,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
-                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面最上方是橫跨全寬的<b>「總長」</b>區，底下依序是<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一欄後其餘會自動往前遞補保持連續），每欄內①②③④<b>直向排列</b>（欄位較窄，同一畫面能並排顯示更多尺寸），標題列「<b>＋新增尺寸</b>」（清除鈕左側，特意留一段距離避免誤按）一次加一欄。四格依序：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm，<b>預設帶入 0.05</b>，仍可自行改），方向多一個<b>「無影響」</b>選項給完全不受這次研磨影響的尺寸（等於增減量 0，不理會欄位裡填了什麼）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，選「增加」或「減少」時配對欄自動改成相反方向、增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；<b>選「無影響」不會牽動配對欄，也不會被配對欄牽動</b>）；<b>還沒選方向時③④欄會提示「暫時算不出來」</b>，提醒要選一下方向，③<b>建議車床尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值（公差預設帶入 <strong>±0.02</strong>，可自行改），④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。最上方的<b>「總長」會自動把目前全部欄位加總</b>（不限兩欄，加多少欄就算多少欄，標題會顯示「目前共 N 欄」），可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示全部加總的總長時填寫其基準值與上下公差），並顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，各欄③的建議基準值會自動依總長公差重新調整</b>（讓全部欄位加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），<b>每一欄都填了手動驗算值時</b>也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，③④要調整時再自行點進去；全程<b>填寫即時自動算，不必另外按計算</b>，「清除」恢復成預設的尺寸A／B兩欄重填（連同總長區的原圖總長尺寸輸入一併清空）。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面最上方是橫跨全寬的<b>「總長」</b>區，底下依序是<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一欄後其餘會自動往前遞補保持連續），每欄內①②③④<b>直向排列</b>（欄位較窄，同一畫面能並排顯示更多尺寸），標題列「<b>＋新增尺寸</b>」（清除鈕左側，特意留一段距離避免誤按）一次加一欄。四格依序：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm，<b>預設帶入 0.05</b>，仍可自行改），方向多一個<b>「無影響」</b>選項給完全不受這次研磨影響的尺寸（等於增減量 0，不理會欄位裡填了什麼）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，選「增加」或「減少」時配對欄自動改成相反方向、增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；<b>選「無影響」不會牽動配對欄，也不會被配對欄牽動</b>）；<b>還沒選方向時③④欄會提示「暫時算不出來」</b>，提醒要選一下方向，③<b>建議車床尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值，<b>上下公差也自動算出、不用手填</b>：最上方一句話可設「建議車床公差目標」（預設 ±0.02mm），每一欄優先套用這個目標值，<b>這一欄的安全範圍比目標窄時會自動縮小到剛好符合</b>（上下可以不對稱，例如貼著安全範圍邊界時其中一側縮到 0），並標示實際縮小到多少，④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。最上方的<b>「總長」會自動把目前全部欄位加總</b>（不限兩欄，加多少欄就算多少欄，標題會顯示「目前共 N 欄」），可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示全部加總的總長時填寫其基準值與上下公差），並顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，各欄③的建議基準值會自動依總長公差重新調整</b>（讓全部欄位加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），<b>每一欄都填了手動驗算值時</b>也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，④要調整時再自行點進去（③已全部自動算出不可手填）；全程<b>填寫即時自動算，不必另外按計算</b>，「清除」恢復成預設的尺寸A／B兩欄重填（連同總長區的原圖總長尺寸輸入一併清空）。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8462,6 +8462,9 @@ include __DIR__ . '/_gear_tool_ui.php';
     }
     .lr-utol:focus, .lr-ltol:focus, .lr-tutol:focus, .lr-tltol:focus,
     .lr-dtot-utol:focus, .lr-dtot-ltol:focus { outline:none; background:#fff; border-color:#8a5a2b; }
+    /* ③的上下公差已改自動算出（套用上方公差目標，安全範圍不夠寬時自動縮小），不給手動輸入，
+       外觀比照 .lr-no-box 的「自動算出」配色，跟還要手填的灰底欄位區分開來 */
+    .lr-auto-fld, .lr-auto-fld:focus { background:#f3e4c8; color:#8a5a2b; font-weight:700; cursor:default; }
     .lr-utol::-webkit-outer-spin-button,.lr-utol::-webkit-inner-spin-button,
     .lr-ltol::-webkit-outer-spin-button,.lr-ltol::-webkit-inner-spin-button,
     .lr-tutol::-webkit-outer-spin-button,.lr-tutol::-webkit-inner-spin-button,
@@ -8503,6 +8506,7 @@ include __DIR__ . '/_gear_tool_ui.php';
     </div>
     <div id="lr-tool-body">
         <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；上方「總長」會<strong>自動把目前所有欄位加總</strong>（不限兩欄，加多少欄就算多少欄）；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。填寫即時自動算，不必另外按計算。（研磨會移除材料，同一研磨面常讓相鄰兩欄一側縮短、另一側增長，方向請各自選）</div>
+        <div class="lr-note" style="background:#fff;border-color:#d8c7b0;">建議車床公差目標：±<input type="number" step="any" id="lr-default-tol" value="0.02" min="0" oninput="lrCalc()" style="width:56px;display:inline-block;font-family:Consolas,monospace;text-align:center;border:1px solid #c9b79a;border-radius:3px;padding:2px;">mm——<strong>各欄③的上下公差自動算出</strong>，優先套用這個目標值，這一欄的安全範圍不夠寬時會自動縮小到剛好符合（不會超出），並標示實際縮小到多少</div>
         <div id="lr-total" class="lr-pair-total">
             <div class="lr-pair-total-row-top">
                 <div class="lr-pair-total-dtot">
@@ -8605,8 +8609,8 @@ include __DIR__ . '/_gear_tool_ui.php';
                 '<div class="lr-dr">' +
                   '<span class="lr-no-box lr-sug-nom">—</span>' +
                   '<div class="lr-tc">' +
-                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-tutol" oninput="lrCalc()" placeholder="如 0.02"></div>' +
-                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-tltol" oninput="lrCalc()" placeholder="如 -0.02"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-tutol lr-auto-fld" readonly tabindex="-1" title="自動算出，套用上方「建議車床公差目標」；這一欄安全範圍不夠寬時自動縮小"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-tltol lr-auto-fld" readonly tabindex="-1" title="自動算出，套用上方「建議車床公差目標」；這一欄安全範圍不夠寬時自動縮小"></div>' +
                   '</div>' +
                 '</div>' +
                 '<div class="lr-rangeline">安全範圍：<span class="lr-out lr-safe-range">—</span></div>' +
@@ -8640,11 +8644,10 @@ include __DIR__ . '/_gear_tool_ui.php';
         var div = document.createElement('div');
         div.innerHTML = LR_ROW_HTML;
         var row = div.firstElementChild;
-        // 建議車床公差預設 ±0.02、研磨增減量預設 0.05（常用值，仍可自行改；
-        // 增減量仍要自己選方向才算得出建議值，②區的提示會一直講到選了方向為止）
-        var tu = row.querySelector('.lr-tutol'); if (tu) tu.value = '0.02';
-        var tl = row.querySelector('.lr-tltol'); if (tl) tl.value = '-0.02';
-        var gm = row.querySelector('.lr-gmag');  if (gm) gm.value = '0.05';
+        // ③的上下公差已改自動算出（見 lrApplySuggestedNom），這裡不用再預填；
+        // 研磨增減量預設 0.05（常用值，仍可自行改；仍要自己選方向才算得出建議值，
+        // ②區的提示會一直講到選了方向為止）
+        var gm = row.querySelector('.lr-gmag'); if (gm) gm.value = '0.05';
         return row;
     }
 
@@ -8759,23 +8762,42 @@ include __DIR__ . '/_gear_tool_ui.php';
     }
 
     // 把算好的建議車床基準值寫進③欄，並檢查使用者填的車床公差有沒有超出這一欄自己的安全範圍。
+    // 讀「建議車床公差目標」設定（±多少，mm）；沒設或填了不合理的值一律退回 0.02。
+    function lrDefaultTol() {
+        var el = document.getElementById('lr-default-tol');
+        var v = el ? parseFloat(el.value) : NaN;
+        return (isNaN(v) || v < 0) ? 0.02 : v;
+    }
+
+    // ③上下公差一律自動算出（不給手動輸入）：優先套用「建議車床公差目標」，這一欄的安全範圍
+    // 比目標窄時，自動依建議基準值 sugNom 在範圍內還剩多少空間（上下可不對稱）縮小到剛好符合，
+    // 絕不會讓研磨後的結果超出成品公差。
     function lrApplySuggestedNom(row, st, sugNom) {
         var sugEl = row.querySelector('.lr-sug-nom');
         if (sugEl) sugEl.textContent = (sugNom !== null) ? lrFmt(sugNom) : '—';
+
+        var tuEl = row.querySelector('.lr-tutol'), tlEl = row.querySelector('.lr-tltol');
         var warnEl = row.querySelector('.lr-blk-sug .lr-warn');
-        if (warnEl) {
-            warnEl.className = 'lr-warn';
-            warnEl.textContent = '';
-            if (sugNom !== null && st.turnLow !== null && (st.tUtol !== null || st.tLtol !== null)) {
-                var tu = (st.tUtol === null) ? 0 : st.tUtol;
-                var tl = (st.tLtol === null) ? 0 : st.tLtol;
-                var candLow  = sugNom + Math.min(tu, tl);
-                var candHigh = sugNom + Math.max(tu, tl);
-                if (candLow < st.turnLow - 1e-9 || candHigh > st.turnHigh + 1e-9) {
-                    warnEl.className = 'lr-warn show';
-                    warnEl.textContent = '⚠ 填的公差超出安全範圍（' + lrFmtRange(st.turnLow, st.turnHigh) + '），研磨後可能不符成品公差，建議縮小公差或改用建議基準值。';
-                }
-            }
+        if (warnEl) { warnEl.className = 'lr-warn'; warnEl.textContent = ''; }
+
+        if (sugNom === null || st.turnLow === null) {
+            if (tuEl) tuEl.value = ''; if (tlEl) tlEl.value = '';
+            return;
+        }
+
+        var desired  = lrDefaultTol();
+        var availUp   = Math.max(0, st.turnHigh - sugNom);
+        var availDown = Math.max(0, sugNom - st.turnLow);
+        var newTu = Math.min(desired, availUp);
+        var newTl = -Math.min(desired, availDown);
+        newTu = Math.round(newTu * 1000) / 1000;
+        newTl = Math.round(newTl * 1000) / 1000;
+        if (tuEl) tuEl.value = lrFmt(newTu);
+        if (tlEl) tlEl.value = lrFmt(newTl);
+
+        if (warnEl && (newTu + 1e-9 < desired || -newTl + 1e-9 < desired)) {
+            warnEl.className = 'lr-warn show';
+            warnEl.textContent = '⚠ 這一欄的安全範圍（' + lrFmtRange(st.turnLow, st.turnHigh) + '）比公差目標 ±' + lrFmt(desired) + ' 窄，已自動縮小為 +' + lrFmt(newTu) + ' / ' + lrFmt(newTl) + '。';
         }
     }
 
