@@ -357,7 +357,7 @@ $pdo = $db->getPDO();
 // ※ 版本號一旦被任何一次頁面載入寫進 system_settings 就不可以再重複使用同一個值——
 //   那會讓 $_mdm_skip_migration=true、整段 migration 被靜默跳過（本次開發中途實際踩到：
 //   先用了 20261012_01、頁面被開過、改回舊號後再改回同一號，結果新表完全沒建卻不報錯）。
-define('MDM_MIGRATION_VERSION', '20261012_02');   // 2026-10-12 「整組」改成獨立主檔(d_setting_part_set，多成員、同一料號可屬多組)，取代 d_setting_jig_set
+define('MDM_MIGRATION_VERSION', '20261012_04');   // 2026-10-12（三次）整組的使用機台可改綁「機台種類(製程大類)／機型」，不限定機台編號
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -674,13 +674,32 @@ try {
         INDEX idx_set_id (set_id),
         INDEX idx_d_id (d_id)
     ) COMMENT='整組成員(多對多)：同一個料號可以同時屬於好幾組'");
+    /**
+     * d_setting_part_set_machine — 整組的「使用機台」（選填）。
+     * 2026-10-12（三次）使用者：「挑選機台應該要可以挑選機台類別，不用限制綁訂到機台編號」
+     * ——很多整組只是認定「哪一類機台可以用」，不該也不必限定到某一台。故比照料號表單既有的
+     * 三種範圍（機台編號／機台種類／機型）：
+     *   target_kind=machine  → target_id = machine_list.machine_id
+     *   target_kind=category → target_id = process_type.process_type_id（製程大類本身）
+     *   target_kind=model    → target_text = machine_list.machine_model（機型是自由文字、沒有主檔 id，
+     *                          與 d_setting_machine_model_map 同一種處理）
+     * target_id/target_text 用 NOT NULL DEFAULT 而不是 NULL：MySQL 的 UNIQUE 不會擋 NULL 重複，
+     * 留 NULL 會讓同一組可以重複掛同一個機型。
+     */
+    try {
+        $chkPsm = $pdo->query("SHOW COLUMNS FROM d_setting_part_set_machine LIKE 'target_kind'")->fetch();
+        if (!$chkPsm) $pdo->exec("DROP TABLE IF EXISTS d_setting_part_set_machine");
+    } catch (Exception $e) {}
     $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_part_set_machine (
-        id         INT AUTO_INCREMENT PRIMARY KEY              COMMENT '主鍵',
-        set_id     INT NOT NULL                                COMMENT '所屬整組，FK → d_setting_part_set.set_id',
-        machine_id INT NOT NULL                                COMMENT '機台，FK → machine_list.machine_id',
-        UNIQUE KEY uk_set_machine (set_id, machine_id),
+        id          INT AUTO_INCREMENT PRIMARY KEY             COMMENT '主鍵',
+        set_id      INT NOT NULL                               COMMENT '所屬整組，FK → d_setting_part_set.set_id',
+        target_kind ENUM('machine','category','model') NOT NULL DEFAULT 'machine' COMMENT 'machine=特定機台 category=機台種類(製程大類) model=機型',
+        target_id   INT NOT NULL DEFAULT 0                     COMMENT 'machine→machine_id；category→process_type_id；model→0',
+        target_text VARCHAR(100) NOT NULL DEFAULT ''           COMMENT 'model→機型文字(machine_list.machine_model)；其餘為空',
+        sort_order  INT NOT NULL DEFAULT 0                     COMMENT '顯示排序',
+        UNIQUE KEY uk_set_target (set_id, target_kind, target_id, target_text),
         INDEX idx_set_id (set_id)
-    ) COMMENT='整組↔使用機台對應(選填，一組可綁多台)'");
+    ) COMMENT='整組↔使用機台對應(選填)：可綁特定機台、機台種類(製程大類)或機型'");
     /* 舊 d_setting_jig_set（一支治具一筆配置）搬進新模型後整張刪除：owner 治具與使用料號
        各變成一個成員，自訂名稱變成組名，機台原樣搬過去。上線以來只有測試期間的個位數筆
        資料，兩套表並存只會讓之後的人不知道該讀哪一張，故搬完就 DROP（鐵律4）。 */
@@ -1793,16 +1812,29 @@ function eg_part_set_build(PDO $pdo, array $setIds): array {
                                    'sub_type_name' => $r['sub_type_name'], 'client_name' => $r['client_name'],
                                    'is_jig' => (int)$r['is_jig']];
     }
-    // 使用機台（批次，選填）
-    $mq = $pdo->prepare("SELECT sm.set_id, sm.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(ml.field_no,'') AS field_no
-                         FROM d_setting_part_set_machine sm LEFT JOIN machine_list ml ON ml.machine_id = sm.machine_id
-                         WHERE sm.set_id IN ($ph) ORDER BY sm.id");
+    // 使用機台（批次，選填）——三種範圍：特定機台／機台種類(製程大類)／機型
+    $mq = $pdo->prepare("SELECT sm.set_id, sm.target_kind, sm.target_id, sm.target_text,
+                                COALESCE(ml.machine,'') AS machine_name, COALESCE(ml.field_no,'') AS field_no,
+                                COALESCE(pt.process_type,'') AS ptype_name
+                         FROM d_setting_part_set_machine sm
+                         LEFT JOIN machine_list ml ON sm.target_kind='machine' AND ml.machine_id = sm.target_id
+                         LEFT JOIN process_type pt ON sm.target_kind='category' AND pt.process_type_id = sm.target_id
+                         WHERE sm.set_id IN ($ph) ORDER BY sm.sort_order, sm.id");
     $mq->execute($setIds);
     foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $sid = (int)$r['set_id'];
         if (!isset($out[$sid])) continue;
-        $out[$sid]['machines'][] = ['machine_id' => (int)$r['machine_id'],
-                                    'label' => $r['machine_name'] . ($r['field_no'] ? ' [' . $r['field_no'] . ']' : '')];
+        $kind = (string)$r['target_kind'];
+        if ($kind === 'category') {
+            $label = ($r['ptype_name'] !== '' ? $r['ptype_name'] : ('大類#' . (int)$r['target_id'])) . '（整類）';
+        } elseif ($kind === 'model') {
+            $label = $r['target_text'] . '（機型）';
+        } else {
+            $label = $r['machine_name'] . ($r['field_no'] ? ' [' . $r['field_no'] . ']' : '');
+            if (trim($label) === '') $label = '機台#' . (int)$r['target_id'];
+        }
+        $out[$sid]['machines'][] = ['target_kind' => $kind, 'target_id' => (int)$r['target_id'],
+                                    'target_text' => (string)$r['target_text'], 'label' => $label];
     }
     // 被幾個料號設為專用/通用治具（刪除前要提醒，畫面也要看得出這一組有沒有在用）
     try {
@@ -4123,9 +4155,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $w2[] = "(s.set_name LIKE ?
                               OR EXISTS (SELECT 1 FROM d_setting_part_set_item i2 JOIN d_setting d2 ON d2.d_id=i2.d_id
                                          WHERE i2.set_id=s.set_id AND (d2.D_Setting_Id LIKE ? OR d2.Spec_No LIKE ?))
-                              OR EXISTS (SELECT 1 FROM d_setting_part_set_machine m2 LEFT JOIN machine_list ml2 ON ml2.machine_id=m2.machine_id
-                                         WHERE m2.set_id=s.set_id AND (ml2.machine LIKE ? OR ml2.field_no LIKE ?)))";
-                    for ($i = 0; $i < 5; $i++) $p2[] = "%$kw%";
+                              OR EXISTS (SELECT 1 FROM d_setting_part_set_machine m2
+                                         LEFT JOIN machine_list ml2 ON m2.target_kind='machine' AND ml2.machine_id=m2.target_id
+                                         LEFT JOIN process_type pt2 ON m2.target_kind='category' AND pt2.process_type_id=m2.target_id
+                                         WHERE m2.set_id=s.set_id AND (ml2.machine LIKE ? OR ml2.field_no LIKE ? OR pt2.process_type LIKE ? OR m2.target_text LIKE ?)))";
+                    for ($i = 0; $i < 7; $i++) $p2[] = "%$kw%";
                 }
                 if ($spec !== '') {
                     $w2[] = "EXISTS (SELECT 1 FROM d_setting_part_set_item i3 JOIN d_setting d3 ON d3.d_id=i3.d_id WHERE i3.set_id=s.set_id AND d3.Spec_No LIKE ?)";
@@ -4179,18 +4213,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $member = intval($_POST['member_d_id'] ?? 0);
             $page   = max(1, intval($_POST['page'] ?? 1));
             $per    = min(100, max(1, intval($_POST['per'] ?? 20)));
+            // 篩選（2026-10-12 使用者回報「整組分頁沒有任何篩選可以用」）
+            $fCust  = trim($_POST['f_customer'] ?? '');   // 客戶編號：該組有成員屬於這家客戶
+            $fSub   = intval($_POST['f_sub_type'] ?? 0);  // 工件小類：該組有成員屬於這個小類
+            $fMach  = trim($_POST['f_machine'] ?? '');    // has=有綁機台 / none=沒綁
+            $fUsed  = trim($_POST['f_used'] ?? '');       // used=被當治具用 / unused=沒被用
+            $fJig   = trim($_POST['f_jig'] ?? '');        // has=組裡有治具 / none=沒有治具
             $w = ['1=1']; $p = [];
             if ($member > 0) {
                 $w[] = "EXISTS (SELECT 1 FROM d_setting_part_set_item mi WHERE mi.set_id=s.set_id AND mi.d_id=?)";
                 $p[] = $member;
             }
+            if ($fCust !== '') {
+                $w[] = "EXISTS (SELECT 1 FROM d_setting_part_set_item ci JOIN d_setting cd ON cd.d_id=ci.d_id WHERE ci.set_id=s.set_id AND cd.Customer_Id=?)";
+                $p[] = $fCust;
+            }
+            if ($fSub > 0) {
+                $w[] = "EXISTS (SELECT 1 FROM d_setting_part_set_item si JOIN d_setting sd ON sd.d_id=si.d_id WHERE si.set_id=s.set_id AND sd.workpiece_sub_type_id=?)";
+                $p[] = $fSub;
+            }
+            if ($fJig === 'has' || $fJig === 'none') {
+                $ex = "EXISTS (SELECT 1 FROM d_setting_part_set_item ji JOIN d_setting jd ON jd.d_id=ji.d_id
+                               JOIN dict_workpiece_type jt ON jt.type_code=jd.Type AND jt.is_jig_type=1
+                               WHERE ji.set_id=s.set_id)";
+                $w[] = ($fJig === 'has') ? $ex : "NOT $ex";
+            }
+            if ($fMach === 'has' || $fMach === 'none') {
+                $ex = "EXISTS (SELECT 1 FROM d_setting_part_set_machine xm WHERE xm.set_id=s.set_id)";
+                $w[] = ($fMach === 'has') ? $ex : "NOT $ex";
+            }
+            if ($fUsed === 'used' || $fUsed === 'unused') {
+                $ex = "EXISTS (SELECT 1 FROM d_setting_jig_map xj WHERE xj.target_kind='set' AND xj.target_id=s.set_id)";
+                $w[] = ($fUsed === 'used') ? $ex : "NOT $ex";
+            }
             if ($kw !== '') {
                 $w[] = "(s.set_name LIKE ?
                          OR EXISTS (SELECT 1 FROM d_setting_part_set_item i2 JOIN d_setting d2 ON d2.d_id=i2.d_id
                                     WHERE i2.set_id=s.set_id AND (d2.D_Setting_Id LIKE ? OR d2.Spec_No LIKE ?))
-                         OR EXISTS (SELECT 1 FROM d_setting_part_set_machine m2 LEFT JOIN machine_list ml2 ON ml2.machine_id=m2.machine_id
-                                    WHERE m2.set_id=s.set_id AND (ml2.machine LIKE ? OR ml2.field_no LIKE ?)))";
-                for ($i = 0; $i < 5; $i++) $p[] = "%$kw%";
+                         OR EXISTS (SELECT 1 FROM d_setting_part_set_machine m2
+                                    LEFT JOIN machine_list ml2 ON m2.target_kind='machine' AND ml2.machine_id=m2.target_id
+                                    LEFT JOIN process_type pt2 ON m2.target_kind='category' AND pt2.process_type_id=m2.target_id
+                                    WHERE m2.set_id=s.set_id AND (ml2.machine LIKE ? OR ml2.field_no LIKE ? OR pt2.process_type LIKE ? OR m2.target_text LIKE ?)))";
+                for ($i = 0; $i < 7; $i++) $p[] = "%$kw%";
             }
             $where = implode(' AND ', $w);
             $cntSt = $pdo->prepare("SELECT COUNT(*) FROM d_setting_part_set s WHERE $where");
@@ -4205,6 +4269,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($setIds as $sid) { if (isset($data[$sid])) $rows[] = $data[$sid]; }
             echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'page'=>$page,'per'=>$per,
                               'total_pages'=>max(1,(int)ceil($total/$per))], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // 整組分頁的篩選下拉選項（2026-10-12）。客戶／工件小類**只列「真的有出現在某一組裡」的**
+    // ——全部客戶有 980 家、小類也不少，整份列出來使用者還是找不到；這裡的候選本來就只需要
+    // 涵蓋得到的範圍（挑一個完全沒有整組的客戶，篩出來一定是空的，那個選項沒有意義）。
+    if ($_POST['action'] === 'part_set_filter_options') {
+        try {
+            $cs = $pdo->query("SELECT DISTINCT c.customer_id, c.customer
+                               FROM d_setting_part_set_item i
+                               JOIN d_setting d ON d.d_id = i.d_id
+                               JOIN customer_list c ON c.customer_id = d.Customer_Id
+                               ORDER BY c.customer")->fetchAll(PDO::FETCH_ASSOC);
+            // sort_order 一定要一起 SELECT：DISTINCT 之下 ORDER BY 不在 SELECT 清單的欄位，
+            // MySQL 會丟 3065 整支 API 失敗（前端只會看到「選項是空的」，看不出有錯）。
+            $ts = $pdo->query("SELECT DISTINCT st.sub_type_id, st.sub_type_name, st.sort_order
+                               FROM d_setting_part_set_item i
+                               JOIN d_setting d ON d.d_id = i.d_id
+                               JOIN dict_workpiece_sub_type st ON st.sub_type_id = d.workpiece_sub_type_id
+                               ORDER BY st.sort_order, st.sub_type_id")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success'=>true,'customers'=>$cs,'sub_types'=>$ts], JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -4227,11 +4313,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $setId   = intval($_POST['set_id'] ?? 0);
             $setName = trim($_POST['set_name'] ?? '');
             $dIds    = json_decode($_POST['d_ids'] ?? '[]', true) ?: [];
-            // 沒送 machine_ids＝這次沒動機台，維持原狀；送了（含空陣列＝刻意清空）才覆蓋（鐵律8）
-            $hasMach = array_key_exists('machine_ids', $_POST);
-            $machIds = $hasMach ? (json_decode($_POST['machine_ids'], true) ?: []) : [];
-            $dIds    = array_values(array_unique(array_filter(array_map('intval', $dIds), fn($v) => $v > 0)));
-            $machIds = array_values(array_unique(array_filter(array_map('intval', $machIds), fn($v) => $v > 0)));
+            // 沒送 machines＝這次沒動機台，維持原狀；送了（含空陣列＝刻意清空）才覆蓋（鐵律8）。
+            // 每一筆形狀 {target_kind:'machine'|'category'|'model', target_id:int, target_text:string}
+            $hasMach  = array_key_exists('machines', $_POST);
+            $machRaw  = $hasMach ? (json_decode($_POST['machines'], true) ?: []) : [];
+            $dIds     = array_values(array_unique(array_filter(array_map('intval', $dIds), fn($v) => $v > 0)));
+            $machRows = [];
+            $seenMach = [];
+            foreach ($machRaw as $m) {
+                $k = (string)($m['target_kind'] ?? 'machine');
+                if (!in_array($k, ['machine','category','model'], true)) continue;
+                $tid = intval($m['target_id'] ?? 0);
+                $txt = trim((string)($m['target_text'] ?? ''));
+                if ($k === 'model') { $tid = 0; if ($txt === '') continue; $txt = mb_substr($txt, 0, 100, 'UTF-8'); }
+                else { $txt = ''; if ($tid <= 0) continue; }
+                $key = $k . '|' . $tid . '|' . $txt;
+                if (isset($seenMach[$key])) continue;
+                $seenMach[$key] = true;
+                $machRows[] = ['kind' => $k, 'id' => $tid, 'text' => $txt];
+            }
             if (!$dIds) throw new Exception('請至少加入一個成員（治具或料號都可以）');
             if (count($dIds) > 50) throw new Exception('一組最多 50 個成員');
             if (mb_strlen($setName, 'UTF-8') > 150) throw new Exception('組名最多 150 個字');
@@ -4262,9 +4362,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach (array_values($dIds) as $k => $did) $insI->execute([$setId, $did, $k]);
             if ($hasMach) {
                 $pdo->prepare("DELETE FROM d_setting_part_set_machine WHERE set_id=?")->execute([$setId]);
-                if ($machIds) {
-                    $insM = $pdo->prepare("INSERT IGNORE INTO d_setting_part_set_machine (set_id, machine_id) VALUES (?,?)");
-                    foreach ($machIds as $mid) $insM->execute([$setId, $mid]);
+                if ($machRows) {
+                    $insM = $pdo->prepare("INSERT IGNORE INTO d_setting_part_set_machine (set_id, target_kind, target_id, target_text, sort_order) VALUES (?,?,?,?,?)");
+                    foreach ($machRows as $k => $m) $insM->execute([$setId, $m['kind'], $m['id'], $m['text'], $k]);
                 }
             }
             $pdo->commit();
@@ -9110,6 +9210,34 @@ body { background:#F6F1EA; }
                 <span id="ps-count" style="font-size:12px;color:#888;"></span>
                 <div id="ps-pager" style="display:flex;gap:4px;align-items:center;"></div>
             </div>
+            <!-- 篩選列（2026-10-12 使用者回報「整組分頁沒有任何篩選可以用」）。
+                 客戶／工件小類是「該組有任一成員符合」就算命中——整組本來就可能混不同客戶的件。
+                 長清單下拉一律掛 data-eg-filter 可打字篩選（UI 規則）。 -->
+            <div class="action-bar" style="flex-wrap:wrap;gap:6px;align-items:center;padding-top:0;">
+                <span style="font-size:12px;color:#888;">篩選</span>
+                <select id="ps-f-customer" class="form-control input-sm" style="width:190px;" data-eg-filter="輸入客戶名稱或編號篩選…" onchange="psLoad(1)">
+                    <option value="">全部客戶</option>
+                </select>
+                <select id="ps-f-subtype" class="form-control input-sm" style="width:150px;" data-eg-filter="輸入工件小類篩選…" onchange="psLoad(1)">
+                    <option value="">全部工件小類</option>
+                </select>
+                <select id="ps-f-jig" class="form-control input-sm" style="width:130px;" onchange="psLoad(1)">
+                    <option value="">含不含治具</option>
+                    <option value="has">組裡有治具</option>
+                    <option value="none">組裡沒有治具</option>
+                </select>
+                <select id="ps-f-machine" class="form-control input-sm" style="width:130px;" onchange="psLoad(1)">
+                    <option value="">有無綁機台</option>
+                    <option value="has">已綁機台</option>
+                    <option value="none">未綁機台</option>
+                </select>
+                <select id="ps-f-used" class="form-control input-sm" style="width:150px;" onchange="psLoad(1)">
+                    <option value="">有沒有被當治具用</option>
+                    <option value="used">已被料號當治具</option>
+                    <option value="unused">還沒有人用</option>
+                </select>
+                <button class="btn btn-default btn-sm" onclick="psClearFilters()" title="清除全部篩選與關鍵字"><i class="fa fa-eraser"></i> 清除</button>
+            </div>
             <div style="font-size:12px;color:#888;padding:0 2px 8px;">
                 一組裡可以同時放治具與一般料號；<b>同一個料號可以屬於很多組</b>（共用底板就是這種情況）。
                 組名留白＝依成員自動命名，成員換了就跟著變；填了字就固定用你填的。
@@ -9614,7 +9742,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div></div></div>
 <!-- 整組：新增／編輯（2026-10-12）。成員可多選、同一個料號可以同時出現在別的組裡；
      組名留白＝依成員自動命名（不存快照，成員改了就跟著變）。 -->
-<div class="modal fade" id="partSetModal" tabindex="-1" style="z-index:1057;"><div class="modal-dialog" style="width:820px;max-width:96vw;"><div class="modal-content">
+<div class="modal fade" id="partSetModal" tabindex="-1" style="z-index:1055;"><div class="modal-dialog" style="width:820px;max-width:96vw;"><div class="modal-content">
 <div class="modal-header" style="background:#2A3F54;color:#fff;padding:10px 16px;"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1;">&times;</button><h4 class="modal-title" id="psModal-title" style="font-size:14px;"><i class="fa fa-cubes"></i> 新增整組</h4></div>
 <div class="modal-body" style="padding:14px;">
     <input type="hidden" id="ps-edit-id" value="0">
@@ -9638,10 +9766,15 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
         </div>
     </div>
     <div class="form-group" style="margin-bottom:4px;">
-        <label style="font-size:12px;">使用機台 <span style="font-weight:normal;color:#aaa;font-size:11px;">（選填，可多台）</span></label>
-        <div style="display:flex;gap:6px;align-items:center;">
-            <span id="ps-mach-chips" style="font-size:12px;flex:1;"></span>
-            <button type="button" class="btn btn-xs btn-default" onclick="psPickMachine()"><i class="fa fa-plus"></i> 挑選機台</button>
+        <label style="font-size:12px;">使用機台
+            <span style="font-weight:normal;color:#aaa;font-size:11px;">（選填；可以只指定「哪一類機台」，不必綁到特定機台編號）</span></label>
+        <div style="border:1px solid #E4D3BC;border-radius:4px;background:#FFF9F0;padding:8px 10px;">
+            <div id="ps-mach-chips" style="font-size:12px;min-height:20px;"></div>
+            <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-xs btn-default" onclick="psPickMachine('category')" title="只指定製程大類，不限定是哪一台"><i class="fa fa-plus"></i> 機台種類</button>
+                <button type="button" class="btn btn-xs btn-default" onclick="psPickMachine('model')" title="指定機型（如 HGH250），不限定是哪一台"><i class="fa fa-plus"></i> 機型</button>
+                <button type="button" class="btn btn-xs btn-default" onclick="psPickMachine('machine')" title="指定到特定那一台機台編號"><i class="fa fa-plus"></i> 機台編號</button>
+            </div>
         </div>
     </div>
 </div>
@@ -9653,7 +9786,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div></div></div>
 
 <!-- 把目前這支料號「加入整組」：挑一個既有的組，或當場建一個新的 -->
-<div class="modal fade" id="partSetPickModal" tabindex="-1" style="z-index:1057;"><div class="modal-dialog" style="width:720px;max-width:96vw;"><div class="modal-content">
+<div class="modal fade" id="partSetPickModal" tabindex="-1" style="z-index:1055;"><div class="modal-dialog" style="width:720px;max-width:96vw;"><div class="modal-content">
 <div class="modal-header" style="background:#2A3F54;color:#fff;padding:10px 16px;"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1;">&times;</button><h4 class="modal-title" style="font-size:14px;"><i class="fa fa-cubes"></i> 加入整組</h4></div>
 <div class="modal-body" style="padding:14px;">
     <div style="font-size:12px;color:#888;margin-bottom:8px;">挑一個既有的整組把這支料號加進去（同一支料號可以同時屬於很多組）；或按下方「建立新的一組」。</div>
@@ -12235,7 +12368,7 @@ function switchTab(tab, btn) {
     if (tab==='parts')     loadParts(1);
     if (tab==='customers') loadCustomers(1);
     if (tab==='makers')    loadMakers(1);
-    if (tab==='partset')   psLoad(1);
+    if (tab==='partset')   { psLoadFilterOptions(); psLoad(1); }
     if (tab==='process')   loadProcessList();
     if (tab==='history')  { histSetToday(); loadHistory(1); }
 }
@@ -15934,6 +16067,15 @@ function mpkTitleOf(mode)   { return { machine:'挑選機台（機台編號）',
 // opts.sel 選填：預先勾選的既有清單（格式同 MPK.sel 的值），用於「重開跳窗時帶出目前已選」。
 function mpkOpen(mode, opts) {
     opts = opts || {};
+    // 疊在目前最上層的跳窗之上。本頁各跳窗的 z-index 是各自寫死的（1050/1055/1056/1060…），
+    // 機台挑選器可能從料號表單開、也可能從「新增整組」跳窗裡開，寫死一個固定值遲早又被
+    // 某一層壓在後面（2026-10-12 使用者回報「挑選機台跑到新增整組後面，導致無法選擇」）。
+    (function(){
+        var top = 1050;
+        $('.modal:visible').each(function(){ var z = parseInt($(this).css('z-index'), 10) || 0; if (z > top) top = z; });
+        var el = document.getElementById('machinePickModal');
+        if (el) el.style.zIndex = Math.max(1056, top + 5);
+    })();
     MPK = { mode:mode, groups:[], sel:{}, order:[], cat:null, onApply:opts.onApply||null };
     if (opts.sel) {
         $.each(opts.sel, function(k,s){ MPK.sel[k] = s; MPK.order.push(k); });
@@ -16116,23 +16258,69 @@ function mpkLoadFromPart(d) {
     ['machine','category','model'].forEach(function(m){ mpkRenderList(m); mpkSync(m); });
 }
 
+/* 疊第二／三層跳窗的安全網（Bootstrap 3 已知缺陷，照抄 views/QA/correction_order.php）：
+   bootstrap.min.js 的 hideModal() 無條件 removeClass('modal-open')，而 overflow-y:auto 只寫在
+   `.modal-open .modal` 底下——所以在跳窗 A 上開跳窗 B、B 一關掉，**還開著的 A 從此捲不動**。
+   本頁現在會疊到三層（料號表單 → 新增整組 → 挑選機台），非有這一段不可。 */
+$(document).on('hidden.bs.modal', '.modal', function(){
+    if ($('.modal.in').length) { $('body').addClass('modal-open'); }
+    else { $('.modal-backdrop').remove(); $('body').removeClass('modal-open').css('padding-right',''); }
+});
+
 // ════════ 「整組」分頁（d_setting_part_set 主檔）════════════════════════════════
 // 2026-10-12 使用者交辦：「可以設定哪幾個治具或是哪幾個料號是一整組的，但不限定一個料號
 // 只能被別的料號設定為整組一次」。整組是獨立主檔，成員多對多，同一個料號可屬於多組。
 var PS_PAGE = 1, PS_KW = '', PS_TIMER = null;
-var PS_EDIT = { setId:0, members:[], machineIds:null, machineLabels:[] };  // machineIds=null＝這次沒動機台
+var PS_EDIT = { setId:0, members:[], machines:null };   // machines=null＝這次沒動機台（存檔時就不送，後端維持原狀）
 var PSP_CB = null, PSP_DID = 0;   // 「加入整組」跳窗：完成後的 callback 與目標料號
 
 function psDebouncedSearch() { clearTimeout(PS_TIMER); PS_TIMER = setTimeout(function(){ psLoad(1); }, 300); }
 
+function _psVal(id) { var e = document.getElementById(id); return e ? e.value : ''; }
 function psLoad(page) {
     PS_PAGE = page || 1;
     PS_KW = (document.getElementById('ps-search')||{value:''}).value.trim();
     var tb = document.getElementById('ps-tbody');
     if (tb) tb.innerHTML = '<tr><td colspan="5"><div class="table-loading"><div class="spinner"></div> 載入中…</div></td></tr>';
-    api({ action:'part_set_list', kw:PS_KW, page:PS_PAGE, per:20 }).done(function(r){
+    api({ action:'part_set_list', kw:PS_KW, page:PS_PAGE, per:20,
+          f_customer:_psVal('ps-f-customer'), f_sub_type:_psVal('ps-f-subtype'),
+          f_jig:_psVal('ps-f-jig'), f_machine:_psVal('ps-f-machine'), f_used:_psVal('ps-f-used') }).done(function(r){
         if (!r.success) { showToast(r.message||'載入失敗','error'); return; }
         psRender(r);
+        psSyncFilterHint();
+    });
+}
+function psClearFilters() {
+    ['ps-f-customer','ps-f-subtype','ps-f-jig','ps-f-machine','ps-f-used'].forEach(function(id){
+        var e = document.getElementById(id); if (e) e.value = '';
+    });
+    var kw = document.getElementById('ps-search'); if (kw) kw.value = '';
+    psLoad(1);
+}
+/* 有篩選在作用時把「清除」鈕標起來——不然篩完忘記清，下次進來會以為資料不見了 */
+function psSyncFilterHint() {
+    var on = ['ps-f-customer','ps-f-subtype','ps-f-jig','ps-f-machine','ps-f-used'].some(function(id){ return _psVal(id) !== ''; })
+             || (document.getElementById('ps-search')||{value:''}).value.trim() !== '';
+    var btn = document.querySelector('#tab-partset button[onclick="psClearFilters()"]');
+    if (btn) { btn.className = 'btn btn-sm ' + (on ? 'btn-warning' : 'btn-default'); }
+}
+/* 篩選下拉的選項：客戶只列「真的有出現在某一組裡」的，不要把 980 家全列出來 */
+var _psFilterLoaded = false;
+function psLoadFilterOptions() {
+    if (_psFilterLoaded) return;
+    _psFilterLoaded = true;
+    api({ action:'part_set_filter_options' }).done(function(r){
+        if (!r.success) {
+            _psFilterLoaded = false;   // 失敗就讓下次切回來還會再試一次
+            showToast(r.message || '篩選選項載入失敗', 'error');   // 靜默 return 只會看到「選項是空的」
+            return;
+        }
+        var cs = document.getElementById('ps-f-customer');
+        if (cs) (r.customers||[]).forEach(function(c){
+            cs.appendChild(new Option(c.customer + '（' + c.customer_id + '）', c.customer_id));
+        });
+        var ss = document.getElementById('ps-f-subtype');
+        if (ss) (r.sub_types||[]).forEach(function(t){ ss.appendChild(new Option(t.sub_type_name, t.sub_type_id)); });
     });
 }
 
@@ -16182,7 +16370,7 @@ function psRender(r) {
 
 /* ── 新增／編輯整組 ───────────────────────────────────────────────────────── */
 function psOpenEdit(setId, presetDId) {
-    PS_EDIT = { setId: setId||0, members: [], machineIds: null, machineLabels: [] };
+    PS_EDIT = { setId: setId||0, members: [], machines: null };
     document.getElementById('ps-edit-id').value = setId||0;
     document.getElementById('psModal-title').innerHTML = '<i class="fa fa-cubes"></i> ' + (setId ? '編輯整組' : '新增整組');
     document.getElementById('ps-name').value = '';
@@ -16194,8 +16382,7 @@ function psOpenEdit(setId, presetDId) {
             var x = r.data;
             document.getElementById('ps-name').value = x.is_auto_name ? '' : (x.set_name||'');
             PS_EDIT.members = (x.members||[]).slice();
-            PS_EDIT.machineIds = (x.machines||[]).map(function(m){ return m.machine_id; });
-            PS_EDIT.machineLabels = (x.machines||[]).map(function(m){ return m.label; });
+            PS_EDIT.machines = (x.machines||[]).slice();
             if (x.used_by > 0) document.getElementById('ps-used-hint').textContent = '這一組已被 ' + x.used_by + ' 個料號設為治具';
             psRenderMembers();
         });
@@ -16232,11 +16419,20 @@ function psRenderMembers() {
              : (nos.length <= 3 ? nos.join('＋') : nos.slice(0,3).join('＋') + ' 等 ' + nos.length + ' 項');
     var el = document.getElementById('ps-name-auto');
     if (el) el.textContent = '自動命名會是：' + auto;
-    // 機台
+    // 使用機台（三種範圍混在一起顯示，各自可移除）
     var mc = document.getElementById('ps-mach-chips');
     if (mc) {
-        var labels = PS_EDIT.machineLabels || [];
-        mc.innerHTML = labels.length ? escHtml(labels.join('、')) : '<span style="color:#aaa;">（未選）</span>';
+        var ms = PS_EDIT.machines || [];
+        if (!ms.length) { mc.innerHTML = '<span style="color:#aaa;">（未選，代表不限定機台）</span>'; }
+        else {
+            mc.innerHTML = ms.map(function(m, i){
+                var color = (m.target_kind === 'category') ? '#6a1b9a' : (m.target_kind === 'model' ? '#1565c0' : '#C77C1A');
+                return '<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid ' + color
+                     + ';color:' + color + ';border-radius:3px;padding:1px 6px;margin:0 4px 3px 0;font-size:11px;">'
+                     + escHtml(m.label||'')
+                     + '<span style="cursor:pointer;color:#e74c3c;font-weight:bold;" onclick="psRemoveMachine(' + i + ')" title="移除">×</span></span>';
+            }).join('');
+        }
     }
 }
 function psRemoveMember(idx) { PS_EDIT.members.splice(idx,1); psRenderMembers(); }
@@ -16245,18 +16441,38 @@ function psAddMember(m) {
     PS_EDIT.members.push(m);
     psRenderMembers();
 }
-function psPickMachine() {
+/* 使用機台可以挑三種範圍（2026-10-12 使用者：「挑選機台應該要可以挑選機台類別，不用限制
+   綁訂到機台編號」）——比照料號表單既有的三種，共用同一個 mpkOpen 挑選器：
+     machine ＝特定機台編號　category＝機台種類(製程大類)　model＝機型
+   三種可以並存（例如「這一類機台都行，但另外指定某一台也可以」）。 */
+function psPickMachine(mode) {
+    mode = mode || 'machine';
+    var titles = { machine:'挑選機台（機台編號）', category:'挑選機台種類（製程大類）', model:'挑選機型' };
+    var cur = PS_EDIT.machines || [];
     var pre = {};
-    (PS_EDIT.machineIds||[]).forEach(function(mid, i){
-        pre[String(mid)] = { value:String(mid), id:mid, no:(PS_EDIT.machineLabels[i]||String(mid)), name:'', cat:'使用機台' };
+    cur.filter(function(m){ return m.target_kind === mode; }).forEach(function(m){
+        var key = (mode === 'model') ? m.target_text : String(m.target_id);
+        pre[key] = { value:key, id:(mode === 'model' ? 0 : m.target_id), no:(m.raw_no || m.target_text || m.label), name:'', cat:titles[mode] };
     });
-    mpkOpen('machine', { title:'挑選使用機台', sel:pre, onApply:function(order, sel){
-        var ids = [], labels = [];
-        order.forEach(function(v){ var x = sel[v]; if (x) { ids.push(parseInt(x.id)); labels.push(x.no + (x.name ? ' ('+x.name+')' : '')); } });
-        PS_EDIT.machineIds = ids; PS_EDIT.machineLabels = labels;
+    mpkOpen(mode, { title:titles[mode], sel:pre, onApply:function(order, sel){
+        // 只換掉「這一種」，另外兩種原樣留著
+        var keep = cur.filter(function(m){ return m.target_kind !== mode; });
+        var add = [];
+        order.forEach(function(v){
+            var x = sel[v]; if (!x) return;
+            if (mode === 'model') {
+                add.push({ target_kind:'model', target_id:0, target_text:String(x.value), raw_no:x.no, label:String(x.value) + '（機型）' });
+            } else if (mode === 'category') {
+                add.push({ target_kind:'category', target_id:parseInt(x.id), target_text:'', raw_no:x.no, label:x.no + '（整類）' });
+            } else {
+                add.push({ target_kind:'machine', target_id:parseInt(x.id), target_text:'', raw_no:x.no, label:x.no + (x.name ? ' ('+x.name+')' : '') });
+            }
+        });
+        PS_EDIT.machines = keep.concat(add);
         psRenderMembers();
     }});
 }
+function psRemoveMachine(idx) { (PS_EDIT.machines||[]).splice(idx,1); psRenderMembers(); }
 function psSave() {
     if (!PS_EDIT.members.length) { showToast('請至少加入一個成員','error'); return; }
     var payload = {
@@ -16265,7 +16481,9 @@ function psSave() {
         set_name: document.getElementById('ps-name').value.trim(),
         d_ids: JSON.stringify(PS_EDIT.members.map(function(m){ return parseInt(m.d_id); }))
     };
-    if (PS_EDIT.machineIds !== null) payload.machine_ids = JSON.stringify(PS_EDIT.machineIds);
+    if (PS_EDIT.machines !== null) payload.machines = JSON.stringify(PS_EDIT.machines.map(function(m){
+        return { target_kind:m.target_kind, target_id:m.target_id||0, target_text:m.target_text||'' };
+    }));
     api(payload).done(function(r){
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         showToast('已儲存');
