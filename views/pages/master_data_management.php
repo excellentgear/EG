@@ -11583,6 +11583,33 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 </div>
 
 <!-- ═══ MODAL: 料號附件瀏覽器 ══════════════════════════════════════════ -->
+<!-- 組合圖「管理零件」（2026-10-12）：只建關聯不複製檔，零件可在別的料號底下 -->
+<div id="pavAsmMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:8px;width:92%;max-width:680px;max-height:86vh;overflow:auto;padding:16px 20px;box-shadow:0 6px 28px rgba(0,0,0,.35);font-size:13px;">
+    <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:10px;">
+      <h4 style="margin:0;color:#8A5A2B;"><i class="fa fa-cubes"></i> 管理組合圖的零件</h4>
+      <button type="button" class="btn btn-default btn-xs" style="margin-left:auto;" onclick="document.getElementById('pavAsmMask').style.display='none';">關閉</button>
+    </div>
+    <div style="background:#FBEEDC;border:1px solid #E6B77A;color:#7A4A12;border-radius:4px;padding:6px 10px;margin-bottom:10px;line-height:1.6;">
+      零件檔若<b>已經在別的料號上傳過</b>，下面直接搜尋指過去就好——<b>只建關聯、不會複製檔案，也不必重新上傳</b>；
+      那個零件在它自己的料號底下仍然是獨立附件，完全不受影響。被收進組合的零件（本料號的）不會再平鋪在附件清單上。
+    </div>
+    <div id="pavAsmCur" style="margin-bottom:12px;"></div>
+    <div style="font-weight:bold;color:#8A5A2B;margin-bottom:4px;">加入本料號的其他 Inventor 檔</div>
+    <div id="pavAsmSame" style="margin-bottom:12px;"></div>
+    <div style="font-weight:bold;color:#8A5A2B;margin-bottom:4px;">或：到全站搜尋零件檔（別的料號已上傳的）</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input type="text" id="pavAsmSearch" class="form-control input-sm" style="flex:1;" placeholder="輸入零件檔名的一部分" onkeydown="if(event.key==='Enter'){event.preventDefault();pavAsmSearch();}">
+      <button type="button" class="btn btn-default btn-sm" onclick="pavAsmSearch()"><i class="fa fa-search"></i> 搜尋</button>
+    </div>
+    <div id="pavAsmFound" style="margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;align-items:center;border-top:1px solid #eee;padding-top:10px;">
+      <span id="pavAsmMsg" style="flex:1;color:#888;"></span>
+      <button type="button" class="btn btn-success btn-sm" onclick="pavAsmLinkSel()"><i class="fa fa-link"></i> 加入勾選的零件</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="partAttachViewModal" tabindex="-1">
 <div class="modal-dialog" style="width:1000px;max-width:97vw;margin:20px auto;"><div class="modal-content" style="height:82vh;display:flex;flex-direction:column;">
 <div class="modal-header" style="background:linear-gradient(135deg,#1a5276,#2980b9);flex-shrink:0;padding:8px 14px;display:flex;align-items:center;gap:8px;">
@@ -21862,6 +21889,11 @@ function _pavOpen() {
     $('#partAttachViewModal').modal('show');
 }
 
+// 組合圖（.iam）↔ 零件的對照（由 list API 一併帶回來，見 part_assembly_lib.php）
+var _pavAsmMap = {};   // 組合附件id → 它的零件陣列
+var _pavCompOf = {};   // 零件附件id → 它屬於哪個組合（只含同一個料號的，別的料號的零件在它自己料號仍獨立顯示）
+var _pavAsmOpen = {};  // 組合附件id → 這一列有沒有展開
+var PAV_CAN_ASM_EDIT = <?= json_encode((bool)$can_part_attach) ?>;   // 能不能改零件關聯（沿用料號附件的上傳/編輯/刪除權限，後端另有守門）
 function _pavLoadFiles(cb) {
     $.get(PART_ATTACH_API_URL, { action:'list', d_id:_pav.dId }, function(r) {
         _pav.allFiles = (r.success && r.data) ? r.data : [];
@@ -21869,6 +21901,9 @@ function _pavLoadFiles(cb) {
         _pav.albums       = (r && r.albums) ? r.albums : [];
         _pav.albumCatIds  = ((r && r.album_cat_ids) ? r.album_cat_ids : []).map(String);
         _pav.canAlbumEdit = !!(r && r.can_album_edit);
+        // 組合圖：哪個組合有哪些零件、哪些附件是「同料號某個組合的零件」要收起來
+        _pavAsmMap = (r && r.assembly_map) ? r.assembly_map : {};
+        _pavCompOf = (r && r.component_of) ? r.component_of : {};
         cb(_pav.allFiles);
     }).fail(function(){ _pav.allFiles=[]; _pav.albums=[]; _pav.albumCatIds=[]; cb([]); });
 }
@@ -22179,6 +22214,9 @@ function _pavRenderList() {
     var html = albumBuilt.rows;
     files.forEach(function(f, idx) {
         if (hasAlbumFile && _pavIsAlbumFile(f)) return;   // 已經收進上面的相簿列，不重複列一次
+        // 組合圖的零件（同一個料號底下）收進組合那一列，不再平鋪一列
+        // （2026-10-12 使用者回報：全部上傳會顯示此料號有一堆附件）
+        if (_pavCompOf && _pavCompOf[String(f.id)]) return;
         var ext  = (f.filename||'').split('.').pop().toLowerCase();
         var icon = _fileIcon(ext);
         var name = escHtml(f.original_name || f.filename || '');
@@ -22194,6 +22232,11 @@ function _pavRenderList() {
             });
         }
         // Encode file ref for onclick
+        var asmComps = (_pavAsmMap && _pavAsmMap[String(f.id)]) ? _pavAsmMap[String(f.id)] : null;
+        if (ext === 'iam') {
+            tags += '<span style="font-size:12px;font-weight:600;background:#FBEEDC;color:#7A4A12;border-radius:4px;padding:1px 7px;margin-right:2px;">組合圖'
+                 + (asmComps && asmComps.length ? ' · ' + asmComps.length + ' 零件' : '') + '</span>';
+        }
         var fIdx = idx;
         var isObs = _pavIsObsolete(f);
         var itemStyle = 'padding:4px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background .1s;'
@@ -22236,6 +22279,28 @@ function _pavRenderList() {
         if (f.bind_quote_no) html += '<span style="background:#F3E8FF;color:#6e2fa3;border:1px solid #DCC9EE;font-weight:600;padding:0 5px;border-radius:3px;" title="已綁定報價單，這份附件會一起出現在該報價單上">報價 '+escHtml(f.bind_quote_no)+'</span>';
         html += '</div>';
         html += '</div>';
+        // 組合圖：底下掛一條可展開的零件清單（零件可能來自別的料號，標示來源）
+        if (ext === 'iam') {
+            var comps = asmComps || [];
+            var openA = !!_pavAsmOpen[String(f.id)];
+            html += '<div style="background:#FEFAF4;border-bottom:1px solid #f0e4d4;padding:3px 10px 5px 14px;font-size:11px;">';
+            html += '<a href="javascript:void(0)" onclick="event.stopPropagation();pavAsmToggle(' + f.id + ')" style="color:#8A5A2B;">'
+                 + '<i class="fa fa-' + (openA ? 'caret-down' : 'caret-right') + '"></i> 零件 ' + comps.length + ' 個</a>';
+            if (PAV_CAN_ASM_EDIT) html += ' <a href="javascript:void(0)" onclick="event.stopPropagation();pavAsmManage(' + f.id + ')" style="margin-left:8px;color:#1a5276;"><i class="fa fa-plus-circle"></i> 管理零件</a>';
+            if (openA) {
+                if (!comps.length) html += '<div style="color:#999;padding:3px 0 0 14px;">尚未指定零件；按「管理零件」加入（可直接用別的料號已上傳的檔，不必重傳）。</div>';
+                comps.forEach(function (c) {
+                    html += '<div style="padding:3px 0 0 14px;line-height:1.5;">'
+                         + '<i class="fa fa-cube" style="color:#bbb;margin-right:4px;"></i>'
+                         + '<span style="word-break:break-word;">' + escHtml(c.original_name || c.filename || '') + '</span>';
+                    if (String(c.d_id) !== String(_pav.dId)) {
+                        html += '<div style="margin:1px 0 0 18px;"><span style="background:#eef4fb;color:#1a5276;border-radius:3px;padding:0 5px;white-space:nowrap;" title="這個零件屬於別的料號，這裡只是引用、沒有複製檔案">引用料號 ' + escHtml(c.part_no || ('#' + c.d_id)) + '</span></div>';
+                    }
+                    html += '</div>';
+                });
+            }
+            html += '</div>';
+        }
     });
     wrap.innerHTML = html;
     // 自動選第一筆：跳過已收進相簿的照片（那些要點相簿看九宮格，不是單張預覽）；
@@ -22952,6 +23017,94 @@ $(document).on('click', '#pav-btn-3d-color-reset', function() {
     if (_pav3dViewer) _pav3dViewer.GetViewer().Render();
 });
 
+// ── 組合圖「管理零件」（2026-10-12 使用者交辦）────────────────────────────
+// 使用者的兩個實際問題：①零件全部上傳會讓料號底下多出一堆附件 ②某些零件本來就是別的
+// 料號、早就各自上傳過，不該再傳一次。所以這裡一律「只建關聯、不複製檔」（唯一實作見
+// src/common/part_assembly_lib.php），零件在它自己的料號底下仍然是獨立附件、不受影響。
+/** 重新套用目前分頁的篩選並重畫清單（規則與 pavSwitchTab 同一套，不另寫第二份判斷） */
+function _pavAsmRefreshList() {
+    var btn = document.querySelector('.pav-tab.active');
+    if (btn) { pavSwitchTab(btn, _pav.catId); return; }
+    _pav.filteredFiles = (_pav.allFiles || []).filter(function (f) { return f.source !== 'quote'; });
+    _pavRenderList();
+}
+function pavAsmToggle(aid) {
+    var k = String(aid);
+    _pavAsmOpen[k] = !_pavAsmOpen[k];
+    _pavRenderList();
+}
+var _pavAsmEditId = 0;
+function pavAsmManage(aid) {
+    _pavAsmEditId = aid;
+    document.getElementById('pavAsmMask').style.display = 'flex';
+    document.getElementById('pavAsmSearch').value = '';
+    document.getElementById('pavAsmMsg').textContent = '';
+    _pavAsmRender();
+}
+function _pavAsmRender() {
+    var cur = (_pavAsmMap[String(_pavAsmEditId)] || []);
+    var h = '<div style="font-weight:bold;color:#8A5A2B;margin-bottom:4px;">目前的零件（' + cur.length + '）</div>';
+    if (!cur.length) h += '<div style="color:#999;padding:2px 0 6px;">還沒有指定零件。</div>';
+    cur.forEach(function (c) {
+        h += '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid #f4f4f4;">'
+           + '<i class="fa fa-cube" style="color:#bbb;"></i>'
+           + '<span style="flex:1;word-break:break-all;">' + escHtml(c.original_name || c.filename || '') + '</span>';
+        if (String(c.d_id) !== String(_pav.dId)) h += '<span style="background:#eef4fb;color:#1a5276;border-radius:3px;padding:0 5px;white-space:nowrap;">引用 ' + escHtml(c.part_no || ('#' + c.d_id)) + '</span>';
+        h += '<a href="javascript:void(0)" onclick="pavAsmUnlink(' + c.id + ')" style="color:#c0392b;">解除</a></div>';
+    });
+    document.getElementById('pavAsmCur').innerHTML = h;
+    // 候選①：同一個料號底下其他還沒被收進來的 Inventor 檔
+    var used = {}; cur.forEach(function (c) { used[String(c.id)] = 1; });
+    var same = (_pav.allFiles || []).filter(function (f) {
+        if (String(f.id) === String(_pavAsmEditId) || used[String(f.id)]) return false;
+        var e = (f.original_name || f.filename || '').split('.').pop().toLowerCase();
+        return e === 'ipt' || e === 'iam';
+    });
+    var h2 = '';
+    same.forEach(function (f) {
+        h2 += '<label style="display:flex;align-items:center;gap:8px;padding:2px 0;cursor:pointer;">'
+            + '<input type="checkbox" class="pav-asm-pick" value="' + f.id + '">'
+            + '<span style="flex:1;word-break:break-all;">' + escHtml(f.original_name || f.filename || '') + '</span>'
+            + '<span style="color:#888;">本料號</span></label>';
+    });
+    document.getElementById('pavAsmSame').innerHTML = h2 || '<div style="color:#999;padding:2px 0;">本料號沒有其他可加入的 Inventor 檔。</div>';
+}
+function pavAsmUnlink(cid) {
+    $.post(PART_ATTACH_API_URL, { action:'assembly_unlink', assembly_id:_pavAsmEditId, component_id:cid }, function () {
+        _pavLoadFiles(function () { _pavAsmRefreshList(); _pavAsmRender(); });
+    }, 'json');
+}
+function pavAsmSearch() {
+    var kw = (document.getElementById('pavAsmSearch').value || '').trim();
+    var box = document.getElementById('pavAsmFound');
+    if (kw.length < 2) { box.innerHTML = '<div style="color:#999;padding:2px 0;">請至少輸入 2 個字（可打零件檔名的一部分）。</div>'; return; }
+    box.innerHTML = '<div style="color:#999;padding:2px 0;"><i class="fa fa-spinner fa-spin"></i> 搜尋中…</div>';
+    $.post(PART_ATTACH_API_URL, { action:'assembly_search', kw:kw }, function (r) {
+        var list = (r && r.success && r.data) ? r.data : [];
+        if (!list.length) { box.innerHTML = '<div style="color:#999;padding:2px 0;">全站找不到符合的 Inventor 檔。</div>'; return; }
+        var h = '';
+        list.forEach(function (c) {
+            h += '<label style="display:flex;align-items:center;gap:8px;padding:2px 0;cursor:pointer;">'
+               + '<input type="checkbox" class="pav-asm-pick" value="' + c.id + '">'
+               + '<span style="flex:1;word-break:break-all;">' + escHtml(c.original_name || '') + '</span>'
+               + '<span style="color:#1a5276;white-space:nowrap;">料號 ' + escHtml(c.part_no || ('#' + c.d_id)) + '</span>'
+               + '<span style="color:#888;white-space:nowrap;">' + escHtml(c.file_size || '') + '</span></label>';
+        });
+        box.innerHTML = h;
+    }, 'json').fail(function () { box.innerHTML = '<div style="color:#c0392b;padding:2px 0;">搜尋失敗</div>'; });
+}
+function pavAsmLinkSel() {
+    var ids = $('.pav-asm-pick:checked').map(function () { return parseInt(this.value, 10); }).get();
+    if (!ids.length) { document.getElementById('pavAsmMsg').textContent = '請先勾選要加入的零件'; return; }
+    $.post(PART_ATTACH_API_URL, { action:'assembly_link', assembly_id:_pavAsmEditId, component_ids:JSON.stringify(ids) }, function (r) {
+        if (!r || !r.success) { document.getElementById('pavAsmMsg').textContent = '加入失敗'; return; }
+        document.getElementById('pavAsmMsg').textContent = '已加入 ' + r.linked + ' 個零件'
+            + ((r.skipped && r.skipped.length) ? ('（略過：' + r.skipped.join('、') + '）') : '');
+        _pavAsmOpen[String(_pavAsmEditId)] = true;
+        _pavLoadFiles(function () { _pavAsmRefreshList(); _pavAsmRender(); });
+    }, 'json').fail(function () { document.getElementById('pavAsmMsg').textContent = '加入失敗'; });
+}
+
 // ── 組合檔（.iam）：零件清單／顯示隱藏／爆炸圖（唯一實作見 eg_3d_viewer_tools.js，
 // 與 bom_viewer.php 共用同一套；2026-10-12 使用者要求組合圖要能像繪圖軟體那樣隱藏
 // 個別零件、拉開零件距離）────────────────────────────────────────────────
@@ -23004,7 +23157,8 @@ function _pav3dSetupAssembly(ext, file) {
             + (res.refs ? res.refs.length : 0) + ' 個零件檔，目前只找得到 ' + found
             + ' 個，畫面上只顯示找得到的部分。<br>缺少：'
             + res.missing.map(function (x) { return escHtml(x); }).join('、')
-            + '<br><span style="color:#8a6a3a;">把這些零件檔也上傳到同一個料號，重新開啟即會自動補齊。</span>'
+            + '<br><button type="button" class="btn btn-warning btn-xs" style="margin-top:4px;" onclick="pavAsmManage(' + m[1] + ')">'
+            + '<i class="fa fa-cubes"></i> 管理零件（可直接用別的料號已上傳的檔）</button>'
         ).show();
     });
 }

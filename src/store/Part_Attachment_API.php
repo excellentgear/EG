@@ -342,11 +342,30 @@ switch ($action) {
                                              eg_adp_compute_is_customer($pdo, $row['category_ids'] ?? '')) ? 1 : 0;
         }
         unset($row);
+        // 組合圖（.iam）：哪幾列是「某個組合的零件」要收進組合那一列、不再平鋪一列
+        // （使用者回報：組合的零件全部上傳會讓料號底下多出一堆附件，把真正要看的圖面淹掉）
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        $asmMap = [];
+        foreach ($data as $row) {
+            $nm0 = (string)($row['original_name'] ?: $row['filename']);
+            if (strtolower(pathinfo($nm0, PATHINFO_EXTENSION)) === 'iam') {
+                $asmMap[(int)$row['id']] = eg_pasm_components($pdo, (int)$row['id']);
+            }
+        }
+        $compOf = [];
+        foreach ($asmMap as $aid => $comps) {
+            foreach ($comps as $c) {
+                // 只有「同一個料號底下」的零件才收起來；別的料號的零件在它自己的料號仍是獨立附件
+                if ((int)$c['d_id'] === $dId) $compOf[(int)$c['id']] = $aid;
+            }
+        }
         // 相簿：哪些標籤要用九宮格檢視（逐標籤勾選，不寫死標籤名稱）＋這個料號目前有哪些相簿
         echo json_encode(['success'=>true,'data'=>$data,
                           'albums'=>pa_album_list($pdo, [$dId]),
                           'album_cat_ids'=>pa_album_cat_ids($pdo),
-                          'can_album_edit'=>pa_album_can_edit($pdo, $uploadedById)]);
+                          'can_album_edit'=>pa_album_can_edit($pdo, $uploadedById),
+                          'assembly_map'=>$asmMap,
+                          'component_of'=>$compOf], JSON_UNESCAPED_UNICODE);
         break;
 
     // ── 相簿：清單 ────────────────────────────────────────────────
@@ -1147,6 +1166,11 @@ switch ($action) {
         $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
         if (!file_exists($fp) || !in_array($ext3d, ['ipt','x_t','iam'], true)) { http_response_code(404); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        // ★ 轉檔要 9~10 秒，而 PHP 的 session 檔在整個請求期間是鎖住的——不先放掉鎖，
+        //   同一個使用者在轉檔期間的**每一個**其他請求（清單、搜尋、存檔…）都會被卡住，
+        //   畫面看起來就像整頁當掉（實測搜尋一直停在「搜尋中…」）。權限已經檢查完了，
+        //   後面用不到 session，這裡直接關掉寫入鎖。
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $comp3d = ($ext3d === 'iam') ? partInventorCompanions($pdo, (int)$rec['d_id'], $fp, $id) : [];
         $stepFp = eg_inventor_preview_step($pdo, $fp, $comp3d, (string)($rec['original_name'] ?: ''));
         if (!$stepFp) { http_response_code(503); echo 'IPT/X_T/IAM 轉檔失敗或暫時無法使用'; exit; }
@@ -1172,6 +1196,11 @@ switch ($action) {
         $fp = rtrim(getPartAttachBase($pdo),'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
         if (strtolower(pathinfo($fp, PATHINFO_EXTENSION)) !== 'iam') { echo json_encode(['success'=>true,'is_assembly'=>false]); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        // ★ 轉檔要 9~10 秒，而 PHP 的 session 檔在整個請求期間是鎖住的——不先放掉鎖，
+        //   同一個使用者在轉檔期間的**每一個**其他請求（清單、搜尋、存檔…）都會被卡住，
+        //   畫面看起來就像整頁當掉（實測搜尋一直停在「搜尋中…」）。權限已經檢查完了，
+        //   後面用不到 session，這裡直接關掉寫入鎖。
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $cmp  = partInventorCompanions($pdo, (int)$rec['d_id'], $fp, $id);
         $stp  = eg_inventor_preview_step($pdo, $fp, $cmp, (string)($rec['original_name'] ?: ''));
         $info = eg_inventor_preview_step_info($stp) ?: [];
@@ -1202,6 +1231,20 @@ switch ($action) {
         $names = json_decode((string)($_POST['names'] ?? $_GET['names'] ?? '[]'), true);
         if (!is_array($names)) $names = [];
         echo json_encode(['success'=>true,'data'=>eg_pasm_find_candidates($pdo, $names)], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    case 'assembly_search':   // 到全站搜尋可以當零件的 Inventor 檔（.ipt/.iam），供「管理零件」加入
+        header('Content-Type: application/json; charset=utf-8');
+        $kw = trim((string)($_POST['kw'] ?? $_GET['kw'] ?? ''));
+        if (mb_strlen($kw, 'UTF-8') < 2) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
+        $st = $pdo->prepare(
+            "SELECT pa.id, pa.d_id, d.D_Setting_Id AS part_no, pa.original_name, pa.file_size, pa.uploaded_at
+               FROM part_attachments pa LEFT JOIN d_setting d ON d.d_id = pa.d_id
+              WHERE pa.deleted_at IS NULL AND pa.original_name LIKE ?
+                AND (LOWER(pa.original_name) LIKE '%.ipt' OR LOWER(pa.original_name) LIKE '%.iam')
+              ORDER BY pa.original_name, pa.id LIMIT 60");
+        $st->execute(['%' . $kw . '%']);
+        echo json_encode(['success'=>true,'data'=>$st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
         exit;
 
     case 'assembly_link':

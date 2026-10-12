@@ -700,6 +700,9 @@ switch ($action) {
         $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
         if (!is_file($fp) || !in_array($ext3d, ['ipt','x_t','iam'], true)) { http_response_code(404); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
+                // 轉檔要 9~10 秒，PHP session 檔整個請求都鎖著——不先放掉，使用者在轉檔期間的
+        // 其他請求會全部被卡住（見 Part_Attachment_API 同一處說明）。權限已檢查完畢。
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $comp3d = ($ext3d === 'iam') ? orderInventorCompanions($pdo, $dir, (int)($row['order_id'] ?? 0), $fp) : [];
         $stepFp = eg_inventor_preview_step($pdo, $fp, $comp3d, (string)($row['original_name'] ?: ''));
         if (!$stepFp) { http_response_code(503); echo 'IPT/X_T/IAM 轉檔失敗或暫時無法使用'; exit; }

@@ -686,6 +686,9 @@ switch ($action) {
             http_response_code(404); exit;
         }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        // 轉檔要 9~10 秒，PHP session 檔整個請求都鎖著——不先放掉，使用者在轉檔期間的
+        // 其他請求會全部被卡住（見 Part_Attachment_API 同一處說明）。權限已檢查完畢。
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $stepFp = eg_inventor_preview_step($pdo, $realPath);
         if (!$stepFp) { http_response_code(503); echo 'IPT/X_T 轉檔失敗或暫時無法使用'; exit; }
         require_once __DIR__ . '/../common/attach_lib.php';
