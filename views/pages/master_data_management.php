@@ -4278,19 +4278,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 涵蓋得到的範圍（挑一個完全沒有整組的客戶，篩出來一定是空的，那個選項沒有意義）。
     if ($_POST['action'] === 'part_set_filter_options') {
         try {
-            $cs = $pdo->query("SELECT DISTINCT c.customer_id, c.customer
+            // 各選項的組數：卡片／膠囊上要印出來才知道點下去有沒有東西（點一個 0 筆的沒有意義）。
+            // 計數一律以「全部資料」為準、不隨其他篩選連動——連動計數要為每個維度各跑一次
+            // 查詢，而這一頁的整組數量本來就不多，不值得為此複雜化。
+            $cs = $pdo->query("SELECT c.customer_id, c.customer, COUNT(DISTINCT i.set_id) AS cnt
                                FROM d_setting_part_set_item i
                                JOIN d_setting d ON d.d_id = i.d_id
                                JOIN customer_list c ON c.customer_id = d.Customer_Id
-                               ORDER BY c.customer")->fetchAll(PDO::FETCH_ASSOC);
-            // sort_order 一定要一起 SELECT：DISTINCT 之下 ORDER BY 不在 SELECT 清單的欄位，
-            // MySQL 會丟 3065 整支 API 失敗（前端只會看到「選項是空的」，看不出有錯）。
-            $ts = $pdo->query("SELECT DISTINCT st.sub_type_id, st.sub_type_name, st.sort_order
+                               GROUP BY c.customer_id, c.customer
+                               ORDER BY cnt DESC, c.customer")->fetchAll(PDO::FETCH_ASSOC);
+            $ts = $pdo->query("SELECT st.sub_type_id, st.sub_type_name, st.sort_order, COUNT(DISTINCT i.set_id) AS cnt
                                FROM d_setting_part_set_item i
                                JOIN d_setting d ON d.d_id = i.d_id
                                JOIN dict_workpiece_sub_type st ON st.sub_type_id = d.workpiece_sub_type_id
+                               GROUP BY st.sub_type_id, st.sub_type_name, st.sort_order
                                ORDER BY st.sort_order, st.sub_type_id")->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success'=>true,'customers'=>$cs,'sub_types'=>$ts], JSON_UNESCAPED_UNICODE);
+            // 快速檢視卡片的數量
+            $q = fn(string $sql) => (int)$pdo->query($sql)->fetchColumn();
+            $exJig  = "EXISTS (SELECT 1 FROM d_setting_part_set_item ji JOIN d_setting jd ON jd.d_id=ji.d_id
+                               JOIN dict_workpiece_type jt ON jt.type_code=jd.Type AND jt.is_jig_type=1 WHERE ji.set_id=s.set_id)";
+            $exMach = "EXISTS (SELECT 1 FROM d_setting_part_set_machine xm WHERE xm.set_id=s.set_id)";
+            $exUsed = "EXISTS (SELECT 1 FROM d_setting_jig_map xj WHERE xj.target_kind='set' AND xj.target_id=s.set_id)";
+            $stats = [
+                'total'    => $q("SELECT COUNT(*) FROM d_setting_part_set s"),
+                'jig'      => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE $exJig"),
+                'machine'  => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE $exMach"),
+                'used'     => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE $exUsed"),
+                'unused'   => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE NOT $exUsed"),
+            ];
+            echo json_encode(['success'=>true,'customers'=>$cs,'sub_types'=>$ts,'stats'=>$stats], JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -8166,6 +8182,32 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .mpk-grid button:hover { background:#F7E0BD; border-color:#C77C1A; }
 .mpk-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
 .mpk-grid button.mpk-cat.has-sel { border-color:#C77C1A; background:#FFF3E2; }
+
+/* ── 「整組」分頁的篩選：快速檢視卡片＋膠囊按鈕（配色走 ai-rules/10 暖色系）────────── */
+.ps-cards { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.ps-card {
+    flex:0 0 auto; min-width:104px; padding:7px 14px; cursor:pointer; text-align:left;
+    background:#fff; border:1px solid #E4D3BC; border-left:3px solid #E4D3BC; border-radius:5px;
+    transition:background .12s, border-color .12s, box-shadow .12s;
+}
+.ps-card:hover { background:#FFF9F0; border-color:#D9B98C; }
+.ps-card .ps-card-n { font-size:19px; font-weight:700; color:#6B4423; line-height:1.1; }
+.ps-card .ps-card-t { font-size:11px; color:#9a8369; margin-top:2px; white-space:nowrap; }
+.ps-card.on { background:#FFF3E2; border-color:#C77C1A; border-left-color:#C77C1A; box-shadow:0 1px 4px rgba(199,124,26,.18); }
+.ps-card.on .ps-card-n, .ps-card.on .ps-card-t { color:#A4600F; }
+.ps-card.zero { opacity:.5; }
+.ps-pills { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+.ps-pill-grp { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+.ps-pill-grp > .ps-pill-lb { font-size:11px; color:#9a8369; margin-right:2px; }
+.ps-pill {
+    display:inline-flex; align-items:center; gap:4px; cursor:pointer;
+    font-size:11.5px; line-height:1.6; padding:1px 9px; border-radius:11px;
+    background:#fff; border:1px solid #E4D3BC; color:#6B4423;
+}
+.ps-pill:hover { background:#FFF9F0; border-color:#D9B98C; }
+.ps-pill.on { background:#C77C1A; border-color:#C77C1A; color:#fff; font-weight:600; }
+.ps-pill .ps-pill-n { font-size:10px; opacity:.72; }
+.ps-pill-clear { color:#A4600F; border-style:dashed; }
 .mpk-grid button.mpk-item.on { background:#F0A24B; border-color:#C77C1A; }
 .mpk-grid button.mpk-item.on small { color:#6B4A22; }
 .mpk-sub { font-size:12.5px; color:#6B4423; margin:0 0 6px; }
@@ -9210,33 +9252,13 @@ body { background:#F6F1EA; }
                 <span id="ps-count" style="font-size:12px;color:#888;"></span>
                 <div id="ps-pager" style="display:flex;gap:4px;align-items:center;"></div>
             </div>
-            <!-- 篩選列（2026-10-12 使用者回報「整組分頁沒有任何篩選可以用」）。
-                 客戶／工件小類是「該組有任一成員符合」就算命中——整組本來就可能混不同客戶的件。
-                 長清單下拉一律掛 data-eg-filter 可打字篩選（UI 規則）。 -->
-            <div class="action-bar" style="flex-wrap:wrap;gap:6px;align-items:center;padding-top:0;">
-                <span style="font-size:12px;color:#888;">篩選</span>
-                <select id="ps-f-customer" class="form-control input-sm" style="width:190px;" data-eg-filter="輸入客戶名稱或編號篩選…" onchange="psLoad(1)">
-                    <option value="">全部客戶</option>
-                </select>
-                <select id="ps-f-subtype" class="form-control input-sm" style="width:150px;" data-eg-filter="輸入工件小類篩選…" onchange="psLoad(1)">
-                    <option value="">全部工件小類</option>
-                </select>
-                <select id="ps-f-jig" class="form-control input-sm" style="width:130px;" onchange="psLoad(1)">
-                    <option value="">含不含治具</option>
-                    <option value="has">組裡有治具</option>
-                    <option value="none">組裡沒有治具</option>
-                </select>
-                <select id="ps-f-machine" class="form-control input-sm" style="width:130px;" onchange="psLoad(1)">
-                    <option value="">有無綁機台</option>
-                    <option value="has">已綁機台</option>
-                    <option value="none">未綁機台</option>
-                </select>
-                <select id="ps-f-used" class="form-control input-sm" style="width:150px;" onchange="psLoad(1)">
-                    <option value="">有沒有被當治具用</option>
-                    <option value="used">已被料號當治具</option>
-                    <option value="unused">還沒有人用</option>
-                </select>
-                <button class="btn btn-default btn-sm" onclick="psClearFilters()" title="清除全部篩選與關鍵字"><i class="fa fa-eraser"></i> 清除</button>
+            <!-- 篩選（2026-10-12 使用者回報「篩選功能很糟糕，也很難看，盡量使用按鈕篩選或是卡片式篩選」）
+                 改成「快速檢視卡片 ＋ 膠囊按鈕」：每個選項都把組數印在上面（點一個 0 筆的沒有意義），
+                 點一下套用、再點一下取消。客戶／工件小類是「該組有任一成員符合」就算命中——
+                 整組本來就可能混不同客戶的件。配色走 ai-rules/10 暖色系。 -->
+            <div id="ps-filter-wrap" style="padding:2px 2px 10px;">
+                <div id="ps-cards" class="ps-cards"></div>
+                <div id="ps-pills" class="ps-pills"></div>
             </div>
             <div style="font-size:12px;color:#888;padding:0 2px 8px;">
                 一組裡可以同時放治具與一般料號；<b>同一個料號可以屬於很多組</b>（共用底板就是這種情況）。
@@ -16276,38 +16298,89 @@ var PSP_CB = null, PSP_DID = 0;   // 「加入整組」跳窗：完成後的 cal
 
 function psDebouncedSearch() { clearTimeout(PS_TIMER); PS_TIMER = setTimeout(function(){ psLoad(1); }, 300); }
 
-function _psVal(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+/* ── 篩選狀態（2026-10-12 改版：使用者要求「盡量使用按鈕篩選或是卡片式篩選」）──────
+   view ＝快速檢視卡片（互斥，一次一種）：'' | jig | machine | used | unused
+   cust / sub ＝膠囊（各自互斥），兩個維度可以跟 view 並存。 */
+var PS_FILTER = { view:'', cust:'', sub:'' };
+var PS_OPTS = null;   // part_set_filter_options 的結果（含各選項組數）
+
 function psLoad(page) {
     PS_PAGE = page || 1;
     PS_KW = (document.getElementById('ps-search')||{value:''}).value.trim();
     var tb = document.getElementById('ps-tbody');
     if (tb) tb.innerHTML = '<tr><td colspan="5"><div class="table-loading"><div class="spinner"></div> 載入中…</div></td></tr>';
+    var v = PS_FILTER.view;
     api({ action:'part_set_list', kw:PS_KW, page:PS_PAGE, per:20,
-          f_customer:_psVal('ps-f-customer'), f_sub_type:_psVal('ps-f-subtype'),
-          f_jig:_psVal('ps-f-jig'), f_machine:_psVal('ps-f-machine'), f_used:_psVal('ps-f-used') }).done(function(r){
+          f_customer: PS_FILTER.cust, f_sub_type: PS_FILTER.sub,
+          f_jig:     (v === 'jig'     ? 'has'    : ''),
+          f_machine: (v === 'machine' ? 'has'    : ''),
+          f_used:    (v === 'used'    ? 'used'   : (v === 'unused' ? 'unused' : '')) }).done(function(r){
         if (!r.success) { showToast(r.message||'載入失敗','error'); return; }
         psRender(r);
-        psSyncFilterHint();
+        psRenderFilters();
     });
 }
+function psSetView(v)  { PS_FILTER.view = (PS_FILTER.view === v) ? '' : v; psLoad(1); }
+function psSetCust(c)  { PS_FILTER.cust = (PS_FILTER.cust === c) ? '' : c; psLoad(1); }
+function psSetSub(t)   { PS_FILTER.sub  = (String(PS_FILTER.sub) === String(t)) ? '' : String(t); psLoad(1); }
 function psClearFilters() {
-    ['ps-f-customer','ps-f-subtype','ps-f-jig','ps-f-machine','ps-f-used'].forEach(function(id){
-        var e = document.getElementById(id); if (e) e.value = '';
-    });
+    PS_FILTER = { view:'', cust:'', sub:'' };
     var kw = document.getElementById('ps-search'); if (kw) kw.value = '';
     psLoad(1);
 }
-/* 有篩選在作用時把「清除」鈕標起來——不然篩完忘記清，下次進來會以為資料不見了 */
-function psSyncFilterHint() {
-    var on = ['ps-f-customer','ps-f-subtype','ps-f-jig','ps-f-machine','ps-f-used'].some(function(id){ return _psVal(id) !== ''; })
-             || (document.getElementById('ps-search')||{value:''}).value.trim() !== '';
-    var btn = document.querySelector('#tab-partset button[onclick="psClearFilters()"]');
-    if (btn) { btn.className = 'btn btn-sm ' + (on ? 'btn-warning' : 'btn-default'); }
+
+/* 卡片與膠囊的渲染：每個選項都把組數印出來（點一個 0 筆的沒有意義，0 筆的淡化顯示） */
+function psRenderFilters() {
+    var box = document.getElementById('ps-cards'); if (!box || !PS_OPTS) return;
+    var st = PS_OPTS.stats || {};
+    var cards = [
+        { k:'',        n:st.total   || 0, t:'全部整組' },
+        { k:'jig',     n:st.jig     || 0, t:'組裡有治具' },
+        { k:'machine', n:st.machine || 0, t:'已綁機台' },
+        { k:'used',    n:st.used    || 0, t:'已被當治具' },
+        { k:'unused',  n:st.unused  || 0, t:'還沒人用' }
+    ];
+    box.innerHTML = cards.map(function(c){
+        var on = (PS_FILTER.view === c.k);
+        return '<div class="ps-card' + (on ? ' on' : '') + (c.n === 0 && c.k !== '' ? ' zero' : '') + '"'
+             + ' onclick="psSetView(\'' + c.k + '\')" title="' + escAttr(c.k === '' ? '顯示全部' : '只看「' + c.t + '」的整組（再點一次取消）') + '">'
+             + '<div class="ps-card-n">' + c.n + '</div><div class="ps-card-t">' + escHtml(c.t) + '</div></div>';
+    }).join('');
+
+    var pills = document.getElementById('ps-pills'); if (!pills) return;
+    var h = '';
+    var cs = PS_OPTS.customers || [];
+    if (cs.length) {
+        h += '<div class="ps-pill-grp"><span class="ps-pill-lb">客戶</span>';
+        cs.forEach(function(c){
+            h += '<span class="ps-pill' + (PS_FILTER.cust === c.customer_id ? ' on' : '') + '"'
+               + ' onclick="psSetCust(\'' + escAttr(c.customer_id) + '\')" title="' + escAttr(c.customer + '（' + c.customer_id + '）') + '">'
+               + escHtml(c.customer) + '<span class="ps-pill-n">' + c.cnt + '</span></span>';
+        });
+        h += '</div>';
+    }
+    var ts = PS_OPTS.sub_types || [];
+    if (ts.length) {
+        h += '<div class="ps-pill-grp"><span class="ps-pill-lb">工件小類</span>';
+        ts.forEach(function(t){
+            h += '<span class="ps-pill' + (String(PS_FILTER.sub) === String(t.sub_type_id) ? ' on' : '') + '"'
+               + ' onclick="psSetSub(' + t.sub_type_id + ')">'
+               + escHtml(t.sub_type_name) + '<span class="ps-pill-n">' + t.cnt + '</span></span>';
+        });
+        h += '</div>';
+    }
+    // 有任何篩選在作用時才出現「清除」——沒在篩的時候多一顆沒用的鈕只是雜訊
+    var any = PS_FILTER.view !== '' || PS_FILTER.cust !== '' || PS_FILTER.sub !== ''
+              || (document.getElementById('ps-search')||{value:''}).value.trim() !== '';
+    if (any) h += '<span class="ps-pill ps-pill-clear" onclick="psClearFilters()"><i class="fa fa-times"></i> 清除篩選</span>';
+    pills.innerHTML = h;
 }
-/* 篩選下拉的選項：客戶只列「真的有出現在某一組裡」的，不要把 980 家全列出來 */
+
+/* 篩選選項（含各自的組數）：客戶與工件小類只列「真的有出現在某一組裡」的——
+   全部客戶 980 家列出來一樣找不到，而且挑一個沒有整組的客戶篩出來必定是空的。 */
 var _psFilterLoaded = false;
-function psLoadFilterOptions() {
-    if (_psFilterLoaded) return;
+function psLoadFilterOptions(force) {
+    if (_psFilterLoaded && !force) { psRenderFilters(); return; }
     _psFilterLoaded = true;
     api({ action:'part_set_filter_options' }).done(function(r){
         if (!r.success) {
@@ -16315,12 +16388,8 @@ function psLoadFilterOptions() {
             showToast(r.message || '篩選選項載入失敗', 'error');   // 靜默 return 只會看到「選項是空的」
             return;
         }
-        var cs = document.getElementById('ps-f-customer');
-        if (cs) (r.customers||[]).forEach(function(c){
-            cs.appendChild(new Option(c.customer + '（' + c.customer_id + '）', c.customer_id));
-        });
-        var ss = document.getElementById('ps-f-subtype');
-        if (ss) (r.sub_types||[]).forEach(function(t){ ss.appendChild(new Option(t.sub_type_name, t.sub_type_id)); });
+        PS_OPTS = r;
+        psRenderFilters();
     });
 }
 
@@ -16488,7 +16557,7 @@ function psSave() {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         showToast('已儲存');
         $('#partSetModal').modal('hide');
-        if (activeTab === 'partset') psLoad(PS_PAGE);
+        if (activeTab === 'partset') { psLoadFilterOptions(true); psLoad(PS_PAGE); }
         if (typeof pfReloadPartSets === 'function') pfReloadPartSets();
     });
 }
@@ -16496,7 +16565,7 @@ function psDelete(setId) {
     if (!confirm('確定刪除這一組？\n（只刪掉「這幾個是一組」這件事，料號本身與其他組都不受影響）')) return;
     api({ action:'part_set_delete', set_id:setId }).done(function(r){
         if (!r.success) { showToast(r.message||'刪除失敗','error'); return; }
-        showToast('已刪除'); psLoad(PS_PAGE);
+        showToast('已刪除'); psLoadFilterOptions(true); psLoad(PS_PAGE);
         if (typeof pfReloadPartSets === 'function') pfReloadPartSets();
     });
 }
