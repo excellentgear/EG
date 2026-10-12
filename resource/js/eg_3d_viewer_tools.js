@@ -1754,7 +1754,7 @@ var EG3DTools = (function () {
         var geo = new GeoCtor();
         geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
         geo.setAttribute('normal', new PosAttrCtor(new Float32Array(normals), 3));
-        return { geo: geo, tris2d: tris2d, basis: basis };
+        return { geo: geo, tris2d: tris2d, basis: basis, loops2d: loops2d };
     }
     // ── 剖面斜線（45 度剖面劃線，2026-10-12 使用者要求比照工程圖慣例：剖切到的實心材料
     // 用斜線（hachure）表示，不要整面實色填滿）──────────────────────────────────
@@ -1763,6 +1763,9 @@ var EG3DTools = (function () {
     // 區域（含挖洞處自然沒有三角形＝線也不會畫進洞裡，不需要另外處理洞），不需要另外對整個
     // 多邊形（可能帶洞）重新寫一套裁剪邏輯。單一三角形一次直線裁剪最多只會留下一段（三角形
     // 是凸的），逐一相交收集起來串成這條斜線在填色區域內的所有線段。
+    // 註：_clipLineByHalfPlane2d／_line2dTriClip 自 2026-10-12 起**已不再被呼叫**——斜線
+    //     改成直接對輪廓邊做偶奇求交（見 _buildCapHatchSegments2d），不再逐一跟三角形裁剪。
+    //     保留原始碼僅供對照，要改斜線請改那一支。
     function _clipLineByHalfPlane2d(tMin, tMax, p0, dir, edgeP, nx, ny) {
         // 半平面以「內側」為 dot(n, point-edgeP) >= 0
         var num = nx * (edgeP[0] - p0[0]) + ny * (edgeP[1] - p0[1]);
@@ -1790,51 +1793,54 @@ var EG3DTools = (function () {
         }
         return range;
     }
-    // tris2d：同一個封頂已經算好的三角化結果；angleDeg：斜線角度（工程圖慣例 45 度，相鄰
-    // 封頂刻意可改 135 度互相區分，等同紙本上「不同零件的剖面線角度要錯開」慣例）；
-    // spacing：平行線間距（2D 參數空間座標單位，與模型座標同單位）。回傳 2D 線段陣列。
-    function _buildCapHatchSegments2d(tris2d, angleDeg, spacing) {
+    // loops2d：這個封頂的 2D 輪廓（外圍與洞一視同仁，與填色用的是同一份）；angleDeg：斜線
+    // 角度（工程圖慣例 45 度，相鄰封頂刻意改 135 度互相區分，等同紙本上「不同零件的剖面線
+    // 角度要錯開」慣例）；spacing：平行線間距。回傳 2D 線段陣列。
+    //
+    // 作法：把輪廓整個旋轉 −angleDeg，原本的斜線就變成水平掃描線，於是可以直接沿用與封頂
+    // 填色完全相同的「偶奇填充」求交邏輯（每條掃描線求出所有交點、排序後兩兩配對），算完
+    // 再把線段轉回原方向。
+    // ★ 這是 2026-10-12 的改版：舊版是「每條斜線逐一去跟封頂的每一片三角形求交」，封頂改用
+    //   掃描線梯形分解之後三角形數量可達兩萬片，成本是 線數×三角形數（數百萬次），而且一條
+    //   斜線會被切成上百段還要再合併。改成直接對輪廓邊求交之後是 線數×邊數（數十萬次），
+    //   一次就得到完整線段、不需要合併，結果也更精確。
+    function _buildCapHatchSegments2d(loops2d, angleDeg, spacing) {
         var rad = angleDeg * Math.PI / 180;
-        var dir = [Math.cos(rad), Math.sin(rad)];
-        var nrm = [-dir[1], dir[0]];   // 垂直方向，用來把各平行線分組（沿這個方向等距切片）
-        var minOff = Infinity, maxOff = -Infinity;
-        tris2d.forEach(function (tri) {
-            tri.forEach(function (p) {
-                var off = p[0]*nrm[0] + p[1]*nrm[1];
-                if (off < minOff) minOff = off;
-                if (off > maxOff) maxOff = off;
-            });
-        });
-        if (!isFinite(minOff) || !isFinite(maxOff)) return [];
-        var segments = [];
-        var start = Math.floor(minOff / spacing) * spacing;
-        for (var off = start; off <= maxOff + spacing; off += spacing) {
-            var p0 = [nrm[0]*off, nrm[1]*off];
-            var ranges = [];
-            for (var t = 0; t < tris2d.length; t++) {
-                var tri = tris2d[t];
-                var range = _line2dTriClip(p0, dir, tri[0], tri[1], tri[2]);
-                if (range) ranges.push(range);
+        var ca = Math.cos(-rad), sa = Math.sin(-rad);     // 轉成「水平掃描線」的旋轉
+        var ica = Math.cos(rad), isa = Math.sin(rad);     // 轉回原方向
+        var edges = [], minY = Infinity, maxY = -Infinity;
+        (loops2d || []).forEach(function (loop) {
+            if (!loop || loop.length < 3) return;
+            for (var i = 0; i < loop.length; i++) {
+                var p = loop[i], q = loop[(i+1) % loop.length];
+                var px = p[0]*ca - p[1]*sa, py = p[0]*sa + p[1]*ca;
+                var qx = q[0]*ca - q[1]*sa, qy = q[0]*sa + q[1]*ca;
+                if (py < minY) minY = py;
+                if (py > maxY) maxY = py;
+                if (qy < minY) minY = qy;
+                if (qy > maxY) maxY = qy;
+                if (py === qy) continue;
+                edges.push(py < qy ? { x0:px, y0:py, x1:qx, y1:qy } : { x0:qx, y0:qy, x1:px, y1:py });
             }
-            if (!ranges.length) continue;
-            // 合併同一條斜線上首尾相接的區間：封頂的三角化是「掃描線梯形帶」，一條斜線
-            // 會被切成上百個相鄰小段，不合併的話每一小段都要產生一條極窄三角面帶，頂點數
-            // 會暴增十倍以上（而且相鄰段的接縫在畫面上還可能出現細微鋸齒）。
-            ranges.sort(function (a, b) { return a[0] - b[0]; });
-            var joinTol = spacing * 1e-3;
-            var cur = ranges[0].slice();
-            for (var ri = 1; ri <= ranges.length; ri++) {
-                if (ri < ranges.length && ranges[ri][0] <= cur[1] + joinTol) {
-                    if (ranges[ri][1] > cur[1]) cur[1] = ranges[ri][1];
-                    continue;
-                }
-                if (cur[1] - cur[0] > joinTol) {
-                    segments.push([
-                        [p0[0] + dir[0]*cur[0], p0[1] + dir[1]*cur[0]],
-                        [p0[0] + dir[0]*cur[1], p0[1] + dir[1]*cur[1]]
-                    ]);
-                }
-                if (ri < ranges.length) cur = ranges[ri].slice();
+        });
+        if (edges.length < 2 || !isFinite(minY) || !isFinite(maxY) || !(spacing > 0)) return [];
+        var segments = [];
+        var guard = 0;
+        for (var y = Math.ceil(minY / spacing) * spacing; y <= maxY && guard++ < 20000; y += spacing) {
+            var xs = [];
+            for (var i = 0; i < edges.length; i++) {
+                var e = edges[i];
+                if (e.y0 > y || e.y1 <= y) continue;   // 半開區間 [y0,y1)，頂點處才不會重複計數
+                xs.push(e.x0 + (y - e.y0) * (e.x1 - e.x0) / (e.y1 - e.y0));
+            }
+            if (xs.length < 2) continue;
+            xs.sort(function (a, b) { return a - b; });
+            for (var k = 0; k + 1 < xs.length; k += 2) {
+                if (xs[k+1] - xs[k] <= spacing * 1e-3) continue;
+                segments.push([
+                    [xs[k]*ica - y*isa, xs[k]*isa + y*ica],
+                    [xs[k+1]*ica - y*isa, xs[k+1]*isa + y*ica]
+                ]);
             }
         }
         return segments;
@@ -1864,8 +1870,8 @@ var EG3DTools = (function () {
     // tris2d：封頂已算好的三角化結果；basis：同一份平面基底；PosAttrCtor/GeoCtor：借用的
     // BufferGeometry／position 屬性建構子（跟封頂本身共用同一份，呼叫端傳入）。回傳世界座標
     // BufferGeometry（含法向量，供 Phong 材質正常受光），沒有斜線可畫時回傳 null。
-    function _buildCapHatchGeometry(tris2d, basis, angleDeg, spacing, lineWidth, PosAttrCtor, GeoCtor) {
-        var segs2d = _buildCapHatchSegments2d(tris2d, angleDeg, spacing);
+    function _buildCapHatchGeometry(loops2d, basis, angleDeg, spacing, lineWidth, PosAttrCtor, GeoCtor) {
+        var segs2d = _buildCapHatchSegments2d(loops2d, angleDeg, spacing);
         if (!segs2d.length) return null;
         var quadTris2d = _buildCapHatchQuads2d(segs2d, lineWidth);
         if (!quadTris2d.length) return null;
@@ -1964,10 +1970,6 @@ var EG3DTools = (function () {
         // 斜線間距／線寬依整個模型的包圍盒尺度換算（跟透視模式虛線間距 dashSize 同一種
         // 做法），模型大小不同時斜線密度維持視覺上接近的比例，不會一個模型線條擠成一團、
         // 另一個模型卻稀疏到看不出是剖面線。
-        var mbbox = mm.GetBoundingBox(function () { return true; });
-        var mscale = mbbox ? _vecLen3([mbbox.max.x-mbbox.min.x, mbbox.max.y-mbbox.min.y, mbbox.max.z-mbbox.min.z]) : 100;
-        var hatchSpacing = Math.max(0.8, mscale * 0.025);
-        var hatchWidth = Math.max(0.08, hatchSpacing * 0.12);
         var PosAttrCtor = sampleMesh.geometry.attributes.position.constructor;
         var GeoCtor = sampleMesh.geometry.constructor;
 
@@ -1996,7 +1998,30 @@ var EG3DTools = (function () {
             // 工程圖「不同零件（或此處=不同剖切面）的剖面線角度要互相區分」慣例，同時也
             // 順便解決了舊版「兩塊封頂同色、分不出交界」的問題，不必再靠顏色分。
             var angleDeg = (i % 2 === 0) ? 45 : 135;
-            var hatchGeo = _buildCapHatchGeometry(built.tris2d, built.basis, angleDeg, hatchSpacing, hatchWidth, PosAttrCtor, GeoCtor);
+            // ★ 斜線間距依「這塊斷面自己的大小」換算，不可以用整個模型的尺寸
+            //   （2026-10-12 使用者回報「楔形剖面在某個角度會有問題」：那支件長 422mm，
+            //   沿長軸剖開後斷面是「422mm 長 × 只有幾 mm 厚」的薄壁，用模型尺寸算出來的
+            //   間距是 10.85mm，每條 45 度斜線穿過薄壁只有 4mm 長、而且間隔 10mm，看起來
+            //   就跟沒有斜線一樣，斷面與一般表面分不出來）。
+            //   以「面積開根號」當基準（≈等效邊長）再除以 12，不論斷面是圓盤還是細長條都能
+            //   得到視覺密度接近的線數；再用斷面自己的對角線夾住上下限，避免退化情形算出
+            //   密到畫不完或疏到整片沒半條線的間距。
+            var capArea = 0, minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+            built.tris2d.forEach(function (tri) {
+                capArea += Math.abs((tri[1][0]-tri[0][0])*(tri[2][1]-tri[0][1]) - (tri[1][1]-tri[0][1])*(tri[2][0]-tri[0][0])) / 2;
+                tri.forEach(function (p) {
+                    if (p[0] < minU) minU = p[0];
+                    if (p[0] > maxU) maxU = p[0];
+                    if (p[1] < minV) minV = p[1];
+                    if (p[1] > maxV) maxV = p[1];
+                });
+            });
+            var capDiag = Math.sqrt((maxU-minU)*(maxU-minU) + (maxV-minV)*(maxV-minV)) || 1;
+            var hatchSpacing = Math.sqrt(capArea) / 12;
+            if (!(hatchSpacing > 0)) hatchSpacing = capDiag / 20;
+            hatchSpacing = Math.min(Math.max(hatchSpacing, capDiag / 400), capDiag / 6);
+            var hatchWidth = Math.max(hatchSpacing * 0.12, capDiag * 0.0006);
+            var hatchGeo = _buildCapHatchGeometry(built.loops2d, built.basis, angleDeg, hatchSpacing, hatchWidth, PosAttrCtor, GeoCtor);
             if (hatchGeo) {
                 // 斜線本身也是三角面（見 _buildCapHatchQuads2d 註解：改用三角面才吃得到
                 // polygonOffset），材質沿用跟封頂同一套 _buildCapMaterial 再覆寫顏色與
