@@ -5,6 +5,35 @@ if (!isset($_SESSION['userName'])) {
     exit();
 }
 
+/**
+ * 本頁所有檔案清單共用：目前登入者的「下載權限矩陣」（唯一實作在 attach_download_perm_lib，
+ * 這裡只是取一次放著重複用）。清單一次幾十筆，逐筆呼叫 eg_adp_user_can() 會每筆查一次 RBAC。
+ * 2026-10-12 使用者要求：沒有下載權限的人，下載／另存按鈕要直接不顯示，不要按了才被擋。
+ * 後端算好 can_dl 旗標交給前端，前端只讀旗標、不自己用副檔名或標籤再判一次（鐵律4）；
+ * 真正的守門仍在三支附件 API 與 bom_download.php（鐵律8：前端藏按鈕≠擋得住直打網址）。
+ */
+function bvDlMatrix(PDO $db): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if ($uid === 0 && ($_SESSION['userName'] ?? '') !== '') {
+        try {
+            $st = $db->prepare("SELECT id FROM user WHERE user_uname = ? AND state != 0 LIMIT 1");
+            $st->execute([$_SESSION['userName']]);
+            $uid = (int)($st->fetchColumn() ?: 0);
+        } catch (Throwable $e) {}
+    }
+    try { $m = eg_adp_user_matrix($db, $uid, false); } catch (Throwable $e) { $m = ['enforced'=>false,'codes'=>[]]; }
+    return $m;
+}
+/** 單一檔案能不能下載：$catIds 傳 null＝沒有附件紀錄的 NAS 圖面（一律視為公司內部） */
+function bvCanDl(PDO $db, string $filename, ?string $catIds): bool {
+    require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+    $isCust = ($catIds === null) ? false : eg_adp_compute_is_customer($db, $catIds);
+    return eg_adp_matrix_allow(bvDlMatrix($db), $filename, $isCust);
+}
+
 // ── AJAX：取得檔名標籤設定 ────────────────────────────────────────────────
 if (isset($_POST['action']) && $_POST['action'] === 'get_file_tags_setting') {
     header('Content-Type: application/json');
@@ -112,6 +141,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                                         'label'=>$label, 'tags'=>$applyTags($fn), 'is_plus'=>false,
                                         'bom'=>$bname, 'bind_from'=>$bindFrom,
                                         'unbound'=>$unbound ? 1 : 0,
+                                        // NAS 掃描圖沒有附件紀錄＝沒有標籤，一律算公司內部（2D/3D 仍看副檔名）
+                                        'can_dl'=>bvCanDl($pdo2, $fn, null) ? 1 : 0,
                                         'bom_client'=>$row['Client_Name'] ?? ''];
                         }
                     }
@@ -218,6 +249,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'filename'       => $r['filename'],
                 'display_name'   => $r['original_name'] ?: $r['filename'],
                 'url'            => $fileUrl,
+                'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
                 'type'           => $type,
                 'file_size'      => $r['file_size'] ?: '',
@@ -264,6 +296,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                         'filename'       => $r['filename'],
                         'display_name'   => $r['original_name'] ?: $r['filename'],
                         'url'            => '../../src/store/Quotation_File_API.php?action=download&quote_no=' . urlencode($r['quote_no']) . '&filename=' . urlencode($r['filename']),
+                        'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                         'ext'            => $ext,
                         'type'           => in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image' : ($ext === 'pdf' ? 'pdf' : 'other'),
                         'file_size'      => $r['file_size'] ?: '',
@@ -293,6 +326,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                         'filename'       => $r['filename'],
                         'display_name'   => $r['original_name'] ?: $r['filename'],
                         'url'            => '../../src/store/Order_Attachment_API.php?action=download&id=' . (int)$r['id'],
+                        'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                         'ext'            => $ext,
                         'type'           => in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image' : ($ext === 'pdf' ? 'pdf' : 'other'),
                         'file_size'      => $r['file_size'] ?: '',
@@ -411,6 +445,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 'filename'       => $r['filename'],
                 'display_name'   => $r['original_name'] ?: $r['filename'],
                 'url'            => $qDlBase . '?action=download&quote_no=' . urlencode($r['quote_no']) . '&filename=' . urlencode($r['filename']),
+                'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
                 'file_size'      => $r['file_size'] ?: '',
                 'note'           => '',
@@ -450,6 +485,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                         'filename'       => $r['filename'],
                         'display_name'   => $r['original_name'] ?: $r['filename'],
                         'url'            => '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$r['id'],
+                        'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                         'ext'            => $ext,
                         'file_size'      => $r['file_size'] ?: '',
                         'note'           => (string)($r['note'] ?? ''),
@@ -539,6 +575,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                 'filename'       => $r['filename'],
                 'display_name'   => $r['original_name'] ?: $r['filename'],
                 'url'            => $dlBase . '?action=download&id=' . (int)$r['id'],
+                'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
                 'file_size'      => $r['file_size'] ?: '',
                 'note'           => '訂單 ' . $r['Order_oo'],
@@ -1059,6 +1096,7 @@ if (_initTab === 'quote') _initTab = 'order_attach';         // 舊版分頁鍵�
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
+var _currentCanDl = true;  // 目前這個檔案允不允許下載（後端算好的 can_dl，見 syncDlBtns()）
 var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PDF」鈕使用
 var _d3Exts      = ['stp','step','stl','obj','igs','iges'];   // 3D 模型副檔名（與 master_data_management.php 同一份清單）
 var _d3NeedConvertExts = ['ipt','x_t'];   // 這些副檔名瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
@@ -1093,10 +1131,15 @@ function dwgToPreviewUrl(downloadUrl) {
 }
 
 // ── 檔案切換顯示 ─────────────────────────────────────────────────────────
-function showFile(path, type, name) {
+function showFile(path, type, name, canDl) {
     _currentPath = path;
     _currentName = name || path;
     _currentType = (type || '').toLowerCase();
+    // 下載權限（2026-10-12）：沒權限就不顯示「儲存／下載 PDF／小畫家」——小畫家也會把檔案
+    // 抓到本機，藏了下載卻留著它等於沒擋。判定是後端算好送來的 can_dl（唯一實作
+    // attach_download_perm_lib），前端不自己用副檔名或標籤再判一次；沒帶這個參數（舊呼叫端）
+    // 一律視為可下載，行為與改版前相同。
+    _currentCanDl = (canDl === undefined || canDl === null) ? true : !(canDl === 0 || canDl === '0' || canDl === false);
     var _isImg = ['jpg','jpeg','png','gif','bmp'].indexOf(_currentType) !== -1;
 
     // 圖面/ERP 檔案原本是 /nas/ 別名（走 Z: 磁碟機代號）直連，Z: 是使用者 session 層級的
@@ -1150,6 +1193,7 @@ function showFile(path, type, name) {
                 $('#bom-pdf-frame').attr('src', blobUrl).show();
                 _dwgPdfUrl = dwgPreviewUrl;
                 $('#btn-print, #btn-save, #btn-save-pdf').show();
+                syncDlBtns();   // DWG 轉檔是非同步的，這裡又把按鈕叫出來了，要再收一次
             })
             .fail(function() {
                 if (_currentPath !== _reqPath) return;
@@ -1232,6 +1276,14 @@ function showFile(path, type, name) {
         $('#btn-save').show();
     }
     if (_isPaintable) { $('#btn-paint').show(); }
+    syncDlBtns();
+}
+
+/** 沒有這個檔案的下載權限時，把「取得檔案」那幾顆鈕收掉。
+ *  showFile() 裡有非同步分支（DWG／3D 轉檔完成後才 .show()），所以那些 callback 也要各呼叫
+ *  一次——只在函式結尾收一次的話，轉檔回來又會把按鈕叫出來。 */
+function syncDlBtns() {
+    if (!_currentCanDl) $('#btn-save, #btn-save-pdf, #btn-paint').hide();
 }
 
 // ── 開啟批圖編輯器（自動帶入目前預覽的圖檔＋料號）────────────────────────────
@@ -1590,7 +1642,7 @@ function doRotate(deg) {
         $btns.prop('disabled', false);
         if (!res || !res.success) { alert((res && res.message) || '旋轉失敗'); return; }
         _rotBust[_currentPath] = res.mtime || Date.now();
-        showFile(_currentPath, _currentType, _currentName);   // 重新載入（帶破快取參數）
+        showFile(_currentPath, _currentType, _currentName, _currentCanDl);   // 重新載入（帶破快取參數）
     }, 'json').fail(function() {
         $btns.prop('disabled', false);
         alert('旋轉失敗：與伺服器連線失敗');
@@ -1677,7 +1729,7 @@ $(document).on('click', '.bom-file-item', function(e) {
     $('.bom-file-item').removeClass('active');
     $(this).addClass('active');
     var isObs = $(this).data('obsolete') === '1' || $(this).data('obsolete') === 1;
-    showFile($(this).data('path'), $(this).data('type'), $(this).data('name'));
+    showFile($(this).data('path'), $(this).data('type'), $(this).data('name'), $(this).data('can-dl'));
     // 作廢 overlay
     $('#viewer-content .bom-obsolete-overlay').remove();
     if (isObs) {
@@ -1754,6 +1806,7 @@ function makeItem(f, active) {
     return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
         +' data-path="'+escapeHtml(f.path)+'"'
         +' data-type="'+escapeHtml(f.type)+'"'
+        +' data-can-dl="'+(f.can_dl === 0 ? '0' : '1')+'"'
         +' data-name="'+escapeHtml(f.name)+'">'
         +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+bindTag+'</p></a>';
 }
@@ -1867,6 +1920,7 @@ function makeAttItem(att, showSource, hideName) {
         + ' data-path="'+escapeHtml(att.url)+'"'
         + ' data-type="'+escapeHtml(att.ext)+'"'
         + ' data-name="'+escapeHtml(att.display_name)+'"'
+        + ' data-can-dl="'+(att.can_dl === 0 ? '0' : '1')+'"'
         + ' data-obsolete="'+(isObs?'1':'0')+'"'
         + ' title="'+escapeHtml(att.display_name)+'"'
         + ' style="'+st+'">'
@@ -1941,7 +1995,7 @@ function renderDrawingList() {
     if (!listHtml && !pagerHtml) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>'); showEmpty('無相關圖檔'); return; }
     if (!listHtml) { showEmpty('此頁沒有圖檔，請翻頁查看其他批次'); }
     $('#bom-file-list').html(listHtml + pagerHtml);
-    if (first) showFile(first.path, first.type, first.name);
+    if (first) showFile(first.path, first.type, first.name, first.can_dl);
 }
 
 function renderAttList(tab) {
@@ -1959,7 +2013,7 @@ function renderAttList(tab) {
     if (plain.length) {
         var f0 = plain[0];
         $('#bom-file-list .bom-file-item').first().addClass('active');
-        showFile(f0.url, f0.ext, f0.display_name);
+        showFile(f0.url, f0.ext, f0.display_name, f0.can_dl);
         applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
     } else {
         // 整個分頁都是照片時，直接打開第一本相簿（不要停在「從左側選擇檔案」）
@@ -2116,7 +2170,7 @@ function renderOrderQuoteTab() {
         var og = g.orderGroups[first.key];
         if (og.files.length) {
             $('#bom-file-list .bom-file-item').first().addClass('active');
-            showFile(og.files[0].url, og.files[0].ext, og.files[0].display_name);
+            showFile(og.files[0].url, og.files[0].ext, og.files[0].display_name, og.files[0].can_dl);
             applyObsoleteOverlay((og.files[0].category_names || []).indexOf('作廢') >= 0);
         } else if (og.quote_no) {
             showQuoteDetail(og.quote_no);
@@ -2261,7 +2315,7 @@ function renderTagFilterResults() {
     $('#bom-file-list').html(items.map(function(f) { return makeAttItem(f, true); }).join(''));
     var f0 = items[0];
     $('#bom-file-list .bom-file-item').first().addClass('active');
-    showFile(f0.url, f0.ext, f0.display_name);
+    showFile(f0.url, f0.ext, f0.display_name, f0.can_dl);
     applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
 }
 $(document).on('click', '.bom-tag-chip', function() {

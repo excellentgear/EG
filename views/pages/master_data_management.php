@@ -1706,6 +1706,9 @@ eg_part_alias_ensure_table($pdo);
 require_once __DIR__ . '/../../src/common/data_console_lib.php';
 // 專用機台的「機台編號／機台種類／機型」兩層挑選器資料來源（唯一實作，與 sop_sip 挑設備同款操作方式）
 require_once __DIR__ . '/../../src/common/machine_pick_lib.php';
+// 附件下載權限（2D/3D × 客供/內部，唯一實作）——頁面渲染時就要用到 EG_ADP_3D_EXTS 與權限判定，
+// 不能只在 action 分支裡 require（說明文字與按鈕顯示都在 HTML 階段決定）
+require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
 
 /**
  * 治具「整組」批次組出完整顯示資料（唯一實作，get_part／jig_pick_search／jig_set_list 共用，
@@ -7464,6 +7467,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $cat_id       = intval($_POST['cat_id'] ?? 0);
                 if (!_mdPerm('attach_cat', $cat_id ? 'edit' : 'add', $can_attach_cat_edit)) throw new Exception('無'.($cat_id?'編輯':'新增').'附件類別標籤權限（需 A/CDR/CDRU）');
                 $name         = trim($_POST['category_name'] ?? '');
+                // 排序：**沒送 sort_order 就完全不動它**（鐵律8「沒送≠設成 0」）。
+                // 2026-10-12 使用者回報「更新類別相關設定後，類別名稱自動排到上面去」——根因是
+                // 前端 saveAttachCategory() 把 sort_order 寫死成 0 一起送出，清單又是
+                // ORDER BY sort_order, id，所以每改一次設定那一列就被推到第一個。排序是
+                // 拖曳(op=reorder)專責的事，編輯設定不該順手改掉它。
+                $hasOrder     = array_key_exists('sort_order', $_POST) && trim((string)$_POST['sort_order']) !== '';
                 $order        = intval($_POST['sort_order'] ?? 0);
                 $show_in_list = intval($_POST['show_in_list'] ?? 0) ? 1 : 0;
                 $own_drawing  = intval($_POST['is_own_drawing'] ?? 0) ? 1 : 0;
@@ -7504,8 +7513,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=?,quote_bindable=?,need_maker=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=?,quote_bindable=?,need_maker=? WHERE id=?")
+                        ->execute([$name, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $cat_id]);
+                    // 排序只有「真的有送」才改（見上面 $hasOrder 的說明）；一般編輯設定不送＝原順序不動
+                    if ($hasOrder) $pdo->prepare("UPDATE quotation_file_categories SET sort_order=? WHERE id=?")->execute([$order, $cat_id]);
                     if ($customer_tag !== null) {
                         $pdo->prepare("UPDATE quotation_file_categories SET is_customer_tag=? WHERE id=?")->execute([$customer_tag, $cat_id]);
                     }
@@ -7513,6 +7524,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
+                    // 新增時沒指定順序＝排到最後（MAX+1），不是 0——0 會讓新標籤直接插到清單最前面
+                    if (!$hasOrder) $order = (int)$pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM quotation_file_categories")->fetchColumn();
                     $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer,quote_bindable,need_maker,is_customer_tag) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                         ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $customer_tag ?? 0]);
                     $new_id = (int)$pdo->lastInsertId();
@@ -10573,10 +10586,13 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                              類別編輯角色就能把內部標籤悄悄改成客供標籤）。 -->
                         <div class="form-group" style="margin-bottom:8px;background:#fdf0ec;border:1px solid #e6bba8;border-radius:4px;padding:8px;">
                             <label style="font-size:11px;color:#a43;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;<?php if(!($is_admin||$_mdRbacAll)):?>opacity:.5;cursor:not-allowed;<?php endif;?>">
-                                <input type="checkbox" id="acat-customer-tag" <?php if(!($is_admin||$_mdRbacAll)):?>disabled<?php endif;?>> <i class="fa fa-shield"></i> 這是「客戶提供的」標籤（下載權限分類）
+                                <input type="checkbox" id="acat-customer-tag" <?php if(!($is_admin||$_mdRbacAll)):?>disabled<?php endif;?>> <i class="fa fa-shield"></i> 客供 2D/3D 標籤（限制下載權限用）
                             </label>
                             <div style="font-size:10px;color:#a43;margin-top:2px;">
-                                勾選後，掛上此標籤的附件在「下載權限」角色判定上算<b>客戶提供</b>；未勾選的標籤一律視為<b>公司內部</b>。<br>
+                                掛上此標籤的附件算<b>客戶提供</b>；<b>沒勾到任何客供標籤的（含完全沒標籤）一律算公司內部</b>——
+                                本公司自己的 2D/3D 不必另外設「內部標籤」，只要標記客供這一邊就夠了。<br>
+                                <b>2D 還是 3D 看副檔名，不看標籤</b>（<?= implode('／', array_map(fn($e)=>'.'.$e, EG_ADP_3D_EXTS)) ?> 算 3D，其餘算 2D），
+                                所以標籤只決定「客供／內部」這一半。<br>
                                 <b>上傳後分類會被鎖定</b>，要把某份附件改成不同分類，需先在下方「解鎖下載分類」輸入本頁管理員確認密碼（10分鐘內有效）。
                                 <?php if(!($is_admin||$_mdRbacAll)):?>僅系統管理員可修改此設定。<?php endif;?>
                             </div>
@@ -20794,7 +20810,9 @@ function saveAttachCategory() {
     if (!name) { showToast('請填寫類別名稱','error'); return; }
     var vars = getAttachCatVars();
     var tagVarsJson = vars.length ? JSON.stringify(vars) : '';
-    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson,
+    // 刻意不送 sort_order：排序是「拖移排序」(op=reorder) 專責的，編輯設定不可順手改動它
+    // ——原本寫死 sort_order:0 一起送，導致每存一次該類別就被推到清單最上面（2026-10-12 使用者回報）
+    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson,
             is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0,
             dwg_group:((document.getElementById('acat-dwg-group')||{}).value||'').trim(),
             dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0,

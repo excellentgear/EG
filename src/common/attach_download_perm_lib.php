@@ -27,14 +27,23 @@
  *    的事、不受此權限限制，只有真的要把檔案存到自己電腦才需要權限（AS9100 常見的
  *    「可以看、不可以帶走」概念）。
  *
- * ── 權限 fail-open（絕對不可影響現有使用者，使用者本輪明確要求）────────────
+ * ── 權限判定：2026-10-12 起改為 fail-close（使用者拍板）──────────────────
  * 新角色 module='attach_dl'，四個功能碼 dl_2d_customer/dl_2d_internal/dl_3d_customer/
- * dl_3d_internal。這是全新加上去的限制，在管理員第一次指派這個角色給任何人之前，
- * 全站沒有人有這個模組的任何角色紀錄——此時一律視為「尚未啟用限制」，所有人下載一切
- * 完全不受影響（與 master_data 模組 2026-10-07 之前的「過渡期」規則同一種精神）。
- * 一旦某個使用者被指派了 module='attach_dl' 的任何角色，**只有這個人**的下載權限才會
- * 開始依四個功能碼嚴格判斷（勾了才能下載、沒勾就擋）；其他完全沒被指派過的人不受影響。
- * 管理員（isAdmin 或本頁等效全權）固定可下載全部。
+ * dl_3d_internal。**沒有被指派到對應功能碼的人一律不能下載**（管理員＝RBAC 'all' 或呼叫端
+ * 傳入的 $isPageAdmin 固定全部放行）。
+ *
+ * 2026-10-08 第一版刻意做成 fail-open（「沒被指派過 attach_dl 任何角色＝視為尚未啟用限制，
+ * 照舊全部放行」），因為當時一個角色都還沒指派、使用者要求「絕對不可影響現有使用者」。
+ * 2026-10-12 使用者指派完角色後交辦「人員沒有設定任何下載權限角色時，應該自動隱藏相關
+ * 2D 跟 3D 檔案的下載按鈕」，確認要收緊，故改為 fail-close。**這是全公司範圍的行為改變**：
+ * 當下在職 38 人、被指派者只有 4 位（設計 3 位＋業務主管 1 位），其餘人不再能下載任何附件。
+ * 要再放寬請改這裡一處，不要在各呼叫端各自放行。
+ *
+ * fail-close 之下有兩個必須注意的點（都已處理，動這支程式時不要拿掉）：
+ *  ‧uid 一定要先過 eg_adp_resolve_uid()——有些入口的 session 只有 userName 沒有 id，
+ *    uid=0 在 fail-open 時會被「沒角色＝放行」接住，fail-close 之下會把登入正常的人全擋掉。
+ *  ‧前端要同步隱藏按鈕（bom_viewer.php 的 can_dl / syncDlBtns），否則使用者只會看到
+ *    「按了沒反應／跳出一串英數字的錯誤」而不知道是權限問題。
  *
  * ── 鎖定解除機制（比照訂單追蹤「解鎖客戶欄」ot_client_unlock_* 同一套做法）────
  * 解鎖是「本頁管理員（master_data 的 A 或 all）或全站系統管理員」的動作，走全站共用的
@@ -84,15 +93,29 @@ if (!function_exists('eg_adp_is_3d_ext')) {
     }
 }
 
+/**
+ * 目前被標記為「客戶提供」的標籤 id 集合（請求內快取）。
+ * 檔案清單一次要判幾十筆附件，每筆各查一次 DB＝N+1；標籤設定在同一個請求內不會變，
+ * 查一次放記憶體即可。呼叫端不必自己快取。
+ */
+if (!function_exists('eg_adp_customer_cat_ids')) {
+    function eg_adp_customer_cat_ids(PDO $db, bool $reset = false): array {
+        static $cache = null;
+        if ($reset) { $cache = null; return []; }
+        if ($cache !== null) return $cache;
+        try {
+            $cache = array_map('intval', $db->query("SELECT id FROM quotation_file_categories WHERE is_customer_tag=1")->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) { $cache = []; }
+        return $cache;
+    }
+}
+
 /** 由逗號分隔的 category_ids 字串，即時算出「是不是客供」（任一標籤有 is_customer_tag=1 即為客供） */
 if (!function_exists('eg_adp_compute_is_customer')) {
     function eg_adp_compute_is_customer(PDO $db, ?string $catIdsStr): bool {
         $ids = array_values(array_filter(array_map('intval', explode(',', (string)$catIdsStr))));
         if (!$ids) return false;
-        $ph = implode(',', array_fill(0, count($ids), '?'));
-        $st = $db->prepare("SELECT COUNT(*) FROM quotation_file_categories WHERE is_customer_tag=1 AND id IN ($ph)");
-        $st->execute($ids);
-        return (int)$st->fetchColumn() > 0;
+        return (bool)array_intersect($ids, eg_adp_customer_cat_ids($db));
     }
 }
 
@@ -106,6 +129,25 @@ if (!function_exists('eg_adp_class_code')) {
 if (!function_exists('eg_adp_class_label')) {
     function eg_adp_class_label(bool $is3d, bool $isCustomer): string {
         return ($is3d ? '3D' : '2D') . '·' . ($isCustomer ? '客戶提供' : '公司內部');
+    }
+}
+
+/**
+ * 把呼叫端給的 uid 補齊（2026-10-12 改 fail-close 後必備）。
+ * 站上有些入口的 session 只有 userName 沒有 id（見記憶 session_userid_key 與 bom_viewer.php
+ * 既有的回查邏輯）——以前 fail-open 時 uid=0 會被「沒角色＝放行」接住，現在 fail-close 之下
+ * uid=0 等於沒有任何功能碼，**會把登入正常的人整個擋掉**。故一律先回查補上。
+ */
+if (!function_exists('eg_adp_resolve_uid')) {
+    function eg_adp_resolve_uid(PDO $db, int $uid): int {
+        if ($uid > 0) return $uid;
+        $uname = $_SESSION['userName'] ?? '';
+        if ($uname === '') return 0;
+        try {
+            $st = $db->prepare("SELECT id FROM user WHERE user_uname = ? AND state != 0 LIMIT 1");
+            $st->execute([$uname]);
+            return (int)($st->fetchColumn() ?: 0);
+        } catch (Throwable $e) { return 0; }
     }
 }
 
@@ -127,13 +169,44 @@ if (!function_exists('eg_adp_user_has_any_role')) {
  */
 if (!function_exists('eg_adp_user_can')) {
     function eg_adp_user_can(PDO $db, int $uid, bool $isPageAdmin, bool $is3d, bool $isCustomer): bool {
-        if ($isPageAdmin) return true;
-        if (!eg_adp_user_has_any_role($db, $uid)) return true;   // fail-open：這個人從未被設定過此權限
+        $m = eg_adp_user_matrix($db, $uid, $isPageAdmin);
+        if (empty($m['enforced'])) return true;
+        return !empty($m['codes'][eg_adp_class_code($is3d, $isCustomer)]);
+    }
+}
+
+/**
+ * 一次算完某使用者的下載權限矩陣（給「一個畫面要判一整批附件」的呼叫端用）。
+ * eg_adp_user_can() 每呼叫一次就查一次 RBAC，檔案清單動輒幾十筆，逐筆呼叫＝N+1。
+ * 回傳 ['enforced'=>bool, 'codes'=>[功能碼=>true]]：enforced=false 代表這個人完全不受限
+ * （管理員，或從未被指派過 attach_dl 角色的 fail-open 過渡期對象），codes 此時沒有意義。
+ * 判定規則與 eg_adp_user_can() 必須一致——這裡是它的批次版，不是另一套規則（鐵律4）。
+ */
+if (!function_exists('eg_adp_user_matrix')) {
+    function eg_adp_user_matrix(PDO $db, int $uid, bool $isPageAdmin): array {
+        if ($isPageAdmin) return ['enforced' => false, 'codes' => []];
+        $uid = eg_adp_resolve_uid($db, $uid);
         require_once __DIR__ . '/rbac.php';
         $feats = [];
         try { $feats = rbac_user_features($db, $uid); } catch (Throwable $e) {}
-        if (in_array('all', $feats, true)) return true;
-        return in_array(eg_adp_class_code($is3d, $isCustomer), $feats, true);
+        if (in_array('all', $feats, true)) return ['enforced' => false, 'codes' => []];
+        $codes = [];
+        foreach (['dl_2d_customer','dl_2d_internal','dl_3d_customer','dl_3d_internal'] as $c) {
+            if (in_array($c, $feats, true)) $codes[$c] = true;
+        }
+        return ['enforced' => true, 'codes' => $codes];
+    }
+}
+
+/**
+ * 用上面算好的矩陣判單一檔案能不能下載（純運算，不再查 DB）。
+ * $isCustomer 傳 null＝呼叫端拿不到標籤（例如 BOM 掃描圖那種沒有附件紀錄的檔案），
+ * 一律當公司內部——與 eg_adp_compute_is_customer() 對「沒有任何客供標籤」的結論相同。
+ */
+if (!function_exists('eg_adp_matrix_allow')) {
+    function eg_adp_matrix_allow(array $matrix, string $filename, ?bool $isCustomer): bool {
+        if (empty($matrix['enforced'])) return true;
+        return !empty($matrix['codes'][eg_adp_class_code(eg_adp_is_3d_ext($filename), (bool)$isCustomer)]);
     }
 }
 

@@ -44,6 +44,31 @@ if (!$resolved) {
 }
 $physPath = $resolved['fs'];
 
+// ── 下載權限（唯一實作 attach_download_perm_lib）──────────────────────────
+// 2026-10-12：這支先前只檢查「有沒有登入」，所以三支附件 API 都已經守住的下載權限，
+// 在「圖面查閱 → 儲存」這條路徑上完全沒有擋——NAS 圖面（含 .stp/.ipt 這類 3D 原始檔）
+// 只要登入就能另存帶走。現在比照 API 同一套規則補上。
+//   ‧只擋真正的另存（未帶 inline）；inline=1 是畫面預覽／列印要用的，不受限制。
+//   ‧NAS 掃描圖沒有附件紀錄、拿不到標籤 → 一律視為「公司內部」（與
+//     eg_adp_compute_is_customer() 對「沒有任何客供標籤」的結論相同）；2D/3D 看副檔名。
+if (!$inline) {
+    try {
+        require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+        $dlUid = (int)($_SESSION['id'] ?? 0);
+        if ($dlUid === 0 && ($_SESSION['userName'] ?? '') !== '') {
+            $stU = $pdoDl->prepare("SELECT id FROM user WHERE user_uname = ? AND state != 0 LIMIT 1");
+            $stU->execute([$_SESSION['userName']]);
+            $dlUid = (int)($stU->fetchColumn() ?: 0);
+        }
+        $gate = eg_adp_gate_download($pdoDl, $dlUid, false, basename($physPath), null);
+        if (!$gate['ok']) {
+            header('HTTP/1.1 403 Forbidden');
+            header('Content-Type: text/plain; charset=utf-8');
+            exit($gate['msg']);
+        }
+    } catch (Throwable $e) { /* 判定失敗不擋下載，維持既有行為（fail-open，見共用庫檔頭） */ }
+}
+
 // ── MIME 類型 ──
 $ext = $resolved['ext'];
 $mimes = [

@@ -44,6 +44,33 @@ try {
         echo json_encode(['success' => false, 'message' => '檔案不存在（可能已被移動或刪除）']);
         exit;
     }
+    // 下載權限（2026-10-12）：小畫家會把檔案整份抓到本機，等同「下載／另存」，
+    // 故與 bom_download.php／三支附件 API 套同一把尺（唯一實作 attach_download_perm_lib）。
+    // 前端已經在沒權限時不顯示「小畫家」鈕，這裡是後端那一道（鐵律8：藏按鈕擋不住直打網址）。
+    // 標籤拿不到時（/nas/ 圖面）一律視為公司內部，與 bom_download.php 同一種處理。
+    try {
+        require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+        $catIds = null;
+        if (($t['src'] ?? '') === 'part' && !empty($t['ref']['id'])) {
+            $cq = $pdo->prepare("SELECT category_ids FROM part_attachments WHERE id=?");
+            $cq->execute([(int)$t['ref']['id']]);
+            $catIds = (string)($cq->fetchColumn() ?: '');
+        } elseif (($t['src'] ?? '') === 'order' && !empty($t['ref']['id'])) {
+            $cq = $pdo->prepare("SELECT category_ids FROM order_attachments WHERE id=?");
+            $cq->execute([(int)$t['ref']['id']]);
+            $catIds = (string)($cq->fetchColumn() ?: '');
+        } elseif (($t['src'] ?? '') === 'quote' && !empty($t['ref']['quote_no'])) {
+            $cq = $pdo->prepare("SELECT category_ids FROM quotation_attachments WHERE quote_no=? AND filename=? LIMIT 1");
+            $cq->execute([(string)$t['ref']['quote_no'], (string)($t['ref']['filename'] ?? '')]);
+            $catIds = (string)($cq->fetchColumn() ?: '');
+        }
+        $gate = eg_adp_gate_download($pdo, $uid, false, $r['name'], $catIds);
+        if (!$gate['ok']) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => $gate['msg']]);
+            exit;
+        }
+    } catch (Throwable $e) { /* 判定失敗不擋，維持既有行為（fail-open，見共用庫檔頭） */ }
     $tok = eg_bvf_token_issue($t, $uid);
     if ($tok === '') {
         echo json_encode(['success' => false, 'message' => '無法建立臨時下載連結（伺服器暫存區不可寫）']);
