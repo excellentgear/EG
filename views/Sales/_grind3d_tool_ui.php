@@ -230,6 +230,20 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
     <div id="g3d-body"></div>
 </div>
 
+<!-- ── 參考圖面放大視窗：與 #g3d-win 同層的獨立浮動視窗，可拖曳、可調整大小，
+     不佔用 mount() 的內容區（所以 mount() 重畫面板時不會把它一起清掉）──── -->
+<div id="g3d-ref-box">
+    <div id="g3d-ref-hdr">
+        <i class="fa fa-file-image-o"></i><span id="g3dRefTitle">參考圖面</span>
+        <span class="g3d-sp"></span>
+        <button type="button" id="g3dRefFit">符合視窗</button>
+        <button type="button" id="g3dRef100">100%</button>
+        <button type="button" id="g3dRefNewTab">另開分頁</button>
+        <button type="button" id="g3dRefClose">關閉</button>
+    </div>
+    <div id="g3d-ref-stage"></div>
+</div>
+
 <?php /* o3dv.min.js（1MB）與 eg_3d_viewer_tools.js（143KB）刻意**不在這裡載入**：
    本元件會被掛在訂單追蹤（現場每天在用的清單、11,600 行）與批圖編輯器上，
    多 1.1MB 進頁面載入路徑是不能接受的。改成使用者第一次真的打開 3D 工具時
@@ -890,6 +904,16 @@ var EGGrind3D = (function () {
            備援接手，**只綁在本面板上**，不會去動宿主頁面既有的 Enter 行為。 */
         h.push('<div class="g3d-left" data-eg-form data-eg-submit="#g3dToLimit">');
 
+        /* ── 參考圖面：零成本的輔助輸入（見上方 CSS 區塊的說明）────────────
+           data-eg-skip 整段排除——檔案選擇器不是要跳欄或全選的欄位。 */
+        h.push('<div class="g3d-sec" data-eg-skip><h4>參考圖面'
+            + '<span style="font-weight:400;font-size:11px;color:#8a7560">'
+            + '（只在畫面上對照，不會存檔）</span></h4>'
+            + '<div class="g3d-ref-sec" id="g3dRefSec">'
+            +   '<label class="g3d-ref-pick"><i class="fa fa-upload"></i> 選擇圖面'
+            +     '<input type="file" id="g3dRefFile" accept="image/*,.pdf"></label>'
+            + '</div></div>');
+
         h.push('<div class="g3d-sec"><h4>砂輪</h4>');
         NUMF.slice(0, 5).forEach(function (f) { h.push(fieldHtml(f)); });
         h.push('</div>');
@@ -1216,6 +1240,212 @@ var EGGrind3D = (function () {
         ST.sec = T3.setSectionMode(VW, ST.secOpts);
     }
 
+    /* ══ 十二之二、參考圖面（零成本輔助輸入）══════════════════════════════
+       獨立於 ST（mount() 每次會整個換掉 ST.root 的內容），用自己的模組級狀態，
+       因為放大視窗 #g3d-ref-box 是跟 #g3d-win 同層的固定節點，不會被 mount()
+       清掉；圖面選了一次，不管面板重畫幾次（嵌入↔浮動視窗互換時）都還在。
+       **一律不送到後端**：這是填表當下的視覺輔助，不是要留存的文件。 */
+    var REF = { url: null, name: '', isPdf: false, scale: 1, panX: 0, panY: 0,
+                natW: 0, natH: 0, dragging: false, dx: 0, dy: 0 };
+
+    var REF_EXT_OK = /\.(jpe?g|png|gif|bmp|webp|pdf)$/i;
+    var REF_MAX_MB = 30;   /* 純前端顯示的記憶體上限，不是伺服器限制 */
+
+    function refClearUrl() {
+        if (REF.url) { try { URL.revokeObjectURL(REF.url); } catch (e) {} }
+        REF.url = null;
+    }
+
+    function refSetFile(file) {
+        if (!file) return;
+        if (!REF_EXT_OK.test(file.name)) {
+            alert('只接受圖片或 PDF（jpg/png/gif/bmp/webp/pdf）。');
+            return;
+        }
+        if (file.size > REF_MAX_MB * 1024 * 1024) {
+            alert('檔案太大（上限 ' + REF_MAX_MB + 'MB），瀏覽器顯示會很慢，請先縮圖。');
+            return;
+        }
+        refClearUrl();
+        REF.url = URL.createObjectURL(file);
+        REF.name = file.name;
+        REF.isPdf = /\.pdf$/i.test(file.name);
+        REF.natW = 0; REF.natH = 0;
+        refRenderPickRow();
+        var box = document.getElementById('g3d-ref-box');
+        if (box && box.classList.contains('g3d-show')) refOpenBox();  /* 正開著就直接換圖 */
+    }
+
+    function refClear() {
+        refClearUrl();
+        REF.name = ''; REF.isPdf = false;
+        refRenderPickRow();
+        refCloseBox();
+    }
+
+    /* 已選圖面那一列（選擇器按鈕 / 縮圖 + 檔名 + 清除），畫面上可能同時存在
+       嵌入式與浮動視窗各一份 #g3dRefSec（極少見但不是不可能），都要一起更新。 */
+    function refRenderPickRow() {
+        document.querySelectorAll('#g3dRefSec').forEach(function (sec) {
+            if (!REF.url) {
+                sec.innerHTML = '<label class="g3d-ref-pick"><i class="fa fa-upload"></i> 選擇圖面'
+                    + '<input type="file" id="g3dRefFile" accept="image/*,.pdf"></label>';
+            } else {
+                var thumb = REF.isPdf
+                    ? '<span class="g3d-ref-pdf-ic"><i class="fa fa-file-pdf-o"></i></span>'
+                    : '<img class="g3d-ref-thumb" src="' + REF.url + '" alt="">';
+                sec.innerHTML = '<div class="g3d-ref-thumb-wrap">' + thumb
+                    + '<span class="g3d-ref-name" title="' + esc(REF.name) + '">' + esc(REF.name) + '</span>'
+                    + '</div>'
+                    + '<label class="g3d-ref-pick" style="padding:5px 8px"><i class="fa fa-upload"></i>'
+                    + '<input type="file" id="g3dRefFile" accept="image/*,.pdf"></label>'
+                    + '<button type="button" class="g3d-ref-x" id="g3dRefClear" title="清除">×</button>';
+            }
+        });
+        refBindPickRow();
+    }
+
+    /* innerHTML 重畫過，事件要重新綁；用 onclick/onchange 直接賦值最簡單可靠
+       （這一小塊元素壽命短、重綁頻率不高，不必上事件委派）。 */
+    function refBindPickRow() {
+        document.querySelectorAll('#g3dRefFile').forEach(function (inp) {
+            inp.onchange = function () { refSetFile(inp.files && inp.files[0]); };
+        });
+        document.querySelectorAll('.g3d-ref-thumb, .g3d-ref-pdf-ic').forEach(function (el) {
+            el.onclick = refOpenBox;
+        });
+        var x = document.getElementById('g3dRefClear');
+        if (x) x.onclick = refClear;
+    }
+
+    function refOpenBox() {
+        if (!REF.url) return;
+        var box = document.getElementById('g3d-ref-box');
+        var stage = document.getElementById('g3d-ref-stage');
+        var title = document.getElementById('g3dRefTitle');
+        if (!box || !stage) return;
+        if (title) title.textContent = '參考圖面 — ' + REF.name;
+        if (REF.isPdf) {
+            stage.innerHTML = '<iframe src="' + REF.url + '"></iframe>';
+        } else {
+            stage.innerHTML = '<img id="g3dRefImg" src="' + REF.url + '" alt="">';
+            var img = document.getElementById('g3dRefImg');
+            img.onload = function () {
+                REF.natW = img.naturalWidth; REF.natH = img.naturalHeight;
+                refFit();
+            };
+        }
+        box.classList.add('g3d-show');
+    }
+    function refCloseBox() {
+        var box = document.getElementById('g3d-ref-box');
+        if (box) box.classList.remove('g3d-show');
+    }
+
+    function refApplyTransform() {
+        var img = document.getElementById('g3dRefImg');
+        if (!img) return;
+        img.style.transform = 'translate(' + REF.panX + 'px,' + REF.panY + 'px) scale(' + REF.scale + ')';
+    }
+    function refFit() {
+        if (REF.isPdf || !REF.natW) return;
+        var stage = document.getElementById('g3d-ref-stage');
+        if (!stage) return;
+        var r = stage.getBoundingClientRect();
+        REF.scale = Math.min(r.width / REF.natW, r.height / REF.natH, 1) || 1;
+        REF.panX = (r.width - REF.natW * REF.scale) / 2;
+        REF.panY = (r.height - REF.natH * REF.scale) / 2;
+        refApplyTransform();
+    }
+    function ref100() {
+        if (REF.isPdf || !REF.natW) return;
+        var stage = document.getElementById('g3d-ref-stage');
+        var r = stage ? stage.getBoundingClientRect() : { width: REF.natW, height: REF.natH };
+        var oldScale = REF.scale;
+        REF.scale = 1;
+        /* 以畫面中心為準重新置中，不要讓圖跳去左上角 */
+        var cx = r.width / 2, cy = r.height / 2;
+        var imgCx = (cx - REF.panX) / oldScale, imgCy = (cy - REF.panY) / oldScale;
+        REF.panX = cx - imgCx * REF.scale;
+        REF.panY = cy - imgCy * REF.scale;
+        refApplyTransform();
+    }
+
+    /* 滑鼠滾輪縮放：以游標那一點為準，不是以圖片中心——否則正在對照的尺寸標註
+       會被縮放推出畫面外（這個坑 2026-09-22 在 SOP/SIP 的圖面放大已經踩過一次，
+       這裡從一開始就用對的做法）。*/
+    (function () {
+        var stage = document.getElementById('g3d-ref-stage');
+        if (!stage) return;
+        stage.addEventListener('wheel', function (e) {
+            if (REF.isPdf || !REF.natW) return;
+            e.preventDefault();
+            var r = stage.getBoundingClientRect();
+            var mx = e.clientX - r.left, my = e.clientY - r.top;
+            var imgX = (mx - REF.panX) / REF.scale, imgY = (my - REF.panY) / REF.scale;
+            var factor = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+            REF.scale = Math.max(0.05, Math.min(REF.scale * factor, 20));
+            REF.panX = mx - imgX * REF.scale;
+            REF.panY = my - imgY * REF.scale;
+            refApplyTransform();
+        }, { passive: false });
+        stage.addEventListener('mousedown', function (e) {
+            if (REF.isPdf || e.target.tagName === 'IFRAME') return;
+            REF.dragging = true; REF.dx = e.clientX - REF.panX; REF.dy = e.clientY - REF.panY;
+            stage.classList.add('g3d-ref-dragging');
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!REF.dragging) return;
+            REF.panX = e.clientX - REF.dx; REF.panY = e.clientY - REF.dy;
+            refApplyTransform();
+        });
+        document.addEventListener('mouseup', function () {
+            REF.dragging = false; stage.classList.remove('g3d-ref-dragging');
+        });
+    })();
+
+    /* 放大視窗標題列可拖曳移動整個視窗（獨立於 #g3d-win 的拖曳邏輯，互不干擾）。*/
+    (function () {
+        var hdr = null, win = null, dx = 0, dy = 0, dragging = false;
+        document.addEventListener('mousedown', function (e) {
+            hdr = document.getElementById('g3d-ref-hdr');
+            win = document.getElementById('g3d-ref-box');
+            if (!hdr || !win || !hdr.contains(e.target)) return;
+            if (e.target.tagName === 'BUTTON') return;
+            var r = win.getBoundingClientRect();
+            win.style.left = r.left + 'px'; win.style.top = r.top + 'px';
+            dx = e.clientX - r.left; dy = e.clientY - r.top;
+            dragging = true;
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging || !win) return;
+            win.style.left = (e.clientX - dx) + 'px';
+            win.style.top = Math.max(0, e.clientY - dy) + 'px';
+        });
+        document.addEventListener('mouseup', function () { dragging = false; });
+    })();
+
+    (function () {
+        var fitBtn = document.getElementById('g3dRefFit');
+        var oneBtn = document.getElementById('g3dRef100');
+        var tabBtn = document.getElementById('g3dRefNewTab');
+        var closeBtn = document.getElementById('g3dRefClose');
+        if (fitBtn) fitBtn.addEventListener('click', refFit);
+        if (oneBtn) oneBtn.addEventListener('click', ref100);
+        if (tabBtn) tabBtn.addEventListener('click', function () {
+            if (REF.url) window.open(REF.url, '_blank');
+        });
+        if (closeBtn) closeBtn.addEventListener('click', refCloseBox);
+        window.addEventListener('resize', function () {
+            var box = document.getElementById('g3d-ref-box');
+            if (box && box.classList.contains('g3d-show')) refFit();
+        });
+        /* 頁面關閉/換頁時釋放 object URL，不依賴使用者記得按「清除」 */
+        window.addEventListener('beforeunload', refClearUrl);
+    })();
+
     /* ══ 十三、掛載 ════════════════════════════════════════════════════════ */
     function mount(el, opts) {
         opts = opts || {};
@@ -1223,6 +1453,7 @@ var EGGrind3D = (function () {
         ST.root = el;
         ST.host = el;
         setParams(opts.params || DEF);
+        refRenderPickRow();   /* 面板重畫（含嵌入↔浮動視窗互換）後，依目前 REF 狀態重現 */
 
         /* 參數欄位：打字就重算（防抖 120ms，避免每個按鍵都重建一次模型）*/
         el.querySelectorAll('[data-g3dk]').forEach(function (inp) {
