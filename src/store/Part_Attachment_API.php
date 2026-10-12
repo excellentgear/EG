@@ -48,16 +48,31 @@ if (!defined('PART_ATTACH_DL')) define('PART_ATTACH_DL', '../../src/store/Part_A
  * 組成 ['原始檔名' => '實體路徑'] 對照表。選件規則走共用庫的唯一實作。
  * （組合檔只是一張參照清單，而附件在 NAS 上是亂碼檔名，不還原原始檔名就找不到零件）
  */
-function partInventorCompanions(PDO $pdo, int $dId, string $selfFs): array {
+function partInventorCompanions(PDO $pdo, int $dId, string $selfFs, int $assemblyAttachId = 0): array {
     require_once __DIR__ . '/../common/inventor_preview_lib.php';
+    require_once __DIR__ . '/../common/part_assembly_lib.php';
     $base = rtrim(getPartAttachBase($pdo), '/\\');
-    if ($base === '' || !$dId) return [];
-    $st = $pdo->prepare("SELECT filename, original_name FROM part_attachments WHERE d_id=? AND deleted_at IS NULL ORDER BY id");
-    $st->execute([$dId]);
+    if ($base === '') return [];
     $rows = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $rows[] = ['original_name' => $r['original_name'] ?: $r['filename'],
-                   'fs_path' => $base . DIRECTORY_SEPARATOR . $dId . DIRECTORY_SEPARATOR . $r['filename']];
+    // ① 明確關聯到這個組合的零件（可能在**別的料號**底下，含巢狀子組合，遞迴展開）。
+    //    使用者的實際情況：很多零件本來就是獨立料號、早就各自上傳過了，不該為了組合再傳一次；
+    //    所以關聯表只建關聯不複製檔（唯一實作見 part_assembly_lib.php）。
+    if ($assemblyAttachId > 0) {
+        $seen = [];
+        foreach (eg_pasm_components_recursive($pdo, $assemblyAttachId, $seen) as $c) {
+            $rows[] = ['original_name' => $c['original_name'] ?: $c['filename'],
+                       'fs_path' => $base . DIRECTORY_SEPARATOR . (int)$c['d_id'] . DIRECTORY_SEPARATOR . $c['filename']];
+        }
+    }
+    // ② 退路：同一個料號底下的 Inventor 檔也一律帶上（有些人就是把零件直接傳在同一個料號、
+    //    還沒建關聯，這樣也能正常顯示；已建關聯的在上面收過了，重複沒關係會自動去重）
+    if ($dId > 0) {
+        $st = $pdo->prepare("SELECT filename, original_name FROM part_attachments WHERE d_id=? AND deleted_at IS NULL ORDER BY id");
+        $st->execute([$dId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = ['original_name' => $r['original_name'] ?: $r['filename'],
+                       'fs_path' => $base . DIRECTORY_SEPARATOR . $dId . DIRECTORY_SEPARATOR . $r['filename']];
+        }
     }
     return eg_inventor_companion_map($rows, $selfFs);
 }
@@ -219,7 +234,7 @@ switch ($action) {
                 require_once __DIR__ . '/../common/inventor_preview_lib.php';
                 // 組合檔（.iam）要連同「同一個料號底下的零件檔」一起傳給轉檔，否則
                 // Inventor 找不到元件會安靜地輸出一個零幾何的空 STEP（見該庫說明）
-                $comp = ($ext === 'iam') ? partInventorCompanions($pdo, $dId, $dir . $fname) : [];
+                $comp = ($ext === 'iam') ? partInventorCompanions($pdo, $dId, $dir . $fname, $newAttachId) : [];
                 eg_inventor_preview_trigger_async($pdo, $dir . $fname, $comp, $orig);
             }
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
@@ -1132,7 +1147,7 @@ switch ($action) {
         $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
         if (!file_exists($fp) || !in_array($ext3d, ['ipt','x_t','iam'], true)) { http_response_code(404); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
-        $comp3d = ($ext3d === 'iam') ? partInventorCompanions($pdo, (int)$rec['d_id'], $fp) : [];
+        $comp3d = ($ext3d === 'iam') ? partInventorCompanions($pdo, (int)$rec['d_id'], $fp, $id) : [];
         $stepFp = eg_inventor_preview_step($pdo, $fp, $comp3d, (string)($rec['original_name'] ?: ''));
         if (!$stepFp) { http_response_code(503); echo 'IPT/X_T/IAM 轉檔失敗或暫時無法使用'; exit; }
         require_once __DIR__ . '/../common/attach_lib.php';
@@ -1157,7 +1172,7 @@ switch ($action) {
         $fp = rtrim(getPartAttachBase($pdo),'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
         if (strtolower(pathinfo($fp, PATHINFO_EXTENSION)) !== 'iam') { echo json_encode(['success'=>true,'is_assembly'=>false]); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
-        $cmp  = partInventorCompanions($pdo, (int)$rec['d_id'], $fp);
+        $cmp  = partInventorCompanions($pdo, (int)$rec['d_id'], $fp, $id);
         $stp  = eg_inventor_preview_step($pdo, $fp, $cmp, (string)($rec['original_name'] ?: ''));
         $info = eg_inventor_preview_step_info($stp) ?: [];
         echo json_encode([
@@ -1169,6 +1184,43 @@ switch ($action) {
             'faces'      => (int)($info['solid_faces'] ?? 0),
             'supplied'   => array_keys($cmp),
         ], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    // ── 組合圖零件關聯（只建關聯不複製檔，唯一實作見 part_assembly_lib.php）──────
+    // 使用者的實際情況：很多零件本來就是獨立料號、早就各自上傳過了，甚至自己也已經
+    // 設定成整組；不該為了組合再上傳一次。所以這裡做的是「指過去」不是「複製一份」。
+    case 'assembly_components':   // 這個組合目前關聯了哪些零件（含來自別的料號的）
+        header('Content-Type: application/json; charset=utf-8');
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        $aid = intval($_GET['assembly_id'] ?? $_POST['assembly_id'] ?? 0);
+        echo json_encode(['success'=>true,'data'=>eg_pasm_components($pdo, $aid)], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    case 'assembly_candidates':   // 依「缺少的檔名」到全站找同名既有附件當候選
+        header('Content-Type: application/json; charset=utf-8');
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        $names = json_decode((string)($_POST['names'] ?? $_GET['names'] ?? '[]'), true);
+        if (!is_array($names)) $names = [];
+        echo json_encode(['success'=>true,'data'=>eg_pasm_find_candidates($pdo, $names)], JSON_UNESCAPED_UNICODE);
+        exit;
+
+    case 'assembly_link':
+        header('Content-Type: application/json; charset=utf-8');
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        $aid = intval($_POST['assembly_id'] ?? 0);
+        $ids = json_decode((string)($_POST['component_ids'] ?? '[]'), true);
+        if (!is_array($ids)) $ids = [];
+        if (!$aid || !$ids) { echo json_encode(['success'=>false,'message'=>'缺少組合圖或零件']); exit; }
+        $r = eg_pasm_link($pdo, $aid, $ids, $uploadedByName, $uploadedById);
+        echo json_encode(['success'=>true] + $r, JSON_UNESCAPED_UNICODE);
+        exit;
+
+    case 'assembly_unlink':
+        header('Content-Type: application/json; charset=utf-8');
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        $aid = intval($_POST['assembly_id'] ?? 0);
+        $cid = intval($_POST['component_id'] ?? 0);
+        echo json_encode(['success'=>eg_pasm_unlink($pdo, $aid, $cid)]);
         exit;
 
     default:

@@ -803,6 +803,15 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         @media print { .page-help-btn { display:none !important; } }
         #helpUseMask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9500;
             align-items:center; justify-content:center; }
+        /* 組合圖「挑選零件」跳窗（2026-10-12）：沿用使用說明同一套遮罩樣式 */
+        #asmPickMask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9600;
+            align-items:center; justify-content:center; }
+        #asmPickMask .ap-box { background:#fff; border-radius:8px; width:92%; max-width:720px; max-height:86vh;
+            overflow:auto; padding:16px 20px; box-shadow:0 6px 28px rgba(0,0,0,.35); font-size:13px; }
+        #asmPickMask .ap-item { border:1px solid #eee; border-radius:5px; padding:8px 10px; margin-bottom:8px; }
+        #asmPickMask .ap-name { font-weight:bold; color:#8A5A2B; word-break:break-all; }
+        #asmPickMask .ap-cand { display:flex; align-items:center; gap:8px; padding:3px 0 3px 4px; }
+        #asmPickMask .ap-none { color:#999; padding:3px 0 0 4px; }
         #helpUseMask .help-box { background:#fff; border-radius:8px; width:92%; max-width:780px; max-height:86vh;
             overflow:auto; padding:18px 22px; box-shadow:0 6px 28px rgba(0,0,0,.35); }
         .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
@@ -973,6 +982,27 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <button id="save-confirm" class="btn btn-success btn-sm"><i class="fa fa-download"></i> 下載</button>
         </div>
     </div>
+</div>
+
+<!-- 組合圖「挑選零件」（2026-10-12）：缺少的零件若在別的料號已經上傳過，直接指過去，不必重傳 -->
+<div id="asmPickMask">
+  <div class="ap-box">
+    <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:10px;">
+      <h4 style="margin:0;color:#8A5A2B;"><i class="fa fa-cubes"></i> 挑選組合用到的零件</h4>
+      <button type="button" class="btn btn-default btn-xs" style="margin-left:auto;" onclick="document.getElementById('asmPickMask').style.display='none';">關閉</button>
+    </div>
+    <div style="background:#FBEEDC;border:1px solid #E6B77A;color:#7A4A12;border-radius:4px;padding:6px 10px;margin-bottom:10px;line-height:1.6;">
+      零件檔若已經在<b>別的料號</b>上傳過，這裡直接指過去就好，<b>不會複製檔案、也不必重新上傳</b>；
+      原本那個料號底下的附件完全不受影響。<br>
+      像「M8x1.25 x30L.ipt」這種標準件檔名可能在多個料號都有，所以一律列出來由您確認是哪一個。
+    </div>
+    <div id="asmPickList"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eee;padding-top:10px;margin-top:6px;">
+      <span id="asmPickMsg" style="flex:1;color:#888;"></span>
+      <button type="button" class="btn btn-default btn-xs" onclick="document.getElementById('asmPickMask').style.display='none';">取消</button>
+      <button type="button" id="btnAsmPickSave" class="btn btn-success btn-xs"><i class="fa fa-link"></i> 建立關聯</button>
+    </div>
+  </div>
 </div>
 
 <!-- 使用說明（鐵律7） -->
@@ -1403,7 +1433,10 @@ $('#btn-3d-color-reset').on('click', function() {
 // 2026-10-12 使用者要求組合圖要能像繪圖軟體那樣隱藏個別零件、拉開零件距離。
 // 幾何操作的唯一實作在 EG3DTools（listComponents／setComponentVisible／setExplode），
 // 兩個檢視頁共用；這裡只負責畫面與事件。
+var _bom3dAsmId = 0;          // 目前這個組合檔的附件 id（建立零件關聯要用）
+var _bom3dAsmMissing = [];    // 目前缺少的零件檔名
 function _bom3dResetAsm() {
+    _bom3dAsmId = 0; _bom3dAsmMissing = [];
     $('#bom-3d-asm-group').hide();
     $('#bom-3d-asm-panel').hide();
     $('#bom-3d-asm-warn').hide().empty();
@@ -1444,15 +1477,18 @@ function _bom3dSetupAssembly(url3d) {
     // 刻意在模型載入完成之後才問，那時 STEP 必定已轉好進快取，不會再觸發一次 9 秒轉檔。
     var m = /[?&]id=(\d+)/.exec(url3d || '');
     if (!m) return;
+    _bom3dAsmId = parseInt(m[1], 10) || 0;
     $.getJSON('../../src/store/Part_Attachment_API.php', { action: 'assembly_info', id: m[1] }, function (res) {
         if (!res || !res.success || !res.is_assembly || !res.missing || !res.missing.length) return;
         var found = (res.refs ? res.refs.length : 0) - res.missing.length;
+        _bom3dAsmMissing = res.missing.slice();
         $('#bom-3d-asm-warn').html(
             '<i class="fa fa-exclamation-triangle"></i> <strong>組合不完整</strong>：這個組合參照 '
             + (res.refs ? res.refs.length : 0) + ' 個零件檔，目前只找得到 ' + found
             + ' 個，畫面上只顯示找得到的部分。<br>缺少：'
             + res.missing.map(function (x) { return escapeHtml(x); }).join('、')
-            + '<br><span style="color:#8a6a3a;">把這些零件檔也上傳到同一個料號，重新開啟即會自動補齊。</span>'
+            + '<br><button type="button" id="btnAsmPick" class="btn btn-warning btn-xs" style="margin-top:4px;">'
+            + '<i class="fa fa-search"></i> 挑選零件（可直接用別的料號已上傳的檔）</button>'
         ).show();
     });
 }
@@ -1477,6 +1513,55 @@ $('#bom-3d-explode').on('input change', function () {
     EG3DTools.setExplode(_bom3dViewer, (parseInt(this.value, 10) || 0) / 100);
     // 零件被移動之後，剖面的封頂是依世界座標算的，必須重算一次才不會留在原位
     if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
+});
+
+// 「挑選零件」：把缺少的檔名拿去全站找同名附件，由使用者確認後只建關聯、不複製檔。
+// 使用者拍板一律要人確認——像「M8x1.25 x30L.ipt」這種標準件檔名，不同料號底下可能有
+// 同名但其實不同的檔，自動連結會悄悄顯示錯的零件形狀而且不易發現。
+$(document).on('click', '#btnAsmPick', function () {
+    if (!_bom3dAsmId || !_bom3dAsmMissing.length) return;
+    $('#asmPickList').html('<div style="color:#999;padding:10px;"><i class="fa fa-spinner fa-spin"></i> 搜尋中…</div>');
+    $('#asmPickMsg').text('');
+    $('#asmPickMask').css('display', 'flex');
+    $.post('../../src/store/Part_Attachment_API.php',
+        { action: 'assembly_candidates', names: JSON.stringify(_bom3dAsmMissing) },
+        function (res) {
+            var data = (res && res.success && res.data) ? res.data : {};
+            var h = '', nCand = 0;
+            _bom3dAsmMissing.forEach(function (nm) {
+                var list = data[nm] || [];
+                h += '<div class="ap-item"><div class="ap-name">' + escapeHtml(nm) + '</div>';
+                if (!list.length) {
+                    h += '<div class="ap-none">全站都還沒有這個檔案，請上傳它（可上傳到它自己的料號，之後再回來這裡指過去）。</div>';
+                } else {
+                    list.forEach(function (c) {
+                        nCand++;
+                        h += '<label class="ap-cand"><input type="checkbox" class="ap-chk" value="' + c.id + '">'
+                           + '<span>料號 <b>' + escapeHtml(c.part_no || ('#' + c.d_id)) + '</b>'
+                           + '　' + escapeHtml(c.file_size || '') + '　' + escapeHtml((c.uploaded_at || '').slice(0, 10)) + '</span></label>';
+                    });
+                }
+                h += '</div>';
+            });
+            $('#asmPickList').html(h);
+            $('#asmPickMsg').text(nCand ? ('找到 ' + nCand + ' 個候選，勾選後按「建立關聯」') : '全站都找不到這些零件檔');
+        }, 'json').fail(function () {
+            $('#asmPickList').html('<div style="color:#c0392b;padding:10px;">搜尋失敗，請重試</div>');
+        });
+});
+$('#btnAsmPickSave').on('click', function () {
+    var ids = $('.ap-chk:checked').map(function () { return parseInt(this.value, 10); }).get();
+    if (!ids.length) { $('#asmPickMsg').text('請先勾選要連結的零件'); return; }
+    var $b = $(this).prop('disabled', true);
+    $.post('../../src/store/Part_Attachment_API.php',
+        { action: 'assembly_link', assembly_id: _bom3dAsmId, component_ids: JSON.stringify(ids) },
+        function (res) {
+            $b.prop('disabled', false);
+            if (!res || !res.success) { $('#asmPickMsg').text('建立失敗'); return; }
+            $('#asmPickMask').hide();
+            // 轉檔的快取鍵含零件清單，關聯一改就會自動重轉——重新載入這個檔案即可看到補齊後的組合
+            alert('已建立 ' + res.linked + ' 筆關聯。組合會重新轉檔（約 10 秒），請重新點一次這個檔案。');
+        }, 'json').fail(function () { $b.prop('disabled', false); $('#asmPickMsg').text('建立失敗'); });
 });
 
 // ── 透視＋剖面同時開啟時的裁切同步（2026-10-12 使用者回報：切掉的那一側看起來
