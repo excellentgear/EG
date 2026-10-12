@@ -832,7 +832,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($content === false || json_decode($content) === null) throw new Exception('工作檔讀取失敗或格式異常');
             echo json_encode(['success' => true, 'work' => $content, 'name' => $r['original_name']]);
         } elseif ($act === 'delete_workfile') {
-            if (!$canDeleteWorkfile) throw new Exception('沒有工作檔刪除權限');
             $wid = (int)($_POST['id'] ?? 0);
             if ($wid <= 0) throw new Exception('缺少工作檔編號');
             // 一併帶出分享範圍，做可見性檢查（與 load_workfile 同一套）：看不到的工作檔就不能刪，
@@ -843,8 +842,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->execute([$wid]);
             $r = $st->fetch(PDO::FETCH_ASSOC);
             if (!$r) throw new Exception('找不到工作檔');
+            $isOwn = ((int)$r['uploaded_by_id'] === $uid);
+            // 2026-10-12 使用者交辦：自己存的暫存工作檔，自己要刪得掉，不必等管理者或
+            // 「工作檔刪除」角色——那個角色管的是「刪別人的」，自己的不該被同一道門擋住。
+            if (!$canDeleteWorkfile && !$isOwn) throw new Exception('沒有工作檔刪除權限');
             $ownerType = $r['owner_type'] ?: 'company';   // 舊資料無 meta → 視為公司共用
-            $canSee = $isMgr || (int)$r['uploaded_by_id'] === $uid || $ownerType === 'company';
+            $canSee = $isMgr || $isOwn || $ownerType === 'company';
             if (!$canSee && $ownerType === 'dept') $canSee = in_array((int)$r['owner_dept_id'], $myDeptIds, true);
             if (!$canSee && $ownerType === 'custom') {
                 $chk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
@@ -1994,7 +1997,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
-                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面兩欄並排，依序為<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一列後其餘會自動往前遞補保持連續），按「<b>＋新增尺寸</b>」一次加一列。每欄分四格：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，其中一欄選了方向，配對欄自動改成相反方向；填了增減量，配對欄的增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；沒填增減量或沒選方向時③④欄會提示「暫時算不出來」），③<b>建議車床（加工）尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值（公差預設帶入 <strong>±0.02</strong>，可自行改），④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。<b>每一對欄位（A/B、C/D……）下方都會接一塊橫跨全寬的「總長」</b>：最上面可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示這兩欄總長時填寫其基準值與上下公差），下方顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，③的建議基準值會自動依總長公差重新調整</b>（讓這兩欄加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），填了雙方的手動驗算值也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，③④要調整時再自行點進去；標題列「<b>計算</b>」可手動重算一次，「清除」恢復成預設的尺寸A／B兩欄重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面依序為<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一列後其餘會自動往前遞補保持連續），每欄內①②③④<b>直向排列</b>（欄位較窄，同一畫面能並排顯示更多尺寸），按「<b>＋新增尺寸</b>」一次加一欄。四格依序：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm，<b>預設帶入 0.05</b>，仍可自行改）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，其中一欄選了方向，配對欄自動改成相反方向；填了增減量，配對欄的增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；<b>還沒選方向時③④欄會提示「暫時算不出來」</b>，提醒要選一下方向），③<b>建議車床尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值（公差預設帶入 <strong>±0.02</strong>，可自行改），④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。<b>每一對欄位（A/B、C/D……）最上面先是橫跨全寬的「總長」，底下才接著那兩欄本身</b>：總長區可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示這兩欄總長時填寫其基準值與上下公差），並顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，下方③的建議基準值會自動依總長公差重新調整</b>（讓這兩欄加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），填了雙方的手動驗算值也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，③④要調整時再自行點進去；全程<b>填寫即時自動算，不必另外按計算</b>，「清除」恢復成預設的尺寸A／B兩欄重填。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8377,14 +8380,14 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-diagram-dims > div { flex:1; text-align:center; }
     .lr-diagram-cap { text-align:center; font-size:9.5px; color:#a08a6f; margin-top:4px; }
     /* 一列＝一段尺寸，兩欄並排連續往下加（尺寸A、B、C、D……）；每兩列底下接一塊橫跨全寬的「總長」 */
-    #lr-rows { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    #lr-rows { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px; }
     .lr-row { border:1px solid #e4d3bc; border-radius:5px; overflow:hidden; background:#fff; }
     .lr-row-hdr { display:flex; align-items:center; justify-content:space-between; gap:6px; background:#faf6f0; padding:4px 8px; border-bottom:1px solid #d8c7b0; }
     .lr-row-label { font-size:12px; font-weight:700; color:#5a3410; }
     .lr-mini-btn { font-size:11px; padding:2px 8px; border:1px solid #d8c7b0; background:#fff; border-radius:3px; cursor:pointer; color:#6b471a; white-space:nowrap; }
     .lr-mini-btn:hover { background:#f4ede2; }
     .lr-del-btn { color:#a2342a; border-color:#e0b3ac; flex-shrink:0; }
-    .lr-row-body { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:6px; }
+    .lr-row-body { display:grid; grid-template-columns:1fr; gap:6px; padding:6px; }
     .lr-blk { border:1px solid #e4d3bc; border-radius:4px; overflow:hidden; }
     .lr-blk-h { font-size:10.5px; font-weight:700; color:#fff; padding:3px 7px; }
     .lr-blk-fin    .lr-blk-h { background:#8a5a2b; }
@@ -8447,21 +8450,18 @@ include __DIR__ . '/_gear_tool_ui.php';
     #lr-add-row-btn { margin-top:2px; }
     @media (max-width:860px) {
         #lr-tool-window { width:98vw; top:10px; }
-        #lr-rows { grid-template-columns:1fr; }
-        .lr-row-body { grid-template-columns:1fr; }
     }
 </style>
 <template id="lr-tool-tpl"><div id="lr-tool-window">
     <div id="lr-tool-hdr">
         <span class="lr-hdr-title"><i class="fa fa-arrows-h"></i> 車床預留量計算</span>
         <div class="lr-hdr-btns">
-            <button onclick="lrCalc()"><i class="fa fa-calculator"></i> 計算</button>
             <button onclick="clearLenTool()">清除</button>
             <button onclick="closeLenTool()">✕ 關閉</button>
         </div>
     </div>
     <div id="lr-tool-body">
-        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……兩欄並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；每兩欄底下會合算<strong>總長</strong>；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。</div>
+        <div class="lr-note">原圖標的是<strong>成品尺寸</strong>，但這段還會被<strong>研磨</strong>一次（研磨會讓尺寸再變一次）。尺寸A、B、C、D……並排連續往下加，每欄填成品尺寸＋研磨後增減量，自動算出<strong>建議車床（加工）尺寸</strong>；每相鄰兩欄最上面先是合算的<strong>總長</strong>、底下接著是那兩欄本身；也可以直接填已經標好的車床尺寸來<strong>驗算</strong>研磨後是否仍符合成品公差。填寫即時自動算，不必另外按計算。</div>
         <div class="lr-diagram">
             <div class="lr-diagram-bar">
                 <div class="lr-dbar-half"></div>
@@ -8505,7 +8505,8 @@ include __DIR__ . '/_gear_tool_ui.php';
         return isNaN(v) ? null : v;
     }
 
-    // 每兩列（一對）底下接一塊橫跨全寬的「總長」，含選填的「原圖總長尺寸」輸入。
+    // 每兩列（一對）最上面先接一塊橫跨全寬的「總長」，底下才是那兩欄本身；
+    // 總長面板含選填的「原圖總長尺寸」輸入。
     var LR_TOTAL_HTML =
         '<div class="lr-pair-total">' +
           '<div class="lr-pair-total-dtot">' +
@@ -8543,7 +8544,7 @@ include __DIR__ . '/_gear_tool_ui.php';
           '</div>' +
           '<div class="lr-row-body">' +
             '<div class="lr-blk lr-blk-fin">' +
-              '<div class="lr-blk-h">① 成品尺寸（原圖標示）</div>' +
+              '<div class="lr-blk-h" title="原圖標示的基準值與上下公差">① 成品尺寸</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
                   '<input type="number" step="any" class="lr-nom" data-lr-tab="1" oninput="lrCalc()" placeholder="基準值">' +
@@ -8556,7 +8557,7 @@ include __DIR__ . '/_gear_tool_ui.php';
               '</div>' +
             '</div>' +
             '<div class="lr-blk lr-blk-grind">' +
-              '<div class="lr-blk-h">② 研磨影響（這一面研磨「後」）</div>' +
+              '<div class="lr-blk-h" title="這一面研磨「後」尺寸的增減">② 研磨影響</div>' +
               '<div class="lr-blk-body">' +
                 '<select class="lr-dir" data-lr-tab="1" onchange="lrDirSelectChanged(this)">' +
                   '<option value="">－請選擇方向－</option>' +
@@ -8571,7 +8572,7 @@ include __DIR__ . '/_gear_tool_ui.php';
               '</div>' +
             '</div>' +
             '<div class="lr-blk lr-blk-sug">' +
-              '<div class="lr-blk-h">③ 建議車床（加工）尺寸</div>' +
+              '<div class="lr-blk-h" title="建議的車床（加工）尺寸">③ 建議車床尺寸</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
                   '<span class="lr-no-box lr-sug-nom">—</span>' +
@@ -8585,7 +8586,7 @@ include __DIR__ . '/_gear_tool_ui.php';
               '</div>' +
             '</div>' +
             '<div class="lr-blk lr-blk-verify">' +
-              '<div class="lr-blk-h">④ 手動驗算（選填）</div>' +
+              '<div class="lr-blk-h" title="選填：驗算已標好的車床尺寸">④ 手動驗算</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
                   '<span class="lr-tlbl" style="width:auto;margin-right:2px;">實際基準值</span>' +
@@ -8611,13 +8612,15 @@ include __DIR__ . '/_gear_tool_ui.php';
         var div = document.createElement('div');
         div.innerHTML = LR_ROW_HTML;
         var row = div.firstElementChild;
-        // 建議車床公差預設 ±0.02（常用值，仍可自行改）
+        // 建議車床公差預設 ±0.02、研磨增減量預設 0.05（常用值，仍可自行改；
+        // 增減量仍要自己選方向才算得出建議值，②區的提示會一直講到選了方向為止）
         var tu = row.querySelector('.lr-tutol'); if (tu) tu.value = '0.02';
         var tl = row.querySelector('.lr-tltol'); if (tl) tl.value = '-0.02';
+        var gm = row.querySelector('.lr-gmag');  if (gm) gm.value = '0.05';
         return row;
     }
 
-    // 確保每兩列（一對）底下都接著一塊「總長」；reset=true 時全部清空重建
+    // 確保每兩列（一對）前面都接著一塊「總長」；reset=true 時全部清空重建
     // （刪除列造成配對重新洗牌時，不要把舊的「原圖總長尺寸」誤套到新的配對上）。
     function lrSyncPairTotals(reset) {
         var wrap = document.getElementById('lr-rows');
@@ -8630,14 +8633,15 @@ include __DIR__ . '/_gear_tool_ui.php';
         var rows = Array.prototype.slice.call(wrap.querySelectorAll('.lr-row'));
         var idx = 0;
         for (var i = 0; i + 1 < rows.length; i += 2) {
-            var r2 = rows[i + 1];
+            var r1 = rows[i];
             var panel = existingTotals[idx];
             if (!panel) {
                 var div = document.createElement('div');
                 div.innerHTML = LR_TOTAL_HTML;
                 panel = div.firstElementChild;
             }
-            if (panel.previousElementSibling !== r2) wrap.insertBefore(panel, r2.nextSibling);
+            // 總長面板放在這一對的「前面」（r1 之前），下面緊接著才是這兩欄本身
+            if (panel.nextElementSibling !== r1) wrap.insertBefore(panel, r1);
             idx++;
         }
         for (; idx < existingTotals.length; idx++) existingTotals[idx].remove();
@@ -8777,8 +8781,8 @@ include __DIR__ . '/_gear_tool_ui.php';
     // panel＝緊接在某一對兩列（A、B）後面的「總長」面板；兩列直接由 DOM 相鄰關係取得
     // （lrSyncPairTotals 保證面板一定緊接在這一對的第二列之後）。
     function lrCalcPairTotal(panel) {
-        var rB = panel.previousElementSibling;
-        var rA = rB ? rB.previousElementSibling : null;
+        var rA = panel.nextElementSibling;
+        var rB = rA ? rA.nextElementSibling : null;
         if (!rA || !rB || !rA.classList || !rA.classList.contains('lr-row') || !rB.classList.contains('lr-row')) return;
         var totalWrap = panel;
         var dtotWrap  = panel.querySelector('.lr-pair-total-dtot');
