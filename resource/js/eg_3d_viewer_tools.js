@@ -1535,8 +1535,10 @@ var EG3DTools = (function () {
         }
         return tris;
     }
-    // 整合：給一個剖切平面與整個模型，算出封頂幾何（世界座標 BufferGeometry），沒有交線
-    // （平面完全沒切到模型）或三角化不出結果時回傳 null，呼叫端就不加這個封頂物件。
+    // 整合：給一個剖切平面與整個模型，算出封頂幾何（世界座標 BufferGeometry）＋連帶算這個
+    // 封頂的 2D 三角化結果／平面基底（供呼叫端另外疊 45 度剖面斜線用，見
+    // _buildCapHatchGeometry，三角化只算一次兩邊共用，不要各自重算一次）。沒有交線（平面
+    // 完全沒切到模型）或三角化不出結果時回傳 null，呼叫端就不加這個封頂物件。
     function _buildCapGeometry(mm, plane) {
         var loops3d = _buildCapLoops3d(mm, plane);
         if (!loops3d.length) return null;
@@ -1563,14 +1565,124 @@ var EG3DTools = (function () {
         var geo = new GeoCtor();
         geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
         geo.setAttribute('normal', new PosAttrCtor(new Float32Array(normals), 3));
+        return { geo: geo, tris2d: tris2d, basis: basis };
+    }
+    // ── 剖面斜線（45 度剖面劃線，2026-10-12 使用者要求比照工程圖慣例：剖切到的實心材料
+    // 用斜線（hachure）表示，不要整面實色填滿）──────────────────────────────────
+    // 作法：在封頂的 2D 參數空間（跟三角化共用同一份 basis.u/v）畫一組等間距、固定角度的
+    // 平行線，逐一跟「已經三角化好的每一片三角形」求交——三角形互不重疊、剛好鋪滿整個填色
+    // 區域（含挖洞處自然沒有三角形＝線也不會畫進洞裡，不需要另外處理洞），不需要另外對整個
+    // 多邊形（可能帶洞）重新寫一套裁剪邏輯。單一三角形一次直線裁剪最多只會留下一段（三角形
+    // 是凸的），逐一相交收集起來串成這條斜線在填色區域內的所有線段。
+    function _clipLineByHalfPlane2d(tMin, tMax, p0, dir, edgeP, nx, ny) {
+        // 半平面以「內側」為 dot(n, point-edgeP) >= 0
+        var num = nx * (edgeP[0] - p0[0]) + ny * (edgeP[1] - p0[1]);
+        var den = nx * dir[0] + ny * dir[1];
+        if (Math.abs(den) < 1e-12) {
+            var inside = nx * (p0[0] - edgeP[0]) + ny * (p0[1] - edgeP[1]) >= -1e-9;
+            return inside ? [tMin, tMax] : null;
+        }
+        var t = num / den;
+        if (den > 0) { if (t > tMin) tMin = t; } else { if (t < tMax) tMax = t; }
+        return tMin <= tMax ? [tMin, tMax] : null;
+    }
+    function _line2dTriClip(p0, dir, a, b, c) {
+        var area2 = (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+        if (Math.abs(area2) < 1e-9) return null;   // 退化（近似共線）三角形，跳過
+        var sign = area2 >= 0 ? 1 : -1;
+        var edges = [[a,b],[b,c],[c,a]];
+        var range = [-1e7, 1e7];
+        for (var i = 0; i < 3; i++) {
+            var p = edges[i][0], q = edges[i][1];
+            var ex = q[0]-p[0], ey = q[1]-p[1];
+            var nx = -ey*sign, ny = ex*sign;   // 邊方向逆時針轉90度＝內向法線（配合三角形纏繞方向）
+            range = _clipLineByHalfPlane2d(range[0], range[1], p0, dir, p, nx, ny);
+            if (!range) return null;
+        }
+        return range;
+    }
+    // tris2d：同一個封頂已經算好的三角化結果；angleDeg：斜線角度（工程圖慣例 45 度，相鄰
+    // 封頂刻意可改 135 度互相區分，等同紙本上「不同零件的剖面線角度要錯開」慣例）；
+    // spacing：平行線間距（2D 參數空間座標單位，與模型座標同單位）。回傳 2D 線段陣列。
+    function _buildCapHatchSegments2d(tris2d, angleDeg, spacing) {
+        var rad = angleDeg * Math.PI / 180;
+        var dir = [Math.cos(rad), Math.sin(rad)];
+        var nrm = [-dir[1], dir[0]];   // 垂直方向，用來把各平行線分組（沿這個方向等距切片）
+        var minOff = Infinity, maxOff = -Infinity;
+        tris2d.forEach(function (tri) {
+            tri.forEach(function (p) {
+                var off = p[0]*nrm[0] + p[1]*nrm[1];
+                if (off < minOff) minOff = off;
+                if (off > maxOff) maxOff = off;
+            });
+        });
+        if (!isFinite(minOff) || !isFinite(maxOff)) return [];
+        var segments = [];
+        var start = Math.floor(minOff / spacing) * spacing;
+        for (var off = start; off <= maxOff + spacing; off += spacing) {
+            var p0 = [nrm[0]*off, nrm[1]*off];
+            for (var t = 0; t < tris2d.length; t++) {
+                var tri = tris2d[t];
+                var range = _line2dTriClip(p0, dir, tri[0], tri[1], tri[2]);
+                if (!range) continue;
+                segments.push([
+                    [p0[0] + dir[0]*range[0], p0[1] + dir[1]*range[0]],
+                    [p0[0] + dir[0]*range[1], p0[1] + dir[1]*range[1]]
+                ]);
+            }
+        }
+        return segments;
+    }
+    // 把斜線畫成「極細的三角面帶」而不是 LineSegments（2026-10-12 實測發現的坑：WebGL 的
+    // `polygonOffset` 只對三角形／多邊形的光柵化生效，GL_LINES 完全不吃這個設定——封頂本身
+    // 用 polygonOffset 讓它穩定贏過模型本體在同一剖切位置的背面沒問題，但斜線跟封頂自己
+    // 的填色面「同樣共平面」時，斜線沒有 polygonOffset 可用，深度測試打平手常常輸給封頂
+    // 填色面本身而完全不可見——改成跟封頂一樣是三角面（每條斜線=一條極窄的長方形帶、兩個
+    // 三角形），一樣能設 polygonOffset 且給比封頂更靠近鏡頭的偏移量，才能穩定疊在封頂
+    // 填色之上，不受視角影響；寬度抓間距的一小部分，看起來細但不會跟封頂填色打架）。
+    function _buildCapHatchQuads2d(segs2d, lineWidth) {
+        var half = lineWidth / 2;
+        var tris = [];
+        segs2d.forEach(function (seg) {
+            var p1 = seg[0], p2 = seg[1];
+            var dx = p2[0]-p1[0], dy = p2[1]-p1[1];
+            var len = Math.sqrt(dx*dx+dy*dy);
+            if (len < 1e-9) return;
+            var nx = -dy/len*half, ny = dx/len*half;
+            var a = [p1[0]+nx, p1[1]+ny], b = [p1[0]-nx, p1[1]-ny];
+            var c = [p2[0]-nx, p2[1]-ny], d = [p2[0]+nx, p2[1]+ny];
+            tris.push([a,b,c], [a,c,d]);
+        });
+        return tris;
+    }
+    // tris2d：封頂已算好的三角化結果；basis：同一份平面基底；PosAttrCtor/GeoCtor：借用的
+    // BufferGeometry／position 屬性建構子（跟封頂本身共用同一份，呼叫端傳入）。回傳世界座標
+    // BufferGeometry（含法向量，供 Phong 材質正常受光），沒有斜線可畫時回傳 null。
+    function _buildCapHatchGeometry(tris2d, basis, angleDeg, spacing, lineWidth, PosAttrCtor, GeoCtor) {
+        var segs2d = _buildCapHatchSegments2d(tris2d, angleDeg, spacing);
+        if (!segs2d.length) return null;
+        var quadTris2d = _buildCapHatchQuads2d(segs2d, lineWidth);
+        if (!quadTris2d.length) return null;
+        var verts = [], normals = [];
+        quadTris2d.forEach(function (tri) {
+            tri.forEach(function (p2) {
+                verts.push(
+                    basis.origin[0] + p2[0]*basis.u[0] + p2[1]*basis.v[0],
+                    basis.origin[1] + p2[0]*basis.u[1] + p2[1]*basis.v[1],
+                    basis.origin[2] + p2[0]*basis.u[2] + p2[1]*basis.v[2]
+                );
+                normals.push(basis.n[0], basis.n[1], basis.n[2]);
+            });
+        });
+        var geo = new GeoCtor();
+        geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
+        geo.setAttribute('normal', new PosAttrCtor(new Float32Array(normals), 3));
         return geo;
     }
-    // 封頂色固定用暖色調（ai-rules/10）兩種：單軸只有一個封頂用第一色；雙軸（3/4剖面）
-    // 兩個封頂各自不同色——2026-10-08 使用者回報「大圓又變成中空的」，實際查證後發現
-    // 封頂本身是實心的（已用 CDP 把兩個封頂分別標成對比色直接驗證過，兩塊都確實填滿），
-    // 真正的原因是雙軸模式下兩個封頂原本同一個顏色，從某些角度兩塊緊鄰、肉眼分不出
-    // 「這裡是封頂A還是封頂B的邊界」，誤以為是鏤空；分開上色之後這個視覺混淆就不會再發生。
-    var _EG_CAP_COLORS = ['#E8742E', '#DD5138'];
+    // 封頂底色（2026-10-12 使用者要求改為工程圖常見的剖面樣式：45度斜線劃線＋淺灰底，
+    // 取代原本的暖色系實心填滿）。
+    var _EG_CAP_BASE_COLOR = '#C9C9C9';   // 淺灰（使用者原話「不要整面顯示黑色，請改為淺灰色」）
+    var _EG_CAP_HATCH_COLOR = '#8a8a8a';  // 斜線顏色，比底色深一階才看得出線條
     function _buildCapMaterial(sampleMesh, colorIdx) {
         var baseMat = Array.isArray(sampleMesh.material) ? sampleMesh.material[0] : sampleMesh.material;
         // 這時候 baseMat.clippingPlanes 已經被 setSectionMode 設成本檔鴨子定型的陽春物件
@@ -1581,36 +1693,80 @@ var EG3DTools = (function () {
         baseMat.clippingPlanes = null;
         var mat = baseMat.clone();
         baseMat.clippingPlanes = savedPlanes;
-        // 封頂色刻意選偏亮、飽和度較高的暖色調（ai-rules/10 暖色系），跟模型本身的灰色調
-        // 明顯區隔，使用者一眼就能認出「這塊是斷面封頂、不是原本的灰色材質背面」。
-        mat.color.set(_EG_CAP_COLORS[colorIdx % _EG_CAP_COLORS.length]);
-        if (mat.specular) mat.specular.set('#332211');   // Phong 材質若保留原本高反光度，封頂色會被鏡面反射洗淡，降低一點
-        mat.shininess = 8;
+        mat.color.set(_EG_CAP_BASE_COLOR);
+        if (mat.specular) mat.specular.set('#222222');   // Phong 材質若保留原本高反光度，淺灰底會被鏡面反射洗成死白，降低一點
+        mat.shininess = 6;
         mat.side = 2;   // THREE.DoubleSide（已用 CDP 實測確認此數值，函式庫未暴露全域 THREE 列舉）
         mat.clippingPlanes = null;
         mat.clipIntersection = false;
+        // 封頂與模型本體在剖切位置「完全共平面」，深度值幾乎相同，深度測試在極小浮點誤差
+        // 下勝負不定——2026-10-12 使用者回報：剛切開時斷面有時看起來像「中空」看到內部
+        // 背面（Y軸剖面尤其穩定重現，X／Z軸則是偶發、拖一下剖面位置滑桿重建一次才會消失），
+        // 正是經典的 z-fighting：封頂有時輸掉深度測試，被模型本體自己在同一位置的背面
+        // （通常光照角度不利、顯得暗沉甚至近黑）蓋過去。標準修法是 `polygonOffset`——把
+        // 封頂在深度緩衝區裡「偷偷」往鏡頭方向推一點點（負值＝更靠近鏡頭），讓它穩定贏得
+        // 深度測試，不需要使用者手動重建剖面才「矯正」一次。偏移量刻意給得足夠大
+        // （-4／-4，Three.js 預設範例常見的 -1 在這個模型的三角面密度下不夠，實測仍偶爾
+        // 輸掉），但維持在「看不出封頂本身浮空」的視覺容許範圍內。
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = -4;
+        mat.polygonOffsetUnits = -4;
         mat.needsUpdate = true;
         return mat;
     }
     // 依目前啟用中的剖切平面陣列，逐一建立封頂物件（雙軸時每個平面各自的封頂要再被「另一
     // 個」平面裁掉超出範圍的部份，否則雙軸剖面的封頂會畫出整個無限大截面、超出實際只保留
-    // 3/4 的那個象限範圍）。回傳新建立的封頂物件陣列，供呼叫端存進 state 以利之後移除。
+    // 3/4 的那個象限範圍）。回傳新建立的封頂物件陣列（含斜線，見下方），供呼叫端存進
+    // state 以利之後移除——刻意把斜線物件也放進同一個陣列回傳，呼叫端既有的清除邏輯
+    // （逐一 root.remove()）不需要另外改。
     function _rebuildCaps(viewer, mm, planes) {
         var sampleMesh = null;
         mm.EnumerateMeshes(function (m) { if (!sampleMesh) sampleMesh = m; });
         if (!sampleMesh) return [];
         var MeshCtor = sampleMesh.constructor;
         var caps = [];
+
+        // 斜線間距／線寬依整個模型的包圍盒尺度換算（跟透視模式虛線間距 dashSize 同一種
+        // 做法），模型大小不同時斜線密度維持視覺上接近的比例，不會一個模型線條擠成一團、
+        // 另一個模型卻稀疏到看不出是剖面線。
+        var mbbox = mm.GetBoundingBox(function () { return true; });
+        var mscale = mbbox ? _vecLen3([mbbox.max.x-mbbox.min.x, mbbox.max.y-mbbox.min.y, mbbox.max.z-mbbox.min.z]) : 100;
+        var hatchSpacing = Math.max(0.8, mscale * 0.025);
+        var hatchWidth = Math.max(0.08, hatchSpacing * 0.12);
+        var PosAttrCtor = sampleMesh.geometry.attributes.position.constructor;
+        var GeoCtor = sampleMesh.geometry.constructor;
+
         planes.forEach(function (plane, i) {
-            var geo = _buildCapGeometry(mm, plane);
-            if (!geo) return;
+            var built = _buildCapGeometry(mm, plane);
+            if (!built) return;
             var mat = _buildCapMaterial(sampleMesh, i);
             var others = planes.filter(function (_, j) { return j !== i; });
             if (others.length) mat.clippingPlanes = others;
-            var capObj = new MeshCtor(geo, mat);
+            var capObj = new MeshCtor(built.geo, mat);
             capObj.renderOrder = 6;   // 比透視模式的可見邊(10)低、比背面虛線邊(5)高，封頂面本身不需要跟邊線搶深度排序
             viewer.AddExtraObject(capObj);
             caps.push(capObj);
+
+            // 相鄰封頂（雙平面楔形/象限剖面時）斜線角度刻意錯開 90 度（45／135），對應紙本
+            // 工程圖「不同零件（或此處=不同剖切面）的剖面線角度要互相區分」慣例，同時也
+            // 順便解決了舊版「兩塊封頂同色、分不出交界」的問題，不必再靠顏色分。
+            var angleDeg = (i % 2 === 0) ? 45 : 135;
+            var hatchGeo = _buildCapHatchGeometry(built.tris2d, built.basis, angleDeg, hatchSpacing, hatchWidth, PosAttrCtor, GeoCtor);
+            if (hatchGeo) {
+                // 斜線本身也是三角面（見 _buildCapHatchQuads2d 註解：改用三角面才吃得到
+                // polygonOffset），材質沿用跟封頂同一套 _buildCapMaterial 再覆寫顏色與
+                // 更靠近鏡頭的偏移量，確保穩定疊在封頂填色之上、不受視角影響。
+                var hatchMat = _buildCapMaterial(sampleMesh, i);
+                hatchMat.color.set(_EG_CAP_HATCH_COLOR);
+                if (others.length) hatchMat.clippingPlanes = others;
+                hatchMat.polygonOffsetFactor = -8;
+                hatchMat.polygonOffsetUnits = -8;
+                hatchMat.needsUpdate = true;
+                var hatchObj = new MeshCtor(hatchGeo, hatchMat);
+                hatchObj.renderOrder = 7;
+                viewer.AddExtraObject(hatchObj);
+                caps.push(hatchObj);
+            }
         });
         return caps;
     }
