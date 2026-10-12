@@ -1879,6 +1879,15 @@ var EG3DTools = (function () {
         mat.transparent = false;
         mat.opacity = 1;
         mat.flatShading = false;
+        // ★ 2026-10-12 使用者回報「透視的剖面顯示異常」：透視（隱藏線）模式會把模型本體的
+        //   材質整批設成 colorWrite=false（只寫深度、不畫顏色，面才會變成只剩邊線），而封頂
+        //   材質是**複製模型材質**來的，於是連這個旗標一起繼承 → 封頂完全不畫出來，透視＋
+        //   剖面時斷面整片消失。與上色那次的 vertexColors 是同一類問題（複製材質會把「屬於
+        //   模型本體的顯示狀態」一併帶走），所以這裡一律把這幾個旗標也還原成正常值。
+        mat.colorWrite = true;
+        mat.depthWrite = true;
+        mat.depthTest = true;
+        mat.visible = true;
         mat.color.set(_EG_CAP_BASE_COLOR);
         if (mat.specular) mat.specular.set('#222222');   // Phong 材質若保留原本高反光度，淺灰底會被鏡面反射洗成死白，降低一點
         mat.shininess = 6;
@@ -1926,7 +1935,17 @@ var EG3DTools = (function () {
             var built = _buildCapGeometry(mm, plane);
             if (!built) return;
             var mat = _buildCapMaterial(sampleMesh, i);
-            var others = planes.filter(function (_, j) { return j !== i; });
+            // ★ 2026-10-12 使用者回報「楔形剖面還是異常」：雙平面（楔形／象限）時每一塊封頂
+            //   都要被「另一個平面」限制範圍，但方向必須**反過來**。Three.js 的規則是「有號
+            //   距離為負的點被切掉」，而模型本體在楔形模式下是 clipIntersection=true（兩個
+            //   平面都判定要切才真的切）；所以平面 A 上真正被挖開、需要畫斷面的那一段，正好
+            //   是「平面 B 也判定要切除」的那一側。直接把平面 B 原樣拿來裁封頂會剛好相反——
+            //   封頂被畫在楔形缺口的**對面**（埋在實體裡看不見，只在零件表面露出一條細線），
+            //   缺口裡面反而沒有斷面。把另一個平面的法向量與 constant 同時取反號，就是反轉
+            //   它的切除側。
+            var others = planes.filter(function (_, j) { return j !== i; }).map(function (p) {
+                return { normal: { x: -p.normal.x, y: -p.normal.y, z: -p.normal.z }, constant: -p.constant };
+            });
             if (others.length) mat.clippingPlanes = others;
             var capObj = new MeshCtor(built.geo, mat);
             capObj.renderOrder = 6;   // 比透視模式的可見邊(10)低、比背面虛線邊(5)高，封頂面本身不需要跟邊線搶深度排序
