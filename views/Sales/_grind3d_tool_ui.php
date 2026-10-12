@@ -33,6 +33,13 @@
 // 本檔不依賴 jQuery，也不引用呼叫端頁面的任何全域函式。
 require_once __DIR__ . '/../../src/common/grind3d_tool_lib.php';
 
+/* 重複 include 防護：齒輪計算工具 _gear_tool_ui.php 已經會 include 本檔（它的
+   出尾計算分頁旁有一顆 3D 按鈕），而同一個頁面可能又自己 include 一次（例如
+   views/TD/grind_interference_3d.php）。第二次要整個不輸出，否則會有兩份 CSS、
+   兩個同 id 的浮動視窗與兩份 EGGrind3D。 */
+if (defined('EG_GRIND3D_UI_INCLUDED')) return;
+define('EG_GRIND3D_UI_INCLUDED', 1);
+
 if (!isset($can_grind3d)) {
     $__g3_pdo = null;
     foreach ([$GRIND3D_TOOL_PDO ?? null, $pdo ?? null, $db ?? null] as $__g3_c) {
@@ -41,6 +48,12 @@ if (!isset($can_grind3d)) {
     $can_grind3d = grind3d_tool_can_use($__g3_pdo, intval($_SESSION['id'] ?? 0));
 }
 $__g3_dir = __DIR__ . '/../../resource/js/';
+/* 函式庫網址推成「網站絕對路徑」：本檔會被不同目錄深度的頁面 include
+   （views/Sales、views/TD…），寫死 ../../ 換個目錄就 404。 */
+$__g3_fs   = str_replace(chr(92), '/', (string)realpath($__g3_dir));
+$__g3_root = str_replace(chr(92), '/', (string)realpath($_SERVER['DOCUMENT_ROOT'] ?? ''));
+$__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
+           ? substr($__g3_fs, strlen($__g3_root)) : '../../resource/js';
 ?>
 <?php if ($can_grind3d): ?>
 <style>
@@ -117,7 +130,10 @@ $__g3_dir = __DIR__ . '/../../resource/js/';
 .g3d-kv .g3d-k-sub { color:#8a7560; font-size:11px; }
 
 /* ── 浮動視窗（方式 A）───────────────────────────────────────────────── */
-#g3d-win { position:fixed; z-index:10400; display:none;
+/* z-index 要比齒輪計算工具視窗（10500）高：這個工具可以從齒輪工具的「出尾計算」
+   分頁右側按鈕開啟，開在它後面就是「按了沒反應」（2026-10-12 實測踩到，截圖才看到
+   視窗其實有開、只是整個被蓋住）。鍵槽工具是 10400、齒輪 10500，這裡用 10550。 */
+#g3d-win { position:fixed; z-index:10550; display:none;
           width:1180px; max-width:96vw; height:706px; max-height:92vh;
           top:46px; left:50%; transform:translateX(-50%);
           background:#fff; border-radius:8px; border:1px solid var(--g3d-line, #E8C9A0);
@@ -147,8 +163,10 @@ $__g3_dir = __DIR__ . '/../../resource/js/';
     <div id="g3d-body"></div>
 </div>
 
-<script src="../../resource/js/o3dv.min.js"></script>
-<script src="../../resource/js/eg_3d_viewer_tools.js?v=<?= @filemtime($__g3_dir.'eg_3d_viewer_tools.js') ?>"></script>
+<?php /* o3dv.min.js（1MB）與 eg_3d_viewer_tools.js（143KB）刻意**不在這裡載入**：
+   本元件會被掛在訂單追蹤（現場每天在用的清單、11,600 行）與批圖編輯器上，
+   多 1.1MB 進頁面載入路徑是不能接受的。改成使用者第一次真的打開 3D 工具時
+   才動態注入（見下面的 ensureLibs），沒點開就完全沒有成本。 */ ?>
 <script>
 /* ══════════════════════════════════════════════════════════════════════════
    砂輪干涉 3D 模擬（唯一實作）
@@ -536,10 +554,41 @@ var EGGrind3D = (function () {
     }
 
     /* ══ 十、檢視器 ════════════════════════════════════════════════════════ */
-    /* eg_3d_viewer_tools.js 在本檔之前載入，所以正常情況下一定抓得到；抓不到
-       （檔案 404）時降級成「只有 3D 與計算、沒有剖面量測截圖」，不要讓整支
-       工具因為工具列少一個功能就完全不能用。 */
-    var T3 = (typeof EG3DTools !== "undefined" && EG3DTools) ? EG3DTools : null;
+    /* 函式庫延後載入，所以 T3（EG3DTools）要等 ensureLibs 完成才解析；
+       抓不到（檔案 404）時降級成「只有 3D 與計算、沒有剖面量測截圖」，
+       不要讓整支工具因為工具列少一個功能就完全不能用。 */
+    var T3 = null;
+
+    /* ── 延後載入：第一次真的要用 3D 時才把兩支重量級函式庫注入 ───────────── */
+    var LIBS = ['<?= $__g3_url ?>/o3dv.min.js',
+                '<?= $__g3_url ?>/eg_3d_viewer_tools.js?v=<?= @filemtime($__g3_dir."eg_3d_viewer_tools.js") ?>'];
+    var _libState = 0;          /* 0未載 1載入中 2完成 3失敗 */
+    var _libQueue = [];
+    function ensureLibs(cb) {
+        if (_libState === 2) { cb(true); return; }
+        if (_libState === 3) { cb(false); return; }
+        _libQueue.push(cb);
+        if (_libState === 1) return;
+        _libState = 1;
+        var i = 0;
+        (function next() {
+            if (i >= LIBS.length) {
+                T3 = (typeof EG3DTools !== 'undefined' && EG3DTools) ? EG3DTools : null;
+                _libState = (typeof OV !== 'undefined' && OV.EmbeddedViewer) ? 2 : 3;
+                var q = _libQueue; _libQueue = [];
+                q.forEach(function (f) { f(_libState === 2); });
+                return;
+            }
+            /* 頁面上可能已經有人載過 o3dv（例如圖面查閱）：載過就跳過不重載 */
+            if (i === 0 && typeof OV !== 'undefined' && OV.EmbeddedViewer) { i++; next(); return; }
+            if (i === 1 && typeof EG3DTools !== 'undefined') { i++; next(); return; }
+            var sc = document.createElement('script');
+            sc.src = LIBS[i];
+            sc.onload = function () { i++; next(); };
+            sc.onerror = function () { i = LIBS.length; next(); };
+            document.head.appendChild(sc);
+        })();
+    }
 
     var VW = null;          /* OV.EmbeddedViewer */
     var VW_HOST = null;
@@ -766,20 +815,38 @@ var EGGrind3D = (function () {
         draw(false);
     }
 
-    /* 重畫（改砂輪位置時呼叫，不重算極限位置）*/
+    /* 重畫（改砂輪位置時呼叫，不重算極限位置）。
+       數字先更新、不等函式庫——結論與出尾長度是純計算，沒有 3D 也該立刻看得到；
+       3D 那一半等 ensureLibs 回來再補上。_drawSeq 是為了丟掉「等函式庫期間使用者
+       又拖了好幾次拉桿」累積下來的過期回呼，只畫最後一次。 */
+    var _drawSeq = 0;
     function draw(refit) {
         var res = ST.res;
         if (!res || !res.ok) return;
-        var tr = $1('#g3dTrans');
-        var model = buildModel(res, ST.cx, (tr && tr.checked) ? 0.42 : 1);
-        var msg = $1('#g3dCanvasMsg');
-        pushToViewer(model, $1('#g3dCanvas'), refit, function (ok) {
-            if (msg) msg.style.display = ok ? 'none' : 'flex';
-            if (!ok && msg) msg.textContent = '3D 檢視器載入失敗（o3dv.min.js 未載入）';
-            /* 剖面開著的時候，模型換掉之後材質是全新的、裁切面會不見，要重新套一次 */
-            if (ok && ST.sec) applySection();
-        });
         showResult();
+
+        var msg = $1('#g3dCanvasMsg');
+        if (msg && _libState < 2) {
+            msg.style.display = 'flex';
+            msg.textContent = '正在載入 3D 元件…';
+        }
+        var seq = ++_drawSeq;
+        ensureLibs(function (libOk) {
+            if (seq !== _drawSeq) return;          /* 已經有更新的一次重畫了 */
+            if (!libOk) {
+                if (msg) { msg.style.display = 'flex';
+                           msg.textContent = '3D 元件載入失敗，計算結果仍然可用'; }
+                return;
+            }
+            var tr = $1('#g3dTrans');
+            var model = buildModel(res, ST.cx, (tr && tr.checked) ? 0.42 : 1);
+            pushToViewer(model, $1('#g3dCanvas'), refit, function (ok) {
+                if (msg) msg.style.display = ok ? 'none' : 'flex';
+                if (!ok && msg) msg.textContent = '3D 檢視器建立失敗';
+                /* 剖面開著時模型換掉後材質是全新的、裁切面會不見，要重新套一次 */
+                if (ok && ST.sec) applySection();
+            });
+        });
     }
 
     function showResult() {

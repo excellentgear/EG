@@ -20,6 +20,19 @@ if (!isset($show_gear_tool)) {
 }
 if (!isset($is_gear_admin)) $is_gear_admin = gear_tool_is_admin();
 
+// 砂輪干涉 3D 模擬（出尾計算的 3D 版本）：出尾計算分頁右側那顆按鈕要不要出現。
+// 元件本身在檔尾才 include（它會自己做重複 include 防護），但按鈕在上面就要輸出，
+// 所以權限必須在這裡先算好。元件的重量級函式庫（o3dv 1MB）是「點開才載入」的，
+// 所以掛上這顆按鈕不會增加訂單追蹤／批圖編輯器的頁面載入成本。
+require_once __DIR__ . '/../../src/common/grind3d_tool_lib.php';
+if (!isset($can_grind3d)) {
+    $__g3_pdo0 = null;
+    foreach ([$GEAR_TOOL_PDO ?? null, $GRIND3D_TOOL_PDO ?? null, $pdo ?? null, $db ?? null] as $__c3) {
+        if ($__c3 instanceof PDO) { $__g3_pdo0 = $__c3; break; }
+    }
+    $can_grind3d = grind3d_tool_can_use($__g3_pdo0, intval($_SESSION['id'] ?? 0));
+}
+
 // 停靠模式（Figma 式「頁面內側邊面板」）：呼叫端設 $gear_tool_dock = '#canvas-wrap'（CSS 選擇器＝
 // 面板要貼在哪個容器的右緣）才會出現「停靠／浮出」切換鈕；沒設定的頁面維持原本的浮動視窗、行為完全不變。
 // $gear_tool_dock_default = 第一次開啟時預設停靠還是浮動（之後記住使用者自己的選擇）。
@@ -77,6 +90,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         .gear-tab-btn.active { color: #1a6fa0; border-bottom-color: #1a6fa0; background: #fff; }
         .gear-tab-btn:disabled { color: #bbb; cursor: not-allowed; }
         .gear-tab-btn:not(:disabled):hover { color: #2980b9; }
+        /* 「砂輪干涉3D」不是分頁、是開另一個工具視窗，所以用暖色與虛線底標示成
+           不同性質的入口（它永遠不會有 .active 狀態，看起來跟分頁一樣會讓人以為
+           按了沒反應）。 */
+        .gear-tab-btn.gear-tab-ext { color:#C77C1A; border-bottom:3px dotted #E8C9A0; }
+        .gear-tab-btn.gear-tab-ext:hover { color:#8a5a2b; border-bottom-color:#C77C1A; }
         .gear-tab-pane { display: none; padding: 14px; }
         .gear-tab-pane.active { display: block; }
         #gear-tool-body { max-height: calc(85vh - 90px); overflow-y: auto; }
@@ -300,6 +318,12 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         <span class="sp-tab-sep"></span>
         <button class="gear-tab-btn" data-tab="sr" onclick="switchGearTab('sr',this)" title="矩形栓槽跨銷值計算">栓槽</button>
         <button class="gear-tab-btn" data-tab="tail" onclick="switchGearTab('tail',this)" title="出尾長度計算與刀具外徑建議">出尾計算</button>
+<?php if ($can_grind3d): ?>
+        <?php /* 這一顆不是分頁、是開另一個工具視窗，所以用 gear-tab-ext 標成不同顏色，
+                 不要讓使用者以為按了會換分頁。唯一實作在 views/Sales/_grind3d_tool_ui.php。 */ ?>
+        <button class="gear-tab-btn gear-tab-ext" onclick="openGrind3DFromTail()"
+                title="開啟砂輪干涉 3D 模擬：出尾計算的 3D 版本，可旋轉、含砂輪傾角。會自動把這一頁已經填好的刀具外徑／齒根直徑／肩部直徑／退刀量帶過去。注意出尾計算的公式只在砂輪傾角 0 時成立，有傾角時要以 3D 的結果為準"><i class="fa fa-cube"></i> 砂輪干涉3D</button>
+<?php endif; ?>
         <span class="sp-tab-sep"></span>
         <button class="gear-tab-btn" data-tab="tables" onclick="switchGearTab('tables',this)"><i class="fa fa-table"></i> 預留量管理</button>
     </div>
@@ -4023,6 +4047,44 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         drawTailSVG(Ds, Dr, Da_max, U, L_geo || L, target);
     };
 
+    // ══ 砂輪干涉 3D 模擬：把出尾計算已經填好的值帶過去 ════════════════════════
+    // 唯一實作在 views/Sales/_grind3d_tool_ui.php（本檔檔尾 include），這裡只負責
+    // 「哪一個欄位對應到 3D 工具的哪一個參數」。欄位沒填就不傳，讓 3D 工具用它
+    // 自己的預設值，不要硬塞 0 進去（砂輪外徑 0 會直接變成算不出來的錯誤狀態）。
+    window.openGrind3DFromTail = function () {
+        if (typeof openGrind3D !== 'function') {
+            alert('砂輪干涉 3D 模擬元件尚未載入，請重新整理頁面後再試');
+            return;
+        }
+        function v(id) {
+            var el = document.getElementById(id);
+            if (!el) return null;
+            var n = parseFloat(el.value);
+            return isFinite(n) && n > 0 ? n : null;
+        }
+        var p = {};
+        var da = v('tail-da-a'), dr = v('tail-dr'), ds = v('tail-ds');
+        var el = document.getElementById('tail-u');
+        var u  = el ? parseFloat(el.value) : NaN;
+        if (da !== null) p.Dw = da;      // 刀具（砂輪）外徑
+        if (dr !== null) p.Dr = dr;      // 齒根直徑 → 工件齒底徑
+        if (ds !== null) p.Ds = ds;      // 肩部直徑
+        if (isFinite(u) && u >= 0) p.U = u;   // 退刀量（0 是合法值，不可用上面的 >0 判斷）
+        openGrind3D(Object.keys(p).length ? p : null);
+    };
+
 })();
 </script>
+<?php
+/* 砂輪干涉 3D 模擬元件（出尾計算分頁右側那顆按鈕要用）。
+   放在檔尾才 include，且元件自己有重複 include 防護，所以：
+     - 頁面只 include 齒輪工具 → 3D 工具跟著有（批圖編輯器、訂單追蹤都是這樣）
+     - 頁面自己也 include 了 3D 工具 → 第二次整個不輸出，不會有兩份
+   元件的 o3dv（1MB）是「使用者第一次點開才動態注入」，所以這個 include 只會多出
+   CSS 與自己的 inline JS，不會增加頁面載入的重量。 */
+if ($can_grind3d) {
+    $GRIND3D_TOOL_PDO = $GRIND3D_TOOL_PDO ?? ($GEAR_TOOL_PDO ?? ($pdo ?? ($db ?? null)));
+    include __DIR__ . '/_grind3d_tool_ui.php';
+}
+?>
 <?php endif; ?>
