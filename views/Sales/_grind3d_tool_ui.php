@@ -675,7 +675,12 @@ var EGGrind3D = (function () {
 
     function panelHtml() {
         var h = ['<div class="g3d-root">'];
-        h.push('<div class="g3d-left">');
+        /* data-eg-form／data-eg-submit：讓共用檔 eg_input_rules.js（有載入的頁面）
+           知道這一塊是一個表單容器，Enter 才會在這些欄位之間跳、最後一欄按 Enter
+           等於按「移到不干涉的極限位置」。沒載入共用檔的頁面（批圖編輯器、訂單
+           追蹤都在 input_rules_baseline.txt 基準線內）由下面的 bindInputRules()
+           備援接手，**只綁在本面板上**，不會去動宿主頁面既有的 Enter 行為。 */
+        h.push('<div class="g3d-left" data-eg-form data-eg-submit="#g3dToLimit">');
 
         h.push('<div class="g3d-sec"><h4>砂輪</h4>');
         NUMF.slice(0, 5).forEach(function (f) { h.push(fieldHtml(f)); });
@@ -1003,8 +1008,70 @@ var EGGrind3D = (function () {
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
         });
 
+        bindInputRules(el);
         recompute(false);
         return ST;
+    }
+
+    /* ══ 輸入欄位行為（Enter 跳下一欄／聚焦全選／有值雙擊清空）══════════════
+       CLAUDE.md 的 UI 鐵則規定這些一律走共用檔 resource/js/eg_input_rules.js，
+       不要各頁自刻。但本元件會被掛在**沒有載入那支共用檔**的頁面上（批圖編輯器、
+       訂單追蹤都列在 input_rules_baseline.txt 基準線內，硬塞共用檔會改變那兩頁
+       既有的 Enter 行為、可能誤送出），所以這裡做的是「**共用檔不在時才接手、
+       而且只綁在本元件的面板上**」的備援：
+         - 共用檔在（window.EG_INPUT_RULES）→ 整段跳過，交給它（面板已標
+           data-eg-form／data-eg-submit，它就知道 Enter 要在哪些欄位之間跳）
+         - 共用檔不在 → 只對 el 內的欄位綁，絕不碰 document，宿主頁面零影響
+       行為與共用檔一致：最後一欄按 Enter＝按下該區塊的主要動作鈕。 */
+    function bindInputRules(el) {
+        if (window.EG_INPUT_RULES) return;      /* 共用檔已接手，不要綁第二份 */
+
+        function fields() {
+            return Array.prototype.filter.call(
+                el.querySelectorAll('.g3d-left input[type=number]'),
+                function (x) { return !x.disabled && x.offsetParent !== null; });
+        }
+        el.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            var t = e.target;
+            if (!t || t.tagName !== 'INPUT' || t.type !== 'number') return;
+            e.preventDefault();
+            var list = fields(), i = list.indexOf(t);
+            if (i < 0) return;
+            if (i < list.length - 1) {
+                list[i + 1].focus();      /* 全選交給下面的 focusin，這裡不要再呼叫一次 */
+            } else {
+                var go = $1('#g3dToLimit');     /* 最後一欄＝觸發本區塊的主要動作 */
+                if (go) go.click();
+                t.blur();
+            }
+        });
+        /* 聚焦自動全選。
+           ── 這裡有一個很難查的坑（2026-10-12 實測，務必保留這兩道防護）──────
+           `select()` 對 input[type=number] **會把焦點搶回自己身上**。而自動全選
+           必須延後到下一個 tick（滑鼠點進欄位時，同步 select 會被接著發生的
+           mouseup 放游標覆蓋掉），兩件事湊在一起就會變成無窮迴圈：
+             焦點 Dw→Tw 時，Dw 那個還沒執行的 select() 一觸發就把焦點搶回 Dw，
+             接著 Tw 的 select() 又搶回 Tw……實測兩個欄位每 15~30ms 互搶一次，
+             畫面上的症狀是「按 Enter 跳到下一欄，又自己跳回上一欄」。
+           兩道防護：①同時間只保留一個待執行的 select（換欄位就取消上一個）
+                     ②真的執行時再確認「這個欄位現在仍然是焦點所在」才 select。 */
+        var selTimer = null;
+        el.addEventListener('focusin', function (e) {
+            var t = e.target;
+            if (!(t && t.tagName === 'INPUT' && t.type === 'number' && t.value !== '')) return;
+            clearTimeout(selTimer);
+            selTimer = setTimeout(function () {
+                if (document.activeElement === t) { try { t.select(); } catch (err) {} }
+            }, 0);
+        });
+        el.addEventListener('dblclick', function (e) {
+            var t = e.target;
+            if (t && t.tagName === 'INPUT' && t.type === 'number' && t.value !== '') {
+                t.value = '';
+                t.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
     }
 
     /* ══ 十四、浮動視窗 ════════════════════════════════════════════════════ */
