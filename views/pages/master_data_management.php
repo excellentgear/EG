@@ -1824,15 +1824,9 @@ function eg_part_set_build(PDO $pdo, array $setIds): array {
     foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $sid = (int)$r['set_id'];
         if (!isset($out[$sid])) continue;
-        $kind = (string)$r['target_kind'];
-        if ($kind === 'category') {
-            $label = ($r['ptype_name'] !== '' ? $r['ptype_name'] : ('大類#' . (int)$r['target_id'])) . '（整類）';
-        } elseif ($kind === 'model') {
-            $label = $r['target_text'] . '（機型）';
-        } else {
-            $label = $r['machine_name'] . ($r['field_no'] ? ' [' . $r['field_no'] . ']' : '');
-            if (trim($label) === '') $label = '機台#' . (int)$r['target_id'];
-        }
+        $kind  = (string)$r['target_kind'];
+        $label = eg_part_set_machine_label($kind, (int)$r['target_id'], (string)$r['target_text'],
+                                           (string)$r['machine_name'], (string)$r['field_no'], (string)$r['ptype_name']);
         $out[$sid]['machines'][] = ['target_kind' => $kind, 'target_id' => (int)$r['target_id'],
                                     'target_text' => (string)$r['target_text'], 'label' => $label];
     }
@@ -1852,6 +1846,17 @@ function eg_part_set_build(PDO $pdo, array $setIds): array {
     }
     unset($row);
     return $out;
+}
+
+/**
+ * 整組「使用機台」的顯示字串（唯一實作：整組清單、編輯跳窗、篩選膠囊共用）。
+ * 三種範圍各自有不同寫法，分散在幾個地方各拼一次遲早走鐘（鐵律4）。
+ */
+function eg_part_set_machine_label(string $kind, int $id, string $text, string $machineName, string $fieldNo, string $ptypeName): string {
+    if ($kind === 'category') return ($ptypeName !== '' ? $ptypeName : ('大類#' . $id)) . '（整類）';
+    if ($kind === 'model')    return $text . '（機型）';
+    $label = $machineName . ($fieldNo !== '' ? ' [' . $fieldNo . ']' : '');
+    return trim($label) !== '' ? $label : ('機台#' . $id);
 }
 
 /**
@@ -4242,6 +4247,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ex = "EXISTS (SELECT 1 FROM d_setting_part_set_machine xm WHERE xm.set_id=s.set_id)";
                 $w[] = ($fMach === 'has') ? $ex : "NOT $ex";
             }
+            // 指定某一台／某一類／某個機型（值格式 "kind:值"，與 part_set_filter_options 一致）
+            $fMachT = trim($_POST['f_machine_target'] ?? '');
+            if ($fMachT !== '' && strpos($fMachT, ':') !== false) {
+                [$mk, $mv] = explode(':', $fMachT, 2);
+                if (in_array($mk, ['machine','category','model'], true)) {
+                    if ($mk === 'model') {
+                        $w[] = "EXISTS (SELECT 1 FROM d_setting_part_set_machine tm WHERE tm.set_id=s.set_id AND tm.target_kind='model' AND tm.target_text=?)";
+                        $p[] = $mv;
+                    } else {
+                        $w[] = "EXISTS (SELECT 1 FROM d_setting_part_set_machine tm WHERE tm.set_id=s.set_id AND tm.target_kind=? AND tm.target_id=?)";
+                        $p[] = $mk; $p[] = (int)$mv;
+                    }
+                }
+            }
             if ($fUsed === 'used' || $fUsed === 'unused') {
                 $ex = "EXISTS (SELECT 1 FROM d_setting_jig_map xj WHERE xj.target_kind='set' AND xj.target_id=s.set_id)";
                 $w[] = ($fUsed === 'used') ? $ex : "NOT $ex";
@@ -4306,7 +4325,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'used'     => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE $exUsed"),
                 'unused'   => $q("SELECT COUNT(*) FROM d_setting_part_set s WHERE NOT $exUsed"),
             ];
-            echo json_encode(['success'=>true,'customers'=>$cs,'sub_types'=>$ts,'stats'=>$stats], JSON_UNESCAPED_UNICODE);
+            // 機台篩選選項：只列「真的有被某一組綁到」的，三種範圍（特定機台／機台種類／機型）
+            // 混在同一排膠囊，各自帶組數。value 統一成 "kind:值" 一個字串，前端不必分三種處理。
+            $ms = $pdo->query("SELECT sm.target_kind, sm.target_id, sm.target_text,
+                                      COALESCE(ml.machine,'') AS machine_name, COALESCE(ml.field_no,'') AS field_no,
+                                      COALESCE(pt.process_type,'') AS ptype_name,
+                                      COUNT(DISTINCT sm.set_id) AS cnt
+                               FROM d_setting_part_set_machine sm
+                               LEFT JOIN machine_list ml ON sm.target_kind='machine' AND ml.machine_id = sm.target_id
+                               LEFT JOIN process_type pt ON sm.target_kind='category' AND pt.process_type_id = sm.target_id
+                               GROUP BY sm.target_kind, sm.target_id, sm.target_text, ml.machine, ml.field_no, pt.process_type
+                               ORDER BY cnt DESC, sm.target_kind, sm.target_id")->fetchAll(PDO::FETCH_ASSOC);
+            $machines = [];
+            foreach ($ms as $m) {
+                $machines[] = [
+                    'value' => $m['target_kind'] . ':' . ($m['target_kind'] === 'model' ? $m['target_text'] : (string)(int)$m['target_id']),
+                    'label' => eg_part_set_machine_label((string)$m['target_kind'], (int)$m['target_id'], (string)$m['target_text'],
+                                                         (string)$m['machine_name'], (string)$m['field_no'], (string)$m['ptype_name']),
+                    'cnt'   => (int)$m['cnt'],
+                ];
+            }
+            echo json_encode(['success'=>true,'customers'=>$cs,'sub_types'=>$ts,'machines'=>$machines,'stats'=>$stats], JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -16301,7 +16340,7 @@ function psDebouncedSearch() { clearTimeout(PS_TIMER); PS_TIMER = setTimeout(fun
 /* ── 篩選狀態（2026-10-12 改版：使用者要求「盡量使用按鈕篩選或是卡片式篩選」）──────
    view ＝快速檢視卡片（互斥，一次一種）：'' | jig | machine | used | unused
    cust / sub ＝膠囊（各自互斥），兩個維度可以跟 view 並存。 */
-var PS_FILTER = { view:'', cust:'', sub:'' };
+var PS_FILTER = { view:'', cust:'', sub:'', mach:'' };
 var PS_OPTS = null;   // part_set_filter_options 的結果（含各選項組數）
 
 function psLoad(page) {
@@ -16311,7 +16350,7 @@ function psLoad(page) {
     if (tb) tb.innerHTML = '<tr><td colspan="5"><div class="table-loading"><div class="spinner"></div> 載入中…</div></td></tr>';
     var v = PS_FILTER.view;
     api({ action:'part_set_list', kw:PS_KW, page:PS_PAGE, per:20,
-          f_customer: PS_FILTER.cust, f_sub_type: PS_FILTER.sub,
+          f_customer: PS_FILTER.cust, f_sub_type: PS_FILTER.sub, f_machine_target: PS_FILTER.mach,
           f_jig:     (v === 'jig'     ? 'has'    : ''),
           f_machine: (v === 'machine' ? 'has'    : ''),
           f_used:    (v === 'used'    ? 'used'   : (v === 'unused' ? 'unused' : '')) }).done(function(r){
@@ -16323,8 +16362,9 @@ function psLoad(page) {
 function psSetView(v)  { PS_FILTER.view = (PS_FILTER.view === v) ? '' : v; psLoad(1); }
 function psSetCust(c)  { PS_FILTER.cust = (PS_FILTER.cust === c) ? '' : c; psLoad(1); }
 function psSetSub(t)   { PS_FILTER.sub  = (String(PS_FILTER.sub) === String(t)) ? '' : String(t); psLoad(1); }
+function psSetMach(v)  { PS_FILTER.mach = (PS_FILTER.mach === v) ? '' : v; psLoad(1); }
 function psClearFilters() {
-    PS_FILTER = { view:'', cust:'', sub:'' };
+    PS_FILTER = { view:'', cust:'', sub:'', mach:'' };
     var kw = document.getElementById('ps-search'); if (kw) kw.value = '';
     psLoad(1);
 }
@@ -16369,8 +16409,19 @@ function psRenderFilters() {
         });
         h += '</div>';
     }
+    // 機台：三種範圍（特定機台／機台種類／機型）混在同一排，value 是後端組好的 "kind:值"
+    var mss = PS_OPTS.machines || [];
+    if (mss.length) {
+        h += '<div class="ps-pill-grp"><span class="ps-pill-lb">機台</span>';
+        mss.forEach(function(m){
+            h += '<span class="ps-pill' + (PS_FILTER.mach === m.value ? ' on' : '') + '"'
+               + ' onclick="psSetMach(&quot;' + escAttr(m.value) + '&quot;)" title="' + escAttr('只看用到「' + m.label + '」的整組') + '">'
+               + escHtml(m.label) + '<span class="ps-pill-n">' + m.cnt + '</span></span>';
+        });
+        h += '</div>';
+    }
     // 有任何篩選在作用時才出現「清除」——沒在篩的時候多一顆沒用的鈕只是雜訊
-    var any = PS_FILTER.view !== '' || PS_FILTER.cust !== '' || PS_FILTER.sub !== ''
+    var any = PS_FILTER.view !== '' || PS_FILTER.cust !== '' || PS_FILTER.sub !== '' || PS_FILTER.mach !== ''
               || (document.getElementById('ps-search')||{value:''}).value.trim() !== '';
     if (any) h += '<span class="ps-pill ps-pill-clear" onclick="psClearFilters()"><i class="fa fa-times"></i> 清除篩選</span>';
     pills.innerHTML = h;
