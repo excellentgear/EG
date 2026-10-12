@@ -8537,8 +8537,8 @@ include __DIR__ . '/_gear_tool_ui.php';
                         <div class="lr-pair-total-row">原圖總長範圍：<span class="lr-out lr-dtot-range">—</span></div>
                         <div class="lr-pair-total-row">成品總長範圍：<span class="lr-out lr-pair-total-fin">—</span></div>
                         <div class="lr-pair-total-row">建議車床總長範圍：<span class="lr-out lr-pair-total-turn">—</span></div>
-                        <div class="lr-pair-total-row">建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>
-                        <div class="lr-pair-total-row">手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>
+                        <div class="lr-pair-total-row">③建議車床基準值合計：<span class="lr-out lr-pair-total-sugsum">—</span></div>
+                        <div class="lr-pair-total-row">④手動總長（研磨後）：<span class="lr-out lr-pair-total-man">—</span><span class="lr-verify-badge lr-pair-total-man-badge"></span></div>
                     </div>
                     <div class="lr-warn lr-pair-total-warn"></div>
                     <div class="lr-warn lr-pair-total-dconflict"></div>
@@ -8955,7 +8955,7 @@ include __DIR__ . '/_gear_tool_ui.php';
             dconflictEl.textContent = '';
             if (dConflict) {
                 dconflictEl.className = 'lr-warn lr-pair-total-dconflict show';
-                dconflictEl.textContent = '✗ 原圖總長公差跟各欄的個別公差、研磨量搭配不出可行的車床尺寸組合，請重新確認原圖數字。';
+                dconflictEl.textContent = '✗ ③原圖總長公差跟各欄的個別公差、研磨量搭配不出可行的車床尺寸組合，請重新確認原圖數字。';
             }
         }
         var dokEl = totalWrap.querySelector('.lr-pair-total-dok');
@@ -8964,12 +8964,18 @@ include __DIR__ . '/_gear_tool_ui.php';
             dokEl.textContent = '';
             if (dAdjusted && !dConflict) {
                 dokEl.className = 'lr-verify-badge lr-pair-total-dok show-ok';
-                dokEl.textContent = '✓ 已依原圖總長公差調整各欄的建議車床基準值，加總落在原圖總長公差內。';
+                dokEl.textContent = '✓ ③已依原圖總長公差調整各欄的建議車床基準值，加總落在原圖總長公差內。';
             }
         }
 
-        var checkLow  = (dLow  !== null) ? dLow  : finLow;
-        var checkHigh = (dHigh !== null) ? dHigh : finHigh;
+        // 注意：這裡驗的是④（各欄「手動驗算」自己填的候選值＋公差）加總後是否符合，
+        // 跟上面③「建議車床基準值合計」是否已依原圖總長公差調整成功，是兩件各自獨立的事——
+        // 即使③已經調整成功（✓），④填的候選值加總後還是可能對不上（尤其④用的是比較寬鬆
+        // 的「這一欄自己的成品公差」在個別驗算時過關，但加總起來超出了比較嚴格的原圖總長公差）。
+        var checkAgainstD = (dLow !== null && dHigh !== null);
+        var checkLow  = checkAgainstD ? dLow  : finLow;
+        var checkHigh = checkAgainstD ? dHigh : finHigh;
+        var checkName = checkAgainstD ? '原圖總長公差' : '成品總長公差';
         var manEl = totalWrap.querySelector('.lr-pair-total-man');
         var manBadge = totalWrap.querySelector('.lr-pair-total-man-badge');
         var hasAllManual = states.every(function(st) { return st.mLow !== null && st.delta !== null; });
@@ -8981,10 +8987,10 @@ include __DIR__ . '/_gear_tool_ui.php';
                 var ok = (manLow >= checkLow - 1e-9) && (manHigh <= checkHigh + 1e-9);
                 if (ok) {
                     manBadge.className = 'lr-verify-badge lr-pair-total-man-badge show-ok';
-                    manBadge.textContent = '✓ 符合';
+                    manBadge.textContent = '✓ ④各欄加總符合' + checkName + '（' + lrFmtRange(checkLow, checkHigh) + '）';
                 } else {
                     manBadge.className = 'lr-verify-badge lr-pair-total-man-badge show-bad';
-                    manBadge.textContent = '✗ 不符合';
+                    manBadge.textContent = '✗ ④各欄加總不符合' + checkName + '（' + lrFmtRange(checkLow, checkHigh) + '）——這是④自己填的候選值，不影響③建議車床基準值的計算';
                 }
             }
         } else {
