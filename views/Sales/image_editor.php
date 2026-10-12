@@ -3022,6 +3022,9 @@ function makeArrow(x1, y1, x2, y2, color, width, ends, dash) {
    （拖端點、重建箭頭）每呼叫一次就累加一次，而拖曳中每個 mousemove 都會呼叫——
    結果就是「拉一端，另一端自己跑掉」，粗線更明顯。修在這裡，所有呼叫端一次到位。 */
 function lineAbsEndpoints(line) {
+    // 防禦：理論上呼叫端都已經先確認過是直線/箭頭群組的線段子物件，但這支有 10 幾個呼叫點，
+    // 任何一處少做這層判斷就會整頁當掉（已踩過一次，2026-10-12），這裡再擋一次最保險。
+    if (!line || typeof line.calcTransformMatrix !== 'function') return [{ x: 0, y: 0 }, { x: 0, y: 0 }];
     const m = line.calcTransformMatrix();
     const lp = line.calcLinePoints();   // 相對線中心的區域座標
     const pts = [fabric.util.transformPoint({ x: lp.x1, y: lp.y1 }, m),
@@ -7408,13 +7411,21 @@ canvas.on('object:modified', (e) => {
         const invSelM = fabric.util.invertTransform(t.calcTransformMatrix());
         let fixedAny = false;
         t.getObjects().forEach(child => {
-            const isSkewed = child.type === 'group' &&
+            // 一定要先確認是箭頭群組或距離標註（trueArrowEndpoints 內部會找 type==='line' 的子物件，
+            // 找不到就整頁當掉）——多選縮放時選取框裡什麼群組都可能有（貼上的標籤群組、合併線段、
+            // 跨視窗貼上重建的物件…），不是每個 type==='group' 都有這個子物件，少了這層判斷
+            // 2026-10-08 剛加的多選修歪斜功能就會對「隨便一個被縮放的群組」呼叫 trueArrowEndpoints，
+            // 找不到線段子物件時 undefined.calcTransformMatrix() 直接丟出例外（使用者 2026-10-12 回報：
+            // 跨視窗貼上後選取縮放時「無法貼上複製的項目」，main console 顯示這個例外）。
+            const isArrow = child.type === 'group' && !!child.isArrowGroup;
+            const isDist  = child.type === 'group' && child.dimKind === 'distance';
+            const isSkewed = (isArrow || isDist) &&
                 (Math.abs((child.scaleX || 1) - 1) > 1e-4 || Math.abs((child.scaleY || 1) - 1) > 1e-4);
             if (!isSkewed) return;
             const absPts = trueArrowEndpoints(child);
             const localPts = absPts.map(p => fabric.util.transformPoint(p, invSelM));
-            if (child.isArrowGroup) { if (reshapeArrowGroup(child, localPts[0], localPts[1])) fixedAny = true; }
-            else if (child.dimKind === 'distance') { if (rebuildDimDistanceInPlace(child, localPts[0], localPts[1])) fixedAny = true; }
+            if (isArrow) { if (reshapeArrowGroup(child, localPts[0], localPts[1])) fixedAny = true; }
+            else if (isDist) { if (rebuildDimDistanceInPlace(child, localPts[0], localPts[1])) fixedAny = true; }
         });
         if (fixedAny) { t.setCoords(); canvas.requestRenderAll(); }
     }
