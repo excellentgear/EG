@@ -2016,7 +2016,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
-                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面最上方是橫跨全寬的<b>「總長」</b>區，底下依序是<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一欄後其餘會自動往前遞補保持連續），每欄內①②③④<b>直向排列</b>（欄位較窄，同一畫面能並排顯示更多尺寸），標題列「<b>＋新增尺寸</b>」（清除鈕左側，特意留一段距離避免誤按）一次加一欄。四格依序：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm，<b>預設帶入 0.05</b>，仍可自行改），方向多一個<b>「無影響」</b>選項給完全不受這次研磨影響的尺寸（等於增減量 0，不理會欄位裡填了什麼）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，選「增加」或「減少」時配對欄自動改成相反方向、增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；<b>選「無影響」不會牽動配對欄，也不會被配對欄牽動</b>）；<b>還沒選方向時③④欄會提示「暫時算不出來」</b>，提醒要選一下方向，③<b>建議車床尺寸</b>＝自動算出「確保研磨完仍落在成品公差內」的安全範圍與建議基準值，<b>上下公差也自動算出、不用手填</b>：最上方一句話可設「建議車床公差目標」（預設 ±0.02mm），每一欄優先套用這個目標值，<b>這一欄的安全範圍比目標窄時會自動縮小到剛好符合</b>（上下可以不對稱，例如貼著安全範圍邊界時其中一側縮到 0），並標示實際縮小到多少，④<b>手動驗算</b>＝直接輸入圖面上已經標好的車床尺寸，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整）。最上方的<b>「總長」會自動把目前全部欄位加總</b>（不限兩欄，加多少欄就算多少欄，標題會顯示「目前共 N 欄」），可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示全部加總的總長時填寫其基準值與上下公差），並顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，各欄③的建議基準值會自動依總長公差重新調整</b>（讓全部欄位加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），<b>每一欄都填了手動驗算值時</b>也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，④要調整時再自行點進去（③已全部自動算出不可手填）；全程<b>填寫即時自動算，不必另外按計算</b>，「清除」恢復成預設的尺寸A／B兩欄重填（連同總長區的原圖總長尺寸輸入一併清空）。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
+                <li><b>預留量計算</b>（底部狀態列，鍵槽計算右側）：開啟<b>車床預留量計算工具</b>，用來處理「原圖標示的是成品尺寸、但這一段加工完還會被研磨，研磨會讓尺寸再變一次」的情況——例如兩個長度中間夾一個會被磨掉的面，磨完一側變短、另一側變長。畫面最上方是橫跨全寬的<b>「總長」</b>區，底下依序是<b>尺寸A、B、C、D……</b>（名稱固定依序編號、不開放改名，刪除某一欄後其餘會自動往前遞補保持連續），每欄內①②③④<b>直向排列</b>（欄位較窄，同一畫面能並排顯示更多尺寸），標題列「<b>＋新增尺寸</b>」（清除鈕左側，特意留一段距離避免誤按）一次加一欄。四格依序：①<b>成品尺寸</b>＝原圖標示的基準值與上下公差，②<b>研磨影響</b>＝這一面研磨「後」尺寸是增加還是減少、增減多少（mm，<b>預設帶入 0.05</b>，仍可自行改），方向多一個<b>「無影響」</b>選項給完全不受這次研磨影響的尺寸（等於增減量 0，不理會欄位裡填了什麼）——<b>第1/2欄、第3/4欄……每相鄰兩欄互為配對</b>，選「增加」或「減少」時配對欄自動改成相反方向、增減量也自動帶成同一個數字（同一個研磨面理論上兩側增減量相等，仍可各自再改；<b>選「無影響」不會牽動配對欄，也不會被配對欄牽動</b>）；<b>還沒選方向時③④欄會提示「暫時算不出來」</b>，提醒要選一下方向，③<b>建議車床尺寸</b>最上面有一組「<b>自動計算／手動輸入</b>」切換鈕，<b>預設自動計算</b>：基準值與上下公差全部由工具算出「確保研磨完仍落在成品公差內」（上下公差優先套用最上方可設定的「建議車床公差目標」預設 ±0.02mm，<b>這一欄的安全範圍比目標窄時會自動縮小到剛好符合</b>，上下可以不對稱、貼著安全範圍邊界時其中一側會縮到 0，並標示實際縮小到多少）；切成<b>手動輸入</b>則基準值與上下公差都變成自己打，工具改為<b>只負責驗算</b>您填的組合會不會超出這一欄的安全範圍（超出會紅字提示，不會幫您改），適合「這個尺寸我已經有自己的決定，只是想請系統幫忙檢查」的情況。④<b>手動驗算</b>是跟③完全獨立的另一個候選值欄位（不論③目前是自動或手動模式都可以用）：輸入車床基準值<b>與自己的上下公差</b>，立刻算出研磨後的實際範圍、並標示是否符合成品公差（紅底＝不符合，需調整），拿來試算「如果改用這個數字會怎樣」很方便。最上方的<b>「總長」會自動把目前全部欄位加總</b>（不限兩欄，加多少欄就算多少欄，標題會顯示「目前共 N 欄」；③切成手動輸入的欄位，加總時固定採用您填的基準值，不會被總長計算回頭調整），可選填<b>「原圖總長尺寸」</b>（原圖另有單獨標示全部加總的總長時填寫其基準值與上下公差），並顯示成品總長範圍、建議車床總長範圍與建議車床基準值合計；<b>填了「原圖總長尺寸」時，各欄仍是自動模式的③建議基準值會自動依總長公差重新調整</b>（讓全部欄位加總落在原圖總長公差內，調整成功標示「✓已依原圖總長公差調整」，個別公差與總長公差互相矛盾湊不出可行組合時標示「✗」並說明），<b>每一欄都填了④手動驗算值時</b>也會一併算出手動總長是否符合（有填總長尺寸則以總長公差為準）。<b>填完①②按 Enter 會直接跳到下一欄的①，方便連續輸入一長串尺寸的成品尺寸與研磨影響</b>，③④要調整時再自行點進去；全程<b>填寫即時自動算，不必另外按計算</b>，「清除」恢復成預設的尺寸A／B兩欄重填（連同總長區的原圖總長尺寸輸入一併清空，③也會重設回自動計算模式）。全部為純前端計算，不會寫入任何資料、不影響畫布內容</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -8454,23 +8454,31 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-tc { display:flex; flex-direction:column; gap:2px; flex:1; min-width:0; margin-left:5px; }
     .lr-tr { display:flex; align-items:center; gap:3px; }
     .lr-tlbl { font-size:9.5px; color:#a08a6f; width:32px; flex-shrink:0; }
-    .lr-utol, .lr-ltol, .lr-tutol, .lr-tltol, .lr-dtot-utol, .lr-dtot-ltol {
+    .lr-utol, .lr-ltol, .lr-tutol, .lr-tltol, .lr-dtot-utol, .lr-dtot-ltol, .lr-mtutol, .lr-mtltol {
         width:0; flex:1; min-width:0; font-family:"Consolas","Courier New",monospace; font-size:10.5px;
         text-align:center; border:1px solid #c9b79a; border-radius:2px; padding:3px 1px;
         background:#efe7db; color:#333; box-sizing:border-box;
         appearance:textfield; -moz-appearance:textfield;
     }
     .lr-utol:focus, .lr-ltol:focus, .lr-tutol:focus, .lr-tltol:focus,
-    .lr-dtot-utol:focus, .lr-dtot-ltol:focus { outline:none; background:#fff; border-color:#8a5a2b; }
-    /* ③的上下公差已改自動算出（套用上方公差目標，安全範圍不夠寬時自動縮小），不給手動輸入，
-       外觀比照 .lr-no-box 的「自動算出」配色，跟還要手填的灰底欄位區分開來 */
+    .lr-dtot-utol:focus, .lr-dtot-ltol:focus, .lr-mtutol:focus, .lr-mtltol:focus { outline:none; background:#fff; border-color:#8a5a2b; }
+    /* ③自動模式的上下公差（套用公差目標，安全範圍不夠寬時自動縮小）唯讀不給手動輸入，
+       外觀比照 .lr-no-box 的「自動算出」配色，跟還要手填的灰底欄位區分開來；手動模式時移除
+       這個 class 即變回可編輯（見 lrSetMode） */
     .lr-auto-fld, .lr-auto-fld:focus { background:#f3e4c8; color:#8a5a2b; font-weight:700; cursor:default; }
+    /* 建議車床尺寸的③④模式切換：兩顆小按鈕並排，當前模式高亮 */
+    .lr-mode-toggle { display:flex; border:1px solid #c9b79a; border-radius:3px; overflow:hidden; margin-bottom:5px; }
+    .lr-mode-btn { flex:1; font-size:9.5px; padding:3px 2px; border:none; background:#fff; color:#8a5a2b; cursor:pointer; }
+    .lr-mode-btn + .lr-mode-btn { border-left:1px solid #c9b79a; }
+    .lr-mode-btn.on { background:#B06F27; color:#fff; font-weight:700; }
     .lr-utol::-webkit-outer-spin-button,.lr-utol::-webkit-inner-spin-button,
     .lr-ltol::-webkit-outer-spin-button,.lr-ltol::-webkit-inner-spin-button,
     .lr-tutol::-webkit-outer-spin-button,.lr-tutol::-webkit-inner-spin-button,
     .lr-tltol::-webkit-outer-spin-button,.lr-tltol::-webkit-inner-spin-button,
     .lr-dtot-utol::-webkit-outer-spin-button,.lr-dtot-utol::-webkit-inner-spin-button,
-    .lr-dtot-ltol::-webkit-outer-spin-button,.lr-dtot-ltol::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+    .lr-dtot-ltol::-webkit-outer-spin-button,.lr-dtot-ltol::-webkit-inner-spin-button,
+    .lr-mtutol::-webkit-outer-spin-button,.lr-mtutol::-webkit-inner-spin-button,
+    .lr-mtltol::-webkit-outer-spin-button,.lr-mtltol::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
     .lr-dir { width:100%; font-size:11px; padding:3px; border:1px solid #c9b79a; border-radius:3px; background:#fff; color:#333; }
     .lr-rangeline { font-size:10px; color:#555; margin-top:4px; }
     .lr-out { font-family:"Consolas","Courier New",monospace; font-weight:700; color:#333; }
@@ -8606,8 +8614,12 @@ include __DIR__ . '/_gear_tool_ui.php';
             '<div class="lr-blk lr-blk-sug">' +
               '<div class="lr-blk-h" title="建議的車床（加工）尺寸">③ 建議車床尺寸</div>' +
               '<div class="lr-blk-body">' +
+                '<div class="lr-mode-toggle">' +
+                  '<button type="button" class="lr-mode-btn on" data-mode="auto" onclick="lrSetMode(this)">自動計算</button>' +
+                  '<button type="button" class="lr-mode-btn" data-mode="manual" onclick="lrSetMode(this)">手動輸入</button>' +
+                '</div>' +
                 '<div class="lr-dr">' +
-                  '<span class="lr-no-box lr-sug-nom">—</span>' +
+                  '<input type="number" step="any" class="lr-no-box lr-sug-nom" readonly tabindex="-1">' +
                   '<div class="lr-tc">' +
                     '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-tutol lr-auto-fld" readonly tabindex="-1" title="自動算出，套用上方「建議車床公差目標」；這一欄安全範圍不夠寬時自動縮小"></div>' +
                     '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-tltol lr-auto-fld" readonly tabindex="-1" title="自動算出，套用上方「建議車床公差目標」；這一欄安全範圍不夠寬時自動縮小"></div>' +
@@ -8618,11 +8630,14 @@ include __DIR__ . '/_gear_tool_ui.php';
               '</div>' +
             '</div>' +
             '<div class="lr-blk lr-blk-verify">' +
-              '<div class="lr-blk-h" title="選填：驗算已標好的車床尺寸">④ 手動驗算</div>' +
+              '<div class="lr-blk-h" title="選填：拿另一個候選車床尺寸與公差來驗算，跟③是否採自動或手動無關">④ 手動驗算</div>' +
               '<div class="lr-blk-body">' +
                 '<div class="lr-dr">' +
-                  '<span class="lr-tlbl" style="width:auto;margin-right:2px;">實際基準值</span>' +
-                  '<input type="number" step="any" class="lr-manual-nom" oninput="lrCalc()" placeholder="留空＝採建議值">' +
+                  '<input type="number" step="any" class="lr-manual-nom" oninput="lrCalc()" placeholder="車床基準值">' +
+                  '<div class="lr-tc">' +
+                    '<div class="lr-tr"><span class="lr-tlbl">上公差</span><input type="number" step="any" class="lr-mtutol" oninput="lrCalc()"></div>' +
+                    '<div class="lr-tr"><span class="lr-tlbl">下公差</span><input type="number" step="any" class="lr-mtltol" oninput="lrCalc()"></div>' +
+                  '</div>' +
                 '</div>' +
                 '<div class="lr-rangeline">研磨後範圍：<span class="lr-out lr-verify-range">—</span></div>' +
                 '<div class="lr-verify-badge"></div>' +
@@ -8644,10 +8659,15 @@ include __DIR__ . '/_gear_tool_ui.php';
         var div = document.createElement('div');
         div.innerHTML = LR_ROW_HTML;
         var row = div.firstElementChild;
-        // ③的上下公差已改自動算出（見 lrApplySuggestedNom），這裡不用再預填；
+        row.dataset.lrMode = 'auto'; // ③預設「自動計算」模式，可按鈕切換成「手動輸入」
+        // ③自動模式的上下公差改自動算出（見 lrApplySuggestedNom），這裡不用再預填；
         // 研磨增減量預設 0.05（常用值，仍可自行改；仍要自己選方向才算得出建議值，
-        // ②區的提示會一直講到選了方向為止）
+        // ②區的提示會一直講到選了方向為止）。④的公差預設帶入同一個目標值方便起算，
+        // 跟③完全獨立，之後各自再改都不會互相影響。
         var gm = row.querySelector('.lr-gmag'); if (gm) gm.value = '0.05';
+        var defTol = lrDefaultTol();
+        var mtu = row.querySelector('.lr-mtutol'); if (mtu) mtu.value = lrFmt(defTol);
+        var mtl = row.querySelector('.lr-mtltol'); if (mtl) mtl.value = lrFmt(-defTol);
         return row;
     }
 
@@ -8699,17 +8719,25 @@ include __DIR__ . '/_gear_tool_ui.php';
         if (lowF !== null && delta !== null) { turnLow = lowF - delta; turnHigh = highF - delta; }
         var tUtol = lrNum(row, '.lr-tutol');
         var tLtol = lrNum(row, '.lr-tltol');
+        // ④手動驗算是獨立於③的另一組候選車床尺寸＋公差（.lr-mtutol/.lr-mtltol），不跟③共用，
+        // 不論③目前是自動或手動模式，④都可以拿來驗算任何一個想檢查的候選值。
         var manualNom = lrNum(row, '.lr-manual-nom');
+        var mtUtol = lrNum(row, '.lr-mtutol');
+        var mtLtol = lrNum(row, '.lr-mtltol');
         var mLow = null, mHigh = null;
         if (manualNom !== null) {
-            var tu = (tUtol === null) ? 0 : tUtol, tl = (tLtol === null) ? 0 : tLtol;
-            mLow  = manualNom + Math.min(tu, tl);
-            mHigh = manualNom + Math.max(tu, tl);
+            var mtu = (mtUtol === null) ? 0 : mtUtol, mtl = (mtLtol === null) ? 0 : mtLtol;
+            mLow  = manualNom + Math.min(mtu, mtl);
+            mHigh = manualNom + Math.max(mtu, mtl);
         }
+        // ③目前的模式：自動（唯讀，由工具算）／手動（直接打進③欄位，工具只驗算）
+        var mode = (row.dataset.lrMode === 'manual') ? 'manual' : 'auto';
+        var manualSugNom = (mode === 'manual') ? lrNum(row, '.lr-sug-nom') : null;
         return {
             dir: dir, gRaw: gRaw, lowF: lowF, highF: highF, delta: delta,
             turnLow: turnLow, turnHigh: turnHigh, tUtol: tUtol, tLtol: tLtol,
-            manualNom: manualNom, mLow: mLow, mHigh: mHigh
+            manualNom: manualNom, mLow: mLow, mHigh: mHigh,
+            mode: mode, manualSugNom: manualSugNom
         };
     }
 
@@ -8773,13 +8801,26 @@ include __DIR__ . '/_gear_tool_ui.php';
     // 比目標窄時，自動依建議基準值 sugNom 在範圍內還剩多少空間（上下可不對稱）縮小到剛好符合，
     // 絕不會讓研磨後的結果超出成品公差。
     function lrApplySuggestedNom(row, st, sugNom) {
-        var sugEl = row.querySelector('.lr-sug-nom');
-        if (sugEl) sugEl.textContent = (sugNom !== null) ? lrFmt(sugNom) : '—';
-
-        var tuEl = row.querySelector('.lr-tutol'), tlEl = row.querySelector('.lr-tltol');
+        var nomEl = row.querySelector('.lr-sug-nom');
+        var tuEl  = row.querySelector('.lr-tutol'), tlEl = row.querySelector('.lr-tltol');
         var warnEl = row.querySelector('.lr-blk-sug .lr-warn');
         if (warnEl) { warnEl.className = 'lr-warn'; warnEl.textContent = ''; }
 
+        if (st.mode === 'manual') {
+            // 手動模式：基準值與公差都是使用者自己打的，這裡完全不覆寫欄位，只驗算合不合
+            if (st.manualSugNom === null || st.turnLow === null) return;
+            var mtu = (st.tUtol === null) ? 0 : st.tUtol, mtl = (st.tLtol === null) ? 0 : st.tLtol;
+            var candLow  = st.manualSugNom + Math.min(mtu, mtl);
+            var candHigh = st.manualSugNom + Math.max(mtu, mtl);
+            if (warnEl && (candLow < st.turnLow - 1e-9 || candHigh > st.turnHigh + 1e-9)) {
+                warnEl.className = 'lr-warn show';
+                warnEl.textContent = '⚠ 您輸入的基準值／公差超出這一欄的安全範圍（' + lrFmtRange(st.turnLow, st.turnHigh) + '），研磨後可能不符成品公差，請自行調整。';
+            }
+            return;
+        }
+
+        // 自動模式：基準值與上下公差全部由工具算出並寫回欄位
+        if (nomEl) nomEl.value = (sugNom !== null) ? lrFmt(sugNom) : '';
         if (sugNom === null || st.turnLow === null) {
             if (tuEl) tuEl.value = ''; if (tlEl) tlEl.value = '';
             return;
@@ -8866,8 +8907,10 @@ include __DIR__ . '/_gear_tool_ui.php';
         var turnEl = totalWrap.querySelector('.lr-pair-total-turn');
         if (turnEl) turnEl.textContent = (turnLowSum !== null) ? lrFmtRange(turnLowSum, turnHighSum) : '—';
 
-        // 各自獨立的建議基準值（安全範圍中點）
+        // 各自獨立的建議基準值：自動模式＝安全範圍中點；手動模式＝使用者自己填的基準值
+        // （還沒填時暫用安全範圍中點佔位，不影響其他自動欄位的計算）
         var sugs = states.map(function(st) {
+            if (st.mode === 'manual' && st.manualSugNom !== null) return st.manualSugNom;
             return (st.turnLow !== null) ? (st.turnLow + st.turnHigh) / 2 : null;
         });
         var dConflict = false, dAdjusted = false;
@@ -8881,7 +8924,15 @@ include __DIR__ . '/_gear_tool_ui.php';
                 dConflict = true;
             } else {
                 var targetSum = (jointLow + jointHigh) / 2;
-                var items = states.map(function(st, i) { return { sug0: sugs[i], low: st.turnLow, high: st.turnHigh }; });
+                // 手動模式的欄位是使用者自己定的，不可被這裡的分攤演算法調整——把它的
+                // 安全範圍鎖成「只有自己這一個值」，water-filling 自然不會去動它，
+                // 所有需要的調整量會轉由其餘自動模式的欄位承接。
+                var items = states.map(function(st, i) {
+                    if (st.mode === 'manual' && st.manualSugNom !== null) {
+                        return { sug0: st.manualSugNom, low: st.manualSugNom, high: st.manualSugNom };
+                    }
+                    return { sug0: sugs[i], low: st.turnLow, high: st.turnHigh };
+                });
                 var dist = lrDistributeSumN(items, targetSum);
                 var naturalSum = sugs.reduce(function(s, v) { return s + v; }, 0);
                 sugs = dist.vals;
@@ -8996,6 +9047,31 @@ include __DIR__ . '/_gear_tool_ui.php';
                 if (pg && pg.value !== inp.value) pg.value = inp.value;
             }
         }
+        lrCalc();
+    };
+
+    // ③「自動計算 / 手動輸入」切換：自動＝沿用這一欄安全範圍自動算出基準值與公差（唯讀）；
+    // 手動＝直接打進這一欄自己要用的車床基準值與公差，工具只負責驗算是否仍在安全範圍內，
+    // 不會再幫你覆寫。切回自動會把欄位改回唯讀，下一次 lrCalc() 自動填回算出來的值。
+    window.lrSetMode = function(btn) {
+        var row = btn.closest('.lr-row');
+        if (!row) return;
+        var mode = btn.getAttribute('data-mode') === 'manual' ? 'manual' : 'auto';
+        row.dataset.lrMode = mode;
+        row.querySelectorAll('.lr-mode-btn').forEach(function(b) { b.classList.toggle('on', b === btn); });
+        var nomEl = row.querySelector('.lr-sug-nom');
+        var tuEl  = row.querySelector('.lr-tutol');
+        var tlEl  = row.querySelector('.lr-tltol');
+        var manual = (mode === 'manual');
+        [nomEl, tuEl, tlEl].forEach(function(el) {
+            if (!el) return;
+            el.readOnly = !manual;
+            if (manual) { el.removeAttribute('tabindex'); el.classList.remove('lr-auto-fld'); }
+            else { el.setAttribute('tabindex', '-1'); el.classList.add('lr-auto-fld'); el.value = ''; }
+        });
+        if (nomEl) { nomEl.classList.toggle('lr-no-box', !manual); nomEl.classList.toggle('lr-nom', manual); nomEl.placeholder = manual ? '車床基準值' : ''; }
+        if (tuEl) tuEl.placeholder = manual ? '如 0.02' : '';
+        if (tlEl) tlEl.placeholder = manual ? '如 -0.02' : '';
         lrCalc();
     };
 
