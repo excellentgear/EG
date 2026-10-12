@@ -43,6 +43,25 @@ function getPartAttachBase(PDO $pdo): string {
 // 附件下載端點（相對路徑）：呼叫端都在 views/xxx/ 底下兩層，與既有的 Quotation_File_API 寫法一致
 if (!defined('PART_ATTACH_DL')) define('PART_ATTACH_DL', '../../src/store/Part_Attachment_API.php');
 
+/**
+ * 組合檔（.iam）轉檔用：同一個料號底下其他的 Inventor 零件／子組合檔，
+ * 組成 ['原始檔名' => '實體路徑'] 對照表。選件規則走共用庫的唯一實作。
+ * （組合檔只是一張參照清單，而附件在 NAS 上是亂碼檔名，不還原原始檔名就找不到零件）
+ */
+function partInventorCompanions(PDO $pdo, int $dId, string $selfFs): array {
+    require_once __DIR__ . '/../common/inventor_preview_lib.php';
+    $base = rtrim(getPartAttachBase($pdo), '/\\');
+    if ($base === '' || !$dId) return [];
+    $st = $pdo->prepare("SELECT filename, original_name FROM part_attachments WHERE d_id=? AND deleted_at IS NULL ORDER BY id");
+    $st->execute([$dId]);
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $rows[] = ['original_name' => $r['original_name'] ?: $r['filename'],
+                   'fs_path' => $base . DIRECTORY_SEPARATOR . $dId . DIRECTORY_SEPARATOR . $r['filename']];
+    }
+    return eg_inventor_companion_map($rows, $selfFs);
+}
+
 function getPartAttachUrlDir(PDO $pdo): string {
     try {
         $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key='part_attach_url_dir'");
@@ -196,9 +215,12 @@ switch ($action) {
             if ($ext === 'dwg') {
                 require_once __DIR__ . '/../common/dwg_preview_lib.php';
                 eg_dwg_preview_trigger_async($pdo, $dir . $fname);
-            } elseif ($ext === 'ipt' || $ext === 'x_t') {
+            } elseif ($ext === 'ipt' || $ext === 'x_t' || $ext === 'iam') {
                 require_once __DIR__ . '/../common/inventor_preview_lib.php';
-                eg_inventor_preview_trigger_async($pdo, $dir . $fname);
+                // 組合檔（.iam）要連同「同一個料號底下的零件檔」一起傳給轉檔，否則
+                // Inventor 找不到元件會安靜地輸出一個零幾何的空 STEP（見該庫說明）
+                $comp = ($ext === 'iam') ? partInventorCompanions($pdo, $dId, $dir . $fname) : [];
+                eg_inventor_preview_trigger_async($pdo, $dir . $fname, $comp, $orig);
             }
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
             echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
@@ -1108,16 +1130,45 @@ switch ($action) {
         $base = getPartAttachBase($pdo);
         $fp   = rtrim($base,'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
         $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
-        if (!file_exists($fp) || !in_array($ext3d, ['ipt','x_t'], true)) { http_response_code(404); exit; }
+        if (!file_exists($fp) || !in_array($ext3d, ['ipt','x_t','iam'], true)) { http_response_code(404); exit; }
         require_once __DIR__ . '/../common/inventor_preview_lib.php';
-        $stepFp = eg_inventor_preview_step($pdo, $fp);
-        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T 轉檔失敗或暫時無法使用'; exit; }
+        $comp3d = ($ext3d === 'iam') ? partInventorCompanions($pdo, (int)$rec['d_id'], $fp) : [];
+        $stepFp = eg_inventor_preview_step($pdo, $fp, $comp3d, (string)($rec['original_name'] ?: ''));
+        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T/IAM 轉檔失敗或暫時無法使用'; exit; }
         require_once __DIR__ . '/../common/attach_lib.php';
         header('Content-Type: application/step');
         header('Cache-Control: private, max-age=300');
         eg_attach_send_disposition(pathinfo($rec['original_name'] ?: $rec['filename'], PATHINFO_FILENAME) . '.stp');
         header('Content-Length: '.filesize($stepFp));
         readfile($stepFp);
+        exit;
+
+    // ── 組合檔（.iam）的零件解析狀況：畫面用來標示「組合不完整、缺哪幾個零件檔」──
+    // 刻意在模型載入完成之後才由前端呼叫：那時 STEP 必定已經轉好進快取，這裡只是把
+    // 轉檔當下記下來的參照報告讀回來，不會再叫一次 Inventor（轉一次要 9~10 秒）。
+    case 'assembly_info':
+        header('Content-Type: application/json; charset=utf-8');
+        $id = intval($_GET['id'] ?? 0);
+        if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少附件 ID']); exit; }
+        $row = $pdo->prepare("SELECT filename, original_name, d_id FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+        $row->execute([$id]);
+        $rec = $row->fetch(PDO::FETCH_ASSOC);
+        if (!$rec) { echo json_encode(['success'=>false,'message'=>'找不到附件']); exit; }
+        $fp = rtrim(getPartAttachBase($pdo),'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
+        if (strtolower(pathinfo($fp, PATHINFO_EXTENSION)) !== 'iam') { echo json_encode(['success'=>true,'is_assembly'=>false]); exit; }
+        require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        $cmp  = partInventorCompanions($pdo, (int)$rec['d_id'], $fp);
+        $stp  = eg_inventor_preview_step($pdo, $fp, $cmp, (string)($rec['original_name'] ?: ''));
+        $info = eg_inventor_preview_step_info($stp) ?: [];
+        echo json_encode([
+            'success'    => true,
+            'is_assembly'=> true,
+            'refs'       => array_values($info['refs'] ?? []),
+            'missing'    => array_values($info['missing'] ?? []),
+            'occurrence' => (int)($info['occurrence'] ?? 0),
+            'faces'      => (int)($info['solid_faces'] ?? 0),
+            'supplied'   => array_keys($cmp),
+        ], JSON_UNESCAPED_UNICODE);
         exit;
 
     default:

@@ -1,4 +1,4 @@
-# inventor_preview_convert.ps1 — IPT/X_T → STEP 轉檔（唯一實作，供 inventor_preview_lib.php 呼叫）
+﻿# inventor_preview_convert.ps1 — IPT/X_T → STEP 轉檔（唯一實作，供 inventor_preview_lib.php 呼叫）
 #
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File inventor_preview_convert.ps1 <來源路徑> <STEP輸出路徑> <Interop.dll路徑>
 #
@@ -46,6 +46,47 @@ try {
     $invApp.Visible = $false
 
     $doc = $invApp.Documents.Open($InPath, $false)
+
+    # ── 組合檔（.iam）：回報它參照了哪些零件、哪幾個沒解析到 ──────────────────
+    # 組合檔本身只是一張「參照清單」，零件幾何在各自的 .ipt 裡。被參照的檔案找不到時
+    # Inventor **不會報錯**，會安靜地匯出一個只有組合名稱、零幾何的空 STEP（已實測：
+    # 2.7KB、0 個面），使用者看到的就是一片空白。所以這裡把參照狀況一併回報給呼叫端，
+    # 讓畫面能明白告訴使用者「這個組合還缺哪幾個零件檔」。
+    # 輸出刻意用 base64 包住 UTF-8 JSON——零件檔名常含中文，PowerShell 的輸出編碼與
+    # PHP 讀檔編碼不見得一致，直接輸出中文會變亂碼。
+    try {
+        $refs = @()
+        $missing = @()
+        # 判「這個元件到底有沒有被解析到」不可以用 Test-Path 檢查 FullFileName——實測
+        # 未解析的元件，FullFileName 仍指著當初建模時的路徑，那個路徑在這台機器上常常
+        # 真的存在（工程人員自己的工作資料夾），於是每個元件都被判成「有找到」，缺件
+        # 完全偵測不出來（實測 5 個元件只供了 1 個，卻回報 missing=0）。
+        # 正解是用 AllReferencedDocuments——那是 Inventor **真正載入成功**的元件清單。
+        $resolved = @{}
+        try {
+            foreach ($rd in $doc.AllReferencedDocuments) {
+                $resolved[([System.IO.Path]::GetFileName($rd.FullFileName)).ToLower()] = $true
+            }
+        } catch { }
+        foreach ($fd in $doc.File.ReferencedFileDescriptors) {
+            $nm = [System.IO.Path]::GetFileName($fd.FullFileName)
+            $refs += $nm
+            $miss = $false
+            try { $miss = [bool]$fd.ReferenceMissing } catch { $miss = $false }
+            if (-not $miss -and -not $resolved.ContainsKey($nm.ToLower())) { $miss = $true }
+            if ($miss) { $missing += $nm }
+        }
+        $occ = 0
+        try { $occ = $doc.ComponentDefinition.Occurrences.Count } catch { }
+        $info = [ordered]@{
+            doc_type   = [string]$doc.DocumentType
+            occurrence = $occ
+            refs       = @($refs)
+            missing    = @($missing)
+        }
+        $json = ($info | ConvertTo-Json -Compress -Depth 4)
+        Write-Output ("REFS64: " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))
+    } catch { }
 
     $stepTranslator = $invApp.ApplicationAddIns.ItemById("{90AF7F40-0C01-11D5-8E83-0010B541CD80}")
     $oContext    = $invApp.TransientObjects.CreateTranslationContext()

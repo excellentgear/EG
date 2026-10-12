@@ -29,7 +29,7 @@
  */
 
 if (!function_exists('eg_inventor_preview_interop_dll')) {
-if (!defined('EG_INVENTOR_PREVIEW_RENDER_VER')) define('EG_INVENTOR_PREVIEW_RENDER_VER', 1);
+if (!defined('EG_INVENTOR_PREVIEW_RENDER_VER')) define('EG_INVENTOR_PREVIEW_RENDER_VER', 3);
 
 /** Inventor .NET Interop 組件路徑，可在 system_settings 覆寫（設定鍵 inventor_interop_dll） */
 function eg_inventor_preview_interop_dll(PDO $db): string {
@@ -51,6 +51,36 @@ function eg_inventor_preview_powershell_exe(PDO $db): string {
         if ($v !== false && $v !== null && trim((string)$v) !== '') return trim((string)$v);
     } catch (Throwable $e) {}
     return 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+}
+
+/** 只取檔名、擋掉任何路徑成分（原始檔名是使用者上傳時打的字，不可信） */
+function eg_inventor_safe_basename(string $name): string {
+    $n = str_replace(['/', '\\'], '', $name);
+    $n = preg_replace('~[\x00-\x1f:*?"<>|]~', '', $n);
+    $n = trim((string)$n, " .");
+    return $n;
+}
+
+/** 組合檔會用到的零件副檔名（Inventor 原生零件／子組合） */
+if (!defined('EG_INVENTOR_COMPONENT_EXTS')) define('EG_INVENTOR_COMPONENT_EXTS', ['ipt', 'iam']);
+
+/**
+ * 從「同一個料號／訂單／報價單底下的附件清單」挑出可以當組合元件的檔案，組成
+ * 轉檔用的 ['原始檔名' => '實體路徑'] 對照表（唯一實作，三支附件 API 共用，
+ * 免得各自寫一份選件規則遲早走鐘）。
+ * @param array  $rows   [['original_name'=>..., 'fs_path'=>...], ...]
+ * @param string $selfFs 來源檔自己的實體路徑（排除自己）
+ */
+function eg_inventor_companion_map(array $rows, string $selfFs = ''): array {
+    $map = [];
+    foreach ($rows as $r) {
+        $nm = eg_inventor_safe_basename((string)($r['original_name'] ?? ''));
+        $fp = (string)($r['fs_path'] ?? '');
+        if ($nm === '' || $fp === '' || $fp === $selfFs || !is_file($fp)) continue;
+        if (!in_array(strtolower(pathinfo($nm, PATHINFO_EXTENSION)), EG_INVENTOR_COMPONENT_EXTS, true)) continue;
+        if (!isset($map[$nm])) $map[$nm] = $fp;   // 同名時取第一個（清單已依建立順序）
+    }
+    return $map;
 }
 
 /** 這台機器有沒有裝 Inventor（供畫面判斷要不要顯示 IPT/X_T 預覽入口） */
@@ -81,7 +111,16 @@ function eg_inventor_preview_running_pids(): array {
  * 把 IPT/X_T 轉成 STEP 並回傳快取後的 STEP 實體路徑；已有有效快取（來源 mtime 相同）
  * 就直接回傳不重轉。失敗回 null。
  */
-function eg_inventor_preview_step(PDO $db, string $srcFsPath): ?string {
+/**
+ * @param array  $companions      組合檔（.iam）專用：['原始檔名.ipt' => '實體路徑', ...]
+ *                                附件在 NAS 上是亂碼檔名，而組合檔是靠**原始檔名**找零件的，
+ *                                直接開一定解析不到元件（實測會安靜地輸出一個 2.7KB、零幾何
+ *                                的空 STEP，畫面上就是一片空白）。給了這份對照表時，轉檔前會
+ *                                先把來源與全部零件以原始檔名複製到一個暫存資料夾再開，實測
+ *                                同一個檔案就能正確轉出 48.9KB、含幾何的組合 STEP。
+ * @param string $srcOriginalName 來源檔自己的原始檔名（走暫存資料夾時要用它當檔名）
+ */
+function eg_inventor_preview_step(PDO $db, string $srcFsPath, array $companions = [], string $srcOriginalName = ''): ?string {
     if (!is_file($srcFsPath)) return null;
     $interop = eg_inventor_preview_interop_dll($db);
     $pwsh    = eg_inventor_preview_powershell_exe($db);
@@ -89,7 +128,16 @@ function eg_inventor_preview_step(PDO $db, string $srcFsPath): ?string {
 
     $mtime = @filemtime($srcFsPath) ?: 0;
     $sig   = sha1($srcFsPath);
-    $key   = $sig . '_' . $mtime . '_v' . EG_INVENTOR_PREVIEW_RENDER_VER;
+    // 零件檔也要進快取鍵：使用者補傳了缺少的零件之後，同一個組合檔必須重轉一次，
+    // 不能繼續拿「上次缺件時轉出來的空 STEP」給他看
+    $compSig = '';
+    if ($companions) {
+        ksort($companions);
+        $parts = [];
+        foreach ($companions as $nm => $p) { $parts[] = $nm . '|' . (@filemtime($p) ?: 0) . '|' . (@filesize($p) ?: 0); }
+        $compSig = '_c' . substr(sha1(implode("\n", $parts)), 0, 12);
+    }
+    $key   = $sig . '_' . $mtime . $compSig . '_v' . EG_INVENTOR_PREVIEW_RENDER_VER;
     $dir   = eg_inventor_preview_cache_dir();
     $step  = $dir . DIRECTORY_SEPARATOR . $key . '.stp';
     if (is_file($step) && filesize($step) > 0) return $step;
@@ -102,10 +150,30 @@ function eg_inventor_preview_step(PDO $db, string $srcFsPath): ?string {
         if (!flock($lh, LOCK_EX)) return null;
         if (is_file($step) && filesize($step) > 0) return $step;   // 拿到鎖時可能別人剛轉完
         foreach (@glob($dir . DIRECTORY_SEPARATOR . $sig . '_*.stp') ?: [] as $old) {
-            if ($old !== $step) @unlink($old);
+            if ($old !== $step) { @unlink($old); @unlink($old . '.json'); }
         }
-        $ok = eg_inventor_preview_run($pwsh, $interop, $srcFsPath, $step);
-        return ($ok && is_file($step) && filesize($step) > 0) ? $step : null;
+        if (!$companions) {
+            $ok = eg_inventor_preview_run($pwsh, $interop, $srcFsPath, $step);
+            return ($ok && is_file($step) && filesize($step) > 0) ? $step : null;
+        }
+        // 組合檔：先把來源與全部零件以「原始檔名」擺進同一個暫存資料夾，Inventor 才找得到元件
+        $stage = $dir . DIRECTORY_SEPARATOR . 'stage_' . bin2hex(random_bytes(6));
+        if (!@mkdir($stage, 0777, true) && !is_dir($stage)) return null;
+        try {
+            $srcName = eg_inventor_safe_basename($srcOriginalName !== '' ? $srcOriginalName : basename($srcFsPath));
+            $stageSrc = $stage . DIRECTORY_SEPARATOR . $srcName;
+            if (!@copy($srcFsPath, $stageSrc)) return null;
+            foreach ($companions as $nm => $p) {
+                $nm2 = eg_inventor_safe_basename((string)$nm);
+                if ($nm2 === '' || $nm2 === $srcName || !is_file($p)) continue;
+                @copy($p, $stage . DIRECTORY_SEPARATOR . $nm2);
+            }
+            $ok = eg_inventor_preview_run($pwsh, $interop, $stageSrc, $step);
+            return ($ok && is_file($step) && filesize($step) > 0) ? $step : null;
+        } finally {
+            foreach (@glob($stage . DIRECTORY_SEPARATOR . '*') ?: [] as $f) { @unlink($f); }
+            @rmdir($stage);
+        }
     } finally {
         flock($lh, LOCK_UN);
         fclose($lh);
@@ -170,13 +238,54 @@ function eg_inventor_preview_run(string $pwsh, string $interop, string $srcFsPat
         }
     }
 
+    // .ps1 現在除了結尾的 OK，組合檔還會多輸出一行 `REFS64: <base64 的 UTF-8 JSON>`
+    // （參照了哪些零件、哪幾個沒解析到），所以不能再把整份輸出當成單一字串比對。
     $result = null;
     if (is_file($outLog)) $result = trim((string)@file_get_contents($outLog));
-    $success = ($ok && $result === 'OK' && is_file($outStep) && filesize($outStep) > 0);
+    $lines   = $result === null ? [] : preg_split('/\R+/', $result);
+    $lastLn  = '';
+    $refsB64 = '';
+    foreach ($lines as $ln) {
+        $ln = trim($ln);
+        if ($ln === '') continue;
+        if (strpos($ln, 'REFS64:') === 0) { $refsB64 = trim(substr($ln, 7)); continue; }
+        $lastLn = $ln;
+    }
+    $success = ($ok && $lastLn === 'OK' && is_file($outStep) && filesize($outStep) > 0);
     if ($success) {
+        // 參照狀況存成 STEP 旁邊的小檔，跟 STEP 共用同一把快取鍵，畫面要顯示
+        // 「組合不完整、缺哪幾個零件」時直接讀它，不必再叫一次 Inventor
+        $info = ['refs' => [], 'missing' => [], 'occurrence' => 0, 'doc_type' => ''];
+        if ($refsB64 !== '') {
+            $dec = @json_decode((string)base64_decode($refsB64, true), true);
+            if (is_array($dec)) $info = array_merge($info, $dec);
+        }
+        $info['solid_faces'] = eg_inventor_step_face_count($outStep);
+        @file_put_contents($outStep . '.json', json_encode($info, JSON_UNESCAPED_UNICODE));
         @unlink($outLog); @unlink($errLog);
     }
     return $success;
+}
+
+/** 數一下 STEP 裡有幾個面——0 代表這個檔案沒有任何幾何（組合檔元件全部沒解析到時就是這樣） */
+function eg_inventor_step_face_count(string $stepPath): int {
+    $fh = @fopen($stepPath, 'rb');
+    if (!$fh) return 0;
+    $n = 0;
+    while (($chunk = fread($fh, 1 << 20)) !== false && $chunk !== '') {
+        $n += substr_count($chunk, 'ADVANCED_FACE');
+    }
+    fclose($fh);
+    return $n;
+}
+
+/** 讀回某個 STEP 的轉檔附帶資訊（組合參照狀況）；沒有就回 null */
+function eg_inventor_preview_step_info(?string $stepPath): ?array {
+    if (!$stepPath) return null;
+    $f = $stepPath . '.json';
+    if (!is_file($f)) return null;
+    $d = @json_decode((string)@file_get_contents($f), true);
+    return is_array($d) ? $d : null;
 }
 
 /**
@@ -186,7 +295,7 @@ function eg_inventor_preview_run(string $pwsh, string $interop, string $srcFsPat
  * （這支 HTTP 請求）結束後繼續跑完（已用對照測試驗證過）。COM 自動化比 accoreconsole
  * 慢很多（約9~10秒），背景預轉檔因此格外重要——不然每次點開 IPT/X_T 預覽都要先等。
  */
-function eg_inventor_preview_trigger_async(PDO $db, string $srcFsPath): void {
+function eg_inventor_preview_trigger_async(PDO $db, string $srcFsPath, array $companions = [], string $srcOriginalName = ''): void {
     if (!is_file($srcFsPath)) return;
     if (!eg_inventor_preview_available($db)) return;
     try {
@@ -198,7 +307,15 @@ function eg_inventor_preview_trigger_async(PDO $db, string $srcFsPath): void {
         $script = __DIR__ . DIRECTORY_SEPARATOR . 'inventor_preview_cli.php';
         $descriptors = [0 => ['file', 'NUL', 'r'], 1 => ['file', 'NUL', 'w'], 2 => ['file', 'NUL', 'w']];
         $pipes = [];
-        @proc_open([$php, $script, $srcFsPath], $descriptors, $pipes, null, null, ['bypass_shell' => true]);
+        $args = [$php, $script, $srcFsPath];
+        if ($companions) {
+            // 零件對照表走暫存檔不走命令列參數：檔名常含中文，走 argv 會被編碼打壞
+            $cf = eg_inventor_preview_cache_dir() . DIRECTORY_SEPARATOR . 'comp_' . bin2hex(random_bytes(6)) . '.json';
+            @file_put_contents($cf, json_encode($companions, JSON_UNESCAPED_UNICODE));
+            $args[] = $cf;
+            $args[] = $srcOriginalName;
+        }
+        @proc_open($args, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
     } catch (Throwable $e) {}
 }
 

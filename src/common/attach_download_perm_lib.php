@@ -61,7 +61,8 @@ if (!defined('EG_ADP_RBAC_MODULE')) define('EG_ADP_RBAC_MODULE', 'attach_dl');
 // 3D 模型副檔名：與 bom_viewer.php／master_data_management.php 的 _d3Exts + _d3NeedConvertExts
 // 完全同一份清單（唯一來源在這裡，上述兩頁的 JS 清單是另外獨立的前端顯示判斷，含義不同
 // 不必互相 include，但異動其中一邊務必同步檢查另一邊，避免「這頁說是3D、那頁說是2D」）。
-if (!defined('EG_ADP_3D_EXTS')) define('EG_ADP_3D_EXTS', ['stp','step','stl','obj','igs','iges','ipt','x_t']);
+// 2026-10-12 新增 iam（Inventor 組合檔）：使用者要求組合圖比照 3D 檔一樣控管下載。
+if (!defined('EG_ADP_3D_EXTS')) define('EG_ADP_3D_EXTS', ['stp','step','stl','obj','igs','iges','ipt','x_t','iam']);
 
 if (!function_exists('eg_adp_ensure_schema')) {
     function eg_adp_ensure_schema(PDO $db): void {
