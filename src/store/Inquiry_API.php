@@ -40,17 +40,16 @@ case 'list': {
     $opt = [
         'dept'      => (string)($_GET['dept'] ?? ''),
         'status'    => (string)($_GET['status'] ?? ''),
+        'year'      => (string)($_GET['year'] ?? ''),
         'date_from' => (string)($_GET['date_from'] ?? ''),
         'date_to'   => (string)($_GET['date_to'] ?? ''),
         'kw'        => trim((string)($_GET['kw'] ?? '')),
+        'page'      => (int)($_GET['page'] ?? 1),
+        'psize'     => (int)($_GET['psize'] ?? 10),
     ];
-    $rows = inq_group_list($db, $opt);
-    foreach ($rows as &$r) {
-        $r['items'] = inq_group_items($db, (int)$r['id']);   // 清單頁「項目摘要」要用，先前漏掉過（一律印「無項目」）
-        $r['docs']  = inq_group_docs($db, (int)$r['id']);
-        foreach ($r['docs'] as &$d) { $d['items'] = inq_doc_items($db, (int)$d['id']); }
-    }
-    jout(true, ['rows' => $rows, 'dept_set' => inq_dept_settings_all($db)]);
+    $res = inq_group_list($db, $opt);
+    jout(true, ['rows' => $res['rows'], 'page' => $res['page'], 'pages' => $res['pages'],
+                'years' => inq_group_years($db), 'dept_set' => inq_dept_settings_all($db)]);
 }
 
 case 'get': {

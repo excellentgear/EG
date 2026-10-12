@@ -222,21 +222,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         </div>
 <?php else: ?>
         <div class="iq-toolbar">
+            <label>年度</label>
+            <select id="fYear"><option value="<?= date('Y') ?>" selected><?= date('Y') ?></option><option value="">全部</option></select>
             <label>分類</label>
             <select id="fDept"><option value="">全部</option><option value="sales">業務</option><option value="pmc">生管</option><option value="purchase">採購</option></select>
             <label>狀態</label>
             <select id="fStatus"><option value="">全部</option><option value="open">進行中</option><option value="closed">已結案</option></select>
             <label>日期</label>
             <input type="date" id="fFrom" style="width:130px;"><span>～</span><input type="date" id="fTo" style="width:130px;">
-            <input type="text" id="fKw" placeholder="關鍵字：廠商／料號／單號／規格…" style="width:220px;">
-            <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
+            <input type="text" id="fKw" placeholder="關鍵字：廠商／料號／單號／規格…（輸入即時篩選）" style="width:240px;">
             <label style="font-weight:normal;"><input type="checkbox" id="chkShowNote" checked> 顯示備註</label>
             <?php if ($perms['canCreate']): ?><button id="btnNew" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增詢價</button><?php endif; ?>
             <span class="iq-role"<?= $perms['canCreate'] ? '' : ' style="margin-left:auto;"' ?>><?= htmlspecialchars($roleLabel) ?></span>
         </div>
 
-        <div id="gList"><div style="text-align:center;color:#999;padding:20px;">載入中…</div></div>
         <div class="iq-pager" id="pager"></div>
+        <div id="gList"><div style="text-align:center;color:#999;padding:20px;">載入中…</div></div>
 <?php endif; ?>
     </div>
 </div>
@@ -500,20 +501,71 @@ function post(action, data, cb){
     }, 'json').fail(function(){ alert('連線失敗'); });
 }
 
-/* ───────────────────── 清單 ───────────────────── */
+/* ───────────────────── 清單（伺服器端分頁：只預載第1頁，其餘頁面背景載入） ───────────────────── */
 function loadDeptSettings(cb){
     $.getJSON(API, {action:'dept_settings'}, function(res){ if (res.success){ DEPT_SET = res.dept_set; cb && cb(); } });
 }
-function loadList(){
-    var p = {dept:$('#fDept').val(), status:$('#fStatus').val(), date_from:$('#fFrom').val(), date_to:$('#fTo').val(), kw:$('#fKw').val()};
-    $.getJSON(API, $.extend({action:'list'}, p), function(res){
-        if (!res.success) return;
+var TOTAL_PAGES = 1;
+var PAGE_CACHE = {};      // { "篩選條件字串": { 頁碼: rows } } —— 換篩選條件就是另一組快取
+var CUR_FKEY = '';
+var PREFETCH_SEQ = 0;     // 每次篩選條件改變就遞增，背景預載的回應若已經是舊的一代就丟棄不採用
+
+function curFilters(){
+    return {dept:$('#fDept').val(), status:$('#fStatus').val(), year:$('#fYear').val(),
+            date_from:$('#fFrom').val(), date_to:$('#fTo').val(), kw:$('#fKw').val()};
+}
+function filterKey(f){ return JSON.stringify(f); }
+
+function renderYearOptions(years){
+    var $sel = $('#fYear'), curVal = $sel.val();
+    var html = '';
+    (years||[]).forEach(function(y){ html += '<option value="'+y+'">'+y+'</option>'; });
+    html += '<option value="">全部</option>';
+    $sel.html(html);
+    if ($sel.find('option[value="'+curVal+'"]').length) $sel.val(curVal);
+}
+
+/** page 省略＝沿用目前 PAGE（通常是資料被改動後的刷新，停在原頁）；篩選條件改變一律呼叫時帶 page=1。 */
+function loadList(page){
+    var f = curFilters(), key = filterKey(f);
+    if (key !== CUR_FKEY) { PAGE_CACHE = {}; CUR_FKEY = key; PREFETCH_SEQ++; }
+    PAGE = page || PAGE || 1;
+    var mySeq = PREFETCH_SEQ;
+    var cache = PAGE_CACHE[key] = PAGE_CACHE[key] || {};
+    if (cache[PAGE]) { applyPage(cache[PAGE]); prefetchRest(f, key, mySeq); return; }
+    $('#gList').html('<div style="text-align:center;color:#999;padding:20px;">載入中…</div>');
+    $.getJSON(API, $.extend({action:'list', page:PAGE, psize:PSIZE}, f), function(res){
+        if (!res.success || mySeq !== PREFETCH_SEQ) return;
         DEPT_SET = res.dept_set || DEPT_SET;
-        GROUPS = res.rows || [];
-        PAGE = 1;
-        renderList();
+        TOTAL_PAGES = res.pages || 1;
+        PAGE = res.page || PAGE;
+        if (res.years) renderYearOptions(res.years);
+        cache[PAGE] = res.rows || [];
+        applyPage(cache[PAGE]);
+        prefetchRest(f, key, mySeq);
     });
 }
+/** 背景依序把其餘頁面補齊，使用者翻頁時直接命中快取不必等待；篩選條件一變就自動放棄（mySeq 比對）。 */
+function prefetchRest(f, key, mySeq){
+    var cache = PAGE_CACHE[key] = PAGE_CACHE[key] || {};
+    function step(){
+        if (mySeq !== PREFETCH_SEQ) return;
+        var next = 1;
+        while (next <= TOTAL_PAGES && cache[next]) next++;
+        if (next > TOTAL_PAGES) return;
+        $.getJSON(API, $.extend({action:'list', page:next, psize:PSIZE}, f), function(res){
+            if (!res.success || mySeq !== PREFETCH_SEQ) return;
+            cache[next] = res.rows || [];
+            setTimeout(step, 60);
+        });
+    }
+    setTimeout(step, 200);
+}
+function applyPage(rows){ GROUPS = rows; renderList(); }
+/* 輸入篩選一改＝回到第1頁重新查（換篩選條件，舊頁碼沒有意義） */
+function filterChanged(){ loadList(1); }
+/* 單據被改動（新增/編輯/刪除/結案…）後要刷新，但應該停在原頁，且不可信任快取（資料已經變了） */
+function reloadList(){ PAGE_CACHE[CUR_FKEY] = {}; loadList(PAGE); }
 function itemSummary(items){
     if (!items || !items.length) return '（尚未填寫項目）';
     var s = items.map(function(it){
@@ -526,25 +578,18 @@ function qtyDisp(q){ return (q!=null && q!=='') ? ('×'+money(q)) : '—'; }
 function priceDisp(v){ return (v!=null && v!=='') ? money(v) : '—'; }
 
 function renderList(){
+    // 這一頁的分頁邊界（哪幾案在同一頁）已經由後端決定好、保證同一案的子單不會被拆開，
+    // 這裡只負責把目前這一頁收到的 GROUPS 攤平成卡片。
     var $list = $('#gList').empty();
-    // 同一個詢價案（母單）底下的子單一定要排在一起，分頁不可把它們拆到兩頁去——
-    // 逐案累加，這一案整批放不下才翻頁（單一案子單數超過一頁容量時仍整批放同一頁，不切）。
-    var pagesArr = [], curPage = [], curCount = 0;
-    GROUPS.forEach(function(g){
-        var docs = g.docs || [];
-        if (!docs.length) return;
-        if (curCount > 0 && curCount + docs.length > PSIZE) { pagesArr.push(curPage); curPage = []; curCount = 0; }
-        docs.forEach(function(d){ curPage.push({d:d, g:g}); });
-        curCount += docs.length;
-    });
-    if (curPage.length) pagesArr.push(curPage);
-    if (!pagesArr.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價單</div>'); $('#pager').empty(); return; }
-    var pages = pagesArr.length;
-    if (PAGE > pages) PAGE = pages;
-    var slice = pagesArr[PAGE-1] || [];
-    slice.forEach(function(x){ $list.append(renderDocCard(x.d, x.g)); });
+    var flat = [];
+    GROUPS.forEach(function(g){ (g.docs||[]).forEach(function(d){ flat.push({d:d, g:g}); }); });
+    if (!flat.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價單</div>'); }
+    else { flat.forEach(function(x){ $list.append(renderDocCard(x.d, x.g)); }); }
+    renderPager();
+}
+function renderPager(){
     var pg = $('#pager').empty();
-    for (var i=1;i<=pages;i++){ (function(i){ var b=$('<button>'+i+'</button>').toggleClass('on', i===PAGE).on('click', function(){ PAGE=i; renderList(); }); pg.append(b); })(i); }
+    for (var i=1;i<=TOTAL_PAGES;i++){ (function(i){ var b=$('<button>'+i+'</button>').toggleClass('on', i===PAGE).on('click', function(){ loadList(i); }); pg.append(b); })(i); }
 }
 /* 下拉選單共用：點按鈕切換，點外面全部收起（委派在 document 上一次處理，不必逐個綁） */
 $(document).on('click', '.iq-dd-btn', function(e){
@@ -640,18 +685,18 @@ function groupOp(act, gid){
     else if (act==='addv') openAddVendor(gid);
     else if (act==='toggle') {
         var g = GROUPS.find(function(x){return x.id===gid;});
-        post('group_status', {id:gid, status: g.status==='closed'?'open':'closed'}, loadList);
+        post('group_status', {id:gid, status: g.status==='closed'?'open':'closed'}, function(){ reloadList(); });
     } else if (act==='del') {
         if (!confirm('確定要刪除這個詢價案？底下的所有子單也會一併刪除。')) return;
-        post('group_delete', {id:gid}, loadList);
+        post('group_delete', {id:gid}, function(){ reloadList(); });
     }
 }
 function docOp(act, did, gid){
     if (act==='edit') openDocEdit(did);
     else if (act==='price') openPriceFill(did);
     else if (act==='print') printOneDoc(did);
-    else if (act==='refollow') { if (confirm('重新跟隨母單會用母單目前的內容整批覆蓋這張子單，單價會被清空，確定？')) post('doc_refollow', {id:did}, loadList); }
-    else if (act==='del') { if (confirm('確定要刪除這張子單？')) post('doc_delete', {id:did}, loadList); }
+    else if (act==='refollow') { if (confirm('重新跟隨母單會用母單目前的內容整批覆蓋這張子單，單價會被清空，確定？')) post('doc_refollow', {id:did}, function(){ reloadList(); }); }
+    else if (act==='del') { if (confirm('確定要刪除這張子單？')) post('doc_delete', {id:did}, function(){ reloadList(); }); }
     else if (act==='g-bind') openBind(gid);
     else if (act==='g-addv') openAddVendor(gid);
     else if (act==='g-toggle') groupOp('toggle', gid);
@@ -970,7 +1015,7 @@ function saveNewGroup(){
         source_dept: $('#gDept').val(), items: JSON.stringify(items), vendor_ids: JSON.stringify(vendorIds),
         bind_type: $('#gBindType').val(), bind_ref: CUR_BIND ? CUR_BIND.ref : '',
         currency: $('#gCurr').val(), note: $('#gNote').val()
-    }, function(res){ closeMask('gMask'); loadList(); alert('已建立，展開成 '+res.doc_ids.length+' 張詢價單'); });
+    }, function(res){ closeMask('gMask'); reloadList(1); alert('已建立，展開成 '+res.doc_ids.length+' 張詢價單'); });
 }
 function openGroupEdit(gid){
     $.getJSON(API, {action:'get', id:gid}, function(res){
@@ -1030,7 +1075,7 @@ function saveGroupEdit(gid){
     $('#gErr').text('');
     post('update_group', {
         id: gid, items: JSON.stringify(items), currency: $('#gCurr').val(), note: $('#gNote').val()
-    }, function(){ closeMask('gMask'); loadList(); });
+    }, function(){ closeMask('gMask'); reloadList(); });
 }
 
 /* ───────────────────── 詢價項目綁定 BOM／製程（只有生管身分看得到這個欄位） ───────────────────── */
@@ -1164,7 +1209,7 @@ function openBind(gid){
     $('#gItemTbl').closest('div').hide();
     $('#gSave').off('click').on('click', function(){
         post('bind', {id:gid, bind_type:$('#gBindType').val(), bind_ref: CUR_BIND ? CUR_BIND.ref : ''}, function(){
-            closeMask('gMask'); loadList();
+            closeMask('gMask'); reloadList();
             $('#gCurr,#gNote').prop('disabled', false); $('#gNoteTpl').show(); $('#gItemTbl').closest('div').show();
         });
     });
@@ -1225,7 +1270,7 @@ function openAddVendor(gid){
 $('#avSave').on('click', function(){
     var vendorIds = $('#avVendorBox input:checked').map(function(){return $(this).val();}).get();
     if (!vendorIds.length) { $('#avErr').text('至少要選一家廠商'); return; }
-    post('add_vendors', {id:ADDV_GID, vendor_ids:JSON.stringify(vendorIds)}, function(res){ closeMask('avMask'); loadList(); alert('已新增 '+res.doc_ids.length+' 張詢價單'); });
+    post('add_vendors', {id:ADDV_GID, vendor_ids:JSON.stringify(vendorIds)}, function(res){ closeMask('avMask'); reloadList(); alert('已新增 '+res.doc_ids.length+' 張詢價單'); });
 });
 
 /* ───────────────────── 編輯子單 ───────────────────── */
@@ -1259,7 +1304,7 @@ function openDocEdit(did){
 }
 function saveDocEdit(did){
     var items = collectItems($('#dItemTbl tbody'), true);
-    post('update_doc', {id:did, items: JSON.stringify(items), status: $('#dStatus').val()}, function(){ closeMask('dMask'); loadList(); });
+    post('update_doc', {id:did, items: JSON.stringify(items), status: $('#dStatus').val()}, function(){ closeMask('dMask'); reloadList(); });
 }
 
 /* ───────────────────── 回填價格（使用者明確要求：跳窗顯示整張詢價單內容，但只有單價與
@@ -1302,7 +1347,7 @@ $('#pfSave').on('click', function(){
         var $tr = $(this);
         items.push({ id: $tr.data('item-id'), unit_price: $tr.find('.pf-price').val(), vendor_note: $tr.find('.pf-note').val() });
     });
-    post('price_fill', {id:PF_DOC_ID, items: JSON.stringify(items)}, function(){ closeMask('priceMask'); loadList(); });
+    post('price_fill', {id:PF_DOC_ID, items: JSON.stringify(items)}, function(){ closeMask('priceMask'); reloadList(); });
 });
 
 /* ───────────────────── 列印 ───────────────────── */
@@ -1521,10 +1566,12 @@ $('#btnSettings').on('click', function(){
 });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnNew').on('click', openNewGroup);
-$('#btnSearch').on('click', loadList);
-$('#fKw').on('keydown', function(e){ if (e.key==='Enter') loadList(); });
+/* 篩選一律即時生效，不需要查詢按鈕：下拉／日期一改就重查，關鍵字輸入防抖350ms避免每打一個字就發一次請求 */
+$('#fYear, #fDept, #fStatus, #fFrom, #fTo').on('change', filterChanged);
+var kwDebounce = null;
+$('#fKw').on('input', function(){ clearTimeout(kwDebounce); kwDebounce = setTimeout(filterChanged, 350); });
 
-if (PERM.canView) { loadDeptSettings(function(){ loadList(); loadAsDocCurrent(); }); }
+if (PERM.canView) { loadDeptSettings(function(){ loadList(1); loadAsDocCurrent(); }); }
 </script>
 </body>
 </html>

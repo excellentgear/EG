@@ -857,13 +857,13 @@ function inq_group_full(PDO $db, int $groupId): ?array {
     return $g;
 }
 
-/** 清單（供主頁面列表用） */
-function inq_group_list(PDO $db, array $opt = []): array {
-    inq_ensure_schema($db);
+/** 清單篩選條件共用組裝（list / years 共用同一套篩選規則，避免兩邊各寫一次條件走鐘） */
+function inq_group_list_where(array $opt): array {
     $where = ['g.deleted_at IS NULL'];
     $params = [];
     if (!empty($opt['dept'])) { $where[] = 'g.source_dept=?'; $params[] = $opt['dept']; }
     if (!empty($opt['status'])) { $where[] = 'g.status=?'; $params[] = $opt['status']; }
+    if (!empty($opt['year']))  { $where[] = 'YEAR(g.inquiry_date)=?'; $params[] = (int)$opt['year']; }
     if (!empty($opt['date_from'])) { $where[] = 'g.inquiry_date>=?'; $params[] = $opt['date_from']; }
     if (!empty($opt['date_to']))   { $where[] = 'g.inquiry_date<=?'; $params[] = $opt['date_to']; }
     if (!empty($opt['kw'])) {
@@ -875,13 +875,65 @@ function inq_group_list(PDO $db, array $opt = []): array {
         $kw = '%' . $opt['kw'] . '%';
         array_push($params, $kw, $kw, $kw, $kw, $kw, $kw, $kw);
     }
-    $sql = "SELECT g.*,
-                   (SELECT COUNT(*) FROM inq_doc d WHERE d.group_id=g.id AND d.deleted_at IS NULL) AS doc_count,
-                   (SELECT GROUP_CONCAT(d.vendor_name SEPARATOR '、') FROM inq_doc d WHERE d.group_id=g.id AND d.deleted_at IS NULL) AS vendor_names
-            FROM inq_group g WHERE " . implode(' AND ', $where) . " ORDER BY g.id DESC LIMIT 500";
-    $st = $db->prepare($sql);
-    $st->execute($params);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    return [implode(' AND ', $where), $params];
+}
+
+/** 所有詢價案出現過的年度（供年度篩選下拉用），一律聯集目前年度——即使今年還沒有任何資料也要選得到 */
+function inq_group_years(PDO $db): array {
+    inq_ensure_schema($db);
+    $years = [];
+    try {
+        $st = $db->query("SELECT DISTINCT YEAR(inquiry_date) AS y FROM inq_group WHERE deleted_at IS NULL ORDER BY y DESC");
+        $years = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    } catch (Throwable $e) {}
+    $thisYear = (int)date('Y');
+    if (!in_array($thisYear, $years, true)) { $years[] = $thisYear; rsort($years); }
+    return $years;
+}
+
+/** 清單（供主頁面列表用）——分頁單位是「詢價案（母單）」，確保同一案底下的子單一定排在同一頁，
+ * 不會被拆散；只對「這一頁要用到的那幾案」撈出完整內容（項目/子單/子單項目），其餘案子只在
+ * 輕量查詢（僅 id 與子單數）裡出現，用來算頁數與頁界——避免每次翻頁/篩選都把全部資料整批撈出來。 */
+function inq_group_list(PDO $db, array $opt = []): array {
+    inq_ensure_schema($db);
+    [$whereSql, $params] = inq_group_list_where($opt);
+    $psize = max(1, (int)($opt['psize'] ?? 10));
+    $page  = max(1, (int)($opt['page'] ?? 1));
+
+    // 輕量查詢：只取 id 與子單數，用來在 PHP 端算頁界（每頁盡量湊到 psize 筆子單，絕不把同一案拆開）
+    $lite = $db->prepare("SELECT g.id, (SELECT COUNT(*) FROM inq_doc d WHERE d.group_id=g.id AND d.deleted_at IS NULL) AS doc_count
+                          FROM inq_group g WHERE $whereSql ORDER BY g.id DESC");
+    $lite->execute($params);
+    $liteRows = $lite->fetchAll(PDO::FETCH_ASSOC);
+
+    $pagesArr = []; $cur = []; $curCount = 0;
+    foreach ($liteRows as $r) {
+        $dc = max(1, (int)$r['doc_count']); // 一案一筆都沒有子單時仍佔一個名額，避免整案消失
+        if ($curCount > 0 && $curCount + $dc > $psize) { $pagesArr[] = $cur; $cur = []; $curCount = 0; }
+        $cur[] = (int)$r['id'];
+        $curCount += $dc;
+    }
+    if ($cur) $pagesArr[] = $cur;
+
+    $totalPages = max(1, count($pagesArr));
+    if ($page > $totalPages) $page = $totalPages;
+    $idsForPage = $pagesArr[$page - 1] ?? [];
+
+    $rows = [];
+    if ($idsForPage) {
+        $ph = implode(',', array_fill(0, count($idsForPage), '?'));
+        $full = $db->prepare("SELECT g.* FROM inq_group g WHERE g.id IN ($ph) ORDER BY g.id DESC");
+        $full->execute($idsForPage);
+        $rows = $full->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$r) {
+            $r['items'] = inq_group_items($db, (int)$r['id']);
+            $r['docs']  = inq_group_docs($db, (int)$r['id']);
+            foreach ($r['docs'] as &$d) { $d['items'] = inq_doc_items($db, (int)$d['id']); }
+        }
+        unset($r, $d);
+    }
+
+    return ['rows' => $rows, 'page' => $page, 'pages' => $totalPages];
 }
 
 /* ════════════════════════════════════════════════════════════════════════
