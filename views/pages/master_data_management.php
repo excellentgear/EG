@@ -15650,7 +15650,15 @@ function mpkChips() {
     document.getElementById('mpk-picked').innerHTML = '<b class="muted-help">已選：</b>' + (h || '<span class="mpk-none">（尚未選擇）</span>');
     document.getElementById('mpk-sel-count').textContent = MPK.order.length;
 }
-$(document).on('click', '.mpk-cat', function(){ MPK.cat = num($(this).data('i')); mpkRender(); });
+// 2026-10-12 使用者回報「機型無法選擇」：這裡原本寫 num($(this).data('i'))，而 num() 在本頁
+// 從來沒有定義過（是別頁的 helper，抄程式時漏抄）——handler 第一行就丟 ReferenceError，
+// mpkRender() 根本不會被呼叫，所以點了分類畫面一動也不動、也沒有任何錯誤提示。
+// 影響「機台編號」與「機型」兩種兩層模式；「機台種類」只有一層不經過 .mpk-cat 所以沒事。
+$(document).on('click', '.mpk-cat', function(){
+    var i = parseInt($(this).data('i'), 10);
+    MPK.cat = isNaN(i) ? null : i;
+    mpkRender();
+});
 $(document).on('click', '.mpk-back', function(){ MPK.cat = null; mpkRender(); });
 $(document).on('click', '.mpk-item', function(){
     var v = String($(this).data('v'));
