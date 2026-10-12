@@ -161,6 +161,63 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
 #g3d-hdr button:hover { background:rgba(255,255,255,.3); }
 #g3d-body { flex:1 1 auto; min-height:0; padding:10px; }
 @media print { #g3d-win { display:none !important; } }
+
+/* ── 參考圖面（零成本輔助輸入，2026-10-12）────────────────────────────────
+   使用者問「上傳2D圖，網頁能不能自動生成3D」——查證後站上沒有接任何讀圖的
+   視覺 AI（會是持續性付費成本），使用者明確回覆「不要須付費的功能」。於是
+   改做零成本的折衷：圖面與輸入欄位並排顯示，填寫的人邊看圖邊打數字，不必
+   切換視窗；生成 3D 這一步完全沿用既有的迴轉引擎（上面那套解析解），AI 在
+   這裡沒有參與任何幾何判斷。**刻意不上傳到伺服器**——這只是填表當下的視覺
+   輔助，不是要留存的文件（圖面本身多半已經是料號附件，另有圖面查閱頁可看），
+   存檔只會多一套路徑管理成本換不到對應的價值；用 `URL.createObjectURL`
+   純前端顯示，關閉頁面即釋放，不佔用 NAS 或資料庫一絲一毫。 */
+.g3d-ref-sec { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.g3d-ref-pick { display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+            background:#fff; border:1px solid #d8c3a4; border-radius:4px;
+            padding:5px 10px; font-size:12px; color:#8a5a22; }
+.g3d-ref-pick:hover { background:#FBF2E6; }
+.g3d-ref-sec input[type=file] { display:none; }
+.g3d-ref-thumb-wrap { display:flex; align-items:center; gap:6px; flex:1 1 auto;
+            min-width:0; }
+.g3d-ref-thumb { width:40px; height:40px; object-fit:cover; border-radius:4px;
+            border:1px solid var(--g3d-line); cursor:zoom-in; flex:0 0 auto;
+            background:#fff; }
+.g3d-ref-pdf-ic { width:40px; height:40px; border-radius:4px; border:1px solid var(--g3d-line);
+            background:#fff; display:flex; align-items:center; justify-content:center;
+            color:#8a5a22; font-size:16px; cursor:zoom-in; flex:0 0 auto; }
+.g3d-ref-name { font-size:11px; color:#8a7560; overflow:hidden; text-overflow:ellipsis;
+            white-space:nowrap; flex:1 1 auto; min-width:0; }
+.g3d-ref-x { background:none; border:none; color:#b08a60; cursor:pointer;
+            font-size:14px; padding:2px 4px; flex:0 0 auto; }
+.g3d-ref-x:hover { color:var(--g3d-bad); }
+
+/* 浮動、不蓋住整個工具視窗的「圖面放大」視窗；z-index 比工具視窗（10550）
+   再高一截——它要在使用者看圖打數字的時候浮在最上層，打完拖開或關掉即可，
+   不像工具視窗那樣固定在同一個 z 平面。 */
+#g3d-ref-box { position:fixed; z-index:10560; display:none;
+            width:720px; max-width:92vw; height:560px; max-height:88vh;
+            min-width:280px; min-height:220px; resize:both; overflow:hidden;
+            top:60px; left:calc(50% + 180px);
+            background:#2b2016; border-radius:8px; border:1px solid #6b4a24;
+            box-shadow:0 12px 40px rgba(0,0,0,.4); flex-direction:column; }
+#g3d-ref-box.g3d-show { display:flex; }
+#g3d-ref-hdr { cursor:move; user-select:none; flex:0 0 auto;
+            background:linear-gradient(135deg,#3a2a18,#6b4a24); color:#fff;
+            padding:6px 10px; display:flex; align-items:center; gap:6px; font-size:12px; }
+#g3d-ref-hdr .g3d-sp { margin-left:auto; }
+#g3d-ref-hdr button { background:rgba(255,255,255,.18); color:#fff; border:none;
+            border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;
+            font-family:inherit; }
+#g3d-ref-hdr button:hover { background:rgba(255,255,255,.3); }
+#g3d-ref-hdr button.g3d-on { background:rgba(255,255,255,.4); }
+#g3d-ref-stage { flex:1 1 auto; min-height:0; position:relative; overflow:hidden;
+            background:repeating-conic-gradient(#241c13 0% 25%, #2b2116 0% 50%) 50%/16px 16px; }
+#g3d-ref-stage img { position:absolute; top:0; left:0; transform-origin:0 0;
+            user-select:none; pointer-events:none; max-width:none; }
+#g3d-ref-stage.g3d-ref-dragging { cursor:grabbing; }
+#g3d-ref-stage:not(.g3d-ref-dragging) { cursor:grab; }
+#g3d-ref-stage iframe { width:100%; height:100%; border:none; background:#fff; }
+@media print { #g3d-ref-box { display:none !important; } }
 </style>
 
 <!-- ── 浮動視窗（方式 A；嵌入式用 EGGrind3D.mount() 不經過這裡）──────────── -->
@@ -295,14 +352,34 @@ var EGGrind3D = (function () {
         return v.toFixed(n === undefined ? 3 : n);
     }
 
-    /* ── 可不可以算（算不出來要講清楚原因，不要畫一張看起來對的圖）──────── */
-    function why(p) {
-        if (p.Rs <= p.Rr + EPS)
-            return '肩部直徑必須大於齒底徑，否則沒有肩部、也就沒有出尾問題。';
-        if (p.H >= p.Rw - EPS)
-            return '肩部高出齒底徑 ' + fx(p.H) + ' mm，已達砂輪半徑 ' + fx(p.Rw)
-                 + ' mm，這支砂輪在幾何上進不到齒底徑。';
-        return '';
+    /* ── 提醒（**不擋下計算**）────────────────────────────────────────────
+       2026-10-12 使用者回報「一直卡在一定要肩部>齒底徑，不然無法計算」。
+       原本這裡有兩道硬性把關，查證後**兩道都是多餘而且是錯的**：
+         ⑴「肩部直徑必須大於齒底徑」——現場常見工件在這一側是**往小的縮**
+           （使用者的實例：齒底徑 Ø118、肩部只有 Ø90），這時候根本沒有肩部，
+           真正會擋到砂輪的是治具；擋下來等於整組算不了。而且求解器本來就
+           處理得好好的：砂輪最深只到齒底徑，碰不到比它更小的東西，那一塊
+           自然不會是卡住的那一塊（ringLimit 會回 -Infinity）。
+         ⑵「肩部高出齒底徑已達砂輪半徑＝進不到齒底徑」——這句也不成立。
+           砂輪中心恆在 Rr+Rw，不管肩部多高，砂輪都磨得到齒底徑，只是要離
+           肩部遠一點而已（出尾變長）。連 H > 2Rw（肩部比砂輪整個還高）求解器
+           都算得對：那時整個砂輪都在肩部半徑之內，答案是「砂輪必須整個待在
+           肩部端面右側」，cxLimit ≈ 砂輪半徑。
+       所以這裡改成只回「提醒」，一律不阻止計算。 */
+    function notes(p) {
+        var w = [];
+        if (p.Rs <= p.Rr + EPS) {
+            w.push('肩部直徑 Ø' + fx(p.Ds, 1) + ' 不大於齒底徑 Ø' + fx(p.Dr, 1)
+                 + '，這一側沒有肩部擋住砂輪，出尾長度由治具（或完全沒有限制）決定。');
+        }
+        var small = p.obs.filter(function (o) {
+            return o.kind === 'fixture' && o.R <= p.Rr + EPS;
+        });
+        if (small.length) {
+            w.push(small.map(function (o) { return o.name; }).join('、')
+                 + ' 的直徑不大於齒底徑，砂輪碰不到，不會是卡住的那一段。');
+        }
+        return w;
     }
 
     /* ══ 一、工件（迴轉體輪廓，局部座標 (r, z)，z 即軸向）══════════════════
@@ -449,9 +526,8 @@ var EGGrind3D = (function () {
 
     /* ══ 七、主分析 ════════════════════════════════════════════════════════ */
     function analyze(raw) {
-        var p = norm(raw), msg = why(p);
-        var out = { p: p, ok: false, err: msg };
-        if (msg) return out;
+        var p = norm(raw);
+        var out = { p: p, ok: true, err: '', notes: notes(p) };
 
         var g = p.tilt * Math.PI / 180, cg = Math.cos(g), sg = Math.sin(g);
         var cy = p.Rr + p.Rw;          /* 解析解，與傾角無關（檔頭推導①）*/
@@ -478,7 +554,10 @@ var EGGrind3D = (function () {
             o.cxLimit = isFinite(rc) ? (o.x1 + rc) : -Infinity;
             if (o.cxLimit > lim) { lim = o.cxLimit; bind = o; }
         }
-        if (!isFinite(lim)) lim = 0;   /* 理論上不會發生（最深點恆可達齒底徑）*/
+        /* 全部障礙物都碰不到（例如工件往小的縮、又沒填治具）＝砂輪沒有任何東西
+           擋著，出尾長度 0。這是合法結果，不是錯誤，畫面要講清楚而不是報錯。 */
+        out.blocked = isFinite(lim);
+        if (!isFinite(lim)) { lim = 0; bind = null; }
 
         out.ok      = true;
         out.cy      = cy;
@@ -488,13 +567,22 @@ var EGGrind3D = (function () {
         out.reach   = reach;
         out.bind    = bind;
         out.cxLimit = lim;
-        out.tail    = lim;             /* 最深點恆在 x = cx（檔頭推導②）*/
-        out.tailTot = lim + p.U;
+        /* 最深點恆在 x = cx（檔頭推導②），所以極限位置就是出尾長度。
+           **極限位置可能是負的**：工件在這一側往小的縮（沒有肩部）、治具又在很外面
+           時，砂輪可以越過肩部端面繼續磨，這時「出尾長度」是 0 不是負數，多出來的
+           那一段改用 overrun 表示並在畫面上講清楚，直接印一個負的出尾沒人看得懂。 */
+        out.tailRaw = lim;
+        out.tail    = Math.max(lim, 0);
+        out.overrun = lim < 0 ? -lim : 0;
+        out.tailTot = out.tail + p.U;
         /* 2D 公式只描述「肩部」這一塊，治具不在它的模型裡，所以兩者只有在
            肩部就是卡住的那一塊、而且傾角 0 時才會相同——畫面上要講明。 */
-        out.tail2d  = Math.sqrt(Math.max(p.Rw * p.Rw - (p.Rw - p.H) * (p.Rw - p.H), 0));
-        out.tail2dT = out.tail2d + p.U;
-        out.diff    = out.tail - out.tail2d;
+        /* 沒有肩部（Rs <= Rr）時 2D 出尾公式沒有意義，給 null 讓畫面顯示「—」，
+           不要硬算出一個 0 讓人以為那是答案。 */
+        out.tail2d  = (p.H > EPS)
+            ? Math.sqrt(Math.max(p.Rw * p.Rw - (p.Rw - p.H) * (p.Rw - p.H), 0)) : null;
+        out.tail2dT = (out.tail2d === null) ? null : out.tail2d + p.U;
+        out.diff    = (out.tail2d === null) ? null : out.tail - out.tail2d;
         return out;
     }
 
@@ -966,20 +1054,32 @@ var EGGrind3D = (function () {
         });
         if (!res.ok) {
             if (err) { err.textContent = res.err; err.style.display = 'block'; }
-            ['Ds','Dr','Dw'].forEach(function (k) {
-                var el = $1('#g3d_' + k); if (el) el.classList.add('g3d-err');
-            });
             var v = $1('#g3dVerdict');
             if (v) { v.className = 'g3d-verdict g3d-v-na'; v.textContent = '無法計算'; }
             var kv = $1('#g3dKv'); if (kv) kv.innerHTML = '';
             return;
         }
-        if (err) err.style.display = 'none';
+        /* 提醒不是錯誤：用灰字說明「為什麼是這個結果」，不擋下計算、不把欄位標紅。
+           （2026-10-12 使用者回報原本會被「肩部一定要大於齒底徑」卡住算不了。） */
+        if (err) {
+            if (res.notes && res.notes.length) {
+                err.innerHTML = res.notes.map(esc).join('<br>');
+                err.style.display = 'block';
+                err.style.color = '#8a7560';
+                err.style.fontWeight = '400';
+            } else {
+                err.style.display = 'none';
+            }
+        }
 
-        /* 拉桿範圍：要涵蓋「壓進肩部」與「完全脫離」兩側，才看得出變化 */
+        /* 拉桿範圍：要涵蓋「壓進障礙物」與「完全脫離」兩側，才看得出變化 */
         var p = res.p;
-        var lo = -(p.Tb / 2 + Math.max(res.cxLimit * 0.35, 2));
-        var hi = Math.max(res.cxLimit * 1.6, p.Rw * 0.4) + p.Tb;
+        /* 範圍要**同時涵蓋極限位置與肩部端面(0)**：極限位置可能是負的（砂輪可以
+           越過端面），原本以 0 為基準的算法會把拉桿夾在涵蓋不到極限位置的區間，
+           畫面上就變成「拉到底還是干涉」。 */
+        var half = Math.max(Math.abs(res.cxLimit) * 0.6, p.Rw * 0.35, p.Tb * 2, 10);
+        var lo = Math.min(res.cxLimit - half, -(p.Tb / 2 + 2));
+        var hi = Math.max(res.cxLimit + half, p.Rw * 0.4);
         var sl = $1('#g3dCx');
         if (sl) {
             sl.min = lo.toFixed(4); sl.max = hi.toFixed(4);
@@ -1031,10 +1131,17 @@ var EGGrind3D = (function () {
         if (sl) sl.textContent = fx(ST.cx, 2);
         /* 先卡住的是哪一塊：砂輪夠大時常常是治具某一段，不是肩部。結論列一定要
            指名道姓，不然使用者會以為只要把肩部改小就解決得了。 */
-        var bindName = res.bind ? res.bind.name : '肩部';
+        var bindName = res.bind ? res.bind.name : '';
         var v = $1('#g3dVerdict');
         if (v) {
-            if (a.hit) {
+            if (!res.blocked) {
+                /* 肩部比齒底徑小、治具也都碰不到＝沒有任何東西擋著。這是合法結果，
+                   要說「沒有限制」，不是報錯也不是說「不干涉還能再靠近 0mm」。 */
+                v.className = 'g3d-verdict g3d-v-ok';
+                v.innerHTML = '<i class="fa fa-check-circle"></i> 沒有任何一塊會擋到砂輪'
+                            + '<span style="font-weight:400">'
+                            + '（肩部與治具的直徑都不大於齒底徑，砂輪碰不到）</span>';
+            } else if (a.hit) {
                 v.className = 'g3d-verdict g3d-v-bad';
                 v.innerHTML = '<i class="fa fa-times-circle"></i> 會干涉：砂輪必須往外退 '
                             + fx(a.pen) + ' mm 才不會碰到<b>' + esc(bindName) + '</b>';
@@ -1044,22 +1151,31 @@ var EGGrind3D = (function () {
                             + fx(a.clr) + ' mm（最先碰到的是<b>' + esc(bindName) + '</b>）';
             }
         }
-        var d2 = res.diff, shoulderBind = !res.bind || res.bind.kind === 'shoulder';
+        var d2 = res.diff, shoulderBind = res.bind && res.bind.kind === 'shoulder';
         var rows = [
             ['砂輪中心軸向位置',                      fx(ST.cx) + ' mm'],
-            ['不干涉的極限位置<span class="g3d-k-sub">（由' + esc(bindName) + '決定）</span>',
+            ['不干涉的極限位置' + (res.blocked
+                 ? '<span class="g3d-k-sub">（由' + esc(bindName) + '決定）</span>'
+                 : '<span class="g3d-k-sub">（沒有東西擋著）</span>'),
                                                       fx(res.cxLimit) + ' mm'],
             ['<b>出尾長度</b><span class="g3d-k-sub">（本工具，含傾角 '
-              + fx(p.tilt, 1) + '°' + (shoulderBind ? '' : '，含治具') + '）</span>',
+              + fx(p.tilt, 1) + '°' + (shoulderBind ? '' : '，含治具') + '）'
+              + (res.overrun > 0 ? '<br>砂輪還可以越過肩部端面 ' + fx(res.overrun)
+                   + ' mm，這一側沒有出尾問題' : '') + '</span>',
                                                       '<b>' + fx(res.tail) + ' mm</b>'],
             ['出尾長度＋退刀量 ' + fx(p.U, 2) + ' mm', fx(res.tailTot) + ' mm'],
-            ['2D 公式值<span class="g3d-k-sub">（齒輪計算工具的出尾計算，只算肩部、只在傾角 0 成立）</span>',
-                                                      fx(res.tail2d) + ' mm'],
-            ['2D 公式低估／高估了' + (shoulderBind ? ''
-                : '<span class="g3d-k-sub">（這次是治具在卡，2D 公式根本沒有算它）</span>'),
-                                                      (d2 >= 0 ? '+' : '') + fx(d2) + ' mm'],
+            ['2D 公式值<span class="g3d-k-sub">（齒輪計算工具的出尾計算，只算肩部、只在傾角 0 成立'
+                + (res.tail2d === null ? '；這個工件沒有肩部，所以不適用' : '') + '）</span>',
+                                                      res.tail2d === null ? '—' : fx(res.tail2d) + ' mm'],
+            ['2D 公式低估／高估了' + (res.tail2d === null ? '' : (shoulderBind ? ''
+                : '<span class="g3d-k-sub">（這次卡住的不是肩部，2D 公式根本沒有算它）</span>')),
+                                                      d2 === null ? '—'
+                                                        : ((d2 >= 0 ? '+' : '') + fx(d2) + ' mm')],
             ['砂輪中心高度<span class="g3d-k-sub">（距工件軸心）</span>', fx(res.cy) + ' mm'],
-            ['肩部高出齒底徑',                        fx(p.H) + ' mm'],
+            /* H 是負的時候「肩部高出齒底徑 -14」很難讀，換句話說比較清楚 */
+            [p.H >= 0 ? '肩部高出齒底徑'
+                      : '肩部<span class="g3d-k-sub">比齒底徑小（這一側沒有肩部）</span>',
+                                                      fx(Math.abs(p.H)) + ' mm'],
             ['砂輪本體厚度<span class="g3d-k-sub">（含側面角張開）</span>', fx(p.Tb) + ' mm']
         ];
 
@@ -1067,14 +1183,17 @@ var EGGrind3D = (function () {
            再長高多少才會碰到＝截圖上那個 10）。兩個數字由同一支解析解推出來，
            保證同時變 0，不會出現「說有間隙卻判干涉」。 */
         p.obs.forEach(function (o) {
+            var reachable = isFinite(o.cxLimit);
             var am = ST.cx - o.cxLimit;
             var rg = radialGap(res, o, ST.cx);
-            var tag = (o === res.bind) ? '　← 最先碰到' : '';
+            var tag = (o === res.bind) ? '　← 最先碰到'
+                    : (!reachable ? '　（直徑不大於齒底徑，碰不到）' : '');
             rows.push([
                 '<b>' + esc(o.name) + '</b><span class="g3d-k-sub"> Ø' + fx(o.R * 2, 1)
                     + '　軸向 ' + fx(o.x0, 1) + '～' + fx(o.x1, 1) + esc(tag) + '</span>',
-                (am < 0 ? '<span style="color:var(--g3d-bad)">軸向 ' + fx(am) + '</span>'
-                        : '軸向 +' + fx(am))
+                (!reachable ? '<span class="g3d-k-sub">軸向 不會擋到</span>'
+                  : (am < 0 ? '<span style="color:var(--g3d-bad)">軸向 ' + fx(am) + '</span>'
+                            : '軸向 +' + fx(am)))
                 + '　/　'
                 + (rg < 0 ? '<span style="color:var(--g3d-bad)">徑向 ' + fx(rg) + '</span>'
                           : '徑向 +' + fx(rg)) + ' mm'
@@ -1118,8 +1237,10 @@ var EGGrind3D = (function () {
         if (fxb) {
             fxb.addEventListener('input', function (e) {
                 if (!e.target.getAttribute || !e.target.getAttribute('data-fxk')) return;
+                /* 與上面的數字欄位一致：改參數就把砂輪重新移到新的極限位置。
+                   兩種輸入一個會移、一個不會移，使用者會以為其中一個壞了。 */
                 clearTimeout(ST.timer);
-                ST.timer = setTimeout(function () { recompute(true); }, 150);
+                ST.timer = setTimeout(function () { recompute(false); }, 150);
             });
             fxb.addEventListener('click', function (e) {
                 if (!e.target.classList || !e.target.classList.contains('g3d-fx-del')) return;
@@ -1133,7 +1254,7 @@ var EGGrind3D = (function () {
                     tr.parentNode.removeChild(tr);
                 }
                 fxRenumber();
-                recompute(true);
+                recompute(false);
             });
         }
         var fxAdd = $1('#g3dFxAdd');
@@ -1462,9 +1583,49 @@ var EGGrind3D = (function () {
                            fx:[{d:'',len:''},{d:0,len:50},{d:118,len:0}] });
         ck('沒填完的治具列被忽略', rE.p.obs.length === 1 && Math.abs(rE.cxLimit - rN.cxLimit) < 1e-9);
 
-        out.push('【五】退化與邊界情形要被擋下、不可以畫出看起來正常的圖');
-        ck('肩部直徑 <= 齒底徑', !analyze({ Dr:40, Ds:40 }).ok);
-        ck('肩部高度 >= 砂輪半徑', !analyze({ Dw:20, Dr:10, Ds:40 }).ok);
+        out.push('【五】工件往小的縮（肩部比齒底徑小）一樣要算得出來，不可以擋下');
+        /* 2026-10-12 使用者回報「一直卡在一定要肩部>齒底徑，不然無法計算」。
+           這是他的實際案例：齒底徑 Ø118、肩部只有 Ø90（這一側根本沒有肩部），
+           治具 Ø105x105 + Ø178x53。 */
+        var UC = { Dw:300, Dr:118, Ds:90, Lsh:105, Lsp:50, U:10, tilt:0,
+                   fx:[{d:105,len:105},{d:178,len:53}] };
+        var rU = analyze(UC);
+        ck('算得出來（不再被擋下）', rU.ok === true && !rU.err, rU.err || '(無錯誤)');
+        ck('有提醒說明為什麼沒有肩部', (rU.notes || []).length > 0,
+           (rU.notes || []).join(' / '));
+        ck('比齒底徑小的那幾塊被判成碰不到',
+           !isFinite(rU.p.obs[0].cxLimit) && !isFinite(rU.p.obs[1].cxLimit),
+           '肩部Ø90 與 治具第1段Ø105 皆 < 齒底徑Ø118');
+        ck('只有 Ø178 那一段算得出極限位置', isFinite(rU.p.obs[2].cxLimit),
+           '治具第2段 cxLimit = ' + rU.p.obs[2].cxLimit.toFixed(3));
+        ck('極限位置為負＝砂輪可以越過肩部端面，出尾長度算 0',
+           rU.cxLimit < 0 && rU.tail === 0 && rU.overrun > 0,
+           '極限 ' + rU.cxLimit.toFixed(3) + '　出尾 ' + rU.tail
+             + '　可越過 ' + rU.overrun.toFixed(3) + ' mm');
+        ck('沒有肩部時 2D 公式顯示為不適用', rU.tail2d === null);
+
+        out.push('【六】其他原本被誤擋的情形');
+        /* 肩部直徑「恰等於」齒底徑是邊界情形：砂輪最深那一點剛好擦到它，所以
+           cxLimit 會算出 0（有限值，不是碰不到），出尾長度 0＝沒有任何限制。
+           第一版斷言寫成「碰不到」是把邊界當成一般情形，判錯的是斷言不是程式。 */
+        var rEq = analyze({ Dw:200, Dr:40, Ds:40, Tw:6 });
+        /* 容差用 1e-3 mm（1 微米）：這個邊界情形的根恰好落在掃描起點 φ=270° 上，
+           粗掃＋二分只能收斂到 1e-6 mm 等級（1 奈米），對加工完全不相干，
+           用 1e-6 當判準只是在考驗數值解析度不是在驗正確性。 */
+        ck('肩部直徑等於齒底徑：算得出來且沒有出尾限制',
+           rEq.ok && Math.abs(rEq.cxLimit) < 1e-3 && rEq.tail < 1e-3,
+           '極限 ' + rEq.cxLimit.toExponential(2) + ' mm　出尾 ' + rEq.tail.toExponential(2) + ' mm');
+        /* 肩部比砂輪半徑還高：砂輪中心恆在 Rr+Rw，照樣磨得到齒底徑，只是出尾變長。
+           原本這裡會回「這支砂輪在幾何上進不到齒底徑」，那句話是錯的。 */
+        var rT = analyze({ Dw:20, Dr:10, Ds:40, Tw:2 });
+        ck('肩部高度大於砂輪半徑：算得出來', rT.ok && rT.tail > 0,
+           '出尾 = ' + rT.tail.toFixed(4) + ' mm（砂輪半徑 10、肩部高出 15）');
+        /* 肩部比整個砂輪還高（H > 2Rw）：整個砂輪都在肩部半徑之內，答案是
+           「砂輪必須整個待在肩部端面右側」，cxLimit 約等於砂輪半徑。 */
+        var rH = analyze({ Dw:20, Dr:10, Ds:60, Tw:2 });
+        ck('肩部高過整個砂輪：砂輪必須整個退到端面右側',
+           rH.ok && Math.abs(rH.tail - 10) < 0.5,
+           '出尾 = ' + rH.tail.toFixed(4) + ' mm（砂輪半徑 10）');
         ck('極小肩部（H=0.1）仍算得出來',
            analyze({ Dw:200, Dr:40, Ds:40.2, Tw:6 }).ok);
 
