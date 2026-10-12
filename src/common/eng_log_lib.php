@@ -411,6 +411,15 @@ function el_ensure_schema(PDO $db): void
         // 問題——與 target_type 是否有值無關（target_type=NULL 原本就是「沒有指定對象」
         // 的既有語意，兩者刻意分開，見 el_order_open_exists_sql() 等處的用法說明）。
         "ALTER TABLE eng_log_item ADD COLUMN is_note TINYINT NOT NULL DEFAULT 0 COMMENT '1=純備註，不列入待處理問題計數／不發催回覆提醒' AFTER target_contact",
+        // 作廢（2026-10-12 使用者交辦：**不做刪除**，改成「建立者可以按作廢、必填原因、作廢後
+        // 依然查得到」）。刻意不用既有的 status='dropped'（那是「這個問題決定不處理」的業務
+        // 判斷，是流程的一部分）：作廢是「這一條根本不該存在／打錯了」，兩者語意不同，混用
+        // 會讓「不處理」的紀錄在畫面上被當成打錯字而消失。
+        "ALTER TABLE eng_log_item ADD COLUMN created_by INT NULL COMMENT '這一條是誰建立的（作廢權限判定用；2026-10-12 之前的舊資料查不到，一律 NULL）' AFTER created_at",
+        "ALTER TABLE eng_log_item ADD COLUMN voided_at DATETIME NULL COMMENT '作廢時間，NULL=未作廢'",
+        "ALTER TABLE eng_log_item ADD COLUMN voided_by INT NULL COMMENT '作廢的人'",
+        "ALTER TABLE eng_log_item ADD COLUMN void_reason VARCHAR(500) NULL COMMENT '作廢原因（必填，畫面上一律顯示出來）'",
+        "ALTER TABLE eng_log_item ADD INDEX idx_void (voided_at)",
     ] as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS eng_log_step (
@@ -1050,13 +1059,56 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
     // 狀態留在 waiting 會變成一條永遠卡在待回覆、又沒有按鈕可以結掉的死紀錄。
     // ※ 這不影響任何統計：待處理計數（el_order_open_exists_sql／el_order_item_summary）與
     //   催回覆提醒（el_process_due_reminders）本來就都有 is_note=0 條件。
+    // created_by：作廢權限要判「這一條是不是我建立的」（2026-10-12）。呼叫端沒傳就存 NULL
+    // ——舊呼叫端行為完全不變，只是那些紀錄之後只有具作廢權限的人才作廢得掉。
+    $cby = el_norm_int($in['created_by'] ?? '');
     $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
-                  target_label, target_post, target_contact, is_note, asked_at, status, follow_up_days, remind_sent, created_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?, 0, ?)")
+                  target_label, target_post, target_contact, is_note, asked_at, status, follow_up_days, remind_sent, created_at, created_by)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?, 0, ?, ?)")
        ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
                   ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc), $isNote,
-                  $asked, ($isNote ? 'resolved' : 'waiting'), $fud, $now]);
+                  $asked, ($isNote ? 'resolved' : 'waiting'), $fud, $now, $cby]);
     return (int)$db->lastInsertId();
+}
+
+/**
+ * 作廢／取消作廢一條問題項（2026-10-12 使用者交辦；**唯一實作**，呼叫端只負責權限判定）。
+ *
+ * 為什麼是「作廢」不是「刪除」（使用者明確拍板）：這些紀錄是品質追溯的一部分，刪掉就
+ * 查不回來了；作廢只是標記「這一條不算數」，**內容、回覆、是誰在什麼時候因為什麼原因
+ * 作廢的全部留著、照樣查得到**。
+ *
+ * 為什麼不沿用既有的 status='dropped'（不處理）：那是「這個問題我們決定不處理」的業務
+ * 判斷，是流程的一部分、要留在畫面上給人看；作廢是「這一條根本不該存在／打錯了」。
+ * 兩者混用會讓「決定不處理」的紀錄被當成打錯字一起收起來。
+ *
+ * @param string $reason 作廢原因，**必填**（使用者指定）
+ */
+function el_item_void(PDO $db, int $logId, int $itemId, string $reason, int $uid, string $now): void
+{
+    $reason = trim($reason);
+    if ($reason === '') throw new InvalidArgumentException('請填寫作廢原因');
+    if (mb_strlen($reason) > 500) throw new InvalidArgumentException('作廢原因請控制在 500 字以內');
+    $st = $db->prepare("SELECT voided_at FROM eng_log_item WHERE id=? AND log_id=?");
+    $st->execute([$itemId, $logId]);
+    $cur = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$cur) throw new InvalidArgumentException('查無此紀錄，請重新整理');
+    // 已經被別人作廢掉了還按下去：講清楚現況，不要安靜地把原因與作廢人蓋成後按的那個人
+    if ($cur['voided_at'] !== null) throw new InvalidArgumentException('這一條已經被作廢過了，請重新整理看最新狀態');
+    $db->prepare("UPDATE eng_log_item SET voided_at=?, voided_by=?, void_reason=?, updated_at=? WHERE id=? AND log_id=?")
+       ->execute([$now, ($uid > 0 ? $uid : null), $reason, $now, $itemId, $logId]);
+}
+
+/** 取消作廢（誤按救得回來；原因與作廢人一併清掉，因為它已經不是作廢狀態了）。 */
+function el_item_unvoid(PDO $db, int $logId, int $itemId, string $now): void
+{
+    $st = $db->prepare("SELECT voided_at FROM eng_log_item WHERE id=? AND log_id=?");
+    $st->execute([$itemId, $logId]);
+    $cur = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$cur) throw new InvalidArgumentException('查無此紀錄，請重新整理');
+    if ($cur['voided_at'] === null) throw new InvalidArgumentException('這一條目前不是作廢狀態，請重新整理看最新狀態');
+    $db->prepare("UPDATE eng_log_item SET voided_at=NULL, voided_by=NULL, void_reason=NULL, updated_at=? WHERE id=? AND log_id=?")
+       ->execute([$now, $itemId, $logId]);
 }
 
 /** 手動改問題項狀態（已解決／不處理／退回待回覆）。 */
@@ -1245,7 +1297,8 @@ function el_order_process_sync_binds(PDO $db, int $logId, int $orderId): void
 function el_order_case_sync_status(PDO $db, int $logId, string $now): void
 {
     // is_note=1（純備註）一律不算「未處理」——本來就不是需要跟催的問題，見 el_item_upsert() 說明。
-    $st = $db->prepare("SELECT COUNT(*) FROM eng_log_item WHERE log_id=? AND is_note=0 AND status NOT IN ('resolved','dropped')");
+    // voided_at IS NOT NULL（已作廢）同理：那一條已經被宣告不算數，不可以再把案件卡在未結案。
+    $st = $db->prepare("SELECT COUNT(*) FROM eng_log_item WHERE log_id=? AND is_note=0 AND voided_at IS NULL AND status NOT IN ('resolved','dropped')");
     $st->execute([$logId]);
     $hasOpen = (int)$st->fetchColumn() > 0;
     if ($hasOpen) {
@@ -1286,6 +1339,11 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
     try {
         // is_note=1（純備註）一律不算進 open_cnt，也不優先被挑成預覽（排序鍵一併排除），
         // 但仍計入 total_cnt——純備註還是這張訂單底下的一條紀錄，只是不算「待處理問題」。
+        // 已作廢（voided_at IS NOT NULL）則是**連 total_cnt 與預覽都整條排除**（2026-10-12）：
+        // 那一條已經被宣告不算數，不該再出現在清單那一格的文字上；要查它請打開問答跳窗，
+        // 裡面會把已作廢的收在最後一區（「作廢後依然查得到」＝使用者指定的口徑）。
+        // ※ 一張訂單的紀錄若全部被作廢，這裡就查不到任何列、清單格子會回到「＋新增」的樣子，
+        //   但那顆按鈕一樣打得開跳窗，歷史不會因此消失。
         $st = $db->prepare("
             SELECT order_id, question, status, target_type, target_label, asked_at, is_note, total_cnt, open_cnt FROM (
                 SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at, i.is_note,
@@ -1298,6 +1356,7 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
                 JOIN eng_log g ON g.id = b.log_id
                 JOIN eng_log_item i ON i.log_id = b.log_id
                 WHERE b.bind_type='order' AND b.bind_id IN ({$in}) AND g.log_type = ?
+                  AND i.voided_at IS NULL
             ) t WHERE rn = 1
         ");
         $st->execute([$logType]);
@@ -1364,12 +1423,15 @@ function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = '
     // (order_process) 不該被算進這個統計，否則既有的卡片數字會被不相干的新資料灌水。
     if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
     // is_note=1（純備註）排除在外：那是使用者勾選「不列入問題」的紀錄，不算批圖溝通中。
+    // 已作廢（voided_at IS NOT NULL）同理排除（2026-10-12）：被宣告不算數的一條不可以
+    // 讓訂單一直掛在「批圖溝通中」。
     return "EXISTS (SELECT 1 FROM eng_log_bind elb
         JOIN eng_log elg ON elg.id = elb.log_id
         JOIN eng_log_item eli ON eli.log_id = elb.log_id
         WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
         AND elg.log_type = '{$logType}'
         AND eli.is_note = 0
+        AND eli.voided_at IS NULL
         AND eli.status NOT IN ('resolved','dropped'))";
 }
 
@@ -1494,6 +1556,7 @@ function el_process_due_reminders(PDO $db): int
                    t.user_id, t.log_no, t.title
             FROM eng_log_item i JOIN eng_log t ON t.id = i.log_id
             WHERE i.status = 'waiting' AND i.remind_sent = 0 AND t.status = 'open' AND i.is_note = 0
+              AND i.voided_at IS NULL
               AND i.asked_at IS NOT NULL
               AND i.asked_at <= DATE_SUB(CURDATE(), INTERVAL COALESCE(i.follow_up_days, {$def}) DAY)
         ")->fetchAll(PDO::FETCH_ASSOC);

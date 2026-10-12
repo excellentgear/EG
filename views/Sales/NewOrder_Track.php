@@ -1652,6 +1652,9 @@ $can_design_qa             = $can_update;
 $can_design_qa_resolve     = false;
 // 維護「對象」選項（2026-10-12）：全新功能，舊制沒有對應權限碼，一律預設關閉
 $can_design_qa_target      = false;
+// 作廢他人的紀錄（2026-10-12）：全新功能，舊制沒有對應權限碼，一律預設關閉
+// （本人作廢自己寫的那一條不吃這個旗標，見 ate_q_void 的判定）
+$can_design_qa_void        = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1789,6 +1792,11 @@ $OT_PAGE_FEATURES = [
     // 跳窗裡新增／改名／排序／停用／刪除那幾顆對象按鈕。**只管「能不能改選項」**，
     // 填單時選哪一個對象是 ot_edit 的事，看得到這個跳窗的人本來就都選得到。
     ['group'=>'設計與批圖',   'code'=>'ot_design_note_target',   'label'=>'維護設計備註問答的「對象」選項（新增／改名／排序／停用）'],
+    // 2026-10-12 使用者拍板：設計備註問答**不開放刪除**（品質追溯紀錄刪掉就查不回來），
+    // 改成「作廢」——建立那一條的人本人一律可以作廢自己寫的（必填原因），
+    // 勾選本項的角色則可以作廢／取消作廢**任何人**的紀錄（含已凍結訂單，收拾殘局用）。
+    // 作廢後內容、回覆與作廢原因全部留著、照樣查得到，只是不再列入任何統計。
+    ['group'=>'設計與批圖',   'code'=>'ot_design_note_void',     'label'=>'作廢他人的設計備註問答紀錄（本人作廢自己寫的不需要這個權限）'],
     // 2026-10-07 使用者要求：新增/編輯訂單跳窗標題右側新增兩顆標記按鈕，純標記不影響任何既有
     // 流程，效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色。
     ['group'=>'設計與批圖',   'code'=>'ot_need_design_draw',     'label'=>'需設計繪圖按鈕（標記需設計重新繪圖，製程欄下方顯示提示）'],
@@ -1820,6 +1828,7 @@ if ($OT_USE_RBAC) {
     $can_design_qa             = $can_update;                   // 新增問題／回覆＝一般編輯門檻（見上方註解）
     $can_design_qa_resolve     = ot_hasF('ot_design_note_resolve');
     $can_design_qa_target      = ot_hasF('ot_design_note_target');
+    $can_design_qa_void        = ot_hasF('ot_design_note_void');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $can_need_design_draw      = ot_hasF('ot_need_design_draw');
@@ -2288,7 +2297,26 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                 foreach ($rp as $r) $rmap[(int)$r['item_id']][] = $r;
                 // is_note 從 PDO 取出來是字串 "0"/"1"，字串 "0" 在 JS 是 truthy，一定要轉成
                 // 真正的數字型別，json_encode 才會輸出 JSON number 給前端用 !!it.is_note 判斷。
-                foreach ($items as &$x) { $x['replies'] = $rmap[(int)$x['id']] ?? []; $x['is_note'] = (int)($x['is_note'] ?? 0); }
+                // 作廢資訊（2026-10-12）：voided_by 是 user.id，畫面要印姓名所以在這裡一次解出來，
+                // 不要讓前端逐條再問一次後端。
+                $voidUids = [];
+                foreach ($items as $x) if (!empty($x['voided_by'])) $voidUids[(int)$x['voided_by']] = true;
+                $vnames = [];
+                if ($voidUids) {
+                    $vin = implode(',', array_map('intval', array_keys($voidUids)));
+                    foreach ($pdo->query("SELECT id, user_cname FROM `user` WHERE id IN ({$vin})")->fetchAll(PDO::FETCH_ASSOC) as $u) {
+                        $vnames[(int)$u['id']] = (string)$u['user_cname'];
+                    }
+                }
+                foreach ($items as &$x) {
+                    $x['replies'] = $rmap[(int)$x['id']] ?? [];
+                    $x['is_note'] = (int)($x['is_note'] ?? 0);
+                    $x['voided_by_name'] = !empty($x['voided_by']) ? ($vnames[(int)$x['voided_by']] ?? ('#' . (int)$x['voided_by'])) : '';
+                    // can_void：本人（created_by＝我）或持有作廢權限者。**後端 ate_q_void 會用
+                    // 同一套規則再判一次**（鐵律8），這裡只是讓畫面不要長出按了會被打臉的按鈕。
+                    $x['can_void'] = $can_design_qa_void
+                        || (!empty($x['created_by']) && (int)$x['created_by'] === (int)$id);
+                }
                 unset($x);
             }
         }
@@ -2311,6 +2339,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
             // 用這個，否則某個對象被停用之後，舊資料的對象會整個變成空白）。
             'targets' => el_item_target_meta($pdo, false), 'targets_all' => el_item_target_meta($pdo, true),
             'can_target_cfg' => $can_design_qa_target,
+            // 作廢（2026-10-12）：can_void_any＝可以作廢任何人的；逐條的 can_void 見上面，
+            // 本人作廢自己寫的不需要角色。frozen 對具 can_void_any 的人不生效（見 ate_q_void）。
+            'can_void_any' => $can_design_qa_void,
             'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
@@ -2351,6 +2382,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         $created = 0;
         foreach ($rows as $r) {
             if (!is_array($r)) continue;
+            // created_by 一律用登入者，不採信前端送的值（作廢權限要靠它判「這是不是我寫的」）
+            $r['created_by'] = (int)$id;
             $newItemId = el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
             $created++;
             // 製程中紀錄「新增紀錄」可以順便一併填回覆（使用者拍板：單一／分開兩種建立方式
@@ -2448,6 +2481,58 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
         echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
     } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+/* ══ 作廢／取消作廢一條設計備註問答（2026-10-12 使用者拍板）═══════════════════
+   **刻意不提供刪除**（使用者明確指示「不開權限給管理員刪除」）：這些是品質追溯紀錄，
+   刪掉就查不回來；作廢只是標記「這一條不算數」，內容／回覆／作廢原因全部留著照樣查得到。
+   權限兩層：①建立這一條的人本人一律可作廢自己寫的 ②另外指派 ot_design_note_void 的角色
+   可以作廢任何人的。作廢原因必填（唯一驗證在 el_item_void()）。
+   凍結（轉生管超過一天）對①生效、對②刻意不生效——②本來就是給「要收拾殘局的人」用的，
+   卡住會讓凍結後的錯誤紀錄永遠清不掉，又回到只能找人進資料庫改的老路。 */
+if (isset($_POST['action']) && ($_POST['action'] === 'ate_q_void' || $_POST['action'] === 'ate_q_unvoid')) {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    $isVoid = ($_POST['action'] === 'ate_q_void');
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $logId  = (int)($_POST['log_id'] ?? 0);
+        $itemId = (int)($_POST['id'] ?? 0);
+        $st = $pdo->prepare("SELECT created_by, voided_at FROM eng_log_item WHERE id=? AND log_id=?");
+        $st->execute([$itemId, $logId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) throw new Exception('查無此紀錄，請重新整理');
+        $isMine = !empty($row['created_by']) && (int)$row['created_by'] === (int)$id;
+        if (!$can_design_qa_void && !$isMine) {
+            // 2026-10-12 之前建立的紀錄沒有 created_by，判不出是誰寫的——訊息要講清楚，
+            // 不然使用者只會看到「不是你寫的」然後覺得系統認錯人
+            throw new Exception(empty($row['created_by'])
+                ? '這一條是舊紀錄（系統沒有記錄是誰建立的），只有具「作廢他人紀錄」權限的人才能作廢'
+                : '只能作廢自己建立的紀錄（要作廢他人的請洽管理員指派「作廢他人的設計備註問答紀錄」權限）');
+        }
+        // 凍結只適用設計備註(order_note)。製程中紀錄(order_process)本來就是轉生管之後才建立的，
+        // 不先判 log_type 的話它每一條都會被判成凍結＝永遠作廢不了（比照 ate_q_add／ate_q_resolve
+        // 既有的 log_type 判斷，不要在這裡另立一套）。
+        if (!$can_design_qa_void && el_log_type_of($pdo, $logId) === 'order_note'
+            && ot_note_frozen_for_order($pdo, el_case_order_id($pdo, $logId))) {
+            throw new Exception('此訂單已轉生管超過一天，設計備註已凍結；如需作廢請洽具「作廢他人紀錄」權限的人處理');
+        }
+        $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+        $pdo->beginTransaction();
+        if ($isVoid) el_item_void($pdo, $logId, $itemId, (string)($_POST['reason'] ?? ''), (int)$id, $nowL);
+        else         el_item_unvoid($pdo, $logId, $itemId, $nowL);
+        // 作廢會讓「還有沒有未處理的問題」改變，案件狀態與列表預覽都要跟著重算
+        el_order_case_sync_status($pdo, $logId, $nowL);
+        $pdo->commit();
+        $oidR = el_case_order_id($pdo, $logId);
+        $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
+        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit;
@@ -4376,6 +4461,35 @@ foreach($dCounts as $c) {
         .ate-q-btn:hover { background:#F1E8D9; }
         .ate-q-btn-ok { border-color:#E0A46A; color:#8a4b12; background:#FDF1E3; }
         .ate-q-btn-ok:hover { background:#F7DFC5; }
+        /* ── 作廢（2026-10-12 使用者拍板：不做刪除，改成作廢並保留紀錄）──────────────
+           顏色一律走 ai-rules/10 的暖色系：#DD5138 是本站既有的「特急件」暖紅，不另外
+           引入冷色系的紅。 */
+        .ate-q-btn-void { border-color:#E8BCA9; color:#DD5138; }
+        .ate-q-btn-void:hover { background:#FBEAE4; }
+        .ate-q-void-badge { font-size:10px; color:#fff; background:#DD5138; border-radius:3px;
+            padding:0 6px; line-height:1.6; white-space:nowrap; }
+        /* 已作廢的那一條整個淡化＋問題文字加刪除線，一眼看得出「這條不算數」；
+           內容本身仍然完整顯示（使用者指定：作廢後依然查得到），不是藏起來。 */
+        .ate-q-item-voided { background:#FAF8F5; border-left-color:#C9BBA6; opacity:.78; }
+        .ate-q-item-voided .ate-q-question { text-decoration:line-through; color:#8a7f6e; }
+        .ate-q-void-info { font-size:11px; color:#8a4b12; background:#FBEAE4; border:1px solid #E8BCA9;
+            border-radius:3px; padding:3px 7px; margin-bottom:4px; display:flex; align-items:baseline; gap:6px; }
+        .ate-q-void-info .ate-q-void-who { margin-left:auto; color:#998a6e; white-space:nowrap; font-size:10px; }
+        .ate-q-voidbox { margin-top:6px; border-top:1px dashed #E8BCA9; padding-top:6px; }
+        .ate-q-voidbox-hint { font-size:11px; color:#6b5638; background:#FDF1E3; border:1px solid #EADFCD;
+            border-radius:3px; padding:4px 7px; margin-bottom:5px; line-height:1.6; }
+        .ate-q-voidbox input { font-size:12px; height:28px; margin-bottom:4px; }
+        .ate-q-voidbox input.has-err { border-color:#DD5138; background:#FBEAE4; }
+        .ate-q-voiderr { font-size:11px; color:#DD5138; min-height:14px; margin-bottom:3px; }
+        /* 已作廢清單：預設收起來不佔版面，點一下才展開（使用者這次就是嫌作廢的紀錄礙眼） */
+        .ate-q-void-wrap { margin-top:4px; }
+        .ate-q-void-bar { font-size:11px; color:#998a6e; background:#F7F4EE; border:1px dashed #D8CBB8;
+            border-radius:3px; padding:4px 8px; cursor:pointer; user-select:none; }
+        .ate-q-void-bar:hover { background:#F1E8D9; color:#6b5638; }
+        .ate-q-void-list { margin-top:6px; }
+        /* 本頁沒有 .btn-danger-o（那是 SOP/SIP 頁的），在這裡自己定義同一組暖紅 */
+        .btn-danger-o { background:#DD5138; border-color:#C4452F; color:#fff; }
+        .btn-danger-o:hover, .btn-danger-o:focus { background:#C4452F; border-color:#A93A27; color:#fff; }
         .ate-q-replybox { margin-top:6px; border-top:1px dashed #EADFCD; padding-top:6px; }
         .ate-q-replybox textarea { font-size:12px; margin-bottom:4px; }
         .ate-q-replyby { margin-bottom:6px; }
@@ -9046,7 +9160,10 @@ foreach($dCounts as $c) {
                       // 對象選項（2026-10-12 起由管理員維護的 eng_log_target 而來，見 ate_q_list）：
                       // targets＝現在可以選的（按鈕列用）；targetsAll＝連停用的也含（顯示舊紀錄
                       // 一定要用這個，不然某個對象被停用之後舊資料的對象會變成空白）。
-                      targets: {}, targetsAll: {}, canTargetCfg: false };
+                      targets: {}, targetsAll: {}, canTargetCfg: false,
+                      // 作廢（2026-10-12）：canVoidAny＝可作廢任何人的；逐條的 can_void 由後端算好
+                      // 放在 item 上（本人寫的那一條不必有角色）。showVoided＝已作廢那一區展開了沒。
+                      canVoidAny: false, showVoided: false };
 
         /** 對象 code → 挑選方式／顯示名稱（**全站唯一來源就是 ATE_Q.targetsAll**，
          *  絕對不要再寫 { user:'業務', maker:'廠商', … } 這種寫死的對照表——管理員改名或
@@ -9109,6 +9226,11 @@ foreach($dCounts as $c) {
                 ATE_Q.targets = res.targets || {};
                 ATE_Q.targetsAll = res.targets_all || res.targets || {};
                 ATE_Q.canTargetCfg = !!res.can_target_cfg;
+                ATE_Q.canVoidAny = !!res.can_void_any;
+                // 已作廢那一區每次重新打開都先收起來（預設不佔版面）；剛按完作廢的那一次例外，
+                // 由 ateQVoid() 設的一次性旗標帶過來展開，讓使用者看得到它跑去哪裡了。
+                ATE_Q.showVoided = !!ATE_Q._keepVoidOpen;
+                ATE_Q._keepVoidOpen = false;
                 ATE_Q.replyChannel = {};   // 每次重新打開都退回預設（電話），不沿用上一次開啟時選過的
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
@@ -9155,15 +9277,32 @@ foreach($dCounts as $c) {
             return '<span class="ate-q-stbadge" style="background:' + x[1] + ';' + (light ? 'color:#6b5638;' : '') + '">' + x[0] + '</span>';
         }
 
+        /** 已作廢的項目（2026-10-12）：**不刪掉、照樣查得到**（使用者指定），但預設收在最下面
+         *  一條摺疊列裡不佔版面——使用者這次就是嫌那幾條作廢的紀錄礙眼才要處理掉，留在列表
+         *  中間跟有效的混在一起等於沒解決問題。點一下展開就看得到內容、原因、誰在何時作廢。 */
         function ateQRenderItems() {
+            var live = [], dead = [];
+            ATE_Q.items.forEach(function(it) { (it.voided_at ? dead : live).push(it); });
             var html = '';
-            if (ATE_Q.items.length) {
-                ATE_Q.items.forEach(function(it) { html += ateQItemHtml(it); });
+            if (live.length) {
+                live.forEach(function(it) { html += ateQItemHtml(it); });
             } else {
-                html = '<div class="text-muted" style="font-size:12px;margin-bottom:6px;">目前沒有任何問題。</div>';
+                html = '<div class="text-muted" style="font-size:12px;margin-bottom:6px;">'
+                     + (dead.length ? '目前沒有有效的問題（已作廢的在下方）。' : '目前沒有任何問題。') + '</div>';
+            }
+            if (dead.length) {
+                html += '<div class="ate-q-void-wrap">'
+                     +    '<div class="ate-q-void-bar" onclick="ateQToggleVoided()">'
+                     +      '<i class="fa fa-' + (ATE_Q.showVoided ? 'caret-down' : 'caret-right') + '"></i> '
+                     +      '已作廢 ' + dead.length + ' 筆（紀錄保留，點一下' + (ATE_Q.showVoided ? '收合' : '查看') + '）'
+                     +    '</div>'
+                     +    '<div class="ate-q-void-list"' + (ATE_Q.showVoided ? '' : ' style="display:none;"') + '>';
+                dead.forEach(function(it) { html += ateQItemHtml(it); });
+                html += '</div></div>';
             }
             $('#ate-q-items-wrap').html(html);
         }
+        function ateQToggleVoided() { ATE_Q.showVoided = !ATE_Q.showVoided; ateQRenderItems(); }
 
         // 回覆對象預設值：
         // ・設計備註問答(note)：這題本來就有指定對象就沿用（通常回覆的人跟被問的人是同一個）；
@@ -9201,12 +9340,23 @@ foreach($dCounts as $c) {
             // （2026-10-12 使用者明確定義），所以不給回覆／已處理／退回待回覆這三顆按鈕——
             // 它建立當下就是 resolved（見 el_item_upsert()），不需要也不該再被結一次或退回。
             var noteView = !!it.is_note;
-            var actions = (frozenView || noteView) ? ''
+            // 已作廢（2026-10-12）：這一條被宣告不算數，所以回覆／已處理那一整套都不給，
+            // 只留「取消作廢」（誤按救得回來）。內容與回覆照樣完整顯示——使用者指定的口徑是
+            // 「作廢後依然查得到」，不是把它藏起來。
+            var voidView = !!it.voided_at;
+            var actions = (frozenView || noteView || voidView) ? ''
                 : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
-            if (!frozenView && !noteView && ATE_Q.canResolve) {
+            if (!frozenView && !noteView && !voidView && ATE_Q.canResolve) {
                 actions += (it.status === 'resolved' || it.status === 'dropped')
                     ? '<button type="button" class="ate-q-btn" onclick="ateQResolve(' + it.id + ',\'waiting\')">退回待回覆</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
+            }
+            // 作廢／取消作廢：can_void 由後端算好（本人寫的 或 有 ot_design_note_void），
+            // 凍結的設計備註只有具該權限的人還能動（與後端 ate_q_void 同一套規則＝鐵律8）。
+            if (it.can_void && (!frozenView || ATE_Q.canVoidAny)) {
+                actions += voidView
+                    ? '<button type="button" class="ate-q-btn" onclick="ateQUnvoid(' + it.id + ')"><i class="fa fa-undo"></i> 取消作廢</button>'
+                    : '<button type="button" class="ate-q-btn ate-q-btn-void" onclick="ateQToggleVoidBox(' + it.id + ')"><i class="fa fa-ban"></i> 作廢</button>';
             }
             var today = (ATE_Q.today || '');
             var askedTxt = it.asked_at ? (typeof egFmtDate === 'function' ? egFmtDate(it.asked_at) : it.asked_at) : '';
@@ -9243,17 +9393,74 @@ foreach($dCounts as $c) {
             // 否則會變成「備註 PS」兩個字樣重複出現。
             var noteBadge = it.is_note ? '<span class="ate-q-note-badge" title="備註：不列入待處理問題計數"><i class="fa fa-sticky-note-o"></i> 備註</span>' : '';
             var targetSpan = it.is_note ? '' : '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>';
-            return '<div class="ate-q-item">'
-                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + noteBadge + targetSpan
+            // 作廢徽章與說明列：誰、什麼時候、為什麼——這三件事一定要印出來，不然事後沒人
+            // 知道這一條為什麼被作廢，等於又變成一條看不懂的紀錄
+            var voidBadge = voidView ? '<span class="ate-q-void-badge" title="已作廢：不列入任何統計，紀錄保留"><i class="fa fa-ban"></i> 已作廢</span>' : '';
+            var voidInfo = '';
+            if (voidView) {
+                var vWhen = (typeof egFmtDate === 'function') ? egFmtDate(String(it.voided_at).substring(0, 10)) : String(it.voided_at).substring(0, 10);
+                voidInfo = '<div class="ate-q-void-info"><b>作廢原因：</b>' + escapeHtml(it.void_reason || '（未填）')
+                         + '<span class="ate-q-void-who">' + escapeHtml(it.voided_by_name || '') + ' ・ ' + escapeHtml(vWhen) + '</span></div>';
+            }
+            // 作廢原因輸入框（必填；前端即時擋一次，後端 el_item_void() 同規則再擋一次）
+            var voidBoxHtml = '';
+            if (!voidView && it.can_void && (!frozenView || ATE_Q.canVoidAny)) {
+                voidBoxHtml = '<div class="ate-q-voidbox" id="ate-q-voidbox-' + it.id + '" style="display:none;">'
+                    + '<div class="ate-q-voidbox-hint"><i class="fa fa-info-circle"></i> 作廢＝這一條不算數（不列入待處理與批圖溝通中），'
+                    +   '但<b>內容與回覆都會留著、照樣查得到</b>。按錯了可以「取消作廢」救回來。</div>'
+                    + '<input type="text" class="form-control" id="ate-q-voidrsn-' + it.id + '" maxlength="500" '
+                    +   'placeholder="請填寫作廢原因（必填，例如：重複輸入／打錯訂單／已改用其他紀錄）" '
+                    +   'onkeydown="ateQVoidKeyDown(event,' + it.id + ')">'
+                    + '<div class="ate-q-voiderr" id="ate-q-voiderr-' + it.id + '"></div>'
+                    + '<button type="button" class="btn btn-xs btn-danger-o" onclick="ateQVoid(' + it.id + ')"><i class="fa fa-ban"></i> 確認作廢</button>'
+                    + '<button type="button" class="btn btn-xs btn-default" onclick="ateQToggleVoidBox(' + it.id + ')">取消</button>'
+                    + '</div>';
+            }
+            return '<div class="ate-q-item' + (voidView ? ' ate-q-item-voided' : '') + '">'
+                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + noteBadge + voidBadge + targetSpan
                 + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + ' 提出</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
+                + voidInfo
                 + repliesHtml
                 + (actions ? '<div class="ate-q-item-actions">' + actions + '</div>' : '')
                 + replyBoxHtml
+                + voidBoxHtml
                 + '</div>';
         }
 
         function ateQToggleReplyBox(itemId) { $('#ate-q-replybox-' + itemId).toggle(); }
+
+        /* ── 作廢／取消作廢（2026-10-12 使用者拍板：不做刪除，改成作廢並保留紀錄）─────── */
+        function ateQToggleVoidBox(itemId) {
+            var $b = $('#ate-q-voidbox-' + itemId);
+            $b.toggle();
+            if ($b.is(':visible')) { $('#ate-q-voiderr-' + itemId).text(''); $('#ate-q-voidrsn-' + itemId).focus(); }
+        }
+        function ateQVoidKeyDown(e, itemId) {
+            if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); ateQVoid(itemId); }
+        }
+        function ateQVoid(itemId) {
+            var $in = $('#ate-q-voidrsn-' + itemId), rsn = $.trim($in.val());
+            // 前端即時擋一次並講明原因（ai-rules/08 表單三總則），不要等按下去才被後端打回來
+            if (!rsn) { $('#ate-q-voiderr-' + itemId).text('請填寫作廢原因'); $in.addClass('has-err').focus(); return; }
+            $('#ate-q-voiderr-' + itemId).text(''); $in.removeClass('has-err');
+            $.post('', { action: 'ate_q_void', log_id: ATE_Q.logId, id: itemId, reason: rsn }, function(res) {
+                if (!res || !res.success) { $('#ate-q-voiderr-' + itemId).text((res && res.message) || '作廢失敗'); return; }
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                // 剛作廢完把那一區展開，使用者看得到它跑去哪裡了（不然會以為被刪掉了）。
+                // ateQOpen() 每次都會把 showVoided 歸零，所以用一個一次性旗標帶過去。
+                ATE_Q._keepVoidOpen = true;
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
+            }, 'json').fail(function() { $('#ate-q-voiderr-' + itemId).text('作廢失敗，請重試'); });
+        }
+        function ateQUnvoid(itemId) {
+            if (!confirm('確定要取消作廢嗎？\n\n這一條會回到正常紀錄，重新列入待處理與批圖溝通中的統計。')) return;
+            $.post('', { action: 'ate_q_unvoid', log_id: ATE_Q.logId, id: itemId }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '取消作廢失敗'); return; }
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
+            }, 'json').fail(function() { showToast('取消作廢失敗，請重試'); });
+        }
 
         /** 回覆方式按鈕列（使用者交辦：電話／Line／E-mail…，預設電話，其他方式管理員可增加）。
          *  選項一律即時取自 ATE_Q.channels（由 eng_log_channel 查來，管理員改了馬上生效，
@@ -15784,6 +15991,15 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>批圖溝通中</b>。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
     <li><b>備註（PS）＝已經處理完成的紀錄，不是在等人回覆的問題</b>（2026-10-12 起）：所以備註那幾條<b>不會有「回覆」「已處理」按鈕</b>，建立當下狀態就是「已處理」。要的是「要問某個對象、等他回覆」請不要勾備註。</li>
+    <li><b>打錯了怎麼辦？用「作廢」，系統沒有刪除</b>（2026-10-12 起）：這些是品質追溯紀錄，刪掉就查不回來了，所以<b>一律不提供刪除</b>（管理員也沒有）。
+        <ul>
+            <li><b>誰能按</b>：<b>建立那一條的人本人</b>（不需要任何額外角色）；要作廢<b>他人</b>寫的，需要角色勾選「作廢他人的設計備註問答紀錄」。
+                ※ 2026-10-12 以前的舊紀錄系統沒有記是誰建立的，那些只有具上述權限的人作廢得掉。</li>
+            <li><b>一定要填作廢原因</b>，而且原因、作廢的人、作廢時間都會印在那一條上面。</li>
+            <li><b>作廢後資料完全保留、照樣查得到</b>：收在問答跳窗最下面的「已作廢 N 筆」，點一下展開就看得到內容與回覆；只是不再列入待處理數、「批圖溝通中」與清單上的預覽文字。</li>
+            <li><b>按錯可以「取消作廢」救回來。</b></li>
+            <li>訂單<b>轉生管超過一天（已凍結）</b>之後本人就不能再作廢了，要請具「作廢他人紀錄」權限的人處理（那個權限不受凍結限制，否則凍結後的錯誤紀錄會永遠清不掉）。</li>
+        </ul></li>
     <li><b>對象按鈕可以增減</b>（2026-10-12 起）：新增區標題列右側的<b>【⚙ 對象設定】</b>可以新增／改名／調順序／停用對象按鈕（需角色勾選「維護設計備註問答的『對象』選項」才看得到）。
         <ul>
             <li><b>挑選方式</b>決定選了這個對象之後要怎麼指定人／公司：<b>公司人員</b>＝從清單挑、<b>廠商／客戶</b>＝搜尋主檔、<b>自行輸入</b>＝打一段說明文字、<b>不必再選</b>＝對象就是這個名稱本身（<b>BOSS</b> 就是這一種，點一下就選好，不必再挑人）。</li>

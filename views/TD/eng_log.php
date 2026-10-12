@@ -161,11 +161,19 @@ $openId = (int)($_GET['id'] ?? 0);
         .chip-done  { background:#E4F6F1; border-color:#B9E5DA; color:#0e8c73; }
         .chip-close { background:#F1F3F5; border-color:#E1E5EA; color:#8A94A0; }
         .chip-warn  { background:#FAF7FC; border-color:#E2D5EC; color:#7E5E95; }
+        /* 已作廢（2026-10-12）：操作入口在訂單追蹤的設計備註問答，本頁只標示 */
+        .chip-void  { background:#DD5138; border-color:#C4452F; color:#fff; }
 
         /* ── 問題項：一條一個區塊（回覆會越積越多，表格列裝不下） ── */
         .qitem { border-top:1px solid #F1F3F5; padding:12px 14px; }
         .qitem:first-child { border-top:none; }
         .qitem.is-done { background:#FAFBFC; }
+        /* 已作廢的整條淡化＋問題文字刪除線，一眼看得出「這條不算數」；內容仍完整保留 */
+        .qitem.is-void { background:#FAF8F5; opacity:.78; }
+        .qitem.is-void .qtext { text-decoration:line-through; color:#8a7f6e; }
+        .q-voidinfo { font-size:11.5px; color:#8a4b12; background:#FBEAE4; border:1px solid #E8BCA9;
+            border-radius:3px; padding:3px 8px; margin:5px 0 0 38px; display:flex; align-items:baseline; gap:6px; }
+        .q-voidinfo .q-voidwho { margin-left:auto; color:#998a6e; white-space:nowrap; font-size:10.5px; }
         /* 欄位順序（使用者指定）：編號 → 狀態 → 日期 → 對象 → 問題 → ⋯
            狀態·日期·對象靠在問題左邊，一眼看得完，不要一個在左一個在右 */
         .qhead { display:grid; grid-template-columns:28px 100px 96px 200px minmax(0,1fr) 96px 30px;
@@ -1443,6 +1451,7 @@ function orderItems(items) {
 function buildItemBlock(d, it, canWrite, inline) {
     var $q = $('<div class="qitem">').addClass(it.status === 'resolved' || it.status === 'dropped' ? 'is-done' : '')
         .addClass(it.parent_item_id ? 'is-child' : '')
+        .addClass(it.voided_at ? 'is-void' : '')
         .attr('data-item', it.id);
     /* 欄位順序（使用者指定）：編號 → 狀態 → 日期 → 對象 → 問題 → ⋯
        狀態·日期·對象擠在一起放在問題前面，一眼就看得完，不要散在兩端。 */
@@ -1456,6 +1465,12 @@ function buildItemBlock(d, it, canWrite, inline) {
     } else if (it.status === 'answered') $s.append($('<span class="chip chip-done">').text('已回覆'));
     else if (it.status === 'resolved') $s.append($('<span class="chip chip-close">').text('已解決'));
     else $s.append($('<span class="chip chip-close">').text('不處理'));
+    // 已作廢（2026-10-12）：這一條被宣告不算數、不列入任何統計，但紀錄保留照樣查得到。
+    // 作廢／取消作廢的操作入口在訂單追蹤的「設計備註問答」跳窗，本頁只負責標示出來，
+    // 不然在這裡看會以為它還是一條正常的紀錄。
+    if (it.voided_at) {
+        $s.append($('<span class="chip chip-void" title="已作廢：不列入任何統計，紀錄保留">').text('已作廢'));
+    }
     $h.append($s);
 
     $h.append($('<span class="qdate">').text(it.asked_at ? dispDate(it.asked_at) : ''));
@@ -1497,6 +1512,16 @@ function buildItemBlock(d, it, canWrite, inline) {
     }
     $h.append($a);
     $q.append($h);
+
+    // 作廢原因（2026-10-12）：誰、何時、為什麼一定要印出來，不然事後沒人知道這一條為什麼
+    // 被作廢，等於又變成一條看不懂的紀錄
+    if (it.voided_at) {
+        $q.append($('<div class="q-voidinfo">')
+            .append($('<b>').text('作廢原因：'))
+            .append(document.createTextNode(it.void_reason || '（未填）'))
+            .append($('<span class="q-voidwho">').text(
+                (it.voided_by_name || '') + ' ・ ' + dispDate(String(it.voided_at).substring(0, 10)))));
+    }
 
     var $r = $('<div class="qreplies">');
     $.each(it.replies || [], function (j, rp) {

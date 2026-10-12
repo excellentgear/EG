@@ -158,8 +158,11 @@ if ($action === 'filter_options') {
 if ($action === 'stats') {
     [$vs, $vp] = el_visible_sql($P);
     $def = el_default_follow_up_days();
-    $waiting = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting')";
+    // 已作廢（voided_at IS NOT NULL）一律不算待回覆／逾期（2026-10-12）：被宣告不算數的
+    // 一條不該讓案件一直掛在待處理，否則畫面上會出現「說有待回覆、點進去卻只有一條作廢的」。
+    $waiting = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting' AND i.voided_at IS NULL)";
     $overdue = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting'
+                    AND i.voided_at IS NULL
                     AND i.asked_at IS NOT NULL
                     AND i.asked_at <= DATE_SUB(CURDATE(), INTERVAL COALESCE(i.follow_up_days,{$def}) DAY))";
     $sql = "SELECT
@@ -226,8 +229,10 @@ if ($action === 'list') {
     // 快捷篩選（過期／待處理／本週到期／未連結料號）
     $quick = trim((string)($_GET['quick'] ?? ''));
     $def = el_default_follow_up_days();
-    $waitingExists = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting')";
+    // 已作廢一律不算待回覆／逾期（與上面 stats 同一套條件，兩邊不可走鐘）
+    $waitingExists = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting' AND i.voided_at IS NULL)";
     $overdueExists = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting'
+                          AND i.voided_at IS NULL
                           AND i.asked_at IS NOT NULL
                           AND i.asked_at <= DATE_SUB(CURDATE(), INTERVAL COALESCE(i.follow_up_days,{$def}) DAY))";
     if     ($quick === 'open')     { $where[] = "t.status='open'"; }
@@ -250,10 +255,10 @@ if ($action === 'list') {
     $lim = $per > 0 ? ' LIMIT ' . (($page - 1) * $per) . ',' . $per : '';
     $st = $db->prepare("
         SELECT t.*, u.user_cname AS owner_name,
-               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id) AS item_cnt,
-               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.status IN ('answered','resolved')) AS item_done,
-               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting') AS item_wait,
-               (SELECT MIN(i.asked_at) FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting') AS oldest_wait,
+               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.voided_at IS NULL) AS item_cnt,
+               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.voided_at IS NULL AND i.status IN ('answered','resolved')) AS item_done,
+               (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.voided_at IS NULL AND i.status='waiting') AS item_wait,
+               (SELECT MIN(i.asked_at) FROM eng_log_item i WHERE i.log_id=t.id AND i.voided_at IS NULL AND i.status='waiting') AS oldest_wait,
                (SELECT COUNT(*) FROM eng_log_index x WHERE x.log_id=t.id
                   AND (x.part_d_id IS NOT NULL OR x.customer_id IS NOT NULL OR x.maker_id_no IS NOT NULL)) AS part_cnt
         FROM eng_log t LEFT JOIN `user` u ON u.id = t.user_id
@@ -315,7 +320,11 @@ if ($action === 'get') {
     $st->execute([$id]);
     $binds = $st->fetchAll(PDO::FETCH_ASSOC);
 
-    $st = $db->prepare("SELECT * FROM eng_log_item WHERE log_id=? ORDER BY seq, id");
+    // voided_by 是 user.id，畫面要印「誰作廢的」所以在這裡一次 JOIN 出來，
+    // 不要讓前端逐條再問一次（2026-10-12）
+    $st = $db->prepare("SELECT i.*, vu.user_cname AS voided_by_name FROM eng_log_item i
+                        LEFT JOIN `user` vu ON vu.id = i.voided_by
+                        WHERE i.log_id=? ORDER BY i.seq, i.id");
     $st->execute([$id]);
     $items = $st->fetchAll(PDO::FETCH_ASSOC);
 
