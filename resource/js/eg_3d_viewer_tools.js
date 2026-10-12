@@ -1474,7 +1474,7 @@ var EG3DTools = (function () {
             return -1;
         }
         function _other(ei, node) { return edges[ei][0] === node ? edges[ei][1] : edges[ei][0]; }
-        var loops = [];
+        var closedPaths = [], openPaths = [];
         for (var si = 0; si < edges.length; si++) {
             if (used[si]) continue;
             used[si] = 1;
@@ -1497,17 +1497,57 @@ var EG3DTools = (function () {
                 }
             }
             if (path.length < 3) continue;
-            if (!closed) {
-                // 容錯：網格本身有破洞時會留下開放鏈。頭尾已經很接近就視同閉合補起來；
-                // 真的缺一大段的寧可不畫，也不要硬填出一塊形狀是錯的實心面。
-                var p0 = nodes[path[0]], pn = nodes[path[path.length-1]];
-                var gap = _dist3(p0, pn), span = 0;
-                for (var pi = 1; pi < path.length; pi++) span += _dist3(nodes[path[pi-1]], nodes[path[pi]]);
-                if (gap > Math.max(tol*20, span*0.05)) continue;
-            }
-            loops.push(path.map(function (id) { return nodes[id].slice(); }));
+            (closed ? closedPaths : openPaths).push(path);
         }
-        return loops;
+        // ── 輪廓縫合（contour healing）────────────────────────────────────────
+        // ★ 2026-10-12 使用者回報「剖面拉到某個地方時會有問題，但過去後又沒事」。
+        //   實測那支長件（LSPS160501，70×70×422mm）在 X48%／Y50%／Y76% 斷面**整個消失**，
+        //   相鄰 2% 的位置卻完全正常。查出來不是破一大塊，而是 CAD 轉網格時留下的微小裂縫：
+        //   兩段開放弧的端點只相距 0.009～0.038mm，而上面的焊接容差是 0.0086mm——就差這麼
+        //   一點點配不起來，整圈輪廓被切成兩段開放弧，舊邏輯對開放弧一律丟棄，斷面就整個
+        //   不見了。單純把焊接容差調大並不安全（會把真正相鄰的細微特徵焊在一起），所以改
+        //   成多一道縫合：**只對「已經斷掉的那幾個端點」**反覆找最近的一對接起來，容差放寬
+        //   到輪廓尺度的千分之一（這支件約 0.43mm，遠大於裂縫、又遠小於任何真實特徵）。
+        //   縫合之後仍然閉不起來的（真的缺一大段）才丟棄——寧可少畫，也不要憑空補出一塊
+        //   形狀錯誤的實心面。
+        var stitchTol = Math.max(tol * 50, diag * 0.001);
+        var mergedAny = true;
+        while (mergedAny && openPaths.length > 1) {
+            mergedAny = false;
+            var bi = -1, bj = -1, bRev = false, bd = Infinity;
+            for (var i = 0; i < openPaths.length; i++) {
+                var tailI = nodes[openPaths[i][openPaths[i].length-1]];
+                for (var j = 0; j < openPaths.length; j++) {
+                    if (i === j) continue;
+                    var dHead = _dist3(tailI, nodes[openPaths[j][0]]);
+                    if (dHead < bd) { bd = dHead; bi = i; bj = j; bRev = false; }
+                    var dTail = _dist3(tailI, nodes[openPaths[j][openPaths[j].length-1]]);
+                    if (dTail < bd) { bd = dTail; bi = i; bj = j; bRev = true; }
+                }
+            }
+            if (bi >= 0 && bd <= stitchTol) {
+                var add = openPaths[bj].slice();
+                if (bRev) add.reverse();
+                if (_dist3(nodes[openPaths[bi][openPaths[bi].length-1]], nodes[add[0]]) <= stitchTol) add.shift();
+                openPaths[bi] = openPaths[bi].concat(add);
+                openPaths.splice(bj, 1);
+                mergedAny = true;
+            }
+        }
+        openPaths.forEach(function (p) {
+            if (p.length < 3) return;
+            var gap = _dist3(nodes[p[0]], nodes[p[p.length-1]]);
+            if (gap <= stitchTol) { closedPaths.push(p); return; }
+            // 最後退路：縫合之後仍然閉不起來，但缺口相對於這條弧自己的長度很小（<5%）時
+            // 仍視同閉合直接拉一條弦補上。缺口佔比太大的才真的丟棄——那種情況硬補會生出
+            // 一塊形狀完全錯誤的實心面，比少畫更糟。
+            var span = 0;
+            for (var pi = 1; pi < p.length; pi++) span += _dist3(nodes[p[pi-1]], nodes[p[pi]]);
+            if (gap <= span * 0.05) closedPaths.push(p);
+        });
+        return closedPaths.map(function (p) {
+            return p.map(function (id) { return nodes[id].slice(); });
+        });
     }
     function _loop3dTo2d(loop3d, basis) {
         return loop3d.map(function (p) {
