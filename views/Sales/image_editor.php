@@ -8474,7 +8474,7 @@ include __DIR__ . '/_gear_tool_ui.php';
     .lr-pair-total-dtot { flex:0 0 auto; width:190px; }
     .lr-pair-total-summary { flex:1; min-width:170px; }
     .lr-pair-total-h { font-size:11px; font-weight:700; color:#5a3410; margin-bottom:4px; }
-    .lr-pair-total-body { display:flex; flex-direction:column; gap:3px; font-size:10.5px; color:#555; }
+    .lr-pair-total-body { display:grid; grid-template-columns:1fr 1fr; gap:3px 14px; font-size:10.5px; color:#555; }
     .lr-pair-total-row { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
     .lr-pair-total .lr-warn, .lr-pair-total .lr-verify-badge { margin-top:4px; }
     #lr-add-row-btn { margin-top:2px; }
