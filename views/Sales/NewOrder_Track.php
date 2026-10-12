@@ -1761,6 +1761,12 @@ $OT_PAGE_FEATURES = [
     ['group'=>'設計與批圖',   'code'=>'ot_master_edit',          'label'=>'前往料號主檔編輯按鈕'],
     ['group'=>'計算工具',     'code'=>'ot_gear_calc',            'label'=>'齒輪計算'],
     ['group'=>'計算工具',     'code'=>'ot_keyway_calc',          'label'=>'鍵槽計算'],
+    // 2026-10-12 新增：砂輪干涉 3D 模擬（齒輪計算「出尾計算」的 3D 版本，可旋轉、含砂輪傾角）
+    // 獨立頁面 views/TD/grind_interference_3d.php；元件 views/Sales/_grind3d_tool_ui.php。
+    // 刻意登記在這個群組、不另開模組與角色：使用者與齒輪計算完全重疊，另開一套只會讓
+    // 管理員要在兩個地方各指派一次（判定見 src/common/grind3d_tool_lib.php，已有
+    // ot_gear_calc 者自動具備，所以這一列是給「只要 3D、不要 2D 計算」的人用的）。
+    ['group'=>'計算工具',     'code'=>'ot_grind3d',              'label'=>'砂輪干涉3D（出尾與肩部干涉模擬）'],
     // 2026-09-22 新增：訂單分析（views/Sales/Order_Analysis.php，獨立頁面）
     // 本頁只多一顆開啟按鈕，其餘一行都不動（使用者明確要求「嚴禁影響現有使用者」）。
     ['group'=>'訂單分析',     'code'=>'ot_analysis',             'label'=>'訂單分析（新訂單／趨勢／全製單製／數量區間／客戶與料號排名）'],
