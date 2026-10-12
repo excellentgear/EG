@@ -27246,6 +27246,23 @@ $(function() {
             setTimeout(function() { openPartModal(autoId); }, 500);
         }
 
+        // ?open_attach=<d_id 整數>：自動定位到該筆料號主檔並開啟「附件」跳窗（唯讀 bom_viewer.php
+        // 的「前往編輯附件」按鈕、批圖編輯器存檔後「確認舊版」都走這個深連結，2026-10-12 使用者交辦）。
+        // 附件跳窗本身既有的權限判斷（新增/刪除/改標籤各自看 CAN_PART_ATTACH）完全不變，這裡只是
+        // 省掉使用者自己打字搜尋的那一步，看不看得到編輯鈕仍由本頁權限決定。
+        var autoAttach = parseInt(params.get('open_attach') || '0', 10);
+        if (autoAttach > 0) {
+            setTimeout(function() {
+                api({ action: 'get_part', d_id: autoAttach }).done(function(r) {
+                    if (r && r.success && r.data) {
+                        openAttachAllView(autoAttach, r.data.D_Setting_Id || '');
+                    } else {
+                        showToast((r && r.message) || '找不到這筆料號主檔', 'error');
+                    }
+                });
+            }, 500);
+        }
+
         // ?view_customer=<客戶代碼>：以唯讀方式直接開啟該客戶檢視跳窗
         // （給訂單分析等其他頁面用新跳窗連進來看，不吃 CAN_UPDATE 權限，只看不改；
         //   側欄／頂欄／清單已經在 <head> 用 CSS 藏起來，這裡不需要再切分頁）
