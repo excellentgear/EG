@@ -1233,6 +1233,111 @@ switch ($action) {
         echo json_encode(['success'=>true,'data'=>eg_pasm_find_candidates($pdo, $names)], JSON_UNESCAPED_UNICODE);
         exit;
 
+    // ── 上傳 Pack and Go 的 ZIP：一次把組合檔與全部零件收進來，清單上只多一列 ──────
+    // 使用者拍板「兩種都做」：這是其一（另一種是前端一次多選檔案，走既有的 upload）。
+    // Pack and Go 會自動把組合用到的檔案全部抓齊，現場只要選一個 ZIP，不會漏傳。
+    case 'upload_assembly_zip':
+        header('Content-Type: application/json; charset=utf-8');
+        $dId = intval($_POST['d_id'] ?? 0);
+        $catIds = trim((string)($_POST['category_ids'] ?? ''));
+        if (!$dId)    { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
+        if (!$catIds) { echo json_encode(['success'=>false,'message'=>'請至少選擇一個附件類別標籤']); exit; }   // 鐵律8 附件標籤
+        if (!class_exists('ZipArchive')) { echo json_encode(['success'=>false,'message'=>'伺服器未啟用 ZIP 支援，請改用「一次選多個檔」上傳']); exit; }
+        if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) { echo json_encode(['success'=>false,'message'=>'上傳失敗']); exit; }
+        if (strtolower(pathinfo(basename($_FILES['file']['name']), PATHINFO_EXTENSION)) !== 'zip') {
+            echo json_encode(['success'=>false,'message'=>'請選擇 Inventor「Pack and Go」打包出來的 ZIP']); exit;
+        }
+        $base = getPartAttachBase($pdo);
+        if (!$base) { echo json_encode(['success'=>false,'message'=>'尚未設定儲存路徑']); exit; }
+        $dir = rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $dId . DIRECTORY_SEPARATOR;
+        if (!is_dir($dir) && !mkdir($dir, 0777, true)) { echo json_encode(['success'=>false,'message'=>'無法建立目錄']); exit; }
+        require_once __DIR__ . '/../common/part_assembly_lib.php';
+        require_once __DIR__ . '/../common/inventor_preview_lib.php';
+
+        $zip = new ZipArchive();
+        if ($zip->open($_FILES['file']['tmp_name']) !== true) { echo json_encode(['success'=>false,'message'=>'ZIP 讀取失敗']); exit; }
+        // 只收 .iam/.ipt；Pack and Go 會一併打包 OldVersions、工程圖等用不到的東西，一律略過
+        $picked = [];   // 原始檔名 => 解壓後的暫存路徑
+        $tmpDir = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'eg_asmzip_' . bin2hex(random_bytes(6));
+        @mkdir($tmpDir, 0777, true);
+        for ($zi = 0; $zi < $zip->numFiles; $zi++) {
+            $st0 = $zip->statIndex($zi);
+            if (!$st0 || substr($st0['name'], -1) === '/') continue;
+            $bn  = eg_inventor_safe_basename(basename(str_replace('\\', '/', $st0['name'])));
+            $ex0 = strtolower(pathinfo($bn, PATHINFO_EXTENSION));
+            if (!in_array($ex0, EG_INVENTOR_COMPONENT_EXTS, true)) continue;
+            if (stripos(str_replace('\\', '/', $st0['name']), 'OldVersions/') !== false) continue;   // 舊版備份資料夾
+            if (isset($picked[$bn])) continue;
+            $dst = $tmpDir . DIRECTORY_SEPARATOR . $bn;
+            $src = $zip->getStream($st0['name']);
+            if (!$src) continue;
+            $fh = @fopen($dst, 'wb');
+            if ($fh) { stream_copy_to_stream($src, $fh); fclose($fh); $picked[$bn] = $dst; }
+            fclose($src);
+        }
+        $zip->close();
+        $iams = array_values(array_filter(array_keys($picked), function ($n) { return strtolower(pathinfo($n, PATHINFO_EXTENSION)) === 'iam'; }));
+        if (!$iams) {
+            foreach ($picked as $f) @unlink($f); @rmdir($tmpDir);
+            echo json_encode(['success'=>false,'message'=>'這個 ZIP 裡沒有組合檔（.iam）']); exit;
+        }
+        // 哪一個是「主組合」：子組合一定會被別的 .iam 參照到（檔名字串會出現在對方檔案內容裡，
+        // UTF-16LE 或 ASCII 兩種都掃），沒有被任何人參照的那個就是最上層。找不出唯一答案時
+        // 退回「檔名與 ZIP 同名」，再不行就取第一個——並把判定結果回報給畫面，讓人看得出來。
+        $rootName = '';
+        if (count($iams) === 1) { $rootName = $iams[0]; }
+        else {
+            $contents = [];
+            foreach ($iams as $n) $contents[$n] = (string)@file_get_contents($picked[$n]);
+            $roots = [];
+            foreach ($iams as $n) {
+                $referenced = false;
+                foreach ($iams as $m) {
+                    if ($m === $n) continue;
+                    $u16 = @iconv('UTF-8', 'UTF-16LE', $n);
+                    if (strpos($contents[$m], $n) !== false || ($u16 && strpos($contents[$m], $u16) !== false)) { $referenced = true; break; }
+                }
+                if (!$referenced) $roots[] = $n;
+            }
+            if (count($roots) === 1) $rootName = $roots[0];
+            if ($rootName === '') {
+                $zipBase = pathinfo(basename($_FILES['file']['name']), PATHINFO_FILENAME);
+                foreach ($iams as $n) { if (pathinfo($n, PATHINFO_FILENAME) === $zipBase) { $rootName = $n; break; } }
+            }
+            if ($rootName === '') $rootName = $iams[0];
+        }
+        // 落地：主組合先寫，零件接著寫，再把零件關聯到主組合
+        $mk = function (string $origName, string $srcPath) use ($pdo, $dir, $dId, $catIds, $uploadedByName, $uploadedById) {
+            $ex = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+            $fn = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ex;
+            if (!@copy($srcPath, $dir . $fn)) return 0;
+            $sz = @filesize($dir . $fn);
+            $szs = $sz ? (($sz >= 1048576) ? round($sz / 1048576, 1) . ' MB' : round($sz / 1024, 1) . ' KB') : null;
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,file_size,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?)")
+                ->execute([$dId, $fn, $origName, $catIds, $szs, $uploadedByName, $uploadedById]);
+            return (int)$pdo->lastInsertId();
+        };
+        $rootId = $mk($rootName, $picked[$rootName]);
+        if (!$rootId) {
+            foreach ($picked as $f) @unlink($f); @rmdir($tmpDir);
+            echo json_encode(['success'=>false,'message'=>'組合檔寫入失敗']); exit;
+        }
+        $compIds = [];
+        foreach ($picked as $nm2 => $fp2) {
+            if ($nm2 === $rootName) continue;
+            $cid2 = $mk($nm2, $fp2);
+            if ($cid2) $compIds[] = $cid2;
+        }
+        if ($compIds) eg_pasm_link($pdo, $rootId, $compIds, $uploadedByName, $uploadedById);
+        foreach ($picked as $f) @unlink($f); @rmdir($tmpDir);
+        // 背景預轉檔，使用者點開預覽時多半已經轉好（轉一次要 9~10 秒）
+        eg_inventor_preview_trigger_async($pdo, $dir . (string)$pdo->query("SELECT filename FROM part_attachments WHERE id=$rootId")->fetchColumn(),
+                                          partInventorCompanions($pdo, $dId, '', $rootId), $rootName);
+        echo json_encode(['success'=>true,'assembly_id'=>$rootId,'assembly_name'=>$rootName,
+                          'component_count'=>count($compIds),
+                          'picked'=>array_keys($picked)], JSON_UNESCAPED_UNICODE);
+        exit;
+
     case 'assembly_search':   // 到全站搜尋可以當零件的 Inventor 檔（.ipt/.iam），供「管理零件」加入
         header('Content-Type: application/json; charset=utf-8');
         $kw = trim((string)($_POST['kw'] ?? $_GET['kw'] ?? ''));

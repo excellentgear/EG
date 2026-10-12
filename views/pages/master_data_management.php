@@ -11610,6 +11610,39 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
   </div>
 </div>
 
+<!-- 上傳組合圖（2026-10-12）：兩種入口都提供（使用者拍板「兩種都做」）-->
+<div id="pavAsmUpMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:8px;width:92%;max-width:620px;max-height:86vh;overflow:auto;padding:16px 20px;box-shadow:0 6px 28px rgba(0,0,0,.35);font-size:13px;">
+    <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:10px;">
+      <h4 style="margin:0;color:#8A5A2B;"><i class="fa fa-cubes"></i> 上傳組合圖</h4>
+      <button type="button" class="btn btn-default btn-xs" style="margin-left:auto;" onclick="document.getElementById('pavAsmUpMask').style.display='none';">關閉</button>
+    </div>
+    <div style="background:#FBEEDC;border:1px solid #E6B77A;color:#7A4A12;border-radius:4px;padding:6px 10px;margin-bottom:10px;line-height:1.6;">
+      組合檔（.iam）本身只是一張「用到哪些零件」的清單，零件形狀在各自的 .ipt 裡，<b>只傳組合檔會是空白的</b>。
+      用下面任一種方式把零件一起帶進來，<b>零件會自動收進組合那一列，不會在附件清單上平鋪一堆</b>。<br>
+      零件如果已經在<b>別的料號</b>上傳過，不必再傳——上傳完用「管理零件」指過去就好。
+    </div>
+    <div style="margin-bottom:8px;">
+      <div style="font-weight:bold;color:#8A5A2B;margin-bottom:3px;">附件類別標籤（必選）</div>
+      <div id="pavAsmUpCats" style="display:flex;flex-wrap:wrap;gap:4px 10px;"></div>
+    </div>
+    <div style="border:1px solid #eee;border-radius:5px;padding:10px;margin-bottom:8px;">
+      <div style="font-weight:bold;color:#8A5A2B;">方式一：Inventor「Pack and Go」打包的 ZIP（最不會漏傳）</div>
+      <div style="color:#888;margin:2px 0 6px;">在 Inventor 開啟組合 → 檔案 → 另存 → Pack and Go → 壓縮成單一 ZIP。</div>
+      <input type="file" id="pavAsmUpZip" accept=".zip">
+    </div>
+    <div style="border:1px solid #eee;border-radius:5px;padding:10px;margin-bottom:10px;">
+      <div style="font-weight:bold;color:#8A5A2B;">方式二：一次多選「組合檔＋全部零件檔」</div>
+      <div style="color:#888;margin:2px 0 6px;">按住 Ctrl 複選 .iam 與它用到的 .ipt；系統會自動認出哪一個是組合檔。</div>
+      <input type="file" id="pavAsmUpFiles" accept=".iam,.ipt" multiple>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;border-top:1px solid #eee;padding-top:10px;">
+      <span id="pavAsmUpMsg" style="flex:1;color:#888;"></span>
+      <button type="button" id="pavAsmUpBtn" class="btn btn-success btn-sm" onclick="pavAsmUploadGo()"><i class="fa fa-upload"></i> 開始上傳</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="partAttachViewModal" tabindex="-1">
 <div class="modal-dialog" style="width:1000px;max-width:97vw;margin:20px auto;"><div class="modal-content" style="height:82vh;display:flex;flex-direction:column;">
 <div class="modal-header" style="background:linear-gradient(135deg,#1a5276,#2980b9);flex-shrink:0;padding:8px 14px;display:flex;align-items:center;gap:8px;">
@@ -11650,6 +11683,9 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <span class="btn btn-xs btn-primary" style="padding:1px 6px;"><i class="fa fa-upload"></i></span>
                 <input type="file" id="pav-upload-input" style="display:none;" multiple onchange="openPartAttachUploadFromView(this)">
             </label>
+            <!-- 組合圖專用上傳（2026-10-12 使用者交辦）：Pack and Go 的 ZIP，或一次多選組合檔＋零件檔。
+                 零件會自動收進組合那一列，不會在清單上平鋪一堆（唯一關聯實作見 part_assembly_lib.php）-->
+            <button type="button" class="btn btn-xs btn-warning" style="padding:1px 6px;margin-left:2px;" title="上傳組合圖（.iam）與它用到的零件檔" onclick="pavAsmUploadOpen()"><i class="fa fa-cubes"></i></button>
             <?php endif; ?>
         </div>
         <div id="pav-file-list" style="flex:1;overflow-y:auto;padding:4px 0;">
@@ -23021,6 +23057,83 @@ $(document).on('click', '#pav-btn-3d-color-reset', function() {
 // 使用者的兩個實際問題：①零件全部上傳會讓料號底下多出一堆附件 ②某些零件本來就是別的
 // 料號、早就各自上傳過，不該再傳一次。所以這裡一律「只建關聯、不複製檔」（唯一實作見
 // src/common/part_assembly_lib.php），零件在它自己的料號底下仍然是獨立附件、不受影響。
+// ── 上傳組合圖（2026-10-12 使用者拍板「兩種都做」）──────────────────────────
+// 方式一：Pack and Go 的 ZIP，整包丟給後端解壓（action=upload_assembly_zip）。
+// 方式二：一次多選組合檔＋零件檔，走既有的 upload 逐檔上傳，再把零件關聯到組合。
+// 兩條路最後的結果完全一樣：零件收進組合那一列、不在附件清單上平鋪。
+function pavAsmUploadOpen() {
+    var box = document.getElementById('pavAsmUpCats');
+    var cats = (_attachCatsCache || []).filter(function (c) { return !c.is_deleted; });
+    box.innerHTML = cats.map(function (c) {
+        return '<label style="cursor:pointer;white-space:nowrap;"><input type="checkbox" class="pav-asmup-cat" value="' + c.id + '"> ' + escHtml(c.category_name) + '</label>';
+    }).join('') || '<span style="color:#999;">沒有可選的標籤</span>';
+    document.getElementById('pavAsmUpZip').value = '';
+    document.getElementById('pavAsmUpFiles').value = '';
+    document.getElementById('pavAsmUpMsg').textContent = '';
+    document.getElementById('pavAsmUpMask').style.display = 'flex';
+}
+function pavAsmUploadGo() {
+    var cats = $('.pav-asmup-cat:checked').map(function () { return this.value; }).get();
+    var msg  = document.getElementById('pavAsmUpMsg');
+    if (!cats.length) { msg.textContent = '請至少選擇一個附件類別標籤'; return; }
+    // 送出時一律直讀 input.files（本機環境 change 事件會被吃掉，見記憶 file_upload_change_event）
+    var zipF  = document.getElementById('pavAsmUpZip').files[0] || null;
+    var multi = Array.from(document.getElementById('pavAsmUpFiles').files || []);
+    if (!zipF && !multi.length) { msg.textContent = '請選擇 ZIP 或多選組合檔與零件檔'; return; }
+    var btn = document.getElementById('pavAsmUpBtn');
+    btn.disabled = true;
+    if (zipF) {
+        msg.textContent = '上傳並解壓中…';
+        var fd = new FormData();
+        fd.append('action', 'upload_assembly_zip');
+        fd.append('d_id', _pav.dId);
+        fd.append('category_ids', cats.join(','));
+        fd.append('file', zipF);
+        $.ajax({ url: PART_ATTACH_API_URL, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+            .done(function (r) {
+                btn.disabled = false;
+                if (!r || !r.success) { msg.textContent = (r && r.message) || '上傳失敗'; return; }
+                msg.textContent = '完成：組合「' + r.assembly_name + '」＋ ' + r.component_count + ' 個零件';
+                document.getElementById('pavAsmUpMask').style.display = 'none';
+                _pavLoadFiles(function () { _pavAsmRefreshList(); });
+            })
+            .fail(function () { btn.disabled = false; msg.textContent = '上傳失敗'; });
+        return;
+    }
+    // 方式二：逐檔上傳，再把零件關聯到組合
+    var iamIdx = multi.findIndex(function (f) { return /\.iam$/i.test(f.name); });
+    if (iamIdx < 0) { btn.disabled = false; msg.textContent = '選取的檔案裡沒有組合檔（.iam）'; return; }
+    var ids = [], done = 0;
+    function upOne(i, cb) {
+        var fd2 = new FormData();
+        fd2.append('action', 'upload');
+        fd2.append('d_id', _pav.dId);
+        fd2.append('category_ids', cats.join(','));
+        fd2.append('file', multi[i]);
+        $.ajax({ url: PART_ATTACH_API_URL, type: 'POST', data: fd2, processData: false, contentType: false, dataType: 'json' })
+            .done(function (r) { ids[i] = (r && r.success) ? r.id : 0; cb(); })
+            .fail(function () { ids[i] = 0; cb(); });
+    }
+    (function next(i) {
+        if (i >= multi.length) {
+            var asmId = ids[iamIdx];
+            if (!asmId) { btn.disabled = false; msg.textContent = '組合檔上傳失敗'; return; }
+            var comps = ids.filter(function (v, k) { return v && k !== iamIdx; });
+            if (!comps.length) { finish(0); return; }
+            $.post(PART_ATTACH_API_URL, { action: 'assembly_link', assembly_id: asmId, component_ids: JSON.stringify(comps) },
+                function (r) { finish(r && r.linked ? r.linked : 0); }, 'json').fail(function () { finish(0); });
+            return;
+        }
+        msg.textContent = '上傳中… (' + (i + 1) + '/' + multi.length + ')';
+        upOne(i, function () { done++; next(i + 1); });
+    })(0);
+    function finish(linked) {
+        btn.disabled = false;
+        document.getElementById('pavAsmUpMask').style.display = 'none';
+        _pavLoadFiles(function () { _pavAsmRefreshList(); });
+    }
+}
+
 /** 重新套用目前分頁的篩選並重畫清單（規則與 pavSwitchTab 同一套，不另寫第二份判斷） */
 function _pavAsmRefreshList() {
     var btn = document.querySelector('.pav-tab.active');
