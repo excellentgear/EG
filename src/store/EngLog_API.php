@@ -100,6 +100,11 @@ if ($action === 'bootstrap') {
             'visibility'   => el_visibility(),
             'channels'     => el_channels($db),
             'channels_all' => el_channels($db, true),
+            // 問題項「對象」（2026-10-12 起改成管理員可維護的 eng_log_target，唯一實作
+            // el_item_target_meta()）：targets＝目前可選的，targets_all＝連停用的也含，
+            // 顯示舊紀錄一定要用 _all，否則停用之後舊資料的對象會變成空白。
+            'targets'      => el_item_target_meta($db, false),
+            'targets_all'  => el_item_target_meta($db, true),
             'log_types'    => el_log_types(),
             'log_types_active' => el_log_types_active(),
             'auto_type'    => ['return'=>'return', 'order'=>'drawing'],

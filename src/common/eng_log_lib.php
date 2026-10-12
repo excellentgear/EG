@@ -52,12 +52,101 @@ function el_item_status(): array {
 }
 
 /**
- * 問題項「對象」型別 → 顯示名稱（2026-10-06 新增 other，供訂單追蹤設計備註問答的
- * 按鈕式選擇器使用；customer/maker/user 一律要挑清單、other 一律手動輸入說明文字，
- * 唯一實作見下方 el_item_upsert() 的驗證邏輯，呼叫端不要自己另判一套）。
+ * 問題項「對象」的**挑選方式**（pick_mode）→ 設定畫面的說明文字。
+ *
+ * 這一欄決定使用者選了這個對象之後，畫面要長出什麼樣的挑選介面，也決定
+ * el_item_upsert() 要用哪一套驗證規則（唯一實作，呼叫端不要自己另判一套）：
+ *   user     ＝ 從公司人員清單挑（存 user.id）
+ *   maker    ＝ 打字搜尋廠商主檔（存 maker_id_no，可再填聯絡人）
+ *   customer ＝ 打字搜尋客戶主檔（存 customer_id，可再填聯絡人）
+ *   text     ＝ 沒有清單可挑，自行輸入說明文字（存 target_label）
+ *   fixed    ＝ 不必再選，對象就是這個名稱本身（例如 BOSS）
  */
-function el_item_target_types(): array {
-    return ['user' => '業務', 'maker' => '廠商', 'customer' => '客戶', 'other' => '其他'];
+function el_item_target_picks(): array {
+    return [
+        'user'     => '公司人員（從清單挑選）',
+        'maker'    => '廠商（搜尋廠商主檔）',
+        'customer' => '客戶（搜尋客戶主檔）',
+        'text'     => '自行輸入說明文字',
+        'fixed'    => '不必再選（對象就是這個名稱）',
+    ];
+}
+
+/**
+ * 內建／預設的「對象」選項（第一次建表時種進 eng_log_target）。
+ *
+ * is_builtin=1 的四種**不可刪除、挑選方式不可更改**——它們各自對應不同的挑選 UI 與
+ * 驗證規則，而且既有紀錄的 target_type 存的就是這些 code，改掉會全部對不到；名稱與
+ * 排序倒是可以改（顯示用，不影響既有資料）。
+ * boss（BOSS）是 2026-10-12 使用者交辦新增的，刻意不設 builtin＝沒人用到時可以刪掉。
+ */
+function el_item_target_defaults(): array {
+    return [
+        ['code' => 'user',     'name' => '業務', 'pick' => 'user',     'sort' => 10, 'builtin' => 1],
+        ['code' => 'maker',    'name' => '廠商', 'pick' => 'maker',    'sort' => 20, 'builtin' => 1],
+        ['code' => 'customer', 'name' => '客戶', 'pick' => 'customer', 'sort' => 30, 'builtin' => 1],
+        ['code' => 'other',    'name' => '其他', 'pick' => 'text',     'sort' => 40, 'builtin' => 1],
+        ['code' => 'boss',     'name' => 'BOSS', 'pick' => 'fixed',    'sort' => 50, 'builtin' => 0],
+    ];
+}
+
+/**
+ * 問題項「對象」的完整設定（設定畫面用）。
+ * @return array 每列 [id, code, name, pick_mode, sort_order, is_active, is_builtin]
+ */
+function el_item_target_rows(PDO $db): array {
+    try {
+        return $db->query("SELECT id, code, name, pick_mode, sort_order, is_active, is_builtin
+                           FROM eng_log_target ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 問題項「對象」型別 → [name, pick]（**唯一實作**，前後端一律由這裡取，不要在任何地方
+ * 另外寫一份 ['user'=>'業務','maker'=>'廠商',…] 的對照表——那份寫死的表在管理員改名或
+ * 新增對象之後會繼續顯示舊內容，而且完全不會報錯，鐵律4）。
+ *
+ * ※ $db 給 null 時一律退回內建預設值，**絕對不可以回空陣列**：el_channels() 當年就是
+ *   「沒給 $db 就回空陣列」，害 el_reply_add() 的白名單檢查永遠失敗、channel 整欄被清成
+ *   空字串而且不報錯（見該函式註解），同一個坑不要再踩第二次。
+ *
+ * @param bool $all true＝連停用的也回（顯示舊紀錄一定要用這個，否則停用之後舊資料會變空白）
+ *                  false＝只回啟用中的（給「現在可以選哪些」用）
+ */
+function el_item_target_meta(PDO $db = null, bool $all = true): array {
+    static $cache = [];
+    // 快取鍵帶上 epoch：管理員存完設定會呼叫 el_item_target_cache_clear() 把 epoch +1，
+    // 同一個 request 內後面的查詢就會重新去撈，不會吃到存檔前的舊清單。
+    $key = ($all ? 'all' : 'act') . '#' . (int)($GLOBALS['__el_target_cache_epoch'] ?? 0);
+    if ($db === null) {
+        $out = [];
+        foreach (el_item_target_defaults() as $d) $out[$d['code']] = ['name' => $d['name'], 'pick' => $d['pick']];
+        return $out;
+    }
+    if (isset($cache[$key])) return $cache[$key];
+    $out = [];
+    try {
+        $sql = "SELECT code, name, pick_mode FROM eng_log_target"
+             . ($all ? '' : " WHERE is_active=1") . " ORDER BY sort_order, id";
+        foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[$r['code']] = ['name' => $r['name'], 'pick' => $r['pick_mode']];
+        }
+    } catch (Throwable $e) {}
+    if (!$out) foreach (el_item_target_defaults() as $d) $out[$d['code']] = ['name' => $d['name'], 'pick' => $d['pick']];
+    return $cache[$key] = $out;
+}
+
+/** 問題項「對象」型別 → 顯示名稱（薄包裝，見 el_item_target_meta()）。 */
+function el_item_target_types(PDO $db = null, bool $all = true): array {
+    $out = [];
+    foreach (el_item_target_meta($db, $all) as $code => $m) $out[$code] = $m['name'];
+    return $out;
+}
+
+/** 清掉 el_item_target_meta() 的請求內快取（管理員存完設定後要呼叫，否則同一個 request
+ *  內後面的查詢仍然吃到存檔前的舊清單——與 dqa_excl_map() 踩過的同一種坑）。 */
+function el_item_target_cache_clear(): void {
+    $GLOBALS['__el_target_cache_epoch'] = (int)($GLOBALS['__el_target_cache_epoch'] ?? 0) + 1;
 }
 
 function el_log_status(): array {
@@ -277,6 +366,30 @@ function el_ensure_schema(PDO $db): void
             $i = 0;
             foreach (['phone' => '電話', 'email' => 'Mail', 'line' => 'Line', 'onsite' => '現場',
                       'meeting' => '會議', 'other' => '其他'] as $c => $n) $ins->execute([$c, $n, $i++]);
+        }
+    } catch (Throwable $e) {}
+
+    /* 問題項「對象」選項（2026-10-12 使用者交辦：原本是寫死的業務/廠商/客戶/其他四種，
+       管理員沒辦法增減）：改成資料表驅動，唯一實作見 el_item_target_meta()。
+       code 存進 eng_log_item.target_type（VARCHAR(10)），建立後不再更動。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS eng_log_target (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(10) NOT NULL COMMENT '存進 eng_log_item.target_type 的值，建立後不再更動',
+        name VARCHAR(40) NOT NULL COMMENT '顯示名稱，改名不影響既有紀錄',
+        pick_mode VARCHAR(10) NOT NULL DEFAULT 'fixed' COMMENT '挑選方式，見 el_item_target_picks()',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT NOT NULL DEFAULT 1 COMMENT '0=停用（既有紀錄照樣顯示，只是不再出現在按鈕列）',
+        is_builtin TINYINT NOT NULL DEFAULT 0 COMMENT '1=內建四種，不可刪除、挑選方式不可改',
+        created_at DATETIME NULL,
+        UNIQUE KEY uq_code (code)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工程處理紀錄 問題項對象選項'");
+    try {
+        if ((int)$db->query("SELECT COUNT(*) FROM eng_log_target")->fetchColumn() === 0) {
+            $ins = $db->prepare("INSERT INTO eng_log_target (code, name, pick_mode, sort_order, is_active, is_builtin, created_at)
+                                 VALUES (?,?,?,?,1,?,NOW())");
+            foreach (el_item_target_defaults() as $d) {
+                $ins->execute([$d['code'], $d['name'], $d['pick'], $d['sort'], $d['builtin']]);
+            }
         }
     } catch (Throwable $e) {}
 
@@ -870,16 +983,29 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
 {
     $q = trim((string)($in['question'] ?? ''));
     if ($q === '') throw new InvalidArgumentException('請填寫問題內容');
+    // 對象型別一律對 eng_log_target 現況驗證（唯一實作 el_item_target_meta()）。
+    // 這裡刻意用 $all=true（連停用的也認）：管理員把某個對象停用之後，舊紀錄還是要改得動，
+    // 用「只認啟用中」會在編輯舊項目時安靜地把對象清成空白。要擋「現在不能再選」是前端
+    // 按鈕列的事（只列啟用中的），不是這裡。
+    $tmeta = el_item_target_meta($db, true);
     $tt = trim((string)($in['target_type'] ?? ''));
-    if (!array_key_exists($tt, el_item_target_types())) $tt = null;
+    if (!isset($tmeta[$tt])) $tt = null;
+    $pick = $tt !== null ? (string)$tmeta[$tt]['pick'] : '';
     $ti = trim((string)($in['target_id'] ?? ''));
     $tl = trim((string)($in['target_label'] ?? ''));
     $tc = trim((string)($in['target_contact'] ?? ''));
     $tp = trim((string)($in['target_post'] ?? ''));
-    // other＝手動輸入說明文字，沒有清單可挑，要求的是 target_label 不是 target_id；
-    // 其餘（customer/maker/user）一律要從候選清單選到，只打名字日後對方改名就對不到了
-    if ($tt === 'other') {
-        if ($tl === '') throw new InvalidArgumentException('請輸入「其他」對象的說明文字');
+    // 驗證依「挑選方式」分流（不是依 code 寫死，否則管理員新增的對象永遠走不到正確規則）：
+    //   fixed ＝不必再選，對象就是這個名稱本身；target_label 一律由伺服器蓋成**當下的名稱**
+    //           （存成快照，日後管理員改名不會回頭改掉舊紀錄），target_id 存 code
+    //   text  ＝沒有清單可挑，要求的是 target_label 不是 target_id
+    //   其餘  ＝一律要從候選清單選到，只打名字日後對方改名就對不到了
+    if ($pick === 'fixed') {
+        $tl = (string)$tmeta[$tt]['name'];
+        $ti = (string)$tt;
+        $tc = '';
+    } elseif ($pick === 'text') {
+        if ($tl === '') throw new InvalidArgumentException('請輸入「' . $tmeta[$tt]['name'] . '」對象的說明文字');
     } elseif ($tt !== null && $ti === '') {
         throw new InvalidArgumentException('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
     }
@@ -898,11 +1024,16 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
         $cur = $st->fetch(PDO::FETCH_ASSOC);
         if (!$cur) throw new InvalidArgumentException('查無此問題項，請重新整理');
         $resend = ((string)$cur['asked_at'] !== (string)$asked || (string)$cur['follow_up_days'] !== (string)$fud) ? 0 : (int)$cur['remind_sent'];
+        // 備註（is_note=1）本身就是「已經處理完成的紀錄」不是待回覆的問題（2026-10-12 使用者
+        // 明確定義），所以改成備註的當下一併把還掛在待回覆／已回覆的狀態收成已解決；
+        // 已經是 resolved/dropped 的不動（dropped 是刻意標的「不處理」，不要被蓋掉）。
+        $status = (string)$cur['status'];
+        if ($isNote && ($status === 'waiting' || $status === 'answered')) $status = 'resolved';
         $db->prepare("UPDATE eng_log_item SET question=?, target_type=?, target_id=?, target_label=?,
                       target_post=?, target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?,
-                      is_note=?, updated_at=? WHERE id=?")
+                      is_note=?, status=?, updated_at=? WHERE id=?")
            ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl), ($tp === '' ? null : $tp),
-                      ($tc === '' ? null : $tc), $asked, $fud, $resend, $isNote, $now, $itemId]);
+                      ($tc === '' ? null : $tc), $asked, $fud, $resend, $isNote, $status, $now, $itemId]);
         return $itemId;
     }
 
@@ -914,12 +1045,17 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
         $pc->execute([$parent, $logId]);
         if (!$pc->fetchColumn()) throw new InvalidArgumentException('要延伸的那一條問題不存在，請重新整理');
     }
+    // 備註（is_note=1）建立當下就是 resolved：它本身就是「已經處理完成」的紀錄，不是在等人
+    // 回覆的問題（2026-10-12 使用者定義）——所以畫面上不給它「回覆／已處理」那幾顆按鈕，
+    // 狀態留在 waiting 會變成一條永遠卡在待回覆、又沒有按鈕可以結掉的死紀錄。
+    // ※ 這不影響任何統計：待處理計數（el_order_open_exists_sql／el_order_item_summary）與
+    //   催回覆提醒（el_process_due_reminders）本來就都有 is_note=0 條件。
     $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
                   target_label, target_post, target_contact, is_note, asked_at, status, follow_up_days, remind_sent, created_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?, 0, ?)")
        ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
                   ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc), $isNote,
-                  $asked, $fud, $now]);
+                  $asked, ($isNote ? 'resolved' : 'waiting'), $fud, $now]);
     return (int)$db->lastInsertId();
 }
 

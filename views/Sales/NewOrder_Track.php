@@ -1650,6 +1650,8 @@ $can_as_tag_setting        = false;
 // 「標記已處理／代填任何對象」另外指派專屬角色，與舊有 ot_design_note（只決定舊 textarea 能不能打字）脫鉤。
 $can_design_qa             = $can_update;
 $can_design_qa_resolve     = false;
+// 維護「對象」選項（2026-10-12）：全新功能，舊制沒有對應權限碼，一律預設關閉
+$can_design_qa_target      = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1782,6 +1784,11 @@ $OT_PAGE_FEATURES = [
     // （新增問題／回覆）沿用上面的 ot_edit；這裡只新增「標記已處理」的設計身分門檻，
     // 刻意與 ot_design_note（舊 textarea 能不能打字）分開，不自動套用在既有「設計」角色上。
     ['group'=>'設計與批圖',   'code'=>'ot_design_note_resolve',  'label'=>'設計備註問題（標記已處理／代填任何對象）'],
+    // 2026-10-12 使用者回報「對象目前好像無法讓管理員增減」：對象選項已改成資料表驅動
+    // （eng_log_target，唯一實作 el_item_target_meta()），勾選本項的角色才能在設計備註問答
+    // 跳窗裡新增／改名／排序／停用／刪除那幾顆對象按鈕。**只管「能不能改選項」**，
+    // 填單時選哪一個對象是 ot_edit 的事，看得到這個跳窗的人本來就都選得到。
+    ['group'=>'設計與批圖',   'code'=>'ot_design_note_target',   'label'=>'維護設計備註問答的「對象」選項（新增／改名／排序／停用）'],
     // 2026-10-07 使用者要求：新增/編輯訂單跳窗標題右側新增兩顆標記按鈕，純標記不影響任何既有
     // 流程，效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色。
     ['group'=>'設計與批圖',   'code'=>'ot_need_design_draw',     'label'=>'需設計繪圖按鈕（標記需設計重新繪圖，製程欄下方顯示提示）'],
@@ -1812,6 +1819,7 @@ if ($OT_USE_RBAC) {
     $can_as_tag_setting        = ot_hasF('ot_as_tag_setting');
     $can_design_qa             = $can_update;                   // 新增問題／回覆＝一般編輯門檻（見上方註解）
     $can_design_qa_resolve     = ot_hasF('ot_design_note_resolve');
+    $can_design_qa_target      = ot_hasF('ot_design_note_target');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $can_need_design_draw      = ot_hasF('ot_need_design_draw');
@@ -2044,23 +2052,38 @@ function ot_note_frozen_for_order(PDO $pdo, int $orderId): bool {
 // $isNote＝使用者勾選的「設為備註(PS)」（2026-10-08 新增，與 $targetType===null 的既有
 // 「沒有指定對象」語意分開——PS 既有簡寫維持給「沒有對象」用，備註改標「【備註】」，
 // 避免同一個【PS】標籤混到兩種不同意思（有沒有對象 vs. 算不算問題）。
+// 2026-10-12：對象清單改成管理員可維護（eng_log_target），這裡不再寫死四種對照表——
+// 一律問唯一實作 el_item_target_meta()（含停用的，舊紀錄的對象才不會變成空白）。
+// 查不到 PDO 時 el_item_target_meta(null) 會退回內建預設值，絕不會回空陣列。
+function ot_dn_target_meta(): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    $pdo = $GLOBALS['db'] ?? null;
+    return $m = el_item_target_meta(($pdo instanceof PDO) ? $pdo : null, true);
+}
 function ot_dn_preview_prefix(?string $targetType, ?string $targetLabel, ?string $askedAt = null, bool $isNote = false): string {
-    $map = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
+    $meta = ot_dn_target_meta();
     $datePart = '';
     if ($askedAt) {
         $ts = strtotime($askedAt);
         if ($ts) $datePart = date('n/j', $ts) . ' ';
     }
+    // 「不必再選」(fixed) 的對象（例如 BOSS）名稱本身就是對象，印成「BOSS BOSS」會很蠢，
+    // 只印一次；target_label 是建立當下存下來的名稱快照，管理員事後改名不影響舊紀錄。
+    $fmt = function (string $tt) use ($meta, $targetLabel): string {
+        $name = $meta[$tt]['name'] ?? $tt;
+        $pick = $meta[$tt]['pick'] ?? '';
+        if ($pick === 'fixed') return ($targetLabel !== null && $targetLabel !== '') ? (string)$targetLabel : $name;
+        $label = ($targetLabel !== null && $targetLabel !== '') ? (string)$targetLabel : '（未指定）';
+        if ($pick === 'user' && $label !== '（未指定）') $label = mb_substr($label, -2, 2, 'UTF-8');
+        return $name . ' ' . $label;
+    };
     if ($isNote) {
         if (!$targetType) return $datePart . '【備註】';
-        $label = $targetLabel !== null && $targetLabel !== '' ? (string)$targetLabel : '（未指定）';
-        if ($targetType === 'user' && $label !== '（未指定）') $label = mb_substr($label, -2, 2, 'UTF-8');
-        return $datePart . '【備註｜' . ($map[$targetType] ?? $targetType) . ' ' . $label . '】';
+        return $datePart . '【備註｜' . $fmt($targetType) . '】';
     }
     if (!$targetType) return $datePart . '【PS】';
-    $label = $targetLabel !== null && $targetLabel !== '' ? (string)$targetLabel : '（未指定）';
-    if ($targetType === 'user' && $label !== '（未指定）') $label = mb_substr($label, -2, 2, 'UTF-8');
-    return $datePart . '【' . ($map[$targetType] ?? $targetType) . ' ' . $label . '】';
+    return $datePart . '【' . $fmt($targetType) . '】';
 }
 
 if (isset($_POST['action']) && $_POST['action'] === 'ate_note_done') {
@@ -2283,6 +2306,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         // 自動一起出現，兩邊共用同一張表、同一套函式（鐵律4）。
         echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL, 'kind' => $kind,
             'frozen' => $frozen, 'cur_user' => $curUser,
+            // 對象選項（2026-10-12 起管理員可維護，唯一實作 el_item_target_meta()）：
+            // targets＝現在可以選的（按鈕列用）；targets_all＝連停用的也含（顯示舊紀錄一定要
+            // 用這個，否則某個對象被停用之後，舊資料的對象會整個變成空白）。
+            'targets' => el_item_target_meta($pdo, false), 'targets_all' => el_item_target_meta($pdo, true),
+            'can_target_cfg' => $can_design_qa_target,
             'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
@@ -2419,6 +2447,98 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
         echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+/* ══ 設計備註問答「對象」選項的維護（2026-10-12 使用者交辦：原本四種是寫死的，
+      管理員沒辦法增減）══════════════════════════════════════════════════════
+   資料與驗證的唯一實作在 eng_log_lib.php（eng_log_target 表／el_item_target_* 系列），
+   這裡只負責權限守門與參數檢查。讀取開放給看得到問答跳窗的人（按鈕列本來就要用它），
+   寫入一律要 ot_design_note_target（前端擋一次、這裡同規則再擋一次＝鐵律8）。 */
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_cfg_list') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        echo json_encode(['success' => true, 'rows' => el_item_target_rows($pdo),
+            'picks' => el_item_target_picks(), 'can_edit' => $can_design_qa_target]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_cfg_save') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa_target) throw new Exception('您沒有維護「對象」選項的權限（需角色勾選該功能）');
+        $tid  = (int)($_POST['id'] ?? 0);
+        $name = trim((string)($_POST['name'] ?? ''));
+        if ($name === '') throw new Exception('請填寫名稱');
+        if (mb_strlen($name) > 20) throw new Exception('名稱請控制在 20 字以內（按鈕列塞不下更長的字）');
+        $sort = (int)($_POST['sort_order'] ?? 0);
+        $act  = !empty($_POST['is_active']) ? 1 : 0;
+        $pick = trim((string)($_POST['pick_mode'] ?? ''));
+        if ($tid > 0) {
+            $st = $pdo->prepare("SELECT * FROM eng_log_target WHERE id=?");
+            $st->execute([$tid]);
+            $cur = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$cur) throw new Exception('查無此選項，請重新整理');
+            // 內建四種的挑選方式固定不可改：既有紀錄的填法（存 id 還是存文字）是按當時的
+            // 挑選方式寫進去的，改了之後舊紀錄會變成用錯的規則去解讀
+            if ((int)$cur['is_builtin'] === 1) $pick = (string)$cur['pick_mode'];
+            if (!isset(el_item_target_picks()[$pick])) throw new Exception('挑選方式不正確');
+            // 內建四種不可停用：業務／廠商／客戶／其他是既有填單一定會用到的四種，
+            // 停用會讓所有人突然少掉按鈕；要少用請自行排到後面
+            if ((int)$cur['is_builtin'] === 1) $act = 1;
+            $pdo->prepare("UPDATE eng_log_target SET name=?, pick_mode=?, sort_order=?, is_active=? WHERE id=?")
+                ->execute([$name, $pick, $sort, $act, $tid]);
+        } else {
+            if (!isset(el_item_target_picks()[$pick])) throw new Exception('挑選方式不正確');
+            // code 存進 eng_log_item.target_type（VARCHAR(10)），建立後不再更動；沒指定就自動產生
+            $code = strtolower(trim((string)($_POST['code'] ?? '')));
+            if ($code === '') $code = 't' . substr(bin2hex(random_bytes(4)), 0, 6);
+            if (!preg_match('/^[a-z0-9_]{1,10}$/', $code)) throw new Exception('代碼只能用小寫英數字與底線，最多 10 個字元');
+            $chk = $pdo->prepare("SELECT 1 FROM eng_log_target WHERE code=?");
+            $chk->execute([$code]);
+            if ($chk->fetchColumn()) throw new Exception('這個代碼已經存在，請換一個');
+            $pdo->prepare("INSERT INTO eng_log_target (code, name, pick_mode, sort_order, is_active, is_builtin, created_at)
+                           VALUES (?,?,?,?,?,0,NOW())")->execute([$code, $name, $pick, $sort, $act]);
+            $tid = (int)$pdo->lastInsertId();
+        }
+        el_item_target_cache_clear();
+        echo json_encode(['success' => true, 'id' => $tid, 'rows' => el_item_target_rows($pdo),
+            'targets' => el_item_target_meta($pdo, false), 'targets_all' => el_item_target_meta($pdo, true)]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_cfg_delete') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa_target) throw new Exception('您沒有維護「對象」選項的權限（需角色勾選該功能）');
+        $tid = (int)($_POST['id'] ?? 0);
+        $st = $pdo->prepare("SELECT code, name, is_builtin FROM eng_log_target WHERE id=?");
+        $st->execute([$tid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) throw new Exception('查無此選項，請重新整理');
+        if ((int)$row['is_builtin'] === 1) throw new Exception('「' . $row['name'] . '」是內建選項不可刪除，如果不想用請排到最後面');
+        // 已經被用過的不給硬刪，否則那些紀錄的對象會變成查不到的孤兒；改建議停用
+        $u = $pdo->prepare("SELECT COUNT(*) FROM eng_log_item WHERE target_type=?");
+        $u->execute([$row['code']]);
+        $used = (int)$u->fetchColumn();
+        if ($used > 0) {
+            throw new Exception('「' . $row['name'] . '」已經被 ' . $used . ' 筆紀錄使用中，不能刪除。請改成「停用」，既有紀錄才不會變成空白。');
+        }
+        $pdo->prepare("DELETE FROM eng_log_target WHERE id=?")->execute([$tid]);
+        el_item_target_cache_clear();
+        echo json_encode(['success' => true, 'rows' => el_item_target_rows($pdo),
+            'targets' => el_item_target_meta($pdo, false), 'targets_all' => el_item_target_meta($pdo, true)]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -3493,9 +3613,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         $_procOpen = $_procRow ? (int)$_procRow['open_count'] : 0;
                         if ($_procRow || (!empty($order['pmGet_formatted']) && $can_design_qa)):
                             if ($_procRow):
-                                $_procTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
+                                // 對象名稱一律問 ot_dn_target_meta()（唯一實作），不寫死對照表
+                                $_procTMap = ot_dn_target_meta();
                                 $_procTT = $_procRow['target_type'];
-                                $_procPrefix = $_procTT ? ('【回報：' . ($_procTMap[$_procTT] ?? $_procTT) . ' ' . (string)$_procRow['target_label'] . '】') : '【PS】';
+                                $_procTName = $_procTT ? ((string)($_procTMap[$_procTT]['name'] ?? $_procTT)) : '';
+                                // fixed（不必再選，例如 BOSS）的名稱本身就是對象，不要印兩次
+                                $_procPrefix = !$_procTT ? '【PS】'
+                                    : (($_procTMap[$_procTT]['pick'] ?? '') === 'fixed'
+                                        ? ('【回報：' . ((string)$_procRow['target_label'] !== '' ? (string)$_procRow['target_label'] : $_procTName) . '】')
+                                        : ('【回報：' . $_procTName . ' ' . (string)$_procRow['target_label'] . '】'));
                                 $_procTitle = '製程中紀錄' . ($_procOpen > 0 ? '（' . $_procOpen . ' 筆未處理）' : '（已完成，可查看）') . '：' . $_procPrefix . (string)$_procRow['question'];
                                 $_procCss = $_procOpen > 0
                                     ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
@@ -4313,6 +4439,40 @@ foreach($dCounts as $c) {
         .ate-tp-cpick-item { margin-left:6px; color:#337ab7; cursor:pointer; }
         .ate-tp-cpick-item:hover { text-decoration:underline; }
         .ate-tp-other input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
+        /* 「不必再選」(fixed) 的對象（例如 BOSS）：對象就是這個名稱本身，用跟廠商/客戶挑選
+           結果不同的淺色 chip 區分開，避免使用者以為自己還沒挑完 */
+        .ate-tp-fixed-chip { background:#F1E8D9; border-color:#D8CBB8; color:#6b5638; }
+
+        /* ── 對象設定（2026-10-12 使用者交辦：原本四種對象是寫死的，管理員沒辦法增減）──
+           刻意**不是** Bootstrap modal：它要疊在 #ate-q-modal 上面，而 Bootstrap 3 的
+           hideModal() 會無條件拿掉 body 的 modal-open，第二層一關底下那層就 overflow:hidden
+           捲不動（見記憶 modal-width-convention 的 CAR 事故）。用自己的固定定位覆蓋層最單純。
+           寬度一律固定像素，不用 vw（同一份記憶的第一條）。 */
+        .ate-tcfg-mask { display:none; position:fixed; inset:0; z-index:20060; background:rgba(0,0,0,.45); }
+        .ate-tcfg-mask.on { display:flex; align-items:flex-start; justify-content:center; }
+        .ate-tcfg-box { background:#fff; border-radius:5px; width:720px; max-width:96%; margin-top:6vh;
+            box-shadow:0 6px 24px rgba(0,0,0,.3); display:flex; flex-direction:column; max-height:84vh; }
+        .ate-tcfg-head { background:#8a5a2b; color:#fff; padding:8px 12px; border-radius:5px 5px 0 0;
+            font-size:14px; display:flex; align-items:center; }
+        .ate-tcfg-head .cls { margin-left:auto; cursor:pointer; font-size:18px; line-height:1; opacity:.85; }
+        .ate-tcfg-head .cls:hover { opacity:1; }
+        .ate-tcfg-body { padding:12px; overflow-y:auto; }
+        .ate-tcfg-foot { padding:8px 12px; border-top:1px solid #eee; text-align:right; }
+        .ate-tcfg-note { background:#FDF1E3; border:1px solid #E8D9C3; color:#6b5638; border-radius:4px;
+            padding:7px 10px; font-size:12px; line-height:1.7; margin-bottom:10px; }
+        table.ate-tcfg-tb { width:100%; font-size:12px; }
+        table.ate-tcfg-tb th { background:#F1E8D9; color:#6b5638; font-weight:700; padding:4px 6px;
+            border-bottom:1px solid #D8CBB8; white-space:nowrap; }
+        table.ate-tcfg-tb td { padding:4px 6px; border-bottom:1px solid #F3EFE6; vertical-align:middle; }
+        table.ate-tcfg-tb input[type=text] { width:100%; font-size:12px; height:28px; padding:2px 6px; }
+        table.ate-tcfg-tb input.sort { width:62px; text-align:center; }
+        table.ate-tcfg-tb select { width:100%; font-size:12px; height:28px; }
+        .ate-tcfg-builtin { font-size:10px; color:#998a6e; background:#F3EFE6; border-radius:3px;
+            padding:1px 5px; margin-left:4px; line-height:16px; display:inline-block; }
+        .ate-tcfg-add { margin-top:10px; border-top:1px dashed #D8CBB8; padding-top:10px; }
+        .ate-tcfg-add-title { font-size:12px; font-weight:700; color:#8a4b12; margin-bottom:5px; }
+        .ate-q-tcfg-link { float:right; font-size:11px; font-weight:400; color:#8a5a2b; }
+        .ate-q-tcfg-link:hover { color:#DD6B2C; text-decoration:underline; }
 
         /* 設計備註凍結提示（2026-10-06） */
         .ate-q-frozen-banner { background:#F1E8D9; border:1px solid #D8CBB8; color:#6b5638;
@@ -8882,7 +9042,24 @@ foreach($dCounts as $c) {
         var ATE_Q = { orderId: 0, logId: 0, kind: 'note', frozen: false, curUser: null, canResolve: false,
                       bizDefault: null, items: [], rows: [],
                       cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {}, tpAllowSelf: {},
-                      tpNoteToggle: {}, channels: {}, replyChannel: {} };
+                      tpNoteToggle: {}, channels: {}, replyChannel: {},
+                      // 對象選項（2026-10-12 起由管理員維護的 eng_log_target 而來，見 ate_q_list）：
+                      // targets＝現在可以選的（按鈕列用）；targetsAll＝連停用的也含（顯示舊紀錄
+                      // 一定要用這個，不然某個對象被停用之後舊資料的對象會變成空白）。
+                      targets: {}, targetsAll: {}, canTargetCfg: false };
+
+        /** 對象 code → 挑選方式／顯示名稱（**全站唯一來源就是 ATE_Q.targetsAll**，
+         *  絕對不要再寫 { user:'業務', maker:'廠商', … } 這種寫死的對照表——管理員改名或
+         *  新增對象之後那份表會繼續顯示舊內容而且完全不報錯，鐵律4）。
+         *  'self'（本人快選）是前端自己的虛擬選項、不會存進 target_type，所以單獨處理。 */
+        function ateQTargetPick(code) {
+            if (code === 'self') return 'self';
+            var m = ATE_Q.targetsAll[code]; return m ? (m.pick || '') : '';
+        }
+        function ateQTargetName(code) {
+            if (code === 'self') return '本人';
+            var m = ATE_Q.targetsAll[code]; return m ? (m.name || code) : (code || '');
+        }
 
         // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）與設計備註問答是兩個分開的
         // eng_log 案件，但共用同一套跳窗與互動邏輯（打字→選對象→多題→多輪回覆→標記已處理），
@@ -8929,6 +9106,9 @@ foreach($dCounts as $c) {
                 ATE_Q.items = res.items || [];
                 ATE_Q.replyState = {};
                 ATE_Q.channels = res.channels || {};
+                ATE_Q.targets = res.targets || {};
+                ATE_Q.targetsAll = res.targets_all || res.targets || {};
+                ATE_Q.canTargetCfg = !!res.can_target_cfg;
                 ATE_Q.replyChannel = {};   // 每次重新打開都退回預設（電話），不沿用上一次開啟時選過的
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
@@ -8955,9 +9135,12 @@ foreach($dCounts as $c) {
 
         function ateQTargetLabel(it) {
             if (!it.target_type) return 'PS';   // 純備註前端簡寫（使用者要求，舊資料仍可能有）
-            var map = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
-            var base = (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
-            if ((it.target_type === 'customer' || it.target_type === 'maker') && it.target_contact) base += '（' + it.target_contact + '）';
+            var pick = ateQTargetPick(it.target_type);
+            // 「不必再選」(fixed) 的對象（例如 BOSS）名稱本身就是對象，印成「BOSS：BOSS」很蠢，
+            // 只印一次；target_label 是建立當下的名稱快照，管理員事後改名不動舊紀錄。
+            if (pick === 'fixed') return it.target_label || ateQTargetName(it.target_type);
+            var base = ateQTargetName(it.target_type) + '：' + (it.target_label || '（未指定）');
+            if ((pick === 'customer' || pick === 'maker') && it.target_contact) base += '（' + it.target_contact + '）';
             // 製程中紀錄的「對象」語意是誰回報這件事，不是問給誰（2026-10-06 使用者更正），
             // 加「回報：」前綴避免跟設計備註問答的語意混淆；設計備註(note)完全不受影響。
             if (ATE_Q.kind === 'process') base = '回報：' + base;
@@ -9014,8 +9197,13 @@ foreach($dCounts as $c) {
             // 設計備註已凍結時（kind==='note' && ATE_Q.frozen）唯讀：不給回覆/標記已處理，
             // 也不渲染回覆框（鐵律8，後端已同規則再擋一次，這裡只是避免使用者點了才被打臉）。
             var frozenView = (ATE_Q.kind === 'note' && ATE_Q.frozen);
-            var actions = frozenView ? '' : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
-            if (!frozenView && ATE_Q.canResolve) {
+            // 備註（is_note=1）本身就是「已經處理完成」的紀錄，不是在等人回覆的問題
+            // （2026-10-12 使用者明確定義），所以不給回覆／已處理／退回待回覆這三顆按鈕——
+            // 它建立當下就是 resolved（見 el_item_upsert()），不需要也不該再被結一次或退回。
+            var noteView = !!it.is_note;
+            var actions = (frozenView || noteView) ? ''
+                : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
+            if (!frozenView && !noteView && ATE_Q.canResolve) {
                 actions += (it.status === 'resolved' || it.status === 'dropped')
                     ? '<button type="button" class="ate-q-btn" onclick="ateQResolve(' + it.id + ',\'waiting\')">退回待回覆</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
@@ -9024,7 +9212,9 @@ foreach($dCounts as $c) {
             var askedTxt = it.asked_at ? (typeof egFmtDate === 'function' ? egFmtDate(it.asked_at) : it.asked_at) : '';
             var rns = 'reply' + it.id;
             var replyBoxHtml = '';
-            if (!frozenView) {
+            // 備註沒有「回覆」按鈕，連回覆框都不要渲染（渲染了也永遠打不開，只是白白多一組
+            // 對象選擇器的狀態與 DOM）
+            if (!frozenView && !noteView) {
                 if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
                 // allowSelf=true：note 的 ATE_Q.curUser 是 null，按鈕自然不會出現（鐵律：
                 // 嚴禁影響現有使用者），process 才會真的多出「本人」快選鈕。
@@ -9106,11 +9296,13 @@ foreach($dCounts as $c) {
             // 「本人」直接用姓名，不加「本人：」前綴──事後回頭看紀錄時，這段文字只是給人看
             // 是誰回覆的，直接印姓名最清楚，「本人」兩個字脫離當下情境後反而看不懂是誰。
             if (st.target_type === 'self') return st.target_label || '';
-            var map = { user: '業務', maker: '廠商', customer: '客戶', other: '其他' };
+            var pick = ateQTargetPick(st.target_type);
+            // fixed（例如 BOSS）名稱本身就是對象，只印一次
+            if (pick === 'fixed') return st.target_label || ateQTargetName(st.target_type);
             var extra = '';
-            if (st.target_type === 'user' && st.target_post) extra = st.target_post;
-            if ((st.target_type === 'customer' || st.target_type === 'maker') && st.target_contact) extra = st.target_contact;
-            var s = (map[st.target_type] || st.target_type) + '：' + (st.target_label || '');
+            if (pick === 'user' && st.target_post) extra = st.target_post;
+            if ((pick === 'customer' || pick === 'maker') && st.target_contact) extra = st.target_contact;
+            var s = ateQTargetName(st.target_type) + '：' + (st.target_label || '');
             if (extra) s += '（' + extra + '）';
             return s;
         }
@@ -9141,9 +9333,11 @@ foreach($dCounts as $c) {
         // （這題本來有指定對象就用那個，沒有才退回打單人員），跟「填完回覆再勾已處理」共用同一支
         // ate_q_reply（resolve=1），不另開一條更新路徑。
         function ateQAutoResolveNote(st) {
-            var map = { user: '業務', maker: '廠商', customer: '客戶', other: '其他' };
-            var typeLabel = (st && st.target_type) ? (map[st.target_type] || st.target_type) : '';
+            var tt = (st && st.target_type) ? st.target_type : '';
+            var typeLabel = tt ? ateQTargetName(tt) : '';
             var name = (st && st.target_label) ? st.target_label : '';
+            // fixed（例如 BOSS）名稱本身就是對象，「BOSSBOSS 已處理完成」會很怪
+            if (tt && ateQTargetPick(tt) === 'fixed') { name = name || typeLabel; typeLabel = ''; }
             var who = (typeLabel + name) || '（未指定對象）';
             var today = ATE_Q.today || '', md = '';
             if (today.length >= 10) md = parseInt(today.substring(5, 7), 10) + '/' + parseInt(today.substring(8, 10), 10);
@@ -9189,7 +9383,16 @@ foreach($dCounts as $c) {
         }
 
         function ateQTpButtonsHtml(ns, st, allowSelf, noteToggle) {
-            var opts = [['user', '業務'], ['maker', '廠商'], ['customer', '客戶'], ['other', '其他']];
+            // 按鈕一律由 ATE_Q.targets（管理員維護的 eng_log_target，只含啟用中的、照設定的
+            // 排序）產生，不再寫死四種（2026-10-12 使用者要求可以增減對象）。
+            var opts = [];
+            $.each(ATE_Q.targets, function(code, m) { opts.push([code, m.name]); });
+            // 目前已經選到的對象萬一已被停用（舊紀錄回覆時會遇到），仍要讓它出現在按鈕列並
+            // 保持選取，不然畫面會看起來「明明有對象卻一個按鈕都沒亮」
+            if (st.target_type && st.target_type !== 'self'
+                && !opts.some(function(o) { return o[0] === st.target_type; })) {
+                opts.push([st.target_type, ateQTargetName(st.target_type) + '（已停用）']);
+            }
             if (allowSelf && ATE_Q.curUser) opts = [['self', '本人']].concat(opts);
             var html = '<div class="ate-tp-btns">';
             // 備註(PS) 開啟時，對象按鈕不需要可以選，變灰色且不可點（2026-10-08 使用者要求）；
@@ -9231,6 +9434,103 @@ foreach($dCounts as $c) {
             var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
 
+        /* ══ 對象設定（2026-10-12 使用者交辦：對象要能讓管理員增減）═══════════════
+           資料與驗證的唯一實作在後端（eng_log_target／el_item_target_*），這裡只負責畫面。
+           每一列各自「儲存」、按下當下就寫入，與「維護回覆方式」同一種操作方式。 */
+        var ATE_TCFG = { rows: [], picks: {} };
+        function ateQTargetCfgOpen() {
+            if (!ATE_Q.canTargetCfg) { showToast('您沒有維護對象選項的權限'); return; }
+            $.post('', { action: 'ate_q_target_cfg_list' }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '讀取失敗'); return; }
+                ATE_TCFG.rows = res.rows || [];
+                ATE_TCFG.picks = res.picks || {};
+                var np = '';
+                $.each(ATE_TCFG.picks, function(k, v) { np += '<option value="' + escapeHtml(k) + '">' + escapeHtml(v) + '</option>'; });
+                $('#ate-tcfg-npick').html(np).val('fixed');     // 新增最常見的就是「不必再選」這種（BOSS、品管…）
+                $('#ate-tcfg-nname').val('');
+                // 排序預設接在目前最後一個之後，不用使用者自己想一個數字
+                var mx = 0; ATE_TCFG.rows.forEach(function(r) { mx = Math.max(mx, parseInt(r.sort_order, 10) || 0); });
+                $('#ate-tcfg-nsort').val(mx + 10);
+                ateQTargetCfgRender();
+                $('#ate-tcfg-mask').addClass('on');
+            }, 'json').fail(function() { showToast('讀取失敗，請重試'); });
+        }
+        function ateQTargetCfgClose() { $('#ate-tcfg-mask').removeClass('on'); }
+        $(document).on('click', '#ate-tcfg-mask', function(e) { if (e.target === this) ateQTargetCfgClose(); });
+
+        function ateQTargetCfgRender() {
+            var html = '';
+            ATE_TCFG.rows.forEach(function(r) {
+                var builtin = String(r.is_builtin) === '1';
+                var pk = '';
+                $.each(ATE_TCFG.picks, function(k, v) {
+                    pk += '<option value="' + escapeHtml(k) + '"' + (k === r.pick_mode ? ' selected' : '') + '>' + escapeHtml(v) + '</option>';
+                });
+                html += '<tr data-id="' + r.id + '">'
+                    + '<td><input type="text" class="tc-name" maxlength="20" value="' + escapeHtml(r.name || '') + '">'
+                    +   (builtin ? '<span class="ate-tcfg-builtin">內建</span>' : '')
+                    +   '<div style="font-size:10px;color:#b3a78f;margin-top:2px;">代碼 ' + escapeHtml(r.code) + '（建立後不可更改）</div></td>'
+                    // 內建四種的挑選方式反灰：既有紀錄是照當時的挑選方式寫進去的（存 id 還是存文字），
+                    // 改了會讓舊紀錄用錯的規則被解讀（後端同規則再擋一次＝鐵律8）
+                    + '<td><select class="tc-pick"' + (builtin ? ' disabled' : '') + '>' + pk + '</select></td>'
+                    + '<td><input type="text" class="tc-sort sort" value="' + escapeHtml(String(r.sort_order)) + '"></td>'
+                    + '<td style="text-align:center;"><input type="checkbox" class="tc-act"'
+                    +   (String(r.is_active) === '1' ? ' checked' : '') + (builtin ? ' disabled' : '') + '></td>'
+                    + '<td><button type="button" class="btn btn-xs btn-warm" onclick="ateQTargetCfgSave(' + r.id + ')">儲存</button>'
+                    +   (builtin ? '' : ' <button type="button" class="btn btn-xs btn-default" onclick="ateQTargetCfgDelete('
+                                      + r.id + ',\'' + escapeHtml(String(r.name || '')).replace(/'/g, "\\'") + '\')">刪除</button>')
+                    + '</td></tr>';
+            });
+            if (!html) html = '<tr><td colspan="5" class="text-muted" style="font-size:12px;">目前沒有任何對象選項。</td></tr>';
+            $('#ate-tcfg-rows').html(html);
+        }
+
+        /** 存檔／刪除成功後：把最新的對象清單套回 ATE_Q 並重畫問答跳窗，使用者不必關掉
+         *  重開才看得到新按鈕（既有的已填內容不會因此遺失，composer 本來就是整個重繪的）。 */
+        function ateQTargetCfgApply(res) {
+            ATE_TCFG.rows = res.rows || ATE_TCFG.rows;
+            if (res.targets) ATE_Q.targets = res.targets;
+            if (res.targets_all) ATE_Q.targetsAll = res.targets_all;
+            ateQTargetCfgRender();
+            if ($('#ate-q-modal').hasClass('in')) { ateQRenderItems(); ateQRedrawComposer(); }
+        }
+        function ateQTargetCfgSave(id) {
+            var $tr = $('#ate-tcfg-rows tr[data-id="' + id + '"]');
+            if (!$tr.length) return;
+            var name = $.trim($tr.find('.tc-name').val());
+            if (!name) { showToast('請填寫名稱'); $tr.find('.tc-name').focus(); return; }
+            $.post('', { action: 'ate_q_target_cfg_save', id: id, name: name,
+                         pick_mode: $tr.find('.tc-pick').val(),
+                         sort_order: $.trim($tr.find('.tc-sort').val()) || 0,
+                         is_active: $tr.find('.tc-act').is(':checked') ? 1 : 0 }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '儲存失敗'); return; }
+                ateQTargetCfgApply(res);
+                showToast('已儲存');
+            }, 'json').fail(function() { showToast('儲存失敗，請重試'); });
+        }
+        function ateQTargetCfgCreate() {
+            var name = $.trim($('#ate-tcfg-nname').val());
+            if (!name) { showToast('請填寫名稱'); $('#ate-tcfg-nname').focus(); return; }
+            $.post('', { action: 'ate_q_target_cfg_save', id: 0, name: name,
+                         pick_mode: $('#ate-tcfg-npick').val(),
+                         sort_order: $.trim($('#ate-tcfg-nsort').val()) || 0, is_active: 1 }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '新增失敗'); return; }
+                $('#ate-tcfg-nname').val('');
+                var mx = 0; (res.rows || []).forEach(function(r) { mx = Math.max(mx, parseInt(r.sort_order, 10) || 0); });
+                $('#ate-tcfg-nsort').val(mx + 10);
+                ateQTargetCfgApply(res);
+                showToast('已新增「' + name + '」');
+            }, 'json').fail(function() { showToast('新增失敗，請重試'); });
+        }
+        function ateQTargetCfgDelete(id, name) {
+            if (!confirm('確定要刪除對象「' + name + '」嗎？\n\n已經被紀錄用過的不會讓你刪（會改提示你停用）。')) return;
+            $.post('', { action: 'ate_q_target_cfg_delete', id: id }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '刪除失敗'); return; }
+                ateQTargetCfgApply(res);
+                showToast('已刪除');
+            }, 'json').fail(function() { showToast('刪除失敗，請重試'); });
+        }
+
         // 候選清單一律從清單挑（打名字日後對方改名就對不到了），但目前已選定的值萬一不在
         // 候選清單裡（例如業務預設值剛好不屬於業務課、或舊資料的人已離開候選範圍）仍要讓
         // 下拉顯示得出目前選的是誰，不能讓畫面看起來「選了卻又沒選」。
@@ -9254,7 +9554,9 @@ foreach($dCounts as $c) {
             // 備註(PS) 開啟時不需要指定對象，不渲染下拉/搜尋，只留一行灰字說明
             // （2026-10-08 使用者要求：按下備註左側的對象按鈕與下方挑選欄一併變灰、不用選）。
             if (st.is_note) return '<span class="ate-tp-note-hint">備註不需要指定對象</span>';
-            var t = st.target_type;
+            // 2026-10-12：底下一律依「挑選方式」(pick) 分流，不是依 code——管理員新增的對象
+            // code 不會叫 user/maker/customer，寫死 code 的話新對象永遠長不出挑選介面。
+            var t = st.target_type, pick = ateQTargetPick(t);
             if (t === 'self') {
                 // 「本人」是直接帶入目前登入者，不必再挑一次——既不是下拉也不是打字搜尋，
                 // 用獨立的視覺樣式（人形圖示＋「（本人）」字樣）跟廠商/客戶挑選結果明確區分
@@ -9264,11 +9566,11 @@ foreach($dCounts as $c) {
                 return '<div class="ate-tp-picked"><span class="ate-tp-picked-chip ate-tp-self-chip">'
                      + '<i class="fa fa-user-circle"></i> ' + escapeHtml(st.target_label || '') + '（本人）</span></div>';
             }
-            if (t === 'user') {
+            if (pick === 'user') {
                 return '<select class="form-control ate-tp-sel" data-eg-filter="輸入姓名篩選…" onchange="ateQTpUserPick(\'' + ns + '\',this)">'
                      + ateQCandOptions('user', st.target_id, st.target_label, st.target_post) + '</select>';
             }
-            if (t === 'customer' || t === 'maker') {
+            if (pick === 'customer' || pick === 'maker') {
                 if (st.target_id) {
                     var html = '<div class="ate-tp-picked"><span class="ate-tp-picked-chip"><i class="fa fa-check-circle"></i> '
                         + escapeHtml(st.target_label || '') + '</span>'
@@ -9279,17 +9581,25 @@ foreach($dCounts as $c) {
                         + '<div id="ate-tp-cpick-' + ns + '"></div>';
                     // 查這一家底下有沒有登記過的聯絡人（customer_contacts／maker_contacts），
                     // 查到就在輸入框旁多列幾個可點選的，查不到前端照樣可以手動輸入
-                    ateQTpLoadContacts(ns, t, st.target_id);
+                    // ※ 傳的是「挑選方式」不是對象 code：ate_q_contact_search／ate_q_target_search
+                    //   認的一律是 customer/maker/user，管理員新增的對象 code 不會長這樣
+                    ateQTpLoadContacts(ns, pick, st.target_id);
                     return html;
                 }
                 return '<div class="ate-tp-search"><input type="text" class="form-control" id="ate-tp-acinput-' + ns + '" '
-                     + 'placeholder="輸入' + (t === 'customer' ? '客戶' : '廠商') + 'ID或名稱搜尋…" autocomplete="off" '
-                     + 'oninput="ateQTpAcInput(\'' + ns + '\',\'' + t + '\',this.value)"></div>'
+                     + 'placeholder="輸入' + (pick === 'customer' ? '客戶' : '廠商') + 'ID或名稱搜尋…" autocomplete="off" '
+                     + 'oninput="ateQTpAcInput(\'' + ns + '\',\'' + pick + '\',this.value)"></div>'
                      + '<div class="ate-tp-ac" id="ate-tp-ac-' + ns + '"></div>';
             }
-            if (t === 'other') {
+            if (pick === 'text') {
                 return '<div class="ate-tp-other"><input type="text" placeholder="請輸入對象說明（例如：倉管部門／客戶現場窗口）" '
                      + 'value="' + escapeHtml(st.target_label || '') + '" oninput="ateQTpOtherInput(\'' + ns + '\',this.value)"></div>';
+            }
+            if (pick === 'fixed') {
+                // 「不必再選」：對象就是這個名稱本身（例如 BOSS），不需要任何挑選介面
+                return '<div class="ate-tp-picked"><span class="ate-tp-picked-chip ate-tp-fixed-chip">'
+                     + '<i class="fa fa-user-circle-o"></i> ' + escapeHtml(ateQTargetName(t)) + '</span>'
+                     + '<span class="ate-tp-note-hint">不需要再挑選對象</span></div>';
             }
             return '<span class="text-muted" style="font-size:11px;">請先選擇對象類別</span>';
         }
@@ -9310,10 +9620,15 @@ foreach($dCounts as $c) {
         function ateQTpSetType(ns, type) {
             var st = ATE_Q.tpState[ns]; if (!st || st.target_type === type) return;
             st.target_type = type; st.target_id = ''; st.target_label = ''; st.target_post = ''; st.target_contact = '';
-            if (type === 'user' && ATE_Q.bizDefault) {
+            var pick = ateQTargetPick(type);
+            if (pick === 'user' && ATE_Q.bizDefault) {
                 st.target_id = String(ATE_Q.bizDefault.id); st.target_label = ATE_Q.bizDefault.name; st.target_post = ATE_Q.bizDefault.post;
             } else if (type === 'self' && ATE_Q.curUser) {
                 st.target_id = String(ATE_Q.curUser.id); st.target_label = ATE_Q.curUser.name; st.target_post = ATE_Q.curUser.post;
+            } else if (pick === 'fixed') {
+                // 不必再選：對象就是這個名稱本身，當下就把 id/label 帶好，使用者點一下就可以送出
+                // （後端 el_item_upsert() 會再用設定值蓋一次，這裡只是讓畫面立即完整）
+                st.target_id = type; st.target_label = ateQTargetName(type);
             }
             var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
@@ -9433,7 +9748,15 @@ foreach($dCounts as $c) {
                 var allNotes = ATE_Q.rows.length > 0 && ATE_Q.rows.every(function(r) { return !!r.is_note; });
                 addTitle = allNotes ? '新增備註' : '新增問題';
             }
-            var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> ' + addTitle + '</div>'
+            // 「對象設定」入口（2026-10-12）：放在新增區標題列最右側——對象按鈕就在正下方，
+            // 發現選項不夠用的當下就在這裡改，不必換頁。只有持 ot_design_note_target 的人看得到
+            // （後端 ate_q_target_cfg_save/delete 同規則再擋一次＝鐵律8）。
+            var cfgBtn = ATE_Q.canTargetCfg
+                ? '<a href="javascript:;" class="ate-q-tcfg-link" onclick="ateQTargetCfgOpen()" '
+                  + 'title="新增／改名／排序／停用對象按鈕（業務、廠商、客戶、其他、BOSS…）">'
+                  + '<i class="fa fa-cog"></i> 對象設定</a>' : '';
+            var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> ' + addTitle
+                + cfgBtn + '</div>'
                 + '<table class="ate-q-add-table"><tbody data-eg-row-add="ateQRowAdd" data-eg-row-del="ateQRowDel">';
             ATE_Q.rows.forEach(function(r, idx) { html += ateQRowHtml(r, idx); });
             html += '</tbody></table>'
@@ -9588,20 +9911,23 @@ foreach($dCounts as $c) {
         // 既有「沒有對象」語意分開——PS 簡寫維持給沒有對象用，備註改標「【備註】」，
         // 與 PHP 端 ot_dn_preview_prefix() 同一套規則，不可各自走鐘。
         function otDnPreviewPrefix(targetType, targetLabel, askedAt, isNote) {
-            var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
             var datePart = '';
             var m = askedAt ? /^(\d{4})-(\d{2})-(\d{2})/.exec(String(askedAt)) : null;
             if (m) datePart = parseInt(m[2], 10) + '/' + parseInt(m[3], 10) + ' ';
+            // 對象名稱一律問 ATE_Q.targetsAll（唯一來源），fixed（例如 BOSS）只印一次名稱
+            var fmt = function(tt) {
+                var pick = ateQTargetPick(tt), name = ateQTargetName(tt);
+                if (pick === 'fixed') return targetLabel || name;
+                var label = targetLabel || '（未指定）';
+                if (pick === 'user' && label !== '（未指定）') label = otShortName(label);
+                return name + ' ' + label;
+            };
             if (isNote) {
                 if (!targetType) return datePart + '【備註】';
-                var nLabel = targetLabel || '（未指定）';
-                if (targetType === 'user' && nLabel !== '（未指定）') nLabel = otShortName(nLabel);
-                return datePart + '【備註｜' + (tMap[targetType] || targetType) + ' ' + nLabel + '】';
+                return datePart + '【備註｜' + fmt(targetType) + '】';
             }
             if (!targetType) return datePart + '【PS】';
-            var label = targetLabel || '（未指定）';
-            if (targetType === 'user' && label !== '（未指定）') label = otShortName(label);
-            return datePart + '【' + (tMap[targetType] || targetType) + ' ' + label + '】';
+            return datePart + '【' + fmt(targetType) + '】';
         }
 
         // 只局部更新這一列的徽章+預覽文字，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
@@ -9645,12 +9971,14 @@ foreach($dCounts as $c) {
             var $btn = $('button[data-proc-q-order="' + orderId + '"]');
             if (!$btn.length) return;
             openCount = parseInt(openCount, 10) || 0;
-            var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
             var css, title, inner;
             if (preview) {
-                var prefix = preview.target_type
-                    ? ('【回報：' + (tMap[preview.target_type] || preview.target_type) + ' ' + (preview.target_label || '（未指定）') + '】')
-                    : '【PS】';
+                // 對象名稱一律問 ATE_Q.targetsAll（唯一來源）；fixed（例如 BOSS）只印一次名稱
+                var pfxPick = preview.target_type ? ateQTargetPick(preview.target_type) : '';
+                var prefix = !preview.target_type ? '【PS】'
+                    : (pfxPick === 'fixed'
+                        ? ('【回報：' + (preview.target_label || ateQTargetName(preview.target_type)) + '】')
+                        : ('【回報：' + ateQTargetName(preview.target_type) + ' ' + (preview.target_label || '（未指定）') + '】'));
                 title = '製程中紀錄' + (openCount > 0 ? '（' + openCount + ' 筆未處理）' : '（已完成，可查看）') + '：' + prefix + (preview.question || '');
                 css = openCount > 0
                     ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
@@ -13617,6 +13945,53 @@ foreach($dCounts as $c) {
         </div></div>
     </div>
 
+    <!-- ═══ 對象設定（2026-10-12 使用者交辦）═══════════════════════════════════
+         疊在設計備註問答跳窗上面，刻意不用 Bootstrap modal（見上方 CSS 註解的理由）。
+         每一列各自「儲存」，按下當下就寫入（與回覆方式維護同一種操作方式）。 -->
+    <div class="ate-tcfg-mask" id="ate-tcfg-mask">
+        <div class="ate-tcfg-box">
+            <div class="ate-tcfg-head">
+                <i class="fa fa-cog"></i>&nbsp;對象設定
+                <span class="cls" onclick="ateQTargetCfgClose()">&times;</span>
+            </div>
+            <div class="ate-tcfg-body">
+                <div class="ate-tcfg-note">
+                    這裡維護的是新增問題／回覆時那一排<b>對象按鈕</b>（業務、廠商、客戶、其他、BOSS…）。<br>
+                    ・<b>每一列各自按「儲存」當下就生效</b>，不必再按其他確定鈕。<br>
+                    ・<b>挑選方式</b>決定選了這個對象之後要怎麼指定人／公司：公司人員＝從清單挑、
+                      廠商／客戶＝搜尋主檔、自行輸入＝打一段說明文字、<b>不必再選＝對象就是這個名稱本身</b>（BOSS 就是這一種）。<br>
+                    ・<b>停用</b>之後新的問題不會再出現這顆按鈕，<b>既有紀錄照常顯示</b>不受影響；
+                      已經被用過的對象不給刪除（刪了那些紀錄的對象會變成空白），請改成停用。<br>
+                    ・業務／廠商／客戶／其他是<b>內建</b>的，可以改名與調順序，但不可刪除、挑選方式也不可更改。
+                </div>
+                <table class="ate-tcfg-tb">
+                    <thead><tr>
+                        <th style="width:30%;">名稱</th><th style="width:34%;">挑選方式</th>
+                        <th style="width:12%;">排序</th><th style="width:10%;">啟用</th><th style="width:14%;">操作</th>
+                    </tr></thead>
+                    <tbody id="ate-tcfg-rows"></tbody>
+                </table>
+                <div class="ate-tcfg-add">
+                    <div class="ate-tcfg-add-title"><i class="fa fa-plus-circle"></i> 新增一個對象</div>
+                    <table class="ate-tcfg-tb"><tbody><tr>
+                        <?php /* 本頁在 input_rules_baseline.txt 基準線內（沒有載入 eg_input_rules.js），
+                                 所以**不可以掛 data-eg-hint**——那會是一個死屬性；改用欄位下方的小字說明。 */ ?>
+                        <td style="width:30%;"><input type="text" id="ate-tcfg-nname" maxlength="20">
+                            <div style="font-size:10px;color:#998a6e;margin-top:2px;">例：BOSS、品管、倉管</div></td>
+                        <td style="width:34%;"><select id="ate-tcfg-npick"></select></td>
+                        <td style="width:12%;"><input type="text" id="ate-tcfg-nsort" class="sort" value="60"></td>
+                        <td style="width:10%;">—</td>
+                        <td style="width:14%;"><button type="button" class="btn btn-xs btn-warm"
+                            onclick="ateQTargetCfgCreate()"><i class="fa fa-plus"></i> 新增</button></td>
+                    </tr></tbody></table>
+                </div>
+            </div>
+            <div class="ate-tcfg-foot">
+                <button type="button" class="btn btn-default btn-sm" onclick="ateQTargetCfgClose()">完成，關閉</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══════════════════════════════════════════════════════════════════════
          訂單變更系統 Modals（變更 / 設定 / 歷史 / 明細）
          ═══════════════════════════════════════════════════════════════════════ -->
@@ -15317,6 +15692,14 @@ window.otHasFeat = function(code) {
 // 設計備註問答（2026-10-05）：直接用後端算好的最終值，不在前端重新判斷一次規則。
 window.OT_CAN_DESIGN_QA = <?= json_encode((bool)$can_design_qa) ?>;
 window.OT_CAN_DESIGN_QA_RESOLVE = <?= json_encode((bool)$can_design_qa_resolve) ?>;
+// 對象選項（2026-10-12）：先用頁面載入當下的設定把 ATE_Q.targets* 填好，跳窗還沒開過
+// 就被呼叫到的顯示函式（ateQApplyBadge／ateProcApplyBadge 走的 otDnPreviewPrefix）才不會
+// 因為查不到名稱而印出 code；跳窗一開 ate_q_list 會再用最新值覆蓋一次。
+try {
+    ATE_Q.targets = <?= json_encode(el_item_target_meta($db, false), JSON_UNESCAPED_UNICODE) ?>;
+    ATE_Q.targetsAll = <?= json_encode(el_item_target_meta($db, true), JSON_UNESCAPED_UNICODE) ?>;
+    ATE_Q.canTargetCfg = <?= json_encode((bool)$can_design_qa_target) ?>;
+} catch (e) {}
 
 // ── 篩選列自適應（2026-09-22 使用者指定口徑）──────────────────────────────
 // 一行放不下時**先縮搜尋欄位**（先客戶、還不夠再連料號與全表搜尋），
@@ -15400,6 +15783,13 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>批圖溝通中</b>。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
+    <li><b>備註（PS）＝已經處理完成的紀錄，不是在等人回覆的問題</b>（2026-10-12 起）：所以備註那幾條<b>不會有「回覆」「已處理」按鈕</b>，建立當下狀態就是「已處理」。要的是「要問某個對象、等他回覆」請不要勾備註。</li>
+    <li><b>對象按鈕可以增減</b>（2026-10-12 起）：新增區標題列右側的<b>【⚙ 對象設定】</b>可以新增／改名／調順序／停用對象按鈕（需角色勾選「維護設計備註問答的『對象』選項」才看得到）。
+        <ul>
+            <li><b>挑選方式</b>決定選了這個對象之後要怎麼指定人／公司：<b>公司人員</b>＝從清單挑、<b>廠商／客戶</b>＝搜尋主檔、<b>自行輸入</b>＝打一段說明文字、<b>不必再選</b>＝對象就是這個名稱本身（<b>BOSS</b> 就是這一種，點一下就選好，不必再挑人）。</li>
+            <li><b>停用</b>之後新的問題不會再出現那顆按鈕，<b>既有紀錄照常顯示</b>不受影響；已經被用過的對象不給刪除（刪了那些紀錄的對象會變成空白），請改成停用。</li>
+            <li>業務／廠商／客戶／其他是<b>內建</b>的，可以改名與調順序，但不可刪除、挑選方式也不可更改。</li>
+        </ul></li>
     <li><b>訂單待確認</b>（紅色）：這張訂單有<b>客戶提醒</b>被設為待處理、還沒標記完成，詳見下方「四之二、客戶提醒」。</li>
     <li>卡片下方若出現「N 筆訂單已暫停/取消」是提醒，不影響其他統計。</li>
 </ul>

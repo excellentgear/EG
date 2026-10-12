@@ -639,6 +639,15 @@ $openId = (int)($_GET['id'] ?? 0);
                     <div class="ac-list" id="iTargetAc"></div>
                     <div class="err" id="eITarget"></div></div>
             </span>
+            <!-- 其他／BOSS 這種「本頁沒有對應挑選介面」的對象（2026-10-12）：唯讀顯示目前
+                 的對象，不給在這裡改——不這樣做的話下拉選不到它，一存檔就會把對象安靜
+                 換成下拉的第一個（客戶）而且不會報錯。 -->
+            <span id="iTargetLocked" style="display:none;">
+                <div class="fld"><label>對象名稱</label>
+                    <input type="text" id="iTargetLockedName" class="form-control" style="width:240px;" readonly>
+                    <div class="hint-txt" style="font-size:11px;color:#998a6e;">
+                        這種對象請到訂單追蹤的「設計備註問答」修改，本頁不提供編輯。</div></div>
+            </span>
             <!-- 公司內部：先選部門，再選該部門底下的人（含兼任，職稱由大到小） -->
             <span id="iTargetInner" style="display:none;">
                 <div class="fld"><label>部門 <span class="req">*</span></label>
@@ -961,8 +970,27 @@ function fillDicts() {
     $('#gVis').val('dept');
     renderChannelOptions();
     $.each(DICT.bind_types, function (k, v) { $('#gBindType').append($('<option>').val(k).text(v.name)); });
-    $.each({ customer: '客戶', maker: '廠商', user: '公司內部' }, function (k, v) {
-        $('#iTargetType').append($('<option>').val(k).text(v));
+    renderTargetTypeOptions();
+}
+
+/* 問題項「對象」下拉（2026-10-12）：選項改由 DICT.targets 現況產生，不再寫死
+   {customer,maker,user} 三種——管理員在訂單追蹤的「對象設定」加的新對象，這裡要跟著出現，
+   否則同一批資料在兩頁會對不起來（鐵律4）。
+   ※ 本頁的對象挑選 UI 只做得出三種挑選方式（公司人員／廠商／客戶），所以 pick_mode 是
+     text／fixed 的對象（例如「其他」「BOSS」）**刻意不列進這個下拉**——那些是訂單追蹤
+     設計備註問答專用的填法，本頁沒有對應的輸入介面。真的遇到既有資料是那種對象時，
+     openItem() 會把它當場補成一個選項並鎖住整個對象區塊（見該函式），不會被安靜改掉。
+   ※ 'user' 在本頁顯示「公司內部」（本頁可以挑任何部門的人，不限業務課），所以名稱取自
+     設定值、只有 user 這一種在本頁另外加註說明，不是另外寫死一份對照表。 */
+function targetPickSupported(code) {
+    var m = (DICT.targets_all || {})[code];
+    return !!m && (m.pick === 'user' || m.pick === 'maker' || m.pick === 'customer');
+}
+function renderTargetTypeOptions() {
+    var $s = $('#iTargetType').empty();
+    $.each((DICT.targets || {}), function (code, m) {
+        if (m.pick !== 'user' && m.pick !== 'maker' && m.pick !== 'customer') return;
+        $s.append($('<option>').val(code).text(m.pick === 'user' ? (m.name + '（公司內部）') : m.name));
     });
 }
 
@@ -1437,7 +1465,7 @@ function buildItemBlock(d, it, canWrite, inline) {
     var $m = $('<span class="qmeta">');
     $m.append($('<span class="to-mark">').text('TO：'));
     var tlabel = it.target_label || '（未指定）';
-    if (it.target_type === 'user' && it.target_post) tlabel = it.target_post + '　' + tlabel;
+    if (targetPick(it.target_type) === 'user' && it.target_post) tlabel = it.target_post + '　' + tlabel;
     if (canWrite) {
         $m.append($('<a href="javascript:;" class="qtarget-edit" title="點一下修改這一條的對象">')
             .text(tlabel).on('click', function (e) { e.stopPropagation(); CUR = d; openItem(it); }));
@@ -1683,9 +1711,13 @@ function qRowAdd(afterTr) {
     $tr.append($('<td class="qseq">'));
     $tr.append($('<td>').append($('<textarea class="form-control q-q" rows="1" maxlength="500">')
         .attr('data-hint', '例：外徑 φ32 未標公差，是否比照前批 h7？')));
-    var $tt = $('<select class="form-control q-tt" data-eg-skip>').append($('<option value="">—</option>'))
-        .append($('<option value="customer">客戶</option>')).append($('<option value="maker">廠商</option>'))
-        .append($('<option value="user">公司內部</option>'));
+    // 對象選項由 DICT.targets 現況產生（2026-10-12，與編輯窗的 renderTargetTypeOptions()
+    // 同一套規則與同一份來源，不要在這裡再寫死一份）
+    var $tt = $('<select class="form-control q-tt" data-eg-skip>').append($('<option value="">—</option>'));
+    $.each((DICT.targets || {}), function (code, m) {
+        if (m.pick !== 'user' && m.pick !== 'maker' && m.pick !== 'customer') return;
+        $tt.append($('<option>').val(code).text(m.pick === 'user' ? (m.name + '（公司內部）') : m.name));
+    });
     $tr.append($('<td>').append($tt));
 
     var $td = $('<td class="q-target">');
@@ -1723,7 +1755,7 @@ $(document).on('change', '.q-tt', function () {
     $tr.find('.q-tn').val('').removeAttr('data-id').prop('readonly', false).removeClass('locked');
     syncRowIdTag($tr);
     $tr.find('.q-person').empty().append($('<option value="">選人員</option>'));
-    if (v === 'user') {
+    if (targetPick(v) === 'user') {
         $tr.find('.q-outer').hide(); $tr.find('.q-inner').show();
         loadDepts($tr.find('.q-dept'));
     } else {
@@ -1734,8 +1766,11 @@ $(document).on('input', '.q-tn', function () {
     var $inp = $(this), $tr = $inp.closest('tr'), type = $tr.find('.q-tt').val();
     $inp.removeAttr('data-id');       // 一改字就解除綁定，避免名字與 ID 對不起來
     syncRowIdTag($tr);
-    if (!type || type === 'user') return;
-    acSearch(type, $inp.val(), $inp, $tr.find('.q-ac'), function (row) {
+    // bind_search 吃的是「挑選方式」(maker/customer) 不是對象 code——管理員新增一個挑選
+    // 方式是廠商的對象時，code 不會叫 maker，直接把 code 丟過去會查無資料
+    var pick = targetPick(type);
+    if (pick !== 'maker' && pick !== 'customer') return;
+    acSearch(pick, $inp.val(), $inp, $tr.find('.q-ac'), function (row) {
         $inp.val(row.label).attr('data-id', row.id);
         syncRowIdTag($tr);
     });
@@ -1946,7 +1981,7 @@ $('#btnSaveLog').on('click', function () {
             var $tr = $(this), q = $.trim($tr.find('.q-q').val());
             if (!q) return;
             var tt = $tr.find('.q-tt').val(), tid = '', tlabel = '', tpost = '';
-            if (tt === 'user') {
+            if (targetPick(tt) === 'user') {
                 tid = $tr.find('.q-person').val() || '';
                 tlabel = $tr.find('.q-person option:selected').attr('data-name') || '';
                 tpost = $tr.find('.q-person option:selected').attr('data-post') || '';
@@ -2214,13 +2249,22 @@ function openItem(it, parent, fromReply) {
     $('#iAsked').val(it ? (it.asked_at || TODAY) : TODAY);
     $('#iFollowUp').val(it ? (it.follow_up_days || '') : '');
     var tt = it ? (it.target_type || 'customer') : 'customer';
-    $('#iTargetType').val(tt);
+    // 這一條的對象若不是本頁支援的三種挑選方式（例如訂單追蹤設計備註問答用的「其他」
+    // 「BOSS」），下拉裡根本沒有那個選項，.val(tt) 會選不到任何東西、一存檔就把人家的
+    // 對象安靜換成下拉的第一個而且不報錯——所以當場補一個選項進去並鎖住整個對象區塊。
+    renderTargetTypeOptions();
+    var ttOk = targetPickSupported(tt);
+    if (tt && !ttOk) {
+        $('#iTargetType').append($('<option>').val(tt).text(((DICT.targets_all || {})[tt] || {}).name || tt));
+    }
+    $('#iTargetType').val(tt).prop('disabled', !ttOk);
+    $('#iTargetLockedName').val(it ? (it.target_label || '') : '');
     $('#iTargetKw').val('').removeAttr('data-id');
     $('#iPerson').empty().append($('<option value="">選人員</option>'));
     applyItemTargetMode(tt);
     syncTargetIdTag();
     if (it && it.target_id) {
-        if (tt === 'user') {
+        if (targetPick(tt) === 'user') {
             // 回填時先把部門帶出來，再依 user_id 選回那個人
             loadDepts($('#iDept'), function () {
                 findPersonDept(it.target_id, function (deptId) {
@@ -2231,17 +2275,25 @@ function openItem(it, parent, fromReply) {
             $('#iTargetKw').val(it.target_label || '').attr('data-id', it.target_id);
             syncTargetIdTag();
         }
-    } else if (tt === 'user') { loadDepts($('#iDept')); }
+    } else if (targetPick(tt) === 'user') { loadDepts($('#iDept')); }
     openMask('itemMask');
 }
+/* 對象 code → 挑選方式（2026-10-12：一律問 DICT，不要再比對 tt === 'user' 這種寫死的 code
+   ——管理員新增一個挑選方式同樣是「公司人員」的對象時，code 不會叫 user）。 */
+function targetPick(code) { return (((DICT.targets_all || {})[code]) || {}).pick || ''; }
 function applyItemTargetMode(tt) {
-    if (tt === 'user') {
-        $('#iTargetOuter').hide(); $('#iTargetInner').show(); loadDepts($('#iDept'));
+    var pick = targetPick(tt);
+    if (pick === 'user') {
+        $('#iTargetOuter').hide(); $('#iTargetLocked').hide(); $('#iTargetInner').show(); loadDepts($('#iDept'));
         // 公司內部不需要聯絡人（人就是那個人），反灰避免誤填
         $('#iContact').val('').prop('disabled', true).closest('.fld').addClass('fld-off');
-    } else {
-        $('#iTargetInner').hide(); $('#iTargetOuter').show();
+    } else if (pick === 'maker' || pick === 'customer') {
+        $('#iTargetInner').hide(); $('#iTargetLocked').hide(); $('#iTargetOuter').show();
         $('#iContact').prop('disabled', false).closest('.fld').removeClass('fld-off');
+    } else {
+        // text／fixed：本頁沒有對應的輸入介面，唯讀顯示（見上方 openItem 的說明）
+        $('#iTargetInner').hide(); $('#iTargetOuter').hide(); $('#iTargetLocked').show();
+        $('#iContact').prop('disabled', true).closest('.fld').addClass('fld-off');
     }
 }
 /* 依 user_id 找出他屬於哪些部門（用既有 dept_people 逐部門比對，不另開端點） */
@@ -2291,10 +2343,11 @@ function syncTargetIdTag() {
     }
 }
 $('#iTargetKw').on('input', function () {
-    var t = $('#iTargetType').val(), $inp = $(this);
+    var t = targetPick($('#iTargetType').val()), $inp = $(this);
     $inp.removeAttr('data-id');
     syncTargetIdTag();
-    if (t === 'user') return;
+    // 同上：bind_search 吃的是挑選方式，不是對象 code
+    if (t !== 'maker' && t !== 'customer') return;
     acSearch(t, $inp.val(), $inp, $('#iTargetAc'), function (row) {
         $inp.val(row.label).attr('data-id', row.id);
         syncTargetIdTag();
@@ -2305,7 +2358,14 @@ $('#btnSaveItem').on('click', function () {
     var q = $.trim($('#iQuestion').val());
     if (!q) { $('#iQuestion').closest('.fld').addClass('has-err'); $('#eIQuestion').text('請填寫問題內容'); return; }
     var tt = $('#iTargetType').val(), tid = '', tlabel = '', tpost = '';
-    if (tt === 'user') {
+    var ttPick = targetPick(tt);
+    if (ttPick !== 'user' && ttPick !== 'maker' && ttPick !== 'customer') {
+        // text／fixed：本頁沒有挑選介面，原樣送回去不動（後端 el_item_upsert() 會依挑選方式
+        // 自己補齊 fixed 的名稱；text 則維持原本輸入過的說明文字）
+        tid = ITEM_EDIT ? (ITEM_EDIT.target_id || '') : '';
+        tlabel = ITEM_EDIT ? (ITEM_EDIT.target_label || '') : '';
+        tpost = ITEM_EDIT ? (ITEM_EDIT.target_post || '') : '';
+    } else if (ttPick === 'user') {
         tid = $('#iPerson').val() || '';
         tlabel = $('#iPerson option:selected').attr('data-name') || '';
         tpost = $('#iPerson option:selected').attr('data-post') || '';
