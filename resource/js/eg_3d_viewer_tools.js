@@ -146,10 +146,21 @@ var EG3DTools = (function () {
     }
     // 從 startFaceIndex 開始，往鄰接三角形 flood fill，逐鄰居局部比較法向量夾角
     // （不是都跟起點比，才能正確吃到整段有弧度的曲面）；回傳三角形索引陣列。
+    // 預設角度門檻（2026-10-12 使用者回報「上色無法直接上整個內孔的顏色」後由 12→20 度，
+    // 唯一受影響的呼叫端是上色互動 attachColorInteraction——其餘呼叫端如
+    // _buildCleanEdgeGeometry 皆自己明確帶入角度參數不受這裡的預設值影響）：用實際模型
+    // （80 ADAPTER BASE，pk=26903）逐一實測多個小孔內壁三角形的成長曲線才找出來的安全
+    // 區間——這批小孔單圈只切出約 14~16 個面（每格跨角約 22.5~25.7 度），用舊的 12 度
+    // 連第一步都跨不過去（flood fill 只選到起點那 1~2 個三角形就停了，使用者點一次只
+    // 塗到一小條）；但同一批小孔從 14 度到 44 度選到的三角形數完全沒有變化（穩定在
+    // 52／156 個，代表這就是該孔內壁自然的完整邊界，不是被門檻卡住），過了 44 度才會
+    // 在 46 度附近暴衝到 1000+ 個（混進完全不相干的其他面，真正的過度合併）。20 度落
+    // 在「連得起小孔整圈」與「暴衝邊界」中間，兩側都留了十幾度的緩衝帶，刻意不要調更高
+    // ——那只是在縮小安全邊界，沒有實益。
     function sameFaceTriangles(mesh, startFaceIndex, angleDeg) {
         var graph = _buildFaceGraph(mesh);
         if (startFaceIndex == null || startFaceIndex < 0 || startFaceIndex >= graph.triCount) return [];
-        var cosThresh = Math.cos((angleDeg == null ? 12 : angleDeg) * Math.PI / 180);
+        var cosThresh = Math.cos((angleDeg == null ? 20 : angleDeg) * Math.PI / 180);
         var visited = new Uint8Array(graph.triCount);
         var stack = [startFaceIndex];
         visited[startFaceIndex] = 1;
@@ -1053,14 +1064,15 @@ var EG3DTools = (function () {
         var meshFrontMat = new Map();   // mesh → 可見邊材質，輪廓邊重用同一份材質（視覺風格要一致）
         var meshBackMat = new Map();    // mesh → 被遮蔽邊材質（虛線＋反轉深度測試），輪廓邊的被遮蔽部分重用同一份
         mm.EnumerateMeshes(function (mesh) {
-            // 角度門檻刻意用 20 度，比上色功能的預設 12 度更寬鬆——這裡只是要畫「視覺輪廓」
-            // 不是要精準選出單一 CAD 面，兩者目的不同。已用真實模型做角度掃描實測校準：
-            // 12 度把整個模型切成 344 個群組（318 個只有 1~2 個三角形，曲面三角化較粗的
-            // 地方——例如小孔的圓柱面——每一小塊facet 都超過 12 度被判成獨立群組，畫出來
-            // 反而是一團蜘蛛網）；20～30 度之間穩定收斂到 44 個群組（只剩 6 個小群組）；
-            // 到 45 度以上開始過度合併（群組數驟減、最大群組暴增到 1000+，代表把真正不同
-            // 的 CAD 面誤連在一起）。20 度正好落在「雜線消失、尚未開始誤併」的穩定區間，
-            // 不要再往上調（上色功能的 12 度是刻意偏嚴格，不要跟著改，兩處用途不同）。
+            // 角度門檻用 20 度——這裡只是要畫「視覺輪廓」不是要精準選出單一 CAD 面，跟
+            // 上色功能（也是 20 度，見 sameFaceTriangles 開頭註解，2026-10-12 已從舊的
+            // 12 度調整過）用途不同，純屬巧合用了同一個數字，改動其中一處不必連動另一處。
+            // 已用真實模型做角度掃描實測校準：12 度把整個模型切成 344 個群組（318 個只有
+            // 1~2 個三角形，曲面三角化較粗的地方——例如小孔的圓柱面——每一小塊facet 都
+            // 超過 12 度被判成獨立群組，畫出來反而是一團蜘蛛網）；20～30 度之間穩定收斂到
+            // 44 個群組（只剩 6 個小群組）；到 45 度以上開始過度合併（群組數驟減、最大
+            // 群組暴增到 1000+，代表把真正不同的 CAD 面誤連在一起）。20 度正好落在「雜線
+            // 消失、尚未開始誤併」的穩定區間，不要再往上調。
             var geo = _buildCleanEdgeGeometry(mesh, 20);
             if (!geo) return;
             mesh.geometry.computeBoundingSphere();
