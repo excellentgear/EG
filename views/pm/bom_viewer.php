@@ -1318,6 +1318,23 @@ EG3DTools.attachMeasureInteraction(
 // ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js）────────
 // 純粹的顯示模式切換，不影響上色／量測互動（兩者仍可同時使用，只是上色效果在
 // 透視模式下暫時看不到——線框模式本來就不顯示實體面材質，切回一般顯示即恢復）。
+// ── 透視＋剖面同時開啟時的裁切同步（2026-10-12 使用者回報：切掉的那一側看起來
+// 還是空心看得穿）：剖面只把 clippingPlanes 設在實體面材質上，透視模式另外建立的
+// 那批邊線物件完全不知道目前有沒有剖面、剖到哪——被切除掉的那部分幾何的邊線照樣
+// 整組畫出來，疊在封頂實心面外面造成「看穿到裡面」的錯覺。唯一實作見
+// EG3DTools.applySectionClipToHiddenLine，這裡只是在每個會改變「剖面有沒有開／
+// 剖到哪」的時機都呼叫一次同步，確保透視的邊線材質跟剖面狀態一致。
+function _bom3dSyncHLClip() {
+    if (!_bom3dHLState) return;
+    var planes = null, clipIntersection = false;
+    if (_bom3dSectionState && _bom3dSectionState.touchedMats && _bom3dSectionState.touchedMats.length) {
+        var mt0 = _bom3dSectionState.touchedMats[0];
+        planes = mt0.clippingPlanes;
+        clipIntersection = mt0.clipIntersection;
+    }
+    EG3DTools.applySectionClipToHiddenLine(_bom3dHLState, planes, clipIntersection);
+    if (_bom3dViewer) _bom3dViewer.GetViewer().Render();
+}
 $('#btn-3d-hiddenline').on('click', function() {
     if (!_bom3dViewer) return;
     if (_bom3dHLState) {
@@ -1326,8 +1343,12 @@ $('#btn-3d-hiddenline').on('click', function() {
         $(this).removeClass('btn-info');
     } else {
         _bom3dHLState = EG3DTools.setHiddenLineMode(_bom3dViewer);
-        if (_bom3dHLState) $(this).addClass('btn-info');
-        else alert('這個模型沒有偵測到可顯示的邊線（例如完全平滑的曲面），無法切換透視顯示');
+        if (_bom3dHLState) {
+            $(this).addClass('btn-info');
+            _bom3dSyncHLClip();   // 開啟透視當下，剖面若已經在切，邊線要立刻套用同樣的裁切
+        } else {
+            alert('這個模型沒有偵測到可顯示的邊線（例如完全平滑的曲面），無法切換透視顯示');
+        }
     }
 });
 
@@ -1343,12 +1364,14 @@ $('#btn-3d-section').on('click', function() {
         $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip, #bom-3d-section-dual-wrap, #bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').hide();
         $('#bom-3d-section-dual').prop('checked', false);
         _bom3dSectionOpts.axis2 = 'none';
+        _bom3dSyncHLClip();
     } else {
         _bom3dSectionState = EG3DTools.setSectionMode(_bom3dViewer, _bom3dSectionOpts);
         if (_bom3dSectionState) {
             $(this).addClass('btn-info');
             $('#bom-3d-section-dual-wrap').css('display', 'inline-block');
             $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip').css('display', 'inline-block');
+            _bom3dSyncHLClip();
         } else {
             alert('這個模型量不出包圍盒範圍，無法切換剖面顯示');
         }
@@ -1356,11 +1379,11 @@ $('#btn-3d-section').on('click', function() {
 });
 $('#bom-3d-section-axis').on('change', function() {
     _bom3dSectionOpts.axis = $(this).val();
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#bom-3d-section-pos').on('input', function() {
     _bom3dSectionOpts.ratio = (+$(this).val()) / 100;
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 // ── 楔形剖面（3/4剖視圖，繞共用軸線挖出可調角度的楔形缺口，唯一實作見
 // eg_3d_viewer_tools.js setSectionMode/updateSectionMode 的 _computeSectionPlanes）──
@@ -1371,27 +1394,27 @@ $('#bom-3d-section-dual').on('change', function() {
     _bom3dSectionOpts.axis2 = on ? $('#bom-3d-section-axis2').val() : 'none';
     $('#bom-3d-section-axis2, #bom-3d-section-pos2, #bom-3d-section-pos3, #btn-3d-section-flip2').css('display', on ? 'inline-block' : 'none');
     $('#bom-3d-section-axis, #bom-3d-section-pos, #btn-3d-section-flip').css('display', on ? 'none' : 'inline-block');
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#bom-3d-section-axis2').on('change', function() {
     _bom3dSectionOpts.axis2 = $(this).val();
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#bom-3d-section-pos2').on('input', function() {
     _bom3dSectionOpts.ratio2 = (+$(this).val()) / 100;   // 楔形起始角度（0~100 對應 0~360 度）
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#bom-3d-section-pos3').on('input', function() {
     _bom3dSectionOpts.ratio3 = (+$(this).val()) / 100;   // 楔形寬度（0~100 對應 1~179 度）
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#btn-3d-section-flip2').on('click', function() {
     _bom3dSectionOpts.flip2 = !_bom3dSectionOpts.flip2;
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 $('#btn-3d-section-flip').on('click', function() {
     _bom3dSectionOpts.flip = !_bom3dSectionOpts.flip;
-    if (_bom3dSectionState) EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts);
+    if (_bom3dSectionState) { EG3DTools.updateSectionMode(_bom3dViewer, _bom3dSectionState, _bom3dSectionOpts); _bom3dSyncHLClip(); }
 });
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────

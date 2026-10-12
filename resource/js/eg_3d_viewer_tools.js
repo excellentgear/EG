@@ -1173,6 +1173,41 @@ var EG3DTools = (function () {
         viewer.Render();
     }
 
+    // 透視（隱藏線）＋剖面同時開啟時的串接（2026-10-12 使用者回報：兩者同時啟用時，
+    // 切掉的那一側看起來還是「空心」能看穿）。根因：剖面（setSectionMode／
+    // updateSectionMode）只把 clippingPlanes 設在**實體面材質**（mm.EnumerateMeshes 那
+    // 一圈）上，完全不知道透視模式另外建立的那一批「邊線」物件（frontObjs／backObjs／
+    // silhouetteObjs，材質各自獨立 clone，從未繼承實體面的 clippingPlanes）——兩套狀態
+    // 原本各自獨立運作。於是單獨開剖面（實體面渲染）正常看得到封頂實心斷面；但一旦同時
+    // 開透視，實體面被透視模式整批 colorWrite=false 隱藏掉只剩邊線，而這些邊線完全沒有
+    // 被剖面裁切，被切除掉的那部分幾何的邊線照樣整組畫出來——使用者看到的「空心」其實是
+    // 被移除那半邊的完整線稿疊在封頂面外面，造成「看穿到裡面」的錯覺（封頂實心面本身沒有
+    // 問題，只是被周圍一堆不該出現的殘留邊線蓋過去，難以辨識）。
+    // 修法：把目前的剖切平面（與 clipIntersection 旗標）也套到透視模式這批邊線材質上；
+    // 兩個模式各自的 UI 事件（開關／調整剖面／開關透視）都要呼叫這支同步一次，確保邊線
+    // 材質的 clippingPlanes 永遠跟剖面目前的狀態一致（清除剖面時傳 null 清空）。沿用
+    // updateSectionMode 同一條規則——直接指派新的 planes 陣列參照，不要求呼叫端自己組
+    // 更新邏輯；多個 LineSegments 物件共用同一份材質（frontObjs/backObjs 的一般特徵邊
+    // 與 silhouetteObjs 的輪廓邊本來就共用同一組 meshFrontMat/meshBackMat，見
+    // setHiddenLineMode 內的輪廓邊重建），逐一設定即使重複也無副作用。
+    function applySectionClipToHiddenLine(hlState, planes, clipIntersection) {
+        if (!hlState) return;
+        var mats = [];
+        function collect(objs) {
+            (objs || []).forEach(function (o) {
+                if (o.material && mats.indexOf(o.material) < 0) mats.push(o.material);
+            });
+        }
+        collect(hlState.frontObjs);
+        collect(hlState.backObjs);
+        collect(hlState.silhouetteObjs);
+        mats.forEach(function (mt) {
+            mt.clippingPlanes = planes || null;
+            mt.clipIntersection = !!clipIntersection;
+            mt.needsUpdate = true;
+        });
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // 剖面（切面）：沿 X/Y/Z 任一軸切一刀，只保留切面的一側（stretch goal，
     // 使用者原話「如果還可以就繼續做」）
@@ -1663,6 +1698,7 @@ var EG3DTools = (function () {
         attachMeasureInteraction: attachMeasureInteraction,
         setHiddenLineMode: setHiddenLineMode,
         clearHiddenLineMode: clearHiddenLineMode,
+        applySectionClipToHiddenLine: applySectionClipToHiddenLine,
         setSectionMode: setSectionMode,
         updateSectionMode: updateSectionMode,
         clearSectionMode: clearSectionMode
