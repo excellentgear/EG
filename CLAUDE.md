@@ -176,6 +176,26 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
 - 執行 SQL 唯一正道：`& C:\MAMP\bin\php\php8.3.1\php.exe C:\MAMP\htdocs\EGsystem\ai-rules\tools\sql.php "SQL語句"`（中文 SQL 改用 `--file`；一次一句）。**勿用 mysql.exe**（舊 client 連不上 MySQL 9.4）。
 - PHP 語法檢查：`& C:\MAMP\bin\php\php8.3.1\php.exe -l 檔案路徑`
 
+## ⚠ `php -l` 不等於「Apache 下跑得起來」（2026-10-13 實際事故）
+**CLI 與 Apache 吃的是兩份不同的 php.ini，而且 `short_open_tag` 設定相反**：
+| | php.ini | short_open_tag |
+|---|---|---|
+| CLI（`php -l` 走這支） | `C:\MAMPin\php\php8.3.1\php.ini` | **Off** |
+| Apache（實際出頁面） | `C:\MAMP\conf\php8.3.1\php.ini` | **On** |
+
+所以檔案裡出現「`<`＋`?`」（例如在 **JS 字串裡寫 XML 宣告開頭**、或貼一段 PHP 範例碼），
+Apache 會把它當成 PHP 開始標籤 → **整份檔案解析失敗**，而 `php -l` 照樣說「No syntax errors」。
+**症狀極難查：頁面不是報錯，是安靜地少掉一截**——HTML 直接斷在出事位置，後面的 script
+根本沒被送出來，所以瀏覽器 console 也不會有任何例外，看起來就只是「畫面一片空白」。
+（實際案例：砂輪干涉 3D 共用元件，頁面全白、`php -l` 全過、console 零例外，
+最後是從 `C:\MAMP\logs\php_error.log` 才看到 `Parse error ... unexpected identifier`。）
+
+**對策**：⑴ 收尾除了 `php -l`，再跑
+`& C:\MAMPin\php\php8.3.1\php.exe C:\MAMP\htdocs\EGsystemi-rules	ools\check_php_lint_apache.php --changed`
+（用 Apache 的設定重新 lint，零誤報；不加 `--changed` 則全專案 772 支一起掃）
+⑵ 要在 JS 字串裡寫 XML 宣告或 PHP 範例，**把「<」與「?」分開拼**
+⑶ **頁面莫名空白／少一截時，第一個該看的是 `C:\MAMP\logs\php_error.log`**，不是瀏覽器 console。
+
 ## 鐵律（違反任一條 = 本次工作不合格）
 1. **改檔前確認可回復**：本專案已用 git 版本控管，**不再手動 Copy-Item 備份 .bak 檔**（舊 .bak-* 已加入 .gitignore，不進版控）。改檔前用 `git status` 確認上一版已 commit 乾淨；真正的保障來自鐵律6——改完立刻 commit+push，才有真正救得回來的版本。
 2. **巨檔保護**：本專案多個 view 超過 500KB（stock.php 721KB、master_data_management.php 1.5MB）。超過 2000 行的檔案：禁止整檔 Read（先 Grep 定位，再 Read offset/limit ±100 行）；禁止 Write 整檔覆寫（只能 Edit，錨點含前後 2–3 行原文）。
@@ -185,7 +205,8 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
    - **根路徑一律用共用庫**（使用者明確要求，2026-07-31）：新模組的附件**預設放在 `\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)` 底下，再以「頁面名稱」為子資料夾自動建立**（例：教育訓練頁＝`…\ERP AS9100文件(勿刪)\教育訓練\`）。唯一實作點 `src/common/attach_lib.php`：`eg_attach_dir($db,'模組設定鍵','頁面資料夾')` 取目錄、`eg_attach_ensure_dir($dir)` 確保存在（不存在自動建，含多層）。**不要再各自寫死 `Z:/BOM/...` 預設值**；根路徑要整批搬家時改設定鍵 `eg_attach_root` 一處即可。模組若已在設定鍵填了完整目錄，以該設定優先（既有模組不動、不必回頭改）。
    - 附件下載一律走該模組 API（權限守門＋路徑現場組），**不要**再另外設 URL 前綴讓瀏覽器直連（UNC 路徑瀏覽器也連不到）。**絕對不可**把組好的完整絕對路徑寫死存進 DB 欄位（換 NAS 硬碟或資料夾位置後，舊資料會全部讀不到、且無法只靠改設定修復）。另：**任何有附件的頁面，新增單據時就要能立刻上傳附件，不可要求「先存單據才能上傳」**——用 temp/active 暫存狀態機解決（新增中先存 temp、存檔時轉正、逾期懶惰清除）。兩者的實作標準、可直接抄的範例、尚未合規模組見 `ai-rules/07-附件路徑儲存規範.md`。
 6. **收尾四件事**（每完成一個修改立刻做，勿累積到最後、勿等整個任務做完才一次處理）：
-   - `php -l` 通過每個改過的檔案
+   - `php -l` 通過每個改過的檔案，**再跑 `ai-rules/tools/check_php_lint_apache.php --changed`**
+     （`php -l` 用的 CLI 設定與 Apache 不同，驗不出短開始標籤造成的整份解析失敗，見上方警告段）
    - `git add <改過的檔案>` → `git commit -m "一句話說明"` → **`git pushall`**（單一檔案改完驗證通過就立刻推，不要累積多檔一起 commit，才能保證每個 commit 都是可回復的獨立檢查點）
      - **推送一律用 `git pushall`，不要只用 `git push`**：本專案設了**兩個 remote**——`origin`＝公帳號 `excellentgear/EG`（共用/目前進度）、`backup`＝私帳號 `ellentravel1003/EGsystem`（備份，防公帳號被他人改動）。`git pushall` 是 alias（`!git push origin master && git push backup master`），一次推兩邊；只 `git push` 會漏掉備份庫。
      - 兩個 remote 的 URL 都已內嵌各自帳號的 PAT。若某邊 push 出現 `Repository not found`(404) 或 401＝該帳號 PAT 失效/無權限：**勿自行改 remote/憑證**，回報使用者重產該帳號 PAT（iOS App 不能產、需 github.com 網頁）。細節與踩坑見記憶 `git_push_broken`。
