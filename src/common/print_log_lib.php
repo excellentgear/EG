@@ -241,6 +241,7 @@ if (!function_exists('eg_print_sources')) {
             'as_schedule'    => ['label' => 'AS 文件年度排程表',             'page' => 'views/ADM/as_schedule.php',               'kind' => 'form'],
             'kpi_scheme'     => ['label' => 'KPI 新方案（草案）',            'page' => 'views/news/KPI_new.php',                  'kind' => 'form'],
             'control_plan'   => ['label' => '管制計畫 CP（Control Plan）',   'page' => 'views/QA/control_plan.php',               'kind' => 'form'],
+            'grind3d'        => ['label' => '砂輪干涉 3D 模擬報告',          'page' => 'views/TD/grind_interference_3d.php',      'kind' => 'form'],
         ];
     }
 }

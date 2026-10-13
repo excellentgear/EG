@@ -1782,7 +1782,7 @@ var EGGrind3D = (function () {
             + '.kv>div:nth-child(1),.kv>div:nth-child(2){border-top:none;}'
             + '.kv .g3d-k-sub{color:#8a7560;font-size:7pt;}'
             + '.imgbox{position:relative;flex:1 1 auto;min-height:0;border:1px solid #d9cbb6;'
-            +         'border-radius:3px;overflow:hidden;background:#F7F3EE;}'
+            +         'border-radius:3px;overflow:hidden;background:transparent;}'
             + '.imgbox img{width:100%;height:100%;object-fit:contain;display:block;}'
             + '.imgbox svg{position:absolute;left:0;top:0;width:100%;height:100%;}'
             + '.imgbox svg text{font-family:"Microsoft JhengHei",sans-serif;font-weight:700;'
@@ -1814,6 +1814,9 @@ var EGGrind3D = (function () {
     }
 
     /* 3D：截圖 PNG ＋ 原封不動搬過去的尺寸標註 SVG（標註是向量的，數字不會糊） */
+/* 列印右欄那一塊的長寬比（A4 橫式扣掉左欄與邊界後約 160mm×112mm） */
+    var PRINT_W = 1600, PRINT_H = 1120;
+
     function printSheet() {
         if (!ST.res || !ST.res.ok) { alert('目前的參數還算不出結果，不能列印。'); return; }
         if (!VW || !T3) { alert('3D 還在載入，請稍候再列印。'); return; }
@@ -1831,14 +1834,26 @@ var EGGrind3D = (function () {
         var viewer = VW.GetViewer();
         var savedCam = viewer.navigation && viewer.navigation.GetCamera();
         var sphere = savedCam && viewer.GetBoundingSphere(function () { return true; });
-        if (sphere) { viewer.FitSphereToWindow(sphere, false); viewer.Render(); drawDims(); }
+        var size0 = viewer.GetCanvasSize();
 
-        var box = cv.getBoundingClientRect();
-        var ovl = (svg && dimOn()) ? svg.outerHTML : '';   /* 先取標註，截圖會動到渲染尺寸 */
-        var png = T3.screenshot(VW, { width: Math.round(box.width * 2),
-                                      height: Math.round(box.height * 2) });
+        /* **擷取前先把檢視器切成列印框的長寬比**：畫面上的畫布又寬又扁（約 3.6:1），
+           照原樣擷取放進列印框（約 1.45:1）會被上下留白夾成一條細長的圖，模型只
+           佔很小一塊（2026-10-13 使用者回報「圖太小看不清楚」）。切成列印框的
+           比例再 FitSphereToWindow，模型就會真的填滿那一塊。
+           Resize 與相機都在**同一個 JS 週期內**還原，瀏覽器不會畫出中間狀態。 */
+        viewer.Resize(PRINT_W, PRINT_H);
+        if (sphere) viewer.FitSphereToWindow(sphere, false);
+        viewer.Render();
+        drawDims();                                        /* 標註要用新的比例重算 */
+        /* 標註是以「畫布座標」算出來的，viewBox 要跟著換成擷取尺寸才對得準 */
+        if (svg) svg.setAttribute('viewBox', '0 0 ' + PRINT_W + ' ' + PRINT_H);
+        var ovl = (svg && dimOn()) ? svg.outerHTML : '';
+        /* 第三個參數 transparent＝不要把檢視器底色烙進圖裡（使用者要求背景透明） */
+        var png = viewer.GetImageAsDataUrl(PRINT_W * 2, PRINT_H * 2, true);
 
-        if (sphere) { viewer.navigation.SetCamera(savedCam); viewer.Render(); }
+        viewer.Resize(size0.width, size0.height);
+        if (sphere) viewer.navigation.SetCamera(savedCam);
+        viewer.Render();
         drawDims();                                        /* 截完還原，標註重畫一次 */
         printReport({
             reportTitle: '3D 模擬報告（出尾長度與治具干涉）',
@@ -2111,7 +2126,7 @@ var EGGrind3D = (function () {
         });
         noteLines = noteLines.slice(0, 4);
 
-        var padL = 26, padR = 26, padT = 34 + noteLines.length * 13 + 12, padB = 118;
+        var padL = 26, padR = 26, padT = 34 + noteLines.length * 13 + 22, padB = 118;
         var sc = Math.min((VW - padL - padR) / xSpan, (VH - padT - padB) / rSpan);
         padL = Math.floor((VW - xSpan * sc) / 2);   /* 水平置中 */
         function sx(x) { return padL + (x - xMin) * sc; }
@@ -2159,8 +2174,11 @@ var EGGrind3D = (function () {
         /* ── 肩部：x∈[-Lsh,0]，R=Rs，藍色 ──────────────────────────────── */
         parts.push('<rect x="' + sx(-p.Lsh) + '" y="' + sy(p.Rs) + '" width="' + (p.Lsh * sc).toFixed(1)
             + '" height="' + (p.Rs * sc).toFixed(1) + '" fill="#dce8f8" stroke="#1565c0" stroke-width="1.5"/>');
+        var shHit = res.bind && res.bind.kind === 'shoulder';
         parts.push('<text x="' + sx(-p.Lsh / 2) + '" y="' + (sy(p.Rs) - 18) + '" text-anchor="middle" '
-            + 'font-size="10" fill="#1565c0">肩部</text>');
+            + 'font-size="10" font-weight="' + (shHit ? '700' : '400') + '" '
+            + 'fill="' + (shHit ? '#DD5138' : '#1565c0') + '">肩部'
+            + (shHit ? '（先碰到）' : '') + '</text>');
 
         /* ── 肩部面（x=0）紅色虛線，與出尾計算同一個視覺慣例 ────────────── */
         parts.push('<line x1="' + sx(0) + '" y1="' + sy(rMax * 1.04) + '" x2="' + sx(0) + '" y2="' + sy(0)
@@ -2171,28 +2189,42 @@ var EGGrind3D = (function () {
             if (o.kind !== 'fixture') return;
             parts.push('<rect x="' + sx(o.x0) + '" y="' + sy(o.R) + '" width="' + ((o.x1 - o.x0) * sc).toFixed(1)
                 + '" height="' + (o.R * sc).toFixed(1) + '" fill="#EFE3CE" stroke="#9C8468" stroke-width="1.5"/>');
+            var hit = (o === res.bind);
             parts.push('<text x="' + sx((o.x0 + o.x1) / 2) + '" y="' + (sy(o.R) - 6) + '" text-anchor="middle" '
-                + 'font-size="10" fill="#8a5a22">' + esc(o.name) + '</text>');
+                + 'font-size="10" font-weight="' + (hit ? '700' : '400') + '" '
+                + 'fill="' + (hit ? '#DD5138' : '#8a5a22') + '">' + esc(o.name)
+                + (hit ? '（先碰到）' : '') + '</text>');
         });
 
         /* ── 直徑標註：半剖面圖的慣例＝從中心線量到外徑、數值標 Ø（使用者要求
               「直徑應該直接標示直徑」，原本只有一行文字不是尺寸標註）。
               段太窄時放不下箭頭與數字，退回只標在上方名稱後面。 */
+        /* 直徑標註。**這張圖畫的是半剖面（只畫軸心以上那一半）**，所以尺寸線是
+           從中心線量到外徑、長度等於半徑；依製圖慣例這種情形**只在外徑那一端給
+           箭頭**，中心線那一端不給（給了會被讀成「這一段長度就是直徑」）。
+           數值仍標 Ø＝直徑（2026-10-13 使用者指正）。
+           標籤一律帶段名，否則畫面上會出現一個沒頭沒尾的「Ø70.0」看不出是哪一段。 */
         function diaDim(x0, x1, R, color, label) {
             var xm = sx((x0 + x1) / 2), y0 = sy(0), yR = sy(R);
+            /* 段名已經畫在矩形上方了，這裡只標數值，不要再帶一次名字（會變成同一個
+               名字出現兩次）。段太窄畫不下尺寸線時，數值往上再讓一層，不要跟段名
+               疊在同一個高度（2026-10-13 使用者看到一個沒頭沒尾的「Ø70.0」就是這樣來的）。 */
+            var txt = 'Ø' + fx(R * 2, 1);
             if ((x1 - x0) * sc < 26 || (y0 - yR) < 26) {
-                parts.push('<text x="' + xm + '" y="' + (yR - 18) + '" text-anchor="middle" '
-                    + 'font-size="9.5" fill="' + color + '">Ø' + fx(R * 2, 1) + '</text>');
+                parts.push('<text x="' + xm + '" y="' + (yR - 30) + '" text-anchor="middle" '
+                    + 'font-size="9.5" fill="' + color + '">' + esc(txt) + '</text>');
                 return;
             }
             parts.push('<line x1="' + xm + '" y1="' + y0 + '" x2="' + xm + '" y2="' + yR
-                + '" stroke="' + color + '" stroke-width="1" marker-start="url(#pa2)" marker-end="url(#pa)"/>');
+                + '" stroke="' + color + '" stroke-width="1" marker-end="url(#pa)"/>');
             parts.push('<text x="' + (xm + 4) + '" y="' + ((y0 + yR) / 2) + '" font-size="9.5" '
-                + 'fill="' + color + '" dominant-baseline="middle">' + esc(label) + ' Ø' + fx(R * 2, 1) + '</text>');
+                + 'fill="' + color + '" dominant-baseline="middle">' + esc(txt) + '</text>');
         }
-        diaDim(0, p.Lsp, p.Rr, '#2e7d32', 'Dr');
-        diaDim(-p.Lsh, 0, p.Rs, '#1565c0', 'Ds');
-        obs.forEach(function (o) { if (o.kind === 'fixture') diaDim(o.x0, o.x1, o.R, '#8a5a22', ''); });
+        diaDim(0, p.Lsp, p.Rr, '#2e7d32', '齒底徑');
+        diaDim(-p.Lsh, 0, p.Rs, '#1565c0', '肩部');
+        obs.forEach(function (o) {
+            if (o.kind === 'fixture') diaDim(o.x0, o.x1, o.R, '#8a5a22', o.name);
+        });
 
         /* ── 長度標註（第一排，各段各自的 x 範圍不重疊，可以共用一排）──── */
         var dimY1 = sy(0) + 30;
@@ -2227,8 +2259,11 @@ var EGGrind3D = (function () {
                 + '"' + (main ? dash : ' stroke-dasharray="3,4"') + '/>');
             parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="' + (main ? 3 : 2)
                 + '" fill="' + (main ? '#C77A30' : '#bda98e') + '"/>');
-            parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr - (main ? 6 : 18))
-                + '" font-size="10" fill="' + (main ? '#8a5a22' : '#a89477') + '">'
+            /* 標籤放在圓的**側邊**（主角放右、對照放左），不要頂在圓的正上方——
+               那裡正好是上方說明文字的位置，兩邊會疊在一起（使用者回報）。 */
+            parts.push('<text x="' + (wx + (main ? wr + 6 : -wr - 6)) + '" y="' + (wy - 4)
+                + '" text-anchor="' + (main ? 'start' : 'end') + '" '
+                + 'font-size="10" fill="' + (main ? '#8a5a22' : '#a89477') + '">'
                 + esc(label) + '</text>');
         }
         /* 主角是「退刀位置」（砂輪/刀具實際會停的地方，只由退刀量決定）；
@@ -2237,7 +2272,7 @@ var EGGrind3D = (function () {
         if (res.blocked && Math.abs(res.cxLimit - res.cxWork) > 1e-6)
             wheelAt(res.cxLimit, false, '極限位置（再往外就會撞到）');
         if (p.tilt !== 0) {
-            parts.push('<text x="' + (sx(res.cxWork) + 6) + '" y="' + (wy - wr + 10)
+            parts.push('<text x="' + (sx(res.cxWork) + p.Rw * sc + 6) + '" y="' + (wy + 10)
                 + '" font-size="9" fill="#b08a60">傾角 ' + fx(p.tilt, 1)
                 + '°，實際外形非真圓，此圖僅示意位置</text>');
         }
@@ -2254,13 +2289,10 @@ var EGGrind3D = (function () {
                 + '" stroke="#DD5138" stroke-width="0.8" stroke-dasharray="2,2"/>');
             parts.push('<text x="' + ((zx + lx) / 2) + '" y="' + (dimY2 + 14) + '" text-anchor="middle" '
                 + 'font-size="11" font-weight="700" fill="#c0392b">出尾長度 ' + fx(res.tail) + '</text>');
-            /* 指名哪一塊先碰到——這個工具最重要的結論，2D 圖上也要講清楚，
-               不能只在畫面結果面板看得到（2026-10-12 的設計原則同樣適用於輸出圖）。 */
-            if (res.bind) {
-                var bx = sx(res.bind.x1);
-                parts.push('<text x="' + bx + '" y="' + (sy(res.bind.R) + 16) + '" text-anchor="middle" '
-                    + 'font-size="10" font-weight="700" fill="#DD5138">↑ 先碰到：' + esc(res.bind.name) + '</text>');
-            }
+            /* 「先碰到哪一段」不再另外畫一行字——那行字會跟段名、直徑標註疊在
+               一起（2026-10-13 使用者回報）。改成直接把那一段的**段名標紅並加註**，
+               訊息一樣清楚又少一段文字。段名是在上面畫 rect 時一起畫的，所以這裡
+               只補一個紅色的註記放在段名右邊。 */
         } else if (res.overrun > 0) {
             parts.push('<text x="' + sx(0) + '" y="' + (dimY2 + 14) + '" font-size="11" fill="#8a7560">'
                 + '這一側沒有東西擋著砂輪/刀具，可再越過肩部面 ' + fx(res.overrun) + ' mm</text>');
