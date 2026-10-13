@@ -222,6 +222,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                     <label style="font-weight:400;margin:0 0 0 6px;"><input type="checkbox" id="prefExpand" onchange="R.prefApply()"> 預設展開</label>
                                 </span>
                                 <button class="btn btn-sm btn-default" onclick="R.exportPdf()" title="匯出目前兩個月完整排班"><i class="fa fa-file-pdf-o"></i> PDF</button>
+                                <button class="btn btn-sm btn-default" onclick="R.openWeekPrint()" title="A4 直式・依週分段・含簽名欄，可選擇列印區間"><i class="fa fa-print"></i> 簽名表</button>
                                 <span id="ownerTools" style="display:none">
                                     <button class="btn btn-sm btn-default" onclick="R.openRange()" title="區間調班"><i class="fa fa-random"></i> 區間調班</button>
                                 </span>
@@ -410,6 +411,23 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
     <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitRange()">套用</button></div>
 </div></div></div>
 
+<!-- 簽名表列印（A4直式・依週分段）modal -->
+<div class="modal fade" id="weekPrintModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">簽名表列印（A4 直式）</h4></div>
+    <div class="modal-body">
+        <p style="color:#8a7a63;font-size:12px;margin-top:0;">依「排班人員」連續的日期自動合併成一列：日期區間／排班人員／簽名欄（留空供現場簽名）；範圍內若遇假日，會直接標在該列日期區間下方。勾選的每個輪值項目各自列印一頁。</p>
+        <div class="row">
+            <div class="col-sm-6 form-group"><label>列印起日 *</label><input type="date" id="wp_from" class="form-control"></div>
+            <div class="col-sm-6 form-group"><label>列印迄日 *</label><input type="date" id="wp_to" class="form-control"></div>
+        </div>
+        <div class="form-group"><label>輪值項目（勾選要列印的，各自一頁）</label>
+            <div id="wp_lanes" style="border:1px solid var(--warm-line);border-radius:5px;padding:8px;max-height:160px;overflow:auto;"></div>
+        </div>
+        <div id="wp_hint" style="color:#b5651d;font-size:12px;"></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitWeekPrint()"><i class="fa fa-print"></i> 產生列印</button></div>
+</div></div></div>
+
 <!-- 排班 modal -->
 <div class="modal fade" id="shiftAssignModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
     <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title" id="saTitle">排班（指定人員上班別）</h4></div>
@@ -557,6 +575,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/Sortable.min.js"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 var RD = {
     api: '../../src/store/store_Roster_API.php',
@@ -1253,6 +1272,158 @@ var R = (function(){
         pdfWindow('固定班別排班表', body);
     }
 
+    /* ── 簽名表列印（A4 直式・依週分段，含簽名欄）── */
+    function wpNowStr(){
+        var n=new Date(), p=function(x){return String(x).padStart(2,'0');};
+        return n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate())+' '+p(n.getHours())+':'+p(n.getMinutes());
+    }
+    function mdFmt(ds, baseYear){   // 同一年省略年份（10.12），跨年才顯示年份
+        var full=(typeof egFmtDate==='function')?egFmtDate(ds):ds;
+        return (ds.slice(0,4)===baseYear) ? full.slice(5) : full;
+    }
+    function wpRangeLabel(start,end){
+        var full=(typeof egFmtDate==='function')?egFmtDate(start):start;
+        return full+'~'+mdFmt(end, start.slice(0,4));
+    }
+    function ymdLocal(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }   // 不可用 toISOString()：UTC+8 下午夜整點會被換成前一天
+    function wpDateAdd(ds,n){ var d=new Date(ds+'T00:00:00'); d.setDate(d.getDate()+n); return ymdLocal(d); }
+    function wpIsoWeekKey(ds){   // ISO 週一~週日 為一週
+        var d=new Date(ds+'T00:00:00');
+        var dow=(d.getDay()+6)%7;             // 0=一..6=日
+        d.setDate(d.getDate()-dow+3);          // 移到本週週四
+        var firstThu=new Date(d.getFullYear(),0,4);
+        var fdow=(firstThu.getDay()+6)%7;
+        firstThu.setDate(firstThu.getDate()-fdow+3);
+        return d.getFullYear()+'-'+(1+Math.round((d-firstThu)/(7*86400000)));
+    }
+    /** 依 ISO 週把同一輪值項目的連續負責人合併成一列；整週同一人時，假日直接附註在該列；
+     *  一週內出現多人（非週輪值的班表）時，各自連續區段各一列（假日落在區段內也一併附註）。 */
+    function wpBuildLaneRows(dateFrom, dateTo, cellsByDate, laneId, holSet, mkSet){
+        var weeks={}, order=[], d=dateFrom;
+        while(d<=dateTo){
+            var dow=new Date(d+'T00:00:00').getDay();
+            var bizPattern = mkSet[d] || (dow!==0 && dow!==6);   // 平日或補班日才算這週的範圍
+            if(bizPattern){
+                var wk=wpIsoWeekKey(d);
+                if(!weeks[wk]){ weeks[wk]={dates:[]}; order.push(wk); }
+                weeks[wk].dates.push(d);
+            }
+            d=wpDateAdd(d,1);
+        }
+        var rows=[];
+        order.forEach(function(wk){
+            var span=weeks[wk].dates, assigned=[];
+            span.forEach(function(ds){
+                var list=cellsByDate[ds]||[];
+                for(var i=0;i<list.length;i++){ if(+list[i].lane_id===+laneId){ assigned.push({date:ds,uid:list[i].user_id,name:list[i].name,left:list[i].left}); break; } }
+            });
+            if(!assigned.length) return;   // 這週此項目完全沒排班（如表尚未開始），略過
+            var uidSet={}; assigned.forEach(function(a){ uidSet[a.uid]=a; });
+            var uidKeys=Object.keys(uidSet);
+            if(uidKeys.length===1){
+                var p=uidSet[uidKeys[0]];
+                var hol=span.filter(function(ds){ return holSet[ds] && !assigned.some(function(a){return a.date===ds;}); });
+                rows.push({start:span[0], end:span[span.length-1], name:p.name, left:p.left, hol:hol});
+            } else {
+                var i=0;
+                while(i<assigned.length){
+                    var j=i; while(j+1<assigned.length && assigned[j+1].uid===assigned[i].uid) j++;
+                    var rs=assigned[i].date, re=assigned[j].date, runDates={};
+                    for(var k=i;k<=j;k++) runDates[assigned[k].date]=1;
+                    var hol2=span.filter(function(ds){ return ds>=rs && ds<=re && holSet[ds] && !runDates[ds]; });
+                    rows.push({start:rs, end:re, name:assigned[i].name, left:assigned[i].left, hol:hol2});
+                    i=j+1;
+                }
+            }
+        });
+        return rows;
+    }
+    function openWeekPrint(){
+        if(!curBoard){ alert('請先在左側選擇一張排班表'); return; }
+        if(selIds.length>1){ alert('此列印僅支援單一排班表，請先只勾選一張表再列印'); return; }
+        var from=curYm?(curYm+'-01'):new Date().toISOString().slice(0,10);
+        var toD=new Date(from+'T00:00:00'); toD.setMonth(toD.getMonth()+3); toD.setDate(0);
+        $('#wp_from').val(from); $('#wp_to').val(ymdLocal(toD));
+        var lanes=(calData&&calData.lanes)||[];
+        var h = lanes.length ? '' : '<div style="color:#a08c72">此表沒有輪值項目</div>';
+        lanes.forEach(function(l){
+            h+='<label style="display:block;font-weight:400;margin:2px 0;"><input type="checkbox" class="wp-lane" value="'+l.id+'" '+(!hiddenLanes[l.id]?'checked':'')+'> '+esc(l.lane_name)+'</label>';
+        });
+        $('#wp_lanes').html(h);
+        $('#wp_from,#wp_to').off('change').on('change', wpUpdateHint);
+        wpUpdateHint();
+        $('#weekPrintModal').modal('show');
+    }
+    function wpUpdateHint(){
+        var f=$('#wp_from').val(), t=$('#wp_to').val();
+        if(!f || !t || f>t){ $('#wp_hint').text(''); return; }
+        var days=Math.round((new Date(t+'T00:00:00')-new Date(f+'T00:00:00'))/86400000)+1;
+        $('#wp_hint').text('約 '+Math.ceil(days/7)+' 週／每個輪值項目各自列印一頁，實際可印頁數依印表機與紙張設定略有不同（僅供參考）。');
+    }
+    function submitWeekPrint(){
+        if(!curBoard) return;
+        var from=$('#wp_from').val(), to=$('#wp_to').val();
+        if(!from || !to){ alert('請選擇起迄日期'); return; }
+        if(from>to){ alert('起日不可晚於迄日'); return; }
+        var laneIds=$('.wp-lane:checked').map(function(){return +$(this).val();}).get();
+        if(!laneIds.length){ alert('請至少勾選一個輪值項目'); return; }
+        post('get_print_range',{id:curBoard.id, date_from:from, date_to:to}).done(function(r){
+            if(!r.success){ alert(r.message); return; }
+            weekPrintBuild(r, laneIds);
+        });
+    }
+    function weekPrintBuild(data, laneIds){
+        var holSet={}, mkSet={};
+        (data.holidays||[]).forEach(function(d){holSet[d]=1;}); (data.makeup||[]).forEach(function(d){mkSet[d]=1;});
+        var laneMap={}; (data.lanes||[]).forEach(function(l){laneMap[l.id]=l;});
+        var boardName=(data.board&&data.board.name)||'輪值排班表';
+        var genTime=(typeof egFmtDate==='function') ? egFmtDate(wpNowStr(), true) : wpNowStr();
+        var body='', first=true;
+        laneIds.forEach(function(lid){
+            var lane=laneMap[lid]; if(!lane) return;
+            var rows=wpBuildLaneRows(data.date_from, data.date_to, data.cells||{}, lid, holSet, mkSet);
+            body+='<div class="wp-page'+(first?'':' brk')+'">'
+                +'<h2>'+esc(boardName)+(lane.lane_name?'　－　'+esc(lane.lane_name):'')+'</h2>'
+                +'<div class="sub">列印範圍：'+wpRangeLabel(data.date_from,data.date_to)+'　列印時間：'+esc(genTime)+'</div>';
+            if(!rows.length){
+                body+='<div style="color:#999;padding:10px 0;">此範圍內尚無排班資料</div>';
+            } else {
+                body+='<table><thead><tr><th style="width:34%">日期區間</th><th style="width:36%">排班人員</th><th style="width:30%">簽名</th></tr></thead><tbody>';
+                rows.forEach(function(rw){
+                    var holHtml = rw.hol.length ? ('<div class="holnote">'+rw.hol.map(function(ds){ return mdFmt(ds, rw.start.slice(0,4))+'放假'; }).join('、')+'</div>') : '';
+                    body+='<tr><td>'+wpRangeLabel(rw.start,rw.end)+holHtml+'</td>'
+                        +'<td>'+esc(rw.name)+(rw.left?'（已離職）':'')+'</td>'
+                        +'<td>&nbsp;</td></tr>';
+                });
+                body+='</tbody></table>';
+            }
+            body+='</div>';
+            first=false;
+        });
+        if(!body){ alert('沒有可列印的項目'); return; }
+        weekPrintWindow(boardName, body);
+        $('#weekPrintModal').modal('hide');
+    }
+    function weekPrintWindow(title, bodyHtml){
+        var w=window.open('','_blank');
+        if(!w){ alert('瀏覽器封鎖了彈出視窗，請允許後再試'); return; }
+        w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'
+          +'@page{size:A4 portrait;margin:14mm 12mm}'
+          +'body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#3a2e20;margin:0}'
+          +'.wp-page.brk{page-break-before:always}'
+          +'h2{font-size:17px;margin:0 0 4px}'
+          +'.sub{font-size:12px;color:#7a6a52;margin-bottom:10px}'
+          +'table{width:100%;border-collapse:collapse;table-layout:fixed}'
+          +'thead{display:table-header-group}'
+          +'th{background:#f6ead8;border:1px solid #c9b99f;font-size:12px;padding:6px 8px;text-align:left}'
+          +'td{border:1px solid #c9b99f;vertical-align:top;padding:8px;font-size:13px;height:30px;page-break-inside:avoid}'
+          +'.holnote{margin-top:3px;font-size:11px;color:#b5651d}'
+          +'</style></head><body>'+bodyHtml+'</body></html>');
+        w.document.close();
+        w.onload=function(){ w.focus(); w.print(); };
+        setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 600);
+    }
+
     /* ── 紀錄 ── */
     function openLogs(){ $('#logModal').modal('show'); $('.rst-logtabs div').removeClass('active').filter('[data-tab=board]').addClass('active'); $('#logBoard').show(); $('#logAdjust').hide(); loadBoardLog(); loadAdjustLog(); }
     function logTab(el){ $('.rst-logtabs div').removeClass('active'); $(el).addClass('active'); var t=$(el).data('tab'); $('#logBoard').toggle(t==='board'); $('#logAdjust').toggle(t==='adjust'); }
@@ -1704,6 +1875,7 @@ var R = (function(){
         shiftExpand:function(d){ shiftExpanded[d]=!dayOpen(shiftExpanded,d); renderShiftCal(); },
         prefApply:prefApply,
         exportPdf:exportPdf, exportShiftPdf:exportShiftPdf,
+        openWeekPrint:openWeekPrint, submitWeekPrint:submitWeekPrint,
         saSync:saSync, saClearAll:saClearAll, saToggle:saToggle, editShiftAssign:editShiftAssign,
         openShiftBatch:openShiftBatch, btFilter:btFilter, btAll:btAll, btSync:btSync, btOpChange:btOpChange, btPreview:btPreview, btApply:btApply,
         loadBlocks:loadBlocks, editBlock:editBlock, delBlock:delBlock,

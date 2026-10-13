@@ -435,6 +435,57 @@ case 'get_calendar': {
     ]);
 }
 
+/* ── 列印用：自訂日期區間的完整排班資料（不受 2 個月限制）── */
+case 'get_print_range': {
+    $id = (int)($_POST['id'] ?? 0);
+    $dateFrom = (string)($_POST['date_from'] ?? '');
+    $dateTo   = (string)($_POST['date_to'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo) || $dateFrom > $dateTo) {
+        jerr('日期區間不正確', 400);
+    }
+    // 上限 3 年，避免濫用造成過大查詢
+    $maxTo = (new DateTime($dateFrom))->modify('+3 years')->format('Y-m-d');
+    if ($dateTo > $maxTo) $dateTo = $maxTo;
+
+    $st = $pdo->prepare("SELECT * FROM roster_board WHERE id=?");
+    $st->execute([$id]); $b = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$b) jerr('排班表不存在', 404);
+    $mine = ((int)$b['owner_id'] === $MYID);
+    if (!$mine && !roster_can_view_board($pdo, $b, $MYID, $features)) jerr('無權檢視', 403);
+
+    // 排班無終止日：補算到所需的迄日（過去凍結，只補未來）
+    if ($b['status'] === 'active') {
+        $maxD = $pdo->query("SELECT MAX(duty_date) FROM roster_assignment WHERE board_id=" . (int)$id)->fetchColumn();
+        if (!$maxD || $maxD < $dateTo) { try { roster_regenerate($pdo, (int)$id, null, $dateTo); } catch (Exception $e) {} }
+    }
+
+    $lanes = $pdo->prepare("SELECT id,lane_name,color,sort_order FROM roster_lane WHERE board_id=? ORDER BY sort_order,id");
+    $lanes->execute([$id]); $lanes = $lanes->fetchAll(PDO::FETCH_ASSOC);
+
+    $aq = $pdo->prepare("SELECT lane_id,duty_date,user_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ? ORDER BY duty_date");
+    $aq->execute([$id, $dateFrom, $dateTo]);
+    $ass = $aq->fetchAll(PDO::FETCH_ASSOC);
+
+    $uids = array_values(array_unique(array_map(fn($r) => (int)$r['user_id'], $ass)));
+    $names = roster_user_name_map($pdo, $uids);
+    $cells = [];
+    foreach ($ass as $r) {
+        $uid = (int)$r['user_id'];
+        $cells[$r['duty_date']][] = [
+            'lane_id' => (int)$r['lane_id'], 'user_id' => $uid,
+            'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
+        ];
+    }
+    $ctx = roster_workday_context($pdo, $dateFrom, $dateTo);
+
+    jout([
+        'board' => ['id' => (int)$b['id'], 'name' => $b['name']],
+        'lanes' => $lanes, 'cells' => $cells,
+        'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ]);
+}
+
 /* ── 多張表疊加同曆（唯讀檢視）── */
 case 'get_calendar_multi': {
     $ids = $_POST['ids'] ?? [];
