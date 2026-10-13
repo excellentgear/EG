@@ -28597,40 +28597,6 @@ $(function() {
         if (viewCustomer) {
             setTimeout(function() { openCustomerModal(viewCustomer, true); }, 300);
         }
-
-        // ?new_part_no=<文字>（可選 new_part_remark=/new_part_cust=）：自動開啟「新增料號」
-        // 跳窗並把料號文字帶入——給 views/TD/drawing_text_recognize.php（圖面文字辨識，上傳圖片/
-        // PDF/DXF 辨識後讓人挑選候選文字）這種「辨識完要建料號」的深連結用。刻意只帶文字、不直接
-        // 寫入 DB：寫入仍走本頁既有的 openPartModal(0)/submitPartForm，OCR 認錯字（0/O、Q/G）的
-        // 風險全部留給使用者在這裡核對後才存檔，本頁的 save_part 規則一行都不受影響（鐵律4）。
-        var newPartNo = (params.get('new_part_no') || '').trim();
-        if (newPartNo) {
-            setTimeout(function() {
-                openPartModal(0);
-                setTimeout(function() {
-                    var noEl = document.getElementById('pf-D_Setting_Id');
-                    if (noEl) noEl.value = newPartNo;
-                    var remark = (params.get('new_part_remark') || '').trim();
-                    if (remark) {
-                        var rEl = document.getElementById('pf-Remark');
-                        if (rEl) rEl.value = (rEl.value ? rEl.value + '\n' : '') + '（圖面辨識帶入）' + remark;
-                    }
-                    var custHint = (params.get('new_part_cust') || '').trim();
-                    if (custHint) {
-                        var cEl = document.getElementById('pf-customer-display');
-                        if (cEl) {
-                            cEl.value = custHint;
-                            // 既有的客戶下拉搜尋是用 addEventListener('input',…) 掛上去的，不是具名函式
-                            // 可以直接呼叫，派發一個 input 事件讓它自己跑既有那套搜尋/去抖邏輯（鐵律4）。
-                            cEl.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                        var hEl = document.getElementById('pf-cust-hint');
-                        if (hEl) hEl.textContent = '圖面辨識帶入「' + custHint + '」，請從下拉挑選正確的客戶主檔';
-                    }
-                    if (typeof scheduleSpecSuggest === 'function') scheduleSpecSuggest();
-                }, 150);
-            }, 300);
-        }
     })();
 
     // ── 設計備註通知輪詢（頁面載入即開始）──
