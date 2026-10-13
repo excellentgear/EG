@@ -236,6 +236,35 @@ $__g3_api_url = ($__g3_root && strpos($__g3_here, $__g3_root) === 0)
 #g3d-ref-stage:not(.g3d-ref-dragging) { cursor:grab; }
 #g3d-ref-stage iframe { width:100%; height:100%; border:none; background:#fff; }
 @media print { #g3d-ref-box { display:none !important; } }
+
+/* ── 2D 工程圖（零成本「數字→2D」，2026-10-13）───────────────────────────
+   使用者問「輸入數字畫3D，能不能自動轉成2D畫面或圖檔」。查證既有的齒輪計算
+   工具「出尾計算」早就有一張手畫的 SVG 剖面圖（肩部＋齒底徑兩段＋尺寸線），
+   走的正是「直接拿同一組數字畫2D」而不是「把3D模型拍扁／反推」——拍扁的3D
+   截圖是透視變形、沒有尺寸標註的示意圖，反推更糟（三角網格推不出乾淨的
+   線段與正確標註）。這裡延伸同一套手法，覆蓋到本工具完整的輸入（含治具
+   多段），SVG 本身就是向量圖，下載 PNG／SVG 或列印都直接可用，但**這不是
+   AutoCAD/Inventor 打得開的 CAD 檔**，純粹是示意圖，已在跳窗標題與產生的
+   圖面本身都寫明。 */
+#g3d-2d-box { position:fixed; z-index:10560; display:none;
+            width:820px; max-width:94vw; height:600px; max-height:90vh;
+            min-width:420px; min-height:300px; resize:both; overflow:hidden;
+            top:60px; left:calc(50% - 410px);
+            background:#fff; border-radius:8px; border:1px solid var(--g3d-line, #E8C9A0);
+            box-shadow:0 12px 40px rgba(0,0,0,.4); flex-direction:column; }
+#g3d-2d-box.g3d-show { display:flex; }
+#g3d-2d-hdr { cursor:move; user-select:none; flex:0 0 auto;
+            background:linear-gradient(135deg,#5a3418,#C77A30); color:#fff;
+            padding:6px 10px; display:flex; align-items:center; gap:6px; font-size:12px; }
+#g3d-2d-hdr .g3d-sp { margin-left:auto; }
+#g3d-2d-hdr button { background:rgba(255,255,255,.18); color:#fff; border:none;
+            border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;
+            font-family:inherit; }
+#g3d-2d-hdr button:hover { background:rgba(255,255,255,.3); }
+#g3d-2d-stage { flex:1 1 auto; min-height:0; overflow:auto; padding:10px;
+            background:#FDF8F2; display:flex; align-items:center; justify-content:center; }
+#g3d-2d-stage svg { width:100%; height:100%; }
+@media print { #g3d-2d-box { display:none !important; } }
 </style>
 
 <!-- ── 浮動視窗（方式 A；嵌入式用 EGGrind3D.mount() 不經過這裡）──────────── -->
@@ -281,6 +310,19 @@ $__g3_api_url = ($__g3_root && strpos($__g3_here, $__g3_root) === 0)
         <button type="button" id="g3dRefClose">關閉</button>
     </div>
     <div id="g3d-ref-stage"></div>
+</div>
+
+<!-- ── 2D 工程圖（零成本「數字→2D」，與數字→3D 平行、不是互相轉換）────────── -->
+<div id="g3d-2d-box">
+    <div id="g3d-2d-hdr">
+        <i class="fa fa-drafting-compass"></i><span>2D 工程圖（示意剖面圖）</span>
+        <span class="g3d-sp"></span>
+        <button type="button" id="g3d2dPng">下載 PNG</button>
+        <button type="button" id="g3d2dSvg">下載 SVG</button>
+        <button type="button" id="g3d2dPrint">列印</button>
+        <button type="button" id="g3d2dClose">關閉</button>
+    </div>
+    <div id="g3d-2d-stage"></div>
 </div>
 
 <?php /* o3dv.min.js（1MB）與 eg_3d_viewer_tools.js（143KB）刻意**不在這裡載入**：
@@ -1260,6 +1302,10 @@ var EGGrind3D = (function () {
             sl.value = ST.cx;
         }
         draw(false);
+        /* 2D 工程圖視窗若正開著，數字一改就跟著重畫——否則使用者看到的是
+           改之前的舊圖，會以為存檔的圖跟畫面不一致。 */
+        var box2d = $d('g3d-2d-box');
+        if (box2d && box2d.classList.contains('g3d-show')) profile2DOpen();
     }
 
     /* 重畫（改砂輪位置時呼叫，不重算極限位置）。
@@ -1753,6 +1799,259 @@ var EGGrind3D = (function () {
         });
     }
 
+    /* ══ 十二之三、2D 工程圖（零成本「數字→2D」，2026-10-13）═══════════════
+       見上方 CSS 區塊的說明：直接拿建立 3D 用的同一組參數（p／res）畫 SVG
+       剖面圖，不是把 3D 模型拍扁或反推——所以尺寸標註保證精確，不是估的。
+       只畫「工件＋治具＋砂輪在極限位置」的半剖面，不畫實際齒形/齒溝（與
+       3D 那邊已知的範圍限制一致，檔頭說明已經寫過）。 */
+    function buildProfileSVG(p, res) {
+        var VW = 900, VH = 460;
+        var obs = p.obs || [];
+
+        /* ── 版面範圍：x 取所有障礙物＋齒段＋砂輪極限位置的涵蓋範圍，
+           r 取所有半徑＋砂輪頂部（cy+Rw）的涵蓋範圍──────────────────── */
+        var xMin = -p.Lsh, xMax = p.Lsp;
+        obs.forEach(function (o) { if (o.x0 < xMin) xMin = o.x0; });
+        if (res.blocked) {
+            xMin = Math.min(xMin, res.cxLimit - p.Rw * 1.05);
+            xMax = Math.max(xMax, res.cxLimit + p.Rw * 1.05);
+        }
+        var rMax = Math.max(p.Rs, p.Rr, p.cy + p.Rw);
+        obs.forEach(function (o) { if (o.R > rMax) rMax = o.R; });
+        var xSpan = Math.max(xMax - xMin, 1), rSpan = Math.max(rMax, 1);
+
+        var padL = 26, padR = 26, padT = 54, padB = 118;
+        var sc = Math.min((VW - padL - padR) / xSpan, (VH - padT - padB) / rSpan);
+        padL = Math.floor((VW - xSpan * sc) / 2);   /* 水平置中 */
+        function sx(x) { return padL + (x - xMin) * sc; }
+        function sy(r) { return VH - padB - r * sc; }
+
+        var parts = [];
+        var defs = '<defs>'
+            + '<marker id="pa"  markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#555"/></marker>'
+            + '<marker id="pa2" markerWidth="7" markerHeight="7" refX="1" refY="3.5" orient="auto-start-reverse"><path d="M0,0 L7,3.5 L0,7 Z" fill="#555"/></marker>'
+            + '</defs>';
+
+        /* ── 標題與提醒（與結果面板同一份 res.notes，不要另寫一份說法）──── */
+        parts.push('<text x="' + (VW / 2) + '" y="20" text-anchor="middle" font-size="15" '
+            + 'font-weight="700" fill="#4a3520">砂輪干涉 2D 剖面圖（示意，傾角 '
+            + fx(p.tilt, 1) + '°' + (res.blocked && res.bind && res.bind.kind !== 'shoulder' ? '、含治具' : '')
+            + '）</text>');
+        (res.notes || []).slice(0, 2).forEach(function (n, i) {
+            parts.push('<text x="' + (VW / 2) + '" y="' + (36 + i * 13) + '" text-anchor="middle" '
+                + 'font-size="10" fill="#8a5a22">' + esc(n) + '</text>');
+        });
+
+        /* ── 工件軸線（中心線）────────────────────────────────────────── */
+        parts.push('<line x1="' + sx(xMin) + '" y1="' + sy(0) + '" x2="' + sx(xMax) + '" y2="' + sy(0)
+            + '" stroke="#ddd" stroke-width="1" stroke-dasharray="6,3"/>');
+
+        /* ── 齒（花鍵）段：x∈[0,Lsp]，R=Rr，綠色──與出尾計算同一套配色慣例 */
+        parts.push('<rect x="' + sx(0) + '" y="' + sy(p.Rr) + '" width="' + (p.Lsp * sc).toFixed(1)
+            + '" height="' + (p.Rr * sc).toFixed(1) + '" fill="#e8f5e9" stroke="#388e3c" stroke-width="1.5"/>');
+        parts.push('<text x="' + sx(p.Lsp / 2) + '" y="' + (sy(p.Rr) - 6) + '" text-anchor="middle" '
+            + 'font-size="10" fill="#2e7d32">Dr Ø' + fx(p.Dr, 1) + '</text>');
+
+        /* ── 肩部：x∈[-Lsh,0]，R=Rs，藍色 ──────────────────────────────── */
+        parts.push('<rect x="' + sx(-p.Lsh) + '" y="' + sy(p.Rs) + '" width="' + (p.Lsh * sc).toFixed(1)
+            + '" height="' + (p.Rs * sc).toFixed(1) + '" fill="#dce8f8" stroke="#1565c0" stroke-width="1.5"/>');
+        parts.push('<text x="' + sx(-p.Lsh / 2) + '" y="' + (sy(p.Rs) - 6) + '" text-anchor="middle" '
+            + 'font-size="10" fill="#1565c0">Ds Ø' + fx(p.Ds, 1) + '</text>');
+
+        /* ── 肩部面（x=0）紅色虛線，與出尾計算同一個視覺慣例 ────────────── */
+        parts.push('<line x1="' + sx(0) + '" y1="' + sy(rMax * 1.04) + '" x2="' + sx(0) + '" y2="' + sy(0)
+            + '" stroke="#e53935" stroke-width="1.2" stroke-dasharray="5,3"/>');
+
+        /* ── 治具：各段依序往外接，棕褐色（與工件顏色區分，不是同一個料件） ── */
+        obs.forEach(function (o) {
+            if (o.kind !== 'fixture') return;
+            parts.push('<rect x="' + sx(o.x0) + '" y="' + sy(o.R) + '" width="' + ((o.x1 - o.x0) * sc).toFixed(1)
+                + '" height="' + (o.R * sc).toFixed(1) + '" fill="#EFE3CE" stroke="#9C8468" stroke-width="1.5"/>');
+            parts.push('<text x="' + sx((o.x0 + o.x1) / 2) + '" y="' + (sy(o.R) - 6) + '" text-anchor="middle" '
+                + 'font-size="10" fill="#8a5a22">' + esc(o.name) + ' Ø' + fx(o.R * 2, 1) + '</text>');
+        });
+
+        /* ── 長度標註（第一排，各段各自的 x 範圍不重疊，可以共用一排）──── */
+        var dimY1 = sy(0) + 30;
+        function lenDim(x0, x1, label) {
+            var ax0 = sx(x0), ax1 = sx(x1);
+            parts.push('<line x1="' + ax0 + '" y1="' + dimY1 + '" x2="' + ax1 + '" y2="' + dimY1
+                + '" stroke="#888" stroke-width="1" marker-start="url(#pa2)" marker-end="url(#pa)"/>');
+            parts.push('<line x1="' + ax0 + '" y1="' + (sy(0) + 5) + '" x2="' + ax0 + '" y2="' + (dimY1 - 3)
+                + '" stroke="#bbb" stroke-width="0.8"/>');
+            parts.push('<line x1="' + ax1 + '" y1="' + (sy(0) + 5) + '" x2="' + ax1 + '" y2="' + (dimY1 - 3)
+                + '" stroke="#bbb" stroke-width="0.8"/>');
+            parts.push('<text x="' + ((ax0 + ax1) / 2) + '" y="' + (dimY1 + 13) + '" text-anchor="middle" '
+                + 'font-size="9.5" fill="#666">' + esc(label) + '</text>');
+        }
+        lenDim(-p.Lsh, 0, '肩部長 ' + fx(p.Lsh, 1));
+        obs.forEach(function (o) {
+            if (o.kind !== 'fixture') return;
+            if ((o.x1 - o.x0) * sc < 26) return;   /* 太短的段標不下文字就跳過，圖面不硬塞 */
+            lenDim(o.x0, o.x1, fx(o.x1 - o.x0, 1));
+        });
+
+        /* ── 砂輪（極限位置）：圓心恆在 (cxLimit, cy)，半徑 Rw──────────────
+           傾角 0 時是精確的真圓；傾角不為 0 時真實輪廓不是圓（第二段虛線＋
+           文字說明），但圓心位置（含出尾長度）仍是精確解，不是示意猜的。 */
+        if (res.blocked || res.overrun > 0) {
+            var wx = sx(res.cxLimit), wy = sy(p.cy), wr = p.Rw * sc;
+            var dash = p.tilt !== 0 ? ' stroke-dasharray="4,3"' : '';
+            parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="' + wr
+                + '" fill="rgba(199,122,48,.16)" stroke="#C77A30" stroke-width="1.6"' + dash + '/>');
+            parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="3" fill="#C77A30"/>');
+            parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr - 6) + '" font-size="10" '
+                + 'fill="#8a5a22">砂輪（極限位置）</text>');
+            if (p.tilt !== 0) {
+                parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr + 10) + '" font-size="9" '
+                    + 'fill="#b08a60">傾角 ' + fx(p.tilt, 1) + '°，實際外形非真圓，此圖僅示意位置</text>');
+            }
+        }
+
+        /* ── 出尾長度主尺寸（第二排，0 → cxLimit）──────────────────────── */
+        var dimY2 = dimY1 + 34;
+        if (res.blocked) {
+            var zx = sx(0), lx = sx(res.cxLimit);
+            parts.push('<line x1="' + Math.min(zx, lx) + '" y1="' + dimY2 + '" x2="' + Math.max(zx, lx) + '" y2="' + dimY2
+                + '" stroke="#DD5138" stroke-width="1.4" marker-start="url(#pa2)" marker-end="url(#pa)"/>');
+            parts.push('<line x1="' + zx + '" y1="' + (sy(0) + 5) + '" x2="' + zx + '" y2="' + (dimY2 - 3)
+                + '" stroke="#DD5138" stroke-width="0.8" stroke-dasharray="2,2"/>');
+            parts.push('<line x1="' + lx + '" y1="' + (sy(0) + 5) + '" x2="' + lx + '" y2="' + (dimY2 - 3)
+                + '" stroke="#DD5138" stroke-width="0.8" stroke-dasharray="2,2"/>');
+            parts.push('<text x="' + ((zx + lx) / 2) + '" y="' + (dimY2 + 14) + '" text-anchor="middle" '
+                + 'font-size="11" font-weight="700" fill="#c0392b">出尾長度 ' + fx(res.tail) + '</text>');
+            /* 指名哪一塊先碰到——這個工具最重要的結論，2D 圖上也要講清楚，
+               不能只在畫面結果面板看得到（2026-10-12 的設計原則同樣適用於輸出圖）。 */
+            if (res.bind) {
+                var bx = sx(res.bind.x1);
+                parts.push('<text x="' + bx + '" y="' + (sy(res.bind.R) + 16) + '" text-anchor="middle" '
+                    + 'font-size="10" font-weight="700" fill="#DD5138">↑ 先碰到：' + esc(res.bind.name) + '</text>');
+            }
+        } else if (res.overrun > 0) {
+            parts.push('<text x="' + sx(0) + '" y="' + (dimY2 + 14) + '" font-size="11" fill="#8a7560">'
+                + '這一側沒有東西擋著砂輪，可再越過肩部面 ' + fx(res.overrun) + ' mm</text>');
+        }
+
+        /* ── 右下角：出尾長度＋退刀量，與出尾計算同一個「最終數字」慣例 ── */
+        parts.push('<text x="' + (VW - 6) + '" y="' + (VH - 6) + '" text-anchor="end" font-size="11" '
+            + 'fill="#6a1b9a" font-weight="600">出尾（含退刀 ' + fx(p.U, 2) + '）= '
+            + fx(res.tailTot) + ' mm</text>');
+
+        /* ── 免責文字：示意圖不是 CAD 檔，一律印在左下角不要讓人誤會 ────── */
+        parts.push('<text x="6" y="' + (VH - 6) + '" font-size="9" fill="#b0a08a">'
+            + '示意剖面圖（向量繪製，尺寸精確），非 CAD 圖檔；不含實際齒形／齒溝</text>');
+
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + VW + ' ' + VH + '">'
+            + defs + parts.join('') + '</svg>';
+    }
+
+    function profile2DOpen() {
+        if (!ST.res || !ST.res.ok) return;
+        var stage = $d('g3d-2d-stage');
+        var box = $d('g3d-2d-box');
+        if (!stage || !box) return;
+        stage.innerHTML = buildProfileSVG(ST.res.p, ST.res);
+        box.classList.add('g3d-show');
+    }
+    function profile2DClose() {
+        var box = $d('g3d-2d-box');
+        if (box) box.classList.remove('g3d-show');
+    }
+    /* SVG 轄 PNG：序列化→Blob→Image→canvas→toDataURL，不依賴任何外部套件。
+       canvas 畫布用 2 倍 viewBox 尺寸輸出，下載出來的 PNG 才不會模糊。 */
+    function profile2DDownloadPng() {
+        var svgEl = $1q('#g3d-2d-stage svg');
+        if (!svgEl) return;
+        var xml = new XMLSerializer().serializeToString(svgEl);
+        var vb = svgEl.viewBox.baseVal;
+        var scalePx = 2;
+        var cv = document.createElement('canvas');
+        cv.width = vb.width * scalePx; cv.height = vb.height * scalePx;
+        var ctx = cv.getContext('2d');
+        var img = new Image();
+        var blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        img.onload = function () {
+            ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+            ctx.drawImage(img, 0, 0, cv.width, cv.height);
+            URL.revokeObjectURL(url);
+            var a = document.createElement('a');
+            a.href = cv.toDataURL('image/png');
+            a.download = '砂輪干涉2D剖面_' + new Date().toISOString().slice(0, 10) + '.png';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        };
+        img.src = url;
+    }
+    function profile2DDownloadSvg() {
+        var svgEl = $1q('#g3d-2d-stage svg');
+        if (!svgEl) return;
+        /* 這裡刻意分段拼字串、不要在原始碼裡直接連著寫出「尖括號加問號」那組
+           XML 宣告開頭——即使寫在 JS 字串或註解裡，PHP 的 short_open_tag
+           只要是開著的就會原樣解析成 PHP 開始標籤，整份檔案因此壞掉。
+           **這一支 CLI 的 php -l 驗不出來**：CLI 用的 php.ini
+           （bin/php/php8.3.1/php.ini）short_open_tag=Off，但 Apache 實際吃的
+           是另一份（conf/php8.3.1/php.ini）short_open_tag=On——同一支 php -l
+           在這台機器對這個設定項完全是假陰性，一定要用真實 HTTP 請求驗證，
+           連註解裡出現同一組符號都會重現這個問題（已實測踩過兩次）。 */
+        var xmlDecl = '<' + '?xml version="1.0" encoding="UTF-8"?' + '>\n';
+        var xml = xmlDecl + new XMLSerializer().serializeToString(svgEl);
+        var blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = '砂輪干涉2D剖面_' + new Date().toISOString().slice(0, 10) + '.svg';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    }
+    function profile2DPrint() {
+        var svgEl = $1q('#g3d-2d-stage svg');
+        if (!svgEl) return;
+        var xml = new XMLSerializer().serializeToString(svgEl);
+        var w = window.open('', '_blank');
+        if (!w) { alert('列印視窗被瀏覽器封鎖，請允許彈出視窗後再試。'); return; }
+        w.document.open();
+        w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>砂輪干涉2D剖面圖</title>'
+            + '<style>@page{margin:10mm}body{margin:0}svg{width:100%;height:auto}</style></head>'
+            + '<body>' + xml + '</body></html>');
+        w.document.close();
+        setTimeout(function () { w.focus(); w.print(); }, 200);
+    }
+    /* $1q：不限定 ST.root 的 querySelector（本面板的輸出目標是頂層的
+       #g3d-2d-box，不是 mount() 掛載的那個容器）。 */
+    function $1q(sel) { return document.querySelector(sel); }
+
+    /* #g3d2dPng／#g3d2dSvg／#g3d2dPrint／#g3d2dClose 四顆活在 #g3d-2d-box 這個
+       靜態頂層節點裡（跟 #g3d-win 同層，模組載入時就存在），這裡直接綁沒問題。
+       **#g3d2dBtn 不是**——它是 panelHtml() 產生、掛在面板裡的按鈕，模組載入
+       當下 mount() 還沒跑過，這裡抓一定是 null；已改到 mount() 內部去綁
+       （跟 g3dShot／g3dMeasBtn 等其他面板內按鈕同一個位置，避免同一種坑）。 */
+    (function () {
+        var pngBtn = $d('g3d2dPng'); if (pngBtn) pngBtn.addEventListener('click', profile2DDownloadPng);
+        var svgBtn = $d('g3d2dSvg'); if (svgBtn) svgBtn.addEventListener('click', profile2DDownloadSvg);
+        var prtBtn = $d('g3d2dPrint'); if (prtBtn) prtBtn.addEventListener('click', profile2DPrint);
+        var clsBtn = $d('g3d2dClose'); if (clsBtn) clsBtn.addEventListener('click', profile2DClose);
+    })();
+
+    /* 2D 工程圖視窗標題列可拖曳（獨立於 #g3d-win／#g3d-ref-box，互不干擾）。*/
+    (function () {
+        var hdr = null, win = null, dx = 0, dy = 0, dragging = false;
+        document.addEventListener('mousedown', function (e) {
+            hdr = $d('g3d-2d-hdr'); win = $d('g3d-2d-box');
+            if (!hdr || !win || !hdr.contains(e.target)) return;
+            if (e.target.tagName === 'BUTTON') return;
+            var r = win.getBoundingClientRect();
+            win.style.left = r.left + 'px'; win.style.top = r.top + 'px';
+            dx = e.clientX - r.left; dy = e.clientY - r.top;
+            dragging = true;
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging || !win) return;
+            win.style.left = (e.clientX - dx) + 'px';
+            win.style.top = Math.max(0, e.clientY - dy) + 'px';
+        });
+        document.addEventListener('mouseup', function () { dragging = false; });
+    })();
+
     /* ══ 十三、掛載 ════════════════════════════════════════════════════════ */
     function mount(el, opts) {
         opts = opts || {};
@@ -1893,6 +2192,9 @@ var EGGrind3D = (function () {
             a.download = '砂輪干涉_' + new Date().toISOString().slice(0, 10) + '.png';
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
         });
+
+        var btn2d = $1('#g3d2dBtn');
+        if (btn2d) btn2d.addEventListener('click', profile2DOpen);
 
         /* ── 砂輪預設 ─────────────────────────────────────────────────── */
         var psel = $1('#g3dPreset');
