@@ -19,7 +19,12 @@ function oei_ensure_schema(PDO $db): void {
     if ($done) return;
     $done = true;
     $r = $db->query("SHOW TABLES LIKE 'order_erp_import_stage'")->fetchColumn();
-    if ($r) return;
+    if ($r) {
+        if (!$db->inTransaction() && !$db->query("SHOW COLUMNS FROM order_erp_import_stage LIKE 'dup_rank'")->fetchColumn()) {
+            $db->exec("ALTER TABLE order_erp_import_stage ADD COLUMN dup_rank INT NOT NULL DEFAULT 1 COMMENT 'Excel 此單內相同明細的第幾筆' AFTER existing_order_id");
+        }
+        return;
+    }
     if ($db->inTransaction()) return; // DDL 會隱式 commit，交易中不建
     $db->exec("CREATE TABLE order_erp_import_stage (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -42,6 +47,7 @@ function oei_ensure_schema(PDO $db): void {
         match_status VARCHAR(20) NOT NULL COMMENT 'new_order/add_to_order/exact/diff/no_part',
         match_note VARCHAR(255) NULL,
         existing_order_id INT NULL COMMENT '比對到的既有訂單(任一筆)',
+        dup_rank INT NOT NULL DEFAULT 1 COMMENT 'Excel 此單內相同明細(料號/數量/製程/單價)的第幾筆',
         state VARCHAR(12) NOT NULL DEFAULT 'pending' COMMENT 'pending/converted/skipped',
         converted_order_id INT NULL,
         created_by INT NULL, created_at DATETIME NOT NULL,
@@ -154,6 +160,12 @@ function oei_match(PDO $db, array $rows): array {
     }
     unset($r);
 
+    // Excel 為 ERP 原始檔＝正確：同單號內「料號/數量/製程/單價」相同的明細要算有幾筆
+    $idKey = fn($r) => $r['order_oo'] . '|' . ($r['d_id_id'] ?: $r['part_no']) . '|' . $r['qty'] . '|' . oei_norm($r['process_text']) . '|' . ($r['unit_price'] === null ? '' : round($r['unit_price'], 2));
+    $xlCnt = [];
+    foreach ($rows as &$r) { $k = $idKey($r); $xlCnt[$k] = ($xlCnt[$k] ?? 0) + 1; $r['dup_rank'] = $xlCnt[$k]; }
+    unset($r);
+
     $ooList = array_values(array_unique(array_column($rows, 'order_oo')));
     $exist = [];
     foreach (array_chunk($ooList, 500) as $ch) {
@@ -184,6 +196,16 @@ function oei_match(PDO $db, array $rows): array {
         $same = array_values(array_filter($exist[$r['order_oo']], fn($e) => $samePart($e, $r)));
         $r['existing_order_id'] = (int)$exist[$r['order_oo']][0]['Order_id'];
         if (!$same) { $r['match_status'] = 'add_to_order'; $r['match_note'] = '單號已存在但無此產品編號，將補進去'; continue; }
+        $eqN = 0;
+        foreach ($same as $e0) {
+            $pOk = $e0['unit_price'] === null || $r['unit_price'] === null || abs((float)$e0['unit_price'] - $r['unit_price']) < 0.005;
+            if ((int)$e0['Qty'] === $r['qty'] && oei_proc_ok((string)$e0['Processing_items'], $r['process_text']) && $pOk) $eqN++;
+        }
+        if ($eqN > 0) {   // 相同明細訂單內筆數比 Excel 少 → 補差額
+            $r['match_status'] = 'add_to_order';
+            $r['match_note'] = "Excel 此單此料相同明細共 {$xlCnt[$idKey($r)]} 筆，訂單內只有 {$eqN} 筆，補差額（第 {$r['dup_rank']} 筆）";
+            continue;
+        }
         $d = [];
         $e = $same[0];
         if ((int)$e['Qty'] !== $r['qty']) $d[] = "數量 {$e['Qty']}→{$r['qty']}";
@@ -205,14 +227,15 @@ function oei_convert_one(PDO $db, int $stageId, int $uid): array {
     if (!$r || $r['state'] !== 'pending') return [false, '此筆已處理過或不存在', null];
     if (!$r['d_id_id']) return [false, '料號主檔未對應，無法轉入', null];
     if (!$r['order_date']) return [false, '單據日期缺漏', null];
-    // 轉入當下重新比對（暫存之後訂單可能已被別人建立／補過）
-    $m = oei_match($db, [[
-        'line_no' => 0, 'order_oo' => $r['order_oo'], 'order_date' => $r['order_date'], 'delivery_date' => $r['delivery_date'],
-        'client_id' => $r['client_id'], 'client_name' => $r['client_name'], 'part_no' => $r['part_no'], 'spec_text' => $r['spec_text'],
-        'qty' => (int)$r['qty'], 'unit_price' => $r['unit_price'] === null ? null : (float)$r['unit_price'],
-        'amount' => null, 'currency' => $r['currency'], 'exchange_rate' => null,
-    ]])[0];
-    if ($m['match_status'] === 'exact') {
+    // 轉入當下重新比對：訂單內相同明細筆數 ≥ Excel 的第 dup_rank 筆 → 已存在（不比對交期）
+    $q = $db->prepare("SELECT Qty, Processing_items, unit_price FROM order_track WHERE Order_oo=? AND (d_id_ID=? OR d_id=?)");
+    $q->execute([$r['order_oo'], (int)$r['d_id_id'], $r['part_no']]);
+    $M = 0;
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $e) {
+        $pOk = $e['unit_price'] === null || $r['unit_price'] === null || abs((float)$e['unit_price'] - (float)$r['unit_price']) < 0.005;
+        if ((int)$e['Qty'] === (int)$r['qty'] && oei_proc_ok((string)$e['Processing_items'], (string)$r['process_text']) && $pOk) $M++;
+    }
+    if ($r['match_status'] !== 'diff' && $M >= (int)$r['dup_rank']) {
         $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', match_note=? WHERE id=?")
            ->execute(['轉入時發現訂單內已有相同明細，略過', $stageId]);
         return [false, '訂單內已有相同明細，已略過', null];

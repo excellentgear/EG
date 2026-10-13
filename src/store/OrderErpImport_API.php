@@ -47,8 +47,8 @@ case 'stage': {   // 確認後存入暫存區（不動 order_track）
     $batch = date('ymdHis');
     $chk = $db->prepare("SELECT 1 FROM order_erp_import_stage WHERE state='pending' AND order_oo=? AND part_no=? AND qty=? AND process_text<=>? AND unit_price<=>? AND batch_id<>? LIMIT 1");
     $ins = $db->prepare("INSERT INTO order_erp_import_stage
-        (batch_id,line_no,order_oo,order_date,delivery_date,client_id,client_name,part_no,d_id_id,spec_text,process_text,qty,unit_price,amount,currency,exchange_rate,match_status,match_note,existing_order_id,created_by,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())");
+        (batch_id,line_no,order_oo,order_date,delivery_date,client_id,client_name,part_no,d_id_id,spec_text,process_text,qty,unit_price,amount,currency,exchange_rate,match_status,match_note,existing_order_id,dup_rank,created_by,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())");
     $n = 0; $dup = 0; $db->beginTransaction();
     $exact = 0;
     foreach ($rows as $r) {
@@ -59,7 +59,7 @@ case 'stage': {   // 確認後存入暫存區（不動 order_track）
         if ($chk->fetchColumn()) { $dup++; continue; }
         $ins->execute([$batch, $r['line_no'], $r['order_oo'], $r['order_date'], $r['delivery_date'], $r['client_id'], $r['client_name'],
             $r['part_no'], $r['d_id_id'], $r['spec_text'], $r['process_text'], $r['qty'], $r['unit_price'], $r['amount'], $r['currency'],
-            $r['exchange_rate'], $r['match_status'], $r['match_note'], $r['existing_order_id'], $uid]);
+            $r['exchange_rate'], $r['match_status'], $r['match_note'], $r['existing_order_id'], $r['dup_rank'], $uid]);
         $n++;
     }
     $db->commit();
