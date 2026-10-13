@@ -748,11 +748,11 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     $('#oeiStatus').on('change', render);
     $('#oeiNote').on('input', function () { clearTimeout(window._oeiT2); window._oeiT2 = setTimeout(render, 200); });
-    // 框選：在表格上任何儲存格按住滑鼠拖出方框，碰到方框的列一次勾選（按住 Ctrl/Alt 改為取消勾選）
+    // 框選：在「勾選欄／狀態欄」按住滑鼠拖出方框，碰到方框的列一次勾選（按住 Ctrl/Alt 改為取消勾選）
     // 沒拖動（單點）：點勾選欄那格＝切換該列。方框縮小時，離開方框的列會還原成拖曳前的狀態。
     // 拖曳超過 4px 才算框選，所以雙擊儲存格選字複製料號／單號仍可用。
     var mq = null;
-    $('#oeiBody').on('mousedown', 'td', function (e) {
+    $('#oeiBody').on('mousedown', 'td:nth-child(-n+2)', function (e) {   // 只從「勾選欄／狀態欄」起拖，其他欄位保留選字
         if (e.which !== 1) return;
         var base = {}; $('#oeiBody .oei-ck').each(function () { base[this.value] = this.checked; });
         mq = { x: e.clientX, y: e.clientY, moved: false, base: base, firstCol: $(this).is(':first-child'), tr: $(this).closest('tr'), box: null, cx: e.clientX, cy: e.clientY };
