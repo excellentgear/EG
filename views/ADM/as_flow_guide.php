@@ -1760,8 +1760,8 @@ $(document).ready(function () {
         $bindTd.on('click', '.ar-doc-open', function (e) { e.preventDefault(); openPreview($(this).data('no')); });
         $bindTd.on('click', '.ar-clause-open', function () { arToggleClauseDetail($(this).data('cid'), $bindTd); });
 
-        $tr.append($('<td></td>').append($('<textarea class="form-control ar-finding" rows="3" placeholder="把稽核老師反饋的重點貼進來…"></textarea>').val(item.finding || '')));
-        $tr.append($('<td></td>').append($('<textarea class="form-control ar-suggest" rows="3"></textarea>').val(item.suggestion || '')));
+        $tr.append($('<td></td>').append($('<textarea class="form-control ar-finding" rows="3" data-eg-skip placeholder="把稽核老師反饋的重點貼進來…"></textarea>').val(item.finding || '')));
+        $tr.append($('<td></td>').append($('<textarea class="form-control ar-suggest" rows="3" data-eg-skip></textarea>').val(item.suggestion || '')));
         $tr.append($('<td style="text-align:center;"><button type="button" class="ar-row-del" title="刪除這一列"><i class="fa fa-times"></i></button></td>'));
         return $tr;
     }
@@ -1798,6 +1798,12 @@ $(document).ready(function () {
         return true;
     };
     $('#btnArAddRow').on('click', function () { arRowAdd(); });
+    // 逐列「×」刪除鈕：原本沒有綁 click，按了完全沒反應（data-eg-row-del 只處理鍵盤 ↑ 收回最末空列）。
+    $('#arItemsBody').on('click', '.ar-row-del', function () {
+        var $rows = $('#arItemsBody tr');
+        if ($rows.length <= 1) { return; }
+        $(this).closest('tr').remove();
+    });
 
     var AR_EDIT_MODE = false;   // true＝編輯既有一筆（固定單列）；false＝新增可多列
     function arOpen(row) {
