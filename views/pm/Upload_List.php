@@ -20,6 +20,8 @@ include '../../src/common/role_features_helper.php';
 // 出貨單「清除資料」危險操作：僅系統管理員或「資料急救台」管理員(data_console_edit)可見/可用（使用者明確要求 2026-08-27）
 $__features = rf_load_user_features($db, (int)$id);
 $canClearIsList = rf_has_feature($__features, 'all') || rf_has_feature($__features, 'data_console_edit');
+// 「補資料」分頁（報價單 ERP 匯入、訂購單補資料）：僅系統管理員（使用者明確要求 2026-10-13）
+$isPageAdmin = rf_has_feature($__features, 'all');
 
 /* =====================================================================
  * 【待刪除清單 2026-07-28】以下 4 個舊上傳區塊已由 ERP 直接匯入取代，
@@ -301,7 +303,15 @@ function lastUpdateBadge($info, $color = '#555') {
                                 <div class="x_content">
                                     <p class="text-muted font-13 m-b-30">
                                     </p>
-                                    
+                                    <?php if ($isPageAdmin): ?>
+                                    <ul class="nav nav-tabs" id="uploadTabs" style="margin-bottom:12px">
+                                        <li class="active"><a href="#tabErpImport" data-toggle="tab">ERP 匯入</a></li>
+                                        <li><a href="#tabBackfill" data-toggle="tab">補資料 <small class="text-muted">(管理員)</small></a></li>
+                                    </ul>
+                                    <?php endif; ?>
+                                    <div class="tab-content" style="border:0;padding:0">
+                                    <div class="tab-pane active" id="tabErpImport">
+
                                     <!-- 訂單未交(order-OK) 匯入已於 2026-09-18 移除：該匯入最後一次執行是 2026-03-12，資料是未交清單快照不是全量訂單，留著只會被誤用；_upload_For_List.php 的 but=Order 分支同步移除 -->
                                     
                                     <!-- 上傳-BOM ERP直接匯入 (N.xlsx，2026-07-20新增，取代下方新BOM+新BOM製程兩步驟) -->
@@ -505,27 +515,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                     </form>
                                     </div><!-- /粉紅底 -->
 
-                                    <!-- 上傳-報價單 ERP直接匯入 (quotation_list，只新增不覆蓋既有單號，補建舊資料用) -->
-                                    <div style="background:#F7E0BD;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
-                                    <form id="form_quotation_erp" action="_upload_For_List.php?but=Quotation_ERP_Preview" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
-                                        <div class="item form-group" style="margin-bottom:0">
-                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_quotation_erp">
-                                                報價單 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
-                                                <span class="required">*</span>
-                                                <span class="text-muted" style="font-size:11px;">ERP匯出「客戶報價單日報表」(型別需選客戶別明細表)<br>只新增，已存在單號一律跳過不動，用於補建舊資料</span>
-                                            </label>
-                                            <div class="col-md-4 col-sm-4 col-xs-8">
-                                                <div class="input-group">
-                                                    <input type="file" id="file_quotation_erp" name="file" accept=".xls,.xlsx" class="form-control short-input">
-                                                    <span class="input-group-btn">
-                                                        <button type="submit" id="btn_upload_quotation_erp" class="btn btn-warning">ERP匯入</button>
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($quotationErpLastImport, '#8a5a2b') ?></div>
-                                        </div>
-                                    </form>
-                                    </div><!-- /暖砂琥珀底 -->
+                                    <!-- 報價單 ERP直接匯入 已移到「補資料」分頁（管理員專用） -->
 
                                     <!-- 上傳-出貨單 (is_list) — 已由 ERP直接匯入 取代，暫時隱藏 -->
                                     <form action="_upload_For_List.php?but=IS_List" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
@@ -585,6 +575,185 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /藍紫底 -->
+                                    </div><!-- /tabErpImport -->
+<?php if ($isPageAdmin): ?>
+                                    <div class="tab-pane" id="tabBackfill">
+                                    <!-- 上傳-報價單 ERP直接匯入 (quotation_list，只新增不覆蓋既有單號，補建舊資料用) -->
+                                    <div style="background:#F7E0BD;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form id="form_quotation_erp" action="_upload_For_List.php?but=Quotation_ERP_Preview" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_quotation_erp">
+                                                報價單 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="required">*</span>
+                                                <span class="text-muted" style="font-size:11px;">ERP匯出「客戶報價單日報表」(型別需選客戶別明細表)<br>只新增，已存在單號一律跳過不動，用於補建舊資料</span>
+                                            </label>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <div class="input-group">
+                                                    <input type="file" id="file_quotation_erp" name="file" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn">
+                                                        <button type="submit" id="btn_upload_quotation_erp" class="btn btn-warning">ERP匯入</button>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($quotationErpLastImport, '#8a5a2b') ?></div>
+                                        </div>
+                                    </form>
+                                    </div><!-- /暖砂琥珀底 -->
+                                    <!-- 訂購單補資料（ERP「客戶訂購單日報表」→ 暫存區 → 轉成正式訂單） -->
+                                    <div style="background:#FBEBD2;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form id="form_oei" class="form-horizontal form-label-left" novalidate onsubmit="return false">
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_oei">
+                                                訂購單 <b>補資料</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="text-muted" style="font-size:11px;">ERP「客戶訂購單日報表」(客戶別 明細表)<br>只新增、不覆蓋；先進暫存區，確認後才轉成正式訂單<br>補入的訂單業務備註自動寫「補訂單資料」</span>
+                                            </label>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <div class="input-group">
+                                                    <input type="file" id="file_oei" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn"><button type="button" id="btn_oei_preview" class="btn btn-warning">解析並比對</button></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </form>
+                                    </div>
+
+                                    <div style="border:1px solid #E4C293;border-radius:6px;padding:8px 12px;background:#fff">
+                                        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+                                            <b>補資料暫存區</b>
+                                            <div class="btn-group btn-group-sm" id="oeiStateTabs">
+                                                <button type="button" class="btn btn-default active" data-st="pending">待轉入 <span class="badge" id="oeiCntPending">0</span></button>
+                                                <button type="button" class="btn btn-default" data-st="converted">已轉入 <span class="badge" id="oeiCntConverted">0</span></button>
+                                                <button type="button" class="btn btn-default" data-st="skipped">已略過 <span class="badge" id="oeiCntSkipped">0</span></button>
+                                            </div>
+                                            <input type="text" id="oeiQ" class="form-control input-sm" style="width:200px" placeholder="搜尋單號/產品編號/客戶" data-eg-skip>
+                                            <span style="flex:1"></span>
+                                            <span id="oeiActs">
+                                                <button type="button" class="btn btn-sm btn-success" id="btnOeiConvert"><i class="fa fa-exchange"></i> 轉成正式訂單（<span id="oeiSel">0</span>）</button>
+                                                <button type="button" class="btn btn-sm btn-default" id="btnOeiSkip">略過選取</button>
+                                                <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel">刪除選取</button>
+                                            </span>
+                                            <span id="oeiActsSk" style="display:none"><button type="button" class="btn btn-sm btn-default" id="btnOeiRestore">還原成待轉入</button> <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel2">刪除選取</button></span>
+                                        </div>
+                                        <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
+                                        <table class="table table-condensed table-bordered" style="font-size:12px;margin:0">
+                                            <thead style="position:sticky;top:0;background:#F7E0BD"><tr>
+                                                <th style="width:28px"><input type="checkbox" id="oeiAll"></th><th>狀態</th><th>訂單編號</th><th>單據日期</th><th>交期</th><th>客戶</th><th>產品編號</th><th>製程</th><th>數量</th><th>單價</th><th>說明</th>
+                                            </tr></thead>
+                                            <tbody id="oeiBody"><tr><td colspan="11" class="text-muted text-center">載入中…</td></tr></tbody>
+                                        </table>
+                                        </div>
+                                        <div class="text-muted" style="font-size:11px;margin-top:6px">「轉成正式訂單」會在訂單追蹤新增該筆（業務備註＝補訂單資料），轉入當下會再比對一次，已有相同明細的自動略過；「同單號已有此產品但內容不同」預設不勾選，確認是另一筆明細才勾選補入。</div>
+                                    </div>
+
+<div class="modal fade" id="oeiModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:1100px;max-width:96%">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#F7E0BD"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><strong>訂購單補資料 — 比對結果</strong></h4></div>
+            <div class="modal-body" id="oeiModalBody" style="max-height:70vh;overflow:auto"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-warning" id="btnOeiStage" style="display:none">存入暫存區（不會動訂單資料）</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var $ = window.jQuery; if (!$ || !$('#form_oei').length) return;
+    var API = '../../src/store/OrderErpImport_API.php', ST = 'pending';
+    var LB = {
+        new_order:   ['新建訂單', '#2e7d32'], add_to_order: ['補進既有訂單', '#8a5a2b'], exact: ['已存在·相同', '#888'],
+        diff:        ['同料號·內容不同', '#DD5138'], no_part: ['料號主檔未對應', '#b71c1c']
+    };
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    function fd(d) { return d ? String(d).replace(/-/g, '.') : ''; }
+    function badge(st) { var l = LB[st] || [st, '#666']; return '<span style="display:inline-block;padding:1px 6px;border-radius:3px;color:#fff;background:' + l[1] + ';font-size:11px;line-height:16px;white-space:nowrap">' + l[0] + '</span>'; }
+    function rowTds(r) {
+        return '<td>' + badge(r.match_status) + '</td><td>' + esc(r.order_oo) + '</td><td>' + fd(r.order_date) + '</td><td>' + fd(r.delivery_date) +
+            '</td><td>' + esc(r.client_name) + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.process_text) + '</td><td style="text-align:right">' + esc(r.qty) +
+            '</td><td style="text-align:right">' + (r.unit_price == null ? '' : Number(r.unit_price).toLocaleString()) + '</td><td>' + esc(r.match_note) + '</td>';
+    }
+    function post(act, data, fileForm) {
+        return $.ajax({ url: API + '?action=' + act, type: 'POST', data: data, dataType: 'json', processData: !fileForm, contentType: fileForm ? false : 'application/x-www-form-urlencoded; charset=UTF-8' });
+    }
+    function fail(x) { var m = '伺服器錯誤'; try { m = JSON.parse(x.responseText).error || m; } catch (e) {} alert(m); }
+
+    $('#btn_oei_preview').on('click', function () {
+        var f = document.getElementById('file_oei').files[0];
+        if (!f) { alert('請選擇檔案'); return; }
+        var form = new FormData(); form.append('file', f);
+        $('#oeiModalBody').html('<div class="text-center" style="padding:20px"><i class="fa fa-spinner fa-spin fa-3x"></i><p>解析並比對訂單資料中…</p></div>');
+        $('#btnOeiStage').hide(); $('#oeiModal').appendTo('body').modal('show');
+        post('preview', form, true).done(function (res) {
+            if (!res.ok) { $('#oeiModalBody').html('<div class="alert alert-danger">' + esc(res.error) + '</div>'); return; }
+            var c = res.counts, h = '<table class="table table-condensed table-bordered" style="font-size:13px;width:auto"><tr><td>解析到</td><td><b>' + res.total + '</b> 筆明細／' + res.orders + ' 張訂單</td></tr>';
+            Object.keys(LB).forEach(function (k) { if (c[k]) h += '<tr><td>' + badge(k) + '</td><td><b>' + c[k] + '</b> 筆' + (k === 'exact' ? '（不會存入暫存區）' : k === 'no_part' ? '（存入後無法轉入，需先建料號主檔）' : '') + '</td></tr>'; });
+            h += '</table>';
+            if (res.warnings && res.warnings.length) h += '<div class="alert alert-warning" style="font-size:12px">' + res.warnings.map(esc).join('<br>') + '</div>';
+            h += '<div style="overflow-x:auto"><table class="table table-condensed table-striped" style="font-size:12px;white-space:nowrap"><thead><tr><th>狀態</th><th>訂單編號</th><th>單據日期</th><th>交期</th><th>客戶</th><th>產品編號</th><th>製程</th><th>數量</th><th>單價</th><th>說明</th></tr></thead><tbody>';
+            res.rows.forEach(function (r) { h += '<tr>' + rowTds(r) + '</tr>'; });
+            h += '</tbody></table></div>';
+            $('#oeiModalBody').html(h); $('#btnOeiStage').show().prop('disabled', false).text('存入暫存區（不會動訂單資料）');
+        }).fail(function (x) { $('#oeiModalBody').html('<div class="alert alert-danger">解析失敗，請確認檔案格式</div>'); });
+    });
+    $('#btnOeiStage').on('click', function () {
+        var b = $(this).prop('disabled', true).text('存入中…');
+        post('stage', {}).done(function (res) {
+            if (!res.ok) { alert(res.error); b.prop('disabled', false); return; }
+            $('#oeiModal').modal('hide'); document.getElementById('file_oei').value = '';
+            alert('已存入暫存區 ' + res.staged + ' 筆' + (res.exact ? '；訂單內已有相同明細 ' + res.exact + ' 筆已略過' : '') + (res.dup ? '；與暫存區既有待處理重複 ' + res.dup + ' 筆已略過' : ''));
+            ST = 'pending'; load();
+        }).fail(function (x) { fail(x); b.prop('disabled', false); });
+    });
+
+    function selIds() { return $('#oeiBody .oei-ck:checked').map(function () { return +this.value; }).get(); }
+    function updSel() { $('#oeiSel').text(selIds().length); }
+    function load() {
+        post('list', { state: ST, q: $('#oeiQ').val() }).done(function (res) {
+            if (!res.ok) return;
+            $('#oeiCntPending').text(res.counts.pending || 0); $('#oeiCntConverted').text(res.counts.converted || 0); $('#oeiCntSkipped').text(res.counts.skipped || 0);
+            var h = '';
+            res.rows.forEach(function (r) {
+                var dis = (ST !== 'converted' && r.match_status === 'no_part') ? ' disabled' : '';
+                var chk = (ST === 'pending' && (r.match_status === 'new_order' || r.match_status === 'add_to_order')) ? ' checked' : '';
+                var note = ST === 'converted' ? '已轉入 訂單 #' + esc(r.converted_order_id) + '　' + esc(r.converted_at || '') : esc(r.match_note);
+                h += '<tr><td>' + (ST === 'converted' ? '' : '<input type="checkbox" class="oei-ck" value="' + r.id + '"' + dis + chk + '>') + '</td>' + rowTds(r).replace(/<td>[^<]*<\/td>$/, '') + '<td>' + note + '</td></tr>';
+            });
+            $('#oeiBody').html(h || '<tr><td colspan="11" class="text-muted text-center">沒有資料</td></tr>');
+            $('#oeiAll').prop('checked', false); updSel();
+            $('#oeiActs').toggle(ST === 'pending'); $('#oeiActsSk').toggle(ST === 'skipped');
+        });
+    }
+    $('#oeiStateTabs button').on('click', function () { ST = $(this).data('st'); $('#oeiStateTabs button').removeClass('active'); $(this).addClass('active'); load(); });
+    $('#oeiQ').on('input', function () { clearTimeout(window._oeiT); window._oeiT = setTimeout(load, 350); });
+    $('#oeiAll').on('change', function () { $('#oeiBody .oei-ck:not(:disabled)').prop('checked', this.checked); updSel(); });
+    $('#oeiBody').on('change', '.oei-ck', updSel);
+
+    $('#btnOeiConvert').on('click', function () {
+        var ids = selIds(); if (!ids.length) { alert('請先勾選要轉入的明細'); return; }
+        // 點開即刷新：以後端最新狀態為準，轉入當下還會再比對一次
+        if (!confirm('確定將選取的 ' + ids.length + ' 筆轉成正式訂單？\n只會新增，不會覆蓋任何既有訂單；業務備註會寫「補訂單資料」。')) return;
+        var b = $(this).prop('disabled', true);
+        post('convert', { ids: JSON.stringify(ids) }).done(function (res) {
+            alert('已轉入 ' + res.converted + ' 筆' + (res.failed.length ? '\n未轉入 ' + res.failed.length + ' 筆：\n' + res.failed.slice(0, 10).join('\n') : ''));
+        }).fail(fail).always(function () { b.prop('disabled', false); load(); });
+    });
+    function simple(act, msg) { return function () {
+        var ids = selIds(); if (!ids.length) { alert('請先勾選'); return; }
+        if (msg && !confirm(msg.replace('N', ids.length))) return;
+        post(act, { ids: JSON.stringify(ids) }).done(load).fail(fail);
+    }; }
+    $('#btnOeiSkip').on('click', simple('skip'));
+    $('#btnOeiRestore').on('click', simple('restore'));
+    $('#btnOeiDel, #btnOeiDel2').on('click', simple('delete', '確定從暫存區刪除選取的 N 筆？（不影響訂單資料）'));
+    load();
+});
+</script>
+
+                                    </div><!-- /tabBackfill -->
+<?php endif; ?>
+                                    </div><!-- /tab-content -->
                                 </div>
                             </div>
                         </div>
