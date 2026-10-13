@@ -90,6 +90,8 @@ function grind3d_presets_get(PDO $pdo): array {
         $name = trim((string)($r['name'] ?? ''));
         if ($name === '') continue;
         $row = ['name' => mb_substr($name, 0, 40), 'note' => mb_substr(trim((string)($r['note'] ?? '')), 0, 60)];
+        /* auto＝頁面載入時要自動套用的那一組（全廠只會有一組） */
+        $row['auto'] = empty($r['auto']) ? 0 : 1;
         foreach (grind3d_preset_fields() as $k => $lim) {
             if (!isset($r[$k]) || !is_numeric($r[$k])) continue;
             $v = (float)$r[$k];
@@ -108,8 +110,9 @@ function grind3d_presets_get(PDO $pdo): array {
  * @throws Exception 名稱空白、重複、或筆數超過上限時
  */
 function grind3d_presets_save(PDO $pdo, array $rows, int $userId): array {
-    $clean = [];
-    $seen  = [];
+    $clean    = [];
+    $seen     = [];
+    $autoSeen = 0;
     foreach ($rows as $r) {
         if (!is_array($r)) continue;
         $name = trim((string)($r['name'] ?? ''));
@@ -120,6 +123,12 @@ function grind3d_presets_save(PDO $pdo, array $rows, int $userId): array {
         $seen[$key] = 1;
 
         $row = ['name' => $name, 'note' => mb_substr(trim((string)($r['note'] ?? '')), 0, 60)];
+        /* 自動套用：只能有一組。前端是用下拉選的，後端同規則再擋一次（鐵律8）。 */
+        $row['auto'] = (!empty($r['auto']) && $r['auto'] !== '0') ? 1 : 0;
+        if ($row['auto']) {
+            if (!empty($autoSeen)) throw new Exception('「載入時自動套用」只能指定一組');
+            $autoSeen = 1;
+        }
         foreach (grind3d_preset_fields() as $k => $lim) {
             if (!isset($r[$k]) || $r[$k] === '' || !is_numeric($r[$k])) continue;
             $row[$k] = max($lim[0], min($lim[1], (float)$r[$k]));

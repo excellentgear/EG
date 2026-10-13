@@ -291,7 +291,16 @@ $__g3_api_url = ($__g3_root && strpos($__g3_here, $__g3_root) === 0)
       <table class="g3d-fx" id="g3dPresetTbl"><thead><tr>
         <th style="min-width:120px">名稱</th><th>外徑</th><th>刃寬</th><th>側面角</th>
         <th>刃高</th><th>傾角</th><th>退刀量</th><th style="width:26px"></th>
-      </tr></thead><tbody id="g3dPresetBody"></tbody></table>
+      </tr></thead>
+      <tbody id="g3dPresetBody" data-eg-row-add="g3dPresetRowAdd"
+             data-eg-row-del="g3dPresetRowDel"></tbody></table>
+      <div class="g3d-row" style="margin-top:8px">
+        <label style="flex:0 0 auto">載入時自動套用</label>
+        <select class="g3d-ni" id="g3dPresetAuto" style="text-align:left;flex:1 1 auto"></select>
+      </div>
+      <div class="g3d-hint">只有一組預設時<b>一律自動套用</b>（不必在這裡指定）；
+        有兩組以上時，這裡選到的那一組會在每次開啟工具時自動帶入。
+        從齒輪計算工具帶著砂輪外徑進來時不會自動套用，免得把帶進來的尺寸蓋掉。</div>
       <div class="g3d-hint">名稱必填且不可重複，至少要填砂輪外徑；其餘留白的欄位套用時不會覆蓋目前的值。
         刪除請按該列最右邊的 ×，按「儲存」才會真的寫入。這份清單是<b>全廠共用</b>的。</div>
     </div>
@@ -682,6 +691,14 @@ var EGGrind3D = (function () {
         out.tail    = Math.max(lim, 0);
         out.overrun = lim < 0 ? -lim : 0;
         out.tailTot = out.tail + p.U;
+        /* ── 砂輪實際要停的位置（2026-10-13 使用者回報）────────────────────
+           ＝從「齒底徑邊緣」（x=0，齒段與肩部的交界面）往外退一個「退刀量」。
+           這是製程上真正會發生的那個位置，**與治具完全無關**：治具只決定
+           「停在這裡會不會撞到」，不該反過來決定砂輪停在哪裡。
+           原本畫面把砂輪直接擺到 cxLimit（治具決定的極限位置），看起來就像
+           砂輪跟著治具的段在跑。 */
+        out.cxWork     = -p.U;
+        out.workMargin = out.cxWork - lim;   /* 正＝退得到，負＝退不到（會撞） */
         /* 2D 公式只描述「肩部」這一塊，治具不在它的模型裡，所以兩者只有在
            肩部就是卡住的那一塊、而且傾角 0 時才會相同——畫面上要講明。 */
         /* 沒有肩部（Rs <= Rr）時 2D 出尾公式沒有意義，給 null 讓畫面顯示「—」，
@@ -1082,6 +1099,11 @@ var EGGrind3D = (function () {
         h.push('<div class="g3d-sec" data-eg-skip><h4>參考圖面'
             + '<span style="font-weight:400;font-size:11px;color:#8a7560">'
             + '（只在畫面上對照，不會存檔）</span></h4>'
+            + '<div class="g3d-hint" style="margin:0 0 6px">把客戶圖或治具草圖叫出來'
+            + '擺在旁邊<b>照著填</b>左邊的尺寸，省得在兩個視窗之間切來切去。'
+            + '點縮圖可放大、滾輪縮放、可「釘在旁邊」一邊看圖一邊打字。'
+            + '檔案只留在這台電腦的瀏覽器裡，<b>不會上傳、不會存進系統</b>，'
+            + '也完全不參與計算。</div>'
             + '<div class="g3d-ref-sec" id="g3dRefSec">'
             +   '<label class="g3d-ref-pick"><i class="fa fa-upload"></i> 選擇圖面'
             +     '<input type="file" id="g3dRefFile" accept="image/*,.pdf"></label>'
@@ -1117,11 +1139,19 @@ var EGGrind3D = (function () {
             + '（第 1 段最靠近肩部，往外依序）</span></h4>'
             + '<table class="g3d-fx"><thead><tr>'
             + '<th style="width:26px">段</th><th>直徑 mm</th><th>長度 mm</th><th style="width:26px"></th>'
-            + '</tr></thead><tbody id="g3dFxBody"></tbody></table>'
+            + '</tr></thead>'
+            /* 可增列表格鐵則（CLAUDE.md UI 規則）：不自刻鍵盤增刪列，掛屬性交給
+               共用檔 eg_input_rules.js——末列按 ↓ 自動加一列、沒填東西的末列按 ↑
+               自動移除，↑↓ 也會在同欄上下換列。沒載共用檔的頁面由本檔的
+               bindInputRules() 備援接手（兩邊共用同一支 g3dFxRowAdd/Del）。 */
+            + '<tbody id="g3dFxBody" data-eg-row-add="g3dFxRowAdd" '
+            +   'data-eg-row-del="g3dFxRowDel"></tbody></table>'
             + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dFxAdd" '
             + 'style="width:100%;margin-top:5px">＋ 新增一段</button>'
             + '<div class="g3d-hint">沒填就只算肩部干涉。砂輪夠大時，先撞到的常常不是'
-            + '肩部而是治具，結果區會指名是哪一段在卡。</div>'
+            + '肩部而是治具，結果區會指名是哪一段在卡。<br>'
+            + '最後一列按 <b>↓</b> 自動加一段；整列都沒填時按 <b>↑</b> 收回去；'
+            + '<b>↑↓</b> 也可以在同一欄上下換列。</div>'
             + '</div>');
 
         h.push('<div class="g3d-badhint" id="g3dErr"></div>');
@@ -1129,9 +1159,13 @@ var EGGrind3D = (function () {
         h.push('<div class="g3d-sec"><h4>砂輪位置</h4>'
             + '<div class="g3d-slider"><label>軸向位置</label>'
             + '<input type="range" id="g3dCx"><span id="g3dCxV">—</span></div>'
-            + '<div class="g3d-hint">砂輪中心到肩部端面的軸向距離。往左拖會壓進肩部或治具，'
-            + '壓到的部分在 3D 上以紅色標示。</div>'
-            + '<button type="button" class="g3d-btn g3d-btn-main" id="g3dToLimit" '
+            + '<div class="g3d-hint">砂輪中心到齒底徑邊緣（肩部端面）的軸向距離。'
+            + '預設停在<b>退刀位置</b>＝齒底徑邊緣往外退一個退刀量，'
+            + '<b>位置只由退刀量決定，與治具無關</b>；治具只決定「停在這裡會不會撞到」。'
+            + '往左拖會壓進肩部或治具，壓到的部分在 3D 上以紅色標示。</div>'
+            + '<button type="button" class="g3d-btn g3d-btn-main" id="g3dToWork" '
+            + 'style="width:100%;margin-bottom:5px">回到退刀位置</button>'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dToLimit" '
             + 'style="width:100%">移到不干涉的極限位置</button>'
             + '</div>');
 
@@ -1248,6 +1282,40 @@ var EGGrind3D = (function () {
                  + '<td><button type="button" class="g3d-fx-del" title="刪除這一段">×</button></td></tr>';
         }).join('');
     }
+    /* ── 給共用檔 eg_input_rules.js 呼叫的增／刪列（一律不帶參數）────────────
+       合約（見該檔檔頭）：add＝在最後面多一列並重繪；del＝移除最後一列並重繪，
+       **只剩 1 列時函式自己要擋掉**。兩支都掛在 window 上，因為共用檔是用
+       window[函式名] 去找的。 */
+    window.g3dFxRowAdd = function () {
+        var rows = readFx();
+        rows.push({ d: '', len: '' });
+        renderFx(rows);
+    };
+    window.g3dFxRowDel = function () {
+        var tb = $1('#g3dFxBody');
+        if (!tb) return;
+        var rows = readFx();
+        if (rows.length <= 1) return;        /* 只剩一列不刪（合約要求自己擋） */
+        rows.pop();
+        renderFx(rows);
+        recompute(false);                    /* 少一段治具，結果要跟著重算 */
+    };
+    window.g3dPresetRowAdd = function () {
+        var tb = $d('g3dPresetBody');
+        if (!tb) return;
+        var rows = presetReadRowsRaw();
+        rows.push({ name: '' });
+        presetRenderRows(rows);
+    };
+    window.g3dPresetRowDel = function () {
+        var tb = $d('g3dPresetBody');
+        if (!tb) return;
+        var rows = presetReadRowsRaw();
+        if (rows.length <= 1) return;
+        rows.pop();
+        presetRenderRows(rows);
+    };
+
     function fxRenumber() {
         var tb = $1('#g3dFxBody');
         if (!tb) return;
@@ -1291,14 +1359,17 @@ var EGGrind3D = (function () {
         /* 範圍要**同時涵蓋極限位置與肩部端面(0)**：極限位置可能是負的（砂輪可以
            越過端面），原本以 0 為基準的算法會把拉桿夾在涵蓋不到極限位置的區間，
            畫面上就變成「拉到底還是干涉」。 */
-        var half = Math.max(Math.abs(res.cxLimit) * 0.6, p.Rw * 0.35, p.Tb * 2, 10);
-        var lo = Math.min(res.cxLimit - half, -(p.Tb / 2 + 2));
-        var hi = Math.max(res.cxLimit + half, p.Rw * 0.4);
+        var aLo  = Math.min(res.cxLimit, res.cxWork), aHi = Math.max(res.cxLimit, res.cxWork);
+        var half = Math.max(Math.abs(aLo) * 0.6, Math.abs(aHi) * 0.6, p.Rw * 0.35, p.Tb * 2, 10);
+        var lo = Math.min(aLo - half, -(p.Tb / 2 + 2));
+        var hi = Math.max(aHi + half, p.Rw * 0.4);
         var sl = $1('#g3dCx');
         if (sl) {
             sl.min = lo.toFixed(4); sl.max = hi.toFixed(4);
             sl.step = ((hi - lo) / 600).toFixed(5);
-            if (!keepCx || ST.cx < lo || ST.cx > hi) ST.cx = res.cxLimit;
+            /* 預設停在「退刀位置」而不是治具決定的極限位置——那才是製程上實際
+               會停的地方；極限位置只用來判斷「停在這裡撞不撞得到」。 */
+            if (!keepCx || ST.cx < lo || ST.cx > hi) ST.cx = res.cxWork;
             sl.value = ST.cx;
         }
         draw(false);
@@ -1378,7 +1449,17 @@ var EGGrind3D = (function () {
         }
         var d2 = res.diff, shoulderBind = res.bind && res.bind.kind === 'shoulder';
         var rows = [
-            ['砂輪中心軸向位置',                      fx(ST.cx) + ' mm'],
+            ['砂輪中心軸向位置<span class="g3d-k-sub">（目前拉桿停的位置）</span>',
+                                                      fx(ST.cx) + ' mm'],
+            ['<b>退刀位置</b><span class="g3d-k-sub">（齒底徑邊緣往外退 ' + fx(p.U, 2)
+                + ' mm＝砂輪實際會停的位置，與治具無關）</span>',
+                                                      '<b>' + fx(res.cxWork) + ' mm</b>'],
+            ['退刀位置還差多少才會撞到' + (res.blocked
+                 ? '<span class="g3d-k-sub">（' + esc(bindName) + '）</span>'
+                 : '<span class="g3d-k-sub">（沒有東西擋著）</span>'),
+                                                      res.blocked
+                                                        ? gapTxt('軸向', res.workMargin) + ' mm'
+                                                        : '<span class="g3d-k-sub">不會撞到</span>'],
             ['不干涉的極限位置' + (res.blocked
                  ? '<span class="g3d-k-sub">（由' + esc(bindName) + '決定）</span>'
                  : '<span class="g3d-k-sub">（沒有東西擋著）</span>'),
@@ -1733,7 +1814,31 @@ var EGGrind3D = (function () {
             PRESETS.canEdit = !!(j && j.can_edit);
             PRESETS.loaded = true;
             presetRender();
+            presetAutoApply();
         });
+    }
+
+    /* 載入時自動套用（2026-10-13 使用者交辦）：
+         只有一組  → 一律套用（不必有人去指定，不然等於要設定兩次）
+         兩組以上  → 套用管理員在「管理預設」裡指定的那一組，沒指定就不套
+       **呼叫端有帶砂輪外徑進來時一律不套**（從齒輪計算工具的出尾計算開進來的
+       那條路），否則會把使用者剛在那邊算好的砂輪尺寸無聲蓋掉。
+       整支只在每次 mount 之後跑一次。 */
+    function presetAutoPick() {
+        if (!PRESETS.rows.length) return -1;
+        for (var i = 0; i < PRESETS.rows.length; i++) if (PRESETS.rows[i].auto) return i;
+        return PRESETS.rows.length === 1 ? 0 : -1;
+    }
+    function presetAutoApply() {
+        /* 預設是非同步撈回來的：使用者手腳快，有可能在這之前就已經開始改尺寸了，
+           這時候套下去等於把他剛打的字無聲蓋掉，一律放棄自動套用。 */
+        if (ST.presetAutoDone || ST.hostGaveWheel || ST.userTouched) return;
+        ST.presetAutoDone = true;
+        var i = presetAutoPick();
+        if (i < 0) return;
+        var sel = $1('#g3dPreset');
+        if (sel) sel.value = String(i);
+        presetApply(i);
     }
 
     function presetApply(i) {
@@ -1752,6 +1857,8 @@ var EGGrind3D = (function () {
         if (!PRESETS.canEdit) return;
         var box = $d('g3dPresetMask');
         if (!box) return;
+        var asel = $d('g3dPresetAuto');
+        if (asel) asel.removeAttribute('data-want');
         presetRenderRows(PRESETS.rows.slice());
         box.classList.add('g3d-show');
     }
@@ -1768,8 +1875,34 @@ var EGGrind3D = (function () {
                  + esc(r.name || '') + '"></td>' + cells
                  + '<td><button type="button" class="g3d-fx-del" title="刪除這一筆">×</button></td></tr>';
         }).join('');
+        presetRenderAutoSel(rows);
     }
-    function presetReadRows() {
+    /* 「載入時自動套用」下拉：選項就是目前表格上的名稱，所以改名/增刪列之後
+       要跟著重建；用名稱而不是列序當記憶，刪掉中間一列才不會莫名其妙換一組。 */
+    function presetRenderAutoSel(rows) {
+        var sel = $d('g3dPresetAuto');
+        if (!sel) return;
+        var want = sel.getAttribute('data-want');
+        if (want === null) {
+            want = '';
+            rows.forEach(function (r) { if (r && r.auto && r.name) want = r.name; });
+        }
+        var h = ['<option value="">— 不自動套用 —</option>'];
+        rows.forEach(function (r) {
+            if (!r || !r.name) return;
+            h.push('<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>');
+        });
+        sel.innerHTML = h.join('');
+        var hit = '';
+        Array.prototype.forEach.call(sel.options, function (op) {
+            if (op.value && op.value === want) hit = op.value;
+        });
+        sel.value = hit;
+        sel.setAttribute('data-want', hit);
+    }
+    /* 畫面上**每一列**（含還沒填名稱的空列）。鍵盤增刪列與重繪要用這一支，
+       用下面會略過空列的那一支會讓剛加出來的空列當場消失。 */
+    function presetReadRowsRaw() {
         var tb = $d('g3dPresetBody'), out = [];
         if (!tb) return out;
         Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
@@ -1778,9 +1911,16 @@ var EGGrind3D = (function () {
                 var v = inp.value.trim();
                 if (v !== '') o[inp.getAttribute('data-pk')] = v;
             });
-            if (o.name) out.push(o);      /* 沒填名稱的列視為空列，直接略過 */
+            out.push(o);
         });
         return out;
+    }
+    /* 要送出去存檔的列（沒填名稱的視為空列，直接略過） */
+    function presetReadRows() {
+        var sel = $d('g3dPresetAuto');
+        var autoName = sel ? sel.value : '';
+        return presetReadRowsRaw().filter(function (o) { return !!o.name; })
+            .map(function (o) { o.auto = (autoName && o.name === autoName) ? 1 : 0; return o; });
     }
     function presetSaveRows(rows, onDone) {
         var st = $d('g3dPresetStatus');
@@ -1812,11 +1952,16 @@ var EGGrind3D = (function () {
            r 取所有半徑＋砂輪頂部（cy+Rw）的涵蓋範圍──────────────────── */
         var xMin = -p.Lsh, xMax = p.Lsp;
         obs.forEach(function (o) { if (o.x0 < xMin) xMin = o.x0; });
-        if (res.blocked) {
-            xMin = Math.min(xMin, res.cxLimit - p.Rw * 1.05);
-            xMax = Math.max(xMax, res.cxLimit + p.Rw * 1.05);
-        }
-        var rMax = Math.max(p.Rs, p.Rr, p.cy + p.Rw);
+        /* 砂輪一定要畫得進來（退刀位置是主角，極限位置是對照），不然圓會被切掉。 */
+        [res.cxWork, res.cxLimit].forEach(function (cx) {
+            if (!isFinite(cx)) return;
+            xMin = Math.min(xMin, cx - p.Rw * 1.05);
+            xMax = Math.max(xMax, cx + p.Rw * 1.05);
+        });
+        /* 砂輪中心高度在 res 上不是 p 上——寫成 p.cy 會讓 rMax 變成 NaN，
+           之後每一個 sx()/sy() 都是 NaN，整張圖「一條線都畫不出來而且不報錯」
+           （2026-10-13 使用者回報「2D 工程圖沒有資料」就是這個）。 */
+        var rMax = Math.max(p.Rs, p.Rr, res.cy + p.Rw);
         obs.forEach(function (o) { if (o.R > rMax) rMax = o.R; });
         var xSpan = Math.max(xMax - xMin, 1), rSpan = Math.max(rMax, 1);
 
@@ -1894,18 +2039,29 @@ var EGGrind3D = (function () {
         /* ── 砂輪（極限位置）：圓心恆在 (cxLimit, cy)，半徑 Rw──────────────
            傾角 0 時是精確的真圓；傾角不為 0 時真實輪廓不是圓（第二段虛線＋
            文字說明），但圓心位置（含出尾長度）仍是精確解，不是示意猜的。 */
-        if (res.blocked || res.overrun > 0) {
-            var wx = sx(res.cxLimit), wy = sy(p.cy), wr = p.Rw * sc;
-            var dash = p.tilt !== 0 ? ' stroke-dasharray="4,3"' : '';
+        var wy = sy(res.cy), wr = p.Rw * sc;
+        var dash = p.tilt !== 0 ? ' stroke-dasharray="4,3"' : '';
+        function wheelAt(cx, main, label) {
+            var wx = sx(cx);
             parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="' + wr
-                + '" fill="rgba(199,122,48,.16)" stroke="#C77A30" stroke-width="1.6"' + dash + '/>');
-            parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="3" fill="#C77A30"/>');
-            parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr - 6) + '" font-size="10" '
-                + 'fill="#8a5a22">砂輪（極限位置）</text>');
-            if (p.tilt !== 0) {
-                parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr + 10) + '" font-size="9" '
-                    + 'fill="#b08a60">傾角 ' + fx(p.tilt, 1) + '°，實際外形非真圓，此圖僅示意位置</text>');
-            }
+                + '" fill="' + (main ? 'rgba(199,122,48,.16)' : 'none') + '" stroke="'
+                + (main ? '#C77A30' : '#bda98e') + '" stroke-width="' + (main ? 1.6 : 1)
+                + '"' + (main ? dash : ' stroke-dasharray="3,4"') + '/>');
+            parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="' + (main ? 3 : 2)
+                + '" fill="' + (main ? '#C77A30' : '#bda98e') + '"/>');
+            parts.push('<text x="' + (wx + 6) + '" y="' + (wy - wr - (main ? 6 : 18))
+                + '" font-size="10" fill="' + (main ? '#8a5a22' : '#a89477') + '">'
+                + esc(label) + '</text>');
+        }
+        /* 主角是「退刀位置」（砂輪實際會停的地方，只由退刀量決定）；
+           極限位置只畫成淡虛線當對照，免得又看成「砂輪跟著治具跑」。 */
+        wheelAt(res.cxWork, true, '砂輪（退刀位置，退刀量 ' + fx(p.U, 2) + '）');
+        if (res.blocked && Math.abs(res.cxLimit - res.cxWork) > 1e-6)
+            wheelAt(res.cxLimit, false, '極限位置（再往外就會撞到）');
+        if (p.tilt !== 0) {
+            parts.push('<text x="' + (sx(res.cxWork) + 6) + '" y="' + (wy - wr + 10)
+                + '" font-size="9" fill="#b08a60">傾角 ' + fx(p.tilt, 1)
+                + '°，實際外形非真圓，此圖僅示意位置</text>');
         }
 
         /* ── 出尾長度主尺寸（第二排，0 → cxLimit）──────────────────────── */
@@ -2055,6 +2211,11 @@ var EGGrind3D = (function () {
     /* ══ 十三、掛載 ════════════════════════════════════════════════════════ */
     function mount(el, opts) {
         opts = opts || {};
+        /* 呼叫端帶了砂輪外徑進來（例如齒輪計算工具的出尾計算）就不要自動套用
+           預設，那會把帶進來的尺寸蓋掉。 */
+        ST.hostGaveWheel = !!(opts.params && isFinite(parseFloat(opts.params.Dw)));
+        ST.presetAutoDone = false;
+        ST.userTouched    = false;
         el.innerHTML = panelHtml();
         ST.root = el;
         ST.host = el;
@@ -2064,6 +2225,7 @@ var EGGrind3D = (function () {
         /* 參數欄位：打字就重算（防抖 120ms，避免每個按鍵都重建一次模型）*/
         el.querySelectorAll('[data-g3dk]').forEach(function (inp) {
             inp.addEventListener('input', function () {
+                ST.userTouched = true;      /* 之後預設撈回來也不可以蓋掉他打的字 */
                 clearTimeout(ST.timer);
                 ST.timer = setTimeout(function () { recompute(false); }, 120);
             });
@@ -2111,6 +2273,13 @@ var EGGrind3D = (function () {
                 ST.timer = setTimeout(function () { draw(false); }, 40);
             });
         }
+        var tw = $1('#g3dToWork');
+        if (tw) tw.addEventListener('click', function () {
+            if (!ST.res || !ST.res.ok) return;
+            ST.cx = ST.res.cxWork;
+            if (sl) sl.value = ST.cx;
+            draw(false);
+        });
         var tl = $1('#g3dToLimit');
         if (tl) tl.addEventListener('click', function () {
             if (!ST.res || !ST.res.ok) return;
@@ -2240,9 +2409,17 @@ var EGGrind3D = (function () {
             if (pclose) pclose.addEventListener('click', function () {
                 pmask.classList.remove('g3d-show');
             });
+            /* 選了之後要把選擇記在 data-want 上：新增/刪除列會整個重畫下拉，
+               不記住的話剛選好的那一組會被打回上一次的值。 */
+            var pauto = $d('g3dPresetAuto');
+            if (pauto) pauto.addEventListener('change', function () {
+                pauto.setAttribute('data-want', pauto.value);
+            });
             var padd = $d('g3dPresetAdd');
             if (padd) padd.addEventListener('click', function () {
-                var rows = presetReadRows();
+                /* 一定要用 Raw：presetReadRows() 會略過沒填名稱的列，
+                   畫面上已經有一列空的時候按「新增」會把它弄不見 */
+                var rows = presetReadRowsRaw();
                 rows.push({ name: '' });
                 presetRenderRows(rows);
             });
@@ -2255,19 +2432,12 @@ var EGGrind3D = (function () {
             var pbody = $d('g3dPresetBody');
             if (pbody) pbody.addEventListener('click', function (e) {
                 if (!e.target.classList || !e.target.classList.contains('g3d-fx-del')) return;
-                var rows = presetReadRows();
                 var tr = e.target.closest('tr');
                 var all = Array.prototype.slice.call(pbody.querySelectorAll('tr'));
                 var at2 = all.indexOf(tr);
-                /* 用畫面上的列序刪，不要用 presetReadRows 的索引：那一支會略過
-                   沒填名稱的空列，兩邊對不起來就會刪錯人 */
-                var disp = all.map(function (r) {
-                    var o = {};
-                    Array.prototype.forEach.call(r.querySelectorAll('[data-pk]'), function (x) {
-                        if (x.value.trim() !== '') o[x.getAttribute('data-pk')] = x.value.trim();
-                    });
-                    return o;
-                });
+                /* 用畫面上的列序刪：presetReadRowsRaw() 與畫面是一列對一列
+                   （會略過空列的 presetReadRows() 索引對不起來，會刪錯人） */
+                var disp = presetReadRowsRaw();
                 if (at2 >= 0) disp.splice(at2, 1);
                 presetRenderRows(disp);
             });
@@ -2303,6 +2473,69 @@ var EGGrind3D = (function () {
                 el.querySelectorAll('.g3d-left input[type=number]'),
                 function (x) { return !x.disabled && x.offsetParent !== null; });
         }
+        /* ── 規則 6 的備援：可增列表格的 ↑↓ 換列與自動增／刪列 ──────────────
+           合約與共用檔完全一致（見 eg_input_rules.js 檔頭）：
+             末列按 ↓          → 呼叫 data-eg-row-add 指定的全域函式，多一列
+             沒填東西的末列按 ↑ → 呼叫 data-eg-row-del，收回那一列（只剩 1 列時函式自己擋）
+             其餘 ↑↓           → 在同一欄上下換列
+           數字欄的原生 ↑↓ 會改值，所以一律 preventDefault 蓋掉，否則使用者想換列
+           卻把尺寸改掉了還不知道。 */
+        el.addEventListener('keydown', function (e) {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+            var t = e.target;
+            if (!t || !t.closest) return;
+            var td = t.closest('td'), tr = t.closest('tr');
+            if (!td || !tr) return;
+            var tb = tr.parentNode;
+            if (!tb || !tb.getAttribute) return;
+            var addFn = tb.getAttribute('data-eg-row-add');
+            var delFn = tb.getAttribute('data-eg-row-del');
+            if (!addFn && !delFn) return;
+
+            var rows = Array.prototype.slice.call(tb.querySelectorAll('tr'));
+            var ri = rows.indexOf(tr);
+            var ci = Array.prototype.indexOf.call(tr.children, td);
+            var isLast = (ri === rows.length - 1);
+
+            function blank(row) {
+                var list = row.querySelectorAll('input,select,textarea');
+                for (var i = 0; i < list.length; i++) {
+                    if (String(list[i].value == null ? '' : list[i].value).trim() !== '') return false;
+                }
+                return true;
+            }
+            function focusCell(idx) {
+                setTimeout(function () {
+                    var rs = tb.querySelectorAll('tr');
+                    if (!rs[idx]) return;
+                    var cell = rs[idx].children[ci];
+                    var inp = cell && cell.querySelector('input,select,textarea');
+                    if (inp) { inp.focus(); try { inp.select(); } catch (err) {} }
+                }, 0);
+            }
+
+            /* 刪列要排在換列之前：末列是空的時候上一列還在，先換列就沒機會刪了 */
+            if (isLast && e.key === 'ArrowUp' && ri > 0 && delFn && blank(tr)) {
+                e.preventDefault();
+                if (typeof window[delFn] === 'function') { window[delFn](); focusCell(ri - 1); }
+                return;
+            }
+            var to = (e.key === 'ArrowUp') ? ri - 1 : ri + 1;
+            if (to >= 0 && to < rows.length) {
+                e.preventDefault();
+                focusCell(to);
+                return;
+            }
+            if (isLast && e.key === 'ArrowDown' && addFn) {
+                e.preventDefault();
+                if (typeof window[addFn] === 'function') { window[addFn](); focusCell(ri + 1); }
+                return;
+            }
+            /* 沒有上／下一列可去時，數字欄仍要擋掉原生改值 */
+            if (t.tagName === 'INPUT' && t.type === 'number') e.preventDefault();
+        });
+
         el.addEventListener('keydown', function (e) {
             if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
             var t = e.target;
@@ -2560,6 +2793,8 @@ var EGGrind3D = (function () {
     return {
         mount: mount, open: open, close: close,
         analyze: analyze, at: at, selfTest: selfTest,
+        /* 給自我測試與瀏覽器端驗收用：目前的面板狀態與已載入的預設清單 */
+        state: function () { return ST; }, _presets: function () { return PRESETS; },
         DEF: DEF, _norm: norm, _obsSD: obsSD, _placed: placed, _radialGap: radialGap,
         _brute: bruteLimit, _wpProfile: wpProfile, _whProfile: whProfile,
         _buildModel: buildModel
