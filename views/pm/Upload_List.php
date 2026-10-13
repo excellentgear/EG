@@ -626,6 +626,12 @@ function lastUpdateBadge($info, $color = '#555') {
                                                 <button type="button" class="btn btn-default" data-st="skipped">已略過 <span class="badge" id="oeiCntSkipped">0</span></button>
                                             </div>
                                             <input type="text" id="oeiQ" class="form-control input-sm" style="width:200px" placeholder="搜尋單號/產品編號/客戶" data-eg-skip>
+                                            <select id="oeiStatus" class="form-control input-sm" style="width:150px" data-eg-skip title="依狀態篩選">
+                                                <option value="">全部狀態</option><option value="new_order">新建訂單</option><option value="add_to_order">補進既有訂單</option>
+                                                <option value="diff">同料號·內容不同</option><option value="no_part">料號主檔未對應</option>
+                                            </select>
+                                            <input type="text" id="oeiNote" class="form-control input-sm" style="width:200px" placeholder="篩選說明內容（如：補差額）" data-eg-skip>
+                                            <span class="text-muted" style="font-size:12px" id="oeiShown"></span>
                                             <span style="flex:1"></span>
                                             <span id="oeiActs">
                                                 <button type="button" class="btn btn-sm btn-success" id="btnOeiConvert"><i class="fa fa-exchange"></i> 轉成正式訂單（<span id="oeiSel">0</span>）</button>
@@ -712,6 +718,21 @@ document.addEventListener('DOMContentLoaded', function () {
     function load() {
         post('list', { state: ST, q: $('#oeiQ').val() }).done(function (res) {
             if (!res.ok) return;
+            ROWS = res.rows; CNT = res.counts; render();
+        });
+    }
+    var ROWS = [], CNT = {};
+    function render() {
+        var res = { rows: ROWS, counts: CNT };
+        var fs = $('#oeiStatus').val(), fn = $.trim($('#oeiNote').val()).toLowerCase();
+        var all = res.rows;
+        res.rows = all.filter(function (r) {
+            if (fs && r.match_status !== fs) return false;
+            if (fn && String(r.match_note || '').toLowerCase().indexOf(fn) < 0) return false;
+            return true;
+        });
+        $('#oeiShown').text(res.rows.length === all.length ? '' : '顯示 ' + res.rows.length + ' / ' + all.length + ' 筆');
+        {
             $('#oeiCntPending').text(res.counts.pending || 0); $('#oeiCntConverted').text(res.counts.converted || 0); $('#oeiCntSkipped').text(res.counts.skipped || 0);
             var h = '';
             res.rows.forEach(function (r) {
@@ -723,8 +744,23 @@ document.addEventListener('DOMContentLoaded', function () {
             $('#oeiBody').html(h || '<tr><td colspan="11" class="text-muted text-center">沒有資料</td></tr>');
             $('#oeiAll').prop('checked', false); updSel();
             $('#oeiActs').toggle(ST === 'pending'); $('#oeiActsSk').toggle(ST === 'skipped');
-        });
+        }
     }
+    $('#oeiStatus').on('change', render);
+    $('#oeiNote').on('input', function () { clearTimeout(window._oeiT2); window._oeiT2 = setTimeout(render, 200); });
+    // 框選：在勾選欄按住往上下拖曳，掃過的列一次勾選／取消（起點那一列的狀態決定是勾還是取消）
+    // 只從勾選欄起拖，其他欄位照常可以選字複製（料號、單號）
+    var drag = null;
+    $('#oeiBody').on('mousedown', 'td:first-child', function (e) {
+        var ck = $(this).find('.oei-ck:not(:disabled)'); if (!ck.length || e.which !== 1) return;
+        e.preventDefault();
+        drag = { val: !ck.prop('checked') }; ck.prop('checked', drag.val); updSel();
+    });
+    $('#oeiBody').on('mouseenter', 'tr', function () {
+        if (!drag) return;
+        $(this).find('.oei-ck:not(:disabled)').prop('checked', drag.val); updSel();
+    });
+    $(document).on('mouseup', function () { drag = null; });
     $('#oeiStateTabs button').on('click', function () { ST = $(this).data('st'); $('#oeiStateTabs button').removeClass('active'); $(this).addClass('active'); load(); });
     $('#oeiQ').on('input', function () { clearTimeout(window._oeiT); window._oeiT = setTimeout(load, 350); });
     $('#oeiAll').on('change', function () { $('#oeiBody .oei-ck:not(:disabled)').prop('checked', this.checked); updSel(); });
