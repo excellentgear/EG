@@ -35,6 +35,24 @@ $action  = (string)($_POST['action'] ?? $_GET['action'] ?? '');
 $isAdmin = grind3d_tool_is_admin();
 
 try {
+    if ($action === 'kv_get') {
+        echo json_encode(['success' => true,
+            'hidden'   => grind3d_kv_hidden($pdo),
+            'keys'     => grind3d_kv_keys(),
+            'can_edit' => $isAdmin], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($action === 'kv_save') {
+        if (!$isAdmin) {
+            echo json_encode(['success' => false, 'message' => '只有系統管理員可以設定計算結果顯示項目']);
+            exit;
+        }
+        $hidden = json_decode((string)($_POST['hidden'] ?? '[]'), true);
+        if (!is_array($hidden)) $hidden = [];
+        echo json_encode(['success' => true,
+            'hidden' => grind3d_kv_save($pdo, $hidden, $uid)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     if ($action === 'presets_get') {
         echo json_encode(['success' => true,
             'rows'     => grind3d_presets_get($pdo),

@@ -74,6 +74,48 @@ function grind3d_preset_fields(): array {
 }
 
 /** 讀出全部預設（陣列，依名稱排序）。永遠回陣列，壞掉的資料一律當成空的。 */
+/**
+ * 計算結果要顯示哪幾列（管理員可設定，全廠共用）。
+ * **存的是「要隱藏的」不是「要顯示的」**：之後程式新增的結果列預設一律看得到，
+ * 不會因為設定檔沒提到它就整列消失（新欄位被舊設定吃掉是最難查的那種問題）。
+ */
+function grind3d_kv_keys(): array {
+    return ['cx', 'work', 'margin', 'limit', 'tail', 'tailu',
+            'd2d', 'd2ddiff', 'cy', 'hh', 'tb', 'obs'];
+}
+
+function grind3d_kv_hidden(PDO $pdo): array {
+    try {
+        $st = $pdo->prepare("SELECT param_value FROM system_parameters
+                             WHERE param_group='GRIND3D' AND param_key='kv_hidden' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+        $arr = $raw ? json_decode((string)$raw, true) : [];
+        if (!is_array($arr)) $arr = [];
+    } catch (Throwable $e) { $arr = []; }
+    $ok = grind3d_kv_keys();
+    $out = [];
+    foreach ($arr as $k) { if (in_array($k, $ok, true)) $out[] = $k; }
+    return array_values(array_unique($out));
+}
+
+function grind3d_kv_save(PDO $pdo, array $hidden, int $userId): array {
+    $ok = grind3d_kv_keys();
+    $clean = [];
+    foreach ($hidden as $k) {
+        $k = (string)$k;
+        if (in_array($k, $ok, true) && !in_array($k, $clean, true)) $clean[] = $k;
+    }
+    if (count($clean) >= count($ok)) throw new Exception('至少要保留一列計算結果');
+    $st = $pdo->prepare("INSERT INTO system_parameters
+            (param_group, param_key, param_value, description, updated_by, updated_at)
+        VALUES ('GRIND3D', 'kv_hidden', ?, '砂輪/刀具干涉3D：計算結果要隱藏的列', ?, NOW())
+        ON DUPLICATE KEY UPDATE param_value=VALUES(param_value),
+            updated_by=VALUES(updated_by), updated_at=NOW()");
+    $st->execute([json_encode($clean, JSON_UNESCAPED_UNICODE), $userId]);
+    return grind3d_kv_hidden($pdo);
+}
+
 function grind3d_presets_get(PDO $pdo): array {
     try {
         $st = $pdo->prepare("SELECT param_value FROM system_parameters
