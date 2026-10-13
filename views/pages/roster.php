@@ -61,6 +61,9 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
         :root{ --warm-line:#e4d8c6; --warm-bg:#faf6ef; --warm-head:#8c5a3c; --amber:#C0762C; --coral:#DD5138; }
+        /* 月曆表格(table-layout:fixed)在極小內容時會讓 <html> 的 scrollWidth 多出幾像素（瀏覽器量測怪異，非實際可見溢出），
+           .roster-wrap 的 overflow-x:hidden 管不到最外層 html/body 自己的捲動軸，這裡直接鎖掉頁面層級的水平捲軸 */
+        html, body{ overflow-x:hidden; }
         .roster-wrap{ padding:0 14px; overflow-x:hidden; }
         .rst-flex{ display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
         .rst-left{ flex:0 0 300px; max-width:320px; min-width:0; }
