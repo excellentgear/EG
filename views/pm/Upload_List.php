@@ -739,7 +739,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 var dis = (ST !== 'converted' && r.match_status === 'no_part') ? ' disabled' : '';
                 var chk = (ST === 'pending' && (r.match_status === 'new_order' || r.match_status === 'add_to_order')) ? ' checked' : '';
                 var note = ST === 'converted' ? '已轉入 訂單 #' + esc(r.converted_order_id) + '　' + esc(r.converted_at || '') : esc(r.match_note);
-                h += '<tr><td>' + (ST === 'converted' ? '' : '<input type="checkbox" class="oei-ck" value="' + r.id + '"' + dis + chk + '>') + '</td>' + rowTds(r).replace(/<td>[^<]*<\/td>$/, '') + '<td>' + note + '</td></tr>';
+                h += '<tr><td style="cursor:pointer;user-select:none">' + (ST === 'converted' ? '' : '<input type="checkbox" class="oei-ck" style="pointer-events:none" value="' + r.id + '"' + dis + chk + '>') + '</td>' + rowTds(r).replace(/<td>[^<]*<\/td>$/, '') + '<td>' + note + '</td></tr>';
             });
             $('#oeiBody').html(h || '<tr><td colspan="11" class="text-muted text-center">沒有資料</td></tr>');
             $('#oeiAll').prop('checked', false); updSel();
