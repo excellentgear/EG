@@ -1586,8 +1586,13 @@ var EGGrind3D = (function () {
         return { x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h, vis: v.z < 1 };
     }
 
+    /* 標註的字級與箭頭大小一律按「要畫到多大的畫面」等比例放大：畫面上的畫布
+       高度約 300px，列印用的擷取是 1120px，同一個 13px 的字印出來只有 1mm 多
+       （2026-10-13 使用者回報「列印上的 3D 文字應該要放大一點」）。 */
+    var DIM_K = 1;
+
     function dimArrow(parts, tx, ty, ux, uy, color) {
-        var L = 9, W = 3.2;
+        var L = 9 * DIM_K, W = 3.2 * DIM_K;
         var bx = tx + ux * L, by = ty + uy * L, px = -uy, py = ux;
         parts.push('<polygon points="' + tx.toFixed(1) + ',' + ty.toFixed(1) + ' '
             + (bx + px * W).toFixed(1) + ',' + (by + py * W).toFixed(1) + ' '
@@ -1601,35 +1606,38 @@ var EGGrind3D = (function () {
        尺寸線本身就落在那兩點上。 */
     function dimLine(parts, a, b, color, dash, label, labelDy) {
         var _dx = b.x - a.x, _dy = b.y - a.y, _L = Math.sqrt(_dx * _dx + _dy * _dy) || 1;
-        var _px = -_dy / _L * 5, _py = _dx / _L * 5;      /* 端點界線：垂直尺寸線 */
+        var _px = -_dy / _L * 5 * DIM_K, _py = _dx / _L * 5 * DIM_K;   /* 端點界線：垂直尺寸線 */
         [a, b].forEach(function (q) {
             parts.push('<line x1="' + (q.x - _px).toFixed(1) + '" y1="' + (q.y - _py).toFixed(1)
                 + '" x2="' + (q.x + _px).toFixed(1) + '" y2="' + (q.y + _py).toFixed(1)
-                + '" stroke="' + color + '" stroke-width="1.2" opacity=".85"/>');
+                + '" stroke="' + color + '" stroke-width="' + (1.2 * DIM_K).toFixed(1)
+                + '" opacity=".85"/>');
         });
         parts.push('<line x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1)
             + '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1)
-            + '" stroke="' + color + '" stroke-width="1.6"'
+            + '" stroke="' + color + '" stroke-width="' + (1.6 * DIM_K).toFixed(1) + '"'
             + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
         var dx = b.x - a.x, dy = b.y - a.y, L = Math.sqrt(dx * dx + dy * dy) || 1;
         var ux = dx / L, uy = dy / L;
         /* 標的距離短時（整個模型縮在畫面裡，10mm 可能只有 8px），箭頭塞不進
            兩端之間就會疊成一團；比照工程圖的標準做法改畫在外側朝內指，
            並把尺寸線往兩邊各延長一截，讓它仍然看得出是一段距離。 */
-        if (L >= 26) {
+        if (L >= 26 * DIM_K) {
             dimArrow(parts, a.x, a.y, ux, uy, color);
             dimArrow(parts, b.x, b.y, -ux, -uy, color);
         } else {
             dimArrow(parts, a.x, a.y, -ux, -uy, color);
             dimArrow(parts, b.x, b.y, ux, uy, color);
-            parts.push('<line x1="' + (a.x - ux * 14).toFixed(1) + '" y1="' + (a.y - uy * 14).toFixed(1)
-                + '" x2="' + (b.x + ux * 14).toFixed(1) + '" y2="' + (b.y + uy * 14).toFixed(1)
-                + '" stroke="' + color + '" stroke-width="1.6"'
+            var ext = 14 * DIM_K;
+            parts.push('<line x1="' + (a.x - ux * ext).toFixed(1) + '" y1="' + (a.y - uy * ext).toFixed(1)
+                + '" x2="' + (b.x + ux * ext).toFixed(1) + '" y2="' + (b.y + uy * ext).toFixed(1)
+                + '" stroke="' + color + '" stroke-width="' + (1.6 * DIM_K).toFixed(1) + '"'
                 + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>');
         }
         var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-        parts.push('<text x="' + mx.toFixed(1) + '" y="' + (my + (labelDy || -7)).toFixed(1)
-            + '" text-anchor="middle" font-size="13" fill="' + color + '">'
+        parts.push('<text x="' + mx.toFixed(1) + '" y="' + (my + (labelDy || -7) * DIM_K).toFixed(1)
+            + '" text-anchor="middle" font-size="' + (13 * DIM_K).toFixed(1)
+            + '" stroke-width="' + (3 * DIM_K).toFixed(1) + '" fill="' + color + '">'
             + esc(label) + '</text>');
     }
 
@@ -1647,6 +1655,7 @@ var EGGrind3D = (function () {
         if (!r.width || !r.height) { svg.innerHTML = ''; return; }
         svg.setAttribute('viewBox', '0 0 ' + wr.width + ' ' + wr.height);
         var ox = r.left - wr.left, oy = r.top - wr.top;
+        DIM_K = Math.max(1, Math.min(r.width, r.height) / 360);
         try { cam.updateMatrixWorld(); } catch (e) {}
         function P(x, y, z) {
             var q = dimProject(cam, r.width, r.height, x, y, z);
@@ -1764,7 +1773,7 @@ var EGGrind3D = (function () {
             + '.ttl h2{margin:1.5mm 0 0;font-size:11.5pt;font-weight:600;color:#8a5a22;}'
             + '.ttl .meta{flex:0 0 auto;font-size:8.5pt;color:#777;text-align:right;white-space:nowrap;}'
             + '.body{display:flex;gap:6mm;flex:1 1 auto;min-height:0;}'
-            + '.cl{flex:0 0 96mm;display:flex;flex-direction:column;gap:3mm;min-height:0;}'
+            + '.cl{flex:0 0 86mm;display:flex;flex-direction:column;gap:3mm;min-height:0;}'
             + '.cr{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;}'
             + 'h3{margin:0 0 1.5mm;font-size:9.5pt;color:#8a5a22;border-left:3px solid #C77A30;padding-left:2mm;}'
             + 'table{width:100%;border-collapse:collapse;font-size:8.5pt;}'
@@ -1800,7 +1809,7 @@ var EGGrind3D = (function () {
             +   '</div>'
             +   '<div class="cr"><h3>' + esc(opt.rightTitle) + '</h3>'
             +     '<div class="imgbox">' + opt.rightInner + '</div>'
-            +     '<div class="cap">' + esc(opt.caption) + '</div>'
+            +     (opt.caption ? '<div class="cap">' + esc(opt.caption) + '</div>' : '')
             +   '</div>'
             + '</div></div></body></html>';
         w.document.open(); w.document.write(html); w.document.close();
@@ -1842,7 +1851,17 @@ var EGGrind3D = (function () {
            比例再 FitSphereToWindow，模型就會真的填滿那一塊。
            Resize 與相機都在**同一個 JS 週期內**還原，瀏覽器不會畫出中間狀態。 */
         viewer.Resize(PRINT_W, PRINT_H);
-        if (sphere) viewer.FitSphereToWindow(sphere, false);
+        if (sphere) {
+            /* FitSphereToWindow 會自己留一圈邊，列印時那一圈就是白白浪費掉的紙。
+               借現成包圍球的建構子造一顆小一點的球去 fit，等於再往內推一點
+               （2026-10-13 使用者回報「列印的 3D 圖可以再加大」）。 */
+            try {
+                var SphC = sphere.constructor, VecC = sphere.center.constructor;
+                var c0 = sphere.center;
+                viewer.FitSphereToWindow(
+                    new SphC(new VecC(c0.x, c0.y, c0.z), sphere.radius * 0.66), false);
+            } catch (e) { viewer.FitSphereToWindow(sphere, false); }
+        }
         viewer.Render();
         drawDims();                                        /* 標註要用新的比例重算 */
         /* 標註是以「畫布座標」算出來的，viewBox 要跟著換成擷取尺寸才對得準 */
@@ -2088,8 +2107,15 @@ var EGGrind3D = (function () {
        剖面圖，不是把 3D 模型拍扁或反推——所以尺寸標註保證精確，不是估的。
        只畫「工件＋治具＋砂輪/刀具在極限位置」的半剖面，不畫實際齒形/齒溝（與
        3D 那邊已知的範圍限制一致，檔頭說明已經寫過）。 */
-    function buildProfileSVG(p, res) {
-        var VW = 900, VH = 460;
+    /* opts.bare＝列印用的精簡版：不畫標題、上方說明與左下免責（列印報表上
+       那些資訊已經在左欄與區塊標題出現過，重複印只是把圖擠小＝2026-10-13
+       使用者回報）。省下來的上下留白直接讓圖放大。 */
+    function buildProfileSVG(p, res, opts) {
+        opts = opts || {};
+        /* 列印版把畫布改高：列印框接近 1.15:1，而 900×460 是 1.96:1，照原比例
+           放進去會上下各留一大片白、圖只佔一半高（2026-10-13 使用者要求圖要
+           填滿區塊 70% 以上）。畫布變高＝可用高度變大＝圖跟著放大。 */
+        var VW = 900, VH = (opts && opts.bare) ? 700 : 460;
         var obs = p.obs || [];
 
         /* ── 版面範圍：x 取所有障礙物＋齒段＋砂輪/刀具極限位置的涵蓋範圍，
@@ -2126,7 +2152,9 @@ var EGGrind3D = (function () {
         });
         noteLines = noteLines.slice(0, 4);
 
-        var padL = 26, padR = 26, padT = 34 + noteLines.length * 13 + 22, padB = 118;
+        if (opts.bare) noteLines = [];
+        var padL = 26, padR = 26, padB = opts.bare ? 96 : 118;
+        var padT = opts.bare ? 16 : (34 + noteLines.length * 13 + 22);
         var sc = Math.min((VW - padL - padR) / xSpan, (VH - padT - padB) / rSpan);
         padL = Math.floor((VW - xSpan * sc) / 2);   /* 水平置中 */
         function sx(x) { return padL + (x - xMin) * sc; }
@@ -2152,7 +2180,7 @@ var EGGrind3D = (function () {
             + '<style>text{paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;}</style>';
 
         /* ── 標題與提醒（與結果面板同一份 res.notes，不要另寫一份說法）──── */
-        parts.push('<text x="' + (VW / 2) + '" y="20" text-anchor="middle" font-size="15" '
+        if (!opts.bare) parts.push('<text x="' + (VW / 2) + '" y="20" text-anchor="middle" font-size="15" '
             + 'font-weight="700" fill="#4a3520">砂輪/刀具干涉 2D 剖面圖（示意，傾角 '
             + fx(p.tilt, 1) + '°' + (res.blocked && res.bind && res.bind.kind !== 'shoulder' ? '、含治具' : '')
             + '）</text>');
@@ -2251,7 +2279,7 @@ var EGGrind3D = (function () {
            文字說明），但圓心位置（含出尾長度）仍是精確解，不是示意猜的。 */
         var wy = sy(res.cy), wr = p.Rw * sc;
         var dash = p.tilt !== 0 ? ' stroke-dasharray="4,3"' : '';
-        function wheelAt(cx, main, label) {
+        function wheelAt(cx, main, label) {       /* label 可以是字串或多行陣列 */
             var wx = sx(cx);
             parts.push('<circle cx="' + wx + '" cy="' + wy + '" r="' + wr
                 + '" fill="' + (main ? 'rgba(199,122,48,.16)' : 'none') + '" stroke="'
@@ -2261,16 +2289,26 @@ var EGGrind3D = (function () {
                 + '" fill="' + (main ? '#C77A30' : '#bda98e') + '"/>');
             /* 標籤放在圓的**側邊**（主角放右、對照放左），不要頂在圓的正上方——
                那裡正好是上方說明文字的位置，兩邊會疊在一起（使用者回報）。 */
-            parts.push('<text x="' + (wx + (main ? wr + 6 : -wr - 6)) + '" y="' + (wy - 4)
-                + '" text-anchor="' + (main ? 'start' : 'end') + '" '
-                + 'font-size="10" fill="' + (main ? '#8a5a22' : '#a89477') + '">'
-                + esc(label) + '</text>');
+            var lines = Array.isArray(label) ? label : [label];
+            lines.forEach(function (ln, i) {
+                parts.push('<text x="' + (wx + (main ? wr + 6 : -wr - 6)) + '" y="'
+                    + (wy - 4 + i * 13) + '" text-anchor="' + (main ? 'start' : 'end') + '" '
+                    + 'font-size="10" fill="' + (main ? '#8a5a22' : '#a89477') + '">'
+                    + esc(ln) + '</text>');
+            });
         }
         /* 主角是「退刀位置」（砂輪/刀具實際會停的地方，只由退刀量決定）；
            極限位置只畫成淡虛線當對照，免得又看成「砂輪/刀具跟著治具跑」。 */
         wheelAt(res.cxWork, true, '砂輪/刀具（退刀位置，退刀量 ' + fx(p.U, 2) + '）');
-        if (res.blocked && Math.abs(res.cxLimit - res.cxWork) > 1e-6)
-            wheelAt(res.cxLimit, false, '極限位置（再往外就會撞到）');
+        if (res.blocked && Math.abs(res.cxLimit - res.cxWork) > 1e-6) {
+            /* 使用者指定：極限位置那一圈的說明要跟結果列同一句話
+               「極限位置／還有 N mm 才會碰撞」。 */
+            var wm = res.workMargin;
+            wheelAt(res.cxLimit, false, ['極限位置',
+                wm < -TOUCH_EPS ? ('已壓進 ' + fx(-wm) + ' mm')
+                : (wm <= TOUCH_EPS ? '剛好貼到，再靠近就碰撞'
+                                   : ('還有 ' + fx(wm) + ' mm 才會碰撞'))]);
+        }
         if (p.tilt !== 0) {
             parts.push('<text x="' + (sx(res.cxWork) + p.Rw * sc + 6) + '" y="' + (wy + 10)
                 + '" font-size="9" fill="#b08a60">傾角 ' + fx(p.tilt, 1)
@@ -2279,7 +2317,10 @@ var EGGrind3D = (function () {
 
         /* ── 出尾長度主尺寸（第二排，0 → cxLimit）──────────────────────── */
         var dimY2 = dimY1 + 34;
-        if (res.blocked) {
+        /* **只有真的有出尾（極限位置在端面右側）才標出尾長度**。極限位置在端面
+           左側時出尾長度是 0，那條線量到的是「可以越過端面多少」，標成
+           「出尾長度 0.000」會變成一條 45mm 的線上面寫 0。 */
+        if (res.blocked && res.cxLimit > TOUCH_EPS) {
             var zx = sx(0), lx = sx(res.cxLimit);
             parts.push('<line x1="' + Math.min(zx, lx) + '" y1="' + dimY2 + '" x2="' + Math.max(zx, lx) + '" y2="' + dimY2
                 + '" stroke="#DD5138" stroke-width="1.4" marker-start="url(#pa2)" marker-end="url(#pa)"/>');
@@ -2294,8 +2335,18 @@ var EGGrind3D = (function () {
                訊息一樣清楚又少一段文字。段名是在上面畫 rect 時一起畫的，所以這裡
                只補一個紅色的註記放在段名右邊。 */
         } else if (res.overrun > 0) {
-            parts.push('<text x="' + sx(0) + '" y="' + (dimY2 + 14) + '" font-size="11" fill="#8a7560">'
-                + '這一側沒有東西擋著砂輪/刀具，可再越過肩部面 ' + fx(res.overrun) + ' mm</text>');
+            /* 可以越過端面：標的是「可越過多少」，並註明出尾長度是 0 */
+            var zx2 = sx(0), lx2 = sx(res.cxLimit);
+            parts.push('<line x1="' + Math.min(zx2, lx2) + '" y1="' + dimY2 + '" x2="' + Math.max(zx2, lx2)
+                + '" y2="' + dimY2 + '" stroke="#2e7d32" stroke-width="1.4" '
+                + 'marker-start="url(#pa2)" marker-end="url(#pa)"/>');
+            [zx2, lx2].forEach(function (xx) {
+                parts.push('<line x1="' + xx + '" y1="' + (sy(0) + 5) + '" x2="' + xx + '" y2="' + (dimY2 - 3)
+                    + '" stroke="#2e7d32" stroke-width="0.8" stroke-dasharray="2,2"/>');
+            });
+            parts.push('<text x="' + ((zx2 + lx2) / 2) + '" y="' + (dimY2 + 14) + '" text-anchor="middle" '
+                + 'font-size="11" font-weight="700" fill="#2e7d32">可越過端面 '
+                + fx(res.overrun) + '（出尾長度 0）</text>');
         }
 
         /* ── 右下角：出尾長度＋退刀量，與出尾計算同一個「最終數字」慣例 ── */
@@ -2304,7 +2355,7 @@ var EGGrind3D = (function () {
             + fx(res.tailTot) + ' mm</text>');
 
         /* ── 免責文字：示意圖不是 CAD 檔，一律印在左下角不要讓人誤會 ────── */
-        parts.push('<text x="6" y="' + (VH - 6) + '" font-size="9" fill="#b0a08a">'
+        if (!opts.bare) parts.push('<text x="6" y="' + (VH - 6) + '" font-size="9" fill="#b0a08a">'
             + '示意剖面圖（向量繪製，尺寸精確），非 CAD 圖檔；不含實際齒形／齒溝</text>');
 
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + VW + ' ' + VH + '">'
@@ -2376,9 +2427,11 @@ var EGGrind3D = (function () {
         printReport({
             reportTitle: '2D 模擬報告（出尾長度與治具干涉）',
             rightTitle: '2D 剖面圖（示意，尺寸精確）',
-            rightInner: new XMLSerializer().serializeToString(svgEl),
-            caption: '向量繪製的示意剖面圖，尺寸由同一組參數解析計算；'
-                   + '非 CAD 圖檔，不含實際齒形／齒溝。',
+            /* 列印用精簡版重畫一張（不含標題／說明／免責），圖才放得大；
+               caption 一併留空——那句話與圖裡那行免責是同一件事，重複又佔空間。 */
+            rightInner: buildProfileSVG(ST.res.p, ST.res, { bare: true })
+                            .replace('<svg ', '<svg class="flat" '),
+            caption: '',
             docTag: '2D剖面圖'
         });
     }
