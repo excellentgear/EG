@@ -45,3 +45,96 @@ function grind3d_tool_can_use($pdo, int $userId): bool {
         return false;
     }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   砂輪尺寸預設（2026-10-13 使用者交辦：「請提供砂輪相關尺寸預設功能(包含退刀量)」）
+
+   **刻意存在資料庫而不是瀏覽器 localStorage**：砂輪是現場共用的設備，一支砂輪的
+   外徑／刃寬／側面角／刃高／傾角／退刀量是全廠共同的事實，存 localStorage 會變成
+   每個人、每台電腦都要自己重打一次，而且改了別人不知道。
+
+   權限：看得到這個工具的人都讀得到預設；**新增／修改／刪除限管理員**（比照齒輪
+   計算工具的「預留量管理」——那也是全廠共用的對照表，由管理員維護）。
+
+   存放：system_parameters（param_group='GRIND3D', param_key='presets'）一列 JSON，
+   不另開資料表：這是一份幾十筆的設定清單，不是業務資料，開一張表只是多一個要
+   維護的東西。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** 預設值的欄位白名單與夾範圍（與前端 norm() 同一套上下限） */
+function grind3d_preset_fields(): array {
+    return [
+        'Dw'   => [1,   2000],   // 砂輪外徑
+        'Tw'   => [0.1,  500],   // 砂輪刃寬
+        'pa'   => [0,     60],   // 砂輪側面角
+        'Hf'   => [0,    500],   // 刃高
+        'tilt' => [-75,   75],   // 砂輪傾角
+        'U'    => [0,    500],   // 退刀量
+    ];
+}
+
+/** 讀出全部預設（陣列，依名稱排序）。永遠回陣列，壞掉的資料一律當成空的。 */
+function grind3d_presets_get(PDO $pdo): array {
+    try {
+        $st = $pdo->prepare("SELECT param_value FROM system_parameters
+                             WHERE param_group='GRIND3D' AND param_key='presets' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+        $arr = $raw ? json_decode((string)$raw, true) : [];
+        if (!is_array($arr)) $arr = [];
+    } catch (Throwable $e) { $arr = []; }
+
+    $out = [];
+    foreach ($arr as $r) {
+        if (!is_array($r)) continue;
+        $name = trim((string)($r['name'] ?? ''));
+        if ($name === '') continue;
+        $row = ['name' => mb_substr($name, 0, 40), 'note' => mb_substr(trim((string)($r['note'] ?? '')), 0, 60)];
+        foreach (grind3d_preset_fields() as $k => $lim) {
+            if (!isset($r[$k]) || !is_numeric($r[$k])) continue;
+            $v = (float)$r[$k];
+            $row[$k] = max($lim[0], min($lim[1], $v));
+        }
+        $out[] = $row;
+    }
+    usort($out, function ($a, $b) { return strnatcasecmp($a['name'], $b['name']); });
+    return $out;
+}
+
+/**
+ * 整份覆寫（新增／改名／刪除都走這一支，前端送完整清單）。
+ * 一次送整份而不是逐筆增刪：這份清單只有幾十筆，整份覆寫不會有「刪到一半失敗」
+ * 的中間狀態，也不必另外處理 id 與併發。
+ * @throws Exception 名稱空白、重複、或筆數超過上限時
+ */
+function grind3d_presets_save(PDO $pdo, array $rows, int $userId): array {
+    $clean = [];
+    $seen  = [];
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        $name = trim((string)($r['name'] ?? ''));
+        if ($name === '') throw new Exception('每一筆預設都要有名稱');
+        $name = mb_substr($name, 0, 40);
+        $key  = mb_strtolower($name);
+        if (isset($seen[$key])) throw new Exception('預設名稱重複：' . $name);
+        $seen[$key] = 1;
+
+        $row = ['name' => $name, 'note' => mb_substr(trim((string)($r['note'] ?? '')), 0, 60)];
+        foreach (grind3d_preset_fields() as $k => $lim) {
+            if (!isset($r[$k]) || $r[$k] === '' || !is_numeric($r[$k])) continue;
+            $row[$k] = max($lim[0], min($lim[1], (float)$r[$k]));
+        }
+        if (!isset($row['Dw'])) throw new Exception('「' . $name . '」至少要填砂輪外徑');
+        $clean[] = $row;
+    }
+    if (count($clean) > 100) throw new Exception('預設最多 100 筆');
+
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    $st = $pdo->prepare("INSERT INTO system_parameters
+            (param_group, param_key, param_value, description, updated_by, updated_at)
+        VALUES ('GRIND3D', 'presets', ?, '砂輪干涉3D：砂輪尺寸預設', ?, NOW())
+        ON DUPLICATE KEY UPDATE param_value=VALUES(param_value),
+            updated_by=VALUES(updated_by), updated_at=NOW()");
+    $st->execute([$json, $userId]);
+    return grind3d_presets_get($pdo);
+}

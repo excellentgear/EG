@@ -54,6 +54,10 @@ $__g3_fs   = str_replace(chr(92), '/', (string)realpath($__g3_dir));
 $__g3_root = str_replace(chr(92), '/', (string)realpath($_SERVER['DOCUMENT_ROOT'] ?? ''));
 $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
            ? substr($__g3_fs, strlen($__g3_root)) : '../../resource/js';
+/* 本工具的後端端點（砂輪預設用），同樣推成網站絕對路徑 */
+$__g3_here = str_replace(chr(92), '/', __DIR__);
+$__g3_api_url = ($__g3_root && strpos($__g3_here, $__g3_root) === 0)
+    ? substr($__g3_here, strlen($__g3_root)) . '/grind3d_api.php' : 'grind3d_api.php';
 ?>
 <?php if ($can_grind3d): ?>
 <style>
@@ -131,6 +135,8 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
 .g3d-verdict.g3d-v-ok  { background:var(--g3d-ok); }
 .g3d-verdict.g3d-v-bad { background:var(--g3d-bad); }
 .g3d-verdict.g3d-v-na  { background:#9C8468; }
+/* 剛好站在極限位置：不是安全也不是干涉，用琥珀色與另外兩種分開 */
+.g3d-verdict.g3d-v-edge{ background:#C77A30; }
 .g3d-kv { display:grid; grid-template-columns:1fr auto; gap:0;
           background:#fff; font-size:12px; }
 .g3d-kv > div { padding:4px 10px; border-top:1px solid #F0E4D2; line-height:1.5; }
@@ -161,6 +167,18 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
 #g3d-hdr button:hover { background:rgba(255,255,255,.3); }
 #g3d-body { flex:1 1 auto; min-height:0; padding:10px; }
 @media print { #g3d-win { display:none !important; } }
+
+/* 砂輪預設管理跳窗（z-index 要比 3D 視窗 10550 高，否則從視窗裡開會被蓋住） */
+.g3d-mask2 { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10600; display:none; }
+.g3d-mask2.g3d-show { display:flex; align-items:flex-start; justify-content:center; padding:40px 12px; }
+.g3d-mask2-box { background:#fff; border-radius:8px; width:860px; max-width:96vw;
+                 max-height:84vh; display:flex; flex-direction:column;
+                 font-family:"Microsoft JhengHei","Segoe UI",sans-serif; color:#4a3520; }
+.g3d-mask2-hd { padding:10px 14px; border-bottom:1px solid #E8C9A0; font-weight:700;
+                display:flex; align-items:center; gap:8px; font-size:14px; }
+.g3d-mask2-bd { padding:12px 14px; overflow:auto; }
+.g3d-mask2 .g3d-fx th { white-space:nowrap; }
+@media print { .g3d-mask2 { display:none !important; } }
 
 /* ── 參考圖面（零成本輔助輸入，2026-10-12）────────────────────────────────
    使用者問「上傳2D圖，網頁能不能自動生成3D」——查證後站上沒有接任何讀圖的
@@ -228,6 +246,27 @@ $__g3_url  = ($__g3_fs && $__g3_root && strpos($__g3_fs, $__g3_root) === 0)
         <button type="button" onclick="EGGrind3D.close()">關閉</button>
     </div>
     <div id="g3d-body"></div>
+</div>
+
+<!-- 砂輪預設管理（2026-10-13）：整份清單一次送出 -->
+<div class="g3d-mask2" id="g3dPresetMask">
+  <div class="g3d-mask2-box">
+    <div class="g3d-mask2-hd"><i class="fa fa-sliders"></i> 砂輪尺寸預設（全廠共用）
+        <span style="margin-left:auto"></span>
+        <span id="g3dPresetStatus" style="font-size:12px;font-weight:400;margin-right:10px"></span>
+        <button type="button" class="g3d-btn g3d-btn-o" id="g3dPresetAdd">＋ 新增一筆</button>
+        <button type="button" class="g3d-btn g3d-btn-main" id="g3dPresetApply">儲存</button>
+        <button type="button" class="g3d-btn g3d-btn-o" id="g3dPresetClose">關閉</button>
+    </div>
+    <div class="g3d-mask2-bd">
+      <table class="g3d-fx" id="g3dPresetTbl"><thead><tr>
+        <th style="min-width:120px">名稱</th><th>外徑</th><th>刃寬</th><th>側面角</th>
+        <th>刃高</th><th>傾角</th><th>退刀量</th><th style="width:26px"></th>
+      </tr></thead><tbody id="g3dPresetBody"></tbody></table>
+      <div class="g3d-hint">名稱必填且不可重複，至少要填砂輪外徑；其餘留白的欄位套用時不會覆蓋目前的值。
+        刪除請按該列最右邊的 ×，按「儲存」才會真的寫入。這份清單是<b>全廠共用</b>的。</div>
+    </div>
+  </div>
 </div>
 
 <!-- ── 參考圖面放大視窗：與 #g3d-win 同層的獨立浮動視窗，可拖曳、可調整大小，
@@ -486,9 +525,15 @@ var EGGrind3D = (function () {
             return a * a + b * b;
         }
         function cand(th) { return -(rho * Math.cos(th) * cg + t * sg); }
+        /* 回傳值一併帶出「是在哪個角度達成的」＝接觸點，3D 上要標出來給人看
+           （2026-10-13 使用者回報「3D 看不出來有沒有干涉」）。
+           **這支不可以取名 R**：R 是本函式的障礙物半徑參數，函式宣告會被提升而把
+           參數整個蓋掉，於是 Rs2 = R * R 變成 NaN、所有比較都不成立，求解器會一律
+           回傳砂輪半徑（實測出尾全部變成 100.000）。自我驗證當場抓到。 */
+        function mk(th) { return { v: cand(th), phi: th }; }
 
         var mid = 1.5 * Math.PI;              /* phi = 270°：砂輪最深的那一點 */
-        if (r2(mid) > Rs2) return -Infinity;  /* 連最深處都碰不到這個半徑 */
+        if (r2(mid) > Rs2) return { v: -Infinity, phi: mid };  /* 連最深處都碰不到 */
 
         /* 從 270° 往 180° 掃，找第一次離開可行區（r > Rs）的那一小段再二分。
            刻意先粗掃再二分、不直接對整個 [180°,270°] 二分：r(phi) 絕大多數情況
@@ -500,12 +545,12 @@ var EGGrind3D = (function () {
             if (r2(th) > Rs2) { hi = th; break; }
             lo = th;
         }
-        if (hi === null) return cand(Math.PI);   /* 整個分支都可行，極值在 180° */
+        if (hi === null) return mk(Math.PI);     /* 整個分支都可行，極值在 180° */
         for (var k = 0; k < BISECT; k++) {
             var m = (lo + hi) / 2;
             if (r2(m) <= Rs2) lo = m; else hi = m;
         }
-        return cand(lo);
+        return mk(lo);
     }
 
     /* ══ 五、擺位：繞世界 Y 軸傾斜 tilt，再平移到 (cx, cy, 0)═══════════════
@@ -549,14 +594,19 @@ var EGGrind3D = (function () {
 
         /** 砂輪在半徑 R 這一圈高度上，最多能往 -X 伸多遠（相對砂輪中心）。
             障礙物右端面在 x1 時，它要求的 cx 下限 = x1 + reach(R)。 */
-        function reach(R) {
-            var m = -Infinity;
+        function reachAt(R) {
+            var m = -Infinity, best = null;
             for (var k = 0; k < rings.length; k++) {
-                var v = ringLimit(rings[k][0], rings[k][1], cg, sg, cy, R);
-                if (v > m) m = v;
+                var rho = rings[k][0], t = rings[k][1];
+                var q = ringLimit(rho, t, cg, sg, cy, R);
+                if (q.v > m) {
+                    m = q.v;
+                    best = [rho * Math.cos(q.phi), rho * Math.sin(q.phi), t];
+                }
             }
-            return m;
+            return { v: m, local: best };
         }
+        function reach(R) { return reachAt(R).v; }
 
         /* 逐一障礙物算出「砂輪中心最多能靠到哪個軸向位置」，整體取最大。
            會卡住的不一定是肩部——砂輪夠大時常常是治具某一段先撞到，
@@ -564,8 +614,9 @@ var EGGrind3D = (function () {
         var lim = -Infinity, bind = null;
         for (i = 0; i < p.obs.length; i++) {
             var o = p.obs[i];
-            var rc = reach(o.R);
-            o.cxLimit = isFinite(rc) ? (o.x1 + rc) : -Infinity;
+            var rc = reachAt(o.R);
+            o.cxLimit  = isFinite(rc.v) ? (o.x1 + rc.v) : -Infinity;
+            o.hitLocal = rc.local;        /* 接觸點（砂輪局部座標），3D 上要標出來 */
             if (o.cxLimit > lim) { lim = o.cxLimit; bind = o; }
         }
         /* 全部障礙物都碰不到（例如工件往小的縮、又沒填治具）＝砂輪沒有任何東西
@@ -621,9 +672,20 @@ var EGGrind3D = (function () {
        刻意回報「軸向餘裕」而不是 3D 最小距離：①它與 cxLimit 由同一個解析解
        推出來，畫面上的「干涉/不干涉」永遠不會跟出尾長度自相矛盾 ②現場要的是
        「還能再靠近幾 mm／必須退幾 mm」這個可以直接拿去用的數字。 */
+    /* 判「剛好貼到」的容差（mm）。按下「移到不干涉的極限位置」一定會停在 margin=0，
+       所以這個狀態非常常出現；原本它顯示成「不干涉：還可以再靠近 0.000 mm」，
+       使用者 2026-10-13 直接回報看不懂（「可以再靠近 0.000 mm 表示已經碰到了嗎?」）。
+       0.005mm 遠小於任何加工餘裕，落在這個範圍就直接講「剛好貼到」。 */
+    var TOUCH_EPS = 0.005;
     function at(res, cx) {
         var m = cx - res.cxLimit;
-        return { hit: m < 0, margin: m, pen: m < 0 ? -m : 0, clr: m >= 0 ? m : 0 };
+        return {
+            margin: m,
+            touch:  Math.abs(m) <= TOUCH_EPS,          /* 剛好貼到（極限位置）*/
+            hit:    m < -TOUCH_EPS,                    /* 真的壓進去了 */
+            pen:    m < 0 ? -m : 0,
+            clr:    m >= 0 ? m : 0
+        };
     }
 
     /* ══════════════════════════════════════════════════════════════════════
@@ -722,6 +784,35 @@ var EGGrind3D = (function () {
         return m;
     }
 
+    /* 某個世界座標點在不在砂輪實體裡面（反轉砂輪的擺位矩陣再比砂輪輪廓）。
+       用來把**障礙物那一側也染紅**：原本只有砂輪會變紅，而干涉時紅色那一塊是埋在
+       工件/治具裡面的，從外面常常看不到，使用者 2026-10-13 回報「3D 看不出來有沒有
+       干涉」。兩邊都染色之後，不管從哪個角度看都會有一塊紅的。 */
+    function inWheel(wx, wy, wz, res, cx) {
+        var p = res.p;
+        var dx = wx - cx, dy = wy - res.cy, dz = wz;
+        /* 反轉 R_y(tilt)：轉置就是反矩陣 */
+        var lx =  dx * res.cg - dz * res.sg;
+        var ly =  dy;
+        var lz =  dx * res.sg + dz * res.cg;
+        var rho = Math.sqrt(lx * lx + ly * ly);
+        if (rho > p.Rw) return false;
+        var r1 = Math.max(p.Rw - p.Hf, 0);
+        var ta = (p.Hf > EPS && p.pa > EPS) ? Math.tan(p.pa * Math.PI / 180) : 0;
+        var half = rho >= r1 ? (p.Tw / 2 + (p.Rw - rho) * ta) : (p.Tb / 2);
+        return Math.abs(lz) <= half;
+    }
+
+    /* 小球標記（標接觸點用）：半圓輪廓繞 Z 迴轉 */
+    function sphereProfile(rad) {
+        var prof = [], N = 10;
+        for (var i = 0; i <= N; i++) {
+            var a = -Math.PI / 2 + Math.PI * i / N;
+            prof.push([Math.abs(rad * Math.cos(a)), rad * Math.sin(a)]);
+        }
+        return prof;
+    }
+
     /* ══ 九、組出整個 OV.Model（工件 + 砂輪）════════════════════════════════
        工件沿局部 Z 迴轉後，用 R_y(90°) 把局部 Z 轉成世界 X（＝工件軸）。
        砂輪的局部 Z 本來就是它自己的迴轉軸，傾角 0 時正好對上世界 Z。 */
@@ -731,7 +822,13 @@ var EGGrind3D = (function () {
         var mWp   = model.AddMaterial(phong(214, 198, 176, wpOpacity));   /* 工件：砂色 */
         var mFx   = model.AddMaterial(phong(150, 124,  96, wpOpacity));   /* 治具：暖棕 */
         var mBody = model.AddMaterial(phong(150, 150, 155));              /* 砂輪本體：灰 */
-        var mHit  = model.AddMaterial(phong(221,  81,  56));              /* 干涉：紅 */
+        /* **宣告順序就是嚴重度順序，不可以隨便調換**：revolveZ 以「三角形四個角的
+           材質索引取最大值」決定整個三角形的顏色，所以索引越大越優先。干涉紅一定要
+           排在強調琥珀後面，否則卡住那一塊的強調色會把真正的干涉紅整個蓋掉
+           （2026-10-13 實測踩到：工件那一側一個紅色三角形都沒有）。 */
+        var mBind = model.AddMaterial(phong(199, 122,  48, wpOpacity));   /* 卡住的那一塊：琥珀 */
+        var mHit  = model.AddMaterial(phong(221,  81,  56));              /* 干涉：紅（最優先）*/
+        var mMark = model.AddMaterial(phong(221,  81,  56));              /* 接觸點標記：紅 */
         /* 原本還有一個「正在切削齒段」的琥珀色，已移除：工件畫的是**加工完成後**的
            齒底徑，砂輪在正確磨削位置只會與齒底圓相切、不會侵入，所以那個顏色實際上
            永遠不會出現（實測染色統計確認 0 個三角形）。留著等於在畫面上承諾一個不會
@@ -745,7 +842,16 @@ var EGGrind3D = (function () {
             return obsSD(w[0], r, p) > 0 ? mHit : mBody;
         }
 
-        var wp = revolveZ(wpProfile(p), SEG, mWp, '工件', null);
+        /* 工件：被砂輪吃進去的部分染紅；肩部如果就是卡住的那一塊，整段用琥珀標出來。
+           classify 拿到的是**局部座標**（繞 Z 迴轉前），工件節點的轉換是 R_y(90°)，
+           所以局部 (x,y,z) → 世界 (z, y, -x)，要先換過去才能跟砂輪比。 */
+        var bindIsShoulder = res.bind && res.bind.kind === 'shoulder';
+        function wpClassify(lx, ly, lz) {
+            if (inWheel(lz, ly, -lx, res, cx)) return mHit;
+            if (bindIsShoulder && lz >= res.bind.x0 - EPS && lz <= res.bind.x1 + EPS) return mBind;
+            return mWp;
+        }
+        var wp = revolveZ(wpProfile(p), SEG, mWp, '工件', wpClassify);
         var iw = model.AddMesh(wp);
         var nw = new OV.Node();
         nw.AddMeshIndex(iw);
@@ -756,7 +862,13 @@ var EGGrind3D = (function () {
            哪一邊；沒填治具時 fxProfile() 回 null，整段不畫。 */
         var fxp = fxProfile(p);
         if (fxp) {
-            var fxm = revolveZ(fxp, SEG, mFx, '治具', null);
+            var bindFx = (res.bind && res.bind.kind === 'fixture') ? res.bind : null;
+            function fxClassify(lx, ly, lz) {
+                if (inWheel(lz, ly, -lx, res, cx)) return mHit;
+                if (bindFx && lz >= bindFx.x0 - EPS && lz <= bindFx.x1 + EPS) return mBind;
+                return mFx;
+            }
+            var fxm = revolveZ(fxp, SEG, mFx, '治具', fxClassify);
             var ifx = model.AddMesh(fxm);
             var nfx = new OV.Node();
             nfx.AddMeshIndex(ifx);
@@ -771,6 +883,21 @@ var EGGrind3D = (function () {
         nh.SetTransformation(new OV.Transformation(mtx(res.cg, res.sg, cx, res.cy, 0)));
         model.GetRootNode().AddChildNode(nh);
 
+        /* 接觸點標記：砂輪上「最先碰到那一塊」的那一個點。使用者光看紅色區域不容易
+           判斷，標一顆小球直接指出「會撞在這裡」。大小隨砂輪縮放，太小會看不見。 */
+        if (res.bind && res.bind.hitLocal) {
+            var hp = placed(res.bind.hitLocal, res.cg, res.sg, cx, res.cy);
+            var mk = revolveZ(sphereProfile(Math.max(p.Rw * 0.022, 1.2)), 24, mMark, '接觸點', null);
+            var imk = model.AddMesh(mk);
+            var nmk = new OV.Node();
+            nmk.AddMeshIndex(imk);
+            nmk.SetTransformation(new OV.Transformation(mtx(1, 0, hp[0], hp[1], hp[2])));
+            model.GetRootNode().AddChildNode(nmk);
+            res.hitWorld = hp;
+        } else {
+            res.hitWorld = null;
+        }
+
         OV.FinalizeModel(model, function () { return new OV.RGBColor(180, 180, 185); });
         return model;
     }
@@ -782,6 +909,10 @@ var EGGrind3D = (function () {
     var T3 = null;
 
     /* ── 延後載入：第一次真的要用 3D 時才把兩支重量級函式庫注入 ───────────── */
+    /* 後端唯一端點（只服務砂輪預設；計算完全在前端）。網址比照函式庫推成網站
+       絕對路徑，不同目錄深度的頁面 include 都指得到。 */
+    var API_URL = '<?= $__g3_api_url ?>';
+
     var LIBS = ['<?= $__g3_url ?>/o3dv.min.js',
                 '<?= $__g3_url ?>/eg_3d_viewer_tools.js?v=<?= @filemtime($__g3_dir."eg_3d_viewer_tools.js") ?>'];
     var _libState = 0;          /* 0未載 1載入中 2完成 3失敗 */
@@ -914,7 +1045,18 @@ var EGGrind3D = (function () {
             +     '<input type="file" id="g3dRefFile" accept="image/*,.pdf"></label>'
             + '</div></div>');
 
-        h.push('<div class="g3d-sec"><h4>砂輪</h4>');
+        h.push('<div class="g3d-sec"><h4>砂輪</h4>'
+            + '<div class="g3d-row"><label>預設</label>'
+            + '<select class="g3d-ni" id="g3dPreset" style="text-align:left">'
+            + '<option value="">（載入中…）</option></select>'
+            + '<span class="g3d-unit"></span></div>'
+            + '<div class="g3d-row" style="gap:5px">'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dPresetSave" '
+            +   'style="flex:1 1 0">存成預設</button>'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dPresetMng" '
+            +   'style="flex:1 1 0">管理預設</button></div>'
+            + '<div class="g3d-hint" id="g3dPresetHint">選一個預設會把砂輪外徑／刃寬／側面角／'
+            + '刃高／傾角與退刀量一次帶入。</div>');
         NUMF.slice(0, 5).forEach(function (f) { h.push(fieldHtml(f)); });
         h.push('</div>');
 
@@ -976,6 +1118,8 @@ var EGGrind3D = (function () {
             + '<button type="button" class="g3d-btn g3d-btn-o" data-g3dview="front">前</button>'
             + '<button type="button" class="g3d-btn g3d-btn-o" data-g3dview="top">上</button>'
             + '<button type="button" class="g3d-btn g3d-btn-o" data-g3dview="right">右</button>'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dFocusHit" '
+            +   'title="把畫面拉近到會撞到的那一點">對準接觸點</button>'
             + '<span class="g3d-sep"></span>'
             + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dSecBtn">剖面</button>'
             + '<span id="g3dSecBox" style="display:none;align-items:center;gap:4px">'
@@ -989,6 +1133,7 @@ var EGGrind3D = (function () {
             + '<span class="g3d-sep"></span>'
             + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dMeasBtn">量測</button>'
             + '<button type="button" class="g3d-btn g3d-btn-o" id="g3dShot">截圖</button>'
+            + '<button type="button" class="g3d-btn g3d-btn-o" id="g3d2dBtn">2D工程圖</button>'
             + '<span id="g3dMeasOut" style="font-size:11px;color:#8a5a22"></span>'
             + '</div>');
 
@@ -1014,6 +1159,9 @@ var EGGrind3D = (function () {
     };
 
     function $1(sel) { return ST.root ? ST.root.querySelector(sel) : null; }
+    /* 砂輪預設的管理跳窗掛在面板**外面**（與浮動視窗同層），$1() 查不到它。
+       用這一支以 document 為範圍找，兩者混用過一次就會變成「按了沒反應」。 */
+    function $d(id) { return document.getElementById(id); }
 
     function readParams() {
         var o = {};
@@ -1167,12 +1315,19 @@ var EGGrind3D = (function () {
                             + '（肩部與治具的直徑都不大於齒底徑，砂輪碰不到）</span>';
             } else if (a.hit) {
                 v.className = 'g3d-verdict g3d-v-bad';
-                v.innerHTML = '<i class="fa fa-times-circle"></i> 會干涉：砂輪必須往外退 '
-                            + fx(a.pen) + ' mm 才不會碰到<b>' + esc(bindName) + '</b>';
+                v.innerHTML = '<i class="fa fa-times-circle"></i> 會干涉：砂輪已經壓進<b>'
+                            + esc(bindName) + '</b>，必須往外退 ' + fx(a.pen) + ' mm';
+            } else if (a.touch) {
+                /* 剛好站在極限位置：既不是「不干涉還有餘裕」也不是「已經撞到」，
+                   講成「還可以再靠近 0.000 mm」沒有人看得懂（使用者原話）。 */
+                v.className = 'g3d-verdict g3d-v-edge';
+                v.innerHTML = '<i class="fa fa-exclamation-circle"></i> 剛好貼到<b>'
+                            + esc(bindName) + '</b>：這就是極限位置，<b>再靠近就會撞到</b>'
+                            + '<span style="font-weight:400">（還沒有干涉，間隙 0）</span>';
             } else {
                 v.className = 'g3d-verdict g3d-v-ok';
-                v.innerHTML = '<i class="fa fa-check-circle"></i> 不干涉：還可以再靠近 '
-                            + fx(a.clr) + ' mm（最先碰到的是<b>' + esc(bindName) + '</b>）';
+                v.innerHTML = '<i class="fa fa-check-circle"></i> 不干涉：離<b>' + esc(bindName)
+                            + '</b>還有 ' + fx(a.clr) + ' mm，可以再靠近這麼多';
             }
         }
         var d2 = res.diff, shoulderBind = res.bind && res.bind.kind === 'shoulder';
@@ -1215,12 +1370,8 @@ var EGGrind3D = (function () {
             rows.push([
                 '<b>' + esc(o.name) + '</b><span class="g3d-k-sub"> Ø' + fx(o.R * 2, 1)
                     + '　軸向 ' + fx(o.x0, 1) + '～' + fx(o.x1, 1) + esc(tag) + '</span>',
-                (!reachable ? '<span class="g3d-k-sub">軸向 不會擋到</span>'
-                  : (am < 0 ? '<span style="color:var(--g3d-bad)">軸向 ' + fx(am) + '</span>'
-                            : '軸向 +' + fx(am)))
-                + '　/　'
-                + (rg < 0 ? '<span style="color:var(--g3d-bad)">徑向 ' + fx(rg) + '</span>'
-                          : '徑向 +' + fx(rg)) + ' mm'
+                (!reachable ? '<span class="g3d-k-sub">軸向 不會擋到</span>' : gapTxt('軸向', am))
+                + '　/　' + gapTxt('徑向', rg) + ' mm'
             ]);
         });
         var kv = $1('#g3dKv');
@@ -1232,6 +1383,35 @@ var EGGrind3D = (function () {
                 return '<div>' + r[0] + '</div><div>' + r[1] + '</div>';
             }).join('');
         }
+    }
+
+    /* 把相機對準接觸點。o3dv 沒有「看向某一點」的公開 API，但 FitSphereToWindow
+       吃的就是一顆球，所以**借現成包圍球的建構子**自己造一顆小球丟進去
+       （與 eg_3d_viewer_tools.js 既有的「借建構子」同一招，o3dv 沒有把 THREE
+       掛在全域）。 */
+    function focusContact() {
+        if (!VW || !ST.res || !ST.res.ok) return;
+        var hp = ST.res.hitWorld;
+        if (!hp) { alert('目前沒有任何一塊會擋到砂輪，沒有接觸點可以對準。'); return; }
+        try {
+            var viewer = VW.GetViewer();
+            var sph = viewer.GetBoundingSphere(function () { return true; });
+            if (!sph || !sph.center) return;
+            var SphCtor = sph.constructor, VecCtor = sph.center.constructor;
+            var rad = Math.max(ST.res.p.Rw * 0.18, ST.res.p.Tb * 3, 8);
+            viewer.FitSphereToWindow(new SphCtor(new VecCtor(hp[0], hp[1], hp[2]), rad), false);
+            viewer.Render();
+        } catch (e) { /* 相機對不準不該讓整個工具壞掉 */ }
+    }
+
+    /* 間隙數字的顯示。|值| 在容差內一律當成 0：浮點算出來的 -1e-13 會被 toFixed
+       印成「-0.000」還標成紅色，看起來像已經干涉了（2026-10-13 畫面實測看到）。 */
+    function gapTxt(label, v) {
+        if (Math.abs(v) <= TOUCH_EPS) {
+            return '<span style="color:#C77A30">' + label + ' 0.000（剛好貼到）</span>';
+        }
+        if (v < 0) return '<span style="color:var(--g3d-bad)">' + label + ' ' + fx(v) + '</span>';
+        return label + ' +' + fx(v);
     }
 
     function applySection() {
@@ -1446,6 +1626,133 @@ var EGGrind3D = (function () {
         window.addEventListener('beforeunload', refClearUrl);
     })();
 
+
+    /* ══ 十二之二、砂輪尺寸預設 ════════════════════════════════════════════
+       2026-10-13 使用者交辦。**存在資料庫（system_parameters）不是 localStorage**：
+       砂輪是現場共用設備，外徑／刃寬／側面角／刃高／傾角／退刀量是全廠共同的事實，
+       存瀏覽器會變成每個人每台電腦各自重打一次、改了別人也不知道。
+       讀取所有使用者都可以；**新增／修改／刪除限管理員**（比照齒輪計算工具的
+       「預留量管理」，那也是全廠共用的對照表）。後端唯一端點 grind3d_api.php。 */
+    var PRESET_KEYS = ['Dw', 'Tw', 'pa', 'Hf', 'tilt', 'U'];
+    var PRESETS = { rows: [], canEdit: false, loaded: false };
+
+    function presetApi(action, data, cb) {
+        var body = 'action=' + encodeURIComponent(action);
+        if (data) for (var k in data) {
+            if (Object.prototype.hasOwnProperty.call(data, k))
+                body += '&' + k + '=' + encodeURIComponent(data[k]);
+        }
+        fetch(API_URL, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: body
+        }).then(function (r) { return r.json(); })
+          .then(function (j) { cb(j); })
+          .catch(function () { cb({ success: false, message: '連線失敗' }); });
+    }
+
+    function presetRender() {
+        var sel = $1('#g3dPreset');
+        if (!sel) return;
+        var cur = sel.value;
+        var h = ['<option value="">— 不套用預設 —</option>'];
+        PRESETS.rows.forEach(function (r, i) {
+            h.push('<option value="' + i + '">' + esc(r.name)
+                 + (r.Dw ? '（Ø' + fx(r.Dw, 1) + '）' : '') + '</option>');
+        });
+        sel.innerHTML = h.join('');
+        if (cur && sel.querySelector('option[value="' + cur + '"]')) sel.value = cur;
+        var mng = $1('#g3dPresetMng'), sav = $1('#g3dPresetSave');
+        /* 沒有管理權限時不要把按鈕藏起來——藏起來使用者只會覺得「怎麼沒有這個功能」。
+           留著但停用並寫清楚原因（後端同規則再擋一次＝鐵律8）。 */
+        [mng, sav].forEach(function (b) {
+            if (!b) return;
+            b.disabled = !PRESETS.canEdit;
+            b.title = PRESETS.canEdit ? '' : '只有系統管理員可以維護砂輪預設';
+        });
+        var hint = $1('#g3dPresetHint');
+        if (hint && PRESETS.loaded) {
+            hint.textContent = PRESETS.rows.length
+                ? ('選一個預設會把砂輪外徑／刃寬／側面角／刃高／傾角與退刀量一次帶入。'
+                   + '目前有 ' + PRESETS.rows.length + ' 筆。'
+                   + (PRESETS.canEdit ? '' : '（維護請洽系統管理員）'))
+                : (PRESETS.canEdit ? '還沒有任何預設。把目前的砂輪尺寸填好後按「存成預設」。'
+                                   : '還沒有任何預設，請洽系統管理員建立。');
+        }
+    }
+
+    function presetLoad() {
+        presetApi('presets_get', null, function (j) {
+            PRESETS.rows = (j && j.success && Array.isArray(j.rows)) ? j.rows : [];
+            PRESETS.canEdit = !!(j && j.can_edit);
+            PRESETS.loaded = true;
+            presetRender();
+        });
+    }
+
+    function presetApply(i) {
+        var r = PRESETS.rows[i];
+        if (!r) return;
+        PRESET_KEYS.forEach(function (k) {
+            var el = $1('#g3d_' + k);
+            if (el && r[k] !== undefined && r[k] !== null) el.value = r[k];
+        });
+        recompute(false);
+    }
+
+    /* 管理跳窗：整份清單一次送出（只有幾十筆，整份覆寫不會有「刪到一半失敗」
+       的中間狀態，也不必處理 id 與併發） */
+    function presetOpenManager() {
+        if (!PRESETS.canEdit) return;
+        var box = $d('g3dPresetMask');
+        if (!box) return;
+        presetRenderRows(PRESETS.rows.slice());
+        box.classList.add('g3d-show');
+    }
+    function presetRenderRows(rows) {
+        var tb = $d('g3dPresetBody');
+        if (!tb) return;
+        if (!rows.length) rows = [{ name: '' }];
+        tb.innerHTML = rows.map(function (r) {
+            var cells = PRESET_KEYS.map(function (k) {
+                return '<td><input type="number" class="g3d-ni" step="any" data-pk="' + k
+                     + '" value="' + esc(r[k] === undefined || r[k] === null ? '' : r[k]) + '"></td>';
+            }).join('');
+            return '<tr><td><input type="text" class="g3d-ni" style="text-align:left" data-pk="name" value="'
+                 + esc(r.name || '') + '"></td>' + cells
+                 + '<td><button type="button" class="g3d-fx-del" title="刪除這一筆">×</button></td></tr>';
+        }).join('');
+    }
+    function presetReadRows() {
+        var tb = $d('g3dPresetBody'), out = [];
+        if (!tb) return out;
+        Array.prototype.forEach.call(tb.querySelectorAll('tr'), function (tr) {
+            var o = {};
+            Array.prototype.forEach.call(tr.querySelectorAll('[data-pk]'), function (inp) {
+                var v = inp.value.trim();
+                if (v !== '') o[inp.getAttribute('data-pk')] = v;
+            });
+            if (o.name) out.push(o);      /* 沒填名稱的列視為空列，直接略過 */
+        });
+        return out;
+    }
+    function presetSaveRows(rows, onDone) {
+        var st = $d('g3dPresetStatus');
+        if (st) { st.textContent = '儲存中…'; st.style.color = '#8a7560'; }
+        presetApi('presets_save', { rows: JSON.stringify(rows) }, function (j) {
+            if (j && j.success) {
+                PRESETS.rows = j.rows || [];
+                PRESETS.canEdit = !!j.can_edit;
+                presetRender();
+                if (st) { st.textContent = '已儲存（' + PRESETS.rows.length + ' 筆）'; st.style.color = '#2e7d32'; }
+                if (onDone) onDone(true);
+            } else {
+                if (st) { st.textContent = (j && j.message) || '儲存失敗'; st.style.color = '#DD5138'; }
+                if (onDone) onDone(false);
+            }
+        });
+    }
+
     /* ══ 十三、掛載 ════════════════════════════════════════════════════════ */
     function mount(el, opts) {
         opts = opts || {};
@@ -1587,7 +1894,91 @@ var EGGrind3D = (function () {
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
         });
 
+        /* ── 砂輪預設 ─────────────────────────────────────────────────── */
+        var psel = $1('#g3dPreset');
+        if (psel) psel.addEventListener('change', function () {
+            if (psel.value !== '') presetApply(parseInt(psel.value, 10));
+        });
+        var psave = $1('#g3dPresetSave');
+        if (psave) psave.addEventListener('click', function () {
+            if (!PRESETS.canEdit) return;
+            var name = window.prompt('這組砂輪尺寸要取什麼名字？（例：Ø300 粗磨）', '');
+            if (name === null) return;
+            name = String(name).trim();
+            if (!name) { alert('請輸入名稱'); return; }
+            var cur = { name: name };
+            PRESET_KEYS.forEach(function (k) {
+                var e2 = $1('#g3d_' + k);
+                if (e2 && e2.value !== '') cur[k] = e2.value;
+            });
+            var rows = PRESETS.rows.slice();
+            var idx = -1;
+            for (var i = 0; i < rows.length; i++) {
+                if (String(rows[i].name).toLowerCase() === name.toLowerCase()) { idx = i; break; }
+            }
+            if (idx >= 0) {
+                if (!confirm('已經有一筆叫「' + name + '」的預設，要覆蓋它嗎？')) return;
+                rows[idx] = cur;
+            } else {
+                rows.push(cur);
+            }
+            presetSaveRows(rows, function (ok) {
+                if (ok) alert('已存成預設「' + name + '」');
+            });
+        });
+        var pmng = $1('#g3dPresetMng');
+        if (pmng) pmng.addEventListener('click', presetOpenManager);
+
+        var pmask = $d('g3dPresetMask');
+        if (pmask) {
+            pmask.addEventListener('click', function (e) {
+                if (e.target === pmask) pmask.classList.remove('g3d-show');
+            });
+            var pclose = $d('g3dPresetClose');
+            if (pclose) pclose.addEventListener('click', function () {
+                pmask.classList.remove('g3d-show');
+            });
+            var padd = $d('g3dPresetAdd');
+            if (padd) padd.addEventListener('click', function () {
+                var rows = presetReadRows();
+                rows.push({ name: '' });
+                presetRenderRows(rows);
+            });
+            var papply = $d('g3dPresetApply');
+            if (papply) papply.addEventListener('click', function () {
+                presetSaveRows(presetReadRows(), function (ok) {
+                    if (ok) presetRenderRows(PRESETS.rows.slice());
+                });
+            });
+            var pbody = $d('g3dPresetBody');
+            if (pbody) pbody.addEventListener('click', function (e) {
+                if (!e.target.classList || !e.target.classList.contains('g3d-fx-del')) return;
+                var rows = presetReadRows();
+                var tr = e.target.closest('tr');
+                var all = Array.prototype.slice.call(pbody.querySelectorAll('tr'));
+                var at2 = all.indexOf(tr);
+                /* 用畫面上的列序刪，不要用 presetReadRows 的索引：那一支會略過
+                   沒填名稱的空列，兩邊對不起來就會刪錯人 */
+                var disp = all.map(function (r) {
+                    var o = {};
+                    Array.prototype.forEach.call(r.querySelectorAll('[data-pk]'), function (x) {
+                        if (x.value.trim() !== '') o[x.getAttribute('data-pk')] = x.value.trim();
+                    });
+                    return o;
+                });
+                if (at2 >= 0) disp.splice(at2, 1);
+                presetRenderRows(disp);
+            });
+        }
+
+        /* ── 對準接觸點：把畫面拉近到「會撞到的那一點」──────────────────
+           使用者 2026-10-13 回報「3D 看不出來有沒有干涉」：砂輪 Ø300 配 Ø40 工件時，
+           接觸區相對整個畫面非常小，光靠顏色不夠，要能一鍵看過去。 */
+        var fh = $1('#g3dFocusHit');
+        if (fh) fh.addEventListener('click', focusContact);
+
         bindInputRules(el);
+        presetLoad();
         recompute(false);
         return ST;
     }
