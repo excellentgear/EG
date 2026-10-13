@@ -640,7 +640,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             </span>
                                             <span id="oeiActsSk" style="display:none"><button type="button" class="btn btn-sm btn-default" id="btnOeiRestore">還原成待轉入</button> <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel2">刪除選取</button></span>
                                         </div>
-                                        <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
+                                        <div id="oeiWrap" style="overflow-x:auto;max-height:520px;overflow-y:auto">
                                         <table class="table table-condensed table-bordered" style="font-size:12px;margin:0">
                                             <thead style="position:sticky;top:0;background:#F7E0BD"><tr>
                                                 <th style="width:28px"><input type="checkbox" id="oeiAll"></th><th>狀態</th><th>訂單編號</th><th>單據日期</th><th>交期</th><th>客戶</th><th>產品編號</th><th>製程</th><th>數量</th><th>單價</th><th>說明</th>
@@ -748,19 +748,46 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     $('#oeiStatus').on('change', render);
     $('#oeiNote').on('input', function () { clearTimeout(window._oeiT2); window._oeiT2 = setTimeout(render, 200); });
-    // 框選：在勾選欄按住往上下拖曳，掃過的列一次勾選／取消（起點那一列的狀態決定是勾還是取消）
-    // 只從勾選欄起拖，其他欄位照常可以選字複製（料號、單號）
-    var drag = null;
-    $('#oeiBody').on('mousedown', 'td:first-child', function (e) {
-        var ck = $(this).find('.oei-ck:not(:disabled)'); if (!ck.length || e.which !== 1) return;
+    // 框選：在表格上任何儲存格按住滑鼠拖出方框，碰到方框的列一次勾選（按住 Ctrl/Alt 改為取消勾選）
+    // 沒拖動（單點）：點勾選欄那格＝切換該列。方框縮小時，離開方框的列會還原成拖曳前的狀態。
+    // 拖曳超過 4px 才算框選，所以雙擊儲存格選字複製料號／單號仍可用。
+    var mq = null;
+    $('#oeiBody').on('mousedown', 'td', function (e) {
+        if (e.which !== 1) return;
+        var base = {}; $('#oeiBody .oei-ck').each(function () { base[this.value] = this.checked; });
+        mq = { x: e.clientX, y: e.clientY, moved: false, base: base, firstCol: $(this).is(':first-child'), tr: $(this).closest('tr'), box: null, cx: e.clientX, cy: e.clientY };
+    });
+    function mqApply() {
+        var x1 = Math.min(mq.x, mq.cx), x2 = Math.max(mq.x, mq.cx), y1 = Math.min(mq.y, mq.cy), y2 = Math.max(mq.y, mq.cy);
+        mq.box.css({ left: x1, top: y1, width: x2 - x1, height: y2 - y1 });
+        var val = !mq.cut;
+        $('#oeiBody tr').each(function () {
+            var ck = $(this).find('.oei-ck:not(:disabled)'); if (!ck.length) return;
+            var rc = this.getBoundingClientRect(), hit = rc.bottom >= y1 && rc.top <= y2 && rc.right >= x1 && rc.left <= x2;
+            ck.prop('checked', hit ? val : mq.base[ck.val()]);
+        });
+        updSel();
+    }
+    $(document).on('mousemove', function (e) {
+        if (!mq) return;
+        mq.cx = e.clientX; mq.cy = e.clientY; mq.cut = e.ctrlKey || e.altKey || e.metaKey;
+        if (!mq.moved) {
+            if (Math.abs(e.clientX - mq.x) < 4 && Math.abs(e.clientY - mq.y) < 4) return;
+            mq.moved = true; window.getSelection && window.getSelection().removeAllRanges();
+            mq.box = $('<div style="position:fixed;z-index:99999;border:1px solid #DD5138;background:rgba(240,162,75,.25);pointer-events:none"></div>').appendTo('body');
+        }
         e.preventDefault();
-        drag = { val: !ck.prop('checked') }; ck.prop('checked', drag.val); updSel();
+        var w = document.getElementById('oeiWrap'), rc = w.getBoundingClientRect();   // 拖到表格邊緣自動捲動
+        if (e.clientY > rc.bottom - 24) w.scrollTop += 20; else if (e.clientY < rc.top + 24) w.scrollTop -= 20;
+        mqApply();
     });
-    $('#oeiBody').on('mouseenter', 'tr', function () {
-        if (!drag) return;
-        $(this).find('.oei-ck:not(:disabled)').prop('checked', drag.val); updSel();
+    $(document).on('mouseup', function () {
+        if (!mq) return;
+        if (mq.moved) { mq.box.remove(); }
+        else if (mq.firstCol) { var ck = mq.tr.find('.oei-ck:not(:disabled)'); if (ck.length) { ck.prop('checked', !ck.prop('checked')); updSel(); } }
+        mq = null;
     });
-    $(document).on('mouseup', function () { drag = null; });
+    $('#oeiBody').on('selectstart', function (e) { if (mq && mq.moved) e.preventDefault(); });
     $('#oeiStateTabs button').on('click', function () { ST = $(this).data('st'); $('#oeiStateTabs button').removeClass('active'); $(this).addClass('active'); load(); });
     $('#oeiQ').on('input', function () { clearTimeout(window._oeiT); window._oeiT = setTimeout(load, 350); });
     $('#oeiAll').on('change', function () { $('#oeiBody .oei-ck:not(:disabled)').prop('checked', this.checked); updSel(); });
