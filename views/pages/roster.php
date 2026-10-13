@@ -1384,14 +1384,14 @@ var R = (function(){
         var body='', first=true;
         laneIds.forEach(function(lid){
             var lane=laneMap[lid]; if(!lane) return;
-            var rows=wpBuildLaneRows(data.date_from, data.date_to, data.cells||{}, lid, holSet, mkSet);
+            var rows=wpBuildLaneRows(data.grid_from||data.date_from, data.grid_to||data.date_to, data.cells||{}, lid, holSet, mkSet);
             body+='<div class="wp-page'+(first?'':' brk')+'">'
                 +'<h2>'+esc(boardName)+(lane.lane_name?'　－　'+esc(lane.lane_name):'')+'</h2>'
                 +'<div class="sub">列印範圍：'+wpRangeLabel(data.date_from,data.date_to)+'　列印時間：'+esc(genTime)+'</div>';
             if(!rows.length){
                 body+='<div style="color:#999;padding:10px 0;">此範圍內尚無排班資料</div>';
             } else {
-                body+='<table><colgroup><col style="width:20%"><col style="width:18%"><col style="width:62%"></colgroup>'
+                body+='<table><colgroup><col style="width:27%"><col style="width:18%"><col style="width:55%"></colgroup>'
                     +'<thead><tr><th>日期區間</th><th>排班人員</th><th>確認</th></tr></thead><tbody>';
                 rows.forEach(function(rw){
                     var gridHtml = rw.days.map(function(dd){
@@ -1426,7 +1426,7 @@ var R = (function(){
           +'th{background:#f6ead8;border:1px solid #c9b99f;font-size:13px;padding:7px 8px;text-align:left}'
           +'td{border:1px solid #c9b99f;vertical-align:middle;page-break-inside:avoid}'
           +'td.dr,td.pn{padding:9px 8px}'
-          +'td.dr{font-size:16px}'
+          +'td.dr{font-size:16px;white-space:nowrap}'
           +'td.pn{font-size:16px;font-weight:bold}'
           +'td.cf{padding:0}'
           +'.confirm-grid{display:flex;min-height:46px}'

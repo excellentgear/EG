@@ -447,6 +447,11 @@ case 'get_print_range': {
     $maxTo = (new DateTime($dateFrom))->modify('+3 years')->format('Y-m-d');
     if ($dateTo > $maxTo) $dateTo = $maxTo;
 
+    // 查詢／物化範圍放大到完整的 ISO 週（週一~週日），讓頭尾週的格子數跟中間週一致，
+    // 不會因為使用者選的起迄日剛好卡在週中而被截短；畫面上「列印範圍」仍顯示使用者原選的 date_from/date_to。
+    $gridFrom = (new DateTime($dateFrom))->modify('monday this week')->format('Y-m-d');
+    $gridTo   = (new DateTime($dateTo))->modify('sunday this week')->format('Y-m-d');
+
     $st = $pdo->prepare("SELECT * FROM roster_board WHERE id=?");
     $st->execute([$id]); $b = $st->fetch(PDO::FETCH_ASSOC);
     if (!$b) jerr('排班表不存在', 404);
@@ -456,14 +461,14 @@ case 'get_print_range': {
     // 排班無終止日：補算到所需的迄日（過去凍結，只補未來）
     if ($b['status'] === 'active') {
         $maxD = $pdo->query("SELECT MAX(duty_date) FROM roster_assignment WHERE board_id=" . (int)$id)->fetchColumn();
-        if (!$maxD || $maxD < $dateTo) { try { roster_regenerate($pdo, (int)$id, null, $dateTo); } catch (Exception $e) {} }
+        if (!$maxD || $maxD < $gridTo) { try { roster_regenerate($pdo, (int)$id, null, $gridTo); } catch (Exception $e) {} }
     }
 
     $lanes = $pdo->prepare("SELECT id,lane_name,color,sort_order FROM roster_lane WHERE board_id=? ORDER BY sort_order,id");
     $lanes->execute([$id]); $lanes = $lanes->fetchAll(PDO::FETCH_ASSOC);
 
     $aq = $pdo->prepare("SELECT lane_id,duty_date,user_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ? ORDER BY duty_date");
-    $aq->execute([$id, $dateFrom, $dateTo]);
+    $aq->execute([$id, $gridFrom, $gridTo]);
     $ass = $aq->fetchAll(PDO::FETCH_ASSOC);
 
     $uids = array_values(array_unique(array_map(fn($r) => (int)$r['user_id'], $ass)));
@@ -476,13 +481,14 @@ case 'get_print_range': {
             'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
         ];
     }
-    $ctx = roster_workday_context($pdo, $dateFrom, $dateTo);
+    $ctx = roster_workday_context($pdo, $gridFrom, $gridTo);
 
     jout([
         'board' => ['id' => (int)$b['id'], 'name' => $b['name']],
         'lanes' => $lanes, 'cells' => $cells,
         'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
         'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'grid_from' => $gridFrom, 'grid_to' => $gridTo,
     ]);
 }
 
