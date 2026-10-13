@@ -11,6 +11,16 @@ if (!isset($_SESSION['userName']) && !isset($_SESSION['user_id']) && !isset($_SE
     exit;
 }
 
+// 2026-10-13 使用者 020 回報「進入頁面後點選附件按鈕沒有反應，只有第一次進入時可以點選」：
+// 排查未發現伺服器端會重現的程式缺陷（真 HTTP 端對端、無頭 Chrome 反覆開關附件跳窗、豐富附件
+// 資料、巢狀跳窗、觸控事件皆正常），但本機既有記憶 [[file_upload_change_event]] 已記錄過同一套
+// 使用者環境（防資安外洩類瀏覽器擴充功能 chext_driver.js/content.js）會**靜默**攔截特定請求、
+// console 不留任何錯誤，難以從伺服器端重現。PHP 的 session nocache 預設本來就會送出
+// no-store，這裡明講一次當第二道保險（零風險、不影響任何現有功能），避免任何代理／擴充功能
+// 把這份頁面的回應快取住而讓使用者看到不一致的畫面。
+header('Cache-Control: no-store, no-cache, must-revalidate');
+header('Pragma: no-cache');
+
 function safe_html($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8'); }
 
 include '../../src/common/DBConnection.php';
@@ -12288,7 +12298,7 @@ var DICT_PERM = {
 var CAN_SEE_DESIGN      = <?= json_encode($can_see_design) ?>;          // 可見設計/技術備註（A/CDR/CDRU）
 var CAN_EDIT_DESIGN     = <?= json_encode($can_edit_design) ?>;         // 可編輯備註（A/CDR）
 var CAN_PROC_EDIT       = <?= json_encode($can_proc_edit) ?>;
-var CURRENT_USER_ID     = <?= json_encode($uid) ?>;                     // 目前登入者 ID
+var CURRENT_USER_ID     = <?= json_encode($user_id) ?>;                // 目前登入者 ID（原寫 $uid，未定義→一律印出 null，2026-10-13 修正）
 var IS_ADMIN_PERM       = <?= json_encode($permission_code === 'A') ?>; // 是否為 A 權限（可操作所有人的備註）           // 製程分頁完整操作（A/CDR/CDRU）
 var SELF_URL   = '<?= basename(__FILE__) ?>';
 var PART_ATTACH_API_URL = '../../src/store/Part_Attachment_API.php';
@@ -21930,9 +21940,17 @@ var _pavAsmMap = {};   // 組合附件id → 它的零件陣列
 var _pavCompOf = {};   // 零件附件id → 它屬於哪個組合（只含同一個料號的，別的料號的零件在它自己料號仍獨立顯示）
 var _pavAsmOpen = {};  // 組合附件id → 這一列有沒有展開
 var PAV_CAN_ASM_EDIT = <?= json_encode((bool)$can_part_attach) ?>;   // 能不能改零件關聯（沿用料號附件的上傳/編輯/刪除權限，後端另有守門）
+// 2026-10-13：這支呼叫失敗（或回 success:false）時原本一律當成「沒有附件」靜默顯示
+// 空清單，使用者看起來就是「點了沒反應」、完全看不出來是連線/伺服器問題還是真的沒有附件
+// （環境裡有防資安外洩類擴充功能會靜默攔截特定請求、console 不留任何錯誤，見記憶
+// [[file_upload_change_event]]，無法單憑伺服器端重現；這裡至少讓失敗變成看得見、按得到重試）。
+// 把失敗原因記下來，_pavRenderList() 在清單為空時據此決定要顯示「無附件」還是「載入失敗」。
+_pav.loadError = null;
 function _pavLoadFiles(cb) {
+    _pav.loadError = null;
     $.get(PART_ATTACH_API_URL, { action:'list', d_id:_pav.dId }, function(r) {
-        _pav.allFiles = (r.success && r.data) ? r.data : [];
+        if (!r || !r.success) { _pav.loadError = (r && r.message) ? r.message : '附件清單載入失敗'; }
+        _pav.allFiles = (r && r.success && r.data) ? r.data : [];
         // 相簿：哪些標籤用相簿檢視、這個料號有哪些相簿、這個人能不能改（後端也會再擋一次）
         _pav.albums       = (r && r.albums) ? r.albums : [];
         _pav.albumCatIds  = ((r && r.album_cat_ids) ? r.album_cat_ids : []).map(String);
@@ -21941,7 +21959,15 @@ function _pavLoadFiles(cb) {
         _pavAsmMap = (r && r.assembly_map) ? r.assembly_map : {};
         _pavCompOf = (r && r.component_of) ? r.component_of : {};
         cb(_pav.allFiles);
-    }).fail(function(){ _pav.allFiles=[]; _pav.albums=[]; _pav.albumCatIds=[]; cb([]); });
+    }).fail(function(jqXHR){
+        _pav.loadError = '附件清單載入失敗（連線中斷或逾時），請點下方「重新載入」再試一次';
+        _pav.allFiles=[]; _pav.albums=[]; _pav.albumCatIds=[]; cb([]);
+    });
+}
+/** 「載入失敗」時讓使用者可以重試，不必整頁重新整理（依目前分頁模式重新打開一次）。 */
+function pavRetryLoad() {
+    if (_pav.mode === 'quote') { openAttachQuoteView(_pav.dId, _pav.partNo); }
+    else { openAttachAllView(_pav.dId, _pav.partNo); }
 }
 
 function _pavBuildCatTabs(files) {
@@ -22218,6 +22244,14 @@ function _pavIsObsolete(file) {
     return false;
 }
 
+/** 附件清單載入失敗時的畫面（取代原本直接顯示「無附件」，避免看起來像沒反應）。 */
+function _pavLoadErrorHtml() {
+    return '<div style="color:#c0392b;font-size:12px;text-align:center;padding:24px 14px;">'
+         + '<i class="fa fa-exclamation-triangle"></i><br>'
+         + escHtml(_pav.loadError || '附件清單載入失敗') + '<br>'
+         + '<button type="button" class="btn btn-xs btn-default" style="margin-top:10px;" onclick="pavRetryLoad()">'
+         + '<i class="fa fa-refresh"></i> 重新載入</button></div>';
+}
 function _pavRenderList() {
     var wrap = document.getElementById('pav-file-list');
     if (!wrap) return;
@@ -22226,7 +22260,8 @@ function _pavRenderList() {
     if (_pav.mode === 'quote') {
         var hasQS = _pav.quoteSummaries && Object.keys(_pav.quoteSummaries).length > 0;
         if (!files.length && !hasQS) {
-            wrap.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-inbox"></i><br>無報價單</div>';
+            wrap.innerHTML = _pav.loadError ? _pavLoadErrorHtml() :
+                '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-inbox"></i><br>無報價單</div>';
             return;
         }
         _pavRenderQuoteGroupList(files, wrap);
@@ -22235,7 +22270,8 @@ function _pavRenderList() {
     // ── 相簿標籤（如產品照片）：左側列相簿（資料夾），右側九宮格 ──────
     if (_pavIsAlbumTab()) { _pavRenderAlbumList(); return; }
     if (!files.length) {
-        wrap.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-inbox"></i><br>無附件</div>';
+        wrap.innerHTML = _pav.loadError ? _pavLoadErrorHtml() :
+            '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-inbox"></i><br>無附件</div>';
         return;
     }
     var cats = _attachCatsCache || [];
