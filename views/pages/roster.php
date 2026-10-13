@@ -222,7 +222,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                     <label style="font-weight:400;margin:0 0 0 6px;"><input type="checkbox" id="prefExpand" onchange="R.prefApply()"> 預設展開</label>
                                 </span>
                                 <button class="btn btn-sm btn-default" onclick="R.exportPdf()" title="匯出目前兩個月完整排班"><i class="fa fa-file-pdf-o"></i> PDF</button>
-                                <button class="btn btn-sm btn-default" onclick="R.openWeekPrint()" title="A4 直式・依週分段・含簽名欄，可選擇列印區間"><i class="fa fa-print"></i> 簽名表</button>
+                                <button class="btn btn-sm btn-default" onclick="R.openWeekPrint()" title="A4 直式・依週分段・逐日確認格，可選擇列印區間"><i class="fa fa-print"></i> 簽名表</button>
                                 <span id="ownerTools" style="display:none">
                                     <button class="btn btn-sm btn-default" onclick="R.openRange()" title="區間調班"><i class="fa fa-random"></i> 區間調班</button>
                                 </span>
@@ -415,7 +415,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
 <div class="modal fade" id="weekPrintModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
     <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">簽名表列印（A4 直式）</h4></div>
     <div class="modal-body">
-        <p style="color:#8a7a63;font-size:12px;margin-top:0;">依「排班人員」連續的日期自動合併成一列：日期區間／排班人員／簽名欄（留空供現場簽名）；範圍內若遇假日，會直接標在該列日期區間下方。勾選的每個輪值項目各自列印一頁。</p>
+        <p style="color:#8a7a63;font-size:12px;margin-top:0;">依「排班人員」連續的日期自動合併成一列：日期區間／排班人員／確認（依天數畫出一天一格，格內左上角標日期，留空供現場逐日簽名確認；遇國定假日/補假/調假當天直接顯示「休」）。勾選的每個輪值項目各自列印一頁。</p>
         <div class="row">
             <div class="col-sm-6 form-group"><label>列印起日 *</label><input type="date" id="wp_from" class="form-control"></div>
             <div class="col-sm-6 form-group"><label>列印迄日 *</label><input type="date" id="wp_to" class="form-control"></div>
@@ -1296,8 +1296,10 @@ var R = (function(){
         firstThu.setDate(firstThu.getDate()-fdow+3);
         return d.getFullYear()+'-'+(1+Math.round((d-firstThu)/(7*86400000)));
     }
-    /** 依 ISO 週把同一輪值項目的連續負責人合併成一列；整週同一人時，假日直接附註在該列；
-     *  一週內出現多人（非週輪值的班表）時，各自連續區段各一列（假日落在區段內也一併附註）。 */
+    function mmddFmt(ds){ return ds.slice(5,7)+'/'+ds.slice(8,10); }   // 格內小字角標，刻意不用 YYYY.MM.DD（空間太小，年份已由該列日期區間標示）
+    /** 依 ISO 週把同一輪值項目的連續負責人合併成一列；每一列附上該範圍內逐日清單（days），
+     *  供「確認」欄畫出一天一格的小格子；國定假日那一天直接標記 hol=true 改顯示「休」。
+     *  一週內出現多人（非週輪值的班表）時，各自連續區段各一列。 */
     function wpBuildLaneRows(dateFrom, dateTo, cellsByDate, laneId, holSet, mkSet){
         var weeks={}, order=[], d=dateFrom;
         while(d<=dateTo){
@@ -1310,6 +1312,10 @@ var R = (function(){
             }
             d=wpDateAdd(d,1);
         }
+        function mkDays(span,rs,re){
+            return span.filter(function(ds){ return ds>=rs && ds<=re; })
+                .map(function(ds){ return {date:ds, hol:!!holSet[ds]}; });
+        }
         var rows=[];
         order.forEach(function(wk){
             var span=weeks[wk].dates, assigned=[];
@@ -1321,17 +1327,14 @@ var R = (function(){
             var uidSet={}; assigned.forEach(function(a){ uidSet[a.uid]=a; });
             var uidKeys=Object.keys(uidSet);
             if(uidKeys.length===1){
-                var p=uidSet[uidKeys[0]];
-                var hol=span.filter(function(ds){ return holSet[ds] && !assigned.some(function(a){return a.date===ds;}); });
-                rows.push({start:span[0], end:span[span.length-1], name:p.name, left:p.left, hol:hol});
+                var p=uidSet[uidKeys[0]], rs1=span[0], re1=span[span.length-1];
+                rows.push({start:rs1, end:re1, name:p.name, left:p.left, days:mkDays(span,rs1,re1)});
             } else {
                 var i=0;
                 while(i<assigned.length){
                     var j=i; while(j+1<assigned.length && assigned[j+1].uid===assigned[i].uid) j++;
-                    var rs=assigned[i].date, re=assigned[j].date, runDates={};
-                    for(var k=i;k<=j;k++) runDates[assigned[k].date]=1;
-                    var hol2=span.filter(function(ds){ return ds>=rs && ds<=re && holSet[ds] && !runDates[ds]; });
-                    rows.push({start:rs, end:re, name:assigned[i].name, left:assigned[i].left, hol:hol2});
+                    var rs=assigned[i].date, re=assigned[j].date;
+                    rows.push({start:rs, end:re, name:assigned[i].name, left:assigned[i].left, days:mkDays(span,rs,re)});
                     i=j+1;
                 }
             }
@@ -1388,12 +1391,15 @@ var R = (function(){
             if(!rows.length){
                 body+='<div style="color:#999;padding:10px 0;">此範圍內尚無排班資料</div>';
             } else {
-                body+='<table><thead><tr><th style="width:34%">日期區間</th><th style="width:36%">排班人員</th><th style="width:30%">簽名</th></tr></thead><tbody>';
+                body+='<table><colgroup><col style="width:20%"><col style="width:18%"><col style="width:62%"></colgroup>'
+                    +'<thead><tr><th>日期區間</th><th>排班人員</th><th>確認</th></tr></thead><tbody>';
                 rows.forEach(function(rw){
-                    var holHtml = rw.hol.length ? ('<div class="holnote">'+rw.hol.map(function(ds){ return mdFmt(ds, rw.start.slice(0,4))+'放假'; }).join('、')+'</div>') : '';
-                    body+='<tr><td>'+wpRangeLabel(rw.start,rw.end)+holHtml+'</td>'
-                        +'<td>'+esc(rw.name)+(rw.left?'（已離職）':'')+'</td>'
-                        +'<td>&nbsp;</td></tr>';
+                    var gridHtml = rw.days.map(function(dd){
+                        return '<div class="cbox'+(dd.hol?' hol':'')+'"><span class="cd">'+mmddFmt(dd.date)+'</span>'+(dd.hol?'<span class="cm">休</span>':'')+'</div>';
+                    }).join('');
+                    body+='<tr><td class="dr">'+wpRangeLabel(rw.start,rw.end)+'</td>'
+                        +'<td class="pn">'+esc(rw.name)+(rw.left?'（已離職）':'')+'</td>'
+                        +'<td class="cf"><div class="confirm-grid">'+gridHtml+'</div></td></tr>';
                 });
                 body+='</tbody></table>';
             }
@@ -1408,16 +1414,27 @@ var R = (function(){
         var w=window.open('','_blank');
         if(!w){ alert('瀏覽器封鎖了彈出視窗，請允許後再試'); return; }
         w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'
+          +'*{box-sizing:border-box}'
           +'@page{size:A4 portrait;margin:14mm 12mm}'
           +'body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#3a2e20;margin:0}'
           +'.wp-page.brk{page-break-before:always}'
           +'h2{font-size:17px;margin:0 0 4px}'
           +'.sub{font-size:12px;color:#7a6a52;margin-bottom:10px}'
+          // table-layout:fixed 的欄寬必須用 colgroup 設定，不可只靠 th 的 inline width（會算錯欄寬造成欄位溢出框線）
           +'table{width:100%;border-collapse:collapse;table-layout:fixed}'
           +'thead{display:table-header-group}'
-          +'th{background:#f6ead8;border:1px solid #c9b99f;font-size:12px;padding:6px 8px;text-align:left}'
-          +'td{border:1px solid #c9b99f;vertical-align:top;padding:8px;font-size:13px;height:30px;page-break-inside:avoid}'
-          +'.holnote{margin-top:3px;font-size:11px;color:#b5651d}'
+          +'th{background:#f6ead8;border:1px solid #c9b99f;font-size:13px;padding:7px 8px;text-align:left}'
+          +'td{border:1px solid #c9b99f;vertical-align:middle;page-break-inside:avoid}'
+          +'td.dr,td.pn{padding:9px 8px}'
+          +'td.dr{font-size:16px}'
+          +'td.pn{font-size:16px;font-weight:bold}'
+          +'td.cf{padding:0}'
+          +'.confirm-grid{display:flex;min-height:46px}'
+          +'.cbox{flex:1 1 0;min-width:0;border-right:1px solid #c9b99f;position:relative}'
+          +'.cbox:last-child{border-right:none}'
+          +'.cbox.hol{background:#efe6d8}'
+          +'.cd{position:absolute;top:2px;left:3px;font-size:10px;color:#7a6a52}'
+          +'.cm{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:bold;color:#8a5a2b}'
           +'</style></head><body>'+bodyHtml+'</body></html>');
         w.document.close();
         w.onload=function(){ w.focus(); w.print(); };
