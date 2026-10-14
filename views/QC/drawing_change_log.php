@@ -487,9 +487,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             <div class="warm-panel">
                 <div class="input-group" style="max-width:420px;" data-eg-form data-eg-submit="#btn-search">
-                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要（雙擊清空＝解除篩選）">
+                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要（雙擊清空＝解除篩選）" autocomplete="new-password" data-lpignore="true" data-form-type="other" name="dc_kw_search">
                     <span class="input-group-btn"><button class="btn btn-warm-o btn-sm" id="btn-search">搜尋</button></span>
                 </div>
+                <div id="dc-stat-cards" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"></div>
                 <div class="table-responsive" style="margin-top:10px;">
                     <table class="table table-bordered table-condensed dc-table">
                         <thead><tr>
@@ -521,7 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="col-sm-6 form-group">
                     <label>料號（必填）</label>
                     <div style="position:relative;">
-                        <input type="text" class="form-control input-sm" id="f-part-kw" autocomplete="off"
+                        <input type="text" class="form-control input-sm" id="f-part-kw" autocomplete="new-password" data-lpignore="true"
                                placeholder="輸入料號關鍵字即時搜尋，再點選（或 ↑↓＋Enter）">
                         <div id="part-results" class="part-dd" style="display:none;"></div>
                     </div>
@@ -607,7 +608,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div id="f-ack-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#FCF7F0;
                      border:1px solid var(--line);border-radius:6px;min-height:32px;margin-bottom:4px;"></div>
                 <div style="position:relative;">
-                    <input type="text" id="f-ack-q" class="form-control input-sm" autocomplete="off"
+                    <input type="text" id="f-ack-q" class="form-control input-sm" autocomplete="new-password" data-lpignore="true"
                            placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）">
                     <div id="f-ack-dd" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;
                          background:#fff;border:1px solid var(--line);border-radius:0 0 6px 6px;max-height:210px;
@@ -669,7 +670,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div id="s-ack-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#FCF7F0;
                      border:1px solid var(--line);border-radius:6px;min-height:32px;margin-bottom:4px;"></div>
                 <div style="position:relative;">
-                    <input type="text" id="s-ack-q" class="form-control input-sm" autocomplete="off"
+                    <input type="text" id="s-ack-q" class="form-control input-sm" autocomplete="new-password" data-lpignore="true"
                            placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）">
                     <div id="s-ack-dd" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;
                          background:#fff;border:1px solid var(--line);border-radius:0 0 6px 6px;max-height:210px;
@@ -915,16 +916,28 @@ $(function(){
         $('#dc-list').html('<tr><td colspan="10" class="text-center muted-help">載入中…</td></tr>');
         post({action:'list', keyword:$('#kw').val()}, function(r){
             if(!r.success){ $('#dc-list').html('<tr><td colspan="10" class="text-danger">'+esc(r.message)+'</td></tr>'); return; }
-            var rows=r.rows||[]; CAN_CANCEL = !!r.can_cancel;
-            ROWS_BY_ID = {}; rows.forEach(function(c){ ROWS_BY_ID[String(c.id)] = c; });
+            var allRows=r.rows||[]; CAN_CANCEL = !!r.can_cancel;
+            ROWS_BY_ID = {}; allRows.forEach(function(c){ ROWS_BY_ID[String(c.id)] = c; });
+            // 狀態卡片：進行中(預設)／已完成(已簽收完或已結案)／草稿／全部
+            var cnt = {all:allRows.length, DRAFT:0, OPEN:0, DONE:0};
+            allRows.forEach(function(c){ cnt[effStatus(c)]++; });
+            var cards = [['OPEN','進行中'],['DONE','已完成'],['DRAFT','草稿'],['all','全部']];
+            $('#dc-stat-cards').html(cards.map(function(k){
+                var on = (STATUS_FILTER===k[0]);
+                return '<div class="dc-stat-card" data-st="'+k[0]+'" style="cursor:pointer;min-width:96px;padding:6px 12px;border-radius:4px;border:1px solid '+(on?'#E08A2E':'#E6D3B3')+';background:'+(on?'#F7E0BD':'#FFF8EE')+';color:#6B4A25;">'+
+                       '<div style="font-size:12px;">'+k[1]+'</div><div style="font-size:20px;font-weight:bold;line-height:24px;">'+cnt[k[0]]+'</div></div>';
+            }).join(''));
+            var rows = allRows.filter(function(c){ return STATUS_FILTER==='all' || effStatus(c)===STATUS_FILTER; });
             $('#dc-list').html(rows.length ? rows.map(function(c){
                 // 免簽收要明寫出來：顯示「—」會讓人以為是忘了指定簽收對象
                 var ack = isNoAck(c) ? '<span class="muted-help" title="建立時勾選「僅記錄，不通知簽收」">免簽收</span>'
                         : ((c.ack_total>0) ? ((c.ack_done>=c.ack_total)
                         ? '<span class="ack-done">✔ '+c.ack_done+'/'+c.ack_total+'</span>'
                         : '<span class="ack-wait">'+c.ack_done+'/'+c.ack_total+'</span>') : '—');
-                var st = c.status==='DRAFT' ? '<span class="badge badge-draft">草稿</span>'
-                       : '<span class="badge '+(c.status==='CLOSED'?'badge-closed':'badge-open')+'">'+(c.status==='CLOSED'?'已結案':'進行中')+'</span>';
+                var es = effStatus(c);
+                var st = es==='DRAFT' ? '<span class="badge badge-draft">草稿</span>'
+                       : (es==='DONE' ? '<span class="badge badge-closed">'+(c.status==='CLOSED'?'已結案':(isNoAck(c)?'已完成':'已簽收完成'))+'</span>'
+                       : '<span class="badge badge-open">進行中</span>');
                 // 「不需建立」：系統自動偵測換圖建出來、還沒送出的草稿才給；點它不要順便開明細
                 if(CAN_CANCEL && isAutoDraft(c)) st += '<br><span class="btn-cancel-auto-row" data-id="'+c.id+'">不需建立</span>';
                 var cust = (c.rev_scope==='internal')
@@ -942,9 +955,18 @@ $(function(){
                     '<td>'+(c.status==='DRAFT'?'<span class="muted-help">—</span>':ack)+'</td>'+
                     '<td>'+st+'</td>'+
                     '<td class="muted-help">'+esc(c.created_by_name||c.created_by||'')+'<br>'+String(c.created_at||'').substring(0,16)+'</td></tr>';
-            }).join('') : '<tr><td colspan="10" class="text-center muted-help">尚無圖面變更紀錄</td></tr>');
+            }).join('') : '<tr><td colspan="10" class="text-center muted-help">此狀態下沒有圖面變更紀錄</td></tr>');
         });
     }
+    // 顯示狀態：手動結案、免簽收、或需簽收的人都簽收完，都算已完成
+    var STATUS_FILTER = 'OPEN';
+    function effStatus(c){
+        if(c.status==='DRAFT') return 'DRAFT';
+        if(c.status==='CLOSED' || isNoAck(c)) return 'DONE';
+        if( parseInt(c.ack_total,10)>0 && parseInt(c.ack_done,10)>=parseInt(c.ack_total,10)) return 'DONE';
+        return 'OPEN';
+    }
+    $(document).on('click', '.dc-stat-card', function(){ STATUS_FILTER = $(this).data('st'); load(); });
     load();
     $('#btn-search').on('click', load);
     $('#kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); load(); } });
