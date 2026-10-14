@@ -252,6 +252,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-toolbar pf-list-wrap">
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="表單編號／料號" style="width:200px;">
+            <button type="button" id="btnClassRule" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="措施門檻、優先順序與 CC／SC 特性分類設定" onclick="openClassRule()"><i class="fa fa-cog"></i> 判定設定</button>
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <button id="btnSuggest" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="從已建立產品開發評估表(2-TD-02-01)、但還沒建立PFMEA的料號自動列出建議清單"><i class="fa fa-magic"></i> 建議建立清單</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
@@ -275,6 +276,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <button type="button" class="pf-row-btn" onclick="selAllFiltered(0)">取消全選</button>
             <span id="selInfo" style="font-size:13px;color:#B5762A;font-weight:bold;"></span>
             <button type="button" class="pf-row-btn" onclick="batchPrint()" title="把勾選的單據逐筆開視窗排隊列印"><i class="fa fa-print"></i> 批次列印</button>
+<?php if ($perms['canAdmin']): ?>
+            <button type="button" class="pf-row-btn del" onclick="batchDelete()" title="刪除勾選的單據（僅管理員）"><i class="fa fa-trash"></i> 批次刪除</button>
+<?php endif; ?>
             <span id="pgInfo" style="font-size:13px;color:#8a6d45;"></span>
             <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
                 <label style="font-size:13px;color:#5b3a1e;">每頁</label>
@@ -699,12 +703,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <ul id="crOrder"></ul>
         <div class="pf-sec-title">特性分類</div>
         <div style="padding:10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;line-height:2.4;">
-            關鍵特性，前端顯示 <input type="text" id="crCcText" style="width:70px;"> ：嚴重度 S ＞ <select id="crCcS"></select><br>
+            關鍵特性，前端顯示 <input type="text" id="crCcText" style="width:70px;"> ：嚴重度 S ≧ <select id="crCcS"></select><br>
             重要特性，前端顯示 <input type="text" id="crScText" style="width:70px;"> ：嚴重度 S ≧ <select id="crScS"></select> 且 發生率 O ≧ <select id="crScO"></select><br>
             其餘為一般特性，前端不顯示符號
         </div>
         <div style="font-size:12px;color:#8a6d45;line-height:1.8;margin-top:6px;">
-            分類自動帶入只會寫進<b>還空白、或上次就是系統自動帶的</b>格子；手動打過的分類不會被蓋掉。<br>
+            分類欄位由系統依嚴重度／發生率自動判定，不提供手動填寫或修改。<br>
             改善後 RPN 若未低於改善前 RPN，該格會標紅底並跳出提示。
         </div>
     </div>
@@ -924,7 +928,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
             <li><b>依 BOM 製程帶入失效模式分析</b>：綁定料號後，編輯畫面下方會出現「依 BOM 製程帶入」按鈕。點開會列出<b>此料號 BOM 上跑過的製程</b>（依站別順序，並顯示各製程可帶入幾筆整組樣板；沒有樣板的無法勾選）。勾選後按「帶入」即依樣板逐筆長出失效模式分析卡片，可選擇附加在後面或先清空既有列。帶入後仍可逐張修改／刪除。<b>存檔時會自動建立「此料號 ↔ 用到的整組」關聯</b>，手動新建的單據同樣適用。</li>
             <li><b>列印紀錄</b>：清單新增「最新列印」欄，顯示這份分析表最後一次列印的日期；列印超過一次會加註次數（如 2026.08.19 (3次)）。點該日期可開啟完整列印紀錄，逐筆列出<b>列印時間、方式（單筆／批次）、列印人</b>。尚未列印過的顯示「未列印」。只有真的送去列印才會記錄，<b>唯讀檢視不計入</b>。</li>
-            <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。<b>批次列印</b>：先在每列最左側<b>勾選</b>要印的單據——表頭那顆勾選框可全選／取消<b>本頁</b>，工具列的「全選／取消全選」則針對<b>目前篩選出的全部</b>（含其他頁）；勾選狀態換頁不會消失，右側會顯示已勾選筆數。按「批次列印」即逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。沒有勾選任何一筆時會提醒而不會整批印出（避免誤觸）。</li>
+            <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。<b>批次列印</b>：先在每列最左側<b>勾選</b>要印的單據——表頭那顆勾選框可全選／取消<b>本頁</b>，工具列的「全選／取消全選」則針對<b>目前篩選出的全部</b>（含其他頁）；勾選狀態換頁不會消失，右側會顯示已勾選筆數。按「批次列印」即逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。沒有勾選任何一筆時會提醒而不會整批印出（避免誤觸）。<b>批次刪除</b>（僅管理員）：用同一組勾選，按「批次刪除」確認後一次刪除。</li>
             <li><b>AI 產生的整組樣板</b>：由 AI 整理匯入的整組樣板，在選擇樣板的清單上會標示橘色 <b>AI</b> 徽章提醒人工複核；此標記<b>不會印在列印版上</b>。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
@@ -1199,9 +1203,7 @@ function itemCardHtml(it, idx, expanded){
         + '</div></div>'
         + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
         + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect')
-        + fld('classification','分類','list:classification',
-              '<span class="pf-op" onclick="openClassPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板</span>'
-              + (CAN_ADMIN ? '<span class="pf-op" onclick="openClassRule()" title="特性分類、措施門檻與優先順序設定" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-cog"></i> 判定設定</span>' : ''))
+        + '<div><label>分類（自動判定）</label><input type="text" data-f="classification" class="rpn-out" value="'+esc(it.classification!=null?it.classification:'')+'" readonly tabindex="-1" data-eg-skip></div>'
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
@@ -1829,27 +1831,17 @@ function classifyBySO(sev, occ){
     if (!r || !r.enabled) return null;
     var s = parseInt(sev,10), o = parseInt(occ,10);
     if (!s && !o) return null;                       // S/O 都還沒填就先不判定
-    if (s && s > r.cc_s) return r.cc_text;
+    if (s && s >= r.cc_s) return r.cc_text;
     if (s && o && s >= r.sc_s && o >= r.sc_o) return r.sc_text;
     return '';                                       // 一般特性不顯示符號
 }
 function applyClassify($card){
-    if (!CAN_EDIT) return;
-    var $cls = $card.find('[data-f="classification"]');
-    if ($cls.attr('data-cls-manual') === '1') return;          // 使用者自己打過就不再自動蓋
     var want = classifyBySO($card.find('[data-f="severity"]').val(), $card.find('[data-f="occurrence"]').val());
     if (want === null) return;
-    var cur = ($cls.val()||'').trim();
-    var auto = $cls.attr('data-cls-auto') || '';
-    if (cur !== '' && cur !== auto) { $cls.attr('data-cls-manual','1'); return; }   // 內容不是我們帶的＝手動值
-    $cls.val(want).attr('data-cls-auto', want);
+    $card.find('[data-f="classification"]').val(want);
 }
 $(document).on('input change', '#itemBody [data-f="severity"], #itemBody [data-f="occurrence"]', function(){
     applyClassify($(this).closest('.pf-card'));
-});
-$(document).on('input', '#itemBody [data-f="classification"]', function(){
-    var v = ($(this).val()||'').trim();
-    $(this).attr('data-cls-manual', (v && v !== ($(this).attr('data-cls-auto')||'')) ? '1' : '0');
 });
 var CR_ORDER_LABEL = {sev:'嚴重度最高的項目', sxo:'嚴重性 × 發生頻率', rpn:'RPN 最高的項目'};
 function crFillSel(id, val){
@@ -1890,6 +1882,7 @@ function refreshAllRisk(){
     if (!r) { loadClassRule(function(){ if (CLASS_RULE) refreshAllRisk(); }); return; }
     var list = [];
     $('#itemBody .pf-card').each(function(){
+        applyClassify($(this));
         var $c = $(this), s = cardNum($c,'severity'), o = cardNum($c,'occurrence'), d = cardNum($c,'detection');
         var rpn = (s && o && d) ? s*o*d : null;
         var need = true;
@@ -2320,6 +2313,17 @@ function saveHeader(){
     }, 'json');
 }
 
+window.batchDelete = function(){
+    var ids = Object.keys(SEL_IDS).filter(function(k){ return SEL_IDS[k]; });
+    if (!ids.length){ alert('請先在清單最左側勾選要刪除的單據。'); return; }
+    if (!confirm('確定刪除勾選的 ' + ids.length + ' 筆 PFMEA 分析表？')) return;
+    $.post(API, {action:'delete_batch', ids:JSON.stringify(ids)}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        SEL_IDS = {};
+        alert('已刪除 ' + res.deleted + ' 筆。');
+        loadList(true);
+    }, 'json');
+};
 function delDoc(id){
     if (!confirm('確定刪除此筆PFMEA分析表？')) return;
     $.post(API, {action:'delete_header', id:id}, function(res){

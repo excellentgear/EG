@@ -419,13 +419,22 @@ function pfmea_classify_rule_get(PDO $db): array {
         'rpn_max'        => isset($d['rpn_max']) ? (int)$d['rpn_max'] : 26,
         // 3. 採取優先順序判定原則的排序（sev=嚴重度最高、sxo=嚴重性x發生頻率、rpn=RPN最高）
         'priority_order' => $ord,
-        // 4. 特性分類：關鍵特性(CC) 嚴重度 > cc_s；重要特性(SC) 嚴重度 >= sc_s 且 發生率 >= sc_o；其餘一般特性不顯示符號
-        'cc_s'           => isset($d['cc_s']) ? (int)$d['cc_s'] : 8,
+        // 4. 特性分類：關鍵特性(CC) 嚴重度 >= cc_s；重要特性(SC) 嚴重度 >= sc_s 且 發生率 >= sc_o；其餘一般特性不顯示符號
+        'cc_s'           => isset($d['cc_s']) ? (int)$d['cc_s'] : 9,
         'cc_text'        => isset($d['cc_text']) ? (string)$d['cc_text'] : 'CC',
         'sc_s'           => isset($d['sc_s']) ? (int)$d['sc_s'] : 5,
         'sc_o'           => isset($d['sc_o']) ? (int)$d['sc_o'] : 4,
         'sc_text'        => isset($d['sc_text']) ? (string)$d['sc_text'] : 'SC',
     ];
+}
+/** 特性分類自動判定（唯一實作；分類欄位不接受手動輸入）：CC / SC / 一般特性(空字串) */
+function pfmea_classify_value(array $rule, $s, $o): ?string {
+    if (empty($rule['enabled'])) return null;
+    $s = ($s === null || $s === '') ? 0 : (int)$s; $o = ($o === null || $o === '') ? 0 : (int)$o;
+    if (!$s && !$o) return null;
+    if ($s && $s >= $rule['cc_s']) return $rule['cc_text'];
+    if ($s && $o && $s >= $rule['sc_s'] && $o >= $rule['sc_o']) return $rule['sc_text'];
+    return '';
 }
 function pfmea_classify_rule_save(PDO $db, array $r, int $uid): void {
     $ord = json_decode((string)($r['priority_order'] ?? '[]'), true);
