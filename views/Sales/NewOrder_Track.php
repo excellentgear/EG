@@ -1665,6 +1665,9 @@ $can_design_qa_target      = false;
 // 作廢他人的紀錄（2026-10-12）：全新功能，舊制沒有對應權限碼，一律預設關閉
 // （本人作廢自己寫的那一條不吃這個旗標，見 ate_q_void 的判定）
 $can_design_qa_void        = false;
+// 設計提醒（2026-10-14）：全新功能，舊制沒有對應權限碼，一律預設關閉
+$can_oda_manage_f          = false;
+$can_oda_confirm_f         = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1807,6 +1810,10 @@ $OT_PAGE_FEATURES = [
     // 勾選本項的角色則可以作廢／取消作廢**任何人**的紀錄（含已凍結訂單，收拾殘局用）。
     // 作廢後內容、回覆與作廢原因全部留著、照樣查得到，只是不再列入任何統計。
     ['group'=>'設計與批圖',   'code'=>'ot_design_note_void',     'label'=>'作廢他人的設計備註問答紀錄（本人作廢自己寫的不需要這個權限）'],
+    // 2026-10-14 設計提醒（規則→設計備註自動長出系統提醒，見 design_alert_lib.php）：兩個獨立功能碼，
+    // 設定規則與確認提醒分開指派（業務／設計主管設定、設計本人確認）。全新功能、舊制沒有對應權限碼。
+    ['group'=>'設計與批圖',   'code'=>'ot_design_alert_manage',  'label'=>'設定設計提醒規則（新增／編輯／停用規則、設計備註「設為提示」）'],
+    ['group'=>'設計與批圖',   'code'=>'ot_design_alert_confirm', 'label'=>'確認設計提醒（系統提醒的「已確認」／「取消確認」）'],
     // 2026-10-07 使用者要求：新增/編輯訂單跳窗標題右側新增兩顆標記按鈕，純標記不影響任何既有
     // 流程，效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色。
     ['group'=>'設計與批圖',   'code'=>'ot_need_design_draw',     'label'=>'需設計繪圖按鈕（標記需設計重新繪圖，製程欄下方顯示提示）'],
@@ -1839,6 +1846,8 @@ if ($OT_USE_RBAC) {
     $can_design_qa_resolve     = ot_hasF('ot_design_note_resolve');
     $can_design_qa_target      = ot_hasF('ot_design_note_target');
     $can_design_qa_void        = ot_hasF('ot_design_note_void');
+    $can_oda_manage_f          = ot_hasF('ot_design_alert_manage');
+    $can_oda_confirm_f         = ot_hasF('ot_design_alert_confirm');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $can_need_design_draw      = ot_hasF('ot_need_design_draw');
@@ -1859,10 +1868,11 @@ if ($OT_USE_RBAC) {
 // 審圖/轉生管按鈕（原本只顯示文字狀態）。後端同規則在 src/common/order_track_perm_lib.php 的
 // ot_can_operate_design()，兩邊要一起改。
 $OT_IS_ADMIN_ANY = ($id === 1);
-// 設計提醒規則（2026-10-14）：誰能設定＝與現有「設計備註設定」同一個權限（ot_design_note_target），
-// 全站管理員亦可；誰能按「已確認」＝與新增／回覆設計備註問題同一個門檻（$can_design_qa）；
+// 設計提醒規則（2026-10-14）：誰能設定＝角色功能碼 ot_design_alert_manage，誰能按「已確認」＝
+// ot_design_alert_confirm（兩者都在角色設定的「設計與批圖」群組，全站管理員一律可）；
 // 刪除規則只有全站管理員（其他人只能停用，停用必填原因）。
-$can_oda_manage = ($can_design_qa_target || $OT_IS_ADMIN_ANY);
+$can_oda_manage = ($can_oda_manage_f || $OT_IS_ADMIN_ANY);
+$can_oda_confirm = (($can_oda_confirm_f && $can_design_qa) || $OT_IS_ADMIN_ANY);
 
 // ── 指定客戶的訂單「轉生管前要先給 BOSS 審圖」（2026-09-18 使用者要求）────────
 // 唯一實作在 src/common/order_boss_review_lib.php；名單沒設定＝這整套等於不存在，
@@ -2365,7 +2375,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
             // 作廢（2026-10-12）：can_void_any＝可以作廢任何人的；逐條的 can_void 見上面，
             // 本人作廢自己寫的不需要角色。frozen 對具 can_void_any 的人不生效（見 ate_q_void）。
             'can_void_any' => $can_design_qa_void,
-            'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
+            'can_resolve' => $can_design_qa_resolve, 'can_oda_confirm' => (bool)$can_oda_confirm, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
     } catch (Exception $e) {
@@ -2563,8 +2573,8 @@ if (isset($_POST['action']) && ($_POST['action'] === 'ate_q_void' || $_POST['act
 
 /* ══ 設計提醒（2026-10-14 使用者交辦）：規則設定＋系統提醒的確認／取消確認 ═══════════
    唯一實作 src/common/design_alert_lib.php，這裡只做權限守門與參數轉接。
-   設定／停用／啟用／從備註設為提示＝$can_oda_manage（與現有設計備註設定同權限）；
-   刪除規則＝只有全站管理員；確認／取消確認＝$can_design_qa（與新增／回覆設計備註同門檻）。
+   設定／停用／啟用／從備註設為提示＝$can_oda_manage（ot_design_alert_manage）；
+   刪除規則＝只有全站管理員；確認／取消確認＝$can_oda_confirm（ot_design_alert_confirm）。
    前端擋一次、這裡同規則再擋一次（鐵律8）。 */
 if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 0) {
     header('Content-Type: application/json');
@@ -2573,7 +2583,7 @@ if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 
     try {
         $unameOda = (string)$pdo->query("SELECT user_cname FROM `user` WHERE id=" . (int)$id)->fetchColumn();
         if ($actOda === 'oda_confirm' || $actOda === 'oda_unconfirm') {
-            if (!$can_design_qa) throw new InvalidArgumentException('沒有使用此功能的權限');
+            if (!$can_oda_confirm) throw new InvalidArgumentException('沒有確認設計提醒的權限');
             $itemId = (int)($_POST['id'] ?? 0);
             $stL = $pdo->prepare("SELECT log_id FROM eng_log_item WHERE id=?");
             $stL->execute([$itemId]);
@@ -4447,6 +4457,11 @@ foreach($dCounts as $c) {
         .stat-card.card-done.active { box-shadow: 0 0 0 3px #1ABB9C; }
         .stat-card.card-communication { border-left-color: #9B59B6; }
         .stat-card.card-communication.active { box-shadow: 0 0 0 3px #9B59B6; }
+        /* PS／批圖溝通中／設計待處理（2026-10-14）：三張卡上下垂直分割，共用一個卡片位置 */
+        .stat-card-stack { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+        .stat-card-stack .stat-card { flex: 1; padding: 4px 12px; display: flex; align-items: center; justify-content: space-between; border-radius: 6px; }
+        .stat-card-stack .stat-card .stat-value { font-size: 18px; margin: 0; line-height: 1.2; }
+        .stat-card-stack .stat-card .stat-label { font-size: 12px; letter-spacing: 0; margin: 0; line-height: 1.2; }
         /* PS／設計待處理（2026-10-14）：暖色系（ai-rules/10） */
         .stat-card.card-ps { border-left-color: #B8956A; }
         .stat-card.card-ps.active { box-shadow: 0 0 0 3px #B8956A; }
@@ -4994,20 +5009,19 @@ foreach($dCounts as $c) {
                         <!-- PS／批圖溝通中／設計待處理（2026-10-14 由原「批圖溝通中」拆成三張）：
                              PS＝設計備註只有純備註；批圖溝通中＝業務的待處理問題（不含系統提醒）；
                              設計待處理＝有尚未確認的系統提醒。後兩者可同時成立，三張卡數字相加會大於訂單數。 -->
-                        <div class="stat-card card-ps" title="設計備註裡只有純備註（PS），沒有待處理的問題">
-                            <i class="fa fa-sticky-note-o stat-icon"></i>
-                            <div class="stat-value" id="count-ps"><?= number_format($stats['ps'] ?? 0) ?></div>
-                            <div class="stat-label">PS</div>
-                        </div>
-                        <div class="stat-card card-communication">
-                            <i class="fa fa-comments stat-icon"></i>
-                            <div class="stat-value" id="count-communication"><?= number_format($stats['communication']) ?></div>
-                            <div class="stat-label">批圖溝通中</div>
-                        </div>
-                        <div class="stat-card card-design-pending" title="設計提醒規則自動產生、設計尚未按「已確認」的訂單">
-                            <i class="fa fa-bell-o stat-icon"></i>
-                            <div class="stat-value" id="count-design-pending"><?= number_format($stats['design_pending'] ?? 0) ?></div>
-                            <div class="stat-label">設計待處理</div>
+                        <div class="stat-card-stack">
+                            <div class="stat-card card-ps" title="設計備註裡只有純備註（PS），沒有待處理的問題">
+                                <span class="stat-label">PS</span>
+                                <span class="stat-value" id="count-ps"><?= number_format($stats['ps'] ?? 0) ?></span>
+                            </div>
+                            <div class="stat-card card-communication" title="業務提出、尚未處理的問題（不含系統提醒）">
+                                <span class="stat-label">批圖溝通中</span>
+                                <span class="stat-value" id="count-communication"><?= number_format($stats['communication']) ?></span>
+                            </div>
+                            <div class="stat-card card-design-pending" title="設計提醒規則自動產生、設計尚未按「已確認」的訂單">
+                                <span class="stat-label">設計待處理</span>
+                                <span class="stat-value" id="count-design-pending"><?= number_format($stats['design_pending'] ?? 0) ?></span>
+                            </div>
                         </div>
                         <div class="stat-card card-done">
                             <i class="fa fa-check-circle stat-icon"></i>
@@ -9428,6 +9442,7 @@ foreach($dCounts as $c) {
                 ATE_Q.frozen = !!res.frozen;
                 ATE_Q.curUser = res.cur_user || null;
                 ATE_Q.canResolve = !!res.can_resolve;
+                ATE_Q.canOdaConfirm = !!res.can_oda_confirm;
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
@@ -9559,7 +9574,7 @@ foreach($dCounts as $c) {
             var al = it.alert || null;
             var actions = (frozenView || noteView || voidView) ? ''
                 : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
-            if (al && !frozenView && !voidView) {
+            if (al && ATE_Q.canOdaConfirm && !frozenView && !voidView) {
                 actions += al.confirmed
                     ? '<button type="button" class="ate-q-btn" onclick="odaConfirm(' + it.id + ',false)"><i class="fa fa-undo"></i> 取消確認</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="odaConfirm(' + it.id + ',true)"><i class="fa fa-check"></i> 已確認</button>';
@@ -16499,7 +16514,7 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>PS</b>／<b>批圖溝通中</b>／<b>設計待處理</b>。</li>
     <li><b>PS／批圖溝通中／設計待處理（2026-10-14 起由原本的「批圖溝通中」拆成三張）</b>：<b>PS</b>＝還沒轉生管、設計備註裡<b>只有純備註</b>、沒有任何待處理問題；<b>批圖溝通中</b>＝還沒轉生管、有業務提出且尚未處理的問題（<b>不含系統提醒</b>，這張卡是給業務看的未回覆資料）；<b>設計待處理</b>＝還沒轉生管、有<b>尚未確認的系統提醒</b>（給設計看）。<b>後兩張可以同時成立</b>（同一張訂單可能兩邊都算），所以三張卡的數字相加會大於訂單數。</li>
-    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。誰能設定規則＝與「維護設計備註對象選項」同一個權限（ot_design_note_target）；誰能按「已確認」＝與新增／回覆設計備註問題同一個門檻。</li>
+    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。權限在「角色設定」的「設計與批圖」群組：<b>設定設計提醒規則</b>（新增／編輯／停用、設為提示）與<b>確認設計提醒</b>（已確認／取消確認）各自勾選指派；全站管理員一律可用。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
     <li><b>備註（PS）＝已經處理完成的紀錄，不是在等人回覆的問題</b>（2026-10-12 起）：所以備註那幾條<b>不會有「回覆」「已處理」按鈕</b>，建立當下狀態就是「已處理」。要的是「要問某個對象、等他回覆」請不要勾備註。</li>
     <li><b>打錯了怎麼辦？用「作廢」，系統沒有刪除</b>（2026-10-12 起）：這些是品質追溯紀錄，刪掉就查不回來了，所以<b>一律不提供刪除</b>（管理員也沒有）。

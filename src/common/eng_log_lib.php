@@ -1338,7 +1338,8 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
     $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
     if (!$ids) return [];
     if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
-    $in = implode(',', $ids);
+    // bind_id 是 VARCHAR：IN 清單若給數字，MySQL 會把整欄轉成數字比較而用不到索引（全表掃描），一律加引號
+    $in = "'" . implode("','", $ids) . "'";
     $out = [];
     try {
         // is_note=1（純備註）一律不算進 open_cnt，也不優先被挑成預覽（排序鍵一併排除），
@@ -1433,7 +1434,7 @@ function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = '
     return "EXISTS (SELECT 1 FROM eng_log_bind elb
         JOIN eng_log elg ON elg.id = elb.log_id
         JOIN eng_log_item eli ON eli.log_id = elb.log_id
-        WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
+        WHERE elb.bind_type='order' AND elb.bind_id = CAST({$orderAlias}.Order_id AS CHAR)
         AND elg.log_type = '{$logType}'
         AND eli.is_note = 0
         AND eli.src_rule_id IS NULL

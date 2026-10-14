@@ -497,7 +497,7 @@ function oda_pending_exists_sql(string $orderAlias = 'ot'): string
     return "EXISTS (SELECT 1 FROM eng_log_bind odb
         JOIN eng_log odg ON odg.id = odb.log_id AND odg.log_type = 'order_note'
         JOIN eng_log_item odi ON odi.log_id = odb.log_id
-        WHERE odb.bind_type='order' AND odb.bind_id = {$orderAlias}.Order_id
+        WHERE odb.bind_type='order' AND odb.bind_id = CAST({$orderAlias}.Order_id AS CHAR)
         AND odi.src_rule_id IS NOT NULL
         AND odi.voided_at IS NULL
         AND odi.status NOT IN ('resolved','dropped'))";
@@ -509,7 +509,7 @@ function oda_ps_exists_sql(string $orderAlias = 'ot'): string
     return "(EXISTS (SELECT 1 FROM eng_log_bind psb
         JOIN eng_log psg ON psg.id = psb.log_id AND psg.log_type = 'order_note'
         JOIN eng_log_item psi ON psi.log_id = psb.log_id
-        WHERE psb.bind_type='order' AND psb.bind_id = {$orderAlias}.Order_id
+        WHERE psb.bind_type='order' AND psb.bind_id = CAST({$orderAlias}.Order_id AS CHAR)
         AND psi.is_note = 1 AND psi.src_rule_id IS NULL AND psi.voided_at IS NULL)
         AND NOT " . el_order_open_exists_sql($orderAlias) . ")";
 }
