@@ -4635,16 +4635,41 @@ foreach($dCounts as $c) {
         .ate-q-alert-hist summary { cursor:pointer; }
         .ate-q-alert-imgs { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
         .ate-oda-btn { background:#FFF6D6; border-color:#E8C766; color:#8a5a2b; }
-        .oda-intro { background:#FAF6EF; border:1px solid #D8CBB8; border-radius:4px; padding:7px 10px; font-size:12px; color:#6b5638; margin-bottom:10px; line-height:1.7; }
-        .oda-form { border:1px solid #E8C766; background:#FFFBEA; border-radius:4px; padding:8px 10px; margin-bottom:10px; }
-        .oda-form-title { font-weight:700; color:#8a5a2b; font-size:13px; margin-bottom:6px; }
-        .oda-frow { margin-bottom:6px; }
-        .oda-frow > label { display:inline-block; width:64px; font-size:12px; color:#6b5638; vertical-align:top; padding-top:5px; margin:0; }
-        .oda-frow > input.form-control, .oda-frow > textarea.form-control { display:inline-block; width:calc(100% - 74px); }
-        .oda-tip { font-size:11px; color:#8a7355; margin-left:6px; }
-        .oda-err { color:#DD5138; font-size:12px; margin-right:8px; }
-        .oda-sug { margin-left:70px; }
-        .oda-sug-item { display:block; padding:3px 8px; font-size:12px; color:#6b5638; border:1px solid #EADFCD; border-top:0; background:#fff; }
+        .oda-intro { background:#FFFBEA; border-left:4px solid #C98A1B; border-radius:3px; padding:8px 12px; font-size:12px; color:#6b5638; margin-bottom:12px; line-height:1.7; }
+        .oda-form { border:1px solid #EADFCD; background:#fff; border-radius:8px; padding:14px 16px; margin-bottom:14px; box-shadow:0 1px 3px rgba(107,86,56,.08); }
+        .oda-form-title { font-weight:700; color:#8a5a2b; font-size:14px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #F1E8D9; }
+        .oda-sec-label { font-size:12px; color:#8a7355; font-weight:600; margin-bottom:6px; }
+        .oda-kinds { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+        .oda-kindbtn { text-align:left; background:#FAF6EF; border:1px solid #D8CBB8; border-radius:6px; padding:8px 10px; color:#6b5638; cursor:pointer; transition:all .15s; }
+        .oda-kindbtn b { display:block; font-size:13px; margin-bottom:2px; }
+        .oda-kindbtn small { display:block; font-size:11px; color:#8a7355; line-height:1.4; }
+        .oda-kindbtn:hover { background:#F7ECD8; }
+        .oda-kindbtn.on { background:#C98A1B; border-color:#C98A1B; color:#fff; box-shadow:0 2px 6px rgba(201,138,27,.35); }
+        .oda-kindbtn.on small { color:#FFF3D6; }
+        .oda-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; }
+        .oda-field { min-width:0; }
+        .oda-field-wide { grid-column:1 / -1; }
+        .oda-field > label { display:block; font-size:12px; color:#6b5638; font-weight:600; margin:0 0 4px; }
+        .oda-field > label small { font-weight:400; color:#9a8c76; margin-left:6px; }
+        .oda-field .form-control { width:100%; font-size:13px; border-color:#D8CBB8; box-shadow:none; }
+        .oda-field .form-control:focus { border-color:#C98A1B; box-shadow:0 0 0 2px rgba(201,138,27,.18); }
+        .oda-kwline { display:flex; gap:8px; align-items:center; }
+        .oda-kwline .form-control { flex:1; }
+        .oda-modes { display:flex; flex:0 0 auto; }
+        .oda-modebtn { background:#FAF6EF; border:1px solid #D8CBB8; color:#6b5638; font-size:12px; padding:5px 10px; cursor:pointer; }
+        .oda-modebtn:first-child { border-radius:4px 0 0 4px; }
+        .oda-modebtn:last-child { border-radius:0 4px 4px 0; border-left:0; }
+        .oda-modebtn.on { background:#C98A1B; border-color:#C98A1B; color:#fff; }
+        .oda-actions { display:flex; justify-content:flex-end; align-items:center; gap:8px; margin-top:12px; }
+        .oda-err { color:#DD5138; font-size:12px; margin-right:auto; }
+        #oda-save { background:#C98A1B; border-color:#C98A1B; color:#fff; padding:5px 16px; }
+        #oda-save:hover { background:#B27817; }
+        .oda-on, .oda-off { line-height:1.4; }
+        .oda-list-title { font-weight:700; color:#6b5638; font-size:13px; margin:2px 0 6px; }
+        .oda-sug { border:1px solid #EADFCD; border-radius:4px; margin-top:3px; max-height:180px; overflow-y:auto; }
+        .oda-sug:empty { display:none; }
+        .oda-sug-item { display:block; padding:5px 10px; font-size:12px; color:#6b5638; border-bottom:1px solid #F4EDE0; background:#fff; }
+        .oda-sug-item:last-child { border-bottom:0; }
         .oda-sug-item:hover { background:#FDF1E3; text-decoration:none; }
         .oda-sug-item small { color:#8a7355; margin-left:6px; }
         .oda-tbl th { font-size:11px; background:#FAF6EF; color:#6b5638; }
@@ -9763,8 +9788,12 @@ foreach($dCounts as $c) {
             $('#oda-form-cancel').hide();
             odaKindChange();
         }
+        function odaPickKind(k) { $('#oda-kind').val(k); odaKindChange(); }
+        function odaPickMode(m) { $('#oda-kwmode').val(m); odaKindChange(); }
         function odaKindChange() {
             var k = $('#oda-kind').val();
+            $('#oda-kinds .oda-kindbtn').removeClass('on').filter('[data-kind="' + k + '"]').addClass('on');
+            $('#oda-modes .oda-modebtn').removeClass('on').filter('[data-mode="' + ($('#oda-kwmode').val() || 'any') + '"]').addClass('on');
             $('#oda-row-cust').toggle(odaKindNeedsCust(k));
             $('#oda-row-part').toggle(odaKindNeedsPart(k));
             $('#oda-row-kw').toggle(k === 'cust_kw');
@@ -14639,45 +14668,49 @@ foreach($dCounts as $c) {
             </div>
             <div class="modal-body">
                 <div class="oda-intro">
-                    符合條件、且<b>尚未轉生管</b>的訂單，會自動在<b>設計備註</b>出現一則淺黃底的「系統提醒」；設計看過按「已確認」即完成，按錯可「取消確認」，每次都記錄人員與時間。
-                    停用的規則不再產生新提醒（已產生的保留）；<b>刪除只有全站管理員</b>，一般情況請用停用（需填原因）。
+                    符合條件、且<b>尚未轉生管</b>的訂單，會自動在<b>設計備註</b>出現淺黃底的「系統提醒」，設計按「已確認」即完成（可取消，每次都記錄人員與時間）。
+                    規則只能<b>停用</b>（需填原因），刪除僅限全站管理員。
                 </div>
                 <div class="oda-form">
                     <div class="oda-form-title" id="oda-form-title">新增提醒規則</div>
-                    <div class="oda-frow"><label>提示對象</label>
-                        <select id="oda-kind" class="form-control input-sm" onchange="odaKindChange()" style="width:180px;display:inline-block;">
-                            <option value="customer">客戶</option>
-                            <option value="part">料號</option>
-                            <option value="cust_kw">客戶＋關鍵字</option>
-                            <option value="cust_part">客戶＋料號</option>
-                        </select>
-                        <span class="oda-tip" id="oda-kind-tip"></span>
+                    <input type="hidden" id="oda-kind" value="customer">
+                    <div class="oda-sec-label">提示對象</div>
+                    <div class="oda-kinds" id="oda-kinds">
+                        <button type="button" class="oda-kindbtn" data-kind="customer" onclick="odaPickKind('customer')"><b><i class="fa fa-building-o"></i> 客戶</b><small>該客戶所有未轉生管訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="part" onclick="odaPickKind('part')"><b><i class="fa fa-cube"></i> 料號</b><small>使用該料號的未轉生管訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="cust_kw" onclick="odaPickKind('cust_kw')"><b><i class="fa fa-search"></i> 客戶＋關鍵字</b><small>該客戶、規格含關鍵字的訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="cust_part" onclick="odaPickKind('cust_part')"><b><i class="fa fa-link"></i> 客戶＋料號</b><small>該客戶底下指定料號的訂單</small></button>
                     </div>
-                    <div class="oda-frow" id="oda-row-cust"><label>客戶</label>
-                        <input type="text" id="oda-cust-input" class="form-control input-sm" autocomplete="off" placeholder="輸入客戶名稱或編號，從清單點選" oninput="odaSearch('cust')">
-                        <div id="oda-cust-sug" class="oda-sug"></div>
+                    <div class="oda-grid">
+                        <div class="oda-field" id="oda-row-cust"><label>客戶</label>
+                            <input type="text" id="oda-cust-input" class="form-control" autocomplete="off" placeholder="輸入客戶名稱或編號，從清單點選" oninput="odaSearch('cust')">
+                            <div id="oda-cust-sug" class="oda-sug"></div>
+                        </div>
+                        <div class="oda-field" id="oda-row-part"><label>料號</label>
+                            <input type="text" id="oda-part-input" class="form-control" autocomplete="off" placeholder="輸入料號或規格，從清單點選（已選客戶時只列該客戶的料號）" oninput="odaSearch('part')">
+                            <div id="oda-part-sug" class="oda-sug"></div>
+                        </div>
+                        <div class="oda-field oda-field-wide" id="oda-row-kw"><label>關鍵字 <small>比對料號規格（Spec No.），固定模糊比對、不分大小寫</small></label>
+                            <div class="oda-kwline">
+                                <input type="text" id="oda-kw" class="form-control" autocomplete="off" placeholder="多組用逗號分隔，例：淬火，滲碳">
+                                <div class="oda-modes" id="oda-modes">
+                                    <button type="button" class="oda-modebtn" data-mode="any" onclick="odaPickMode('any')">任一組符合</button>
+                                    <button type="button" class="oda-modebtn" data-mode="all" onclick="odaPickMode('all')">全部都要符合</button>
+                                </div>
+                                <input type="hidden" id="oda-kwmode" value="any">
+                            </div>
+                        </div>
+                        <div class="oda-field oda-field-wide"><label>提醒內容 <small>給設計看的提醒</small></label>
+                            <textarea id="oda-content" class="form-control" rows="2" maxlength="500" placeholder="例：圖面都需要齒研"></textarea>
+                        </div>
                     </div>
-                    <div class="oda-frow" id="oda-row-part"><label>料號</label>
-                        <input type="text" id="oda-part-input" class="form-control input-sm" autocomplete="off" placeholder="輸入料號或規格，從清單點選（已選客戶時只列該客戶的料號）" oninput="odaSearch('part')">
-                        <div id="oda-part-sug" class="oda-sug"></div>
-                    </div>
-                    <div class="oda-frow" id="oda-row-kw"><label>關鍵字</label>
-                        <input type="text" id="oda-kw" class="form-control input-sm" autocomplete="off" placeholder="比對料號規格（Spec No.），多組用逗號分隔，例：淬火，滲碳" style="width:340px;display:inline-block;">
-                        <select id="oda-kwmode" class="form-control input-sm" style="width:150px;display:inline-block;">
-                            <option value="any">任一組符合</option>
-                            <option value="all">全部都要符合</option>
-                        </select>
-                        <span class="oda-tip">固定模糊比對（包含即算），不分大小寫</span>
-                    </div>
-                    <div class="oda-frow"><label>提醒內容</label>
-                        <textarea id="oda-content" class="form-control input-sm" rows="2" maxlength="500" placeholder="給設計看的提醒，例：圖面都需要齒研"></textarea>
-                    </div>
-                    <div class="oda-frow">
+                    <div class="oda-actions">
                         <span class="oda-err" id="oda-form-err"></span>
-                        <button type="button" class="btn btn-warm btn-sm" id="oda-save" onclick="odaSave()"><i class="fa fa-save"></i> 儲存規則</button>
                         <button type="button" class="btn btn-default btn-sm" id="oda-form-cancel" style="display:none;" onclick="odaFormReset()">取消編輯</button>
+                        <button type="button" class="btn btn-warm btn-sm" id="oda-save" onclick="odaSave()"><i class="fa fa-save"></i> 儲存規則</button>
                     </div>
                 </div>
+                <div class="oda-list-title"><i class="fa fa-list-ul"></i> 已設定的規則</div>
                 <div id="oda-rule-list"></div>
             </div>
             <div class="modal-footer"><button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button></div>
