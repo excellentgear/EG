@@ -219,6 +219,7 @@ $rbacManagedPageIds = [
     135, 136, // 審核表單模板管理 / 審核表單 (review_form_template / review_form)；共用 module='review_form' 角色
     141, 142, // 人資職務表單 / 人資職務表單設定 (hr_position_forms / hr_position_forms_template)；共用 module='hr_form' 角色
     143, // 表單簽核設計器 (form_signer)；module='form_signer' 角色
+    172, 173, // 表格模板管理 / 表格模板填寫 (sheet_form_template / sheet_form)；共用 module='sheet_form' 角色
 ];
 $rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
 
@@ -345,6 +346,7 @@ $EG_ROLE_MODULES = [
     'attach_dl'           => ['prefix'=>'adl',     'label'=>'附件下載權限',        'page'=>'master_data_management.php'],
     'imgedit'             => ['prefix'=>'imgedit', 'label'=>'批圖編輯器',          'page'=>''],   // 未登記進選單（帶參數才進得去）
     'review_form'         => ['prefix'=>'rvf',     'label'=>'審核表單',            'page'=>'review_form.php'],
+    'sheet_form'          => ['prefix'=>'sf',      'label'=>'表格模板',            'page'=>'sheet_form.php'],
     'hr_form'             => ['prefix'=>'hrf',     'label'=>'人資職務表單',        'page'=>'hr_position_forms.php'],
     'form_signer'         => ['prefix'=>'fsd',     'label'=>'表單簽核設計器',      'page'=>'form_signer.php'],
     'drawing_rename'      => ['prefix'=>'drawren', 'label'=>'圖面改檔名',          'page'=>'drawing_rename.php'],
@@ -1454,6 +1456,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('rvf', 'review_form', '審核表單', 'fa-clipboard', '#c0782d',
                         '為每位使用者指派審核表單引擎的操作角色（檢閱、檢視全部人員表單、建立/填寫/送出、列印、模板管理）。模板管理僅供設定 AS 文件綁定/審核核准流程；項次內容維護權限則另在「審核表單模板管理」頁依維護部門/維護人員指派，不透過此處角色。角色與功能定義請至 <strong>審核表單模板管理 → 使用說明</strong>。',
                         rs_of('review_form'), rsu_of('review_form'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('sf', 'sheet_form', '表格模板', 'fa-table', '#c0782d',
+                        '為每位使用者指派表格模板（像 Excel 設計表單模板、依模板填寫與列印）的操作角色：模板管理（設計模板、停用/刪除、AS 文件綁定）、檢視全部人員建立的單據。<strong>所有登入者都能建立並填寫自己的單據</strong>，不需另外指派。角色與功能定義請至 <strong>表格模板管理 → 使用說明</strong>。',
+                        rs_of('sheet_form'), rsu_of('sheet_form'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',
                         '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',
