@@ -114,7 +114,10 @@ function eg_part_required_labels(PDO $db, string $partType): array {
                                AND FIND_IN_SET(?, type_code)
                              ORDER BY sort_order, label_id");
         $st->execute([$t]);
-        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        // 工件總長已改存主檔欄位（見檔尾），它的必填由 eg_workpiece_length_required() 另外檢查
+        $wl = eg_workpiece_length_label_id($db);
+        return array_values(array_filter($rows, function($r) use ($wl){ return (int)$r['label_id'] !== $wl; }));
     } catch (Throwable $e) { return []; }   // 欄位還沒建出來時一律視為沒有必填標籤，不要讓存檔壞掉
 }
 
@@ -167,4 +170,63 @@ function eg_part_label_meta(PDO $db, int $labelId): ?array {
             'required' => ((int)$r['is_required'] === 1),
         ];
     } catch (Throwable $e) { return null; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * 工件總長改存「料號主檔本體欄位」d_setting.workpiece_length（2026-10-14）
+ *
+ * 使用者交辦：標籤「工件總長」一直有刪除權限問題，改成主檔管理「客戶」右側的獨立欄位，
+ * 既有標籤資料一次搬進欄位（views/pages/migrations/2026-10-14_workpiece_length_to_column.php），
+ * 之後會把標籤本身移除。**從此讀寫一律走下面這三支，不再碰標籤那一筆**——
+ * 兩邊各存一份遲早對不起來（舊標籤那一份會變成不再更新的殘值）。
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/** 確保欄位存在（只在欄位真的不存在時才下 DDL；DDL 會造成隱式 commit，所以平常只做 SHOW COLUMNS） */
+function eg_workpiece_length_ensure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    try {
+        $has = $db->query("SHOW COLUMNS FROM d_setting LIKE 'workpiece_length'")->fetch();
+        if (!$has && !$db->inTransaction()) {
+            $db->exec("ALTER TABLE d_setting ADD COLUMN workpiece_length VARCHAR(30) NULL COMMENT '工件總長(mm)，原料號標籤「工件總長」搬來'");
+        }
+        $done = true;
+    } catch (Throwable $e) { /* 欄位建不出來時讓呼叫端自己的查詢報錯，不在這裡吞掉原因 */ }
+}
+
+/** 正規化：去空白、15.50→15.5、25.00→25；非數字原樣保留（舊資料可能有文字） */
+function eg_workpiece_length_norm($v): ?string {
+    $s = trim((string)($v ?? ''));
+    if ($s === '') return null;
+    if (is_numeric($s) && strpos($s, '.') !== false) $s = rtrim(rtrim($s, '0'), '.');
+    return $s === '' ? '0' : mb_substr($s, 0, 30);
+}
+
+function eg_workpiece_length_get(PDO $db, int $dId): ?string {
+    if ($dId <= 0) return null;
+    eg_workpiece_length_ensure($db);
+    try {
+        $st = $db->prepare("SELECT workpiece_length FROM d_setting WHERE d_id=?");
+        $st->execute([$dId]);
+        $v = $st->fetchColumn();
+        return ($v === false || $v === null || trim((string)$v) === '') ? null : (string)$v;
+    } catch (Throwable $e) { return null; }
+}
+
+function eg_workpiece_length_set(PDO $db, int $dId, $value): bool {
+    if ($dId <= 0) return false;
+    eg_workpiece_length_ensure($db);
+    try {
+        $db->prepare("UPDATE d_setting SET workpiece_length=? WHERE d_id=?")->execute([eg_workpiece_length_norm($value), $dId]);
+        return true;
+    } catch (Throwable $e) { return false; }
+}
+
+/**
+ * 工件總長是不是「這個料號種類」新增時的必填。
+ * 設定仍沿用標籤字典那一筆（適用種類＋is_required）；標籤被移除後＝不再必填。
+ */
+function eg_workpiece_length_required(PDO $db, string $partType): bool {
+    $m = eg_part_label_meta($db, eg_workpiece_length_label_id($db));
+    return $m && $m['required'] && in_array(trim($partType), $m['types'], true);
 }

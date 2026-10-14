@@ -3094,13 +3094,16 @@ try {
             // 註：這個跳窗只放得下「工件總長」一個標籤，所以只檢查它；其他標籤若被管理員設成必填，
             //     由主檔管理那一頁把關（在這裡擋會變成從報價單一支新料號都建不出來）。
             if (empty($d_id)) {
-                $__wlMeta = eg_part_label_meta($pdo, eg_workpiece_length_label_id($pdo));
-                if ($__wlMeta && $__wlMeta['required'] && in_array($type, $__wlMeta['types'], true)
+                if (eg_workpiece_length_required($pdo, (string)$type)
                     && trim((string)($_POST['workpiece_length'] ?? '')) === '') {
-                    throw new Exception('「' . $__wlMeta['name'] . '」為必填，請先填寫');
+                    throw new Exception('「工件總長」為必填，請先填寫');
+                }
+                if (trim((string)($_POST['workpiece_length'] ?? '')) !== '' && !is_numeric(trim((string)$_POST['workpiece_length']))) {
+                    throw new Exception('工件總長請輸入數字（mm）');
                 }
             }
             $cust_id = ($cust_id !== '' && $cust_id !== null) ? $cust_id : null;
+            eg_workpiece_length_ensure($pdo);   // 欄位不存在才下 DDL，必須在交易之外
 
             $pdo->beginTransaction();
 
@@ -3158,12 +3161,10 @@ try {
             // gear_save_lib 的「把沒管到的欄位補回來」那一套——這張表單已經沒有管不到的欄位了。
             eg_gear_rows_save($pdo, (int)$d_id, ($type === 'G') ? $gears : [], (string)$user_id);
 
-            // 工件總長：**存在料號標籤**（與主檔管理「新增/編輯料號」的標籤「工件總長」同一筆資料），
-            // 不是存 d_setting_gear.Workpiece_Length——那是 2026-10-02 之前兩邊各存一份、
-            // 已經實測對不起來的舊做法。沒送這個欄位＝舊呼叫端，一律不要動它。
+            // 工件總長：存在料號主檔本體欄位 d_setting.workpiece_length（與主檔管理「客戶」右側欄位同一筆資料，
+            // 2026-10-14 起不再用標籤）。沒送這個欄位＝舊呼叫端，一律不要動它。
             if (array_key_exists('workpiece_length', $_POST)) {
-                $__wlId = eg_workpiece_length_label_id($pdo);
-                if ($__wlId > 0) eg_part_label_set($pdo, (int)$d_id, $__wlId, (string)$_POST['workpiece_length']);
+                eg_workpiece_length_set($pdo, (int)$d_id, (string)$_POST['workpiece_length']);
             }
             $pdo->commit();
             $response = ['success' => true, 'message' => '料號資料儲存成功', 'd_id' => (int)$d_id];
@@ -3188,9 +3189,8 @@ try {
             } else {
                 $part['gears'] = [];
             }
-            // 工件總長讀的是料號標籤（與主檔管理同一筆資料），不是齒輪表的欄位
-            $__wlId = eg_workpiece_length_label_id($pdo);
-            $part['workpiece_length'] = ($__wlId > 0) ? eg_part_label_value($pdo, $d_id, $__wlId) : null;
+            // 工件總長讀的是料號主檔欄位（與主檔管理同一筆資料）
+            $part['workpiece_length'] = eg_workpiece_length_get($pdo, (int)$d_id);
             $response = ['success' => true, 'data' => $part];
             break;
 

@@ -1610,10 +1610,10 @@ body { background:var(--bg); }
           </div>
           <div class="col-md-4 form-group">
             <label>工件總長 (mm) <span id="part_wl_req_star" class="text-danger" style="display:none;">*</span>
-              <span style="font-weight:normal;color:#999;font-size:11px;">＝主檔管理的標籤「工件總長」</span>
+              <span style="font-weight:normal;color:#999;font-size:11px;">＝主檔管理的「工件總長」欄位</span>
             </label>
             <input type="text" class="form-control" id="part_workpiece_len_modal"
-                   title="與主檔管理「新增/編輯料號」的標籤『工件總長』是同一筆資料，在這裡填就等於填在那裡">
+                   title="與主檔管理「新增/編輯料號」的『工件總長』欄位是同一筆資料，在這裡填就等於填在那裡">
           </div>
         </div>
         <div class="form-group">
@@ -10084,7 +10084,7 @@ function savePart() {
     // 工件總長：新增料號時必填（修改既有料號不擋）。後端同規則再擋一次（鐵律8）
     const _isNew = !String($('#part_d_id_modal').val() || '').trim();
     if (_isNew && wlIsRequiredFor($('#part_type_modal').val()) && !$('#part_workpiece_len_modal').val().trim()) {
-        Swal.fire('錯誤', '「' + (WL_LABEL.name || '工件總長') + '」為必填，請先填寫（這一欄就是主檔管理的標籤「工件總長」）', 'error');
+        Swal.fire('錯誤', '「' + (WL_LABEL.name || '工件總長') + '」為必填，請先填寫（這一欄就是主檔管理的「工件總長」欄位）', 'error');
         $('#part_workpiece_len_modal').focus();
         return;
     }

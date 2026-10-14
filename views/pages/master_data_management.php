@@ -367,7 +367,7 @@ $pdo = $db->getPDO();
 // ※ 版本號一旦被任何一次頁面載入寫進 system_settings 就不可以再重複使用同一個值——
 //   那會讓 $_mdm_skip_migration=true、整段 migration 被靜默跳過（本次開發中途實際踩到：
 //   先用了 20261012_01、頁面被開過、改回舊號後再改回同一號，結果新表完全沒建卻不報錯）。
-define('MDM_MIGRATION_VERSION', '20261012_04');   // 2026-10-12（三次）整組的使用機台可改綁「機台種類(製程大類)／機型」，不限定機台編號
+define('MDM_MIGRATION_VERSION', '20261014_01');   // 2026-10-12（三次）整組的使用機台可改綁「機台種類(製程大類)／機型」，不限定機台編號
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -1168,6 +1168,7 @@ try {
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN is_exclude_calc TINYINT NOT NULL DEFAULT 0 COMMENT '不列入計算用 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN is_dimension TINYINT NOT NULL DEFAULT 0 COMMENT '長x寬(圓x深) 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE d_setting ADD COLUMN Weight_Kg DECIMAL(10,3) NULL COMMENT '重量(kg)'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE d_setting ADD COLUMN workpiece_length VARCHAR(30) NULL COMMENT '工件總長(mm)，原料號標籤「工件總長」搬來'"); } catch(Exception $e){}
     // ── 料號舊料號對應 ────────────────────────────────────────────────────────
     $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_old_part_links (
         id           INT AUTO_INCREMENT PRIMARY KEY,
@@ -3005,6 +3006,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $Customer_Id= trim($_POST['Customer_Id'] ?? '') ?: null;
             $Remark     = trim($_POST['Remark'] ?? '');
             $Weight_Kg        = (isset($_POST['Weight_Kg']) && $_POST['Weight_Kg'] !== '') ? floatval($_POST['Weight_Kg']) : null;
+            // 工件總長（d_setting.workpiece_length）：**沒送這個欄位＝不動**（舊分頁/其他呼叫端不會被洗掉），送空字串＝清空
+            require_once __DIR__ . '/../../src/common/part_label_lib.php';
+            $__wlSent = array_key_exists('workpiece_length', $_POST);
+            $__wlVal  = $__wlSent ? trim((string)$_POST['workpiece_length']) : null;
+            if ($__wlSent && $__wlVal !== '' && !preg_match('/^\d+(\.\d+)?$/', $__wlVal)) throw new Exception('工件總長請輸入數字（mm）');
             // 2026-08-24 重量計算器已移除（全庫 4045 筆從未產生過計算值），重量一律手動輸入
             $weight_source    = 'manual';
             $weight_calc_json = null;
@@ -3022,6 +3028,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($d_id <= 0) {
                 require_once __DIR__ . '/../../src/common/part_label_lib.php';
                 $__miss = eg_part_required_missing($pdo, $Type, $labels_list);
+                if (eg_workpiece_length_required($pdo, $Type) && trim((string)$__wlVal) === '') $__miss[] = '工件總長';
                 if ($__miss) throw new Exception('新增料號必須填寫：' . implode('、', $__miss));
             }
 
@@ -3076,6 +3083,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid]);
                 $d_id = (int)$pdo->lastInsertId();
             }
+            if ($__wlSent) eg_workpiece_length_set($pdo, (int)$d_id, $__wlVal);
 
             // ── 刀具規格（d_setting_tool，Type=H/OH）──────────────────────────
             $tool_in = json_decode($_POST['tool_spec'] ?? '{}', true);
@@ -9549,6 +9557,17 @@ body { background:#F6F1EA; }
                 <div id="pf-customer-dropdown" style="display:none;position:absolute;z-index:1050;width:100%;background:#fff;border:1px solid #ddd;border-top:none;max-height:160px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.1);"></div>
             </div>
             <div class="id-hint" id="pf-cust-hint"></div>
+        </div>
+    </div>
+    <div class="col-md-3" id="pf-wl-group">
+        <div class="form-group">
+            <label>工件總長 <span class="required-star" id="pf-wl-star" style="display:none;">*</span>
+                <span style="font-weight:normal;color:#999;font-size:11px;">(mm)</span></label>
+            <div class="input-group">
+                <input type="text" class="form-control" id="pf-workpiece_length" name="workpiece_length" placeholder="—" autocomplete="off" maxlength="30" inputmode="decimal" data-eg-hint="例：120 或 85.5">
+                <span class="input-group-addon">mm</span>
+            </div>
+            <div class="id-hint" id="pf-wl-err" style="color:#DD5138;"></div>
         </div>
     </div>
     <div class="col-md-3" id="pf-assembly-group">
@@ -17621,6 +17640,8 @@ function openPartModal(d_id) {
             document.getElementById('pf-Is_Assembly').checked  = (d.Is_Assembly=='1');
             document.getElementById('pf-Remark').value         = d.Remark||'';
             _fillWeightField(d.Weight_Kg);
+            document.getElementById('pf-workpiece_length').value = d.workpiece_length||'';
+            pfWlRefresh();
             var cpBtn   = document.getElementById('btn-copy-labels');
             if (cpBtn)   cpBtn.style.display   = '';
             fillAliasRows(d.aliases || []);
@@ -17661,6 +17682,7 @@ function openPartModal(d_id) {
         document.getElementById('partForm').reset();
         _setWeightUnit('g');
         document.getElementById('pf-d_id').value = '0';
+        pfWlRefresh();
         pfAcReset();   // 清空 廠商 / 專用料號 / 專用機台 / 價格
         CUR_PART_DID = 0; PART_SETS = []; renderPartSets();   // 新增中還沒有 d_id，所屬整組一律收起來
         _curPartIsAssembly = false;
@@ -17693,6 +17715,33 @@ function openPartModal(d_id) {
     }
 }
 
+// ── 工件總長（主檔本體欄位 d_setting.workpiece_length，2026-10-14 由標籤搬來）──
+// 是否必填：沿用標籤字典「工件總長」那一筆的設定（適用種類＋新增時必填）；標籤移除後即不再必填
+var PF_WL_META = <?= json_encode(($__wlm = (function() use ($pdo){ require_once __DIR__ . '/../../src/common/part_label_lib.php'; return eg_part_label_meta($pdo, eg_workpiece_length_label_id($pdo)); })()) ?: ['required'=>false,'types'=>[],'name'=>'工件總長'], JSON_UNESCAPED_UNICODE) ?>;
+function pfWlIsRequired() {
+    var isNew = !parseInt(document.getElementById('pf-d_id').value||'0');
+    var t = (document.getElementById('pf-Type')||{}).value || '';
+    return isNew && PF_WL_META && PF_WL_META.required && (PF_WL_META.types||[]).indexOf(String(t)) >= 0;
+}
+function pfWlValidate(submitting) {
+    var el = document.getElementById('pf-workpiece_length'), er = document.getElementById('pf-wl-err');
+    if (!el || !er) return true;
+    var v = el.value.trim(), msg = '';
+    if (v !== '' && !/^\d+(\.\d+)?$/.test(v)) msg = '請輸入數字（mm），例：120 或 85.5';
+    else if (v === '' && submitting && pfWlIsRequired()) msg = '新增料號必須填寫工件總長';
+    er.textContent = msg;
+    el.style.borderColor = msg ? '#DD5138' : '';
+    if (msg && submitting) showToast(msg, 'error');
+    return !msg;
+}
+function pfWlRefresh() {
+    var st = document.getElementById('pf-wl-star'); if (st) st.style.display = pfWlIsRequired() ? '' : 'none';
+    var er = document.getElementById('pf-wl-err'); if (er) er.textContent = '';
+    var el = document.getElementById('pf-workpiece_length'); if (el) el.style.borderColor = '';
+}
+$(document).on('input blur', '#pf-workpiece_length', function(){ pfWlValidate(false); });
+$(document).on('change', '#pf-Type', function(){ pfWlRefresh(); });
+
 // 新增料號時還沒填的必填標籤（_labelDefs 來自 manage_labels op=list，帶著 is_required）
 function _pfMissingRequiredLabels() {
     var miss = [];
@@ -17721,6 +17770,8 @@ function submitPartForm() {
         var _missReq = _pfMissingRequiredLabels();
         if (_missReq.length) { showToast('新增料號必須填寫：' + _missReq.join('、'), 'error'); return; }
     }
+    // 工件總長：格式即時檢查＋新增時必填（後端同規則再擋一次）
+    if (!pfWlValidate(true)) { var _wlE=document.getElementById('pf-workpiece_length'); if(_wlE){_wlE.focus();_wlE.select();} return; }
     if (type === 'G' && gearRows.length === 0) { showToast('齒輪料號至少需設定一筆齒輪規格','error'); return; }
     if (type === 'G') {
         for (var i=0; i<gearRows.length; i++) {
@@ -17750,6 +17801,7 @@ function submitPartForm() {
         Customer_Id:  document.getElementById('pf-Customer_Id').value,
         Remark:       document.getElementById('pf-Remark').value,
         Weight_Kg:    _getWeightKg(),
+        workpiece_length: document.getElementById('pf-workpiece_length').value.trim(),
         gears:        JSON.stringify(gearRows),
         bom_children: JSON.stringify(bomRows),
         labels:       (document.getElementById('pf-labels-json')||{value:'[]'}).value,
@@ -17928,6 +17980,8 @@ function copyPartModal(d_id) {
         onAssemblyChange(d.Is_Assembly=='1');
         document.getElementById('pf-Remark').value      = d.Remark||'';
         _fillWeightField(d.Weight_Kg);
+        document.getElementById('pf-workpiece_length').value = _copyLabelsAndGears ? (d.workpiece_length||'') : '';
+        pfWlRefresh();
         document.getElementById('pf-Customer_Id').value = d.Customer_Id||'';
         document.getElementById('pf-customer-display').value = d.client_name ? (d.client_name+' ('+d.Customer_Id+')') : (d.Customer_Id||'');
         document.getElementById('pf-cust-hint').textContent  = d.Customer_Id ? ('複製自：'+d.Customer_Id) : '';
@@ -28677,7 +28731,7 @@ $(function() {
     if (sdEl) sdEl.addEventListener('input', updateSettlementDayHint);
 
     // ── 料號 modal：ENTER 自動跳下一個輸入框（跳過舊料號區）──────────
-    var _partEnterOrder = ['pf-D_Setting_Id','pf-Spec_No','pf-Revision','pf-Issue_Date','pf-customer-display','pf-Weight_Kg'];
+    var _partEnterOrder = ['pf-D_Setting_Id','pf-Spec_No','pf-Revision','pf-Issue_Date','pf-customer-display','pf-workpiece_length','pf-Weight_Kg'];
     document.getElementById('partForm').addEventListener('keydown', function(e) {
         if (e.key !== 'Enter') return;
         var el = e.target;
