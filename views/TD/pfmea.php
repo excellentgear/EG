@@ -212,6 +212,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-card-grid textarea { min-height:38px; resize:vertical; }
         .pf-card-grid input.rating { text-align:center; }
         .pf-card-grid input.rpn-out { text-align:center; background:#F7F2E6; font-weight:bold; color:#8A5A2B; }
+        .pf-card-grid .rpn-bad, .pf-rating-quad .rpn-bad { background:#DD5138 !important; color:#fff !important; border-color:#B03A24 !important; }
+        .pf-prio { display:inline-block; margin-left:8px; padding:0 8px; border-radius:9px; background:#F0A24B; color:#4a2d10; font-size:11px; font-weight:bold; line-height:18px; }
+        .pf-noact-note { display:none; margin:8px 0; padding:6px 10px; background:#F7F2E6; border:1px dashed #E8D5B5; border-radius:4px; font-size:12px; color:#8a6d45; }
+        .pf-card.no-action .pf-act-sec { display:none; }
+        .pf-card.no-action .pf-noact-note { display:block; }
+        #crOrder { list-style:none; margin:6px 0; padding:0; }
+        #crOrder li { padding:6px 10px; margin-bottom:4px; background:#FFF; border:1px solid #E8D5B5; border-radius:4px; cursor:move; }
+        #crOrder li:before { content:'\2630 '; color:#b5762a; }
         .pf-card-grid .rpn-hi { color:#DD5138 !important; border-color:#DD5138 !important; }
         .pf-rating-quad { display:grid; grid-template-columns:repeat(4,1fr); gap:6px 10px; }
         @media print { .pf-toolbar, .nav_menu, .left_col, footer { display:none !important; } .right_col { margin:0 !important; padding:0 !important; } }
@@ -677,24 +685,27 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     </div>
 </div></div>
 
-<!-- 分類自動判定規則（2026-08-18 使用者要求，僅管理員） -->
-<div class="pf-mask" id="classRuleMask" style="z-index:1200;"><div class="pf-modal" style="max-width:560px;">
-    <div class="m-head"><span>分類自動判定規則</span><span class="m-close" onclick="closeMask('classRuleMask')">✕</span></div>
+<!-- PFMEA 判定設定（僅管理員）：措施門檻／優先順序／特性分類 -->
+<div class="pf-mask" id="classRuleMask" style="z-index:1200;"><div class="pf-modal" style="max-width:620px;">
+    <div class="m-head"><span>PFMEA 判定設定</span><span class="m-close" onclick="closeMask('classRuleMask')">✕</span></div>
     <div class="m-body" style="font-size:14px;color:#5b3a1e;">
-        <label style="font-size:14px;"><input type="checkbox" id="crEnabled"> 啟用自動判定（填寫 S／O 時自動帶入分類）</label>
-        <div style="margin:10px 0;padding:10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;line-height:2.2;">
-            嚴重度 S 介於
-            <input type="number" id="crSMin" min="1" max="10" style="width:60px;"> ～
-            <input type="number" id="crSMax" min="1" max="10" style="width:60px;">
-            <br><b>或</b> 發生率 O 介於
-            <input type="number" id="crOMin" min="1" max="10" style="width:60px;"> ～
-            <input type="number" id="crOMax" min="1" max="10" style="width:60px;">
-            <br>符合 → 分類帶入 <input type="text" id="crHit" style="width:130px;">
-            <br>都不符合 → 分類帶入 <input type="text" id="crElse" style="width:130px;">
+        <label style="font-size:14px;"><input type="checkbox" id="crEnabled"> 啟用自動判定</label>
+        <div class="pf-sec-title">措施判定</div>
+        <div style="padding:10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;line-height:2.4;">
+            嚴重度 S ≧ <select id="crSevForce"></select> → 不須考慮 RPN，直接納入優先採取措施<br>
+            RPN ≦ <input type="number" id="crRpnMax" min="0" max="1000" style="width:80px;"> → 不須採取改善措施（卡片自動隱藏建議措施與措施結果）
         </div>
-        <div style="font-size:12px;color:#8a6d45;line-height:1.8;">
-            兩個條件是「或」的關係，只要其中一個成立就算符合。<br>
-            自動帶入只會寫進<b>還空白、或上次就是系統自動帶的</b>格子；您手動打過的分類不會被蓋掉。
+        <div class="pf-sec-title">採取優先順序判定原則（拖移排序，越上面越優先）</div>
+        <ul id="crOrder"></ul>
+        <div class="pf-sec-title">特性分類</div>
+        <div style="padding:10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;line-height:2.4;">
+            關鍵特性，前端顯示 <input type="text" id="crCcText" style="width:70px;"> ：嚴重度 S ＞ <select id="crCcS"></select><br>
+            重要特性，前端顯示 <input type="text" id="crScText" style="width:70px;"> ：嚴重度 S ≧ <select id="crScS"></select> 且 發生率 O ≧ <select id="crScO"></select><br>
+            其餘為一般特性，前端不顯示符號
+        </div>
+        <div style="font-size:12px;color:#8a6d45;line-height:1.8;margin-top:6px;">
+            分類自動帶入只會寫進<b>還空白、或上次就是系統自動帶的</b>格子；手動打過的分類不會被蓋掉。<br>
+            改善後 RPN 若未低於改善前 RPN，該格會標紅底並跳出提示。
         </div>
     </div>
     <div class="m-foot">
@@ -951,6 +962,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/Sortable.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_part_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_picker.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
@@ -1174,7 +1186,7 @@ function itemCardHtml(it, idx, expanded){
     var dis = CAN_EDIT ? '' : ' disabled';
     return '<div class="pf-card'+(expanded?'':' collapsed')+'" data-id="'+esc(it.id||0)+'">'
         + '<div class="pf-card-hd" onclick="toggleCard(this)">'
-        + '<span><i class="fa fa-chevron-'+(expanded?'down':'right')+' toggle-ic"></i><b>項次 <span class="seq">'+(idx+1)+'</span></b>'
+        + '<span><i class="fa fa-chevron-'+(expanded?'down':'right')+' toggle-ic"></i><b>項次 <span class="seq">'+(idx+1)+'</span></b><span class="pf-prio" style="display:none"></span>'
         + '<span class="pf-card-summary">'+cardSummaryText(it)+'</span></span>'
         + '<button type="button" class="pf-row-btn del" onclick="event.stopPropagation();removeCard(this)"><i class="fa fa-trash"></i> 刪除此項</button>'
         + '</div>'
@@ -1189,7 +1201,7 @@ function itemCardHtml(it, idx, expanded){
         + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect')
         + fld('classification','分類','list:classification',
               '<span class="pf-op" onclick="openClassPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板</span>'
-              + (CAN_ADMIN ? '<span class="pf-op" onclick="openClassRule()" title="設定自動判定的S/O門檻" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-cog"></i> 判定規則</span>' : ''))
+              + (CAN_ADMIN ? '<span class="pf-op" onclick="openClassRule()" title="特性分類、措施門檻與優先順序設定" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-cog"></i> 判定設定</span>' : ''))
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
@@ -1198,17 +1210,18 @@ function itemCardHtml(it, idx, expanded){
         + fld('detection_controls','控制偵測','list:detection') + fld('detection','偵測度 D','rating')
         + '<div><label>RPN</label><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></div>'
         + '</div>'
-        + '<div class="pf-card-grp-title">建議措施</div>'
-        + '<div class="pf-card-grid">'
+        + '<div class="pf-noact-note">此項 RPN 低於設定門檻，不須採取改善措施。</div>'
+        + '<div class="pf-card-grp-title pf-act-sec">建議措施</div>'
+        + '<div class="pf-card-grid pf-act-sec">'
         + '<div><label>建議措施<span class="pf-op" onclick="openActionPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板（可複選）</span></label>'
         + '<textarea data-f="recommended_actions" class="f-action">'+esc(it.recommended_actions!=null?it.recommended_actions:'')+'</textarea></div>'
         + fld('target_date','目標完成日','date')
         + '</div>'
-        + '<div class="pf-card-grp-title">措施結果</div>'
-        + '<div class="pf-card-grid">'
+        + '<div class="pf-card-grp-title pf-act-sec">措施結果</div>'
+        + '<div class="pf-card-grid pf-act-sec">'
         + fld('action_date','生效日期','date')
         + '</div>'
-        + '<div class="pf-rating-quad">'
+        + '<div class="pf-rating-quad pf-act-sec">'
         + fld('new_severity','評價 S','rating') + fld('new_occurrence','評價 O','rating') + fld('new_detection','評價 D','rating')
         + '<div><label>改善後RPN</label><input type="text" class="rpn-out'+newRpnCls+'" data-new-rpn value="'+newRpn+'" readonly></div>'
         + '</div>'
@@ -1816,8 +1829,9 @@ function classifyBySO(sev, occ){
     if (!r || !r.enabled) return null;
     var s = parseInt(sev,10), o = parseInt(occ,10);
     if (!s && !o) return null;                       // S/O 都還沒填就先不判定
-    var hit = (s && s >= r.s_min && s <= r.s_max) || (o && o >= r.o_min && o <= r.o_max);
-    return hit ? r.hit_text : r.else_text;
+    if (s && s > r.cc_s) return r.cc_text;
+    if (s && o && s >= r.sc_s && o >= r.sc_o) return r.sc_text;
+    return '';                                       // 一般特性不顯示符號
 }
 function applyClassify($card){
     if (!CAN_EDIT) return;
@@ -1837,26 +1851,70 @@ $(document).on('input', '#itemBody [data-f="classification"]', function(){
     var v = ($(this).val()||'').trim();
     $(this).attr('data-cls-manual', (v && v !== ($(this).attr('data-cls-auto')||'')) ? '1' : '0');
 });
+var CR_ORDER_LABEL = {sev:'嚴重度最高的項目', sxo:'嚴重性 × 發生頻率', rpn:'RPN 最高的項目'};
+function crFillSel(id, val){
+    var h=''; for (var i=1;i<=10;i++) h+='<option value="'+i+'">'+i+'</option>';
+    $('#'+id).html(h).val(val);
+}
 window.openClassRule = function(){
     loadClassRule(function(){
         var r = CLASS_RULE || {};
         $('#crEnabled').prop('checked', !!r.enabled);
-        $('#crSMin').val(r.s_min); $('#crSMax').val(r.s_max);
-        $('#crOMin').val(r.o_min); $('#crOMax').val(r.o_max);
-        $('#crHit').val(r.hit_text); $('#crElse').val(r.else_text);
+        crFillSel('crSevForce', r.sev_force); crFillSel('crCcS', r.cc_s); crFillSel('crScS', r.sc_s); crFillSel('crScO', r.sc_o);
+        $('#crRpnMax').val(r.rpn_max); $('#crCcText').val(r.cc_text); $('#crScText').val(r.sc_text);
+        $('#crOrder').html((r.priority_order||[]).map(function(k){ return '<li data-k="'+k+'">'+CR_ORDER_LABEL[k]+'</li>'; }).join(''));
+        var ul = document.getElementById('crOrder');
+        if (window.Sortable && !ul._sortable) ul._sortable = Sortable.create(ul, {animation:120});
         openMask('classRuleMask');
     });
 };
 window.saveClassRule = function(){
+    var order = $('#crOrder li').map(function(){ return $(this).attr('data-k'); }).get();
     $.post(API, {action:'classify_rule_save', enabled:$('#crEnabled').is(':checked')?1:0,
-        s_min:$('#crSMin').val(), s_max:$('#crSMax').val(), o_min:$('#crOMin').val(), o_max:$('#crOMax').val(),
-        hit_text:$('#crHit').val(), else_text:$('#crElse').val()}, function(res){
+        sev_force:$('#crSevForce').val(), rpn_max:$('#crRpnMax').val(), priority_order:JSON.stringify(order),
+        cc_s:$('#crCcS').val(), cc_text:$('#crCcText').val(), sc_s:$('#crScS').val(), sc_o:$('#crScO').val(), sc_text:$('#crScText').val()}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         CLASS_RULE = res.rule;
         closeMask('classRuleMask');
-        alert('已儲存。之後填寫 S／O 時就會依新的門檻自動帶入分類。');
+        refreshAllRisk();
+        alert('已儲存。之後填寫時會依新的設定判定。');
     }, 'json');
 };
+
+/* ---------- 措施判定／優先順序／改善後RPN檢核 ----------
+ * 須採取措施 = S ≧ sev_force（不看RPN）或 RPN > rpn_max；否則卡片隱藏建議措施與措施結果。
+ * 須採取措施的項目依管理員設定的判定原則（嚴重度／S×O／RPN，依序比較）排出優先順序。 */
+function cardNum($c, f){ var v = parseInt($c.find('[data-f="'+f+'"]').val(),10); return isNaN(v) ? null : v; }
+function refreshAllRisk(){
+    var r = CLASS_RULE;
+    if (!r) { loadClassRule(function(){ if (CLASS_RULE) refreshAllRisk(); }); return; }
+    var list = [];
+    $('#itemBody .pf-card').each(function(){
+        var $c = $(this), s = cardNum($c,'severity'), o = cardNum($c,'occurrence'), d = cardNum($c,'detection');
+        var rpn = (s && o && d) ? s*o*d : null;
+        var need = true;
+        if (r.enabled && !(s !== null && s >= r.sev_force) && rpn !== null && rpn <= r.rpn_max) need = false;
+        $c.toggleClass('no-action', !need);
+        $c.find('.pf-prio').hide().text('');
+        if (need && (s || rpn)) list.push({$c:$c, sev:s||0, sxo:(s&&o)?s*o:0, rpn:rpn||0});
+        var ns = cardNum($c,'new_severity'), no = cardNum($c,'new_occurrence'), nd = cardNum($c,'new_detection');
+        var bad = need && rpn !== null && ns && no && nd && (ns*no*nd) >= rpn;
+        $c.find('[data-new-rpn]').toggleClass('rpn-bad', !!bad);
+    });
+    list.sort(function(a,b){
+        for (var i=0;i<r.priority_order.length;i++){ var k=r.priority_order[i]; if (a[k]!==b[k]) return b[k]-a[k]; }
+        return 0;
+    });
+    list.forEach(function(x,i){ x.$c.find('.pf-prio').text('優先 #'+(i+1)).show(); });
+}
+$(document).on('input', '#itemBody .sod-in', function(){ refreshAllRisk(); });
+$(document).on('change', '#itemBody [data-f="new_severity"], #itemBody [data-f="new_occurrence"], #itemBody [data-f="new_detection"]', function(){
+    refreshAllRisk();
+    var $c = $(this).closest('.pf-card');
+    if ($c.find('[data-new-rpn]').hasClass('rpn-bad')) {
+        alert('改善後 RPN（' + $c.find('[data-new-rpn]').val() + '）未低於改善前 RPN（' + $c.find('[data-rpn]').val() + '），請修改評價 S／O／D 或重新檢討建議措施。');
+    }
+});
 
 /* 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選，但也要可以綁定）。
    句庫沿用控制選項同一張表 option_type='classification'；跟「綁定」並存互不衝突——綁定值

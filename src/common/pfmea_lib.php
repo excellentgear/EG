@@ -409,28 +409,38 @@ function pfmea_classify_rule_get(PDO $db): array {
     $v = $st->fetchColumn();
     $d = $v ? json_decode((string)$v, true) : null;
     if (!is_array($d)) $d = [];
+    $ord = (isset($d['priority_order']) && is_array($d['priority_order'])) ? array_values(array_intersect($d['priority_order'], ['sev','sxo','rpn'])) : [];
+    foreach (['sev','sxo','rpn'] as $k) if (!in_array($k, $ord, true)) $ord[] = $k;
     return [
-        'enabled'   => array_key_exists('enabled', $d) ? (int)$d['enabled'] : 1,
-        's_min'     => isset($d['s_min']) ? (int)$d['s_min'] : 5,
-        's_max'     => isset($d['s_max']) ? (int)$d['s_max'] : 8,
-        'o_min'     => isset($d['o_min']) ? (int)$d['o_min'] : 4,
-        'o_max'     => isset($d['o_max']) ? (int)$d['o_max'] : 10,
-        'hit_text'  => isset($d['hit_text'])  ? (string)$d['hit_text']  : '重要特性',
-        'else_text' => isset($d['else_text']) ? (string)$d['else_text'] : '一般特性',
+        'enabled'        => array_key_exists('enabled', $d) ? (int)$d['enabled'] : 1,
+        // 1. 嚴重度 S >= sev_force 不論 RPN 一律納入優先採取措施
+        'sev_force'      => isset($d['sev_force']) ? (int)$d['sev_force'] : 9,
+        // 2. RPN <= rpn_max 不須採取改善措施
+        'rpn_max'        => isset($d['rpn_max']) ? (int)$d['rpn_max'] : 26,
+        // 3. 採取優先順序判定原則的排序（sev=嚴重度最高、sxo=嚴重性x發生頻率、rpn=RPN最高）
+        'priority_order' => $ord,
+        // 4. 特性分類：關鍵特性(CC) 嚴重度 > cc_s；重要特性(SC) 嚴重度 >= sc_s 且 發生率 >= sc_o；其餘一般特性不顯示符號
+        'cc_s'           => isset($d['cc_s']) ? (int)$d['cc_s'] : 8,
+        'cc_text'        => isset($d['cc_text']) ? (string)$d['cc_text'] : 'CC',
+        'sc_s'           => isset($d['sc_s']) ? (int)$d['sc_s'] : 5,
+        'sc_o'           => isset($d['sc_o']) ? (int)$d['sc_o'] : 4,
+        'sc_text'        => isset($d['sc_text']) ? (string)$d['sc_text'] : 'SC',
     ];
 }
 function pfmea_classify_rule_save(PDO $db, array $r, int $uid): void {
+    $ord = json_decode((string)($r['priority_order'] ?? '[]'), true);
+    $cur = pfmea_classify_rule_get($db);
     $clean = [
-        'enabled'   => !empty($r['enabled']) ? 1 : 0,
-        's_min'     => max(1, min(10, (int)($r['s_min'] ?? 5))),
-        's_max'     => max(1, min(10, (int)($r['s_max'] ?? 8))),
-        'o_min'     => max(1, min(10, (int)($r['o_min'] ?? 4))),
-        'o_max'     => max(1, min(10, (int)($r['o_max'] ?? 10))),
-        'hit_text'  => trim((string)($r['hit_text'] ?? '重要特性')),
-        'else_text' => trim((string)($r['else_text'] ?? '一般特性')),
+        'enabled'        => !empty($r['enabled']) ? 1 : 0,
+        'sev_force'      => max(1, min(10, (int)($r['sev_force'] ?? $cur['sev_force']))),
+        'rpn_max'        => max(0, min(1000, (int)($r['rpn_max'] ?? $cur['rpn_max']))),
+        'priority_order' => is_array($ord) ? $ord : $cur['priority_order'],
+        'cc_s'           => max(1, min(10, (int)($r['cc_s'] ?? $cur['cc_s']))),
+        'cc_text'        => trim((string)($r['cc_text'] ?? 'CC')) ?: 'CC',
+        'sc_s'           => max(1, min(10, (int)($r['sc_s'] ?? $cur['sc_s']))),
+        'sc_o'           => max(1, min(10, (int)($r['sc_o'] ?? $cur['sc_o']))),
+        'sc_text'        => trim((string)($r['sc_text'] ?? 'SC')) ?: 'SC',
     ];
-    if ($clean['s_min'] > $clean['s_max']) [$clean['s_min'], $clean['s_max']] = [$clean['s_max'], $clean['s_min']];
-    if ($clean['o_min'] > $clean['o_max']) [$clean['o_min'], $clean['o_max']] = [$clean['o_max'], $clean['o_min']];
     $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
     $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='PFMEA' AND param_key='classify_rule' LIMIT 1");
     $st->execute();
