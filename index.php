@@ -55,10 +55,12 @@ session_start();
                         ?>
                     </h5>
                     <div>
-                        <input type="text" id="userName" name="userName" class="form-control" placeholder="Username" required="" autocomplete="off" />
+                        <input type="text" id="userName" name="userName" class="form-control" placeholder="Username" required="" autocomplete="off" readonly onfocus="this.removeAttribute('readonly');" />
                     </div>
                     <div>
-                        <input type="password" id="password" name="password" class="form-control" placeholder="Password" required="" autocomplete="new-password" />
+                        <!-- 刻意不用 type=password：Chrome 會無視 autocomplete=off 而提示儲存/自動填入密碼，
+                             共用 Google 帳號下會讓別人直接登入他人帳號。改用 text＋CSS 遮罩，瀏覽器就不當成密碼欄 -->
+                        <input type="text" id="password" name="password" class="form-control" placeholder="Password" required="" autocomplete="off" autocapitalize="off" spellcheck="false" style="-webkit-text-security:disc;text-security:disc;" />
                     </div>
                     <div>
                         <button type="submit" name="login" class="btn btn-default submit">登入</button>
