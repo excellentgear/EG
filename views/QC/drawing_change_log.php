@@ -695,7 +695,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
         <div class="modal-body">
             <div class="muted-help" id="pw-why" style="margin-bottom:8px;"></div>
-            <input type="password" class="form-control input-sm" id="pw-input" autocomplete="off" placeholder="請輸入您的操作確認密碼">
+            <input type="text" class="form-control input-sm" id="pw-input" name="dc_confirm_code" style="-webkit-text-security:disc;" autocomplete="new-password" data-lpignore="true" data-form-type="other" placeholder="請輸入您的操作確認密碼">
             <div class="err-msg" id="pw-err" style="margin-top:5px;display:none;"></div>
         </div>
         <div class="modal-footer">
