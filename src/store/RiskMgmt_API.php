@@ -63,7 +63,7 @@ function rmDocGet(PDO $db, int $id): ?array {
     $st->execute([$id]);
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
-function rmCanSee(array $r, array $P): bool { return $r['kind'] === 'context' || $P['canView'] || (int)$r['created_by'] === (int)$P['uid']; }
+function rmCanSee(array $r, array $P): bool { return true; }   // 兩種表都是整家公司一個年度一張，所有在職員工都看得到（只有建立者與管理員可改）
 function rmCanEdit(array $r, array $P): bool { return $P['canAdmin'] || (int)$r['created_by'] === (int)$P['uid']; }
 
 /** 明細列＋即時算出的風險等級（用「目前設定」，不讀存好的值） */
@@ -118,7 +118,7 @@ if ($action === 'doc_list') {
     $year = (int)($_GET['year'] ?? 0);
 
     $where = ["d.kind=?", "d.is_deleted=0"]; $a = [$kind];
-    if (!$P['canView'] && $kind !== 'context') { $where[] = "d.created_by=?"; $a[] = $uid; }
+    // 兩種表都是整家公司一個年度一張，所有在職員工都看得到，不再依建立者過濾
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     if ($kw !== '') {
         $like = '%' . $kw . '%';
@@ -170,7 +170,6 @@ if ($action === 'doc_get') {
 /* ---------------------------------------------------------------- 風險分布（表D）：各格實際有幾筆風險 */
 if ($action === 'dist') {
     $where = ["d.kind='risk'", "d.is_deleted=0", "i.severity IS NOT NULL"]; $a = [];
-    if (!$P['canView']) { $where[] = "d.created_by=?"; $a[] = $uid; }
     $year = (int)($_GET['year'] ?? 0);
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     $st = $db->prepare("SELECT i.severity, i.frequency, COUNT(*) c FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id
@@ -213,24 +212,20 @@ if ($action === 'suggest') {
     }
     // ② 溝通管理：還沒結案的利害關係者反應 → 需求與期望的線索
     try {
-        $q = $db->query("SELECT party, content, due_date FROM comm_track WHERE is_deleted=0 AND is_closed=0 AND party<>'' ORDER BY react_date DESC, track_id DESC LIMIT 8");
+        $q = $db->prepare("SELECT party, content, due_date FROM comm_track WHERE is_deleted=0 AND is_closed=0 AND party<>'' AND YEAR(react_date)=? ORDER BY react_date DESC, track_id DESC LIMIT 8");
+        $q->execute([$year]);
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $out[] = ['source'=>'溝通管理・措施追蹤表（未結案）', 'key'=>'T', 'stakeholder'=>(string)$t['party'], 'needs'=>mb_substr((string)$t['content'], 0, 200),
                       'issue'=>'', 'why'=>'利害關係者提出且尚未解決的反應，可能是外部威脅或需要把握的機會（請自行判斷象限）'];
         }
     } catch (Throwable $e) {}
-    // ③ 品質異常單：近一年出現最多的原因分類 → 內部劣勢線索
-    try {
-        $q = $db->query("SELECT c.name, COUNT(*) n FROM qa_abnormal_cause ac
-                         JOIN qa_abnormal_order o ON o.id=ac.order_id AND o.deleted_at IS NULL AND o.created_at >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
-                         JOIN qa_cause_cat c ON c.cat_id=ac.cat_id
-                         GROUP BY c.cat_id, c.name ORDER BY n DESC LIMIT 4");
-        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $c) {
-            $out[] = ['source'=>'品質異常處理單（近 12 個月）', 'key'=>'W', 'stakeholder'=>'客戶', 'needs'=>'品質穩定、不良品不外流',
-                      'issue'=>'近一年品質異常單中，原因分類「' . $c['name'] . '」出現 ' . $c['n'] . ' 次', 'why'=>'異常重複出現的原因，常是內部需改善的項目'];
-        }
-    } catch (Throwable $e) {}
-    jout(['year'=>$year, 'rows'=>$out]);
+    // ③ 依當年實際資料即時算出的建議（KPI、出貨、人員、行事曆、委外、品質異常、法規溝通…；選哪一年就用那一年的資料）
+    require_once __DIR__ . '/../common/risk_mgmt_suggest_lib.php';
+    $GLOBALS['RM_SG_LAST_ERR'] = [];
+    $auto = rm_suggest_context($db, $year);
+    $out = array_merge($auto, $out);                       // 規則算出的放最前面，再來是去年的表與未結案反應
+    jout(['year'=>$year, 'rows'=>$out, 'warn'=>$GLOBALS['RM_SG_LAST_ERR']]);
+
 }
 
 /* ---------------------------------------------------------------- 可引用的組織處境議題（風險表挑「引用處境議題」用） */
@@ -259,12 +254,13 @@ if ($action === 'doc_save') {
     $fillDate = rmDate($_POST['fill_date'] ?? '');
     if (!$fillDate) jerr('請填寫填表日期');
     if ($fillDate > rmToday($db)) jerr('填表日期不可是未來日期');
-    if ($kind === 'context') {
-        // 組織處境分析表：整家公司一個年度只有一張
-        $q = $db->prepare("SELECT doc_id, doc_no FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? AND doc_id<>?");
-        $q->execute([(int)substr($fillDate, 0, 4), $id]);
+    {
+        /* 兩種表都是整家公司一個年度只有一張：AS9100D 6.1／4.1 沒有規定一年幾張，這是本公司程序書 2-GM-03 的做法
+           （6.1.1 風險小組會議每年至少召開一次；6.7 有重大變化時開不定期會議＝在同一張表上更新，不另開新表） */
+        $q = $db->prepare("SELECT doc_id, doc_no FROM rm_doc WHERE kind=? AND is_deleted=0 AND YEAR(fill_date)=? AND doc_id<>?");
+        $q->execute([$kind, (int)substr($fillDate, 0, 4), $id]);
         if ($dup = $q->fetch(PDO::FETCH_ASSOC))
-            jerr('「' . substr($fillDate, 0, 4) . '」年度已經有組織處境分析表（單號 ' . $dup['doc_no'] . '），整家公司一個年度只會有一張，請直接開啟那一張編輯。', 409);
+            jerr('「' . substr($fillDate, 0, 4) . '」年度已經有' . (rm_print_meta($db, $kind)['doc_name'] ?: '這張表') . '（單號 ' . $dup['doc_no'] . '），整家公司一個年度只會有一張，請直接開啟那一張編輯（年度中途有變動也是在同一張上更新）。', 409);
     }
 
     $set = rm_settings($db);
@@ -415,19 +411,36 @@ if ($action === 'setting_save') {
     rmReqAdmin($P);
     $arr = json_decode((string)($_POST['settings'] ?? ''), true);
     if (!is_array($arr)) jerr('設定內容不正確');
-    $toWrite = [];
+    $toWrite = []; $cur = rm_settings($db);
+    $impMap = null; $likMap = null;
     if (array_key_exists('rm_impact', $arr)) {
-        [$v, $e] = rm_normalize_impact($arr['rm_impact']); if ($e) jerr($e); $toWrite['rm_impact'] = $v;
+        [$v, $e, $impMap] = rm_normalize_impact($arr['rm_impact']); if ($e) jerr($e); $toWrite['rm_impact'] = $v;
+        // orig 一定要是目前真的有的等級（別人剛改過就請他重新整理，不然對應會錯）
+        $curV = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_impact']['rows']);
+        foreach (array_keys($impMap) as $o) if (!in_array($o, $curV, true)) jerr('影響分析的等級已被其他人更新，請重新整理頁面後再修改', 409);
     }
     if (array_key_exists('rm_likelihood', $arr)) {
-        [$v, $e] = rm_normalize_likelihood($arr['rm_likelihood']); if ($e) jerr($e); $toWrite['rm_likelihood'] = $v;
+        [$v, $e, $likMap] = rm_normalize_likelihood($arr['rm_likelihood']); if ($e) jerr($e); $toWrite['rm_likelihood'] = $v;
+        $curV = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_likelihood']);
+        foreach (array_keys($likMap) as $o) if (!in_array($o, $curV, true)) jerr('可能性評估的等級已被其他人更新，請重新整理頁面後再修改', 409);
     }
     if (array_key_exists('rm_method', $arr)) {
         if (!in_array($arr['rm_method'], ['multiply', 'add', 'max'], true)) jerr('分數算法不正確');
         $toWrite['rm_method'] = $arr['rm_method'];
     }
+    // 風險準則：最後一級的上限＝改完之後可能的最高分，所以一定要用「改完之後」的影響／可能性／算法來算
+    $newImpRows = ($toWrite['rm_impact'] ?? $cur['rm_impact'])['rows'];
+    $newLikRows = $toWrite['rm_likelihood'] ?? $cur['rm_likelihood'];
+    $newMethod  = $toWrite['rm_method'] ?? $cur['rm_method'];
+    $maxScore   = rm_max_score($newImpRows, $newLikRows, $newMethod);
+    $savedNames = array_map(function ($r) { return (string)$r['name']; }, $cur['rm_levels']);
     if (array_key_exists('rm_levels', $arr)) {
-        [$v, $e] = rm_normalize_levels($arr['rm_levels']); if ($e) jerr($e); $toWrite['rm_levels'] = $v;
+        [$v, $e] = rm_normalize_levels($arr['rm_levels'], $maxScore, $savedNames); if ($e) jerr($e); $toWrite['rm_levels'] = $v;
+    } elseif (isset($toWrite['rm_impact']) || isset($toWrite['rm_likelihood']) || isset($toWrite['rm_method'])) {
+        $re = array_map(function ($r) { return ['name'=>$r['name'], 'orig_name'=>$r['name'], 'hi'=>$r['hi'], 'measure'=>$r['measure'], 'action'=>$r['action']]; }, $cur['rm_levels']);
+        [$v, $e] = rm_normalize_levels($re, $maxScore, $savedNames);
+        if ($e) jerr('影響／可能性／算法改動後，原本的風險準則已對不上：' . $e . '。請一併調整風險準則再儲存。');
+        $toWrite['rm_levels'] = $v;
     }
     if (array_key_exists('rm_dimensions', $arr)) {
         [$v, $e] = rm_normalize_swot_names($arr['rm_dimensions']); if ($e) jerr($e); $toWrite['rm_dimensions'] = $v;
@@ -437,16 +450,34 @@ if ($action === 'setting_save') {
         if ($p === '') jerr('風險確認編號的前綴要填英數字（最多 6 碼）');
         $toWrite['rm_confirm_prefix'] = $p;
     }
-    // 影響／可能性的等級改了之後，既有資料若還用著被拿掉的值，那一列會算不出風險等級——先講清楚再讓管理員決定，不要默默存
-    if ((isset($toWrite['rm_impact']) || isset($toWrite['rm_likelihood'])) && empty($_POST['force'])) {
-        $cur = rm_settings($db);
-        $sv = array_map(function ($r) { return (int)$r['v']; }, ($toWrite['rm_impact'] ?? $cur['rm_impact'])['rows']);
-        $fq = array_map(function ($r) { return (int)$r['v']; }, $toWrite['rm_likelihood'] ?? $cur['rm_likelihood']);
-        $bad = (int)$db->query("SELECT COUNT(*) FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE d.is_deleted=0 AND i.severity IS NOT NULL
-                  AND (i.severity NOT IN (" . implode(',', $sv) . ") OR i.frequency NOT IN (" . implode(',', $fq) . "))")->fetchColumn();
-        if ($bad > 0) jerr('有 ' . $bad . ' 列既有資料用到「被你拿掉的等級」，改完之後那些列會算不出風險等級。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$bad]);
+    // 影響／可能性的等級是自動依順序編號：刪掉其中一級，後面的等級數字會往前補（不跳號）。
+    // 既有風險資料存的是等級數字，所以要一併換成新數字；被刪掉那一級的資料沒有對應的新等級，會變成「未評估」——先講清楚再讓管理員決定
+    $remap = [];     // [欄位 => [舊值 => 新值]]
+    if ($impMap !== null) { $remap['severity']  = $impMap; $curVals['severity']  = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_impact']['rows']); }
+    if ($likMap !== null) { $remap['frequency'] = $likMap; $curVals['frequency'] = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_likelihood']); }
+    $changed = [];   // 真的需要動資料的欄位
+    $lost = 0;
+    foreach ($remap as $col => $map) {
+        $identity = true;
+        foreach ($map as $o => $n2) if ($o !== $n2) $identity = false;
+        $deleted = array_values(array_diff($curVals[$col], array_keys($map)));
+        if (!$identity || $deleted) $changed[$col] = ['map'=>$map, 'deleted'=>$deleted];
+        if ($deleted) {
+            $lost += (int)$db->query("SELECT COUNT(*) FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE d.is_deleted=0 AND i.$col IN (" . implode(',', array_map('intval', $deleted)) . ")")->fetchColumn();
+        }
     }
-    foreach ($toWrite as $k => $v) rm_setting_write($db, $k, $v, $uname);
+    if ($lost > 0 && empty($_POST['force']))
+        jerr('有 ' . $lost . ' 列既有風險資料用到「被你刪除的等級」，儲存後那些列會變成「未評估」（需要重新選嚴重度與頻率）。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$lost]);
+    $db->beginTransaction();
+    try {
+        foreach ($toWrite as $k => $v) rm_setting_write($db, $k, $v, $uname);
+        foreach ($changed as $col => $ch) {
+            $case = ''; foreach ($ch['map'] as $o => $n2) $case .= ' WHEN ' . (int)$o . ' THEN ' . (int)$n2;
+            $db->exec("UPDATE rm_item SET $col = CASE $col$case ELSE NULL END WHERE $col IS NOT NULL");
+        }
+        if ($changed) $db->exec("UPDATE rm_item SET severity=NULL, frequency=NULL WHERE (severity IS NULL) <> (frequency IS NULL)");   // 嚴重度與頻率要一起有、一起沒有
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存設定失敗：' . $e->getMessage(), 500); }
     $set = rm_settings($db);
     jout(['settings'=>$set, 'levels'=>rm_levels_view($set), 'swot'=>rm_swot_view($set)]);
 }

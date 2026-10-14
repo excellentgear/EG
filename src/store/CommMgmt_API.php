@@ -379,7 +379,7 @@ if ($action === 'rec_save') {
     $catRow = array_key_exists('party_cat_id', $_POST) ? cmCatCheck($db, $_POST['party_cat_id'], $old ? (int)$old['party_cat_id'] : 0) : null;
     if (array_key_exists('party_cat_id', $_POST) && !$catRow) jerr('請選擇類別');
     if ($catRow) {
-        $kind = (string)$catRow['kind'];
+        $kind = $catRow['kind'] === 'government' ? 'other' : (string)$catRow['kind'];   // 政府單位的挑法＝手動填寫，記錄表一律存成 other
         if ($catRow['free_text']) {
             $kindOther = cmS($_POST['party_kind_other'] ?? '', 100);
             if ($kindOther === '') jerr('類別選「' . $catRow['name'] . '」時請填寫類別說明');
@@ -1144,8 +1144,8 @@ if ($action === 'cat_save') {
     $name = cmS($_POST['name'] ?? '', 40);
     if ($name === '') jerr('請填寫類別名稱');
     $kind = cmS($_POST['kind'] ?? 'other', 12);
-    if (!isset(CM_PARTY_KINDS[$kind])) jerr('挑對象的方式不正確');
-    $free = ($kind === 'other' && !empty($_POST['free_text'])) ? 1 : 0;
+    if (!isset(CM_CAT_KINDS[$kind])) jerr('挑對象的方式不正確');
+    $free = (in_array($kind, ['other', 'government'], true) && !empty($_POST['free_text'])) ? 1 : 0;
     $q = $db->prepare("SELECT cat_id FROM comm_track_cat WHERE name=? AND cat_id<>?");
     $q->execute([$name, $id]);
     if ($q->fetchColumn()) jerr('已經有「' . $name . '」這個類別了');

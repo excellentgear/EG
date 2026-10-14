@@ -51,6 +51,10 @@ const CM_TYPES = ['regular' => '定期', 'irregular' => '不定期'];
 /** 類別（紙本：□客戶 □供應商 □員工 □其他：＿＿） */
 const CM_PARTY_KINDS = ['customer' => '客戶', 'supplier' => '供應商', 'employee' => '員工', 'other' => '其他'];
 
+/** 類別可選的「挑利害關係者的方式」：比寫死的四種多一個「政府單位」（環保局、消防局…），挑法與「其他」相同＝手動填寫名稱。
+ *  溝通記錄表本身仍只存四種（政府單位存成 other），所以記錄表、管制表既有的判斷與列印都不受影響。 */
+const CM_CAT_KINDS = ['customer' => '客戶', 'supplier' => '供應商', 'employee' => '員工', 'government' => '政府單位', 'other' => '其他'];
+
 /** 管道（紙本：□電話 □面談 □email □會議 □其他:＿＿）；可複選 */
 const CM_CHANNELS = ['phone' => '電話', 'face' => '面談', 'email' => 'email', 'meeting' => '會議', 'other' => '其他'];
 
@@ -225,7 +229,7 @@ function cm_ensure_schema(PDO $db): void
         }
         if ($fresh) {   // 第一次建立時的起點：原本寫死的四種＋使用者舉的三個例子，管理員可改名、停用、刪除或再新增
             $seed = [['客戶','customer',0,10], ['供應商','supplier',0,20], ['員工','employee',0,30],
-                     ['環保局','other',0,40], ['消防局','other',0,50], ['人事行政機關','other',0,60], ['其他','other',1,900]];
+                     ['環保局','government',0,40], ['消防局','government',0,50], ['人事行政機關','government',0,60], ['其他','other',1,900]];
             foreach ($seed as $s0) {
                 $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sort_order, created_by, created_at, updated_at) VALUES (?,?,?,?,'系統預設',NOW(),NOW())")->execute($s0);
             }

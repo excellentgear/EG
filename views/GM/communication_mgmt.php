@@ -805,7 +805,7 @@ $roleLabel = cm_role_label($perms);
         <div class="hint" style="margin-bottom:6px;">這裡維護的類別會直接出現在「利害關係者溝通記錄表」的類別單選，以及措施追蹤表的類別欄與篩選
             （記錄表轉入追蹤表時，類別自動帶入）。<b>每一列按「儲存」就立刻生效</b>，不必再按下面的「儲存設定」。<br>
             「挑利害關係者的方式」決定記錄表選了這個類別之後怎麼填對象：客戶／供應商會搜尋主檔、員工先選部門再挑人、
-            <b>環保局、消防局、人事行政機關這類機關選「其他」即可</b>（手動填寫名稱）。已經有資料使用的類別不能刪除、也不能改挑對象的方式，只能停用。</div>
+            <b>環保局、消防局、人事行政機關這類機關選「政府單位」</b>（手動填寫名稱）；其他不屬於上面幾種的選「其他」。已經有資料使用的類別不能刪除、也不能改挑對象的方式，只能停用。</div>
         <table class="cm-table" style="margin-bottom:6px;">
             <thead><tr><th>類別名稱</th><th>挑利害關係者的方式</th><th>類別說明</th><th>排序</th><th>啟用</th><th>使用中</th><th>操作</th></tr></thead>
             <tbody id="catBody"></tbody>
@@ -1569,7 +1569,7 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
         $.each(cats, function(_, c){ if (!cur && c.kind === kind && (kind === 'other' ? +c.free_text : !+c.free_text)) cur = +c.cat_id; });
     }
     $.each(cats, function(_, c){
-        kr.append('<label><input type="radio" name="cKind" value="' + c.cat_id + '" data-kind="' + esc(c.kind) + '" data-free="' + (+c.free_text ? 1 : 0) + '"'
+        kr.append('<label><input type="radio" name="cKind" value="' + c.cat_id + '" data-kind="' + esc(c.kind === 'government' ? 'other' : c.kind) + '" data-free="' + (+c.free_text ? 1 : 0) + '"'
             + (+c.cat_id === cur ? ' checked' : '') + '> ' + esc(c.name) + '</label>');
     });
     if (!cats.length) kr.append('<span class="hint">尚未設定任何類別，請洽溝通管理員到「模組設定」建立。</span>');
@@ -2034,7 +2034,8 @@ function fillRecKindFilter(){
     $.each(META.track_cats || [], function(_, c){ el.append($('<option>').val(c.cat_id).text(c.name)); });
     if (cur) el.val(cur);
 }
-var CATKINDS = {customer:'客戶（搜尋客戶主檔）', supplier:'供應商（搜尋廠商主檔）', employee:'員工（先選部門再挑人）', other:'其他（手動填寫名稱）'};
+var CATKINDS = {customer:'客戶（搜尋客戶主檔）', supplier:'供應商（搜尋廠商主檔）', employee:'員工（先選部門再挑人）', government:'政府單位（手動填寫名稱）', other:'其他（手動填寫名稱）'};
+function manualKind(k){ return k === 'other' || k === 'government'; }   // 這兩種都是手動填寫名稱
 function catRowHtml(c){
     var kopts = $.map(CATKINDS, function(t, k){ return '<option value="' + k + '"' + (c.kind === k ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
     var used = (+c.used_rec || 0) + (+c.used_track || 0);
@@ -2051,15 +2052,15 @@ function catRowHtml(c){
 function renderCats(){
     var b = $('#catBody').empty();
     $.each(META.track_cats_all || [], function(_, c){ b.append(catRowHtml(c)); });
-    b.find('tr').each(function(){ var k = $(this).find('.cc-kind').val(); $(this).find('.cc-free').prop('disabled', k !== 'other'); });
+    b.find('tr').each(function(){ var k = $(this).find('.cc-kind').val(); $(this).find('.cc-free').prop('disabled', !manualKind(k)); });
 }
 function catApply(res){
     META.track_cats = res.track_cats; META.track_cats_all = res.track_cats_all;
     renderCats(); fillCatFilter(); fillRecKindFilter();
 }
 $(document).on('change', '#catBody .cc-kind', function(){
-    var tr = $(this).closest('tr'), other = this.value === 'other';
-    tr.find('.cc-free').prop('disabled', !other); if (!other) tr.find('.cc-free').prop('checked', false);
+    var tr = $(this).closest('tr'), manual = manualKind(this.value);
+    tr.find('.cc-free').prop('disabled', !manual); if (!manual) tr.find('.cc-free').prop('checked', false);
 });
 $(document).on('click', '#btnCatAdd', function(){
     $('#catBody').append(catRowHtml({cat_id:0, name:'', kind:'other', free_text:0, sort_order:0, is_active:1}));
