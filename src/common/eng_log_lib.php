@@ -1481,7 +1481,7 @@ function el_person_post(PDO $db, int $uid): ?array
                             LEFT JOIN department d ON d.id = m.department_id
                             LEFT JOIN position p ON p.id = m.position_id
                             WHERE u.id = ?
-                            ORDER BY s ASC, m.is_main DESC, m.id ASC LIMIT 1");
+                            ORDER BY m.is_main DESC, s ASC, m.id ASC LIMIT 1");   // 主職優先（2026-10-14）：兼任者原本取職級最高那筆，會把何沐桐顯示成兼任的「生管組 組長」而不是主職「技術課 工程師」
         $st->execute([$uid]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r || empty($r['id'])) return null;

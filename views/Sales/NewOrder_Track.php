@@ -2625,7 +2625,18 @@ if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 
             if ($oidFz && ot_note_frozen_for_order($pdo, $oidFz)) {
                 throw new InvalidArgumentException('此訂單已轉生管超過一天，設計備註已凍結，無法再確認／取消確認');
             }
-            $oidR = oda_confirm($pdo, $itemId, $actOda === 'oda_confirm', (int)$id, $unameOda);
+            // 確認人一律記「這張訂單的設計」本人（2026-10-14）：設計自己按＝記自己；管理員代按＝記訂單的設計，
+            // 並註明是誰代按的（紀錄要查得到真正按的人，但「誰確認」要落在負責這張訂單的設計身上）
+            $byId = (int)$id; $byName = $unameOda; $proxy = '';
+            if ($oidFz) {
+                $stD = $pdo->prepare("SELECT ot.ate, u.user_cname FROM order_track ot LEFT JOIN `user` u ON u.id = ot.ate WHERE ot.Order_id=?");
+                $stD->execute([$oidFz]);
+                $dz = $stD->fetch(PDO::FETCH_ASSOC);
+                if ($dz && (int)$dz['ate'] > 0 && (int)$dz['ate'] !== (int)$id && trim((string)$dz['user_cname']) !== '') {
+                    $byId = (int)$dz['ate']; $byName = (string)$dz['user_cname']; $proxy = $unameOda . ' 代';
+                }
+            }
+            $oidR = oda_confirm($pdo, $itemId, $actOda === 'oda_confirm', $byId, $byName, $proxy);
             $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], 'order_note')[$oidR] ?? null) : null;
             echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => 'note', 'preview' => $prevRow]);
             exit;

@@ -474,7 +474,7 @@ function oda_item_meta(PDO $db, array $itemIds): array
  * 每一次都寫一筆紀錄（誰、什麼時候）。呼叫端負責權限與凍結判定。
  * @return int 這則提醒所屬的訂單 id（呼叫端要重算該列預覽用）
  */
-function oda_confirm(PDO $db, int $itemId, bool $confirm, int $uid, string $uname): int
+function oda_confirm(PDO $db, int $itemId, bool $confirm, int $uid, string $uname, string $proxyNote = ''): int
 {
     oda_ensure_schema($db);
     $now = (string)$db->query("SELECT NOW()")->fetchColumn();
@@ -497,7 +497,8 @@ function oda_confirm(PDO $db, int $itemId, bool $confirm, int $uid, string $unam
         $logId = (int)$it['log_id'];
         $oid = el_case_order_id($db, $logId);
         $db->prepare("INSERT INTO order_design_alert_log (item_id, rule_id, order_id, action, by_id, by_name, at) VALUES (?,?,?,?,?,?,?)")
-           ->execute([$itemId, (int)$it['src_rule_id'], $oid ?: null, $confirm ? 'confirm' : 'unconfirm', ($uid ?: null), $uname, $now]);
+           ->execute([$itemId, (int)$it['src_rule_id'], $oid ?: null, $confirm ? 'confirm' : 'unconfirm', ($uid ?: null),
+                      $uname . ($proxyNote !== '' ? '（' . $proxyNote . '）' : ''), $now]);
         el_order_case_sync_status($db, $logId, $now);
         $db->commit();
         return $oid;
