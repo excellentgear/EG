@@ -393,6 +393,24 @@ function oda_spec_match(string $spec, string $keywordsJson, string $mode): bool
     return $mode === 'all' ? ($hit === count($kw)) : ($hit > 0);
 }
 
+/**
+ * 順路觸發的「最近新增／修改過的訂單」同步：每次載入頁面／清單都跑（很便宜，只看近 $minutes 分鐘內
+ * 建立或修改、尚未轉生管的訂單）。這樣使用者剛存好一張新訂單（或剛換料號）、清單重新載入時，
+ * 提醒就已經在了，不必等全量同步的 2 分鐘。沒有任何啟用中的規則時完全不做事。
+ */
+function oda_sync_recent(PDO $db, int $minutes = 30): void
+{
+    try {
+        if ((int)$db->query("SELECT COUNT(*) FROM order_design_alert_rule WHERE is_active=1")->fetchColumn() === 0) return;
+        $m = max(1, $minutes);
+        $ids = $db->query("SELECT Order_id FROM order_track
+                            WHERE pmGet IS NULL AND (Order_status IS NULL OR Order_status <> 6)
+                              AND (Created_At >= DATE_SUB(NOW(), INTERVAL {$m} MINUTE) OR Modified_At >= DATE_SUB(NOW(), INTERVAL {$m} MINUTE))")
+                   ->fetchAll(PDO::FETCH_COLUMN);
+        if ($ids) oda_sync($db, array_map('intval', $ids));
+    } catch (Throwable $e) { error_log('[design_alert] recent sync: ' . $e->getMessage()); }
+}
+
 /** 順路觸發的全量同步：每 2 分鐘最多一次（頁面載入時呼叫；失敗不影響頁面） */
 function oda_sync_auto(PDO $db): void
 {

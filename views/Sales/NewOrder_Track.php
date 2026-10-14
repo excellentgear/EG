@@ -2798,7 +2798,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     try { ocr_ensure_schema($pdo); } catch (Exception $eOcrEs) {}
     // 設計提醒（2026-10-14）：順路把新訂單／換料號的訂單補上系統提醒（全量同步每 2 分鐘最多一次，
     // 失敗不影響清單）。新存檔的訂單另外由存檔流程立即補一次，見 oda_sync() 的呼叫點。
-    try { oda_sync_auto($pdo); } catch (Throwable $eOdaSync) {}
+    try { oda_sync_recent($pdo); oda_sync_auto($pdo); } catch (Throwable $eOdaSync) {}
     ob_start(); // 【防護罩開啟】攔截所有意外警告、空白行
 
     header('Content-Type: application/json');
@@ -4329,7 +4329,7 @@ catch (Exception $_eNd) {
 try { ot_boss_ensure_schema($conn->getPDO()); } catch (Exception $_eBoss) {}
 try { ocr_ensure_schema($conn->getPDO()); } catch (Exception $_eOcr) {}
 // 設計提醒（2026-10-14）：頁面載入時順路補產生（每 2 分鐘最多一次；失敗不影響頁面）
-try { oda_sync_auto($conn->getPDO()); } catch (Throwable $_eOdaA) {}
+try { oda_sync_recent($conn->getPDO()); oda_sync_auto($conn->getPDO()); } catch (Throwable $_eOdaA) {}
 // 「單價為0」卡片要排除哪些標籤（2026-10-06 使用者要求）：與 AJAX 分頁那支共用同一套判定。
 $zpExclSqlInit = ot_astag_zeroprice_excl_sql($db, 'ot');
 $initStatsSql = "SELECT
