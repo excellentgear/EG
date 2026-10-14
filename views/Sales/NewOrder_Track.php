@@ -9860,7 +9860,7 @@ foreach($dCounts as $c) {
             if (q === '') { $sug.empty(); return; }
             var seq = (ODA._seq = (ODA._seq || 0) + 1);
             var data = type === 'cust' ? { action: 'ate_q_target_search', type: 'customer', kw: q }
-                                       : { action: 'oda_part_search', q: q, customer_id: ODA.cust ? ODA.cust.id : '' };
+                                       : { action: 'oda_part_search', q: q };   // 不依客戶過濾：選了料號會反過來帶出它的客戶（否則換客戶的料號永遠搜不到）
             $.post('', data, function(res) {
                 if (seq !== ODA._seq || !res || !res.success) return;
                 var h = '';
@@ -9868,7 +9868,7 @@ foreach($dCounts as $c) {
                     if (type === 'cust') {
                         h += '<a href="javascript:void(0)" class="oda-sug-item" data-id="' + escapeHtml(r.id) + '" data-name="' + escapeHtml(r.label) + '">' + escapeHtml(r.label) + ' <small>' + escapeHtml(r.sub || '') + '</small></a>';
                     } else {
-                        h += '<a href="javascript:void(0)" class="oda-sug-item" data-id="' + r.d_id + '" data-name="' + escapeHtml(r.D_Setting_Id) + '">' + escapeHtml(r.D_Setting_Id)
+                        h += '<a href="javascript:void(0)" class="oda-sug-item" data-id="' + r.d_id + '" data-name="' + escapeHtml(r.D_Setting_Id) + '" data-cust-id="' + escapeHtml(r.Customer_Id || '') + '" data-cust-name="' + escapeHtml(r.customer || '') + '">' + escapeHtml(r.D_Setting_Id)
                            + ' <small>' + escapeHtml((r.customer || '') + (r.Spec_No ? '　規格：' + r.Spec_No : '')) + '</small></a>';
                     }
                 });
@@ -9882,6 +9882,12 @@ foreach($dCounts as $c) {
         $(document).on('click', '#oda-part-sug .oda-sug-item', function() {
             ODA.part = { id: parseInt($(this).data('id'), 10), label: String($(this).data('name')) };
             $('#oda-part-input').val(ODA.part.label); $('#oda-part-sug').empty();
+            // 客戶＋料號：換料號就自動換成該料號所屬的客戶（料號主檔本來就綁定客戶，兩者不可能對不上）
+            var pc = String($(this).data('custId') || '');
+            if ($('#oda-kind').val() === 'cust_part' && pc) {
+                ODA.cust = { id: pc, name: String($(this).data('custName') || pc) };
+                $('#oda-cust-input').val(ODA.cust.name); $('#oda-cust-sug').empty();
+            }
         });
         function odaSave() {
             var k = $('#oda-kind').val(), err = '';
