@@ -46,14 +46,15 @@
             return abs ? m : col + (parseInt(row, 10) + n);
         });
     }
-    /** 彙總函式（SUM 等）的範圍若結尾剛好是明細最後一列，就延伸一列；單格引用 SUM(C5) 則變 SUM(C5:C6) */
-    function expandAggregates(f, lastRow1) {
+    /** 彙總函式（SUM 等）的範圍若結尾剛好是明細最後一列，就延伸 n 列；單格引用 SUM(C5) 則變 SUM(C5:C6) */
+    function expandAggregates(f, lastRow1, n) {
+        n = n || 1;
         var s = String(f);
         s = s.replace(/(\$?[A-Z]{1,3}\$?)(\d+):(\$?[A-Z]{1,3}\$?)(\d+)/g, function (m, c1, r1, c2, r2) {
-            return parseInt(r2, 10) === lastRow1 ? c1 + r1 + ':' + c2 + (lastRow1 + 1) : m;
+            return parseInt(r2, 10) === lastRow1 ? c1 + r1 + ':' + c2 + (lastRow1 + n) : m;
         });
         s = s.replace(/\b(SUM|AVERAGE|COUNT|COUNTA|MAX|MIN)\(\s*(\$?[A-Z]{1,3}\$?)(\d+)\s*\)/gi, function (m, fn, col, row) {
-            return parseInt(row, 10) === lastRow1 ? fn + '(' + col + row + ':' + col.replace(/\$/g, '') + (lastRow1 + 1) + ')' : m;
+            return parseInt(row, 10) === lastRow1 ? fn + '(' + col + row + ':' + col.replace(/\$/g, '') + (lastRow1 + n) + ')' : m;
         });
         return s;
     }
@@ -141,38 +142,45 @@
         ctl.hasDetail = function () { return groupRow != null; };
         var chain = Promise.resolve();
         function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-        async function doAdd() {
+        async function doAdd(n) {
+            n = n || 1;
             internal++;
             try {
-                var sh = ws(), lastD = groupRow + extra, nr = lastD + 1, maxC = 0;
+                var sh = ws(), lastD = groupRow + extra, maxC = 0;
                 var cd = (firstSheet(wb.save()).sheet.cellData) || {};
                 Object.keys(cd).forEach(function (r) { Object.keys(cd[r] || {}).forEach(function (c) { if (+c > maxC) maxC = +c; }); });
-                sh.insertRowAfter(lastD);                 // 樣式與資料驗證會自動沿用上一列
-                await sleep(150);                          // 等 Univer 自己的參照位移處理完，再改公式（否則會被它蓋回去）
+                sh.insertRowsAfter(lastD, n);              // 樣式與資料驗證會自動沿用上一列
+                await sleep(150);                           // 等 Univer 自己的參照位移處理完，再改公式（否則會被它蓋回去）
+                var merges = (sh.getMergedRanges() || []).filter(function (m) { return m.getRow() === lastD && m.getLastRow() === lastD && m.getLastColumn() > m.getColumn(); });
+                var srcF = [], srcV = [];
                 for (var c = 0; c <= maxC; c++) {
                     var isF = fields.some(function (f) { return f.g && f.c === c; });
-                    if (isF) continue;
-                    var src = sh.getRange(lastD, c), fm = src.getFormula();
-                    if (fm) sh.getRange(nr, c).setFormula(shiftFormulaRows(fm, 1));
-                    else { var val = src.getValue(); if (val !== null && val !== undefined && val !== '') sh.getRange(nr, c).setValue(val); }
+                    var src = sh.getRange(lastD, c);
+                    srcF[c] = isF ? '' : src.getFormula();
+                    srcV[c] = (isF || srcF[c]) ? null : src.getValue();
                 }
-                (sh.getMergedRanges() || []).forEach(function (m) {
-                    if (m.getRow() === lastD && m.getLastRow() === lastD && m.getLastColumn() > m.getColumn())
-                        sh.getRange(nr, m.getColumn(), 1, m.getLastColumn() - m.getColumn() + 1).merge();
-                });
-                try { sh.setRowHeight(nr, sh.getRowHeight(lastD)); } catch (e) {}
+                var h = 0; try { h = sh.getRowHeight(lastD); } catch (e) {}
+                for (var k = 1; k <= n; k++) {
+                    var nr = lastD + k;
+                    for (var c2 = 0; c2 <= maxC; c2++) {
+                        if (srcF[c2]) sh.getRange(nr, c2).setFormula(shiftFormulaRows(srcF[c2], k));
+                        else if (srcV[c2] !== null && srcV[c2] !== undefined && srcV[c2] !== '') sh.getRange(nr, c2).setValue(srcV[c2]);
+                    }
+                    merges.forEach(function (m) { sh.getRange(nr, m.getColumn(), 1, m.getLastColumn() - m.getColumn() + 1).merge(); });
+                    if (h) { try { sh.setRowHeight(nr, h); } catch (e) {} }
+                }
                 // 其他列的彙總公式（如合計）一併延伸
                 var snap = firstSheet(wb.save()).sheet.cellData || {};
                 Object.keys(snap).forEach(function (r) {
-                    if (+r >= groupRow && +r <= nr) return;
+                    if (+r >= groupRow && +r <= lastD + n) return;
                     Object.keys(snap[r] || {}).forEach(function (c) {
                         var f0 = snap[r][c] && snap[r][c].f;
                         if (!f0) return;
-                        var nf = expandAggregates(f0, lastD + 1);
+                        var nf = expandAggregates(f0, lastD + 1, n);
                         if (nf !== f0) sh.getRange(+r, +c).setFormula(nf);
                     });
                 });
-                extra++;
+                extra += n;
                 await sleep(80);
                 if (ctl.armGuard) ctl.armGuard();           // 結構變了，鎖定基準要重建，否則下一次編輯會被當成違規而復原
             } finally { internal--; }
@@ -181,7 +189,13 @@
         /** 加一列（回傳 Promise；連按會排隊依序執行，不會互相踩） */
         ctl.addDetailRow = function () {
             if (groupRow == null) return Promise.resolve(false);
-            chain = chain.then(doAdd).catch(function (e) { try { console.error(e); } catch (x) {} toast('加列失敗：' + (e && e.message || e)); return false; });
+            chain = chain.then(function () { return doAdd(1); }).catch(function (e) { try { console.error(e); } catch (x) {} toast('加列失敗：' + (e && e.message || e)); return false; });
+            return chain;
+        };
+        /** 一次加 n 列（載入既有單據時用，比逐列加快很多） */
+        ctl.addDetailRows = function (n) {
+            if (groupRow == null || n <= 0) return Promise.resolve(false);
+            chain = chain.then(function () { return doAdd(n); }).catch(function (e) { try { console.error(e); } catch (x) {} toast('加列失敗：' + (e && e.message || e)); return false; });
             return chain;
         };
         async function doRemoveLast() {
@@ -454,10 +468,10 @@
         if (mode !== 'design') {
             var want = extra; extra = 0;
             ctl.ready = (async function () {
-                await sleep(300);
-                for (var i = 0; i < want; i++) await ctl.addDetailRow();
+                await sleep(120);
+                if (want > 0) await ctl.addDetailRows(want);
                 if (o.values) ctl.setValues(o.values);
-                await sleep(200);
+                await sleep(80);
                 if (ctl.armGuard) ctl.armGuard();
                 return true;
             })();

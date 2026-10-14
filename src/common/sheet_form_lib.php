@@ -71,6 +71,9 @@ function sf_ensure_schema(PDO $db): void {
             KEY idx_tpl (template_id), KEY idx_creator (created_by)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表格模板填寫單據'");
     }
+    // 預設明細內容（建立單據時自動帶入的標準項目；2026-10-14 加）
+    $col = $db->query("SHOW COLUMNS FROM sf_template LIKE 'defaults_json'")->fetchColumn();
+    if (!$col) $db->exec("ALTER TABLE sf_template ADD COLUMN defaults_json MEDIUMTEXT NULL COMMENT '預設明細內容 {rows,values:{欄位id:[值]}}，建立單據時帶入' AFTER fields_json");
     $done = true;
 }
 
@@ -226,6 +229,26 @@ function sf_validate_values(array $fields, array $values, int $extra, bool $stri
     return ['values'=>$out, 'errors'=>$errs];
 }
 
+/**
+ * 預設明細內容正規化：只收明細列欄位、依型別檢查，不合法的值丟棄；回傳 ['rows'=>N,'values'=>[欄位id=>[…]]]。
+ * 沒有明細欄位或沒有任何列時回 null。
+ */
+function sf_defaults_normalize(array $fields, $raw): ?array {
+    if (!is_array($raw)) return null;
+    $rows = max(0, min(200, (int)($raw['rows'] ?? 0)));
+    $vals = is_array($raw['values'] ?? null) ? $raw['values'] : [];
+    $g = array_values(array_filter($fields, fn($f) => $f['g'] !== ''));
+    if (!$g || $rows < 1) return null;
+    $out = [];
+    foreach ($g as $f) {
+        $arr = [];
+        $src = is_array($vals[$f['id']] ?? null) ? $vals[$f['id']] : [];
+        for ($i = 0; $i < $rows; $i++) { [$nv, $er] = sf_norm_value($f, $src[$i] ?? ''); $arr[] = $er ? '' : $nv; }
+        $out[$f['id']] = $arr;
+    }
+    return ['rows' => $rows, 'values' => $out];
+}
+
 /* ============================================================ 模板 ============================================================ */
 
 function sf_template_get(PDO $db, int $id): ?array {
@@ -248,7 +271,7 @@ function sf_template_list(PDO $db): array {
 }
 
 /** 存模板（新增或更新）。回傳模板 id。 */
-function sf_template_save(PDO $db, int $uid, int $id, string $name, string $paper, string $orient, string $bookJson): int {
+function sf_template_save(PDO $db, int $uid, int $id, string $name, string $paper, string $orient, string $bookJson, ?string $defaultsJson = null): int {
     $name = trim($name);
     if ($name === '') throw new InvalidArgumentException('請輸入模板名稱');
     if (mb_strlen($name) > 100) throw new InvalidArgumentException('模板名稱不可超過 100 字');
@@ -259,17 +282,24 @@ function sf_template_save(PDO $db, int $uid, int $id, string $name, string $pape
     if (!is_array($book) || !isset($book['sheets'])) throw new InvalidArgumentException('表格資料格式不正確');
     $fields = sf_book_fields($book);
     $fj = json_encode($fields, JSON_UNESCAPED_UNICODE);
+    // 預設明細：null＝這次沒送（保留原值）；送了就依目前欄位重新正規化（欄位被刪掉的值自然消失）
+    $dj = null; $setDef = false;
+    if ($defaultsJson !== null) {
+        $setDef = true;
+        $d = $defaultsJson === '' ? null : sf_defaults_normalize($fields, json_decode($defaultsJson, true));
+        $dj = $d ? json_encode($d, JSON_UNESCAPED_UNICODE) : null;
+    }
     if ($id > 0) {
         $old = sf_template_get($db, $id);
         if (!$old) throw new InvalidArgumentException('找不到此模板');
         $db->prepare("UPDATE sf_template SET name=?, paper_size=?, orientation=?, book_json=?, fields_json=?, version=version+1,
-                      modified_by=?, modified_at=NOW() WHERE id=?")
-           ->execute([$name, $paper, $orient, $bookJson, $fj, $uid, $id]);
+                      defaults_json=IF(?, ?, defaults_json), modified_by=?, modified_at=NOW() WHERE id=?")
+           ->execute([$name, $paper, $orient, $bookJson, $fj, $setDef ? 1 : 0, $dj, $uid, $id]);
         return $id;
     }
-    $db->prepare("INSERT INTO sf_template (name, paper_size, orientation, book_json, fields_json, created_by, created_at, modified_by, modified_at)
-                  VALUES (?,?,?,?,?,?,NOW(),?,NOW())")
-       ->execute([$name, $paper, $orient, $bookJson, $fj, $uid, $uid]);
+    $db->prepare("INSERT INTO sf_template (name, paper_size, orientation, book_json, fields_json, defaults_json, created_by, created_at, modified_by, modified_at)
+                  VALUES (?,?,?,?,?,?,?,NOW(),?,NOW())")
+       ->execute([$name, $paper, $orient, $bookJson, $fj, $dj, $uid, $uid]);
     return (int)$db->lastInsertId();
 }
 

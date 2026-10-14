@@ -58,7 +58,8 @@ case 'template_get': {
     if ($t['status'] !== 'active' && !$perms['canAdmin']) jerr('此模板已停用', 403);
     $t['fields'] = json_decode((string)$t['fields_json'], true) ?: [];
     $t['book'] = json_decode((string)$t['book_json'], true);
-    unset($t['fields_json'], $t['book_json']);
+    $t['defaults'] = json_decode((string)($t['defaults_json'] ?? ''), true);
+    unset($t['fields_json'], $t['book_json'], $t['defaults_json']);
     $t['as_doc'] = eg_asdoc_get($db, sf_asdoc_module((int)$t['id']));
     jout(['template'=>$t]);
 }
@@ -67,7 +68,8 @@ case 'template_save': {
     need_csrf(); need_admin();
     try {
         $id = sf_template_save($db, $uid, (int)($_POST['id'] ?? 0), (string)($_POST['name'] ?? ''),
-            (string)($_POST['paper_size'] ?? 'A4'), (string)($_POST['orientation'] ?? 'landscape'), (string)($_POST['book_json'] ?? ''));
+            (string)($_POST['paper_size'] ?? 'A4'), (string)($_POST['orientation'] ?? 'landscape'), (string)($_POST['book_json'] ?? ''),
+            isset($_POST['defaults_json']) ? (string)$_POST['defaults_json'] : null);
     } catch (InvalidArgumentException $e) { jerr($e->getMessage()); }
     if (isset($_POST['as_doc_id'])) eg_asdoc_save($db, sf_asdoc_module($id), (int)$_POST['as_doc_id'], (string)$u['user_cname']);
     jout(['id'=>$id]);
@@ -94,7 +96,7 @@ case 'template_copy': {
     $t = sf_template_get($db, (int)($_POST['id'] ?? 0));
     if (!$t) jerr('找不到此模板', 404);
     $name = mb_substr($t['name'], 0, 90) . '（複本）';
-    $nid = sf_template_save($db, $uid, 0, $name, $t['paper_size'], $t['orientation'], (string)$t['book_json']);
+    $nid = sf_template_save($db, $uid, 0, $name, $t['paper_size'], $t['orientation'], (string)$t['book_json'], (string)($t['defaults_json'] ?? ''));
     jout(['id'=>$nid]);
 }
 
@@ -129,9 +131,13 @@ case 'instance_create': {
     $biz = (string)($_POST['biz_date'] ?? '');
     if ($biz !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $biz)) jerr('業務日期格式不正確');
     $title = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150);
-    $db->prepare("INSERT INTO sf_instance (template_id, tpl_version, title, biz_date, tpl_book_json, tpl_fields_json, values_json, created_by, created_at, modified_by, modified_at)
-                  VALUES (?,?,?,?,?,?, '{}', ?, NOW(), ?, NOW())")
-       ->execute([$t['id'], $t['version'], $title, $biz ?: date('Y-m-d'), $t['book_json'], $t['fields_json'], $uid, $uid]);
+    // 模板有「預設明細內容」（標準項目）就一併帶入：列數＝extra_rows+1
+    $defVals = '{}'; $extra = 0;
+    $def = json_decode((string)($t['defaults_json'] ?? ''), true);
+    if (is_array($def) && !empty($def['rows']) && is_array($def['values'] ?? null)) { $defVals = json_encode($def['values'], JSON_UNESCAPED_UNICODE); $extra = max(0, (int)$def['rows'] - 1); }
+    $db->prepare("INSERT INTO sf_instance (template_id, tpl_version, title, biz_date, tpl_book_json, tpl_fields_json, values_json, extra_rows, created_by, created_at, modified_by, modified_at)
+                  VALUES (?,?,?,?,?,?,?,?, ?, NOW(), ?, NOW())")
+       ->execute([$t['id'], $t['version'], $title, $biz ?: date('Y-m-d'), $t['book_json'], $t['fields_json'], $defVals, $extra, $uid, $uid]);
     jout(['id'=>(int)$db->lastInsertId()]);
 }
 

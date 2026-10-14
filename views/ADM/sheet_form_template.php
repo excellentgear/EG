@@ -79,6 +79,7 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
         .fld-item .tg { background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; line-height:16px; padding:0 7px; }
         .err { color:#DD5138; font-size:12px; }
         .sf-toast { position:fixed; left:50%; bottom:30px; transform:translateX(-50%); background:#5b3a1e; color:#fff; padding:8px 18px; border-radius:6px; z-index:2000; display:none; font-size:13px; }
+        #dfMask, #helpUseMask { z-index:10100; }
         @media print { .page-help-btn { display:none; } }
     </style>
 </head>
@@ -140,6 +141,8 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
             <label><input type="checkbox" id="fdReq"> 必填（送出時檢查）</label>
             <label><input type="checkbox" id="fdG"> 這一列是「明細列」（填寫時可按「加一列」）</label>
             <div class="hint">明細列：同一張模板只能有一列；要放進明細列的每一格都要各自設為待填欄位並勾這個選項。合計列（如 =SUM）會在加列時自動延伸範圍。</div>
+            <div style="margin:6px 0;"><button type="button" id="btnDef"><i class="fa fa-list"></i> 預設明細內容…</button> <span id="defInfo" class="hint">尚未設定</span></div>
+            <div class="hint">標準項目（例如每年固定要審的 7 個項目）可先在這裡貼上，建立單據時就會自動帶入，不用每次重打。</div>
             <div><button class="btn-warm" id="btnApply">套用到選取的格子</button><button id="btnClear">取消待填</button></div>
             <div id="fdErr" class="err"></div>
             <h5>已設定的待填欄位（<span id="fdCount">0</span>）</h5>
@@ -148,6 +151,16 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
         </div>
     </div>
 </div>
+
+<div class="sf-mask" id="dfMask"><div class="sf-modal wide">
+    <div class="m-head"><span>預設明細內容</span><span class="m-close" onclick="closeMask('dfMask')">✕</span></div>
+    <div class="m-body" style="font-size:13px;color:#5b3a1e;">
+        <div class="hint" style="font-size:12.5px;line-height:1.7;">建立單據時，這些列會自動帶入明細（使用者仍可新增、刪除、修改）。<b>一列一筆、欄位用 Tab 分隔</b>，可直接從 Excel 複製貼上。欄位順序：<b id="dfCols"></b>。沒有要預設的欄位留空即可（連續兩個 Tab）。</div>
+        <textarea id="dfText" rows="12" style="width:100%;font-size:13px;border:1px solid #D8BE93;border-radius:4px;padding:6px;box-sizing:border-box;white-space:pre;" data-eg-skip></textarea>
+        <div id="dfErr" class="err"></div>
+    </div>
+    <div class="m-foot"><button style="background:#fff;color:#5b3a1e;border-color:#D8BE93;margin-right:6px;" onclick="closeMask('dfMask')">取消</button><button id="btnDfOk">套用</button></div>
+</div></div>
 
 <div class="sf-mask" id="helpUseMask"><div class="sf-modal wide">
     <div class="m-head"><span>使用說明 — 表格模板管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -236,14 +249,14 @@ function startDesigner(t){
     if (CUR && CUR.ctl) { CUR.ctl.dispose(); }
     $('#dzSheet').empty().append('<div id="dzU" style="position:absolute;inset:0;"></div>');
     $('#dz').addClass('on');
-    CUR = { id: t?t.id:0, docId: t&&t.as_doc?t.as_doc.id:0, dirty:false };
+    CUR = { id: t?t.id:0, docId: t&&t.as_doc?t.as_doc.id:0, dirty:false, defaults: (t && t.defaults && t.defaults.rows) ? t.defaults : null };
     $('#dzName').val(t?t.name:''); $('#dzPaper').val(t?t.paper_size:'A4'); $('#dzOrient').val(t?t.orientation:'landscape');
     $('#dzDoc').text(t&&t.as_doc ? t.as_doc.doc_no+' '+t.as_doc.doc_name : '未綁定');
     $('#dzDirty').hide();
     CUR.ctl = EGSheetForm.mount({ el:'dzU', mode:'design', book: t?t.book:null, people: META.people, toast: toast });
     CUR.ctl.wb.onCommandExecuted(function(c){ if (!/selection|scroll|cursor|zoom|set-worksheet-active/i.test(c.id||'')) { CUR.dirty = true; $('#dzDirty').show(); } });
     CUR.ctl.onSelection(refreshSel);
-    setTimeout(function(){ refreshSel(); refreshList(); }, 600);
+    setTimeout(function(){ refreshSel(); refreshList(); refreshDefInfo(); }, 600);
 }
 function selRange(){
     var s = CUR.ctl.getSelection(); if (!s) return '';
@@ -296,6 +309,36 @@ $('#btnClear').on('click', function(){
     var n = CUR.ctl.clearField(); toast('已取消 '+n+' 格的待填設定'); CUR.dirty = true; $('#dzDirty').show();
     setTimeout(function(){ refreshList(); refreshSel(); }, 200);
 });
+function detailFields(){ return CUR.ctl.listFields().filter(function(f){ return f.g; }).sort(function(a,b){ return a.c-b.c; }); }
+function refreshDefInfo(){ $('#defInfo').text(CUR && CUR.defaults ? '已設定 '+CUR.defaults.rows+' 列' : '尚未設定'); }
+$('#btnDef').on('click', function(){
+    var gf = detailFields();
+    if (!gf.length){ alert('這張模板還沒有「明細列」欄位。請先把明細那一列的格子設為待填欄位並勾選「明細列」。'); return; }
+    $('#dfCols').text(gf.map(function(f){ return (f.label||EGSheetForm.a1(f.r,f.c)); }).join(' → '));
+    var lines = [];
+    if (CUR.defaults){ for (var i=0;i<CUR.defaults.rows;i++) lines.push(gf.map(function(f){ var v=((CUR.defaults.values||{})[f.id]||[])[i]; return v==null||v===false?'':String(v).replace(/[\t\r\n]+/g,' '); }).join('\t')); }
+    $('#dfText').val(lines.join('\n')); $('#dfErr').text(''); openMask('dfMask');
+});
+$('#btnDfOk').on('click', function(){
+    var gf = detailFields(), rows = [];
+    $('#dfText').val().split(/\r?\n/).forEach(function(l){ if ($.trim(l.replace(/\t/g,''))==='') return; rows.push(l.split('\t')); });
+    if (rows.length>200){ $('#dfErr').text('最多 200 列'); return; }
+    if (!rows.length){ CUR.defaults = null; }
+    else {
+        var vals = {}; gf.forEach(function(f,ci){ vals[f.id] = rows.map(function(r){ return $.trim(r[ci]||''); }); });
+        // 即時檢查：下拉欄位的值要在選項內、數字要是數字
+        for (var ci=0; ci<gf.length; ci++){
+            var f = gf[ci];
+            for (var ri=0; ri<rows.length; ri++){
+                var v = vals[f.id][ri]; if (v==='') continue;
+                if (f.t==='select' && f.opt.indexOf(v)<0){ $('#dfErr').text('第 '+(ri+1)+' 列「'+(f.label||'')+'」的值「'+v+'」不在下拉選項內'); return; }
+                if (f.t==='number' && isNaN(Number(v))){ $('#dfErr').text('第 '+(ri+1)+' 列「'+(f.label||'')+'」必須是數字'); return; }
+            }
+        }
+        CUR.defaults = {rows:rows.length, values:vals};
+    }
+    CUR.dirty = true; $('#dzDirty').show(); refreshDefInfo(); closeMask('dfMask');
+});
 $('#btnDzDoc').on('click', function(){
     $.getJSON(API, {action:'asdoc_list'}, function(res){
         EGAsDoc.open({ docs:res.docs||[], current:CUR.docId||0, title:'模板 AS 文件綁定', onSave:function(id, doc){
@@ -307,7 +350,7 @@ function saveDesigner(cb){
     var name = $.trim($('#dzName').val());
     if (!name){ alert('請輸入模板名稱'); $('#dzName').focus(); return; }
     var bookJson = JSON.stringify(CUR.ctl.exportBook());
-    post({action:'template_save', id:CUR.id, name:name, paper_size:$('#dzPaper').val(), orientation:$('#dzOrient').val(), book_json:bookJson, as_doc_id:CUR.docId||0}, function(res){
+    post({action:'template_save', id:CUR.id, name:name, paper_size:$('#dzPaper').val(), orientation:$('#dzOrient').val(), book_json:bookJson, as_doc_id:CUR.docId||0, defaults_json: CUR.defaults ? JSON.stringify(CUR.defaults) : ''}, function(res){
         CUR.id = res.id; CUR.dirty = false; $('#dzDirty').hide(); toast('已儲存'); loadList(); cb&&cb();
     });
 }

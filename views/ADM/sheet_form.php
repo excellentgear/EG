@@ -31,7 +31,6 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
     <link href="../../resource/css/nprogress.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
-    <link rel="stylesheet" href="../../resource/css/eg_univer.css?v=<?= $_v('resource/css/eg_univer.css') ?>">
     <style>
         #sidebar-menu { visibility: hidden; }
         .right_col .page-title { margin:8px 0 4px; overflow:hidden; clear:both; }
@@ -200,10 +199,22 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= $_v('resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= $_v('resource/js/eg_date_fmt.js') ?>"></script>
-<script src="../../resource/js/eg_univer.js?v=<?= $_v('resource/js/eg_univer.js') ?>"></script>
 <script src="../../resource/js/eg_sheet_form.js?v=<?= $_v('resource/js/eg_sheet_form.js') ?>"></script>
 <script>
 var API = '../../src/store/SheetForm_API.php';
+var ENGINE_VER = '<?= $_v('resource/js/eg_univer.js') ?>', ENGINE_P = null;
+/** 試算表引擎（約 12MB）只在第一次開單據時才載入；清單頁完全不碰它。列表載好後會在背景預先載入。 */
+function loadEngine(){
+    if (window.EGUniver) return Promise.resolve();
+    if (ENGINE_P) return ENGINE_P;
+    ENGINE_P = new Promise(function(res, rej){
+        var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '../../resource/css/eg_univer.css?v=<?= $_v('resource/css/eg_univer.css') ?>'; document.head.appendChild(l);
+        var sc = document.createElement('script'); sc.src = '../../resource/js/eg_univer.js?v=' + ENGINE_VER;
+        sc.onload = function(){ res(); }; sc.onerror = function(){ ENGINE_P = null; rej(new Error('表單元件載入失敗，請重新整理後再試')); };
+        document.head.appendChild(sc);
+    });
+    return ENGINE_P;
+}
 var META = null, PAGE = 1, TOTAL = 0;
 function toast(m){ var $t=$('#sfToast'); $t.text(m).stop(true,true).fadeIn(120); setTimeout(function(){ $t.fadeOut(300); }, 3000); }
 function openMask(id){ $('#'+id).show(); } function closeMask(id){ $('#'+id).hide(); }
@@ -240,6 +251,7 @@ function loadList(){
               + (r.can_edit || META.perms.canAdmin ? '<span class="lnk del" onclick="delInst('+r.id+')">刪除</span>' : '') + '</td></tr>';
         });
         $('#listBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;">沒有符合條件的單據</td></tr>');
+        setTimeout(function(){ loadEngine().catch(function(){}); }, 1200);
         var per = +res.per, pages = Math.max(1, Math.ceil(res.total/per));
         $('#pagerTop').html('<span>共 '+res.total+' 筆</span><button '+(PAGE<=1?'disabled':'')+' onclick="gotoPage('+(PAGE-1)+')">上一頁</button><span>'+PAGE+' / '+pages+'</span><button '+(PAGE>=pages?'disabled':'')+' onclick="gotoPage('+(PAGE+1)+')">下一頁</button>');
     });
@@ -379,7 +391,7 @@ function openInst(id){
     $.getJSON(API, {action:'instance_get', id:id}, function(res){
         if(!res.ok){ alert(res.error); return; }
         var inst = res.instance;
-        if (FM && FM.ctl) FM.ctl.dispose();
+        if (FM && FM.ctl && FM.ctl.dispose) FM.ctl.dispose();
         $('#fmEngine').empty().append('<div id="fmU" style="position:absolute;inset:0;"></div>');
         FM = { id:inst.id, inst:inst, canEdit:!!inst.can_edit, fields:inst.fields, byId:{} };
         inst.fields.forEach(function(f){ FM.byId[f.id] = f; });
@@ -393,9 +405,13 @@ function openInst(id){
         $('#fmMask').addClass('on'); $('#fmMask .fm-foot button').prop('disabled', true);
         $('#fmBase').html('<div style="padding:20px;color:#8a6d45">載入中…</div>');
         FM.lay = { fieldMeta:{} };
-        FM.ctl = EGSheetForm.mount({ el:'fmU', mode:'fill', book:inst.book, fields:inst.fields, values:inst.values, extraRows:inst.extra_rows, people:META.people, toast:toast });
         var cur = FM;
-        FM.ctl.ready.then(function(){ if (FM!==cur) return; buildForm(); $('#fmMask .fm-foot button').prop('disabled', false); });
+        loadEngine().then(function(){
+            if (FM!==cur) return;
+            FM.ctl = EGSheetForm.mount({ el:'fmU', mode:'fill', book:inst.book, fields:inst.fields, values:inst.values, extraRows:inst.extra_rows, people:META.people, toast:toast });
+            return FM.ctl.ready;
+        }).then(function(){ if (FM!==cur) return; buildForm(); $('#fmMask .fm-foot button').prop('disabled', false); })
+          .catch(function(e){ $('#fmBase').html('<div style="padding:20px;color:#DD5138">'+esc(e.message||'載入失敗')+'</div>'); $('#btnFmClose').prop('disabled', false); });
     });
 }
 function collect(submit){
@@ -421,7 +437,7 @@ function printInst(){
 $('#btnFmPrint').on('click', printInst);
 function closeFill(force){
     if (!force && FM && FM.canEdit && !confirm('關閉前請確認已按「儲存草稿」，未儲存的內容會遺失。確定關閉？')) return;
-    if (FM && FM.ctl) FM.ctl.dispose();
+    if (FM && FM.ctl && FM.ctl.dispose) FM.ctl.dispose();
     FM = null; $('#fmMask').removeClass('on'); $('#fmEngine').empty();
 }
 $('#btnFmClose,#btnFmX').on('click', function(){ closeFill(false); });
