@@ -1871,8 +1871,28 @@ $OT_IS_ADMIN_ANY = ($id === 1);
 // 設計提醒規則（2026-10-14）：誰能設定＝角色功能碼 ot_design_alert_manage，誰能按「已確認」＝
 // ot_design_alert_confirm（兩者都在角色設定的「設計與批圖」群組，全站管理員一律可）；
 // 刪除規則只有全站管理員（其他人只能停用，停用必填原因）。
-$can_oda_manage = ($can_oda_manage_f || $OT_IS_ADMIN_ANY);
-$can_oda_confirm = (($can_oda_confirm_f && $can_design_qa) || $OT_IS_ADMIN_ANY);
+// 設計部門判定（2026-10-14 使用者要求）：設計備註欄的「新增問題」「設計提醒規則」只有「被指派為該訂單設計
+// （order_track.ate）、且屬於設計部門」的人可以用，規則同「審圖／轉生管」按鈕只能操作自己負責的訂單。
+// 設計部門＝組織角色綁定的 rd_dept（含子部門）；管理員的組織綁定尚未設定時視同不限制（不要把全部人鎖死）。
+$OT_IS_DESIGN_DEPT = false;
+try {
+    require_once __DIR__ . '/../../src/common/org_role_lib.php';
+    $__rdIds = eg_org_dept_ids($conn->getPDO(), 'rd_dept');
+    if (!$__rdIds) {
+        $OT_IS_DESIGN_DEPT = true;
+    } else {
+        $__st = $conn->getPDO()->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=?");
+        $__st->execute([(int)$id]);
+        foreach ($__st->fetchAll(PDO::FETCH_COLUMN) as $__d) { if (in_array((int)$__d, $__rdIds, true)) { $OT_IS_DESIGN_DEPT = true; break; } }
+    }
+} catch (Throwable $__eRd) { $OT_IS_DESIGN_DEPT = false; }
+/** 這張訂單是不是「我負責的設計」（管理員不限）；$ate＝order_track.ate */
+function ot_own_design_order($ate): bool {
+    global $OT_IS_ADMIN_ANY, $OT_IS_DESIGN_DEPT, $id;
+    return $OT_IS_ADMIN_ANY || ($OT_IS_DESIGN_DEPT && (int)$ate > 0 && (int)$ate === (int)$id);
+}
+$can_oda_manage = (($can_oda_manage_f && $OT_IS_DESIGN_DEPT) || $OT_IS_ADMIN_ANY);
+$can_oda_confirm = (($can_oda_confirm_f && $can_design_qa && $OT_IS_DESIGN_DEPT) || $OT_IS_ADMIN_ANY);
 
 // ── 指定客戶的訂單「轉生管前要先給 BOSS 審圖」（2026-09-18 使用者要求）────────
 // 唯一實作在 src/common/order_boss_review_lib.php；名單沒設定＝這整套等於不存在，
@@ -2353,7 +2373,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                 unset($x);
             }
         }
-        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By, pmGet FROM order_track WHERE Order_id=?");
+        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By, pmGet, ate FROM order_track WHERE Order_id=?");
         $ordSt->execute([$oid]);
         $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
         $bizDefault = el_order_business_default($pdo, $ord);
@@ -2375,7 +2395,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
             // 作廢（2026-10-12）：can_void_any＝可以作廢任何人的；逐條的 can_void 見上面，
             // 本人作廢自己寫的不需要角色。frozen 對具 can_void_any 的人不生效（見 ate_q_void）。
             'can_void_any' => $can_design_qa_void,
-            'can_resolve' => $can_design_qa_resolve, 'can_oda_confirm' => (bool)$can_oda_confirm, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
+            'can_resolve' => $can_design_qa_resolve, 'can_oda_confirm' => (bool)($can_oda_confirm && ($OT_IS_ADMIN_ANY || ot_own_design_order($ord['ate'] ?? 0))),
+            'can_add' => ($kind === 'process') ? (bool)$can_design_qa : (bool)($can_design_qa && ot_own_design_order($ord['ate'] ?? 0)), 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
     } catch (Exception $e) {
@@ -2396,9 +2417,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         // （2026-10-06 新增，見 ate_q_list 同一段註解，兩種案件各自獨立不互相影響）。
         $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
         $logType = ($kind === 'process') ? 'order_process' : 'order_note';
-        $chkOrd = $pdo->prepare("SELECT 1 FROM order_track WHERE Order_id=?");
+        $chkOrd = $pdo->prepare("SELECT ate FROM order_track WHERE Order_id=?");
         $chkOrd->execute([$oid]);
-        if (!$chkOrd->fetchColumn()) throw new Exception('查無此訂單');
+        $chkRow = $chkOrd->fetch(PDO::FETCH_ASSOC);
+        if (!$chkRow) throw new Exception('查無此訂單');
+        // 只有「被指派為這張訂單的設計、且屬於設計部門」的人可以新增設計備註問題（2026-10-14；製程中紀錄不受影響）
+        if ($kind === 'note' && !ot_own_design_order($chkRow['ate'])) {
+            throw new Exception('只有被指派為這張訂單設計、且屬於設計部門的人，才能新增設計備註問題');
+        }
         // 設計備註凍結（2026-10-06）：只擋 note，製程中紀錄沒有這條規則；後端再擋一次，
         // 不可只靠前端隱藏「＋新增」鈕（鐵律8）。
         if ($kind === 'note' && ot_note_frozen_for_order($pdo, $oid)) {
@@ -2591,6 +2617,11 @@ if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 
             if ($logIdO <= 0) throw new InvalidArgumentException('查無這則提醒，請重新整理');
             // 設計備註凍結（轉生管超過一天）：與回覆／標記已處理同一條規則
             $oidFz = el_case_order_id($pdo, $logIdO);
+            if (!$OT_IS_ADMIN_ANY) {
+                $stA = $pdo->prepare("SELECT ate FROM order_track WHERE Order_id=?");
+                $stA->execute([$oidFz]);
+                if (!ot_own_design_order($stA->fetchColumn())) throw new InvalidArgumentException('只有被指派為這張訂單設計的人，才能確認這則提醒');
+            }
             if ($oidFz && ot_note_frozen_for_order($pdo, $oidFz)) {
                 throw new InvalidArgumentException('此訂單已轉生管超過一天，設計備註已凍結，無法再確認／取消確認');
             }
@@ -4058,6 +4089,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     // 不能再新增/回覆/標記已處理；取消轉生管後 pmGet 清空，條件自然不成立，
                     // 不需要另外還原。唯一實作 ot_note_frozen()，見本檔上方函式說明。
                     $_noteFrozen = ot_note_frozen((string)($order['pmGet'] ?? ''), $todayNoteFreezeStr);
+                    $_ateOwn = ot_own_design_order($order['ate'] ?? 0);   // 被指派為這張訂單的設計＋設計部門＝可新增問題／設計提醒規則
                     ?>
                     <div class="ate-q-cell">
                         <?php if ($_ateQRow): ?>
@@ -4090,7 +4122,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         </div>
                         <?php elseif ($_noteFrozen): ?>
                         <span class="text-muted" style="font-size:11px;" title="已轉生管超過一天，設計備註已凍結（原本就沒有任何紀錄）"><i class="fa fa-lock"></i> 已凍結</span>
-                        <?php elseif ($can_design_qa): ?>
+                        <?php elseif ($can_design_qa && $_ateOwn): ?>
                         <button type="button" class="ate-q-add-btn" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
                                 title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>
                         <?php else: ?>
@@ -4098,7 +4130,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php endif; ?>
                     </div>
                     <div class="ate-note-bar">
-                        <?php if ($can_oda_manage): ?>
+                        <?php if ($can_oda_manage && $_ateOwn): ?>
                         <button type="button" class="ate-note-btn ate-oda-btn" onclick="odaRulesOpen(this)"
                                 data-cust-id="<?= safe_html((string)($order['Client_name_ID'] ?? '')) ?>"
                                 data-cust-name="<?= safe_html((string)($order['cl_customer_name'] ?? $order['Client_name'] ?? '')) ?>"
@@ -9443,6 +9475,7 @@ foreach($dCounts as $c) {
                 ATE_Q.curUser = res.cur_user || null;
                 ATE_Q.canResolve = !!res.can_resolve;
                 ATE_Q.canOdaConfirm = !!res.can_oda_confirm;
+                ATE_Q.canAdd = (res.can_add !== false);   // 設計備註新增問題：只有被指派為該訂單設計且屬設計部門者
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
@@ -10411,6 +10444,10 @@ foreach($dCounts as $c) {
         //    （data-eg-row-add/del）；設計備註(note)凍結後不給新增，composer 直接清空。
         function ateQRedrawComposer() {
             if (!window.OT_CAN_DESIGN_QA || (ATE_Q.kind === 'note' && ATE_Q.frozen)) { $('#ate-q-composer-wrap').html(''); return; }
+            if (ATE_Q.kind === 'note' && ATE_Q.canAdd === false) {
+                $('#ate-q-composer-wrap').html('<div class="text-muted" style="font-size:12px;margin-top:6px;"><i class="fa fa-lock"></i> 只有被指派為這張訂單設計、且屬於設計部門的人，才能新增設計備註問題（仍可回覆既有問題）。</div>');
+                return;
+            }
             // 標題隨目前所有列的備註(PS)狀態變動：全部都勾了就顯示「新增備註」，否則「新增問題」
             // （2026-10-08 使用者要求）；製程中紀錄沒有備註概念，維持固定「新增紀錄」。
             var addTitle;
@@ -16514,7 +16551,7 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>PS</b>／<b>批圖溝通中</b>／<b>設計待處理</b>。</li>
     <li><b>PS／批圖溝通中／設計待處理（2026-10-14 起由原本的「批圖溝通中」拆成三張）</b>：<b>PS</b>＝還沒轉生管、設計備註裡<b>只有純備註</b>、沒有任何待處理問題；<b>批圖溝通中</b>＝還沒轉生管、有業務提出且尚未處理的問題（<b>不含系統提醒</b>，這張卡是給業務看的未回覆資料）；<b>設計待處理</b>＝還沒轉生管、有<b>尚未確認的系統提醒</b>（給設計看）。<b>後兩張可以同時成立</b>（同一張訂單可能兩邊都算），所以三張卡的數字相加會大於訂單數。</li>
-    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。權限在「角色設定」的「設計與批圖」群組：<b>設定設計提醒規則</b>（新增／編輯／停用、設為提示）與<b>確認設計提醒</b>（已確認／取消確認）各自勾選指派；全站管理員一律可用。</li>
+    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。<b>誰能用（2026-10-14）</b>：設計備註欄的<b>「新增問題」與「設計提醒規則」只有「被指派為這張訂單的設計、且屬於設計部門（組織角色綁定的設計／技術部門）」的人</b>可以用，規則同審圖／轉生管按鈕只能操作自己負責的訂單；別人仍可查看與回覆既有問題。「確認設計提醒」同樣只限自己負責的訂單。管理員不受此限。權限在「角色設定」的「設計與批圖」群組：<b>設定設計提醒規則</b>（新增／編輯／停用、設為提示）與<b>確認設計提醒</b>（已確認／取消確認）各自勾選指派；全站管理員一律可用。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
     <li><b>備註（PS）＝已經處理完成的紀錄，不是在等人回覆的問題</b>（2026-10-12 起）：所以備註那幾條<b>不會有「回覆」「已處理」按鈕</b>，建立當下狀態就是「已處理」。要的是「要問某個對象、等他回覆」請不要勾備註。</li>
     <li><b>打錯了怎麼辦？用「作廢」，系統沒有刪除</b>（2026-10-12 起）：這些是品質追溯紀錄，刪掉就查不回來了，所以<b>一律不提供刪除</b>（管理員也沒有）。
