@@ -7977,6 +7977,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 補轉檔：批圖編輯器輸出的大 PNG 轉 256 色（僅本頁管理員／系統管理員）──────────────
+    // 做法與判定全在 views/Sales/migrations/2026-10-14_imgedit_png_256.php（唯一實作，CLI 與本按鈕共用）；
+    // 這裡只負責：scan＝試算件數、run＝派出背景程序（關瀏覽器照常跑）、status＝讀進度記錄。原檔會備份、不直接刪。
+    if ($_POST['action'] === 'png256_batch') {
+        header('Content-Type: application/json; charset=utf-8');
+        try {
+            if (!($is_admin || $_mdRbacAll)) throw new Exception('僅限本頁管理員或系統管理員');
+            $op = $_POST['op'] ?? '';
+            $script = __DIR__ . '/../Sales/migrations/2026-10-14_imgedit_png_256.php';
+            if (!is_file($script)) throw new Exception('找不到轉檔工具');
+            $phpExe = '';
+            foreach ((glob('C:\\MAMP\\bin\\php\\php' . PHP_VERSION . '\\php.exe') ?: glob('C:\\MAMP\\bin\\php\\php*\\php.exe') ?: []) as $p) { $phpExe = $p; }
+            if ($phpExe === '') throw new Exception('找不到 PHP 執行檔');
+            $logf = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'egpng256_batch.log';
+            $running = false; $logTxt = '';
+            if (is_file($logf)) {
+                $logTxt = (string)@file_get_contents($logf);
+                $running = (time() - filemtime($logf) < 900) && !preg_match('/^完成/m', $logTxt);
+            }
+            if ($op === 'status') {
+                $lines = array_values(array_filter(explode("\n", trim($logTxt)), 'strlen'));
+                echo json_encode(['success'=>true,'running'=>$running,'tail'=>array_slice($lines, -6),'done'=>(bool)preg_match('/^完成/m', $logTxt)], JSON_UNESCAPED_UNICODE);
+            } elseif ($op === 'scan') {
+                if ($running) throw new Exception('背景轉檔進行中，請稍後再試');
+                @set_time_limit(120);
+                $o = []; exec('"' . $phpExe . '" "' . $script . '" 2>&1', $o);
+                $txt = implode("\n", $o);
+                if (!preg_match('/待處理 (\d+) 個，合計 (\d+) MB/u', $txt, $m)) throw new Exception('試算失敗：' . mb_substr($txt, 0, 200));
+                echo json_encode(['success'=>true,'count'=>(int)$m[1],'mb'=>(int)$m[2]], JSON_UNESCAPED_UNICODE);
+            } elseif ($op === 'run') {
+                if ($running) throw new Exception('背景轉檔已在進行中，請稍後再看結果');
+                @unlink($logf);
+                $cmd = 'start "" /B "' . $phpExe . '" -d memory_limit=512M "' . $script . '" --run --log="' . $logf . '"';
+                $h = @popen($cmd, 'r');
+                if (!$h) throw new Exception('無法啟動背景程序');
+                @pclose($h);
+                echo json_encode(['success'=>true,'message'=>'已派出背景轉檔，可以關閉視窗；完成後原檔會備份在「_大檔轉256色原檔備份」資料夾']);
+            } else { throw new Exception('未知操作'); }
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
+
     // ── 附件下載權限：解鎖下載分類／本頁管理員的確認密碼（唯一實作 attach_download_perm_lib）──
     // 解鎖是「本頁管理員（master_data 的 A 或 all）或全站系統管理員」才能做的動作，沿用全站
     // 共用的操作確認密碼（confirm_password_lib），不是另外做一套密碼系統；本頁管理員原本
@@ -11679,6 +11721,15 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
     <button type="button" id="pav-btn-del-log" onclick="pavOpenDeleteLog()" title="查看已刪除的附件紀錄"
         style="font-size:11px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
         <i class="fa fa-history"></i> 刪除紀錄
+    </button>
+    <?php endif; ?>
+    <?php if ($is_admin || $_mdRbacAll): ?>
+    <!-- 補轉檔（僅本頁管理員／系統管理員）：把批圖編輯器輸出的大 PNG（>8MB）轉成 256 色，全站所有料號一起處理。
+         新存的圖會自動轉，這顆只是補轉先前沒轉到的；原檔不刪，備份在 NAS「_大檔轉256色原檔備份」。 -->
+    <button type="button" id="pav-btn-png256" onclick="pavPng256Batch()"
+        title="補轉：批圖編輯器輸出的大 PNG（8MB 以上）轉成 256 色以縮小檔案（全站料號一起處理，原檔會備份）"
+        style="font-size:11px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+        <i class="fa fa-compress"></i> 補轉檔
     </button>
     <?php endif; ?>
     <button type="button" class="close" data-dismiss="modal" style="color:#fff;margin:0;padding:0;line-height:1;font-size:22px;opacity:.8;flex-shrink:0;">&times;</button>
@@ -23554,6 +23605,38 @@ function pavDeleteCurrent() {
             });
         } else showToast(r.message||'刪除失敗','error');
     });
+}
+
+/**
+ * 補轉檔（僅管理員看得到按鈕，後端 png256_batch 同規則再擋一次）：
+ * 先試算件數 → 確認 → 派背景程序（關瀏覽器照常跑）；背景進行中再按會顯示進度。
+ */
+function pavPng256Batch() {
+    var btn = document.getElementById('pav-btn-png256');
+    var lab = '<i class="fa fa-compress"></i> 補轉檔';
+    var rst = function(){ if (btn) { btn.disabled = false; btn.innerHTML = lab; } };
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 查詢中…'; }
+    api({ action:'png256_batch', op:'status' }).done(function(s) {
+        if (!s.success) { rst(); alert(s.message || '查詢失敗'); return; }
+        if (s.running) {
+            rst();
+            alert('背景補轉檔進行中，最近進度：\n\n' + (s.tail || []).join('\n') + '\n\n可以關閉視窗，稍後再按一次看結果。');
+            return;
+        }
+        api({ action:'png256_batch', op:'scan' }).done(function(r) {
+            if (!r.success) { rst(); alert(r.message || '試算失敗'); return; }
+            var last = (s.done && s.tail && s.tail.length) ? '\n\n上一次結果：\n' + s.tail.slice(-1)[0] : '';
+            if (!r.count) { rst(); alert('目前沒有需要補轉的大檔（8MB 以上、尚未轉成 256 色的批圖輸出圖）。' + last); return; }
+            if (!confirm('找到 ' + r.count + ' 張批圖輸出圖需要補轉（合計約 ' + r.mb + ' MB），全站所有料號一起處理。\n\n'
+                + '・轉成 256 色 PNG，解析度不變，並把淡灰掃描雜點還原成白底\n'
+                + '・原檔不會刪除，會備份在 NAS「_大檔轉256色原檔備份」資料夾\n'
+                + '・在背景執行，按下確定後可以關閉視窗\n\n要開始嗎？')) { rst(); return; }
+            api({ action:'png256_batch', op:'run' }).done(function(g) {
+                rst();
+                alert(g.success ? g.message : (g.message || '啟動失敗'));
+            }).fail(function(){ rst(); alert('啟動失敗（連線錯誤）'); });
+        }).fail(function(){ rst(); alert('試算失敗（連線錯誤）'); });
+    }).fail(function(){ rst(); alert('查詢失敗（連線錯誤）'); });
 }
 
 /**
