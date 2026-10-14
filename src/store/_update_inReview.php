@@ -39,6 +39,10 @@ if (!ot_can_operate_design($pdo, $uid, (int)$orderId, 'ot_batch_draw')) {
 }
 
 if ($action === 'set_in_review') {
+    // 設計提醒（2026-10-14）：訂單還有未確認的系統提醒時，不能審圖（要先在設計備註按完「已確認」）
+    require_once dirname(__DIR__) . '/common/design_alert_lib.php';
+    $__odaGate = oda_gate_payload($pdo, (int)$orderId, '審圖');
+    if ($__odaGate) { echo json_encode($__odaGate); exit; }
     try {
         $pdo->prepare("UPDATE order_track SET in_review = CURDATE() WHERE Order_id = ?")
             ->execute([$orderId]);

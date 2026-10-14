@@ -508,6 +508,52 @@ function oda_confirm(PDO $db, int $itemId, bool $confirm, int $uid, string $unam
     }
 }
 
+/* ───────────────────────── 審圖／轉生管 前置檢查 ───────────────────────── */
+
+/**
+ * 這張訂單還有哪些「未確認」的系統提醒（審圖／轉生管之前一律要全部按「已確認」）。
+ * 檢查前先替這張訂單補產生一次——剛建立、還沒被順路同步到的訂單也不可以因此漏擋。
+ * @return array [['id'=>項目id,'text'=>提醒文字], ...]
+ */
+function oda_unconfirmed_items(PDO $db, int $orderId): array
+{
+    oda_ensure_schema($db);
+    oda_sync($db, [$orderId]);
+    $st = $db->prepare("SELECT i.id FROM eng_log_item i
+        JOIN eng_log g ON g.id = i.log_id AND g.log_type = 'order_note'
+        JOIN eng_log_bind b ON b.log_id = i.log_id AND b.bind_type = 'order' AND b.bind_id = ?
+        WHERE i.src_rule_id IS NOT NULL AND i.voided_at IS NULL AND i.status NOT IN ('resolved','dropped')
+        ORDER BY i.id");
+    $st->execute([(string)$orderId]);
+    $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    if (!$ids) return [];
+    $meta = oda_item_meta($db, $ids);
+    $q = $db->query("SELECT id, question FROM eng_log_item WHERE id IN (" . implode(',', $ids) . ")")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $out = [];
+    foreach ($ids as $iid) {
+        $t = $meta[$iid]['text'] ?? null;
+        $out[] = ['id' => $iid, 'text' => ($t !== null && $t !== '') ? $t : (string)($q[$iid] ?? '')];
+    }
+    return $out;
+}
+
+/**
+ * 審圖／轉生管的擋關：有未確認的系統提醒就回傳要給前端的 JSON 內容（呼叫端 echo 後 exit），沒有回 null。
+ * 查詢本身出錯時不擋（寧可放行，也不要讓審圖／轉生管整個壞掉），但會寫 error_log。
+ */
+function oda_gate_payload(PDO $db, int $orderId, string $what): ?array
+{
+    try {
+        $items = oda_unconfirmed_items($db, $orderId);
+    } catch (Throwable $e) {
+        error_log('[design_alert] gate check failed: ' . $e->getMessage());
+        return null;
+    }
+    if (!$items) return null;
+    return ['success' => false, 'code' => 'ODA_UNCONFIRMED', 'order_id' => $orderId, 'items' => $items,
+            'message' => '這張訂單還有 ' . count($items) . ' 項設計提醒尚未確認，全部按「已確認」後才能' . $what . '。'];
+}
+
 /* ───────────────────────── 統計／篩選 SQL 片段 ───────────────────────── */
 
 /** 「設計待處理」：這張訂單有尚未確認的系統提醒（只看訂單階段的設計備註案件） */

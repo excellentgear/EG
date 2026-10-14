@@ -53,6 +53,14 @@ try {
     // 檢查是否為取消操作
     $action = isset($_POST['action']) ? $_POST['action'] : 'update';
 
+    // 設計提醒（2026-10-14）：訂單還有未確認的系統提醒時，不能轉生管（也不能送 BOSS 審圖），
+    // 要先在設計備註按完「已確認」。取消轉生管／BOSS 核可與取消不受影響。
+    if (!in_array($action, ['cancel', 'boss_ok', 'boss_cancel'], true)) {
+        require_once '../common/design_alert_lib.php';
+        $__odaGate = oda_gate_payload($pdo, $order_id, '轉生管');
+        if ($__odaGate) { echo json_encode($__odaGate); exit; }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // BOSS 審圖（2026-09-18 使用者要求）
     //  ・客戶在「需給 BOSS 審圖」名單內、而且這張訂單不是「存檔自動轉生管」的對象時，

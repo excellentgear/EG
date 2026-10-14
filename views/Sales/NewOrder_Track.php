@@ -4641,6 +4641,10 @@ foreach($dCounts as $c) {
         .ate-q-alert-badge { background:#C98A1B; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
         .ate-q-alert-ok { background:#8a9a7a; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
         .ate-q-alert-wait { background:#DD5138; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
+        .ate-q-oda-banner { background:#FFF3E2; border:1px solid #F0A24B; border-left:5px solid #DD5138; border-radius:4px; padding:8px 12px; margin-bottom:10px; color:#8a4b12; font-size:13px; }
+        .ate-q-oda-banner ol { margin:6px 0 0; padding-left:22px; font-size:12px; color:#6b5638; }
+        .ate-q-oda-banner.gate { background:#FDE6E0; border-color:#DD5138; color:#a8321f; animation:odaShake .4s 2; }
+        @keyframes odaShake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-5px)} 75%{transform:translateX(5px)} }
         .ate-q-alert-note { font-size:11px; color:#6b5638; margin-top:3px; }
         .ate-q-alert-hist { font-size:11px; color:#6b5638; margin-top:3px; }
         .ate-q-alert-hist summary { cursor:pointer; }
@@ -9582,6 +9586,17 @@ foreach($dCounts as $c) {
          *  一條摺疊列裡不佔版面——使用者這次就是嫌那幾條作廢的紀錄礙眼才要處理掉，留在列表
          *  中間跟有效的混在一起等於沒解決問題。點一下展開就看得到內容、原因、誰在何時作廢。 */
         function ateQRenderItems() {
+            // 未確認的設計提醒橫幅：有就一直顯示（審圖／轉生管要全部確認後才按得了）；被擋下開啟時更醒目
+            var pend = [];
+            ATE_Q.items.forEach(function(it) { if (it.alert && !it.alert.confirmed && !it.voided_at) pend.push(it); });
+            var $bn = $('#ate-q-oda-banner');
+            if (ATE_Q.kind === 'note' && pend.length) {
+                var gated = !!ATE_Q.gate;
+                var bh = '<div class="ate-q-oda-banner' + (gated ? ' gate' : '') + '"><b><i class="fa fa-exclamation-triangle"></i> '
+                       + (gated ? '審圖／轉生管已被擋下：' : '') + '尚有 ' + pend.length + ' 項設計提醒需按「已確認」，全部確認後才能按【審圖】或【轉生管】</b><ol>';
+                pend.forEach(function(it) { bh += '<li>' + escapeHtml(String(it.question || '').substring(0, 80)) + '</li>'; });
+                $bn.html(bh + '</ol>').show();
+            } else { $bn.hide().empty(); }
             var live = [], dead = [];
             ATE_Q.items.forEach(function(it) { (it.voided_at ? dead : live).push(it); });
             var html = '';
@@ -9769,6 +9784,17 @@ foreach($dCounts as $c) {
         // ═══ 設計提醒（2026-10-14；唯一實作 src/common/design_alert_lib.php）══════════════
         // 規則設定在「設計提醒規則」跳窗；符合條件且尚未轉生管的訂單，設計備註裡會自動長出
         // 「系統提醒」（淺黃底），設計按「已確認」＝完成，按錯可「取消確認」，每次都記錄誰與時間。
+        // 審圖／轉生管被擋（還有未確認的設計提醒）：把格子還原、跳出明顯提示、直接開出設計備註問答跳窗
+        // 並在最上方列出「需確認的項目」（見 ateQRenderItems 的 #ate-q-oda-banner）
+        // 被擋下的醒目橫幅在跳窗關閉時才解除（期間重繪不會變回一般樣式）
+        $(document).on('hidden.bs.modal', '#ate-q-modal', function() { ATE_Q.gate = null; });
+        function odaGate(orderId, data, $cell, oldHtml) {
+            if ($cell && oldHtml !== undefined) $cell.html(oldHtml);
+            ATE_Q.gate = data;
+            var n = (data.items || []).length;
+            if (typeof showToast === 'function') showToast('⚠ 尚有 ' + n + ' 項設計提醒需先確認，已為您開啟設計備註');
+            ateQOpen(orderId);
+        }
         function odaFmtDt(s) {
             if (!s) return '';
             var d = String(s).substring(0, 10), t = String(s).substring(11, 16);
@@ -10834,6 +10860,7 @@ foreach($dCounts as $c) {
 
         function updateInReview(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
+            var oldCellHtml = cell.html();
             cell.html('<span class="loading-spinner">處理中...</span>');
 
             $.post("../../src/store/_update_inReview.php", { Order_id: orderId, action: 'set_in_review' }, function(res) {
@@ -10845,6 +10872,8 @@ foreach($dCounts as $c) {
                         if (typeof showToast === 'function') showToast(data.message);
                         else alert(data.message);
                     }
+                } else if (data.code === 'ODA_UNCONFIRMED') {
+                    odaGate(orderId, data, cell, oldCellHtml);   // 還有未確認的設計提醒：擋下並開出設計備註要求確認
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -10875,6 +10904,7 @@ foreach($dCounts as $c) {
 
         function updatePmGet(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
+            var oldCellHtml = cell.html();
             cell.html('<span class="loading-spinner">處理中...</span>');
 
             $.post("../../src/store/simple_update_pmGet.php", { Order_id: orderId }, function(res) {
@@ -10886,6 +10916,8 @@ foreach($dCounts as $c) {
                         if (typeof showToast === 'function') showToast(data.message);
                         else alert(data.message);
                     }
+                } else if (data.code === 'ODA_UNCONFIRMED') {
+                    odaGate(orderId, data, cell, oldCellHtml);   // 還有未確認的設計提醒：擋下並開出設計備註要求確認
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -14781,6 +14813,7 @@ foreach($dCounts as $c) {
                     無法再新增/回覆/標記已處理。如需記錄新的狀況，請改用料號欄的「製程中紀錄」
                     <i class="fa fa-wrench"></i> 圖示。
                 </div>
+                <div id="ate-q-oda-banner" style="display:none;"></div>
                 <div id="ate-q-items-wrap"></div>
                 <div id="ate-q-composer-wrap"></div>
             </div>
@@ -16628,7 +16661,7 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>PS</b>／<b>批圖溝通中</b>／<b>設計待處理</b>。</li>
     <li><b>PS／批圖溝通中／設計待處理（2026-10-14 起由原本的「批圖溝通中」拆成三張）</b>：<b>PS</b>＝還沒轉生管、設計備註裡<b>只有純備註</b>、沒有任何待處理問題；<b>批圖溝通中</b>＝還沒轉生管、有業務提出且尚未處理的問題（<b>不含系統提醒</b>，這張卡是給業務看的未回覆資料）；<b>設計待處理</b>＝還沒轉生管、有<b>尚未確認的系統提醒</b>（給設計看）。<b>後兩張可以同時成立</b>（同一張訂單可能兩邊都算），所以三張卡的數字相加會大於訂單數。</li>
-    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。<b>誰能用（2026-10-14）</b>：設計備註欄的<b>「新增問題」與「設計提醒規則」只有「被指派為這張訂單的設計、且屬於設計部門（組織角色綁定的設計／技術部門）」的人</b>可以用，規則同審圖／轉生管按鈕只能操作自己負責的訂單；別人仍可查看與回覆既有問題。「確認設計提醒」同樣只限自己負責的訂單。管理員不受此限。權限在「角色設定」的「設計與批圖」群組：<b>設定設計提醒規則</b>（新增／編輯／停用、設為提示）與<b>確認設計提醒</b>（已確認／取消確認）各自勾選指派；全站管理員一律可用。</li>
+    <li><b>設計提醒規則（系統提醒）</b>：在設計備註欄的「<i class="fa fa-bell-o"></i> 設計提醒規則」可設定四種提示對象——<b>客戶</b>／<b>料號</b>／<b>客戶＋關鍵字</b>（比對料號主檔的規格 Spec No.，固定模糊比對，多組關鍵字可選「任一組」或「全部」符合）／<b>客戶＋料號</b>。符合條件、<b>且尚未轉生管</b>的訂單（包含規則建立前就已存在的），設計備註裡會自動出現一則<b>淺黃底「系統提醒」</b>，每張訂單每則規則只出現一次；設計看過按<b>「已確認」</b>即完成，按錯可<b>「取消確認」</b>，<b>每一次都記錄是誰、什麼時候</b>，設計也可以直接在那一則底下回覆。已確認的不會因為規則事後被修改而重新變成待確認。<b>訂單還有未確認的系統提醒時，不能按【審圖】或【轉生管】</b>（後端也擋）：按下去會被擋住，並自動開出設計備註問答跳窗、最上方用紅色橫幅列出「需確認的項目」，全部按「已確認」後才按得了。在設計備註查看跳窗（點料號旁的紅色筆記按鈕）裡，每則客戶／料號設計備註旁可按<b>「設為提示」</b>，等於把那則備註綁定成「客戶」或「料號」的提示（內容與附件即時引用備註，備註改了提示跟著改）。<b>規則不能刪除，只能停用（必填停用原因）</b>：停用後不再產生新提醒、已產生的保留；只有全站管理員可以刪除規則本體。<b>誰能用（2026-10-14）</b>：設計備註欄的<b>「新增問題」與「設計提醒規則」只有「被指派為這張訂單的設計、且屬於設計部門（組織角色綁定的設計／技術部門）」的人</b>可以用，規則同審圖／轉生管按鈕只能操作自己負責的訂單；別人仍可查看與回覆既有問題。「確認設計提醒」同樣只限自己負責的訂單。管理員不受此限。權限在「角色設定」的「設計與批圖」群組：<b>設定設計提醒規則</b>（新增／編輯／停用、設為提示）與<b>確認設計提醒</b>（已確認／取消確認）各自勾選指派；全站管理員一律可用。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
     <li><b>備註（PS）＝已經處理完成的紀錄，不是在等人回覆的問題</b>（2026-10-12 起）：所以備註那幾條<b>不會有「回覆」「已處理」按鈕</b>，建立當下狀態就是「已處理」。要的是「要問某個對象、等他回覆」請不要勾備註。</li>
     <li><b>打錯了怎麼辦？用「作廢」，系統沒有刪除</b>（2026-10-12 起）：這些是品質追溯紀錄，刪掉就查不回來了，所以<b>一律不提供刪除</b>（管理員也沒有）。
