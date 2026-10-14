@@ -732,10 +732,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $png = ''; unset($_POST['png']);
             if ($bin === false || @file_put_contents($dir . DIRECTORY_SEPARATOR . $pngFile, $bin) === false) throw new Exception('圖檔寫入失敗');
             $bin = '';
-            // 輸出圖過大（A3 兩倍輸出常達 40MB）時自動轉 256 色 PNG（去掃描底雜點，畫質已由使用者確認）；
+            // 輸出圖過大（A3 兩倍輸出常達 40MB）時交背景程序轉 256 色 PNG（去掃描底雜點，畫質已由使用者確認；不佔存檔等待）；
             // 任何一步失敗都保留原圖，絕不影響存檔。唯一實作 image_palette_lib.php
             require_once __DIR__ . '/../../src/common/image_palette_lib.php';
-            eg_png_to_palette256($dir . DIRECTORY_SEPARATOR . $pngFile);
+            if (!eg_png_to_palette256_async($dir . DIRECTORY_SEPARATOR . $pngFile)) { /* 派不出背景程序就維持原圖，之後可用 migrations 補轉 */ }
             // 工作檔：抽離內嵌底圖 → 同目錄實體檔，JSON 只留引用
             $n = 0;
             $workFile = null;

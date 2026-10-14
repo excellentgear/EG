@@ -48,3 +48,28 @@ function eg_png_to_palette256(string $path, int $minBytes = EG_PNG256_MIN_BYTES)
         return false;
     }
 }
+
+/**
+ * 背景轉檔：存檔請求不必等轉檔（A3 大圖要 6~20 秒），先把原圖存好就回應，
+ * 轉檔交給獨立的 CLI 程序（image_palette_worker.php），使用者關掉瀏覽器也照常完成。
+ * 轉檔失敗時原圖仍在、只是檔案比較大；整批補轉可跑 views/Sales/migrations/2026-10-14_imgedit_png_256.php。
+ * 回傳 true＝已成功派出背景程序（不代表已轉完）。
+ */
+function eg_png_to_palette256_async(string $path, int $minBytes = EG_PNG256_MIN_BYTES): bool {
+    try {
+        if (!is_file($path) || filesize($path) < $minBytes) return false;
+        if (!function_exists('popen')) return false;
+        $php = '';
+        foreach (glob('C:\MAMP\bin\php\php' . PHP_VERSION . '\php.exe') ?: [] as $p) { $php = $p; }
+        if ($php === '') foreach (glob('C:\MAMP\bin\php\php*\php.exe') ?: [] as $p) { $php = $p; }
+        if ($php === '') return false;
+        $worker = __DIR__ . DIRECTORY_SEPARATOR . 'image_palette_worker.php';
+        $cmd = 'start "" /B "' . $php . '" -d memory_limit=512M "' . $worker . '" "' . $path . '"';
+        $h = @popen($cmd, 'r');
+        if (!$h) return false;
+        @pclose($h);
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
