@@ -1747,6 +1747,10 @@ try {
     }
 } catch (Exception $_ot_e) {}
 
+// 2026-10-14 角色可設「進頁面預設的篩選卡片」：全部訂單／批圖中（存成 role_features 的 ot_default_view_all／
+// ot_default_view_progress，沿用個人＋職稱＋代理的功能碼合併；兩者都沒設＝維持原本預設「批圖中」）。
+$OT_DEFAULT_VIEW = in_array('ot_default_view_all', $_ot_features, true) ? 'all' : 'in_progress';
+
 function ot_hasF(string $f): bool {
     global $_ot_features;
     return in_array('all', $_ot_features, true) || in_array($f, $_ot_features, true);
@@ -6802,7 +6806,7 @@ foreach($dCounts as $c) {
                 if (client) $('#filter-client').val(client);
                 // 載入時預設篩選「批圖中」（2026-10-14 使用者要求）；從別的頁面帶篩選進來（kw/part/client）時
                 // 不套用，免得把要找的那張訂單篩掉。效果等同使用者點了「批圖中」卡片，「取消」鈕仍回到全部。
-                if (!kw && !part && !client) {
+                if (!kw && !part && !client && <?= json_encode($OT_DEFAULT_VIEW) ?> === 'in_progress') {
                     currentFilters.status = 'in_progress';
                     isStatCardFilter = true;
                     lockedStats = null;
@@ -16405,6 +16409,17 @@ include __DIR__ . '/_keyway_tool_ui.php';
               ← 請選擇角色
             </div>
             <div id="ot-role-feat-body" style="flex:1;overflow-y:auto;padding:10px 14px;">
+              <div style="margin-bottom:12px;">
+                <div style="font-weight:600;color:#8a5a2b;margin-bottom:6px;font-size:12px;letter-spacing:.5px;border-bottom:1px dashed #e0d5c5;padding-bottom:3px;">
+                  <i class="fa fa-filter"></i> 進入頁面預設的篩選卡片（選填）
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px 24px;">
+                  <label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="radio" name="ot-default-view" value="" checked> 未設定（沿用系統預設：批圖中）</label>
+                  <label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="radio" name="ot-default-view" value="ot_default_view_all"> 全部訂單</label>
+                  <label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="radio" name="ot-default-view" value="ot_default_view_progress"> 批圖中</label>
+                </div>
+                <small class="text-muted">持有此角色的人開啟頁面時預設停在所選卡片；從其他頁面帶篩選進來時不套用。同時有多個角色且設定不同時，以「全部訂單」為準。</small>
+              </div>
               <?php
               $_ot_grps = [];
               foreach ($OT_PAGE_FEATURES as $_ot_f) $_ot_grps[$_ot_f['group']][] = $_ot_f;
@@ -16497,6 +16512,7 @@ function otSelectRole(roleId, isSystem) {
     var displayName = $item.find('.ot-role-name').clone().children().remove().end().text().trim();
     $('#ot-role-feat-header').text('設定功能：' + displayName);
     $('.ot-role-feat-cb').prop('checked', false).prop('disabled', !!isSystem);
+    $('input[name="ot-default-view"]').prop('disabled', !!isSystem).filter('[value=""]').prop('checked', true);
     $('#ot-role-feat-footer').show();
     if (isSystem) {
         // 管理員系統角色 → 全勾且不可修改
@@ -16510,6 +16526,9 @@ function otSelectRole(roleId, isSystem) {
     $.get(OT_ROLES_API, { action:'get_role_features', role_id: roleId }, function(res) {
         if (res.success && res.data) {
             res.data.forEach(function(code) {
+                if (code === 'ot_default_view_all' || code === 'ot_default_view_progress') {
+                    $('input[name="ot-default-view"][value="' + code + '"]').prop('checked', true);
+                }
                 $('.ot-role-feat-cb[value="' + code + '"]').prop('checked', true);
             });
         }
@@ -16524,6 +16543,8 @@ function otSaveRoleFeatures() {
     if (!_otSelRoleId) return;
     var codes = [];
     $('.ot-role-feat-cb:checked').each(function() { codes.push($(this).val()); });
+    var dv = $('input[name="ot-default-view"]:checked').val();
+    if (dv) codes.push(dv);
     $.post(OT_ROLES_API, { action:'save_role_features', role_id:_otSelRoleId, features: JSON.stringify(codes) }, function(res) {
         if (res.success) { showToast('角色設定已儲存'); }
         else { alert(res.message || '儲存失敗'); }
