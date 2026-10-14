@@ -21932,7 +21932,11 @@ function _pavOpen() {
     _pavPreviewResetLayout();
     document.getElementById('pav-actions').style.display = 'none';
     _pav.currentFile = null;
-    $('#partAttachViewModal').modal('show');
+    // 上傳跳窗還在關閉動畫中就開這個跳窗時，Bootstrap 會留下「isShown=true 但畫面是隱藏」的假狀態，
+    // 之後每次點附件按鈕的 modal('show') 都被當成「已經開著」而完全沒反應；開之前先把假狀態清掉。
+    var $pavM = $('#partAttachViewModal'), pavD = $pavM.data('bs.modal');
+    if (pavD && pavD.isShown && $pavM.css('display') === 'none') { pavD.isShown = false; pavD.isTransitioning = false; }
+    $pavM.modal('show');
 }
 
 // 組合圖（.iam）↔ 零件的對照（由 list API 一併帶回來，見 part_assembly_lib.php）
@@ -24373,7 +24377,7 @@ function submitPartAttachUpload() {
                 $('#partAttachUploadModal').modal('hide');
                 _refreshPartAttachCell(dId);
                 if (changeHit) { askAutoDwgChange(changeHit); return; }   // 問要不要自動建立變更紀錄
-                setTimeout(function(){ openAttachAllView(dId, _pav.partNo||''); }, 200);
+                setTimeout(function(){ openAttachAllView(dId, _pav.partNo||''); }, 700);
             }
             return;
         }
@@ -24446,16 +24450,16 @@ function askAutoDwgChange(ctx) {
             + '　按「取消」也沒關係，之後在附件跳窗按「自動換圖記錄」一樣建得出來）';
     if (!confirm(msg)) {
         showToast('已略過。之後可在附件跳窗按「自動換圖記錄」補建', 'warning');
-        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 700);
         return;
     }
     $.post(PART_ATTACH_API_URL, { action:'auto_dwg_change', d_id:ctx.dId, attachment_id:ctx.attachId }, function(r) {
         if (!r || !r.success) { showToast((r && r.message) || '建立失敗', 'error'); }
         else { showToast(r.message, 'success'); window.open('../QC/drawing_change_log.php?id=' + r.id, '_blank'); }
-        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 700);
     }, 'json').fail(function() {
         showToast('建立失敗（連線錯誤）', 'error');
-        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 700);
     });
 }
 
