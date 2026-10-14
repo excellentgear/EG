@@ -432,6 +432,10 @@ case 'import_word': {
     $vid = (int)($_POST['version_id'] ?? 0);
     needVersion($db, $P, $vid);
     @set_time_limit(300);   // LibreOffice 轉一份程序書實測約 8~10 秒，大檔給寬一點
+    /* 轉檔要跑很久，期間若一直握著 session 檔鎖，同一個人在別的分頁開任何頁面都會排隊等到轉完
+       （PHP 預設一個 session 同時只允許一個請求）。權限與參數都驗完了，匯入函式本身不讀 $_SESSION，
+       先釋放鎖。 */
+    session_write_close();
     $r = adi_import_version($db, $vid, $uid, !empty($_POST['overwrite']));
     if (empty($r['ok'])) jerr($r['msg']);
     jout(true, ['message' => $r['msg'], 'report' => $r['report']]);
