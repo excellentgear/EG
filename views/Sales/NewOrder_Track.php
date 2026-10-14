@@ -3653,7 +3653,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if ($_has_files): ?>
                         <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>', <?= (int)($order['d_id_ID'] ?? 0) ?>)"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
-                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
+                        <span class="part-nolink" style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($order['assembly_parent_order_id'])):
                             $_asm_src = $asmSrcMap[(int)$order['assembly_parent_order_id']] ?? null;
@@ -6650,7 +6650,8 @@ foreach($dCounts as $c) {
                     fetchTableData(1);
                 } else if (colIdx === 3 + colOffset) {
                     // 料號欄雙擊篩選
-                    var val = $(this).find('.part-link').text().trim() || $(this).text().trim();
+                    // 無圖面的料號是 .part-nolink（沒有 .part-link），退回整格文字會把「NEW」等徽章文字一起帶入
+                    var val = ($(this).find('.part-link').first().text() || $(this).find('.part-nolink').first().text() || $(this).text()).trim();
                     var $f = $('#filter-part');
                     $f.val($f.val() ? '' : val);
                     isStatCardFilter = false; lockedStats = null;
