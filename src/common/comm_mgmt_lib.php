@@ -204,8 +204,40 @@ function cm_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='溝通管制表的提醒對象'");
     } catch (Throwable $e) {}
 
+    /* ---- 「類別」：溝通記錄表與措施追蹤表共用同一份清單，由本站管理員自訂 ----
+       每個類別有「挑對象的方式」kind：customer 客戶（模糊搜尋客戶主檔）／supplier 供應商（搜尋廠商主檔）／
+       employee 員工（先選部門再挑人）／other 其他（手動填寫名稱）。環保局、消防局這類機關一律屬 other，
+       不需要為它們各寫一套挑選邏輯。free_text=1 的 other 類別（預設的「其他」）要再填一段類別說明。 */
+    try {
+        $fresh = false;
+        if (!$db->query("SHOW TABLES LIKE 'comm_track_cat'")->fetchColumn()) {
+            $db->exec("CREATE TABLE comm_track_cat (
+                cat_id     INT AUTO_INCREMENT PRIMARY KEY,
+                name       VARCHAR(40) NOT NULL,
+                kind       VARCHAR(12) NOT NULL DEFAULT 'other' COMMENT 'customer/supplier/employee/other＝溝通記錄表挑利害關係者的方式',
+                free_text  TINYINT NOT NULL DEFAULT 0 COMMENT '1＝選到這個類別時要再填「類別說明」（預設的「其他」）',
+                sort_order INT NOT NULL DEFAULT 0,
+                is_active  TINYINT NOT NULL DEFAULT 1 COMMENT '停用＝新增時不再出現，既有資料仍顯示原類別',
+                created_by VARCHAR(60) NULL, created_at DATETIME NULL, updated_at DATETIME NULL,
+                UNIQUE KEY uk_name (name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='溝通管理類別（管理員自訂；記錄表與追蹤表共用）'");
+            $fresh = true;
+        }
+        if ($fresh) {   // 第一次建立時的起點：原本寫死的四種＋使用者舉的三個例子，管理員可改名、停用、刪除或再新增
+            $seed = [['客戶','customer',0,10], ['供應商','supplier',0,20], ['員工','employee',0,30],
+                     ['環保局','other',0,40], ['消防局','other',0,50], ['人事行政機關','other',0,60], ['其他','other',1,900]];
+            foreach ($seed as $s0) {
+                $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sort_order, created_by, created_at, updated_at) VALUES (?,?,?,?,'系統預設',NOW(),NOW())")->execute($s0);
+            }
+        }
+    } catch (Throwable $e) {}
+
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
+        "ALTER TABLE comm_track ADD COLUMN cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id（NULL＝未分類）' AFTER party",
+        "ALTER TABLE comm_track ADD KEY idx_cat (cat_id)",
+        "ALTER TABLE comm_record ADD COLUMN party_cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id；party_kind 由它的 kind 決定' AFTER party_kind",
+        "ALTER TABLE comm_record ADD KEY idx_pcat (party_cat_id)",
         // 記錄表：利害關係者改成「先選類別再依類別連動挑對象」，除了顯示字串還要存得住是挑到哪一筆
         "ALTER TABLE comm_record ADD COLUMN party_ref_id VARCHAR(40) NULL COMMENT '客戶=customer_list.customer_id／供應商=maker_list.maker_id_no／員工=department.id' AFTER party_name",
         "ALTER TABLE comm_record ADD COLUMN party_user_id INT NULL COMMENT '類別=員工時的 user.id' AFTER party_ref_id",
@@ -230,6 +262,13 @@ function cm_ensure_schema(PDO $db): void
         "ALTER TABLE comm_ctrl ADD COLUMN remind_last_at DATETIME NULL AFTER remind_sent_for",
     ];
     foreach ($alters as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
+    /* 舊資料回填：只有 party_kind 沒有類別 id 的記錄，對到「同一種挑法的第一個類別」（other 對到預設的「其他」，說明文字原樣留在 party_kind_other） */
+    try {
+        $db->exec("UPDATE comm_record r JOIN comm_track_cat c ON c.kind=r.party_kind AND c.free_text=(r.party_kind='other')
+                   SET r.party_cat_id=c.cat_id
+                   WHERE r.party_cat_id IS NULL
+                     AND c.cat_id=(SELECT MIN(c2.cat_id) FROM comm_track_cat c2 WHERE c2.kind=c.kind AND c2.free_text=c.free_text)");
+    } catch (Throwable $e) {}
 }
 
 /* ============================ 使用者與權限 ============================ */

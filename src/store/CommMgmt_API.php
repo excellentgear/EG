@@ -47,7 +47,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
    永遠存不進去（見 src/common/_config.php 的防護說明）。 */
 $WRITE = ['rec_save','rec_delete','rec_submit','rec_decide','rec_to_track',
           'att_upload','att_delete','track_save','track_delete','ctrl_save','ctrl_delete',
-          'setting_save','asdoc_save'];
+          'setting_save','asdoc_save','cat_save','cat_delete'];
 if (in_array($action, $WRITE, true)) {
     if ($uid <= 0) jerr('登入已逾時，請重新登入後再儲存（您填的內容還在，重新登入後再按一次即可）', 401, ['code'=>'LOGIN']);
     $tok = $_POST['csrf'] ?? '';
@@ -68,6 +68,40 @@ function cmNow(PDO $db): array {
     try { $r = $db->query("SELECT NOW() AS n, CURDATE() AS d")->fetch(PDO::FETCH_ASSOC); }
     catch (Throwable $e) { return ['n'=>date('Y-m-d H:i:s'), 'd'=>date('Y-m-d')]; }
     return ['n'=>(string)$r['n'], 'd'=>(string)$r['d']];
+}
+
+/** 類別清單；$all=false 只回啟用中的（給下拉用），true 連停用的與使用筆數一起回（給管理員設定用） */
+function cmCatList(PDO $db, bool $all): array {
+    $sql = "SELECT c.cat_id, c.name, c.kind, c.free_text, c.sort_order, c.is_active,
+                   (SELECT COUNT(*) FROM comm_track t WHERE t.cat_id=c.cat_id AND t.is_deleted=0) AS used_track,
+                   (SELECT COUNT(*) FROM comm_record r WHERE r.party_cat_id=c.cat_id AND r.is_deleted=0) AS used_rec
+            FROM comm_track_cat c " . ($all ? '' : 'WHERE c.is_active=1 ') . "ORDER BY c.sort_order, c.cat_id";
+    return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+}
+/** 驗證類別並回傳整列；0／空＝未分類(null)。必須存在，且要是啟用中（或就是這筆原本的類別：編輯舊資料不該因為類別後來被停用而存不進去） */
+function cmCatCheck(PDO $db, $v, int $keep = 0): ?array {
+    $id = (int)$v;
+    if ($id <= 0) return null;
+    $st = $db->prepare("SELECT * FROM comm_track_cat WHERE cat_id=?");
+    $st->execute([$id]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('選的類別不存在，請重新整理後再選');
+    if (!(int)$c['is_active'] && $id !== $keep) jerr('「' . $c['name'] . '」這個類別已停用，請改選其他類別');
+    return $c;
+}
+/** 溝通記錄表要顯示的「類別」文字：有類別 id 用類別名稱（free_text 類別再接說明）；舊資料退回原本的四種寫法 */
+function cmKindText(PDO $db, array $r): string {
+    static $cache = [];
+    $id = (int)($r['party_cat_id'] ?? 0);
+    if ($id > 0) {
+        if (!isset($cache[$id])) {
+            $st = $db->prepare("SELECT name, free_text FROM comm_track_cat WHERE cat_id=?"); $st->execute([$id]);
+            $cache[$id] = $st->fetch(PDO::FETCH_ASSOC) ?: false;
+        }
+        if ($cache[$id]) return $cache[$id]['free_text'] ? (($r['party_kind_other'] ?? '') !== '' ? (string)$r['party_kind_other'] : (string)$cache[$id]['name']) : (string)$cache[$id]['name'];
+    }
+    $k = (string)($r['party_kind'] ?? '');
+    return $k === 'other' ? ((string)($r['party_kind_other'] ?? '') ?: '其他') : (CM_PARTY_KINDS[$k] ?? '');
 }
 
 /** 一張單的目前簽核關卡（'' ＝ 不在待簽狀態） */
@@ -215,6 +249,8 @@ if ($action === 'meta') {
         'need_sign' => ((string)($set['cm_need_sign'] ?? '1')) !== '0',
         'depts'     => cm_dept_list($db),
         'people'    => eg_people_list($db, []),
+        'track_cats'=> cmCatList($db, false),
+        'track_cats_all' => $P['canAdmin'] ? cmCatList($db, true) : [],
     ]);
 }
 
@@ -260,6 +296,7 @@ if ($action === 'rec_list') {
     $w = ['r.is_deleted=0']; $a = [];
     if (($s = cmS($_GET['status'] ?? '', 20)) !== '' && isset(CM_STATUS[$s])) { $w[] = 'r.status=?'; $a[] = $s; }
     if (($k = cmS($_GET['kind'] ?? '', 20)) !== '' && isset(CM_PARTY_KINDS[$k])) { $w[] = 'r.party_kind=?'; $a[] = $k; }
+    if ((int)($_GET['cat'] ?? 0) > 0) { $w[] = 'r.party_cat_id=?'; $a[] = (int)$_GET['cat']; }
     if (($d1 = cmDate($_GET['from'] ?? '')))  { $w[] = 'r.comm_date>=?'; $a[] = $d1; }
     if (($d2 = cmDate($_GET['to'] ?? '')))    { $w[] = 'r.comm_date<=?'; $a[] = $d2; }
     if (!empty($_GET['mine']))                { $w[] = 'r.maker_id=?';   $a[] = $uid; }
@@ -290,6 +327,7 @@ if ($action === 'rec_list') {
     $total = count($rows);
     $rows  = array_slice($rows, ($page - 1) * $per, $per);
     foreach ($rows as $i => $r) {
+        $rows[$i]['kind_text'] = cmKindText($db, $r);
         $rows[$i]['items']    = cmItems($db, (int)$r['rec_id']);
         // 清單上就要看得到附件數量並能直接點開（使用者要求），所以連附件一起帶回來
         $rows[$i]['attaches'] = cmAttaches($db, (int)$r['rec_id']);
@@ -309,8 +347,12 @@ if ($action === 'rec_get') {
     $sign  = $stage !== '' ? cm_can_sign($db, cmPoolOf($db, $r, $stage), $uid) : ['ok'=>false,'deputy'=>false,'for_name'=>''];
     $biz   = (string)($r['comm_date'] ?: cmNow($db)['d']);
     $mgr   = cm_dept_manager_pool($db, (int)$r['maker_id'], (int)$r['maker_dept_id'], (int)$r['maker_pos_sort'], $biz);
+    $r['kind_text'] = cmKindText($db, $r);
+    $catRow = null;
+    if ((int)$r['party_cat_id'] > 0) { $cq = $db->prepare("SELECT cat_id, name, kind, free_text, is_active FROM comm_track_cat WHERE cat_id=?"); $cq->execute([(int)$r['party_cat_id']]); $catRow = $cq->fetch(PDO::FETCH_ASSOC) ?: null; }
     jout([
         'rec'      => $r,
+        'cat'      => $catRow,
         'items'    => cmItems($db, (int)$r['rec_id']),
         'attaches' => cmAttaches($db, (int)$r['rec_id']),
         'stage'    => $stage,
@@ -332,10 +374,25 @@ if ($action === 'rec_save') {
     if (!$commDate) jerr('請填寫溝通日期');
     $type = cmS($_POST['comm_type'] ?? '', 12);
     if (!isset(CM_TYPES[$type])) jerr('請選擇型態（定期／不定期）');
-    $kind = cmS($_POST['party_kind'] ?? '', 12);
-    if (!isset(CM_PARTY_KINDS[$kind])) jerr('請選擇類別');
-    $kindOther = cmS($_POST['party_kind_other'] ?? '', 100);
-    if ($kind === 'other' && $kindOther === '') jerr('類別選「其他」時請填寫說明');
+    /* 類別一律來自管理員在模組設定維護的清單（有送 party_cat_id 就以它為準，挑對象的方式由該類別的 kind 決定，
+       不採信前端送的 party_kind）。沒送 party_cat_id 的舊呼叫端才退回原本的四種寫法。 */
+    $catRow = array_key_exists('party_cat_id', $_POST) ? cmCatCheck($db, $_POST['party_cat_id'], $old ? (int)$old['party_cat_id'] : 0) : null;
+    if (array_key_exists('party_cat_id', $_POST) && !$catRow) jerr('請選擇類別');
+    if ($catRow) {
+        $kind = (string)$catRow['kind'];
+        if ($catRow['free_text']) {
+            $kindOther = cmS($_POST['party_kind_other'] ?? '', 100);
+            if ($kindOther === '') jerr('類別選「' . $catRow['name'] . '」時請填寫類別說明');
+        } else {
+            $kindOther = $kind === 'other' ? (string)$catRow['name'] : '';
+        }
+    } else {
+        $kind = cmS($_POST['party_kind'] ?? '', 12);
+        if (!isset(CM_PARTY_KINDS[$kind])) jerr('請選擇類別');
+        $kindOther = cmS($_POST['party_kind_other'] ?? '', 100);
+        if ($kind === 'other' && $kindOther === '') jerr('類別選「其他」時請填寫說明');
+    }
+    $partyCatId = $catRow ? (int)$catRow['cat_id'] : null;
     $party = cmS($_POST['party_name'] ?? '', 200);
     if ($party === '') jerr('請填寫利害關係者公司/代表人');
 
@@ -410,12 +467,12 @@ if ($action === 'rec_save') {
             // 溝通日期改了就要重編單號（單號依表單上的日期，不是建檔日）
             $recNo = (string)$old['rec_no'];
             if ($recNo === '' || substr($recNo, 0, 8) !== str_replace('-', '', $commDate)) $recNo = cm_next_rec_no($db, $commDate);
-            $db->prepare("UPDATE comm_record SET rec_no=?, comm_type=?, comm_date=?, party_kind=?, party_kind_other=?,
+            $db->prepare("UPDATE comm_record SET rec_no=?, comm_type=?, comm_date=?, party_kind=?, party_cat_id=?, party_kind_other=?,
                             party_name=?, party_ref_id=?, party_user_id=?, party_contact_id=?, party_contact_name=?,
                             ch_phone=?, ch_face=?, ch_email=?, ch_meeting=?, ch_other=?, ch_other_text=?,
                             maker_id=?, maker_name=?, maker_dept_id=?, maker_dept_name=?, maker_pos_id=?, maker_pos_name=?,
                             maker_pos_sort=?, remark=?, updated_at=? WHERE rec_id=?")
-               ->execute([$recNo, $type, $commDate, $kind, $kindOther, $party,
+               ->execute([$recNo, $type, $commDate, $kind, $partyCatId, $kindOther, $party,
                           $partyRef ?: null, $partyUser ?: null, $partyCtcId ?: null, $partyCtcName ?: null,
                           $ch['phone'], $ch['face'], $ch['email'], $ch['meeting'], $ch['other'], $chOther,
                           $makerId, cm_user_name($db, $makerId), $idn['department_id'], $idn['department_name'],
@@ -424,13 +481,13 @@ if ($action === 'rec_save') {
             $db->prepare("DELETE FROM comm_record_item WHERE rec_id=?")->execute([$id]);
         } else {
             $recNo = cm_next_rec_no($db, $commDate);
-            $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_kind_other, party_name,
+            $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_cat_id, party_kind_other, party_name,
                             party_ref_id, party_user_id, party_contact_id, party_contact_name,
                             ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
                             maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort,
                             status, remark, created_by, created_by_name, created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)")
-               ->execute([$recNo, $type, $commDate, $kind, $kindOther, $party,
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)")
+               ->execute([$recNo, $type, $commDate, $kind, $partyCatId, $kindOther, $party,
                           $partyRef ?: null, $partyUser ?: null, $partyCtcId ?: null, $partyCtcName ?: null,
                           $ch['phone'], $ch['face'], $ch['email'], $ch['meeting'], $ch['other'], $chOther,
                           $makerId, cm_user_name($db, $makerId), $idn['department_id'], $idn['department_name'],
@@ -627,10 +684,15 @@ if ($action === 'rec_to_track') {
     $now     = cmNow($db);
     $ownerId = (int)($_POST['owner_id'] ?? 0);
     $due     = cmDate($_POST['due_date'] ?? '');
-    $db->prepare("INSERT INTO comm_track (party, content, react_date, action, owner_id, owner_name, due_date,
+    // 類別預設帶溝通記錄表自己的類別（前端會先帶好，可改）；沒送就沿用記錄表的
+    $recCat = $db->prepare("SELECT party_cat_id FROM comm_record WHERE rec_id=?"); $recCat->execute([(int)$it['rec_id']]);
+    $rc = (int)$recCat->fetchColumn();
+    $catRow = array_key_exists('cat_id', $_POST) ? cmCatCheck($db, $_POST['cat_id'], $rc) : ($rc ? cmCatCheck($db, $rc, $rc) : null);
+    $catId = $catRow ? (int)$catRow['cat_id'] : null;
+    $db->prepare("INSERT INTO comm_track (party, cat_id, content, react_date, action, owner_id, owner_name, due_date,
                     src_rec_id, src_item_id, created_by, created_by_name, created_at, updated_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-       ->execute([$it['party_name'], $it['question'], $it['comm_date'], cmS($_POST['action_text'] ?? $it['reply'], 4000),
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+       ->execute([$it['party_name'], $catId, $it['question'], $it['comm_date'], cmS($_POST['action_text'] ?? $it['reply'], 4000),
                   $ownerId ?: null, $ownerId ? cm_user_name($db, $ownerId) : cmS($_POST['owner_name'] ?? '', 60), $due,
                   (int)$it['rec_id'], $itemId, $uid, $uname, $now['n'], $now['n']]);
     $tid = (int)$db->lastInsertId();
@@ -647,19 +709,24 @@ if ($action === 'track_list') {
     $show = cmS($_GET['show'] ?? 'open', 10);          // open=只看未結案（預設，追蹤表的本意）／all=全部／closed
     if ($show === 'open')   $w[] = 't.is_closed=0';
     if ($show === 'closed') $w[] = 't.is_closed=1';
+    $cat = cmS($_GET['cat'] ?? '', 10);                // ''＝全部／none＝未分類／數字＝指定類別
+    if ($cat === 'none') $w[] = 't.cat_id IS NULL';
+    elseif ((int)$cat > 0) { $w[] = 't.cat_id=?'; $a[] = (int)$cat; }
     $kw = cmS($_GET['kw'] ?? '', 60);
     if ($kw !== '') {
         foreach (preg_split('/\s+/', $kw, -1, PREG_SPLIT_NO_EMPTY) as $t) {
-            $w[] = "(t.party LIKE ? OR t.content LIKE ? OR t.action LIKE ? OR t.owner_name LIKE ? OR t.close_note LIKE ?)";
-            for ($i = 0; $i < 5; $i++) $a[] = '%' . $t . '%';
+            $w[] = "(t.party LIKE ? OR t.content LIKE ? OR t.action LIKE ? OR t.owner_name LIKE ? OR t.close_note LIKE ?
+                     OR EXISTS (SELECT 1 FROM comm_track_cat cc WHERE cc.cat_id=t.cat_id AND cc.name LIKE ?))";
+            for ($i = 0; $i < 6; $i++) $a[] = '%' . $t . '%';
         }
     }
     $where = implode(' AND ', $w);
     $st = $db->prepare("SELECT COUNT(*) FROM comm_track t WHERE $where");
     $st->execute($a);
     $total = (int)$st->fetchColumn();
-    $st = $db->prepare("SELECT t.*, r.rec_no AS src_rec_no FROM comm_track t
+    $st = $db->prepare("SELECT t.*, r.rec_no AS src_rec_no, tc.name AS cat_name FROM comm_track t
                         LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id
+                        LEFT JOIN comm_track_cat tc ON tc.cat_id=t.cat_id
                         WHERE $where ORDER BY t.is_closed, t.due_date IS NULL, t.due_date, t.track_id
                         LIMIT " . (int)$per . " OFFSET " . (($page - 1) * $per));
     $st->execute($a);
@@ -692,9 +759,14 @@ if ($action === 'track_save') {
         if (!$own) jerr('查無此追蹤項目', 404);
         if (!$P['canAdmin'] && (int)$own['created_by'] !== $uid && $ownerId !== $uid)
             jerr('只有建立者、負責人或溝通管理員可以修改', 403);
-        $db->prepare("UPDATE comm_track SET party=?, content=?, react_date=?, action=?, owner_id=?, owner_name=?,
+        // 沒送 cat_id＝舊呼叫端，類別不動；有送（含 0＝改成未分類）才更新
+        $keepCat = $db->prepare("SELECT cat_id FROM comm_track WHERE track_id=?"); $keepCat->execute([$id]);
+        $oldCat = (int)$keepCat->fetchColumn();
+        $catRow = array_key_exists('cat_id', $_POST) ? cmCatCheck($db, $_POST['cat_id'], $oldCat) : ($oldCat ? ['cat_id'=>$oldCat] : null);
+        $catId = $catRow ? (int)$catRow['cat_id'] : null;
+        $db->prepare("UPDATE comm_track SET party=?, cat_id=?, content=?, react_date=?, action=?, owner_id=?, owner_name=?,
                         due_date=?, is_closed=?, closed_date=?, close_note=?, updated_at=? WHERE track_id=?")
-           ->execute([$party, $content, cmDate($_POST['react_date'] ?? ''), cmS($_POST['action_text'] ?? '', 4000),
+           ->execute([$party, $catId, $content, cmDate($_POST['react_date'] ?? ''), cmS($_POST['action_text'] ?? '', 4000),
                       $ownerId ?: null, $owner, $due, $closed, $closedDate, cmS($_POST['close_note'] ?? '', 500), $now['n'], $id]);
     } else {
         $db->prepare("INSERT INTO comm_track (party, content, react_date, action, owner_id, owner_name, due_date,
@@ -1063,6 +1135,50 @@ if ($action === 'setting_save') {
         cm_setting_save($db, $k, (string)$v, $uname);
     }
     jout(['settings'=>cm_settings($db)]);
+}
+
+/* ---- 類別（本站管理員維護；溝通記錄表與措施追蹤表共用） ---- */
+if ($action === 'cat_save') {
+    cmReqAdmin($P);
+    $id   = (int)($_POST['cat_id'] ?? 0);
+    $name = cmS($_POST['name'] ?? '', 40);
+    if ($name === '') jerr('請填寫類別名稱');
+    $kind = cmS($_POST['kind'] ?? 'other', 12);
+    if (!isset(CM_PARTY_KINDS[$kind])) jerr('挑對象的方式不正確');
+    $free = ($kind === 'other' && !empty($_POST['free_text'])) ? 1 : 0;
+    $q = $db->prepare("SELECT cat_id FROM comm_track_cat WHERE name=? AND cat_id<>?");
+    $q->execute([$name, $id]);
+    if ($q->fetchColumn()) jerr('已經有「' . $name . '」這個類別了');
+    $sort = (int)($_POST['sort_order'] ?? 0);
+    $act  = !empty($_POST['is_active']) ? 1 : 0;
+    $now  = cmNow($db);
+    if ($id) {
+        $q = $db->prepare("SELECT kind FROM comm_track_cat WHERE cat_id=?"); $q->execute([$id]);
+        $oldKind = $q->fetchColumn();
+        if ($oldKind === false) jerr('查無此類別', 404);
+        // 已經有溝通記錄用到時不能換「挑對象的方式」：舊記錄綁的客戶／廠商編號會變得對不上而且看不出來
+        if ($oldKind !== $kind) {
+            $u = $db->prepare("SELECT COUNT(*) FROM comm_record WHERE party_cat_id=? AND is_deleted=0"); $u->execute([$id]);
+            if ((int)$u->fetchColumn() > 0) jerr('已有溝通記錄表使用這個類別，不能更改「挑對象的方式」；請另外新增一個類別。');
+        }
+        $db->prepare("UPDATE comm_track_cat SET name=?, kind=?, free_text=?, sort_order=?, is_active=?, updated_at=? WHERE cat_id=?")->execute([$name, $kind, $free, $sort, $act, $now['n'], $id]);
+    } else {
+        if (!$sort) $sort = (int)$db->query("SELECT COALESCE(MAX(CASE WHEN sort_order<900 THEN sort_order END),0)+10 FROM comm_track_cat")->fetchColumn();
+        $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sort_order, is_active, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$name, $kind, $free, $sort, $act, $uname, $now['n'], $now['n']]);
+        $id = (int)$db->lastInsertId();
+    }
+    jout(['cat_id'=>$id, 'track_cats'=>cmCatList($db, false), 'track_cats_all'=>cmCatList($db, true)]);
+}
+if ($action === 'cat_delete') {
+    cmReqAdmin($P);
+    $id = (int)($_POST['cat_id'] ?? 0);
+    $q = $db->prepare("SELECT (SELECT COUNT(*) FROM comm_track WHERE cat_id=? AND is_deleted=0) + (SELECT COUNT(*) FROM comm_record WHERE party_cat_id=? AND is_deleted=0)");
+    $q->execute([$id, $id]);
+    $n = (int)$q->fetchColumn();
+    if ($n > 0) jerr('已有 ' . $n . ' 筆溝通記錄／追蹤項目使用這個類別，不能刪除；請改成「停用」（既有資料仍顯示原類別，新增時不再出現）。', 409);
+    $db->prepare("DELETE FROM comm_track_cat WHERE cat_id=?")->execute([$id]);
+    jout(['track_cats'=>cmCatList($db, false), 'track_cats_all'=>cmCatList($db, true)]);
 }
 
 if ($action === 'asdoc_save') {

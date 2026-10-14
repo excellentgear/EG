@@ -165,6 +165,14 @@ $perms  = rm_perms($db, $rmUser);
         .show-guide .swot-guide { display:block; }
         .swot-guide ul { margin:2px 0 6px; padding-left:18px; }
         .swot-guide .g-h { color:#8A5A2B; font-weight:bold; font-size:12px; }
+        .swot-guide ul.scan { background:#FDF8EF; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px 6px 22px; }
+        .swot-guide ul.scan li { margin:2px 0; }
+        /* 右下角回頂端 */
+        #btnTop { position:fixed; right:22px; bottom:22px; width:44px; height:44px; border-radius:22px; border:1px solid #d98a33;
+            background:#F0A24B; color:#fff; font-size:20px; line-height:42px; text-align:center; cursor:pointer; box-shadow:0 2px 8px rgba(60,40,20,.3);
+            display:none; z-index:10500; padding:0; }
+        #btnTop:hover { background:#d98a33; }
+        @media print { #btnTop { display:none !important; } }
         .swot-ex { display:block; width:100%; text-align:left; margin:3px 0; padding:4px 8px; border:1px dashed #D8BE93; border-radius:6px;
             background:#FDF8EF; color:#5b3a1e; font-size:12px; line-height:1.5; cursor:pointer; }
         .swot-ex:hover { background:#F7E0BD; }
@@ -333,6 +341,7 @@ $perms  = rm_perms($db, $rmUser);
     </div>
 </div></div>
 
+<button type="button" id="btnTop" title="回頁面頂端" aria-label="回頁面頂端"><i class="fa fa-angle-up"></i></button>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -467,6 +476,8 @@ function boardHtml(){
           + '<button type="button" class="b-mini warm" data-addswot="' + m.key + '"><i class="fa fa-plus"></i> 新增一條</button>'
           + '<div class="swot-guide"><div class="g-h">想想看（填寫提示）</div><ul>'
           + $.map(META.guide[m.key].ask, function(a){ return '<li>' + esc(a) + '</li>'; }).join('') + '</ul>'
+          + (META.guide[m.key].scan ? '<div class="g-h">🌍 放眼全球檢核（逐項想想，有影響就寫成一條）</div><ul class="scan">'
+              + $.map(META.guide[m.key].scan, function(x){ return '<li><b>' + esc(x.cat) + '</b>：' + esc(x.hint) + '</li>'; }).join('') + '</ul>' : '')
           + '<div class="g-h">範例（點一下加入，再改成自己公司的情況）</div>'
           + $.map(META.guide[m.key].ex, function(e, i){
               return '<button type="button" class="swot-ex" data-ex="' + m.key + ':' + i + '"><b>' + esc(e.stakeholder) + '</b>｜' + esc(e.needs) + '<br>' + esc(e.issue) + '</button>'; }).join('')
@@ -1196,6 +1207,16 @@ $(document).on('click', '[data-csv]', function(){
 });
 
 $('#btnPageHelp').on('click', function(){ renderRoleHelp(); openMask('helpUseMask'); });
+
+/* ---------- 右下角回頂端：版型的捲動容器可能是 window 也可能是 .right_col，兩邊都聽 ---------- */
+function topScroller(){ var rc = document.querySelector('.right_col'); return (rc && rc.scrollHeight > rc.clientHeight + 4 && getComputedStyle(rc).overflowY !== 'visible') ? rc : null; }
+function topY(){ var rc = topScroller(); return Math.max(window.pageYOffset || 0, document.documentElement.scrollTop || 0, document.body.scrollTop || 0, rc ? rc.scrollTop : 0); }
+function syncTopBtn(){ $('#btnTop').toggle(topY() > 200); }
+window.addEventListener('scroll', syncTopBtn, true);
+$('#btnTop').on('click', function(){
+    var rc = topScroller(); if (rc) rc.scrollTop = 0;
+    window.scrollTo({top:0, behavior:'smooth'}); document.documentElement.scrollTop = 0; document.body.scrollTop = 0;
+});
 
 /* ================= 啟動 ================= */
 get({action:'meta'}, function(m){

@@ -298,7 +298,9 @@ $roleLabel = cm_role_label($perms);
                     <option value="closed">已結案</option>
                     <option value="all">全部</option>
                 </select>
-                <input type="text" id="trackKw" placeholder="搜尋利害關係者/內容/措施/負責人" style="width:230px;">
+                <label>類別</label>
+                <select id="trackCat" style="width:150px;" data-eg-filter="輸入類別篩選…"><option value="">全部類別</option></select>
+                <input type="text" id="trackKw" placeholder="搜尋利害關係者/內容/措施/負責人/類別" style="width:250px;">
                 <button id="btnTrackSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnTrackPrint"><i class="fa fa-print"></i> 列印追蹤表</button>
                 <button id="btnTrackCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
@@ -307,12 +309,12 @@ $roleLabel = cm_role_label($perms);
             <div class="cm-table-wrap">
                 <table class="cm-table" id="trackTable">
                     <thead><tr>
-                        <th style="width:50px;">項次</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
+                        <th style="width:50px;">項次</th><th style="width:100px;">類別</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
                         <th style="width:96px;">反應日期</th><th>回應措施</th><th style="width:100px;">負責人</th>
                         <th style="width:110px;">預計完成日</th><th style="width:96px;">是否結案</th>
                         <th style="width:110px;">來源</th><th style="width:130px;">操作</th>
                     </tr></thead>
-                    <tbody id="trackBody"><tr><td colspan="10" class="cm-empty">載入中…</td></tr></tbody>
+                    <tbody id="trackBody"><tr><td colspan="11" class="cm-empty">載入中…</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -515,6 +517,8 @@ $roleLabel = cm_role_label($perms);
                     <select id="ttOwner" class="pk-grow"></select>
                 </div>
                 <span class="err" id="eTtOwner"></span></div>
+            <div><label>類別 <span class="hint" style="font-weight:normal;">（預設帶溝通記錄表的類別）</span></label>
+                <select id="ttCat" data-eg-filter="輸入類別篩選…"></select></div>
             <div><label>預計完成日 <span style="color:#DD5138;">*</span></label>
                 <input type="date" id="ttDue"><span class="err" id="eTtDue"></span></div>
         </div>
@@ -531,6 +535,8 @@ $roleLabel = cm_role_label($perms);
             <div><label>利害關係者 <span style="color:#DD5138;">*</span></label>
                 <input type="text" id="tkParty" maxlength="200"><span class="err" id="eTkParty"></span></div>
             <div><label>反應日期</label><input type="date" id="tkReact"></div>
+            <div><label>類別 <span class="hint" style="font-weight:normal;">（由管理員在模組設定維護）</span></label>
+                <select id="tkCat" data-eg-filter="輸入類別篩選…"></select></div>
             <div class="full"><label>反應內容 <span style="color:#DD5138;">*</span></label>
                 <textarea id="tkContent"></textarea><span class="err" id="eTkContent"></span></div>
             <div class="full"><label>回應措施</label><textarea id="tkAction"></textarea></div>
@@ -793,6 +799,18 @@ $roleLabel = cm_role_label($perms);
                 <select id="setGmRank" style="width:260px;"></select>
             </div>
         </div>
+
+        <h4 style="color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:3px;margin:14px 0 8px;font-size:15px;">
+            六、類別（溝通記錄表與措施追蹤表共用）</h4>
+        <div class="hint" style="margin-bottom:6px;">這裡維護的類別會直接出現在「利害關係者溝通記錄表」的類別單選，以及措施追蹤表的類別欄與篩選
+            （記錄表轉入追蹤表時，類別自動帶入）。<b>每一列按「儲存」就立刻生效</b>，不必再按下面的「儲存設定」。<br>
+            「挑利害關係者的方式」決定記錄表選了這個類別之後怎麼填對象：客戶／供應商會搜尋主檔、員工先選部門再挑人、
+            <b>環保局、消防局、人事行政機關這類機關選「其他」即可</b>（手動填寫名稱）。已經有資料使用的類別不能刪除、也不能改挑對象的方式，只能停用。</div>
+        <table class="cm-table" style="margin-bottom:6px;">
+            <thead><tr><th>類別名稱</th><th>挑利害關係者的方式</th><th>類別說明</th><th>排序</th><th>啟用</th><th>使用中</th><th>操作</th></tr></thead>
+            <tbody id="catBody"></tbody>
+        </table>
+        <button class="b-mini warm" id="btnCatAdd"><i class="fa fa-plus"></i> 新增類別</button>
     </div>
     <div class="cm-mft"><button data-close>取消</button>
         <button id="btnSetSave" class="btn-warm"><i class="fa fa-save"></i> 儲存設定</button></div>
@@ -1184,7 +1202,8 @@ function boot(){
             ? '<i class="fa fa-paper-plane"></i> 儲存並送出確認'
             : '<i class="fa fa-check-circle"></i> 儲存並送出（免簽核・自動完成）');
         var s = $('#recStatus'); $.each(res.status, function(k, v){ s.append($('<option>').val(k).text(v)); });
-        var k = $('#recKind');   $.each(res.kinds,  function(kk, v){ k.append($('<option>').val(kk).text(v)); });
+        fillRecKindFilter();
+        fillCatFilter();
         renderAsdocHint();
         renderRoleHelp();
         /* 先抓一次「我自己的部門／職稱」：填表人清單一律要含自己。
@@ -1262,7 +1281,7 @@ function renderPager(el, total, page, per, onGo, onPer){
 /* ================= 分頁一：溝通記錄表 ================= */
 function recFilters(){
     return {action:'rec_list', page:PAGE.rec, per:PER.rec,
-        status:$('#recStatus').val(), kind:$('#recKind').val(),
+        status:$('#recStatus').val(), cat:$('#recKind').val(),
         from:$('#recFrom').val(), to:$('#recTo').val(),
         mine:$('#recMine').is(':checked') ? 1 : 0, kw:$('#recKw').val()};
 }
@@ -1281,8 +1300,7 @@ function loadRec(){
                 : '<span class="hint">－</span>';
             var chs = [];
             $.each(META.channels, function(k, v){ if (+r['ch_' + k]) chs.push(k === 'other' ? (r.ch_other_text || v) : v); });
-            var kind = META.kinds[r.party_kind] || '';
-            if (r.party_kind === 'other' && r.party_kind_other) kind = r.party_kind_other;
+            var kind = r.kind_text || META.kinds[r.party_kind] || '';
             var stCls = 'st-' + r.status;
             var stTxt = META.status[r.status] || r.status;
             if (r.status === 'draft' && r.reject_note){ stCls = 'st-rej'; stTxt = '已退回'; }
@@ -1418,7 +1436,7 @@ function setupMakerPicker(makerId, makerDeptId, makerPosId){
         MYIDENTS.forEach(function(i){ if (+i.is_main && !main) main = i; });
         if (!main && MYIDENTS.length) main = MYIDENTS[0];
         if (main && +MAKERUID === +META.me.id) dept = +main.department_id || 0;
-        if (!dept) (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.department_id || 0; });
+        if (!dept) (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.dept_id || +p.department_id || 0; });
     }
     fillDeptSel('#fMakerDept', dept, '請選擇部門…');
     loadMakerPeople(dept);
@@ -1543,9 +1561,18 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
         t.append('<label><input type="radio" name="cType" value="' + k + '"' + (k === type ? ' checked' : '') + '> ' + esc(v) + '</label>');
     });
     var kr = $('#recKindRow').empty();
-    $.each(META.kinds, function(k, v){
-        kr.append('<label><input type="radio" name="cKind" value="' + k + '"' + (k === kind ? ' checked' : '') + '> ' + esc(v) + '</label>');
+    /* 類別來自「模組設定」裡管理員維護的清單（每個類別有自己的「挑對象方式」＝data-kind）；
+       這張單原本用的類別如果後來被停用，仍要顯示出來，免得開啟舊單時類別憑空消失 */
+    var cur = (REC && REC.rec) ? (+REC.rec.party_cat_id || 0) : 0, cats = (META.track_cats || []).slice();
+    if (cur && REC.cat && !cats.some(function(c){ return +c.cat_id === cur; })) cats.push(REC.cat);
+    if (!cur && kind){   // 還沒有類別 id 的舊資料：對到同一種挑法的第一個類別
+        $.each(cats, function(_, c){ if (!cur && c.kind === kind && (kind === 'other' ? +c.free_text : !+c.free_text)) cur = +c.cat_id; });
+    }
+    $.each(cats, function(_, c){
+        kr.append('<label><input type="radio" name="cKind" value="' + c.cat_id + '" data-kind="' + esc(c.kind) + '" data-free="' + (+c.free_text ? 1 : 0) + '"'
+            + (+c.cat_id === cur ? ' checked' : '') + '> ' + esc(c.name) + '</label>');
     });
+    if (!cats.length) kr.append('<span class="hint">尚未設定任何類別，請洽溝通管理員到「模組設定」建立。</span>');
     $('#fKindOther').val(kindOther || '');
     var cr = $('#recChRow').empty();
     $.each(META.channels, function(k, v){
@@ -1568,7 +1595,9 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
 var MAKERUID = 0;
 var PARTY = {ref_id:'', user_id:0, contact_id:0, contact_name:''};
 
-function currentKind(){ return $('input[name=cKind]:checked').val() || ''; }
+function currentKind(){ var el = $('input[name=cKind]:checked'); return el.length ? (el.attr('data-kind') || '') : ''; }   // 挑利害關係者的方式：customer/supplier/employee/other
+function currentCat(){ return +$('input[name=cKind]:checked').val() || 0; }
+function catFree(){ return $('input[name=cKind]:checked').attr('data-free') === '1'; }                                  // 要再填「類別說明」的類別
 
 /** 依目前類別切換右側輸入區塊；$rec 有值＝開啟既有單據，要把已存的值回填 */
 function resetPartyPicker(rec){
@@ -1613,7 +1642,7 @@ function resetPartyPicker(rec){
         fillDeptSel('#pkDept', PARTY.ref_id, '請選擇部門…');
         loadDeptPeople(PARTY.ref_id, '#pkUser', $('#fCommDate').val() || TODAY, PARTY.user_id, function(){ syncPartyFromPicker(); });
     } else if (kind === 'other'){
-        $('#pkOtherBox').show();
+        if (catFree()) $('#pkOtherBox').show();       // 一般的「其他」類別（環保局、消防局…）名稱就是類別，不必再填說明
     }
     if (kind !== 'customer' && kind !== 'supplier' && kind !== 'employee') syncPartyFromPicker();
 }
@@ -1837,10 +1866,11 @@ function collectRec(){
     d.comm_date = $('#fCommDate').val();
     if (!d.comm_date){ setErr('eCommDate', '#fCommDate', '請填寫溝通日期'); ok = false; }
     d.comm_type = $('input[name=cType]:checked').val() || '';
-    d.party_kind = $('input[name=cKind]:checked').val() || '';
-    if (!d.party_kind){ setErr('eKind', null, '請選擇類別'); ok = false; }
+    d.party_cat_id = currentCat();
+    d.party_kind = currentKind();
+    if (!d.party_cat_id){ setErr('eKind', null, '請選擇類別'); ok = false; }
     d.party_kind_other = $('#fKindOther').val() || '';
-    if (d.party_kind === 'other' && !d.party_kind_other.trim()){ setErr('eKind', '#fKindOther', '類別選「其他」時請填寫說明'); ok = false; }
+    if (d.party_cat_id && catFree() && !d.party_kind_other.trim()){ setErr('eKind', '#fKindOther', '這個類別需要填寫類別說明'); ok = false; }
     d.party_name = $('#fParty').val() || '';
     if (!d.party_name.trim()){ setErr('eParty', '#fParty', '請填寫利害關係者公司/代表人'); ok = false; }
     /* ① 依類別帶上挑到的對象；後端會用同一批來源再核對一次（鐵律8） */
@@ -1957,6 +1987,7 @@ function openToTrack(idx){
     $('#ttContent').val(it.question);
     $('#ttAction').val(it.reply || '');
     $('#ttDue').val('');
+    fillCatSel('#ttCat', (REC && REC.rec) ? (+REC.rec.party_cat_id || 0) : 0, (REC && REC.rec) ? (REC.rec.kind_text || '') : '');
     // ⑦ 負責人改成「部門 → 人員」兩段式，職稱依該單溝通日期回推當時的
     TTDATE = (REC && REC.rec) ? REC.rec.comm_date : TODAY;
     fillDeptSel('#ttOwnerDept', 0, '請選擇部門…');
@@ -1973,25 +2004,93 @@ $('#btnToTrackOk').on('click', function(){
     if (!$('#ttDue').val()){ setErr('eTtDue', '#ttDue', '請填寫預計完成日'); ok = false; }
     if (!ok) return;
     post({action:'rec_to_track', item_id:TTCTX.item_id, action_text:$('#ttAction').val(),
-          owner_id:p.id, due_date:$('#ttDue').val()}, function(){
+          owner_id:p.id, cat_id:$('#ttCat').val() || 0, due_date:$('#ttDue').val()}, function(){
         alert('已建立追蹤項目，可在「回應利害關係者措施追蹤表」分頁查看。');
         closeMask('toTrackMask');
         openRec(REC.rec.rec_id); loadTrack();
     });
 });
 
+/* ================= 類別（記錄表與追蹤表共用，管理員在模組設定維護） ================= */
+function fillCatSel(sel, cur, curName){
+    var el = $(sel).empty().append('<option value="">（未分類）</option>'), found = false;
+    $.each(META.track_cats || [], function(_, c){
+        if (+c.cat_id === +cur) found = true;
+        el.append($('<option>').val(c.cat_id).text(c.name));
+    });
+    // 這筆原本的類別後來被停用：仍要顯示出來並可保留
+    if (cur && !found) el.append($('<option>').val(cur).text((curName || ('類別#' + cur)) + '（已停用）'));
+    el.val(cur ? String(cur) : '');
+}
+function fillCatFilter(){
+    var el = $('#trackCat'), cur = el.val();
+    el.empty().append('<option value="">全部類別</option><option value="none">未分類</option>');
+    $.each(META.track_cats || [], function(_, c){ el.append($('<option>').val(c.cat_id).text(c.name)); });
+    if (cur) el.val(cur);
+}
+function fillRecKindFilter(){
+    var el = $('#recKind'), cur = el.val();
+    el.empty().append('<option value="">全部</option>');
+    $.each(META.track_cats || [], function(_, c){ el.append($('<option>').val(c.cat_id).text(c.name)); });
+    if (cur) el.val(cur);
+}
+var CATKINDS = {customer:'客戶（搜尋客戶主檔）', supplier:'供應商（搜尋廠商主檔）', employee:'員工（先選部門再挑人）', other:'其他（手動填寫名稱）'};
+function catRowHtml(c){
+    var kopts = $.map(CATKINDS, function(t, k){ return '<option value="' + k + '"' + (c.kind === k ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
+    var used = (+c.used_rec || 0) + (+c.used_track || 0);
+    return '<tr data-id="' + (c.cat_id || 0) + '">'
+        + '<td><input type="text" class="cc-name" maxlength="40" value="' + esc(c.name) + '" style="width:130px;"></td>'
+        + '<td><select class="cc-kind" style="width:190px;">' + kopts + '</select></td>'
+        + '<td><label style="font-weight:normal;margin:0;"><input type="checkbox" class="cc-free"' + (+c.free_text ? ' checked' : '') + '> 需填說明</label></td>'
+        + '<td><input type="number" class="cc-sort" value="' + (+c.sort_order || 0) + '" style="width:64px;"></td>'
+        + '<td><input type="checkbox" class="cc-act"' + (c.is_active === undefined || +c.is_active ? ' checked' : '') + '></td>'
+        + '<td class="hint">' + (c.cat_id ? '記錄 ' + (+c.used_rec || 0) + '／追蹤 ' + (+c.used_track || 0) : '新增') + '</td>'
+        + '<td><button class="b-mini warm" data-catsave><i class="fa fa-save"></i> 儲存</button>'
+        + (c.cat_id ? '<button class="b-mini" data-catdel style="color:#DD5138;"' + (used ? ' title="已有資料使用，不能刪除，請改為停用"' : '') + '><i class="fa fa-trash"></i></button>' : '') + '</td></tr>';
+}
+function renderCats(){
+    var b = $('#catBody').empty();
+    $.each(META.track_cats_all || [], function(_, c){ b.append(catRowHtml(c)); });
+    b.find('tr').each(function(){ var k = $(this).find('.cc-kind').val(); $(this).find('.cc-free').prop('disabled', k !== 'other'); });
+}
+function catApply(res){
+    META.track_cats = res.track_cats; META.track_cats_all = res.track_cats_all;
+    renderCats(); fillCatFilter(); fillRecKindFilter();
+}
+$(document).on('change', '#catBody .cc-kind', function(){
+    var tr = $(this).closest('tr'), other = this.value === 'other';
+    tr.find('.cc-free').prop('disabled', !other); if (!other) tr.find('.cc-free').prop('checked', false);
+});
+$(document).on('click', '#btnCatAdd', function(){
+    $('#catBody').append(catRowHtml({cat_id:0, name:'', kind:'other', free_text:0, sort_order:0, is_active:1}));
+    $('#catBody tr:last .cc-name').focus();
+});
+$(document).on('click', '[data-catsave]', function(){
+    var tr = $(this).closest('tr');
+    if (!$.trim(tr.find('.cc-name').val())){ alert('請填寫類別名稱'); return; }
+    post({action:'cat_save', cat_id:tr.data('id') || 0, name:tr.find('.cc-name').val(), kind:tr.find('.cc-kind').val(),
+          free_text:tr.find('.cc-free').is(':checked') ? 1 : 0, sort_order:tr.find('.cc-sort').val() || 0,
+          is_active:tr.find('.cc-act').is(':checked') ? 1 : 0}, function(res){ catApply(res); });
+});
+$(document).on('click', '[data-catdel]', function(){
+    var tr = $(this).closest('tr');
+    if (!confirm('確定要刪除「' + tr.find('.cc-name').val() + '」這個類別嗎？（已有資料使用的不能刪除，請改為停用）')) return;
+    post({action:'cat_delete', cat_id:tr.data('id')}, function(res){ catApply(res); });
+});
+
 /* ================= 分頁二：措施追蹤表 ================= */
 function loadTrack(){
-    get({action:'track_list', page:PAGE.track, per:PER.track, show:$('#trackShow').val(), kw:$('#trackKw').val()}, function(res){
+    get({action:'track_list', page:PAGE.track, per:PER.track, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(res){
         window.__trackPrint = res.print;
         var b = $('#trackBody').empty();
-        if (!res.rows.length) b.html('<tr><td colspan="10" class="cm-empty">沒有符合條件的追蹤項目</td></tr>');
+        if (!res.rows.length) b.html('<tr><td colspan="11" class="cm-empty">沒有符合條件的追蹤項目</td></tr>');
         res.rows.forEach(function(r, i){
             var late = !+r.is_closed && r.due_date && r.due_date < TODAY;
             var badge = +r.is_closed ? '<span class="st tg-closed">是</span>'
                       : (late ? '<span class="st tg-late">否・已逾期</span>' : '<span class="st tg-open">否</span>');
             b.append('<tr>'
                 + '<td>' + ((res.page - 1) * res.per + i + 1) + '</td>'
+                + '<td>' + (r.cat_name ? esc(r.cat_name) : '<span class="hint">未分類</span>') + '</td>'
                 + '<td class="l wrap">' + esc(r.party) + '</td>'
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
                 + '<td>' + dispDate(r.react_date) + '</td>'
@@ -2010,7 +2109,7 @@ function loadTrack(){
 }
 $('#btnTrackSearch').on('click', function(){ PAGE.track = 1; loadTrack(); });
 $('#trackKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.track = 1; loadTrack(); } });
-$('#trackShow').on('change', function(){ PAGE.track = 1; loadTrack(); });
+$('#trackShow,#trackCat').on('change', function(){ PAGE.track = 1; loadTrack(); });
 
 var TRACKROWS = {}, TKLEGACYOWNER = '';
 /* 追蹤表刻意沒有「新增」入口（使用者指定）：措施追蹤項目一定是從溝通記錄表的某一列問題
@@ -2026,7 +2125,7 @@ function openTrack(id){
        這樣一開跳窗就直接停在對的部門、人也已經選好。 */
     var fillOwner = function(uid, date){
         var dept = 0;
-        (META.people || []).forEach(function(p){ if (+p.id === +uid && !dept) dept = +p.department_id || 0; });
+        (META.people || []).forEach(function(p){ if (+p.id === +uid && !dept) dept = +p.dept_id || +p.department_id || 0; });
         fillDeptSel('#tkOwnerDept', dept, '請選擇部門…');
         loadDeptPeople(dept, '#tkOwner', date || TODAY, uid, function(){ });
     };
@@ -2035,6 +2134,7 @@ function openTrack(id){
         $('#tkParty,#tkContent,#tkAction,#tkCloseNote').val('');
         $('#tkReact,#tkDue,#tkCloseDate').val('');
         $('#tkClosed').prop('checked', false).trigger('change');
+        fillCatSel('#tkCat', 0, '');
         $('#tkSrc').html(''); $('#btnTrackDel').hide();
         TKLEGACYOWNER = '';
         fillOwner(0, TODAY); $('#trackMask').data('id', 0);
@@ -2047,6 +2147,7 @@ function openTrack(id){
         if (!r){ alert('查無此追蹤項目，請重新整理。'); loadTrack(); return; }
         $('#trackTitle').text('編輯追蹤項目');
         $('#tkParty').val(r.party); $('#tkContent').val(r.content); $('#tkAction').val(r.action);
+        fillCatSel('#tkCat', +r.cat_id || 0, r.cat_name || '');
         $('#tkReact').val(r.react_date || ''); $('#tkDue').val(r.due_date || '');
         $('#tkCloseDate').val(r.closed_date || ''); $('#tkCloseNote').val(r.close_note || '');
         $('#tkClosed').prop('checked', !!+r.is_closed).trigger('change');
@@ -2077,7 +2178,7 @@ $('#btnTrackSave').on('click', function(){
     if (!ok) return;
     post({action:'track_save', track_id:$('#trackMask').data('id') || 0,
         party:$('#tkParty').val(), content:$('#tkContent').val(), react_date:$('#tkReact').val(),
-        action_text:$('#tkAction').val(), owner_id:tkp ? tkp.id : 0,
+        action_text:$('#tkAction').val(), cat_id:$('#tkCat').val() || 0, owner_id:tkp ? tkp.id : 0,
         owner_name:tkp ? '' : TKLEGACYOWNER, due_date:$('#tkDue').val(),
         is_closed:closed ? 1 : 0, closed_date:$('#tkCloseDate').val(), close_note:$('#tkCloseNote').val()},
         function(){ closeMask('trackMask'); loadTrack(); });
@@ -2480,6 +2581,7 @@ $('#btnSetting').on('click', function(){
     renderChips('mgr'); renderChips('gm');
     fillPick('#mgrPick'); fillPick('#gmPick');
     renderSetAsdoc();
+    renderCats();
     openMask('setMask');
 });
 function fillPick(sel){
@@ -2635,9 +2737,11 @@ function printRecord(id){
             $.each(META.channels, function(k, v){
                 chs.push(mark(+r['ch_' + k]) + (k === 'other' ? '其他：' + esc(r.ch_other_text || '') : esc(v)));
             });
-            var kinds = [];
-            $.each(META.kinds, function(k, v){
-                kinds.push(mark(r.party_kind === k) + (k === 'other' ? '其他：' + esc(r.party_kind_other || '') : esc(v)));
+            var kinds = [], pcats = (META.track_cats || []).slice();
+            if (res.cat && !pcats.some(function(c){ return +c.cat_id === +res.cat.cat_id; })) pcats.push(res.cat);
+            $.each(pcats, function(_, c){
+                var on = +c.cat_id === (+r.party_cat_id || 0);
+                kinds.push(mark(on) + (+c.free_text ? esc(c.name) + '：' + (on ? esc(r.party_kind_other || '') : '') : esc(c.name)));
             });
             var types = [];
             $.each(META.types, function(k, v){ types.push(mark(r.comm_type === k) + esc(v)); });
@@ -2685,22 +2789,22 @@ $('#btnRecPrint').on('click', function(){ if (REC && REC.rec) printRecord(REC.re
 
 /* 清單型列印＝印出目前篩選的全部結果（不是只有這一頁），所以重新向後端要 per=0 的全量 */
 $('#btnTrackPrint').on('click', function(){
-    get({action:'track_list', page:1, per:50, show:$('#trackShow').val(), kw:$('#trackKw').val()}, function(first){
+    get({action:'track_list', page:1, per:50, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(first){
         var total = first.total, per = 50, pages = Math.ceil(total / per) || 1, rows = [], done = 0;
         var render = function(){
             var meta = first.print;
             var tr = rows.map(function(r, i){
-                return '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(r.party) + '</td>'
+                return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.cat_name || '') + '</td><td class="l">' + esc(r.party) + '</td>'
                      + '<td class="l">' + esc(r.content).replace(/\n/g, '<br>') + '</td>'
                      + '<td>' + dispDate(r.react_date) + '</td>'
                      + '<td class="l">' + esc(r.action).replace(/\n/g, '<br>') + '</td>'
                      + '<td>' + esc(r.owner_name) + '</td><td>' + dispDate(r.due_date) + '</td>'
                      + '<td>' + (+r.is_closed ? '是' : '否') + '</td></tr>';
-            }).join('') || '<tr><td colspan="8">（無資料）</td></tr>';
+            }).join('') || '<tr><td colspan="9">（無資料）</td></tr>';
             var body = printHead(meta, '回應利害關係者措施追蹤表')
-                + '<table class="pt"><colgroup><col style="width:40px;"><col style="width:120px;"><col>'
+                + '<table class="pt"><colgroup><col style="width:40px;"><col style="width:76px;"><col style="width:120px;"><col>'
                 + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
-                + '<thead><tr><th>項次</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
+                + '<thead><tr><th>項次</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
                 + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead>'
                 + '<tbody>' + tr + '</tbody></table>';
             egPrintWindow('回應利害關係者措施追蹤表', body, '', meta.doc_no, true);
@@ -2709,7 +2813,7 @@ $('#btnTrackPrint').on('click', function(){
         };
         for (var p = 1; p <= pages; p++){
             (function(pp){
-                get({action:'track_list', page:pp, per:per, show:$('#trackShow').val(), kw:$('#trackKw').val()}, function(res){
+                get({action:'track_list', page:pp, per:per, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(res){
                     rows = rows.concat(res.rows.map(function(x){ return $.extend({__p:pp}, x); }));
                     if (++done === pages){
                         rows.sort(function(a, b){ return a.__p - b.__p; });
@@ -2792,10 +2896,10 @@ $('#btnRecCsv').on('click', function(){
     });
 });
 $('#btnTrackCsv').on('click', function(){
-    fetchAll({action:'track_list', show:$('#trackShow').val(), kw:$('#trackKw').val()}, function(rows){
-        csvDump('回應利害關係者措施追蹤表', ['項次','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
+    fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(rows){
+        csvDump('回應利害關係者措施追蹤表', ['項次','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
             rows.map(function(r, i){
-                return [i + 1, r.party, r.content, dispDate(r.react_date), r.action, r.owner_name,
+                return [i + 1, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, r.owner_name,
                     dispDate(r.due_date), +r.is_closed ? '是' : '否', dispDate(r.closed_date), r.src_rec_no || ''];
             }));
     });
