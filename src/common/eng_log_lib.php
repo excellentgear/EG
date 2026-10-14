@@ -420,6 +420,10 @@ function el_ensure_schema(PDO $db): void
         "ALTER TABLE eng_log_item ADD COLUMN voided_by INT NULL COMMENT '作廢的人'",
         "ALTER TABLE eng_log_item ADD COLUMN void_reason VARCHAR(500) NULL COMMENT '作廢原因（必填，畫面上一律顯示出來）'",
         "ALTER TABLE eng_log_item ADD INDEX idx_void (voided_at)",
+        // 設計提醒（2026-10-14，見 design_alert_lib.php）：由規則自動產生的「系統提醒」項目，
+        // 值＝規則 id；NULL＝人工建立的一般問題項（全部既有資料）。系統提醒不算「批圖溝通中」。
+        "ALTER TABLE eng_log_item ADD COLUMN src_rule_id INT NULL COMMENT '設計提醒規則 id，NULL=人工建立'",
+        "ALTER TABLE eng_log_item ADD INDEX idx_src_rule (src_rule_id)",
     ] as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS eng_log_step (
@@ -1345,8 +1349,8 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
         // ※ 一張訂單的紀錄若全部被作廢，這裡就查不到任何列、清單格子會回到「＋新增」的樣子，
         //   但那顆按鈕一樣打得開跳窗，歷史不會因此消失。
         $st = $db->prepare("
-            SELECT order_id, question, status, target_type, target_label, asked_at, is_note, total_cnt, open_cnt FROM (
-                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at, i.is_note,
+            SELECT order_id, question, status, target_type, target_label, asked_at, is_note, src_rule_id, total_cnt, open_cnt FROM (
+                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at, i.is_note, i.src_rule_id,
                        COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
                        SUM(CASE WHEN i.is_note=0 AND i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
                            OVER (PARTITION BY b.bind_id) AS open_cnt,
@@ -1371,6 +1375,7 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
                 'target_label' => $r['target_label'] !== null ? (string)$r['target_label'] : null,
                 'asked_at'     => $r['asked_at'] !== null ? (string)$r['asked_at'] : null,
                 'is_note'      => (int)$r['is_note'],
+                'is_alert'     => $r['src_rule_id'] !== null ? 1 : 0,   // 設計提醒規則自動產生的系統提醒
             ];
         }
     } catch (Throwable $e) {}
@@ -1431,6 +1436,7 @@ function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = '
         WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
         AND elg.log_type = '{$logType}'
         AND eli.is_note = 0
+        AND eli.src_rule_id IS NULL
         AND eli.voided_at IS NULL
         AND eli.status NOT IN ('resolved','dropped'))";
 }
