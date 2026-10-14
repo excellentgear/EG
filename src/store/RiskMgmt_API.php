@@ -63,7 +63,7 @@ function rmDocGet(PDO $db, int $id): ?array {
     $st->execute([$id]);
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
-function rmCanSee(array $r, array $P): bool { return $P['canView'] || (int)$r['created_by'] === (int)$P['uid']; }
+function rmCanSee(array $r, array $P): bool { return $r['kind'] === 'context' || $P['canView'] || (int)$r['created_by'] === (int)$P['uid']; }
 function rmCanEdit(array $r, array $P): bool { return $P['canAdmin'] || (int)$r['created_by'] === (int)$P['uid']; }
 
 /** 明細列＋即時算出的風險等級（用「目前設定」，不讀存好的值） */
@@ -103,6 +103,7 @@ if ($action === 'meta') {
         'asdoc'    => rm_asdoc_all($db),
         'asdoc_list' => $P['canAdmin'] ? eg_asdoc_list($db) : [],
         'scopes'   => RM_SCOPES, 'ro_kinds' => RM_RO_KINDS,
+        'swot'     => rm_swot_view($set), 'guide' => rm_swot_guide(),
         'depts'    => cm_dept_list($db),
         'roles'    => rm_roles_now($db),
     ]);
@@ -117,7 +118,7 @@ if ($action === 'doc_list') {
     $year = (int)($_GET['year'] ?? 0);
 
     $where = ["d.kind=?", "d.is_deleted=0"]; $a = [$kind];
-    if (!$P['canView']) { $where[] = "d.created_by=?"; $a[] = $uid; }
+    if (!$P['canView'] && $kind !== 'context') { $where[] = "d.created_by=?"; $a[] = $uid; }
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     if ($kw !== '') {
         $like = '%' . $kw . '%';
@@ -178,11 +179,64 @@ if ($action === 'dist') {
     jout(['cells'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/* ---------------------------------------------------------------- 組織處境分析表：整家公司一個年度一張 */
+if ($action === 'ctx_year') {
+    $year = (int)($_GET['year'] ?? 0);
+    if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    $st = $db->prepare("SELECT * FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1");
+    $st->execute([$year]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    $yrs = $db->query("SELECT DISTINCT YEAR(fill_date) y FROM rm_doc WHERE kind='context' AND is_deleted=0 ORDER BY y DESC")->fetchAll(PDO::FETCH_COLUMN);
+    jout(['year'=>$year, 'doc'=>$r ?: null,
+          'items'=>$r ? rmItems($db, (int)$r['doc_id'], rm_settings($db)) : [],
+          'can_edit'=>$r ? rmCanEdit($r, $P) : true,     // 還沒建立：任何在職員工都可以建（建立者之後與管理員可改）
+          'years'=>array_map('intval', $yrs),
+          'print'=>rm_print_meta($db, 'context', $r ? (string)$r['fill_date'] : null)]);
+}
+
+/* ---------------------------------------------------------------- 依系統資料給的建議（不是外部 AI：全部來自本系統既有資料，可驗證、可追溯） */
+if ($action === 'suggest') {
+    $year = (int)($_GET['year'] ?? 0);
+    if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    $out = [];
+    // ① 去年表上的項目（沿用最省事）
+    $st = $db->prepare("SELECT d.doc_id, YEAR(d.fill_date) y FROM rm_doc d WHERE d.kind='context' AND d.is_deleted=0 AND YEAR(d.fill_date)<? ORDER BY d.fill_date DESC LIMIT 1");
+    $st->execute([$year]);
+    if ($prev = $st->fetch(PDO::FETCH_ASSOC)) {
+        $q = $db->prepare("SELECT dimension, stakeholder, needs, issue FROM rm_item WHERE doc_id=? ORDER BY seq");
+        $q->execute([(int)$prev['doc_id']]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $it) {
+            if (!isset(RM_SWOT[(string)$it['dimension']])) continue;
+            $out[] = ['source'=>'去年（' . $prev['y'] . ' 年度）組織處境分析表', 'key'=>$it['dimension'], 'stakeholder'=>(string)$it['stakeholder'],
+                      'needs'=>(string)$it['needs'], 'issue'=>(string)$it['issue'], 'why'=>'去年已列入，確認今年是否仍然適用'];
+        }
+    }
+    // ② 溝通管理：還沒結案的利害關係者反應 → 需求與期望的線索
+    try {
+        $q = $db->query("SELECT party, content, due_date FROM comm_track WHERE is_deleted=0 AND is_closed=0 AND party<>'' ORDER BY react_date DESC, track_id DESC LIMIT 8");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $t) {
+            $out[] = ['source'=>'溝通管理・措施追蹤表（未結案）', 'key'=>'T', 'stakeholder'=>(string)$t['party'], 'needs'=>mb_substr((string)$t['content'], 0, 200),
+                      'issue'=>'', 'why'=>'利害關係者提出且尚未解決的反應，可能是外部威脅或需要把握的機會（請自行判斷象限）'];
+        }
+    } catch (Throwable $e) {}
+    // ③ 品質異常單：近一年出現最多的原因分類 → 內部劣勢線索
+    try {
+        $q = $db->query("SELECT c.name, COUNT(*) n FROM qa_abnormal_cause ac
+                         JOIN qa_abnormal_order o ON o.id=ac.order_id AND o.deleted_at IS NULL AND o.created_at >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                         JOIN qa_cause_cat c ON c.cat_id=ac.cat_id
+                         GROUP BY c.cat_id, c.name ORDER BY n DESC LIMIT 4");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $out[] = ['source'=>'品質異常處理單（近 12 個月）', 'key'=>'W', 'stakeholder'=>'客戶', 'needs'=>'品質穩定、不良品不外流',
+                      'issue'=>'近一年品質異常單中，原因分類「' . $c['name'] . '」出現 ' . $c['n'] . ' 次', 'why'=>'異常重複出現的原因，常是內部需改善的項目'];
+        }
+    } catch (Throwable $e) {}
+    jout(['year'=>$year, 'rows'=>$out]);
+}
+
 /* ---------------------------------------------------------------- 可引用的組織處境議題（風險表挑「引用處境議題」用） */
 if ($action === 'ctx_options') {
     $kw = rmS($_GET['kw'] ?? '', 60);
     $where = ["d.kind='context'", "d.is_deleted=0"]; $a = [];
-    if (!$P['canView']) { $where[] = "d.created_by=?"; $a[] = $uid; }
     if ($kw !== '') {
         $where[] = "(i.issue LIKE ? OR i.stakeholder LIKE ? OR i.needs LIKE ? OR i.dimension LIKE ?)";
         for ($i = 0; $i < 4; $i++) $a[] = '%' . $kw . '%';
@@ -205,16 +259,22 @@ if ($action === 'doc_save') {
     $fillDate = rmDate($_POST['fill_date'] ?? '');
     if (!$fillDate) jerr('請填寫填表日期');
     if ($fillDate > rmToday($db)) jerr('填表日期不可是未來日期');
+    if ($kind === 'context') {
+        // 組織處境分析表：整家公司一個年度只有一張
+        $q = $db->prepare("SELECT doc_id, doc_no FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? AND doc_id<>?");
+        $q->execute([(int)substr($fillDate, 0, 4), $id]);
+        if ($dup = $q->fetch(PDO::FETCH_ASSOC))
+            jerr('「' . substr($fillDate, 0, 4) . '」年度已經有組織處境分析表（單號 ' . $dup['doc_no'] . '），整家公司一個年度只會有一張，請直接開啟那一張編輯。', 409);
+    }
 
     $set = rm_settings($db);
-    $dimOk = array_map('strval', (array)$set['rm_dimensions']);
 
     // 相關部門：只收主檔裡真的存在的部門 id，名稱一律回查主檔（不採信前端送來的文字）
     $deptIds = json_decode((string)($_POST['dept_ids'] ?? '[]'), true);
     $deptIds = is_array($deptIds) ? array_values(array_unique(array_filter(array_map('intval', $deptIds)))) : [];
     $deptMap = [];
     foreach (cm_dept_list($db) as $d) $deptMap[(int)$d['id']] = (string)$d['name'];
-    $deptIds = array_values(array_filter($deptIds, function ($x) use ($deptMap) { return isset($deptMap[$x]); }));
+    $deptIds = $kind === 'context' ? [] : array_values(array_filter($deptIds, function ($x) use ($deptMap) { return isset($deptMap[$x]); }));
     $deptNames = implode('、', array_map(function ($x) use ($deptMap) { return $deptMap[$x]; }, $deptIds));
 
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
@@ -236,18 +296,10 @@ if ($action === 'doc_save') {
             'measure'     => '', 'effect_check' => '', 'ctx_item_id' => null,
         ];
         if ($kind === 'context') {
-            $dim = rmS($it['dimension'] ?? '', 40);
-            if ($dim !== '' && !in_array($dim, $dimOk, true)) {
-                // 構面清單被管理員改過、這列是舊值：允許原值保留（編輯舊單不該因此存不進去），新值一律要在清單內
-                $keep = false;
-                if ($old && !empty($it['item_id'])) {
-                    $q = $db->prepare("SELECT dimension FROM rm_item WHERE item_id=? AND doc_id=?");
-                    $q->execute([(int)$it['item_id'], $id]);
-                    $keep = ((string)$q->fetchColumn() === $dim);
-                }
-                if (!$keep) jerr('第 ' . ($n + 1) . ' 列的構面「' . $dim . '」不在設定的清單內');
-            }
-            $row['dimension'] = $dim !== '' ? $dim : null;
+            $dim = strtoupper(rmS($it['dimension'] ?? '', 2));
+            if (!isset(RM_SWOT[$dim])) jerr('第 ' . ($n + 1) . ' 列沒有指定 SWOT 象限（優勢／劣勢／機會／威脅）');
+            $row['dimension'] = $dim;
+            $row['scope'] = RM_SWOT[$dim]['scope'];            // 內部／外部由象限決定，不採信前端
         } else {
             $row['ro_kind'] = in_array(($it['ro_kind'] ?? ''), array_keys(RM_RO_KINDS), true) ? $it['ro_kind'] : null;
             $row['ro_text'] = rmS($it['ro_text'] ?? '', 4000);
@@ -277,7 +329,7 @@ if ($action === 'doc_save') {
         }
         // 整列都沒填東西就略過（末列多按出來的空白列）
         $blank = $row['stakeholder'] === '' && $row['needs'] === '' && $row['issue'] === '' && $row['ro_text'] === ''
-              && $row['measure'] === '' && $row['effect_check'] === '' && $row['dimension'] === null && $row['severity'] === null;
+              && $row['measure'] === '' && $row['effect_check'] === '' && ($kind === 'context' || $row['dimension'] === null) && $row['severity'] === null;
         if ($blank) continue;
         $row['_old_id'] = (int)($it['item_id'] ?? 0);
         $clean[] = $row;
@@ -378,10 +430,7 @@ if ($action === 'setting_save') {
         [$v, $e] = rm_normalize_levels($arr['rm_levels']); if ($e) jerr($e); $toWrite['rm_levels'] = $v;
     }
     if (array_key_exists('rm_dimensions', $arr)) {
-        $dims = [];
-        foreach ((array)$arr['rm_dimensions'] as $d) { $d = rmS($d, 40); if ($d !== '' && !in_array($d, $dims, true)) $dims[] = $d; }
-        if (!$dims || count($dims) > 12) jerr('構面至少 1 個、最多 12 個');
-        $toWrite['rm_dimensions'] = $dims;
+        [$v, $e] = rm_normalize_swot_names($arr['rm_dimensions']); if ($e) jerr($e); $toWrite['rm_dimensions'] = $v;
     }
     if (array_key_exists('rm_confirm_prefix', $arr)) {
         $p = preg_replace('/[^A-Za-z0-9\-]/', '', rmS($arr['rm_confirm_prefix'], 6));
@@ -399,7 +448,7 @@ if ($action === 'setting_save') {
     }
     foreach ($toWrite as $k => $v) rm_setting_write($db, $k, $v, $uname);
     $set = rm_settings($db);
-    jout(['settings'=>$set, 'levels'=>rm_levels_view($set)]);
+    jout(['settings'=>$set, 'levels'=>rm_levels_view($set), 'swot'=>rm_swot_view($set)]);
 }
 
 if ($action === 'asdoc_save') {

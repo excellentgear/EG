@@ -136,6 +136,45 @@ $perms  = rm_perms($db, $rmUser);
         .ctx-tag { display:inline-block; font-size:11px; background:#F7E0BD; border:1px solid #E0BE86; border-radius:4px; padding:0 5px;
             margin-top:2px; line-height:16px; color:#5b3a1e; }
 
+        /* SWOT 四象限（組織處境分析表） */
+        .swot-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px; }
+        .swot-bar select, .swot-bar input, .swot-bar button { height:30px; font-size:13px; padding:0 10px; border:1px solid #D8BE93;
+            border-radius:4px; background:#fff; color:#5b3a1e; box-sizing:border-box; }
+        .swot-bar button { cursor:pointer; }
+        .swot-bar button:hover { background:#F7E0BD; }
+        .swot-bar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .swot-status { font-size:12.5px; color:#8a6d45; margin:0 0 8px; }
+        .swot-status.warn { color:#C4442D; }
+        .swot-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; align-items:start; }
+        .swot-q { border:2px solid var(--c); border-radius:8px; background:#fff; min-width:0; overflow:hidden; }
+        .swot-h { background:var(--c); color:var(--t); padding:7px 12px; font-size:15px; font-weight:bold; display:flex; align-items:center; gap:8px; }
+        .swot-h small { font-weight:normal; font-size:11.5px; opacity:.9; }
+        .swot-h .cnt { margin-left:auto; font-size:12px; font-weight:normal; }
+        .swot-body { padding:8px 10px; }
+        .swot-purpose { font-size:12px; color:#8a6d45; margin:0 0 6px; }
+        .swot-it { position:relative; border:1px solid #E8D5B5; border-radius:6px; background:#FFFDF8; padding:6px 30px 6px 30px; margin-bottom:6px; }
+        .swot-it .no { position:absolute; left:7px; top:7px; width:18px; height:18px; border-radius:9px; background:var(--c); color:var(--t);
+            font-size:11px; line-height:18px; text-align:center; }
+        .swot-it .del { position:absolute; right:5px; top:4px; border:none; background:none; color:#DD5138; cursor:pointer; font-size:14px; }
+        .swot-it label { display:block; font-size:11.5px; color:#8a6d45; margin:3px 0 1px; font-weight:bold; }
+        .swot-it input, .swot-it textarea { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:4px 7px; font-size:13px;
+            background:#fff; color:#5b3a1e; box-sizing:border-box; }
+        .swot-it textarea { min-height:46px; resize:vertical; }
+        .swot-it.ro input, .swot-it.ro textarea { background:#F5EEE2; }
+        .swot-guide { display:none; margin-top:6px; border-top:1px dashed #E0BE86; padding-top:6px; font-size:12.5px; color:#5b3a1e; }
+        .show-guide .swot-guide { display:block; }
+        .swot-guide ul { margin:2px 0 6px; padding-left:18px; }
+        .swot-guide .g-h { color:#8A5A2B; font-weight:bold; font-size:12px; }
+        .swot-ex { display:block; width:100%; text-align:left; margin:3px 0; padding:4px 8px; border:1px dashed #D8BE93; border-radius:6px;
+            background:#FDF8EF; color:#5b3a1e; font-size:12px; line-height:1.5; cursor:pointer; }
+        .swot-ex:hover { background:#F7E0BD; }
+        .swot-ex b { color:#8A5A2B; }
+        .sg-row { border:1px solid #EADFC8; border-radius:6px; padding:6px 9px; margin-bottom:6px; background:#FFFDF8; }
+        .sg-row .src { font-size:11.5px; color:#8a6d45; }
+        .sg-row .why { font-size:11.5px; color:#8a6d45; }
+        .sg-row.done { opacity:.55; }
+        @media (max-width:1100px) { .swot-grid { grid-template-columns:minmax(0,1fr); } }
+
         /* 評級對照矩陣 */
         table.mx { border-collapse:collapse; font-size:12.5px; margin:6px 0; }
         table.mx th, table.mx td { border:1px solid #EADFC8; padding:5px 9px; text-align:center; }
@@ -171,7 +210,7 @@ $perms  = rm_perms($db, $rmUser);
         </div>
 
         <div class="rm-tabs" id="mainTabs">
-            <span class="rm-tab on" data-tab="context"><span class="tn"></span><small>組織內外部議題與利害關係者需求</small></span>
+            <span class="rm-tab on" data-tab="context"><span class="tn"></span><small>SWOT　整家公司一個年度一張</small></span>
             <span class="rm-tab" data-tab="risk"><span class="tn"></span><small>風險評估與因應措施</small></span>
         </div>
 
@@ -220,6 +259,13 @@ $perms  = rm_perms($db, $rmUser);
     </div>
 </div></div>
 
+<!-- ============ 依系統資料建議（組織處境分析表） ============ -->
+<div class="rm-mask" id="sugMask"><div class="rm-modal" style="width:860px;">
+    <div class="rm-mhd"><span>依系統資料建議（供參考，加入後可再修改）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
+    <div class="rm-mbd"><div class="note-box" style="margin-bottom:8px;">下面的建議全部來自本系統既有資料（去年的表、溝通管理未結案的反應、近一年品質異常單的主要原因），<b>不是憑空產生的</b>，每一條都標明來源；是不是真的要列入、放在哪個象限，由您判斷。</div>
+        <div id="sugBody"></div></div>
+</div></div>
+
 <!-- ============ 評級對照表 ============ -->
 <div class="rm-mask" id="ratingMask"><div class="rm-modal" style="width:860px;">
     <div class="rm-mhd"><span>風險管理準則（2-GM-03 表A～表D，由模組設定即時產生）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
@@ -248,8 +294,14 @@ $perms  = rm_perms($db, $rmUser);
                 <select id="setMethod" style="max-width:320px;"><option value="multiply">影響等級 × 可能性等級</option><option value="add">影響等級 ＋ 可能性等級</option><option value="max">取影響與可能性較大者</option></select></div>
             <div class="hint" style="margin-bottom:4px;">下表是依上面三項設定即時預覽的風險分布（尚未儲存前就能看到結果）：</div>
             <div id="setDist"></div></div>
-        <div class="set-sec"><h5>組織處境分析表的構面（一行一個）</h5>
-            <textarea id="setDims" style="width:100%;min-height:90px;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;box-sizing:border-box;"></textarea></div>
+        <div class="set-sec"><h5>組織處境分析表（SWOT）四象限名稱</h5>
+            <div class="fgrid" style="grid-template-columns:repeat(4, minmax(0,1fr));">
+                <div class="fld"><label>S（內部）</label><input type="text" id="setSwot0" maxlength="20"></div>
+                <div class="fld"><label>W（內部）</label><input type="text" id="setSwot1" maxlength="20"></div>
+                <div class="fld"><label>O（外部）</label><input type="text" id="setSwot2" maxlength="20"></div>
+                <div class="fld"><label>T（外部）</label><input type="text" id="setSwot3" maxlength="20"></div>
+            </div>
+            <div class="hint">四象限固定為優勢(S)、劣勢(W)、機會(O)、威脅(T)，S、W 屬內部、O、T 屬外部；這裡只改顯示名稱，不影響既有資料。</div></div>
         <div class="set-sec"><h5>風險確認編號前綴</h5>
             <div class="fld"><input type="text" id="setPrefix" maxlength="6" style="max-width:140px;"></div>
             <div class="hint">編號格式：前綴＋填表年度＋流水號，例如 R2026-001。已配發的編號不會因設定變動而改變。</div></div>
@@ -264,7 +316,7 @@ $perms  = rm_perms($db, $rmUser);
     <div class="rm-mhd"><span>使用說明　風險與機會管理</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
     <div class="rm-mbd help-doc">
         <h4>這一頁在做什麼</h4>
-        <ul><li><b>組織處境分析表</b>：記錄公司內外部議題、相關利害關係者與他們的需求與期望，是風險與機會的來源。</li>
+        <ul><li><b>組織處境分析表</b>：整家公司<b>一個年度只有一張</b>，用 SWOT 四象限（優勢／劣勢／機會／威脅）記錄內外部議題、相關利害關係者與他們的需求與期望，是風險與機會的來源。每個象限都有「填寫提示」與「範例」，按「依系統資料建議」可帶入去年內容、溝通管理未結案的反應、品質異常的主要原因等線索。</li>
             <li><b>風險與機會因應措施管制表</b>：把議題整理成風險／機會，評估嚴重度與頻率，自動算出風險等級，並記錄因應措施與成效確認（原「策略行動措施管制表」與「風險評估及處理表」合併為這一張）。</li>
             <li>利害關係者的溝通記錄、措施追蹤與溝通管制在「溝通管理」頁，按上方「前往溝通管理」即可轉跳。</li></ul>
         <h4>操作步驟</h4>
@@ -296,6 +348,7 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 var API = '../../src/store/RiskMgmt_API.php';
 var META = null, CSRF = '';
 var KINDS = ['context', 'risk'];
+var LISTKINDS = ['risk'];       // 組織處境分析表是整家公司一個年度一張，不用清單，直接開 SWOT 版面
 var STATE = {context:{page:1, per:20}, risk:{page:1, per:20}};
 var CUR = null;            // 目前開啟的表單 {kind, doc_id, can_edit, dept_ids, print}
 var CTXROW = null;         // 正在挑「引用處境」的那一列
@@ -390,6 +443,180 @@ function lvBadge(lv, withScore){
         + (withScore ? '（' + lv.score + '）' : '') + '</span>';
 }
 
+/* ================= 組織處境分析表（SWOT 看板，整家公司一個年度一張） ================= */
+var BOARD = {year:0, doc:null, can_edit:true, dirty:false, years:[]};
+var SWOTCOL = {S:['#F0A24B', '#5b3a1e'], W:['#DD5138', '#ffffff'], O:['#E8C98F', '#5b3a1e'], T:['#8B2E1E', '#ffffff']};   // 固定暖色盤，名稱另外有文字，不靠顏色辨識
+function swotMeta(key){ var m = null; $.each(META.swot, function(_, x){ if (x.key === key) m = x; }); return m; }
+function swotName(key){ var m = swotMeta(key); return m ? m.name : (key || ''); }
+function boardHtml(){
+    var h = '<div class="swot-bar">'
+        + '<label>年度</label><select id="bYear" style="width:92px;"></select>'
+        + '<label>填表日期</label><input type="date" id="bDate">'
+        + '<span style="flex:1 1 20px;"></span>'
+        + '<button id="bSuggest"><i class="fa fa-lightbulb-o"></i> 依系統資料建議</button>'
+        + '<button id="bGuide"><i class="fa fa-question-circle"></i> 填寫提示與範例</button>'
+        + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
+        + '<button id="bSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>'
+        + '</div><div class="swot-status" id="bStatus"></div><span class="err" id="bErr"></span><div class="swot-grid">';
+    $.each(META.swot, function(_, m){
+        var c = SWOTCOL[m.key];
+        h += '<div class="swot-q" data-key="' + m.key + '" style="--c:' + c[0] + ';--t:' + c[1] + ';">'
+          + '<div class="swot-h"><span class="nm">' + esc(m.name) + '</span><small>' + m.en + '・' + (m.scope === 'internal' ? '內部' : '外部') + '</small><span class="cnt"></span></div>'
+          + '<div class="swot-body"><div class="swot-purpose">' + esc(META.guide[m.key].purpose) + '</div>'
+          + '<div class="swot-list"></div>'
+          + '<button type="button" class="b-mini warm" data-addswot="' + m.key + '"><i class="fa fa-plus"></i> 新增一條</button>'
+          + '<div class="swot-guide"><div class="g-h">想想看（填寫提示）</div><ul>'
+          + $.map(META.guide[m.key].ask, function(a){ return '<li>' + esc(a) + '</li>'; }).join('') + '</ul>'
+          + '<div class="g-h">範例（點一下加入，再改成自己公司的情況）</div>'
+          + $.map(META.guide[m.key].ex, function(e, i){
+              return '<button type="button" class="swot-ex" data-ex="' + m.key + ':' + i + '"><b>' + esc(e.stakeholder) + '</b>｜' + esc(e.needs) + '<br>' + esc(e.issue) + '</button>'; }).join('')
+          + '</div></div></div>';
+    });
+    return h + '</div>';
+}
+function itemHtml(it, n){
+    return '<div class="swot-it" data-item-id="' + (it.item_id || 0) + '"><span class="no">' + n + '</span>'
+        + '<button type="button" class="del" data-delswot title="刪除這一條"><i class="fa fa-times"></i></button>'
+        + '<label>利害關係者</label><input type="text" data-f="stakeholder" value="' + esc(it.stakeholder) + '" maxlength="200">'
+        + '<label>需求與期望</label><textarea data-f="needs">' + esc(it.needs) + '</textarea>'
+        + '<label>議題描述</label><textarea data-f="issue">' + esc(it.issue) + '</textarea></div>';
+}
+function renumberBoard(){
+    $('.swot-q').each(function(){
+        var q = $(this), cards = q.find('.swot-it');
+        cards.each(function(i){ $(this).find('.no').text(i + 1); });
+        q.find('.cnt').text(cards.length + ' 條');
+    });
+}
+function addSwot(key, it, focus){
+    var q = $('.swot-q[data-key="' + key + '"]'), n = q.find('.swot-it').length + 1;
+    q.find('.swot-list').append(itemHtml(it || {}, n));
+    renumberBoard(); markDirty();
+    if (focus) q.find('.swot-it:last [data-f=stakeholder]').focus();
+}
+function markDirty(){ BOARD.dirty = true; $('#bStatus').addClass('warn').text('內容尚未儲存，記得按右上「儲存」。'); }
+function setBoardEditable(on){
+    $('#pane_context .swot-it').toggleClass('ro', !on);
+    $('#pane_context .swot-it input, #pane_context .swot-it textarea').prop('readonly', !on);
+    $('#pane_context [data-addswot], #pane_context [data-delswot], #pane_context .swot-ex, #bSave, #bSuggest, #bDate').toggle(on);
+}
+function loadBoard(year){
+    if (!year) year = +META.today.slice(0, 4);
+    get({action:'ctx_year', year:year}, function(res){
+        BOARD.year = res.year; BOARD.doc = res.doc; BOARD.can_edit = res.can_edit; BOARD.dirty = false; BOARD.years = res.years;
+        var sel = $('#bYear').empty(), cy = +META.today.slice(0, 4);
+        for (var y = cy; y >= cy - 8; y--) sel.append('<option value="' + y + '"' + (y === res.year ? ' selected' : '') + '>' + y + '</option>');
+        $('.swot-list').empty();
+        $.each(res.items, function(_, it){ if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
+        renumberBoard();
+        $('#bDate').val(res.doc ? res.doc.fill_date : (res.year === cy ? META.today : res.year + '-12-31'));
+        $('#bErr').text('');
+        $('#bStatus').removeClass('warn').text(res.doc
+            ? '單號 ' + res.doc.doc_no + '　填表人 ' + (res.doc.created_by_name || '') + '　最後更新 ' + dispDate((res.doc.updated_at || '').slice(0, 10))
+              + (res.can_edit ? '' : '　（只有建立者與管理員可以修改）')
+            : '尚未建立 ' + res.year + ' 年度組織處境分析表：填寫後按「儲存」即建立（整家公司一個年度只有一張）。');
+        $('#pane_context').toggleClass('show-guide', !res.items.length);
+        $('#bYear').prop('disabled', false);
+        setBoardEditable(res.can_edit);
+        $('#bPrint').toggle(!!res.doc);
+        // 還沒建立且是未來年度：不可建（填表日期不可是未來）
+        if (!res.doc && res.year > cy) setBoardEditable(false);
+    });
+}
+function addSwotQuiet(key, it){
+    var q = $('.swot-q[data-key="' + key + '"]'), n = q.find('.swot-it').length + 1;
+    q.find('.swot-list').append(itemHtml(it, n));
+}
+function collectBoard(){
+    var out = [];
+    $('.swot-q').each(function(){
+        var key = $(this).data('key');
+        $(this).find('.swot-it').each(function(){
+            out.push({item_id:+$(this).data('item-id') || 0, dimension:key,
+                      stakeholder:$(this).find('[data-f=stakeholder]').val(), needs:$(this).find('[data-f=needs]').val(), issue:$(this).find('[data-f=issue]').val()});
+        });
+    });
+    return out;
+}
+$(document).on('click', '[data-addswot]', function(){ addSwot($(this).data('addswot'), {}, true); });
+$(document).on('click', '[data-delswot]', function(){
+    var card = $(this).closest('.swot-it');
+    var empty = !$.trim(card.find('[data-f=stakeholder]').val() + card.find('[data-f=needs]').val() + card.find('[data-f=issue]').val());
+    if (!empty && !confirm('確定要刪除這一條嗎？')) return;
+    card.remove(); renumberBoard(); markDirty();
+});
+$(document).on('input', '.swot-it input, .swot-it textarea', function(){ if (!BOARD.dirty) markDirty(); });
+$(document).on('click', '[data-ex]', function(){
+    var p = String($(this).data('ex')).split(':'), e = META.guide[p[0]].ex[+p[1]];
+    addSwot(p[0], {stakeholder:e.stakeholder, needs:e.needs, issue:e.issue}, false);
+});
+$(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); });
+$(document).on('change', '#bYear', function(){
+    var y = +$(this).val();
+    if (BOARD.dirty && !confirm('目前的內容還沒儲存，切換年度會放棄這些修改。確定切換嗎？')){ $(this).val(BOARD.year); return; }
+    loadBoard(y);
+});
+$(document).on('click', '#bSave', function(){
+    var date = $('#bDate').val(); $('#bErr').text('');
+    if (!date){ $('#bErr').text('請填寫填表日期'); return; }
+    if (date > META.today){ $('#bErr').text('填表日期不可是未來日期'); return; }
+    if (+date.slice(0, 4) !== BOARD.year){ $('#bErr').text('填表日期必須落在 ' + BOARD.year + ' 年度內（整家公司一個年度一張）'); return; }
+    var items = collectBoard(), bad = false;
+    $.each(items, function(_, it){ if (!$.trim(it.stakeholder + it.needs + it.issue)) return; });
+    if (!$.grep(items, function(it){ return $.trim(it.stakeholder + it.needs + it.issue); }).length){ $('#bErr').text('至少要填寫一條內容'); return; }
+    post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items)}, function(){ loadBoard(BOARD.year); });
+});
+/* ---------- 依系統資料建議 ---------- */
+var SUG = [];
+$(document).on('click', '#bSuggest', function(){
+    get({action:'suggest', year:BOARD.year}, function(res){
+        SUG = res.rows;
+        var b = $('#sugBody').empty();
+        if (!SUG.length) b.html('<div class="rm-empty">目前系統裡沒有可參考的資料（沒有去年的表、沒有未結案的溝通反應、近一年也沒有品質異常單）。可改用「填寫提示與範例」。</div>');
+        var last = '';
+        $.each(SUG, function(i, r){
+            if (r.source !== last){ b.append('<h4 style="color:#8A5A2B;font-size:14px;margin:10px 0 4px;">' + esc(r.source) + '</h4>'); last = r.source; }
+            var opts = $.map(META.swot, function(m){ return '<option value="' + m.key + '"' + (m.key === r.key ? ' selected' : '') + '>' + esc(m.name) + '</option>'; }).join('');
+            b.append('<div class="sg-row" data-sg="' + i + '"><div><b>' + esc(r.stakeholder || '（未填利害關係者）') + '</b>｜' + esc(r.needs) + (r.issue ? '<br>' + esc(r.issue) : '') + '</div>'
+                + '<div class="why">' + esc(r.why) + '</div>'
+                + '<div style="margin-top:4px;">加入到 <select class="sg-key">' + opts + '</select> <button type="button" class="b-mini warm" data-sgadd="' + i + '">加入</button></div></div>');
+        });
+        openMask('sugMask');
+    });
+});
+$(document).on('click', '[data-sgadd]', function(){
+    var i = +$(this).data('sgadd'), r = SUG[i], row = $(this).closest('.sg-row');
+    addSwot(row.find('.sg-key').val(), {stakeholder:r.stakeholder, needs:r.needs, issue:r.issue}, false);
+    row.addClass('done'); $(this).prop('disabled', true).text('已加入');
+});
+/* ---------- 列印（SWOT 版面） ---------- */
+$(document).on('click', '#bPrint', function(){
+    if (!BOARD.doc) { alert('請先儲存後再列印'); return; }
+    get({action:'ctx_year', year:BOARD.year}, function(res){
+        var d = res.doc, meta = res.print, byKey = {S:[], W:[], O:[], T:[]};
+        $.each(res.items, function(_, it){ if (byKey[it.dimension]) byKey[it.dimension].push(it); });
+        var quad = function(key){
+            var m = swotMeta(key), rows = '';
+            $.each(byKey[key], function(i, it){
+                rows += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(it.stakeholder) + '</td><td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td></tr>';
+            });
+            if (!rows) rows = '<tr><td colspan="4">　</td></tr>';
+            return '<td class="qd"><div class="qh">' + esc(m.name) + '　' + m.en + '（' + (m.scope === 'internal' ? '內部' : '外部') + '）</div>'
+                + '<table class="pt in"><colgroup><col style="width:28px;"><col style="width:90px;"><col style="width:30%;"><col></colgroup>'
+                + '<thead><tr><th>編號</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + rows + '</tbody></table></td>';
+        };
+        var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName('context')) + '</div></div>'
+            + '<div class="pt-meta"><span>年度：' + BOARD.year + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';
+        var body = head + '<table class="grid"><tr>' + quad('S') + quad('W') + '</tr><tr>' + quad('O') + quad('T') + '</tr></table>';
+        var css = 'table.grid{width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;}table.grid>tbody>tr>td.qd{vertical-align:top;border:2px solid #333;padding:0;}'
+            + '.qh{background:#EFEFEF;font-weight:bold;font-size:13px;padding:4px 8px;border-bottom:1px solid #333;}table.pt.in{margin:0;font-size:11px;}table.pt.in th,table.pt.in td{padding:3px 4px;}'
+            + 'table.grid>tbody>tr{page-break-inside:avoid;}';
+        egPrintWindow(meta.doc_name || kindName('context'), body, meta.doc_no, css);
+        EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName('context')) + ' ' + BOARD.year + ' 年度 ' + d.doc_no, doc_kind:'form', ref_table:'rm_doc', ref_id:d.doc_id});
+    });
+});
+window.addEventListener('beforeunload', function(e){ if (BOARD.dirty){ e.preventDefault(); e.returnValue = ''; } });
+
 /* ================= 分頁骨架 ================= */
 function paneHtml(k){
     var isRisk = k === 'risk';
@@ -408,7 +635,7 @@ function paneHtml(k){
 }
 function fillYears(){
     var y = new Date().getFullYear();
-    KINDS.forEach(function(k){
+    LISTKINDS.forEach(function(k){
         var s = $('[data-year="' + k + '"]').empty().append('<option value="0">全部</option>');
         for (var i = y + 1; i >= y - 8; i--) s.append('<option value="' + i + '"' + (i === y ? ' selected' : '') + '>' + i + '</option>');
     });
@@ -449,7 +676,7 @@ $('#mainTabs').on('click', '.rm-tab', function(){
     var k = $(this).data('tab');
     $('#mainTabs .rm-tab').removeClass('on'); $(this).addClass('on');
     $('.rm-pane').removeClass('on'); $('#pane_' + k).addClass('on');
-    loadList(k);                           // 切換分頁一律刷新（點開即刷新）
+    if (k === 'context') loadBoard(BOARD.year); else loadList(k);       // 切換分頁一律刷新（點開即刷新）
 });
 
 /* ================= 表單編輯 ================= */
@@ -599,7 +826,7 @@ $(document).on('click', '[data-open]', function(){ openDoc($(this).data('kind'),
 $(document).on('click', '[data-del]', function(){
     var id = +$(this).data('del');
     if (!confirm('確定要刪除這張表單嗎？刪除後清單與風險表引用都不會再出現。')) return;
-    post({action:'doc_delete', doc_id:id}, function(){ KINDS.forEach(function(k){ loadList(k); }); });
+    post({action:'doc_delete', doc_id:id}, function(){ LISTKINDS.forEach(function(k){ loadList(k); }); });
 });
 
 function collectItems(){
@@ -639,7 +866,7 @@ function loadCtx(){
         var b = $('#ctxBody').empty();
         if (!res.rows.length) b.append('<tr><td colspan="6" class="rm-empty">沒有可引用的組織處境議題（請先在「' + esc(kindName('context')) + '」分頁建立）</td></tr>');
         $.each(res.rows, function(_, r){
-            b.append('<tr><td>' + esc(r.doc_no) + '</td><td>' + esc(META.scopes[r.scope] || '') + '</td><td>' + esc(r.dimension) + '</td>'
+            b.append('<tr><td>' + esc(r.doc_no) + '</td><td>' + esc(META.scopes[r.scope] || '') + '</td><td>' + esc(swotName(r.dimension)) + '</td>'
                 + '<td class="l">' + esc(r.stakeholder) + '</td><td class="l">' + esc(r.issue) + '</td>'
                 + '<td><button class="b-mini warm" data-usectx="' + r.item_id + '">選用</button></td></tr>')
               .find('button:last').data('row', r);
@@ -818,7 +1045,7 @@ function renderSet(){
     var tk = '<table class="rm-table fld"><thead><tr><th style="width:74px;">等級</th><th style="width:130px;">可能性分類</th><th style="width:120px;">發生機率百分比</th><th>詳細的描述</th><th style="width:44px;"></th></tr></thead><tbody>';
     $.each(S.rm_likelihood, function(_, r){ tk += likRowHtml(r); });
     $('#setLik').html(tk + '</tbody></table>');
-    $('#setMethod').val(S.rm_method); $('#setDims').val(S.rm_dimensions.join('\n')); $('#setPrefix').val(S.rm_confirm_prefix);
+    $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix);
     var b = $('#setAsdocBody').empty();
     $.each(META.asdoc, function(k, v){
         var cur = v.doc ? (v.doc.doc_no + '（' + v.doc.doc_name + '）') : '尚未綁定　建議：' + v.fallback;
@@ -866,7 +1093,7 @@ $('#btnSetSave').on('click', function(){
         return {v:r.v, label:r.label, cells:$.map(IMPCOLS, function(c){ return r.byName[c] || ''; })};
     });
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
-             rm_dimensions:$('#setDims').val().split('\n'), rm_confirm_prefix:$('#setPrefix').val()};
+             rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val()};
     var send = function(force){
         $('#eSet').text('');
         NProgress.start();
@@ -874,9 +1101,9 @@ $('#btnSetSave').on('click', function(){
         $.ajax({url:API, method:'POST', dataType:'json', global:false, data:{action:'setting_save', csrf:CSRF, settings:JSON.stringify(s), force:force ? 1 : 0}})
          .done(function(res){
             NProgress.done();
-            META.settings = res.settings; META.levels = res.levels;
+            META.settings = res.settings; META.levels = res.levels; META.swot = res.swot;
             alert('設定已儲存'); closeMask('setMask');
-            KINDS.forEach(function(k){ loadList(k); });
+            LISTKINDS.forEach(function(k){ loadList(k); }); loadBoard(BOARD.year);
          })
          .fail(function(xhr){
             NProgress.done();
@@ -889,7 +1116,7 @@ $('#btnSetSave').on('click', function(){
 });
 
 /* ================= 列印（ai-rules/16；比照紙本版面） ================= */
-function egPrintWindow(title, bodyHtml, docNo){
+function egPrintWindow(title, bodyHtml, docNo, extraCss){
     var asHtml = esc(String(docNo || ''));
     var css = '@page{size:A4 landscape;margin:0;}html,body{margin:0;padding:0;}'
         + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:10mm 8mm 12mm;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
@@ -900,7 +1127,7 @@ function egPrintWindow(title, bodyHtml, docNo){
         + 'table.pt thead{display:table-header-group;}table.pt tr{page-break-inside:avoid;}'
         + 'table.pt th,table.pt td{border:1px solid #333;padding:4px 5px;text-align:center;word-wrap:break-word;overflow-wrap:break-word;line-height:1.4;vertical-align:middle;}'
         + 'table.pt th{background:#EFEFEF;font-weight:bold;}table.pt td.l{text-align:left;vertical-align:top;white-space:pre-wrap;}'
-        + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}';
+        + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}' + (extraCss || '');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     // 超過一頁才加左下角頁碼；量高度要在「列印寬度」下量（視窗寬度不同高度就不同）
@@ -975,13 +1202,13 @@ get({action:'meta'}, function(m){
     META = m; CSRF = m.csrf;
     $('#roleLabel').text(roleLabel());
     $('#btnSetting').toggle(!!m.perms.canAdmin);
-    KINDS.forEach(function(k){ $('#pane_' + k).html(paneHtml(k)); });
-    fillYears(); renderTabNames(); renderAsdocHint(); renderRoleHelp();
+    $('#pane_context').html(boardHtml()); $('#pane_risk').html(paneHtml('risk'));
+    fillYears(); BOARD.year = +m.today.slice(0, 4); renderTabNames(); renderAsdocHint(); renderRoleHelp();
     var q = {};
     location.search.replace(/^\?/, '').split('&').forEach(function(kv){ if (!kv) return; var p = kv.split('='); q[decodeURIComponent(p[0])] = decodeURIComponent(p[1] || ''); });
     var startTab = q.tab === 'risk' ? 'risk' : 'context';
     $('#mainTabs .rm-tab[data-tab="' + startTab + '"]').trigger('click');
-    if (+q.doc) openDoc(startTab, +q.doc);
+    if (+q.doc && startTab === 'risk') openDoc(startTab, +q.doc);
 });
 </script>
 <?php endif; ?>

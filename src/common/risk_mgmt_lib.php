@@ -32,6 +32,13 @@ const RM_ASDOC_MODULES = [
 const RM_SETTING_GROUP = 'RISK_MGMT';
 const RM_SCOPES   = ['internal' => '內部', 'external' => '外部'];
 const RM_RO_KINDS = ['risk' => '風險', 'opportunity' => '機會'];
+/** SWOT 四象限：key 固定（資料存 key，不存名稱，名稱日後改了舊資料不會對不上）；內部／外部由 key 決定，不給使用者手選 */
+const RM_SWOT = [
+    'S' => ['scope' => 'internal', 'en' => 'Strengths'],
+    'W' => ['scope' => 'internal', 'en' => 'Weaknesses'],
+    'O' => ['scope' => 'external', 'en' => 'Opportunities'],
+    'T' => ['scope' => 'external', 'en' => 'Threats'],
+];
 /** 風險等級的固定暖色盤（ai-rules/10）：依「等級由低到高的順位」取色，不是設定值；超過 4 級時最高色沿用 */
 const RM_LEVEL_COLORS = [
     ['bg' => '#F7E0BD', 'fg' => '#5b3a1e'],
@@ -275,6 +282,75 @@ function rm_normalize_levels($raw): array
     }
     usort($out, function ($a, $b) { return $a['min'] <=> $b['min']; });
     return [$out, ''];
+}
+
+/** SWOT 四象限名稱（依 S,W,O,T 順序各一個，不可空白） */
+function rm_normalize_swot_names($raw): array
+{
+    $keys = array_keys(RM_SWOT);
+    if (!is_array($raw) || count($raw) !== 4) return [[], 'SWOT 要剛好 4 個名稱（優勢、劣勢、機會、威脅各一個）'];
+    $out = [];
+    foreach (array_values($raw) as $i => $n) {
+        $n = mb_substr(trim((string)$n), 0, 20);
+        if ($n === '') return [[], 'SWOT「' . $keys[$i] . '」的名稱不可空白'];
+        $out[] = $n;
+    }
+    return [$out, ''];
+}
+
+/** 畫面用：[{key,name,en,scope}]（名稱取自設定） */
+function rm_swot_view(array $set): array
+{
+    $names = array_values((array)$set['rm_dimensions']);
+    $out = []; $i = 0;
+    foreach (RM_SWOT as $k => $m) { $out[] = ['key'=>$k, 'name'=>(string)($names[$i] ?? $k), 'en'=>$m['en'], 'scope'=>$m['scope']]; $i++; }
+    return $out;
+}
+
+/**
+ * 填寫提示與範例（內建；範例為製造業／AS9100 常見情境，只是起點，使用者按一下加入後可自行修改）。
+ * 'ask' ＝ 這個象限該問自己的問題；'ex' ＝ 範例條目（利害關係者／需求與期望／議題描述）
+ */
+function rm_swot_guide(): array
+{
+    return [
+        'S' => [
+            'purpose' => '公司內部做得好、可以拿來競爭或降低風險的條件。',
+            'ask' => ['我們的技術、設備、人才有哪些別人比不上的？', '客戶最常稱讚我們什麼？', '哪些管理制度（驗證、系統、SOP）已經運作良好？', '財務、交期、品質哪一項長期穩定？'],
+            'ex' => [
+                ['stakeholder'=>'客戶', 'needs'=>'穩定的品質與準時交貨', 'issue'=>'已建立 AS9100 品質系統並通過驗證，品質與交期績效穩定'],
+                ['stakeholder'=>'客戶', 'needs'=>'高精度齒輪與特殊規格加工能力', 'issue'=>'具備齒輪、花鍵一貫加工能力，可承接少量多樣訂單'],
+                ['stakeholder'=>'員工', 'needs'=>'穩定的工作與學習機會', 'issue'=>'核心技術人員資歷深，現場經驗豐富'],
+            ],
+        ],
+        'W' => [
+            'purpose' => '公司內部不足、可能拖累目標達成的條件。',
+            'ask' => ['哪些流程常出狀況（異常單、客訴、延遲）？', '人員是否有斷層、過度依賴特定人？', '設備是否老舊、校驗或保養是否落後？', '哪些資訊還靠人工紀錄、容易漏或錯？'],
+            'ex' => [
+                ['stakeholder'=>'員工', 'needs'=>'完整的訓練與經驗傳承', 'issue'=>'資深技術人員即將退休，關鍵製程經驗傳承不足'],
+                ['stakeholder'=>'客戶', 'needs'=>'量測數據可靠、可追溯', 'issue'=>'部分量測設備老舊，校驗週期管理不一致'],
+                ['stakeholder'=>'供應商', 'needs'=>'明確的訂單預告與規格', 'issue'=>'生產排程變動頻繁，委外廠商交期不易配合'],
+            ],
+        ],
+        'O' => [
+            'purpose' => '公司外部、對我們有利的趨勢或事件，可以主動把握。',
+            'ask' => ['客戶有沒有新的需求或新市場（例如電動車、航太、醫材）？', '政府有沒有補助、法規變化對我們有利？', '技術或設備有沒有新的選擇可以降低成本？', '競爭對手有沒有退出或出現空缺？'],
+            'ex' => [
+                ['stakeholder'=>'客戶', 'needs'=>'一站式齒輪加工與短交期', 'issue'=>'電動車減速機與機器人關節需求成長，新客戶詢價增加'],
+                ['stakeholder'=>'政府／主管機關', 'needs'=>'節能與設備升級', 'issue'=>'政府推動設備汰舊換新與智慧製造補助，可申請'],
+                ['stakeholder'=>'客戶', 'needs'=>'供應鏈在地化', 'issue'=>'客戶為分散風險，增加國內供應商比重'],
+            ],
+        ],
+        'T' => [
+            'purpose' => '公司外部、可能對我們不利的趨勢或事件，需要預先防範。',
+            'ask' => ['原物料、能源價格或供貨有沒有不穩定？', '客戶有沒有要求降價、縮短交期或提高驗證門檻？', '法規、環保、關稅有沒有新增要求？', '競爭對手或替代技術有沒有帶來壓力？'],
+            'ex' => [
+                ['stakeholder'=>'供應商', 'needs'=>'合理的價格與付款條件', 'issue'=>'特殊鋼材與熱處理委外價格上漲、交期不穩'],
+                ['stakeholder'=>'客戶', 'needs'=>'更短交期與更低成本', 'issue'=>'客戶要求縮短交期並持續議價，產能與利潤受壓'],
+                ['stakeholder'=>'主管機關／驗證機構', 'needs'=>'符合法規與驗證要求', 'issue'=>'環保與職安法規趨嚴，需持續投入合規成本'],
+            ],
+        ],
+    ];
 }
 
 /* ============================ 風險等級（唯一實作；前端只拿設定在畫面預覽，存檔以此為準） ============================ */
