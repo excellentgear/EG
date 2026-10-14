@@ -93,15 +93,13 @@ function rmItems(PDO $db, int $docId, array $set): array {
 /* ---------------------------------------------------------------- meta */
 if ($action === 'meta') {
     $set = rm_settings($db);
-    $lvls = [];
-    foreach ($set['rm_levels'] as $i => $lv) $lvls[] = array_merge($lv, rm_level_color($i));
     jout([
         'csrf'     => (string)$_SESSION['rm_csrf'],
         'perms'    => $P,
         'me'       => ['id'=>$uid, 'name'=>$uname],
         'today'    => rmToday($db),
         'settings' => $set,
-        'levels'   => $lvls,
+        'levels'   => rm_levels_view($set),
         'asdoc'    => rm_asdoc_all($db),
         'asdoc_list' => $P['canAdmin'] ? eg_asdoc_list($db) : [],
         'scopes'   => RM_SCOPES, 'ro_kinds' => RM_RO_KINDS,
@@ -168,6 +166,18 @@ if ($action === 'doc_get') {
           'print'=>rm_print_meta($db, $r['kind'], (string)$r['fill_date'])]);
 }
 
+/* ---------------------------------------------------------------- 風險分布（表D）：各格實際有幾筆風險 */
+if ($action === 'dist') {
+    $where = ["d.kind='risk'", "d.is_deleted=0", "i.severity IS NOT NULL"]; $a = [];
+    if (!$P['canView']) { $where[] = "d.created_by=?"; $a[] = $uid; }
+    $year = (int)($_GET['year'] ?? 0);
+    if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
+    $st = $db->prepare("SELECT i.severity, i.frequency, COUNT(*) c FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id
+                        WHERE " . implode(' AND ', $where) . " GROUP BY i.severity, i.frequency");
+    $st->execute($a);
+    jout(['cells'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
 /* ---------------------------------------------------------------- 可引用的組織處境議題（風險表挑「引用處境議題」用） */
 if ($action === 'ctx_options') {
     $kw = rmS($_GET['kw'] ?? '', 60);
@@ -212,8 +222,8 @@ if ($action === 'doc_save') {
     $items = array_slice($items, 0, 200);
 
     $clean = []; $seq = 0;
-    $sevOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_severity']);
-    $frqOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_frequency']);
+    $sevOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_impact']['rows']);
+    $frqOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_likelihood']);
     foreach ($items as $n => $it) {
         $row = [
             'scope'       => in_array(($it['scope'] ?? ''), array_keys(RM_SCOPES), true) ? $it['scope'] : null,
@@ -245,8 +255,8 @@ if ($action === 'doc_save') {
             $row['effect_check'] = rmS($it['effect_check'] ?? '', 4000);
             $sv = ($it['severity'] ?? '') === '' ? null : (int)$it['severity'];
             $fq = ($it['frequency'] ?? '') === '' ? null : (int)$it['frequency'];
-            if ($sv !== null && !in_array($sv, $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的嚴重度不在設定的級距內');
-            if ($fq !== null && !in_array($fq, $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的頻率不在設定的級距內');
+            if ($sv !== null && !in_array($sv, $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的嚴重度（影響）不在設定的級距內');
+            if ($fq !== null && !in_array($fq, $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的頻率（可能性）不在設定的級距內');
             if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的嚴重度與頻率要一起填（缺一個算不出風險等級）');
             $row['severity'] = $sv; $row['frequency'] = $fq;
             $cx = (int)($it['ctx_item_id'] ?? 0);
@@ -354,11 +364,11 @@ if ($action === 'setting_save') {
     $arr = json_decode((string)($_POST['settings'] ?? ''), true);
     if (!is_array($arr)) jerr('設定內容不正確');
     $toWrite = [];
-    if (array_key_exists('rm_severity', $arr)) {
-        [$v, $e] = rm_normalize_scale($arr['rm_severity'], '嚴重度'); if ($e) jerr($e); $toWrite['rm_severity'] = $v;
+    if (array_key_exists('rm_impact', $arr)) {
+        [$v, $e] = rm_normalize_impact($arr['rm_impact']); if ($e) jerr($e); $toWrite['rm_impact'] = $v;
     }
-    if (array_key_exists('rm_frequency', $arr)) {
-        [$v, $e] = rm_normalize_scale($arr['rm_frequency'], '頻率'); if ($e) jerr($e); $toWrite['rm_frequency'] = $v;
+    if (array_key_exists('rm_likelihood', $arr)) {
+        [$v, $e] = rm_normalize_likelihood($arr['rm_likelihood']); if ($e) jerr($e); $toWrite['rm_likelihood'] = $v;
     }
     if (array_key_exists('rm_method', $arr)) {
         if (!in_array($arr['rm_method'], ['multiply', 'add', 'max'], true)) jerr('分數算法不正確');
@@ -378,19 +388,18 @@ if ($action === 'setting_save') {
         if ($p === '') jerr('風險確認編號的前綴要填英數字（最多 6 碼）');
         $toWrite['rm_confirm_prefix'] = $p;
     }
-    // 級距改了之後，既有資料若還用著被拿掉的值，那一列會算不出等級——先講清楚再讓管理員決定，不要默默存
-    if ((isset($toWrite['rm_severity']) || isset($toWrite['rm_frequency'])) && empty($_POST['force'])) {
-        $sv = array_map(function ($r) { return (int)$r['v']; }, $toWrite['rm_severity'] ?? rm_settings($db)['rm_severity']);
-        $fq = array_map(function ($r) { return (int)$r['v']; }, $toWrite['rm_frequency'] ?? rm_settings($db)['rm_frequency']);
+    // 影響／可能性的等級改了之後，既有資料若還用著被拿掉的值，那一列會算不出風險等級——先講清楚再讓管理員決定，不要默默存
+    if ((isset($toWrite['rm_impact']) || isset($toWrite['rm_likelihood'])) && empty($_POST['force'])) {
+        $cur = rm_settings($db);
+        $sv = array_map(function ($r) { return (int)$r['v']; }, ($toWrite['rm_impact'] ?? $cur['rm_impact'])['rows']);
+        $fq = array_map(function ($r) { return (int)$r['v']; }, $toWrite['rm_likelihood'] ?? $cur['rm_likelihood']);
         $bad = (int)$db->query("SELECT COUNT(*) FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE d.is_deleted=0 AND i.severity IS NOT NULL
                   AND (i.severity NOT IN (" . implode(',', $sv) . ") OR i.frequency NOT IN (" . implode(',', $fq) . "))")->fetchColumn();
-        if ($bad > 0) jerr('有 ' . $bad . ' 列既有資料用到「被你拿掉的級距數值」，改完之後那些列會算不出風險等級。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$bad]);
+        if ($bad > 0) jerr('有 ' . $bad . ' 列既有資料用到「被你拿掉的等級」，改完之後那些列會算不出風險等級。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$bad]);
     }
     foreach ($toWrite as $k => $v) rm_setting_write($db, $k, $v, $uname);
     $set = rm_settings($db);
-    $lvls = [];
-    foreach ($set['rm_levels'] as $i => $lv) $lvls[] = array_merge($lv, rm_level_color($i));
-    jout(['settings'=>$set, 'levels'=>$lvls]);
+    jout(['settings'=>$set, 'levels'=>rm_levels_view($set)]);
 }
 
 if ($action === 'asdoc_save') {

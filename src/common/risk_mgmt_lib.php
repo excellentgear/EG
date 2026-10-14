@@ -8,11 +8,12 @@
  * 表單名稱與文件編號一律由「綁定的 AS 文件」自動取得（AS 文件改名後這裡跟著變，禁寫死）。
  * 利害關係者溝通記錄已經做在「溝通管理」頁（views/GM/communication_mgmt.php），這裡只放快捷轉跳。
  *
- * 風險評估（嚴重度／頻率／風險等級）比照 PFMEA 的「評級對照表」概念，但**全部由管理員在模組設定維護，
+ * 風險評估的四種設定對應「2-GM-03 風險管理程序」的四張表，**全部由管理員在模組設定維護，
  * 程式裡不寫死任何一級的名稱、分數或門檻**：
- *   rm_severity / rm_frequency  級距清單（值、名稱、說明）
- *   rm_method                   分數算法 multiply(嚴重度×頻率) / add(相加) / max(取大)
- *   rm_levels                   風險等級門檻（名稱、起算分數、是否需要因應措施）
+ *   表A 風險準則   rm_levels      風險等級（名稱、起算分數、處理措施、是否需要因應措施）
+ *   表B 影響分析   rm_impact      影響等級（值、名稱）＋可自訂的說明欄（預設：公司形象／財物損失／客戶抱怨件數）
+ *   表C 可能性分析 rm_likelihood  可能性等級（值、名稱、發生機率百分比、詳細描述）
+ *   表D 風險分布   rm_method      影響×可能性的分數算法 multiply(相乘，程序書採此) / add / max；矩陣由 A～C 自動產生
  * 風險等級**一律讀取當下設定即時算出、不存進資料列**——設定改了，舊資料的等級就跟著重算
  * （存下來的話，改了門檻之後舊資料還顯示舊等級而且不報錯＝鐵律4）。
  * 唯一會存下來的是「風險確認編號」（配出去的編號不可因設定變動而消失）。
@@ -43,26 +44,29 @@ const RM_LEVEL_COLORS = [
 function rm_settings_default(): array
 {
     return [
-        'rm_severity'  => [
-            ['v'=>1,'label'=>'輕微','desc'=>'影響很小，可立即處理'],
-            ['v'=>2,'label'=>'低',  'desc'=>'局部影響，可在日常作業中處理'],
-            ['v'=>3,'label'=>'中',  'desc'=>'影響單一流程或單一客戶'],
-            ['v'=>4,'label'=>'高',  'desc'=>'影響多個流程或造成客訴／損失'],
-            ['v'=>5,'label'=>'嚴重','desc'=>'影響公司營運、法規或重大客戶'],
+        // 表B 影響分析（2-GM-03 表B）
+        'rm_impact' => [
+            'columns' => ['公司形象', '財物損失', '客戶抱怨件數'],
+            'rows' => [
+                ['v'=>1, 'label'=>'輕微',     'cells'=>['單一部門負面形象', '10萬以下', '1家客戶']],
+                ['v'=>2, 'label'=>'嚴重',     'cells'=>['跨部門負面形象', '20萬以下 10萬(含)以上', '2家(含)客戶']],
+                ['v'=>3, 'label'=>'非常嚴重', 'cells'=>['公司整體負面形象', '20萬(含)以上', '3家(含)客戶以上']],
+            ],
         ],
-        'rm_frequency' => [
-            ['v'=>1,'label'=>'極少','desc'=>'幾年才發生一次'],
-            ['v'=>2,'label'=>'偶爾','desc'=>'一年發生一次左右'],
-            ['v'=>3,'label'=>'有時','desc'=>'每季發生一次左右'],
-            ['v'=>4,'label'=>'經常','desc'=>'每月發生'],
-            ['v'=>5,'label'=>'頻繁','desc'=>'每週以上發生'],
+        // 表C 可能性分析（2-GM-03 表C）
+        'rm_likelihood' => [
+            ['v'=>1, 'label'=>'幾乎不可能', 'prob'=>'0-40%',   'desc'=>'只會在特殊的情況下發生'],
+            ['v'=>2, 'label'=>'可能',       'prob'=>'41-60%',  'desc'=>'有些情況下會發生'],
+            ['v'=>3, 'label'=>'幾乎確定',   'prob'=>'61-100%', 'desc'=>'在大部分的情況下會發生'],
         ],
-        'rm_method'    => 'multiply',
-        'rm_levels'    => [
-            ['name'=>'低',  'min'=>0,  'action'=>false],
-            ['name'=>'中',  'min'=>6,  'action'=>false],
-            ['name'=>'高',  'min'=>12, 'action'=>true],
-            ['name'=>'極高','min'=>20, 'action'=>true],
+        // 表D 風險分布：分數算法（程序書 6.3.3：影響等級×機率等級）
+        'rm_method' => 'multiply',
+        // 表A 風險準則（2-GM-03 表A）：分數 >= 起算分數的最高一級；低於最低一級的起算分數時歸最低級
+        'rm_levels' => [
+            ['name'=>'低度危險', 'min'=>1, 'action'=>false, 'measure'=>'低度危險的風險，以一般步驟處理'],
+            ['name'=>'中度危險', 'min'=>2, 'action'=>false, 'measure'=>'必須明定管理階層的責任範圍'],
+            ['name'=>'高度危險', 'min'=>3, 'action'=>true,  'measure'=>'管理階層需督導所屬研擬計畫並提供資源'],
+            ['name'=>'極度危險', 'min'=>9, 'action'=>true,  'measure'=>'極度危險的風險，需立即採取行動'],
         ],
         'rm_dimensions'     => ['優勢（S）', '劣勢（W）', '機會（O）', '威脅（T）'],
         'rm_confirm_prefix' => 'R',
@@ -103,8 +107,8 @@ function rm_ensure_schema(PDO $db): void
             issue       TEXT NULL COMMENT '議題描述',
             ro_kind     VARCHAR(12) NULL COMMENT 'risk=風險／opportunity=機會',
             ro_text     TEXT NULL COMMENT '風險/機會說明',
-            severity    TINYINT NULL COMMENT '嚴重度（值取自 rm_severity 設定）',
-            frequency   TINYINT NULL COMMENT '頻率（值取自 rm_frequency 設定）',
+            severity    TINYINT NULL COMMENT '嚴重度＝影響等級（值取自 rm_impact 設定）',
+            frequency   TINYINT NULL COMMENT '頻率＝可能性等級（值取自 rm_likelihood 設定）',
             confirm_no  VARCHAR(30) NULL COMMENT '風險確認編號（配發後不隨設定變動）',
             measure     TEXT NULL COMMENT '因應措施',
             effect_check TEXT NULL COMMENT '成效確認',
@@ -207,39 +211,69 @@ function rm_setting_write(PDO $db, string $key, $value, string $by = ''): void
     }
 }
 
-/** 級距清單（嚴重度／頻率）驗證與整理。回傳 [清單, 錯誤訊息]；錯誤訊息非空代表不可存 */
-function rm_normalize_scale($raw, string $title): array
+/** 表B 影響分析：{columns:[說明欄名稱…], rows:[{v,label,cells[]}]}。回傳 [設定, 錯誤訊息] */
+function rm_normalize_impact($raw): array
 {
-    if (!is_array($raw) || count($raw) < 2 || count($raw) > 10) return [[], $title . '至少要有 2 級、最多 10 級'];
+    if (!is_array($raw) || !isset($raw['rows']) || !is_array($raw['rows'])) return [[], '影響分析內容不正確'];
+    $cols = [];
+    foreach ((array)($raw['columns'] ?? []) as $c) {
+        $c = mb_substr(trim((string)$c), 0, 20);
+        if ($c !== '' && !in_array($c, $cols, true)) $cols[] = $c;
+    }
+    if (count($cols) > 6) return [[], '影響分析的說明欄最多 6 個'];
+    $rows = $raw['rows'];
+    if (count($rows) < 2 || count($rows) > 10) return [[], '影響分析至少要有 2 級、最多 10 級'];
+    $out = []; $seen = [];
+    foreach ($rows as $r) {
+        $v = (int)($r['v'] ?? 0);
+        $label = mb_substr(trim((string)($r['label'] ?? '')), 0, 20);
+        if ($v < 1 || $v > 99) return [[], '影響分析的等級必須是 1～99 的整數'];
+        if (isset($seen[$v])) return [[], '影響分析的等級 ' . $v . ' 重複了'];
+        if ($label === '') return [[], '影響分析的等級 ' . $v . ' 沒有填名稱'];
+        $seen[$v] = 1;
+        $cells = [];
+        $src = isset($r['cells']) && is_array($r['cells']) ? array_values($r['cells']) : [];
+        for ($i = 0; $i < count($cols); $i++) $cells[] = mb_substr(trim((string)($src[$i] ?? '')), 0, 100);
+        $out[] = ['v'=>$v, 'label'=>$label, 'cells'=>$cells];
+    }
+    usort($out, function ($a, $b) { return $a['v'] <=> $b['v']; });
+    return [['columns'=>$cols, 'rows'=>$out], ''];
+}
+
+/** 表C 可能性分析：[{v,label,prob,desc}] */
+function rm_normalize_likelihood($raw): array
+{
+    if (!is_array($raw) || count($raw) < 2 || count($raw) > 10) return [[], '可能性分析至少要有 2 級、最多 10 級'];
     $out = []; $seen = [];
     foreach ($raw as $r) {
         $v = (int)($r['v'] ?? 0);
         $label = mb_substr(trim((string)($r['label'] ?? '')), 0, 20);
-        if ($v < 1 || $v > 99) return [[], $title . '的數值必須是 1～99 的整數'];
-        if (isset($seen[$v])) return [[], $title . '的數值 ' . $v . ' 重複了'];
-        if ($label === '') return [[], $title . '的數值 ' . $v . ' 沒有填名稱'];
+        if ($v < 1 || $v > 99) return [[], '可能性分析的等級必須是 1～99 的整數'];
+        if (isset($seen[$v])) return [[], '可能性分析的等級 ' . $v . ' 重複了'];
+        if ($label === '') return [[], '可能性分析的等級 ' . $v . ' 沒有填名稱'];
         $seen[$v] = 1;
-        $out[] = ['v'=>$v, 'label'=>$label, 'desc'=>mb_substr(trim((string)($r['desc'] ?? '')), 0, 200)];
+        $out[] = ['v'=>$v, 'label'=>$label, 'prob'=>mb_substr(trim((string)($r['prob'] ?? '')), 0, 30),
+                  'desc'=>mb_substr(trim((string)($r['desc'] ?? '')), 0, 200)];
     }
     usort($out, function ($a, $b) { return $a['v'] <=> $b['v']; });
     return [$out, ''];
 }
 
+/** 表A 風險準則：[{name,min,action,measure}]（依起算分數由低到高） */
 function rm_normalize_levels($raw): array
 {
-    if (!is_array($raw) || count($raw) < 1 || count($raw) > 8) return [[], '風險等級至少 1 級、最多 8 級'];
+    if (!is_array($raw) || count($raw) < 1 || count($raw) > 8) return [[], '風險準則至少 1 級、最多 8 級'];
     $out = []; $seen = [];
     foreach ($raw as $r) {
         $name = mb_substr(trim((string)($r['name'] ?? '')), 0, 10);
         $min  = (int)($r['min'] ?? 0);
-        if ($name === '') return [[], '風險等級有一列沒有填名稱'];
+        if ($name === '') return [[], '風險準則有一列沒有填等級名稱'];
         if ($min < 0 || $min > 9999) return [[], '風險等級「' . $name . '」的起算分數不合理'];
         if (isset($seen[$min])) return [[], '兩個風險等級的起算分數都是 ' . $min . '，無法分辨'];
         $seen[$min] = 1;
-        $out[] = ['name'=>$name, 'min'=>$min, 'action'=>!empty($r['action'])];
+        $out[] = ['name'=>$name, 'min'=>$min, 'action'=>!empty($r['action']), 'measure'=>mb_substr(trim((string)($r['measure'] ?? '')), 0, 200)];
     }
     usort($out, function ($a, $b) { return $a['min'] <=> $b['min']; });
-    $out[0]['min'] = 0;       // 最低一級一定從 0 起算，否則低分數會「落在所有等級之外」算不出等級
     return [$out, ''];
 }
 
@@ -253,17 +287,44 @@ function rm_level_calc(array $set, $sev, $freq): ?array
     if ($sev === null || $sev === '' || $freq === null || $freq === '') return null;
     $sev = (int)$sev; $freq = (int)$freq;
     $okS = false; $okF = false;
-    foreach ((array)$set['rm_severity'] as $r)  if ((int)$r['v'] === $sev)  $okS = true;
-    foreach ((array)$set['rm_frequency'] as $r) if ((int)$r['v'] === $freq) $okF = true;
+    foreach ((array)$set['rm_impact']['rows'] as $r) if ((int)$r['v'] === $sev)  $okS = true;
+    foreach ((array)$set['rm_likelihood'] as $r)     if ((int)$r['v'] === $freq) $okF = true;
     if (!$okS || !$okF) return null;
-    $m = (string)($set['rm_method'] ?? 'multiply');
-    $score = $m === 'add' ? $sev + $freq : ($m === 'max' ? max($sev, $freq) : $sev * $freq);
-    $hit = null; $rank = 0;
-    foreach ((array)$set['rm_levels'] as $i => $lv) {
+    $score = rm_score($set, $sev, $freq);
+    $lvls = (array)$set['rm_levels'];
+    if (!$lvls) return null;
+    $hit = $lvls[0]; $rank = 0;                       // 低於最低一級的起算分數時歸最低級（不會算不出等級）
+    foreach ($lvls as $i => $lv) {
         if ($score >= (int)$lv['min']) { $hit = $lv; $rank = $i; }
     }
-    if (!$hit) return null;
-    return ['score'=>$score, 'name'=>(string)$hit['name'], 'rank'=>$rank, 'action'=>!empty($hit['action'])];
+    return ['score'=>$score, 'name'=>(string)$hit['name'], 'rank'=>$rank, 'action'=>!empty($hit['action']),
+            'measure'=>(string)($hit['measure'] ?? '')];
+}
+
+/** 表D：影響等級 × 可能性等級 的分數（算法由設定決定） */
+function rm_score(array $set, int $impact, int $likelihood): int
+{
+    $m = (string)($set['rm_method'] ?? 'multiply');
+    return $m === 'add' ? $impact + $likelihood : ($m === 'max' ? max($impact, $likelihood) : $impact * $likelihood);
+}
+
+/** 畫面用的風險等級清單：固定暖色盤顏色＋該等級在目前矩陣中實際會出現的分數範圍（例 3～6，與程序書表A一致） */
+function rm_levels_view(array $set): array
+{
+    $scores = [];
+    foreach ((array)$set['rm_impact']['rows'] as $i)
+        foreach ((array)$set['rm_likelihood'] as $l) $scores[] = rm_score($set, (int)$i['v'], (int)$l['v']);
+    $out = [];
+    $lvls = (array)$set['rm_levels'];
+    foreach ($lvls as $k => $lv) {
+        $lo = (int)$lv['min'];
+        $hi = isset($lvls[$k + 1]) ? (int)$lvls[$k + 1]['min'] - 1 : PHP_INT_MAX;
+        $in = array_filter($scores, function ($x) use ($lo, $hi, $k) { return ($k === 0 || $x >= $lo) && $x <= $hi; });
+        $range = '';
+        if ($in) { $a = min($in); $b = max($in); $range = $a === $b ? (string)$a : $a . '～' . $b; }
+        $out[] = array_merge($lv, rm_level_color($k), ['range'=>$range]);
+    }
+    return $out;
 }
 
 function rm_level_color(int $rank): array
