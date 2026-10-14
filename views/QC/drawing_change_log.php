@@ -486,9 +486,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </div>
 
             <div class="warm-panel">
-                <div class="input-group" style="max-width:420px;" data-eg-form data-eg-submit="#btn-search">
-                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要（雙擊清空＝解除篩選）" autocomplete="new-password" data-lpignore="true" data-form-type="other" name="dc_kw_search">
-                    <span class="input-group-btn"><button class="btn btn-warm-o btn-sm" id="btn-search">搜尋</button></span>
+                <div class="input-group" style="max-width:420px;" data-eg-form>
+                    <input type="text" id="kw" class="form-control input-sm" placeholder="即時搜尋：料號 / 變更單號 / 摘要（雙擊清空＝解除篩選）" autocomplete="new-password" data-lpignore="true" data-form-type="other" name="dc_kw_search">
                 </div>
                 <div id="dc-stat-cards" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"></div>
                 <div class="table-responsive" style="margin-top:10px;">
@@ -968,10 +967,21 @@ $(function(){
     }
     $(document).on('click', '.dc-stat-card', function(){ STATUS_FILTER = $(this).data('st'); load(); });
     load();
-    $('#btn-search').on('click', load);
     $('#kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); load(); } });
     // 雙擊清空（eg_input_rules.js）後要同時解除篩選＝重新載入全部
-    $('#kw').on('input', function(){ if($.trim(this.value)==='') load(); });
+    // 即時搜尋（350ms 防抖）；清空時立即重載
+    var kwTimer=null, kwLast=$('#kw').val();
+    $('#kw').on('input', function(){
+        clearTimeout(kwTimer);
+        var v=$.trim(this.value);
+        if(v===kwLast) return;
+        kwTimer=setTimeout(function(){ kwLast=v; load(); }, v===''?0:350);
+    });
+    // 有內容時雙擊＝清空並解除搜尋篩選
+    $('#kw').on('dblclick', function(){
+        if(this.value==='') return;
+        this.value=''; clearTimeout(kwTimer); kwLast=''; load();
+    });
 
     // ---- 登錄 / 修改 ----
     // ---- 設定：全站預設簽收對象（僅管理員）----
