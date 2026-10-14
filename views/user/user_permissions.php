@@ -372,6 +372,7 @@ $EG_ROLE_MODULES = [
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'risk_mgmt'           => ['prefix'=>'rm',      'label'=>'風險與機會管理',      'page'=>'risk_mgmt.php'],
     'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
@@ -1615,6 +1616,13 @@ $_quotDepts = array_keys($_deptSet);
                          同部門找不到就沿部門樹往上一層找，一路找到最上層都沒有則該格免簽；「總經理確認」預設取組織角色綁定的
                          <strong>最高核准人員</strong>。名單內的人請假並設有代理人時，代理人可代簽（圖章加「代」字）。管理者固定擁有全部權限。',
                         rs_of('comm_mgmt'), rsu_of('comm_mgmt'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('rm', 'risk_mgmt', '風險與機會管理', 'fa-exclamation-triangle', '#b06f27',
+                        '為每位使用者指派「<a href="../GM/risk_mgmt.php" target="_blank" style="color:#b5762a;">風險與機會管理</a>」頁（組織處境分析表、風險與機會因應措施管制表）的角色。
+                         <strong>所有在職員工不需要指派角色</strong>，就能建立與編輯<span style="color:#b06f27;">自己建立的</span>表單。<br>
+                         此處指派兩種加值角色：<strong>風險與機會檢閱</strong>＝唯讀查看全部表單；
+                         <strong>風險與機會管理員</strong>＝檢閱＋修改任何一張、刪除、模組設定（AS 文件綁定、嚴重度／頻率級距、風險等級門檻、構面、確認編號前綴）。管理者固定擁有全部權限。',
+                        rs_of('risk_mgmt'), rsu_of('risk_mgmt'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('cs', 'cust_satis', '客戶滿意度', 'fa-smile-o', '#b06f27',
                         '為每位使用者指派「<a href="../Sales/customer_satisfaction.php" target="_blank" style="color:#b5762a;">客戶滿意度</a>」頁

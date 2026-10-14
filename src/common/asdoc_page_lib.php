@@ -203,6 +203,8 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'cm_record'             => ['溝通管理 · 利害關係者溝通記錄表',     'GM/communication_mgmt.php'],
         'cm_track'              => ['溝通管理 · 回應利害關係者措施追蹤表', 'GM/communication_mgmt.php'],
         'cm_ctrl'               => ['溝通管理 · 溝通管制表',               'GM/communication_mgmt.php'],
+        'rm_context'            => ['風險與機會管理 · 組織處境分析表',         'GM/risk_mgmt.php'],
+        'rm_risk'               => ['風險與機會管理 · 風險與機會因應措施管制表', 'GM/risk_mgmt.php'],
         'eng_change'            => ['工程變更申請單',                'TD/eng_change.php'],
         // 出貨單做在快速出貨(新版)；該頁已登記進選單，權限照它自己算。
         'shipping_note'         => ['快速出貨 · 出貨單',             'Sales/Shipping_Quick.php'],
