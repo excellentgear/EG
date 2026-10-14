@@ -457,6 +457,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <div><label>評價O</label><input type="number" min="1" max="10" id="rsTplNewOccurrence"></div>
                 <div><label>評價D</label><input type="number" min="1" max="10" id="rsTplNewDetection"></div>
             </div>
+            <div id="rsTplNoActNote" style="display:none;margin-top:6px;font-size:12px;color:#8a6d45;">依「判定設定」，此組 S／O／D 的 RPN 低於門檻、不須改善，建議措施與評價欄位已停用且不會存入樣板。</div>
             <div style="margin-top:8px;">
                 <button type="button" class="pf-row-btn" onclick="rsSaveTpl()">儲存樣板</button>
                 <button type="button" class="pf-row-btn" onclick="$('#rsTplForm').hide();">取消</button>
@@ -1307,6 +1308,7 @@ $(document).on('change', '#fBizDate', function(){
     if (!v) return;
     $('#itemBody .pf-card').each(function(){
         var $card = $(this);
+        if ($card.hasClass('no-action')) return;
         if (!$card.find('[data-f="target_date"]').val()) $card.find('[data-f="target_date"]').val(v);
         if (!$card.find('[data-f="action_date"]').val()) $card.find('[data-f="action_date"]').val(v);
     });
@@ -1376,6 +1378,7 @@ function maybeSuggestRating($card){
         failure_mode:k.failure_mode, failure_effect:k.failure_effect, severity:k.severity, failure_cause:k.failure_cause}, function(res){
         if (!res.success || !res.rule) return;
         var r = res.rule;
+        if (!riskNeedsAction($card.find('[data-f="severity"]').val(), $card.find('[data-f="occurrence"]').val(), $card.find('[data-f="detection"]').val())) return;
         if (!$card.find('[data-f="new_severity"]').val()) $card.find('[data-f="new_severity"]').val(r.new_severity).trigger('input');
         if (!$card.find('[data-f="new_occurrence"]').val()) $card.find('[data-f="new_occurrence"]').val(r.new_occurrence).trigger('input');
         if (!$card.find('[data-f="new_detection"]').val()) $card.find('[data-f="new_detection"]').val(r.new_detection).trigger('input');
@@ -1775,6 +1778,9 @@ window.applyBomFill = function(){
                 new_severity: t.new_severity, new_occurrence: t.new_occurrence, new_detection: t.new_detection,
                 target_date: bizDate || '', action_date: bizDate || ''
             };
+            if (!riskNeedsAction(t.severity, t.occurrence, t.detection)) {
+                IMPROVE_FIELDS.forEach(function(f){ it[f] = ''; });
+            }
             $('#itemBody').append(itemCardHtml(it, $('#itemBody .pf-card').length, false));
         });
         renumberRows();
@@ -1877,6 +1883,18 @@ window.saveClassRule = function(){
  * 須採取措施 = S ≧ sev_force（不看RPN）或 RPN > rpn_max；否則卡片隱藏建議措施與措施結果。
  * 須採取措施的項目依管理員設定的判定原則（嚴重度／S×O／RPN，依序比較）排出優先順序。 */
 function cardNum($c, f){ var v = parseInt($c.find('[data-f="'+f+'"]').val(),10); return isNaN(v) ? null : v; }
+/* 是否須採取改善措施（唯一判定，refreshAllRisk 與所有「自動帶入改善資料」的路徑共用）：
+ * S ≧ sev_force 一律須採取；RPN ≦ rpn_max 不須；S/O/D 未填齊或規則未載入視為須採取（不擅自隱藏） */
+function riskNeedsAction(s, o, d){
+    var r = CLASS_RULE;
+    s = parseInt(s,10)||0; o = parseInt(o,10)||0; d = parseInt(d,10)||0;
+    if (!r || !r.enabled) return true;
+    if (s && s >= r.sev_force) return true;
+    if (s && o && d && s*o*d <= r.rpn_max) return false;
+    return true;
+}
+/* 不須改善的項目：自動帶入時一律不帶改善相關資料（建議措施／目標完成日／措施結果／評價S·O·D／生效日期） */
+var IMPROVE_FIELDS = ['recommended_actions','target_date','action_date','new_severity','new_occurrence','new_detection'];
 function refreshAllRisk(){
     var r = CLASS_RULE;
     if (!r) { loadClassRule(function(){ if (CLASS_RULE) refreshAllRisk(); }); return; }
@@ -1885,8 +1903,7 @@ function refreshAllRisk(){
         applyClassify($(this));
         var $c = $(this), s = cardNum($c,'severity'), o = cardNum($c,'occurrence'), d = cardNum($c,'detection');
         var rpn = (s && o && d) ? s*o*d : null;
-        var need = true;
-        if (r.enabled && !(s !== null && s >= r.sev_force) && rpn !== null && rpn <= r.rpn_max) need = false;
+        var need = riskNeedsAction(s, o, d);
         $c.toggleClass('no-action', !need);
         $c.find('.pf-prio').hide().text('');
         if (need && (s || rpn)) list.push({$c:$c, sev:s||0, sxo:(s&&o)?s*o:0, rpn:rpn||0});
@@ -1978,8 +1995,10 @@ window.applyTemplate = function(i){
         severity:t.severity, failure_cause:t.failure_cause, occurrence:t.occurrence, prevention_controls:t.prevention_controls,
         detection_controls:t.detection_controls, detection:t.detection, recommended_actions:t.recommended_actions,
         new_severity:t.new_severity, new_occurrence:t.new_occurrence, new_detection:t.new_detection};
+    var skipImprove = !riskNeedsAction(t.severity, t.occurrence, t.detection);
     Object.keys(map).forEach(function(f){
         if (map[f] == null) return;
+        if (skipImprove && IMPROVE_FIELDS.indexOf(f) >= 0) return;
         $card.find('[data-f="'+f+'"]').val(map[f]).trigger('input');
     });
     var it = {failure_mode: $card.find('[data-f="failure_mode"]').val(), rpn: $card.find('[data-rpn]').val() || null};
@@ -3002,6 +3021,7 @@ window.rsOpenTplForm = function(id){
     $('#rsTplDetectionCtrl').val(t.detection_controls||''); $('#rsTplDetection').val(t.detection||'');
     $('#rsTplRecAction').val(t.recommended_actions||''); $('#rsTplNewSeverity').val(t.new_severity||'');
     $('#rsTplNewOccurrence').val(t.new_occurrence||''); $('#rsTplNewDetection').val(t.new_detection||'');
+    loadClassRule(rsTplApplyRisk);
     $('#rsTplForm').show();
 };
 window.rsSaveTpl = function(){
@@ -3029,6 +3049,18 @@ window.rsDeleteTpl = function(id){
     }, 'json');
 };
 $('#rsTplProcSel').on('change', rsLoadTplList);
+/* 樣板編輯：依判定設定，不須改善者停用並清空改善相關欄位（與分析表自動帶入同一個判定 riskNeedsAction） */
+var RS_TPL_IMPROVE = '#rsTplRecAction,#rsTplNewSeverity,#rsTplNewOccurrence,#rsTplNewDetection';
+function rsTplApplyRisk(){
+    var need = riskNeedsAction($('#rsTplSeverity').val(), $('#rsTplOccurrence').val(), $('#rsTplDetection').val());
+    if (!need) $(RS_TPL_IMPROVE).val('');
+    $(RS_TPL_IMPROVE).prop('disabled', !need);
+    $('#rsTplNoActNote').toggle(!need);
+}
+$(document).on('input', '#rsTplSeverity,#rsTplOccurrence,#rsTplDetection', function(){
+    if (!CLASS_RULE) { loadClassRule(rsTplApplyRisk); return; }
+    rsTplApplyRisk();
+});
 
 /** 「料號＋製程代號」複合鍵的分隔字元，需與後端 PFMEA_PART_PROCESS_SEP 完全一致 */
 var PART_PROCESS_SEP = '｜';
