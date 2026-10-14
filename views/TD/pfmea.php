@@ -1237,6 +1237,7 @@ function renderItems(items){
         items.forEach(function(it, idx){ html += itemCardHtml(it, idx, false); });
         $('#itemBody').html(html);
         refreshAllCardDatalists();
+        refreshAllRisk();
     } else {
         $('#itemBody').html('');
         pfAddRow();
@@ -1905,6 +1906,7 @@ function refreshAllRisk(){
         var rpn = (s && o && d) ? s*o*d : null;
         var need = riskNeedsAction(s, o, d);
         $c.toggleClass('no-action', !need);
+        if (!need) IMPROVE_FIELDS.forEach(function(f){ $c.find('[data-f="'+f+'"]').val(''); });
         $c.find('.pf-prio').hide().text('');
         if (need && (s || rpn)) list.push({$c:$c, sev:s||0, sxo:(s&&o)?s*o:0, rpn:rpn||0});
         var ns = cardNum($c,'new_severity'), no = cardNum($c,'new_occurrence'), nd = cardNum($c,'new_detection');
@@ -2419,6 +2421,9 @@ function nbNum(t){
     return esc(String(t)).replace(/([\u00b1+\-]?[0-9][0-9.,\/\-\u00b1\u00d7\u00b0]*)/g, '<span class="nb">$1</span>');
 }
 function buildPrintDoc(res){
+    (res.items || []).forEach(function(it){
+        if (!riskNeedsAction(it.severity, it.occurrence, it.detection)) { IMPROVE_FIELDS.forEach(function(f){ it[f] = null; }); it.new_rpn = null; }
+    });
     var d = res.doc;
         var rows = '';
         (res.items||[]).forEach(function(it, i){
@@ -2567,7 +2572,7 @@ var PRINT_HEAD_FIELDS = [
 var PRINT_ITEM_FIELDS = [
     ['process_desc','項目'], ['function_desc','功能'], ['requirement','要求'],
     ['failure_mode','潛在失效模式'], ['failure_effect','失效模式潛在後果'], ['severity','嚴重度S'],
-    ['classification','分類'], ['failure_cause','失效潛在原因'], ['occurrence','發生率O'],
+    ['failure_cause','失效潛在原因'], ['occurrence','發生率O'],
     ['prevention_controls','控制預防'], ['detection_controls','控制偵測'], ['detection','偵測度D'],
     ['recommended_actions','建議措施'], ['target_date','目標完成日'], ['action_date','生效日期'],
     ['new_severity','評價S'], ['new_occurrence','評價O'], ['new_detection','評價D']
@@ -2579,7 +2584,8 @@ function printMissingFields(res){
                                     .map(function(f){ return f[1]; });
     if (headMiss.length) miss.push('表頭：' + headMiss.join('、'));
     (res.items || []).forEach(function(it, i){
-        var m = PRINT_ITEM_FIELDS.filter(function(f){ return !String(it[f[0]] == null ? '' : it[f[0]]).trim(); })
+        var noAct = !riskNeedsAction(it.severity, it.occurrence, it.detection);
+        var m = PRINT_ITEM_FIELDS.filter(function(f){ return !(noAct && IMPROVE_FIELDS.indexOf(f[0]) >= 0); }).filter(function(f){ return !String(it[f[0]] == null ? '' : it[f[0]]).trim(); })
                                  .map(function(f){ return f[1]; });
         if (m.length) miss.push('項次 ' + (i + 1) + '：' + m.join('、'));
     });
@@ -2589,6 +2595,17 @@ function printMissingFields(res){
 function printDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
+        loadClassRule(function(){ printDocWithRule(res); });
+    });
+}
+function printDocWithRule(res){
+    (res.items || []).forEach(function(it){
+        if (!riskNeedsAction(it.severity, it.occurrence, it.detection)) {
+            IMPROVE_FIELDS.forEach(function(f){ it[f] = null; });
+            it.new_rpn = null;
+        }
+    });
+    {
         var miss = printMissingFields(res);
         if (miss.length){
             $('#printCheckList').html(miss.map(function(m){ return '<li>'+esc(m)+'</li>'; }).join(''));
@@ -2597,7 +2614,7 @@ function printDoc(id){
             return;
         }
         doPrintDoc(res);
-    });
+    }
 }
 window.openPrintLog = function(id, docNo){
     $('#printLogDoc').text(docNo ? ('（'+docNo+'）') : '');
@@ -2643,6 +2660,11 @@ var VIEW_PART_PK = 0;   // d_setting.d_id：同名料號有多筆主檔時要指
 function viewDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
+        loadClassRule(function(){ viewDocShow(res); });
+    });
+}
+function viewDocShow(res){
+    {
         var pd = buildPrintDoc(res);
         VIEW_PART_NO = pd.partNo;
         VIEW_PART_PK = pd.partDId || 0;
@@ -2652,7 +2674,7 @@ function viewDoc(id){
         doc.open();
         doc.write('<html><head><meta charset="utf-8"><style>'+pd.css+'body{padding:6mm;}</style></head><body>'+pd.body+'</body></html>');
         doc.close();
-    });
+    }
 }
 window.openViewDrawing = function(){ if (VIEW_PART_NO || VIEW_PART_PK) EGPartPicker.openViewer(VIEW_PART_NO, VIEWER_URL, VIEW_PART_PK); };
 
