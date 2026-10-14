@@ -64,7 +64,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         #gList { display:flex; flex-direction:column; gap:8px; }
         #gList.hide-note .iq-doc-note { display:none; }
         .iq-doc-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; overflow:visible; }
-        .iq-doc-hd { display:flex; align-items:center; gap:14px; padding:8px 12px; flex-wrap:wrap; }
+        .iq-doc-hd { display:flex; align-items:center; gap:14px; padding:8px 12px; flex-wrap:wrap;
+            background:#FBF2DE; border-bottom:1px solid #E8D5B5; border-radius:6px 6px 0 0; }
         .iq-doc-no { flex:none; line-height:1.3; }
         .iq-doc-no .l1 { font-size:13.5px; font-weight:bold; color:#b5762a; white-space:nowrap; }
         .iq-doc-no .l2 { font-size:11px; color:#999; }
@@ -78,7 +79,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .iq-doc-who { flex:none; font-size:12px; color:#5b3a1e; }
         .iq-doc-hd .iq-badge { flex:none; }
         .iq-doc-ops { margin-left:auto; display:flex; gap:5px; flex:none; align-items:center; }
-        .iq-doc-divider { border-top:1px solid #F2EAD9; }
         .iq-dd { position:relative; flex:none; }
         .iq-dd-btn { height:24px; padding:0 9px; font-size:12px; border:1px solid #D8BE93; background:#fff;
             color:#8A5A2B; border-radius:4px; cursor:pointer; }
@@ -101,7 +101,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .iq-item-block .ib-spec { color:#8a6d45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .iq-item-block .ib-row { display:flex; justify-content:space-between; gap:6px; color:#5b3a1e; }
         .iq-item-block .ib-row .ib-price { font-weight:bold; }
-        .iq-doc-note { padding:6px 12px; font-size:12px; color:#8a6d45; border-top:1px solid #F2EAD9; }
+        .iq-doc-note { padding:6px 12px; font-size:12px; color:#8a6d45; border-top:1px solid #F2EAD9; background:#FDFBF6; border-radius:0 0 6px 6px; }
         .iq-doc-note:empty { display:none; }
         .iq-doc-fillinfo { padding:4px 12px 0; font-size:11px; color:#999; }
         .iq-doc-fillinfo:empty { display:none; }
@@ -642,7 +642,6 @@ function renderDocCard(d, g){
     ops.find('.iq-op').on('click', function(){ docOp($(this).data('act'), d.id, g.id); });
     hd.append(ops);
     card.append(hd);
-    card.append('<div class="iq-doc-divider"></div>');
 
     var items = d.items || [];
     if (items.length > 4) {
