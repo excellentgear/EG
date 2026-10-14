@@ -11723,15 +11723,6 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
         <i class="fa fa-history"></i> 刪除紀錄
     </button>
     <?php endif; ?>
-    <?php if ($is_admin || $_mdRbacAll): ?>
-    <!-- 補轉檔（僅本頁管理員／系統管理員）：把批圖編輯器輸出的大 PNG（>8MB）轉成 256 色，全站所有料號一起處理。
-         新存的圖會自動轉，這顆只是補轉先前沒轉到的；原檔不刪，備份在 NAS「_大檔轉256色原檔備份」。 -->
-    <button type="button" id="pav-btn-png256" onclick="pavPng256Batch()"
-        title="補轉：批圖編輯器輸出的大 PNG（8MB 以上）轉成 256 色以縮小檔案（全站料號一起處理，原檔會備份）"
-        style="font-size:11px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
-        <i class="fa fa-compress"></i> 補轉檔
-    </button>
-    <?php endif; ?>
     <button type="button" class="close" data-dismiss="modal" style="color:#fff;margin:0;padding:0;line-height:1;font-size:22px;opacity:.8;flex-shrink:0;">&times;</button>
 </div>
 <div style="flex:1;display:flex;min-height:0;">
@@ -12358,6 +12349,7 @@ var CAN_PART_ATTACH     = <?= json_encode($can_part_attach) ?>;
 var MD_CAN_QUOTE        = <?= json_encode($can_view_quote) ?>;   // 報價資料分頁（quotation_view）
 var MD_CAN_OTHER        = <?= json_encode($can_view_other) ?>;   // 其他附件分頁（md_attach_view，過渡期開放）
 var MD_IS_ADMIN         = <?= json_encode($is_admin) ?>;
+var MD_CAN_PNG256       = <?= json_encode((bool)($is_admin || $_mdRbacAll)) ?>; // 補轉檔鈕：僅本頁管理員／系統管理員（後端 png256_batch 同規則再擋）
 // 備註圖片改走讀檔 API（不再用 Apache /nas 別名直連）：存放位置只由 notes_nas_dir 決定，
 // 換 NAS 免改 httpd.conf、也不綁磁碟機代號。前綴後面接檔名即可，用法與原本相同。
 var NAS_URL_DIR = '../../src/store/NoteImage_API.php?f=';
@@ -14614,7 +14606,9 @@ function renderPartsTable(rows, total, pg, pages) {
     html += '<th style="width:36px;">#</th>';
     html += '<th style="max-width:130px;">料號</th><th>規格</th><th style="white-space:nowrap;">版次 / 發行日</th><th>種類</th><th>客戶</th><th>備註</th><th style="white-space:nowrap;">重量</th>';
     html += '<th style="white-space:nowrap;min-width:90px;">出貨筆數/件數</th>';
-    html += '<th style="min-width:80px;white-space:nowrap;"><i class="fa fa-paperclip"></i> 附件</th>';
+    html += '<th style="min-width:80px;white-space:nowrap;"><i class="fa fa-paperclip"></i> 附件'
+          + (MD_CAN_PNG256 ? ' <button type="button" id="pav-btn-png256" onclick="pavPng256Batch()" title="補轉：批圖編輯器輸出的大 PNG（8MB 以上）轉成 256 色以縮小檔案（全站料號一起處理，原檔會備份）" style="font-size:10px;font-weight:600;background:#FFF8EE;color:#C77C1A;border:1px solid #C77C1A;border-radius:5px;padding:0 6px;margin-left:4px;cursor:pointer;line-height:16px;"><i class="fa fa-compress"></i> 補轉檔</button>' : '')
+          + '</th>';
     if (CAN_SEE_DESIGN) html += '<th style="min-width:120px;">設計備註</th>';
     if (CAN_PART_EDIT||CAN_PART_DELETE) html += '<th style="text-align:center;width:80px;">操作</th>';
     html += '</tr></thead><tbody>';
