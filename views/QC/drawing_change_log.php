@@ -47,8 +47,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $uid   = trim((string)($_SESSION['id'] ?? ''));
     $feats = rbac_user_features($pdo, (int)$uid);
     $has   = function ($c) use ($feats) { return in_array('all', $feats, true) || in_array($c, $feats, true); };
-    $canView   = $has('qc_view_readonly') || $has('qc_fill_inspection') || $has('qc_manage_settings') || $has('qc_edit_history') || $has('all');
-    $canManage = $has('qc_manage_settings') || $has('all');   // 建立/修改圖面變更＝管理檢驗設定權限
+    // 2026-10-14：本頁以「選單頁面權限」（使用者權限設定 → 頁面 R/CRUD）為主，不再要求另外綁 QC 角色
+    //（兩邊都要設太混亂，且 022 這類只有選單權限的人會看得到頁面卻載不出內容）。
+    // 既有 QC 角色持有者維持原權限，不受影響。
+    include_once '../../src/common/asdoc_page_lib.php';
+    $menuPerm = '';
+    try {
+        $__pg = $pdo->prepare("SELECT page_id FROM system_module_pages WHERE page_url LIKE '%/views/QC/drawing_change_log.php' LIMIT 1");
+        $__pg->execute();
+        $__pid = (int)$__pg->fetchColumn();
+        if ($__pid > 0) {
+            $__pp = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=? LIMIT 1");
+            $__pp->execute([(int)$uid, $__pid]);
+            $menuPerm = strtoupper((string)$__pp->fetchColumn());
+        }
+    } catch (Throwable $e) { $menuPerm = ''; }
+    $canView   = $has('qc_view_readonly') || $has('qc_fill_inspection') || $has('qc_manage_settings') || $has('qc_edit_history') || $has('all')
+                 || $menuPerm !== '';
+    $canManage = $has('qc_manage_settings') || $has('all')   // 建立/修改圖面變更＝管理檢驗設定權限，或選單頁面權限含 C/U
+                 || strpbrk($menuPerm, 'CU') !== false;
     $isAdmin   = in_array('all', $feats, true);                // 管理員：可改他人填的紀錄（需操作確認密碼）
     $act = $_POST['action'];
 
