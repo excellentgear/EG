@@ -2150,6 +2150,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where .= " AND d.workpiece_sub_type_id = :fsub";
                 $params[':fsub'] = $fsub;
             }
+            // 工件總長區間（d_setting.workpiece_length，文字欄位內非數字的一律不命中）
+            $fwl_min = trim($_POST['filter_wl_min'] ?? '');
+            $fwl_max = trim($_POST['filter_wl_max'] ?? '');
+            if (is_numeric($fwl_min) || is_numeric($fwl_max)) {
+                $where .= " AND d.workpiece_length REGEXP '^[0-9]+([.][0-9]+)?$'";
+                if (is_numeric($fwl_min)) { $where .= " AND CAST(d.workpiece_length AS DECIMAL(12,4)) >= :fwlmin"; $params[':fwlmin'] = $fwl_min; }
+                if (is_numeric($fwl_max)) { $where .= " AND CAST(d.workpiece_length AS DECIMAL(12,4)) <= :fwlmax"; $params[':fwlmax'] = $fwl_max; }
+            }
             // 齒部外徑篩選：依 da = m*z/cos(β) + 2m(1+x) 計算後範圍過濾
             $fda_min = trim($_POST['filter_gear_da_min'] ?? '');
             $fda_max = trim($_POST['filter_gear_da_max'] ?? '');
@@ -9060,6 +9068,11 @@ body { background:#F6F1EA; }
                         <div id="parts-type-dd" class="parts-cust-dropdown" style="min-width:220px;"></div>
                     </div>
                     <span id="parts-type-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
+                    <span class="filter-group-label" style="margin-left:8px;">工件總長</span>
+                    <input type="number" id="fw-wl-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onWlRangeInput()">
+                    <span style="color:#888;margin:0 2px;">~</span>
+                    <input type="number" id="fw-wl-max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onWlRangeInput()">
+                    <span style="color:#888;font-size:11px;">mm</span>
                     <span class="filter-group-label" style="margin-left:6px;">種類</span>
                     <span class="fc active" data-type="" onclick="setPartFilter('type','',this)">全部</span>
                     <!-- dynamic type chips injected by JS -->
@@ -13028,6 +13041,19 @@ function setGearSpecFilter(dim, val, el) {
     loadParts(1);
 }
 
+// 工件總長區間篩選（d_setting.workpiece_length，mm）：只填一邊＝大於等於／小於等於
+var _wlRangeTimer = null;
+function onWlRangeInput() {
+    clearTimeout(_wlRangeTimer);
+    _wlRangeTimer = setTimeout(function() {
+        var a = document.getElementById('fw-wl-min'), b = document.getElementById('fw-wl-max');
+        _partsFilter.wlMin = (a && a.value !== '') ? parseFloat(a.value) : null;
+        _partsFilter.wlMax = (b && b.value !== '') ? parseFloat(b.value) : null;
+        updatePartsClearBtn();
+        loadParts(1);
+    }, 350);
+}
+
 var _gearRangeTimer = null;
 function onGearRangeInput() {
     clearTimeout(_gearRangeTimer);
@@ -13251,6 +13277,7 @@ function updatePartsClearBtn() {
         || _partsFilter.gearTeethMin !== null || _partsFilter.gearTeethMax !== null
         || _partsFilter.gearFwMin !== null || _partsFilter.gearFwMax !== null
         || _partsFilter.gearHaMin !== null || _partsFilter.gearHaMax !== null
+        || _partsFilter.wlMin != null || _partsFilter.wlMax != null
         || _partsFilter.shipSort;
     var btn = document.getElementById('parts-clear-filter-btn');
     if (btn) btn.style.display = hasFilter ? '' : 'none';
@@ -13258,7 +13285,7 @@ function updatePartsClearBtn() {
 
 function clearPartsFilter() {
     _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
-    ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
         var isDefault = c.dataset.shipsort === '';
         c.classList.toggle('active', isDefault);
@@ -14564,6 +14591,8 @@ function loadParts(pg) {
           filter_gear_modules:     JSON.stringify(_partsFilter.gearModules||[]),
           filter_gear_helix_dir:   _partsFilter.gearHelixDir||'',
           filter_gear_pressures:   JSON.stringify(_partsFilter.gearPressureAngles||[]),
+          filter_wl_min:           _partsFilter.wlMin != null ? _partsFilter.wlMin : '',
+          filter_wl_max:           _partsFilter.wlMax != null ? _partsFilter.wlMax : '',
           filter_gear_teeth_min:   _partsFilter.gearTeethMin !== null ? _partsFilter.gearTeethMin : '',
           filter_gear_teeth_max:   _partsFilter.gearTeethMax !== null ? _partsFilter.gearTeethMax : '',
           filter_gear_fw_min:      _partsFilter.gearFwMin !== null ? _partsFilter.gearFwMin : '',

@@ -229,6 +229,17 @@ function kpiLoadLabelValMap(PDO $pdo, array $dsIds): array {
             $map[$did.'_'.$lid.'_'.$sid.'_draw']  = $sr['draw_dim'];
             $map[$did.'_'.$lid.'_'.$sid.'_lathe'] = $sr['lathe_dim'];
         }
+        // 「工件總長」已於 2026-10-14 由料號標籤改成主檔欄位 d_setting.workpiece_length，標籤本身已移除；
+        // 重量計算規則仍用原標籤 id 當來源，所以在這裡把欄位值**以原標籤 id 虛擬補進來**（規則不必改）。
+        $wlLid = intval($pdo->query("SELECT param_value FROM system_parameters WHERE param_group='PART_LABEL_BIND' AND param_key='workpiece_length'")->fetchColumn());
+        if ($wlLid > 0) {
+            foreach ($pdo->query("SELECT d_id, workpiece_length FROM d_setting WHERE d_id IN ($ids) AND workpiece_length IS NOT NULL AND TRIM(workpiece_length)<>''")->fetchAll(PDO::FETCH_ASSOC) as $wr) {
+                $did = intval($wr['d_id']);
+                if (!is_numeric($wr['workpiece_length'])) continue;
+                $map[$did.'_'.$wlLid]        = $wr['workpiece_length'];
+                $map[$did.'_'.$wlLid.'_min'] = 0; $map[$did.'_'.$wlLid.'_max'] = 0; $map[$did.'_'.$wlLid.'_qty'] = 0;
+            }
+        }
     } catch(Throwable) {}
     return $map;
 }
