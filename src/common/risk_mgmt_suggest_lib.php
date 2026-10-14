@@ -163,19 +163,23 @@ function rm_suggest_context(PDO $db, int $year): array
 
     /* ---- 5. 供應鏈（委外） ---- */
     try {
-        $st = $db->prepare("SELECT maker_id_no, COUNT(*) n FROM bom_ing WHERE maker_id_no IS NOT NULL AND maker_id_no<>'' AND outsource_date BETWEEN ? AND ? GROUP BY maker_id_no ORDER BY n DESC");
+        // 只看「稽核製程」（訂單追蹤設定的認證範圍，如齒研、插齒）；倒圓角、熱處理等不在認證範圍內的不納入
+        require_once __DIR__ . '/order_as_tag_lib.php';
+        $auditNos = array_map('intval', array_keys(ot_astag_audit_process_nos($db)));
+        $inAudit = $auditNos ? implode(',', $auditNos) : '0';
+        $st = $db->prepare("SELECT maker_id_no, COUNT(*) n FROM bom_ing WHERE maker_id_no IS NOT NULL AND maker_id_no<>'' AND process_no IN ($inAudit) AND outsource_date BETWEEN ? AND ? GROUP BY maker_id_no ORDER BY n DESC");
         $st->execute([$y1, $y2 . ' 23:59:59']);
         $mk = $st->fetchAll(PDO::FETCH_ASSOC); $all = array_sum(array_column($mk, 'n'));
         $nm = function ($id) use ($db) { $q = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=?"); $q->execute([$id]); return (string)$q->fetchColumn() ?: $id; };
         if ($mk && $all > 0 && $mk[0]['n'] * 100 / $all >= RM_SG_VENDOR_PCT) {
             $n0 = $nm($mk[0]['maker_id_no']);
             $add('委外發包（' . $year . '）', 'T', '供應商', '合理的交期與訂單預告',
-                 $year . ' 年委外發包 ' . $all . ' 筆中，' . $n0 . ' 占 ' . $mk[0]['n'] . ' 筆（' . rm_sg_pct($mk[0]['n'], $all) . '），對單一廠商依賴高。佐證：BOM 製程委外紀錄' . rm_sg_recs($db, $year, [$n0]),
-                 '規則：單一廠商占委外筆數 ≥ ' . RM_SG_VENDOR_PCT . '%');
+                 $year . ' 年委外發包 ' . $all . ' 筆中，' . $n0 . ' 占 ' . $mk[0]['n'] . ' 筆（' . rm_sg_pct($mk[0]['n'], $all) . '），對單一廠商依賴高（僅計稽核製程）。佐證：BOM 製程委外紀錄' . rm_sg_recs($db, $year, [$n0]),
+                 '規則：稽核製程中單一廠商占委外筆數 ≥ ' . RM_SG_VENDOR_PCT . '%');
         }
         // 單一來源製程：當年實際委外紀錄裡，某製程只交給 1 家廠商做、且發包筆數夠多（≥ RM_SG_SINGLE_MIN 筆）
         $st = $db->prepare("SELECT b.process_no, COUNT(*) n, MIN(b.maker_id_no) mid FROM bom_ing b
-                            WHERE b.maker_id_no IS NOT NULL AND b.maker_id_no<>'' AND b.outsource_date BETWEEN ? AND ?
+                            WHERE b.maker_id_no IS NOT NULL AND b.maker_id_no<>'' AND b.process_no IN ($inAudit) AND b.outsource_date BETWEEN ? AND ?
                             GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . " ORDER BY n DESC LIMIT 4");
         $st->execute([$y1, $y2 . ' 23:59:59']);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $sg) {
@@ -184,7 +188,7 @@ function rm_suggest_context(PDO $db, int $year): array
             $mname = $nm($sg['mid']);
             $add('委外發包（' . $year . '）', 'T', '供應商', '穩定的委外加工來源',
                  $year . ' 年「' . $pname . '」製程委外 ' . $sg['n'] . ' 筆全部只交給 ' . $mname . ' 一家，沒有備援廠商，單一來源風險高。佐證：BOM 製程委外紀錄' . rm_sg_recs($db, $year, [$mname]),
-                 '規則：當年某製程只有 1 家委外廠商且發包 ≥ ' . RM_SG_SINGLE_MIN . ' 筆');
+                 '規則：當年某稽核製程只有 1 家委外廠商且發包 ≥ ' . RM_SG_SINGLE_MIN . ' 筆');
         }
     } catch (Throwable $e) { rm_sg_err($e); }
 
