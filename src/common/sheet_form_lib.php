@@ -21,7 +21,7 @@
 
 require_once __DIR__ . '/asdoc_lib.php';
 
-const SF_TYPES = ['text', 'number', 'date', 'select', 'checkbox', 'person'];
+const SF_TYPES = ['text', 'number', 'date', 'select', 'checkbox', 'person', 'part', 'customer'];
 const SF_MAX_BOOK_BYTES = 8 * 1024 * 1024;
 
 function sf_asdoc_module(int $tid): string { return 'sheet_form_tpl_' . $tid; }
@@ -74,6 +74,21 @@ function sf_ensure_schema(PDO $db): void {
     // 預設明細內容（建立單據時自動帶入的標準項目；2026-10-14 加）
     $col = $db->query("SHOW COLUMNS FROM sf_template LIKE 'defaults_json'")->fetchColumn();
     if (!$col) $db->exec("ALTER TABLE sf_template ADD COLUMN defaults_json MEDIUMTEXT NULL COMMENT '預設明細內容 {rows,values:{欄位id:[值]}}，建立單據時帶入' AFTER fields_json");
+    // 簽核流程／維護人員／圖章樣式（2026-10-14）
+    foreach (['flow_json' => "TEXT NULL COMMENT '簽核流程 [{label,mode,dept_id,user_id,auto}]'",
+              'maintain_dept_id' => "INT NULL COMMENT '維護部門（該部門主管可改預設明細內容）'",
+              'maintainers_json' => "TEXT NULL COMMENT '維護人員 user id 清單'",
+              'stamp_tpl_id' => "INT NULL COMMENT '簽章圖章樣式（stamp_template.id）'"] as $c => $def) {
+        if (!$db->query("SHOW COLUMNS FROM sf_template LIKE '$c'")->fetchColumn()) $db->exec("ALTER TABLE sf_template ADD COLUMN $c $def");
+    }
+    foreach (['tpl_flow_json' => "TEXT NULL COMMENT '建立當下的簽核流程快照'",
+              'submit_date' => "DATE NULL COMMENT '送出日（簽核用業務日期）'",
+              'cur_step' => "TINYINT NOT NULL DEFAULT 0 COMMENT '目前簽核到第幾關'",
+              'sign_meta_json' => "TEXT NULL COMMENT '簽核補充（代理人／自動簽核標記、本輪起點）'"] as $c => $def) {
+        if (!$db->query("SHOW COLUMNS FROM sf_instance LIKE '$c'")->fetchColumn()) $db->exec("ALTER TABLE sf_instance ADD COLUMN $c $def");
+    }
+    $stType = (string)$db->query("SHOW COLUMNS FROM sf_instance LIKE 'status'")->fetch(PDO::FETCH_ASSOC)['Type'];
+    if (strpos($stType, 'pending') === false) $db->exec("ALTER TABLE sf_instance MODIFY status ENUM('draft','pending','done','rejected') NOT NULL DEFAULT 'draft'");
     $done = true;
 }
 
@@ -200,7 +215,7 @@ function sf_norm_value(array $f, $v): array {
  * 只收 fields 裡有的欄位 id（其餘一律丟掉＝防止有人直接打 API 塞別的格子）。
  * $strict=true 時（送出）才檢查必填。
  */
-function sf_validate_values(array $fields, array $values, int $extra, bool $strict): array {
+function sf_validate_values(array $fields, array $values, int $extra, bool $strict, ?PDO $db = null): array {
     $out = [];
     $errs = [];
     foreach ($fields as $f) {
@@ -213,6 +228,7 @@ function sf_validate_values(array $fields, array $values, int $extra, bool $stri
             $arr = [];
             for ($i = 0; $i <= $extra; $i++) {
                 [$nv, $er] = sf_norm_value($f, $raw[$i] ?? '');
+                if (!$er && $strict && $db && in_array($f['t'], ['part', 'customer'], true) && $nv !== '' && !sf_lookup_exists($db, $f['t'], (string)$nv)) $er = '不在主檔內，請從搜尋清單挑選';
                 if ($er) $errs[] = [$id, $i, $label . '（第' . ($i + 1) . '筆）' . $er];
                 elseif ($strict && $f['req'] && ($nv === '' || $nv === false && $f['t'] !== 'checkbox')) $errs[] = [$id, $i, $label . '（第' . ($i + 1) . '筆）必填'];
                 $arr[] = $nv;
@@ -221,6 +237,7 @@ function sf_validate_values(array $fields, array $values, int $extra, bool $stri
         } else {
             if (is_array($raw)) $raw = $raw[0] ?? '';
             [$nv, $er] = sf_norm_value($f, $raw);
+            if (!$er && $strict && $db && in_array($f['t'], ['part', 'customer'], true) && $nv !== '' && !sf_lookup_exists($db, $f['t'], (string)$nv)) $er = '不在主檔內，請從搜尋清單挑選';
             if ($er) $errs[] = [$id, null, $label . $er];
             elseif ($strict && $f['req'] && $f['t'] !== 'checkbox' && $nv === '') $errs[] = [$id, null, $label . '必填'];
             $out[$id] = $nv;
@@ -270,8 +287,12 @@ function sf_template_list(PDO $db): array {
     return $rows;
 }
 
-/** 存模板（新增或更新）。回傳模板 id。 */
-function sf_template_save(PDO $db, int $uid, int $id, string $name, string $paper, string $orient, string $bookJson, ?string $defaultsJson = null): int {
+/**
+ * 存模板（新增或更新）。回傳模板 id。
+ * $opt（鍵沒給＝保留原值；給了就覆寫）：defaults_json／flow_json（字串，空字串＝清除）、
+ * maintain_dept_id（int，0＝清除）、maintainers（user id 陣列）、stamp_tpl_id（int，0＝清除）。
+ */
+function sf_template_save(PDO $db, int $uid, int $id, string $name, string $paper, string $orient, string $bookJson, array $opt = []): int {
     $name = trim($name);
     if ($name === '') throw new InvalidArgumentException('請輸入模板名稱');
     if (mb_strlen($name) > 100) throw new InvalidArgumentException('模板名稱不可超過 100 字');
@@ -282,38 +303,54 @@ function sf_template_save(PDO $db, int $uid, int $id, string $name, string $pape
     if (!is_array($book) || !isset($book['sheets'])) throw new InvalidArgumentException('表格資料格式不正確');
     $fields = sf_book_fields($book);
     $fj = json_encode($fields, JSON_UNESCAPED_UNICODE);
-    // 預設明細：null＝這次沒送（保留原值）；送了就依目前欄位重新正規化（欄位被刪掉的值自然消失）
-    $dj = null; $setDef = false;
-    if ($defaultsJson !== null) {
-        $setDef = true;
-        $d = $defaultsJson === '' ? null : sf_defaults_normalize($fields, json_decode($defaultsJson, true));
-        $dj = $d ? json_encode($d, JSON_UNESCAPED_UNICODE) : null;
+
+    $set = ['name' => $name, 'paper_size' => $paper, 'orientation' => $orient, 'book_json' => $bookJson, 'fields_json' => $fj];
+    if (array_key_exists('defaults_json', $opt)) {
+        $d = ($opt['defaults_json'] === null || $opt['defaults_json'] === '') ? null : sf_defaults_normalize($fields, json_decode((string)$opt['defaults_json'], true));
+        $set['defaults_json'] = $d ? json_encode($d, JSON_UNESCAPED_UNICODE) : null;
     }
+    if (array_key_exists('flow_json', $opt)) {
+        $fl = sf_flow_normalize($db, (string)$opt['flow_json']);
+        $set['flow_json'] = $fl ? json_encode($fl, JSON_UNESCAPED_UNICODE) : null;
+    }
+    if (array_key_exists('maintain_dept_id', $opt)) {
+        $md = (int)$opt['maintain_dept_id'];
+        if ($md && !$db->query("SELECT COUNT(*) FROM department WHERE id=" . $md)->fetchColumn()) throw new InvalidArgumentException('維護部門不存在');
+        $set['maintain_dept_id'] = $md ?: null;
+    }
+    if (array_key_exists('maintainers', $opt)) {
+        $ids = [];
+        foreach ((array)$opt['maintainers'] as $u) { $u = (int)$u; if ($u && sf_user_row($db, $u)) $ids[$u] = $u; }
+        $set['maintainers_json'] = $ids ? json_encode(array_values($ids)) : null;
+    }
+    if (array_key_exists('stamp_tpl_id', $opt)) $set['stamp_tpl_id'] = ((int)$opt['stamp_tpl_id']) ?: null;
+
     if ($id > 0) {
-        $old = sf_template_get($db, $id);
-        if (!$old) throw new InvalidArgumentException('找不到此模板');
-        $db->prepare("UPDATE sf_template SET name=?, paper_size=?, orientation=?, book_json=?, fields_json=?, version=version+1,
-                      defaults_json=IF(?, ?, defaults_json), modified_by=?, modified_at=NOW() WHERE id=?")
-           ->execute([$name, $paper, $orient, $bookJson, $fj, $setDef ? 1 : 0, $dj, $uid, $id]);
+        if (!sf_template_get($db, $id)) throw new InvalidArgumentException('找不到此模板');
+        $cols = []; $args = [];
+        foreach ($set as $k => $v) { $cols[] = "$k=?"; $args[] = $v; }
+        $db->prepare("UPDATE sf_template SET " . implode(',', $cols) . ", version=version+1, modified_by=?, modified_at=NOW() WHERE id=?")
+           ->execute(array_merge($args, [$uid, $id]));
         return $id;
     }
-    $db->prepare("INSERT INTO sf_template (name, paper_size, orientation, book_json, fields_json, defaults_json, created_by, created_at, modified_by, modified_at)
-                  VALUES (?,?,?,?,?,?,?,NOW(),?,NOW())")
-       ->execute([$name, $paper, $orient, $bookJson, $fj, $dj, $uid, $uid]);
+    $set['created_by'] = $uid; $set['modified_by'] = $uid;
+    $cols = array_keys($set);
+    $db->prepare("INSERT INTO sf_template (" . implode(',', $cols) . ", created_at, modified_at) VALUES (" . implode(',', array_fill(0, count($cols), '?')) . ", NOW(), NOW())")
+       ->execute(array_values($set));
     return (int)$db->lastInsertId();
 }
 
 /* ============================================================ 單據 ============================================================ */
 
 function sf_instance_get(PDO $db, int $id): ?array {
-    $st = $db->prepare("SELECT i.*, u.user_cname AS creator_name FROM sf_instance i LEFT JOIN user u ON u.id=i.created_by
-                        WHERE i.id=? AND i.deleted_at IS NULL");
+    $st = $db->prepare("SELECT i.*, u.user_cname AS creator_name, t.name AS template_name FROM sf_instance i LEFT JOIN user u ON u.id=i.created_by
+                        LEFT JOIN sf_template t ON t.id=i.template_id WHERE i.id=? AND i.deleted_at IS NULL");
     $st->execute([$id]);
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
 function sf_instance_can_edit(array $perms, array $inst, int $uid): bool {
-    if ($inst['status'] !== 'draft') return false;
+    if (!in_array($inst['status'], ['draft', 'rejected'], true)) return false;
     return $perms['canAdmin'] || (int)$inst['created_by'] === $uid;
 }
 
@@ -331,3 +368,5 @@ function sf_print_meta(PDO $db, int $tid, string $tplName, ?string $bizDate): ar
     } catch (Throwable $e) {}
     return ['title'=>$doc ? $doc['doc_name'] : $tplName, 'doc_no'=>$no, 'company'=>$company, 'bound'=>$doc ? 1 : 0];
 }
+
+require_once __DIR__ . '/sheet_form_flow_lib.php';

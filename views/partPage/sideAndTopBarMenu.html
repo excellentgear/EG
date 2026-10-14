@@ -651,6 +651,18 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            if (refType === 'SHEET_FORM_APPROVAL') {
+                // 表格模板單據待簽核：開填寫頁並自動彈出該單（含核准／退回列，退回必填原因）；簽核完成前不移除(mode=sign)。
+                window.open('../ADM/sheet_form.php?decide=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'SHEET_FORM_RESULT') {
+                // 表格模板簽核結果／退回通知（給填表人）：純資訊型，開該單後標記已讀移除
+                window.open('../ADM/sheet_form.php?inst=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'PROJECT_COSIGN') {
                 // 專案立案待會簽：開專案管理頁並自動跳出會簽跳窗（refid = project_cosign.id）。
                 // 必須先選同意/不同意才能填意見，所以不用通用回覆；完成會簽前不移除(mode=sign)。

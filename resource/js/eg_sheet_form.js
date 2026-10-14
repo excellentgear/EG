@@ -9,7 +9,7 @@
 (function (w) {
     'use strict';
     var MARK = '#FFF3D1';
-    var TYPE_LABEL = { text: '文字', number: '數字', date: '日期', select: '下拉選單', checkbox: '勾選框', person: '人員' };
+    var TYPE_LABEL = { text: '文字', number: '數字', date: '日期', select: '下拉選單', checkbox: '勾選框', person: '人員', part: '料號(搜尋主檔)', customer: '客戶(搜尋主檔)' };
 
     function p2(n) { return (n < 10 ? '0' : '') + n; }
     function colName(c) { var s = ''; c++; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
@@ -491,10 +491,18 @@
             '@bottom-right{content:"' + String(meta.doc_no || '').replace(/"/g, '') + '";font-size:11px;color:#333;}}' +
             'body{margin:0;font-family:"Microsoft JhengHei","PMingLiU",sans-serif;color:#000}' +
             '.h1{text-align:center;font-size:20px;font-weight:bold;margin:0 0 2px}.h2{text-align:center;font-size:16px;font-weight:bold;margin:0 0 8px}' +
-            '.wrap{zoom:' + zoom + '}table.sfp td{box-sizing:border-box}tr{page-break-inside:avoid}';
+            '.wrap{zoom:' + zoom + '}table.sfp td{box-sizing:border-box}tr{page-break-inside:avoid}' +
+            '.signs{display:flex;flex-wrap:wrap;gap:0;margin-top:10px;page-break-inside:avoid;border:1px solid #000;border-right:none}' +
+            '.signs .sg{flex:1;min-width:110px;border-right:1px solid #000;text-align:center;font-size:12px}' +
+            '.signs .sg .lb{border-bottom:1px solid #000;padding:2px 0;background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+            '.signs .sg .bx{min-height:100px;display:flex;align-items:center;justify-content:center;padding:2px}' +
+            '.stamp-wrap{height:auto !important;display:inline-flex;align-items:center;}' +
+            '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+            '.stamp-wrap svg.eg-stamp-tpl{width:auto;height:auto;}';
         var h = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(meta.title || '') + '</title><style>' + css + '</style></head><body>' +
             (meta.company ? '<div class="h1">' + esc(meta.company) + '</div>' : '') +
             '<div class="h2">' + esc(meta.title || '') + '</div><div class="wrap">' + t.html + '</div>' +
+            ((meta.signs && meta.signs.length) ? '<div class="signs">' + meta.signs.map(function (g) { return '<div class="sg"><div class="lb">' + esc(g.label) + '</div><div class="bx">' + (g.html || '') + '</div></div>'; }).join('') + '</div>' : '') +
             '<script>window.onload=function(){setTimeout(function(){window.focus();window.print();},300);};<\/script></body></html>';
         var win = window.open('', '_blank');
         if (!win) { alert('瀏覽器擋住了列印視窗，請允許本站的彈出視窗後再按一次'); return false; }

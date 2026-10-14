@@ -404,6 +404,10 @@ if (!function_exists('eg_sign_modules')) {
                 'table' => 'rf_instance', 'pk' => 'id',
                 'name_sql' => "COALESCE(NULLIF(t.title,''), CONCAT('審核表單 #', t.id))",
                 'date_sql' => 't.business_date'],
+            'sheet_form' => ['label' => '表格模板', 'page' => 'views/ADM/sheet_form.php',
+                'table' => 'sf_instance', 'pk' => 'id',
+                'name_sql' => "COALESCE(NULLIF(t.title,''), CONCAT('表格模板單據 #', t.id))",
+                'date_sql' => 't.biz_date'],
             'hr_form' => ['label' => '人事表單（職務說明書／技能鑑定／職能鑑定）', 'page' => 'views/ADM/hr_position_forms.php',
                 'table' => 'hr_form_instance', 'pk' => 'id',
                 // 「專業技能鑑定考核表　黃文德（生產1廠 作業員）－ CNC車床」這種程度才看得出印的是什麼。
@@ -468,7 +472,7 @@ if (!function_exists('eg_sign_level_label')) {
             'gm'      => '總經理核准',
         ];
         if (isset($map[$level])) return $map[$level];
-        if (preg_match('/^stage_(\d+)$/', $level, $m)) return '第 ' . $m[1] . ' 關簽核';
+        if (preg_match('/^(?:stage_|step)(\d+)$/', $level, $m)) return '第 ' . $m[1] . ' 關簽核';   // stepN＝表格模板（sheet_form）的關卡
         return $level;
     }
 }
