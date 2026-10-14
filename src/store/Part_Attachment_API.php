@@ -1128,6 +1128,11 @@ switch ($action) {
         require_once __DIR__ . '/../common/attach_lib.php';
         eg_attach_send_disposition($rec['original_name'] ?: $rec['filename']);
         header('Content-Length: '.filesize($fp));
+        // 批圖編輯器 2× 輸出的 PNG 可達 40MB 以上：Apache 的 php.ini 開著 zlib.output_compression，
+        // 透過壓縮輸出處理器 readfile 這種大檔會 Fatal（"Cannot use output buffering in output buffering
+        // display handlers"），瀏覽器就只看到「圖檔載入失敗」。圖檔／PDF 本身已壓縮，關掉壓縮不吃虧。
+        @ini_set('zlib.output_compression', '0');
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         readfile($fp);
         exit;
 
