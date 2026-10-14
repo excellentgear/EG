@@ -17,7 +17,55 @@ function pfmea_qc_special_characteristics(PDO $db): array {
     return $db->query("SELECT characteristic_id, name, symbol, description FROM qc_special_characteristic WHERE is_active=1 ORDER BY characteristic_id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/* ---------- 製程開放使用＝訂單追蹤的「稽核製程」自動連動（2026-10-14 使用者交辦）----------
+ * 只有被訂單追蹤設為「稽核製程」的製程小類才需要 PFMEA 參考資料；哪些製程算稽核製程由
+ * order_as_tag_lib 的 ot_astag_audit_process_nos() 即時決定（定義的製程大類或指定小類），本模組
+ * 不再自己存一份開放清單，管理員在訂單追蹤改了設定這裡就跟著變。is_enabled 欄位只是這個結果的快取，
+ * 每次讀取前都會重新對齊（同請求只做一次）。 */
+function pfmea_audit_process_sync(PDO $db): array {
+    static $res = null;
+    if ($res !== null) return $res;
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $audit = ot_astag_audit_process_nos($db);
+    $nos = array_keys($audit);
+    $created = 0;
+    try {
+        if ($nos) {
+            // 稽核製程在 pfmea_process 還沒有列就從製程主檔補（名稱與大項分類取主檔）
+            $in = implode(',', array_map('intval', $nos));
+            $have = $db->query("SELECT COALESCE(master_process_no_id, IF(process_code REGEXP '^[0-9]+$', CAST(process_code AS UNSIGNED), NULL)) AS no_id
+                                  FROM pfmea_process")->fetchAll(PDO::FETCH_COLUMN);
+            $haveSet = array_flip(array_map('intval', array_filter($have, static fn($v) => $v !== null)));
+            foreach ($db->query("SELECT pn.ProcessNo, pn.ProcessName, pn.process_type_id, pt.process_type
+                                   FROM process_no pn LEFT JOIN process_type pt ON pt.process_type_id=pn.process_type_id
+                                  WHERE pn.ProcessNo IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if (isset($haveSet[(int)$r['ProcessNo']])) continue;
+                $sort = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_process")->fetchColumn();
+                $db->prepare("INSERT INTO pfmea_process (process_code, process_name, master_process_no_id, master_type_id, category_name, sort_order, is_enabled, created_by, created_by_name)
+                              VALUES (?,?,?,?,?,?,1,0,'系統(稽核製程連動)')")
+                   ->execute([(string)$r['ProcessNo'], $r['ProcessName'], (int)$r['ProcessNo'], $r['process_type_id'] ?: null, $r['process_type'] ?: null, $sort]);
+                $created++;
+            }
+            $expr = "COALESCE(master_process_no_id, IF(process_code REGEXP '^[0-9]+$', CAST(process_code AS UNSIGNED), NULL))";
+            $db->exec("UPDATE pfmea_process SET is_enabled=1 WHERE is_active=1 AND is_enabled=0 AND $expr IN ($in)");
+            $db->exec("UPDATE pfmea_process SET is_enabled=0 WHERE is_enabled=1 AND ($expr IS NULL OR $expr NOT IN ($in))");
+        } else {
+            $db->exec("UPDATE pfmea_process SET is_enabled=0 WHERE is_enabled=1");
+        }
+    } catch (Throwable $e) { @error_log('[pfmea_audit_process_sync] ' . $e->getMessage()); }
+    return $res = ['audit_nos' => $nos, 'created' => $created];
+}
+
+/** 稽核製程的 process_no => 稽核製程標籤名稱（顯示用，如「齒研」「插齒」） */
+function pfmea_audit_process_tag_names(PDO $db): array {
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $out = [];
+    foreach (ot_astag_audit_process_nos($db) as $no => $v) $out[(int)$no] = implode('、', $v['tags']);
+    return $out;
+}
+
 function pfmea_ref_process_list(PDO $db): array {
+    pfmea_audit_process_sync($db);
     return $db->query("SELECT id, process_code, process_name, category_name FROM pfmea_process WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -59,9 +107,10 @@ function pfmea_process_sync_from_master(PDO $db, int $uid, string $uname): array
 /** 參考資料設定畫面用：全部製程(不篩is_enabled)，含大項分類+已設定幾個潛在失效模式(製程層級)，
  * 供批次開放/個別勾選介面；筆數提醒使用者這個製程已經有人設定過內容，理應開放使用 */
 function pfmea_process_list_all(PDO $db): array {
-    return $db->query("SELECT p.id, p.process_code, p.process_name, p.master_type_id, p.category_name, p.is_enabled,
-                               (SELECT COUNT(*) FROM pfmea_process_failure_mode f WHERE f.process_id=p.id AND f.item_option_id IS NULL AND f.function_option_id IS NULL AND f.is_active=1) AS fm_count
-                        FROM pfmea_process p WHERE p.is_active=1 ORDER BY (p.category_name IS NULL), p.category_name, p.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
+    pfmea_audit_process_sync($db);
+    return $db->query("SELECT p.id, p.process_code, p.process_name, p.master_process_no_id, p.master_type_id, p.category_name, p.is_enabled,
+                               (SELECT COUNT(*) FROM pfmea_process_failure_mode f WHERE f.process_id=p.id AND f.is_active=1) AS fm_count
+                        FROM pfmea_process p WHERE p.is_active=1 AND p.is_enabled=1 ORDER BY (p.category_name IS NULL), p.category_name, p.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /** 把已經有配置「潛在失效模式」的製程一併開放使用（2026-08-14使用者要求：有設定內容的製程理應
@@ -337,6 +386,11 @@ function pfmea_part_bom_processes(PDO $db, int $partDId, string $partNo = '', st
         }
     }
     if (!$rows) return [];
+    // 只有稽核製程才需要 PFMEA 參考資料（訂單追蹤的稽核製程設定即時決定，不寫死）
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $auditNos = ot_astag_audit_process_nos($db);
+    $rows = array_values(array_filter($rows, static fn($r) => isset($auditNos[(int)$r['process_no']])));
+    if (!$rows) return [];
     foreach ($rows as &$rr) { $rr['match_by'] = $matchBy; }
     unset($rr);
     foreach ($rows as &$r) {
@@ -568,13 +622,14 @@ const PFMEA_FLAT_MULTI = ['failure_effect', 'classification', 'failure_cause'];
 
 /** 平面表格的資料來源：所有失效模式各自的完整路徑 + 掛在它底下的後果／分類／原因 */
 function pfmea_flat_list(PDO $db): array {
+    pfmea_audit_process_sync($db);
     $rows = $db->query("SELECT f.id AS fm_id, f.failure_mode, f.process_id, f.item_option_id, f.function_option_id,
                                 p.process_code, p.process_name, i.item_name, fn.function_desc, fn.item_option_id AS fn_item_id
                          FROM pfmea_process_failure_mode f
                          LEFT JOIN pfmea_process p ON p.id = f.process_id
                          LEFT JOIN pfmea_function_option fn ON fn.id = f.function_option_id
                          LEFT JOIN pfmea_item_option i ON i.id = COALESCE(f.item_option_id, fn.item_option_id)
-                         WHERE f.is_active = 1
+                         WHERE f.is_active = 1 AND p.is_enabled = 1
                          ORDER BY p.sort_order, p.id, i.sort_order, i.id, fn.sort_order, fn.id, f.sort_order, f.id")
               ->fetchAll(PDO::FETCH_ASSOC);
     if (!$rows) return [];
@@ -618,6 +673,7 @@ function pfmea_flat_list(PDO $db): array {
 
 /** 前端算「這一格可以選什麼」用的整棵樹（含各層 id，才能在本機依左邊欄位過濾候選值） */
 function pfmea_flat_tree(PDO $db): array {
+    pfmea_audit_process_sync($db);
     return [
         'processes' => $db->query("SELECT id, process_code, process_name, category_name FROM pfmea_process
                                     WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),

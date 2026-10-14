@@ -54,7 +54,10 @@ function pfmea_suggest_candidates_multi(PDO $db, array $sources): array {
             // 專案模組不可用時只是少一個來源，不能讓整個建議清單掛掉
         }
     }
-    return $out;
+    // 2026-10-14 使用者交辦：只有「料號底下有稽核製程標籤訂單」的才需要 PFMEA（判定與合約審查同一套，
+    // 稽核製程由訂單追蹤設定即時決定）。比不到訂單的不列入建議。
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    return ot_astag_filter_audit_parts($db, $out, static fn($r) => [$r['part_d_id'] ?? 0, $r['part_no'] ?? ($r['part_no_text'] ?? ''), $r['customer_name'] ?? '', '']);
 }
 
 /** 候選清單：td_dev_eval 已有紀錄、pfmea_doc 還沒有紀錄的客戶+料號組合 */

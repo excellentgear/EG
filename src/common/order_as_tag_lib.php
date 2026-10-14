@@ -1451,3 +1451,105 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
     return ['ok' => true, 'applied' => $n, 'msg' => $msg];
 }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * 「稽核製程」衍生查詢（2026-10-14 使用者交辦）
+ * 各模組的「建議建立清單」與 PFMEA 參考資料，一律以這裡為準判定「哪些製程／料號屬於稽核範圍」，
+ * 不可以在別處另寫死一份製程清單——管理員在訂單追蹤改了稽核製程設定，所有模組就要跟著變。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 稽核製程涵蓋的 process_no => ['tags'=>[tag_id=>稽核製程名稱]]。
+ *  每個啟用中的 kind='process' 定義：有指定小類就用指定的，沒指定＝該製程大類底下全部小類。 */
+if (!function_exists('ot_astag_audit_process_nos')) {
+function ot_astag_audit_process_nos(PDO $db, bool $refresh = false): array
+{
+    static $cache = null;
+    if ($refresh) $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    foreach (ot_astag_defs($db, true) as $d) {
+        if (($d['kind'] ?? '') !== 'process') continue;
+        $nos = $d['sub_nos'];
+        if (!$nos && $d['process_type_id']) {
+            $st = $db->prepare("SELECT ProcessNo FROM process_no WHERE process_type_id=?");
+            $st->execute([(int)$d['process_type_id']]);
+            $nos = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        }
+        foreach ($nos as $n) { $out[(int)$n]['tags'][(int)$d['tag_id']] = (string)$d['proc_name']; }
+    }
+    return $cache = $out;
+}
+}
+
+/** 有稽核製程標籤訂單（排除暫停/取消）的料號集合。判定與合約審查(con_review)完全同一套：
+ *  訂單 as_tag_id 指向 kind='process' 的定義。pk＝料號主檔 id；txt＝「客戶編號或客戶名稱|料號文字」
+ *  （order_track.d_id_ID 有六成是空的，只靠主鍵會漏掉大半訂單，所以文字退路一定要有且一定要比客戶）。 */
+if (!function_exists('ot_astag_audit_part_set')) {
+function ot_astag_audit_part_set(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $set = ['pk' => [], 'txt' => []];
+    try {
+        $rows = $db->query("SELECT DISTINCT ot.d_id_ID AS pk, ot.d_id AS part_txt, ot.Client_name AS cname, ot.Client_name_ID AS cid
+                              FROM order_track ot
+                              JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id AND t.kind = 'process'
+                             WHERE (ot.Order_status IS NULL OR ot.Order_status <> 6)")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return $cache = $set; }
+    foreach ($rows as $r) {
+        $pk = (int)($r['pk'] ?? 0);
+        if ($pk) $set['pk'][$pk] = true;
+        $pt = trim((string)($r['part_txt'] ?? ''));
+        if ($pt === '') continue;
+        $ci = trim((string)($r['cid'] ?? '')); $cn = trim((string)($r['cname'] ?? ''));
+        if ($ci !== '') $set['txt'][$ci . '|' . $pt] = true;
+        if ($cn !== '') $set['txt'][$cn . '|' . $pt] = true;
+    }
+    return $cache = $set;
+}
+}
+
+/** 這個料號（客戶＋料號）底下有沒有稽核製程標籤的訂單。pk 優先；比不到才退「客戶＋料號文字」。 */
+if (!function_exists('ot_astag_part_is_audit')) {
+function ot_astag_part_is_audit(PDO $db, array $set, $partDId, $partText = '', $custName = '', $custId = ''): bool
+{
+    static $master = [];
+    $pk = (int)$partDId;
+    if ($pk && isset($set['pk'][$pk])) return true;
+    $txt = trim((string)$partText); $cn = trim((string)$custName); $ci = trim((string)$custId);
+    if ($pk) {
+        if (!array_key_exists($pk, $master)) {
+            try {
+                $st = $db->prepare("SELECT ds.D_Setting_Id, ds.Customer_Id, cl.customer FROM d_setting ds
+                                      LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id WHERE ds.d_id = ?");
+                $st->execute([$pk]);
+                $master[$pk] = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+            } catch (Throwable $e) { $master[$pk] = null; }
+        }
+        if ($master[$pk]) {
+            if ($txt === '') $txt = trim((string)$master[$pk]['D_Setting_Id']);
+            if ($ci === '')  $ci  = trim((string)$master[$pk]['Customer_Id']);
+            if ($cn === '')  $cn  = trim((string)$master[$pk]['customer']);
+        }
+    }
+    if ($txt === '') return false;
+    if ($ci !== '' && isset($set['txt'][$ci . '|' . $txt])) return true;
+    if ($cn !== '' && isset($set['txt'][$cn . '|' . $txt])) return true;
+    return false;
+}
+}
+
+/** 批次過濾「建議建立清單」：只留下料號底下有稽核製程訂單的列。
+ *  $get($row) 回傳 [料號主檔id, 料號文字, 客戶名稱, 客戶編號]。 */
+if (!function_exists('ot_astag_filter_audit_parts')) {
+function ot_astag_filter_audit_parts(PDO $db, array $rows, callable $get): array
+{
+    $set = ot_astag_audit_part_set($db);
+    $out = [];
+    foreach ($rows as $r) {
+        $k = $get($r);
+        if (ot_astag_part_is_audit($db, $set, $k[0] ?? 0, $k[1] ?? '', $k[2] ?? '', $k[3] ?? '')) $out[] = $r;
+    }
+    return $out;
+}
+}

@@ -1053,9 +1053,12 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
     if (!$missingIds) return [];
 
     $in = implode(',', array_map('intval', $missingIds));
-    $rows = $db->query("SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(cl.customer,'') AS customer_name
+    $rows = $db->query("SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(cl.customer,'') AS customer_name, ds.Customer_Id AS customer_id
                          FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id=ds.Customer_Id
                          WHERE ds.d_id IN ($in) ORDER BY ds.D_Setting_Id")->fetchAll(PDO::FETCH_ASSOC);
+    // 2026-10-14 使用者交辦：只有料號底下有稽核製程標籤訂單的才需要建型態識別文件管制表（比照合約審查）
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $rows = ot_astag_filter_audit_parts($db, $rows, static fn($r) => [$r['d_id'], $r['part_no'], $r['customer_name'], $r['customer_id']]);
     foreach ($rows as &$r) {
         $id = (int)$r['d_id'];
         $r['ext_count']   = $counts[$id] ?? 0;

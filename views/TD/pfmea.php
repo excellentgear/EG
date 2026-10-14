@@ -309,11 +309,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
 
         <div class="pf-rt-pane" data-rstab="proc">
-        <div class="pf-sec-title">製程開放使用設定
-            <span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span>
-            <span class="pf-op" onclick="rsEnableConfigured()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-check-square-o"></i> 一鍵開放已設定製程</span>
-        </div>
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
+        <div class="pf-sec-title">製程開放使用（自動連動訂單追蹤的「稽核製程」）</div>
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">只有被訂單追蹤設為<b>稽核製程</b>的製程小類才需要 PFMEA 參考資料，本清單由系統依訂單追蹤的設定即時決定，<b>不能在這裡手動開放</b>；要增減請到訂單追蹤→設定→稽核製程標籤（改完這裡自動跟著變）。</div>
         <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
 
         <!-- 左樹右設定（2026-08-18 使用者拍板）：左邊一棵可展開的樹一眼看完整體結構，點哪一節
@@ -933,7 +930,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>AI 產生的整組樣板</b>：由 AI 整理匯入的整組樣板，在選擇樣板的清單上會標示橘色 <b>AI</b> 徽章提醒人工複核；此標記<b>不會印在列印版上</b>。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
-            <li><b>參考資料設定</b>：頁面上方的<b>「參考資料設定」大分頁</b>（僅管理員可見，與「分析表清單」並列；工具列同名按鈕也會切到這裡）。裡面再分三個子頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>參考資料設定</b>：頁面上方的<b>「參考資料設定」大分頁</b>（僅管理員可見，與「分析表清單」並列；工具列同名按鈕也會切到這裡）。裡面再分三個子頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端的「製程開放使用」清單<b>自動連動訂單追蹤的稽核製程設定</b>（訂單追蹤→設定→稽核製程標籤；只有被設為稽核製程的製程小類需要 PFMEA 參考資料，製程不寫死、那邊改了這裡自動跟著變，不能在這裡手動開放），只有這些製程會出現在分析表下拉。「建議建立清單」也只列出料號底下有稽核製程標籤訂單的料號。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>分類自動判定</b>：填寫「嚴重度S」或「發生率O」時，系統會依門檻自動帶入分類——預設 <b>S 介於 5~8</b> <b>或</b> <b>O 介於 4~10</b> 就帶「重要特性」，都不符合帶「一般特性」（兩條件是「或」，其中一個成立即可）。只會寫進<b>還空白、或上次就是系統自動帶的</b>格子，您手動打過的分類不會被蓋掉。門檻與文字可由管理員在分類欄位右側「判定規則」按鈕修改（可整個停用）。</li>
             <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
             <li><b>建議措施的列印換行</b>：列印時「建議措施」會依編號一項一行（1. 2. 3. 各自獨立一行）；不論您是用 Enter 換行輸入，或是編號連著寫成一整段，列印都會自動斷行。公差小數（如 0.02、Ra1.6）不會被誤判成編號。</li>
@@ -2942,66 +2939,23 @@ window.switchRsTab = function(tab){
 function rsRenderProcessEnableList(){
     $.getJSON(API, {action:'process_list_all'}, function(res){
         if (!res.success) return;
-        var byCat = {};
+        var byTag = {};
         (res.rows||[]).forEach(function(p){
-            var cat = p.category_name || '（未分類／尚未同步主檔）';
-            (byCat[cat] = byCat[cat] || []).push(p);
+            var tag = p.audit_tags || '（稽核製程）';
+            (byTag[tag] = byTag[tag] || []).push(p);
         });
         var html = '';
-        Object.keys(byCat).sort().forEach(function(cat){
-            var procs = byCat[cat];
-            var allChecked = procs.every(function(p){ return p.is_enabled==1; });
-            var typeId = procs[0].master_type_id || 0;
-            html += '<div class="rs-cat-block">'
-                + '<label class="rs-cat-hd"><input type="checkbox" class="rs-cat-ck" data-type="'+typeId+'"'+(allChecked?' checked':'')+'> <b>'+esc(cat)+'</b>　('+procs.length+'個)</label>';
-            procs.forEach(function(p){
-                var badge = p.fm_count > 0 ? ' <span style="color:#b5762a;">（已設定'+p.fm_count+'個潛在失效模式）</span>' : '';
-                html += '<label class="rs-proc-ck-row"><input type="checkbox" class="rs-proc-ck" data-id="'+p.id+'"'+(p.is_enabled==1?' checked':'')+'> '+esc(p.process_code)+' '+esc(p.process_name)+badge+'</label>';
+        Object.keys(byTag).forEach(function(tag){
+            html += '<div class="rs-cat-block"><div class="rs-cat-hd"><b>稽核製程：'+esc(tag)+'</b>　('+byTag[tag].length+'個製程小類)</div>';
+            byTag[tag].forEach(function(p){
+                var badge = p.fm_count > 0 ? ' <span style="color:#b5762a;">（已設定'+p.fm_count+'個潛在失效模式）</span>' : ' <span style="color:#DD5138;">（尚未設定參考資料）</span>';
+                html += '<div class="rs-proc-ck-row">✔ '+esc(p.process_code)+' '+esc(p.process_name)+badge+'</div>';
             });
             html += '</div>';
         });
-        $('#rsProcessEnableList').html(html || '<div class="rs-empty">尚無資料，請先按「從全站製程主檔同步」</div>');
+        $('#rsProcessEnableList').html(html || '<div class="rs-empty">目前訂單追蹤沒有設定任何稽核製程（訂單追蹤→設定→稽核製程標籤），所以沒有需要設定參考資料的製程。</div>');
     });
 }
-window.rsSyncProcesses = function(){
-    if (!confirm('從全站製程主檔（process_no）重新同步製程清單？\n已存在的製程代號不會被覆蓋名稱，只會補上大項分類關聯；新出現的製程預設不開放使用，需另外勾選。')) return;
-    $.post(API, {action:'process_sync_master'}, function(res){
-        if (!res.success){ alert(res.message||'同步失敗'); return; }
-        alert('同步完成：新增 '+res.created+' 筆，補連結 '+res.linked+' 筆（主檔共 '+res.total_master+' 筆製程）。');
-        rsRenderProcessEnableList(); loadProcessList();
-    }, 'json');
-};
-window.rsEnableConfigured = function(){
-    $.post(API, {action:'process_enable_configured'}, function(res){
-        if (!res.success){ alert(res.message||'設定失敗'); return; }
-        alert('已將 '+res.enabled+' 個已設定過潛在失效模式、但尚未開放的製程改為開放使用。');
-        rsRenderProcessEnableList(); loadProcessList();
-    }, 'json');
-};
-$(document).on('change', '#rsProcessEnableList .rs-proc-ck', function(){
-    var id = parseInt($(this).data('id'),10), checked = this.checked;
-    $.post(API, {action:'process_set_enabled', ids:JSON.stringify([id]), enabled:checked?1:0}, function(res){
-        if (!res.success){ alert(res.message||'設定失敗'); return; }
-        loadProcessList(); rsLoadProcessList();
-    }, 'json');
-    var $block = $(this).closest('.rs-cat-block');
-    $block.find('.rs-cat-ck').prop('checked', $block.find('.rs-proc-ck').length === $block.find('.rs-proc-ck:checked').length);
-});
-$(document).on('change', '#rsProcessEnableList .rs-cat-ck', function(){
-    var typeId = parseInt($(this).data('type'),10), checked = this.checked;
-    var $block = $(this).closest('.rs-cat-block');
-    $block.find('.rs-proc-ck').prop('checked', checked);
-    if (!typeId) {
-        var ids = $block.find('.rs-proc-ck').map(function(){ return parseInt($(this).data('id'),10); }).get();
-        $.post(API, {action:'process_set_enabled', ids:JSON.stringify(ids), enabled:checked?1:0}, function(res){
-            if (res.success) { loadProcessList(); rsLoadProcessList(); }
-        }, 'json');
-        return;
-    }
-    $.post(API, {action:'process_set_enabled_by_type', master_type_id:typeId, enabled:checked?1:0}, function(res){
-        if (res.success) { loadProcessList(); rsLoadProcessList(); }
-    }, 'json');
-});
 
 /* ---------- 整組樣板 新增/編輯/刪除（2026-08-14使用者要求：不再只能查看/刪除）---------- */
 var RS_TPL_ROWS = [];

@@ -220,6 +220,10 @@ function td_dev_eval_suggest_candidates(PDO $db, string $dateFrom, string $dateT
     }
     unset($row);
 
+    // 2026-10-14 使用者交辦：只有料號底下有稽核製程標籤訂單的才需要建產品開發評估表（比照合約審查）
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $out = ot_astag_filter_audit_parts($db, $out, static fn($r) => [$r['part_d_id'] ?? 0, $r['part_no_text'] ?? '', $r['customer_name'] ?? '', $r['customer_id'] ?? '']);
+
     usort($out, function($a, $b) {
         $c = strcmp($a['customer_name'], $b['customer_name']);
         return $c !== 0 ? $c : strcmp($a['part_no_text'], $b['part_no_text']);
@@ -272,7 +276,8 @@ function td_dev_eval_suggest_project_candidates(PDO $db): array {
             'project_name' => (string)$r['project_name'],
         ];
     }
-    return $out;
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    return ot_astag_filter_audit_parts($db, $out, static fn($r) => [$r['part_d_id'] ?? 0, $r['part_no_text'] ?? '', $r['customer_name'] ?? '', $r['customer_id'] ?? '']);
 }
 
 /** 單一料號的參考資訊：最新BOM編號/建立日期、最早報工日期、最早訂單日期（皆不受篩選區間限制，越早越有參考價值） */
