@@ -53,6 +53,19 @@
     .fm-step .st-note { color:#8a6d45; font-size:11.5px; margin-top:2px; white-space:pre-line; }
     .fm-decide { border:1.5px solid #F0A24B; background:#FFF8E8; border-radius:8px; padding:10px 12px; margin-bottom:12px; }
     .fm-decide textarea { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:13px; box-sizing:border-box; margin-top:6px; }
+    /* 手機／窄螢幕：跳窗滿版、欄位單欄 */
+    @media (max-width:768px) {
+        .fm-panel { width:100vw; max-width:100vw; margin:0; border-radius:0; max-height:100vh; height:100vh; }
+        .fm-head { border-radius:0; }
+        .fm-body { padding:10px 12px; }
+        .fm-meta { grid-template-columns:1fr; }
+        .fm-grid, .fm-cardgrid { grid-template-columns:1fr; }
+        .fm-fld.fm-wide { grid-column:span 1; }
+        .fm-foot { position:sticky; bottom:0; }
+        .fm-foot button { flex:1 1 40%; }
+        .fm-step { min-width:46%; }
+        .fm-in, .fm-meta input, .fm-meta select { font-size:16px; }
+    }
     /* 簽章列（表單底部，顯示已簽核者的圖章） */
     .fm-stamps { display:flex; flex-wrap:wrap; gap:14px; margin-top:6px; }
 </style>
@@ -74,6 +87,7 @@
     <div class="fm-foot">
         <button id="btnFmPrint"><i class="fa fa-print"></i> 列印</button>
         <span style="flex:1"></span>
+        <button id="btnFmWithdraw" style="display:none;"><i class="fa fa-undo"></i> 撤回</button>
         <button id="btnFmSave"><i class="fa fa-save"></i> 儲存草稿</button>
         <button id="btnFmDone" class="b-ok"><i class="fa fa-check"></i> 完成送出</button>
         <button id="btnFmClose">關閉</button>

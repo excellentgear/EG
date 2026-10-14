@@ -167,14 +167,14 @@ case 'instance_list': {
     $kw = trim((string)($_GET['kw'] ?? ''));
     if (!empty($_GET['todo'])) {          // 待我簽核
         $rows = $db->query("SELECT i.id, i.template_id, t.name AS template_name, i.title, i.biz_date, i.status, i.created_by, u.user_cname AS creator_name,
-                i.created_at, i.modified_at, i.submitted_at, i.cur_step, i.tpl_flow_json
+                i.created_at, i.modified_at, i.submitted_at, i.cur_step, i.tpl_flow_json, i.sign_meta_json
             FROM sf_instance i JOIN sf_template t ON t.id=i.template_id LEFT JOIN user u ON u.id=i.created_by
             WHERE i.deleted_at IS NULL AND i.status='pending' ORDER BY i.id DESC LIMIT 300")->fetchAll(PDO::FETCH_ASSOC);
         $mine = [];
         foreach ($rows as $r) {
             if ($kw !== '' && stripos($r['title'] . $r['template_name'] . $r['creator_name'], $kw) === false) continue;
             [$can] = sf_flow_can_decide($db, $r, $uid);
-            if ($can) { $r['can_edit'] = false; $r['step_label'] = sf_step_label(sf_flow_of_instance($r), (int)$r['cur_step']); unset($r['tpl_flow_json']); $mine[] = $r; }
+            if ($can) { $r['can_edit'] = false; $r['step_label'] = sf_step_label(sf_flow_of_instance($r), (int)$r['cur_step']); unset($r['tpl_flow_json'], $r['sign_meta_json']); $mine[] = $r; }
         }
         jout(['rows'=>array_slice($mine, ($page - 1) * $per, $per), 'total'=>count($mine), 'page'=>$page, 'per'=>$per]);
     }
@@ -202,7 +202,7 @@ case 'instance_list': {
 
 case 'todo_count': {
     $n = 0;
-    foreach ($db->query("SELECT id, created_by, status, cur_step, tpl_flow_json FROM sf_instance WHERE deleted_at IS NULL AND status='pending' LIMIT 300")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    foreach ($db->query("SELECT id, created_by, status, cur_step, tpl_flow_json, sign_meta_json FROM sf_instance WHERE deleted_at IS NULL AND status='pending' LIMIT 300")->fetchAll(PDO::FETCH_ASSOC) as $r) {
         [$can] = sf_flow_can_decide($db, $r, $uid); if ($can) $n++;
     }
     jout(['n'=>$n]);
@@ -240,7 +240,7 @@ case 'instance_get': {
         'fields'=>json_decode((string)$inst['tpl_fields_json'], true) ?: [],
         'values'=>json_decode((string)$inst['values_json'], true) ?: new stdClass(),
         'can_edit'=>sf_instance_can_edit($perms, $inst, $uid),
-        'can_decide'=>$canDecide, 'cur_step'=>(int)$inst['cur_step'], 'flow_steps'=>sf_flow_steps_view($db, $inst), 'has_flow'=>count($flow) > 0,
+        'can_decide'=>$canDecide, 'can_withdraw'=>($inst['status'] === 'pending' && ($perms['canAdmin'] || (int)$inst['created_by'] === $uid)), 'cur_step'=>(int)$inst['cur_step'], 'flow_steps'=>sf_flow_steps_view($db, $inst), 'has_flow'=>count($flow) > 0,
         'submit_date'=>$inst['submit_date'],
         'stamp_tpl'=>(($stp = rvf_stamp_tpl_get($db, (int)($tpl['stamp_tpl_id'] ?? 0))) ? $stp['schema'] : null),
         'creator'=>['id'=>(int)$inst['created_by']] + sf_identity_asof($db, (int)$inst['created_by'], (string)($inst['submit_date'] ?: $inst['biz_date'])),
@@ -292,6 +292,13 @@ case 'flow_decide': {
     need_csrf();
     $r = sf_flow_decide($db, (int)($_POST['id'] ?? 0), $uid, $uname, ($_POST['decision'] ?? '') === 'rejected' ? 'rejected' : 'approved', (string)($_POST['note'] ?? ''));
     if (empty($r['ok'])) jerr($r['msg'] ?? '處理失敗', 422);
+    jout(['status'=>$r['status'], 'partial'=>!empty($r['partial']), 'left'=>(int)($r['left'] ?? 0)]);
+}
+
+case 'flow_withdraw': {
+    need_csrf();
+    $r = sf_flow_withdraw($db, (int)($_POST['id'] ?? 0), $uid, $uname, (bool)$perms['canAdmin']);
+    if (empty($r['ok'])) jerr($r['msg'] ?? '撤回失敗', 422);
     jout(['status'=>$r['status']]);
 }
 

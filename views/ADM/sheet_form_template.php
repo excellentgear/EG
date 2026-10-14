@@ -178,7 +178,7 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
     <div class="m-head"><span>簽核與維護設定</span><span class="m-close" onclick="closeMask('stMask')">✕</span></div>
     <div class="m-body">
         <div style="font-weight:bold;color:#8A5A2B;">簽核流程（依序簽，最多 4 關；一關都不設＝送出即完成，不需簽核）</div>
-        <div class="hint">簽核人方式：<b>部門任一主管</b>＝該部門任何一位主管簽即可；<b>指定人員</b>＝固定那個人；<b>送出者的單位主管</b>＝依組織圖自動找（組長→課長，只追到課級）；<b>最高核准人員</b>＝全站組織角色綁定的那位。解析到送出者本人會自動跳過（不能自己簽自己的單）。簽核人請假且設有代理人時，代理人也能簽。勾「系統自動簽核」＝不等真人，送出後系統立即簽完（簽核時間會隨機錯開幾分鐘、不跨天，補歷史單據用）。</div>
+        <div class="hint">簽核人方式：<b>部門任一主管</b>＝該部門任何一位主管簽即可（勾「會簽」則每一位主管都要簽）；<b>指定人員</b>＝固定那個人；<b>送出者的單位主管</b>＝依組織圖自動找（組長→課長，只追到課級）；<b>最高核准人員</b>＝全站組織角色綁定的那位。解析到送出者本人會自動跳過（不能自己簽自己的單）。簽核人請假且設有代理人時，代理人也能簽。勾「系統自動簽核」＝不等真人，送出後系統立即簽完（簽核時間會隨機錯開幾分鐘、不跨天，補歷史單據用）。</div>
         <div id="flowRows"></div>
         <button type="button" id="btnFlowAdd" style="height:28px;border:1px dashed #D8BE93;border-radius:4px;background:#FDF8EF;color:#8A5A2B;cursor:pointer;padding:0 12px;">＋ 新增一關</button>
         <div style="font-weight:bold;color:#8A5A2B;margin-top:16px;">簽章圖章樣式</div>
@@ -434,6 +434,7 @@ function flowRowHtml(i, s){
       + '<select class="fl-mode">'+modes+'</select>'
       + '<span class="fl-dept-w" style="'+(s.mode==='dept'?'':'display:none;')+'"><select class="fl-dept" data-eg-filter="輸入部門篩選…" style="min-width:150px">'+depts+'</select></span>'
       + '<span class="fl-user-w" style="'+(s.mode==='user'?'':'display:none;')+'"><select class="fl-user" data-eg-filter="輸入姓名篩選…" style="min-width:180px">'+users+'</select></span>'
+      + '<label class="fl-all-w" style="margin:0;'+(s.mode==='dept'?'':'display:none;')+'"><input type="checkbox" class="fl-all"'+(s.all?' checked':'')+'> 會簽（每位主管都要簽）</label>'
       + '<label style="margin:0;"><input type="checkbox" class="fl-auto"'+(s.auto?' checked':'')+'> 系統自動簽核</label>'
       + '<span class="lnk del fl-del" style="margin-left:auto;">刪除</span></div>';
 }
@@ -443,7 +444,7 @@ function renderFlowRows(){
 }
 function readFlowRows(){
     var out=[]; $('#flowRows .flow-row').each(function(){
-        var $r=$(this); out.push({label:$.trim($r.find('.fl-label').val()), mode:$r.find('.fl-mode').val(), dept_id:+$r.find('.fl-dept').val()||0, user_id:+$r.find('.fl-user').val()||0, auto:$r.find('.fl-auto').is(':checked')?1:0});
+        var $r=$(this); out.push({label:$.trim($r.find('.fl-label').val()), mode:$r.find('.fl-mode').val(), dept_id:+$r.find('.fl-dept').val()||0, user_id:+$r.find('.fl-user').val()||0, auto:$r.find('.fl-auto').is(':checked')?1:0, all:($r.find('.fl-mode').val()==='dept' && $r.find('.fl-all').is(':checked'))?1:0});
     });
     return out;
 }
@@ -459,7 +460,7 @@ $('#btnDzFlow').on('click', function(){
 });
 $('#btnFlowAdd').on('click', function(){ CUR._ef = readFlowRows(); if (CUR._ef.length>=4) return; CUR._ef.push({label: CUR._ef.length===0?'審核':'核准', mode:'dept', dept_id:0, user_id:0, auto:0}); renderFlowRows(); });
 $('#flowRows').on('click', '.fl-del', function(){ CUR._ef = readFlowRows(); CUR._ef.splice(+$(this).closest('.flow-row').attr('data-i'),1); renderFlowRows(); });
-$('#flowRows').on('change', '.fl-mode', function(){ var $r=$(this).closest('.flow-row'), m=$(this).val(); $r.find('.fl-dept-w').toggle(m==='dept'); $r.find('.fl-user-w').toggle(m==='user'); });
+$('#flowRows').on('change', '.fl-mode', function(){ var $r=$(this).closest('.flow-row'), m=$(this).val(); $r.find('.fl-dept-w').toggle(m==='dept'); $r.find('.fl-user-w').toggle(m==='user'); $r.find('.fl-all-w').toggle(m==='dept'); });
 $('#stMUser').on('change', function(){
     var id=+$(this).val(); if (!id) return;
     var p=(META.people_full||[]).filter(function(x){ return x.id===id; })[0];
@@ -490,7 +491,7 @@ $('#btnDzPreview').on('click', function(){
     $('#fmTitle').text(($.trim($('#dzName').val())||'（未命名模板）')+' — 預覽'); $('#fmState').html('<span class="st-badge st-active">預覽</span>');
     $('#fmName').val('').prop('disabled', true); $('#fmDate').val(META.today).prop('disabled', true); $('#fmWho').text('預覽（內容不會儲存）');
     $('#fmDecide').hide().html('');
-    $('#fmFlow').html((CUR.flow||[]).length ? '<div class="fm-flow"><b style="color:#8A5A2B">簽核流程：</b>填表 → '+CUR.flow.map(function(s){ return esc(s.label)+'（'+MODE_LABEL[s.mode]+(s.auto?'・自動':'')+'）'; }).join(' → ')+'</div>' : '');
+    $('#fmFlow').html((CUR.flow||[]).length ? '<div class="fm-flow"><b style="color:#8A5A2B">簽核流程：</b>填表 → '+CUR.flow.map(function(s){ return esc(s.label)+'（'+MODE_LABEL[s.mode]+(s.all?'・會簽':'')+(s.auto?'・自動':'')+'）'; }).join(' → ')+'</div>' : '');
     $('#fmBase,#fmDetail,#fmCalc').html('<div style="padding:20px;color:#8a6d45">載入中…</div>'); $('#fmErr').text('');
     $('#fmMask').addClass('on preview');
     PV = { ctl: EGSheetForm.mount({ el:'fmU', mode:'fill', book:book, fields:fields, values:values, extraRows:extra, people:META.people, toast:toast }) };

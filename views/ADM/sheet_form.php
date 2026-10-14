@@ -127,7 +127,8 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
         <b>①新增單據</b>：按「新增單據」→ 選模板、（可選）寫標題、確認業務日期 → 開始填寫。模板若有預設的標準項目，會自動帶入明細。<br>
         <b>②填寫</b>：直接在欄位輸入；下拉欄選項、日期欄點日曆、勾選欄直接點；<b>料號、客戶欄輸入關鍵字會從主檔搜尋，請從清單挑選</b>。必填欄位標紅色星號，輸入錯誤當場提示原因。明細可按「新增一筆」，每筆右上角「✕ 刪除」可刪除該筆，合計等計算欄位自動更新。<br>
         <b>③儲存草稿／送出</b>：草稿可隨時存、日後再改。模板有簽核流程時按「送出簽核」，依序通知各關簽核人；沒有簽核流程則「完成送出」後直接鎖定。<br>
-        <b>④簽核</b>：被指定的簽核人會收到通知，也會出現在「待我簽核」。開啟單據可看完整內容與簽核進度，核准或退回（<b>退回必須填原因</b>）。被退回的單據建立人可修改後重新送出。簽核人請假且設有代理人時，代理人也能簽（圖章右下角加「代」字）。<br>
+        <b>④簽核</b>：被指定的簽核人會收到通知，也會出現在「待我簽核」。開啟單據可看完整內容與簽核進度，核准或退回（<b>退回必須填原因</b>）。被退回的單據建立人可修改後重新送出。簽核人請假且設有代理人時，代理人也能簽（圖章右下角加「代」字）。有「會簽」的關卡，該部門每一位主管都要簽，進度會顯示已簽幾位。<br>
+        <b>④-1 撤回</b>：簽核中且還沒有任何真人簽過時，填表人可以按「撤回」把單據收回成草稿，修改後重送；已經有人簽過就不能撤回，請洽簽核人退回。<br>
         <b>⑤列印</b>：依模板設定的紙張與方向，表頭是公司名稱與表單名稱，底部是填表人與各關簽核人的圖章，右下角是 AS 文件編號（版次依業務日期回推），並記錄列印紀錄。<br>
         <b>⑥刪除</b>：草稿與已退回的單據可由建立人刪除；其他狀態只有管理員能刪。
         <h4>重要行為</h4>
@@ -246,7 +247,11 @@ function renderFlow(inst){
     h += '<div class="fm-step s-done"><b>填表</b><div>'+esc(inst.creator_name||'')+'</div></div>';
     steps.forEach(function(s){
         var cls = s.state==='done'?'s-done':(s.state==='cur'?'s-cur':(s.state==='rej'?'s-rej':'')), t = '';
-        if (s.state==='done') t = esc(s.by)+(s.deleg?'（代 '+esc(s.deleg)+'）':'')+'<div class="st-note">'+esc((s.at||'').substring(0,16))+'</div>';
+        if (s.all && s.state!=='rej'){
+            t = (s.signers||[]).map(function(g){ return esc(g.by)+(g.deleg?'（代 '+esc(g.deleg)+'）':'')+' <span class="st-note" style="display:inline">'+esc((g.at||'').substring(5,16))+'</span>'; }).join('<br>');
+            if (s.state==='cur') t += (t?'<br>':'')+'<span class="st-note">會簽 '+esc(s.progress||'')+'；等待：'+esc(s.waiting_for||'')+'</span>';
+        }
+        else if (s.state==='done') t = esc(s.by)+(s.deleg?'（代 '+esc(s.deleg)+'）':'')+'<div class="st-note">'+esc((s.at||'').substring(0,16))+'</div>';
         else if (s.state==='rej') t = esc(s.by)+' 退回<div class="st-note">'+esc((s.at||'').substring(0,16))+'\n原因：'+esc(s.note)+'</div>';
         else if (s.state==='cur') t = '待簽核中<div class="st-note">'+esc(s.waiting_for||'')+'</div>';
         else t = (inst.status==='pending' && s.waiting_for) ? '等待前關完成' : '尚未送出';
@@ -277,6 +282,7 @@ function openInst(id){
         } else $('#fmDecide').hide().html('');
         $('#fmBase,#fmDetail,#fmCalc').html(''); $('#fmErr').text('');
         $('#btnFmSave').toggle(!!inst.can_edit);
+        $('#btnFmWithdraw').toggle(!!inst.can_withdraw);
         $('#btnFmDone').toggle(!!inst.can_edit).html(inst.has_flow ? '<i class="fa fa-paper-plane"></i> 送出簽核' : '<i class="fa fa-check"></i> 完成送出');
         $('#fmMask').addClass('on'); $('#fmMask .fm-foot button').prop('disabled', true);
         $('#fmBase').html('<div style="padding:20px;color:#8a6d45">載入中…</div>');
@@ -317,19 +323,26 @@ $('#fmMask').on('click', '#btnFmApprove,#btnFmReject', function(){
     if (!confirm(rej ? '確定退回這張單據？' : '確定核准？')) return;
     $('#fmDecide button').prop('disabled', true);
     post({action:'flow_decide', id:FM.id, decision:rej?'rejected':'approved', note:note}, function(res){
-        toast(rej ? '已退回' : (res.status==='done' ? '已簽核完成' : '已核准，送往下一關')); closeFill(true); loadList(); refreshTodo();
+        toast(rej ? '已退回' : (res.partial ? '已核准，還有 '+res.left+' 位要會簽' : (res.status==='done' ? '已簽核完成' : '已核准，送往下一關'))); closeFill(true); loadList(); refreshTodo();
     }, function(res){ $('#fmDecErr').text(res.error||'處理失敗'); $('#fmDecide button').prop('disabled', false); });
 });
 function printInst(){
     var i = FM.inst, signs = [];
     if (i.has_flow){
         signs.push({label:'填表人', html: stampHtml(i.creator_name, i.submit_date||i.biz_date, false, (i.creator||{}).dept, (i.creator||{}).position)});
-        (i.flow_steps||[]).forEach(function(s){ signs.push({label:s.label, html: s.state==='done' ? stampHtml(s.by, s.at, !!s.deleg, s.dept, s.position) : ''}); });
+        (i.flow_steps||[]).forEach(function(s){
+            if (s.state==='done' && (s.signers||[]).length>1) s.signers.forEach(function(g){ signs.push({label:s.label, html: stampHtml(g.by, g.at, !!g.deleg, g.dept, g.position)}); });
+            else signs.push({label:s.label, html: s.state==='done' ? stampHtml(s.by, s.at, !!s.deleg, s.dept, s.position) : ''});
+        });
     }
     EGSheetForm.printWindow(FM.ctl, { title:i.print.title, company:i.print.company, doc_no:i.print.doc_no, paper_size:i.paper_size, orientation:i.orientation, signs:signs });
     post({action:'print_log', id:FM.id}, function(){});
 }
 $('#btnFmPrint').on('click', printInst);
+$('#btnFmWithdraw').on('click', function(){
+    if (!confirm('撤回後單據回到草稿，可以修改後重新送出。確定撤回？')) return;
+    post({action:'flow_withdraw', id:FM.id}, function(){ toast('已撤回，單據回到草稿'); closeFill(true); loadList(); refreshTodo(); });
+});
 function closeFill(force, silent){
     if (!force && FM && FM.canEdit && !confirm('關閉前請確認已按「儲存草稿」，未儲存的內容會遺失。確定關閉？')) return;
     if (FM && FM.ui) FM.ui.destroy();

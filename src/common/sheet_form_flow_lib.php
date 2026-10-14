@@ -41,6 +41,7 @@ function sf_flow_normalize(PDO $db, string $json): array {
             $ok = $d > 0 && $db->query("SELECT COUNT(*) FROM department WHERE id=" . $d)->fetchColumn();
             if (!$ok) throw new InvalidArgumentException("第 {$n} 關請選擇簽核部門");
             $step['dept_id'] = $d;
+            if (!empty($s['all'])) $step['all'] = 1;       // 會簽：該部門每一位主管都要簽
         } elseif ($mode === 'user') {
             $u = (int)($s['user_id'] ?? 0);
             $ok = $u > 0 && $db->query("SELECT COUNT(*) FROM `user` WHERE id=" . $u . " AND COALESCE(state,1) NOT IN (0,90)")->fetchColumn();
@@ -185,6 +186,8 @@ function sf_flow_run(PDO $db, int $instId, int $from, string $after): array {
         if (!$pool) { sf_meta_set($db, $instId, $meta); return ['ok' => false, 'msg' => '第 ' . $n . ' 關「' . $step['label'] . '」找不到合格的簽核人']; }
         $aid = eg_approval_submit($db, 'sheet_form', $instId, sf_level($n), $uid, $uname);
         $db->prepare("UPDATE sf_instance SET status='pending', cur_step=? WHERE id=?")->execute([$n, $instId]);
+        if (!empty($step['all'])) $meta['n' . $n] = ['need' => array_values(array_map(fn($p) => (int)$p['id'], array_filter($pool, fn($p) => $p['deleg_for'] === null))), 'done' => []];
+        else unset($meta['n' . $n]);
         sf_meta_set($db, $instId, $meta);
         $eid = sf_notify($db, $instId, array_column($pool, 'id'), '「' . $title . '」待您' . $step['label'],
             $uname . ' 送出的「' . $title . '」（' . ($inst['template_name'] ?? '') . '）待您' . $step['label'] . '，請開啟查看完整內容後核准或退回。', $uid, 'SHEET_FORM_APPROVAL', 'sign');
@@ -216,8 +219,9 @@ function sf_flow_submit(PDO $db, array $inst, int $uid, string $uname): array {
 /** 目前這一關的待簽紀錄（沒有回 null） */
 function sf_flow_current_record(PDO $db, array $inst): ?array {
     if ($inst['status'] !== 'pending') return null;
-    $rec = eg_approval_latest($db, 'sheet_form', (int)$inst['id'], sf_level((int)$inst['cur_step']));
-    return ($rec && $rec['status'] === 'pending') ? $rec : null;
+    $st = $db->prepare("SELECT * FROM approval_record WHERE module='sheet_form' AND entity_id=? AND level=? AND status='pending' ORDER BY id DESC LIMIT 1");
+    $st->execute([(int)$inst['id'], sf_level((int)$inst['cur_step'])]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
 /** 這個人現在能不能簽這張單（回傳 [bool, 代理的被代理人id|null]） */
@@ -227,8 +231,13 @@ function sf_flow_can_decide(PDO $db, array $inst, int $uid): array {
     $flow = sf_flow_of_instance($inst);
     $step = $flow[(int)$inst['cur_step'] - 1] ?? null;
     if (!$step) return [false, null];
+    $done = [];
+    if (!empty($step['all'])) { $m = sf_meta_get($inst); $done = array_map('intval', $m['n' . (int)$inst['cur_step']]['done'] ?? []); }
     foreach (sf_step_pool($db, $step, (int)$inst['created_by'], (int)$inst['id']) as $p) {
-        if ((int)$p['id'] === $uid) return [true, $p['deleg_for']];
+        if ((int)$p['id'] !== $uid) continue;
+        $member = $p['deleg_for'] !== null ? (int)$p['deleg_for'] : $uid;
+        if (!empty($step['all']) && in_array($member, $done, true)) return [false, null];
+        return [true, $p['deleg_for']];
     }
     return [false, null];
 }
@@ -242,6 +251,21 @@ function sf_flow_decide(PDO $db, int $instId, int $uid, string $uname, string $d
     if (!$can) return ['ok' => false, 'msg' => '您不是這一關的簽核人'];
     $note = trim($note);
     if ($decision === 'rejected' && $note === '') return ['ok' => false, 'msg' => '退回請填寫原因'];
+    $flowCfg = sf_flow_of_instance($inst); $curN = (int)$inst['cur_step']; $stepCfg = $flowCfg[$curN - 1] ?? [];
+    if (!empty($stepCfg['all']) && $decision !== 'rejected') {
+        $m0 = sf_meta_get($inst); $key = 'n' . $curN;
+        $need = array_map('intval', $m0[$key]['need'] ?? []); $done = array_map('intval', $m0[$key]['done'] ?? []);
+        $member = $delegFor ? (int)$delegFor : $uid;
+        if (!in_array($member, $done, true)) $done[] = $member;
+        if (array_diff($need, $done)) {            // 還有人沒簽：記這一位的核准，關卡留著
+            $aid2 = eg_approval_submit($db, 'sheet_form', $instId, sf_level($curN), (int)$inst['created_by'], (string)$inst['creator_name']);
+            $r2 = eg_approval_decide($db, $aid2, $uid, $uname, 'approved', $note !== '' ? $note : null);
+            if (!$r2['success']) return ['ok' => false, 'msg' => $r2['message']];
+            if ($delegFor) { $o = sf_user_row($db, (int)$delegFor); $m0['a' . $aid2] = ['deleg' => $o ? $o['user_cname'] : '', 'deleg_id' => (int)$delegFor]; }
+            $m0[$key]['done'] = $done; sf_meta_set($db, $instId, $m0);
+            return ['ok' => true, 'status' => 'pending', 'partial' => true, 'left' => count(array_diff($need, $done))];
+        }
+    }
     $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision === 'rejected' ? 'rejected' : 'approved', $note !== '' ? $note : null);
     if (!$r['success']) return ['ok' => false, 'msg' => $r['message']];
     $meta = sf_meta_get($inst);
@@ -284,26 +308,65 @@ function sf_flow_steps_view(PDO $db, array $inst): array {
     $out = [];
     foreach ($flow as $i => $s) {
         $n = $i + 1;
-        $st = $db->prepare("SELECT * FROM approval_record WHERE module='sheet_form' AND entity_id=? AND level=? AND id>? ORDER BY id DESC LIMIT 1");
+        $st = $db->prepare("SELECT * FROM approval_record WHERE module='sheet_form' AND entity_id=? AND level=? AND id>? ORDER BY id");
         $st->execute([(int)$inst['id'], sf_level($n), $from]);
-        $rec = $st->fetch(PDO::FETCH_ASSOC) ?: null;
-        $state = 'wait'; $by = ''; $byId = 0; $at = ''; $note = ''; $deleg = ''; $auto = 0; $dept = ''; $pos = '';
-        if ($rec) {
-            $m = $meta['a' . $rec['id']] ?? [];
-            if ($rec['status'] === 'approved') { $state = 'done'; $by = $rec['approver_name']; $byId = (int)$rec['approver_id']; $at = $rec['decided_at']; }
-            elseif ($rec['status'] === 'rejected') { $state = 'rej'; $by = $rec['approver_name']; $byId = (int)$rec['approver_id']; $at = $rec['decided_at']; $note = eg_sign_note_public((string)$rec['note']); }
-            if ($byId) { $idn = sf_identity_asof($db, $byId, substr((string)$at, 0, 10)); $dept = $idn['dept'] ?? ''; $pos = $idn['position'] ?? ''; }
-            else { $state = 'cur'; }
-            $deleg = (string)($m['deleg'] ?? ''); $auto = !empty($m['auto']) ? 1 : 0;
+        $recs = $st->fetchAll(PDO::FETCH_ASSOC);
+        $hasPending = false; $approved = []; $rejected = null;
+        foreach ($recs as $r) {
+            if ($r['status'] === 'pending') $hasPending = true;
+            elseif ($r['status'] === 'approved') $approved[] = $r;
+            else $rejected = $r;
         }
-        $names = '';
-        if ($state === 'cur' || ($state === 'wait' && $inst['status'] === 'pending')) {
+        $all = !empty($s['all']);
+        $state = 'wait'; $note = '';
+        if ($rejected && !$hasPending) { $state = 'rej'; $note = eg_sign_note_public((string)$rejected['note']); }
+        elseif ($hasPending) $state = 'cur';
+        elseif ($approved) $state = 'done';
+        $signers = [];
+        $list = $state === 'rej' ? [$rejected] : $approved;
+        foreach ($list as $r) {
+            $m = $meta['a' . $r['id']] ?? [];
+            $idn = sf_identity_asof($db, (int)$r['approver_id'], substr((string)$r['decided_at'], 0, 10));
+            $signers[] = ['by' => $r['approver_name'], 'by_id' => (int)$r['approver_id'], 'at' => $r['decided_at'], 'deleg' => (string)($m['deleg'] ?? ''),
+                          'dept' => $idn['dept'] ?? '', 'position' => $idn['position'] ?? ''];
+        }
+        $first = $signers[0] ?? ['by' => '', 'by_id' => 0, 'at' => '', 'deleg' => '', 'dept' => '', 'position' => ''];
+        $names = ''; $progress = '';
+        if ($all && $state === 'cur') {
+            $need = array_map('intval', $meta['n' . $n]['need'] ?? []); $done = array_map('intval', $meta['n' . $n]['done'] ?? []);
+            $left = array_diff($need, $done);
+            $names = implode('、', array_filter(array_map(function ($id) use ($db) { $u = sf_user_row($db, (int)$id); return $u ? $u['user_cname'] : ''; }, $left)));
+            $progress = '已簽 ' . count($done) . '／' . count($need);
+        } elseif ($state === 'cur' || ($state === 'wait' && $inst['status'] === 'pending')) {
             $names = implode('、', array_map(fn($p) => $p['user_cname'], sf_step_pool($db, $s, (int)$inst['created_by'], (int)$inst['id'])));
         }
-        $out[] = ['no' => $n, 'label' => $s['label'], 'state' => $state, 'by' => $by, 'by_id' => $byId, 'at' => $at, 'note' => $note, 'deleg' => $deleg,
-                  'dept' => $dept, 'position' => $pos, 'waiting_for' => $names];
+        $out[] = ['no' => $n, 'label' => $s['label'], 'state' => $state, 'by' => $first['by'], 'by_id' => $first['by_id'], 'at' => $first['at'], 'note' => $note,
+                  'deleg' => $first['deleg'], 'dept' => $first['dept'], 'position' => $first['position'], 'waiting_for' => $names,
+                  'all' => $all ? 1 : 0, 'progress' => $progress, 'signers' => $signers];
     }
     return $out;
+}
+
+/**
+ * 撤回（填表人或管理員）：只能在「簽核中且還沒有任何真人簽過」時撤回（自動簽核的不算）。
+ * 待簽紀錄記為「填表人撤回」留在簽核歷程，單據回到草稿可修改後重送。
+ */
+function sf_flow_withdraw(PDO $db, int $instId, int $uid, string $uname, bool $isAdmin): array {
+    $inst = sf_instance_get($db, $instId);
+    if (!$inst) return ['ok' => false, 'msg' => '找不到此單據'];
+    if ($inst['status'] !== 'pending') return ['ok' => false, 'msg' => '只有簽核中的單據可以撤回'];
+    if ((int)$inst['created_by'] !== $uid && !$isAdmin) return ['ok' => false, 'msg' => '只有填表人本人（或管理員）可以撤回'];
+    $meta = sf_meta_get($inst);
+    $st = $db->prepare("SELECT id, status FROM approval_record WHERE module='sheet_form' AND entity_id=? AND id>?");
+    $st->execute([$instId, (int)($meta['round_from'] ?? 0)]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ($r['status'] === 'approved' && empty($meta['a' . $r['id']]['auto'])) return ['ok' => false, 'msg' => '已經有人簽核過，不能撤回；請洽簽核人退回'];
+    }
+    $db->prepare("UPDATE approval_record SET status='rejected', approver_id=?, approver_name=?, note='（填表人撤回）', decided_at=NOW()
+                  WHERE module='sheet_form' AND entity_id=? AND id>? AND status='pending'")->execute([$uid, $uname, $instId, (int)($meta['round_from'] ?? 0)]);
+    $db->prepare("UPDATE sf_instance SET status='draft', cur_step=0, modified_at=NOW() WHERE id=?")->execute([$instId]);
+    sf_notify_close($db, $instId);
+    return ['ok' => true, 'status' => 'draft'];
 }
 
 /* ============================================================ 維護人員（只能改「預設明細內容」） ============================================================ */
