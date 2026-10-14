@@ -121,10 +121,10 @@ if ($action === 'doc_list') {
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     if ($kw !== '') {
         $like = '%' . $kw . '%';
-        $where[] = "(d.doc_no LIKE ? OR d.project_no LIKE ? OR d.dept_names LIKE ? OR d.created_by_name LIKE ?
+        $where[] = "(d.doc_no LIKE ? OR d.dept_names LIKE ? OR d.created_by_name LIKE ?
                      OR EXISTS (SELECT 1 FROM rm_item i WHERE i.doc_id=d.doc_id AND (i.stakeholder LIKE ? OR i.needs LIKE ? OR i.issue LIKE ?
                           OR i.ro_text LIKE ? OR i.measure LIKE ? OR i.effect_check LIKE ? OR i.confirm_no LIKE ? OR i.dimension LIKE ?)))";
-        for ($i = 0; $i < 12; $i++) $a[] = $like;
+        for ($i = 0; $i < 11; $i++) $a[] = $like;
     }
     $w = implode(' AND ', $where);
     $st = $db->prepare("SELECT COUNT(*) FROM rm_doc d WHERE $w"); $st->execute($a);

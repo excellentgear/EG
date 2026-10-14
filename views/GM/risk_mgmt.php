@@ -105,7 +105,7 @@ $perms  = rm_perms($db, $rmUser);
             border:1px solid #D8BE93; background:#fff; color:#5b3a1e; margin-left:6px; }
         .rm-mft button.btn-warm { border-color:#d98a33; background:#F0A24B; color:#fff; }
 
-        .fgrid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px 14px; margin-bottom:10px; }
+        .fgrid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px 14px; margin-bottom:10px; }
         .fgrid > div { min-width:0; }
         .fgrid .full { grid-column:1 / -1; }
         .fgrid label, .fld label { display:block; font-size:12.5px; color:#5b3a1e; margin:0 0 2px; font-weight:bold; }
@@ -189,7 +189,6 @@ $perms  = rm_perms($db, $rmUser);
     <div class="rm-mhd"><span id="docTitle">表單</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
     <div class="rm-mbd">
         <div class="fgrid">
-            <div><label>專案編號</label><input type="text" id="fProject" maxlength="60"></div>
             <div><label>填表日期 <span style="color:#DD5138;">*</span></label><input type="date" id="fDate"><span class="err" id="eDate"></span></div>
             <div><label>單號</label><input type="text" id="fNo" readonly placeholder="儲存後自動產生" style="background:#F5EEE2;" data-eg-skip></div>
             <div class="full"><label>相關部門</label>
@@ -269,7 +268,7 @@ $perms  = rm_perms($db, $rmUser);
             <li><b>風險與機會因應措施管制表</b>：把議題整理成風險／機會，評估嚴重度與頻率，自動算出風險等級，並記錄因應措施與成效確認（原「策略行動措施管制表」與「風險評估及處理表」合併為這一張）。</li>
             <li>利害關係者的溝通記錄、措施追蹤與溝通管制在「溝通管理」頁，按上方「前往溝通管理」即可轉跳。</li></ul>
         <h4>操作步驟</h4>
-        <ul><li>按「新增」→ 填專案編號、填表日期、相關部門 → 逐列填寫（最後一列按 ↓ 自動加列）→ 儲存。</li>
+        <ul><li>按「新增」→ 填填表日期、相關部門 → 逐列填寫（最後一列按 ↓ 自動加列）→ 儲存。</li>
             <li>風險表每一列的「議題描述」可按「選擇處境議題」連動組織處境分析表：內/外部議題、利害關係者、需求與期望、議題描述都跟著來源走（來源改了這裡跟著變），不必重打；要自行修改先按「解除連動」。「風險與機會」欄選這一列是風險還是機會，「對組織的影響說明」寫它對組織造成的影響。</li>
             <li>嚴重度與頻率要一起選，<b>風險等級由系統依目前設定自動算出</b>，不可手填。</li>
             <li>等級被設定為「需要因應措施」的列，儲存時會自動配發風險確認編號。</li>
@@ -397,13 +396,13 @@ function paneHtml(k){
     return '<div class="rm-toolbar">'
         + '<button class="btn-warm" data-new="' + k + '"><i class="fa fa-plus"></i> 新增</button>'
         + '<label>年度</label><select data-year="' + k + '" style="width:92px;"></select>'
-        + '<input type="text" data-kw="' + k + '" placeholder="關鍵字（單號／專案／部門／議題／措施…）" style="width:280px;">'
+        + '<input type="text" data-kw="' + k + '" placeholder="關鍵字（單號／部門／議題／措施…）" style="width:280px;">'
         + (isRisk ? '<button data-rating="1"><i class="fa fa-table"></i> 風險準則／評級對照</button>' : '')
         + '<button data-csv="' + k + '"><i class="fa fa-download"></i> 匯出 CSV</button>'
         + '</div>'
         + '<div class="rm-pager" data-pager="' + k + '"></div>'
         + '<div class="rm-table-wrap"><table class="rm-table"><thead><tr>'
-        + '<th>單號</th><th>專案編號</th><th>相關部門</th><th>填表日期</th><th>筆數</th>'
+        + '<th>單號</th><th>相關部門</th><th>填表日期</th><th>筆數</th>'
         + (isRisk ? '<th>最高風險等級</th><th>需因應措施</th>' : '')
         + '<th>填表人</th><th>操作</th></tr></thead><tbody data-body="' + k + '"></tbody></table></div>';
 }
@@ -419,12 +418,12 @@ function loadList(k, resetPage){
     get({action:'doc_list', kind:k, page:STATE[k].page, per:STATE[k].per,
          year:$('[data-year="' + k + '"]').val() || 0, kw:$('[data-kw="' + k + '"]').val()}, function(res){
         var isRisk = k === 'risk', b = $('[data-body="' + k + '"]').empty();
-        if (!res.rows.length) b.append('<tr><td colspan="' + (isRisk ? 9 : 7) + '" class="rm-empty">沒有符合條件的資料</td></tr>');
+        if (!res.rows.length) b.append('<tr><td colspan="' + (isRisk ? 8 : 6) + '" class="rm-empty">沒有符合條件的資料</td></tr>');
         $.each(res.rows, function(_, r){
             var ops = '<button class="b-mini" data-open="' + r.doc_id + '" data-kind="' + k + '"><i class="fa fa-' + (r.can_edit ? 'pencil' : 'eye') + '"></i> '
                 + (r.can_edit ? '編輯' : '檢視') + '</button>'
                 + (META.perms.canAdmin ? '<button class="b-mini danger" data-del="' + r.doc_id + '"><i class="fa fa-trash"></i></button>' : '');
-            b.append('<tr><td>' + esc(r.doc_no) + '</td><td>' + esc(r.project_no) + '</td><td class="l">' + esc(r.dept_names) + '</td>'
+            b.append('<tr><td>' + esc(r.doc_no) + '</td><td class="l">' + esc(r.dept_names) + '</td>'
                 + '<td>' + esc(dispDate(r.fill_date)) + '</td><td>' + r.item_cnt + '</td>'
                 + (isRisk ? '<td>' + lvBadge(r.top_level, true) + '</td><td>' + (r.action_cnt > 0 ? r.action_cnt + ' 筆' : '—') + '</td>' : '')
                 + '<td>' + esc(r.created_by_name) + '</td><td>' + ops + '</td></tr>');
@@ -577,7 +576,6 @@ function openDoc(kind, id){
         CUR = {kind:kind, doc_id:doc ? +doc.doc_id : 0, can_edit:canEdit, print:pr,
                dept_ids:doc && doc.dept_ids ? (JSON.parse(doc.dept_ids) || []).map(Number) : []};
         $('#docTitle').text(kindName(kind) + (doc ? '　' + doc.doc_no : '　新增'));
-        $('#fProject').val(doc ? (doc.project_no || '') : '');
         $('#fDate').val(doc ? doc.fill_date : META.today);
         $('#fNo').val(doc ? doc.doc_no : '');
         $('#eDate, #eItems').text(''); $('#fDate').removeClass('bad');
@@ -625,7 +623,7 @@ $('#btnDocSave').on('click', function(){
         });
     }
     if (bad){ $('#eItems').text(bad); return; }
-    post({action:'doc_save', doc_id:CUR.doc_id, kind:CUR.kind, project_no:$('#fProject').val(), fill_date:date,
+    post({action:'doc_save', doc_id:CUR.doc_id, kind:CUR.kind, fill_date:date,
           dept_ids:JSON.stringify(CUR.dept_ids), items:JSON.stringify(items)}, function(res){
         closeMask('docMask');
         loadList(CUR.kind);
@@ -936,7 +934,7 @@ $('#btnDocPrint').on('click', function(){
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'
-            + '<div class="pt-meta"><span>專案編號：' + esc(d.project_no) + '</span><span>相關部門：' + esc(d.dept_names) + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';
+            + '<div class="pt-meta"><span>相關部門：' + esc(d.dept_names) + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';
         var table;
         if (kind === 'context'){
             table = '<table class="pt"><colgroup><col style="width:40px;"><col style="width:70px;"><col style="width:100px;"><col style="width:140px;"><col><col></colgroup>'
@@ -958,9 +956,9 @@ $('#btnDocPrint').on('click', function(){
 $(document).on('click', '[data-csv]', function(){
     var k = $(this).data('csv');
     get({action:'doc_list', kind:k, per:0, page:1, year:$('[data-year="' + k + '"]').val() || 0, kw:$('[data-kw="' + k + '"]').val()}, function(res){
-        var rows = [['單號','專案編號','相關部門','填表日期','筆數'].concat(k === 'risk' ? ['最高風險等級','需因應措施筆數'] : []).concat(['填表人'])];
+        var rows = [['單號','相關部門','填表日期','筆數'].concat(k === 'risk' ? ['最高風險等級','需因應措施筆數'] : []).concat(['填表人'])];
         $.each(res.rows, function(_, r){
-            rows.push([r.doc_no, r.project_no || '', r.dept_names || '', dispDate(r.fill_date), r.item_cnt]
+            rows.push([r.doc_no, r.dept_names || '', dispDate(r.fill_date), r.item_cnt]
                 .concat(k === 'risk' ? [r.top_level ? r.top_level.name : '', r.action_cnt] : []).concat([r.created_by_name || '']));
         });
         var csv = '﻿' + rows.map(function(r){ return r.map(function(c){ return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n');
