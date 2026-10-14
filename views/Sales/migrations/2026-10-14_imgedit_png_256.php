@@ -18,6 +18,7 @@
  */
 if (PHP_SAPI !== 'cli') { exit('CLI only'); }
 require_once __DIR__ . '/../../../src/common/DBConnection.php';
+require_once __DIR__ . '/../../../src/common/image_palette_lib.php';   // eg_png_is_palette()
 $run     = in_array('--run', $argv, true);
 $restore = in_array('--restore', $argv, true);
 $MIN     = 8 * 1024 * 1024;
@@ -54,23 +55,34 @@ if ($restore) {
     exit;
 }
 
+// 候選清單改由資料庫取（批圖輸出圖本來就都登記在 part_attachments），不再掃 600 多個 NAS 資料夾（那要一分鐘以上）
+// 曾因「與原圖差異過大」被略過的檔案記在 system_settings.png256_skip（檔案大小一變就失效）；
+// 一般掃描／轉檔不再把它們算進待補轉（否則按鈕永遠顯示有待補、按了又沒變化）。明確指定 --rmse 放寬時才重試。
+$skipMap = json_decode((string)$pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='png256_skip'")->fetchColumn(), true);
+if (!is_array($skipMap)) $skipMap = [];
+$retrySkipped = (bool)array_filter($argv, function ($a) { return strpos($a, '--rmse=') === 0; });
+$cands = $pdo->query("SELECT DISTINCT d_id, filename FROM part_attachments WHERE filename LIKE 'egdraw!_%.png' ESCAPE '!'")->fetchAll(PDO::FETCH_NUM);
 $todo = [];
-foreach (glob($base . DIRECTORY_SEPARATOR . '*', GLOB_ONLYDIR) as $d) {
-    if (!ctype_digit(basename($d))) continue;
-    if ($only !== '' && basename($d) !== $only) continue;
-    foreach (glob($d . DIRECTORY_SEPARATOR . 'egdraw_*.png') as $f) {
-        $sz = filesize($f);
-        if ($sz < $MIN) continue;
-        [, $type] = sh(q($MAGICK) . ' identify -format "%[type]" ' . q($f . '[0]'));
-        if (stripos($type, 'Palette') !== false) continue;          // 已是 256 色，轉了也不會變小
-        $todo[] = [basename($d), $f, $sz];
-    }
+$nC = count($cands); $iC = 0;
+foreach ($cands as [$cDid, $cName]) {
+    $iC++;
+    if ($iC % 10 === 0 || $iC === $nC) out("進度 {$iC}/{$nC}\n");
+    if ($only !== '' && (string)$cDid !== $only) continue;
+    $f = $base . DIRECTORY_SEPARATOR . $cDid . DIRECTORY_SEPARATOR . $cName;
+    if (!is_file($f)) continue;
+    $sz = filesize($f);
+    if ($sz < $MIN) continue;
+    if (eg_png_is_palette($f)) continue;                        // 已是 256 色，轉了也不會變小（讀檔頭判斷，瞬間完成）
+    if (!$retrySkipped && isset($skipMap[$cDid . '/' . $cName]) && (int)$skipMap[$cDid . '/' . $cName] === $sz) continue;   // 先前判定不能轉
+    $todo[] = [(string)$cDid, $f, $sz];
 }
 out(sprintf("待處理 %d 個，合計 %.0f MB（%s）\n", count($todo), array_sum(array_column($todo, 2)) / 1048576, $run ? '實際轉換' : '試算，加 --run 才會寫入'));
 if (!$run) { out("完成：試算\n"); exit; }
+$nT = count($todo); $iT = 0;
 
 $ok = 0; $skip = 0; $fail = 0; $saved = 0;
 foreach ($todo as [$did, $f, $sz]) {
+    $iT++; out("轉檔進度 {$iT}/{$nT}\n");
     $name = basename($f);
     $t0 = microtime(true);
     $loc = $tmp . DIRECTORY_SEPARATOR . 'src_' . $name;
@@ -87,7 +99,12 @@ foreach ($todo as [$did, $f, $sz]) {
             if (!preg_match('/\(([\d.eE+-]+)\)/', $cmp, $m) || (float)$m[1] >= $maxRmse) $why = '與原圖差異過大 ' . $cmp . '（上限 ' . $maxRmse . '）';
         }
     }
-    if ($why !== '') { out("略過 {$did}/{$name}：{$why}\n"); $skip++; @unlink($loc); @unlink($outp); continue; }
+    if ($why !== '') {
+        out("略過 {$did}/{$name}：{$why}\n"); $skip++; @unlink($loc); @unlink($outp);
+        if (strpos($why, '差異過大') !== false) $skipMap[$did . '/' . $name] = $sz;   // 記下來，之後不再算進待補轉
+        continue;
+    }
+    unset($skipMap[$did . '/' . $name]);
     // 原檔移到備份 → 新檔放回原名
     $bd = $bak . DIRECTORY_SEPARATOR . $did;
     if (!is_dir($bd) && !@mkdir($bd, 0777, true)) { out("失敗(建備份資料夾) {$did}\n"); $fail++; @unlink($loc); @unlink($outp); continue; }
@@ -100,4 +117,5 @@ foreach ($todo as [$did, $f, $sz]) {
     out(sprintf("OK %s/%s %.1f→%.1f MB (%.0fs)\n", $did, $name, $sz / 1048576, $new / 1048576, microtime(true) - $t0));
     @unlink($loc); @unlink($outp);
 }
-out(sprintf("完成：成功 %d、略過 %d、失敗 %d，省下 %.0f MB；原檔備份在 %s\n", $ok, $skip, $fail, $saved / 1048576, $bak));
+$pdo->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('png256_skip', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")->execute([json_encode($skipMap)]);
+out(sprintf("完成：成功 %d、略過 %d（差異過大，保留原圖）、失敗 %d，省下 %.0f MB；原檔備份在 %s\n", $ok, $skip, $fail, $saved / 1048576, $bak));

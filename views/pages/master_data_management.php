@@ -7998,7 +7998,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             if ($op === 'status') {
                 $lines = array_values(array_filter(explode("\n", trim($logTxt)), 'strlen'));
-                echo json_encode(['success'=>true,'running'=>$running,'tail'=>array_slice($lines, -6),'done'=>(bool)preg_match('/^完成/m', $logTxt)], JSON_UNESCAPED_UNICODE);
+                $cur = 0; $tot = 0;
+                if (preg_match_all('/^轉檔進度 (\d+)\/(\d+)/m', $logTxt, $pm, PREG_SET_ORDER) && $pm) { $l = end($pm); $cur = (int)$l[1]; $tot = (int)$l[2]; }
+                elseif (preg_match('/^待處理 (\d+) 個/m', $logTxt, $pm2)) { $tot = (int)$pm2[1]; }
+                echo json_encode(['success'=>true,'running'=>$running,'cur'=>$cur,'total'=>$tot,'tail'=>array_slice($lines, -6),'done'=>(bool)preg_match('/^完成/m', $logTxt)], JSON_UNESCAPED_UNICODE);
             } elseif ($op === 'scan') {
                 if ($running) throw new Exception('背景轉檔進行中，請稍後再試');
                 @set_time_limit(120);
@@ -14909,6 +14912,7 @@ function renderPartsTable(rows, total, pg, pages) {
     }
     var pgHtml = paginationHTML(total, pg, pages, 'loadParts');
     document.getElementById('parts-table-wrap').innerHTML = pgHtml + html + '</tbody></table></div>';
+    if (MD_CAN_PNG256) pavPng256Init();   // 補轉檔鈕：顯示待補轉數量（僅管理員）
     // 批次載入附件資料
     var dIds = rows.map(function(r){ return r.d_id; });
     if (dIds.length) loadPartAttachDataForRows(dIds);
@@ -23605,32 +23609,67 @@ function pavDeleteCurrent() {
  * 補轉檔（僅管理員看得到按鈕，後端 png256_batch 同規則再擋一次）：
  * 先試算件數 → 確認 → 派背景程序（關瀏覽器照常跑）；背景進行中再按會顯示進度。
  */
-function pavPng256Batch() {
+var PNG256 = { count:null, mb:0, running:false, cur:0, total:0, timer:null, inited:false };
+// 按鈕狀態只由這支畫：查詢中／待補轉 N 張／轉檔中 a/b（%）／無需補轉／查詢失敗；列表重畫後也靠它還原
+function pavPng256Paint() {
     var btn = document.getElementById('pav-btn-png256');
-    var lab = '<i class="fa fa-compress"></i> 補轉檔';
-    var rst = function(){ if (btn) { btn.disabled = false; btn.innerHTML = lab; } };
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 查詢中…'; }
+    if (!btn) return;
+    var h, dis = false, bg = '#FFF8EE', col = '#C77C1A';
+    if (PNG256.running) {
+        var p = PNG256.total ? Math.round(PNG256.cur * 100 / PNG256.total) : 0;
+        h = '<i class="fa fa-spinner fa-spin"></i> 轉檔中 ' + PNG256.cur + '/' + PNG256.total + '（' + p + '%）'; dis = true;
+    } else if (PNG256.count === null) { h = '<i class="fa fa-spinner fa-spin"></i> 查詢中…'; dis = true; }
+    else if (PNG256.count === 'err') { h = '<i class="fa fa-refresh"></i> 查詢失敗，重試'; }
+    else if (PNG256.count === 0) { h = '<i class="fa fa-check"></i> 無需補轉'; dis = true; bg = '#f3f3f3'; col = '#999'; }
+    else { h = '<i class="fa fa-compress"></i> 補轉檔（' + PNG256.count + '）'; }
+    btn.innerHTML = h; btn.disabled = dis; btn.style.background = bg; btn.style.color = col;
+    btn.style.cursor = dis ? 'default' : 'pointer';
+}
+function pavPng256Init() {
+    if (!PNG256.inited) { PNG256.inited = true; pavPng256Refresh(); } else pavPng256Paint();
+}
+// 查「有幾張需要補轉」；背景補轉進行中就改顯示進度
+function pavPng256Refresh() {
+    PNG256.count = null; pavPng256Paint();
     api({ action:'png256_batch', op:'status' }).done(function(s) {
-        if (!s.success) { rst(); alert(s.message || '查詢失敗'); return; }
-        if (s.running) {
-            rst();
-            alert('背景補轉檔進行中，最近進度：\n\n' + (s.tail || []).join('\n') + '\n\n可以關閉視窗，稍後再按一次看結果。');
-            return;
+        if (s && s.success && s.running) {
+            PNG256.running = true; PNG256.cur = s.cur; PNG256.total = s.total; pavPng256Paint(); pavPng256Poll(); return;
         }
         api({ action:'png256_batch', op:'scan' }).done(function(r) {
-            if (!r.success) { rst(); alert(r.message || '試算失敗'); return; }
-            var last = (s.done && s.tail && s.tail.length) ? '\n\n上一次結果：\n' + s.tail.slice(-1)[0] : '';
-            if (!r.count) { rst(); alert('目前沒有需要補轉的大檔（8MB 以上、尚未轉成 256 色的批圖輸出圖）。' + last); return; }
-            if (!confirm('找到 ' + r.count + ' 張批圖輸出圖需要補轉（合計約 ' + r.mb + ' MB），全站所有料號一起處理。\n\n'
-                + '・轉成 256 色 PNG，解析度不變，並把淡灰掃描雜點還原成白底\n'
-                + '・原檔不會刪除，會備份在 NAS「_大檔轉256色原檔備份」資料夾\n'
-                + '・在背景執行，按下確定後可以關閉視窗\n\n要開始嗎？')) { rst(); return; }
-            api({ action:'png256_batch', op:'run' }).done(function(g) {
-                rst();
-                alert(g.success ? g.message : (g.message || '啟動失敗'));
-            }).fail(function(){ rst(); alert('啟動失敗（連線錯誤）'); });
-        }).fail(function(){ rst(); alert('試算失敗（連線錯誤）'); });
-    }).fail(function(){ rst(); alert('查詢失敗（連線錯誤）'); });
+            PNG256.running = false;
+            if (r && r.success) { PNG256.count = r.count; PNG256.mb = r.mb; } else { PNG256.count = 'err'; }
+            pavPng256Paint();
+        }).fail(function(){ PNG256.count = 'err'; pavPng256Paint(); });
+    }).fail(function(){ PNG256.count = 'err'; pavPng256Paint(); });
+}
+function pavPng256Poll() {
+    if (PNG256.timer) clearInterval(PNG256.timer);
+    PNG256.timer = setInterval(function() {
+        api({ action:'png256_batch', op:'status' }).done(function(s) {
+            if (!s || !s.success) return;
+            PNG256.cur = s.cur; PNG256.total = s.total;
+            if (!s.running) {
+                clearInterval(PNG256.timer); PNG256.timer = null; PNG256.running = false;
+                var last = (s.tail && s.tail.length) ? s.tail.slice(-1)[0] : '';
+                pavPng256Refresh();
+                if (last) alert('補轉檔完成：\n' + last);
+            } else pavPng256Paint();
+        });
+    }, 2000);
+}
+function pavPng256Batch() {
+    if (PNG256.running) return;
+    if (PNG256.count === 'err') { pavPng256Refresh(); return; }
+    if (!PNG256.count) return;
+    if (!confirm('找到 ' + PNG256.count + ' 張批圖輸出圖需要補轉（合計約 ' + PNG256.mb + ' MB），全站所有料號一起處理。\n\n'
+        + '・轉成 256 色 PNG，解析度不變，並把淡灰掃描雜點還原成白底\n'
+        + '・原檔不會刪除，會備份在 NAS「_大檔轉256色原檔備份」資料夾\n'
+        + '・在背景執行，按鈕會顯示進度，也可以關閉視窗\n\n要開始嗎？')) return;
+    PNG256.running = true; PNG256.cur = 0; PNG256.total = PNG256.count; pavPng256Paint();
+    api({ action:'png256_batch', op:'run' }).done(function(g) {
+        if (!g || !g.success) { PNG256.running = false; pavPng256Paint(); alert((g && g.message) || '啟動失敗'); return; }
+        pavPng256Poll();
+    }).fail(function(){ PNG256.running = false; pavPng256Paint(); alert('啟動失敗（連線錯誤）'); });
 }
 
 /**

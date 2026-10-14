@@ -10,6 +10,16 @@
  */
 if (!defined('EG_PNG256_MIN_BYTES')) define('EG_PNG256_MIN_BYTES', 8 * 1024 * 1024);
 
+/** PNG 是否已是調色盤（256 色）格式：直接讀檔頭 IHDR 的 color type（第 26 個位元組，3＝調色盤），瞬間完成；
+ *  不要改回 ImageMagick 的 %[type]——它要掃過整張圖，A3 大圖要幾十秒。 */
+function eg_png_is_palette(string $path): bool {
+    $h = @fopen($path, 'rb');
+    if (!$h) return false;
+    $b = fread($h, 26);
+    fclose($h);
+    return is_string($b) && strlen($b) >= 26 && substr($b, 1, 3) === 'PNG' && ord($b[25]) === 3;
+}
+
 function eg_magick_path(): string {
     foreach (['C:\\MAMP\\bin\\ImageMagick-7.1.0-Q16\\magick.exe'] as $p) { if (is_file($p)) return $p; }
     return '';
@@ -27,9 +37,7 @@ function eg_png_to_palette256(string $path, int $minBytes = EG_PNG256_MIN_BYTES)
         @set_time_limit(240);
         $q = function ($s) { return '"' . $s . '"'; };
         $out = $path . '.p256.tmp.png';
-        $o = []; $rc = 1;
-        exec($q($mg) . ' ' . $q($path . '[0]') . ' -format "%[type]" info: 2>&1', $o, $rc);
-        if (stripos(implode('', $o), 'Palette') !== false) return false;            // 已是 256 色
+        if (eg_png_is_palette($path)) return false;                                  // 已是 256 色
         $o = []; $rc = 1;
         exec($q($mg) . ' ' . $q($path) . ' -fuzz 6% -fill white -opaque white -colors 256 -dither None PNG8:' . $q($out) . ' 2>&1', $o, $rc);
         if ($rc !== 0 || !is_file($out)) { @unlink($out); return false; }
