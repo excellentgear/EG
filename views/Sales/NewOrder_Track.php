@@ -4097,13 +4097,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         // PS＝純備註的前端簡寫（使用者要求）；前綴格式／廠內人員縮短姓名／M-D提出
                         // 日期統一走 ot_dn_preview_prefix()（2026-10-07），不要在這裡再組一次。
                         $_ateQPrefix = !empty($_ateQRow['is_alert'])
-                            ? '【系統提醒】'   // 設計提醒規則自動產生（2026-10-14），沒有對象可顯示
+                            ? '【提醒】'   // 設計提醒規則自動產生（2026-10-14），沒有對象可顯示；清單格字數有限，只印「提醒」
                             : ot_dn_preview_prefix($_ateQRow['target_type'], $_ateQRow['target_label'], $_ateQRow['asked_at'] ?? null, !empty($_ateQRow['is_note']));
                         $_ateQText = (string)$_ateQRow['question'];
                         $_ateQFull = $_ateQPrefix . $_ateQText;
                         $_ateQDone = ($_ateQOpen === 0);
                         ?>
-                        <div class="ate-q-preview<?= $_ateQDone ? ' ate-q-preview-done' : '' ?>"
+                        <div class="ate-q-preview<?= $_ateQDone ? ' ate-q-preview-done' : '' ?><?= !empty($_ateQRow['is_alert']) ? ' ate-q-preview-alert' : '' ?>"
                              onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
                              title="<?= safe_html($_ateQFull) ?>（<?= $_noteFrozen ? '已凍結，只能查看' : '點擊查看／回覆' ?>）">
                             <div class="ate-q-preview-head">
@@ -4690,6 +4690,13 @@ foreach($dCounts as $c) {
             background:#FDF1E3; padding:3px 6px; width:100%; max-width:400px; box-sizing:border-box; }
         .ate-q-preview:hover { background:#F7DFC5; }
         .ate-q-preview-done { background:#FAF6EF; border-color:#D8CBB8; }
+        /* 系統提醒（設計提醒規則自動產生）：整塊用淺黃底，跟業務／設計自己提的問題（淺橘底）一眼分得出來 */
+        .ate-q-preview.ate-q-preview-alert { background:#FFF6D6; border-color:#E8C766; }
+        .ate-q-preview.ate-q-preview-alert:hover { background:#FFEDB0; }
+        .ate-q-preview.ate-q-preview-alert .ate-q-badge-inline { background:#C98A1B; }
+        .ate-q-preview.ate-q-preview-alert.ate-q-preview-done { background:#FBF7E6; border-color:#E3D6A8; }
+        .ate-q-preview.ate-q-preview-alert .ate-q-preview-txt { color:#7a5a12; }
+        .ate-q-preview.ate-q-preview-alert .ate-q-badge-done { background:#8a9a7a; }
         .ate-q-preview-done:hover { background:#F1E8D9; }
         .ate-q-preview-head { margin-bottom:2px; }
         .ate-q-badge-inline { background:#DD5138; color:#fff; border-radius:3px; font-size:10px;
@@ -10707,14 +10714,14 @@ foreach($dCounts as $c) {
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
             if (preview) {
-                var prefix = preview.is_alert ? '【系統提醒】' : otDnPreviewPrefix(preview.target_type, preview.target_label, preview.asked_at, !!preview.is_note);
+                var prefix = preview.is_alert ? '【提醒】' : otDnPreviewPrefix(preview.target_type, preview.target_label, preview.asked_at, !!preview.is_note);
                 var full = prefix + (preview.question || '');
                 var done = openCount === 0;
                 var badge = done
                     ? '<span class="ate-q-badge-inline ate-q-badge-done"><i class="fa fa-check"></i> 已完成</span>'
                     : '<span class="ate-q-badge-inline"><i class="fa fa-flag"></i> ' + openCount + '</span>';
                 var more = full.length > 36 ? '<div class="ate-q-preview-more">還有更多</div>' : '';
-                $cell.html('<div class="ate-q-preview' + (done ? ' ate-q-preview-done' : '') + '" onclick="ateQOpen(' + orderId + ')" title="' + escapeHtml(full) + '（點擊查看／回覆）">'
+                $cell.html('<div class="ate-q-preview' + (done ? ' ate-q-preview-done' : '') + (preview.is_alert ? ' ate-q-preview-alert' : '') + '" onclick="ateQOpen(' + orderId + ')" title="' + escapeHtml(full) + '（點擊查看／回覆）">'
                     + '<div class="ate-q-preview-head">' + badge + '</div>'
                     + '<div class="ate-q-preview-txt">' + escapeHtml(full) + '</div>' + more + '</div>');
             } else if (window.OT_CAN_DESIGN_QA) {
