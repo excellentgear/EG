@@ -184,14 +184,88 @@
             chain = chain.then(doAdd).catch(function (e) { try { console.error(e); } catch (x) {} toast('加列失敗：' + (e && e.message || e)); return false; });
             return chain;
         };
+        async function doRemoveLast() {
+            internal++;
+            try { ws().deleteRow(groupRow + extra); extra--; await sleep(120); if (ctl.armGuard) ctl.armGuard(); } finally { internal--; }
+            return true;
+        }
         ctl.removeLastDetailRow = function () {
             if (groupRow == null || extra <= 0) return Promise.resolve(false);
+            chain = chain.then(doRemoveLast);
+            return chain;
+        };
+        /** 寫入單一待填格（網頁表單用；不觸發鎖定安全網） */
+        ctl.setField = function (f, idx, v) {
+            internal++;
+            try { setCellValue(f, f.g ? f.r + (idx || 0) : rowOf(f), v); } finally { internal--; }
+        };
+        /** 整批覆寫明細列（含清空）；vals＝{欄位id:[各列值]} */
+        ctl.setDetailRows = function (vals) {
+            internal++;
+            try {
+                fields.forEach(function (f) {
+                    if (!f.g) return;
+                    var arr = vals[f.id] || [];
+                    for (var i = 0; i <= extra; i++) {
+                        var v = arr[i], rng = ws().getRange(f.r + i, f.c);
+                        if (v === undefined || v === null || v === '' || v === false) rng.setValue(f.t === 'checkbox' ? 0 : '');
+                        else setCellValue(f, f.r + i, v);
+                    }
+                });
+            } finally { internal--; }
+        };
+        /** 刪除指定的明細列（第 i 列，0 起算）：後面的列往上補，最後一列刪掉 */
+        ctl.removeDetailRow = function (i) {
+            if (groupRow == null || i < 0 || i > extra) return Promise.resolve(false);
             chain = chain.then(async function () {
-                internal++;
-                try { ws().deleteRow(groupRow + extra); extra--; await sleep(120); if (ctl.armGuard) ctl.armGuard(); } finally { internal--; }
+                var vals = ctl.getValues();
+                fields.forEach(function (f) { if (f.g && Array.isArray(vals[f.id])) vals[f.id].splice(i, 1); });
+                if (extra > 0) { await doRemoveLast(); ctl.setDetailRows(vals); }
+                else { var empty = {}; fields.forEach(function (f) { if (f.g) empty[f.id] = ['']; }); ctl.setDetailRows(empty); }
+                await sleep(150);
                 return true;
             });
             return chain;
+        };
+        ctl.display = function (r, c) { try { return ws().getRange(r, c).getDisplayValue(); } catch (e) { return ''; } };
+        /** 網頁表單版面：欄位資訊、明細表欄位（含計算欄）、其他計算儲存格 */
+        ctl.layout = function () {
+            var snap = wb.save(), sh = firstSheet(snap).sheet, cd = sh.cellData || {}, colD = sh.columnData || {}, defW = sh.defaultColumnWidth || 88, styles = snap.styles || {};
+            function cell(r, c) { return (cd[r] && cd[r][c]) || null; }
+            function styleOf(x) { return x ? (typeof x.s === 'string' ? (styles[x.s] || {}) : (x.s || {})) : {}; }
+            function stext(r, c) { var x = cell(r, c); return x && x.v != null && !x.f && typeof x.v !== 'object' ? String(x.v) : ''; }
+            function width(c) { return (colD[c] && colD[c].w) || defW; }
+            var out = { groupRow: groupRow, extra: extra, detail: null, summary: [], fieldMeta: {} };
+            fields.forEach(function (f) { var r = f.g ? f.r : rowOf(f); out.fieldMeta[f.id] = { wrap: styleOf(cell(r, f.c)).tb === 3, w: width(f.c) }; });
+            var cols = [];
+            if (groupRow != null) {
+                var maxC = 0; Object.keys(cd[groupRow] || {}).forEach(function (c) { if (+c > maxC) maxC = +c; });
+                for (var c = 0; c <= maxC; c++) {
+                    var fld = fields.filter(function (f) { return f.g && f.c === c; })[0], x = cell(groupRow, c);
+                    var head = ''; for (var rr = groupRow - 1; rr >= Math.max(0, groupRow - 3) && !head; rr--) head = stext(rr, c);
+                    if (fld) cols.push({ c: c, kind: 'field', f: fld, header: head || fld.label || colName(c), w: width(c) });
+                    else if (x && x.f) cols.push({ c: c, kind: 'calc', header: head || colName(c), w: width(c) });
+                }
+                out.detail = { cols: cols, first: groupRow };
+            }
+            Object.keys(cd).forEach(function (r0) {
+                var r = +r0;
+                if (groupRow != null && r >= groupRow && r <= groupRow + extra) return;
+                Object.keys(cd[r] || {}).forEach(function (c0) {
+                    var c = +c0, x = cd[r][c]; if (!x || !x.f) return;
+                    var label = ''; for (var k = c - 1; k >= 0 && !label; k--) label = stext(r, k);
+                    out.summary.push({ r: r, c: c, label: label, below: groupRow != null && r > groupRow + extra,
+                        inCols: cols.some(function (cc) { return cc.c === c; }) });
+                });
+            });
+            out.summary.sort(function (a, b) { return a.r - b.r || a.c - b.c; });
+            out.rowTexts = {};
+            out.summary.forEach(function (x) {
+                if (out.rowTexts[x.r]) return;
+                var t = {}; Object.keys(cd[x.r] || {}).forEach(function (c) { var v = stext(x.r, +c); if (v) t[c] = v; });
+                out.rowTexts[x.r] = t;
+            });
+            return out;
         };
 
         /* ---------- 填寫模式：鎖定非待填儲存格 ---------- */

@@ -136,7 +136,7 @@ $_v = function ($rel) { return @filemtime(__DIR__ . '/../../' . $rel); };
                 <option value="select">下拉選單</option><option value="checkbox">勾選框</option><option value="person">人員（全公司在職者）</option>
             </select>
             <div id="optBox" style="display:none;"><label>下拉選項（一行一個）</label><textarea id="fdOpt" rows="4"></textarea></div>
-            <label>欄位名稱（錯誤訊息會用到；留空則自動取左邊格子的文字）</label><input type="text" id="fdLabel" maxlength="40">
+            <label>欄位名稱（填寫畫面的欄位標籤；留空則明細列取正上方表頭、其他取左邊格子的文字）</label><input type="text" id="fdLabel" maxlength="40">
             <label><input type="checkbox" id="fdReq"> 必填（送出時檢查）</label>
             <label><input type="checkbox" id="fdG"> 這一列是「明細列」（填寫時可按「加一列」）</label>
             <div class="hint">明細列：同一張模板只能有一列；要放進明細列的每一格都要各自設為待填欄位並勾這個選項。合計列（如 =SUM）會在加列時自動延伸範圍。</div>
@@ -280,6 +280,7 @@ $('#btnApply').on('click', function(){
     }
     var s = CUR.ctl.getSelection(); if (!s){ $('#fdErr').text('請先選取要設定的格子'); return; }
     var label = $.trim($('#fdLabel').val());
+    if (!label && $('#fdG').is(':checked') && s.r1>0){ try { var uv = CUR.ctl.wb.getActiveSheet().getRange(s.r1-1, s.c1).getValue(); if (typeof uv==='string' && uv.charAt(0)!=='=') label = String(uv).substring(0,40); } catch(e){} }
     if (!label && s.c1>0){ try { var lv = CUR.ctl.wb.getActiveSheet().getRange(s.r1, s.c1-1).getValue(); if (typeof lv==='string' && lv.charAt(0)!=='=') label = String(lv).substring(0,40); } catch(e){} }
     var g = $('#fdG').is(':checked') ? 'd' : '';
     if (g){
