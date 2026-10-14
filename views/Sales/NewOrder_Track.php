@@ -9889,6 +9889,26 @@ foreach($dCounts as $c) {
                 $('#oda-cust-input').val(ODA.cust.name); $('#oda-cust-sug').empty();
             }
         });
+        // 規則跳窗的文字欄位（客戶／料號／關鍵字／提醒內容）：點進去自動全選、快速連點兩下清空
+        // （全站輸入欄位規則；本頁沒有載入共用檔 eg_input_rules.js，所以在這裡只綁在自己的欄位上，不動別處）
+        (function() {
+            var sel = '#oda-cust-input, #oda-part-input, #oda-kw, #oda-content';
+            var pending = null;
+            $(document).on('focus', sel, function() {
+                var el = this;
+                if (pending) clearTimeout(pending);
+                // 延到下一個 tick：滑鼠點擊時 mouseup 會把游標定位覆蓋掉全選；執行當下確認還在這個欄位
+                pending = setTimeout(function() { pending = null; if (document.activeElement === el && el.value) { try { el.select(); } catch (e) {} } }, 0);
+            });
+            $(document).on('dblclick', sel, function(e) {
+                e.preventDefault();
+                var id = this.id;
+                $(this).val('');
+                if (id === 'oda-cust-input') odaSearch('cust');          // 清空＝解除已選的客戶並清掉候選清單
+                else if (id === 'oda-part-input') odaSearch('part');
+                $(this).focus();
+            });
+        })();
         function odaSave() {
             var k = $('#oda-kind').val(), err = '';
             if (odaKindNeedsCust(k) && !ODA.cust) err = '請從清單點選客戶（直接打字不算綁定）';
