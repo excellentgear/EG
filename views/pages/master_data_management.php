@@ -11731,7 +11731,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 </div>
 
 <div class="modal fade" id="partAttachViewModal" tabindex="-1">
-<div class="modal-dialog" style="width:1000px;max-width:97vw;margin:20px auto;"><div class="modal-content" style="height:82vh;display:flex;flex-direction:column;">
+<div class="modal-dialog" style="width:1240px;max-width:97vw;margin:20px auto;"><div class="modal-content" style="height:82vh;display:flex;flex-direction:column;">
 <div class="modal-header" style="background:linear-gradient(135deg,#1a5276,#2980b9);flex-shrink:0;padding:8px 14px;display:flex;align-items:center;gap:8px;">
     <h4 class="modal-title" style="color:#fff;font-size:14px;margin:0;white-space:nowrap;flex-shrink:0;"><i class="fa fa-paperclip"></i> 附件 — <span id="pav-part-no" style="font-family:Consolas,monospace;"></span></h4>
     <!-- 類別標籤 Tab（all 模式顯示） -->
@@ -11762,7 +11762,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 </div>
 <div style="flex:1;display:flex;min-height:0;">
     <!-- 左：檔案列表 -->
-    <div style="width:240px;flex-shrink:0;border-right:1px solid #e4e8ed;display:flex;flex-direction:column;background:#f9fafb;">
+    <div style="width:340px;flex-shrink:0;border-right:1px solid #e4e8ed;display:flex;flex-direction:column;background:#f9fafb;">
         <div style="padding:8px;background:#eef4fb;border-bottom:1px solid #d6eaf8;display:flex;align-items:center;justify-content:space-between;">
             <span style="font-size:11px;font-weight:700;color:#1a5276;" id="pav-list-title">附件列表</span>
             <?php if ($can_part_attach): ?>
@@ -22454,7 +22454,7 @@ function _pavRenderList() {
         //    第一行改成放標籤與各種標記，第二行放備註。完整檔名仍在整列的 title、
         //    以及右側預覽區上方的檔名列看得到。
         // 第一行：圖示 + 類別標籤 +（作廢 / 版次 / 發行日）
-        html += '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">';
+        html += '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;white-space:nowrap;">';
         html += '<i class="fa '+icon+'" style="color:'+(isObs?'#c0392b':'#888')+';flex-shrink:0;font-size:12px;"></i>';
         // 廠商緊接在類別標籤旁（2026-09-08 使用者指定的位置）；沒綁廠商的完全看不出差別
         var mkTag = f.maker_no
@@ -22475,7 +22475,7 @@ function _pavRenderList() {
         }
         html += '</div>';
         // 第二行：備註（標籤下方；沒填就整行不出現＝使用者拍板，不顯示「未填備註」）
-        if (f.note) {
+        if (f.note && !isObs) {   // 作廢的附件不顯示備註（使用者要求 2026-10-14）
             html += '<div style="margin-top:2px;font-size:11px;color:#4A3524;line-height:1.35;word-break:break-all;" title="'+escHtml(f.note)+'">'
                   + '<i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
         }
