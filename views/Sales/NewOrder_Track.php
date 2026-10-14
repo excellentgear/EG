@@ -6800,6 +6800,15 @@ foreach($dCounts as $c) {
                 if (kw)     $('#filter-global').val(kw);
                 if (part)   $('#filter-part').val(part);
                 if (client) $('#filter-client').val(client);
+                // 載入時預設篩選「批圖中」（2026-10-14 使用者要求）；從別的頁面帶篩選進來（kw/part/client）時
+                // 不套用，免得把要找的那張訂單篩掉。效果等同使用者點了「批圖中」卡片，「取消」鈕仍回到全部。
+                if (!kw && !part && !client) {
+                    currentFilters.status = 'in_progress';
+                    isStatCardFilter = true;
+                    lockedStats = null;
+                    $('.stat-card').removeClass('active');
+                    $('.stat-card.card-processing').addClass('active');
+                }
             })();
             fetchTableData(1);
 
