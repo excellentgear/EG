@@ -12,7 +12,7 @@ session_start();
 require_once __DIR__ . '/../common/api_guard.php';
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
-include_once $document_root . '/EGsystem/src/common/risk_mgmt_lib.php';
+include_once $document_root . '/EGsystem/src/common/risk_mgmt_rules_lib.php';   // 內含 risk_mgmt_lib／risk_mgmt_suggest_lib
 
 function jout($a = []) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = 400, $extra = []) {
@@ -41,7 +41,7 @@ if (!$uid) jerr('無使用權限（帳號非在職狀態）', 403);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類動作：先驗登入再驗 CSRF（順序不可顛倒，見 _config.php 的說明） */
-$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save'];
+$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['rm_csrf'], $tok))
@@ -103,7 +103,7 @@ if ($action === 'meta') {
         'asdoc'    => rm_asdoc_all($db),
         'asdoc_list' => $P['canAdmin'] ? eg_asdoc_list($db) : [],
         'scopes'   => RM_SCOPES, 'ro_kinds' => RM_RO_KINDS,
-        'swot'     => rm_swot_view($set), 'guide' => rm_swot_guide(),
+        'swot'     => rm_swot_view($set), 'guide' => rm_swot_guide(), 'effect_status' => RM_EFFECT_STATUS,
         'depts'    => cm_dept_list($db),
         'roles'    => rm_roles_now($db),
     ]);
@@ -213,19 +213,97 @@ if ($action === 'suggest') {
     // ② 溝通管理：還沒結案的利害關係者反應 → 需求與期望的線索
     try {
         $q = $db->prepare("SELECT party, content, due_date FROM comm_track WHERE is_deleted=0 AND is_closed=0 AND party<>'' AND YEAR(react_date)=? ORDER BY react_date DESC, track_id DESC LIMIT 8");
-        $q->execute([$year]);
+        $q->execute([(int)($_GET['data_year'] ?? 0) >= 2000 ? (int)$_GET['data_year'] : $year]);
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $out[] = ['source'=>'溝通管理・措施追蹤表（未結案）', 'key'=>'T', 'stakeholder'=>(string)$t['party'], 'needs'=>mb_substr((string)$t['content'], 0, 200),
                       'issue'=>'', 'why'=>'利害關係者提出且尚未解決的反應，可能是外部威脅或需要把握的機會（請自行判斷象限）'];
         }
     } catch (Throwable $e) {}
     // ③ 依當年實際資料即時算出的建議（KPI、出貨、人員、行事曆、委外、品質異常、法規溝通…；選哪一年就用那一年的資料）
-    require_once __DIR__ . '/../common/risk_mgmt_suggest_lib.php';
+    require_once __DIR__ . '/../common/risk_mgmt_rules_lib.php';
     $GLOBALS['RM_SG_LAST_ERR'] = [];
-    $auto = rm_suggest_context($db, $year);
+    // 資料年度：年初（1～3 月）填當年度的表時，當年資料還很少，預設用前一年的全年資料；使用者可在畫面上改選
+    $dy = (int)($_GET['data_year'] ?? 0);
+    if ($dy < 2000 || $dy > 2100) $dy = rm_data_year($db, $year);
+    $auto = rm_suggest_context($db, $dy);
     $out = array_merge($auto, $out);                       // 規則算出的放最前面，再來是去年的表與未結案反應
-    jout(['year'=>$year, 'rows'=>$out, 'warn'=>$GLOBALS['RM_SG_LAST_ERR']]);
+    jout(['year'=>$year, 'data_year'=>$dy, 'rows'=>$out, 'warn'=>$GLOBALS['RM_SG_LAST_ERR']]);
 
+}
+
+/* ---------------------------------------------------------------- 判斷規則目錄（畫面「判斷規則」顯示） */
+if ($action === 'rules_list') {
+    require_once __DIR__ . '/../common/risk_mgmt_rules_lib.php';
+    jout(['rules'=>rm_rule_catalog(), 'status'=>RM_EFFECT_STATUS]);
+}
+
+/* ---------------------------------------------------------------- 成效確認：依規則蒐集佐證並建議結果（不寫入，使用者看過、改過、填裁示後才按儲存） */
+if ($action === 'risk_evidence') {
+    require_once __DIR__ . '/../common/risk_mgmt_rules_lib.php';
+    $row = json_decode((string)($_POST['row'] ?? ''), true);
+    if (!is_array($row)) jerr('資料不正確');
+    $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    // 連動處境議題時，一律用來源的最新內容判斷
+    $cx = (int)($row['ctx_item_id'] ?? 0);
+    if ($cx > 0) {
+        $q = $db->prepare("SELECT dimension, stakeholder, needs, issue FROM rm_item WHERE item_id=?"); $q->execute([$cx]);
+        if ($c0 = $q->fetch(PDO::FETCH_ASSOC)) { $row['dimension'] = $c0['dimension']; $row['stakeholder'] = $c0['stakeholder']; $row['needs'] = $c0['needs']; $row['issue'] = $c0['issue']; }
+    }
+    jout(['evidence'=>rm_rule_evidence($db, rm_settings($db), $row, $year)]);
+}
+
+/* ---------------------------------------------------------------- 由組織處境分析表產生風險與機會因應措施管制表（規則引擎替每個議題產生草稿） */
+if ($action === 'risk_generate') {
+    require_once __DIR__ . '/../common/risk_mgmt_rules_lib.php';
+    $year = (int)($_POST['year'] ?? 0);
+    $cy = (int)substr(rmToday($db), 0, 4);
+    if ($year < 2000 || $year > $cy) jerr('年度不正確（不可建立未來年度）');
+    $st = $db->prepare("SELECT * FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1");
+    $st->execute([$year]);
+    $ctxDoc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$ctxDoc) jerr('請先建立 ' . $year . ' 年度的組織處境分析表（年初先填處境分析，再由它產生風險與機會因應措施管制表）');
+    $st = $db->prepare("SELECT * FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1");
+    $st->execute([$year]);
+    $riskDoc = $st->fetch(PDO::FETCH_ASSOC);
+    if ($riskDoc && !rmCanEdit($riskDoc, $P)) jerr('這張表只有建立者或管理員可以補產生項目', 403);
+    $dy = (int)($_POST['data_year'] ?? 0); if ($dy < 2000 || $dy > 2100) $dy = rm_data_year($db, $year);
+    $set = rm_settings($db);
+    $src = $db->prepare("SELECT * FROM rm_item WHERE doc_id=? AND dimension IN ('W','O','T') ORDER BY seq, item_id");
+    $src->execute([(int)$ctxDoc['doc_id']]);
+    $ctxItems = $src->fetchAll(PDO::FETCH_ASSOC);
+    $linked = [];
+    if ($riskDoc) { $lq = $db->prepare("SELECT ctx_item_id FROM rm_item WHERE doc_id=? AND ctx_item_id IS NOT NULL"); $lq->execute([(int)$riskDoc['doc_id']]); $linked = array_map('intval', $lq->fetchAll(PDO::FETCH_COLUMN)); }
+    $todo = array_values(array_filter($ctxItems, function ($i) use ($linked) { return !in_array((int)$i['item_id'], $linked, true); }));
+    if (!$todo) jerr($riskDoc ? '處境分析表的議題都已經有對應的風險項目了，沒有需要補產生的' : '這張處境分析表沒有可以產生風險／機會的議題（優勢象限不產生風險項目）');
+    $now = rmNow($db);
+    $db->beginTransaction();
+    try {
+        if (!$riskDoc) {
+            $fd = $year === $cy ? rmToday($db) : $year . '-12-31';
+            $no = rm_next_doc_no($db, $fd);
+            $db->prepare("INSERT INTO rm_doc (doc_no, kind, dept_ids, fill_date, created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)")
+               ->execute([$no, 'risk', '[]', $fd, $uid, $uname, $now, $now]);
+            $docId = (int)$db->lastInsertId(); $seq = 0; $fill = $fd;
+        } else {
+            $docId = (int)$riskDoc['doc_id']; $fill = (string)$riskDoc['fill_date'];
+            $seq = (int)$db->query("SELECT COALESCE(MAX(seq),0) FROM rm_item WHERE doc_id=$docId")->fetchColumn();
+        }
+        $summary = [];
+        foreach ($todo as $c) {
+            $seq++;
+            $r = rm_rule_make_row($db, $set, $c, $dy);
+            $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+            $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fill) : null;
+            $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+               ->execute([$docId, $seq, $c['scope'], $c['stakeholder'], $c['needs'], $c['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm,
+                          $r['measure'], $r['effect_check'], (int)$c['item_id'], $r['rule_ids']]);
+            $summary[] = ['issue'=>mb_substr((string)$c['issue'], 0, 40), 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why']];
+        }
+        $db->prepare("UPDATE rm_doc SET updated_at=? WHERE doc_id=?")->execute([$now, $docId]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('產生失敗：' . $e->getMessage(), 500); }
+    jout(['doc_id'=>$docId, 'created'=>!$riskDoc, 'added'=>count($todo), 'data_year'=>$dy, 'summary'=>$summary]);
 }
 
 /* ---------------------------------------------------------------- 可引用的組織處境議題（風險表挑「引用處境議題」用） */
@@ -290,6 +368,7 @@ if ($action === 'doc_save') {
             'ro_kind'     => null, 'ro_text' => '', 'severity' => null, 'frequency' => null,
             'confirm_no'  => rmS($it['confirm_no'] ?? '', 30),
             'measure'     => '', 'effect_check' => '', 'ctx_item_id' => null,
+            'effect_status' => null, 'effect_date' => null, 'effect_ruling' => '', 'effect_evidence' => '', 'rule_ids' => null,
         ];
         if ($kind === 'context') {
             $dim = strtoupper(rmS($it['dimension'] ?? '', 2));
@@ -301,11 +380,25 @@ if ($action === 'doc_save') {
             $row['ro_text'] = rmS($it['ro_text'] ?? '', 4000);
             $row['measure'] = rmS($it['measure'] ?? '', 4000);
             $row['effect_check'] = rmS($it['effect_check'] ?? '', 4000);
+            // 成效確認（裁示與佐證）：有結果就一定要有日期、裁示與佐證（AS9100D 6.1.2 要評估措施有效性並留下證據）
+            $es = rmS($it['effect_status'] ?? '', 12);
+            if ($es !== '' && !isset(RM_EFFECT_STATUS[$es])) jerr('第 ' . ($n + 1) . ' 列的成效確認結果不正確');
+            $row['effect_status'] = $es !== '' && $es !== 'unconfirmed' ? $es : null;
+            $row['effect_date'] = rmDate($it['effect_date'] ?? '');
+            $row['effect_ruling'] = rmS($it['effect_ruling'] ?? '', 4000);
+            $row['effect_evidence'] = rmS($it['effect_evidence'] ?? '', 8000);
+            $row['rule_ids'] = preg_replace('/[^A-Za-z0-9,\-]/', '', rmS($it['rule_ids'] ?? '', 200)) ?: null;
+            if ($row['effect_date'] && $row['effect_date'] > rmToday($db)) jerr('第 ' . ($n + 1) . ' 列的成效確認日期不可是未來日期');
+            if (in_array($row['effect_status'], ['effective', 'partial', 'ineffective'], true)) {
+                if (!$row['effect_date']) jerr('第 ' . ($n + 1) . ' 列已填成效確認結果，請填確認日期');
+                if ($row['effect_ruling'] === '') jerr('第 ' . ($n + 1) . ' 列已填成效確認結果，請填裁示');
+                if ($row['effect_evidence'] === '') jerr('第 ' . ($n + 1) . ' 列已填成效確認結果，請填佐證（可按「依資料產生佐證」）');
+            }
             $sv = ($it['severity'] ?? '') === '' ? null : (int)$it['severity'];
             $fq = ($it['frequency'] ?? '') === '' ? null : (int)$it['frequency'];
-            if ($sv !== null && !in_array($sv, $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的嚴重度（影響）不在設定的級距內');
-            if ($fq !== null && !in_array($fq, $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的頻率（可能性）不在設定的級距內');
-            if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的嚴重度與頻率要一起填（缺一個算不出風險等級）');
+            if ($sv !== null && !in_array($sv, $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的嚴重度(S)不在設定的級距內');
+            if ($fq !== null && !in_array($fq, $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的發生率(O)不在設定的級距內');
+            if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的嚴重度(S)與發生率(O)要一起填（缺一個算不出風險等級）');
             $row['severity'] = $sv; $row['frequency'] = $fq;
             $cx = (int)($it['ctx_item_id'] ?? 0);
             if ($cx > 0) {
@@ -324,13 +417,20 @@ if ($action === 'doc_save') {
             }
         }
         // 整列都沒填東西就略過（末列多按出來的空白列）
-        $blank = $row['stakeholder'] === '' && $row['needs'] === '' && $row['issue'] === '' && $row['ro_text'] === ''
+        $blank = $row['stakeholder'] === '' && $row['needs'] === '' && $row['issue'] === '' && $row['ro_text'] === '' && $row['effect_status'] === null && $row['effect_ruling'] === ''
               && $row['measure'] === '' && $row['effect_check'] === '' && ($kind === 'context' || $row['dimension'] === null) && $row['severity'] === null;
         if ($blank) continue;
         $row['_old_id'] = (int)($it['item_id'] ?? 0);
         $clean[] = $row;
     }
     if (!$clean) jerr('至少要填寫一列內容');
+    if ($kind === 'context') {      // 組織處境分析表：四個象限每一項至少兩筆（有填議題描述的才算）
+        $cnt = array_fill_keys(array_keys(RM_SWOT), 0);
+        foreach ($clean as $r) if ($r['issue'] !== '' && isset($cnt[$r['dimension']])) $cnt[$r['dimension']]++;
+        $lack = [];
+        foreach ($cnt as $d => $c) if ($c < 2) $lack[] = (['S'=>'優勢','W'=>'劣勢','O'=>'機會','T'=>'威脅'][$d] ?? $d) . '（目前 ' . $c . ' 筆）';
+        if ($lack) jerr('組織處境分析表每個象限至少要填兩筆議題，尚不足：' . implode('、', $lack));
+    }
 
     $now = rmNow($db);
     $db->beginTransaction();
@@ -373,15 +473,18 @@ if ($action === 'doc_save') {
             }
             $vals = [$seq, $row['scope'], $row['dimension'], $row['stakeholder'] ?: null, $row['needs'] ?: null, $row['issue'] ?: null,
                      $row['ro_kind'], $row['ro_text'] ?: null, $row['severity'], $row['frequency'], $confirm ?: null,
-                     $row['measure'] ?: null, $row['effect_check'] ?: null, $row['ctx_item_id']];
+                     $row['measure'] ?: null, $row['effect_check'] ?: null, $row['ctx_item_id'],
+                     $row['effect_status'], $row['effect_date'], $row['effect_ruling'] ?: null, $row['effect_evidence'] ?: null, $row['rule_ids']];
             if ($isOld) {
                 $db->prepare("UPDATE rm_item SET seq=?, scope=?, dimension=?, stakeholder=?, needs=?, issue=?, ro_kind=?, ro_text=?,
-                                severity=?, frequency=?, confirm_no=?, measure=?, effect_check=?, ctx_item_id=? WHERE item_id=? AND doc_id=?")
+                                severity=?, frequency=?, confirm_no=?, measure=?, effect_check=?, ctx_item_id=?,
+                                effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=?, rule_ids=? WHERE item_id=? AND doc_id=?")
                    ->execute(array_merge($vals, [$oid, $id]));
                 $keepIds[] = $oid;
             } else {
                 $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, dimension, stakeholder, needs, issue, ro_kind, ro_text,
-                                severity, frequency, confirm_no, measure, effect_check, ctx_item_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                severity, frequency, confirm_no, measure, effect_check, ctx_item_id,
+                                effect_status, effect_date, effect_ruling, effect_evidence, rule_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge([$id], $vals));
                 $keepIds[] = (int)$db->lastInsertId();
             }
@@ -417,18 +520,18 @@ if ($action === 'setting_save') {
         [$v, $e, $impMap] = rm_normalize_impact($arr['rm_impact']); if ($e) jerr($e); $toWrite['rm_impact'] = $v;
         // orig 一定要是目前真的有的等級（別人剛改過就請他重新整理，不然對應會錯）
         $curV = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_impact']['rows']);
-        foreach (array_keys($impMap) as $o) if (!in_array($o, $curV, true)) jerr('影響分析的等級已被其他人更新，請重新整理頁面後再修改', 409);
+        foreach (array_keys($impMap) as $o) if (!in_array($o, $curV, true)) jerr('嚴重度(S)分析的等級已被其他人更新，請重新整理頁面後再修改', 409);
     }
     if (array_key_exists('rm_likelihood', $arr)) {
         [$v, $e, $likMap] = rm_normalize_likelihood($arr['rm_likelihood']); if ($e) jerr($e); $toWrite['rm_likelihood'] = $v;
         $curV = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_likelihood']);
-        foreach (array_keys($likMap) as $o) if (!in_array($o, $curV, true)) jerr('可能性評估的等級已被其他人更新，請重新整理頁面後再修改', 409);
+        foreach (array_keys($likMap) as $o) if (!in_array($o, $curV, true)) jerr('發生率(O)評估的等級已被其他人更新，請重新整理頁面後再修改', 409);
     }
     if (array_key_exists('rm_method', $arr)) {
         if (!in_array($arr['rm_method'], ['multiply', 'add', 'max'], true)) jerr('分數算法不正確');
         $toWrite['rm_method'] = $arr['rm_method'];
     }
-    // 風險準則：最後一級的上限＝改完之後可能的最高分，所以一定要用「改完之後」的影響／可能性／算法來算
+    // 風險準則：最後一級的上限＝改完之後可能的最高分，所以一定要用「改完之後」的嚴重度(S)／發生率(O)／算法來算
     $newImpRows = ($toWrite['rm_impact'] ?? $cur['rm_impact'])['rows'];
     $newLikRows = $toWrite['rm_likelihood'] ?? $cur['rm_likelihood'];
     $newMethod  = $toWrite['rm_method'] ?? $cur['rm_method'];
@@ -439,7 +542,7 @@ if ($action === 'setting_save') {
     } elseif (isset($toWrite['rm_impact']) || isset($toWrite['rm_likelihood']) || isset($toWrite['rm_method'])) {
         $re = array_map(function ($r) { return ['name'=>$r['name'], 'orig_name'=>$r['name'], 'hi'=>$r['hi'], 'measure'=>$r['measure'], 'action'=>$r['action']]; }, $cur['rm_levels']);
         [$v, $e] = rm_normalize_levels($re, $maxScore, $savedNames);
-        if ($e) jerr('影響／可能性／算法改動後，原本的風險準則已對不上：' . $e . '。請一併調整風險準則再儲存。');
+        if ($e) jerr('嚴重度(S)／發生率(O)／算法改動後，原本的風險準則已對不上：' . $e . '。請一併調整風險準則再儲存。');
         $toWrite['rm_levels'] = $v;
     }
     if (array_key_exists('rm_dimensions', $arr)) {
@@ -450,7 +553,7 @@ if ($action === 'setting_save') {
         if ($p === '') jerr('風險確認編號的前綴要填英數字（最多 6 碼）');
         $toWrite['rm_confirm_prefix'] = $p;
     }
-    // 影響／可能性的等級是自動依順序編號：刪掉其中一級，後面的等級數字會往前補（不跳號）。
+    // 嚴重度(S)／發生率(O)的等級是自動依順序編號：刪掉其中一級，後面的等級數字會往前補（不跳號）。
     // 既有風險資料存的是等級數字，所以要一併換成新數字；被刪掉那一級的資料沒有對應的新等級，會變成「未評估」——先講清楚再讓管理員決定
     $remap = [];     // [欄位 => [舊值 => 新值]]
     if ($impMap !== null) { $remap['severity']  = $impMap; $curVals['severity']  = array_map(function ($r) { return (int)$r['v']; }, $cur['rm_impact']['rows']); }
@@ -467,7 +570,7 @@ if ($action === 'setting_save') {
         }
     }
     if ($lost > 0 && empty($_POST['force']))
-        jerr('有 ' . $lost . ' 列既有風險資料用到「被你刪除的等級」，儲存後那些列會變成「未評估」（需要重新選嚴重度與頻率）。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$lost]);
+        jerr('有 ' . $lost . ' 列既有風險資料用到「被你刪除的等級」，儲存後那些列會變成「未評估」（需要重新選嚴重度(S)與發生率(O)）。請確認後再存。', 409, ['code'=>'NEED_FORCE', 'bad'=>$lost]);
     $db->beginTransaction();
     try {
         foreach ($toWrite as $k => $v) rm_setting_write($db, $k, $v, $uname);
@@ -475,7 +578,7 @@ if ($action === 'setting_save') {
             $case = ''; foreach ($ch['map'] as $o => $n2) $case .= ' WHEN ' . (int)$o . ' THEN ' . (int)$n2;
             $db->exec("UPDATE rm_item SET $col = CASE $col$case ELSE NULL END WHERE $col IS NOT NULL");
         }
-        if ($changed) $db->exec("UPDATE rm_item SET severity=NULL, frequency=NULL WHERE (severity IS NULL) <> (frequency IS NULL)");   // 嚴重度與頻率要一起有、一起沒有
+        if ($changed) $db->exec("UPDATE rm_item SET severity=NULL, frequency=NULL WHERE (severity IS NULL) <> (frequency IS NULL)");   // 嚴重度(S)與發生率(O)要一起有、一起沒有
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存設定失敗：' . $e->getMessage(), 500); }
     $set = rm_settings($db);

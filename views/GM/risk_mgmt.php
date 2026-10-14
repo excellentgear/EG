@@ -143,10 +143,16 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.c-lv { grid-column:span 2; }
         #itTbl.cards td.c-cn { grid-column:span 2; }
         #itTbl.cards td.c-measure, #itTbl.cards td.c-eff { grid-column:span 6; }
+        #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 2; }
+        #itTbl.cards td.c-er { grid-column:span 8; }
+        #itTbl.cards td.c-ev { grid-column:span 12; }
+        #itTbl.cards td.c-es, #itTbl.cards td.c-ed, #itTbl.cards td.c-er, #itTbl.cards td.c-ev { border-top:1px dashed #E0BE86; padding-top:6px; }
+        #itTbl.cards td.c-ev textarea { min-height:84px; }
+        .ev-reason { font-size:12px; color:#8A5A2B; margin-top:3px; }
         #itTbl.cards td.op { position:absolute; right:8px; top:8px; }
         #itTbl.cards td.lvc { padding-top:2px; }
         #itTbl.cards textarea { min-height:60px; }
-        @media (max-width:980px) { #itTbl.cards td.c-scope, #itTbl.cards td.c-sh, #itTbl.cards td.c-needs, #itTbl.cards td.c-issue, #itTbl.cards td.c-ro,
+        @media (max-width:980px) { #itTbl.cards td.c-er, #itTbl.cards td.c-ev { grid-column:span 12; } #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 6; } #itTbl.cards td.c-scope, #itTbl.cards td.c-sh, #itTbl.cards td.c-needs, #itTbl.cards td.c-issue, #itTbl.cards td.c-ro,
             #itTbl.cards td.c-measure, #itTbl.cards td.c-eff { grid-column:span 12; } #itTbl.cards td.c-kind, #itTbl.cards td.c-sev, #itTbl.cards td.c-frq,
             #itTbl.cards td.c-lv, #itTbl.cards td.c-cn { grid-column:span 6; } }
         table.it-tbl { border-collapse:collapse; font-size:12.5px; table-layout:fixed; }
@@ -299,7 +305,23 @@ $perms  = rm_perms($db, $rmUser);
             涵蓋：KPI 年度總表（未達標／全部達標）、出貨紀錄（客戶集中度、新客戶）、人員資料（新進人員比例）、行事曆（颱風假）、BOM 委外紀錄（單一廠商／單一來源製程）、
             品質異常處理單、客戶退貨、溝通管理（政府單位溝通、逾期與未結案的措施追蹤）、量測儀器校驗、去年的表。
             每一條都寫明<b>佐證來源與規則</b>，有對應的溝通記錄時會自動附上單號；是不是列入、放在哪個象限由您判斷。</div>
+        <div style="margin-bottom:8px;"><label style="font-size:13px;margin:0;">資料年度</label>
+            <select id="sugDy" style="width:110px;height:28px;"></select>
+            <span class="hint">年初（1～3 月）填當年度的表時，預設用「前一年」的全年資料；可自行改選。</span></div>
         <div id="sugBody"></div></div>
+</div></div>
+
+<!-- ============ 判斷規則 ============ -->
+<div class="rm-mask" id="ruleMask"><div class="rm-modal" style="width:1080px;">
+    <div class="rm-mhd"><span>判斷規則（不依賴外部 AI，所有判斷都是下面這些規則）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
+    <div class="rm-mbd">
+        <div class="note-box" style="margin-bottom:8px;">「由處境分析表產生」與「依資料產生佐證」都是依下面的規則判斷，每一列產生出來的資料都會記下用到哪些規則編號；結果一律只是<b>草稿／建議</b>，要由人確認、修改並填裁示。
+            嚴重度與發生率是先算成 0～1 的比例，再依「模組設定」目前有幾級換算，所以級數改了規則照樣適用。</div>
+        <label style="font-size:13px;">類型：</label>
+        <select id="ruleKind" style="width:150px;"><option value="">全部</option></select>
+        <div class="rm-table-wrap" style="margin-top:6px;"><table class="rm-table"><thead><tr><th style="width:92px;">規則編號</th><th style="width:76px;">類型</th><th style="width:120px;">適用類別</th><th>條件</th><th>判斷結果</th></tr></thead>
+            <tbody id="ruleBody"></tbody></table></div>
+    </div>
 </div></div>
 
 <!-- ============ 評級對照表 ============ -->
@@ -319,22 +341,22 @@ $perms  = rm_perms($db, $rmUser);
             <button type="button" class="b-mini" id="btnAddLvl"><i class="fa fa-plus"></i> 新增一級</button>
             <span class="err" id="eLvl"></span>
             <div class="hint"><b>評分是「下限～上限」區間</b>（例：低度 1～1、中度 2～2、高度 3～6），區間之間連續不留縫隙：每一級的<b>下限會自動＝上一級上限＋1</b>、不用也不能自己填；第一級從 1 起算，
-                <b>最後一級的上限固定＝目前最高可能分數</b>（由下面的影響與可能性等級算出，會跟著變）。上限不可小於下限，也要替後面的每一級各留至少 1 分。
+                <b>最後一級的上限固定＝目前最高可能分數</b>（由下面的嚴重度(S)與發生率(O)等級算出，會跟著變）。上限不可小於下限，也要替後面的每一級各留至少 1 分。
                 <b>已儲存的風險等級名稱不提供修改</b>（要改請刪除後重新新增）。「處理措施」會顯示在評級對照表上；勾選「需要因應措施」的等級，儲存時若該列沒有風險確認編號，會自動配發。</div></div>
-        <div class="set-sec"><h5>② 影響分析（表B）</h5>
+        <div class="set-sec"><h5>② 嚴重度(S)分析（表B）</h5>
             <div class="fld"><label>說明欄名稱（一行一個，可自行增減；預設：公司形象／財物損失／客戶抱怨件數）</label>
                 <textarea id="setImpCols" style="min-height:66px;"></textarea></div>
             <div id="setImp"></div>
             <span class="err" id="eImp"></span>
             <button type="button" class="b-mini" id="btnAddImp"><i class="fa fa-plus"></i> 新增一級</button>
             <div class="hint">等級數字由系統從 1 起<b>自動依順序編號、不能修改</b>；刪除其中一級後後面的數字會自動往前補（不會跳號），已填的風險資料會一併換成新的等級數字，被刪掉那一級的資料會變成「未評估」。</div></div>
-        <div class="set-sec"><h5>③ 可能性評估（表C）</h5><div id="setLik"></div>
+        <div class="set-sec"><h5>③ 發生率(O)評估（表C）</h5><div id="setLik"></div>
             <span class="err" id="eLik"></span>
             <button type="button" class="b-mini" id="btnAddLik"><i class="fa fa-plus"></i> 新增一級</button>
             <div class="hint">等級數字同樣自動編號、不能修改。<b>發生機率百分比是整數區間</b>：第一級從 0% 起算、<b>最後一級固定到 100%</b>，每一級的<b>下限自動＝上一級上限＋1</b>，只需要填各級的上限（不可小於下限，也要替後面的每一級各留至少 1%）。</div></div>
         <div class="set-sec"><h5>④ 風險分布（表D）</h5>
             <div class="fld" style="margin-bottom:6px;"><label>分數算法（程序書 6.3.3 採相乘制）</label>
-                <select id="setMethod" style="max-width:320px;"><option value="multiply">影響等級 × 可能性等級</option><option value="add">影響等級 ＋ 可能性等級</option><option value="max">取影響與可能性較大者</option></select></div>
+                <select id="setMethod" style="max-width:320px;"><option value="multiply">嚴重度(S)等級 × 發生率(O)等級</option><option value="add">嚴重度(S)等級 ＋ 發生率(O)等級</option><option value="max">取嚴重度(S)與發生率(O)較大者</option></select></div>
             <div class="hint" style="margin-bottom:4px;">下表是依上面三項設定即時預覽的風險分布（尚未儲存前就能看到結果）：</div>
             <div id="setDist"></div></div>
         <div class="set-sec"><h5>組織處境分析表（SWOT）四象限名稱</h5>
@@ -347,7 +369,8 @@ $perms  = rm_perms($db, $rmUser);
             <div class="hint">四象限固定為優勢(S)、劣勢(W)、機會(O)、威脅(T)，S、W 屬內部、O、T 屬外部；這裡只改顯示名稱，不影響既有資料。</div></div>
         <div class="set-sec"><h5>風險確認編號前綴</h5>
             <div class="fld"><input type="text" id="setPrefix" maxlength="6" style="max-width:140px;"></div>
-            <div class="hint">編號格式：前綴＋填表年度＋流水號，例如 R2026-001。已配發的編號不會因設定變動而改變。</div></div>
+            <div class="hint"><b>風險確認編號是什麼</b>：每條「需要因應措施」的風險（風險準則裡勾選的等級）由系統自動配發的流水號，讓這條風險在措施追蹤、管理審查、矯正單等地方被引用時有唯一編號可對照。
+                格式：前綴＋填表年度＋流水號，例如 R2026-001。已配發的編號不會因設定變動而改變。</div></div>
         <span class="err" id="eSet"></span>
         <div class="hint">按「儲存設定」才會生效；設定改了之後，所有既有資料的風險等級會依新設定即時重算（資料本身不會被改動）。</div>
     </div>
@@ -360,16 +383,24 @@ $perms  = rm_perms($db, $rmUser);
     <div class="rm-mbd help-doc">
         <h4>這一頁在做什麼</h4>
         <ul><li><b>組織處境分析表</b>：整家公司<b>一個年度只有一張</b>，用 SWOT 四象限（優勢／劣勢／機會／威脅）記錄內外部議題、相關利害關係者與他們的需求與期望，是風險與機會的來源。每個象限都有「填寫提示」與「範例」，按「依系統資料建議」可帶入去年內容、溝通管理未結案的反應、品質異常的主要原因等線索。</li>
-            <li><b>風險與機會因應措施管制表</b>：把議題整理成風險／機會，評估嚴重度與頻率，自動算出風險等級，並記錄因應措施與成效確認（原「策略行動措施管制表」與「風險評估及處理表」合併為這一張）。</li>
+            <li><b>風險與機會因應措施管制表</b>：把議題整理成風險／機會，評估嚴重度(S)與發生率(O)，自動算出風險等級，並記錄因應措施與成效確認（原「策略行動措施管制表」與「風險評估及處理表」合併為這一張）。</li>
             <li>利害關係者的溝通記錄、措施追蹤與溝通管制在「溝通管理」頁，按上方「前往溝通管理」即可轉跳。</li></ul>
+        <h4>年度作業流程</h4>
+        <ul><li><b>年初</b>：先填「組織處境分析表」（可按「依系統資料建議」，年初用前一年的全年資料）→ 到「風險與機會因應措施管制表」按「<b>由處境分析表產生</b>」，系統依規則替每個議題產生風險／機會草稿（影響說明、嚴重度(S)、發生率(O)、因應措施、成效確認方式），您再檢查修改。</li>
+            <li><b>年中</b>：措施靠「溝通管理」的溝通記錄與措施追蹤落實。</li>
+            <li><b>定期／年底的「成效確認」</b>：在每條風險的「成效確認」區按「<b>依資料產生佐證</b>」，系統蒐集 KPI 逐月數字、相關措施追蹤與溝通記錄的結案狀況並建議結果，主管填「裁示」後存檔；存檔當下的佐證是快照，之後資料再變也不會改寫。有結果就一定要有確認日期、裁示與佐證。</li>
+            <li>按「判斷規則」可以看到系統用的所有規則（分類、嚴重度(S)、發生率(O)、措施、成效），都不依賴外部 AI。</li></ul>
+        <h4>名詞：風險確認編號</h4>
+        <ul><li>每條<b>需要因應措施</b>的風險（等級在「風險準則」被勾選「需要因應措施」者）由系統自動配發的流水號，例如 R2026-001（前綴與年度可在模組設定調整）。
+            用途是讓這條風險在其他表單（措施追蹤、管理審查、矯正單）被引用時有唯一編號可對照；已配發的編號不會因為設定變動而改變。</li></ul>
         <h4>操作步驟</h4>
         <ul><li>按「新增」→ 填填表日期、相關部門 → 逐列填寫（最後一列按 ↓ 自動加列）→ 儲存。</li>
             <li>風險表每一列的「議題描述」可按「選擇處境議題」連動組織處境分析表：內/外部議題、利害關係者、需求與期望、議題描述都跟著來源走（來源改了這裡跟著變），不必重打；要自行修改先按「解除連動」。「風險與機會」欄選這一列是風險還是機會，「對組織的影響說明」寫它對組織造成的影響。</li>
-            <li>嚴重度與頻率要一起選，<b>風險等級由系統依目前設定自動算出</b>，不可手填。</li>
+            <li>嚴重度(S)與發生率(O)要一起選，<b>風險等級由系統依目前設定自動算出</b>，不可手填。</li>
             <li>等級被設定為「需要因應措施」的列，儲存時會自動配發風險確認編號。</li>
-            <li>「風險準則／評級對照」可隨時查看 2-GM-03 的表A風險準則、表B影響分析、表C可能性分析、表D風險分布（格內附目前實際落在該格的風險筆數）。</li></ul>
+            <li>「風險準則／評級對照」可隨時查看 2-GM-03 的表A風險準則、表B嚴重度(S)分析、表C發生率(O)分析、表D風險分布（格內附目前實際落在該格的風險筆數）。</li></ul>
         <h4>重要行為</h4>
-        <ul><li>風險準則（表A）、影響分析（表B）、可能性評估（表C）、風險分布算法（表D）、構面、確認編號前綴<b>全部可在「模組設定」修改</b>（預設值取自 2-GM-03）；改完後既有資料的風險等級依新設定即時重算。</li>
+        <ul><li>風險準則（表A）、嚴重度(S)分析（表B）、發生率(O)評估（表C）、風險分布算法（表D）、構面、確認編號前綴<b>全部可在「模組設定」修改</b>（預設值取自 2-GM-03）；改完後既有資料的風險等級依新設定即時重算。</li>
             <li>表單名稱與文件編號取自綁定的 AS 文件，列印版頁尾右下角的編號版次依填表日期回推。</li>
             <li>一般員工只看得到、改得動自己建立的表單；檢閱角色可唯讀查看全部；管理員可改全部、刪除與設定。</li></ul>
         <h4>角色</h4><div id="helpRoleBody"></div>
@@ -455,7 +486,7 @@ function renderRoleHelp(){
 
 /* ---------- 風險等級（只用來在畫面即時預覽；存檔與列表以後端 rm_level_calc 為準） ---------- */
 var LVCOL = [['#F7E0BD', '#5b3a1e'], ['#F0A24B', '#5b3a1e'], ['#DD5138', '#ffffff'], ['#8B2E1E', '#ffffff']];   // 與後端 RM_LEVEL_COLORS 同一組固定暖色盤
-/* 影響／可能性的選單用清單（title 顯示完整說明） */
+/* 嚴重度(S)／發生率(O)的選單用清單（title 顯示完整說明） */
 function impactList(S){
     S = S || META.settings;
     return $.map(S.rm_impact.rows, function(r){
@@ -614,9 +645,12 @@ $(document).on('click', '#bSave', function(){
 });
 /* ---------- 依系統資料建議 ---------- */
 var SUG = [];
-$(document).on('click', '#bSuggest', function(){
-    get({action:'suggest', year:BOARD.year}, function(res){
+function loadSug(dy){
+    get({action:'suggest', year:BOARD.year, data_year:dy || 0}, function(res){
         SUG = res.rows;
+        var sel = $('#sugDy').empty();
+        for (var y = BOARD.year; y >= BOARD.year - 3; y--) sel.append('<option value="' + y + '">' + y + ' 年資料</option>');
+        sel.val(String(res.data_year));
         if (res.warn && res.warn.length) console.warn('建議規則有錯誤：', res.warn);
         var b = $('#sugBody').empty();
         if (!SUG.length) b.html('<div class="rm-empty">目前系統裡沒有可參考的資料（沒有去年的表、沒有未結案的溝通反應、近一年也沒有品質異常單）。可改用「填寫提示與範例」。</div>');
@@ -630,7 +664,9 @@ $(document).on('click', '#bSuggest', function(){
         });
         openMask('sugMask');
     });
-});
+}
+$(document).on('click', '#bSuggest', function(){ loadSug(0); });
+$('#sugDy').on('change', function(){ loadSug(+$(this).val()); });
 $(document).on('click', '[data-sgadd]', function(){
     var i = +$(this).data('sgadd'), r = SUG[i], row = $(this).closest('.sg-row');
     addSwot(row.find('.sg-key').val(), {stakeholder:r.stakeholder, needs:r.needs, issue:r.issue}, false);
@@ -671,7 +707,9 @@ function paneHtml(k){
         + '<button class="btn-warm" data-new="' + k + '"><i class="fa fa-plus"></i> 新增</button>'
         + '<label>年度</label><select data-year="' + k + '" style="width:92px;"></select>'
         + '<input type="text" data-kw="' + k + '" placeholder="關鍵字（單號／部門／議題／措施…）" style="width:280px;">'
-        + (isRisk ? '<button data-rating="1"><i class="fa fa-table"></i> 風險準則／評級對照</button>' : '')
+        + (isRisk ? '<button class="btn-warm" data-gen="risk"><i class="fa fa-magic"></i> 由處境分析表產生</button>'
+                    + '<button data-rating="1"><i class="fa fa-table"></i> 風險準則／評級對照</button>'
+                    + '<button data-rules="1"><i class="fa fa-gavel"></i> 判斷規則</button>' : '')
         + '<button data-csv="' + k + '"><i class="fa fa-download"></i> 匯出 CSV</button>'
         + '</div>'
         + '<div class="rm-pager" data-pager="' + k + '"></div>'
@@ -733,7 +771,7 @@ function colsOf(kind){
     if (kind === 'context') return [['seq','編號',52],['scope','內/外部議題',100],['dimension','構面',130],['stakeholder','利害關係者',150],
         ['needs','需求與期望',230],['issue','議題描述',300],['op','',44]];
     return [['seq','編號',52],['scope','內/外部議題',96],['stakeholder','利害關係者',130],['needs','需求與期望',170],['issue','議題描述',210],
-        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度（影響）',112],['frequency','頻率（可能性）',112],['level','風險等級',92],['confirm_no','風險確認編號',104],
+        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險確認編號',104],
         ['measure','因應措施',200],['effect','成效確認',170],['op','',44]];
 }
 function scaleOptions(list, val){
@@ -744,6 +782,11 @@ function scaleOptions(list, val){
         var found = false; $.each(list, function(_, r){ if (String(val) === String(r.v)) found = true; });
         if (!found) h += '<option value="' + val + '" selected>' + val + '（已不在設定內）</option>';
     }
+    return h;
+}
+function effOpts(cur){
+    var h = '<option value="">未確認</option>';
+    $.each(META.effect_status, function(k, t){ if (k !== 'unconfirmed') h += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + esc(t) + '</option>'; });
     return h;
 }
 function ctxFlagHtml(it){
@@ -762,7 +805,7 @@ function rowHtml(kind, it, n){
         + $.map(META.scopes, function(t, k){ return '<option value="' + k + '"' + (it.scope === k ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select>';
     var td = function(inner, cls){ return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + inner + '</td>'; };
     var ta = function(f, v){ return '<textarea data-f="' + f + '">' + esc(v) + '</textarea>'; };
-    var h = '<tr data-item-id="' + (it.item_id || 0) + '" data-ctx="' + (it.ctx_item_id || '') + '">' + td('#' + n, 'seq');
+    var h = '<tr data-item-id="' + (it.item_id || 0) + '" data-ctx="' + (it.ctx_item_id || '') + '" data-rules="' + esc(it.rule_ids || '') + '">' + td('#' + n, 'seq');
     if (kind === 'context'){
         var dopts = '<option value="">—</option>', hasDim = false;
         $.each(META.settings.rm_dimensions, function(_, d){ if (it.dimension === d) hasDim = true; dopts += '<option' + (it.dimension === d ? ' selected' : '') + '>' + esc(d) + '</option>'; });
@@ -781,11 +824,15 @@ function rowHtml(kind, it, n){
         h += fd('內/外部議題', scopeSel, 'c-scope') + fd('利害關係者', ta('stakeholder', it.stakeholder), 'c-sh') + fd('需求與期望', ta('needs', it.needs), 'c-needs')
           + fd('議題描述', issueCell, 'c-issue') + fd('對組織的影響說明', ta('ro_text', it.ro_text), 'c-ro')
           + fd('風險與機會', roSel, 'c-kind')
-          + fd('嚴重度（影響）', '<select data-f="severity">' + scaleOptions(impactList(), it.severity) + '</select>', 'c-sev')
-          + fd('頻率（可能性）', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
+          + fd('嚴重度(S)', '<select data-f="severity">' + scaleOptions(impactList(), it.severity) + '</select>', 'c-sev')
+          + fd('發生率(O)', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('風險等級', lvBadge(lv, true), 'c-lv lvc')
-          + fd('風險確認編號', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
-          + fd('因應措施', ta('measure', it.measure), 'c-measure') + fd('成效確認', ta('effect_check', it.effect_check), 'c-eff');
+          + fd('風險確認編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
+          + fd('因應措施', ta('measure', it.measure), 'c-measure') + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
+          + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>', 'c-es')
+          + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
+          + fd('裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
+          + fd('佐證 <button type="button" class="b-mini warm" data-evidence><i class="fa fa-search"></i> 依資料產生佐證／建議結果</button>', ta('effect_evidence', it.effect_evidence) + '<div class="ev-reason"></div>', 'c-ev');
     }
     return h + td('<button type="button" class="b-mini danger" data-delrow title="刪除此列"><i class="fa fa-times"></i></button>', 'op') + '</tr>';
 }
@@ -798,7 +845,7 @@ function buildTable(kind, items){
     if (kind === 'risk'){
         h += '<tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
           + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
-          + '<tr><th>嚴重度（影響）</th><th>頻率（可能性）</th><th>風險等級</th></tr>';
+          + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr>';
     } else {
         h += '<tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
     }
@@ -824,7 +871,7 @@ $(document).on('click', '[data-delrow]', function(){
     if ($('#itBody tr').length <= 1){ $(this).closest('tr').find('textarea,input[type=text]').val(''); $(this).closest('tr').find('select').val(''); return; }
     $(this).closest('tr').remove(); renumber();
 });
-/* 嚴重度／頻率一改就即時更新該列的風險等級預覽 */
+/* 嚴重度(S)／發生率(O)一改就即時更新該列的風險等級預覽 */
 $(document).on('change', '#itBody select[data-f=severity], #itBody select[data-f=frequency]', function(){
     var tr = $(this).closest('tr');
     tr.find('td.lvc').html(lvBadge(calcLevel(tr.find('[data-f=severity]').val(), tr.find('[data-f=frequency]').val()), true));
@@ -858,7 +905,7 @@ function openDoc(kind, id){
         $('#fNo').val(doc ? doc.doc_no : '');
         $('#eDate, #eItems').text(''); $('#fDate').removeClass('bad');
         $('#itemHint').html(kind === 'risk'
-            ? '嚴重度與頻率要一起選；<b>風險等級由系統依目前設定自動算出</b>。按「選擇處境議題」可連動組織處境分析表的議題。整家公司一個年度只有一張，年度中途有變動請直接在這一張上更新。'
+            ? '嚴重度(S)與發生率(O)要一起選；<b>風險等級由系統依目前設定自動算出</b>。按「選擇處境議題」可連動組織處境分析表的議題。整家公司一個年度只有一張，年度中途有變動請直接在這一張上更新。'
             : '構面清單由管理員在「模組設定」維護。');
         buildTable(kind, items);
         renderDeptChips();
@@ -893,7 +940,7 @@ $(document).on('click', '[data-del]', function(){
 function collectItems(){
     var out = [];
     $('#itBody tr').each(function(){
-        var tr = $(this), o = {item_id:+tr.data('item-id') || 0, ctx_item_id:+tr.attr('data-ctx') || 0};
+        var tr = $(this), o = {item_id:+tr.data('item-id') || 0, ctx_item_id:+tr.attr('data-ctx') || 0, rule_ids:tr.attr('data-rules') || ''};
         tr.find('[data-f]').each(function(){ o[$(this).data('f')] = $(this).val(); });
         out.push(o);
     });
@@ -907,7 +954,7 @@ $('#btnDocSave').on('click', function(){
     var items = collectItems(), bad = '';
     if (CUR.kind === 'risk'){
         $.each(items, function(i, it){
-            if (!bad && ((it.severity === '') !== (it.frequency === ''))) bad = '第 ' + (i + 1) + ' 列的嚴重度與頻率要一起填（缺一個算不出風險等級）';
+            if (!bad && ((it.severity === '') !== (it.frequency === ''))) bad = '第 ' + (i + 1) + ' 列的嚴重度(S)與發生率(O)要一起填（缺一個算不出風險等級）';
         });
     }
     if (bad){ $('#eItems').text(bad); return; }
@@ -961,7 +1008,7 @@ function renderRating(){
         h += '<tr><td>' + lvBadge(lv, false) + '</td><td>' + esc(lv.range) + '</td><td style="text-align:left;">' + esc(lv.measure) + '</td><td>' + (lv.action ? '是' : '否') + '</td></tr>';
     });
     h += '</tbody></table>';
-    h += H + '表B、影響分析</h4><table class="mx"><thead><tr><th>等級</th><th>影響</th>';
+    h += H + '表B、嚴重度(S)分析</h4><table class="mx"><thead><tr><th>等級</th><th>嚴重度(S)</th>';
     $.each(S.rm_impact.columns, function(_, c){ h += '<th>' + esc(c) + '</th>'; });
     h += '</tr></thead><tbody>';
     $.each(S.rm_impact.rows.slice().reverse(), function(_, r){
@@ -970,13 +1017,13 @@ function renderRating(){
         h += '</tr>';
     });
     h += '</tbody></table>';
-    h += H + '表C、可能性分析</h4><table class="mx"><thead><tr><th>等級</th><th>可能性分類</th><th>發生機率百分比</th><th>詳細的描述</th></tr></thead><tbody>';
+    h += H + '表C、發生率(O)分析</h4><table class="mx"><thead><tr><th>等級</th><th>發生率(O)分類</th><th>發生機率百分比</th><th>詳細的描述</th></tr></thead><tbody>';
     $.each(S.rm_likelihood.slice().reverse(), function(_, r){
         h += '<tr><td>' + r.v + '</td><td>' + esc(r.label) + '</td><td>' + esc(r.prob) + '</td><td style="text-align:left;">' + esc(r.desc) + '</td></tr>';
     });
     h += '</tbody></table>';
-    h += H + '表D、風險分布（' + {multiply:'影響等級 × 機率等級', add:'影響等級 ＋ 機率等級', max:'取較大者'}[S.rm_method] + '；格內小字＝目前實際落在此格的風險筆數）</h4>'
-       + '<table class="mx"><thead><tr><th>影響＼機率</th>';
+    h += H + '表D、風險分布（' + {multiply:'嚴重度(S)等級 × 發生率(O)等級', add:'嚴重度(S)等級 ＋ 發生率(O)等級', max:'取較大者'}[S.rm_method] + '；格內小字＝目前實際落在此格的風險筆數）</h4>'
+       + '<table class="mx"><thead><tr><th>嚴重度(S)＼發生率(O)</th>';
     $.each(S.rm_likelihood, function(_, f){ h += '<th>' + esc(f.label) + '（' + f.v + '）</th>'; });
     h += '</tr></thead><tbody>';
     $.each(S.rm_impact.rows.slice().reverse(), function(_, s){
@@ -995,6 +1042,59 @@ function renderRating(){
 }
 $(document).on('click', '[data-rating]', function(){ renderRating(); openMask('ratingMask'); });
 
+/* ---------- 判斷規則 ---------- */
+var RULES = [];
+function renderRules(){
+    var k = $('#ruleKind').val(), b = $('#ruleBody').empty();
+    $.each(RULES, function(_, r){
+        if (k && r.kind !== k) return;
+        b.append('<tr><td><b>' + esc(r.id) + '</b></td><td>' + esc(r.kind) + '</td><td class="l">' + esc(r.cat) + '</td><td class="l">' + esc(r.when) + '</td><td class="l">' + esc(r.then) + '</td></tr>');
+    });
+}
+$(document).on('click', '[data-rules]', function(){
+    get({action:'rules_list'}, function(res){
+        RULES = res.rules;
+        var kinds = {}; $.each(RULES, function(_, r){ kinds[r.kind] = 1; });
+        var s = $('#ruleKind').empty().append('<option value="">全部（' + RULES.length + ' 條）</option>');
+        $.each(kinds, function(k){ s.append('<option>' + esc(k) + '</option>'); });
+        renderRules(); openMask('ruleMask');
+    });
+});
+$('#ruleKind').on('change', renderRules);
+
+/* ---------- 由組織處境分析表產生風險與機會因應措施管制表（規則引擎） ---------- */
+$(document).on('click', '[data-gen]', function(){
+    var cy = +META.today.slice(0, 4), y = +$('[data-year="risk"]').val() || cy;
+    if (!confirm('依「' + y + ' 年度組織處境分析表」，用規則替每個議題（劣勢、機會、威脅）產生風險／機會草稿：\n'
+        + '影響說明、嚴重度(S)、發生率(O)、因應措施、成效確認方式都會依規則帶入。\n\n'
+        + '・已經有對應風險項目的議題不會重複產生\n・優勢（S）象限不產生風險項目\n・產生的是草稿，請人工檢查後再使用（可按「判斷規則」看依據）\n\n確定要產生嗎？')) return;
+    post({action:'risk_generate', year:y}, function(res){
+        var lines = $.map(res.summary, function(s){ return '・' + s.issue + '…　→　' + s.category + '／' + (s.level || '未評估'); });
+        alert('已' + (res.created ? '建立 ' + y + ' 年度風險與機會因應措施管制表並' : '') + '產生 ' + res.added + ' 條風險／機會草稿（評分依據 ' + res.data_year + ' 年資料）：\n\n' + lines.join('\n')
+            + '\n\n請逐條檢查；每一條的「判斷依據」可在卡片的規則編號（滑鼠移到編號上）與「判斷規則」查看。');
+        loadList('risk', true); openDoc('risk', +res.doc_id);
+    });
+});
+
+/* ---------- 成效確認：依規則蒐集佐證並建議結果 ---------- */
+$(document).on('click', '[data-evidence]', function(){
+    var tr = $(this).closest('tr'), o = {ctx_item_id:+tr.attr('data-ctx') || 0};
+    tr.find('[data-f]').each(function(){ o[$(this).data('f')] = $(this).val(); });
+    var year = +(($('#fDate').val() || META.today).slice(0, 4));
+    var $ev = tr.find('[data-f=effect_evidence]'), $why = tr.find('.ev-reason');
+    post({action:'risk_evidence', row:JSON.stringify(o), year:year}, function(res){
+        var e = res.evidence;
+        if ($.trim($ev.val()) && $ev.val() !== e.text && !confirm('佐證欄已經有內容，要用系統剛產生的佐證覆蓋嗎？')) return;
+        $ev.val(e.text);
+        var $st = tr.find('[data-f=effect_status]');
+        if (!$st.val() && e.status !== 'unconfirmed') $st.val(e.status);
+        var $dt = tr.find('[data-f=effect_date]'); if (!$dt.val() && e.status !== 'unconfirmed') $dt.val(META.today);
+        $why.html('<b>系統建議：' + esc(META.effect_status[e.status] || '') + '</b>（' + esc(e.reason) + '）　依據規則：' + esc(e.rule_ids) + '。結果與裁示請由主管確認後再存檔。');
+    });
+});
+// 滑鼠移到卡片編號上可看這一列是用哪些規則產生的
+$(document).on('mouseenter', '#itBody tr td.seq', function(){ var r = $(this).closest('tr').attr('data-rules'); $(this).attr('title', r ? '產生這一條所依據的規則：' + r + '（按「判斷規則」查看說明）' : '手動新增，沒有套用規則'); });
+
 /* ================= 模組設定 ================= */
 var LVCOLS = LVCOL;
 /* ---- 風險準則（表A）：評分區間 ---- */
@@ -1008,14 +1108,14 @@ function lvlRowHtml(r){
         + '<td style="text-align:center;"><input type="checkbox" data-l="action"' + (r.action ? ' checked' : '') + '></td>'
         + '<td><button type="button" class="b-mini danger" data-rmrow="lvl"><i class="fa fa-times"></i></button></td></tr>';
 }
-/* ---- 影響分析（表B）：等級數字自動 ---- */
+/* ---- 嚴重度(S)分析（表B）：等級數字自動 ---- */
 function impRowHtml(cols, r){
     var h = '<tr data-orig="' + (+r.orig || 0) + '"><td class="lvno" style="text-align:center;font-weight:bold;"></td>'
         + '<td><input type="text" data-i="label" value="' + esc(r.label) + '" maxlength="20" style="width:110px;"></td>';
     $.each(cols, function(i, c){ h += '<td><input type="text" data-ic="' + i + '" value="' + esc((r.cells || [])[i] || '') + '" maxlength="100" placeholder="' + esc(c) + '"></td>'; });
     return h + '<td><button type="button" class="b-mini danger" data-rmrow="imp"><i class="fa fa-times"></i></button></td></tr>';
 }
-/* ---- 可能性評估（表C）：等級數字自動、機率為上下限 ---- */
+/* ---- 發生率(O)評估（表C）：等級數字自動、機率為上下限 ---- */
 function likRowHtml(r){
     return '<tr data-orig="' + (+r.orig || 0) + '"><td class="lvno" style="text-align:center;font-weight:bold;"></td>'
         + '<td><input type="text" data-k="label" value="' + esc(r.label) + '" maxlength="20" style="width:120px;"></td>'
@@ -1024,7 +1124,7 @@ function likRowHtml(r){
         + '<td><input type="text" data-k="desc" value="' + esc(r.desc || '') + '" maxlength="200"></td>'
         + '<td><button type="button" class="b-mini danger" data-rmrow="lik"><i class="fa fa-times"></i></button></td></tr>';
 }
-var IMPCOLS = [];     // 影響分析目前的說明欄名稱（改欄名時依舊名稱保留各格內容）
+var IMPCOLS = [];     // 嚴重度(S)分析目前的說明欄名稱（改欄名時依舊名稱保留各格內容）
 function impColsDraft(){
     var out = [];
     $('#setImpCols').val().split('\n').forEach(function(x){ x = $.trim(x); if (x && out.indexOf(x) < 0) out.push(x); });
@@ -1040,7 +1140,7 @@ function readImp(){
     return rows;
 }
 function renderImpTable(cols, rows){
-    var t = '<table class="rm-table fld"><thead><tr><th style="width:64px;">等級</th><th style="width:120px;">影響</th>';
+    var t = '<table class="rm-table fld"><thead><tr><th style="width:64px;">等級</th><th style="width:120px;">嚴重度(S)</th>';
     $.each(cols, function(_, c){ t += '<th>' + esc(c) + '</th>'; });
     t += '<th style="width:44px;"></th></tr></thead><tbody>';
     $.each(rows, function(_, r){
@@ -1070,7 +1170,7 @@ function renumberLevels(){
     $('#setImp tbody tr').each(function(i){ $(this).find('.lvno').text(i + 1); });
     $('#setLik tbody tr').each(function(i){ $(this).find('.lvno').text(i + 1); });
 }
-/* 目前草稿下可能的最高分（影響最高等級 × 可能性最高等級，依算法） */
+/* 目前草稿下可能的最高分（嚴重度(S)最高等級 × 發生率(O)最高等級，依算法） */
 function draftMaxScore(){
     var a = $('#setImp tbody tr').length, b = $('#setLik tbody tr').length, m = $('#setMethod').val();
     return m === 'add' ? a + b : (m === 'max' ? Math.max(a, b) : a * b);
@@ -1100,7 +1200,7 @@ function relinkLik(fix){
 /* 風險準則：下限自動串接、第一級從 1、最後一級上限固定＝最高分 */
 function relinkLvl(fix){
     var rows = $('#setLvl tbody tr'), n = rows.length, max = draftMaxScore(), prev = 0, errs = [];
-    if (n > max) errs.push('目前的影響與可能性等級最高只會算出 ' + max + ' 分，沒有辦法分成 ' + n + ' 個風險等級');
+    if (n > max) errs.push('目前的嚴重度(S)與發生率(O)等級最高只會算出 ' + max + ' 分，沒有辦法分成 ' + n + ' 個風險等級');
     rows.each(function(i){
         var tr = $(this), lo = i === 0 ? 1 : prev + 1, last = i === n - 1, name = $.trim(tr.find('[data-l=name]').val()) || ('第 ' + (i + 1) + ' 級'), hi;
         tr.find('.lv-lo').val(lo);
@@ -1136,7 +1236,7 @@ function previewDist(){
         lv.push({name:$.trim($(this).find('[data-l=name]').val()) || ('第 ' + (i + 1) + ' 級'), min:+$(this).find('.lv-lo').val() || 0,
                  hi:+$(this).find('.lv-hi').val() || 0, action:false, bg:c[0], fg:c[1]});
     });
-    var h = '<table class="mx"><thead><tr><th>影響＼機率</th>';
+    var h = '<table class="mx"><thead><tr><th>嚴重度(S)＼發生率(O)</th>';
     $.each(lik, function(_, f){ h += '<th>' + esc(f.label) + '（' + f.v + '）</th>'; });
     h += '</tr></thead><tbody>';
     $.each(imp.slice().reverse(), function(_, s){
@@ -1153,7 +1253,7 @@ function renderSet(){
     $('#setLvl').html(t + '</tbody></table>');
     $('#setImpCols').val(S.rm_impact.columns.join('\n'));
     renderImpTable(S.rm_impact.columns, $.map(S.rm_impact.rows, function(r){ return {orig:r.v, label:r.label, cells:r.cells}; }));
-    var tk = '<table class="rm-table fld"><thead><tr><th style="width:64px;">等級</th><th style="width:130px;">可能性分類</th><th style="width:100px;">機率下限</th><th style="width:100px;">機率上限</th><th>詳細的描述</th><th style="width:44px;"></th></tr></thead><tbody>';
+    var tk = '<table class="rm-table fld"><thead><tr><th style="width:64px;">等級</th><th style="width:130px;">發生率(O)分類</th><th style="width:100px;">機率下限</th><th style="width:100px;">機率上限</th><th>詳細的描述</th><th style="width:44px;"></th></tr></thead><tbody>';
     $.each(S.rm_likelihood, function(_, r){ tk += likRowHtml({orig:r.v, label:r.label, lo:r.prob_lo, hi:r.prob_hi, desc:r.desc}); });
     $('#setLik').html(tk + '</tbody></table>');
     $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix);
@@ -1182,20 +1282,20 @@ $('#btnAddLvl').on('click', function(){
     showSetErrs(true); previewDist();
 });
 $('#btnAddImp').on('click', function(){
-    if ($('#setImp tbody tr').length >= 10){ alert('影響分析最多 10 級'); return; }
+    if ($('#setImp tbody tr').length >= 10){ alert('嚴重度(S)分析最多 10 級'); return; }
     $('#setImp tbody').append(impRowHtml(IMPCOLS, {orig:0, label:'', cells:[]}));
     renumberLevels(); showSetErrs(true); previewDist();
 });
 $('#btnAddLik').on('click', function(){
     var rows = $('#setLik tbody tr'), n = rows.length;
-    if (n >= 10){ alert('可能性分析最多 10 級'); return; }
+    if (n >= 10){ alert('發生率(O)分析最多 10 級'); return; }
     var last = rows.last(), lo = +last.find('.lk-lo').val() || 0;
     if (lo > 99){ alert('最後一級已經只剩 100%，沒有空間再分出新的一級（請先把前面等級的機率上限調小）。'); return; }
     last.find('.lk-hi').val(Math.max(lo, 99));                  // 原本最後一級讓出最高的 100%，新的一級取 100%
     $('#setLik tbody').append(likRowHtml({orig:0, label:'', lo:100, hi:100, desc:''}));
     renumberLevels(); showSetErrs(true); previewDist();
 });
-/* 說明欄名稱一改，影響分析的表頭與各列欄位即時跟著變（舊欄名的內容保留） */
+/* 說明欄名稱一改，嚴重度(S)分析的表頭與各列欄位即時跟著變（舊欄名的內容保留） */
 $('#setImpCols').on('input', debounce(function(){
     var cols = impColsDraft(), rows = readImp();
     renderImpTable(cols, rows); previewDist();
@@ -1268,6 +1368,14 @@ function egPrintWindow(title, bodyHtml, docNo, extraCss){
         + '<scr' + 'ipt>window.onload=function(){' + onloadJs + 'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
     w.document.close();
 }
+function effectPrint(it){
+    var h = esc(it.effect_check || '');
+    if (it.effect_status && it.effect_status !== 'unconfirmed'){
+        h += '<br><b>【成效確認：' + esc(META.effect_status[it.effect_status] || '') + '】' + esc(dispDate(it.effect_date)) + '</b>'
+           + '<br>裁示：' + esc(it.effect_ruling || '') + '<br>佐證：' + esc(it.effect_evidence || '').replace(/\n/g, '<br>');
+    }
+    return h;
+}
 function scaleLabel(list, v){
     if (v === '' || v == null) return '';
     var t = String(v); $.each(list, function(_, r){ if (+r.v === +v) t = r.v + ' ' + r.label; }); return t;
@@ -1286,7 +1394,7 @@ function printDoc(docId){
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
                     + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '</td><td>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
                     + '<td>' + esc(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
-                    + '<td class="l">' + esc(it.measure) + '</td><td class="l">' + esc(it.effect_check) + '</td></tr>';
+                    + '<td class="l">' + esc(it.measure) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'
@@ -1300,7 +1408,7 @@ function printDoc(docId){
                 + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
                 + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
                 + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
-                + '<tr><th>嚴重度（影響）</th><th>頻率（可能性）</th><th>風險等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
+                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
         }
         egPrintWindow(meta.doc_name || kindName(kind), head + table, meta.doc_no);
         EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + ' ' + d.doc_no,

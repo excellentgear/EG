@@ -11,9 +11,9 @@
  * 風險評估的四種設定對應「2-GM-03 風險管理程序」的四張表，**全部由管理員在模組設定維護，
  * 程式裡不寫死任何一級的名稱、分數或門檻**：
  *   表A 風險準則   rm_levels      風險等級（名稱、起算分數、處理措施、是否需要因應措施）
- *   表B 影響分析   rm_impact      影響等級（值、名稱）＋可自訂的說明欄（預設：公司形象／財物損失／客戶抱怨件數）
- *   表C 可能性分析 rm_likelihood  可能性等級（值、名稱、發生機率百分比、詳細描述）
- *   表D 風險分布   rm_method      影響×可能性的分數算法 multiply(相乘，程序書採此) / add / max；矩陣由 A～C 自動產生
+ *   表B 嚴重度(S)分析   rm_impact      嚴重度(S)等級（值、名稱）＋可自訂的說明欄（預設：公司形象／財物損失／客戶抱怨件數）
+ *   表C 發生率(O)分析 rm_likelihood  發生率(O)等級（值、名稱、發生機率百分比、詳細描述）
+ *   表D 風險分布   rm_method      嚴重度(S)×發生率(O)的分數算法 multiply(相乘，程序書採此) / add / max；矩陣由 A～C 自動產生
  * 風險等級**一律讀取當下設定即時算出、不存進資料列**——設定改了，舊資料的等級就跟著重算
  * （存下來的話，改了門檻之後舊資料還顯示舊等級而且不報錯＝鐵律4）。
  * 唯一會存下來的是「風險確認編號」（配出去的編號不可因設定變動而消失）。
@@ -51,7 +51,7 @@ const RM_LEVEL_COLORS = [
 function rm_settings_default(): array
 {
     return [
-        // 表B 影響分析（2-GM-03 表B）
+        // 表B 嚴重度(S)分析（2-GM-03 表B）
         'rm_impact' => [
             'columns' => ['公司形象', '財物損失', '客戶抱怨件數'],
             'rows' => [
@@ -60,13 +60,13 @@ function rm_settings_default(): array
                 ['v'=>3, 'label'=>'非常嚴重', 'cells'=>['公司整體負面形象', '20萬(含)以上', '3家(含)客戶以上']],
             ],
         ],
-        // 表C 可能性分析（2-GM-03 表C）：等級數字由系統依順序自動給（1,2,3…），發生機率百分比是下限～上限（整數）
+        // 表C 發生率(O)分析（2-GM-03 表C）：等級數字由系統依順序自動給（1,2,3…），發生機率百分比是下限～上限（整數）
         'rm_likelihood' => [
             ['v'=>1, 'label'=>'幾乎不可能', 'prob_lo'=>0,  'prob_hi'=>40,  'prob'=>'0-40%',   'desc'=>'只會在特殊的情況下發生'],
             ['v'=>2, 'label'=>'可能',       'prob_lo'=>41, 'prob_hi'=>60,  'prob'=>'41-60%',  'desc'=>'有些情況下會發生'],
             ['v'=>3, 'label'=>'幾乎確定',   'prob_lo'=>61, 'prob_hi'=>100, 'prob'=>'61-100%', 'desc'=>'在大部分的情況下會發生'],
         ],
-        // 表D 風險分布：分數算法（程序書 6.3.3：影響等級×機率等級）
+        // 表D 風險分布：分數算法（程序書 6.3.3：嚴重度(S)等級×發生率(O)等級）
         'rm_method' => 'multiply',
         // 表A 風險準則（2-GM-03 表A）：評分是「下限～上限」區間，區間之間連續不留縫隙、最後一級的上限＝目前可能的最高分
         'rm_levels' => [
@@ -114,8 +114,8 @@ function rm_ensure_schema(PDO $db): void
             issue       TEXT NULL COMMENT '議題描述',
             ro_kind     VARCHAR(12) NULL COMMENT 'risk=風險／opportunity=機會',
             ro_text     TEXT NULL COMMENT '風險/機會說明',
-            severity    TINYINT NULL COMMENT '嚴重度＝影響等級（值取自 rm_impact 設定）',
-            frequency   TINYINT NULL COMMENT '頻率＝可能性等級（值取自 rm_likelihood 設定）',
+            severity    TINYINT NULL COMMENT '嚴重度＝嚴重度(S)等級（值取自 rm_impact 設定）',
+            frequency   TINYINT NULL COMMENT '頻率＝發生率(O)等級（值取自 rm_likelihood 設定）',
             confirm_no  VARCHAR(30) NULL COMMENT '風險確認編號（配發後不隨設定變動）',
             measure     TEXT NULL COMMENT '因應措施',
             effect_check TEXT NULL COMMENT '成效確認',
@@ -123,6 +123,15 @@ function rm_ensure_schema(PDO $db): void
             KEY idx_doc (doc_id, seq), KEY idx_ctx (ctx_item_id), KEY idx_cn (confirm_no)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='風險與機會管理：明細列'");
     } catch (Throwable $e) {}
+
+    /* 成效確認（裁示與佐證）與規則引擎的欄位：既有資料不重建，一律 ALTER */
+    foreach ([
+        "ALTER TABLE rm_item ADD COLUMN effect_status VARCHAR(12) NULL COMMENT '成效確認結果 unconfirmed/doing/effective/partial/ineffective'",
+        "ALTER TABLE rm_item ADD COLUMN effect_date DATE NULL COMMENT '成效確認日期（業務日期）'",
+        "ALTER TABLE rm_item ADD COLUMN effect_ruling TEXT NULL COMMENT '成效確認裁示'",
+        "ALTER TABLE rm_item ADD COLUMN effect_evidence TEXT NULL COMMENT '成效確認佐證（確認當下的快照，之後資料再變也不改寫歷史）'",
+        "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
+    ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }
 
     /* 角色（自動出現在「使用者權限設定」頁的動態角色區塊）。module 欄位是依據，不是顯示名 */
     foreach ([['rm_view', '風險與機會檢閱'], ['rm_admin', '風險與機會管理員']] as $r) {
@@ -240,7 +249,7 @@ function rm_settings_fix(array $set): array
     return $set;
 }
 
-/** 目前設定下可能出現的最高風險分數（影響最高等級 × 可能性最高等級，依算法） */
+/** 目前設定下可能出現的最高風險分數（嚴重度(S)最高等級 × 發生率(O)最高等級，依算法） */
 function rm_max_score(array $impactRows, array $likeRows, string $method): int
 {
     $mx = 0;
@@ -267,26 +276,26 @@ function rm_setting_write(PDO $db, string $key, $value, string $by = ''): void
     }
 }
 
-/** 表B 影響分析：{columns:[說明欄名稱…], rows:[{label,cells[],orig}]}。等級數字一律由順序自動給（1,2,3…，不跳號、不接受前端指定）。
+/** 表B 嚴重度(S)分析：{columns:[說明欄名稱…], rows:[{label,cells[],orig}]}。等級數字一律由順序自動給（1,2,3…，不跳號、不接受前端指定）。
  *  回傳 [設定, 錯誤訊息, 舊等級→新等級對照]（orig＝這一列原本的等級數字，新增的列為 0） */
 function rm_normalize_impact($raw): array
 {
-    if (!is_array($raw) || !isset($raw['rows']) || !is_array($raw['rows'])) return [[], '影響分析內容不正確', []];
+    if (!is_array($raw) || !isset($raw['rows']) || !is_array($raw['rows'])) return [[], '嚴重度(S)分析內容不正確', []];
     $cols = [];
     foreach ((array)($raw['columns'] ?? []) as $c) {
         $c = mb_substr(trim((string)$c), 0, 20);
         if ($c !== '' && !in_array($c, $cols, true)) $cols[] = $c;
     }
-    if (count($cols) > 6) return [[], '影響分析的說明欄最多 6 個', []];
+    if (count($cols) > 6) return [[], '嚴重度(S)分析的說明欄最多 6 個', []];
     $rows = array_values($raw['rows']);
-    if (count($rows) < 2 || count($rows) > 10) return [[], '影響分析至少要有 2 級、最多 10 級', []];
+    if (count($rows) < 2 || count($rows) > 10) return [[], '嚴重度(S)分析至少要有 2 級、最多 10 級', []];
     $out = []; $map = [];
     foreach ($rows as $i => $r) {
         $v = $i + 1;
         $label = mb_substr(trim((string)($r['label'] ?? '')), 0, 20);
-        if ($label === '') return [[], '影響分析的第 ' . $v . ' 級沒有填名稱', []];
+        if ($label === '') return [[], '嚴重度(S)分析的第 ' . $v . ' 級沒有填名稱', []];
         $orig = (int)($r['orig'] ?? 0);
-        if ($orig > 0) { if (isset($map[$orig])) return [[], '影響分析的等級資料重複，請重新整理後再改', []]; $map[$orig] = $v; }
+        if ($orig > 0) { if (isset($map[$orig])) return [[], '嚴重度(S)分析的等級資料重複，請重新整理後再改', []]; $map[$orig] = $v; }
         $cells = [];
         $src = isset($r['cells']) && is_array($r['cells']) ? array_values($r['cells']) : [];
         for ($k = 0; $k < count($cols); $k++) $cells[] = mb_substr(trim((string)($src[$k] ?? '')), 0, 100);
@@ -295,19 +304,19 @@ function rm_normalize_impact($raw): array
     return [['columns'=>$cols, 'rows'=>$out], '', $map];
 }
 
-/** 表C 可能性分析：[{label,lo,hi,desc,orig}]。等級數字自動給；發生機率百分比是整數區間：
+/** 表C 發生率(O)分析：[{label,lo,hi,desc,orig}]。等級數字自動給；發生機率百分比是整數區間：
  *  第一級下限固定 0、最後一級上限固定 100、每一級下限＝上一級上限＋1（連續、不重疊、不留縫），上限不可小於下限。 */
 function rm_normalize_likelihood($raw): array
 {
-    if (!is_array($raw)) return [[], '可能性分析內容不正確', []];
+    if (!is_array($raw)) return [[], '發生率(O)分析內容不正確', []];
     $rows = array_values($raw);
     $n = count($rows);
-    if ($n < 2 || $n > 10) return [[], '可能性分析至少要有 2 級、最多 10 級', []];
+    if ($n < 2 || $n > 10) return [[], '發生率(O)分析至少要有 2 級、最多 10 級', []];
     $out = []; $map = []; $prevHi = -1;
     foreach ($rows as $i => $r) {
         $v = $i + 1;
         $label = mb_substr(trim((string)($r['label'] ?? '')), 0, 20);
-        if ($label === '') return [[], '可能性分析的第 ' . $v . ' 級沒有填名稱', []];
+        if ($label === '') return [[], '發生率(O)分析的第 ' . $v . ' 級沒有填名稱', []];
         $lo = $i === 0 ? 0 : $prevHi + 1;
         if ($i === $n - 1) $hi = 100;
         else {
@@ -320,7 +329,7 @@ function rm_normalize_likelihood($raw): array
         }
         $prevHi = $hi;
         $orig = (int)($r['orig'] ?? 0);
-        if ($orig > 0) { if (isset($map[$orig])) return [[], '可能性分析的等級資料重複，請重新整理後再改', []]; $map[$orig] = $v; }
+        if ($orig > 0) { if (isset($map[$orig])) return [[], '發生率(O)分析的等級資料重複，請重新整理後再改', []]; $map[$orig] = $v; }
         $out[] = ['v'=>$v, 'label'=>$label, 'prob_lo'=>$lo, 'prob_hi'=>$hi, 'prob'=>$lo . '-' . $hi . '%',
                   'desc'=>mb_substr(trim((string)($r['desc'] ?? '')), 0, 200)];
     }
@@ -335,7 +344,7 @@ function rm_normalize_levels($raw, int $maxScore, array $savedNames): array
     $rows = array_values($raw);
     $n = count($rows);
     if ($n < 1 || $n > 8) return [[], '風險準則至少 1 級、最多 8 級'];
-    if ($maxScore < $n) return [[], '目前的影響與可能性等級最高只會算出 ' . $maxScore . ' 分，沒有辦法分成 ' . $n . ' 個風險等級'];
+    if ($maxScore < $n) return [[], '目前的嚴重度(S)與發生率(O)等級最高只會算出 ' . $maxScore . ' 分，沒有辦法分成 ' . $n . ' 個風險等級'];
     $out = []; $seen = []; $prevHi = 0;
     foreach ($rows as $i => $r) {
         $name = mb_substr(trim((string)($r['name'] ?? '')), 0, 10);
@@ -480,7 +489,7 @@ function rm_level_calc(array $set, $sev, $freq): ?array
             'measure'=>(string)($hit['measure'] ?? '')];
 }
 
-/** 表D：影響等級 × 可能性等級 的分數（算法由設定決定） */
+/** 表D：嚴重度(S)等級 × 發生率(O)等級 的分數（算法由設定決定） */
 function rm_score(array $set, int $impact, int $likelihood): int
 {
     $m = (string)($set['rm_method'] ?? 'multiply');
