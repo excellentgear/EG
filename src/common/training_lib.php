@@ -325,6 +325,8 @@ function training_ensure_schema(PDO $db): void {
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練需求申請單-每日上課時間'");
 
     // 計畫回指來源申請單（列印/畫面顯示用，不再塞進備註文字）；轉計畫時順便把申請單的人員與日期原封帶入
+    try { $db->exec("ALTER TABLE training_session ADD COLUMN plan_evenement_id INT NULL COMMENT '計畫中先記到行事曆的預計事件 evenement.id'"); }
+    catch (Throwable $e) {}
     try { $db->exec("ALTER TABLE training_session ADD COLUMN from_request_id INT NULL COMMENT '來源需求申請單 training_request.request_id'"); }
     catch (Throwable $e) {}
 
@@ -965,6 +967,19 @@ function training_event_set_targets(PDO $db, int $evId): void {
 /** 移除某場次已同步的行事曆事件（只刪 training_session_day.evenement_id 指到的那些，不條件反查） */
 function training_event_remove(PDO $db, int $sid): void {
     try {
+        // 計畫中的「預計」事件（一場一筆，id 存在 training_session.plan_evenement_id）
+        $pq = $db->prepare("SELECT plan_evenement_id FROM training_session WHERE session_id=?");
+        $pq->execute([$sid]);
+        $pev = (int)$pq->fetchColumn();
+        if ($pev > 0) {
+            $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id=?")->execute([$pev]);
+            $db->prepare("DELETE FROM evenement_target WHERE event_id=?")->execute([$pev]);
+            $db->prepare("DELETE FROM evenement_actor WHERE event_id=?")->execute([$pev]);
+            $db->prepare("DELETE FROM evenement WHERE id=?")->execute([$pev]);
+            $db->prepare("UPDATE training_session SET plan_evenement_id=NULL WHERE session_id=?")->execute([$sid]);
+        }
+    } catch (Throwable $e) {}
+    try {
         $st = $db->prepare("SELECT day_id, evenement_id FROM training_session_day WHERE session_id=? AND evenement_id IS NOT NULL");
         $st->execute([$sid]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -990,15 +1005,34 @@ function training_event_sync(PDO $db, int $sid): int {
         $s = $st->fetch(PDO::FETCH_ASSOC);
         if (!$s) return 0;
         training_event_remove($db, $sid);
-        if (!in_array($s['status'], ['scheduled', 'done'], true)) return 0;   // 只有確定開課後才進行事曆
         $catId = training_category_id($db, (string)$s['train_type']);
-        if (!$catId) return 0;
+        if ($s['status'] === 'planned') {
+            // 計畫中：還沒有實際日期，先以預計月份 1 日的全天事件佔位，確認實行後由下方正式事件取代
+            if (!$catId || !(int)$s['year'] || !(int)$s['plan_month']) return 0;
+            $ext0 = $s['train_type'] === 'external';
+            $remark0 = ($ext0 ? '外訓' : '內訓') . '／' . ($ext0 ? ('開課單位：' . ($s['org_unit'] ?: '—')) : ('講師：' . ($s['trainer'] ?: '—')))
+                . '　對象：' . ($s['dept_id'] === null ? '全公司' : ($s['dept_name'] ?: ''))
+                . '　（計畫中，尚未確定上課日期，僅標示預計月份）（教育訓練管理 #' . $sid . '）';
+            $d0 = sprintf('%04d-%02d-01', (int)$s['year'], (int)$s['plan_month']);
+            $db->prepare("INSERT INTO evenement (title, category_id, start, end, allday, remark) VALUES (?,?,?,?,1,?)")
+               ->execute(['【預計】教育訓練：' . $s['course_name'], $catId, $d0 . ' 00:00:00', $d0 . ' 23:59:59', $remark0]);
+            $pev0 = (int)$db->lastInsertId();
+            try {
+                if (!$ext0 && $s['trainer_id']) {
+                    $db->prepare("INSERT INTO evenement_actor (event_id, user_id, created_at) VALUES (?,?,NOW())")->execute([$pev0, (int)$s['trainer_id']]);
+                }
+            } catch (Throwable $e) {}
+            training_event_set_targets($db, $pev0);
+            $db->prepare("UPDATE training_session SET plan_evenement_id=? WHERE session_id=?")->execute([$pev0, $sid]);
+            return 1;
+        }
+        if (!in_array($s['status'], ['scheduled', 'done'], true)) return 0;   // 其餘狀態（取消等）不進行事曆
         $dq = $db->prepare("SELECT day_id, day_no, day_date, start_time, end_time, hours FROM training_session_day
                             WHERE session_id=? ORDER BY day_no, day_date");
         $dq->execute([$sid]);
         $days = $dq->fetchAll(PDO::FETCH_ASSOC);
         $ext = $s['train_type'] === 'external';
-        $n = count($days); $done = 0;
+        $n = count(array_unique(array_map(fn($x) => $x['day_date'], $days))); $done = 0;
         foreach ($days as $d) {
             $title = '教育訓練：' . $s['course_name'] . ($n > 1 ? '（第' . $d['day_no'] . '/' . $n . '天）' : '');
             $startT = $d['start_time'] ?: '00:00';
@@ -1008,6 +1042,7 @@ function training_event_sync(PDO $db, int $sid): int {
                 . '／' . ($ext ? ('開課單位：' . ($s['org_unit'] ?: '—')) : ('講師：' . ($s['trainer'] ?: '—')))
                 . '　對象：' . ($s['dept_id'] === null ? '全公司' : ($s['dept_name'] ?: ''))
                 . ($s['location'] ? '　地點：' . $s['location'] : '')
+                . ($s['outline'] ? '　內容：' . mb_substr(preg_replace('/\s+/u', ' ', (string)$s['outline']), 0, 200) : '')
                 . ($d['hours'] !== null ? '　時數：' . rtrim(rtrim(number_format((float)$d['hours'], 1), '0'), '.') : '')
                 . '（教育訓練管理 #' . $sid . '）';
             $db->prepare("INSERT INTO evenement (title, category_id, start, end, allday, remark) VALUES (?,?,?,?,?,?)")
@@ -1029,6 +1064,58 @@ function training_event_sync(PDO $db, int $sid): int {
         }
         return $done;
     } catch (Throwable $e) { return 0; }
+}
+
+/* ============================================================
+ * 現場簽到通知（講師用）：內訓確認開課後，發一則「sign」型通知給講師，點開進簽到頁（不需教育訓練模組權限），
+ * 學員在講師的裝置上選自己姓名＋輸入本人密碼簽到；講師按「簽到完畢」才關閉通知。
+ * 簽到資料本來就由 sign_attendee 即時寫進該場次名單（簽到／實到），不需另外搬運。
+ * ============================================================ */
+function training_checkin_notify(PDO $db, int $sid, int $fromUid): int {
+    try {
+        $st = $db->prepare("SELECT session_id, course_name, train_type, trainer_id, status FROM training_session WHERE session_id=?");
+        $st->execute([$sid]);
+        $s = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$s || $s['train_type'] === 'external' || !(int)$s['trainer_id'] || $s['status'] !== 'scheduled') return 0;
+        $ex = $db->prepare("SELECT id FROM live_event WHERE ref_type='TRAINING_CHECKIN' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE()) LIMIT 1");
+        $ex->execute([$sid]);
+        if ($ex->fetchColumn()) return 0;        // 已有未結案的簽到通知，不重複發
+        $dq = $db->prepare("SELECT day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_date, start_time");
+        $dq->execute([$sid]);
+        $days = $dq->fetchAll(PDO::FETCH_ASSOC);
+        $when = '';
+        foreach ($days as $d) $when .= ($when ? '、' : '') . str_replace('-', '.', $d['day_date']) . ($d['start_time'] ? ' ' . $d['start_time'] . ($d['end_time'] ? '~' . $d['end_time'] : '') : '');
+        $title = '教育訓練現場簽到：' . $s['course_name'];
+        $content = '課程：' . $s['course_name'] . "
+上課時間：" . ($when ?: '（未填）')
+                 . "
+開課當天點此開啟簽到頁，讓學員輸入本人密碼簽到；全部簽完後請按「簽到完畢」，此通知才會消失，簽到結果會自動記入該課程。";
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '教育訓練', 1, 'TRAINING_CHECKIN', ?)")
+           ->execute([$title, $content, $fromUid, $sid]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eid, (int)$s['trainer_id']]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+function training_checkin_close(PDO $db, int $sid): void {
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='TRAINING_CHECKIN' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")->execute([$sid]);
+    } catch (Throwable $e) {}
+}
+/** 這個人能不能開現場簽到頁：本場講師本人，或具教育訓練登錄權限 */
+function training_checkin_can(PDO $db, array $u, int $sid): bool {
+    $perms = training_perms($db, $u);
+    if (!empty($perms['canEdit'])) return true;
+    $st = $db->prepare("SELECT 1 FROM training_session WHERE session_id=? AND trainer_id=?");
+    $st->execute([$sid, (int)$u['id']]);
+    return (bool)$st->fetchColumn();
 }
 
 /* ============================================================

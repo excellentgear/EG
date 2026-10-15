@@ -696,6 +696,11 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            if (refType === 'TRAINING_CHECKIN') {
+                // 教育訓練現場簽到（講師）：開簽到頁；講師按「簽到完畢」前不移除(mode=sign)
+                window.open('../ADM/training_checkin.php?session_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                return;
+            }
             if (refType === 'BUSINESS_TRIP_APPROVAL') {
                 // 公出單待核准：通用回覆/回簽不會真的呼叫 decide，改開公出單頁帶 trip_approve，
                 // 頁面會自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)。

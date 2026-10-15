@@ -38,7 +38,7 @@ $perms = training_perms($db, $u);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 // 需求申請單的核准人（申請單位部門主管）多半沒有教育訓練模組任何角色，只是被指派決行一筆申請單，
 // 不能卡在「無教育訓練檢閱權限」——這兩個動作各自在 case 內再驗一次「是不是被指派的那個人」。
-$publicActions = ['request_decide', 'checkin_meta', 'sign_attendee'];
+$publicActions = ['request_decide', 'checkin_meta', 'sign_attendee', 'checkin_finish'];
 if (!$perms['canView'] && !in_array($action, $publicActions, true)) jerr('無教育訓練檢閱權限', 403);
 
 /** 申請人的主要部門（申請單「申請單位」預設值） */
@@ -596,6 +596,18 @@ case 'sign_attendee': {
     jout(['att_id'=>$attId, 'day_date'=>$dayDate]);
 }
 
+/* 講師按「簽到完畢」：關閉簽到通知（簽到資料早已由 sign_attendee 即時寫入名單，不必另外搬）。
+   限本場講師本人或具登錄權限者。 */
+case 'checkin_finish': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    if (!training_checkin_can($db, $u, $sid)) jerr('只有本場講師或教育訓練登錄人員可以結束簽到', 403);
+    training_checkin_close($db, $sid);
+    $c = $db->prepare("SELECT COUNT(*), SUM(signed=1) FROM training_attendee WHERE session_id=?");
+    $c->execute([$sid]);
+    $r = $c->fetch(PDO::FETCH_NUM);
+    jout(['total'=>(int)$r[0], 'signed'=>(int)$r[1]]);
+}
+
 /* 超級管理員（isAdmin，員工ID=1固定屬此）全部自動簽到：免逐一輸入本人密碼，一次把該上課日尚未簽到的人
    全部標記已簽到，比照 td_dev_eval 的「全部自動簽核」，僅補歷史紙本簽到資料/測試用；已簽到的人不覆蓋原簽到時間/方式。 */
 case 'checkin_admin_signall': {
@@ -809,6 +821,7 @@ case 'save_session': {
         training_save_session_depts($db, $sid, $deptIds);      // 對象部門複選（同步主表 dept_id）
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    training_event_sync($db, $sid);      // 計畫中也先記到行事曆（預計月份）；失敗不擋存檔
     jout(['session_id'=>$sid]);
 }
 
@@ -851,7 +864,7 @@ case 'save_execution': {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jerr("第 {$n} 天：日期格式不正確（應為 YYYY-MM-DD）");
         [$yy,$mm,$dd] = array_map('intval', explode('-', $date));
         if (!checkdate($mm, $dd, $yy)) jerr("第 {$n} 天：日期不存在（{$date}）");
-        if (isset($seen[$date])) jerr("第 {$n} 天：日期重複（{$date}）");
+        // 同一天可有多個時段（上午/下午分開登錄），日期重複不再擋；上課天數看相異日期數
         $seen[$date] = true;
         $s = tr_norm_time($d['start_time'] ?? '');
         $e = tr_norm_time($d['end_time'] ?? '');
@@ -901,7 +914,11 @@ case 'save_execution': {
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
         $ins = $db->prepare("INSERT INTO training_session_day (session_id, day_no, day_date, start_time, end_time, break_minutes, hours)
                              VALUES (?,?,?,?,?,?,?)");
-        foreach ($clean as $i => $c) $ins->execute([$sid, $i + 1, $c['date'], $c['start'], $c['end'], $c['break'], $c['hours']]);
+        $dayNoMap = []; $dn = 0;     // 第幾天＝相異日期的順序（同一天多時段算同一天）
+        foreach ($clean as $c) {
+            if (!isset($dayNoMap[$c['date']])) $dayNoMap[$c['date']] = ++$dn;
+            $ins->execute([$sid, $dayNoMap[$c['date']], $c['date'], $c['start'], $c['end'], $c['break'], $c['hours']]);
+        }
         if ($markDone) {
             // 登錄完成當下，用實際簽到狀態覆蓋實到——不採信前端 checkbox 當下值，未簽到者一律視為未到
             $db->prepare("UPDATE training_attendee SET attended = IF(signed=1, 1, 0) WHERE session_id=?")->execute([$sid]);
@@ -915,6 +932,9 @@ case 'save_execution': {
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 確定開課後自動寫入行事曆（一天一筆；失敗不擋存檔）
     $evCount = training_event_sync($db, $sid);
+    // 內訓確認開課（尚未完成）→ 通知講師現場簽到；登錄完成則收掉通知
+    if ($newStatus === 'scheduled') training_checkin_notify($db, $sid, $uid);
+    elseif ($newStatus === 'done') training_checkin_close($db, $sid);
     // 外訓場次確認開課後，為每位參加人員各產生一張公出單草稿（2-MM-01-06；可在公出單模組設定關閉）。
     // 在 commit 之後呼叫、內部自行吞例外，失敗不影響訓練存檔。
     $btRes = ['created'=>0, 'updated'=>0, 'skipped'=>0];
@@ -922,7 +942,7 @@ case 'save_execution': {
         require_once __DIR__ . '/../common/business_trip_lib.php';
         $btRes = bt_create_from_training($db, $sid);
     } catch (Throwable $e) {}
-    jout(['session_id'=>$sid, 'status'=>$newStatus, 'days'=>count($clean), 'events'=>$evCount,
+    jout(['session_id'=>$sid, 'status'=>$newStatus, 'days'=>count($dayNoMap), 'events'=>$evCount,
           'total_hours'=>$hasH ? round($totalH, 1) : null, 'business_trip'=>$btRes]);
 }
 
@@ -947,6 +967,8 @@ case 'set_status': {
         $db->prepare("UPDATE training_session SET status=?, done_date=NULL WHERE session_id=?")->execute([$status, $sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('狀態變更失敗：'.$e->getMessage(), 500); }
+    training_checkin_close($db, $sid);   // 退回計畫中/取消 → 簽到通知一併收掉
+    if ($status === 'planned') training_event_sync($db, $sid);   // 退回計畫中 → 重新記一筆預計事件
     jout(['session_id'=>$sid, 'status'=>$status]);
 }
 
@@ -1640,6 +1662,19 @@ case 'copy_session': {
                       $s['outline'] ?? null, $s['eval_method'] ?? null, $uid,$uname]);
         $newId = (int)$db->lastInsertId();
         training_save_session_depts($db, $newId, training_session_depts($db, [$sid])[$sid] ?? []);   // 對象部門一併複製
+        // 選擇連同考核表（考官＋考核項目；不含成績）一起複製
+        if ((int)($_POST['copy_ojt'] ?? 0) === 1 && $s['train_type'] !== 'external') {
+            $hq = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
+            $hq->execute([$sid]);
+            $asr = $hq->fetchColumn();
+            if ($asr !== false && $asr !== null && $asr !== '') {
+                $db->prepare("INSERT INTO training_ojt_checklist (session_id, assessor_name, updated_at, updated_by, updated_by_name) VALUES (?,?,NOW(),?,?)")
+                   ->execute([$newId, $asr, $uid, $uname]);
+            }
+            $db->prepare("INSERT INTO training_ojt_item (session_id, sort_order, item_type, score_mode, content)
+                          SELECT ?, sort_order, item_type, score_mode, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id")
+               ->execute([$newId, $sid]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('複製失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$newId]);

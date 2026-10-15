@@ -641,7 +641,9 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div id="ojtLockHint" style="font-size:12px;color:#DD5138;display:none;margin-bottom:4px;">此場次的考核項目僅本場講師本人或訓練管理員可編輯。</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
                 <label style="margin:0;font-size:12px;color:#5b3a1e;">考官</label>
-                <input type="text" id="ojtAssessor" maxlength="50" placeholder="預設帶入講師姓名，可修改" style="width:170px;">
+                <select id="ojtAssDept" style="width:120px;" data-eg-skip><option value="">部門</option></select>
+                <select id="ojtAssPerson" style="width:120px;" data-eg-skip><option value="">人員</option></select>
+                <input type="text" id="ojtAssessor" maxlength="50" placeholder="預設帶入講師姓名，可選人員或直接打字" style="width:200px;">
             </div>
             <div class="att-list-wrap" style="max-height:210px;">
                 <table class="day-tbl">
@@ -1138,7 +1140,7 @@ function loadMeta(cb){
         var $y = $('#yearSel').empty();
         m.years.forEach(function(y){ $y.append('<option value="'+y+'">'+y+'</option>'); });
         $y.val(m.cur_year);
-        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), $rd = $('#reqDept'), $cd = $('#cardDeptSel'), dh='';
+        var $d = $('#deptSel'), $td = $('#edTrainerDept, #ojtAssDept'), $ad = $('#attDept'), $rd = $('#reqDept'), $cd = $('#cardDeptSel'), dh='';
         DEPTS = m.departments || [];
         DEPTS.forEach(function(d){
             $d.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
@@ -1718,10 +1720,19 @@ function dayAdd(){
    上課天數是看相異日期數（見 dayNumberLabels()），這裡加的列不會讓天數多算。 */
 function dayAddSameDay(){
     var last = DAYS[DAYS.length-1] || {date:$('#exDone').val()||META.today, start:'', end:'', brk:0, hours:''};
-    var d = {date:last.date||'', start:'', end:'', brk:0, hours:''};
+    // 新時段開始時間＝同一天上一個時段的結束時間；若剛好落在休息時段內（含起點）就跳到休息結束
+    var st = '';
+    if (last.end && timeToMin(last.end)!=null){
+        st = last.end;
+        var b1=timeToMin(BRK.start), b2=timeToMin(BRK.end), t=timeToMin(st);
+        if (b1!=null && b2!=null && b2>b1 && t>=b1 && t<b2) st = BRK.end;
+    }
+    var d = {date:last.date||'', start:st, end:'', brk:0, hours:''};
     dayRecalc(d);
     DAYS.push(d);
     renderDays();
+    // 游標直接停在新時段的結束時間，接著輸入即可
+    $('#dayBody tr:last input').eq(2).trigger('focus');
 }
 function dayDelLast(){ if (DAYS.length<=1) return; DAYS.pop(); renderDays(); }
 /* 時間與休息套用到全部日期（不動日期） */
@@ -1812,6 +1823,12 @@ $('#edTrainerDept').on('change', function(){
     var did=$(this).val(); var $p=$('#edTrainerPerson').html('<option value="">人員</option>');
     if(did) $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate()},function(res){ if(res.ok) res.people.forEach(function(u){ $p.append('<option value="'+u.id+'">'+esc(u.user_cname)+'</option>'); }); });
 });
+/* 考核表考官：部門→人員（同講師挑法，預設帶入講師，可改選或直接打字） */
+$('#ojtAssDept').on('change', function(){
+    var did=$(this).val(); var $p=$('#ojtAssPerson').html('<option value="">人員</option>');
+    if(did) $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate()},function(res){ if(res.ok) res.people.forEach(function(u){ $p.append('<option value="'+u.id+'">'+esc(u.user_cname)+'</option>'); }); });
+});
+$('#ojtAssPerson').on('change', function(){ var t=$(this).find('option:selected').text(); if($(this).val()) $('#ojtAssessor').val(t); });
 $('#edTrainerPerson').on('change', function(){ var t=$(this).find('option:selected').text(); if($(this).val()) $('#edTrainer').val(t); });
 /* 參加人員：講師是「上課的人」不是「受訓的人」，一律不列入名單（外訓沒有內部講師故不判斷）。
    trainer_id 是從部門→人員選出來的才有；手打講師姓名時退而以姓名比對。 */
@@ -2277,7 +2294,7 @@ function ojtDefaultAssessor(){
 /* ---------- OJT／實作口試考核表：考核項目清單（僅內訓，講師本人或訓練管理員可編輯） ---------- */
 function loadOjt(sid){
     OJT_ITEMS = []; renderOjt();
-    $('#ojtAssessor').val('');
+    $('#ojtAssessor').val(''); $('#ojtAssDept').val(''); $('#ojtAssPerson').html('<option value="">人員</option>');
     if (!sid) return;
     $.getJSON(API, {action:'ojt_list', session_id:sid}, function(res){
         if (!res.ok) return;
@@ -2957,7 +2974,11 @@ function setStatus(sid, status, fromEx, password){
 }
 function copySession(sid){
     if (!confirm('複製此場次內容為新的一場（不含參加名單）？')) return;
-    $.post(API, {action:'copy_session', session_id:sid}, function(res){
+    var cr = (ROWS||[]).find(function(x){ return String(x.session_id)===String(sid); }) || {};
+    var copyOjt = 0;
+    if (cr.train_type!=='external')
+        copyOjt = confirm('是否連同「考核表」（考官與考核項目，不含成績）一起複製？\n\n按「確定」＝一併複製；按「取消」＝只複製課程內容。') ? 1 : 0;
+    $.post(API, {action:'copy_session', session_id:sid, copy_ojt:copyOjt}, function(res){
         if (!res.ok){ alert(res.error||'複製失敗'); return; }
         loadList(); alert('已複製為新場次，可再編輯調整並另建參加名單');
     }, 'json').fail(function(x){ alert('複製失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
@@ -2988,7 +3009,8 @@ function printSignSheet(blankOnly, src){
     var blanks = 0;
     if (blankMode==='fill16') blanks = Math.max(0, 16 - list.length);
     else { var bn = parseInt(blankMode,10); if (!isNaN(bn) && bn>0) blanks = Math.min(16, bn); }
-    if (blankOnly && blanks===0) blanks = 16;
+    // 空白簽到表固定 6 列，列高拉高填滿 A4 直式一頁（使用者要求，簽名欄空間也較充裕）
+    if (blankOnly) blanks = 6;
     for (var bi=0; bi<blanks; bi++) list.push({});
     var days = src ? (src.days||[]) : DAYS;
     var ds=(days.length?days:[{date:'', start:'', end:'', hours:''}]);
@@ -3039,6 +3061,7 @@ function printSignSheet(blankOnly, src){
         +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
+    if (blankOnly) css += 'table.sf tbody td{height:104px;}';
     egPrintWindow(docTitle, html, css, r.as_doc_signsheet_no||DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
@@ -3613,7 +3636,7 @@ function renderRequestList(){
         var trNames = (r.trainees_list||[]).map(function(t){ return t.user_name; }).join('、');
         h += '<tr><td>'+esc(dispDate(r.apply_date))+'</td><td>'+esc(r.dept_name||'')+'</td><td class="t-left">'+esc(r.subject)+'</td>'
            + '<td class="t-left">'+esc(trNames)+'</td>'
-           + '<td>'+esc((dispDate(r.start_date)||'')+(r.end_date?'~'+dispDate(r.end_date):''))+(r.days?'（'+r.days+'天）':'')+'</td>'
+           + '<td>'+esc((dispDate(r.start_date)||'')+(r.end_date?'~'+dispDate(r.end_date):''))+(r.days&&r.days.length>1?'（'+r.days.length+'天）':'')+'</td>'
            + '<td>'+reqStatusPill(r.status)+(r.status==='rejected'&&r.reject_note?' <span title="'+esc(r.reject_note)+'" style="color:#DD5138;"><i class="fa fa-info-circle"></i></span>':'')+'</td>'
            + '<td style="white-space:nowrap;">'
            + '<span class="tr-op" onclick="openReq('+r.request_id+')"><i class="fa fa-search-plus"></i>檢視</span>';
