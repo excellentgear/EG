@@ -111,7 +111,7 @@ if (!function_exists('eg_pref_attach_fetch')) {
             foreach ($db->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
                 $cats[(int)$c['id']] = $c['category_name'];
             }
-        } catch (Throwable $e) {}
+        } catch (Throwable $e) { error_log('eg_pref_attach_fetch 標籤對照: ' . $e->getMessage()); }
         $catNamesOf = function ($csv) use ($cats) {
             $out = [];
             foreach (array_filter(explode(',', (string)$csv)) as $cid) {
@@ -157,20 +157,25 @@ if (!function_exists('eg_pref_attach_fetch')) {
                     'source_label'   => '料號附件',
                 ];
             }
-        } catch (Throwable $e) {}
+        } catch (Throwable $e) { error_log('eg_pref_attach_fetch 料號附件: ' . $e->getMessage()); }
 
-        // ── 2. 報價附件（該報價單含這幾筆料號主檔；只取正式附件）──────
+        // ── 2. 報價附件（屬於這幾筆料號主檔的；只取正式附件）──────────
+        /* 「這份報價附件屬不屬於這個料號」一律走共用判定（唯一實作 quote_attach_scope_lib）：
+           linked_parts 有值→必須命中本料號，NULL→才算整張報價單共用。
+           2026-10-15 修正：舊版只判「這張報價單裡有這個料號的品項」，完全沒看 linked_parts，
+           同一張報價單上別的料號的圖會一起被帶進來（與 bom_viewer「其他附件」分頁同一個漏洞；
+           那邊實測錯帶 79 組，這裡因為目前勾選的標籤剛好沒資料踩到才沒爆出來）。 */
         try {
-            $st = $db->prepare("SELECT DISTINCT a.id, a.filename, a.original_name, a.category_ids, a.file_size,
+            require_once __DIR__ . '/quote_attach_scope_lib.php';
+            $bel = eg_quote_attach_scope_cond(eg_quote_attach_part_nos($db, $dids), $dids);
+            $st = $db->prepare("SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size,
                                        a.uploaded_at, a.quote_no,
                                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by
                                 FROM quotation_attachments a
                                 LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                                JOIN quotation_list ql ON ql.quote_no = a.quote_no
-                                JOIN quotation_item  qi ON qi.quote_id = ql.quote_id
-                                WHERE a.status = 'active' AND qi.d_setting_d_id IN ($phD) AND ($catCond)
+                                WHERE a.status = 'active' AND ($catCond) AND {$bel['sql']}
                                 ORDER BY a.uploaded_at DESC");
-            $st->execute(array_merge($dids, $ids));
+            $st->execute(array_merge($ids, $bel['params']));
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
                 $out[] = [
@@ -190,7 +195,7 @@ if (!function_exists('eg_pref_attach_fetch')) {
                     'source_label'   => '報價附件',
                 ];
             }
-        } catch (Throwable $e) {}
+        } catch (Throwable $e) { error_log('eg_pref_attach_fetch 報價附件: ' . $e->getMessage()); }
 
         // ── 3. 訂單附件 ──────────────────────────────────────────────
         try {
@@ -221,7 +226,7 @@ if (!function_exists('eg_pref_attach_fetch')) {
                     'source_label'   => '訂單附件',
                 ];
             }
-        } catch (Throwable $e) {}
+        } catch (Throwable $e) { error_log('eg_pref_attach_fetch 訂單附件: ' . $e->getMessage()); }
 
         // 新到舊（三種來源混排，對圖時一律先看最新的）
         usort($out, function ($a, $b) { return strcmp($b['uploaded_at'], $a['uploaded_at']); });

@@ -278,14 +278,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 $phD2 = implode(',', array_fill(0, count($dids), '?'));
                 $catCond = implode(' OR ', array_fill(0, count($showOtherIds), 'FIND_IN_SET(?, a.category_ids)'));
 
-                $qStmt = $pdo2->prepare("SELECT DISTINCT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
+                /* 「這份報價附件屬不屬於這個料號」一律走共用判定（唯一實作 quote_attach_scope_lib）：
+                   linked_parts 有值→必須命中本料號（含別名綁定帶入的），NULL→才算整張報價單共用。
+                   2026-10-15 修正：舊版只判「這張報價單裡有這個料號的品項」，完全沒看 linked_parts，
+                   同一張報價單上**別的料號**的原圖會一起列進來（實測 24 個附件錯帶到 25 個料號頁），
+                   D1A-61017-0B-00 的頁面上會列著 D1B-61017-0B-00 的原圖＝會真的拿錯圖去加工。 */
+                require_once __DIR__ . '/../../src/common/quote_attach_scope_lib.php';
+                $qBel = eg_quote_attach_scope_cond($scope['part_nos'], $dids);
+                $qStmt = $pdo2->prepare("SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
                                                 COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.quote_no
                                          FROM quotation_attachments a
                                          LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                                         JOIN quotation_list ql ON ql.quote_no = a.quote_no
-                                         JOIN quotation_item qi ON qi.quote_id = ql.quote_id
-                                         WHERE a.status='active' AND qi.d_setting_d_id IN ($phD2) AND ($catCond)");
-                $qStmt->execute(array_merge($dids, $showOtherIds));
+                                         WHERE a.status='active' AND ($catCond) AND {$qBel['sql']}");
+                $qStmt->execute(array_merge($showOtherIds, $qBel['params']));
                 foreach ($qStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;   // 價格類文件同樣要擋
                     $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
@@ -339,7 +344,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                     ];
                 }
             }
-        } catch (Exception $_e) {}
+        } catch (Exception $_e) {
+            /* 刻意不中斷：併入失敗時料號附件本身仍要列得出來。但**不可以靜默吞掉**——
+               這一段壞掉時畫面只會少東西、完全不報錯，沒有 log 就查不出為什麼少檔案。 */
+            error_log('bom_viewer get_attachments_by_did 併入報價/訂單附件失敗: ' . $_e->getMessage());
+        }
         echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -374,23 +383,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
         $bindLabelByDid    = $scope['bind_label_by_did'];
         $allPartNos        = $scope['part_nos'];
         $dids              = $scope['dids'];
-        $ph = implode(',', array_fill(0, count($dids), '?'));
-        $jsonConds = implode(' OR ', array_fill(0, count($allPartNos), 'JSON_CONTAINS(a.linked_parts, ?)'));
         // 報價附件：linked_parts JSON 含此料號（或綁定料號），或 linked_parts NULL 且該報價單包含此料號（或綁定料號）
+        // 這一套判定本來就寫在這裡且是對的，2026-10-15 原樣抽成共用庫讓其他兩處（其他附件分頁、
+        // pref_attach_lib 優選附件）也走同一份，條件一字未改＝本分頁行為完全不變。
         // status='active'：只顯示正式附件，隱藏 temp(未存檔)/pending(補件待審)/trash(已否決)
+        require_once __DIR__ . '/../../src/common/quote_attach_scope_lib.php';
+        $qBel = eg_quote_attach_scope_cond($allPartNos, $dids);
         $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.quote_no, a.linked_parts,
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at
                 FROM quotation_attachments a
                 LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                WHERE a.status = 'active' AND (
-                      (a.linked_parts IS NOT NULL AND ($jsonConds))
-                   OR (a.linked_parts IS NULL AND a.quote_no IN (
-                        SELECT ql.quote_no FROM quotation_item qi
-                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
-                        WHERE qi.d_setting_d_id IN ($ph))))
+                WHERE a.status = 'active' AND {$qBel['sql']}
                 ORDER BY a.uploaded_at DESC";
         $stmt = $pdo2->prepare($sql);
-        $stmt->execute(array_merge(array_map('json_encode', $allPartNos), $dids));
+        $stmt->execute($qBel['params']);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // linked_parts 為 NULL 分支：靠 quote_no 對應的品項料號判斷是否「只透過綁定料號才對得上」
