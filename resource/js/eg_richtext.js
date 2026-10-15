@@ -85,7 +85,12 @@
     'border-color':      /^((#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})\s*){1,4}$/,
     'float':             /^(left|right|none)$/i,
     'margin':            /^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/,
-    'margin-right':      /^(\d{1,2}(\.\d{1,2})?)(em|px|cm|mm)$/,
+    'margin-right':      /^(auto|0|\d{1,2}(\.\d{1,2})?(em|px|cm|mm))$/,
+    'margin-left':       /^(auto|0|\d{1,2}(\.\d)?em)$/,
+    // 圖片／流程圖區塊在畫面上自由移動：只放行 relative 位移（不脫離文字流、不會蓋掉整頁）
+    'position':          /^relative$/i,
+    'left':              /^-?\d{1,4}px$/,
+    'top':               /^-?\d{1,4}px$/,
     'page-break-before': /^(always|auto|avoid)$/i,
     'page-break-after':  /^(always|auto|avoid)$/i,
     'page-break-inside': /^(avoid|auto)$/i
@@ -1157,6 +1162,52 @@
       imgHandle.style.left = (ir.right - hr.left - 6) + 'px';
     }
 
+    /* 表格工具列：點進表格就在表格左上方出現「靠左／置中／靠右」，
+       寫成 margin-left/right（auto），整張表一起移動，匯入的表格不置中時用它一鍵置中 */
+    var curTbl = null, tblBar = null;
+    function clearTblSel() {
+      curTbl = null;
+      if (tblBar) tblBar.style.display = 'none';
+    }
+    function placeTblUi() {
+      if (!curTbl || !tblBar || !curTbl.isConnected) { clearTblSel(); return; }
+      var hr = host.getBoundingClientRect(), tr = curTbl.getBoundingClientRect();
+      var scroll = host.querySelector('.egrt-doc-scroll');
+      var sr = scroll ? scroll.getBoundingClientRect() : hr;
+      if (tr.bottom < sr.top || tr.top > sr.bottom) { tblBar.style.display = 'none'; return; }
+      tblBar.style.display = 'block';
+      var top = tr.top - hr.top - 26;
+      if (top < 2) top = 2;
+      tblBar.style.top = top + 'px';
+      tblBar.style.left = Math.max(2, tr.left - hr.left) + 'px';
+    }
+    function selectTbl(tb) {
+      if (!tblBar) {
+        tblBar = d.createElement('div');
+        tblBar.className = 'egrt-imgbar';
+        tblBar.style.display = 'none';
+        tblBar.innerHTML = '<span style="font-size:11px;color:#8A5A2B;padding:0 4px;">表格位置</span>'
+          + '<button type="button" data-tal="left" title="整張表靠左"><i class="fa fa-align-left"></i></button>'
+          + '<button type="button" data-tal="center" title="整張表置中"><i class="fa fa-align-center"></i></button>'
+          + '<button type="button" data-tal="right" title="整張表靠右"><i class="fa fa-align-right"></i></button>';
+        host.appendChild(tblBar);
+        tblBar.addEventListener('mousedown', function (e) { e.preventDefault(); });
+        tblBar.addEventListener('click', function (e) {
+          var b = e.target.closest ? e.target.closest('button') : null;
+          if (!b || !curTbl) return;
+          var al = b.getAttribute('data-tal');
+          curTbl.style.marginLeft  = (al === 'left') ? '0' : 'auto';
+          curTbl.style.marginRight = (al === 'right') ? '0' : 'auto';
+          placeTblUi();
+          changed();
+        });
+        var sc2 = host.querySelector('.egrt-doc-scroll');
+        if (sc2) sc2.addEventListener('scroll', placeTblUi);
+      }
+      curTbl = tb;
+      placeTblUi();
+    }
+
     function selectImg(im) {
       buildImgBar();
       clearImgSel();
@@ -1277,8 +1328,42 @@
 
       if (isDoc) {
         el2.addEventListener('click', function (e) {
-          if (e.target && e.target.nodeName === 'IMG') { selectImg(e.target); e.stopPropagation(); }
-          else clearImgSel();
+          if (e.target && e.target.nodeName === 'IMG') { selectImg(e.target); e.stopPropagation(); clearTblSel(); }
+          else {
+            clearImgSel();
+            var tb = e.target && e.target.closest ? e.target.closest('table') : null;
+            if (tb && el2.contains(tb)) selectTbl(tb); else clearTblSel();
+          }
+        });
+        // 圖片（含流程圖的每個區塊）按住就能在畫面上任意拖動：
+        // 用 position:relative 的 left/top 位移，不影響前後文字排版，列印也照同一位置。
+        el2.addEventListener('mousedown', function (e) {
+          var im = e.target;
+          if (e.button !== 0 || !im || im.nodeName !== 'IMG' || !im.getAttribute('data-asset')) return;
+          e.preventDefault();                       // 擋掉瀏覽器內建的圖片拖曳虛影
+          var sx = e.clientX, sy = e.clientY, moved = false;
+          var ox = parseInt(im.style.left, 10) || 0, oy = parseInt(im.style.top, 10) || 0;
+          function mv(ev) {
+            var dx = ev.clientX - sx, dy = ev.clientY - sy;
+            if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+            if (!moved) { moved = true; selectImg(im); }
+            im.style.position = 'relative';
+            im.style.left = Math.max(-1500, Math.min(1500, ox + dx)) + 'px';
+            im.style.top  = Math.max(-1500, Math.min(1500, oy + dy)) + 'px';
+            placeImgUi();
+          }
+          function up() {
+            d.removeEventListener('mousemove', mv);
+            d.removeEventListener('mouseup', up);
+            if (moved) {
+              if (!parseInt(im.style.left, 10) && !parseInt(im.style.top, 10)) {
+                im.style.position = ''; im.style.left = ''; im.style.top = '';
+              }
+              changed();
+            }
+          }
+          d.addEventListener('mousemove', mv);
+          d.addEventListener('mouseup', up);
         });
         el2.addEventListener('dblclick', function (e) {
           // 雙擊流程圖＝直接開編輯器（跟 Word 雙擊圖表一樣）
