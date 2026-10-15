@@ -102,6 +102,8 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
     $res = adi_transform($db, $raw, $work, $contentId, $uid);
     adi_rrmdir($work);
 
+    [$res['html'], $wrapMerged] = adi_merge_wrapped_paragraphs((string)$res['html']);
+    $res['wrap_merged'] = $wrapMerged;
     $clean = eg_richtext_sanitize($res['html'], ADC_MAX_LEN, 'doc');
     if (trim($clean) === '') {
         return ['ok' => false, 'msg' => '轉出來是空白的——這份 Word 可能整份都是圖片或繪圖物件，沒有可以轉入的文字。'];
@@ -569,3 +571,64 @@ function adi_rrmdir(string $dir): void
 }
 
 } // EG_AS_DOC_IMPORT_LIB
+
+/**
+ * 把 Word 裡「手動斷行」的段落接回上一段。
+ * Word 稿常常為了讓一行不要太長，在行尾直接按 Enter 並在下一行前面用空白手排縮排
+ *（實例 2-GM-03：「…過程負責人為風險小」／「　　　組成員，由總經理擔任組長。」被切成兩個段落）。
+ * 線上版寬度跟 Word 不同，這樣會看到孤零零的半行字、換行位置怪異。
+ * 判定（保守，寧可不接也不要接錯）：下一段開頭有 3 個以上手排空白、去掉空白後第一個字是漢字或字母
+ *（不是編號／項目符號）、且上一段有字、結尾不是句末標點。
+ * @return array{0:string,1:int} [處理後 HTML, 接回的段數]
+ */
+function adi_merge_wrapped_paragraphs(string $html): array
+{
+    if ($html === '' || stripos($html, '<p') === false) return [$html, 0];
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $prev = libxml_use_internal_errors(true);
+    $ok = $dom->loadHTML('<meta http-equiv="Content-Type" content="text/html; charset=utf-8"><body>' . $html . '</body>',
+        LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors(); libxml_use_internal_errors($prev);
+    if (!$ok) return [$html, 0];
+    $body = $dom->getElementsByTagName('body')->item(0);
+    if (!$body) return [$html, 0];
+
+    $merged = 0;
+    $last = null;   // 上一個「有字」的頂層 <p>
+    $ws = '[ \x{00A0}\x{3000}]';
+    foreach (iterator_to_array($body->childNodes) as $n) {
+        if ($n->nodeType === XML_TEXT_NODE && trim($n->nodeValue) === '') continue;
+        if ($n->nodeType !== XML_ELEMENT_NODE || strtolower($n->nodeName) !== 'p') { $last = null; continue; }
+        $raw = str_replace(["\n", "\t", "\r"], '', $n->textContent);
+        $txt = trim(preg_replace('/^' . $ws . '+|' . $ws . '+$/u', '', $raw));
+        if ($txt === '' ) { $last = null; continue; }    // 空段落＝作者刻意的段落分隔
+        $isCont = $last !== null
+            && preg_match('/^' . $ws . '{3,}/u', $raw)
+            && preg_match('/^[\p{Han}A-Za-z]/u', $txt);
+        if ($isCont) {
+            $lt = trim(preg_replace('/' . $ws . '+$/u', '', str_replace(["\n", "\t", "\r"], '', $last->textContent)));
+            if ($lt !== '' && !preg_match('/[。：；！？．.:;!?)）」』】]$/u', $lt)) {
+                // 去掉接過來那一段開頭的手排空白，再把子節點搬到上一段尾端
+                $first = $n->firstChild;
+                $tw = new DOMXPath($dom);
+                $tn = $tw->query('.//text()', $n);
+                foreach ($tn as $t) {
+                    $v = preg_replace('/^[\s\x{00A0}\x{3000}]+/u', '', $t->nodeValue);
+                    if ($v !== '') { $t->nodeValue = $v; break; }
+                    $t->nodeValue = '';
+                }
+                if (preg_match('/[A-Za-z0-9]$/', $lt) && preg_match('/^[A-Za-z0-9]/', $txt)) {
+                    $last->appendChild($dom->createTextNode(' '));
+                }
+                while ($n->firstChild) $last->appendChild($n->firstChild);
+                $body->removeChild($n);
+                $merged++;
+                continue;
+            }
+        }
+        $last = $n;
+    }
+    $out = '';
+    foreach ($body->childNodes as $c) $out .= $dom->saveHTML($c);
+    return [$out, $merged];
+}
