@@ -1137,7 +1137,8 @@ $(document).on('click', '[data-evidence]', function(){
         var $st = tr.find('[data-f=effect_status]');
         if (!$st.val() && e.status !== 'unconfirmed') $st.val(e.status);
         var $dt = tr.find('[data-f=effect_date]'); if (!$dt.val() && e.status !== 'unconfirmed') $dt.val(META.today);
-        $why.html('<b>系統建議：' + esc(META.effect_status[e.status] || '') + '</b>（' + esc(e.reason) + '）　依據規則：' + esc(e.rule_ids) + '。結果與裁示請由主管確認後再存檔。');
+        $why.html('<b>系統建議：' + esc(META.effect_status[e.status] || '') + '</b>（' + esc(e.reason) + '）　依據規則：' + esc(e.rule_ids) + '。結果與裁示請由主管確認後再存檔。'
+            + (e.recheck_hint ? '<br><b style="color:#DD5138;">⚠ 建議重新評估：</b>' + esc(e.recheck_hint) : ''));
     });
 });
 // 滑鼠移到卡片編號上可看這一列是用哪些規則產生的

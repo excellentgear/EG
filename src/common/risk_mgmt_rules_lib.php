@@ -423,8 +423,20 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         if ($cat === 'climate') { $d = rm_rule_typhoon($db, $year); array_unshift($lines, $year . ' 年行事曆颱風假 ' . $d . ' 天'); }
     }
     if (!$lines) $lines[] = '系統找不到對應資料（沒有對應的 KPI、措施追蹤或溝通記錄）';
-    $lines[] = '系統建議結果：' . RM_EFFECT_STATUS[$status] . '（' . $reason . '）。資料截至 ' . $today . '，規則：' . implode('、', $ids) . '；最後仍由主管裁示。';
-    return ['lines'=>$lines, 'text'=>implode("\n", $lines), 'status'=>$status, 'reason'=>$reason, 'rule_ids'=>implode(',', $ids), 'category'=>$cat];
+    // 佐證本文只放資料本身（簡潔）；「系統建議結果／規則編號」顯示在畫面上，規則編號另存在 rule_ids 欄位，不寫進佐證文字
+    $lines[] = '資料截至 ' . $today;
+
+    // 重新評估提示：用「現在」的資料再算一次發生率，比表上的高（例：年初評為幾乎不可能、今年卻已經發生）就提醒要不要重新評估
+    $hint = '';
+    try {
+        if ($row['frequency'] !== null && $row['frequency'] !== '' && ($row['severity'] ?? '') !== '') {
+            $ctx = ['stakeholder'=>$row['stakeholder'] ?? '', 'needs'=>$row['needs'] ?? '', 'issue'=>$row['issue'] ?? '', 'dimension'=>$row['dimension'] ?? ''];
+            $now = rm_rule_make_row($db, $set, $ctx, $year, $year);
+            if ((int)$now['frequency'] > (int)$row['frequency'])
+                $hint = '依 ' . $year . ' 年資料，發生率建議由 ' . (int)$row['frequency'] . ' 提高為 ' . (int)$now['frequency'] . '（' . implode('；', array_slice($now['why'], 1, 2)) . '）；請評估是否在「重新評估」欄記錄並調整評分。';
+        }
+    } catch (Throwable $e) { rm_sg_err($e); }
+    return ['lines'=>$lines, 'text'=>implode("\n", $lines), 'status'=>$status, 'reason'=>$reason, 'rule_ids'=>implode(',', $ids), 'category'=>$cat, 'recheck_hint'=>$hint];
 }
 
 /* ============================ 風險列的措施追蹤（顯示用） ============================
