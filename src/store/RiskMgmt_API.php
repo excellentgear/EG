@@ -72,7 +72,7 @@ function rmItems(PDO $db, int $docId, array $set): array {
     $st->execute([$docId]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) {
-        $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+        $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)($r['ro_kind'] ?? 'risk'));
         $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'])) : null;
         // 連動組織處境分析表的議題：內外部／利害關係者／需求與期望／議題描述一律讀來源的「現在」內容
         $r['ctx_linked'] = false; $r['ctx_doc_no'] = null;
@@ -141,13 +141,15 @@ if ($action === 'doc_list') {
     foreach ($rows as &$r) {
         $r['top_level'] = null; $r['action_cnt'] = 0;
         if ($kind === 'risk') {
-            $its = $db->prepare("SELECT severity, frequency FROM rm_item WHERE doc_id=?");
+            // 「最高風險等級」只看風險（機會不是危險，不該把清單的等級拉高）；「需因應措施」則風險與機會都算
+            $its = $db->prepare("SELECT severity, frequency, ro_kind FROM rm_item WHERE doc_id=?");
             $its->execute([(int)$r['doc_id']]);
             $best = null;
             foreach ($its->fetchAll(PDO::FETCH_ASSOC) as $it) {
-                $lv = rm_level_calc($set, $it['severity'], $it['frequency']);
+                $lv = rm_level_calc($set, $it['severity'], $it['frequency'], (string)($it['ro_kind'] ?? 'risk'));
                 if (!$lv) continue;
                 if ($lv['action']) $r['action_cnt']++;
+                if ($lv['is_opp']) continue;
                 if (!$best || $lv['score'] > $best['score']) $best = $lv;
             }
             if ($best) $r['top_level'] = array_merge($best, rm_level_color($best['rank']));
@@ -176,7 +178,8 @@ if ($action === 'doc_get') {
 
 /* ---------------------------------------------------------------- 風險分布（表D）：各格實際有幾筆風險 */
 if ($action === 'dist') {
-    $where = ["d.kind='risk'", "d.is_deleted=0", "i.severity IS NOT NULL"]; $a = [];
+    $where = ["d.kind='risk'", "d.is_deleted=0", "i.severity IS NOT NULL",
+              "(i.ro_kind IS NULL OR i.ro_kind <> 'opportunity')"]; $a = [];
     $year = (int)($_GET['year'] ?? 0);
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     $st = $db->prepare("SELECT i.severity, i.frequency, COUNT(*) c FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id
@@ -305,7 +308,7 @@ if ($action === 'risk_generate') {
         foreach ($todo as $c) {
             $seq++;
             $r = rm_rule_make_row($db, $set, $c, $dy, (int)substr($fill, 0, 4));
-            $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+            $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
             $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fill) : null;
             $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -486,7 +489,7 @@ if ($action === 'doc_save') {
             $confirm = $row['confirm_no'];
             if ($isOld && $oldConfirm[$oid] !== '' && $confirm === '') $confirm = $oldConfirm[$oid];
             if ($kind === 'risk' && $confirm === '') {
-                $lv = rm_level_calc($set, $row['severity'], $row['frequency']);
+                $lv = rm_level_calc($set, $row['severity'], $row['frequency'], (string)$row['ro_kind']);
                 if ($lv && $lv['action']) $confirm = rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fillDate);
             }
             $vals = [$seq, $row['scope'], $row['dimension'], $row['stakeholder'] ?: null, $row['needs'] ?: null, $row['issue'] ?: null,
@@ -568,6 +571,17 @@ if ($action === 'setting_save') {
     }
     if (array_key_exists('rm_dimensions', $arr)) {
         [$v, $e] = rm_normalize_swot_names($arr['rm_dimensions']); if ($e) jerr($e); $toWrite['rm_dimensions'] = $v;
+    }
+    if (array_key_exists('rm_opp_terms', $arr)) {
+        $t = (array)$arr['rm_opp_terms']; $cur2 = $cur['rm_opp_terms'] ?? [];
+        $o = [];
+        foreach (['sev', 'freq', 'level'] as $k) {
+            $v = mb_substr(trim((string)($t[$k] ?? '')), 0, 12);
+            if ($v === '') $v = (string)($cur2[$k] ?? '');
+            if ($v === '') jerr('機會的欄位名稱不可留空');
+            $o[$k] = $v;
+        }
+        $toWrite['rm_opp_terms'] = $o;
     }
     if (array_key_exists('rm_outsource_tags', $arr)) {
         $valid = array_map(function ($r) { return (int)$r['tag_id']; }, rm_audit_procs_view($db));

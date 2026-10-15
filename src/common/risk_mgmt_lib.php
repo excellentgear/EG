@@ -70,13 +70,20 @@ function rm_settings_default(): array
         'rm_method' => 'multiply',
         // 表A 風險準則（2-GM-03 表A）：評分是「下限～上限」區間，區間之間連續不留縫隙、最後一級的上限＝目前可能的最高分
         'rm_levels' => [
-            ['name'=>'低度危險', 'lo'=>1, 'hi'=>1, 'min'=>1, 'action'=>false, 'measure'=>'低度危險的風險，以一般步驟處理'],
-            ['name'=>'中度危險', 'lo'=>2, 'hi'=>2, 'min'=>2, 'action'=>false, 'measure'=>'必須明定管理階層的責任範圍'],
-            ['name'=>'高度危險', 'lo'=>3, 'hi'=>6, 'min'=>3, 'action'=>true,  'measure'=>'管理階層需督導所屬研擬計畫並提供資源'],
-            ['name'=>'極度危險', 'lo'=>7, 'hi'=>9, 'min'=>7, 'action'=>true,  'measure'=>'極度危險的風險，需立即採取行動'],
+            ['name'=>'低度危險', 'lo'=>1, 'hi'=>1, 'min'=>1, 'action'=>false, 'measure'=>'低度危險的風險，以一般步驟處理',
+             'name_opp'=>'低度機會', 'measure_opp'=>'效益有限，依現有作業掌握即可'],
+            ['name'=>'中度危險', 'lo'=>2, 'hi'=>2, 'min'=>2, 'action'=>false, 'measure'=>'必須明定管理階層的責任範圍',
+             'name_opp'=>'中度機會', 'measure_opp'=>'列入年度計畫追蹤，由權責單位評估可行性'],
+            ['name'=>'高度危險', 'lo'=>3, 'hi'=>6, 'min'=>3, 'action'=>true,  'measure'=>'管理階層需督導所屬研擬計畫並提供資源',
+             'name_opp'=>'高度機會', 'measure_opp'=>'優先推動，指派負責單位並提供必要資源'],
+            ['name'=>'極度危險', 'lo'=>7, 'hi'=>9, 'min'=>7, 'action'=>true,  'measure'=>'極度危險的風險，需立即採取行動',
+             'name_opp'=>'最優先機會', 'measure_opp'=>'最優先推動，立即投入資源並訂定里程碑'],
         ],
         'rm_dimensions'     => ['優勢（S）', '劣勢（W）', '機會（O）', '威脅（T）'],
         'rm_confirm_prefix' => 'R',
+        // 機會與風險共用同一張評分矩陣（分數算法一樣），但顯示的用詞不同：
+        // 風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。只有用詞不同，不另做一套分數。
+        'rm_opp_terms' => ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'],
         'rm_outsource_tags' => [],      // 對外宣稱有外包的稽核製程（ot_as_proc_tag.tag_id 清單）；沒勾＝沒有外包，不產生任何委外分析
     ];
 }
@@ -248,7 +255,21 @@ function rm_settings_fix(array $set): array
         $lv[$k]['min'] = (int)$lv[$k]['lo'];
         $prev = (int)$lv[$k]['hi'];
     }
+    // 舊設定沒有「機會」那兩欄時就地補出來（只補在讀取，不寫回資料庫）：
+    // 名稱把「危險／風險」換成「機會」（低度危險→低度機會），換不出來就沿用風險那一套名稱。
+    foreach ($lv as $k => $r) {
+        if (trim((string)($r['name_opp'] ?? '')) === '') {
+            $n = str_replace(['危險', '風險'], '機會', (string)$r['name']);
+            $lv[$k]['name_opp'] = $n;
+        }
+        if (trim((string)($r['measure_opp'] ?? '')) === '') {
+            $d = rm_settings_default()['rm_levels'][$k] ?? null;     // 沒改過名稱的那幾級，直接用預設的機會處理措施
+            $lv[$k]['measure_opp'] = ($d && (string)$d['name'] === (string)$r['name']) ? (string)$d['measure_opp'] : '';
+        }
+    }
     $set['rm_levels'] = $lv;
+    if (!isset($set['rm_opp_terms']) || !is_array($set['rm_opp_terms'])) $set['rm_opp_terms'] = [];
+    $set['rm_opp_terms'] += ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'];
     return $set;
 }
 
@@ -348,7 +369,7 @@ function rm_normalize_levels($raw, int $maxScore, array $savedNames): array
     $n = count($rows);
     if ($n < 1 || $n > 8) return [[], '風險準則至少 1 級、最多 8 級'];
     if ($maxScore < $n) return [[], '目前的嚴重度(S)與發生率(O)等級最高只會算出 ' . $maxScore . ' 分，沒有辦法分成 ' . $n . ' 個風險等級'];
-    $out = []; $seen = []; $prevHi = 0;
+    $out = []; $seen = []; $seenOpp = []; $prevHi = 0;
     foreach ($rows as $i => $r) {
         $name = mb_substr(trim((string)($r['name'] ?? '')), 0, 10);
         if ($name === '') return [[], '風險準則有一列沒有填等級名稱'];
@@ -370,8 +391,14 @@ function rm_normalize_levels($raw, int $maxScore, array $savedNames): array
             if ($hi > $cap) return [[], '「' . $name . '」的評分上限最多只能到 ' . $cap . '（後面的每一級至少各要保留 1 分，目前最高分是 ' . $maxScore . '）'];
         }
         $prevHi = $hi;
+        $nameOpp = mb_substr(trim((string)($r['name_opp'] ?? '')), 0, 10);
+        if ($nameOpp !== '') {
+            if (isset($seenOpp[$nameOpp])) return [[], '機會等級「' . $nameOpp . '」重複了'];
+            $seenOpp[$nameOpp] = 1;
+        }
         $out[] = ['name'=>$name, 'lo'=>$lo, 'hi'=>$hi, 'min'=>$lo, 'action'=>!empty($r['action']),
-                  'measure'=>mb_substr(trim((string)($r['measure'] ?? '')), 0, 200)];
+                  'measure'=>mb_substr(trim((string)($r['measure'] ?? '')), 0, 200),
+                  'name_opp'=>$nameOpp, 'measure_opp'=>mb_substr(trim((string)($r['measure_opp'] ?? '')), 0, 200)];
     }
     return [$out, ''];
 }
@@ -472,7 +499,7 @@ function rm_swot_guide(): array
 /**
  * @return array|null  ['score'=>int,'name'=>string,'rank'=>int(0起,由低到高),'action'=>bool]；嚴重度或頻率沒填／不在級距內回 null
  */
-function rm_level_calc(array $set, $sev, $freq): ?array
+function rm_level_calc(array $set, $sev, $freq, string $roKind = 'risk'): ?array
 {
     if ($sev === null || $sev === '' || $freq === null || $freq === '') return null;
     $sev = (int)$sev; $freq = (int)$freq;
@@ -488,8 +515,10 @@ function rm_level_calc(array $set, $sev, $freq): ?array
         if ($score >= (int)$lv['lo']) { $hit = $lv; $rank = $i; }
         if ($score >= (int)$lv['lo'] && $score <= (int)$lv['hi']) { $hit = $lv; $rank = $i; break; }
     }
-    return ['score'=>$score, 'name'=>(string)$hit['name'], 'rank'=>$rank, 'action'=>!empty($hit['action']),
-            'measure'=>(string)($hit['measure'] ?? '')];
+    $opp = $roKind === 'opportunity';
+    return ['score'=>$score, 'rank'=>$rank, 'action'=>!empty($hit['action']), 'is_opp'=>$opp,
+            'name'=>(string)(($opp && !empty($hit['name_opp'])) ? $hit['name_opp'] : $hit['name']),
+            'measure'=>(string)(($opp && !empty($hit['measure_opp'])) ? $hit['measure_opp'] : ($hit['measure'] ?? ''))];
 }
 
 /** 表D：嚴重度(S)等級 × 發生率(O)等級 的分數（算法由設定決定） */
