@@ -164,7 +164,13 @@ if ($action === 'doc_get') {
     if (!$r) jerr('查無此表單', 404);
     if (!rmCanSee($r, $P)) jerr('您沒有查看這張表單的權限', 403);
     $set = rm_settings($db);
-    jout(['doc'=>$r, 'items'=>rmItems($db, (int)$r['doc_id'], $set), 'can_edit'=>rmCanEdit($r, $P),
+    $items = rmItems($db, (int)$r['doc_id'], $set);
+    if ($r['kind'] === 'risk') {      // 因應措施的負責單位與預計完成日一律即時取自溝通管理的措施追蹤，不在本表另存一份
+        $yr = (int)substr((string)$r['fill_date'], 0, 4);
+        foreach ($items as &$it) { try { $it['tracks'] = rm_item_tracks($db, $yr, $it); } catch (Throwable $e) { $it['tracks'] = []; } }
+        unset($it);
+    }
+    jout(['doc'=>$r, 'items'=>$items, 'can_edit'=>rmCanEdit($r, $P),
           'print'=>rm_print_meta($db, $r['kind'], (string)$r['fill_date'])]);
 }
 
@@ -298,7 +304,7 @@ if ($action === 'risk_generate') {
         $summary = [];
         foreach ($todo as $c) {
             $seq++;
-            $r = rm_rule_make_row($db, $set, $c, $dy);
+            $r = rm_rule_make_row($db, $set, $c, $dy, (int)substr($fill, 0, 4));
             $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
             $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fill) : null;
             $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids)
@@ -376,6 +382,7 @@ if ($action === 'doc_save') {
             'confirm_no'  => rmS($it['confirm_no'] ?? '', 30),
             'measure'     => '', 'effect_check' => '', 'ctx_item_id' => null,
             'effect_status' => null, 'effect_date' => null, 'effect_ruling' => '', 'effect_evidence' => '', 'rule_ids' => null,
+            'recheck_note' => '', 'recheck_date' => null,
         ];
         if ($kind === 'context') {
             $dim = strtoupper(rmS($it['dimension'] ?? '', 2));
@@ -394,6 +401,10 @@ if ($action === 'doc_save') {
             $row['effect_date'] = rmDate($it['effect_date'] ?? '');
             $row['effect_ruling'] = rmS($it['effect_ruling'] ?? '', 4000);
             $row['effect_evidence'] = rmS($it['effect_evidence'] ?? '', 8000);
+            $row['recheck_note'] = rmS($it['recheck_note'] ?? '', 2000);
+            $row['recheck_date'] = rmDate($it['recheck_date'] ?? '');
+            if ($row['recheck_date'] && $row['recheck_date'] > rmToday($db)) jerr('第 ' . ($n + 1) . ' 列的重新評估日期不可是未來日期');
+            if ($row['recheck_note'] !== '' && !$row['recheck_date']) jerr('第 ' . ($n + 1) . ' 列已填重新評估原因，請填重新評估日期');
             $row['rule_ids'] = preg_replace('/[^A-Za-z0-9,\-]/', '', rmS($it['rule_ids'] ?? '', 200)) ?: null;
             if ($row['effect_date'] && $row['effect_date'] > rmToday($db)) jerr('第 ' . ($n + 1) . ' 列的成效確認日期不可是未來日期');
             if (in_array($row['effect_status'], ['effective', 'partial', 'ineffective'], true)) {
@@ -481,17 +492,20 @@ if ($action === 'doc_save') {
             $vals = [$seq, $row['scope'], $row['dimension'], $row['stakeholder'] ?: null, $row['needs'] ?: null, $row['issue'] ?: null,
                      $row['ro_kind'], $row['ro_text'] ?: null, $row['severity'], $row['frequency'], $confirm ?: null,
                      $row['measure'] ?: null, $row['effect_check'] ?: null, $row['ctx_item_id'],
-                     $row['effect_status'], $row['effect_date'], $row['effect_ruling'] ?: null, $row['effect_evidence'] ?: null, $row['rule_ids']];
+                     $row['effect_status'], $row['effect_date'], $row['effect_ruling'] ?: null, $row['effect_evidence'] ?: null, $row['rule_ids'],
+                     $row['recheck_note'] ?: null, $row['recheck_date']];
             if ($isOld) {
                 $db->prepare("UPDATE rm_item SET seq=?, scope=?, dimension=?, stakeholder=?, needs=?, issue=?, ro_kind=?, ro_text=?,
                                 severity=?, frequency=?, confirm_no=?, measure=?, effect_check=?, ctx_item_id=?,
-                                effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=?, rule_ids=? WHERE item_id=? AND doc_id=?")
+                                effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=?, rule_ids=?,
+                                recheck_note=?, recheck_date=? WHERE item_id=? AND doc_id=?")
                    ->execute(array_merge($vals, [$oid, $id]));
                 $keepIds[] = $oid;
             } else {
                 $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, dimension, stakeholder, needs, issue, ro_kind, ro_text,
                                 severity, frequency, confirm_no, measure, effect_check, ctx_item_id,
-                                effect_status, effect_date, effect_ruling, effect_evidence, rule_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                effect_status, effect_date, effect_ruling, effect_evidence, rule_ids,
+                                recheck_note, recheck_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge([$id], $vals));
                 $keepIds[] = (int)$db->lastInsertId();
             }

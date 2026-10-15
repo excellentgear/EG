@@ -131,6 +131,8 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN effect_date DATE NULL COMMENT '成效確認日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN effect_ruling TEXT NULL COMMENT '成效確認裁示'",
         "ALTER TABLE rm_item ADD COLUMN effect_evidence TEXT NULL COMMENT '成效確認佐證（確認當下的快照，之後資料再變也不改寫歷史）'",
+        "ALTER TABLE rm_item ADD COLUMN recheck_note TEXT NULL COMMENT '重新評估原因（年度中途因重大變化重新評估時填寫，AS9100D 6.1 的再評估紀錄）'",
+        "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
     ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }
 

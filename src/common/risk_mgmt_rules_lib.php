@@ -65,6 +65,12 @@ const RM_RULE_CATS = [
         'measures' => ['新客戶首次出貨後 30 天內完成品質確認與年度報價', '每月檢討新客戶訂單與產能'],
         'metric' => '當年首次出貨客戶數與金額不低於前一年；年度報價回覆率 100%',
         'kpi' => ['接單率'], 'trk_kw' => ['首批', '報價', '新客戶', '年度需求'], 'trk_kind' => 'customer'],
+    'existing_customer' => ['label' => '既有客戶擴單', 'ro' => 'opportunity', 'sev' => 0.4,
+        'kw' => ['既有客戶', '擴大', '接單量', '擴單', '增加訂單', '同類'],
+        'impact' => '既有客戶已通過品質驗證，爭取同類加工訂單可提高產能利用率與營收穩定度。',
+        'measures' => ['每季盤點既有客戶同類料號的加工需求並主動報價', '依既有客戶的年度需求預留產能'],
+        'metric' => '既有客戶年度訂單金額不低於前一年；同類料號報價回覆率 100%',
+        'kpi' => ['受訂目標'], 'trk_kw' => ['既有客戶', '產能預留', '年度需求'], 'trk_kind' => 'customer'],
     'climate' => ['label' => '氣候／天然災害', 'ro' => 'risk', 'sev' => 0.4,
         'kw' => ['颱風', '豪雨', '氣候', '淹水', '極端', '天災', '碳'],
         'impact' => '颱風豪雨造成停工與在途品項延遲，影響交期並可能損壞庫存。',
@@ -263,7 +269,7 @@ function rm_rule_track_txt(array $t, string $today): string
  * 由組織處境的一個議題產生風險／機會草稿。$dataYear＝評分所依據的資料年度（年初用前一年）。
  * @return array 欄位：ro_kind, ro_text, severity, frequency, measure, effect_check, rule_ids, why（給人看的判斷說明）
  */
-function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear): array
+function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $docYear = null): array
 {
     $text = trim(($ctx['stakeholder'] ?? '') . ' ' . ($ctx['needs'] ?? '') . ' ' . ($ctx['issue'] ?? ''));
     [$cat, $cid, $hits] = rm_rule_classify($text, (string)($ctx['dimension'] ?? ''));
@@ -335,8 +341,12 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear): array
 
     // 措施與成效確認方式
     $measure = implode('；', $c['measures']);
-    $kpiName = $kpi ? $kpi['name'] : ($c['kpi'] ? $c['kpi'][0] . '相關 KPI' : '');
-    $metric = str_replace('{kpi}', $kpiName ? ' KPI「' . $kpiName . '」' . ($kpi ? '（目標 ' . ($kpi['gte'] ? '≥' : '≤') . rm_sg_f($kpi['target'], 2) . $kpi['unit'] . '）' : '') : '指標', $c['metric']);
+    // 成效確認方式寫的是「這張表的年度」要達成的目標：KPI 目標值會逐年調整（例：客訴頻率 2025 是 ≤5%、2026 改成 ≤2 件），
+    // 評分用的是前一年資料、但目標一定要寫當年度的，否則措施欄與日後的佐證會出現兩個不同的目標值。
+    $kpiDoc = ($docYear !== null && $docYear !== $dataYear && $c['kpi']) ? rm_rule_kpi($db, $docYear, $c['kpi']) : null;
+    $kpiT = $kpiDoc ?: $kpi;
+    $kpiName = $kpiT ? $kpiT['name'] : ($c['kpi'] ? $c['kpi'][0] . '相關 KPI' : '');
+    $metric = str_replace('{kpi}', $kpiName ? ' KPI「' . $kpiName . '」' . ($kpiT ? '（' . ($docYear ?: $dataYear) . ' 年度目標 ' . ($kpiT['gte'] ? '≥' : '≤') . rm_sg_f($kpiT['target'], 2) . $kpiT['unit'] . '）' : '') : '指標', $c['metric']);
     $ro = ((string)($ctx['dimension'] ?? '') === 'O' || $c['ro'] === 'opportunity') ? 'opportunity' : 'risk';
     return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure,
             'effect_check'=>trim($metric), 'rule_ids'=>implode(',', array_values(array_unique($ids))), 'why'=>$why];
@@ -415,4 +425,28 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
     if (!$lines) $lines[] = '系統找不到對應資料（沒有對應的 KPI、措施追蹤或溝通記錄）';
     $lines[] = '系統建議結果：' . RM_EFFECT_STATUS[$status] . '（' . $reason . '）。資料截至 ' . $today . '，規則：' . implode('、', $ids) . '；最後仍由主管裁示。';
     return ['lines'=>$lines, 'text'=>implode("\n", $lines), 'status'=>$status, 'reason'=>$reason, 'rule_ids'=>implode(',', $ids), 'category'=>$cat];
+}
+
+/* ============================ 風險列的措施追蹤（顯示用） ============================
+ * 風險表本身不另外填負責單位與預計完成日——那些資料已經在溝通管理的「措施追蹤」裡，
+ * 兩邊各填一次遲早對不起來（鐵律4）。這裡即時把相關追蹤項目查出來顯示在因應措施底下。 */
+if (!function_exists('rm_item_tracks')) {
+function rm_item_tracks(PDO $db, int $year, array $row): array
+{
+    $cx = (int)($row['ctx_item_id'] ?? 0);
+    $r = $row;
+    if ($cx > 0) {
+        $q = $db->prepare("SELECT dimension, stakeholder, needs, issue FROM rm_item WHERE item_id=?"); $q->execute([$cx]);
+        if ($c0 = $q->fetch(PDO::FETCH_ASSOC)) foreach (['dimension', 'stakeholder', 'needs', 'issue'] as $k) $r[$k] = $c0[$k];
+    }
+    [$cat] = rm_rule_classify(trim(($r['stakeholder'] ?? '') . ' ' . ($r['needs'] ?? '') . ' ' . ($r['issue'] ?? '')), (string)($r['dimension'] ?? ''));
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $out = [];
+    foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? '')) as $t) {
+        $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
+        $out[] = ['id'=>(int)$t['track_id'], 'owner'=>(string)$t['owner_name'], 'due'=>(string)($t['due_date'] ?? ''),
+                  'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? '')];
+    }
+    return $out;
+}
 }

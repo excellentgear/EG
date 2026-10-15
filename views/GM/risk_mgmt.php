@@ -143,12 +143,21 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.c-lv { grid-column:span 2; }
         #itTbl.cards td.c-cn { grid-column:span 2; }
         #itTbl.cards td.c-measure, #itTbl.cards td.c-eff { grid-column:span 6; }
+        #itTbl.cards td.c-rc { grid-column:span 12; border-top:1px dashed #E0BE86; padding-top:6px; }
+        #itTbl.cards td.c-rc textarea { min-height:38px; }
         #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 2; }
         #itTbl.cards td.c-er { grid-column:span 8; }
         #itTbl.cards td.c-ev { grid-column:span 12; }
         #itTbl.cards td.c-es, #itTbl.cards td.c-ed, #itTbl.cards td.c-er, #itTbl.cards td.c-ev { border-top:1px dashed #E0BE86; padding-top:6px; }
         #itTbl.cards td.c-ev textarea { min-height:84px; }
         .ev-reason { font-size:12px; color:#8A5A2B; margin-top:3px; }
+        .trk { margin-top:5px; font-size:12px; color:#5b3a1e; background:#FBF4E8; border:1px solid #EADFC8; border-radius:4px; padding:4px 6px; }
+        .trk.none { color:#9a8a74; }
+        .trk-row { border-top:1px dotted #E0BE86; padding:3px 0 2px; }
+        .trk-row:first-of-type { border-top:0; }
+        .trk-ac { color:#6b5a44; }
+        .trk-st { padding:0 5px; border-radius:8px; font-size:11px; line-height:16px; display:inline-block; }
+        .trk-row.open .trk-st { background:#F7E0BD; } .trk-row.over .trk-st { background:#DD5138; color:#fff; } .trk-row.done .trk-st { background:#CFE3C8; }
         #itTbl.cards td.op { position:absolute; right:8px; top:8px; }
         #itTbl.cards td.lvc { padding-top:2px; }
         #itTbl.cards textarea { min-height:60px; }
@@ -777,7 +786,7 @@ function colsOf(kind){
         ['needs','需求與期望',230],['issue','議題描述',300],['op','',44]];
     return [['seq','編號',52],['scope','內/外部議題',96],['stakeholder','利害關係者',130],['needs','需求與期望',170],['issue','議題描述',210],
         ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險確認編號',104],
-        ['measure','因應措施',200],['effect','成效確認',170],['op','',44]];
+        ['measure','因應措施',200],['recheck','重新評估',150],['effect','成效確認',170],['op','',44]];
 }
 function scaleOptions(list, val){
     var h = '<option value="">—</option>';
@@ -788,6 +797,18 @@ function scaleOptions(list, val){
         if (!found) h += '<option value="' + val + '" selected>' + val + '（已不在設定內）</option>';
     }
     return h;
+}
+function trackHtml(it){
+    var ts = it.tracks || [];
+    if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
+    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b>';
+    $.each(ts, function(_, t){
+        var cls = t.state === 'over' ? 'over' : (t.state === 'closed' ? 'done' : 'open');
+        var txt = t.state === 'over' ? '逾期' : (t.state === 'closed' ? '已結案' : '執行中');
+        h += '<div class="trk-row ' + cls + '">#' + t.id + '　' + esc(t.owner || '未指定負責人') + '　' + (t.due ? dispDate(t.due) : '未定日期')
+           + '　<span class="trk-st">' + txt + '</span><div class="trk-ac">' + esc(t.action || '') + '</div></div>';
+    });
+    return h + '</div>';
 }
 function effOpts(cur){
     var h = '<option value="">未確認</option>';
@@ -833,7 +854,8 @@ function rowHtml(kind, it, n){
           + fd('發生率(O)', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('風險等級', lvBadge(lv, true), 'c-lv lvc')
           + fd('風險確認編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
-          + fd('因應措施', ta('measure', it.measure), 'c-measure') + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
+          + fd('因應措施', ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
+          + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>', 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
           + fd('裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
@@ -1376,12 +1398,39 @@ function egPrintWindow(title, bodyHtml, docNo, extraCss){
         + '<scr' + 'ipt>window.onload=function(){' + onloadJs + 'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
     w.document.close();
 }
+/* 列印用的成效確認：主表只留「結果、日期、確認結果一行、裁示、佐證來源」。
+   逐月 KPI 數據與每一項措施追蹤的明細留在系統（佐證欄全文），不塞進正式表單，否則一格會變成半頁。 */
+function evidenceBrief(txt){
+    var lines = String(txt || '').split('\n').map(function(x){ return x.trim(); }).filter(function(x){ return x; });
+    if (!lines.length) return {first:'', refs:''};
+    var first = lines[0].replace(/^（參考）/, ''), refs = [];
+    $.each(lines, function(_, l){
+        var m1 = l.match(/措施追蹤\s*#\d+/g), m2 = l.match(/溝通記錄\s*\d{8,11}/g);
+        if (m1) refs = refs.concat(m1);
+        if (m2) refs = refs.concat(m2);
+    });
+    refs = refs.filter(function(v, i){ return refs.indexOf(v) === i; });
+    return {first:first, refs:refs.join('、')};
+}
 function effectPrint(it){
     var h = esc(it.effect_check || '');
     if (it.effect_status && it.effect_status !== 'unconfirmed'){
-        h += '<br><b>【成效確認：' + esc(META.effect_status[it.effect_status] || '') + '】' + esc(dispDate(it.effect_date)) + '</b>'
-           + '<br>裁示：' + esc(it.effect_ruling || '') + '<br>佐證：' + esc(it.effect_evidence || '').replace(/\n/g, '<br>');
+        var e = evidenceBrief(it.effect_evidence);
+        h += '<br><b>【成效確認：' + esc(META.effect_status[it.effect_status] || '') + '】' + esc(dispDate(it.effect_date)) + '</b>';
+        if (e.first) h += '<br>確認結果：' + esc(e.first);
+        h += '<br>裁示：' + esc(it.effect_ruling || '');
+        h += '<br>佐證：' + esc(e.refs ? e.refs + '（詳細紀錄見系統）' : '見系統成效確認紀錄');
     }
+    return h;
+}
+function measurePrint(it){
+    var h = esc(it.measure || '').replace(/\n/g, '<br>'), ts = it.tracks || [];
+    if (ts.length){
+        var o = $.map(ts, function(t){ return '#' + t.id + ' ' + (t.owner || '未指定') + '／' + (t.due ? dispDate(t.due) : '未定')
+            + (t.state === 'closed' ? '（已結案）' : (t.state === 'over' ? '（逾期）' : '（執行中）')); });
+        h += '<br><span style="color:#444;">措施追蹤：' + esc(o.join('；')) + '</span>';
+    }
+    if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
 }
 function scaleLabel(list, v){
@@ -1402,7 +1451,7 @@ function printDoc(docId){
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
                     + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '</td><td>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
                     + '<td>' + esc(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
-                    + '<td class="l">' + esc(it.measure) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
+                    + '<td class="l">' + measurePrint(it) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'
