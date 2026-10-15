@@ -35,13 +35,22 @@
    標題列與頁尾（含「放進文件」）永遠留在畫面上。
    先前寫 flex:0 0 auto，畫布一放大（例如改成 900×700）頁尾就被擠出視窗外，
    使用者會以為「畫完之後沒有按鈕可以插入到文件上」。 */
-#egfWin .egf-bd{padding:10px 14px;overflow:auto;background:#efe9e0;flex:1 1 auto;min-height:0;}
+#egfWin .egf-bd{padding:9px 14px 10px;overflow:auto;background:#efe9e0;flex:1 1 auto;min-height:0;}
 #egfWin .egf-ft{padding:9px 14px;border-top:1px solid #e4d3ba;background:#faf6f0;border-radius:0 0 6px 6px;
   display:flex;align-items:center;gap:8px;}
 #egfWin .egf-ft .egf-hint{color:#8A5A2B;font-size:12px;}
 #egfWin .egf-ft .egf-sp{margin-left:auto;}
-.egf-bar{background:#fff;border:1px solid #e4d3ba;border-radius:4px;padding:5px 6px;margin-bottom:9px;
+/* 工具列是**標題列的下一塊、不在捲動區裡面**（使用者 2026-10-15：上排內容要固定不可捲動）。
+   放在 .egf-bd 裡面的話，畫布一捲動工具列就跟著跑掉，正在畫圖時要往回捲才按得到。 */
+.egf-bar{background:#fff;border:1px solid #e4d3ba;border-radius:4px;padding:5px 6px;
+  margin:10px 14px 0;flex:0 0 auto;
   display:flex;flex-wrap:wrap;align-items:center;gap:3px;}
+/* 左下角的縮放把手：拖曳改變整個跳窗大小（雙擊＝還原預設） */
+.egf-grip{width:20px;height:20px;margin-right:2px;cursor:nesw-resize;color:#8A5A2B;flex:0 0 auto;
+  display:inline-flex;align-items:center;justify-content:center;border-radius:3px;
+  -webkit-user-select:none;user-select:none;}
+.egf-grip:hover{background:#f2e6d4;color:#4E2C0B;}
+.egf-grip i{font-size:13px;transform:rotate(90deg);}
 .egf-btn{border:1px solid #e4d3ba;background:#faf6f0;color:#6B471A;font-size:12px;line-height:24px;height:26px;
   padding:0 8px;border-radius:3px;}
 .egf-btn:hover{background:#f2e6d4;}
@@ -94,12 +103,12 @@
     <div class="egf-hd">
       <b><i class="fa fa-sitemap"></i> 流程圖</b>
       <span class="egf-hint" style="color:#8A5A2B;font-size:12px">
-        雙擊圖形可直接打字；選起來可拖曳與縮放；箭頭選起來後兩端的圓點可以各自拉
+        雙擊圖形可直接打字；線選起來只會出現兩端的圓點（可各自拉），要改中間的轉折請在線上雙擊
       </span>
       <span class="egf-x" id="egfClose">&times;</span>
     </div>
-    <div class="egf-bd">
-      <div class="egf-bar">
+    <!-- 工具列固定在標題列下方，不隨畫布捲動 -->
+    <div class="egf-bar">
         <span class="egf-lab" style="margin-left:0">框線</span><span id="egfSwLine"></span>
         <span class="egf-lab">填色</span><span id="egfSwFill"></span>
         <span class="egf-lab">字級</span>
@@ -138,7 +147,8 @@
           <option value="rarrow">反向箭頭 ←</option>
         </select>
         <button type="button" class="egf-btn" id="egfConnFlip" title="把選取那條線的頭尾對調（箭頭跟著反向）"><i class="fa fa-exchange"></i> 反向</button>
-        <button type="button" class="egf-btn" id="egfConnNode" title="在選取那條線的最長一段中間加一個折點（也可以直接選起來，點線段中間的空心「＋」圓點新增；折點可以任意拖曳）"><i class="fa fa-plus"></i> 折點</button>
+        <button type="button" class="egf-btn" id="egfConnEdit" title="編輯節點：打開之後線上每個轉折點都會出現可拖的橘色圓點，線段中間也會有空心「＋」可以加折點；在節點上再點一下（或按住 Alt 點）＝取消那個節點（併回相鄰的節點）。直接在線上雙擊也可以打開／關掉。&#10;平常是關著的——不關的話拖線很容易誤拖到中間的節點，線就被拉成彎的。"><i class="fa fa-crosshairs"></i> 節點</button>
+        <button type="button" class="egf-btn" id="egfConnNode" title="在選取那條線的最長一段中間加一個折點（也可以按「節點」打開節點編輯，點線段中間的空心「＋」圓點新增；折點可以任意拖曳）"><i class="fa fa-plus"></i> 折點</button>
         <button type="button" class="egf-btn" id="egfConnOrtho" title="把選取那條線改成直角折線（流程圖最常用的轉折方式，依兩端的相對位置自動決定先走橫的還是先走直的）"><i class="fa fa-level-up"></i> 直角</button>
         <button type="button" class="egf-btn" id="egfConnStraight" title="把選取那條線的折點全部移除，變回頭尾一條直線"><i class="fa fa-minus"></i> 取直</button>
         <button type="button" class="egf-btn" id="egfConnCurve" title="圓滑／取直曲線：通過每一個折點畫成平滑曲線（至少要有一個折點，先按「折點」）"><i class="fa fa-adjust"></i> 圓滑</button>
@@ -155,7 +165,8 @@
         <button type="button" class="egf-btn" id="egfZoomIn" title="放大顯示（不會改變實際大小）">＋</button>
         <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖（圖比視窗大時，一打開就會自動縮成這樣；也可以按住 Ctrl 滾滑鼠滾輪縮放）">符合視窗</button>
         <button type="button" class="egf-btn" id="egfZoom1" title="回到 100%">100%</button>
-      </div>
+    </div>
+    <div class="egf-bd">
       <div class="egf-work">
         <div class="egf-pal">
           <div class="egf-pal-t">圖形（拖到畫布上）</div>
@@ -189,7 +200,9 @@
             拖不習慣也可以直接點一下圖形，會放到畫布上。<br>
             圖形<b>雙擊</b>就能打字。<br>
             畫線：<b>點起點→點終點</b>，中間多點幾下就是折線，雙擊或 Enter 結束。<br>
-            線<b>選起來</b>之後，藍點＝拖曳折點、空心＋＝加折點。<br>
+            線<b>選起來</b>只會出現<b>兩端</b>的橘色圓點（拖它接到圖形上）。<br>
+            要改中間的轉折：在線上<b>雙擊</b>（或按工具列「節點」）→ 每個折點都可拖、
+            線段中間的空心<b>＋</b>＝加折點、<b>在折點上再點一下＝取消那個折點</b>。<br>
             鍵盤：<b>V</b> 選取、<b>A</b> 箭頭、<b>L</b> 直線、<b>方向鍵</b>微調位置。
           </div>
         </div>
@@ -199,6 +212,8 @@
       </div>
     </div>
     <div class="egf-ft">
+      <span class="egf-grip" id="egfGrip"
+            title="拖曳可以改變這個視窗的大小（畫布放大時很有用）；雙擊＝還原成預設大小"><i class="fa fa-expand"></i></span>
       <span class="egf-asbar" id="egfAsBar" style="display:none">
         <i class="fa fa-exclamation-triangle"></i>
         <span id="egfAsBarTxt"></span>
@@ -852,6 +867,9 @@
   function connNodeAction(i) {
     return function (eventData, transform, x, y) {
       var ln = transform.target;
+      /* 剛剛才在這個控制點上「取消節點」：接下來那幾下 mousemove 要忽略，
+         不然刪完之後索引整個位移，會把別的節點拖到滑鼠位置去。 */
+      if (ln.__egNodeGuard && Date.now() - ln.__egNodeGuard < 600) return false;
       var ps = connPts(ln);
       if (!ps[i]) return false;
       var isEnd = (i === 0 || i === ps.length - 1);
@@ -887,29 +905,50 @@
       snapshot();
     };
   }
+  /** 取消一個折點：把它併回相鄰的節點（端點不可取消，至少要留兩點） */
+  function connDelNode(ln, i) {
+    var ps = connPts(ln);
+    if (ps.length <= 2) return false;
+    if (i <= 0 || i >= ps.length - 1) return false;    // 兩端是接圖形用的，不可以取消
+    ps.splice(i, 1);
+    setConnPts(ln, ps);
+    syncConn(ln);
+    return true;
+  }
+  /** 兩個節點靠得太近就併成一個（畫線時連點兩下、或把節點拖到重疊，會留下一堆看不出來的點） */
+  function connDedupe(ln, tol) {
+    var ps = connPts(ln);
+    if (ps.length < 3) return false;
+    var out = [ps[0]], t = tol || 3;
+    for (var i = 1; i < ps.length; i++) {
+      var a = out[out.length - 1];
+      if (Math.abs(ps[i].x - a.x) < t && Math.abs(ps[i].y - a.y) < t && i !== ps.length - 1) continue;
+      out.push(ps[i]);
+    }
+    // 尾點跟前一點重疊時留尾點（它可能綁著圖形錨點）
+    while (out.length > 2 && Math.abs(out[out.length - 1].x - out[out.length - 2].x) < t
+                          && Math.abs(out[out.length - 1].y - out[out.length - 2].y) < t) {
+      out.splice(out.length - 2, 1);
+    }
+    if (out.length !== ps.length && out.length >= 2) { setConnPts(ln, out); syncConn(ln); return true; }
+    return false;
+  }
+
+  /* 目前處於「節點編輯」的那條線（egId）。預設是 null＝選起來只看得到兩端的圓點。
+     使用者 2026-10-15：「箭頭變出一堆點導致完全無法拉到端點」「預設的節點影響使用
+     （拖移時會變成彎折）」——所以中間的折點與「＋」一律要雙擊線（或按工具列「節點」）
+     才出現，平常只留兩端那兩顆，拖線才不會動不動就被拉成彎的。 */
+  var nodeEditId = null;
+
   function buildConnControls(ln) {
     var ctrls = {}, n = (ln.points || []).length;
-    for (var i = 0; i < n; i++) {
-      (function (i) {
-        var bound = (i === 0 && ln.egPA) || (i === n - 1 && ln.egPB);
-        ctrls['p' + i] = new fabric.Control({
-          positionHandler: connNodePos(i),
-          actionHandler: connNodeAction(i),
-          actionName: 'egConnNode',
-          cursorStyle: 'crosshair',
-          render: function (ctx, left, top) {
-            ctx.save();
-            // 扣在圖形錨點上的那一端畫成深色實心，看得出來「這端是綁住的」
-            ctx.fillStyle = bound ? '#8A5A2B' : '#F0A24B';
-            ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
-            ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-            ctx.restore();
-          }
-        });
-      })(i);
-    }
-    // 節點太多就不放「＋」（控制點加倍會拖慢渲染，而流程圖的線本來就不會有幾十個折點）
-    if (n <= 20) {
+    var full = (nodeEditId !== null && nodeEditId === ln.egId);
+
+    /* 中間那一段的「＋」要**先**定義。
+       fabric 的 _findTargetCorner 是從 controls 的最後一個鍵往前找，
+       先定義＝後被命中；端點放最後定義，重疊時端點才搶得贏
+       （這正是「一堆點疊在一起、就是拉不到端點」的直接原因）。 */
+    if (full && n <= 20) {
       for (var k = 0; k < n - 1; k++) {
         (function (k) {
           ctrls['m' + k] = new fabric.Control({
@@ -917,6 +956,9 @@
             mouseDownHandler: connInsertAction(k),
             actionHandler: function () { return false; },
             cursorStyle: 'copy',
+            /* 線段在畫面上太短時整顆不要出現——不只是不畫，連命中判定都要關掉
+               （getVisibility 兩邊都會用到），否則短線上的「＋」會蓋住旁邊的端點。 */
+            getVisibility: function (o) { return segScreenLen(o, k) >= 30; },
             render: function (ctx, left, top) {
               ctx.save();
               ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#F0A24B'; ctx.lineWidth = 1.2;
@@ -932,7 +974,74 @@
         })(k);
       }
     }
+
+    // 中間的折點（只有節點編輯模式才有）
+    for (var i = 1; i < n - 1; i++) {
+      (function (i) {
+        ctrls['p' + i] = new fabric.Control({
+          positionHandler: connNodePos(i),
+          actionHandler: connNodeAction(i),
+          mouseDownHandler: connNodeDelHandler(i),
+          actionName: 'egConnNode',
+          cursorStyle: 'crosshair',
+          getVisibility: function () { return full; },
+          render: function (ctx, left, top) {
+            ctx.save();
+            ctx.fillStyle = '#F0A24B'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.arc(left, top, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.restore();
+          }
+        });
+      })(i);
+    }
+
+    // 兩端：永遠都在，而且**最後定義**＝重疊時優先命中
+    [0, n - 1].forEach(function (i) {
+      if (i < 0 || n < 2) return;
+      var bound = (i === 0 && ln.egPA) || (i === n - 1 && ln.egPB);
+      ctrls['p' + i] = new fabric.Control({
+        positionHandler: connNodePos(i),
+        actionHandler: connNodeAction(i),
+        actionName: 'egConnNode',
+        cursorStyle: 'crosshair',
+        render: function (ctx, left, top) {
+          ctx.save();
+          // 扣在圖形錨點上的那一端畫成深色實心，看得出來「這端是綁住的」
+          ctx.fillStyle = bound ? '#8A5A2B' : '#F0A24B';
+          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(left, top, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          ctx.restore();
+        }
+      });
+    });
     return ctrls;
+  }
+
+  /** 第 k 段在**畫面上**有多長（含顯示縮放），用來決定短線段要不要長出「＋」 */
+  function segScreenLen(ln, k) {
+    var ps = connPts(ln), a = ps[k], b = ps[k + 1];
+    if (!a || !b) return 0;
+    var z = (ln.canvas && ln.canvas.viewportTransform) ? ln.canvas.viewportTransform[0] : 1;
+    return Math.hypot(b.x - a.x, b.y - a.y) * z;
+  }
+
+  /** 折點上「再點一下」或「Alt＋點」＝取消那個折點（併回相鄰節點） */
+  function connNodeDelHandler(i) {
+    return function (eventData, transform) {
+      var ln = transform.target, now = Date.now();
+      var alt = eventData && (eventData.altKey || eventData.ctrlKey);
+      var again = ln.__egNodeHit && ln.__egNodeHit.i === i && (now - ln.__egNodeHit.t) < 600;
+      ln.__egNodeHit = { i: i, t: now };
+      if (!alt && !again) return;              // 第一下＝準備拖曳，不刪
+      if (!connDelNode(ln, i)) return;
+      ln.__egNodeGuard = now;                  // 擋掉這一輪的拖曳（索引已經變了）
+      ln.__egNodeHit = null;
+      ln.controls = buildConnControls(ln);
+      ln.setCoords();
+      cv.requestRenderAll();
+      snapshot();
+      stat('已取消這個折點（併回相鄰的節點）');
+    };
   }
   /** 收掉所有連接線的節點控制點（名稱沿用 clearHandles，呼叫端不必改） */
   function clearHandles() {
@@ -953,7 +1062,22 @@
     ln.hasControls = true;
     ln.hasBorders = false;
     ln.setCoords();
+    syncNodeBtn();
     cv.requestRenderAll();
+  }
+  /** 工具列「節點」那顆鈕要跟目前狀態一致（唯一一處，不要各呼叫端各自 toggle） */
+  function syncNodeBtn() {
+    var b = el('egfConnEdit');
+    if (b) b.classList.toggle('on', nodeEditId !== null);
+  }
+  /** 切換「節點編輯」：on 不給就是反向切換。回傳切換後的狀態 */
+  function setNodeEdit(ln, on) {
+    if (!ln || ln.egRole !== 'conn') return false;
+    var want = (typeof on === 'boolean') ? on : (nodeEditId !== ln.egId);
+    nodeEditId = want ? ln.egId : null;
+    if (want) connDedupe(ln);          // 進去之前先把重疊的點併掉，免得看到一堆疊在一起的圓點
+    showHandles(ln);
+    return want;
   }
 
   /* ── 插入 AS 文件編號／名稱（2026-10-15 使用者交辦：流程圖、烏龜圖裡面也要能用）──
@@ -1389,17 +1513,30 @@
     });
     cv.on('selection:created', onSel);
     cv.on('selection:updated', onSel);
-    cv.on('selection:cleared', function () { clearHandles(); });
+    cv.on('selection:cleared', function () { nodeEditId = null; clearHandles(); syncNodeBtn(); });
 
     function onSel() {
       clearHandles();
       var objs = cv.getActiveObjects();
+      /* 換選別的東西就退出節點編輯——否則下一條線一選起來又是滿滿的圓點，
+         又回到「拖線變成彎折」那個狀況。 */
+      if (!(objs.length === 1 && objs[0].egRole === 'conn' && objs[0].egId === nodeEditId)) nodeEditId = null;
       if (objs.length === 1 && objs[0].egRole === 'conn') showHandles(objs[0]);
+      syncNodeBtn();
     }
 
     // 雙擊圖形＝直接打字（標籤平常 evented=false，所以要自己算命中）
     cv.on('mouse:dblclick', function (e) {
       if (pend) { finishPend(true); return; }   // 畫線中：雙擊＝結束這條線
+      /* 雙擊線＝進入／離開節點編輯（使用者 2026-10-15 指定的做法）。
+         平常只有兩端的圓點，拖線就是整條搬動；要改中間的轉折才雙擊打開。 */
+      var tg = e.target;
+      if (tg && tg.egRole === 'conn') {
+        var on = setNodeEdit(tg);
+        stat(on ? '節點編輯：每個折點都可以拖，線段中間的空心＋＝加折點，在折點上再點一下（或 Alt＋點）＝取消那個折點。再雙擊一次關閉'
+                : '已關閉節點編輯（線上只剩兩端的圓點，拖線不會再被拉成彎的）');
+        return;
+      }
       var p = cv.getPointer(e.e);
       var hit = null;
       cv.getObjects().forEach(function (o) {
@@ -1486,11 +1623,17 @@
       pendPts = []; drag = null;
       clearPendPrev();
       if (pts.length >= 2) {
-        // 雙擊結束時最後兩點常常重疊（同一個位置按了兩下），重疊的尾點要丟掉
-        while (pts.length > 2) {
-          var a = pts[pts.length - 1], b = pts[pts.length - 2];
-          if (Math.abs(a.x - b.x) < 4 && Math.abs(a.y - b.y) < 4) pts.pop(); else break;
+        /* 雙擊結束時最後兩點常常重疊（同一個位置按了兩下）；中間也可能因為手抖
+           連點兩下而留下看不出來的重複點——那正是「箭頭變出一堆點」的來源，
+           所以**整條**都要把靠太近的點併掉，不是只處理尾巴。 */
+        var clean = [pts[0]];
+        for (var pi = 1; pi < pts.length; pi++) {
+          var pa = clean[clean.length - 1];
+          if (Math.abs(pts[pi].x - pa.x) < 6 && Math.abs(pts[pi].y - pa.y) < 6) continue;
+          clean.push(pts[pi]);
         }
+        if (clean.length < 2) { if (!keepTool) { w.__egfSetPending(null); return; } stat(pendHint(pend)); return; }
+        pts = clean;
         addConnPts(pend || 'arrow', pts);
         snapshot();
       }
@@ -1741,7 +1884,83 @@
   }
 
   /* ── 工具列綁定 ───────────────────────────────────────────────────── */
+  /* ── 左下角的縮放把手（使用者 2026-10-15：跳窗左下角要能拖移放大縮小）──
+     跳窗平常是 transform 置中的；一開始拖就先把它換成固定的 left/top，
+     之後以「左下角」為基準調整＝往左拖變寬、往下拖變高，右上角不動。
+     大小記在 localStorage，下次打開沿用（畫布開大的人不必每次重拉）。 */
+  var EGF_WIN_LS = 'egf_win_size';
+  var EGF_MIN_W = 720, EGF_MIN_H = 420;
+
+  function winApplySize(wpx, hpx) {
+    var win = el('egfWin');
+    if (!win) return;
+    var maxW = Math.max(EGF_MIN_W, window.innerWidth - 40);
+    var maxH = Math.max(EGF_MIN_H, window.innerHeight - 24);
+    wpx = Math.max(EGF_MIN_W, Math.min(maxW, Math.round(wpx)));
+    hpx = Math.max(EGF_MIN_H, Math.min(maxH, Math.round(hpx)));
+    win.style.width = wpx + 'px';
+    win.style.height = hpx + 'px';
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+    return { w: wpx, h: hpx };
+  }
+  function winRestoreSize() {
+    var win = el('egfWin');
+    if (!win) return;
+    /* 每次打開都先回到 CSS 的置中規則再套大小——上一次拖曳留下的 left/top 是
+       當時那個瀏覽器視窗的座標，換個螢幕或改過視窗大小就會開在畫面外面。 */
+    win.style.left = ''; win.style.top = ''; win.style.transform = '';
+    try {
+      var s = JSON.parse(localStorage.getItem(EGF_WIN_LS) || 'null');
+      if (s && s.w && s.h) winApplySize(s.w, s.h);
+      else { win.style.width = ''; win.style.height = ''; win.style.maxWidth = ''; win.style.maxHeight = ''; }
+    } catch (e) {}
+  }
+  function winResetSize() {
+    var win = el('egfWin');
+    if (!win) return;
+    win.style.width = ''; win.style.height = '';
+    win.style.maxWidth = ''; win.style.maxHeight = '';
+    win.style.left = ''; win.style.top = ''; win.style.transform = '';
+    try { localStorage.removeItem(EGF_WIN_LS); } catch (e) {}
+    stat('視窗大小已還原成預設');
+  }
+  function setupGrip() {
+    var grip = el('egfGrip'), win = el('egfWin');
+    if (!grip || !win || grip.__egBound) return;
+    grip.__egBound = 1;
+    var st = null;
+    grip.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var r = win.getBoundingClientRect();
+      // 置中的 transform 會讓後續計算對不起來，一律先釘成絕對位置
+      win.style.left = r.left + 'px';
+      win.style.top = r.top + 'px';
+      win.style.transform = 'none';
+      st = { x: e.clientX, y: e.clientY, w: r.width, h: r.height, left: r.left };
+      d.body.style.cursor = 'nesw-resize';
+    });
+    d.addEventListener('mousemove', function (e) {
+      if (!st) return;
+      var dx = e.clientX - st.x, dy = e.clientY - st.y;
+      var sz = winApplySize(st.w - dx, st.h + dy);
+      // 右緣要固定不動：寬度被夾在上下限時，left 也要跟著夾住才不會整個視窗飄走
+      win.style.left = Math.round(st.left + st.w - sz.w) + 'px';
+      if (cv) cv.requestRenderAll();
+    });
+    d.addEventListener('mouseup', function () {
+      if (!st) return;
+      st = null;
+      d.body.style.cursor = '';
+      var r = win.getBoundingClientRect();
+      try { localStorage.setItem(EGF_WIN_LS, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
+      stat('視窗大小已調整為 ' + Math.round(r.width) + '×' + Math.round(r.height) + '（下次打開會沿用；雙擊左下角把手可還原）');
+    });
+    grip.addEventListener('dblclick', function (e) { e.preventDefault(); winResetSize(); });
+  }
+
   function bind() {
+    setupGrip();
     var win = el('egfWin');
     win.addEventListener('click', function (e) {
       // .egf-x（右上角的 ×）是 <span> 不是 button，選擇器漏掉它就會「關不掉，只能按 ESC」
@@ -1789,14 +2008,25 @@
           snapshot();
           break;
         }
+        case 'egfConnEdit': {
+          var ce = cv && cv.getActiveObject();
+          if (!ce || ce.egRole !== 'conn') { stat('請先點選一條連線，再按「節點」（也可以直接在線上雙擊）'); break; }
+          var cOn = setNodeEdit(ce);
+          cv.requestRenderAll();
+          stat(cOn ? '節點編輯已開啟：折點可拖、空心＋＝加折點、在折點上再點一下（或 Alt＋點）＝取消那個折點'
+                   : '節點編輯已關閉（線上只剩兩端的圓點）');
+          break;
+        }
         case 'egfConnNode':
         case 'egfConnOrtho':
         case 'egfConnStraight':
         case 'egfConnCurve': {
           var cn = cv && cv.getActiveObject();
           if (!cn || cn.egRole !== 'conn') { stat('請先點選一條連線（線選起來之後會出現可以拖的節點）'); break; }
+          // 這四顆都是在改轉折，按了就順手把節點顯示出來，不然使用者看不到剛加的折點
+          if (t.id !== 'egfConnStraight') nodeEditId = cn.egId;
           if (t.id === 'egfConnNode') {
-            connAddNode(cn); stat('已加一個折點，拖那顆橘色圓點就能調整轉折位置');
+            connAddNode(cn); stat('已加一個折點，拖那顆橘色圓點就能調整轉折位置（在折點上再點一下＝取消它）');
           } else if (t.id === 'egfConnOrtho') {
             if (connOrtho(cn)) stat('已改成直角折線，每個轉角都可以再拖');
             else stat('這條線本來就是水平或垂直的，不需要轉折');
@@ -1971,6 +2201,7 @@
         e.preventDefault();
         // 正在畫線＝先丟掉這一條（還沒畫完的點），再按一次才是回到選取工具
         if (w.__egfCancelPend && w.__egfCancelPend()) { stat('已取消這一條線（再按 Esc 回到選取工具）'); return; }
+        nodeEditId = null; syncNodeBtn();
         if (cv) { cv.discardActiveObject(); clearHandles(); clearPortDots(); clearGuides(); cv.requestRenderAll(); }
         stat('已取消選取（要關閉請按右上角的 ×）');
       }
@@ -2026,8 +2257,12 @@
     window.__egfAsCur = null;
     el('egfMask').classList.add('open');
     if (!cv) { build(); bind(); }
+    setupGrip();                 // 呼叫端可能在 bind() 之前就換過 DOM，保險再綁一次（有防重複）
+    winRestoreSize();            // 沿用上次拖好的視窗大小
     paintSwatches();
+    nodeEditId = null;
     clearHandles();
+    syncNodeBtn();
     hist = []; histAt = -1;
     stat('　');
 
