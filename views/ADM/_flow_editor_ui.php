@@ -108,7 +108,8 @@
         <button type="button" class="egf-btn" id="egfRedo" title="重做 (Ctrl+Y)"><i class="fa fa-repeat"></i></button>
         <button type="button" class="egf-btn egf-danger" id="egfDel" title="刪除選取 (Delete)"><i class="fa fa-trash-o"></i></button>
         <span class="egf-sep"></span>
-        <button type="button" class="egf-btn on" id="egfSnap" title="靠齊格線（畫得比較整齊）"><i class="fa fa-th"></i> 格線</button>
+        <button type="button" class="egf-btn" id="egfSnap" title="靠齊格線：開啟後移動與畫線都會對到 10px 的格子上（預設關閉，想精準擺位時就讓它關著）"><i class="fa fa-th"></i> 格線</button>
+        <button type="button" class="egf-btn on" id="egfGuide" title="對齊輔助線：拖曳時跟其他圖形的邊或中心接近就顯示橘色虛線並自動對齊"><i class="fa fa-magnet"></i> 對齊</button>
         <span class="egf-lab">畫布</span>
         <input type="number" class="egf-num" id="egfCW" value="760" min="200" max="2000" step="20" data-eg-skip>
         <span class="egf-lab" style="margin-left:0">×</span>
@@ -214,7 +215,8 @@
   var LINE_COLORS = ['#333333', '#8A5A2B', '#B06F27', '#D6851F', '#A34E2A', '#DD5138'];
   var FILL_COLORS = ['#ffffff', '#faf6f0', '#F7E0BD', '#EBD3A8', '#E8C07A', '#F8DCD5'];
 
-  var cv = null, nextId = 1, snap = true, hist = [], histAt = -1, quiet = false;
+  // snap 預設 false：使用者要的是「放到想放的位置」，靠齊格線會讓圖形一直跳到 10px 的倍數
+  var cv = null, nextId = 1, snap = false, hist = [], histAt = -1, quiet = false;
   var lineColor = '#333333', fillColor = '#ffffff', fontSize = 12;
   var onSaveCb = null;
   var GRID = 10;
@@ -469,6 +471,7 @@
      吸過去並畫一條線。輔助線是暫時的畫面元素，**存檔與復原都不可以收進去**
      （跟連接點提示一樣，見 snapshot()／doSave()）。 */
   var GUIDE_SNAP = 6;
+  var guideOn = true;            // 對齊輔助線總開關（工具列「對齊」鈕）
   var guideObjs = [];
 
   function clearGuides() {
@@ -487,6 +490,7 @@
   /** 拖曳中的對齊：回傳有沒有吸附到東西 */
   function applyGuides(o) {
     clearGuides();
+    if (!guideOn) return false;
     if (!o || o.egRole === 'handle') return false;
     var r = o.getBoundingRect(true, true);
     var mine = {
@@ -1056,11 +1060,30 @@
     });
 
     // 拖曳畫線：按住「箭頭／直線」之後在畫布上拖
-    var pend = null, drag = null;
+    var pend = null, drag = null, pendPrev = null;
+    function clearPendPrev() {
+      if (pendPrev) { cv.remove(pendPrev); pendPrev = null; cv.requestRenderAll(); }
+    }
     cv.on('mouse:down', function (e) {
       if (!pend) return;
       var p = cv.getPointer(e.e);
       drag = { x: p.x, y: p.y };
+    });
+    /* 拖的過程中要看得到線正在長出來——原本按下去到放開之間畫面完全沒有變化，
+       使用者會以為「點了沒反應、畫不出直線」（2026-10-15 回報）。 */
+    cv.on('mouse:move', function (e) {
+      if (!pend || !drag || !e || !e.e) return;
+      var p = cv.getPointer(e.e);
+      if (!pendPrev) {
+        pendPrev = new fabric.Line([drag.x, drag.y, p.x, p.y], {
+          stroke: lineColor, strokeWidth: 1.5, strokeDashArray: [6, 4],
+          selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+        cv.add(pendPrev);
+      }
+      pendPrev.set({ x2: p.x, y2: p.y });
+      pendPrev.setCoords();
+      pendPrev.bringToFront();
+      cv.requestRenderAll();
     });
     cv.on('mouse:up', function (e) {
       if (!pend) return;
@@ -1068,6 +1091,7 @@
       var x1 = drag ? drag.x : p.x, y1 = drag ? drag.y : p.y;
       // 只是點一下（沒有拖）就給一條預設長度的線，不然使用者會以為按了沒反應
       if (Math.abs(p.x - x1) < 6 && Math.abs(p.y - y1) < 6) { p.x = x1; p.y = y1 + 70; }
+      clearPendPrev();
       addConn(pend, x1, y1, p.x, p.y);
       pend = null; drag = null;
       cv.defaultCursor = 'default';
@@ -1077,8 +1101,10 @@
     w.__egfSetPending = function (k) {
       pend = k;
       cv.defaultCursor = k ? 'crosshair' : 'default';
-      stat(k === 'arrow' ? '在畫布上由起點拖到終點畫出箭頭（點一下也可以，會給一條預設長度的線）'
-                         : '在畫布上由起點拖到終點畫出直線');
+      if (!k) clearPendPrev();
+      stat(k === 'arrow' ? '畫箭頭：在畫布上由起點拖到終點（點一下也可以，會給一條預設長度的線）'
+         : k === 'line'  ? '畫直線：在畫布上由起點拖到終點（點一下也可以）'
+                         : '　');
     };
   }
 
@@ -1293,7 +1319,13 @@
         case 'egfSnap':
           snap = !snap;
           t.classList.toggle('on', snap);
-          stat(snap ? '已開啟靠齊格線（每 10px）' : '已關閉靠齊格線');
+          stat(snap ? '已開啟靠齊格線（每 10px）' : '已關閉靠齊格線，可以放到任何位置');
+          break;
+        case 'egfGuide':
+          guideOn = !guideOn;
+          t.classList.toggle('on', guideOn);
+          if (!guideOn) clearGuides();
+          stat(guideOn ? '已開啟對齊輔助線' : '已關閉對齊輔助線，拖曳不會再被吸過去');
           break;
         case 'egfResize': {
           var ww = Math.max(200, Math.min(2000, parseInt(el('egfCW').value, 10) || 760));
