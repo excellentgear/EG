@@ -229,6 +229,13 @@ function cmNotifyResult(PDO $db, array $r, int $toUid, string $decision, string 
 /* ================================================================ 動作 */
 
 /* ---- meta：頁面載入抓一次 ---- */
+/* 空白表單列印用：只回表頭（公司全名、表單名稱、AS 編號），不碰任何單據資料 */
+if ($action === 'print_meta') {
+    $w = $_GET['which'] ?? '';
+    if (!in_array($w, ['record', 'track', 'ctrl'], true)) jerr('表單種類不正確');
+    jout(['print' => cm_print_meta($db, $w, (string)$db->query("SELECT CURDATE()")->fetchColumn())]);
+}
+
 if ($action === 'meta') {
     $set = cm_settings($db);
     jout([

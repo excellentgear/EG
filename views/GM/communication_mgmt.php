@@ -271,6 +271,7 @@ $roleLabel = cm_role_label($perms);
                     <input type="checkbox" id="recMine"> 只看我建立的</label>
                 <input type="text" id="recKw" placeholder="搜尋單號/對象/問題/回覆" style="width:210px;">
                 <button id="btnRecSearch"><i class="fa fa-search"></i> 查詢</button>
+                <button class="btnBlank" data-blank="record"><i class="fa fa-file-o"></i> 列印空白表單</button>
                 <button id="btnRecCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             </div>
             <div class="cm-pager" id="recPager"></div>
@@ -303,6 +304,7 @@ $roleLabel = cm_role_label($perms);
                 <input type="text" id="trackKw" placeholder="搜尋利害關係者/內容/措施/負責人/類別" style="width:250px;">
                 <button id="btnTrackSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnTrackPrint"><i class="fa fa-print"></i> 列印追蹤表</button>
+                <button class="btnBlank" data-blank="track"><i class="fa fa-file-o"></i> 列印空白表單</button>
                 <button id="btnTrackCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             </div>
             <div class="cm-pager" id="trackPager"></div>
@@ -326,6 +328,7 @@ $roleLabel = cm_role_label($perms);
                 <input type="text" id="ctrlKw" placeholder="搜尋填表人/利害關係人/內容/管道/頻率" style="width:250px;">
                 <button id="btnCtrlSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnCtrlPrint"><i class="fa fa-print"></i> 列印管制表</button>
+                <button class="btnBlank" data-blank="ctrl"><i class="fa fa-file-o"></i> 列印空白表單</button>
                 <button id="btnCtrlCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
                 <span class="hint" style="flex:1 1 260px;">管制表只寫<b>常態性溝通機制</b>（例：每週與外包廠的產銷會議），單一突發事件請記到「溝通記錄表」。</span>
             </div>
@@ -2853,6 +2856,58 @@ $('#btnCtrlPrint').on('click', function(){
                 });
             })(p);
         }
+    });
+});
+
+
+/* ---------- 空白表單列印（三份表單都可印出空白紙本，現場手寫用；版面與正式列印共用同一組樣式與表頭） ---------- */
+function blankRows(n, cols, h){
+    var o = '';
+    for (var i = 1; i <= n; i++){
+        o += '<tr>';
+        for (var c = 0; c < cols.length; c++) o += cols[c] === '#' ? '<td style="height:' + h + 'px;">' + i + '</td>' : '<td style="height:' + h + 'px;">&nbsp;</td>';
+        o += '</tr>';
+    }
+    return o;
+}
+$(document).on('click', '.btnBlank', function(){
+    var which = $(this).data('blank');
+    get({action:'print_meta', which:which}, function(res){
+        var meta = res.print, mark = '□', body, landscape = true, title;
+        if (which === 'record'){
+            title = '利害關係者溝通記錄表';
+            var chs = $.map(META.channels, function(v, k){ return mark + (k === 'other' ? '其他：＿＿＿＿' : esc(v)); });
+            var kinds = $.map(META.track_cats || [], function(c){ return mark + (+c.free_text ? esc(c.name) + '：＿＿＿＿' : esc(c.name)); });
+            var types = $.map(META.types, function(v){ return mark + esc(v); });
+            body = printHead(meta, title)
+                + '<table class="pt"><colgroup><col style="width:80px;"><col><col style="width:150px;"><col style="width:230px;"></colgroup>'
+                + '<tr><th>型態</th><td class="l mid">' + types.join('　') + '</td><th>溝通日期</th><td>&nbsp;</td></tr>'
+                + '<tr><th>類別</th><td class="l mid">' + kinds.join('　') + '</td><th>利害關係者<br>公司/代表人</th><td>&nbsp;</td></tr>'
+                + '<tr><th>管道</th><td class="l mid">' + chs.join('　') + '</td><th>填表人/部門</th><td>&nbsp;</td></tr></table>'
+                + '<table class="pt" style="margin-top:0;"><colgroup><col style="width:34px;"><col style="width:48%;"><col></colgroup>'
+                + '<thead><tr><th colspan="2">溝通問題(可依實際需求增列問題)</th><th>回覆內容</th></tr></thead><tbody>'
+                + blankRows(5, ['#', '', ''], 44) + '</tbody></table>'
+                + '<table class="pt" style="margin-top:0;"><tr><th style="width:120px;">總經理確認：</th><td style="height:100px;">&nbsp;</td>'
+                + '<th style="width:200px;">部門主管確認：<br><span style="font-weight:normal;font-size:10px;">(若由主管填寫則此格免簽)</span></th>'
+                + '<td style="height:100px;">&nbsp;</td></tr></table>';
+        } else if (which === 'track'){
+            title = '回應利害關係者措施追蹤表';
+            body = printHead(meta, title)
+                + '<table class="pt"><colgroup><col style="width:40px;"><col style="width:76px;"><col style="width:120px;"><col>'
+                + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
+                + '<thead><tr><th>項次</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
+                + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead><tbody>'
+                + blankRows(10, ['#', '', '', '', '', '', '', '', ''], 40) + '</tbody></table>';
+        } else {
+            title = '溝通管制表'; landscape = false;
+            body = printHead(meta, title)
+                + '<table class="pt"><thead><tr><th style="width:90px;">填表人</th><th style="width:130px;">利害關係人</th>'
+                + '<th>溝通內容</th><th style="width:110px;">溝通管道</th><th style="width:100px;">頻率</th>'
+                + '<th style="width:96px;">下次應溝通日</th></tr></thead><tbody>'
+                + blankRows(14, ['', '', '', '', '', ''], 40) + '</tbody></table>';
+        }
+        egPrintWindow(title + '（空白）', body, '', meta.doc_no, landscape, false);
+        EGPrintLog.record({source:'comm_mgmt', doc_name:title + '（空白表單）', doc_kind:'form', ref_table:'comm_' + which, ref_id:0});
     });
 });
 
