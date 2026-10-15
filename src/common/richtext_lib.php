@@ -85,6 +85,9 @@ define('EG_RT_DOC_STYLES', array_merge(EG_RT_STYLES, [
     'border-style'     => '/^((solid|dashed|dotted|none)\s*){1,4}$/i',
     'border-color'     => '/^((#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})\s*){1,4}$/',
     'float'            => '/^(left|right|none)$/i',
+    // 只放行 inline-block：句尾 (文件編號) 對齊靠它撐出固定寬度。
+    // 不可以放行 none（內容會整段隱形）或 list-item（每行冒出項目符號）
+    'display'          => '/^inline-block$/i',
     'margin'           => '/^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/',
     'margin-right'     => '/^(auto|0|\d{1,2}(\.\d{1,2})?(em|px|cm|mm))$/',
     'position'         => '/^relative$/i',

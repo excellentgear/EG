@@ -84,6 +84,8 @@
     'border-style':      /^((solid|dashed|dotted|none)\s*){1,4}$/i,
     'border-color':      /^((#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})\s*){1,4}$/,
     'float':             /^(left|right|none)$/i,
+    // 只放行 inline-block（句尾文件編號對齊用），none/list-item 一律不收
+    'display':           /^inline-block$/i,
     'margin':            /^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/,
     'margin-right':      /^(auto|0|\d{1,2}(\.\d{1,2})?(em|px|cm|mm))$/,
     'margin-left':       /^(auto|0|\d{1,2}(\.\d)?em)$/,
@@ -280,8 +282,10 @@
        + btn('justifyRight', 'align-right', '靠右') + btn('justifyFull', 'align-justify', '兩端對齊')
        + '<span class="egrt-sep"></span>'
        + btn('egOutdent', 'outdent', '減少縮排') + btn('egIndent', 'indent', '增加縮排')
-       + btn('egNumIndent', 'sort-numeric-asc', '依編號自動縮排：整份文件重新掃一遍，'
-           + '段落開頭是 1. / 1.1 / 1.1.1 這種階層編號的，依「.」的段數自動排縮並對齊數字後的內容')
+       + btn('egNumIndent', 'sort-numeric-asc', '依編號自動排版：整份文件重新掃一遍。'
+           + '段落開頭是 1. / 1.1 / 1.1.1 這種階層編號的，依「.」的段數自動排縮、'
+           + '對齊數字後的內容，並在編號與文字之間補一個空格；'
+           + '句尾是 (2-MM-01) 這種文件編號的連續幾段，括號也會對齊到同一欄')
        + '<span class="egrt-sep"></span>'
        // 上下對齊（作用在游標所在的表格儲存格；整張表選起來就整張套用）
        + btn('egVaTop', 'angle-up', '儲存格靠上')
@@ -571,10 +575,14 @@
   }
 
   /** 對單一區塊套用「依編號自動縮排」。不是編號段落就不動它（不清掉別的手動縮排）。回傳有沒有套用到 */
-  function applyNumIndent(block) {
+  function applyNumIndent(block, addSpace) {
     if (!block || block.nodeType !== 1) return false;
     var m = numLabelMatch(block.textContent);
     if (!m) return false;
+    // 編號與文字之間補一個空格：Word 原稿常常是「8.1人力資源管理程序」黏在一起
+    //（使用者 2026-10-15）。只在按工具列那顆按鈕時補，打字當下不補——
+    // 即時插字會把游標頂走，正在打的人會覺得鍵盤不受控。
+    if (addSpace && addNumSpace(block)) m = numLabelMatch(block.textContent) || m;
     var level = Math.max(0, m.depth - 1);
     // 編號前面用空白（含全形／不斷行空白）手排出來的縮排一律拿掉：
     // 現在縮排由階層自動決定，兩邊都有就會縮兩次、文字位置跑掉（使用者 2026-10-15）
@@ -614,8 +622,116 @@
     return true;
   }
 
+
+  /** 編號與後面的文字之間補一個空格（已經有空白、或編號後面沒東西就不動）。回傳有沒有補 */
+  function addNumSpace(block) {
+    var m = numLabelMatch(block.textContent || '');
+    if (!m) return false;
+    if (/[\s\u00a0\u3000]$/.test(m.label)) return false;      // 本來就有空白
+    var num = m.label;                                        // 編號本身（含可能的句點）
+    var wk = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null), nd;
+    var acc = '';
+    while ((nd = wk.nextNode())) {
+      var v = nd.nodeValue || '';
+      var before = acc.replace(/^[\s\u00a0\u3000]+/, '');
+      acc += v;
+      var after = acc.replace(/^[\s\u00a0\u3000]+/, '');
+      // 編號在這個節點裡結束，而且後面還有字 → 就在這裡插一個空格
+      if (before.length < num.length && after.length >= num.length) {
+        if (after.indexOf(num) !== 0) return false;           // 開頭不是這個編號，別亂改
+        var cut = v.length - (after.length - num.length);
+        if (cut < 0 || cut > v.length) return false;
+        var rest = v.slice(cut);
+        if (/^[\s\u00a0\u3000]/.test(rest)) return false;
+        if (rest === '' && !wk.nextNode()) return false;      // 編號後面什麼都沒有
+        nd.nodeValue = v.slice(0, cut) + ' ' + rest;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /* ── 句尾的 (AS 文件編號) 整列對齊（使用者 2026-10-15）──────────────────
+     「8.1人力資源管理程序　(2-MM-01)」這種清單，每一列的括號本來就該對齊在同一欄。
+     用空格補是對不齊的（網頁是比例字型，一個空格的寬度跟一個中文字差很多，
+     而且每一列要補幾個空格都不一樣），所以把括號前面那段文字包成
+     **固定寬度的 inline-block**，寬度取同一群裡最寬的那一段。
+     只對「括號內長得像文件編號」（含 - 且有數字）的段落動手，
+     一般的「(見附件)」「(備註)」不會被誤當成要對齊的清單。 */
+  var AS_TAIL_RE = /^([\s\S]*?)[\s\u3000]*[(（]\s*([0-9A-Za-z][-0-9A-Za-z.]*)\s*[)）][\s\u3000]*$/;
+
+  function asTailMatch(block) {
+    if (!block || block.nodeType !== 1) return null;
+    if (block.querySelector && block.querySelector('table,img,ul,ol')) return null;
+    var t = (block.textContent || '').replace(/[\s\u00a0\u3000]+/g, ' ').trim();
+    var m = AS_TAIL_RE.exec(t);
+    if (!m) return null;
+    var code = m[2];
+    if (code.indexOf('-') < 0 || !/\d/.test(code)) return null;   // 要像文件編號才算
+    var head = m[1].replace(/[\s\u3000]+$/, '');
+    if (head === '') return null;
+    return { head: head, code: code };
+  }
+
+  /** 把一群「…(編號)」段落的括號對齊：head 包成等寬 inline-block。回傳處理了幾段 */
+  function alignAsTails(blocks) {
+    if (!_numMeasureCanvas) _numMeasureCanvas = d.createElement('canvas');
+    var ctx = _numMeasureCanvas.getContext('2d');
+    var items = [], maxEm = 0;
+    blocks.forEach(function (b) {
+      var mm = asTailMatch(b);
+      if (!mm) return;
+      var wk = d.createTreeWalker(b, NodeFilter.SHOW_TEXT, null), n0 = wk.nextNode();
+      var el = (n0 && n0.parentNode && n0.parentNode.nodeType === 1) ? n0.parentNode : b;
+      var cs = w.getComputedStyle(el);
+      ctx.font = cs.font || (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily);
+      var fs = parseFloat(cs.fontSize) || 16;
+      var em = ctx.measureText(mm.head).width / fs;
+      if (em > maxEm) maxEm = em;
+      items.push({ b: b, m: mm, el: el });
+    });
+    if (items.length < 2) return 0;                 // 只有一列沒有「對齊」可言
+    var wEm = Math.min(40, Math.round((maxEm + 1.2) * 10) / 10);
+    items.forEach(function (it) {
+      // 重建這一段：<span 固定寬>前段文字</span>(編號)
+      // 字型字級沿用原本第一個文字節點的設定，不然重建後整段會變成預設字體
+      var sp = d.createElement('span');
+      sp.style.display = 'inline-block';
+      sp.style.width = wEm + 'em';
+      sp.textContent = it.m.head;
+      var keep = (it.el && it.el !== it.b && it.el.getAttribute) ? (it.el.getAttribute('style') || '') : '';
+      var outer = null;
+      if (keep) { outer = d.createElement('span'); outer.setAttribute('style', keep); }
+      while (it.b.firstChild) it.b.removeChild(it.b.firstChild);
+      var tail = d.createTextNode('(' + it.m.code + ')');
+      if (outer) { outer.appendChild(sp); outer.appendChild(tail); it.b.appendChild(outer); }
+      else { it.b.appendChild(sp); it.b.appendChild(tail); }
+    });
+    return items.length;
+  }
+
+  /** 整份文件：把連續的「…(編號)」段落分群後各自對齊 */
+  function alignAsTailsAll(root) {
+    var all = Array.prototype.slice.call(root.querySelectorAll('p,div'));
+    var n = 0, run = [];
+    function flush() { if (run.length >= 2) n += alignAsTails(run); run = []; }
+    all.forEach(function (b) {
+      var pb = b.parentNode, nested = false;
+      while (pb && pb !== root) {
+        if (pb.nodeType === 1 && /^(DIV|P|LI)$/.test(pb.nodeName)) { nested = true; break; }
+        pb = pb.parentNode;
+      }
+      if (nested) return;
+      if (asTailMatch(b)) run.push(b);
+      else if ((b.textContent || '').trim() === '') { /* 中間的空行不算打斷同一群 */ }
+      else flush();
+    });
+    flush();
+    return n;
+  }
+
   /** 整份文件（doc profile）逐區塊套用一次，回傳套到幾段 */
-  function applyNumIndentAll(root) {
+  function applyNumIndentAll(root, addSpace) {
     var n = 0;
     Array.prototype.slice.call(root.querySelectorAll('div,p,li')).forEach(function (b) {
       // 只對「最外層」的區塊做——巢狀在別的區塊裡面的（縮排時包出來的那層）不用重複量
@@ -624,7 +740,7 @@
         if (parentBlock.nodeType === 1 && /^(DIV|P|LI)$/.test(parentBlock.nodeName)) return;
         parentBlock = parentBlock.parentNode;
       }
-      if (applyNumIndent(b)) n++;
+      if (applyNumIndent(b, addSpace)) n++;
     });
     return n;
   }
@@ -1063,7 +1179,10 @@
         if (cmd === 'egAutoPage')  { autoPaginate(); return; }
         if (cmd === 'egNumIndent') {
           var got = autoNumIndent();
-          w.alert(got ? ('已依編號自動縮排 ' + got + ' 段。') : '這份文件裡沒有找到「1. / 1.1 / 1.1.1」這種階層編號的段落。');
+          var msg = got.n ? ('已依編號自動縮排 ' + got.n + ' 段（編號與文字之間補上空格）。')
+                          : '這份文件裡沒有找到「1. / 1.1 / 1.1.1」這種階層編號的段落。';
+          if (got.aligned) msg += '\n另外把 ' + got.aligned + ' 段句尾的 (文件編號) 對齊到同一欄。';
+          w.alert(msg);
           return;
         }
         if (cmd === 'egFontUp')    { bumpFont(1);  return; }
@@ -2078,11 +2197,11 @@
     /** 工具列的「依編號自動縮排」：整份文件重新掃一遍套用，並重新分頁
      *  （縮排改變了換行位置，某幾頁可能因此變多或變少列，要重排才會準）。 */
     function autoNumIndent() {
-      var n = 0;
-      sheets().forEach(function (s) { n += applyNumIndentAll(s); });
+      var n = 0, a = 0;
+      sheets().forEach(function (s) { n += applyNumIndentAll(s, true); a += alignAsTailsAll(s); });
       reflow(0);
       changed();
-      return n;
+      return { n: n, aligned: a };
     }
 
     /** 在游標處分頁：游標所在區塊之後的內容整批移到新的一頁 */
