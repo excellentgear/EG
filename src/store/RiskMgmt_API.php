@@ -41,7 +41,7 @@ if (!$uid) jerr('無使用權限（帳號非在職狀態）', 403);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類動作：先驗登入再驗 CSRF（順序不可顛倒，見 _config.php 的說明） */
-$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate'];
+$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['rm_csrf'], $tok))
@@ -186,6 +186,22 @@ if ($action === 'dist') {
                         WHERE " . implode(' AND ', $where) . " GROUP BY i.severity, i.frequency");
     $st->execute($a);
     jout(['cells'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ---------------------------------------------------------------- 成效無效 → 開異常矯正處理單 */
+if ($action === 'risk_open_car') {
+    $iid = (int)($_POST['item_id'] ?? 0);
+    $st = $db->prepare("SELECT i.*, d.doc_id AS d_id, d.doc_no, d.created_by AS d_created_by, d.kind AS d_kind, d.is_deleted FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE i.item_id=?");
+    $st->execute([$iid]);
+    $it = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$it || (int)$it['is_deleted'] || $it['d_kind'] !== 'risk') jerr('查無這一列', 404);
+    if (!rmCanEdit(['created_by' => $it['d_created_by']], $P)) jerr('您沒有這張表單的修改權限', 403);
+    // 前端只在「成效無效」時給按鈕，後端同規則再擋一次（鐵律8）：沒確認過成效或成效不是無效，不能開單
+    if (($it['effect_status'] ?? '') !== 'ineffective') jerr('只有成效確認結果為「無效」的項目才能開立矯正單');
+    try {
+        $r = rm_car_create($db, $it, ['doc_no' => $it['doc_no']], $uid, $uname);
+    } catch (Throwable $e) { error_log('rm_car_create: ' . $e->getMessage()); jerr('開立矯正單失敗：' . $e->getMessage(), 500); }
+    jout(['car_id' => $r['car_id'], 'car_no' => $r['car_no'], 'existed' => $r['existed']]);
 }
 
 /* ---------------------------------------------------------------- 空白表單列印用：表頭（公司名稱、表單名稱、AS 編號） */

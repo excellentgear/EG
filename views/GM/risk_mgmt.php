@@ -151,6 +151,7 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.c-es, #itTbl.cards td.c-ed, #itTbl.cards td.c-er, #itTbl.cards td.c-ev { border-top:1px dashed #E0BE86; padding-top:6px; }
         #itTbl.cards td.c-ev textarea { min-height:84px; }
         .ev-reason { font-size:12px; color:#8A5A2B; margin-top:3px; }
+        .car-box { margin-top:5px; font-size:12px; }
         .trk { margin-top:5px; font-size:12px; color:#5b3a1e; background:#FBF4E8; border:1px solid #EADFC8; border-radius:4px; padding:4px 6px; }
         .trk.none { color:#9a8a74; }
         .trk-row { border-top:1px dotted #E0BE86; padding:3px 0 2px; }
@@ -823,6 +824,13 @@ function trackHtml(it){
     });
     return h + '</div>';
 }
+function carHtml(it){
+    // 成效「無效」且已存檔的列才給開單鈕；開過了就顯示單號並可開啟
+    if (it.car_id) return '<div class="car-box"><a href="../QA/correction_order.php?open_id=' + (+it.car_id) + '" target="_blank">矯正單 ' + esc(it.car_no || ('#' + it.car_id)) + '</a></div>';
+    if (it.effect_status === 'ineffective' && +it.item_id > 0)
+        return '<div class="car-box"><button type="button" class="b-mini danger" data-opencar title="成效判定為無效，開立異常矯正處理單追根因"><i class="fa fa-wrench"></i> 開矯正單</button></div>';
+    return '<div class="car-box"></div>';
+}
 function effOpts(cur){
     var h = '<option value="">未確認</option>';
     $.each(META.effect_status, function(k, t){ if (k !== 'unconfirmed') h += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + esc(t) + '</option>'; });
@@ -870,7 +878,7 @@ function rowHtml(kind, it, n){
           + fd('風險確認編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
           + fd('因應措施', ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
           + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
-          + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>', 'c-es')
+          + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
           + fd('裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
           + fd('佐證 <button type="button" class="b-mini warm" data-evidence><i class="fa fa-search"></i> 依資料產生佐證／建議結果</button>', ta('effect_evidence', it.effect_evidence) + '<div class="ev-reason"></div>', 'c-ev');
@@ -1125,6 +1133,18 @@ $(document).on('click', '[data-gen]', function(){
 });
 
 /* ---------- 成效確認：依規則蒐集佐證並建議結果 ---------- */
+$(document).on('click', '[data-opencar]', function(){
+    var tr = $(this).closest('tr'), iid = +tr.attr('data-item-id') || 0, $b = $(this);
+    if (!iid){ alert('請先儲存這張表單再開矯正單'); return; }
+    if (tr.find('[data-f=effect_status]').val() !== 'ineffective'){ alert('成效確認結果不是「無效」，不能開立矯正單'); return; }
+    if (!confirm('要為這條風險開立異常矯正處理單嗎？\n（一條風險只能開一張，開立後會通知矯正單的指派人員）')) return;
+    $b.prop('disabled', true);
+    post({action:'risk_open_car', item_id:iid}, function(res){
+        tr.find('.car-box').html('<a href="../QA/correction_order.php?open_id=' + (+res.car_id) + '" target="_blank">矯正單 ' + esc(res.car_no) + '</a>');
+        alert((res.existed ? '這條風險已經開過矯正單：' : '已開立矯正單：') + res.car_no);
+    });
+    setTimeout(function(){ $b.prop('disabled', false); }, 4000);      // 失敗時（錯誤訊息由全站 ajax 錯誤處理顯示）讓按鈕可以再按
+});
 $(document).on('click', '[data-evidence]', function(){
     var tr = $(this).closest('tr'), o = {ctx_item_id:+tr.attr('data-ctx') || 0};
     tr.find('[data-f]').each(function(){ o[$(this).data('f')] = $(this).val(); });
@@ -1448,6 +1468,7 @@ function effectPrint(it){
         if (e.first) h += '<br>確認結果：' + esc(e.first);
         h += '<br>裁示：' + esc(it.effect_ruling || '');
         h += '<br>佐證：' + esc(e.refs ? e.refs + '（詳細紀錄見系統）' : '見系統成效確認紀錄');
+        if (it.car_no) h += '<br>矯正單：' + esc(it.car_no);
     }
     return h;
 }

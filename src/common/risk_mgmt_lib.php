@@ -138,6 +138,8 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN effect_date DATE NULL COMMENT '成效確認日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN effect_ruling TEXT NULL COMMENT '成效確認裁示'",
         "ALTER TABLE rm_item ADD COLUMN effect_evidence TEXT NULL COMMENT '成效確認佐證（確認當下的快照，之後資料再變也不改寫歷史）'",
+        "ALTER TABLE rm_item ADD COLUMN car_id INT NULL COMMENT '成效無效時開立的異常矯正處理單 id（car_order.id）'",
+        "ALTER TABLE rm_item ADD COLUMN car_no VARCHAR(40) NULL COMMENT '異常矯正處理單單號（開單當下存一份供列印，單據本身以 car_id 為準）'",
         "ALTER TABLE rm_item ADD COLUMN recheck_note TEXT NULL COMMENT '重新評估原因（年度中途因重大變化重新評估時填寫，AS9100D 6.1 的再評估紀錄）'",
         "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
@@ -603,4 +605,62 @@ function rm_print_meta(PDO $db, string $kind, ?string $bizDate = null): array
     ];
 }
 
+}
+
+
+/* ============================ 成效無效 → 開異常矯正處理單 ============================
+ * 開單、配號、簽章、紀錄、通知全部走 CAR 模組自己的函式（car_lib／car_notify），這裡只負責把風險列的內容組成異常說明。
+ * 一條風險只開一張（rm_item.car_id 擋重複）；責任單位不在這裡猜——風險列沒有單一責任單位，
+ * 交給矯正單的流程由主管指派回覆人（與內部稽核開單同一做法：解析不到人也不能讓單子開不出來）。 */
+function rm_car_create(PDO $db, array $item, array $doc, int $uid, string $uname, bool $notify = true): array
+{
+    require_once __DIR__ . '/car_lib.php';
+    require_once __DIR__ . '/car_notify.php';
+    if ((int)($item['car_id'] ?? 0) > 0) return ['car_id'=>(int)$item['car_id'], 'car_no'=>(string)($item['car_no'] ?? ''), 'existed'=>true];
+
+    $biz = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $set = rm_settings($db);
+    $lv  = rm_level_calc($set, $item['severity'], $item['frequency'], (string)($item['ro_kind'] ?? 'risk'));
+    $conf = trim((string)($item['confirm_no'] ?? ''));
+    $eff = ['effective'=>'有效', 'partial'=>'部分有效', 'ineffective'=>'無效', 'doing'=>'進行中'][(string)($item['effect_status'] ?? '')] ?? '';
+
+    $desc = '【風險與機會因應措施管制表 ' . $doc['doc_no'] . '】' . "\n"
+          . ($conf !== '' ? '風險確認編號：' . $conf . "\n" : '')
+          . '議題：' . trim((string)$item['issue']) . "\n"
+          . '風險等級：' . ($lv ? $lv['name'] . '（' . $lv['score'] . ' 分）' : '未評估') . "\n"
+          . '因應措施：' . trim((string)$item['measure']) . "\n"
+          . '成效確認：' . $eff . ($item['effect_date'] ? '（' . $item['effect_date'] . '）' : '') . "\n"
+          . ($item['effect_ruling'] ? '裁示：' . trim((string)$item['effect_ruling']) . "\n" : '')
+          . ($item['effect_evidence'] ? "佐證：\n" . trim((string)$item['effect_evidence']) . "\n" : '')
+          . '請說明原因並提出矯正措施，必要時調整因應措施或風險評分。';
+
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        $no = car_alloc_numbers($db, 1, date('Ymd', strtotime($biz)))[0];
+        $db->prepare(
+            "INSERT INTO car_order (car_no, group_no, source_type, source_no, source_desc, fill_date, found_date,
+                 created_by, created_by_name, abnormal_desc, status, stage_since, created_at, updated_at)
+             VALUES (?,?, 'OTHER', ?,?, ?,?, ?,?, ?, 'open', NOW(), NOW(), NOW())")
+           ->execute([$no, $no, mb_substr('風險與機會管制表 ' . $doc['doc_no'] . ($conf !== '' ? ' ' . $conf : ''), 0, 50),
+                      mb_substr(trim((string)$item['issue']), 0, 255), $biz, $biz, $uid, $uname, $desc]);
+        $carId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label) VALUES (?, 'desc', ?, ?, NOW(), ?)")
+           ->execute([$carId, $uid, $uname, eg_fmt_date($biz)]);
+        car_log($db, $carId, 'create', $uid, $uname, '由風險與機會因應措施管制表 ' . $doc['doc_no'] . ' 成效確認無效開立');
+        $db->prepare("UPDATE rm_item SET car_id=?, car_no=? WHERE item_id=?")->execute([$carId, $no, (int)$item['item_id']]);
+        if ($own) $db->commit();
+    } catch (Throwable $e) {
+        if ($own && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+    if (!$notify) return ['car_id'=>$carId, 'car_no'=>$no, 'existed'=>false];      // 測試用：不發通知
+    try {   // 通知走 CAR 模組自己的機制；失敗不影響開單
+        $ro = $db->prepare("SELECT * FROM car_order WHERE id=?"); $ro->execute([$carId]);
+        $o = $ro->fetch(PDO::FETCH_ASSOC) ?: [];
+        if ($o) car_notify($db, $carId, car_notify_title('🔧', $o, '待指派回覆人'),
+            car_notify_body($db, $o, '由風險與機會因應措施管制表成效確認「無效」自動開立，請指派回覆人說明原因並提出矯正措施。'),
+            car_pm_supervisors($db) ?: car_final_deciders($db), $uid);
+    } catch (Throwable $e) {}
+    return ['car_id'=>$carId, 'car_no'=>$no, 'existed'=>false];
 }
