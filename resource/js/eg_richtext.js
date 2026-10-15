@@ -526,7 +526,7 @@
     // 量寬只量「編號＋後面的空白」：開頭的空白不算（那是 Word 手排的縮排，會另外被清掉，
     // 算進去吊掛寬度就會多出一截）；後面連續的一般空白瀏覽器只會顯示成一個，也只量一個
     var wsShown = wsAfter.replace(/ {2,}/g, ' ');
-    return { depth: depth, label: m[0].slice(m[1].length) + wsShown };
+    return { depth: depth, num: num, label: m[0].slice(m[1].length) + wsShown };
   }
 
   var _numMeasureCanvas = null;
@@ -584,6 +584,26 @@
     var meas = measureLabelPx(block, m.label);
     var hangEm = Math.min(9.9, Math.max(0, Math.round((meas.px / meas.fontSizePx) * 10) / 10));
     var mgEm = Math.min(INDENT_MAX, level * INDENT_STEP);
+    /* 只有一層的「1.」「2.」若是接在更深的編號（如 6.4.1）底下，它是那一條的子清單，
+       編號要排在上一條「內容」的起點（垂直對齊在 6.4.1 那串字的右側），不是跟 6.4.1 的編號切齊。
+       判斷：這一段是「1.」且上一個有編號的段落層級比較深＝子清單開頭；
+       「2.」「3.」則接續上一個子清單項目的位置。其他（例如 6.4.1.4 之後的「7.」）仍是頂層。 */
+    if (m.depth === 1) {
+      var pv = block.previousElementSibling, pm = null, hops = 0;
+      while (pv && hops++ < 40) {
+        pm = numLabelMatch(pv.textContent);
+        if (pm) break;
+        pv = pv.previousElementSibling;
+      }
+      var myN = parseInt(m.num, 10);
+      if (pv && pm && pm.depth >= 2 && myN === 1) {
+        var pml = parseFloat((pv.style.marginLeft || '').replace('em', '')) || 0;
+        var phang = parseFloat(((pv.style.textIndent || '').replace('-', '')).replace('em', '')) || 0;
+        mgEm = Math.min(INDENT_MAX, pml + phang);
+      } else if (pv && pm && pm.depth === 1 && (parseFloat((pv.style.marginLeft || '').replace('em', '')) || 0) > 0 && myN === parseInt(pm.num, 10) + 1) {
+        mgEm = parseFloat((pv.style.marginLeft || '').replace('em', '')) || 0;
+      }
+    }
     block.style.marginLeft = mgEm ? (mgEm + 'em') : '';
     // padding-left 這個個別屬性不在白名單裡（見 richtext_lib.php），要用 padding 簡寫
     block.style.padding = '0em 0em 0em ' + hangEm.toFixed(1) + 'em';
