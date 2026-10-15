@@ -1242,7 +1242,36 @@ case 'admin_backfill': {
                                       VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE confirmed_at=VALUES(confirmed_at)");
             $dt = $date . ' ' . date('H:i:s');
             foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $it) {
-                foreach (meeting_item_required_signers_for($db, $id, $it) as $signer) {
+                $signers = meeting_item_required_signers_for($db, $id, $it);
+                // 「本次未出席」的指定人員／負責部門：required_signers 只回有出席者，補齊若只處理它們，
+                // 未出席者永遠不會被標成已確認（畫面仍顯示尚未回覆）→ 超管補齊時一併代為確認。
+                $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_users'] ?? '')))));
+                if ($ownerUserIds) {
+                    $uq = $db->prepare("SELECT id, user_cname FROM `user` WHERE id=?");
+                    foreach ($ownerUserIds as $ou) {
+                        if (isset($signers[$ou])) continue;
+                        $uq->execute([$ou]);
+                        $ur = $uq->fetch(PDO::FETCH_ASSOC);
+                        if ($ur) $signers[$ou] = ['user_id'=>(int)$ur['id'], 'user_name'=>(string)$ur['user_cname'], 'dept_name'=>null, 'dept_id'=>null];
+                    }
+                } else {
+                    $ownerDeptIds = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_depts'] ?? '')))));
+                    $dq = $db->prepare("SELECT m.user_id, u.user_cname, d.name AS dept_name
+                                          FROM user_department_position_map m
+                                          JOIN `user` u ON u.id=m.user_id AND u.state NOT IN (0,90)
+                                          JOIN department d ON d.id=m.department_id
+                                          LEFT JOIN position p ON p.id=m.position_id
+                                          LEFT JOIN position_level pl ON pl.position_id=m.position_id
+                                         WHERE m.department_id=?
+                                         ORDER BY (m.is_main=1) DESC, COALESCE(pl.level,999), COALESCE(p.sort_order,999), m.user_id LIMIT 1");
+                    foreach ($ownerDeptIds as $od) {
+                        if (isset($signers[$od])) continue;
+                        $dq->execute([$od]);
+                        $dr = $dq->fetch(PDO::FETCH_ASSOC);
+                        if ($dr) $signers[$od] = ['user_id'=>(int)$dr['user_id'], 'user_name'=>(string)$dr['user_cname'], 'dept_name'=>(string)$dr['dept_name'], 'dept_id'=>$od];
+                    }
+                }
+                foreach ($signers as $signer) {
                     $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $signer['dept_id'], $dt]);
                 }
                 meeting_close_item_notice_if_done($db, (int)$it['item_id']); // 補齊後同樣要關掉還開著的回簽通知
