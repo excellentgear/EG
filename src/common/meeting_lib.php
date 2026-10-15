@@ -16,7 +16,8 @@ include_once __DIR__ . '/date_fmt_lib.php';   // 通知內文的日期顯示一�
 
 const MEETING_FEATURES = [
     ['code'=>'meeting_view',      'group'=>'view', 'label'=>'檢閱會議記錄列表（沒勾也看得到自己的草稿、有簽核/出席到的會議）'],
-    ['code'=>'meeting_view_all',  'group'=>'view', 'label'=>'檢視全部人員建立的會議記錄（不含他人尚未送出的草稿）'],
+    ['code'=>'meeting_view_all',  'group'=>'view', 'label'=>'檢索全部會議記錄（不限是否與自己相關或自己建立；不含他人尚未送出的草稿）'],
+    ['code'=>'meeting_view_prod', 'group'=>'view', 'label'=>'檢視全部「產銷會議」（主題含「產銷」，不含草稿）；其他會議仍只看得到自己建立或與自己相關的'],
     ['code'=>'meeting_edit',      'group'=>'op',   'label'=>'新增/編輯/送出會議記錄'],
     ['code'=>'meeting_print',     'group'=>'op',   'label'=>'列印（會議記錄／空白簽到表）'],
     ['code'=>'meeting_kpi_insert','group'=>'op',   'label'=>'可將本月出貨目標達成率插入會議記錄'],
@@ -299,6 +300,7 @@ function meeting_perms(PDO $db, ?array $u): array {
         'canEdit'    => $has('meeting_edit') || $has('meeting_admin'),
         'canView'    => $has('meeting_view') || $has('meeting_edit') || $has('meeting_admin') || true,   // 每個登入者至少看得到自己的草稿/相關會議
         'canViewAll' => $has('meeting_view_all') || $has('meeting_admin'),
+        'canViewProd'=> $has('meeting_view_prod') || $has('meeting_view_all') || $has('meeting_admin'),
         'canPrint'   => $has('meeting_print') || $has('meeting_admin'),
         'canKpiInsert' => $has('meeting_kpi_insert') || $has('meeting_admin'),
     ];
@@ -315,6 +317,8 @@ function meeting_can_view(PDO $db, int $uid, array $perms, array $m): bool {
     // 「有關」＝出席人員／主席／總經理／項目負責部門或指定人員(需簽名的人)，2026-08-14使用者明確要求擴大。
     $isDraft = (($m['status'] ?? '') === 'draft');
     if (!$isDraft && !empty($perms['canViewAll'])) return true;
+    // 產銷會議人員：可看全部（已送出的）產銷會議，其他會議仍須與自己有關（下方判斷）
+    if (!$isDraft && !empty($perms['canViewProd']) && mb_strpos((string)($m['subject'] ?? ''), '產銷') !== false) return true;
     if ((int)($m['chair_user_id'] ?? 0) === $uid) return true;
     try {
         $st = $db->prepare("SELECT 1 FROM meeting_attendee WHERE meeting_id=? AND user_id=? LIMIT 1");

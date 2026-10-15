@@ -713,8 +713,14 @@ foreach ($roleRows as $rr) {
 <!-- 使用說明 modal（鐵律7） -->
 <div class="mt-mask" id="helpUseMask"><div class="mt-modal wide">
     <div class="m-head"><span>使用說明 — 會議紀錄管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
-    <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
-        <h4>功能說明</h4>
+    <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;display:flex;gap:16px;align-items:flex-start;">
+    <div id="helpRoleBox" style="flex:0 0 170px;position:sticky;top:0;background:#FFF3D1;border:1px solid #E8C98A;border-radius:6px;padding:10px 12px;line-height:1.6;">
+        <b style="color:#8A5A2B;">您目前的角色</b>
+        <div id="helpRoleList" style="margin-top:6px;">載入中…</div>
+        <div style="margin-top:8px;font-size:12px;color:#8A5A2B;">可看到的會議：<span id="helpRoleScope"></span></div>
+    </div>
+    <div style="flex:1;min-width:0;">
+        <h4 style="margin-top:0;">功能說明</h4>
         會議記錄（2-GM-05-01）線上化：建立會議基本資料與出席名單、現場密碼簽到、上級指示要項／會議要項雙表格、
         主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。<br>
         <b>會議通知單（2-GM-05-03）</b>：開會<b>前</b>發的通知單也在這一頁，與會議記錄<b>共用同一筆資料</b>（同一場會議＝清單上同一列），
@@ -766,12 +772,12 @@ foreach ($roleRows as $rr) {
         「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。<br>
         「模組設定 → <b>會議通知單</b>」（僅管理員）：①<b>AS 文件編號綁定</b>（2-GM-05-03；綁定後列印版表頭用該文件的表單名稱、右下角印文件編號，版次依<b>會議日期</b>回推當時生效的那一版）②<b>通知單上要列出哪些「應出席單位」</b>。
         <h4>權限角色</h4>
-        會議記錄檢閱＝看（草稿仍僅本人）；會議記錄登錄＝新增/編輯/送出；會議記錄管理員＝＋檢視全部人員記錄、刪除、修改他人已送出記錄、維護常用設定；管理者全權。<br>
+        <b>可看到哪些會議記錄</b>：①<b>會議記錄登錄</b>＝只看得到<b>自己建立或與自己相關</b>（出席／主席／總經理／負責簽名）的會議記錄；②<b>產銷會議人員</b>（功能碼「檢視產銷會議」）＝<b>全部產銷會議</b>（主題含「產銷」、已送出者）＋自己建立或相關的其他會議；③<b>會議記錄檢索</b>（功能碼「檢索全部」）＝不限是否相關、可檢索全部已送出的會議記錄；④會議記錄管理員＝全部＋刪除、修改他人已送出記錄、維護常用設定；管理者全權。任何角色都<b>看不到他人尚未送出的草稿</b>（除非是自己建立或需要自己簽名）。新增/編輯/送出需「會議記錄登錄」。<br>
         ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
         ・<b>超級管理員自動簽章（會議通知單）</b>：通知單畫面下方有「超級管理員工具 — 自動簽章」，<b>不必等主席實際操作</b>就能把通知單簽成已確認，並可<b>指定通知日期</b>（補歷史紙本時跟紙上那一天對得起來；那裡填的就是通知日期，兩格章都印它，一樣要通過「早於會議日期／工作日／簽章者當天有上班」三條檢查）。蓋出來的仍是<b>主席本人的章</b>——紙本上那一格本來就是主席的章，改蓋超管的章會讓文件對不上紙本。是否同時發出會議通知可勾選：<b>會議日期還沒到</b>時預設會發，<b>日期已過</b>（研判是補歷史資料）預設<b>不</b>發，避免事後再吵人。需輸入超級管理員密碼，並留下 page_change_log 紀錄可追溯。<br>
         ・<b>列印紀錄</b>：本頁四種列印（會議記錄／空白簽到表／已簽署簽到表／出貨目標達成率）與<b>會議通知單</b>，按下列印都會留下列印時間、列印人、登入電腦與文件名稱，可在<a href="../admin/print_sign_log.php" target="_blank">列印與簽核紀錄</a>查詢（ai-rules/23）。<br>
         ・<b>任何動作都會即時更新畫面</b>：補簽、更換記錄人、回簽確認等操作完成後，檢視視窗與背後的清單／狀態篩選筆數會一起重抓，所以「一次補齊全部簽章」之後清單上的狀態會直接變成<b>已完成</b>，不需要重新整理整頁。
-    </div>
+    </div></div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
 </div></div>
 
@@ -893,7 +899,13 @@ $('#yearSel').on('change', function(){ loadList(); });
 $('#btnAdd').on('click', function(){ openCreate(false); });
 // 通知單優先的入口（使用者指定：實務上先發通知單、開完會才有會議記錄）
 $('#btnAddNotice').on('click', function(){ openCreate(true); });
-$('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+$('#btnPageHelp').on('click', function(){
+    var rs = (META && META.my_roles) || [];
+    $('#helpRoleList').html(rs.length ? rs.map(function(r){ return '<div>• '+esc(r)+'</div>'; }).join('') : '<div>（未指派本模組角色，僅能看自己建立或相關的會議記錄）</div>');
+    var P = (PERMS||{});
+    $('#helpRoleScope').text(P.canAdmin||P.canViewAll ? '全部（已送出）' : (P.canViewProd ? '全部產銷會議＋自己建立或相關的' : '自己建立或相關的'));
+    openMask('helpUseMask');
+});
 
 function loadList(){
     NProgress.start();

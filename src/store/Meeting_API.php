@@ -129,7 +129,15 @@ case 'meta': {
     };
     $stTpl   = $loadTpl((int)meeting_setting_get($db, 'meeting_stamp_tpl_id', '0'));
     $apTpl   = $loadTpl((int)meeting_setting_get($db, 'meeting_approval_stamp_tpl_id', '1'));
-    jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'is_superadmin'=>meeting_is_superadmin($db, $uid),
+    // 目前使用者在本模組被指派的角色（使用說明左側顯示用；一律即時查現況，不寫死角色清單）
+    $myRoles = [];
+    try {
+        $rq = $db->prepare("SELECT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='meeting' ORDER BY r.role_id");
+        $rq->execute([$uid]);
+        $myRoles = $rq->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {}
+    if (!empty($perms['isAdmin'])) array_unshift($myRoles, '系統管理者');
+    jout(['perms'=>$perms, 'my_roles'=>$myRoles, 'departments'=>$depts, 'years'=>$years, 'is_superadmin'=>meeting_is_superadmin($db, $uid),
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
