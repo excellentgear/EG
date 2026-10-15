@@ -28,6 +28,7 @@ define('EG_AS_DOC_IMPORT_LIB', 1);
 require_once __DIR__ . '/as_doc_content_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/attachment_lib.php';
+require_once __DIR__ . '/as_doc_flow_import_lib.php';   // Word 流程圖 → 可再編輯的流程圖
 
 /** 認得的 Word 副檔名 */
 define('ADI_WORD_EXT', ['doc', 'docx', 'rtf', 'odt']);
@@ -102,8 +103,21 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
     // 先把「夾在段落中間的浮動表格」搬到該段之後，不然 DOM 解析會就地把段落切成兩半
     [$raw, $tblMoved] = adi_float_tables_out($raw);
 
+    /* 流程圖要在 adi_transform **之前**處理：那支會把每張 GIF 碎片各自收成一個圖片資產，
+       收完就拼不回來了（使用者 2026-10-15：「後面的流程圖整個亂七八糟」）。
+       這裡改成另外讀一份 .fodt 把圖案座標拿回來，整張換成可再編輯的流程圖。 */
+    $flowStat = [];
+    if (preg_match('#<(img[^>]*\bname=|span[^>]*\bid=)#i', $raw)) {
+        $fodt = eg_att_soffice_convert($tmpSrc, $work, 180, 'fodt');
+        if ($fodt && is_file($fodt)) {
+            $raw = adfi_import($db, $raw, $fodt, $contentId, $uid, $flowStat);
+        }
+    }
+
     $res = adi_transform($db, $raw, $work, $contentId, $uid);
     $res['tbl_moved'] = $tblMoved;
+    $res['flow_img']   = $flowStat['flow_img'] ?? 0;
+    $res['flow_items'] = $flowStat['flow_items'] ?? 0;
 
     // 有自動編號清單才多轉一次純文字（多花約 10 秒），拿它的實際編號當準。
     // ⚠ 一定要在 adi_rrmdir() 之前——工作資料夾一刪，原始檔與轉檔暫存都沒了
@@ -434,6 +448,9 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
     // ③ 圖片：繪圖物件碎片不匯入（見檔頭說明），真正的圖片收成資產
     $raw = (string)preg_replace_callback('#<img\b([^>]*)>#i', function ($mm) use (&$stat, $db, $workDir, $contentId, $uid) {
         $at = $mm[1];
+        // 流程圖已經在前一步換成 <img data-asset="N">（沒有 src，資產也建好了），
+        // 不跳過的話會被下面「沒有 src＝壞圖」那一條整個刪掉
+        if (preg_match('/\bdata-asset="\d+"/i', $at)) return $mm[0];
         $stat['img_in']++;
         $name = preg_match('/\bname="([^"]*)"/i', $at, $n) ? $n[1] : '';
         $src  = preg_match('/\bsrc="([^"]*)"/i', $at, $s) ? $s[1] : '';
@@ -517,6 +534,9 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     $done[] = ['type' => 'text',  'n' => $chars,       'note' => '文字已轉入約 ' . number_format($chars) . ' 字'];
     if ($s['tables'])     $done[] = ['type' => 'table', 'n' => $s['tables'], 'note' => '表格 ' . $s['tables'] . ' 張已轉入（含框線與合併儲存格）'];
     if ($s['img_ok'])     $done[] = ['type' => 'image', 'n' => $s['img_ok'], 'note' => '圖片 ' . $s['img_ok'] . ' 張已轉入'];
+    if (!empty($res['flow_img'])) $done[] = ['type' => 'flow', 'n' => (int)$res['flow_img'],
+        'note' => '流程圖 ' . (int)$res['flow_img'] . ' 張已轉成可編輯的圖（共 ' . (int)$res['flow_items']
+                . ' 個方塊與連線，雙擊就能改字、拖曳就能移動）'];
     if ($s['boxes'])      $done[] = ['type' => 'box',   'n' => $s['boxes'],  'note' => '帶框線的文字方塊 ' . $s['boxes'] . ' 個的文字已轉入'];
     if (!empty($s['page_frames'])) $done[] = ['type' => 'box', 'n' => $s['page_frames'],
         'note' => 'Word 的頁框表格 ' . $s['page_frames'] . ' 頁已拆開：外框與重複的表頭（公司名／文件編號／頁次／頁版別）都沒有匯入，'

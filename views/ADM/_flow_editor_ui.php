@@ -377,11 +377,49 @@
     if (hist.length > 40) hist.shift();
     histAt = hist.length - 1;
   }
+  /* 從 Word 匯入的流程圖（src/common/as_doc_flow_import_lib.php 產生的中介格式）。
+     刻意**不是** Fabric 的序列化格式：那個格式綁 Fabric 版本，手寫很容易出錯；
+     改成在這裡用編輯器自己的 addNode／addConn／addFreeText 重建，
+     長出來的物件就跟使用者自己畫的一模一樣（拖曳、雙擊改字、改色全都照常）。 */
+  function buildFromImport(jj) {
+    quiet = true;
+    cv.clear();
+    cv.setWidth(Math.max(200, jj.w || 600));
+    cv.setHeight(Math.max(200, jj.h || 400));
+    var snapWas = snap; snap = false;          // 匯入的座標要照原樣，不可以對齊格線
+    (jj.items || []).forEach(function (it) {
+      try {
+        if (it.t === 'conn') { addConn(it.kind === 'arrow' ? 'arrow' : 'line', it.x1, it.y1, it.x2, it.y2); return; }
+        if (it.t === 'text') {
+          var t = addFreeText(it.x, it.y);
+          t.set({ text: String(it.text || ''), width: Math.max(24, it.w || 80) });
+          return;
+        }
+        var sh = addNode(it.kind || 'proc', it.x, it.y, String(it.text || ''));
+        // addNode 用的是固定尺寸，要縮放成 Word 裡的實際大小，標籤跟著重新置中
+        var bw = sh.width || 1, bh = sh.height || 1;
+        sh.set({ scaleX: (it.w || bw) / bw, scaleY: (it.h || bh) / bh });
+        sh.setCoords();
+        syncLabel(sh);
+      } catch (err) {}
+    });
+    snap = snapWas;
+    cv.discardActiveObject();
+    cv.requestRenderAll();
+    quiet = false;
+  }
+
   function restore(j, cb) {
     quiet = true;
     // 畫布尺寸要先套：loadFromJSON 不管它，不先設好的話圖形會跑到畫布外面
     try {
       var jj = (typeof j === 'string') ? JSON.parse(j) : j;
+      if (jj && jj.egImport) {                 // Word 匯入的中介格式：用建構函式重建
+        buildFromImport(jj);
+        snapshot();
+        if (cb) cb();
+        return;
+      }
       if (jj && jj.egW && jj.egH) { cv.setWidth(jj.egW); cv.setHeight(jj.egH); }
     } catch (e) {}
     cv.loadFromJSON(j, function () {
