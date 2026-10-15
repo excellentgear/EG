@@ -1174,7 +1174,14 @@ function paintReport(rep) {
     $('#adReportBody').html(h);
     $('#adReport').show();
 }
-function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
+/* 連雙引號一起跳脫——原本走 jQuery 的 text→html，那個**不跳脫雙引號**，
+   拿去拼 value="…" 時只要值本身含引號就會被截斷（2026-10-15 的公版字型就是這樣
+   被存成空字串）。屬性值仍然建議直接用 DOM 設定，這裡是最後一道保險。 */
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 /* ── 版面樣板 ─────────────────────────────────────────────────────────────
    封面、文件制修訂紀錄書、目錄、每一頁的頁首頁尾一律由後端產生（API action=tpl），
@@ -1546,11 +1553,22 @@ $('#btnTpl').on('click', function(){
 function fillStyleForm() {
     if (!$('#stFont').length || !TPL || !TPL.style_opts) return;
     var o = TPL.style_opts, s = TPL.style || {};
+    /* ⚠ 一定要用 DOM 設 value，不可以拼 HTML 字串：
+       字型的值本身就含雙引號（"標楷體","DFKai-SB",serif），而 esc() 是
+       jQuery 的 text→html，**不跳脫雙引號**，拼進 value="…" 會在第一個引號就被截斷，
+       option 的 value 變成空字串 → 選了標楷體卻存進一個空值，
+       文件不會變、重開設定又跳回預設（使用者 2026-10-15 回報）。 */
     function fill($el, map, cur) {
-        $el.html(Object.keys(map).map(function(k){
-            return '<option value="' + esc(k) + '"' + (k === String(cur) ? ' selected' : '') + '>'
-                 + esc(map[k]) + '</option>';
-        }).join(''));
+        var el = $el[0];
+        if (!el) return;
+        el.innerHTML = '';
+        Object.keys(map).forEach(function (k) {
+            var op = document.createElement('option');
+            op.value = k;
+            op.textContent = map[k];
+            if (k === String(cur)) op.selected = true;
+            el.appendChild(op);
+        });
     }
     fill($('#stFont'), o.fonts, s.tbl_font || '');
     fill($('#stBStyle'), o.borders, s.brd_style || 'solid');
