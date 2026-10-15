@@ -2810,6 +2810,69 @@ function meetingRecordPageHtml(m, res, docNoMode){
         + '</div>';
 }
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
+function discListFromItems(items){ return (items||[]).filter(function(it){ return it.kind==='directive' || it.kind==='general'; }); }
+/* 討論列對應要項的文字：ref＝'general:2'（第2項），items 為 {kind,content} 陣列（編輯畫面與檢視共用） */
+function discRefLabel(ref, items){
+    if (!ref) return '綜合討論（不對應特定要項）';
+    var p = ref.split(':'), kind = p[0], no = +p[1], n = 0, hit = null;
+    (items||[]).forEach(function(it){ if (it.kind===kind){ n++; if (n===no) hit = it; } });
+    var nm = kind==='directive' ? '上級指示要項' : '會議要項';
+    return hit ? (nm+' 第'+no+'項：'+String(hit.content||'').replace(/\s+/g,' ').substr(0,24)) : (nm+' 第'+no+'項（項目已變動）');
+}
+function discParse(m){
+    var rows = [];
+    try { rows = m.discussion_json ? JSON.parse(m.discussion_json) : []; } catch(e){ rows = []; }
+    if (!rows.length && m.discussion) rows = [{ref:'', content:m.discussion}];   // 舊版純文字
+    return rows;
+}
+var DISC = [];
+function discEditItems(){
+    return ITEMS_D.map(function(it){ return {kind:'directive', content:it.content}; })
+        .concat(ITEMS_G.map(function(it){ return {kind:'general', content:it.content}; }));
+}
+function discDeptText(){
+    var seen = {}, out = [];
+    ATT.forEach(function(a){ var d=a.dept_name||''; if (d && !seen[d]){ seen[d]=1; out.push(d+'：'); } });
+    return out.join('\n');
+}
+function discAdd(){
+    DISC.push({ref:'', content: $('#discAutoDept').prop('checked') ? discDeptText() : ''});
+    renderDisc();
+}
+function discDel(i){ DISC.splice(i,1); renderDisc(); }
+function discFillDept(i){
+    var t = discDeptText(); if (!t){ alert('尚未加入出席人員。'); return; }
+    var cur = $.trim(DISC[i].content||'');
+    DISC[i].content = cur ? (cur+'\n'+t) : t;
+    renderDisc();
+}
+function renderDisc(){
+    var items = discEditItems(), h = '';
+    DISC.forEach(function(r,i){
+        var opts = '<option value="">綜合討論（不對應特定要項）</option>', n = {directive:0, general:0};
+        items.forEach(function(it){
+            n[it.kind]++;
+            var v = it.kind+':'+n[it.kind];
+            opts += '<option value="'+v+'"'+(r.ref===v?' selected':'')+'>'+esc(discRefLabel(v, items))+'</option>';
+        });
+        if (r.ref && opts.indexOf('value="'+r.ref+'"')<0) opts += '<option value="'+esc(r.ref)+'" selected>'+esc(discRefLabel(r.ref, items))+'</option>';
+        h += '<tr><td><select style="width:100%;font-size:12px;" data-eg-skip onchange="DISC['+i+'].ref=this.value">'+opts+'</select>'
+           + '<a href="javascript:void(0)" style="font-size:11px;display:block;margin-top:3px;" onclick="discFillDept('+i+')">代入與會者部門</a></td>'
+           + '<td><textarea rows="4" style="width:100%;" oninput="DISC['+i+'].content=this.value">'+esc(r.content||'')+'</textarea></td>'
+           + '<td><span class="att-del" onclick="discDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
+    });
+    $('#discBody').html(h || '<tr><td colspan="3" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立討論紀錄（沒有需要記錄討論過程的可略過）</td></tr>');
+}
+/* 討論過程紀錄表格：對應要項｜討論內容（檢視與列印共用） */
+function discussionTableHtml(m, items){
+    var rows = discParse(m); if (!rows.length) return '';
+    var list = discListFromItems(items);
+    return '<table class="mr-items" style="width:100%;border-collapse:collapse;"><thead><tr><th style="width:32%;">對應要項</th><th>討論內容</th></tr></thead><tbody>'
+        + rows.map(function(r){
+            return '<tr><td style="vertical-align:top;">'+esc(discRefLabel(r.ref, list))+'</td><td style="vertical-align:top;white-space:pre-wrap;text-align:left;">'+esc(r.content||'')+'</td></tr>';
+        }).join('') + '</tbody></table>';
+}
+/* 討論過程紀錄：獨立一頁（內容長短不定，不塞進固定版面的會議記錄頁） */
 function discussionPageHtml(m, res){
     var tbl = discussionTableHtml(m, res.items);
     if (!tbl) return '';
