@@ -31,6 +31,7 @@ $P   = adc_perms($db, $uid);
 
 $versionId = (int)($_GET['version_id'] ?? 0);
 $V = $versionId > 0 ? adc_version_info($db, $versionId) : null;
+if ($V) $P = adc_perms($db, $uid, (int)$V['doc_id']);   // 逐文件權限（見 adc_perms）
 
 $err = '';
 if (!$P['view'])                                      $err = '沒有 AS 文件的檢視權限';

@@ -115,13 +115,85 @@ function adc_dir(PDO $db): string
    依鐵律6 不登記進選單），所以沿用 as_doc 的角色與頁面權限，只多一個功能碼
    asdoc_edit_content。不要挪用既有的 asdoc_edit_online——那是「用本機 Word 開檔」。
    ════════════════════════════════════════════════════════════════════════ */
-function adc_perms(PDO $db, int $uid): array
+/**
+ * 線上版的權限。
+ *
+ * @param int $docId 指定文件時，**該文件的負責課室／所屬部門的人也能編輯它**
+ *   （使用者 2026-10-15：「應該要可以自動對應 AS 文件管理內此表單的負責課室與
+ *     表單掛在哪個課室底下」）。不指定就是全站層級的判定，行為與改版前相同。
+ *   設定類（公版、簽核、版面樣板）一律只有管理員，與這裡無關。
+ *
+ * @return array{view:bool,edit:bool,admin:bool,edit_src:string}
+ *   edit_src＝能編輯的原因：admin／role（有編輯線上內容的角色）／dept（負責課室或所屬部門）／''
+ */
+function adc_perms(PDO $db, int $uid, int $docId = 0): array
 {
     require_once __DIR__ . '/asdoc_lib.php';
     $view  = eg_asdoc_user_can($db, $uid, 'view');
     $admin = eg_asdoc_user_can($db, $uid, 'settings');   // 頁面A權或 as_doc 管理者
-    $edit  = $admin || eg_asdoc_user_can($db, $uid, 'edit_content');
-    return ['view' => $view, 'edit' => $edit, 'admin' => $admin];
+    $src   = '';
+    if ($admin) $src = 'admin';
+    elseif (eg_asdoc_user_can($db, $uid, 'edit_content')) $src = 'role';
+    elseif ($docId > 0 && adc_user_in_doc_depts($db, $uid, $docId)) $src = 'dept';
+    return ['view' => $view, 'edit' => $src !== '', 'admin' => $admin, 'edit_src' => $src];
+}
+
+/**
+ * 這份文件登記在哪些課室底下。
+ * 兩個來源都是 as_document_management.php 上設定的：
+ *   as_document.department_id  所屬部門（表單掛在哪個課室底下）
+ *   as_doc_owner_dept          負責課室（可複選）
+ *
+ * ⚠ **刻意不展開下轄單位**：一階手冊掛的是「總經理室」，而總經理室底下就是
+ *   技術課／品管課／資材課／生產課／業務課／管理課／文管中心＝全公司，
+ *   一展開就變成人人都能改手冊（實測 1-GM-01 正是這種情況）。
+ *   要讓更多課室能改，請到 AS 文件管理把那個課室加進「負責課室」（本來就可複選）。
+ * @return int[]
+ */
+function adc_doc_dept_ids(PDO $db, int $docId): array
+{
+    if ($docId <= 0) return [];
+    static $cache = [];
+    if (isset($cache[$docId])) return $cache[$docId];
+    $base = [];
+    try {
+        $st = $db->prepare("SELECT department_id FROM as_document WHERE id=? AND department_id IS NOT NULL");
+        $st->execute([$docId]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $base[] = (int)$x;
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT department_id FROM as_doc_owner_dept WHERE doc_id=?");
+        $st->execute([$docId]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $base[] = (int)$x;
+    } catch (Throwable $e) {}
+    return $cache[$docId] = array_values(array_unique(array_filter($base)));
+}
+
+/** 這個人是不是這份文件登記的課室的人；兼任的課室也算（不含下轄，見 adc_doc_dept_ids） */
+function adc_user_in_doc_depts(PDO $db, int $uid, int $docId): bool
+{
+    if ($uid <= 0 || $docId <= 0) return false;
+    $depts = adc_doc_dept_ids($db, $docId);
+    if (!$depts) return false;
+    try {
+        $in = implode(',', array_map('intval', $depts));
+        $st = $db->prepare("SELECT 1 FROM user_department_position_map
+                            WHERE user_id=? AND department_id IN ({$in}) LIMIT 1");
+        $st->execute([$uid]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/** 這份文件所屬／負責部門的名稱（畫面上要說清楚「誰可以改」） */
+function adc_doc_dept_names(PDO $db, int $docId): array
+{
+    $ids = adc_doc_dept_ids($db, $docId);
+    if (!$ids) return [];
+    try {
+        $in = implode(',', array_map('intval', $ids));
+        return $db->query("SELECT name FROM department WHERE id IN ({$in}) ORDER BY COALESCE(sort_order,999), id")
+                  ->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (Throwable $e) { return []; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════

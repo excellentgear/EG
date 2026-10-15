@@ -48,6 +48,17 @@ adc_ensure_schema($db);
 $P = adc_perms($db, $uid);
 if (!$P['view']) { http_response_code(403); jerr('沒有 AS 文件的檢視權限'); }
 
+/* 權限要**逐文件**再算一次：這份文件的負責課室／所屬部門的人也能編輯它
+   （使用者 2026-10-15）。幾乎每個端點都帶 version_id，拿它推出 doc_id。
+   ⚠ 一定要在 switch 之前就算好——各 case 是「先 needEdit 再 needVersion」，
+     等到 needVersion 才升級的話，needEdit 早就把人擋在外面了。
+   設定類端點走 needAdmin()，不受這裡影響。 */
+$pvid = (int)($_REQUEST['version_id'] ?? 0);
+if ($pvid > 0) {
+    $pv = adc_version_info($db, $pvid);
+    if ($pv) $P = adc_perms($db, $uid, (int)$pv['doc_id']);
+}
+
 /* 寫入一律驗 CSRF。先驗登入再驗 CSRF——token 會在同一個請求裡重新產生，
    順序顛倒的話已登出的人會一直看到「憑證失效」卻永遠存不進去
    （記憶 session_gc_csrf_false_alarm）。 */
@@ -57,8 +68,14 @@ if ($isWrite) {
         jerr('連線憑證失效，請重新整理頁面後再試 (CSRF)', 'CSRF');
     }
 }
-function needEdit(array $P) { if (empty($P['edit'])) { http_response_code(403); jerr('沒有編輯線上內容的權限（需要 AS 文件管理的「編輯線上內容」）'); } }
-function needAdmin(array $P) { if (empty($P['admin'])) { http_response_code(403); jerr('只有 AS 文件管理員可以改簽核設定'); } }
+function needEdit(array $P) {
+    if (empty($P['edit'])) {
+        http_response_code(403);
+        jerr('沒有編輯這份文件的權限。可以編輯的人：AS 文件管理員，'
+           . '或這份文件在「AS 文件管理」裡登記的負責課室／所屬部門的人員。');
+    }
+}
+function needAdmin(array $P) { if (empty($P['admin'])) { http_response_code(403); jerr('這項設定只有 AS 文件管理員可以改'); } }
 /* 送簽用的共用庫；**一定要宣告在 switch 外面**——寫在 case 之間的話，
    前一個 case 以 jout()/exit 結束就永遠執行不到那幾行，函式根本不會被定義。 */
 function adsLib() { require_once __DIR__ . '/../common/as_doc_sign_lib.php'; }

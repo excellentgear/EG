@@ -40,6 +40,9 @@ if ($versionId <= 0 && !empty($_GET['doc_id'])) {
     } catch (Throwable $e) {}
 }
 $V = $versionId > 0 ? adc_version_info($db, $versionId) : null;
+// 權限要**逐文件**再算一次：這份文件的負責課室／所屬部門的人也能編輯它
+// （使用者 2026-10-15）。設定類仍然只有管理員，見 adc_perms 的說明。
+if ($V) $P = adc_perms($db, $uid, (int)$V['doc_id']);
 if (empty($_SESSION['adc_csrf'])) $_SESSION['adc_csrf'] = bin2hex(random_bytes(16));
 
 $blocked = '';
@@ -271,6 +274,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <h4><i class="fa fa-lock"></i> <?= htmlspecialchars($blocked) ?></h4>
             <p>請洽管理者於「使用者權限設定」指派 AS 文件管理的相關角色，或回
                <a href="as_document_management.php">AS 文件管理</a> 重新選一份文件。</p>
+            <p style="font-size:13px;color:#8A5A2B">可以編輯某一份文件的人：AS 文件管理員，
+               或該文件在 AS 文件管理裡登記的<b>負責課室</b>／<b>所屬部門</b>的人員。</p>
         </div>
 <?php else: ?>
         <div class="ad-head">
@@ -284,6 +289,21 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <span id="adPrimaryBadge" class="ad-badge none">尚未建立線上版</span>
             <?php if ((int)$V['current_version_id'] !== (int)$V['version_id']): ?>
               <span class="ad-badge draft" title="這不是目前生效的版次，是歷史版本">歷史版本</span>
+            <?php endif; ?>
+            <?php
+              /* 能不能改這一份，取決於 AS 文件管理上的「所屬部門」與「負責課室」。
+                 唯讀的人一定要看得到「誰可以改」，不然只會以為系統壞了。 */
+              $adDepts = adc_doc_dept_names($db, (int)$V['doc_id']);
+              $adWho   = $adDepts ? implode('、', array_slice($adDepts, 0, 6))
+                                  . (count($adDepts) > 6 ? ' 等' : '') : '';
+            ?>
+            <?php if (!$P['edit']): ?>
+              <span class="ad-badge none" style="background:#e6ddd0;color:#8A5A2B"
+                    title="可以編輯的人：AS 文件管理員，或這份文件在『AS 文件管理』裡登記的負責課室／所屬部門的人員<?= $adWho ? '（' . htmlspecialchars($adWho) . '）' : '' ?>">
+                <i class="fa fa-eye"></i> 唯讀<?= $adWho ? '（可編輯：' . htmlspecialchars(mb_substr($adWho, 0, 18)) . '）' : '' ?></span>
+            <?php elseif (($P['edit_src'] ?? '') === 'dept'): ?>
+              <span class="ad-badge draft" title="你屬於這份文件的負責課室／所屬部門，所以可以編輯它">
+                <i class="fa fa-pencil"></i> 可編輯（本課室文件）</span>
             <?php endif; ?>
 
             <!-- 送審狀態放在「線上版草稿／正本」徽章右側（使用者 2026-09-24 交辦），
@@ -786,9 +806,22 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 
     <h4>權限角色</h4>
     <ul>
-      <li><b>檢視</b>：有 AS 文件檢視權就看得到線上內容。</li>
-      <li><b>編輯</b>：需要 AS 文件管理的頁面 A 權，或角色功能碼
-          <code>編輯線上內容（程序書電子版）</code>。</li>
+      <li><b>檢視</b>：有 AS 文件檢視權就看得到線上內容。沒有編輯權的人一律是唯讀，
+          文件標題列會標<span class="hl">「唯讀」</span>並寫出哪個課室可以改。</li>
+      <li><b>編輯</b>：符合下面任一種就能改<span class="hl">這一份</span>文件——
+        <ul>
+          <li>AS 文件管理員（頁面 A 權）；</li>
+          <li>有角色功能碼 <code>編輯線上內容（程序書電子版）</code>（可改全部文件）；</li>
+          <li><b>這份文件登記的課室的人</b>——也就是
+              <a href="as_document_management.php">AS 文件管理</a> 裡這份文件的
+              <span class="hl">所屬部門</span>（編輯資料內）或<span class="hl">負責課室</span>
+              （⚙ →「更新頻率 / 負責課室」，可複選）。</li>
+        </ul>
+        課室是<b>精準比對、不含下轄單位</b>：一階手冊掛的是「總經理室」，
+        而總經理室底下就是全公司，連下轄一起算的話等於人人都能改手冊。
+        要讓別的課室也能改，請到 AS 文件管理把那個課室<b>加進「負責課室」</b>。</li>
+      <li><b>設定</b>（公版表格外觀、簽核設定）：<span class="hl">只有 AS 文件管理員</span>，
+          課室成員看不到也改不了。</li>
       <li>已廢止的文件只有管理員能開啟（比照 AS 文件管理既有的口徑）。</li>
     </ul>
   </div>
