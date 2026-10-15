@@ -38,10 +38,17 @@
     'TABLE','THEAD','TBODY','TFOOT','TR','TD','TH','COLGROUP','COL',
     'IMG','HR','SUB','SUP'
   ]);
+  // span 的那一組＝AS 文件參照標記（見後端 EG_RT_DOC_ATTRS 的說明，兩邊必須一致）
   var DOC_ATTRS = { 'TD': ['colspan','rowspan'], 'TH': ['colspan','rowspan'],
-                    'IMG': ['data-asset'], 'COL': ['span'] };
+                    'IMG': ['data-asset'], 'COL': ['span'],
+                    'SPAN': ['class','data-asdoc','data-asno','data-asname','data-asmode','data-astpl'] };
   var DOC_ATTR_PAT = { 'colspan': /^([1-9]|[1-9]\d)$/, 'rowspan': /^([1-9]|[1-9]\d)$/,
-                       'span': /^([1-9]|[1-9]\d)$/, 'data-asset': /^[1-9]\d{0,9}$/ };
+                       'span': /^([1-9]|[1-9]\d)$/, 'data-asset': /^[1-9]\d{0,9}$/,
+                       'class': /^eg-asref$/, 'data-asdoc': /^[1-9]\d{0,9}$/,
+                       'data-asno': /^[0-9A-Za-z\-_.\/]{1,40}$/,
+                       'data-asname': /^[^<>\r\n]{1,120}$/,
+                       'data-asmode': /^(both|name|no)$/,
+                       'data-astpl': /^[^<>\r\n]{1,60}$/ };
   // 可選字型：值是「字型堆疊」——中文字型一定要有英文後援，不然換一台電腦就印不出來
   var DOC_FONTS = [
     ['', '（預設）'],
@@ -309,6 +316,13 @@
        + '<span class="egrt-sep"></span>';
     if (opt.onInsertImage) h += btn('egImage', 'picture-o', '插入圖片');
     if (opt.onInsertFlow)  h += btn('egFlow', 'sitemap', '插入流程圖');
+    /* 插入 AS 文件編號／名稱（2026-10-15 使用者交辦）。
+       刻意不用純圖示：這顆鈕一眼要看得出是「AS 文件」，所以圖示後面直接寫 AS。 */
+    if (opt.onInsertAsRef)
+      h += '<button type="button" class="egrt-btn" data-cmd="egAsRef" style="font-weight:bold"'
+         + ' title="插入 AS 文件編號／名稱：可打編號或名稱搜尋，也可以依部門與階別挑選；'
+         + '插入後那份文件改了編號或名稱，這裡會自動提醒你確認">'
+         + '<i class="fa fa-plus"></i> AS</button>';
     h += btn('egHr', 'minus', '水平線');
     h += '<span class="egrt-sep"></span>'
        + btn('egPageBreak', 'scissors', '在游標處分頁（游標後面的內容移到新的一頁）')
@@ -1191,6 +1205,7 @@
         if (cmd === 'egLhDown')    { bumpLineHeight(-0.1); return; }
         // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
         if (cmd === 'egImage')     { rememberRange(); if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
+        if (cmd === 'egAsRef')     { rememberRange(); if (opt.onInsertAsRef) opt.onInsertAsRef(insertHtml); return; }
         if (cmd === 'egFlow')      { rememberRange(); if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
       }
       useCss(cmd);

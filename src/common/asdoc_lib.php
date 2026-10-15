@@ -38,6 +38,142 @@ function eg_asdoc_list(PDO $db): array {
     } catch (Throwable $e) { return []; }
 }
 
+/**
+ * 文件清單（含部門、階別、是否廢止）——給「插入 AS 文件編號／名稱」的挑選器用。
+ * 刻意另開一支而不是改 eg_asdoc_list()：那一支是**綁定選擇器**在用的（全站 20 幾個
+ * 呼叫端），欄位一多前端的篩選與顯示就得跟著改，沒必要冒這個險。
+ */
+function eg_asdoc_list_full(PDO $db): array {
+    try {
+        $rows = $db->query("SELECT d.id, d.doc_no, d.doc_name, d.doc_level, d.doc_type,
+                                   d.department_id, dp.name AS dept_name,
+                                   COALESCE(d.is_obsolete,0) AS is_obsolete, d.current_version
+                            FROM as_document d
+                            LEFT JOIN department dp ON dp.id = d.department_id
+                            WHERE d.is_deleted=0
+                            ORDER BY d.doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    /* 負責課室（as_doc_owner_dept，多對多）也要一起帶：文件的 department_id 常常是空的，
+       現場是靠負責課室在管的——只給 department_id 的話「依部門挑文件」會有一大半挑不到。 */
+    $own = [];
+    try {
+        foreach ($db->query("SELECT o.doc_id, o.department_id, dp.name
+                             FROM as_doc_owner_dept o
+                             LEFT JOIN department dp ON dp.id = o.department_id")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $own[(int)$r['doc_id']][] = ['id' => (int)$r['department_id'], 'name' => (string)$r['name']];
+        }
+    } catch (Throwable $e) {}
+    foreach ($rows as &$r) {
+        $r['id'] = (int)$r['id'];
+        $r['is_obsolete'] = (int)$r['is_obsolete'];
+        $r['owner_depts'] = $own[$r['id']] ?? [];
+    }
+    unset($r);
+    return $rows;
+}
+
+/* ── 插入 AS 文件編號／名稱的格式（管理員可設定）─────────────────────────────
+   使用者 2026-10-15：「選擇帶入文件名稱與文件編號時，管理員可以設定哪幾種樣式自動帶入」，
+   並指定預設兩種＝「人力資源管理程序　(2-MM-01)」與「2-MM-01人力資源管理程序」。
+   樣板用 {name}／{no} 兩個代碼，插入時原樣替換。
+   **只帶名稱時固定用「」框住**（使用者指定）；插進去之後就是普通文字，要刪引號自己刪。 */
+if (!defined('EG_ASDOC_INS_GROUP')) define('EG_ASDOC_INS_GROUP', 'AS_DOC_INSERT');
+
+/** 預設樣式（使用者指定的那兩種，不可以刪到一種都不剩） */
+function eg_asdoc_insert_styles_default(): array {
+    return [
+        ['id' => 's0', 'label' => '名稱　(編號)', 'tpl' => '{name}　({no})'],
+        ['id' => 's1', 'label' => '編號名稱',     'tpl' => '{no}{name}'],
+    ];
+}
+
+/** 目前的樣式清單（沒設定過就回預設） */
+function eg_asdoc_insert_styles(PDO $db): array {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters
+                            WHERE param_group=? AND param_key='styles' LIMIT 1");
+        $st->execute([EG_ASDOC_INS_GROUP]);
+        $j = (string)($st->fetchColumn() ?: '');
+        $a = $j !== '' ? json_decode($j, true) : null;
+        if (is_array($a) && $a) {
+            $out = [];
+            foreach ($a as $x) {
+                if (!is_array($x)) continue;
+                $tpl = trim((string)($x['tpl'] ?? ''));
+                // 樣板一定要用到至少一個代碼，不然插進去是一段跟文件無關的死字串
+                if ($tpl === '' || (strpos($tpl, '{name}') === false && strpos($tpl, '{no}') === false)) continue;
+                $out[] = ['id'    => 's' . count($out),
+                          'label' => (string)($x['label'] ?? $tpl),
+                          'tpl'   => $tpl];
+            }
+            if ($out) return $out;
+        }
+    } catch (Throwable $e) {}
+    return eg_asdoc_insert_styles_default();
+}
+
+/** 存樣式清單（限管理員，呼叫端自己把關）。回傳 [ok, msg] */
+function eg_asdoc_insert_styles_save(PDO $db, array $rows, int $uid): array {
+    $out = [];
+    foreach ($rows as $x) {
+        if (!is_array($x)) continue;
+        $tpl = trim((string)($x['tpl'] ?? ''));
+        if ($tpl === '') continue;
+        if (mb_strlen($tpl) > 60) return [false, '樣式樣板太長（上限 60 字）'];
+        if (strpos($tpl, '{name}') === false && strpos($tpl, '{no}') === false)
+            return [false, '樣式樣板至少要用到 {name} 或 {no} 其中一個'];
+        if (preg_match('/[<>]/u', $tpl)) return [false, '樣式樣板不可以含 < 或 >'];
+        $label = trim((string)($x['label'] ?? '')) ?: $tpl;
+        if (mb_strlen($label) > 30) $label = mb_substr($label, 0, 30);
+        $out[] = ['id' => 's' . count($out), 'label' => $label, 'tpl' => $tpl];
+        if (count($out) >= 12) break;
+    }
+    if (!$out) return [false, '至少要留一種樣式'];
+    try {
+        $st = $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,updated_by,updated_at)
+                            VALUES (?,'styles',?,?,NOW())
+                            ON DUPLICATE KEY UPDATE param_value=VALUES(param_value),
+                                updated_by=VALUES(updated_by), updated_at=NOW()");
+        $st->execute([EG_ASDOC_INS_GROUP, json_encode($out, JSON_UNESCAPED_UNICODE), (string)$uid]);
+    } catch (Throwable $e) { return [false, '存檔失敗：' . $e->getMessage()]; }
+    return [true, '已存檔'];
+}
+
+/**
+ * 依「帶入方式」組出要插入的文字。
+ * @param string $mode  both＝名稱＋編號（走樣式樣板）／name＝只有名稱（自動加「」）／no＝只有編號
+ * @param string $tpl   mode=both 時用的樣板（{name}/{no}）
+ */
+function eg_asdoc_insert_text(string $mode, string $docNo, string $docName, string $tpl = ''): string {
+    $docNo = trim($docNo); $docName = trim($docName);
+    if ($mode === 'no')   return $docNo;
+    if ($mode === 'name') return '「' . $docName . '」';
+    if ($tpl === '') $tpl = '{name}　({no})';
+    return str_replace(['{no}', '{name}'], [$docNo, $docName], $tpl);
+}
+
+/**
+ * 插入到線上版內文的「參照標記」HTML。
+ *
+ * 為什麼要包一層 span 而不是直接插純文字：被引用的那份文件改了編號或名稱時，
+ * 純文字只能靠「字串比對」去找（`as_doc_ref_lib.php` 原本就是這樣做的），
+ * 一旦名稱裡有標點或被換行拆開就找不到、而且**完全不報錯**。
+ * 帶著 `data-asdoc` 就能精準反查「哪一份文件、第幾處」，改名也連動得到。
+ *
+ * class 一律用 eg-asref（白名單已放行 data-asdoc/data-asno/data-asname/data-asmode/data-astpl）。
+ */
+function eg_asdoc_ref_span(int $docId, string $docNo, string $docName, string $mode, string $tpl = ''): string {
+    $txt = eg_asdoc_insert_text($mode, $docNo, $docName, $tpl);
+    $esc = function ($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); };
+    return '<span class="eg-asref" data-asdoc="' . (int)$docId . '"'
+         . ' data-asno="' . $esc($docNo) . '"'
+         . ' data-asname="' . $esc($docName) . '"'
+         . ' data-asmode="' . $esc($mode) . '"'
+         . ($tpl !== '' ? ' data-astpl="' . $esc($tpl) . '"' : '')
+         . '>' . $esc($txt) . '</span>';
+}
+
 /** 某模組綁定的 as_document.id（未綁定回 0） */
 function eg_asdoc_id(PDO $db, string $module): int {
     $read = function (string $g, string $k) use ($db): int {
@@ -192,7 +328,7 @@ function eg_asdoc_page_perm(PDO $db, int $uid): string {
 
 /** 能力判斷本體（不查 DB，供已經算好 features／pagePerm 的呼叫端使用；AS_Document_API 的 asCan() 走這支）。 */
 function eg_asdoc_can_with(array $features, bool $isRoleAdmin, string $pagePerm, string $what): bool {
-    if ($isRoleAdmin || strpos($pagePerm, 'A') !== false) return true;
+    if (eg_asdoc_is_admin_with($isRoleAdmin, $pagePerm, $features)) return true;
     $charMap = ['view'=>'R', 'create'=>'C', 'update'=>'U', 'delete'=>'D'];
     if (isset($charMap[$what]) && strpos($pagePerm, $charMap[$what]) !== false) return true;
     // 上傳紀錄：與「新增文件」分開設定，但相容既有已具新增文件權限者
@@ -214,8 +350,13 @@ function eg_asdoc_can_with(array $features, bool $isRoleAdmin, string $pagePerm,
  * eg_asdoc_is_admin()——兩邊各寫一次的話，會出現「前端顯示按鈕、後端擋下」（違反鐵律8）。
  * 更新頻率／負責課室（save_doc_freq）與文件備註都是用這條判定。
  */
-function eg_asdoc_is_admin_with(bool $isRoleAdmin, string $pagePerm): bool {
-    return $isRoleAdmin || strpos($pagePerm, 'A') !== false;
+function eg_asdoc_is_admin_with(bool $isRoleAdmin, string $pagePerm, array $features = []): bool {
+    /* asdoc_admin＝「本頁管理員」（ai-rules/26）：使用者 2026-10-15 要求
+       「增加本頁管理員，跟目前 AS負責人 角色是分開的，AS負責人只能有一人，
+       但可以有多個本頁管理員，方便除了負責人以外的人可以協助管理」。
+       所以本頁所有管理員功能一律走這一支，不要再去比對 A 級權限或 all 角色。 */
+    return $isRoleAdmin || strpos($pagePerm, 'A') !== false
+        || in_array('asdoc_admin', $features, true);
 }
 
 /** 由 user id 判斷是不是 AS 文件管理員（給 AS 文件管理以外的模組用，例如 AS 文件排程） */
@@ -224,7 +365,7 @@ function eg_asdoc_is_admin(PDO $db, int $uid): bool {
     require_once __DIR__ . '/role_features_helper.php';
     try { $features = rf_load_user_features_override($db, $uid, 'as_doc'); }
     catch (Throwable $e) { $features = []; }
-    return eg_asdoc_is_admin_with(in_array('all', $features, true), eg_asdoc_page_perm($db, $uid));
+    return eg_asdoc_is_admin_with(in_array('all', $features, true), eg_asdoc_page_perm($db, $uid), $features);
 }
 
 /** 由 user id 直接判斷 AS 文件管理的某項能力（view/create/update/delete/settings/…）。 */

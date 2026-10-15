@@ -109,14 +109,27 @@ define('EG_RT_DOC_ATTRS', [
     'th'  => ['colspan','rowspan'],
     'img' => ['data-asset'],
     'col' => ['span'],
+    /* AS 文件參照標記（2026-10-15）：用「插入 AS 文件編號／名稱」放進內文的那一段，
+       包成 <span class="eg-asref" data-asdoc="12" data-asno="2-MM-01" …>。
+       為什麼要留這些屬性：被引用的那份文件改了編號或名稱時，純文字只能靠字串比對去找
+       （名稱裡有標點或被換行拆開就找不到、而且完全不報錯），帶著 data-asdoc 才能精準反查。
+       class 的值由 attrPat 鎖死成 eg-asref 一種，不是開放任意 class。 */
+    'span' => ['class','data-asdoc','data-asno','data-asname','data-asmode','data-astpl'],
 ]);
 
 /** 屬性值檢查：只收得下這幾種，其餘一律丟掉 */
 define('EG_RT_DOC_ATTR_PAT', [
-    'colspan'    => '/^([1-9]|[1-9]\d)$/',
-    'rowspan'    => '/^([1-9]|[1-9]\d)$/',
-    'span'       => '/^([1-9]|[1-9]\d)$/',
-    'data-asset' => '/^[1-9]\d{0,9}$/',
+    'colspan'     => '/^([1-9]|[1-9]\d)$/',
+    'rowspan'     => '/^([1-9]|[1-9]\d)$/',
+    'span'        => '/^([1-9]|[1-9]\d)$/',
+    'data-asset'  => '/^[1-9]\d{0,9}$/',
+    // class 只放行這一個值；開放任意 class 等於讓人注入版面樣式
+    'class'       => '/^eg-asref$/',
+    'data-asdoc'  => '/^[1-9]\d{0,9}$/',
+    'data-asno'   => '/^[0-9A-Za-z\-_.\/]{1,40}$/',
+    'data-asname' => '/^[^<>\r\n]{1,120}$/u',
+    'data-asmode' => '/^(both|name|no)$/',
+    'data-astpl'  => '/^[^<>\r\n]{1,60}$/u',
 ]);
 
 /**

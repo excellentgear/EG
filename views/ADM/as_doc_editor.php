@@ -254,7 +254,31 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .st-prev table.adt-hdr { margin-bottom:2mm; }
         .tpl-row.tpl-l1 { display:none; }        /* 只有一階文件才顯示，由 JS 打開 */
 
-        @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; } }
+        /* 插入 AS 文件編號／名稱 的挑選器 */
+        .ar-filters { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+        .ar-list { border:1px solid #e4d3ba; border-radius:4px; height:230px; overflow:auto; background:#fff; }
+        .ar-item { display:flex; gap:10px; align-items:baseline; padding:5px 10px; cursor:pointer;
+                   border-bottom:1px solid #f3ece1; font-size:13px; }
+        .ar-item:hover { background:#fbf6ee; }
+        .ar-item.on { background:#f0dfc4; }
+        .ar-no { font-weight:bold; color:#6B471A; min-width:92px; }
+        .ar-nm { color:#333; flex:1; }
+        .ar-dp { color:#8A5A2B; font-size:12px; }
+        .ar-obs { color:#DD5138; font-size:12px; }
+        .ar-empty { padding:14px; text-align:center; color:#8A5A2B; font-size:13px; }
+        .ar-pick { display:flex; gap:14px; margin-top:10px; }
+        .ar-pick-l { width:250px; font-size:13px; color:#6B471A; }
+        .ar-sel { margin-top:5px; padding:7px 9px; border:1px dashed #e4d3ba; border-radius:4px;
+                  background:#fbf6ee; min-height:40px; font-size:13px; }
+        .ar-pick-r { flex:1; }
+        .ar-row { display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap; font-size:13px; }
+        .ar-row label { font-weight:normal; margin:0; }
+        .ar-lab { color:#8A5A2B; font-size:12px; min-width:34px; }
+        .ar-prev { font-weight:bold; color:#6B471A; background:#f0dfc4; padding:4px 10px; border-radius:3px; }
+        /* 內文裡的參照標記：畫面上淡淡標起來，知道這段字跟哪份文件連著；列印一律不標 */
+        .egrt-main .eg-asref { background:#FDF4E6; border-bottom:1px dotted #d8b98a; }
+        @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; }
+                       .eg-asref { background:none !important; border:none !important; } }
     </style>
 </head>
 <body class="nav-sm">
@@ -439,6 +463,89 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
     </div>
   </div>
   <div class="m-foot"><button class="btn btn-default btn-sm" data-close="mRef">關閉</button></div>
+</div></div>
+
+<!-- 插入 AS 文件編號／名稱（2026-10-15 使用者交辦）
+     打編號或名稱即時搜尋，也可以依部門與階別挑；可選只帶名稱／只帶編號／兩個都帶，
+     並可自訂前後綴。插進去的是帶 data-asdoc 的參照標記，之後那份文件改編號或改名
+     就會自動提醒來確認（見 as_doc_ref_lib.php）。 -->
+<div class="m-mask" id="mAsRef"><div class="m-win" style="width:900px;max-width:96vw;">
+  <div class="m-head">插入 AS 文件編號／名稱 <span class="m-x" data-close="mAsRef">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      插入之後這段文字會<b>記住是哪一份文件</b>——那份文件日後改了編號或名稱，
+      這份文件打開時會跳出提示請你確認要不要跟著改（不會自動改掉，一律經過人確認）。<br>
+      只帶名稱時會自動用<b>「」</b>框住，不想要的話插入後自己把引號刪掉就好。
+    </div>
+    <div class="ar-filters">
+      <input type="text" id="arKw" class="form-control input-sm" style="width:260px"
+             placeholder="打編號或名稱搜尋，例如 2-MM 或 人力資源" data-eg-skip>
+      <select id="arDept" class="form-control input-sm" style="width:150px" data-eg-skip></select>
+      <select id="arLevel" class="form-control input-sm" style="width:110px" data-eg-skip></select>
+      <label style="font-weight:normal;font-size:12px;margin:0;color:#6B471A">
+        <input type="checkbox" id="arObs" data-eg-skip> 含已廢止
+      </label>
+      <span id="arCount" style="font-size:12px;color:#8A5A2B;margin-left:auto"></span>
+    </div>
+    <div class="ar-list" id="arList"></div>
+    <div class="ar-pick">
+      <div class="ar-pick-l">
+        <div><b>選到的文件</b></div>
+        <div id="arSel" class="ar-sel">尚未選擇（請點上面清單的一列）</div>
+      </div>
+      <div class="ar-pick-r">
+        <div class="ar-row">
+          <span class="ar-lab">帶入</span>
+          <label><input type="radio" name="arMode" value="both" checked data-eg-skip> 名稱＋編號</label>
+          <label><input type="radio" name="arMode" value="name" data-eg-skip> 只有名稱</label>
+          <label><input type="radio" name="arMode" value="no" data-eg-skip> 只有編號</label>
+        </div>
+        <div class="ar-row" id="arStyleRow">
+          <span class="ar-lab">樣式</span>
+          <select id="arStyle" class="form-control input-sm" style="width:260px" data-eg-skip></select>
+          <button class="btn btn-default btn-xs" id="btnArStyleCfg" style="display:none"
+                  title="管理員可以增減「名稱＋編號」的排列樣式">樣式設定</button>
+        </div>
+        <div class="ar-row">
+          <span class="ar-lab">前綴</span>
+          <input type="text" id="arPre" class="form-control input-sm" style="width:110px" maxlength="20" data-eg-skip>
+          <span class="ar-lab">後綴</span>
+          <input type="text" id="arPost" class="form-control input-sm" style="width:110px" maxlength="20" data-eg-skip>
+          <span style="font-size:12px;color:#8A5A2B">（例如前綴「依」、後綴「辦理」）</span>
+        </div>
+        <div class="ar-row">
+          <span class="ar-lab">預覽</span>
+          <span class="ar-prev" id="arPrev">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="m-foot">
+    <button class="btn btn-default btn-sm" data-close="mAsRef">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnArInsert" disabled><i class="fa fa-plus"></i> 插入到游標位置</button>
+  </div>
+</div></div>
+
+<!-- 「名稱＋編號」的排列樣式（限管理員） -->
+<div class="m-mask" id="mArStyle"><div class="m-win" style="width:620px;max-width:96vw;">
+  <div class="m-head">插入樣式設定 <span class="m-x" data-close="mArStyle">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      樣板用 <b>{name}</b> 代表文件名稱、<b>{no}</b> 代表文件編號，其餘字元原樣輸出。<br>
+      例：<code>{name}　({no})</code> → 人力資源管理程序　(2-MM-01)；<code>{no}{name}</code> → 2-MM-01人力資源管理程序。<br>
+      至少要留一種樣式；樣板一定要用到 {name} 或 {no} 其中一個（不然插進去會是一段跟文件無關的死字串）。
+    </div>
+    <table class="table table-condensed" id="arStyleTbl">
+      <thead><tr><th style="width:180px">顯示名稱</th><th>樣板</th><th style="width:60px"></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button class="btn btn-default btn-xs" id="btnArStyleAdd"><i class="fa fa-plus"></i> 新增一種</button>
+    <div id="arStyleMsg" style="margin-top:8px;font-size:12px;color:#DD5138"></div>
+  </div>
+  <div class="m-foot">
+    <button class="btn btn-default btn-sm" data-close="mArStyle">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnArStyleSave"><i class="fa fa-save"></i> 儲存</button>
+  </div>
 </div></div>
 
 <!-- 插入圖片 -->
@@ -1682,6 +1789,202 @@ $('#btnTplSave').on('click', function(){
     }, 'json');
 });
 
+/* ── 插入 AS 文件編號／名稱（2026-10-15 使用者交辦）──────────────────────
+   文件清單一次撈回來（164 份只有幾十 KB），之後打字即時篩選，不每打一個字就打一支 API。
+   ⚠ 真正要插入的 HTML 一律由後端組（asref_build）：名稱與編號必須以資料庫**現況**為準，
+     用畫面上幾分鐘前載入的舊值拼出來，插進去就是一段對不上的文字（鐵律8 同一個精神）。 */
+var AR = { docs: [], styles: [], depts: [], levels: [], pick: null,
+           insert: null,      // 內文：拿到 HTML 直接插到游標位置
+           pickCb: null,      // 流程圖：只要「文字＋引用了哪一份文件」，不插 HTML
+           loaded: false };
+
+function arLoad(cb) {
+    if (AR.loaded) { cb && cb(); return; }
+    $.getJSON(API, { action: 'asref_meta', version_id: VID }, function (r) {
+        if (!r || !r.success) { alert((r && r.message) || '讀不到 AS 文件清單'); return; }
+        AR.docs = r.docs || []; AR.styles = r.styles || [];
+        AR.depts = r.depts || []; AR.levels = r.levels || [];
+        AR.loaded = true;
+        var dh = '<option value="">全部部門</option>';
+        AR.depts.forEach(function (d) { dh += '<option value="' + d.id + '">' + esc(d.name) + '</option>'; });
+        $('#arDept').html(dh);
+        var lh = '<option value="">全部階別</option>';
+        AR.levels.forEach(function (l) { lh += '<option value="' + esc(l) + '">' + esc(l) + '</option>'; });
+        $('#arLevel').html(lh);
+        arFillStyles();
+        $('#btnArStyleCfg').toggle(!!r.can_admin);
+        cb && cb();
+    });
+}
+function arFillStyles() {
+    var h = '';
+    AR.styles.forEach(function (s) {
+        h += '<option value="' + esc(s.id) + '">' + esc(s.label) + '　→　' + esc(s.tpl) + '</option>';
+    });
+    $('#arStyle').html(h);
+}
+/** 篩選規則：關鍵字比對編號與名稱（多個關鍵字空白分隔，每個都要命中） */
+function arRows() {
+    var kw = String($('#arKw').val() || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var dept = parseInt($('#arDept').val() || '0', 10) || 0;
+    var lv = String($('#arLevel').val() || '');
+    var obs = $('#arObs').is(':checked');
+    return AR.docs.filter(function (d) {
+        if (!obs && d.is_obsolete) return false;
+        if (lv && d.doc_level !== lv) return false;
+        if (dept) {
+            var hit = (parseInt(d.department_id || 0, 10) === dept);
+            (d.owner_depts || []).forEach(function (o) { if (parseInt(o.id, 10) === dept) hit = true; });
+            if (!hit) return false;
+        }
+        if (kw.length) {
+            var hay = ((d.doc_no || '') + ' ' + (d.doc_name || '')).toLowerCase();
+            for (var i = 0; i < kw.length; i++) if (hay.indexOf(kw[i]) < 0) return false;
+        }
+        return true;
+    });
+}
+function arRender() {
+    var rows = arRows();
+    $('#arCount').text('符合 ' + rows.length + ' 份 / 共 ' + AR.docs.length + ' 份');
+    if (!rows.length) { $('#arList').html('<div class="ar-empty">沒有符合條件的文件</div>'); return; }
+    var h = '';
+    rows.slice(0, 300).forEach(function (d) {
+        var dp = (d.owner_depts || []).map(function (o) { return o.name; }).join('、') || (d.dept_name || '');
+        h += '<div class="ar-item' + (AR.pick && AR.pick.id === d.id ? ' on' : '') + '" data-id="' + d.id + '">'
+           + '<span class="ar-no">' + esc(d.doc_no) + '</span>'
+           + '<span class="ar-nm">' + esc(d.doc_name) + '</span>'
+           + '<span class="ar-dp">' + esc(d.doc_level || '') + (dp ? '／' + esc(dp) : '') + '</span>'
+           + (d.is_obsolete ? '<span class="ar-obs">已廢止</span>' : '')
+           + '</div>';
+    });
+    if (rows.length > 300) h += '<div class="ar-empty">還有 ' + (rows.length - 300) + ' 份，請再打幾個字縮小範圍</div>';
+    $('#arList').html(h);
+}
+function arPrev() {
+    if (!AR.pick) { $('#arPrev').text('—'); $('#btnArInsert').prop('disabled', true); return; }
+    var mode = $('input[name=arMode]:checked').val() || 'both';
+    $('#arStyleRow').toggle(mode === 'both');
+    var txt;
+    if (mode === 'no') txt = AR.pick.doc_no;
+    else if (mode === 'name') txt = '「' + AR.pick.doc_name + '」';
+    else {
+        var sid = $('#arStyle').val(), tpl = (AR.styles[0] || {}).tpl || '{name}　({no})';
+        AR.styles.forEach(function (s) { if (s.id === sid) tpl = s.tpl; });
+        txt = tpl.replace(/\{no\}/g, AR.pick.doc_no).replace(/\{name\}/g, AR.pick.doc_name);
+    }
+    txt = String($('#arPre').val() || '') + txt + String($('#arPost').val() || '');
+    $('#arPrev').text(txt);
+    $('#btnArInsert').prop('disabled', false);
+}
+$('#arKw,#arDept,#arLevel,#arObs').on('input change', function () { arRender(); });
+$(document).on('click', '.ar-item', function () {
+    var id = parseInt($(this).data('id'), 10);
+    AR.docs.forEach(function (d) { if (d.id === id) AR.pick = d; });
+    $('.ar-item').removeClass('on');
+    $(this).addClass('on');
+    if (AR.pick) {
+        $('#arSel').html('<b>' + esc(AR.pick.doc_no) + '</b>　' + esc(AR.pick.doc_name)
+            + (AR.pick.is_obsolete ? '　<span style="color:#DD5138">（這份文件已廢止，確定要引用嗎？）</span>' : ''));
+    }
+    arPrev();
+});
+$('input[name=arMode],#arStyle').on('change', arPrev);
+$('#arPre,#arPost').on('input', arPrev);
+
+$('#btnArInsert').on('click', function () {
+    if (!AR.pick || (!AR.insert && !AR.pickCb)) return;
+    var mode = $('input[name=arMode]:checked').val() || 'both';
+    var sid = $('#arStyle').val() || '';
+    var $b = $(this).prop('disabled', true);
+    $.post(API, {
+        action: 'asref_build', csrf: CSRF, version_id: VID, doc_id: AR.pick.id,
+        mode: mode, style: sid,
+        pre: $('#arPre').val() || '', post: $('#arPost').val() || ''
+    }, function (r) {
+        $b.prop('disabled', false);
+        if (!r || !r.success) { alert((r && r.message) || '插入失敗'); return; }
+        if (AR.pickCb) {
+            /* 流程圖那邊是畫布上的文字物件，不能插 HTML——改回傳「文字＋引用了哪一份文件」，
+               由流程圖編輯器自己記在物件的 egAsRef 上（見 _flow_editor_ui.php 的 asRefInsert）。 */
+            var tpl = '';
+            AR.styles.forEach(function (x) { if (x.id === sid) tpl = x.tpl; });
+            AR.pickCb({ doc_id: AR.pick.id, no: AR.pick.doc_no, name: AR.pick.doc_name,
+                        mode: mode, tpl: (mode === 'both' ? (tpl || (AR.styles[0] || {}).tpl || '') : ''),
+                        text: r.text });
+            AR.pickCb = null;
+        } else {
+            AR.insert(r.html);
+            $('#adSaved').text('已插入「' + r.text + '」').show();
+        }
+        closeMask('mAsRef');
+    }, 'json');
+});
+/* 關掉挑選器就把「這一次是給誰用的」清掉，否則下次從內文開啟時會插到流程圖去 */
+$(document).on('click', '[data-close="mAsRef"]', function () { AR.pickCb = null; });
+
+/** 給流程圖編輯器用的兩個回呼（挑文件、比對引用的文件改了沒） */
+function flowAsRefOpts() {
+    return {
+        onPickAsRef: function (done) {
+            AR.pickCb = done;
+            arLoad(function () { arRender(); arPrev(); openMask('mAsRef'); });
+        },
+        onAsRefCheck: function (list, cb) {
+            var ids = list.map(function (x) { return x.doc_id; }).join(',');
+            if (!ids) { cb(null); return; }
+            $.getJSON(API, { action: 'asref_resolve', version_id: VID, ids: ids }, function (r) {
+                cb(r && r.success ? (r.docs || {}) : null);
+            });
+        }
+    };
+}
+
+/* 樣式設定（限管理員） */
+function arStyleRows() {
+    var h = '';
+    AR.styles.forEach(function (s) {
+        h += '<tr><td><input type="text" class="form-control input-sm as-lab" maxlength="30" value="' + esc(s.label) + '" data-eg-skip></td>'
+           + '<td><input type="text" class="form-control input-sm as-tpl" maxlength="60" value="' + esc(s.tpl) + '" data-eg-skip></td>'
+           + '<td><button class="btn btn-default btn-xs as-del" title="刪除這一種">&times;</button></td></tr>';
+    });
+    $('#arStyleTbl tbody').html(h);
+}
+$('#btnArStyleCfg').on('click', function () { arStyleRows(); $('#arStyleMsg').text(''); openMask('mArStyle'); });
+$('#btnArStyleAdd').on('click', function () {
+    $('#arStyleTbl tbody').append('<tr><td><input type="text" class="form-control input-sm as-lab" maxlength="30" data-eg-skip></td>'
+        + '<td><input type="text" class="form-control input-sm as-tpl" maxlength="60" value="{name}　({no})" data-eg-skip></td>'
+        + '<td><button class="btn btn-default btn-xs as-del">&times;</button></td></tr>');
+});
+$(document).on('click', '.as-del', function () {
+    if ($('#arStyleTbl tbody tr').length <= 1) { $('#arStyleMsg').text('至少要留一種樣式'); return; }
+    $(this).closest('tr').remove();
+    $('#arStyleMsg').text('');
+});
+$('#btnArStyleSave').on('click', function () {
+    var rows = [], bad = '';
+    $('#arStyleTbl tbody tr').each(function () {
+        var lab = String($(this).find('.as-lab').val() || '').trim();
+        var tpl = String($(this).find('.as-tpl').val() || '').trim();
+        if (tpl === '') return;
+        // 前端先擋一次（後端同規則再擋一次＝鐵律8）
+        if (tpl.indexOf('{name}') < 0 && tpl.indexOf('{no}') < 0) bad = '樣板「' + tpl + '」沒有用到 {name} 或 {no}';
+        if (/[<>]/.test(tpl)) bad = '樣板不可以含 < 或 >';
+        rows.push({ label: lab || tpl, tpl: tpl });
+    });
+    if (bad) { $('#arStyleMsg').text(bad); return; }
+    if (!rows.length) { $('#arStyleMsg').text('至少要留一種樣式'); return; }
+    $.post(API, { action: 'asref_styles_save', csrf: CSRF, version_id: VID, styles: JSON.stringify(rows) },
+        function (r) {
+            if (!r || !r.success) { $('#arStyleMsg').text((r && r.message) || '存檔失敗'); return; }
+            AR.styles = r.styles || rows;
+            arFillStyles();
+            arPrev();
+            closeMask('mArStyle');
+            $('#adSaved').text('插入樣式已存檔').show();
+        }, 'json');
+});
+
 /* ── 建立編輯器（圖片/流程圖/裁切都掛回呼，共用元件不碰模組 API）────────── */
 function mkEditor() {
     return EGRichText.attach('#adEditorHost', {
@@ -1696,8 +1999,14 @@ function mkEditor() {
         assetKind: function(id){ return ASSET_KIND[String(id)] || 'image'; },
         onChange: function(){ setDirty(true); },
         onInsertImage: function(insert){ openUpload(insert); },
+        onInsertAsRef: function(insertHtml){
+            AR.insert = insertHtml;
+            arLoad(function(){ arRender(); arPrev(); openMask('mAsRef'); });
+        },
         onInsertFlow: function(insert){
-            EGFlow.open({ json:null, onSave: function(png, json){
+            EGFlow.open({ json:null, onPickAsRef: flowAsRefOpts().onPickAsRef,
+              onAsRefCheck: flowAsRefOpts().onAsRefCheck,
+              onSave: function(png, json){
                 saveFlow(0, png, json, function(id){
                     ASSET_KIND[String(id)] = 'flow';
                     insert(id, { width:'70%' });
@@ -1708,7 +2017,10 @@ function mkEditor() {
         onEditFlow: function(assetId, done){
             $.getJSON(API, { action:'get_flow', id:assetId, version_id:VID }, function(r){
                 if (!r.success) { alert(r.message || '讀不到這張流程圖的編輯資料'); return; }
-                EGFlow.open({ json:r.flow_json, onSave: function(png, json){
+                EGFlow.open({ json:r.flow_json,
+                    onPickAsRef: flowAsRefOpts().onPickAsRef,
+                    onAsRefCheck: flowAsRefOpts().onAsRefCheck,
+                    onSave: function(png, json){
                     saveFlow(assetId, png, json, function(){ done(); });
                 }});
             });

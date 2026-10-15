@@ -47,6 +47,9 @@
 .egf-btn:hover{background:#f2e6d4;}
 .egf-btn.on{background:#e8d5b8;border-color:#d8c7b0;}
 .egf-btn.egf-danger{color:#DD5138;}
+.egf-asbar{background:#FDF0DC;border:1px solid #E8C89A;color:#8A5A2B;border-radius:4px;
+  padding:3px 8px;font-size:12px;display:inline-flex;align-items:center;gap:8px;max-width:62%;}
+.egf-asbar i{color:#DD5138;}
 .egf-sep{display:inline-block;width:1px;height:18px;background:#e4d3ba;margin:0 5px;}
 .egf-lab{font-size:12px;color:#8A5A2B;margin:0 3px 0 6px;}
 .egf-sel{height:26px;border:1px solid #d8c7b0;border-radius:3px;background:#fff;color:#4E2C0B;font-size:12px;}
@@ -123,6 +126,8 @@
         <button type="button" class="egf-btn" id="egfTxtT" title="圖形內文字靠上"><i class="fa fa-angle-up"></i></button>
         <button type="button" class="egf-btn" id="egfTxtM" title="圖形內文字上下置中（預設）"><i class="fa fa-minus"></i></button>
         <button type="button" class="egf-btn" id="egfTxtB" title="圖形內文字靠下"><i class="fa fa-angle-down"></i></button>
+        <button type="button" class="egf-btn" id="egfAsRef" style="display:none;font-weight:bold"
+                title="插入 AS 文件編號／名稱：先選一個圖形（或文字），插進去的文字會記住是哪一份 AS 文件；那份文件改了編號或名稱，下次打開這張流程圖會提示你更新"><i class="fa fa-plus"></i> AS</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">連線</span>
         <select class="egf-num" id="egfConnKind" style="width:92px" data-eg-skip
@@ -194,6 +199,11 @@
       </div>
     </div>
     <div class="egf-ft">
+      <span class="egf-asbar" id="egfAsBar" style="display:none">
+        <i class="fa fa-exclamation-triangle"></i>
+        <span id="egfAsBarTxt"></span>
+        <button type="button" class="egf-btn" id="egfAsUpd">更新引用文字</button>
+      </span>
       <span class="egf-hint" id="egfStat">　</span>
       <span class="egf-sp"></span>
       <button type="button" class="btn btn-default" id="egfCancel">取消</button>
@@ -946,11 +956,131 @@
     cv.requestRenderAll();
   }
 
+  /* ── 插入 AS 文件編號／名稱（2026-10-15 使用者交辦：流程圖、烏龜圖裡面也要能用）──
+     流程圖的文字是畫布上的物件、不是 HTML，所以沒辦法像內文那樣包一個 <span data-asdoc>。
+     改成把「引用了哪一份文件」記在**物件自己的 egAsRef** 上並一起存進工作檔，
+     打開時再跟資料庫現況比對（asRefCheck），改過的就提示一鍵更新。
+     挑文件的畫面刻意**由呼叫端提供**（opt.onPickAsRef）：那份清單與樣式設定是
+     AS 文件模組的事，流程圖編輯器不該自己去打 AS 的 API（它也用在別的頁面）。 */
+  var onPickAsRefCb = null, onAsRefCheckCb = null;
+
+  /** 目前選到的那一個「放得下文字」的物件（圖形→它的標籤；文字→本身） */
+  function asRefTarget() {
+    var o = cv && cv.getActiveObject();
+    if (!o) return null;
+    if (o.egRole === 'shape') return labelOf(o);
+    if (o.egRole === 'label' || o.egRole === 'text') return o;
+    return null;
+  }
+
+  /** 把文字插進目前選到的圖形／文字；都沒選就在畫布中間放一個新的文字物件 */
+  function asRefInsert(meta) {
+    if (!meta || !meta.text) return;
+    var t = asRefTarget();
+    if (!t) {
+      t = addFreeText(Math.round(LOGW / 2) - 70, Math.round(LOGH / 2) - 10);
+      t.set({ text: '' });
+    }
+    var cur = String(t.text || '');
+    t.set({ text: cur ? (cur + meta.text) : meta.text });
+    /* 一個物件可能引用好幾份文件（例如一個方框裡寫兩份表單），所以 egAsRef 是陣列。
+       `at` 記的是插入當下的字串位置，更新文字時才知道要換哪一段。 */
+    var list = (t.egAsRef && t.egAsRef.slice) ? t.egAsRef.slice() : [];
+    list.push({ doc_id: meta.doc_id, no: meta.no, name: meta.name,
+                mode: meta.mode, tpl: meta.tpl || '', text: meta.text, at: cur.length });
+    t.egAsRef = list;
+    var sh = shapeOf(t);
+    if (sh) syncLabel(sh);
+    cv.setActiveObject(sh || t);
+    cv.requestRenderAll();
+    snapshot();
+    stat('已插入「' + meta.text + '」（記住了是哪一份 AS 文件，之後那份文件改編號或改名會提示更新）');
+  }
+
+  /** 這張流程圖引用到的全部 AS 文件（去重） */
+  function asRefList() {
+    var out = [], seen = {};
+    if (!cv) return out;
+    cv.getObjects().forEach(function (o) {
+      (o.egAsRef || []).forEach(function (r) {
+        var k = String(r.doc_id);
+        if (!seen[k]) { seen[k] = 1; out.push({ doc_id: r.doc_id, no: r.no, name: r.name }); }
+      });
+    });
+    return out;
+  }
+
+  /** 把物件上所有過時的引用文字換成新的（cur＝{doc_id:{no,name}}）。回傳換掉幾處 */
+  function asRefApply(cur) {
+    var n = 0;
+    cv.getObjects().forEach(function (o) {
+      var list = o.egAsRef || [];
+      if (!list.length) return;
+      var txt = String(o.text || ''), changed = false;
+      list.forEach(function (r) {
+        var c = cur[String(r.doc_id)];
+        if (!c) return;
+        var want = asRefText(r.mode, c.no, c.name, r.tpl);
+        if (want === r.text) return;
+        // 以「原本插進去的那段字」為準做取代；找不到就不動（使用者可能自己改過字）
+        if (txt.indexOf(r.text) >= 0) {
+          txt = txt.replace(r.text, want);
+          r.text = want; r.no = c.no; r.name = c.name;
+          changed = true; n++;
+        }
+      });
+      if (changed) {
+        o.set({ text: txt });
+        var sh = shapeOf(o);
+        if (sh) syncLabel(sh);
+      }
+    });
+    if (n) { cv.requestRenderAll(); snapshot(); }
+    return n;
+  }
+
+  /** 與後端 eg_asdoc_insert_text() 同一套規則（只帶名稱時固定加「」） */
+  function asRefText(mode, no, name, tpl) {
+    if (mode === 'no') return String(no || '');
+    if (mode === 'name') return '「' + String(name || '') + '」';
+    var t = tpl || '{name}　({no})';
+    return t.replace(/\{no\}/g, String(no || '')).replace(/\{name\}/g, String(name || ''));
+  }
+
+  /** 打開時比對資料庫現況，有改過就在狀態列提示並長出「更新引用文字」鈕 */
+  function asRefCheck() {
+    var bar = el('egfAsBar');
+    if (bar) bar.style.display = 'none';
+    if (!onAsRefCheckCb) return;
+    var list = asRefList();
+    if (!list.length) return;
+    onAsRefCheckCb(list, function (cur) {
+      if (!cur) return;
+      var bad = [];
+      cv.getObjects().forEach(function (o) {
+        (o.egAsRef || []).forEach(function (r) {
+          var c = cur[String(r.doc_id)];
+          if (!c) { bad.push('（文件已被刪除）' + r.no + ' ' + r.name); return; }
+          var want = asRefText(r.mode, c.no, c.name, r.tpl);
+          if (want !== r.text) bad.push(r.text + ' → ' + want);
+        });
+      });
+      if (!bad.length) return;
+      window.__egfAsCur = cur;
+      if (bar) {
+        el('egfAsBarTxt').textContent = '這張流程圖引用的 AS 文件有 ' + bad.length
+          + ' 處已經改了：' + bad.slice(0, 3).join('、') + (bad.length > 3 ? ' …' : '');
+        bar.style.display = '';
+      }
+    });
+  }
+
   /* ── 歷史（復原/重做）──────────────────────────────────────────────── */
   /** 序列化：fabric 的 toJSON 不含畫布尺寸，自己補上 egW/egH，
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
-    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA', 'egCurve']);
+    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA', 'egCurve',
+                        'egAsRef']);
     jo.egW = LOGW;
     jo.egH = LOGH;
     return JSON.stringify(jo);
@@ -1683,6 +1813,19 @@
           snapshot();
           break;
         }
+        case 'egfAsRef': {
+          if (!onPickAsRefCb) { stat('這個頁面沒有提供 AS 文件清單'); break; }
+          onPickAsRefCb(asRefInsert);
+          break;
+        }
+        case 'egfAsUpd': {
+          var cur = window.__egfAsCur;
+          if (!cur) break;
+          var n = asRefApply(cur);
+          el('egfAsBar').style.display = 'none';
+          stat(n ? ('已更新 ' + n + ' 處引用文字（記得按下方「插入到文件」才會存回去）') : '沒有需要更新的地方');
+          break;
+        }
         case 'egfConnFlip': {
           var fl = cv.getActiveObject();
           if (fl && fl.egRole === 'conn') { flipConn(fl); snapshot(); stat('已把這條線反向'); }
@@ -1878,6 +2021,9 @@
   function open(opt) {
     opt = opt || {};
     onSaveCb = opt.onSave || null;
+    onPickAsRefCb = opt.onPickAsRef || null;
+    onAsRefCheckCb = opt.onAsRefCheck || null;
+    window.__egfAsCur = null;
     el('egfMask').classList.add('open');
     if (!cv) { build(); bind(); }
     paintSwatches();
@@ -1888,6 +2034,9 @@
     function afterLoad() {
       el('egfCW').value = LOGW;
       el('egfCH').value = LOGH;
+      var ab = el('egfAsRef');
+      if (ab) ab.style.display = onPickAsRefCb ? '' : 'none';
+      try { asRefCheck(); } catch (err) {}
       /* 不沿用上一次的縮放：先回 100%，**畫布比視窗大就自動縮到整張看得完**。
          從 Word 匯入的流程圖實測 666×575，比可視區大，固定 100% 的話
          一打開只看得到左上角一塊，下半張要捲才找得到（使用者 2026-10-15 回報）。 */

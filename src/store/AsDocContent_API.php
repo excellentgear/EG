@@ -517,6 +517,104 @@ case 'heading_doc_search': {
     jout(true, ['rows' => adh_doc_search($db, $kw, 30)]);
 }
 
+/* ══════════════ 插入 AS 文件編號／名稱（2026-10-15 使用者交辦）══════════════
+   挑選器要的資料一次給完（文件清單＋可用樣式＋部門與階別），前端自己做即時篩選——
+   164 份文件一次撈回來只有幾十 KB，比每打一個字就打一支 API 省得多。 */
+
+case 'asref_meta': {
+    require_once __DIR__ . '/../common/asdoc_lib.php';
+    $docs = eg_asdoc_list_full($db);
+    // 部門清單由文件實際掛到的部門長出來，不另外寫一份（部門改名也不會對不起來）
+    $depts = [];
+    $levels = [];
+    foreach ($docs as $d) {
+        if (!empty($d['dept_name'])) $depts[(int)$d['department_id']] = (string)$d['dept_name'];
+        foreach ((array)$d['owner_depts'] as $o) {
+            if (!empty($o['name'])) $depts[(int)$o['id']] = (string)$o['name'];
+        }
+        if (!empty($d['doc_level'])) $levels[(string)$d['doc_level']] = 1;
+    }
+    $dl = [];
+    foreach ($depts as $id => $nm) $dl[] = ['id' => $id, 'name' => $nm];
+    usort($dl, fn($a, $b) => strcmp($a['name'], $b['name']));
+    jout(true, [
+        'docs'   => $docs,
+        'styles' => eg_asdoc_insert_styles($db),
+        'depts'  => $dl,
+        'levels' => array_keys($levels),
+        'can_admin' => !empty($P['admin']),
+    ]);
+}
+
+/** 樣式設定（只有管理員可改；一般使用者只是照設定好的樣式插入） */
+case 'asref_styles_save': {
+    needAdmin($P);
+    require_once __DIR__ . '/../common/asdoc_lib.php';
+    $rows = json_decode((string)($_POST['styles'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('樣式格式不正確');
+    [$ok, $msg] = eg_asdoc_insert_styles_save($db, $rows, $uid);
+    if (!$ok) jerr($msg);
+    jout(true, ['message' => $msg, 'styles' => eg_asdoc_insert_styles($db)]);
+}
+
+/**
+ * 伺服器端組出要插入的 HTML（前端只送「哪一份文件、哪一種帶入方式」）。
+ * 為什麼不讓前端自己拼：文件名稱與編號一律以**資料庫現況**為準，
+ * 前端送過來的名稱可能是幾分鐘前載入的舊值，插進去就是一段對不上的文字（鐵律8 同一個精神）。
+ */
+case 'asref_build': {
+    require_once __DIR__ . '/../common/asdoc_lib.php';
+    $docId = (int)($_POST['doc_id'] ?? $_GET['doc_id'] ?? 0);
+    $mode  = (string)($_POST['mode'] ?? $_GET['mode'] ?? 'both');
+    if (!in_array($mode, ['both', 'name', 'no'], true)) $mode = 'both';
+    $styleId = (string)($_POST['style'] ?? $_GET['style'] ?? '');
+    $pre  = mb_substr(trim((string)($_POST['pre'] ?? $_GET['pre'] ?? '')), 0, 20);
+    $post = mb_substr(trim((string)($_POST['post'] ?? $_GET['post'] ?? '')), 0, 20);
+    if (preg_match('/[<>]/u', $pre . $post)) jerr('前後綴不可以含 < 或 >');
+    $st = $db->prepare("SELECT id, doc_no, doc_name, COALESCE(is_obsolete,0) obs
+                        FROM as_document WHERE id=? AND is_deleted=0 LIMIT 1");
+    $st->execute([$docId]);
+    $d = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$d) jerr('找不到這份 AS 文件（可能已被刪除）');
+    $tpl = '';
+    if ($mode === 'both') {
+        foreach (eg_asdoc_insert_styles($db) as $x) {
+            if ($x['id'] === $styleId) { $tpl = $x['tpl']; break; }
+        }
+        if ($tpl === '') {
+            $all = eg_asdoc_insert_styles($db);
+            $tpl = $all[0]['tpl'];
+        }
+    }
+    $span = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl);
+    $esc = fn($v) => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+    jout(true, [
+        'html' => $esc($pre) . $span . $esc($post),
+        'text' => $pre . eg_asdoc_insert_text($mode, (string)$d['doc_no'], (string)$d['doc_name'], $tpl) . $post,
+        'obsolete' => (int)$d['obs'],
+    ]);
+}
+
+/**
+ * 一批 AS 文件現在的編號與名稱（流程圖打開時用來比對「引用的文件改了沒」）。
+ * 回 {doc_id: {no, name, obsolete}}；查不到的那一個 key 就不會出現（代表已被刪除）。
+ */
+case 'asref_resolve': {
+    $ids = array_values(array_filter(array_map('intval',
+        explode(',', (string)($_GET['ids'] ?? $_POST['ids'] ?? '')))));
+    $ids = array_slice(array_unique($ids), 0, 200);
+    if (!$ids) jout(true, ['docs' => []]);
+    $in = implode(',', $ids);
+    $out = [];
+    foreach ($db->query("SELECT id, doc_no, doc_name, COALESCE(is_obsolete,0) obs
+                         FROM as_document WHERE is_deleted=0 AND id IN ($in)")
+                ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(string)$r['id']] = ['no' => (string)$r['doc_no'], 'name' => (string)$r['doc_name'],
+                                  'obsolete' => (int)$r['obs']];
+    }
+    jout(true, ['docs' => $out]);
+}
+
 /* ══════════════ 內文引用的文件編號：待處理／預覽／套用／略過 ══════════════
    規則一律在 as_doc_ref_lib.php，這裡只守門與轉呼叫（鐵律4）。 */
 
