@@ -1265,11 +1265,43 @@
       placeTblUi();
     }
 
+    /** 放開滑鼠的位置落在哪一頁、該插在哪個位置（跨頁搬圖用） */
+    function dropSheetAt(x, y) {
+      var el = d.elementFromPoint(x, y);
+      if (!el || !el.closest) return null;
+      var sheet = el.closest('[contenteditable="true"]');
+      if (!sheet || !host.contains(sheet)) return null;
+      var rg = null;
+      try {
+        // caretRangeFromPoint 只有 WebKit/Blink 有；沒有就退回「放到那一頁最後面」
+        if (d.caretRangeFromPoint) rg = d.caretRangeFromPoint(x, y);
+        else if (d.caretPositionFromPoint) {
+          var cp = d.caretPositionFromPoint(x, y);
+          if (cp) { rg = d.createRange(); rg.setStart(cp.offsetNode, cp.offset); rg.collapse(true); }
+        }
+        if (rg && !sheet.contains(rg.startContainer)) rg = null;
+      } catch (err) { rg = null; }
+      return { sheet: sheet, range: rg };
+    }
+
     function selectImg(im) {
       buildImgBar();
       clearImgSel();
       curImg = im;
       im.classList.add('egrt-img-sel');
+      /* 真的把這張圖選成「選取範圍」——只加外框是看得到選不到，Ctrl+C 複製的會是空的
+         （使用者 2026-10-15 回報「無法複製貼上到別的頁面」）。
+         選取範圍一併讓 body 指向它所在的那一頁，貼上時才會落在正確的頁。 */
+      try {
+        var sheet = im.closest ? im.closest('[contenteditable="true"]') : null;
+        if (sheet) body = sheet;
+        var rg = d.createRange();
+        rg.selectNode(im);
+        var sel0 = w.getSelection();
+        sel0.removeAllRanges();
+        sel0.addRange(rg);
+        rememberRange();
+      } catch (err) {}
       // 流程圖才需要「編輯」鈕；純圖片不需要（沒有 fabric 工作檔可編）
       var fb = imgBar.querySelector('[data-act="flow"]');
       if (fb) {
@@ -1409,15 +1441,36 @@
             im.style.top  = Math.max(-1500, Math.min(1500, oy + dy)) + 'px';
             placeImgUi();
           }
-          function up() {
+          function up(ev) {
             d.removeEventListener('mousemove', mv);
             d.removeEventListener('mouseup', up);
-            if (moved) {
-              if (!parseInt(im.style.left, 10) && !parseInt(im.style.top, 10)) {
+            if (!moved) return;
+            /* 放開的位置在別一頁（或同一頁的別處）＝真的把節點搬過去，不是只有視覺位移：
+               每一頁是各自獨立的 contenteditable，單靠 left/top 位移永遠離不開原本那一頁，
+               而且 .egrt-sheet 是 overflow:hidden，推出去只會被裁掉看不見
+               （使用者 2026-10-15 回報「流程圖無法移到別的頁面」）。 */
+            var tgt = dropSheetAt(ev.clientX, ev.clientY);
+            if (tgt && tgt.sheet) {
+              var sameSpot = (tgt.sheet === el2) && !tgt.range;
+              if (!sameSpot) {
+                var keep = { p: im.style.position, l: im.style.left, t: im.style.top };
                 im.style.position = ''; im.style.left = ''; im.style.top = '';
+                try {
+                  if (tgt.range) tgt.range.insertNode(im);
+                  else tgt.sheet.appendChild(im);
+                  body = tgt.sheet;
+                  selectImg(im);
+                } catch (err) {
+                  // 插不進去（落在不可編輯處等）就維持原位，不要把圖弄丟
+                  im.style.position = keep.p; im.style.left = keep.l; im.style.top = keep.t;
+                }
               }
-              changed();
             }
+            if (!parseInt(im.style.left, 10) && !parseInt(im.style.top, 10)) {
+              im.style.position = ''; im.style.left = ''; im.style.top = '';
+            }
+            placeImgUi();
+            changed();
           }
           d.addEventListener('mousemove', mv);
           d.addEventListener('mouseup', up);
@@ -1436,6 +1489,9 @@
     }
 
     function afterEdit() {
+      // 貼上的 <img data-asset="N"> 會被清洗掉 src（src 一律不存，見 hydrate 的說明），
+      // 不補回來就是一張破圖——使用者 2026-10-15 回報「複製貼上到別的頁面」看不到東西
+      if (isDoc) hydrate();
       // 即時依編號自動縮排：只掃游標目前所在的那一段（不是整份文件），
       // 打字打出「2.1」的當下那一段就自動排縮，不必等按「依編號自動縮排」。
       if (isDoc) {
