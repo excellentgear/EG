@@ -696,11 +696,13 @@ if ($action === 'rec_to_track') {
     $rc = (int)$recCat->fetchColumn();
     $catRow = array_key_exists('cat_id', $_POST) ? cmCatCheck($db, $_POST['cat_id'], $rc) : ($rc ? cmCatCheck($db, $rc, $rc) : null);
     $catId = $catRow ? (int)$catRow['cat_id'] : null;
-    $db->prepare("INSERT INTO comm_track (party, cat_id, content, react_date, action, owner_id, owner_name, due_date,
+    $odId = (int)($_POST['owner_dept_id'] ?? 0);
+    $db->prepare("INSERT INTO comm_track (party, cat_id, content, react_date, action, owner_id, owner_name, owner_dept_id, owner_dept_name, due_date,
                     src_rec_id, src_item_id, created_by, created_by_name, created_at, updated_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
        ->execute([$it['party_name'], $catId, $it['question'], $it['comm_date'], cmS($_POST['action_text'] ?? $it['reply'], 4000),
-                  $ownerId ?: null, $ownerId ? cm_user_name($db, $ownerId) : cmS($_POST['owner_name'] ?? '', 60), $due,
+                  $ownerId ?: null, $ownerId ? cm_user_name($db, $ownerId) : cmS($_POST['owner_name'] ?? '', 60),
+                  $odId ?: null, $odId ? cm_dept_name($db, $odId) : null, $due,
                   (int)$it['rec_id'], $itemId, $uid, $uname, $now['n'], $now['n']]);
     $tid = (int)$db->lastInsertId();
     $db->prepare("UPDATE comm_record_item SET track_id=? WHERE item_id=?")->execute([$tid, $itemId]);
@@ -775,6 +777,11 @@ if ($action === 'track_save') {
                         due_date=?, is_closed=?, closed_date=?, close_note=?, updated_at=? WHERE track_id=?")
            ->execute([$party, $catId, $content, cmDate($_POST['react_date'] ?? ''), cmS($_POST['action_text'] ?? '', 4000),
                       $ownerId ?: null, $owner, $due, $closed, $closedDate, cmS($_POST['close_note'] ?? '', 500), $now['n'], $id]);
+        if (array_key_exists('owner_dept_id', $_POST)) {
+            $odId = (int)$_POST['owner_dept_id'];
+            $db->prepare("UPDATE comm_track SET owner_dept_id=?, owner_dept_name=? WHERE track_id=?")
+               ->execute([$odId ?: null, $odId ? cm_dept_name($db, $odId) : null, $id]);
+        }
     } else {
         $db->prepare("INSERT INTO comm_track (party, content, react_date, action, owner_id, owner_name, due_date,
                         is_closed, closed_date, close_note, created_by, created_by_name, created_at, updated_at)

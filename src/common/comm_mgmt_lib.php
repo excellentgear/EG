@@ -239,6 +239,8 @@ function cm_ensure_schema(PDO $db): void
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
         "ALTER TABLE comm_track ADD COLUMN cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id（NULL＝未分類）' AFTER party",
+        "ALTER TABLE comm_track ADD COLUMN owner_dept_id INT NULL COMMENT '負責人所屬部門（挑人時先選的部門；兼任者才分得出是以哪個部門的身分負責）' AFTER owner_name",
+        "ALTER TABLE comm_track ADD COLUMN owner_dept_name VARCHAR(100) NULL COMMENT '負責人所屬部門名稱（存當時名稱）' AFTER owner_dept_id",
         "ALTER TABLE comm_track ADD KEY idx_cat (cat_id)",
         "ALTER TABLE comm_record ADD COLUMN party_cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id；party_kind 由它的 kind 決定' AFTER party_kind",
         "ALTER TABLE comm_record ADD KEY idx_pcat (party_cat_id)",

@@ -2009,7 +2009,7 @@ $('#btnToTrackOk').on('click', function(){
     if (!$('#ttDue').val()){ setErr('eTtDue', '#ttDue', '請填寫預計完成日'); ok = false; }
     if (!ok) return;
     post({action:'rec_to_track', item_id:TTCTX.item_id, action_text:$('#ttAction').val(),
-          owner_id:p.id, cat_id:$('#ttCat').val() || 0, due_date:$('#ttDue').val()}, function(){
+          owner_id:p.id, owner_dept_id:$('#ttOwnerDept').val() || 0, cat_id:$('#ttCat').val() || 0, due_date:$('#ttDue').val()}, function(){
         alert('已建立追蹤項目，可在「回應利害關係者措施追蹤表」分頁查看。');
         closeMask('toTrackMask');
         openRec(REC.rec.rec_id); loadTrack();
@@ -2101,7 +2101,7 @@ function loadTrack(){
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
                 + '<td>' + dispDate(r.react_date) + '</td>'
                 + '<td class="l wrap">' + esc(r.action) + '</td>'
-                + '<td>' + esc(r.owner_name) + '</td>'
+                + '<td>' + ownerTxt(r) + '</td>'
                 + '<td>' + dispDate(r.due_date) + '</td>'
                 + '<td>' + badge + (+r.is_closed && r.closed_date ? '<br><span class="hint">' + dispDate(r.closed_date) + '</span>' : '') + '</td>'
                 + '<td>' + (r.src_rec_no ? '<a href="javascript:;" onclick="openRec(' + r.src_rec_id + ')">' + esc(r.src_rec_no) + '</a>' : '<span class="hint">手動新增</span>') + '</td>'
@@ -2118,6 +2118,8 @@ $('#trackKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.track = 1;
 $('#trackShow,#trackCat').on('change', function(){ PAGE.track = 1; loadTrack(); });
 
 var TRACKROWS = {}, TKLEGACYOWNER = '';
+/* 負責人顯示：部門名稱＋姓名（兼任者才看得出是以哪個部門的身分負責） */
+function ownerTxt(r){ return (r.owner_dept_name ? '<span class="hint">' + esc(r.owner_dept_name) + '</span><br>' : '') + esc(r.owner_name); }
 /* 追蹤表刻意沒有「新增」入口（使用者指定）：措施追蹤項目一定是從溝通記錄表的某一列問題
    轉進來的，來源可追溯才有意義。openTrack(0) 保留給程式內部用，畫面上沒有按鈕，
    後端 track_save 也會擋下「沒有來源的新建」（鐵律8，不是只擋 UI）。 */
@@ -2184,7 +2186,7 @@ $('#btnTrackSave').on('click', function(){
     if (!ok) return;
     post({action:'track_save', track_id:$('#trackMask').data('id') || 0,
         party:$('#tkParty').val(), content:$('#tkContent').val(), react_date:$('#tkReact').val(),
-        action_text:$('#tkAction').val(), cat_id:$('#tkCat').val() || 0, owner_id:tkp ? tkp.id : 0,
+        action_text:$('#tkAction').val(), cat_id:$('#tkCat').val() || 0, owner_id:tkp ? tkp.id : 0, owner_dept_id:tkp ? ($('#tkOwnerDept').val() || 0) : 0,
         owner_name:tkp ? '' : TKLEGACYOWNER, due_date:$('#tkDue').val(),
         is_closed:closed ? 1 : 0, closed_date:$('#tkCloseDate').val(), close_note:$('#tkCloseNote').val()},
         function(){ closeMask('trackMask'); loadTrack(); });
@@ -2804,7 +2806,7 @@ $('#btnTrackPrint').on('click', function(){
                      + '<td class="l">' + esc(r.content).replace(/\n/g, '<br>') + '</td>'
                      + '<td>' + dispDate(r.react_date) + '</td>'
                      + '<td class="l">' + esc(r.action).replace(/\n/g, '<br>') + '</td>'
-                     + '<td>' + esc(r.owner_name) + '</td><td>' + dispDate(r.due_date) + '</td>'
+                     + '<td>' + ownerTxt(r) + '</td><td>' + dispDate(r.due_date) + '</td>'
                      + '<td>' + (+r.is_closed ? '是' : '否') + '</td></tr>';
             }).join('') || '<tr><td colspan="9">（無資料）</td></tr>';
             var body = printHead(meta, '回應利害關係者措施追蹤表')
@@ -2957,7 +2959,7 @@ $('#btnTrackCsv').on('click', function(){
     fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(rows){
         csvDump('回應利害關係者措施追蹤表', ['項次','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
             rows.map(function(r, i){
-                return [i + 1, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, r.owner_name,
+                return [i + 1, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
                     dispDate(r.due_date), +r.is_closed ? '是' : '否', dispDate(r.closed_date), r.src_rec_no || ''];
             }));
     });

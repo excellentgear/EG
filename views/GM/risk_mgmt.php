@@ -843,7 +843,7 @@ function trackHtml(it){
     $.each(ts, function(_, t){
         var cls = t.state === 'over' ? 'over' : (t.state === 'closed' ? 'done' : 'open');
         var txt = t.state === 'over' ? '逾期' : (t.state === 'closed' ? '已結案' : '執行中');
-        h += '<div class="trk-row ' + cls + '">#' + t.id + '　' + esc(t.owner || '未指定負責人') + '　' + (t.due ? dispDate(t.due) : '未定日期')
+        h += '<div class="trk-row ' + cls + '">#' + t.id + '　' + esc((t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定負責人')) + '　' + (t.due ? dispDate(t.due) : '未定日期')
            + '　<span class="trk-st">' + txt + '</span><div class="trk-ac">' + esc(t.action || '') + '</div></div>';
     });
     return h + '</div>';

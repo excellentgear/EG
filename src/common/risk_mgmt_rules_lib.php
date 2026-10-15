@@ -43,15 +43,15 @@ const RM_RULE_CATS = [
     'delivery' => ['label' => '交期／準時出貨', 'ro' => 'risk', 'sev' => 0.9,
         'kw' => ['準時出貨', '交期', '延後出貨', '出貨延', '交貨', '準時交貨', '遲交'],
         'impact' => '準時出貨率未達目標，客戶抱怨增加並可能失去訂單。',
-        'measures' => ['生管組每週交期檢討與關鍵製程負荷預警，並每週回報客戶', '接單時確認關鍵製程產能，必要時調整交期或外包'],
+        'measures' => ['生管組每週交期檢討與關鍵製程負荷預警，並將交期狀況提供業務課回報客戶', '接單時由生管組確認關鍵製程產能，必要時調整交期或外包'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標',
         'kpi' => ['準時出貨'], 'trk_kw' => ['交期', '出貨', '延後', '延遲'], 'trk_kind' => 'customer', 'trk_not' => ['首次出貨', '年度報價', '客訴']],
     'supplier' => ['label' => '供應鏈／委外', 'ro' => 'risk', 'sev' => 0.8,
         'kw' => ['廠商準時', '委外', '供應商', '單一來源', '單一廠商', '備援', '缺料', '原料', '交期不穩'],
         'impact' => '委外或供料延遲造成製令停滯並連帶使客戶交期落後；單一來源會放大風險。',
-        'measures' => ['與主要委外廠商建立每週交期與排程確認機制'],
+        'measures' => ['生管組加強跟催主要委外廠商的交期與進度'],
         'metric' => '{kpi}回升並維持達標',
-        'kpi' => ['廠商準時'], 'trk_kw' => ['委外', '齒研', '插齒', '排程', '備援', '廠商'], 'trk_kind' => 'supplier', 'trk_not' => ['颱風', '豪雨']],
+        'kpi' => ['廠商準時'], 'trk_kw' => ['跟催', '備援'], 'trk_kind' => 'supplier', 'trk_not' => ['颱風', '豪雨']],
     'quality' => ['label' => '品質／客訴', 'ro' => 'risk', 'sev' => 0.9,
         'kw' => ['客訴', '客戶退貨', '退貨', '品質異常', '不良', '矯正', '品質穩定'],
         'impact' => '客訴或不良持續發生，影響客戶信任與再下單意願，並增加重工、報廢與運費成本。',
@@ -61,38 +61,38 @@ const RM_RULE_CATS = [
     'people' => ['label' => '人員／能力傳承', 'ro' => 'risk', 'sev' => 0.4,
         'kw' => ['新進', '經驗', '傳承', '標準作業', '訓練', '輔導', '離職', '人力'],
         'impact' => '新進人員比例高、經驗傳承不足，可能增加不良與異常、拉長上手時間。',
-        'measures' => ['補齊關鍵製程標準作業書', '指派資深同仁輔導新進同仁並留存輔導紀錄', '依職能規劃教育訓練'],
+        'measures' => ['生產課補齊關鍵製程標準作業書，並指派資深同仁輔導新進同仁、留存輔導紀錄', '管理課依職能規劃教育訓練'],
         'metric' => '標準作業書與輔導的措施追蹤如期結案；{kpi}不低於年度目標',
         'kpi' => ['教育訓練'], 'trk_kw' => ['標準作業', '輔導', '新進', '訓練'], 'trk_kind' => 'employee', 'by' => 'track'],
     'concentration' => ['label' => '客戶集中度', 'ro' => 'risk', 'sev' => 0.8,
         'kw' => ['集中度', '前三大客戶', '大客戶', '客戶集中'],
         'impact' => '大客戶訂單變動會直接衝擊產能與營收。',
-        'measures' => ['與前三大客戶定期（每季）溝通訂單預測與產能預留', '持續開發新客戶以分散風險'],
+        'measures' => ['業務課每季與前三大客戶溝通訂單預測與產能預留，並提供生管組參考', '業務課持續開拓客源以分散風險'],
         'metric' => '前三大客戶合計出貨占比不高於前一年（{share}）；每季溝通的措施追蹤如期結案',
-        'kpi' => [], 'trk_kw' => ['預測', '產能預留'], 'trk_kind' => 'customer'],
+        'kpi' => [], 'trk_kw' => ['訂單預測與產能預留'], 'trk_kind' => 'customer', 'trk_not' => ['交期']],
     'new_customer' => ['label' => '新客戶首次出貨', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶'],
         'impact' => '新客戶首次出貨後若能持續下單，可分散對大客戶的依賴並提高產能利用率。',
         'measures' => ['與新客戶於首次出貨當下或 30 天內進行溝通（了解使用情形與後續需求），並留存溝通記錄', '每季檢討新客戶的訂單與產能'],
         'metric' => '當年首次出貨客戶數與金額不低於前一年同期；首次出貨的新客戶皆於首次出貨當下或 30 天內留有溝通記錄',
         'kpi' => ['接單率'], 'trk_kw' => ['首批', '新客戶', '首次出貨', '年度需求'], 'trk_kind' => 'customer'],
-    'inquiry' => ['label' => '新客戶詢價與加工導入', 'ro' => 'opportunity', 'sev' => 0.4,
+    'inquiry' => ['label' => '接單評估與交期回覆', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['詢價', '轉單', '評估與承接', '評估表', 'PFMEA', '導入'],
-        'impact' => '新客戶詢價若能快速完成製程評估與報價並轉成訂單，可擴大認證範圍內的接單量。',
-        'measures' => ['詢價後由技術課、生管組、品管課評估製程可行性、產能與品質要求並於期限內回覆報價', '每月檢討詢價件數、報價回覆時效與轉單情形'],
-        'metric' => '{kpi}不低於年度目標；詢價評估與報價的措施追蹤如期結案',
-        'kpi' => ['接單率'], 'trk_kw' => ['詢價', '報價', '評估'], 'trk_kind' => 'customer'],
+        'impact' => '接到訂單時若能快速完成製程、產能與品質評估並回覆交期，可提高接單轉換並避免交期承諾失準。',
+        'measures' => ['接到訂單時，由技術課、生產課、生管組、品管課評估製程可行性、產能與品質要求並回覆交期，業務課彙整後回覆客戶', '每月檢討接單評估與交期回覆的時效'],
+        'metric' => '{kpi}不低於年度目標；接單評估的措施追蹤如期結案',
+        'kpi' => ['接單率'], 'trk_kw' => ['接單評估'], 'trk_kind' => ''],
     'existing_customer' => ['label' => '既有客戶擴單', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['既有客戶', '擴大', '接單量', '擴單', '增加訂單', '同類'],
         'impact' => '既有客戶已通過品質驗證，爭取同類加工訂單可提高產能利用率與營收穩定度。',
         'measures' => ['每季盤點既有客戶同類料號的加工需求並主動報價', '依既有客戶的年度需求預留產能'],
         'metric' => '既有客戶（去年以前就有出貨的客戶）的稽核製程出貨金額不低於前一年同期；年度需求盤點的措施追蹤如期結案',
         'by' => 'existing',
-        'kpi' => ['受訂目標'], 'trk_kw' => ['既有客戶', '產能預留', '年度需求'], 'trk_kind' => 'customer'],
+        'kpi' => ['受訂目標'], 'trk_kw' => ['既有客戶'], 'trk_kind' => 'customer'],
     'climate' => ['label' => '氣候／天然災害', 'ro' => 'risk', 'sev' => 0.4,
         'kw' => ['颱風', '豪雨', '氣候', '淹水', '極端', '天災', '碳'],
         'impact' => '颱風豪雨造成停工與在途品項延遲，影響交期並可能損壞庫存。',
-        'measures' => ['颱風警報發布當日由生管組通知客戶與委外廠在途品項預計回廠日', '每年汛期前檢查庫房與廠區防水'],
+        'measures' => ['颱風警報發布當日，業務課通知客戶在途品項預計交期', '每年汛期前，倉管組檢查庫房防水、生產課檢查廠區防水'],
         'metric' => '颱風通知程序與汛期前廠區檢查的措施追蹤如期結案',
         'kpi' => [], 'trk_kw' => ['颱風', '豪雨', '防水', '氣候'], 'trk_kind' => ''],
     'legal' => ['label' => '法規遵循', 'ro' => 'risk', 'sev' => 0.67,
@@ -112,7 +112,7 @@ const RM_RULE_CATS = [
         'impact' => '業績達成率落後，影響營收與產能規劃。',
         'measures' => ['業務課每月檢討達成率落後原因，並提出衝刺方案（客戶訂單預測、報價跟催）', '依訂單預測調整產能與交期承諾'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標',
-        'kpi' => ['銷貨額達成', '受訂目標'], 'trk_kw' => ['預測', '報價', '衝刺'], 'trk_kind' => 'customer', 'trk_not' => ['延後', '客訴']],
+        'kpi' => ['銷貨額達成', '受訂目標'], 'trk_kw' => ['訂單預測與產能預留', '報價', '衝刺'], 'trk_kind' => 'customer', 'trk_not' => ['延後', '客訴']],
     'generic' => ['label' => '一般議題', 'ro' => 'risk', 'sev' => 0.65,
         'kw' => [],
         'impact' => '此議題若未妥善因應，可能影響公司目標達成與利害關係者滿意度。',
@@ -274,11 +274,13 @@ function rm_rule_typhoon(PDO $db, int $year): int
 }
 
 /** 相關措施追蹤：先看措施欄有沒有註記單號，再用類別關鍵字與溝通對象類型找（只找 $year 年的） */
-function rm_rule_tracks(PDO $db, int $year, string $cat, string $text): array
+function rm_rule_tracks(PDO $db, int $year, string $cat, string $text, bool $annotatedOnly = false): array
 {
+    // $annotatedOnly＝人工填寫的列（沒有規則編號）：只認措施欄裡註記的「措施追蹤 #編號／溝通記錄 單號」，
+    // 不用類別關鍵字猜——猜出來的追蹤常常是別的部門的事（例如收貨列被掛上委外跟催）
     $c = RM_RULE_CATS[$cat] ?? RM_RULE_CATS['generic'];
     $found = [];
-    $base = "SELECT t.track_id, t.party, t.content, t.action, t.owner_name, t.due_date, t.is_closed, t.closed_date, r.rec_no, r.comm_date, cc.name cat_name
+    $base = "SELECT t.track_id, t.party, t.content, t.action, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.closed_date, r.rec_no, r.comm_date, cc.name cat_name
              FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id LEFT JOIN comm_track_cat cc ON cc.cat_id=t.cat_id WHERE t.is_deleted=0 ";
     try {
         if (preg_match_all('/措施追蹤\s*#(\d+)/u', $text, $m)) {
@@ -287,6 +289,7 @@ function rm_rule_tracks(PDO $db, int $year, string $cat, string $text): array
         if (preg_match_all('/溝通記錄\s*(\d{8,11})/u', $text, $m)) {
             foreach ($m[1] as $no) { $st = $db->prepare($base . "AND r.rec_no=?"); $st->execute([$no]); foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $found[$r['track_id']] = $r; }
         }
+        if ($annotatedOnly) { ksort($found); return array_slice(array_values($found), 0, 8); }
         $w = []; $a = [$year];
         foreach ($c['trk_kw'] as $kw) { $w[] = "(t.content LIKE ? OR t.action LIKE ?)"; $a[] = "%$kw%"; $a[] = "%$kw%"; }
         $cond = [];
@@ -312,7 +315,7 @@ function rm_rule_track_txt(array $t, string $today): string
 {
     $state = (int)$t['is_closed'] ? '已結案' . ($t['closed_date'] ? ' ' . substr($t['closed_date'], 0, 10) : '')
            : ($t['due_date'] && $t['due_date'] < $today ? '未結案・已逾期（預計 ' . $t['due_date'] . '）' : '未結案（預計 ' . ($t['due_date'] ?: '未訂') . '）');
-    return '措施追蹤 #' . $t['track_id'] . '（' . mb_substr((string)$t['action'], 0, 40) . '；負責 ' . $t['owner_name'] . '；' . $state . '）' . ($t['rec_no'] ? '，來自溝通記錄 ' . $t['rec_no'] : '');
+    return '措施追蹤 #' . $t['track_id'] . '（' . mb_substr((string)$t['action'], 0, 40) . '；負責 ' . (!empty($t['owner_dept_name']) ? $t['owner_dept_name'] . ' ' : '') . $t['owner_name'] . '；' . $state . '）' . ($t['rec_no'] ? '，來自溝通記錄 ' . $t['rec_no'] : '');
 }
 
 /* ============================ 產生風險草稿（M／S／O 規則） ============================ */
@@ -452,7 +455,7 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
     $c = RM_RULE_CATS[$cat]; $lines = []; $ids = ['C-' . strtoupper($cat)];
     $status = 'unconfirmed'; $reason = '';
 
-    $tracks = rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''));
+    $tracks = rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id']));
     $open = 0; $over = 0; $closed = 0;
     foreach ($tracks as $t) {
         if ((int)$t['is_closed']) $closed++; elseif ($t['due_date'] && $t['due_date'] < $today) $over++; else $open++;
@@ -555,9 +558,9 @@ function rm_item_tracks(PDO $db, int $year, array $row): array
     [$cat] = rm_rule_classify(trim(($r['stakeholder'] ?? '') . ' ' . ($r['needs'] ?? '') . ' ' . ($r['issue'] ?? '')), (string)($r['dimension'] ?? ''));
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
     $out = [];
-    foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? '')) as $t) {
+    foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id'])) as $t) {
         $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
-        $out[] = ['id'=>(int)$t['track_id'], 'owner'=>(string)$t['owner_name'], 'due'=>(string)($t['due_date'] ?? ''),
+        $out[] = ['id'=>(int)$t['track_id'], 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
                   'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? '')];
     }
     return $out;
