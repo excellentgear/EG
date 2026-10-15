@@ -108,7 +108,7 @@ function rm_rule_catalog(): array
     }
     $rows[] = ['id'=>'C-GENERIC', 'kind'=>'分類', 'cat'=>'一般議題', 'when'=>'沒有任何關鍵字命中', 'then'=>'歸類為「一般議題」，請人工確認'];
     $rows[] = ['id'=>'O-KPI', 'kind'=>'發生率(O)', 'cat'=>'有對應 KPI 的類別', 'when'=>'資料年度內 KPI 未達標月份占比 r', 'then'=>'r=0→0.34；r<30%→0.5；r<60%→0.67；其餘→1.0；最近一個月仍未達標時至少 0.67；資料不足 2 個月→0.5'];
-    $rows[] = ['id'=>'O-SINGLE', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'當年有製程只交給 1 家廠商（≥20 筆）', 'then'=>'發生率比例至少 0.67'];
+    $rows[] = ['id'=>'O-SINGLE', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'當年有稽核製程只交給 1 家外部委外廠商（≥20 筆；廠內製程不算）', 'then'=>'發生率比例至少 0.67'];
     $rows[] = ['id'=>'O-QA', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年品質異常處理單張數', 'then'=>'≥6 張→1.0；≥3 張→0.67；≥1 張→0.5（與 KPI 規則取較高者）'];
     $rows[] = ['id'=>'O-RETURN', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年客戶退貨筆數相對前一年', 'then'=>'增加 ≥30%→1.0；≥10%→0.67；有退貨但增幅較小→0.5；無退貨 0.34（與其他品質規則取最高者）'];
     $rows[] = ['id'=>'O-HIRE', 'kind'=>'發生率(O)', 'cat'=>'人員／能力傳承', 'when'=>'近兩年新進人員占在職比例', 'then'=>'≥30%→1.0；≥20%→0.67；≥10%→0.5；其餘 0.34（與教育訓練 KPI 規則取較高者）'];
@@ -320,7 +320,9 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear): array
             $why[] = $dataYear . ' 年品質異常處理單 ' . $n . ' 張；客戶退貨 ' . $n0 . ' 筆（前一年 ' . $n1 . ' 筆）'; $ids[] = 'O-QA'; $ids[] = 'O-RETURN';
             break;
         case 'supplier':
-            $st = $db->prepare("SELECT COUNT(*) FROM (SELECT process_no FROM bom_ing WHERE maker_id_no IS NOT NULL AND maker_id_no<>'' AND outsource_date BETWEEN ? AND ? GROUP BY process_no HAVING COUNT(DISTINCT maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
+            require_once __DIR__ . '/order_as_tag_lib.php';
+            $auditIn = implode(',', array_map('intval', array_keys(ot_astag_audit_process_nos($db)))) ?: '0';
+            $st = $db->prepare("SELECT COUNT(*) FROM (SELECT b.process_no FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
             $st->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $sg = (int)$st->fetchColumn();
             if ($sg > 0) { $fromKpi = max($fromKpi ?? 0.5, 0.67); $why[] = $dataYear . ' 年有 ' . $sg . ' 個製程的委外只交給 1 家廠商'; $ids[] = 'O-SINGLE'; }
             break;
