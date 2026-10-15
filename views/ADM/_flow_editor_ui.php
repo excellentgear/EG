@@ -445,9 +445,11 @@
      之後移動圖形線會跟著走。按 Esc 或點空白處取消。 */
   var linkFrom = null;     // {id, port, x, y}
   var linkPrev = null;     // 預覽線
+  var linkDot = null;      // 預覽線起點的空心圓
 
   function clearLink() {
     if (linkPrev) { cv.remove(linkPrev); linkPrev = null; }
+    if (linkDot)  { cv.remove(linkDot);  linkDot = null; }
     linkFrom = null;
     clearPortDots();
     cv.requestRenderAll();
@@ -459,7 +461,29 @@
       stroke: '#F0A24B', strokeWidth: 1.5, strokeDashArray: [5, 4],
       selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
     cv.add(linkPrev); linkPrev.bringToFront();
-    stat('再點另一個圖形上的錨點就連起來了（Esc 取消）');
+    // 起點放一個空心圓，一眼看得出「這是還沒完成的預覽」，不是已經畫好的線
+    linkDot = new fabric.Circle({ left: dot.left, top: dot.top, radius: 6,
+      originX: 'center', originY: 'center', fill: 'transparent',
+      stroke: '#F0A24B', strokeWidth: 2, strokeDashArray: [3, 2],
+      selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+    cv.add(linkDot); linkDot.bringToFront();
+    stat('連線中：再點「另一個圖形」上的錨點就完成；點空白處或按 Esc 取消');
+  }
+
+  /** 把一條既有連線「離該錨點較近的那一端」改接到這個錨點 */
+  function rebindConnEnd(ln, dot) {
+    var a = lineAbs(ln);
+    var dA = Math.sqrt(Math.pow(a.x1 - dot.left, 2) + Math.pow(a.y1 - dot.top, 2));
+    var dB = Math.sqrt(Math.pow(a.x2 - dot.left, 2) + Math.pow(a.y2 - dot.top, 2));
+    var bind = { id: dot.egPortId, port: dot.egPortKey };
+    if (dA <= dB) { ln.egPA = bind; setLineAbs(ln, dot.left, dot.top, a.x2, a.y2); }
+    else          { ln.egPB = bind; setLineAbs(ln, a.x1, a.y1, dot.left, dot.top); }
+    syncConn(ln);
+    showHandles(ln);
+    clearPortDots();
+    cv.requestRenderAll();
+    snapshot();
+    stat('已把' + (dA <= dB ? '起點' : '終點') + '改接到這個錨點（拖端點的圓圈也可以改）');
   }
 
   function finishLink(dot) {
@@ -949,7 +973,7 @@
         if (!ln) return;
         var a = lineAbs(ln);
         // 靠近圖形的連接點就吸過去（並記住綁在哪，之後圖形移動線會跟著）
-        showPortDots(o.left, o.top);
+        showPortDots(o.left, o.top, false);   // 拖曳中的提示點不收事件，免得搶走滑鼠
         var hit = nearestPort(o.left, o.top);
         var nx = hit ? hit.x : snapv(o.left), ny = hit ? hit.y : snapv(o.top);
         if (o.egWhich === 'a') { ln.egPA = hit ? { id: hit.id, port: hit.port } : null; setLineAbs(ln, nx, ny, a.x2, a.y2); }
@@ -975,8 +999,13 @@
     cv.on('mouse:down', function (e) {
       altDragDone = false;
       var t = e.target;
-      if (t && t.egRole === 'port' && t.egPortId) {     // 點錨點＝開始／完成連線
-        if (linkFrom) finishLink(t); else startLink(t);
+      if (t && t.egRole === 'port' && t.egPortId) {
+        if (linkFrom) { finishLink(t); return; }
+        /* 正選著一條線的時候點錨點＝把「離這個錨點比較近的那一端」改接過來。
+           連錯的箭頭不必刪掉重畫，點一下新的錨點就改好了（2026-10-15 使用者回報）。 */
+        var act = cv.getActiveObject();
+        if (act && act.egRole === 'conn') { rebindConnEnd(act, t); return; }
+        startLink(t);
         return;
       }
       if (linkFrom) { clearLink(); stat('已取消連線'); }
@@ -1001,8 +1030,15 @@
         if (p.x >= r.left - 10 && p.x <= r.left + r.width + 10
          && p.y >= r.top - 10 && p.y <= r.top + r.height + 10) over = o;
       });
-      if (over) showPortDots(p.x, p.y, true);
-      else if (portDots.length) clearPortDots(), cv.requestRenderAll();
+      if (over) {
+        showPortDots(p.x, p.y, true);
+        /* 錨點會蓋在「連線端點的控制圓」上面，使用者就拖不到端點、
+           已經連錯的線也改不掉（2026-10-15 回報）。所以錨點畫完之後
+           一定要把端點控制圓再提到最上層。 */
+        if (hA) hA.bringToFront();
+        if (hB) hB.bringToFront();
+        cv.requestRenderAll();
+      } else if (portDots.length) { clearPortDots(); cv.requestRenderAll(); }
     });
     cv.on('mouse:up', function () { clearGuides(); });
     cv.on('object:scaling', function (e) {
