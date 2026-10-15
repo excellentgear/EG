@@ -534,6 +534,7 @@ function boardHtml(){
         + '<button id="bSuggest"><i class="fa fa-lightbulb-o"></i> 依系統資料建議</button>'
         + '<button id="bGuide"><i class="fa fa-question-circle"></i> 填寫提示與範例</button>'
         + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
+        + '<button data-blank="context"><i class="fa fa-file-o"></i> 列印空白表單</button>'
         + '<button id="bSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>'
         + '</div><div class="swot-status" id="bStatus"></div><span class="err" id="bErr"></span><div class="swot-grid">';
     $.each(META.swot, function(_, m){
@@ -713,6 +714,7 @@ function paneHtml(k){
         + (isRisk ? '<button class="btn-warm" data-gen="risk"><i class="fa fa-magic"></i> 由處境分析表產生</button>'
                     + '<button data-rating="1"><i class="fa fa-table"></i> 風險準則／評級對照</button>'
                     + '<button data-rules="1"><i class="fa fa-gavel"></i> 判斷規則</button>' : '')
+        + '<button data-blank="' + k + '"><i class="fa fa-file-o"></i> 列印空白表單</button>'
         + '<button data-csv="' + k + '"><i class="fa fa-download"></i> 匯出 CSV</button>'
         + '</div>'
         + '<div class="rm-pager" data-pager="' + k + '"></div>'
@@ -1421,6 +1423,39 @@ function printDoc(docId){
             doc_kind:'form', ref_table:'rm_doc', ref_id:d.doc_id});
     });
 }
+
+/* ---------- 空白表單列印（兩張表都可以印出空白紙本，現場手寫用） ---------- */
+function printBlank(kind){
+    get({action:'print_meta', kind:kind}, function(res){
+        var meta = res.print, body, css = '', blankTd = function(n, h){ var s = ''; for (var i = 0; i < n; i++) s += '<td style="height:' + h + 'px;"></td>'; return '<tr>' + s + '</tr>'; };
+        var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>';
+        if (kind === 'context'){
+            head += '<div class="pt-meta"><span>年度：＿＿＿＿＿</span><span>填表日期：＿＿＿＿＿＿＿＿＿＿</span></div>';
+            var quad = function(key){
+                var m = swotMeta(key), rows = '';
+                for (var i = 0; i < 6; i++) rows += blankTd(4, 34);
+                return '<td class="qd"><div class="qh">' + esc(m.name) + '　' + m.en + '（' + (m.scope === 'internal' ? '內部' : '外部') + '）</div>'
+                    + '<table class="pt in"><colgroup><col style="width:28px;"><col style="width:90px;"><col style="width:30%;"><col></colgroup>'
+                    + '<thead><tr><th>編號</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + rows + '</tbody></table></td>';
+            };
+            body = head + '<table class="grid"><tr>' + quad('S') + quad('W') + '</tr><tr>' + quad('O') + quad('T') + '</tr></table>';
+            css = 'table.grid{width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;}table.grid>tbody>tr>td.qd{vertical-align:top;border:2px solid #333;padding:0;}'
+                + '.qh{background:#EFEFEF;font-weight:bold;font-size:13px;padding:4px 8px;border-bottom:1px solid #333;}table.pt.in{margin:0;font-size:11px;}table.pt.in th,table.pt.in td{padding:3px 4px;}'
+                + 'table.grid>tbody>tr{page-break-inside:avoid;}';
+        } else {
+            head += '<div class="pt-meta"><span>相關部門：＿＿＿＿＿＿＿＿＿＿＿＿＿＿</span><span>填表日期：＿＿＿＿＿＿＿＿＿＿</span></div>';
+            var rows = ''; for (var i = 1; i <= 10; i++) rows += '<tr><td>' + i + '</td>' + blankTd(12, 46).replace('<tr>', '').replace('</tr>', '') + '</tr>';
+            body = head + '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
+                + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
+                + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
+                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
+                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        }
+        egPrintWindow(meta.doc_name || kindName(kind), body, meta.doc_no, css);
+        EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + '（空白表單）', doc_kind:'form', ref_table:'rm_doc', ref_id:0});
+    });
+}
+$(document).on('click', '[data-blank]', function(){ printBlank($(this).data('blank')); });
 $('#btnDocPrint').on('click', function(){ if (CUR && CUR.doc_id) printDoc(CUR.doc_id); });
 $(document).on('click', '[data-print]', function(){ printDoc(+$(this).data('print')); });
 

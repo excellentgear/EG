@@ -179,6 +179,12 @@ if ($action === 'dist') {
     jout(['cells'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/* ---------------------------------------------------------------- 空白表單列印用：表頭（公司名稱、表單名稱、AS 編號） */
+if ($action === 'print_meta') {
+    $k = ($_GET['kind'] ?? '') === 'context' ? 'context' : 'risk';
+    jout(['print' => rm_print_meta($db, $k, rmToday($db))]);
+}
+
 /* ---------------------------------------------------------------- 組織處境分析表：整家公司一個年度一張 */
 if ($action === 'ctx_year') {
     $year = (int)($_GET['year'] ?? 0);
