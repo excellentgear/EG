@@ -645,8 +645,8 @@ case 'save': {
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
-        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment, confirm_mode)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment, confirm_mode, due_na)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
         $n = 0;
         $keptOldIds = [];
         foreach ($items as $it) {
@@ -654,6 +654,8 @@ case 'save': {
             if ($content === '') continue;
             $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
             $due = trim((string)($it['due_date'] ?? '')) ?: null;
+            $dueNa = (!empty($it['due_na']) && $kind !== 'announce') ? 1 : 0;
+            if ($dueNa) $due = null;
             if ($due && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due)) $due = null;
             // 負責人二擇一(2026-08-05使用者明確要求)：owner_users(指定人員)有值時完全取代 owner_depts(部門自動判定)
             $ownerUserIds = array_values(array_filter(array_map('intval', (array)($it['owner_users'] ?? []))));
@@ -665,7 +667,7 @@ case 'save': {
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
             $cmode = in_array($it['confirm_mode'] ?? '', ['later','ack'], true) ? $it['confirm_mode'] : 'onsite';
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null, $cmode]);
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null, $cmode, $dueNa]);
             if ($prev) {
                 $keptOldIds[] = $prevId;
                 $newItemId = (int)$db->lastInsertId();
@@ -696,9 +698,19 @@ case 'save': {
                           WHERE attach_id IN ({$in}) AND created_by=? AND status='temp'")->execute([$id, $uid]);
         }
         // 討論過程紀錄：沒送這個欄位＝不動（舊呼叫端不可被洗掉），送空字串才是清空
-        if (array_key_exists('discussion', $_POST)) {
-            $disc = trim((string)$_POST['discussion']);
-            $db->prepare("UPDATE meeting_record SET discussion=? WHERE meeting_id=?")->execute([$disc !== '' ? mb_substr($disc, 0, 20000) : null, $id]);
+        if (array_key_exists('discussion_json', $_POST)) {
+            $rows = json_decode((string)$_POST['discussion_json'], true);
+            $clean = [];
+            foreach ((is_array($rows) ? $rows : []) as $r) {
+                $ct = trim((string)($r['content'] ?? ''));
+                if ($ct === '') continue;
+                $ref = (string)($r['ref'] ?? '');
+                if (!preg_match('/^(directive|general):\d{1,3}$/', $ref)) $ref = '';
+                $clean[] = ['ref'=>$ref, 'content'=>mb_substr($ct, 0, 6000)];
+                if (count($clean) >= 60) break;
+            }
+            $db->prepare("UPDATE meeting_record SET discussion_json=?, discussion=NULL WHERE meeting_id=?")
+               ->execute([$clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null, $id]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }

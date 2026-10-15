@@ -112,6 +112,15 @@ function meeting_ensure_schema(PDO $db): void {
                        COMMENT '直接指定負責人員 user.id 逗號分隔(與owner_depts二擇一,有值時完全取代部門判定)' AFTER owner_dept_names");
         }
     } catch (Throwable $e) {}
+    /* 應完成日期＝NA(2026-10-15 使用者要求)：不是每項都有應完成日期，NA 的項目不必指定負責人、也不回簽，等同僅宣布。 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_item' AND COLUMN_NAME='due_na'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_item ADD COLUMN due_na TINYINT NOT NULL DEFAULT 0 COMMENT '1=應完成日期NA(不需負責人與回簽)'");
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='discussion_json'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN discussion_json MEDIUMTEXT NULL COMMENT '討論過程紀錄 [{ref:kind:序號,content}]'");
+    } catch (Throwable $e) {}
     /* 討論過程紀錄(2026-10-15 使用者要求)：會議要項只有結論，稽核要看得到「怎麼討論、為什麼這樣決議」。
        純文字（換行保留），檢視與列印顯示在會議要項之後，列印另成一頁。 */
     try {
@@ -942,7 +951,7 @@ function meeting_auto_submit_enabled(PDO $db): bool {
  * 回傳每項的顯示標籤，例：['上級指示要項第 1 項「AS 稽核延期…」', …]；空陣列＝全部都有指定。
  */
 function meeting_items_missing_owner(PDO $db, int $meetingId): array {
-    $st = $db->prepare("SELECT kind, sort_order, item_id, content, owner_depts, owner_users
+    $st = $db->prepare("SELECT kind, sort_order, item_id, content, owner_depts, owner_users, due_na
                           FROM meeting_item WHERE meeting_id=? ORDER BY kind, sort_order, item_id");
     $st->execute([$meetingId]);
     $seq = []; $out = [];
@@ -951,6 +960,7 @@ function meeting_items_missing_owner(PDO $db, int $meetingId): array {
         if ($kind === 'announce') continue;                       // 宣布事項不需要負責人
         $seq[$kind] = ($seq[$kind] ?? 0) + 1;                     // 序號依畫面上各表格自己從 1 開始
         if (trim((string)($it['owner_depts'] ?? '')) !== '' || trim((string)($it['owner_users'] ?? '')) !== '') continue;
+        if ((int)($it['due_na'] ?? 0) === 1) continue;            // 應完成日期NA＝僅宣布，不需負責人
         $out[] = ($kind === 'directive' ? '上級指示要項' : '會議要項') . '第 ' . $seq[$kind] . ' 項「'
                . mb_substr((string)$it['content'], 0, 20) . '」';
     }

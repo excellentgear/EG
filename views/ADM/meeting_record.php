@@ -368,8 +368,13 @@ foreach ($roleRows as $rr) {
         </div>
 
         <div class="mt-sec" id="edSecDisc">
-            <div class="mt-sec-title">討論過程紀錄（選填：記錄討論了什麼、各單位意見、為什麼這樣決議）</div>
-            <textarea id="edDiscussion" rows="10" maxlength="20000" style="width:100%;" placeholder="可分段書寫；檢視與列印會保留換行，列印另成一頁。"></textarea>
+            <div class="mt-sec-title">討論過程紀錄（選填：只記錄有討論的上級指示／會議要項，不必每項都寫）</div>
+            <label style="font-weight:normal;margin:0 0 4px;"><input type="checkbox" id="discAutoDept" data-eg-skip> 新增討論列時自動代入與會者部門（各部門一行，供填寫意見）</label>
+            <table class="itm-tbl">
+                <thead><tr><th style="width:240px;">對應要項</th><th>討論內容</th><th style="width:24px;"></th></tr></thead>
+                <tbody id="discBody"></tbody>
+            </table>
+            <button type="button" class="b-att wt" onclick="discAdd()"><i class="fa fa-plus"></i> 新增討論項目</button>
         </div>
 
         <div class="mt-sec" id="edSecKpi">
@@ -991,7 +996,7 @@ function edApplyNoticeMode(on){
     $('#btnEdSubmit').html(on ? '<i class="fa fa-bullhorn"></i> 建立並填寫通知單' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
 }
 function openCreate(noticeMode){
-    $('#edDiscussion').val('');
+    DISC = []; renderDisc();
     EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
@@ -1078,12 +1083,12 @@ function openEdit(id){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
                 owner_users:(it.owner_users?String(it.owner_users).split(','):[]), remark:it.remark||'',
-                owner_mode: it.owner_users ? 'user' : 'dept', confirm_mode: it.confirm_mode||'onsite',
+                owner_mode: it.owner_users ? 'user' : 'dept', confirm_mode: it.confirm_mode||'onsite', due_na: +it.due_na===1,
                 confirm_slots:it.confirm_slots||[]};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
         });
-        $('#edDiscussion').val(m.discussion||'');
+        DISC = discParse(m); renderDisc();
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
         renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
@@ -1523,11 +1528,11 @@ function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
 /* 應完成日期：不是每一項都有，勾「NA」＝沒有應完成日期（存成空值，檢視與列印印 NA） */
 function dueCellHtml(kind,i,it){
-    var na = it.due_na===undefined ? (+it.item_id>0 && !it.due_date) : !!it.due_na;
+    var na = !!it.due_na;
     return '<input type="date" max="9999-12-31" value="'+esc(na?'':(it.due_date||''))+'"'+(na?' disabled':'')
          + ' onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)">'
          + '<label style="display:block;font-weight:normal;font-size:12px;margin:2px 0 0;"><input type="checkbox"'+(na?' checked':'')
-         + ' onchange="dueNaToggle(\''+kind+'\','+i+',this.checked)"> NA（無應完成日期）</label>';
+         + ' onchange="dueNaToggle(\''+kind+'\','+i+',this.checked)"> NA（無應完成日期，僅宣布：不需負責人與回簽）</label>';
 }
 function dueNaToggle(kind,i,on){
     var a = itemsArr(kind)[i]; if (!a) return;
@@ -1555,7 +1560,7 @@ function renderItems(kind){
     }
     a.forEach(function(it,i){
         var slots = it.confirm_slots||[], doneN = slots.filter(function(s){ return s.signed; }).length;
-        var hasOwner = itemHasOwner(it);
+        var hasOwner = itemHasOwner(it) || !itemNeedsOwner(it);
         var confirmTxt = slots.length ? ('<span class="'+(doneN===slots.length?'confirm-yes':'confirm-no')+'">已簽 '+doneN+'/'+slots.length+'</span>')
                         : (hasOwner ? '<span class="confirm-no">負責人本次未出席</span>' : '<span class="confirm-no">未指派負責人</span>');
         // 未指定負責人的列標紅底：送出時會被擋下(前端+後端)，要讓人在填的當下就看見，而不是按了送出才知道
@@ -1568,6 +1573,7 @@ function renderItems(kind){
     });
     $(itemBodySel(kind)).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
     refreshEdSubmitBtn();
+    if (typeof renderDisc==='function' && $('#discBody').length) renderDisc();
 }
 /* 負責人二擇一(2026-08-05使用者明確要求)：部門模式(自動判定主要角色主管優先→兼任主管→職稱排序最高者)，
    或指定人員模式(直接指名，本次只要有出席就是必簽者，完全取代部門判定)；用切換連結決定畫哪一種挑選器。 */
@@ -1578,7 +1584,7 @@ function ownerPickHtml(kind,i,it){
     var mode = it.owner_mode || ((it.owner_users&&it.owner_users.length) ? 'user' : 'dept');
     var toggle = '<a href="javascript:void(0)" style="font-size:11px;display:block;" onclick="toggleOwnerMode(\''+kind+'\','+i+')">切換：'+(mode==='dept'?'改指定人員':'改選部門')+'</a>';
     // 空著就講明原因（鐵律8 的「錯誤即時顯示原因」）：送出時一定會被擋，不要等按了送出才說
-    var warn = itemHasOwner(it) ? ''
+    var warn = (itemHasOwner(it) || !itemNeedsOwner(it)) ? ''
              : '<div class="errmsg" style="margin-top:2px;">必填：請指定負責部門或人員<br>（只是宣布事項請改建在「宣布事項」）</div>';
     // 確認方式(每個項目一個設定)：當場簽／會後通知確認／僅通知簽收
     var cm = it.confirm_mode || 'onsite';
@@ -1930,7 +1936,7 @@ function gatherPayload(){
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
         tpl_id: EDIT_ID ? 0 : TPL_ID,
         attendees: JSON.stringify(ATT),
-        discussion: $('#edDiscussion').val(),
+        discussion_json: JSON.stringify(DISC.filter(function(r){ return $.trim(r.content||'')!==''; })),
         items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
                     .concat(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); }))
                     .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); }))),
@@ -2112,9 +2118,10 @@ function viewHtml(res){
             var deptNames = ownerDisplayText(it);
             // 沒指定負責人的項目一定要一眼看得出來（2026-09-16 使用者回報：沒選負責人也送得出去，
             // 紙本上那一格就是空白，事後沒人知道該找誰）；送出前端與後端都會擋，這裡負責講清楚是哪一項。
-            var noOwner = !itemHasOwner(it);
+            var isNaOnly = !itemNeedsOwner(it) && !itemHasOwner(it);
+            var noOwner = !itemHasOwner(it) && !isNaOnly;
             t += '<tr'+(noOwner?' style="background:#FBE3DC;"':'')+'><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+(it.due_date?dispDate(it.due_date):'NA')+'</td>'
-               + '<td>'+(noOwner ? '<span style="color:#DD5138;font-weight:bold;">⚠ 尚未指定負責人／負責部門</span>' : esc(deptNames||'—'))
+               + '<td>'+(noOwner ? '<span style="color:#DD5138;font-weight:bold;">⚠ 尚未指定負責人／負責部門</span>' : esc(deptNames||(isNaOnly?'—（僅宣布）':'—')))
                + (canAdjOwner ? '<br><a href="javascript:void(0)" style="font-size:11px;" onclick="openOwnerAdjust('+it.item_id+')">'
                                 + '<i class="fa fa-pencil"></i> 調整負責人</a>' : '')
                + '</td>'
@@ -2139,7 +2146,7 @@ function viewHtml(res){
     }
     h += announceTable() + itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
 
-    if (m.discussion) h += '<h5>討論過程紀錄</h5><div style="white-space:pre-wrap;line-height:1.7;">' + esc(m.discussion) + '</div>';
+    if (discParse(m).length) h += '<h5>討論過程紀錄</h5>' + discussionTableHtml(m, res.items);
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
@@ -2208,6 +2215,8 @@ function viewHtml(res){
 }
 /* 這一項有沒有指定負責人／負責部門（編輯畫面是陣列、檢視畫面是後端來的逗號字串，兩種資料型態都要認得）。
    **宣布事項不需要負責人**，呼叫端自己先排除。判定只有這一份，畫面標紅、擋送出、計算待回簽都用它。 */
+/* 應完成日期=NA 的項目＝僅宣布，不需要負責人與回簽（編輯物件是 boolean、後端來的是 '1'/1） */
+function itemNeedsOwner(it){ return !(it.due_na===true || +it.due_na===1); }
 function itemHasOwner(it){
     function has(v){ return Array.isArray(v) ? v.length>0 : !!(v && String(v).trim()!==''); }
     return has(it.owner_depts) || has(it.owner_users);
@@ -2218,7 +2227,7 @@ function itemsMissingOwner(items){
     (items||[]).forEach(function(it){
         if (it.kind==='announce') return;
         seq[it.kind] = (seq[it.kind]||0) + 1;
-        if (itemHasOwner(it)) return;
+        if (itemHasOwner(it) || !itemNeedsOwner(it)) return;
         out.push((it.kind==='directive'?'上級指示要項':'會議要項') + '第 ' + seq[it.kind] + ' 項「'
                  + String(it.content||'').substr(0,20) + '」');
     });
@@ -2801,14 +2810,13 @@ function meetingRecordPageHtml(m, res, docNoMode){
         + '</div>';
 }
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
-/* 討論過程紀錄：獨立一頁（內容長短不定，不塞進固定版面的會議記錄頁） */
-function discussionPageHtml(m){
-    if (!m.discussion) return '';
+function discussionPageHtml(m, res){
+    var tbl = discussionTableHtml(m, res.items);
+    if (!tbl) return '';
     return '<div class="mr-page" style="break-before:page;">'
         + '<div class="mr-title">'+esc(META.company_name||'')+'-會議討論過程紀錄</div>'
         + '<div style="margin:6px 0 10px;font-size:13px;"><b>主題：</b>'+esc(m.subject||'')+'　<b>日期：</b>'+dispDate(m.meeting_date)+'　<b>記錄：</b>'+esc(m.recorder_name||'')+'</div>'
-        + '<div style="white-space:pre-wrap;line-height:1.75;font-size:13px;">'+esc(m.discussion)+'</div>'
-        + '</div>';
+        + tbl + '</div>';
 }
 function kpiPageHtml(m, preparerName){
     var k = JSON.parse(m.kpi_snapshot_json);
@@ -2871,7 +2879,7 @@ function printMeetingRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting, res = VIEW;
     mtPrintLog('會議記錄 '+(m.subject||'')+' '+dispDate(m.meeting_date), m.meeting_id);
-    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + discussionPageHtml(m) + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + discussionPageHtml(m, res) + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
