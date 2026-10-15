@@ -299,6 +299,118 @@
     return ln;
   }
 
+
+  /* ── 圖形的 8 個連接點（使用者 2026-10-15 要求）─────────────────────────
+     端點位置依形狀算：矩形類是外框的四邊中點與四個角，菱形則是四個頂點加四條邊的中點
+     ——用同一組外框座標去放，菱形的「角」會落在圖形外面的空白處。
+     連線端點吸附到連接點之後記在線上（egPA／egPB），圖形一移動線就跟著走，
+     不必再手動把線重拉一次。 */
+  var PORT_KEYS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  var PORT_SNAP = 16;          // 滑鼠離連接點幾 px 以內就吸附
+
+  function portsOf(sh) {
+    if (!sh) return null;
+    var r = sh.getBoundingRect(true, true);
+    var L = r.left, T = r.top, W = r.width, H = r.height, cx = L + W / 2, cy = T + H / 2;
+    if (sh.egKind === 'judge') {
+      // 菱形：四個頂點＋四條邊的中點（角點放在外框角上會飄在圖外）
+      return { N: {x: cx, y: T}, E: {x: L + W, y: cy}, S: {x: cx, y: T + H}, W: {x: L, y: cy},
+               NE: {x: L + W * 0.75, y: T + H * 0.25}, SE: {x: L + W * 0.75, y: T + H * 0.75},
+               SW: {x: L + W * 0.25, y: T + H * 0.75}, NW: {x: L + W * 0.25, y: T + H * 0.25} };
+    }
+    if (sh.egKind === 'doc') {
+      // 平行四邊形：上下邊依傾斜量內縮，點才會貼在實際的邊上
+      var off = Math.min(W * 0.1, 14);
+      return { N: {x: cx + off / 2, y: T}, S: {x: cx - off / 2, y: T + H},
+               E: {x: L + W - off / 2, y: cy}, W: {x: L + off / 2, y: cy},
+               NE: {x: L + W, y: T}, SE: {x: L + W - off, y: T + H},
+               SW: {x: L, y: T + H}, NW: {x: L + off, y: T} };
+    }
+    return { N: {x: cx, y: T}, NE: {x: L + W, y: T}, E: {x: L + W, y: cy}, SE: {x: L + W, y: T + H},
+             S: {x: cx, y: T + H}, SW: {x: L, y: T + H}, W: {x: L, y: cy}, NW: {x: L, y: T} };
+  }
+
+  function shapeById(id) {
+    var r = null;
+    cv.getObjects().forEach(function (o) { if (o.egRole === 'shape' && o.egId === id) r = o; });
+    return r;
+  }
+
+  /** 綁定資訊 {id,port} → 絕對座標；圖形被刪掉就回 null */
+  function portPos(bind) {
+    if (!bind || !bind.id) return null;
+    var sh = shapeById(bind.id);
+    if (!sh) return null;
+    var ps = portsOf(sh);
+    return (ps && ps[bind.port]) ? ps[bind.port] : null;
+  }
+
+  /** 找離某一點最近的連接點（只找圖形，不找自己）；超過 PORT_SNAP 就回 null */
+  function nearestPort(x, y) {
+    var best = null, bd = PORT_SNAP;
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'shape') return;
+      var ps = portsOf(o);
+      PORT_KEYS.forEach(function (k) {
+        var pt = ps[k];
+        if (!pt) return;
+        var dd = Math.sqrt((pt.x - x) * (pt.x - x) + (pt.y - y) * (pt.y - y));
+        if (dd < bd) { bd = dd; best = { id: o.egId, port: k, x: pt.x, y: pt.y }; }
+      });
+    });
+    return best;
+  }
+
+  /* 拖連線端點時，把附近圖形的連接點畫出來當提示（放開就清掉） */
+  var portDots = [];
+  function clearPortDots() {
+    portDots.forEach(function (o) { cv.remove(o); });
+    portDots = [];
+  }
+  function showPortDots(x, y) {
+    clearPortDots();
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'shape') return;
+      var r = o.getBoundingRect(true, true);
+      // 只畫滑鼠附近那個圖形的點，全部畫出來畫面會一片圓點看不到圖
+      if (x < r.left - 60 || x > r.left + r.width + 60 || y < r.top - 60 || y > r.top + r.height + 60) return;
+      var ps = portsOf(o);
+      PORT_KEYS.forEach(function (k) {
+        var pt = ps[k];
+        if (!pt) return;
+        var c = new fabric.Circle({ left: pt.x, top: pt.y, radius: 4,
+          originX: 'center', originY: 'center', fill: '#fff', stroke: '#F0A24B', strokeWidth: 2,
+          selectable: false, evented: false, objectCaching: false, egRole: 'port' });
+        cv.add(c); c.bringToFront();
+        portDots.push(c);
+      });
+    });
+  }
+
+  /** 圖形移動／縮放後，把綁在它身上的連線端點一起帶走 */
+  function syncBoundConns(sh) {
+    if (!sh || sh.egRole !== 'shape') return;
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'conn') return;
+      if ((!o.egPA || o.egPA.id !== sh.egId) && (!o.egPB || o.egPB.id !== sh.egId)) return;
+      var a = lineAbs(o);
+      var pa = portPos(o.egPA), pb = portPos(o.egPB);
+      setLineAbs(o, pa ? pa.x : a.x1, pa ? pa.y : a.y1, pb ? pb.x : a.x2, pb ? pb.y : a.y2);
+      syncConn(o);
+    });
+  }
+
+  /** 匯入時：端點剛好落在某個圖形的連接點附近就自動綁起來 */
+  function autoBindConns() {
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'conn') return;
+      var a = lineAbs(o);
+      var pa = nearestPort(a.x1, a.y1), pb = nearestPort(a.x2, a.y2);
+      if (pa) o.egPA = { id: pa.id, port: pa.port };
+      if (pb) o.egPB = { id: pb.id, port: pb.port };
+    });
+  }
+
   function headOf(ln) {
     var r = null;
     cv.getObjects().forEach(function (o) { if (o.egRole === 'head' && o.egId === ln.egId) r = o; });
@@ -361,7 +473,7 @@
   /** 序列化：fabric 的 toJSON 不含畫布尺寸，自己補上 egW/egH，
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
-    var jo = cv.toJSON(['egRole', 'egId', 'egKind']);
+    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB']);
     jo.egW = cv.getWidth();
     jo.egH = cv.getHeight();
     return JSON.stringify(jo);
@@ -370,6 +482,7 @@
   function snapshot() {
     if (quiet || !cv) return;
     clearHandles();
+    clearPortDots();        // 連接點提示只是暫時畫上去的，不可以存進工作檔
     var j = serialize();
     if (hist[histAt] === j) return;
     hist = hist.slice(0, histAt + 1);
@@ -404,9 +517,12 @@
       } catch (err) {}
     });
     snap = snapWas;
+    autoBindConns();            // 端點本來就畫在圖形邊上，直接綁起來
     cv.discardActiveObject();
     cv.requestRenderAll();
     quiet = false;
+    // 匯入的圖常比畫布大（實測 666x575），不自動縮一下會看不到下半張
+    try { zoomFit(); } catch (e) {}
   }
 
   function restore(j, cb) {
@@ -426,7 +542,7 @@
       // 還原後要把 egId 的最大值找回來，否則新增的節點會撞到既有 id
       var mx = 0;
       cv.getObjects().forEach(function (o) {
-        if (o.egRole === 'handle') { cv.remove(o); return; }
+        if (o.egRole === 'handle' || o.egRole === 'port') { cv.remove(o); return; }
         if (o.egId && o.egId > mx) mx = o.egId;
         if (o.egRole === 'label') { o.selectable = false; o.evented = false; }
         if (o.egRole === 'head')  { o.selectable = false; o.evented = false; }
@@ -451,14 +567,23 @@
   }
 
   /* ── 刪除（節點要連標籤一起刪，連接線要連箭頭一起刪）────────────────── */
+  /** 圖形被刪掉時，把綁在它身上的連線解開（留在原地，不要憑空跳走） */
+  function unbindShape(id) {
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'conn') return;
+      if (o.egPA && o.egPA.id === id) o.egPA = null;
+      if (o.egPB && o.egPB.id === id) o.egPB = null;
+    });
+  }
+
   function delSel() {
     var objs = cv.getActiveObjects();
     if (!objs.length) { stat('請先選要刪除的東西'); return; }
     objs.forEach(function (o) {
       if (o.egRole === 'handle') return;
-      if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) cv.remove(lb); }
+      if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) cv.remove(lb); unbindShape(o.egId); }
       if (o.egRole === 'conn')  { var hd = headOf(o);  if (hd) cv.remove(hd); }
-      if (o.egRole === 'label') { var sh = shapeOf(o); if (sh) cv.remove(sh); }
+      if (o.egRole === 'label') { var sh = shapeOf(o); if (sh) { unbindShape(sh.egId); cv.remove(sh); } }
       cv.remove(o);
     });
     cv.discardActiveObject();
@@ -507,22 +632,26 @@
         var ln = o.egFor;
         if (!ln) return;
         var a = lineAbs(ln);
-        var nx = snapv(o.left), ny = snapv(o.top);
-        if (o.egWhich === 'a') setLineAbs(ln, nx, ny, a.x2, a.y2);
-        else                   setLineAbs(ln, a.x1, a.y1, nx, ny);
+        // 靠近圖形的連接點就吸過去（並記住綁在哪，之後圖形移動線會跟著）
+        showPortDots(o.left, o.top);
+        var hit = nearestPort(o.left, o.top);
+        var nx = hit ? hit.x : snapv(o.left), ny = hit ? hit.y : snapv(o.top);
+        if (o.egWhich === 'a') { ln.egPA = hit ? { id: hit.id, port: hit.port } : null; setLineAbs(ln, nx, ny, a.x2, a.y2); }
+        else                   { ln.egPB = hit ? { id: hit.id, port: hit.port } : null; setLineAbs(ln, a.x1, a.y1, nx, ny); }
         syncConn(ln);
         return;
       }
       o.set({ left: snapv(o.left), top: snapv(o.top) });
-      if (o.egRole === 'shape') syncLabel(o);
+      if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
       if (o.egRole === 'conn')  { syncConn(o); clearHandles(); }
     });
     cv.on('object:scaling', function (e) {
-      if (e.target.egRole === 'shape') syncLabel(e.target);
+      if (e.target.egRole === 'shape') { syncLabel(e.target); syncBoundConns(e.target); }
     });
     cv.on('object:modified', function (e) {
       var o = e.target;
-      if (o && o.egRole === 'shape') syncLabel(o);
+      clearPortDots();
+      if (o && o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
       if (o && o.egRole === 'conn') { syncConn(o); showHandles(o); }
       if (o && o.egRole === 'handle' && o.egFor) showHandles(o.egFor);
       snapshot();
@@ -876,9 +1005,12 @@
   function doSave() {
     if (!cv) return;
     clearHandles();
+    clearPortDots();        // 連接點提示不可以被印進圖裡
     cv.discardActiveObject();
     cv.requestRenderAll();
-    var objs = cv.getObjects().filter(function (o) { return o.egRole !== 'handle'; });
+    var objs = cv.getObjects().filter(function (o) {
+      return o.egRole !== 'handle' && o.egRole !== 'port';
+    });
     if (!objs.length) { stat('畫布是空的，沒有東西可以放進文件'); return; }
     /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
        （使用者：插入文件上時，應該依照實際大小插入，不是連旁邊畫布空白都插入）。
