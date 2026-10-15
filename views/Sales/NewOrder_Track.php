@@ -3040,11 +3040,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         'unfinished'    => $globalResult['unfinished'] ?? 0,
     ];
 
-    // 排序（使用者明確要求，2026-09-03）：只有「批圖中」篩選會把急件拉到最上方，
-    // 多筆急件依接單日(Order_date)由新到舊；非急件與其他篩選一律維持原本的建檔時間新到舊，不動既有行為。
-    $orderBySql = ($status === 'in_progress')
-        ? "ORDER BY ot.is_urgent DESC, CASE WHEN ot.is_urgent = 1 THEN ot.Order_date END DESC, ot.Created_At DESC"
-        : "ORDER BY ot.Created_At DESC";
+    // 排序（使用者明確要求，2026-10-15 更正 09-03 版）：所有篩選一律依接單日(Order_date)由新到舊；
+    // 「急件且尚未轉生管(pmGet 為空)」才置頂（同樣依接單日新到舊），轉生管後即回到一般排序。
+    // 接單日相同時再依建檔時間新到舊，讓順序固定不跳動（分頁才不會重複/漏筆）。
+    $orderBySql = "ORDER BY (ot.is_urgent = 1 AND ot.pmGet IS NULL) DESC, ot.Order_date DESC, ot.Created_At DESC";
 
     $dataSql = "SELECT ot.*, 
         CONCAT(DATE_FORMAT(ot.Order_date, '%y'), 'y/', DATE_FORMAT(ot.Order_date, '%c/%e')) AS Order_date_formatted, 
@@ -3791,7 +3790,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php endif; ?>
                     </span>
                     <?php // 急件標籤（2026-09-03 使用者要求）：顯示在客戶名稱下方，不放接單日/交期欄 ?>
-                    <?php if (!empty($order['is_urgent'])): ?><div style="margin-top:2px;"><span class="urgent-badge" title="急件：篩選「批圖中」時會排在最上方"><i class="fa fa-bolt"></i> 急件</span></div><?php endif; ?>
+                    <?php if (!empty($order['is_urgent'])): ?><div style="margin-top:2px;"><span class="urgent-badge" title="急件：尚未轉生管前會排在最上方"><i class="fa fa-bolt"></i> 急件</span></div><?php endif; ?>
                     <?php
                     // ── 與來源OP單的客戶不一致（2026-08-28）────────────────────────────
                     // 常見情境：用 A 客戶報價，接單後客戶要求改成 B 客戶名稱，報價單那邊改了、
@@ -4407,7 +4406,7 @@ FROM order_track ot
 LEFT JOIN user u ON u.id = ot.ate 
 LEFT JOIN user AS creator ON creator.id = ot.Created_By 
 WHERE (ot.parent_order_id IS NULL OR ot.parent_order_id = 0) " . ($selectedYear !== 'ALL' ? "AND YEAR(ot.Order_date) = " . intval($selectedYear) : "") . " 
-ORDER BY ot.Created_At DESC LIMIT 0, 50";
+ORDER BY (ot.is_urgent = 1 AND ot.pmGet IS NULL) DESC, ot.Order_date DESC, ot.Created_At DESC LIMIT 0, 50";
 
 $order_list = $conn->getPDO()->query($dataSql)->fetchAll(PDO::FETCH_ASSOC);
 
