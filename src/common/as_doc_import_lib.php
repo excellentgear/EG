@@ -391,7 +391,14 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
     //      常常比紙張內容區還寬，直接照搬就會溢出紙張（A4 直式內容寬 180mm≒680px）。
     $raw = (string)preg_replace_callback('#<(table|td|th|col)\b([^>]*)>#i', function ($mm) use (&$stat) {
         $tag = strtolower($mm[1]); $at = $mm[2];
-        if (!preg_match('/\bwidth="(\d{1,4})"/i', $at, $w)) return $mm[0];
+        // 表格一律置中（使用者 2026-10-15）：加 margin auto，後面各分支都會保留 style
+        if ($tag === 'table') {
+            $ctr = 'margin-left:auto;margin-right:auto';
+            if (preg_match('/style="([^"]*)"/i', $at, $sc)) {
+                $at = str_replace($sc[0], 'style="' . rtrim($sc[1], '; ') . ';' . $ctr . '"', $at);
+            } else { $at .= ' style="' . $ctr . '"'; }
+        }
+        if (!preg_match('/\bwidth="(\d{1,4})"/i', $at, $w)) return '<' . $tag . $at . '>';
         $px = (int)$w[1];
         if ($px <= 0 || $px > 2000) return $mm[0];
         if ($tag === 'table' && $px > ADI_PAGE_CONTENT_PX) {

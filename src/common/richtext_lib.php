@@ -86,7 +86,9 @@ define('EG_RT_DOC_STYLES', array_merge(EG_RT_STYLES, [
     'border-color'     => '/^((#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})\s*){1,4}$/',
     'float'            => '/^(left|right|none)$/i',
     'margin'           => '/^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/',
-    'margin-right'     => '/^(\d{1,2}(\.\d{1,2})?)(em|px|cm|mm)$/',
+    'margin-right'     => '/^(auto|\d{1,2}(\.\d{1,2})?(em|px|cm|mm))$/',
+    // 匯入的表格一律置中（margin-left/right:auto）；整份文件 profile 才放行 auto，備註欄不受影響
+    'margin-left'      => '/^(auto|\d{1,2}(\.\d)?em)$/',
     'page-break-before'=> '/^(always|auto|avoid)$/i',
     'page-break-after' => '/^(always|auto|avoid)$/i',
     'page-break-inside'=> '/^(avoid|auto)$/i',
