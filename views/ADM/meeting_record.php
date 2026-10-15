@@ -932,8 +932,10 @@ function renderList(){
            // 會議通知單（2-GM-05-03）：與會議記錄的狀態各自獨立（通知單簽完了、記錄本身還是草稿是正常的）。
            // 狀態籤與入口按鈕**排在同一行**（2026-09-29 使用者回報：上下兩行會把整列撐高不好閱讀）
            + '<td class="nt-cell"><span class="nt-pill nt-'+m.notice_state+'">'+(NOTICE_LABEL[m.notice_state]||m.notice_state)+'</span>'
-           + '<span class="mt-op" onclick="openNotice('+m.meeting_id+')">'
-           + (m.notice_state==='none' ? '建立' : '開啟') + '</span></td>'
+           // 尚無通知單時，只有記錄人本人或管理員可建立（他人建立的會議紀錄不可由別人建通知單）
+           + ((m.notice_state==='none' && !(m.is_mine || PERMS.canAdmin)) ? ''
+               : '<span class="mt-op" onclick="openNotice('+m.meeting_id+')">'
+                 + (m.notice_state==='none' ? '建立' : '開啟') + '</span>') + '</td>'
            + '<td><div class="mt-op-wrap">'
            + '<span class="mt-op" onclick="openView('+m.meeting_id+')"><i class="fa fa-search-plus"></i> 檢視</span>';
         var isDraftLike = m.approval_status==='draft' || m.approval_status==='rejected' || m.approval_status==='ready';
@@ -2745,6 +2747,9 @@ var NT_UNITS = [];          // 目前勾選的單位 department.id（數字陣�
 function openNotice(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        if (res.meeting.notice_state==='none' && !res.meeting.notice_can_edit){
+            alert('此會議紀錄由他人建立，僅記錄人本人或管理員可建立會議通知單'); return;
+        }
         NOTICE = res;
         mtSyncYear(res.meeting.meeting_date);
         var m = res.meeting;
