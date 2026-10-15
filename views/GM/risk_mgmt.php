@@ -1433,7 +1433,7 @@ function printBlank(kind){
             head += '<div class="pt-meta"><span>年度：＿＿＿＿＿</span><span>填表日期：＿＿＿＿＿＿＿＿＿＿</span></div>';
             var quad = function(key){
                 var m = swotMeta(key), rows = '';
-                for (var i = 0; i < 6; i++) rows += blankTd(4, 34);
+                for (var i = 0; i < 5; i++) rows += blankTd(4, 30);
                 return '<td class="qd"><div class="qh">' + esc(m.name) + '　' + m.en + '（' + (m.scope === 'internal' ? '內部' : '外部') + '）</div>'
                     + '<table class="pt in"><colgroup><col style="width:28px;"><col style="width:90px;"><col style="width:30%;"><col></colgroup>'
                     + '<thead><tr><th>編號</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + rows + '</tbody></table></td>';
