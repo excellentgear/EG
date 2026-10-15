@@ -119,7 +119,7 @@
         <button type="button" class="egf-btn" id="egfZoomOut" title="縮小顯示（不會改變實際大小）">－</button>
         <span class="egf-lab" id="egfZoomVal" style="min-width:38px;display:inline-block;text-align:center">100%</span>
         <button type="button" class="egf-btn" id="egfZoomIn" title="放大顯示（不會改變實際大小）">＋</button>
-        <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖">符合視窗</button>
+        <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖（圖比視窗大時，一打開就會自動縮成這樣；也可以按住 Ctrl 滾滑鼠滾輪縮放）">符合視窗</button>
         <button type="button" class="egf-btn" id="egfZoom1" title="回到 100%">100%</button>
       </div>
       <div class="egf-work">
@@ -521,8 +521,7 @@
     cv.discardActiveObject();
     cv.requestRenderAll();
     quiet = false;
-    // 匯入的圖常比畫布大（實測 666x575），不自動縮一下會看不到下半張
-    try { zoomFit(); } catch (e) {}
+    // 縮放統一由 open() 的 afterLoad 處理（它在這之後才跑，在這裡縮會被它蓋掉）
   }
 
   function restore(j, cb) {
@@ -954,6 +953,17 @@
       var wr = d.querySelector('#egfWin .egf-canwrap');
       if (wr) wr.classList.remove('egf-drop');
     });
+    /* Ctrl＋滾輪縮放（跟一般繪圖軟體一樣）。
+       刻意要按著 Ctrl：不按的話滾輪要留給畫布捲動，圖一大就只能用捲軸找東西。 */
+    var canhost = d.querySelector('#egfWin .egf-canhost');
+    if (canhost) {
+      canhost.addEventListener('wheel', function (e) {
+        if (!e.ctrlKey || !cv) return;
+        e.preventDefault();
+        setZoom(ZOOM * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+      }, { passive: false });
+    }
+
     var wrap = d.querySelector('#egfWin .egf-canwrap');
     if (wrap) {
       wrap.addEventListener('dragover', function (e) {
@@ -1050,8 +1060,15 @@
     function afterLoad() {
       el('egfCW').value = cv.getWidth();
       el('egfCH').value = cv.getHeight();
-      // 每次開啟都回到 100%，不要沿用上一次的顯示縮放
+      /* 不沿用上一次的縮放：先回 100%，**畫布比視窗大就自動縮到整張看得完**。
+         從 Word 匯入的流程圖實測 666×575，比可視區大，固定 100% 的話
+         一打開只看得到左上角一塊，下半張要捲才找得到（使用者 2026-10-15 回報）。 */
       ZOOM = 1; applyZoom();
+      var host = d.querySelector('#egfWin .egf-canhost');
+      if (host && host.clientWidth > 40 && host.clientHeight > 40
+          && (cv.getWidth() > host.clientWidth - 16 || cv.getHeight() > host.clientHeight - 16)) {
+        zoomFit();
+      }
       snapshot();
     }
     if (opt.json) {
