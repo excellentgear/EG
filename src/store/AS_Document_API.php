@@ -1151,6 +1151,57 @@ case 'update_document_meta':
         jout(['status'=>'success','cascade_renumbered'=>$cascadeCnt,'ref_scan'=>$refScan2]);
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
 
+// ══════════════ AS 文件部門負責人與代理人（2026-10-15 使用者交辦）══════════════
+// 規則全部在 src/common/as_doc_owner_lib.php（唯一實作），這裡只守門與轉呼叫。
+// 讀取刻意**不卡管理員**：一般使用者也要看得到「這份文件的負責人是誰」，
+// 否則出了問題不知道要找誰（設定仍然只有管理員能改）。
+
+case 'dept_owner_meta': {
+    if (!asCan('view')) jout(['status'=>'error','message'=>'沒有檢視權限']);
+    require_once __DIR__ . '/../common/as_doc_owner_lib.php';
+    $depts = ado_depts($db);
+    // 每個部門的候選人員（含兼任；一個職務一列＝CLAUDE.md 人員列表鐵則⑥）
+    $cands = [];
+    foreach ($depts as $d) {
+        $did = (int)$d['dept_id'];
+        $cands[$did] = array_map(function ($p) {
+            return ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
+                    'dept' => (string)($p['dept_name'] ?? ''), 'pos' => (string)($p['position_name'] ?? ''),
+                    'leave' => (string)($p['leave_label'] ?? '')];
+        }, ado_candidates($db, $did));
+    }
+    jout(['status'=>'success', 'depts'=>$depts, 'cands'=>$cands,
+          'problems'=>ado_problems($db),
+          'can_edit'=>(asIsAdmin() || in_array('asdoc_owner_manage', (array)$asFeatures, true))]);
+}
+
+case 'dept_owner_save': {
+    /* 管理員（含本頁管理員）或持有 asdoc_owner_manage 的人都可以指派——
+       使用者要求「角色功能要提供設定相關負責人的功能可以勾選」，
+       也就是有些人只需要這一件事的權限，不必給他整個本頁管理員。 */
+    $canOwn = asIsAdmin() || in_array('asdoc_owner_manage', (array)$asFeatures, true);
+    if (!$canOwn) jout(['status'=>'error','message'=>'沒有指派 AS 文件部門負責人的權限（請由管理員在「角色設定」勾選）']);
+    require_once __DIR__ . '/../common/as_doc_owner_lib.php';
+    $deptId = (int)($_POST['department_id'] ?? 0);
+    $owner  = (int)($_POST['owner_uid'] ?? 0);
+    $deputy = (int)($_POST['deputy_uid'] ?? 0);
+    $note   = (string)($_POST['note'] ?? '');
+    [$ok, $msg] = ado_save($db, $deptId, $owner, $deputy, (int)$currentUserId, $note);
+    if (!$ok) jout(['status'=>'error','message'=>$msg]);
+    // 稽核：這是「誰可以簽核 AS 文件」的設定，一定要留痕跡
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes,
+                        user_id, operator, created_at)
+                      VALUES ('AS_DOC_OWNER','department',?,?,?,?,?,NOW())")
+           ->execute([(string)$deptId, 'AS文件部門負責人',
+                      json_encode(['owner_uid'=>$owner, 'deputy_uid'=>$deputy, 'note'=>$note],
+                                  JSON_UNESCAPED_UNICODE),
+                      $currentUserId ?: null, (string)$GLOBALS['currentCname']]);
+    } catch (Throwable $e) {}
+    jout(['status'=>'success','message'=>$msg,
+          'depts'=>ado_depts($db), 'problems'=>ado_problems($db)]);
+}
+
 // ══════════════ 文件備註（富文字；管理員維護，清單顯示在文件名稱下方） ══════════════
 // 備註的唯一寫入點——刻意不併進 update_document_meta，兩個寫入點規則遲早走鐘，
 // 而且一般使用者存編輯資料時會把管理員寫的備註整段洗掉。

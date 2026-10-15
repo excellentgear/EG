@@ -147,6 +147,17 @@ try {
     error_log('[asched] tick hook failed: ' . $e->getMessage());
 }
 
+// === AS 文件部門負責人缺口提醒 順路觸發（2026-10-15 新增；做法同上，免工作排程器）===
+// 負責人離職或調離該負責課室時，AS 文件就沒有人能簽核了。離職/調職是在別的頁面發生的，
+// 那些頁面不會知道 AS 文件這邊還掛著這個人，所以改成定期盤點「現在的設定對不對」。
+// 同一組問題 7 天內只發一次（內容變了才再發），每天吵同一件事沒人會看。
+try {
+    require_once __DIR__ . '/as_doc_owner_tick.php';
+    eg_as_doc_owner_tick($db);
+} catch (Throwable $e) {
+    error_log('[as_doc_owner] tick hook failed: ' . $e->getMessage());
+}
+
 // === 移機快速備份 順路觸發（2026-07-24 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 3600 秒才背景啟動；是否執行由工人依 migbk_interval_days 判斷(0=未啟用)
 try {

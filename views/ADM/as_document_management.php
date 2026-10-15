@@ -58,6 +58,7 @@ try {
 
 // ── as_doc 模組角色（職稱為主自動套用、個人指派優先覆蓋）與頁面 ACRUD 合併 ──
 include_once '../../src/common/role_features_helper.php';
+include_once '../../src/common/asdoc_lib.php';   // 管理員判定的唯一實作（eg_asdoc_is_admin_with）
 $asFeatures    = rf_load_user_features_override($conn, $id, 'as_doc');
 $asIsRoleAdmin = in_array('all', $asFeatures, true);
 $pp = $deptPerm ?: '';
@@ -81,8 +82,10 @@ $asCaps = [
     // 上傳紀錄（表單填寫紀錄/留存附件）：與「新增文件」分開設定，但仍相容既有已勾選新增文件者
     'upload_record' => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'C')!==false
         || in_array('asdoc_upload_record', $asFeatures, true) || in_array('asdoc_create', $asFeatures, true),
-    // 管理員（系統角色或頁面A權）：批次補建版本/程序書快速建檔 專用
-    'admin' => $asIsRoleAdmin || strpos($pp,'A')!==false,
+    /* 管理員：系統角色／頁面A權／**本頁管理員（asdoc_admin）**。
+       判定走 asdoc_lib.php 的唯一實作，不要在這裡自己拼——前端自己拼一套的話
+       會出現「畫面顯示按鈕、後端擋下」（鐵律8），本頁管理員就是這樣漏掉的。 */
+    'admin' => eg_asdoc_is_admin_with($asIsRoleAdmin, $pp, $asFeatures),
     // 永久刪除（含改版紀錄，不可復原）：僅超級管理員 id=1 本人且具管理者權限，用於傳錯文件
     'super_delete' => ($id == 1 && $asIsRoleAdmin),
     // 補舊版次（往前補比目前版本舊的歷史紀錄，會動到已發行的版本歷史）：僅超級管理員 id=1 本人且具管理者權限
@@ -201,6 +204,8 @@ if ($deptPerm === 'R') {
                           title="把每份文件設定好的作業項目（這份文件實務上在做哪幾件事）直接顯示在「標籤」欄位內，不必逐份點開 ⚙ 才看得到；點一下項目即可開啟該文件的作業項目設定"><i class="fa fa-tasks"></i> 顯示作業項目</button>
                   <?php endif; ?>
                   <button class="btn btn-default btn-sm" id="btnTree" title="一眼檢視全部文件的階層結構"><i class="fa fa-sitemap"></i> 結構總覽</button>
+                  <button class="btn btn-default btn-sm" id="btnDeptOwner"
+                          title="每個負責課室／文件負責部門的 AS 文件部門負責人與代理人（只有管理員能改，其他人看得到是誰負責）"><i class="fa fa-user-circle-o"></i> 部門負責人</button>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
                   <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定</button>
@@ -208,6 +213,10 @@ if ($deptPerm === 'R') {
                   <?php endif; ?>
                   <label style="font-weight:normal;margin:0 0 0 auto;white-space:nowrap;"><input type="checkbox" id="incDeleted"> 顯示已刪除</label>
               </div>
+
+              <!-- AS 文件部門負責人的提醒橫幅（使用者要求「進入該頁時跳出提示直到設定都正確設定」）。
+                   刻意**不給關**：關掉等於沒做，而這件事沒設好就沒有人能簽核。 -->
+              <div id="ownerBanner" style="display:none;"></div>
 
               <!-- 搜尋 / 篩選 -->
               <div class="row" style="margin-bottom:8px;">
@@ -477,6 +486,50 @@ if ($deptPerm === 'R') {
         <span class="text-muted pull-left" style="font-size:11px;line-height:32px;">此設定與「編輯資料」分開，存檔不會動到文件編號等其他欄位。</span>
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
         <button type="button" class="btn btn-primary" id="fqSave"><i class="fa fa-save"></i> 儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ AS 文件部門負責人與代理人（2026-10-15 使用者交辦）═════════
+     掛在「部門」而不是逐份文件：文件 164 份、負責課室只有 12 個，逐份指派等於要維護 164 筆
+     而且每新增一份文件都要補一次；現場的實際情形本來就是「這個課室的 AS 文件由課室裡的某一位負責」。
+     文件要找負責人時由「文件 → 它的負責課室／負責部門 → 這張表」推導（ado_doc_owner）。 -->
+<div class="modal fade" id="ownerModal" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-lg" role="document" style="width:1000px;max-width:96vw;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-user-circle-o"></i> AS 文件部門負責人與代理人</h4>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-info" style="font-size:12px;padding:8px 12px;">
+          每一個「負責課室／文件負責部門」指派一位<b>部門負責人</b>與一位<b>代理人</b>，
+          只能從<b>該部門內的在職人員</b>挑選（兼任或主要職位都可以）。<br>
+          負責人<b>離職或調離該部門</b>時，系統會自動改用代理人，並通知全站管理員與 AS負責人
+          提醒重新指派；代理人也不可用時就沒有人可以簽核，所以兩個都要設。<br>
+          簽核設定裡選「這份文件的 AS 文件部門負責人」當簽核人時，解析的就是這張表。
+        </div>
+        <div id="ownerProblems"></div>
+        <table class="table table-bordered table-condensed" style="font-size:13px;">
+          <thead>
+            <tr style="background:#faf6f0;">
+              <th style="width:130px;">部門</th>
+              <th style="width:70px;">AS文件</th>
+              <th style="width:250px;">部門負責人</th>
+              <th style="width:250px;">代理人</th>
+              <th>備註</th>
+              <th style="width:90px;"></th>
+            </tr>
+          </thead>
+          <tbody id="ownerRows"><tr><td colspan="6" class="text-center text-muted">載入中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <span class="text-muted pull-left" style="font-size:11px;line-height:32px;">
+          每一列各自存檔（改完按那一列的「儲存」）。
+        </span>
+        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
       </div>
     </div>
   </div>
@@ -4518,7 +4571,14 @@ $(function(){
     {code:'asdoc_edit_content', label:'編輯線上內容（程序書電子版）'},
     {code:'asdoc_no_attach',   label:'免附件補登'},
     {code:'asdoc_upload_record', label:'上傳紀錄'},
-    {code:'asdoc_online_form_beta', label:'線上表單模板(測試功能)'}
+    {code:'asdoc_online_form_beta', label:'線上表單模板(測試功能)'},
+    /* 本頁管理員（2026-10-15 使用者交辦，ai-rules/26）：
+       「AS負責人只能有一人，但可以有多個本頁管理員，方便除了負責人以外的人協助管理」。
+       勾了這個就等於在這一頁擁有全站管理員同等的權力（含指派部門負責人、改各種設定）。 */
+    {code:'asdoc_admin',       label:'本頁管理員（等同管理員，可多人）'},
+    /* 只想讓某些人「指派各部門的 AS 文件負責人與代理人」，但不想給他整個本頁管理員權力時勾這個
+       （使用者 2026-10-15：「角色功能要提供設定相關負責人的功能可以勾選」）。 */
+    {code:'asdoc_owner_manage', label:'設定各部門的 AS 文件負責人與代理人'}
   ];
   let AS_ROLES = [];
 
@@ -4702,6 +4762,150 @@ $(function(){
 
   $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）\n3. 職稱與個人的指派都在「權限設定頁 → AS9100 文件管理」區塊操作\n4. 管理員固定擁有全部權限\n\n可勾選的角色功能（本頁「角色設定」定義角色）：\n・檢閱/預覽＝線上預覽（不可下載原檔）\n・新增文件、改版/編輯、下載原檔（各自獨立）\n・刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
 
+/* ── AS 文件部門負責人與代理人（2026-10-15 使用者交辦）────────────────────
+   使用者要求「相關提醒應通知全站管理員與 AS負責人，並在進入該頁時跳出提示直到設定都正確設定」。
+   做法：①頁面載入就查一次，有 block 級問題就在工具列下方長出紅色橫幅（**不給關**，
+   關掉等於沒做）②有權限改的人，同一個瀏覽器工作階段第一次進來會自動把設定跳窗打開一次
+   （每次翻頁都強制彈窗會讓人沒辦法做別的事，所以只彈一次，橫幅則一直在）。 */
+var OWN = { depts: [], cands: {}, problems: [], canEdit: false, loaded: false };
+
+function ownLoad(cb) {
+    $.getJSON(API, { action: 'dept_owner_meta' }, function (r) {
+        if (!r || r.status !== 'success') { if (cb) cb(false); return; }
+        OWN.depts = r.depts || [];
+        OWN.cands = r.cands || {};
+        OWN.problems = r.problems || [];
+        OWN.canEdit = !!r.can_edit;
+        OWN.loaded = true;
+        if (cb) cb(true);
+    });
+}
+
+/** 工具列下方的提醒橫幅（只列一定要處理的 block 級，警告級在跳窗裡提示） */
+function ownBanner() {
+    var blocks = (OWN.problems || []).filter(function (p) { return p.level === 'block'; });
+    var $b = $('#ownerBanner');
+    if (!blocks.length) { $b.hide().empty(); return; }
+    var lis = blocks.map(function (p) { return '<li>' + esc(p.msg) + '</li>'; }).join('');
+    $b.html('<div class="alert alert-danger" style="margin-bottom:10px;padding:10px 12px;">'
+        + '<b><i class="fa fa-exclamation-triangle"></i> AS 文件部門負責人需要設定（' + blocks.length + ' 項）</b>'
+        + '<ul style="margin:6px 0 6px 18px;font-size:12px;">' + lis + '</ul>'
+        + (OWN.canEdit
+            ? '<button class="btn btn-danger btn-xs" id="btnOwnerFix"><i class="fa fa-user-circle-o"></i> 現在設定</button>'
+            : '<span style="font-size:12px;">請通知 AS 文件管理員設定（本頁管理員或全站管理員）。</span>')
+        + '</div>').show();
+}
+
+function ownRender() {
+    var canEdit = OWN.canEdit;
+    var probByDept = {};
+    (OWN.problems || []).forEach(function (p) {
+        (probByDept[p.dept_id] = probByDept[p.dept_id] || []).push(p);
+    });
+    var h = (OWN.depts || []).map(function (d) {
+        var cs = OWN.cands[d.dept_id] || [];
+        function sel(name, cur) {
+            if (!canEdit) {
+                var nm = '';
+                cs.forEach(function (c) { if (c.id === cur) nm = c.name; });
+                return '<span>' + (cur ? esc(nm || ('#' + cur)) : '<span class="text-muted">（未設）</span>') + '</span>';
+            }
+            var o = '<option value="">（未設）</option>';
+            cs.forEach(function (c) {
+                o += '<option value="' + c.id + '"' + (c.id === cur ? ' selected' : '') + '>'
+                   + esc(c.dept + '　' + c.pos + '　' + c.name + (c.leave ? ('（' + c.leave + '）') : ''))
+                   + '</option>';
+            });
+            // 已經不在這個部門（或已離職）的人不會在候選裡，但要讓使用者看得到目前掛的是誰
+            var inList = cs.some(function (c) { return c.id === cur; });
+            if (cur && !inList) {
+                o += '<option value="' + cur + '" selected>⚠ ' + esc(
+                       (name === 'owner' ? d.owner_name : d.deputy_name) || ('#' + cur))
+                   + '（已離職或已調離，請改選）</option>';
+            }
+            return '<select class="form-control input-sm own-' + name + '" data-eg-filter="輸入姓名篩選…">' + o + '</select>';
+        }
+        var warn = (probByDept[d.dept_id] || []).map(function (p) {
+            return '<div style="font-size:11px;color:' + (p.level === 'block' ? '#DD5138' : '#8A5A2B') + ';">'
+                 + (p.level === 'block' ? '⚠ ' : '※ ') + esc(p.msg) + '</div>';
+        }).join('');
+        return '<tr data-dept="' + d.dept_id + '">'
+             + '<td><b>' + esc(d.dept_name) + '</b>' + warn + '</td>'
+             + '<td class="text-center">' + d.docs + '</td>'
+             + '<td>' + sel('owner', d.owner_uid) + '</td>'
+             + '<td>' + sel('deputy', d.deputy_uid) + '</td>'
+             + '<td>' + (canEdit
+                 ? '<input type="text" class="form-control input-sm own-note" maxlength="255" value="'
+                   + esc(d.note || '') + '">'
+                 : esc(d.note || '')) + '</td>'
+             + '<td>' + (canEdit
+                 ? '<button class="btn btn-primary btn-xs own-save">儲存</button>'
+                 : '') + '</td>'
+             + '</tr>';
+    }).join('');
+    $('#ownerRows').html(h || '<tr><td colspan="6" class="text-center text-muted">沒有任何部門底下有 AS 文件</td></tr>');
+    var blocks = (OWN.problems || []).filter(function (p) { return p.level === 'block'; });
+    var warns = (OWN.problems || []).filter(function (p) { return p.level === 'warn'; });
+    $('#ownerProblems').html(
+        (blocks.length
+            ? '<div class="alert alert-danger" style="padding:8px 12px;font-size:12px;"><b>一定要處理（' + blocks.length + '）：</b>'
+              + '沒有負責人、或負責人已離職／已調離該部門。</div>'
+            : '<div class="alert alert-success" style="padding:8px 12px;font-size:12px;">'
+              + '<i class="fa fa-check"></i> 每個部門都有有效的負責人。</div>')
+        + (warns.length
+            ? '<div class="alert alert-warning" style="padding:8px 12px;font-size:12px;"><b>建議處理（' + warns.length + '）：</b>'
+              + '還沒設代理人（負責人請假或離職時沒有人可以接手）。</div>'
+            : ''));
+}
+
+function ownOpen() {
+    $('#ownerRows').html('<tr><td colspan="6" class="text-center text-muted">載入中…</td></tr>');
+    $('#ownerModal').modal('show');
+    ownLoad(function (ok) { if (ok) ownRender(); else $('#ownerRows').html('<tr><td colspan="6" class="text-danger text-center">載入失敗</td></tr>'); });
+}
+
+$(document).on('click', '#btnDeptOwner, #btnOwnerFix', function () { ownOpen(); });
+
+$(document).on('click', '.own-save', function () {
+    var $tr = $(this).closest('tr');
+    var $b = $(this).prop('disabled', true).text('儲存中…');
+    $.post(API, {
+        action: 'dept_owner_save',
+        department_id: $tr.data('dept'),
+        owner_uid: $tr.find('.own-owner').val() || 0,
+        deputy_uid: $tr.find('.own-deputy').val() || 0,
+        note: $tr.find('.own-note').val() || ''
+    }, function (r) {
+        $b.prop('disabled', false).text('儲存');
+        if (!r || r.status !== 'success') { alert((r && r.message) || '儲存失敗'); return; }
+        OWN.depts = r.depts || OWN.depts;
+        OWN.problems = r.problems || [];
+        ownRender();
+        ownBanner();
+    }, 'json');
+});
+
+/* 頁面載入就查一次（不必等使用者點開跳窗），有問題就長出橫幅。
+   這一段已經在 $(function(){…}) 裡面，不要再包一層 ready（包了也不會錯，但多一層沒意義）。 */
+  (function () {
+    ownLoad(function (ok) {
+        if (!ok) return;
+        ownBanner();
+        var blocks = (OWN.problems || []).filter(function (p) { return p.level === 'block'; });
+        // 有權限改的人，這個瀏覽器工作階段第一次進來自動打開一次（之後只留橫幅）
+        if (blocks.length && OWN.canEdit) {
+            var once = false;
+            try { once = sessionStorage.getItem('as_owner_prompted') === '1'; } catch (e) {}
+            if (!once) {
+                try { sessionStorage.setItem('as_owner_prompted', '1'); } catch (e) {}
+                setTimeout(function () { ownOpen(); }, 600);
+            }
+        }
+        // 推播／通知點進來時直接開（as_document_management.php?dept_owner=1）
+        if (/[?&]dept_owner=1/.test(location.search)) setTimeout(function () { ownOpen(); }, 300);
+    });
+  })();
+
   // init
   // 外部帶入定位：?kw=文件編號（AS流程說明手冊的「到文件管理」鈕用；也可直接複製網址分享單一文件）
   (function(){ var kw = new URLSearchParams(location.search).get('kw'); if (kw) { $('#searchKw').val(kw); } })();
@@ -4773,9 +4977,19 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li>【<b>品質記錄一覽表</b>】：把表單加進一覽表並列印。</li>
 </ul>
 
-<h4>六、權限角色</h4>
+<h4>六、AS 文件部門負責人與代理人</h4>
+<p>工具列的【<b>部門負責人</b>】：每一個<b>負責課室／文件負責部門</b>指派一位<b>部門負責人</b>與一位<b>代理人</b>，只能從<b>該部門內的在職人員</b>挑（兼任或主要職位都可以）。線上版的「簽核設定」選「這份文件的 AS 文件部門負責人」當簽核人時，解析的就是這張表。</p>
+<ul>
+    <li>負責人<b>離職或調離該部門</b>時，系統自動改用<b>代理人</b>，並在本頁最上方跳出<b>紅色提醒</b>（刻意不給關——沒設好就沒有人能簽核），同時通知全站管理員與 AS負責人（站內通知＋Web Push＋Telegram，同一組問題 7 天內只發一次）。</li>
+    <li>代理人也不可用時就<b>沒有人可以簽核</b>，所以兩個都要設。沒設代理人只是建議處理（不會發通知）。</li>
+    <li>某個部門<b>一個在職人員都沒有</b>時指派不了，提醒會直接講明原因，請先到員工管理把人掛到那個部門，或把那些文件的負責課室改到別的部門。</li>
+    <li>誰能改：管理員（含<b>本頁管理員</b>），或在【角色設定】勾了<b>「設定各部門的 AS 文件負責人與代理人」</b>的人。其他人<b>看得到是誰負責但不能改</b>。</li>
+</ul>
+
+<h4>七、權限角色</h4>
 <ul>
     <li>權限分<b>檢閱／新增／修改／刪除／設定</b>五種，頁首標題旁會顯示您目前擁有哪幾種，點旁邊的 <b>?</b> 看各角色說明。</li>
+    <li><b>AS負責人</b>是這份制度的主責人（一位）；<b>本頁管理員</b>是另一個角色、<b>可以指派多人</b>，勾了之後在這一頁擁有與管理員同等的權力（含各種設定與指派部門負責人），方便負責人以外的人協助管理。兩個角色互相獨立，在【角色設定】裡各自勾選。</li>
     <li>【<b>角色設定</b>】【<b>系統設定</b>】只有具設定權限者看得到；使用者要指派到哪個角色在<b>系統設定 → 使用者權限設定</b>。</li>
     <li><b>管制文件</b>（有存放實體檔案者）：管理員以外的人不能開啟或預覽檔案，結構總覽與其列印資料也不會列出。</li>
 </ul>

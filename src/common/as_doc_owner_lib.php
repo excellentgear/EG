@@ -251,9 +251,18 @@ function ado_problems(PDO $db): array
         $dp = (int)$d['deputy_uid'];
 
         if ($ow <= 0) {
-            $out[] = ['dept_id' => $did, 'dept_name' => $dn, 'docs' => $docs, 'kind' => 'no_owner',
+            /* 這個部門根本沒有在職人員時一定要講出來（實測文管中心就是這種情況：
+               掛著 20 份 AS 文件，但部門裡唯一的人已經離職）。
+               只寫「還沒指派」的話，管理員打開設定看到空的下拉選單會不知道為什麼挑不到人。 */
+            $noStaff = count(ado_candidates($db, $did)) === 0;
+            $out[] = ['dept_id' => $did, 'dept_name' => $dn, 'docs' => $docs,
+                      'kind' => $noStaff ? 'no_staff' : 'no_owner',
                       'level' => 'block', 'who' => '',
-                      'msg' => $dn . '底下有 ' . $docs . ' 份 AS 文件，還沒指派部門負責人'];
+                      'msg' => $noStaff
+                        ? ($dn . '底下有 ' . $docs . ' 份 AS 文件，但這個部門目前沒有任何在職人員，'
+                           . '所以指派不了負責人——請先到員工管理把人員掛到這個部門（兼任也可以），'
+                           . '或是把這些文件的負責課室改到別的部門')
+                        : ($dn . '底下有 ' . $docs . ' 份 AS 文件，還沒指派部門負責人')];
             continue;   // 連負責人都沒有，就不必再報代理人的問題（會變成同一件事報兩次）
         }
         $ownerBad = false;
