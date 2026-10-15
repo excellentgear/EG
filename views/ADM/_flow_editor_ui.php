@@ -115,6 +115,30 @@
         <input type="number" class="egf-num" id="egfCH" value="560" min="200" max="3000" step="20" data-eg-skip>
         <button type="button" class="egf-btn" id="egfResize">套用</button>
         <span class="egf-sep"></span>
+        <span class="egf-lab">圖內文字</span>
+        <button type="button" class="egf-btn" id="egfTxtL" title="圖形內文字靠左"><i class="fa fa-align-left"></i></button>
+        <button type="button" class="egf-btn" id="egfTxtC" title="圖形內文字左右置中（預設）"><i class="fa fa-align-center"></i></button>
+        <button type="button" class="egf-btn" id="egfTxtR" title="圖形內文字靠右"><i class="fa fa-align-right"></i></button>
+        <button type="button" class="egf-btn" id="egfTxtT" title="圖形內文字靠上"><i class="fa fa-angle-up"></i></button>
+        <button type="button" class="egf-btn" id="egfTxtM" title="圖形內文字上下置中（預設）"><i class="fa fa-minus"></i></button>
+        <button type="button" class="egf-btn" id="egfTxtB" title="圖形內文字靠下"><i class="fa fa-angle-down"></i></button>
+        <span class="egf-sep"></span>
+        <span class="egf-lab">連線</span>
+        <select class="egf-num" id="egfConnKind" style="width:92px" data-eg-skip
+                title="點錨點連線時要畫成哪一種；選著一條線時改這裡會直接套用到那條線">
+          <option value="arrow">單箭頭 →</option>
+          <option value="darrow">雙箭頭 ↔</option>
+          <option value="line">直線（無箭頭）</option>
+          <option value="rarrow">反向箭頭 ←</option>
+        </select>
+        <button type="button" class="egf-btn" id="egfConnFlip" title="把選取那條線的頭尾對調（箭頭跟著反向）"><i class="fa fa-exchange"></i> 反向</button>
+        <span class="egf-sep"></span>
+        <span class="egf-lab">排列</span>
+        <button type="button" class="egf-btn" id="egfAlignVC" title="框選兩個以上的圖形後按這裡：全部的中心對齊到第一個的中心垂直線（左右對齊成一直行）"><i class="fa fa-align-center"></i> 中線</button>
+        <button type="button" class="egf-btn" id="egfAlignHC" title="全部的中心對齊到第一個的中心水平線（上下對齊成一橫列）"><i class="fa fa-ellipsis-h"></i> 橫線</button>
+        <button type="button" class="egf-btn" id="egfDistV" title="由上到下等距排好、彼此不重疊，中心也對齊成一直行"><i class="fa fa-sort-amount-asc"></i> 直排</button>
+        <button type="button" class="egf-btn" id="egfDistH" title="由左到右等距排好、彼此不重疊，中心也對齊成一橫列"><i class="fa fa-exchange"></i> 橫排</button>
+        <span class="egf-sep"></span>
         <span class="egf-lab">顯示</span>
         <button type="button" class="egf-btn" id="egfZoomOut" title="縮小顯示（不會改變實際大小）">－</button>
         <span class="egf-lab" id="egfZoomVal" style="min-width:38px;display:inline-block;text-align:center">100%</span>
@@ -216,13 +240,41 @@
     cv.getObjects().forEach(function (o) { if (o.egRole === 'shape' && o.egId === label.egId) r = o; });
     return r;
   }
+  /* 圖形內的文字：預設上下左右都置中，可以改成靠左／靠右、靠上／靠下
+     （使用者 2026-10-15）。對齊方式記在圖形上（egHA／egVA），
+     不是記在文字上——圖形縮放、移動都要重新定位文字，統一由這支算。 */
   function syncLabel(shape) {
     var lb = labelOf(shape);
     if (!lb) return;
     var wpx = shape.getScaledWidth(), hpx = shape.getScaledHeight();
-    lb.set({ width: Math.max(24, wpx - 12) });
-    lb.set({ left: shape.left + wpx / 2, top: shape.top + hpx / 2 });
+    var ha = shape.egHA || 'center', va = shape.egVA || 'middle';
+    var pad = 6;
+    // 水平：文字框本來就跟圖形同寬，靠左右只要換 textAlign，不必移動框
+    lb.set({ width: Math.max(24, wpx - 12), textAlign: ha,
+             originX: 'center', left: shape.left + wpx / 2 });
+    if (va === 'top')         lb.set({ originY: 'top',    top: shape.top + pad });
+    else if (va === 'bottom') lb.set({ originY: 'bottom', top: shape.top + hpx - pad });
+    else                      lb.set({ originY: 'center', top: shape.top + hpx / 2 });
     lb.setCoords();
+  }
+
+  /** 設定選取圖形內文字的對齊（h：left/center/right；v：top/middle/bottom） */
+  function setLabelAlign(which, val) {
+    var objs = cv.getActiveObjects().filter(function (o) {
+      return o.egRole === 'shape' || (o.egRole === 'label' && shapeOf(o));
+    });
+    if (!objs.length) { stat('請先點選要調整的圖形'); return; }
+    var n = 0;
+    objs.forEach(function (o) {
+      var sh = (o.egRole === 'shape') ? o : shapeOf(o);
+      if (!sh) return;
+      if (which === 'h') sh.egHA = val; else sh.egVA = val;
+      syncLabel(sh);
+      n++;
+    });
+    cv.requestRenderAll();
+    snapshot();
+    stat('已調整 ' + n + ' 個圖形內文字的對齊');
   }
 
   function addLabel(shape, text) {
@@ -284,15 +336,10 @@
     });
     ln.egRole = 'conn'; ln.egId = id; ln.egKind = kind;
     cv.add(ln);
-    if (kind === 'arrow') {
-      var hd = new fabric.Polygon(arrowHeadPoints(), {
-        left: ln.x2, top: ln.y2, originX: 'center', originY: 'bottom',
-        fill: lineColor, stroke: lineColor, strokeWidth: 0.5,
-        selectable: false, evented: false, objectCaching: false
-      });
-      hd.egRole = 'head'; hd.egId = id;
-      cv.add(hd);
-    }
+    /* kind：line＝沒有箭頭／arrow＝終點箭頭／darrow＝兩端都有／rarrow＝起點箭頭。
+       每個箭頭記下自己在哪一端（egEnd），syncConn 才知道要擺在哪、角度朝哪邊。
+       舊工作檔的箭頭沒有 egEnd，一律當成終點（見 headsOf）。 */
+    connHeadKinds(kind).forEach(function (endKey) { addHead(id, endKey); });
     syncConn(ln);
     cv.setActiveObject(ln);
     cv.requestRenderAll();
@@ -367,7 +414,7 @@
     portDots.forEach(function (o) { cv.remove(o); });
     portDots = [];
   }
-  function showPortDots(x, y) {
+  function showPortDots(x, y, clickable) {
     clearPortDots();
     cv.getObjects().forEach(function (o) {
       if (o.egRole !== 'shape') return;
@@ -378,13 +425,54 @@
       PORT_KEYS.forEach(function (k) {
         var pt = ps[k];
         if (!pt) return;
-        var c = new fabric.Circle({ left: pt.x, top: pt.y, radius: 4,
-          originX: 'center', originY: 'center', fill: '#fff', stroke: '#F0A24B', strokeWidth: 2,
-          selectable: false, evented: false, objectCaching: false, egRole: 'port' });
+        var c = new fabric.Circle({ left: pt.x, top: pt.y, radius: clickable ? 5 : 4,
+          originX: 'center', originY: 'center',
+          fill: clickable ? '#F0A24B' : '#fff', stroke: clickable ? '#fff' : '#F0A24B', strokeWidth: 2,
+          // 可點的錨點才收事件：拖連線端點時顯示的那一批要 evented:false，
+          // 不然滑鼠會打在錨點上、拖不到真正的端點
+          selectable: false, evented: !!clickable, hoverCursor: 'crosshair',
+          objectCaching: false, egRole: 'port', egPortId: o.egId, egPortKey: k });
         cv.add(c); c.bringToFront();
         portDots.push(c);
       });
     });
+  }
+
+
+  /* ── 點兩個錨點就自動連線（使用者 2026-10-15：要像畫面上那樣點錨點相連）────
+     滑鼠移到圖形上就長出 8 個可點的錨點；點第一個進入連線狀態（有一條跟著滑鼠的
+     預覽線），再點另一個圖形的錨點就完成，兩端自動綁定到那兩個錨點，
+     之後移動圖形線會跟著走。按 Esc 或點空白處取消。 */
+  var linkFrom = null;     // {id, port, x, y}
+  var linkPrev = null;     // 預覽線
+
+  function clearLink() {
+    if (linkPrev) { cv.remove(linkPrev); linkPrev = null; }
+    linkFrom = null;
+    clearPortDots();
+    cv.requestRenderAll();
+  }
+
+  function startLink(dot) {
+    linkFrom = { id: dot.egPortId, port: dot.egPortKey, x: dot.left, y: dot.top };
+    linkPrev = new fabric.Line([dot.left, dot.top, dot.left, dot.top], {
+      stroke: '#F0A24B', strokeWidth: 1.5, strokeDashArray: [5, 4],
+      selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+    cv.add(linkPrev); linkPrev.bringToFront();
+    stat('再點另一個圖形上的錨點就連起來了（Esc 取消）');
+  }
+
+  function finishLink(dot) {
+    if (!linkFrom) return;
+    if (dot.egPortId === linkFrom.id && dot.egPortKey === linkFrom.port) { clearLink(); return; }
+    var kind = (el('egfConnKind') && el('egfConnKind').value) || 'arrow';
+    var ln = addConn(kind, linkFrom.x, linkFrom.y, dot.left, dot.top);
+    ln.egPA = { id: linkFrom.id, port: linkFrom.port };
+    ln.egPB = { id: dot.egPortId, port: dot.egPortKey };
+    syncConn(ln);
+    clearLink();
+    snapshot();
+    stat('已連線（兩端都扣在錨點上，移動圖形線會跟著走）');
   }
 
   /** 圖形移動／縮放後，把綁在它身上的連線端點一起帶走 */
@@ -503,6 +591,133 @@
     return null;
   }
 
+
+  /* ── 框選之後的對齊與排列（使用者 2026-10-15）────────────────────────────
+     「所有的中心點都對齊，且不重疊」。基準一律取**第一個**（畫布上最早建立的
+     那一個，也就是 fabric 給的物件順序第一個），其餘跟著它走。
+     ⚠ 一定要先 discardActiveObject()：物件還在 activeSelection 裡面時，
+       getBoundingRect(true,true) 回的是**群組座標**不是絕對座標，
+       拿它算對齊會整組亂跑（本專案在批圖編輯器踩過同一個坑）。 */
+  var ARRANGE_GAP = 24;          // 等距排列的間距（px）
+
+  function arrangeSelected(mode) {
+    var sel = cv.getActiveObjects().filter(function (o) {
+      return o.egRole === 'shape' || o.egRole === 'text';
+    });
+    if (sel.length < 2) { stat('請先框選兩個以上的圖形或文字（按住拖曳框起來，或按住 Shift 逐個點選）'); return; }
+    /* 先完整解除群組選取、重繪一次，**之後**才讀座標。
+       物件還在 activeSelection 裡面時，left/top 是相對於群組中心的值，
+       calcTransformMatrix／getBoundingRect 也會把群組矩陣算進去，
+       在這個時間點取基準會把所有圖形推到畫布左上角（實測中心從 106 變成 0）。 */
+    cv.discardActiveObject();
+    sel.forEach(function (o) { if (o.group) o.group = undefined; o.setCoords(); });
+    cv.requestRenderAll();
+
+    /* 絕對中心一律讀 calcTransformMatrix 的 m[4]/m[5]。
+       ⚠ 不要改用 getBoundingRect()：物件剛從 activeSelection 出來時它回的是
+         **還沒更新的舊座標**（實測三個圖形都回 0，而 calcTransformMatrix 回正確的
+         106／386／181），呼叫過 setCoords() 也一樣。 */
+    var info = sel.map(function (o) {
+      var m = o.calcTransformMatrix();
+      return { o: o, w: o.getScaledWidth(), h: o.getScaledHeight(), cx: m[4], cy: m[5] };
+    });
+    var base = info[0];
+
+    /* 用「目前中心 → 目標中心」的差去位移 left/top，不直接指定座標：
+       圖形、文字的 origin 設定不一樣（文字是 center），直接算 left 會各自錯開。 */
+    function moveCenter(it, cx, cy) {
+      var m = it.o.calcTransformMatrix();
+      it.o.set({ left: it.o.left + (cx - m[4]), top: it.o.top + (cy - m[5]) });
+      it.o.setCoords();
+      if (it.o.egRole === 'shape') { syncLabel(it.o); syncBoundConns(it.o); }
+    }
+    function moveTo(it, nx, ny) {       // nx/ny＝新的「外框左上角」
+      moveCenter(it, nx + it.w / 2, ny + it.h / 2);
+    }
+    info.forEach(function (it) { it.left = it.cx - it.w / 2; it.top = it.cy - it.h / 2; });
+
+    if (mode === 'vc') {                // 中心 X 對齊第一個
+      info.forEach(function (it) { moveTo(it, base.cx - it.w / 2, it.top); });
+    } else if (mode === 'hc') {         // 中心 Y 對齊第一個
+      info.forEach(function (it) { moveTo(it, it.left, base.cy - it.h / 2); });
+    } else if (mode === 'dv') {         // 由上到下等距、不重疊，中心對齊成一直行
+      var byY = info.slice().sort(function (a, b) { return a.cy - b.cy; });
+      var y = byY[0].top;
+      byY.forEach(function (it) {
+        moveTo(it, base.cx - it.w / 2, y);
+        y += it.h + ARRANGE_GAP;
+      });
+    } else if (mode === 'dh') {         // 由左到右等距、不重疊，中心對齊成一橫列
+      var byX = info.slice().sort(function (a, b) { return a.cx - b.cx; });
+      var x = byX[0].left;
+      byX.forEach(function (it) {
+        moveTo(it, x, base.cy - it.h / 2);
+        x += it.w + ARRANGE_GAP;
+      });
+    }
+
+    // 排完重新選起來，方便接著再按別的排列鈕
+    var ns = new fabric.ActiveSelection(sel, { canvas: cv });
+    cv.setActiveObject(ns);
+    cv.requestRenderAll();
+    snapshot();
+    stat({ vc: '已把中心對齊成一直行', hc: '已把中心對齊成一橫列',
+           dv: '已由上到下等距排好（不重疊）', dh: '已由左到右等距排好（不重疊）' }[mode] || '已排列');
+  }
+
+  /** 這種線要在哪幾端放箭頭 */
+  function connHeadKinds(kind) {
+    if (kind === 'darrow') return ['a', 'b'];
+    if (kind === 'rarrow') return ['a'];
+    if (kind === 'arrow')  return ['b'];
+    return [];
+  }
+
+  function addHead(id, endKey) {
+    var hd = new fabric.Polygon(arrowHeadPoints(), {
+      originX: 'center', originY: 'bottom',
+      fill: lineColor, stroke: lineColor, strokeWidth: 0.5,
+      selectable: false, evented: false, objectCaching: false
+    });
+    hd.egRole = 'head'; hd.egId = id; hd.egEnd = endKey;
+    cv.add(hd);
+    return hd;
+  }
+
+  /** 一條線的箭頭（可能兩個）；舊資料沒有 egEnd 的一律當終點 */
+  function headsOf(ln) {
+    var out = [];
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole === 'head' && o.egId === ln.egId) {
+        if (!o.egEnd) o.egEnd = 'b';
+        out.push(o);
+      }
+    });
+    return out;
+  }
+
+  /** 換一條線的箭頭樣式（無／單／雙／反向） */
+  function setConnKind(ln, kind) {
+    if (!ln || ln.egRole !== 'conn') return;
+    headsOf(ln).forEach(function (h) { cv.remove(h); });
+    ln.egKind = kind;
+    connHeadKinds(kind).forEach(function (endKey) { addHead(ln.egId, endKey); });
+    syncConn(ln);
+    cv.requestRenderAll();
+  }
+
+  /** 把線的頭尾對調（箭頭跟著反向，綁定的錨點也跟著換邊） */
+  function flipConn(ln) {
+    if (!ln || ln.egRole !== 'conn') return;
+    var a = lineAbs(ln);
+    var pa = ln.egPA, pb = ln.egPB;
+    setLineAbs(ln, a.x2, a.y2, a.x1, a.y1);
+    ln.egPA = pb; ln.egPB = pa;
+    syncConn(ln);
+    showHandles(ln);
+    cv.requestRenderAll();
+  }
+
   function headOf(ln) {
     var r = null;
     cv.getObjects().forEach(function (o) { if (o.egRole === 'head' && o.egId === ln.egId) r = o; });
@@ -527,16 +742,20 @@
     ln.setCoords();
   }
   function syncConn(ln) {
-    var hd = headOf(ln);
-    if (!hd) return;
+    var hs = headsOf(ln);
+    if (!hs.length) return;
     var a = lineAbs(ln);
     /* 箭頭本體的三個點是 (0,0) 尖端、(±6,-11) 底邊，配上 originY:'bottom'
        ＝「left/top 指的是尖端」，而**沒有旋轉時它是朝下的**（底邊在尖端上方）。
        所以要轉到線的方向是 φ−90，不是 φ+90——寫成 +90 會讓每一支箭頭都剛好
        反過來指（尖端位置仍在終點上，所以乍看很像對的，要量底邊在哪一側才看得出來）。 */
-    var ang = Math.atan2(a.y2 - a.y1, a.x2 - a.x1) * 180 / Math.PI - 90;
-    hd.set({ left: a.x2, top: a.y2, angle: ang, fill: ln.stroke, stroke: ln.stroke });
-    hd.setCoords();
+    hs.forEach(function (hd) {
+      var sx = (hd.egEnd === 'a') ? a.x2 : a.x1, sy = (hd.egEnd === 'a') ? a.y2 : a.y1;
+      var ex = (hd.egEnd === 'a') ? a.x1 : a.x2, ey = (hd.egEnd === 'a') ? a.y1 : a.y2;
+      var ang = Math.atan2(ey - sy, ex - sx) * 180 / Math.PI - 90;
+      hd.set({ left: ex, top: ey, angle: ang, fill: ln.stroke, stroke: ln.stroke });
+      hd.setCoords();
+    });
   }
 
   /* 端點控制點：選到連接線時長出兩個小圓，拖它改端點（不是縮放整條線——
@@ -568,7 +787,7 @@
   /** 序列化：fabric 的 toJSON 不含畫布尺寸，自己補上 egW/egH，
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
-    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB']);
+    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA']);
     jo.egW = LOGW;
     jo.egH = LOGH;
     return JSON.stringify(jo);
@@ -670,13 +889,15 @@
     });
   }
 
+  function escLink() { if (linkFrom) { clearLink(); stat('已取消連線'); return true; } return false; }
+
   function delSel() {
     var objs = cv.getActiveObjects();
     if (!objs.length) { stat('請先選要刪除的東西'); return; }
     objs.forEach(function (o) {
       if (o.egRole === 'handle') return;
       if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) cv.remove(lb); unbindShape(o.egId); }
-      if (o.egRole === 'conn')  { var hd = headOf(o);  if (hd) cv.remove(hd); }
+      if (o.egRole === 'conn')  { headsOf(o).forEach(function (h) { cv.remove(h); }); }
       if (o.egRole === 'label') { var sh = shapeOf(o); if (sh) { unbindShape(sh.egId); cv.remove(sh); } }
       cv.remove(o);
     });
@@ -706,7 +927,8 @@
       if (o.egRole === 'handle') return;
       if (kind === 'line') {
         o.set('stroke', c);
-        if (o.egRole === 'conn') { var hd = headOf(o); if (hd) hd.set({ fill: c, stroke: c }); }
+        // 雙箭頭有兩個箭頭，改色要兩個都改（只改一個會變成一端舊色）
+        if (o.egRole === 'conn') headsOf(o).forEach(function (h) { h.set({ fill: c, stroke: c }); });
         if (o.egRole === 'label' || o.egRole === 'text') o.set({ fill: c, stroke: null });
       } else if (o.egRole === 'shape') {
         o.set('fill', c);
@@ -753,8 +975,34 @@
     cv.on('mouse:down', function (e) {
       altDragDone = false;
       var t = e.target;
+      if (t && t.egRole === 'port' && t.egPortId) {     // 點錨點＝開始／完成連線
+        if (linkFrom) finishLink(t); else startLink(t);
+        return;
+      }
+      if (linkFrom) { clearLink(); stat('已取消連線'); }
       altDragFrom = (t && t.egRole !== 'handle' && t.egRole !== 'port')
                   ? { left: t.left, top: t.top } : null;
+    });
+
+    /* 滑過圖形就顯示可以點的錨點。拖曳中不顯示——那時候滑鼠正在搬東西，
+       冒出一堆圓點只會擋住視線，也會把事件攔走。 */
+    cv.on('mouse:move', function (e) {
+      if (!e || !e.e) return;
+      var p = cv.getPointer(e.e);
+      if (linkFrom) {
+        if (linkPrev) { linkPrev.set({ x2: p.x, y2: p.y }); linkPrev.setCoords(); cv.requestRenderAll(); }
+        return;
+      }
+      if (e.e.buttons) return;                      // 按著滑鼠＝正在拖東西
+      var over = null;
+      cv.getObjects().forEach(function (o) {
+        if (o.egRole !== 'shape') return;
+        var r = o.getBoundingRect(true, true);
+        if (p.x >= r.left - 10 && p.x <= r.left + r.width + 10
+         && p.y >= r.top - 10 && p.y <= r.top + r.height + 10) over = o;
+      });
+      if (over) showPortDots(p.x, p.y, true);
+      else if (portDots.length) clearPortDots(), cv.requestRenderAll();
     });
     cv.on('mouse:up', function () { clearGuides(); });
     cv.on('object:scaling', function (e) {
@@ -772,6 +1020,7 @@
     cv.on('selection:created', onSel);
     cv.on('selection:updated', onSel);
     cv.on('selection:cleared', function () { clearHandles(); });
+    cv.on('mouse:out', function () { if (!linkFrom && portDots.length) { clearPortDots(); cv.requestRenderAll(); } });
 
     function onSel() {
       var objs = cv.getActiveObjects();
@@ -1070,6 +1319,22 @@
           snapshot();
           break;
         }
+        case 'egfConnFlip': {
+          var fl = cv.getActiveObject();
+          if (fl && fl.egRole === 'conn') { flipConn(fl); snapshot(); stat('已把這條線反向'); }
+          else stat('請先點選一條連線');
+          break;
+        }
+        case 'egfTxtL': setLabelAlign('h', 'left');   break;
+        case 'egfTxtC': setLabelAlign('h', 'center'); break;
+        case 'egfTxtR': setLabelAlign('h', 'right');  break;
+        case 'egfTxtT': setLabelAlign('v', 'top');    break;
+        case 'egfTxtM': setLabelAlign('v', 'middle'); break;
+        case 'egfTxtB': setLabelAlign('v', 'bottom'); break;
+        case 'egfAlignVC': arrangeSelected('vc'); break;
+        case 'egfAlignHC': arrangeSelected('hc'); break;
+        case 'egfDistV':   arrangeSelected('dv'); break;
+        case 'egfDistH':   arrangeSelected('dh'); break;
         case 'egfZoomIn':  zoomStep(+1); break;
         case 'egfZoomOut': zoomStep(-1); break;
         case 'egfZoomFit': zoomFit(); break;
@@ -1099,6 +1364,12 @@
     });
     /* Ctrl＋滾輪縮放（跟一般繪圖軟體一樣）。
        刻意要按著 Ctrl：不按的話滾輪要留給畫布捲動，圖一大就只能用捲軸找東西。 */
+    var ck = el('egfConnKind');
+    if (ck) ck.addEventListener('change', function () {
+      var o = cv && cv.getActiveObject();
+      if (o && o.egRole === 'conn') { setConnKind(o, ck.value); showHandles(o); snapshot(); stat('已換成' + ck.options[ck.selectedIndex].text); }
+    });
+
     var canhost = d.querySelector('#egfWin .egf-canhost');
     if (canhost) {
       canhost.addEventListener('wheel', function (e) {
@@ -1152,7 +1423,8 @@
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delSel(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-      else if (e.key === 'Escape') { close(); }
+      // Esc 先取消「正在拉的連線」，沒有在拉線才關掉整個編輯器
+      else if (e.key === 'Escape') { if (!escLink()) close(); }
     });
   }
 
