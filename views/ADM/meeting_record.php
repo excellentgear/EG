@@ -2813,7 +2813,7 @@ function meetingRecordPageHtml(m, res, docNoMode){
 function discListFromItems(items){ return (items||[]).filter(function(it){ return it.kind==='directive' || it.kind==='general'; }); }
 /* 討論列對應要項的文字：ref＝'general:2'（第2項），items 為 {kind,content} 陣列（編輯畫面與檢視共用） */
 function discRefLabel(ref, items){
-    if (!ref) return '綜合討論（不對應特定要項）';
+    if (!ref) return '（未選擇要項）';
     var p = ref.split(':'), kind = p[0], no = +p[1], n = 0, hit = null;
     (items||[]).forEach(function(it){ if (it.kind===kind){ n++; if (n===no) hit = it; } });
     var nm = kind==='directive' ? '上級指示要項' : '會議要項';
@@ -2849,7 +2849,7 @@ function discFillDept(i){
 function renderDisc(){
     var items = discEditItems(), h = '';
     DISC.forEach(function(r,i){
-        var opts = '<option value="">綜合討論（不對應特定要項）</option>', n = {directive:0, general:0};
+        var opts = '<option value="">請選擇要項…</option>', n = {directive:0, general:0};
         items.forEach(function(it){
             n[it.kind]++;
             var v = it.kind+':'+n[it.kind];
