@@ -1521,16 +1521,29 @@ $('#btnSignSubmit').on('click', function(){
             return;
         }
         var h = '';
+        /* 使用者 2026-10-15：「請檢查最後修改者是否為此 AS 文件之負責部門人員或是此 AS 文件之部門內人員」。
+           刻意**只提醒不擋下**——臨時請別的單位的人代改就送不出去了，要不要照簽由簽核人判斷。 */
+        if (p.editor_warn) {
+            h += '<div class="alert alert-warning" style="padding:8px 10px;font-size:12px;margin-bottom:8px;">'
+               + '<b><i class="fa fa-exclamation-triangle"></i> 請確認：</b>' + esc(p.editor_warn) + '</div>';
+        }
         p.steps.forEach(function(s){
             h += '<div class="sg-pick" data-cfg="' + s.cfg_id + '">'
                + '<div class="sg-h">' + s.seq + '. ' + esc(s.stage_name)
                + (s.auto_sign ? ' <span style="color:#8A5A2B;font-weight:normal">（自動簽核）</span>' : '') + '</div>';
             if (!s.candidates.length) {
-                h += '<div class="sg-f" style="color:#DD5138">管理員設定的部門與職稱目前沒有在職人員，送不出去。</div>';
+                h += '<div class="sg-f" style="color:#DD5138">'
+                   + (s.mode === 'editor_sup'
+                      ? '解析不到最後修改人的單位主管（他可能自己就是課級最高主管），請改選別的來源或指定人員。'
+                      : s.mode === 'doc_owner'
+                      ? '這份文件的負責課室還沒指派 AS 文件部門負責人（到「AS 文件管理 → 部門負責人」設定）。'
+                      : '管理員設定的部門與職稱目前沒有在職人員，送不出去。') + '</div>';
             } else if (s.fixed || s.auto_sign) {
                 var c0 = s.candidates[0];
                 h += '<div class="sg-f">' + esc(c0.name) + '　' + esc(c0.dept) + ' ' + esc(c0.pos)
-                   + (s.mode === 'editor' ? '（內容的最後修改人）' : '') + '</div>';
+                   + (s.mode === 'editor' ? '（內容的最後修改人）'
+                      : s.mode === 'editor_sup' ? '（最後修改人的單位主管）'
+                      : s.mode === 'doc_owner' ? '（AS 文件部門負責人）' : '') + '</div>';
             } else {
                 h += '<select class="form-control input-sm sg-sel" data-eg-filter="輸入姓名篩選…">'
                    + s.candidates.map(function(c2){
@@ -1604,8 +1617,17 @@ function cfgRowHtml(r) {
 function cfgPaintTarget($tr, r) {
     var mode = $tr.find('.cfg-mode').val();
     var h = '';
+    /* 這三種都是系統算出來的唯一人選，沒有東西要挑——
+       沒有列出來的話會掉進最後那個 else 顯示部門＋職稱挑選器，
+       使用者會以為要選部門（選了也不會被用到）。 */
     if (mode === 'editor') {
         h = '<span style="font-size:12px;color:#8A5A2B">由系統自動判定（這一版內容的最後修改人）</span>';
+    } else if (mode === 'editor_sup') {
+        h = '<span style="font-size:12px;color:#8A5A2B">由系統自動判定（最後修改人的單位主管；'
+          + '往上只追到「課」級，課級最高主管自己改的就從缺）</span>';
+    } else if (mode === 'doc_owner') {
+        h = '<span style="font-size:12px;color:#8A5A2B">由系統自動判定（這份文件負責課室的 AS 文件部門負責人；'
+          + '他不在職或已調離時自動改用該部門的代理人）</span>';
     } else if (mode === 'user') {
         h = '<select class="form-control input-sm cfg-user" data-eg-filter="輸入姓名篩選…">'
           + CFG.people.map(function(p){
@@ -1641,10 +1663,11 @@ function cfgLoad(deptId) {
         $('#cfgScopeNote').text(Number(deptId) > 0
             ? (r.scope_is_own ? '這個部門有自己的設定' : '這個部門目前沿用全站預設，存檔後就會變成它自己的設定')
             : '沒有自己設定的部門都會用這一組');
+        // 還沒設定過時帶這一組預設；審查＝最後修改人的單位主管（使用者 2026-10-15 指定）
         var rows = r.rows.length ? r.rows : [
-            { stage:'draft',   mode:'editor',   auto_sign:0 },
-            { stage:'review',  mode:'dept_pos', auto_sign:0 },
-            { stage:'approve', mode:'dept_pos', auto_sign:0 }
+            { stage:'draft',   mode:'editor',     auto_sign:0 },
+            { stage:'review',  mode:'editor_sup', auto_sign:0 },
+            { stage:'approve', mode:'dept_pos',   auto_sign:0 }
         ];
         $('#cfgTbl tbody').empty();
         rows.forEach(function(row){
