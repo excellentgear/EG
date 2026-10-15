@@ -112,6 +112,18 @@ function meeting_ensure_schema(PDO $db): void {
                        COMMENT '直接指定負責人員 user.id 逗號分隔(與owner_depts二擇一,有值時完全取代部門判定)' AFTER owner_dept_names");
         }
     } catch (Throwable $e) {}
+    /* 負責人確認方式(2026-10-15 使用者要求)：每個項目一個設定。
+         onsite＝出席者當場簽章、未出席者收通知回簽(預設，與舊行為相同)
+         later ＝出席與否一律不當場簽，全部改收通知、會後確認（可回覆）
+         ack   ＝出席者當場簽章，未出席者收「僅知會」通知，只按簽收、不留回覆 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_item' AND COLUMN_NAME='confirm_mode'")->fetchColumn();
+        if ($c === 0) {
+            $db->exec("ALTER TABLE meeting_item ADD COLUMN confirm_mode VARCHAR(10) NOT NULL DEFAULT 'onsite'
+                       COMMENT 'onsite當場簽/later會後通知確認/ack僅通知簽收' AFTER owner_users");
+        }
+    } catch (Throwable $e) {}
     /* 出席人員的「其餘兼任職務」(2026-09-17 使用者要求)：內部稽核的稽核小組是「一筆職務一列」，
        同一個人可能掛兩個職務(例 何沐桐＝生管組 組長＋技術課 工程師)，但出席名單是一人一列，
        只印一個職務會讓使用者對不上小組名單(11 筆職務 vs 9 列)。
@@ -511,14 +523,15 @@ function meeting_display_status(PDO $db, array $m): string {
  * mode 用 'reply'（不是單純的 sign）：讓對方在通知系統內留下一段回覆文字，畫面上會顯示在項目下方，
  * 而不只是「已回簽」三個字看不到內容；回覆同時視同簽名完成，見 _eventRespond.php 的掛勾。
  */
-function meeting_notify_item_owners(PDO $db, int $itemId, array $toUids, string $title, string $content, int $fromUid): int {
+function meeting_notify_item_owners(PDO $db, int $itemId, array $toUids, string $title, string $content, int $fromUid, string $mode = 'reply'): int {
+    $mode = $mode === 'sign' ? 'sign' : 'reply';
     if (!$toUids) return 0;
     try {
         $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
                       VALUES (CURDATE(), NULL, ?, ?, 0, ?, '會議記錄項目確認', 1, 'MEETING_ITEM_CONFIRM', ?)")
            ->execute([$title, $content, $fromUid, $itemId]);
         $eid = (int)$db->lastInsertId();
-        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'reply')");
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, '$mode')");
         foreach (array_unique(array_map('intval', $toUids)) as $tuid) $ins->execute([$eid, $tuid]);
         try {
             require_once __DIR__ . '/../push/push_send.php';
@@ -646,6 +659,8 @@ function meeting_item_required_signers_by_users(PDO $db, int $meetingId, array $
 /** 統一入口：依項目的 owner_users(指定人員模式，優先/完全取代) 或 owner_depts(部門自動判定模式) 算出必簽名單，兩者擇一。
  *  呼叫端一律用這支，不要自己 if/else 判斷 owner_users 是否有值，避免各處判斷邏輯漏改不一致。$item 需含 owner_users/owner_depts 欄位。 */
 function meeting_item_required_signers_for(PDO $db, int $meetingId, array $item): array {
+    // 會後確認(later)：出席者也不當場簽，一律走通知回簽
+    if (($item['confirm_mode'] ?? 'onsite') === 'later') return [];
     $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
     if ($ownerUserIds) return meeting_item_required_signers_by_users($db, $meetingId, $ownerUserIds);
     $ownerDeptIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
@@ -724,6 +739,10 @@ function meeting_close_single_item_notice(PDO $db, int $itemId): void {
  * 兩邊各寫一份的話，同一張單在不同時間點發出的通知會長得不一樣，收件人會以為是兩件不同的事。
  * $m 需含 subject/meeting_date；$item 需含 item_id/content/due_date/owner_depts/owner_users。
  */
+/** 這個項目的通知要用哪種回應模式：ack(僅通知簽收)＝只簽章不留回覆，其餘＝回簽＋可回覆 */
+function meeting_item_notice_mode(array $item): string {
+    return ($item['confirm_mode'] ?? 'onsite') === 'ack' ? 'sign' : 'reply';
+}
 function meeting_item_notice_text(PDO $db, array $m, array $item, array $targets): array {
     $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
     $ownerUserIds = $ownerIds ? [] : array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
@@ -749,6 +768,9 @@ function meeting_item_notice_text(PDO $db, array $m, array $item, array $targets
                . "回覆內容可以留白，直接按「僅回簽（不留言）」也算完成）")
             : "\n（回覆內容可以留白，直接按「僅回簽（不留言）」也算完成）";
     }
+    $cm = (string)($item['confirm_mode'] ?? 'onsite');
+    if ($cm === 'ack') $rule = "\n（本項目為通知事項，請直接按「簽收」表示已知悉，不需回覆）";
+    elseif ($cm === 'later') $rule .= "\n（本項目於會後確認，請確認內容後回簽，有意見可在回覆中說明）";
     return [
         'title'   => '「' . $m['subject'] . '」會議記錄項目待確認：' . mb_substr((string)$item['content'], 0, 30),
         'content' => '「' . $m['subject'] . '」（' . $m['meeting_date'] . '）會議記錄的以下負責項目請確認並回覆：' . "\n" . $item['content']
@@ -771,7 +793,7 @@ function meeting_item_notice_text(PDO $db, array $m, array $item, array $targets
 function meeting_item_notice_sync(PDO $db, array $m, int $itemId, int $fromUid): array {
     $res = ['added'=>[], 'removed'=>[], 'new_notice'=>false];
     $meetingId = (int)$m['meeting_id'];
-    $st = $db->prepare("SELECT item_id, content, due_date, owner_depts, owner_users FROM meeting_item WHERE item_id=? AND meeting_id=?");
+    $st = $db->prepare("SELECT item_id, content, due_date, owner_depts, owner_users, confirm_mode FROM meeting_item WHERE item_id=? AND meeting_id=?");
     $st->execute([$itemId, $meetingId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) return $res;
@@ -792,7 +814,7 @@ function meeting_item_notice_sync(PDO $db, array $m, int $itemId, int $fromUid):
         // 還沒發過通知（或先前已關閉）：有待回簽對象才補發一則，沿用與「存檔並通知」完全相同的措辭
         if ($pending) {
             $tx = meeting_item_notice_text($db, $m, $item, $pending);
-            if (meeting_notify_item_owners($db, $itemId, $pending, $tx['title'], $tx['content'], $fromUid)) {
+            if (meeting_notify_item_owners($db, $itemId, $pending, $tx['title'], $tx['content'], $fromUid, meeting_item_notice_mode($item))) {
                 $res['added'] = $pending; $res['new_notice'] = true;
             }
         }
@@ -820,7 +842,7 @@ function meeting_item_notice_sync(PDO $db, array $m, int $itemId, int $fromUid):
         $res['removed'] = $del;
     }
     if ($add) {
-        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'reply')");
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, '" . meeting_item_notice_mode($item) . "')");
         foreach ($add as $tuid) $ins->execute([$eid, $tuid]);
         $res['added'] = $add;
         // 推播只發給這次新加進來的人，不重發給原本就在收件人裡的人（否則每調整一次就轟炸全部人一次）

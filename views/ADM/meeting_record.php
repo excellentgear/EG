@@ -1072,7 +1072,7 @@ function openEdit(id){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
                 owner_users:(it.owner_users?String(it.owner_users).split(','):[]), remark:it.remark||'',
-                owner_mode: it.owner_users ? 'user' : 'dept',
+                owner_mode: it.owner_users ? 'user' : 'dept', confirm_mode: it.confirm_mode||'onsite',
                 confirm_slots:it.confirm_slots||[]};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
@@ -1510,7 +1510,7 @@ function groupSaveConfirm(){
 /* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
 function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
 function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
-function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', remark:''}); renderItems(kind); }
+function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', confirm_mode:'onsite', remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
@@ -1573,7 +1573,14 @@ function ownerPickHtml(kind,i,it){
     // 空著就講明原因（鐵律8 的「錯誤即時顯示原因」）：送出時一定會被擋，不要等按了送出才說
     var warn = itemHasOwner(it) ? ''
              : '<div class="errmsg" style="margin-top:2px;">必填：請指定負責部門或人員<br>（只是宣布事項請改建在「宣布事項」）</div>';
-    return toggle + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[])) + warn;
+    // 確認方式(每個項目一個設定)：當場簽／會後通知確認／僅通知簽收
+    var cm = it.confirm_mode || 'onsite';
+    var cmSel = '<select style="font-size:12px;margin-top:3px;max-width:100%;" onchange="itemEdit(\'' + kind + '\',' + i + ',\'confirm_mode\',this.value)" data-eg-skip'
+        + ' title="當場簽＝出席者當場輸入密碼簽章、未出席者收通知回簽；會後確認＝全部改收通知，確認後回簽並可回覆；僅通知簽收＝出席者當場簽，未出席者只按簽收、不用回覆">'
+        + '<option value="onsite"'+(cm==='onsite'?' selected':'')+'>確認方式：當場簽章</option>'
+        + '<option value="later"'+(cm==='later'?' selected':'')+'>確認方式：會後通知確認（可回覆）</option>'
+        + '<option value="ack"'+(cm==='ack'?' selected':'')+'>確認方式：未出席者僅簽收</option></select>';
+    return toggle + cmSel + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[])) + warn;
 }
 function toggleOwnerMode(kind,i){
     var a = itemsArr(kind)[i]; if (!a) return;
@@ -1618,6 +1625,12 @@ function personMainPostText(p){
 function ownerDisplayText(it){
     var ownerUsers = it.owner_users ? String(it.owner_users).split(',') : [];
     if (ownerUsers.length) {
+        // 指定的人剛好就是本次全部與會者：只寫「與會者」，姓名下方簽章欄本來就會逐一顯示，不必在這欄重複列出
+        var atts = (typeof VIEW!=='undefined' && VIEW && VIEW.attendees) ? VIEW.attendees : (typeof ATT!=='undefined' ? ATT : []);
+        if (atts.length > 1 && atts.length === ownerUsers.length) {
+            var ownerSet = {}; ownerUsers.forEach(function(id){ ownerSet[String(id)] = 1; });
+            if (atts.every(function(a){ return ownerSet[String(a.user_id)]; })) return '與會者';
+        }
         return ownerUsers.map(function(id){ var p=personById(id); return p?p.user_cname:''; }).filter(Boolean).join('、');
     }
     return (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
@@ -2403,7 +2416,8 @@ function itemConfirmCellHtml(it){
         if (!s.can_sign_in_person) {
             inline += '<div style="font-size:11px;color:#8a6d45;">'
                     + esc(s.dept_name || s.user_name || '') + '：尚未回簽　'
-                    + (s.dept_id ? '<span style="color:#a08050;">（該部門本次無人出席，已通知部門主管在系統內回簽）</span>'
+                    + (it.confirm_mode==='later' ? '<span style="color:#a08050;">（本項目採會後確認，已發通知請於系統內回簽，可回覆意見）</span>'
+                      : s.dept_id ? '<span style="color:#a08050;">（該部門本次無人出席，已通知部門主管在系統內回簽）</span>'
                                  : '<span style="color:#a08050;">（本次未出席，無法現場簽名，已發通知請本人在系統內回簽）</span>')
                     + '</div>';
             return;

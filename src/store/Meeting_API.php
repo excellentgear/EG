@@ -645,8 +645,8 @@ case 'save': {
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
-        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment)
-                              VALUES (?,?,?,?,?,?,?,?,?,?)");
+        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment, confirm_mode)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?)");
         $n = 0;
         $keptOldIds = [];
         foreach ($items as $it) {
@@ -664,7 +664,8 @@ case 'save': {
             $remark = trim((string)($it['remark'] ?? '')) ?: null;
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null]);
+            $cmode = in_array($it['confirm_mode'] ?? '', ['later','ack'], true) ? $it['confirm_mode'] : 'onsite';
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null, $cmode]);
             if ($prev) {
                 $keptOldIds[] = $prevId;
                 $newItemId = (int)$db->lastInsertId();
@@ -871,7 +872,7 @@ case 'notify_pending_items': {
         $notified++;
         // 標題/內文一律走共用的 meeting_item_notice_text()，與「回簽中調整負責人」補發的通知用同一份措辭
         $tx = meeting_item_notice_text($db, $m, $it, $targets);
-        meeting_notify_item_owners($db, (int)$it['item_id'], $targets, $tx['title'], $tx['content'], $noticeFrom);
+        meeting_notify_item_owners($db, (int)$it['item_id'], $targets, $tx['title'], $tx['content'], $noticeFrom, meeting_item_notice_mode($it));
     }
     jout(['notified_items'=>$notified]);
 }
