@@ -1488,6 +1488,28 @@ try {
 endif; // end !$_mdm_skip_migration
 unset($_mdm_skip_migration);
 
+// ── 齒部外徑（da）計算式：唯一實作 ──────────────────────────────────────
+// 列表顯示的「齒部外徑」籤與「齒部外徑區間篩選」一律用這一支產生 SQL，
+// 兩邊各寫一份的話，DIN5480 花鍵（短齒型 da=mz+2m(0.4+x)）這種分支會只有
+// 其中一邊算對：畫面印 48.8、篩 50~100 卻把它撈出來，使用者只會以為篩選壞了。
+// $g = d_setting_gear 的別名，$dt = dict_gear_type 的別名（需 LEFT JOIN 進來）。
+function _gear_da_expr($g, $dt) {
+    $m = "CAST(REPLACE($g.Module,'M','') AS DECIMAL(20,8))";
+    return "CASE"
+         // DIN5480 花鍵（外花鍵/花鍵）：有公稱直徑用 da=D_B-0.2m，否則短齒型 da=mz+2m(0.4+x)
+         . " WHEN $g.spec_spline_std='DIN5480' AND $g.spec_spline_nominal_dia>0 AND $dt.spec_category='spline' AND $dt.type_name NOT LIKE '%內%'"
+         . "     THEN $g.spec_spline_nominal_dia - 0.2 * $m"
+         . " WHEN $g.spec_spline_std='DIN5480' AND ($g.spec_spline_nominal_dia IS NULL OR $g.spec_spline_nominal_dia<=0) AND $dt.spec_category='spline' AND $dt.type_name NOT LIKE '%內%'"
+         . "     THEN $m * $g.Teeth + 2 * $m * (0.4 + COALESCE($g.Profile_Shift_X,0))"
+         // DIN5480 內花鍵：有公稱直徑用 di=D_B-2m，否則一般公式
+         . " WHEN $g.spec_spline_std='DIN5480' AND $g.spec_spline_nominal_dia>0 AND $dt.spec_category='spline' AND $dt.type_name LIKE '%內%'"
+         . "     THEN $g.spec_spline_nominal_dia - 2 * $m"
+         . " WHEN $g.spec_spline_std='DIN5480' AND ($g.spec_spline_nominal_dia IS NULL OR $g.spec_spline_nominal_dia<=0) AND $dt.spec_category='spline' AND $dt.type_name LIKE '%內%'"
+         . "     THEN $m * $g.Teeth - 2 * $m * (1 + COALESCE($g.Profile_Shift_X,0))"
+         . " ELSE $m * $g.Teeth / COS(RADIANS(COALESCE($g.Helix_Angle,0))) + 2 * $m * (1 + COALESCE($g.Profile_Shift_X,0))"
+         . " END";
+}
+
 // ── 操作紀錄輔助函數 ──
 function _get_setting($pdo, $key, $default='') {
     try { $s=$pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key=?"); $s->execute([$key]); $v=$s->fetchColumn(); return ($v!==false&&$v!==null&&$v!=='') ? $v : $default; } catch(Exception $e){ return $default; }
@@ -2158,12 +2180,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (is_numeric($fwl_min)) { $where .= " AND CAST(d.workpiece_length AS DECIMAL(12,4)) >= :fwlmin"; $params[':fwlmin'] = $fwl_min; }
                 if (is_numeric($fwl_max)) { $where .= " AND CAST(d.workpiece_length AS DECIMAL(12,4)) <= :fwlmax"; $params[':fwlmax'] = $fwl_max; }
             }
-            // 齒部外徑篩選：依 da = m*z/cos(β) + 2m(1+x) 計算後範圍過濾
+            // 齒部外徑區間篩選（只填一邊＝大於等於／小於等於）
+            // 計算式與列表上的「齒部外徑」籤共用 _gear_da_expr()，並同樣 ROUND(…,2)，
+            // 否則畫面印 48.8、篩 50~100 時卻把它撈出來（DIN5480 花鍵分支），看起來就像篩選壞了。
+            // 同一個料號可能有好幾筆齒輪規格，EXISTS＝其中任一筆落在區間內就算命中。
             $fda_min = trim($_POST['filter_gear_da_min'] ?? '');
             $fda_max = trim($_POST['filter_gear_da_max'] ?? '');
             if (is_numeric($fda_min) || is_numeric($fda_max)) {
                 $da_mn  = "CAST(REPLACE(gda.Module,'M','') AS DECIMAL(20,8))";
-                $da_expr = "$da_mn * gda.Teeth / COS(RADIANS(COALESCE(gda.Helix_Angle,0))) + 2 * $da_mn * (1 + COALESCE(gda.Profile_Shift_X,0))";
+                $da_expr = "ROUND(" . _gear_da_expr('gda', 'gdat') . ", 2)";
                 $da_cond = '';
                 if (is_numeric($fda_min) && is_numeric($fda_max)) {
                     $da_cond = "AND ($da_expr) >= :fda_min AND ($da_expr) <= :fda_max";
@@ -2175,7 +2200,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $da_cond = "AND ($da_expr) <= :fda_max";
                     $params[':fda_max'] = $fda_max;
                 }
-                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gda WHERE gda.d_setting_id=d.d_id AND $da_mn>0 AND gda.Teeth>0 $da_cond)";
+                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gda"
+                        . " LEFT JOIN dict_gear_type gdat ON gdat.gear_type_id=gda.Gear_Type"
+                        . " WHERE gda.d_setting_id=d.d_id AND $da_mn>0 AND gda.Teeth>0 $da_cond)";
             }
             // 齒輪規格篩選
             $fgear_modules_raw = trim($_POST['filter_gear_modules'] ?? '');
@@ -2634,22 +2661,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         WHERE g.d_setting_id=d.d_id) AS gear_spec_str,
                        (SELECT GROUP_CONCAT(
                             IF(CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8))>0 AND g.Teeth IS NOT NULL AND g.Teeth>0,
-                               ROUND(
-                                   CASE
-                                       -- DIN5480 花鍵（外花鍵/花鍵）：有公稱直徑用 da=D_B-0.2m，否則短齒型 da=mz+2m(0.4+x)
-                                       -- 用 spec_category='spline' 避免依賴中文 type_name 比較
-                                       WHEN g.spec_spline_std='DIN5480' AND g.spec_spline_nominal_dia>0 AND dt_sp.spec_category='spline' AND dt_sp.type_name NOT LIKE '%內%'
-                                           THEN g.spec_spline_nominal_dia - 0.2 * CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8))
-                                       WHEN g.spec_spline_std='DIN5480' AND (g.spec_spline_nominal_dia IS NULL OR g.spec_spline_nominal_dia<=0) AND dt_sp.spec_category='spline' AND dt_sp.type_name NOT LIKE '%內%'
-                                           THEN CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * g.Teeth + 2 * CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * (0.4 + COALESCE(g.Profile_Shift_X,0))
-                                       -- DIN5480 內花鍵：有公稱直徑用 di=D_B-2m，否則一般公式
-                                       WHEN g.spec_spline_std='DIN5480' AND g.spec_spline_nominal_dia>0 AND dt_sp.spec_category='spline' AND dt_sp.type_name LIKE '%內%'
-                                           THEN g.spec_spline_nominal_dia - 2 * CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8))
-                                       WHEN g.spec_spline_std='DIN5480' AND (g.spec_spline_nominal_dia IS NULL OR g.spec_spline_nominal_dia<=0) AND dt_sp.spec_category='spline' AND dt_sp.type_name LIKE '%內%'
-                                           THEN CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * g.Teeth - 2 * CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * (1 + COALESCE(g.Profile_Shift_X,0))
-                                       ELSE
-                                           CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * g.Teeth / COS(RADIANS(COALESCE(g.Helix_Angle,0))) + 2 * CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8)) * (1 + COALESCE(g.Profile_Shift_X,0))
-                                   END, 2),
+                               ROUND(" . _gear_da_expr('g', 'dt_sp') . ", 2),
                                NULL)
                             ORDER BY g.gear_id SEPARATOR '/')
                         FROM d_setting_gear g LEFT JOIN dict_gear_type dt_sp ON dt_sp.gear_type_id=g.Gear_Type
@@ -9113,7 +9125,7 @@ body { background:#F6F1EA; }
                     <span class="fc fc-sub active" data-gpa="" onclick="setGearSpecFilter('pressureAngle','',this)">全部</span>
                     <span id="fg-pa-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
                 </div>
-                <!-- 齒數/齒寬範圍篩選（類型=G時出現） -->
+                <!-- 齒數/齒寬/齒部外徑範圍篩選（類型=G時出現） -->
                 <div class="filter-sub-row" id="parts-gear-range-filter" style="flex-wrap:wrap;gap:4px;align-items:center;">
                     <span class="filter-group-label">齒數</span>
                     <input type="number" id="fg-teeth-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
@@ -9124,6 +9136,14 @@ body { background:#F6F1EA; }
                     <input type="number" id="fg-fw-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
                     <span style="color:#888;margin:0 2px;">~</span>
                     <input type="number" id="fg-fw-max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
+                    <span style="font-size:11px;color:#888;margin-left:3px;">mm</span>
+                    <span style="margin:0 10px;color:#ddd;align-self:center;">│</span>
+                    <span class="filter-group-label" title="齒部外徑 da 由系統依齒輪規格即時計算（與列表上那顆橘色「齒部外徑」籤同一個值）：&#10;一般齒輪 da＝模數×齒數÷cos(螺旋角)＋2×模數×(1＋齒形變位)&#10;DIN5480 花鍵另有專用算式。&#10;只填一邊＝大於等於／小於等於；同一料號有多筆齒輪規格時，任一筆落在區間內就算命中。">齒部外徑</span>
+                    <input type="number" id="fg-da-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()"
+                           title="齒部外徑最小值（含）。留空＝不限下限。" data-eg-hint="齒部外徑 da 由系統依齒輪規格即時計算；只填一邊＝大於等於／小於等於">
+                    <span style="color:#888;margin:0 2px;">~</span>
+                    <input type="number" id="fg-da-max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()"
+                           title="齒部外徑最大值（含）。留空＝不限上限。" data-eg-hint="齒部外徑 da 由系統依齒輪規格即時計算；只填一邊＝大於等於／小於等於">
                     <span style="font-size:11px;color:#888;margin-left:3px;">mm</span>
                 </div>
                 <!-- 小類子篩（選非全部時出現） -->
@@ -12939,7 +12959,8 @@ function setPartFilter(dim, val, el) {
             _partsFilter.gearModules = []; _partsFilter.gearHelixDir = '';
             _partsFilter.gearPressureAngles = []; _partsFilter.gearTeethMin = null;
             _partsFilter.gearTeethMax = null; _partsFilter.gearFwMin = null; _partsFilter.gearFwMax = null;
-            ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+            _partsFilter.gearDaMin = null; _partsFilter.gearDaMax = null;
+            ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
         }
 
         var selEl = _partsFilter.types.length === 1
@@ -13061,12 +13082,16 @@ function onGearRangeInput() {
         var tMin=document.getElementById('fg-teeth-min'), tMax=document.getElementById('fg-teeth-max');
         var fMin=document.getElementById('fg-fw-min'),   fMax=document.getElementById('fg-fw-max');
         var hMin=document.getElementById('fg-ha-min'),   hMax=document.getElementById('fg-ha-max');
+        var dMin=document.getElementById('fg-da-min'),   dMax=document.getElementById('fg-da-max');
         _partsFilter.gearTeethMin = (tMin&&tMin.value!=='') ? parseFloat(tMin.value) : null;
         _partsFilter.gearTeethMax = (tMax&&tMax.value!=='') ? parseFloat(tMax.value) : null;
         _partsFilter.gearFwMin    = (fMin&&fMin.value!=='') ? parseFloat(fMin.value) : null;
         _partsFilter.gearFwMax    = (fMax&&fMax.value!=='') ? parseFloat(fMax.value) : null;
         _partsFilter.gearHaMin    = (hMin&&hMin.value!=='') ? parseFloat(hMin.value) : null;
         _partsFilter.gearHaMax    = (hMax&&hMax.value!=='') ? parseFloat(hMax.value) : null;
+        // 齒部外徑（計算值 da，後端以齒輪規格即時算出後比對）
+        _partsFilter.gearDaMin    = (dMin&&dMin.value!=='') ? parseFloat(dMin.value) : null;
+        _partsFilter.gearDaMax    = (dMax&&dMax.value!=='') ? parseFloat(dMax.value) : null;
         updatePartsClearBtn();
         loadParts(1);
     }, 350);
@@ -13285,7 +13310,7 @@ function updatePartsClearBtn() {
 
 function clearPartsFilter() {
     _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
-    ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
         var isDefault = c.dataset.shipsort === '';
         c.classList.toggle('active', isDefault);
@@ -13865,73 +13890,16 @@ function _makeLblValWrap(key, it, hasDl, isRng, small, isDim, isQtyDim) {
     return vw;
 }
 
-function syncGearDaFilter() {
-    var lRow = document.getElementById('parts-label-filter');
-    if (!lRow) return;
-    var mnEl = lRow.querySelector('.lbl-filter-val[data-role="gda-min"]');
-    var mxEl = lRow.querySelector('.lbl-filter-val[data-role="gda-max"]');
-    _partsFilter.gearDaMin = (mnEl && mnEl.value.trim() !== '') ? parseFloat(mnEl.value) : null;
-    _partsFilter.gearDaMax = (mxEl && mxEl.value.trim() !== '') ? parseFloat(mxEl.value) : null;
-    updatePartsClearBtn();
-    loadParts(1);
-}
-
 function buildLabelFilterRow(typeCode) {
     buildToolFilterRow(typeCode);          // 刀具規格篩選列跟著種類一起切換
     var lRow = document.getElementById('parts-label-filter');
     if (!lRow) return;
     lRow.classList.remove('visible');
     lRow.innerHTML = '<span class="filter-group-label" style="margin-top:4px;">標籤篩選</span>';
-    _partsFilter.gearDaMin = null; _partsFilter.gearDaMax = null;
     // typeCode='' → 不限種類，API 會回傳所有標籤，不再提前 return
-
-    // 齒部外徑 range filter（齒輪型 G 才顯示，作為第一個）
-    if (typeCode === 'G') {
-        lRow.classList.add('visible');
-        var daWrap = document.createElement('div');
-        daWrap.className = 'lbl-filter-group';
-        daWrap.style.cssText = 'display:inline-flex;align-items:center;flex-wrap:wrap;gap:3px;margin:1px 4px 1px 0;vertical-align:middle;';
-
-        var daChip = document.createElement('span');
-        daChip.className = 'fc fc-sub';
-        daChip.dataset.active = '0';
-        daChip.textContent = '齒部外徑';
-        daChip.style.cssText = 'background:#fff3e0;color:#e65100;border:1.5px solid #ffcc80;cursor:pointer;';
-
-        var daValWrap = document.createElement('span');
-        daValWrap.style.cssText = 'display:none;align-items:center;gap:3px;';
-
-        var daMin = document.createElement('input');
-        daMin.type = 'number'; daMin.placeholder = 'min'; daMin.style.width = '60px';
-        daMin.className = 'form-control input-sm lbl-filter-val'; daMin.dataset.role = 'gda-min';
-        daMin.oninput = function(){ syncGearDaFilter(); };
-
-        var daSep = document.createTextNode(' ~ ');
-
-        var daMax = document.createElement('input');
-        daMax.type = 'number'; daMax.placeholder = 'max'; daMax.style.width = '60px';
-        daMax.className = 'form-control input-sm lbl-filter-val'; daMax.dataset.role = 'gda-max';
-        daMax.oninput = function(){ syncGearDaFilter(); };
-
-        daValWrap.appendChild(daMin);
-        daValWrap.appendChild(daSep);
-        daValWrap.appendChild(daMax);
-
-        daChip.onclick = (function(c, vw) {
-            return function() {
-                var isA = c.dataset.active === '1';
-                c.dataset.active = isA ? '0' : '1';
-                c.style.background = isA ? '#fff3e0' : '#e65100';
-                c.style.color      = isA ? '#e65100' : '#fff';
-                vw.style.display   = isA ? 'none' : 'inline-flex';
-                if (isA) { vw.querySelector('[data-role="gda-min"]').value = ''; vw.querySelector('[data-role="gda-max"]').value = ''; syncGearDaFilter(); }
-            };
-        })(daChip, daValWrap);
-
-        daWrap.appendChild(daChip);
-        daWrap.appendChild(daValWrap);
-        lRow.appendChild(daWrap);
-    }
+    // 註：齒部外徑區間篩選已移到「齒數/齒寬」那一列（#parts-gear-range-filter，id=fg-da-min/max），
+    //     由 onGearRangeInput() 寫入 _partsFilter.gearDaMin/Max；這裡不可再長出第二份控制項，
+    //     否則同一個條件會有兩個來源互相覆蓋（本列每次重建都會清空自己的輸入框）。
 
     api({ action:'manage_labels', op:'list', type_code:typeCode }).done(function(r) {
         if (!r.success || !r.data || !r.data.length) return;
