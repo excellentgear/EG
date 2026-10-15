@@ -55,7 +55,7 @@ $requete = "
             LEFT JOIN user_department_position_map udpm ON u.id = udpm.user_id AND udpm.is_main = 1
             LEFT JOIN department d ON udpm.department_id = d.id
             LEFT JOIN position p ON udpm.position_id = p.id
-            WHERE ea.event_id = e.id
+            WHERE ea.event_id = e.id AND (u.state IS NULL OR u.state <> 0)
         ) as actors_json,
         -- 彙整 targets
         (
