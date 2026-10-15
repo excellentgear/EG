@@ -106,6 +106,7 @@ if ($action === 'meta') {
         'swot'     => rm_swot_view($set), 'guide' => rm_swot_guide(), 'effect_status' => RM_EFFECT_STATUS,
         'depts'    => cm_dept_list($db),
         'roles'    => rm_roles_now($db),
+        'audit_procs' => rm_audit_procs_view($db),
     ]);
 }
 
@@ -547,6 +548,10 @@ if ($action === 'setting_save') {
     }
     if (array_key_exists('rm_dimensions', $arr)) {
         [$v, $e] = rm_normalize_swot_names($arr['rm_dimensions']); if ($e) jerr($e); $toWrite['rm_dimensions'] = $v;
+    }
+    if (array_key_exists('rm_outsource_tags', $arr)) {
+        $valid = array_map(function ($r) { return (int)$r['tag_id']; }, rm_audit_procs_view($db));
+        $toWrite['rm_outsource_tags'] = array_values(array_unique(array_filter(array_map('intval', (array)$arr['rm_outsource_tags']), function ($t) use ($valid) { return in_array($t, $valid, true); })));
     }
     if (array_key_exists('rm_confirm_prefix', $arr)) {
         $p = preg_replace('/[^A-Za-z0-9\-]/', '', rmS($arr['rm_confirm_prefix'], 6));

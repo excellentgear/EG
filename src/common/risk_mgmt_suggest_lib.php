@@ -58,6 +58,52 @@ function rm_sg_recs(PDO $db, int $year, array $names, ?string $catKind = null): 
 }
 
 /**
+ * 稽核製程範圍（訂單追蹤設定的稽核製程標籤）：風險與機會的客戶／品質／退貨統計一律只算「稽核製程的料號」。
+ * 料號判定與合約審查同一套（ot_astag_audit_part_set：主檔 id 優先，退路＝客戶＋料號文字）。
+ * @return int[] d_setting.d_id 清單（沒有任何稽核製程訂單時回空陣列）
+ */
+function rm_audit_part_ids(PDO $db): array
+{
+    static $ids = null;
+    if ($ids !== null) return $ids;
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $set = ot_astag_audit_part_set($db); $ids = array_map('intval', array_keys($set['pk']));
+    try {
+        foreach ($db->query("SELECT ds.d_id, ds.D_Setting_Id t, ds.Customer_Id ci, cl.customer cn FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id=ds.Customer_Id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $t = trim((string)$r['t']); if ($t === '') continue;
+            if (($r['ci'] !== null && isset($set['txt'][trim((string)$r['ci']) . '|' . $t])) || ($r['cn'] !== null && isset($set['txt'][trim((string)$r['cn']) . '|' . $t]))) $ids[] = (int)$r['d_id'];
+        }
+    } catch (Throwable $e) { rm_sg_err($e); }
+    return $ids = array_values(array_unique($ids));
+}
+/** SQL 片段：該欄位（料號主檔 id）屬於稽核製程料號。沒有稽核製程料號時一律不成立。 */
+function rm_audit_in(PDO $db, string $col = 'd_setting_id'): string
+{
+    $ids = rm_audit_part_ids($db);
+    return $col . ' IN (' . ($ids ? implode(',', $ids) : '0') . ')';
+}
+/** 目前設定的稽核製程（訂單追蹤的稽核製程標籤）清單，供模組設定勾選「對外宣稱有外包」 */
+function rm_audit_procs_view(PDO $db): array
+{
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $out = [];
+    foreach (ot_astag_defs($db, true) as $d) if (($d['kind'] ?? '') === 'process') $out[] = ['tag_id' => (int)$d['tag_id'], 'name' => (string)$d['proc_name']];
+    return $out;
+}
+/** 對外宣稱「有外包」的稽核製程：製程編號 => 稽核製程名稱（模組設定勾選；沒勾＝沒有外包，所有委外分析都不列） */
+function rm_outsource_proc_nos(PDO $db): array
+{
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $sel = array_map('intval', (array)(rm_settings($db)['rm_outsource_tags'] ?? []));
+    $out = [];
+    if (!$sel) return $out;
+    foreach (ot_astag_audit_process_nos($db) as $no => $v) {
+        foreach ($v['tags'] as $tid => $nm) if (in_array((int)$tid, $sel, true)) { $out[(int)$no] = $nm; break; }
+    }
+    return $out;
+}
+
+/**
  * @return array[] 每筆：['source','key','stakeholder','needs','issue','why']
  */
 function rm_suggest_context(PDO $db, int $year): array
@@ -81,6 +127,7 @@ function rm_suggest_context(PDO $db, int $year): array
             $mv->execute([(int)$ind['indicator_id'], $year]);
             $rows = array_values(array_filter($mv->fetchAll(PDO::FETCH_ASSOC), function ($r) { return $r['v'] !== null; }));
             if (count($rows) < 2) continue;                       // 資料太少不下結論
+            if (mb_strpos((string)$ind['name'], '廠商準時') !== false && !rm_outsource_proc_nos($db)) continue;   // 稽核製程沒有外包時不列委外廠商指標
             $tv = (float)$ind['tv']; $gte = $ind['td'] === 'gte'; $unit = (string)$ind['tu'];
             $miss = array_values(array_filter($rows, function ($r) use ($tv, $gte) { return $gte ? (float)$r['v'] < $tv : (float)$r['v'] > $tv; }));
             $dirTxt = ($gte ? '≥' : '≤') . rm_sg_f($tv, 2) . $unit;
@@ -105,16 +152,16 @@ function rm_suggest_context(PDO $db, int $year): array
 
     /* ---- 2. 客戶集中度與新客戶（出貨紀錄） ---- */
     try {
-        $tot = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE Order_date BETWEEN '$y1' AND '$y2'")->fetchColumn();
+        $tot = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '$y1' AND '$y2'")->fetchColumn();
         if ($tot > 0) {
-            $top = $db->query("SELECT Client_name, SUM(Qty*Unit_price) a FROM is_list WHERE Order_date BETWEEN '$y1' AND '$y2' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3")->fetchAll(PDO::FETCH_ASSOC);
+            $top = $db->query("SELECT Client_name, SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '$y1' AND '$y2' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3")->fetchAll(PDO::FETCH_ASSOC);
             $t3 = array_sum(array_column($top, 'a')); $share = $t3 * 100 / $tot;
             if ($share >= RM_SG_CONC_PCT) {
                 $names = array_column($top, 'Client_name');
                 $prevTxt = '';
-                $pt = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE Order_date BETWEEN '" . ($year - 1) . "-01-01' AND '" . ($year - 1) . "-12-31'")->fetchColumn();
+                $pt = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '" . ($year - 1) . "-01-01' AND '" . ($year - 1) . "-12-31'")->fetchColumn();
                 if ($pt > 0) {
-                    $pt3 = (float)$db->query("SELECT SUM(a) FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE Order_date BETWEEN '" . ($year - 1) . "-01-01' AND '" . ($year - 1) . "-12-31' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3) t")->fetchColumn();
+                    $pt3 = (float)$db->query("SELECT SUM(a) FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '" . ($year - 1) . "-01-01' AND '" . ($year - 1) . "-12-31' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3) t")->fetchColumn();
                     $prevTxt = '（前一年為 ' . rm_sg_pct($pt3, $pt) . '）';
                 }
                 $add('出貨紀錄（' . $year . '）', 'T', '客戶', '穩定供貨與交期',
@@ -123,7 +170,7 @@ function rm_suggest_context(PDO $db, int $year): array
                      '規則：前三大客戶占比 ≥ ' . RM_SG_CONC_PCT . '%');
             }
         }
-        $firsts = $db->query("SELECT Client_name, MIN(Order_date) fd, SUM(Qty*Unit_price) a FROM is_list WHERE Client_name<>'' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$y1' AND '$y2' ORDER BY a DESC")->fetchAll(PDO::FETCH_ASSOC);
+        $firsts = $db->query("SELECT Client_name, MIN(Order_date) fd, SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Client_name<>'' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$y1' AND '$y2' ORDER BY a DESC")->fetchAll(PDO::FETCH_ASSOC);
         if ($firsts) {
             $names = array_slice(array_column($firsts, 'Client_name'), 0, 3);
             $add('出貨紀錄（' . $year . '）', 'O', '客戶', '穩定的新供應商、短交期與合理報價',
@@ -154,9 +201,9 @@ function rm_suggest_context(PDO $db, int $year): array
             $cur = array_filter($ty, function ($d) use ($year) { return (int)substr($d, 0, 4) === $year; });
             $prev = array_filter($ty, function ($d) use ($year) { return (int)substr($d, 0, 4) === $year - 1; });
             $fmt = function ($a) { return implode('、', array_map(function ($d) { return substr($d, 5, 2) . '/' . substr($d, 8, 2); }, $a)); };
-            $add('行事曆（' . $year . '）', 'T', '員工／供應商', '颱風豪雨期間的安全與正常出貨',
+            $add('行事曆（' . $year . '）', 'T', '員工', '颱風豪雨期間的安全與正常出貨',
                  ($cur ? $year . ' 年已有 ' . count($cur) . ' 天颱風假（' . $fmt($cur) . '）' : $year . ' 年尚無颱風假') . ($prev ? '；前一年 ' . count($prev) . ' 天（' . $fmt($prev) . '）' : '')
-                 . '。極端氣候會使本公司與委外廠停工、在途品項延遲回廠。佐證：行事曆颱風假',
+                 . '。極端氣候會使本公司停工、在途品項延遲出貨。佐證：行事曆颱風假',
                  '規則：行事曆在當年或前一年有颱風假');
         }
     } catch (Throwable $e) { rm_sg_err($e); }
@@ -165,8 +212,9 @@ function rm_suggest_context(PDO $db, int $year): array
     try {
         // 只看「稽核製程」（訂單追蹤設定的認證範圍，如齒研、插齒）；倒圓角、熱處理等不在認證範圍內的不納入
         require_once __DIR__ . '/order_as_tag_lib.php';
-        $auditNos = array_map('intval', array_keys(ot_astag_audit_process_nos($db)));
-        $inAudit = $auditNos ? implode(',', $auditNos) : '0';
+        $inAllAudit = implode(',', array_map('intval', array_keys(ot_astag_audit_process_nos($db)))) ?: '0';
+        $outNos = rm_outsource_proc_nos($db);       // 只看「對外宣稱有外包」的稽核製程；沒設定就不產生任何委外建議
+        $inAudit = $outNos ? implode(',', array_map('intval', array_keys($outNos))) : '0';
         $st = $db->prepare("SELECT bi.maker_id_no, COUNT(*) n FROM bom_ing bi JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE bi.maker_id_no<>'' AND bi.process_no IN ($inAudit) AND bi.outsource_date BETWEEN ? AND ? GROUP BY bi.maker_id_no ORDER BY n DESC");
         $st->execute([$y1, $y2 . ' 23:59:59']);
         $mk = $st->fetchAll(PDO::FETCH_ASSOC); $all = array_sum(array_column($mk, 'n'));
@@ -174,7 +222,7 @@ function rm_suggest_context(PDO $db, int $year): array
         if ($mk && $all >= 50 && $mk[0]['n'] * 100 / $all >= RM_SG_VENDOR_PCT) {
             $n0 = $nm($mk[0]['maker_id_no']);
             $add('委外發包（' . $year . '）', 'T', '供應商', '合理的交期與訂單預告',
-                 $year . ' 年委外發包 ' . $all . ' 筆中，' . $n0 . ' 占 ' . $mk[0]['n'] . ' 筆（' . rm_sg_pct($mk[0]['n'], $all) . '），對單一廠商依賴高（僅計稽核製程的外部委外廠商，主檔設為「廠內製程」者不算委外）。佐證：BOM 製程委外紀錄' . rm_sg_recs($db, $year, [$n0]),
+                 $year . ' 年委外發包 ' . $all . ' 筆中，' . $n0 . ' 占 ' . $mk[0]['n'] . ' 筆（' . rm_sg_pct($mk[0]['n'], $all) . '），對單一廠商依賴高（僅計對外宣稱委外的稽核製程；主檔設為「廠內製程」者不算委外）。佐證：BOM 製程委外紀錄' . rm_sg_recs($db, $year, [$n0]),
                  '規則：稽核製程中單一廠商占委外筆數 ≥ ' . RM_SG_VENDOR_PCT . '%');
         }
         // 單一來源製程：當年實際委外紀錄裡，某製程只交給 1 家廠商做、且發包筆數夠多（≥ RM_SG_SINGLE_MIN 筆）
@@ -193,7 +241,7 @@ function rm_suggest_context(PDO $db, int $year): array
         }
         // 稽核製程由「廠內製程」廠商（maker_list.internal=1）承擔的比例：集中度高代表產能／設備／人力集中，屬內部劣勢，不是委外風險
         $st = $db->prepare("SELECT SUM(COALESCE(ml.internal,0)=1) a, COUNT(*) n FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no
-                            WHERE b.maker_id_no<>'' AND b.process_no IN ($inAudit) AND b.outsource_date BETWEEN ? AND ?");
+                            WHERE b.maker_id_no<>'' AND b.process_no IN ($inAllAudit) AND b.outsource_date BETWEEN ? AND ?");
         $st->execute([$y1, $y2 . ' 23:59:59']); $ih = $st->fetch(PDO::FETCH_ASSOC);
         if ($ih && (int)$ih['n'] >= RM_SG_SINGLE_MIN && (int)$ih['a'] * 100 / (int)$ih['n'] >= 80) {
             $add('BOM 製程紀錄（' . $year . '）', 'W', '客戶', '穩定交期與加工品質',
@@ -204,10 +252,10 @@ function rm_suggest_context(PDO $db, int $year): array
 
     /* ---- 6. 品質異常、客戶退貨 ---- */
     try {
-        $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order WHERE deleted_at IS NULL AND YEAR(created_at)=?");
+        $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order WHERE " . rm_audit_in($db,'part_d_id') . " AND deleted_at IS NULL AND YEAR(created_at)=?");
         $st->execute([$year]); $n = (int)$st->fetchColumn();
         if ($n > 0) {
-            $st = $db->prepare("SELECT c.name, COUNT(*) n FROM qa_abnormal_cause ac JOIN qa_abnormal_order o ON o.id=ac.order_id AND o.deleted_at IS NULL AND YEAR(o.created_at)=?
+            $st = $db->prepare("SELECT c.name, COUNT(*) n FROM qa_abnormal_cause ac JOIN qa_abnormal_order o ON o.id=ac.order_id AND " . rm_audit_in($db,'o.part_d_id') . " AND o.deleted_at IS NULL AND YEAR(o.created_at)=?
                                 JOIN qa_cause_cat c ON c.cat_id=ac.cat_id GROUP BY c.cat_id, c.name ORDER BY n DESC LIMIT 3");
             $st->execute([$year]);
             $cs = array_map(function ($r) { return $r['name'] . ' ' . $r['n'] . ' 次'; }, $st->fetchAll(PDO::FETCH_ASSOC));
@@ -215,7 +263,7 @@ function rm_suggest_context(PDO $db, int $year): array
                  $year . ' 年品質異常處理單共 ' . $n . ' 張' . ($cs ? '，原因分類最多為：' . implode('、', $cs) : '') . '。佐證：品質異常處理單',
                  '規則：當年有品質異常處理單，重複出現的原因分類通常是內部需改善的項目');
         }
-        $st = $db->prepare("SELECT COUNT(*) n, COUNT(DISTINCT Client_name) c FROM ir_track WHERE YEAR(IR_date)=?");
+        $st = $db->prepare("SELECT COUNT(*) n, COUNT(DISTINCT Client_name) c FROM ir_track WHERE " . rm_audit_in($db,'d_setting_id') . " AND YEAR(IR_date)=?");
         $st->execute([$year]); $ir = $st->fetch(PDO::FETCH_ASSOC);
         if ((int)$ir['n'] > 0)
             $add('客戶退貨（' . $year . '）', 'W', '客戶', '品質穩定、不良品不外流',

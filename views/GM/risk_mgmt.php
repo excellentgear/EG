@@ -367,6 +367,9 @@ $perms  = rm_perms($db, $rmUser);
                 <div class="fld"><label>T（外部）</label><input type="text" id="setSwot3" maxlength="20"></div>
             </div>
             <div class="hint">四象限固定為優勢(S)、劣勢(W)、機會(O)、威脅(T)，S、W 屬內部、O、T 屬外部；這裡只改顯示名稱，不影響既有資料。</div></div>
+        <div class="set-sec"><h5>對外宣稱有外包的稽核製程</h5>
+            <div class="fld" id="setOutsrc"></div>
+            <div class="hint">稽核製程取自「訂單追蹤」設定的稽核製程。只有勾選的製程才會做委外廠商相關的分析與建議；沒勾＝依 AS 稽核對外宣稱沒有外包，SWOT 與風險表都不列委外議題。客戶、品質、退貨等統計一律只計稽核製程的料號。</div></div>
         <div class="set-sec"><h5>風險確認編號前綴</h5>
             <div class="fld"><input type="text" id="setPrefix" maxlength="6" style="max-width:140px;"></div>
             <div class="hint"><b>風險確認編號是什麼</b>：每條「需要因應措施」的風險（風險準則裡勾選的等級）由系統自動配發的流水號，讓這條風險在措施追蹤、管理審查、矯正單等地方被引用時有唯一編號可對照。
@@ -1257,6 +1260,8 @@ function renderSet(){
     $.each(S.rm_likelihood, function(_, r){ tk += likRowHtml({orig:r.v, label:r.label, lo:r.prob_lo, hi:r.prob_hi, desc:r.desc}); });
     $('#setLik').html(tk + '</tbody></table>');
     $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix);
+    var oh = ''; $.each(META.audit_procs || [], function(_, p){ oh += '<label style="margin-right:16px;font-weight:normal;"><input type="checkbox" class="setOut" value="' + p.tag_id + '"' + (($.inArray(p.tag_id, S.rm_outsource_tags || []) >= 0) ? ' checked' : '') + '> ' + esc(p.name) + '</label>'; });
+    $('#setOutsrc').html(oh || '<span class="hint">訂單追蹤尚未設定稽核製程</span>');
     var b = $('#setAsdocBody').empty();
     $.each(META.asdoc, function(k, v){
         var cur = v.doc ? (v.doc.doc_no + '（' + v.doc.doc_name + '）') : '尚未綁定　建議：' + v.fallback;
@@ -1323,7 +1328,8 @@ $('#btnSetSave').on('click', function(){
         return {orig:r.orig, label:r.label, cells:$.map(IMPCOLS, function(c){ return r.byName[c] || ''; })};
     });
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
-             rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val()};
+             rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(),
+             rm_outsource_tags:$('.setOut:checked').map(function(){ return +this.value; }).get()};
     var send = function(force){
         $('#eSet').text('');
         NProgress.start();

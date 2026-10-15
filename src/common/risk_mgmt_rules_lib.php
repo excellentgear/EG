@@ -195,9 +195,9 @@ function rm_rule_kpi_txt(array $k): string
 function rm_rule_share(PDO $db, int $year): array
 {
     $f = function ($y) use ($db) {
-        $tot = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE Order_date BETWEEN '$y-01-01' AND '$y-12-31'")->fetchColumn();
+        $tot = (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '$y-01-01' AND '$y-12-31'")->fetchColumn();
         if ($tot <= 0) return null;
-        $t3 = (float)$db->query("SELECT SUM(a) FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE Order_date BETWEEN '$y-01-01' AND '$y-12-31' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3) t")->fetchColumn();
+        $t3 = (float)$db->query("SELECT SUM(a) FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Order_date BETWEEN '$y-01-01' AND '$y-12-31' AND Client_name<>'' GROUP BY Client_name ORDER BY a DESC LIMIT 3) t")->fetchColumn();
         return $t3 * 100 / $tot;
     };
     return [$f($year), $f($year - 1)];
@@ -205,7 +205,7 @@ function rm_rule_share(PDO $db, int $year): array
 /** 當年首次出貨客戶 [家數, 金額] */
 function rm_rule_newcust(PDO $db, int $year, string $mmdd = '12-31'): array
 {
-    $r = $db->query("SELECT COUNT(*) c, COALESCE(SUM(a),0) a FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE Client_name<>'' AND Order_date<='$year-$mmdd' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$year-01-01' AND '$year-$mmdd') t")->fetch(PDO::FETCH_ASSOC);
+    $r = $db->query("SELECT COUNT(*) c, COALESCE(SUM(a),0) a FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Client_name<>'' AND Order_date<='$year-$mmdd' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$year-01-01' AND '$year-$mmdd') t")->fetch(PDO::FETCH_ASSOC);
     return [(int)$r['c'], (float)$r['a']];
 }
 function rm_rule_typhoon(PDO $db, int $year): int
@@ -310,9 +310,9 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear): array
             $occF = max($occH, $fromKpi ?? 0); $fromKpi = null; $why[] = '近兩年新進人員占 ' . rm_sg_f($ratio) . '%'; $ids[] = 'O-HIRE';
             break;
         case 'quality':
-            $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order WHERE deleted_at IS NULL AND YEAR(created_at)=?"); $st->execute([$dataYear]); $n = (int)$st->fetchColumn();
+            $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order WHERE " . rm_audit_in($db,'part_d_id') . " AND deleted_at IS NULL AND YEAR(created_at)=?"); $st->execute([$dataYear]); $n = (int)$st->fetchColumn();
             $occQ = $n >= 6 ? 1.0 : ($n >= 3 ? 0.67 : ($n >= 1 ? 0.5 : 0.34));
-            $ir = function ($y) use ($db) { $q = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE YEAR(IR_date)=?"); $q->execute([$y]); return (int)$q->fetchColumn(); };
+            $ir = function ($y) use ($db) { $q = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE " . rm_audit_in($db,'d_setting_id') . " AND YEAR(IR_date)=?"); $q->execute([$y]); return (int)$q->fetchColumn(); };
             $n0 = $ir($dataYear); $n1 = $ir($dataYear - 1);
             $occR = 0.34;
             if ($n0 > 0) { $inc = $n1 > 0 ? ($n0 - $n1) * 100 / $n1 : 0; $occR = $inc >= 30 ? 1.0 : ($inc >= 10 ? 0.67 : 0.5); }
@@ -320,8 +320,7 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear): array
             $why[] = $dataYear . ' 年品質異常處理單 ' . $n . ' 張；客戶退貨 ' . $n0 . ' 筆（前一年 ' . $n1 . ' 筆）'; $ids[] = 'O-QA'; $ids[] = 'O-RETURN';
             break;
         case 'supplier':
-            require_once __DIR__ . '/order_as_tag_lib.php';
-            $auditIn = implode(',', array_map('intval', array_keys(ot_astag_audit_process_nos($db)))) ?: '0';
+            $auditIn = implode(',', array_map('intval', array_keys(rm_outsource_proc_nos($db)))) ?: '0';
             $st = $db->prepare("SELECT COUNT(*) FROM (SELECT b.process_no FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
             $st->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $sg = (int)$st->fetchColumn();
             if ($sg > 0) { $fromKpi = max($fromKpi ?? 0.5, 0.67); $why[] = $dataYear . ' 年有 ' . $sg . ' 個製程的委外只交給 1 家廠商'; $ids[] = 'O-SINGLE'; }
@@ -379,7 +378,7 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
 
     $kpi = ($c['kpi'] && $cat !== 'new_customer') ? rm_rule_kpi($db, $year, $c['kpi']) : null;
     if ($cat === 'quality') {
-        $irq = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE YEAR(IR_date)=?");
+        $irq = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE " . rm_audit_in($db,'d_setting_id') . " AND YEAR(IR_date)=?");
         $irq->execute([$year]); $i0 = (int)$irq->fetchColumn(); $irq->execute([$year - 1]); $i1 = (int)$irq->fetchColumn();
         $lines[] = $year . ' 年客戶退貨 ' . $i0 . ' 筆（前一年 ' . $i1 . ' 筆）';
     }

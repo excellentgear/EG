@@ -77,6 +77,7 @@ function rm_settings_default(): array
         ],
         'rm_dimensions'     => ['優勢（S）', '劣勢（W）', '機會（O）', '威脅（T）'],
         'rm_confirm_prefix' => 'R',
+        'rm_outsource_tags' => [],      // 對外宣稱有外包的稽核製程（ot_as_proc_tag.tag_id 清單）；沒勾＝沒有外包，不產生任何委外分析
     ];
 }
 
