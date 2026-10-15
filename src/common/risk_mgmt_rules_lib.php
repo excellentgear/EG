@@ -59,17 +59,24 @@ const RM_RULE_CATS = [
         'measures' => ['與前三大客戶定期（每季）溝通訂單預測與產能預留', '持續開發新客戶以分散風險'],
         'metric' => '前三大客戶合計出貨占比逐年下降至 30% 以下；每季溝通紀錄完整',
         'kpi' => [], 'trk_kw' => ['預測', '產能預留'], 'trk_kind' => 'customer'],
-    'new_customer' => ['label' => '新客戶／商機', 'ro' => 'opportunity', 'sev' => 0.4,
-        'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶', '詢價'],
-        'impact' => '新客戶持續開發，可分散對大客戶的依賴並提高產能利用率。',
-        'measures' => ['新客戶首次出貨後 30 天內完成品質確認與年度報價', '每月檢討新客戶訂單與產能'],
-        'metric' => '當年首次出貨客戶數與金額不低於前一年；年度報價回覆率 100%',
-        'kpi' => ['接單率'], 'trk_kw' => ['首批', '報價', '新客戶', '年度需求'], 'trk_kind' => 'customer'],
+    'new_customer' => ['label' => '新客戶首次出貨', 'ro' => 'opportunity', 'sev' => 0.4,
+        'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶'],
+        'impact' => '新客戶首次出貨後若能持續下單，可分散對大客戶的依賴並提高產能利用率。',
+        'measures' => ['新客戶首次出貨後 30 天內完成品質確認、客戶滿意度與後續需求訪談', '每季檢討新客戶再次下單情形與後續訂單金額'],
+        'metric' => '當年首次出貨客戶數與金額不低於前一年；首次出貨客戶的再次下單率逐季提升',
+        'kpi' => ['接單率'], 'trk_kw' => ['首批', '新客戶', '年度需求'], 'trk_kind' => 'customer'],
+    'inquiry' => ['label' => '新客戶詢價與加工導入', 'ro' => 'opportunity', 'sev' => 0.4,
+        'kw' => ['詢價', '轉單', '評估與承接', '評估表', 'PFMEA', '導入'],
+        'impact' => '新客戶詢價若能快速完成製程評估與報價並轉成訂單，可擴大認證範圍內的接單量。',
+        'measures' => ['詢價後由技術課、生管組、品管課評估製程可行性、產能與品質要求並於期限內回覆報價', '每月檢討詢價件數、報價回覆時效與轉單情形'],
+        'metric' => '詢價均於期限內完成評估與報價回覆；{kpi}維持達標（以詢價轉單情形為參考）',
+        'kpi' => ['接單率'], 'trk_kw' => ['詢價', '報價', '評估'], 'trk_kind' => 'customer'],
     'existing_customer' => ['label' => '既有客戶擴單', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['既有客戶', '擴大', '接單量', '擴單', '增加訂單', '同類'],
         'impact' => '既有客戶已通過品質驗證，爭取同類加工訂單可提高產能利用率與營收穩定度。',
         'measures' => ['每季盤點既有客戶同類料號的加工需求並主動報價', '依既有客戶的年度需求預留產能'],
-        'metric' => '既有客戶年度訂單金額不低於前一年；同類料號報價回覆率 100%',
+        'metric' => '既有客戶（去年以前就有出貨的客戶）的稽核製程出貨金額不低於前一年同期；同類料號報價回覆率 100%',
+        'by' => 'existing',
         'kpi' => ['受訂目標'], 'trk_kw' => ['既有客戶', '產能預留', '年度需求'], 'trk_kind' => 'customer'],
     'climate' => ['label' => '氣候／天然災害', 'ro' => 'risk', 'sev' => 0.4,
         'kw' => ['颱風', '豪雨', '氣候', '淹水', '極端', '天災', '碳'],
@@ -114,6 +121,9 @@ function rm_rule_catalog(): array
     }
     $rows[] = ['id'=>'C-GENERIC', 'kind'=>'分類', 'cat'=>'一般議題', 'when'=>'沒有任何關鍵字命中', 'then'=>'歸類為「一般議題」，請人工確認'];
     $rows[] = ['id'=>'O-KPI', 'kind'=>'發生率(O)', 'cat'=>'有對應 KPI 的類別', 'when'=>'資料年度內 KPI 未達標月份占比 r', 'then'=>'r=0→0.34；r<30%→0.5；r<60%→0.67；其餘→1.0；最近一個月仍未達標時至少 0.67；資料不足 2 個月→0.5'];
+    $rows[] = ['id'=>'O-VENDOR', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'對外宣稱委外的稽核製程中，單一外部廠商占委外筆數 ≥30%（至少 20 筆）', 'then'=>'發生率比例至少 0.5（準時交貨率好不代表供應中斷「幾乎不可能」）'];
+    $rows[] = ['id'=>'O-OPP', 'kind'=>'發生率(O)', 'cat'=>'既有客戶擴單／新客戶詢價', 'when'=>'機會的發生率＝實現可能性：依對應 KPI 當年達標月份占比 m', 'then'=>'m≥80%→1.0；≥50%→0.67；≥30%→0.5；其餘 0.34（與風險相反：達標越多可能性越高）'];
+    $rows[] = ['id'=>'E-EXISTING', 'kind'=>'成效', 'cat'=>'既有客戶擴單', 'when'=>'既有客戶（去年以前就有出貨）的稽核製程出貨金額，與前一年同期比較', 'then'=>'不低於→有效；差距 10% 內→部分有效；低於超過 10%→無效；前一年沒有資料→未確認'];
     $rows[] = ['id'=>'O-SINGLE', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'當年有稽核製程只交給 1 家外部委外廠商（≥20 筆；廠內製程不算）', 'then'=>'發生率比例至少 0.67'];
     $rows[] = ['id'=>'O-QA', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年品質異常處理單張數', 'then'=>'≥6 張→1.0；≥3 張→0.67；≥1 張→0.5（與 KPI 規則取較高者）'];
     $rows[] = ['id'=>'O-RETURN', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年客戶退貨筆數相對前一年', 'then'=>'增加 ≥30%→1.0；≥10%→0.67；有退貨但增幅較小→0.5；無退貨 0.34（與其他品質規則取最高者）'];
@@ -194,7 +204,7 @@ function rm_rule_kpi_txt(array $k): string
 {
     $o = [];
     foreach ($k['months'] as $m => $v) $o[] = $m . '月 ' . rm_sg_f($v) . $k['unit'] . ($k['ok']($v) ? '' : '✗');
-    return $k['name'] . '（目標 ' . ($k['gte'] ? '≥' : '≤') . rm_sg_f($k['target'], 2) . $k['unit'] . '；✗＝未達標）：' . implode('、', $o);
+    return $k['name'] . '（每月統計；目標 ' . ($k['gte'] ? '≥' : '≤') . rm_sg_f($k['target'], 2) . $k['unit'] . '；✗＝未達標）：' . implode('、', $o);
 }
 
 /** 前三大客戶占比 [本年占比%, 前一年占比%] */
@@ -213,6 +223,20 @@ function rm_rule_newcust(PDO $db, int $year, string $mmdd = '12-31'): array
 {
     $r = $db->query("SELECT COUNT(*) c, COALESCE(SUM(a),0) a FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Client_name<>'' AND Order_date<='$year-$mmdd' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$year-01-01' AND '$year-$mmdd') t")->fetch(PDO::FETCH_ASSOC);
     return [(int)$r['c'], (float)$r['a']];
+}
+/** 既有客戶（該年 1/1 以前就有出貨）的稽核製程出貨金額：[本年 1/1～mmdd 金額, 前一年同期金額, 客戶數] */
+function rm_rule_existing(PDO $db, int $year, string $mmdd = '12-31'): array
+{
+    $aud = rm_audit_in($db, 'd_setting_id');
+    $sum = function (int $y, int $baseYear) use ($db, $aud, $mmdd) {
+        $q = $db->prepare("SELECT COUNT(DISTINCT Client_name) c, COALESCE(SUM(Qty*Unit_price),0) a FROM is_list
+                           WHERE $aud AND Client_name<>'' AND Order_date BETWEEN ? AND ?
+                             AND Client_name IN (SELECT Client_name FROM (SELECT DISTINCT Client_name FROM is_list WHERE $aud AND Order_date < ?) x)");
+        $q->execute([$y . '-01-01', $y . '-' . $mmdd, $baseYear . '-01-01']);
+        return $q->fetch(PDO::FETCH_ASSOC);
+    };
+    $a = $sum($year, $year); $b = $sum($year - 1, $year - 1);
+    return [(float)$a['a'], (float)$b['a'], (int)$a['c']];
 }
 function rm_rule_typhoon(PDO $db, int $year): int
 {
@@ -289,6 +313,12 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
         }
         $ids[] = 'O-KPI';
     }
+    if ($kpi && in_array($cat, ['existing_customer', 'inquiry'], true) && $kpi['n'] >= 2) {
+        $met = 1 - $kpi['miss'] / $kpi['n'];
+        $fromKpi = $met >= 0.8 ? 1.0 : ($met >= 0.5 ? 0.67 : ($met >= 0.3 ? 0.5 : 0.34));
+        $why = array_values(array_filter($why, function ($w) use ($kpi) { return strpos($w, $kpi['name']) !== 0; }));
+        $why[] = '機會的實現可能性：' . $kpi['name'] . ' ' . $dataYear . ' 年 ' . $kpi['n'] . ' 個月中有 ' . ($kpi['n'] - $kpi['miss']) . ' 個月達標（' . rm_sg_f($met * 100, 0) . '%），達標越多、實現可能性越高';
+    }
     switch ($cat) {
         case 'concentration':
             [$s0, $s1] = rm_rule_share($db, $dataYear);
@@ -330,6 +360,18 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
             $st = $db->prepare("SELECT COUNT(*) FROM (SELECT b.process_no FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
             $st->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $sg = (int)$st->fetchColumn();
             if ($sg > 0) { $fromKpi = max($fromKpi ?? 0.5, 0.67); $why[] = $dataYear . ' 年有 ' . $sg . ' 個製程的委外只交給 1 家廠商'; $ids[] = 'O-SINGLE'; }
+            // 集中度：單一外部廠商占外宣稱委外製程的筆數 ≥ RM_SG_VENDOR_PCT％，發生率至少「中間」
+            // （準時交貨率好只代表目前沒出事，不代表供應中斷「幾乎不可能」；備援廠商評估完成前不下調）
+            $vs = $db->prepare("SELECT COUNT(*) n, MAX(c) m FROM (SELECT COUNT(*) c FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0
+                                WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.maker_id_no) t");
+            $vs->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $vr = $vs->fetch(PDO::FETCH_ASSOC);
+            $vt = $db->prepare("SELECT COUNT(*) FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0
+                                WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ?");
+            $vt->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $vall = (int)$vt->fetchColumn();
+            if ($vall >= RM_SG_SINGLE_MIN && (int)$vr['m'] * 100 / $vall >= RM_SG_VENDOR_PCT) {
+                $fromKpi = max($fromKpi ?? 0.5, 0.5); $why[] = $dataYear . ' 年對外宣稱委外製程中，單一廠商占 ' . rm_sg_f((int)$vr['m'] * 100 / $vall) . '%（≥ ' . RM_SG_VENDOR_PCT . '%），發生率至少取中間值';
+                $ids[] = 'O-VENDOR';
+            }
             break;
     }
     if ($fromKpi !== null) $occF = $fromKpi;
@@ -400,6 +442,14 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
             elseif ($s1 !== null && $s0 < $s1) { $status = 'partial'; $reason = '占比較前一年下降，但仍高於 30%'; }
             else { $status = 'ineffective'; $reason = '占比未較前一年下降'; }
         } else $reason = '當年出貨資料不足';
+    } elseif ($cat === 'existing_customer') {
+        $mmdd = $year === (int)substr($today, 0, 4) ? substr($today, 5, 5) : '12-31';
+        [$a0, $a1, $n0] = rm_rule_existing($db, $year, $mmdd); $ids[] = 'E-EXISTING';
+        array_unshift($lines, $year . ' 年（1/1～' . str_replace('-', '/', $mmdd) . '）既有客戶（' . $n0 . ' 家）稽核製程出貨金額 ' . number_format($a0) . ' 元；前一年同期 ' . number_format($a1) . ' 元');
+        if ($a1 <= 0) { $status = 'unconfirmed'; $reason = '前一年同期沒有可比較的既有客戶出貨金額'; }
+        elseif ($a0 >= $a1) { $status = 'effective'; $reason = '既有客戶出貨金額不低於前一年同期'; }
+        elseif ($a0 >= $a1 * 0.9) { $status = 'partial'; $reason = '既有客戶出貨金額略低於前一年同期（差距在 10% 內）'; }
+        else { $status = 'ineffective'; $reason = '既有客戶出貨金額低於前一年同期超過 10%'; }
     } elseif ($cat === 'new_customer') {
         // 當年度還沒過完時，前一年也只比到同一天（不拿半年去比整年）
         $mmdd = $year === (int)substr($today, 0, 4) ? substr($today, 5, 5) : '12-31';
@@ -416,6 +466,8 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         elseif ($open && !$over) { $status = 'doing'; $reason = $kpi['name'] . ' 尚未連續 3 個月達標，但措施追蹤仍在執行中'; }
         elseif ($kpi['improved'] || ($kpi['n'] - $kpi['miss']) > 0 && $kpi['last_ok']) { $status = 'partial'; $reason = $kpi['name'] . ' 較前期改善或已有月份達標，但尚未連續 3 個月達標'; }
         else { $status = 'ineffective'; $reason = $kpi['name'] . ' 未改善' . ($tracks && !$open ? '，而相關措施已執行完畢' : ''); }
+        // 單一來源／備援廠商：準時交貨率好只代表目前沒出事；措施要求「備援廠商評估」，沒有任何措施追蹤佐證就不能判有效
+        if ($cat === 'supplier' && !$tracks && $status === 'effective') { $status = 'partial'; $reason .= '；但備援廠商評估尚無對應的措施追蹤紀錄，無法證明降低單一來源風險'; }
     } else {
         $ids[] = 'E-TRACK';
         if ($kpi && $kpi['n'] >= 1) array_unshift($lines, '（參考）' . rm_rule_kpi_txt($kpi));

@@ -1530,9 +1530,12 @@ function printDoc(docId){
                 + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
                 + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
         }
-        // 機會列的三個評分欄位在表頭叫「嚴重度(S)／發生率(O)／風險等級」，實際問的是效益與把握度，所以在表尾註明一行
-        var foot = kind === 'risk' ? '<div style="margin-top:4px;font-size:11px;color:#333;">註：風險與機會共用同一組評分；'
-            + '「風險與機會」欄為機會者，嚴重度(S)＝' + esc(oppTerm('sev')) + '、發生率(O)＝' + esc(oppTerm('freq')) + '、風險等級＝' + esc(oppTerm('level')) + '。</div>' : '';
+        // 風險與機會共用 1～n 級評分尺度，但評估的意義不同，所以在表尾逐點說明（稽核員看到表頭「嚴重度／發生率」時才不會把機會也當成危險）
+        var foot = kind === 'risk' ? '<div style="margin-top:6px;font-size:11px;color:#333;line-height:1.6;">註：'
+            + '<br>1. 風險與機會採用相同的評分尺度（分數＝嚴重度(S)等級 × 發生率(O)等級，算法以模組設定為準），惟各自依不同的評估意義判定。'
+            + '<br>2. 風險：嚴重度(S)評估可能造成的負面影響，發生率(O)評估其發生可能性；依風險準則判定風險等級。'
+            + '<br>3. 機會（「風險與機會」欄為機會者）：嚴重度(S)欄為' + esc(oppTerm('sev')) + '，評估機會實現後的效益；發生率(O)欄為' + esc(oppTerm('freq')) + '，評估其實現的可能性；風險等級欄為' + esc(oppTerm('level')) + '。'
+            + '<br>4. 風險與機會分別編號（風險以 ' + esc(META.settings.rm_confirm_prefix) + ' 開頭、機會以 ' + esc(META.settings.rm_opp_prefix || 'O') + ' 開頭），以利因應措施及成效確認之追蹤。</div>' : '';
         egPrintWindow(meta.doc_name || kindName(kind), head + table + foot, meta.doc_no);
         EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + ' ' + d.doc_no,
             doc_kind:'form', ref_table:'rm_doc', ref_id:d.doc_id});
