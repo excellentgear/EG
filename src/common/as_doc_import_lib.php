@@ -104,6 +104,7 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
 
     [$res['html'], $wrapMerged] = adi_merge_wrapped_paragraphs((string)$res['html']);
     $res['wrap_merged'] = $wrapMerged;
+    [$res['html'], $res['font_fixed']] = adi_fix_cjk_fonts((string)$res['html']);
     $clean = eg_richtext_sanitize($res['html'], ADC_MAX_LEN, 'doc');
     if (trim($clean) === '') {
         return ['ok' => false, 'msg' => '轉出來是空白的——這份 Word 可能整份都是圖片或繪圖物件，沒有可以轉入的文字。'];
@@ -631,4 +632,58 @@ function adi_merge_wrapped_paragraphs(string $html): array
     $out = '';
     foreach ($body->childNodes as $c) $out .= $dom->saveHTML($c);
     return [$out, $merged];
+}
+
+/**
+ * 匯入內文的中文字型統一：
+ * ① 沒有指定字型的中文（LibreOffice 對「預設字型」的文字不寫 font-family）會掉到線上版的頁面預設字型
+ *   （微軟正黑體），跟 Word 原稿的標楷體混在一起；一律補上標楷體。
+ * ② 拉丁字型（Times New Roman／Arial）的區段裡若夾了中文，瀏覽器會自己挑後援字型（也是正黑體），
+ *   所以在字型清單尾端補上標楷體當中文後援——英數字仍用原本的拉丁字型。
+ * @return array{0:string,1:int} [處理後 HTML, 補上字型的區段數]
+ */
+function adi_fix_cjk_fonts(string $html): array
+{
+    if ($html === '') return [$html, 0];
+    $n2 = 0;
+    // ② 拉丁字型補中文後援（已經帶標楷體的不重複補）
+    $html = (string)preg_replace_callback(
+        '/font-family:\s*((?:Times New Roman|Arial|Calibri|Verdana|Tahoma)[^;"]*)/iu',
+        function ($m) use (&$n2) {
+            if (mb_stripos($m[1], '標楷體') !== false) return $m[0];
+            $n2++;
+            // 通用字型（serif 等）一旦出現就會吃掉後面所有候選，標楷體必須排在它前面
+            $fam = rtrim($m[1], ' ,');
+            if (preg_match('/^(.*?),\s*(serif|sans-serif|monospace|cursive)$/i', $fam, $g)) {
+                return 'font-family:' . $g[1] . ', 標楷體, ' . $g[2];
+            }
+            return 'font-family:' . $fam . ', 標楷體';
+        }, $html);
+
+    // ① 沒有任何字型祖先的中文文字節點 → 包一層標楷體
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $prev = libxml_use_internal_errors(true);
+    $ok = $dom->loadHTML('<meta http-equiv="Content-Type" content="text/html; charset=utf-8"><body>' . $html . '</body>',
+        LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors(); libxml_use_internal_errors($prev);
+    $body = $ok ? $dom->getElementsByTagName('body')->item(0) : null;
+    if (!$body) return [$html, $n2];
+    $xp = new DOMXPath($dom);
+    $han = '/[\x{3000}-\x{303F}\x{3400}-\x{9FFF}\x{FF00}-\x{FFEF}]/u';
+    foreach (iterator_to_array($xp->query('//body//text()')) as $t) {
+        if (!preg_match($han, $t->nodeValue)) continue;
+        $hasFont = false;
+        for ($p = $t->parentNode; $p && $p !== $body; $p = $p->parentNode) {
+            if ($p->nodeType === XML_ELEMENT_NODE && stripos((string)$p->getAttribute('style'), 'font-family') !== false) { $hasFont = true; break; }
+        }
+        if ($hasFont) continue;
+        $sp = $dom->createElement('span');
+        $sp->setAttribute('style', 'font-family:標楷體, cursive');
+        $t->parentNode->replaceChild($sp, $t);
+        $sp->appendChild($t);
+        $n2++;
+    }
+    $out = '';
+    foreach ($body->childNodes as $c) $out .= $dom->saveHTML($c);
+    return [$out, $n2];
 }
