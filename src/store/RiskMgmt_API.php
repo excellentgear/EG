@@ -204,6 +204,16 @@ if ($action === 'risk_open_car') {
     jout(['car_id' => $r['car_id'], 'car_no' => $r['car_no'], 'existed' => $r['existed']]);
 }
 
+/* ---------------------------------------------------------------- 填表人候選：填表日期當天在職的人（補歷史單據時，當時在職、現已離職的人也選得到＝ai-rules/22 第5坑） */
+if ($action === 'maker_options') {
+    require_once __DIR__ . '/../common/people_lib.php';
+    $d = rmDate($_GET['date'] ?? '') ?: rmToday($db);
+    $rows = eg_people_list_asof($db, [], $d);
+    $out = [];
+    foreach ($rows as $r) $out[] = ['id' => (int)$r['id'], 'name' => (string)$r['user_cname'], 'display' => trim(($r['dept_name'] ?? '') . '　' . ($r['position_name'] ?? '') . '　' . $r['user_cname'])];
+    jout(['people' => $out]);
+}
+
 /* ---------------------------------------------------------------- 空白表單列印用：表頭（公司名稱、表單名稱、AS 編號） */
 if ($action === 'print_meta') {
     $k = ($_GET['kind'] ?? '') === 'context' ? 'context' : 'risk';
@@ -473,9 +483,20 @@ if ($action === 'doc_save') {
     $db->beginTransaction();
     try {
         if ($old) {
+            // 備註只有「有送這個欄位」才更新（畫面沒有備註欄，原本每次存檔都把它洗成空，連「【假資料】」標記都被洗掉）
+            $remark = array_key_exists('remark', $_POST) ? (rmS($_POST['remark'], 500) ?: null) : ($old['remark'] ?? null);
             $db->prepare("UPDATE rm_doc SET project_no=?, dept_ids=?, dept_names=?, fill_date=?, remark=?, updated_at=? WHERE doc_id=?")
                ->execute([rmS($_POST['project_no'] ?? '', 60) ?: null, json_encode($deptIds), $deptNames ?: null, $fillDate,
-                          rmS($_POST['remark'] ?? '', 500) ?: null, $now, $id]);
+                          $remark, $now, $id]);
+            // 填表人：只有「建立者本人或管理員」可以換；新的填表人必須是填表日期當天在職（或原本就是這張單的填表人）
+            if (!empty($_POST['maker_id']) && (int)$_POST['maker_id'] !== (int)$old['created_by']) {
+                if (!$P['canAdmin'] && (int)$old['created_by'] !== (int)$P['uid']) { $db->rollBack(); jerr('只有填表人本人或管理員可以更換填表人', 403); }
+                require_once __DIR__ . '/../common/people_lib.php';
+                $mk = null;
+                foreach (eg_people_list_asof($db, [], $fillDate) as $pp) if ((int)$pp['id'] === (int)$_POST['maker_id']) { $mk = $pp; break; }
+                if (!$mk) { $db->rollBack(); jerr('填表人必須是填表日期當天在職的人員', 400); }
+                $db->prepare("UPDATE rm_doc SET created_by=?, created_by_name=? WHERE doc_id=?")->execute([(int)$mk['id'], (string)$mk['user_cname'], $id]);
+            }
             // 填表日期改了，單號跟著重編（單號前八碼＝表單日期）；只有真的換日期才重編，避免無謂跳號
             if (substr(preg_replace('/\D/', '', (string)$old['fill_date']), 0, 8) !== preg_replace('/\D/', '', $fillDate)) {
                 $db->prepare("UPDATE rm_doc SET doc_no=? WHERE doc_id=?")->execute([rm_next_doc_no($db, $fillDate), $id]);

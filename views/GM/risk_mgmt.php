@@ -279,6 +279,8 @@ $perms  = rm_perms($db, $rmUser);
         <div class="fgrid">
             <div><label>填表日期 <span style="color:#DD5138;">*</span></label><input type="date" id="fDate"><span class="err" id="eDate"></span></div>
             <div><label>單號</label><input type="text" id="fNo" readonly placeholder="儲存後自動產生" style="background:#F5EEE2;" data-eg-skip></div>
+            <div><label>填表人</label><select id="fMaker" data-eg-filter="輸入姓名篩選…"></select><span class="err" id="eMaker"></span>
+                <div class="hint" style="margin:2px 0 0;">預設是建立者；補歷史單據時可改成填表日期當天在職的人。</div></div>
             <div class="full"><label>相關部門</label>
                 <div class="chips" id="deptChips"></div>
                 <select id="deptAdd" data-eg-filter="輸入部門名稱篩選…"></select>
@@ -570,6 +572,7 @@ function boardHtml(){
     var h = '<div class="swot-bar">'
         + '<label>年度</label><select id="bYear" style="width:92px;"></select>'
         + '<label>填表日期</label><input type="date" id="bDate">'
+        + '<label>填表人</label><select id="bMaker" data-eg-filter="輸入姓名篩選…" style="width:210px;" title="預設是建立者；已建立的表只有填表人本人或管理員可以更換"></select>'
         + '<span style="flex:1 1 20px;"></span>'
         + '<button id="bSuggest"><i class="fa fa-lightbulb-o"></i> 依系統資料建議</button>'
         + '<button id="bGuide"><i class="fa fa-question-circle"></i> 填寫提示與範例</button>'
@@ -631,6 +634,9 @@ function loadBoard(year){
         $.each(res.items, function(_, it){ if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
         renumberBoard();
         $('#bDate').val(res.doc ? res.doc.fill_date : (res.year === cy ? META.today : res.year + '-12-31'));
+        BOARD.maker0 = res.doc ? +res.doc.created_by : 0;
+        loadMakers($('#bMaker'), $('#bDate').val(), res.doc ? res.doc.created_by : META.me.id, res.doc ? res.doc.created_by_name : META.me.name,
+                   !!res.doc && res.can_edit && (META.perms.canAdmin || +res.doc.created_by === +META.me.id));
         $('#bErr').text('');
         $('#bStatus').removeClass('warn').text(res.doc
             ? '單號 ' + res.doc.doc_no + '　填表人 ' + (res.doc.created_by_name || '') + '　最後更新 ' + dispDate((res.doc.updated_at || '').slice(0, 10))
@@ -685,7 +691,8 @@ $(document).on('click', '#bSave', function(){
     var items = collectBoard(), bad = false;
     $.each(items, function(_, it){ if (!$.trim(it.stakeholder + it.needs + it.issue)) return; });
     if (!$.grep(items, function(it){ return $.trim(it.stakeholder + it.needs + it.issue); }).length){ $('#bErr').text('至少要填寫一條內容'); return; }
-    post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items)}, function(){ loadBoard(BOARD.year); });
+    post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items),
+          maker_id:(!$('#bMaker').prop('disabled') && +$('#bMaker').val() && +$('#bMaker').val() !== BOARD.maker0 ? +$('#bMaker').val() : '')}, function(){ loadBoard(BOARD.year); });
 });
 /* ---------- 依系統資料建議 ---------- */
 var SUG = [];
@@ -966,6 +973,18 @@ $(document).on('click', '[data-rmdept]', function(){
     var id = +$(this).data('rmdept'); CUR.dept_ids = CUR.dept_ids.filter(function(x){ return x !== id; }); renderDeptChips();
 });
 
+/* 填表人下拉：填表日期當天在職的人；原本的填表人即使已離職也保留在選項裡（免得只是開來看一下就被換掉） */
+function loadMakers($sel, date, curId, curName, canChange){
+    $sel.prop('disabled', !canChange);
+    var fill = function(people){
+        var h = '', has = false;
+        $.each(people, function(_, p){ if (+p.id === +curId) has = true; h += '<option value="' + p.id + '"' + (+p.id === +curId ? ' selected' : '') + '>' + esc(p.display) + '</option>'; });
+        if (curId && !has) h = '<option value="' + curId + '" selected>' + esc(curName || ('#' + curId)) + '</option>' + h;
+        $sel.html(h);
+    };
+    if (!canChange){ fill([]); return; }
+    get({action:'maker_options', date:date}, function(res){ fill(res.people || []); });
+}
 function openDoc(kind, id){
     var show = function(doc, items, canEdit, pr){
         CUR = {kind:kind, doc_id:doc ? +doc.doc_id : 0, can_edit:canEdit, print:pr,
@@ -973,6 +992,10 @@ function openDoc(kind, id){
         $('#docTitle').text(kindName(kind) + (doc ? '　' + doc.doc_no : '　新增'));
         $('#fDate').val(doc ? doc.fill_date : ((NEWYEAR && NEWYEAR < +META.today.slice(0, 4)) ? NEWYEAR + '-12-31' : META.today)); NEWYEAR = 0;
         $('#fNo').val(doc ? doc.doc_no : '');
+        // 新增時填表人就是自己（不給選，免得替別人開單）；已存在的單只有建立者本人或管理員可換
+        var canMk = !!doc && canEdit && (META.perms.canAdmin || +doc.created_by === +META.me.id);
+        loadMakers($('#fMaker'), $('#fDate').val(), doc ? doc.created_by : META.me.id, doc ? doc.created_by_name : META.me.name, canMk);
+        CUR.maker0 = doc ? +doc.created_by : 0;
         $('#eDate, #eItems').text(''); $('#fDate').removeClass('bad');
         $('#itemHint').html(kind === 'risk'
             ? '嚴重度(S)與發生率(O)要一起選；<b>風險等級由系統依目前設定自動算出</b>。按「選擇處境議題」可連動組織處境分析表的議題。整家公司一個年度只有一張，年度中途有變動請直接在這一張上更新。'
@@ -1016,6 +1039,14 @@ function collectItems(){
     });
     return out;
 }
+$(document).on('change', '#bDate', function(){
+    if (!BOARD.doc || $('#bMaker').prop('disabled')) return;
+    loadMakers($('#bMaker'), $(this).val(), +$('#bMaker').val() || BOARD.maker0, '', true);
+});
+$('#fDate').on('change', function(){
+    if (!CUR || !CUR.doc_id || $('#fMaker').prop('disabled')) return;
+    loadMakers($('#fMaker'), $(this).val(), +$('#fMaker').val() || CUR.maker0, '', true);
+});
 $('#btnDocSave').on('click', function(){
     var date = $('#fDate').val();
     $('#eDate, #eItems').text(''); $('#fDate').removeClass('bad');
@@ -1028,7 +1059,8 @@ $('#btnDocSave').on('click', function(){
         });
     }
     if (bad){ $('#eItems').text(bad); return; }
-    post({action:'doc_save', doc_id:CUR.doc_id, kind:CUR.kind, fill_date:date,
+    var mk = $('#fMaker').prop('disabled') ? 0 : (+$('#fMaker').val() || 0);
+    post({action:'doc_save', doc_id:CUR.doc_id, kind:CUR.kind, fill_date:date, maker_id:(mk && mk !== CUR.maker0 ? mk : ''),
           dept_ids:JSON.stringify(CUR.dept_ids), items:JSON.stringify(items)}, function(res){
         closeMask('docMask');
         loadList(CUR.kind);
