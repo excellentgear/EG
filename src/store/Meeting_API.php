@@ -695,6 +695,11 @@ case 'save': {
             $db->prepare("UPDATE meeting_attach SET meeting_id=?, status='active', expire_at=NULL
                           WHERE attach_id IN ({$in}) AND created_by=? AND status='temp'")->execute([$id, $uid]);
         }
+        // 討論過程紀錄：沒送這個欄位＝不動（舊呼叫端不可被洗掉），送空字串才是清空
+        if (array_key_exists('discussion', $_POST)) {
+            $disc = trim((string)$_POST['discussion']);
+            $db->prepare("UPDATE meeting_record SET discussion=? WHERE meeting_id=?")->execute([$disc !== '' ? mb_substr($disc, 0, 20000) : null, $id]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 存檔本身也可能讓最後一個條件成立（最常見的是這次才指定主席）；交易外才做，避免自動送出的通知

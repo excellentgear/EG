@@ -367,6 +367,11 @@ foreach ($roleRows as $rr) {
             <button type="button" class="b-att wt" onclick="itemAdd('general')"><i class="fa fa-plus"></i> 新增會議要項</button>
         </div>
 
+        <div class="mt-sec" id="edSecDisc">
+            <div class="mt-sec-title">討論過程紀錄（選填：記錄討論了什麼、各單位意見、為什麼這樣決議）</div>
+            <textarea id="edDiscussion" rows="10" maxlength="20000" style="width:100%;" placeholder="可分段書寫；檢視與列印會保留換行，列印另成一頁。"></textarea>
+        </div>
+
         <div class="mt-sec" id="edSecKpi">
             <div class="mt-sec-title">出貨目標達成率（產銷會議可插入本月數據佐證，非必要可略過）</div>
             <div id="kpiBox"></div>
@@ -986,6 +991,7 @@ function edApplyNoticeMode(on){
     $('#btnEdSubmit').html(on ? '<i class="fa fa-bullhorn"></i> 建立並填寫通知單' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
 }
 function openCreate(noticeMode){
+    $('#edDiscussion').val('');
     EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
@@ -1077,6 +1083,7 @@ function openEdit(id){
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
         });
+        $('#edDiscussion').val(m.discussion||'');
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
         renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
@@ -1923,6 +1930,7 @@ function gatherPayload(){
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
         tpl_id: EDIT_ID ? 0 : TPL_ID,
         attendees: JSON.stringify(ATT),
+        discussion: $('#edDiscussion').val(),
         items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
                     .concat(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); }))
                     .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); }))),
@@ -2131,6 +2139,7 @@ function viewHtml(res){
     }
     h += announceTable() + itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
 
+    if (m.discussion) h += '<h5>討論過程紀錄</h5><div style="white-space:pre-wrap;line-height:1.7;">' + esc(m.discussion) + '</div>';
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
@@ -2792,6 +2801,15 @@ function meetingRecordPageHtml(m, res, docNoMode){
         + '</div>';
 }
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
+/* 討論過程紀錄：獨立一頁（內容長短不定，不塞進固定版面的會議記錄頁） */
+function discussionPageHtml(m){
+    if (!m.discussion) return '';
+    return '<div class="mr-page" style="break-before:page;">'
+        + '<div class="mr-title">'+esc(META.company_name||'')+'-會議討論過程紀錄</div>'
+        + '<div style="margin:6px 0 10px;font-size:13px;"><b>主題：</b>'+esc(m.subject||'')+'　<b>日期：</b>'+dispDate(m.meeting_date)+'　<b>記錄：</b>'+esc(m.recorder_name||'')+'</div>'
+        + '<div style="white-space:pre-wrap;line-height:1.75;font-size:13px;">'+esc(m.discussion)+'</div>'
+        + '</div>';
+}
 function kpiPageHtml(m, preparerName){
     var k = JSON.parse(m.kpi_snapshot_json);
     var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, dispDate(m.meeting_date), false, mApprovalStampSchema()) : '';
@@ -2853,7 +2871,7 @@ function printMeetingRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting, res = VIEW;
     mtPrintLog('會議記錄 '+(m.subject||'')+' '+dispDate(m.meeting_date), m.meeting_id);
-    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + discussionPageHtml(m) + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;

@@ -112,6 +112,13 @@ function meeting_ensure_schema(PDO $db): void {
                        COMMENT '直接指定負責人員 user.id 逗號分隔(與owner_depts二擇一,有值時完全取代部門判定)' AFTER owner_dept_names");
         }
     } catch (Throwable $e) {}
+    /* 討論過程紀錄(2026-10-15 使用者要求)：會議要項只有結論，稽核要看得到「怎麼討論、為什麼這樣決議」。
+       純文字（換行保留），檢視與列印顯示在會議要項之後，列印另成一頁。 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='discussion'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN discussion MEDIUMTEXT NULL COMMENT '討論過程紀錄(純文字)'");
+    } catch (Throwable $e) {}
     /* 負責人確認方式(2026-10-15 使用者要求)：每個項目一個設定。
          onsite＝出席者當場簽章、未出席者收通知回簽(預設，與舊行為相同)
          later ＝出席與否一律不當場簽，全部改收通知、會後確認（可回覆）
