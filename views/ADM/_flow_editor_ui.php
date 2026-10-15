@@ -902,7 +902,40 @@
   }
 
   /* ── 建立畫布與事件 ───────────────────────────────────────────────── */
+  /* 連接線的點擊判定要放寬（使用者 2026-10-15：「無法分別拖移兩端位置」）。
+     fabric.Line 的命中範圍就是它的外框，而一條垂直／水平線的外框只有
+     strokeWidth（1.5px）那麼寬——實測幾乎點不中，選不到線就看不到端點控制圓，
+     當然也拖不動。這裡只對流程圖的連接線（egRole='conn'）改成
+     「滑鼠離線段 8px 以內就算點中」，其他 fabric.Line（輔助線、預覽線）不受影響。 */
+  function patchLineHitArea() {
+    if (fabric.Line.prototype.__egHitPatched) return;
+    var orig = fabric.Line.prototype.containsPoint;
+    fabric.Line.prototype.containsPoint = function (point, absolute, calculate) {
+      if (this.egRole === 'conn' && point) {
+        /* ⚠ fabric 傳進來的 point 是「畫面座標」（含縮放位移），
+           而 left/top/x1..y2 是場景座標——直接比對在縮放時永遠不會命中。
+           先用 viewportTransform 反算回場景座標再比。 */
+        var vt = (this.canvas && this.canvas.viewportTransform) || [1, 0, 0, 1, 0, 0];
+        var zx = vt[0] || 1, zy = vt[3] || 1;
+        var px = (point.x - vt[4]) / zx, py = (point.y - vt[5]) / zy;
+        var mi = Math.min(this.x1, this.x2), mj = Math.min(this.y1, this.y2);
+        var x1 = this.left + (this.x1 - mi), y1 = this.top + (this.y1 - mj);
+        var x2 = this.left + (this.x2 - mi), y2 = this.top + (this.y2 - mj);
+        var dx = x2 - x1, dy = y2 - y1, len2 = dx * dx + dy * dy;
+        var t = len2 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        var qx = x1 + t * dx, qy = y1 + t * dy;
+        // 容差是「畫面上的 8px」，換算回場景座標要除以縮放倍率
+        var tol = 8 / Math.max(0.05, Math.min(zx, zy)) + (this.strokeWidth || 1) / 2;
+        return ((px - qx) * (px - qx) + (py - qy) * (py - qy)) <= tol * tol;
+      }
+      return orig.call(this, point, absolute, calculate);
+    };
+    fabric.Line.prototype.__egHitPatched = true;
+  }
+
   function build() {
+    patchLineHitArea();
     cv = new fabric.Canvas('egfCanvas', { backgroundColor: '#ffffff', preserveObjectStacking: true });
 
     cv.on('object:moving', function (e) {
@@ -962,10 +995,19 @@
     });
     cv.on('selection:created', onSel);
     cv.on('selection:updated', onSel);
-    cv.on('selection:cleared', function () { clearHandles(); });
+    /* ⚠ 按在端點控制圓上的瞬間，fabric 會先把原本選著的那條線取消選取，
+       如果這時把控制圓清掉，使用者就「按得到卻拖不動」——按下去圓點就消失了
+       （使用者 2026-10-15 回報「無法分別拖移兩端位置」）。
+       所以選到的是控制圓本身時，一律保留它們。 */
+    cv.on('selection:cleared', function () {
+      var a = cv.getActiveObject();
+      if (a && a.egRole === 'handle') return;
+      clearHandles();
+    });
 
     function onSel() {
       var objs = cv.getActiveObjects();
+      if (objs.length === 1 && objs[0].egRole === 'handle') return;   // 正在抓端點，別動它
       clearHandles();
       if (objs.length === 1 && objs[0].egRole === 'conn') showHandles(objs[0]);
     }
@@ -1365,7 +1407,14 @@
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delSel(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-      else if (e.key === 'Escape') { close(); }
+      /* Esc 刻意**不關閉**整個編輯器（使用者 2026-10-15）：畫到一半誤按一下
+         就把視窗關掉、畫的東西全沒了。Esc 只用來「放掉目前選取的東西」，
+         要關請按右上角的 × 或下方的取消。 */
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        if (cv) { cv.discardActiveObject(); clearHandles(); clearPortDots(); clearGuides(); cv.requestRenderAll(); }
+        stat('已取消選取（要關閉請按右上角的 ×）');
+      }
     });
   }
 
