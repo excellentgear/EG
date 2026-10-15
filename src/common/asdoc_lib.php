@@ -418,11 +418,11 @@ function eg_asdoc_nochange_ensure(PDO $db): void {
     if ($done) return;
     try {
         $st = $db->query("SHOW TABLES LIKE 'as_doc_no_change'");
-        if ($st && $st->fetchColumn()) { $done = true; return; }   // 已存在＝不下 DDL
-        if ($db->inTransaction()) return;                          // 交易中一律不建表（下次非交易時再建）
+        if ($db->inTransaction()) return;                          // 交易中一律不下 DDL（下次非交易時再做）
+        $exists = $st && $st->fetchColumn();
     } catch (Throwable $e) { return; }
     $done = true;
-    try {
+    if (!$exists) try {
         $db->exec("CREATE TABLE IF NOT EXISTS as_doc_no_change (
             id INT AUTO_INCREMENT PRIMARY KEY,
             doc_id INT NOT NULL COMMENT 'as_document.id',
