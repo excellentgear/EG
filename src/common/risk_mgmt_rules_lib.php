@@ -73,9 +73,9 @@ const RM_RULE_CATS = [
     'new_customer' => ['label' => '新客戶首次出貨', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶'],
         'impact' => '新客戶首次出貨後若能持續下單，可分散對大客戶的依賴並提高產能利用率。',
-        'measures' => ['新客戶首次出貨後 30 天內完成品質確認、客戶滿意度與後續需求訪談', '每季檢討新客戶再次下單情形與後續訂單金額'],
-        'metric' => '當年首次出貨客戶數與金額不低於前一年同期；後續訪談與品質確認的措施追蹤如期結案',
-        'kpi' => ['接單率'], 'trk_kw' => ['首批', '新客戶', '年度需求'], 'trk_kind' => 'customer'],
+        'measures' => ['與新客戶於首次出貨當下或 30 天內進行溝通（了解使用情形與後續需求），並留存溝通記錄', '每季檢討新客戶的訂單與產能'],
+        'metric' => '當年首次出貨客戶數與金額不低於前一年同期；首次出貨的新客戶皆於首次出貨當下或 30 天內留有溝通記錄',
+        'kpi' => ['接單率'], 'trk_kw' => ['首批', '新客戶', '首次出貨', '年度需求'], 'trk_kind' => 'customer'],
     'inquiry' => ['label' => '新客戶詢價與加工導入', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['詢價', '轉單', '評估與承接', '評估表', 'PFMEA', '導入'],
         'impact' => '新客戶詢價若能快速完成製程評估與報價並轉成訂單，可擴大認證範圍內的接單量。',
@@ -149,7 +149,7 @@ function rm_rule_catalog(): array
     $rows[] = ['id'=>'E-KPI', 'kind'=>'成效', 'cat'=>'有對應 KPI 的類別', 'when'=>'成效確認時，KPI 資料年度的逐月數字', 'then'=>'最近 3 個月全部達標→有效；措施追蹤尚有未逾期未結案項目→進行中；較前期改善或有達標月份→部分有效；其餘→無效；資料不足 3 個月→未確認'];
     $rows[] = ['id'=>'E-TRACK', 'kind'=>'成效', 'cat'=>'沒有 KPI 的類別（以及人員／能力傳承，KPI 只列為參考）', 'when'=>'相關措施追蹤（依措施欄註記的單號、類別關鍵字、溝通對象類型找出）', 'then'=>'全部如期結案→有效；有逾期→無效；有未結案但未逾期→進行中；找不到追蹤項目→未確認'];
     $rows[] = ['id'=>'E-CONC', 'kind'=>'成效', 'cat'=>'客戶集中度', 'when'=>'前三大客戶占比 vs 前一年', 'then'=>'低於 30% 或不高於前一年→有效；較前一年上升 5 個百分點內→部分有效；上升超過 5 個百分點→無效'];
-    $rows[] = ['id'=>'E-NEWCUST', 'kind'=>'成效', 'cat'=>'新客戶／商機', 'when'=>'當年首次出貨客戶數與金額 vs 前一年', 'then'=>'兩者皆不低於前一年→有效；其一→部分有效；皆低於→無效'];
+    $rows[] = ['id'=>'E-NEWCUST', 'kind'=>'成效', 'cat'=>'新客戶／商機', 'when'=>'當年首次出貨客戶數與金額 vs 前一年；首次出貨起 30 天內是否留有溝通記錄', 'then'=>'兩者皆不低於前一年→有效；其一→部分有效；皆低於→無效；有新客戶沒有 30 天內的溝通記錄時最多部分有效'];
     return $rows;
 }
 
@@ -236,6 +236,21 @@ function rm_rule_newcust(PDO $db, int $year, string $mmdd = '12-31'): array
 {
     $r = $db->query("SELECT COUNT(*) c, COALESCE(SUM(a),0) a FROM (SELECT SUM(Qty*Unit_price) a FROM is_list WHERE " . rm_audit_in($db,'d_setting_id') . " AND Client_name<>'' AND Order_date<='$year-$mmdd' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN '$year-01-01' AND '$year-$mmdd') t")->fetch(PDO::FETCH_ASSOC);
     return [(int)$r['c'], (float)$r['a']];
+}
+/** 當年首次出貨的新客戶（稽核製程料號），各自首次出貨日起 30 天內有沒有溝通記錄（溝通管理的客戶溝通記錄）。
+ *  回傳 [新客戶數, 已溝通數, 未溝通客戶名稱[], 只計到 mmdd 為止] */
+function rm_rule_newcust_comm(PDO $db, int $year, string $mmdd = '12-31'): array
+{
+    $st = $db->prepare("SELECT Client_name, MIN(Order_date) fd FROM is_list WHERE " . rm_audit_in($db, 'd_setting_id') . " AND Client_name<>''
+                        GROUP BY Client_name HAVING MIN(Order_date) BETWEEN ? AND ? ORDER BY fd");
+    $st->execute([$year . '-01-01', $year . '-' . $mmdd]);
+    $all = $st->fetchAll(PDO::FETCH_ASSOC); $done = 0; $miss = [];
+    $q = $db->prepare("SELECT COUNT(*) FROM comm_record WHERE is_deleted=0 AND party_kind='customer' AND party_name LIKE ? AND comm_date BETWEEN ? AND DATE_ADD(?, INTERVAL 30 DAY)");
+    foreach ($all as $r) {
+        $q->execute(['%' . $r['Client_name'] . '%', $r['fd'], $r['fd']]);
+        if ((int)$q->fetchColumn() > 0) $done++; else $miss[] = $r['Client_name'];
+    }
+    return [count($all), $done, $miss];
 }
 /** 既有客戶（該年 1/1 以前就有出貨）的稽核製程出貨金額：[本年 1/1～mmdd 金額, 前一年同期金額, 客戶數] */
 function rm_rule_existing(PDO $db, int $year, string $mmdd = '12-31'): array
@@ -477,9 +492,15 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         $mmdd = $year === (int)substr($today, 0, 4) ? substr($today, 5, 5) : '12-31';
         [$n0, $a0] = rm_rule_newcust($db, $year, $mmdd); [$n1, $a1] = rm_rule_newcust($db, $year - 1, $mmdd); $ids[] = 'E-NEWCUST';
         array_unshift($lines, $year . ' 年（1/1～' . str_replace('-', '/', $mmdd) . '）首次出貨客戶 ' . $n0 . ' 家、金額 ' . number_format($a0) . ' 元；前一年同期 ' . $n1 . ' 家、' . number_format($a1) . ' 元');
+        [$cn, $cd, $cm] = rm_rule_newcust_comm($db, $year, $mmdd); $ids[] = 'E-NEWCOMM';
+        $lines[] = '新客戶 ' . $cn . ' 家中，' . $cd . ' 家於首次出貨當日起 30 天內留有溝通記錄' . ($cm ? '；尚無溝通記錄：' . implode('、', array_slice($cm, 0, 6)) . (count($cm) > 6 ? ' 等 ' . count($cm) . ' 家' : '') : '');
         $good = ($n0 >= $n1 ? 1 : 0) + ($a0 >= $a1 ? 1 : 0);
         $status = $good == 2 ? 'effective' : ($good == 1 ? 'partial' : 'ineffective');
         $reason = $good == 2 ? '首次出貨客戶數與金額皆不低於前一年' : ($good == 1 ? '客戶數或金額其中一項不低於前一年' : '客戶數與金額皆低於前一年');
+        if ($cn > 0 && $cd < $cn) {      // 措施「首次出貨 30 天內溝通」沒有全部做到：最多部分有效
+            if ($status === 'effective') $status = 'partial';
+            $reason .= '；新客戶 ' . $cn . ' 家中有 ' . ($cn - $cd) . ' 家尚無 30 天內的溝通記錄';
+        }
     } elseif ($kpi && $kpi['n'] >= 1 && ($c['by'] ?? 'kpi') === 'kpi') {
         $ids[] = 'E-KPI';
         array_unshift($lines, rm_rule_kpi_txt($kpi));
