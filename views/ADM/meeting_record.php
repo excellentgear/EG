@@ -658,6 +658,12 @@ foreach ($roleRows as $rr) {
             <label>先選部門<span style="font-weight:normal;color:#8a6d45;font-size:11.5px;">（含子部門；兼任該部門的人也會列出）</span></label>
             <select id="pickDept" data-eg-filter="輸入部門名稱篩選…"></select>
         </div>
+        <div id="pickAttRow" style="margin:6px 0;display:none;">
+            <button type="button" class="own-btn" onclick="pickAddAttendees(false)"><i class="fa fa-users"></i> 一次選取本次全部與會人員</button>
+            <button type="button" class="own-btn" onclick="pickAddAttendees(true)">只選屬於目前部門篩選的與會人員</button>
+            <button type="button" class="own-btn" onclick="pickClearAll()">清除全部</button>
+            <span style="font-size:11.5px;color:#8a6d45;">選完仍可在下方逐一取消勾選</span>
+        </div>
         <label>關鍵字（姓名／部門／職稱）</label>
         <input type="text" id="pickKw" placeholder="不確定在哪個部門時直接打姓名…" autocomplete="off">
         <div class="pick-list" id="pickList"></div>
@@ -1506,6 +1512,19 @@ function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'',
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
+/* 應完成日期：不是每一項都有，勾「NA」＝沒有應完成日期（存成空值，檢視與列印印 NA） */
+function dueCellHtml(kind,i,it){
+    var na = it.due_na===undefined ? (+it.item_id>0 && !it.due_date) : !!it.due_na;
+    return '<input type="date" max="9999-12-31" value="'+esc(na?'':(it.due_date||''))+'"'+(na?' disabled':'')
+         + ' onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)">'
+         + '<label style="display:block;font-weight:normal;font-size:12px;margin:2px 0 0;"><input type="checkbox"'+(na?' checked':'')
+         + ' onchange="dueNaToggle(\''+kind+'\','+i+',this.checked)"> NA（無應完成日期）</label>';
+}
+function dueNaToggle(kind,i,on){
+    var a = itemsArr(kind)[i]; if (!a) return;
+    a.due_na = on; if (on) a.due_date = '';
+    renderItems(kind);
+}
 function itemAddDirective(){ itemAdd('directive'); }
 function itemDelLastDirective(){ itemDelLast('directive'); }
 function itemAddGeneral(){ itemAdd('general'); }
@@ -1533,7 +1552,7 @@ function renderItems(kind){
         // 未指定負責人的列標紅底：送出時會被擋下(前端+後端)，要讓人在填的當下就看見，而不是按了送出才知道
         h += '<tr'+(hasOwner?'':' style="background:#FBE3DC;"')+'><td style="text-align:center;">'+(i+1)+'</td>'
            + '<td><textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
-           + '<td><input type="date" max="9999-12-31" value="'+esc(it.due_date||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)"></td>'
+           + '<td>'+dueCellHtml(kind,i,it)+'</td>'
            + '<td>'+ownerPickHtml(kind,i,it)+'</td>'
            + '<td><input type="text" maxlength="200" value="'+esc(it.remark||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'remark\',this.value)" placeholder="'+confirmTxt.replace(/<[^>]+>/g,'')+'"></td>'
            + '<td><span class="att-del" onclick="itemDel(\''+kind+'\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
@@ -1559,7 +1578,14 @@ function toggleOwnerMode(kind,i){
     var curMode = a.owner_mode || ((a.owner_users&&a.owner_users.length) ? 'user' : 'dept');
     // 切換模式時清空另一種資料重新挑選，避免存檔時殘留(後端也會以owner_users有值時完全取代owner_depts，這裡雙保險)
     if (curMode === 'user') { a.owner_mode = 'dept'; a.owner_users = []; a.owner_depts = a.owner_depts || []; }
-    else { a.owner_mode = 'user'; a.owner_depts = []; a.owner_users = a.owner_users || []; }
+    else {
+        // 部門改指定人員：把「已選負責部門」底下、本次有出席的人直接帶入（可再到挑選視窗增減）
+        var sub = [];
+        (a.owner_depts||[]).forEach(function(d){ sub = sub.concat(deptSubtreeIds(d)); });
+        var pre = [];
+        if (sub.length) ATT.forEach(function(x){ var p = personById(x.user_id); if (p && personPostIn(p, sub)) pre.push(String(x.user_id)); });
+        a.owner_mode = 'user'; a.owner_depts = []; a.owner_users = pre.length ? pre : (a.owner_users || []);
+    }
     renderItems(kind);
 }
 /* ---------- 負責部門／指定人員挑選（2026-09-02 使用者回報「負責人員的選單很糟糕」全面改寫） ----------
@@ -1624,6 +1650,7 @@ function personPostIn(p, deptIds){
 function openPick(opts){
     PICK = {mode:opts.mode, ids:(opts.ids||[]).map(String), locked:(opts.locked||[]).map(String), apply:opts.apply};
     $('#pickTitle').text(opts.title || (opts.mode==='user'?'選擇指定人員':'選擇負責部門'));
+    $('#pickAttRow').toggle(opts.mode==='user');
     $('#pickDeptRow').toggle(opts.mode==='user');       // 選部門時不需要再多一層部門下拉
     $('#pickDept').html(deptOptionHtml('')).val('');
     $('#pickKw').val('').attr('placeholder', opts.mode==='user'?'不確定在哪個部門時直接打姓名…':'輸入部門名稱…');
@@ -1692,6 +1719,26 @@ function renderPick(){
     }
     $('#pickList').html(h || '<div class="pick-empty">查無符合的'+(PICK.mode==='user'?'人員':'部門')+'</div>');
     $('#pickCount').text('共 '+n+' 筆，已選 '+PICK.ids.length+' 筆');
+}
+/* 一次帶入本次與會人員（ATT）；onlyDept＝只帶屬於上方「先選部門」的人。已回簽鎖定的人不動。 */
+function pickAddAttendees(onlyDept){
+    if (!PICK || PICK.mode!=='user') return;
+    if (!ATT.length){ alert('尚未加入出席人員，請先在上方「出席人員」加入。'); return; }
+    var deptId = $('#pickDept').val();
+    if (onlyDept && !deptId){ alert('請先在「先選部門」選一個部門。'); return; }
+    var sub = onlyDept ? deptSubtreeIds(deptId) : null, add = 0;
+    ATT.forEach(function(a){
+        var id = String(a.user_id);
+        if (sub){ var p = personById(id); if (!p || !personPostIn(p, sub)) return; }
+        if (PICK.ids.indexOf(id)<0){ PICK.ids.push(id); add++; }
+    });
+    renderPick();
+    if (!add) alert('沒有可新增的人員（可能都已選取）。');
+}
+function pickClearAll(){
+    if (!PICK) return;
+    PICK.ids = PICK.ids.filter(function(id){ return PICK.locked.indexOf(String(id))>=0; });
+    renderPick();
 }
 function pickToggle(id){
     if (!PICK) return;
@@ -2028,7 +2075,7 @@ function viewHtml(res){
             // 沒指定負責人的項目一定要一眼看得出來（2026-09-16 使用者回報：沒選負責人也送得出去，
             // 紙本上那一格就是空白，事後沒人知道該找誰）；送出前端與後端都會擋，這裡負責講清楚是哪一項。
             var noOwner = !itemHasOwner(it);
-            t += '<tr'+(noOwner?' style="background:#FBE3DC;"':'')+'><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+dispDate(it.due_date)+'</td>'
+            t += '<tr'+(noOwner?' style="background:#FBE3DC;"':'')+'><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+(it.due_date?dispDate(it.due_date):'NA')+'</td>'
                + '<td>'+(noOwner ? '<span style="color:#DD5138;font-weight:bold;">⚠ 尚未指定負責人／負責部門</span>' : esc(deptNames||'—'))
                + (canAdjOwner ? '<br><a href="javascript:void(0)" style="font-size:11px;" onclick="openOwnerAdjust('+it.item_id+')">'
                                 + '<i class="fa fa-pencil"></i> 調整負責人</a>' : '')
@@ -2641,7 +2688,7 @@ function meetingItemGroupRows(items, kind, groupLabel){
             : signed.map(confirmStampHtml).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
-             + '<td>'+dispDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+             + '<td>'+(it.due_date?dispDate(it.due_date):'NA')+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
 }
 /* 確認簽名附表（另起一頁）：只列出被移過來的項目，一項一區塊、章自動換行不會被裁掉。
