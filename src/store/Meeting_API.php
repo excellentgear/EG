@@ -763,8 +763,14 @@ case 'people_all': {
     // 例：何沐桐 → 「技術部 工程師／生管組 組長（兼任）」。人員清單一律走共用庫，不自己拼 SQL（鐵則見 ai-rules/08 第五節）。
     // 這裡是指派任務負責人，選的是「人」不是「職務」，所以一人仍只有一列（owner_users 存的就是 user_id），
     // 只是把職務全列出來讓人認得出是誰。
-    $rows  = eg_people_list($db, ['states'=>[1,2,3], 'prefer_main'=>true]);
-    $posts = eg_people_posts($db, ['states'=>[1,2,3], 'user_ids'=>array_column($rows, 'id')]);
+    // 有會議日期（編輯中的單據）就依該日期回推當時在職者與職稱（ai-rules/22 第5坑）：
+    // 補離職前的會議，當時在職、現已離職的人一定要列得出來，否則已選的人會只剩 #員編。
+    $asof  = trim((string)($_GET['meeting_date'] ?? ''));
+    $rows  = $asof !== '' ? eg_people_list_asof($db, ['states'=>[1,2,3], 'prefer_main'=>true], $asof)
+                          : eg_people_list($db, ['states'=>[1,2,3], 'prefer_main'=>true]);
+    $uids  = array_column($rows, 'id');
+    $posts = $asof !== '' ? eg_people_posts_asof($db, ['states'=>[1,2,3], 'user_ids'=>$uids], $asof)
+                          : eg_people_posts($db, ['states'=>[1,2,3], 'user_ids'=>$uids]);
     $byUid = [];
     foreach ($posts as $p) $byUid[(int)$p['id']][] = $p;
     $fmt = function (array $ps): array {

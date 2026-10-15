@@ -1081,6 +1081,8 @@ function openEdit(id){
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
         renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
         $('#edChair').val(m.chair_user_id||'');
+        // 依會議日期載入當時在職的人（含現已離職者），已選負責人標籤才認得出來，載完再重畫
+        PEOPLE_ASOF = ''; loadPeopleAsof(function(){ renderItems('directive'); renderItems('general'); });
         $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
         openMask('edMask');
     });
@@ -1594,7 +1596,11 @@ function toggleOwnerMode(kind,i){
    改成獨立跳窗：①**先選部門再選人**（使用者指定）②一列一人、部門／職稱／姓名分欄對齊（鐵則5 的欄位順序）
    ③不確定在哪個部門時可直接打姓名跨部門搜尋。部門與人員共用同一個跳窗，只差要不要顯示部門下拉。
    儲存格內只留「已選標籤＋一顆按鈕」，不再有任何下拉。 */
-function personById(id){ for (var i=0;i<ALL_PEOPLE.length;i++) if (String(ALL_PEOPLE[i].id)===String(id)) return ALL_PEOPLE[i]; return null; }
+function personById(id){ for (var i=0;i<ALL_PEOPLE.length;i++) if (String(ALL_PEOPLE[i].id)===String(id)) return ALL_PEOPLE[i];
+    // 名單沒有（例如現已離職）時，用出席人員名單上存的姓名與職稱頂著，不要只剩員編
+    for (var j=0;j<ATT.length;j++) if (String(ATT[j].user_id)===String(id))
+        return {id:ATT[j].user_id, user_cname:ATT[j].user_name, dept_name:ATT[j].dept_name||'', position_name:ATT[j].position_name||'', posts:[], posts_text:$.trim((ATT[j].dept_name||'')+' '+(ATT[j].position_name||''))};
+    return null; }
 /* 人員的職務顯示(2026-09-01 使用者回報)：一個人可能同時掛主職與兼任(例：技術部 工程師＋生管組 組長)，
    後端 people_all 已把**所有**職務都帶回來(posts_text，主職在前、兼任加註「（兼任）」)。 */
 function personPostsText(p){
@@ -1647,7 +1653,18 @@ function personPostIn(p, deptIds){
     for (var i=0;i<ps.length;i++) if (deptIds.indexOf(String(ps[i].dept_id))>=0) return ps[i];
     return null;
 }
+/* 挑人名單依會議日期回推（補離職前的會議才列得到已離職的人）；同一日期只抓一次 */
+var PEOPLE_ASOF = '';
+function loadPeopleAsof(done){
+    var d = $('#edDate').val() || '';
+    if (!d || d === PEOPLE_ASOF){ done(); return; }
+    $.getJSON(API, {action:'people_all', meeting_date:d}, function(r){
+        if (r.ok){ ALL_PEOPLE = r.people||[]; PEOPLE_ASOF = d; }
+        done();
+    }).fail(done);
+}
 function openPick(opts){
+    if (opts.mode==='user' && !opts._loaded){ opts._loaded = true; loadPeopleAsof(function(){ openPick(opts); }); return; }
     PICK = {mode:opts.mode, ids:(opts.ids||[]).map(String), locked:(opts.locked||[]).map(String), apply:opts.apply};
     $('#pickTitle').text(opts.title || (opts.mode==='user'?'選擇指定人員':'選擇負責部門'));
     $('#pickAttRow').toggle(opts.mode==='user');
