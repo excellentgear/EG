@@ -1271,7 +1271,9 @@ case 'admin_backfill': {
                         if ($dr) $signers[$od] = ['user_id'=>(int)$dr['user_id'], 'user_name'=>(string)$dr['user_cname'], 'dept_name'=>(string)$dr['dept_name'], 'dept_id'=>$od];
                     }
                 }
+                $tUid = (int)($_POST['target_user_id'] ?? 0); // 只改單一簽名者的日期（同欄位內個別改日期）
                 foreach ($signers as $signer) {
+                    if ($tUid && (int)$signer['user_id'] !== $tUid) continue;
                     $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $signer['dept_id'], $dt]);
                 }
                 meeting_close_item_notice_if_done($db, (int)$it['item_id']); // 補齊後同樣要關掉還開著的回簽通知

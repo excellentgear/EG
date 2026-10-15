@@ -2061,7 +2061,7 @@ function itemConfirmCellHtml(it){
             // ——指定人員模式那個欄位是空的，章會變成只有姓名，跟上方簽到表的章長得不一樣（使用者回報）。
             html = '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), slotStampDept(s), slotStampPos(s)):esc(s.user_name))
                  + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
-                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
+                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+','+(+s.user_id||0)+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
                  + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
             signedSeen++;
             if (signedSeen > MR_CONFIRM_SHOW) { more += html; moreN++; return; }
@@ -2167,32 +2167,52 @@ function saveRecorder(){
 /* 超級管理員：補齊/修改單一列(出席簽到或項目確認)的簽章日期，未簽者一併視同補簽(2026-08-05使用者明確要求)。
    密碼沿用同一次檢視期間內輸入過的值(ADMIN_PW)，避免每列都要重打一次；日期預設帶會議日期，可自行修改。 */
 var ADMIN_PW = '';
-function adminBackfillRow(scope, targetId){
+/* 密碼（遮蔽成 *）＋日期 一個小跳窗取代 prompt()（prompt 會把密碼明碼顯示）。cb(pw,date) */
+function adminAskPwDate(title, defDate, cb){
+    $('#adminPwMask').remove();
+    var needPw = !ADMIN_PW;
+    var h = '<div id="adminPwMask" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20000;display:flex;align-items:center;justify-content:center;">'
+        + '<div style="background:#fff;border-radius:6px;padding:16px 18px;width:340px;max-width:92vw;">'
+        + '<div style="font-weight:bold;margin-bottom:10px;color:#5b3a1e;">'+esc(title)+'</div>'
+        + (needPw ? '<div style="margin-bottom:8px;"><label style="font-size:12px;">超級管理員密碼（本次檢視期間共用）</label>'
+            + '<input type="password" id="adminPwIn" autocomplete="new-password" data-eg-skip style="width:100%;"></div>' : '')
+        + '<div style="margin-bottom:12px;"><label style="font-size:12px;">日期</label>'
+        + '<input type="date" id="adminDateIn" value="'+esc(defDate||'')+'" data-eg-skip style="width:100%;"></div>'
+        + '<div style="text-align:right;"><button type="button" id="adminPwCancel">取消</button> '
+        + '<button type="button" id="adminPwOk" style="background:#F0A24B;border:0;padding:4px 14px;border-radius:3px;">確定</button></div>'
+        + '</div></div>';
+    $('body').append(h);
+    function ok(){
+        var pw = needPw ? $('#adminPwIn').val() : ADMIN_PW, d = $('#adminDateIn').val();
+        if (!pw){ alert('請輸入密碼'); return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)){ alert('請選擇日期'); return; }
+        $('#adminPwMask').remove(); ADMIN_PW = pw; cb(pw, d);
+    }
+    $('#adminPwOk').on('click', ok);
+    $('#adminPwCancel').on('click', function(){ $('#adminPwMask').remove(); });
+    $('#adminPwIn,#adminDateIn').on('keydown', function(e){ if (e.key==='Enter'){ e.preventDefault(); ok(); } });
+    setTimeout(function(){ $(needPw ? '#adminPwIn' : '#adminDateIn').focus(); }, 30);
+}
+function adminBackfillRow(scope, targetId, targetUserId){
     var m = VIEW.meeting;
-    if (!ADMIN_PW) ADMIN_PW = prompt('請輸入超級管理員密碼（本次檢視期間內補簽/改日期共用，重新整理後需再輸入一次）：') || '';
-    if (!ADMIN_PW) return;
-    var date = prompt('請輸入日期(YYYY-MM-DD)：', m.meeting_date ? fmtDate(m.meeting_date) : '');
-    if (!date) return;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('日期格式不正確'); return; }
-    $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:ADMIN_PW, date:date, scope:scope, target_id:targetId}, function(res){
+    adminAskPwDate('補簽／改日期', m.meeting_date ? fmtDate(m.meeting_date) : '', function(pw, date){
+    $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:pw, date:date, scope:scope, target_id:targetId, target_user_id:targetUserId||0}, function(res){
         if (!res.ok){ alert(res.error||'補登失敗'); ADMIN_PW=''; return; }
         refreshAfterChange(m.meeting_id);
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '補登失敗'); ADMIN_PW=''; });
+    });
 }
 /* 超級管理員：一次補齊整場會議的簽章日期(出席簽到＋項目確認＋主席＋總經理)，同樣視同未簽者一併補簽。 */
 function adminBackfillAll(){
     var m = VIEW.meeting;
     if (!confirm('確定要補齊「'+m.subject+'」整場會議的簽到／項目確認／主席／總經理簽章日期？尚未簽核的部分將視同已完成一併補簽（主席／總經理若還沒送出過也會自動送審＋自動核准），此操作會留下稽核紀錄。')) return;
-    if (!ADMIN_PW) ADMIN_PW = prompt('請輸入超級管理員密碼：') || '';
-    if (!ADMIN_PW) return;
-    var date = prompt('請輸入要套用的日期(YYYY-MM-DD)：', m.meeting_date ? fmtDate(m.meeting_date) : '');
-    if (!date) return;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('日期格式不正確'); return; }
-    $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:ADMIN_PW, date:date, scope:'all'}, function(res){
+    adminAskPwDate('套用到整場會議的日期', m.meeting_date ? fmtDate(m.meeting_date) : '', function(pw, date){
+    $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:pw, date:date, scope:'all'}, function(res){
         if (!res.ok){ alert(res.error||'補登失敗'); ADMIN_PW=''; return; }
         alert('已補齊。');
         refreshAfterChange(m.meeting_id);   // 補齊後狀態常常就變成「已完成」，清單與狀態篩選筆數要一起重抓
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '補登失敗'); ADMIN_PW=''; });
+    });
 }
 function confirmItemWithPassword(itemId, uidv){
     var pw = $('#pwConfirm'+itemId+'_'+uidv).val();
