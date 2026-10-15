@@ -325,7 +325,7 @@ if ($action === 'risk_generate') {
             $seq++;
             $r = rm_rule_make_row($db, $set, $c, $dy, (int)substr($fill, 0, 4));
             $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
-            $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fill) : null;
+            $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, rm_prefix_for($set, (string)$r['ro_kind']), $fill) : null;
             $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                ->execute([$docId, $seq, $c['scope'], $c['stakeholder'], $c['needs'], $c['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm,
@@ -506,7 +506,7 @@ if ($action === 'doc_save') {
             if ($isOld && $oldConfirm[$oid] !== '' && $confirm === '') $confirm = $oldConfirm[$oid];
             if ($kind === 'risk' && $confirm === '') {
                 $lv = rm_level_calc($set, $row['severity'], $row['frequency'], (string)$row['ro_kind']);
-                if ($lv && $lv['action']) $confirm = rm_next_confirm_no($db, (string)$set['rm_confirm_prefix'], $fillDate);
+                if ($lv && $lv['action']) $confirm = rm_next_confirm_no($db, rm_prefix_for($set, (string)$row['ro_kind']), $fillDate);
             }
             $vals = [$seq, $row['scope'], $row['dimension'], $row['stakeholder'] ?: null, $row['needs'] ?: null, $row['issue'] ?: null,
                      $row['ro_kind'], $row['ro_text'] ?: null, $row['severity'], $row['frequency'], $confirm ?: null,
@@ -605,8 +605,14 @@ if ($action === 'setting_save') {
     }
     if (array_key_exists('rm_confirm_prefix', $arr)) {
         $p = preg_replace('/[^A-Za-z0-9\-]/', '', rmS($arr['rm_confirm_prefix'], 6));
-        if ($p === '') jerr('風險確認編號的前綴要填英數字（最多 6 碼）');
+        if ($p === '') jerr('風險編號的前綴要填英數字（最多 6 碼）');
         $toWrite['rm_confirm_prefix'] = $p;
+    }
+    if (array_key_exists('rm_opp_prefix', $arr)) {
+        $p2 = preg_replace('/[^A-Za-z0-9\-]/', '', rmS($arr['rm_opp_prefix'], 6));
+        if ($p2 === '') jerr('機會編號的前綴要填英數字（最多 6 碼）');
+        if (strcasecmp($p2, (string)($toWrite['rm_confirm_prefix'] ?? $cur['rm_confirm_prefix'])) === 0) jerr('機會與風險的編號前綴不可相同，否則流水號會互相混在一起');
+        $toWrite['rm_opp_prefix'] = $p2;
     }
     // 嚴重度(S)／發生率(O)的等級是自動依順序編號：刪掉其中一級，後面的等級數字會往前補（不跳號）。
     // 既有風險資料存的是等級數字，所以要一併換成新數字；被刪掉那一級的資料沒有對應的新等級，會變成「未評估」——先講清楚再讓管理員決定

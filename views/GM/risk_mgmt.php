@@ -352,7 +352,7 @@ $perms  = rm_perms($db, $rmUser);
             <span class="err" id="eLvl"></span>
             <div class="hint"><b>評分是「下限～上限」區間</b>（例：低度 1～1、中度 2～2、高度 3～6），區間之間連續不留縫隙：每一級的<b>下限會自動＝上一級上限＋1</b>、不用也不能自己填；第一級從 1 起算，
                 <b>最後一級的上限固定＝目前最高可能分數</b>（由下面的嚴重度(S)與發生率(O)等級算出，會跟著變）。上限不可小於下限，也要替後面的每一級各留至少 1 分。
-                <b>已儲存的風險等級名稱不提供修改</b>（要改請刪除後重新新增）。「處理措施」會顯示在評級對照表上；勾選「需要因應措施」的等級，儲存時若該列沒有風險確認編號，會自動配發。</div></div>
+                <b>已儲存的風險等級名稱不提供修改</b>（要改請刪除後重新新增）。「處理措施」會顯示在評級對照表上；勾選「需要因應措施」的等級，儲存時若該列沒有風險與機會編號，會自動配發。</div></div>
         <div class="set-sec"><h5>② 嚴重度(S)分析（表B）</h5>
             <div class="fld"><label>說明欄名稱（一行一個，可自行增減；預設：公司形象／財物損失／客戶抱怨件數）</label>
                 <textarea id="setImpCols" style="min-height:66px;"></textarea></div>
@@ -388,10 +388,12 @@ $perms  = rm_perms($db, $rmUser);
         <div class="set-sec"><h5>對外宣稱有外包的稽核製程</h5>
             <div class="fld" id="setOutsrc"></div>
             <div class="hint">稽核製程取自「訂單追蹤」設定的稽核製程。只有勾選的製程才會做委外廠商相關的分析與建議；沒勾＝依 AS 稽核對外宣稱沒有外包，SWOT 與風險表都不列委外議題。客戶、品質、退貨等統計一律只計稽核製程的料號。</div></div>
-        <div class="set-sec"><h5>風險確認編號前綴</h5>
-            <div class="fld"><input type="text" id="setPrefix" maxlength="6" style="max-width:140px;"></div>
-            <div class="hint"><b>風險確認編號是什麼</b>：每條「需要因應措施」的風險（風險準則裡勾選的等級）由系統自動配發的流水號，讓這條風險在措施追蹤、管理審查、矯正單等地方被引用時有唯一編號可對照。
-                格式：前綴＋填表年度＋流水號，例如 R2026-001。已配發的編號不會因設定變動而改變。</div></div>
+        <div class="set-sec"><h5>風險與機會編號前綴</h5>
+            <div class="fld" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <label>風險</label><input type="text" id="setPrefix" maxlength="6" style="width:90px;">
+                <label>機會</label><input type="text" id="setOppPrefix" maxlength="6" style="width:90px;"></div>
+            <div class="hint"><b>風險與機會編號是什麼</b>：每條「需要因應措施」的風險或機會（風險準則裡勾選的等級）由系統自動配發的流水號，讓它在措施追蹤、管理審查、矯正單等地方被引用時有唯一編號可對照。
+                格式：前綴＋填表年度＋流水號，風險例如 R2026-001、機會例如 O2026-001，<b>兩者各自流水</b>。已配發的編號不會因設定變動而改變；一般以這個編號追蹤，成效確認只另外記錄確認日期、結果與裁示，不需要每次確認都產生新編號。</div></div>
         <span class="err" id="eSet"></span>
         <div class="hint">按「儲存設定」才會生效；設定改了之後，所有既有資料的風險等級會依新設定即時重算（資料本身不會被改動）。</div>
     </div>
@@ -423,14 +425,14 @@ $perms  = rm_perms($db, $rmUser);
             <li>委外廠商相關的分析與建議，只針對「模組設定」勾選為<b>對外宣稱有外包</b>的稽核製程；沒勾＝沒有外包，SWOT 與風險表都不列委外議題。</li></ul>
         <h4>列印</h4>
         <ul><li>兩張表都有「列印空白表單」（現場手寫用）；正式列印的成效確認欄只印結果、日期、裁示與佐證來源編號，逐月 KPI 數據與追蹤明細留在系統畫面。</li></ul>
-        <h4>名詞：風險確認編號</h4>
+        <h4>名詞：風險與機會編號</h4>
         <ul><li>每條<b>需要因應措施</b>的風險（等級在「風險準則」被勾選「需要因應措施」者）由系統自動配發的流水號，例如 R2026-001（前綴與年度可在模組設定調整）。
             用途是讓這條風險在其他表單（措施追蹤、管理審查、矯正單）被引用時有唯一編號可對照；已配發的編號不會因為設定變動而改變。</li></ul>
         <h4>操作步驟</h4>
         <ul><li>按「新增」→ 填填表日期、相關部門 → 逐列填寫（最後一列按 ↓ 自動加列）→ 儲存。</li>
             <li>風險表每一列的「議題描述」可按「選擇處境議題」連動組織處境分析表：內/外部議題、利害關係者、需求與期望、議題描述都跟著來源走（來源改了這裡跟著變），不必重打；要自行修改先按「解除連動」。「風險與機會」欄選這一列是風險還是機會，「對組織的影響說明」寫它對組織造成的影響。</li>
             <li>嚴重度(S)與發生率(O)要一起選，<b>風險等級由系統依目前設定自動算出</b>，不可手填。</li>
-            <li>等級被設定為「需要因應措施」的列，儲存時會自動配發風險確認編號。</li>
+            <li>等級被設定為「需要因應措施」的列，儲存時會自動配發風險與機會編號（風險 R、機會 O，各自流水）。</li>
             <li>「風險準則／評級對照」可隨時查看 2-GM-03 的表A風險準則、表B嚴重度(S)分析、表C發生率(O)分析、表D風險分布（格內附目前實際落在該格的風險筆數）。</li></ul>
         <h4>重要行為</h4>
         <ul><li>風險準則（表A）、嚴重度(S)分析（表B）、發生率(O)評估（表C）、風險分布算法（表D）、構面、確認編號前綴<b>全部可在「模組設定」修改</b>（預設值取自 2-GM-03）；改完後既有資料的風險等級依新設定即時重算。</li>
@@ -811,7 +813,7 @@ function colsOf(kind){
     if (kind === 'context') return [['seq','編號',52],['scope','內/外部議題',100],['dimension','構面',130],['stakeholder','利害關係者',150],
         ['needs','需求與期望',230],['issue','議題描述',300],['op','',44]];
     return [['seq','編號',52],['scope','內/外部議題',96],['stakeholder','利害關係者',130],['needs','需求與期望',170],['issue','議題描述',210],
-        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險確認編號',104],
+        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險與機會編號',104],
         ['measure','因應措施',200],['recheck','重新評估',150],['effect','成效確認',170],['op','',44]];
 }
 function scaleOptions(list, val){
@@ -887,7 +889,7 @@ function rowHtml(kind, it, n){
           + fd('<span class="lb-sev">' + (opp ? esc(oppTerm('sev')) : '嚴重度(S)') + '</span>', '<select data-f="severity">' + scaleOptions(impactList(), it.severity) + '</select>', 'c-sev')
           + fd('<span class="lb-frq">' + (opp ? esc(oppTerm('freq')) : '發生率(O)') + '</span>', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('<span class="lb-lv">' + (opp ? esc(oppTerm('level')) : '風險等級') + '</span>', lvBadge(lv, true), 'c-lv lvc')
-          + fd('風險確認編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
+          + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
           + fd('因應措施', ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
           + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
@@ -905,7 +907,7 @@ function buildTable(kind, items){
     var h = '<colgroup>' + cols.map(function(c){ return '<col style="width:' + c[2] + 'px;">'; }).join('') + '</colgroup><thead>';
     if (kind === 'risk'){
         h += '<tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
+          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
           + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr>';
     } else {
         h += '<tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
@@ -1342,7 +1344,7 @@ function renderSet(){
     var tk = '<table class="rm-table fld"><thead><tr><th style="width:64px;">等級</th><th style="width:130px;">發生率(O)分類</th><th style="width:100px;">機率下限</th><th style="width:100px;">機率上限</th><th>詳細的描述</th><th style="width:44px;"></th></tr></thead><tbody>';
     $.each(S.rm_likelihood, function(_, r){ tk += likRowHtml({orig:r.v, label:r.label, lo:r.prob_lo, hi:r.prob_hi, desc:r.desc}); });
     $('#setLik').html(tk + '</tbody></table>');
-    $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix);
+    $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix); $('#setOppPrefix').val(S.rm_opp_prefix || 'O');
     var oh = ''; $.each(META.audit_procs || [], function(_, p){ oh += '<label style="margin-right:16px;font-weight:normal;"><input type="checkbox" class="setOut" value="' + p.tag_id + '"' + (($.inArray(p.tag_id, S.rm_outsource_tags || []) >= 0) ? ' checked' : '') + '> ' + esc(p.name) + '</label>'; });
     $('#setOutsrc').html(oh || '<span class="hint">訂單追蹤尚未設定稽核製程</span>');
     var b = $('#setAsdocBody').empty();
@@ -1411,7 +1413,7 @@ $('#btnSetSave').on('click', function(){
         return {orig:r.orig, label:r.label, cells:$.map(IMPCOLS, function(c){ return r.byName[c] || ''; })};
     });
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
-             rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(),
+             rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(), rm_opp_prefix:$('#setOppPrefix').val(),
              rm_opp_terms:{sev:$('#setOppSev').val(), freq:$('#setOppFrq').val(), level:$('#setOppLv').val()},
              rm_outsource_tags:$('.setOut:checked').map(function(){ return +this.value; }).get()};
     var send = function(force){
@@ -1525,7 +1527,7 @@ function printDoc(docId){
             table = '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
                 + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
                 + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
+                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
                 + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
         }
         // 機會列的三個評分欄位在表頭叫「嚴重度(S)／發生率(O)／風險等級」，實際問的是效益與把握度，所以在表尾註明一行
@@ -1561,7 +1563,7 @@ function printBlank(kind){
             body = head + '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
                 + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
                 + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險確認編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
+                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
                 + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + rows + '</tbody></table>';
         }
         egPrintWindow(meta.doc_name || kindName(kind), body, meta.doc_no, css);

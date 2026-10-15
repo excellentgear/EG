@@ -80,7 +80,8 @@ function rm_settings_default(): array
              'name_opp'=>'最優先機會', 'measure_opp'=>'最優先推動，立即投入資源並訂定里程碑'],
         ],
         'rm_dimensions'     => ['優勢（S）', '劣勢（W）', '機會（O）', '威脅（T）'],
-        'rm_confirm_prefix' => 'R',
+        'rm_confirm_prefix' => 'R',      // 風險與機會編號的前綴：風險用這個（R2026-001）
+        'rm_opp_prefix'     => 'O',      // 機會用這個（O2026-001）；兩者各自流水，已配發的編號不因設定變動而改變
         // 機會與風險共用同一張評分矩陣（分數算法一樣），但顯示的用詞不同：
         // 風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。只有用詞不同，不另做一套分數。
         'rm_opp_terms' => ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'],
@@ -561,7 +562,13 @@ function rm_next_doc_no(PDO $db, string $fillDate): string
     return $d . str_pad((string)($n + 1), 3, '0', STR_PAD_LEFT);
 }
 
-/** 風險確認編號：前綴＋填表年度＋流水（例 R2026-001）；全站同年度連號，已配出的不回收 */
+/** 依「風險／機會」選前綴（機會用 rm_opp_prefix，其餘用 rm_confirm_prefix） */
+function rm_prefix_for(array $set, string $roKind): string
+{
+    return $roKind === 'opportunity' ? (string)($set['rm_opp_prefix'] ?? 'O') : (string)$set['rm_confirm_prefix'];
+}
+
+/** 風險與機會編號：前綴＋填表年度＋流水（例 R2026-001）；全站同年度連號，已配出的不回收 */
 function rm_next_confirm_no(PDO $db, string $prefix, string $fillDate): string
 {
     $prefix = preg_replace('/[^A-Za-z0-9\-]/', '', $prefix);
@@ -625,7 +632,7 @@ function rm_car_create(PDO $db, array $item, array $doc, int $uid, string $uname
     $eff = ['effective'=>'有效', 'partial'=>'部分有效', 'ineffective'=>'無效', 'doing'=>'進行中'][(string)($item['effect_status'] ?? '')] ?? '';
 
     $desc = '【風險與機會因應措施管制表 ' . $doc['doc_no'] . '】' . "\n"
-          . ($conf !== '' ? '風險確認編號：' . $conf . "\n" : '')
+          . ($conf !== '' ? '風險與機會編號：' . $conf . "\n" : '')
           . '議題：' . trim((string)$item['issue']) . "\n"
           . '風險等級：' . ($lv ? $lv['name'] . '（' . $lv['score'] . ' 分）' : '未評估') . "\n"
           . '因應措施：' . trim((string)$item['measure']) . "\n"
