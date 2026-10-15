@@ -957,6 +957,11 @@ function meeting_submit_blocker(PDO $db, array $m): string {
     if ((int)$un->fetchColumn() > 0) return '尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出';
     $miss = meeting_items_missing_owner($db, $id);
     if ($miss) return '下列項目尚未指定負責人／負責部門，請先指定：' . implode('、', $miss);
+    // 套用會議範本留下的【待填：…】必須全部填掉才能送出
+    require_once __DIR__ . '/meeting_tpl_lib.php';
+    foreach ($items as $it) {
+        if (meeting_tpl_has_blank((string)$it['content'])) return '項目「' . mb_substr(preg_replace('/\s+/u', ' ', (string)$it['content']), 0, 20) . '…」還有【待填：…】的內容沒有填寫，請先填入';
+    }
     foreach ($items as $it) {
         if (!meeting_item_is_confirmed($db, $it)) {
             return '項目「' . mb_substr((string)$it['content'], 0, 20) . '…」尚有負責部門/指定人員未確認回簽，請先「存檔並通知」，待對方回覆確認後再送出';

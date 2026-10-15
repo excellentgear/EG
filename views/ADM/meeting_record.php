@@ -299,6 +299,8 @@ foreach ($roleRows as $rr) {
         <div class="grid3">
             <div style="grid-column:span 2;"><label>會議主題 *
                 <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select>
+                <select id="edTpl" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;" title="套用會議範本：帶入主題／時間／地點／預設要項（管理審查等制式會議）"><option value="">套用會議範本…</option></select>
+                <a href="javascript:;" id="btnTplMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openTplMgr()"><i class="fa fa-cog"></i> 範本管理</a>
                 <a href="javascript:;" id="btnPresetMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openPresetMgr()"><i class="fa fa-cog"></i> 管理</a>
                 <select id="edCalPick" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;" title="只列出今天的行事曆會議，自動帶入日期/時間/主題/出席人員"><option value="">從行事曆選今天的會議…</option></select></label>
                 <input type="text" id="edSubject" maxlength="100" list="edSubjectTags"><datalist id="edSubjectTags"></datalist>
@@ -421,6 +423,48 @@ foreach ($roleRows as $rr) {
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
         <button class="b-ok" onclick="saveRecorder()"><i class="fa fa-check"></i> 確定更換</button>
+    </div>
+</div></div>
+
+<!-- 會議範本管理（管理審查等制式會議：預設主題／要項／負責單位／通知單內容，2026-10-15） -->
+<div class="mt-mask" id="tplMask"><div class="mt-modal" style="max-width:980px;">
+    <div class="m-head"><span id="tplMgrTitle">會議範本管理</span><span class="m-close" onclick="closeMask('tplMask')">✕</span></div>
+    <div class="m-body">
+        <div id="tplListBox">
+            <table class="att-tbl"><thead><tr><th>範本名稱</th><th>會議主題</th><th style="width:70px;">項目數</th><th style="width:120px;"></th></tr></thead>
+            <tbody id="tplListBody"></tbody></table>
+            <div style="margin-top:8px;"><button type="button" class="b-att" onclick="tplEdit(0)"><i class="fa fa-plus"></i> 新增範本</button></div>
+        </div>
+        <div id="tplEditBox" style="display:none;">
+            <div class="grid3">
+                <div><label>範本名稱 *</label><input type="text" id="tpName" maxlength="100" placeholder="例：管理審查會議"></div>
+                <div style="grid-column:span 2;"><label>帶入的會議主題 *</label><input type="text" id="tpSubject" maxlength="100"></div>
+            </div>
+            <div class="grid3">
+                <div><label>地點</label><input type="text" id="tpLoc" maxlength="100"></div>
+                <div><label>開始時間</label><input type="text" id="tpStart" class="time-in" maxlength="5" data-eg-hint="24 小時制；可直接打 0900 / 900 / 9"></div>
+                <div><label>結束時間</label><input type="text" id="tpEnd" class="time-in" maxlength="5" data-eg-hint="24 小時制；可直接打 1700 / 17"></div>
+            </div>
+            <label>會議通知單的「會議要項」制式文字</label>
+            <textarea id="tpNotice" rows="3" maxlength="5000"></textarea>
+            <label>會議通知單的應出席單位 <span id="tpUnitCnt" style="color:#8a6d45;font-weight:normal;"></span></label>
+            <div id="tpUnitBox" style="display:flex;flex-wrap:wrap;gap:4px 12px;max-height:110px;overflow:auto;border:1px solid #EADFC8;padding:6px;border-radius:4px;"></div>
+            <label style="margin-top:12px;">範本項目（套用後長成會議記錄裡的項目）</label>
+            <div style="font-size:11.5px;color:#8a6d45;margin-bottom:4px;">
+                內容裡寫 <b>【待填：提示文字】</b> 代表「需要記錄人填入的內容」，沒填完就不能送出；
+                選「系統資料」則套用當下依<b>會議日期</b>自動算出最新數字附在內容後面（仍可修改）。</div>
+            <div id="tpItemBox"></div>
+            <div style="margin-top:6px;">
+                <button type="button" class="b-att" onclick="tplItemAdd('directive')">＋上級指示要項</button>
+                <button type="button" class="b-att" onclick="tplItemAdd('general')">＋會議要項</button>
+                <button type="button" class="b-att" onclick="tplItemAdd('announce')">＋宣布事項</button>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" id="tplBackBtn" style="display:none;" onclick="tplBack()">← 回範本清單</button>
+        <button class="b-ok" id="tplSaveBtn" style="display:none;" onclick="tplSave()"><i class="fa fa-check"></i> 儲存範本</button>
+        <button class="b-ok" id="tplCloseBtn" onclick="closeMask('tplMask')">關閉</button>
     </div>
 </div></div>
 
@@ -811,7 +855,8 @@ function loadMeta(cb){
         var $ad = $('#attDept').empty().append('<option value="">選部門載入人員…</option>');
         DEPTS.forEach(function(d){ $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
         if (m.perms.canEdit) $('#btnAdd,#btnAddNotice').show();
-        if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnMtSetting').show(); }
+        if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnTplMgr').show(); $('#btnMtSetting').show(); }
+        loadTemplates();
         $('#mtHeaderDocNo').text(m.as_doc_record && m.as_doc_record.doc_no ? (m.as_doc_record.doc_no+' ') : '');
         // 通知單的編號也一律取自綁定（禁寫死，ai-rules/16）：改綁別份文件時標題會跟著變
         $('#mtHeaderNoticeDocNo').text(m.as_doc_notice && m.as_doc_notice.doc_no ? (m.as_doc_notice.doc_no+' ') : '');
@@ -917,7 +962,7 @@ function edApplyNoticeMode(on){
     $('#btnEdSubmit').html(on ? '<i class="fa fa-bullhorn"></i> 建立並填寫通知單' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
 }
 function openCreate(noticeMode){
-    EDIT_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
+    EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
@@ -990,7 +1035,7 @@ function openEdit(id){
             alert(m.notifying ? '此會議記錄「存檔並通知」後正在回簽中，內容已鎖定無法編輯；請先在檢視畫面按「撤回」解除鎖定。' : '此會議記錄目前無法編輯。');
             return;
         }
-        EDIT_ID = m.meeting_id;
+        EDIT_ID = m.meeting_id; TPL_ID = 0;
         edApplyNoticeMode(false);          // 編輯既有會議一律是完整的會議記錄畫面（通知單模式只用在新建）
         mtSyncYear(m.meeting_date);        // 補舊年度的會議：清單年度要跟著切，關掉跳窗才找得到
         $('#edTitle').text('編輯會議紀錄');
@@ -1148,6 +1193,136 @@ function renderChairSel(){
     var h = '<option value="">請選擇主席</option>';
     ATT.forEach(function(a){ h += '<option value="'+a.user_id+'">'+esc(a.user_name)+'（'+esc(a.dept_name||'')+'）</option>'; });
     $('#edChair').html(h).val(cur);
+}
+
+/* ---------- 會議範本（2026-10-15）：套用＝帶入主題/時間/地點/項目/通知單內容；管理＝管理員維護 ---------- */
+var TPLS = [], TPL_SRC = {}, TPL_ID = 0, TPL_ED = null;
+function loadTemplates(cb){
+    $.getJSON(API, {action:'tpl_list'}, function(r){
+        if (!r.ok) return;
+        TPLS = r.templates||[]; TPL_SRC = r.sources||{};
+        var h = '<option value="">套用會議範本…</option>';
+        TPLS.forEach(function(t){ h += '<option value="'+t.tpl_id+'">'+esc(t.name)+'</option>'; });
+        $('#edTpl').html(h);
+        if (cb) cb();
+    });
+}
+$('#edTpl').on('change', function(){
+    var id = $(this).val(); $(this).val('');
+    if (!id) return;
+    var hasContent = ITEMS_D.length || ITEMS_G.length || ITEMS_A.length;
+    if (hasContent && !confirm('目前已填的會議項目會被範本內容取代，確定套用？')) return;
+    $.getJSON(API, {action:'tpl_render', tpl_id:id, meeting_date:$('#edDate').val()}, function(r){
+        if (!r.ok){ alert(r.error||'套用失敗'); return; }
+        var t = r.template;
+        $('#edSubject').val(t.subject);
+        if (t.location) $('#edLoc').val(t.location);
+        if (t.start_time) $('#edStart').val(t.start_time);
+        if (t.end_time) $('#edEnd').val(t.end_time);
+        edTimeValidate();
+        ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
+        (t.items||[]).forEach(function(it){
+            var row = {content:it.content, due_date:'', owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
+                       owner_users:[], remark:it.remark||'', owner_mode:'dept', confirm_slots:[]};
+            (it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G)).push(row);
+        });
+        if (!EDIT_ID) TPL_ID = +t.tpl_id;   // 只有新建的會議才會連通知單內容一起帶入
+        renderItems('directive'); renderItems('general'); renderItems('announce');
+        alert('已套用「'+t.name+'」。內容裡的【待填：…】要填完才能送出；系統資料是依會議日期 '+dispDate($('#edDate').val())+' 算的，改日期後請重新套用。');
+    });
+});
+
+function openTplMgr(){ loadTemplates(function(){ tplBack(); openMask('tplMask'); }); }
+function tplBack(){
+    TPL_ED = null;
+    $('#tplEditBox,#tplBackBtn,#tplSaveBtn').hide(); $('#tplListBox,#tplCloseBtn').show();
+    $('#tplMgrTitle').text('會議範本管理');
+    var h = '';
+    TPLS.forEach(function(t){
+        h += '<tr><td class="t-left">'+esc(t.name)+'</td><td class="t-left">'+esc(t.subject)+'</td><td>'+(t.items||[]).length+'</td>'
+           + '<td><a href="javascript:;" onclick="tplEdit('+t.tpl_id+')">編輯</a>　<a href="javascript:;" style="color:#DD5138;" onclick="tplDel('+t.tpl_id+')">刪除</a></td></tr>';
+    });
+    $('#tplListBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未建立範本</td></tr>');
+}
+function tplDel(id){
+    if (!confirm('刪除此範本？（已用它建立的會議記錄不受影響）')) return;
+    $.post(API, {action:'tpl_delete', tpl_id:id}, function(r){
+        if (!r.ok){ alert(r.error||'刪除失敗'); return; }
+        loadTemplates(tplBack);
+    }, 'json');
+}
+function tplEdit(id){
+    var t = TPLS.find(function(x){ return +x.tpl_id===+id; });
+    TPL_ED = t ? {tpl_id:+t.tpl_id, notice_depts:String(t.notice_depts||'').split(',').filter(Boolean).map(Number),
+                  items:(t.items||[]).map(function(it){ return {kind:it.kind, content:it.content, remark:it.remark||'', data_src:it.data_src||'',
+                       owner_depts:String(it.owner_depts||'').split(',').filter(Boolean).map(Number)}; })}
+             : {tpl_id:0, notice_depts:[], items:[]};
+    $('#tpName').val(t?t.name:''); $('#tpSubject').val(t?t.subject:''); $('#tpLoc').val(t&&t.location?t.location:'');
+    $('#tpStart').val(t&&t.start_time?t.start_time:''); $('#tpEnd').val(t&&t.end_time?t.end_time:''); $('#tpNotice').val(t&&t.notice_items?t.notice_items:'');
+    $('#tplListBox,#tplCloseBtn').hide(); $('#tplEditBox,#tplBackBtn,#tplSaveBtn').show();
+    $('#tplMgrTitle').text(t ? '編輯會議範本' : '新增會議範本');
+    tplRenderUnits(); tplRenderItems();
+}
+function tplRenderUnits(){
+    $('#tpUnitBox').html((DEPTS||[]).map(function(d){
+        return '<label style="margin:0;font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" class="tp-u" value="'+d.id+'" data-eg-skip'
+             + (TPL_ED.notice_depts.indexOf(+d.id)>=0?' checked':'')+'> '+esc(d.name)+'</label>';
+    }).join(''));
+    $('#tpUnitBox').off('change').on('change', '.tp-u', function(){
+        TPL_ED.notice_depts = $('#tpUnitBox .tp-u:checked').map(function(){ return +this.value; }).get();
+        $('#tpUnitCnt').text('（已勾選 '+TPL_ED.notice_depts.length+' 個）');
+    }).trigger('change');
+}
+var TPL_KIND = {directive:'上級指示要項', general:'會議要項', announce:'宣布事項'};
+function tplItemAdd(kind){ tplCollect(); TPL_ED.items.push({kind:kind, content:'', remark:'', data_src:'', owner_depts:[]}); tplRenderItems(); }
+function tplItemDel(i){ tplCollect(); TPL_ED.items.splice(i,1); tplRenderItems(); }
+function tplItemMove(i,d){ tplCollect(); var j=i+d; if (j<0||j>=TPL_ED.items.length) return; var x=TPL_ED.items.splice(i,1)[0]; TPL_ED.items.splice(j,0,x); tplRenderItems(); }
+function tplOwnerAdd(i, sel){ var v=+sel.value; if (!v) return; tplCollect(); if (TPL_ED.items[i].owner_depts.indexOf(v)<0) TPL_ED.items[i].owner_depts.push(v); tplRenderItems(); }
+function tplOwnerDel(i,v){ tplCollect(); TPL_ED.items[i].owner_depts = TPL_ED.items[i].owner_depts.filter(function(x){ return x!==v; }); tplRenderItems(); }
+function tplCollect(){   // 重畫前先把畫面上改過的文字存回狀態
+    $('#tpItemBox .tp-it').each(function(){
+        var i = +$(this).data('i'), it = TPL_ED.items[i]; if (!it) return;
+        it.content = $(this).find('.tp-c').val(); it.remark = $(this).find('.tp-r').val(); it.data_src = $(this).find('.tp-s').val()||'';
+    });
+}
+function tplRenderItems(){
+    var srcOpts = '<option value="">不帶系統資料</option>' + Object.keys(TPL_SRC).map(function(k){ return '<option value="'+k+'">'+esc(TPL_SRC[k])+'</option>'; }).join('');
+    var h = '';
+    TPL_ED.items.forEach(function(it,i){
+        var chips = it.owner_depts.map(function(v){
+            var d = (DEPTS||[]).find(function(x){ return +x.id===v; });
+            return '<span style="background:#F7E0BD;border-radius:3px;padding:1px 6px;margin-right:4px;font-size:12px;">'+esc(d?d.name:('#'+v))
+                 + ' <a href="javascript:;" onclick="tplOwnerDel('+i+','+v+')" style="color:#DD5138;">×</a></span>';
+        }).join('');
+        var deptSel = '<select style="width:auto;" onchange="tplOwnerAdd('+i+',this)" data-eg-filter="輸入部門名稱篩選…"><option value="">＋加負責部門</option>'
+            + (DEPTS||[]).filter(function(d){ return it.owner_depts.indexOf(+d.id)<0; }).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('') + '</select>';
+        h += '<div class="tp-it" data-i="'+i+'" style="border:1px solid #EADFC8;border-radius:4px;padding:6px;margin-bottom:6px;">'
+           + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;"><b>'+(i+1)+'. '+TPL_KIND[it.kind]+'</b>'
+           + '<span style="margin-left:auto;"><a href="javascript:;" onclick="tplItemMove('+i+',-1)">↑</a> <a href="javascript:;" onclick="tplItemMove('+i+',1)">↓</a> '
+           + '<a href="javascript:;" style="color:#DD5138;" onclick="tplItemDel('+i+')">刪除</a></span></div>'
+           + '<textarea class="tp-c" rows="3" placeholder="制式內容；需要填入處寫【待填：提示文字】">'+esc(it.content)+'</textarea>'
+           + (it.kind==='announce' ? '' : '<div style="margin-top:4px;">負責部門：'+(chips||'<span style="color:#8a6d45;">（未指定，套用後要自己指定）</span>')+' '+deptSel+'</div>')
+           + '<div style="display:flex;gap:6px;margin-top:4px;"><select class="tp-s" style="flex:1;">'+srcOpts+'</select>'
+           + '<input type="text" class="tp-r" maxlength="200" placeholder="備註" value="'+esc(it.remark)+'" style="flex:1;"></div></div>';
+    });
+    $('#tpItemBox').html(h || '<div style="color:#8a6d45;">尚未建立項目，請按下方按鈕新增。</div>');
+    $('#tpItemBox .tp-it').each(function(){ $(this).find('.tp-s').val(TPL_ED.items[+$(this).data('i')].data_src||''); });
+}
+function tplSave(){
+    tplCollect();
+    var name = $.trim($('#tpName').val()), subj = $.trim($('#tpSubject').val());
+    if (!name){ alert('請輸入範本名稱'); return; }
+    if (!subj){ alert('請輸入帶入的會議主題'); return; }
+    var bs = parseTime($('#tpStart').val()), be = parseTime($('#tpEnd').val());
+    if (!bs.ok){ alert('開始時間：'+bs.msg); return; }
+    if (!be.ok){ alert('結束時間：'+be.msg); return; }
+    if (bs.val && be.val && be.val<=bs.val){ alert('結束時間不可早於或等於開始時間'); return; }
+    var items = TPL_ED.items.filter(function(it){ return $.trim(it.content)!==''; });
+    $.post(API, {action:'tpl_save', tpl:JSON.stringify({tpl_id:TPL_ED.tpl_id, name:name, subject:subj, location:$('#tpLoc').val(),
+        start_time:bs.val, end_time:be.val, notice_items:$('#tpNotice').val(), notice_depts:TPL_ED.notice_depts, items:items})}, function(r){
+        if (!r.ok){ alert(r.error||'儲存失敗'); return; }
+        loadTemplates(tplBack);
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '儲存失敗'); });
 }
 
 /* ---------- 常用設定管理（主題綁地點綁時間，管理員維護） ---------- */
@@ -1586,6 +1761,7 @@ function gatherPayload(){
         action:'save', meeting_id: EDIT_ID, subject: $('#edSubject').val(), meeting_date: $('#edDate').val(),
         start_time: $('#edStart').val(), end_time: $('#edEnd').val(), location: $('#edLoc').val(),
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
+        tpl_id: EDIT_ID ? 0 : TPL_ID,
         attendees: JSON.stringify(ATT),
         items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
                     .concat(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); }))
@@ -1683,6 +1859,11 @@ function saveDraft(thenSubmit){
         headMiss = !setErr($('#edEnd'),'errEdEnd', $.trim($('#edEnd').val()) ? '' : '送出前必填：請輸入結束時間') || headMiss;
         headMiss = !setErr($('#edLoc'),'errEdLoc', $.trim($('#edLoc').val()) ? '' : '送出前必填：請輸入會議地點') || headMiss;
         if (headMiss) { alert('送出前，會議日期、開始時間、結束時間、地點都必須填寫（已在欄位下方標示）。'); return; }
+        var blankItems = [].concat(ITEMS_D, ITEMS_G, ITEMS_A).filter(function(it){ return /【待填[：:][^】]*】/.test(it.content||''); });
+        if (blankItems.length) {
+            alert('下列項目還有【待填：…】的內容沒有填寫，請先填入再送出：\n\n' + blankItems.map(function(it){ return '・'+String(it.content).replace(/\s+/g,' ').substr(0,30)+'…'; }).join('\n'));
+            return;
+        }
         var miss = mtReadiness().noOwner;
         if (miss.length) {
             alert('下列項目尚未指定負責人／負責部門，請先指定後再送出：\n\n' + miss.join('\n')

@@ -167,6 +167,92 @@ case 'preset_save': {
     }
     jout(['preset_id'=>$id]);
 }
+/* ===== 會議範本（2026-10-15）：管理員維護；有編輯權者套用 ===== */
+case 'tpl_list': {
+    include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+    if (!$perms['canEdit'] && !$perms['canAdmin']) jerr('無權限', 403);
+    jout(['templates'=>meeting_tpl_list($db), 'sources'=>meeting_tpl_sources()]);
+}
+case 'tpl_save': {
+    include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+    if (!$perms['canAdmin']) jerr('僅管理員可維護會議範本', 403);
+    meeting_tpl_ensure($db);
+    $t = json_decode((string)($_POST['tpl'] ?? ''), true);
+    if (!is_array($t)) jerr('資料格式不正確');
+    $name = trim((string)($t['name'] ?? '')); $subject = trim((string)($t['subject'] ?? ''));
+    if ($name === '') jerr('請輸入範本名稱');
+    if ($subject === '') jerr('請輸入會議主題');
+    $start = trim((string)($t['start_time'] ?? '')) ?: null; $end = trim((string)($t['end_time'] ?? '')) ?: null;
+    foreach ([$start, $end] as $v) if ($v !== null && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $v)) jerr('時間格式不正確');
+    if ($start !== null && $end !== null && $end <= $start) jerr('結束時間不可早於或等於開始時間');
+    $depIds = function ($raw) use ($db) {
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array)$raw))));
+        if (!$ids) return null;
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $q = $db->prepare("SELECT id FROM department WHERE id IN ($in) ORDER BY sort_order, id");
+        $q->execute($ids);
+        $ok = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        return $ok ? implode(',', $ok) : null;
+    };
+    $nDepts = $depIds($t['notice_depts'] ?? []);
+    $notice = trim((string)($t['notice_items'] ?? '')) ?: null;
+    $src = meeting_tpl_sources();
+    $items = [];
+    foreach ((array)($t['items'] ?? []) as $it) {
+        $c = trim((string)($it['content'] ?? ''));
+        if ($c === '') continue;
+        $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
+        $ds = (string)($it['data_src'] ?? ''); if ($ds !== '' && !isset($src[$ds])) jerr('不支援的系統資料來源：'.$ds);
+        $items[] = [$kind, $c, $kind === 'announce' ? null : $depIds($it['owner_depts'] ?? []),
+                    trim((string)($it['remark'] ?? '')) ?: null, $ds ?: null];
+    }
+    $id = (int)($t['tpl_id'] ?? 0);
+    try {
+        $db->beginTransaction();
+        if ($id > 0) {
+            $db->prepare("UPDATE meeting_tpl SET name=?, subject=?, location=?, start_time=?, end_time=?, notice_items=?, notice_depts=?, updated_at=NOW() WHERE tpl_id=?")
+               ->execute([$name, $subject, trim((string)($t['location'] ?? '')) ?: null, $start, $end, $notice, $nDepts, $id]);
+            $db->prepare("DELETE FROM meeting_tpl_item WHERE tpl_id=?")->execute([$id]);
+        } else {
+            $n = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM meeting_tpl")->fetchColumn();
+            $db->prepare("INSERT INTO meeting_tpl (name, subject, location, start_time, end_time, notice_items, notice_depts, sort_order, created_by, created_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$name, $subject, trim((string)($t['location'] ?? '')) ?: null, $start, $end, $notice, $nDepts, $n, $uid]);
+            $id = (int)$db->lastInsertId();
+        }
+        $ins = $db->prepare("INSERT INTO meeting_tpl_item (tpl_id, kind, sort_order, content, owner_depts, remark, data_src) VALUES (?,?,?,?,?,?,?)");
+        foreach ($items as $i => $r) $ins->execute([$id, $r[0], $i, $r[1], $r[2], $r[3], $r[4]]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['tpl_id'=>$id]);
+}
+case 'tpl_delete': {
+    include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+    if (!$perms['canAdmin']) jerr('僅管理員可維護會議範本', 403);
+    meeting_tpl_ensure($db);
+    $db->prepare("UPDATE meeting_tpl SET is_active=0 WHERE tpl_id=?")->execute([(int)($_POST['tpl_id'] ?? 0)]);
+    jout([]);
+}
+/* 套用：依會議日期把系統資料算好附在項目內容後面（日期改了要重新套用） */
+case 'tpl_render': {
+    include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+    if (!$perms['canEdit'] && !$perms['canAdmin']) jerr('無權限', 403);
+    $id = (int)($_GET['tpl_id'] ?? 0);
+    $date = (string)($_GET['meeting_date'] ?? ''); if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
+    $found = null;
+    foreach (meeting_tpl_list($db) as $t) if ((int)$t['tpl_id'] === $id) $found = $t;
+    if (!$found) jerr('找不到此範本');
+    $cache = [];
+    foreach ($found['items'] as &$it) {
+        $ds = (string)($it['data_src'] ?? '');
+        if ($ds !== '') {
+            if (!isset($cache[$ds])) $cache[$ds] = meeting_tpl_source_text($db, $ds, $date);
+            $it['content'] = rtrim((string)$it['content']) . "\n" . $cache[$ds];
+        }
+    }
+    unset($it);
+    jout(['template'=>$found]);
+}
 case 'preset_delete': {
     if (!$perms['canAdmin']) jerr('僅管理員可維護常用設定', 403);
     $db->prepare("DELETE FROM meeting_preset WHERE preset_id=?")->execute([(int)($_POST['preset_id'] ?? 0)]);
@@ -487,6 +573,16 @@ case 'save': {
                           VALUES (?,?,?,?,?,?,?,?,?, 'draft', ?, ?)")
                ->execute([$subject, $date, $start, $end, $loc, $chairUid ?: null, $chairName ?: null, $uid, $recorderName, $uid, $uname]);
             $id = (int)$db->lastInsertId();
+            // 套用會議範本建立的新會議：通知單的會議要項與應出席單位一併帶入（通知單狀態不動，仍要自己存草稿）
+            $tplId = (int)($_POST['tpl_id'] ?? 0);
+            if ($tplId > 0) {
+                include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+                meeting_tpl_ensure($db);
+                $tq = $db->prepare("SELECT notice_items, notice_depts FROM meeting_tpl WHERE tpl_id=?");
+                $tq->execute([$tplId]);
+                if ($tr = $tq->fetch(PDO::FETCH_ASSOC))
+                    $db->prepare("UPDATE meeting_record SET notice_items=?, notice_depts=? WHERE meeting_id=?")->execute([$tr['notice_items'], $tr['notice_depts'], $id]);
+            }
         }
 
         // 出席人員：整批取代（保留已簽到狀態）
