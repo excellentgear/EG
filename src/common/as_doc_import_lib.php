@@ -99,10 +99,19 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
         if ($conv !== false && mb_check_encoding($conv, 'UTF-8')) $raw = $conv;
     }
 
+    // 先把「夾在段落中間的浮動表格」搬到該段之後，不然 DOM 解析會就地把段落切成兩半
+    [$raw, $tblMoved] = adi_float_tables_out($raw);
+
     $res = adi_transform($db, $raw, $work, $contentId, $uid);
+    $res['tbl_moved'] = $tblMoved;
+
+    // 有自動編號清單才多轉一次純文字（多花約 10 秒），拿它的實際編號當準。
+    // ⚠ 一定要在 adi_rrmdir() 之前——工作資料夾一刪，原始檔與轉檔暫存都沒了
+    $numMap = (stripos((string)$res['html'], '<ol') !== false)
+        ? adi_txt_number_map($tmpSrc, $work) : [];
     adi_rrmdir($work);
 
-    [$res['html'], $res['list_num']] = adi_lists_to_text_numbers((string)$res['html']);
+    [$res['html'], $res['list_num']] = adi_lists_to_text_numbers((string)$res['html'], $numMap);
     [$res['html'], $wrapMerged] = adi_merge_wrapped_paragraphs((string)$res['html']);
     $res['wrap_merged'] = $wrapMerged;
     [$res['html'], $res['font_fixed']] = adi_fix_cjk_fonts((string)$res['html']);
@@ -703,7 +712,7 @@ function adi_fix_cjk_fonts(string $html): array
  *
  * @return array{0:string,1:int} [處理後 HTML, 改寫的項目數]
  */
-function adi_lists_to_text_numbers(string $html): array
+function adi_lists_to_text_numbers(string $html, array $numMap = []): array
 {
     if ($html === '' || stripos($html, '<ol') === false) return [$html, 0];
     $dom = new DOMDocument('1.0', 'UTF-8');
@@ -719,7 +728,7 @@ function adi_lists_to_text_numbers(string $html): array
     $xp = new DOMXPath($dom);
     foreach (iterator_to_array($xp->query('//ol[not(ancestor::ol)]')) as $ol) {
         $out = [];
-        adi_ol_collect($ol, [], $dom, $out, $cnt);
+        adi_ol_collect($ol, [], $dom, $out, $cnt, $numMap);
         foreach ($out as $node) $ol->parentNode->insertBefore($node, $ol);
         $ol->parentNode->removeChild($ol);
     }
@@ -729,7 +738,7 @@ function adi_lists_to_text_numbers(string $html): array
 }
 
 /** 走訪一層 <ol>，把每個 <li> 收成帶編號的 <p>（見 adi_lists_to_text_numbers） */
-function adi_ol_collect(DOMElement $ol, array $stack, DOMDocument $dom, array &$out, int &$cnt): void
+function adi_ol_collect(DOMElement $ol, array $stack, DOMDocument $dom, array &$out, int &$cnt, array $numMap = []): void
 {
     if (count($stack) > 8) return;                       // 防爆：真實文件不會超過這個層數
     $start = (int)$ol->getAttribute('start');
@@ -744,19 +753,47 @@ function adi_ol_collect(DOMElement $ol, array $stack, DOMDocument $dom, array &$
         if ($c->nodeType !== XML_ELEMENT_NODE) continue;
         $tag = strtolower($c->nodeName);
         if ($tag === 'li') {
-            adi_li_emit($c, array_merge($stack, [$n]), $dom, $out, $cnt);
+            adi_li_emit($c, array_merge($stack, [$n]), $dom, $out, $cnt, $numMap);
             $lastNum = $n; $n++;
         } elseif ($tag === 'ol') {
             // 有 li 時，這個 ol 是「上一個 li 的子清單」；沒有 li 時它就是下一層本身
-            adi_ol_collect($c, array_merge($stack, [$hasLi ? $lastNum : $n]), $dom, $out, $cnt);
+            adi_ol_collect($c, array_merge($stack, [$hasLi ? $lastNum : $n]), $dom, $out, $cnt, $numMap);
         }
     }
 }
 
 /** 把一個 <li> 的內容收成 <p>，第一段開頭插入編號文字（見 adi_lists_to_text_numbers） */
-function adi_li_emit(DOMElement $li, array $num, DOMDocument $dom, array &$out, int &$cnt): void
+function adi_li_emit(DOMElement $li, array $num, DOMDocument $dom, array &$out, int &$cnt, array $numMap = []): void
 {
     $label = implode('.', $num);
+    // 同一份 Word 常常「清單層級」與「手打編號」並用：段落掛在 <ol> 底下（為了縮排），
+    // 文字本身卻已經寫好「5.1 AS 9100要求」。再補一個算出來的編號就變成「1 5.1 …」
+    //（使用者 2026-10-15 回報）。所以開頭已經是編號樣式的一律不補，只攤平。
+    $own = '';
+    foreach ($li->childNodes as $c0) {
+        if ($c0->nodeType === XML_ELEMENT_NODE && strtolower($c0->nodeName) === 'ol') break;
+        $own .= $c0->textContent;
+    }
+    $own = trim(preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', $own));
+    $hasOwnNo = $own !== '' && (
+        preg_match('/^\d{1,2}(\.\d{1,2})*[\s.、:：]/u', $own)      // 5.1 ／ 6.2.1 ／ 1.
+        || preg_match('/^[a-zA-Z]\s*[\)）.]/', $own)                 // a) ／ A.
+        || preg_match('/^[\(（]?\d{1,2}[\)）]/u', $own)              // 1) ／ (1)
+    );
+    if ($hasOwnNo) $label = '';
+    /* LibreOffice 寫在 HTML 上的 <ol start> 不可靠——實例 2-GM-03：「6.5 風險應對」那一層
+       它照樣輸出 start="4"，照算會變成第二個 6.4，之後的條文編號整串錯掉。
+       所以同一份檔案另外轉一次純文字（那裡的自動編號是展開好的、就是 Word 顯示的值），
+       用段落文字對回去取真編號；對不到才退回推算值。 */
+    if (!$hasOwnNo && $numMap) {
+        $k = adi_num_key($own);
+        if ($k !== '' && isset($numMap[$k]) && $numMap[$k] !== ''
+            // 只在「層數一樣」時才採用：巢狀 <ol> 的深度是可信的，錯的只是數值，
+            // 這一關可以擋掉短句子誤對到別層編號（例如 4.6 的定義對到 6.5 的章節）
+            && substr_count($numMap[$k], '.') === substr_count($label, '.')) {
+            $label = $numMap[$k];
+        }
+    }
     $first = true;
     $carry = null;   // 還沒有 p 可掛的零散內容（裸文字、<span>）
     $flush = function () use (&$carry, &$out, &$first, $dom, $label, &$cnt) {
@@ -768,7 +805,7 @@ function adi_li_emit(DOMElement $li, array $num, DOMDocument $dom, array &$out, 
         $tag = ($c->nodeType === XML_ELEMENT_NODE) ? strtolower($c->nodeName) : '';
         if ($tag === 'ol') {                       // 子清單：編號接在這個 li 底下
             $flush();
-            adi_ol_collect($c, $num, $dom, $out, $cnt);
+            adi_ol_collect($c, $num, $dom, $out, $cnt, $numMap);
             continue;
         }
         if ($tag === 'p' || $tag === 'div') {
@@ -792,9 +829,115 @@ function adi_li_emit(DOMElement $li, array $num, DOMDocument $dom, array &$out, 
 /** 在區塊最前面插入「編號＋空白」（編號沿用文件裡其他手打編號的西文字型） */
 function adi_li_label(DOMElement $block, string $label, DOMDocument $dom): void
 {
+    if ($label === '') return;      // 文字本身已經有編號（見 adi_li_emit）
     $sp = $dom->createElement('span');
     $sp->setAttribute('style', 'font-family:Times New Roman, serif');
     $sp->appendChild($dom->createTextNode($label));
     $block->insertBefore($dom->createTextNode(' '), $block->firstChild);
     $block->insertBefore($sp, $block->firstChild);
+}
+
+/**
+ * 把「夾在段落中間的浮動表格」移到那一段之後，段落文字才不會被切成兩半。
+ *
+ * Word 裡錨在段落中間的浮動表格（文字方塊內含表格），LibreOffice 會輸出成
+ * `<p>…在<span style="float:left">…<table>…</table>…</span>分析過程中，…</p>`。
+ * HTML 不允許 <table> 在 <p> 裡面，解析時段落會被就地切斷——實例 2-GM-03：
+ * 「6.3.2 在」與「分析過程中，必要時可修正…」被拆成兩段，中間夾著表 B、表 C，
+ * 而原文是同一句話（使用者 2026-10-15 回報）。
+ *
+ * 做法是在**解析成 DOM 之前**先用字串把整個框架搬到該段落的 </p> 之後：
+ * 文字自然接回一句，表格仍留在這一段後面，與 Word 的閱讀順序一致。
+ * 只搬「含表格」的框架——流程圖那種只有文字的框架另有處理，動它會打亂圖的位置。
+ *
+ * @return array{0:string,1:int} [處理後 HTML, 搬動的框架數]
+ */
+function adi_float_tables_out(string $html): array
+{
+    if ($html === '' || stripos($html, 'float') === false) return [$html, 0];
+    $moved = 0;
+    $i = 0;
+    $guard = 0;
+    while ($guard++ < 300) {
+        if (!preg_match('#<span\b[^>]*style="[^"]*float\s*:[^"]*"[^>]*>#i',
+                        $html, $m, PREG_OFFSET_CAPTURE, $i)) break;
+        $open    = (int)$m[0][1];
+        $inner0  = $open + strlen($m[0][0]);
+        // 配對自己的 </span>（框架裡還會有別的 span）
+        $depth = 1; $j = $inner0;
+        while ($depth > 0) {
+            if (!preg_match('#<(/?)span\b[^>]*>#i', $html, $m2, PREG_OFFSET_CAPTURE, $j)) { $j = strlen($html); break; }
+            $depth += ($m2[1][0] === '/') ? -1 : 1;
+            $j = (int)$m2[0][1] + strlen($m2[0][0]);
+        }
+        $end  = $j;
+        $frag = substr($html, $open, $end - $open);
+        if (stripos($frag, '<table') === false) { $i = $inner0; continue; }
+
+        // 這個框架真的在某個 <p> 裡面嗎？（在 <td> 裡的表格不能亂搬）
+        $before    = substr($html, 0, $open);
+        $lastOpen  = strripos($before, '<p');
+        $lastClose = strripos($before, '</p>');
+        if ($lastOpen === false || ($lastClose !== false && $lastClose > $lastOpen)) { $i = $inner0; continue; }
+
+        $pEnd = stripos($html, '</p>', $end);
+        if ($pEnd === false) { $i = $inner0; continue; }
+        $after = $pEnd + 4;
+
+        $html = substr($html, 0, $open) . substr($html, $end, $after - $end)
+              . $frag . substr($html, $after);
+        $moved++;
+        $i = $open + ($after - $end) + strlen($frag);   // 跳過剛搬過去的那一段，免得又掃到它
+    }
+    return [$html, $moved];
+}
+
+/** 段落文字 → 對照用的鍵：空白全部拿掉、只取前 24 個字（見 adi_txt_number_map） */
+function adi_num_key(string $text): string
+{
+    $t = preg_replace('/[\s\x{00A0}\x{3000}]+/u', '', $text);
+    $t = (string)$t;
+    return $t === '' ? '' : mb_substr($t, 0, 24);
+}
+
+/**
+ * 另外把同一份 Word 轉成純文字，建立「段落文字 → 真正的條文編號」對照表。
+ *
+ * 為什麼需要：LibreOffice 的 HTML 輸出用 `<ol start="N">` 表示自動編號，但那個 N 並不可靠
+ *（實例 2-GM-03：「6.5 風險應對」仍輸出 start="4"），照算會得到第二個 6.4，
+ * 之後的條文編號整串跟著錯。純文字輸出則是把自動編號**展開成文字**，
+ * 跟 Word 畫面上看到的一模一樣，所以拿它當唯一可信的來源。
+ *
+ * 同一個鍵對到兩種不同編號時一律捨棄（寧可退回推算，也不要給一個錯的編號）。
+ *
+ * @return array<string,string> 文字鍵 → 編號（例 "6.5"）
+ */
+function adi_txt_number_map(string $srcFile, string $workDir): array
+{
+    $txt = eg_att_soffice_convert($srcFile, $workDir, 180, 'txt:Text (encoded):UTF8');
+    if (!$txt || !is_file($txt)) return [];
+    $raw = (string)@file_get_contents($txt);
+    if ($raw === '') return [];
+    if (!mb_check_encoding($raw, 'UTF-8')) {
+        $conv = @mb_convert_encoding($raw, 'UTF-8', 'BIG-5');
+        if ($conv !== false && mb_check_encoding($conv, 'UTF-8')) $raw = $conv;
+    }
+    $map = [];
+    $bad = [];
+    /* 編號不一定在行首：純文字會把頁首表格的欄位也印在同一行
+       （實例：「頁版別\t2.0\t    6.5.2 風險小組提出之應對方案…」），所以整行搜尋。
+       只收**含小數點**的編號：頂層的單一數字用 <ol start> 推算本來就準，
+       而「10萬以上」這種表格內容會被誤當成編號 10。 */
+    $re = '/(?:^|[\s\x{00A0}\x{3000}])(\d{1,2}(?:\.\d{1,2}){1,5})[\s\x{00A0}\x{3000}]*([^\d\s\x{00A0}\x{3000}][^\r\n]*)/u';
+    foreach (preg_split('/\r\n|\r|\n/', $raw) as $line) {
+        if (!preg_match_all($re, $line, $ms, PREG_SET_ORDER)) continue;
+        foreach ($ms as $m) {
+            $k = adi_num_key(trim($m[2]));
+            if ($k === '' || mb_strlen($k) < 4) continue;   // 太短的鍵容易誤中
+            if (isset($bad[$k])) continue;
+            if (isset($map[$k]) && $map[$k] !== $m[1]) { unset($map[$k]); $bad[$k] = true; continue; }
+            $map[$k] = $m[1];
+        }
+    }
+    return $map;
 }
