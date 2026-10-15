@@ -428,9 +428,15 @@
         var c = new fabric.Circle({ left: pt.x, top: pt.y, radius: clickable ? 5 : 4,
           originX: 'center', originY: 'center',
           fill: clickable ? '#F0A24B' : '#fff', stroke: clickable ? '#fff' : '#F0A24B', strokeWidth: 2,
-          // 可點的錨點才收事件：拖連線端點時顯示的那一批要 evented:false，
-          // 不然滑鼠會打在錨點上、拖不到真正的端點
-          selectable: false, evented: !!clickable, hoverCursor: 'crosshair',
+          /* 可點的錨點才收事件：拖連線端點時顯示的那一批要 evented:false，
+             不然滑鼠會打在錨點上、拖不到真正的端點。
+             ⚠ 可點的那一批一定要整個鎖住（lockMovement／不可縮放旋轉）：
+               只設 selectable:false 的話，在錨點上按下去 fabric 仍會建立拖曳，
+               結果是**整個圖形被拖走**（實測圖形從 380,260 被拖到 104,84），
+               錨點位置跟著跑掉，放開時當然連不到任何東西。 */
+          selectable: !!clickable, evented: !!clickable, hoverCursor: 'crosshair',
+          lockMovementX: true, lockMovementY: true, lockScalingX: true, lockScalingY: true,
+          lockRotation: true, hasControls: false, hasBorders: false,
           objectCaching: false, egRole: 'port', egPortId: o.egId, egPortKey: k });
         cv.add(c); c.bringToFront();
         portDots.push(c);
@@ -446,6 +452,7 @@
   var linkFrom = null;     // {id, port, x, y}
   var linkPrev = null;     // 預覽線
   var linkDot = null;      // 預覽線起點的空心圓
+  var linkDownAt = null;   // 按在錨點上的位置（判斷是「點一下」還是「拖曳」）
 
   function clearLink() {
     if (linkPrev) { cv.remove(linkPrev); linkPrev = null; }
@@ -489,12 +496,19 @@
   function finishLink(dot) {
     if (!linkFrom) return;
     if (dot.egPortId === linkFrom.id && dot.egPortKey === linkFrom.port) { clearLink(); return; }
+    finishLinkAt({ id: dot.egPortId, port: dot.egPortKey, x: dot.left, y: dot.top });
+  }
+
+  /** 真正產生連線（點選式與拖曳式共用） */
+  function finishLinkAt(target) {
+    if (!linkFrom || !target) return;
     var kind = (el('egfConnKind') && el('egfConnKind').value) || 'arrow';
-    var ln = addConn(kind, linkFrom.x, linkFrom.y, dot.left, dot.top);
+    var ln = addConn(kind, linkFrom.x, linkFrom.y, target.x, target.y);
     ln.egPA = { id: linkFrom.id, port: linkFrom.port };
-    ln.egPB = { id: dot.egPortId, port: dot.egPortKey };
+    ln.egPB = { id: target.id, port: target.port };
     syncConn(ln);
     clearLink();
+    linkDownAt = null;
     snapshot();
     stat('已連線（兩端都扣在錨點上，移動圖形線會跟著走）');
   }
@@ -1005,6 +1019,7 @@
            連錯的箭頭不必刪掉重畫，點一下新的錨點就改好了（2026-10-15 使用者回報）。 */
         var act = cv.getActiveObject();
         if (act && act.egRole === 'conn') { rebindConnEnd(act, t); return; }
+        linkDownAt = { x: t.left, y: t.top };
         startLink(t);
         return;
       }
@@ -1019,10 +1034,20 @@
       if (!e || !e.e) return;
       var p = cv.getPointer(e.e);
       if (linkFrom) {
-        if (linkPrev) { linkPrev.set({ x2: p.x, y2: p.y }); linkPrev.setCoords(); cv.requestRenderAll(); }
+        if (linkPrev) { linkPrev.set({ x2: p.x, y2: p.y }); linkPrev.setCoords(); }
+        /* 連線中一樣要把滑鼠附近圖形的錨點畫出來——不畫的話使用者移過去
+           看不到也點不到第二個錨點，就會卡在「點了第一個就動不了」
+           （2026-10-15 回報）。 */
+        hoverPorts(p);
+        cv.requestRenderAll();
         return;
       }
       if (e.e.buttons) return;                      // 按著滑鼠＝正在拖東西
+      hoverPorts(p);
+    });
+
+    /** 滑鼠附近有圖形就顯示它的錨點（連線中與平常都用這一支） */
+    function hoverPorts(p) {
       var over = null;
       cv.getObjects().forEach(function (o) {
         if (o.egRole !== 'shape') return;
@@ -1037,10 +1062,29 @@
            一定要把端點控制圓再提到最上層。 */
         if (hA) hA.bringToFront();
         if (hB) hB.bringToFront();
-        cv.requestRenderAll();
-      } else if (portDots.length) { clearPortDots(); cv.requestRenderAll(); }
+        if (linkPrev) linkPrev.bringToFront();
+        if (linkDot)  linkDot.bringToFront();
+      } else if (portDots.length && !linkFrom) { clearPortDots(); }
+    }
+    cv.on('mouse:up', function (e) {
+      clearGuides();
+      /* 兩種連線方式都支援：
+         ①點一下錨點 → 移動 → 再點第二個錨點
+         ②按住錨點拖到另一個錨點再放開（滑鼠移動超過 8px 才算拖曳，
+           不然「點一下」的 mouseup 會在原地就把連線收掉）。 */
+      if (!linkFrom || !linkDownAt || !e) return;
+      // 放開時優先用 fabric 給的場景座標：getPointer 在 mouseup 這個時間點
+      // 可能拿到已經重設過的快取值，算出來的位置會對不上任何錨點
+      var p = e.absolutePointer || (e.e ? cv.getPointer(e.e) : null);
+      if (!p) return;
+      var moved = Math.abs(p.x - linkDownAt.x) + Math.abs(p.y - linkDownAt.y);
+      if (moved < 8) return;
+      var hit = nearestPort(p.x, p.y);
+      if (hit && !(hit.id === linkFrom.id && hit.port === linkFrom.port)) {
+        finishLinkAt(hit);
+      }
+      linkDownAt = null;
     });
-    cv.on('mouse:up', function () { clearGuides(); });
     cv.on('object:scaling', function (e) {
       if (e.target.egRole === 'shape') { syncLabel(e.target); syncBoundConns(e.target); }
     });
@@ -1060,6 +1104,9 @@
 
     function onSel() {
       var objs = cv.getActiveObjects();
+      /* 錨點為了「按得下去又不會把圖形拖走」設成 selectable，但它只是提示用的，
+         被選起來會讓連線的端點控制圓消失，所以選到它就立刻放掉。 */
+      if (objs.length === 1 && objs[0].egRole === 'port') { cv.discardActiveObject(); return; }
       clearHandles();
       if (objs.length === 1 && objs[0].egRole === 'conn') showHandles(objs[0]);
     }
