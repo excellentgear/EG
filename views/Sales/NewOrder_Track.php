@@ -2504,6 +2504,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         $ret = el_reply_add($pdo, $logId, $itemIds, $_POST, $id, $nowL, $todayL);
         if ($resolve) {
             foreach ($itemIds as $iid) el_item_set_status($pdo, $logId, (int)$iid, 'resolved', '', $nowL);
+        } elseif (!empty($_POST['reopen'])) {
+            // 追問：已處理／已回覆的問題再提問＝退回待回覆（只用在人工問題，系統提醒與備註不適用）。
+            // 提問本來就是 ot_edit 的事，不需要「標記已處理」權限。
+            $chkRe = $pdo->prepare("SELECT status FROM eng_log_item WHERE id=? AND log_id=? AND is_note=0 AND src_rule_id IS NULL AND voided_at IS NULL");
+            foreach ($itemIds as $iid) {
+                $chkRe->execute([(int)$iid, $logId]);
+                $stRe = $chkRe->fetchColumn();
+                if ($stRe === 'resolved' || $stRe === 'dropped' || $stRe === 'answered') el_item_set_status($pdo, $logId, (int)$iid, 'waiting', '', $nowL);
+            }
         }
         el_order_case_sync_status($pdo, $logId, $nowL);
         $pdo->commit();
@@ -4737,6 +4746,7 @@ foreach($dCounts as $c) {
         .ate-q-asked { font-size:10px; color:#aaa; margin-left:auto; white-space:nowrap; }
         .ate-q-question { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; margin-bottom:4px; }
         .ate-q-reply { background:#FAF6EF; border-radius:3px; padding:4px 7px; margin:4px 0; }
+        .ate-q-reply-ext { margin-left:22px; border-left:3px solid #E3B873; }
         .ate-q-reply-meta { font-size:10px; color:#998a6e; display:block; margin-bottom:2px; }
         .ate-q-reply-content { font-size:12px; color:#444; white-space:pre-wrap; word-break:break-word; }
         .ate-q-item-actions { display:flex; gap:6px; margin-top:4px; }
@@ -9655,11 +9665,13 @@ foreach($dCounts as $c) {
         }
 
         function ateQItemHtml(it) {
-            var repliesHtml = '';
+            var repliesHtml = '', extOn = false;
             (it.replies || []).forEach(function(r) {
+                // 追問之後的內容（追問本身與對方的回答）一律縮排，才看得出是延伸問題
+                if (String(r.content || '').indexOf('【追問】') === 0) extOn = true;
                 var when = r.replied_on ? (typeof egFmtDate === 'function' ? egFmtDate(r.replied_on) : r.replied_on) : '';
                 var chLabel = (r.channel && ATE_Q.channels && ATE_Q.channels[r.channel]) ? ATE_Q.channels[r.channel] : '';
-                repliesHtml += '<div class="ate-q-reply"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
+                repliesHtml += '<div class="ate-q-reply' + (extOn ? ' ate-q-reply-ext' : '') + '"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
                     (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
             });
             // 設計備註已凍結時（kind==='note' && ATE_Q.frozen）唯讀：不給回覆/標記已處理，
@@ -9677,7 +9689,8 @@ foreach($dCounts as $c) {
             // 「已確認／取消確認」取代「已處理」，每一次都記錄是誰、什麼時候
             var al = it.alert || null;
             var actions = (frozenView || noteView || voidView) ? ''
-                : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
+                : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> '
+                  + ((!al && ATE_Q.kind === 'note' && (it.status === 'resolved' || it.status === 'dropped' || it.status === 'answered')) ? '追問／PS補充' : '回覆') + '</button>';
             if (al && ATE_Q.canOdaConfirm && !frozenView && !voidView) {
                 actions += al.confirmed
                     ? '<button type="button" class="ate-q-btn" onclick="odaConfirm(' + it.id + ',false)"><i class="fa fa-undo"></i> 取消確認</button>'
@@ -9699,6 +9712,8 @@ foreach($dCounts as $c) {
             var askedTxt = it.asked_at ? (typeof egFmtDate === 'function' ? egFmtDate(it.asked_at) : it.asked_at) : '';
             var rns = 'reply' + it.id;
             var replyBoxHtml = '';
+            var reopenable = !al && !noteView && !voidView && ATE_Q.kind === 'note'
+                && (it.status === 'resolved' || it.status === 'dropped' || it.status === 'answered');
             // 備註沒有「回覆」按鈕，連回覆框都不要渲染（渲染了也永遠打不開，只是白白多一組
             // 對象選擇器的狀態與 DOM）
             if (!frozenView && !noteView) {
@@ -9714,14 +9729,23 @@ foreach($dCounts as $c) {
                     +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
                     // 回覆方式（電話／Line／E-mail…使用者交辦，預設電話）：選項即時取自管理員
                     // 維護的 eng_log_channel（走 eng_log.php「維護回覆方式」），不是寫死的清單
+                    // 已處理／已回覆的問題：可選「追問」（退回待回覆）或「PS 補充」（只留說明、狀態不變）
+                    +   (reopenable
+                          ? '<div class="ate-q-replyby"><label>送出方式：</label>'
+                          +   '<label style="font-weight:normal;margin-right:12px;"><input type="radio" name="ate-q-mode-' + it.id + '" value="ps" checked onchange="ateQModeChange(' + it.id + ')"> PS 補充說明（維持目前狀態）</label>'
+                          +   '<label style="font-weight:normal;"><input type="radio" name="ate-q-mode-' + it.id + '" value="ask" onchange="ateQModeChange(' + it.id + ')"> 進一步提問（同一問題的延伸，退回待回覆）</label></div>'
+                          : '')
+                    // PS 補充說明是設計自己的備註，不需要回覆方式／對象；只有「進一步提問」才要指定問誰、怎麼問
+                    +   '<div id="ate-q-askonly-' + it.id + '"' + (reopenable ? ' style="display:none;"' : '') + '>'
                     +   '<div class="ate-q-replyby"><label>回覆方式：</label>' + ateQChannelHtml(it.id) + '</div>'
                     // 預設帶出這條問題本來指定的對象（使用者仍可改成實際回覆的人，例如業務轉述
                     // 客戶窗口的話），與新增問題共用同一套按鈕式選擇器
                     +   '<div class="ate-q-replyby"><label>' + replyByLabel + '：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
                     +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
                     +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
+                    +   '</div>'
                     +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
-                    +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
+                    +   '<button type="button" class="btn btn-xs btn-warm" id="ate-q-sendbtn-' + it.id + '" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
                     + '</div>';
             }
             // 備註(PS) 徽章：is_note=1 時這一條不列入待處理問題計數，純粹記錄內容
@@ -10124,18 +10148,29 @@ foreach($dCounts as $c) {
             return s;
         }
 
+        function ateQModeChange(itemId) {
+            var ask = $('input[name="ate-q-mode-' + itemId + '"]:checked').val() === 'ask';
+            $('#ate-q-askonly-' + itemId).toggle(ask);
+            $('#ate-q-sendbtn-' + itemId).html('<i class="fa fa-paper-plane"></i> ' + (ask ? '送出問題' : '送出回覆'));
+            $('#ate-q-replyok-' + itemId).closest('label').toggle(!ask);
+        }
         function ateQSubmitReply(itemId) {
             var $ta = $('#ate-q-replytxt-' + itemId);
             var txt = $.trim($ta.val());
             if (!txt) { showToast('請輸入回覆內容'); return; }
-            var replyBy = ateQTpComposeReplyBy(ATE_Q.replyState[itemId]);
+            var psOnly = $('input[name="ate-q-mode-' + itemId + '"]:checked').val() === 'ps';
+            var replyBy = psOnly ? '' : ateQTpComposeReplyBy(ATE_Q.replyState[itemId]);
             // 回覆日期預設今天，可自行改成實際回覆的那一天（例如客戶是電話回的、隔幾天才補登）；
             // 不可以是未來日期（後端 el_reply_add() 同規則再擋一次）
             var repliedOn = $('#ate-q-replydate-' + itemId).val() || '';
             var resolve = $('#ate-q-replyok-' + itemId).is(':checked') ? 1 : 0;
-            var channel = ATE_Q.replyChannel[itemId] || '';
+            var channel = psOnly ? '' : (ATE_Q.replyChannel[itemId] || '');
+            var $mode = $('input[name="ate-q-mode-' + itemId + '"]:checked');
+            var reopen = ($mode.length && $mode.val() === 'ask') ? 1 : 0;
+            if (reopen) { resolve = 0; txt = '【追問】' + txt; }
+            else if ($mode.length) txt = '【PS】' + txt;
             $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve, channel: channel }, function(res) {
+                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve, reopen: reopen, channel: channel }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
                 // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
                 $ta.css('background-color', '#d4edda');
@@ -11422,6 +11457,7 @@ foreach($dCounts as $c) {
                 astagRenderDefs();
                 astagRenderOthers();
                 astagRenderFixed();
+                astagSnapMark();                            // 以剛載入的內容為基準，之後有改動才算未儲存
                 astagRenderSummary(res.summary || {});
                 ASTAGCFG.zpExcl = res.zeroprice_excl_keys || [];
                 astagZpRender();
@@ -11764,7 +11800,22 @@ foreach($dCounts as $c) {
             ASTAGCFG.rows.splice(i, 1);
             astagRenderDefs();
         }
-        function astagSaveDefs() {
+        /** 目前畫面上兩張表的內容（送後端的 rows；同時用來判斷「有沒有未儲存的修改」） */
+        function astagPayload() {
+            return ASTAGCFG.rows.map(function (r) {
+                return { kind: 'process', tag_id: r.tag_id, process_type_id: r.process_type_id,
+                         proc_name: r.proc_name, sub_nos: r.sub_nos, scope: r.scope, is_active: r.is_active };
+            }).concat(ASTAGCFG.others.map(function (o) {
+                return { kind: 'other', tag_id: o.tag_id, process_type_id: o.process_type_id,
+                         proc_name: o.proc_name, sub_nos: o.sub_nos, scope: o.scope,
+                         own_company_only: o.own_company_only, is_active: o.is_active };
+            }));
+        }
+        function astagSnapMark() { ASTAGCFG.snap = JSON.stringify(astagPayload()); }
+        function astagIsDirty() { return ASTAGCFG.snap !== undefined && ASTAGCFG.snap !== JSON.stringify(astagPayload()); }
+
+        function astagSaveDefs(done) {
+            if (typeof done !== 'function') done = null;   // onclick 會傳入 event，不是回呼
             $('#astag-defs-err').hide().empty();
             $('#astag-defs-msg').css('color', '#888').text('儲存中…');
             // 兩張表一起送，各自帶 kind；排序交給後端算（稽核製程在前、自訂固定選項排在內建三個之後）
@@ -11782,9 +11833,12 @@ foreach($dCounts as $c) {
                     $('#astag-defs-err').html((res.errors && res.errors.length
                         ? res.errors.map(function (e) { return '・' + escapeHtml(e); }).join('<br>')
                         : escapeHtml(res.message || '儲存失敗'))).show();
+                    if (done) done(false);
                     return;
                 }
                 $('#astag-defs-msg').css('color', '#27ae60').text(res.message || '已儲存');
+                astagSnapMark();                            // 已存好＝不再算未儲存（避免儲存設定重複送出）
+                if (done) done(true);
                 astagSettingsOpen();                    // 重新載入（拿到新的 tag_id、使用筆數，並同步篩選列的下拉）
                 if ($('#newOrderModal').hasClass('in')) astagLoadOptions(ASTAG.loadedClient || '', true);
             });
@@ -14955,6 +15009,15 @@ foreach($dCounts as $c) {
               </div>
               <div class="oc-edit-row" style="align-items:flex-start;"><label style="margin-top:5px;">業務備註</label><textarea id="oc-e-ps" class="form-control input-sm oc-input" rows="2" style="height:auto;"></textarea></div>
             </div>
+            <!-- 拆批交期（只有已拆批的訂單才會顯示；未填＝不變更） -->
+            <div class="main-card" id="oc-split-card" style="margin-bottom:10px;display:none;">
+              <div style="font-weight:700;color:#444;border-bottom:2px solid #1ABB9C;padding-bottom:4px;margin-bottom:8px;"><i class="fa fa-code-fork"></i> 拆批交期 <small style="color:#999;font-weight:400;">（只需填有變更的批次，<b>未填＝不變更</b>；編號同訂單列表上的 #編號）</small></div>
+              <table class="table table-condensed table-bordered" style="font-size:12px;margin-bottom:0;background:#fff;">
+                <thead><tr style="background:#f5f5f5;"><th style="width:64px;text-align:center;">編號</th><th style="width:90px;text-align:right;">數量</th><th style="width:130px;">原交期</th><th>新交期（有變更才填）</th></tr></thead>
+                <tbody id="oc-split-body"></tbody>
+              </table>
+              <div id="oc-split-main-note" style="font-size:11px;color:#8a5a2b;margin-top:5px;"></div>
+            </div>
             <!-- 變更備註 -->
             <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-commenting-o"></i> 變更備註 <span style="color:#e74c3c;">*</span></div>
@@ -15656,6 +15719,8 @@ foreach($dCounts as $c) {
                 .forEach(function(id){ document.getElementById(id).textContent='—'; });
             ['oc-e-del','oc-e-qty','oc-e-price','oc-e-proc','oc-e-ps'].forEach(function(id){ document.getElementById(id).value=''; });
             document.getElementById('oc-proc-tag-note').style.display='none';
+            document.getElementById('oc-split-card').style.display='none';
+            document.getElementById('oc-split-body').innerHTML='';
             document.getElementById('oc-targets').innerHTML='<span style="color:#aaa;font-size:12px;">載入中…</span>';
             document.getElementById('oc-order-history').innerHTML='<span style="color:#aaa;font-size:12px;">載入中…</span>';
             $('#orderChangeModal').modal('show');
@@ -15683,6 +15748,21 @@ foreach($dCounts as $c) {
                 document.getElementById('oc-h-qty').textContent = '原:'+(d.Qty||'空');
                 document.getElementById('oc-h-price').textContent = '原:'+(d.unit_price||'空');
                 document.getElementById('oc-h-proc').textContent = '原:'+(d.Processing_items||'空');
+                // 拆批交期：主單原交期 + 各批原交期列出，新交期留空＝不變更
+                var sps=res.splits||[];
+                if(sps.length){
+                    var h='<tr style="background:#fafafa;"><td style="text-align:center;color:#888;">主單</td><td style="text-align:right;color:#888;">'+ocEsc(d.Qty||'')+'</td>'
+                        +'<td>'+ocEsc(d.Delivery_date||'空')+'</td><td style="color:#888;">於上方「交期」欄修改</td></tr>';
+                    sps.forEach(function(s){
+                        h+='<tr><td style="text-align:center;font-weight:700;color:#1ABB9C;">#'+s.seq+'</td>'
+                          +'<td style="text-align:right;">'+ocEsc(s.qty)+'</td>'
+                          +'<td class="oc-sp-old">'+ocEsc(s.delivery||'空')+'</td>'
+                          +'<td><input type="date" class="form-control input-sm oc-input oc-sp-new" data-sid="'+s.id+'" data-old="'+ocEsc(s.delivery||'')+'" data-seq="'+s.seq+'" style="max-width:180px;"></td></tr>';
+                    });
+                    document.getElementById('oc-split-body').innerHTML=h;
+                    document.getElementById('oc-split-main-note').textContent='主單數量為整張訂單總數，各批數量為拆出的數量；此處只變更交期，數量請至拆批功能調整。';
+                    document.getElementById('oc-split-card').style.display='';
+                }
             });
             // 通知對象（部門 / 人員 分區）
             ocApi('get_notify_targets', {}).then(function(res){
@@ -15766,9 +15846,17 @@ foreach($dCounts as $c) {
                     if(v!=null && String(v).trim()!=='') newVals[p[0]]=v;
                 });
             var procChanged = !!newVals.Processing_items;   // 製程有變更＝存完要再提醒一次確認標籤
+            // 拆批交期：只送有填且與原交期不同的（未填＝不變更）
+            var splitDates={}, splitBad='';
+            document.querySelectorAll('#oc-split-body .oc-sp-new').forEach(function(inp){
+                var v=(inp.value||'').trim(); if(!v) return;
+                if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ splitBad='拆批#'+inp.getAttribute('data-seq')+' 的交期格式不正確'; return; }
+                if(v!==inp.getAttribute('data-old')) splitDates[inp.getAttribute('data-sid')]=v;
+            });
+            if(splitBad){ msg.textContent=splitBad; return; }
             var targets=[]; document.querySelectorAll('#oc-targets .oc-tg:checked').forEach(function(c){ targets.push(c.value); });
             var btn=document.getElementById('oc-save-btn'); btn.disabled=true; msg.style.color='#888'; msg.textContent='處理中…';
-            ocApi('save_change', {order_id:orderId, note:note, new_values:JSON.stringify(newVals), targets:targets})
+            ocApi('save_change', {order_id:orderId, note:note, new_values:JSON.stringify(newVals), split_dates:JSON.stringify(splitDates), targets:targets})
             .then(function(res){
                 if(!res.success){ btn.disabled=false; msg.style.color='#c0392b'; msg.textContent=res.message||'儲存失敗'; return; }
                 var fileArr=ocSelFiles.slice();
@@ -16008,6 +16096,16 @@ foreach($dCounts as $c) {
         }
         window.ocFilterSettingUsers = ocRenderSettingUsers;
         window.saveChangeSettings = function(){
+            // 稽核製程標籤區有未儲存的修改（例如剛新增一列）：先存它，成功才繼續存下面的設定。
+            // 否則按底下的「儲存設定」會直接關窗，新增的那一列就這樣消失（它只有區塊內自己的儲存鈕會送出）。
+            if (typeof astagIsDirty === 'function' && astagIsDirty()) {
+                var m0=document.getElementById('ocs-msg'); m0.style.color='#888'; m0.textContent='儲存稽核製程標籤…';
+                astagSaveDefs(function(ok){
+                    if (!ok) { m0.style.color='#c0392b'; m0.textContent='稽核製程標籤未儲存成功，請看該區的紅字說明'; return; }
+                    window.saveChangeSettings();
+                });
+                return;
+            }
             var depts=[]; document.querySelectorAll('#ocs-depts .ocs-d:checked').forEach(function(c){ depts.push(c.value); });
             var users=Array.from(ocsUserSel);
             var allow= document.getElementById('ocs-allow-all').checked? '1':'0';

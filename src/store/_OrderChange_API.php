@@ -302,7 +302,19 @@ try {
         $client = !empty($row['cl_customer_name']) ? $row['cl_customer_name'] : ($row['Client_name'] ?? '');
         $trimNum = function($v) { if ($v === null || $v === '') return ''; if (!is_numeric($v)) return $v;
             return rtrim(rtrim(number_format((float)$v, 6, '.', ''), '0'), '.'); };
-        echo json_encode(['success' => true, 'data' => [
+        // 拆批子單（有才回傳；沒有拆批的訂單前端完全不顯示拆批區塊）
+        $splits = [];
+        if (empty($row['parent_order_id'])) {
+            $sp = $pdo->prepare("SELECT Order_id, split_seq, Qty, DATE_FORMAT(Delivery_date,'%Y-%m-%d') AS del_f
+                FROM order_track WHERE parent_order_id = ?
+                ORDER BY Delivery_date ASC, split_seq ASC");
+            $sp->execute([$oid]);
+            foreach ($sp->fetchAll(PDO::FETCH_ASSOC) as $s) {
+                $splits[] = ['id' => (int)$s['Order_id'], 'seq' => (int)$s['split_seq'],
+                             'qty' => $trimNum($s['Qty']), 'delivery' => $s['del_f'] ?? ''];
+            }
+        }
+        echo json_encode(['success' => true, 'splits' => $splits, 'data' => [
             'Order_id'      => $row['Order_id'],
             'order_no'      => $row['Order_oo'] ?? '',
             'client_name'   => $client,
@@ -380,6 +392,33 @@ try {
             $setBind[]  = $writeVal;
         }
 
+        // 拆批子單交期變更：{子單 Order_id: 'YYYY-MM-DD'}，未帶/空字串＝不變更。
+        // 後端自己再驗一次：必須是這張主單底下的子單、日期格式正確（不可只信前端）。
+        $splitDates = json_decode($_POST['split_dates'] ?? '{}', true);
+        if (!is_array($splitDates)) $splitDates = [];
+        $splitUpdates = [];
+        if (!empty($splitDates)) {
+            if (!empty($row['parent_order_id'])) { $pdo->rollBack(); throw new Exception('此訂單本身是拆批子單，不可再變更其拆批交期'); }
+            $sq = $pdo->prepare("SELECT Order_id, split_seq, DATE_FORMAT(Delivery_date,'%Y-%m-%d') AS del_f
+                FROM order_track WHERE parent_order_id = ? ORDER BY Delivery_date ASC, split_seq ASC FOR UPDATE");
+            $sq->execute([$oid]);
+            $mine = [];
+            foreach ($sq->fetchAll(PDO::FETCH_ASSOC) as $s) $mine[(int)$s['Order_id']] = $s;
+            foreach ($splitDates as $sid => $nd) {
+                $nd = oc_norm($nd, 'date');
+                if ($nd === '') continue;
+                $sid = (int)$sid;
+                if (!isset($mine[$sid])) { $pdo->rollBack(); throw new Exception('拆批子單不屬於此訂單，請重新整理後再試'); }
+                $dt = DateTime::createFromFormat('Y-m-d', $nd);
+                if (!$dt || $dt->format('Y-m-d') !== $nd) { $pdo->rollBack(); throw new Exception('拆批#' . (int)$mine[$sid]['split_seq'] . ' 的交期格式不正確'); }
+                $oldD = (string)($mine[$sid]['del_f'] ?? '');
+                if ($oldD === $nd) continue;
+                $diffs[] = ['field' => 'split_delivery_' . $sid, 'label' => '拆批#' . (int)$mine[$sid]['split_seq'] . ' 交期',
+                            'old' => $oldD, 'new' => $nd];
+                $splitUpdates[$sid] = $nd;
+            }
+        }
+
         if (empty($diffs) && $note === '') {
             $pdo->rollBack();
             throw new Exception('沒有任何變更內容，也未填寫備註');
@@ -390,6 +429,11 @@ try {
             $setBind[] = $oid;
             $up = $pdo->prepare("UPDATE order_track SET " . implode(', ', $setParts) . " WHERE Order_id = ?");
             $up->execute($setBind);
+        }
+        // 更新拆批子單交期（限定 parent_order_id，雙重保險）
+        if (!empty($splitUpdates)) {
+            $us = $pdo->prepare("UPDATE order_track SET Delivery_date = ? WHERE Order_id = ? AND parent_order_id = ?");
+            foreach ($splitUpdates as $sid => $nd) $us->execute([$nd, $sid, $oid]);
         }
 
         $client = !empty($row['cl_customer_name']) ? $row['cl_customer_name'] : ($row['Client_name'] ?? '');
