@@ -133,6 +133,10 @@
           <option value="rarrow">反向箭頭 ←</option>
         </select>
         <button type="button" class="egf-btn" id="egfConnFlip" title="把選取那條線的頭尾對調（箭頭跟著反向）"><i class="fa fa-exchange"></i> 反向</button>
+        <button type="button" class="egf-btn" id="egfConnNode" title="在選取那條線的最長一段中間加一個折點（也可以直接選起來，點線段中間的空心「＋」圓點新增；折點可以任意拖曳）"><i class="fa fa-plus"></i> 折點</button>
+        <button type="button" class="egf-btn" id="egfConnOrtho" title="把選取那條線改成直角折線（流程圖最常用的轉折方式，依兩端的相對位置自動決定先走橫的還是先走直的）"><i class="fa fa-level-up"></i> 直角</button>
+        <button type="button" class="egf-btn" id="egfConnStraight" title="把選取那條線的折點全部移除，變回頭尾一條直線"><i class="fa fa-minus"></i> 取直</button>
+        <button type="button" class="egf-btn" id="egfConnCurve" title="圓滑／取直曲線：通過每一個折點畫成平滑曲線（至少要有一個折點，先按「折點」）"><i class="fa fa-adjust"></i> 圓滑</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">排列</span>
         <button type="button" class="egf-btn" id="egfAlignVC" title="框選兩個以上的圖形後按這裡：全部的中心對齊到第一個的中心垂直線（左右對齊成一直行）"><i class="fa fa-align-center"></i> 中線</button>
@@ -162,11 +166,11 @@
             <div class="egf-tile" draggable="true" data-drag="text"  title="純文字說明">
               <span class="egf-ic egf-ic-text">字</span><i>文字</i></div>
           </div>
-          <div class="egf-pal-t">連線（在畫布上拖）</div>
+          <div class="egf-pal-t">連線（在畫布上畫）</div>
           <div class="egf-tiles">
-            <div class="egf-tile" data-add="arrow" title="由起點拖到終點">
+            <div class="egf-tile" data-add="arrow" title="點一下起點、再點一下終點就連起來；中間想轉幾個彎就多點幾下，最後雙擊（或按 Enter）結束。也可以直接由起點拖到終點畫一段。">
               <span class="egf-ic egf-ic-arrow"></span><i>箭頭</i></div>
-            <div class="egf-tile" data-add="line" title="由起點拖到終點">
+            <div class="egf-tile" data-add="line" title="點一下起點、再點一下終點就連起來；中間想轉幾個彎就多點幾下，最後雙擊（或按 Enter）結束。也可以直接由起點拖到終點畫一段。">
               <span class="egf-ic egf-ic-line"></span><i>直線</i></div>
           </div>
           <div class="egf-pal-t">範本（一鍵插入）</div>
@@ -178,7 +182,10 @@
             <b>PDCA 循環</b><span>規劃→執行→查核→改善</span></button>
           <div class="egf-pal-tip">
             拖不習慣也可以直接點一下圖形，會放到畫布上。<br>
-            圖形<b>雙擊</b>就能打字。
+            圖形<b>雙擊</b>就能打字。<br>
+            畫線：<b>點起點→點終點</b>，中間多點幾下就是折線，雙擊或 Enter 結束。<br>
+            線<b>選起來</b>之後，藍點＝拖曳折點、空心＋＝加折點。<br>
+            鍵盤：<b>V</b> 選取、<b>A</b> 箭頭、<b>L</b> 直線、<b>方向鍵</b>微調位置。
           </div>
         </div>
         <div class="egf-canhost">
@@ -330,13 +337,46 @@
   /* ── 箭頭／直線：線＋箭頭，兩端各有一個可拖的控制點 ─────────────────── */
   function arrowHeadPoints() { return [{x:0,y:0},{x:-6,y:-11},{x:6,y:-11}]; }
 
-  function addConn(kind, x1, y1, x2, y2) {
-    var id = nextId++;
-    var ln = new fabric.Line([snapv(x1), snapv(y1), snapv(x2), snapv(y2)], {
-      stroke: lineColor, strokeWidth: 1.5, strokeUniform: true, objectCaching: false,
-      hasControls: false, lockScalingX: true, lockScalingY: true
+  /** 連接線的物件本體（唯一建構點）。
+   *  ⚠ 2026-10-15 由 fabric.Line 換成 fabric.Polyline：使用者要「像批圖編輯器
+   *    那樣可以自由移動跟設置線段折線」，而 Line 永遠只有兩端、加不了折點。
+   *    Polyline 的點一律存**絕對座標**（本編輯器的連接線不旋轉也不縮放，
+   *    所以 left/top 由 _setPositionDimensions 依點自己算，省掉一層換算）。 */
+  function mkConnObj(pts, opt) {
+    var o = new fabric.Polyline(pts.map(function (p) { return { x: p.x, y: p.y }; }), {
+      stroke: (opt && opt.stroke) || lineColor, strokeWidth: (opt && opt.strokeWidth) || 1.5,
+      fill: '', strokeUniform: true, strokeLineCap: 'round', strokeLineJoin: 'round',
+      objectCaching: false, hasControls: false,
+      lockScalingX: true, lockScalingY: true, lockRotation: true
     });
-    ln.egRole = 'conn'; ln.egId = id; ln.egKind = kind;
+    return o;
+  }
+  /** 絕對座標的節點清單（畫面上看到的位置） */
+  function connPts(ln) {
+    if (!ln || !ln.points) return [];
+    var m = ln.calcTransformMatrix();
+    var ox = ln.pathOffset ? ln.pathOffset.x : 0, oy = ln.pathOffset ? ln.pathOffset.y : 0;
+    return ln.points.map(function (p) {
+      return fabric.util.transformPoint({ x: p.x - ox, y: p.y - oy }, m);
+    });
+  }
+  /** 用絕對座標整組換掉節點（會順手把 left/top/width/height/pathOffset 重算） */
+  function setConnPts(ln, abs) {
+    if (!ln || !abs || abs.length < 2) return;
+    ln.points = abs.map(function (p) { return { x: p.x, y: p.y }; });
+    ln.set({ angle: 0, scaleX: 1, scaleY: 1, flipX: false, flipY: false });
+    ln._setPositionDimensions({});
+    ln.setCoords();
+    ln.dirty = true;
+  }
+
+  function addConn(kind, x1, y1, x2, y2) {
+    return addConnPts(kind, [{ x: snapv(x1), y: snapv(y1) }, { x: snapv(x2), y: snapv(y2) }]);
+  }
+  function addConnPts(kind, pts) {
+    var id = nextId++;
+    var ln = mkConnObj(pts);
+    ln.egRole = 'conn'; ln.egId = id; ln.egKind = kind; ln.egCurve = false;
     cv.add(ln);
     /* kind：line＝沒有箭頭／arrow＝終點箭頭／darrow＝兩端都有／rarrow＝起點箭頭。
        每個箭頭記下自己在哪一端（egEnd），syncConn 才知道要擺在哪、角度朝哪邊。
@@ -477,6 +517,9 @@
   function clearGuides() {
     guideObjs.forEach(function (g) { cv.remove(g); });
     guideObjs = [];
+    /* 畫線預覽等暫時物件一律標 egRole='guide'，這裡一併掃掉——
+       它們絕對不可以被存進工作檔、也不可以被印進插入文件的那張圖。 */
+    cv.getObjects().slice().forEach(function (o) { if (o.egRole === 'guide') cv.remove(o); });
   }
   function addGuide(pos, dir) {
     var ln = new fabric.Line(
@@ -551,10 +594,14 @@
       return t;
     }
     if (o.egRole === 'conn') {
-      var a = lineAbs(o);
       var dx = atLeft - o.left, dy = atTop - o.top;
-      return addConn(o.egKind === 'arrow' ? 'arrow' : 'line',
-                     a.x1 + dx, a.y1 + dy, a.x2 + dx, a.y2 + dy);
+      var np = addConnPts(o.egKind || 'arrow', connPts(o).map(function (p) {
+        return { x: p.x + dx, y: p.y + dy };     // 折點也要一起複製，不然複本會變成直線
+      }));
+      np.egCurve = !!o.egCurve;
+      np.set({ stroke: o.stroke, strokeWidth: o.strokeWidth });
+      syncConn(np);
+      return np;
     }
     return null;
   }
@@ -677,13 +724,52 @@
   /** 把線的頭尾對調（箭頭跟著反向，綁定的錨點也跟著換邊） */
   function flipConn(ln) {
     if (!ln || ln.egRole !== 'conn') return;
-    var a = lineAbs(ln);
     var pa = ln.egPA, pb = ln.egPB;
-    setLineAbs(ln, a.x2, a.y2, a.x1, a.y1);
+    setConnPts(ln, connPts(ln).reverse());     // 折點也要跟著倒過來
     ln.egPA = pb; ln.egPB = pa;
     syncConn(ln);
     showHandles(ln);
     cv.requestRenderAll();
+  }
+
+  /* ── 折線：加折點／直角／取直／圓滑（使用者 2026-10-15：要像批圖編輯器
+        那樣「自由移動跟設置線段折線」）──────────────────────────────── */
+  /** 在最長的那一段中間加一個折點（最長的那段才有空間拖，加在短的看起來像沒反應） */
+  function connAddNode(ln) {
+    var ps = connPts(ln);
+    if (ps.length < 2) return false;
+    var at = 0, best = -1;
+    for (var i = 0; i < ps.length - 1; i++) {
+      var dd = Math.hypot(ps[i + 1].x - ps[i].x, ps[i + 1].y - ps[i].y);
+      if (dd > best) { best = dd; at = i; }
+    }
+    ps.splice(at + 1, 0, { x: (ps[at].x + ps[at + 1].x) / 2, y: (ps[at].y + ps[at + 1].y) / 2 });
+    setConnPts(ln, ps);
+    return true;
+  }
+  /** 直角折線：依兩端的相對位置自動決定先走橫的還是先走直的
+   *  （綁在圖形錨點上時以錨點方向為準，從圖形的左右兩側出發就先走橫的） */
+  function connOrtho(ln) {
+    var a = lineAbs(ln);
+    var dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+    if (Math.abs(dx) < 2 || Math.abs(dy) < 2) return false;   // 本來就是水平／垂直，不必轉折
+    var horizFirst = true;
+    var pk = (ln.egPA && ln.egPA.port) || '';
+    if (pk === 'N' || pk === 'S') horizFirst = false;
+    else if (pk === 'E' || pk === 'W') horizFirst = true;
+    else horizFirst = Math.abs(dx) >= Math.abs(dy);
+    var mid = horizFirst ? { x: a.x1 + dx / 2, y: a.y1 } : { x: a.x1, y: a.y1 + dy / 2 };
+    var mid2 = horizFirst ? { x: a.x1 + dx / 2, y: a.y2 } : { x: a.x2, y: a.y1 + dy / 2 };
+    setConnPts(ln, [{ x: a.x1, y: a.y1 }, mid, mid2, { x: a.x2, y: a.y2 }]);
+    ln.egCurve = false;
+    return true;
+  }
+  /** 取直：折點全部移除 */
+  function connStraight(ln) {
+    var a = lineAbs(ln);
+    setConnPts(ln, [{ x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }]);
+    ln.egCurve = false;
+    return true;
   }
 
   function headOf(ln) {
@@ -694,60 +780,169 @@
 
   /** 線的端點是靠 x1/y1/x2/y2，但 fabric 移動 Line 時改的是 left/top——
    *  兩套座標要自己對起來，不然箭頭會跟線分家。這裡一律以「絕對端點」為準重算。 */
+  /** 頭尾兩端的絕對座標（中間的折點不在這裡；要全部請用 connPts） */
   function lineAbs(ln) {
-    var cx = ln.left + (ln.strokeWidth || 0) / 2, cy = ln.top + (ln.strokeWidth || 0) / 2;
-    // fabric 的 Line：left/top 是 bounding box 左上角，x1..y2 是相對於中心的原始座標
-    var minX = Math.min(ln.x1, ln.x2), minY = Math.min(ln.y1, ln.y2);
-    return {
-      x1: ln.left + (ln.x1 - minX), y1: ln.top + (ln.y1 - minY),
-      x2: ln.left + (ln.x2 - minX), y2: ln.top + (ln.y2 - minY)
-    };
+    var ps = connPts(ln);
+    if (ps.length < 2) return { x1: 0, y1: 0, x2: 0, y2: 0 };
+    var a = ps[0], b = ps[ps.length - 1];
+    return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
   }
+  /** 只換頭尾、中間的折點留著（圖形移動時帶著線走就是走這一支） */
   function setLineAbs(ln, x1, y1, x2, y2) {
-    ln.set({ x1: x1, y1: y1, x2: x2, y2: y2,
-             left: Math.min(x1, x2), top: Math.min(y1, y2),
-             width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) });
-    ln.setCoords();
+    var ps = connPts(ln);
+    if (ps.length < 2) ps = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+    ps[0] = { x: x1, y: y1 };
+    ps[ps.length - 1] = { x: x2, y: y2 };
+    setConnPts(ln, ps);
   }
   function syncConn(ln) {
     var hs = headsOf(ln);
     if (!hs.length) return;
-    var a = lineAbs(ln);
+    var ps = connPts(ln);
+    if (ps.length < 2) return;
     /* 箭頭本體的三個點是 (0,0) 尖端、(±6,-11) 底邊，配上 originY:'bottom'
        ＝「left/top 指的是尖端」，而**沒有旋轉時它是朝下的**（底邊在尖端上方）。
        所以要轉到線的方向是 φ−90，不是 φ+90——寫成 +90 會讓每一支箭頭都剛好
        反過來指（尖端位置仍在終點上，所以乍看很像對的，要量底邊在哪一側才看得出來）。 */
+    var n = ps.length;
     hs.forEach(function (hd) {
-      var sx = (hd.egEnd === 'a') ? a.x2 : a.x1, sy = (hd.egEnd === 'a') ? a.y2 : a.y1;
-      var ex = (hd.egEnd === 'a') ? a.x1 : a.x2, ey = (hd.egEnd === 'a') ? a.y1 : a.y2;
-      var ang = Math.atan2(ey - sy, ex - sx) * 180 / Math.PI - 90;
-      hd.set({ left: ex, top: ey, angle: ang, fill: ln.stroke, stroke: ln.stroke });
+      /* 折線的箭頭角度要看「貼著那一端的那一段」，不是頭尾直線的方向——
+         用頭尾算的話，轉了彎的線箭頭會朝著斜的方向，看起來像沒對準。 */
+      var tip = (hd.egEnd === 'a') ? ps[0] : ps[n - 1];
+      var from = (hd.egEnd === 'a') ? ps[1] : ps[n - 2];
+      var ang = Math.atan2(tip.y - from.y, tip.x - from.x) * 180 / Math.PI - 90;
+      hd.set({ left: tip.x, top: tip.y, angle: ang, fill: ln.stroke, stroke: ln.stroke });
       hd.setCoords();
     });
   }
 
-  /* 端點控制點：選到連接線時長出兩個小圓，拖它改端點（不是縮放整條線——
-     縮放會讓線寬與箭頭一起變形，看起來像圖片被拉大） */
-  var hA = null, hB = null;
+  /* ── 節點編輯：選到連接線時，每個節點長出一個可拖的控制點，
+        線段中間另有空心「＋」可以插入折點（做法與批圖編輯器的「編輯端點」同一套）。
+        ⚠ 刻意改用 fabric 的**自訂控制點**而不是另外加一顆 Circle 當 handle：
+          另加物件時 fabric 會先把原本選著的線取消選取、控制圓也跟著被清掉，
+          使用者就「按得到卻拖不動」（2026-10-15 回報過一次）；
+          控制點是物件自己的一部分，不會有這個問題，而且不會被存進工作檔。 ── */
+  function connNodePos(i) {
+    return function (dim, finalMatrix, ln) {
+      if (!ln.canvas || !ln.points || !ln.points[i]) return new fabric.Point(-99999, -99999);
+      var p = connPts(ln)[i];
+      if (!p) return new fabric.Point(-99999, -99999);
+      return fabric.util.transformPoint(new fabric.Point(p.x, p.y), ln.canvas.viewportTransform);
+    };
+  }
+  function connMidPos(i) {
+    return function (dim, finalMatrix, ln) {
+      if (!ln.canvas || !ln.points) return new fabric.Point(-99999, -99999);
+      var ps = connPts(ln), a = ps[i], b = ps[i + 1];
+      if (!a || !b) return new fabric.Point(-99999, -99999);
+      return fabric.util.transformPoint(new fabric.Point((a.x + b.x) / 2, (a.y + b.y) / 2),
+                                        ln.canvas.viewportTransform);
+    };
+  }
+  function connNodeAction(i) {
+    return function (eventData, transform, x, y) {
+      var ln = transform.target;
+      var ps = connPts(ln);
+      if (!ps[i]) return false;
+      var isEnd = (i === 0 || i === ps.length - 1);
+      var nx = snapv(x), ny = snapv(y);
+      if (isEnd) {
+        // 端點靠近圖形的連接點就吸過去，並記住綁在哪（之後圖形移動線會跟著走）
+        showPortDots(x, y);
+        var hit = nearestPort(x, y);
+        if (hit) { nx = hit.x; ny = hit.y; }
+        if (i === 0) ln.egPA = hit ? { id: hit.id, port: hit.port } : null;
+        else         ln.egPB = hit ? { id: hit.id, port: hit.port } : null;
+      }
+      if (!isFinite(nx) || !isFinite(ny)) return false;
+      ps[i] = { x: nx, y: ny };
+      setConnPts(ln, ps);
+      syncConn(ln);
+      return true;
+    };
+  }
+  function connInsertAction(i) {
+    return function (eventData, transform) {
+      var ln = transform.target;
+      var now = Date.now();
+      if (ln.__egIns && now - ln.__egIns < 350) return;   // 防連點插出一堆節點
+      ln.__egIns = now;
+      var ps = connPts(ln), a = ps[i], b = ps[i + 1];
+      if (!a || !b) return;
+      ps.splice(i + 1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      setConnPts(ln, ps);
+      ln.controls = buildConnControls(ln);
+      syncConn(ln);
+      cv.requestRenderAll();
+      snapshot();
+    };
+  }
+  function buildConnControls(ln) {
+    var ctrls = {}, n = (ln.points || []).length;
+    for (var i = 0; i < n; i++) {
+      (function (i) {
+        var bound = (i === 0 && ln.egPA) || (i === n - 1 && ln.egPB);
+        ctrls['p' + i] = new fabric.Control({
+          positionHandler: connNodePos(i),
+          actionHandler: connNodeAction(i),
+          actionName: 'egConnNode',
+          cursorStyle: 'crosshair',
+          render: function (ctx, left, top) {
+            ctx.save();
+            // 扣在圖形錨點上的那一端畫成深色實心，看得出來「這端是綁住的」
+            ctx.fillStyle = bound ? '#8A5A2B' : '#F0A24B';
+            ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.restore();
+          }
+        });
+      })(i);
+    }
+    // 節點太多就不放「＋」（控制點加倍會拖慢渲染，而流程圖的線本來就不會有幾十個折點）
+    if (n <= 20) {
+      for (var k = 0; k < n - 1; k++) {
+        (function (k) {
+          ctrls['m' + k] = new fabric.Control({
+            positionHandler: connMidPos(k),
+            mouseDownHandler: connInsertAction(k),
+            actionHandler: function () { return false; },
+            cursorStyle: 'copy',
+            render: function (ctx, left, top) {
+              ctx.save();
+              ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#F0A24B'; ctx.lineWidth = 1.2;
+              ctx.beginPath(); ctx.arc(left, top, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+              ctx.lineWidth = 1.4;
+              ctx.beginPath();
+              ctx.moveTo(left - 3, top); ctx.lineTo(left + 3, top);
+              ctx.moveTo(left, top - 3); ctx.lineTo(left, top + 3);
+              ctx.stroke();
+              ctx.restore();
+            }
+          });
+        })(k);
+      }
+    }
+    return ctrls;
+  }
+  /** 收掉所有連接線的節點控制點（名稱沿用 clearHandles，呼叫端不必改） */
   function clearHandles() {
-    [hA, hB].forEach(function (h) { if (h) cv.remove(h); });
-    hA = hB = null;
+    if (!cv) return;
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole === 'conn' && o.__egNodes) {
+        delete o.__egNodes; delete o.controls;
+        o.hasControls = false; o.hasBorders = true;
+        o.setCoords();
+      }
+    });
   }
   function showHandles(ln) {
+    if (!ln || ln.egRole !== 'conn') return;
     clearHandles();
-    var a = lineAbs(ln);
-    function mk(px, py, which) {
-      var c = new fabric.Circle({ left: px, top: py, radius: 5, originX: 'center', originY: 'center',
-        fill: '#F0A24B', stroke: '#fff', strokeWidth: 2, hasControls: false, hasBorders: false,
-        objectCaching: false, egRole: 'handle', egWhich: which, egFor: ln });
-      cv.add(c); c.bringToFront();
-      return c;
-    }
-    hA = mk(a.x1, a.y1, 'a');
-    hB = mk(a.x2, a.y2, 'b');
-    // 已經綁在圖形錨點上的那一端畫成實心深色，看得出來「這一端是扣住的」
-    if (ln.egPA) hA.set({ fill: '#8A5A2B' });
-    if (ln.egPB) hB.set({ fill: '#8A5A2B' });
+    ln.controls = buildConnControls(ln);
+    ln.__egNodes = true;
+    ln.hasControls = true;
+    ln.hasBorders = false;
+    ln.setCoords();
     cv.requestRenderAll();
   }
 
@@ -755,7 +950,7 @@
   /** 序列化：fabric 的 toJSON 不含畫布尺寸，自己補上 egW/egH，
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
-    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA']);
+    var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA', 'egCurve']);
     jo.egW = LOGW;
     jo.egH = LOGH;
     return JSON.stringify(jo);
@@ -763,7 +958,10 @@
 
   function snapshot() {
     if (quiet || !cv) return;
-    clearHandles();
+    /* ⚠ 這裡**不可以**呼叫 clearHandles()：節點控制點是連接線物件自己的一部分
+       （fabric 的自訂 controls，不會被序列化），清掉只會讓使用者剛選起來的線
+       突然沒有節點可以拖——而每做完一個動作都會 snapshot 一次，症狀就是
+       「線選起來了、卻拖不到端點」。要清暫時**物件**請用下面兩支。 */
     clearPortDots();        // 連接點提示只是暫時畫上去的，不可以存進工作檔
     clearGuides();          // 對齊輔助線同理
     var j = serialize();
@@ -821,22 +1019,42 @@
     } catch (e) {}
     cv.loadFromJSON(j, function () {
       // 還原後要把 egId 的最大值找回來，否則新增的節點會撞到既有 id
-      var mx = 0;
+      var mx = 0, oldLines = [];
       cv.getObjects().forEach(function (o) {
         if (o.egRole === 'handle' || o.egRole === 'port' || o.egRole === 'guide') { cv.remove(o); return; }
         if (o.egId && o.egId > mx) mx = o.egId;
         if (o.egRole === 'label') { o.selectable = false; o.evented = false; }
         if (o.egRole === 'head')  { o.selectable = false; o.evented = false; }
-        if (o.egRole === 'conn')  { o.hasControls = false; }
+        if (o.egRole === 'conn')  { o.hasControls = false; o.hasBorders = true;
+                                    if (o.type === 'line') oldLines.push(o); }
         // 底圖鎖定：還原之後要再鎖一次，不然使用者拖曳挪動了底圖，
         // 存檔會把移位後的座標一起存下去，之後每次重開都對不回原位
         if (o.egRole === 'bg')    { o.selectable = false; o.evented = false; cv.sendToBack(o); }
       });
       nextId = mx + 1;
+      /* 2026-10-15 之前的工作檔，連接線是 fabric.Line（只有兩端、加不了折點）。
+         一打開就就地換成 Polyline，使用者不必重畫；egId／egKind／綁定／顏色全部沿用，
+         箭頭物件本來就是另一個物件靠 egId 配對的，不必動。 */
+      oldLines.forEach(function (o) { migrateLineConn(o); });
       cv.requestRenderAll();
       quiet = false;
       if (cb) cb();
     });
+  }
+  /** 舊 fabric.Line 連接線 → Polyline（就地換掉，保留堆疊順序） */
+  function migrateLineConn(o) {
+    var mi = Math.min(o.x1, o.x2), mj = Math.min(o.y1, o.y2);
+    var pts = [{ x: o.left + (o.x1 - mi), y: o.top + (o.y1 - mj) },
+               { x: o.left + (o.x2 - mi), y: o.top + (o.y2 - mj) }];
+    var np = mkConnObj(pts, { stroke: o.stroke, strokeWidth: o.strokeWidth || 1.5 });
+    np.egRole = 'conn'; np.egId = o.egId; np.egKind = o.egKind || 'arrow';
+    np.egPA = o.egPA || null; np.egPB = o.egPB || null; np.egCurve = false;
+    var idx = cv.getObjects().indexOf(o);
+    cv.remove(o);
+    cv.add(np);
+    if (idx >= 0) np.moveTo(idx);
+    syncConn(np);
+    return np;
   }
   function undo() {
     if (histAt <= 0) { stat('沒有可以復原的動作了'); return; }
@@ -911,6 +1129,60 @@
      strokeWidth（1.5px）那麼寬——實測幾乎點不中，選不到線就看不到端點控制圓，
      當然也拖不動。這裡只對流程圖的連接線（egRole='conn'）改成
      「滑鼠離線段 8px 以內就算點中」，其他 fabric.Line（輔助線、預覽線）不受影響。 */
+  /** 連接線（Polyline）的命中判定：逐段算「滑鼠離線段多遠」，8px 以內算點中。
+   *  fabric 預設用外框判定，而水平／垂直的線外框只有 strokeWidth(1.5px) 那麼薄，
+   *  實測幾乎點不中——選不到線就看不到節點，當然也拖不動。 */
+  function patchConnHitArea() {
+    if (fabric.Polyline.prototype.__egHitPatched) return;
+    var orig = fabric.Polyline.prototype.containsPoint;
+    fabric.Polyline.prototype.containsPoint = function (point, absolute, calculate) {
+      if (this.egRole === 'conn' && point && this.points && this.points.length > 1) {
+        /* ⚠ fabric 傳進來的 point 是「畫面座標」（含縮放位移），節點是場景座標，
+           直接比對在縮放時永遠不會命中，要先反算回場景座標。 */
+        var vt = (this.canvas && this.canvas.viewportTransform) || [1, 0, 0, 1, 0, 0];
+        var zx = vt[0] || 1, zy = vt[3] || 1;
+        var px = (point.x - vt[4]) / zx, py = (point.y - vt[5]) / zy;
+        var ps = connPts(this);
+        var tol = 8 / Math.max(0.05, Math.min(zx, zy)) + (this.strokeWidth || 1) / 2;
+        for (var i = 0; i < ps.length - 1; i++) {
+          var ax = ps[i].x, ay = ps[i].y, bx = ps[i + 1].x, by = ps[i + 1].y;
+          var dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+          var t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          var qx = ax + t * dx, qy = ay + t * dy;
+          if ((px - qx) * (px - qx) + (py - qy) * (py - qy) <= tol * tol) return true;
+        }
+        return false;
+      }
+      return orig.call(this, point, absolute, calculate);
+    };
+    fabric.Polyline.prototype.__egHitPatched = true;
+  }
+
+  /** 圓滑曲線：egCurve=true 的連接線用 Catmull-Rom 曲線通過每一個節點
+   *  （節點資料不變，節點編輯照常可用）。做法沿用批圖編輯器的同一套。 */
+  function patchCurvedPoly() {
+    if (fabric.Polyline.prototype.__egCurvePatched) return;
+    var orig = fabric.Polyline.prototype.commonRender;
+    fabric.Polyline.prototype.commonRender = function (ctx) {
+      if (!this.egCurve || !this.points || this.points.length < 3) return orig.call(this, ctx);
+      var pts = this.points, n = pts.length, ox = this.pathOffset.x, oy = this.pathOffset.y;
+      if (isNaN(pts[n - 1].y)) return false;
+      var P = function (i) { return pts[Math.max(0, Math.min(n - 1, i))]; };
+      ctx.beginPath();
+      ctx.moveTo(P(0).x - ox, P(0).y - oy);
+      for (var i = 0; i < n - 1; i++) {
+        var p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+        ctx.bezierCurveTo(
+          p1.x + (p2.x - p0.x) / 6 - ox, p1.y + (p2.y - p0.y) / 6 - oy,
+          p2.x - (p3.x - p1.x) / 6 - ox, p2.y - (p3.y - p1.y) / 6 - oy,
+          p2.x - ox, p2.y - oy);
+      }
+      return true;
+    };
+    fabric.Polyline.prototype.__egCurvePatched = true;
+  }
+
   function patchLineHitArea() {
     if (fabric.Line.prototype.__egHitPatched) return;
     var orig = fabric.Line.prototype.containsPoint;
@@ -940,23 +1212,12 @@
 
   function build() {
     patchLineHitArea();
+    patchConnHitArea();
+    patchCurvedPoly();
     cv = new fabric.Canvas('egfCanvas', { backgroundColor: '#ffffff', preserveObjectStacking: true });
 
     cv.on('object:moving', function (e) {
       var o = e.target;
-      if (o.egRole === 'handle') {
-        var ln = o.egFor;
-        if (!ln) return;
-        var a = lineAbs(ln);
-        // 靠近圖形的連接點就吸過去（並記住綁在哪，之後圖形移動線會跟著）
-        showPortDots(o.left, o.top);
-        var hit = nearestPort(o.left, o.top);
-        var nx = hit ? hit.x : snapv(o.left), ny = hit ? hit.y : snapv(o.top);
-        if (o.egWhich === 'a') { ln.egPA = hit ? { id: hit.id, port: hit.port } : null; setLineAbs(ln, nx, ny, a.x2, a.y2); }
-        else                   { ln.egPB = hit ? { id: hit.id, port: hit.port } : null; setLineAbs(ln, a.x1, a.y1, nx, ny); }
-        syncConn(ln);
-        return;
-      }
       // Alt 拖曳＝在原位留一份複本（只做一次，之後的 move 不再複製）
       if (e.e && e.e.altKey && !altDragDone && altDragFrom
           && (o.egRole === 'shape' || o.egRole === 'text' || o.egRole === 'conn')) {
@@ -969,7 +1230,7 @@
       o.set({ left: snapv(o.left), top: snapv(o.top) });
       applyGuides(o);                       // 對齊輔助線（會順手吸附）
       if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
-      if (o.egRole === 'conn')  { syncConn(o); clearHandles(); }
+      if (o.egRole === 'conn')  syncConn(o);      // 節點控制點會自己跟著走，不必收掉
     });
     // 按下的當下記住原始位置，Alt 複製要把複本放回這裡
     cv.on('mouse:down', function (e) {
@@ -994,30 +1255,21 @@
       clearGuides();
       if (o && o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
       if (o && o.egRole === 'conn') { syncConn(o); showHandles(o); }
-      if (o && o.egRole === 'handle' && o.egFor) showHandles(o.egFor);
       snapshot();
     });
     cv.on('selection:created', onSel);
     cv.on('selection:updated', onSel);
-    /* ⚠ 按在端點控制圓上的瞬間，fabric 會先把原本選著的那條線取消選取，
-       如果這時把控制圓清掉，使用者就「按得到卻拖不動」——按下去圓點就消失了
-       （使用者 2026-10-15 回報「無法分別拖移兩端位置」）。
-       所以選到的是控制圓本身時，一律保留它們。 */
-    cv.on('selection:cleared', function () {
-      var a = cv.getActiveObject();
-      if (a && a.egRole === 'handle') return;
-      clearHandles();
-    });
+    cv.on('selection:cleared', function () { clearHandles(); });
 
     function onSel() {
-      var objs = cv.getActiveObjects();
-      if (objs.length === 1 && objs[0].egRole === 'handle') return;   // 正在抓端點，別動它
       clearHandles();
+      var objs = cv.getActiveObjects();
       if (objs.length === 1 && objs[0].egRole === 'conn') showHandles(objs[0]);
     }
 
     // 雙擊圖形＝直接打字（標籤平常 evented=false，所以要自己算命中）
     cv.on('mouse:dblclick', function (e) {
+      if (pend) { finishPend(true); return; }   // 畫線中：雙擊＝結束這條線
       var p = cv.getPointer(e.e);
       var hit = null;
       cv.getObjects().forEach(function (o) {
@@ -1059,52 +1311,115 @@
       snapshot();
     });
 
-    // 拖曳畫線：按住「箭頭／直線」之後在畫布上拖
-    var pend = null, drag = null, pendPrev = null;
+    /* ── 畫線（做法比照批圖編輯器的「兩點連線」工具）────────────────────
+       點起點 → 點終點就連起來；中間想轉幾個彎就多點幾下（折線），
+       最後**雙擊或按 Enter** 結束。畫完工具還留著，可以一條接一條畫。
+       也保留原本的「由起點拖到終點」畫一段（拖曳放開就直接完成）。
+       ⚠ 連續點按一定要有「正在畫的樣子」：原本按下去到放開之間畫面完全沒變化，
+         使用者會以為「點了沒反應、畫不出直線」（2026-10-15 回報）。 */
+    var pend = null, drag = null, pendPrev = null, pendPts = [], pendDots = [];
     function clearPendPrev() {
-      if (pendPrev) { cv.remove(pendPrev); pendPrev = null; cv.requestRenderAll(); }
+      if (pendPrev) { cv.remove(pendPrev); pendPrev = null; }
+      pendDots.forEach(function (o) { cv.remove(o); });
+      pendDots = [];
+      cv.requestRenderAll();
+    }
+    /** 把「已確定的點＋目前滑鼠位置」畫成虛線預覽
+     *  ⚠ 每次都整組重建，不要留著舊物件改座標——輔助物件一律標 egRole='guide'，
+     *    而 clearGuides() 會把畫面上所有 guide 掃掉（存檔與輸出圖都不可以含它們），
+     *    留著參考就會變成「物件已經不在畫布上、改了座標也不會顯示」。 */
+    function drawPendPrev(cur) {
+      clearPendPrev();
+      var pts = pendPts.slice();
+      if (cur) pts.push(cur);
+      if (pts.length >= 2) {
+        pendPrev = new fabric.Polyline(pts, {
+          stroke: lineColor, strokeWidth: 1.5, strokeDashArray: [6, 4], fill: '',
+          selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+        cv.add(pendPrev);
+        pendPrev.bringToFront();
+      }
+      // 已確定的點各放一顆小紅點，看得出來「這幾個點已經定了」
+      pendPts.forEach(function (p) {
+        var dot = new fabric.Circle({ left: p.x, top: p.y, radius: 4,
+          originX: 'center', originY: 'center',
+          fill: '#DD5138', stroke: '#fff', strokeWidth: 1.5,
+          selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+        cv.add(dot); dot.bringToFront();
+        pendDots.push(dot);
+      });
+      cv.requestRenderAll();
+    }
+    /** 結束這一條：>=2 個點就建立連接線 */
+    function finishPend(keepTool) {
+      var pts = pendPts.slice();
+      pendPts = []; drag = null;
+      clearPendPrev();
+      if (pts.length >= 2) {
+        // 雙擊結束時最後兩點常常重疊（同一個位置按了兩下），重疊的尾點要丟掉
+        while (pts.length > 2) {
+          var a = pts[pts.length - 1], b = pts[pts.length - 2];
+          if (Math.abs(a.x - b.x) < 4 && Math.abs(a.y - b.y) < 4) pts.pop(); else break;
+        }
+        addConnPts(pend || 'arrow', pts);
+        snapshot();
+      }
+      if (!keepTool) { w.__egfSetPending(null); return; }
+      stat(pendHint(pend) + '（上一條已完成，可以接著畫下一條；要停止請按 V 或左邊面板那顆按鈕）');
+    }
+    function pendHint(k) {
+      return (k === 'line' ? '畫直線' : '畫箭頭')
+        + '：點一下起點、再點一下終點；中間多點幾下就是折線，雙擊或按 Enter 結束（也可以直接由起點拖到終點）';
     }
     cv.on('mouse:down', function (e) {
       if (!pend) return;
       var p = cv.getPointer(e.e);
-      drag = { x: p.x, y: p.y };
+      drag = { x: snapv(p.x), y: snapv(p.y) };
     });
-    /* 拖的過程中要看得到線正在長出來——原本按下去到放開之間畫面完全沒有變化，
-       使用者會以為「點了沒反應、畫不出直線」（2026-10-15 回報）。 */
     cv.on('mouse:move', function (e) {
-      if (!pend || !drag || !e || !e.e) return;
+      if (!pend || !e || !e.e) return;
       var p = cv.getPointer(e.e);
-      if (!pendPrev) {
-        pendPrev = new fabric.Line([drag.x, drag.y, p.x, p.y], {
-          stroke: lineColor, strokeWidth: 1.5, strokeDashArray: [6, 4],
-          selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
-        cv.add(pendPrev);
-      }
-      pendPrev.set({ x2: p.x, y2: p.y });
-      pendPrev.setCoords();
-      pendPrev.bringToFront();
-      cv.requestRenderAll();
+      if (!pendPts.length && !drag) return;        // 還沒下第一點，不必畫預覽
+      drawPendPrev({ x: snapv(p.x), y: snapv(p.y) });
     });
     cv.on('mouse:up', function (e) {
       if (!pend) return;
       var p = cv.getPointer(e.e);
-      var x1 = drag ? drag.x : p.x, y1 = drag ? drag.y : p.y;
-      // 只是點一下（沒有拖）就給一條預設長度的線，不然使用者會以為按了沒反應
-      if (Math.abs(p.x - x1) < 6 && Math.abs(p.y - y1) < 6) { p.x = x1; p.y = y1 + 70; }
-      clearPendPrev();
-      addConn(pend, x1, y1, p.x, p.y);
-      pend = null; drag = null;
-      cv.defaultCursor = 'default';
-      clearPendUI();
-      snapshot();
+      var px = snapv(p.x), py = snapv(p.y);
+      var moved = drag && (Math.abs(px - drag.x) >= 6 || Math.abs(py - drag.y) >= 6);
+      if (moved) {
+        // 拖曳：起點→放開的位置畫一段（還沒下過點時就是完整一條，有點時就是最後一段）
+        if (!pendPts.length) pendPts.push({ x: drag.x, y: drag.y });
+        pendPts.push({ x: px, y: py });
+        finishPend(true);
+        return;
+      }
+      // 單純點一下＝下一個點
+      pendPts.push({ x: px, y: py });
+      drag = null;
+      drawPendPrev(null);
+      stat(pendPts.length === 1
+        ? (pendHint(pend) + '　→　已下第 1 點，再點終點')
+        : (pendHint(pend) + '　→　已有 ' + pendPts.length + ' 點，雙擊或按 Enter 結束'));
     });
+    w.__egfFinishPend = function () { if (pend && pendPts.length >= 2) { finishPend(true); return true; } return false; };
+    w.__egfCancelPend = function () {
+      if (!pend) return false;
+      if (pendPts.length) { pendPts = []; drag = null; clearPendPrev(); stat(pendHint(pend)); return true; }
+      w.__egfSetPending(null);
+      return true;
+    };
     w.__egfSetPending = function (k) {
       pend = k;
+      pendPts = []; drag = null;
+      clearPendPrev();
       cv.defaultCursor = k ? 'crosshair' : 'default';
-      if (!k) clearPendPrev();
-      stat(k === 'arrow' ? '畫箭頭：在畫布上由起點拖到終點（點一下也可以，會給一條預設長度的線）'
-         : k === 'line'  ? '畫直線：在畫布上由起點拖到終點（點一下也可以）'
-                         : '　');
+      /* 畫線中一律不要讓滑鼠打到既有物件：不關掉的話點在圖形上會變成「拖動那個圖形」，
+         使用者以為在畫線、結果是把方塊搬走了。框選的藍框也一起關掉。 */
+      cv.selection = !k;
+      cv.skipTargetFind = !!k;
+      stat(k ? pendHint(k) : '　');
+      if (!k) clearPendUI();
     };
   }
 
@@ -1169,6 +1484,15 @@
   var KIND_NAME  = { proc:'處理', judge:'判斷', term:'起訖', doc:'文件', text:'文字' };
   var dragKind = null;
 
+  /** 切換目前的工具（null＝回到選取），面板上的亮起狀態一起處理 */
+  function setTool(k) {
+    clearPendUI();
+    if (k) {
+      var b = d.querySelector('#egfWin [data-add="' + k + '"]');
+      if (b) b.classList.add('on');
+    }
+    if (w.__egfSetPending) w.__egfSetPending(k);
+  }
   function clearPendUI() {
     Array.prototype.slice.call(d.querySelectorAll('#egfWin [data-add],#egfWin [data-drag]'))
       .forEach(function (b) { b.classList.remove('on'); });
@@ -1335,6 +1659,30 @@
           snapshot();
           break;
         }
+        case 'egfConnNode':
+        case 'egfConnOrtho':
+        case 'egfConnStraight':
+        case 'egfConnCurve': {
+          var cn = cv && cv.getActiveObject();
+          if (!cn || cn.egRole !== 'conn') { stat('請先點選一條連線（線選起來之後會出現可以拖的節點）'); break; }
+          if (t.id === 'egfConnNode') {
+            connAddNode(cn); stat('已加一個折點，拖那顆橘色圓點就能調整轉折位置');
+          } else if (t.id === 'egfConnOrtho') {
+            if (connOrtho(cn)) stat('已改成直角折線，每個轉角都可以再拖');
+            else stat('這條線本來就是水平或垂直的，不需要轉折');
+          } else if (t.id === 'egfConnStraight') {
+            connStraight(cn); stat('已取直（折點全部移除）');
+          } else {
+            if (!cn.egCurve && (cn.points || []).length < 3) { stat('至少要有一個折點才能圓滑——請先按「折點」'); break; }
+            cn.egCurve = !cn.egCurve; cn.dirty = true;
+            stat(cn.egCurve ? '已改成圓滑曲線（通過每一個折點）' : '已改回直線段');
+          }
+          syncConn(cn);
+          showHandles(cn);
+          cv.requestRenderAll();
+          snapshot();
+          break;
+        }
         case 'egfConnFlip': {
           var fl = cv.getActiveObject();
           if (fl && fl.egRole === 'conn') { flipConn(fl); snapshot(); stat('已把這條線反向'); }
@@ -1439,11 +1787,47 @@
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delSel(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
       else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+      /* Enter＝結束正在畫的折線（比照批圖編輯器） */
+      else if (e.key === 'Enter') {
+        if (w.__egfFinishPend && w.__egfFinishPend()) { e.preventDefault(); }
+      }
+      /* 工具快捷鍵：V 選取、A 箭頭、L 直線（跟批圖編輯器同一組按鍵） */
+      else if (!e.ctrlKey && !e.metaKey && !e.altKey && 'vVaAlL'.indexOf(e.key) >= 0 && e.key.length === 1) {
+        e.preventDefault();
+        var kk = e.key.toLowerCase();
+        setTool(kk === 'v' ? null : (kk === 'a' ? 'arrow' : 'line'));
+      }
+      /* 方向鍵微調位置：一下 1px、按住 Shift 一下 10px
+         （使用者 2026-10-15：「移動時會像有格點一樣無法對齊到想要對齊的地方」，
+           格線吸附已預設關閉，再給鍵盤微調才真的放得到想要的位置） */
+      else if (e.key.indexOf('Arrow') === 0) {
+        var objs = cv ? cv.getActiveObjects().filter(function (o) {
+          return o.egRole === 'shape' || o.egRole === 'text' || o.egRole === 'conn';
+        }) : [];
+        if (!objs.length) return;
+        e.preventDefault();
+        var st = e.shiftKey ? 10 : 1;
+        var ddx = (e.key === 'ArrowLeft' ? -st : e.key === 'ArrowRight' ? st : 0);
+        var ddy = (e.key === 'ArrowUp' ? -st : e.key === 'ArrowDown' ? st : 0);
+        objs.forEach(function (o) {
+          o.set({ left: o.left + ddx, top: o.top + ddy });
+          o.setCoords();
+          if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
+          if (o.egRole === 'conn') syncConn(o);
+        });
+        var one = cv.getActiveObject();
+        if (one && one.egRole === 'conn') showHandles(one);
+        cv.requestRenderAll();
+        snapshot();
+        stat('已移動 ' + st + 'px（按住 Shift 一次移 10px）');
+      }
       /* Esc 刻意**不關閉**整個編輯器（使用者 2026-10-15）：畫到一半誤按一下
          就把視窗關掉、畫的東西全沒了。Esc 只用來「放掉目前選取的東西」，
          要關請按右上角的 × 或下方的取消。 */
       else if (e.key === 'Escape') {
         e.preventDefault();
+        // 正在畫線＝先丟掉這一條（還沒畫完的點），再按一次才是回到選取工具
+        if (w.__egfCancelPend && w.__egfCancelPend()) { stat('已取消這一條線（再按 Esc 回到選取工具）'); return; }
         if (cv) { cv.discardActiveObject(); clearHandles(); clearPortDots(); clearGuides(); cv.requestRenderAll(); }
         stat('已取消選取（要關閉請按右上角的 ×）');
       }
