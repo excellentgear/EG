@@ -10776,6 +10776,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <div class="modal-body">
     <div class="form-group">
         <label style="font-size:12px;color:#888;">選擇要套用的料號</label>
+        <div id="parts-batch-note" style="display:none;"></div>
         <div style="border:1px solid #ddd;border-radius:6px;max-height:200px;overflow-y:auto;padding:6px;" id="parts-batch-list">
             <div style="text-align:center;color:#aaa;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
         </div>
@@ -12871,18 +12872,30 @@ function clearAttachFilter() {
 }
 
 // ── 料號篩選初始化 ─────────────────────────────────────────
+/* 清掉上一次注入的「工件種類」chip。
+ * 原本寫的是 while (bar.children.length > 4) bar.removeChild(bar.lastChild)
+ * ＝把「靜態子元素只有 4 個」寫死在程式裡。後來在同一個容器裡插了「工件總長
+ * 區間」（標籤＋最小＋~＋最大＋mm 共 5 個元素）之後，這一行就從第 5 個開始
+ * 往後砍，實際把「工件總長 最大」欄位、mm 單位、「種類」標籤、以及種類的
+ * 「全部」鈕一起刪掉了——畫面上看起來就是「工件總長只能填最小值」「種類沒有
+ * 全部可以按」，而且完全不報錯（HTML 裡明明寫著，所以看原始碼也看不出來）。
+ * 改成只移除「自己注入的那些 chip」（data-type-chip="1"），不再依賴靜態元素個數，
+ * 日後在這一列再加任何東西都不會被牽連。 */
+function _clearInjectedTypeChips(bar) {
+    bar.querySelectorAll('[data-type-chip="1"]').forEach(function(c){ bar.removeChild(c); });
+}
 function initPartsFilterBar() {
     var bar = document.getElementById('parts-type-group');
     if (!bar) return;
-    // Remove previously injected chips (keep pac-wrap + chips-span + label + 全部 = 4 children)
-    while (bar.children.length > 4) bar.removeChild(bar.lastChild);
+    _clearInjectedTypeChips(bar);
     api({ action:'manage_workpiece_types', op:'list' }).done(function(r) {
         if (!r.success) return;
-        while (bar.children.length > 4) bar.removeChild(bar.lastChild);
+        _clearInjectedTypeChips(bar);
         r.data.forEach(function(t, idx) {
             var pal = _wpPalette[idx % _wpPalette.length];
             var chip = document.createElement('span');
             chip.className = 'fc';
+            chip.dataset.typeChip = '1';
             chip.dataset.type = t.type_code;
             chip.dataset.typePal = JSON.stringify(pal);
             chip.dataset.subTypes = JSON.stringify(t.sub_types||[]);
@@ -13288,9 +13301,11 @@ function clearPartsCust() {
     loadParts(1);
 }
 
-// 取消篩選按鈕顯示邏輯
-function updatePartsClearBtn() {
-    var hasFilter = _partsFilter.types.length || _partsFilter.gear || _partsFilter.sub
+// 目前有沒有套用任何篩選（唯一實作）：「取消篩選」鈕要不要出現、以及
+// 批次設定跳窗要不要寫明「已套用篩選」都問這一支，不要各自再列一次條件。
+// 註：這裡刻意不含搜尋框裡還沒按下 Enter 的即時關鍵字，維持原本按鈕的行為。
+function partsHasFilter() {
+    return !!(_partsFilter.types.length || _partsFilter.gear || _partsFilter.sub
         || (_partsFilter.labels && _partsFilter.labels.length)
         || _partsFilter.customerIds.length || _partsFilter.grades.length
         || _partsFilter.industries.length || _partsFilter.industrySubs.length
@@ -13303,9 +13318,13 @@ function updatePartsClearBtn() {
         || _partsFilter.gearFwMin !== null || _partsFilter.gearFwMax !== null
         || _partsFilter.gearHaMin !== null || _partsFilter.gearHaMax !== null
         || _partsFilter.wlMin != null || _partsFilter.wlMax != null
-        || _partsFilter.shipSort;
+        || _partsFilter.shipSort);
+}
+
+// 取消篩選按鈕顯示邏輯
+function updatePartsClearBtn() {
     var btn = document.getElementById('parts-clear-filter-btn');
-    if (btn) btn.style.display = hasFilter ? '' : 'none';
+    if (btn) btn.style.display = partsHasFilter() ? '' : 'none';
 }
 
 function clearPartsFilter() {
@@ -14535,13 +14554,18 @@ function initMakerProcLabelFilter(forceApi) {
 
 var partsLoaded=false, partsCurrent=1, partsTotal=1;
 
-function loadParts(pg) {
-    pg = pg || 1;
-    partsCurrent = pg;
+/* ── 料號清單的「目前篩選條件 → API 參數」：唯一實作 ────────────────────
+ * 凡是「要拿到使用者畫面上正在看的那一批料號」的功能一律呼叫這一支
+ * （目前＝清單本身 loadParts 與「批次設定」跳窗）。
+ * 各自列一份參數的結果已經出過事：批次設定原本只帶 種類／齒輪類型／小類／
+ * 關鍵字，客戶、標籤、齒數、齒寬、工件總長、齒部外徑全部沒帶，於是畫面上
+ * 篩到只剩 10 筆、批次設定跳窗卻列出上百筆，按「全選」就會批次改到使用者
+ * 根本沒看到的料號（而且畫面不會有任何提示）。往後新增篩選條件只要改這裡。
+ */
+function partsFilterPayload() {
     var liveKw = (document.getElementById('parts-search')||{}).value || '';
     var allKws = _partsFilter.keywords.slice().concat(_partsFilter.quickKws||[]); if (liveKw.trim()) allKws.push(liveKw.trim());
-    document.getElementById('parts-table-wrap').innerHTML = '<div class="table-loading"><div class="spinner"></div> 載入中…</div>';
-    api({ action:'list_parts', keywords_p:allKws.join('||'), page:pg,
+    return {  keywords_p:              allKws.join('||'),
           filter_type:             _partsFilter.types.join(','),
           filter_gear:             _partsFilter.gear,
           filter_sub:              _partsFilter.sub,
@@ -14574,7 +14598,14 @@ function loadParts(pg) {
           filter_industry_subs_p:  _partsFilter.industrySubs.join(','),
           sort_by:                 _partsFilter.shipSort,
           filter_attach_tags:      JSON.stringify(_partsFilter.attachTags||[])
-    }).done(function(r) {
+    };
+}
+
+function loadParts(pg) {
+    pg = pg || 1;
+    partsCurrent = pg;
+    document.getElementById('parts-table-wrap').innerHTML = '<div class="table-loading"><div class="spinner"></div> 載入中…</div>';
+    api($.extend({ action:'list_parts', page:pg }, partsFilterPayload())).done(function(r) {
         if (!r.success) { showToast(r.message,'error'); return; }
         partsLoaded = true;
         partsTotal  = r.pages;
@@ -26860,15 +26891,59 @@ function executeCustBatch() {
 }
 
 // ─── Parts Batch ──────────────────────────────────────────
+// ※ 這一整段（Customer Batch／Parts Batch）在本檔案後段還有一份一模一樣的宣告
+//    ＝既有的重複貼上，JS 以「後宣告的那一份」為準。兩份一律同步修改，
+//    不論哪一份生效行為都相同（重複本身是既有狀況，未在本次一併移除）。
 var _partsBatchData = [];
+var _partsBatchTotal = 0;          // 符合目前篩選的總筆數（後端回傳的 total）
+var PB_LIMIT = 999;                // 一次最多載入幾筆（沿用原本的 999，不改變既有行為）
+
+// 跳窗頂端的說明列：講清楚「這份清單是依畫面目前的篩選條件撈出來的」，
+// 以及被 PB_LIMIT 截斷時「全選只會選到前 N 筆」——不講的話使用者會以為
+// 全選就是全部符合條件的料號，批次設定少改了一批卻完全看不出來。
+function renderPartsBatchNote(loading) {
+    var el = document.getElementById('parts-batch-note');
+    if (!el) return;
+    if (loading) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    var liveKw   = (document.getElementById('parts-search') || {}).value || '';
+    var filtered = partsHasFilter() || liveKw.trim() !== '';
+    var n = _partsBatchTotal, loaded = _partsBatchData.length;
+    var warn = loaded < n;
+    var html = filtered
+        ? '<i class="fa fa-filter"></i> 已套用料號清單目前的篩選條件，符合 <strong>' + n + '</strong> 筆'
+        : '<i class="fa fa-info-circle"></i> 目前沒有套用任何篩選，清單為全部料號（共 <strong>' + n + '</strong> 筆）';
+    if (warn) html += '，<strong>僅載入前 ' + loaded + ' 筆</strong>；「全選」只會選到這 ' + loaded + ' 筆，請先縮小篩選範圍。';
+    el.innerHTML  = html;
+    el.style.cssText = 'font-size:11px;margin:4px 0 6px;padding:4px 8px;border-radius:4px;line-height:1.5;display:block;'
+        + (warn     ? 'color:#8a6d3b;background:#fdf5e6;border:1px solid #f0d9a8;'
+        : (filtered ? 'color:#8a5a00;background:#fff7ec;border:1px solid #ffd79a;'
+                    : 'color:#888;background:#f7f7f7;border:1px solid #eee;'));
+}
 
 function openPartsBatchModal() {
     $('#partsBatchModal').modal('show');
-    var kw = document.getElementById('parts-search').value;
-    api({ action:'list_parts', keyword:kw, page:1, lmt:999, filter_type:_partsFilter.types.join(','), filter_gear:_partsFilter.gear, filter_sub:_partsFilter.sub }).done(function(r) {
-        if (!r.success) return;
-        _partsBatchData = r.data || [];
+    var sb = document.getElementById('parts-batch-search'); if (sb) sb.value = '';
+    var lw = document.getElementById('parts-batch-list');
+    if (lw) lw.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>';
+    _partsBatchData = []; _partsBatchTotal = 0;
+    renderPartsBatchNote(true);
+    // 清單一律用「畫面上目前的篩選條件」撈（partsFilterPayload＝與料號清單同一份參數）。
+    // 原本只帶 種類／齒輪類型／小類／關鍵字，客戶、標籤、齒數、齒寬、工件總長、
+    // 齒部外徑都沒帶，所以畫面篩到只剩幾筆、這裡卻列出上百筆，按「全選」就會
+    // 批次改到使用者根本沒看到的料號。
+    api($.extend({ action:'list_parts', page:1, lmt:PB_LIMIT }, partsFilterPayload())).done(function(r) {
+        if (!r.success) {
+            if (lw) lw.innerHTML = '<p style="color:#e74c3c;font-size:12px;text-align:center;padding:10px;">載入失敗，請重新開啟</p>';
+            showToast(r.message || '載入失敗','error');
+            return;
+        }
+        _partsBatchData  = r.data || [];
+        _partsBatchTotal = (r.total === undefined || r.total === null) ? _partsBatchData.length : (parseInt(r.total,10) || 0);
+        renderPartsBatchNote();
         renderPartsBatchList(_partsBatchData);
+    }).fail(function(){
+        if (lw) lw.innerHTML = '<p style="color:#e74c3c;font-size:12px;text-align:center;padding:10px;">網路錯誤，請重新開啟</p>';
+        showToast('網路錯誤','error');
     });
     // Load workpiece types
     api({ action:'manage_workpiece_types', op:'list' }).done(function(r) {
@@ -27381,15 +27456,59 @@ function executeCustBatch() {
 }
 
 // ─── Parts Batch ──────────────────────────────────────────
+// ※ 這一整段（Customer Batch／Parts Batch）在本檔案後段還有一份一模一樣的宣告
+//    ＝既有的重複貼上，JS 以「後宣告的那一份」為準。兩份一律同步修改，
+//    不論哪一份生效行為都相同（重複本身是既有狀況，未在本次一併移除）。
 var _partsBatchData = [];
+var _partsBatchTotal = 0;          // 符合目前篩選的總筆數（後端回傳的 total）
+var PB_LIMIT = 999;                // 一次最多載入幾筆（沿用原本的 999，不改變既有行為）
+
+// 跳窗頂端的說明列：講清楚「這份清單是依畫面目前的篩選條件撈出來的」，
+// 以及被 PB_LIMIT 截斷時「全選只會選到前 N 筆」——不講的話使用者會以為
+// 全選就是全部符合條件的料號，批次設定少改了一批卻完全看不出來。
+function renderPartsBatchNote(loading) {
+    var el = document.getElementById('parts-batch-note');
+    if (!el) return;
+    if (loading) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    var liveKw   = (document.getElementById('parts-search') || {}).value || '';
+    var filtered = partsHasFilter() || liveKw.trim() !== '';
+    var n = _partsBatchTotal, loaded = _partsBatchData.length;
+    var warn = loaded < n;
+    var html = filtered
+        ? '<i class="fa fa-filter"></i> 已套用料號清單目前的篩選條件，符合 <strong>' + n + '</strong> 筆'
+        : '<i class="fa fa-info-circle"></i> 目前沒有套用任何篩選，清單為全部料號（共 <strong>' + n + '</strong> 筆）';
+    if (warn) html += '，<strong>僅載入前 ' + loaded + ' 筆</strong>；「全選」只會選到這 ' + loaded + ' 筆，請先縮小篩選範圍。';
+    el.innerHTML  = html;
+    el.style.cssText = 'font-size:11px;margin:4px 0 6px;padding:4px 8px;border-radius:4px;line-height:1.5;display:block;'
+        + (warn     ? 'color:#8a6d3b;background:#fdf5e6;border:1px solid #f0d9a8;'
+        : (filtered ? 'color:#8a5a00;background:#fff7ec;border:1px solid #ffd79a;'
+                    : 'color:#888;background:#f7f7f7;border:1px solid #eee;'));
+}
 
 function openPartsBatchModal() {
     $('#partsBatchModal').modal('show');
-    var kw = document.getElementById('parts-search').value;
-    api({ action:'list_parts', keyword:kw, page:1, lmt:999, filter_type:_partsFilter.types.join(','), filter_gear:_partsFilter.gear, filter_sub:_partsFilter.sub }).done(function(r) {
-        if (!r.success) return;
-        _partsBatchData = r.data || [];
+    var sb = document.getElementById('parts-batch-search'); if (sb) sb.value = '';
+    var lw = document.getElementById('parts-batch-list');
+    if (lw) lw.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>';
+    _partsBatchData = []; _partsBatchTotal = 0;
+    renderPartsBatchNote(true);
+    // 清單一律用「畫面上目前的篩選條件」撈（partsFilterPayload＝與料號清單同一份參數）。
+    // 原本只帶 種類／齒輪類型／小類／關鍵字，客戶、標籤、齒數、齒寬、工件總長、
+    // 齒部外徑都沒帶，所以畫面篩到只剩幾筆、這裡卻列出上百筆，按「全選」就會
+    // 批次改到使用者根本沒看到的料號。
+    api($.extend({ action:'list_parts', page:1, lmt:PB_LIMIT }, partsFilterPayload())).done(function(r) {
+        if (!r.success) {
+            if (lw) lw.innerHTML = '<p style="color:#e74c3c;font-size:12px;text-align:center;padding:10px;">載入失敗，請重新開啟</p>';
+            showToast(r.message || '載入失敗','error');
+            return;
+        }
+        _partsBatchData  = r.data || [];
+        _partsBatchTotal = (r.total === undefined || r.total === null) ? _partsBatchData.length : (parseInt(r.total,10) || 0);
+        renderPartsBatchNote();
         renderPartsBatchList(_partsBatchData);
+    }).fail(function(){
+        if (lw) lw.innerHTML = '<p style="color:#e74c3c;font-size:12px;text-align:center;padding:10px;">網路錯誤，請重新開啟</p>';
+        showToast('網路錯誤','error');
     });
     // Load workpiece types
     api({ action:'manage_workpiece_types', op:'list' }).done(function(r) {
