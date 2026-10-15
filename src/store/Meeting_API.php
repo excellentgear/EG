@@ -884,7 +884,10 @@ case 'decide': {
     }
     if (!$perms['canAdmin'] && (!$signer || (int)$signer['id'] !== $uid)) jerr('您不是本階段的簽核人', 403);
 
-    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note ?: null);
+    // 管理員代簽：簽核紀錄（畫面與圖章）要記原本的主席／總經理，不是操作的管理員
+    $decUid = $uid; $decName = $uname;
+    if ($signer && (int)$signer['id'] > 0 && (int)$signer['id'] !== $uid) { $decUid = (int)$signer['id']; $decName = (string)$signer['name']; }
+    $r = eg_approval_decide($db, (int)$rec['id'], $decUid, $decName, $decision, $note ?: null);
     if (!$r['success']) jerr($r['message']);
     meeting_close_notice($db, $id);
     $submitter = (int)$m['recorder_user_id'];
@@ -1309,6 +1312,10 @@ case 'admin_backfill': {
                 $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
             }
             if ($rec && $rec['status'] === 'approved') {
+                // 先前若由管理員本人代按，簽核人改回原本的主席／總經理
+                $sg = $lvl === 'chair' ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']) : meeting_gm_signer_effective($db);
+                if ($sg && (int)$sg['id'] > 0 && (int)$rec['approver_id'] !== (int)$sg['id'])
+                    $db->prepare("UPDATE approval_record SET approver_id=?, approver_name=? WHERE id=?")->execute([(int)$sg['id'], (string)$sg['name'], (int)$rec['id']]);
                 $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
                    ->execute([$date, (int)$rec['id']]);
             }
