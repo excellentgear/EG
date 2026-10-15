@@ -534,14 +534,38 @@
   function measureLabelPx(block, label) {
     if (!_numMeasureCanvas) _numMeasureCanvas = d.createElement('canvas');
     var ctx = _numMeasureCanvas.getContext('2d');
-    // 字型盡量取「第一個真的有文字的節點」的樣式——匯入的內容常把字型字級包在
-    // 段落裡層的 <span> 上，段落本身沒設定的話這裡量出來的寬度會不準
+    function fontOf(n) {
+      var el = (n && n.parentNode && n.parentNode.nodeType === 1) ? n.parentNode : block;
+      var cs = w.getComputedStyle(el);
+      ctx.font = cs.font || (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily);
+      return parseFloat(cs.fontSize) || 16;
+    }
+    // 編號與後面的空白常常落在不同字型的 <span>（數字 Times New Roman、空白標楷體），
+    // 整串用同一個字型量會量錯（標楷體的數字比較寬 → 換行對齊跑到內容右邊）。
+    // 所以逐字對回實際的文字節點，每一段用自己那個節點的字型量，再加總。
     var walker = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
-    var n = walker.nextNode();
-    var el = (n && n.parentNode && n.parentNode.nodeType === 1) ? n.parentNode : block;
-    var cs = w.getComputedStyle(el);
-    ctx.font = cs.font || (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily);
-    return { px: ctx.measureText(label).width, fontSizePx: parseFloat(cs.fontSize) || 16 };
+    var rest = label, px = 0, fs = 0, first = true, n;
+    while (rest && (n = walker.nextNode())) {
+      var v = n.nodeValue || '', took = '';
+      for (var i = 0; i < v.length && rest; i++) {
+        var c = v.charAt(i), isWs = /[\s 　]/.test(c), rw = /[\s 　]/.test(rest.charAt(0));
+        if (c === rest.charAt(0) || (isWs && rw)) { took += c; rest = rest.slice(1); }
+        else if (took === '' && isWs) continue;      // 編號前被清掉／折疊的空白
+        else if (isWs) continue;                    // 被折疊掉的多餘空白
+        else break;
+      }
+      if (took) {
+        var f = fontOf(n);
+        if (first) { fs = f; first = false; }
+        px += ctx.measureText(took).width;
+      }
+    }
+    if (rest) {   // 對不上（節點被拆得很碎等）：退回整串用第一個節點字型量
+      var w0 = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null), n0 = w0.nextNode();
+      fs = fontOf(n0);
+      px = ctx.measureText(label).width;
+    }
+    return { px: px, fontSizePx: fs || 16 };
   }
 
   /** 對單一區塊套用「依編號自動縮排」。不是編號段落就不動它（不清掉別的手動縮排）。回傳有沒有套用到 */
