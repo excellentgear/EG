@@ -1172,10 +1172,17 @@ function loadRef() {
         REF = r.rows || [];
         REF_NEXT = r.next_version || '';
         if (!REF.length) { $('#adRefBar').hide(); return; }
-        var hits = 0, obs = 0;
-        REF.forEach(function(x){ hits += (x.hits || 0); if (x.kind === 'obsolete') obs++; });
-        $('#adRefSum').text('：' + REF.length + ' 個編號、共 ' + hits + ' 處'
-            + (obs ? ('（其中 ' + obs + ' 個是廢止，系統不會自動改）') : ''));
+        var hits = 0, obs = 0, ren = 0, flows = 0;
+        REF.forEach(function(x){
+            hits += (x.hits || 0);
+            flows += (x.flows || 0);
+            if (x.kind === 'obsolete') obs++;
+            if (x.kind === 'rename') ren++;
+        });
+        $('#adRefSum').text('：' + REF.length + ' 筆、共 ' + hits + ' 處'
+            + (ren ? ('（其中 ' + ren + ' 筆是改名）') : '')
+            + (obs ? ('（其中 ' + obs + ' 個是廢止，系統不會自動改）') : '')
+            + (flows ? ('，另有 ' + flows + ' 張流程圖也引用了它') : ''));
         $('#adRefNextVer').text((r.cur_version || '—') + ' → ' + REF_NEXT);
         $('#adRefBar').show();
     });
@@ -1187,13 +1194,34 @@ function refPickedIds() {
 function refPaintList() {
     var h = REF.map(function(x){
         var on = !!REF_PICK[x.id];
-        var head = x.kind === 'obsolete'
-            ? ('<span class="adr-warn">' + esc(x.old_no) + '</span> 已廢止')
-            : ('<span class="adr-old">' + esc(x.old_no) + '</span> → <span class="adr-new">' + esc(x.new_no) + '</span>');
+var head;
+        if (x.kind === 'obsolete') {
+            head = '<span class="adr-warn">' + esc(x.old_no) + '</span> 已廢止';
+        } else if (x.kind === 'rename') {
+            head = '文件名稱 <span class="adr-old">' + esc(x.old_name || '') + '</span>'
+                 + ' → <span class="adr-new">' + esc(x.new_name || '') + '</span>'
+                 + '　<span style="color:#8a6d45;font-size:12px;">(' + esc(x.old_no || '') + ')</span>';
+        } else {
+            head = '<span class="adr-old">' + esc(x.old_no) + '</span> → <span class="adr-new">' + esc(x.new_no) + '</span>';
+        }
         var hits = (x.hits_list || []).map(function(t){
+            // 改名的命中是「整段參照標記」，沒有前後文，直接把新舊兩段字列出來比較清楚
+            if (!t.before && !t.after) {
+                return '<div class="adr-hit"><b>正文第 ' + t.page + ' 頁</b>　'
+                     + '<span class="adr-old">' + esc(t.old) + '</span> → '
+                     + '<span class="adr-new">' + esc(t.new || '') + '</span></div>';
+            }
             return '<div class="adr-hit"><b>正文第 ' + t.page + ' 頁</b>　…'
                  + esc(t.before) + '<b>' + esc(t.old) + '</b>' + esc(t.after) + '…</div>';
         }).join('');
+        /* 流程圖不能自動改（插進文件的是一張 PNG，換字要重新產生那張圖，後端沒有瀏覽器做不到），
+           所以這裡明講「請打開那張流程圖按更新引用文字」——不講的話使用者會以為套用就全部處理好了。 */
+        if (x.flows) {
+            hits += '<div class="adr-hit" style="background:#FDF0DC;border-color:#E8C89A;">'
+                 + '<b>另有 ' + x.flows + ' 張流程圖引用了它</b>　'
+                 + '流程圖插進文件的是一張圖片，系統沒辦法在後端重畫，'
+                 + '請在內文點那張流程圖 →「編輯流程圖」，打開時會自動提示並有「更新引用文字」可以按。</div>';
+        }
         return '<div class="adr-it' + (on ? ' on' : '') + '">'
              + '<div class="adr-it-h"><label style="font-weight:normal;margin:0;">'
              + '<input type="checkbox" class="refChk" value="' + x.id + '"' + (on ? ' checked' : '') + '>'

@@ -43,9 +43,16 @@ function ads_stages(): array
 function ads_modes(): array
 {
     return [
-        'editor'   => '內容的最後修改人（表單修改人）',
-        'dept_pos' => '指定部門＋職稱（送審當下在職者）',
-        'user'     => '指定某一個人',
+        'editor'     => '內容的最後修改人（表單修改人）',
+        /* 2026-10-15 使用者指定：「審查應該要由最後修改人的上級主管簽核」。
+           單位主管的解析一律走 ai-rules/24 的唯一實作 eg_unit_supervisor()——
+           往上只追到「課」級，課級最高主管自己改的就從缺（那是核准欄的事）。 */
+        'editor_sup' => '內容最後修改人的單位主管（依 ai-rules/24）',
+        /* 這份文件的 AS 文件部門負責人（負責課室／文件負責部門指派的那一位）；
+           他不在職或已調離時自動改用該部門的代理人（as_doc_owner_lib.php）。 */
+        'doc_owner'  => '這份文件的 AS 文件部門負責人（不在時用代理人）',
+        'dept_pos'   => '指定部門＋職稱（送審當下在職者）',
+        'user'       => '指定某一個人',
     ];
 }
 
@@ -208,13 +215,30 @@ function ads_cfg_save(PDO $db, int $deptId, array $rows, int $uid): array
  * 這一列設定「現在」有哪些人可以簽。
  * 一律即時解析：設定存的是部門與職稱，人員異動不必回來改設定。
  */
-function ads_candidates(PDO $db, array $cfg, ?int $editorUid = null): array
+function ads_candidates(PDO $db, array $cfg, ?int $editorUid = null, int $docId = 0): array
 {
     $mode = (string)$cfg['mode'];
     if ($mode === 'editor') {
         if (!$editorUid) return [];
         $p = eg_people_list($db, ['user_ids' => [$editorUid]]);
         return $p;
+    }
+    if ($mode === 'editor_sup') {
+        if (!$editorUid) return [];
+        require_once __DIR__ . '/unit_supervisor_lib.php';
+        /* ⚠ eg_unit_supervisor() 的第二個參數是 **userId 不是 deptId**，
+           語意是「這個人的單位主管」（會排除本人往上找）——傳錯參數會永遠解析不到人
+           而且完全不報錯（CLAUDE.md 2026-09-30 記過同一個坑）。 */
+        $sup = eg_unit_supervisor($db, $editorUid);
+        $sid = (int)($sup['id'] ?? 0);      // 回傳的鍵是 id（不是 user_id）
+        return $sid > 0 ? eg_people_list($db, ['user_ids' => [$sid]]) : [];
+    }
+    if ($mode === 'doc_owner') {
+        if ($docId <= 0) return [];
+        require_once __DIR__ . '/as_doc_owner_lib.php';
+        $ow = ado_doc_owner($db, $docId);
+        $oid = (int)($ow['uid'] ?? 0);
+        return $oid > 0 ? eg_people_list($db, ['user_ids' => [$oid]]) : [];
     }
     if ($mode === 'user') {
         $uid = (int)($cfg['user_id'] ?? 0);
@@ -265,7 +289,7 @@ function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0): array
     $stages = ads_stages();
     $out = [];
     foreach ($cfg as $c) {
-        $cand = ads_candidates($db, $c, $editorUid);
+        $cand = ads_candidates($db, $c, $editorUid, (int)$v['doc_id']);
         $out[] = [
             'cfg_id'    => (int)$c['id'],
             'stage'     => $c['stage'],
@@ -273,15 +297,33 @@ function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0): array
             'seq'       => (int)$c['seq'],
             'mode'      => $c['mode'],
             'auto_sign' => (int)$c['auto_sign'],
-            'fixed'     => in_array($c['mode'], ['editor', 'user'], true),
+            // 這幾種是「系統算出來的唯一人選」，畫面上不給挑（挑了也只有一個）
+            'fixed'     => in_array($c['mode'], ['editor', 'editor_sup', 'doc_owner', 'user'], true),
             'candidates' => array_map(function ($p) {
                 return ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
                         'dept' => (string)($p['dept_name'] ?? ''), 'pos' => (string)($p['position_name'] ?? '')];
             }, $cand),
         ];
     }
+    /* 使用者 2026-10-15：「請檢查最後修改者是否為此 AS 文件之負責部門人員或是此 AS 文件之部門內人員」。
+       不符合**不擋下送簽**（擋下的話臨時請人代改就送不出去），只把事實講出來讓簽核人判斷。 */
+    $editorWarn = '';
+    if ($editorUid > 0) {
+        try {
+            require_once __DIR__ . '/as_doc_content_lib.php';
+            $inDept = adc_user_in_doc_depts($db, $editorUid, (int)$v['doc_id']);
+            if (!$inDept) {
+                $names = adc_doc_dept_names($db, (int)$v['doc_id']);
+                $who = eg_people_list($db, ['user_ids' => [$editorUid]]);
+                $wn = $who ? (string)$who[0]['user_cname'] : ('#' . $editorUid);
+                $editorWarn = '內容最後修改人「' . $wn . '」不屬於這份文件的負責課室／所屬部門'
+                            . ($names ? ('（' . implode('、', $names) . '）') : '（這份文件還沒登記負責課室）')
+                            . '，請確認是否由正確的人修改。';
+            }
+        } catch (Throwable $e) {}
+    }
     return ['ok' => true, 'steps' => $out, 'scope_dept_id' => $cfg[0]['_scope'] ?? 0,
-            'dept_id' => $deptId, 'editor_uid' => $editorUid];
+            'dept_id' => $deptId, 'editor_uid' => $editorUid, 'editor_warn' => $editorWarn];
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -315,7 +357,8 @@ function ads_current_step(array $steps): ?array
  * 送審。$picks = [cfg_id => user_id]（建立者從候選名單挑的人）。
  * auto_sign 的關卡不必挑，系統自動取候選名單第一位（ai-rules/21：池空才退回最高核准人員）。
  */
-function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $uname): array
+function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $uname,
+                    string $submitDate = ''): array
 {
     ads_ensure_schema($db);
     $cur = ads_case($db, $versionId);
@@ -352,7 +395,12 @@ function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $una
         $rows[] = ['s' => $s, 'p' => $chosen];
     }
 
+    /* 業務日期：一般送簽＝今天；引用連動自動送簽＝來源異動日（ai-rules/21 業務日期與時間戳分離）。
+       只收合法的 Y-m-d，而且**不可以是未來**——簽核紀錄上出現未來日期是稽核一定會問的事。 */
     $today = $db->query("SELECT CURDATE()")->fetchColumn();
+    if ($submitDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate) && $submitDate <= $today) {
+        $today = $submitDate;
+    }
     $allAuto = true;
     foreach ($rows as $r) if (empty($r['s']['auto_sign'])) { $allAuto = false; break; }
 

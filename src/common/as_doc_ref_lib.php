@@ -49,7 +49,8 @@ function adr_ensure_schema(PDO $db): void
     if ($done) return;
     try {
         $st = $db->query("SHOW TABLES LIKE 'as_doc_ref_change'");
-        if ($st && $st->fetchColumn()) { $done = true; return; }
+        // 表已經存在時也要走一次補欄位（2026-10-15 的新欄位），否則永遠不會被加上去
+        if ($st && $st->fetchColumn()) { $done = true; adr_ensure_cols($db); return; }
         if ($db->inTransaction()) return;
     } catch (Throwable $e) { return; }
     $done = true;
@@ -77,6 +78,37 @@ function adr_ensure_schema(PDO $db): void
             KEY idx_src (src_doc_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='線上版內文引用的文件編號待處理變更'");
     } catch (Throwable $e) { error_log('[adr] ensure_schema: ' . $e->getMessage()); }
+    adr_ensure_cols($db);
+}
+
+/**
+ * 後補的欄位（2026-10-15：名稱變更也要連動、流程圖一併盤點）。
+ * ⚠ **這個 MySQL（9.4.0）沒有 `ADD COLUMN IF NOT EXISTS`**（那是 MariaDB 的語法），
+ *    硬寫會直接 1064 語法錯誤、而且錯誤被 catch 吞掉＝欄位永遠不會被加上去，
+ *    症狀是「掃描一直回 0 筆」卻看不出原因。一律先查 SHOW COLUMNS 再逐欄 ALTER
+ *    （站上 homepage.php／meeting_lib.php／con_review_lib.php 都是這個慣例）。
+ */
+function adr_ensure_cols(PDO $db): void
+{
+    static $done = false;
+    if ($done || $db->inTransaction()) return;
+    $done = true;
+    $want = [
+        'src_old_name' => "VARCHAR(160) NULL COMMENT '來源文件改名前的名稱'",
+        'src_new_name' => "VARCHAR(160) NULL COMMENT '改名後的名稱'",
+        'flows'        => "INT NOT NULL DEFAULT 0 COMMENT '另有幾張流程圖引用了它'",
+        'flows_json'   => "TEXT NULL COMMENT '那幾張流程圖（資產 id 與目前文字）'",
+    ];
+    try {
+        $have = [];
+        foreach ($db->query("SHOW COLUMNS FROM as_doc_ref_change")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $have[strtolower((string)$c['Field'])] = true;
+        }
+        foreach ($want as $col => $def) {
+            if (isset($have[strtolower($col)])) continue;
+            $db->exec("ALTER TABLE as_doc_ref_change ADD COLUMN `$col` $def");
+        }
+    } catch (Throwable $e) { error_log('[adr] ensure_cols: ' . $e->getMessage()); }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -202,6 +234,148 @@ function adr_find_hits(string $html, string $old, ?string $new): array
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   參照標記（<span class="eg-asref" data-asdoc="N">）
+   ──────────────────────────────────────────────────────────────────────
+   2026-10-15 新增「插入 AS 文件編號／名稱」之後，內文裡的引用會帶著
+   data-asdoc／data-asno／data-asname／data-asmode／data-astpl。
+   **有標記就用標記比對**：改名尤其只能靠它——文件名稱（例如「人力資源管理程序」）
+   在內文裡到處都是普通敘述文字，拿名稱做字串比對會改到一大堆不是引用的地方。
+   沒有標記的舊內容仍走原本的「編號字串比對」那條路（改名就連動不到，畫面上會講明）。
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** 依 mode／tpl 組出引用文字（與 eg_asdoc_insert_text() 同一套規則，那邊是唯一實作） */
+function adr_ref_text(string $mode, string $no, string $name, string $tpl = ''): string
+{
+    require_once __DIR__ . '/asdoc_lib.php';
+    return eg_asdoc_insert_text($mode, $no, $name, $tpl);
+}
+
+/** 把內文載成 DOM（本檔多處要用，收斂成一支） */
+function adr_dom(string $html): ?array
+{
+    if ($html === '') return null;
+    $doc  = new DOMDocument('1.0', 'UTF-8');
+    $prev = libxml_use_internal_errors(true);
+    $ok = $doc->loadHTML('<?xml encoding="UTF-8"><div id="adr-root">' . $html . '</div>',
+                         LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    if (!$ok) return null;
+    $root = $doc->getElementById('adr-root') ?: $doc->documentElement;
+    if (!$root) return null;
+    return [$doc, $root];
+}
+
+function adr_dom_html(DOMDocument $doc, DOMNode $root): string
+{
+    $out = '';
+    foreach ($root->childNodes as $c) { $out .= $doc->saveHTML($c); }
+    return trim($out);
+}
+
+/**
+ * 這份內文裡引用了某一份文件的參照標記，逐處列出「現在寫的」與「應該寫的」。
+ * @return array [['page'=>int,'before'=>'','after'=>'','old'=>現在的字,'new'=>應該的字], …]
+ */
+function adr_span_hits(string $html, int $docId, string $no, string $name): array
+{
+    $out = [];
+    if ($docId <= 0) return $out;
+    $pages = adt_split_pages($html);
+    if (!$pages) $pages = [$html];
+    foreach ($pages as $i => $pageHtml) {
+        $d = adr_dom((string)$pageHtml);
+        if (!$d) continue;
+        [$doc, $root] = $d;
+        $xp = new DOMXPath($doc);
+        foreach ($xp->query('.//span[@data-asdoc="' . $docId . '"]', $root) as $sp) {
+            /** @var DOMElement $sp */
+            $cur  = (string)$sp->textContent;
+            $mode = (string)$sp->getAttribute('data-asmode') ?: 'both';
+            $tpl  = (string)$sp->getAttribute('data-astpl');
+            $want = adr_ref_text($mode, $no, $name, $tpl);
+            if ($want === $cur) continue;                   // 已經是對的，不必列
+            $out[] = ['page' => $i + 1, 'before' => '', 'after' => '',
+                      'old' => $cur, 'new' => $want];
+        }
+    }
+    return $out;
+}
+
+/**
+ * 把參照標記的文字與屬性更新成現況。
+ * @return array ['html'=>新內文, 'count'=>換了幾處, 'pages'=>[頁碼,…]]
+ */
+function adr_span_update(string $html, int $docId, string $no, string $name): array
+{
+    if ($docId <= 0 || $html === '') return ['html' => $html, 'count' => 0, 'pages' => []];
+    $d = adr_dom($html);
+    if (!$d) return ['html' => $html, 'count' => 0, 'pages' => []];
+    [$doc, $root] = $d;
+    $xp = new DOMXPath($doc);
+    $cnt = 0;
+    foreach ($xp->query('.//span[@data-asdoc="' . $docId . '"]', $root) as $sp) {
+        /** @var DOMElement $sp */
+        $mode = (string)$sp->getAttribute('data-asmode') ?: 'both';
+        $tpl  = (string)$sp->getAttribute('data-astpl');
+        $want = adr_ref_text($mode, $no, $name, $tpl);
+        if ((string)$sp->textContent === $want
+            && (string)$sp->getAttribute('data-asno') === $no
+            && (string)$sp->getAttribute('data-asname') === $name) continue;
+        while ($sp->firstChild) $sp->removeChild($sp->firstChild);
+        $sp->appendChild($doc->createTextNode($want));
+        $sp->setAttribute('data-asno', $no);
+        $sp->setAttribute('data-asname', $name);
+        $cnt++;
+    }
+    if ($cnt === 0) return ['html' => $html, 'count' => 0, 'pages' => []];
+    // 頁碼要以「更新後」的內容重算（標記的位置不會變，但分頁可能已經被編輯過）
+    $newHtml = adr_dom_html($doc, $root);
+    $pages = [];
+    $pp = adt_split_pages($newHtml) ?: [$newHtml];
+    foreach ($pp as $i => $ph) {
+        if (strpos((string)$ph, 'data-asdoc="' . $docId . '"') !== false) $pages[] = $i + 1;
+    }
+    return ['html' => $newHtml, 'count' => $cnt, 'pages' => $pages];
+}
+
+/**
+ * 哪幾張流程圖引用了這份文件（流程圖的文字是畫布物件，存在工作檔 JSON 的 egAsRef）。
+ * **只盤點、不自動改**：流程圖插進文件的是一張 PNG，改字要重新產生那張圖，
+ * 而產生圖需要瀏覽器（Fabric）——後端改 JSON 卻沒換圖，印出來還是舊的而且看不出來。
+ * 所以這裡列出「請打開這張流程圖按『更新引用文字』」，由編輯器那邊處理（它本來就會自己偵測）。
+ */
+function adr_flow_hits(PDO $db, int $contentId, int $docId): array
+{
+    $out = [];
+    if ($contentId <= 0 || $docId <= 0) return $out;
+    try {
+        require_once __DIR__ . '/as_doc_content_lib.php';
+        $dir = adc_dir($db);
+        $st = $db->prepare("SELECT id, file_name, flow_json FROM as_doc_asset
+                            WHERE content_id=? AND kind='flow' AND flow_json IS NOT NULL AND flow_json<>''");
+        $st->execute([$contentId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
+            $p = $dir . $a['flow_json'];
+            if (!is_file($p)) continue;
+            $raw = (string)@file_get_contents($p);
+            if ($raw === '' || strpos($raw, 'egAsRef') === false) continue;
+            $j = json_decode($raw, true);
+            if (!is_array($j)) continue;
+            $texts = [];
+            foreach (($j['objects'] ?? []) as $o) {
+                foreach ((array)($o['egAsRef'] ?? []) as $r) {
+                    if ((int)($r['doc_id'] ?? 0) !== $docId) continue;
+                    $texts[] = (string)($r['text'] ?? '');
+                }
+            }
+            if ($texts) $out[] = ['asset_id' => (int)$a['id'], 'texts' => array_values(array_unique($texts))];
+        }
+    } catch (Throwable $e) { error_log('[adr] flow_hits: ' . $e->getMessage()); }
+    return $out;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    偵測：來源文件異動時掃描所有線上版
    ════════════════════════════════════════════════════════════════════════ */
 
@@ -215,11 +389,21 @@ function adr_find_hits(string $html, string $old, ?string $new): array
 function adr_scan_on_change(PDO $db, array $src): array
 {
     adr_ensure_schema($db);
-    $kind  = ($src['kind'] ?? '') === 'obsolete' ? 'obsolete' : 'renumber';
+    $k = (string)($src['kind'] ?? '');
+    $kind = in_array($k, ['obsolete', 'rename'], true) ? $k : 'renumber';
     $oldNo = trim((string)($src['old_no'] ?? ''));
     $newNo = $kind === 'renumber' ? trim((string)($src['new_no'] ?? '')) : '';
-    $out   = ['targets' => 0, 'hits' => 0, 'rows' => []];
-    if ($oldNo === '' || ($kind === 'renumber' && ($newNo === '' || $newNo === $oldNo))) return $out;
+    $oldName = trim((string)($src['old_name'] ?? ''));
+    $newName = trim((string)($src['new_name'] ?? ''));
+    $out   = ['targets' => 0, 'hits' => 0, 'flows' => 0, 'rows' => []];
+    /* rename 只靠參照標記連動（名稱在內文裡到處都是普通敘述文字，
+       拿名稱做字串比對會改到一大堆不是引用的地方），所以它不需要 old_no，
+       但需要 doc_id——沒有 doc_id 就找不到任何標記。 */
+    if ($kind === 'rename') {
+        if ((int)($src['doc_id'] ?? 0) <= 0 || $newName === '' || $newName === $oldName) return $out;
+    } elseif ($oldNo === '' || ($kind === 'renumber' && ($newNo === '' || $newNo === $oldNo))) {
+        return $out;
+    }
 
     try {
         // 只掃「這份文件目前版次的線上版」；歷史版次是發行紀錄，不可以回頭改
@@ -238,28 +422,64 @@ function adr_scan_on_change(PDO $db, array $src): array
     $srcDocId = (int)($src['doc_id'] ?? 0);
     $ins = $db->prepare("INSERT INTO as_doc_ref_change
         (target_doc_id, target_version_id, src_doc_id, src_kind, src_old_no, src_new_no,
-         src_date, src_note, hits, pages, hits_json, status, created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending', NOW())");
+         src_old_name, src_new_name, src_date, src_note, hits, pages, hits_json,
+         flows, flows_json, status, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', NOW())");
+
+    // 來源文件現在的編號與名稱（參照標記要更新成**現況**，不是只換異動那一個欄位）
+    $curNo = $kind === 'renumber' ? $newNo : $oldNo;
+    $curName = $newName;
+    if ($srcDocId > 0) {
+        try {
+            $q = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=? LIMIT 1");
+            $q->execute([$srcDocId]);
+            if ($cur = $q->fetch(PDO::FETCH_ASSOC)) {
+                $curNo = (string)$cur['doc_no'];
+                $curName = (string)$cur['doc_name'];
+            }
+        } catch (Throwable $e) {}
+    }
 
     foreach ($rows as $r) {
-        // 被改的那份文件如果自己就有線上版，不必掃自己（改的是它的編號，內文引用自己時照樣要換，
-        // 所以這裡刻意**不**跳過，只有完全沒命中才略過）
-        $hits = adr_find_hits((string)$r['content_html'], $oldNo, $newNo !== '' ? $newNo : null);
-        if (!$hits) continue;
+        $html = (string)$r['content_html'];
+        // 被改的那份文件如果自己就有線上版，刻意**不**跳過：內文引用自己時照樣要換
+        $hits = [];
+        if ($kind !== 'rename') {
+            $hits = adr_find_hits($html, $oldNo, $newNo !== '' ? $newNo : null);
+        }
+        // 參照標記（有 data-asdoc 的）一律用精準比對補上；改名只有這一條路
+        if ($srcDocId > 0 && $kind !== 'obsolete') {
+            foreach (adr_span_hits($html, $srcDocId, $curNo, $curName) as $h) {
+                /* renumber 時標記裡的舊編號也會被上面的字串比對抓到一次，
+                   這裡用「現在寫的字」去重，同一處不會算兩次。 */
+                $dup = false;
+                foreach ($hits as $x) {
+                    if ((int)$x['page'] === (int)$h['page']
+                        && mb_strpos($h['old'], (string)$x['old']) !== false) { $dup = true; break; }
+                }
+                if (!$dup) $hits[] = $h;
+            }
+        }
+        $flows = ($srcDocId > 0) ? adr_flow_hits($db, (int)$r['content_id'], $srcDocId) : [];
+        if (!$hits && !$flows) continue;
         $pages = array_values(array_unique(array_column($hits, 'page')));
         sort($pages);
         try {
             $ins->execute([
                 (int)$r['doc_id'], (int)$r['version_id'], $srcDocId ?: null, $kind,
-                $oldNo, $newNo !== '' ? $newNo : null,
+                $oldNo !== '' ? $oldNo : $curNo, $newNo !== '' ? $newNo : null,
+                $oldName !== '' ? $oldName : null, $newName !== '' ? $newName : null,
                 ($src['date'] ?? null) ?: null, mb_substr((string)($src['note'] ?? ''), 0, 255),
                 count($hits), implode(',', $pages),
                 json_encode($hits, JSON_UNESCAPED_UNICODE),
+                count($flows), $flows ? json_encode($flows, JSON_UNESCAPED_UNICODE) : null,
             ]);
         } catch (Throwable $e) { error_log('[adr] insert: ' . $e->getMessage()); continue; }
         $out['targets']++;
         $out['hits'] += count($hits);
-        $out['rows'][] = ['doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name'], 'hits' => count($hits)];
+        $out['flows'] += count($flows);
+        $out['rows'][] = ['doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name'],
+                          'hits' => count($hits), 'flows' => count($flows)];
     }
     return $out;
 }
@@ -272,6 +492,7 @@ function adr_scan_on_change(PDO $db, array $src): array
 function adr_pending_for_version(PDO $db, int $versionId): array
 {
     adr_ensure_schema($db);
+    adr_ensure_cols($db);
     if ($versionId <= 0) return [];
     try {
         $st = $db->prepare("SELECT * FROM as_doc_ref_change
@@ -327,9 +548,32 @@ function adr_mark_html(string $html, array $changes): array
 
     $marks = 0;
     $xp = new DOMXPath($doc);
+    /* 參照標記（有 data-asdoc）一律用「整個標記包成 del＋ins」標示——
+       改名沒有編號字串可比對，而且標記本來就是一整段引用，拆開標反而看不懂。 */
     foreach ($changes as $ch) {
+        $sd = (int)($ch['src_doc_id'] ?? 0);
+        if ($sd <= 0 || (string)($ch['src_kind'] ?? '') === 'obsolete') continue;
+        foreach (iterator_to_array($xp->query('.//span[@data-asdoc="' . $sd . '"]', $root)) as $sp) {
+            /** @var DOMElement $sp */
+            $cur  = (string)$sp->textContent;
+            $mode = (string)$sp->getAttribute('data-asmode') ?: 'both';
+            $tpl  = (string)$sp->getAttribute('data-astpl');
+            $no   = (string)($ch['src_new_no'] ?: $sp->getAttribute('data-asno'));
+            $nm   = (string)($ch['src_new_name'] ?: $sp->getAttribute('data-asname'));
+            $want = adr_ref_text($mode, $no, $nm, $tpl);
+            if ($want === $cur) continue;
+            while ($sp->firstChild) $sp->removeChild($sp->firstChild);
+            $d = $doc->createElement('del', $cur);  $d->setAttribute('class', 'adr-old');
+            $n = $doc->createElement('ins', $want); $n->setAttribute('class', 'adr-new');
+            $sp->appendChild($d); $sp->appendChild($n);
+            $marks++;
+        }
+    }
+    foreach ($changes as $ch) {
+        if ((string)($ch['src_kind'] ?? '') === 'rename') continue;   // 改名沒有編號字串要標
         $old = (string)$ch['src_old_no'];
         $new = (string)($ch['src_new_no'] ?? '');
+        if ($old === '') continue;
         $pat = adr_pattern($old);
         // 每一筆都重抓一次 text node：上一筆可能已經插入了新節點
         foreach (iterator_to_array($xp->query('.//text()', $root)) as $t) {
@@ -375,14 +619,16 @@ function adr_mark_html(string $html, array $changes): array
  */
 function adr_summary_text(array $applied): string
 {
-    $chg = []; $obs = [];
+    $chg = []; $obs = []; $ren = [];
     foreach ($applied as $a) {
         $p = $a['pages'] !== '' ? '第' . str_replace(',', '、', $a['pages']) . '頁' : '';
         if (($a['kind'] ?? '') === 'obsolete') $obs[] = $p . ' ' . $a['old'] . '（已廢止）';
+        elseif (($a['kind'] ?? '') === 'rename') $ren[] = $p . ' ' . $a['old'] . '→' . $a['new'];
         else $chg[] = $p . ' ' . $a['old'] . '→' . $a['new'];
     }
     $s = [];
     if ($chg) $s[] = '改：' . implode('；', $chg);
+    if ($ren) $s[] = '改名：' . implode('；', $ren);
     if ($obs) $s[] = '廢：' . implode('；', $obs);
     return mb_substr(implode('　', $s), 0, 500, 'UTF-8');
 }
@@ -426,6 +672,31 @@ function adr_apply(PDO $db, int $versionId, array $changeIds, int $uid, string $
     foreach ($rows as $r) {
         $old = (string)$r['src_old_no'];
         $new = (string)($r['src_new_no'] ?? '');
+        $srcDoc = (int)($r['src_doc_id'] ?? 0);
+
+        /* ① 參照標記（data-asdoc）一律先依**來源文件現況**更新文字與屬性。
+              改名只有這一條路；改編號也走這裡，因為它連 data-asno 一起更新
+              （只做字串取代的話屬性會留著舊編號，下次比對又會再報一次）。 */
+        if ($srcDoc > 0 && (string)$r['src_kind'] !== 'obsolete') {
+            try {
+                $q = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=? LIMIT 1");
+                $q->execute([$srcDoc]);
+                $cur = $q->fetch(PDO::FETCH_ASSOC);
+            } catch (Throwable $e) { $cur = null; }
+            if ($cur) {
+                $sp = adr_span_update($html, $srcDoc, (string)$cur['doc_no'], (string)$cur['doc_name']);
+                if ($sp['count'] > 0) {
+                    $html = $sp['html'];
+                    $replaced += $sp['count'];
+                    $applied[] = ['kind' => (string)$r['src_kind'], 'old' => (string)($r['src_old_name'] ?: $old),
+                                  'new' => (string)($r['src_new_name'] ?: $new) ?: (string)$cur['doc_name'],
+                                  'pages' => implode(',', $sp['pages']) ?: (string)$r['pages'],
+                                  'n' => $sp['count']];
+                }
+            }
+        }
+        if ((string)$r['src_kind'] === 'rename') continue;   // 改名沒有編號字串要換
+
         if ($r['src_kind'] === 'obsolete' || $new === '') {
             // 廢止：不動內文，只記進摘要讓制修訂紀錄看得到「這一版確認過這件事」
             $applied[] = ['kind' => 'obsolete', 'old' => $old, 'new' => '', 'pages' => (string)$r['pages']];
@@ -438,9 +709,12 @@ function adr_apply(PDO $db, int $versionId, array $changeIds, int $uid, string $
         $pagesNow = array_keys($pagesNow); sort($pagesNow);
         $html = $res['html'];
         $replaced += $res['count'];
-        $applied[] = ['kind' => 'renumber', 'old' => $old, 'new' => $new,
-                      'pages' => implode(',', $pagesNow) ?: (string)$r['pages'], 'n' => $res['count']];
+        if ($res['count'] > 0) {
+            $applied[] = ['kind' => 'renumber', 'old' => $old, 'new' => $new,
+                          'pages' => implode(',', $pagesNow) ?: (string)$r['pages'], 'n' => $res['count']];
+        }
     }
+    if (!$applied) return ['ok' => false, 'msg' => '這幾筆已經沒有需要改的地方了（可能已被手動改過），請按「略過」結案'];
 
     // 修訂日期＝來源異動的業務日期（使用者指定），多筆取最新的一個；都沒有才退回今天
     $date = '';
@@ -491,9 +765,27 @@ function adr_apply(PDO $db, int $versionId, array $changeIds, int $uid, string $
         return ['ok' => false, 'msg' => '套用失敗：' . $e->getMessage()];
     }
 
-    return ['ok' => true, 'msg' => '已套用並補上制修訂紀錄',
+    /* 補完制修訂紀錄之後**自動送出簽核**（使用者 2026-10-15 交辦：
+         「自動列在制修訂紀錄內，自動依照更新日期簽核發行（由管理員設定是否自動簽核，
+           不自動簽核則在變更後自動送出簽核）」）。
+       「要不要自動簽」沿用簽核設定裡每一關本來就有的 auto_sign，**不另外加一個開關**——
+       同一件事兩個地方可設，遲早對不起來（鐵律4）。全關都是自動＝當場簽完；
+       有需要人簽的＝送出並通知第一位待簽者。
+       整段包 try：送簽失敗絕不可以把「已經套用成功」變成失敗（內容已經改好、紀錄已經補好了）。 */
+    $sign = null;
+    try {
+        require_once __DIR__ . '/as_doc_sign_lib.php';
+        $sign = ads_submit($db, $newVid, [], $uid, $uname, $date);
+    } catch (Throwable $e) {
+        error_log('[adr] auto submit: ' . $e->getMessage());
+        $sign = ['ok' => false, 'msg' => '自動送簽失敗：' . $e->getMessage()];
+    }
+
+    return ['ok' => true, 'msg' => '已套用並補上制修訂紀錄'
+                . (!empty($sign['ok']) ? ('；' . (string)$sign['msg']) : ''),
             'version_id' => $newVid, 'version' => $newVer, 'replaced' => $replaced,
-            'pages' => implode('、', $pageList), 'summary' => $summary, 'date' => $date];
+            'pages' => implode('、', $pageList), 'summary' => $summary, 'date' => $date,
+            'sign' => $sign];
 }
 
 /** 略過（這一處不需要改）——留紀錄，不是直接刪掉 */

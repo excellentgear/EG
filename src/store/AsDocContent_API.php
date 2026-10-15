@@ -632,6 +632,11 @@ case 'ref_pending': {
             'date' => $r['src_date'], 'note' => $r['src_note'],
             'hits' => (int)$r['hits'], 'pages' => $r['pages'],
             'hits_list' => $r['hits_list'],
+            // 改名（2026-10-15）：舊/新名稱與「另有幾張流程圖引用它」要帶給畫面，
+            // 流程圖那幾張一律只提示、不自動改（改字要重新產生 PNG，後端做不到）
+            'old_name' => $r['src_old_name'] ?? null, 'new_name' => $r['src_new_name'] ?? null,
+            'flows' => (int)($r['flows'] ?? 0),
+            'flows_list' => $r['flows_json'] ? json_decode((string)$r['flows_json'], true) : [],
         ];
     }
     // 套用之後版別會變成這個，先算好讓確認畫面直接寫出來（使用者才知道會變 2.1 還是 A.1）

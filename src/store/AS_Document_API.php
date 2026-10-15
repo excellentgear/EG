@@ -76,8 +76,11 @@ function jout($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
    AS 文件排程頁要判同一件事（誰能改更新頻率），兩邊各寫一次會出現
    「前端顯示按鈕、後端擋下」（違反鐵律8）。這裡仍用 request 內已算好的全域變數，不多查 DB。 */
 function asIsAdmin(): bool {
-    global $asIsRoleAdmin, $asPagePerm;
-    return eg_asdoc_is_admin_with((bool)$asIsRoleAdmin, (string)$asPagePerm);
+    global $asIsRoleAdmin, $asPagePerm, $asFeatures;
+    /* $asFeatures 一定要傳：asdoc_admin＝「本頁管理員」（ai-rules/26），
+       使用者 2026-10-15 要求「AS負責人只能有一人，但可以有多個本頁管理員」。
+       少傳這個參數，指派了本頁管理員的人還是打不開管理員功能。 */
+    return eg_asdoc_is_admin_with((bool)$asIsRoleAdmin, (string)$asPagePerm, (array)$asFeatures);
 }
 /**
  * 版本檔案「雙版本」解析（使用者要求 2026-08-19）：
@@ -1029,11 +1032,29 @@ case 'add_version':
                 $renumResult['ref_scan'] = adr_scan_on_change($db, [
                     'kind'   => 'renumber', 'doc_id' => $docId,
                     'old_no' => $renumResult['old_doc_no'], 'new_no' => $renumResult['new_doc_no'],
+                    'old_name' => $renumResult['old_doc_name'], 'new_name' => $renumResult['new_doc_name'],
                     'date'   => $rdate,
                     'note'   => (string)$doc['doc_name'] . ' 編號由 ' . $renumResult['old_doc_no']
                                 . ' 變更為 ' . $renumResult['new_doc_no'],
                 ]);
             } catch (Throwable $e) { error_log('[as_doc] renumber ref scan: ' . $e->getMessage()); }
+        }
+        /* 名稱變更也要連動（2026-10-15 使用者交辦）。
+           改名只透過「插入 AS 文件編號／名稱」留下的參照標記連動——
+           名稱在別人的內文裡到處都是普通敘述文字，拿名稱做字串比對會改到一大堆不是引用的地方。 */
+        if ($renumResult && !empty($renumResult['changed_name'])
+            && empty($renumResult['changed_no'])) {
+            try {
+                require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+                $renumResult['ref_scan_name'] = adr_scan_on_change($db, [
+                    'kind'   => 'rename', 'doc_id' => $docId,
+                    'old_no' => $renumResult['new_doc_no'],
+                    'old_name' => $renumResult['old_doc_name'], 'new_name' => $renumResult['new_doc_name'],
+                    'date'   => $rdate,
+                    'note'   => '文件名稱由「' . $renumResult['old_doc_name'] . '」變更為「'
+                                . $renumResult['new_doc_name'] . '」',
+                ]);
+            } catch (Throwable $e) { error_log('[as_doc] rename ref scan: ' . $e->getMessage()); }
         }
         jout(['status'=>'success','version_id'=>$verId,'renumber'=>$renumResult]);
     } catch (Exception $e) {
@@ -1067,10 +1088,12 @@ case 'update_document_meta':
     $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
 
-    // 取更新前的編號（供子表單編號連動用）
-    $oldNoStmt = $db->prepare("SELECT doc_no FROM as_document WHERE id=?");
+    // 取更新前的編號與名稱（供子表單編號連動與「引用連動」用）
+    $oldNoStmt = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
     $oldNoStmt->execute([$id]);
-    $oldNo = (string)$oldNoStmt->fetchColumn();
+    $oldMeta = $oldNoStmt->fetch(PDO::FETCH_ASSOC) ?: ['doc_no' => '', 'doc_name' => ''];
+    $oldNo = (string)$oldMeta['doc_no'];
+    $oldName2 = (string)$oldMeta['doc_name'];
     $cascade = ($_POST['cascade_children'] ?? '') === '1';
 
     $db->beginTransaction();
@@ -1104,7 +1127,28 @@ case 'update_document_meta':
         $db->prepare("DELETE FROM as_doc_tag_map WHERE doc_id=?")->execute([$id]);
         if ($tagIds) { $ins=$db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)"); foreach($tagIds as $t) $ins->execute([$id,$t]); }
         $db->commit();
-        jout(['status'=>'success','cascade_renumbered'=>$cascadeCnt]);
+        /* 編輯基本資料也會改到編號或名稱（誤植修正），一樣要掃一次線上版的引用。
+           掃描放 commit 之後、整段包 try——掃描失敗絕不可以把「已經存好」變成失敗。 */
+        $refScan2 = null;
+        try {
+            require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+            if ($oldNo !== '' && $oldNo !== $doc_no) {
+                $refScan2 = adr_scan_on_change($db, [
+                    'kind' => 'renumber', 'doc_id' => $id,
+                    'old_no' => $oldNo, 'new_no' => $doc_no,
+                    'old_name' => $oldName2, 'new_name' => $doc_name,
+                    'date' => $rdate, 'note' => $doc_name . ' 編號由 ' . $oldNo . ' 更正為 ' . $doc_no,
+                ]);
+            } elseif ($oldName2 !== '' && $oldName2 !== $doc_name) {
+                $refScan2 = adr_scan_on_change($db, [
+                    'kind' => 'rename', 'doc_id' => $id, 'old_no' => $doc_no,
+                    'old_name' => $oldName2, 'new_name' => $doc_name,
+                    'date' => $rdate,
+                    'note' => '文件名稱由「' . $oldName2 . '」更正為「' . $doc_name . '」',
+                ]);
+            }
+        } catch (Throwable $e) { error_log('[as_doc] meta ref scan: ' . $e->getMessage()); }
+        jout(['status'=>'success','cascade_renumbered'=>$cascadeCnt,'ref_scan'=>$refScan2]);
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
 
 // ══════════════ 文件備註（富文字；管理員維護，清單顯示在文件名稱下方） ══════════════

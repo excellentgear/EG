@@ -459,17 +459,33 @@ if (!function_exists('eg_sign_modules')) {
                 'name_fmt' => '量測儀器校驗批次 #%s'],
             'as_doc_tree' => ['label' => 'AS 文件結構總覽表', 'page' => 'views/ADM/as_document_management.php',
                 'name_fmt' => 'AS 文件結構總覽表'],
+            /* AS 文件線上版（二階程序書等直接在網頁上編輯的那一種）的三關簽核。
+               2026-10-15 補登記：as_doc_sign_lib.php 早就在寫 approval_record(module='as_doc_online')，
+               但這裡沒登記，所以「列印與簽核紀錄」查詢頁只印得出模組代碼、看不出是哪一份文件哪一版
+               （ai-rules/23 要求簽核紀錄要查得到文件名稱）。entity_id＝as_document_version.id。 */
+            'as_doc_online' => ['label' => 'AS 文件線上版', 'page' => 'views/ADM/as_doc_editor.php',
+                'table' => 'as_document_version', 'pk' => 'id',
+                // 關卡名稱一律跟制修訂紀錄書上的格子一致（ads_stages() 是唯一來源）
+                'levels' => ['draft' => '制修訂', 'review' => '審查', 'approve' => '核准'],
+                'name_sql' => "CONCAT(d.doc_no, ' ', d.doc_name, '　第 ', COALESCE(NULLIF(t.version,''), '?'), ' 版')",
+                'join_sql' => "LEFT JOIN as_document d ON d.id = t.doc_id",
+                'date_sql' => 't.revised_date'],
         ];
     }
 }
 
 if (!function_exists('eg_sign_level_label')) {
     /** 簽核關卡代碼轉中文；沒對到的原樣顯示（不寫死一份完整清單，新關卡不會變成空白） */
-    function eg_sign_level_label(string $level): string {
+    function eg_sign_level_label(string $level, array $override = []): string {
+        /* $override＝該模組自己的關卡名稱（eg_sign_modules() 的 'levels'）。
+           同一個代碼在不同模組叫法不一樣（線上版的 review 是「審查」、別的模組是「審核」），
+           印出來的名稱必須跟那張表單上的格子一致，否則稽核對不起來。 */
+        if ($override && isset($override[$level])) return (string)$override[$level];
         $map = [
             'manager' => '主管核准', 'approve' => '核准', 'approval' => '核准',
             'confirm' => '確認',     'review'  => '審核', 'chair'    => '主席確認',
             'gm'      => '總經理核准',
+            'draft'   => '制修訂',   // AS 文件線上版的第一關（制修訂紀錄書上的「制修訂」格）
         ];
         if (isset($map[$level])) return $map[$level];
         if (preg_match('/^(?:stage_|step)(\d+)$/', $level, $m)) return '第 ' . $m[1] . ' 關簽核';   // stepN＝表格模板（sheet_form）的關卡
@@ -561,7 +577,8 @@ if (!function_exists('eg_sign_resolve_names')) {
                 $rows[$i]['doc_name']     = $name;
                 $rows[$i]['doc_date']     = $dateById[$eid] ?? null;
                 $rows[$i]['module_label'] = $cfg['label'] ?? $mod;
-                $rows[$i]['level_label']  = eg_sign_level_label((string)$rows[$i]['level']);
+                $rows[$i]['level_label']  = eg_sign_level_label((string)$rows[$i]['level'],
+                                                                 (array)($cfg['levels'] ?? []));
                 $rows[$i]['result_label'] = eg_sign_result_label((string)$rows[$i]['status']);
             }
         }
