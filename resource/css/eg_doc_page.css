@@ -30,7 +30,12 @@
 }
 
 .eg-docbody {
-    font-family: "微軟正黑體", "Microsoft JhengHei", sans-serif;
+    /* 公版字型套到整份文件：原本只作用在表格上，封面與制修訂紀錄書的標題
+       （公司名、文件名、「文件制修訂紀錄書」）會留在寫死的正黑體，
+       改成標楷體之後標題卻沒跟著變（使用者 2026-10-15 回報）。
+       沒設定公版字型時用後面的預設值，外觀與改版前完全相同。
+       內文中使用者自己指定過字型的段落有自己的 font-family，不受這一條影響。 */
+    font-family: var(--adt-tbl-font, "微軟正黑體", "Microsoft JhengHei", sans-serif);
     font-size: 12pt;
     line-height: 1.6;
     color: #333;

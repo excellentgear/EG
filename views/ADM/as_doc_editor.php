@@ -242,7 +242,10 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .st-sp { display:inline-block; width:1px; height:18px; background:#e4d3ba; margin:0 5px; }
         .st-prev-wrap { margin-top:8px; }
         /* 預覽用「一張紙的一角」呈現，所見即所得 */
-        .st-prev { background:#fff; border:1px solid #d8c7b0; padding:10px 12px; border-radius:3px; }
+        /* 預覽要跟文件一樣吃公版字型——頁首那張表不在 .eg-docbody 裡面，
+           不補這一條的話預覽的表頭永遠是正黑體，跟存檔後的結果對不起來 */
+        .st-prev { background:#fff; border:1px solid #d8c7b0; padding:10px 12px; border-radius:3px;
+                   font-family: var(--adt-tbl-font, "微軟正黑體", "Microsoft JhengHei", sans-serif); }
         .st-prev .st-body { font-size:11pt; line-height:1.5; }
         .st-prev .st-body p { margin:0 0 4px; }
         .st-prev table.adt-hdr { margin-bottom:2mm; }
@@ -1585,8 +1588,12 @@ function fillStyleForm() {
 function previewStyle() {
     var p = document.getElementById('stPreview');
     if (!p) return;
-    p.style.setProperty('--adt-tbl-font', $('#stFont').val() || 'inherit');
-    p.style.setProperty('--adt-tbl-size', $('#stSize').val() || 'inherit');
+    /* 沒選字型／字級時要把變數**移除**，不是設成 inherit：
+       設了值就輪不到 CSS 裡 var(…, 預設) 的那個預設，預覽會變成跳窗的字型，
+       跟存檔後的實際結果對不起來 */
+    var fv = $('#stFont').val(), sv = $('#stSize').val();
+    if (fv) p.style.setProperty('--adt-tbl-font', fv); else p.style.removeProperty('--adt-tbl-font');
+    if (sv) p.style.setProperty('--adt-tbl-size', sv); else p.style.removeProperty('--adt-tbl-size');
     p.style.setProperty('--adt-tbl-weight', $('#stBold').hasClass('on') ? 'bold' : 'normal');
     p.style.setProperty('--adt-brd-style', $('#stBStyle').val() || 'solid');
     p.style.setProperty('--adt-brd-w', $('#stBW').val() || '1px');
