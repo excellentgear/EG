@@ -524,8 +524,10 @@
     if (depth === 1 && !m[3]) return null;   // 純數字開頭又沒有點——當內文看，不當編號（避免「10月份」誤判）
     var wsAfter = /^[\s　]*/.exec(text.slice(m[0].length))[0];
     // 量寬只量「編號＋後面的空白」：開頭的空白不算（那是 Word 手排的縮排，會另外被清掉，
-    // 算進去吊掛寬度就會多出一截）；後面連續的一般空白瀏覽器只會顯示成一個，也只量一個
-    var wsShown = wsAfter.replace(/ {2,}/g, ' ');
+    // 算進去吊掛寬度就會多出一截）。後面的空白一律正規化成「瀏覽器實際顯示的樣子」——
+    // LibreOffice 匯出的原始碼縮排（換行＋tab）在 HTML 只會顯示成一個空格，
+    // 直接拿去 measureText 會量成一大截（實例 2-GM-03 的 6.1.1 因此比 6.1.2 多縮 1.3em）
+    var wsShown = wsAfter.replace(/[ \t\r\n\f\v]+/g, ' ');
     return { depth: depth, num: num, label: m[0].slice(m[1].length) + wsShown };
   }
 
@@ -557,7 +559,7 @@
       if (took) {
         var f = fontOf(n);
         if (first) { fs = f; first = false; }
-        px += ctx.measureText(took).width;
+        px += ctx.measureText(took.replace(/[ \t\r\n\f\v]+/g, ' ')).width;
       }
     }
     if (rest) {   // 對不上（節點被拆得很碎等）：退回整串用第一個節點字型量
@@ -578,8 +580,9 @@
     // 現在縮排由階層自動決定，兩邊都有就會縮兩次、文字位置跑掉（使用者 2026-10-15）
     var tw = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null), tn = tw.nextNode();
     if (tn && /^[\s 　]+/.test(tn.nodeValue)) {
-      var stripped = tn.nodeValue.replace(/^[\s 　]+/, '');
-      if (stripped !== '') tn.nodeValue = stripped;
+      // 整段都是空白的節點也要清（匯入的內容常把縮排單獨包成一個 <span>），
+      // 留著它第一行就多一個空格、編號跟著右移
+      tn.nodeValue = tn.nodeValue.replace(/^[\s 　]+/, '');
     }
     var meas = measureLabelPx(block, m.label);
     var hangEm = Math.min(9.9, Math.max(0, Math.round((meas.px / meas.fontSizePx) * 10) / 10));

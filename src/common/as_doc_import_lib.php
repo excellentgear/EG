@@ -102,6 +102,7 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
     $res = adi_transform($db, $raw, $work, $contentId, $uid);
     adi_rrmdir($work);
 
+    [$res['html'], $res['list_num']] = adi_lists_to_text_numbers((string)$res['html']);
     [$res['html'], $wrapMerged] = adi_merge_wrapped_paragraphs((string)$res['html']);
     $res['wrap_merged'] = $wrapMerged;
     [$res['html'], $res['font_fixed']] = adi_fix_cjk_fonts((string)$res['html']);
@@ -686,4 +687,114 @@ function adi_fix_cjk_fonts(string $html): array
     $out = '';
     foreach ($body->childNodes as $c) $out .= $dom->saveHTML($c);
     return [$out, $n2];
+}
+
+/**
+ * Word 的「自動編號清單」改寫成文字編號。
+ *
+ * LibreOffice 把 Word 的多層自動編號輸出成**巢狀 <ol> 加 start 屬性**
+ *（6.2 ＝ `<ol start="6"><ol start="2"><li>…`），而 start 不在清洗白名單裡會被丟掉，
+ * 瀏覽器就從 1 重新數——實例 2-GM-03：「6.2 風險識別」被顯示成「1. 風險識別」，
+ * 之後的條文編號整串跟著錯（使用者 2026-10-15 回報）。
+ *
+ * 同一份文件裡本來就有手打的文字編號（6.1.1、6.1.3），所以一律算成文字編號、
+ * 攤平成 <p>：編號固定不會再被重算，也跟手打的那些段落走同一套自動縮排規則。
+ * <ul>（項目符號）不動——那本來就沒有編號可言。
+ *
+ * @return array{0:string,1:int} [處理後 HTML, 改寫的項目數]
+ */
+function adi_lists_to_text_numbers(string $html): array
+{
+    if ($html === '' || stripos($html, '<ol') === false) return [$html, 0];
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $prev = libxml_use_internal_errors(true);
+    $ok = $dom->loadHTML('<meta http-equiv="Content-Type" content="text/html; charset=utf-8"><body>' . $html . '</body>',
+        LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors(); libxml_use_internal_errors($prev);
+    $body = $ok ? $dom->getElementsByTagName('body')->item(0) : null;
+    if (!$body) return [$html, 0];
+
+    $cnt = 0;
+    // 由外而內：只處理「最外層」的 ol（裡面的交給遞迴），否則同一層會被算兩次
+    $xp = new DOMXPath($dom);
+    foreach (iterator_to_array($xp->query('//ol[not(ancestor::ol)]')) as $ol) {
+        $out = [];
+        adi_ol_collect($ol, [], $dom, $out, $cnt);
+        foreach ($out as $node) $ol->parentNode->insertBefore($node, $ol);
+        $ol->parentNode->removeChild($ol);
+    }
+    $res = '';
+    foreach ($body->childNodes as $c) $res .= $dom->saveHTML($c);
+    return [$res, $cnt];
+}
+
+/** 走訪一層 <ol>，把每個 <li> 收成帶編號的 <p>（見 adi_lists_to_text_numbers） */
+function adi_ol_collect(DOMElement $ol, array $stack, DOMDocument $dom, array &$out, int &$cnt): void
+{
+    if (count($stack) > 8) return;                       // 防爆：真實文件不會超過這個層數
+    $start = (int)$ol->getAttribute('start');
+    $n = $start > 0 ? $start : 1;
+    // 這一層有沒有自己的 <li>？沒有＝它只是「更深一層」的中介（<ol start="6"><ol start="2">）
+    $hasLi = false;
+    foreach ($ol->childNodes as $c) {
+        if ($c->nodeType === XML_ELEMENT_NODE && strtolower($c->nodeName) === 'li') { $hasLi = true; break; }
+    }
+    $lastNum = $n;
+    foreach (iterator_to_array($ol->childNodes) as $c) {
+        if ($c->nodeType !== XML_ELEMENT_NODE) continue;
+        $tag = strtolower($c->nodeName);
+        if ($tag === 'li') {
+            adi_li_emit($c, array_merge($stack, [$n]), $dom, $out, $cnt);
+            $lastNum = $n; $n++;
+        } elseif ($tag === 'ol') {
+            // 有 li 時，這個 ol 是「上一個 li 的子清單」；沒有 li 時它就是下一層本身
+            adi_ol_collect($c, array_merge($stack, [$hasLi ? $lastNum : $n]), $dom, $out, $cnt);
+        }
+    }
+}
+
+/** 把一個 <li> 的內容收成 <p>，第一段開頭插入編號文字（見 adi_lists_to_text_numbers） */
+function adi_li_emit(DOMElement $li, array $num, DOMDocument $dom, array &$out, int &$cnt): void
+{
+    $label = implode('.', $num);
+    $first = true;
+    $carry = null;   // 還沒有 p 可掛的零散內容（裸文字、<span>）
+    $flush = function () use (&$carry, &$out, &$first, $dom, $label, &$cnt) {
+        if (!$carry) return;
+        if ($first) { adi_li_label($carry, $label, $dom); $first = false; $cnt++; }
+        $out[] = $carry; $carry = null;
+    };
+    foreach (iterator_to_array($li->childNodes) as $c) {
+        $tag = ($c->nodeType === XML_ELEMENT_NODE) ? strtolower($c->nodeName) : '';
+        if ($tag === 'ol') {                       // 子清單：編號接在這個 li 底下
+            $flush();
+            adi_ol_collect($c, $num, $dom, $out, $cnt);
+            continue;
+        }
+        if ($tag === 'p' || $tag === 'div') {
+            $flush();
+            if ($first) { adi_li_label($c, $label, $dom); $first = false; $cnt++; }
+            $out[] = $c;
+            continue;
+        }
+        if ($c->nodeType === XML_TEXT_NODE && trim($c->nodeValue) === '') continue;
+        if (!$carry) $carry = $dom->createElement('p');
+        $carry->appendChild($c);
+    }
+    $flush();
+    if ($first) {   // 整個 li 是空的：仍然要留下編號，不然那一條會整個不見
+        $p = $dom->createElement('p');
+        adi_li_label($p, $label, $dom);
+        $out[] = $p; $cnt++;
+    }
+}
+
+/** 在區塊最前面插入「編號＋空白」（編號沿用文件裡其他手打編號的西文字型） */
+function adi_li_label(DOMElement $block, string $label, DOMDocument $dom): void
+{
+    $sp = $dom->createElement('span');
+    $sp->setAttribute('style', 'font-family:Times New Roman, serif');
+    $sp->appendChild($dom->createTextNode($label));
+    $block->insertBefore($dom->createTextNode(' '), $block->firstChild);
+    $block->insertBefore($sp, $block->firstChild);
 }
