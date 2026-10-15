@@ -57,7 +57,7 @@
 .eg-docbody ol { margin: 0 0 4px; padding-left: 22px; }
 .eg-docbody li { margin: 0; }
 
-.eg-docbody table { border-collapse: collapse; margin: 6px 0;
+.eg-docbody table { border-collapse: collapse; margin: 6px auto;
     font-family: var(--adt-tbl-font); font-size: var(--adt-tbl-size); font-weight: var(--adt-tbl-weight); }
 .eg-docbody td,
 .eg-docbody th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
