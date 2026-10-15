@@ -1051,7 +1051,7 @@ function renderRules(){
         b.append('<tr><td><b>' + esc(r.id) + '</b></td><td>' + esc(r.kind) + '</td><td class="l">' + esc(r.cat) + '</td><td class="l">' + esc(r.when) + '</td><td class="l">' + esc(r.then) + '</td></tr>');
     });
 }
-$(document).on('click', '[data-rules]', function(){
+$(document).on('click', 'button[data-rules]', function(){
     get({action:'rules_list'}, function(res){
         RULES = res.rules;
         var kinds = {}; $.each(RULES, function(_, r){ kinds[r.kind] = 1; });
