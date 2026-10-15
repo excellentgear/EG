@@ -523,7 +523,10 @@
     var num = m[2], depth = num.split('.').length;
     if (depth === 1 && !m[3]) return null;   // 純數字開頭又沒有點——當內文看，不當編號（避免「10月份」誤判）
     var wsAfter = /^[\s　]*/.exec(text.slice(m[0].length))[0];
-    return { depth: depth, label: m[0] + wsAfter };
+    // 量寬只量「編號＋後面的空白」：開頭的空白不算（那是 Word 手排的縮排，會另外被清掉，
+    // 算進去吊掛寬度就會多出一截）；後面連續的一般空白瀏覽器只會顯示成一個，也只量一個
+    var wsShown = wsAfter.replace(/ {2,}/g, ' ');
+    return { depth: depth, label: m[0].slice(m[1].length) + wsShown };
   }
 
   var _numMeasureCanvas = null;
@@ -547,6 +550,13 @@
     var m = numLabelMatch(block.textContent);
     if (!m) return false;
     var level = Math.max(0, m.depth - 1);
+    // 編號前面用空白（含全形／不斷行空白）手排出來的縮排一律拿掉：
+    // 現在縮排由階層自動決定，兩邊都有就會縮兩次、文字位置跑掉（使用者 2026-10-15）
+    var tw = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null), tn = tw.nextNode();
+    if (tn && /^[\s 　]+/.test(tn.nodeValue)) {
+      var stripped = tn.nodeValue.replace(/^[\s 　]+/, '');
+      if (stripped !== '') tn.nodeValue = stripped;
+    }
     var meas = measureLabelPx(block, m.label);
     var hangEm = Math.min(9.9, Math.max(0, Math.round((meas.px / meas.fontSizePx) * 10) / 10));
     var mgEm = Math.min(INDENT_MAX, level * INDENT_STEP);
