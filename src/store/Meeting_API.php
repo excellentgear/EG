@@ -179,7 +179,12 @@ case 'preset_save': {
 case 'tpl_list': {
     include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
     if (!$perms['canEdit'] && !$perms['canAdmin']) jerr('無權限', 403);
-    jout(['templates'=>meeting_tpl_list($db), 'sources'=>meeting_tpl_sources()]);
+    $tpls = meeting_tpl_list($db);
+    foreach ($tpls as &$t) $t['sync'] = meeting_tpl_sync_status($db, $t);   // 與 AS 文件線上版的差異（沒綁文件＝null）
+    unset($t);
+    jout(['templates'=>$tpls, 'sources'=>meeting_tpl_sources(), 'src_meta'=>meeting_tpl_source_meta(),
+          'doc_map'=>meeting_tpl_doc_map(), 'docs'=>meeting_tpl_doc_options($db),
+          'kpi_options'=>$db->query("SELECT indicator_id id, name FROM kpi_as_indicator WHERE is_active=1 ORDER BY sort_order, indicator_id")->fetchAll(PDO::FETCH_ASSOC)]);
 }
 case 'tpl_save': {
     include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
@@ -210,9 +215,21 @@ case 'tpl_save': {
         $c = trim((string)($it['content'] ?? ''));
         if ($c === '') continue;
         $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
-        $ds = (string)($it['data_src'] ?? ''); if ($ds !== '' && !isset($src[$ds])) jerr('不支援的系統資料來源：'.$ds);
+        $srcs = [];
+        foreach ((array)($it['srcs'] ?? []) as $sx) {
+            $k = (string)($sx['k'] ?? ''); if ($k === '') continue;
+            if (!isset($src[$k])) jerr('不支援的系統資料來源：'.$k);
+            $srcs[] = ['k'=>$k, 'ids'=>array_values(array_unique(array_filter(array_map('intval', (array)($sx['ids'] ?? [])))))];
+        }
+        $docIds = array_values(array_unique(array_filter(array_map('intval', (array)($it['as_docs'] ?? [])))));
+        if ($docIds) {   // 只收真的存在的 AS 文件
+            $q = $db->prepare("SELECT id FROM as_document WHERE id IN (" . implode(',', array_fill(0, count($docIds), '?')) . ")");
+            $q->execute($docIds); $docIds = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        }
         $items[] = [$kind, $c, $kind === 'announce' ? null : $depIds($it['owner_depts'] ?? []),
-                    trim((string)($it['remark'] ?? '')) ?: null, $ds ?: null];
+                    trim((string)($it['remark'] ?? '')) ?: null, null,
+                    trim((string)($it['clause'] ?? '')) ?: null, trim((string)($it['title_text'] ?? '')) ?: null,
+                    $docIds ? implode(',', $docIds) : null, $srcs ? json_encode($srcs, JSON_UNESCAPED_UNICODE) : null];
     }
     $id = (int)($t['tpl_id'] ?? 0);
     try {
@@ -228,8 +245,8 @@ case 'tpl_save': {
                ->execute([$name, $subject, trim((string)($t['location'] ?? '')) ?: null, $start, $end, $notice, $nDepts, $n, $uid]);
             $id = (int)$db->lastInsertId();
         }
-        $ins = $db->prepare("INSERT INTO meeting_tpl_item (tpl_id, kind, sort_order, content, owner_depts, remark, data_src) VALUES (?,?,?,?,?,?,?)");
-        foreach ($items as $i => $r) $ins->execute([$id, $r[0], $i, $r[1], $r[2], $r[3], $r[4]]);
+        $ins = $db->prepare("INSERT INTO meeting_tpl_item (tpl_id, kind, sort_order, content, owner_depts, remark, data_src, clause, title_text, as_docs, src_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+        foreach ($items as $i => $r) $ins->execute([$id, $r[0], $i, $r[1], $r[2], $r[3], $r[4], $r[5], $r[6], $r[7], $r[8]]);
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['tpl_id'=>$id]);
@@ -250,16 +267,22 @@ case 'tpl_render': {
     $found = null;
     foreach (meeting_tpl_list($db) as $t) if ((int)$t['tpl_id'] === $id) $found = $t;
     if (!$found) jerr('找不到此範本');
-    $cache = [];
     foreach ($found['items'] as &$it) {
-        $ds = (string)($it['data_src'] ?? '');
-        if ($ds !== '') {
-            if (!isset($cache[$ds])) $cache[$ds] = meeting_tpl_source_text($db, $ds, $date);
-            $it['content'] = rtrim((string)$it['content']) . "\n" . $cache[$ds];
-        }
+        $txt = meeting_tpl_item_text($db, $it, $date);
+        if ($txt !== '') $it['content'] = rtrim((string)$it['content']) . "\n" . $txt;
     }
     unset($it);
-    jout(['template'=>$found]);
+    [$py, $pf, $pt] = meeting_tpl_period($date);
+    $found['sync'] = meeting_tpl_sync_status($db, $found);
+    jout(['template'=>$found, 'period'=>['year'=>$py, 'from'=>$pf, 'to'=>$pt]]);
+}
+/* 依 AS 文件線上版更新範本的條文（只換條文文字與補新增的條文，待填提示與系統資料設定不動） */
+case 'tpl_sync': {
+    include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php';
+    if (!$perms['canAdmin']) jerr('僅管理員可維護會議範本', 403);
+    $r = meeting_tpl_sync_apply($db, (int)($_POST['tpl_id'] ?? 0));
+    if (empty($r['ok'])) jerr($r['error'] ?? '同步失敗');
+    jout($r);
 }
 case 'preset_delete': {
     if (!$perms['canAdmin']) jerr('僅管理員可維護常用設定', 403);

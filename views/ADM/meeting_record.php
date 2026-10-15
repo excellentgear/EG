@@ -252,7 +252,8 @@ foreach ($roleRows as $rr) {
             .mt-toolbar, .nav_menu, .left_col, footer, .mt-op { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
         }
-    </style>
+            .note-warn{background:#FFF3D6;border:1px solid #F0A24B;color:#6b4a16;border-radius:4px;padding:6px 10px;font-size:12px;margin:8px 0;}
+</style>
 </head>
 <body class="nav-sm">
 <div class="container body">
@@ -449,10 +450,13 @@ foreach ($roleRows as $rr) {
             <textarea id="tpNotice" rows="3" maxlength="5000"></textarea>
             <label>會議通知單的應出席單位 <span id="tpUnitCnt" style="color:#8a6d45;font-weight:normal;"></span></label>
             <div id="tpUnitBox" style="display:flex;flex-wrap:wrap;gap:4px 12px;max-height:110px;overflow:auto;border:1px solid #EADFC8;padding:6px;border-radius:4px;"></div>
+            <div id="tpSyncBox"></div>
             <label style="margin-top:12px;">範本項目（套用後長成會議記錄裡的項目）</label>
             <div style="font-size:11.5px;color:#8a6d45;margin-bottom:4px;">
                 內容裡寫 <b>【待填：提示文字】</b> 代表「需要記錄人填入的內容」，沒填完就不能送出；
-                選「系統資料」則套用當下依<b>會議日期</b>自動算出最新數字附在內容後面（仍可修改）。</div>
+                每個項目可多選<b>對應的 AS 表單</b>：有 <b>★</b> 的表單已登記系統資料，套用當下依<b>會議日期</b>自動算出統計附在內容後面（仍可修改）；
+                也可另外指定「系統資料」（KPI 可只帶指定的幾項指標）。1～2 月召開的會議，統計的是上一個完整年度。
+                有「條文編號」的項目對應 AS 文件線上版，線上版更動時這裡會提醒、可一鍵更新。</div>
             <div id="tpItemBox"></div>
             <div style="margin-top:6px;">
                 <button type="button" class="b-att" onclick="tplItemAdd('directive')">＋上級指示要項</button>
@@ -1210,11 +1214,11 @@ function renderChairSel(){
 }
 
 /* ---------- 會議範本（2026-10-15）：套用＝帶入主題/時間/地點/項目/通知單內容；管理＝管理員維護 ---------- */
-var TPLS = [], TPL_SRC = {}, TPL_ID = 0, TPL_ED = null;
+var TPLS = [], TPL_SRC = {}, TPL_ID = 0, TPL_ED = null, TPL_DOCS = [], TPL_DOCMAP = {}, TPL_KPIS = [];
 function loadTemplates(cb){
     $.getJSON(API, {action:'tpl_list'}, function(r){
         if (!r.ok) return;
-        TPLS = r.templates||[]; TPL_SRC = r.sources||{};
+        TPLS = r.templates||[]; TPL_SRC = r.sources||{}; TPL_DOCS = r.docs||[]; TPL_DOCMAP = r.doc_map||{}; TPL_KPIS = r.kpi_options||[];
         var h = '<option value="">套用會議範本…</option>';
         TPLS.forEach(function(t){ h += '<option value="'+t.tpl_id+'">'+esc(t.name)+'</option>'; });
         $('#edTpl').html(h);
@@ -1242,7 +1246,9 @@ $('#edTpl').on('change', function(){
         });
         if (!EDIT_ID) TPL_ID = +t.tpl_id;   // 只有新建的會議才會連通知單內容一起帶入
         renderItems('directive'); renderItems('general'); renderItems('announce');
-        alert('已套用「'+t.name+'」。內容裡的【待填：…】要填完才能送出；系統資料是依會議日期 '+dispDate($('#edDate').val())+' 算的，改日期後請重新套用。');
+        var per = r.period ? ('統計期間 '+dispDate(r.period.from)+' ～ '+dispDate(r.period.to)+'（1～2 月召開的會議，審查的是上一個完整年度）') : '';
+        var warn = (t.sync && t.sync.dirty) ? ('\n\n⚠ 注意：這份範本的條文與 AS 文件「'+esc(t.name)+'」線上版（'+(t.sync.ver?t.sync.ver.version:'')+'）不一致，請管理員到「範本管理」依線上版更新。') : '';
+        alert('已套用「'+t.name+'」。\n內容裡的【待填：…】要填完才能送出；系統資料是依會議日期 '+dispDate($('#edDate').val())+' 算的，改日期後請重新套用。\n'+per+warn);
     });
 });
 
@@ -1253,7 +1259,12 @@ function tplBack(){
     $('#tplMgrTitle').text('會議範本管理');
     var h = '';
     TPLS.forEach(function(t){
-        h += '<tr><td class="t-left">'+esc(t.name)+'</td><td class="t-left">'+esc(t.subject)+'</td><td>'+(t.items||[]).length+'</td>'
+        var sy = t.sync, badge = '';
+        if (sy && sy.has_doc === false) badge = ' <span style="color:#C0703A;font-size:11px;">（對應的 AS 文件沒有線上版內容）</span>';
+        else if (sy && sy.dirty) badge = ' <span style="background:#F0A24B;color:#4A3524;border-radius:8px;padding:0 7px;font-size:11px;">線上版已更新</span>'
+            + ' <a href="javascript:;" style="font-size:11.5px;" onclick="tplSyncOpen('+t.tpl_id+')">查看差異／依線上版更新</a>';
+        else if (sy) badge = ' <span style="color:#5C8A3C;font-size:11px;">與線上版 '+esc(sy.ver?sy.ver.version:'')+' 一致</span>';
+        h += '<tr><td class="t-left">'+esc(t.name)+badge+'</td><td class="t-left">'+esc(t.subject)+'</td><td>'+(t.items||[]).length+'</td>'
            + '<td><a href="javascript:;" onclick="tplEdit('+t.tpl_id+')">編輯</a>　<a href="javascript:;" style="color:#DD5138;" onclick="tplDel('+t.tpl_id+')">刪除</a></td></tr>';
     });
     $('#tplListBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未建立範本</td></tr>');
@@ -1268,14 +1279,21 @@ function tplDel(id){
 function tplEdit(id){
     var t = TPLS.find(function(x){ return +x.tpl_id===+id; });
     TPL_ED = t ? {tpl_id:+t.tpl_id, notice_depts:String(t.notice_depts||'').split(',').filter(Boolean).map(Number),
-                  items:(t.items||[]).map(function(it){ return {kind:it.kind, content:it.content, remark:it.remark||'', data_src:it.data_src||'',
-                       owner_depts:String(it.owner_depts||'').split(',').filter(Boolean).map(Number)}; })}
-             : {tpl_id:0, notice_depts:[], items:[]};
+                  items:(t.items||[]).map(function(it){ return {kind:it.kind, content:it.content, remark:it.remark||'',
+                       clause:it.clause||'', title_text:it.title_text||'',
+                       as_docs:String(it.as_docs||'').split(',').filter(Boolean).map(Number),
+                       srcs:(it.srcs||[]).map(function(x){ return {k:x.k, ids:(x.ids||[]).map(Number)}; }),
+                       owner_depts:String(it.owner_depts||'').split(',').filter(Boolean).map(Number)}; }),
+                  sync:t.sync||null}
+             : {tpl_id:0, notice_depts:[], items:[], sync:null};
     $('#tpName').val(t?t.name:''); $('#tpSubject').val(t?t.subject:''); $('#tpLoc').val(t&&t.location?t.location:'');
     $('#tpStart').val(t&&t.start_time?t.start_time:''); $('#tpEnd').val(t&&t.end_time?t.end_time:''); $('#tpNotice').val(t&&t.notice_items?t.notice_items:'');
     $('#tplListBox,#tplCloseBtn').hide(); $('#tplEditBox,#tplBackBtn,#tplSaveBtn').show();
     $('#tplMgrTitle').text(t ? '編輯會議範本' : '新增會議範本');
     tplRenderUnits(); tplRenderItems();
+    var sy = TPL_ED.sync;
+    $('#tpSyncBox').html(sy && sy.dirty ? ('<div class="note-warn">⚠ 這份範本的條文與 AS 文件線上版不一致（改 '+sy.changed.length+' 條、新增 '+sy.added.length+' 條、已刪除 '+sy.removed.length+' 條）。'
+        + ' <a href="javascript:;" onclick="tplSyncOpen('+TPL_ED.tpl_id+')">查看差異／依線上版更新</a></div>') : '');
 }
 function tplRenderUnits(){
     $('#tpUnitBox').html((DEPTS||[]).map(function(d){
@@ -1288,7 +1306,7 @@ function tplRenderUnits(){
     }).trigger('change');
 }
 var TPL_KIND = {directive:'上級指示要項', general:'會議要項', announce:'宣布事項'};
-function tplItemAdd(kind){ tplCollect(); TPL_ED.items.push({kind:kind, content:'', remark:'', data_src:'', owner_depts:[]}); tplRenderItems(); }
+function tplItemAdd(kind){ tplCollect(); TPL_ED.items.push({kind:kind, content:'', remark:'', clause:'', title_text:'', as_docs:[], srcs:[], owner_depts:[]}); tplRenderItems(); }
 function tplItemDel(i){ tplCollect(); TPL_ED.items.splice(i,1); tplRenderItems(); }
 function tplItemMove(i,d){ tplCollect(); var j=i+d; if (j<0||j>=TPL_ED.items.length) return; var x=TPL_ED.items.splice(i,1)[0]; TPL_ED.items.splice(j,0,x); tplRenderItems(); }
 function tplOwnerAdd(i, sel){ var v=+sel.value; if (!v) return; tplCollect(); if (TPL_ED.items[i].owner_depts.indexOf(v)<0) TPL_ED.items[i].owner_depts.push(v); tplRenderItems(); }
@@ -1296,11 +1314,10 @@ function tplOwnerDel(i,v){ tplCollect(); TPL_ED.items[i].owner_depts = TPL_ED.it
 function tplCollect(){   // 重畫前先把畫面上改過的文字存回狀態
     $('#tpItemBox .tp-it').each(function(){
         var i = +$(this).data('i'), it = TPL_ED.items[i]; if (!it) return;
-        it.content = $(this).find('.tp-c').val(); it.remark = $(this).find('.tp-r').val(); it.data_src = $(this).find('.tp-s').val()||'';
+        it.content = $(this).find('.tp-c').val(); it.remark = $(this).find('.tp-r').val();
     });
 }
 function tplRenderItems(){
-    var srcOpts = '<option value="">不帶系統資料</option>' + Object.keys(TPL_SRC).map(function(k){ return '<option value="'+k+'">'+esc(TPL_SRC[k])+'</option>'; }).join('');
     var h = '';
     TPL_ED.items.forEach(function(it,i){
         var chips = it.owner_depts.map(function(v){
@@ -1311,16 +1328,68 @@ function tplRenderItems(){
         var deptSel = '<select style="width:auto;" onchange="tplOwnerAdd('+i+',this)" data-eg-filter="輸入部門名稱篩選…"><option value="">＋加負責部門</option>'
             + (DEPTS||[]).filter(function(d){ return it.owner_depts.indexOf(+d.id)<0; }).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('') + '</select>';
         h += '<div class="tp-it" data-i="'+i+'" style="border:1px solid #EADFC8;border-radius:4px;padding:6px;margin-bottom:6px;">'
-           + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;"><b>'+(i+1)+'. '+TPL_KIND[it.kind]+'</b>'
+           + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;"><b>'+(i+1)+'. '+TPL_KIND[it.kind]+'</b>'+(it.clause?' <span style="background:#EADFC8;border-radius:8px;padding:0 7px;font-size:11px;">線上版條文 '+esc(it.clause)+'</span>':'')
            + '<span style="margin-left:auto;"><a href="javascript:;" onclick="tplItemMove('+i+',-1)">↑</a> <a href="javascript:;" onclick="tplItemMove('+i+',1)">↓</a> '
            + '<a href="javascript:;" style="color:#DD5138;" onclick="tplItemDel('+i+')">刪除</a></span></div>'
            + '<textarea class="tp-c" rows="3" placeholder="制式內容；需要填入處寫【待填：提示文字】">'+esc(it.content)+'</textarea>'
            + (it.kind==='announce' ? '' : '<div style="margin-top:4px;">負責部門：'+(chips||'<span style="color:#8a6d45;">（未指定，套用後要自己指定）</span>')+' '+deptSel+'</div>')
-           + '<div style="display:flex;gap:6px;margin-top:4px;"><select class="tp-s" style="flex:1;">'+srcOpts+'</select>'
-           + '<input type="text" class="tp-r" maxlength="200" placeholder="備註" value="'+esc(it.remark)+'" style="flex:1;"></div></div>';
+           + tplAutoDataHtml(it, i)
+           + '<div style="margin-top:4px;"><input type="text" class="tp-r" maxlength="200" placeholder="備註" value="'+esc(it.remark)+'"></div></div>';
     });
     $('#tpItemBox').html(h || '<div style="color:#8a6d45;">尚未建立項目，請按下方按鈕新增。</div>');
-    $('#tpItemBox .tp-it').each(function(){ $(this).find('.tp-s').val(TPL_ED.items[+$(this).data('i')].data_src||''); });
+}
+/* 每個項目的「對應 AS 表單（可多選）」與「系統資料」：有登記系統資料的表單（★）掛上去就自動帶統計，其他表單帶期間內填寫紀錄份數 */
+function tplDocLabel(d){ return d.doc_no+' '+d.doc_name; }
+function tplAutoDataHtml(it, i){
+    var chipCss = 'background:#F7E0BD;border-radius:3px;padding:1px 6px;margin-right:4px;font-size:12px;display:inline-block;margin-bottom:2px;';
+    var dchips = it.as_docs.map(function(id){
+        var d = TPL_DOCS.find(function(x){ return +x.id===id; });
+        var auto = d && TPL_DOCMAP[d.doc_no];
+        return '<span style="'+chipCss+'">'+esc(d?tplDocLabel(d):('#'+id))+(auto?' <b title="自動帶出：'+esc(TPL_SRC[auto]||auto)+'" style="color:#B5762A;">★</b>':'')
+             + ' <a href="javascript:;" onclick="tplDocDel('+i+','+id+')" style="color:#DD5138;">×</a></span>';
+    }).join('');
+    var docSel = '<select style="width:auto;max-width:330px;" onchange="tplDocAdd('+i+',this)" data-eg-filter="輸入表單編號或名稱篩選…"><option value="">＋加對應 AS 表單</option>'
+        + TPL_DOCS.filter(function(d){ return it.as_docs.indexOf(+d.id)<0; }).map(function(d){
+            return '<option value="'+d.id+'">'+esc(tplDocLabel(d))+(TPL_DOCMAP[d.doc_no]?' ★':'')+'</option>'; }).join('') + '</select>';
+    var schips = it.srcs.map(function(sx){
+        var extra = '';
+        if (sx.k==='kpi'){
+            extra = sx.ids.length ? '：'+sx.ids.map(function(id){ var kp = TPL_KPIS.find(function(x){ return +x.id===id; });
+                return esc(kp?kp.name:('#'+id))+' <a href="javascript:;" onclick="tplKpiDel('+i+','+id+')" style="color:#DD5138;">×</a>'; }).join('、') : '：全部指標';
+        }
+        return '<span style="'+chipCss+'">'+esc(TPL_SRC[sx.k]||sx.k)+extra+' <a href="javascript:;" onclick="tplSrcDel('+i+',\''+sx.k+'\')" style="color:#DD5138;">×</a></span>';
+    }).join('');
+    var haveK = it.srcs.map(function(x){ return x.k; });
+    var srcSel = '<select style="width:auto;" onchange="tplSrcAdd('+i+',this)"><option value="">＋加系統資料</option>'
+        + Object.keys(TPL_SRC).filter(function(k){ return haveK.indexOf(k)<0; }).map(function(k){ return '<option value="'+k+'">'+esc(TPL_SRC[k])+'</option>'; }).join('') + '</select>';
+    var kpiSel = '';
+    var ks = it.srcs.find(function(x){ return x.k==='kpi'; });
+    if (ks) kpiSel = ' <select style="width:auto;max-width:260px;" onchange="tplKpiAdd('+i+',this)" data-eg-filter="輸入指標名稱篩選…"><option value="">KPI：改成只帶指定指標…</option>'
+        + TPL_KPIS.filter(function(x){ return ks.ids.indexOf(+x.id)<0; }).map(function(x){ return '<option value="'+x.id+'">'+esc(x.name)+'</option>'; }).join('') + '</select>';
+    return '<div style="margin-top:4px;">對應 AS 表單：'+(dchips||'<span style="color:#8a6d45;">（無）</span>')+' '+docSel+'</div>'
+         + '<div style="margin-top:4px;">系統資料：'+(schips||'<span style="color:#8a6d45;">（無；掛上有 ★ 的表單也會自動帶）</span>')+' '+srcSel+kpiSel+'</div>';
+}
+function tplDocAdd(i, sel){ var v=+sel.value; if (!v) return; tplCollect(); var it=TPL_ED.items[i]; if (it.as_docs.indexOf(v)<0) it.as_docs.push(v); tplRenderItems(); }
+function tplDocDel(i,v){ tplCollect(); TPL_ED.items[i].as_docs = TPL_ED.items[i].as_docs.filter(function(x){ return x!==v; }); tplRenderItems(); }
+function tplSrcAdd(i, sel){ var k=sel.value; if (!k) return; tplCollect(); var it=TPL_ED.items[i]; if (!it.srcs.some(function(x){ return x.k===k; })) it.srcs.push({k:k, ids:[]}); tplRenderItems(); }
+function tplSrcDel(i,k){ tplCollect(); TPL_ED.items[i].srcs = TPL_ED.items[i].srcs.filter(function(x){ return x.k!==k; }); tplRenderItems(); }
+function tplKpiAdd(i, sel){ var v=+sel.value; if (!v) return; tplCollect(); var ks=TPL_ED.items[i].srcs.find(function(x){ return x.k==='kpi'; }); if (ks && ks.ids.indexOf(v)<0) ks.ids.push(v); tplRenderItems(); }
+function tplKpiDel(i,id){ tplCollect(); var ks=TPL_ED.items[i].srcs.find(function(x){ return x.k==='kpi'; }); if (ks) ks.ids = ks.ids.filter(function(x){ return x!==id; }); tplRenderItems(); }
+
+/* 與 AS 文件線上版的差異 → 一鍵依線上版更新（只換條文文字、補新增條文；待填提示與系統資料設定不動） */
+function tplSyncOpen(id){
+    var t = TPLS.find(function(x){ return +x.tpl_id===+id; }); if (!t || !t.sync) return;
+    var sy = t.sync, h = '依 AS 文件線上版（版次 '+esc(sy.ver?sy.ver.version:'')+'，'+dispDate(sy.ver?sy.ver.revised_date:'')+'）比對：\n\n';
+    sy.changed.forEach(function(c){ h += '改　'+c.clause+'\n　　原：'+(c.old||'（無）')+'\n　　新：'+c.new+'\n'; });
+    sy.added.forEach(function(c){ h += '新增　'+c.clause+' '+c.text+'\n'; });
+    sy.removed.forEach(function(c){ h += '線上版已無　'+c+'（更新時不會自動刪除，請自行確認）\n'; });
+    h += '\n按「確定」依線上版更新範本條文（會另外請你確認，更新後再檢查各項目的待填提示）。';
+    if (!confirm(h)) return;
+    $.post(API, {action:'tpl_sync', tpl_id:id}, function(r){
+        if (!r.ok){ alert(r.error||'更新失敗'); return; }
+        alert('已更新：改 '+r.changed+' 條、新增 '+r.added+' 條'+((r.removed||[]).length?('；線上版已無 '+r.removed.join('、')+'，請自行確認是否刪除'):'')+'。\n請再檢查各項目的【待填】提示與系統資料是否仍適用。');
+        loadTemplates(function(){ if (TPL_ED) tplEdit(id); else tplBack(); });
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '更新失敗'); });
 }
 function tplSave(){
     tplCollect();

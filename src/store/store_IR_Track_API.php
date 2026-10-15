@@ -553,6 +553,59 @@ ORDER BY t.IR_date DESC, t.IR_id DESC";
             echo json_encode($out);
             break;
 
+        /* ── 退貨統計（2026-10-15）：退貨件數／數量／客戶／性質／原因分類；與管理審查會議共用 ir_stats_lib ── */
+        case 'ir_stats': {
+            require_once __DIR__ . '/../common/ir_stats_lib.php';
+            $from = (string)($_POST['from'] ?? ''); $to = (string)($_POST['to'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) || $to < $from)
+                { echo json_encode(['success'=>false,'message'=>'日期區間不正確']); break; }
+            echo json_encode(['success'=>true, 'stats'=>irs_stats($pdo, $from, $to)]);
+            break;
+        }
+        /* 原因分類作業清單：期間內的有效退貨單＋退貨原因文字＋已挑的原因分類 */
+        case 'ir_cause_list': {
+            require_once __DIR__ . '/../common/ir_stats_lib.php';
+            irs_ensure($pdo);
+            $from = (string)($_POST['from'] ?? ''); $to = (string)($_POST['to'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) || $to < $from)
+                { echo json_encode(['success'=>false,'message'=>'日期區間不正確']); break; }
+            $only = !empty($_POST['only_uncat']);
+            $st = $pdo->prepare("SELECT t.IR_id, t.IR_no, DATE_FORMAT(t.IR_date,'%Y.%m.%d') d, t.Qty, t.IR_ps,
+                                        COALESCE(cl.customer, NULLIF(TRIM(t.Client_name),''), '') client,
+                                        (SELECT GROUP_CONCAT(c.cat_id) FROM ir_cause c WHERE c.ir_id=t.IR_id) cats
+                                   FROM ir_track t
+                                   LEFT JOIN d_setting ds ON ds.d_id = COALESCE(t.d_setting_id, IF(t.d_id REGEXP '^[0-9]+$', CAST(t.d_id AS UNSIGNED), NULL))
+                                   LEFT JOIN customer_list cl ON ds.Customer_Id = cl.customer_id
+                                  WHERE " . irs_valid_cond('t') . " AND t.IR_date BETWEEN ? AND ?
+                                  " . ($only ? "AND NOT EXISTS (SELECT 1 FROM ir_cause c2 WHERE c2.ir_id=t.IR_id)" : "") . "
+                                  ORDER BY t.IR_date DESC, t.IR_id DESC LIMIT 400");
+            $st->execute([$from, $to]);
+            echo json_encode(['success'=>true, 'rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+            break;
+        }
+        case 'ir_cause_save': {
+            require_once __DIR__ . '/../common/ir_stats_lib.php';
+            irs_ensure($pdo);
+            $irId = (int)($_POST['ir_id'] ?? 0);
+            $cats = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['cat_ids'] ?? ''))))));
+            if ($irId <= 0 || !$pdo->query("SELECT 1 FROM ir_track WHERE IR_id=" . $irId)->fetchColumn())
+                { echo json_encode(['success'=>false,'message'=>'找不到退貨單']); break; }
+            if ($cats) {
+                $in = implode(',', $cats);
+                $ok = array_map('intval', $pdo->query("SELECT cat_id FROM qa_cause_cat WHERE is_active=1 AND cat_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN));
+                if (count($ok) !== count($cats)) { echo json_encode(['success'=>false,'message'=>'有不存在或已停用的原因分類']); break; }
+            }
+            $pdo->beginTransaction();
+            try {
+                $pdo->prepare("DELETE FROM ir_cause WHERE ir_id=?")->execute([$irId]);
+                $ins = $pdo->prepare("INSERT INTO ir_cause (ir_id, cat_id, created_by, created_at) VALUES (?,?,?,NOW())");
+                foreach ($cats as $c) $ins->execute([$irId, $c, $user_id]);
+                $pdo->commit();
+            } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+            echo json_encode(['success'=>true]);
+            break;
+        }
+
         case 'get_ir_years':
             irEnsureListSchema($pdo);
             echo json_encode(['success' => true, 'years' => irYears($pdo)]);

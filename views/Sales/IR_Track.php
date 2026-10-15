@@ -165,7 +165,11 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                 </div>
             </div>
             <div class="clearfix"></div>
-
+            <ul class="nav nav-tabs" id="irMainTabs" style="margin-bottom:12px;">
+                <li class="active"><a href="javascript:;" data-irv="list"><i class="fa fa-list-alt"></i> 退貨清單</a></li>
+                <li><a href="javascript:;" data-irv="stats"><i class="fa fa-bar-chart"></i> 退貨統計與原因分類</a></li>
+            </ul>
+            <div id="irListView">
             <div class="row">
                 <div class="col-md-12">
                     <div class="stats-container" id="statsContainer">
@@ -233,6 +237,40 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                             <tbody></tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+            </div><!-- /irListView -->
+
+            <div id="irStatsView" style="display:none;">
+                <div style="background:#fff;border-radius:6px;padding:10px 14px;box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+                    <b style="font-size:13px;">統計期間</b>
+                    <input type="date" id="irsFrom" class="form-control input-sm" style="width:150px;">
+                    <span>～</span>
+                    <input type="date" id="irsTo" class="form-control input-sm" style="width:150px;">
+                    <button class="btn btn-default btn-sm" type="button" id="irsThisYear">本年度</button>
+                    <button class="btn btn-default btn-sm" type="button" id="irsLastYear">去年度</button>
+                    <button class="btn btn-primary btn-sm" type="button" id="irsGo"><i class="fa fa-refresh"></i> 重新統計</button>
+                </div>
+                <div class="note-box" style="margin-bottom:10px;">
+                    退貨性質標成「備註」的單據只是備註、不算退貨。<b>退貨原因</b>請在下方「原因分類作業」逐張挑選異常原因分類（與品質異常處理單共用同一棵分類樹，可複選）；
+                    沒有自己分類的退貨單，會退回參考它已開的品質異常單所選的分類，兩者都沒有就歸為「尚未分類」。管理審查會議的客戶抱怨統計直接讀這裡的數字。
+                </div>
+                <div class="row" id="irsCards"></div>
+                <div class="row">
+                    <div class="col-md-6"><div class="main-card"><h5 style="margin-top:0;">逐月退貨</h5><div id="irsMonths"></div></div></div>
+                    <div class="col-md-6"><div class="main-card"><h5 style="margin-top:0;">退貨原因分類</h5><div id="irsCauses"></div></div></div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6"><div class="main-card"><h5 style="margin-top:0;">客戶別（前15）</h5><div id="irsClients"></div></div></div>
+                    <div class="col-md-6"><div class="main-card"><h5 style="margin-top:0;">退貨性質</h5><div id="irsTypes"></div></div></div>
+                </div>
+                <div class="main-card">
+                    <h5 style="margin-top:0;display:flex;align-items:center;gap:10px;">原因分類作業
+                        <label style="font-weight:normal;font-size:12px;margin:0;"><input type="checkbox" id="irsOnlyUncat" checked> 只看尚未分類的</label>
+                        <small style="color:#888;">最多列出 400 筆</small></h5>
+                    <table class="table table-striped table-condensed" id="irsCauseTbl"><thead><tr>
+                        <th style="width:100px;">退貨日期</th><th style="width:110px;">退貨單號</th><th>客戶</th><th style="width:60px;">數量</th>
+                        <th>退貨原因 / 備註</th><th style="min-width:260px;">原因分類</th></tr></thead><tbody></tbody></table>
                 </div>
             </div>
         </div>
@@ -561,6 +599,7 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                 <li>看得到這一頁的人都可以填業務進度、改退貨性質與負責業務、結案。</li>
                 <li><b>開立異常單</b>依品質異常處理單模組的權限（品管／業務部門、或 <code>qab_fill</code>、<code>qab_admin</code> 等角色）。</li>
                 <li><b>期間自動結案</b>限系統管理者（或被授予 <code>ir_track_admin</code> 功能碼者）。</li>
+                <li><b>退貨統計與原因分類</b>（頁面上方分頁）：統計期間內的退貨件數／數量（含去年同期）、逐月、客戶別、退貨性質與<b>退貨原因分類</b>。退貨性質標成「備註」的不計。原因請在下方「原因分類作業」逐張挑選（與品質異常處理單共用同一棵分類樹、可複選）；沒自己分類的會退回參考已開異常單的分類，都沒有則為「尚未分類」。管理審查會議的客戶抱怨統計直接讀這裡的數字。</li>
             </ul>
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
@@ -873,6 +912,86 @@ $(document).on('click', '#qa_cause_chips .egcp-chip-x', function(){
     var rid = String($(this).data('id'));
     qaSetCause(qaCauseSel().filter(function(x){ return x !== rid; }));
 });
+/* ---------- 退貨統計與原因分類（2026-10-15） ---------- */
+(function(){
+    function irsEsc(x){ return $('<div>').text(x==null?'':x).html(); }
+    function irsPad(n){ return (n<10?'0':'')+n; }
+    var now = new Date(), yy = now.getFullYear(), td = yy+'-'+irsPad(now.getMonth()+1)+'-'+irsPad(now.getDate());
+    $('#irsFrom').val(yy+'-01-01'); $('#irsTo').val(td);
+    $('#irsThisYear').on('click', function(){ $('#irsFrom').val(yy+'-01-01'); $('#irsTo').val(td); irsLoad(); });
+    $('#irsLastYear').on('click', function(){ $('#irsFrom').val((yy-1)+'-01-01'); $('#irsTo').val((yy-1)+'-12-31'); irsLoad(); });
+    $('#irsGo').on('click', function(){ irsLoad(); });
+    $('#irsOnlyUncat').on('change', function(){ irsLoadList(); });
+    $('#irMainTabs a').on('click', function(){
+        var v = $(this).data('irv');
+        $('#irMainTabs li').removeClass('active'); $(this).parent().addClass('active');
+        $('#irListView').toggle(v==='list'); $('#irStatsView').toggle(v==='stats');
+        if (v==='stats') irsLoad();
+    });
+    function bars(rows){
+        if (!rows || !rows.length) return '<span class="text-muted">期間內沒有資料</span>';
+        var max = Math.max.apply(null, rows.map(function(r){ return +r.n; })) || 1;
+        return '<table class="table table-condensed" style="margin:0;"><tbody>' + rows.map(function(r){
+            return '<tr><td style="width:42%;font-size:12.5px;">'+irsEsc(r.c)+'</td><td><div style="background:#F7E0BD;height:14px;width:'+Math.max(2,Math.round(100*r.n/max))+'%;border-radius:3px;"></div></td>'
+                 + '<td style="width:130px;text-align:right;font-size:12px;white-space:nowrap;">'+r.n+' 件／數量 '+(+r.q)+'</td></tr>'; }).join('') + '</tbody></table>';
+    }
+    function cmp(c,p){ return p>0 ? '去年同期 '+(+p)+'（'+(c>=p?'+':'')+(+(c-p).toFixed(2))+'）' : '去年同期無資料'; }
+    function card(t,v,sub,red){ return '<div class="col-md-3"><div class="main-card"><div style="font-size:12px;color:#888;">'+t+'</div><div style="font-size:26px;font-weight:700;'+(red?'color:#DD5138;':'')+'">'+v+'</div><small>'+sub+'</small></div></div>'; }
+    function irsChips(ids){
+        return (ids.length ? EGCausePicker.chipsHtml(QAB_CAUSE_TREE, ids, {removable:false}) : '<span class="text-muted" style="font-size:12px;">未分類</span>')
+             + ' <button type="button" class="btn btn-default btn-xs irs-pick"><i class="fa fa-tags"></i> 選擇</button>';
+    }
+    function irsLoadList(){
+        $.post(IR_API, {action:'ir_cause_list', from:$('#irsFrom').val(), to:$('#irsTo').val(), only_uncat:$('#irsOnlyUncat').prop('checked')?1:0}, function(r){
+            if (!r.success) return;
+            var h = (r.rows||[]).map(function(x){
+                var ids = String(x.cats||'').split(',').filter(Boolean);
+                return '<tr data-ir="'+x.IR_id+'" data-cats="'+ids.join(',')+'"><td>'+x.d+'</td><td>'+irsEsc(x.IR_no)+'</td><td>'+irsEsc(x.client)+'</td><td>'+(+x.Qty)+'</td>'
+                     + '<td style="white-space:pre-wrap;font-size:12px;">'+irsEsc(x.IR_ps)+'</td><td class="irs-cc">'+irsChips(ids)+'</td></tr>'; }).join('');
+            $('#irsCauseTbl tbody').html(h || '<tr><td colspan="6" class="text-muted">沒有符合的退貨單</td></tr>');
+        }, 'json');
+    }
+    function irsStatsOnly(){
+        $.post(IR_API, {action:'ir_stats', from:$('#irsFrom').val(), to:$('#irsTo').val()}, function(r){
+            if (!r.success) return; var s = r.stats;
+            $('#irsCauses').html(bars(s.causes));
+            $('#irsCards .col-md-3:eq(2) div:eq(2)').text(s.self_classified); $('#irsCards .col-md-3:eq(3) div:eq(2)').text(s.qa_none);
+        }, 'json');
+    }
+    window.irsLoad = function(){
+        var from = $('#irsFrom').val(), to = $('#irsTo').val();
+        if (!from || !to || to < from){ alert('請選擇正確的統計期間'); return; }
+        $.post(IR_API, {action:'ir_stats', from:from, to:to}, function(r){
+            if (!r.success){ alert(r.message||'統計失敗'); return; }
+            var s = r.stats;
+            $('#irsCards').html(card('退貨件數', s.total, cmp(s.total,s.prev_total)) + card('退貨數量', +s.qty, cmp(+s.qty,+s.prev_qty))
+                + card('已自行分類原因', s.self_classified, '件（其餘退回參考異常單）') + card('尚未分類', s.qa_none, '件', true));
+            $('#irsMonths').html(bars((s.months||[]).map(function(m){ return {c:m.ym, n:+m.n, q:m.q}; })));
+            $('#irsCauses').html(bars(s.causes));
+            $('#irsClients').html(bars((s.clients||[]).slice(0,15)));
+            $('#irsTypes').html(bars(s.types));
+        }, 'json');
+        irsLoadList();
+    };
+    $(document).on('click', '.irs-pick', function(){
+        var tr = $(this).closest('tr'), id = +tr.data('ir');
+        if (!QAB_CAUSE_TREE.length){ alert('管理員尚未建立異常原因分類，請到「品質異常處理單 → 設定 → 異常原因分類」建立。'); return; }
+        EGCausePicker.open({
+            tree: QAB_CAUSE_TREE, selected: String(tr.attr('data-cats')||'').split(',').filter(Boolean),
+            multi: true, title: '選擇退貨原因分類',
+            add: { url: QAB_API, csrf: QAB_CSRF, can: QAB_CAN_ADMIN },
+            onTreeChange: function(t){ QAB_CAUSE_TREE = t; },
+            onApply: function(ids){
+                $.post(IR_API, {action:'ir_cause_save', ir_id:id, cat_ids:ids.join(',')}, function(r){
+                    if (!r.success){ alert(r.message||'儲存失敗'); return; }
+                    tr.attr('data-cats', ids.join(',')); tr.find('.irs-cc').html(irsChips(ids.map(String)));
+                    if ($('#irsOnlyUncat').prop('checked') && ids.length) tr.fadeOut(200, function(){ tr.remove(); });
+                    irsStatsOnly();
+                }, 'json');
+            }
+        });
+    });
+})();
 var allIRData = [];
 var allDepts  = [];
 var currentFilter = 'all';
