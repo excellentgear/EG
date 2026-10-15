@@ -411,6 +411,98 @@
     });
   }
 
+
+  /* ── 對齊輔助線（使用者 2026-10-15：要像 Figma 一樣看得到有沒有跟上面對齊）──
+     拖曳中比對其他物件的 左／中／右 與 上／中／下，差距在 GUIDE_SNAP 以內就
+     吸過去並畫一條線。輔助線是暫時的畫面元素，**存檔與復原都不可以收進去**
+     （跟連接點提示一樣，見 snapshot()／doSave()）。 */
+  var GUIDE_SNAP = 6;
+  var guideObjs = [];
+
+  function clearGuides() {
+    guideObjs.forEach(function (g) { cv.remove(g); });
+    guideObjs = [];
+  }
+  function addGuide(pos, dir) {
+    var ln = new fabric.Line(
+      dir === 'v' ? [pos, -4000, pos, 4000] : [-4000, pos, 4000, pos],
+      { stroke: '#F0A24B', strokeWidth: 1, strokeDashArray: [4, 3],
+        selectable: false, evented: false, objectCaching: false, egRole: 'guide' });
+    cv.add(ln); ln.bringToFront();
+    guideObjs.push(ln);
+  }
+
+  /** 拖曳中的對齊：回傳有沒有吸附到東西 */
+  function applyGuides(o) {
+    clearGuides();
+    if (!o || o.egRole === 'handle') return false;
+    var r = o.getBoundingRect(true, true);
+    var mine = {
+      x: [r.left, r.left + r.width / 2, r.left + r.width],
+      y: [r.top, r.top + r.height / 2, r.top + r.height]
+    };
+    var bx = null, by = null;
+    cv.getObjects().forEach(function (t) {
+      if (t === o) return;
+      if (t.egRole === 'handle' || t.egRole === 'port' || t.egRole === 'guide'
+          || t.egRole === 'label' || t.egRole === 'head') return;
+      // 跟著一起被選取的物件不算（整組在動，互相對齊沒有意義）
+      if (o.type === 'activeSelection' && o._objects && o._objects.indexOf(t) >= 0) return;
+      var tr = t.getBoundingRect(true, true);
+      var tx = [tr.left, tr.left + tr.width / 2, tr.left + tr.width];
+      var ty = [tr.top, tr.top + tr.height / 2, tr.top + tr.height];
+      mine.x.forEach(function (a) {
+        tx.forEach(function (b) {
+          var dd = Math.abs(a - b);
+          if (dd <= GUIDE_SNAP && (!bx || dd < bx.d)) bx = { d: dd, pos: b, delta: b - a };
+        });
+      });
+      mine.y.forEach(function (a) {
+        ty.forEach(function (b) {
+          var dd = Math.abs(a - b);
+          if (dd <= GUIDE_SNAP && (!by || dd < by.d)) by = { d: dd, pos: b, delta: b - a };
+        });
+      });
+    });
+    if (bx) { o.set({ left: o.left + bx.delta }); addGuide(bx.pos, 'v'); }
+    if (by) { o.set({ top: o.top + by.delta }); addGuide(by.pos, 'h'); }
+    if (bx || by) o.setCoords();
+    return !!(bx || by);
+  }
+
+  /* ── Alt＋拖曳＝複製一份（使用者 2026-10-15）──────────────────────────
+     做法是「在**原來的位置**留下一份複本」，使用者拖走的還是原本那一個，
+     放開之後看起來就像複製出一個新的。複製一律走 addNode／addFreeText／addConn，
+     不用 fabric 的 clone——節點的文字標籤是另一個物件靠 egId 配對的，
+     clone 出來的那一份不會有自己的標籤，字會留在原地不跟著走。 */
+  var altDragDone = false, altDragFrom = null;
+
+  function dupObject(o, atLeft, atTop) {
+    if (!o) return null;
+    if (o.egRole === 'shape') {
+      var lb = labelOf(o);
+      var sh = addNode(o.egKind || 'proc', atLeft, atTop, lb ? (lb.text || '') : '');
+      sh.set({ scaleX: o.scaleX, scaleY: o.scaleY, angle: o.angle,
+               fill: o.fill, stroke: o.stroke, strokeWidth: o.strokeWidth });
+      sh.setCoords();
+      syncLabel(sh);
+      return sh;
+    }
+    if (o.egRole === 'text') {
+      var t = addFreeText(atLeft, atTop);
+      t.set({ text: o.text, width: o.width, fontSize: o.fontSize, fill: o.fill, fontFamily: o.fontFamily });
+      t.setCoords();
+      return t;
+    }
+    if (o.egRole === 'conn') {
+      var a = lineAbs(o);
+      var dx = atLeft - o.left, dy = atTop - o.top;
+      return addConn(o.egKind === 'arrow' ? 'arrow' : 'line',
+                     a.x1 + dx, a.y1 + dy, a.x2 + dx, a.y2 + dy);
+    }
+    return null;
+  }
+
   function headOf(ln) {
     var r = null;
     cv.getObjects().forEach(function (o) { if (o.egRole === 'head' && o.egId === ln.egId) r = o; });
@@ -466,6 +558,9 @@
     }
     hA = mk(a.x1, a.y1, 'a');
     hB = mk(a.x2, a.y2, 'b');
+    // 已經綁在圖形錨點上的那一端畫成實心深色，看得出來「這一端是扣住的」
+    if (ln.egPA) hA.set({ fill: '#8A5A2B' });
+    if (ln.egPB) hB.set({ fill: '#8A5A2B' });
     cv.requestRenderAll();
   }
 
@@ -474,8 +569,8 @@
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
     var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB']);
-    jo.egW = cv.getWidth();
-    jo.egH = cv.getHeight();
+    jo.egW = LOGW;
+    jo.egH = LOGH;
     return JSON.stringify(jo);
   }
 
@@ -483,6 +578,7 @@
     if (quiet || !cv) return;
     clearHandles();
     clearPortDots();        // 連接點提示只是暫時畫上去的，不可以存進工作檔
+    clearGuides();          // 對齊輔助線同理
     var j = serialize();
     if (hist[histAt] === j) return;
     hist = hist.slice(0, histAt + 1);
@@ -497,8 +593,7 @@
   function buildFromImport(jj) {
     quiet = true;
     cv.clear();
-    cv.setWidth(Math.max(200, jj.w || 600));
-    cv.setHeight(Math.max(200, jj.h || 400));
+    setLogicalSize(Math.max(200, jj.w || 600), Math.max(200, jj.h || 400));
     var snapWas = snap; snap = false;          // 匯入的座標要照原樣，不可以對齊格線
     (jj.items || []).forEach(function (it) {
       try {
@@ -535,13 +630,13 @@
         if (cb) cb();
         return;
       }
-      if (jj && jj.egW && jj.egH) { cv.setWidth(jj.egW); cv.setHeight(jj.egH); }
+      if (jj && jj.egW && jj.egH) setLogicalSize(jj.egW, jj.egH);
     } catch (e) {}
     cv.loadFromJSON(j, function () {
       // 還原後要把 egId 的最大值找回來，否則新增的節點會撞到既有 id
       var mx = 0;
       cv.getObjects().forEach(function (o) {
-        if (o.egRole === 'handle' || o.egRole === 'port') { cv.remove(o); return; }
+        if (o.egRole === 'handle' || o.egRole === 'port' || o.egRole === 'guide') { cv.remove(o); return; }
         if (o.egId && o.egId > mx) mx = o.egId;
         if (o.egRole === 'label') { o.selectable = false; o.evented = false; }
         if (o.egRole === 'head')  { o.selectable = false; o.evented = false; }
@@ -640,16 +735,35 @@
         syncConn(ln);
         return;
       }
+      // Alt 拖曳＝在原位留一份複本（只做一次，之後的 move 不再複製）
+      if (e.e && e.e.altKey && !altDragDone && altDragFrom
+          && (o.egRole === 'shape' || o.egRole === 'text' || o.egRole === 'conn')) {
+        altDragDone = true;
+        var keep = cv.getActiveObject();
+        dupObject(o, altDragFrom.left, altDragFrom.top);
+        if (keep) cv.setActiveObject(keep);
+        stat('已複製一份（原本的留在原位）');
+      }
       o.set({ left: snapv(o.left), top: snapv(o.top) });
+      applyGuides(o);                       // 對齊輔助線（會順手吸附）
       if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
       if (o.egRole === 'conn')  { syncConn(o); clearHandles(); }
     });
+    // 按下的當下記住原始位置，Alt 複製要把複本放回這裡
+    cv.on('mouse:down', function (e) {
+      altDragDone = false;
+      var t = e.target;
+      altDragFrom = (t && t.egRole !== 'handle' && t.egRole !== 'port')
+                  ? { left: t.left, top: t.top } : null;
+    });
+    cv.on('mouse:up', function () { clearGuides(); });
     cv.on('object:scaling', function (e) {
       if (e.target.egRole === 'shape') { syncLabel(e.target); syncBoundConns(e.target); }
     });
     cv.on('object:modified', function (e) {
       var o = e.target;
       clearPortDots();
+      clearGuides();
       if (o && o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
       if (o && o.egRole === 'conn') { syncConn(o); showHandles(o); }
       if (o && o.egRole === 'handle' && o.egFor) showHandles(o.egFor);
@@ -680,7 +794,22 @@
       lb.selectable = true; lb.evented = true;
       cv.setActiveObject(lb);
       lb.enterEditing();
-      lb.selectAll();
+      /* 已經有字的圖形：游標放在「點下去的那個位置」，不要整段選起來——
+         選起來的話接著打的第一個字會把原本的字整段取代掉，使用者看到的就是
+         「想加字，原有文字卻直接消失」（2026-10-15 回報）。
+         本來就是空的才全選（反正沒東西，只是讓游標就定位）。 */
+      var txt = String(lb.text || '');
+      if (txt === '') {
+        lb.selectAll();
+      } else {
+        var idx = txt.length;
+        try {
+          var got = lb.getSelectionStartFromPointer(e.e);
+          if (typeof got === 'number' && got >= 0 && got <= txt.length) idx = got;
+        } catch (err) {}
+        lb.setSelectionStart(idx);
+        lb.setSelectionEnd(idx);
+      }
       cv.requestRenderAll();
     });
     cv.on('text:editing:exited', function (e) {
@@ -727,12 +856,28 @@
      匯出與存檔拿到的仍是原尺寸；fabric v5 的 getPointer 會自己換算 CSS 縮放，
      滑鼠點擊位置不會跑掉。 */
   var ZOOM = 1;
+  /* 畫布的「邏輯尺寸」：物件座標、存檔、輸出圖都用它。
+     顯示尺寸＝邏輯尺寸 × ZOOM，由 applyZoom() 設到 canvas 上。
+     ⚠ 一定要跟顯示尺寸分開存：縮放之後 cv.getWidth() 回的是顯示尺寸，
+       拿它去存檔會讓工作檔的畫布大小隨「上次看的縮放」變來變去。 */
+  var LOGW = 760, LOGH = 560;
+
+  function setLogicalSize(w, h) {
+    LOGW = Math.max(60, Math.round(w || LOGW));
+    LOGH = Math.max(60, Math.round(h || LOGH));
+    applyZoom();
+  }
   var ZOOM_STEPS = [0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.25, 1.5, 2, 2.5, 3];
 
   function applyZoom() {
     if (!cv) return;
-    cv.setDimensions({ width: Math.round(cv.getWidth() * ZOOM) + 'px',
-                       height: Math.round(cv.getHeight() * ZOOM) + 'px' }, { cssOnly: true });
+    /* 用 Fabric 自己的縮放（viewportTransform）＋真的改 canvas 尺寸，
+       內容會以新的解析度**重新畫一次**，所以放大縮小都清楚。
+       原本是 setDimensions(..., {cssOnly:true})＝只改 CSS 把點陣圖拉伸，
+       縮小時文字糊成一團，而且繞過了 Fabric 的高解析度處理
+       （使用者 2026-10-15 回報「圖示內文字看起來很模糊」）。 */
+    cv.setZoom(ZOOM);
+    cv.setDimensions({ width: Math.round(LOGW * ZOOM), height: Math.round(LOGH * ZOOM) });
     var v = el('egfZoomVal');
     if (v) v.textContent = Math.round(ZOOM * 100) + '%';
   }
@@ -752,8 +897,8 @@
   function zoomFit() {
     var host = d.querySelector('#egfWin .egf-canhost');
     if (!host || !cv) return;
-    var k = Math.min((host.clientWidth - 16) / cv.getWidth(),
-                     (host.clientHeight - 16) / cv.getHeight());
+    var k = Math.min((host.clientWidth - 16) / LOGW,
+                     (host.clientHeight - 16) / LOGH);
     setZoom(k > 0 ? k : 1);
   }
 
@@ -790,10 +935,9 @@
   /* ── 範本 ─────────────────────────────────────────────────────────── */
   /** 畫布至少要這麼大，範本才放得下 */
   function ensureCanvas(ww, hh) {
-    if (cv.getWidth()  < ww) cv.setWidth(ww);
-    if (cv.getHeight() < hh) cv.setHeight(hh);
-    el('egfCW').value = cv.getWidth();
-    el('egfCH').value = cv.getHeight();
+    if (LOGW < ww || LOGH < hh) setLogicalSize(Math.max(LOGW, ww), Math.max(LOGH, hh));
+    el('egfCW').value = LOGW;
+    el('egfCH').value = LOGH;
   }
   function hasContent() {
     return cv.getObjects().some(function (o) {
@@ -921,7 +1065,7 @@
         case 'egfResize': {
           var ww = Math.max(200, Math.min(2000, parseInt(el('egfCW').value, 10) || 760));
           var hh = Math.max(200, Math.min(3000, parseInt(el('egfCH').value, 10) || 560));
-          cv.setWidth(ww); cv.setHeight(hh); applyZoom(); cv.requestRenderAll();
+          setLogicalSize(ww, hh); cv.requestRenderAll();
           stat('畫布已改成 ' + ww + '×' + hh);
           snapshot();
           break;
@@ -1016,10 +1160,15 @@
     if (!cv) return;
     clearHandles();
     clearPortDots();        // 連接點提示不可以被印進圖裡
+    clearGuides();          // 對齊輔助線同理
+    /* 輸出之前一定要把顯示縮放歸 1：toDataURL 的 left/top/width/height 會被
+       viewportTransform 換算，縮放中輸出會裁到錯的範圍（圖只剩一角或整片空白）。 */
+    var _z = ZOOM;
+    if (_z !== 1) { ZOOM = 1; applyZoom(); }
     cv.discardActiveObject();
     cv.requestRenderAll();
     var objs = cv.getObjects().filter(function (o) {
-      return o.egRole !== 'handle' && o.egRole !== 'port';
+      return o.egRole !== 'handle' && o.egRole !== 'port' && o.egRole !== 'guide';
     });
     if (!objs.length) { stat('畫布是空的，沒有東西可以放進文件'); return; }
     /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
@@ -1035,13 +1184,14 @@
       if (r.top  + r.height > maxY) maxY = r.top + r.height;
     });
     var cx = Math.max(0, Math.floor(minX - PAD)), cy = Math.max(0, Math.floor(minY - PAD));
-    var cw = Math.min(cv.getWidth()  - cx, Math.ceil(maxX - minX + PAD * 2));
-    var ch = Math.min(cv.getHeight() - cy, Math.ceil(maxY - minY + PAD * 2));
-    if (!(cw > 0 && ch > 0)) { cx = 0; cy = 0; cw = cv.getWidth(); ch = cv.getHeight(); }
+    var cw = Math.min(LOGW - cx, Math.ceil(maxX - minX + PAD * 2));
+    var ch = Math.min(LOGH - cy, Math.ceil(maxY - minY + PAD * 2));
+    if (!(cw > 0 && ch > 0)) { cx = 0; cy = 0; cw = LOGW; ch = LOGH; }
     // multiplier 2.5＝列印時不會鋸齒（列印是 300dpi 等級，螢幕 1x 印出來會糊）
     var png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false,
                              left: cx, top: cy, width: cw, height: ch });
     var json = serialize();
+    if (_z !== 1) { ZOOM = _z; applyZoom(); }     // 還原使用者原本的顯示縮放
     var cb = onSaveCb;
     close();
     if (cb) cb(png, json);
@@ -1058,15 +1208,15 @@
     stat('　');
 
     function afterLoad() {
-      el('egfCW').value = cv.getWidth();
-      el('egfCH').value = cv.getHeight();
+      el('egfCW').value = LOGW;
+      el('egfCH').value = LOGH;
       /* 不沿用上一次的縮放：先回 100%，**畫布比視窗大就自動縮到整張看得完**。
          從 Word 匯入的流程圖實測 666×575，比可視區大，固定 100% 的話
          一打開只看得到左上角一塊，下半張要捲才找得到（使用者 2026-10-15 回報）。 */
       ZOOM = 1; applyZoom();
       var host = d.querySelector('#egfWin .egf-canhost');
       if (host && host.clientWidth > 40 && host.clientHeight > 40
-          && (cv.getWidth() > host.clientWidth - 16 || cv.getHeight() > host.clientHeight - 16)) {
+          && (LOGW > host.clientWidth - 16 || LOGH > host.clientHeight - 16)) {
         zoomFit();
       }
       snapshot();
@@ -1087,15 +1237,14 @@
       fabric.Image.fromURL(opt.bgImageUrl, function (img) {
         if (!img || !img.width) {
           stat('底圖載入失敗，已改成空白畫布');
-          cv.setWidth(760); cv.setHeight(560);
+          setLogicalSize(760, 560);
           cv.requestRenderAll();
           afterLoad();
           return;
         }
         // 過大的圖等比例縮進畫布可用的上限，避免視窗打開就要捲很遠才看得到全貌
         var k = Math.min(1, EGF_BG_MAX_W / img.width, EGF_BG_MAX_H / img.height);
-        cv.setWidth(Math.round(img.width * k));
-        cv.setHeight(Math.round(img.height * k));
+        setLogicalSize(Math.round(img.width * k), Math.round(img.height * k));
         img.set({ left: 0, top: 0, originX: 'left', originY: 'top',
                   scaleX: k, scaleY: k, selectable: false, evented: false, hasControls: false });
         img.egRole = 'bg';
@@ -1107,7 +1256,7 @@
     } else {
       cv.clear();
       cv.backgroundColor = '#ffffff';
-      cv.setWidth(760); cv.setHeight(560);
+      setLogicalSize(760, 560);
       nextId = 1;
       cv.requestRenderAll();
       afterLoad();
