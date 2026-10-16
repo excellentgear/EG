@@ -46,11 +46,25 @@
   margin:10px 14px 0;flex:0 0 auto;
   display:flex;flex-wrap:wrap;align-items:center;gap:3px;}
 /* 左下角的縮放把手：拖曳改變整個跳窗大小（雙擊＝還原預設） */
-.egf-grip{width:20px;height:20px;margin-right:2px;cursor:nesw-resize;color:#8A5A2B;flex:0 0 auto;
-  display:inline-flex;align-items:center;justify-content:center;border-radius:3px;
-  -webkit-user-select:none;user-select:none;}
-.egf-grip:hover{background:#f2e6d4;color:#4E2C0B;}
-.egf-grip i{font-size:13px;transform:rotate(90deg);}
+.egf-grip{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;z-index:5;
+  background:repeating-linear-gradient(-45deg,transparent 0 2px,#c9a06a 2px 3px);
+  border-radius:0 0 6px 0;-webkit-user-select:none;user-select:none;}
+.egf-grip:hover{background:repeating-linear-gradient(-45deg,transparent 0 2px,#8A5A2B 2px 3px);}
+/* 左下角的縮放滑桿——比照 Excel 那一條：拖著就放大縮小編輯畫面
+   （使用者 2026-10-16：工具列那組「顯示 －／60%／＋」不要，改成可以拖的） */
+.egf-zoom{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;}
+.egf-zoom input[type=range]{-webkit-appearance:none;appearance:none;width:150px;height:4px;
+  background:#e4d3ba;border-radius:2px;outline:none;cursor:pointer;margin:0;padding:0;}
+.egf-zoom input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:15px;height:15px;border-radius:50%;background:#F0A24B;border:2px solid #fff;
+  box-shadow:0 0 0 1px #c9a06a;cursor:grab;}
+.egf-zoom input[type=range]::-webkit-slider-thumb:active{cursor:grabbing;background:#DD5138;}
+.egf-zoom input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;
+  background:#F0A24B;border:2px solid #fff;box-shadow:0 0 0 1px #c9a06a;cursor:grab;}
+.egf-zbtn{border:1px solid #e4d3ba;background:#faf6f0;color:#6B471A;width:22px;height:22px;
+  line-height:18px;padding:0;border-radius:3px;font-size:13px;}
+.egf-zbtn:hover{background:#f2e6d4;}
+.egf-zval{font-size:12px;color:#8A5A2B;min-width:42px;text-align:center;}
 .egf-btn{border:1px solid #e4d3ba;background:#faf6f0;color:#6B471A;font-size:12px;line-height:24px;height:26px;
   padding:0 8px;border-radius:3px;}
 .egf-btn:hover{background:#f2e6d4;}
@@ -154,17 +168,12 @@
         <button type="button" class="egf-btn" id="egfConnCurve" title="圓滑／取直曲線：通過每一個折點畫成平滑曲線（至少要有一個折點，先按「折點」）"><i class="fa fa-adjust"></i> 圓滑</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">排列</span>
+        <button type="button" class="egf-btn" id="egfAlignL" title="框選兩個以上的圖形後按這裡：全部的「左邊緣」對齊到第一個的左邊緣"><i class="fa fa-align-left"></i> 靠左</button>
         <button type="button" class="egf-btn" id="egfAlignVC" title="框選兩個以上的圖形後按這裡：全部的中心對齊到第一個的中心垂直線（左右對齊成一直行）"><i class="fa fa-align-center"></i> 中線</button>
+        <button type="button" class="egf-btn" id="egfAlignR" title="框選兩個以上的圖形後按這裡：全部的「右邊緣」對齊到第一個的右邊緣"><i class="fa fa-align-right"></i> 靠右</button>
         <button type="button" class="egf-btn" id="egfAlignHC" title="全部的中心對齊到第一個的中心水平線（上下對齊成一橫列）"><i class="fa fa-ellipsis-h"></i> 橫線</button>
         <button type="button" class="egf-btn" id="egfDistV" title="由上到下等距排好、彼此不重疊，中心也對齊成一直行"><i class="fa fa-sort-amount-asc"></i> 直排</button>
         <button type="button" class="egf-btn" id="egfDistH" title="由左到右等距排好、彼此不重疊，中心也對齊成一橫列"><i class="fa fa-exchange"></i> 橫排</button>
-        <span class="egf-sep"></span>
-        <span class="egf-lab">顯示</span>
-        <button type="button" class="egf-btn" id="egfZoomOut" title="縮小顯示（不會改變實際大小）">－</button>
-        <span class="egf-lab" id="egfZoomVal" style="min-width:38px;display:inline-block;text-align:center">100%</span>
-        <button type="button" class="egf-btn" id="egfZoomIn" title="放大顯示（不會改變實際大小）">＋</button>
-        <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖（圖比視窗大時，一打開就會自動縮成這樣；也可以按住 Ctrl 滾滑鼠滾輪縮放）">符合視窗</button>
-        <button type="button" class="egf-btn" id="egfZoom1" title="回到 100%">100%</button>
     </div>
     <div class="egf-bd">
       <div class="egf-work">
@@ -212,8 +221,15 @@
       </div>
     </div>
     <div class="egf-ft">
-      <span class="egf-grip" id="egfGrip"
-            title="拖曳可以改變這個視窗的大小（畫布放大時很有用）；雙擊＝還原成預設大小"><i class="fa fa-expand"></i></span>
+      <span class="egf-zoom">
+        <button type="button" class="egf-zbtn" id="egfZoomOut" title="縮小編輯畫面">－</button>
+        <input type="range" id="egfZoomRange" min="25" max="400" step="1" value="100" data-eg-skip
+               title="拖曳這條滑桿放大縮小編輯畫面（只是看起來變大，圖的實際尺寸沒有變）">
+        <button type="button" class="egf-zbtn" id="egfZoomIn" title="放大編輯畫面">＋</button>
+        <span class="egf-zval" id="egfZoomVal">100%</span>
+        <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖（也可以按住 Ctrl 滾滑鼠滾輪縮放）">符合視窗</button>
+        <button type="button" class="egf-btn" id="egfZoom1" title="回到 100%">100%</button>
+      </span>
       <span class="egf-asbar" id="egfAsBar" style="display:none">
         <i class="fa fa-exclamation-triangle"></i>
         <span id="egfAsBarTxt"></span>
@@ -225,6 +241,9 @@
       <button type="button" class="btn btn-warning" id="egfSave" style="font-weight:bold;padding:6px 18px;">
         <i class="fa fa-check"></i> 插入到文件</button>
     </div>
+    <!-- 視窗右下角的縮放把手（拖曳改變這個跳窗的大小，雙擊還原） -->
+    <span class="egf-grip" id="egfGrip"
+          title="拖曳這個角可以改變跳窗大小；雙擊＝還原成預設大小"></span>
   </div>
 </div>
 
@@ -280,15 +299,24 @@
   function syncLabel(shape) {
     var lb = labelOf(shape);
     if (!lb) return;
-    var wpx = shape.getScaledWidth(), hpx = shape.getScaledHeight();
+    /* 座標一律走 calcTransformMatrix 的 m[4]/m[5]（絕對中心），
+       不可以直接讀 shape.left/top：框選之後圖形被收進 activeSelection，
+       left/top 會變成「相對群組中心」的值，拿它當絕對座標會把文字丟到
+       畫布左上角（使用者 2026-10-16「框選移動時內部文字沒有跟著移動」）。
+       群組被縮放時成員自己的 scaleX 不變，要再乘上群組的縮放。 */
+    var gs = shape.group ? (shape.group.scaleX || 1) : 1;
+    var gt = shape.group ? (shape.group.scaleY || 1) : 1;
+    var wpx = shape.getScaledWidth() * gs, hpx = shape.getScaledHeight() * gt;
+    var m = shape.calcTransformMatrix();
+    var cx = m[4], cy = m[5], absTop = cy - hpx / 2;
     var ha = shape.egHA || 'center', va = shape.egVA || 'middle';
     var pad = 6;
     // 水平：文字框本來就跟圖形同寬，靠左右只要換 textAlign，不必移動框
     lb.set({ width: Math.max(24, wpx - 12), textAlign: ha,
-             originX: 'center', left: shape.left + wpx / 2 });
-    if (va === 'top')         lb.set({ originY: 'top',    top: shape.top + pad });
-    else if (va === 'bottom') lb.set({ originY: 'bottom', top: shape.top + hpx - pad });
-    else                      lb.set({ originY: 'center', top: shape.top + hpx / 2 });
+             originX: 'center', left: cx });
+    if (va === 'top')         lb.set({ originY: 'top',    top: absTop + pad });
+    else if (va === 'bottom') lb.set({ originY: 'bottom', top: absTop + hpx - pad });
+    else                      lb.set({ originY: 'center', top: cy });
     lb.setCoords();
   }
 
@@ -506,11 +534,29 @@
 
 
 
+  /* 框選（activeSelection）一次搬好幾個物件時，fabric 只給「群組」這一個 target，
+     它沒有 egRole，所以原本的同步完全不會被呼叫——圖形內的文字跟箭頭
+     （它們都是 selectable:false，永遠不會被收進群組）就會留在原地。
+     一律先用這支攤開成成員，再走原本的同步邏輯。 */
+  function eachSel(t, fn) {
+    if (!t) return;
+    if (t.type === 'activeSelection' && t.getObjects) t.getObjects().forEach(fn);
+    else fn(t);
+  }
+  function syncMoved(o) {
+    if (!o) return;
+    if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
+    else if (o.egRole === 'conn') syncConn(o);   // 箭頭不在群組裡，要自己重算位置
+  }
+
   /** 圖形移動／縮放後，把綁在它身上的連線端點一起帶走 */
   function syncBoundConns(sh) {
     if (!sh || sh.egRole !== 'shape') return;
     cv.getObjects().forEach(function (o) {
       if (o.egRole !== 'conn') return;
+      /* 這條線自己也在框選裡面時，fabric 會整組搬它，這裡再寫一次絕對
+         座標等於移兩次（而且 setConnPts 會把群組相對的 left/top 整個重算掉）。 */
+      if (o.group) return;
       if ((!o.egPA || o.egPA.id !== sh.egId) && (!o.egPB || o.egPB.id !== sh.egId)) return;
       var a = lineAbs(o);
       var pa = portPos(o.egPA), pb = portPos(o.egPB);
@@ -676,7 +722,12 @@
     }
     info.forEach(function (it) { it.left = it.cx - it.w / 2; it.top = it.cy - it.h / 2; });
 
-    if (mode === 'vc') {                // 中心 X 對齊第一個
+    if (mode === 'al') {                // 左邊緣對齊第一個的左邊緣
+      info.forEach(function (it) { moveTo(it, base.left, it.top); });
+    } else if (mode === 'ar') {         // 右邊緣對齊第一個的右邊緣
+      var rx = base.left + base.w;
+      info.forEach(function (it) { moveTo(it, rx - it.w, it.top); });
+    } else if (mode === 'vc') {         // 中心 X 對齊第一個
       info.forEach(function (it) { moveTo(it, base.cx - it.w / 2, it.top); });
     } else if (mode === 'hc') {         // 中心 Y 對齊第一個
       info.forEach(function (it) { moveTo(it, it.left, base.cy - it.h / 2); });
@@ -1483,8 +1534,7 @@
       }
       o.set({ left: snapv(o.left), top: snapv(o.top) });
       applyGuides(o);                       // 對齊輔助線（會順手吸附）
-      if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
-      if (o.egRole === 'conn')  syncConn(o);      // 節點控制點會自己跟著走，不必收掉
+      eachSel(o, syncMoved);                // 節點控制點會自己跟著走，不必收掉
     });
     // 按下的當下記住原始位置，Alt 複製要把複本放回這裡
     cv.on('mouse:down', function (e) {
@@ -1500,15 +1550,13 @@
        線就是自由拖拉；只有在**拖連線端點**時才顯示附近圖形的錨點當提示，
        靠過去會吸附並記住綁定（之後移動圖形，線會跟著走）。 */
     cv.on('mouse:up', function () { clearGuides(); clearPortDots(); });
-    cv.on('object:scaling', function (e) {
-      if (e.target.egRole === 'shape') { syncLabel(e.target); syncBoundConns(e.target); }
-    });
+    cv.on('object:scaling', function (e) { eachSel(e.target, syncMoved); });
     cv.on('object:modified', function (e) {
       var o = e.target;
       clearPortDots();
       clearGuides();
-      if (o && o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
-      if (o && o.egRole === 'conn') { syncConn(o); showHandles(o); }
+      eachSel(o, syncMoved);
+      if (o && o.egRole === 'conn') showHandles(o);
       snapshot();
     });
     cv.on('selection:created', onSel);
@@ -1725,13 +1773,18 @@
        （使用者 2026-10-15 回報「圖示內文字看起來很模糊」）。 */
     cv.setZoom(ZOOM);
     cv.setDimensions({ width: Math.round(LOGW * ZOOM), height: Math.round(LOGH * ZOOM) });
+    var pct = Math.round(ZOOM * 100);
     var v = el('egfZoomVal');
-    if (v) v.textContent = Math.round(ZOOM * 100) + '%';
+    if (v) v.textContent = pct + '%';
+    /* 滑桿跟數值要雙向同步：用＋－或「符合視窗」改過之後，滑桿還停在舊位置的話，
+       下一次拖它會先跳回舊值。 */
+    var r = el('egfZoomRange');
+    if (r && String(r.value) !== String(pct)) r.value = Math.max(25, Math.min(400, pct));
   }
-  function setZoom(z) {
+  function setZoom(z, silent) {
     ZOOM = Math.max(0.15, Math.min(4, z));
     applyZoom();
-    stat('顯示縮放 ' + Math.round(ZOOM * 100) + '%（只是看起來變大，實際尺寸沒有變）');
+    if (!silent) stat('顯示縮放 ' + Math.round(ZOOM * 100) + '%（只是看起來變大，實際尺寸沒有變）');
   }
   function zoomStep(dir) {
     var i = 0, best = 0, d = 1e9;
@@ -1938,14 +1991,13 @@
       win.style.top = r.top + 'px';
       win.style.transform = 'none';
       st = { x: e.clientX, y: e.clientY, w: r.width, h: r.height, left: r.left };
-      d.body.style.cursor = 'nesw-resize';
+      d.body.style.cursor = 'nwse-resize';
     });
     d.addEventListener('mousemove', function (e) {
       if (!st) return;
       var dx = e.clientX - st.x, dy = e.clientY - st.y;
-      var sz = winApplySize(st.w - dx, st.h + dy);
-      // 右緣要固定不動：寬度被夾在上下限時，left 也要跟著夾住才不會整個視窗飄走
-      win.style.left = Math.round(st.left + st.w - sz.w) + 'px';
+      // 把手在右下角：左上角固定不動，往右往下拖就是變大
+      winApplySize(st.w + dx, st.h + dy);
       if (cv) cv.requestRenderAll();
     });
     d.addEventListener('mouseup', function () {
@@ -1954,13 +2006,25 @@
       d.body.style.cursor = '';
       var r = win.getBoundingClientRect();
       try { localStorage.setItem(EGF_WIN_LS, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); } catch (e) {}
-      stat('視窗大小已調整為 ' + Math.round(r.width) + '×' + Math.round(r.height) + '（下次打開會沿用；雙擊左下角把手可還原）');
+      stat('視窗大小已調整為 ' + Math.round(r.width) + '×' + Math.round(r.height) + '（下次打開會沿用；雙擊右下角把手可還原）');
     });
     grip.addEventListener('dblclick', function (e) { e.preventDefault(); winResetSize(); });
   }
 
+  /* 滑桿不是 button，接不到 click 委派，要自己綁 input（拖曳中即時縮放）。 */
+  function setupZoomRange() {
+    var r = el('egfZoomRange');
+    if (!r || r.__egBound) return;
+    r.__egBound = 1;
+    r.addEventListener('input', function () { setZoom((parseInt(r.value, 10) || 100) / 100, true); });
+    r.addEventListener('change', function () {
+      stat('顯示縮放 ' + Math.round(ZOOM * 100) + '%（只是看起來變大，實際尺寸沒有變）');
+    });
+  }
+
   function bind() {
     setupGrip();
+    setupZoomRange();
     var win = el('egfWin');
     win.addEventListener('click', function (e) {
       // .egf-x（右上角的 ×）是 <span> 不是 button，選擇器漏掉它就會「關不掉，只能按 ESC」
@@ -2068,6 +2132,8 @@
         case 'egfTxtT': setLabelAlign('v', 'top');    break;
         case 'egfTxtM': setLabelAlign('v', 'middle'); break;
         case 'egfTxtB': setLabelAlign('v', 'bottom'); break;
+        case 'egfAlignL':  arrangeSelected('al'); break;
+        case 'egfAlignR':  arrangeSelected('ar'); break;
         case 'egfAlignVC': arrangeSelected('vc'); break;
         case 'egfAlignHC': arrangeSelected('hc'); break;
         case 'egfDistV':   arrangeSelected('dv'); break;
