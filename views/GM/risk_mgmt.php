@@ -209,21 +209,23 @@ $perms  = rm_perms($db, $rmUser);
         .res-grid input { width:100%; }
         .fu-hint { margin-top:4px; font-size:12px; color:#5b3a1e; } .fu-hint b { color:#8A5A2B; } .fu-over { color:#DD5138; font-weight:bold; }
         .sg-note { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
+        #riskInline .rm-table-wrap { overflow-x:hidden; }
         #riskInline table.rkt { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; table-layout:fixed; }
         #riskInline table.rkt thead th { background:#F7E0BD; color:#5b3a1e; border:1px solid #E5D3B3; padding:5px 6px; text-align:left; vertical-align:middle; line-height:1.35; }
-        #riskInline table.rkt td { padding:6px 8px; vertical-align:top; text-align:left; word-break:break-word; border:0; }
+        #riskInline table.rkt td { padding:6px 8px; vertical-align:top; text-align:left; word-break:break-word; overflow-wrap:anywhere; border:0; }
+        /* 風險：淡橘紅；機會：很淡的綠（底色要淺，內文才好讀；區分主要靠左邊粗線、上框與標籤） */
         #riskInline tbody.rk-g.risk td { background:#FFF4EE; } #riskInline tbody.rk-g.risk tr.sub td { background:#FFFAF7; }
-        #riskInline tbody.rk-g.opp td { background:#E9F5EC; } #riskInline tbody.rk-g.opp tr.sub td { background:#F5FBF7; }
+        #riskInline tbody.rk-g.opp td { background:#F6FBF8; } #riskInline tbody.rk-g.opp tr.sub td { background:#FBFEFC; }
         #riskInline tbody.rk-g.risk td:first-child { border-left:5px solid #DD5138; } #riskInline tbody.rk-g.opp td:first-child { border-left:5px solid #2E8B57; }
-        #riskInline tbody.rk-g.risk tr.main td { border-top:2px solid #E3A18F; } #riskInline tbody.rk-g.opp tr.main td { border-top:2px solid #7FBF98; }
-        #riskInline tbody.rk-g.risk tr.sub td { border-top:1px dashed #EBC9BC; } #riskInline tbody.rk-g.opp tr.sub td { border-top:1px dashed #B8DCC6; }
+        #riskInline tbody.rk-g.risk tr.main td { border-top:2px solid #E3A18F; } #riskInline tbody.rk-g.opp tr.main td { border-top:2px solid #8CCBA4; }
+        #riskInline tbody.rk-g.risk tr.sub td { border-top:1px dashed #EBC9BC; } #riskInline tbody.rk-g.opp tr.sub td { border-top:1px dashed #CFE6D8; }
         #riskInline tbody.rk-g tr.main td { font-size:13px; }
-        #riskInline tr.sub td.sl { font-size:11.5px; color:#8A5A2B; font-weight:bold; text-align:right; padding-right:10px; } #riskInline tbody.opp tr.sub td.sl { color:#2E6B47; }
-        #riskInline tr.sub td .tx { white-space:pre-wrap; line-height:1.55; }
+        #riskInline tr.sub td { padding:4px 10px 4px 12px; line-height:1.55; white-space:pre-wrap; }
+        #riskInline tr.sub td b.sl { color:#8A5A2B; margin-right:8px; } #riskInline tbody.opp tr.sub td b.sl { color:#2E6B47; }
         #riskInline tr.gap td { height:10px; padding:0; background:#fff !important; border:0 !important; }
         .rk-kind { display:inline-block; padding:0 9px; border-radius:10px; font-size:12px; line-height:19px; color:#fff; }
         .rk-no { font-weight:bold; font-size:15px; color:#5b3a1e; } .rk-kind.risk { background:#DD5138; } .rk-kind.opp { background:#2E8B57; }
-        .rk-cn { font-size:12px; color:#6b4a2b; } tbody.opp .rk-cn { color:#1f4d2e; }
+        .rk-cn { font-size:11.5px; color:#6b4a2b; } tbody.opp .rk-cn { color:#1f4d2e; }
         #riskInline table { width:100%; border-collapse:collapse; font-size:12.5px; } #riskInline th, #riskInline td { border:1px solid #E5D3B3; padding:5px 7px; vertical-align:top; text-align:left; }
         #riskInline th { background:#F7E0BD; color:#5b3a1e; } #riskInline tr.rowdraft td { background:#FFFBF1; }
         .cmp-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; margin-left:6px; border-radius:8px; border:1px solid; white-space:nowrap; vertical-align:middle; }
@@ -960,31 +962,32 @@ var OPEN_ROW = null;
 function renderRiskInline(doc){
     var box = $('#riskInline').empty(); if (!doc) return;
     get({action:'doc_get', doc_id:doc.doc_id}, function(res){
-        var S = META.settings, draft = +res.doc.is_draft, CS = 9;
+        var S = META.settings, draft = +res.doc.is_draft, CS = 8;
         var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
-            + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張；每一項上面一列是重點，下面幾列是相關資料（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）。按「編輯此項」開啟並跳到該項修改。</span></h4>'
-            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:70px;"><col><col style="width:64px;"><col style="width:104px;"><col style="width:96px;"><col style="width:28%;"><col style="width:112px;"><col style="width:104px;"><col style="width:78px;"></colgroup>'
-            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S)／<br>發生率(O)</th><th>等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th><th></th></tr></thead>';
-        var sub = function(lb, html){ return '<tr class="sub"><td class="sl" colspan="2">' + lb + '</td><td colspan="' + (CS - 2) + '"><div class="tx">' + html + '</div></td></tr>'; };
+            + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張；每一項上面一列是重點，下面幾列是相關資料（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）。</span></h4>'
+            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:9%;"><col style="width:21%;"><col style="width:6%;"><col style="width:10%;"><col style="width:10%;"><col style="width:28%;"><col style="width:8%;"><col style="width:8%;"></colgroup>'
+            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S)／<br>發生率(O)</th><th>等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
+        // 下面幾列不對齊上面的欄位：整列一格、標題接在內容前面，不留空白
+        var sub = function(lb, html){ return '<tr class="sub"><td colspan="' + CS + '"><b class="sl">' + lb + '</b>' + html + '</td></tr>'; };
         $.each(res.items, function(i, it){
             var opp = it.ro_kind === 'opportunity', fu = it.follow_up, cls = opp ? 'opp' : 'risk';
             var fuTxt = fu ? esc(fu.cycle) + '<br>' + esc(dispDate(fu.next)) + (fu.overdue ? '<br><span class="fu-over">已到期</span>' : '') : '<span class="hint">—</span>';
             var eff = it.effect_status ? '<b>' + esc(META.effect_status[it.effect_status] || '') + '</b><br><span class="hint">' + esc(dispDate(it.effect_date)) + '</span>' : '<span class="hint">未確認</span>';
-            h += '<tbody class="rk-g ' + cls + '"><tr class="main"><td><span class="rk-no">' + (i + 1) + '</span>' + (it.confirm_no ? '<br><span class="rk-cn">' + esc(it.confirm_no) + '</span>' : '') + '</td>'
+            h += '<tbody class="rk-g ' + cls + '"><tr class="main"><td><span class="rk-no">' + (i + 1) + '</span>' + (it.confirm_no ? '<br><span class="rk-cn">' + esc(it.confirm_no) + '</span>' : '')
+              + '<br><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '" style="margin-top:4px;"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯' : '檢視') + '</button></td>'
               + '<td>' + esc(it.issue || '—') + '</td>'
               + '<td><span class="rk-kind ' + cls + '">' + (opp ? '機會' : '風險') + '</span></td>'
               + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '<br>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
               + '<td>' + lvBadge(it.level, true) + '</td>'
-              + '<td style="white-space:pre-wrap;">' + esc(it.measure || '—') + '</td><td>' + fuTxt + '</td><td>' + eff + '</td>'
-              + '<td><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯此項' : '檢視') + '</button></td></tr>';
-            h += sub('利害關係者／需求與期望', esc((it.stakeholder || '—') + '　／　' + (it.needs || '—')) + '　<span class="hint">（' + esc(META.scopes[it.scope] || '') + '議題）</span>');
-            if (it.ro_text) h += sub('對組織的影響說明', esc(it.ro_text));
-            if (it.tracks && it.tracks.length) h += sub('相關措施追蹤', trackHtml(it));
-            if (it.resources) h += sub('所需資源（人員、設施、工作環境、方法）', esc(String(it.resources).replace(/；(?=(?:人員|設施|工作環境|方法)：)/g, '\n')));
-            if (it.recheck_note) h += sub('重新評估（' + esc(dispDate(it.recheck_date)) + '）', esc(it.recheck_note));
-            h += sub('成效確認方式', esc(it.effect_check || '—'));
-            if (it.effect_status || it.effect_ruling) h += sub('成效確認結果與裁示', (it.effect_status ? '<b>' + esc(META.effect_status[it.effect_status] || '') + '</b>　' + esc(dispDate(it.effect_date)) + (it.car_no ? '　矯正單 ' + esc(it.car_no) : '') + '<br>' : '') + '主管裁示：' + esc(it.effect_ruling || '—'));
-            if (it.effect_evidence) h += sub('佐證', esc(it.effect_evidence));
+              + '<td style="white-space:pre-wrap;">' + esc(it.measure || '—') + '</td><td>' + fuTxt + '</td><td>' + eff + '</td></tr>';
+            h += sub('利害關係者／需求與期望：', esc((it.stakeholder || '—') + '　／　' + (it.needs || '—')) + '　<span class="hint">（' + esc(META.scopes[it.scope] || '') + '議題）</span>');
+            if (it.ro_text) h += sub('對組織的影響說明：', esc(it.ro_text));
+            if (it.tracks && it.tracks.length) h += sub('相關措施追蹤：', trackHtml(it));
+            if (it.resources) h += sub('所需資源：', esc(String(it.resources).replace(/[；\n]+(?=(?:人員|設施|工作環境|方法)：)/g, '　')));
+            if (it.recheck_note) h += sub('重新評估（' + esc(dispDate(it.recheck_date)) + '）：', esc(it.recheck_note));
+            h += sub('成效確認方式：', esc(it.effect_check || '—'));
+            if (it.effect_status || it.effect_ruling) h += sub('成效確認結果與裁示：', (it.effect_status ? '<b>' + esc(META.effect_status[it.effect_status] || '') + '</b>（' + esc(dispDate(it.effect_date)) + '）' + (it.car_no ? '　矯正單 ' + esc(it.car_no) : '') + '　' : '') + '主管裁示：' + esc(it.effect_ruling || '—'));
+            if (it.effect_evidence) h += sub('佐證：', esc(it.effect_evidence));
             h += '<tr class="gap"><td colspan="' + CS + '"></td></tr></tbody>';
         });
         box.html(h + '</table></div>');
