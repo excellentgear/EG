@@ -1540,6 +1540,20 @@
     var P = fabric.IText && fabric.IText.prototype;
     if (!P || P.__egLabelPatched) return;
     P.__egLabelPatched = true;
+    /* ★ 真正的根因（使用者 2026-10-16 兩度回報「打字／按 Enter 原文就消失」）：
+       fabric 的文字輸入是打進一個隱藏的 <textarea>，而全站共用檔 eg_input_rules.js
+       有「聚焦已有資料的欄位自動全選」（focusin → 下一個 tick select()）——
+       這個隱藏 textarea 每次取得焦點（進入編輯、每一次點進文字裡移動游標）
+       都被它整段全選，接著按 Enter 或打字就把整段原文取代掉。
+       標上 data-eg-skip 讓共用規則放過它；下面的游標同步只是補強。 */
+    var oInit = P.initHiddenTextarea;
+    if (typeof oInit === 'function') {
+      P.initHiddenTextarea = function () {
+        var r = oInit.apply(this, arguments);
+        if (this.hiddenTextarea) this.hiddenTextarea.setAttribute('data-eg-skip', '1');
+        return r;
+      };
+    }
     ['selectWord', 'selectLine'].forEach(function (nm) {
       var orig = P[nm];
       if (typeof orig !== 'function') return;
