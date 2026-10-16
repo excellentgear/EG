@@ -8404,8 +8404,8 @@ echo "</script>\n";
         if (!bar) return;
         var f = window.simFilter;
         if (!f) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
-        bar.style.display = '';
-        bar.innerHTML = '<i class="fa fa-filter"></i> <b>目前正在篩選「類似料號」</b>：只顯示料號 <b>' + escapeHtml(f.label) + '</b> 與它的類似料號（共 ' + f.n + ' 個料號）的製令。'
+        bar.style.display = 'table';   // 區塊且寬度只包住文字；clear:both 讓它從浮動的標題下方開始，底色不會延伸到標題底下
+        bar.innerHTML = '<i class="fa fa-filter"></i> <b>目前正在篩選「類似料號」</b>：只顯示料號 <b>' + escapeHtml(f.label) + '</b> 與它的類似料號（共 ' + f.n + ' 個料號）的製令（此篩選會暫時忽略其他搜尋與篩選條件）。'
             + ' <button type="button" class="btn btn-xs btn-default" style="margin-left:8px;" onclick="simFilterClear()"><i class="fa fa-times"></i> 取消類似料號篩選</button>';
     }
 
@@ -8413,7 +8413,9 @@ echo "</script>\n";
         var filters = getFilters();
         if (window.simFilter && window.simFilter.ids) {
             var _sfIds = window.simFilter.ids;
-            data = data.filter(function (r) { return r && _sfIds[String(r.d_setting_id || '')]; });
+            // 類似料號篩選優先：暫時忽略其他搜尋／篩選條件，原料號與類似料號的製令一定都要出現
+            // （否則像搜尋框裡殘留一個料號關鍵字，就會把類似料號那一半藏起來）
+            return applyListSort(data.filter(function (r) { return r && _sfIds[String(r.d_setting_id || '')]; }));
         }
         // console.log("Applying filters:", filters); // Debug
         let filtered = data.filter(function(row) {
@@ -15896,7 +15898,7 @@ echo "</script>\n";
                     </div>
 
                     <!-- 類似料號篩選中的提示橫幅（平常隱藏；篩選時由 simFilterRender() 顯示，避免使用者不知道正在篩選） -->
-                    <div id="sim-filter-bar" style="display:none;margin:6px 0;padding:6px 12px;background:#E4F1FB;border:1px solid #9CC8E8;border-left:5px solid #4A90C2;border-radius:4px;color:#1f4e79;font-size:13px;"></div>
+                    <div id="sim-filter-bar" style="display:none;clear:both;width:auto;max-width:100%;margin:6px 0;padding:6px 12px;background:#E4F1FB;border:1px solid #9CC8E8;border-left:5px solid #4A90C2;border-radius:4px;color:#1f4e79;font-size:13px;"></div>
 
                     <?php if ($permission_code === 'A'): ?>
                     <!-- ══ 角色功能設定 Modal（僅管理員可見的按鈕才會觸發開啟） ══ -->
