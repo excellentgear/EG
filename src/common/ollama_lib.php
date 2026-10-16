@@ -157,7 +157,17 @@ function eg_ai_draft(PDO $db, string $kind, array $ctx): string
             $title = $mk === 'mr' ? '管理審查會議（AS9100D 9.3）' : '內部稽核相關會議（事前會議或結束會議）';
             $factsMeeting = eg_ai_meeting_facts($db, (int)($ctx['year'] ?? date('Y')));
             $isDir = $g('item_kind', 10) === 'directive';
-            $u = "會議：" . $title . "；主題：" . $g('subject', 100) . "。\n以下是系統查到的實際狀況（只能用這些，不要自己編數字）：\n" . $factsMeeting . "\n"
+            // 管理審查：把程序書（2-GM-05）目前的 6.1.4 輸入／6.1.5 輸出條文給模型，要求會議要項開頭標條號（編輯畫面的「管理審查條文檢查」靠條號判定涵蓋）
+            $clauseTxt = '';
+            if ($mk === 'mr') {
+                try {
+                    require_once __DIR__ . '/mr_clause_lib.php';
+                    $cl = mr_clause_catalog($db, ((int)($ctx['year'] ?? date('Y'))) . '-06-30');
+                    $ls = []; foreach ($cl['clauses'] as $c0) $ls[] = $c0['no'] . ' ' . $c0['text'];
+                    if ($ls) $clauseTxt = "管理審查程序要求涵蓋這些條文（輸入 6.1.4、輸出 6.1.5），會議要項請對應其中的條文，每項開頭寫「【條號】」，沒有資料可報告的條文可以略過：\n" . implode("\n", $ls) . "\n";
+                } catch (Throwable $e) {}
+            }
+            $u = "會議：" . $title . "；主題：" . $g('subject', 100) . "。\n以下是系統查到的實際狀況（只能用這些，不要自己編數字）：\n" . $factsMeeting . "\n" . $clauseTxt
                . "請寫 " . ($isDir ? '「上級指示要項」' : '「會議要項（報告要點及決議事項）」') . "草稿，3～6 項，每項一行，開頭寫清楚報告或決議的主題，"
                . "後面接要點與決議；需要追蹤的事要寫出負責部門。每項不超過 60 字。";
             $raw = eg_ai_chat($db, $sys, $u . "\n格式：每一項只佔一行（不要把標題與內容分成兩行），不要編號，不要寫「主題」「要點」「決議」這些標籤字，也不要用 # 開頭。", ['max_tokens' => 600, 'timeout' => 180]);

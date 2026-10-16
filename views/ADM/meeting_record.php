@@ -110,6 +110,14 @@ foreach ($roleRows as $rr) {
         .mt-hint b { color:#8A5A2B; }
         .mt-sec { border-top:1px dashed #EADFC8; margin-top:10px; padding-top:6px; }
         .mt-sec-title { font-weight:bold; color:#5b3a1e; margin:6px 0 4px; }
+        .mr-box { border:1px solid #E0BE86; border-radius:6px; background:#FFFBF1; padding:8px 10px; font-size:12.5px; color:#5b3a1e; }
+        .mr-box .mr-sum b.bad { color:#DD5138; } .mr-box .mr-sum b.ok { color:#2e7d32; }
+        .mr-row { border-top:1px dashed #E5D3B3; padding:6px 0; } .mr-row:first-of-type { border-top:0; }
+        .mr-row .mr-no { font-weight:bold; color:#8A5A2B; } .mr-row .mr-tp { display:inline-block; font-size:11px; padding:0 6px; border-radius:8px; border:1px solid #D6BE94; background:#F3EBDD; color:#7a6a50; margin-left:4px; }
+        .mr-row .mr-st { display:inline-block; font-size:11px; padding:0 7px; border-radius:8px; margin-left:6px; border:1px solid; white-space:nowrap; }
+        .mr-ok { background:#E8F3E6; color:#2e7d32; border-color:#9CC79A; } .mr-miss { background:#FBE3D6; color:#A33A1A; border-color:#DD5138; } .mr-wv { background:#F3EBDD; color:#7a6a50; border-color:#D6BE94; }
+        .mr-row .mr-ex { margin-top:3px; color:#5b3a1e; line-height:1.55; } .mr-row .mr-fact { margin-top:2px; padding:3px 7px; border-left:3px solid #F0A24B; background:#FDF8EF; }
+        .mr-row .mr-duty { color:#8a7a5a; font-size:12px; } .mr-row .b-att { margin:3px 4px 0 0; }
         /* 2026-08-26：名字右方要接「當天行程」，改為一人一列的直式清單（橫排會被長字串擠爆） */
         .att-people { max-height:200px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px;
             display:flex; flex-direction:column; gap:3px; margin-bottom:6px; min-height:20px; }
@@ -340,6 +348,10 @@ foreach ($roleRows as $rr) {
             </div>
         </div>
 
+        <div class="mt-sec" id="edSecMr" style="display:none;">
+            <div class="mt-sec-title">管理審查條文檢查（2-GM-05）<span class="mr-sum" id="mrSum" style="font-weight:normal;margin-left:8px;"></span></div>
+            <div class="mr-box"><div class="hint" id="mrProc" style="margin-bottom:4px;"></div><div id="mrList"><span class="hint">載入中…</span></div></div>
+        </div>
         <div class="mt-sec" id="edSecAnnounce">
             <div class="mt-sec-title">宣布事項</div>
             <table class="itm-tbl">
@@ -793,6 +805,10 @@ foreach ($roleRows as $rr) {
         <h4>設定入口</h4>
         「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。<br>
         「模組設定 → <b>會議通知單</b>」（僅管理員）：①<b>AS 文件編號綁定</b>（2-GM-05-03；綁定後列印版表頭用該文件的表單名稱、右下角印文件編號，版次依<b>會議日期</b>回推當時生效的那一版）②<b>通知單上要列出哪些「應出席單位」</b>。
+        <h4>管理審查會議的條文檢查（2-GM-05）</h4>
+        ・會議主題含「管理審查」時，編輯畫面上方會出現「<b>管理審查條文檢查</b>」：列出 2-GM-05 管理審查<b>輸入（6.1.4）</b>與<b>輸出（6.1.5）</b>的每一條，條號與文字<b>即時取自 AS 文件線上版目前的內容</b>（程序書改版自動跟著變）。<br>
+        ・每一條都有<b>解說</b>（要報告什麼、權責單位）與<b>系統查到的資料</b>（稽核不符合、客訴與退貨、KPI 達標、供應商績效、矯正單、組織處境分析表與風險表、措施追蹤逾期…），1～3 月開的管理審查看的是前一年度資料。<br>
+        ・會議要項／討論紀錄裡出現該條的號碼或關鍵字就算<b>已列入</b>；沒列入的可按「<b>加入會議要項（帶入系統資料）</b>」，或按「已檢視，本次不需列入」並寫一句原因（隨會議存檔）。送出時若仍有沒列入的條文會提醒一次，可先存草稿補齊再送。<br>
         <h4>權限角色</h4>
         <b>可看到哪些會議記錄</b>：①<b>會議記錄登錄</b>＝只看得到<b>自己建立或與自己相關</b>（出席／主席／總經理／負責簽名）的會議記錄；②<b>產銷會議人員</b>（功能碼「檢視產銷會議」）＝<b>全部產銷會議</b>（主題含「產銷」、已送出者）＋自己建立或相關的其他會議；③<b>會議記錄檢索</b>（功能碼「檢索全部」）＝不限是否相關、可檢索全部已送出的會議記錄；④會議記錄管理員＝全部＋刪除、修改他人已送出記錄、維護常用設定；管理者全權。任何角色都<b>看不到他人尚未送出的草稿</b>（除非是自己建立或需要自己簽名）。新增/編輯/送出需「會議記錄登錄」。<br>
         ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
@@ -1001,7 +1017,7 @@ function edApplyNoticeMode(on){
 }
 function openCreate(noticeMode){
     DISC = []; renderDisc();
-    EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
+    EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = []; MR_WAIVE = {}; MR_CL = null;
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
@@ -1093,9 +1109,11 @@ function openEdit(id){
             target.push(row);
         });
         DISC = discParse(m); renderDisc();
+        try { MR_WAIVE = m.mr_waive ? (JSON.parse(m.mr_waive) || {}) : {}; } catch (e) { MR_WAIVE = {}; } MR_CL = null;
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
         renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
+        mrRefresh();
         $('#edChair').val(m.chair_user_id||'');
         // 依會議日期載入當時在職的人（含現已離職者），已選負責人標籤才認得出來，載完再重畫
         PEOPLE_ASOF = ''; loadPeopleAsof(function(){ renderItems('directive'); renderItems('general'); });
@@ -1524,6 +1542,73 @@ function groupSaveConfirm(){
 }
 
 /* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
+/* ---------- 管理審查會議：2-GM-05 條文檢查（條文取自 AS 文件線上版目前內容；有解說、系統對應資料、涵蓋判定，缺的可一鍵加入會議要項或標註「已檢視、本次不列入」） ---------- */
+var MR_CL = null, MR_CL_DATE = '', MR_WAIVE = {}, MR_LOADING = false;
+function mrIsMr(){ return /管理審查|管審/.test($.trim($('#edSubject').val() || '')); }
+function mrCorpus(){
+    var t = [];
+    $.each([ITEMS_A, ITEMS_D, ITEMS_G], function(_, a){ $.each(a || [], function(_, it){ t.push(it.content || ''); }); });
+    $.each(DISC || [], function(_, r){ t.push(r.content || ''); });
+    return t.join('\n');
+}
+function mrCovered(c, text){
+    if (text.indexOf(c.no) >= 0) return true;                       // 條文號碼（加入要項時帶「【6.1.4.9 …】」）
+    var hit = false; $.each(c.akw || [], function(_, k){ if (k && text.indexOf(k) >= 0) hit = true; });
+    return hit;
+}
+function mrRefresh(){
+    var on = mrIsMr(); $('#edSecMr').toggle(on); if (!on) return;
+    var d = $('#edDate').val() || META.today;
+    if (MR_CL && MR_CL_DATE === d){ mrRender(); return; }
+    if (MR_LOADING) return; MR_LOADING = true;
+    $.get(API, {action:'mr_clauses', date:d}, function(res){
+        MR_LOADING = false;
+        if (!res.ok){ $('#mrList').html('<span class="hint">條文載入失敗：' + esc(res.error || '') + '</span>'); return; }
+        MR_CL = res; MR_CL_DATE = d; mrRender();
+        if ($('#edDate').val() !== d) mrRefresh();
+    }, 'json').fail(function(){ MR_LOADING = false; $('#mrList').html('<span class="hint">條文載入失敗</span>'); });
+}
+function mrRender(){
+    if (!mrIsMr() || !MR_CL) return;
+    var text = mrCorpus(), p = MR_CL.proc || {}, miss = 0, cov = 0, total = 0, h = '';
+    $('#mrProc').html(esc(p.doc_no || '') + ' ' + esc(p.name || '') + (p.version ? '　線上版 ' + esc(p.version) : '') + '（條文取自 AS 文件線上版，程序書改版這裡自動跟著變）；'
+        + '審查資料年度：<b>' + MR_CL.data_year + '</b> 年' + '　<span style="color:#8a7a5a;">1～3 月的管理審查看的是前一年度資料。涵蓋判定：會議要項／討論紀錄裡出現該條的號碼或關鍵字就算涵蓋。</span>');
+    $.each(['in', 'out'], function(_, tp){
+        var rows = $.grep(MR_CL.clauses, function(c){ return c.type === tp; });
+        if (!rows.length) return;
+        h += '<div style="font-weight:bold;margin:6px 0 2px;color:#8A5A2B;">' + (tp === 'in' ? '管理審查輸入（6.1.4）：會議要報告與審查的資料' : '管理審查輸出（6.1.5）：會議要做成的決議') + '</div>';
+        $.each(rows, function(_, c){
+            var ok = mrCovered(c, text), wv = MR_WAIVE[c.key] || '';
+            total++; if (ok || wv) cov++; else miss++;
+            h += '<div class="mr-row"><span class="mr-no">' + esc(c.no) + '</span> ' + esc(c.text)
+              + (ok ? '<span class="mr-st mr-ok">已列入會議內容</span>' : (wv ? '<span class="mr-st mr-wv">已檢視不列入：' + esc(wv) + '</span>' : '<span class="mr-st mr-miss">尚未列入</span>'))
+              + '<div class="mr-ex">' + esc(c.explain) + (c.duty ? ' <span class="mr-duty">（權責：' + esc(String(c.duty).replace(/^3\.\d+\s*/, '')) + '）</span>' : '') + '</div>'
+              + (c.fact ? '<div class="mr-fact"><b>系統查到的資料：</b>' + esc(c.fact) + '</div>' : '<div class="mr-duty">系統裡沒有這一條的對應資料，請依實際狀況填寫。</div>');
+            if (!ok) h += '<button type="button" class="b-att wt" data-mradd="' + esc(c.key) + '"><i class="fa fa-plus"></i> 加入會議要項（帶入系統資料）</button>'
+                       + (wv ? '<button type="button" class="b-att" data-mrundo="' + esc(c.key) + '">取消「不列入」</button>' : '<button type="button" class="b-att" data-mrwaive="' + esc(c.key) + '">已檢視，本次不需列入</button>');
+            h += '</div>';
+        });
+    });
+    $('#mrList').html(h || '<span class="hint">程序書目前找不到 6.1.4／6.1.5 的條文。</span>');
+    $('#mrSum').html(miss ? '<b class="bad">尚有 ' + miss + ' 條沒有列入</b>　<span class="hint">已列入／已檢視 ' + cov + ' ／ 共 ' + total + '</span>' : '<b class="ok">全部條文都已涵蓋或已檢視</b>');
+    MR_MISSING = miss;
+}
+var MR_MISSING = 0;
+function mrClauseOf(key){ var r = null; $.each((MR_CL && MR_CL.clauses) || [], function(_, c){ if (c.key === key) r = c; }); return r; }
+$(document).on('click', '[data-mradd]', function(){
+    var c = mrClauseOf($(this).data('mradd')); if (!c) return;
+    ITEMS_G.push({item_id:0, content:c.draft, due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', confirm_mode:'onsite', remark:''});
+    renderItems('general'); mrRender();
+    var el = document.getElementById('edSecGeneral'); if (el && el.scrollIntoView) el.scrollIntoView({block:'center'});
+});
+$(document).on('click', '[data-mrwaive]', function(){
+    var k = $(this).data('mrwaive'), why = prompt('請簡述為什麼這次管理審查不需要列入這一條（會一起存檔，稽核時可說明）。\n例如：本年度沒有客戶滿意度調查結果；沒有環境審查表。', '');
+    if (why === null) return; why = $.trim(why);
+    if (!why){ alert('請寫一句原因，才能標示「已檢視、本次不列入」。'); return; }
+    MR_WAIVE[k] = why; mrRender();
+});
+$(document).on('click', '[data-mrundo]', function(){ delete MR_WAIVE[$(this).data('mrundo')]; mrRender(); });
+$(document).on('input change', '#edSubject, #edDate', function(){ clearTimeout(window.__mrT); window.__mrT = setTimeout(mrRefresh, 350); });
 function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
 function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
 /* AI 草稿（僅全站管理員；本機 Ollama；只限「內部稽核」「管理審查」會議）：把草稿一行一項加到表格後面，負責部門仍要人指定 */
@@ -1547,7 +1632,7 @@ EGAiDraft.reg('meeting_items', {
 function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', confirm_mode:'onsite', remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
-function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
+function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; if (key === 'content' && typeof mrRender === 'function') mrRender(); }
 /* 應完成日期：不是每一項都有，勾「NA」＝沒有應完成日期（存成空值，檢視與列印印 NA） */
 function dueCellHtml(kind,i,it){
     var na = !!it.due_na;
@@ -1596,6 +1681,7 @@ function renderItems(kind){
     $(itemBodySel(kind)).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
     refreshEdSubmitBtn();
     if (typeof renderDisc==='function' && $('#discBody').length) renderDisc();
+    if (typeof mrRender === 'function') mrRender();
 }
 /* 負責人二擇一(2026-08-05使用者明確要求)：部門模式(自動判定主要角色主管優先→兼任主管→職稱排序最高者)，
    或指定人員模式(直接指名，本次只要有出席就是必簽者，完全取代部門判定)；用切換連結決定畫哪一種挑選器。 */
@@ -1956,7 +2042,7 @@ function gatherPayload(){
         action:'save', meeting_id: EDIT_ID, subject: $('#edSubject').val(), meeting_date: $('#edDate').val(),
         start_time: $('#edStart').val(), end_time: $('#edEnd').val(), location: $('#edLoc').val(),
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
-        tpl_id: EDIT_ID ? 0 : TPL_ID,
+        tpl_id: EDIT_ID ? 0 : TPL_ID, mr_waive: JSON.stringify(MR_WAIVE),
         attendees: JSON.stringify(ATT),
         discussion_json: JSON.stringify(DISC.filter(function(r){ return $.trim(r.content||'')!==''; })),
         items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
@@ -2026,6 +2112,8 @@ function saveDraft(thenSubmit){
     if (!$('#edDate').val()){ setErr($('#edDate'),'errEdDate','請選擇會議日期'); return; }
     setErr($('#edDate'),'errEdDate','');
     if (!edTimeValidate()){ alert('時間欄位有誤，請先修正'); return; }
+    if (thenSubmit && !ED_NOTICE_MODE && mrIsMr() && MR_CL && MR_MISSING > 0 &&
+        !confirm('2-GM-05 管理審查條文還有 ' + MR_MISSING + ' 條沒有列入會議內容（見上方「管理審查條文檢查」）。\n\n管理審查要審查完整的輸入、做成完整的輸出決議；仍要送出嗎？（也可先存草稿，補齊再送）')) return;
     if (thenSubmit && !$('#edChair').val()){ alert(ED_NOTICE_MODE ? '通知單一定要有主席（主席確認那一格的章），請先在出席人員內指定' : '送出前請先指定主席'); return; }
     if (thenSubmit && !ATT.length){ alert(ED_NOTICE_MODE ? '請先加入出席人員（通知單要印出席人員，也要靠這份名單發通知）' : '送出前請先加入出席人員'); return; }
     /* 通知單模式：存好會議基本資料就好，**不要**走「送出主席簽核」那條路（那是會議記錄的簽核，

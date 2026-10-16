@@ -235,7 +235,6 @@ if ($action === 'ctx_year') {
           'can_edit'=>$r ? rmCanEdit($r, $P) : true,     // 還沒建立：任何在職員工都可以建（建立者之後與管理員可改）
           'years'=>array_map('intval', $yrs),
           'compare'=>$r ? rm_ctx_compare($db, (int)$r['doc_id'], (string)$r['fill_date']) : null,
-          'clauses'=>rm_clause_catalog($db),
           'print'=>rm_print_meta($db, 'context', $r ? (string)$r['fill_date'] : null)]);
 }
 
@@ -260,10 +259,6 @@ if ($action === 'track_options') {
     $st->execute([$year, $year]);
     jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
-if ($action === 'clause_hints') {
-    jout(rm_clause_hints($db));
-}
-
 /* ---------------------------------------------------------------- SWOT → 風險表／溝通記錄／措施追蹤「草稿」
    依使用者已儲存的組織處境分析表產生；全部標「草稿・待確認」（is_draft=1，畫面標示、列印不顯示），使用者實際看過按「確認」才是正式資料。
    重新產生時先清掉舊草稿（已確認的不動）。溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以一定要人確認。 */
@@ -518,8 +513,6 @@ if ($action === 'doc_save') {
             if (!isset(RM_SWOT[$dim])) jerr('第 ' . ($n + 1) . ' 列沒有指定 SWOT 象限（優勢／劣勢／機會／威脅）');
             $row['dimension'] = $dim;
             $row['scope'] = RM_SWOT[$dim]['scope'];            // 內部／外部由象限決定，不採信前端
-            $ck = rmS($it['clause_key'] ?? '', 30);            // 對應的程序書條文：必須存在於目前的程序書、且適用這個象限（後端同規則再擋一次）
-            $row['clause_key'] = $ck === 'none' ? 'none' : (($ck !== '' && rm_clause_valid($db, $ck, $dim)) ? $ck : null);   // none＝使用者明確選「不對應」
         } else {
             $row['ro_kind'] = in_array(($it['ro_kind'] ?? ''), array_keys(RM_RO_KINDS), true) ? $it['ro_kind'] : null;
             $row['ro_text'] = rmS($it['ro_text'] ?? '', 4000);
@@ -612,15 +605,6 @@ if ($action === 'doc_save') {
             $id = (int)$db->lastInsertId();
         }
 
-        // 處境分析表：已檢視、本年度不需要列入的條文（要寫原因；條文必須是「應涵蓋檢查」的那幾條）
-        if ($kind === 'context' && array_key_exists('clause_waive', $_POST)) {
-            $wv = json_decode((string)$_POST['clause_waive'], true); $keep = [];
-            if (is_array($wv)) {
-                $okKeys = []; foreach (rm_clause_catalog($db)['clauses'] as $cc) if (!empty($cc['check'])) $okKeys[$cc['key']] = true;
-                foreach ($wv as $k0 => $why0) { $k0 = (string)$k0; $why0 = rmS($why0, 100); if (isset($okKeys[$k0]) && $why0 !== '') $keep[$k0] = $why0; }
-            }
-            $db->prepare("UPDATE rm_doc SET clause_waive=? WHERE doc_id=?")->execute([$keep ? json_encode($keep, JSON_UNESCAPED_UNICODE) : null, $id]);
-        }
         // 既有列：沿用原本的風險確認編號（不可因重存而重配）
         $oldConfirm = [];
         if ($old) {
@@ -645,19 +629,19 @@ if ($action === 'doc_save') {
                      $row['ro_kind'], $row['ro_text'] ?: null, $row['severity'], $row['frequency'], $confirm ?: null,
                      $row['measure'] ?: null, $row['effect_check'] ?: null, $row['ctx_item_id'],
                      $row['effect_status'], $row['effect_date'], $row['effect_ruling'] ?: null, $row['effect_evidence'] ?: null, $row['rule_ids'],
-                     $row['recheck_note'] ?: null, $row['recheck_date'], $row['resources'] ?: null, $row['clause_key'] ?? null];
+                     $row['recheck_note'] ?: null, $row['recheck_date'], $row['resources'] ?: null];
             if ($isOld) {
                 $db->prepare("UPDATE rm_item SET seq=?, scope=?, dimension=?, stakeholder=?, needs=?, issue=?, ro_kind=?, ro_text=?,
                                 severity=?, frequency=?, confirm_no=?, measure=?, effect_check=?, ctx_item_id=?,
                                 effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=?, rule_ids=?,
-                                recheck_note=?, recheck_date=?, resources=?, clause_key=? WHERE item_id=? AND doc_id=?")
+                                recheck_note=?, recheck_date=?, resources=? WHERE item_id=? AND doc_id=?")
                    ->execute(array_merge($vals, [$oid, $id]));
                 $keepIds[] = $oid;
             } else {
                 $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, dimension, stakeholder, needs, issue, ro_kind, ro_text,
                                 severity, frequency, confirm_no, measure, effect_check, ctx_item_id,
                                 effect_status, effect_date, effect_ruling, effect_evidence, rule_ids,
-                                recheck_note, recheck_date, resources, clause_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                recheck_note, recheck_date, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge([$id], $vals));
                 $keepIds[] = (int)$db->lastInsertId();
             }

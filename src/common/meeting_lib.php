@@ -236,6 +236,7 @@ function meeting_ensure_schema(PDO $db): void {
         ['notice_depts',        "VARCHAR(200) NULL COMMENT '通知單的「應出席單位」department.id 逗號分隔(只存id，名稱一律即時查主檔)'"],
         ['notice_submitted_at', "DATETIME NULL COMMENT '通知單送出(待主席確認)的時間'"],
         ['notice_sent_at',      "DATETIME NULL COMMENT '最後一次把「會議通知」發給應出席人員的時間'"],
+        ['mr_waive',            "TEXT NULL COMMENT '管理審查會議：已檢視、本次不需列入的 2-GM-05 條文 {條文key: 原因}（mr_clause_lib 的 key）'"],
     ] as [$col, $ddl]) {
         try {
             $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS

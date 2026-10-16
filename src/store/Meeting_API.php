@@ -30,6 +30,14 @@ $perms = meeting_perms($db, $u);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 if (!$perms['canView']) jerr('無會議記錄檢閱權限', 403);
 
+/* 管理審查會議的條文檢查（2-GM-05 6.1.4 輸入／6.1.5 輸出）：條文取自 AS 文件線上版目前內容，附解說、系統裡查得到的對應資料與草稿句 */
+if ($action === 'mr_clauses') {
+    include_once $document_root . '/EGsystem/src/common/risk_mgmt_rules_lib.php';   // rm_ctx_compare（風險與機會／處境分析表的資料）
+    include_once $document_root . '/EGsystem/src/common/mr_clause_lib.php';
+    $d = (string)($_GET['date'] ?? ''); if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) $d = date('Y-m-d');
+    jout(mr_clause_catalog($db, $d));
+}
+
 /**
  * 人員清單 → 前端要的欄位，並附上「當天的行程」（2026-08-26 使用者明確要求）
  * 每個人多帶：sched(行程陣列)、sched_text(名字右方要顯示的字)、blocked(1=不可勾選)、block_reason
@@ -696,6 +704,15 @@ case 'save': {
             $in = implode(',', $tempIds);
             $db->prepare("UPDATE meeting_attach SET meeting_id=?, status='active', expire_at=NULL
                           WHERE attach_id IN ({$in}) AND created_by=? AND status='temp'")->execute([$id, $uid]);
+        }
+        // 管理審查會議的「已檢視、本次不需列入」條文：沒送這個欄位＝不動
+        if (array_key_exists('mr_waive', $_POST)) {
+            $wv = json_decode((string)$_POST['mr_waive'], true); $keep = [];
+            foreach ((is_array($wv) ? $wv : []) as $k0 => $w0) {
+                $k0 = preg_replace('/[^A-Za-z0-9_]/', '', (string)$k0); $w0 = mb_substr(trim((string)$w0), 0, 100);
+                if ($k0 !== '' && $w0 !== '') $keep[$k0] = $w0;
+            }
+            $db->prepare("UPDATE meeting_record SET mr_waive=? WHERE meeting_id=?")->execute([$keep ? json_encode($keep, JSON_UNESCAPED_UNICODE) : null, $id]);
         }
         // 討論過程紀錄：沒送這個欄位＝不動（舊呼叫端不可被洗掉），送空字串才是清空
         if (array_key_exists('discussion_json', $_POST)) {
