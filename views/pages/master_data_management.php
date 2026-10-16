@@ -6311,6 +6311,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $_has = $pdo->query("SHOW COLUMNS FROM dict_maker_sub_category LIKE '{$_bc}'")->fetch();
                 if (!$_has) $pdo->exec("ALTER TABLE dict_maker_sub_category ADD COLUMN {$_bc} INT NULL");
             }
+            $pdo->exec("CREATE TABLE IF NOT EXISTS dict_maker_sub_cat_proc_map (
+                sub_cat_id INT NOT NULL, process_no_id INT NOT NULL, PRIMARY KEY (sub_cat_id, process_no_id)
+            ) COMMENT='廠商小類(加工類)綁定的製程小類(process_no)，可多筆；所屬製程大類存在 dict_maker_sub_category.bind_process_type_id'");
             $op = $_POST['op'];
             if ($op === 'proc_nos') {
                 // 某製程大類底下的製程小類（process_no），與製程分頁 list_process 同一套來源
@@ -6331,7 +6334,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $sql = "SELECT s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, s.ref_process_type_id, s.sort_order, s.is_active, s.eval_excluded,
                                s.bind_process_type_id, s.bind_process_no_id,
                                (SELECT process_type FROM process_type WHERE process_type_id=s.bind_process_type_id) AS bind_type_name,
-                               (SELECT ProcessName FROM process_no WHERE ProcessNo=s.bind_process_no_id) AS bind_pno_name,
+                               (SELECT GROUP_CONCAT(pn.ProcessNo ORDER BY pn.ProcessNo) FROM dict_maker_sub_cat_proc_map pm JOIN process_no pn ON pn.ProcessNo=pm.process_no_id WHERE pm.sub_cat_id=s.sub_cat_id) AS bind_pno_ids,
+                               (SELECT GROUP_CONCAT(pn.ProcessName ORDER BY pn.ProcessNo SEPARATOR '、') FROM dict_maker_sub_cat_proc_map pm JOIN process_no pn ON pn.ProcessNo=pm.process_no_id WHERE pm.sub_cat_id=s.sub_cat_id) AS bind_pno_name,
                                GROUP_CONCAT(m.main_cat_name ORDER BY m.main_cat_name SEPARATOR ', ') AS main_cat_names,
                                GROUP_CONCAT(CAST(h.main_cat_id AS CHAR) ORDER BY m.main_cat_name) AS main_cat_ids
                         FROM dict_maker_sub_category s
@@ -6364,19 +6368,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $main_ids = array_values(array_filter(array_map('intval', explode(',', $main_ids_raw))));
                 $eval_excluded = intval($_POST['eval_excluded'] ?? 0) ? 1 : 0;
                 // 綁定製程大類／小類（僅加工類；後端同規則驗證：小類必須屬於所選大類）
-                $bind_pt = null; $bind_pn = null;
+                $bind_pt = null; $bind_pns = [];
                 if ($group === 'PROCESS' && intval($_POST['bind_process_type_id'] ?? 0) > 0) {
                     $bind_pt = intval($_POST['bind_process_type_id']);
                     $ck = $pdo->prepare("SELECT COUNT(*) FROM process_type WHERE process_type_id=?"); $ck->execute([$bind_pt]);
                     if (!(int)$ck->fetchColumn()) throw new Exception('所選製程大類不存在');
-                    $bpn = intval($_POST['bind_process_no_id'] ?? 0);
-                    if ($bpn > 0) {
-                        $ck = $pdo->prepare("SELECT COUNT(*) FROM process_no WHERE ProcessNo=? AND ProcessNo IN
-                            (SELECT process_no_id FROM process_type_process_map WHERE process_type_id=?
-                             UNION SELECT ProcessNo FROM process_no WHERE process_type_id=?)");
+                    $ck = $pdo->prepare("SELECT COUNT(*) FROM process_no WHERE ProcessNo=? AND ProcessNo IN
+                        (SELECT process_no_id FROM process_type_process_map WHERE process_type_id=?
+                         UNION SELECT ProcessNo FROM process_no WHERE process_type_id=?)");
+                    foreach (array_unique(array_filter(array_map('intval', explode(',', $_POST['bind_process_no_ids'] ?? '')))) as $bpn) {
                         $ck->execute([$bpn,$bind_pt,$bind_pt]);
-                        if (!(int)$ck->fetchColumn()) throw new Exception('所選製程小類不屬於該製程大類');
-                        $bind_pn = $bpn;
+                        if (!(int)$ck->fetchColumn()) throw new Exception('所選製程小類 #'.$bpn.' 不屬於該製程大類');
+                        $bind_pns[] = $bpn;
                     }
                 }
                 if (empty($name)) throw new Exception('小類名稱不可為空');
@@ -6389,17 +6392,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 $pdo->beginTransaction();
                 if ($id) {
-                    $old_sc = $pdo->prepare("SELECT sub_cat_name,sub_cat_group,eval_excluded,bind_process_type_id,bind_process_no_id FROM dict_maker_sub_category WHERE sub_cat_id=?"); $old_sc->execute([$id]); $old_sc_row = $old_sc->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_maker_sub_category SET sub_cat_name=?,sub_cat_group=?,ref_process_type_id=?,eval_excluded=?,bind_process_type_id=?,bind_process_no_id=? WHERE sub_cat_id=?")
-                        ->execute([$name,$group,$ref_pt,$eval_excluded,$bind_pt,$bind_pn,$id]);
-                    $ch=_diff_rows($old_sc_row??[],['sub_cat_name'=>$name,'sub_cat_group'=>$group,'eval_excluded'=>$eval_excluded,'bind_process_type_id'=>$bind_pt,'bind_process_no_id'=>$bind_pn],['sub_cat_name','sub_cat_group','eval_excluded','bind_process_type_id','bind_process_no_id']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-sub:'.$id,$name,$ch,$uid,$op_name);
+                    $old_sc = $pdo->prepare("SELECT sub_cat_name,sub_cat_group,eval_excluded,bind_process_type_id FROM dict_maker_sub_category WHERE sub_cat_id=?"); $old_sc->execute([$id]); $old_sc_row = $old_sc->fetch(PDO::FETCH_ASSOC);
+                    $pdo->prepare("UPDATE dict_maker_sub_category SET sub_cat_name=?,sub_cat_group=?,ref_process_type_id=?,eval_excluded=?,bind_process_type_id=?,bind_process_no_id=NULL WHERE sub_cat_id=?")
+                        ->execute([$name,$group,$ref_pt,$eval_excluded,$bind_pt,$id]);
+                    $ch=_diff_rows($old_sc_row??[],['sub_cat_name'=>$name,'sub_cat_group'=>$group,'eval_excluded'=>$eval_excluded,'bind_process_type_id'=>$bind_pt],['sub_cat_name','sub_cat_group','eval_excluded','bind_process_type_id']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-sub:'.$id,$name,$ch,$uid,$op_name);
                 } else {
                     $max = $pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM dict_maker_sub_category")->fetchColumn();
-                    $pdo->prepare("INSERT INTO dict_maker_sub_category (sub_cat_name,sub_cat_group,ref_process_type_id,sort_order,eval_excluded,bind_process_type_id,bind_process_no_id) VALUES (?,?,?,?,?,?,?)")
-                        ->execute([$name,$group,$ref_pt,$max,$eval_excluded,$bind_pt,$bind_pn]);
+                    $pdo->prepare("INSERT INTO dict_maker_sub_category (sub_cat_name,sub_cat_group,ref_process_type_id,sort_order,eval_excluded,bind_process_type_id) VALUES (?,?,?,?,?,?)")
+                        ->execute([$name,$group,$ref_pt,$max,$eval_excluded,$bind_pt]);
                     $id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','maker-sub:'.$id,$name,null,$uid,$op_name);
                 }
+                $pdo->prepare("DELETE FROM dict_maker_sub_cat_proc_map WHERE sub_cat_id=?")->execute([$id]);
+                foreach ($bind_pns as $bpn) { $pdo->prepare("INSERT INTO dict_maker_sub_cat_proc_map (sub_cat_id,process_no_id) VALUES (?,?)")->execute([$id,$bpn]); }
                 $pdo->prepare("DELETE FROM maker_category_hierarchy WHERE sub_cat_id=?")->execute([$id]);
                 if (!empty($main_ids)) {
                     $ins = $pdo->prepare("INSERT IGNORE INTO maker_category_hierarchy (main_cat_id, sub_cat_id, sort_order) VALUES (?,?,0)");
@@ -20814,8 +20819,8 @@ var dictConfig = {
                 ? ' <span style="font-size:10px;background:#9e9e9e;color:#fff;border-radius:3px;padding:1px 6px;" title="此小類不列入定期評核評鑑等級計算">不列入評鑑</span>'
                 : '';
             var bindBadge = d.bind_type_name
-                ? ' <span style="font-size:10px;background:#fde9cf;color:#8a4b08;border-radius:3px;padding:1px 6px;" title="綁定製程大類ID '+escHtml(String(d.bind_process_type_id))+(d.bind_process_no_id?'／製程小類ID '+escHtml(String(d.bind_process_no_id)):'')+'"><i class="fa fa-cogs"></i> '+escHtml(d.bind_type_name)+(d.bind_pno_name?' › '+escHtml(d.bind_pno_name):'')+'</span>'
-                : '';
+                ? ' <span style="font-size:10px;background:#fde9cf;color:#8a4b08;border-radius:3px;padding:1px 6px;" title="製程大類ID '+escHtml(String(d.bind_process_type_id))+(d.bind_pno_ids?'／製程小類ID '+escHtml(String(d.bind_pno_ids)):'')+'"><i class="fa fa-link"></i> 已綁定：'+escHtml(d.bind_type_name)+(d.bind_pno_name?' › '+escHtml(d.bind_pno_name):'（僅大類）')+'</span>'
+                : (g==='PROCESS' ? ' <span style="font-size:10px;color:#bbb;"><i class="fa fa-chain-broken"></i> 未綁定製程</span>' : '');
             return grpBadge + syncBadge + escHtml(d.sub_cat_name) + exclBadge + bindBadge + '<div style="margin-top:3px;">'+cats+'</div>';
         },
         renderForm: function() {
@@ -20839,8 +20844,8 @@ var dictConfig = {
             html += '<div id="dict-sub-bind-wrap" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px;padding:7px;background:#fffaf2;border:1px solid #f0d9b5;border-radius:6px;">';
             html += '<div style="min-width:200px;"><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">綁定製程大類</label>';
             html += '<select id="dict-f-bind-pt" class="form-control input-sm" data-eg-filter="輸入製程大類篩選…"><option value="">（不綁定）</option></select></div>';
-            html += '<div style="min-width:200px;"><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">製程小類（可不選＝只綁大類）</label>';
-            html += '<select id="dict-f-bind-pn" class="form-control input-sm" data-eg-filter="輸入製程小類篩選…" disabled><option value="">只綁大類（不指定小類）</option></select></div>';
+            html += '<div style="min-width:200px;"><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">製程小類（可多選；不選＝只綁大類）</label>';
+            html += '<div id="dict-f-bind-pn" style="display:flex;flex-wrap:wrap;gap:5px;max-width:560px;"><span style="color:#aaa;font-size:11px;">請先選製程大類</span></div></div>';
             html += '<div style="font-size:11px;color:#a67c3d;flex:1;min-width:160px;">僅加工類可綁定；系統會記錄所選製程大類／製程小類的 ID。</div>';
             html += '</div>';
             html += '<label style="font-size:11px;color:#888;margin-bottom:4px;display:block;">綁定大類（可多選）</label>';
@@ -20892,7 +20897,7 @@ var dictConfig = {
                 var old = document.getElementById('sync-notice');
                 if (old) old.remove();
             }
-            subBindSet(d.bind_process_type_id, d.bind_process_no_id);
+            subBindSet(d.bind_process_type_id, d.bind_pno_ids);
             var ids = (d.main_cat_ids||'').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
             setTimeout(function() {
                 document.querySelectorAll('#dict-sub-main-checkboxes .sub-main-chk-label').forEach(function(el) {
@@ -20914,9 +20919,10 @@ var dictConfig = {
             var id = $('#dict-edit-id').val();
             var evalExcl = $('#dict-f-eval-excl').is(':checked') ? 1 : 0;
             var bpt = (group==='PROCESS') ? ($('#dict-f-bind-pt').val()||'') : '';
-            var bpn = bpt ? ($('#dict-f-bind-pn').val()||'') : '';
+            var bpn = [];
+            if (bpt) document.querySelectorAll('#dict-f-bind-pn input:checked').forEach(function(c){ bpn.push(c.value); });
             return { action:'manage_maker_sub_cats', op:'save', sub_cat_id:id, sub_cat_name:name, sub_cat_group:group, main_cat_ids:ids.join(','), eval_excluded:evalExcl,
-                     bind_process_type_id:bpt, bind_process_no_id:bpn };
+                     bind_process_type_id:bpt, bind_process_no_ids:bpn.join(',') };
         },
         getDeleteId: function(d){ return d.sub_cat_id; }
     },
@@ -26612,17 +26618,25 @@ function clearDictForm() {
 
 // ── 廠商小類：綁定製程大類／製程小類 ──
 var _subBindPending = null;   // fillForm 早於大類清單載入完成時暫存
-function subBindLoadPnos(ptid, selPn) {
+function subBindLoadPnos(ptid, selPns) {
     var $pn = $('#dict-f-bind-pn');
-    $pn.html('<option value="">只綁大類（不指定小類）</option>');
-    if (!ptid) { $pn.prop('disabled', true); return; }
-    $pn.prop('disabled', false);
+    if (!ptid) { $pn.html('<span style="color:#aaa;font-size:11px;">請先選製程大類</span>'); return; }
+    $pn.html('<span style="color:#aaa;font-size:11px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</span>');
+    var sel = String(selPns||'').split(',').filter(Boolean);
     api({ action:'manage_maker_sub_cats', op:'proc_nos', process_type_id:ptid }).done(function(r) {
         if (!r.success) return;
+        if (!r.data.length) { $pn.html('<span style="color:#aaa;font-size:11px;">此大類下沒有製程小類（只綁大類）</span>'); return; }
+        $pn.empty();
         r.data.forEach(function(p) {
-            $pn.append($('<option>').val(p.ProcessNo).text(p.ProcessName + '（#' + p.ProcessNo + '）'));
+            var on = sel.indexOf(String(p.ProcessNo)) >= 0;
+            var $l = $('<label style="display:inline-flex;align-items:center;gap:4px;border:1px solid #dde;border-radius:14px;padding:3px 10px;cursor:pointer;font-weight:normal;font-size:12px;">');
+            var $i = $('<input type="checkbox" style="display:none;">').val(p.ProcessNo).prop('checked', on);
+            var paint = function() { var o = $i.prop('checked'); $l.css({background:o?'#f0a24b':'#fff', color:o?'#fff':'', borderColor:o?'#d98a2b':'#dde'}); };
+            $i.on('change', paint);
+            $l.append($i).append(document.createTextNode(p.ProcessName + '（#' + p.ProcessNo + '）'));
+            paint();
+            $pn.append($l);
         });
-        if (selPn) $pn.val(String(selPn));
     });
 }
 function subBindToggleGroup() {
