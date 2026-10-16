@@ -171,11 +171,26 @@ function getEmployees() {
         $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // 在 PHP 中計算特休天數
+        // 離職→復職的人，年資要不要扣掉中間那段由「請假系統→管理者設定→特休年資」決定；
+        // 這裡一律回傳「效期到職日」(annual_leave_hire) 與說明 (annual_leave_note) 給前端，
+        // 因為前端那道「到職未滿6個月＝0天」的閘門必須拿效期到職日來判——用原到職日判的話，
+        // 「重新計算」模式下剛復職的人會被算成老員工而顯示出一個明顯錯誤的天數。
+        // annual_leave_days_net ＝已套用「到職未滿6個月＝0天」閘門的實際可用天數。
+        // 這個閘門原本只寫在前端 JS，而 raw 對「年中才起算」的到職日會回一個沒有意義的數字
+        // （例：起算 2026-08-11 的人在 2026 年 raw 會回 5），兩邊各算一次遲早走鐘，故後端一併算好；
+        // 前端仍保留同一條 JS 判定當後備（舊欄位 annual_leave_days 維持 raw，行為不變）。
         foreach ($data as $key => $employee) {
+            $data[$key]['annual_leave_hire'] = $employee['hire_date'];
+            $data[$key]['annual_leave_note'] = '';
             if ($employee['state'] != 0) { // 只計算在職員工
-                $data[$key]['annual_leave_days'] = calculateProratedAnnualLeave($employee['hire_date']);
+                $eff = eg_annual_leave_explain($db, (int)$employee['id'], $employee['hire_date']);
+                $data[$key]['annual_leave_days']     = eg_annual_leave_raw($eff['hire'], null);
+                $data[$key]['annual_leave_days_net'] = eg_annual_leave_entitlement($eff['hire'], null);
+                $data[$key]['annual_leave_hire']     = $eff['hire'];
+                $data[$key]['annual_leave_note']     = (string)$eff['note'];
             } else {
-                $data[$key]['annual_leave_days'] = 0;
+                $data[$key]['annual_leave_days']     = 0;
+                $data[$key]['annual_leave_days_net'] = 0;
             }
         }
 

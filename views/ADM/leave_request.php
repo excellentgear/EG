@@ -226,6 +226,9 @@ input[type=number]{-moz-appearance:textfield;}
             <div class="lb"><span class="an-y">本年度</span>請假紀錄（已核准）</div>
             <div id="yearUsage" style="font-size:13px;color:var(--ink);line-height:1.7;margin-top:2px;"></div>
             <div style="font-size:11px;color:#9a7b4f;margin-top:2px;">特休額度與員工資料的到職日／年資同一套算法即時計算，不另建額度表。</div>
+            <!-- 離職→復職者的年資調整說明（沒調整時整列不出現） -->
+            <div id="anSenNote" style="display:none;font-size:12px;color:#8a5a1a;background:#FFF3DF;
+                 border:1px solid var(--sand-d);border-radius:4px;padding:3px 7px;margin-top:4px;"></div>
           </div>
         </div>
 
@@ -724,11 +727,19 @@ input[type=number]{-moz-appearance:textfield;}
       <li><b>為什麼我的假單建不出來？</b>同一個時段已經有單（重疊）、或該期間沒有工作日。</li>
       <li><b>補以前的假</b>：人工送審有天數限制（人事設定）；行事曆帶入的舊資料不受此限，因為那是已經發生的事實。</li>
       <li><b>特休額度</b>：人工送審超額會被擋下；行事曆帶入的舊資料照建，但會在補建結果裡列出「超額」提醒人事處理。</li>
+      <li><b>離職之後又復職，特休年資怎麼算？</b>看「管理者設定 → 特休年資」選的模式，三種：
+          <b>維持現狀</b>（離職期間照算年資，預設）／<b>扣除離職期間</b>（年資累計但中間沒上班的日子不算）／
+          <b>自最後一次復職日重新計算</b>。離職與復職日期取自<b>員工管理 → 異動紀錄</b>的在職狀態紀錄，
+          <b>員工資料的「到職日」永遠維持第一次到職那天不動</b>（改掉會讓第一段任職期間的舊單據查不到這個人）。
+          年資被調整過時，上方額度區與員工管理的特休欄都會寫出「以哪一天起算、原到職日是哪天」。
+          <b>查往年額度時不受今年才發生的離職影響</b>（只算該年度年末之前已經發生的期間）。</li>
+      <li><b>留職停薪／育嬰留停要不要扣？</b>預設<b>不扣</b>（留停復職在勞基法上年資不中斷）；要扣請在
+          「特休年資」分頁額外勾選，且<b>只有「扣除離職期間」模式吃這個選項</b>，「重新計算」一律只看離職。</li>
     </ul>
 
     <h4>設定入口與權限</h4>
     <ul>
-      <li><b>管理者設定</b>（右上角齒輪）：角色的新增／改名／刪除與功能勾選、行事曆自動建單設定、補建舊資料。
+      <li><b>管理者設定</b>（右上角齒輪）：角色的新增／改名／刪除與功能勾選、行事曆自動建單設定、補建舊資料、特休年資（復職）。
           刪除角色時若有人正被設定成該角色，系統會列出是誰並要求先轉換成其他角色或確認移除，不會安靜地把權限拿掉。</li>
       <li><b>誰擁有哪個角色</b>：在「人員權限設定」頁指派。</li>
       <li><b>代理人順位、假別、額度、列印表頭表尾</b>：在「人事設定」與本頁管理員功能維護。</li>
@@ -750,6 +761,9 @@ input[type=number]{-moz-appearance:textfield;}
       <button type="button" class="pm-tab-btn active" id="lvsTabRole" onclick="lvSetTab('role')">角色設定</button>
       <?php endif; ?>
       <button type="button" class="pm-tab-btn<?= $IS_ADMIN ? '' : ' active' ?>" id="lvsTabCal" onclick="lvSetTab('cal')">行事曆自動建單</button>
+      <?php if ($IS_ADMIN): ?>
+      <button type="button" class="pm-tab-btn" id="lvsTabAnn" onclick="lvSetTab('ann')">特休年資</button>
+      <?php endif; ?>
     </div>
 
     <?php if ($IS_ADMIN): ?>
@@ -814,6 +828,35 @@ input[type=number]{-moz-appearance:textfield;}
         <div id="calListBox" style="margin-top:10px;max-height:260px;overflow:auto;"></div>
       </div>
     </div>
+
+    <?php if ($IS_ADMIN): ?>
+    <!-- ── 特休年資（離職→復職怎麼算）── -->
+    <div id="lvsPaneAnn" style="display:none;">
+      <p style="color:#8a6d45;margin:0 0 8px;">離職之後又復職的人，<b>員工資料的「到職日」一律維持第一次到職那天不動</b>
+        （改掉的話第一段任職期間的舊單據會查不到這個人），所以特休年資預設會把中間沒上班的那段也算進去。
+        這裡決定要怎麼處理。離職與復職的日期取自<b>員工管理 → 異動紀錄</b>的在職狀態紀錄。</p>
+
+      <div style="border:1px solid var(--sand-d);border-radius:6px;background:#FFF7E8;padding:10px;margin-bottom:12px;">
+        <div id="annModes"></div>
+        <label style="display:block;font-weight:400;margin-top:8px;padding-top:8px;border-top:1px dashed var(--sand-d);">
+          <input type="checkbox" id="annUnpaid" data-eg-skip> 留職停薪／育嬰留停期間<b>也一併扣除</b>
+          <span style="color:#8a6d45;">（只有「扣除離職期間」模式吃這個選項；預設不勾＝留停期間照算年資）</span>
+        </label>
+        <div style="margin-top:8px;color:#8a5a1a;">※ 本設定<b>不會改動任何人的到職日</b>，只影響特休天數怎麼算；
+          請假系統的額度與員工管理的「特休天數」欄會同時跟著變。</div>
+        <button type="button" class="btn btn-sm btn-amber" style="margin-top:8px;" onclick="annSaveCfg()"><i class="fa fa-save"></i> 儲存設定</button>
+        <span id="annSetMsg" style="margin-left:8px;color:#2e7d32;"></span>
+      </div>
+
+      <div style="border:1px solid var(--sand-d);border-radius:6px;padding:10px;">
+        <div style="font-weight:bold;color:#8A5A2B;margin-bottom:6px;">
+          影響範圍（<span id="annYearLab"></span> 年度）
+          <span style="font-weight:400;color:#8a6d45;">— 只有曾經離職或留停的人會被這個設定改到</span>
+        </div>
+        <div id="annImpact" style="overflow:auto;">讀取中…</div>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
 </div></div></div>
 <?php endif; ?>
@@ -901,6 +944,9 @@ function renderAnnual(an){
   if(!an) return;
   $('#anEnt').text(num(an.entitlement)); $('#anUsed').text(num(an.used));
   $('#anPend').text(num(an.pending));    $('#anRem').text(num(an.remaining));
+  // 年資被「復職年資設定」調整過時一定要寫出來：否則使用者只看到一個跟自己到職日
+  // 對不起來的天數，會以為系統算錯（沒調整時 note 是空字串，整列不出現）
+  $('#anSenNote').html(an.seniority_note ? esc(an.seniority_note) : '').toggle(!!an.seniority_note);
 }
 // 年度切換：標題文字跟著改（看往年時要一眼看得出來現在不是今年）
 function syncAnnualYearLabel(){
@@ -1490,9 +1536,11 @@ function openLvSetting(){
   $('#lvSetModal').modal('show');
 }
 function lvSetTab(t){
-  $('#lvsTabRole, #lvsTabCal').removeClass('active');
-  $(t==='role' ? '#lvsTabRole' : '#lvsTabCal').addClass('active');
-  $('#lvsPaneRole').toggle(t==='role'); $('#lvsPaneCal').toggle(t==='cal');
+  $('#lvsTabRole, #lvsTabCal, #lvsTabAnn').removeClass('active');
+  $(t==='role' ? '#lvsTabRole' : (t==='ann' ? '#lvsTabAnn' : '#lvsTabCal')).addClass('active');
+  $('#lvsPaneRole').toggle(t==='role'); $('#lvsPaneCal').toggle(t==='cal'); $('#lvsPaneAnn').toggle(t==='ann');
+  // 切到特休年資才去抓（影響範圍要逐人算三種模式，沒看就不要白算）
+  if (t==='ann') annLoadCfg();
 }
 
 // ── 角色 ──
@@ -1624,6 +1672,83 @@ function calSaveSetting(){
     $('#calSetMsg').text('已儲存 ✓'); setTimeout(function(){ $('#calSetMsg').text(''); }, 2500);
   }, 'json');
 }
+// ── 特休年資（離職→復職） ──
+// 模式選項一律由後端的登記表 eg_annual_leave_rehire_modes() 畫出來，不在這裡寫死一份
+// （鐵律4：寫死一份對照表，之後後端加模式畫面就不會長出來，而且不會報錯）
+let ANN_CFG = null;
+function annLoadCfg(){
+  $('#annImpact').html('讀取中…');
+  $.getJSON(API, {action:'annual_cfg'}, function(r){
+    if(!r.success){ $('#annImpact').html('<span style="color:#a3341f;">'+esc(r.message||'讀取失敗')+'</span>'); return; }
+    ANN_CFG = r;
+    $('#annYearLab').text(r.year);
+    let h = '';
+    Object.keys(r.modes).forEach(function(k){
+      const m = r.modes[k];
+      h += '<label style="display:block;font-weight:400;margin-bottom:4px;">'
+         + '<input type="radio" name="annMode" value="'+esc(k)+'" data-eg-skip'
+         + (k===r.cfg.mode ? ' checked' : '') + '> <b>'+esc(m.label)+'</b>'
+         + '<div style="color:#8a6d45;margin-left:20px;">'+esc(m.desc)+'</div></label>';
+    });
+    $('#annModes').html(h);
+    $('#annUnpaid').prop('checked', !!r.cfg.include_unpaid);
+    annRenderImpact();
+  });
+}
+function annRenderImpact(){
+  if(!ANN_CFG) return;
+  const rows = ANN_CFG.impact || [], modes = Object.keys(ANN_CFG.modes);
+  if(!rows.length){
+    $('#annImpact').html('<div style="color:#6b5638;">目前沒有任何人有離職或留停紀錄，這個設定對所有人都沒有差別。</div>');
+    return;
+  }
+  let h = '<table class="table table-condensed" style="font-size:12.5px;white-space:nowrap;"><thead><tr>'
+        + '<th>員工</th><th>原到職日</th><th>不在職期間</th><th>狀態</th>';
+  modes.forEach(function(k){
+    h += '<th class="numc"'+(k===ANN_CFG.cfg.mode?' style="background:#FDF3E3;"':'')+'>'
+       + esc(ANN_CFG.modes[k].label.split('：')[0])
+       + (k===ANN_CFG.cfg.mode?'<br><span style="font-weight:400;color:#8a5a1a;">（目前）</span>':'') + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+  rows.forEach(function(x){
+    let per = '';
+    (x.periods||[]).forEach(function(p){
+      per += '<div>' + (p.kind==='resign'?'離職':'留停') + ' ' + egFmtDate(p.from) + '～'
+           + (p.to ? egFmtDate(p.to) : '<span style="color:#a3341f;">尚未復職</span>')
+           + (p.days!==null ? '（'+p.days+' 天）' : '') + '</div>';
+    });
+    h += '<tr><td>'+esc(x.dept||'')+' '+esc(x.pos||'')+' <b>'+esc(x.name)+'</b>'
+       + '<div style="color:#9a7b4f;">'+esc(x.id)+'</div></td>'
+       + '<td>'+egFmtDate(x.hire)+'</td><td style="white-space:normal;">'+per+'</td>'
+       + '<td>'+esc(x.state_label||'')+'</td>';
+    modes.forEach(function(k){
+      const m = x.modes[k] || {};
+      h += '<td class="numc"'+(k===ANN_CFG.cfg.mode?' style="background:#FDF3E3;"':'')+'>'
+         + '<b>'+num(m.days)+'</b> 天'
+         + (m.hire && m.hire!==x.hire ? '<div style="color:#8a6d45;font-weight:400;">起算 '+egFmtDate(m.hire)+'</div>' : '')
+         + '</td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>'
+     + '<div style="color:#8a6d45;margin-top:4px;">天數是該年度的<b>可用額度</b>（已套用「到職未滿6個月＝0天」）；'
+     + '已經請掉的特休不會因為換模式而退回來，所以<b>把年度中途才復職的人改成「重新計算」時，'
+     + '他在同一年度已核准的特休可能超過新額度</b>，請假頁的剩餘天數會變成負數並擋下後續申請——'
+     + '這種情形請先確認是公司要的結果。</div>';
+  $('#annImpact').html(h);
+}
+function annSaveCfg(){
+  const mode = $('input[name=annMode]:checked').val();
+  if(!mode){ alert('請先選一種年資計算方式'); return; }
+  $.post(API, {action:'annual_cfg_save', csrf:CSRF, mode:mode,
+               include_unpaid: $('#annUnpaid').is(':checked')?1:0}, function(r){
+    if(!r.success){ alert(r.message||'儲存失敗'); return; }
+    $('#annSetMsg').text('已儲存 ✓'); setTimeout(function(){ $('#annSetMsg').text(''); }, 2500);
+    annLoadCfg();                       // 重抓：影響範圍表的「目前」欄位要跟著移動
+    if (typeof loadAnnual === 'function') loadAnnual();   // 自己的額度面板立刻跟著變
+  }, 'json');
+}
+
 function calList(){
   $('#calListBox').html('讀取中…');
   $.getJSON(API, {action:'cal_pending_list', from:$('#calFrom').val()||'', to:$('#calTo').val()||''}, function(r){

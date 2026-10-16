@@ -424,19 +424,23 @@ if (!function_exists('eg_leave_roster_range')) {
 
 if (!function_exists('eg_leave_annual_summary')) {
     /**
-     * 特休額度摘要：['entitlement'=>float,'used'=>float,'pending'=>float,'remaining'=>float]
+     * 特休額度摘要：['entitlement'=>float,'used'=>float,'pending'=>float,'remaining'=>float,
+     *               'hire'=>效期到職日,'hire_orig'=>原到職日,'seniority_note'=>說明文字]
      * 額度=annual_leave_lib（與員工列表同一套）；used=該年度 approved 特休 total_days 加總；
      * pending=送審中特休（避免重複申請超額）；remaining=額度-used-pending。
      * 年度歸屬以請假起日年份計。
+     *
+     * 離職→復職的人，年資怎麼算由「管理者設定→特休年資」決定（預設維持現狀＝照原到職日）；
+     * 有調整時一定要把 seniority_note 顯示在畫面上，否則使用者只看到一個跟到職日對不起來的
+     * 天數，會以為系統算錯。
      */
     function eg_leave_annual_summary(PDO $db, int $userId, ?int $year = null): array {
         $year = $year ?? (int)date('Y');
         $ent = 0.0;
+        $eff = ['hire' => null, 'orig' => null, 'note' => '', 'adjusted' => false];
         try {
-            $st = $db->prepare("SELECT hire_date FROM user WHERE id = ? LIMIT 1");
-            $st->execute([$userId]);
-            $hire = $st->fetchColumn();
-            $ent = eg_annual_leave_entitlement($hire ?: null, $year);
+            $eff = eg_annual_leave_explain($db, $userId, null, $year);
+            $ent = eg_annual_leave_entitlement($eff['hire'], $year);
         } catch (Throwable $e) {}
         $used = 0.0; $pending = 0.0;
         try {
@@ -454,10 +458,13 @@ if (!function_exists('eg_leave_annual_summary')) {
             }
         } catch (Throwable $e) {}
         return [
-            'entitlement' => $ent,
-            'used'        => $used,
-            'pending'     => $pending,
-            'remaining'   => round($ent - $used - $pending, 2),
+            'entitlement'    => $ent,
+            'used'           => $used,
+            'pending'        => $pending,
+            'remaining'      => round($ent - $used - $pending, 2),
+            'hire'           => $eff['hire'] ?? null,
+            'hire_orig'      => $eff['orig'] ?? null,
+            'seniority_note' => (string)($eff['note'] ?? ''),
         ];
     }
 }

@@ -710,6 +710,14 @@ if ($hrUserPerm === 'R') {
 
                         <h4>與圖章管理的連動</h4>
                         <ul>
+                            <li><b>離職又復職要怎麼設定？</b>在職狀態改回「在職」並<b>把離職日欄位清空</b>（不清空會被擋下存檔——
+                                離職日只要早於今天，全站就一律判定此人已被封鎖）。<b>到職日請維持第一次到職那天不要改</b>：
+                                改掉的話第一段任職期間的所有舊單據都會被判成「當時還沒進公司」而查不到這個人，而且不會有任何錯誤訊息。
+                                之後再離職時就照一般離職做（狀態改「離職」、填這次的離職日），
+                                完整的離職→復職→離職時間軸留在「異動紀錄」裡，<b>離職日欄位只保留最新一次</b>。</li>
+                            <li><b>特休天數怎麼算復職的人？</b>由<a href="leave_request.php" target="_blank">請假系統</a>的
+                                「管理者設定 → 特休年資」決定（維持現狀／扣除離職期間／自復職日重新計算，<b>預設維持現狀</b>）；
+                                年資被調整過的人，本頁「特休天數」欄下方會寫出是以哪一天起算。</li>
                             <li><b>離職自動作廢圖章</b>：一旦離職日成立（人事直接把狀態改成「離職」，或預定離職日到期由系統自動轉離職），此人名下所有「使用中」的圖章登記會<b>自動改為作廢</b>、作廢日＝離職日，並在存檔後的訊息裡告知作廢了幾筆。課室章／職稱章沒有掛在特定人身上，不受影響。</li>
                             <li><b>部門／職位異動</b>：若此人原本掛在某個部門下的圖章（部門人員章），因為這次異動不再屬於那個部門，存檔後會跳出提示列出是哪幾筆，並可直接開啟「圖章管理」頁處理（改綁新部門或直接停用）——<b>系統不會自動改動或停用</b>，換部門不代表一定要換章，由人判斷比較保險。</li>
                             <li><b>新進人員</b>：新增員工存檔成功後，會提示是否要順手開啟「圖章管理」頁為此人登記所需圖章。</li>
@@ -898,9 +906,14 @@ $(document).ready(function() {
                     const eduLabel = EDU_LABEL[emp.highest_education] || '';
 
                     // 修正特休計算：到職不滿6個月為0天
-                    let displayAnnualLeave = emp.annual_leave_days;
-                    if (emp.hire_date) {
-                        const dateParts = emp.hire_date.split('-');
+                    // 判定基準是後端算好的「效期到職日」annual_leave_hire（離職→復職者可能被
+                    // 扣除離職期間或自復職日重新起算），沒有才退回原到職日＝舊行為完全不變。
+                    // 後端已算好 net（含閘門）就直接用，沒有才走下面這段 JS 後備判定
+                    let displayAnnualLeave = (emp.annual_leave_days_net !== undefined && emp.annual_leave_days_net !== null)
+                        ? emp.annual_leave_days_net : emp.annual_leave_days;
+                    const alHire = emp.annual_leave_hire || emp.hire_date;
+                    if (alHire) {
+                        const dateParts = alHire.split('-');
                         if (dateParts.length === 3) {
                             const hireDateObj = new Date(dateParts[0], dateParts[1] - 1, dateParts[2]);
                             const sixMonthsLater = new Date(hireDateObj);
@@ -925,7 +938,9 @@ $(document).ready(function() {
                         </td>
                         <td>${eduLabel}</td>
                         <td>${escapeHtml(emp.hire_date || '')}</td>
-                        <td>${escapeHtml(displayAnnualLeave)} 天</td>
+                        <td>${escapeHtml(displayAnnualLeave)} 天${emp.annual_leave_note
+                            ? `<div style="font-size:11px;line-height:15px;color:#8a6d3b;margin-top:2px;">${escapeHtml(emp.annual_leave_note)}</div>`
+                            : ''}</td>
                         <td>
                             ${emp.concurrent_positions ? emp.concurrent_positions.split('; ').map(escapeHtml).join('<br>') : '<i class="text-muted">無</i>'}
                         </td>

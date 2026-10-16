@@ -613,6 +613,73 @@ case 'annual_summary': {
          'year_usage' => eg_leave_year_usage($db, $user_id, $year)]);
 }
 
+// ════════════════ 復職年資設定（離職期間要不要扣） ════════════════
+// 商業邏輯一律在 src/common/annual_leave_lib.php，這裡只做權限與參數守門。
+case 'annual_cfg': {
+    if (!$IS_ADMIN) bad('僅請假系統管理員可檢視特休年資設定');
+    require_once __DIR__ . '/../common/annual_leave_lib.php';
+    $year = (int)($_GET['year'] ?? date('Y'));
+    if ($year < 1990 || $year > 9999) $year = (int)date('Y');
+
+    // 影響範圍：只有「有離職／留停紀錄」的人才會被這個設定改到，一律把三種模式的結果
+    // 並排列出來讓管理員自己比。不列出來的話，管理員按下存檔前無從判斷會動到誰幾天。
+    $map   = eg_annual_leave_absence_map($db);
+    $modes = eg_annual_leave_rehire_modes();
+    $cfg   = eg_annual_leave_rehire_cfg($db);
+    $rows  = [];
+    if ($map) {
+        $ids = implode(',', array_map('intval', array_keys($map)));
+        $us  = $db->query("SELECT u.id, u.user_cname, u.hire_date, u.state, d.name AS dept, p.name AS pos
+                           FROM `user` u
+                           LEFT JOIN user_department_position_map m ON m.user_id = u.id AND m.is_main = 1
+                           LEFT JOIN department d ON d.id = m.department_id
+                           LEFT JOIN position p ON p.id = m.position_id
+                           WHERE u.id IN ($ids)")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($us as $u) {
+            $uid = (int)$u['id'];
+            $r = ['id' => $uid, 'name' => (string)$u['user_cname'], 'dept' => (string)($u['dept'] ?? ''),
+                  'pos' => (string)($u['pos'] ?? ''), 'hire' => (string)($u['hire_date'] ?? ''),
+                  // 用 people_lib 的（本檔頂端已 require），不用 user_active_lib 的同名函式——
+                  // 那支是 api_guard 條件式載入的，不保證在這裡存在
+                  'state' => (int)$u['state'], 'state_label' => eg_people_state_label($u['state']),
+                  'periods' => [], 'modes' => []];
+            foreach ($map[$uid] as $p) {
+                $r['periods'][] = ['from' => $p['from'], 'to' => $p['to'], 'kind' => $p['kind'],
+                                   'days' => ($p['to'] !== null) ? eg_annual_leave_absence_days($p['from'], $p['to']) : null];
+            }
+            foreach (array_keys($modes) as $m) {
+                $eff = eg_annual_leave_effective_hire($u['hire_date'] ?: null, $map[$uid],
+                           ['mode' => $m, 'include_unpaid' => $cfg['include_unpaid']], $year);
+                $eff['note'] = eg_annual_leave_hire_note($eff);
+                $r['modes'][$m] = [
+                    'hire' => $eff['hire'], 'note' => $eff['note'],
+                    // 畫面要顯示的是「實際可用額度」，所以用 entitlement（含未滿6個月＝0天的閘門），
+                    // 不是 raw——raw 對「年中才起算」的到職日會給出一個沒有意義的數字。
+                    'days' => eg_annual_leave_entitlement($eff['hire'], $year),
+                ];
+            }
+            $rows[] = $r;
+        }
+        usort($rows, fn($a, $b) => strcmp((string)$a['id'], (string)$b['id']));
+    }
+    out(['success' => true, 'year' => $year, 'cfg' => $cfg, 'modes' => $modes, 'impact' => $rows]);
+}
+
+case 'annual_cfg_save': {
+    if (!$IS_ADMIN) bad('僅請假系統管理員可修改特休年資設定');
+    need_csrf();
+    require_once __DIR__ . '/../common/annual_leave_lib.php';
+    $st = $db->prepare("SELECT user_cname FROM `user` WHERE id = ? LIMIT 1");
+    $st->execute([$user_id]);
+    try {
+        eg_annual_leave_rehire_save($db, [
+            'mode'           => (string)($_POST['mode'] ?? ''),
+            'include_unpaid' => !empty($_POST['include_unpaid']),
+        ], $user_id, (string)$st->fetchColumn());
+    } catch (InvalidArgumentException $e) { bad($e->getMessage()); }
+    out(['success' => true, 'cfg' => eg_annual_leave_rehire_cfg($db)]);
+}
+
 // ════════════════ 附件：上傳（temp 或補件） ════════════════
 case 'attach_upload': {
     need_csrf();
