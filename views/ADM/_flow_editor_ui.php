@@ -174,6 +174,10 @@
         <button type="button" class="egf-btn" id="egfAlignHC" title="全部的中心對齊到第一個的中心水平線（上下對齊成一橫列）"><i class="fa fa-ellipsis-h"></i> 橫線</button>
         <button type="button" class="egf-btn" id="egfDistV" title="由上到下等距排好、彼此不重疊，中心也對齊成一直行"><i class="fa fa-sort-amount-asc"></i> 直排</button>
         <button type="button" class="egf-btn" id="egfDistH" title="由左到右等距排好、彼此不重疊，中心也對齊成一橫列"><i class="fa fa-exchange"></i> 橫排</button>
+        <span class="egf-sep"></span>
+        <button type="button" class="egf-btn" id="egfSizeAll" title="框選兩個以上的圖形後按這裡：寬與高都變得跟「第一個」一樣大（各自的中心位置不變）"><i class="fa fa-clone"></i> 同大小</button>
+        <button type="button" class="egf-btn" id="egfSizeW" title="只讓寬度跟第一個一樣"><i class="fa fa-arrows-h"></i> 同寬</button>
+        <button type="button" class="egf-btn" id="egfSizeH" title="只讓高度跟第一個一樣"><i class="fa fa-arrows-v"></i> 同高</button>
     </div>
     <div class="egf-bd">
       <div class="egf-work">
@@ -722,7 +726,26 @@
     }
     info.forEach(function (it) { it.left = it.cx - it.w / 2; it.top = it.cy - it.h / 2; });
 
-    if (mode === 'al') {                // 左邊緣對齊第一個的左邊緣
+    if (mode === 'sz' || mode === 'sw' || mode === 'sh') {
+      /* 同大小／同寬／同高：以第一個為準，其餘圖形的縮放比例改成剛好等於它的尺寸，
+         中心位置不動（所以只是原地變大變小，不會跑位）。只處理圖形——
+         文字框拉伸會讓字變形，不在這裡動。 */
+      var n = 0;
+      info.forEach(function (it) {
+        if (it === base || it.o.egRole !== 'shape') return;
+        var nw = (mode === 'sh') ? it.w : base.w, nh = (mode === 'sw') ? it.h : base.h;
+        /* getScaledWidth() 含邊框（strokeUniform 時邊框不跟著縮放），
+           所以要先扣掉邊框再除；直接除會讓每按一次比第一個多 1.5px。 */
+        var sk = it.o.strokeUniform ? (it.o.strokeWidth || 0) : 0;
+        it.o.set({ scaleX: (nw - sk) / it.o.width, scaleY: (nh - sk) / it.o.height });
+        it.o.setCoords();
+        it.w = nw; it.h = nh;
+        moveCenter(it, it.cx, it.cy);
+        n++;
+      });
+      stat(n ? ('已把 ' + n + ' 個圖形調成跟第一個一樣' + (mode === 'sz' ? '大' : (mode === 'sw' ? '寬' : '高')))
+             : '第一個以外沒有可調整的圖形（文字框不會被拉伸）');
+    } else if (mode === 'al') {                // 左邊緣對齊第一個的左邊緣
       info.forEach(function (it) { moveTo(it, base.left, it.top); });
     } else if (mode === 'ar') {         // 右邊緣對齊第一個的右邊緣
       var rx = base.left + base.w;
@@ -2196,6 +2219,9 @@
         case 'egfAlignHC': arrangeSelected('hc'); break;
         case 'egfDistV':   arrangeSelected('dv'); break;
         case 'egfDistH':   arrangeSelected('dh'); break;
+        case 'egfSizeAll': arrangeSelected('sz'); break;
+        case 'egfSizeW':   arrangeSelected('sw'); break;
+        case 'egfSizeH':   arrangeSelected('sh'); break;
         case 'egfZoomIn':  zoomStep(+1); break;
         case 'egfZoomOut': zoomStep(-1); break;
         case 'egfZoomFit': zoomFit(); break;
