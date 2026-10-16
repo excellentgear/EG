@@ -156,9 +156,16 @@
      跟著正文字級一起變會把整張表撐開。 */
 .adt-hdr, .adt-ftr { font-family: var(--adt-tbl-font, "微軟正黑體", "Microsoft JhengHei", sans-serif); }
 .adt-hdr { width: 100%; border-collapse: collapse; margin-bottom: 2.5mm; table-layout: fixed; }
-.adt-hdr td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .8mm 2mm; font-size: 9.5pt;
+/* 頁首字級與正文表格字級**刻意分開**：頁首是固定四欄格線、高度要穩定，
+   跟著正文字級一起變會把整張表撐開（使用者 2026-10-16 交辦可以單獨設定）。 */
+.adt-hdr td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .8mm 2mm;
+  font-size: var(--adt-hdr-size, 9.5pt);
   vertical-align: middle;
   word-wrap: break-word; overflow-wrap: break-word; }
+/* 太長就自動縮小：span 是 nowrap 的行內區塊，scrollWidth ＝「排成一行要多寬」，
+   由 resource/js/eg_doc_fit.js 量了再逐級調小；縮到下限仍放不下才加 adt-fit-wrap 換行。 */
+.adt-hdr .adt-fit { display: inline-block; max-width: 100%; white-space: nowrap; }
+.adt-hdr .adt-fit.adt-fit-wrap { white-space: normal; }
 .adt-hdr .adt-c1 { width: 16%; }
 .adt-hdr .adt-c2 { width: 42%; }
 .adt-hdr .adt-c3 { width: 16%; }

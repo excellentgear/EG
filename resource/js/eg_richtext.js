@@ -1878,6 +1878,9 @@
           del.classList.toggle('egrt-blankpage', blank);
         } else if (del) { del.parentNode.removeChild(del); }
       });
+      /* 頁首是每次都整段 innerHTML 重寫的（fillChrome），所以「太長自動縮字」
+         一定要在這裡再跑一次，不然重新分頁之後就被打回原本的字級。 */
+      if (w.EGDocFit) w.EGDocFit.run(pagesBox || host);
     }
 
     /**

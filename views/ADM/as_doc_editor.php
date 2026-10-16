@@ -801,6 +801,10 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         </select>
         <button type="button" class="st-btn" id="stBold" title="表格文字粗體"><b>B</b></button>
         <span class="st-sp"></span>
+        <span class="st-lab">頁首字級</span>
+        <select id="stHdrSize" class="st-sel" data-eg-skip
+                title="頁首那一條（文件編號／文件名稱／頁次／頁版別）的字級；字太長會自動縮小"></select>
+        <span class="st-sp"></span>
         <span class="st-lab">框線</span>
         <select id="stBStyle" class="st-sel" data-eg-skip></select>
         <select id="stBW" class="st-sel" data-eg-skip></select>
@@ -823,6 +827,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         改完按下方「存檔」才會套用到所有文件；預設值與改版前完全相同，沒動過的文件外觀不會變。<br>
         <b>字型</b>會一路套到<b>頁首的文件編號、文件名稱、頁次、頁版別</b>與封面、制修訂紀錄書；
         <b>英數</b>只作用在英文、數字與西文標點（中文仍用左邊的字型），留「跟著中文字型」就是不特別指定。<br>
+        <b>頁首字級</b>只管上面那一條（文件編號／文件名稱／頁次／頁版別），與正文字級分開；
+        <b>字太長放不下時會自動縮小</b>（縮到 6pt 還放不下才換行），所以調大之後也不會把頁首撐開。<br>
         <b>內容大框</b>打開後，正文會被一個外框框起來，<b>框線與上方頁首同寬、左右自然對齊</b>，
         匯入的內容直接放進這個大框裡。
       </div>
@@ -834,10 +840,14 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <tr><td class="adt-hdr-co" rowspan="2" colspan="2">
                   <div class="adt-hdr-coen">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>
                   <div class="adt-hdr-cozh">超正齒輪科技有限公司</div></td>
-                <td class="adt-hdr-k">文件編號</td><td class="adt-hdr-v">2-DC-01</td></tr>
-            <tr><td class="adt-hdr-k">頁　　次</td><td class="adt-hdr-v">1 / 12</td></tr>
-            <tr><td class="adt-hdr-nk">文件名稱</td><td class="adt-hdr-nm">文件管理程序</td>
-                <td class="adt-hdr-k">頁 版 別</td><td class="adt-hdr-v">2.0</td></tr>
+                <td class="adt-hdr-k"><span class="adt-fit">文件編號</span></td>
+                <td class="adt-hdr-v"><span class="adt-fit">2-DC-01</span></td></tr>
+            <tr><td class="adt-hdr-k"><span class="adt-fit">頁　　次</span></td>
+                <td class="adt-hdr-v"><span class="adt-fit">1 / 12</span></td></tr>
+            <tr><td class="adt-hdr-nk"><span class="adt-fit">文件名稱</span></td>
+                <td class="adt-hdr-nm"><span class="adt-fit">文件管理程序</span></td>
+                <td class="adt-hdr-k"><span class="adt-fit">頁 版 別</span></td>
+                <td class="adt-hdr-v"><span class="adt-fit">2.0</span></td></tr>
           </table>
           <div class="eg-docbody st-body">
             <p>這裡是正文。打開「內容大框」之後，這一整塊會被框起來。</p>
@@ -978,6 +988,7 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_richtext.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_richtext.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_doc_fit.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_fit.js') ?>"></script>
 <!-- 簽章：制修訂紀錄書上的制修訂／審查／核准三格（ai-rules/18 一律走共用圖章元件） -->
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_doc_sign_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_sign_stamp.js') ?>"></script>
@@ -1157,6 +1168,7 @@ function load() {
                 });
                 host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:680px"><div class="egrt-pages">'
                                + h + '</div></div>';
+                if (window.EGDocFit) EGDocFit.runWhenReady(host);
                 afterRo();
             }).fail(function(){
                 // 拿不到版面時至少要把正文顯示出來，不要整頁空白
@@ -1803,6 +1815,7 @@ function fillStyleForm() {
     fill($('#stBStyle'), o.borders, s.brd_style || 'solid');
     fill($('#stBW'), o.widths, s.brd_w || '1px');
     fill($('#stBColor'), o.colors, s.brd_color || '#000000');
+    fill($('#stHdrSize'), o.hdr_sizes || {}, s.hdr_size || '');
     $('#stSize').val(s.tbl_size || '');
     $('#stPad').val(s.cell_pad || '4px');
     $('#stBodyPad').val(s.body_pad || '3mm');
@@ -1826,6 +1839,8 @@ function previewStyle() {
     if (fv) p.style.setProperty('--adt-tbl-font', fv); else p.style.removeProperty('--adt-tbl-font');
     if (sv) p.style.setProperty('--adt-tbl-size', sv); else p.style.removeProperty('--adt-tbl-size');
     p.style.setProperty('--adt-tbl-weight', $('#stBold').hasClass('on') ? 'bold' : 'normal');
+    var hv = $('#stHdrSize').val();
+    if (hv) p.style.setProperty('--adt-hdr-size', hv); else p.style.removeProperty('--adt-hdr-size');
     p.style.setProperty('--adt-brd-style', $('#stBStyle').val() || 'solid');
     p.style.setProperty('--adt-brd-w', $('#stBW').val() || '1px');
     p.style.setProperty('--adt-brd-color', $('#stBColor').val() || '#000');
@@ -1838,8 +1853,10 @@ function previewStyle() {
         p.style.setProperty('--adt-body-brd', '0 none transparent');
         p.style.setProperty('--adt-body-pad', '0');
     }
+    // 字型／字級一變，頁首那幾格就要重新算一次要不要縮小
+    if (window.EGDocFit) EGDocFit.runWhenReady(p);
 }
-$(document).on('change', '#stFont,#stFontEn,#stSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
+$(document).on('change', '#stFont,#stFontEn,#stSize,#stHdrSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
 $(document).on('click', '#stBold,#stFrame', function(){ $(this).toggleClass('on'); previewStyle(); });
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
@@ -1860,6 +1877,7 @@ $('#btnTplSave').on('click', function(){
             tbl_font:    $('#stFont').val(),
             tbl_font_en: $('#stFontEn').val(),
             tbl_size:   $('#stSize').val(),
+            hdr_size:   $('#stHdrSize').val(),
             tbl_weight: $('#stBold').hasClass('on') ? 'bold' : 'normal',
             brd_style:  $('#stBStyle').val(),
             brd_w:      $('#stBW').val(),

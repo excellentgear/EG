@@ -210,7 +210,8 @@ case 'tpl': {
         'style_css'  => adt_style_css($db),
         'style_opts' => ['fonts' => adt_style_fonts(), 'fonts_en' => adt_style_fonts_en(),
                          'borders' => adt_style_borders(),
-                         'widths' => adt_style_widths(), 'colors' => adt_style_colors()],
+                         'widths' => adt_style_widths(), 'colors' => adt_style_colors(),
+                         'hdr_sizes' => adt_style_hdr_sizes()],
         // 英數＋中文組好的 font-family，預覽直接套這一串（不要在前端再拼一次）
         'style_stack' => adt_style_font_stack(adt_style_get($db)),
         'depts'     => $depts,
@@ -279,7 +280,7 @@ case 'tpl_style_save': {
     needAdmin($P);
     require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
     $in = [];
-    foreach (['tbl_font','tbl_font_en','tbl_size','tbl_weight','brd_style','brd_w','brd_color','cell_pad',
+    foreach (['tbl_font','tbl_font_en','tbl_size','tbl_weight','hdr_size','brd_style','brd_w','brd_color','cell_pad',
               'body_frame','body_pad'] as $k) {
         if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
     }

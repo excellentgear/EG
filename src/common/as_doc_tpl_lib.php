@@ -157,6 +157,17 @@ function adt_style_fonts_en(): array
         '"Courier New",monospace'   => 'Courier New',
     ];
 }
+/**
+ * 頁首（文件編號／文件名稱／頁次／頁版別）的字級。
+ * 刻意與正文表格的字級分開：頁首是固定四欄格線、高度要穩定，
+ * 跟著正文字級一起變會把整張表撐開（使用者 2026-10-16 交辦）。
+ */
+function adt_style_hdr_sizes(): array
+{
+    return ['' => '（預設 9.5pt）', '8pt' => '8pt', '8.5pt' => '8.5pt', '9pt' => '9pt',
+            '9.5pt' => '9.5pt', '10pt' => '10pt', '10.5pt' => '10.5pt',
+            '11pt' => '11pt', '12pt' => '12pt'];
+}
 /** 框線型式（使用者要求的「框線分類型式」） */
 function adt_style_borders(): array
 {
@@ -179,6 +190,7 @@ function adt_style_colors(): array
 function adt_style_defaults(): array
 {
     return ['tbl_font' => '', 'tbl_font_en' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
+            'hdr_size' => '',
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
             'cell_pad' => '4px',
             // 內容大框：把正文整塊框起來，框線與頁首同寬、上下自然對齊
@@ -222,6 +234,11 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         $v = trim((string)$in['tbl_size']);
         if ($v !== '' && !preg_match('/^\d{1,2}(\.\d)?pt$/', $v)) return ['ok' => false, 'msg' => '字級要像 10.5pt 這樣'];
         $new['tbl_size'] = $v;
+    }
+    if (array_key_exists('hdr_size', $in)) {
+        $v = trim((string)$in['hdr_size']);
+        if (!array_key_exists($v, adt_style_hdr_sizes())) return ['ok' => false, 'msg' => '頁首字級不在可選清單內'];
+        $new['hdr_size'] = $v;
     }
     if (array_key_exists('tbl_weight', $in)) {
         $v = (string)$in['tbl_weight'];
@@ -296,6 +313,7 @@ function adt_style_css(PDO $db): string
     $stack = adt_style_font_stack($s);
     if ($stack !== '')           $css[] = '--adt-tbl-font:' . $stack;
     if ($s['tbl_size'] !== '')   $css[] = '--adt-tbl-size:' . $s['tbl_size'];
+    if (($s['hdr_size'] ?? '') !== '') $css[] = '--adt-hdr-size:' . $s['hdr_size'];
     if ($s['tbl_weight'] !== '') $css[] = '--adt-tbl-weight:' . $s['tbl_weight'];
     $css[] = '--adt-brd-style:' . $s['brd_style'];
     $css[] = '--adt-brd-w:' . $s['brd_w'];
@@ -597,6 +615,10 @@ function adt_header_html(array $ctx, $pageNo, $total, string $pageVer): string
     /* 四欄固定格線：[文件名稱標題][文件名稱內容][項目][值]
        公司名與「文件名稱」那一格各自跨欄，所以**每一條直框線都落在同一個位置**，
        上下兩列不會像原本那樣各切各的（使用者：底下框線務必要跟上方對齊）。 */
+    /* 每一格的字一律包一層 <span class="adt-fit">：字級調大或文件名稱太長時，
+       resource/js/eg_doc_fit.js 會把那一格的字自動縮到放得下
+       （頁首是固定格線，一換行整張表就被撐高、每一頁的可用高度跟著變）。 */
+    $fit = function ($t) { return '<span class="adt-fit">' . adt_e($t) . '</span>'; };
     return '<table class="adt-hdr">'
          . '<colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>'
          . '<tr>'
@@ -604,12 +626,15 @@ function adt_header_html(array $ctx, $pageNo, $total, string $pageVer): string
          . '<div class="adt-hdr-coen">' . adt_e($ctx['co_en']) . '</div>'
          . '<div class="adt-hdr-cozh">' . adt_e($ctx['co_full']) . '</div>'
          . '</td>'
-         . '<td class="adt-hdr-k">文件編號</td><td class="adt-hdr-v">' . adt_e($ctx['doc_no']) . '</td></tr>'
-         . '<tr><td class="adt-hdr-k">頁　　次</td><td class="adt-hdr-v">' . adt_e($pageNo) . ' / ' . adt_e($total) . '</td></tr>'
+         . '<td class="adt-hdr-k">' . $fit('文件編號') . '</td>'
+         . '<td class="adt-hdr-v">' . $fit($ctx['doc_no']) . '</td></tr>'
+         . '<tr><td class="adt-hdr-k">' . $fit('頁　　次') . '</td>'
+         . '<td class="adt-hdr-v">' . $fit($pageNo . ' / ' . $total) . '</td></tr>'
          // 文件名稱與內容分兩格（使用者指定：文件名稱 ｜ 文件管理程序，內容佔大格）
-         . '<tr><td class="adt-hdr-nk">文件名稱</td>'
-         . '<td class="adt-hdr-nm">' . adt_e($ctx['doc_name']) . '</td>'
-         . '<td class="adt-hdr-k">頁 版 別</td><td class="adt-hdr-v">' . adt_e($pageVer) . '</td></tr>'
+         . '<tr><td class="adt-hdr-nk">' . $fit('文件名稱') . '</td>'
+         . '<td class="adt-hdr-nm">' . $fit($ctx['doc_name']) . '</td>'
+         . '<td class="adt-hdr-k">' . $fit('頁 版 別') . '</td>'
+         . '<td class="adt-hdr-v">' . $fit($pageVer) . '</td></tr>'
          . '</table>';
 }
 

@@ -202,6 +202,7 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_doc_sign_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_sign_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
+<script src="../../resource/js/eg_doc_fit.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_fit.js') ?>"></script>
 <script>
 function doPrint(){
     // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，送出即忘不影響列印
@@ -218,9 +219,11 @@ function doPrint(){
 // 圖片沒載完就叫 print() 會印出空白的圖框，所以等全部圖片就緒（含失敗的）才自動跳列印。
 // 簽章要**先畫**再等圖片：掃描實體章本身也是圖，先畫才會被下面那一輪等到。
 function startAutoPrint(){
+    // 頁首太長的字先縮到放得下再印（縮放要在量得到版面之後、print() 之前）
+    if (window.EGDocFit) EGDocFit.run(document);
     var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
-    function go(){ setTimeout(doPrint, 250); }
+    function go(){ setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250); }
     if (!left) { go(); return; }
     imgs.forEach(function(i){
         if (i.complete) return;
