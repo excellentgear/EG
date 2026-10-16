@@ -843,7 +843,7 @@ function scaleOptions(list, val){
 function trackHtml(it){
     var ts = it.tracks || [];
     if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
-    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b>';
+    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b><span class="hint" style="margin-left:6px;">#編號＝溝通管理「措施追蹤表」的項次</span>';
     $.each(ts, function(_, t){
         var cls = t.state === 'over' ? 'over' : (t.state === 'closed' ? 'done' : 'open');
         var txt = t.state === 'over' ? '逾期' : (t.state === 'closed' ? '已結案' : '執行中');
@@ -1514,38 +1514,45 @@ function egPrintWindow(title, bodyHtml, docNo, extraCss){
         + '<scr' + 'ipt>window.onload=function(){' + onloadJs + 'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
     w.document.close();
 }
-/* 列印用的成效確認：主表只留「結果、日期、確認結果一行、裁示、佐證來源」。
-   逐月 KPI 數據與每一項措施追蹤的明細留在系統（佐證欄全文），不塞進正式表單，否則一格會變成半頁。 */
+/* 列印用的成效確認（重點式）：結果＋一行確認摘要＋裁示＋佐證編號。
+   逐月 KPI 數據與每一項措施追蹤的明細留在系統（佐證欄全文），不塞進正式表單。 */
 function evidenceBrief(txt){
     var lines = String(txt || '').split('\n').map(function(x){ return x.trim(); }).filter(function(x){ return x; });
     if (!lines.length) return {first:'', refs:''};
-    var first = lines[0].replace(/^（參考）/, ''), refs = [];
+    var first = lines[0].replace(/^（參考）/, ''), ids = [];
     $.each(lines, function(_, l){
-        var m1 = l.match(/措施追蹤\s*#\d+/g), m2 = l.match(/溝通記錄\s*\d{8,11}/g);
-        if (m1) refs = refs.concat(m1);
-        if (m2) refs = refs.concat(m2);
+        var m = l.match(/措施追蹤\s*#\d+/g);
+        if (m) $.each(m, function(_, x){ var n = x.replace(/\D/g, ''); if (ids.indexOf(n) < 0) ids.push(n); });
     });
-    refs = refs.filter(function(v, i){ return refs.indexOf(v) === i; });
-    return {first:first, refs:refs.join('、')};
+    // 逐月數據（「1月 76%✗、2月 46%✗…」）濃縮成「N 個月中 M 個月未達標」；其他說明只留前 46 字
+    var mm = first.match(/\d+\s*月\s*[\d.]+\s*[^\s、，；。]*/g);
+    if (mm && mm.length >= 2){
+        var miss = 0; $.each(mm, function(_, x){ if (x.indexOf('✗') >= 0) miss++; });
+        var last3 = mm.slice(-3).every(function(x){ return x.indexOf('✗') < 0; });
+        first = first.split('（')[0] + ' ' + mm.length + ' 個月中 ' + miss + ' 個月未達標' + (last3 ? '，最近 3 個月已達標' : '，最近 3 個月仍有未達標');
+    } else if (first.length > 46) first = first.slice(0, 46) + '…';
+    return {first:first, refs:ids.length ? '措施追蹤 ' + ids.map(function(n){ return '#' + n; }).join('、') : ''};
 }
 function effectPrint(it){
     var h = esc(it.effect_check || '');
     if (it.effect_status && it.effect_status !== 'unconfirmed'){
         var e = evidenceBrief(it.effect_evidence);
         h += '<br><b>【成效確認：' + esc(META.effect_status[it.effect_status] || '') + '】' + esc(dispDate(it.effect_date)) + '</b>';
-        if (e.first) h += '<br>確認結果：' + esc(e.first);
-        h += '<br>裁示：' + esc(it.effect_ruling || '');
-        h += '<br>佐證：' + esc(e.refs ? e.refs + '（詳細紀錄見系統）' : '見系統成效確認紀錄');
+        if (e.first) h += '<br>確認：' + esc(e.first);
+        if (it.effect_ruling) h += '<br>裁示：' + esc(it.effect_ruling);
+        h += '<br>佐證：' + esc(e.refs || '見系統成效確認紀錄');
         if (it.car_no) h += '<br>矯正單：' + esc(it.car_no);
     }
     return h;
 }
+/* 因應措施：每一筆措施追蹤各佔一行，負責人前面加部門。
+   #編號＝溝通管理「回應利害關係者措施追蹤表」的項次（3-GM-01-02），可到該頁查負責人、完成情形與來源溝通記錄。 */
 function measurePrint(it){
     var h = esc(it.measure || '').replace(/\n/g, '<br>'), ts = it.tracks || [];
     if (ts.length){
-        var o = $.map(ts, function(t){ return '#' + t.id + ' ' + (t.owner || '未指定') + '／' + (t.due ? dispDate(t.due) : '未定')
+        var o = $.map(ts, function(t){ return '#' + t.id + ' ' + (t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定') + '／' + (t.due ? dispDate(t.due) : '未定')
             + (t.state === 'closed' ? '（已結案）' : (t.state === 'over' ? '（逾期）' : '（執行中）')); });
-        h += '<br><span style="color:#444;">措施追蹤：' + esc(o.join('；')) + '</span>';
+        h += '<br><span style="color:#444;">措施追蹤（編號見溝通管理措施追蹤表）：<br>' + $.map(o, esc).join('；<br>') + '</span>';
     }
     if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
