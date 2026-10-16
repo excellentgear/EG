@@ -255,8 +255,8 @@ function rm_suggest_context(PDO $db, int $year): array
             $cur = array_filter($ty, function ($d) use ($year) { return (int)substr($d, 0, 4) === $year; });
             $prev = array_filter($ty, function ($d) use ($year) { return (int)substr($d, 0, 4) === $year - 1; });
             $fmt = function ($a) { return implode('、', array_map(function ($d) { return substr($d, 5, 2) . '/' . substr($d, 8, 2); }, $a)); };
-            $add('行事曆（' . $year . '）', 'T', '員工', '颱風豪雨期間的安全與正常出貨',
-                 '颱風與豪雨可能造成停工、停電或委外廠停工，使在途品項延遲、交期延誤並可能損壞庫存',
+            $add('行事曆（' . $year . '）', 'T', '員工', '極端氣候（颱風、豪雨、高溫）期間的安全與正常出貨',
+                 '極端氣候（颱風、豪雨、高溫與限電）可能造成停工、停電或委外廠停工，使在途品項延遲、交期延誤並可能損壞庫存',
                  '規則：行事曆在當年或前一年有颱風假（' . ($cur ? $year . ' 年 ' . count($cur) . ' 天：' . $fmt($cur) : $year . ' 年尚無') . '）');
         }
     } catch (Throwable $e) { rm_sg_err($e); }
