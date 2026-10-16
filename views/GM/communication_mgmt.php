@@ -929,6 +929,9 @@ $roleLabel = cm_role_label($perms);
                 瀏覽器不會回報您在列印對話框按了確定還是取消，所以<b>按取消也會留一筆</b>，這是刻意的。</li>
         </ul>
 
+        <h4>AI 草稿（僅全站管理員）</h4>
+        <ul><li>溝通記錄的「回覆」與措施追蹤的「回應措施」旁有「AI 草稿」鈕：由本機 Ollama 依該筆資料寫文字草稿，<b>只填進欄位，確認後自己存檔</b>；Ollama 沒開時按鈕不會出現。一般使用者看不到。</li></ul>
+
         <h4>常見疑問</h4>
         <ul>
             <li><b>Q：為什麼我送出後直接跳到總經理確認？</b><br>
@@ -1143,7 +1146,7 @@ function acRender(key){
     } else {
         st.rows.forEach(function(x, i){
             $l.append('<div class="pk-ac-item" data-i="' + i + '"><span class="id">' + esc(x.id) + '</span>'
-                + esc(x.full_name || x.name) + '</div>');
+                + esc(x.name || x.full_name) + '</div>');
         });
     }
     acPosition(key);
@@ -1170,7 +1173,7 @@ function acMove(key, d){
 function acPick(key, i){
     var st = ACS[key], x = st.rows[i];
     if (!x) return;
-    $(st.inputSel).val(x.full_name || x.name);   // 選了就直接顯示在同一個欄位內
+    $(st.inputSel).val(x.name || x.full_name);   // 選了就直接顯示在同一個欄位內
     st.onPick(x);
     acHide(key);
 }
@@ -1634,7 +1637,7 @@ function resetPartyPicker(rec){
                 var hit = null;
                 (res.rows || []).forEach(function(x){ if (String(x.id) === String(PARTY.ref_id)) hit = x; });
                 PARTYHIT = hit;
-                if (hit) $('#fParty').val(hit.full_name || hit.name);
+                if (hit) $('#fParty').val(hit.name || hit.full_name);
                 acBoundHtml('#fPartyBound', kind, hit);
                 loadPartyContacts();
             });
@@ -1715,7 +1718,7 @@ function syncPartyFromPicker(){
     var kind = currentKind(), sum = $('#pkSummary').empty(), txt = '';
     if (kind === 'customer' || kind === 'supplier'){
         if (PARTYHIT){
-            txt = '將存入：' + (PARTYHIT.full_name || PARTYHIT.name) + '（編號 ' + PARTYHIT.id + '）'
+            txt = '將存入：' + (PARTYHIT.name || PARTYHIT.full_name) + '（編號 ' + PARTYHIT.id + '）'
                 + (PARTY.contact_name ? '　代表人：' + PARTY.contact_name : '　代表人：未指定');
         }
     } else if (kind === 'employee'){
@@ -2355,7 +2358,7 @@ function resetCfParty(keep){
                 var hit = null;
                 (res.rows || []).forEach(function(x){ if (String(x.id) === String(CFPARTY.ref_id)) hit = x; });
                 CFHIT = hit;
-                if (hit) $('#cfParty').val(hit.full_name || hit.name);
+                if (hit) $('#cfParty').val(hit.name || hit.full_name);
                 acBoundHtml('#cfPartyBound', kind, hit);
                 syncCfParty();
             });
@@ -2393,7 +2396,7 @@ $('#cfUser').on('change', function(){
 function syncCfParty(){
     var kind = cfKind(), sum = $('#cfSummary').empty(), txt = '';
     if (kind === 'customer' || kind === 'supplier'){
-        if (CFHIT) txt = '將存入：' + (CFHIT.full_name || CFHIT.name) + '（編號 ' + CFHIT.id + '）';
+        if (CFHIT) txt = '將存入：' + (CFHIT.name || CFHIT.full_name) + '（編號 ' + CFHIT.id + '）';
     } else if (kind === 'employee'){
         var p = pickedPerson('#cfUser');
         if (p) txt = '將存入：' + p.dept_name + '　' + personLabel(p);
