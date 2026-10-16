@@ -76,7 +76,7 @@ function eg_ai_chat(PDO $db, string $system, string $user, array $opt = []): str
     $model = eg_ai_pick_model($db);
     $body = json_encode([
         'model' => $model, 'stream' => false, 'keep_alive' => '15m',
-        'options' => ['temperature' => $opt['temperature'] ?? 0.4, 'num_predict' => $opt['max_tokens'] ?? 500, 'num_ctx' => 4096],
+        'options' => ['temperature' => $opt['temperature'] ?? 0.4, 'num_predict' => $opt['max_tokens'] ?? 500, 'num_ctx' => (int)($opt['num_ctx'] ?? 4096)],
         'messages' => [['role' => 'system', 'content' => $system], ['role' => 'user', 'content' => $user]],
     ], JSON_UNESCAPED_UNICODE);
     $ch = curl_init(eg_ai_url($db) . '/api/chat');
@@ -165,6 +165,31 @@ function eg_ai_draft(PDO $db, string $kind, array $ctx): string
         }
     }
     throw new InvalidArgumentException('不支援的草稿種類');
+}
+
+/**
+ * 國際局勢／環境新聞 → 組織處境議題。內網 AI 本身不知道「今天」的國際局勢，所以只能依使用者貼入的新聞（可多則）抓重點，
+ * 不得自己補充新聞沒寫的事件或數字。回傳 [['issue'=>議題描述, 'impact'=>對本公司的可能影響], …]（最多 5 條）
+ */
+function eg_ai_news_digest(PDO $db, string $news): array
+{
+    $news = mb_substr(trim(preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/u', '', $news)), 0, 5000);
+    if ($news === '') return [];
+    $sys = eg_ai_company_facts($db) . "\n" . EG_AI_STYLE;
+    $u = "下面是使用者貼上的近期國際局勢與環境相關新聞（可能有好幾則，以空行或 --- 分隔）。你不知道今天的國際局勢，只能依這些新聞的內容整理，不得補充新聞沒寫的事件、數字或國家。\n"
+       . "請找出對本公司（齒輪加工、客戶含軍工航太、原物料與外購件、委外加工、能源與匯率）可能有影響的重點，合併相似的新聞，整理成 1～5 條。\n"
+       . "格式：每條一行，「議題描述｜對本公司的可能影響」，中間用全形直線「｜」分隔；議題描述寫發生了什麼事（不超過 40 字），可能影響寫成對公司的風險或機會（不超過 40 字，不要寫措施）。不要編號、不要標題。\n\n新聞：\n" . $news;
+    $raw = eg_ai_chat($db, $sys, $u, ['max_tokens' => 700, 'timeout' => 180, 'num_ctx' => 8192]);
+    $out = [];
+    foreach (preg_split('/\R/u', $raw) as $l) {
+        $l = trim(preg_replace('/^[\s・•\-*#]*(\d+[.、)）]\s*)?/u', '', $l));
+        if (mb_strpos($l, '｜') === false && mb_strpos($l, '|') !== false) $l = str_replace('|', '｜', $l);
+        $p = explode('｜', $l, 2);
+        if (count($p) < 2 || trim($p[0]) === '' || trim($p[1]) === '') continue;
+        $out[] = ['issue' => mb_substr(trim($p[0]), 0, 80), 'impact' => mb_substr(trim($p[1]), 0, 80)];
+        if (count($out) >= 5) break;
+    }
+    return $out;
 }
 
 /** 一項一行：標題行（以冒號結尾）併入下一行、去掉項目編號與空行 */

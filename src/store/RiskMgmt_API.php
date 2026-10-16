@@ -41,7 +41,7 @@ if (!$uid) jerr('無使用權限（帳號非在職狀態）', 403);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類動作：先驗登入再驗 CSRF（順序不可顛倒，見 _config.php 的說明） */
-$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car'];
+$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car', 'news_digest'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['rm_csrf'], $tok))
@@ -233,6 +233,29 @@ if ($action === 'ctx_year') {
           'can_edit'=>$r ? rmCanEdit($r, $P) : true,     // 還沒建立：任何在職員工都可以建（建立者之後與管理員可改）
           'years'=>array_map('intval', $yrs),
           'print'=>rm_print_meta($db, 'context', $r ? (string)$r['fill_date'] : null)]);
+}
+
+/* ---------------------------------------------------------------- 國際局勢新聞：貼入（可多則）→ 內網 AI 抓重點；AI 不能用時退回取每則第一行 */
+if ($action === 'news_get') {
+    $n = rm_news_get($db);
+    require_once __DIR__ . '/../common/ollama_lib.php';
+    jout(['news'=>$n, 'ai_on'=>eg_ai_setting($db, 'enabled', '0') === '1']);
+}
+if ($action === 'news_digest') {
+    require_once __DIR__ . '/../common/ollama_lib.php';
+    $text = mb_substr(trim((string)($_POST['text'] ?? '')), 0, 5000);
+    $isAi = false; $digest = []; $aiErr = '';
+    if ($text !== '') {
+        try { $digest = eg_ai_news_digest($db, $text); $isAi = (bool)$digest; if (!$digest) $aiErr = 'AI 沒有整理出可用的重點'; }
+        catch (Throwable $e) { $aiErr = $e->getMessage(); }
+        if (!$digest) $digest = rm_news_fallback_digest($text);
+    }
+    rm_news_param_save($db, 'text', $text);
+    rm_news_param_save($db, 'digest', json_encode($digest, JSON_UNESCAPED_UNICODE));
+    rm_news_param_save($db, 'ai', $isAi ? '1' : '0');
+    rm_news_param_save($db, 'at', rmToday($db));
+    rm_news_param_save($db, 'by', $uname);
+    jout(['digest'=>$digest, 'ai'=>$isAi, 'ai_error'=>$aiErr]);
 }
 
 /* ---------------------------------------------------------------- 依系統資料給的建議（不是外部 AI：全部來自本系統既有資料，可驗證、可追溯） */

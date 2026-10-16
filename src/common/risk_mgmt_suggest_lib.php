@@ -25,13 +25,47 @@ const RM_SG_SINGLE_MIN  = 20;   // 單一來源製程要達到的當年發包筆
 /** KPI 名稱 → 建議的象限／利害關係者／需求（未命中的退回 W／客戶） */
 function rm_sg_kpi_class(string $name): array
 {
+    // SWOT 的分類看議題的「性質」不是看利害關係者是誰：KPI 未達標是公司內部績效缺口（劣勢），
+    // 利害關係者寫「公司內部」，客戶的要求寫在「需求與期望」（客戶要求品質是外部需求，做不到是內部劣勢，兩件事分開）
     if (mb_strpos($name, '廠商準時') !== false) return ['T', '供應商', '合理的交期與訂單預告'];
-    if (mb_strpos($name, '準時出貨') !== false) return ['T', '客戶', '準時交貨'];
-    if (mb_strpos($name, '客訴') !== false)     return ['W', '客戶', '低客訴、不良品不外流'];
-    if (mb_strpos($name, '不良') !== false)     return ['W', '客戶', '品質穩定、不良品不外流'];
-    if (mb_strpos($name, '校驗') !== false)     return ['W', '客戶', '量測數據可靠、可追溯'];
-    if (mb_strpos($name, '接單') !== false || mb_strpos($name, '達成') !== false) return ['W', '客戶', '穩定的訂單與營收'];
-    return ['W', '客戶', '符合年度目標'];
+    if (mb_strpos($name, '準時出貨') !== false) return ['W', '公司內部（生管組、生產課）', '依約定交期交貨（客戶要求）'];
+    if (mb_strpos($name, '客訴') !== false)     return ['W', '公司內部（品管課）', '低客訴、不良品不外流（客戶要求）'];
+    if (mb_strpos($name, '不良') !== false)     return ['W', '公司內部（品管課、生產課）', '品質穩定、不良品不外流（客戶要求）'];
+    if (mb_strpos($name, '校驗') !== false)     return ['W', '公司內部（品管課）', '量測數據可靠、可追溯（客戶與稽核要求）'];
+    if (mb_strpos($name, '接單') !== false || mb_strpos($name, '達成') !== false) return ['W', '公司內部（業務課）', '穩定的訂單與營收（公司年度目標）'];
+    return ['W', '公司內部', '符合年度目標'];
+}
+
+/* ---- 國際局勢新聞（使用者貼入；可多則）：全站共用一份最新的，存在 system_parameters(RISK_NEWS) ---- */
+function rm_news_param(PDO $db, string $k, string $default = ''): string
+{
+    try { $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='RISK_NEWS' AND param_key=?"); $st->execute([$k]); $v = $st->fetchColumn(); return $v === false || $v === null ? $default : (string)$v; }
+    catch (Throwable $e) { return $default; }
+}
+function rm_news_param_save(PDO $db, string $k, string $v): void
+{
+    $st = $db->prepare("SELECT 1 FROM system_parameters WHERE param_group='RISK_NEWS' AND param_key=?"); $st->execute([$k]);
+    if ($st->fetchColumn()) $db->prepare("UPDATE system_parameters SET param_value=? WHERE param_group='RISK_NEWS' AND param_key=?")->execute([$v, $k]);
+    else $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value) VALUES ('RISK_NEWS',?,?)")->execute([$k, $v]);
+}
+/** @return array ['text'=>貼入的新聞,'at'=>日期,'by'=>貼入者,'ai'=>是否由 AI 整理,'digest'=>[['issue','impact']…],'stale'=>超過 45 天] */
+function rm_news_get(PDO $db): array
+{
+    $at = rm_news_param($db, 'at'); $dg = json_decode(rm_news_param($db, 'digest', '[]'), true);
+    $stale = $at !== '' && strtotime($at) < strtotime('-45 days');
+    return ['text'=>rm_news_param($db, 'text'), 'at'=>$at, 'by'=>rm_news_param($db, 'by'), 'ai'=>rm_news_param($db, 'ai') === '1',
+            'digest'=>(is_array($dg) && !$stale) ? $dg : [], 'stale'=>$stale];
+}
+/** AI 不能用時的退路：新聞以空行或 --- 分隔，每則取第一行當議題 */
+function rm_news_fallback_digest(string $news): array
+{
+    $out = [];
+    foreach (preg_split('/\R\s*(?:-{3,}\s*)?\R|\R-{3,}\R/u', trim($news)) as $blk) {
+        $first = trim(preg_split('/\R/u', trim($blk))[0] ?? '');
+        if ($first !== '') $out[] = ['issue'=>mb_substr($first, 0, 80), 'impact'=>'對公司的影響請自行判斷'];
+        if (count($out) >= 5) break;
+    }
+    return $out;
 }
 
 /** 規則算失敗時不讓整個建議清單消失，但要留下紀錄（不然規則壞了完全看不出來） */
@@ -266,11 +300,11 @@ function rm_suggest_context(PDO $db, int $year): array
         if (!$outNos && $ih && (int)$ih['a'] >= RM_SG_SINGLE_MIN) {
             // 模組設定沒有勾選任何「對外宣稱有外包」的稽核製程＝宣告全部廠內加工：
             // 不可再顯示「廠內占 97%」這種暗示有外包的比例（會與設定矛盾），只陳述廠內承擔的筆數
-            $add('BOM 製程紀錄（' . $year . '）', 'W', '客戶', '穩定交期與加工品質',
+            $add('BOM 製程紀錄（' . $year . '）', 'W', '公司內部（生管組、生產課）', '依約定交期與品質交貨（客戶要求）',
                  '齒研、插齒加工由廠內製程承擔，產能、設備與人力集中，設備故障或人員異動會直接影響交期',
                  '規則：未宣稱外包的稽核製程，廠內製程承擔筆數 ≥ ' . RM_SG_SINGLE_MIN . ' 筆（' . $year . ' 年 ' . (int)$ih['a'] . ' 筆）');
         } elseif ($outNos && $ih && (int)$ih['n'] >= RM_SG_SINGLE_MIN && (int)$ih['a'] * 100 / (int)$ih['n'] >= 80) {
-            $add('BOM 製程紀錄（' . $year . '）', 'W', '客戶', '穩定交期與加工品質',
+            $add('BOM 製程紀錄（' . $year . '）', 'W', '公司內部（生管組、生產課）', '依約定交期與品質交貨（客戶要求）',
                  '齒研、插齒加工大多由廠內製程承擔，產能、設備與人力集中，設備故障或人員異動會直接影響交期',
                  '規則：稽核製程由廠內製程承擔的比例 ≥ 80%（至少 ' . RM_SG_SINGLE_MIN . ' 筆；' . $year . ' 年 ' . $ih['n'] . ' 筆中廠內承擔 ' . rm_sg_pct($ih['a'], $ih['n']) . '）');
         }
@@ -285,14 +319,14 @@ function rm_suggest_context(PDO $db, int $year): array
                                 JOIN qa_cause_cat c ON c.cat_id=ac.cat_id GROUP BY c.cat_id, c.name ORDER BY n DESC LIMIT 3");
             $st->execute([$year]);
             $cs = array_map(function ($r) { return $r['name'] . ' ' . $r['n'] . ' 次'; }, $st->fetchAll(PDO::FETCH_ASSOC));
-            $add('品質異常處理單（' . $year . '）', 'W', '客戶', '品質穩定、不良品不外流',
+            $add('品質異常處理單（' . $year . '）', 'W', '公司內部（品管課、生產課）', '品質穩定、不良品不外流（客戶要求）',
                  '品質異常持續發生，重複出現的原因分類是內部需改善的項目',
                  '規則：當年有品質異常處理單，重複出現的原因分類通常是內部需改善的項目（' . $year . ' 年共 ' . $n . ' 張）');
         }
         $st = $db->prepare("SELECT COUNT(*) n, COUNT(DISTINCT Client_name) c FROM ir_track WHERE " . rm_audit_in($db,'d_setting_id') . " AND YEAR(IR_date)=?");
         $st->execute([$year]); $ir = $st->fetch(PDO::FETCH_ASSOC);
         if ((int)$ir['n'] > 0)
-            $add('客戶退貨（' . $year . '）', 'W', '客戶', '品質穩定、不良品不外流',
+            $add('客戶退貨（' . $year . '）', 'W', '公司內部（品管課、生產課）', '品質穩定、不良品不外流（客戶要求）',
                  '發生客戶退貨，產品品質或製程仍有改善空間', '規則：當年有客戶退貨（' . $year . ' 年 ' . $ir['n'] . ' 筆，涉及 ' . $ir['c'] . ' 家客戶）');
     } catch (Throwable $e) { rm_sg_err($e); }
 
@@ -325,8 +359,22 @@ function rm_suggest_context(PDO $db, int $year): array
         if ($year === (int)substr($today, 0, 4)) {
             $n = (int)$db->query("SELECT COUNT(*) FROM qc_tool WHERE calib_managed=1 AND calibration_due IS NOT NULL AND calibration_due<CURDATE() AND (state IS NULL OR state=0)")->fetchColumn();
             if ($n > 0)
-                $add('量測儀器校驗', 'W', '客戶', '量測數據可靠、可追溯', '列管量具有已超過校驗到期日未校驗者，量測數據的可靠度與可追溯性有疑慮', '規則：列管量具校驗到期日已過（目前 ' . $n . ' 支）');
+                $add('量測儀器校驗', 'W', '公司內部（品管課）', '量測數據可靠、可追溯（客戶與稽核要求）', '列管量具有已超過校驗到期日未校驗者，量測數據的可靠度與可追溯性有疑慮', '規則：列管量具校驗到期日已過（目前 ' . $n . ' 支）');
         }
+    } catch (Throwable $e) { rm_sg_err($e); }
+
+    /* ---- 10. 國際局勢與環境議題（AS9100D 4.1 的外部議題，一定要列：不依賴資料，沒資料也列） ---- */
+    try {
+        $add('國際局勢與環境議題（必列）', 'T', '國際環境（客戶、供應鏈）', '穩定的原物料與外購件供應、合理的成本、客戶訂單不中斷',
+             '國際局勢（戰爭與地緣衝突、貿易管制與關稅、能源與物價上漲、匯率波動）可能影響原物料與外購件的價格與交期，並影響客戶的訂單與出貨規定',
+             '規則：國際局勢屬 AS9100D 4.1 應考量的外部議題，每年一定要列入評估。系統與內網 AI 不知道當前的國際情勢，可在本視窗上方貼入近期新聞，由 AI 整理成具體議題');
+        $add('國際局勢與環境議題（必列）', 'T', '政府單位、客戶', '符合環保與減碳要求',
+             '氣候變遷、減碳與環保法規趨嚴，可能增加合規與能源成本，客戶也可能提出環境相關要求（碳足跡、有害物質管制）',
+             '規則：環境議題屬 AS9100D 4.1 應考量的外部議題，每年一定要列入評估（颱風豪雨等天然災害另見行事曆那一條）');
+        $nw = rm_news_get($db);
+        foreach ($nw['digest'] as $d)
+            $add('國際局勢新聞整理（' . $nw['at'] . '）', 'T', '國際環境（客戶、供應鏈）', '穩定的原物料與外購件供應、合理的成本、客戶訂單不中斷',
+                 $d['issue'] . '；' . $d['impact'], '依使用者於 ' . $nw['at'] . ' 貼入的新聞' . ($nw['ai'] ? '，由內網 AI 整理重點' : '（內網 AI 無法使用，直接取新聞標題，影響請自行判斷）') . '；新聞是否仍適用請自行確認');
     } catch (Throwable $e) { rm_sg_err($e); }
 
     return $out;

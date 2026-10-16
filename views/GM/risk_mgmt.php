@@ -320,6 +320,11 @@ $perms  = rm_perms($db, $rmUser);
         <div style="margin-bottom:8px;"><label style="font-size:13px;margin:0;">資料年度</label>
             <select id="sugDy" style="width:110px;height:28px;"></select>
             <span class="hint">年初（1～3 月）填當年度的表時，預設用「前一年」的全年資料；可自行改選。</span></div>
+        <div class="note-box" style="margin-bottom:8px;"><b>國際局勢與環境議題一定要列入</b>（AS9100D 4.1 外部議題），下方「必列」兩條每年都會出現。
+            <b>內網 AI 不知道今天的國際局勢</b>，請把近期的新聞（戰爭、通膨、關稅、能源、匯率、環保法規…）<b>貼在下面，可貼好幾則</b>（每則之間空一行或打 ---），按「整理成議題」讓 AI 只依貼入的內容抓重點；
+            AI 無法使用時會直接取每則新聞的第一行當議題。<span id="newsInfo" class="hint"></span>
+            <textarea id="newsText" rows="5" maxlength="5000" style="width:100%;margin-top:6px;" data-eg-skip placeholder="貼上新聞全文或標題皆可（合計 5000 字內）"></textarea>
+            <div style="margin-top:4px;"><button type="button" class="b-mini warm" id="newsGo"><i class="fa fa-magic"></i> 整理成議題</button> <span id="newsMsg" class="hint"></span></div></div>
         <div id="sugBody"></div></div>
 </div></div>
 
@@ -430,7 +435,7 @@ $perms  = rm_perms($db, $rmUser);
     <div class="rm-mhd"><span>使用說明　風險與機會管理</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
     <div class="rm-mbd help-doc">
         <h4>這一頁在做什麼</h4>
-        <ul><li><b>組織處境分析表</b>：整家公司<b>一個年度只有一張</b>，用 SWOT 四象限（優勢／劣勢／機會／威脅）記錄內外部議題、相關利害關係者與他們的需求與期望，是風險與機會的來源。每個象限都有「填寫提示」與「範例」，按「依系統資料建議」可帶入去年內容、溝通管理未結案的反應、品質異常的主要原因等線索。</li>
+        <ul><li><b>組織處境分析表</b>：整家公司<b>一個年度只有一張</b>，用 SWOT 四象限（優勢／劣勢／機會／威脅）記錄內外部議題、相關利害關係者與他們的需求與期望，是風險與機會的來源。<b>分類看議題的性質，不是看利害關係者是誰</b>：優勢／劣勢＝公司內部現況（能力、設備、人力、績效），機會／威脅＝外部環境的變化（市場、競爭、法規、供應商、<b>國際局勢與環境議題為必列</b>）；議題只寫「目前的狀況」，「建立流程」「加強訓練」這類是措施，要寫在風險表的因應措施，不要寫成劣勢；客戶的要求寫在「需求與期望」，做不到才是內部劣勢，兩者分成兩列。每個象限都有「填寫提示」與「範例」，按「依系統資料建議」可帶入去年內容、溝通管理未結案的反應、品質異常的主要原因等線索。</li>
             <li><b>風險與機會因應措施管制表</b>：把議題整理成風險／機會，評估嚴重度(S)與發生率(O)，自動算出風險等級，並記錄因應措施與成效確認（原「策略行動措施管制表」與「風險評估及處理表」合併為這一張）。</li>
             <li>利害關係者的溝通記錄、措施追蹤與溝通管制在「溝通管理」頁，按上方「前往溝通管理」即可轉跳。</li></ul>
         <h4>年度作業流程</h4>
@@ -744,7 +749,26 @@ function loadSug(dy){
         openMask('sugMask');
     });
 }
-$(document).on('click', '#bSuggest', function(){ loadSug(0); });
+function loadNews(){
+    get({action:'news_get'}, function(res){
+        var n = res.news || {};
+        if (!$('#newsText').val()) $('#newsText').val(n.text || '');
+        $('#newsInfo').text(n.at ? '　上次貼入：' + dispDate(n.at) + '（' + (n.by || '') + '）' + (n.stale ? '，已超過 45 天，不再列入建議，請重新貼入' : '')
+            : '　目前還沒有貼入新聞' + (res.ai_on ? '' : '；內網 AI 目前未啟用'));
+    });
+}
+$(document).on('click', '#newsGo', function(){
+    var t = $.trim($('#newsText').val());
+    if (!t){ $('#newsMsg').text('請先貼上新聞'); return; }
+    var $b = $(this).prop('disabled', true); $('#newsMsg').text('整理中…（AI 約需 10～60 秒）');
+    $.post(API, {action:'news_digest', text:t, csrf:CSRF}, null, 'json').done(function(res){
+        if (!res || !res.ok){ $('#newsMsg').text((res && res.error) || '整理失敗'); return; }
+        $('#newsMsg').text((res.ai ? 'AI 已整理出 ' : '已取出 ') + res.digest.length + ' 條議題，列在下方「國際局勢新聞整理」' + (res.ai ? '' : '（AI 無法使用：' + (res.ai_error || '') + '）'));
+        loadSug(+$('#sugDy').val() || 0); loadNews();
+    }).fail(function(x){ var m = ''; try { m = JSON.parse(x.responseText).error; } catch (e) {} $('#newsMsg').text(m || '整理失敗，請稍後再試'); })
+      .always(function(){ $b.prop('disabled', false); });
+});
+$(document).on('click', '#bSuggest', function(){ loadSug(0); loadNews(); });
 $('#sugDy').on('change', function(){ loadSug(+$(this).val()); });
 $(document).on('click', '[data-sgadd]', function(){
     var i = +$(this).data('sgadd'), r = SUG[i], row = $(this).closest('.sg-row');
