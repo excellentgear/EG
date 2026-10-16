@@ -293,6 +293,9 @@
            + '段落開頭是 1. / 1.1 / 1.1.1 這種階層編號的，依「.」的段數自動排縮、'
            + '對齊數字後的內容，並在編號與文字之間補一個空格；'
            + '句尾是 (2-MM-01) 這種文件編號的連續幾段，括號也會對齊到同一欄')
+       + btn('egAlignParen', 'columns', '括號對齊：先用滑鼠選取要對齊的那幾列（例如 8.1～8.3 的相關文件清單），'
+           + '按這顆，每一列第一個「(」會對齊到同一欄；不動文字內容，AS 文件參照的標記也不會被破壞。'
+           + '想取消就把那幾列的括號前面退格刪掉再重按')
        + '<span class="egrt-sep"></span>'
        // 上下對齊（作用在游標所在的表格儲存格；整張表選起來就整張套用）
        + btn('egVaTop', 'angle-up', '儲存格靠上')
@@ -1266,6 +1269,7 @@
           w.alert(msg);
           return;
         }
+        if (cmd === 'egAlignParen') { var an = alignSelectedParen(); w.alert(an.msg); return; }
         if (cmd === 'egFontUp')    { bumpFont(1);  return; }
         if (cmd === 'egFontDown')  { bumpFont(-1); return; }
         if (cmd === 'egLhUp')      { bumpLineHeight(0.1);  return; }
@@ -2281,6 +2285,94 @@
 
     /** 工具列的「依編號自動縮排」：整份文件重新掃一遍套用，並重新分頁
      *  （縮排改變了換行位置，某幾頁可能因此變多或變少列，要重排才會準）。 */
+    /* 括號對齊（使用者 2026-10-16）：選取幾列後，把每一列第一個「(」對到同一欄。
+       做法是在「(」前面插一個空的 inline-block 墊片、寬度＝最右那一列的位置減掉自己的位置——
+       **不重建段落**：既有的 alignAsTails 會把整段清掉重組，AS 文件參照的 class／data 標記
+       也一起被洗掉；墊片只是多插一個節點，文字、參照、字型樣式都原封不動。
+       每次先清掉上一次的墊片再量，所以可以重複按（改了文字再按一次就重新對齊）。 */
+    function isLeafBlock(b) { return !b.querySelector('p,div,li,table,ul,ol'); }
+    function alignSelectedParen() {
+      var sel = w.getSelection(), rg = null;
+      if (sel && sel.rangeCount && host.contains(sel.getRangeAt(0).commonAncestorContainer)) rg = sel.getRangeAt(0);
+      else if (lastRange) rg = lastRange;
+      if (!rg || rg.collapsed) return { n: 0, msg: '請先用滑鼠選取要對齊的那幾列（至少兩列），再按「括號對齊」。' };
+      var blocks = [];
+      sheets().forEach(function (sh) {
+        Array.prototype.slice.call(sh.querySelectorAll('p,div,li')).forEach(function (b) {
+          if (isLeafBlock(b) && rg.intersectsNode(b)) blocks.push(b);
+        });
+      });
+      // 先清掉舊墊片
+      blocks.forEach(function (b) {
+        Array.prototype.slice.call(b.querySelectorAll('span[data-egpad],span[style*="inline-block"]')).forEach(function (sp) {
+          if (sp.textContent === '' && sp.children.length === 0) sp.parentNode.removeChild(sp);
+        });
+        b.normalize();
+      });
+      var rows = [];
+      blocks.forEach(function (b) {
+        var wk = d.createTreeWalker(b, NodeFilter.SHOW_TEXT, null), nd, prev = [];
+        while ((nd = wk.nextNode())) {
+          var i = nd.nodeValue.search(/[(（]/);
+          if (i >= 0) {
+            var hasHead = (nd.nodeValue.slice(0, i).replace(/[\s　 ]+/g, '') !== '') || prev.some(function (x) { return x.nodeValue.replace(/[\s　 ]+/g, '') !== ''; });
+            if (!hasHead) return;                     // 括號前面沒字（整列從括號開始）不處理
+            // 括號前面的空白一律先收掉（原本靠空格湊的位置沒有意義）
+            var j = i, t = nd.nodeValue;
+            while (j > 0 && /[\s　 ]/.test(t[j - 1])) j--;
+            var rightNode = d.createTextNode(t.slice(i));
+            nd.nodeValue = t.slice(0, j);
+            nd.parentNode.insertBefore(rightNode, nd.nextSibling);
+            if (j === 0) {                              // 空白連到這個節點的開頭：往前一個文字節點繼續收
+              for (var k = prev.length - 1; k >= 0; k--) {
+                var pv = prev[k].nodeValue, e2 = pv.length;
+                while (e2 > 0 && /[\s　 ]/.test(pv[e2 - 1])) e2--;
+                prev[k].nodeValue = pv.slice(0, e2);
+                if (e2 > 0) break;
+              }
+            }
+            var spc = d.createElement('span');
+            spc.setAttribute('data-egpad', '1');
+            spc.style.display = 'inline-block';
+            spc.style.width = '0px';
+            rightNode.parentNode.insertBefore(spc, rightNode);
+            rows.push({ b: b, sp: spc, node: rightNode });
+            return;
+          }
+          prev.push(nd);
+        }
+      });
+      if (rows.length < 2) { return { n: 0, msg: '選取範圍內沒有找到至少兩列含「(」的文字。' }; }
+      // 同一頁內才互相對齊（不同頁的版面寬度各自獨立）
+      var bySheet = [];
+      rows.forEach(function (r) {
+        var sh = r.b.closest('[contenteditable="true"]');
+        var g = null;
+        bySheet.forEach(function (x) { if (x.sh === sh) g = x; });
+        if (!g) { g = { sh: sh, rows: [] }; bySheet.push(g); }
+        g.rows.push(r);
+      });
+      var done = 0;
+      bySheet.forEach(function (g) {
+        if (g.rows.length < 2) return;
+        g.rows.forEach(function (r) {
+          var rr = d.createRange();
+          rr.setStart(r.node, 0); rr.setEnd(r.node, 1);
+          r.x = rr.getBoundingClientRect().left;
+          r.fs = parseFloat(w.getComputedStyle(r.node.parentNode).fontSize) || 16;
+        });
+        var maxX = Math.max.apply(null, g.rows.map(function (r) { return r.x; }));
+        g.rows.forEach(function (r) {
+          // 最寬那列也留 0.4 個字寬的空隙，括號才不會貼著名稱
+          var px = Math.max(0, Math.round((maxX - r.x + 0.4 * r.fs) * 10) / 10);
+          r.sp.style.width = Math.min(999, px) + 'px';
+          done++;
+        });
+      });
+      changed();
+      return { n: done, msg: '已把 ' + done + ' 列的「(」對齊到同一欄。' };
+    }
+
     function autoNumIndent() {
       var n = 0, a = 0;
       sheets().forEach(function (s) { n += applyNumIndentAll(s, true); a += alignAsTailsAll(s); });

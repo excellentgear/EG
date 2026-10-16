@@ -2030,6 +2030,22 @@ function arRender() {
     if (rows.length > 300) h += '<div class="ar-empty">還有 ' + (rows.length - 300) + ' 份，請再打幾個字縮小範圍</div>';
     $('#arList').html(h);
 }
+/* 每次打開「插入 AS 文件編號／名稱」都從乾淨的狀態開始：關鍵字、部門／階別、含已廢止、
+   上一次選到的文件與前後綴一律清空，游標直接落在搜尋框可以馬上打字
+   （使用者 2026-10-16：上次的篩選留著，每次都要先自己刪掉）。
+   帶入方式與樣式是個人習慣，不清。 */
+function arOpenFresh() {
+    arLoad(function () {
+        AR.pick = null;
+        $('#arKw').val('');
+        $('#arDept,#arLevel').each(function () { this.selectedIndex = 0; });
+        $('#arObs').prop('checked', false);
+        $('#arPre,#arPost').val('');
+        arRender(); arPrev();
+        openMask('mAsRef');
+        setTimeout(function () { var k = document.getElementById('arKw'); if (k) k.focus(); }, 60);
+    });
+}
 function arPrev() {
     if (!AR.pick) { $('#arPrev').text('—'); $('#btnArInsert').prop('disabled', true); return; }
     var mode = $('input[name=arMode]:checked').val() || 'both';
@@ -2097,7 +2113,7 @@ function flowAsRefOpts() {
     return {
         onPickAsRef: function (done) {
             AR.pickCb = done;
-            arLoad(function () { arRender(); arPrev(); openMask('mAsRef'); });
+            arOpenFresh();
         },
         onAsRefCheck: function (list, cb) {
             var ids = list.map(function (x) { return x.doc_id; }).join(',');
@@ -2170,7 +2186,7 @@ function mkEditor() {
         onInsertImage: function(insert){ openUpload(insert); },
         onInsertAsRef: function(insertHtml){
             AR.insert = insertHtml;
-            arLoad(function(){ arRender(); arPrev(); openMask('mAsRef'); });
+            arOpenFresh();
         },
         onInsertFlow: function(insert){
             EGFlow.open({ json:null, onPickAsRef: flowAsRefOpts().onPickAsRef,
