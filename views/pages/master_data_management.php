@@ -21083,6 +21083,12 @@ var dictConfig = {
 };
 
 // Table head config
+(function(){ var st = document.createElement('style');
+    st.textContent = '#dict-table.dict-2col thead{display:none}#dict-table.dict-2col,#dict-table.dict-2col tbody{display:block;width:100%}'
+        + '#dict-table.dict-2col tbody{display:grid;grid-template-columns:1fr 1fr;column-gap:14px}'
+        + '#dict-table.dict-2col tbody tr{display:flex;align-items:center;border-bottom:1px solid #eee;min-width:0}'
+        + '#dict-table.dict-2col tbody td{border:0 !important;padding:6px 6px}';
+    document.head.appendChild(st); })();
 var dictTableHead = {
     'workpiece':     '<th style="width:80px;">代碼</th><th>名稱</th><th style="width:90px;text-align:center;">操作</th>',
     'workpiece-sub': '<th style="width:90px;">所屬種類</th><th>小類名稱</th><th style="width:90px;text-align:center;">操作</th>',
@@ -21320,6 +21326,9 @@ function initDictTableSortable(type) {
 }
 
 function loadDict(type, navBtn) {
+    // 同一個字典重新載入（例如編輯儲存後）時記住列表捲動位置，載入完成再還原；換字典則回到最上面
+    var _dictScrollEl = document.getElementById('dict-table-area');
+    var _dictKeepTop = (type === currentDictType && _dictScrollEl) ? _dictScrollEl.scrollTop : 0;
     currentDictType = type;
     _dictCurrentType = type;
 
@@ -21470,6 +21479,7 @@ function loadDict(type, navBtn) {
         : api({ action: cfg.action, op: 'list' });
     listReq.done(function(r) {
         if (!r.success) { showToast('載入失敗','error'); return; }
+        setTimeout(function(){ var el = document.getElementById('dict-table-area'); if (el && _dictKeepTop) el.scrollTop = _dictKeepTop; }, 0);
         var data = r.data || [];
         if (type === 'label') {
             renderLabelDictFull(data);
@@ -21532,8 +21542,10 @@ function renderDictTable(type, data) {
     var cfg = dictConfig[type];
     _dictDataCache = {};  // reset cache
     var html = '';
+    var _tblEl = document.getElementById('dict-table');
+    if (_tblEl) _tblEl.classList.toggle('dict-2col', type === 'maker-sub');
     if (!data.length) {
-        html = '<tr><td colspan="3" class="text-center" style="padding:32px;color:#aaa;"><i class="fa fa-inbox" style="font-size:24px;display:block;margin-bottom:8px;"></i>目前無資料，請使用上方表單新增</td></tr>';
+        html = '<tr style="grid-column:1/-1;"><td colspan="3" class="text-center" style="padding:32px;color:#aaa;"><i class="fa fa-inbox" style="font-size:24px;display:block;margin-bottom:8px;"></i>目前無資料，請使用上方表單新增</td></tr>';
     } else {
         data.forEach(function(d, idx) {
             var id = cfg.getId(d);
@@ -21547,7 +21559,13 @@ function renderDictTable(type, data) {
                 var cats = d.main_cat_names
                     ? d.main_cat_names.split(', ').map(function(n){ return '<span style="font-size:10px;background:#eef2ff;color:#5856d6;padding:1px 5px;border-radius:3px;">'+escHtml(n)+'</span>'; }).join(' ')
                     : '<span style="color:#ccc;font-size:11px;">未綁定</span>';
-                html += '<td><strong>'+escHtml(d.sub_cat_name)+'</strong><br><span style="font-size:11px;">'+cats+'</span></td>';
+                var bindHtml = '';
+                if (d.bind_type_name) {
+                    bindHtml = '<br><span style="font-size:11px;background:#fde9cf;color:#8a4b08;border-radius:3px;padding:1px 6px;" title="製程大類ID '+escHtml(String(d.bind_process_type_id))+(d.bind_pno_ids?'／製程小類ID '+escHtml(String(d.bind_pno_ids)):'')+'"><i class="fa fa-link"></i> '+escHtml(d.bind_type_name)+(d.bind_pno_name?' › '+escHtml(d.bind_pno_name):'（僅大類）')+'</span>';
+                } else if (g === 'PROCESS') {
+                    bindHtml = '<br><span style="font-size:11px;color:#DD5138;font-weight:600;"><i class="fa fa-chain-broken"></i> 未綁定製程</span>';
+                }
+                html += '<td style="flex:1;min-width:0;"><strong>'+escHtml(d.sub_cat_name)+'</strong>'+bindHtml+'<br><span style="font-size:11px;">'+cats+'</span></td>';
             } else if (type === 'workpiece') {
                 html += '<td><span class="dict-code-badge">'+escHtml(d.type_code)+'</span></td>';
                 html += '<td>'+escHtml(d.type_name)+'</td>';
@@ -26306,6 +26324,7 @@ function initPaginatedDict(type, data) {
         bar.id = 'dict-pg-searchbar';
         bar.style.cssText = 'display:flex;gap:6px;align-items:center;margin:8px 0 2px;flex-wrap:wrap;';
         bar.innerHTML = '<input type="text" id="dict-pg-q" class="form-control input-sm" placeholder="搜尋名稱…" style="max-width:200px;" oninput="onDictPgSearch()">'
+            + (type === 'maker-sub' ? '<select id="dict-pg-bind" class="form-control input-sm" style="width:auto;" onchange="onDictPgBind()"><option value="">全部（綁定不拘）</option><option value="unbound">只看加工類未綁定</option><option value="bound">只看已綁定</option></select>' : '')
             + '<span id="dict-pg-info" style="font-size:11px;color:#aaa;"></span>';
         tbl.parentNode.insertBefore(bar, tbl);
     }
@@ -26319,7 +26338,16 @@ function initPaginatedDict(type, data) {
     if (document.getElementById('dict-pg-q')) {
         document.getElementById('dict-pg-q').value = state.search;
     }
+    if (document.getElementById('dict-pg-bind')) document.getElementById('dict-pg-bind').value = state.bind || '';
     renderPaginatedDictPage(type);
+}
+
+function onDictPgBind() {
+    var state = _paginatedDictData[currentDictType];
+    if (!state) return;
+    state.bind = document.getElementById('dict-pg-bind').value;
+    state.page = 1;
+    renderPaginatedDictPage(currentDictType);
 }
 
 function onDictPgSearch() {
@@ -26342,6 +26370,11 @@ function renderPaginatedDictPage(type) {
     if (!state) return;
     var searchField = (type === 'maker-sub') ? 'sub_cat_name' : 'main_cat_name';
     var filtered = state.allData.filter(function(d) {
+        if (type === 'maker-sub' && state.bind) {
+            var isB = !!d.bind_type_name;
+            if (state.bind === 'bound' && !isB) return false;
+            if (state.bind === 'unbound' && (isB || (d.sub_cat_group||'PROCESS') !== 'PROCESS')) return false;
+        }
         if (!state.search) return true;
         return ((d[searchField]||'').toLowerCase().indexOf(state.search) >= 0);
     });
