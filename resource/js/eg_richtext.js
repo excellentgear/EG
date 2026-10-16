@@ -59,6 +59,10 @@
     ['"Times New Roman",Times,serif', 'Times New Roman'],
     ['Consolas,"Courier New",monospace', 'Consolas']
   ];
+  /* 英數字型：只套在英文／數字上（排在 font-family 最前面，中文字它沒有，瀏覽器自動往後找到中文字型）。
+     值只放字型名稱，組合成字型堆疊由 composeFont() 做。 */
+  var EN_FONTS = [['', '英數＝同中文'], ['Arial', 'Arial'], ['Calibri', 'Calibri'], ['Times New Roman', 'Times New Roman'],
+                  ['Verdana', 'Verdana'], ['Tahoma', 'Tahoma'], ['Georgia', 'Georgia'], ['Courier New', 'Courier New']];
   var DOC_SIZES = ['9pt','10pt','11pt','12pt','14pt','16pt','18pt','20pt','24pt'];
   var DOC_BLOCKS = [['P','正文'],['H1','標題 1'],['H2','標題 2'],['H3','標題 3'],['H4','標題 4']];
   // 允許保留的 CSS 宣告（與後端 richtext_lib.php 的 EG_RT_STYLES 必須一致）。
@@ -266,7 +270,8 @@
     var h = '<div class="egrt-bar egrt-bar-doc">';
     // 第一排：區塊階層／字型／字級／字形／顏色
     h += '<select class="egrt-sel egrt-sel-block" data-eg-skip title="段落階層">' + opts(DOC_BLOCKS, 'P') + '</select>';
-    h += '<select class="egrt-sel egrt-sel-font" data-eg-skip title="字型">' + opts(DOC_FONTS, '') + '</select>';
+    h += '<select class="egrt-sel egrt-sel-font" data-eg-skip title="中文字型：選取文字後這裡會顯示它現在用的字型">' + opts(DOC_FONTS, '') + '</select>';
+    h += '<select class="egrt-sel egrt-sel-fonten" data-eg-skip title="英數字型：只改選取文字裡的英文與數字，中文仍用左邊的字型">' + opts(EN_FONTS, '') + '</select>';
     h += btn('egFontDown', 'minus', '字級調小（選取的字會保持選取，可以連按）')
        + '<select class="egrt-sel egrt-sel-size" data-eg-skip title="字級">'
        + '<option value="">字級</option>' + opts(DOC_SIZES, '') + '</select>'
@@ -328,7 +333,10 @@
          + '<i class="fa fa-plus"></i> AS</button>';
     h += btn('egHr', 'minus', '水平線');
     h += '<span class="egrt-sep"></span>'
-       + btn('egPageBreak', 'scissors', '在游標處分頁（游標後面的內容移到新的一頁）')
+       + btn('egHardBreak', 'level-down', '強制換頁（像 Word 的「段落前分頁」）：游標所在的那一段（例如「8. 相關文件」標題）'
+           + '固定從新的一頁開始，之後自動分頁、刪字回流都不會把它拉回上一頁。再按一次取消。'
+           + '有強制換頁的那一段右上角會標「強制換頁」')
+       + btn('egPageBreak', 'scissors', '在游標處分頁（游標後面的內容移到新的一頁；這一刀也是強制的，不會被自動回流拉回來）')
        + btn('egAddPage', 'file-o', '在最後面新增一頁')
        + btn('egAutoPage', 'magic', '自動分頁：把超出每一頁的內容往後推，直到每頁都放得下')
        + '<span class="egrt-sep"></span>'
@@ -881,6 +889,9 @@
       '.egrt-delpage.egrt-delarm{background:#DD5138;color:#fff;font-weight:bold;}',
       // 內容裡若還殘留分頁標記（舊資料），在編輯器裡標示出來
       '.egrt-page hr[style*="page-break"]{border-top:2px dashed #D6851F;position:relative;margin:18px 0;}',
+      '.egrt-main > [style*="page-break-before"]{position:relative;}',
+      '.egrt-main > [style*="page-break-before"]:before{content:"強制換頁";position:absolute;right:0;top:-1px;',
+      'font:10px/14px sans-serif;color:#fff;background:#D6851F;padding:0 5px;border-radius:0 0 0 3px;pointer-events:none;}',
       '.egrt-page hr[style*="page-break"]:after{content:"分頁";position:absolute;right:0;top:-9px;',
       'background:#F7E0BD;color:#8A5A2B;font-size:10px;line-height:14px;padding:0 5px;border-radius:3px;}',
       // 選取中的圖片＋右下角縮放把手
@@ -975,6 +986,7 @@
       if (!isDoc) return;
       syncLhRead();
       syncSizeRead();
+      syncFontRead();
       // 選單要跟著游標位置顯示「現在是什麼」，不然使用者永遠看到「正文」而不知道自己在標題裡
       var blkSel = host.querySelector('.egrt-sel-block');
       if (blkSel) {
@@ -995,10 +1007,83 @@
         if (b3) b3.style.opacity = inCell ? '1' : '.45';
       });
     }
+    /* ── 字型顯示與英數字型 ──────────────────────────────────────────────
+       工具列的字型下拉要跟著選取的文字顯示「現在用的是什麼」（使用者 2026-10-16：
+       選取文字時看不出是什麼字體）。讀的是瀏覽器算出來的 font-family（含從公版繼承來的），
+       不是只看那段文字自己有沒有設字型。選取範圍頭尾字型不同＝顯示「（混合）」。 */
+    function parseFams(str) {
+      var out = [], m, re = /"([^"]+)"|'([^']+)'|([^,]+)/g;
+      while ((m = re.exec(String(str || '')))) out.push(String(m[1] || m[2] || m[3]).trim());
+      return out;
+    }
+    var ZH_NAMES = DOC_FONTS.filter(function (f) { return /[一-鿿]/.test(f[0]); })
+                            .map(function (f) { return f[0].match(/^"([^"]+)"/)[1]; });
+    var EN_NAMES = EN_FONTS.filter(function (f) { return f[0]; }).map(function (f) { return f[0]; });
+    function famsAt(node) {
+      var el = node && (node.nodeType === 1 ? node : node.parentNode);
+      if (!el || !body || !body.contains(el)) return null;
+      return parseFams(w.getComputedStyle(el).fontFamily);
+    }
+    function pickName(fams, names) {
+      for (var i = 0; i < fams.length; i++) if (names.indexOf(fams[i]) >= 0) return fams[i];
+      return '';
+    }
+    function fontKey(fams) {
+      if (!fams) return null;
+      var zh = pickName(fams, ZH_NAMES);
+      // 英數字型：只算「排在中文字型前面」的西文字型（排在後面的只是後援，不是使用者指定的）
+      var en = '';
+      for (var i = 0; i < fams.length; i++) {
+        if (ZH_NAMES.indexOf(fams[i]) >= 0) break;
+        if (EN_NAMES.indexOf(fams[i]) >= 0) { en = fams[i]; break; }
+      }
+      return { zh: zh, en: en };
+    }
+    function zhValueOf(name) {
+      var v = '';
+      DOC_FONTS.forEach(function (f) { if (name && f[0].indexOf('"' + name + '"') === 0) v = f[0]; });
+      return v;
+    }
+    /** 中文字型堆疊＋英數字型 → 最後套用的 font-family */
+    function composeFont(zhStack, en) {
+      var base = zhStack || '"微軟正黑體","Microsoft JhengHei",sans-serif';
+      return en ? ('"' + en + '",' + base) : base;
+    }
+    function syncFontRead() {
+      var zhSel = host.querySelector('.egrt-sel-font'), enSel = host.querySelector('.egrt-sel-fonten');
+      if (!zhSel && !enSel) return;
+      var sel = w.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      var rg = sel.getRangeAt(0);
+      if (!body || !body.contains(rg.commonAncestorContainer)) return;
+      var a = fontKey(famsAt(rg.startContainer)), b = fontKey(famsAt(rg.endContainer));
+      if (!a) return;
+      var mixZh = !!(b && b.zh !== a.zh), mixEn = !!(b && b.en !== a.en);
+      function setSel(el, val, mix) {
+        if (!el) return;
+        var mo = el.querySelector('option[data-mix]');
+        if (mix) {
+          if (!mo) { mo = d.createElement('option'); mo.setAttribute('data-mix', '1'); mo.value = '__mix'; mo.textContent = '（混合）'; el.insertBefore(mo, el.firstChild); }
+          el.value = '__mix';
+        } else {
+          if (mo) mo.parentNode.removeChild(mo);
+          el.value = val;
+          if (el.value !== val) el.value = '';
+        }
+      }
+      setSel(zhSel, zhValueOf(a.zh), mixZh);
+      setSel(enSel, a.en, mixEn);
+      if (zhSel) zhSel.title = '中文字型：' + (mixZh ? '選取的文字有不同字型' : (a.zh || '預設（未指定）'));
+      if (enSel) enSel.title = '英數字型：' + (mixEn ? '選取的文字有不同字型' : (a.en || '同中文字型'));
+    }
+    function applyFontPair(zhStack, en) {
+      exec('fontName', composeFont(zhStack, en));
+      refreshState();
+    }
     function closePops() {
       Array.prototype.slice.call(host.querySelectorAll('.egrt-pop')).forEach(function (p) { p.classList.remove('open'); });
     }
-    function changed() { refreshState(); refreshCount(); if (opt.onChange) opt.onChange(); }
+    function changed() { refreshState(); refreshCount(); if (typeof uNote === 'function') uNote(); if (opt.onChange) opt.onChange(); }
 
     /* 記住游標位置。
        插入圖片／流程圖要先開跳窗，跳窗一開（尤其流程圖那個 Fabric 畫布）焦點就離開編輯區、
@@ -1289,6 +1374,7 @@
         if (cmd === 'egHr')        { insertHtml('<hr>'); return; }
         // 分頁＝真的長出新的一頁（游標所在區塊之後的內容整批移過去），不是插一條線
         if (cmd === 'egPageBreak') { splitAtCaret(); return; }
+        if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); w.alert(hb.msg); return; }
         if (cmd === 'egAddPage')   { api.addPage(); return; }
         if (cmd === 'egAutoPage')  { autoPaginate(); return; }
         if (cmd === 'egNumIndent') {
@@ -1568,7 +1654,24 @@
         if (!t.classList) return;
         if (t.classList.contains('egrt-sel-block')) { exec('formatBlock', '<' + t.value.toLowerCase() + '>'); }
         else if (t.classList.contains('egrt-sel-font')) {
-          if (t.value) exec('fontName', t.value);
+          if (t.value && t.value !== '__mix') {
+            var enS = host.querySelector('.egrt-sel-fonten');
+            applyFontPair(t.value, enS && enS.value !== '__mix' ? enS.value : '');
+          }
+        } else if (t.classList.contains('egrt-sel-fonten')) {
+          if (t.value === '__mix') return;
+          // 中文字型維持現狀：優先用目前選到的那個，沒有就退回這段文字原本的中文字型（含公版）
+          var zhS = host.querySelector('.egrt-sel-font');
+          var zhStack = (zhS && zhS.value && zhS.value !== '__mix') ? zhS.value : '';
+          if (!zhStack) {
+            var rg0 = w.getSelection().rangeCount ? w.getSelection().getRangeAt(0) : null;
+            var fams = rg0 ? famsAt(rg0.startContainer) : null;
+            if (fams) {
+              var keep = fams.filter(function (f) { return EN_NAMES.indexOf(f) < 0; });
+              zhStack = keep.map(function (f) { return /^(serif|sans-serif|monospace|cursive|fantasy)$/.test(f) ? f : '"' + f + '"'; }).join(',');
+            }
+          }
+          applyFontPair(zhStack, t.value);
         } else if (t.classList.contains('egrt-sel-size')) {
           applyFontSize(t.value);
         }
@@ -1737,6 +1840,7 @@
       refreshCount();
       markOverflow();
       reflowSoon();      // 打滿一頁就自動流到下一頁（刪字之後也會把下一頁的內容拉回來）
+      if (typeof uNote === 'function') uNote();
       if (opt.onChange) opt.onChange();
     }
 
@@ -2243,6 +2347,69 @@
       if (Math.abs(diff) > 1) a.sc.scrollTop += diff;
     }
 
+    /* ── 強制換頁（使用者 2026-10-16：像 Word 一樣，「8. 相關文件」要固定從新的一頁開始）──
+       標記就是區塊自己的 style="page-break-before:always"（本來就在清洗白名單裡，
+       存檔／重開／列印都認得，不必新增任何資料格式）。
+       回流有兩個動作要配合：①往後推時遇到有標記的區塊，它與後面的內容整批搬到下一頁；
+       ②往前拉時絕不把有標記的區塊拉回上一頁。沒有這兩條，手動分頁一按自動分頁就被拉回去
+       （「8.」每次載入都跳回上一頁就是這個原因）。 */
+    function isHard(el) {
+      return !!(el && el.nodeType === 1 && /(page-break-before\s*:\s*always|break-before\s*:\s*page)/i.test(el.getAttribute('style') || ''));
+    }
+    /* ⚠ 不能用 el.style.pageBreakBefore = 'always'：Chrome 會把它改寫成新語法
+       「break-before: page」存進 style 屬性，而清洗白名單只認舊的 page-break-before，
+       存檔時整個標記被剝掉（重開就不見）。一律直接改 style 屬性字串。 */
+    function setHard(el, on) {
+      var st = String(el.getAttribute('style') || '')
+        .replace(/(^|;)\s*(page-break-before|break-before)\s*:[^;]*/gi, '$1')
+        .replace(/^[\s;]+|[\s;]+$/g, '');
+      if (on) st = (st ? st + ';' : '') + 'page-break-before:always';
+      if (st) el.setAttribute('style', st); else el.removeAttribute('style');
+    }
+    function topBlockOf(node, sheet) {
+      var n = (node && node.nodeType === 3) ? node.parentNode : node;
+      while (n && n.parentNode !== sheet) n = n.parentNode;
+      return (n && n.parentNode === sheet) ? n : null;
+    }
+    /** 把有強制換頁標記、卻不在頁首的區塊連同後面的內容搬到新的一頁 */
+    function enforceHardBreaks(from) {
+      var guard = 0;
+      for (var i = Math.max(0, from || 0); i < sheets().length && guard < 500; i++) {
+        var s = sheets()[i], ks = blocksOf(s), k;
+        for (k = 1; k < ks.length; k++) if (isHard(ks[k])) break;
+        if (k >= ks.length) continue;
+        guard++;
+        var rest = ks.slice(k);
+        var nx = nextSheet(s, false);
+        // 下一頁的第一個區塊本身也是強制換頁的話，不可以把搬過去的內容塞在它前面（它會落在頁中間）→ 另開一頁
+        if (!nx || isHard(blocksOf(nx)[0])) {
+          var ssAll = sheets();
+          nx = mkSheet('', (i + 1 < ssAll.length) ? ssAll[i + 1] : null);
+          nx.innerHTML = '';
+        }
+        for (var m = rest.length - 1; m >= 0; m--) prependBlock(nx, rest[m]);
+      }
+    }
+    /** 工具列「強制換頁」：游標所在的那一段加上／拿掉標記 */
+    function toggleHardBreak() {
+      var selx = w.getSelection();
+      // 以「游標實際所在的那一頁」為準，不依賴 body（body 只在點擊／聚焦時才更新）
+      var s = null;
+      if (selx && selx.rangeCount) sheets().forEach(function (x) { if (!s && x.contains(selx.anchorNode)) s = x; });
+      if (!s) s = (body && body.classList && body.classList.contains('egrt-body')) ? body : sheets()[0];
+      var blk = (selx && selx.rangeCount) ? topBlockOf(selx.anchorNode, s) : null;
+      if (!blk) return { ok: false, msg: '請先把游標放在要「從新的一頁開始」的那一段（例如「8. 相關文件」標題）裡。' };
+      if (isHard(blk)) {
+        setHard(blk, false);
+        reflow(0); changed();
+        return { ok: true, msg: '已取消這一段的強制換頁（自動分頁時可能會回到上一頁）。' };
+      }
+      setHard(blk, true);
+      reflow(0); changed();
+      try { blk.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+      return { ok: true, msg: '這一段已設為強制換頁：固定從新的一頁開始，自動分頁不會把它拉回上一頁。' };
+    }
+
     var reflowing = false;
     /** @param {number} [from] 從第幾頁開始（打字時只從目前那一頁往後算，整份文件才不會每次都重排） */
     function reflow(from) {
@@ -2261,6 +2428,7 @@
       var start = Math.max(0, from || 0);
       if (merged >= 0) start = Math.min(start, merged);
 
+      enforceHardBreaks(start);
       var guard = 0, i = start;
       // ① 往後推：超出的區塊搬到下一頁；只剩一張長表格就改「拆列」
       for (; i < sheets().length && guard < 4000; i++) {
@@ -2282,6 +2450,7 @@
           var bk = blocksOf(b);
           if (!bk.length) break;
           var node = bk[0];
+          if (isHard(node)) break;                              // 強制換頁的區塊不拉回上一頁
           appendBlock(a, node);
           if (!fitsPage(a)) { prependBlock(b, node); break; }   // 放不下就還回去
         }
@@ -2434,6 +2603,8 @@
       if (move.length) {
         ns.innerHTML = '';
         move.forEach(function (k) { ns.appendChild(k); });
+        // 這一刀是人決定的分頁，要標成強制換頁，不然下一次自動分頁就把它拉回去了
+        if (move[0].nodeType === 1) setHard(move[0], true);
       }
       numberPages(); fitPages(); markOverflow(); changed();
       ns.focus();
@@ -2515,6 +2686,105 @@
     /** 目前全部內容（多頁模式＝各頁以分頁標記接起來） */
     function allHtml() { return isDoc ? joinPages() : body.innerHTML; }
 
+    /* ── 自己的復原／重做（使用者 2026-10-16：Ctrl+Z 返回不了幾次）──────────────
+       瀏覽器內建的復原堆疊只記得「它自己做的編輯」：我們的程式只要動過 DOM
+       （自動分頁搬區塊、頁首重寫、括號對齊、強制換頁、插入 AS 參照…）它就整個清掉或錯亂，
+       所以打了一段字再做任何一個程式動作，之前的就都退不回去了。
+       改成存「整份文件的快照」：每次改動停手 400ms 記一筆（上限 150 筆），
+       Ctrl+Z／Ctrl+Y（Ctrl+Shift+Z）在編輯區內一律由這裡處理。
+       快照只存這個編輯器的內容，不碰別的欄位的輸入框。 */
+    var U = { stack: [], redo: [], cur: null, timer: null, busy: false, max: 150 };
+    function uCaret() {
+      try {
+        var sel = w.getSelection();
+        if (!sel || !sel.rangeCount) return null;
+        var r = sel.getRangeAt(0), ss = sheets(), i;
+        for (i = 0; i < ss.length; i++) if (ss[i].contains(r.startContainer)) break;
+        if (i >= ss.length) return null;
+        var pre = d.createRange();
+        pre.selectNodeContents(ss[i]); pre.setEnd(r.startContainer, r.startOffset);
+        return { sheet: i, off: pre.toString().length };
+      } catch (e) { return null; }
+    }
+    function uSetCaret(c) {
+      if (!c) return;
+      try {
+        var ss = sheets(), sh = ss[Math.min(c.sheet, ss.length - 1)];
+        if (!sh) return;
+        var wk = d.createTreeWalker(sh, NodeFilter.SHOW_TEXT, null), n, acc = 0, tgt = null, toff = 0;
+        while ((n = wk.nextNode())) {
+          var L = n.nodeValue.length;
+          if (acc + L >= c.off) { tgt = n; toff = c.off - acc; break; }
+          acc += L;
+        }
+        var rg = d.createRange();
+        if (tgt) { rg.setStart(tgt, toff); } else { rg.selectNodeContents(sh); rg.collapse(false); }
+        rg.collapse(true);
+        try { sh.focus({ preventScroll: true }); } catch (e1) { sh.focus(); }
+        body = sh;
+        var sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+      } catch (e) {}
+    }
+    function uSnap() { return { html: allHtml(), caret: uCaret() }; }
+    function uNote() {
+      if (!isDoc || U.busy) return;
+      if (U.timer) clearTimeout(U.timer);
+      U.timer = setTimeout(uCommit, 400);
+    }
+    function uCommit() {
+      if (U.timer) { clearTimeout(U.timer); U.timer = null; }
+      if (!isDoc || U.busy) return;
+      var n = uSnap();
+      if (!U.cur) { U.cur = n; return; }
+      if (n.html === U.cur.html) { return; }
+      U.stack.push(U.cur);
+      if (U.stack.length > U.max) U.stack.shift();
+      U.cur = n;
+      U.redo = [];
+    }
+    function uApply(st) {
+      U.busy = true;
+      var scr = saveScrolls();
+      var prevIdx = Math.max(0, sheets().indexOf(body));
+      try {
+        renderPages(st.html);
+        clearImgSel(); refreshCount(); refreshState();
+        // 起點快照沒有游標資訊：焦點一定要留在編輯區，否則下一次 Ctrl+Z／Ctrl+Y 的 keydown
+        // 落在 body 上，編輯器收不到（連按復原會退到一半就沒反應）
+        uSetCaret(st.caret || { sheet: prevIdx, off: 0 });
+      } finally {
+        U.busy = false;
+        restoreScrolls(scr);
+        setTimeout(function () { restoreScrolls(scr); }, 0);
+        setTimeout(function () { restoreScrolls(scr); }, 150);
+      }
+      if (opt.onChange) opt.onChange();
+    }
+    function uUndo() {
+      uCommit();                                  // 先把還沒記下來的最新幾個字記進去，才退得回「打字之前」
+      if (!U.stack.length) return false;
+      U.redo.push(U.cur);
+      U.cur = U.stack.pop();
+      uApply(U.cur);
+      return true;
+    }
+    function uRedo() {
+      uCommit();
+      if (!U.redo.length) return false;
+      U.stack.push(U.cur);
+      U.cur = U.redo.pop();
+      uApply(U.cur);
+      return true;
+    }
+    host.addEventListener('keydown', function (e) {
+      if (!isDoc || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      var t = e.target;
+      if (!t || !t.closest || !t.closest('[contenteditable="true"]') || !host.contains(t)) return;
+      var k = String(e.key || '').toLowerCase();
+      if (k === 'z' && !e.shiftKey)              { e.preventDefault(); uUndo(); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); uRedo(); }
+    }, true);
+
     var api = {
       host: host, profile: prof,
       get body() { return body; },     // 目前作用中的那一頁（會隨焦點改變）
@@ -2526,6 +2796,8 @@
         else { body.innerHTML = c2; hydrate(); }
         clearImgSel();
         refreshCount(); refreshState();
+        // 整份換掉內容（載入／匯入）＝新的起點，不能讓 Ctrl+Z 退回「上一份文件」
+        if (isDoc) { U.stack = []; U.redo = []; U.cur = null; if (U.timer) { clearTimeout(U.timer); U.timer = null; } setTimeout(function () { if (!U.cur) U.cur = uSnap(); }, 700); }
       },
       text: function () { return toText(allHtml()); },
       focus: function () { if (body) body.focus(); },
@@ -2575,6 +2847,8 @@
     };
     host._egrt = api;
     if (isDoc) { numberPages(); fitPages(); api.setViewMode(viewMode); }
+    // 復原的起點：內容載入完（含第一次回流）之後的樣子，之後的每一步都退得回這裡
+    setTimeout(function () { if (!U.cur) U.cur = uSnap(); }, 700);
     refreshCount();
     return api;
   }

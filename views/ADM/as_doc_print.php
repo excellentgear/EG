@@ -146,7 +146,10 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
    這裡只加「列印特有」的規則，不可以再寫一份排版 */
 .adt-page thead { display: table-header-group; }   /* 表頭跨頁重複 */
 .adt-page tr { page-break-inside: avoid; }         /* 資料列不可被切成上下兩半 */
-.adt-page hr[style*="page-break"] { display: none; }  /* 頁界標記本身不印（頁已經切開了） */
+.adt-page hr[style*="page-break"] { display: none; }
+/* 編輯器的「強制換頁」標記（區塊的 page-break-before:always）只在編輯時用來決定這一頁從哪開始；
+   列印時頁已經切好了，再讓瀏覽器照字面斷一次，頁首就會多出一張空白頁 */
+.adt-page .adt-body [style*="page-break-before"] { page-break-before: auto !important; break-before: auto !important; }  /* 頁界標記本身不印（頁已經切開了） */
 /* 一個 .adt-page ＝ 一張紙：高度固定成可印區、強制換頁，
    這樣編輯器上看到的一頁就是印出來的一頁（不會再出現「下方被切得亂七八糟」）。 */
 .adt-page { page-break-after: always; break-after: page;
