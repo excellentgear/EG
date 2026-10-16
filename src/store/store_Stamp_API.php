@@ -120,6 +120,35 @@ case 'meta': {
           'as_doc'=>$asDoc, 'as_doc_no'=>eg_asdoc_no($asDoc), 'as_docs'=>$canManage ? eg_asdoc_list($db) : []]);
 }
 
+// ── 需留意的人員（新進沒登記圖章／復職後待人工建立）──
+// 商業邏輯一律在 src/common/stamp_lib.php，這裡只做權限與參數守門。
+// 使用者 2026-10-16 要求「有新進人員時自動提示建立圖章」：既有做法只有員工管理存檔後
+// confirm 問一次，按掉就沒有第二次提醒，所以改成在本頁常駐列出。
+case 'attention': {
+    needManage($canManage);
+    jout(['ok'=>true, 'rows'=>eg_stamp_attention_rows($db), 'no_need'=>eg_stamp_no_need_list($db)]);
+}
+
+case 'no_need_set': {
+    needManage($canManage);
+    $tuid = (int)($_POST['user_id'] ?? 0);
+    if ($tuid <= 0) jerr('請指定人員');
+    $st = $db->prepare("SELECT 1 FROM `user` WHERE id = ?");
+    $st->execute([$tuid]);
+    if (!$st->fetchColumn()) jerr('人員不存在');
+    $on = !empty($_POST['on']);
+    eg_stamp_no_need_set($db, $tuid, $on, (string)($_POST['note'] ?? ''), $cname);
+    jout(['ok'=>true, 'rows'=>eg_stamp_attention_rows($db), 'no_need'=>eg_stamp_no_need_list($db)]);
+}
+
+// 復職後待人工建立者：把原作廢登記的內容回傳，供前端直接帶進「新增登記」跳窗
+case 'rehire_plan': {
+    needManage($canManage);
+    $tuid = (int)($_GET['user_id'] ?? 0);
+    if ($tuid <= 0) jerr('請指定人員');
+    jout(['ok'=>true, 'plan'=>eg_stamp_rehire_plan($db, $tuid)]);
+}
+
 // ── 印章種類主檔維護 ──
 // bind_targets：逗號分隔 user/dept/position 子集；空字串=不綁定(不限制，新增登記三種持有對象皆可選)
 case 'type_save': {

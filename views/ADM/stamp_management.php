@@ -105,6 +105,19 @@ try {
     <button class="btn btn-primary btn-sm" id="btnAdd"><i class="fa fa-plus"></i> 登記核發</button>
     <div class="text-muted" style="font-size:12px;margin-top:4px;">同一持有對象＋同一「模板」，同時只能有一筆「使用中」；同種類不同模板可同時持有。各種類可綁定的持有對象請按右上「設定」維護。</div>
   </div>
+  <!-- 需留意的人員（新進還沒登記圖章／復職後待人工建立）。使用者 2026-10-16 要求常駐提示：
+       原本只有員工管理存檔後 confirm 問一次，按掉就沒有第二次提醒。沒有要處理的就整區不出現。 -->
+  <div id="attnBar" style="display:none;margin-bottom:10px;padding:8px 10px;background:#FFF3DF;
+       border:1px solid #e8d9b8;border-left:4px solid #F0A24B;border-radius:4px;">
+    <strong style="color:#8a5a1a;"><i class="fa fa-exclamation-triangle"></i>
+      需留意：<span id="attnCnt">0</span> 位人員應該登記圖章卻還沒有</strong>
+    <button class="btn btn-default btn-xs" id="btnAttnToggle" style="margin-left:8px;">展開／收合</button>
+    <button class="btn btn-default btn-xs" id="btnAttnNoNeed" style="margin-left:4px;">已標記為不需要圖章的人員</button>
+    <div id="attnBody" style="margin-top:8px;display:none;"></div>
+    <div class="text-muted" style="font-size:11.5px;margin-top:4px;">
+      不需要圖章的人員（例如不會在單據上簽章的現場人員）請按該列「不需要」，之後就不再出現在這裡，
+      避免這個提示變成每天看到卻沒人處理的雜訊。</div>
+  </div>
   <div id="batchDateBar" style="display:none;margin-bottom:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
     <strong style="color:#7a4e17;"><i class="fa fa-calendar"></i> 批次改核發日期：</strong>
     已勾選 <span id="batchDateCnt">0</span> 筆（僅本頁，勾選框在最左欄）
@@ -419,6 +432,39 @@ try {
       <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
     </ol>
 
+    <h5>上方橘色「需留意」提示區（2026-10-16）</h5>
+    <p>系統自動列出<strong>應該要有章卻還沒有</strong>的人，處理完就自動消失（沒有要處理的整區不出現）。兩種來源：</p>
+    <table class="list">
+      <tr><th style="width:120px;">情形</th><th>說明</th></tr>
+      <tr><td>在職沒有圖章</td>
+          <td>在職人員目前<b>完全沒有任何使用中的圖章登記</b>。到職 90 天內會標「<b>新進</b>」並排在最前面
+              ——使用者要求「有新進人員時自動提示建立圖章」；原本只有在員工管理存檔後跳一次詢問，按掉就沒有第二次提醒。</td></tr>
+      <tr><td>復職待建立</td>
+          <td>此人<b>已復職</b>，但離職時被系統自動作廢的章<b>沒有自動恢復</b>（多半是因為部門與原本不同）。</td></tr>
+    </table>
+    <p>按該列「<b>建立登記</b>」會把人員直接帶進上方的新增登記列（不是另開一套介面），選好模板與日期即可核發。
+       確定不需要章的人（例如不會在單據上簽章的現場人員）請按「<b>不需要</b>」，之後就不再出現在這裡
+       ——<b>不給這個出口的話，這個提示會變成每天看到卻沒人處理的雜訊</b>。要取消標記，按提示區的
+       「已標記為不需要圖章」那顆按鈕。</p>
+
+    <h5>離職與復職時圖章會自動怎麼變</h5>
+    <table class="list">
+      <tr><th style="width:120px;">事件</th><th>系統做什麼</th></tr>
+      <tr><td>離職</td>
+          <td>此人名下<b>所有使用中</b>的圖章登記自動改為作廢，作廢日＝離職日，並記下「因離職作廢」。
+              課室章／職稱章沒有掛在特定人身上，不受影響。</td></tr>
+      <tr><td>復職<br>（部門相同）</td>
+          <td><b>自動產生新的核發登記</b>，核發日＝復職日；原作廢那一列保留不動，備註會寫出是從哪一筆重新核發來的。
+              <b>不是把原本那列改回使用中</b>——離職那段期間章確實是作廢的，保留原列才追溯得出來。</td></tr>
+      <tr><td>復職<br>（部門不同）</td>
+          <td><b>只提示、不自動建立。</b>模板「人員簽章(長方)」的章面是「部門 姓名」，部門換了章面就是錯的；
+              個人章比「離職當時的主職部門」與「現在的主職部門」，部門人員章則看此人是否仍屬於原本綁定的那個部門（含兼任）。</td></tr>
+      <tr><td>其他只提示的情形</td>
+          <td>原模板或原種類<b>已停用</b>（會建出畫不出來的章）、復職後<b>還沒設定部門職稱</b>（判斷不了部門是否相同）。</td></tr>
+    </table>
+    <p><b>人工作廢的圖章永遠不會因為復職被復活</b>——那是人判斷過要停用的，不該被系統偷偷接回來。
+       「離職當時的部門」是依離職日回推異動紀錄（員工管理→異動紀錄）；沒補登過異動紀錄的人會回現況，等於視同沒變。</p>
+
     <h5>列印版的「新增／作廢」是怎麼判定的</h5>
     <p>兩個欄位<strong>不是另外填的，由資料自動推導</strong>（所以不會有「打勾跟實際狀態對不起來」的情形）：</p>
     <table class="list">
@@ -484,6 +530,7 @@ try {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script>window.__ownCompany = <?= json_encode($ownCompany, JSON_UNESCAPED_UNICODE) ?>;</script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js'); ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js'); ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js'); ?>"></script>
@@ -606,9 +653,87 @@ function loadMeta(){
     AS_DOCS=m.as_docs||[]; AS_DOC=m.as_doc||null; renderAsDoc();
     if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); $('.reg-chk-col').show(); $('#batchDateBar').show(); $('#btnCheckIssueDate').show(); }
     if(m.canBatch){ $('#btnBatchAdd').show(); }
+    if(canManage) loadAttention();
     loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
   });
 }
+
+// ── 需留意的人員（新進沒圖章／復職待人工建立）──
+// 判定一律在後端 eg_stamp_attention_rows()，這裡只負責畫與動作（禁止在前端再寫一套判定）
+let ATTN=[], ATTN_NONEED=[];
+function loadAttention(){
+  $.getJSON(API+'?action=attention',r=>{
+    if(!r.ok) return;
+    ATTN=r.rows||[]; ATTN_NONEED=r.no_need||[];
+    $('#attnCnt').text(new Set(ATTN.map(x=>x.user_id)).size);
+    $('#attnBar').toggle(ATTN.length>0 || ATTN_NONEED.length>0);
+    $('#btnAttnNoNeed').toggle(ATTN_NONEED.length>0).text('已標記為不需要圖章：'+ATTN_NONEED.length+' 人');
+    renderAttention();
+  });
+}
+function renderAttention(){
+  if(!ATTN.length){
+    $('#attnBody').html('<div class="text-muted">目前沒有需要處理的人員。</div>');
+    return;
+  }
+  let h='<table class="table table-condensed" style="font-size:12.5px;margin-bottom:0;background:#fff;"><thead><tr>'
+      + '<th>人員</th><th>部門／職稱</th><th>情形</th><th style="width:170px;">動作</th></tr></thead><tbody>';
+  ATTN.forEach(function(x){
+    h+='<tr'+(x.is_new?' style="background:#FFF9EC;"':'')+'>'
+      + '<td><b>'+esc(x.name)+'</b>'+(x.is_new?' <span class="label label-warning" style="line-height:14px;">新進</span>':'')
+      + '<div class="text-muted">'+esc(x.user_id)+(x.hire_date?'　到職 '+egFmtDate(x.hire_date):'')+'</div></td>'
+      + '<td>'+esc(x.dept_name||'')+(x.pos_name?' / '+esc(x.pos_name):'')+'</td>'
+      + '<td>'+esc(x.text)+'</td>'
+      + '<td><button class="btn btn-primary btn-xs attn-go" data-uid="'+x.user_id+'" data-name="'+esc(x.name)+'">建立登記</button> '
+      + (x.kind==='no_stamp'
+          ? '<button class="btn btn-default btn-xs attn-noneed" data-uid="'+x.user_id+'" data-name="'+esc(x.name)+'">不需要</button>'
+          : '')
+      + '</td></tr>';
+  });
+  $('#attnBody').html(h+'</tbody></table>');
+}
+$('#btnAttnToggle').on('click',()=>$('#attnBody').slideToggle(120));
+// 「建立登記」＝把人員帶進上方新增登記列並聚焦，不自己另開一套新增 UI（鐵律4）
+$(document).on('click','.attn-go',function(){
+  const uid=$(this).data('uid');
+  $('#addKind').val('user').trigger('change');
+  setTimeout(function(){ $('#addUser').val(String(uid)).trigger('change');
+    $('#addBar')[0].scrollIntoView({block:'center'}); $('#addType').focus(); },120);
+});
+$(document).on('click','.attn-noneed',function(){
+  const uid=$(this).data('uid'), nm=$(this).data('name');
+  if(!confirm('把「'+nm+'」標記為不需要圖章？\n\n之後這個人就不會再出現在上方提示區。\n'
+            + '（可按「已標記為不需要圖章」那顆按鈕隨時取消）')) return;
+  $.post(API,{action:'no_need_set',user_id:uid,on:1},r=>{
+    if(!r.ok){alert(r.error||'操作失敗');return;}
+    ATTN=r.rows||[]; ATTN_NONEED=r.no_need||[];
+    $('#attnCnt').text(new Set(ATTN.map(x=>x.user_id)).size);
+    $('#btnAttnNoNeed').toggle(ATTN_NONEED.length>0).text('已標記為不需要圖章：'+ATTN_NONEED.length+' 人');
+    renderAttention();
+  },'json');
+});
+$('#btnAttnNoNeed').on('click',function(){
+  if(!ATTN_NONEED.length){ alert('目前沒有被標記為不需要圖章的人員。'); return; }
+  let h='已標記為「不需要圖章」的人員：\n\n';
+  ATTN_NONEED.forEach(function(x,i){
+    h+=(i+1)+'. '+(x.dept_name||'')+(x.pos_name?' '+x.pos_name:'')+' '+x.name
+      +(String(x.state)!=='1'?'（目前非在職）':'')+'\n';
+  });
+  h+='\n要取消哪一位的標記？請輸入上面的編號（直接按確定＝不取消）';
+  const ans=prompt(h,'');
+  const i=parseInt(ans,10);
+  if(!i || i<1 || i>ATTN_NONEED.length) return;
+  const t=ATTN_NONEED[i-1];
+  $.post(API,{action:'no_need_set',user_id:t.user_id,on:0},r=>{
+    if(!r.ok){alert(r.error||'操作失敗');return;}
+    ATTN=r.rows||[]; ATTN_NONEED=r.no_need||[];
+    $('#attnCnt').text(new Set(ATTN.map(x=>x.user_id)).size);
+    $('#attnBar').toggle(ATTN.length>0 || ATTN_NONEED.length>0);
+    $('#btnAttnNoNeed').toggle(ATTN_NONEED.length>0).text('已標記為不需要圖章：'+ATTN_NONEED.length+' 人');
+    renderAttention();
+    alert('已取消「'+t.name+'」的標記，他會重新出現在提示區。');
+  },'json');
+});
 
 // ── 內頁頁籤（清冊/模板）與設定跳窗分頁 ──
 $('.warm-tabs [data-tab]').on('click',function(){
@@ -810,6 +935,7 @@ $('#btnAdd').on('click',function(){
     if(!r.ok){alert(r.error||'登記失敗');return;}
     $('#addUser,#addDept,#addDeptUser,#addPosition').val(''); $('#addNote').val(''); $('#addDate').val(today());
     populateDeptUserOptions(); loadList(1);
+    if(canManage) loadAttention();   // 剛登記好的人要從上方提示區消失
   },'json');
 });
 $('#regBody').on('click','.edit-btn',function(){
@@ -906,12 +1032,14 @@ $('#btnRevSave').on('click',function(){
   $.post(API+'?action=revoke',{id:curRevId,revoke_date:d},r=>{
     if(!r.ok){alert(r.error||'停用失敗');return;}
     $('#revModal').modal('hide'); loadList();
+    if(canManage) loadAttention();   // 停用後此人可能變成完全沒有圖章，要重新出現在提示區
   },'json');
 });
 $('#regBody').on('click','.del-btn',function(){
   const id=$(this).data('id'), name=$(this).data('name');
   if(!confirm(`確定刪除「${name}」這筆登記？（僅供誤登記時使用，刪除不可復原）`)) return;
-  $.post(API+'?action=delete',{id},r=>{ if(!r.ok){alert(r.error||'刪除失敗');return;} loadList(); },'json');
+  $.post(API+'?action=delete',{id},r=>{ if(!r.ok){alert(r.error||'刪除失敗');return;} loadList();
+    if(canManage) loadAttention(); },'json');
 });
 
 // ── CSV / 列印 ──

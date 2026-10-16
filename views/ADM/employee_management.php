@@ -719,8 +719,15 @@ if ($hrUserPerm === 'R') {
                                 「管理者設定 → 特休年資」決定（維持現狀／扣除離職期間／自復職日重新計算，<b>預設維持現狀</b>）；
                                 年資被調整過的人，本頁「特休天數」欄下方會寫出是以哪一天起算。</li>
                             <li><b>離職自動作廢圖章</b>：一旦離職日成立（人事直接把狀態改成「離職」，或預定離職日到期由系統自動轉離職），此人名下所有「使用中」的圖章登記會<b>自動改為作廢</b>、作廢日＝離職日，並在存檔後的訊息裡告知作廢了幾筆。課室章／職稱章沒有掛在特定人身上，不受影響。</li>
+                            <li><b>復職自動恢復圖章</b>（2026-10-16）：在職狀態從離職／留停改回「在職」存檔時，當初<b>因離職被系統自動作廢</b>的圖章，
+                                只要<b>部門與原本相同</b>就自動產生新的核發登記（核發日＝復職日，原作廢那一列保留不動以便追溯）。
+                                <b>部門不同就只提示、不自動建立</b>——模板「人員簽章(長方)」的章面是「部門 姓名」，部門換了章面就是錯的；
+                                模板或種類已停用、復職後還沒設定部門職稱也一律只提示。<b>人工作廢的圖章永遠不會被復職復活</b>（那是人判斷過要停用的）。
+                                存檔後會列出自動核發了哪幾筆、哪幾筆要人工建立；沒處理的會常駐列在「圖章管理」頁上方的提示區，不會漏掉。</li>
                             <li><b>部門／職位異動</b>：若此人原本掛在某個部門下的圖章（部門人員章），因為這次異動不再屬於那個部門，存檔後會跳出提示列出是哪幾筆，並可直接開啟「圖章管理」頁處理（改綁新部門或直接停用）——<b>系統不會自動改動或停用</b>，換部門不代表一定要換章，由人判斷比較保險。</li>
-                            <li><b>新進人員</b>：新增員工存檔成功後，會提示是否要順手開啟「圖章管理」頁為此人登記所需圖章。</li>
+                            <li><b>新進人員</b>：新增員工存檔成功後，會提示是否要順手開啟「圖章管理」頁為此人登記所需圖章。
+                                <b>按取消也不會漏掉</b>——「圖章管理」頁上方會<b>常駐</b>列出「在職卻還沒有任何使用中圖章」的人（到職 90 天內標「新進」排最前面），
+                                處理完自動消失；確定不需要章的人（例如不會在單據上簽章的現場人員）可在那裡按「不需要」，之後就不再提示。</li>
                             <li><b>特殊帳號、最高權限帳號不可登記圖章</b>（在職狀態選「特殊帳號」或「最高權限帳號」者）：這兩種帳號不代表一個實際會在單據上簽章的人，圖章管理頁會直接擋下為其新增登記。</li>
                         </ul>
 
@@ -1492,9 +1499,37 @@ $(document).ready(function() {
 
     // ②新進人員：提醒順手去登記所需圖章
     function notifyStampSetup(n) {
-        if (confirm('「' + n.name + '」已建立完成。\n\n是否現在開啟「圖章管理」頁為此人登記所需圖章？')) {
+        if (confirm('「' + n.name + '」已建立完成。\n\n是否現在開啟「圖章管理」頁為此人登記所需圖章？\n'
+                  + '（按取消也沒關係：圖章管理頁上方會常駐列出「在職卻還沒有任何使用中圖章」的人，不會漏掉）')) {
             window.open(stampLinkFor(n.name), '_blank');
         }
+    }
+
+    // ③復職：離職時被系統作廢的圖章，部門相同者已自動重新核發；部門不同等情形要人工建立（2026-10-16）
+    function notifyStampRehire(n) {
+        var lines = ['「' + n.name + '」已復職。'];
+        if (n.created && n.created.length) {
+            lines.push('', '● 已自動重新核發 ' + n.created.length + ' 筆圖章登記（核發日＝復職日）：');
+            n.created.forEach(function (x) {
+                lines.push('　・' + (x.type_name || '圖章')
+                         + (x.tpl_name ? '／' + x.tpl_name : '')
+                         + (x.dept_name ? '（' + x.dept_name + '）' : '')
+                         + '　原登記 #' + x.from_id + ' → 新登記 #' + x.new_id);
+            });
+        }
+        if (n.manual && n.manual.length) {
+            lines.push('', '● 下列 ' + n.manual.length + ' 筆沒有自動恢復，需要人工建立：');
+            n.manual.forEach(function (x) {
+                lines.push('　・' + (x.type_name || '圖章')
+                         + (x.tpl_name ? '／' + x.tpl_name : '')
+                         + (x.dept_name ? '（' + x.dept_name + '）' : '')
+                         + '　→ ' + x.reason_text);
+            });
+            lines.push('', '要現在開啟「圖章管理」頁建立嗎？（未處理的也會常駐列在該頁上方的提示區）');
+            if (confirm(lines.join('\n'))) { window.open(stampLinkFor(n.name), '_blank'); return; }
+            return;
+        }
+        if (n.created && n.created.length) alert(lines.join('\n'));
     }
 
     function submitEmployee(action, data, confirmed) {
@@ -1509,6 +1544,8 @@ $(document).ready(function() {
                 if (response.stamp_dept_notice) notifyStampDeptChange(response.stamp_dept_notice);
                 // 新進人員：提醒去登記圖章
                 if (response.stamp_setup_notice) notifyStampSetup(response.stamp_setup_notice);
+                // 復職：自動重新核發的結果＋要人工建立的清單
+                if (response.stamp_rehire_notice) notifyStampRehire(response.stamp_rehire_notice);
             } else if (response.status === 'need_confirm') {
                 if (confirm(buildDelegateImpactMsg(response.affected))) {
                     submitEmployee(action, data, true); // 確認後帶旗標重送

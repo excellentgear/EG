@@ -459,6 +459,7 @@ function addOrUpdateEmployee($mode) {
 
         // 4. 在職狀態歷程（user_status_history）
         $stampRevokedCount = 0;   // 本次若觸發離職，順帶作廢的圖章筆數（存進 permission_notice 供前端提示）
+        $stampRehire = null;      // 本次若觸發復職，圖章自動重新核發／待人工建立的結果（2026-10-16）
         if ($mode === 'update') {
             $newSt = (int)$state;
             $oldSt = ($old_state === false) ? null : (int)$old_state;
@@ -485,9 +486,17 @@ function addOrUpdateEmployee($mode) {
                 $stampRevokedCount = eg_stamp_auto_revoke_for_leave($db, (int)$id, $resignDate, (string)($_SESSION['user_cname'] ?? 'system'));
             } elseif ($oldSt !== null && in_array($oldSt, [0, 2, 3], true) && $newSt === 1) {
                 // 復職／恢復在職也留一筆，時間軸才接得起來（日後補歷史資料要靠它）
+                // 日期取 DB 的 CURDATE()：**本站 PHP 是 UTC、MySQL 是本地時間**，用 date('Y-m-d')
+                // 在台灣時間 08:00 前會寫成前一天（既有問題，順手修掉；圖章核發日也用同一個值才一致）
+                $rehireDate = (string)$db->query("SELECT CURDATE()")->fetchColumn();
                 $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, 1, ?, NULL, ?)")
-                   ->execute([$id, date('Y-m-d'),
+                   ->execute([$id, $rehireDate,
                               $oldSt === 0 ? '復職' : '恢復在職（原：' . ($oldSt === 2 ? '留職停薪' : '育嬰留停') . '）']);
+                // 圖章連動（2026-10-16 使用者要求）：離職時被系統自動作廢的圖章，部門與原本相同者
+                // 自動產生新的核發登記（核發日＝復職日）；部門不同／模板停用等情形只提示、不自動建立。
+                // 與狀態變更同一交易；真的失敗時不會讓「復職」存不進去（函式內已 try/catch 轉成人工提示）。
+                $stampRehire = eg_stamp_rehire_on_reinstate($db, (int)$id, $rehireDate,
+                                   (string)($_SESSION['user_cname'] ?? 'system'));
             }
         }
 
@@ -536,6 +545,14 @@ function addOrUpdateEmployee($mode) {
         }
         // ②新進人員：提醒人事順手到圖章管理頁登記所需圖章（沒有硬性檢查，只是不要漏做）；
         //   特殊帳號／最高權限帳號本來就不可設定圖章（見下方 EG_STAMP_BLOCKED_HOLDER_STATES），不提醒。
+        // ③復職：把自動重新核發的結果與「要人工建立」的清單一起回報（2026-10-16 使用者要求）
+        if ($stampRehire !== null
+            && (!empty($stampRehire['created']) || !empty($stampRehire['manual']))) {
+            $resp['stamp_rehire_notice'] = [
+                'user_id' => (int)$id, 'name' => $user_cname,
+                'created' => $stampRehire['created'], 'manual' => $stampRehire['manual'],
+            ];
+        }
         if ($mode === 'add' && !in_array((int)$state, EG_STAMP_BLOCKED_HOLDER_STATES, true)) {
             $resp['stamp_setup_notice'] = ['user_id' => (int)$id, 'name' => $user_cname];
         }
