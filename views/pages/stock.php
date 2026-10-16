@@ -4510,7 +4510,9 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <div class="right_col" role="main">
 
 <!-- 頁頭 -->
-<div class="pg-header" style="flex-wrap:wrap;gap:8px;">
+<div class="pg-header" style="flex-wrap:wrap;gap:8px;position:relative;">
+  <?php $__stkRoles = stock_user_role_labels($pdo, $userId); ?>
+  <span id="stk-my-roles" title="目前登入者在庫存管理的角色（由角色決定可用功能）" style="position:absolute;top:-10px;right:16px;font-size:12px;font-weight:600;padding:2px 12px;border-radius:12px;background:#f5ead9;color:#7a4a18;border:1px solid #e3d4b6;line-height:18px;white-space:nowrap;"><i class="fa fa-user-circle-o"></i> <?= htmlspecialchars(($CURRENT_USER_CNAME ?? '') !== '' ? $CURRENT_USER_CNAME : ($_SESSION['userName'] ?? '')) ?>｜角色：<?= $__stkRoles ? htmlspecialchars(implode('、', $__stkRoles)) : '（尚未指派）' ?></span>
   <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
     <h3 style="margin:0;"><i class="fa fa-cubes" style="color:var(--accent);margin-right:8px;"></i>庫存管理</h3>
     <!-- 成本/售額內嵌在標題列 -->
