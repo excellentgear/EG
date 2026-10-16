@@ -145,6 +145,7 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN recheck_note TEXT NULL COMMENT '重新評估原因（年度中途因重大變化重新評估時填寫，AS9100D 6.1 的再評估紀錄）'",
         "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
+        "ALTER TABLE rm_item ADD COLUMN resources TEXT NULL COMMENT '所需資源（人員、設施、工作環境、方法；2-GM-05 6.1.5.3 管理審查要對資源需求做決議）'",
         "ALTER TABLE rm_doc ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
         "ALTER TABLE rm_doc ADD COLUMN draft_at DATETIME NULL COMMENT '草稿產生時間'",
     ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }

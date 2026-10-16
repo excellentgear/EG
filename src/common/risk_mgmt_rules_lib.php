@@ -96,6 +96,13 @@ const RM_RULE_CATS = [
         'measures' => ['管理課每年盤點適用的環保與減碳法規及客戶的環境要求，指定負責部門並列入溝通管制表', '生產課與倉管組依法規處理廢棄物並保存處理紀錄'],
         'metric' => '環保與減碳相關的措施追蹤如期結案、沒有逾期未結案',
         'kpi' => [], 'trk_kw' => ['環保', '減碳', '廢棄物', '碳'], 'trk_kind' => ''],
+    // 職安衛與作業安全：2-GM-05 6.1.4.9 明列「品質、安全、環境」，建議清單一定會列出
+    'safety' => ['label' => '職業安全衛生／作業安全', 'ro' => 'risk', 'sev' => 0.67,
+        'kw' => ['作業安全', '職業安全', '工安', '職災', '職業災害', '安全衛生', '安全的工作環境'],
+        'impact' => '加工現場（砂輪、刀具、天車、搬運）若發生職業災害，會造成人員傷亡、停工並可能受政府處分，影響交期與客戶信任。',
+        'measures' => ['生產課與管理課每年訂定職安衛教育訓練並確實執行，新進與換線人員上線前完成安全說明', '各課主管於現場巡檢時確認防護裝置與個人防護具齊備，發現缺失當場改善'],
+        'metric' => '職安衛教育訓練與現場巡檢的措施追蹤如期結案、沒有逾期未結案；全年無停工以上的職業災害',
+        'kpi' => [], 'trk_kw' => ['職安', '安全', '巡檢', '防護'], 'trk_kind' => ''],
     'legal' => ['label' => '法規遵循', 'ro' => 'risk', 'sev' => 0.67,
         'kw' => ['法定', '申報', '法規', '環保', '消防', '職安', '勞工', '稽查', '政府'],
         'impact' => '未依法定期限申報或檢修會受處分，嚴重時影響營運與客戶稽核。',
@@ -129,6 +136,25 @@ const RM_RULE_CATS = [
         'measures' => ['指定負責人並訂定因應措施與完成期限，納入溝通管理措施追蹤'],
         'metric' => '依措施追蹤項目如期結案確認',
         'kpi' => [], 'trk_kw' => [], 'trk_kind' => ''],
+];
+
+/** 各類別的「所需資源」（2-GM-05 6.1.5.3：人員、設施、工作環境、方法…），產生因應措施時一併帶入 */
+const RM_RULE_RESOURCES = [
+    'delivery' => '人員：生管組排程與跟催人力；設施：關鍵製程設備與工時；方法：每週製程負荷檢視',
+    'supplier' => '人員：生管組跟催、採購組評估備援廠商；方法：廠商評鑑與備援廠商評估',
+    'quality' => '人員：品管課檢驗與矯正人力；設施：量測設備；方法：異常矯正處理單流程',
+    'concentration' => '人員：業務課開發客源與客戶溝通；方法：每季與主要客戶溝通訂單預測',
+    'new_customer' => '人員：業務課；方法：首次出貨 30 天內溝通並留存溝通記錄',
+    'inquiry' => '人員：技術課、生產課、生管組、品管課的評估人力；方法：產品開發評估表與 PFMEA',
+    'existing_customer' => '人員：業務課；設施與產能：預留稽核製程（齒研、插齒）產能',
+    'climate' => '設施：庫房與廠區防水設施；人員：倉管組、生產課檢查人力；工作環境：高溫與限電時的排程與現場因應',
+    'environment' => '人員：管理課法規盤點人力；設施：廢棄物處理與暫存設施；方法：適用法規與客戶環境要求清單',
+    'safety' => '人員：管理課職安衛管理人員與各課主管；設施：防護與消防設備；工作環境：現場作業安全；方法：教育訓練與巡檢',
+    'legal' => '人員：管理課申報負責人；方法：年度法定申報行事曆',
+    'measure' => '人員：品管課校驗人力；設施：標準件與校驗設備；方法：校驗週期與到期提醒',
+    'sales' => '人員：業務課、生管組；方法：每月訂單預測與待出貨訂單核對',
+    'geopolitics' => '人員：業務課客戶溝通、管理課營運成本監控；方法：加工單價條件與營運成本變動回報',
+    'generic' => '由負責部門評估所需人員、設施、工作環境與方法後填寫',
 ];
 
 /** 規則目錄（畫面「判斷規則」顯示用；規則編號也會寫進每一列的「依據規則」） */
@@ -451,7 +477,7 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
         $metric = str_replace('回升並維持達標', '逐月回升並朝年度目標邁進', $metric);
     }
     $ro = ((string)($ctx['dimension'] ?? '') === 'O' || $c['ro'] === 'opportunity') ? 'opportunity' : 'risk';
-    return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure,
+    return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure, 'resources'=>RM_RULE_RESOURCES[$cat] ?? RM_RULE_RESOURCES['generic'],
             'effect_check'=>trim($metric), 'rule_ids'=>implode(',', array_values(array_unique($ids))), 'why'=>$why];
 }
 
@@ -591,4 +617,96 @@ function rm_item_tracks(PDO $db, int $year, array $row): array
     }
     return $out;
 }
+}
+
+/* ============================ 成效確認「自動建立完整」 ============================
+ * 產生因應措施的當下就一併建立成效確認：結果（系統建議）、確認日期、主管裁示（建議文字）、佐證（資料快照）。
+ * 這些都只是「系統建議」，風險表本身若是草稿要經使用者確認；直接產生到正式表上的，主管看過可再修改。
+ * 規則算不出結果（資料不足、找不到措施追蹤）時只寫佐證與原因，不硬塞結果。 */
+const RM_EFFECT_RULING_SUGGEST = [
+    'effective' => '經確認措施已落實，指標或追蹤項目達成，本項成效有效；維持現行作法並納入下年度持續監控。',
+    'partial' => '部分達成；要求負責人於下次確認前補強措施並持續追蹤。',
+    'doing' => '措施執行中，尚未到可判定成效的時點；維持追蹤至下次確認。',
+    'ineffective' => '依規則判定措施已執行（或逾期未做）但指標沒有改善，成效不足；請主管裁示是否開立異常矯正處理單並調整措施。',
+];
+function rm_effect_autofill(PDO $db, array $set, array $row, int $year, string $date): array
+{
+    $ev = rm_rule_evidence($db, $set, $row, $year);
+    $ok = isset(RM_EFFECT_RULING_SUGGEST[$ev['status']]);
+    return ['effect_status' => $ok ? $ev['status'] : null, 'effect_date' => $ok ? $date : null,
+            'effect_ruling' => $ok ? RM_EFFECT_RULING_SUGGEST[$ev['status']] : '', 'effect_evidence' => (string)$ev['text'],
+            'reason' => (string)$ev['reason'], 'status' => $ev['status']];
+}
+
+/* ============================ 處境分析表與前一年度比較（2-GM-05 5.1 b：內外部議題的變更） ============================
+ * 逐項標示新增／變更／沿用，並列出前一年有、今年沒有的議題。比對鍵＝象限＋需求與期望（議題描述改了＝變更）。 */
+function rm_ctx_compare(PDO $db, int $docId, string $fillDate): array
+{
+    $none = ['prev_year'=>null, 'marks'=>[], 'removed'=>[], 'counts'=>['new'=>0, 'changed'=>0, 'same'=>0, 'removed'=>0]];
+    $st = $db->prepare("SELECT doc_id, YEAR(fill_date) y FROM rm_doc WHERE kind='context' AND is_deleted=0 AND doc_id<>? AND fill_date<? ORDER BY fill_date DESC, doc_id DESC LIMIT 1");
+    $st->execute([$docId, $fillDate]);
+    $prev = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$prev) return $none;
+    $norm = function ($s) { return preg_replace('/\s+/u', '', (string)$s); };
+    $q = $db->prepare("SELECT item_id, dimension, stakeholder, needs, issue FROM rm_item WHERE doc_id=? ORDER BY seq, item_id");
+    $q->execute([(int)$prev['doc_id']]); $P = $q->fetchAll(PDO::FETCH_ASSOC);
+    $q->execute([$docId]); $N = $q->fetchAll(PDO::FETCH_ASSOC);
+    $pk = []; foreach ($P as $r) $pk[$r['dimension'] . '|' . $norm($r['needs'])][] = $r;
+    $used = []; $marks = []; $cnt = ['new'=>0, 'changed'=>0, 'same'=>0, 'removed'=>0];
+    foreach ($N as $r) {
+        $k = $r['dimension'] . '|' . $norm($r['needs']); $m = 'new';
+        foreach ($pk[$k] ?? [] as $p) {
+            if (isset($used[$p['item_id']])) continue;
+            $used[$p['item_id']] = true;
+            $m = $norm($p['issue']) === $norm($r['issue']) ? 'same' : 'changed'; break;
+        }
+        $marks[(int)$r['item_id']] = $m; $cnt[$m]++;
+    }
+    $removed = [];
+    foreach ($P as $p) if (!isset($used[$p['item_id']])) { $removed[] = ['dimension'=>$p['dimension'], 'stakeholder'=>$p['stakeholder'], 'needs'=>$p['needs'], 'issue'=>mb_substr((string)$p['issue'], 0, 80)]; $cnt['removed']++; }
+    return ['prev_year'=>(int)$prev['y'], 'marks'=>$marks, 'removed'=>$removed, 'counts'=>$cnt];
+}
+
+/* ============================ 管理審查管理程序（2-GM-05）條文提示 ============================
+ * 處境分析表／風險表是管理審查（6.1.4 輸入、6.1.5 輸出）的資料來源。條文文字「即時」取自 AS 文件線上版的最新內容
+ * （程序書改版、條號變動時這裡自動跟著變，不在程式裡抄一份），並對每一條說明「這兩張表怎麼對應」。 */
+function rm_clause_hints(PDO $db): array
+{
+    $map = [
+        ['kw' => '要求變化', 'how' => '處境分析表的外部議題（國際局勢、極端氣候、環境議題、客戶集中度）與「職業安全衛生」議題，涵蓋品質、安全、環境三個面向，每年一定要列入評估。'],
+        ['kw' => '資源的需求', 'how' => '風險與機會因應措施管制表每一條都有「所需資源」欄（人員、設施、工作環境、方法），管理審查可直接據以決議。'],
+        ['kw' => '風險識別', 'how' => '風險與機會因應措施管制表就是這項輸出：每條議題評嚴重度(S)與發生率(O)得風險等級，需因應措施者配發編號追蹤。'],
+        ['kw' => '議題的變更', 'how' => '處境分析表每一條議題會與前一年度比較，標示「新增／變更／沿用」，並列出已刪除的議題。'],
+        ['kw' => '行動的有效性', 'how' => '風險表的「成效確認」：產生因應措施時就依 KPI 與措施追蹤自動建立結果、佐證與裁示建議，主管看過確認；管審會議要項可帶入前一年的成效。'],
+        ['kw' => '預防和矯正措施', 'how' => '成效確認結果為「無效」時，可直接開立異常矯正處理單，狀況在管審時一併報告。'],
+        ['kw' => '目標執行狀況', 'how' => 'KPI 年度目標未達標的指標會列為劣勢，並連到風險表；成效確認方式寫明當年度目標。'],
+        ['kw' => '供應商的績效', 'how' => '供應商績效（廠商準時交貨率）未達標，或委外集中於單一廠商時，列為供應商議題。'],
+        ['kw' => '前次管理審查', 'how' => '措施追蹤（溝通管理）逾期未結案會列入；管審會議要項會帶入追蹤情形。'],
+        ['kw' => '次年度目標', 'how' => '次年度 KPI 目標由 KPI 模組設定；風險表成效確認方式一律寫該年度目標。'],
+    ];
+    $proc = ['doc_no' => '2-GM-05', 'name' => '管理審查管理程序', 'version' => ''];
+    $lines = [];
+    try {
+        $r = $db->query("SELECT c.content_html, v.version, d.doc_name FROM as_document d JOIN as_doc_content c ON c.doc_id=d.id JOIN as_document_version v ON v.id=c.version_id
+                         WHERE d.doc_no='2-GM-05' ORDER BY c.version_id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) {
+            $proc['version'] = (string)$r['version']; $proc['name'] = (string)$r['doc_name'];
+            $t = html_entity_decode(strip_tags(preg_replace('/<\/(p|div|tr|h\d|li)>|<br\s*\/?>/i', "\n", (string)$r['content_html'])), ENT_QUOTES, 'UTF-8');
+            foreach (preg_split('/\R/u', $t) as $l) { $l = trim(preg_replace('/[ \t\x{3000}]+/u', ' ', $l)); if ($l !== '') $lines[] = $l; }
+        }
+    } catch (Throwable $e) { rm_sg_err($e); }
+    $items = []; $pending = '';
+    $nl = count($lines);
+    foreach ($map as $m) {
+        $hit = '';
+        for ($i = 0; $i < $nl; $i++) {
+            if (mb_strpos($lines[$i], $m['kw']) === false) continue;
+            $l = $lines[$i];
+            // 5.1 表格的「a)、b)」常與內容分在不同行：前一行若只是編號就併進來
+            if (preg_match('/^[a-z]\)$|^\d+\)$/u', $lines[$i - 1] ?? '')) $l = $lines[$i - 1] . ' ' . $l;
+            $hit = $l; break;
+        }
+        $items[] = ['clause' => $hit, 'how' => $m['how']];
+    }
+    return ['proc' => $proc, 'items' => $items];
 }

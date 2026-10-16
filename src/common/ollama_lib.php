@@ -238,5 +238,33 @@ function eg_ai_meeting_facts(PDO $db, int $year): string
         $st = $db->prepare("SELECT COUNT(*) n, SUM(stage<>'closed') op FROM ia_nc WHERE is_deleted=0 AND year=?"); $st->execute([$year]); $r = $st->fetch(PDO::FETCH_ASSOC);
         if ((int)$r['n'] > 0) $o[] = $year . ' 年內部稽核不符合通知單 ' . (int)$r['n'] . ' 張（尚未結案 ' . (int)$r['op'] . ' 張）';
     } catch (Throwable $e) {}
+    // 2-GM-05 管理審查輸入 5.1(b)(e)、6.1.4.9、6.1.5.3～5：議題變更、前一年因應風險與機會的有效性、風險識別、資源需求
+    try {
+        if (function_exists('rm_ctx_compare')) {
+            $c = $db->prepare("SELECT doc_id, fill_date, doc_no FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1");
+            $c->execute([$year]); $cd = $c->fetch(PDO::FETCH_ASSOC);
+            if ($cd) {
+                $cp = rm_ctx_compare($db, (int)$cd['doc_id'], (string)$cd['fill_date']);
+                if ($cp['prev_year']) $o[] = $year . ' 年組織處境分析表與 ' . $cp['prev_year'] . ' 年比較：新增 ' . $cp['counts']['new'] . ' 項、變更 ' . $cp['counts']['changed'] . ' 項、沿用 ' . $cp['counts']['same'] . ' 項、刪除 ' . $cp['counts']['removed'] . ' 項（內外部議題變更）';
+            }
+            $pr = $db->prepare("SELECT doc_id, doc_no FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1");
+            $pr->execute([$year - 1]); $pd = $pr->fetch(PDO::FETCH_ASSOC);
+            if ($pd) {
+                $st = $db->prepare("SELECT COALESCE(effect_status,'none') s, COUNT(*) n FROM rm_item WHERE doc_id=? AND confirm_no IS NOT NULL AND confirm_no<>'' GROUP BY s");
+                $st->execute([(int)$pd['doc_id']]); $m = ['effective'=>'有效','partial'=>'部分有效','ineffective'=>'無效','doing'=>'進行中','none'=>'尚未確認']; $parts = [];
+                foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $parts[] = ($m[$r['s']] ?? $r['s']) . ' ' . $r['n'] . ' 項';
+                if ($parts) $o[] = '前一年（' . ($year - 1) . '）因應風險與機會所採取行動的有效性（需因應措施的項目）：' . implode('、', $parts);
+            }
+            $cr = $db->prepare("SELECT doc_id FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1");
+            $cr->execute([$year]); $cd2 = $cr->fetch(PDO::FETCH_ASSOC);
+            if ($cd2) {
+                $st = $db->prepare("SELECT SUM(ro_kind='risk') r, SUM(ro_kind='opportunity') o, SUM(confirm_no IS NOT NULL AND confirm_no<>'') a, SUM(resources IS NOT NULL AND resources<>'') rs FROM rm_item WHERE doc_id=?");
+                $st->execute([(int)$cd2['doc_id']]); $r = $st->fetch(PDO::FETCH_ASSOC);
+                $o[] = $year . ' 年風險識別：風險 ' . (int)$r['r'] . ' 項、機會 ' . (int)$r['o'] . ' 項，其中 ' . (int)$r['a'] . ' 項需因應措施；所需資源（人員、設施、工作環境、方法）已列 ' . (int)$r['rs'] . ' 項';
+                $sf = $db->prepare("SELECT COUNT(*) FROM rm_item WHERE doc_id=? AND (issue LIKE '%安全%' OR issue LIKE '%職災%')"); $sf->execute([(int)$cd2['doc_id']]);
+                $o[] = '客戶／市場要求變化對本廠風險（品質、安全、環境）：風險表中與安全相關的項目 ' . (int)$sf->fetchColumn() . ' 項';
+            }
+        }
+    } catch (Throwable $e) {}
     return $o ? '・' . implode("\n・", $o) : '（系統目前沒有可引用的資料）';
 }

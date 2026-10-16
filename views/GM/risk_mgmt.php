@@ -143,7 +143,7 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.c-sev, #itTbl.cards td.c-frq { grid-column:span 3; }
         #itTbl.cards td.c-lv { grid-column:span 2; }
         #itTbl.cards td.c-cn { grid-column:span 2; }
-        #itTbl.cards td.c-measure, #itTbl.cards td.c-eff { grid-column:span 6; }
+        #itTbl.cards td.c-measure, #itTbl.cards td.c-eff, #itTbl.cards td.c-res { grid-column:span 6; }
         #itTbl.cards td.c-rc { grid-column:span 12; border-top:1px dashed #E0BE86; padding-top:6px; }
         #itTbl.cards td.c-rc textarea { min-height:38px; }
         #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 2; }
@@ -164,7 +164,7 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.lvc { padding-top:2px; }
         #itTbl.cards textarea { min-height:60px; }
         @media (max-width:980px) { #itTbl.cards td.c-er, #itTbl.cards td.c-ev { grid-column:span 12; } #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 6; } #itTbl.cards td.c-scope, #itTbl.cards td.c-sh, #itTbl.cards td.c-needs, #itTbl.cards td.c-issue, #itTbl.cards td.c-ro,
-            #itTbl.cards td.c-measure, #itTbl.cards td.c-eff { grid-column:span 12; } #itTbl.cards td.c-kind, #itTbl.cards td.c-sev, #itTbl.cards td.c-frq,
+            #itTbl.cards td.c-measure, #itTbl.cards td.c-eff, #itTbl.cards td.c-res { grid-column:span 12; } #itTbl.cards td.c-kind, #itTbl.cards td.c-sev, #itTbl.cards td.c-frq,
             #itTbl.cards td.c-lv, #itTbl.cards td.c-cn { grid-column:span 6; } }
         table.it-tbl { border-collapse:collapse; font-size:12.5px; table-layout:fixed; }
         table.it-tbl th, table.it-tbl td { border:1px solid #EADFC8; padding:3px 4px; vertical-align:top; }
@@ -205,6 +205,12 @@ $perms  = rm_perms($db, $rmUser);
         .swot-it.ro input, .swot-it.ro textarea { background:#F5EEE2; }
         .swot-guide { display:none; margin-top:6px; border-top:1px dashed #E0BE86; padding-top:6px; font-size:12.5px; color:#5b3a1e; }
         .show-guide .swot-guide { display:block; }
+        .swot-clause { display:none; margin:6px 0 8px; padding:8px 10px; border:1px solid #E0BE86; border-radius:6px; background:#FDF8EF; font-size:12.5px; color:#5b3a1e; }
+        .show-guide .swot-clause { display:block; }
+        .swot-clause .cl-h { color:#8A5A2B; font-weight:bold; margin-bottom:4px; }
+        .swot-clause li { margin:3px 0; } .swot-clause .cl-q { color:#7a5a2b; } .swot-clause .cl-how { color:#2d2d2d; }
+        .cmp-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; margin-left:6px; border-radius:8px; border:1px solid; white-space:nowrap; vertical-align:middle; }
+        .cmp-new { background:#FFF3D1; color:#B35A00; border-color:#F0A24B; } .cmp-changed { background:#FBE3D6; color:#A33A1A; border-color:#DD5138; } .cmp-same { background:#F3EBDD; color:#7a6a50; border-color:#D6BE94; }
         .swot-guide ul { margin:2px 0 6px; padding-left:18px; }
         .swot-guide .g-h { color:#8A5A2B; font-weight:bold; font-size:12px; }
         .swot-guide ul.scan { background:#FDF8EF; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px 6px 22px; }
@@ -456,6 +462,10 @@ $perms  = rm_perms($db, $rmUser);
         <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次；要連結某一項，在因應措施文字裡寫「措施追蹤 #編號」，或在溝通管理建立追蹤項目。</li>
             <li><b>重新評估</b>：年度中途因重大變化（例如某項指標已實際發生）重新評估時，填「重新評估」日期與原因。按「依資料產生佐證」時，若依當年資料算出的發生率比表上高，畫面會用紅字提示建議重新評估，但<b>不會自動改你的評分</b>。</li>
             <li><b>成效確認結果為「無效」</b>的列會出現「開矯正單」鈕，按下去由異常矯正處理單模組開單（一條風險只開一張，開完該列顯示單號）。需要先儲存、且只有表單建立者或管理員可以開。</li></ul>
+        <h4>對應管理審查管理程序（2-GM-05）</h4>
+        <ul><li>處境分析表按「<b>填寫提示與範例</b>」會顯示 2-GM-05 目前線上版的相關條文，以及<b>兩張表如何對應</b>（條文取自 AS 文件線上版，程序書改版自動跟著變）。</li>
+            <li>處境分析表每條議題會與前一年度比較並標「新增／變更／沿用」（管審輸入：議題的變更）；風險表每條有「<b>所需資源</b>」欄（管審輸出：資源需求）；<b>職業安全衛生、國際局勢、環境議題</b>每年必列（客戶／市場要求變化對本廠的風險：品質、安全、環境）。</li>
+            <li>產生因應措施時，<b>成效確認（結果、日期、裁示建議、佐證）一併自動建立</b>；規則算不出結果時只寫佐證與原因，由主管確認。</li></ul>
         <h4>SWOT 一鍵產生草稿（風險表、溝通記錄、措施追蹤）</h4>
         <ul><li>處境分析表<b>儲存後</b>，按「<b>產生風險表與措施追蹤草稿</b>」，系統依已儲存的 SWOT 一次建立：風險與機會因應措施管制表、溝通記錄、措施追蹤。<b>全部標「草稿・待確認」</b>（畫面標示、列印不顯示）。</li>
             <li>溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以<b>一定要您實際看過、內容屬實後按「確認為正式資料」</b>（溝通管理可逐張確認，也可在這裡「全部確認」）；確認前的草稿不列入成效判定。</li>
@@ -622,7 +632,8 @@ function boardHtml(){
         + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
         + '<button data-blank="context"><i class="fa fa-file-o"></i> 列印空白表單</button>'
         + '<button id="bSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>'
-        + '</div><div class="swot-status" id="bStatus"></div><div class="swot-status" id="draftInfo" style="margin-top:2px;"></div><span class="err" id="bErr"></span><div class="swot-grid">';
+        + '</div><div class="swot-status" id="bStatus"></div><div class="swot-status" id="bCompare" style="margin-top:2px;"></div><div class="swot-status" id="draftInfo" style="margin-top:2px;"></div><span class="err" id="bErr"></span>'
+        + '<div class="swot-clause" id="clauseBox"><div class="cl-h">管理審查管理程序要求的對照</div><div class="hint">載入中…</div></div><div class="swot-grid">';
     $.each(META.swot, function(_, m){
         var c = SWOTCOL[m.key];
         h += '<div class="swot-q" data-key="' + m.key + '" style="--c:' + c[0] + ';--t:' + c[1] + ';">'
@@ -642,7 +653,9 @@ function boardHtml(){
     return h + '</div>';
 }
 function itemHtml(it, n){
+    var cmpTxt = {'new':'新增', 'changed':'變更', 'same':'沿用'};
     return '<div class="swot-it" data-item-id="' + (it.item_id || 0) + '"><span class="no">' + n + '</span>'
+        + (it.cmp ? '<span class="cmp-tag cmp-' + it.cmp + '" title="與前一年度處境分析表比較">' + cmpTxt[it.cmp] + '</span>' : '')
         + '<button type="button" class="del" data-delswot title="刪除這一條"><i class="fa fa-times"></i></button>'
         + '<label>利害關係者</label><input type="text" data-f="stakeholder" value="' + esc(it.stakeholder) + '" maxlength="200">'
         + '<label>需求與期望</label><textarea data-f="needs">' + esc(it.needs) + '</textarea>'
@@ -678,8 +691,11 @@ function loadBoard(year){
         var sel = $('#bYear').empty(), cy = +META.today.slice(0, 4);
         for (var y = cy; y >= cy - 8; y--) sel.append('<option value="' + y + '"' + (y === res.year ? ' selected' : '') + '>' + y + '</option>');
         $('.swot-list').empty();
-        $.each(res.items, function(_, it){ if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
+        var cmp = res.compare || {}, cm = cmp.marks || {};
+        $.each(res.items, function(_, it){ if (cmp.prev_year) it.cmp = cm[it.item_id] || ''; if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
         renumberBoard();
+        BOARD.compare = cmp;
+        $('#bCompare').html(cmpSummaryHtml(cmp));
         $('#bDate').val(res.doc ? res.doc.fill_date : (res.year === cy ? META.today : res.year + '-12-31'));
         BOARD.maker0 = res.doc ? +res.doc.created_by : 0;
         loadMakers($('#bMaker'), $('#bDate').val(), res.doc ? res.doc.created_by : META.me.id, res.doc ? res.doc.created_by_name : META.me.name,
@@ -731,6 +747,13 @@ $(document).on('click', '#draftConfirmAll', function(){
     if (!confirm('確定要把 ' + BOARD.year + ' 年度所有草稿（風險表、溝通記錄、措施追蹤）一次確認成正式資料嗎？\n\n請確認您已經實際看過這些內容、內容屬實。確認後不再標示草稿。')) return;
     post({action:'draft_confirm', year:BOARD.year}, function(){ loadDraftInfo(); alert('已確認為正式資料'); });
 });
+/* 與前一年度比較（2-GM-05 管理審查輸入：內外部議題的變更） */
+function cmpSummaryHtml(c){
+    if (!c || !c.prev_year) return '';
+    var n = c.counts || {}, h = '與 ' + c.prev_year + ' 年度比較：<b>新增 ' + n['new'] + '</b>、<b>變更 ' + n.changed + '</b>、沿用 ' + n.same + '、<b>刪除 ' + n.removed + '</b>（議題的變更，管理審查要看）。';
+    if ((c.removed || []).length) h += ' 已刪除：' + $.map(c.removed.slice(0, 6), function(r){ return esc(swotName(r.dimension)) + '「' + esc(String(r.needs || r.issue).slice(0, 18)) + '」'; }).join('、') + (c.removed.length > 6 ? ' 等 ' + c.removed.length + ' 項' : '');
+    return h;
+}
 function addSwotQuiet(key, it){
     var q = $('.swot-q[data-key="' + key + '"]'), n = q.find('.swot-it').length + 1;
     q.find('.swot-list').append(itemHtml(it, n));
@@ -763,7 +786,20 @@ $(document).on('click', '#docDraftConfirm', function(){
     if (!confirm('確認這份草稿（以及同年度其他草稿的溝通記錄與措施追蹤）已經實際看過、內容屬實，要確認成正式資料嗎？')) return;
     post({action:'draft_confirm', year:y}, function(){ closeMask('docMask'); loadDraftInfo(); if (typeof CUR !== 'undefined' && CUR.kind) loadList(CUR.kind); alert('已確認為正式資料'); });
 });
-$(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); });
+var CLAUSE_LOADED = false;
+function loadClauses(){
+    if (CLAUSE_LOADED) return; CLAUSE_LOADED = true;
+    get({action:'clause_hints'}, function(res){
+        var p = res.proc || {};
+        var h = '<div class="cl-h">管理審查管理程序要求的對照　<span class="hint" style="font-weight:normal;">' + esc(p.doc_no || '') + ' ' + esc(p.name || '') + (p.version ? '　線上版 ' + esc(p.version) : '') + '（條文內容取自 AS 文件線上版，程序書改版這裡自動跟著變）</span></div>'
+            + '<div class="hint" style="margin-bottom:4px;">處境分析表與風險表是管理審查的輸入（議題變更、因應風險與機會的有效性、客戶／市場要求變化對本廠的風險）與輸出（風險識別、資源需求）的資料來源，填寫時對照下面的要求：</div><ul>';
+        $.each(res.items || [], function(_, it){
+            h += '<li>' + (it.clause ? '<span class="cl-q">' + esc(it.clause) + '</span><br>' : '') + '<span class="cl-how">▶ ' + esc(it.how) + '</span></li>';
+        });
+        $('#clauseBox').html(h + '</ul>');
+    });
+}
+$(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); loadClauses(); });
 $(document).on('change', '#bYear', function(){
     var y = +$(this).val();
     if (BOARD.dirty && !confirm('目前的內容還沒儲存，切換年度會放棄這些修改。確定切換嗎？')){ $(this).val(BOARD.year); return; }
@@ -846,7 +882,8 @@ $(document).on('click', '#bPrint', function(){
                 + '<thead><tr><th>編號</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + rows + '</tbody></table></td>';
         };
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName('context')) + '</div></div>'
-            + '<div class="pt-meta"><span>年度：' + BOARD.year + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';
+            + '<div class="pt-meta"><span>年度：' + BOARD.year + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span>'
+            + ((res.compare && res.compare.prev_year) ? '<span>與 ' + res.compare.prev_year + ' 年比較：新增 ' + res.compare.counts['new'] + '、變更 ' + res.compare.counts.changed + '、沿用 ' + res.compare.counts.same + '、刪除 ' + res.compare.counts.removed + '</span>' : '') + '</div>';
         var body = head + '<table class="grid"><tr>' + quad('S') + quad('W') + '</tr><tr>' + quad('O') + quad('T') + '</tr></table>';
         var css = 'table.grid{width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;}table.grid>tbody>tr>td.qd{vertical-align:top;border:2px solid #333;padding:0;}'
             + '.qh{background:#EFEFEF;font-weight:bold;font-size:13px;padding:4px 8px;border-bottom:1px solid #333;}table.pt.in{margin:0;font-size:11px;}table.pt.in th,table.pt.in td{padding:3px 4px;}'
@@ -1021,7 +1058,8 @@ function rowHtml(kind, it, n){
           + fd('<span class="lb-frq">' + (opp ? esc(oppTerm('freq')) : '發生率(O)') + '</span>', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('<span class="lb-lv">' + (opp ? esc(oppTerm('level')) : '風險等級') + '</span>', lvBadge(lv, true), 'c-lv lvc')
           + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
-          + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
+          + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackHtml(it), 'c-measure')
+          + fd('所需資源（人員、設施、工作環境、方法）', ta('resources', it.resources), 'c-res') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
           + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
@@ -1760,6 +1798,7 @@ function measurePrint(it){
             + (t.state === 'closed' ? '（已結案）' : (t.state === 'over' ? '（逾期）' : '（執行中）')); });
         h += '<br><span style="color:#444;">措施追蹤（編號見溝通管理措施追蹤表）：<br>' + $.map(o, esc).join('；<br>') + '</span>';
     }
+    if (it.resources) h += '<br><span style="color:#444;">所需資源：' + esc(it.resources).replace(/\n/g, '<br>') + '</span>';
     if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
 }

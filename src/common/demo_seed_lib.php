@@ -622,20 +622,23 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $r = rm_rule_make_row($db, $set, ['stakeholder' => $cx['stakeholder'], 'needs' => $cx['needs'], 'issue' => $cx['issue'], 'dimension' => $cx['dimension']], $dataYear, $Y);
         $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
         $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, rm_prefix_for($set, (string)$r['ro_kind']), $riskDate) : null;
-        $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], $cx['id'], $r['rule_ids']]);
+        $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], $cx['id'], $r['rule_ids'], $r['resources']]);
     }
-    // 成效確認：規則算得出「有效／部分有效／進行中」才寫入；無效或未確認的留空待人工（不產生要開矯正單的資料）
-    $rulings = ['effective' => '經確認措施已落實，指標或追蹤項目達成，本項成效有效；維持現行作法並納入下年度持續監控。', 'partial' => '部分達成；要求負責人於下次確認前補強措施並持續追蹤。',
-                'doing' => '措施執行中，尚未到可判定成效的時點；維持追蹤至下次確認。'];
+    // 成效確認：與因應措施一併自動建立（rm_effect_autofill：結果、日期、裁示建議、佐證快照）。
+    // 假資料維持「無效／未確認的留空」（不產生要開矯正單的示範資料）；草稿則全部建立，無法判定的只寫佐證與原因，待使用者確認
     $effDate = $DT['effect']; $effN = 0; $skipped = 0;
-    foreach (($draft || $skipRisk) ? [] : eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
-        $ev = rm_rule_evidence($db, $set, $row, $Y);
-        if (!isset($rulings[$ev['status']])) { $skipped++; continue; }
-        $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$ev['status'], $effDate, $rulings[$ev['status']], $ev['text'], (int)$row['item_id']]);
+    foreach ($skipRisk ? [] : eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
+        $fa = rm_effect_autofill($db, $set, $row, $Y, $effDate);
+        if ($fa['effect_status'] === null || (!$draft && $fa['effect_status'] === 'ineffective')) {
+            $skipped++;
+            if ($draft && $fa['effect_evidence'] !== '') $db->prepare("UPDATE rm_item SET effect_evidence=? WHERE item_id=?")->execute([$fa['effect_evidence'], (int)$row['item_id']]);
+            continue;
+        }
+        $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'], $fa['effect_evidence'], (int)$row['item_id']]);
         $effN++;
     }
-    if ($skipped) $warn[] = $skipped . ' 列的成效規則判定為「無效」或「未確認」，沒有寫入確認結果（請人工確認）';
+    if ($skipped) $warn[] = $skipped . ($draft ? ' 列的成效目前規則無法判定（資料不足或找不到措施追蹤），只寫入佐證與原因，請確認時人工判斷' : ' 列的成效規則判定為「無效」或「未確認」，沒有寫入確認結果（請人工確認）');
 
     /* ---------- 4. 會議紀錄：內部稽核（事前／結束）與管理審查 ---------- */
     $topU = eg_org_user($db, 'top_approver');
