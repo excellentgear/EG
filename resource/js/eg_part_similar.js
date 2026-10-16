@@ -123,8 +123,9 @@
             if (!procs.length) s += '<span class="egps-muted">無製程資料</span>';
             procs.forEach(function (p, i) {
                 var v = p.vendor ? (p.internal ? '<span class="egps-muted">廠內</span> ' + esc(p.vendor) : esc(p.vendor)) : '<span class="egps-muted">—</span>';
-                var amt = (p.amount !== '' && p.amount != null)
-                    ? '<div style="color:#8a4b12;"><b>' + esc(p.amount) + '</b> 元' + (p.price !== '' ? '<span class="egps-muted">（單價' + esc(p.price) + '）</span>' : '') + '</div>' : '';
+                // 外包只顯示單價（不顯示依本次數量算出的發包總價）
+                var amt = (p.price !== '' && p.price != null)
+                    ? '<div style="color:#8a4b12;">單價 <b>' + esc(p.price) + '</b> 元</div>' : '';
                 s += '<div style="flex:0 0 118px;box-sizing:border-box;border:1px solid #EADFCD;border-radius:3px;background:#FFFBF4;padding:2px 5px;font-size:11px;line-height:1.35;">'
                    + '<div style="font-weight:700;color:#4a2e0a;"><span class="egps-muted" style="font-weight:400;">' + (i + 1) + '.</span> ' + esc(p.process) + '</div>'
                    + '<div style="word-break:break-all;">' + v + '</div>' + amt + '</div>';
