@@ -6142,9 +6142,17 @@ echo "</script>\n";
                     _simBtn.style.cssText = 'background:#fff;border:1px solid #4A90C2;color:#1f4e79;padding:0 6px;font-size:11px;white-space:nowrap;';
                     _simBtn.innerHTML = '<i class="fa fa-filter"></i> 篩選';
                     _simBtn.title = '只顯示這個料號與它的類似料號';
-                    (function (dsid, label) {
-                        _simBtn.addEventListener('click', function (ev) { ev.stopPropagation(); simFilterSet(dsid, label); });
-                    })(row.d_setting_id, row.d_display || '');
+                    if (simPeersActiveCount(_simE) === 0) {
+                        // 類似料號都沒有加工中（未結案）的製令＝已結案：篩選出來也只會剩自己，所以不給按
+                        _simBtn.disabled = true;
+                        _simBtn.style.opacity = '.5';
+                        _simBtn.style.cursor = 'not-allowed';
+                        _simBtn.title = '類似料號已結案';
+                    } else {
+                        (function (dsid, label) {
+                            _simBtn.addEventListener('click', function (ev) { ev.stopPropagation(); simFilterSet(dsid, label); });
+                        })(row.d_setting_id, row.d_display || '');
+                    }
                     _simBox.appendChild(_simTxt);
                     _simBox.appendChild(_simBtn);
                     tdBomPs.appendChild(_simBox);
@@ -8383,12 +8391,28 @@ echo "</script>\n";
     // 2. 過濾數據陣列 (確保此函數邏輯正確，操作 data 陣列)
     // ── 類似料號篩選（2026-10-16）：只顯示「這個料號＋它的 A/B 級類似料號」的製令 ──
     // window.simFilter = {ids:{d_setting_id:1,...}, label, n}；null＝沒有在篩選。篩選中一定要在頁面上顯示橫幅，避免使用者不知道。
+    // 畫面資料（未結案的製令）裡有哪些料號主檔 id；資料更新時才重建
+    function simActiveDsidSet() {
+        if (window.__simDsRef !== fullDataset || !window.__simDsSet) {
+            var st = {};
+            (fullDataset || []).forEach(function (r) { if (r && r.d_setting_id) st[String(r.d_setting_id)] = 1; });
+            window.__simDsSet = st; window.__simDsRef = fullDataset;
+        }
+        return window.__simDsSet;
+    }
+    // 這個料號的類似料號中，有幾個目前還有加工中（未結案）的製令
+    function simPeersActiveCount(e) {
+        var st = simActiveDsidSet(), n = 0;
+        ((e && e.peer_ids) || []).forEach(function (x) { if (st[String(x)]) n++; });
+        return n;
+    }
     function simFilterSet(dsid, label) {
         var e = (window.simMap || {})[String(dsid)];
         if (!e) return;
         var ids = {}; ids[String(dsid)] = 1;
         (e.peer_ids || []).forEach(function (x) { ids[String(x)] = 1; });
-        window.simFilter = { ids: ids, label: label || String(dsid), n: Object.keys(ids).length };
+        var closedN = (e.peer_ids || []).length - simPeersActiveCount(e);
+        window.simFilter = { ids: ids, label: label || String(dsid), n: Object.keys(ids).length, closed: closedN };
         currentPage = 1;
         simFilterRender();
         processAndRenderData();
@@ -8405,7 +8429,7 @@ echo "</script>\n";
         var f = window.simFilter;
         if (!f) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
         bar.style.display = 'table';   // 區塊且寬度只包住文字；clear:both 讓它從浮動的標題下方開始，底色不會延伸到標題底下
-        bar.innerHTML = '<i class="fa fa-filter"></i> <b>目前正在篩選「類似料號」</b>：只顯示料號 <b>' + escapeHtml(f.label) + '</b> 與它的類似料號（共 ' + f.n + ' 個料號）的製令（此篩選會暫時忽略其他搜尋與篩選條件）。'
+        bar.innerHTML = '<i class="fa fa-filter"></i> <b>目前正在篩選「類似料號」</b>：只顯示料號 <b>' + escapeHtml(f.label) + '</b> 與它的類似料號（共 ' + f.n + ' 個料號）的製令' + (f.closed > 0 ? '（其中 ' + f.closed + ' 個類似料號已結案，沒有製令可顯示）' : '') + '（此篩選會暫時忽略其他搜尋與篩選條件）。'
             + ' <button type="button" class="btn btn-xs btn-default" style="margin-left:8px;" onclick="simFilterClear()"><i class="fa fa-times"></i> 取消類似料號篩選</button>';
     }
 
@@ -8447,6 +8471,8 @@ echo "</script>\n";
                     if (!(isDropdownPleaseSelect && isNotStock && bomHasActualOrders)) {
                         show = false;
                     }
+                } else if (filters.status === "has_similar") { // 有類似料號（A/B 級；不論類似料號是否還有加工中的製令，只要這個料號本身有類似料號就列出）
+                    if (!(window.simMap && window.simMap[String(row.d_setting_id || '')])) show = false;
                 } else if (filters.status === "has_bom_ing_ps") { // 有備註 (BOM 主檔備註)
                     // If bom_bom_ps is null, undefined, or an empty string after trimming, then hide.
                     if (!row.bom_bom_ps || String(row.bom_bom_ps).trim() === "") {
@@ -16085,6 +16111,7 @@ echo "</script>\n";
                                                 <option value="E">上華已移轉</option> <!-- 修改文字使其更簡潔 -->
                                                 <option value="skip">跳過</option>
                                                 <option value="has_bom_ing_ps">有備註</option> <!-- 新增：有製程備註 -->
+                                                <option value="has_similar">有類似料號</option> <!-- 類似料號（2026-10-16）：不論類似料號本身有沒有在加工中 -->
                                                 <option value="has_report_data">有報工資料</option> <!-- 新增：有報工資料 -->
                                                 <option value="has_new_process_report">有新製程報工</option>
                                                 <option value="qc_check_any">QC檢驗</option>
