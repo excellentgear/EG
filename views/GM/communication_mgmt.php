@@ -311,7 +311,7 @@ $roleLabel = cm_role_label($perms);
             <div class="cm-table-wrap">
                 <table class="cm-table" id="trackTable">
                     <thead><tr>
-                        <th style="width:50px;">項次</th><th style="width:100px;">類別</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
+                        <th style="width:60px;" title="追蹤編號：風險與機會因應措施表引用的 #編號">編號</th><th style="width:100px;">類別</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
                         <th style="width:96px;">反應日期</th><th>回應措施</th><th style="width:100px;">負責人</th>
                         <th style="width:110px;">預計完成日</th><th style="width:96px;">是否結案</th>
                         <th style="width:110px;">來源</th><th style="width:130px;">操作</th>
@@ -2095,7 +2095,7 @@ function loadTrack(){
             var badge = +r.is_closed ? '<span class="st tg-closed">是</span>'
                       : (late ? '<span class="st tg-late">否・已逾期</span>' : '<span class="st tg-open">否</span>');
             b.append('<tr>'
-                + '<td>' + ((res.page - 1) * res.per + i + 1) + '</td>'
+                + '<td><b>#' + esc(r.track_id) + '</b></td>'
                 + '<td>' + (r.cat_name ? esc(r.cat_name) : '<span class="hint">未分類</span>') + '</td>'
                 + '<td class="l wrap">' + esc(r.party) + '</td>'
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
@@ -2131,9 +2131,9 @@ function openTrack(id){
     clearErr('#trackMask');
     /* 負責人一樣改成「部門 → 人員」兩段式。編輯既有項目時先用 META.people 反查他的部門，
        這樣一開跳窗就直接停在對的部門、人也已經選好。 */
-    var fillOwner = function(uid, date){
-        var dept = 0;
-        (META.people || []).forEach(function(p){ if (+p.id === +uid && !dept) dept = +p.dept_id || +p.department_id || 0; });
+    var fillOwner = function(uid, date, deptHint){
+        var dept = +deptHint || 0;       // 追蹤項目存了部門就直接用（兼任者以哪個部門的身分負責，列表與編輯畫面才一致）
+        if (!dept) (META.people || []).forEach(function(p){ if (+p.id === +uid && !dept) dept = +p.dept_id || +p.department_id || 0; });
         fillDeptSel('#tkOwnerDept', dept, '請選擇部門…');
         loadDeptPeople(dept, '#tkOwner', date || TODAY, uid, function(){ });
     };
@@ -2162,7 +2162,7 @@ function openTrack(id){
         /* 舊資料可能只有姓名沒有 user_id（或那個人已離職、不在候選名單裡）——
            留著原姓名當退路，使用者沒有重新挑人時就照原樣存回去，不要把人洗掉。 */
         TKLEGACYOWNER = (!+r.owner_id && r.owner_name) ? r.owner_name : '';
-        fillOwner(+r.owner_id || 0, r.react_date || TODAY);
+        fillOwner(+r.owner_id || 0, r.react_date || TODAY, +r.owner_dept_id || 0);
         $('#tkSrc').html(r.src_rec_no ? '來源：溝通記錄表 <b>' + esc(r.src_rec_no) + '</b>' : '來源：手動新增');
         $('#btnTrackDel').toggle(!!META.perms.canAdmin);
         $('#trackMask').data('id', id);
@@ -2802,7 +2802,7 @@ $('#btnTrackPrint').on('click', function(){
         var render = function(){
             var meta = first.print;
             var tr = rows.map(function(r, i){
-                return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.cat_name || '') + '</td><td class="l">' + esc(r.party) + '</td>'
+                return '<tr><td>#' + esc(r.track_id) + '</td><td>' + esc(r.cat_name || '') + '</td><td class="l">' + esc(r.party) + '</td>'
                      + '<td class="l">' + esc(r.content).replace(/\n/g, '<br>') + '</td>'
                      + '<td>' + dispDate(r.react_date) + '</td>'
                      + '<td class="l">' + esc(r.action).replace(/\n/g, '<br>') + '</td>'
@@ -2810,9 +2810,9 @@ $('#btnTrackPrint').on('click', function(){
                      + '<td>' + (+r.is_closed ? '是' : '否') + '</td></tr>';
             }).join('') || '<tr><td colspan="9">（無資料）</td></tr>';
             var body = printHead(meta, '回應利害關係者措施追蹤表')
-                + '<table class="pt"><colgroup><col style="width:40px;"><col style="width:76px;"><col style="width:120px;"><col>'
+                + '<table class="pt"><colgroup><col style="width:48px;"><col style="width:76px;"><col style="width:120px;"><col>'
                 + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
-                + '<thead><tr><th>項次</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
+                + '<thead><tr><th>編號</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
                 + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead>'
                 + '<tbody>' + tr + '</tbody></table>';
             egPrintWindow('回應利害關係者措施追蹤表', body, '', meta.doc_no, true);
@@ -2897,9 +2897,9 @@ $(document).on('click', '.btnBlank', function(){
         } else if (which === 'track'){
             title = '回應利害關係者措施追蹤表';
             body = printHead(meta, title)
-                + '<table class="pt"><colgroup><col style="width:40px;"><col style="width:76px;"><col style="width:120px;"><col>'
+                + '<table class="pt"><colgroup><col style="width:48px;"><col style="width:76px;"><col style="width:120px;"><col>'
                 + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
-                + '<thead><tr><th>項次</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
+                + '<thead><tr><th>編號</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
                 + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead><tbody>'
                 + blankRows(10, ['#', '', '', '', '', '', '', '', ''], 40) + '</tbody></table>';
         } else {
@@ -2957,9 +2957,9 @@ $('#btnRecCsv').on('click', function(){
 });
 $('#btnTrackCsv').on('click', function(){
     fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(rows){
-        csvDump('回應利害關係者措施追蹤表', ['項次','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
+        csvDump('回應利害關係者措施追蹤表', ['編號','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
             rows.map(function(r, i){
-                return [i + 1, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
+                return ['#' + r.track_id, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
                     dispDate(r.due_date), +r.is_closed ? '是' : '否', dispDate(r.closed_date), r.src_rec_no || ''];
             }));
     });
