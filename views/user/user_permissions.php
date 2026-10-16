@@ -1463,7 +1463,7 @@ $_quotDepts = array_keys($_deptSet);
                         rs_of('sheet_form'), rsu_of('sheet_form'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('stk', 'stock', '庫存管理', 'fa-cubes', '#c0762c',
-                        '為每位使用者指派庫存管理頁的角色：<strong>本頁管理員</strong>、<strong>生管</strong>、<strong>業務</strong>、<strong>唯讀</strong>（以及可自行新增的角色）。各角色可執行的功能（庫存異動、盤點、主資料設定、領庫需求單、列印…）與各項通知要通知哪些角色，由本站管理員在 <strong>庫存管理 → 角色與通知設定</strong> 勾選。<strong>目前庫存頁的操作權限與通知仍沿用上方「模組權限」的 A／C／R／U／D，角色指派完成後才會一次切換成角色判定</strong>，在那之前指派角色不會改變任何人現有的操作與通知。',
+                        '為每位使用者指派庫存管理頁的角色：<strong>本頁管理員</strong>、<strong>生管</strong>、<strong>業務</strong>、<strong>唯讀</strong>（以及可自行新增的角色）。各角色可執行的功能（庫存異動、盤點、主資料設定、領庫需求單、列印…）與各項通知要通知哪些角色，由本站管理員在 <strong>庫存管理 → 角色與通知設定</strong> 勾選。<strong>庫存頁的操作權限與通知對象已改由角色決定（不再使用上方「模組權限」的 A／C／R／U／D）</strong>；沒有被指派任何庫存角色、或角色沒有「檢視庫存列表」功能的人無法進入庫存頁。',
                         rs_of('stock'), rsu_of('stock'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',

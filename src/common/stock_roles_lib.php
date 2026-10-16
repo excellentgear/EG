@@ -2,9 +2,8 @@
 /**
  * stock_roles_lib.php — 庫存管理（views/pages/stock.php）的角色制：功能清單、預設角色、通知對象設定
  *
- * 2026-10-16 建立。**目前只建立角色與設定，尚未用來判定權限**：頁面與 API 仍沿用
- * user_module_permissions 的 A/C/R/U/D（使用者指派完角色後，會再一次改成角色判定）。
- * 所以本檔的任何東西都不可以影響現有使用者的操作與通知。
+ * 2026-10-16 建立；同日使用者指派完角色後，庫存頁的權限判定與通知對象已全面改成角色制
+ * （stock_user_features()／stock_notify_targets()），不再讀 user_module_permissions 的 A/C/R/U/D。
  *
  * 角色（roles.module='stock'）：
  *   - 本站管理員  ＝全站既有的系統角色 admin（roles.is_system=1、功能碼 'all'），每個模組都會自動列出、
@@ -46,7 +45,6 @@ function stock_feature_catalog(): array {
             ['stock_delete_txn',    '刪除入／出庫異動紀錄', 'D'],
             ['stock_purge',         '強制刪除庫存品項', 'A'],
             ['stock_split_txn',     '拆分異動歷程', 'A'],
-            ['stock_recalc',        '重算成本／售價快照', 'A'],
         ]),
         $g('組合件與批次', [
             ['stock_group_create',  '新增組合件', 'C'],
@@ -160,49 +158,54 @@ function stock_has_feature(PDO $pdo, int $uid, string $code): bool {
 
 /** 本頁會發出的通知種類（key 固定，新增通知時在這裡加一列即可） */
 function stock_notify_types(): array {
+    // creator＝是否提供「通知該需求單建立者」選項；creator_default＝沒設定過時的預設（刪除單原本就一律通知建立者，維持原行為）
     return [
-        ['key' => 'req_new',      'label' => '新增領庫需求單',
-         'legacy' => '庫存權限為 A，或同時有 C、R、U、D 的人（不含操作者本人）', 'creator' => false],
-        ['key' => 'req_modified', 'label' => '修改領庫需求單',
-         'legacy' => '庫存權限為 A，或同時有 C、R、U、D 的人（不含操作者本人）', 'creator' => false],
-        ['key' => 'req_deleted',  'label' => '刪除領庫需求單',
-         'legacy' => '只通知該需求單的建立者（建立者自己刪除時不通知）', 'creator' => true],
+        ['key' => 'req_new',      'label' => '新增領庫需求單', 'creator' => false, 'creator_default' => false],
+        ['key' => 'req_modified', 'label' => '修改領庫需求單', 'creator' => true,  'creator_default' => false],
+        ['key' => 'req_deleted',  'label' => '刪除領庫需求單', 'creator' => true,  'creator_default' => true],
     ];
 }
 
 function stock_notify_cfg_load(PDO $pdo): array {
     $out = [];
-    foreach (stock_notify_types() as $t) $out[$t['key']] = [];
+    foreach (stock_notify_types() as $t) $out[$t['key']] = ['roles' => [], 'creator' => (bool)$t['creator_default']];
     try {
         $st = $pdo->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group='STOCK_NOTIFY'");
         $st->execute();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (strpos($r['param_key'], 'roles_') !== 0) continue;
-            $k = substr($r['param_key'], 6);
-            if (!array_key_exists($k, $out)) continue;
-            $ids = json_decode((string)$r['param_value'], true);
-            $out[$k] = is_array($ids) ? array_values(array_unique(array_filter(array_map('intval', $ids)))) : [];
+            if (strpos($r['param_key'], 'roles_') === 0) {
+                $k = substr($r['param_key'], 6);
+                if (!isset($out[$k])) continue;
+                $ids = json_decode((string)$r['param_value'], true);
+                $out[$k]['roles'] = is_array($ids) ? array_values(array_unique(array_filter(array_map('intval', $ids)))) : [];
+            } elseif (strpos($r['param_key'], 'creator_') === 0) {
+                $k = substr($r['param_key'], 8);
+                if (isset($out[$k])) $out[$k]['creator'] = ((string)$r['param_value'] === '1');
+            }
         }
     } catch (Throwable $e) {}
     return $out;
 }
 
-/** 儲存；只收「庫存模組的角色＋系統管理員角色」，其他 id 一律丟掉 */
+/** 儲存；只收「庫存模組的角色＋系統管理員角色」，其他 id 一律丟掉。cfg[key] = {roles:[], creator:bool}（也相容舊的純陣列） */
 function stock_notify_cfg_save(PDO $pdo, array $cfg, string $by): void {
     $valid = [];
     foreach (stock_assignable_roles($pdo) as $r) $valid[(int)$r['role_id']] = true;
     $sel = $pdo->prepare("SELECT id FROM system_parameters WHERE param_group='STOCK_NOTIFY' AND param_key=? LIMIT 1");
     $upd = $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?");
     $ins = $pdo->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('STOCK_NOTIFY',?,?,?,?)");
-    foreach (stock_notify_types() as $t) {
-        $ids = [];
-        foreach ((array)($cfg[$t['key']] ?? []) as $rid) { $rid = (int)$rid; if ($rid > 0 && isset($valid[$rid])) $ids[] = $rid; }
-        $json = json_encode(array_values(array_unique($ids)));
-        $key  = 'roles_' . $t['key'];
+    $put = function (string $key, string $val, string $desc) use ($sel, $upd, $ins, $by) {
         $sel->execute([$key]);
         $id = $sel->fetchColumn();
-        if ($id) $upd->execute([$json, $by, $id]);
-        else $ins->execute([$key, $json, '庫存通知對象角色：' . $t['label'], $by]);
+        if ($id) $upd->execute([$val, $by, $id]); else $ins->execute([$key, $val, $desc, $by]);
+    };
+    foreach (stock_notify_types() as $t) {
+        $one   = $cfg[$t['key']] ?? [];
+        $roles = (isset($one['roles']) && is_array($one['roles'])) ? $one['roles'] : (is_array($one) && !isset($one['creator']) ? $one : []);
+        $ids = [];
+        foreach ($roles as $rid) { $rid = (int)$rid; if ($rid > 0 && isset($valid[$rid])) $ids[] = $rid; }
+        $put('roles_' . $t['key'], json_encode(array_values(array_unique($ids))), '庫存通知對象角色：' . $t['label']);
+        if ($t['creator']) $put('creator_' . $t['key'], !empty($one['creator']) ? '1' : '0', '庫存通知是否通知建立者：' . $t['label']);
     }
 }
 
@@ -259,6 +262,118 @@ function stock_notify_user_labels(PDO $pdo, array $uids): array {
             $o[] = trim(((string)$r['dept']) . ' ' . ((string)$r['pos']) . ' ' . ((string)$r['user_cname']));
         return $o;
     } catch (Throwable $e) { return []; }
+}
+
+// ── 角色制權限判定（2026-10-16 起庫存頁一律用這裡，不再讀 user_module_permissions）──────
+
+/** 這個人的庫存功能碼：本站管理員＝['all']；否則取個人指派∪部門職稱指派（含代理承接），只留 stock_ 開頭 */
+function stock_user_features(PDO $pdo, int $uid): array {
+    if ($uid <= 0) return [];
+    if (stock_is_site_admin($pdo, $uid)) return ['all'];
+    try {
+        $f = __DIR__ . '/role_features_helper.php';
+        if (is_file($f)) require_once $f;
+        if (!function_exists('rf_load_user_features_all')) return [];
+        $out = [];
+        foreach (rf_load_user_features_all($pdo, $uid) as $c) {
+            if ($c === 'all' || strpos($c, 'stock_') === 0) $out[] = $c;
+        }
+        return array_values(array_unique($out));
+    } catch (Throwable $e) { return []; }
+}
+
+function stock_feat_has(array $feats, string $code): bool {
+    return in_array('all', $feats, true) || in_array($code, $feats, true);
+}
+function stock_feat_any(array $feats, array $codes): bool {
+    foreach ($codes as $c) if (stock_feat_has($feats, $c)) return true;
+    return false;
+}
+
+/** 顯示用：這個人持有的庫存角色名稱（個人指派＋部門職稱指派；本站管理員顯示為「本站管理員」） */
+function stock_user_role_labels(PDO $pdo, int $uid): array {
+    $o = [];
+    try {
+        $st = $pdo->prepare("SELECT r.role_name, r.is_system FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                             WHERE ur.user_id=? AND (r.module='stock' OR r.is_system=1)");
+        $st->execute([$uid]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $o[] = ((int)$r['is_system'] === 1) ? '本站管理員' : $r['role_name'];
+        $st = $pdo->prepare("SELECT DISTINCT r.role_name FROM user_department_position_map m
+                             JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
+                             JOIN roles r ON r.role_id=pr.role_id AND r.module='stock' WHERE m.user_id=?");
+        $st->execute([$uid]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $n) $o[] = $n;
+    } catch (Throwable $e) {}
+    return array_values(array_unique($o));
+}
+
+/**
+ * 通知收件人（依「通知對象」設定）：勾選的角色（在職者）＋（有開啟且有給建立者時）需求單建立者。
+ * 操作者本人由 stock_req_notify() 統一剔除。
+ */
+function stock_notify_targets(PDO $pdo, string $key, ?int $creatorId = null): array {
+    $cfg = stock_notify_cfg_load($pdo);
+    $c = $cfg[$key] ?? ['roles' => [], 'creator' => false];
+    $uids = stock_notify_role_users($pdo, $c['roles']);
+    if (!empty($c['creator']) && $creatorId) {
+        try {
+            $st = $pdo->prepare("SELECT 1 FROM `user` WHERE id=? AND state=1");
+            $st->execute([$creatorId]);
+            if ($st->fetchColumn()) $uids[] = (int)$creatorId;
+        } catch (Throwable $e) {}
+    }
+    return array_values(array_unique(array_map('intval', $uids)));
+}
+
+/**
+ * 各 AJAX 動作需要的功能碼（任一即可）。回傳 [] ＝只要能進本頁（stock_view）即可（查詢、搜尋、下拉資料等）。
+ * 需求單的「建立者自己可改自己的」例外在各動作內部另外判斷，不放在這裡。
+ */
+function stock_action_need(string $a, array $p): array {
+    $id = function (string $k) use ($p) { return (int)($p[$k] ?? 0) > 0; };
+    switch ($a) {
+        case 'merge_stock': case 'batch_update_unit': case 'merge_existing_to_group': return ['stock_batch_ops'];
+        case 'purge_stock_item': case 'delete_stock_item': return ['stock_purge'];
+        case 'save_stock_item':  return [$id('stock_item_id') ? 'stock_edit' : 'stock_add'];
+        case 'batch_save_stock': return ['stock_batch_add'];
+        case 'quick_in':   return ['stock_in'];
+        case 'quick_out':  return ['stock_out'];
+        case 'quick_move': return ['stock_move'];
+        case 'delete_transaction': return ['stock_delete_txn'];
+        case 'split_txn_items':    return ['stock_split_txn'];
+        case 'save_cat_locations': return ['stock_cat_edit'];
+        case 'save_location':  return [$id('location_id') ? 'stock_loc_edit' : 'stock_loc_add'];
+        case 'move_location':  return ['stock_loc_edit'];
+        case 'delete_location':return ['stock_loc_delete'];
+        case 'save_category':  return [$id('category_id') ? 'stock_cat_edit' : 'stock_cat_add'];
+        case 'delete_category':return ['stock_cat_delete'];
+        case 'save_unit':      return [$id('unit_id') ? 'stock_unit_edit' : 'stock_unit_add'];
+        case 'save_item_units':return ['stock_unit_edit'];
+        case 'delete_unit':    return ['stock_unit_delete'];
+        case 'save_safety_stock':   return ['stock_safety_add', 'stock_safety_edit'];   // 以料號為鍵的新增或更新
+        case 'delete_safety_stock': return ['stock_safety_delete'];
+        case 'save_area':   return [$id('area_id') ? 'stock_area_edit' : 'stock_area_add'];
+        case 'delete_area': return ['stock_area_delete'];
+        case 'unbound_parts_list': case 'unbound_parts_bind': return ['stock_unbound_check'];
+        case 'create_count_session': case 'get_count_sessions': case 'get_count_details':
+        case 'save_count_detail': case 'random_count_sample': return ['stock_count'];
+        case 'apply_count_adjustments': return ['stock_count_apply'];
+        case 'delete_count_session':    return ['stock_count_delete'];
+        case 'get_analysis': case 'get_aging_detail': return ['stock_analysis'];
+        case 'get_daily_report': return ['stock_report'];
+        case 'save_stock_group': return ['stock_group_create'];
+        case 'group_adjust':     return ['stock_group_adjust'];
+        case 'group_txn':        return ['stock_in', 'stock_out', 'stock_group_adjust'];
+        case 'create_requisition': return ['stock_req_create'];
+        case 'get_requisitions': case 'get_req_detail': return ['stock_req_view'];
+        case 'get_deleted_requisitions': return ['stock_req_view_deleted'];
+        case 'issue_requisition': return ['stock_req_issue'];
+        case 'req_get_batches':   return ['stock_req_issue', 'stock_req_view'];
+        case 'print_requisitions': case 'req_print_meta': return ['stock_req_print'];
+        case 'req_print_setting_get': case 'req_print_setting_save': return ['stock_req_print_setting'];
+        case 'stock_doc_print_meta': case 'get_stock_in_sheet': case 'get_stock_in_days': return ['stock_doc_print'];
+    }
+    return [];
 }
 
 }

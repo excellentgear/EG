@@ -21,23 +21,19 @@ $pdo    = $conn->getPDO();
 $userId = intval($_SESSION['id'] ?? 0);
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') stock_ensure_roles($pdo);   // 只補建不存在的預設角色，不動既有角色與任何人的權限
 
-// ── 權限檢查（非 AJAX 請求時，使用同一個 $pdo） ───
-$PAGE_PERM = 'A'; // 預設全開（DB 查不到時不封鎖）
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    try {
-        $permCheck = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock' LIMIT 1");
-        $permCheck->execute([$userId]);
-        $permRow = $permCheck->fetch(PDO::FETCH_ASSOC);
-        if ($permRow && !empty($permRow['permission'])) {
-            $PAGE_PERM = $permRow['permission'];
-        } else {
-            // 查無權限記錄 → 轉跳首頁
-            header("Location:../../index.php?msg=no_permission");
-            exit;
-        }
-    } catch(Exception $pe) {
-        $PAGE_PERM = 'A'; // 資料表不存在時預設全開
-    }
+// ── 權限（2026-10-16 起改為角色制）──────────────────────────────
+// 功能碼由「個人指派＋部門職稱指派」的庫存角色解析（本站管理員＝全部）；不再讀 user_module_permissions 的 A/C/R/U/D。
+// 進頁面至少要有「檢視庫存」；各動作要的功能碼見 stock_action_need()（AJAX 在下方統一守門）。
+$STK_FEATS = stock_user_features($pdo, $userId);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST' && !stock_feat_has($STK_FEATS, 'stock_view')) {
+    header("Location:../../index.php?msg=no_permission");
+    exit;
+}
+function stk_can($code){ global $STK_FEATS; return stock_feat_has($STK_FEATS, $code); }
+function stk_need($codes){   // 任一即可；沒有就丟例外（呼叫端的 try 會轉成 JSON 錯誤）
+    global $STK_FEATS;
+    foreach ((array)$codes as $c) if (stock_feat_has($STK_FEATS, $c)) return;
+    throw new Exception('沒有此功能的權限');
 }
 
 // ── 當前登入使用者資訊（非AJAX時查詢，供頁面JS使用） ──────────────────
@@ -85,12 +81,8 @@ foreach(['is_active TINYINT NOT NULL DEFAULT 1','deleted_by INT NULL','deleted_a
     try { $pdo->exec("ALTER TABLE stock_requisitions ADD COLUMN $_col"); } catch(Exception $_e2){}
 }
 
-// ── 需求單通知對象 ──────────────────────────────────
-// 通知本體改走全站公告/通知系統(live_event，見 src/common/stock_notify.php)，
-// 不再用本頁自建的 stock_req_notifications 表＋輪詢彈窗(多分頁/多裝置容易重複彈出、且未走全站已讀機制)。
-function getNotifTargetUsers($pdo){
-    try{ return $pdo->query("SELECT DISTINCT user_id FROM user_module_permissions WHERE module_code='stock' AND (permission='A' OR (permission LIKE '%C%' AND permission LIKE '%R%' AND permission LIKE '%U%' AND permission LIKE '%D%'))")->fetchAll(PDO::FETCH_COLUMN); }catch(Exception $e){ return []; }
-}
+// ── 需求單通知對象：改由「角色與通知設定」決定（stock_notify_targets()，見 stock_roles_lib.php）──
+// 通知本體走全站公告/通知系統(live_event，見 src/common/stock_notify.php)。
 
 // ── 領料需求單列印用：公司全名／圖章模板（ai-rules/16 第一節、ai-rules/18）──────
 // 模組代碼 stock_req：AS 文件綁定走 asdoc_lib（system_parameters AS_DOC_BIND/stock_req）、
@@ -260,14 +252,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     ob_start();
     header('Content-Type: application/json; charset=utf-8');
 
+    // ── 角色制統一守門（2026-10-16）：每個動作需要哪些功能碼見 stock_action_need()；沒列的＝進得了本頁即可 ──
+    $__act = (string)$_POST['action'];
+    if (!in_array($__act, ['keepalive','check_permission','role_panel_info','notify_cfg_get','notify_cfg_save'], true)) {
+        $__need = stock_action_need($__act, $_POST);
+        if (!stock_feat_has($STK_FEATS, 'stock_view') || ($__need && !stock_feat_any($STK_FEATS, $__need))) {
+            echo json_encode(['success'=>false,'message'=>'沒有此功能的權限'], JSON_UNESCAPED_UNICODE); exit;
+        }
+    }
+
     if ($_POST['action'] === 'keepalive') { echo json_encode(['ok'=>true]); exit; }
 
     if ($_POST['action'] === 'check_permission') {
-        try {
-            $st=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $st->execute([$userId]); $row=$st->fetch(PDO::FETCH_ASSOC);
-            echo json_encode(['success'=>true,'is_admin'=>($row&&$row['permission']==='A')]);
-        } catch(Exception $e){ echo json_encode(['success'=>true,'is_admin'=>false]); }
+        echo json_encode(['success'=>true,'is_admin'=>stk_can('stock_purge')]);   // 舊呼叫端相容：不再作為權限依據
         exit;
     }
 
@@ -293,8 +290,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $cur = stock_notify_cfg_load($pdo);
             $types = [];
             foreach (stock_notify_types() as $t) {
-                $uids = stock_notify_role_users($pdo, $cur[$t['key']] ?? []);
-                $t['role_ids'] = $cur[$t['key']] ?? [];
+                $uids = stock_notify_role_users($pdo, $cur[$t['key']]['roles'] ?? []);
+                $t['role_ids'] = $cur[$t['key']]['roles'] ?? [];
+                $t['creator_on'] = !empty($cur[$t['key']]['creator']);
                 $t['preview']  = stock_notify_user_labels($pdo, $uids);
                 $types[] = $t;
             }
@@ -1046,10 +1044,7 @@ LBLSQL;
     // ── 完整刪除庫存品項（僅限A權限，硬刪除）──────
     if ($_POST['action'] === 'purge_stock_item') {
         try {
-            // 確認 user 是否有 stock module A 權限
-            $chkPerm=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $chkPerm->execute([$userId]); $permRow=$chkPerm->fetch(PDO::FETCH_ASSOC);
-            if (!$permRow || $permRow['permission']!=='A') throw new Exception('權限不足，需要 A 級權限');
+            stk_need('stock_purge');
             $confirm = trim($_POST['confirm_text']??''); if($confirm!=='Y') throw new Exception('確認文字必須輸入 Y');
             $id=intval($_POST['stock_item_id']??0); if(!$id) throw new Exception('未指定');
             $pdo->beginTransaction();
@@ -2379,11 +2374,7 @@ LBLSQL;
     // ── 料號綁定檢查（管理員）：列出未綁定料號ID的庫存品項＋完全同名的候選料號 ──────────
     if ($_POST['action'] === 'unbound_parts_list') {
         try {
-            // 注意：$PAGE_PERM 只有非 POST（開頁面）時才會去查，AJAX 進來時它還是預設值 'A'，
-            // 拿它守門等於誰都放行 → 一律比照 purge_stock_item 當場查一次
-            $chkPerm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $chkPerm->execute([$userId]); $permRow2 = $chkPerm->fetch(PDO::FETCH_ASSOC);
-            if (!$permRow2 || $permRow2['permission'] !== 'A') throw new Exception('權限不足，需要 A 級權限');
+            stk_need('stock_unbound_check');
             $rows = $pdo->query("SELECT si.stock_item_id, si.d_id, si.qty, si.item_type, si.storage_location,
                                         COALESCE(c.category_name,'') AS category_name
                                  FROM stock_items si
@@ -2414,11 +2405,7 @@ LBLSQL;
     // ── 料號綁定檢查（管理員）：批次補綁 ──────────────────────────────────────
     if ($_POST['action'] === 'unbound_parts_bind') {
         try {
-            // 注意：$PAGE_PERM 只有非 POST（開頁面）時才會去查，AJAX 進來時它還是預設值 'A'，
-            // 拿它守門等於誰都放行 → 一律比照 purge_stock_item 當場查一次
-            $chkPerm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $chkPerm->execute([$userId]); $permRow2 = $chkPerm->fetch(PDO::FETCH_ASSOC);
-            if (!$permRow2 || $permRow2['permission'] !== 'A') throw new Exception('權限不足，需要 A 級權限');
+            stk_need('stock_unbound_check');
             $pairs = json_decode($_POST['pairs'] ?? '[]', true);
             if (!is_array($pairs) || !$pairs) throw new Exception('未選擇要綁定的資料');
             $pdo->beginTransaction();
@@ -2568,23 +2555,13 @@ LBLSQL;
     if ($_POST['action'] === 'delete_transaction') {
         try {
             $txnId = intval($_POST['txn_id']??0); if(!$txnId) throw new Exception('未指定');
-            // 權限檢查：需要 D 或 A 權限
-            $chkPermDel=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $chkPermDel->execute([$userId]); $permRowDel=$chkPermDel->fetch(PDO::FETCH_ASSOC);
-            $pDel=$permRowDel['permission']??'';
-            if (!$permRowDel || ($pDel!=='A' && strpos($pDel,'D')===false)) throw new Exception('刪除異動記錄需要 D 或 A 權限');
+            stk_need('stock_delete_txn');
             $st=$pdo->prepare("SELECT * FROM stock_transactions WHERE txn_id=?");
             $st->execute([$txnId]); $txn=$st->fetch(PDO::FETCH_ASSOC);
             if(!$txn) throw new Exception('找不到記錄');
 
-            // 權限檢查：count 類型需 A 或 CRUD 完整權限
-            if ($txn['txn_type'] === 'count') {
-                $chkPerm=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-                $chkPerm->execute([$userId]); $permRow2=$chkPerm->fetch(PDO::FETCH_ASSOC);
-                $p2=$permRow2['permission']??'';
-                $isCRUD=(strpos($p2,'C')!==false&&strpos($p2,'R')!==false&&strpos($p2,'U')!==false&&strpos($p2,'D')!==false);
-                if (!$permRow2 || ($p2!=='A' && !$isCRUD)) throw new Exception('刪除盤點記錄需要 A 或 CRUD 完整權限');
-            }
+            // 盤點類型的異動另需「刪除盤點單」功能
+            if ($txn['txn_type'] === 'count') stk_need('stock_count_delete');
 
             $pdo->beginTransaction();
             // 還原庫存：把異動qty反向
@@ -3516,10 +3493,7 @@ LBLSQL;
     // ── 異動歷程拆分（A權限） ─────────────────────
     if ($_POST['action'] === 'split_txn_items') {
         try {
-            // 權限檢查
-            $chkPerm=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
-            $chkPerm->execute([$userId]); $permRow3=$chkPerm->fetch(PDO::FETCH_ASSOC);
-            if (!$permRow3 || $permRow3['permission']!=='A') throw new Exception('拆分功能需要 A 級權限');
+            stk_need('stock_split_txn');
 
             $stockItemId = intval($_POST['stock_item_id']??0);
             if (!$stockItemId) throw new Exception('未指定庫存品項');
@@ -3696,7 +3670,7 @@ LBLSQL;
                     ->execute([$reqId,intval($item['stock_item_id'])?:null,$item['d_id']??'',$item['client_name']??'',$item['storage_location']??'',max(1,intval($item['qty']??1)),trim($item['remark']??'')?:null,intval($item['is_urgent']??0),$sort++]);
             }
             $pdo->commit();
-            $notifTargets=getNotifTargetUsers($pdo);
+            $notifTargets=stock_notify_targets($pdo,'req_new',null);
             stock_req_notify($pdo,$reqId,$reqNo,'new','新領料單：'.$reqNo.($title?' — '.$title:'').($requesterName?'（申請人：'.$requesterName.'）':''),$notifTargets,$userId);
             echo json_encode(['success'=>true,'req_id'=>$reqId,'req_no'=>$reqNo]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3773,10 +3747,7 @@ LBLSQL;
             $rq=$pdo->prepare("SELECT req_no,Created_By,status FROM stock_requisitions WHERE req_id=? AND (is_active=1 OR is_active IS NULL)"); $rq->execute([$reqId]); $req=$rq->fetch(PDO::FETCH_ASSOC);
             if(!$req) throw new Exception('找不到需求單');
             if(intval($req['status'])===2) throw new Exception('已完成出庫的需求單不可修改');
-            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
-            $p=($pp->fetch(PDO::FETCH_ASSOC)['permission']??'');
-            $isCRUD=strpos($p,'C')!==false&&strpos($p,'R')!==false&&strpos($p,'U')!==false&&strpos($p,'D')!==false;
-            if($req['Created_By']!=$userId&&$p!=='A'&&!$isCRUD) throw new Exception('無修改權限');
+            if($req['Created_By']!=$userId&&!stk_can('stock_req_edit_all')) throw new Exception('無修改權限');
             $title=trim($_POST['title']??''); $deptName=trim($_POST['dept_name']??''); $requesterName=trim($_POST['requester_name']??''); $remark=trim($_POST['req_remark']??'');
             $items=json_decode($_POST['items_json']??'[]',true);
             $newItems=json_decode($_POST['new_items']??'[]',true);
@@ -3811,7 +3782,7 @@ LBLSQL;
                     $pdo->prepare("UPDATE stock_requisitions SET status=?,Modified_By=? WHERE req_id=?")->execute([$newStatus,$userId,$reqId]);
             }
             $pdo->commit();
-            $notifTargets=getNotifTargetUsers($pdo);
+            $notifTargets=stock_notify_targets($pdo,'req_modified',intval($req['Created_By']));
             stock_req_notify($pdo,$reqId,$req['req_no'],'modified','領料單已修改：'.$req['req_no'].($title?' — '.$title:''),$notifTargets,$userId);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3826,18 +3797,13 @@ LBLSQL;
             if(!$deleteReason) throw new Exception('請輸入刪除原因');
             $rq=$pdo->prepare("SELECT req_no,Created_By FROM stock_requisitions WHERE req_id=? AND (is_active=1 OR is_active IS NULL)"); $rq->execute([$reqId]); $req=$rq->fetch(PDO::FETCH_ASSOC);
             if(!$req) throw new Exception('找不到需求單');
-            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
-            $p=($pp->fetch(PDO::FETCH_ASSOC)['permission']??'');
-            $isCRUD=strpos($p,'C')!==false&&strpos($p,'R')!==false&&strpos($p,'U')!==false&&strpos($p,'D')!==false;
-            if($req['Created_By']!=$userId&&$p!=='A'&&!$isCRUD) throw new Exception('無刪除權限');
+            if($req['Created_By']!=$userId&&!stk_can('stock_req_edit_all')) throw new Exception('無刪除權限');
             $pdo->beginTransaction();
             $pdo->prepare("UPDATE stock_requisitions SET is_active=0,deleted_by=?,deleted_at=NOW(),delete_reason=?,Modified_By=? WHERE req_id=?")
                 ->execute([$userId,$deleteReason,$userId,$reqId]);
             $pdo->commit();
-            // 通知建立者（若非自己刪的）
-            if($req['Created_By']&&intval($req['Created_By'])!==$userId){
-                stock_req_notify($pdo,$reqId,$req['req_no'],'deleted','您的領料單 '.$req['req_no'].' 已被刪除，原因：'.$deleteReason,[intval($req['Created_By'])],$userId);
-            }
+            // 通知對象依「角色與通知設定」：勾選的角色＋（有開啟時）該需求單的建立者；操作者本人不通知
+            stock_req_notify($pdo,$reqId,$req['req_no'],'deleted','領料單 '.$req['req_no'].' 已被刪除，原因：'.$deleteReason,stock_notify_targets($pdo,'req_deleted',intval($req['Created_By'])),$userId);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3984,10 +3950,7 @@ LBLSQL;
             $outDeptId=intval($_POST['out_dept_id']??0)?:null; $outUserId2=intval($_POST['out_user_id']??0)?:null;
             $issueItems=json_decode($_POST['issue_items_json']??'[]',true);
             if(empty($issueItems)) throw new Exception('請設定出庫明細');
-            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
-            $p=($pp->fetch(PDO::FETCH_ASSOC)['permission']??'');
-            $isCRUD=strpos($p,'C')!==false&&strpos($p,'R')!==false&&strpos($p,'U')!==false&&strpos($p,'D')!==false;
-            if($p!=='A'&&!$isCRUD) throw new Exception('無出庫權限');
+            stk_need('stock_req_issue');
             $rqRow=$pdo->prepare("SELECT * FROM stock_requisitions WHERE req_id=?"); $rqRow->execute([$reqId]); $req=$rqRow->fetch(PDO::FETCH_ASSOC);
             if(!$req) throw new Exception('找不到需求單');
             // 自動填入請領人信息（從需求單取得，確保出庫記錄可追蹤）
@@ -4221,8 +4184,7 @@ LBLSQL;
     // ── 列印設定（AS 文件綁定＋領料人圖章模板）讀取：限 A 權限 ──
     if ($_POST['action'] === 'req_print_setting_get') {
         try {
-            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
-            if (($pp->fetch(PDO::FETCH_ASSOC)['permission'] ?? '') !== 'A') throw new Exception('需要 A 級權限才能修改列印設定');
+            stk_need('stock_req_print_setting');
             echo json_encode(['success'=>true,
                 'as_docs'      => eg_asdoc_list($pdo),
                 'as_doc_id'    => eg_asdoc_id($pdo, STOCK_REQ_ASDOC_MODULE),
@@ -4242,8 +4204,7 @@ LBLSQL;
     // ── 列印設定儲存：限 A 權限 ──
     if ($_POST['action'] === 'req_print_setting_save') {
         try {
-            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
-            if (($pp->fetch(PDO::FETCH_ASSOC)['permission'] ?? '') !== 'A') throw new Exception('需要 A 級權限才能修改列印設定');
+            stk_need('stock_req_print_setting');
             $docId = intval($_POST['as_doc_id'] ?? 0);
             $tplId = intval($_POST['stamp_tpl_id'] ?? 0);
             /* 倉庫庫存表／入庫單：用 array_key_exists 判「有沒有送這個欄位」而不是判值（本專案既有慣例）。
@@ -4565,11 +4526,11 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
   <div style="display:flex;gap:8px;align-items:center;">
     <div class="tab-sw">
       <button class="tab-btn active" onclick="switchTab('list',this)">📦 庫存列表</button>
-      <button class="tab-btn" onclick="switchTab('analysis',this)">📊 分析報表</button>
+      <button class="tab-btn" data-stk-feat="stock_analysis" onclick="switchTab('analysis',this)">📊 分析報表</button>
       <button class="tab-btn" id="tab-btn-count" onclick="switchTab('count',this)" style="display:none;">📋 庫存盤點</button>
       <button class="tab-btn" id="tab-btn-setting" onclick="switchTab('setting',this)" style="display:none;">⚙️ 主資料設定</button>
-      <button class="tab-btn" id="tab-btn-req" onclick="switchTab('req',this)">📋 領庫需求單</button>
-      <button class="tab-btn" id="tab-btn-report" onclick="switchTab('report',this)">📊 入出庫紀錄</button>
+      <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求單</button>
+      <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 入出庫紀錄</button>
     </div>
     <button class="btn btn-sm btn-default" id="btn-role-cfg" style="display:none;border-radius:6px;font-weight:600;" onclick="openRoleCfg()" title="庫存管理的角色、功能與通知對象設定"><i class="fa fa-key"></i> 角色與通知設定</button>
     <button class="btn btn-sm" id="btn-add-stock" style="background:var(--accent);color:#fff;border-radius:6px;font-weight:600;display:none;" onclick="openAddModal()"><i class="fa fa-plus"></i> 新增庫存</button>
@@ -4624,7 +4585,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <button class="btn btn-default btn-sm" id="btn-lblfilter" onclick="openLabelFilter()" title="依料號底下的標籤內容篩選（例：模數 M 2.5、滾齒刀規格 內徑 22.225）"><i class="fa fa-tags"></i> 標籤篩選<span id="lblf-cnt" class="lblf-badge" style="display:none;">0</span></button>
     <button class="btn btn-default btn-sm" onclick="resetFilters()">重置</button>
     <!-- 倉庫庫存表（2-WH-01-01）：印的是「目前篩選條件下的全部品項」，不是只印這一頁（ai-rules/08） -->
-    <button class="btn btn-default btn-sm" onclick="printStockList()" title="依目前篩選條件列印正式的倉庫庫存表（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印庫存表</button>
+    <button class="btn btn-default btn-sm" data-stk-feat="stock_doc_print" onclick="printStockList()" title="依目前篩選條件列印正式的倉庫庫存表（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印庫存表</button>
     <button class="btn btn-sm btn-info" id="btn-batch-group" style="display:none; border-radius:6px; font-weight:600;" onclick="openMergeExistingGroupModal()"><i class="fa fa-compress"></i> 合併為組合件 (<span id="sel-cnt">0</span>)</button>
     <button class="btn btn-sm" id="btn-batch-unit" style="display:none; background:#7f8c8d; color:#fff; border-radius:6px; font-weight:600;" onclick="openBatchUnitModal()"><i class="fa fa-balance-scale"></i> 設定單位</button>
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
@@ -4798,11 +4759,11 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <div id="tab-req" style="display:none;">
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
     <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-clipboard"></i> 領庫需求單</h4>
-    <button id="btn-create-req" class="btn-pill" onclick="openCreateReqModal()"><i class="fa fa-plus"></i> 新增需求單</button>
-    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openDeletedReqModal()"><i class="fa fa-trash-o"></i> 已刪除</button>
-    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printAllReq()" title="依目前篩選結果，逐筆各自列印正式表單"><i class="fa fa-print"></i> 列印</button>
-    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printReqSummary()" title="多筆彙總成一份內部清單（非正式表單，不印 AS 文件編號）"><i class="fa fa-list-alt"></i> 清單彙總</button>
-<?php if (($PAGE_PERM ?? '') === 'A'): ?>
+    <button id="btn-create-req" class="btn-pill" data-stk-feat="stock_req_create" onclick="openCreateReqModal()"><i class="fa fa-plus"></i> 新增需求單</button>
+    <button class="btn btn-sm btn-default" data-stk-feat="stock_req_view_deleted" style="border-radius:12px;" onclick="openDeletedReqModal()"><i class="fa fa-trash-o"></i> 已刪除</button>
+    <button class="btn btn-sm btn-default" data-stk-feat="stock_req_print" style="border-radius:12px;" onclick="printAllReq()" title="依目前篩選結果，逐筆各自列印正式表單"><i class="fa fa-print"></i> 列印</button>
+    <button class="btn btn-sm btn-default" data-stk-feat="stock_req_print" style="border-radius:12px;" onclick="printReqSummary()" title="多筆彙總成一份內部清單（非正式表單，不印 AS 文件編號）"><i class="fa fa-list-alt"></i> 清單彙總</button>
+<?php if (stk_can('stock_req_print_setting')): ?>
     <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openReqPrintSetting()" title="設定列印用的 AS 文件編號與倉管圖章模板"><i class="fa fa-cog"></i> 列印設定</button>
 <?php endif; ?>
     <span id="req-perm-badge" style="font-size:11px;padding:3px 8px;border-radius:10px;background:#e8f4fd;color:#1a78c2;border:1px solid #b8d8f0;font-weight:600;"></span>
@@ -4863,7 +4824,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         <button class="btn btn-default" onclick="rptNavigate(1)" title="下一期"><i class="fa fa-chevron-right"></i></button>
       </div>
       <!-- 入庫單（2-WH-01-07）：同一天的入庫彙整成一張單，可補印過去的日期 -->
-      <button class="btn btn-sm btn-default" onclick="openStockInPrint()" title="把某一天的入庫彙整成一張正式入庫單列印（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印入庫單</button>
+      <button class="btn btn-sm btn-default" data-stk-feat="stock_doc_print" onclick="openStockInPrint()" title="把某一天的入庫彙整成一張正式入庫單列印（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印入庫單</button>
       <div id="rpt-range-wrap" style="display:none;gap:6px;align-items:center;">
         <input type="date" id="rpt-date-from" class="form-control input-sm" style="width:130px;">
         <span class="text-muted">~</span>
@@ -5071,8 +5032,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-key"></i> 庫存管理－角色與通知設定</h4></div>
       <div class="modal-body" style="padding:0;">
         <div style="padding:8px 14px;background:#faf6ee;border-bottom:1px solid #e3d4b6;font-size:12px;color:#5b3a1e;">
-          <i class="fa fa-info-circle"></i> 目前本頁的操作權限與通知對象<b>仍沿用原本的 A／C／R／U／D 權限</b>，這裡設定的角色與通知對象<b>暫不生效</b>。
-          請先到「<b>管理設定 → 使用者權限</b>」把角色指派給人員，指派完成後再一次切換成角色判定。
+          <i class="fa fa-info-circle"></i> 本頁的操作權限與通知對象<b>已改由角色決定</b>（不再使用 A／C／R／U／D）。
+          角色指派到人員請至「<b>管理設定 → 使用者權限</b>」；沒有被指派任何庫存角色（也沒有檢視庫存功能）的人將無法進入本頁。
         </div>
         <ul class="nav nav-tabs" style="padding:0 10px;margin:0;">
           <li class="active" id="stkTabRolesLi"><a href="javascript:void(0)" onclick="stkRoleTab('roles')">角色與功能</a></li>
@@ -6218,11 +6179,12 @@ var G = { page:1, rows:[], sortCol:'Modified_At', sortDir:'desc', allLocs:[], al
     req:{page:1,pageSize:20,status:'0',kw:'',currentReqId:null,issueItems:[],currentReq:null,issueBatches:{},issuePendingItems:[]},
     lblf:{applied:[],draft:[],facets:null,scopeKey:''},   // 標籤篩選：applied=已套用、draft=跳窗中編輯的
     rpt:{view:'day',dateFrom:'',dateTo:'',page:1,pageSize:20,refDate:new Date()} };
-var PERM = '<?php echo htmlspecialchars($PAGE_PERM ?? "R", ENT_QUOTES); ?>';
+var FEAT = <?php echo json_encode(array_values($STK_FEATS)); ?>;   // 角色制功能碼（'all'＝本站管理員）
+var STK_ROLE_LABELS = <?php echo json_encode(stock_user_role_labels($pdo, $userId), JSON_UNESCAPED_UNICODE); ?>;
 var CURRENT_USER_ID = <?php echo intval($CURRENT_USER_ID ?? 0); ?>;
 var CURRENT_USER_NAME = '<?php echo htmlspecialchars($CURRENT_USER_CNAME ?? '', ENT_QUOTES); ?>';
 var CURRENT_USER_DEPTS = <?php echo json_encode($CURRENT_USER_DEPTS ?? []); ?>;
-function hasP(p){ return PERM==='A' || PERM.indexOf(p)>=0; }
+function hasF(c){ return FEAT.indexOf('all')>=0 || FEAT.indexOf(c)>=0; }
 
 var G_allOrdersForEdit = [];
 var G_allOrdersForEditMap = {};
@@ -6296,7 +6258,6 @@ $(function(){
 
     loadStats(); loadList(1); loadMasterData();
     setInterval(function(){ ajx({action:'keepalive'},function(){}); }, 300000);
-    ajx({action:'check_permission'},function(r){ if(r&&r.is_admin){ G._isAdminUser=true; } });
     // 領料單通知改走全站公告/通知系統（右上角鈴鐺），不再於本頁輪詢彈窗
     checkStockReqParam();
 
@@ -6685,25 +6646,24 @@ function _refreshAreaDropdowns(){
 
 // ── 權限控制 ─────────────────────────────────────
 function _applyPermissions(){
-    var canC=hasP('C'), canR=hasP('R'), canU=hasP('U'), canD=hasP('D'), isA=hasP('A');
-    // 如果完全沒有讀取權限（理論上 PHP 已擋，這裡雙保險）
-    if(!canR && !isA){ $('body').html('<div style="text-align:center;margin-top:80px;"><h2>無讀取權限</h2><p>請聯絡管理員開通 stock 模組讀取權限（R）</p></div>'); return; }
-    // 記錄 admin 狀態
-    if(isA) G._isAdminUser=true;
-    // 盤點：需要 A 或同時有 C+R+U+D
-    G._canCount = isA || (canC&&canR&&canU&&canD);
+    // 角色制（2026-10-16）：每個按鈕／分頁對應一個功能碼（hasF），後端同規則再擋一次（stock_action_need）
+    if(!hasF('stock_view')){ $('body').html('<div style="text-align:center;margin-top:80px;"><h2>無檢視權限</h2><p>請聯絡管理員為您指派庫存管理角色</p></div>'); return; }
+    G._canPurge = hasF('stock_purge');
+    G._canSplit = hasF('stock_split_txn');
+    G._isAdminUser = G._canSplit;   // 舊變數：僅剩「異動歷程顯示儲位」用（原本 A 權限才顯示）
+    G._canCount = hasF('stock_count');
+    G._canBatch = hasF('stock_batch_ops');
+    $('[data-stk-feat]').each(function(){ if(!hasF($(this).attr('data-stk-feat'))) $(this).hide(); });
     if(G._canCount){ $('#tab-btn-count').show(); }
-    // 設定頁：所有有效使用者均可看到（R-only 可唯讀，無操作按鈕）
-    $('#tab-btn-setting').show();
-    // 設定頁新增/廠區按鈕：僅 C 或 A 可用
-    if(!canC && !isA){
-        $('#btn-add-loc,#btn-add-cat,#btn-add-unit,#btn-add-safety').hide();
-        $('#btn-area-manage').hide();
-    }
-    // 庫存列表新增按鈕：僅 C 或 A 可用
-    if(canC||isA){ $('#btn-add-stock').show(); $('#btn-batch-add').show(); $('#btn-add-group').show(); }
-    // 多選批次功能（合併組合件/設定單位）：僅 U 或 A 可見
-    G._canBatch = canU || isA;
+    if(hasF('stock_view_setting')){ $('#tab-btn-setting').show(); }
+    if(!hasF('stock_loc_add'))    $('#btn-add-loc').hide();
+    if(!hasF('stock_cat_add'))    $('#btn-add-cat').hide();
+    if(!hasF('stock_unit_add'))   $('#btn-add-unit').hide();
+    if(!hasF('stock_safety_add')) $('#btn-add-safety').hide();
+    if(!(hasF('stock_area_add')||hasF('stock_area_edit')||hasF('stock_area_delete'))) $('#btn-area-manage').hide();
+    if(hasF('stock_add'))        $('#btn-add-stock').show();
+    if(hasF('stock_batch_add'))  $('#btn-batch-add').show();
+    if(hasF('stock_group_create')) $('#btn-add-group').show();
     if(!G._canBatch){
         $('#th-list-chk').hide();
         $('#btn-batch-group,#btn-batch-unit').hide();
@@ -7223,12 +7183,12 @@ function renderTable(rows, page, ps){
           +'<td style="font-size:11px;line-height:1.7;">'+refs+'</td>'
           +'<td style="font-size:11px;color:#888;">'+dateStr+'</td>'
           +'<td style="text-align:center;white-space:nowrap;">'
-          +(hasP('C')||hasP('A')?'<button class="ba ba-in" onclick="openIn('+r.stock_item_id+')" title="入庫"><i class="fa fa-arrow-down"></i></button>':'')
-          +(hasP('C')||hasP('A')?'<button class="ba ba-out" onclick="openOut('+r.stock_item_id+')" title="出庫"><i class="fa fa-arrow-up"></i></button>':'')
-          +(hasP('U')||hasP('A')?'<button class="ba ba-move" onclick="openMove('+r.stock_item_id+')" title="移位"><i class="fa fa-exchange"></i></button>':'')
-          +(hasP('U')||hasP('A')?'<button class="ba ba-edit" onclick="openEdit('+r.stock_item_id+')" title="編輯"><i class="fa fa-pencil"></i></button>':'')
+          +(hasF('stock_in')?'<button class="ba ba-in" onclick="openIn('+r.stock_item_id+')" title="入庫"><i class="fa fa-arrow-down"></i></button>':'')
+          +(hasF('stock_out')?'<button class="ba ba-out" onclick="openOut('+r.stock_item_id+')" title="出庫"><i class="fa fa-arrow-up"></i></button>':'')
+          +(hasF('stock_move')?'<button class="ba ba-move" onclick="openMove('+r.stock_item_id+')" title="移位"><i class="fa fa-exchange"></i></button>':'')
+          +(hasF('stock_edit')?'<button class="ba ba-edit" onclick="openEdit('+r.stock_item_id+')" title="編輯"><i class="fa fa-pencil"></i></button>':'')
           +'<button class="ba ba-info" onclick="openDetail('+r.stock_item_id+')" title="歷程"><i class="fa fa-history"></i></button>'
-          +(G._isAdminUser?'<button class="ba ba-del" onclick="openPurge('+r.stock_item_id+',\''+esc(r.d_id)+'\')" title="強制刪除（A權限）"><i class="fa fa-trash"></i></button>':'')
+          +(G._canPurge?'<button class="ba ba-del" onclick="openPurge('+r.stock_item_id+',\''+esc(r.d_id)+'\')" title="強制刪除（A權限）"><i class="fa fa-trash"></i></button>':'')
           +'</td></tr>';
     });
     $('#stock-tbody').html(h);
@@ -7292,7 +7252,7 @@ function openEdit(id){
         hideDidMsg();
         if(G._didLegacyUnbound){
             showDidMsg('<i class="fa fa-info-circle"></i> 這筆是尚未綁定料號ID的舊資料（客戶欄不會自動帶入）。'
-                + (PERM==='A' ? '可到「主資料設定 → 料號綁定檢查」批次補綁，或在此重新選一次料號。' : '請洽管理員以「料號綁定檢查」補綁。'), '#8a6d3b');
+                + (hasF('stock_unbound_check') ? '可到「主資料設定 → 料號綁定檢查」批次補綁，或在此重新選一次料號。' : '請洽管理員以「料號綁定檢查」補綁。'), '#8a6d3b');
         }
         $('#item-cat').val(d.item_type||''); onCatChange(d.location_id);
         $('#item-client').val(d.client_name||''); $('#item-cid').val(d.client_id||'');
@@ -8024,9 +7984,9 @@ function openDetail(id){
             var deptUserStr='';
             if(t.dept_name) deptUserStr+='<i class="fa fa-building-o"></i> '+esc(t.dept_name)+' ';
             if(t.out_user_name) deptUserStr+='<i class="fa fa-user-o"></i> '+esc(t.out_user_name);
-            var canDel=(hasP('D')||hasP('A'))&&(t.txn_type==='in'||t.txn_type==='out'||(t.txn_type==='count'&&G._canCount));
+            var canDel=hasF('stock_delete_txn')&&(t.txn_type==='in'||t.txn_type==='out'||(t.txn_type==='count'&&hasF('stock_count_delete')));
             // A權限：可多選 checkbox（in / out / move / adjust / count 類型現在皆可拆分）
-            var canSplit = G._isAdminUser && (t.txn_type==='in'||t.txn_type==='out'||t.txn_type==='move'||t.txn_type==='adjust'||t.txn_type==='count');
+            var canSplit = G._canSplit && (t.txn_type==='in'||t.txn_type==='out'||t.txn_type==='move'||t.txn_type==='adjust'||t.txn_type==='count');
             var chkHtml = canSplit
                 ? '<input type="checkbox" class="txn-split-chk" data-txn-id="'+t.txn_id+'" data-qty="'+qty+'" data-type="'+t.txn_type+'" data-loc="'+esc(t.location_to||t.location_from||'')+'" data-loc-id="'+(t.location_to_id||t.location_from_id||'')+'" data-remark="'+esc(t.remark||'')+'" style="margin-right:5px;cursor:pointer;" onchange="updateSplitSelection()">'
                 : '';
@@ -8053,7 +8013,7 @@ function openDetail(id){
         th+='</div>';
         $('#detail-txns').html(th);
         // 若 A 權限且有可拆分的異動記錄，顯示 toolbar
-        if(G._isAdminUser && $('.txn-split-chk').length > 0){
+        if(G._canSplit && $('.txn-split-chk').length > 0){
             $('#split-txn-toolbar').css('display','flex');
         } else {
             $('#split-txn-toolbar').hide();
@@ -8251,12 +8211,9 @@ function switchTab(tab, btn){
 }
 
 function showReqPermBadge(){
-    var labels={'A':'管理員（全權）','R':'唯讀','C':'可新增','U':'可修改','D':'可刪除'};
-    var p=PERM||'R';
-    var text=p==='A'?'管理員（全權）':(p==='R'?'唯讀（R）':('權限：'+p));
-    var color=p==='A'?'#155724':(p==='R'?'#856404':'#0c4a6e');
-    var bg=p==='A'?'#d4edda':(p==='R'?'#fff3cd':'#e0f2fe');
-    $('#req-perm-badge').css({background:bg,color:color,'border-color':bg}).text(text);
+    // 角色制：顯示目前持有的庫存角色名稱
+    var text=STK_ROLE_LABELS.length?('角色：'+STK_ROLE_LABELS.join('、')):'尚未指派角色';
+    $('#req-perm-badge').css({background:'#e8f4fd',color:'#1a78c2','border-color':'#b8d8f0'}).text(text);
 }
 
 // 領料單通知從右上角鈴鐺點開「在庫存頁查看」時，帶 ?req=單號ID 開新分頁進來，
@@ -8277,7 +8234,7 @@ function loadSettingData(){
 // 只補 stock_items.d_setting_id，不動數量／儲位／異動紀錄。
 var BIND_ROWS = [];
 function loadBindSummary(){
-    if(PERM!=='A') return;
+    if(!hasF('stock_unbound_check')) return;
     $('#bind-card').show();
     ajx({action:'unbound_parts_list'}, function(r){
         if(!r.success){ $('#bind-summary').text('讀取失敗：'+(r.message||'')).css('color','#DD5138'); return; }
@@ -8289,7 +8246,7 @@ function loadBindSummary(){
     });
 }
 function openBindModal(){
-    if(PERM!=='A'){ toast('需要 A 級權限','error'); return; }
+    if(!hasF('stock_unbound_check')){ toast('沒有料號綁定檢查的權限','error'); return; }
     $('#bind-tbody').html('<tr><td colspan="6" class="text-center text-muted"><i class="fa fa-spinner fa-spin"></i></td></tr>');
     $('#bindModal').modal('show');
     // 點開即刷新：每次開窗都跟後端要最新清單，避免拿舊快取去綁已經被別人綁過的資料
@@ -8449,9 +8406,9 @@ function renderLocTable(data){
          +'<td style="color:#888;font-size:11px;">'+esc(area)+'</td>'
          +'<td>'+esc(l.location_name||'')+'</td>'
          +'<td>'
-         +(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-default" onclick="openLocModal('+l.location_id+')" title="編輯"><i class="fa fa-pencil"></i></button> ':'')
-         +(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-info" onclick="openMoveLocModal('+l.location_id+',\''+esc(l.location_code)+'\')" title="整批移動到其他儲位"><i class="fa fa-exchange"></i></button> ':'')
-         +(hasP('D')||hasP('A')?'<button class="btn btn-xs btn-danger" onclick="delLoc('+l.location_id+',\''+esc(l.location_code)+'\')"><i class="fa fa-trash"></i></button>':'')
+         +(hasF('stock_loc_edit')?'<button class="btn btn-xs btn-default" onclick="openLocModal('+l.location_id+')" title="編輯"><i class="fa fa-pencil"></i></button> ':'')
+         +(hasF('stock_loc_edit')?'<button class="btn btn-xs btn-info" onclick="openMoveLocModal('+l.location_id+',\''+esc(l.location_code)+'\')" title="整批移動到其他儲位"><i class="fa fa-exchange"></i></button> ':'')
+         +(hasF('stock_loc_delete')?'<button class="btn btn-xs btn-danger" onclick="delLoc('+l.location_id+',\''+esc(l.location_code)+'\')"><i class="fa fa-trash"></i></button>':'')
          +'</td></tr>';
     });
     $('#loc-tbody').html(h||'<tr><td colspan="4" class="text-center text-muted">尚無儲位</td></tr>');
@@ -8477,7 +8434,7 @@ function renderCatTable(data){
           +'<td style="text-align:center;">'+(dashVal?'<i class="fa fa-check" style="color:var(--accent);"></i>':'<i class="fa fa-minus" style="color:#ccc;"></i>')+'</td>'
           +'<td style="font-size:11px;">'+(_catShowFieldsStr(c)||'<span style="color:#ccc;">—</span>')+'</td>'
           +'<td id="cat-loc-cnt-'+c.category_id+'" style="font-size:11px;color:#888;">—</td>'
-          +'<td>'+(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-default" onclick="openCatModal('+c.category_id+')"><i class="fa fa-pencil"></i></button> ':'')+' '+(hasP('D')||hasP('A')?'<button class="btn btn-xs btn-danger" onclick="delCat('+c.category_id+')"><i class="fa fa-trash"></i></button>':'')+'</td>'
+          +'<td>'+(hasF('stock_cat_edit')?'<button class="btn btn-xs btn-default" onclick="openCatModal('+c.category_id+')"><i class="fa fa-pencil"></i></button> ':'')+' '+(hasF('stock_cat_delete')?'<button class="btn btn-xs btn-danger" onclick="delCat('+c.category_id+')"><i class="fa fa-trash"></i></button>':'')+'</td>'
           +'</tr>';
     });
     $('#cat-tbody').html(h||'<tr><td colspan="8" class="text-center text-muted">尚無種類</td></tr>');
@@ -8693,8 +8650,8 @@ function renderUnitTable(data){
          +'<td>'+esc(u.base_unit_name||'（基準）')+'</td>'
          +'<td>'+esc(u.convert_factor||'')+'</td>'
          +'<td>'
-         +(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-default" onclick="openUnitModal('+u.unit_id+')"><i class="fa fa-pencil"></i></button> ':'')
-         +(hasP('D')||hasP('A')?'<button class="btn btn-xs btn-danger" onclick="delUnit('+u.unit_id+')"><i class="fa fa-trash"></i></button>':'')
+         +(hasF('stock_unit_edit')?'<button class="btn btn-xs btn-default" onclick="openUnitModal('+u.unit_id+')"><i class="fa fa-pencil"></i></button> ':'')
+         +(hasF('stock_unit_delete')?'<button class="btn btn-xs btn-danger" onclick="delUnit('+u.unit_id+')"><i class="fa fa-trash"></i></button>':'')
          +'</td></tr>';
     });
     $('#unit-tbody').html(h||'<tr><td colspan="6" class="text-center text-muted">尚無單位</td></tr>');
@@ -8710,8 +8667,8 @@ function renderSafetyTable(data){
           +'<td>'+qtyStr+'</td>'
           +'<td>'+esc(s.unit_name||'主單位')+'</td>'
           +'<td>'
-          +(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-default" onclick="openSafetyModal('+s.id+',\''+esc(s.d_id)+'\','+s.safety_qty+','+(s.unit_id||0)+',\''+esc(s.remark||'')+'\')"><i class="fa fa-pencil"></i></button> ':'')
-          +(hasP('D')||hasP('A')?'<button class="btn btn-xs btn-danger" onclick="delSafety('+s.id+')"><i class="fa fa-trash"></i></button>':'')
+          +(hasF('stock_safety_edit')?'<button class="btn btn-xs btn-default" onclick="openSafetyModal('+s.id+',\''+esc(s.d_id)+'\','+s.safety_qty+','+(s.unit_id||0)+',\''+esc(s.remark||'')+'\')"><i class="fa fa-pencil"></i></button> ':'')
+          +(hasF('stock_safety_delete')?'<button class="btn btn-xs btn-danger" onclick="delSafety('+s.id+')"><i class="fa fa-trash"></i></button>':'')
           +'</td></tr>';
     });
     $('#safety-tbody').html(h||'<tr><td colspan="4" class="text-center text-muted">尚未設定</td></tr>');
@@ -8801,8 +8758,8 @@ function loadAreaList(){
         (r.data||[]).forEach(function(a){
             h+='<tr><td><strong>'+esc(a.area_name)+'</strong></td><td>'+esc(a.sort_order)+'</td>'
               +'<td>'
-              +(hasP('U')||hasP('A')?'<button class="btn btn-xs btn-default" onclick="editArea('+a.area_id+',\''+esc(a.area_name)+'\','+a.sort_order+')"><i class="fa fa-pencil"></i></button> ':'')
-              +(hasP('D')||hasP('A')?'<button class="btn btn-xs btn-danger" onclick="delArea('+a.area_id+')"><i class="fa fa-trash"></i></button>':'')
+              +(hasF('stock_area_edit')?'<button class="btn btn-xs btn-default" onclick="editArea('+a.area_id+',\''+esc(a.area_name)+'\','+a.sort_order+')"><i class="fa fa-pencil"></i></button> ':'')
+              +(hasF('stock_area_delete')?'<button class="btn btn-xs btn-danger" onclick="delArea('+a.area_id+')"><i class="fa fa-trash"></i></button>':'')
               +'</td></tr>';
         });
         $('#area-list-body').html(h||'<tr><td colspan="3" class="text-center text-muted">尚無廠區</td></tr>');
@@ -9402,7 +9359,7 @@ function renderCountDetail(sid,rows){
      +'<span style="font-size:12px;background:#fde8e8;color:#a52020;padding:2px 8px;border-radius:20px;">差異：'+hasDiff+'</span>'
      +(notAdj>0?'<button class="btn btn-sm" style="background:var(--primary);color:#fff;font-size:12px;height:28px;" onclick="applyAdj('+sid+')"><i class="fa fa-check"></i> 套用調整</button>':'')
      // A 或 CRUD：拆分工具列
-     +(G._canCount
+     +((G._canCount&&G._canSplit)
          ? '<span id="count-split-toolbar" style="display:none;align-items:center;gap:4px;">'
            +'<span id="count-split-sel-count" style="font-size:11px;color:#888;"></span>'
            +'<button class="btn btn-sm" style="background:var(--accent);color:#fff;height:28px;font-size:12px;" onclick="openSplitFromCount()"><i class="fa fa-scissors"></i> 拆分選取</button>'
@@ -9413,7 +9370,7 @@ function renderCountDetail(sid,rows){
      +'<button class="btn btn-sm btn-default" style="height:28px;font-size:12px;" onclick="openRandomCount('+sid+')"><i class="fa fa-random"></i> 隨機抽盤</button>'
      +'</div></div>';
     // A 或 CRUD：checkbox 欄（供拆分選取）
-    var hasChk = G._canCount;
+    var hasChk = G._canCount&&G._canSplit;
     h+='<div><table class="table tbl-sm" id="count-tbl" style="margin:0;width:100%;">'
      +'<thead><tr>'
      +(hasChk?'<th style="width:26px;"><input type="checkbox" id="count-chk-all" title="全選/取消" onchange="toggleAllCountChk(this)"></th>':'')
@@ -9478,7 +9435,7 @@ function clearCountSelection(){
     updateCountSplitSelection();
 }
 function openSplitFromCount(){
-    if(!G._canCount){ toast('需要 A 或 CRUD 完整權限','error'); return; }
+    if(!(G._canCount&&G._canSplit)){ toast('沒有拆分異動的權限','error'); return; }
     var checked = $('.count-split-chk:checked');
     if(checked.length < 1){ toast('請至少勾選 1 筆進行拆分','error'); return; }
 
@@ -9718,7 +9675,7 @@ $('#out-unit').on('change',function(){ applyUnitStep($(this).val(),'out-qty'); c
 
 // ── 強制刪除庫存（A權限）────────────────────────
 function openPurge(id, did){
-    if(!G._isAdminUser){toast('需要 A 級權限','error');return;}
+    if(!G._canPurge){toast('沒有強制刪除的權限','error');return;}
     if(!confirm('⚠️ 第一次確認\n\n確定要永久刪除料號「'+did+'」的庫存記錄？\n\n此操作不可復原，將刪除所有異動歷程！')){return;}
     $('#purge-item-id').val(id);
     $('#purge-item-info').html('<strong>料號：</strong>'+esc(did)+'<br><span style="color:#c0392b;">此筆所有庫存記錄、異動歷程、盤點明細將永久刪除</span>');
@@ -11090,7 +11047,7 @@ function updateSplitQtySummary(){
 }
 
 function confirmSplitTxn(){
-    if(!G._isAdminUser){ toast('需要 A 級權限','error'); return; }
+    if(!G._canSplit){ toast('沒有拆分異動的權限','error'); return; }
     var stockItemId = $('#split-stock-item-id').val();
     if(!stockItemId){ toast('找不到品項','error'); return; }
 
@@ -11177,7 +11134,7 @@ function loadRequisitions(p){
                 +'<td style="font-size:12px;white-space:nowrap;">'+esc(crAt)+'</td>'
                 +'<td style="font-size:12px;white-space:nowrap;color:'+(modAt!==crAt?'var(--accent)':'#aaa')+';">'+esc(modAt)+'</td>'
                 +'<td><button class="btn btn-xs btn-info" onclick="openReqDetail('+row.req_id+')" title="查看"><i class="fa fa-eye"></i></button>'
-                +(hasP('C')||hasP('A')?'<button class="btn btn-xs btn-danger" style="margin-left:3px;" onclick="deleteReq('+row.req_id+')" title="刪除"><i class="fa fa-trash"></i></button>':'')
+                +((hasF('stock_req_edit_all')||parseInt(row.Created_By)===CURRENT_USER_ID)?'<button class="btn btn-xs btn-danger" style="margin-left:3px;" onclick="deleteReq('+row.req_id+')" title="刪除"><i class="fa fa-trash"></i></button>':'')
                 +'</td></tr>');
         });
         $('#req-pager').html(buildPager(r.page, r.pages, 'loadRequisitions'));
@@ -11579,8 +11536,8 @@ function openReqDetail(reqId){
         var hasUrgent=(req.items||[]).some(function(it){ return parseInt(it.is_urgent)===1; });
         if(!isDeleted&&hasUrgent) badges+=' <span class="label label-danger"><i class="fa fa-bolt"></i> 含急件</span>';
         $('#req-detail-badges').html(badges);
-        var canIssue=!isDeleted&&(hasP('A')||(hasP('C')&&hasP('U')&&hasP('D'))) && st<2;
-        var canEdit=!isDeleted&&(hasP('A')||(parseInt(req.Created_By)===CURRENT_USER_ID)) && st<2;
+        var canIssue=!isDeleted&&hasF('stock_req_issue') && st<2;
+        var canEdit=!isDeleted&&(hasF('stock_req_edit_all')||(parseInt(req.Created_By)===CURRENT_USER_ID)) && st<2;
         var h='';
         if(isDeleted) h='<div class="alert alert-danger" style="padding:8px 12px;margin-bottom:8px;font-size:13px;"><i class="fa fa-trash"></i> 此需求單已被刪除'+(req.delete_reason?' — 原因：'+esc(req.delete_reason):'')+(req.deleted_at?' （'+esc((req.deleted_at||'').substr(0,16))+'）':'')+'</div>';
         h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;background:#f8f9fa;border-radius:6px;padding:10px;">'
@@ -12786,7 +12743,7 @@ function stkSelectRole(id,sys,name){
           +' <a href="javascript:void(0)" class="stk-grp-all" style="font-weight:normal;font-size:11px;margin-left:8px;">本組全選／取消</a></div><div style="display:flex;flex-wrap:wrap;gap:6px 24px;">';
         groups[g].forEach(function(f){
             h+='<label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="checkbox" class="stk-feat-cb" value="'+esc(f.code)+'"> '+esc(f.label)
-              +(f.legacy?' <span style="color:#aaa;font-size:11px;">（現行：'+esc(f.legacy)+'）</span>':'')+'</label>';
+              +'</label>';
         });
         h+='</div></div>';
     });
@@ -12867,26 +12824,26 @@ function stkLoadNotify(){
 function stkRenderNotify(r){
     if(!r||!r.success){ $('#stkPaneNotify').html('<div class="text-danger">'+esc((r&&r.message)||'載入失敗')+'</div>'); return; }
     STK.notify=r;
-    var h='<div style="font-size:12px;color:#666;margin-bottom:10px;">每一項通知可勾選要通知哪些角色（可複選）。下方「設定後會通知」是依<b>目前已指派角色的人員</b>即時算出的預覽；'
-         +'尚未指派角色前會是空的。<b>此設定目前尚未生效</b>，現行通知仍依「現行規則」發送。</div>';
+    var h='<div style="font-size:12px;color:#666;margin-bottom:10px;">每一項通知可勾選要通知哪些角色（可複選），修改／刪除領庫需求單另可勾選「通知該需求單的建立者」。操作者本人一律不通知。'
+         +'下方「設定後會通知」是依<b>目前已指派角色的人員</b>即時算出的預覽（不含建立者，建立者依每張單而定）。<b>儲存後立即生效。</b></div>';
     r.types.forEach(function(t){
         h+='<div class="stk-nt" data-key="'+esc(t.key)+'" style="border:1px solid #e3d4b6;border-radius:6px;padding:10px 12px;margin-bottom:12px;">'
           +'<div style="font-weight:700;color:#5b3a1e;margin-bottom:2px;">'+esc(t.label)+'</div>'
-          +'<div style="font-size:12px;color:#888;margin-bottom:6px;">現行規則：'+esc(t.legacy)+'</div>'
-          +'<div style="display:flex;flex-wrap:wrap;gap:6px 20px;">';
+          +'<div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">';
         r.roles.forEach(function(ro){
             h+='<label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="checkbox" class="stk-nt-cb" value="'+ro.role_id+'"'+(t.role_ids.indexOf(parseInt(ro.role_id))>=0?' checked':'')+'> '+esc(ro.is_system==1?'本站管理員':ro.role_name)+'</label>';
         });
-        h+='</div><div style="font-size:12px;margin-top:6px;color:#555;"><b>設定後會通知（'+t.preview.length+' 人）：</b>'
-          +(t.preview.length?t.preview.map(esc).join('、'):'<span style="color:#aaa;">（尚無人員，或角色尚未指派）</span>')
-          +(t.creator?'<br><span style="color:#888;">※ 此項另外固定通知該需求單的建立者。</span>':'')+'</div></div>';
+        h+='</div>'
+          +(t.creator?'<label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:8px 0 0;color:#5b3a1e;"><input type="checkbox" class="stk-nt-creator"'+(t.creator_on?' checked':'')+'> <b>通知該需求單的建立者</b></label>':'')
+          +'<div style="font-size:12px;margin-top:6px;color:#555;"><b>設定後會通知（'+t.preview.length+' 人）：</b>'
+          +(t.preview.length?t.preview.map(esc).join('、'):'<span style="color:#aaa;">（尚無人員，或角色尚未指派）</span>')+'</div></div>';
     });
     h+='<div style="text-align:right;"><button class="btn btn-primary btn-sm" onclick="stkSaveNotify()"><i class="fa fa-save"></i> 儲存通知對象</button></div>';
     $('#stkPaneNotify').html(h);
 }
 function stkSaveNotify(){
     var cfg={};
-    $('.stk-nt').each(function(){ var k=$(this).data('key'); cfg[k]=[]; $(this).find('.stk-nt-cb:checked').each(function(){ cfg[k].push(parseInt($(this).val())); }); });
+    $('.stk-nt').each(function(){ var k=$(this).data('key'); cfg[k]={roles:[],creator:$(this).find('.stk-nt-creator').is(':checked')?1:0}; $(this).find('.stk-nt-cb:checked').each(function(){ cfg[k].roles.push(parseInt($(this).val())); }); });
     ajx({action:'notify_cfg_save',cfg:JSON.stringify(cfg)},function(r){
         if(r&&r.success){ toast('通知對象已儲存'); stkRenderNotify(r); } else toast((r&&r.message)||'儲存失敗','error');
     });
