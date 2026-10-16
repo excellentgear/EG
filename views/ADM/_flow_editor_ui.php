@@ -1515,7 +1515,50 @@
     fabric.Line.prototype.__egHitPatched = true;
   }
 
+  /* 圖形內文字進入編輯後，再快速點兩下／三下，fabric 會自己「選取一個字詞／整行」
+     （IText 內建的雙擊選字、三擊選行）。流程圖的文字多半是「2-GM-01管理責任與經營策劃程序」
+     這種中間沒有空格的一長串，所以選字詞＝整段選起來，接著打的第一個字就把原文整段取代
+     （使用者 2026-10-16：「編輯圖形內文字一樣一打字原本內容就消失了」）。
+     對圖形標籤改成只把游標放到點的位置、不選取；其他文字物件（獨立文字）維持原本行為。 */
+  /* ⚠ 游標位置要連「隱藏的 textarea」一起設：fabric 的輸入其實是打進那個 textarea，
+     再由它回寫到文字物件；只改 IText 自己的 selectionStart/End，textarea 裡仍是上一次
+     的選取範圍（重新進入編輯時是整段全選），接著打的字就照 textarea 的範圍把原文取代掉。 */
+  function syncTextareaCaret(lb, a, b) {
+    var e2 = (b === undefined ? a : b);
+    function go() {
+      var t = lb && lb.hiddenTextarea;
+      if (!t || !lb.isEditing) return;
+      try { t.selectionStart = a; t.selectionEnd = e2; } catch (e) {}
+    }
+    go();
+    /* fabric 在滑鼠放開、textarea 取得焦點之後會再重寫一次選取範圍（實測重新進入編輯時
+       是整段全選），所以立即設一次還不夠，要等它做完再補設。 */
+    setTimeout(go, 0);
+    setTimeout(go, 60);
+  }
+  function patchLabelSelect() {
+    var P = fabric.IText && fabric.IText.prototype;
+    if (!P || P.__egLabelPatched) return;
+    P.__egLabelPatched = true;
+    ['selectWord', 'selectLine'].forEach(function (nm) {
+      var orig = P[nm];
+      if (typeof orig !== 'function') return;
+      P[nm] = function (i) {
+        if (this.egRole === 'label') {
+          var n = String(this.text || '').length;
+          var at = (typeof i === 'number' && i >= 0 && i <= n) ? i : n;
+          this.setSelectionStart(at);
+          this.setSelectionEnd(at);
+          syncTextareaCaret(this, at);
+          return;
+        }
+        return orig.apply(this, arguments);
+      };
+    });
+  }
+
   function build() {
+    patchLabelSelect();
     patchLineHitArea();
     patchConnHitArea();
     patchCurvedPoly();
@@ -1613,6 +1656,7 @@
         } catch (err) {}
         lb.setSelectionStart(idx);
         lb.setSelectionEnd(idx);
+        syncTextareaCaret(lb, idx);
       }
       cv.requestRenderAll();
     });
