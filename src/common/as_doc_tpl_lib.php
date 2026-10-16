@@ -136,6 +136,27 @@ function adt_style_fonts(): array
         '"Times New Roman",serif'              => 'Times New Roman',
     ];
 }
+/**
+ * 英數字型（只套到英文、數字與標點，中文仍用上面那個字型）。
+ * 做法是把它排在 font-family 的**最前面**：英數字母在這支字型裡找得到就用它，
+ * 中文字它沒有、瀏覽器自動往後找到中文字型——這是 CSS 既有的 fallback 機制，
+ * 不需要另外標記哪幾個字是英數（使用者 2026-10-16 交辦）。
+ * ⚠ 清單只放「西文字型」：放中文字型進來等於把中文字型指定兩次，
+ *   後面那個中文設定就永遠不會生效而且完全看不出原因。
+ */
+function adt_style_fonts_en(): array
+{
+    return [
+        ''                          => '（跟著中文字型）',
+        '"Arial",sans-serif'        => 'Arial',
+        '"Calibri",sans-serif'      => 'Calibri',
+        '"Verdana",sans-serif'      => 'Verdana',
+        '"Tahoma",sans-serif'       => 'Tahoma',
+        '"Times New Roman",serif'   => 'Times New Roman',
+        '"Georgia",serif'           => 'Georgia',
+        '"Courier New",monospace'   => 'Courier New',
+    ];
+}
 /** 框線型式（使用者要求的「框線分類型式」） */
 function adt_style_borders(): array
 {
@@ -157,7 +178,7 @@ function adt_style_colors(): array
 
 function adt_style_defaults(): array
 {
-    return ['tbl_font' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
+    return ['tbl_font' => '', 'tbl_font_en' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
             'cell_pad' => '4px',
             // 內容大框：把正文整塊框起來，框線與頁首同寬、上下自然對齊
@@ -191,6 +212,11 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         $v = (string)$in['tbl_font'];
         if (!array_key_exists($v, adt_style_fonts())) return ['ok' => false, 'msg' => '字型不在可選清單內'];
         $new['tbl_font'] = $v;
+    }
+    if (array_key_exists('tbl_font_en', $in)) {
+        $v = (string)$in['tbl_font_en'];
+        if (!array_key_exists($v, adt_style_fonts_en())) return ['ok' => false, 'msg' => '英數字型不在可選清單內'];
+        $new['tbl_font_en'] = $v;
     }
     if (array_key_exists('tbl_size', $in)) {
         $v = trim((string)$in['tbl_size']);
@@ -244,6 +270,22 @@ function adt_style_save(PDO $db, array $in, int $uid): array
 }
 
 /**
+ * 中文字型＋英數字型組成最後要用的 font-family（英數排前面，見 adt_style_fonts_en）。
+ * 回空字串＝兩個都沒設定，外觀維持改版前。
+ * ⚠ 只設英數字型時，中文那一段**要補上預設值**不可以留空：
+ *   font-family 只寫 Arial 的話，中文字會掉到瀏覽器的預設中文字型（通常是新細明體），
+ *   使用者會以為「只改英數卻連中文都變了」。
+ */
+function adt_style_font_stack(array $s): string
+{
+    $zh = trim((string)($s['tbl_font'] ?? ''));
+    $en = trim((string)($s['tbl_font_en'] ?? ''));
+    if ($zh === '' && $en === '') return '';
+    if ($zh === '') $zh = '"微軟正黑體","Microsoft JhengHei",sans-serif';
+    return $en === '' ? $zh : ($en . ',' . $zh);
+}
+
+/**
  * 把公版設定變成一段 CSS 變數覆寫，編輯器與列印版都注入這一段。
  * 只覆寫變數、不動任何規則——所以不會跟 eg_doc_page.css 打架。
  */
@@ -251,7 +293,8 @@ function adt_style_css(PDO $db): string
 {
     $s = adt_style_get($db);
     $css = [];
-    if ($s['tbl_font'] !== '')   $css[] = '--adt-tbl-font:' . $s['tbl_font'];
+    $stack = adt_style_font_stack($s);
+    if ($stack !== '')           $css[] = '--adt-tbl-font:' . $stack;
     if ($s['tbl_size'] !== '')   $css[] = '--adt-tbl-size:' . $s['tbl_size'];
     if ($s['tbl_weight'] !== '') $css[] = '--adt-tbl-weight:' . $s['tbl_weight'];
     $css[] = '--adt-brd-style:' . $s['brd_style'];

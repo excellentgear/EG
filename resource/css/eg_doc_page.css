@@ -149,6 +149,12 @@
 /* 頁首是固定四欄格線（table-layout:fixed ＋ colgroup）：
    每一條直框線都由 colgroup 決定，跨欄的儲存格不會把下一列的線推歪，
    所以上下兩列的框線一定對齊（使用者 2026-09-22 指出的問題）。 */
+/* 頁首／頁尾不在 .eg-docbody 裡面（它們是「一張紙」的直接子元素，跟正文並列），
+   所以要自己再吃一次公版字型——不補這一條的話，改了公版字型只有正文變，
+   上面的文件編號、文件名稱還是舊字體（使用者 2026-10-16 回報）。
+   ⚠ 只套字型不套字級：頁首的 9.5pt 是為了塞進固定高度的四欄格線調出來的，
+     跟著正文字級一起變會把整張表撐開。 */
+.adt-hdr, .adt-ftr { font-family: var(--adt-tbl-font, "微軟正黑體", "Microsoft JhengHei", sans-serif); }
 .adt-hdr { width: 100%; border-collapse: collapse; margin-bottom: 2.5mm; table-layout: fixed; }
 .adt-hdr td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .8mm 2mm; font-size: 9.5pt;
   vertical-align: middle;

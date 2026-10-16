@@ -61,6 +61,12 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
     <link href="../../resource/css/nprogress.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
+    <?php /* 內文排版（.eg-docbody／版面樣板）與列印版同一個檔。
+             這裡先自己掛一份帶版號的，eg_richtext.js 的 injectDocCss() 看到
+             id 已經在就不會再掛一次沒有版號的——改了 CSS 使用者卻還看到舊樣式，
+             十之八九就是那一份沒有版號的被瀏覽器快取住（見記憶 asset-cache-busting）。 */ ?>
+    <link id="eg-docpage-css" rel="stylesheet"
+          href="../../resource/css/eg_doc_page.css?v=<?= @filemtime(__DIR__.'/../../resource/css/eg_doc_page.css') ?>">
     <style>
         #sidebar-menu { visibility: hidden; }
         /* .right_col 的第一個子元素一定要 clear:both——.top_nav 高度是 0 且浮動溢出，
@@ -782,7 +788,11 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
       <!-- 工具列：排版與文書軟體一樣，選了就在下面的預覽即時看到結果 -->
       <div class="st-bar">
         <span class="st-lab">字型</span>
-        <select id="stFont" class="st-sel" style="max-width:150px" data-eg-skip></select>
+        <select id="stFont" class="st-sel" style="max-width:150px" data-eg-skip
+                title="中文字型；頁首的文件編號／文件名稱也會跟著變"></select>
+        <span class="st-lab">英數</span>
+        <select id="stFontEn" class="st-sel" style="max-width:140px" data-eg-skip
+                title="只套在英文、數字與西文標點上，中文仍用左邊那個字型"></select>
         <span class="st-lab">字級</span>
         <select id="stSize" class="st-sel" data-eg-skip>
           <option value="">（跟著內文）</option>
@@ -811,6 +821,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
       </div>
       <div class="tpl-hint">
         改完按下方「存檔」才會套用到所有文件；預設值與改版前完全相同，沒動過的文件外觀不會變。<br>
+        <b>字型</b>會一路套到<b>頁首的文件編號、文件名稱、頁次、頁版別</b>與封面、制修訂紀錄書；
+        <b>英數</b>只作用在英文、數字與西文標點（中文仍用左邊的字型），留「跟著中文字型」就是不特別指定。<br>
         <b>內容大框</b>打開後，正文會被一個外框框起來，<b>框線與上方頁首同寬、左右自然對齊</b>，
         匯入的內容直接放進這個大框裡。
       </div>
@@ -1787,6 +1799,7 @@ function fillStyleForm() {
         });
     }
     fill($('#stFont'), o.fonts, s.tbl_font || '');
+    fill($('#stFontEn'), o.fonts_en || {}, s.tbl_font_en || '');
     fill($('#stBStyle'), o.borders, s.brd_style || 'solid');
     fill($('#stBW'), o.widths, s.brd_w || '1px');
     fill($('#stBColor'), o.colors, s.brd_color || '#000000');
@@ -1804,7 +1817,12 @@ function previewStyle() {
     /* 沒選字型／字級時要把變數**移除**，不是設成 inherit：
        設了值就輪不到 CSS 裡 var(…, 預設) 的那個預設，預覽會變成跳窗的字型，
        跟存檔後的實際結果對不起來 */
-    var fv = $('#stFont').val(), sv = $('#stSize').val();
+    /* 英數字型排在最前面，中文排後面——跟後端 adt_style_font_stack() 同一套規則。
+       只選了英數時中文要補上預設字型，不然中文會掉到瀏覽器預設的新細明體，
+       看起來像「只改英數卻連中文都變了」。 */
+    var zh = $('#stFont').val() || '', en = $('#stFontEn').val() || '';
+    var fv = (!zh && !en) ? '' : ((en ? en + ',' : '') + (zh || '"微軟正黑體","Microsoft JhengHei",sans-serif'));
+    var sv = $('#stSize').val();
     if (fv) p.style.setProperty('--adt-tbl-font', fv); else p.style.removeProperty('--adt-tbl-font');
     if (sv) p.style.setProperty('--adt-tbl-size', sv); else p.style.removeProperty('--adt-tbl-size');
     p.style.setProperty('--adt-tbl-weight', $('#stBold').hasClass('on') ? 'bold' : 'normal');
@@ -1821,7 +1839,7 @@ function previewStyle() {
         p.style.setProperty('--adt-body-pad', '0');
     }
 }
-$(document).on('change', '#stFont,#stSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
+$(document).on('change', '#stFont,#stFontEn,#stSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
 $(document).on('click', '#stBold,#stFrame', function(){ $(this).toggleClass('on'); previewStyle(); });
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
@@ -1839,7 +1857,8 @@ $('#btnTplSave').on('click', function(){
         if (!$('#stFont').length) { finishTpl(); return; }
         $.post(API, {
             action: 'tpl_style_save', csrf: CSRF,
-            tbl_font:   $('#stFont').val(),
+            tbl_font:    $('#stFont').val(),
+            tbl_font_en: $('#stFontEn').val(),
             tbl_size:   $('#stSize').val(),
             tbl_weight: $('#stBold').hasClass('on') ? 'bold' : 'normal',
             brd_style:  $('#stBStyle').val(),
