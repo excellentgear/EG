@@ -56,6 +56,10 @@ switch ($action) {
         psReply(['success' => true, 'ctx' => $ctx] + $r);
     }
 
+    case 'find_part': {
+        psReply(['success' => true, 'rows' => ps_search_parts($pdo, (string)($_POST['kw'] ?? ''))]);
+    }
+
     case 'compare': {
         $a = (int)($_POST['a'] ?? $_GET['a'] ?? 0);
         $b = (int)($_POST['b'] ?? $_GET['b'] ?? 0);

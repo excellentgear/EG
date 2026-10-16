@@ -40,7 +40,7 @@
         var css = [
             '.egps-mask{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(60,40,15,.45);z-index:10600;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 0;}',
             '.egps-box{background:#fff;border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.3);width:820px;max-width:96%;color:#3d2c17;font-size:13px;font-family:inherit;line-height:1.5;}',
-            '.egps-box.sm{width:520px;} .egps-box.lg{width:980px;}',
+            '.egps-box.sm{width:560px;} .egps-box.lg{width:980px;}',
             '.egps-hd{background:#8a5a2b;color:#fff;padding:9px 14px;border-radius:6px 6px 0 0;display:flex;align-items:center;font-size:14px;font-weight:700;}',
             '.egps-hd .x{margin-left:auto;cursor:pointer;font-size:20px;line-height:1;padding:0 4px;}',
             '.egps-bd{padding:12px 14px;max-height:72vh;overflow:auto;}',
@@ -266,8 +266,33 @@
                 + '<label class="egps-chk"><input type="checkbox" id="egps-en"' + (r.enabled ? ' checked' : '') + '> 啟用類似料號提示</label><hr style="margin:6px 0;">'
                 + '<div style="columns:2;column-gap:16px;">' + (r.choices || []).map(function (c) {
                     return '<label class="egps-chk"><input type="checkbox" class="egps-lb" value="' + c.label_id + '"' + (sel[c.label_id] ? ' checked' : '') + '> ' + esc(c.label_name) + '</label>';
-                }).join('') + '</div><div id="egps-msg" class="egps-muted" style="margin-top:6px;"></div>';
+                }).join('') + '</div><div id="egps-msg" class="egps-muted" style="margin-top:6px;"></div>'
+                + '<hr style="margin:10px 0 6px;"><div><b>查詢某個料號有哪些類似料號與等級</b>（不必儲存設定就能查）</div>'
+                + '<div style="margin-top:4px;"><input id="egps-q" type="text" placeholder="輸入料號關鍵字（至少 2 字）" style="width:260px;padding:2px 6px;border:1px solid #c9a97a;border-radius:3px;"> <span class="egps-btn" id="egps-qgo" style="margin-left:0;">查詢</span></div>'
+                + '<div id="egps-qres" style="margin-top:6px;"></div>';
             var m = openMask('<i class="fa fa-cog"></i>&nbsp;類似料號比對設定', s, 'sm', '<span class="egps-btn" id="egps-save" style="background:#F0A24B;border-color:#d98a2f;">儲存</span>');
+            function qgo() {
+                var kw = m.querySelector('#egps-q').value, box = m.querySelector('#egps-qres');
+                box.innerHTML = '<span class="egps-muted">查詢中…</span>';
+                post({ action: 'find_part', kw: kw }).then(function (x) {
+                    var rows = (x && x.rows) || [];
+                    if (!rows.length) { box.innerHTML = '<span class="egps-muted">找不到料號（至少輸入 2 個字）</span>'; return; }
+                    box.innerHTML = rows.map(function (p) {
+                        return '<div style="padding:1px 0;"><span class="egps-lnk" data-pick="' + p.d_id + '">' + esc(p.part_no) + '</span> <span class="egps-muted">' + esc(p.customer || '—')
+                            + (parseInt(p.has_gear, 10) ? '' : '（無齒輪規格，不偵測）') + '</span></div>';
+                    }).join('');
+                }).catch(function () { box.innerHTML = '<span class="egps-muted">網路錯誤</span>'; });
+            }
+            m.querySelector('#egps-qgo').addEventListener('click', qgo);
+            m.querySelector('#egps-q').addEventListener('keydown', function (e) { if (e.key === 'Enter') qgo(); });
+            m.querySelector('#egps-qres').addEventListener('click', function (e) {
+                var id = e.target.getAttribute && e.target.getAttribute('data-pick');
+                if (!id) return;
+                post({ action: 'check', d_id: id, ctx: 'master' }).then(function (r) {
+                    if (!r || !r.items || !r.items.length) { alert('這個料號沒有類似料號（或沒有齒輪規格）'); return; }
+                    show(r, 'master', parseInt(id, 10));
+                });
+            });
             m.querySelector('#egps-save').addEventListener('click', function () {
                 var ids = [].slice.call(m.querySelectorAll('.egps-lb:checked')).map(function (x) { return parseInt(x.value, 10); });
                 post({ action: 'settings_save', csrf: r.csrf, enabled: m.querySelector('#egps-en').checked ? 1 : 0, labels: JSON.stringify(ids) }).then(function (x) {

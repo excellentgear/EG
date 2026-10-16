@@ -159,7 +159,10 @@ function ps_gear_list(PDO $db, int $dId): array {
             $n = ps_gear_norm($g, $tn);
             // 完全沒有齒數的列（空白列）不算齒輪資料
             if ($n['teeth'] === '' && $n['module'] === '' && $n['sp_type'] === '' && $n['chain'] === '') continue;
-            $out[] = ['norm' => $n, 'sig' => implode('|', $n)];
+            // 轉位係數常常有一方沒填（實案例：同一支圖，一支填 -0.29、另一支空白），所以不放進簽章，
+            // 改由 ps_find 另外比：兩邊都有填且不同才算不同；只有一方填就算相同但在原因裡註明。
+            $sigParts = $n; unset($sigParts['shift']);
+            $out[] = ['norm' => $n, 'sig' => implode('|', $sigParts)];
         }
     } catch (Throwable $e) {}
     usort($out, function ($a, $b) { return strcmp($a['sig'], $b['sig']); });
@@ -283,6 +286,14 @@ function ps_find(PDO $db, int $dId, int $limit = 12): array {
             if (!$theirs || ps_gear_sig_all($theirs) !== $mySig) continue;
             $h = ps_part_head($db, $cid);
             if (!$h) continue;
+            // 轉位係數：兩邊都有填且不同 → 不算類似；只有一方填 → 算相同並註明
+            $shiftNote = ''; $shiftBad = false;
+            foreach ($mine as $i => $mg) {
+                $a = $mg['norm']['shift']; $b = $theirs[$i]['norm']['shift'] ?? '';
+                if ($a !== '' && $b !== '' && abs((float)$a - (float)$b) > 0.00005) { $shiftBad = true; break; }
+                if (($a === '') !== ($b === '')) $shiftNote = '轉位係數只有一方有填（' . ($a !== '' ? '本料號 X' . $a : '對方 X' . $b) . '），視為相同';
+            }
+            if ($shiftBad) continue;
             $theirLen = ps_num($h['wlen']);
             $lenOk = null;   // null＝無法確認
             if ($myLen !== '' && $theirLen !== '') {
@@ -290,6 +301,7 @@ function ps_find(PDO $db, int $dId, int $limit = 12): array {
                 $lenOk = true;
             }
             $reasons = ['齒輪規格完全相同（' . ps_gear_brief($mine) . '）'];
+            if ($shiftNote !== '') $reasons[] = $shiftNote;
             if ($lenOk === true) $reasons[] = '工件總長相同（' . $myLen . ' mm）';
             else $reasons[] = '工件總長' . ($myLen === '' && $theirLen === '' ? '雙方都未填' : ($myLen === '' ? '本料號未填' : '對方未填')) . '，無法確認是否相同';
             $level = ($lenOk === true) ? 'A' : 'C';
@@ -455,4 +467,18 @@ function ps_order_detail(PDO $db, int $orderId): ?array {
                 'qty' => ps_num($r['Qty']), 'price' => ps_num($r['unit_price']), 'currency' => $r['currency'],
                 'process' => $r['Processing_items'], 'spec' => $r['Specification'], 'note' => $r['Order_ps'], 'customer_order' => $r['C_order']];
     } catch (Throwable $e) { return null; }
+}
+
+/** 依料號關鍵字找料號（查詢用）：回 d_id／料號／客戶，最多 15 筆；同時標出有沒有齒輪規格 */
+function ps_search_parts(PDO $db, string $kw): array {
+    $kw = trim($kw);
+    if (mb_strlen($kw) < 2) return [];
+    try {
+        $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id AS part_no, c.customer,
+                                   EXISTS(SELECT 1 FROM d_setting_gear g WHERE g.d_setting_id=d.d_id) AS has_gear
+                            FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                            WHERE d.D_Setting_Id LIKE ? ORDER BY (d.D_Setting_Id=?) DESC, d.d_id DESC LIMIT 15");
+        $st->execute(['%' . $kw . '%', $kw]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
 }
