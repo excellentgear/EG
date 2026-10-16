@@ -252,6 +252,9 @@ $roleLabel = cm_role_label($perms);
                 <i class="fa fa-question-circle" id="btnRoleHelp" style="cursor:pointer;" title="角色權限說明"></i></span>
         </div>
 
+        <div class="cm-toolbar" style="margin-bottom:0;"><label><b>年度</b></label>
+            <select id="yearSel" style="width:130px;"><option value="0">全部年度</option></select>
+            <span class="hint">三個分頁共用：溝通記錄依溝通日期、追蹤表依反應日期、管制表依建立年度</span></div>
         <div class="cm-tabs" id="mainTabs">
             <span class="cm-tab on" data-tab="rec">利害關係者溝通記錄表<small>3-GM-01-01　事件當下的紀錄</small></span>
             <span class="cm-tab" data-tab="track">回應利害關係者措施追蹤表<small>3-GM-01-02　盯還沒做完的事</small></span>
@@ -1014,6 +1017,7 @@ function post(data, cb){
     $.post(API, data, function(res){ NProgress.done(); if (res && res.ok) cb(res); }, 'json')
      .fail(function(){ NProgress.done(); });
 }
+function curYear(){ return +($('#yearSel').val() || 0); }
 function get(data, cb){
     NProgress.start();
     $.getJSON(API, data, function(res){ NProgress.done(); if (res && res.ok) cb(res); })
@@ -1201,6 +1205,8 @@ $('#mainTabs .cm-tab').on('click', function(){
     loadRec(); loadTrack(); loadCtrl();
 });
 
+$('#yearSel').on('change', function(){ PAGE.rec = PAGE.track = PAGE.ctrl = 1; loadRec(); loadTrack(); loadCtrl(); });
+
 /* ================= 初始化 ================= */
 function boot(){
     get({action:'meta'}, function(res){
@@ -1223,8 +1229,13 @@ function boot(){
         get({action:'identities', user_id:res.me.id, date:res.today}, function(r2){
             MYIDENTS = r2.identities || [];
         });
-        loadRec(); loadTrack(); loadCtrl();
-        openFromUrl();
+        get({action:'years'}, function(ry){
+            var ys = $('#yearSel'), cy = String(new Date().getFullYear());
+            (ry.years || []).forEach(function(y){ ys.append($('<option>').val(y).text(y + ' 年')); });
+            ys.val(cy);
+            loadRec(); loadTrack(); loadCtrl();
+            openFromUrl();
+        });
     });
 }
 /* 通知點進來時直接開到那張單（路由在 views/partPage/sideAndTopBarMenu.html）：
@@ -1293,7 +1304,7 @@ function recFilters(){
     return {action:'rec_list', page:PAGE.rec, per:PER.rec,
         status:$('#recStatus').val(), cat:$('#recKind').val(),
         from:$('#recFrom').val(), to:$('#recTo').val(),
-        mine:$('#recMine').is(':checked') ? 1 : 0, kw:$('#recKw').val()};
+        mine:$('#recMine').is(':checked') ? 1 : 0, kw:$('#recKw').val(), year:curYear()};
 }
 function loadRec(){
     get(recFilters(), function(res){
@@ -2097,7 +2108,7 @@ $(document).on('click', '[data-catdel]', function(){
 
 /* ================= 分頁二：措施追蹤表 ================= */
 function loadTrack(){
-    get({action:'track_list', page:PAGE.track, per:PER.track, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(res){
+    get({action:'track_list', page:PAGE.track, per:PER.track, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val(), year:curYear()}, function(res){
         window.__trackPrint = res.print;
         var b = $('#trackBody').empty();
         if (!res.rows.length) b.html('<tr><td colspan="11" class="cm-empty">沒有符合條件的追蹤項目</td></tr>');
@@ -2229,7 +2240,7 @@ $('#btnTrackDel').on('click', function(){
 
 /* ================= 分頁三：溝通管制表 ================= */
 function loadCtrl(){
-    get({action:'ctrl_list', page:PAGE.ctrl, per:PER.ctrl, kw:$('#ctrlKw').val()}, function(res){
+    get({action:'ctrl_list', page:PAGE.ctrl, per:PER.ctrl, kw:$('#ctrlKw').val(), year:curYear()}, function(res){
         window.__ctrlPrint = res.print;
         CTRLROWS = {};
         var b = $('#ctrlBody').empty();
@@ -2827,7 +2838,7 @@ $('#btnRecPrint').on('click', function(){ if (REC && REC.rec) printRecord(REC.re
 
 /* 清單型列印＝印出目前篩選的全部結果（不是只有這一頁），所以重新向後端要 per=0 的全量 */
 $('#btnTrackPrint').on('click', function(){
-    get({action:'track_list', page:1, per:50, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(first){
+    get({action:'track_list', page:1, per:50, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val(), year:curYear()}, function(first){
         var total = first.total, per = 50, pages = Math.ceil(total / per) || 1, rows = [], done = 0;
         var render = function(){
             var meta = first.print;
@@ -2851,7 +2862,7 @@ $('#btnTrackPrint').on('click', function(){
         };
         for (var p = 1; p <= pages; p++){
             (function(pp){
-                get({action:'track_list', page:pp, per:per, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(res){
+                get({action:'track_list', page:pp, per:per, show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val(), year:curYear()}, function(res){
                     rows = rows.concat(res.rows.map(function(x){ return $.extend({__p:pp}, x); }));
                     if (++done === pages){
                         rows.sort(function(a, b){ return a.__p - b.__p; });
@@ -2863,7 +2874,7 @@ $('#btnTrackPrint').on('click', function(){
     });
 });
 $('#btnCtrlPrint').on('click', function(){
-    get({action:'ctrl_list', page:1, per:50, kw:$('#ctrlKw').val()}, function(first){
+    get({action:'ctrl_list', page:1, per:50, kw:$('#ctrlKw').val(), year:curYear()}, function(first){
         var total = first.total, per = 50, pages = Math.ceil(total / per) || 1, rows = [], done = 0;
         var render = function(){
             var meta = first.print;
@@ -2884,7 +2895,7 @@ $('#btnCtrlPrint').on('click', function(){
         };
         for (var p = 1; p <= pages; p++){
             (function(pp){
-                get({action:'ctrl_list', page:pp, per:per, kw:$('#ctrlKw').val()}, function(res){
+                get({action:'ctrl_list', page:pp, per:per, kw:$('#ctrlKw').val(), year:curYear()}, function(res){
                     rows = rows.concat(res.rows.map(function(x){ return $.extend({__p:pp}, x); }));
                     if (++done === pages){ rows.sort(function(a, b){ return a.__p - b.__p; }); render(); }
                 });
@@ -2986,7 +2997,7 @@ $('#btnRecCsv').on('click', function(){
     });
 });
 $('#btnTrackCsv').on('click', function(){
-    fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(rows){
+    fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val(), year:curYear()}, function(rows){
         csvDump('回應利害關係者措施追蹤表', ['編號','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
             rows.map(function(r, i){
                 return [r.track_no || ('#' + r.track_id), r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
@@ -2995,7 +3006,7 @@ $('#btnTrackCsv').on('click', function(){
     });
 });
 $('#btnCtrlCsv').on('click', function(){
-    fetchAll({action:'ctrl_list', kw:$('#ctrlKw').val()}, function(rows){
+    fetchAll({action:'ctrl_list', kw:$('#ctrlKw').val(), year:curYear()}, function(rows){
         csvDump('溝通管制表',
             ['項次','填表人','部門','類別','利害關係人','溝通內容','溝通管道','頻率','下次應溝通日','自動提醒','提前天數','提醒時間','提醒對象','備註'],
             rows.map(function(r, i){

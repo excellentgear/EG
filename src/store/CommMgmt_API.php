@@ -295,6 +295,23 @@ if ($action === 'identities') {
     jout(['identities'=>$list, 'gm_pool'=>cm_gm_pool($db, $biz), 'date'=>$biz]);
 }
 
+/* ---- 年度篩選：三個分頁共用的年度清單與條件（唯一實作） ---- */
+function cmYearParam() {
+    $y = (int)($_GET['year'] ?? 0);
+    return ($y >= 2000 && $y <= 2100) ? $y : 0;          // 0＝全部年度
+}
+if ($action === 'years') {
+    $ys = [];
+    foreach (["SELECT DISTINCT YEAR(comm_date) FROM comm_record WHERE is_deleted=0 AND comm_date IS NOT NULL",
+              "SELECT DISTINCT YEAR(react_date) FROM comm_track WHERE is_deleted=0 AND react_date IS NOT NULL",
+              "SELECT DISTINCT YEAR(created_at) FROM comm_ctrl WHERE is_deleted=0 AND created_at IS NOT NULL"] as $sql) {
+        foreach ($db->query($sql)->fetchAll(PDO::FETCH_COLUMN) as $y) if ((int)$y > 0) $ys[(int)$y] = 1;
+    }
+    $ys[(int)date('Y')] = 1;
+    krsort($ys);
+    jout(['years'=>array_keys($ys)]);
+}
+
 /* ---- 溝通記錄表：清單 ---- */
 if ($action === 'rec_list') {
     $page = max(1, (int)($_GET['page'] ?? 1));
@@ -307,6 +324,7 @@ if ($action === 'rec_list') {
     if (($d1 = cmDate($_GET['from'] ?? '')))  { $w[] = 'r.comm_date>=?'; $a[] = $d1; }
     if (($d2 = cmDate($_GET['to'] ?? '')))    { $w[] = 'r.comm_date<=?'; $a[] = $d2; }
     if (!empty($_GET['mine']))                { $w[] = 'r.maker_id=?';   $a[] = $uid; }
+    if (($yr = cmYearParam()))                { $w[] = 'YEAR(r.comm_date)=?'; $a[] = $yr; }
     $kw = cmS($_GET['kw'] ?? '', 60);
     if ($kw !== '') {
         // 全表搜尋鐵則：LIKE 掃過畫面上看得到的欄位，多關鍵字＝每個都要命中（可分散在不同欄位）
@@ -731,6 +749,7 @@ if ($action === 'track_list') {
     $cat = cmS($_GET['cat'] ?? '', 10);                // ''＝全部／none＝未分類／數字＝指定類別
     if ($cat === 'none') $w[] = 't.cat_id IS NULL';
     elseif ((int)$cat > 0) { $w[] = 't.cat_id=?'; $a[] = (int)$cat; }
+    if (($yr = cmYearParam())) { $w[] = 'YEAR(t.react_date)=?'; $a[] = $yr; }
     $kw = cmS($_GET['kw'] ?? '', 60);
     if ($kw !== '') {
         foreach (preg_split('/\s+/', $kw, -1, PREG_SPLIT_NO_EMPTY) as $t) {
@@ -818,6 +837,7 @@ if ($action === 'ctrl_list') {
     $per  = (int)($_GET['per'] ?? 20);
     if (!in_array($per, [5,10,20,50], true)) $per = 20;
     $w = ['is_deleted=0']; $a = [];
+    if (($yr = cmYearParam())) { $w[] = 'YEAR(created_at)=?'; $a[] = $yr; }
     $kw = cmS($_GET['kw'] ?? '', 60);
     if ($kw !== '') {
         foreach (preg_split('/\s+/', $kw, -1, PREG_SPLIT_NO_EMPTY) as $t) {
