@@ -1042,7 +1042,36 @@ function setDirty(on) {
     $('#adDirty').toggleClass('on', DIRTY);
     if (DIRTY) $('#adSaved').text('');
 }
-function openMask(id) { document.getElementById(id).classList.add('open'); }
+/* 跳窗標題列可以拖著移動（使用者 2026-10-16：插入 AS 文件那個跳窗要能移開，才看得到底下的文件）。
+   全頁的 .m-win 共用同一支：每次打開都先回到置中，不沿用上一次被拖走的位置
+   （換了螢幕或改了瀏覽器大小，沿用舊座標會開在畫面外面）。 */
+function openMask(id) {
+    var m = document.getElementById(id);
+    var w2 = m && m.querySelector('.m-win');
+    if (w2) { w2.style.left = ''; w2.style.top = ''; w2.style.transform = ''; }
+    m.classList.add('open');
+}
+(function () {
+    var drag = null;
+    document.addEventListener('mousedown', function (e) {
+        var hd = e.target.closest && e.target.closest('.m-win > .m-head');
+        if (!hd || e.target.closest('.m-x') || e.button !== 0) return;
+        var win = hd.parentNode, r = win.getBoundingClientRect();
+        win.style.left = r.left + 'px'; win.style.top = r.top + 'px'; win.style.transform = 'none';
+        drag = { win: win, dx: e.clientX - r.left, dy: e.clientY - r.top };
+        hd.style.cursor = 'move';
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+        if (!drag) return;
+        var x = e.clientX - drag.dx, y = e.clientY - drag.dy;
+        // 標題列至少留一截在畫面內，不然拖出去就找不回來
+        x = Math.max(60 - drag.win.offsetWidth, Math.min(window.innerWidth - 60, x));
+        y = Math.max(0, Math.min(window.innerHeight - 30, y));
+        drag.win.style.left = x + 'px'; drag.win.style.top = y + 'px';
+    });
+    document.addEventListener('mouseup', function () { drag = null; });
+})();
 function closeMask(id) { document.getElementById(id).classList.remove('open'); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });

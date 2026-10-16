@@ -1022,7 +1022,34 @@
     }
     // 每一頁的監聽統一在 bindSheet() 綁（多頁模式會動態長出新的頁）
 
+    /* 開跳窗插入（圖片／流程圖／AS 文件編號）時，回來一定要插在「按下按鈕當下」的游標處。
+       ⚠ 不能只靠 restoreRange() 的「目前選取還在編輯區內就不還原」判斷：
+         跳窗關掉後呼叫 body.focus()，Chrome 會把游標放到那一頁的開頭，
+         於是 restoreRange 以為「游標本來就在編輯區裡」而不還原——插入的位置就變成
+         那一頁的最前面（使用者 2026-10-16：「插入後出現的位置跟實際游標位置不同」）。
+         所以由開跳窗的指令設旗標，插入時優先還原當時記下的那一個範圍。 */
+    var pendingRestore = false;
+    function applySavedRange() {
+      if (!lastRange) return false;
+      try {
+        var n0 = lastRange.startContainer;
+        if (!n0 || !n0.isConnected) return false;
+        var el0 = n0.nodeType === 1 ? n0 : n0.parentNode;
+        var sh = el0 && el0.closest ? el0.closest('[contenteditable="true"]') : null;
+        if (!sh || !host.contains(sh)) return false;
+        body = sh;                       // 多頁模式：游標在哪一頁就插在哪一頁
+        sh.focus();
+        var sel = w.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(lastRange);
+        return true;
+      } catch (e) { return false; }
+    }
     function insertHtml(html) {
+      var useSaved = pendingRestore; pendingRestore = false;
+      if (useSaved && applySavedRange()) {
+        // 已經回到原本的游標位置，直接插
+      } else {
       body.focus();
       if (!restoreRange()) {
         // 真的沒有游標可用（例如一打開就按插入）→ 補在內容最後，而不是開頭
@@ -1032,6 +1059,43 @@
         var s = w.getSelection();
         s.removeAllRanges();
         s.addRange(r);
+      }
+      }
+      /* 游標若落在一個 AS 文件參照（.eg-asref 行內標記）裡面——行尾的游標常常會被瀏覽器
+         放進前一個 span 的尾端——直接插入會把新的塞進舊的裡面（巢狀），清洗時被拆開，
+         最後出現的位置跟游標對不上。先把游標移到那個標記的後面再插。 */
+      try {
+        var sel2 = w.getSelection();
+        if (sel2 && sel2.rangeCount) {
+          var rg2 = sel2.getRangeAt(0);
+          var nd = rg2.startContainer; nd = nd.nodeType === 1 ? nd : nd.parentNode;
+          var ref2 = nd && nd.closest ? nd.closest('.eg-asref') : null;
+          if (ref2 && body.contains(ref2) && /<span[^>]*eg-asref/.test(html)) {
+            var after = d.createRange();
+            after.setStartAfter(ref2); after.collapse(true);
+            sel2.removeAllRanges(); sel2.addRange(after);
+          }
+        }
+      } catch (e) {}
+      /* AS 文件參照一律用 Range 直接插入節點，不走 execCommand('insertHTML')：
+         瀏覽器的 insertHTML 會依「周圍的樣式」重組貼上的內容，游標貼著另一個參照或
+         行尾時，實測會把 <span class="eg-asref" data-asdoc=…> 的 class 與 data 屬性整個丟掉，
+         只留一個底色的空 span——那一段文字就不再記得「引用的是哪一份文件」，
+         文件改名／改編號時就不會被偵測到，而且完全看不出來。 */
+      if (/<span[^>]*eg-asref/.test(html)) {
+        try {
+          var selA = w.getSelection();
+          var rgA = selA.getRangeAt(0);
+          var tp = d.createElement('template'); tp.innerHTML = html;
+          var frag = tp.content;
+          var lastN = frag.lastChild;
+          rgA.deleteContents();
+          rgA.insertNode(frag);
+          if (lastN) { rgA.setStartAfter(lastN); rgA.collapse(true); selA.removeAllRanges(); selA.addRange(rgA); }
+          rememberRange();
+          changed();
+          return;
+        } catch (e) { /* 失敗就退回下面的 execCommand */ }
       }
       try { d.execCommand('insertHTML', false, html); } catch (e) {}
       rememberRange();
@@ -1207,9 +1271,9 @@
         if (cmd === 'egLhUp')      { bumpLineHeight(0.1);  return; }
         if (cmd === 'egLhDown')    { bumpLineHeight(-0.1); return; }
         // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
-        if (cmd === 'egImage')     { rememberRange(); if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
-        if (cmd === 'egAsRef')     { rememberRange(); if (opt.onInsertAsRef) opt.onInsertAsRef(insertHtml); return; }
-        if (cmd === 'egFlow')      { rememberRange(); if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
+        if (cmd === 'egImage')     { rememberRange(); pendingRestore = true; if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
+        if (cmd === 'egAsRef')     { rememberRange(); pendingRestore = true; if (opt.onInsertAsRef) opt.onInsertAsRef(insertHtml); return; }
+        if (cmd === 'egFlow')      { rememberRange(); pendingRestore = true; if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
       }
       useCss(cmd);
       try { d.execCommand(cmd, false, val === undefined ? null : val); } catch (e) {}
