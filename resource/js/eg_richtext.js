@@ -2306,6 +2306,13 @@
       blocks.forEach(function (b) {
         Array.prototype.slice.call(b.querySelectorAll('span[data-egpad],span[style*="inline-block"]')).forEach(function (sp) {
           if (sp.textContent === '' && sp.children.length === 0) sp.parentNode.removeChild(sp);
+          else if (!sp.className && /inline-block/.test(sp.getAttribute('style') || '') && /width/.test(sp.getAttribute('style') || '')) {
+            /* 舊的「依編號自動排版」會把括號前的文字包成固定寬度的 inline-block——
+               那個盒子的右緣不是括號的自然位置，留著的話量出來的「最右一列」是假的、
+               整群就對不到真正最遠的那一列（使用者 2026-10-16 回報）。先拆成一般文字再量。 */
+            while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+            sp.parentNode.removeChild(sp);
+          }
         });
         b.normalize();
       });
@@ -2362,9 +2369,11 @@
           r.fs = parseFloat(w.getComputedStyle(r.node.parentNode).fontSize) || 16;
         });
         var maxX = Math.max.apply(null, g.rows.map(function (r) { return r.x; }));
+        // 空隙取同群最大字級的 0.4 倍、**全群共用同一個值**：
+        // 各列用自己的字級算的話，字級略有差異的列會停在不同的位置（實測差 1px 以上）
+        var gap = 0.4 * Math.max.apply(null, g.rows.map(function (r) { return r.fs; }));
         g.rows.forEach(function (r) {
-          // 最寬那列也留 0.4 個字寬的空隙，括號才不會貼著名稱
-          var px = Math.max(0, Math.round((maxX - r.x + 0.4 * r.fs) * 10) / 10);
+          var px = Math.max(0, Math.round((maxX - r.x + gap) * 10) / 10);
           r.sp.style.width = Math.min(999, px) + 'px';
           done++;
         });
