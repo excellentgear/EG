@@ -2778,7 +2778,7 @@ function mrCss(){
         + 'table.mr-items{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
         + 'table.mr-items th,table.mr-items td{border:1px solid #333;padding:5px;text-align:center;}'
         + 'table.mr-items td.t-left{text-align:left;}'
-        + 'table.mr-items tr.mr-grp-row td{background:#F7E0BD;font-weight:bold;text-align:left;letter-spacing:2px;-webkit-print-color-adjust:exact;print-color-adjust:exact;break-after:avoid;page-break-after:avoid;}'
+        + 'table.mr-items tr.mr-grp-row th{background:#F7E0BD;font-weight:bold;text-align:left;letter-spacing:2px;-webkit-print-color-adjust:exact;print-color-adjust:exact;break-after:avoid;page-break-after:avoid;}'
         + 'table.mr-items td.mr-grp{width:32px;writing-mode:vertical-rl;text-orientation:upright;font-weight:bold;letter-spacing:4px;}'
         + 'table.mr-foot{width:100%;font-size:13px;margin-top:16px;break-inside:avoid;page-break-inside:avoid;}'
         + 'table.mr-foot td{padding:10px 6px;width:33.33%;}'
@@ -2843,17 +2843,20 @@ function confirmAppendixItems(items){
 function meetingItemGroupRows(items, kind, groupLabel){
     var rows = (items||[]).filter(function(it){ return it.kind===kind; });
     if (!rows.length) return '';
-    return rows.map(function(it,i){
+    var body = rows.map(function(it,i){
         var deptNames = ownerDisplayText(it);
         var signed = itemSignedSlots(it);
         var confirmHtml = (signed.length > MR_CONFIRM_PRINT_INLINE)
             ? '<span class="mr-confirm-ref">已確認 '+signed.length+' 位<br>（詳見附表）</span>'
             : signed.map(confirmStampHtml).join('');
         // 2026-10-16：不用跨列的直書標籤格(rowspan)——Chrome 無法把跨整張表的 rowspan 儲存格切到下一頁，會整張表被推走留下空白；改成群組標題列
-        return (i===0 ? '<tr class="mr-grp-row"><td colspan="6">'+groupLabel+'</td></tr>' : '') + '<tr>'
+        return '<tr>'
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
              + '<td>'+(it.due_date?dispDate(it.due_date):'NA')+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
+    // 群組標題放在欄位表頭「上方」(同一個 thead，跨頁時一起重複)
+    return '<table class="mr-items"><thead><tr class="mr-grp-row"><th colspan="6">'+groupLabel+'</th></tr>'
+         + '<tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+body+'</tbody></table>';
 }
 /* 確認簽名附表（另起一頁）：只列出被移過來的項目，一項一區塊、章自動換行不會被裁掉。
    沒有任何項目超量時回傳空字串＝完全不會多印這一頁。 */
@@ -2918,7 +2921,7 @@ function meetingRecordPageHtml(m, res, docNoMode){
         + '</table>'
         + (announceBody ? '<table class="mr-announce"><thead><tr><th style="width:32px;">序</th><th>宣布事項</th><th style="width:120px;">備註</th></tr></thead><tbody>'+announceBody+'</tbody></table>' : '')
         + (announceBody && itemBody ? '<div class="mr-gap"></div>' : '')
-        + (itemBody ? '<table class="mr-items"><thead><tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
+        + itemBody
         + '<table class="mr-foot"><tr><td>總經理：'+gmStamp+'</td><td>主席：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
         + (docNoMode==='inline' && m.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(m.as_doc_record_no)+'</span></div>' : '')
         + (docNoMode==='fixed' && m.as_doc_record_no ? '<div class="as-doc-fixed">'+esc(m.as_doc_record_no)+'</div>' : '')
