@@ -505,7 +505,9 @@ if ($deptPerm === 'R') {
       <div class="modal-body">
         <div class="alert alert-info" style="font-size:12px;padding:8px 12px;">
           每一個「負責課室／文件負責部門」指派一位<b>部門負責人</b>與一位<b>代理人</b>，
-          只能從<b>該部門內的在職人員</b>挑選（兼任或主要職位都可以）。<br>
+          預設從<b>該部門內的在職人員</b>挑選（兼任或主要職位都可以）；
+          管理員可在「<b>人員來源</b>」欄<b>另外勾選其他部門</b>（例如總經理室的文件不由總經理處理，改從別的部門挑人）。<br>
+          品管課與品管組等<b>已在內部稽核設為同一受稽單位</b>的部門，這裡自動看成同一個部門（文件與人員合併計算）。<br>
           負責人<b>離職或調離該部門</b>時，系統會自動改用代理人，並通知全站管理員與 AS負責人
           提醒重新指派；代理人也不可用時就沒有人可以簽核，所以兩個都要設。<br>
           簽核設定裡選「這份文件的 AS 文件部門負責人」當簽核人時，解析的就是這張表。
@@ -518,11 +520,12 @@ if ($deptPerm === 'R') {
               <th style="width:70px;">AS文件</th>
               <th style="width:250px;">部門負責人</th>
               <th style="width:250px;">代理人</th>
+              <th style="width:130px;">人員來源</th>
               <th>備註</th>
               <th style="width:90px;"></th>
             </tr>
           </thead>
-          <tbody id="ownerRows"><tr><td colspan="6" class="text-center text-muted">載入中…</td></tr></tbody>
+          <tbody id="ownerRows"><tr><td colspan="7" class="text-center text-muted">載入中…</td></tr></tbody>
         </table>
       </div>
       <div class="modal-footer">
@@ -4767,13 +4770,14 @@ $(function(){
    做法：①頁面載入就查一次，有 block 級問題就在工具列下方長出紅色橫幅（**不給關**，
    關掉等於沒做）②有權限改的人，同一個瀏覽器工作階段第一次進來會自動把設定跳窗打開一次
    （每次翻頁都強制彈窗會讓人沒辦法做別的事，所以只彈一次，橫幅則一直在）。 */
-var OWN = { depts: [], cands: {}, problems: [], canEdit: false, loaded: false };
+var OWN = { depts: [], cands: {}, allDepts: [], problems: [], canEdit: false, loaded: false };
 
 function ownLoad(cb) {
     $.getJSON(API, { action: 'dept_owner_meta' }, function (r) {
         if (!r || r.status !== 'success') { if (cb) cb(false); return; }
         OWN.depts = r.depts || [];
         OWN.cands = r.cands || {};
+        OWN.allDepts = r.all_depts || [];
         OWN.problems = r.problems || [];
         OWN.canEdit = !!r.can_edit;
         OWN.loaded = true;
@@ -4825,6 +4829,18 @@ function ownRender() {
             }
             return '<select class="form-control input-sm own-' + name + '" data-eg-filter="輸入姓名篩選…">' + o + '</select>';
         }
+        function srcCell(d) {
+            var ex = d.cand_depts || [];
+            var names = (d.group_names || []).map(function (n) { return '含 ' + esc(n); });
+            ex.forEach(function (id) { (OWN.allDepts || []).forEach(function (a) { if (a.id === id) names.push('＋' + esc(a.name)); }); });
+            var sum = names.length ? '<div style="font-size:11px;color:#8A5A2B;">' + names.join('、') + '</div>' : '';
+            if (!canEdit) return sum || '<span class="text-muted">本部門</span>';
+            var cb = (OWN.allDepts || []).filter(function (a) { return a.id !== d.dept_id && (d.group_names || []).indexOf(a.name) < 0; }).map(function (a) {
+                return '<label style="display:block;font-weight:normal;margin:0;white-space:nowrap;"><input type="checkbox" class="own-src" value="' + a.id + '"'
+                     + (ex.indexOf(a.id) >= 0 ? ' checked' : '') + '> ' + esc(a.name) + '</label>';
+            }).join('');
+            return sum + '<details><summary style="cursor:pointer;font-size:12px;">選擇其他部門</summary><div style="max-height:170px;overflow:auto;padding:4px 0;">' + cb + '</div></details>';
+        }
         var warn = (probByDept[d.dept_id] || []).map(function (p) {
             return '<div style="font-size:11px;color:' + (p.level === 'block' ? '#DD5138' : '#8A5A2B') + ';">'
                  + (p.level === 'block' ? '⚠ ' : '※ ') + esc(p.msg) + '</div>';
@@ -4834,6 +4850,7 @@ function ownRender() {
              + '<td class="text-center">' + d.docs + '</td>'
              + '<td>' + sel('owner', d.owner_uid) + '</td>'
              + '<td>' + sel('deputy', d.deputy_uid) + '</td>'
+             + '<td>' + srcCell(d) + '</td>'
              + '<td>' + (canEdit
                  ? '<input type="text" class="form-control input-sm own-note" maxlength="255" value="'
                    + esc(d.note || '') + '">'
@@ -4843,7 +4860,7 @@ function ownRender() {
                  : '') + '</td>'
              + '</tr>';
     }).join('');
-    $('#ownerRows').html(h || '<tr><td colspan="6" class="text-center text-muted">沒有任何部門底下有 AS 文件</td></tr>');
+    $('#ownerRows').html(h || '<tr><td colspan="7" class="text-center text-muted">沒有任何部門底下有 AS 文件</td></tr>');
     var blocks = (OWN.problems || []).filter(function (p) { return p.level === 'block'; });
     var warns = (OWN.problems || []).filter(function (p) { return p.level === 'warn'; });
     $('#ownerProblems').html(
@@ -4859,9 +4876,9 @@ function ownRender() {
 }
 
 function ownOpen() {
-    $('#ownerRows').html('<tr><td colspan="6" class="text-center text-muted">載入中…</td></tr>');
+    $('#ownerRows').html('<tr><td colspan="7" class="text-center text-muted">載入中…</td></tr>');
     $('#ownerModal').modal('show');
-    ownLoad(function (ok) { if (ok) ownRender(); else $('#ownerRows').html('<tr><td colspan="6" class="text-danger text-center">載入失敗</td></tr>'); });
+    ownLoad(function (ok) { if (ok) ownRender(); else $('#ownerRows').html('<tr><td colspan="7" class="text-danger text-center">載入失敗</td></tr>'); });
 }
 
 $(document).on('click', '#btnDeptOwner, #btnOwnerFix', function () { ownOpen(); });
@@ -4874,11 +4891,13 @@ $(document).on('click', '.own-save', function () {
         department_id: $tr.data('dept'),
         owner_uid: $tr.find('.own-owner').val() || 0,
         deputy_uid: $tr.find('.own-deputy').val() || 0,
-        note: $tr.find('.own-note').val() || ''
+        note: $tr.find('.own-note').val() || '',
+        cand_dept_ids: $tr.find('.own-src:checked').map(function () { return this.value; }).get().join(',')
     }, function (r) {
         $b.prop('disabled', false).text('儲存');
         if (!r || r.status !== 'success') { alert((r && r.message) || '儲存失敗'); return; }
         OWN.depts = r.depts || OWN.depts;
+        OWN.cands = r.cands || OWN.cands;
         OWN.problems = r.problems || [];
         ownRender();
         ownBanner();

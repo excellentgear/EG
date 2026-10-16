@@ -1160,17 +1160,11 @@ case 'dept_owner_meta': {
     if (!asCan('view')) jout(['status'=>'error','message'=>'沒有檢視權限']);
     require_once __DIR__ . '/../common/as_doc_owner_lib.php';
     $depts = ado_depts($db);
-    // 每個部門的候選人員（含兼任；一個職務一列＝CLAUDE.md 人員列表鐵則⑥）
-    $cands = [];
-    foreach ($depts as $d) {
-        $did = (int)$d['dept_id'];
-        $cands[$did] = array_map(function ($p) {
-            return ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
-                    'dept' => (string)($p['dept_name'] ?? ''), 'pos' => (string)($p['position_name'] ?? ''),
-                    'leave' => (string)($p['leave_label'] ?? '')];
-        }, ado_candidates($db, $did));
-    }
-    jout(['status'=>'success', 'depts'=>$depts, 'cands'=>$cands,
+    $allDepts = [];
+    foreach ($db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) as $r)
+        $allDepts[] = ['id' => (int)$r['id'], 'name' => (string)$r['name']];
+    jout(['status'=>'success', 'depts'=>$depts, 'cands'=>ado_cands_map($db, $depts),
+          'all_depts'=>$allDepts,
           'problems'=>ado_problems($db),
           'can_edit'=>(asIsAdmin() || in_array('asdoc_owner_manage', (array)$asFeatures, true))]);
 }
@@ -1186,7 +1180,10 @@ case 'dept_owner_save': {
     $owner  = (int)($_POST['owner_uid'] ?? 0);
     $deputy = (int)($_POST['deputy_uid'] ?? 0);
     $note   = (string)($_POST['note'] ?? '');
-    [$ok, $msg] = ado_save($db, $deptId, $owner, $deputy, (int)$currentUserId, $note);
+    // 沒送 cand_dept_ids＝不動原設定；送空字串＝清掉額外來源部門
+    $extra = array_key_exists('cand_dept_ids', $_POST)
+        ? array_values(array_filter(array_map('intval', explode(',', (string)$_POST['cand_dept_ids'])))) : null;
+    [$ok, $msg] = ado_save($db, $deptId, $owner, $deputy, (int)$currentUserId, $note, $extra);
     if (!$ok) jout(['status'=>'error','message'=>$msg]);
     // 稽核：這是「誰可以簽核 AS 文件」的設定，一定要留痕跡
     try {
@@ -1194,12 +1191,13 @@ case 'dept_owner_save': {
                         user_id, operator, created_at)
                       VALUES ('AS_DOC_OWNER','department',?,?,?,?,?,NOW())")
            ->execute([(string)$deptId, 'AS文件部門負責人',
-                      json_encode(['owner_uid'=>$owner, 'deputy_uid'=>$deputy, 'note'=>$note],
+                      json_encode(['owner_uid'=>$owner, 'deputy_uid'=>$deputy, 'note'=>$note, 'cand_dept_ids'=>$extra],
                                   JSON_UNESCAPED_UNICODE),
                       $currentUserId ?: null, (string)$GLOBALS['currentCname']]);
     } catch (Throwable $e) {}
+    $dd = ado_depts($db);
     jout(['status'=>'success','message'=>$msg,
-          'depts'=>ado_depts($db), 'problems'=>ado_problems($db)]);
+          'depts'=>$dd, 'cands'=>ado_cands_map($db, $dd), 'problems'=>ado_problems($db)]);
 }
 
 // ══════════════ 文件備註（富文字；管理員維護，清單顯示在文件名稱下方） ══════════════

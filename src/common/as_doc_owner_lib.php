@@ -62,6 +62,14 @@ function ado_ensure_schema(PDO $db): void
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
               COMMENT='AS 文件的部門負責人與代理人（as_doc_owner_lib.php）'");
         }
+        // MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加
+        if ($db->query("SHOW TABLES LIKE 'as_doc_dept_owner'")->fetchColumn()) {
+            $c = $db->query("SHOW COLUMNS FROM as_doc_dept_owner LIKE 'cand_dept_ids'")->fetchColumn();
+            if (!$c && !$db->inTransaction()) {
+                $db->exec("ALTER TABLE as_doc_dept_owner ADD COLUMN cand_dept_ids VARCHAR(255) NULL
+                           COMMENT '額外可挑選負責人的來源部門 id（逗號分隔）'");
+            }
+        }
     } catch (Throwable $e) { error_log('[ado] schema: ' . $e->getMessage()); }
     $done = true;
 }
@@ -69,6 +77,70 @@ function ado_ensure_schema(PDO $db): void
 /* ════════════════════════════════════════════════════════════════════════
    部門清單與指派
    ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 部門 → 代表部門 id。品管課／品管組這種「看成同一個部門」的，沿用內部稽核已設定的
+ * 受稽單位群組（ia_audit_unit；設定入口在內部稽核頁），不另建第二套合併設定（鐵律4）。
+ * 沒被收編的部門就是自己。
+ */
+function ado_key(PDO $db, int $deptId): int
+{
+    static $loaded = null;
+    if ($loaded === null) {
+        $loaded = false;
+        try { require_once __DIR__ . '/internal_audit_lib.php'; $loaded = function_exists('ia_unit_key_of_dept'); }
+        catch (Throwable $e) { error_log('[ado] key: ' . $e->getMessage()); }
+    }
+    if (!$loaded) return $deptId;
+    try { return (int)ia_unit_key_of_dept($db, $deptId) ?: $deptId; } catch (Throwable $e) { return $deptId; }
+}
+
+/** 代表部門涵蓋的所有部門 id（群組成員，不含下轄；沒群組＝只有自己） */
+function ado_group_ids(PDO $db, int $key): array
+{
+    $ids = [$key];
+    try {
+        $st = $db->prepare("SELECT d.dept_id FROM ia_audit_unit u
+                            JOIN ia_audit_unit_dept d ON d.unit_id=u.unit_id
+                            WHERE u.is_active=1 AND u.main_dept_id=?");
+        $st->execute([$key]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[] = (int)$v;
+    } catch (Throwable $e) {}
+    return array_values(array_unique(array_filter($ids)));
+}
+
+/** 管理員為這個部門另外指定的「可挑選人員來源部門」 */
+function ado_extra_depts(PDO $db, int $key): array
+{
+    ado_ensure_schema($db);
+    try {
+        $st = $db->prepare("SELECT cand_dept_ids FROM as_doc_dept_owner WHERE department_id=?");
+        $st->execute([$key]);
+        $v = (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) { return []; }
+    $o = [];
+    foreach (explode(',', $v) as $x) { $x = (int)trim($x); if ($x > 0) $o[] = $x; }
+    return array_values(array_unique($o));
+}
+
+/**
+ * 部門 id 去重。**刻意不展開下轄**：組織樹的根是董事長室→總經理室，展開下轄＝全公司，
+ * 「總經理室的文件不由總經理處理」這種設定就變成誰都算在範圍內（本專案 org_role 的老坑）。
+ * 需要一併看待的子部門（品管組、生產各廠）已由受稽單位群組明列成員。
+ */
+function ado_expand_subtree(PDO $db, array $ids): array
+{
+    return array_values(array_unique(array_map('intval', array_filter($ids))));
+}
+
+/**
+ * 這個部門的負責人／代理人可以從哪些部門挑（含下轄）：
+ * 本部門群組成員（品管課＋品管組）＋管理員另外指定的部門。
+ */
+function ado_scope_ids(PDO $db, int $key): array
+{
+    return ado_expand_subtree($db, array_merge(ado_group_ids($db, $key), ado_extra_depts($db, $key)));
+}
 
 /**
  * 跟 AS 文件有關的部門清單（＝需要指派負責人的部門）。
@@ -83,8 +155,9 @@ function ado_depts(PDO $db): array
 {
     ado_ensure_schema($db);
     $map = [];
-    $add = function (int $did, int $docId) use (&$map) {
+    $add = function (int $did, int $docId) use (&$map, $db) {
         if ($did <= 0) return;
+        $did = ado_key($db, $did);   // 品管組的文件併入品管課
         if (!isset($map[$did])) $map[$did] = ['dept_id' => $did, 'docs' => [], 'dept_name' => ''];
         if ($docId > 0) $map[$did]['docs'][$docId] = 1;
     };
@@ -114,6 +187,7 @@ function ado_depts(PDO $db): array
     } catch (Throwable $e) {}
     try {
         foreach ($db->query("SELECT o.department_id, o.owner_uid, o.deputy_uid, o.updated_at, o.note,
+                                    o.cand_dept_ids,
                                     uo.user_cname owner_name, uo.state owner_state,
                                     ud.user_cname deputy_name, ud.state deputy_state
                              FROM as_doc_dept_owner o
@@ -130,6 +204,7 @@ function ado_depts(PDO $db): array
             $map[$d]['deputy_state'] = isset($r['deputy_state']) ? (int)$r['deputy_state'] : null;
             $map[$d]['updated_at']   = (string)($r['updated_at'] ?? '');
             $map[$d]['note']         = (string)($r['note'] ?? '');
+            $map[$d]['cand_depts']   = array_values(array_filter(array_map('intval', explode(',', (string)($r['cand_dept_ids'] ?? '')))));
         }
     } catch (Throwable $e) {}
 
@@ -139,7 +214,13 @@ function ado_depts(PDO $db): array
         $v += ['dept_name' => '(部門 #' . $d . ')', 'sort_order' => 999, 'level' => 0,
                'owner_uid' => 0, 'owner_name' => '', 'owner_state' => null,
                'deputy_uid' => 0, 'deputy_name' => '', 'deputy_state' => null,
-               'updated_at' => '', 'note' => ''];
+               'updated_at' => '', 'note' => '', 'cand_depts' => []];
+        $nm = [];
+        foreach (ado_group_ids($db, $d) as $g) {
+            if ($g === $d) continue;
+            try { $q = $db->prepare("SELECT name FROM department WHERE id=?"); $q->execute([$g]); $n = $q->fetchColumn(); if ($n) $nm[] = (string)$n; } catch (Throwable $e) {}
+        }
+        $v['group_names'] = $nm;   // 一併看待的其他部門（顯示用）
         $out[] = $v;
     }
     usort($out, function ($a, $b) {
@@ -153,8 +234,23 @@ function ado_candidates(PDO $db, int $deptId): array
 {
     if ($deptId <= 0) return [];
     try {
-        return eg_people_list($db, ['dept_ids' => [$deptId], 'all_posts' => true]);
+        return eg_people_list($db, ['dept_ids' => ado_scope_ids($db, ado_key($db, $deptId)), 'all_posts' => true]);
     } catch (Throwable $e) { error_log('[ado] cand: ' . $e->getMessage()); return []; }
+}
+
+/** 每個部門的候選人員（下拉用；一個職務一列＝人員列表鐵則⑥） */
+function ado_cands_map(PDO $db, array $depts): array
+{
+    $cands = [];
+    foreach ($depts as $d) {
+        $did = (int)$d['dept_id'];
+        $cands[$did] = array_map(function ($p) {
+            return ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
+                    'dept' => (string)($p['dept_name'] ?? ''), 'pos' => (string)($p['position_name'] ?? ''),
+                    'leave' => (string)($p['leave_label'] ?? '')];
+        }, ado_candidates($db, $did));
+    }
+    return $cands;
 }
 
 /**
@@ -165,9 +261,11 @@ function ado_user_in_dept(PDO $db, int $uid, int $deptId): bool
 {
     if ($uid <= 0 || $deptId <= 0) return false;
     try {
+        $ids = ado_scope_ids($db, ado_key($db, $deptId));
+        $in = implode(',', array_map('intval', $ids ?: [$deptId]));
         $st = $db->prepare("SELECT 1 FROM user_department_position_map
-                            WHERE user_id=? AND department_id=? LIMIT 1");
-        $st->execute([$uid, $deptId]);
+                            WHERE user_id=? AND department_id IN ($in) LIMIT 1");
+        $st->execute([$uid]);
         return (bool)$st->fetchColumn();
     } catch (Throwable $e) { return false; }
 }
@@ -193,7 +291,7 @@ function ado_user_active(PDO $db, int $uid): bool
  *   - 負責人與代理人不可以是同一個人（代理的意義就是本人不在時有別人可以接）
  *   - 兩個都留空＝清除這個部門的設定
  */
-function ado_save(PDO $db, int $deptId, int $ownerUid, int $deputyUid, int $uid, string $note = ''): array
+function ado_save(PDO $db, int $deptId, int $ownerUid, int $deputyUid, int $uid, string $note = '', ?array $extraDepts = null): array
 {
     ado_ensure_schema($db);
     if ($deptId <= 0) return [false, '請選擇部門'];
@@ -203,28 +301,51 @@ function ado_save(PDO $db, int $deptId, int $ownerUid, int $deputyUid, int $uid,
 
     if ($ownerUid > 0 && $deputyUid > 0 && $ownerUid === $deputyUid)
         return [false, '負責人與代理人不可以是同一個人'];
+    // 來源部門：null＝沒送這個欄位，維持原值；陣列＝管理員這次指定的（先驗證存在）
+    if ($extraDepts === null) {
+        $extraDepts = ado_extra_depts($db, $deptId);
+    } else {
+        $clean = [];
+        foreach ($extraDepts as $x) {
+            $x = (int)$x;
+            if ($x <= 0 || $x === $deptId) continue;
+            $q = $db->prepare("SELECT 1 FROM department WHERE id=?"); $q->execute([$x]);
+            if (!$q->fetchColumn()) return [false, '指定的來源部門不存在'];
+            $clean[$x] = $x;
+        }
+        $extraDepts = array_values($clean);
+    }
+    $extraStr = $extraDepts ? implode(',', $extraDepts) : null;
+    // 驗證人員時要吃「這次新指定的來源部門」，所以不能直接呼叫 ado_user_in_dept（它讀的是存檔前的舊值）
+    $scopeIds = ado_expand_subtree($db, array_merge(ado_group_ids($db, $deptId), $extraDepts));
+    $inScope = function (int $u) use ($db, $scopeIds): bool {
+        $in = implode(',', array_map('intval', $scopeIds));
+        $q = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id IN ($in) LIMIT 1");
+        $q->execute([$u]);
+        return (bool)$q->fetchColumn();
+    };
     foreach ([['負責人', $ownerUid], ['代理人', $deputyUid]] as [$lab, $u]) {
         if ($u <= 0) continue;
         if (!ado_user_active($db, $u)) return [false, $lab . '不在職，請改指派在職人員'];
-        if (!ado_user_in_dept($db, $u, $deptId))
-            return [false, $lab . '不屬於這個部門（兼任也算），依規定只能指派負責課室或文件負責部門內的人員'];
+        if (!$inScope($u))
+            return [false, $lab . '不屬於這個部門或管理員指定的來源部門（兼任也算）'];
     }
     if ($ownerUid <= 0 && $deputyUid > 0)
         return [false, '只設代理人沒有意義，請先指派負責人'];
 
     try {
-        if ($ownerUid <= 0 && $deputyUid <= 0) {
+        if ($ownerUid <= 0 && $deputyUid <= 0 && !$extraDepts) {
             $db->prepare("DELETE FROM as_doc_dept_owner WHERE department_id=?")->execute([$deptId]);
             return [true, '已清除這個部門的設定'];
         }
         $st = $db->prepare("INSERT INTO as_doc_dept_owner
-                            (department_id, owner_uid, deputy_uid, note, updated_by, updated_at)
-                            VALUES (?,?,?,?,?,NOW())
-                            ON DUPLICATE KEY UPDATE owner_uid=VALUES(owner_uid),
+                            (department_id, owner_uid, deputy_uid, note, cand_dept_ids, updated_by, updated_at)
+                            VALUES (?,?,?,?,?,?,NOW())
+                            ON DUPLICATE KEY UPDATE owner_uid=VALUES(owner_uid), cand_dept_ids=VALUES(cand_dept_ids),
                               deputy_uid=VALUES(deputy_uid), note=VALUES(note),
                               updated_by=VALUES(updated_by), updated_at=NOW()");
         $st->execute([$deptId, $ownerUid ?: null, $deputyUid ?: null,
-                      mb_substr(trim($note), 0, 255), $uid]);
+                      mb_substr(trim($note), 0, 255), $extraStr, $uid]);
     } catch (Throwable $e) { return [false, '存檔失敗：' . $e->getMessage()]; }
     return [true, '已儲存'];
 }
@@ -319,7 +440,7 @@ function ado_doc_owner(PDO $db, int $docId): ?array
         $v = (int)($st->fetchColumn() ?: 0);
         if ($v > 0) $depts[] = $v;
     } catch (Throwable $e) { return null; }
-    $depts = array_values(array_unique($depts));
+    $depts = array_values(array_unique(array_map(function ($d) use ($db) { return ado_key($db, (int)$d); }, $depts)));
     if (!$depts) return null;
 
     $in = implode(',', $depts);
