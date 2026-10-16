@@ -88,7 +88,12 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .ad-badge.draft   { background:#EBD3A8; color:#6B471A; }
         .ad-badge.none    { background:#eee; color:#888; }
 
-        .ad-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:9px; clear:both; }
+        /* 頁面往下捲時，存檔／匯入／設定這一排與下面的文件編輯工具列要釘在視窗上方，
+           捲到文件中段也點得到（使用者 2026-10-16）。編輯工具列釘在存檔列的正下方，
+           它的 top 由 JS 依存檔列的實際高度寫進 --ad-stick（按鈕換行時高度會變）。 */
+        .ad-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:0; padding:5px 0 9px; clear:both;
+                  position:sticky; top:0; z-index:60; background:#F7F7F7; }
+        #adEditorHost .egrt-bar { position:sticky; top:var(--ad-stick, 52px); z-index:55; }
         .ad-bar .btn { font-size:13px; }
         /* 存檔按鈕＋「上次存檔」時間分兩行（使用者 2026-09-24 交辦：時間要顯示在
            按鈕下方，不要跟按鈕擠在同一列） */
@@ -2034,6 +2039,22 @@ function arRender() {
    上一次選到的文件與前後綴一律清空，游標直接落在搜尋框可以馬上打字
    （使用者 2026-10-16：上次的篩選留著，每次都要先自己刪掉）。
    帶入方式與樣式是個人習慣，不清。 */
+/* 存檔列的實際高度寫進 --ad-stick，編輯工具列才釘得在它正下方、不被蓋住也不留縫 */
+(function () {
+    function fit() {
+        var b = document.querySelector('.ad-bar');
+        if (!b) return;
+        document.documentElement.style.setProperty('--ad-stick', Math.round(b.getBoundingClientRect().height) + 'px');
+    }
+    window.addEventListener('resize', fit);
+    document.addEventListener('DOMContentLoaded', fit);
+    setTimeout(fit, 300); setTimeout(fit, 1500);
+    if (window.ResizeObserver) {
+        var ro = new ResizeObserver(fit);
+        var tryObs = function () { var b = document.querySelector('.ad-bar'); if (b) ro.observe(b); else setTimeout(tryObs, 200); };
+        tryObs();
+    }
+})();
 function arOpenFresh() {
     arLoad(function () {
         AR.pick = null;
@@ -2062,7 +2083,11 @@ function arPrev() {
     $('#arPrev').text(txt);
     $('#btnArInsert').prop('disabled', false);
 }
-$('#arKw,#arDept,#arLevel,#arObs').on('input change', function () { arRender(); });
+/* ⚠ 關鍵字框只能綁 input，不能綁 change：打完字直接用滑鼠去點清單時，滑鼠按下去的瞬間
+   輸入框失焦、觸發 change，清單被整個重畫，按下與放開落在不同的元素上，click 就不會發生——
+   使用者要點第二次才選得到（2026-10-16 回報「篩選後都要點兩次」）。 */
+$('#arKw').on('input', function () { arRender(); });
+$('#arDept,#arLevel,#arObs').on('change', function () { arRender(); });
 $(document).on('click', '.ar-item', function () {
     var id = parseInt($(this).data('id'), 10);
     AR.docs.forEach(function (d) { if (d.id === id) AR.pick = d; });
