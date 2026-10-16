@@ -295,6 +295,24 @@ case 'print_setting_save': {
     jout([]);
 }
 
+/* ---- 副知通知對象設定（僅管理員）---- */
+case 'notify_cc_get': {
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    $ppl = [];
+    foreach (eg_people_list($db, ['all_posts'=>true]) as $p) {
+        $ppl[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'dept'=>$p['department_name'] ?? ($p['dept_name'] ?? ''), 'pos'=>$p['position_name'] ?? ($p['pos_name'] ?? '')];
+    }
+    jout(['events'=>CNRV_CC_EVENTS, 'cc'=>cnrv_cc_get($db), 'people'=>$ppl]);
+}
+case 'notify_cc_save': {
+    cnrv_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    $in = json_decode((string)($_POST['cc'] ?? ''), true);
+    if (!is_array($in)) jerr('資料格式錯誤');
+    try { cnrv_cc_save($db, $in, $uname); } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout([]);
+}
+
 /* ---- 簽核人員權限自查（2026-10-05 使用者提問交辦）：解析出來的部門/決行/核准人員
    有沒有被指派本頁的檢視權限（con_review_view 以上），沒有的人點開通知只會看到 403 ---- */
 case 'perm_check': {

@@ -920,6 +920,8 @@ function cnrv_dept_sign(PDO $db, int $docId, int $deptId, int $uid, string $unam
     $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
     if ($toUids) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $uid);
+    if (cnrv_all_depts_signed($db, $docId)) cnrv_cc_notify($db, $docId, 'depts_signed', '合約訂單審查待決行',
+        "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，等待業務課決行。", $uid, $toUids);
 }
 
 /* ============================================================ 管理員：自動填寫並簽核（2026-10-05 使用者交辦） ============================================================
@@ -1039,6 +1041,9 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
             $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
             if ($toUids && cnrv_all_depts_signed($db, $docId)) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
                 "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $adminUid);
+
+            if (cnrv_all_depts_signed($db, $docId)) cnrv_cc_notify($db, $docId, 'depts_signed', '合約訂單審查待決行',
+                "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，等待業務課決行。", $adminUid, $toUids);
         }
         return ['sign_date'=>$signDate, 'filled'=>$filled, 'skipped_no_default'=>$skippedNoDefault,
                 'signed_depts'=>$signedDepts, 'unsigned_depts'=>$unsignedDepts];
@@ -1057,6 +1062,8 @@ function cnrv_submit(PDO $db, int $docId, int $uid, string $uname): void {
     $toUids = array_keys($toUids);
     if ($toUids) cnrv_notify($db, $docId, $toUids, '合約訂單審查待填寫',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已送出，請填寫並簽核您負責的項目。", $uid);
+    cnrv_cc_notify($db, $docId, 'submitted', '合約訂單審查已送出',
+        "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已送出，等待內容部門填寫簽核。", $uid, $toUids);
 }
 
 /**
@@ -1091,6 +1098,8 @@ function cnrv_decide(PDO $db, int $docId, int $uid, string $uname, string $decis
     $gm = cnrv_gm_signer($db, $docId);
     if ($gm) cnrv_notify($db, $docId, [(int)$gm['id']], '合約訂單審查待核准',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已決行為「" . CNRV_DECISIONS[$decision] . "」，請核准。", $uid);
+    cnrv_cc_notify($db, $docId, 'decided', '合約訂單審查已決行',
+        "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已決行為「" . CNRV_DECISIONS[$decision] . "」，等待總經理核准。", $uid, $gm ? [(int)$gm['id']] : []);
 }
 
 /** 總經理核准：核准後 status=closed。同一套「代簽記真人、管理員本人只留 LOG」規則（見 cnrv_decide() 說明）。 */
@@ -1118,6 +1127,8 @@ function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmi
     $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_approved_date=?,gm_is_deputy=?,
                   gm_approved_is_proxy=?,gm_approved_proxy_uid=?,gm_approved_proxy_name=?,closed_at=NOW() WHERE id=?")
        ->execute([$signerId, $signerName, $doc['business_date'], $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
+    cnrv_cc_notify($db, $docId, 'closed', '合約訂單審查已結案',
+        "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已經總經理核准，審查結案。", $uid);
 }
 
 /** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」，同日再交辦「也要能刪除舊有已決行
@@ -1194,7 +1205,7 @@ function cnrv_list(PDO $db, array $f = []): array {
 
 /* ============================================================ 通知 ============================================================ */
 
-function cnrv_notify(PDO $db, int $docId, array $toUids, string $title, string $content, int $fromUid): int {
+function cnrv_notify(PDO $db, int $docId, array $toUids, string $title, string $content, int $fromUid, string $mode = 'sign'): int {
     $toUids = array_values(array_unique(array_map('intval', $toUids)));
     if (!$toUids) return 0;
     try {
@@ -1202,12 +1213,61 @@ function cnrv_notify(PDO $db, int $docId, array $toUids, string $title, string $
                       VALUES (CURDATE(), NULL, ?, ?, 0, ?, '合約訂單審查', 1, 'CON_REVIEW', ?)")
            ->execute([$title, $content, $fromUid, $docId]);
         $eid = (int)$db->lastInsertId();
-        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')");
-        foreach ($toUids as $tuid) $ins->execute([$eid, $tuid]);
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, ?)");
+        foreach ($toUids as $tuid) $ins->execute([$eid, $tuid, $mode]);
         try {
             require_once __DIR__ . '/../push/push_send.php';
             eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
         } catch (Throwable $e) {}
         return $eid;
     } catch (Throwable $e) { return 0; }
+}
+
+/* ---- 副知通知對象（2026-10-16 使用者交辦）：管理員可針對四個節點額外指定要收到「知會」的人員，
+   與原本依組織解析出的待簽人員並行；副知只讀不簽（mode='read'）。值存
+   system_parameters('CON_REVIEW','notify_cc')＝{事件鍵:[user_id,...]}。 ---- */
+const CNRV_CC_EVENTS = [
+    'submitted'    => '表單送出（內容部門待填寫時）',
+    'depts_signed' => '內容部門全部簽核完成（待業務課決行時）',
+    'decided'      => '業務課決行完成（待總經理核准時）',
+    'closed'       => '總經理核准、審查結案',
+];
+
+function cnrv_cc_get(PDO $db): array {
+    $out = array_fill_keys(array_keys(CNRV_CC_EVENTS), []);
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc' LIMIT 1");
+        $st->execute();
+        $d = json_decode((string)$st->fetchColumn(), true);
+        if (is_array($d)) foreach ($out as $k => $_) $out[$k] = array_values(array_unique(array_filter(array_map('intval', (array)($d[$k] ?? [])))));
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 存檔（呼叫端驗管理員）；只收在職人員 id，其餘丟掉。 */
+function cnrv_cc_save(PDO $db, array $in, string $by): void {
+    $valid = [];
+    foreach (eg_people_list($db, []) as $p) $valid[(int)$p['id']] = true;
+    $clean = [];
+    foreach (CNRV_CC_EVENTS as $k => $_) {
+        $ids = [];
+        foreach ((array)($in[$k] ?? []) as $v) { $v = (int)$v; if ($v && isset($valid[$v])) $ids[$v] = $v; }
+        $clean[$k] = array_values($ids);
+    }
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    $ex = $db->prepare("SELECT id FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc' LIMIT 1");
+    $ex->execute();
+    $rid = $ex->fetchColumn();
+    if ($rid) $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $by, $rid]);
+    else $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('CON_REVIEW','notify_cc',?,?,?)")
+             ->execute([$json, '合約訂單審查：各節點額外副知通知對象 {事件:[user_id]}', $by]);
+}
+
+/** 對該事件設定的副知人員發「知會」通知（已是主要收件人者不重複發）。失敗不影響主流程。 */
+function cnrv_cc_notify(PDO $db, int $docId, string $event, string $title, string $content, int $fromUid, array $exclude = []): void {
+    try {
+        $ids = cnrv_cc_get($db)[$event] ?? [];
+        $ids = array_values(array_diff($ids, array_map('intval', $exclude)));
+        if ($ids) cnrv_notify($db, $docId, $ids, $title . '（副知）', $content, $fromUid, 'read');
+    } catch (Throwable $e) {}
 }

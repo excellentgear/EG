@@ -121,6 +121,7 @@ $companyName = eg_company_full_name($db);
         <button type="button" class="cr-btn b-plain" id="btnTpl" style="margin-left:auto;"><i class="fa fa-list"></i> 範本維護</button>
         <button type="button" class="cr-btn b-plain" id="btnPrintSet"><i class="fa fa-cog"></i> 列印設定</button>
         <button type="button" class="cr-btn b-plain" id="btnPermCheck"><i class="fa fa-user-circle-o"></i> 簽核人員權限檢查</button>
+        <button type="button" class="cr-btn b-plain" id="btnNotifyCc"><i class="fa fa-bell-o"></i> 通知對象設定</button>
         <?php endif; ?>
     </div>
 
@@ -224,6 +225,16 @@ $companyName = eg_company_full_name($db);
         <div style="font-size:11.5px;color:#8a6d45;margin-top:4px;">各內容部門簽核、業務課決行、總經理核准，列印與畫面上一律蓋這個模板的圖章；未指定則用系統預設回墨印。模板在「圖章管理 → 線上圖章設計」建立。</div>
     </div>
     <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('printSetMask')">取消</button> <button type="button" class="cr-btn" onclick="savePrintSetting()"><i class="fa fa-save"></i> 儲存</button></div>
+</div></div>
+
+<!-- 通知對象設定（副知，僅管理員，2026-10-16 使用者交辦） -->
+<div class="cr-mask" id="ccMask"><div class="cr-modal">
+    <div class="m-head"><span>通知對象設定（副知）</span><span class="m-close" onclick="closeMask('ccMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12.5px;color:#8a6d45;">各節點原本就會通知「該輪待簽核的人」（依組織架構自動解析）；這裡可<b>額外指定要副知的人員</b>，他們只會收到知會通知、不需簽核。已是該節點待簽人員者不會重複通知。</p>
+        <div id="ccBody">載入中…</div>
+    </div>
+    <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('ccMask')">取消</button> <button type="button" class="cr-btn" onclick="saveNotifyCc()"><i class="fa fa-save"></i> 儲存</button></div>
 </div></div>
 
 <!-- 簽核人員權限檢查（僅管理員，2026-10-05 使用者提問交辦）：解析出來的部門/決行/核准人員
@@ -785,6 +796,45 @@ function savePrintSetting(){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('printSetMask');
         loadMeta();   // 重新載入 META.as_doc／META.stamp_tpl，讓畫面上的圖章與 AS 編號立刻套用新設定
+    }, 'json');
+}
+
+/* ───────────────── 通知對象設定（副知，僅管理員） ───────────────── */
+var CC = {events:{}, cc:{}, people:{}};
+$('#btnNotifyCc').on('click', function(){
+    $('#ccBody').html('載入中…'); openMask('ccMask');
+    $.getJSON(API, {action:'notify_cc_get'}, function(res){
+        if (!res.ok){ $('#ccBody').html('<span style="color:#c0392b;">'+esc(res.error||'載入失敗')+'</span>'); return; }
+        CC.events = res.events||{}; CC.cc = res.cc||{}; CC.people = {};
+        (res.people||[]).forEach(function(p){ (CC.people[p.id] = CC.people[p.id]||{id:p.id,name:p.name,labels:[]}).labels.push((p.dept||'')+' '+(p.pos||'')); });
+        renderCc();
+    });
+});
+function ccName(id){ var p = CC.people[id]; return p ? p.name : ('#'+id+'（已離職）'); }
+function renderCc(){
+    var h = '';
+    Object.keys(CC.events).forEach(function(k){
+        var ids = CC.cc[k]||[];
+        h += '<div style="margin-bottom:14px;" data-ev="'+k+'"><label style="font-weight:600;">'+esc(CC.events[k])+'</label><div style="margin:4px 0;min-height:24px;">';
+        h += ids.length ? ids.map(function(id){ return '<span style="display:inline-block;background:#F7E0BD;color:#5a3a12;border-radius:12px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12.5px;">'+esc(ccName(id))+' <a href="javascript:void(0)" data-rm="'+id+'" style="color:#DD5138;text-decoration:none;">×</a></span>'; }).join('') : '<span style="color:#aaa;font-size:12.5px;">（未指定）</span>';
+        h += '</div><select class="cc-add" data-eg-filter="輸入姓名篩選…"><option value="">＋ 加入人員…</option>';
+        Object.keys(CC.people).forEach(function(id){ var p = CC.people[id]; if (ids.indexOf(p.id)>=0) return; h += '<option value="'+p.id+'">'+esc(p.labels[0].trim()+'　'+p.name)+'</option>'; });
+        h += '</select></div>';
+    });
+    $('#ccBody').html(h);
+}
+$(document).on('change', '#ccBody .cc-add', function(){
+    var id = parseInt(this.value)||0; if (!id) return;
+    var k = $(this).closest('[data-ev]').data('ev'); (CC.cc[k] = CC.cc[k]||[]).push(id); renderCc();
+});
+$(document).on('click', '#ccBody [data-rm]', function(){
+    var id = parseInt($(this).data('rm')), k = $(this).closest('[data-ev]').data('ev');
+    CC.cc[k] = (CC.cc[k]||[]).filter(function(x){ return x!==id; }); renderCc();
+});
+function saveNotifyCc(){
+    $.post(API, {action:'notify_cc_save', csrf:META.csrf, cc:JSON.stringify(CC.cc)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        closeMask('ccMask');
     }, 'json');
 }
 
