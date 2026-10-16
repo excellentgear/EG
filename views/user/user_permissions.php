@@ -397,6 +397,7 @@ $EG_ROLE_MODULES = [
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
     'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝製程排程',        'page'=>'packing_schedule.php'],
     'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
+    'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
 ];
 
 /** 模組代碼 → 中文名（查不到就回代碼本身，至少不會顯示空白） */
@@ -1460,6 +1461,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('sf', 'sheet_form', '表格模板', 'fa-table', '#c0782d',
                         '為每位使用者指派表格模板（像 Excel 設計表單模板、依模板填寫與列印）的操作角色：模板管理（設計模板、停用/刪除、AS 文件綁定）、檢視全部人員建立的單據。<strong>所有登入者都能建立並填寫自己的單據</strong>，不需另外指派。角色與功能定義請至 <strong>表格模板管理 → 使用說明</strong>。',
                         rs_of('sheet_form'), rsu_of('sheet_form'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('stk', 'stock', '庫存管理', 'fa-cubes', '#c0762c',
+                        '為每位使用者指派庫存管理頁的角色：<strong>本頁管理員</strong>、<strong>生管</strong>、<strong>業務</strong>、<strong>唯讀</strong>（以及可自行新增的角色）。各角色可執行的功能（庫存異動、盤點、主資料設定、領庫需求單、列印…）與各項通知要通知哪些角色，由本站管理員在 <strong>庫存管理 → 角色與通知設定</strong> 勾選。<strong>目前庫存頁的操作權限與通知仍沿用上方「模組權限」的 A／C／R／U／D，角色指派完成後才會一次切換成角色判定</strong>，在那之前指派角色不會改變任何人現有的操作與通知。',
+                        rs_of('stock'), rsu_of('stock'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',
                         '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',

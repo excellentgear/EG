@@ -15,9 +15,11 @@ function safe_html($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8');
 include_once '../../src/common/DBConnection.php';
 require_once '../../src/common/stock_notify.php';
 require_once '../../src/common/asdoc_lib.php';   // AS 文件編號綁定（ai-rules/16 第一之三節：後端唯一實作點）
+require_once '../../src/common/stock_roles_lib.php';   // 角色制：功能清單／預設角色／通知對象設定（2026-10-16；目前只建角色與設定，尚未用來判定權限）
 $conn   = new DBConnection();
 $pdo    = $conn->getPDO();
 $userId = intval($_SESSION['id'] ?? 0);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') stock_ensure_roles($pdo);   // 只補建不存在的預設角色，不動既有角色與任何人的權限
 
 // ── 權限檢查（非 AJAX 請求時，使用同一個 $pdo） ───
 $PAGE_PERM = 'A'; // 預設全開（DB 查不到時不封鎖）
@@ -266,6 +268,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->execute([$userId]); $row=$st->fetch(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'is_admin'=>($row&&$row['permission']==='A')]);
         } catch(Exception $e){ echo json_encode(['success'=>true,'is_admin'=>false]); }
+        exit;
+    }
+
+    // ── 角色與通知設定（2026-10-16）──────────────────────────────
+    // 角色的新增／改名／刪除與功能勾選走全站 Roles_API.php（它自己驗本站管理員）；
+    // 這裡只負責：功能清單、通知對象設定。目前都不影響既有權限判定與既有通知。
+    if ($_POST['action'] === 'role_panel_info') {
+        $isSite = stock_is_site_admin($pdo, $userId);
+        echo json_encode(['success'=>true, 'is_site_admin'=>$isSite,
+            'can_notify_cfg'=>($isSite || stock_has_feature($pdo, $userId, 'stock_notify_setting')),
+            'catalog'=>($isSite ? stock_feature_catalog() : [])], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($_POST['action'] === 'notify_cfg_get' || $_POST['action'] === 'notify_cfg_save') {
+        try {
+            if (!stock_is_site_admin($pdo, $userId) && !stock_has_feature($pdo, $userId, 'stock_notify_setting'))
+                throw new Exception('沒有設定通知對象的權限');
+            if ($_POST['action'] === 'notify_cfg_save') {
+                $cfg = json_decode($_POST['cfg'] ?? '{}', true);
+                if (!is_array($cfg)) throw new Exception('設定格式錯誤');
+                stock_notify_cfg_save($pdo, $cfg, (string)($_SESSION['userName'] ?? ''));
+            }
+            $cur = stock_notify_cfg_load($pdo);
+            $types = [];
+            foreach (stock_notify_types() as $t) {
+                $uids = stock_notify_role_users($pdo, $cur[$t['key']] ?? []);
+                $t['role_ids'] = $cur[$t['key']] ?? [];
+                $t['preview']  = stock_notify_user_labels($pdo, $uids);
+                $types[] = $t;
+            }
+            echo json_encode(['success'=>true, 'types'=>$types, 'roles'=>stock_assignable_roles($pdo)], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
 
@@ -4537,6 +4571,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <button class="tab-btn" id="tab-btn-req" onclick="switchTab('req',this)">📋 領庫需求單</button>
       <button class="tab-btn" id="tab-btn-report" onclick="switchTab('report',this)">📊 入出庫紀錄</button>
     </div>
+    <button class="btn btn-sm btn-default" id="btn-role-cfg" style="display:none;border-radius:6px;font-weight:600;" onclick="openRoleCfg()" title="庫存管理的角色、功能與通知對象設定"><i class="fa fa-key"></i> 角色與通知設定</button>
     <button class="btn btn-sm" id="btn-add-stock" style="background:var(--accent);color:#fff;border-radius:6px;font-weight:600;display:none;" onclick="openAddModal()"><i class="fa fa-plus"></i> 新增庫存</button>
     <button class="btn btn-sm" id="btn-batch-add" style="background:#16a085;color:#fff;border-radius:6px;font-weight:600;display:none;" onclick="openBatchAddModal()"><i class="fa fa-th-list"></i> 批次新增</button>
     <button class="btn btn-sm" id="btn-add-group" style="background:var(--warn);color:#fff;border-radius:6px;font-weight:600;display:none;" onclick="openGroupModal()"><i class="fa fa-cubes"></i> 新增組合件</button>
@@ -5021,6 +5056,53 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <div class="modal-footer">
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
         <button type="button" class="btn btn-danger" onclick="confirmDeleteReq()"><i class="fa fa-trash"></i> 確認刪除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: 角色與通知設定（2026-10-16）══
+     角色新增／改名／刪除與功能勾選：只有本站管理員（Roles_API 後端也再驗一次）。
+     通知對象：本站管理員，或被授予「設定通知對象」功能的人。
+     目前只是建立角色與儲存設定，頁面權限與現行通知仍沿用原本的 A／C／R／U／D，等指派完角色再一次切換。 -->
+<div class="modal fade" id="stkRoleModal" tabindex="-1">
+  <div class="modal-dialog" style="width:960px;max-width:96vw;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-key"></i> 庫存管理－角色與通知設定</h4></div>
+      <div class="modal-body" style="padding:0;">
+        <div style="padding:8px 14px;background:#faf6ee;border-bottom:1px solid #e3d4b6;font-size:12px;color:#5b3a1e;">
+          <i class="fa fa-info-circle"></i> 目前本頁的操作權限與通知對象<b>仍沿用原本的 A／C／R／U／D 權限</b>，這裡設定的角色與通知對象<b>暫不生效</b>。
+          請先到「<b>管理設定 → 使用者權限</b>」把角色指派給人員，指派完成後再一次切換成角色判定。
+        </div>
+        <ul class="nav nav-tabs" style="padding:0 10px;margin:0;">
+          <li class="active" id="stkTabRolesLi"><a href="javascript:void(0)" onclick="stkRoleTab('roles')">角色與功能</a></li>
+          <li id="stkTabNotifyLi"><a href="javascript:void(0)" onclick="stkRoleTab('notify')">通知對象</a></li>
+        </ul>
+        <!-- 分頁一：角色與功能 -->
+        <div id="stkPaneRoles" style="display:flex;height:460px;font-size:13px;">
+          <div style="width:230px;min-width:230px;border-right:1px solid #ddd;display:flex;flex-direction:column;">
+            <div style="padding:8px 10px;background:#f8f9fa;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-weight:600;font-size:12px;">角色清單</span>
+              <button class="btn btn-xs btn-success" onclick="stkAddRole()"><i class="fa fa-plus"></i> 新增</button>
+            </div>
+            <div id="stk-roles-list" style="flex:1;overflow-y:auto;"></div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+            <div id="stk-feat-header" style="padding:8px 14px;background:#f8f9fa;border-bottom:1px solid #ddd;font-weight:600;font-size:12px;color:#555;">← 請選擇角色</div>
+            <div id="stk-del-box" style="display:none;padding:10px 14px;background:#fdf1ee;border-bottom:1px solid #e8b9ad;font-size:12px;"></div>
+            <div id="stk-feat-body" style="flex:1;overflow-y:auto;padding:10px 14px;"></div>
+            <div id="stk-feat-footer" style="padding:8px 14px;border-top:1px solid #ddd;background:#f8f9fa;display:none;">
+              <small class="text-muted" id="stk-feat-note" style="float:left;line-height:28px;"></small>
+              <div style="display:flex;gap:6px;justify-content:flex-end;">
+                <button class="btn btn-default btn-sm" id="stk-btn-all" onclick="stkToggleAll(true)"><i class="fa fa-check-square-o"></i> 全選</button>
+                <button class="btn btn-default btn-sm" id="stk-btn-none" onclick="stkToggleAll(false)"><i class="fa fa-square-o"></i> 取消全選</button>
+                <button class="btn btn-primary btn-sm" id="stk-btn-save" onclick="stkSaveFeatures()"><i class="fa fa-save"></i> 儲存角色設定</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 分頁二：通知對象 -->
+        <div id="stkPaneNotify" style="display:none;height:460px;overflow-y:auto;padding:12px 16px;font-size:13px;"></div>
       </div>
     </div>
   </div>
@@ -12651,6 +12733,163 @@ function printDailyReport(){
         +'</body></html>');
     w.document.close(); w.focus();
     setTimeout(function(){ w.print(); }, 300);
+}
+
+// ══ 角色與通知設定（2026-10-16；目前只建立角色與設定，尚未用來判定權限）══════════════
+var STK_ROLES_API='../../src/store/Roles_API.php';
+var STK={isAdmin:false,canNotify:false,catalog:[],selRole:0,roleNames:{},notify:null};
+$(function(){
+    ajx({action:'role_panel_info'},function(r){
+        if(!r||!r.success) return;
+        STK.isAdmin=!!r.is_site_admin; STK.canNotify=!!r.can_notify_cfg; STK.catalog=r.catalog||[];
+        if(STK.isAdmin||STK.canNotify) $('#btn-role-cfg').show();
+    });
+});
+function openRoleCfg(){
+    $('#stkRoleModal').modal('show');
+    if(STK.isAdmin){ $('#stkTabRolesLi').show(); stkRoleTab('roles'); stkLoadRoles(); }
+    else { $('#stkTabRolesLi').hide(); stkRoleTab('notify'); }
+}
+function stkRoleTab(t){
+    $('#stkTabRolesLi').toggleClass('active',t==='roles'); $('#stkTabNotifyLi').toggleClass('active',t==='notify');
+    $('#stkPaneRoles').css('display',t==='roles'?'flex':'none');
+    $('#stkPaneNotify').css('display',t==='notify'?'block':'none');
+    if(t==='notify') stkLoadNotify();
+}
+function stkLoadRoles(){
+    $.getJSON(STK_ROLES_API,{action:'get_roles',module:'stock'},function(res){
+        if(!res.success){ $('#stk-roles-list').html('<div class="text-danger" style="padding:10px;">載入失敗</div>'); return; }
+        var h='';
+        res.data.forEach(function(r){
+            var sys=r.is_system==1; STK.roleNames[r.role_id]=r.role_name;
+            var nm=sys?'本站管理員':r.role_name;
+            h+='<div class="stk-role-item" data-id="'+r.role_id+'" data-sys="'+(sys?1:0)+'" data-name="'+esc(nm)+'" style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;'+(STK.selRole==r.role_id?'background:#f5ead9;font-weight:600;':'')+'">'
+              +'<span style="flex:1;font-size:13px;">'+esc(nm)+(sys?' <span class="label label-warning" style="font-size:9px;">系統</span>':'')+'</span>'
+              +(sys?'':'<button class="btn btn-xs btn-default stk-ren" style="opacity:.7;padding:1px 5px;margin-right:3px;" title="修改角色名稱"><i class="fa fa-pencil"></i></button><button class="btn btn-xs btn-danger stk-del" style="opacity:.7;padding:1px 5px;" title="刪除角色"><i class="fa fa-times"></i></button>')
+              +'</div>';
+        });
+        $('#stk-roles-list').html(h||'<div class="text-muted" style="padding:10px;">尚無角色</div>');
+    });
+}
+$(document).on('click','.stk-role-item',function(){ var $i=$(this); stkSelectRole(parseInt($i.data('id')),$i.data('sys')==1,String($i.data('name'))); });
+$(document).on('click','.stk-ren',function(e){ e.stopPropagation(); var $i=$(this).closest('.stk-role-item'); stkRenameRole(parseInt($i.data('id')),String($i.data('name'))); });
+$(document).on('click','.stk-del',function(e){ e.stopPropagation(); var $i=$(this).closest('.stk-role-item'); stkDeleteRole(parseInt($i.data('id')),String($i.data('name'))); });
+function stkSelectRole(id,sys,name){
+    STK.selRole=id; $('#stk-del-box').hide();
+    $('.stk-role-item').css({background:'','font-weight':''}).filter('[data-id="'+id+'"]').css({background:'#f5ead9','font-weight':'600'});
+    $('#stk-feat-header').text('設定功能：'+name);
+    var groups={},order=[];
+    STK.catalog.forEach(function(f){ if(!groups[f.group]){groups[f.group]=[];order.push(f.group);} groups[f.group].push(f); });
+    var h='';
+    order.forEach(function(g){
+        h+='<div style="margin-bottom:12px;"><div style="font-weight:600;color:#8a5a2b;margin-bottom:6px;font-size:12px;border-bottom:1px dashed #e0d5c5;padding-bottom:3px;"><i class="fa fa-folder-o"></i> '+esc(g)
+          +' <a href="javascript:void(0)" class="stk-grp-all" style="font-weight:normal;font-size:11px;margin-left:8px;">本組全選／取消</a></div><div style="display:flex;flex-wrap:wrap;gap:6px 24px;">';
+        groups[g].forEach(function(f){
+            h+='<label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="checkbox" class="stk-feat-cb" value="'+esc(f.code)+'"> '+esc(f.label)
+              +(f.legacy?' <span style="color:#aaa;font-size:11px;">（現行：'+esc(f.legacy)+'）</span>':'')+'</label>';
+        });
+        h+='</div></div>';
+    });
+    $('#stk-feat-body').html(h); $('#stk-feat-footer').show();
+    if(sys){
+        $('.stk-feat-cb').prop('checked',true).prop('disabled',true);
+        $('#stk-feat-note').text('本站管理員自動擁有全部功能，不可修改');
+        $('#stk-feat-footer button').prop('disabled',true); return;
+    }
+    $('#stk-feat-note').text(''); $('#stk-feat-footer button').prop('disabled',false);
+    $.getJSON(STK_ROLES_API,{action:'get_role_features',role_id:id},function(res){
+        if(res.success&&res.data) res.data.forEach(function(c){ $('.stk-feat-cb[value="'+c+'"]').prop('checked',true); });
+    });
+}
+$(document).on('click','.stk-grp-all',function(){
+    var $cbs=$(this).closest('div').next().find('.stk-feat-cb:not(:disabled)');
+    $cbs.prop('checked',$cbs.filter(':checked').length!==$cbs.length);
+});
+function stkToggleAll(c){ $('.stk-feat-cb:not(:disabled)').prop('checked',c); }
+function stkSaveFeatures(){
+    if(!STK.selRole) return;
+    var codes=[]; $('.stk-feat-cb:checked').each(function(){ codes.push($(this).val()); });
+    $.post(STK_ROLES_API,{action:'save_role_features',role_id:STK.selRole,features:JSON.stringify(codes)},function(res){
+        if(res.success) toast('角色設定已儲存'); else toast(res.message||'儲存失敗','error');
+    },'json');
+}
+function stkAddRole(){
+    var n=prompt('請輸入新角色名稱'); if(n===null) return; n=n.trim(); if(!n){ toast('角色名稱不可空白','error'); return; }
+    $.post(STK_ROLES_API,{action:'save_role',role_name:n,module:'stock'},function(res){
+        if(!res.success){ toast(res.message||'新增失敗','error'); return; }
+        STK.selRole=res.role_id; stkLoadRoles(); setTimeout(function(){ stkSelectRole(res.role_id,false,n); },300);
+    },'json');
+}
+function stkRenameRole(id,old){
+    var n=prompt('修改角色名稱',old); if(n===null) return; n=n.trim(); if(!n||n===old) return;
+    $.post(STK_ROLES_API,{action:'save_role',role_id:id,role_name:n},function(res){
+        if(!res.success){ toast(res.message||'修改失敗','error'); return; }
+        toast('角色名稱已更新'); if(STK.selRole==id) $('#stk-feat-header').text('設定功能：'+n); stkLoadRoles();
+    },'json');
+}
+function stkDeleteRole(id,name){
+    if(!confirm('刪除角色「'+name+'」？\n此角色的功能設定將一併刪除。')) return;
+    $.post(STK_ROLES_API,{action:'delete_role',role_id:id},function(res){
+        if(res.success){ toast(res.message||'已刪除'); if(STK.selRole==id){ STK.selRole=0; $('#stk-feat-body').empty(); $('#stk-feat-footer').hide(); $('#stk-feat-header').text('← 請選擇角色'); } $('#stk-del-box').hide(); stkLoadRoles(); return; }
+        if(res.in_use){ stkShowInUse(id,name,res); return; }
+        toast(res.message||'刪除失敗','error');
+    },'json');
+}
+// 有人在用的角色不能直接刪：列出是誰，讓管理員選「轉換成別的角色」或「一併移除」
+function stkShowInUse(id,name,res){
+    var opts='<option value="0">（不轉換）</option>';
+    $('.stk-role-item').each(function(){ var rid=parseInt($(this).data('id')); if(rid!==id) opts+='<option value="'+rid+'">'+esc(String($(this).data('name')))+'</option>'; });
+    var h='<div style="color:#b03a1a;font-weight:600;margin-bottom:4px;">「'+esc(name)+'」已被使用，不能直接刪除</div>'
+        +'<div style="margin-bottom:6px;">'+esc(res.message||'')+'</div>'
+        +(res.users&&res.users.length?'<div style="margin-bottom:6px;color:#555;">人員：'+res.users.map(esc).join('、')+'</div>':'')
+        +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">轉換成 <select id="stk-xfer" class="form-control input-sm" style="width:auto;">'+opts+'</select>'
+        +'<button class="btn btn-sm btn-warning" onclick="stkConfirmDelete('+id+',false)">轉換並刪除</button>'
+        +'<button class="btn btn-sm btn-danger" onclick="stkConfirmDelete('+id+',true)">一併移除（這些人失去此角色）</button>'
+        +'<button class="btn btn-sm btn-default" onclick="$(\'#stk-del-box\').hide()">取消</button></div>';
+    $('#stk-del-box').html(h).show();
+}
+function stkConfirmDelete(id,remove){
+    var to=parseInt($('#stk-xfer').val())||0;
+    if(!remove&&!to){ toast('請先選擇要轉換成哪個角色','error'); return; }
+    var d={action:'delete_role',role_id:id}; if(remove) d.confirm_users=1; else d.transfer_to=to;
+    $.post(STK_ROLES_API,d,function(res){
+        if(!res.success){ toast(res.message||'刪除失敗','error'); return; }
+        toast(res.message||'已刪除'); $('#stk-del-box').hide();
+        if(STK.selRole==id){ STK.selRole=0; $('#stk-feat-body').empty(); $('#stk-feat-footer').hide(); $('#stk-feat-header').text('← 請選擇角色'); }
+        stkLoadRoles();
+    },'json');
+}
+// ── 通知對象 ──
+function stkLoadNotify(){
+    $('#stkPaneNotify').html('<div class="text-muted"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
+    ajx({action:'notify_cfg_get'},stkRenderNotify);
+}
+function stkRenderNotify(r){
+    if(!r||!r.success){ $('#stkPaneNotify').html('<div class="text-danger">'+esc((r&&r.message)||'載入失敗')+'</div>'); return; }
+    STK.notify=r;
+    var h='<div style="font-size:12px;color:#666;margin-bottom:10px;">每一項通知可勾選要通知哪些角色（可複選）。下方「設定後會通知」是依<b>目前已指派角色的人員</b>即時算出的預覽；'
+         +'尚未指派角色前會是空的。<b>此設定目前尚未生效</b>，現行通知仍依「現行規則」發送。</div>';
+    r.types.forEach(function(t){
+        h+='<div class="stk-nt" data-key="'+esc(t.key)+'" style="border:1px solid #e3d4b6;border-radius:6px;padding:10px 12px;margin-bottom:12px;">'
+          +'<div style="font-weight:700;color:#5b3a1e;margin-bottom:2px;">'+esc(t.label)+'</div>'
+          +'<div style="font-size:12px;color:#888;margin-bottom:6px;">現行規則：'+esc(t.legacy)+'</div>'
+          +'<div style="display:flex;flex-wrap:wrap;gap:6px 20px;">';
+        r.roles.forEach(function(ro){
+            h+='<label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;"><input type="checkbox" class="stk-nt-cb" value="'+ro.role_id+'"'+(t.role_ids.indexOf(parseInt(ro.role_id))>=0?' checked':'')+'> '+esc(ro.is_system==1?'本站管理員':ro.role_name)+'</label>';
+        });
+        h+='</div><div style="font-size:12px;margin-top:6px;color:#555;"><b>設定後會通知（'+t.preview.length+' 人）：</b>'
+          +(t.preview.length?t.preview.map(esc).join('、'):'<span style="color:#aaa;">（尚無人員，或角色尚未指派）</span>')
+          +(t.creator?'<br><span style="color:#888;">※ 此項另外固定通知該需求單的建立者。</span>':'')+'</div></div>';
+    });
+    h+='<div style="text-align:right;"><button class="btn btn-primary btn-sm" onclick="stkSaveNotify()"><i class="fa fa-save"></i> 儲存通知對象</button></div>';
+    $('#stkPaneNotify').html(h);
+}
+function stkSaveNotify(){
+    var cfg={};
+    $('.stk-nt').each(function(){ var k=$(this).data('key'); cfg[k]=[]; $(this).find('.stk-nt-cb:checked').each(function(){ cfg[k].push(parseInt($(this).val())); }); });
+    ajx({action:'notify_cfg_save',cfg:JSON.stringify(cfg)},function(r){
+        if(r&&r.success){ toast('通知對象已儲存'); stkRenderNotify(r); } else toast((r&&r.message)||'儲存失敗','error');
+    });
 }
 
 // ── 工具函式 ────────────────────────────────────
