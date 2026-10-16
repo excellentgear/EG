@@ -387,6 +387,9 @@ $perms  = rm_perms($db, $rmUser);
             </div>
             <div class="hint">風險與機會共用同一組評分（分數算法相同），但問的問題不同：風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。
                 這裡只改機會列顯示的欄位名稱與上面風險準則的「機會等級名稱」，不會另外產生一套分數；<b>機會不列入風險分布（表D）與清單的「最高風險等級」</b>。</div></div>
+        <div class="set-sec"><h5>填表人可選擇的部門</h5>
+            <div class="fld" id="setMakerDepts" style="display:flex;flex-wrap:wrap;gap:4px 16px;"></div>
+            <div class="hint">勾選後，兩張表的「填表人」下拉只列這些部門（含下轄）在填表日期當天任職的人，避免選錯；<b>一個都不勾＝不限部門</b>。兼任者的每一個職務都會各列一列。</div></div>
         <div class="set-sec"><h5>對外宣稱有外包的稽核製程</h5>
             <div class="fld" id="setOutsrc"></div>
             <div class="hint">稽核製程取自「訂單追蹤」設定的稽核製程。只有勾選的製程才會做委外廠商相關的分析與建議；沒勾＝依 AS 稽核對外宣稱沒有外包，SWOT 與風險表都不列委外議題。客戶、品質、退貨等統計一律只計稽核製程的料號。</div></div>
@@ -691,8 +694,9 @@ $(document).on('click', '#bSave', function(){
     var items = collectBoard(), bad = false;
     $.each(items, function(_, it){ if (!$.trim(it.stakeholder + it.needs + it.issue)) return; });
     if (!$.grep(items, function(it){ return $.trim(it.stakeholder + it.needs + it.issue); }).length){ $('#bErr').text('至少要填寫一條內容'); return; }
+    if (!$('#bMaker').prop('disabled') && !mkId($('#bMaker'))){ $('#bErr').text('請重新選擇填表人（填表日期改了，原填表人於該日期不在可選名單）'); return; }
     post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items),
-          maker_id:(!$('#bMaker').prop('disabled') && +$('#bMaker').val() && +$('#bMaker').val() !== BOARD.maker0 ? +$('#bMaker').val() : '')}, function(){ loadBoard(BOARD.year); });
+          maker_id:(!$('#bMaker').prop('disabled') && mkId($('#bMaker')) && mkId($('#bMaker')) !== BOARD.maker0 ? mkId($('#bMaker')) : '')}, function(){ loadBoard(BOARD.year); });
 });
 /* ---------- 依系統資料建議 ---------- */
 var SUG = [];
@@ -973,14 +977,24 @@ $(document).on('click', '[data-rmdept]', function(){
     var id = +$(this).data('rmdept'); CUR.dept_ids = CUR.dept_ids.filter(function(x){ return x !== id; }); renderDeptChips();
 });
 
-/* 填表人下拉：填表日期當天在職的人；原本的填表人即使已離職也保留在選項裡（免得只是開來看一下就被換掉） */
-function loadMakers($sel, date, curId, curName, canChange){
+/* 填表人下拉：填表日期當天在職、且屬於管理員設定可選部門的人（一個職務一列；value＝post_key「人員:部門」）。
+   開啟時：原本的填表人即使已離職也保留在選項裡（免得只是開來看一下就被換掉）；
+   改了填表日期：原填表人那天若不在候選名單（尚未到職、已離職或不在可選部門）就清空，要求重新選擇。 */
+function mkId($sel){ var v = String($sel.val() || ''); return v ? (+v.split(':')[0] || 0) : 0; }
+function loadMakers($sel, date, curId, curName, canChange, clearIfMissing){
     $sel.prop('disabled', !canChange);
     var fill = function(people){
         var h = '', has = false;
-        $.each(people, function(_, p){ if (+p.id === +curId) has = true; h += '<option value="' + p.id + '"' + (+p.id === +curId ? ' selected' : '') + '>' + esc(p.display) + '</option>'; });
-        if (curId && !has) h = '<option value="' + curId + '" selected>' + esc(curName || ('#' + curId)) + '</option>' + h;
-        $sel.html(h);
+        $.each(people, function(_, p){
+            var sel = !has && +p.id === +curId;      // 同一人有多個職務時只預選第一列
+            if (sel) has = true;
+            h += '<option value="' + esc(p.key) + '"' + (sel ? ' selected' : '') + '>' + esc(p.display) + '</option>';
+        });
+        if (curId && !has){
+            if (clearIfMissing) h = '<option value="" selected>（原填表人於此日期不在可選名單，請重新選擇）</option>' + h;
+            else h = '<option value="' + curId + '" selected>' + esc(curName || ('#' + curId)) + '</option>' + h;
+        }
+        $sel.html(h).toggleClass('mk-empty', !$sel.val());
     };
     if (!canChange){ fill([]); return; }
     get({action:'maker_options', date:date}, function(res){ fill(res.people || []); });
@@ -1041,11 +1055,11 @@ function collectItems(){
 }
 $(document).on('change', '#bDate', function(){
     if (!BOARD.doc || $('#bMaker').prop('disabled')) return;
-    loadMakers($('#bMaker'), $(this).val(), +$('#bMaker').val() || BOARD.maker0, '', true);
+    loadMakers($('#bMaker'), $(this).val(), mkId($('#bMaker')) || BOARD.maker0, '', true, true);
 });
 $('#fDate').on('change', function(){
     if (!CUR || !CUR.doc_id || $('#fMaker').prop('disabled')) return;
-    loadMakers($('#fMaker'), $(this).val(), +$('#fMaker').val() || CUR.maker0, '', true);
+    loadMakers($('#fMaker'), $(this).val(), mkId($('#fMaker')) || CUR.maker0, '', true, true);
 });
 $('#btnDocSave').on('click', function(){
     var date = $('#fDate').val();
@@ -1059,7 +1073,9 @@ $('#btnDocSave').on('click', function(){
         });
     }
     if (bad){ $('#eItems').text(bad); return; }
-    var mk = $('#fMaker').prop('disabled') ? 0 : (+$('#fMaker').val() || 0);
+    if (!$('#fMaker').prop('disabled') && !mkId($('#fMaker'))){ $('#eMaker').text('請重新選擇填表人（填表日期改了，原填表人於該日期不在可選名單）'); return; }
+    $('#eMaker').text('');
+    var mk = $('#fMaker').prop('disabled') ? 0 : mkId($('#fMaker'));
     post({action:'doc_save', doc_id:CUR.doc_id, kind:CUR.kind, fill_date:date, maker_id:(mk && mk !== CUR.maker0 ? mk : ''),
           dept_ids:JSON.stringify(CUR.dept_ids), items:JSON.stringify(items)}, function(res){
         closeMask('docMask');
@@ -1381,6 +1397,8 @@ function renderSet(){
     $('#setLik').html(tk + '</tbody></table>');
     $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix); $('#setOppPrefix').val(S.rm_opp_prefix || 'O');
     var oh = ''; $.each(META.audit_procs || [], function(_, p){ oh += '<label style="margin-right:16px;font-weight:normal;"><input type="checkbox" class="setOut" value="' + p.tag_id + '"' + (($.inArray(p.tag_id, S.rm_outsource_tags || []) >= 0) ? ' checked' : '') + '> ' + esc(p.name) + '</label>'; });
+    var mh = ''; $.each(META.depts || [], function(_, d){ mh += '<label style="font-weight:normal;"><input type="checkbox" class="setMkDept" value="' + d.id + '"' + (($.inArray(+d.id, (S.rm_maker_depts || []).map(Number)) >= 0) ? ' checked' : '') + '> ' + esc(d.name) + '</label>'; });
+    $('#setMakerDepts').html(mh || '<span class="hint">尚無部門資料</span>');
     $('#setOutsrc').html(oh || '<span class="hint">訂單追蹤尚未設定稽核製程</span>');
     var b = $('#setAsdocBody').empty();
     $.each(META.asdoc, function(k, v){
@@ -1450,6 +1468,7 @@ $('#btnSetSave').on('click', function(){
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
              rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(), rm_opp_prefix:$('#setOppPrefix').val(),
              rm_opp_terms:{sev:$('#setOppSev').val(), freq:$('#setOppFrq').val(), level:$('#setOppLv').val()},
+             rm_maker_depts:$('.setMkDept:checked').map(function(){ return +this.value; }).get(),
              rm_outsource_tags:$('.setOut:checked').map(function(){ return +this.value; }).get()};
     var send = function(force){
         $('#eSet').text('');

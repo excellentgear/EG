@@ -208,10 +208,10 @@ if ($action === 'risk_open_car') {
 if ($action === 'maker_options') {
     require_once __DIR__ . '/../common/people_lib.php';
     $d = rmDate($_GET['date'] ?? '') ?: rmToday($db);
-    $rows = eg_people_list_asof($db, [], $d);
     $out = [];
-    foreach ($rows as $r) $out[] = ['id' => (int)$r['id'], 'name' => (string)$r['user_cname'], 'display' => trim(($r['dept_name'] ?? '') . '　' . ($r['position_name'] ?? '') . '　' . $r['user_cname'])];
-    jout(['people' => $out]);
+    foreach (rm_maker_candidates($db, $d) as $r) $out[] = ['key' => (string)$r['post_key'], 'id' => (int)$r['id'], 'name' => (string)$r['user_cname'], 'display' => (string)$r['display']];
+    $set = rm_settings($db);
+    jout(['people' => $out, 'limited' => !empty($set['rm_maker_depts'])]);
 }
 
 /* ---------------------------------------------------------------- 空白表單列印用：表頭（公司名稱、表單名稱、AS 編號） */
@@ -493,8 +493,8 @@ if ($action === 'doc_save') {
                 if (!$P['canAdmin'] && (int)$old['created_by'] !== (int)$P['uid']) { $db->rollBack(); jerr('只有填表人本人或管理員可以更換填表人', 403); }
                 require_once __DIR__ . '/../common/people_lib.php';
                 $mk = null;
-                foreach (eg_people_list_asof($db, [], $fillDate) as $pp) if ((int)$pp['id'] === (int)$_POST['maker_id']) { $mk = $pp; break; }
-                if (!$mk) { $db->rollBack(); jerr('填表人必須是填表日期當天在職的人員', 400); }
+                foreach (rm_maker_candidates($db, $fillDate) as $pp) if ((int)$pp['id'] === (int)$_POST['maker_id']) { $mk = $pp; break; }
+                if (!$mk) { $db->rollBack(); jerr('填表人必須是填表日期當天在職、且屬於管理員設定可選部門的人員', 400); }
                 $db->prepare("UPDATE rm_doc SET created_by=?, created_by_name=? WHERE doc_id=?")->execute([(int)$mk['id'], (string)$mk['user_cname'], $id]);
             }
             // 填表日期改了，單號跟著重編（單號前八碼＝表單日期）；只有真的換日期才重編，避免無謂跳號
@@ -619,6 +619,10 @@ if ($action === 'setting_save') {
             $o[$k] = $v;
         }
         $toWrite['rm_opp_terms'] = $o;
+    }
+    if (array_key_exists('rm_maker_depts', $arr)) {
+        $valid = array_map(function ($d) { return (int)$d['id']; }, cm_dept_list($db));
+        $toWrite['rm_maker_depts'] = array_values(array_unique(array_filter(array_map('intval', (array)$arr['rm_maker_depts']), function ($d) use ($valid) { return in_array($d, $valid, true); })));
     }
     if (array_key_exists('rm_outsource_tags', $arr)) {
         $valid = array_map(function ($r) { return (int)$r['tag_id']; }, rm_audit_procs_view($db));

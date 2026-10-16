@@ -85,6 +85,7 @@ function rm_settings_default(): array
         // 機會與風險共用同一張評分矩陣（分數算法一樣），但顯示的用詞不同：
         // 風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。只有用詞不同，不另做一套分數。
         'rm_opp_terms' => ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'],
+        'rm_maker_depts'    => [],      // 填表人可以選的部門（department.id 清單，含下轄）；空＝不限，由管理員設定以免選錯
         'rm_outsource_tags' => [],      // 對外宣稱有外包的稽核製程（ot_as_proc_tag.tag_id 清單）；沒勾＝沒有外包，不產生任何委外分析
     ];
 }
@@ -560,6 +561,22 @@ function rm_next_doc_no(PDO $db, string $fillDate): string
         $n = $last !== '' ? (int)substr($last, 8) : 0;
     } catch (Throwable $e) { $n = 0; }
     return $d . str_pad((string)($n + 1), 3, '0', STR_PAD_LEFT);
+}
+
+/**
+ * 填表人候選（唯一實作，下拉與後端驗證共用）：填表日期當天在職的人（補歷史單據時當時在職、現已離職者也選得到），
+ * 且有「管理員設定可選部門」時，只列在那些部門（含下轄）任職的人。
+ * 一個職務一列（兼任者的主職務與兼任職務都要列得出來，value 用 post_key；只留職級最高那筆會讓主職消失）。
+ */
+function rm_maker_candidates(PDO $db, string $date): array
+{
+    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/org_role_lib.php';
+    $set = rm_settings($db);
+    $dept = [];
+    foreach ((array)($set['rm_maker_depts'] ?? []) as $d) foreach (eg_dept_subtree_ids($db, (int)$d) as $x) $dept[(int)$x] = true;
+    $opt = $dept ? ['dept_ids' => array_keys($dept)] : [];
+    return eg_people_posts_asof($db, $opt, $date);
 }
 
 /** 依「風險／機會」選前綴（機會用 rm_opp_prefix，其餘用 rm_confirm_prefix） */

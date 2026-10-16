@@ -1,0 +1,6 @@
+# check_people_posts.php 基準線（2026-10-16）：當下已存在、尚未處理的檔案；改到這些檔案時順手改成 all_posts / eg_people_posts
+# communication_mgmt.php：挑人是「先選部門再挑人」（cm_dept_people），每個部門各自列人，兼任者在各自部門都看得到，暫不需改
+views/GM/communication_mgmt.php
+views/QC/inspection_entry_v2.php
+views/pm/packing_schedule.php
+views/user/user.php
