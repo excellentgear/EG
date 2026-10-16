@@ -231,7 +231,7 @@ $companyName = eg_company_full_name($db);
 <div class="cr-mask" id="ccMask"><div class="cr-modal">
     <div class="m-head"><span>通知對象設定（副知）</span><span class="m-close" onclick="closeMask('ccMask')">✕</span></div>
     <div class="m-body">
-        <p style="font-size:12.5px;color:#8a6d45;">各節點原本就會通知「該輪待簽核的人」（依組織架構自動解析）；這裡可<b>額外指定要副知的人員</b>，他們只會收到知會通知、不需簽核。已是該節點待簽人員者不會重複通知。</p>
+        <p style="font-size:12.5px;color:#8a6d45;">各節點原本就會通知「該輪待簽核的人」（依組織架構自動解析）；這裡可<b>勾選要額外副知的角色</b>（本頁角色，管理員在使用者權限設定頁指派），該角色底下的在職人員只會收到知會通知、不需簽核。已是該節點待簽人員者不會重複通知。</p>
         <div id="ccBody">載入中…</div>
     </div>
     <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('ccMask')">取消</button> <button type="button" class="cr-btn" onclick="saveNotifyCc()"><i class="fa fa-save"></i> 儲存</button></div>
@@ -799,40 +799,31 @@ function savePrintSetting(){
     }, 'json');
 }
 
-/* ───────────────── 通知對象設定（副知，僅管理員） ───────────────── */
-var CC = {events:{}, cc:{}, people:{}};
+/* ───────────────── 通知對象設定（副知，依角色勾選，僅管理員） ───────────────── */
+var CC = {events:{}, cc:{}, roles:[]};
 $('#btnNotifyCc').on('click', function(){
     $('#ccBody').html('載入中…'); openMask('ccMask');
     $.getJSON(API, {action:'notify_cc_get'}, function(res){
         if (!res.ok){ $('#ccBody').html('<span style="color:#c0392b;">'+esc(res.error||'載入失敗')+'</span>'); return; }
-        CC.events = res.events||{}; CC.cc = res.cc||{}; CC.people = {};
-        (res.people||[]).forEach(function(p){ (CC.people[p.id] = CC.people[p.id]||{id:p.id,name:p.name,labels:[]}).labels.push((p.dept||'')+' '+(p.pos||'')); });
-        renderCc();
+        CC.events = res.events||{}; CC.cc = res.cc||{}; CC.roles = res.roles||[];
+        var h = '';
+        Object.keys(CC.events).forEach(function(k){
+            h += '<div style="margin-bottom:12px;" data-ev="'+k+'"><label style="font-weight:600;">'+esc(CC.events[k])+'</label><div>';
+            CC.roles.forEach(function(r){
+                var on = (CC.cc[k]||[]).indexOf(parseInt(r.role_id))>=0;
+                h += '<label style="display:inline-block;font-weight:normal;margin:3px 14px 3px 0;"><input type="checkbox" value="'+r.role_id+'"'+(on?' checked':'')+'> '+esc(r.role_name)+'</label>';
+            });
+            h += '</div></div>';
+        });
+        $('#ccBody').html(h || '（本模組尚無角色）');
     });
-});
-function ccName(id){ var p = CC.people[id]; return p ? p.name : ('#'+id+'（已離職）'); }
-function renderCc(){
-    var h = '';
-    Object.keys(CC.events).forEach(function(k){
-        var ids = CC.cc[k]||[];
-        h += '<div style="margin-bottom:14px;" data-ev="'+k+'"><label style="font-weight:600;">'+esc(CC.events[k])+'</label><div style="margin:4px 0;min-height:24px;">';
-        h += ids.length ? ids.map(function(id){ return '<span style="display:inline-block;background:#F7E0BD;color:#5a3a12;border-radius:12px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12.5px;">'+esc(ccName(id))+' <a href="javascript:void(0)" data-rm="'+id+'" style="color:#DD5138;text-decoration:none;">×</a></span>'; }).join('') : '<span style="color:#aaa;font-size:12.5px;">（未指定）</span>';
-        h += '</div><select class="cc-add" data-eg-filter="輸入姓名篩選…"><option value="">＋ 加入人員…</option>';
-        Object.keys(CC.people).forEach(function(id){ var p = CC.people[id]; if (ids.indexOf(p.id)>=0) return; h += '<option value="'+p.id+'">'+esc(p.labels[0].trim()+'　'+p.name)+'</option>'; });
-        h += '</select></div>';
-    });
-    $('#ccBody').html(h);
-}
-$(document).on('change', '#ccBody .cc-add', function(){
-    var id = parseInt(this.value)||0; if (!id) return;
-    var k = $(this).closest('[data-ev]').data('ev'); (CC.cc[k] = CC.cc[k]||[]).push(id); renderCc();
-});
-$(document).on('click', '#ccBody [data-rm]', function(){
-    var id = parseInt($(this).data('rm')), k = $(this).closest('[data-ev]').data('ev');
-    CC.cc[k] = (CC.cc[k]||[]).filter(function(x){ return x!==id; }); renderCc();
 });
 function saveNotifyCc(){
-    $.post(API, {action:'notify_cc_save', csrf:META.csrf, cc:JSON.stringify(CC.cc)}, function(res){
+    var cc = {};
+    $('#ccBody [data-ev]').each(function(){
+        cc[$(this).data('ev')] = $(this).find('input:checked').map(function(){ return parseInt(this.value); }).get();
+    });
+    $.post(API, {action:'notify_cc_save', csrf:META.csrf, cc:JSON.stringify(cc)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('ccMask');
     }, 'json');

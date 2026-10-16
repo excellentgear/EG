@@ -298,11 +298,7 @@ case 'print_setting_save': {
 /* ---- 副知通知對象設定（僅管理員）---- */
 case 'notify_cc_get': {
     if (!$perms['canAdmin']) jerr('沒有權限', 403);
-    $ppl = [];
-    foreach (eg_people_list($db, ['all_posts'=>true]) as $p) {
-        $ppl[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'dept'=>$p['department_name'] ?? ($p['dept_name'] ?? ''), 'pos'=>$p['position_name'] ?? ($p['pos_name'] ?? '')];
-    }
-    jout(['events'=>CNRV_CC_EVENTS, 'cc'=>cnrv_cc_get($db), 'people'=>$ppl]);
+    jout(['events'=>CNRV_CC_EVENTS, 'cc'=>cnrv_cc_get($db), 'roles'=>cnrv_cc_roles($db)]);
 }
 case 'notify_cc_save': {
     cnrv_need_csrf();

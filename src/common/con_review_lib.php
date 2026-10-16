@@ -1223,9 +1223,9 @@ function cnrv_notify(PDO $db, int $docId, array $toUids, string $title, string $
     } catch (Throwable $e) { return 0; }
 }
 
-/* ---- 副知通知對象（2026-10-16 使用者交辦）：管理員可針對四個節點額外指定要收到「知會」的人員，
+/* ---- 副知通知對象（2026-10-16 使用者交辦）：管理員可針對四個節點額外勾選要收到「知會」的角色，
    與原本依組織解析出的待簽人員並行；副知只讀不簽（mode='read'）。值存
-   system_parameters('CON_REVIEW','notify_cc')＝{事件鍵:[user_id,...]}。 ---- */
+   system_parameters('CON_REVIEW','notify_cc_roles')＝{事件鍵:[role_id,...]}（依角色勾選，不指定個人）。 ---- */
 const CNRV_CC_EVENTS = [
     'submitted'    => '表單送出（內容部門待填寫時）',
     'depts_signed' => '內容部門全部簽核完成（待業務課決行時）',
@@ -1233,21 +1233,31 @@ const CNRV_CC_EVENTS = [
     'closed'       => '總經理核准、審查結案',
 ];
 
+/** 本模組目前的所有角色（管理員可能自訂新增，所以一律即時查）。 */
+function cnrv_cc_roles(PDO $db): array {
+    $st = $db->prepare("SELECT role_id, role_name FROM roles WHERE module=? ORDER BY role_id");
+    $st->execute([CNRV_AS_MODULE]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** {事件鍵:[role_id,...]}；已不存在的角色自動濾掉。 */
 function cnrv_cc_get(PDO $db): array {
     $out = array_fill_keys(array_keys(CNRV_CC_EVENTS), []);
     try {
-        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc' LIMIT 1");
+        $valid = [];
+        foreach (cnrv_cc_roles($db) as $r) $valid[(int)$r['role_id']] = true;
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc_roles' LIMIT 1");
         $st->execute();
         $d = json_decode((string)$st->fetchColumn(), true);
-        if (is_array($d)) foreach ($out as $k => $_) $out[$k] = array_values(array_unique(array_filter(array_map('intval', (array)($d[$k] ?? [])))));
+        if (is_array($d)) foreach ($out as $k => $_) $out[$k] = array_values(array_filter(array_unique(array_map('intval', (array)($d[$k] ?? []))), fn($x) => isset($valid[$x])));
     } catch (Throwable $e) {}
     return $out;
 }
 
-/** 存檔（呼叫端驗管理員）；只收在職人員 id，其餘丟掉。 */
+/** 存檔（呼叫端驗管理員）；只收本模組存在的角色。 */
 function cnrv_cc_save(PDO $db, array $in, string $by): void {
     $valid = [];
-    foreach (eg_people_list($db, []) as $p) $valid[(int)$p['id']] = true;
+    foreach (cnrv_cc_roles($db) as $r) $valid[(int)$r['role_id']] = true;
     $clean = [];
     foreach (CNRV_CC_EVENTS as $k => $_) {
         $ids = [];
@@ -1255,18 +1265,31 @@ function cnrv_cc_save(PDO $db, array $in, string $by): void {
         $clean[$k] = array_values($ids);
     }
     $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
-    $ex = $db->prepare("SELECT id FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc' LIMIT 1");
+    $ex = $db->prepare("SELECT id FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='notify_cc_roles' LIMIT 1");
     $ex->execute();
     $rid = $ex->fetchColumn();
     if ($rid) $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $by, $rid]);
-    else $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('CON_REVIEW','notify_cc',?,?,?)")
-             ->execute([$json, '合約訂單審查：各節點額外副知通知對象 {事件:[user_id]}', $by]);
+    else $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('CON_REVIEW','notify_cc_roles',?,?,?)")
+             ->execute([$json, '合約訂單審查：各節點副知通知角色 {事件:[role_id]}', $by]);
+}
+
+/** 該事件勾選角色底下的在職人員 id。 */
+function cnrv_cc_users(PDO $db, string $event): array {
+    $rids = cnrv_cc_get($db)[$event] ?? [];
+    if (!$rids) return [];
+    $in = implode(',', array_fill(0, count($rids), '?'));
+    $st = $db->prepare("SELECT DISTINCT user_id FROM user_roles WHERE role_id IN ($in)");
+    $st->execute($rids);
+    $have = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $active = [];
+    foreach (eg_people_list($db, []) as $p) $active[(int)$p['id']] = true;   // 只列在職者
+    return array_values(array_filter($have, fn($u) => isset($active[$u])));
 }
 
 /** 對該事件設定的副知人員發「知會」通知（已是主要收件人者不重複發）。失敗不影響主流程。 */
 function cnrv_cc_notify(PDO $db, int $docId, string $event, string $title, string $content, int $fromUid, array $exclude = []): void {
     try {
-        $ids = cnrv_cc_get($db)[$event] ?? [];
+        $ids = cnrv_cc_users($db, $event);
         $ids = array_values(array_diff($ids, array_map('intval', $exclude)));
         if ($ids) cnrv_notify($db, $docId, $ids, $title . '（副知）', $content, $fromUid, 'read');
     } catch (Throwable $e) {}
