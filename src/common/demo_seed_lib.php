@@ -158,8 +158,6 @@ function eg_demo_date_fields(): array
     return [
         'ctx'    => ['label' => '組織處境分析表 填表日', 'opt' => false, 'tip' => ''],
         'risk'   => ['label' => '風險與機會因應措施管制表 填表日', 'opt' => false, 'tip' => ''],
-        'ia_pre' => ['label' => '內部稽核 事前會議', 'opt' => true, 'tip' => ''],
-        'ia_end' => ['label' => '內部稽核 結束會議', 'opt' => true, 'tip' => ''],
         'effect' => ['label' => '成效確認日', 'opt' => false,
                      'tip' => '建議：排在管理審查會議之前（管理審查要看風險與機會的成效確認結果），預設為管理審查前一個工作日；此日之前措施要已有執行紀錄。溝通記錄與措施追蹤的日期，會自動落在「風險管制表填表日～成效確認日」之間。'],
         'mr'     => ['label' => '管理審查會議', 'opt' => true, 'tip' => ''],
@@ -190,8 +188,6 @@ function eg_demo_date_docs(PDO $db): array
         'ctx'    => ['mods' => ['rm_context']],
         'risk'   => ['mods' => ['rm_risk']],
         'effect' => ['mods' => ['rm_risk']],
-        'ia_pre' => ['mods' => ['ia_case']],
-        'ia_end' => ['mods' => ['ia_case', 'ia_report']],
         'mr'     => ['mods' => [], 'name' => '管理審查審核表'],
     ];
     $units = asFreqUnits(); $out = [];
@@ -270,23 +266,11 @@ function eg_demo_default_dates(PDO $db, int $Y): array
     if ($D['risk'] < $D['ctx']) $D['risk'] = $D['ctx'];
     $D['effect'] = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
     if ($D['effect'] < $D['risk']) $D['effect'] = $D['risk'];
-    // 稽核結束會議：AS 有指定月份就取該月（月底前、工作日），還沒到的月份就留白；沒指定才用預設的 9 月底
-    $em = eg_demo_months_for($docs, 'ia_end');
-    $x = $em ? eg_demo_wd($db, sprintf('%04d-%02d-20', $Y, $em[0]), -1) : eg_demo_wd($db, $cap($Y . '-09-26'), -1);
-    $D['ia_end'] = $x > $today ? '' : $x;
-    // 稽核事前會議：結束會議前約 4 週，但不早於風險表填表日
-    $pm = eg_demo_months_for($docs, 'ia_pre');
-    if ($pm) { $y2 = eg_demo_wd($db, sprintf('%04d-%02d-10', $Y, $pm[0]), 1); }
-    elseif ($D['ia_end'] !== '') { $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_end'] . ' -28 days')), 1); }
-    else { $y2 = eg_demo_wd($db, $cap($Y . '-09-01'), -1); }
-    if ($y2 < $D['risk']) $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['risk'] . ' +1 day')), 1);
-    if ($D['ia_end'] !== '' && $y2 >= $D['ia_end']) $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_end'] . ' -1 day')), -1);
-    $D['ia_pre'] = $y2 > $today ? '' : $y2;
     // 管理審查：AS 有指定月份就取該月；沒指定才排在成效確認日之後、稽核結束之後
     $mm = eg_demo_months_for($docs, 'mr');
     if ($mm) $D['mr'] = eg_demo_wd($db, sprintf('%04d-%02d-05', $Y, $mm[0]), 1);
     else {
-        $D['mr'] = eg_demo_wd($db, date('Y-m-d', strtotime(max($D['effect'], $D['ia_end'] ?: $D['effect']) . ' +1 day')), 1);
+        $D['mr'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['effect'] . ' +1 day')), 1);
     }
     if ($D['mr'] > $today) $D['mr'] = '';
     return $D;
@@ -328,11 +312,8 @@ function eg_demo_dates_check(PDO $db, int $Y, array $in): array
     $mrByAs = (bool)eg_demo_months_for($docs, 'mr');
     $le('ctx', 'risk', 'risk', '不可早於處境分析表填表日（' . $D['ctx'] . '），風險表是依處境分析表產生的');
     $le('risk', 'effect', 'effect', '不可早於風險管制表填表日（' . $D['risk'] . '），措施建立之後才談得到成效');
-    $le('risk', 'ia_pre', 'ia_pre', '不可早於風險管制表填表日，稽核要查的是已建立的管制表');
-    $le('ia_pre', 'ia_end', 'ia_end', '結束會議必須晚於事前會議（' . $D['ia_pre'] . '）', true);
     if (!$mrByAs) {          // AS 指定了管理審查的月份＝審查的是前一年度，不和本年度的成效確認、稽核結束比先後
         $le('effect', 'mr', 'mr', '管理審查要看成效確認結果，不可早於成效確認日（' . $D['effect'] . '）');
-        $le('ia_end', 'mr', 'mr', '管理審查要審查內部稽核結果，不可早於稽核結束會議（' . $D['ia_end'] . '）');
     }
     return ['errors' => $E, 'dates' => $D];
 }
@@ -442,13 +423,31 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         ]]);
     } else $warn[] = '沒有「加工項目」綁定到對外宣稱委外製程的廠商（或模組設定沒有勾選對外宣稱委外的稽核製程），略過供應商溝通';
     // 氣候
-    $rec(['date' => $d(4, 28), 'type' => 'regular', 'cat' => '員工', 'party' => '業務課、倉管組、生產課　防颱防汛作業檢討', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => [
+    $rec(['date' => $d(4, 28), 'type' => 'regular', 'cat' => '員工', 'party' => '業務課、倉管組、生產課　防颱防汛作業確認', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => [
         ['q' => '颱風警報發布當日，在途品項的預計交期要通知客戶。', 'a' => '業務課於警報發布當日通知客戶在途品項預計交期。',
          'track' => ['owner' => $own['業務課'], 'due' => $d(6, 30), 'closed' => $d(6, 18), 'action' => '訂定颱風警報當日通知客戶在途品項預計交期的作法，並通知相關客戶窗口', 'note' => '已完成並通知客戶窗口。']],
         ['q' => '汛期前庫房屋頂、排水與門口防水需要檢查。', 'a' => '倉管組於汛期前檢查庫房防水。',
          'track' => ['owner' => $own['倉管組'], 'due' => $d(5, 31), 'closed' => $d(5, 22), 'action' => '汛期前檢查庫房屋頂、排水與門口防水並改善', 'note' => '已完成檢查，缺失已改善。']],
         ['q' => '汛期前廠區排水與防水需要檢查。', 'a' => '生產課於汛期前檢查廠區防水。',
          'track' => ['owner' => $own['生產課'], 'due' => $d(5, 31), 'closed' => $d(5, 27), 'action' => '汛期前檢查廠區排水溝與防水並改善', 'note' => '已完成檢查，缺失已改善。']],
+        ['q' => '夏季高溫或電力吃緊（限電警示）時，現場加工與排程要如何因應。', 'a' => '生管組於高溫或限電警示時與生產課調整排程。',
+         'track' => ['owner' => $own['生管組'], 'due' => $d(7, 31), 'closed' => $d(7, 18), 'action' => '高溫或限電警示時，生管組與生產課調整生產排程並通知業務課', 'note' => '已訂定作法並通知相關人員。']],
+    ]]);
+    // 國際局勢：原物料與外購件價格、交期（客戶要價格條件、採購要供應商報價）
+    $q = '國際局勢（關稅、能源、匯率）使客戶成本壓力變大，詢問加工單價是否能調降，並希望確認報價的有效期限。';
+    $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q], '業務課與客戶確認訂單預測與加工單價條件，營運成本明顯上升時再與客戶協議調整。');
+    $rec(['date' => $d(5, 12), 'type' => 'irregular', 'cat' => '客戶', 'party' => $c1['name'], 'ref' => $c1['id'], 'ch' => ['phone'], 'maker' => $mk, 'items' => [
+        ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => '與主要客戶確認訂單預測與加工單價條件；營運成本明顯上升時與客戶協議調整加工單價']],
+    ]]);
+    $q = '能源與耗材價格上漲，刀具與砂輪的報價與交貨時間需要提早確認，避免加工停滯。';
+    $a = '採購組每月向刀具、砂輪供應商確認報價與交貨時間，必要時提前採購。';
+    $rec(['date' => $d(5, 20), 'type' => 'regular', 'cat' => '供應商', 'party' => '刀具、砂輪等加工工具供應商', 'ch' => ['phone'], 'maker' => $own['採購組'] ?: $own['生管組'], 'items' => [
+        ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['採購組'] ?: $own['生管組'], 'due' => $eoy, 'action' => '每月留意電力與刀具砂輪等營運成本的變動，刀具砂輪報價與交貨時間需提早確認，異常上升時回報總經理室']],
+    ]]);
+    // 環境議題：減碳與環保法規、客戶的環境要求
+    $rec(['date' => $d(8, 25), 'type' => 'regular', 'cat' => '環保局', 'party' => '環保局　環保與減碳法規諮詢窗口', 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
+        ['q' => '環保與減碳相關法規近期的異動，以及本公司適用的申報與管制要求。', 'a' => '管理課盤點適用的法規與客戶環境要求，指定負責部門並列入溝通管制表。',
+         'track' => ['owner' => $own['管理課'], 'due' => $d(9, 30), 'closed' => $d(9, 18), 'action' => '盤點適用的環保與減碳法規及客戶環境要求，指定負責部門並列入溝通管制表', 'note' => '已完成盤點並指定負責部門。']],
     ]]);
     // 法規（政府單位）
     foreach ([['環保局', '環保局　事業廢棄物申報窗口', '廢切削油與廢棄刀具的清運及網路申報方式、期限與聯單保存要求。', '依規定完成本期事業廢棄物申報，聯單歸檔', $d(5, 14), $d(6, 30), $d(6, 20)],
@@ -465,7 +464,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
                        'track' => ['owner' => $own[$x[0]], 'due' => $d(3, 31), 'closed' => $d(3, 20), 'action' => '接單評估：' . $x[1], 'note' => '已訂定評估作法。']];
     $ordItems[] = ['q' => '各部門評估結果要由業務課彙整，並於客戶要求的時效內回覆客戶交期。', 'a' => '業務課彙整各部門評估，並於客戶要求的時效內回覆客戶交期。',
                    'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => '接單評估：業務課彙整各部門評估，並於客戶要求的時效內回覆客戶交期']];
-    $rec(['date' => $d(2, 10), 'type' => 'regular', 'cat' => '員工', 'party' => '技術課、生產課、生管組、品管課、業務課　接單評估作業檢討', 'ch' => ['meeting'], 'maker' => $mk, 'items' => $ordItems]);
+    $rec(['date' => $d(2, 10), 'type' => 'regular', 'cat' => '員工', 'party' => '技術課、生產課、生管組、品管課、業務課　接單評估作業確認', 'ch' => ['meeting'], 'maker' => $mk, 'items' => $ordItems]);
     // 新客戶：首次出貨當下或 30 天內溝通
     $ncQ = [['首次出貨後的使用情形，以及產品尺寸、外觀是否符合需求。', '客戶表示首批產品符合圖面要求，無異常。'], ['後續是否還有相同或類似料號的加工需求，預計的數量與時程。', '客戶預計下一季追加訂單，會提前提供預測量。'], ['交期與包裝方式是否需要調整。', '目前交期可接受，包裝維持現行方式。']];
     foreach ($newC as $i => $nc) {
@@ -544,13 +543,20 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $chair = $topU ? ['id' => (int)$topU['id'], 'name' => (string)($topU['user_cname'] ?? '')] : ['id' => (int)$own['管理課']['id'], 'name' => $own['管理課']['name']];
     $attDepts = ['業務課', '生管組', '生產課', '品管課', '技術課', '管理課', '倉管組', '採購組'];
     $meetings = [];
-    if ($DT['ia_pre'] !== '') $meetings[] = ['subj' => '內部稽核事前會議', 'mk' => 'ia', 'date' => $DT['ia_pre'], 'loc' => '大會議室'];
-    if ($DT['ia_end'] !== '') $meetings[] = ['subj' => '內部稽核結束會議', 'mk' => 'ia', 'date' => $DT['ia_end'], 'loc' => '大會議室'];
+    // 該年度已經有「真實」的管理審查會議紀錄就不再產生假的（同一天兩場一模一樣的會議只會混淆）
+    $realMr = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM meeting_record WHERE subject LIKE '%管理審查%' AND subject NOT LIKE ? AND YEAR(meeting_date)=?", [EG_DEMO_TAG . '%', $Y])['n'];
+    if ($DT['mr'] !== '' && $realMr > 0) { $warn[] = '管理審查會議：' . $Y . ' 年已有實際建立的管理審查會議紀錄，不產生假資料'; $DT['mr'] = ''; }
     if ($DT['mr'] !== '')     $meetings[] = ['subj' => '管理審查會議', 'mk' => 'mr', 'date' => $DT['mr'], 'loc' => '大會議室'];
-    foreach (['ia_pre' => '內部稽核事前會議', 'ia_end' => '內部稽核結束會議', 'mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
+    foreach (['mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
     $deptList = eg_demo_qa($db, "SELECT id, name FROM department ORDER BY CHAR_LENGTH(name) DESC");
     $mCount = 0;
     foreach ($meetings as $m) {
+        // 管理審查排在年初（早於本年度成效確認日）＝審查的是前一年度，內容要引用前一年度的風險表，不能引用還沒發生的本年度成效
+        $mYear = $Y; $mRisk = $riskId;
+        if ($m['mk'] === 'mr' && $m['date'] < $DT['effect']) {
+            $pr = eg_demo_q1($db, "SELECT doc_id FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1", [$Y - 1]);
+            if ($pr) { $mYear = $Y - 1; $mRisk = (int)$pr['doc_id']; }
+        }
         // 每場會議各自一個交易：任何一步建立不了就整場跳過（不留半套資料），並在報告裡說明原因
         try {
             $att = [$chair['id'] => [$chair['name'], '總經理室', '總經理', 1]];
@@ -566,8 +572,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
                    ->execute([$mid, $uid, $a[0], $a[1], $a[2], $a[3], $m['date'] . ' 09:05:00']);
             $itemN = 0;
             foreach (['general' => 4, 'directive' => 2] as $kind => $want) {
-                $lines = eg_demo_lines($db, $st, 'meeting_items', ['meeting_kind' => $m['mk'], 'subject' => $m['subj'], 'year' => $Y, 'item_kind' => $kind]);
-                if (!$lines) $lines = eg_demo_meeting_fallback($db, $m['mk'], $kind, $Y, $riskId);
+                $lines = eg_demo_lines($db, $st, 'meeting_items', ['meeting_kind' => $m['mk'], 'subject' => $m['subj'], 'year' => $mYear, 'item_kind' => $kind]);
+                if (!$lines) $lines = eg_demo_meeting_fallback($db, $m['mk'], $kind, $mYear, $mRisk);
                 $so = 0;
                 foreach (array_slice($lines, 0, $want + 2) as $ln) {
                     $so++; $ids = []; $nm = [];
