@@ -1283,7 +1283,10 @@ function cnrv_cc_users(PDO $db, string $event): array {
     $have = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
     $active = [];
     foreach (eg_people_list($db, []) as $p) $active[(int)$p['id']] = true;   // 只列在職者
-    return array_values(array_filter($have, fn($u) => isset($active[$u])));
+    // 全站管理員（id=1／user_status 9、90）不收副知通知
+    $adm = [1 => true];
+    foreach ($db->query("SELECT id FROM user WHERE user_status IN (9,90)")->fetchAll(PDO::FETCH_COLUMN) as $a) $adm[(int)$a] = true;
+    return array_values(array_filter($have, fn($u) => isset($active[$u]) && !isset($adm[$u])));
 }
 
 /** 對該事件設定的副知人員發「知會」通知（已是主要收件人者不重複發）。失敗不影響主流程。 */
