@@ -141,7 +141,7 @@ function rm_suggest_context(PDO $db, int $year): array
                               FROM kpi_as_indicator_year y JOIN kpi_as_indicator i ON i.indicator_id=y.indicator_id
                               WHERE y.year=? AND y.is_active=1 AND y.target_value IS NOT NULL ORDER BY i.item_no");
         $inds->execute([$year]);
-        $okNames = [];
+        $okNames = []; $grp = [];
         foreach ($inds->fetchAll(PDO::FETCH_ASSOC) as $ind) {
             $mv = $db->prepare("SELECT month, COALESCE(override_value, manual_value, auto_value) v FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? ORDER BY month");
             $mv->execute([(int)$ind['indicator_id'], $year]);
@@ -160,7 +160,16 @@ function rm_suggest_context(PDO $db, int $year): array
             // 只寫事實與月份：不用「最近」這種沒有範圍的字眼，也不另外列「逐月變差」
             $issue = $ind['name'] . '未達年度目標' . ($lastOk ? '' : '，截至 ' . (int)$last['month'] . ' 月仍未達標');
 
-            $add('KPI 未達標（' . $year . '）', $key, $sh, $needs, $issue, '規則：該年度有月份未達 KPI 年度目標（' . $year . ' 年 ' . count($miss) . ' 個月未達），列為議題；請確認原因後再決定放在哪個象限');
+            // 同一類需求的 KPI（例：受訂金額與銷貨額達成率都是「穩定的訂單與營收」）合併成一個議題，
+            // 不然會長出兩列措施與成效幾乎一模一樣的風險
+            $g = $key . '|' . $sh . '|' . $needs;
+            if (!isset($grp[$g])) $grp[$g] = ['key'=>$key, 'sh'=>$sh, 'needs'=>$needs, 'issues'=>[], 'whys'=>[]];
+            $grp[$g]['issues'][] = $issue;
+            $grp[$g]['whys'][] = $ind['name'] . ' ' . $year . ' 年 ' . count($miss) . ' 個月未達';
+        }
+        foreach ($grp as $g) {
+            $add('KPI 未達標（' . $year . '）', $g['key'], $g['sh'], $g['needs'], implode('；', $g['issues']),
+                 '規則：該年度有月份未達 KPI 年度目標（' . implode('、', $g['whys']) . '），列為議題；請確認原因後再決定放在哪個象限');
         }
         if (count($okNames) >= 2)
             $add('KPI 達標（' . $year . '）', 'S', '客戶', '品質穩定、量測可追溯、人員具備能力',

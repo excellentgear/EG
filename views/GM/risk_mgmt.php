@@ -1714,7 +1714,7 @@ function printDoc(docId){
                 + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
                 + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
                 + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
-                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
+                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險<br>等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
         }
         // 風險與機會共用 1～n 級評分尺度，但評估的意義不同，所以在表尾逐點說明（稽核員看到表頭「嚴重度／發生率」時才不會把機會也當成危險）
         var foot = kind === 'risk' ? '<div style="margin-top:6px;font-size:11px;color:#333;line-height:1.6;">註：'
