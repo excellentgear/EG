@@ -3988,6 +3988,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE client_id=? AND is_active=1");
             $chk->execute([$cid]); $cnt=(int)$chk->fetchColumn();
             if ($cnt>0) $blocks[] = "庫存紀錄 {$cnt} 筆";
+            // BOM 只存客戶名稱文字（bom.Client_Name），沒綁料號的製令也要擋
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM bom b JOIN customer_list c ON c.customer=b.Client_Name WHERE c.customer_id=?");
+            $chk->execute([$cid]); $cnt=(int)$chk->fetchColumn();
+            if ($cnt>0) $blocks[] = "生產批次(BOM) {$cnt} 筆";
             if (!empty($blocks)) throw new Exception('此客戶已有關聯資料，無法刪除：' . implode('、',$blocks));
             $del_cust_q = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=?"); $del_cust_q->execute([$cid]); $del_cust_name = $del_cust_q->fetchColumn();
             $pdo->prepare("DELETE FROM customer_industry_mapping WHERE customer_id=?")->execute([$cid]);
@@ -5077,6 +5081,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM is_list WHERE Client_id=?"); $chk->execute([$cid]); $n=(int)$chk->fetchColumn(); if($n) $blocks[]="出貨單 {$n} 筆";
             $chk = $pdo->prepare("SELECT COUNT(*) FROM quotation_list WHERE client_id=?"); $chk->execute([$cid]); $n=(int)$chk->fetchColumn(); if($n) $blocks[]="報價單 {$n} 筆";
             $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE client_id=? AND is_active=1"); $chk->execute([$cid]); $n=(int)$chk->fetchColumn(); if($n) $blocks[]="庫存紀錄 {$n} 筆";
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM bom b JOIN customer_list c ON c.customer=b.Client_Name WHERE c.customer_id=?"); $chk->execute([$cid]); $n=(int)$chk->fetchColumn(); if($n) $blocks[]="生產批次(BOM) {$n} 筆";
             echo json_encode(['success'=>true,'blocks'=>$blocks,'customer'=>$cust]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -6867,7 +6872,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // Check relations
             $n1 = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE Customer_Id=?"); $n1->execute([$cid]); $c1=(int)$n1->fetchColumn();
             $n2 = $pdo->prepare("SELECT COUNT(*) FROM order_track WHERE Client_name_ID=?"); $n2->execute([$cid]); $c2=(int)$n2->fetchColumn();
-            if ($c1+$c2 > 0) throw new Exception("此客戶有關聯資料（料號{$c1}筆、訂單{$c2}筆），請先改為停用狀態");
+            // BOM 只存客戶名稱文字（bom.Client_Name），以名稱比對
+            $n3 = $pdo->prepare("SELECT COUNT(*) FROM bom b JOIN customer_list c ON c.customer=b.Client_Name WHERE c.customer_id=?"); $n3->execute([$cid]); $c3=(int)$n3->fetchColumn();
+            $n4 = $pdo->prepare("SELECT COUNT(*) FROM is_list WHERE Client_id=?"); $n4->execute([$cid]); $c4=(int)$n4->fetchColumn();
+            $n5 = $pdo->prepare("SELECT COUNT(*) FROM quotation_list WHERE client_id=?"); $n5->execute([$cid]); $c5=(int)$n5->fetchColumn();
+            if ($c1+$c2+$c3+$c4+$c5 > 0) throw new Exception("此客戶有關聯資料（料號{$c1}筆、訂單{$c2}筆、BOM{$c3}筆、出貨單{$c4}筆、報價單{$c5}筆），請先改為停用狀態");
             $pdo->prepare("DELETE FROM customer_industry_mapping WHERE customer_id=?")->execute([$cid]);
             $pdo->prepare("DELETE FROM customer_list WHERE customer_id=?")->execute([$cid]);
             echo json_encode(['success'=>true,'message'=>"客戶 {$cid} 已刪除"]);
@@ -6907,6 +6916,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             if (!$canPartDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $d_id = intval($_POST['d_id']);
+            // 後端自己擋：有任何關聯資料一律不可直接刪（不可只靠畫面隱藏刪除鈕，否則直打 API 可繞過）。
+            // 項目與 delete_part／check_part_blocks 相同。
+            $__blk = [];
+            foreach ([
+                ['訂單',            "SELECT COUNT(*) FROM order_track WHERE d_id_ID=?", 1],
+                ['生產批次(BOM)',   "SELECT COUNT(*) FROM bom WHERE d_setting_id=?", 1],
+                ['BOM組合件關聯',   "SELECT COUNT(*) FROM d_setting_bom WHERE parent_d_id=? OR child_d_id=?", 2],
+                ['出貨單',          "SELECT COUNT(*) FROM is_list WHERE d_setting_id=?", 1],
+                ['庫存紀錄',        "SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1", 1],
+                ['報價單',          "SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?", 1],
+                ['退貨單',          "SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?", 1],
+            ] as [$__lab, $__sql, $__np]) {
+                $__q = $pdo->prepare($__sql); $__q->execute(array_fill(0, $__np, $d_id));
+                $__n = (int)$__q->fetchColumn(); if ($__n > 0) $__blk[] = "{$__lab} {$__n} 筆";
+            }
+            try { $__q = $pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?"); $__q->execute([$d_id]); $__n=(int)$__q->fetchColumn(); if ($__n>0) $__blk[]="圖面變更紀錄 {$__n} 筆"; } catch (Exception $__qe) {}
+            if ($__blk) throw new Exception('此料號已有關聯資料，無法直接刪除（請改用移轉）：' . implode('、', $__blk));
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
             $pdo->prepare("DELETE FROM d_setting_bom  WHERE parent_d_id=? OR child_d_id=?")->execute([$d_id,$d_id]);
