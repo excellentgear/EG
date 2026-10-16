@@ -367,7 +367,7 @@ $pdo = $db->getPDO();
 // ※ 版本號一旦被任何一次頁面載入寫進 system_settings 就不可以再重複使用同一個值——
 //   那會讓 $_mdm_skip_migration=true、整段 migration 被靜默跳過（本次開發中途實際踩到：
 //   先用了 20261012_01、頁面被開過、改回舊號後再改回同一號，結果新表完全沒建卻不報錯）。
-define('MDM_MIGRATION_VERSION', '20261014_01');   // 2026-10-12（三次）整組的使用機台可改綁「機台種類(製程大類)／機型」，不限定機台編號
+define('MDM_MIGRATION_VERSION', '20261016_01');   // 2026-10-12（三次）整組的使用機台可改綁「機台種類(製程大類)／機型」，不限定機台編號
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -468,7 +468,8 @@ $pdo->exec("INSERT IGNORE INTO dict_timing_belt_profile (profile_code,pitch_mm,p
     ('T2.5',2.500,0.300,'Metric',210),('T5',5.000,0.500,'Metric',220),
     ('T10',10.000,1.000,'Metric',230),('T20',20.000,1.500,'Metric',240),
     ('AT3',3.000,0.205,'Metric',310),('AT5',5.000,0.610,'Metric',320),
-    ('AT10',10.000,0.910,'Metric',330),('AT20',20.000,1.410,'Metric',340)"); } catch(Exception $_e){}
+    ('AT10',10.000,0.910,'Metric',330),('AT20',20.000,1.410,'Metric',340),
+    ('2GT',2.000,0.254,'GT',250),('3GT',3.000,0.381,'GT',260),('5GT',5.000,0.5715,'GT',270)"); } catch(Exception $_e){}
 try {
     $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_file_categories (
         id            INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
