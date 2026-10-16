@@ -6130,8 +6130,9 @@ echo "</script>\n";
                     _simBox.style.cssText = 'display:flex;align-items:stretch;gap:4px;margin-bottom:6px;';
                     var _simTxt = document.createElement('div');
                     _simTxt.style.cssText = 'flex:1;min-width:0;cursor:pointer;background:#E4F1FB;border:1px solid #9CC8E8;border-left:4px solid #4A90C2;color:#1f4e79;border-radius:3px;padding:2px 6px;font-size:12px;line-height:1.4;word-break:break-all;';
-                    var _simTot = (_simE.B || 0) + (_simE.A || 0) + (_simE.C || 0);
-                    _simTxt.innerHTML = '<b>【類似料號】</b>' + escapeHtml(_simE.peer_nos.join('、')) + (_simTot > _simE.peer_nos.length ? ' 等' + _simTot + '個' : '');
+                    // 只有一個類似料號就直接印料號；兩個以上印「x數量」（點開跳窗看全部）
+                    var _simN = (_simE.B || 0) + (_simE.A || 0);
+                    _simTxt.innerHTML = '<b>【類似料號】</b>' + (_simN > 1 ? 'x' + _simN : escapeHtml(_simE.peer_nos[0]));
                     _simTxt.title = '有類似料號（齒輪規格相同），點一下查看原因與最近三張製令';
                     (function (dsid) {
                         _simTxt.addEventListener('click', function (ev) { ev.stopPropagation(); if (window.EGPartSimilar) EGPartSimilar.prompt({ dId: dsid, ctx: 'bom', once: false, refBanner: false }); });

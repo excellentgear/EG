@@ -4265,10 +4265,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         $_psLv = $ps_levels[(int)($order['d_id_ID'] ?? 0)] ?? null;
                         if ($_psLv && $_psLv['best'] !== 'C' && empty($order['pmGet'])):
                         ?>
-                        <?php $_psNos = $_psLv['peer_nos'] ?? []; $_psTotal = (int)$_psLv['B'] + (int)$_psLv['A'] + (int)$_psLv['C']; ?>
+                        <?php $_psNos = $_psLv['peer_nos'] ?? []; $_psTotal = (int)$_psLv['B'] + (int)$_psLv['A']; ?>
                         <div style="margin-top:3px;cursor:pointer;background:#E4F1FB;border:1px solid #9CC8E8;border-left:4px solid #4A90C2;color:#1f4e79;border-radius:3px;padding:2px 6px;font-size:11px;line-height:1.4;word-break:break-all;"
                              onclick="if(window.EGPartSimilar)EGPartSimilar.prompt({dId:<?= (int)$order['d_id_ID'] ?>,ctx:'order',once:false,refBanner:false})"
-                             title="有類似料號（齒輪規格相同），點一下查看原因、最近訂單與逐項比對"><b>【類似料號】</b><?= safe_html(implode('、', $_psNos)) ?><?= $_psTotal > count($_psNos) ? ' 等' . $_psTotal . '個' : '' ?></div>
+                             title="有類似料號（齒輪規格相同），點一下查看原因、最近訂單與逐項比對"><b>【類似料號】</b><?= $_psTotal > 1 ? 'x' . $_psTotal : safe_html((string)($_psNos[0] ?? '')) ?></div>
                         <?php endif; ?>
                     </div>
                     <div class="ate-note-bar">
