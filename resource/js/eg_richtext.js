@@ -1342,6 +1342,11 @@
          使用者點的那一頁（例如第 4 頁的表格）拉回第一頁，restoreRange() 也還原不回來，
          結果就是按了完全沒反應（實測抓到）。工具列的 mousedown 已經 preventDefault，
          所以這時候的即時選取仍然是使用者點的那一格。 */
+      /* 強制換頁／括號對齊也要在 body.focus() 之前處理：body 是「最後點過的那一頁」，
+         游標若在別頁（例如用鍵盤或程式移過去），body.focus() 會把游標拉到那一頁開頭，
+         結果標記打到錯的段落（實測：游標在第 4 頁的「8. 相關文件」，標記卻打在第 1 頁第 1 段）。 */
+      if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); w.alert(hb.msg); return; }
+      if (cmd === 'egAlignParen') { var an = alignSelectedParen(); w.alert(an.msg); return; }
       if (cmd === 'egVaTop' || cmd === 'egVaMid' || cmd === 'egVaBot') {
         var va0 = cmd === 'egVaTop' ? 'top' : (cmd === 'egVaBot' ? 'bottom' : 'middle');
         if (!setCellVAlign(body, va0)) {
@@ -1374,7 +1379,7 @@
         if (cmd === 'egHr')        { insertHtml('<hr>'); return; }
         // 分頁＝真的長出新的一頁（游標所在區塊之後的內容整批移過去），不是插一條線
         if (cmd === 'egPageBreak') { splitAtCaret(); return; }
-        if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); w.alert(hb.msg); return; }
+
         if (cmd === 'egAddPage')   { api.addPage(); return; }
         if (cmd === 'egAutoPage')  { autoPaginate(); return; }
         if (cmd === 'egNumIndent') {
@@ -1385,7 +1390,6 @@
           w.alert(msg);
           return;
         }
-        if (cmd === 'egAlignParen') { var an = alignSelectedParen(); w.alert(an.msg); return; }
         if (cmd === 'egFontUp')    { bumpFont(1);  return; }
         if (cmd === 'egFontDown')  { bumpFont(-1); return; }
         if (cmd === 'egLhUp')      { bumpLineHeight(0.1);  return; }
@@ -2371,6 +2375,32 @@
       while (n && n.parentNode !== sheet) n = n.parentNode;
       return (n && n.parentNode === sheet) ? n : null;
     }
+    /* Word 文件常用「連按好幾個空白段落」把標題頂到下一頁。改成強制換頁之後，
+       那幾個空白段落還留在上一頁底部，一超出就被推到下一頁變成「只有一個空行的空白頁」
+       （使用者 2026-10-16：強制換頁後存檔重新載入多出一頁空白）。
+       強制換頁的前一頁，尾端的空白段落一律移除（至少留一個區塊）。 */
+    function isBlankBlock(b) {
+      if (!b || b.nodeType !== 1) return false;
+      if (b.querySelector && b.querySelector('img,table,hr,ul,ol,[data-asset],.eg-asref')) return false;
+      return String(b.textContent || '').replace(/[\s 　]/g, '') === '';
+    }
+    function trimBlanksBeforeHard() {
+      var ss = sheets();
+      for (var i = 0; i < ss.length - 1; i++) {
+        var nk = blocksOf(ss[i + 1])[0];
+        if (!isHard(nk)) continue;
+        var ks = blocksOf(ss[i]), lastBlank = null;
+        while (ks.length && isBlankBlock(ks[ks.length - 1])) { lastBlank = ks.pop(); ss[i].removeChild(lastBlank); }
+        if (!ks.length) {
+          if (i > 0) {
+            // 這一頁剩下的全是空白段落＝一張空白頁，直接整頁拿掉（強制換頁後面本來就會另起新頁）
+            var wp = wrapOf(ss[i]);
+            if (wp && wp.parentNode) wp.parentNode.removeChild(wp);
+            ss = sheets(); i--;
+          } else if (lastBlank) ss[i].appendChild(lastBlank);     // 第一頁永遠留著
+        }
+      }
+    }
     /** 把有強制換頁標記、卻不在頁首的區塊連同後面的內容搬到新的一頁 */
     function enforceHardBreaks(from) {
       var guard = 0;
@@ -2389,6 +2419,7 @@
         }
         for (var m = rest.length - 1; m >= 0; m--) prependBlock(nx, rest[m]);
       }
+      trimBlanksBeforeHard();
     }
     /** 工具列「強制換頁」：游標所在的那一段加上／拿掉標記 */
     function toggleHardBreak() {
@@ -2462,6 +2493,7 @@
       });
       if (!sheets().length) { body = mkSheet(); }
       else if (!body || !host.contains(body)) { body = sheets()[0]; }
+      trimBlanksBeforeHard();      // ①②搬動之後才會出現新的「強制換頁前的尾端空白」，要再清一次
       numberPages(); fitPages(); markOverflow();
       scrollRestore(anchor);
       reflowing = false;
