@@ -71,9 +71,11 @@ function rmItems(PDO $db, int $docId, array $set): array {
     $st = $db->prepare("SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq, item_id");
     $st->execute([$docId]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $fd = $db->prepare("SELECT fill_date FROM rm_doc WHERE doc_id=?"); $fd->execute([$docId]); $fillDate = (string)$fd->fetchColumn();
     foreach ($rows as &$r) {
         $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)($r['ro_kind'] ?? 'risk'));
         $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'])) : null;
+        $r['follow_up'] = ($lv && !empty($r['ro_kind'])) ? rm_follow_up($set, $lv, $r, $fillDate) : null;
         // 連動組織處境分析表的議題：內外部／利害關係者／需求與期望／議題描述一律讀來源的「現在」內容
         $r['ctx_linked'] = false; $r['ctx_doc_no'] = null;
         if ((int)$r['ctx_item_id'] > 0) {
@@ -237,6 +239,27 @@ if ($action === 'ctx_year') {
           'print'=>rm_print_meta($db, 'context', $r ? (string)$r['fill_date'] : null)]);
 }
 
+/* 人工填寫時：挑完處境議題後，依規則引擎建議「風險與機會、嚴重度(S)、發生率(O)、因應措施、所需資源、成效確認方式」（只是建議，前端只填空白欄位） */
+if ($action === 'risk_suggest_row') {
+    $cx = (int)($_GET['ctx_item_id'] ?? 0);
+    $q = $db->prepare("SELECT i.* FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE i.item_id=? AND d.kind='context' AND d.is_deleted=0");
+    $q->execute([$cx]); $c = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('查無這個處境議題');
+    $year = (int)($_GET['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    $set = rm_settings($db);
+    $r = rm_rule_make_row($db, $set, $c, rm_data_year($db, $year), $year);
+    $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
+    jout(['suggest'=>['ro_kind'=>$r['ro_kind'], 'ro_text'=>$r['ro_text'], 'severity'=>$r['severity'], 'frequency'=>$r['frequency'], 'measure'=>$r['measure'], 'resources'=>$r['resources'],
+                      'effect_check'=>$r['effect_check'], 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why'], 'rule_ids'=>$r['rule_ids']]]);
+}
+/* 人工填寫因應措施時要引用的措施追蹤（溝通管理）：選了就在措施欄寫上「措施追蹤 編號」，系統即可連結 */
+if ($action === 'track_options') {
+    $year = (int)($_GET['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    $st = $db->prepare("SELECT t.track_no, t.track_id, t.party, t.action, t.content, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.is_draft FROM comm_track t
+                        WHERE t.is_deleted=0 AND (YEAR(t.react_date)=? OR YEAR(t.due_date)=?) ORDER BY t.is_closed, t.due_date, t.track_id LIMIT 200");
+    $st->execute([$year, $year]);
+    jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
 if ($action === 'clause_hints') {
     jout(rm_clause_hints($db));
 }

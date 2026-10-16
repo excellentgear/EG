@@ -692,3 +692,22 @@ function rm_car_create(PDO $db, array $item, array $doc, int $uid, string $uname
     } catch (Throwable $e) {}
     return ['car_id'=>$carId, 'car_no'=>$no, 'existed'=>false];
 }
+
+/**
+ * 追蹤週期建議：AS9100D 6.1 沒有規定多久追蹤一次，慣例依風險高低——高度風險每月、中度每季、低度每半年；機會每季。
+ * 起算日取「最後一次成效確認／重新評估／填表日」中最晚的一天，算出下一次追蹤日；沒有因應措施的等級不建議追蹤。
+ * 只是建議（畫面顯示，不寫入資料）。
+ */
+function rm_follow_up(array $set, array $lv, array $row, string $fillDate): ?array
+{
+    if (empty($lv['action'])) return null;
+    $n = max(1, count((array)$set['rm_levels']) - 1);
+    $ratio = $n > 0 ? ((int)$lv['rank'] / $n) : 1;
+    if (!empty($lv['is_opp'])) { $label = '每季'; $mon = 3; }
+    elseif ($ratio >= 0.75) { $label = '每月'; $mon = 1; }
+    elseif ($ratio >= 0.4) { $label = '每季'; $mon = 3; }
+    else { $label = '每半年'; $mon = 6; }
+    $base = max(array_filter([(string)($row['effect_date'] ?? ''), (string)($row['recheck_date'] ?? ''), $fillDate], function ($x) { return $x !== ''; }) ?: [date('Y-m-d')]);
+    $next = date('Y-m-d', strtotime($base . ' +' . $mon . ' months'));
+    return ['cycle' => $label, 'months' => $mon, 'base' => $base, 'next' => $next, 'overdue' => $next < date('Y-m-d')];
+}

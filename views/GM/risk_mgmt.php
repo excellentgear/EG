@@ -209,6 +209,12 @@ $perms  = rm_perms($db, $rmUser);
         .show-guide .swot-clause { display:block; }
         .swot-clause .cl-h { color:#8A5A2B; font-weight:bold; margin-bottom:4px; }
         .swot-clause li { margin:3px 0; } .swot-clause .cl-q { color:#7a5a2b; } .swot-clause .cl-how { color:#2d2d2d; }
+        .res-grid { display:grid; grid-template-columns:64px 1fr; gap:4px 6px; align-items:center; } .res-grid label { margin:0; font-size:12px; color:#8A5A2B; }
+        .res-grid input { width:100%; }
+        .fu-hint { margin-top:4px; font-size:12px; color:#5b3a1e; } .fu-hint b { color:#8A5A2B; } .fu-over { color:#DD5138; font-weight:bold; }
+        .sg-note { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
+        #riskInline table { width:100%; border-collapse:collapse; font-size:12.5px; } #riskInline th, #riskInline td { border:1px solid #E5D3B3; padding:5px 7px; vertical-align:top; text-align:left; }
+        #riskInline th { background:#F7E0BD; color:#5b3a1e; } #riskInline tr.rowdraft td { background:#FFFBF1; }
         .clause-row { margin-top:4px; } .clause-row select { width:100%; font-size:12px; }
         .clause-hint { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
         .clause-hint .ch-no { color:#8A5A2B; font-weight:bold; } .clause-hint button { margin-top:3px; }
@@ -469,6 +475,14 @@ $perms  = rm_perms($db, $rmUser);
         <ul><li>處境分析表按「<b>填寫提示與範例</b>」會顯示 2-GM-05 目前線上版的相關條文，以及<b>兩張表如何對應</b>（條文取自 AS 文件線上版，程序書改版自動跟著變）。</li>
             <li>處境分析表每條議題會與前一年度比較並標「新增／變更／沿用」（管審輸入：議題的變更）；風險表每條有「<b>所需資源</b>」欄（管審輸出：資源需求）；<b>職業安全衛生、國際局勢、環境議題</b>每年必列（客戶／市場要求變化對本廠的風險：品質、安全、環境）。</li>
             <li>產生因應措施時，<b>成效確認（結果、日期、裁示建議、佐證）一併自動建立</b>；規則算不出結果時只寫佐證與原因，由主管確認。</li></ul>
+        <h4>人工填寫風險與機會因應措施管制表</h4>
+        <ul><li>按「選擇處境議題」後，系統會依規則<b>自動建議</b>風險與機會、嚴重度(S)、發生率(O)、因應措施、所需資源、成效確認方式，<b>只填空白欄位</b>，已填的不會被蓋掉，可自行修改。</li>
+            <li><b>風險與機會編號</b>由系統自動配發：該列的風險等級屬於「需要因應措施」時，儲存當下配發（風險 R年度-流水、機會 O年度-流水），已配發不會變；不需要自己填。</li>
+            <li><b>相關措施追蹤</b>：在因應措施欄按「引用措施追蹤」，選溝通管理已建立的追蹤項目，系統會寫入「措施追蹤 編號」，之後自動顯示負責人、預計完成日與執行狀況；還沒有的請先到溝通管理建立。</li>
+            <li><b>所需資源</b>分「人員、設施、工作環境、方法」四格填寫，列印時自動整理成一段、每一類各佔一行。</li>
+            <li><b>追蹤週期建議</b>（畫面顯示）：高度風險每月、中度每季、低度每半年、機會每季，從最近一次成效確認／重新評估／填表日起算，並提示已到期的項目。</li>
+            <li><b>填表日期</b>是這張表的制定日，不會因回覆內容而變動；年度中的變動記在每一項的「重新評估日期」與「成效確認日期」，列印時另顯示「最後更新日期」。</li>
+            <li>一個年度只有一張，清單下方直接列出這一年的內容，按「編輯此項」開啟並跳到該項修改。</li></ul>
         <h4>SWOT 一鍵產生草稿（風險表、溝通記錄、措施追蹤）</h4>
         <ul><li>處境分析表<b>儲存後</b>，按「<b>產生風險表與措施追蹤草稿</b>」，系統依已儲存的 SWOT 一次建立：風險與機會因應措施管制表、溝通記錄、措施追蹤。<b>全部標「草稿・待確認」</b>（畫面標示、列印不顯示）。</li>
             <li>溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以<b>一定要您實際看過、內容屬實後按「確認為正式資料」</b>（溝通管理可逐張確認，也可在這裡「全部確認」）；確認前的草稿不列入成效判定。</li>
@@ -924,7 +938,7 @@ $(document).on('click', '#bPrint', function(){
         var quad = function(key){
             var m = swotMeta(key), rows = '';
             $.each(byKey[key], function(i, it){
-                rows += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(it.stakeholder) + '</td><td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue)
+                rows += '<tr><td>' + (i + 1) + '</td><td class="l">' + pSmall(it.stakeholder) + '</td><td class="l">' + pSmall(it.needs) + '</td><td class="l">' + esc(it.issue)
                     + ((it.clause_key && it.clause_key !== 'none' && clauseLabel(it.clause_key)) ? '<br><span style="font-size:10px;color:#555;">對應 ' + esc(clauseLabel(it.clause_key)) + '</span>' : '') + '</td></tr>';
             });
             if (!rows) rows = '<tr><td colspan="4">　</td></tr>';
@@ -933,8 +947,7 @@ $(document).on('click', '#bPrint', function(){
                 + '<thead><tr><th>編號</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + rows + '</tbody></table></td>';
         };
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName('context')) + '</div></div>'
-            + '<div class="pt-meta"><span>年度：' + BOARD.year + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span>'
-            + ((res.compare && res.compare.prev_year) ? '<span>與 ' + res.compare.prev_year + ' 年比較：新增 ' + res.compare.counts['new'] + '、變更 ' + res.compare.counts.changed + '、沿用 ' + res.compare.counts.same + '、刪除 ' + res.compare.counts.removed + '</span>' : '') + '</div>';
+            + '<div class="pt-meta"><span>年度：' + BOARD.year + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';   // 與前一年比較的摘要只在畫面顯示，不印出來
         var body = head + '<table class="grid"><tr>' + quad('S') + quad('W') + '</tr><tr>' + quad('O') + quad('T') + '</tr></table>';
         var css = 'table.grid{width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;}table.grid>tbody>tr>td.qd{vertical-align:top;border:2px solid #333;padding:0;}'
             + '.qh{background:#EFEFEF;font-weight:bold;font-size:13px;padding:4px 8px;border-bottom:1px solid #333;}table.pt.in{margin:0;font-size:11px;}table.pt.in th,table.pt.in td{padding:3px 4px;}'
@@ -962,7 +975,8 @@ function paneHtml(k){
         + '<div class="rm-table-wrap"><table class="rm-table"><thead><tr>'
         + '<th>單號</th><th>相關部門</th><th>填表日期</th><th>筆數</th>'
         + (isRisk ? '<th>最高風險等級</th><th>需因應措施</th>' : '')
-        + '<th>填表人</th><th>操作</th></tr></thead><tbody data-body="' + k + '"></tbody></table></div>';
+        + '<th>填表人</th><th>操作</th></tr></thead><tbody data-body="' + k + '"></tbody></table></div>'
+        + (isRisk ? '<div id="riskInline" style="margin-top:12px;"></div>' : '');
 }
 function fillYears(){
     var y = new Date().getFullYear();
@@ -988,8 +1002,30 @@ function loadList(k, resetPage){
                 + '<td>' + esc(r.created_by_name) + '</td><td>' + ops + '</td></tr>');
         });
         renderPager(k, res);
+        if (isRisk) renderRiskInline(res.rows.length ? res.rows[0] : null);
     });
 }
+/* 一個年度只有一張：直接把這一年的內容列在清單下面（唯讀總覽），要改就按該列的「編輯此項」開啟整張表並跳到那一項 */
+var OPEN_ROW = null;
+function renderRiskInline(doc){
+    var box = $('#riskInline').empty(); if (!doc) return;
+    get({action:'doc_get', doc_id:doc.doc_id}, function(res){
+        var S = META.settings, h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
+            + (+res.doc.is_draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張，內容直接列在這裡；按「編輯此項」開啟並跳到該項修改。</span></h4>'
+            + '<div class="rm-table-wrap"><table><thead><tr><th style="width:34px;">編號</th><th>議題</th><th style="width:70px;">風險／機會</th><th style="width:96px;">嚴重度(S)／發生率(O)</th><th style="width:84px;">等級</th>'
+            + '<th>因應措施</th><th style="width:120px;">建議追蹤</th><th style="width:96px;">成效確認</th><th style="width:70px;"></th></tr></thead><tbody>';
+        $.each(res.items, function(i, it){
+            var fu = it.follow_up ? esc(it.follow_up.cycle) + '<br>' + esc(dispDate(it.follow_up.next)) + (it.follow_up.overdue ? '<br><span class="fu-over">已到期</span>' : '') : '<span class="hint">—</span>';
+            h += '<tr' + (+res.doc.is_draft ? ' class="rowdraft"' : '') + '><td>' + (i + 1) + (it.confirm_no ? '<br><span class="hint">' + esc(it.confirm_no) + '</span>' : '') + '</td><td>' + esc(String(it.issue || '').slice(0, 70)) + '</td>'
+              + '<td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td><td>' + esc(scaleLabel(impactList(S), it.severity)) + '<br>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
+              + '<td>' + lvBadge(it.level, true) + '</td><td>' + esc(String(it.measure || '').slice(0, 90)) + '</td><td>' + fu + '</td>'
+              + '<td>' + (it.effect_status ? esc(META.effect_status[it.effect_status] || '') + '<br><span class="hint">' + esc(dispDate(it.effect_date)) + '</span>' : '<span class="hint">未確認</span>') + '</td>'
+              + '<td><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯此項' : '檢視') + '</button></td></tr>';
+        });
+        box.html(h + '</tbody></table></div>');
+    });
+}
+$(document).on('click', '[data-editrow]', function(){ OPEN_ROW = +$(this).data('editrow'); openDoc('risk', +$(this).data('doc')); });
 function renderPager(k, res){
     var per = res.per || 0, pages = per ? Math.max(1, Math.ceil(res.total / per)) : 1, p = res.page;
     var h = '共 ' + res.total + ' 筆　每頁 <select data-per="' + k + '">';
@@ -1045,6 +1081,35 @@ EGAiDraft.reg('risk_effect_check', {
     collect:function($b){ var c = aiRowCtx($b); if (!c.issue){ alert('請先選擇處境議題'); return null; } return c; },
     apply:function($b, t){ EGAiDraft.fill($b.closest('tr').find('[data-f="effect_check"]'), t); }
 });
+/* 括號裡的補充文字換行縮小顯示（列印用）：公司內部（業務課）→ 公司內部／小字（業務課） */
+function pSmall(s){
+    return esc(s).replace(/（([^（）]*)）|[(]([^()]*)[)]/g, function(m, a, b){ return '<br><span style="font-size:9px;">（' + (a || b) + '）</span>'; });
+}
+/* 所需資源：人員、設施、工作環境、方法 分四格填寫，存成「人員：…（換行）設施：…」，列印時每一類自動換行 */
+var RESLB = [['人員', 'res_p'], ['設施', 'res_f'], ['工作環境', 'res_e'], ['方法', 'res_m']], RESMAP = {'人員':'res_p', '設施':'res_f', '工作環境':'res_e', '方法':'res_m'};
+function parseRes(t){
+    var o = {res_p:'', res_f:'', res_e:'', res_m:''}; if (!t) return o;
+    var cur = 'res_m';
+    $.each(String(t).split(/[；;\n]+/), function(_, p){
+        p = $.trim(p); if (!p) return;
+        var m = p.match(/^(人員|設施|工作環境|方法)[：:]\s*(.*)$/);
+        if (m){ cur = RESMAP[m[1]]; o[cur] += (o[cur] ? '；' : '') + m[2]; } else o[cur] += (o[cur] ? '；' : '') + p;
+    });
+    return o;
+}
+function composeRes(o){ var out = []; $.each(RESLB, function(_, r){ var v = $.trim(o[r[1]] || ''); if (v) out.push(r[0] + '：' + v); }); return out.join('\n'); }
+function resHtml(t){
+    var o = parseRes(t);
+    return '<div class="res-grid">' + $.map(RESLB, function(r){ return '<label>' + r[0] + '</label><input type="text" data-f="' + r[1] + '" value="' + esc(o[r[1]]) + '" maxlength="300">'; }).join('') + '</div>';
+}
+/* 追蹤週期建議（依風險等級；只是建議，後端 rm_follow_up 算出） */
+function followHtml(it){
+    var f = it.follow_up; if (!f) return '';
+    return '<div class="fu-hint"><b>建議追蹤週期：' + esc(f.cycle) + '</b>　下一次追蹤：' + esc(dispDate(f.next)) + (f.overdue ? ' <span class="fu-over">（已到期，請追蹤並更新成效確認）</span>' : '')
+        + '<br><span class="hint">依風險等級建議（高度風險每月、中度每季、低度每半年；機會每季）。成效確認至少每年一次並趕在管理審查之前；有重大變化時隨時重新評估。</span></div>';
+}
+/* 人工填寫因應措施：引用溝通管理的措施追蹤（選了就把「措施追蹤 編號」寫進因應措施，系統即可連結負責人與完成情形） */
+function trackPickHtml(){ return '<div class="trk-pick" style="margin-top:4px;"><button type="button" class="b-mini" data-trkpick><i class="fa fa-link"></i> 引用措施追蹤</button></div>'; }
 function trackHtml(it){
     var ts = it.tracks || [];
     if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
@@ -1109,8 +1174,8 @@ function rowHtml(kind, it, n){
           + fd('<span class="lb-frq">' + (opp ? esc(oppTerm('freq')) : '發生率(O)') + '</span>', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('<span class="lb-lv">' + (opp ? esc(oppTerm('level')) : '風險等級') + '</span>', lvBadge(lv, true), 'c-lv lvc')
           + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
-          + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackHtml(it), 'c-measure')
-          + fd('所需資源（人員、設施、工作環境、方法）', ta('resources', it.resources), 'c-res') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
+          + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackPickHtml() + trackHtml(it) + followHtml(it), 'c-measure')
+          + fd('所需資源（人員、設施、工作環境、方法）', resHtml(it.resources), 'c-res') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
           + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
@@ -1231,6 +1296,10 @@ function openDoc(kind, id){
         $('#itBody [data-pickctx], #itBody [data-delrow], #itBody [data-unlinkctx], #btnDocSave, #addRowBox').toggle(canEdit);
         $('#btnDocPrint').toggle(!!doc);
         openMask('docMask');
+        if (OPEN_ROW !== null){      // 從清單下方的總覽「編輯此項」進來：跳到那一項並短暫標示
+            var tr0 = $('#itBody tr').eq(OPEN_ROW); OPEN_ROW = null;
+            if (tr0.length) setTimeout(function(){ tr0[0].scrollIntoView({block:'start'}); tr0.css('outline', '3px solid #F0A24B'); setTimeout(function(){ tr0.css('outline', ''); }, 1800); }, 150);
+        }
     };
     if (!id){ show(null, [], true, null); return; }
     get({action:'doc_get', doc_id:id}, function(res){ show(res.doc, res.items, res.can_edit, res.print); });
@@ -1258,6 +1327,7 @@ function collectItems(){
     $('#itBody tr').each(function(){
         var tr = $(this), o = {item_id:+tr.data('item-id') || 0, ctx_item_id:+tr.attr('data-ctx') || 0, rule_ids:tr.attr('data-rules') || ''};
         tr.find('[data-f]').each(function(){ o[$(this).data('f')] = $(this).val(); });
+        if (tr.find('[data-f=res_p]').length){ o.resources = composeRes(o); $.each(RESLB, function(_, r){ delete o[r[1]]; }); }
         out.push(o);
     });
     return out;
@@ -1319,6 +1389,42 @@ $(document).on('click', '[data-usectx]', function(){
     CTXROW.find('.ctx-flag').html(ctxFlagHtml({ctx_item_id:r.item_id, ctx_doc_no:r.doc_no}));
     lockCtxRow(CTXROW, true);
     closeMask('ctxMask');
+    suggestRow(CTXROW, r.item_id);
+});
+/* 人工填寫：挑完處境議題後，依規則引擎給建議（風險與機會、嚴重度S、發生率O、因應措施、所需資源、成效確認方式）；只填空白欄位，不蓋掉已填的 */
+function suggestRow(tr, ctxId){
+    var y = +String($('#fDate').val() || META.today).slice(0, 4);
+    get({action:'risk_suggest_row', ctx_item_id:ctxId, year:y}, function(res){
+        var s = res.suggest || {}, filled = [];
+        var setIf = function(f, v, label){ var el = tr.find('[data-f=' + f + ']'); if (el.length && (el.val() === '' || el.val() === null) && v !== '' && v !== null && v !== undefined){ el.val(v).trigger('change'); filled.push(label); } };
+        if (!(+tr.data('item-id')) && s.ro_kind && tr.find('[data-f=ro_kind]').val() !== s.ro_kind){ tr.find('[data-f=ro_kind]').val(s.ro_kind).trigger('change'); filled.push('風險與機會'); } else setIf('ro_kind', s.ro_kind, '風險與機會'); setIf('severity', s.severity, '嚴重度(S)'); setIf('frequency', s.frequency, '發生率(O)');
+        setIf('ro_text', s.ro_text, '對組織的影響說明'); setIf('measure', s.measure, '因應措施'); setIf('effect_check', s.effect_check, '成效確認方式');
+        if (s.resources && !$.trim(tr.find('[data-f=res_p]').val() + tr.find('[data-f=res_f]').val() + tr.find('[data-f=res_e]').val() + tr.find('[data-f=res_m]').val())){
+            var o = parseRes(s.resources); $.each(RESLB, function(_, r){ tr.find('[data-f=' + r[1] + ']').val(o[r[1]]); }); filled.push('所需資源');
+        }
+        tr.find('.sg-note').remove();
+        tr.find('.ctx-flag').closest('td,div').first().append('<div class="sg-note"><b>系統建議（可自行修改）</b>：歸類「' + esc(s.category || '') + '」，風險等級 ' + esc(s.level || '—')
+            + (filled.length ? '；已填入空白欄位：' + esc(filled.join('、')) : '；各欄位原本都已有內容，沒有覆蓋') + '。<br>' + esc((s.why || []).slice(0, 3).join('；')) + '</div>');
+    });
+}
+$(document).on('click', '[data-trkpick]', function(){
+    var box = $(this).closest('.trk-pick'), tr = $(this).closest('tr'), y = +String($('#fDate').val() || META.today).slice(0, 4);
+    box.find('select').remove();
+    get({action:'track_options', year:y}, function(res){
+        if (!res.rows.length){ box.append('<div class="hint">這一年度的溝通管理還沒有措施追蹤項目，請先到溝通管理建立。</div>'); return; }
+        var h = '<select data-eg-skip style="width:100%;margin-top:4px;"><option value="">選一筆措施追蹤，會把「措施追蹤 編號」寫進因應措施…</option>' + $.map(res.rows, function(t){
+            return '<option value="' + esc(t.track_no || ('#' + t.track_id)) + '">' + esc((t.track_no || ('#' + t.track_id)) + '｜' + (t.owner_dept_name ? t.owner_dept_name + ' ' : '') + (t.owner_name || '未指定') + '｜' + (t.due_date ? dispDate(t.due_date) : '未定')
+              + (+t.is_closed ? '｜已結案' : '') + (+t.is_draft ? '｜草稿' : '') + '｜' + String(t.action || t.content || '').slice(0, 30)) + '</option>'; }).join('') + '</select>';
+        box.append(h);
+    });
+});
+$(document).on('change', '.trk-pick select', function(){
+    var v = $(this).val(); if (!v) return;
+    var ta = $(this).closest('td,div.fld,div').find('[data-f=measure]').first();
+    if (!ta.length) ta = $(this).closest('tr').find('[data-f=measure]').first();
+    var cur = ta.val() || '', tag = '措施追蹤 ' + v;
+    if (cur.indexOf(tag) < 0) ta.val($.trim(cur + (cur ? '\n' : '') + tag)).trigger('input');
+    $(this).remove();
 });
 $(document).on('click', '[data-unlinkctx]', function(e){
     e.preventDefault();
@@ -1849,7 +1955,7 @@ function measurePrint(it){
             + (t.state === 'closed' ? '（已結案）' : (t.state === 'over' ? '（逾期）' : '（執行中）')); });
         h += '<br><span style="color:#444;">措施追蹤（編號見溝通管理措施追蹤表）：<br>' + $.map(o, esc).join('；<br>') + '</span>';
     }
-    if (it.resources) h += '<br><span style="color:#444;">所需資源：' + esc(it.resources).replace(/\n/g, '<br>') + '</span>';
+    if (it.resources) h += '<br><span style="color:#444;">所需資源：<br>' + esc(String(it.resources).replace(/；(?=(?:人員|設施|工作環境|方法)：)/g, '\n')).replace(/\n/g, '<br>') + '</span>';
     if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
 }
@@ -1863,11 +1969,11 @@ function printDoc(docId){
         $.each(res.items, function(i, it){
             if (kind === 'context'){
                 tr += '<tr><td>' + (i + 1) + '</td><td>' + esc(META.scopes[it.scope] || '') + '</td><td>' + esc(it.dimension) + '</td>'
-                    + '<td class="l">' + esc(it.stakeholder) + '</td><td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td></tr>';
+                    + '<td class="l">' + pSmall(it.stakeholder) + '</td><td class="l">' + pSmall(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td></tr>';
             } else {
                 var lv = it.level ? it.level.name : '';     // 機會列印出來的是機會等級名稱（後端依 ro_kind 給）
-                tr += '<tr><td>' + (i + 1) + '</td><td>' + esc(META.scopes[it.scope] || '') + '</td><td class="l">' + esc(it.stakeholder) + '</td>'
-                    + '<td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td>'
+                tr += '<tr><td>' + (i + 1) + '</td><td>' + esc(META.scopes[it.scope] || '') + '</td><td class="l">' + pSmall(it.stakeholder) + '</td>'
+                    + '<td class="l">' + pSmall(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td>'
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
                     + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '</td><td>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
                     + '<td>' + lvWrap(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
@@ -1875,7 +1981,8 @@ function printDoc(docId){
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'
-            + '<div class="pt-meta"><span>相關部門：' + esc(d.dept_names) + '</span><span>填表日期：' + esc(dispDate(d.fill_date)) + '</span></div>';
+            + '<div class="pt-meta"><span>相關部門：' + esc(d.dept_names) + '</span><span>填表日期：' + esc(dispDate(d.fill_date))
+            + (d.updated_at && String(d.updated_at).slice(0, 10) > d.fill_date ? '　最後更新：' + esc(dispDate(String(d.updated_at).slice(0, 10))) : '') + '</span></div>';
         var table;
         if (kind === 'context'){
             table = '<table class="pt"><colgroup><col style="width:40px;"><col style="width:70px;"><col style="width:100px;"><col style="width:140px;"><col><col></colgroup>'

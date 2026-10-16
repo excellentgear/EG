@@ -477,7 +477,7 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
         $metric = str_replace('回升並維持達標', '逐月回升並朝年度目標邁進', $metric);
     }
     $ro = ((string)($ctx['dimension'] ?? '') === 'O' || $c['ro'] === 'opportunity') ? 'opportunity' : 'risk';
-    return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure, 'resources'=>RM_RULE_RESOURCES[$cat] ?? RM_RULE_RESOURCES['generic'],
+    return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure, 'resources'=>str_replace('；', "\n", RM_RULE_RESOURCES[$cat] ?? RM_RULE_RESOURCES['generic']),
             'effect_check'=>trim($metric), 'rule_ids'=>implode(',', array_values(array_unique($ids))), 'why'=>$why];
 }
 
