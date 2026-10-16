@@ -166,6 +166,19 @@ function eg_demo_date_fields(): array
     ];
 }
 
+/** 更新頻率備註裡提到的月份（使用者定調：「年底」＝12 月、「年初」＝1 月；也認「3 月」「三月」這種寫法）。唯一解析點 */
+function eg_demo_note_months(string $note): array
+{
+    $m = [];
+    if (mb_strpos($note, '年底') !== false) $m[12] = 12;
+    if (mb_strpos($note, '年初') !== false) $m[1] = 1;
+    if (preg_match_all('/([0-9]{1,2})\s*月/u', $note, $x)) foreach ($x[1] as $v) { $v = (int)$v; if ($v >= 1 && $v <= 12) $m[$v] = $v; }
+    $cn = ['一' => 1, '二' => 2, '三' => 3, '四' => 4, '五' => 5, '六' => 6, '七' => 7, '八' => 8, '九' => 9, '十' => 10, '十一' => 11, '十二' => 12];
+    if (preg_match_all('/(十二|十一|十|一|二|三|四|五|六|七|八|九)月/u', $note, $x)) foreach ($x[1] as $v) if (isset($cn[$v])) $m[$cn[$v]] = $cn[$v];
+    ksort($m);
+    return array_values($m);
+}
+
 /**
  * 每個日期對應的 AS 文件（編號、名稱、更新頻率、負責課室），由 AS 文件管理的設定即時取得，不寫死。
  * 對應方式：優先用「AS 文件綁定」的模組代碼（處境表、風險表、內稽的計劃表／通知單／報告表）；管理審查審核表沒有綁定模組，改用名稱關鍵字找。
@@ -192,12 +205,13 @@ function eg_demo_date_docs(PDO $db): array
             if (!$r) continue;
             $own = array_column(eg_demo_qa($db, "SELECT d.name FROM as_doc_owner_dept o JOIN department d ON d.id=o.department_id WHERE o.doc_id=? ORDER BY d.id", [$id]), 'name');
             $months = asFreqParseMonths($r['freq_months'] ?? '');
+            $noteMonths = eg_demo_note_months((string)($r['freq_note'] ?? ''));
             $t = (string)($r['freq_type'] ?? '');
             if ($t === '') $ft = '未設定更新頻率';
             elseif ($t === 'irregular') $ft = '不定時';
             else { $n = max(1, (int)$r['freq_n']); $ft = '每' . ($n > 1 ? $n : '') . ($units[$t] ?? $t) . ($months ? '（指定 ' . implode('、', $months) . ' 月）' : ''); }
             $list[] = ['no' => (string)$r['doc_no'], 'name' => (string)$r['doc_name'], 'freq' => $ft, 'note' => trim((string)($r['freq_note'] ?? '')),
-                       'owners' => $own, 'months' => $months, 'type' => $t];
+                       'owners' => $own, 'months' => array_values(array_unique(array_merge($months, $noteMonths))), 'note_months' => array_values(array_diff($noteMonths, $months)), 'type' => $t];
         }
         $out[$k] = $list;
     }
@@ -207,6 +221,8 @@ function eg_demo_date_docs(PDO $db): array
 /** 某個日期欄位被 AS 文件管理「指定月份」限制時，回傳允許的月份（沒有指定月份＝空陣列＝不限）。唯一解析點，預設值／檢查／備註共用 */
 function eg_demo_months_for(array $docs, string $k): array
 {
+    // 成效確認日只是借用風險管制表的備註當參考，那份文件的月份是講「制訂表單」的時間，不限制成效確認
+    if ($k === 'effect') return [];
     $m = [];
     foreach ($docs[$k] ?? [] as $d) foreach ($d['months'] as $x) $m[(int)$x] = (int)$x;
     ksort($m);
@@ -221,7 +237,8 @@ function eg_demo_date_hints(PDO $db, array $dates): array
         $lines = [];
         foreach ($list as $d) {
             $lines[] = $d['no'] . ' ' . $d['name'] . '：' . $d['freq'] . ($d['note'] !== '' ? '，' . mb_substr($d['note'], 0, 40) . (mb_strlen($d['note']) > 40 ? '…' : '') : '')
-                     . ($d['owners'] ? '；負責課室 ' . implode('、', $d['owners']) : '');
+                     . ($d['owners'] ? '；負責課室 ' . implode('、', $d['owners']) : '')
+                     . ($d['note_months'] ? '　【備註提到的時間視為 ' . implode('、', $d['note_months']) . ' 月（年底＝12 月、年初＝1 月）】' : '');
         }
         $ms = eg_demo_months_for($docs, $k);
         if ($ms) $lines[] = '必須落在 ' . implode('、', $ms) . ' 月（依 AS 文件管理設定，月份不符不能產生）';
@@ -305,7 +322,7 @@ function eg_demo_dates_check(PDO $db, int $Y, array $in): array
         if (!$ms || ($D[$k] ?? '') === '' || isset($E[$k])) continue;
         if (!in_array((int)substr($D[$k], 5, 2), $ms, true)) {
             $names = []; foreach ($docs[$k] as $d) if ($d['months']) $names[] = '「' . $d['name'] . '」';
-            $E[$k] = 'AS 文件管理設定' . implode('、', $names) . '是每年 ' . implode('、', $ms) . ' 月，請改成該月份的日期（該月份還沒到的話，請留白＝不建立）';
+            $E[$k] = 'AS 文件管理設定' . implode('、', $names) . '是每年 ' . implode('、', $ms) . ' 月，請改成該月份的日期' . (!empty($f['opt']) ? '（該月份還沒到的話，請留白＝不建立）' : '');
         }
     }
     $mrByAs = (bool)eg_demo_months_for($docs, 'mr');
