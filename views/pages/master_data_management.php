@@ -3069,8 +3069,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($d_id > 0) {
                 if (!$canPartEdit && !$can_edit_gear) throw new Exception('無修改權限');
-                $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
-                $ck->execute([$D_Setting_Id, $d_id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
+                // 規格／版次：資料庫裡「空白」同時有 NULL 與 ''（舊資料 NULL、後來存的是 ''），
+                // 兩邊都先把空白正規化成 '' 再比，否則 NULL <=> '' 為假而放過重複。
+                $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? AND (Customer_Id <=> ?) AND COALESCE(NULLIF(TRIM(Spec_No),''),'')=? AND COALESCE(NULLIF(TRIM(Revision),''),'')=?");
+                $ck->execute([$D_Setting_Id, $d_id, $CustIdForCheck, (string)$SpecForCheck, (string)$RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
                 $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
@@ -3096,8 +3098,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             } else {
                 if (!$canPartAdd) throw new Exception('無新增權限');
-                $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
-                $ck->execute([$D_Setting_Id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
+                $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND COALESCE(NULLIF(TRIM(Spec_No),''),'')=? AND COALESCE(NULLIF(TRIM(Revision),''),'')=?");
+                $ck->execute([$D_Setting_Id, $CustIdForCheck, (string)$SpecForCheck, (string)$RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
                 $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Spec_No,Revision,Issue_Date,Type,Is_Assembly,workpiece_sub_type_id,Customer_Id,Remark,Weight_Kg,weight_source,weight_calc_json,Created_By,Created_At) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid]);
