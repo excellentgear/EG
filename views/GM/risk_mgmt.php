@@ -209,6 +209,9 @@ $perms  = rm_perms($db, $rmUser);
         .show-guide .swot-clause { display:block; }
         .swot-clause .cl-h { color:#8A5A2B; font-weight:bold; margin-bottom:4px; }
         .swot-clause li { margin:3px 0; } .swot-clause .cl-q { color:#7a5a2b; } .swot-clause .cl-how { color:#2d2d2d; }
+        .clause-row { margin-top:4px; } .clause-row select { width:100%; font-size:12px; }
+        .clause-hint { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
+        .clause-hint .ch-no { color:#8A5A2B; font-weight:bold; } .clause-hint button { margin-top:3px; }
         .cmp-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; margin-left:6px; border-radius:8px; border:1px solid; white-space:nowrap; vertical-align:middle; }
         .cmp-new { background:#FFF3D1; color:#B35A00; border-color:#F0A24B; } .cmp-changed { background:#FBE3D6; color:#A33A1A; border-color:#DD5138; } .cmp-same { background:#F3EBDD; color:#7a6a50; border-color:#D6BE94; }
         .swot-guide ul { margin:2px 0 6px; padding-left:18px; }
@@ -659,8 +662,53 @@ function itemHtml(it, n){
         + '<button type="button" class="del" data-delswot title="刪除這一條"><i class="fa fa-times"></i></button>'
         + '<label>利害關係者</label><input type="text" data-f="stakeholder" value="' + esc(it.stakeholder) + '" maxlength="200">'
         + '<label>需求與期望</label><textarea data-f="needs">' + esc(it.needs) + '</textarea>'
-        + '<label>議題描述</label><textarea data-f="issue">' + esc(it.issue) + '</textarea></div>';
+        + '<label>議題描述</label><textarea data-f="issue">' + esc(it.issue) + '</textarea>'
+        + clauseRowHtml(it) + '</div>';
 }
+/* ---------- 每一項對應的程序書（2-GM-05）條文：只列「適用這個象限」的條文，不適合的不會出現在選單；沒有可選條文的象限不顯示這一列 ---------- */
+var CLAUSES = [];
+function clausesFor(dim){ return $.grep(CLAUSES, function(c){ return $.inArray(dim, c.dims) >= 0; }); }
+function autoClause(dim, text){
+    var best = '', bn = 0;
+    $.each(clausesFor(dim), function(_, c){
+        var n = 0; $.each(c.akw || [], function(_, k){ if (k && String(text).indexOf(k) >= 0) n++; });
+        if (n > bn){ bn = n; best = c.key; }
+    });
+    return best;
+}
+function clauseOf(key){ var r = null; $.each(CLAUSES, function(_, c){ if (c.key === key) r = c; }); return r; }
+function clauseLabel(key){ var c = clauseOf(key); return c ? '2-GM-05 ' + c.no + ' ' + c.text : ''; }
+function clauseRowHtml(it){
+    var dim = it.dimension || '', list = clausesFor(dim);
+    if (!list.length) return '';
+    var cur = (it.clause_key !== undefined && it.clause_key !== null && it.clause_key !== '') ? it.clause_key : autoClause(dim, (it.stakeholder || '') + ' ' + (it.needs || '') + ' ' + (it.issue || ''));
+    var opts = '<option value="none"' + (cur === 'none' || !cur ? ' selected' : '') + '>（不對應條文）</option>' + $.map(list, function(c){
+        return '<option value="' + c.key + '"' + (cur === c.key ? ' selected' : '') + '>' + esc(c.no + ' ' + c.text.slice(0, 34)) + '</option>'; }).join('');
+    var mapped = !!cur && cur !== 'none';
+    // 沒有對應條文的項目不顯示條文（只留一個小連結，要對應時再點開選單）；有對應的才顯示選單與建議
+    return '<div class="clause-row">' + (mapped ? '' : '<a href="javascript:;" class="clause-add hint">＋ 選擇這一項要對應的程序書條文（2-GM-05）</a>')
+        + '<div class="clause-sel"' + (mapped ? '' : ' style="display:none;"') + '><label>對應程序書條文（2-GM-05）</label><select data-f="clause_key">' + opts + '</select></div>'
+        + '<div class="clause-hint-box">' + clauseHintHtml(cur, dim) + '</div></div>';
+}
+function clauseHintHtml(key, dim){
+    var c = key && key !== 'none' ? clauseOf(key) : null;
+    if (!c) return '';
+    var ex = c.ex && c.ex[dim];
+    return '<div class="clause-hint"><span class="ch-no">' + esc(c.no) + '</span> ' + esc(c.text) + '<br>' + esc(c.hint)
+        + (ex ? '<br><button type="button" class="b-mini warm" data-clause-ex="' + c.key + '">用這一條的範例填入空白欄位</button>　<span class="hint">範例：' + esc(ex[2]) + '</span>' : '') + '</div>';
+}
+$(document).on('change', '.swot-it select[data-f=clause_key]', function(){
+    var card = $(this).closest('.swot-it'), dim = card.closest('.swot-q').data('key');
+    card.find('.clause-hint-box').html(clauseHintHtml($(this).val(), dim)); markDirty();
+});
+$(document).on('click', '.clause-add', function(){ $(this).hide().siblings('.clause-sel').show().find('select').focus(); });
+$(document).on('click', '[data-clause-ex]', function(){
+    var card = $(this).closest('.swot-it'), dim = card.closest('.swot-q').data('key'), c = clauseOf($(this).data('clause-ex')), ex = c && c.ex ? c.ex[dim] : null;
+    if (!ex) return;
+    var f = {stakeholder:ex[0], needs:ex[1], issue:ex[2]}, filled = 0;
+    $.each(f, function(k, v){ var el = card.find('[data-f=' + k + ']'); if (!$.trim(el.val())){ el.val(v); filled++; } });
+    if (filled) markDirty(); else alert('這一條的三個欄位都已經填寫了，範例沒有套用（範例只會填入空白欄位）。');
+});
 function renumberBoard(){
     $('.swot-q').each(function(){
         var q = $(this), cards = q.find('.swot-it');
@@ -670,7 +718,8 @@ function renumberBoard(){
 }
 function addSwot(key, it, focus){
     var q = $('.swot-q[data-key="' + key + '"]'), n = q.find('.swot-it').length + 1;
-    q.find('.swot-list').append(itemHtml(it || {}, n));
+    it = it || {}; it.dimension = key;
+    q.find('.swot-list').append(itemHtml(it, n));
     renumberBoard(); markDirty();
     if (focus) q.find('.swot-it:last [data-f=stakeholder]').focus();
 }
@@ -691,6 +740,7 @@ function loadBoard(year){
         var sel = $('#bYear').empty(), cy = +META.today.slice(0, 4);
         for (var y = cy; y >= cy - 8; y--) sel.append('<option value="' + y + '"' + (y === res.year ? ' selected' : '') + '>' + y + '</option>');
         $('.swot-list').empty();
+        CLAUSES = (res.clauses && res.clauses.clauses) || [];
         var cmp = res.compare || {}, cm = cmp.marks || {};
         $.each(res.items, function(_, it){ if (cmp.prev_year) it.cmp = cm[it.item_id] || ''; if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
         renumberBoard();
@@ -763,7 +813,7 @@ function collectBoard(){
     $('.swot-q').each(function(){
         var key = $(this).data('key');
         $(this).find('.swot-it').each(function(){
-            out.push({item_id:+$(this).data('item-id') || 0, dimension:key,
+            out.push({item_id:+$(this).data('item-id') || 0, dimension:key, clause_key:$(this).find('[data-f=clause_key]').val() || '',
                       stakeholder:$(this).find('[data-f=stakeholder]').val(), needs:$(this).find('[data-f=needs]').val(), issue:$(this).find('[data-f=issue]').val()});
         });
     });
@@ -874,7 +924,8 @@ $(document).on('click', '#bPrint', function(){
         var quad = function(key){
             var m = swotMeta(key), rows = '';
             $.each(byKey[key], function(i, it){
-                rows += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(it.stakeholder) + '</td><td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td></tr>';
+                rows += '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(it.stakeholder) + '</td><td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue)
+                    + ((it.clause_key && it.clause_key !== 'none' && clauseLabel(it.clause_key)) ? '<br><span style="font-size:10px;color:#555;">對應 ' + esc(clauseLabel(it.clause_key)) + '</span>' : '') + '</td></tr>';
             });
             if (!rows) rows = '<tr><td colspan="4">　</td></tr>';
             return '<td class="qd"><div class="qh">' + esc(m.name) + '　' + m.en + '（' + (m.scope === 'internal' ? '內部' : '外部') + '）</div>'
