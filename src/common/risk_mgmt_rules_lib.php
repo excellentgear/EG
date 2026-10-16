@@ -35,7 +35,7 @@ const RM_EFFECT_STATUS = ['unconfirmed' => '未確認', 'doing' => '進行中', 
  *     系統查不到的（「報價回覆率 100%」「紀錄 100% 留存」「重複原因不再發生」）一律不寫進成效方式，
  *     那些屬於主管裁示時人工確認的事，寫了只會讓判定永遠停在「未確認」。
  *  ② 目標要從「目前的實際水準」往前走，不是憑空寫一個遙不可及的絕對值：
- *     客戶集中度寫成「不高於前一年」，不寫「降到 30% 以下」；
+ *     客戶集中度寫成「控制在警戒線 50% 以下」（依目前實際水準訂，不寫「降到 30% 以下」這種遙不可及的值）；
  *     KPI 在資料年度已有六成以上月份未達標時，先要求「逐月改善」，最終目標才是連續 3 個月達標。
  *  ③ 判無效的唯一條件＝措施已經執行（或逾期未做）而指標沒有改善；措施還在做就是「進行中」。
  */
@@ -68,7 +68,7 @@ const RM_RULE_CATS = [
         'kw' => ['集中度', '前三大客戶', '大客戶', '客戶集中'],
         'impact' => '大客戶訂單變動會直接衝擊產能與營收。',
         'measures' => ['業務課每季與前三大客戶溝通訂單預測與產能預留，並提供生管組參考', '業務課持續開拓客源以分散風險'],
-        'metric' => '前三大客戶合計出貨占比不高於前一年（{share}）；每季溝通的措施追蹤如期結案',
+        'metric' => '前三大客戶合計出貨占比控制在 50% 以下（客戶集中度警戒線；目前 {share}）；每季溝通的措施追蹤如期結案',
         'kpi' => [], 'trk_kw' => ['訂單預測與產能預留'], 'trk_kind' => 'customer', 'trk_not' => ['交期']],
     'new_customer' => ['label' => '新客戶首次出貨', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶'],
@@ -148,7 +148,7 @@ function rm_rule_catalog(): array
     foreach (RM_RULE_CATS as $k => $c) $rows[] = ['id'=>'M-' . strtoupper($k), 'kind'=>'措施', 'cat'=>$c['label'], 'when'=>'由處境分析表產生風險草稿時', 'then'=>'因應措施：' . implode('；', $c['measures']) . '　成效確認方式：' . $c['metric']];
     $rows[] = ['id'=>'E-KPI', 'kind'=>'成效', 'cat'=>'有對應 KPI 的類別', 'when'=>'成效確認時，KPI 資料年度的逐月數字', 'then'=>'最近 3 個月全部達標→有效；措施追蹤尚有未逾期未結案項目→進行中；較前期改善或有達標月份→部分有效；其餘→無效；資料不足 3 個月→未確認'];
     $rows[] = ['id'=>'E-TRACK', 'kind'=>'成效', 'cat'=>'沒有 KPI 的類別（以及人員／能力傳承，KPI 只列為參考）', 'when'=>'相關措施追蹤（依措施欄註記的單號、類別關鍵字、溝通對象類型找出）', 'then'=>'全部如期結案→有效；有逾期→無效；有未結案但未逾期→進行中；找不到追蹤項目→未確認'];
-    $rows[] = ['id'=>'E-CONC', 'kind'=>'成效', 'cat'=>'客戶集中度', 'when'=>'前三大客戶占比 vs 前一年', 'then'=>'低於 30% 或不高於前一年→有效；較前一年上升 5 個百分點內→部分有效；上升超過 5 個百分點→無效'];
+    $rows[] = ['id'=>'E-CONC', 'kind'=>'成效', 'cat'=>'客戶集中度', 'when'=>'前三大客戶占比 vs 警戒線 50%', 'then'=>'低於 50%→有效；50%～未達 60%→部分有效；60% 以上→無效'];
     $rows[] = ['id'=>'E-NEWCUST', 'kind'=>'成效', 'cat'=>'新客戶／商機', 'when'=>'當年首次出貨客戶數與金額 vs 前一年；首次出貨起 30 天內是否留有溝通記錄', 'then'=>'兩者皆不低於前一年→有效；其一→部分有效；皆低於→無效；有新客戶沒有 30 天內的溝通記錄時最多部分有效'];
     return $rows;
 }
@@ -477,10 +477,10 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
     if ($cat === 'concentration') {
         [$s0, $s1] = rm_rule_share($db, $year); $ids[] = 'E-CONC';
         if ($s0 !== null) {
-            array_unshift($lines, '前三大客戶占 ' . $year . ' 年出貨 ' . rm_sg_f($s0) . '%' . ($s1 !== null ? '（前一年 ' . rm_sg_f($s1) . '%）' : '') . '；目標：不高於前一年');
-            if ($s0 < 30 || ($s1 !== null && $s0 <= $s1)) { $status = 'effective'; $reason = $s0 < 30 ? '占比低於 30%' : '占比不高於前一年'; }
-            elseif ($s1 !== null && $s0 <= $s1 + 5) { $status = 'partial'; $reason = '占比較前一年上升 5 個百分點以內'; }
-            else { $status = 'ineffective'; $reason = '占比較前一年上升超過 5 個百分點'; }
+            array_unshift($lines, '前三大客戶占 ' . $year . ' 年出貨 ' . rm_sg_f($s0) . '%' . ($s1 !== null ? '（前一年 ' . rm_sg_f($s1) . '%）' : '') . '；目標：控制在 50% 以下');
+            if ($s0 < 50) { $status = 'effective'; $reason = '占比低於警戒線 50%'; }
+            elseif ($s0 < 60) { $status = 'partial'; $reason = '占比超過 50% 警戒線但未達 60%'; }
+            else { $status = 'ineffective'; $reason = '占比達 60% 以上'; }
         } else $reason = '當年出貨資料不足';
     } elseif ($cat === 'existing_customer') {
         $mmdd = $year === (int)substr($today, 0, 4) ? substr($today, 5, 5) : '12-31';
