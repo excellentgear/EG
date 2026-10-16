@@ -58,12 +58,6 @@ const RM_RULE_CATS = [
         'measures' => ['客訴與不良逐件開立異常矯正處理單，每月品質檢討會檢討原因分類並回報客戶', '重複出現的原因建立預防措施並追蹤到結案'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標；矯正與預防的措施追蹤如期結案',
         'kpi' => ['客訴', '不良率'], 'trk_kw' => ['客訴', '矯正', '不良', '預防措施'], 'trk_kind' => 'customer'],
-    'people' => ['label' => '人員／能力傳承', 'ro' => 'risk', 'sev' => 0.4,
-        'kw' => ['新進', '經驗', '傳承', '標準作業', '訓練', '輔導', '離職', '人力'],
-        'impact' => '新進人員比例高、經驗傳承不足，可能增加不良與異常、拉長上手時間。',
-        'measures' => ['生產課補齊關鍵製程標準作業書，並指派資深同仁輔導新進同仁、留存輔導紀錄', '管理課依職能規劃教育訓練'],
-        'metric' => '標準作業書與輔導的措施追蹤如期結案；{kpi}不低於年度目標',
-        'kpi' => ['教育訓練'], 'trk_kw' => ['標準作業', '輔導', '新進', '訓練'], 'trk_kind' => 'employee', 'by' => 'track'],
     'concentration' => ['label' => '客戶集中度', 'ro' => 'risk', 'sev' => 0.8,
         'kw' => ['集中度', '前三大客戶', '大客戶', '客戶集中'],
         'impact' => '大客戶訂單變動會直接衝擊產能與營收。',
@@ -140,7 +134,6 @@ function rm_rule_catalog(): array
     $rows[] = ['id'=>'O-SINGLE', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'當年有稽核製程只交給 1 家外部委外廠商（≥20 筆；廠內製程不算）', 'then'=>'發生率比例至少 0.67'];
     $rows[] = ['id'=>'O-QA', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年品質異常處理單張數', 'then'=>'≥6 張→1.0；≥3 張→0.67；≥1 張→0.5（與 KPI 規則取較高者）'];
     $rows[] = ['id'=>'O-RETURN', 'kind'=>'發生率(O)', 'cat'=>'品質／客訴', 'when'=>'當年客戶退貨筆數相對前一年', 'then'=>'增加 ≥30%→1.0；≥10%→0.67；有退貨但增幅較小→0.5；無退貨 0.34（與其他品質規則取最高者）'];
-    $rows[] = ['id'=>'O-HIRE', 'kind'=>'發生率(O)', 'cat'=>'人員／能力傳承', 'when'=>'近兩年新進人員占在職比例', 'then'=>'≥30%→1.0；≥20%→0.67；≥10%→0.5；其餘 0.34（與教育訓練 KPI 規則取較高者）'];
     $rows[] = ['id'=>'O-CONC', 'kind'=>'發生率(O)', 'cat'=>'客戶集中度', 'when'=>'前三大客戶占當年出貨比例', 'then'=>'≥40%→0.67；≥30%→0.5；其餘 0.34；嚴重度比例同時依占比上調（≥40%→1.0；≥30%→0.8）'];
     $rows[] = ['id'=>'O-CLIMATE', 'kind'=>'發生率(O)', 'cat'=>'氣候／天然災害', 'when'=>'當年與前一年行事曆颱風假天數', 'then'=>'≥6 天→1.0；≥2 天→0.5；其餘 0.34'];
     $rows[] = ['id'=>'O-LEGAL', 'kind'=>'發生率(O)', 'cat'=>'法規遵循', 'when'=>'政府單位相關措施追蹤是否有逾期', 'then'=>'有逾期→0.67；否則 0.34'];
@@ -373,13 +366,6 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
             $today = (string)$db->query("SELECT CURDATE()")->fetchColumn(); $over = 0;
             foreach ($tr as $t) if (!(int)$t['is_closed'] && $t['due_date'] && $t['due_date'] < $today) $over++;
             $occF = $over ? 0.67 : 0.34; $why[] = '政府單位相關追蹤共 ' . count($tr) . ' 項' . ($over ? '，其中 ' . $over . ' 項逾期' : '，無逾期'); $ids[] = 'O-LEGAL';
-            break;
-        case 'people':
-            $st = $db->prepare("SELECT COUNT(*) n, SUM(hire_date>=DATE_SUB(?, INTERVAL 2 YEAR)) nw FROM user WHERE state=1 AND hire_date IS NOT NULL AND hire_date<=?");
-            $y2 = min($dataYear . '-12-31', (string)$db->query("SELECT CURDATE()")->fetchColumn()); $st->execute([$y2, $y2]); $h = $st->fetch(PDO::FETCH_ASSOC);
-            $ratio = (int)$h['n'] ? (int)$h['nw'] * 100 / (int)$h['n'] : 0;
-            $occH = $ratio >= 30 ? 1.0 : ($ratio >= 20 ? 0.67 : ($ratio >= 10 ? 0.5 : 0.34));
-            $occF = max($occH, $fromKpi ?? 0); $fromKpi = null; $why[] = '近兩年新進人員占 ' . rm_sg_f($ratio) . '%'; $ids[] = 'O-HIRE';
             break;
         case 'quality':
             $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order WHERE " . rm_audit_in($db,'part_d_id') . " AND deleted_at IS NULL AND YEAR(created_at)=?"); $st->execute([$dataYear]); $n = (int)$st->fetchColumn();

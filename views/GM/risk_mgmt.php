@@ -314,7 +314,7 @@ $perms  = rm_perms($db, $rmUser);
 <div class="rm-mask" id="sugMask"><div class="rm-modal" style="width:860px;">
     <div class="rm-mhd"><span>依系統資料建議（供參考，加入後可再修改）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
     <div class="rm-mbd"><div class="note-box" style="margin-bottom:8px;">下面的建議<b>全部由本系統的實際資料依規則即時算出</b>（不是憑空產生），<b>選哪一年就用那一年的資料重新計算，所以每年都會不一樣</b>。
-            涵蓋：KPI 年度總表（未達標／全部達標）、出貨紀錄（客戶集中度、新客戶）、人員資料（新進人員比例）、行事曆（颱風假）、BOM 委外紀錄（單一廠商／單一來源製程）、
+            涵蓋：KPI 年度總表（未達標／全部達標）、出貨紀錄（客戶集中度、新客戶）、行事曆（颱風假）、BOM 委外紀錄（單一廠商／單一來源製程）、
             品質異常處理單、客戶退貨、溝通管理（政府單位溝通、逾期與未結案的措施追蹤）、量測儀器校驗、去年的表。
             每一條都寫明<b>佐證來源與規則</b>，有對應的溝通記錄時會自動附上單號；是不是列入、放在哪個象限由您判斷。</div>
         <div style="margin-bottom:8px;"><label style="font-size:13px;margin:0;">資料年度</label>

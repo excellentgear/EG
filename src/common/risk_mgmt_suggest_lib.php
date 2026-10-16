@@ -10,7 +10,6 @@
  *   KPI 當年有月份未達年度目標 → W/T（依指標性質）；全部月份達標 → S
  *   出貨前三大客戶占當年出貨 ≥ RM_SG_CONC_PCT% → T
  *   當年首次出貨的新客戶 ≥ 1 家 → O
- *   近兩年新進人員占在職 ≥ RM_SG_NEWHIRE_PCT% → W
  *   當年（及前一年）有颱風假 → T
  *   當年某製程的委外只有 1 家廠商（≥ RM_SG_SINGLE_MIN 筆）／某廠商占委外筆數 ≥ RM_SG_VENDOR_PCT% → T
  *   當年品質異常處理單 ≥ 1 張 → W
@@ -20,7 +19,6 @@
 require_once __DIR__ . '/risk_mgmt_lib.php';
 
 const RM_SG_CONC_PCT    = 30;   // 前三大客戶占比門檻（%）
-const RM_SG_NEWHIRE_PCT = 20;   // 近兩年新進人員占比門檻（%）
 const RM_SG_VENDOR_PCT  = 30;   // 單一廠商占委外筆數門檻（%）
 const RM_SG_SINGLE_MIN  = 20;   // 單一來源製程要達到的當年發包筆數
 
@@ -32,7 +30,6 @@ function rm_sg_kpi_class(string $name): array
     if (mb_strpos($name, '客訴') !== false)     return ['W', '客戶', '低客訴、不良品不外流'];
     if (mb_strpos($name, '不良') !== false)     return ['W', '客戶', '品質穩定、不良品不外流'];
     if (mb_strpos($name, '校驗') !== false)     return ['W', '客戶', '量測數據可靠、可追溯'];
-    if (mb_strpos($name, '教育訓練') !== false) return ['W', '員工', '完整的訓練與經驗傳承'];
     if (mb_strpos($name, '接單') !== false || mb_strpos($name, '達成') !== false) return ['W', '客戶', '穩定的訂單與營收'];
     return ['W', '客戶', '符合年度目標'];
 }
@@ -148,6 +145,7 @@ function rm_suggest_context(PDO $db, int $year): array
             $mv->execute([(int)$ind['indicator_id'], $year]);
             $rows = array_values(array_filter($mv->fetchAll(PDO::FETCH_ASSOC), function ($r) { return $r['v'] !== null; }));
             if (count($rows) < 2) continue;                       // 資料太少不下結論
+            if (mb_strpos((string)$ind['name'], '教育訓練') !== false) continue;   // 不列新進人員／教育訓練類議題（使用者要求）
             if (mb_strpos((string)$ind['name'], '廠商準時') !== false && !rm_outsource_proc_nos($db)) continue;   // 稽核製程沒有外包時不列委外廠商指標
             $tv = (float)$ind['tv']; $gte = $ind['td'] === 'gte'; $unit = (string)$ind['tu'];
             $miss = array_values(array_filter($rows, function ($r) use ($tv, $gte) { return $gte ? (float)$r['v'] < $tv : (float)$r['v'] > $tv; }));
@@ -199,18 +197,6 @@ function rm_suggest_context(PDO $db, int $year): array
 
                  '規則：當年有首次出貨的新客戶');
         }
-    } catch (Throwable $e) { rm_sg_err($e); }
-
-    /* ---- 3. 人員 ---- */
-    try {
-        $st = $db->prepare("SELECT COUNT(*) n, SUM(hire_date>=DATE_SUB(?, INTERVAL 2 YEAR)) nw, MIN(hire_date) mh FROM user WHERE state=1 AND hire_date IS NOT NULL AND hire_date<=?");
-        $st->execute([$y2, $y2]);
-        $s = $st->fetch(PDO::FETCH_ASSOC);
-        if ((int)$s['n'] > 0 && (int)$s['nw'] * 100 / (int)$s['n'] >= RM_SG_NEWHIRE_PCT)
-            $add('人員資料（' . $year . '）', 'W', '員工', '標準作業書、固定師傅輔導、完整訓練',
-                 '在職 ' . $s['n'] . ' 人中近兩年新進 ' . $s['nw'] . ' 人（' . rm_sg_pct($s['nw'], $s['n']) . '），經驗傳承與標準作業書需要補強',
-
-                 '規則：近兩年新進人員占比 ≥ ' . RM_SG_NEWHIRE_PCT . '%');
     } catch (Throwable $e) { rm_sg_err($e); }
 
     /* ---- 4. 氣候（颱風假，行事曆） ---- */
