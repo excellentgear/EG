@@ -1516,6 +1516,14 @@ foreach ($OreadyReply_list_final ?: [] as $row) {
 }
 echo "<script>\n";
 echo "    window.initialFullDataset = " . json_encode($OreadyReply_list_slim) . ";\n";
+// 類似料號（2026-10-16）：本批製令料號中有 A/B 級類似料號者；失敗就當沒有，頁面照常顯示
+$__simMap = [];
+try {
+    require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+    require_once __DIR__ . '/../../src/common/part_similar_lib.php';
+    $__simMap = ps_sim_map_for_ids($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
+} catch (Throwable $__eSim) { $__simMap = []; }
+echo "    window.simMap = " . json_encode($__simMap ?: new stdClass()) . ";\n";
 echo "    window.initialBomPSList = " . json_encode($bom_ps_list ?: []) . ";\n";
 echo "    window.initialMaxCount = " . json_encode((int)($bom_ps_list_max ?: 0)) . ";\n";
 echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) . "; // [bom][bom_sn] 最新單價\n";
@@ -2986,6 +2994,7 @@ echo "</script>\n";
 <link href="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/css/select2.min.css" rel="stylesheet" />
 <!-- 引入 html2canvas 按鈕部分-->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="../../resource/js/eg_part_similar.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_part_similar.js') ?>"></script>
 <link href='../../resource/css/fullcalendar.css' rel='stylesheet' />
 
 <script>
@@ -4898,6 +4907,7 @@ echo "</script>\n";
                             window.allProcessTypes = response.all_process_types; // Store all process types globally
                         }
                         if (response.transfer_price_map) window.transferPriceMap = response.transfer_price_map;
+                        if (response.sim_map && typeof response.sim_map === 'object') window.simMap = response.sim_map;   // 類似料號（整批取代，fetchAll 回的是全部）
                         if (response.transfer_history_map) window.transferHistoryMap = response.transfer_history_map;
                         if (response.ing_active_map) window.ingActiveMap = response.ing_active_map;
                         else window.ingActiveMap = buildIngActiveMap(newBomPSList);
@@ -6111,6 +6121,35 @@ echo "</script>\n";
             // --- 9. BOM備註 (bom.bom_ps as textarea) --- (原為第10欄，現移至第9欄)
             var tdBomPs = document.createElement('td');
             tdBomPs.setAttribute('name', 'bom_bom_ps_edit');
+
+            // --- 類似料號（2026-10-16）：BOM/製程備註欄最上面顯示【類似料號】＋料號，點開看原因與最近三張製令；右側「篩選」只看原本料號與類似料號 ---
+            try {
+                var _simE = (window.simMap || {})[String(row.d_setting_id || '')];
+                if (_simE && _simE.best !== 'C' && _simE.peer_nos && _simE.peer_nos.length) {
+                    var _simBox = document.createElement('div');
+                    _simBox.style.cssText = 'display:flex;align-items:stretch;gap:4px;margin-bottom:6px;';
+                    var _simTxt = document.createElement('div');
+                    _simTxt.style.cssText = 'flex:1;min-width:0;cursor:pointer;background:#E4F1FB;border:1px solid #9CC8E8;border-left:4px solid #4A90C2;color:#1f4e79;border-radius:3px;padding:2px 6px;font-size:12px;line-height:1.4;word-break:break-all;';
+                    var _simTot = (_simE.B || 0) + (_simE.A || 0) + (_simE.C || 0);
+                    _simTxt.innerHTML = '<b>【類似料號】</b>' + escapeHtml(_simE.peer_nos.join('、')) + (_simTot > _simE.peer_nos.length ? ' 等' + _simTot + '個' : '');
+                    _simTxt.title = '有類似料號（齒輪規格相同），點一下查看原因與最近三張製令';
+                    (function (dsid) {
+                        _simTxt.addEventListener('click', function (ev) { ev.stopPropagation(); if (window.EGPartSimilar) EGPartSimilar.prompt({ dId: dsid, ctx: 'bom', once: false, refBanner: false }); });
+                    })(row.d_setting_id);
+                    var _simBtn = document.createElement('button');
+                    _simBtn.type = 'button';
+                    _simBtn.className = 'btn btn-xs';
+                    _simBtn.style.cssText = 'background:#fff;border:1px solid #4A90C2;color:#1f4e79;padding:0 6px;font-size:11px;white-space:nowrap;';
+                    _simBtn.innerHTML = '<i class="fa fa-filter"></i> 篩選';
+                    _simBtn.title = '只顯示這個料號與它的類似料號';
+                    (function (dsid, label) {
+                        _simBtn.addEventListener('click', function (ev) { ev.stopPropagation(); simFilterSet(dsid, label); });
+                    })(row.d_setting_id, row.d_display || '');
+                    _simBox.appendChild(_simTxt);
+                    _simBox.appendChild(_simBtn);
+                    tdBomPs.appendChild(_simBox);
+                }
+            } catch (_simErr) {}
 
             // --- START: 新增邏輯，顯示 bom.bom_ps ---
             var bomALLBomPsText = row.bom_ALL_bom_ps || "";
@@ -8342,8 +8381,40 @@ echo "</script>\n";
     }
 
     // 2. 過濾數據陣列 (確保此函數邏輯正確，操作 data 陣列)
+    // ── 類似料號篩選（2026-10-16）：只顯示「這個料號＋它的 A/B 級類似料號」的製令 ──
+    // window.simFilter = {ids:{d_setting_id:1,...}, label, n}；null＝沒有在篩選。篩選中一定要在頁面上顯示橫幅，避免使用者不知道。
+    function simFilterSet(dsid, label) {
+        var e = (window.simMap || {})[String(dsid)];
+        if (!e) return;
+        var ids = {}; ids[String(dsid)] = 1;
+        (e.peer_ids || []).forEach(function (x) { ids[String(x)] = 1; });
+        window.simFilter = { ids: ids, label: label || String(dsid), n: Object.keys(ids).length };
+        currentPage = 1;
+        simFilterRender();
+        processAndRenderData();
+    }
+    function simFilterClear() {
+        window.simFilter = null;
+        currentPage = 1;
+        simFilterRender();
+        processAndRenderData();
+    }
+    function simFilterRender() {
+        var bar = document.getElementById('sim-filter-bar');
+        if (!bar) return;
+        var f = window.simFilter;
+        if (!f) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+        bar.style.display = '';
+        bar.innerHTML = '<i class="fa fa-filter"></i> <b>目前正在篩選「類似料號」</b>：只顯示料號 <b>' + escapeHtml(f.label) + '</b> 與它的類似料號（共 ' + f.n + ' 個料號）的製令。'
+            + ' <button type="button" class="btn btn-xs btn-default" style="margin-left:8px;" onclick="simFilterClear()"><i class="fa fa-times"></i> 取消類似料號篩選</button>';
+    }
+
     function filterData(data) {
         var filters = getFilters();
+        if (window.simFilter && window.simFilter.ids) {
+            var _sfIds = window.simFilter.ids;
+            data = data.filter(function (r) { return r && _sfIds[String(r.d_setting_id || '')]; });
+        }
         // console.log("Applying filters:", filters); // Debug
         let filtered = data.filter(function(row) {
             // 確保 row 和 row.OrderList 存在且是陣列
@@ -15823,6 +15894,9 @@ echo "</script>\n";
                             </h3>
                         </div>
                     </div>
+
+                    <!-- 類似料號篩選中的提示橫幅（平常隱藏；篩選時由 simFilterRender() 顯示，避免使用者不知道正在篩選） -->
+                    <div id="sim-filter-bar" style="display:none;margin:6px 0;padding:6px 12px;background:#E4F1FB;border:1px solid #9CC8E8;border-left:5px solid #4A90C2;border-radius:4px;color:#1f4e79;font-size:13px;"></div>
 
                     <?php if ($permission_code === 'A'): ?>
                     <!-- ══ 角色功能設定 Modal（僅管理員可見的按鈕才會觸發開啟） ══ -->

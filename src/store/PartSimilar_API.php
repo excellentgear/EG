@@ -47,9 +47,10 @@ switch ($action) {
         $ctx = (string)($_POST['ctx'] ?? $_GET['ctx'] ?? 'master');
         if ($dId <= 0) psReply(['success' => true, 'items' => [], 'total' => 0]);
         $r = ps_find($pdo, $dId);
-        if ($r['items'] && ($ctx === 'quote' || $ctx === 'order')) {
+        if ($r['items'] && ($ctx === 'quote' || $ctx === 'order' || $ctx === 'bom')) {
             foreach ($r['items'] as &$it) {
-                $it['history'] = ($ctx === 'quote') ? ps_recent_quotes($pdo, (int)$it['d_id'], 3) : ps_recent_orders($pdo, (int)$it['d_id'], 3);
+                $it['history'] = ($ctx === 'quote') ? ps_recent_quotes($pdo, (int)$it['d_id'], 3)
+                               : (($ctx === 'bom') ? ps_recent_boms($pdo, (int)$it['d_id'], 3) : ps_recent_orders($pdo, (int)$it['d_id'], 3));
             }
             unset($it);
         }

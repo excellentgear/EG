@@ -95,6 +95,7 @@
 
     function historyHtml(it, ctx) {
         var h = it.history || [];
+        if (ctx === 'bom') return bomHistoryHtml(h);
         if (ctx !== 'quote' && ctx !== 'order') return '';
         var isQ = ctx === 'quote';
         var s = '<table class="egps-tb"><tr><th>' + (isQ ? '最近報價單號' : '最近訂單號') + '</th><th>日期</th><th>製程</th><th>數量</th><th>單價</th></tr>';
@@ -103,6 +104,21 @@
             var key = isQ ? ('data-q="' + r.item_id + '"') : ('data-o="' + r.order_id + '"');
             s += '<tr><td><span class="egps-lnk" ' + key + '>' + esc(r.no) + '</span></td><td>' + esc(dateFmt(r.date)) + '</td><td>' + esc(r.process || '—')
                 + '</td><td>' + esc(r.qty || '—') + (r.tiered ? ' <span class="egps-muted">階梯</span>' : '') + '</td><td>' + money(r.price, r.currency) + '</td></tr>';
+        });
+        return s + '</table>';
+    }
+
+    // BOM 總表用：最近三張製令（客戶、數量、每道製程的廠商與外包金額）
+    function bomHistoryHtml(h) {
+        var s = '<table class="egps-tb"><tr><th style="width:15%;">最近製令(BOM)</th><th style="width:13%;">客戶</th><th style="width:8%;">數量</th><th>製程／外包廠商／外包金額</th></tr>';
+        if (!h.length) s += '<tr><td colspan="4" class="egps-muted">這個料號沒有製令紀錄</td></tr>';
+        h.forEach(function (r) {
+            var lines = (r.procs || []).map(function (p) {
+                var v = p.vendor ? (p.internal ? '廠內 ' + esc(p.vendor) : esc(p.vendor)) : '—';
+                var amt = (p.amount !== '' && p.amount != null) ? '　<b>' + esc(p.amount) + '</b> 元' + (p.price !== '' ? '（單價 ' + esc(p.price) + '）' : '') : '';
+                return '<div>' + esc(p.process) + '　' + v + amt + '</div>';
+            }).join('') || '<span class="egps-muted">無製程資料</span>';
+            s += '<tr><td>' + esc(r.bom) + '<div class="egps-muted">' + esc(dateFmt(r.date)) + '</div></td><td>' + esc(r.client || '—') + '</td><td>' + esc(r.qty || '—') + '</td><td>' + lines + '</td></tr>';
         });
         return s + '</table>';
     }

@@ -336,6 +336,9 @@ function ps_similar_levels(PDO $db): array {
         $need = [];
         foreach ($memo as &$m) {
             usort($m['peers'], function ($x, $y) use ($rank) { return $rank[$x[0]] <=> $rank[$y[0]] ?: $x[1] <=> $y[1]; });
+            // 全部 A/B 級類似料號的 d_id（BOM 總表「篩選類似料號」用，不受下面只留 3 個的限制）
+            $m['peer_ids'] = [];
+            foreach ($m['peers'] as $pr) if ($pr[0] !== 'C') $m['peer_ids'][] = (int)$pr[1];
             $m['peers'] = array_slice($m['peers'], 0, 3);
             foreach ($m['peers'] as $pr) $need[$pr[1]] = 1;
         }
@@ -561,4 +564,74 @@ function ps_search_parts(PDO $db, string $kw): array {
         $st->execute(['%' . $kw . '%', $kw]);
         return $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 該料號最近 N 張製令（BOM 總表的類似料號跳窗用）：製令號／客戶／數量／日期，
+ * 以及每一道製程的名稱、廠商、外包金額。
+ * 外包金額＝該製令該製程「最新一筆移轉憑單」的加工金額（與 BOM 總表 transfer_price_map 同一個口徑）；
+ * 廠內廠商（maker_list.internal=1）標「廠內」、不顯示金額；沒有移轉憑單就沒有金額（不估算）。
+ */
+function ps_recent_boms(PDO $db, int $dId, int $n = 3): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT bom, Client_Name, sqty, Created_At FROM bom WHERE d_setting_id=?
+                            ORDER BY Created_At DESC, bom DESC LIMIT " . max(1, (int)$n));
+        $st->execute([$dId]);
+        $boms = $st->fetchAll(PDO::FETCH_ASSOC);
+        if (!$boms) return [];
+        $bomNos = array_column($boms, 'bom');
+        $ph = implode(',', array_fill(0, count($bomNos), '?'));
+        // 每道製程取最新一筆 bom_ing（同 bom_sn 可能因分批有多列）
+        $ing = $db->prepare("SELECT bi.bom, bi.bom_sn, bi.process_no, bi.maker_id_no, bi.maker_id AS maker_name, ml.internal, pn.ProcessName
+                             FROM bom_ing bi
+                             JOIN (SELECT bom, bom_sn, MAX(bom_ing_fid) AS fid FROM bom_ing WHERE bom IN ($ph) GROUP BY bom, bom_sn) x ON x.fid=bi.bom_ing_fid
+                             LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
+                             LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                             ORDER BY bi.bom, bi.bom_sn");
+        $ing->execute($bomNos);
+        $procs = [];
+        foreach ($ing->fetchAll(PDO::FETCH_ASSOC) as $r) $procs[$r['bom']][] = $r;
+        $tl = $db->prepare("SELECT tl.bom, tl.bom_sn, tl.process_amount, tl.price, tl.modified_unit_price, tl.sqty
+                            FROM bom_ing_transfer_log tl
+                            JOIN (SELECT bom, bom_sn, MAX(transfer_id) AS mx FROM bom_ing_transfer_log WHERE bom IN ($ph) GROUP BY bom, bom_sn) l
+                              ON l.mx=tl.transfer_id");
+        $tl->execute($bomNos);
+        $amt = [];
+        foreach ($tl->fetchAll(PDO::FETCH_ASSOC) as $r) $amt[$r['bom']][(int)$r['bom_sn']] = $r;
+        foreach ($boms as $b) {
+            $lines = [];
+            foreach ($procs[$b['bom']] ?? [] as $p) {
+                $vendor = trim((string)$p['maker_id_no']) !== '' ? trim((string)$p['maker_name']) : '';
+                $internal = (int)($p['internal'] ?? 0) === 1;
+                $a = $amt[$b['bom']][(int)$p['bom_sn']] ?? null;
+                $ext = (!$internal && $vendor !== '');
+                $lines[] = [
+                    'process' => (string)($p['ProcessName'] ?? ('製程' . $p['process_no'])),
+                    'vendor'  => $vendor, 'internal' => $internal,
+                    'amount'  => ($ext && $a && $a['process_amount'] !== null) ? ps_num($a['process_amount']) : '',
+                    'price'   => ($ext && $a) ? ps_num(($a['modified_unit_price'] !== null && $a['modified_unit_price'] !== '') ? $a['modified_unit_price'] : $a['price']) : '',
+                ];
+            }
+            $out[] = ['bom' => $b['bom'], 'client' => (string)$b['Client_Name'], 'qty' => ps_num($b['sqty']), 'date' => $b['Created_At'], 'procs' => $lines];
+        }
+    } catch (Throwable $e) { error_log('ps_recent_boms: ' . $e->getMessage()); }
+    return $out;
+}
+
+/**
+ * BOM 總表用：只回傳「畫面上這批製令的料號」中有 A/B 級類似料號者（C 級不顯示）。
+ * @param array $dIds d_setting.d_id 清單（可有重複／非數字，會自動清理）
+ * @return array "d_id" => ['best','B','A','C','peer_nos'=>[料號文字≤3],'peer_ids'=>[全部 A/B 級類似料號 d_id]]
+ */
+function ps_sim_map_for_ids(PDO $db, array $dIds): array {
+    $out = [];
+    try {
+        $all = ps_similar_levels($db);
+        if (!$all) return [];
+        foreach (array_unique(array_filter(array_map('intval', $dIds))) as $id) {
+            if (isset($all[$id]) && $all[$id]['best'] !== 'C') $out[(string)$id] = $all[$id];
+        }
+    } catch (Throwable $e) { return []; }
+    return $out;
 }

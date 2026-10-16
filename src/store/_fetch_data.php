@@ -927,9 +927,18 @@ if (!empty($_mkinfo_nos)) {
     } catch (PDOException $e) { error_log('_fetch_data maker_info_map error: ' . $e->getMessage()); }
 }
 
+// 類似料號（2026-10-16）：本批製令料號中有 A/B 級類似料號者；失敗就當沒有，不影響其他欄位
+$sim_map = [];
+try {
+    require_once __DIR__ . '/../common/gear_spec_lib.php';
+    require_once __DIR__ . '/../common/part_similar_lib.php';
+    $sim_map = ps_sim_map_for_ids($db, array_column($data_to_return, 'd_setting_id'));
+} catch (Throwable $e) { $sim_map = []; }
+
 echo json_encode([
     'success' => true,
     'data' => $data_to_return,
+    'sim_map' => $sim_map ?: (object)[],
     'totalRecords' => (int)$totalRecords,
     'bom_ps_list' => $bom_ps_list,
     'bom_ps_list_max' => $bom_ps_list_max,
