@@ -1345,8 +1345,12 @@
       /* 強制換頁／括號對齊也要在 body.focus() 之前處理：body 是「最後點過的那一頁」，
          游標若在別頁（例如用鍵盤或程式移過去），body.focus() 會把游標拉到那一頁開頭，
          結果標記打到錯的段落（實測：游標在第 4 頁的「8. 相關文件」，標記卻打在第 1 頁第 1 段）。 */
-      if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); w.alert(hb.msg); return; }
-      if (cmd === 'egAlignParen') { var an = alignSelectedParen(); w.alert(an.msg); return; }
+      /* 這兩顆按了就直接做，不跳需要按確認的視窗；只有沒做成功時才在畫面右下角淡淡提示 */
+      function softTip(m){ var t = d.createElement('div'); t.textContent = m;
+        t.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:100000;background:#7A4A12;color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;max-width:360px;box-shadow:0 2px 8px rgba(0,0,0,.25);';
+        d.body.appendChild(t); setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 3500); }
+      if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); if (!hb.ok) softTip(hb.msg); return; }
+      if (cmd === 'egAlignParen') { var an = alignSelectedParen(); if (!an.n) softTip(an.msg); return; }
       if (cmd === 'egVaTop' || cmd === 'egVaMid' || cmd === 'egVaBot') {
         var va0 = cmd === 'egVaTop' ? 'top' : (cmd === 'egVaBot' ? 'bottom' : 'middle');
         if (!setCellVAlign(body, va0)) {
