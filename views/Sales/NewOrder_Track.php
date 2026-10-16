@@ -22,6 +22,7 @@ function safe_html($val) {
 // （這張訂單綁定的案件底下還有未處理的問題項），全頁 6 處統計/篩選都吃同一份函式。
 require_once __DIR__ . '/../../src/common/eng_log_lib.php';
 require_once __DIR__ . '/../../src/common/design_alert_lib.php';   // 設計提醒（規則→設計備註系統提醒，2026-10-14）
+require_once __DIR__ . '/../../src/common/attach_lib.php';          // 設計備註問答附件（圖面／截圖，2026-10-16）
 
 // 將報價項目 process_notes（逗號分隔的 sub_tag_id）轉為製程名稱字串（・連接），寫回每列 'processes'
 function eg_build_process_names($pdo, array $rows) {
@@ -2316,6 +2317,77 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_contact_search') {
 }
 
 // 讀取某張訂單目前的問答內容（唯讀；渲染小跳窗用）
+// ── 設計備註問答附件（2026-10-16 使用者交辦：問答裡要能貼上圖面當說明，貼上就顯示、點擊放大）──
+// 檔案存在 eng_log_file（與工程處理紀錄同一張表、同一個資料夾，不另開一套）：
+// 上傳先存 temp（新增中就能上傳＝鐵律5），送出問題／回覆時由 ate_q_add／ate_q_reply 轉正。
+// 權限沿用本功能的 $can_design_qa；讀檔要確認該檔屬於「訂單設計備註／製程中紀錄」案件。
+function ate_q_file_bind(PDO $pdo, int $logId, string $ownerType, int $ownerId, $fileIds, int $uid): void {
+    if (!is_array($fileIds) || !$fileIds || $ownerId <= 0) return;
+    $up = $pdo->prepare("UPDATE eng_log_file SET log_id=?, owner_type=?, owner_id=?, status='active', expire_at=NULL
+                         WHERE id=? AND status='temp' AND uploaded_by=?");
+    foreach (array_slice($fileIds, 0, 20) as $fid) $up->execute([$logId, $ownerType, $ownerId, (int)$fid, $uid]);
+}
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_upload') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) throw new Exception('檔案上傳失敗，請重新選擇');
+        $f = $_FILES['file'];
+        if ($f['size'] > 30 * 1024 * 1024) throw new Exception('單一檔案請小於 30MB');
+        $orig = (string)$f['name'];
+        $ext  = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+        if ($ext !== '' && !preg_match('/^[a-z0-9]{1,8}$/', $ext)) throw new Exception('副檔名不正確');
+        if (in_array($ext, ['php','phtml','exe','bat','cmd','com','scr','vbs','js','jar','msi','html','htm','svg'], true))
+            throw new Exception('不接受這種檔案類型');
+        $ownerType = (($_POST['owner_type'] ?? '') === 'reply') ? 'reply' : 'item';
+        $dir = eg_attach_dir($pdo, 'eng_log_nas_dir', '工程處理紀錄');
+        if (!eg_attach_ensure_dir($dir)) throw new Exception('附件資料夾無法建立，請洽管理員檢查路徑設定');
+        $name = 'el_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . ($ext ? '.' . $ext : '');
+        if (!@move_uploaded_file($f['tmp_name'], $dir . $name)) throw new Exception('檔案寫入失敗，請洽管理員檢查資料夾權限');
+        $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+        $pdo->prepare("INSERT INTO eng_log_file (log_id, owner_type, owner_id, file_name, original_name, file_size,
+                       status, expire_at, uploaded_by, created_at) VALUES (NULL,?,NULL,?,?,?, 'temp', DATE_ADD(?, INTERVAL 1 DAY), ?, ?)")
+            ->execute([$ownerType, $name, $orig, (int)$f['size'], $nowL, (int)$id, $nowL]);
+        echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+if (isset($_GET['action']) && $_GET['action'] === 'ate_q_file') {
+    $pdo = $conn->getPDO();
+    $fail = function ($code, $msg) { http_response_code($code); header('Content-Type: text/plain; charset=utf-8'); echo $msg; exit; };
+    if (!$can_design_qa) $fail(403, '無權限');
+    $st = $pdo->prepare("SELECT * FROM eng_log_file WHERE id=?");
+    $st->execute([(int)($_GET['id'] ?? 0)]);
+    $ff = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$ff) $fail(404, '查無此附件');
+    if ((int)$ff['log_id'] > 0) {
+        if (!in_array(el_log_type_of($pdo, (int)$ff['log_id']), ['order_note', 'order_process'], true)) $fail(403, '無權限');
+    } elseif ((int)$ff['uploaded_by'] !== (int)$id) {
+        $fail(403, '無權限');
+    }
+    $nm = (string)$ff['file_name'];
+    if ($nm === '' || strpbrk($nm, "/\\") !== false || strpos($nm, '..') !== false) $fail(400, '檔名不合法');
+    $path = eg_attach_dir($pdo, 'eng_log_nas_dir', '工程處理紀錄') . $nm;
+    if (!is_file($path)) $fail(404, '檔案不存在（可能已被移除）');
+    $mimes = ['pdf'=>'application/pdf','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp','bmp'=>'image/bmp'];
+    $ex = strtolower(pathinfo($nm, PATHINFO_EXTENSION));
+    // 只有圖片與 PDF 允許 inline 顯示，其餘一律強制下載（避免被瀏覽器當網頁執行）
+    $inlineOk = isset($mimes[$ex]);
+    // 本檔開頭有 UTF-8 BOM，會被當成輸出內容塞在檔案前面把圖片弄壞——先把已緩衝的輸出清掉
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: ' . ($mimes[$ex] ?? 'application/octet-stream'));
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($path));
+    $dn = preg_replace('/[\\\\\/:\*\?"<>\|]/', '_', (string)($ff['original_name'] ?: $nm));
+    header('Content-Disposition: ' . ($inlineOk && empty($_GET['dl']) ? 'inline' : 'attachment') . "; filename*=UTF-8''" . rawurlencode($dn));
+    header('Cache-Control: private, max-age=300');
+    readfile($path);
+    exit;
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
     header('Content-Type: application/json');
     $pdo = $conn->getPDO();
@@ -2341,8 +2413,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                 $rp = $pdo->query("SELECT r.*, u.user_cname AS created_by_name FROM eng_log_reply r
                                    LEFT JOIN `user` u ON u.id = r.created_by
                                    WHERE r.item_id IN ({$ids}) ORDER BY r.replied_on, r.id")->fetchAll(PDO::FETCH_ASSOC);
+                // 附件（2026-10-16）：問題與回覆各自掛的檔案，一次查完再分給各列
+                $fmapI = []; $fmapR = [];
+                $fst = $pdo->prepare("SELECT id, owner_type, owner_id, original_name, file_name, file_size FROM eng_log_file
+                                      WHERE log_id=? AND status='active' AND owner_type IN ('item','reply') ORDER BY id");
+                $fst->execute([$logId]);
+                foreach ($fst->fetchAll(PDO::FETCH_ASSOC) as $fr) {
+                    $one = ['id' => (int)$fr['id'], 'name' => (string)($fr['original_name'] ?: $fr['file_name']),
+                            'ext' => strtolower(pathinfo((string)$fr['file_name'], PATHINFO_EXTENSION)), 'size' => (int)$fr['file_size']];
+                    if ($fr['owner_type'] === 'item') $fmapI[(int)$fr['owner_id']][] = $one; else $fmapR[(int)$fr['owner_id']][] = $one;
+                }
                 $rmap = [];
-                foreach ($rp as $r) $rmap[(int)$r['item_id']][] = $r;
+                foreach ($rp as $r) { $r['files'] = $fmapR[(int)$r['id']] ?? []; $rmap[(int)$r['item_id']][] = $r; }
                 // is_note 從 PDO 取出來是字串 "0"/"1"，字串 "0" 在 JS 是 truthy，一定要轉成
                 // 真正的數字型別，json_encode 才會輸出 JSON number 給前端用 !!it.is_note 判斷。
                 // 作廢資訊（2026-10-12）：voided_by 是 user.id，畫面要印姓名所以在這裡一次解出來，
@@ -2367,6 +2449,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                         if ($x['alert']['text'] !== null && $x['alert']['text'] !== '') $x['question'] = $x['alert']['text'];
                     }
                     $x['replies'] = $rmap[(int)$x['id']] ?? [];
+                    $x['files'] = $fmapI[(int)$x['id']] ?? [];
                     $x['is_note'] = (int)($x['is_note'] ?? 0);
                     $x['voided_by_name'] = !empty($x['voided_by']) ? ($vnames[(int)$x['voided_by']] ?? ('#' . (int)$x['voided_by'])) : '';
                     // can_void：本人（created_by＝我）或持有作廢權限者。**後端 ate_q_void 會用
@@ -2449,6 +2532,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
             $r['created_by'] = (int)$id;
             $newItemId = el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
             $created++;
+            ate_q_file_bind($pdo, $logId, 'item', (int)$newItemId, $r['file_ids'] ?? [], (int)$id);   // 附件轉正（2026-10-16）
             // 製程中紀錄「新增紀錄」可以順便一併填回覆（使用者拍板：單一／分開兩種建立方式
             // 都要能用，避免先收到狀況、還沒有結果時無法紀錄）——有填「回覆內容」才真的建立
             // 一筆回覆，留白就只建立這筆紀錄，之後仍可用既有「回覆」功能補上。
@@ -2502,6 +2586,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         $todayL = substr($nowL, 0, 10);
         $pdo->beginTransaction();
         $ret = el_reply_add($pdo, $logId, $itemIds, $_POST, $id, $nowL, $todayL);
+        $rFids = json_decode((string)($_POST['file_ids'] ?? '[]'), true);
+        ate_q_file_bind($pdo, $logId, 'reply', (int)($ret['first_id'] ?? 0), $rFids, (int)$id);   // 附件轉正（2026-10-16）
         if ($resolve) {
             foreach ($itemIds as $iid) el_item_set_status($pdo, $logId, (int)$iid, 'resolved', '', $nowL);
         } elseif (!empty($_POST['reopen'])) {
@@ -4745,6 +4831,24 @@ foreach($dCounts as $c) {
         .ate-q-asked { font-size:10px; color:#aaa; margin-left:auto; white-space:nowrap; }
         .ate-q-question { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; margin-bottom:4px; }
         .ate-q-reply { background:#FAF6EF; border-radius:3px; padding:4px 7px; margin:4px 0; }
+        /* 問答附件（2026-10-16）：貼上／上傳的圖面截圖直接顯示縮圖，點擊放大 */
+        .ate-q-att { margin-top:5px; }
+        .ate-q-att input[type=file] { font-size:11px; max-width:100%; }
+        .ate-q-att-hint { display:block; font-size:11px; color:#9A7B4F; margin-top:1px; }
+        .ate-q-att-th, .ate-q-files { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+        .ate-q-files { margin:4px 0 2px; }
+        .ate-q-att-item { position:relative; display:inline-block; }
+        .ate-q-att-img { max-width:150px; max-height:110px; width:auto; height:auto; object-fit:contain; background:#fff;
+                         border:1px solid #E0CDB0; border-radius:4px; cursor:zoom-in; display:block; }
+        .ate-q-files .ate-q-att-img { max-width:220px; max-height:160px; }
+        .ate-q-att-file { display:inline-block; font-size:11px; color:#6B4A1F; background:#FBF1DF; border:1px solid #E0CDB0;
+                          border-radius:4px; padding:3px 7px; text-decoration:none; line-height:16px; }
+        .ate-q-att-x { position:absolute; top:-6px; right:-6px; width:18px; height:18px; line-height:16px; padding:0; border-radius:9px;
+                       border:1px solid #DD5138; background:#fff; color:#DD5138; font-size:13px; cursor:pointer; }
+        .ate-q-lb { position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(40,28,12,.82); display:none; z-index:30000; overflow:auto; }
+        .ate-q-lb img { max-width:96vw; max-height:92vh; margin:auto; cursor:zoom-in; background:#fff; }
+        .ate-q-lb img.full { max-width:none; max-height:none; cursor:zoom-out; }
+        .ate-q-lb-tip { position:fixed; left:0; right:0; bottom:8px; text-align:center; color:#F7E0BD; font-size:12px; pointer-events:none; }
         .ate-q-reply-ext { margin-left:22px; border-left:3px solid #E3B873; }
         .ate-q-reply-meta { font-size:10px; color:#998a6e; display:block; margin-bottom:2px; }
         .ate-q-reply-content { font-size:12px; color:#444; white-space:pre-wrap; word-break:break-word; }
@@ -9548,7 +9652,7 @@ foreach($dCounts as $c) {
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
-                ATE_Q.replyState = {};
+                ATE_Q.replyState = {}; ATE_Q.replyFiles = {};
                 ATE_Q.channels = res.channels || {};
                 ATE_Q.targets = res.targets || {};
                 ATE_Q.targetsAll = res.targets_all || res.targets || {};
@@ -9663,6 +9767,109 @@ foreach($dCounts as $c) {
                      : { target_type: '', target_id: '', target_label: '', target_post: '', target_contact: '' };
         }
 
+        // ═══ 問答附件（2026-10-16）：貼上／選檔／拖曳 → 立刻顯示縮圖 → 送出時才上傳 → 清單顯示並可點擊放大 ═══
+        // key：'n'+列索引＝新增問題那一列、'r'+問題id＝回覆框。檔案先留在瀏覽器（縮圖用 objectURL），
+        // 按送出才一起上傳，所以沒送出就不會在 NAS 留下孤兒檔；上傳走 ate_q_upload（後端驗權限與副檔名）。
+        ATE_Q.replyFiles = {};
+        function ateQAttList(key) {
+            if (key.charAt(0) === 'n') { var r = ATE_Q.rows[parseInt(key.slice(1), 10)]; if (!r) return []; return (r.files = r.files || []); }
+            var id = key.slice(1); return (ATE_Q.replyFiles[id] = ATE_Q.replyFiles[id] || []);
+        }
+        function ateQAttAdd(key, files) {
+            var list = ateQAttList(key), n = 0;
+            Array.prototype.forEach.call(files || [], function(f) {
+                if (!f || !f.size) return;
+                if (f.size > 30 * 1024 * 1024) { showToast('「' + f.name + '」超過 30MB，未加入'); return; }
+                if (list.some(function(x) { return x.f.name === f.name && x.f.size === f.size && x.f.lastModified === f.lastModified; })) return;
+                list.push({ f: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : '' }); n++;
+            });
+            if (n) ateQAttRedraw(key);
+        }
+        function ateQAttPick(inp) { ateQAttAdd($(inp).attr('data-att-input'), inp.files); inp.value = ''; }
+        // 有些瀏覽器環境 change 事件會被吞掉：送出前再直接讀一次所有 file input 補進清單
+        function ateQAttSyncInputs() {
+            $('#ate-q-modal input[data-att-input]').each(function() {
+                if (this.files && this.files.length) { ateQAttAdd($(this).attr('data-att-input'), this.files); this.value = ''; }
+            });
+        }
+        function ateQAttThumbsHtml(key) {
+            var h = '';
+            ateQAttList(key).forEach(function(x, i) {
+                h += '<span class="ate-q-att-item">'
+                   + (x.url ? '<img src="' + x.url + '" class="ate-q-att-img" onclick="ateQLightbox(this.src)" title="' + escapeHtml(x.f.name) + '（點擊放大）">'
+                            : '<span class="ate-q-att-file"><i class="fa fa-file-o"></i> ' + escapeHtml(x.f.name) + '</span>')
+                   + '<button type="button" class="ate-q-att-x" onclick="ateQAttRemove(\'' + key + '\',' + i + ')" title="移除這個附件">&times;</button></span>';
+            });
+            return h;
+        }
+        function ateQAttRedraw(key) { $('[data-att-th="' + key + '"]').html(ateQAttThumbsHtml(key)); }
+        function ateQAttRemove(key, i) {
+            var x = ateQAttList(key).splice(i, 1)[0];
+            if (x && x.url) { try { URL.revokeObjectURL(x.url); } catch (e) {} }
+            ateQAttRedraw(key);
+        }
+        function ateQAttBoxHtml(key) {
+            return '<div class="ate-q-att" data-att="' + key + '">'
+                 + '<input type="file" multiple data-att-input="' + key + '" accept="image/*,.pdf,.dxf,.dwg,.xls,.xlsx,.doc,.docx,.txt" onchange="ateQAttPick(this)">'
+                 + '<span class="ate-q-att-hint"><i class="fa fa-paperclip"></i> 可在輸入框按 Ctrl+V 直接貼上圖片，或把檔案拖進來</span>'
+                 + '<div class="ate-q-att-th" data-att-th="' + key + '">' + ateQAttThumbsHtml(key) + '</div></div>';
+        }
+        // 貼上圖片（截圖／複製的圖面）與拖曳檔案：事件委派，重繪後的輸入框也涵蓋
+        $(document).on('paste', '#ate-q-modal textarea[data-att-key]', function(e) {
+            var cd = e.originalEvent && e.originalEvent.clipboardData;
+            if (!cd || !cd.files || !cd.files.length) return;      // 純文字貼上不攔截
+            e.preventDefault();
+            var d = new Date(), pad = function(n) { return (n < 10 ? '0' : '') + n; }, out = [];
+            Array.prototype.forEach.call(cd.files, function(f, i) {
+                var ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+                out.push(new File([f], '貼上圖片_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + (i ? '_' + i : '') + '.' + ext, { type: f.type, lastModified: Date.now() + i }));
+            });
+            ateQAttAdd($(this).attr('data-att-key'), out);
+        });
+        $(document).on('dragover', '#ate-q-modal textarea[data-att-key], #ate-q-modal [data-att]', function(e) { e.preventDefault(); });
+        $(document).on('drop', '#ate-q-modal textarea[data-att-key], #ate-q-modal [data-att]', function(e) {
+            var dt = e.originalEvent && e.originalEvent.dataTransfer;
+            if (!dt || !dt.files || !dt.files.length) return;
+            e.preventDefault();
+            var key = $(this).attr('data-att-key') || $(this).attr('data-att');
+            ateQAttAdd(key, dt.files);
+        });
+        // 依序上傳一批 [{f}]，成功回傳 id 陣列
+        function ateQUploadFiles(list, ownerType, cb) {
+            var ids = [], i = 0;
+            (function next() {
+                if (i >= list.length) return cb(null, ids);
+                var fd = new FormData();
+                fd.append('action', 'ate_q_upload'); fd.append('owner_type', ownerType); fd.append('file', list[i].f, list[i].f.name);
+                $.ajax({ url: '', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+                    .done(function(res) { if (!res || !res.success) return cb((res && res.message) || '附件上傳失敗'); ids.push(res.id); i++; next(); })
+                    .fail(function() { cb('附件上傳失敗，請重試'); });
+            })();
+        }
+        // 顯示已儲存的附件：圖片直接出縮圖（點擊放大），其他類型給下載連結
+        function ateQFilesView(files) {
+            if (!files || !files.length) return '';
+            var h = '<div class="ate-q-files">';
+            files.forEach(function(f) {
+                var u = '?action=ate_q_file&id=' + f.id;
+                if (/^(jpg|jpeg|png|gif|webp|bmp)$/.test(f.ext)) h += '<img class="ate-q-att-img" src="' + u + '" onclick="ateQLightbox(this.src)" title="' + escapeHtml(f.name) + '（點擊放大）">';
+                else h += '<a class="ate-q-att-file" href="' + u + '" target="_blank"><i class="fa fa-' + (f.ext === 'pdf' ? 'file-pdf-o' : 'file-o') + '"></i> ' + escapeHtml(f.name) + '</a>';
+            });
+            return h + '</div>';
+        }
+        function ateQLightbox(src) {
+            var $o = $('#ate-q-lb');
+            if (!$o.length) {
+                $o = $('<div id="ate-q-lb" class="ate-q-lb"><img alt=""><div class="ate-q-lb-tip">點圖片＝切換原尺寸／符合畫面　點空白處或按 Esc 關閉</div></div>').appendTo('body');
+                $o.on('click', function(e) { if (e.target.tagName === 'IMG') $(e.target).toggleClass('full'); else $o.hide(); });
+                document.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape' && $o.is(':visible')) { $o.hide(); e.stopPropagation(); e.stopImmediatePropagation(); }
+                }, true);
+            }
+            $o.find('img').removeClass('full').attr('src', src);
+            $o.css('display', 'flex').scrollTop(0);
+        }
+
         function ateQItemHtml(it) {
             var repliesHtml = '', extOn = false;
             (it.replies || []).forEach(function(r) {
@@ -9671,7 +9878,7 @@ foreach($dCounts as $c) {
                 var when = r.replied_on ? (typeof egFmtDate === 'function' ? egFmtDate(r.replied_on) : r.replied_on) : '';
                 var chLabel = (r.channel && ATE_Q.channels && ATE_Q.channels[r.channel]) ? ATE_Q.channels[r.channel] : '';
                 repliesHtml += '<div class="ate-q-reply' + (extOn ? ' ate-q-reply-ext' : '') + '"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
-                    (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
+                    (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div>' + ateQFilesView(r.files) + '</div>';
             });
             // 設計備註已凍結時（kind==='note' && ATE_Q.frozen）唯讀：不給回覆/標記已處理，
             // 也不渲染回覆框（鐵律8，後端已同規則再擋一次，這裡只是避免使用者點了才被打臉）。
@@ -9725,7 +9932,8 @@ foreach($dCounts as $c) {
                 var replyByLabel = (ATE_Q.kind === 'process') ? '回覆者' : '回覆對象';
                 replyBoxHtml = '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
                     +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
-                    +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
+                    +     'id="ate-q-replytxt-' + it.id + '" data-att-key="r' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
+                    +   ateQAttBoxHtml('r' + it.id)
                     // 回覆方式（電話／Line／E-mail…使用者交辦，預設電話）：選項即時取自管理員
                     // 維護的 eng_log_channel（走 eng_log.php「維護回覆方式」），不是寫死的清單
                     // 已處理／已回覆的問題：可選「追問」（退回待回覆）或「PS 補充」（只留說明、狀態不變）
@@ -9808,6 +10016,7 @@ foreach($dCounts as $c) {
                 + '<div class="ate-q-item-head">' + (al ? alertHead : ateQStatusBadge(it.status)) + noteBadge + voidBadge + (al ? '' : targetSpan)
                 + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + (al ? ' 產生' : ' 提出') + '</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
+                + ateQFilesView(it.files)
                 + alertInfo
                 + voidInfo
                 + repliesHtml
@@ -10168,14 +10377,22 @@ foreach($dCounts as $c) {
             var reopen = ($mode.length && $mode.val() === 'ask') ? 1 : 0;
             if (reopen) { resolve = 0; txt = '【追問】' + txt; }
             else if ($mode.length) txt = '【PS】' + txt;
-            $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve, reopen: reopen, channel: channel }, function(res) {
-                if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
-                // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
-                $ta.css('background-color', '#d4edda');
-                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
-                setTimeout(function() { ateQOpen(ATE_Q.orderId, ATE_Q.kind); }, 450);
-            }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
+            ateQAttSyncInputs();
+            var upList = ateQAttList('r' + itemId).slice();
+            var $sendBtn = $('#ate-q-sendbtn-' + itemId).prop('disabled', true);
+            ateQUploadFiles(upList, 'reply', function(err, fids) {
+                if (err) { $sendBtn.prop('disabled', false); showToast(err); return; }
+                $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
+                             content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve, reopen: reopen, channel: channel,
+                             file_ids: JSON.stringify(fids) }, function(res) {
+                    if (!res || !res.success) { $sendBtn.prop('disabled', false); showToast((res && res.message) || '回覆失敗'); return; }
+                    // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
+                    $ta.css('background-color', '#d4edda');
+                    delete ATE_Q.replyFiles[itemId];
+                    ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                    setTimeout(function() { ateQOpen(ATE_Q.orderId, ATE_Q.kind); }, 450);
+                }, 'json').fail(function() { $sendBtn.prop('disabled', false); showToast('回覆失敗，請重試'); });
+            });
         }
 
         // 直接按「已處理」（沒有先展開回覆框填內容）時，2026-10-06 使用者交辦：自動補一筆回覆，
@@ -10632,7 +10849,7 @@ foreach($dCounts as $c) {
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             return '<tr>'
                 + '<td style="width:32%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
-                +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea></td>'
+                +   'data-att-key="n' + idx + '" oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea>' + ateQAttBoxHtml('n' + idx) + '</td>'
                 + '<td style="width:13%;"><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
                 +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></td>'
                 + '<td style="width:47%;">' + ateQTpHtml(ns, r) + '</td>'
@@ -10652,8 +10869,8 @@ foreach($dCounts as $c) {
             var html = '<tr><td class="ate-rec-cell">';
             html += '<div class="ate-rec-top">'
                 + '<textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入製程中發生的狀況…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
-                +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea>'
-                + '<div class="ate-rec-del">' + delBtn + '</div></div>';
+                +   'data-att-key="n' + idx + '" oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea>'
+                + '<div class="ate-rec-del">' + delBtn + '</div></div>' + ateQAttBoxHtml('n' + idx);
             html += '<div class="ate-rec-meta">'
                 + '<div class="ate-rec-field"><label>日期</label><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
                 +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></div>'
@@ -10713,7 +10930,8 @@ foreach($dCounts as $c) {
 
         function ateQSubmitNew() {
             if (ATE_Q.kind === 'note' && ATE_Q.frozen) { showToast('此訂單設計備註已凍結，無法再新增'); return; }
-            var out = []; var bad = false;
+            var out = []; var outFiles = []; var bad = false;
+            ateQAttSyncInputs();
             ATE_Q.rows.forEach(function(r) {
                 var q = $.trim(r.question || '');
                 if (!q) return;
@@ -10737,12 +10955,21 @@ foreach($dCounts as $c) {
                         row.reply_by = ateQTpComposeReplyBy(rt);
                     }
                 }
-                out.push(row);
+                out.push(row); outFiles.push(r.files || []);
             });
             if (bad) { showToast('有問題選了對象類別卻沒有填完對象資料，請補選／補填'); return; }
             if (!out.length) { showToast('請至少填寫一條內容'); return; }
             $('#ate-q-submit-new').prop('disabled', true);
             $('.ate-q-qtext').css('background-color', '#d4edda');   // 比照舊版存檔成功的綠色回饋
+            var flat = [], owner = [];
+            outFiles.forEach(function(fl, i) { fl.forEach(function(x) { flat.push(x); owner.push(i); }); });
+            ateQUploadFiles(flat, 'item', function(err, ids) {
+                if (err) { $('#ate-q-submit-new').prop('disabled', false); $('.ate-q-qtext').css('background-color', ''); showToast(err); return; }
+                ids.forEach(function(fid, k) { (out[owner[k]].file_ids = out[owner[k]].file_ids || []).push(fid); });
+                ateQPostNew(out);
+            });
+        }
+        function ateQPostNew(out) {
             $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, kind: ATE_Q.kind, items: JSON.stringify(out) }, function(res) {
                 $('#ate-q-submit-new').prop('disabled', false);
                 if (!res || !res.success) { $('.ate-q-qtext').css('background-color', ''); showToast((res && res.message) || '新增失敗'); return; }
