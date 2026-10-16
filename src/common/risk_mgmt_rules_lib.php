@@ -280,11 +280,16 @@ function rm_rule_tracks(PDO $db, int $year, string $cat, string $text, bool $ann
     // 不用類別關鍵字猜——猜出來的追蹤常常是別的部門的事（例如收貨列被掛上委外跟催）
     $c = RM_RULE_CATS[$cat] ?? RM_RULE_CATS['generic'];
     $found = [];
-    $base = "SELECT t.track_id, t.party, t.content, t.action, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.closed_date, r.rec_no, r.comm_date, cc.name cat_name
+    $base = "SELECT t.track_id, t.track_no, t.party, t.content, t.action, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.closed_date, r.rec_no, r.comm_date, cc.name cat_name
              FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id LEFT JOIN comm_track_cat cc ON cc.cat_id=t.cat_id WHERE t.is_deleted=0 ";
     try {
-        if (preg_match_all('/措施追蹤\s*#(\d+)/u', $text, $m)) {
-            foreach ($m[1] as $id) { $st = $db->prepare($base . "AND t.track_id=?"); $st->execute([(int)$id]); if ($r = $st->fetch(PDO::FETCH_ASSOC)) $found[$r['track_id']] = $r; }
+        // 措施欄可註記「措施追蹤 F2026-004」（新編號）或舊式「措施追蹤 #274」
+        if (preg_match_all('/措施追蹤\s*(?:(F\d{4}-\d{3})|#(\d+))/u', $text, $m, PREG_SET_ORDER)) {
+            foreach ($m as $g) {
+                if (!empty($g[1])) { $st = $db->prepare($base . "AND t.track_no=?"); $st->execute([$g[1]]); }
+                else { $st = $db->prepare($base . "AND t.track_id=?"); $st->execute([(int)$g[2]]); }
+                if ($r = $st->fetch(PDO::FETCH_ASSOC)) $found[$r['track_id']] = $r;
+            }
         }
         if (preg_match_all('/溝通記錄\s*(\d{8,11})/u', $text, $m)) {
             foreach ($m[1] as $no) { $st = $db->prepare($base . "AND r.rec_no=?"); $st->execute([$no]); foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $found[$r['track_id']] = $r; }
@@ -315,7 +320,7 @@ function rm_rule_track_txt(array $t, string $today): string
 {
     $state = (int)$t['is_closed'] ? '已結案' . ($t['closed_date'] ? ' ' . substr($t['closed_date'], 0, 10) : '')
            : ($t['due_date'] && $t['due_date'] < $today ? '未結案・已逾期（預計 ' . $t['due_date'] . '）' : '未結案（預計 ' . ($t['due_date'] ?: '未訂') . '）');
-    return '措施追蹤 #' . $t['track_id'] . '（' . mb_substr((string)$t['action'], 0, 40) . '；負責 ' . (!empty($t['owner_dept_name']) ? $t['owner_dept_name'] . ' ' : '') . $t['owner_name'] . '；' . $state . '）' . ($t['rec_no'] ? '，來自溝通記錄 ' . $t['rec_no'] : '');
+    return '措施追蹤 ' . (!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']) . '（' . mb_substr((string)$t['action'], 0, 40) . '；負責 ' . (!empty($t['owner_dept_name']) ? $t['owner_dept_name'] . ' ' : '') . $t['owner_name'] . '；' . $state . '）' . ($t['rec_no'] ? '，來自溝通記錄 ' . $t['rec_no'] : '');
 }
 
 /* ============================ 產生風險草稿（M／S／O 規則） ============================ */
@@ -560,7 +565,7 @@ function rm_item_tracks(PDO $db, int $year, array $row): array
     $out = [];
     foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id'])) as $t) {
         $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
-        $out[] = ['id'=>(int)$t['track_id'], 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
+        $out[] = ['id'=>(int)$t['track_id'], 'no'=>(string)(!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']), 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
                   'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? '')];
     }
     return $out;

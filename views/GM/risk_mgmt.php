@@ -843,11 +843,11 @@ function scaleOptions(list, val){
 function trackHtml(it){
     var ts = it.tracks || [];
     if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
-    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b><span class="hint" style="margin-left:6px;">#編號＝溝通管理「措施追蹤表」的項次</span>';
+    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b><span class="hint" style="margin-left:6px;">編號（FYYYY-流水號）＝溝通管理「措施追蹤表」的追蹤編號</span>';
     $.each(ts, function(_, t){
         var cls = t.state === 'over' ? 'over' : (t.state === 'closed' ? 'done' : 'open');
         var txt = t.state === 'over' ? '逾期' : (t.state === 'closed' ? '已結案' : '執行中');
-        h += '<div class="trk-row ' + cls + '">#' + t.id + '　' + esc((t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定負責人')) + '　' + (t.due ? dispDate(t.due) : '未定日期')
+        h += '<div class="trk-row ' + cls + '">' + esc(t.no || ('#' + t.id)) + '　' + esc((t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定負責人')) + '　' + (t.due ? dispDate(t.due) : '未定日期')
            + '　<span class="trk-st">' + txt + '</span><div class="trk-ac">' + esc(t.action || '') + '</div></div>';
     });
     return h + '</div>';
@@ -1521,8 +1521,8 @@ function evidenceBrief(txt){
     if (!lines.length) return {first:'', refs:''};
     var first = lines[0].replace(/^（參考）/, ''), ids = [];
     $.each(lines, function(_, l){
-        var m = l.match(/措施追蹤\s*#\d+/g);
-        if (m) $.each(m, function(_, x){ var n = x.replace(/\D/g, ''); if (ids.indexOf(n) < 0) ids.push(n); });
+        var m = l.match(/措施追蹤\s*(?:F\d{4}-\d{3}|#\d+)/g);
+        if (m) $.each(m, function(_, x){ var n = x.replace(/^措施追蹤\s*/, ''); if (ids.indexOf(n) < 0) ids.push(n); });
     });
     // 逐月數據（「1月 76%✗、2月 46%✗…」）濃縮成「N 個月中 M 個月未達標」；其他說明只留前 46 字
     var mm = first.match(/\d+\s*月\s*[\d.]+\s*[^\s、，；。]*/g);
@@ -1531,7 +1531,7 @@ function evidenceBrief(txt){
         var last3 = mm.slice(-3).every(function(x){ return x.indexOf('✗') < 0; });
         first = first.split('（')[0] + ' ' + mm.length + ' 個月中 ' + miss + ' 個月未達標' + (last3 ? '，最近 3 個月已達標' : '，最近 3 個月仍有未達標');
     } else if (first.length > 46) first = first.slice(0, 46) + '…';
-    return {first:first, refs:ids.length ? '措施追蹤 ' + ids.map(function(n){ return '#' + n; }).join('、') : ''};
+    return {first:first, refs:ids.length ? '措施追蹤 ' + ids.join('、') : ''};
 }
 function effectPrint(it){
     var h = esc(it.effect_check || '');
@@ -1550,7 +1550,7 @@ function effectPrint(it){
 function measurePrint(it){
     var h = esc(it.measure || '').replace(/\n/g, '<br>'), ts = it.tracks || [];
     if (ts.length){
-        var o = $.map(ts, function(t){ return '#' + t.id + ' ' + (t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定') + '／' + (t.due ? dispDate(t.due) : '未定')
+        var o = $.map(ts, function(t){ return (t.no || ('#' + t.id)) + ' ' + (t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定') + '／' + (t.due ? dispDate(t.due) : '未定')
             + (t.state === 'closed' ? '（已結案）' : (t.state === 'over' ? '（逾期）' : '（執行中）')); });
         h += '<br><span style="color:#444;">措施追蹤（編號見溝通管理措施追蹤表）：<br>' + $.map(o, esc).join('；<br>') + '</span>';
     }

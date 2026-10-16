@@ -239,6 +239,8 @@ function cm_ensure_schema(PDO $db): void
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
         "ALTER TABLE comm_track ADD COLUMN cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id（NULL＝未分類）' AFTER party",
+        "ALTER TABLE comm_track ADD COLUMN track_no VARCHAR(20) NULL COMMENT '追蹤編號 FYYYY-流水三碼（年度取反應日期；建立後不再變動）' AFTER track_id",
+        "ALTER TABLE comm_track ADD UNIQUE KEY uk_track_no (track_no)",
         "ALTER TABLE comm_track ADD COLUMN owner_dept_id INT NULL COMMENT '負責人所屬部門（挑人時先選的部門；兼任者才分得出是以哪個部門的身分負責）' AFTER owner_name",
         "ALTER TABLE comm_track ADD COLUMN owner_dept_name VARCHAR(100) NULL COMMENT '負責人所屬部門名稱（存當時名稱）' AFTER owner_dept_id",
         "ALTER TABLE comm_track ADD KEY idx_cat (cat_id)",
@@ -268,6 +270,7 @@ function cm_ensure_schema(PDO $db): void
         "ALTER TABLE comm_ctrl ADD COLUMN remind_last_at DATETIME NULL AFTER remind_sent_for",
     ];
     foreach ($alters as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
+    try { cm_track_no_backfill($db); } catch (Throwable $e) {}
     /* 舊資料回填：只有 party_kind 沒有類別 id 的記錄，對到「同一種挑法的第一個類別」（other 對到預設的「其他」，說明文字原樣留在 party_kind_other） */
     try {
         $db->exec("UPDATE comm_record r JOIN comm_track_cat c ON c.kind=r.party_kind AND c.free_text=(r.party_kind='other')
@@ -275,6 +278,24 @@ function cm_ensure_schema(PDO $db): void
                    WHERE r.party_cat_id IS NULL
                      AND c.cat_id=(SELECT MIN(c2.cat_id) FROM comm_track_cat c2 WHERE c2.kind=c.kind AND c2.free_text=c.free_text)");
     } catch (Throwable $e) {}
+}
+
+/** 追蹤編號：F＋年度（反應日期的年）＋「-」＋該年度流水三碼，例 F2026-004。已配發的號碼不會因日期事後修改而變動。 */
+function cm_track_no_next(PDO $db, ?string $date = null): string
+{
+    $y = preg_match('/^(\d{4})/', (string)$date, $m) ? $m[1] : date('Y');
+    $st = $db->prepare("SELECT COALESCE(MAX(CAST(SUBSTRING(track_no, 7) AS UNSIGNED)), 0) FROM comm_track WHERE track_no LIKE ?");
+    $st->execute(['F' . $y . '-%']);
+    return sprintf('F%s-%03d', $y, (int)$st->fetchColumn() + 1);
+}
+/** 舊資料補號：依 年度、反應日期、原流水號 的順序補上（只補還沒有編號的） */
+function cm_track_no_backfill(PDO $db): void
+{
+    $n = (int)$db->query("SELECT COUNT(*) FROM comm_track WHERE track_no IS NULL")->fetchColumn();
+    if ($n <= 0) return;
+    $rows = $db->query("SELECT track_id, COALESCE(react_date, DATE(created_at)) d FROM comm_track WHERE track_no IS NULL ORDER BY COALESCE(react_date, DATE(created_at)), track_id")->fetchAll(PDO::FETCH_ASSOC);
+    $up = $db->prepare("UPDATE comm_track SET track_no=? WHERE track_id=? AND track_no IS NULL");
+    foreach ($rows as $r) $up->execute([cm_track_no_next($db, (string)$r['d']), (int)$r['track_id']]);
 }
 
 /* ============================ 使用者與權限 ============================ */

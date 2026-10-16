@@ -697,10 +697,10 @@ if ($action === 'rec_to_track') {
     $catRow = array_key_exists('cat_id', $_POST) ? cmCatCheck($db, $_POST['cat_id'], $rc) : ($rc ? cmCatCheck($db, $rc, $rc) : null);
     $catId = $catRow ? (int)$catRow['cat_id'] : null;
     $odId = (int)($_POST['owner_dept_id'] ?? 0);
-    $db->prepare("INSERT INTO comm_track (party, cat_id, content, react_date, action, owner_id, owner_name, owner_dept_id, owner_dept_name, due_date,
+    $db->prepare("INSERT INTO comm_track (track_no, party, cat_id, content, react_date, action, owner_id, owner_name, owner_dept_id, owner_dept_name, due_date,
                     src_rec_id, src_item_id, created_by, created_by_name, created_at, updated_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-       ->execute([$it['party_name'], $catId, $it['question'], $it['comm_date'], cmS($_POST['action_text'] ?? $it['reply'], 4000),
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+       ->execute([cm_track_no_next($db, (string)$it['comm_date']), $it['party_name'], $catId, $it['question'], $it['comm_date'], cmS($_POST['action_text'] ?? $it['reply'], 4000),
                   $ownerId ?: null, $ownerId ? cm_user_name($db, $ownerId) : cmS($_POST['owner_name'] ?? '', 60),
                   $odId ?: null, $odId ? cm_dept_name($db, $odId) : null, $due,
                   (int)$it['rec_id'], $itemId, $uid, $uname, $now['n'], $now['n']]);

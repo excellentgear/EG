@@ -311,7 +311,7 @@ $roleLabel = cm_role_label($perms);
             <div class="cm-table-wrap">
                 <table class="cm-table" id="trackTable">
                     <thead><tr>
-                        <th style="width:60px;" title="追蹤編號：風險與機會因應措施表引用的 #編號">編號</th><th style="width:100px;">類別</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
+                        <th style="width:78px;" title="追蹤編號 FYYYY-流水三碼（年度取反應日期），風險與機會因應措施表引用的就是這個編號">編號</th><th style="width:100px;">類別</th><th style="width:150px;">利害關係者</th><th>反應內容</th>
                         <th style="width:96px;">反應日期</th><th>回應措施</th><th style="width:100px;">負責人</th>
                         <th style="width:110px;">預計完成日</th><th style="width:96px;">是否結案</th>
                         <th style="width:110px;">來源</th><th style="width:130px;">操作</th>
@@ -2095,7 +2095,7 @@ function loadTrack(){
             var badge = +r.is_closed ? '<span class="st tg-closed">是</span>'
                       : (late ? '<span class="st tg-late">否・已逾期</span>' : '<span class="st tg-open">否</span>');
             b.append('<tr>'
-                + '<td><b>#' + esc(r.track_id) + '</b></td>'
+                + '<td><b>' + esc(r.track_no || ('#' + r.track_id)) + '</b></td>'
                 + '<td>' + (r.cat_name ? esc(r.cat_name) : '<span class="hint">未分類</span>') + '</td>'
                 + '<td class="l wrap">' + esc(r.party) + '</td>'
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
@@ -2802,7 +2802,7 @@ $('#btnTrackPrint').on('click', function(){
         var render = function(){
             var meta = first.print;
             var tr = rows.map(function(r, i){
-                return '<tr><td>#' + esc(r.track_id) + '</td><td>' + esc(r.cat_name || '') + '</td><td class="l">' + esc(r.party) + '</td>'
+                return '<tr><td>' + esc(r.track_no || ('#' + r.track_id)) + '</td><td>' + esc(r.cat_name || '') + '</td><td class="l">' + esc(r.party) + '</td>'
                      + '<td class="l">' + esc(r.content).replace(/\n/g, '<br>') + '</td>'
                      + '<td>' + dispDate(r.react_date) + '</td>'
                      + '<td class="l">' + esc(r.action).replace(/\n/g, '<br>') + '</td>'
@@ -2810,7 +2810,7 @@ $('#btnTrackPrint').on('click', function(){
                      + '<td>' + (+r.is_closed ? '是' : '否') + '</td></tr>';
             }).join('') || '<tr><td colspan="9">（無資料）</td></tr>';
             var body = printHead(meta, '回應利害關係者措施追蹤表')
-                + '<table class="pt"><colgroup><col style="width:48px;"><col style="width:76px;"><col style="width:120px;"><col>'
+                + '<table class="pt"><colgroup><col style="width:64px;"><col style="width:76px;"><col style="width:120px;"><col>'
                 + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
                 + '<thead><tr><th>編號</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
                 + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead>'
@@ -2897,7 +2897,7 @@ $(document).on('click', '.btnBlank', function(){
         } else if (which === 'track'){
             title = '回應利害關係者措施追蹤表';
             body = printHead(meta, title)
-                + '<table class="pt"><colgroup><col style="width:48px;"><col style="width:76px;"><col style="width:120px;"><col>'
+                + '<table class="pt"><colgroup><col style="width:64px;"><col style="width:76px;"><col style="width:120px;"><col>'
                 + '<col style="width:76px;"><col><col style="width:80px;"><col style="width:86px;"><col style="width:60px;"></colgroup>'
                 + '<thead><tr><th>編號</th><th>類別</th><th>利害關係者</th><th>反應內容</th><th>反應日期</th>'
                 + '<th>回應措施</th><th>負責人</th><th>預計完成日</th><th>是否結案</th></tr></thead><tbody>'
@@ -2959,7 +2959,7 @@ $('#btnTrackCsv').on('click', function(){
     fetchAll({action:'track_list', show:$('#trackShow').val(), cat:$('#trackCat').val(), kw:$('#trackKw').val()}, function(rows){
         csvDump('回應利害關係者措施追蹤表', ['編號','類別','利害關係者','反應內容','反應日期','回應措施','負責人','預計完成日','是否結案','結案日期','來源單號'],
             rows.map(function(r, i){
-                return ['#' + r.track_id, r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
+                return [r.track_no || ('#' + r.track_id), r.cat_name || '', r.party, r.content, dispDate(r.react_date), r.action, (r.owner_dept_name ? r.owner_dept_name + ' ' : '') + r.owner_name,
                     dispDate(r.due_date), +r.is_closed ? '是' : '否', dispDate(r.closed_date), r.src_rec_no || ''];
             }));
     });
