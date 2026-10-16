@@ -74,7 +74,7 @@ function rmItems(PDO $db, int $docId, array $set): array {
     $fd = $db->prepare("SELECT fill_date FROM rm_doc WHERE doc_id=?"); $fd->execute([$docId]); $fillDate = (string)$fd->fetchColumn();
     foreach ($rows as &$r) {
         $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)($r['ro_kind'] ?? 'risk'));
-        $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'])) : null;
+        $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'], !empty($lv['is_opp']))) : null;
         $r['follow_up'] = ($lv && !empty($r['ro_kind'])) ? rm_follow_up($set, $lv, $r, $fillDate) : null;
         // 連動組織處境分析表的議題：內外部／利害關係者／需求與期望／議題描述一律讀來源的「現在」內容
         $r['ctx_linked'] = false; $r['ctx_doc_no'] = null;

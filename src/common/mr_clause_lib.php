@@ -71,7 +71,7 @@ function mr_clause_catalog(PDO $db, string $meetingDate): array
     $nos = array_keys($all);
     // 配合後面的對照表用的設定：關鍵字＝條文文字裡的字；akw＝判定「會議有沒有涵蓋」的關鍵字；dkw＝找「權責」那一行的關鍵字
     $cfg = [
-        ['kw' => '稽核結果', 'key' => 'audit', 'dkw' => '稽核結果', 'akw' => ['稽核', '不符合'],
+        ['kw' => '稽核結果', 'key' => 'audit', 'dkw' => '稽核結果', 'akw' => ['稽核結果', '稽核報告', '不符合', '內稽', '外稽', '驗證機構'],   // 單獨的「稽核」太寬（「利於稽核及管理」不算報告了稽核結果）
          'explain' => '報告內部與外部（驗證機構）稽核的結果：不符合事項件數與嚴重程度、是否如期改善、內部稽核年度計畫的完成度。'],
         ['kw' => '客訴統計', 'key' => 'complaint', 'dkw' => '客訴', 'akw' => ['客訴', '抱怨', '退貨'],
          'explain' => '報告客訴件數、主要原因分類、處理時效與趨勢（KPI「客訴頻率」）；有退貨一併說明。'],
@@ -164,8 +164,8 @@ function mr_clause_facts(PDO $db, int $dy, string $meetingDate, array $kpi): arr
     if (isset($tr['n'])) $p[] = '溝通管理措施追蹤未結案 ' . (int)$tr['n'] . ' 筆' . ((int)$tr['od'] ? '（逾期 ' . (int)$tr['od'] . ' 筆）' : '');
     $f['followup'] = implode('；', $p);
     // 風險與機會管理（組織處境分析表／風險表）
-    $rk = $q1("SELECT doc_id, doc_no FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1", [$dy]);
-    $cx = $q1("SELECT doc_id, fill_date FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1", [$dy]);
+    $rk = $q1("SELECT doc_id, doc_no FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND (remark IS NULL OR remark NOT LIKE '【假資料】%') AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1", [$dy]);
+    $cx = $q1("SELECT doc_id, fill_date FROM rm_doc WHERE kind='context' AND is_deleted=0 AND (remark IS NULL OR remark NOT LIKE '【假資料】%') AND YEAR(fill_date)=? ORDER BY doc_id DESC LIMIT 1", [$dy]);
     $p = [];
     if (!empty($cx['doc_id']) && function_exists('rm_ctx_compare')) {
         $cp = rm_ctx_compare($db, (int)$cx['doc_id'], (string)$cx['fill_date']);

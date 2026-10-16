@@ -209,6 +209,19 @@ $perms  = rm_perms($db, $rmUser);
         .res-grid input { width:100%; }
         .fu-hint { margin-top:4px; font-size:12px; color:#5b3a1e; } .fu-hint b { color:#8A5A2B; } .fu-over { color:#DD5138; font-weight:bold; }
         .sg-note { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
+        .rk-card { border:2px solid; border-radius:8px; margin:10px 0; overflow:hidden; }
+        .rk-card.risk { background:#FFF6F1; border-color:#E3A18F; } .rk-card.opp { background:#EEF7F1; border-color:#7FBF98; }
+        .rk-hd { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:6px 10px; font-size:13px; }
+        .rk-card.risk .rk-hd { background:#F9DDD2; } .rk-card.opp .rk-hd { background:#D3EBDC; }
+        .rk-no { font-weight:bold; font-size:15px; color:#5b3a1e; } .rk-card.opp .rk-no { color:#1f4d2e; }
+        .rk-kind { display:inline-block; padding:0 9px; border-radius:10px; font-size:12px; line-height:19px; color:#fff; }
+        .rk-card.risk .rk-kind { background:#DD5138; } .rk-card.opp .rk-kind { background:#2E8B57; }
+        .rk-cn { font-size:12px; color:#6b4a2b; border:1px solid #C9A77A; border-radius:8px; padding:0 6px; background:#fff; } .rk-card.opp .rk-cn { color:#1f4d2e; border-color:#7FBF98; }
+        .rk-body { display:grid; grid-template-columns:repeat(12, 1fr); gap:8px 12px; padding:8px 10px 10px; font-size:12.5px; color:#2d2d2d; }
+        .rk-f { min-width:0; } .rk-f .lb { display:block; font-size:11.5px; color:#8A5A2B; margin-bottom:1px; line-height:1.3; } .rk-card.opp .rk-f .lb { color:#2E6B47; }
+        .rk-f .tx { white-space:pre-wrap; word-break:break-word; line-height:1.55; }
+        .rk-s3 { grid-column:span 3; } .rk-s4 { grid-column:span 4; } .rk-s6 { grid-column:span 6; } .rk-s12 { grid-column:span 12; }
+        @media (max-width:900px){ .rk-s3, .rk-s4, .rk-s6 { grid-column:span 12; } }
         #riskInline table { width:100%; border-collapse:collapse; font-size:12.5px; } #riskInline th, #riskInline td { border:1px solid #E5D3B3; padding:5px 7px; vertical-align:top; text-align:left; }
         #riskInline th { background:#F7E0BD; color:#5b3a1e; } #riskInline tr.rowdraft td { background:#FFFBF1; }
         .cmp-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; margin-left:6px; border-radius:8px; border:1px solid; white-space:nowrap; vertical-align:middle; }
@@ -615,7 +628,7 @@ function calcLevel(sev, frq, S, LV, roKind){
     var hit = LV[0];                                   // 低於最低一級的起算分數時歸最低級
     $.each(LV, function(i, lv){ if (score >= +lv.min) hit = lv; });
     var opp = isOpp(roKind);
-    return {score:score, action:!!hit.action, bg:hit.bg, fg:hit.fg, is_opp:opp,
+    return {score:score, action:!!hit.action, bg:(opp && hit.bg_opp) ? hit.bg_opp : hit.bg, fg:(opp && hit.fg_opp) ? hit.fg_opp : hit.fg, is_opp:opp,
             name:(opp && hit.name_opp) ? hit.name_opp : hit.name,
             measure:(opp && hit.measure_opp) ? hit.measure_opp : (hit.measure || '')};
 }
@@ -945,19 +958,34 @@ var OPEN_ROW = null;
 function renderRiskInline(doc){
     var box = $('#riskInline').empty(); if (!doc) return;
     get({action:'doc_get', doc_id:doc.doc_id}, function(res){
-        var S = META.settings, h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
-            + (+res.doc.is_draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張，內容直接列在這裡；按「編輯此項」開啟並跳到該項修改。</span></h4>'
-            + '<div class="rm-table-wrap"><table><thead><tr><th style="width:34px;">編號</th><th>議題</th><th style="width:70px;">風險／機會</th><th style="width:96px;">嚴重度(S)／發生率(O)</th><th style="width:84px;">等級</th>'
-            + '<th>因應措施</th><th style="width:120px;">建議追蹤</th><th style="width:96px;">成效確認</th><th style="width:70px;"></th></tr></thead><tbody>';
+        var S = META.settings, draft = +res.doc.is_draft;
+        var f = function(lb, html, cls){ return '<div class="rk-f ' + (cls || 'rk-s12') + '"><span class="lb">' + lb + '</span><div class="tx">' + html + '</div></div>'; };
+        var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
+            + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張，內容完整列在這裡（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）；按「編輯此項」開啟並跳到該項修改。</span></h4>';
         $.each(res.items, function(i, it){
-            var fu = it.follow_up ? esc(it.follow_up.cycle) + '<br>' + esc(dispDate(it.follow_up.next)) + (it.follow_up.overdue ? '<br><span class="fu-over">已到期</span>' : '') : '<span class="hint">—</span>';
-            h += '<tr' + (+res.doc.is_draft ? ' class="rowdraft"' : '') + '><td>' + (i + 1) + (it.confirm_no ? '<br><span class="hint">' + esc(it.confirm_no) + '</span>' : '') + '</td><td>' + esc(String(it.issue || '').slice(0, 70)) + '</td>'
-              + '<td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td><td>' + esc(scaleLabel(impactList(S), it.severity)) + '<br>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
-              + '<td>' + lvBadge(it.level, true) + '</td><td>' + esc(String(it.measure || '').slice(0, 90)) + '</td><td>' + fu + '</td>'
-              + '<td>' + (it.effect_status ? esc(META.effect_status[it.effect_status] || '') + '<br><span class="hint">' + esc(dispDate(it.effect_date)) + '</span>' : '<span class="hint">未確認</span>') + '</td>'
-              + '<td><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯此項' : '檢視') + '</button></td></tr>';
+            var opp = it.ro_kind === 'opportunity', fu = it.follow_up;
+            h += '<div class="rk-card ' + (opp ? 'opp' : 'risk') + '"><div class="rk-hd"><span class="rk-no">' + (i + 1) + '</span>'
+              + '<span class="rk-kind">' + (opp ? '機會' : '風險') + '</span>' + lvBadge(it.level, true)
+              + (it.confirm_no ? '<span class="rk-cn">' + esc((opp ? '機會編號 ' : '風險編號 ') + it.confirm_no) + '</span>' : '')
+              + (fu ? '<span class="hint">建議追蹤 ' + esc(fu.cycle) + '・下次 ' + esc(dispDate(fu.next)) + (fu.overdue ? ' <span class="fu-over">已到期</span>' : '') + '</span>' : '')
+              + '<span style="flex:1;"></span><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯此項' : '檢視') + '</button></div>'
+              + '<div class="rk-body">'
+              + f('利害關係者', esc(it.stakeholder || '—'), 'rk-s4') + f('需求與期望', esc(it.needs || '—'), 'rk-s4') + f('內／外部議題', esc(META.scopes[it.scope] || '—'), 'rk-s4')
+              + f('議題描述', esc(it.issue || '—')) + f('對組織的影響說明', esc(it.ro_text || '—'))
+              + f('風險／<br>機會', opp ? '機會' : '風險', 'rk-s3')
+              + f(opp ? esc(oppTerm('sev')) + '／<br>' + esc(oppTerm('freq')) : '嚴重度(S)／<br>發生率(O)', esc(scaleLabel(impactList(S), it.severity)) + '<br>' + esc(scaleLabel(likeList(S), it.frequency)), 'rk-s3')
+              + f(opp ? esc(oppTerm('level')) : '風險等級', lvBadge(it.level, true), 'rk-s3')
+              + f('風險與機會編號', esc(it.confirm_no || '（不需因應措施，未配發）'), 'rk-s3')
+              + f('因應措施', esc(it.measure || '—') + trackHtml(it))
+              + f('所需資源（人員、設施、工作環境、方法）', esc(it.resources ? String(it.resources).replace(/；(?=(?:人員|設施|工作環境|方法)：)/g, '\n') : '—'))
+              + (it.recheck_note ? f('重新評估（' + esc(dispDate(it.recheck_date)) + '）', esc(it.recheck_note)) : '')
+              + f('成效確認方式', esc(it.effect_check || '—'))
+              + f('成效確認結果', it.effect_status ? '<b>' + esc(META.effect_status[it.effect_status] || '') + '</b>　' + esc(dispDate(it.effect_date)) + (it.car_no ? '　矯正單 ' + esc(it.car_no) : '') : '<span class="hint">尚未確認</span>', 'rk-s4')
+              + f('主管裁示', esc(it.effect_ruling || '—'), 'rk-s6')
+              + (it.effect_evidence ? f('佐證', esc(it.effect_evidence)) : '')
+              + '</div></div>';
         });
-        box.html(h + '</tbody></table></div>');
+        box.html(h);
     });
 }
 $(document).on('click', '[data-editrow]', function(){ OPEN_ROW = +$(this).data('editrow'); openDoc('risk', +$(this).data('doc')); });

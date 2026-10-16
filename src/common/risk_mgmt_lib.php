@@ -46,6 +46,13 @@ const RM_LEVEL_COLORS = [
     ['bg' => '#DD5138', 'fg' => '#ffffff'],
     ['bg' => '#8B2E1E', 'fg' => '#ffffff'],
 ];
+/* 機會等級用「綠色系」（與風險的橘紅色系明顯區分；風險的顏色不動）：由淺到深＝低度機會→高度機會 */
+const RM_LEVEL_COLORS_OPP = [
+    ['bg' => '#DDF0E3', 'fg' => '#1f4d2e'],
+    ['bg' => '#9ED3B0', 'fg' => '#1f4d2e'],
+    ['bg' => '#3E9B6B', 'fg' => '#ffffff'],
+    ['bg' => '#1E6B47', 'fg' => '#ffffff'],
+];
 
 /** 設定預設值（只是「第一次使用時的起點」，管理員改了就以資料庫為準；陣列型一律存 JSON） */
 function rm_settings_default(): array
@@ -541,14 +548,16 @@ function rm_levels_view(array $set): array
     $out = [];
     foreach ((array)$set['rm_levels'] as $k => $lv) {
         $lo = (int)$lv['lo']; $hi = (int)$lv['hi'];
-        $out[] = array_merge($lv, rm_level_color($k), ['range'=>$lo === $hi ? (string)$lo : $lo . '～' . $hi]);
+        $oc = rm_level_color($k, true);
+        $out[] = array_merge($lv, rm_level_color($k), ['bg_opp'=>$oc['bg'], 'fg_opp'=>$oc['fg'], 'range'=>$lo === $hi ? (string)$lo : $lo . '～' . $hi]);
     }
     return $out;
 }
 
-function rm_level_color(int $rank): array
+function rm_level_color(int $rank, bool $opp = false): array
 {
-    return RM_LEVEL_COLORS[min($rank, count(RM_LEVEL_COLORS) - 1)];
+    $pal = $opp ? RM_LEVEL_COLORS_OPP : RM_LEVEL_COLORS;
+    return $pal[min($rank, count($pal) - 1)];
 }
 
 /* ============================ 編號 ============================ */
