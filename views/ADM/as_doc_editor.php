@@ -838,8 +838,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
           <table class="adt-hdr">
             <colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>
             <tr><td class="adt-hdr-co" rowspan="2" colspan="2">
-                  <div class="adt-hdr-coen">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>
-                  <div class="adt-hdr-cozh">超正齒輪科技有限公司</div></td>
+                  <div class="adt-hdr-coen"><span class="adt-fit">EXCELLENT GEAR TECHNOLOGY CO.,LTD</span></div>
+                  <div class="adt-hdr-cozh"><span class="adt-fit">超正齒輪科技有限公司</span></div></td>
                 <td class="adt-hdr-k"><span class="adt-fit">文件編號</span></td>
                 <td class="adt-hdr-v"><span class="adt-fit">2-DC-01</span></td></tr>
             <tr><td class="adt-hdr-k"><span class="adt-fit">頁　　次</span></td>

@@ -171,8 +171,10 @@
 .adt-hdr .adt-c3 { width: 16%; }
 .adt-hdr .adt-c4 { width: 26%; }
 .adt-hdr .adt-hdr-co { text-align: center; vertical-align: middle; }
-.adt-hdr-coen { font-size: 9pt; }
-.adt-hdr-cozh { font-size: 11pt; letter-spacing: 1px; }
+/* 公司名稱跟著「頁首字級」走：預設 9.5pt 時英文 9pt／中文 11pt（與改版前相同），
+   字級一變兩行一起等量增減，維持原本的大小關係。 */
+.adt-hdr-coen { font-size: calc(var(--adt-hdr-size, 9.5pt) - 0.5pt); }
+.adt-hdr-cozh { font-size: calc(var(--adt-hdr-size, 9.5pt) + 1.5pt); letter-spacing: 1px; }
 .adt-hdr .adt-hdr-k { text-align: center; }
 .adt-hdr .adt-hdr-v { text-align: center; }
 .adt-hdr .adt-hdr-nk { text-align: center; }
