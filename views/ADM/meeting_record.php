@@ -356,6 +356,7 @@ foreach ($roleRows as $rr) {
                 <tbody id="itmBodyD" data-eg-row-add="itemAddDirective" data-eg-row-del="itemDelLastDirective"></tbody>
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('directive')"><i class="fa fa-plus"></i> 新增上級指示項目</button>
+            <button type="button" class="b-att wt ai-draft-btn" data-aidraft="meeting_items" data-itemkind="directive" title="AI 草稿（僅全站管理員；只限內部稽核與管理審查會議）"><i class="fa fa-magic"></i> AI 草稿（內稽／管審）</button>
         </div>
         <div class="mt-sec" id="edSecGeneral">
             <div class="mt-sec-title">會議要項</div>
@@ -365,6 +366,7 @@ foreach ($roleRows as $rr) {
                 <tbody id="itmBodyG" data-eg-row-add="itemAddGeneral" data-eg-row-del="itemDelLastGeneral"></tbody>
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('general')"><i class="fa fa-plus"></i> 新增會議要項</button>
+            <button type="button" class="b-att wt ai-draft-btn" data-aidraft="meeting_items" data-itemkind="general" title="AI 草稿（僅全站管理員；只限內部稽核與管理審查會議）：依系統資料產生會議要項草稿，加在表格後面，請確認並指定負責部門"><i class="fa fa-magic"></i> AI 草稿（內稽／管審）</button>
         </div>
 
         <div class="mt-sec" id="edSecDisc">
@@ -805,6 +807,7 @@ foreach ($roleRows as $rr) {
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_ai_draft.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ai_draft.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
@@ -1522,6 +1525,24 @@ function groupSaveConfirm(){
 /* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
 function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
 function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
+/* AI 草稿（僅全站管理員；本機 Ollama；只限「內部稽核」「管理審查」會議）：把草稿一行一項加到表格後面，負責部門仍要人指定 */
+EGAiDraft.init('../../src/store/AiDraft_API.php');
+EGAiDraft.reg('meeting_items', {
+    collect:function($b){
+        var subj = $.trim($('#edSubject').val() || ''), mk = /管理審查|管審/.test(subj) ? 'mr' : (/內部稽核|內稽|稽核/.test(subj) ? 'ia' : '');
+        if (!mk){ alert('AI 草稿只提供「內部稽核」與「管理審查」會議：請先把主題填成含這些字樣（例：管理審查會議、內部稽核事前會議）。'); return null; }
+        return {meeting_kind:mk, subject:subj, year:+String($('#edDate').val() || '').slice(0, 4) || new Date().getFullYear(), item_kind:$b.data('itemkind')};
+    },
+    apply:function($b, t){
+        var kind = $b.data('itemkind'), arr = itemsArr(kind), n = 0;
+        $.each(String(t).split(/\n+/), function(_, l){
+            l = $.trim(l.replace(/^[\s・•\-*\d]+[.、)）]?\s*/, ''));
+            if (!l) return;
+            arr.push({item_id:0, content:l, due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', confirm_mode:'onsite', remark:''}); n++;
+        });
+        renderItems(kind);
+    }
+});
 function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', confirm_mode:'onsite', remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }

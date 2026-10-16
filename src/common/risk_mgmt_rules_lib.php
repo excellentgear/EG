@@ -393,15 +393,16 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
             break;
         case 'supplier':
             $auditIn = implode(',', array_map('intval', array_keys(rm_outsource_proc_nos($db)))) ?: '0';
-            $st = $db->prepare("SELECT COUNT(*) FROM (SELECT b.process_no FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
+            $bnd = rm_bound_makers_sql($db, array_keys(rm_outsource_proc_nos($db)));     // 以廠商「加工項目」綁定為準
+            $st = $db->prepare("SELECT COUNT(*) FROM (SELECT b.process_no FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 AND ml.maker_id_no IN (" . $bnd . ") WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . ") t");
             $st->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $sg = (int)$st->fetchColumn();
             if ($sg > 0) { $fromKpi = max($fromKpi ?? 0.5, 0.67); $why[] = $dataYear . ' 年有 ' . $sg . ' 個製程的委外只交給 1 家廠商'; $ids[] = 'O-SINGLE'; }
             // 集中度：單一外部廠商占外宣稱委外製程的筆數 ≥ RM_SG_VENDOR_PCT％，發生率至少「中間」
             // （準時交貨率好只代表目前沒出事，不代表供應中斷「幾乎不可能」；備援廠商評估完成前不下調）
-            $vs = $db->prepare("SELECT COUNT(*) n, MAX(c) m FROM (SELECT COUNT(*) c FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0
+            $vs = $db->prepare("SELECT COUNT(*) n, MAX(c) m FROM (SELECT COUNT(*) c FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 AND ml.maker_id_no IN (" . $bnd . ")
                                 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ? GROUP BY b.maker_id_no) t");
             $vs->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $vr = $vs->fetch(PDO::FETCH_ASSOC);
-            $vt = $db->prepare("SELECT COUNT(*) FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0
+            $vt = $db->prepare("SELECT COUNT(*) FROM bom_ing b JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 AND ml.maker_id_no IN (" . $bnd . ")
                                 WHERE b.maker_id_no<>'' AND b.process_no IN (" . $auditIn . ") AND b.outsource_date BETWEEN ? AND ?");
             $vt->execute([$dataYear . '-01-01', $dataYear . '-12-31 23:59:59']); $vall = (int)$vt->fetchColumn();
             if ($vall >= RM_SG_SINGLE_MIN && (int)$vr['m'] * 100 / $vall >= RM_SG_VENDOR_PCT) {

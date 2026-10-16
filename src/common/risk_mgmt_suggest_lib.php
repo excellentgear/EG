@@ -104,6 +104,27 @@ function rm_outsource_proc_nos(PDO $db): array
 }
 
 /**
+ * 「加工項目」綁定判定（主檔管理→廠商→加工項目所綁定的製程大類／小類，dict_maker_sub_category.bind_*／ref_*）：
+ * 廠商要綁定到「這些製程本身」或「這些製程所屬的大類」，才算那個製程的委外廠商。
+ * 不可只看 bom_ing 的發包紀錄——發包資料可能掛在別的製程上（例如熱處理廠商掛到齒研製程），
+ * 以廠商主檔的綁定為準。回傳可直接放進 IN (...) 的引號清單；沒有綁定任何廠商回 ''。
+ */
+function rm_bound_makers_sql(PDO $db, array $procNos): string
+{
+    $procNos = array_values(array_filter(array_map('intval', $procNos)));
+    if (!$procNos) return "''";
+    try {
+        $in = implode(',', $procNos);
+        $types = array_map('intval', $db->query("SELECT DISTINCT process_type_id FROM process_no WHERE ProcessNo IN ($in) AND process_type_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN));
+        $tin = $types ? implode(',', $types) : '0';
+        $ids = $db->query("SELECT DISTINCT m.maker_id_no FROM maker_sub_category_mapping m JOIN dict_maker_sub_category s ON s.sub_cat_id=m.sub_cat_id
+                           WHERE COALESCE(s.is_active,1)=1 AND (s.bind_process_type_id IN ($tin) OR s.bind_process_no_id IN ($in) OR s.ref_process_type_id IN ($tin))")->fetchAll(PDO::FETCH_COLUMN);
+        if (!$ids) return "''";
+        return implode(',', array_map(function ($x) use ($db) { return $db->quote((string)$x); }, $ids));
+    } catch (Throwable $e) { rm_sg_err($e); return "''"; }
+}
+
+/**
  * @return array[] 每筆：['source','key','stakeholder','needs','issue','why']
  */
 function rm_suggest_context(PDO $db, int $year): array
@@ -215,7 +236,8 @@ function rm_suggest_context(PDO $db, int $year): array
         $inAllAudit = implode(',', array_map('intval', array_keys(ot_astag_audit_process_nos($db)))) ?: '0';
         $outNos = rm_outsource_proc_nos($db);       // 只看「對外宣稱有外包」的稽核製程；沒設定就不產生任何委外建議
         $inAudit = $outNos ? implode(',', array_map('intval', array_keys($outNos))) : '0';
-        $st = $db->prepare("SELECT bi.maker_id_no, COUNT(*) n FROM bom_ing bi JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no AND COALESCE(ml.internal,0)=0 WHERE bi.maker_id_no<>'' AND bi.process_no IN ($inAudit) AND bi.outsource_date BETWEEN ? AND ? GROUP BY bi.maker_id_no ORDER BY n DESC");
+        $bnd = rm_bound_makers_sql($db, array_keys($outNos));     // 只計「加工項目」綁定到這些製程的廠商
+        $st = $db->prepare("SELECT bi.maker_id_no, COUNT(*) n FROM bom_ing bi JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no AND COALESCE(ml.internal,0)=0 AND ml.maker_id_no IN (" . $bnd . ") WHERE bi.maker_id_no<>'' AND bi.process_no IN ($inAudit) AND bi.outsource_date BETWEEN ? AND ? GROUP BY bi.maker_id_no ORDER BY n DESC");
         $st->execute([$y1, $y2 . ' 23:59:59']);
         $mk = $st->fetchAll(PDO::FETCH_ASSOC); $all = array_sum(array_column($mk, 'n'));
         $nm = function ($id) use ($db) { $q = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=?"); $q->execute([$id]); return (string)$q->fetchColumn() ?: $id; };
@@ -227,7 +249,7 @@ function rm_suggest_context(PDO $db, int $year): array
         }
         // 單一來源製程：當年實際委外紀錄裡，某製程只交給 1 家廠商做、且發包筆數夠多（≥ RM_SG_SINGLE_MIN 筆）
         $st = $db->prepare("SELECT b.process_no, COUNT(*) n, MIN(b.maker_id_no) mid FROM bom_ing b
-                            JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0
+                            JOIN maker_list ml ON ml.maker_id_no=b.maker_id_no AND COALESCE(ml.internal,0)=0 AND ml.maker_id_no IN (" . $bnd . ")
                             WHERE b.maker_id_no<>'' AND b.process_no IN ($inAudit) AND b.outsource_date BETWEEN ? AND ?
                             GROUP BY b.process_no HAVING COUNT(DISTINCT b.maker_id_no)=1 AND COUNT(*)>=" . RM_SG_SINGLE_MIN . " ORDER BY n DESC LIMIT 4");
         $st->execute([$y1, $y2 . ' 23:59:59']);

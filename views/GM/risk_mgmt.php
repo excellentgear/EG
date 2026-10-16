@@ -399,6 +399,14 @@ $perms  = rm_perms($db, $rmUser);
                 <label>機會</label><input type="text" id="setOppPrefix" maxlength="6" style="width:90px;"></div>
             <div class="hint"><b>風險與機會編號是什麼</b>：每條「需要因應措施」的風險或機會（風險準則裡勾選的等級）由系統自動配發的流水號，讓它在措施追蹤、管理審查、矯正單等地方被引用時有唯一編號可對照。
                 格式：前綴＋填表年度＋流水號，風險例如 R2026-001、機會例如 O2026-001，<b>兩者各自流水</b>。已配發的編號不會因設定變動而改變；一般以這個編號追蹤，成效確認只另外記錄確認日期、結果與裁示，不需要每次確認都產生新編號。</div></div>
+        <div class="set-sec ai-only"><h5>示範用假資料產生器（僅全站管理員）</h5>
+            <div class="fld" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <label>年度</label><input type="number" id="demoYear" style="width:90px;" value="<?= (int)date('Y') ?>">
+                <label style="font-weight:normal;"><input type="checkbox" id="demoAi" checked> 用本機 AI 寫文字</label>
+                <button type="button" class="btn-warm" id="btnDemoSeed">產生關聯假資料</button>
+                <button type="button" id="btnDemoClear">清除該年度假資料</button></div>
+            <div class="hint">一次產生溝通管理、風險與機會管制表、內稽／管審會議三者互相關聯的示範資料（標【假資料】）。該年度已有真實文件時不會產生；清除只刪【假資料】。AI 寫文字約需 1～3 分鐘。</div>
+            <div class="hint" id="demoMsg"></div></div>
         <span class="err" id="eSet"></span>
         <div class="hint">按「儲存設定」才會生效；設定改了之後，所有既有資料的風險等級會依新設定即時重算（資料本身不會被改動）。</div>
     </div>
@@ -456,6 +464,7 @@ $perms  = rm_perms($db, $rmUser);
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_ai_draft.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ai_draft.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
@@ -840,6 +849,21 @@ function scaleOptions(list, val){
     }
     return h;
 }
+/* AI 草稿（僅全站管理員；本機 Ollama）：依該列議題產生因應措施／成效確認方式草稿，填入後仍須人確認 */
+EGAiDraft.init('../../src/store/AiDraft_API.php');
+function aiRowCtx($b){
+    var $r = $b.closest('tr'), f = function(n){ return $.trim($r.find('[data-f="' + n + '"]').val() || ''); };
+    var tr = $r.find('.trk-row').map(function(){ return $.trim($(this).text()); }).get().join('；');
+    return {ro_kind:f('ro_kind'), stakeholder:f('stakeholder'), needs:f('needs'), issue:f('issue'), measure:f('measure'), tracks:tr};
+}
+EGAiDraft.reg('risk_measure', {
+    collect:function($b){ var c = aiRowCtx($b); if (!c.issue){ alert('請先選擇處境議題（議題描述是空的）'); return null; } return c; },
+    apply:function($b, t){ EGAiDraft.fill($b.closest('tr').find('[data-f="measure"]'), t); }
+});
+EGAiDraft.reg('risk_effect_check', {
+    collect:function($b){ var c = aiRowCtx($b); if (!c.issue){ alert('請先選擇處境議題'); return null; } return c; },
+    apply:function($b, t){ EGAiDraft.fill($b.closest('tr').find('[data-f="effect_check"]'), t); }
+});
 function trackHtml(it){
     var ts = it.tracks || [];
     if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
@@ -904,8 +928,8 @@ function rowHtml(kind, it, n){
           + fd('<span class="lb-frq">' + (opp ? esc(oppTerm('freq')) : '發生率(O)') + '</span>', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
           + fd('<span class="lb-lv">' + (opp ? esc(oppTerm('level')) : '風險等級') + '</span>', lvBadge(lv, true), 'c-lv lvc')
           + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
-          + fd('因應措施', ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
-          + fd('成效確認方式（指標與目標，年初設定）', ta('effect_check', it.effect_check), 'c-eff')
+          + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackHtml(it), 'c-measure') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
+          + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
           + fd('裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
@@ -1459,6 +1483,20 @@ $(document).on('click', '[data-pickasdoc]', function(){
     });
 });
 $('#btnSetting').on('click', function(){ renderSet(); openMask('setMask'); });
+function demoPost(data, done){
+    $('#demoMsg').text('處理中，請稍候…');
+    $.ajax({url:'../../src/store/AiDraft_API.php', type:'POST', dataType:'json', timeout:600000, data:$.extend({csrf:EGAiDraft.csrf()}, data)})
+     .done(function(r){ $('#demoMsg').text(done(r)); })
+     .fail(function(x){ var m=''; try{ m=JSON.parse(x.responseText).error; }catch(e){} $('#demoMsg').text(m || '失敗（逾時或 AI 沒有回應）'); });
+}
+$('#btnDemoSeed').on('click', function(){
+    var y = +$('#demoYear').val(); if (!y || !confirm('要產生 ' + y + ' 年的關聯假資料嗎？')) return;
+    demoPost({action:'demo_seed', year:y, ai:$('#demoAi').prop('checked') ? 1 : 0}, function(r){ var p=r.report||{}; return '已產生：溝通記錄 ' + p.comm_records + '、措施追蹤 ' + p.comm_tracks + '、處境議題 ' + p.context_items + '、風險項目 ' + p.risk_items + '、會議 ' + p.meetings + (p.warn && p.warn.length ? '；注意：' + p.warn.join('；') : ''); });
+});
+$('#btnDemoClear').on('click', function(){
+    var y = +$('#demoYear').val(); if (!y || !confirm('要清除 ' + y + ' 年標【假資料】的資料嗎？（真實資料不受影響）')) return;
+    demoPost({action:'demo_clear', year:y}, function(r){ return '已清除：' + JSON.stringify(r.cleared); });
+});
 $('#btnSetSave').on('click', function(){
     var errs = showSetErrs(false);
     if (errs.length){ $('#eSet').text('請先修正上面標紅的欄位：' + errs[0]); return; }

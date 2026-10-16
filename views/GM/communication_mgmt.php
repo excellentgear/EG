@@ -542,7 +542,7 @@ $roleLabel = cm_role_label($perms);
                 <select id="tkCat" data-eg-filter="輸入類別篩選…"></select></div>
             <div class="full"><label>反應內容 <span style="color:#DD5138;">*</span></label>
                 <textarea id="tkContent"></textarea><span class="err" id="eTkContent"></span></div>
-            <div class="full"><label>回應措施</label><textarea id="tkAction"></textarea></div>
+            <div class="full"><label>回應措施 <span id="tkAiBtn"></span></label><textarea id="tkAction"></textarea></div>
             <div class="full"><label>負責人 <span style="color:#DD5138;">*</span>
                     <span class="hint" style="font-weight:normal;">（先選部門，再挑該部門底下的人）</span></label>
                 <div class="pk-line">
@@ -973,6 +973,7 @@ $roleLabel = cm_role_label($perms);
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_ai_draft.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ai_draft.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
@@ -1360,7 +1361,7 @@ function renderItems(){
         b.append('<tr>'
             + '<td class="seq">' + (i + 1) + '</td>'
             + '<td><textarea class="iq"' + (ro ? ' readonly' : '') + '>' + esc(it.question) + '</textarea></td>'
-            + '<td><textarea class="ir"' + (ro ? ' readonly' : '') + '>' + esc(it.reply) + '</textarea></td>'
+            + '<td><textarea class="ir"' + (ro ? ' readonly' : '') + '>' + esc(it.reply) + '</textarea>' + (ro ? '' : EGAiDraft.btnHtml('comm_reply')) + '</td>'
             + '<td class="op">' + op + '</td></tr>');
     });
     $('#itemBody textarea').on('input', function(){ syncItemsFromDom(); });
@@ -2118,6 +2119,25 @@ $('#trackKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.track = 1;
 $('#trackShow,#trackCat').on('change', function(){ PAGE.track = 1; loadTrack(); });
 
 var TRACKROWS = {}, TKLEGACYOWNER = '';
+/* AI 草稿（僅全站管理員；本機 Ollama）：溝通記錄每一列的「回覆」、追蹤項目的「回應措施」 */
+EGAiDraft.init('../../src/store/AiDraft_API.php');
+$('#tkAiBtn').html(EGAiDraft.btnHtml('comm_track_action'));
+EGAiDraft.reg('comm_reply', {
+    collect:function($b){
+        var q = $.trim($b.closest('tr').find('.iq').val() || '');
+        if (!q){ alert('請先填寫左邊的「利害關係者反應或提問」'); return null; }
+        return {party:$.trim($('#fParty').val() || ''), question:q};
+    },
+    apply:function($b, t){ EGAiDraft.fill($b.closest('td').find('.ir'), t); syncItemsFromDom(); }
+});
+EGAiDraft.reg('comm_track_action', {
+    collect:function(){
+        var c = $.trim($('#tkContent').val() || '');
+        if (!c){ alert('請先填寫「反應內容」'); return null; }
+        return {party:$.trim($('#tkParty').val() || ''), content:c};
+    },
+    apply:function($b, t){ EGAiDraft.fill($('#tkAction'), t); }
+});
 /* 負責人顯示：部門名稱＋姓名（兼任者才看得出是以哪個部門的身分負責） */
 function ownerTxt(r){ return (r.owner_dept_name ? '<span class="hint">' + esc(r.owner_dept_name) + '</span><br>' : '') + esc(r.owner_name); }
 /* 追蹤表刻意沒有「新增」入口（使用者指定）：措施追蹤項目一定是從溝通記錄表的某一列問題
