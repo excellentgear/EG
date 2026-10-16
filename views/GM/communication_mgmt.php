@@ -2732,9 +2732,13 @@ $('#btnSetSave').on('click', function(){
 function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, showPageCounter){
     if (showPageCounter === undefined) showPageCounter = true;
     var asHtml = esc(String(docNo || ''));
-    var css = '@page{size:A4 ' + (landscape ? 'landscape' : 'portrait') + ';margin:0;}'
+    /* 邊界一律由 @page 負責（每一頁都有）：body padding 只作用在第一頁與最後一頁，
+       下一頁內容會貼上緣、固定在頁尾的編號也會壓到表格內容。編號與頁碼放在頁邊區 margin box，不佔內容區。 */
+    var docNoCss = String(docNo || '').replace(/[^0-9A-Za-z一-鿿._\- ]/g, '');
+    var css = '@page{size:A4 ' + (landscape ? 'landscape' : 'portrait') + ';margin:12mm 8mm 16mm;'
+        + (docNoCss ? '@bottom-right{content:"' + docNoCss + '";font-size:9pt;color:#333;}' : '') + '}'
         + 'html,body{margin:0;padding:0;}'
-        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:10mm 8mm 12mm;'
+        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
         + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pt-head{text-align:center;margin-bottom:6px;}'
         + '.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
@@ -2749,7 +2753,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, showPageCoun
         + 'table.pt td.l.mid{vertical-align:middle;}'
         /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
+        + 'table.pt thead{display:table-header-group;}table.pt tr{page-break-inside:avoid;}'
         + (extraCss || '');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
@@ -2762,7 +2766,6 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, showPageCoun
     // <!DOCTYPE html> 不可省略：少了它會落入 Quirks Mode，scrollHeight 量不準、單頁判斷會失準
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css
         + '</style></head><body>' + bodyHtml
-        + (asHtml ? '<div class="pt-foot">' + asHtml + '</div>' : '')
         + '<scr' + 'ipt>window.onload=function(){' + onloadJs + 'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
     w.document.close();
     return w;
