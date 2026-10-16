@@ -947,7 +947,7 @@ function rowHtml(kind, it, n){
           + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
-          + fd('裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
+          + fd('主管裁示', ta('effect_ruling', it.effect_ruling), 'c-er')
           + fd('佐證 <button type="button" class="b-mini warm" data-evidence><i class="fa fa-search"></i> 依資料產生佐證／建議結果</button>', ta('effect_evidence', it.effect_evidence) + '<div class="ev-reason"></div>', 'c-ev');
     }
     return h + td('<button type="button" class="b-mini danger" data-delrow title="刪除此列"><i class="fa fa-times"></i></button>', 'op') + '</tr>';
@@ -1625,6 +1625,20 @@ function egPrintWindow(title, bodyHtml, docNo, extraCss){
 }
 /* 列印用的成效確認（重點式）：結果＋一行確認摘要＋裁示＋佐證編號。
    逐月 KPI 數據與每一項措施追蹤的明細留在系統（佐證欄全文），不塞進正式表單。 */
+/* 等級名稱 4 個字以上時每 2 個字換一行（高度危險→高度／危險），欄位窄時才不會被切成「高度危／險」 */
+function lvWrap(name){
+    var s = String(name || '');
+    if (s.length < 4) return esc(s);
+    var o = []; for (var i = 0; i < s.length; i += 2) o.push(esc(s.substr(i, 2)));
+    return o.join('<br>');
+}
+function monthSpanTxt(ms){
+    ms = ms.slice().sort(function(a, b){ return a - b; });
+    if (!ms.length) return '';
+    if (ms.length === 1) return ms[0] + ' 月';
+    var contig = true; for (var i = 1; i < ms.length; i++) if (ms[i] !== ms[i - 1] + 1) contig = false;
+    return contig ? ms[0] + '～' + ms[ms.length - 1] + ' 月' : ms.join('、') + ' 月';
+}
 function evidenceBrief(txt){
     var lines = String(txt || '').split('\n').map(function(x){ return x.trim(); }).filter(function(x){ return x; });
     if (!lines.length) return {first:'', refs:''};
@@ -1636,9 +1650,11 @@ function evidenceBrief(txt){
     // 逐月數據（「1月 76%✗、2月 46%✗…」）濃縮成「N 個月中 M 個月未達標」；其他說明只留前 46 字
     var mm = first.match(/\d+\s*月\s*[\d.]+\s*[^\s、，；。]*/g);
     if (mm && mm.length >= 2){
-        var miss = 0; $.each(mm, function(_, x){ if (x.indexOf('✗') >= 0) miss++; });
-        var last3 = mm.slice(-3).every(function(x){ return x.indexOf('✗') < 0; });
-        first = first.split('（')[0] + ' ' + mm.length + ' 個月中 ' + miss + ' 個月未達標' + (last3 ? '，最近 3 個月已達標' : '，最近 3 個月仍有未達標');
+        var miss = 0, nums = []; $.each(mm, function(_, x){ if (x.indexOf('✗') >= 0) miss++; nums.push(parseInt(x, 10)); });
+        var l3 = mm.slice(-3), l3m = $.map(l3, function(x){ return parseInt(x, 10); });
+        var last3 = l3.length >= 3 && l3.every(function(x){ return x.indexOf('✗') < 0; });
+        first = first.split('（')[0] + '：' + monthSpanTxt([nums[0], nums[nums.length - 1]]) + '共 ' + mm.length + ' 個月有資料，其中 ' + miss + ' 個月未達標'
+            + (l3.length >= 3 ? '；' + monthSpanTxt(l3m) + (last3 ? '連續達標' : '仍有月份未達標') : '');
     } else if (first.length > 46) first = first.slice(0, 46) + '…';
     return {first:first, refs:ids.length ? '措施追蹤 ' + ids.join('、') : ''};
 }
@@ -1647,8 +1663,8 @@ function effectPrint(it){
     if (it.effect_status && it.effect_status !== 'unconfirmed'){
         var e = evidenceBrief(it.effect_evidence);
         h += '<br><b>【成效確認：' + esc(META.effect_status[it.effect_status] || '') + '】' + esc(dispDate(it.effect_date)) + '</b>';
-        if (e.first) h += '<br>確認：' + esc(e.first);
-        if (it.effect_ruling) h += '<br>裁示：' + esc(it.effect_ruling);
+        if (e.first) h += '<br>數據查核：' + esc(e.first);
+        if (it.effect_ruling) h += '<br>主管裁示：' + esc(it.effect_ruling);
         h += '<br>佐證：' + esc(e.refs || '見系統成效確認紀錄');
         if (it.car_no) h += '<br>矯正單：' + esc(it.car_no);
     }
@@ -1683,7 +1699,7 @@ function printDoc(docId){
                     + '<td class="l">' + esc(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td>'
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
                     + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '</td><td>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
-                    + '<td>' + esc(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
+                    + '<td>' + lvWrap(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
                     + '<td class="l">' + measurePrint(it) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
             }
         });

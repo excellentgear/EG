@@ -43,7 +43,7 @@ const RM_RULE_CATS = [
     'delivery' => ['label' => '交期／準時出貨', 'ro' => 'risk', 'sev' => 0.9,
         'kw' => ['準時出貨', '交期', '延後出貨', '出貨延', '交貨', '準時交貨', '遲交'],
         'impact' => '準時出貨率未達目標，客戶抱怨增加並可能失去訂單。',
-        'measures' => ['生管組每週交期檢討與關鍵製程負荷預警，並將交期狀況提供業務課回報客戶', '接單時由生管組確認關鍵製程產能，必要時調整交期或外包'],
+        'measures' => ['生管組每週確認關鍵製程負荷並預警，將交期狀況提供業務課回報客戶', '接單時由生管組確認關鍵製程產能，必要時調整交期或外包'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標',
         'kpi' => ['準時出貨'], 'trk_kw' => ['交期', '出貨', '延後', '延遲'], 'trk_kind' => 'customer', 'trk_not' => ['首次出貨', '年度報價', '客訴']],
     'supplier' => ['label' => '供應鏈／委外', 'ro' => 'risk', 'sev' => 0.8,
@@ -55,7 +55,7 @@ const RM_RULE_CATS = [
     'quality' => ['label' => '品質／客訴', 'ro' => 'risk', 'sev' => 0.9,
         'kw' => ['客訴', '客戶退貨', '退貨', '品質異常', '不良', '矯正', '品質穩定'],
         'impact' => '客訴或不良持續發生，影響客戶信任與再下單意願，並增加重工、報廢與運費成本。',
-        'measures' => ['客訴與不良逐件開立異常矯正處理單，每月品質檢討會檢討原因分類並回報客戶', '重複出現的原因建立預防措施並追蹤到結案'],
+        'measures' => ['客訴與不良逐件開立異常矯正處理單，並回報客戶處理結果', '重複出現的原因建立預防措施並追蹤到結案'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標；矯正與預防的措施追蹤如期結案',
         'kpi' => ['客訴', '不良率'], 'trk_kw' => ['客訴', '矯正', '不良', '預防措施'], 'trk_kind' => 'customer'],
     'concentration' => ['label' => '客戶集中度', 'ro' => 'risk', 'sev' => 0.8,
@@ -67,13 +67,13 @@ const RM_RULE_CATS = [
     'new_customer' => ['label' => '新客戶首次出貨', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['首次出貨', '新客戶', '新客', '商機', '開發客戶'],
         'impact' => '新客戶首次出貨後若能持續下單，可分散對大客戶的依賴並提高產能利用率。',
-        'measures' => ['與新客戶於首次出貨當下或 30 天內進行溝通（了解使用情形與後續需求），並留存溝通記錄', '每季檢討新客戶的訂單與產能'],
+        'measures' => ['與新客戶於首次出貨當下或 30 天內進行溝通（了解使用情形與後續需求），並留存溝通記錄', '每季由業務課與生管組確認新客戶的訂單與產能預留'],
         'metric' => '當年首次出貨客戶數與金額不低於前一年同期；首次出貨的新客戶皆於首次出貨當下或 30 天內留有溝通記錄',
         'kpi' => ['接單率'], 'trk_kw' => ['首批', '新客戶', '首次出貨', '年度需求'], 'trk_kind' => 'customer'],
     'inquiry' => ['label' => '接單評估與交期回覆', 'ro' => 'opportunity', 'sev' => 0.4,
         'kw' => ['詢價', '轉單', '評估與承接', '評估表', 'PFMEA', '導入'],
         'impact' => '接到訂單時若能快速完成製程、產能與品質評估並回覆交期，可提高接單轉換並避免交期承諾失準。',
-        'measures' => ['接到訂單時，由技術課、生產課、生管組、品管課評估製程可行性、產能與品質要求並回覆交期，業務課彙整後回覆客戶', '每月檢討接單評估與交期回覆的時效'],
+        'measures' => ['接到訂單時，由技術課、生產課、生管組、品管課評估製程可行性、產能與品質要求並回覆交期，業務課彙整後回覆客戶', '業務課於客戶要求的時效內回覆交期'],
         'metric' => '{kpi}不低於年度目標；接單評估的措施追蹤如期結案',
         'kpi' => ['接單率'], 'trk_kw' => ['接單評估'], 'trk_kind' => ''],
     'existing_customer' => ['label' => '既有客戶擴單', 'ro' => 'opportunity', 'sev' => 0.4,
@@ -104,7 +104,9 @@ const RM_RULE_CATS = [
     'sales' => ['label' => '業績／營收目標', 'ro' => 'risk', 'sev' => 0.75,
         'kw' => ['達成率', '受訂', '銷貨額', '營收', '接單', '訂單金額'],
         'impact' => '業績達成率落後，影響營收與產能規劃。',
-        'measures' => ['業務課每月檢討達成率落後原因，並提出衝刺方案（客戶訂單預測、報價跟催）', '依訂單預測調整產能與交期承諾'],
+        'measures' => ['業務課每月與主要客戶確認訂單預測，並跟催未回覆的報價', '依訂單預測調整產能與交期承諾'],
+        // 同一類別底下對應不同 KPI 時，第一條措施依 KPI 區分（否則「受訂金額」與「銷貨額」兩列會寫得一模一樣）
+        'measures_kpi' => ['受訂' => '業務課每月與主要客戶確認訂單預測，並跟催未回覆的報價', '銷貨額' => '業務課與生管組每月核對待出貨訂單與交期，已完工品項如期出貨'],
         'metric' => '{kpi}回到年度目標並連續 3 個月達標',
         'kpi' => ['銷貨額達成', '受訂目標'], 'trk_kw' => ['訂單預測與產能預留', '報價', '衝刺'], 'trk_kind' => 'customer', 'trk_not' => ['延後', '客訴']],
     'generic' => ['label' => '一般議題', 'ro' => 'risk', 'sev' => 0.65,
@@ -125,7 +127,7 @@ function rm_rule_catalog(): array
         $rows[] = ['id'=>"S-$K", 'kind'=>'嚴重度(S)', 'cat'=>$c['label'], 'when'=>'此類議題的衝擊', 'then'=>'嚴重度比例 ' . $c['sev'] . '（再依「模組設定」目前的嚴重度(S)級數換算成等級）'];
     }
     $rows[] = ['id'=>'C-GENERIC', 'kind'=>'分類', 'cat'=>'一般議題', 'when'=>'沒有任何關鍵字命中', 'then'=>'歸類為「一般議題」，請人工確認'];
-    $rows[] = ['id'=>'O-KPI', 'kind'=>'發生率(O)', 'cat'=>'有對應 KPI 的類別', 'when'=>'資料年度內 KPI 未達標月份占比 r', 'then'=>'r=0→0.34；r<30%→0.5；r<60%→0.67；其餘→1.0；最近一個月仍未達標時至少 0.67；資料不足 2 個月→0.5'];
+    $rows[] = ['id'=>'O-KPI', 'kind'=>'發生率(O)', 'cat'=>'有對應 KPI 的類別', 'when'=>'資料年度內 KPI 未達標月份占比 r', 'then'=>'r=0→0.34；r<30%→0.5；r<60%→0.67；其餘→1.0；資料中最後一個月仍未達標時至少 0.67；資料不足 2 個月→0.5'];
     $rows[] = ['id'=>'O-VENDOR', 'kind'=>'發生率(O)', 'cat'=>'供應鏈／委外', 'when'=>'對外宣稱委外的稽核製程中，單一外部廠商占委外筆數 ≥30%（至少 20 筆）', 'then'=>'發生率比例至少 0.5（準時交貨率好不代表供應中斷「幾乎不可能」）'];
     $rows[] = ['id'=>'O-OPP', 'kind'=>'發生率(O)', 'cat'=>'既有客戶擴單／新客戶詢價', 'when'=>'機會的發生率＝實現可能性：依對應 KPI 當年達標月份占比 m', 'then'=>'m≥80%→1.0；≥50%→0.67；≥30%→0.5；其餘 0.34（與風險相反：達標越多可能性越高）'];
     $rows[] = ['id'=>'E-GUARD', 'kind'=>'成效', 'cat'=>'全部類別', 'when'=>'指標沒改善、但找不到任何對應的措施追蹤', 'then'=>'不判無效，改為「未確認」並提示先建立措施追蹤（沒有措施可對照就判無效，等於還沒開始做就開矯正單）'];
@@ -139,7 +141,7 @@ function rm_rule_catalog(): array
     $rows[] = ['id'=>'O-LEGAL', 'kind'=>'發生率(O)', 'cat'=>'法規遵循', 'when'=>'政府單位相關措施追蹤是否有逾期', 'then'=>'有逾期→0.67；否則 0.34'];
     $rows[] = ['id'=>'O-NEWCUST', 'kind'=>'發生率(O)', 'cat'=>'新客戶／商機', 'when'=>'當年首次出貨的客戶數', 'then'=>'≥20 家→1.0；≥5 家→0.67；≥1 家→0.5（機會：數字愈大代表實現機會愈高）'];
     foreach (RM_RULE_CATS as $k => $c) $rows[] = ['id'=>'M-' . strtoupper($k), 'kind'=>'措施', 'cat'=>$c['label'], 'when'=>'由處境分析表產生風險草稿時', 'then'=>'因應措施：' . implode('；', $c['measures']) . '　成效確認方式：' . $c['metric']];
-    $rows[] = ['id'=>'E-KPI', 'kind'=>'成效', 'cat'=>'有對應 KPI 的類別', 'when'=>'成效確認時，KPI 資料年度的逐月數字', 'then'=>'最近 3 個月全部達標→有效；措施追蹤尚有未逾期未結案項目→進行中；較前期改善或有達標月份→部分有效；其餘→無效；資料不足 3 個月→未確認'];
+    $rows[] = ['id'=>'E-KPI', 'kind'=>'成效', 'cat'=>'有對應 KPI 的類別', 'when'=>'成效確認時，KPI 資料年度的逐月數字', 'then'=>'資料中最後 3 個月（說明會寫出實際月份，例如 7～9 月）全部達標→有效；措施追蹤尚有未逾期未結案項目→進行中；較前期改善或有達標月份→部分有效；其餘→無效；資料不足 3 個月→未確認'];
     $rows[] = ['id'=>'E-TRACK', 'kind'=>'成效', 'cat'=>'沒有 KPI 的類別（以及人員／能力傳承，KPI 只列為參考）', 'when'=>'相關措施追蹤（依措施欄註記的單號、類別關鍵字、溝通對象類型找出）', 'then'=>'全部如期結案→有效；有逾期→無效；有未結案但未逾期→進行中；找不到追蹤項目→未確認'];
     $rows[] = ['id'=>'E-CONC', 'kind'=>'成效', 'cat'=>'客戶集中度', 'when'=>'前三大客戶占比 vs 警戒線 50%', 'then'=>'低於 50%→有效；50%～未達 60%→部分有效；60% 以上→無效'];
     $rows[] = ['id'=>'E-NEWCUST', 'kind'=>'成效', 'cat'=>'新客戶／商機', 'when'=>'當年首次出貨客戶數與金額 vs 前一年；首次出貨起 30 天內是否留有溝通記錄', 'then'=>'兩者皆不低於前一年→有效；其一→部分有效；皆低於→無效；有新客戶沒有 30 天內的溝通記錄時最多部分有效'];
@@ -178,8 +180,19 @@ function rm_rule_classify(string $text, string $dim = ''): array
 }
 
 /** 某 KPI（名稱含關鍵字）在某年度的逐月資料與是否達標 */
-function rm_rule_kpi(PDO $db, int $year, array $kws): ?array
+/** 月份清單 → 文字：連續就「7～9 月」，不連續就「5、7、9 月」 */
+function rm_rule_month_span(array $ms): string
 {
+    $ms = array_values(array_unique(array_map('intval', $ms))); sort($ms);
+    if (!$ms) return '';
+    if (count($ms) === 1) return $ms[0] . ' 月';
+    $contig = true; for ($i = 1; $i < count($ms); $i++) if ($ms[$i] !== $ms[$i - 1] + 1) $contig = false;
+    return $contig ? $ms[0] . '～' . end($ms) . ' 月' : implode('、', $ms) . ' 月';
+}
+/** $hint＝議題文字：同一類別有好幾個 KPI 時，優先用名稱出現在議題裡的那一個（否則兩條不同 KPI 的議題會對到同一個 KPI） */
+function rm_rule_kpi(PDO $db, int $year, array $kws, string $hint = ''): ?array
+{
+    if ($hint !== '') usort($kws, function ($a, $b) use ($hint) { return (mb_strpos($hint, $b) !== false ? 1 : 0) <=> (mb_strpos($hint, $a) !== false ? 1 : 0); });
     foreach ($kws as $kw) {
         $st = $db->prepare("SELECT y.indicator_id, i.name, y.target_direction td, y.target_value tv, y.target_unit tu FROM kpi_as_indicator_year y
                             JOIN kpi_as_indicator i ON i.indicator_id=y.indicator_id WHERE y.year=? AND y.target_value IS NOT NULL AND i.name LIKE ? ORDER BY i.item_no LIMIT 1");
@@ -202,7 +215,7 @@ function rm_rule_kpi(PDO $db, int $year, array $kws): ?array
         $avgB = $half ? array_sum(array_slice($vals, $half)) / (count($vals) - $half) : null;
         $improved = $avgA !== null && ($gte ? $avgB > $avgA : $avgB < $avgA);
         return ['name'=>$ind['name'], 'gte'=>$gte, 'target'=>$tv, 'unit'=>(string)$ind['tu'], 'months'=>$months, 'n'=>count($months), 'miss'=>$miss,
-                'last_month'=>$lastM, 'last_ok'=>$lastM ? $ok($months[$lastM]) : true, 'met3'=>$met3, 'improved'=>$improved, 'ok'=>$ok];
+                'last_month'=>$lastM, 'last3_txt'=>rm_rule_month_span(array_keys($last3)), 'span_txt'=>$keys ? rm_rule_month_span([min($keys), max($keys)]) : '', 'last_ok'=>$lastM ? $ok($months[$lastM]) : true, 'met3'=>$met3, 'improved'=>$improved, 'ok'=>$ok];
     }
     return null;
 }
@@ -330,7 +343,7 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
     $why = ['分類：' . $c['label'] . ($hits ? '（命中關鍵字：' . implode('、', $hits) . '）' : '（沒有關鍵字命中，請人工確認）')];
     $sevF = $c['sev']; $occF = 0.5;
 
-    $kpi = ($c['kpi'] && $cat !== 'new_customer') ? rm_rule_kpi($db, $dataYear, $c['kpi']) : null;
+    $kpi = ($c['kpi'] && $cat !== 'new_customer') ? rm_rule_kpi($db, $dataYear, $c['kpi'], (string)($ctx['issue'] ?? '')) : null;
     $fromKpi = null;
     if ($kpi) {
         if ($kpi['n'] < 2) { $fromKpi = 0.5; $why[] = $kpi['name'] . ' ' . $dataYear . ' 年資料不足 2 個月，發生率取中間值'; }
@@ -338,7 +351,7 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
             $r = $kpi['miss'] / $kpi['n'];
             $fromKpi = $r == 0 ? 0.34 : ($r < 0.3 ? 0.5 : ($r < 0.6 ? 0.67 : 1.0));
             if (!$kpi['last_ok']) $fromKpi = max($fromKpi, 0.67);
-            $why[] = $kpi['name'] . ' ' . $dataYear . ' 年 ' . $kpi['n'] . ' 個月中 ' . $kpi['miss'] . ' 個月未達標（' . rm_sg_f($r * 100, 0) . '%）' . ($kpi['last_ok'] ? '' : '，最近一個月仍未達標');
+            $why[] = $kpi['name'] . ' ' . $dataYear . ' 年 ' . $kpi['n'] . ' 個月中 ' . $kpi['miss'] . ' 個月未達標（' . rm_sg_f($r * 100, 0) . '%）' . ($kpi['last_ok'] ? '' : '，截至 ' . $kpi['last_month'] . ' 月仍未達標');
         }
         $ids[] = 'O-KPI';
     }
@@ -405,10 +418,12 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
     $why[] = '嚴重度(S)比例 ' . rm_sg_f($sevF * 100, 0) . '% → 第 ' . $sev . ' 級；發生率(O)比例 ' . rm_sg_f($occF * 100, 0) . '% → 第 ' . $occ . ' 級';
 
     // 措施與成效確認方式
-    $measure = implode('；', $c['measures']);
+    $ms = $c['measures'];
+    if (!empty($c['measures_kpi']) && $kpi) foreach ($c['measures_kpi'] as $kw => $mtxt) if (mb_strpos($kpi['name'], $kw) !== false) { $ms[0] = $mtxt; break; }
+    $measure = implode('；', $ms);
     // 成效確認方式寫的是「這張表的年度」要達成的目標：KPI 目標值會逐年調整（例：客訴頻率 2025 是 ≤5%、2026 改成 ≤2 件），
     // 評分用的是前一年資料、但目標一定要寫當年度的，否則措施欄與日後的佐證會出現兩個不同的目標值。
-    $kpiDoc = ($docYear !== null && $docYear !== $dataYear && $c['kpi']) ? rm_rule_kpi($db, $docYear, $c['kpi']) : null;
+    $kpiDoc = ($docYear !== null && $docYear !== $dataYear && $c['kpi']) ? rm_rule_kpi($db, $docYear, $c['kpi'], (string)($ctx['issue'] ?? '')) : null;
     $kpiT = $kpiDoc ?: $kpi;
     $kpiName = $kpiT ? $kpiT['name'] : ($c['kpi'] ? $c['kpi'][0] . '相關 KPI' : '');
     $metric = str_replace('{kpi}', $kpiName ? ' KPI「' . $kpiName . '」' . ($kpiT ? '（' . ($docYear ?: $dataYear) . ' 年度目標 ' . ($kpiT['gte'] ? '≥' : '≤') . rm_sg_f($kpiT['target'], 2) . $kpiT['unit'] . '）' : '') : '指標', $c['metric']);
@@ -460,7 +475,7 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         return ['effective', '相關 ' . $closed . ' 項措施追蹤全部如期結案'];
     };
 
-    $kpi = ($c['kpi'] && $cat !== 'new_customer') ? rm_rule_kpi($db, $year, $c['kpi']) : null;
+    $kpi = ($c['kpi'] && $cat !== 'new_customer') ? rm_rule_kpi($db, $year, $c['kpi'], (string)($row['issue'] ?? '')) : null;
     if ($cat === 'quality') {
         $irq = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE " . rm_audit_in($db,'d_setting_id') . " AND YEAR(IR_date)=?");
         $irq->execute([$year]); $i0 = (int)$irq->fetchColumn(); $irq->execute([$year - 1]); $i1 = (int)$irq->fetchColumn();
@@ -486,7 +501,12 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         // 當年度還沒過完時，前一年也只比到同一天（不拿半年去比整年）
         $mmdd = $year === (int)substr($today, 0, 4) ? substr($today, 5, 5) : '12-31';
         [$n0, $a0] = rm_rule_newcust($db, $year, $mmdd); [$n1, $a1] = rm_rule_newcust($db, $year - 1, $mmdd); $ids[] = 'E-NEWCUST';
-        array_unshift($lines, $year . ' 年（1/1～' . str_replace('-', '/', $mmdd) . '）首次出貨客戶 ' . $n0 . ' 家、金額 ' . number_format($a0) . ' 元；前一年同期 ' . $n1 . ' 家、' . number_format($a1) . ' 元');
+        // 不顯示金額，改顯示新客戶出貨占稽核製程出貨的比例（判定仍用金額比較）
+        $tt = function ($y) use ($db, $mmdd) {
+            return (float)$db->query("SELECT SUM(Qty*Unit_price) FROM is_list WHERE " . rm_audit_in($db, 'd_setting_id') . " AND Order_date BETWEEN '$y-01-01' AND '$y-$mmdd'")->fetchColumn();
+        };
+        $pc = function ($a, $t) { return $t > 0 ? '占稽核製程出貨 ' . rm_sg_f($a * 100 / $t) . '%' : '無可比較的出貨'; };
+        array_unshift($lines, $year . ' 年（1/1～' . str_replace('-', '/', $mmdd) . '）首次出貨客戶 ' . $n0 . ' 家，' . $pc($a0, $tt($year)) . '；前一年同期 ' . $n1 . ' 家，' . $pc($a1, $tt($year - 1)));
         [$cn, $cd, $cm] = rm_rule_newcust_comm($db, $year, $mmdd); $ids[] = 'E-NEWCOMM';
         $lines[] = '新客戶 ' . $cn . ' 家中，' . $cd . ' 家於首次出貨當日起 30 天內留有溝通記錄' . ($cm ? '；尚無溝通記錄：' . implode('、', array_slice($cm, 0, 6)) . (count($cm) > 6 ? ' 等 ' . count($cm) . ' 家' : '') : '');
         $good = ($n0 >= $n1 ? 1 : 0) + ($a0 >= $a1 ? 1 : 0);
@@ -500,7 +520,7 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
         $ids[] = 'E-KPI';
         array_unshift($lines, rm_rule_kpi_txt($kpi));
         if ($kpi['n'] < 3) { $status = 'unconfirmed'; $reason = $kpi['name'] . ' 目前只有 ' . $kpi['n'] . ' 個月資料，不足 3 個月無法判斷'; }
-        elseif ($kpi['met3']) { $status = 'effective'; $reason = '最近 3 個月 ' . $kpi['name'] . ' 全部達標'; }
+        elseif ($kpi['met3']) { $status = 'effective'; $reason = $year . ' 年 ' . $kpi['last3_txt'] . '（連續 3 個月）' . $kpi['name'] . ' 全部達標'; }
         elseif ($open && !$over) { $status = 'doing'; $reason = $kpi['name'] . ' 尚未連續 3 個月達標，但措施追蹤仍在執行中'; }
         elseif ($kpi['improved'] || ($kpi['n'] - $kpi['miss']) > 0 && $kpi['last_ok']) { $status = 'partial'; $reason = $kpi['name'] . ' 較前期改善或已有月份達標，但尚未連續 3 個月達標'; }
         else { $status = 'ineffective'; $reason = $kpi['name'] . ' 未改善' . ($tracks && !$open ? '，而相關措施已執行完畢' : ''); }
