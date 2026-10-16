@@ -217,6 +217,7 @@ $openId = (int)($_GET['id'] ?? 0);
             <button class="ec-btn ghost" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
             <span style="flex:1"></span>
             <?php if ($P['canEdit']): ?>
+            <button class="ec-btn ghost" id="btnDwgSuggest" title="依圖面變更紀錄，列出建議要開立的申請單"><i class="fa fa-lightbulb-o"></i> 依圖面變更建議 <span id="dwgSugCnt" class="pill draft" style="display:none;"></span></button>
             <button class="ec-btn" id="btnNew"><i class="fa fa-plus"></i> 開立申請單</button>
             <?php endif; ?>
             <?php if ($P['canAdmin']): ?>
@@ -406,6 +407,21 @@ $openId = (int)($_GET['id'] ?? 0);
             <textarea id="rejReason" class="form-control" rows="4"></textarea><div class="err">請填寫退回原因</div></div>
     </div>
     <div class="m-foot"><button class="b-ok" id="btnRejOk">確定退回</button></div>
+</div></div>
+
+<!-- ══════════ 依圖面變更紀錄建議開單 ══════════ -->
+<div class="ec-mask" id="dwgMask"><div class="ec-modal xwide">
+    <div class="m-head"><span>依圖面變更紀錄建議開立的申請單</span><span class="m-close" onclick="closeMask('dwgMask')">✕</span></div>
+    <div class="m-body">
+        <div style="border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;padding:6px 10px;margin-bottom:8px;color:#7A4A12;font-size:12px;">
+            列出「圖面變更紀錄」（品質管理 → 圖面變更紀錄）已送出、但還沒有對應工程變更申請單的項目。
+            <b>客戶要求的變更一定要開單</b>（預設勾選）；內部變更由技術課判斷（預設不勾）。
+            勾選後按「開立草稿」，料號、客戶與變更摘要會自動帶入，開出來是草稿、確認後才送出。
+            同料號同一次變更（客戶版次或客戶圖面日期相同）已有單據者不會列入。
+        </div>
+        <div id="dwgList"></div>
+    </div>
+    <div class="m-foot"><button class="b-ok" id="btnDwgMake">開立草稿</button></div>
 </div></div>
 
 <!-- ══════════ 挑選料號附件 ══════════ -->
@@ -1129,7 +1145,7 @@ function renderAttach(slot){
             h += '<span class="none">（未選）</span>';
         }
         h += '</span>';
-        if (a) h += '<button type="button" class="att-mini" onclick="openAttFile('+a.attach_id+')">檢視</button>';
+        if (a) h += '<button type="button" class="att-mini" onclick="openAttFile(\''+esc(a.url)+'\')">檢視</button>';
         if (canEdit) {
             h += '<button type="button" class="att-mini" onclick="openAttPick(\''+slot+'\','+c.id+')">'
                + (a ? '換一個' : '挑選…') + '</button>';
@@ -1139,8 +1155,8 @@ function renderAttach(slot){
     });
     $box.html(h);
 }
-function openAttFile(attachId){
-    window.open('../../src/store/Part_Attachment_API.php?action=download&id=' + attachId, '_blank');
+function openAttFile(url){
+    window.open(url, '_blank');
 }
 function delAttach(rowId){
     if (!CUR) return;
@@ -1175,41 +1191,41 @@ function openAttPick(slot, catId){
     $('#attTitle').text('挑選附件　' + (DICT.attach_slots[slot] ? DICT.attach_slots[slot].label : slot) + '　—　' + cat.name);
     $('#attStep1').show(); $('#attStep2').hide();
     $('#attFiles').html('<div style="color:#aaa;">載入中…</div>');
-    $('#attHint').html(esc(ATT_HINT[slot] || '') + '<br>只列本單料號「<b>' + esc(CUR.part_no || '') + '</b>」底下掛「'
-                     + esc(cat.name) + '」標籤的附件，<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。');
+    $('#attHint').html(esc(ATT_HINT[slot] || '') + '<br>列出本單料號「<b>' + esc(CUR.part_no || '') + '</b>」的<b>料號附件、報價單附件、訂單附件</b>中掛「'
+                     + esc(cat.name) + '」標籤者（同一份檔案只列一次），<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。');
     openMask('attMask');
     $.getJSON(API, {action:'attach_candidates', id:CUR.ec_id, slot:slot, cat_id:catId}, function(r){
         if (!r.ok) return;
         var rows = r.rows || [];
         if (!rows.length) {
-            $('#attFiles').html('<div style="color:#aaa;">這個料號底下沒有掛「'+esc(cat.name)
+            $('#attFiles').html('<div style="color:#aaa;">這個料號的料號附件、報價單、訂單底下都沒有掛「'+esc(cat.name)
                 + '」標籤的附件。請先到料號主檔上傳，或改挑其他標籤。</div>');
             return;
         }
         var h = '';
         rows.forEach(function(f){
             h += '<div class="att-f">'
-              +  '<span class="nm">' + esc(f.show_name)
+              +  '<span class="nm"><span class="pill draft" style="margin-right:4px;">' + esc(f.src_label || '料號附件') + '</span>' + esc(f.show_name)
               +  (f.is_pdf ? ' <span class="pill draft">PDF</span>' : '')
               +  (f.note ? '<br><span class="mt">' + esc(f.note) + '</span>' : '') + '</span>'
               +  '<span class="mt">' + (f.issue_stamp_date ? '發行 ' + dispDate(f.issue_stamp_date) + '　' : '')
               +  '上傳 ' + dispDate(f.uploaded_at) + '　' + esc(f.uploaded_by || '') + '</span>'
               +  '<button type="button" class="att-mini" onclick="window.open(\'' + f.url + '\',\'_blank\')">預覽</button>'
               +  '<button type="button" class="att-mini" onclick="pickAttFile(' + f.id + ',' + f.is_pdf + ','
-              +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ')">選這一個</button>'
+              +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ',\'' + f.src_kind + '\',\'' + esc(f.url) + '\')">選這一個</button>'
               +  '</div>';
         });
         $('#attFiles').html(h);
     });
 }
 /** 選定檔案：要指定頁的 PDF 進第二步挑頁，其餘直接存 */
-function pickAttFile(attachId, isPdf, showName, needPage){
-    ATT_FILE = {id:attachId, name:showName};
+function pickAttFile(attachId, isPdf, showName, needPage, srcKind, url){
+    ATT_FILE = {id:attachId, name:showName, src:srcKind || 'part'};
     if (!isPdf || !needPage) { saveAttach(attachId, 0, 0); return; }
     $('#attStep1').hide(); $('#attStep2').show();
     $('#attPickedName').html('<b>' + esc(showName) + '</b>　請點選要附上的那一頁');
     $('#attPages').html('<div style="color:#aaa;">正在載入 PDF…</div>');
-    renderPdfPages('../../src/store/Part_Attachment_API.php?action=download&id=' + attachId, attachId);
+    renderPdfPages(url, attachId);
 }
 $('#btnAttBack').on('click', function(){ $('#attStep2').hide(); $('#attStep1').show(); });
 
@@ -1273,7 +1289,7 @@ function renderPdfPages(url, attachId){
 }
 function saveAttach(attachId, pageNo, pageCount){
     post({action:'attach_save', ec_id:CUR.ec_id, slot:ATT_SLOT, cat_id:ATT_CAT,
-          attach_id:attachId, page_no:pageNo || 0, page_count:pageCount || 0}, function(r){
+          attach_id:attachId, src_kind:(ATT_FILE && ATT_FILE.src) || 'part', page_no:pageNo || 0, page_count:pageCount || 0}, function(r){
         if (!r.ok) return;
         CUR_ATT = r.rows || [];
         closeMask('attMask');
@@ -1582,6 +1598,45 @@ function headPayload(){
         change_reason: $('#e_reason').val()
     };
 }
+
+/* ── 依圖面變更紀錄建議開單 ── */
+function loadDwgSuggest(openIt){
+    $.getJSON(API, {action:'dwg_suggest'}, function(r){
+        if (!r.ok) return;
+        var rows = r.rows || [], rec = rows.filter(function(x){ return x.level === 'recommend'; }).length;
+        $('#dwgSugCnt').text(rec || '').toggle(rec > 0);
+        if (!openIt) return;
+        if (!rows.length) { $('#dwgList').html('<div style="color:#aaa;padding:14px;">目前沒有需要補開的項目，圖面變更都已有對應的申請單。</div>'); }
+        else {
+            var h = '<table class="ec-list"><thead><tr><th style="width:30px;"></th><th>圖面變更單</th><th>日期</th><th>客戶</th><th>料號</th><th>版次</th><th>變更摘要</th><th>建議</th></tr></thead><tbody>';
+            rows.forEach(function(x){
+                h += '<tr><td><input type="checkbox" class="dwg-chk" value="'+x.id+'"'+(x.level==='recommend'?' checked':'')+'></td>'
+                  +  '<td><a href="../QC/drawing_change_log.php?id='+x.id+'" target="_blank">'+esc(x.change_no)+'</a></td>'
+                  +  '<td>'+dispDate(x.change_date)+'</td><td>'+esc(x.customer)+'</td><td>'+esc(x.part_no)+'</td>'
+                  +  '<td>'+esc(x.old_revision||'')+(x.new_revision?' → '+esc(x.new_revision):'')+'</td>'
+                  +  '<td>'+esc(x.summary)+'</td>'
+                  +  '<td><span class="pill '+(x.level==='recommend'?'':'draft')+'" title="'+esc(x.reason)+'">'
+                  +  (x.level==='recommend'?'建議開單':'內部／自行判斷')+'</span></td></tr>';
+            });
+            $('#dwgList').html(h + '</tbody></table>');
+        }
+        $('#btnDwgMake').toggle(+r.can_create === 1 && rows.length > 0);
+        openMask('dwgMask');
+    });
+}
+$('#btnDwgSuggest').on('click', function(){ loadDwgSuggest(true); });
+$('#btnDwgMake').on('click', function(){
+    var ids = $('.dwg-chk:checked').map(function(){ return +this.value; }).get();
+    if (!ids.length) { alert('請先勾選要開立的項目'); return; }
+    post({action:'dwg_create', ids:JSON.stringify(ids)}, function(r){
+        if (!r.ok) return;
+        var msg = '已開立 ' + (r.made || []).length + ' 張草稿：' + (r.made || []).map(function(m){ return m.doc_no; }).join('、');
+        if ((r.skipped || []).length) msg += '\n\n略過：\n' + r.skipped.join('\n');
+        alert(msg);
+        closeMask('dwgMask'); loadList(); loadDwgSuggest(false);
+    });
+});
+if ($('#btnDwgSuggest').length) loadDwgSuggest(false);
 
 $('#btnNew').on('click', function(){
     post($.extend({action:'create'}, {
@@ -2502,7 +2557,7 @@ function printAttachments(list, row){
             return;
         }
         var a = list[i];
-        var url = '../../src/store/Part_Attachment_API.php?action=download&id=' + a.attach_id;
+        var url = a.url;
         var cap = '<div class="no">' + esc(a.seq_label) + '</div>'
                 + '<div class="cap">' + esc(a.print_text)
                 + '　' + esc(a.orig_name) + (a.page_no ? '（第 ' + a.page_no + ' 頁）' : '') + '</div>';

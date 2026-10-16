@@ -313,6 +313,14 @@ function ec_ensure_schema(PDO $db): void
             KEY idx_ec (ec_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工程變更申請單：選定的料號附件'");
     } catch (Throwable $e) {}
+    // 附件來源：part 料號附件／quote 報價單附件／order 訂單附件（MySQL 無 ADD COLUMN IF NOT EXISTS，先查再加）
+    try {
+        $have = $db->query("SHOW COLUMNS FROM eng_change_attach")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('src_kind', $have, true))
+            $db->exec("ALTER TABLE eng_change_attach ADD COLUMN src_kind VARCHAR(10) NOT NULL DEFAULT 'part' COMMENT 'part/quote/order＝attach_id 指向哪張表'");
+        if (!in_array('src_ref', $have, true))
+            $db->exec("ALTER TABLE eng_change_attach ADD COLUMN src_ref VARCHAR(40) NULL COMMENT '報價附件的 quote_no（下載要用）'");
+    } catch (Throwable $e) {}
 
     try {
         $db->exec("CREATE TABLE IF NOT EXISTS eng_change_review (
@@ -553,6 +561,9 @@ function ec_attach_rows(PDO $db, int $ecId): array
             'cat_id'     => (int)$r['cat_id'],
             'cat_name'   => $cat,
             'attach_id'  => (int)$r['attach_id'],
+            'src_kind'   => ((string)($r['src_kind'] ?? 'part')) ?: 'part',
+            'url'        => ec_attach_url(((string)($r['src_kind'] ?? 'part')) ?: 'part', (int)$r['attach_id'],
+                                          (string)($r['src_ref'] ?? ''), (string)$r['file_name']),
             'file_name'  => (string)$r['file_name'],
             'orig_name'  => (string)($r['orig_name'] ?: $r['file_name']),
             'note'       => (string)$r['note'],
@@ -574,36 +585,125 @@ function ec_attach_has(PDO $db, int $ecId, string $slot): bool
     return false;
 }
 
+/** 附件下載網址（相對於 views/TD/）；三種來源的下載端點不同 */
+function ec_attach_url(string $kind, int $id, string $ref = '', string $fileName = ''): string
+{
+    if ($kind === 'quote')
+        return '../../src/store/Quotation_File_API.php?action=download&quote_no=' . rawurlencode($ref)
+             . '&filename=' . rawurlencode($fileName);
+    if ($kind === 'order') return '../../src/store/Order_Attachment_API.php?action=download&id=' . $id;
+    return '../../src/store/Part_Attachment_API.php?action=download&id=' . $id;
+}
+
+/**
+ * 這個料號、某個標籤可以挑的附件（料號附件＋報價單附件＋訂單附件，新到舊）。
+ * 同一份檔案（原始檔名＋檔案大小相同，或同訂單同實體檔）只列一次，優先序 料號>報價>訂單。
+ */
+function ec_attach_candidates(PDO $db, int $dId, int $catId): array
+{
+    $out = [];
+    $seen = [];
+    $add = function (array $x) use (&$out, &$seen) {
+        $size = trim((string)($x['file_size'] ?? ''));
+        $key = mb_strtolower(trim((string)$x['show_name']), 'UTF-8') . '|' . $size;
+        if ($size !== '' && isset($seen[$key])) return;
+        $seen[$key] = 1;
+        $out[] = $x;
+    };
+    $isPdf = fn($f) => strtolower(pathinfo((string)$f, PATHINFO_EXTENSION)) === 'pdf' ? 1 : 0;
+
+    // ① 料號附件
+    $st = $db->prepare("SELECT pa.id, pa.filename, pa.original_name, pa.note, pa.file_size,
+                               pa.issue_stamp_date, pa.uploaded_at,
+                               COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by
+                          FROM part_attachments pa LEFT JOIN `user` u ON u.id = pa.uploaded_by_id
+                         WHERE pa.d_id = ? AND pa.deleted_at IS NULL
+                           AND FIND_IN_SET(?, REPLACE(COALESCE(pa.category_ids,''), ' ', ''))
+                         ORDER BY COALESCE(pa.issue_stamp_date, DATE(pa.uploaded_at)) DESC, pa.id DESC LIMIT 200");
+    $st->execute([$dId, $catId]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $add(['src_kind' => 'part', 'src_label' => '料號附件', 'id' => (int)$r['id'], 'src_ref' => '',
+              'filename' => $r['filename'], 'show_name' => (string)($r['original_name'] ?: $r['filename']),
+              'note' => (string)$r['note'], 'file_size' => (string)$r['file_size'],
+              'issue_stamp_date' => $r['issue_stamp_date'], 'uploaded_at' => $r['uploaded_at'],
+              'uploaded_by' => (string)$r['uploaded_by'], 'is_pdf' => $isPdf($r['filename']),
+              'url' => ec_attach_url('part', (int)$r['id'])]);
+    }
+
+    // ② 報價單附件（沿用全站報價附件歸屬判定：綁料號者比對料號、沒綁者看報價單含不含此料號）
+    try {
+        require_once __DIR__ . '/quote_attach_scope_lib.php';
+        $bel = eg_quote_attach_scope_cond(eg_quote_attach_part_nos($db, [$dId]), [$dId], 'a');
+        $st = $db->prepare("SELECT a.id, a.quote_no, a.filename, a.original_name, a.note, a.file_size, a.uploaded_at, a.uploaded_by
+                              FROM quotation_attachments a
+                             WHERE a.status='active' AND {$bel['sql']}
+                               AND (a.category_id = ? OR FIND_IN_SET(?, REPLACE(COALESCE(a.category_ids,''), ' ', '')))
+                             ORDER BY a.uploaded_at DESC, a.id DESC LIMIT 200");
+        $st->execute(array_merge($bel['params'], [$catId, $catId]));
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $add(['src_kind' => 'quote', 'src_label' => '報價單 ' . $r['quote_no'], 'id' => (int)$r['id'],
+                  'src_ref' => (string)$r['quote_no'], 'filename' => $r['filename'],
+                  'show_name' => (string)($r['original_name'] ?: $r['filename']), 'note' => (string)$r['note'],
+                  'file_size' => (string)$r['file_size'], 'issue_stamp_date' => null,
+                  'uploaded_at' => $r['uploaded_at'], 'uploaded_by' => (string)$r['uploaded_by'],
+                  'is_pdf' => $isPdf($r['filename']),
+                  'url' => ec_attach_url('quote', (int)$r['id'], (string)$r['quote_no'], (string)$r['filename'])]);
+        }
+    } catch (Throwable $e) { error_log('ec_attach_candidates quote: ' . $e->getMessage()); }
+
+    // ③ 訂單附件（同一訂單編號＋同實體檔只列一次：共用附件會被複製掛到每一列）
+    try {
+        $st = $db->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.uploaded_at,
+                                   COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo
+                              FROM order_attachments a
+                              JOIN order_track ot ON ot.Order_id = a.order_id
+                              LEFT JOIN `user` u ON u.id = a.uploaded_by
+                             WHERE a.status='active' AND ot.d_id_ID = ?
+                               AND FIND_IN_SET(?, REPLACE(COALESCE(a.category_ids,''), ' ', ''))
+                             ORDER BY a.uploaded_at DESC, a.id DESC LIMIT 200");
+        $st->execute([$dId, $catId]);
+        $seenOo = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = $r['Order_oo'] . '|' . $r['filename'];
+            if (isset($seenOo[$k])) continue;
+            $seenOo[$k] = 1;
+            $add(['src_kind' => 'order', 'src_label' => '訂單 ' . $r['Order_oo'], 'id' => (int)$r['id'],
+                  'src_ref' => '', 'filename' => $r['filename'],
+                  'show_name' => (string)($r['original_name'] ?: $r['filename']), 'note' => '',
+                  'file_size' => (string)$r['file_size'], 'issue_stamp_date' => null,
+                  'uploaded_at' => $r['uploaded_at'], 'uploaded_by' => (string)$r['uploaded_by'],
+                  'is_pdf' => $isPdf($r['filename']), 'url' => ec_attach_url('order', (int)$r['id'])]);
+        }
+    } catch (Throwable $e) { error_log('ec_attach_candidates order: ' . $e->getMessage()); }
+
+    usort($out, fn($a, $b) => strcmp((string)($b['issue_stamp_date'] ?: $b['uploaded_at']),
+                                     (string)($a['issue_stamp_date'] ?: $a['uploaded_at'])));
+    return $out;
+}
+
 /**
  * 挑一個附件進來（同一段、同一個標籤只留一筆＝覆蓋）。
- * 一律重新讀 part_attachments 取檔名／備註快照，不採信前端送來的字（鐵律8）。
+ * 一律重查候選清單驗證（來源、料號歸屬、標籤都以後端查到的為準），不採信前端送來的字（鐵律8）。
  */
 function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attachId,
-                       ?int $pageNo, ?int $pageCount, int $uid): array
+                       ?int $pageNo, ?int $pageCount, int $uid, string $srcKind = 'part'): array
 {
     ec_ensure_schema($db);
     if (!isset(EC_ATTACH_SLOTS[$slot])) throw new Exception('無效的附件區塊');
     $row = ec_row($db, $ecId);
     if (!$row) throw new Exception('查無此申請單');
+    if (!in_array($srcKind, ['part', 'quote', 'order'], true)) throw new Exception('無效的附件來源');
 
     $allow = array_column(ec_attach_allowed_cats($db, $slot), 'id');
     if (!in_array($catId, $allow, true))
         throw new Exception('這個附件標籤不在管理員允許的清單內');
 
-    $st = $db->prepare("SELECT id, d_id, filename, original_name, note, category_ids
-                          FROM part_attachments WHERE id=? AND deleted_at IS NULL");
-    $st->execute([$attachId]);
-    $a = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$a) throw new Exception('查無這個附件，或它已經被刪除');
-    // 附件一定要屬於這張單的料號——不擋的話直打 API 就能把別的料號的圖掛上來
-    if ((int)$a['d_id'] !== (int)$row['d_id'])
-        throw new Exception('這個附件不屬於本單的料號');
-    $cats = array_filter(array_map('intval', explode(',', (string)$a['category_ids'])));
-    if (!in_array($catId, $cats, true))
-        throw new Exception('這個附件沒有掛這個標籤');
+    $a = null;
+    foreach (ec_attach_candidates($db, (int)$row['d_id'], $catId) as $c)
+        if ($c['src_kind'] === $srcKind && (int)$c['id'] === $attachId) { $a = $c; break; }
+    if (!$a) throw new Exception('查無這個附件，或它不屬於本單料號／沒有掛這個標籤');
 
-    // 申請內容那一段：PDF 一定要指定頁（使用者明確要求）
-    $isPdf = strtolower(pathinfo((string)$a['filename'], PATHINFO_EXTENSION)) === 'pdf';
+    $isPdf = (int)$a['is_pdf'] === 1;
     if ($isPdf && EC_ATTACH_SLOTS[$slot]['need_page'] && (int)$pageNo <= 0)
         throw new Exception('這是 PDF 檔，請指定要附上第幾頁');
     if (!$isPdf) { $pageNo = null; $pageCount = null; }
@@ -612,14 +712,15 @@ function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attach
 
     $map = ec_attach_cat_map($db);
     $db->prepare("INSERT INTO eng_change_attach
-            (ec_id, slot, cat_id, cat_name, attach_id, file_name, orig_name, note, page_no, page_count, created_by, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())
+            (ec_id, slot, cat_id, cat_name, attach_id, src_kind, src_ref, file_name, orig_name, note, page_no, page_count, created_by, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
          ON DUPLICATE KEY UPDATE cat_name=VALUES(cat_name), attach_id=VALUES(attach_id),
+                                 src_kind=VALUES(src_kind), src_ref=VALUES(src_ref),
                                  file_name=VALUES(file_name), orig_name=VALUES(orig_name), note=VALUES(note),
                                  page_no=VALUES(page_no), page_count=VALUES(page_count),
                                  created_by=VALUES(created_by), created_at=VALUES(created_at)")
-       ->execute([$ecId, $slot, $catId, ($map[$catId]['name'] ?? ''), $attachId,
-                  (string)$a['filename'], (string)($a['original_name'] ?: $a['filename']),
+       ->execute([$ecId, $slot, $catId, ($map[$catId]['name'] ?? ''), $attachId, $srcKind, (string)$a['src_ref'],
+                  (string)$a['filename'], (string)$a['show_name'],
                   mb_substr(trim((string)$a['note']), 0, 255, 'UTF-8'),
                   $pageNo ?: null, $pageCount ?: null, $uid ?: null]);
     return ['rows' => ec_attach_rows($db, $ecId)];
@@ -2364,6 +2465,54 @@ function ec_auto_from_dwg_change(PDO $db, int $changeId, int $uid, string $uname
     return ['ok' => true, 'ec_id' => $ecId, 'doc_no' => (string)$row['doc_no'], 'existed' => false,
             'message' => '已依圖面變更 ' . (string)$c['change_no'] . ' 自動建立工程變更申請單草稿 '
                        . (string)$row['doc_no'] . '（客戶／料號／變更摘要已帶入），請確認內容後送出。'];
+}
+
+/**
+ * 依「圖面變更紀錄」建議該開工程變更申請單的資料。
+ * 範圍＝已送出（非草稿）、還沒有對應工程變更單的圖面變更；
+ * 已有同一次變更（同料號、客戶版次或客戶圖面日期相同）的單據者視為已涵蓋、不建議。
+ * level：recommend＝變更來源是客戶（客戶要求改圖，一定要走工程變更）／optional＝內部變更（由技術課判斷）。
+ */
+function ec_dwg_suggestions(PDO $db, int $limit = 100): array
+{
+    ec_ensure_schema($db);
+    $out = [];
+    try {
+        $rows = $db->query("SELECT q.id, q.change_no, q.d_id, q.change_date, q.source, q.summary,
+                                   q.old_revision, q.new_revision, q.int_new_revision, q.status,
+                                   s.D_Setting_Id AS part_no, cl.customer
+                              FROM qc_drawing_change q
+                              LEFT JOIN d_setting s ON s.d_id = q.d_id
+                              LEFT JOIN customer_list cl ON cl.customer_id = s.Customer_Id
+                             WHERE q.status <> 'DRAFT' AND q.submitted_at IS NOT NULL
+                               AND NOT EXISTS (SELECT 1 FROM eng_change e WHERE e.source_change_id = q.id)
+                             ORDER BY (q.source = '客戶') DESC, q.change_date DESC, q.id DESC
+                             LIMIT 400")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as $r) {
+        $newRev = trim((string)$r['new_revision']); $newDate = trim((string)$r['int_new_revision']);
+        if ($newRev !== '' || $newDate !== '') {
+            $ors = []; $args = [(int)$r['d_id']];
+            if ($newRev !== '')  { $ors[] = 'q2.new_revision = ?';     $args[] = $newRev; }
+            if ($newDate !== '') { $ors[] = 'q2.int_new_revision = ?'; $args[] = $newDate; }
+            try {
+                $st = $db->prepare("SELECT 1 FROM eng_change e JOIN qc_drawing_change q2 ON q2.id = e.source_change_id
+                                     WHERE e.d_id = ? AND e.status <> 'REJECTED' AND (" . implode(' OR ', $ors) . ") LIMIT 1");
+                $st->execute($args);
+                if ($st->fetchColumn()) continue;           // 同一次變更已有單
+            } catch (Throwable $e) {}
+        }
+        $isCust = (string)$r['source'] === '客戶';
+        $out[] = ['id' => (int)$r['id'], 'change_no' => (string)$r['change_no'], 'part_no' => (string)$r['part_no'],
+                  'customer' => (string)$r['customer'], 'change_date' => (string)$r['change_date'],
+                  'source' => (string)$r['source'], 'summary' => (string)$r['summary'],
+                  'old_revision' => (string)$r['old_revision'], 'new_revision' => $newRev,
+                  'level' => $isCust ? 'recommend' : 'optional',
+                  'reason' => $isCust ? '變更來源是客戶：客戶改圖要有工程變更申請單留存'
+                                      : '內部變更：由技術課判斷是否需要開單'];
+        if (count($out) >= $limit) break;
+    }
+    return $out;
 }
 
 /* ============================ 列印用資料 ============================ */

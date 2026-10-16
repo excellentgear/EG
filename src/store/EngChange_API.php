@@ -214,6 +214,28 @@ try {
         jout(['rows' => $rows]);
     }
 
+    /** 依圖面變更紀錄建議要開的申請單 */
+    if ($action === 'dwg_suggest') {
+        if (!$P['canEdit'] && !$P['canView']) jerr('沒有檢閱權限', 403);
+        jout(['rows' => ec_dwg_suggestions($db), 'can_create' => $P['canEdit'] ? 1 : 0]);
+    }
+
+    /** 把建議的圖面變更逐筆開成申請單草稿（沿用自動建單的判定與防重複） */
+    if ($action === 'dwg_create') {
+        if (!$P['canEdit']) jerr('沒有開立申請單的權限', 403);
+        $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+        if (!is_array($ids) || !$ids) jerr('請先勾選要開立的項目', 400);
+        $ids = array_slice(array_values(array_unique(array_map('intval', $ids))), 0, 50);
+        $made = []; $skip = [];
+        foreach ($ids as $cid) {
+            $res = ec_auto_from_dwg_change($db, $cid, $uid, $uname);
+            if (!$res['ok']) { $skip[] = $res['message']; continue; }
+            if ($res['existed']) { $skip[] = $res['message']; continue; }
+            $made[] = ['ec_id' => $res['ec_id'], 'doc_no' => $res['doc_no']];
+        }
+        jout(['made' => $made, 'skipped' => $skip]);
+    }
+
     if ($action === 'get') {
         $ecId = (int)($_GET['id'] ?? 0);
         $r = ec_row($db, $ecId);
@@ -517,25 +539,8 @@ try {
         $allow = array_column(ec_attach_allowed_cats($db, $slot), 'id');
         if (!in_array($cat, $allow, true)) jerr('這個附件標籤不在管理員允許的清單內', 400);
         if (!(int)$r['d_id']) jout(['rows' => [], 'no_part' => 1]);
-        // 只列這張單的料號底下、掛了這個標籤、未刪除的附件（新到舊）
-        $st = $db->prepare("SELECT pa.id, pa.filename, pa.original_name, pa.note, pa.revision,
-                                   pa.issue_stamp_date, pa.uploaded_at,
-                                   COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by
-                              FROM part_attachments pa
-                              LEFT JOIN `user` u ON u.id = pa.uploaded_by_id
-                             WHERE pa.d_id = ? AND pa.deleted_at IS NULL
-                               AND FIND_IN_SET(?, REPLACE(COALESCE(pa.category_ids,''), ' ', ''))
-                             ORDER BY COALESCE(pa.issue_stamp_date, DATE(pa.uploaded_at)) DESC, pa.id DESC
-                             LIMIT 200");
-        $st->execute([(int)$r['d_id'], $cat]);
-        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($rows as &$x) {
-            $x['id']        = (int)$x['id'];
-            $x['is_pdf']    = strtolower(pathinfo((string)$x['filename'], PATHINFO_EXTENSION)) === 'pdf' ? 1 : 0;
-            $x['show_name'] = (string)($x['original_name'] ?: $x['filename']);
-            $x['url']       = '../../src/store/Part_Attachment_API.php?action=download&id=' . $x['id'];
-        }
-        unset($x);
+        // 料號附件＋報價單附件＋訂單附件（同一份檔案只列一次）
+        $rows = ec_attach_candidates($db, (int)$r['d_id'], $cat);
         jout(['rows' => $rows, 'need_page' => (int)EC_ATTACH_SLOTS[$slot]['need_page']]);
     }
 
@@ -546,7 +551,8 @@ try {
         if (!$r) jerr('查無此申請單', 404);
         if (!ec_attach_can_edit($db, $r, $slot, $P, $uid)) jerr('你現在不能修改這一段的附件', 403);
         jout(ec_attach_set($db, $ecId, $slot, (int)($_POST['cat_id'] ?? 0), (int)($_POST['attach_id'] ?? 0),
-                           ((int)($_POST['page_no'] ?? 0)) ?: null, ((int)($_POST['page_count'] ?? 0)) ?: null, $uid));
+                           ((int)($_POST['page_no'] ?? 0)) ?: null, ((int)($_POST['page_count'] ?? 0)) ?: null, $uid,
+                           (string)($_POST['src_kind'] ?? 'part')));
     }
 
     if ($action === 'attach_del') {
