@@ -1041,19 +1041,49 @@
         var sh = el0 && el0.closest ? el0.closest('[contenteditable="true"]') : null;
         if (!sh || !host.contains(sh)) return false;
         body = sh;                       // 多頁模式：游標在哪一頁就插在哪一頁
-        sh.focus();
+        // preventScroll：focus() 預設會把那一頁捲進視窗，畫面就「跳一下」（使用者 2026-10-16）
+        try { sh.focus({ preventScroll: true }); } catch (e2) { sh.focus(); }
         var sel = w.getSelection();
         sel.removeAllRanges();
         sel.addRange(lastRange);
         return true;
       } catch (e) { return false; }
     }
+    /* 插入前後畫面不可以跳：記下視窗與各層捲動容器的捲動位置，插完還原。
+       （focus、insertNode、重新分頁都可能把畫面捲到別處，使用者看到的就是焦點「跳一下」。） */
+    function saveScrolls() {
+      var list = [{ el: null, x: w.pageXOffset, y: w.pageYOffset }];
+      var n = host;
+      while (n && n !== d.documentElement) {
+        if (n.scrollTop || n.scrollLeft) list.push({ el: n, x: n.scrollLeft, y: n.scrollTop });
+        n = n.parentNode;
+      }
+      Array.prototype.slice.call(host.querySelectorAll('.egrt-doc-scroll,.egrt-wrap')).forEach(function (e) {
+        list.push({ el: e, x: e.scrollLeft, y: e.scrollTop });
+      });
+      return list;
+    }
+    function restoreScrolls(list) {
+      list.forEach(function (o) {
+        if (!o.el) w.scrollTo(o.x, o.y);
+        else { o.el.scrollLeft = o.x; o.el.scrollTop = o.y; }
+      });
+    }
     function insertHtml(html) {
+      var scr = saveScrolls();
+      try { insertHtmlInner(html); } finally {
+        restoreScrolls(scr);
+        // 重新分頁／清洗是延後執行的，等它做完再還原一次
+        setTimeout(function () { restoreScrolls(scr); }, 0);
+        setTimeout(function () { restoreScrolls(scr); }, 120);
+      }
+    }
+    function insertHtmlInner(html) {
       var useSaved = pendingRestore; pendingRestore = false;
       if (useSaved && applySavedRange()) {
         // 已經回到原本的游標位置，直接插
       } else {
-      body.focus();
+      try { body.focus({ preventScroll: true }); } catch (e3) { body.focus(); }
       if (!restoreRange()) {
         // 真的沒有游標可用（例如一打開就按插入）→ 補在內容最後，而不是開頭
         var r = d.createRange();
