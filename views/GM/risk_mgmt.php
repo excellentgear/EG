@@ -417,8 +417,8 @@ $perms  = rm_perms($db, $rmUser);
 <div class="rm-mask" id="demoDateMask" style="z-index:11300;"><div class="rm-modal" style="width:780px;">
     <div class="rm-mhd"><span>設定假資料的相關日期（<span id="demoDateYear"></span> 年）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
     <div class="rm-mbd">
-        <div class="hint" style="margin-bottom:8px;">處境分析表、風險管制表、溝通記錄與措施追蹤、成效確認、內部稽核與管理審查會議的日期彼此有先後關係，所以這裡<b>一次設定</b>，系統再依這組日期推算其餘日期（溝通記錄與措施追蹤的日期會落在「溝通記錄期間」內，並挪到工作日）。
-            右邊紅字是目前不合理的原因，全部消除才能產生；<b>三場會議可以留白，留白就不建立</b>。</div>
+        <div class="hint" style="margin-bottom:8px;">處境分析表、風險管制表、溝通記錄與措施追蹤、成效確認、內部稽核與管理審查會議的日期彼此有先後關係，所以這裡<b>一次設定</b>，系統再依這組日期推算其餘日期（溝通記錄與措施追蹤的日期會落在上述期間內，並挪到工作日）。
+            右邊紅字是目前不合理的原因，全部消除才能產生；<b>三場會議可以留白，留白就不建立</b>。<b>溝通記錄期間不用設定</b>：就是「風險管制表填表日～成效確認日」。灰字是 AS 文件管理裡各文件的更新頻率與負責課室（會自動跟著那邊的設定變動）。</div>
         <table class="rm-table" style="margin-bottom:6px;"><thead><tr><th style="width:250px;">項目</th><th style="width:150px;">日期</th><th>檢查</th></tr></thead><tbody id="demoDateBody"></tbody></table>
         <div class="hint" id="demoDateMsg"></div>
     </div>
@@ -1513,13 +1513,22 @@ function demoDateRender(res){
     Object.keys(DEMO_F).forEach(function(k){
         h += '<tr><td>' + esc(DEMO_F[k].label) + (DEMO_F[k].opt ? ' <span style="color:#8a6d45;font-size:11.5px;">（可留白＝不建立）</span>' : '') + '</td>'
            + '<td><input type="date" data-k="' + k + '" value="' + esc((res.dates || res.defaults || {})[k] || '') + '" max="' + esc(res.today || '') + '" style="width:140px;"></td>'
-           + '<td class="demo-e" data-e="' + k + '" style="color:#DD5138;font-size:12px;"></td></tr>';
+           + '<td><div class="demo-e" data-e="' + k + '" style="color:#DD5138;font-size:12px;"></div><div class="demo-h" data-h="' + k + '" style="color:#8a6d45;font-size:11.5px;line-height:1.5;"></div></td></tr>';
     });
     $('#demoDateBody').html(h);
-    demoDateShowErr(res.errors || {});
+    DEMO_TIP = {}; Object.keys(DEMO_F).forEach(function(k){ DEMO_TIP[k] = DEMO_F[k].tip || ''; });
+    demoDateShowErr(res.errors || {}, res.hints || {});
 }
-function demoDateShowErr(errs){
+var DEMO_TIP = {};
+function demoDateShowErr(errs, hints){
     var n = 0;
+    if (hints) $('#demoDateBody .demo-h').each(function(){
+        var k = $(this).data('h'), h = hints[k] || {lines:[], warn:[]}, t = '';
+        (h.lines || []).forEach(function(l){ t += '<div>' + esc(l) + '</div>'; });
+        (h.warn || []).forEach(function(w){ t += '<div style="color:#B8650F;font-weight:bold;">⚠ ' + esc(w) + '（僅提醒，不影響產生）</div>'; });
+        if (DEMO_TIP[k]) t += '<div style="color:#5b3a1e;">' + esc(DEMO_TIP[k]) + '</div>';
+        $(this).html(t);
+    });
     $('#demoDateBody .demo-e').each(function(){ var m = errs[$(this).data('e')] || ''; $(this).text(m); if (m) n++; });
     $('#btnDemoDateGo').prop('disabled', n > 0).css('opacity', n > 0 ? .5 : 1);
     $('#demoDateMsg').text(n ? ('還有 ' + n + ' 項日期不合理，請修正後再產生。') : '日期檢查通過。');
@@ -1528,7 +1537,7 @@ function demoDateCheck(){
     clearTimeout(DEMO_T);
     DEMO_T = setTimeout(function(){
         $.ajax({url:'../../src/store/AiDraft_API.php', type:'POST', dataType:'json', data:{csrf:EGAiDraft.csrf(), action:'demo_dates', year:DEMO_Y, dates:JSON.stringify(demoDateRead())}})
-         .done(function(r){ demoDateShowErr(r.errors || {}); }).fail(function(){ $('#demoDateMsg').text('檢查失敗，請稍後再試'); });
+         .done(function(r){ demoDateShowErr(r.errors || {}, r.hints || {}); }).fail(function(){ $('#demoDateMsg').text('檢查失敗，請稍後再試'); });
     }, 250);
 }
 function demoDateLoad(useDefault){

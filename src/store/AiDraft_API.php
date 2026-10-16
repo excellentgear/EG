@@ -65,7 +65,7 @@ if ($action === 'demo_dates') {         // 取得預設日期＋欄位定義；�
     $dates = json_decode((string)($_POST['dates'] ?? ''), true);
     $def = eg_demo_default_dates($db, $y);
     $chk = eg_demo_dates_check($db, $y, is_array($dates) ? $dates : $def);
-    jout(['fields' => eg_demo_date_fields(), 'defaults' => $def, 'dates' => $chk['dates'], 'errors' => (object)$chk['errors'], 'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn()]);
+    jout(['fields' => eg_demo_date_fields(), 'defaults' => $def, 'dates' => $chk['dates'], 'errors' => (object)$chk['errors'], 'hints' => eg_demo_date_hints($db, $chk['dates']), 'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn()]);
 }
 if ($action === 'demo_seed') {          // 一鍵產生溝通管理／風險與機會／內稽與管審會議的關聯假資料（標【假資料】，可清除）
     $y = (int)($_POST['year'] ?? 0); if ($y < 2000 || $y > 2100) jerr('年度不合法');

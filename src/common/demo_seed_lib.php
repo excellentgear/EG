@@ -149,21 +149,77 @@ function eg_demo_doc(PDO $db, string $kind, string $date, array $deptIds, array 
 
 /* ============ 日期：由使用者一次設定，並檢查前後關係合理 ============
  * 會影響的是 SWOT（處境分析表）、風險與機會管制表、溝通管理、內部稽核事前／結束會議、管理審查會議，
- * 所以不再寫死月日，改成「一組關鍵日期」，其餘日期（溝通記錄、措施追蹤的預計／結案日）都依這組日期推算。 */
+ * 所以不再寫死月日，改成「一組關鍵日期」，其餘日期（溝通記錄、措施追蹤的預計／結案日）都依這組日期推算。
+ * 溝通記錄期間不用設定：就是「風險管制表填表日 ～ 成效確認日」（都在當年度內，措施要先建立、成效確認前要有執行紀錄）。 */
 
-/** 日期欄位（key => 名稱、是否可留白＝留白就不建立該筆會議）。只有一份定義，前端畫面也由 API 取用 */
+/** 日期欄位（key => 名稱、是否可留白＝留白就不建立該筆會議、建議說明）。只有一份定義，前端畫面也由 API 取用 */
 function eg_demo_date_fields(): array
 {
     return [
-        'ctx'      => ['label' => '組織處境分析表 填表日', 'opt' => false],
-        'risk'     => ['label' => '風險與機會因應措施管制表 填表日', 'opt' => false],
-        'comm_from' => ['label' => '溝通記錄期間（起）', 'opt' => false],
-        'comm_to'  => ['label' => '溝通記錄期間（迄）', 'opt' => false],
-        'effect'   => ['label' => '成效確認日', 'opt' => false],
-        'ia_pre'   => ['label' => '內部稽核 事前會議', 'opt' => true],
-        'ia_end'   => ['label' => '內部稽核 結束會議', 'opt' => true],
-        'mr'       => ['label' => '管理審查會議', 'opt' => true],
+        'ctx'    => ['label' => '組織處境分析表 填表日', 'opt' => false, 'tip' => ''],
+        'risk'   => ['label' => '風險與機會因應措施管制表 填表日', 'opt' => false, 'tip' => ''],
+        'ia_pre' => ['label' => '內部稽核 事前會議', 'opt' => true, 'tip' => ''],
+        'ia_end' => ['label' => '內部稽核 結束會議', 'opt' => true, 'tip' => ''],
+        'effect' => ['label' => '成效確認日', 'opt' => false,
+                     'tip' => '建議：排在管理審查會議之前（管理審查要看風險與機會的成效確認結果），預設為管理審查前一個工作日；此日之前措施要已有執行紀錄。溝通記錄與措施追蹤的日期，會自動落在「風險管制表填表日～成效確認日」之間。'],
+        'mr'     => ['label' => '管理審查會議', 'opt' => true, 'tip' => ''],
     ];
+}
+
+/**
+ * 每個日期對應的 AS 文件（編號、名稱、更新頻率、負責課室），由 AS 文件管理的設定即時取得，不寫死。
+ * 對應方式：優先用「AS 文件綁定」的模組代碼（處境表、風險表、內稽的計劃表／通知單／報告表）；管理審查審核表沒有綁定模組，改用名稱關鍵字找。
+ */
+function eg_demo_date_docs(PDO $db): array
+{
+    if (!function_exists('eg_asdoc_get')) require_once __DIR__ . '/asdoc_lib.php';
+    $map = [
+        'ctx'    => ['mods' => ['rm_context']],
+        'risk'   => ['mods' => ['rm_risk']],
+        'effect' => ['mods' => ['rm_risk']],
+        'ia_pre' => ['mods' => ['ia_case']],
+        'ia_end' => ['mods' => ['ia_case', 'ia_report']],
+        'mr'     => ['mods' => [], 'name' => '管理審查審核表'],
+    ];
+    $units = asFreqUnits(); $out = [];
+    foreach ($map as $k => $m) {
+        $docs = [];
+        foreach ($m['mods'] as $mod) { $d = eg_asdoc_get($db, $mod); if ($d && !empty($d['id'])) $docs[(int)$d['id']] = (int)$d['id']; }
+        if (!empty($m['name'])) foreach (eg_demo_qa($db, "SELECT id FROM as_document WHERE doc_name LIKE ? ORDER BY id LIMIT 1", ['%' . $m['name'] . '%']) as $r) $docs[(int)$r['id']] = (int)$r['id'];
+        $list = [];
+        foreach ($docs as $id) {
+            $r = eg_demo_q1($db, "SELECT id, doc_no, doc_name, freq_type, freq_n, freq_months, freq_note FROM as_document WHERE id=?", [$id]);
+            if (!$r) continue;
+            $own = array_column(eg_demo_qa($db, "SELECT d.name FROM as_doc_owner_dept o JOIN department d ON d.id=o.department_id WHERE o.doc_id=? ORDER BY d.id", [$id]), 'name');
+            $months = asFreqParseMonths($r['freq_months'] ?? '');
+            $t = (string)($r['freq_type'] ?? '');
+            if ($t === '') $ft = '未設定更新頻率';
+            elseif ($t === 'irregular') $ft = '不定時';
+            else { $n = max(1, (int)$r['freq_n']); $ft = '每' . ($n > 1 ? $n : '') . ($units[$t] ?? $t) . ($months ? '（指定 ' . implode('、', $months) . ' 月）' : ''); }
+            $list[] = ['no' => (string)$r['doc_no'], 'name' => (string)$r['doc_name'], 'freq' => $ft, 'note' => trim((string)($r['freq_note'] ?? '')),
+                       'owners' => $own, 'months' => $months, 'type' => $t];
+        }
+        $out[$k] = $list;
+    }
+    return $out;
+}
+
+/** 依目前填的日期產生備註：AS 文件設定的更新頻率／負責課室＋「日期的月份和 AS 設定的月份不同」的提醒（只提醒、不擋） */
+function eg_demo_date_hints(PDO $db, array $dates): array
+{
+    $docs = eg_demo_date_docs($db); $H = [];
+    foreach ($docs as $k => $list) {
+        $lines = []; $warn = [];
+        foreach ($list as $d) {
+            $s = $d['no'] . ' ' . $d['name'] . '：' . $d['freq'] . ($d['note'] !== '' ? '，' . mb_substr($d['note'], 0, 40) . (mb_strlen($d['note']) > 40 ? '…' : '') : '') . ($d['owners'] ? '；負責課室 ' . implode('、', $d['owners']) : '');
+            $lines[] = $s;
+            $v = (string)($dates[$k] ?? '');
+            if ($v !== '' && $d['months'] && !in_array((int)substr($v, 5, 2), $d['months'], true))
+                $warn[] = 'AS 文件管理設定「' . $d['name'] . '」是每年 ' . implode('、', $d['months']) . ' 月，目前日期落在 ' . (int)substr($v, 5, 2) . ' 月';
+        }
+        $H[$k] = ['lines' => $lines, 'warn' => $warn];
+    }
+    return $H;
 }
 
 function eg_demo_wd(PDO $db, string $date, int $dir): string
@@ -176,26 +232,23 @@ function eg_demo_wd(PDO $db, string $date, int $dir): string
     return $date;
 }
 
-/** 預設值：貼近一般作業順序，且不超過今天；留給使用者逐項調整 */
+/** 預設值：貼近一般作業順序（管理審查前一個工作日確認成效），且不超過今天；留給使用者逐項調整 */
 function eg_demo_default_dates(PDO $db, int $Y): array
 {
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
     $cap = function (string $d) use ($today) { return $d > $today ? $today : $d; };
     $D = [];
-    $D['ctx']       = eg_demo_wd($db, $cap($Y . '-01-12'), -1);
-    $D['risk']      = eg_demo_wd($db, $cap($Y . '-01-15'), -1);
+    $D['ctx']  = eg_demo_wd($db, $cap($Y . '-01-12'), -1);
+    $D['risk'] = eg_demo_wd($db, $cap($Y . '-01-15'), -1);
     if ($D['risk'] < $D['ctx']) $D['risk'] = $D['ctx'];
-    $D['comm_from'] = $cap($Y . '-02-01');
-    if ($D['comm_from'] < $D['risk']) $D['comm_from'] = $D['risk'];
-    $D['comm_to']   = $cap($Y . '-08-31');
-    if ($D['comm_to'] < $D['comm_from']) $D['comm_to'] = $D['comm_from'];
-    $D['ia_pre']    = eg_demo_wd($db, $cap($Y . '-09-01'), -1);
-    $D['ia_end']    = eg_demo_wd($db, $cap($Y . '-09-26'), -1);
+    $D['ia_pre'] = eg_demo_wd($db, $cap($Y . '-09-01'), -1);
+    $D['ia_end'] = eg_demo_wd($db, $cap($Y . '-09-26'), -1);
     if ($D['ia_end'] <= $D['ia_pre']) $D['ia_end'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_pre'] . ' +1 day')), 1);
-    $D['effect']    = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
-    $D['mr']        = $D['effect'];
+    $D['mr'] = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
+    $D['effect'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['mr'] . ' -1 day')), -1);
+    if ($D['effect'] < $D['risk']) $D['effect'] = $D['risk'];
+    if ($D['mr'] < $D['effect']) $D['mr'] = $D['effect'];
     foreach (['ia_pre', 'ia_end', 'mr'] as $k) if ($D[$k] > $today) $D[$k] = '';      // 今天以前排不下就留白（不建立）
-    if ($D['effect'] < $D['comm_to']) $D['effect'] = $D['comm_to'];
     return $D;
 }
 
@@ -203,8 +256,7 @@ function eg_demo_default_dates(PDO $db, int $Y): array
  * 檢查日期是否合理。回傳 ['errors' => [欄位 => 原因], 'dates' => 正規化後的日期]。
  * 規則（前後端共用這一份，畫面只是顯示原因）：
  *   ①都在該年度內、不可晚於今天（未來日期的文件與會議不合理）②表單與會議日必須是工作日
- *   ③處境分析表 ≤ 風險管制表 ≤ 溝通記錄期間（起）≤ 迄 ≤ 成效確認日
- *   ④稽核事前會議在風險表之後、事前 < 結束 ⑤管理審查在成效確認與稽核結束會議之後
+ *   ③處境分析表 ≤ 風險管制表 ≤ 成效確認日 ④稽核事前會議在風險表之後、事前 < 結束 ⑤管理審查在成效確認與稽核結束會議之後
  */
 function eg_demo_dates_check(PDO $db, int $Y, array $in): array
 {
@@ -217,16 +269,14 @@ function eg_demo_dates_check(PDO $db, int $Y, array $in): array
         $D[$k] = $v;
         if ((int)substr($v, 0, 4) !== $Y) { $E[$k] = '必須在 ' . $Y . ' 年內（清除功能依年度，跨年的資料會清不掉）'; continue; }
         if ($v > $today) { $E[$k] = '不可晚於今天（' . $today . '）'; continue; }
-        if (in_array($k, ['ctx', 'risk', 'effect', 'ia_pre', 'ia_end', 'mr'], true) && !eg_leave_is_workday_safe($db, $v)) $E[$k] = '不是工作日（假日或週末），請改選工作日';
+        if (!eg_leave_is_workday_safe($db, $v)) $E[$k] = '不是工作日（假日或週末），請改選工作日';
     }
     $le = function (string $a, string $b, string $msgKey, string $msg, bool $strict = false) use (&$E, &$D) {
         if ($D[$a] === '' || $D[$b] === '' || isset($E[$msgKey])) return;
         if ($strict ? $D[$a] >= $D[$b] : $D[$a] > $D[$b]) $E[$msgKey] = $msg;
     };
     $le('ctx', 'risk', 'risk', '不可早於處境分析表填表日（' . $D['ctx'] . '），風險表是依處境分析表產生的');
-    $le('risk', 'comm_from', 'comm_from', '不可早於風險管制表填表日（' . $D['risk'] . '），措施追蹤是風險表建立之後才開始的');
-    $le('comm_from', 'comm_to', 'comm_to', '不可早於溝通記錄期間（起）');
-    $le('comm_to', 'effect', 'effect', '不可早於溝通記錄期間（迄）' . $D['comm_to'] . '，要先有措施的執行紀錄才能確認成效');
+    $le('risk', 'effect', 'effect', '不可早於風險管制表填表日（' . $D['risk'] . '），措施建立之後才談得到成效');
     $le('risk', 'ia_pre', 'ia_pre', '不可早於風險管制表填表日，稽核要查的是已建立的管制表');
     $le('ia_pre', 'ia_end', 'ia_end', '結束會議必須晚於事前會議（' . $D['ia_pre'] . '）', true);
     $le('effect', 'mr', 'mr', '管理審查要看成效確認結果，不可早於成效確認日（' . $D['effect'] . '）');
@@ -295,8 +345,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $own = [];
     foreach (['業務課', '生管組', '生產課', '品管組', '品管課', '技術課', '管理課', '倉管組', '採購組'] as $dn) $own[$dn] = eg_demo_owner($db, $dn);
     foreach (['業務課', '生管組', '生產課', '品管組', '管理課', '倉管組', '技術課', '品管課'] as $must) if (!$own[$must]) throw new RuntimeException('找不到部門「' . $must . '」的在職人員，無法指定負責人');
-    // 溝通記錄與措施追蹤的日期：原本寫死的月日（名義日期）依「溝通記錄期間」等比例換算並挪到工作日，順序（記錄日→結案日→預計完成日）不變
-    $cf = $DT['comm_from']; $ct = $DT['comm_to'];
+    // 溝通記錄與措施追蹤的日期：原本寫死的月日（名義日期）依「風險管制表填表日～成效確認日」等比例換算並挪到工作日，順序（記錄日→結案日→預計完成日）不變
+    $cf = $DT['risk']; $ct = $DT['effect'];
     $cSpan = max(0, (int)round((strtotime($ct) - strtotime($cf)) / 86400)); $y0 = strtotime($Y . '-01-01'); $y1 = strtotime($Y . '-12-31');
     $d = function ($m, $day) use ($Y, $db, $cf, $ct, $cSpan, $y0, $y1) {
         $nom = strtotime(sprintf('%04d-%02d-%02d', $Y, $m, $day));
@@ -368,7 +418,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     foreach ($newC as $i => $nc) {
         $cc = $cust($nc['Client_name']);
         $dt = eg_demo_clamp(date('Y-m-d', strtotime($nc['fd'] . ' +' . ($i % 3 === 0 ? 0 : 3 + $i * 4) . ' days')), $today);
-        if ($dt < $cf || $dt > $ct) { $warn[] = '新客戶「' . $nc['Client_name'] . '」首次出貨 ' . $nc['fd'] . '，溝通日期 ' . $dt . ' 不在溝通記錄期間內，已跳過'; continue; }
+        if ($dt < $cf || $dt > $ct) { $warn[] = '新客戶「' . $nc['Client_name'] . '」首次出貨 ' . $nc['fd'] . '，溝通日期 ' . $dt . ' 不在「風險管制表填表日～成效確認日」之內，已跳過'; continue; }
         $rec(['date' => $dt, 'type' => 'irregular', 'cat' => '客戶', 'party' => $cc['name'], 'ref' => $cc['id'], 'ch' => [$i % 2 ? 'phone' : 'face'], 'maker' => $mk, 'items' => [['q' => $ncQ[$i % 3][0], 'a' => $ncQ[$i % 3][1]]]]);
     }
     // 溝通管制表（常態機制）：稽核製程出貨前三大客戶
