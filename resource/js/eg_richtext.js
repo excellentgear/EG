@@ -2595,6 +2595,20 @@
         if (g.rows.length < 2) return;
         if (!_numMeasureCanvas) _numMeasureCanvas = d.createElement('canvas');
         var mctx = _numMeasureCanvas.getContext('2d');
+        /* ⚠ 頁面在視窗較窄時會被 fitPages 用 CSS zoom 縮小（pagesBox.style.zoom）：
+           getBoundingClientRect 量到的是縮小後的畫面座標，而墊片寬度是寫成 CSS px、之後又會被同一個 zoom 縮一次——
+           不換算的話，視窗一窄（例如只開半個螢幕）每個墊片都差 (1-zoom) 倍，括號就對不齊
+           （使用者 2026-10-16：我這邊測是齊的、他那邊怎麼按都不齊）。
+           用一個 100px 寬的探針量出實際縮放倍率，所有量到的畫面距離都除以它換回 CSS px。 */
+        var zoom = 1;
+        try {
+          var pr = d.createElement('span');
+          pr.style.cssText = 'display:inline-block;width:100px;height:1px;';
+          g.rows[0].node.parentNode.insertBefore(pr, g.rows[0].node);
+          var zw = pr.getBoundingClientRect().width;
+          pr.parentNode.removeChild(pr);
+          if (zw > 5 && isFinite(zw)) zoom = zw / 100;
+        } catch (e) {}
         g.rows.forEach(function (r) {
           var rr = d.createRange();
           rr.setStart(r.node, 0); rr.setEnd(r.node, 1);
@@ -2613,7 +2627,8 @@
             if (typeof mt.actualBoundingBoxLeft === 'number') ink = -mt.actualBoundingBoxLeft;
           } catch (e) {}
           r.ink = ink;
-          r.x = rr.getBoundingClientRect().left + ink;
+          // 位置換算回「未縮放」的座標：畫面座標 ÷ 縮放倍率（墨跡偏移本來就是 CSS px，不必除）
+          r.x = rr.getBoundingClientRect().left / zoom + ink;
         });
         var maxX = Math.max.apply(null, g.rows.map(function (r) { return r.x; }));
         // 空隙取同群最大字級的 0.4 倍、**全群共用同一個值**：
