@@ -71,12 +71,12 @@ function eg_demo_lines(PDO $db, array &$st, string $kind, array $ctx): array
 }
 
 /** 清除【假資料】（三個模組）；$year 有給就只清那個年度（依表單日期／溝通日期／會議日期），不給＝全部；回傳各表刪除筆數 */
-function eg_demo_clear(PDO $db, ?int $year = null): array
+function eg_demo_clear(PDO $db, ?int $year = null, bool $keepCtx = false): array
 {
     $n = ['rm_doc' => 0, 'comm_record' => 0, 'comm_ctrl' => 0, 'meeting' => 0];
     $db->beginTransaction();
     try {
-        $ids = array_column(eg_demo_qa($db, "SELECT doc_id FROM rm_doc WHERE remark LIKE ?" . ($year ? " AND YEAR(fill_date)=" . (int)$year : ''), [EG_DEMO_TAG . '%']), 'doc_id');
+        $ids = array_column(eg_demo_qa($db, "SELECT doc_id FROM rm_doc WHERE remark LIKE ?" . ($year ? " AND YEAR(fill_date)=" . (int)$year : '') . ($keepCtx ? " AND kind<>'context'" : ''), [EG_DEMO_TAG . '%']), 'doc_id');
         if ($ids) { $in = implode(',', array_map('intval', $ids)); $db->exec("DELETE FROM rm_item WHERE doc_id IN ($in)"); $n['rm_doc'] = $db->exec("DELETE FROM rm_doc WHERE doc_id IN ($in)"); }
         $ids = array_column(eg_demo_qa($db, "SELECT rec_id FROM comm_record WHERE remark LIKE ?" . ($year ? " AND YEAR(comm_date)=" . (int)$year : ''), [EG_DEMO_TAG . '%']), 'rec_id');
         if ($ids) {
@@ -348,7 +348,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     // 該年度已有「真實」表單就不產生
     $real = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE is_deleted=0 AND YEAR(fill_date)=? AND (remark IS NULL OR remark NOT LIKE ?)", [$Y, EG_DEMO_TAG . '%'])['n'];
     if ($real > 0) throw new RuntimeException($Y . ' 年已經有實際建立的處境分析表／風險表，一個年度只能有一張；請改選沒有表單的年度，或先刪除該年度的表單。');
-    $clear = eg_demo_clear($db, $Y);
+    $fromCtx = !empty($opt['from_context']);       // 沿用現有的處境分析表（使用者改過的 SWOT），只重建風險表、溝通管理與會議
+    $clear = eg_demo_clear($db, $Y, $fromCtx);
 
     $in = rm_audit_in($db, 'd_setting_id');
     $set = rm_settings($db);
@@ -391,8 +392,22 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $eoy = $Y . '-12-31';
 
     /* ---------- 2. 溝通管理：記錄＋追蹤（關鍵字對應風險表各類別，所以風險列自動連到這些追蹤） ---------- */
-    $R = []; $rec = function (array $o) use ($db, $cats, &$R) { $r = eg_demo_record($db, $cats, $o); $R[] = $r; return $r; };
+    // 沿用現有處境分析表時：只產生「SWOT 的劣勢／機會／威脅真的有提到的類別」的溝通記錄（沒提到的類別不憑空產生）
+    $catSet = null; $ctxDocId = 0; $ctxLoaded = []; $gateCat = null;
+    if ($fromCtx) {
+        $cd = eg_demo_q1($db, "SELECT doc_id FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1", [$Y]);
+        if (!$cd) throw new RuntimeException($Y . ' 年沒有組織處境分析表，無法沿用');
+        $ctxDocId = (int)$cd['doc_id']; $catSet = [];
+        foreach (eg_demo_qa($db, "SELECT item_id, dimension, stakeholder, needs, issue FROM rm_item WHERE doc_id=? ORDER BY seq, item_id", [$ctxDocId]) as $ci) {
+            $ctxLoaded[] = ['id' => (int)$ci['item_id'], 'dimension' => (string)$ci['dimension'], 'stakeholder' => (string)$ci['stakeholder'], 'needs' => (string)$ci['needs'], 'issue' => (string)$ci['issue']];
+            if (in_array($ci['dimension'], ['W', 'O', 'T'], true)) $catSet[rm_rule_classify(trim($ci['stakeholder'] . ' ' . $ci['needs'] . ' ' . $ci['issue']), (string)$ci['dimension'])[0]] = true;
+        }
+    }
+    $R = []; $rec = function (array $o) use ($db, $cats, &$R, &$gateCat, &$catSet) {
+        if ($catSet !== null && $gateCat !== null && !isset($catSet[$gateCat])) return null;
+        $r = eg_demo_record($db, $cats, $o); $R[] = $r; return $r; };
     $mk = $own['業務課'];
+    $gateCat = 'delivery';
     // 交期
     $q1 = '客戶希望關鍵品項的交期縮短，並要求說明目前排程與製程負荷。';
     $a1 = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q1], '生管組盤點稽核製程（插齒、齒研）負荷後回覆可行交期，並由業務課回覆客戶。');
@@ -402,18 +417,21 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         ['q' => $q1, 'a' => $a1, 'track' => ['owner' => $own['生管組'], 'due' => $d(4, 7), 'closed' => $d(4, 3), 'action' => '生管組盤點稽核製程（插齒、齒研）負荷並回覆交期', 'note' => '已盤點完成並回覆客戶。']],
         ['q' => $q2, 'a' => $a2, 'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => eg_demo_text($db, $st, 'comm_track_action', ['party' => $c1['name'], 'content' => $q2, 'reply' => $a2], '業務課每週回報客戶準時出貨進度與交期狀況', '交期')]],
     ]]);
+    $gateCat = 'concentration';
     // 客戶集中度
     $q = '客戶希望每季提供一次訂單預測，雙方才能提早備料與預留產能。';
     $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $c2['name'], 'party_kind' => '客戶', 'question' => $q], '同意每季溝通一次訂單預測，由業務課負責並提供生管組參考。');
     $rec(['date' => $d(1, 20), 'type' => 'regular', 'cat' => '客戶', 'party' => $c2['name'], 'ref' => $c2['id'], 'ch' => ['meeting'], 'maker' => $mk, 'items' => [
         ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => '每季與前三大客戶溝通訂單預測與產能預留，並提供生管組參考；持續開拓客源以分散風險']],
     ]]);
+    $gateCat = 'quality';
     // 品質／客訴
     $q = '近期客訴集中在加工尺寸與外觀，客戶要求提出矯正與預防措施。';
     $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q], '品管組逐件開立異常矯正處理單，並回報客戶處理結果。');
     $rec(['date' => $d(8, 12), 'type' => 'irregular', 'cat' => '客戶', 'party' => $c1['name'], 'ref' => $c1['id'], 'ch' => ['phone'], 'maker' => $mk, 'items' => [
         ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['品管組'], 'due' => $eoy, 'action' => '逐件開立異常矯正處理單；重複發生的原因列管追蹤；每月回報客戶處理結果']],
     ]]);
+    $gateCat = 'supplier';
     // 委外
     if ($vend) {
         $q = '部分訂單因委外' . $procLabel . '交期延後，需要加強交期與進度跟催。';
@@ -421,7 +439,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $rec(['date' => $d(8, 20), 'type' => 'irregular', 'cat' => '供應商', 'party' => $vend['mshort'] ?: $vend['mall'], 'ref' => $vend['mid'], 'ch' => ['phone'], 'maker' => $own['生管組'], 'items' => [
             ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['生管組'], 'due' => $eoy, 'action' => '加強跟催主要委外廠商（' . ($vend['mshort'] ?: '委外廠商') . '等）的交期與進度，每週回報生管組長']],
         ]]);
-    } else $warn[] = '沒有「加工項目」綁定到對外宣稱委外製程的廠商（或模組設定沒有勾選對外宣稱委外的稽核製程），略過供應商溝通';
+    } elseif ($catSet === null || isset($catSet['supplier'])) $warn[] = '沒有「加工項目」綁定到對外宣稱委外製程的廠商（或模組設定沒有勾選對外宣稱委外的稽核製程），略過供應商溝通';
+    $gateCat = 'climate';
     // 氣候
     $rec(['date' => $d(4, 28), 'type' => 'regular', 'cat' => '員工', 'party' => '業務課、倉管組、生產課　防颱防汛作業確認', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => [
         ['q' => '颱風警報發布當日，在途品項的預計交期要通知客戶。', 'a' => '業務課於警報發布當日通知客戶在途品項預計交期。',
@@ -433,6 +452,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         ['q' => '夏季高溫或電力吃緊（限電警示）時，現場加工與排程要如何因應。', 'a' => '生管組於高溫或限電警示時與生產課調整排程。',
          'track' => ['owner' => $own['生管組'], 'due' => $d(7, 31), 'closed' => $d(7, 18), 'action' => '高溫或限電警示時，生管組與生產課調整生產排程並通知業務課', 'note' => '已訂定作法並通知相關人員。']],
     ]]);
+    $gateCat = 'geopolitics';
     // 國際局勢：原物料與外購件價格、交期（客戶要價格條件、採購要供應商報價）
     $q = '國際局勢（關稅、能源、匯率）使客戶成本壓力變大，詢問加工單價是否能調降，並希望確認報價的有效期限。';
     $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q], '業務課與客戶確認訂單預測與加工單價條件，營運成本明顯上升時再與客戶協議調整。');
@@ -444,11 +464,13 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $rec(['date' => $d(5, 20), 'type' => 'regular', 'cat' => '供應商', 'party' => '刀具、砂輪等加工工具供應商', 'ch' => ['phone'], 'maker' => $own['採購組'] ?: $own['生管組'], 'items' => [
         ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['採購組'] ?: $own['生管組'], 'due' => $eoy, 'action' => '每月留意電力與刀具砂輪等營運成本的變動，刀具砂輪報價與交貨時間需提早確認，異常上升時回報總經理室']],
     ]]);
+    $gateCat = 'environment';
     // 環境議題：減碳與環保法規、客戶的環境要求
     $rec(['date' => $d(8, 25), 'type' => 'regular', 'cat' => '環保局', 'party' => '環保局　環保與減碳法規諮詢窗口', 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
         ['q' => '環保與減碳相關法規近期的異動，以及本公司適用的申報與管制要求。', 'a' => '管理課盤點適用的法規與客戶環境要求，指定負責部門並列入溝通管制表。',
          'track' => ['owner' => $own['管理課'], 'due' => $d(9, 30), 'closed' => $d(9, 18), 'action' => '盤點適用的環保與減碳法規及客戶環境要求，指定負責部門並列入溝通管制表', 'note' => '已完成盤點並指定負責部門。']],
     ]]);
+    $gateCat = 'legal';
     // 法規（政府單位）
     foreach ([['環保局', '環保局　事業廢棄物申報窗口', '廢切削油與廢棄刀具的清運及網路申報方式、期限與聯單保存要求。', '依規定完成本期事業廢棄物申報，聯單歸檔', $d(5, 14), $d(6, 30), $d(6, 20)],
               ['消防局', '消防局　消防安全設備檢修申報窗口', '消防安全設備定期檢修申報的時程與應備文件。', '委託合格檢修業者辦理檢修並申報', $d(4, 22), $d(5, 29), $d(5, 22)],
@@ -456,6 +478,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $rec(['date' => $g[4], 'type' => 'regular', 'cat' => $g[0], 'party' => $g[1], 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
             ['q' => $g[2], 'a' => '依規定於期限內完成申報，並保存紀錄備查。', 'track' => ['owner' => $own['管理課'], 'due' => $g[5], 'closed' => $g[6], 'action' => $g[3], 'note' => '已完成並歸檔。']]]]);
     }
+    $gateCat = 'inquiry';
     // 接單評估（五個部門各一筆）
     $ordItems = [];
     foreach ([['技術課', '技術課評估製程可行性與治具刀具需求', '技術課於接單時評估製程可行性。'], ['生產課', '生產課評估現場產能與加工條件', '生產課於接單時評估現場產能與加工條件。'],
@@ -465,6 +488,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $ordItems[] = ['q' => '各部門評估結果要由業務課彙整，並於客戶要求的時效內回覆客戶交期。', 'a' => '業務課彙整各部門評估，並於客戶要求的時效內回覆客戶交期。',
                    'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => '接單評估：業務課彙整各部門評估，並於客戶要求的時效內回覆客戶交期']];
     $rec(['date' => $d(2, 10), 'type' => 'regular', 'cat' => '員工', 'party' => '技術課、生產課、生管組、品管課、業務課　接單評估作業確認', 'ch' => ['meeting'], 'maker' => $mk, 'items' => $ordItems]);
+    $gateCat = 'new_customer';
     // 新客戶：首次出貨當下或 30 天內溝通
     $ncQ = [['首次出貨後的使用情形，以及產品尺寸、外觀是否符合需求。', '客戶表示首批產品符合圖面要求，無異常。'], ['後續是否還有相同或類似料號的加工需求，預計的數量與時程。', '客戶預計下一季追加訂單，會提前提供預測量。'], ['交期與包裝方式是否需要調整。', '目前交期可接受，包裝維持現行方式。']];
     foreach ($newC as $i => $nc) {
@@ -473,8 +497,23 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         if ($dt < $cf || $dt > $ct) { $warn[] = '新客戶「' . $nc['Client_name'] . '」首次出貨 ' . $nc['fd'] . '，溝通日期 ' . $dt . ' 不在「風險管制表填表日～成效確認日」之內，已跳過'; continue; }
         $rec(['date' => $dt, 'type' => 'irregular', 'cat' => '客戶', 'party' => $cc['name'], 'ref' => $cc['id'], 'ch' => [$i % 2 ? 'phone' : 'face'], 'maker' => $mk, 'items' => [['q' => $ncQ[$i % 3][0], 'a' => $ncQ[$i % 3][1]]]]);
     }
+    $gateCat = null;
+    // SWOT 提到、但上面沒有固定情境的類別（業績、量測…）：依該類別的因應措施各建一筆措施追蹤，負責部門取措施開頭的部門名
+    if ($fromCtx) {
+        $covered = ['delivery', 'concentration', 'quality', 'supplier', 'climate', 'geopolitics', 'environment', 'legal', 'inquiry', 'new_customer'];
+        $gi = 0;
+        foreach (array_keys($catSet) as $ck) {
+            if (in_array($ck, $covered, true) || empty(RM_RULE_CATS[$ck]['measures'])) continue;
+            $cc = RM_RULE_CATS[$ck]; $its = []; $gi++;
+            foreach ($cc['measures'] as $mt) {
+                $ow = null; foreach ($own as $dn => $o) if ($o && mb_strpos($mt, $dn) === 0) { $ow = $o; break; }
+                $its[] = ['q' => '「' . $cc['label'] . '」議題需要落實的作法：' . $mt, 'a' => '由負責部門依期限辦理：' . $mt, 'track' => ['owner' => $ow ?: $own['管理課'], 'due' => $eoy, 'action' => $mt]];
+            }
+            $rec(['date' => $d(6, 8 + $gi * 3), 'type' => 'regular', 'cat' => '員工', 'party' => $cc['label'] . '　議題追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $its]);
+        }
+    }
     // 溝通管制表（常態機制）：稽核製程出貨前三大客戶
-    foreach ($top as $i => $tc) {
+    foreach (($catSet === null || isset($catSet['concentration'])) ? $top : [] as $i => $tc) {
         $cc = $cust($tc['Client_name']);
         $mkr = $own['業務課']; $mkIds = cm_identities($db, (int)$mkr['id'], $today); $mi = $mkIds[0] ?? ['department_id' => 0, 'department_name' => '', 'position_name' => ''];
         $db->prepare("INSERT INTO comm_ctrl (maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_name, party_kind, party_kind_other, party, party_ref_id, party_user_id,
@@ -487,6 +526,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
 
     /* ---------- 3. 組織處境分析表（依前一年資料）＋風險與機會因應措施管制表 ---------- */
     $ctx = [];
+    if ($fromCtx) { $ctx = $ctxLoaded; $ctxId = $ctxDocId; $ctxIds = $ctxLoaded; $seq = 0; }
+    else {
     foreach (rm_suggest_context($db, $dataYear) as $r) {
         if (mb_strpos((string)$r['needs'], '標準作業書') !== false || mb_strpos((string)$r['issue'], '新進') !== false) continue;     // 新進人員／訓練類議題不產生
         $ctx[] = ['dimension' => $r['key'], 'stakeholder' => $r['stakeholder'], 'needs' => $r['needs'], 'issue' => $r['issue']];
@@ -511,6 +552,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, dimension, stakeholder, needs, issue) VALUES (?,?,?,?,?,?,?)")
            ->execute([$ctxId, $seq, RM_SWOT[$c['dimension']]['scope'], $c['dimension'], $c['stakeholder'], $c['needs'], $c['issue']]);
         $ctxIds[] = ['id' => (int)$db->lastInsertId()] + $c;
+    }
     }
     $riskDate = $DT['risk'];
     $deptNames = ['總經理室', '業務課', '生管組', '品管課', '技術課', '管理課'];
@@ -595,7 +637,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         }
     }
     return ['year' => $Y, 'cleared' => $clear, 'comm_records' => count($R), 'comm_tracks' => array_sum(array_map(function ($r) { return count($r['tracks']); }, $R)),
-            'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount,
+            'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount, 'from_context' => $fromCtx,
             'ai' => ['enabled' => !empty($opt['ai']), 'calls' => $st['calls'], 'ok' => $st['ai_ok'], 'fallback' => $st['fallback'], 'error' => $st['ai_err']], 'warn' => $warn];
 }
 
@@ -617,4 +659,40 @@ function eg_demo_meeting_fallback(PDO $db, string $mk, string $kind, int $Y, int
         '稽核發現的不符合事項由受稽單位提出矯正措施，品管課追蹤改善結果。',
         '風險與機會因應措施的執行情形列入稽核查檢，由管理課確認措施追蹤是否如期結案。',
         '稽核員與受稽單位對稽核結果有共識，後續改善依通知單期限辦理。'];
+}
+
+/**
+ * 「風險與機會因應措施管制表缺失檢討會議」這類實際建立的會議：把目前風險表中「需要因應措施」的項目整理成會議要項。
+ * 只動內容以【依處境分析表更新】開頭的要項（重複執行會取代上一次的），原本人工寫的要項一律不動。
+ * @return int 寫入的要項數
+ */
+function eg_demo_sync_review_meeting(PDO $db, int $meetingId, int $riskDocId): int
+{
+    $mt = eg_demo_q1($db, "SELECT meeting_id FROM meeting_record WHERE meeting_id=?", [$meetingId]);
+    if (!$mt) throw new RuntimeException('找不到會議 ' . $meetingId);
+    $rd = eg_demo_q1($db, "SELECT fill_date FROM rm_doc WHERE doc_id=?", [$riskDocId]);
+    $eoy = substr((string)($rd['fill_date'] ?? date('Y-m-d')), 0, 4) . '-12-31';
+    $TAG = '【依處境分析表更新】';
+    $deptList = eg_demo_qa($db, "SELECT id, name FROM department ORDER BY CHAR_LENGTH(name) DESC");
+    $rows = eg_demo_qa($db, "SELECT seq, issue, ro_kind, measure, confirm_no FROM rm_item WHERE doc_id=? AND confirm_no IS NOT NULL AND confirm_no<>'' ORDER BY seq", [$riskDocId]);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM meeting_item WHERE meeting_id=? AND content LIKE ?")->execute([$meetingId, $TAG . '%']);
+        $so = (int)eg_demo_q1($db, "SELECT COALESCE(MAX(sort_order),0) m FROM meeting_item WHERE meeting_id=?", [$meetingId])['m'];
+        $ins = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, confirm_mode, due_na) VALUES (?,?,?,?,?,?,?,'onsite',0)");
+        $n = 0;
+        $lines = [$TAG . '組織處境分析表（SWOT）已依現況修訂（含國際局勢、氣候變異、環境議題），並據以重新產生風險與機會因應措施管制表，其中 ' . count($rows) . ' 項需要因應措施，請各權責單位確認。'];
+        foreach ($rows as $r) {
+            $iss = mb_substr(trim((string)$r['issue']), 0, 60) . (mb_strlen(trim((string)$r['issue'])) > 60 ? '…' : '');
+            $lines[] = $TAG . $r['confirm_no'] . '（' . ($r['ro_kind'] === 'opportunity' ? '機會' : '風險') . '）' . $iss . '；因應措施：' . trim((string)$r['measure']);
+        }
+        foreach ($lines as $i => $ln) {
+            $ids = []; $nm = [];
+            if ($i > 0) foreach ($deptList as $dp) if (mb_strpos($ln, $dp['name']) !== false && count($ids) < 3 && !in_array((int)$dp['id'], $ids, true)) { $ids[] = (int)$dp['id']; $nm[] = $dp['name']; }
+            $so++; $n++;
+            $ins->execute([$meetingId, 'general', $so, mb_substr($ln, 0, 400), $eoy, $ids ? implode(',', $ids) : null, $nm ? implode('、', $nm) : null]);
+        }
+        $db->commit();
+        return $n;
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
 }

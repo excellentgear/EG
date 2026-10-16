@@ -310,6 +310,10 @@ $perms  = rm_perms($db, $rmUser);
     </div>
 </div></div>
 
+<div id="dirtyFloat" class="no-print" style="display:none;position:fixed;right:24px;bottom:88px;z-index:1200;background:#FFF3D1;border:2px solid #DD5138;border-radius:8px;padding:8px 12px;box-shadow:0 2px 10px rgba(90,50,10,.35);color:#5A3210;font-size:13px;line-height:1.5;">
+    <b style="color:#DD5138;">● 尚未儲存</b>　組織處境分析表有修改還沒存檔
+    <button type="button" class="btn-warm" id="dirtyFloatSave" style="margin-left:8px;">儲存</button></div>
+
 <!-- ============ 依系統資料建議（組織處境分析表） ============ -->
 <div class="rm-mask" id="sugMask"><div class="rm-modal" style="width:860px;">
     <div class="rm-mhd"><span>依系統資料建議（供參考，加入後可再修改）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
@@ -408,6 +412,7 @@ $perms  = rm_perms($db, $rmUser);
             <div class="fld" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <label>年度</label><input type="number" id="demoYear" style="width:90px;" value="<?= (int)date('Y') ?>">
                 <label style="font-weight:normal;"><input type="checkbox" id="demoAi" checked> 用本機 AI 寫文字</label>
+                <label style="font-weight:normal;" title="勾選後不會動處境分析表（您改過的 SWOT 保留），只依它重建風險表與溝通管理資料"><input type="checkbox" id="demoKeepCtx"> 沿用現有處境分析表（只依它重建風險表、溝通管理）</label>
                 <button type="button" class="btn-warm" id="btnDemoSeed">產生關聯假資料</button>
                 <button type="button" id="btnDemoClear">清除該年度假資料</button></div>
             <div class="hint">一次產生溝通管理、風險與機會管制表、內稽／管審會議三者互相關聯的示範資料（標【假資料】）。該年度已有真實文件時不會產生；清除只刪【假資料】。AI 寫文字約需 1～3 分鐘。</div>
@@ -650,7 +655,11 @@ function addSwot(key, it, focus){
     renumberBoard(); markDirty();
     if (focus) q.find('.swot-it:last [data-f=stakeholder]').focus();
 }
-function markDirty(){ BOARD.dirty = true; $('#bStatus').addClass('warn').text('內容尚未儲存，記得按右上「儲存」。'); }
+function markDirty(){ BOARD.dirty = true; $('#bStatus').addClass('warn').text('內容尚未儲存，記得按右上「儲存」。'); syncDirtyFloat(); }
+/* 尚未儲存的提示固定在畫面右下角（隨視窗捲動、不會被捲出畫面），避免改了沒存就離開 */
+function syncDirtyFloat(){ $('#dirtyFloat').toggle(!!BOARD.dirty && $('#pane_context').is(':visible')); }
+setInterval(syncDirtyFloat, 400);
+$(document).on('click', '#dirtyFloatSave', function(){ $('#bSave').trigger('click'); });
 function setBoardEditable(on){
     $('#pane_context .swot-it').toggleClass('ro', !on);
     $('#pane_context .swot-it input, #pane_context .swot-it textarea').prop('readonly', !on);
@@ -1579,9 +1588,9 @@ $('#btnDemoSeed').on('click', function(){
 });
 $('#btnDemoDateGo').on('click', function(){
     var y = DEMO_Y, dates = demoDateRead();
-    if (!confirm('要依這些日期產生 ' + y + ' 年的關聯假資料嗎？\n（該年度先前的【假資料】會先清除，真實資料不受影響）')) return;
+    if (!confirm('要依這些日期產生 ' + y + ' 年的關聯假資料嗎？\n（該年度先前的【假資料】會先清除，真實資料不受影響）' + ($('#demoKeepCtx').prop('checked') ? '\n\n※ 已勾選「沿用現有處境分析表」：處境分析表保留不動，只重建風險表、溝通管理與會議的【假資料】。' : ''))) return;
     closeMask('demoDateMask');
-    demoPost({action:'demo_seed', year:y, dates:JSON.stringify(dates), ai:$('#demoAi').prop('checked') ? 1 : 0}, function(r){
+    demoPost({action:'demo_seed', year:y, dates:JSON.stringify(dates), ai:$('#demoAi').prop('checked') ? 1 : 0, from_ctx:$('#demoKeepCtx').prop('checked') ? 1 : 0}, function(r){
         var p = r.report || {};
         return '已產生：溝通記錄 ' + p.comm_records + '、措施追蹤 ' + p.comm_tracks + '、處境議題 ' + p.context_items + '、風險項目 ' + p.risk_items + '、會議 ' + p.meetings + ' 場'
              + ((p.warn || []).length ? '。注意：' + p.warn.join('；') : '');

@@ -71,7 +71,7 @@ if ($action === 'demo_seed') {          // 一鍵產生溝通管理／風險與�
     $y = (int)($_POST['year'] ?? 0); if ($y < 2000 || $y > 2100) jerr('年度不合法');
     $dates = json_decode((string)($_POST['dates'] ?? ''), true);
     if (!is_array($dates)) jerr('請先設定日期');
-    try { $rep = eg_demo_seed($db, ['year' => $y, 'dates' => $dates, 'ai' => !empty($_POST['ai']), 'cap' => 24]); }
+    try { $rep = eg_demo_seed($db, ['year' => $y, 'dates' => $dates, 'ai' => !empty($_POST['ai']), 'cap' => 24, 'from_context' => !empty($_POST['from_ctx'])]); }
     catch (RuntimeException $e) { jerr($e->getMessage(), 400); }
     jout(['report' => $rep]);
 }
