@@ -801,6 +801,12 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         </select>
         <button type="button" class="st-btn" id="stBold" title="表格文字粗體"><b>B</b></button>
         <span class="st-sp"></span>
+        <span class="st-lab">公司名稱</span>
+        <select id="stCoMode" class="st-sel" data-eg-skip
+                title="頁首公司名稱的排法；同一行時下方的文件名稱會自動變成上下兩格合併並加大">
+          <option value="two">英中上下兩行</option>
+          <option value="one">同一行（英 中）</option>
+        </select>
         <span class="st-lab">頁首字級</span>
         <select id="stHdrSize" class="st-sel" data-eg-skip
                 title="頁首那一條（文件編號／文件名稱／頁次／頁版別）的字級；字太長會自動縮小"></select>
@@ -835,7 +841,7 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
       <div class="st-prev-wrap">
         <div class="tpl-sub" style="margin-bottom:3px">預覽（就是文件上會長的樣子）</div>
         <div id="stPreview" class="st-prev">
-          <table class="adt-hdr">
+          <table class="adt-hdr" id="stPrevTwo">
             <colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>
             <tr><td class="adt-hdr-co" rowspan="2" colspan="2">
                   <div class="adt-hdr-coen"><span class="adt-fit">EXCELLENT GEAR TECHNOLOGY CO.,LTD</span></div>
@@ -848,6 +854,15 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
                 <td class="adt-hdr-nm"><span class="adt-fit">文件管理程序</span></td>
                 <td class="adt-hdr-k"><span class="adt-fit">頁 版 別</span></td>
                 <td class="adt-hdr-v"><span class="adt-fit">2.0</span></td></tr>
+          </table>
+          <table class="adt-hdr adt-hdr-one" id="stPrevOne" style="display:none">
+            <colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>
+            <tr><td class="adt-hdr-co" colspan="2"><div class="adt-hdr-coone"><span class="adt-fit">EXCELLENT GEAR TECHNOLOGY CO.,LTD　超正齒輪科技有限公司</span></div></td>
+                <td class="adt-hdr-k"><span class="adt-fit">文件編號</span></td><td class="adt-hdr-v"><span class="adt-fit">2-DC-01</span></td></tr>
+            <tr><td class="adt-hdr-nk adt-hdr-big" rowspan="2"><span class="adt-fit">文件名稱</span></td>
+                <td class="adt-hdr-nm adt-hdr-big" rowspan="2"><span class="adt-fit">文件管理程序</span></td>
+                <td class="adt-hdr-k"><span class="adt-fit">頁　　次</span></td><td class="adt-hdr-v"><span class="adt-fit">1 / 12</span></td></tr>
+            <tr><td class="adt-hdr-k"><span class="adt-fit">頁 版 別</span></td><td class="adt-hdr-v"><span class="adt-fit">2.0</span></td></tr>
           </table>
           <div class="eg-docbody st-body">
             <p>這裡是正文。打開「內容大框」之後，這一整塊會被框起來。</p>
@@ -1819,6 +1834,7 @@ function fillStyleForm() {
     $('#stSize').val(s.tbl_size || '');
     $('#stPad').val(s.cell_pad || '4px');
     $('#stBodyPad').val(s.body_pad || '3mm');
+    $('#stCoMode').val(s.hdr_co_mode === 'one' ? 'one' : 'two');
     $('#stBold').toggleClass('on', String(s.tbl_weight) === 'bold');
     $('#stFrame').toggleClass('on', String(s.body_frame) === '1');
     previewStyle();
@@ -1836,11 +1852,15 @@ function previewStyle() {
     var zh = $('#stFont').val() || '', en = $('#stFontEn').val() || '';
     var fv = (!zh && !en) ? '' : ((en ? en + ',' : '') + (zh || '"微軟正黑體","Microsoft JhengHei",sans-serif'));
     var sv = $('#stSize').val();
-    if (fv) p.style.setProperty('--adt-tbl-font', fv); else p.style.removeProperty('--adt-tbl-font');
-    if (sv) p.style.setProperty('--adt-tbl-size', sv); else p.style.removeProperty('--adt-tbl-size');
+    /* 「沒設定」不能用 removeProperty：頁面 :root 已經注入了**目前存的**公版變數，
+       移除之後會掉回那個舊值，預覽就跟選的對不上。要明確寫成「未設定時的預設值」。 */
+    p.style.setProperty('--adt-tbl-font', fv || '"微軟正黑體","Microsoft JhengHei",sans-serif');
+    p.style.setProperty('--adt-tbl-size', sv || 'inherit');
     p.style.setProperty('--adt-tbl-weight', $('#stBold').hasClass('on') ? 'bold' : 'normal');
+    $('#stPrevTwo').toggle($('#stCoMode').val() !== 'one');
+    $('#stPrevOne').toggle($('#stCoMode').val() === 'one');
     var hv = $('#stHdrSize').val();
-    if (hv) p.style.setProperty('--adt-hdr-size', hv); else p.style.removeProperty('--adt-hdr-size');
+    p.style.setProperty('--adt-hdr-size', hv || '9.5pt');
     p.style.setProperty('--adt-brd-style', $('#stBStyle').val() || 'solid');
     p.style.setProperty('--adt-brd-w', $('#stBW').val() || '1px');
     p.style.setProperty('--adt-brd-color', $('#stBColor').val() || '#000');
@@ -1856,7 +1876,7 @@ function previewStyle() {
     // 字型／字級一變，頁首那幾格就要重新算一次要不要縮小
     if (window.EGDocFit) EGDocFit.runWhenReady(p);
 }
-$(document).on('change', '#stFont,#stFontEn,#stSize,#stHdrSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
+$(document).on('change', '#stFont,#stFontEn,#stSize,#stHdrSize,#stCoMode,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
 $(document).on('click', '#stBold,#stFrame', function(){ $(this).toggleClass('on'); previewStyle(); });
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
@@ -1878,6 +1898,7 @@ $('#btnTplSave').on('click', function(){
             tbl_font_en: $('#stFontEn').val(),
             tbl_size:   $('#stSize').val(),
             hdr_size:   $('#stHdrSize').val(),
+            hdr_co_mode: $('#stCoMode').val(),
             tbl_weight: $('#stBold').hasClass('on') ? 'bold' : 'normal',
             brd_style:  $('#stBStyle').val(),
             brd_w:      $('#stBW').val(),

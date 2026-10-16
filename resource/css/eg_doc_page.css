@@ -164,7 +164,8 @@
   word-wrap: break-word; overflow-wrap: break-word; }
 /* 太長就自動縮小：span 是 nowrap 的行內區塊，scrollWidth ＝「排成一行要多寬」，
    由 resource/js/eg_doc_fit.js 量了再逐級調小；縮到下限仍放不下才加 adt-fit-wrap 換行。 */
-.adt-hdr .adt-fit { display: inline-block; max-width: 100%; white-space: nowrap; }
+.adt-hdr .adt-fit { display: inline-block; max-width: 100%; white-space: nowrap;
+  line-height: 1.35; vertical-align: top; }   /* Gentelella 全站 td span{line-height:28px}，不指定會把每格撐成 28px 高 */
 .adt-hdr .adt-fit.adt-fit-wrap { white-space: normal; }
 .adt-hdr .adt-c1 { width: 16%; }
 .adt-hdr .adt-c2 { width: 42%; }
@@ -175,6 +176,9 @@
    字級一變兩行一起等量增減，維持原本的大小關係。 */
 .adt-hdr-coen { font-size: calc(var(--adt-hdr-size, 9.5pt) - 0.5pt); }
 .adt-hdr-cozh { font-size: calc(var(--adt-hdr-size, 9.5pt) + 1.5pt); letter-spacing: 1px; }
+/* 公司名稱同一行：英文＋中文排成一列；下方文件名稱兩格跨兩列並等比例加大 */
+.adt-hdr-coone { font-size: calc(var(--adt-hdr-size, 9.5pt) + 1pt); }
+.adt-hdr .adt-hdr-big { font-size: calc(var(--adt-hdr-size, 9.5pt) * 1.35); }
 .adt-hdr .adt-hdr-k { text-align: center; }
 .adt-hdr .adt-hdr-v { text-align: center; }
 .adt-hdr .adt-hdr-nk { text-align: center; }

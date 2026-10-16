@@ -191,6 +191,8 @@ function adt_style_defaults(): array
 {
     return ['tbl_font' => '', 'tbl_font_en' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
             'hdr_size' => '',
+            // 頁首公司名稱：two＝英文／中文上下兩行（原樣）、one＝同一行「英文 中文」
+            'hdr_co_mode' => 'two',
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
             'cell_pad' => '4px',
             // 內容大框：把正文整塊框起來，框線與頁首同寬、上下自然對齊
@@ -239,6 +241,11 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         $v = trim((string)$in['hdr_size']);
         if (!array_key_exists($v, adt_style_hdr_sizes())) return ['ok' => false, 'msg' => '頁首字級不在可選清單內'];
         $new['hdr_size'] = $v;
+    }
+    if (array_key_exists('hdr_co_mode', $in)) {
+        $v = (string)$in['hdr_co_mode'];
+        if (!in_array($v, ['two', 'one'], true)) return ['ok' => false, 'msg' => '公司名稱排法只能是上下兩行或同一行'];
+        $new['hdr_co_mode'] = $v;
     }
     if (array_key_exists('tbl_weight', $in)) {
         $v = (string)$in['tbl_weight'];
@@ -390,6 +397,7 @@ function adt_context(PDO $db, int $versionId): ?array
         'rev_date'   => $v['revised_date'] ? eg_fmt_date($v['revised_date']) : '',
         'co_full'    => $co['full'],
         'co_en'      => $co['en'],
+        'hdr_co_mode' => adt_style_get($db)['hdr_co_mode'] ?? 'two',
         'dept_label' => adt_dept_label($db, (int)$v['department_id']),
         'issue_dept' => adt_dept_label($db, $issueDept),
         'versions'   => $vers,
@@ -619,6 +627,23 @@ function adt_header_html(array $ctx, $pageNo, $total, string $pageVer): string
        resource/js/eg_doc_fit.js 會把那一格的字自動縮到放得下
        （頁首是固定格線，一換行整張表就被撐高、每一頁的可用高度跟著變）。 */
     $fit = function ($t) { return '<span class="adt-fit">' . adt_e($t) . '</span>'; };
+    /* 公司名稱同一行（hdr_co_mode=one）：公司只佔第一列，下面「文件名稱」標題與內容
+       各自跨兩列合併，字級依頁首字級等比例加大（.adt-hdr-big）。右邊三列照舊。 */
+    if (($ctx['hdr_co_mode'] ?? 'two') === 'one') {
+        return '<table class="adt-hdr adt-hdr-one">'
+             . '<colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>'
+             . '<tr><td class="adt-hdr-co" colspan="2">'
+             . '<div class="adt-hdr-coone">' . $fit($ctx['co_en'] . '　' . $ctx['co_full']) . '</div></td>'
+             . '<td class="adt-hdr-k">' . $fit('文件編號') . '</td>'
+             . '<td class="adt-hdr-v">' . $fit($ctx['doc_no']) . '</td></tr>'
+             . '<tr><td class="adt-hdr-nk adt-hdr-big" rowspan="2">' . $fit('文件名稱') . '</td>'
+             . '<td class="adt-hdr-nm adt-hdr-big" rowspan="2">' . $fit($ctx['doc_name']) . '</td>'
+             . '<td class="adt-hdr-k">' . $fit('頁　　次') . '</td>'
+             . '<td class="adt-hdr-v">' . $fit($pageNo . ' / ' . $total) . '</td></tr>'
+             . '<tr><td class="adt-hdr-k">' . $fit('頁 版 別') . '</td>'
+             . '<td class="adt-hdr-v">' . $fit($pageVer) . '</td></tr>'
+             . '</table>';
+    }
     return '<table class="adt-hdr">'
          . '<colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>'
          . '<tr>'
