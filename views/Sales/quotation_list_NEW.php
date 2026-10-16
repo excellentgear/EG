@@ -1999,6 +1999,7 @@ body { background:var(--bg); }
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js'); ?>"></script>
+<script src="../../resource/js/eg_part_similar.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_part_similar.js'); ?>"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
@@ -5384,6 +5385,7 @@ function resetEditor() {
     $('#client_name').val('');
     $('#contact_id').val('');
     $('#quote_id').val('');
+    try { if (window.EGPartSimilar) EGPartSimilar.resetOnce(); } catch (e) {}   // 新的一張報價單：類似料號「已提示過」記錄重來
     $('#source_quote_id').val('');
     $('#quote_no').val('');
     $('#quote_no_prefix').text('');
@@ -9765,6 +9767,16 @@ function bindPartToRow($tr, partId, dId) {
     loadBomInfo($tr, null, dId);
     refreshPartAttachBadges();
     scheduleDupCheck(true);   // 綁定料號後才有得比對
+    psQuoteSimilar(dId);      // 類似料號提示（輔助提示，失敗一律安靜略過）
+}
+
+// 類似料號提示（2026-10-16）：綁定料號後提示「有類似料號」，同一張報價單內同一個料號只提示一次。
+// 純輔助、不阻擋任何操作；EGPartSimilar 內部已吞掉所有錯誤。
+function psQuoteSimilar(dId) {
+    try {
+        if (!dId || !window.EGPartSimilar) return;
+        EGPartSimilar.prompt({ dId: dId, ctx: 'quote', onceKey: 'q' + ($('#quote_id').val() || 'new') });
+    } catch (e) {}
 }
 
 // 清除客戶篩選（從「找不到料號」的快捷連結觸發）
@@ -9812,6 +9824,7 @@ $(document).on('click', '.part-suggestions .suggestion-item', function () {
     loadBomInfo($tr, dId ? null : partId, dId || null);
     refreshPartAttachBadges();
     scheduleDupCheck(true);   // 綁定料號後才有得比對
+    psQuoteSimilar(dId);      // 類似料號提示
 });
 
 // ══════════════════════════════════════════════════════

@@ -8730,6 +8730,7 @@ body { background:#F6F1EA; }
                 <?php if ($is_admin): ?>
                 <button class="btn btn-warning btn-sm" id="btn-role-setting" title="設定主檔管理（附件）操作角色與功能"><i class="fa fa-key"></i> 角色設定</button>
                 <button class="btn btn-danger btn-sm" id="btn-adl-role-setting" title="設定附件下載權限角色（2D／3D × 客供／內部）"><i class="fa fa-download"></i> 下載權限角色</button>
+                <button class="btn btn-default btn-sm" id="btn-similar-setting" onclick="EGPartSimilar.openSettings()" title="設定「類似料號」提示要比對哪些標籤"><i class="fa fa-clone"></i> 類似料號設定</button>
                 <?php endif; ?>
             </div>
         </div>
@@ -12428,6 +12429,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_part_similar.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_similar.js') ?>"></script>
 <script src="../../resource/js/eg_3d_viewer_tools.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_3d_viewer_tools.js') ?>"></script>
 <!-- 2026-08-24 使用者要求「輸入框內按 Enter 要自動跳下一個輸入框」。
      本頁原本只對料號 modal 的 6 個欄位自刻了 Enter 跳欄，其餘欄位按 Enter 沒反應。
@@ -17941,6 +17943,8 @@ function submitPartForm() {
                 showToast(r.message,'success');
                 $('#partModal').one('hidden.bs.modal', function(){ loadParts(partsCurrent); });
                 $('#partModal').modal('hide');
+                // 儲存（含標籤與齒輪規格）後自動確認有沒有類似料號（2026-10-16）；純輔助，失敗安靜略過
+                try { if (window.EGPartSimilar && r.d_id) EGPartSimilar.prompt({ dId: r.d_id, ctx: 'master', once: false }); } catch (e) {}
             } else showToast(r.message,'error');
         },
         function(){ restore(); showToast('網路錯誤','error'); }

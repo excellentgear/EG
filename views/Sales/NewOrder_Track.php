@@ -6675,6 +6675,7 @@ foreach($dCounts as $c) {
     <script src="../../resource/js/dataTables.fixedHeader.min.js"></script>
     <script src="../../resource/js/custom.min.js"></script>
     <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+    <script src="../../resource/js/eg_part_similar.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_similar.js') ?>"></script>
 
     <script>
         // ── 阻止 custom.min.js 的 init_DataTables 初始化 #orderTable ────────
@@ -7473,12 +7474,28 @@ foreach($dCounts as $c) {
             showToast('已取消解鎖，客戶與料號已還原。', 'info');
         }
 
+        // ── 類似料號提示（2026-10-16）：新增訂單、綁定料號後提示「有類似料號」，附對方最近三筆訂單 ──
+        // 只在「新訂單」（hidden_Order_id 為空）才跳；同一個料號只提示一次（_psOrdLast 擋重複呼叫，
+        // updateIdBadges 一次操作會被叫很多次）。編輯既有訂單完全不觸發。
+        var _psOrdLast = '';
+        function psOrderSimilar(partPk) {
+            try {
+                if ($('#hidden_Order_id').val()) return;
+                partPk = String(partPk || '');
+                if (!partPk || partPk === '0') { _psOrdLast = ''; return; }
+                if (partPk === _psOrdLast) return;
+                _psOrdLast = partPk;
+                if (window.EGPartSimilar) EGPartSimilar.prompt({ dId: partPk, ctx: 'order', onceKey: 'ordnew' });
+            } catch (e) {}
+        }
+
         // ── Modal ID Badge 更新 + 右側面板觸發 ──────────────────────────────
         function updateIdBadges() {
             var custPk  = $('#selected_customer_pk').val();
             var partPk  = $('#selected_part_pk').val();
             var custTxt = $('#client_name_input').val().trim();
             var partTxt = $('#part_id_input').val().trim();
+            psOrderSimilar(partPk);   // 類似料號提示（只在新增訂單時；純輔助、失敗安靜略過）
 
             // 客戶 badge
             if (custPk && custPk !== '' && custPk !== '0') {
@@ -9686,6 +9703,14 @@ foreach($dCounts as $c) {
                 $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
                 $('#ate-q-frozen-banner').toggle(ATE_Q.frozen);
                 $('#ate-q-modal').modal('show');
+                // 類似料號（只有設計備註問答看得到；製程中紀錄不顯示）。純輔助，失敗安靜略過，不影響下面的問題清單
+                try {
+                    var _psEl = document.getElementById('ate-q-similar');
+                    if (_psEl) {
+                        if (ATE_Q.kind === 'note' && window.EGPartSimilar) EGPartSimilar.panel(_psEl, { orderId: orderId });
+                        else { _psEl.innerHTML = ''; _psEl.style.display = 'none'; }
+                    }
+                } catch (e) {}
                 ateQEnsureCandidates('user', function() {
                     ateQRenderItems();
                     ateQRedrawComposer();
@@ -11429,6 +11454,7 @@ foreach($dCounts as $c) {
             ocrOnCustomerLoaded('');   // 客戶提醒：新增模式尚未選定任何客戶
             $('#orig_client_pk,#orig_part_pk').val('');
             $('#hidden_Order_id').val('');
+            _psOrdLast = ''; try { if (window.EGPartSimilar) EGPartSimilar.resetOnce(); } catch (e) {}   // 新訂單：類似料號提示重來
             $('#selected_customer_pk').val('');
             $('#selected_part_pk').val('');
             $('#selected_part_drawing_no').val('');
@@ -15141,6 +15167,7 @@ foreach($dCounts as $c) {
                     <i class="fa fa-wrench"></i> 圖示。
                 </div>
                 <div id="ate-q-oda-banner" style="display:none;"></div>
+                <div id="ate-q-similar" style="display:none;margin-bottom:10px;"></div>
                 <div id="ate-q-items-wrap"></div>
                 <div id="ate-q-composer-wrap"></div>
             </div>
