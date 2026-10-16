@@ -6682,27 +6682,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     GROUP BY D_Setting_Id HAVING cnt > 1
                     ORDER BY D_Setting_Id")->fetchAll(PDO::FETCH_ASSOC);
 
-                $result = [];
-                foreach ($dup as $d) {
-                    $rows = $pdo->prepare("
+                // 效能：原本每一列各跑 6 次 COUNT（約 4000 列＝2.4 萬次查詢），改成一次撈全部列、
+                // 再對各關聯表各做一次 GROUP BY（共 7 次查詢），結果與內容完全相同。
+                $ids = array_column($dup, 'D_Setting_Id');
+                $byKey = [];
+                if ($ids) {
+                    $ph = implode(',', array_fill(0, count($ids), '?'));
+                    $rs = $pdo->prepare("
                         SELECT s.d_id, s.D_Setting_Id, s.Spec_No, s.Revision, s.Issue_Date,
                                s.Type, s.Remark, c.customer AS client_name
                         FROM d_setting s
                         LEFT JOIN customer_list c ON c.customer_id=s.Customer_Id
-                        WHERE s.D_Setting_Id=?
+                        WHERE s.D_Setting_Id IN ($ph)
                         ORDER BY s.Issue_Date DESC, s.d_id ASC");
-                    $rows->execute([$d['D_Setting_Id']]);
-                    $partRows = $rows->fetchAll(PDO::FETCH_ASSOC);
-                    foreach ($partRows as &$pr) {
-                        $did = $pr['d_id']; $rel = [];
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM order_track WHERE d_id_ID=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="訂單{$n}筆";
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM bom WHERE d_setting_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="生產{$n}筆";
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM is_list WHERE d_setting_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="出貨{$n}筆";
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="報價{$n}筆";
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="退貨{$n}筆";
-                        $q=$pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $rel[]="庫存{$n}筆";
-                        $pr['relations'] = $rel;
-                    }; unset($pr);
+                    $rs->execute($ids);
+                    foreach ($rs->fetchAll(PDO::FETCH_ASSOC) as $r) $byKey[$r['D_Setting_Id']][] = $r;
+                }
+                $allDid = [];
+                foreach ($byKey as $rows) foreach ($rows as $r) $allDid[] = (int)$r['d_id'];
+                $relCnt = [];
+                if ($allDid) {
+                    $ph2 = implode(',', $allDid);
+                    $defs = [
+                        ['訂單', "SELECT d_id_ID k, COUNT(*) n FROM order_track WHERE d_id_ID IN ($ph2) GROUP BY d_id_ID"],
+                        ['生產', "SELECT d_setting_id k, COUNT(*) n FROM bom WHERE d_setting_id IN ($ph2) GROUP BY d_setting_id"],
+                        ['出貨', "SELECT d_setting_id k, COUNT(*) n FROM is_list WHERE d_setting_id IN ($ph2) GROUP BY d_setting_id"],
+                        ['報價', "SELECT d_setting_d_id k, COUNT(*) n FROM quotation_item WHERE d_setting_d_id IN ($ph2) GROUP BY d_setting_d_id"],
+                        ['退貨', "SELECT d_setting_id k, COUNT(*) n FROM ir_track WHERE d_setting_id IN ($ph2) GROUP BY d_setting_id"],
+                        ['庫存', "SELECT d_id k, COUNT(*) n FROM stock_items WHERE d_id IN ($ph2) AND is_active=1 GROUP BY d_id"],
+                    ];
+                    foreach ($defs as [$lab, $sql]) {
+                        foreach ($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                            if ((int)$r['n'] > 0) $relCnt[(int)$r['k']][] = $lab . (int)$r['n'] . '筆';
+                        }
+                    }
+                }
+                $result = [];
+                foreach ($dup as $d) {
+                    $partRows = $byKey[$d['D_Setting_Id']] ?? [];
+                    foreach ($partRows as &$pr) { $pr['relations'] = $relCnt[(int)$pr['d_id']] ?? []; }
+                    unset($pr);
                     $result[] = [
                         'key'   => $d['D_Setting_Id'],
                         'count' => (int)$d['cnt'],
@@ -17982,7 +18001,14 @@ document.addEventListener('click', function(e) {
         document.getElementById('dpm-tgt-dd').style.display = 'none';
 });
 
-function _afterPartOp() { $('#deletePartModal').modal('hide'); loadParts(partsCurrent); if ($('#dupCheckModal').hasClass('in')) openDupCheck('parts'); }
+function _afterPartOp() {
+    $('#deletePartModal').modal('hide'); loadParts(partsCurrent);
+    // 自動除錯視窗開著時只移除剛處理掉的那一列，不重跑整個重複查詢（很慢）
+    if ($('#dupCheckModal').hasClass('in')) {
+        var b = document.querySelector('#dup-modal-body .dup-row[data-did="'+_dpm_d_id+'"] button');
+        if (b) _dupRemoveRow(b); else openDupCheck('parts');
+    }
+}
 function doDeletePart() {
     if (document.getElementById('dpm-ok-input').value.trim().toUpperCase() !== 'OK') {
         showToast('請輸入大寫 OK 確認','error'); return;
@@ -27206,7 +27232,7 @@ function renderDupParts(data) {
         html += '<div class="dup-group-header"><i class="fa fa-exclamation-triangle"></i> 料號：<strong>'+escHtml(g.key)+'</strong> — 共 '+g.count+' 筆</div>';
         g.rows.forEach(function(r) {
             var hasRel = r.relations && r.relations.length > 0;
-            html += '<div class="dup-row" style="flex-direction:column;align-items:stretch;gap:4px;">';
+            html += '<div class="dup-row" data-did="'+r.d_id+'" style="flex-direction:column;align-items:stretch;gap:4px;">';
             html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">';
             html += '<span style="font-family:Consolas;font-weight:700;color:var(--primary);min-width:110px;">'+escHtml(r.D_Setting_Id)+'</span>';
             html += '<span class="dup-field">版次：'+(r.Revision?escHtml(r.Revision):'<em style="color:#ccc">無</em>')+'</span>';
