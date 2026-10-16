@@ -2759,7 +2759,11 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
    上級指示要項/會議要項合併表(左側直書跨列標籤)中間留間隔列；底部總經理/主席/製表 三欄簽章，用 flex+margin-top:auto
    固定貼在版面最下方（.mr-page 撐滿版心高度，簽章列自動被推到底，不因項目/KPI內容多寡而移動位置）。 */
 function mrCss(){
-    return '.mr-page{display:flex;flex-direction:column;min-height:172mm;}'
+    // 2026-10-16：不可用 display:flex——Chrome 列印時 flex 容器內的大表格不會跨頁切開，
+    // 會整個被推到下一頁而在前面留下一大片空白（會議紀錄項目多時前兩頁幾乎全空）。改回一般區塊流，表格才能自然分頁。
+    return '.mr-page{display:block;min-height:172mm;}'
+        + 'table.mr-items tr,table.mr-announce tr{break-inside:avoid;page-break-inside:avoid;}'
+        + 'table.mr-items thead,table.mr-announce thead{display:table-header-group;}'
         + '.pt-head{text-align:center;margin-bottom:8px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
         + '.mr-title{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;margin-bottom:8px;}'
         + 'table.mr-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}'
@@ -2776,7 +2780,7 @@ function mrCss(){
         + 'table.mr-items td.t-left{text-align:left;}'
         + 'table.mr-items th.mr-grp-hd{width:32px;}'
         + 'table.mr-items td.mr-grp{width:32px;writing-mode:vertical-rl;text-orientation:upright;font-weight:bold;letter-spacing:4px;}'
-        + 'table.mr-foot{width:100%;margin-top:16px;font-size:13px;margin-top:auto;}'
+        + 'table.mr-foot{width:100%;font-size:13px;margin-top:16px;break-inside:avoid;page-break-inside:avoid;}'
         + 'table.mr-foot td{padding:10px 6px;width:33.33%;}'
         + 'table.mr-foot td.mr-foot-prep{text-align:right;}'
         + '.mr-bottom-note{margin-top:4px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
