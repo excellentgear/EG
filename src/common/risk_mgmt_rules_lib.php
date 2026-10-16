@@ -788,6 +788,10 @@ function rm_clause_catalog(PDO $db): array
             'ex' => ['W' => ['公司內部', '可達成且有挑戰性的年度目標', '部分年度目標連續兩年未達，需要檢視目標值是否合理'],
                      'O' => ['客戶', '更高的品質與交期績效', '績效長期超過目標，可提高次年度目標值']]],
     ];
+    // 「處境分析表應該涵蓋」的管理審查輸入條文（輸出類——資源需求、風險識別、次年度目標——不在這裡檢查）；
+    // 6.1.4.9 另外要求涵蓋「品質、安全、環境」三個面向，加上本公司要求必列的國際局勢
+    $check = ['audit', 'complaint', 'satisfaction', 'supplier', 'objectives', 'corrective', 'other_sys', 'followup', 'market'];
+    $aspects = ['market' => [['品質', ['品質', '檢驗', '客戶要求', '不良']], ['安全', ['安全', '職災']], ['環境', ['環境', '環保', '減碳', '氣候', '碳', '颱風', '豪雨']], ['國際局勢', ['國際局勢', '戰爭', '關稅', '通膨', '匯率']]]];
     [$proc, $lines] = rm_proc_lines($db);
     $out = [];
     foreach ($def as $key => $d) {
@@ -796,7 +800,7 @@ function rm_clause_catalog(PDO $db): array
         if ($hit === '' && $lines) continue;            // 程序書目前沒有這一條：不出現在選單
         $no = ''; $txt = $hit;
         if (preg_match('/^(\d+(?:\.\d+)+)\s*(.*)$/u', $hit, $m)) { $no = $m[1]; $txt = $m[2]; }
-        $out[] = ['key' => $key, 'no' => $no, 'text' => preg_replace('/[。：:]+$/u', '', $txt), 'dims' => $d['dims'], 'akw' => $d['akw'], 'hint' => $d['hint'], 'ex' => (object)$d['ex']];
+        $out[] = ['key' => $key, 'no' => $no, 'text' => preg_replace('/[。：:]+$/u', '', $txt), 'dims' => $d['dims'], 'akw' => $d['akw'], 'hint' => $d['hint'], 'ex' => (object)$d['ex'], 'check' => in_array($key, $check, true), 'aspects' => $aspects[$key] ?? []];
     }
     return ['proc' => $proc, 'clauses' => $out];
 }

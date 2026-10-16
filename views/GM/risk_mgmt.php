@@ -215,6 +215,9 @@ $perms  = rm_perms($db, $rmUser);
         .sg-note { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
         #riskInline table { width:100%; border-collapse:collapse; font-size:12.5px; } #riskInline th, #riskInline td { border:1px solid #E5D3B3; padding:5px 7px; vertical-align:top; text-align:left; }
         #riskInline th { background:#F7E0BD; color:#5b3a1e; } #riskInline tr.rowdraft td { background:#FFFBF1; }
+        .cov-box { margin:6px 0; padding:8px 10px; border:1px solid #E0BE86; border-radius:6px; background:#FFFBF1; font-size:12.5px; color:#5b3a1e; }
+        .cov-box .cov-h { font-weight:bold; color:#8A5A2B; } .cov-box .cov-ok { color:#2e7d32; font-weight:bold; } .cov-box .cov-miss { color:#DD5138; font-weight:bold; }
+        .cov-box ul { margin:4px 0 0; padding-left:18px; } .cov-box li { margin:4px 0; } .cov-box .hint { color:#8a7a5a; } .cov-box .b-mini { margin:2px 3px 0 0; }
         .clause-row { margin-top:4px; } .clause-row select { width:100%; font-size:12px; }
         .clause-hint { margin-top:4px; padding:5px 8px; border-left:3px solid #F0A24B; background:#FDF8EF; font-size:12px; color:#5b3a1e; line-height:1.55; }
         .clause-hint .ch-no { color:#8A5A2B; font-weight:bold; } .clause-hint button { margin-top:3px; }
@@ -475,6 +478,10 @@ $perms  = rm_perms($db, $rmUser);
         <ul><li>處境分析表按「<b>填寫提示與範例</b>」會顯示 2-GM-05 目前線上版的相關條文，以及<b>兩張表如何對應</b>（條文取自 AS 文件線上版，程序書改版自動跟著變）。</li>
             <li>處境分析表每條議題會與前一年度比較並標「新增／變更／沿用」（管審輸入：議題的變更）；風險表每條有「<b>所需資源</b>」欄（管審輸出：資源需求）；<b>職業安全衛生、國際局勢、環境議題</b>每年必列（客戶／市場要求變化對本廠的風險：品質、安全、環境）。</li>
             <li>產生因應措施時，<b>成效確認（結果、日期、裁示建議、佐證）一併自動建立</b>；規則算不出結果時只寫佐證與原因，由主管確認。</li></ul>
+        <h4>條文涵蓋檢查（處境分析表）</h4>
+        <ul><li>處境分析表上方的「<b>條文涵蓋檢查</b>」會即時對照 2-GM-05 管理審查輸入的條文（稽核結果、客訴、滿意度、供應商績效、品質目標、預防矯正措施、其他系統運作狀況、前次追蹤、客戶／市場要求變化），列出<b>還沒有任何議題對應的條文</b>。</li>
+            <li>「客戶／市場要求變化」另外檢查<b>品質、安全、環境、國際局勢</b>四個面向，缺哪個面向就提示哪個。</li>
+            <li>缺的可按「＋新增」帶入範例；若本年度確實沒有這類議題，按「已檢視，本年度沒有這類議題」並寫一句原因（隨表存檔，稽核可說明）。儲存時若仍有未涵蓋的條文會提醒一次，可以先存。</li></ul>
         <h4>人工填寫風險與機會因應措施管制表</h4>
         <ul><li>按「選擇處境議題」後，系統會依規則<b>自動建議</b>風險與機會、嚴重度(S)、發生率(O)、因應措施、所需資源、成效確認方式，<b>只填空白欄位</b>，已填的不會被蓋掉，可自行修改。</li>
             <li><b>風險與機會編號</b>由系統自動配發：該列的風險等級屬於「需要因應措施」時，儲存當下配發（風險 R年度-流水、機會 O年度-流水），已配發不會變；不需要自己填。</li>
@@ -649,7 +656,7 @@ function boardHtml(){
         + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
         + '<button data-blank="context"><i class="fa fa-file-o"></i> 列印空白表單</button>'
         + '<button id="bSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>'
-        + '</div><div class="swot-status" id="bStatus"></div><div class="swot-status" id="bCompare" style="margin-top:2px;"></div><div class="swot-status" id="draftInfo" style="margin-top:2px;"></div><span class="err" id="bErr"></span>'
+        + '</div><div class="swot-status" id="bStatus"></div><div class="swot-status" id="bCompare" style="margin-top:2px;"></div><div class="cov-box" id="covBox" style="display:none;"></div><div class="swot-status" id="draftInfo" style="margin-top:2px;"></div><span class="err" id="bErr"></span>'
         + '<div class="swot-clause" id="clauseBox"><div class="cl-h">管理審查管理程序要求的對照</div><div class="hint">載入中…</div></div><div class="swot-grid">';
     $.each(META.swot, function(_, m){
         var c = SWOTCOL[m.key];
@@ -679,6 +686,72 @@ function itemHtml(it, n){
         + '<label>議題描述</label><textarea data-f="issue">' + esc(it.issue) + '</textarea>'
         + clauseRowHtml(it) + '</div>';
 }
+/* ---------- 條文涵蓋檢查：2-GM-05 管理審查輸入的條文，處境分析表有沒有列入（即時依畫面內容檢查；已檢視、本年度沒有的可標註原因） ---------- */
+var ASPECT_EX = {
+    '品質': {dim:'T', v:['客戶', '穩定的品質與驗收要求被滿足', '客戶對品質與驗收的要求提高（新增檢驗項目或規格變更），需確認本廠檢驗能力能符合']},
+    '安全': {dim:'W', v:['員工、政府單位（勞動檢查機構）', '安全的工作環境、符合職業安全衛生法規', '加工現場（砂輪、刀具、天車、搬運）的作業安全與防護、教育訓練若不足，可能發生職業災害']},
+    '環境': {dim:'T', v:['政府單位、客戶', '符合環保與減碳要求', '環保與減碳法規趨嚴，客戶也可能提出環境相關要求（碳足跡、有害物質管制）']},
+    '國際局勢': {dim:'T', v:['國際環境（客戶、營運成本）', '客戶訂單與合理的加工單價、可控的營運成本', '國際局勢（戰爭、關稅、通膨、匯率）使客戶壓低加工單價或減少下單，同時營運成本上升']}
+};
+function coverageCalc(){
+    var items = collectBoard(), by = {}, waive = BOARD.waive || {}, res = {rows:[], covered:0, total:0, missing:0};
+    $.each(items, function(_, it){
+        if (!$.trim(it.stakeholder + it.needs + it.issue)) return;
+        var k = it.clause_key; if (!k || k === 'none') return;
+        (by[k] = by[k] || []).push(it);
+    });
+    $.each(CLAUSES, function(_, c){
+        if (!c.check) return;
+        var list = by[c.key] || [], row = {c:c, n:list.length, waived:waive[c.key] || '', miss_aspects:[]};
+        if ((c.aspects || []).length){
+            var txt = $.map(list, function(it){ return it.stakeholder + ' ' + it.needs + ' ' + it.issue; }).join(' ');
+            $.each(c.aspects, function(_, a){ var hit = false; $.each(a[1], function(_, k){ if (txt.indexOf(k) >= 0) hit = true; }); if (!hit) row.miss_aspects.push(a[0]); });
+        }
+        row.ok = row.n > 0 && !row.miss_aspects.length;
+        res.total++;
+        if (row.ok || row.waived) res.covered++; else res.missing++;
+        res.rows.push(row);
+    });
+    return res;
+}
+function renderCoverage(){
+    var box = $('#covBox');
+    if (!CLAUSES.length || BOARD.can_edit === false){ box.hide(); return; }
+    var r = coverageCalc();
+    if (!r.total){ box.hide(); return; }
+    var h = '<div class="cov-h">條文涵蓋檢查（2-GM-05 管理審查輸入）　' + (r.missing ? '<span class="cov-miss">尚有 ' + r.missing + ' 條沒有列入</span>' : '<span class="cov-ok">全部條文都已涵蓋或已檢視</span>')
+        + '　<span class="hint">已涵蓋／已檢視 ' + r.covered + ' ／ 應檢查 ' + r.total + '（隨填寫即時更新）</span></div>';
+    var miss = $.grep(r.rows, function(x){ return !x.ok && !x.waived; });
+    if (miss.length){
+        h += '<ul>';
+        $.each(miss, function(_, x){
+            var c = x.c, line = '<li><b>' + esc(c.no) + '</b> ' + esc(c.text) + (x.miss_aspects.length ? '　<span class="cov-miss">缺少面向：' + esc(x.miss_aspects.join('、')) + '</span>' : '　<span class="cov-miss">處境分析表沒有對應這一條的議題</span>') + '<br><span class="hint">' + esc(c.hint) + '</span><br>';
+            if (x.miss_aspects.length) $.each(x.miss_aspects, function(_, a){ h += '<button type="button" class="b-mini warm" data-covaspect="' + esc(a) + '" data-covkey="' + c.key + '">＋ 新增「' + esc(a) + '」議題</button>'; });
+            else $.each(c.dims, function(_, d){ var m = swotMeta(d); h += '<button type="button" class="b-mini warm" data-covadd="' + c.key + '" data-covdim="' + d + '">＋ 新增到' + esc(m ? m.name : d) + '</button>'; });
+            h += '<button type="button" class="b-mini" data-covwaive="' + c.key + '">已檢視，本年度沒有這類議題</button></li>';
+        });
+        h += '</ul>';
+    }
+    var wv = $.grep(r.rows, function(x){ return x.waived; });
+    if (wv.length) h += '<div class="hint" style="margin-top:4px;">已檢視不列入：' + $.map(wv, function(x){ return esc(x.c.no) + '（' + esc(x.waived) + '）<a href="javascript:;" data-covundo="' + x.c.key + '">取消</a>'; }).join('、') + '</div>';
+    box.html(h).show();
+}
+var scheduleCov = debounce(renderCoverage, 200);
+$(document).on('click', '[data-covadd]', function(){
+    var c = clauseOf($(this).data('covadd')), d = $(this).data('covdim'), ex = c && c.ex ? c.ex[d] : null;
+    addSwot(d, {clause_key:c.key, stakeholder:ex ? ex[0] : '', needs:ex ? ex[1] : '', issue:ex ? ex[2] : ''}, true);
+});
+$(document).on('click', '[data-covaspect]', function(){
+    var a = ASPECT_EX[$(this).data('covaspect')]; if (!a) return;
+    addSwot(a.dim, {clause_key:$(this).data('covkey'), stakeholder:a.v[0], needs:a.v[1], issue:a.v[2]}, true);
+});
+$(document).on('click', '[data-covwaive]', function(){
+    var k = $(this).data('covwaive'), why = prompt('請簡述為什麼本年度不需要列入這一條（會一起存檔，稽核時可說明）。\n例如：今年沒有稽核不符合；今年沒有客戶滿意度調查結果。', '');
+    if (why === null) return; why = $.trim(why);
+    if (!why){ alert('請寫一句原因，才能標示「已檢視、不列入」。'); return; }
+    BOARD.waive = BOARD.waive || {}; BOARD.waive[k] = why; markDirty(); renderCoverage();
+});
+$(document).on('click', '[data-covundo]', function(){ delete (BOARD.waive || {})[$(this).data('covundo')]; markDirty(); renderCoverage(); });
 /* ---------- 每一項對應的程序書（2-GM-05）條文：只列「適用這個象限」的條文，不適合的不會出現在選單；沒有可選條文的象限不顯示這一列 ---------- */
 var CLAUSES = [];
 function clausesFor(dim){ return $.grep(CLAUSES, function(c){ return $.inArray(dim, c.dims) >= 0; }); }
@@ -737,7 +810,7 @@ function addSwot(key, it, focus){
     renumberBoard(); markDirty();
     if (focus) q.find('.swot-it:last [data-f=stakeholder]').focus();
 }
-function markDirty(){ BOARD.dirty = true; $('#bStatus').addClass('warn').text('內容尚未儲存，記得按右上「儲存」。'); syncDirtyFloat(); }
+function markDirty(){ BOARD.dirty = true; $('#bStatus').addClass('warn').text('內容尚未儲存，記得按右上「儲存」。'); syncDirtyFloat(); if (typeof scheduleCov === 'function') scheduleCov(); }
 /* 尚未儲存的提示固定在畫面右下角（隨視窗捲動、不會被捲出畫面），避免改了沒存就離開 */
 function syncDirtyFloat(){ $('#dirtyFloat').toggle(!!BOARD.dirty && $('#pane_context').is(':visible')); }
 setInterval(syncDirtyFloat, 400);
@@ -759,7 +832,9 @@ function loadBoard(year){
         $.each(res.items, function(_, it){ if (cmp.prev_year) it.cmp = cm[it.item_id] || ''; if (swotMeta(it.dimension)) addSwotQuiet(it.dimension, it); });
         renumberBoard();
         BOARD.compare = cmp;
+        try { BOARD.waive = res.doc && res.doc.clause_waive ? (JSON.parse(res.doc.clause_waive) || {}) : {}; } catch (e) { BOARD.waive = {}; }
         $('#bCompare').html(cmpSummaryHtml(cmp));
+        renderCoverage();
         $('#bDate').val(res.doc ? res.doc.fill_date : (res.year === cy ? META.today : res.year + '-12-31'));
         BOARD.maker0 = res.doc ? +res.doc.created_by : 0;
         loadMakers($('#bMaker'), $('#bDate').val(), res.doc ? res.doc.created_by : META.me.id, res.doc ? res.doc.created_by_name : META.me.name,
@@ -876,9 +951,14 @@ $(document).on('click', '#bSave', function(){
     if (+date.slice(0, 4) !== BOARD.year){ $('#bErr').text('填表日期必須落在 ' + BOARD.year + ' 年度內（整家公司一個年度一張）'); return; }
     var items = collectBoard(), bad = false;
     $.each(items, function(_, it){ if (!$.trim(it.stakeholder + it.needs + it.issue)) return; });
+    var cov = coverageCalc();
+    if (cov.missing){
+        var names = $.map($.grep(cov.rows, function(x){ return !x.ok && !x.waived; }), function(x){ return '・' + x.c.no + ' ' + x.c.text.slice(0, 26) + (x.miss_aspects.length ? '（缺：' + x.miss_aspects.join('、') + '）' : ''); }).join('\n');
+        if (!confirm('2-GM-05 管理審查輸入還有 ' + cov.missing + ' 條沒有列入處境分析表：\n' + names + '\n\n可以先儲存、之後再補；仍要儲存嗎？')) return;
+    }
     if (!$.grep(items, function(it){ return $.trim(it.stakeholder + it.needs + it.issue); }).length){ $('#bErr').text('至少要填寫一條內容'); return; }
     if (!$('#bMaker').prop('disabled') && !mkId($('#bMaker'))){ $('#bErr').text('請重新選擇填表人（填表日期改了，原填表人於該日期不在可選名單）'); return; }
-    post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items),
+    post({action:'doc_save', doc_id:BOARD.doc ? BOARD.doc.doc_id : 0, kind:'context', fill_date:date, items:JSON.stringify(items), clause_waive:JSON.stringify(BOARD.waive || {}),
           maker_id:(!$('#bMaker').prop('disabled') && mkId($('#bMaker')) && mkId($('#bMaker')) !== BOARD.maker0 ? mkId($('#bMaker')) : '')}, function(){ loadBoard(BOARD.year); });
 });
 /* ---------- 依系統資料建議 ---------- */

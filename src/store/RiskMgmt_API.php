@@ -612,6 +612,15 @@ if ($action === 'doc_save') {
             $id = (int)$db->lastInsertId();
         }
 
+        // 處境分析表：已檢視、本年度不需要列入的條文（要寫原因；條文必須是「應涵蓋檢查」的那幾條）
+        if ($kind === 'context' && array_key_exists('clause_waive', $_POST)) {
+            $wv = json_decode((string)$_POST['clause_waive'], true); $keep = [];
+            if (is_array($wv)) {
+                $okKeys = []; foreach (rm_clause_catalog($db)['clauses'] as $cc) if (!empty($cc['check'])) $okKeys[$cc['key']] = true;
+                foreach ($wv as $k0 => $why0) { $k0 = (string)$k0; $why0 = rmS($why0, 100); if (isset($okKeys[$k0]) && $why0 !== '') $keep[$k0] = $why0; }
+            }
+            $db->prepare("UPDATE rm_doc SET clause_waive=? WHERE doc_id=?")->execute([$keep ? json_encode($keep, JSON_UNESCAPED_UNICODE) : null, $id]);
+        }
         // 既有列：沿用原本的風險確認編號（不可因重存而重配）
         $oldConfirm = [];
         if ($old) {
