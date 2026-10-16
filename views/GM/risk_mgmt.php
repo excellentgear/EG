@@ -392,7 +392,7 @@ $perms  = rm_perms($db, $rmUser);
             <div class="hint">勾選後，兩張表的「填表人」下拉只列這些部門（含下轄）在填表日期當天任職的人，避免選錯；<b>一個都不勾＝不限部門</b>。兼任者的每一個職務都會各列一列。</div></div>
         <div class="set-sec"><h5>對外宣稱有外包的稽核製程</h5>
             <div class="fld" id="setOutsrc"></div>
-            <div class="hint">稽核製程取自「訂單追蹤」設定的稽核製程。只有勾選的製程才會做委外廠商相關的分析與建議；沒勾＝依 AS 稽核對外宣稱沒有外包，SWOT 與風險表都不列委外議題。客戶、品質、退貨等統計一律只計稽核製程的料號。</div></div>
+            <div class="hint">這裡只是顯示，<b>不在此設定</b>：請到「訂單追蹤」→設定→稽核製程，勾選每個製程的「對外宣稱有外包」。只有勾選的製程才會做委外廠商相關的分析與建議；沒勾＝依 AS 稽核對外宣稱沒有外包，SWOT 與風險表都不列委外議題。客戶、品質、退貨等統計一律只計稽核製程的料號（適用範圍為「只有全製」的製程不列入這些統計）。</div></div>
         <div class="set-sec"><h5>風險與機會編號前綴</h5>
             <div class="fld" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                 <label>風險</label><input type="text" id="setPrefix" maxlength="6" style="width:90px;">
@@ -411,6 +411,18 @@ $perms  = rm_perms($db, $rmUser);
         <div class="hint">按「儲存設定」才會生效；設定改了之後，所有既有資料的風險等級會依新設定即時重算（資料本身不會被改動）。</div>
     </div>
     <div class="rm-mft"><button type="button" data-close>取消</button><button type="button" class="btn-warm" id="btnSetSave">儲存設定</button></div>
+</div></div>
+
+<!-- ============ 假資料：一次設定相關日期 ============ -->
+<div class="rm-mask" id="demoDateMask" style="z-index:11300;"><div class="rm-modal" style="width:780px;">
+    <div class="rm-mhd"><span>設定假資料的相關日期（<span id="demoDateYear"></span> 年）</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
+    <div class="rm-mbd">
+        <div class="hint" style="margin-bottom:8px;">處境分析表、風險管制表、溝通記錄與措施追蹤、成效確認、內部稽核與管理審查會議的日期彼此有先後關係，所以這裡<b>一次設定</b>，系統再依這組日期推算其餘日期（溝通記錄與措施追蹤的日期會落在「溝通記錄期間」內，並挪到工作日）。
+            右邊紅字是目前不合理的原因，全部消除才能產生；<b>三場會議可以留白，留白就不建立</b>。</div>
+        <table class="rm-table" style="margin-bottom:6px;"><thead><tr><th style="width:250px;">項目</th><th style="width:150px;">日期</th><th>檢查</th></tr></thead><tbody id="demoDateBody"></tbody></table>
+        <div class="hint" id="demoDateMsg"></div>
+    </div>
+    <div class="rm-mft"><button type="button" id="btnDemoDateDefault">恢復預設日期</button><button type="button" data-close>取消</button><button type="button" class="btn-warm" id="btnDemoDateGo">依這些日期產生</button></div>
 </div></div>
 
 <!-- ============ 使用說明 ============ -->
@@ -1423,7 +1435,7 @@ function renderSet(){
     $.each(S.rm_likelihood, function(_, r){ tk += likRowHtml({orig:r.v, label:r.label, lo:r.prob_lo, hi:r.prob_hi, desc:r.desc}); });
     $('#setLik').html(tk + '</tbody></table>');
     $('#setMethod').val(S.rm_method); $.each(S.rm_dimensions, function(i, n){ $('#setSwot' + i).val(n); }); $('#setPrefix').val(S.rm_confirm_prefix); $('#setOppPrefix').val(S.rm_opp_prefix || 'O');
-    var oh = ''; $.each(META.audit_procs || [], function(_, p){ oh += '<label style="margin-right:16px;font-weight:normal;"><input type="checkbox" class="setOut" value="' + p.tag_id + '"' + (($.inArray(p.tag_id, S.rm_outsource_tags || []) >= 0) ? ' checked' : '') + '> ' + esc(p.name) + '</label>'; });
+    var oh = ''; $.each(META.audit_procs || [], function(_, p){ oh += '<span style="margin-right:16px;">' + (p.outsourced ? '✔ ' : '✘ ') + esc(p.name) + '：' + (p.outsourced ? '對外宣稱有外包' : '無外包') + '</span>'; });
     var mh = ''; $.each(META.depts || [], function(_, d){ mh += '<label style="font-weight:normal;"><input type="checkbox" class="setMkDept" value="' + d.id + '"' + (($.inArray(+d.id, (S.rm_maker_depts || []).map(Number)) >= 0) ? ' checked' : '') + '> ' + esc(d.name) + '</label>'; });
     $('#setMakerDepts').html(mh || '<span class="hint">尚無部門資料</span>');
     $('#setOutsrc').html(oh || '<span class="hint">訂單追蹤尚未設定稽核製程</span>');
@@ -1492,9 +1504,55 @@ function demoPost(data, done){
      .done(function(r){ $('#demoMsg').text(done(r)); })
      .fail(function(x){ var m=''; try{ m=JSON.parse(x.responseText).error; }catch(e){} $('#demoMsg').text(m || '失敗（逾時或 AI 沒有回應）'); });
 }
+/* 假資料日期：先向後端取預設日期（貼近作業順序、不超過今天），使用者逐項調整，後端同一份規則即時檢查並回報原因 */
+var DEMO_F = {}, DEMO_Y = 0, DEMO_T = null;
+function demoDateRead(){ var o = {}; $('#demoDateBody input[data-k]').each(function(){ o[$(this).data('k')] = $(this).val(); }); return o; }
+function demoDateRender(res){
+    DEMO_F = res.fields || {};
+    var h = '';
+    Object.keys(DEMO_F).forEach(function(k){
+        h += '<tr><td>' + esc(DEMO_F[k].label) + (DEMO_F[k].opt ? ' <span style="color:#8a6d45;font-size:11.5px;">（可留白＝不建立）</span>' : '') + '</td>'
+           + '<td><input type="date" data-k="' + k + '" value="' + esc((res.dates || res.defaults || {})[k] || '') + '" max="' + esc(res.today || '') + '" style="width:140px;"></td>'
+           + '<td class="demo-e" data-e="' + k + '" style="color:#DD5138;font-size:12px;"></td></tr>';
+    });
+    $('#demoDateBody').html(h);
+    demoDateShowErr(res.errors || {});
+}
+function demoDateShowErr(errs){
+    var n = 0;
+    $('#demoDateBody .demo-e').each(function(){ var m = errs[$(this).data('e')] || ''; $(this).text(m); if (m) n++; });
+    $('#btnDemoDateGo').prop('disabled', n > 0).css('opacity', n > 0 ? .5 : 1);
+    $('#demoDateMsg').text(n ? ('還有 ' + n + ' 項日期不合理，請修正後再產生。') : '日期檢查通過。');
+}
+function demoDateCheck(){
+    clearTimeout(DEMO_T);
+    DEMO_T = setTimeout(function(){
+        $.ajax({url:'../../src/store/AiDraft_API.php', type:'POST', dataType:'json', data:{csrf:EGAiDraft.csrf(), action:'demo_dates', year:DEMO_Y, dates:JSON.stringify(demoDateRead())}})
+         .done(function(r){ demoDateShowErr(r.errors || {}); }).fail(function(){ $('#demoDateMsg').text('檢查失敗，請稍後再試'); });
+    }, 250);
+}
+function demoDateLoad(useDefault){
+    $.ajax({url:'../../src/store/AiDraft_API.php', type:'POST', dataType:'json', data:{csrf:EGAiDraft.csrf(), action:'demo_dates', year:DEMO_Y,
+            dates:useDefault ? '' : JSON.stringify(demoDateRead())}})
+     .done(function(r){ if (useDefault) r.dates = r.defaults; demoDateRender(r); })
+     .fail(function(x){ var m=''; try{ m=JSON.parse(x.responseText).error; }catch(e){} $('#demoMsg').text(m || '取得預設日期失敗'); });
+}
+$(document).on('change input', '#demoDateBody input[data-k]', demoDateCheck);
+$('#btnDemoDateDefault').on('click', function(){ demoDateLoad(true); });
 $('#btnDemoSeed').on('click', function(){
-    var y = +$('#demoYear').val(); if (!y || !confirm('要產生 ' + y + ' 年的關聯假資料嗎？')) return;
-    demoPost({action:'demo_seed', year:y, ai:$('#demoAi').prop('checked') ? 1 : 0}, function(r){ var p=r.report||{}; return '已產生：溝通記錄 ' + p.comm_records + '、措施追蹤 ' + p.comm_tracks + '、處境議題 ' + p.context_items + '、風險項目 ' + p.risk_items + '、會議 ' + p.meetings + (p.warn && p.warn.length ? '；注意：' + p.warn.join('；') : ''); });
+    var y = +$('#demoYear').val(); if (!y) return;
+    DEMO_Y = y; $('#demoDateYear').text(y); $('#demoDateBody').html('<tr><td colspan="3">載入中…</td></tr>');
+    openMask('demoDateMask'); demoDateLoad(true);
+});
+$('#btnDemoDateGo').on('click', function(){
+    var y = DEMO_Y, dates = demoDateRead();
+    if (!confirm('要依這些日期產生 ' + y + ' 年的關聯假資料嗎？\n（該年度先前的【假資料】會先清除，真實資料不受影響）')) return;
+    closeMask('demoDateMask');
+    demoPost({action:'demo_seed', year:y, dates:JSON.stringify(dates), ai:$('#demoAi').prop('checked') ? 1 : 0}, function(r){
+        var p = r.report || {};
+        return '已產生：溝通記錄 ' + p.comm_records + '、措施追蹤 ' + p.comm_tracks + '、處境議題 ' + p.context_items + '、風險項目 ' + p.risk_items + '、會議 ' + p.meetings + ' 場'
+             + ((p.warn || []).length ? '。注意：' + p.warn.join('；') : '');
+    });
 });
 $('#btnDemoClear').on('click', function(){
     var y = +$('#demoYear').val(); if (!y || !confirm('要清除 ' + y + ' 年標【假資料】的資料嗎？（真實資料不受影響）')) return;
@@ -1509,8 +1567,7 @@ $('#btnSetSave').on('click', function(){
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
              rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(), rm_opp_prefix:$('#setOppPrefix').val(),
              rm_opp_terms:{sev:$('#setOppSev').val(), freq:$('#setOppFrq').val(), level:$('#setOppLv').val()},
-             rm_maker_depts:$('.setMkDept:checked').map(function(){ return +this.value; }).get(),
-             rm_outsource_tags:$('.setOut:checked').map(function(){ return +this.value; }).get()};
+             rm_maker_depts:$('.setMkDept:checked').map(function(){ return +this.value; }).get()};
     var send = function(force){
         $('#eSet').text('');
         NProgress.start();
@@ -1535,23 +1592,25 @@ $('#btnSetSave').on('click', function(){
 /* ================= 列印（ai-rules/16；比照紙本版面） ================= */
 function egPrintWindow(title, bodyHtml, docNo, extraCss){
     var asHtml = esc(String(docNo || ''));
-    var css = '@page{size:A4 landscape;margin:0;}html,body{margin:0;padding:0;}'
-        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:10mm 8mm 12mm;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    // 邊界一律交給 @page（多頁時每一頁都有上下留白，不會貼齊紙邊被裁掉；頁碼與表單編號也才有地方印）
+    var docNoCss = String(docNo || '').replace(/[\\"\r\n]/g, '');
+    var css = '@page{size:A4 landscape;margin:10mm 8mm 14mm;' + (docNoCss ? '@bottom-right{content:"' + docNoCss + '";font-size:9pt;color:#333;}' : '') + '}html,body{margin:0;padding:0;}'
+        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
         + '.pt-head .tt{font-size:18px;font-weight:bold;margin-top:3px;letter-spacing:1px;text-decoration:underline;}'
         + '.pt-meta{display:flex;justify-content:space-between;font-size:12.5px;margin:8px 0 4px;}'
         + 'table.pt{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;}'
         + 'table.pt thead{display:table-header-group;}table.pt tr{page-break-inside:avoid;}'
-        + 'table.pt th,table.pt td{border:1px solid #333;padding:4px 5px;text-align:center;word-wrap:break-word;overflow-wrap:break-word;line-height:1.4;vertical-align:middle;}'
+        + 'table.pt th,table.pt td{border:1px solid #333;padding:4px 5px;text-align:center;word-wrap:break-word;overflow-wrap:break-word;line-height:1.4;vertical-align:top;}table.pt th{vertical-align:middle;}'
         + 'table.pt th{background:#EFEFEF;font-weight:bold;}table.pt td.l{text-align:left;vertical-align:top;white-space:pre-wrap;}'
-        + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}' + (extraCss || '');
+        + (extraCss || '');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     // 超過一頁才加左下角頁碼；量高度要在「列印寬度」下量（視窗寬度不同高度就不同）
-    var onloadJs = 'var onePageA4=(210-28)*96/25.4;if(document.body.scrollHeight>onePageA4*0.92){var st=document.createElement(\'style\');'
+    var onloadJs = 'var onePageA4=(210-24)*96/25.4;if(document.body.scrollHeight>onePageA4*0.92){var st=document.createElement(\'style\');'
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";document.head.appendChild(st);}';
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css + '</style></head><body>'
-        + bodyHtml + (asHtml ? '<div class="pt-foot">' + asHtml + '</div>' : '')
+        + bodyHtml
         + '<scr' + 'ipt>window.onload=function(){' + onloadJs + 'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
     w.document.close();
 }

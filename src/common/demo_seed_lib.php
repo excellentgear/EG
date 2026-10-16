@@ -147,9 +147,102 @@ function eg_demo_doc(PDO $db, string $kind, string $date, array $deptIds, array 
     return (int)$db->lastInsertId();
 }
 
+/* ============ 日期：由使用者一次設定，並檢查前後關係合理 ============
+ * 會影響的是 SWOT（處境分析表）、風險與機會管制表、溝通管理、內部稽核事前／結束會議、管理審查會議，
+ * 所以不再寫死月日，改成「一組關鍵日期」，其餘日期（溝通記錄、措施追蹤的預計／結案日）都依這組日期推算。 */
+
+/** 日期欄位（key => 名稱、是否可留白＝留白就不建立該筆會議）。只有一份定義，前端畫面也由 API 取用 */
+function eg_demo_date_fields(): array
+{
+    return [
+        'ctx'      => ['label' => '組織處境分析表 填表日', 'opt' => false],
+        'risk'     => ['label' => '風險與機會因應措施管制表 填表日', 'opt' => false],
+        'comm_from' => ['label' => '溝通記錄期間（起）', 'opt' => false],
+        'comm_to'  => ['label' => '溝通記錄期間（迄）', 'opt' => false],
+        'effect'   => ['label' => '成效確認日', 'opt' => false],
+        'ia_pre'   => ['label' => '內部稽核 事前會議', 'opt' => true],
+        'ia_end'   => ['label' => '內部稽核 結束會議', 'opt' => true],
+        'mr'       => ['label' => '管理審查會議', 'opt' => true],
+    ];
+}
+
+function eg_demo_wd(PDO $db, string $date, int $dir): string
+{
+    if (!function_exists('eg_leave_is_workday')) require_once __DIR__ . '/leave_lib.php';
+    for ($i = 0; $i < 20; $i++) {
+        if (eg_leave_is_workday($db, $date)) return $date;
+        $date = date('Y-m-d', strtotime($date . ($dir < 0 ? ' -1 day' : ' +1 day')));
+    }
+    return $date;
+}
+
+/** 預設值：貼近一般作業順序，且不超過今天；留給使用者逐項調整 */
+function eg_demo_default_dates(PDO $db, int $Y): array
+{
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $cap = function (string $d) use ($today) { return $d > $today ? $today : $d; };
+    $D = [];
+    $D['ctx']       = eg_demo_wd($db, $cap($Y . '-01-12'), -1);
+    $D['risk']      = eg_demo_wd($db, $cap($Y . '-01-15'), -1);
+    if ($D['risk'] < $D['ctx']) $D['risk'] = $D['ctx'];
+    $D['comm_from'] = $cap($Y . '-02-01');
+    if ($D['comm_from'] < $D['risk']) $D['comm_from'] = $D['risk'];
+    $D['comm_to']   = $cap($Y . '-08-31');
+    if ($D['comm_to'] < $D['comm_from']) $D['comm_to'] = $D['comm_from'];
+    $D['ia_pre']    = eg_demo_wd($db, $cap($Y . '-09-01'), -1);
+    $D['ia_end']    = eg_demo_wd($db, $cap($Y . '-09-26'), -1);
+    if ($D['ia_end'] <= $D['ia_pre']) $D['ia_end'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_pre'] . ' +1 day')), 1);
+    $D['effect']    = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
+    $D['mr']        = $D['effect'];
+    foreach (['ia_pre', 'ia_end', 'mr'] as $k) if ($D[$k] > $today) $D[$k] = '';      // 今天以前排不下就留白（不建立）
+    if ($D['effect'] < $D['comm_to']) $D['effect'] = $D['comm_to'];
+    return $D;
+}
+
+/**
+ * 檢查日期是否合理。回傳 ['errors' => [欄位 => 原因], 'dates' => 正規化後的日期]。
+ * 規則（前後端共用這一份，畫面只是顯示原因）：
+ *   ①都在該年度內、不可晚於今天（未來日期的文件與會議不合理）②表單與會議日必須是工作日
+ *   ③處境分析表 ≤ 風險管制表 ≤ 溝通記錄期間（起）≤ 迄 ≤ 成效確認日
+ *   ④稽核事前會議在風險表之後、事前 < 結束 ⑤管理審查在成效確認與稽核結束會議之後
+ */
+function eg_demo_dates_check(PDO $db, int $Y, array $in): array
+{
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $F = eg_demo_date_fields(); $E = []; $D = [];
+    foreach ($F as $k => $f) {
+        $v = trim((string)($in[$k] ?? ''));
+        if ($v === '') { if (!$f['opt']) $E[$k] = '必填'; $D[$k] = ''; continue; }
+        if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $v) || !strtotime($v)) { $E[$k] = '日期格式不正確'; $D[$k] = ''; continue; }
+        $D[$k] = $v;
+        if ((int)substr($v, 0, 4) !== $Y) { $E[$k] = '必須在 ' . $Y . ' 年內（清除功能依年度，跨年的資料會清不掉）'; continue; }
+        if ($v > $today) { $E[$k] = '不可晚於今天（' . $today . '）'; continue; }
+        if (in_array($k, ['ctx', 'risk', 'effect', 'ia_pre', 'ia_end', 'mr'], true) && !eg_leave_is_workday_safe($db, $v)) $E[$k] = '不是工作日（假日或週末），請改選工作日';
+    }
+    $le = function (string $a, string $b, string $msgKey, string $msg, bool $strict = false) use (&$E, &$D) {
+        if ($D[$a] === '' || $D[$b] === '' || isset($E[$msgKey])) return;
+        if ($strict ? $D[$a] >= $D[$b] : $D[$a] > $D[$b]) $E[$msgKey] = $msg;
+    };
+    $le('ctx', 'risk', 'risk', '不可早於處境分析表填表日（' . $D['ctx'] . '），風險表是依處境分析表產生的');
+    $le('risk', 'comm_from', 'comm_from', '不可早於風險管制表填表日（' . $D['risk'] . '），措施追蹤是風險表建立之後才開始的');
+    $le('comm_from', 'comm_to', 'comm_to', '不可早於溝通記錄期間（起）');
+    $le('comm_to', 'effect', 'effect', '不可早於溝通記錄期間（迄）' . $D['comm_to'] . '，要先有措施的執行紀錄才能確認成效');
+    $le('risk', 'ia_pre', 'ia_pre', '不可早於風險管制表填表日，稽核要查的是已建立的管制表');
+    $le('ia_pre', 'ia_end', 'ia_end', '結束會議必須晚於事前會議（' . $D['ia_pre'] . '）', true);
+    $le('effect', 'mr', 'mr', '管理審查要看成效確認結果，不可早於成效確認日（' . $D['effect'] . '）');
+    $le('ia_end', 'mr', 'mr', '管理審查要審查內部稽核結果，不可早於稽核結束會議（' . $D['ia_end'] . '）');
+    return ['errors' => $E, 'dates' => $D];
+}
+
+function eg_leave_is_workday_safe(PDO $db, string $d): bool
+{
+    if (!function_exists('eg_leave_is_workday')) require_once __DIR__ . '/leave_lib.php';
+    return eg_leave_is_workday($db, $d);
+}
+
 /**
  * 產生一整套關聯假資料。
- * @param array $opt year（預設今年）、ai（是否讓 Ollama 寫文字）、cap（最多呼叫 Ollama 幾次，預設 24）
+ * @param array $opt year（預設今年）、dates（關鍵日期，見 eg_demo_date_fields；沒給就用預設值）、ai（是否讓 Ollama 寫文字）、cap（最多呼叫 Ollama 幾次，預設 24）
  * @return array 報告：各模組筆數、Ollama 呼叫與退回次數、警告
  */
 function eg_demo_seed(PDO $db, array $opt = []): array
@@ -161,6 +254,12 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $warn = [];
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     rm_ensure_schema($db); cm_ensure_schema($db);
+    $dchk = eg_demo_dates_check($db, $Y, isset($opt['dates']) && is_array($opt['dates']) ? $opt['dates'] : eg_demo_default_dates($db, $Y));
+    if ($dchk['errors']) {
+        $m = []; foreach ($dchk['errors'] as $k => $msg) $m[] = (eg_demo_date_fields()[$k]['label'] ?? $k) . '：' . $msg;
+        throw new RuntimeException('日期不合理，沒有產生任何資料：' . implode('；', $m));
+    }
+    $DT = $dchk['dates'];
 
     // 該年度已有「真實」表單就不產生
     $real = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE is_deleted=0 AND YEAR(fill_date)=? AND (remark IS NULL OR remark NOT LIKE ?)", [$Y, EG_DEMO_TAG . '%'])['n'];
@@ -179,7 +278,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     if (count($top) < 2) throw new RuntimeException('稽核製程在 ' . $Y . ' 與 ' . $dataYear . ' 年的出貨客戶不足，無法產生關聯資料');
     $cust = function (string $short) use ($db) {
         $c = eg_demo_q1($db, "SELECT customer_id, customer, customer_full FROM customer_list WHERE customer=? ORDER BY customer_id LIMIT 1", [$short]);
-        return ['name' => ($c['customer_full'] ?? '') ?: $short, 'id' => $c['customer_id'] ?? null];
+        return ['name' => $short, 'id' => $c['customer_id'] ?? null];
     };
     $c1 = $cust($top[0]['Client_name']); $c2 = $cust($top[1]['Client_name']);
     // 委外廠商：只取「對外宣稱委外的稽核製程」（模組設定），且廠商主檔「加工項目」綁定到該製程大類／小類者；製程名稱取自被宣稱的製程
@@ -191,12 +290,20 @@ function eg_demo_seed(PDO $db, array $opt = []): array
                                   GROUP BY b.maker_id_no ORDER BY n DESC LIMIT 1", [$dataYear . '-01-01']);
     }
     $procLabel = $outNos ? (string)reset($outNos) : '加工';
-    $newC = eg_demo_qa($db, "SELECT Client_name, MIN(Order_date) fd, SUM(Qty*Unit_price) a FROM is_list WHERE $in AND Client_name<>'' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN ? AND ? ORDER BY a DESC LIMIT 6", [$Y . '-01-01', $today]);
+    $newC = eg_demo_qa($db, "SELECT Client_name, MIN(Order_date) fd, SUM(Qty*Unit_price) a FROM is_list WHERE $in AND Client_name<>'' GROUP BY Client_name HAVING MIN(Order_date) BETWEEN ? AND ? ORDER BY a DESC LIMIT 6", [$Y . '-01-01', min($today, $Y . '-12-31')]);
 
     $own = [];
     foreach (['業務課', '生管組', '生產課', '品管組', '品管課', '技術課', '管理課', '倉管組', '採購組'] as $dn) $own[$dn] = eg_demo_owner($db, $dn);
     foreach (['業務課', '生管組', '生產課', '品管組', '管理課', '倉管組', '技術課', '品管課'] as $must) if (!$own[$must]) throw new RuntimeException('找不到部門「' . $must . '」的在職人員，無法指定負責人');
-    $d = function ($m, $day) use ($Y, $today) { return eg_demo_clamp(sprintf('%04d-%02d-%02d', $Y, $m, $day), $today); };
+    // 溝通記錄與措施追蹤的日期：原本寫死的月日（名義日期）依「溝通記錄期間」等比例換算並挪到工作日，順序（記錄日→結案日→預計完成日）不變
+    $cf = $DT['comm_from']; $ct = $DT['comm_to'];
+    $cSpan = max(0, (int)round((strtotime($ct) - strtotime($cf)) / 86400)); $y0 = strtotime($Y . '-01-01'); $y1 = strtotime($Y . '-12-31');
+    $d = function ($m, $day) use ($Y, $db, $cf, $ct, $cSpan, $y0, $y1) {
+        $nom = strtotime(sprintf('%04d-%02d-%02d', $Y, $m, $day));
+        $x = date('Y-m-d', strtotime($cf . ' +' . (int)round(($nom - $y0) / ($y1 - $y0) * $cSpan) . ' day'));
+        if ($x > $ct) $x = $ct;
+        $w = eg_demo_wd($db, $x, -1); if ($w < $cf) $w = eg_demo_wd($db, $x, 1); return $w > $ct ? $ct : $w;
+    };
     $eoy = $Y . '-12-31';
 
     /* ---------- 2. 溝通管理：記錄＋追蹤（關鍵字對應風險表各類別，所以風險列自動連到這些追蹤） ---------- */
@@ -226,8 +333,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     // 委外
     if ($vend) {
         $q = '部分訂單因委外' . $procLabel . '交期延後，需要加強交期與進度跟催。';
-        $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $vend['mall'] ?: $vend['mshort'], 'party_kind' => '供應商', 'question' => $q], '生管組加強跟催主要委外廠商的交期與進度，每週回報生管組長。');
-        $rec(['date' => $d(8, 20), 'type' => 'irregular', 'cat' => '供應商', 'party' => $vend['mall'] ?: $vend['mshort'], 'ref' => $vend['mid'], 'ch' => ['phone'], 'maker' => $own['生管組'], 'items' => [
+        $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $vend['mshort'] ?: $vend['mall'], 'party_kind' => '供應商', 'question' => $q], '生管組加強跟催主要委外廠商的交期與進度，每週回報生管組長。');
+        $rec(['date' => $d(8, 20), 'type' => 'irregular', 'cat' => '供應商', 'party' => $vend['mshort'] ?: $vend['mall'], 'ref' => $vend['mid'], 'ch' => ['phone'], 'maker' => $own['生管組'], 'items' => [
             ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['生管組'], 'due' => $eoy, 'action' => '加強跟催主要委外廠商（' . ($vend['mshort'] ?: '委外廠商') . '等）的交期與進度，每週回報生管組長']],
         ]]);
     } else $warn[] = '沒有「加工項目」綁定到對外宣稱委外製程的廠商（或模組設定沒有勾選對外宣稱委外的稽核製程），略過供應商溝通';
@@ -261,6 +368,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     foreach ($newC as $i => $nc) {
         $cc = $cust($nc['Client_name']);
         $dt = eg_demo_clamp(date('Y-m-d', strtotime($nc['fd'] . ' +' . ($i % 3 === 0 ? 0 : 3 + $i * 4) . ' days')), $today);
+        if ($dt < $cf || $dt > $ct) { $warn[] = '新客戶「' . $nc['Client_name'] . '」首次出貨 ' . $nc['fd'] . '，溝通日期 ' . $dt . ' 不在溝通記錄期間內，已跳過'; continue; }
         $rec(['date' => $dt, 'type' => 'irregular', 'cat' => '客戶', 'party' => $cc['name'], 'ref' => $cc['id'], 'ch' => [$i % 2 ? 'phone' : 'face'], 'maker' => $mk, 'items' => [['q' => $ncQ[$i % 3][0], 'a' => $ncQ[$i % 3][1]]]]);
     }
     // 溝通管制表（常態機制）：稽核製程出貨前三大客戶
@@ -283,9 +391,9 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     }
     $has = function ($needs) use (&$ctx) { foreach ($ctx as $c) if ($c['needs'] === $needs) return true; return false; };
     $extra = [
-        ['S', '客戶', '穩定的稽核製程加工品質', $dataYear . ' 年稽核製程（齒研、插齒）的訂單與加工製程皆有 BOM 製程紀錄可追溯'],
+        ['S', '客戶', '穩定的稽核製程加工品質', '稽核製程（齒研、插齒）的訂單與加工製程皆有 BOM 製程紀錄可追溯'],
         ['S', '管理階層、客戶', '品質系統有效運作、產品符合要求、品質績效可追溯', '品質系統於認證範圍（齒研、插齒）內運作，內部稽核、管理審查與 KPI 皆有紀錄可追溯'],
-        ['O', '客戶', '更多稽核製程加工訂單', '稽核製程（齒研、插齒）' . $dataYear . ' 年已有訂單，可向既有客戶爭取更多同類齒輪加工訂單'],
+        ['O', '客戶', '更多稽核製程加工訂單', '稽核製程（齒研、插齒）已有穩定訂單，可向既有客戶爭取更多同類齒輪加工訂單'],
         ['O', '客戶', '接到訂單時快速評估並回覆交期', '新客戶陸續詢價，產品開發評估表與 PFMEA 已建立參考資料，可加速評估與承接'],
         ['T', '政府單位（環保局、消防局、人事行政機關）', '依法申報、保存紀錄', '事業廢棄物、消防設備檢修、勞工健康檢查與職安衛訓練的申報皆有法定期限，逾期會受處分'],
         ['W', '客戶、員工', '進料點收正確、產品識別與追溯不中斷、客供料妥善保管', '收貨（外購品、客供料、委外回廠品）點收數量、規格或識別標示不當，可能造成混料、短缺或追溯中斷'],
@@ -293,7 +401,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     ];
     foreach ($extra as $e) if (!$has($e[2])) $ctx[] = ['dimension' => $e[0], 'stakeholder' => $e[1], 'needs' => $e[2], 'issue' => $e[3]];
     foreach (['S', 'W', 'O', 'T'] as $q) { $n = 0; foreach ($ctx as $c) if ($c['dimension'] === $q) $n++; if ($n < 2) $warn[] = '處境分析表「' . $q . '」象限只有 ' . $n . ' 筆（每個象限至少要兩筆），請人工補充'; }
-    $ctxDate = $d(1, 12);
+    $ctxDate = $DT['ctx'];
     $ctxId = eg_demo_doc($db, 'context', $ctxDate, [], []);
     $ctxIds = []; $seq = 0;
     foreach ($ctx as $c) {
@@ -302,7 +410,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
            ->execute([$ctxId, $seq, RM_SWOT[$c['dimension']]['scope'], $c['dimension'], $c['stakeholder'], $c['needs'], $c['issue']]);
         $ctxIds[] = ['id' => (int)$db->lastInsertId()] + $c;
     }
-    $riskDate = $d(1, 15);
+    $riskDate = $DT['risk'];
     $deptNames = ['總經理室', '業務課', '生管組', '品管課', '技術課', '管理課'];
     $deptIds = array_values(array_filter(array_map(function ($n) use ($db) { return eg_demo_dept_id($db, $n); }, $deptNames)));
     $riskId = eg_demo_doc($db, 'risk', $riskDate, $deptIds, $deptNames);
@@ -319,7 +427,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     // 成效確認：規則算得出「有效／部分有效／進行中」才寫入；無效或未確認的留空待人工（不產生要開矯正單的資料）
     $rulings = ['effective' => '經確認措施已落實，指標或追蹤項目達成，本項成效有效；維持現行作法並納入下年度持續監控。', 'partial' => '部分達成；要求負責人於下次確認前補強措施並持續追蹤。',
                 'doing' => '措施執行中，尚未到可判定成效的時點；維持追蹤至下次確認。'];
-    $effDate = eg_demo_clamp($Y . '-10-09', $today); $effN = 0; $skipped = 0;
+    $effDate = $DT['effect']; $effN = 0; $skipped = 0;
     foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
         $ev = rm_rule_evidence($db, $set, $row, $Y);
         if (!isset($rulings[$ev['status']])) { $skipped++; continue; }
@@ -332,40 +440,53 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $topU = eg_org_user($db, 'top_approver');
     $chair = $topU ? ['id' => (int)$topU['id'], 'name' => (string)($topU['user_cname'] ?? '')] : ['id' => (int)$own['管理課']['id'], 'name' => $own['管理課']['name']];
     $attDepts = ['業務課', '生管組', '生產課', '品管課', '技術課', '管理課', '倉管組', '採購組'];
-    $meetings = [
-        ['subj' => '管理審查會議', 'mk' => 'mr', 'date' => $d(10, 9), 'loc' => '大會議室'],
-        ['subj' => '內部稽核事前會議', 'mk' => 'ia', 'date' => $d(9, 1), 'loc' => '大會議室'],
-        ['subj' => '內部稽核結束會議', 'mk' => 'ia', 'date' => $d(9, 26), 'loc' => '大會議室'],
-    ];
+    $meetings = [];
+    if ($DT['ia_pre'] !== '') $meetings[] = ['subj' => '內部稽核事前會議', 'mk' => 'ia', 'date' => $DT['ia_pre'], 'loc' => '大會議室'];
+    if ($DT['ia_end'] !== '') $meetings[] = ['subj' => '內部稽核結束會議', 'mk' => 'ia', 'date' => $DT['ia_end'], 'loc' => '大會議室'];
+    if ($DT['mr'] !== '')     $meetings[] = ['subj' => '管理審查會議', 'mk' => 'mr', 'date' => $DT['mr'], 'loc' => '大會議室'];
+    foreach (['ia_pre' => '內部稽核事前會議', 'ia_end' => '內部稽核結束會議', 'mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
     $deptList = eg_demo_qa($db, "SELECT id, name FROM department ORDER BY CHAR_LENGTH(name) DESC");
     $mCount = 0;
     foreach ($meetings as $m) {
-        $db->prepare("INSERT INTO meeting_record (subject, meeting_date, start_time, end_time, location, chair_user_id, chair_name, recorder_user_id, recorder_name, status, created_at, created_by, created_by_name, updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,'done',?,1,'超級管理員',?)")
-           ->execute([EG_DEMO_TAG . $m['subj'], $m['date'], '09:00', '10:30', $m['loc'], $chair['id'], $chair['name'], $own['管理課']['id'], $own['管理課']['name'], $m['date'] . ' 08:30:00', $m['date'] . ' 11:00:00']);
-        $mid = (int)$db->lastInsertId();
-        $att = [$chair['id'] => [$chair['name'], '總經理室', '總經理', 1]];
-        foreach ($attDepts as $dn) { $o = $own[$dn] ?? []; if ($o && !isset($att[$o['id']])) $att[$o['id']] = [$o['name'], $dn, $o['pos'], 0]; }
-        foreach ($att as $uid => $a)
-            $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name, position_name, is_chair, signed, signed_at) VALUES (?,?,?,?,?,?,1,?)")
-               ->execute([$mid, $uid, $a[0], $a[1], $a[2], $a[3], $m['date'] . ' 09:05:00']);
-        foreach (['general' => 4, 'directive' => 2] as $kind => $want) {
-            $lines = [];
-            $lines = eg_demo_lines($db, $st, 'meeting_items', ['meeting_kind' => $m['mk'], 'subject' => $m['subj'], 'year' => $Y, 'item_kind' => $kind]);
-            if (!$lines) $lines = eg_demo_meeting_fallback($db, $m['mk'], $kind, $Y, $riskId);
-            $so = 0;
-            foreach (array_slice($lines, 0, $want + 2) as $ln) {
-                $so++; $ids = []; $nm = [];
-                foreach ($deptList as $dp) if (mb_strpos($ln, $dp['name']) !== false && count($ids) < 2 && !in_array((int)$dp['id'], $ids, true)) { $ids[] = (int)$dp['id']; $nm[] = $dp['name']; }
-                if (!$ids) { $ids = [eg_demo_dept_id($db, '管理課')]; $nm = ['管理課']; }
-                $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, confirm_mode, due_na) VALUES (?,?,?,?,?,?,?,'onsite',0)")
-                   ->execute([$mid, $kind, $so, mb_substr($ln, 0, 400), eg_demo_clamp(date('Y-m-d', strtotime($m['date'] . ' +30 days')), $eoy), implode(',', $ids), implode('、', $nm)]);
+        // 每場會議各自一個交易：任何一步建立不了就整場跳過（不留半套資料），並在報告裡說明原因
+        try {
+            $att = [$chair['id'] => [$chair['name'], '總經理室', '總經理', 1]];
+            foreach ($attDepts as $dn) { $o = $own[$dn] ?? []; if ($o && !isset($att[$o['id']])) $att[$o['id']] = [$o['name'], $dn, $o['pos'], 0]; }
+            if (!$chair['id'] || count($att) < 3) throw new RuntimeException('找不到足夠的出席人員（主席與各部門代表），無法建立');
+            $db->beginTransaction();
+            $db->prepare("INSERT INTO meeting_record (subject, meeting_date, start_time, end_time, location, chair_user_id, chair_name, recorder_user_id, recorder_name, status, created_at, created_by, created_by_name, updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,'done',?,1,'超級管理員',?)")
+               ->execute([EG_DEMO_TAG . $m['subj'], $m['date'], '09:00', '10:30', $m['loc'], $chair['id'], $chair['name'], $own['管理課']['id'], $own['管理課']['name'], $m['date'] . ' 08:30:00', $m['date'] . ' 11:00:00']);
+            $mid = (int)$db->lastInsertId();
+            foreach ($att as $uid => $a)
+                $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name, position_name, is_chair, signed, signed_at) VALUES (?,?,?,?,?,?,1,?)")
+                   ->execute([$mid, $uid, $a[0], $a[1], $a[2], $a[3], $m['date'] . ' 09:05:00']);
+            $itemN = 0;
+            foreach (['general' => 4, 'directive' => 2] as $kind => $want) {
+                $lines = eg_demo_lines($db, $st, 'meeting_items', ['meeting_kind' => $m['mk'], 'subject' => $m['subj'], 'year' => $Y, 'item_kind' => $kind]);
+                if (!$lines) $lines = eg_demo_meeting_fallback($db, $m['mk'], $kind, $Y, $riskId);
+                $so = 0;
+                foreach (array_slice($lines, 0, $want + 2) as $ln) {
+                    $so++; $ids = []; $nm = [];
+                    foreach ($deptList as $dp) if (mb_strpos($ln, $dp['name']) !== false && count($ids) < 2 && !in_array((int)$dp['id'], $ids, true)) { $ids[] = (int)$dp['id']; $nm[] = $dp['name']; }
+                    if (!$ids) { $ids = [eg_demo_dept_id($db, '管理課')]; $nm = ['管理課']; }
+                    // 應完成日期：會議後 30 天，但不超過年底、也不晚於今天以後太多（會議日期本身已 ≤ 今天）
+                    $due = eg_demo_clamp(date('Y-m-d', strtotime($m['date'] . ' +30 days')), $eoy);
+                    $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, confirm_mode, due_na) VALUES (?,?,?,?,?,?,?,'onsite',0)")
+                       ->execute([$mid, $kind, $so, mb_substr($ln, 0, 400), $due, implode(',', $ids), implode('、', $nm)]);
+                    $itemN++;
+                }
             }
+            if ($itemN === 0) throw new RuntimeException('產生不出會議要項，略過這場會議');
+            $db->commit();
+            $mCount++;
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $warn[] = $m['subj'] . '（' . $m['date'] . '）無法建立，已跳過：' . $e->getMessage();
         }
-        $mCount++;
     }
     return ['year' => $Y, 'cleared' => $clear, 'comm_records' => count($R), 'comm_tracks' => array_sum(array_map(function ($r) { return count($r['tracks']); }, $R)),
-            'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount,
+            'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount,
             'ai' => ['enabled' => !empty($opt['ai']), 'calls' => $st['calls'], 'ok' => $st['ai_ok'], 'fallback' => $st['fallback'], 'error' => $st['ai_err']], 'warn' => $warn];
 }
 

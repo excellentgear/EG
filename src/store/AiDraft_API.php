@@ -5,7 +5,7 @@
  *   GET  action=info       → enabled／model／csrf（非管理員一律 enabled=false，不給 token）
  *   POST action=draft      → kind＋ctx（JSON）＋csrf → text
  *   POST action=set_model  → model＋csrf（只能選本機已安裝的）
- *   POST action=demo_seed  → year＋ai＋csrf：產生關聯假資料（demo_seed_lib.php）；demo_clear → 清除【假資料】
+ *   POST action=demo_dates → year（＋dates）：預設日期與合理性檢查；demo_seed → year＋dates＋ai＋csrf：產生關聯假資料（demo_seed_lib.php）；demo_clear → 清除【假資料】
  */
 $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
@@ -60,9 +60,18 @@ if ($action === 'draft') {
     if ($text === '') jerr('模型沒有回傳內容，請再按一次', 502);
     jout(['text' => $text, 'model' => eg_ai_pick_model($db), 'sec' => round(microtime(true) - $t0, 1)]);
 }
+if ($action === 'demo_dates') {         // 取得預設日期＋欄位定義；帶 dates 時順便回傳檢查結果（畫面即時顯示不合理的原因）
+    $y = (int)($_POST['year'] ?? 0); if ($y < 2000 || $y > 2100) jerr('年度不合法');
+    $dates = json_decode((string)($_POST['dates'] ?? ''), true);
+    $def = eg_demo_default_dates($db, $y);
+    $chk = eg_demo_dates_check($db, $y, is_array($dates) ? $dates : $def);
+    jout(['fields' => eg_demo_date_fields(), 'defaults' => $def, 'dates' => $chk['dates'], 'errors' => (object)$chk['errors'], 'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn()]);
+}
 if ($action === 'demo_seed') {          // 一鍵產生溝通管理／風險與機會／內稽與管審會議的關聯假資料（標【假資料】，可清除）
     $y = (int)($_POST['year'] ?? 0); if ($y < 2000 || $y > 2100) jerr('年度不合法');
-    try { $rep = eg_demo_seed($db, ['year' => $y, 'ai' => !empty($_POST['ai']), 'cap' => 24]); }
+    $dates = json_decode((string)($_POST['dates'] ?? ''), true);
+    if (!is_array($dates)) jerr('請先設定日期');
+    try { $rep = eg_demo_seed($db, ['year' => $y, 'dates' => $dates, 'ai' => !empty($_POST['ai']), 'cap' => 24]); }
     catch (RuntimeException $e) { jerr($e->getMessage(), 400); }
     jout(['report' => $rep]);
 }
