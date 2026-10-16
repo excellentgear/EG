@@ -824,7 +824,12 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         <span class="st-sp"></span>
         <button type="button" class="st-btn" id="stFrame" title="把正文整塊用外框框起來，框線與頁首同寬">
           <i class="fa fa-square-o"></i> 內容大框</button>
-        <select id="stBodyPad" class="st-sel" data-eg-skip title="大框與文字之間留多少空白">
+        <span class="st-lab">文字離框線</span>
+        <select id="stBodyGap" class="st-sel" data-eg-skip title="每一行第一個字離左右框線幾個空格（至少留 1 個才不會貼著線）">
+          <option value="0">0 空格</option><option value="1">1 空格</option><option value="2">2 空格</option>
+          <option value="3">3 空格</option><option value="4">4 空格</option><option value="6">6 空格</option>
+        </select>
+        <select id="stBodyPad" class="st-sel" data-eg-skip title="大框上下與文字之間留多少空白">
           <option value="2mm">2mm</option><option value="3mm">3mm</option>
           <option value="4mm">4mm</option><option value="5mm">5mm</option>
         </select>
@@ -1834,6 +1839,7 @@ function fillStyleForm() {
     $('#stSize').val(s.tbl_size || '');
     $('#stPad').val(s.cell_pad || '4px');
     $('#stBodyPad').val(s.body_pad || '3mm');
+    $('#stBodyGap').val(s.body_gap === undefined || s.body_gap === '' ? '2' : s.body_gap);
     $('#stCoMode').val(s.hdr_co_mode === 'one' ? 'one' : 'two');
     $('#stBold').toggleClass('on', String(s.tbl_weight) === 'bold');
     $('#stFrame').toggleClass('on', String(s.body_frame) === '1');
@@ -1869,14 +1875,16 @@ function previewStyle() {
         p.style.setProperty('--adt-body-brd',
             ($('#stBW').val() || '1px') + ' ' + ($('#stBStyle').val() || 'solid') + ' ' + ($('#stBColor').val() || '#000'));
         p.style.setProperty('--adt-body-pad', $('#stBodyPad').val() || '3mm');
+        p.style.setProperty('--adt-body-gap', $('#stBodyGap').val() || '2');
     } else {
         p.style.setProperty('--adt-body-brd', '0 none transparent');
         p.style.setProperty('--adt-body-pad', '0');
+        p.style.setProperty('--adt-body-gap', '0');
     }
     // 字型／字級一變，頁首那幾格就要重新算一次要不要縮小
     if (window.EGDocFit) EGDocFit.runWhenReady(p);
 }
-$(document).on('change', '#stFont,#stFontEn,#stSize,#stHdrSize,#stCoMode,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
+$(document).on('change', '#stFont,#stFontEn,#stSize,#stHdrSize,#stCoMode,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad,#stBodyGap', previewStyle);
 $(document).on('click', '#stBold,#stFrame', function(){ $(this).toggleClass('on'); previewStyle(); });
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
@@ -1905,7 +1913,8 @@ $('#btnTplSave').on('click', function(){
             brd_color:  $('#stBColor').val(),
             cell_pad:   $('#stPad').val(),
             body_frame: $('#stFrame').hasClass('on') ? 1 : 0,
-            body_pad:   $('#stBodyPad').val()
+            body_pad:   $('#stBodyPad').val(),
+            body_gap:   $('#stBodyGap').val()
         }, function(r2){
             if (!r2.success) { $('#tplMsg').text(''); alert(r2.message || '公版設定存檔失敗'); return; }
             finishTpl();

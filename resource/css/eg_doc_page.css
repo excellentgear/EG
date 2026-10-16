@@ -43,7 +43,9 @@
        所以框線寬度與內距對兩邊的影響完全相同，換頁位置不會走鐘。
        box-sizing:border-box ＝ 外框吃的是內距不是額外高度，編輯區的可用高度算法不必改。 */
     border: var(--adt-body-brd, 0 none transparent);
-    padding: var(--adt-body-pad, 0);
+    /* 上下留 body_pad、左右留「N 個空格」：文字第一個字不會貼著框線。
+       沒開內容大框時兩個變數都不存在 → 0，與改版前相同。 */
+    padding: var(--adt-body-pad, 0) calc(var(--adt-body-gap, 0) * 6pt);
     box-sizing: border-box;
 }
 

@@ -196,7 +196,9 @@ function adt_style_defaults(): array
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
             'cell_pad' => '4px',
             // 內容大框：把正文整塊框起來，框線與頁首同寬、上下自然對齊
-            'body_frame' => '0', 'body_pad' => '3mm'];
+            'body_frame' => '0', 'body_pad' => '3mm',
+            // 文字離左右框線的距離（單位：半形空格數，1 個空格＝6pt，與字級無關，編輯器與列印才一致）
+            'body_gap' => '2'];
 }
 
 /** 目前的公版設定（沒設定過就回預設＝與改版前外觀完全相同） */
@@ -275,6 +277,11 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         if ($v !== '' && !preg_match('/^\d{1,2}(\.\d)?(mm|px)$/', $v)) return ['ok' => false, 'msg' => '大框內距要像 3mm 這樣'];
         $new['body_pad'] = $v ?: '3mm';
     }
+    if (array_key_exists('body_gap', $in)) {
+        $v = trim((string)$in['body_gap']);
+        if (!preg_match('/^[0-9]$/', $v)) return ['ok' => false, 'msg' => '文字離框線的空格數要是 0~9'];
+        $new['body_gap'] = $v;
+    }
     if (array_key_exists('cell_pad', $in)) {
         $v = trim((string)$in['cell_pad']);
         if ($v !== '' && !preg_match('/^\d{1,2}px$/', $v)) return ['ok' => false, 'msg' => '儲存格內距要像 4px 這樣'];
@@ -330,6 +337,7 @@ function adt_style_css(PDO $db): string
         // 大框用的是同一組框線設定，所以它一定跟頁首那張表看起來是同一套
         $css[] = '--adt-body-brd:' . $s['brd_w'] . ' ' . $s['brd_style'] . ' ' . $s['brd_color'];
         $css[] = '--adt-body-pad:' . ($s['body_pad'] !== '' ? $s['body_pad'] : '3mm');
+        $css[] = '--adt-body-gap:' . (($s['body_gap'] ?? '') !== '' ? $s['body_gap'] : '2');
     }
     return ':root{' . implode(';', $css) . '}';
 }

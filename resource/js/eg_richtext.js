@@ -851,7 +851,10 @@
          那邊有 max-height:260px，不蓋掉的話可編輯區會被壓成 260px，
          編輯器一頁塞得下的量遠小於列印可用高，列印就會整批多出一倍的頁數（實測畫面 14 頁、PDF 22 頁）。 */
       '.egrt-main{flex:1 1 auto;overflow:hidden;outline:none;min-height:0 !important;',
-      'max-height:none !important;padding:0;}',
+      /* 內距要吃公版的大框設定（上下 body_pad、左右 N 個空格），與列印版同一條規則，
+         換行與換頁位置才一致；原本寫死 padding:0，編輯器裡文字會緊貼框線。
+         ⚠ 不能直接刪掉：.egrt-body（同一個元素也有）會把 7px 9px 帶回來。 */
+      'max-height:none !important;padding:var(--adt-body-pad,0) calc(var(--adt-body-gap,0)*6pt);}',
       '.egrt-chrome{flex:0 0 auto;}',
       '.egrt-chrome *{cursor:default;}',
       // 系統頁（封面／制修訂紀錄書／目錄）：唯讀，標示「系統自動產生」
