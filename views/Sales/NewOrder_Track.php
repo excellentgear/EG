@@ -3361,6 +3361,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         } catch (Throwable $eQ) { $ate_q_map = []; $ate_proc_map = []; }
     }
 
+    // 類似料號（2026-10-16）：d_id => ['best'=>A|B|C,...]，整頁只算一次（約 30ms）；失敗就當沒有，清單照常顯示
+    $ps_levels = [];
+    try {
+        require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+        require_once __DIR__ . '/../../src/common/part_similar_lib.php';
+        $ps_levels = ps_similar_levels($pdo);
+    } catch (Throwable $ePs) { $ps_levels = []; }
+
     // 客戶提醒「待處理」筆數（2026-09-23）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
     // 表還沒建起來時 catch 掉當作沒有，清單照樣顯示得出來（鐵律：新客戶提醒功能不影響既有使用者）。
     $ocr_pending_map = [];
@@ -4251,6 +4259,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>
                         <?php else: ?>
                         <span class="text-muted" style="font-size:11px;">（無）</span>
+                        <?php endif; ?>
+                        <?php
+                        // 類似料號（淺藍小標籤）：只在還沒轉生管、且有 A/B 級類似料號時顯示；點一下開跳窗
+                        $_psLv = $ps_levels[(int)($order['d_id_ID'] ?? 0)] ?? null;
+                        if ($_psLv && $_psLv['best'] !== 'C' && empty($order['pmGet'])):
+                        ?>
+                        <div style="margin-top:3px;"><span style="cursor:pointer;display:inline-block;background:#E4F1FB;border:1px solid #9CC8E8;color:#1f4e79;border-radius:3px;padding:0 6px;font-size:10px;line-height:16px;"
+                              onclick="if(window.EGPartSimilar)EGPartSimilar.prompt({dId:<?= (int)$order['d_id_ID'] ?>,ctx:'order',once:false,refBanner:false})"
+                              title="有類似料號（齒輪規格相同），點一下查看原因、最近訂單與逐項比對"><i class="fa fa-clone"></i> 類似料號 <?= $_psLv['B'] ? 'B×' . (int)$_psLv['B'] . ' ' : '' ?><?= $_psLv['A'] ? 'A×' . (int)$_psLv['A'] : '' ?></span></div>
                         <?php endif; ?>
                     </div>
                     <div class="ate-note-bar">

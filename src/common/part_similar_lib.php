@@ -247,6 +247,93 @@ function ps_gear_brief(array $list): string {
     return implode('；', $bits);
 }
 
+
+/**
+ * 兩個料號的類似判定（ps_find 與整批統計 ps_similar_levels 共用，規則只有這一份）。
+ * 呼叫前提：兩邊的齒輪簽章（不含轉位係數）已經相同。
+ * @return array|null null＝不算類似；否則 ['level'=>'A'|'B'|'C','reasons'=>[...]]
+ */
+function ps_pair_eval(array $mine, array $theirs, string $myLen, string $theirLen, array $cfgLabels, array $myTags, array $theirTags): ?array {
+    // 轉位係數：兩邊都有填且不同 → 不算類似；只有一方填 → 算相同並註明
+    $shiftNote = '';
+    foreach ($mine as $i => $mg) {
+        $a = $mg['norm']['shift']; $b = $theirs[$i]['norm']['shift'] ?? '';
+        if ($a !== '' && $b !== '' && abs((float)$a - (float)$b) > 0.00005) return null;
+        if (($a === '') !== ($b === '')) $shiftNote = '轉位係數只有一方有填（' . ($a !== '' ? '本料號 X' . $a : '對方 X' . $b) . '），視為相同';
+    }
+    $lenOk = null;   // null＝無法確認
+    if ($myLen !== '' && $theirLen !== '') {
+        if (abs((float)$myLen - (float)$theirLen) > 0.0049) return null;   // 兩邊都有填卻不同＝不是類似
+        $lenOk = true;
+    }
+    $reasons = ['齒輪規格完全相同（' . ps_gear_brief($mine) . '）'];
+    if ($shiftNote !== '') $reasons[] = $shiftNote;
+    if ($lenOk === true) $reasons[] = '工件總長相同（' . $myLen . ' mm）';
+    else $reasons[] = '工件總長' . ($myLen === '' && $theirLen === '' ? '雙方都未填' : ($myLen === '' ? '本料號未填' : '對方未填')) . '，無法確認是否相同';
+    $level = ($lenOk === true) ? 'A' : 'C';
+    if ($level === 'A' && $cfgLabels && $myTags) {
+        $same = true; $names = [];
+        foreach ($cfgLabels as $lid) {
+            $a = $myTags[$lid]['vals'] ?? [];
+            $b = $theirTags[$lid]['vals'] ?? [];
+            if ($a !== $b) { $same = false; break; }
+            if ($a) $names[] = $myTags[$lid]['name'];
+        }
+        if ($same && $names) { $level = 'B'; $reasons[] = '標籤相同：' . implode('、', $names); }
+    }
+    return ['level' => $level, 'reasons' => $reasons];
+}
+
+/**
+ * 全庫整批統計：每個「有類似料號」的料號 → 最高等級與各級數量（主檔管理清單的徽章與篩選用）。
+ * 只讀約數百筆齒輪列，同簽章的料號才互相比，不逐一呼叫 ps_find。
+ * @return array d_id => ['best'=>'A'|'B'|'C','B'=>n,'A'=>n,'C'=>n]
+ */
+function ps_similar_levels(PDO $db): array {
+    static $memo = null;
+    if ($memo !== null) return $memo;
+    $memo = [];
+    try {
+        $cfg = ps_settings($db);
+        if (!$cfg['enabled']) return $memo;
+        $tn = ps_gear_type_names($db);
+        $parts = [];   // d_id => ['list'=>[...], 'sig'=>, 'len'=>]
+        $st = $db->query("SELECT g.*, d.workpiece_length AS wl_part FROM d_setting_gear g JOIN d_setting d ON d.d_id=g.d_setting_id ORDER BY g.d_setting_id, g.gear_id");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $g) {
+            $id = (int)$g['d_setting_id'];
+            $n = ps_gear_norm($g, $tn);
+            if ($n['teeth'] === '' && $n['module'] === '' && $n['sp_type'] === '' && $n['chain'] === '') continue;
+            $sp = $n; unset($sp['shift']);
+            if (!isset($parts[$id])) $parts[$id] = ['list' => [], 'len' => ps_num($g['wl_part'])];
+            $parts[$id]['list'][] = ['norm' => $n, 'sig' => implode('|', $sp)];
+        }
+        $groups = [];
+        foreach ($parts as $id => &$p) {
+            usort($p['list'], function ($a, $b) { return strcmp($a['sig'], $b['sig']); });
+            $p['sig'] = ps_gear_sig_all($p['list']);
+            $groups[$p['sig']][] = $id;
+        }
+        unset($p);
+        $tags = [];
+        foreach ($groups as $ids) {
+            if (count($ids) < 2) continue;
+            if ($cfg['labels']) foreach ($ids as $id) if (!isset($tags[$id])) $tags[$id] = ps_label_values($db, $id, $cfg['labels']);
+            foreach ($ids as $a) {
+                foreach ($ids as $b) {
+                    if ($a === $b) continue;
+                    $ev = ps_pair_eval($parts[$a]['list'], $parts[$b]['list'], $parts[$a]['len'], $parts[$b]['len'], $cfg['labels'], $tags[$a] ?? [], $tags[$b] ?? []);
+                    if (!$ev) continue;
+                    if (!isset($memo[$a])) $memo[$a] = ['best' => 'C', 'B' => 0, 'A' => 0, 'C' => 0];
+                    $memo[$a][$ev['level']]++;
+                }
+            }
+        }
+        foreach ($memo as &$m) { $m['best'] = $m['B'] ? 'B' : ($m['A'] ? 'A' : 'C'); }
+        unset($m);
+    } catch (Throwable $e) { error_log('ps_similar_levels: ' . $e->getMessage()); $memo = []; }
+    return $memo;
+}
+
 /**
  * 找類似料號。
  * @return array ['ok'=>bool,'enabled'=>bool,'note'=>string,'target'=>[...],'items'=>[...],'total'=>int,'label_cfg'=>int]
@@ -286,37 +373,10 @@ function ps_find(PDO $db, int $dId, int $limit = 12): array {
             if (!$theirs || ps_gear_sig_all($theirs) !== $mySig) continue;
             $h = ps_part_head($db, $cid);
             if (!$h) continue;
-            // 轉位係數：兩邊都有填且不同 → 不算類似；只有一方填 → 算相同並註明
-            $shiftNote = ''; $shiftBad = false;
-            foreach ($mine as $i => $mg) {
-                $a = $mg['norm']['shift']; $b = $theirs[$i]['norm']['shift'] ?? '';
-                if ($a !== '' && $b !== '' && abs((float)$a - (float)$b) > 0.00005) { $shiftBad = true; break; }
-                if (($a === '') !== ($b === '')) $shiftNote = '轉位係數只有一方有填（' . ($a !== '' ? '本料號 X' . $a : '對方 X' . $b) . '），視為相同';
-            }
-            if ($shiftBad) continue;
-            $theirLen = ps_num($h['wlen']);
-            $lenOk = null;   // null＝無法確認
-            if ($myLen !== '' && $theirLen !== '') {
-                if (abs((float)$myLen - (float)$theirLen) > 0.0049) continue;   // 兩邊都有填卻不同＝不是類似
-                $lenOk = true;
-            }
-            $reasons = ['齒輪規格完全相同（' . ps_gear_brief($mine) . '）'];
-            if ($shiftNote !== '') $reasons[] = $shiftNote;
-            if ($lenOk === true) $reasons[] = '工件總長相同（' . $myLen . ' mm）';
-            else $reasons[] = '工件總長' . ($myLen === '' && $theirLen === '' ? '雙方都未填' : ($myLen === '' ? '本料號未填' : '對方未填')) . '，無法確認是否相同';
-            $level = ($lenOk === true) ? 'A' : 'C';
-            if ($level === 'A' && $cfg['labels'] && $myTags) {
-                $theirTags = ps_label_values($db, $cid, $cfg['labels']);
-                $same = true;
-                $names = [];
-                foreach ($cfg['labels'] as $lid) {
-                    $a = $myTags[$lid]['vals'] ?? [];
-                    $b = $theirTags[$lid]['vals'] ?? [];
-                    if ($a !== $b) { $same = false; break; }
-                    if ($a) $names[] = $myTags[$lid]['name'];
-                }
-                if ($same && $names) { $level = 'B'; $reasons[] = '標籤相同：' . implode('、', $names); }
-            }
+            $ev = ps_pair_eval($mine, $theirs, $myLen, ps_num($h['wlen']), $cfg['labels'], $myTags,
+                               $cfg['labels'] ? ps_label_values($db, $cid, $cfg['labels']) : []);
+            if (!$ev) continue;
+            $level = $ev['level']; $reasons = $ev['reasons'];
             $found[] = [
                 'd_id' => $cid, 'part_no' => $h['part_no'], 'drawing_no' => $h['drawing_no'], 'customer' => $h['customer'],
                 'same_customer' => ((string)$h['customer_id'] === (string)$head['customer_id'] && (string)$head['customer_id'] !== ''),

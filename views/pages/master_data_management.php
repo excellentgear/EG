@@ -2492,6 +2492,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where .= " AND d.D_Setting_Id IN ($phs_pp)";
                 foreach ($fpinned_p as $i => $pid) { $params[":fpp$i"] = $pid; }
             }
+            // 類似料號篩選（2026-10-16）：ab＝有 A/B 級類似料號；all＝含 C 級（參考）。判定唯一實作 part_similar_lib.php
+            $fsim = trim($_POST['filter_similar'] ?? '');
+            if ($fsim === 'ab' || $fsim === 'all') {
+                try {
+                    require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+                    require_once __DIR__ . '/../../src/common/part_similar_lib.php';
+                    $simIds = [];
+                    foreach (ps_similar_levels($pdo) as $sid => $sv) { if ($fsim === 'all' || $sv['best'] !== 'C') $simIds[] = (int)$sid; }
+                    $where .= $simIds ? (" AND d.d_id IN (" . implode(',', $simIds) . ")") : " AND 1=0";
+                } catch (Throwable $e) {}
+            }
             $fcust_ids_raw = trim($_POST['filter_customer_ids'] ?? '');
             $fgrades_raw   = trim($_POST['filter_grades_p']     ?? '');
             $finds_raw     = trim($_POST['filter_industries_p'] ?? '');
@@ -2695,6 +2706,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute(array_merge($params_sel, $pg_id_params, $pg_id_params2));
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             mdQuoteFlagFill($pdo, $rows);
+            // 每列的類似料號徽章資料（2026-10-16；純顯示，失敗就沒有徽章，不影響清單）
+            try {
+                require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+                require_once __DIR__ . '/../../src/common/part_similar_lib.php';
+                $simAll = ps_similar_levels($pdo);
+                if ($simAll) foreach ($rows as &$simRow) { $simRow['sim'] = $simAll[(int)$simRow['d_id']] ?? null; }
+                unset($simRow);
+            } catch (Throwable $e) {}
             // 設計備註（有查看權限時補上）
             if ($can_see_design && !empty($rows)) {
                 try {
@@ -9153,6 +9172,11 @@ body { background:#F6F1EA; }
                 <?php endif; ?>
                 <button class="btn btn-default btn-sm" id="parts-clear-filter-btn" onclick="clearPartsFilter()" style="border-radius:16px;font-size:12px;display:none;background:#fff5f5;color:#e74c3c;border-color:#e74c3c88;"><i class="fa fa-times"></i> 取消篩選</button>
                 <button class="btn btn-default btn-sm" onclick="openDupCheck('parts')" style="border-radius:16px;font-size:12px;"><i class="fa fa-search-plus" style="color:#e67e22;"></i> 重複料號</button>
+                <select id="parts-similar-sel" class="btn btn-default btn-sm" onchange="loadParts(1)" title="只看有「類似料號」的料號（齒輪規格＋總長；等級說明見「類似料號設定」）" style="border-radius:16px;font-size:12px;height:30px;">
+                    <option value="">類似料號：不篩選</option>
+                    <option value="ab">只看有 A／B 級類似</option>
+                    <option value="all">含 C 級（參考）</option>
+                </select>
                 <button class="btn btn-default btn-sm" onclick="openPartsBatchModal()" style="border-radius:16px;font-size:12px;"><i class="fa fa-list-check" style="color:#1565c0;"></i> 批次設定</button>
             </div>
             <!-- 工件種類快篩 -->
@@ -13424,6 +13448,7 @@ function clearPartsFilter() {
         if (isDefault) { c.style.background='#2A3F54'; c.style.color='#fff'; c.style.borderColor='#2A3F54'; }
         else { c.style.background='#f0f2f5'; c.style.color='#555'; c.style.borderColor='transparent'; }
     });
+    var psSel=document.getElementById('parts-similar-sel'); if(psSel) psSel.value='';
     var ptc=document.getElementById('parts-type-chips'); if(ptc) ptc.innerHTML='';
     // Clear keyword chips
     var skc = document.getElementById('parts-search-chips'); if (skc) skc.innerHTML = '';
@@ -14684,6 +14709,7 @@ function partsFilterPayload() {
           filter_grades_p:         _partsFilter.grades.join(','),
           filter_industries_p:     _partsFilter.industries.join(','),
           filter_industry_subs_p:  _partsFilter.industrySubs.join(','),
+          filter_similar:          (document.getElementById('parts-similar-sel') || {}).value || '',
           sort_by:                 _partsFilter.shipSort,
           filter_attach_tags:      JSON.stringify(_partsFilter.attachTags||[])
     };
@@ -14738,6 +14764,11 @@ function openPartDrawing(pid, pk) {
     );
 }
 
+// 類似料號徽章點擊：開跳窗（原因、逐項比對）；純輔助，EGPartSimilar 沒載入就什麼都不做
+function psMasterSimilar(dId) {
+    try { if (window.EGPartSimilar) EGPartSimilar.prompt({ dId: dId, ctx: 'master', once: false, refBanner: false }); } catch (e) {}
+}
+
 function renderPartsTable(rows, total, pg, pages) {
     var colCount = 10 + (CAN_PART_EDIT||CAN_PART_DELETE ? 1 : 0) + (CAN_SEE_DESIGN ? 1 : 0);
     var html = '<div style="overflow-x:auto;"><table class="table"><thead><tr>';
@@ -14773,6 +14804,14 @@ function renderPartsTable(rows, total, pg, pages) {
                 var _pssShow = _pss.slice(0,2).map(escHtml).join('、') + (_pss.length > 2 ? ' +'+(_pss.length-2) : '');
                 pulledHtml = '<div style="font-size:10px;color:#e67e22;margin-top:2px;line-height:1.2;" title="此料號本身未含關鍵字，因其組合件命中而列出：'+escHtml(_pss.join('、'))+'">↳ 由組合件 '+_pssShow+' 帶出</div>';
             }
+            // 類似料號徽章（點開看原因、最近報價/訂單與逐項比對；B 紅／A 橘／C 米）
+            var simBadge = '';
+            if (r.sim) {
+                var _sc = {B:['#DD5138','#fff'], A:['#F0A24B','#4a2e0a'], C:['#EADFCD','#6b5638']}[r.sim.best] || ['#EADFCD','#6b5638'];
+                var _st = (r.sim.B ? 'B×'+r.sim.B+' ' : '') + (r.sim.A ? 'A×'+r.sim.A+' ' : '') + (r.sim.C ? 'C×'+r.sim.C : '');
+                simBadge = '<span onclick="psMasterSimilar('+(parseInt(r.d_id,10)||0)+')" title="有類似料號，點一下查看" '
+                         + 'style="cursor:pointer;display:inline-block;margin-top:2px;font-size:10px;line-height:1.4;border-radius:3px;padding:0 5px;background:'+_sc[0]+';color:'+_sc[1]+';"><i class="fa fa-clone"></i> 類似 '+_st.trim()+'</span>';
+            }
             html += '<tr>';
             html += '<td style="color:#aaa;font-size:11px;">'+(((pg-1)*10)+i+1)+'</td>';
             // 齒輪規格小字（僅 G 種類）
@@ -14788,9 +14827,9 @@ function renderPartsTable(rows, total, pg, pages) {
                 });
             }
             if (r.has_drawing || (MD_CAN_OTHER && r.has_attach) || (MD_CAN_QUOTE && r.has_quote)) {
-                html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\','+(parseInt(r.d_id,10)||0)+')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
+                html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\','+(parseInt(r.d_id,10)||0)+')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+simBadge+'</td>';
             } else {
-                html += '<td style="max-width:160px;line-height:1.3;"><strong style="font-family:Consolas,monospace;">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
+                html += '<td style="max-width:160px;line-height:1.3;"><strong style="font-family:Consolas,monospace;">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+simBadge+'</td>';
             }
             // 規格 + 標籤
             var labelsHtml = '';

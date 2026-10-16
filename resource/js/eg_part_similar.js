@@ -205,10 +205,21 @@
             post(req).then(function (r) {
                 if (!r || !r.success || !r.enabled || !r.items || !r.items.length) { el.innerHTML = ''; el.style.display = 'none'; return; }
                 var myId = (r.target && r.target.d_id) || 0;
+                var c = { B: 0, A: 0, C: 0 };
+                r.items.forEach(function (it) { c[it.level]++; });
+                var parts = [];
+                if (c.B) parts.push('B 級 ' + c.B + ' 個'); if (c.A) parts.push('A 級 ' + c.A + ' 個'); if (c.C) parts.push('參考(C) ' + c.C + ' 個');
                 el.style.display = '';
-                el.innerHTML = '<div class="egps-banner" style="border-left-color:#8a5a2b;"><b><i class="fa fa-clone"></i> 有類似料號</b>'
-                    + '<div style="margin-top:6px;background:#fff;border-radius:4px;padding:6px 8px;">' + bodyFor(r, 'design', myId) + '</div></div>';
-                if (!el._egpsWired) { el._egpsWired = true; wire(el, function () { return el._egpsMy; }); }
+                // 淺藍底「類似料號」系統提示（使用者指定淺藍，與黃色的設計提醒區分）；點「查看」開跟建立訂單時一樣的跳窗
+                el.innerHTML = '<div style="background:#E4F1FB;border:1px solid #9CC8E8;border-left:5px solid #4A90C2;border-radius:4px;padding:7px 11px;color:#1f4e79;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+                    + '<b><i class="fa fa-clone"></i> 類似料號</b><span>' + esc(parts.join('、')) + '（齒輪規格相同）</span>'
+                    + '<span class="egps-btn" data-psopen="1" style="background:#fff;border-color:#4A90C2;color:#1f4e79;">查看類似料號</span></div>';
+                if (!el._egpsWired) {
+                    el._egpsWired = true;
+                    el.addEventListener('click', function (e) {
+                        if (e.target.getAttribute && e.target.getAttribute('data-psopen')) prompt({ dId: el._egpsMy, ctx: 'order', once: false, refBanner: false });
+                    });
+                }
                 el._egpsMy = myId;
             }).catch(function () { el.innerHTML = ''; el.style.display = 'none'; });
         } catch (e) {}
