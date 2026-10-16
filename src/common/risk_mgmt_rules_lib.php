@@ -294,14 +294,14 @@ function rm_rule_typhoon(PDO $db, int $year): int
 }
 
 /** 相關措施追蹤：先看措施欄有沒有註記單號，再用類別關鍵字與溝通對象類型找（只找 $year 年的） */
-function rm_rule_tracks(PDO $db, int $year, string $cat, string $text, bool $annotatedOnly = false): array
+function rm_rule_tracks(PDO $db, int $year, string $cat, string $text, bool $annotatedOnly = false, bool $withDraft = false): array
 {
     // $annotatedOnly＝人工填寫的列（沒有規則編號）：只認措施欄裡註記的「措施追蹤 #編號／溝通記錄 單號」，
     // 不用類別關鍵字猜——猜出來的追蹤常常是別的部門的事（例如收貨列被掛上委外跟催）
     $c = RM_RULE_CATS[$cat] ?? RM_RULE_CATS['generic'];
     $found = [];
     $base = "SELECT t.track_id, t.track_no, t.party, t.content, t.action, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.closed_date, r.rec_no, r.comm_date, cc.name cat_name
-             FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id LEFT JOIN comm_track_cat cc ON cc.cat_id=t.cat_id WHERE t.is_deleted=0 ";
+             FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id LEFT JOIN comm_track_cat cc ON cc.cat_id=t.cat_id WHERE t.is_deleted=0 " . ($withDraft ? '' : 'AND t.is_draft=0 ');   // 草稿（尚未確認）的追蹤不列入成效判定，只在畫面上顯示
     try {
         // 措施欄可註記「措施追蹤 F2026-004」（新編號）或舊式「措施追蹤 #274」
         if (preg_match_all('/措施追蹤\s*(?:(F\d{4}-\d{3})|#(\d+))/u', $text, $m, PREG_SET_ORDER)) {
@@ -584,7 +584,7 @@ function rm_item_tracks(PDO $db, int $year, array $row): array
     [$cat] = rm_rule_classify(trim(($r['stakeholder'] ?? '') . ' ' . ($r['needs'] ?? '') . ' ' . ($r['issue'] ?? '')), (string)($r['dimension'] ?? ''));
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
     $out = [];
-    foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id'])) as $t) {
+    foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id']), true) as $t) {
         $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
         $out[] = ['id'=>(int)$t['track_id'], 'no'=>(string)(!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']), 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
                   'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? '')];

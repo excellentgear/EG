@@ -100,6 +100,7 @@ $roleLabel = cm_role_label($perms);
         .st-rej      { background:#DD5138; color:#fff;    border-color:#C4442D; }
         .tg-open     { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .tg-closed   { background:#EFE3CC; color:#5b3a1e; border-color:#D6BE94; }
+        .draft-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; background:#FFF3D1; color:#DD5138; border:1px solid #DD5138; white-space:nowrap; }
         .tg-late     { background:#DD5138; color:#fff; border-color:#C4442D; }
         .b-mini { height:24px; padding:0 8px; font-size:12px; border:1px solid #D8BE93; background:#fff; color:#5b3a1e;
             border-radius:4px; cursor:pointer; margin:1px; white-space:nowrap; }
@@ -1316,9 +1317,10 @@ function loadRec(){
             var ops = '<button class="b-mini" onclick="openRec(' + r.rec_id + ')"><i class="fa fa-folder-open-o"></i> 開啟</button>';
             if (r.can_sign) ops += '<button class="b-mini warm" onclick="openSign(' + r.rec_id + ')"><i class="fa fa-check"></i> 確認</button>';
             ops += '<button class="b-mini" onclick="printRecord(' + r.rec_id + ')"><i class="fa fa-print"></i></button>';
+            if (+r.is_draft && r.can_edit) ops += '<button class="b-mini warm" title="實際看過、內容屬實後，確認成正式資料" onclick="draftConfirm(' + r.rec_id + ')"><i class="fa fa-check-square-o"></i> 確認為正式資料</button>';
             if (r.can_edit) ops += '<button class="b-mini danger" onclick="delRec(' + r.rec_id + ')"><i class="fa fa-trash"></i></button>';
             b.append('<tr>'
-                + '<td>' + esc(r.rec_no) + '</td>'
+                + '<td>' + esc(r.rec_no) + (+r.is_draft ? '<br><span class="draft-tag">草稿・待確認</span>' : '') + '</td>'
                 + '<td>' + dispDate(r.comm_date) + '</td>'
                 + '<td>' + esc(META.types[r.comm_type] || '') + '</td>'
                 + '<td>' + esc(kind) + '</td>'
@@ -1397,7 +1399,7 @@ function openRec(id){
         RECITEMS = res.items.map(function(x){ return {question:x.question || '', reply:x.reply || '', track_id:+x.track_id || 0, item_id:+x.item_id}; });
         if (!RECITEMS.length) RECITEMS = [{question:'', reply:'', track_id:0, item_id:0}];
         ATTACHES = res.attaches || [];
-        $('#recTitle').text('溝通記錄表　' + r.rec_no + '　' + (META.status[r.status] || ''));
+        $('#recTitle').text('溝通記錄表　' + r.rec_no + '　' + (META.status[r.status] || '') + (+r.is_draft ? '　【草稿・待確認：系統依處境分析表產生，請實際看過、修改後確認】' : ''));
         $('#fCommDate').val(r.comm_date); $('#fParty').val(r.party_name); $('#fRemark').val(r.remark || '');
         $('#fAttNote').val('');
         var ch = {}; $.each(META.channels, function(k){ ch[k] = +r['ch_' + k]; });
@@ -1932,6 +1934,11 @@ $('#btnRecSubmit').on('click', function(){
         });
     });
 });
+/* 草稿（系統依處境分析表產生）→ 使用者實際看過、內容屬實後確認成正式資料（它轉出的措施追蹤一起確認） */
+function draftConfirm(id){
+    if (!confirm('這張溝通記錄是系統依處境分析表產生的草稿。\n\n請確認您已經實際看過、內容屬實（日期、對象、內容、負責人都正確），再確認成正式資料。確認後不再標示草稿。')) return;
+    post({action:'draft_confirm', rec_id:id}, function(){ loadRec(); if (typeof loadTrack === 'function') loadTrack(); });
+}
 function delRec(id){
     /* 點開即刷新鐵則（ai-rules/08 第六節）：不用清單上的快取，按下去的當下重抓這張單，
        才算得準「會連帶刪掉幾筆追蹤項目」——別人可能剛把某一列轉進追蹤表。 */
@@ -2099,7 +2106,7 @@ function loadTrack(){
             var badge = +r.is_closed ? '<span class="st tg-closed">是</span>'
                       : (late ? '<span class="st tg-late">否・已逾期</span>' : '<span class="st tg-open">否</span>');
             b.append('<tr>'
-                + '<td><b>' + esc(r.track_no || ('#' + r.track_id)) + '</b></td>'
+                + '<td><b>' + esc(r.track_no || ('#' + r.track_id)) + '</b>' + (+r.is_draft ? '<br><span class="draft-tag">草稿・待確認</span>' : '') + '</td>'
                 + '<td>' + (r.cat_name ? esc(r.cat_name) : '<span class="hint">未分類</span>') + '</td>'
                 + '<td class="l wrap">' + esc(r.party) + '</td>'
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
@@ -2808,7 +2815,7 @@ function printRecord(id){
                 + '<tr><th style="width:120px;">總經理確認：</th><td style="height:100px;">' + gmCell + '</td>'
                 + '<th style="width:200px;">部門主管確認：<br><span style="font-weight:normal;font-size:10px;">(若由主管填寫則此格免簽)</span></th>'
                 + '<td style="height:100px;">' + mgrCell + '</td></tr></table>'
-                + (r.remark ? '<div style="font-size:11px;margin-top:6px;">備註：' + esc(r.remark) + '</div>' : '');
+                + (r.remark && r.remark.indexOf('【假資料】') !== 0 ? '<div style="font-size:11px;margin-top:6px;">備註：' + esc(r.remark) + '</div>' : '');
 
             egPrintWindow('溝通記錄表 ' + r.rec_no, body, '', meta.doc_no, true);
             EGPrintLog.record({source:'comm_mgmt', doc_name:'利害關係者溝通記錄表 ' + r.rec_no,

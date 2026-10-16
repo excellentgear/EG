@@ -41,7 +41,7 @@ if (!$uid) jerr('無使用權限（帳號非在職狀態）', 403);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類動作：先驗登入再驗 CSRF（順序不可顛倒，見 _config.php 的說明） */
-$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car', 'news_digest'];
+$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car', 'news_digest', 'draft_generate', 'draft_confirm'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['rm_csrf'], $tok))
@@ -233,6 +233,46 @@ if ($action === 'ctx_year') {
           'can_edit'=>$r ? rmCanEdit($r, $P) : true,     // 還沒建立：任何在職員工都可以建（建立者之後與管理員可改）
           'years'=>array_map('intval', $yrs),
           'print'=>rm_print_meta($db, 'context', $r ? (string)$r['fill_date'] : null)]);
+}
+
+/* ---------------------------------------------------------------- SWOT → 風險表／溝通記錄／措施追蹤「草稿」
+   依使用者已儲存的組織處境分析表產生；全部標「草稿・待確認」（is_draft=1，畫面標示、列印不顯示），使用者實際看過按「確認」才是正式資料。
+   重新產生時先清掉舊草稿（已確認的不動）。溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以一定要人確認。 */
+function rmDraftCtx(PDO $db, int $year): ?array {
+    $st = $db->prepare("SELECT * FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1");
+    $st->execute([$year]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+if ($action === 'draft_status') {
+    require_once __DIR__ . '/../common/demo_seed_lib.php';
+    $year = (int)($_GET['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
+    $c = rmDraftCtx($db, $year);
+    jout(['year'=>$year, 'has_ctx'=>(bool)$c, 'can'=>$c ? rmCanEdit($c, $P) : false, 'status'=>eg_draft_status($db, $year)]);
+}
+if ($action === 'draft_generate') {
+    require_once __DIR__ . '/../common/demo_seed_lib.php';
+    require_once __DIR__ . '/../common/ollama_lib.php';
+    $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) jerr('年度不正確');
+    $c = rmDraftCtx($db, $year);
+    if (!$c) jerr($year . ' 年還沒有組織處境分析表，請先儲存處境分析表');
+    if (!rmCanEdit($c, $P)) jerr('只有處境分析表的建立者與管理員可以產生草稿', 403);
+    $ai = !empty($_POST['ai']) && eg_ai_is_admin($db, $u) && eg_ai_setting($db, 'enabled', '0') === '1';
+    try {
+        $rep = eg_demo_seed($db, ['year'=>$year, 'dates'=>eg_demo_default_dates($db, $year), 'draft'=>true, 'ai'=>$ai, 'cap'=>24, 'user'=>['id'=>$uid, 'name'=>$uname]]);
+    } catch (RuntimeException $e) { jerr($e->getMessage()); }
+    jout(['report'=>$rep, 'status'=>eg_draft_status($db, $year)]);
+}
+if ($action === 'draft_confirm') {
+    require_once __DIR__ . '/../common/demo_seed_lib.php';
+    $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) jerr('年度不正確');
+    $c = rmDraftCtx($db, $year);
+    if (!$c || !rmCanEdit($c, $P)) jerr('只有處境分析表的建立者與管理員可以確認草稿', 403);
+    $n = [];
+    $n['risk'] = $db->prepare("UPDATE rm_doc SET is_draft=0, draft_at=NULL WHERE is_draft=1 AND YEAR(fill_date)=?");  $n['risk']->execute([$year]);
+    $n['rec']  = $db->prepare("UPDATE comm_record SET is_draft=0 WHERE is_draft=1 AND YEAR(comm_date)=?");              $n['rec']->execute([$year]);
+    $n['trk']  = $db->prepare("UPDATE comm_track SET is_draft=0 WHERE is_draft=1 AND YEAR(react_date)=?");              $n['trk']->execute([$year]);
+    $cnt = ['risk'=>$n['risk']->rowCount(), 'records'=>$n['rec']->rowCount(), 'tracks'=>$n['trk']->rowCount()];
+    jout(['confirmed'=>$cnt, 'status'=>eg_draft_status($db, $year)]);
 }
 
 /* ---------------------------------------------------------------- 國際局勢新聞：貼入（可多則）→ 內網 AI 抓重點；AI 不能用時退回取每則第一行 */

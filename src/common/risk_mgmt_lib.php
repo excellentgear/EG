@@ -145,6 +145,8 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN recheck_note TEXT NULL COMMENT '重新評估原因（年度中途因重大變化重新評估時填寫，AS9100D 6.1 的再評估紀錄）'",
         "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
+        "ALTER TABLE rm_doc ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
+        "ALTER TABLE rm_doc ADD COLUMN draft_at DATETIME NULL COMMENT '草稿產生時間'",
     ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }
 
     /* 角色（自動出現在「使用者權限設定」頁的動態角色區塊）。module 欄位是依據，不是顯示名 */
@@ -487,7 +489,7 @@ function rm_swot_guide(): array
                 ['cat'=>'法規與科技', 'hint'=>'環保與職安法規趨嚴、資安與個資規範、替代技術（例如 3D 列印、一體成型）'],
             ],
             'ex' => [
-                ['stakeholder'=>'供應商', 'needs'=>'合理的價格與付款條件', 'issue'=>'特殊鋼材與熱處理委外價格上漲、交期不穩'],
+                ['stakeholder'=>'供應商', 'needs'=>'合理的價格與付款條件', 'issue'=>'特殊鋼材與委外加工價格上漲、交期不穩'],
                 ['stakeholder'=>'客戶', 'needs'=>'更短交期與更低成本', 'issue'=>'客戶要求縮短交期並持續議價，產能與利潤受壓'],
                 ['stakeholder'=>'主管機關／驗證機構', 'needs'=>'符合法規與驗證要求', 'issue'=>'環保與職安法規趨嚴，需持續投入合規成本'],
                 ['stakeholder'=>'供應商', 'needs'=>'穩定的原料與能源供應', 'issue'=>'國際戰爭與制裁推升能源與特殊合金鋼價格，並造成海運延誤'],

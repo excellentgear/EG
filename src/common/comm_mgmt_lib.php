@@ -238,6 +238,8 @@ function cm_ensure_schema(PDO $db): void
 
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
+        "ALTER TABLE comm_record ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
+        "ALTER TABLE comm_track ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝草稿（同上）'",
         "ALTER TABLE comm_track ADD COLUMN cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id（NULL＝未分類）' AFTER party",
         "ALTER TABLE comm_track ADD COLUMN track_no VARCHAR(20) NULL COMMENT '追蹤編號 FYYYY-流水三碼（年度取反應日期；建立後不再變動）' AFTER track_id",
         "ALTER TABLE comm_track ADD UNIQUE KEY uk_track_no (track_no)",

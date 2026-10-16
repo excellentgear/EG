@@ -45,7 +45,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 /* 寫入類動作先驗登入再驗 CSRF。順序不可顛倒：session 被 GC 掃掉時 token 會在同一個請求裡重新
    產生、比對必定不過，但那其實是「已經被登出」不是 CSRF 攻擊，訊息講錯使用者只會一直重整卻
    永遠存不進去（見 src/common/_config.php 的防護說明）。 */
-$WRITE = ['rec_save','rec_delete','rec_submit','rec_decide','rec_to_track',
+$WRITE = ['draft_confirm','rec_save','rec_delete','rec_submit','rec_decide','rec_to_track',
           'att_upload','att_delete','track_save','track_delete','ctrl_save','ctrl_delete',
           'setting_save','asdoc_save','cat_save','cat_delete'];
 if (in_array($action, $WRITE, true)) {
@@ -414,7 +414,7 @@ if ($action === 'rec_save') {
         $hit = null;
         foreach (cm_party_search($db, $kind, $partyRef, 50) as $x) if ((string)$x['id'] === $partyRef) { $hit = $x; break; }
         if (!$hit) jerr(($kind === 'customer' ? '客戶' : '供應商') . '編號不存在：' . $partyRef);
-        $party = (string)($hit['full_name'] ?: $hit['name']);
+        $party = (string)($hit['name'] ?: $hit['full_name']);   // 客戶/廠商一律存簡稱
         if ($partyCtcId > 0) {
             $ok = null;
             foreach (cm_party_contacts($db, $kind, $partyRef) as $ct) if ((int)$ct['contact_id'] === $partyCtcId) { $ok = $ct; break; }
@@ -520,6 +520,16 @@ if ($action === 'rec_save') {
 }
 
 /* ---- 溝通記錄表：刪除（軟刪） ---- */
+/* 草稿（系統依處境分析表產生、待確認）→ 使用者實際看過後確認成正式資料：記錄與它轉出的措施追蹤一起確認 */
+if ($action === 'draft_confirm') {
+    $r = cmRecGet($db, (int)($_POST['rec_id'] ?? 0));
+    if (!$r) jerr('查無此溝通記錄表', 404);
+    if (!(int)($r['is_draft'] ?? 0)) jerr('這張已經是正式資料了');
+    if (!cmCanEdit($r, $P, $uid) && !$P['canAdmin']) jerr('只有填表人或溝通管理員可以確認', 403);
+    $db->prepare("UPDATE comm_record SET is_draft=0 WHERE rec_id=?")->execute([(int)$r['rec_id']]);
+    $db->prepare("UPDATE comm_track SET is_draft=0 WHERE src_rec_id=?")->execute([(int)$r['rec_id']]);
+    jout(['rec_id'=>(int)$r['rec_id']]);
+}
 if ($action === 'rec_delete') {
     $r = cmRecGet($db, (int)($_POST['rec_id'] ?? 0));
     if (!$r) jerr('查無此溝通記錄表', 404);
@@ -860,7 +870,7 @@ if ($action === 'ctrl_save') {
         $hit = null;
         foreach (cm_party_search($db, $kind, $partyRef, 50) as $x) if ((string)$x['id'] === $partyRef) { $hit = $x; break; }
         if (!$hit) jerr(($kind === 'customer' ? '客戶' : '供應商') . '編號不存在：' . $partyRef);
-        $party = (string)($hit['full_name'] ?: $hit['name']);
+        $party = (string)($hit['name'] ?: $hit['full_name']);   // 客戶/廠商一律存簡稱
         $partyUser = 0;
     } elseif ($kind === 'employee') {
         $deptRef = (int)$partyRef;

@@ -63,6 +63,7 @@ $perms  = rm_perms($db, $rmUser);
         .rm-toolbar button, .rm-toolbar a.btn-link { cursor:pointer; text-decoration:none; display:inline-block; }
         .rm-toolbar button:hover, .rm-toolbar a.btn-link:hover { background:#F7E0BD; }
         .rm-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .draft-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; background:#FFF3D1; color:#DD5138; border:1px solid #DD5138; white-space:nowrap; }
         .rm-toolbar .btn-warm:hover { background:#d98a33; }
         .rm-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
 
@@ -455,6 +456,10 @@ $perms  = rm_perms($db, $rmUser);
         <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次；要連結某一項，在因應措施文字裡寫「措施追蹤 #編號」，或在溝通管理建立追蹤項目。</li>
             <li><b>重新評估</b>：年度中途因重大變化（例如某項指標已實際發生）重新評估時，填「重新評估」日期與原因。按「依資料產生佐證」時，若依當年資料算出的發生率比表上高，畫面會用紅字提示建議重新評估，但<b>不會自動改你的評分</b>。</li>
             <li><b>成效確認結果為「無效」</b>的列會出現「開矯正單」鈕，按下去由異常矯正處理單模組開單（一條風險只開一張，開完該列顯示單號）。需要先儲存、且只有表單建立者或管理員可以開。</li></ul>
+        <h4>SWOT 一鍵產生草稿（風險表、溝通記錄、措施追蹤）</h4>
+        <ul><li>處境分析表<b>儲存後</b>，按「<b>產生風險表與措施追蹤草稿</b>」，系統依已儲存的 SWOT 一次建立：風險與機會因應措施管制表、溝通記錄、措施追蹤。<b>全部標「草稿・待確認」</b>（畫面標示、列印不顯示）。</li>
+            <li>溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以<b>一定要您實際看過、內容屬實後按「確認為正式資料」</b>（溝通管理可逐張確認，也可在這裡「全部確認」）；確認前的草稿不列入成效判定。</li>
+            <li>畫面會顯示是否已產生草稿與各幾筆；<b>重新產生會先清掉尚未確認的舊草稿</b>（已確認的不動）。該年度已有正式的風險表時，一個年度只能有一張，所以只會產生溝通記錄與措施追蹤草稿。</li></ul>
         <h4>AI 草稿與示範假資料（僅全站管理員）</h4>
         <ul><li>管理員會看到「AI 草稿」鈕（因應措施、成效確認方式，溝通管理的回覆與回應措施，內稽／管審會議要項）：由<b>本機 Ollama</b> 依系統實際資料寫文字草稿，<b>只填進欄位，要自己確認後才存檔</b>；Ollama 沒開時按鈕不會出現。</li>
             <li>「模組設定」最下方的<b>示範用假資料產生器</b>：選年度後一鍵產生溝通管理、風險與機會管制表、內稽／管審會議三者互相關聯的假資料（標【假資料】）。該年度已有真實文件時不會產生；「清除」只刪標【假資料】的資料。委外廠商一律依主檔管理「加工項目」所綁定的製程判定。</li></ul>
@@ -612,11 +617,12 @@ function boardHtml(){
         + '<label>填表人</label><select id="bMaker" data-eg-filter="輸入姓名篩選…" style="width:210px;" title="預設是建立者；已建立的表只有填表人本人或管理員可以更換"></select>'
         + '<span style="flex:1 1 20px;"></span>'
         + '<button id="bSuggest"><i class="fa fa-lightbulb-o"></i> 依系統資料建議</button>'
+        + '<button id="bDraft" class="btn-warm" title="依已儲存的處境分析表，產生風險表、溝通記錄與措施追蹤的草稿；草稿要由您實際看過確認後才算正式資料"><i class="fa fa-magic"></i> 產生風險表與措施追蹤草稿</button>'
         + '<button id="bGuide"><i class="fa fa-question-circle"></i> 填寫提示與範例</button>'
         + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
         + '<button data-blank="context"><i class="fa fa-file-o"></i> 列印空白表單</button>'
         + '<button id="bSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>'
-        + '</div><div class="swot-status" id="bStatus"></div><span class="err" id="bErr"></span><div class="swot-grid">';
+        + '</div><div class="swot-status" id="bStatus"></div><div class="swot-status" id="draftInfo" style="margin-top:2px;"></div><span class="err" id="bErr"></span><div class="swot-grid">';
     $.each(META.swot, function(_, m){
         var c = SWOTCOL[m.key];
         h += '<div class="swot-q" data-key="' + m.key + '" style="--c:' + c[0] + ';--t:' + c[1] + ';">'
@@ -689,8 +695,42 @@ function loadBoard(year){
         $('#bPrint').toggle(!!res.doc);
         // 還沒建立且是未來年度：不可建（填表日期不可是未來）
         if (!res.doc && res.year > cy) setBoardEditable(false);
+        loadDraftInfo();
     });
 }
+/* ---------- SWOT → 風險表／溝通記錄／措施追蹤「草稿」（產生後要人實際看過確認才算正式資料；重新產生會先清掉舊草稿） ---------- */
+var DRAFT = {has:false};
+function loadDraftInfo(){
+    get({action:'draft_status', year:BOARD.year}, function(res){
+        DRAFT = res.status || {has:false}; DRAFT.can = res.can; DRAFT.has_ctx = res.has_ctx;
+        var h = '';
+        if (!res.has_ctx) h = '還沒有 ' + BOARD.year + ' 年度的處境分析表：儲存之後才能產生草稿。';
+        else if (DRAFT.has) h = '<b style="color:#DD5138;">● 已產生草稿（待確認）</b>：風險表 ' + DRAFT.risk_items + ' 項、溝通記錄 ' + DRAFT.records + ' 筆、措施追蹤 ' + DRAFT.tracks + ' 筆'
+            + (DRAFT.at ? '（' + esc(dispDate(String(DRAFT.at).slice(0, 10))) + ' 產生）' : '') + '　草稿在畫面上標「草稿・待確認」、列印不顯示。'
+            + (DRAFT.can ? ' <button type="button" class="b-mini warm" id="draftConfirmAll">全部確認為正式資料</button>' : '');
+        else h = '尚未產生草稿。按「產生風險表與措施追蹤草稿」可依目前儲存的處境分析表一鍵建立；重新產生會先清除尚未確認的舊草稿。';
+        $('#draftInfo').html(h);
+        $('#bDraft').toggle(!!res.can || !res.has_ctx);
+    });
+}
+$(document).on('click', '#bDraft', function(){
+    if (!BOARD.doc){ alert('請先儲存組織處境分析表（草稿是依已儲存的內容產生的）'); return; }
+    if (BOARD.dirty){ alert('處境分析表有修改還沒儲存，請先按「儲存」再產生草稿（草稿是依已儲存的內容產生的）'); return; }
+    var msg = DRAFT.has ? '已經產生過草稿（風險表 ' + DRAFT.risk_items + ' 項、溝通記錄 ' + DRAFT.records + ' 筆、措施追蹤 ' + DRAFT.tracks + ' 筆）。\n\n重新產生會先「清除」這些尚未確認的舊草稿，再依目前的處境分析表重建（已確認成正式資料的不會被動到）。確定嗎？'
+                          : '要依目前儲存的處境分析表產生 ' + BOARD.year + ' 年度的風險表、溝通記錄與措施追蹤草稿嗎？\n\n產生後都標「草稿・待確認」，您實際看過、確認內容屬實後才算正式資料。';
+    if (!confirm(msg)) return;
+    var $b = $(this).prop('disabled', true); $('#draftInfo').text('產生中…（用本機 AI 寫文字約需 1～3 分鐘，請勿關閉頁面）');
+    $.ajax({url:API, type:'POST', dataType:'json', timeout:900000, data:{action:'draft_generate', year:BOARD.year, ai:1, csrf:CSRF}}).done(function(res){
+        if (!res || !res.ok){ alert((res && res.error) || '產生失敗'); return; }
+        var p = res.report || {};
+        alert('已產生草稿：風險表 ' + (p.risk_items || 0) + ' 項、溝通記錄 ' + p.comm_records + ' 筆、措施追蹤 ' + p.comm_tracks + ' 筆。' + ((p.warn || []).length ? '\n\n注意：' + p.warn.join('\n') : '') + '\n\n請到「風險與機會因應措施管制表」與「溝通管理」逐筆看過，確認屬實後按「確認」。');
+    }).fail(function(x){ var m = ''; try { m = JSON.parse(x.responseText).error; } catch (e) {} alert(m || '產生失敗，請稍後再試'); })
+      .always(function(){ $b.prop('disabled', false); loadDraftInfo(); });
+});
+$(document).on('click', '#draftConfirmAll', function(){
+    if (!confirm('確定要把 ' + BOARD.year + ' 年度所有草稿（風險表、溝通記錄、措施追蹤）一次確認成正式資料嗎？\n\n請確認您已經實際看過這些內容、內容屬實。確認後不再標示草稿。')) return;
+    post({action:'draft_confirm', year:BOARD.year}, function(){ loadDraftInfo(); alert('已確認為正式資料'); });
+});
 function addSwotQuiet(key, it){
     var q = $('.swot-q[data-key="' + key + '"]'), n = q.find('.swot-it').length + 1;
     q.find('.swot-list').append(itemHtml(it, n));
@@ -717,6 +757,11 @@ $(document).on('input', '.swot-it input, .swot-it textarea', function(){ if (!BO
 $(document).on('click', '[data-ex]', function(){
     var p = String($(this).data('ex')).split(':'), e = META.guide[p[0]].ex[+p[1]];
     addSwot(p[0], {stakeholder:e.stakeholder, needs:e.needs, issue:e.issue}, false);
+});
+$(document).on('click', '#docDraftConfirm', function(){
+    var y = +String($('#fDate').val() || BOARD.year).slice(0, 4) || BOARD.year;
+    if (!confirm('確認這份草稿（以及同年度其他草稿的溝通記錄與措施追蹤）已經實際看過、內容屬實，要確認成正式資料嗎？')) return;
+    post({action:'draft_confirm', year:y}, function(){ closeMask('docMask'); loadDraftInfo(); if (typeof CUR !== 'undefined' && CUR.kind) loadList(CUR.kind); alert('已確認為正式資料'); });
 });
 $(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); });
 $(document).on('change', '#bYear', function(){
@@ -849,7 +894,7 @@ function loadList(k, resetPage){
                 + '<button class="b-mini" data-open="' + r.doc_id + '" data-kind="' + k + '"><i class="fa fa-' + (r.can_edit ? 'pencil' : 'eye') + '"></i> '
                 + (r.can_edit ? '編輯' : '檢視') + '</button>'
                 + (META.perms.canAdmin ? '<button class="b-mini danger" data-del="' + r.doc_id + '"><i class="fa fa-trash"></i></button>' : '');
-            b.append('<tr><td>' + esc(r.doc_no) + '</td><td class="l">' + esc(r.dept_names) + '</td>'
+            b.append('<tr><td>' + esc(r.doc_no) + (+r.is_draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '</td><td class="l">' + esc(r.dept_names) + '</td>'
                 + '<td>' + esc(dispDate(r.fill_date)) + '</td><td>' + r.item_cnt + '</td>'
                 + (isRisk ? '<td>' + lvBadge(r.top_level, true) + '</td><td>' + (r.action_cnt > 0 ? r.action_cnt + ' 筆' : '—') + '</td>' : '')
                 + '<td>' + esc(r.created_by_name) + '</td><td>' + ops + '</td></tr>');
@@ -1075,7 +1120,10 @@ function openDoc(kind, id){
     var show = function(doc, items, canEdit, pr){
         CUR = {kind:kind, doc_id:doc ? +doc.doc_id : 0, can_edit:canEdit, print:pr,
                dept_ids:doc && doc.dept_ids ? (JSON.parse(doc.dept_ids) || []).map(Number) : []};
-        $('#docTitle').text(kindName(kind) + (doc ? '　' + doc.doc_no : '　新增'));
+        $('#docTitle').text(kindName(kind) + (doc ? '　' + doc.doc_no : '　新增') + (doc && +doc.is_draft ? '　【草稿・待確認】' : ''));
+        $('#docDraftBar').remove();
+        if (doc && +doc.is_draft) $('#docMask .rm-mbd').first().prepend('<div id="docDraftBar" class="note-box" style="border-color:#DD5138;margin-bottom:8px;"><b style="color:#DD5138;">● 這是系統依處境分析表產生的草稿</b>，內容要由您看過、修改後確認才算正式資料（畫面標示草稿，列印不顯示）。'
+            + (canEdit ? ' <button type="button" class="b-mini warm" id="docDraftConfirm">確認為正式資料</button>' : '') + '</div>');
         $('#fDate').val(doc ? doc.fill_date : ((NEWYEAR && NEWYEAR < +META.today.slice(0, 4)) ? NEWYEAR + '-12-31' : META.today)); NEWYEAR = 0;
         $('#fNo').val(doc ? doc.doc_no : '');
         // 新增時填表人就是自己（不給選，免得替別人開單）；已存在的單只有建立者本人或管理員可換

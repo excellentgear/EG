@@ -96,6 +96,38 @@ function eg_demo_clear(PDO $db, ?int $year = null, bool $keepCtx = false): array
     return $n;
 }
 
+/** 只清除「還沒確認」的草稿（is_draft=1）：風險表、溝通記錄（連同明細與追蹤）。已確認成正式資料的不動 */
+function eg_draft_clear(PDO $db, int $year): array
+{
+    $n = ['rm_doc' => 0, 'comm_record' => 0];
+    $db->beginTransaction();
+    try {
+        $ids = array_column(eg_demo_qa($db, "SELECT doc_id FROM rm_doc WHERE is_draft=1 AND YEAR(fill_date)=?", [$year]), 'doc_id');
+        if ($ids) { $in = implode(',', array_map('intval', $ids)); $db->exec("DELETE FROM rm_item WHERE doc_id IN ($in)"); $n['rm_doc'] = $db->exec("DELETE FROM rm_doc WHERE doc_id IN ($in)"); }
+        $ids = array_column(eg_demo_qa($db, "SELECT rec_id FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$year]), 'rec_id');
+        if ($ids) {
+            $in = implode(',', array_map('intval', $ids));
+            $db->exec("DELETE FROM comm_track WHERE src_rec_id IN ($in)"); $db->exec("DELETE FROM comm_record_item WHERE rec_id IN ($in)");
+            $n['comm_record'] = $db->exec("DELETE FROM comm_record WHERE rec_id IN ($in)");
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    return $n;
+}
+
+/** 草稿狀態：有沒有已產生的草稿、各有幾筆（畫面按鈕旁顯示用） */
+function eg_draft_status(PDO $db, int $year): array
+{
+    $r = eg_demo_q1($db, "SELECT COUNT(*) n, MAX(draft_at) at FROM rm_doc WHERE is_draft=1 AND is_deleted=0 AND YEAR(fill_date)=?", [$year]);
+    $c = eg_demo_q1($db, "SELECT COUNT(*) n FROM comm_record WHERE is_draft=1 AND is_deleted=0 AND YEAR(comm_date)=?", [$year]);
+    $t = eg_demo_q1($db, "SELECT COUNT(*) n FROM comm_track WHERE is_draft=1 AND is_deleted=0 AND YEAR(react_date)=?", [$year]);
+    $ri = 0; $d = eg_demo_q1($db, "SELECT doc_id FROM rm_doc WHERE is_draft=1 AND is_deleted=0 AND YEAR(fill_date)=? LIMIT 1", [$year]);
+    if ($d) $ri = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_item WHERE doc_id=?", [(int)$d['doc_id']])['n'];
+    $at = $r['at'] ?? null;
+    if (!$at && (int)$c['n'] > 0) $at = eg_demo_q1($db, "SELECT MAX(created_at) a FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$year])['a'] ?? null;
+    return ['risk_doc' => (int)$r['n'], 'risk_items' => $ri, 'records' => (int)$c['n'], 'tracks' => (int)$t['n'], 'at' => $at, 'has' => ((int)$r['n'] + (int)$c['n']) > 0];
+}
+
 /** 溝通記錄＋追蹤項目（比照人工「建立→轉追蹤」的欄位；追蹤編號走 cm_track_no_next） */
 function eg_demo_record(PDO $db, array $cats, array $o): array
 {
@@ -110,6 +142,16 @@ function eg_demo_record(PDO $db, array $cats, array $o): array
     $mp = cm_dept_manager_pool($db, (int)$maker['id'], (int)$mk['department_id'], (int)$mk['pos_sort'], $date);
     $mgr = $mp['pool'][0] ?? null; $gm = cm_gm_pool($db, $date)[0] ?? null;
     $ts = function ($h, $m = 0) use ($date) { return $date . ' ' . sprintf('%02d:%02d:00', $h, $m); };
+    $draft = !empty($GLOBALS['EG_DRAFT_MODE']); $du = $GLOBALS['EG_DRAFT_USER'] ?? ['id' => 1, 'name' => '超級管理員'];
+    if ($draft) {
+        // 草稿：不簽核、不蓋任何章（簽核走正常流程），remark 留空；is_draft=1 讓畫面標示「草稿・待確認」、列印不顯示
+        $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_cat_id, party_kind_other, party_name, party_ref_id, ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
+                maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort, status, is_draft, created_by, created_by_name, created_at, updated_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?,'draft',1,?,?,NOW(),NOW())")
+           ->execute([$no, $o['type'] ?? 'irregular', $date, $kind, (int)$cat['cat_id'], $kind === 'other' ? $o['cat'] : '', $o['party'], $o['ref'] ?? null,
+                      (int)in_array('phone', $o['ch']), (int)in_array('face', $o['ch']), (int)in_array('email', $o['ch']), (int)in_array('meeting', $o['ch']),
+                      $maker['id'], $maker['name'], $mk['department_id'], $mk['department_name'], $mk['position_id'], $mk['position_name'], $mk['pos_sort'], $du['id'], $du['name']]);
+    } else
     $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_cat_id, party_kind_other, party_name, party_ref_id, party_user_id,
             party_contact_id, party_contact_name, ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
             maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort,
@@ -128,9 +170,10 @@ function eg_demo_record(PDO $db, array $cats, array $o): array
         if (!empty($it['track'])) {
             $t = $it['track']; $ow = $t['owner'];
             $db->prepare("INSERT INTO comm_track (track_no, party, cat_id, content, react_date, action, owner_id, owner_name, owner_dept_id, owner_dept_name, due_date, is_closed, closed_date, close_note,
-                            src_rec_id, src_item_id, created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'超級管理員',?,?)")
+                            src_rec_id, src_item_id, is_draft, created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                ->execute([cm_track_no_next($db, $date), $o['party'], (int)$cat['cat_id'], $it['q'], $date, $t['action'], $ow['id'], $ow['name'], $ow['dept_id'], $ow['dept'], $t['due'],
-                          !empty($t['closed']) ? 1 : 0, $t['closed'] ?? null, $t['note'] ?? null, $rid, $iid, $ts(11, 30), $ts(11, 30)]);
+                          (!$draft && !empty($t['closed'])) ? 1 : 0, $draft ? null : ($t['closed'] ?? null), $draft ? null : ($t['note'] ?? null), $rid, $iid, $draft ? 1 : 0,
+                          $draft ? $du['id'] : 1, $draft ? $du['name'] : '超級管理員', $ts(11, 30), $ts(11, 30)]);
             $tid = (int)$db->lastInsertId();
             $db->prepare("UPDATE comm_record_item SET track_id=? WHERE item_id=?")->execute([$tid, $iid]);
             $tracks[] = $tid;
@@ -142,6 +185,12 @@ function eg_demo_record(PDO $db, array $cats, array $o): array
 /** 處境分析表／風險表的表頭（沿用人工建立的欄位；單號依表單日期配號） */
 function eg_demo_doc(PDO $db, string $kind, string $date, array $deptIds, array $deptNames): int
 {
+    if (!empty($GLOBALS['EG_DRAFT_MODE'])) {       // 草稿：不標【假資料】，用 is_draft 標示
+        $du = $GLOBALS['EG_DRAFT_USER'] ?? ['id' => 1, 'name' => '超級管理員'];
+        $db->prepare("INSERT INTO rm_doc (doc_no, kind, dept_ids, dept_names, fill_date, remark, is_draft, draft_at, created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,NULL,1,NOW(),?,?,NOW(),NOW())")
+           ->execute([rm_next_doc_no($db, $date), $kind, json_encode($deptIds), implode('、', $deptNames) ?: null, $date, $du['id'], $du['name']]);
+        return (int)$db->lastInsertId();
+    }
     $db->prepare("INSERT INTO rm_doc (doc_no, kind, dept_ids, dept_names, fill_date, remark, created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,?,1,'超級管理員',?,?)")
        ->execute([rm_next_doc_no($db, $date), $kind, json_encode($deptIds), implode('、', $deptNames) ?: null, $date, EG_DEMO_TAG . '關聯假資料（可一鍵清除）', $date . ' 10:00:00', $date . ' 10:00:00']);
     return (int)$db->lastInsertId();
@@ -346,10 +395,13 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $DT = $dchk['dates'];
 
     // 該年度已有「真實」表單就不產生
-    $real = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE is_deleted=0 AND YEAR(fill_date)=? AND (remark IS NULL OR remark NOT LIKE ?)", [$Y, EG_DEMO_TAG . '%'])['n'];
+    $draft = !empty($opt['draft']);                 // 草稿模式：使用者自己的 SWOT 為準，產生「待確認」的風險表／溝通記錄／措施追蹤
+    $GLOBALS['EG_DRAFT_MODE'] = $draft; $GLOBALS['EG_DRAFT_USER'] = $opt['user'] ?? ['id' => 1, 'name' => '超級管理員'];
+    if ($draft) $opt['from_context'] = true;
+    $real = $draft ? 0 : (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE is_deleted=0 AND YEAR(fill_date)=? AND (remark IS NULL OR remark NOT LIKE ?)", [$Y, EG_DEMO_TAG . '%'])['n'];
     if ($real > 0) throw new RuntimeException($Y . ' 年已經有實際建立的處境分析表／風險表，一個年度只能有一張；請改選沒有表單的年度，或先刪除該年度的表單。');
-    $fromCtx = !empty($opt['from_context']);       // 沿用現有的處境分析表（使用者改過的 SWOT），只重建風險表、溝通管理與會議
-    $clear = eg_demo_clear($db, $Y, $fromCtx);
+    $fromCtx = !empty($opt['from_context']) || !empty($opt['draft']);       // 沿用現有的處境分析表（使用者改過的 SWOT），只重建風險表、溝通管理與會議
+    $clear = $draft ? ['demo' => eg_demo_clear($db, $Y, true), 'draft' => eg_draft_clear($db, $Y)] : eg_demo_clear($db, $Y, $fromCtx);   // 草稿取代同年度的示範假資料（處境表保留）與舊草稿
 
     $in = rm_audit_in($db, 'd_setting_id');
     $set = rm_settings($db);
@@ -513,7 +565,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         }
     }
     // 溝通管制表（常態機制）：稽核製程出貨前三大客戶
-    foreach (($catSet === null || isset($catSet['concentration'])) ? $top : [] as $i => $tc) {
+    foreach ((!$draft && ($catSet === null || isset($catSet['concentration']))) ? $top : [] as $i => $tc) {
         $cc = $cust($tc['Client_name']);
         $mkr = $own['業務課']; $mkIds = cm_identities($db, (int)$mkr['id'], $today); $mi = $mkIds[0] ?? ['department_id' => 0, 'department_name' => '', 'position_name' => ''];
         $db->prepare("INSERT INTO comm_ctrl (maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_name, party_kind, party_kind_other, party, party_ref_id, party_user_id,
@@ -554,12 +606,17 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $ctxIds[] = ['id' => (int)$db->lastInsertId()] + $c;
     }
     }
+    $skipRisk = false;
+    if ($draft) {         // 該年度已經有一張風險表（正式或示範）：一個年度只能有一張，不另外產生草稿，只產生溝通記錄與措施追蹤草稿
+        $ex = eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND is_draft=0 AND YEAR(fill_date)=?", [$Y]);
+        if ((int)$ex['n'] > 0) { $skipRisk = true; $warn[] = $Y . ' 年已經有一張風險與機會因應措施管制表（一個年度只能有一張），所以只產生溝通記錄與措施追蹤草稿；要產生風險表草稿請先刪除該年度現有的風險表'; }
+    }
     $riskDate = $DT['risk'];
     $deptNames = ['總經理室', '業務課', '生管組', '品管課', '技術課', '管理課'];
     $deptIds = array_values(array_filter(array_map(function ($n) use ($db) { return eg_demo_dept_id($db, $n); }, $deptNames)));
-    $riskId = eg_demo_doc($db, 'risk', $riskDate, $deptIds, $deptNames);
+    $riskId = $skipRisk ? 0 : eg_demo_doc($db, 'risk', $riskDate, $deptIds, $deptNames);
     $seq = 0;
-    foreach ($ctxIds as $cx) {
+    foreach ($skipRisk ? [] : $ctxIds as $cx) {
         if (!in_array($cx['dimension'], ['W', 'O', 'T'], true)) continue;
         $seq++;
         $r = rm_rule_make_row($db, $set, ['stakeholder' => $cx['stakeholder'], 'needs' => $cx['needs'], 'issue' => $cx['issue'], 'dimension' => $cx['dimension']], $dataYear, $Y);
@@ -572,7 +629,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $rulings = ['effective' => '經確認措施已落實，指標或追蹤項目達成，本項成效有效；維持現行作法並納入下年度持續監控。', 'partial' => '部分達成；要求負責人於下次確認前補強措施並持續追蹤。',
                 'doing' => '措施執行中，尚未到可判定成效的時點；維持追蹤至下次確認。'];
     $effDate = $DT['effect']; $effN = 0; $skipped = 0;
-    foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
+    foreach (($draft || $skipRisk) ? [] : eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
         $ev = rm_rule_evidence($db, $set, $row, $Y);
         if (!isset($rulings[$ev['status']])) { $skipped++; continue; }
         $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$ev['status'], $effDate, $rulings[$ev['status']], $ev['text'], (int)$row['item_id']]);
@@ -587,9 +644,10 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $meetings = [];
     // 該年度已經有「真實」的管理審查會議紀錄就不再產生假的（同一天兩場一模一樣的會議只會混淆）
     $realMr = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM meeting_record WHERE subject LIKE '%管理審查%' AND subject NOT LIKE ? AND YEAR(meeting_date)=?", [EG_DEMO_TAG . '%', $Y])['n'];
-    if ($DT['mr'] !== '' && $realMr > 0) { $warn[] = '管理審查會議：' . $Y . ' 年已有實際建立的管理審查會議紀錄，不產生假資料'; $DT['mr'] = ''; }
+    if (!$draft && $DT['mr'] !== '' && $realMr > 0) { $warn[] = '管理審查會議：' . $Y . ' 年已有實際建立的管理審查會議紀錄，不產生假資料'; $DT['mr'] = ''; }
     if ($DT['mr'] !== '')     $meetings[] = ['subj' => '管理審查會議', 'mk' => 'mr', 'date' => $DT['mr'], 'loc' => '大會議室'];
-    foreach (['mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
+    if ($draft) $meetings = [];
+    foreach ($draft ? [] : ['mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
     $deptList = eg_demo_qa($db, "SELECT id, name FROM department ORDER BY CHAR_LENGTH(name) DESC");
     $mCount = 0;
     foreach ($meetings as $m) {
@@ -637,7 +695,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         }
     }
     return ['year' => $Y, 'cleared' => $clear, 'comm_records' => count($R), 'comm_tracks' => array_sum(array_map(function ($r) { return count($r['tracks']); }, $R)),
-            'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount, 'from_context' => $fromCtx,
+            'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount, 'from_context' => $fromCtx, 'draft' => $draft,
             'ai' => ['enabled' => !empty($opt['ai']), 'calls' => $st['calls'], 'ok' => $st['ai_ok'], 'fallback' => $st['fallback'], 'error' => $st['ai_err']], 'warn' => $warn];
 }
 
