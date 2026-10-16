@@ -2593,11 +2593,27 @@
       var done = 0;
       bySheet.forEach(function (g) {
         if (g.rows.length < 2) return;
+        if (!_numMeasureCanvas) _numMeasureCanvas = d.createElement('canvas');
+        var mctx = _numMeasureCanvas.getContext('2d');
         g.rows.forEach(function (r) {
           var rr = d.createRange();
           rr.setStart(r.node, 0); rr.setEnd(r.node, 1);
-          r.x = rr.getBoundingClientRect().left;
-          r.fs = parseFloat(w.getComputedStyle(r.node.parentNode).fontSize) || 16;
+          var cs0 = w.getComputedStyle(r.node.parentNode);
+          r.fs = parseFloat(cs0.fontSize) || 16;
+          /* 對齊的是「看得見的括號墨跡」，不是字元方塊的左緣：
+             全形「（」的方塊左半是空白、墨跡在方塊中段；半形「(」墨跡幾乎貼著方塊左緣，
+             兩種括號並排時照方塊左緣對齊，畫面上會差半個字（使用者 2026-10-16：
+             9.1~9.3 用「（」、9.4 用「(」，按了還是沒對齊）。
+             墨跡位置用 canvas 量 actualBoundingBoxLeft（負值＝墨跡在原點右邊）。 */
+          var ink = 0;
+          try {
+            mctx.font = cs0.fontStyle + ' ' + cs0.fontWeight + ' ' + cs0.fontSize + ' ' + cs0.fontFamily;
+            var ch = r.node.nodeValue.charAt(0);
+            var mt = mctx.measureText(ch);
+            if (typeof mt.actualBoundingBoxLeft === 'number') ink = -mt.actualBoundingBoxLeft;
+          } catch (e) {}
+          r.ink = ink;
+          r.x = rr.getBoundingClientRect().left + ink;
         });
         var maxX = Math.max.apply(null, g.rows.map(function (r) { return r.x; }));
         // 空隙取同群最大字級的 0.4 倍、**全群共用同一個值**：
