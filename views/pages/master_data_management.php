@@ -20845,7 +20845,8 @@ var dictConfig = {
             html += '<div style="min-width:200px;"><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">綁定製程大類</label>';
             html += '<select id="dict-f-bind-pt" class="form-control input-sm" data-eg-filter="輸入製程大類篩選…"><option value="">（不綁定）</option></select></div>';
             html += '<div style="min-width:200px;"><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">製程小類（可多選；不選＝只綁大類）</label>';
-            html += '<div id="dict-f-bind-pn" style="display:flex;flex-wrap:wrap;gap:5px;max-width:560px;"><span style="color:#aaa;font-size:11px;">請先選製程大類</span></div></div>';
+            html += '<input type="text" id="dict-f-bind-pn-q" class="form-control input-sm" placeholder="輸入關鍵字篩選製程小類…" style="max-width:260px;margin-bottom:4px;" oninput="subBindFilterPnos(this.value)">';
+            html += '<div id="dict-f-bind-pn" style="display:flex;flex-wrap:wrap;gap:5px;max-width:620px;max-height:110px;overflow-y:auto;padding:2px;"><span style="color:#aaa;font-size:11px;">請先選製程大類</span></div></div>';
             html += '<div style="font-size:11px;color:#a67c3d;flex:1;min-width:160px;">僅加工類可綁定；系統會記錄所選製程大類／製程小類的 ID。</div>';
             html += '</div>';
             html += '<label style="font-size:11px;color:#888;margin-bottom:4px;display:block;">綁定大類（可多選）</label>';
@@ -26651,8 +26652,15 @@ function clearDictForm() {
 
 // ── 廠商小類：綁定製程大類／製程小類 ──
 var _subBindPending = null;   // fillForm 早於大類清單載入完成時暫存
+function subBindFilterPnos(q) {
+    q = (q||'').trim().toLowerCase();
+    $('#dict-f-bind-pn label').each(function() {
+        $(this).toggle(!q || $(this).text().toLowerCase().indexOf(q) >= 0 || $(this).find('input').prop('checked'));
+    });
+}
 function subBindLoadPnos(ptid, selPns) {
     var $pn = $('#dict-f-bind-pn');
+    $('#dict-f-bind-pn-q').val('');
     if (!ptid) { $pn.html('<span style="color:#aaa;font-size:11px;">請先選製程大類</span>'); return; }
     $pn.html('<span style="color:#aaa;font-size:11px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</span>');
     var sel = String(selPns||'').split(',').filter(Boolean);
