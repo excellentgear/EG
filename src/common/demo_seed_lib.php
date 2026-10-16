@@ -204,20 +204,29 @@ function eg_demo_date_docs(PDO $db): array
     return $out;
 }
 
-/** 依目前填的日期產生備註：AS 文件設定的更新頻率／負責課室＋「日期的月份和 AS 設定的月份不同」的提醒（只提醒、不擋） */
+/** 某個日期欄位被 AS 文件管理「指定月份」限制時，回傳允許的月份（沒有指定月份＝空陣列＝不限）。唯一解析點，預設值／檢查／備註共用 */
+function eg_demo_months_for(array $docs, string $k): array
+{
+    $m = [];
+    foreach ($docs[$k] ?? [] as $d) foreach ($d['months'] as $x) $m[(int)$x] = (int)$x;
+    ksort($m);
+    return array_values($m);
+}
+
+/** 依 AS 文件管理的設定產生備註：更新頻率／負責課室＋必須落在哪幾個月（前端畫面顯示；實際阻擋由 eg_demo_dates_check 做） */
 function eg_demo_date_hints(PDO $db, array $dates): array
 {
     $docs = eg_demo_date_docs($db); $H = [];
     foreach ($docs as $k => $list) {
-        $lines = []; $warn = [];
+        $lines = [];
         foreach ($list as $d) {
-            $s = $d['no'] . ' ' . $d['name'] . '：' . $d['freq'] . ($d['note'] !== '' ? '，' . mb_substr($d['note'], 0, 40) . (mb_strlen($d['note']) > 40 ? '…' : '') : '') . ($d['owners'] ? '；負責課室 ' . implode('、', $d['owners']) : '');
-            $lines[] = $s;
-            $v = (string)($dates[$k] ?? '');
-            if ($v !== '' && $d['months'] && !in_array((int)substr($v, 5, 2), $d['months'], true))
-                $warn[] = 'AS 文件管理設定「' . $d['name'] . '」是每年 ' . implode('、', $d['months']) . ' 月，目前日期落在 ' . (int)substr($v, 5, 2) . ' 月';
+            $lines[] = $d['no'] . ' ' . $d['name'] . '：' . $d['freq'] . ($d['note'] !== '' ? '，' . mb_substr($d['note'], 0, 40) . (mb_strlen($d['note']) > 40 ? '…' : '') : '')
+                     . ($d['owners'] ? '；負責課室 ' . implode('、', $d['owners']) : '');
         }
-        $H[$k] = ['lines' => $lines, 'warn' => $warn];
+        $ms = eg_demo_months_for($docs, $k);
+        if ($ms) $lines[] = '必須落在 ' . implode('、', $ms) . ' 月（依 AS 文件管理設定，月份不符不能產生）';
+        if ($k === 'mr' && $ms) $lines[] = '管理審查指定月份時，審查的是前一年度的稽核與成效，所以不要求晚於本年度的成效確認日與稽核結束會議';
+        $H[$k] = ['lines' => $lines, 'warn' => []];
     }
     return $H;
 }
@@ -232,30 +241,44 @@ function eg_demo_wd(PDO $db, string $date, int $dir): string
     return $date;
 }
 
-/** 預設值：貼近一般作業順序（管理審查前一個工作日確認成效），且不超過今天；留給使用者逐項調整 */
+/** 預設值：有 AS 指定月份的就落在該月份，其餘貼近一般作業順序；不超過今天，排不下的會議留白（不建立） */
 function eg_demo_default_dates(PDO $db, int $Y): array
 {
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
     $cap = function (string $d) use ($today) { return $d > $today ? $today : $d; };
+    $docs = eg_demo_date_docs($db);
     $D = [];
     $D['ctx']  = eg_demo_wd($db, $cap($Y . '-01-12'), -1);
     $D['risk'] = eg_demo_wd($db, $cap($Y . '-01-15'), -1);
     if ($D['risk'] < $D['ctx']) $D['risk'] = $D['ctx'];
-    $D['ia_pre'] = eg_demo_wd($db, $cap($Y . '-09-01'), -1);
-    $D['ia_end'] = eg_demo_wd($db, $cap($Y . '-09-26'), -1);
-    if ($D['ia_end'] <= $D['ia_pre']) $D['ia_end'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_pre'] . ' +1 day')), 1);
-    $D['mr'] = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
-    $D['effect'] = eg_demo_wd($db, date('Y-m-d', strtotime($D['mr'] . ' -1 day')), -1);
+    $D['effect'] = eg_demo_wd($db, $cap($Y . '-10-09'), -1);
     if ($D['effect'] < $D['risk']) $D['effect'] = $D['risk'];
-    if ($D['mr'] < $D['effect']) $D['mr'] = $D['effect'];
-    foreach (['ia_pre', 'ia_end', 'mr'] as $k) if ($D[$k] > $today) $D[$k] = '';      // 今天以前排不下就留白（不建立）
+    // 稽核結束會議：AS 有指定月份就取該月（月底前、工作日），還沒到的月份就留白；沒指定才用預設的 9 月底
+    $em = eg_demo_months_for($docs, 'ia_end');
+    $x = $em ? eg_demo_wd($db, sprintf('%04d-%02d-20', $Y, $em[0]), -1) : eg_demo_wd($db, $cap($Y . '-09-26'), -1);
+    $D['ia_end'] = $x > $today ? '' : $x;
+    // 稽核事前會議：結束會議前約 4 週，但不早於風險表填表日
+    $pm = eg_demo_months_for($docs, 'ia_pre');
+    if ($pm) { $y2 = eg_demo_wd($db, sprintf('%04d-%02d-10', $Y, $pm[0]), 1); }
+    elseif ($D['ia_end'] !== '') { $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_end'] . ' -28 days')), 1); }
+    else { $y2 = eg_demo_wd($db, $cap($Y . '-09-01'), -1); }
+    if ($y2 < $D['risk']) $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['risk'] . ' +1 day')), 1);
+    if ($D['ia_end'] !== '' && $y2 >= $D['ia_end']) $y2 = eg_demo_wd($db, date('Y-m-d', strtotime($D['ia_end'] . ' -1 day')), -1);
+    $D['ia_pre'] = $y2 > $today ? '' : $y2;
+    // 管理審查：AS 有指定月份就取該月；沒指定才排在成效確認日之後、稽核結束之後
+    $mm = eg_demo_months_for($docs, 'mr');
+    if ($mm) $D['mr'] = eg_demo_wd($db, sprintf('%04d-%02d-05', $Y, $mm[0]), 1);
+    else {
+        $D['mr'] = eg_demo_wd($db, date('Y-m-d', strtotime(max($D['effect'], $D['ia_end'] ?: $D['effect']) . ' +1 day')), 1);
+    }
+    if ($D['mr'] > $today) $D['mr'] = '';
     return $D;
 }
 
 /**
  * 檢查日期是否合理。回傳 ['errors' => [欄位 => 原因], 'dates' => 正規化後的日期]。
  * 規則（前後端共用這一份，畫面只是顯示原因）：
- *   ①都在該年度內、不可晚於今天（未來日期的文件與會議不合理）②表單與會議日必須是工作日
+ *   ①都在該年度內、不可晚於今天（未來日期的文件與會議不合理）②表單與會議日必須是工作日，且月份符合 AS 文件管理的指定月份
  *   ③處境分析表 ≤ 風險管制表 ≤ 成效確認日 ④稽核事前會議在風險表之後、事前 < 結束 ⑤管理審查在成效確認與稽核結束會議之後
  */
 function eg_demo_dates_check(PDO $db, int $Y, array $in): array
@@ -275,12 +298,25 @@ function eg_demo_dates_check(PDO $db, int $Y, array $in): array
         if ($D[$a] === '' || $D[$b] === '' || isset($E[$msgKey])) return;
         if ($strict ? $D[$a] >= $D[$b] : $D[$a] > $D[$b]) $E[$msgKey] = $msg;
     };
+    // AS 文件管理有「指定月份」的文件，日期的月份必須在指定月份內（使用者要求：非正確月份要阻擋產生）
+    $docs = eg_demo_date_docs($db);
+    foreach ($F as $k => $f) {
+        $ms = eg_demo_months_for($docs, $k);
+        if (!$ms || ($D[$k] ?? '') === '' || isset($E[$k])) continue;
+        if (!in_array((int)substr($D[$k], 5, 2), $ms, true)) {
+            $names = []; foreach ($docs[$k] as $d) if ($d['months']) $names[] = '「' . $d['name'] . '」';
+            $E[$k] = 'AS 文件管理設定' . implode('、', $names) . '是每年 ' . implode('、', $ms) . ' 月，請改成該月份的日期（該月份還沒到的話，請留白＝不建立）';
+        }
+    }
+    $mrByAs = (bool)eg_demo_months_for($docs, 'mr');
     $le('ctx', 'risk', 'risk', '不可早於處境分析表填表日（' . $D['ctx'] . '），風險表是依處境分析表產生的');
     $le('risk', 'effect', 'effect', '不可早於風險管制表填表日（' . $D['risk'] . '），措施建立之後才談得到成效');
     $le('risk', 'ia_pre', 'ia_pre', '不可早於風險管制表填表日，稽核要查的是已建立的管制表');
     $le('ia_pre', 'ia_end', 'ia_end', '結束會議必須晚於事前會議（' . $D['ia_pre'] . '）', true);
-    $le('effect', 'mr', 'mr', '管理審查要看成效確認結果，不可早於成效確認日（' . $D['effect'] . '）');
-    $le('ia_end', 'mr', 'mr', '管理審查要審查內部稽核結果，不可早於稽核結束會議（' . $D['ia_end'] . '）');
+    if (!$mrByAs) {          // AS 指定了管理審查的月份＝審查的是前一年度，不和本年度的成效確認、稽核結束比先後
+        $le('effect', 'mr', 'mr', '管理審查要看成效確認結果，不可早於成效確認日（' . $D['effect'] . '）');
+        $le('ia_end', 'mr', 'mr', '管理審查要審查內部稽核結果，不可早於稽核結束會議（' . $D['ia_end'] . '）');
+    }
     return ['errors' => $E, 'dates' => $D];
 }
 
