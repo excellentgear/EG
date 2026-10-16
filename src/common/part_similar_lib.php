@@ -323,12 +323,32 @@ function ps_similar_levels(PDO $db): array {
                     if ($a === $b) continue;
                     $ev = ps_pair_eval($parts[$a]['list'], $parts[$b]['list'], $parts[$a]['len'], $parts[$b]['len'], $cfg['labels'], $tags[$a] ?? [], $tags[$b] ?? []);
                     if (!$ev) continue;
-                    if (!isset($memo[$a])) $memo[$a] = ['best' => 'C', 'B' => 0, 'A' => 0, 'C' => 0];
+                    if (!isset($memo[$a])) $memo[$a] = ['best' => 'C', 'B' => 0, 'A' => 0, 'C' => 0, 'peers' => []];
                     $memo[$a][$ev['level']]++;
+                    $memo[$a]['peers'][] = [$ev['level'], $b];
                 }
             }
         }
         foreach ($memo as &$m) { $m['best'] = $m['B'] ? 'B' : ($m['A'] ? 'A' : 'C'); }
+        unset($m);
+        // 類似料號的料號文字（清單格直接印出來用）：高等級排前面，每個料號最多留 3 個
+        $rank = ['B' => 0, 'A' => 1, 'C' => 2];
+        $need = [];
+        foreach ($memo as &$m) {
+            usort($m['peers'], function ($x, $y) use ($rank) { return $rank[$x[0]] <=> $rank[$y[0]] ?: $x[1] <=> $y[1]; });
+            $m['peers'] = array_slice($m['peers'], 0, 3);
+            foreach ($m['peers'] as $pr) $need[$pr[1]] = 1;
+        }
+        unset($m);
+        $names = [];
+        if ($need) {
+            foreach ($db->query("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id IN (" . implode(',', array_keys($need)) . ")") as $r) $names[(int)$r['d_id']] = (string)$r['D_Setting_Id'];
+        }
+        foreach ($memo as &$m) {
+            $m['peer_nos'] = [];
+            foreach ($m['peers'] as $pr) if (isset($names[$pr[1]])) $m['peer_nos'][] = $names[$pr[1]];
+            unset($m['peers']);
+        }
         unset($m);
     } catch (Throwable $e) { error_log('ps_similar_levels: ' . $e->getMessage()); $memo = []; }
     return $memo;
