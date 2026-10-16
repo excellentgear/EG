@@ -2321,6 +2321,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_contact_search') {
 // 檔案存在 eng_log_file（與工程處理紀錄同一張表、同一個資料夾，不另開一套）：
 // 上傳先存 temp（新增中就能上傳＝鐵律5），送出問題／回覆時由 ate_q_add／ate_q_reply 轉正。
 // 權限沿用本功能的 $can_design_qa；讀檔要確認該檔屬於「訂單設計備註／製程中紀錄」案件。
+/** 這張訂單目前算在哪幾張統計卡（PS／批圖溝通中／設計待處理）：判定與清單統計 SQL 同一套函式。
+ *  前端拿「動作前後的差」即時調整卡片數字，不必為了三個數字整頁重載（2026-10-16 使用者回報）。 */
+function ate_q_flags(PDO $pdo, int $oid): ?array {
+    if ($oid <= 0) return null;
+    try {
+        $np = "ot.pmGet IS NULL";   // pmGet 是 TIMESTAMP，拿 '' 比會 1525 錯誤
+        $st = $pdo->prepare("SELECT ($np AND " . el_order_open_exists_sql('ot') . ") AS comm,
+                                    ($np AND " . oda_ps_exists_sql('ot') . ") AS ps,
+                                    ($np AND " . oda_pending_exists_sql('ot') . ") AS pend
+                             FROM order_track ot WHERE ot.Order_id = ?");
+        $st->execute([$oid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['comm' => (int)$r['comm'], 'ps' => (int)$r['ps'], 'pend' => (int)$r['pend']] : null;
+    } catch (Exception $e) { return null; }
+}
 function ate_q_file_bind(PDO $pdo, int $logId, string $ownerType, int $ownerId, $fileIds, int $uid): void {
     if (!is_array($fileIds) || !$fileIds || $ownerId <= 0) return;
     $up = $pdo->prepare("UPDATE eng_log_file SET log_id=?, owner_type=?, owner_id=?, status='active', expire_at=NULL
@@ -2473,7 +2488,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         // 不在這裡另存一份清單——管理員在 eng_log.php「維護回覆方式」加的新選項，這裡會
         // 自動一起出現，兩邊共用同一張表、同一套函式（鐵律4）。
         echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL, 'kind' => $kind,
-            'frozen' => $frozen, 'cur_user' => $curUser,
+            'frozen' => $frozen, 'cur_user' => $curUser, 'order_id' => $oid, 'flags' => ate_q_flags($pdo, $oid),
             // 對象選項（2026-10-12 起管理員可維護，唯一實作 el_item_target_meta()）：
             // targets＝現在可以選的（按鈕列用）；targets_all＝連停用的也含（顯示舊紀錄一定要
             // 用這個，否則某個對象被停用之後，舊資料的對象會整個變成空白）。
@@ -2554,7 +2569,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         $pdo->commit();
         $prevRow = el_order_item_summary($pdo, [$oid], $logType)[$oid] ?? null;
         echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created, 'kind' => $kind,
-            'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow]);
+            'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow, 'order_id' => $oid, 'flags' => ate_q_flags($pdo, $oid)]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2608,7 +2623,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
         echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR,
-            'reply_count' => count($ret['ids']), 'preview' => $prevRow]);
+            'reply_count' => count($ret['ids']), 'preview' => $prevRow, 'order_id' => (int)$oidR, 'flags' => ate_q_flags($pdo, (int)$oidR)]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2637,7 +2652,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $oidR = el_case_order_id($pdo, $logId);
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow, 'order_id' => (int)$oidR, 'flags' => ate_q_flags($pdo, (int)$oidR)]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -2688,7 +2703,7 @@ if (isset($_POST['action']) && ($_POST['action'] === 'ate_q_void' || $_POST['act
         $oidR = el_case_order_id($pdo, $logId);
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow, 'order_id' => (int)$oidR, 'flags' => ate_q_flags($pdo, (int)$oidR)]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2737,7 +2752,7 @@ if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 
             }
             $oidR = oda_confirm($pdo, $itemId, $actOda === 'oda_confirm', $byId, $byName, $proxy);
             $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], 'order_note')[$oidR] ?? null) : null;
-            echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => 'note', 'preview' => $prevRow]);
+            echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => 'note', 'preview' => $prevRow, 'order_id' => (int)$oidR, 'flags' => ate_q_flags($pdo, (int)$oidR)]);
             exit;
         }
         // 設計備註查看跳窗：哪些備註已經被設為提示（沒有設定權限的人 can=false、不給資料，不是錯誤）
@@ -11019,6 +11034,23 @@ foreach($dCounts as $c) {
         // kind='process' 時改走 ateProcApplyBadge()（2026-10-06 新增，更新的是料號欄裡那顆
         // 獨立的「製程中紀錄」小圖示，不是這裡的 .ate-q-cell）；kind 不帶或非 'process' 時
         // 完全沿用原本的邏輯，與改動前逐行相同——嚴禁影響現有使用者。
+        // 統計卡即時更新（2026-10-16）：每個問答動作的回應都帶這張訂單「現在算在哪幾張卡」(flags)，
+        // 跟上一次記下的比對，差多少就把 PS／批圖溝通中／設計待處理三張卡加減多少，不整頁重載。
+        // 第一次看到某張訂單（開跳窗載入）只記錄、不調整數字。
+        var ATE_FLAGS = {};
+        $(document).ajaxSuccess(function(ev, xhr, opt) {
+            var res = xhr && xhr.responseJSON;
+            if (!res || !res.success || !res.flags || !res.order_id) return;
+            var oid = String(res.order_id), prev = ATE_FLAGS[oid], cur = res.flags;
+            ATE_FLAGS[oid] = cur;
+            if (!prev) return;
+            [['comm', '#count-communication'], ['ps', '#count-ps'], ['pend', '#count-design-pending']].forEach(function(m) {
+                var d = (cur[m[0]] || 0) - (prev[m[0]] || 0);
+                if (!d) return;
+                var $e = $(m[1]), n = parseInt(String($e.text()).replace(/,/g, ''), 10);
+                if (!isNaN(n)) $e.text(Math.max(0, n + d).toLocaleString('en-US'));
+            });
+        });
         function ateQApplyBadge(orderId, openCount, preview, kind) {
             if (kind === 'process') { ateProcApplyBadge(orderId, openCount, preview); return; }
             var $cell = $('td[data-ate-q-order="' + orderId + '"] .ate-q-cell');
@@ -11928,7 +11960,9 @@ foreach($dCounts as $c) {
                 var tsel = astagTypeSelHtml('astag-f', i, r.process_type_id);
                 var ssel = astagSubSelHtml('astag-f', i, r.process_type_id, r.sub_nos);
                 // 適用範圍
-                var scopes = [['both', '兩者皆可（長兩顆）'], ['single', '只有單製'], ['full', '只有全製']];
+                // 稽核製程不提供「只有全製」（會包含非稽核製程資料）；舊資料若仍是 full 只顯示成待修正項，後端存檔會擋下
+                var scopes = [['both', '兩者皆可（長兩顆）'], ['single', '只有單製']];
+                if (r.scope === 'full') scopes.push(['full', '只有全製（不可用，請改選）']);
                 var csel = '<select class="form-control input-sm astag-f" data-i="' + i + '" data-f="scope">'
                          + scopes.map(function (x) { return '<option value="' + x[0] + '"' + (r.scope === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('')
                          + '</select>';
