@@ -426,6 +426,7 @@ if ($action === 'rec_save') {
        不可只擋 UI，直打 API 就能塞一個根本不存在的客戶編號或別部門的人進來） */
     $partyRef     = cmS($_POST['party_ref_id'] ?? '', 40);
     $partyUser    = (int)($_POST['party_user_id'] ?? 0);
+    $partyMulti   = null;
     $partyCtcId   = (int)($_POST['party_contact_id'] ?? 0);
     $partyCtcName = cmS($_POST['party_contact_name'] ?? '', 100);
     if ($kind === 'customer' || $kind === 'supplier') {
@@ -441,6 +442,31 @@ if ($action === 'rec_save') {
             $partyCtcName = (string)$ok['name'];
         }
         $partyUser = 0;
+    } elseif ($kind === 'employee' && is_array($multiRaw = json_decode((string)($_POST['party_multi'] ?? ''), true)) && $multiRaw) {
+        // 員工類別可多選：個別人員，或整個部門的「全體人員」「相關人員」（人員多時不必一個個挑）；每一筆都回後端核對
+        $multi = []; $parts = []; $seenK = [];
+        foreach (array_slice($multiRaw, 0, 30) as $e) {
+            $dRef = (int)($e['dept_id'] ?? 0); $scope = (string)($e['scope'] ?? 'person');
+            if (!in_array($scope, ['person', 'related', 'all'], true)) jerr('員工對象的範圍不正確');
+            $dq = $db->prepare("SELECT name FROM department WHERE id=?"); $dq->execute([$dRef]); $dn = (string)$dq->fetchColumn();
+            if ($dn === '') jerr('所選的部門不存在，請重新選擇');
+            if ($scope === 'person') {
+                $uidE = (int)($e['user_id'] ?? 0); $ok = null;
+                foreach (cm_dept_people($db, $dRef, $commDate) as $p) if ((int)$p['id'] === $uidE) { $ok = $p; break; }
+                if (!$ok) jerr('「' . $dn . '」查無這位員工（溝通日期當時），請重新選擇');
+                $key = $dRef . '|p|' . $uidE; if (isset($seenK[$key])) continue; $seenK[$key] = 1;
+                $parts[] = $ok['dept_name'] . '　' . $ok['name'];
+                $multi[] = ['dept_id' => $dRef, 'dept_name' => $ok['dept_name'], 'scope' => 'person', 'user_id' => $uidE, 'name' => $ok['name'], 'pos_name' => (string)$ok['pos_name']];
+            } else {
+                $key = $dRef . '|' . $scope; if (isset($seenK[$key])) continue; $seenK[$key] = 1;
+                $parts[] = $dn . '　' . ($scope === 'all' ? '全體人員' : '相關人員');
+                $multi[] = ['dept_id' => $dRef, 'dept_name' => $dn, 'scope' => $scope, 'user_id' => 0, 'name' => '', 'pos_name' => ''];
+            }
+        }
+        if (!$multi) jerr('請選擇員工');
+        $party = implode('、', $parts); $partyRef = (string)$multi[0]['dept_id']; $partyCtcName = ''; $partyCtcId = 0;
+        $partyUser = 0; foreach ($multi as $m0) if ($m0['scope'] === 'person') { $partyUser = (int)$m0['user_id']; break; }
+        $partyMulti = json_encode($multi, JSON_UNESCAPED_UNICODE);
     } elseif ($kind === 'employee') {
         $deptRef = (int)$partyRef;
         if ($deptRef <= 0) jerr('請選擇員工所屬部門');
@@ -521,6 +547,7 @@ if ($action === 'rec_save') {
                           cmS($_POST['remark'] ?? '', 500), $uid, $uname, $now['n'], $now['n']]);
             $id = (int)$db->lastInsertId();
         }
+        $db->prepare("UPDATE comm_record SET party_multi=? WHERE rec_id=?")->execute([$partyMulti, $id]);
         $ins = $db->prepare("INSERT INTO comm_record_item (rec_id, seq, question, reply, track_id) VALUES (?,?,?,?,?)");
         foreach ($clean as $i => $it) $ins->execute([$id, $i + 1, $it['question'], $it['reply'], $it['track_id']]);
 
@@ -536,6 +563,17 @@ if ($action === 'rec_save') {
         jerr('儲存失敗：' . $e->getMessage(), 500);
     }
     jout(['rec_id'=>$id, 'rec_no'=>$recNo]);
+}
+
+/* 溝通記錄的問題欄「引用風險與機會因應措施管制表」：列出該年度風險表的項目（編號／類型／議題／措施），供挑選後寫入「對應風險與機會因應措施管制表 編號」 */
+if ($action === 'risk_options') {
+    $year = (int)($_GET['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(cmNow($db)['d'], 0, 4);
+    try {
+        $st = $db->prepare("SELECT i.item_id, i.seq, i.confirm_no, i.ro_kind, i.issue, i.measure, d.doc_no, d.is_draft
+                            FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE d.kind='risk' AND d.is_deleted=0 AND YEAR(d.fill_date)=? ORDER BY d.doc_id, i.seq");
+        $st->execute([$year]);
+        jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Throwable $e) { jout(['rows'=>[]]); }
 }
 
 /* ---- 溝通記錄表：刪除（軟刪） ---- */

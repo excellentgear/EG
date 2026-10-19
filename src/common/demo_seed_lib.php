@@ -877,6 +877,9 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
         // 溝通對象（類別＝員工）：涉及的部門＋人員，不限定一位
         $partyTxt = implode('、', array_map(function ($d2, $o2) { return $d2 . ' ' . $o2['name']; }, array_keys($involved), array_values($involved)));
         $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $partyTxt, 'ch' => (count($involved) >= 4 ? ['meeting'] : ['face']), 'maker' => $own['管理課'], 'items' => $items]);
+        // 溝通對象的多選資料（表單開啟時顯示成可增減的清單）
+        $pm = []; foreach ($involved as $d2 => $o2) $pm[] = ['dept_id' => (int)$o2['dept_id'], 'dept_name' => $d2, 'scope' => 'person', 'user_id' => (int)$o2['id'], 'name' => $o2['name'], 'pos_name' => (string)($o2['pos'] ?? '')];
+        if ($pm && !empty($made['rec_id'])) $db->prepare("UPDATE comm_record SET party_multi=?, party_ref_id=?, party_user_id=? WHERE rec_id=?")->execute([json_encode($pm, JSON_UNESCAPED_UNICODE), (string)$pm[0]['dept_id'], $pm[0]['user_id'], (int)$made['rec_id']]);
         foreach ($made['tracks'] as $tid) {     // 回覆內容裡的追蹤編號：追蹤建立後才知道，逐條補上
             $db->prepare("UPDATE comm_record_item SET reply=REPLACE(reply,'@@TRK@@',(SELECT track_no FROM comm_track WHERE track_id=?)) WHERE track_id=?")->execute([(int)$tid, (int)$tid]);
         }

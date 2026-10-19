@@ -197,6 +197,8 @@ $roleLabel = cm_role_label($perms);
             font-size:12.5px; background:#fff; color:#5b3a1e; box-sizing:border-box; height:28px; }
         .pk-line select { max-width:100%; }
         .pk-grow { flex:1 1 220px; min-width:120px; max-width:100%; }
+        .pk-chip { display:inline-block; background:#F7E0BD; color:#5b3a1e; border-radius:10px; padding:1px 8px; margin:2px 4px 2px 0; font-size:12px; line-height:18px; }
+        .pk-chip b { cursor:pointer; margin-left:6px; color:#DD5138; }
         .pk-sum { font-size:12px; color:#8A5A2B; background:#F7E0BD; border-radius:4px; padding:3px 8px;
             display:inline-block; margin-top:4px; }
         .pk-sum.none { background:#F5EEE2; color:#8a6d45; }
@@ -402,7 +404,13 @@ $roleLabel = cm_role_label($perms);
                         <label>員工／職稱</label>
                         <select id="pkUser" class="pk-grow"></select>
                     </div>
-                    <div class="hint">職稱依<b>溝通日期</b>回推當時的（ai-rules/22）；一個人身兼多職時，每個職稱各列一列。</div>
+                    <div class="pk-line">
+                        <span class="hint" style="margin:0 6px 0 0;">人員多時可直接加入整個部門：</span>
+                        <button type="button" class="b-mini" id="pkAddAll"><i class="fa fa-plus"></i> 全體人員</button>
+                        <button type="button" class="b-mini" id="pkAddRelated"><i class="fa fa-plus"></i> 相關人員</button>
+                    </div>
+                    <div id="pkChips"></div>
+                    <div class="hint">可<b>多選</b>：挑人員會直接加入下方清單（可跨部門）；職稱依<b>溝通日期</b>回推當時的（ai-rules/22），一個人身兼多職時每個職稱各列一列。同一部門加了「全體人員」就不必再挑個別人員。</div>
                 </div>
 
                 <div class="pk-box" id="pkOtherBox" style="display:none;">
@@ -1377,12 +1385,33 @@ function renderItems(){
         }
         b.append('<tr>'
             + '<td class="seq">' + (i + 1) + '</td>'
-            + '<td><textarea class="iq"' + (ro ? ' readonly' : '') + '>' + esc(it.question) + '</textarea></td>'
+            + '<td><textarea class="iq"' + (ro ? ' readonly' : '') + '>' + esc(it.question) + '</textarea>'
+            + (ro ? '' : '<div class="rk-pick" style="margin-top:3px;"><button type="button" class="b-mini" data-rkpick title="選風險與機會因應措施管制表的項目，會在問題欄寫入「對應風險與機會因應措施管制表 編號」"><i class="fa fa-link"></i> 引用風險與機會管制表</button></div>') + '</td>'
             + '<td><textarea class="ir"' + (ro ? ' readonly' : '') + '>' + esc(it.reply) + '</textarea>' + (ro ? '' : EGAiDraft.btnHtml('comm_reply')) + '</td>'
             + '<td class="op">' + op + '</td></tr>');
     });
     $('#itemBody textarea').on('input', function(){ syncItemsFromDom(); });
 }
+
+/* 引用風險與機會因應措施管制表：選一項，在這一列的溝通問題寫入「（對應風險與機會因應措施管制表 R2026-013）」（已有的對應會被換掉） */
+var RKTAG = /（對應風險與機會因應措施管制表[^）]*）/;
+$(document).on('click', '[data-rkpick]', function(){
+    var box = $(this).closest('.rk-pick'), y = +String($('#fCommDate').val() || TODAY).slice(0, 4);
+    box.find('select').remove();
+    get({action:'risk_options', year:y}, function(res){
+        if (!res.rows.length){ box.append('<div class="hint">' + y + ' 年度還沒有風險與機會因應措施管制表的項目。</div>'); return; }
+        var h = '<select data-eg-skip style="width:100%;margin-top:4px;"><option value="">選一項風險／機會，會寫入「對應風險與機會因應措施管制表 編號」…</option>' + $.map(res.rows, function(r){
+            var no = r.confirm_no || ('第 ' + r.seq + ' 項');
+            return '<option value="' + esc(no) + '">' + esc(no + '｜' + (r.ro_kind === 'opportunity' ? '機會' : '風險') + '｜' + String(r.issue || '').slice(0, 28)) + (+r.is_draft ? '｜草稿' : '') + '</option>'; }).join('') + '</select>';
+        box.append(h);
+    });
+});
+$(document).on('change', '.rk-pick select', function(){
+    var v = $(this).val(); if (!v) return;
+    var ta = $(this).closest('td').find('textarea.iq').first(), cur = ta.val() || '', tag = '（對應風險與機會因應措施管制表 ' + v + '）';
+    ta.val(RKTAG.test(cur) ? cur.replace(RKTAG, tag) : $.trim(cur + (cur ? '' : '') + tag)).trigger('input');
+    $(this).remove();
+});
 
 /* ---- 開啟編輯跳窗 ---- */
 $('#btnRecAdd').on('click', function(){ openRec(0); });
@@ -1607,7 +1636,7 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
     $('#fCommDate,#fParty,#fRemark,#fKindOther').prop('readonly', !!ro);
     $('#fMaker,#fMakerDept').prop('disabled', !!ro);
     $('#fAtt,#fAttNote').prop('disabled', !!ro);
-    $('#pkContact,#pkContactName,#pkDept,#pkUser').prop('disabled', !!ro);
+    $('#pkContact,#pkContactName,#pkDept,#pkUser,#pkAddAll,#pkAddRelated').prop('disabled', !!ro);
 }
 
 /* ================= ① 類別連動的利害關係者挑選 =================
@@ -1681,8 +1710,15 @@ function resetPartyPicker(rec){
         }
     } else if (kind === 'employee'){
         $('#pkEmpBox').show();
-        fillDeptSel('#pkDept', PARTY.ref_id, '請選擇部門…');
-        loadDeptPeople(PARTY.ref_id, '#pkUser', $('#fCommDate').val() || TODAY, PARTY.user_id, function(){ syncPartyFromPicker(); });
+        PARTYLIST = [];
+        if (rec && rec.party_multi){ try { PARTYLIST = JSON.parse(rec.party_multi) || []; } catch (e) { PARTYLIST = []; } }
+        else if (rec && PARTY.ref_id && PARTY.user_id){      // 舊資料（單選）：轉成一筆
+            var nm = String(rec.party_name || '').split('　');
+            PARTYLIST = [{dept_id:+PARTY.ref_id, dept_name:nm[0] || '', scope:'person', user_id:+PARTY.user_id, name:nm[1] || '', pos_name:''}];
+        }
+        renderChips();
+        fillDeptSel('#pkDept', PARTY.ref_id || (PARTYLIST[0] ? PARTYLIST[0].dept_id : ''), '請選擇部門…');
+        loadDeptPeople($('#pkDept').val(), '#pkUser', $('#fCommDate').val() || TODAY, 0, function(){ syncPartyFromPicker(); });
     } else if (kind === 'other'){
         if (catFree()){ $('#pkOtherBox').show(); showSubPicker(); }       // 一般的「其他」類別要填說明；有子選項的類別（主管機關）改成勾選子選項＋「其他」自填
     }
@@ -1743,10 +1779,32 @@ $('#pkDept').on('change', function(){
 });
 $('#pkUser').on('change', function(){
     var p = pickedPerson('#pkUser');
-    PARTY.user_id = p ? +p.id : 0;
-    PARTY.contact_name = p ? personLabel(p) : '';
-    syncPartyFromPicker();
+    if (!p) return;
+    addParty({dept_id:+$('#pkDept').val(), dept_name:deptNameOf($('#pkDept').val()), scope:'person', user_id:+p.id, name:p.name, pos_name:p.pos_name || ''});
+    $(this).val('');          // 挑完就加入清單，下拉回到空白，可以繼續挑下一位
 });
+/* ---- 員工類別的多選對象：個別人員、或整個部門的「全體人員」「相關人員」 ---- */
+var PARTYLIST = [];
+function deptNameOf(id){ var n = ''; (META.depts || []).forEach(function(d){ if (String(d.id) === String(id)) n = d.name; }); return n; }
+function chipText(e){ return e.scope === 'person' ? e.dept_name + '　' + e.name : e.dept_name + '　' + (e.scope === 'all' ? '全體人員' : '相關人員'); }
+function renderChips(){
+    var ro = REC && !REC.can_edit, h = '';
+    $.each(PARTYLIST, function(i, e){ h += '<span class="pk-chip">' + esc(chipText(e)) + (ro ? '' : '<b data-chipdel="' + i + '" title="移除">×</b>') + '</span>'; });
+    $('#pkChips').html(h || '<span class="hint">尚未加入任何人員</span>');
+}
+function addParty(e){
+    if (!e.dept_id){ alert('請先選擇部門'); return; }
+    var same = function(x){ return +x.dept_id === +e.dept_id; };
+    if (e.scope === 'all') PARTYLIST = PARTYLIST.filter(function(x){ return !same(x); });                   // 全體人員＝涵蓋該部門的個別人員與相關人員
+    else if (PARTYLIST.some(function(x){ return same(x) && x.scope === 'all'; })){ alert('「' + e.dept_name + '」已加入全體人員，不必再加個別人員或相關人員'); return; }
+    if (PARTYLIST.some(function(x){ return same(x) && x.scope === e.scope && +x.user_id === +e.user_id; })) return;
+    PARTYLIST.push(e); renderChips(); syncPartyFromPicker();
+}
+$(document).on('click', '#pkAddAll,#pkAddRelated', function(){
+    var d = $('#pkDept').val(); if (!d){ alert('請先選擇部門'); return; }
+    addParty({dept_id:+d, dept_name:deptNameOf(d), scope:this.id === 'pkAddAll' ? 'all' : 'related', user_id:0, name:'', pos_name:''});
+});
+$(document).on('click', '[data-chipdel]', function(){ PARTYLIST.splice(+$(this).attr('data-chipdel'), 1); renderChips(); syncPartyFromPicker(); });
 /** 把挑到的對象反映到「利害關係者公司/代表人」欄與下方摘要（畫面與送出的值永遠一致） */
 function syncPartyFromPicker(){
     var kind = currentKind(), sum = $('#pkSummary').empty(), txt = '';
@@ -1756,11 +1814,9 @@ function syncPartyFromPicker(){
                 + (PARTY.contact_name ? '　代表人：' + PARTY.contact_name : '　代表人：未指定');
         }
     } else if (kind === 'employee'){
-        var p = pickedPerson('#pkUser');
-        if (p){
-            $('#fParty').val(p.dept_name + '　' + p.name);
-            txt = '將存入：' + p.dept_name + '　' + personLabel(p);
-        }
+        var lt = $.map(PARTYLIST, chipText).join('、');
+        $('#fParty').val(lt);
+        if (lt) txt = '將存入：' + lt;
     }
     if (txt) sum.html('<span class="pk-sum">' + esc(txt) + '</span>');
 }
@@ -1924,8 +1980,10 @@ function collectRec(){
     if (d.party_kind === 'customer' && !d.party_ref_id){ setErr('eParty', '#fParty', '請在欄位內打客戶名稱或編號，再從跳出的清單挑一筆（要綁到客戶編號才存得進去）'); ok = false; }
     if (d.party_kind === 'supplier' && !d.party_ref_id){ setErr('eParty', '#fParty', '請在欄位內打廠商名稱或編號，再從跳出的清單挑一筆（要綁到廠商編號才存得進去）'); ok = false; }
     if (d.party_kind === 'employee'){
-        if (!d.party_ref_id){ setErr('eKind', '#pkDept', '請選擇員工所屬部門'); ok = false; }
-        else if (!d.party_user_id){ setErr('eKind', '#pkUser', '請選擇員工'); ok = false; }
+        d.party_multi = JSON.stringify(PARTYLIST);
+        d.party_ref_id = PARTYLIST.length ? String(PARTYLIST[0].dept_id) : '';
+        d.party_user_id = 0; $.each(PARTYLIST, function(_, e){ if (e.scope === 'person' && !d.party_user_id) d.party_user_id = e.user_id; });
+        if (!PARTYLIST.length){ setErr('eKind', '#pkUser', '請選擇員工，或加入整個部門的全體人員／相關人員'); ok = false; }
     }
     var any = false;
     $('#recChRow .cCh').each(function(){ if (this.checked){ d['ch_' + this.value] = 1; any = true; } });

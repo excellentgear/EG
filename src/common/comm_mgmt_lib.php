@@ -239,6 +239,7 @@ function cm_ensure_schema(PDO $db): void
 
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
+        "ALTER TABLE comm_record ADD COLUMN party_multi TEXT NULL COMMENT '類別=員工時的多選對象 JSON：[{dept_id,dept_name,scope(person/related/all),user_id,name,pos_name}]'",
         "ALTER TABLE comm_track_cat ADD COLUMN sub_options TEXT NULL COMMENT '子選項（一行一個；選到此類別時要再勾一個子選項，另有「其他」自填）'",
         "ALTER TABLE comm_record ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
         "ALTER TABLE comm_track ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝草稿（同上）'",
