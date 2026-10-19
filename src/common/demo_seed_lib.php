@@ -125,7 +125,8 @@ function eg_draft_status(PDO $db, int $year): array
     if ($d) $ri = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_item WHERE doc_id=?", [(int)$d['doc_id']])['n'];
     $at = $r['at'] ?? null;
     if (!$at && (int)$c['n'] > 0) $at = eg_demo_q1($db, "SELECT MAX(created_at) a FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$year])['a'] ?? null;
-    return ['risk_doc' => (int)$r['n'], 'risk_items' => $ri, 'records' => (int)$c['n'], 'tracks' => (int)$t['n'], 'at' => $at, 'has' => ((int)$r['n'] + (int)$c['n']) > 0];
+    $rc = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE kind='risk' AND is_draft=0 AND is_deleted=0 AND YEAR(fill_date)=?", [$year])['n'];
+    return ['risk_confirmed' => $rc, 'risk_doc' => (int)$r['n'], 'risk_items' => $ri, 'records' => (int)$c['n'], 'tracks' => (int)$t['n'], 'at' => $at, 'has' => ((int)$r['n'] + (int)$c['n']) > 0];
 }
 
 /** 溝通記錄＋追蹤項目（比照人工「建立→轉追蹤」的欄位；追蹤編號走 cm_track_no_next） */
@@ -756,4 +757,111 @@ function eg_demo_sync_review_meeting(PDO $db, int $meetingId, int $riskDocId): i
         $db->commit();
         return $n;
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+}
+
+/* ============================================================================
+ * SWOT → 風險表草稿 → （風險表確認後）→ 溝通記錄＋措施追蹤草稿 —— 2026-10-19
+ *   ① eg_draft_risk_generate：只依已儲存的處境分析表產生「風險與機會因應措施管制表」草稿
+ *   ② eg_draft_comm_from_risk：風險表確認後，依風險表每一列「因應措施」拆句，一句一條措施追蹤（負責部門取句中的部門名），
+ *      同一列的措施放在同一張溝通記錄；溝通記錄與追蹤也是草稿，要人實際看過才確認（溝通是實際發生的事，系統只能擬稿）
+ *   溝通記錄的文字完全來自風險表的措施，不再有寫死在產生器裡的範本
+ * ========================================================================== */
+function eg_draft_risk_generate(PDO $db, int $Y, array $user): array
+{
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    rm_ensure_schema($db);
+    $ex = (int)eg_demo_q1($db, "SELECT COUNT(*) n FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND is_draft=0 AND YEAR(fill_date)=?", [$Y])['n'];
+    if ($ex > 0) throw new RuntimeException($Y . ' 年已經有正式的風險與機會因應措施管制表（一個年度只能有一張）；要重做請先刪除該年度的表單');
+    $cd = eg_demo_q1($db, "SELECT doc_id FROM rm_doc WHERE kind='context' AND is_deleted=0 AND YEAR(fill_date)=? ORDER BY doc_id LIMIT 1", [$Y]);
+    if (!$cd) throw new RuntimeException($Y . ' 年沒有組織處境分析表');
+    $GLOBALS['EG_DRAFT_MODE'] = true; $GLOBALS['EG_DRAFT_USER'] = $user;
+    $DT = eg_demo_default_dates($db, $Y);
+    $set = rm_settings($db); $dataYear = $Y - 1; $warn = [];
+    $deptNames = ['總經理室', '業務課', '生管組', '品管課', '技術課', '管理課'];
+    $deptIds = array_values(array_filter(array_map(function ($n) use ($db) { return eg_demo_dept_id($db, $n); }, $deptNames)));
+    $db->beginTransaction();
+    try {
+        eg_draft_clear($db, $Y);
+        $riskId = eg_demo_doc($db, 'risk', $DT['risk'], $deptIds, $deptNames);
+        $seq = 0; $effN = 0;
+        foreach (eg_demo_qa($db, "SELECT item_id, dimension, stakeholder, needs, issue FROM rm_item WHERE doc_id=? ORDER BY seq, item_id", [(int)$cd['doc_id']]) as $cx) {
+            if (!in_array($cx['dimension'], ['W', 'O', 'T'], true)) continue;
+            $seq++;
+            $r = rm_rule_make_row($db, $set, ['stakeholder' => $cx['stakeholder'], 'needs' => $cx['needs'], 'issue' => $cx['issue'], 'dimension' => $cx['dimension']], $dataYear, $Y);
+            $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+            $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, rm_prefix_for($set, (string)$r['ro_kind']), $DT['risk']) : null;
+            $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+               ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], (int)$cx['item_id'], $r['rule_ids'], $r['resources']]);
+        }
+        foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
+            $fa = rm_effect_autofill($db, $set, $row, $Y, $DT['effect']);
+            if ($fa['effect_status'] === null) { if ($fa['effect_evidence'] !== '') $db->prepare("UPDATE rm_item SET effect_evidence=? WHERE item_id=?")->execute([$fa['effect_evidence'], (int)$row['item_id']]); continue; }
+            $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'], $fa['effect_evidence'], (int)$row['item_id']]);
+            $effN++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    return ['year' => $Y, 'doc_id' => $riskId, 'risk_items' => $seq, 'effect_filled' => $effN, 'warn' => $warn];
+}
+
+/** 措施句 → 負責部門：句中最早出現的部門名（或簡稱）；都沒有就用管理課 */
+function eg_draft_clause_dept(string $clause, array $depts, string $fallback = '管理課'): string
+{
+    $alias = ['倉管' => '倉管組', '生管' => '生管組', '品管' => '品管課', '業務' => '業務課', '採購' => '採購組', '技術' => '技術課', '生產' => '生產課'];
+    $best = ''; $pos = PHP_INT_MAX;
+    foreach (array_merge(array_combine($depts, $depts), $alias) as $k => $dn) {
+        $p = mb_strpos($clause, (string)$k);
+        if ($p !== false && $p < $pos && in_array($dn, $depts, true)) { $pos = $p; $best = $dn; }
+    }
+    return $best !== '' ? $best : $fallback;
+}
+
+function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
+{
+    $doc = eg_demo_q1($db, "SELECT * FROM rm_doc WHERE doc_id=? AND kind='risk' AND is_deleted=0", [$riskDocId]);
+    if (!$doc) throw new RuntimeException('查無風險與機會因應措施管制表');
+    if ((int)$doc['is_draft'] === 1) throw new RuntimeException('風險表還是草稿，請先確認風險表');
+    $Y = (int)substr((string)$doc['fill_date'], 0, 4);
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    cm_ensure_schema($db);
+    $GLOBALS['EG_DRAFT_MODE'] = true; $GLOBALS['EG_DRAFT_USER'] = $user;
+    $cats = []; foreach (eg_demo_qa($db, "SELECT cat_id, name, kind FROM comm_track_cat") as $c) $cats[$c['name']] = $c;
+    if (empty($cats['員工'])) throw new RuntimeException('溝通管理缺少類別「員工」，請先到模組設定建立');
+    $depts = ['業務課', '生管組', '生產課', '品管組', '品管課', '技術課', '管理課', '倉管組', '採購組'];
+    $own = []; foreach ($depts as $dn) { $o = eg_demo_owner($db, $dn); if ($o) $own[$dn] = $o; }
+    if (empty($own['管理課'])) throw new RuntimeException('找不到管理課的在職人員，無法指定負責人');
+    $set = rm_settings($db); $nRec = 0; $nTrk = 0; $i = 0;
+    // 只清「尚未確認」的舊溝通草稿（已確認的不動）
+    $ids = array_column(eg_demo_qa($db, "SELECT rec_id FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$Y]), 'rec_id');
+    if ($ids) { $in = implode(',', array_map('intval', $ids)); $db->exec("DELETE FROM comm_track WHERE src_rec_id IN ($in)"); $db->exec("DELETE FROM comm_record_item WHERE rec_id IN ($in)"); $db->exec("DELETE FROM comm_record WHERE rec_id IN ($in)"); }
+    foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskDocId]) as $row) {
+        // 拆句：分號／句號、以及「，由○○」（同一句裡交代給不同部門的事）；「以…」開頭的是目的說明，併回前一句
+        $clauses = [];
+        foreach (array_map('trim', preg_split('/(?:[；;。]+|[，,](?=\s*由))/u', (string)$row['measure'])) as $cl) {
+            if (mb_strlen($cl) < 4) continue;
+            if ($clauses && mb_substr($cl, 0, 1) === '以') { $clauses[count($clauses) - 1] .= '，' . $cl; continue; }
+            $clauses[] = $cl;
+        }
+        if (!$clauses) continue;
+        $label = '';
+        $cx = (int)($row['ctx_item_id'] ?? 0); $src = $row;
+        if ($cx > 0) { $q = eg_demo_q1($db, "SELECT dimension, stakeholder, needs, issue FROM rm_item WHERE item_id=?", [$cx]); if ($q) $src = array_merge($row, $q); }
+        $ck = rm_rule_classify(trim(($src['stakeholder'] ?? '') . ' ' . ($src['needs'] ?? '') . ' ' . ($src['issue'] ?? '')), (string)($src['dimension'] ?? ''))[0] ?? '';
+        $label = (string)(RM_RULE_CATS[$ck]['label'] ?? '');
+        if ($label === '' || $label === '一般議題') $label = mb_substr((string)$row['issue'], 0, 16) . '…';
+        $date = eg_demo_wd($db, min($today, date('Y-m-d', strtotime($doc['fill_date'] . ' +' . (1 + $i * 2) . ' day'))), -1);
+        if ($date < $doc['fill_date']) $date = $doc['fill_date'];
+        $i++;
+        $items = [];
+        $dn = (mb_strpos((string)($src['stakeholder'] ?? ''), '客戶') !== false) ? '業務課' : '管理課';     // 句中沒有部門名時的預設（客戶議題→業務課），之後沿用前一句的部門
+        foreach ($clauses as $cl) {
+            $dn = eg_draft_clause_dept($cl, array_keys($own), $dn); $ow = $own[$dn] ?? $own['管理課'];
+            $items[] = ['q' => '「' . $label . '」議題需要落實的作法：' . $cl, 'a' => '由' . $ow['dept'] . '依期限辦理：' . $cl,
+                        'track' => ['owner' => $ow, 'due' => $Y . '-12-31', 'action' => $cl]];
+        }
+        eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $label . '　因應措施追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        $nRec++; $nTrk += count($items);
+    }
+    return ['year' => $Y, 'records' => $nRec, 'tracks' => $nTrk];
 }

@@ -493,10 +493,11 @@ $perms  = rm_perms($db, $rmUser);
             <li><b>追蹤週期建議</b>（畫面顯示）：高度風險每月、中度每季、低度每半年、機會每季，從最近一次成效確認／重新評估／填表日起算，並提示已到期的項目。</li>
             <li><b>填表日期</b>是這張表的制定日，不會因回覆內容而變動；年度中的變動記在每一項的「重新評估日期」與「成效確認日期」，列印時另顯示「最後更新日期」。</li>
             <li>一個年度只有一張，清單下方直接列出這一年的內容，按「編輯此項」開啟並跳到該項修改。</li></ul>
-        <h4>SWOT 一鍵產生草稿（風險表、溝通記錄、措施追蹤）</h4>
-        <ul><li>處境分析表<b>儲存後</b>，按「<b>產生風險表與措施追蹤草稿</b>」，系統依已儲存的 SWOT 一次建立：風險與機會因應措施管制表、溝通記錄、措施追蹤。<b>全部標「草稿・待確認」</b>（畫面標示、列印不顯示）。</li>
-            <li>溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以<b>一定要您實際看過、內容屬實後按「確認為正式資料」</b>（溝通管理可逐張確認，也可在這裡「全部確認」）；確認前的草稿不列入成效判定。</li>
-            <li>畫面會顯示是否已產生草稿與各幾筆；<b>重新產生會先清掉尚未確認的舊草稿</b>（已確認的不動）。該年度已有正式的風險表時，一個年度只能有一張，所以只會產生溝通記錄與措施追蹤草稿。</li></ul>
+        <h4>SWOT → 風險表草稿 → 溝通記錄與措施追蹤（兩段式）</h4>
+        <ul><li>處境分析表<b>儲存後</b>，按「<b>產生風險表草稿</b>」，系統依已儲存的 SWOT 建立風險與機會因應措施管制表<b>草稿</b>（標「草稿・待確認」、列印不顯示）。請看過、必要時修改。</li>
+            <li>風險表<b>確認</b>後，系統自動依<b>每條因應措施</b>拆句：一句一條措施追蹤（負責部門取句中的部門名，沒寫則由管理課），同一條風險的措施放在同一張溝通記錄；內容完全來自風險表，您改了措施再確認，產生的就是改過的。</li>
+            <li>溝通記錄是「實際發生過的溝通」，系統只能擬稿，所以<b>仍是草稿</b>，要您看過、內容屬實後在這裡「全部確認」或到溝通管理逐張確認。重新產生只會清掉尚未確認的舊草稿。</li>
+            <li>該年度已有正式的風險表時不會再產生風險表草稿，但可按「依風險表產生溝通記錄與措施追蹤草稿」。</li></ul>
         <h4>AI 草稿與示範假資料（僅全站管理員）</h4>
         <ul><li>管理員會看到「AI 草稿」鈕（因應措施、成效確認方式，溝通管理的回覆與回應措施，內稽／管審會議要項）：由<b>本機 Ollama</b> 依系統實際資料寫文字草稿，<b>只填進欄位，要自己確認後才存檔</b>；Ollama 沒開時按鈕不會出現。</li>
             <li>「模組設定」最下方的<b>示範用假資料產生器</b>：選年度後一鍵產生溝通管理、風險與機會管制表、內稽／管審會議三者互相關聯的假資料（標【假資料】）。該年度已有真實文件時不會產生；「清除」只刪標【假資料】的資料。委外廠商一律依主檔管理「加工項目」所綁定的製程判定。</li></ul>
@@ -654,7 +655,7 @@ function boardHtml(){
         + '<label>填表人</label><select id="bMaker" data-eg-filter="輸入姓名篩選…" style="width:210px;" title="預設是建立者；已建立的表只有填表人本人或管理員可以更換"></select>'
         + '<span style="flex:1 1 20px;"></span>'
         + '<button id="bSuggest"><i class="fa fa-lightbulb-o"></i> 依系統資料建議</button>'
-        + '<button id="bDraft" class="btn-warm" title="依已儲存的處境分析表，產生風險表、溝通記錄與措施追蹤的草稿；草稿要由您實際看過確認後才算正式資料"><i class="fa fa-magic"></i> 產生風險表與措施追蹤草稿</button>'
+        + '<button id="bDraft" class="btn-warm" title="依已儲存的處境分析表產生風險與機會因應措施管制表草稿；風險表確認後，系統再依措施自動產生溝通記錄與措施追蹤草稿"><i class="fa fa-magic"></i> 產生風險表草稿</button>'
         + '<button id="bGuide"><i class="fa fa-question-circle"></i> 填寫提示與範例</button>'
         + '<button id="bPrint"><i class="fa fa-print"></i> 列印</button>'
         + '<button data-blank="context"><i class="fa fa-file-o"></i> 列印空白表單</button>'
@@ -750,10 +751,13 @@ function loadDraftInfo(){
         DRAFT = res.status || {has:false}; DRAFT.can = res.can; DRAFT.has_ctx = res.has_ctx;
         var h = '';
         if (!res.has_ctx) h = '還沒有 ' + BOARD.year + ' 年度的處境分析表：儲存之後才能產生草稿。';
-        else if (DRAFT.has) h = '<b style="color:#DD5138;">● 已產生草稿（待確認）</b>：風險表 ' + DRAFT.risk_items + ' 項、溝通記錄 ' + DRAFT.records + ' 筆、措施追蹤 ' + DRAFT.tracks + ' 筆'
-            + (DRAFT.at ? '（' + esc(dispDate(String(DRAFT.at).slice(0, 10))) + ' 產生）' : '') + '　草稿在畫面上標「草稿・待確認」、列印不顯示。'
-            + (DRAFT.can ? ' <button type="button" class="b-mini warm" id="draftConfirmAll">全部確認為正式資料</button>' : '');
-        else h = '尚未產生草稿。按「產生風險表與措施追蹤草稿」可依目前儲存的處境分析表一鍵建立；重新產生會先清除尚未確認的舊草稿。';
+        else if (DRAFT.risk_doc > 0) h = '<b style="color:#DD5138;">● 風險表草稿（待確認）</b>：風險表 ' + DRAFT.risk_items + ' 項'
+            + (DRAFT.at ? '（' + esc(dispDate(String(DRAFT.at).slice(0, 10))) + ' 產生）' : '') + '　請先看過並修改風險表；<b>確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿</b>。'
+            + (DRAFT.can ? ' <button type="button" class="b-mini warm" id="draftConfirmAll">確認風險表並產生溝通記錄／措施追蹤草稿</button>' : '');
+        else if (DRAFT.records + DRAFT.tracks > 0) h = '<b style="color:#DD5138;">● 溝通記錄 ' + DRAFT.records + ' 筆、措施追蹤 ' + DRAFT.tracks + ' 筆（依風險表措施產生，待確認）</b>　請到「溝通管理」看過、內容屬實後確認。'
+            + (DRAFT.can ? ' <button type="button" class="b-mini warm" id="draftCommConfirm">全部確認溝通記錄與措施追蹤</button> <button type="button" class="b-mini" id="draftCommGen">依風險表重新產生</button>' : '');
+        else if (DRAFT.risk_confirmed > 0) h = BOARD.year + ' 年風險表已確認。' + (DRAFT.can ? '<button type="button" class="b-mini warm" id="draftCommGen">依風險表產生溝通記錄與措施追蹤草稿</button>' : '');
+        else h = '尚未產生草稿。按「產生風險表草稿」可依目前儲存的處境分析表建立風險與機會因應措施管制表；風險表確認後才會自動產生溝通記錄與措施追蹤。';
         $('#draftInfo').html(h);
         $('#bDraft').toggle(!!res.can || !res.has_ctx);
     });
@@ -761,20 +765,47 @@ function loadDraftInfo(){
 $(document).on('click', '#bDraft', function(){
     if (!BOARD.doc){ alert('請先儲存組織處境分析表（草稿是依已儲存的內容產生的）'); return; }
     if (BOARD.dirty){ alert('處境分析表有修改還沒儲存，請先按「儲存」再產生草稿（草稿是依已儲存的內容產生的）'); return; }
-    var msg = DRAFT.has ? '已經產生過草稿（風險表 ' + DRAFT.risk_items + ' 項、溝通記錄 ' + DRAFT.records + ' 筆、措施追蹤 ' + DRAFT.tracks + ' 筆）。\n\n重新產生會先「清除」這些尚未確認的舊草稿，再依目前的處境分析表重建（已確認成正式資料的不會被動到）。確定嗎？'
-                          : '要依目前儲存的處境分析表產生 ' + BOARD.year + ' 年度的風險表、溝通記錄與措施追蹤草稿嗎？\n\n產生後都標「草稿・待確認」，您實際看過、確認內容屬實後才算正式資料。';
+    var msg = DRAFT.risk_doc > 0 ? '已經有尚未確認的風險表草稿（' + DRAFT.risk_items + ' 項）。
+
+重新產生會先清除這份草稿（以及尚未確認的溝通記錄與措施追蹤草稿），再依目前的處境分析表重建。確定嗎？'
+                          : '要依目前儲存的處境分析表產生 ' + BOARD.year + ' 年度的風險與機會因應措施管制表草稿嗎？
+
+風險表確認後，系統會再依每條因應措施自動產生溝通記錄與措施追蹤草稿。';
     if (!confirm(msg)) return;
-    var $b = $(this).prop('disabled', true); $('#draftInfo').text('產生中…（用本機 AI 寫文字約需 1～3 分鐘，請勿關閉頁面）');
-    $.ajax({url:API, type:'POST', dataType:'json', timeout:900000, data:{action:'draft_generate', year:BOARD.year, ai:1, csrf:CSRF}}).done(function(res){
+    var $b = $(this).prop('disabled', true); $('#draftInfo').text('產生中…');
+    $.ajax({url:API, type:'POST', dataType:'json', timeout:900000, data:{action:'draft_generate', year:BOARD.year, csrf:CSRF}}).done(function(res){
         if (!res || !res.ok){ alert((res && res.error) || '產生失敗'); return; }
         var p = res.report || {};
-        alert('已產生草稿：風險表 ' + (p.risk_items || 0) + ' 項、溝通記錄 ' + p.comm_records + ' 筆、措施追蹤 ' + p.comm_tracks + ' 筆。' + ((p.warn || []).length ? '\n\n注意：' + p.warn.join('\n') : '') + '\n\n請到「風險與機會因應措施管制表」與「溝通管理」逐筆看過，確認屬實後按「確認」。');
+        alert('已產生風險表草稿：' + (p.risk_items || 0) + ' 項。
+
+請到「風險與機會因應措施管制表」看過、必要時修改，再按「確認風險表並產生溝通記錄／措施追蹤草稿」。');
+        loadList('risk', true);
     }).fail(function(x){ var m = ''; try { m = JSON.parse(x.responseText).error; } catch (e) {} alert(m || '產生失敗，請稍後再試'); })
       .always(function(){ $b.prop('disabled', false); loadDraftInfo(); });
 });
+function draftCommDone(res){
+    var g = res.generated; loadDraftInfo(); if (typeof CUR !== 'undefined' && CUR.kind) loadList(CUR.kind, true);
+    alert(g ? '風險表已確認為正式資料，並依因應措施產生溝通記錄 ' + g.records + ' 筆、措施追蹤 ' + g.tracks + ' 筆（草稿・待確認）。
+
+請到「溝通管理」看過、內容屬實後再確認。' : '已確認');
+}
 $(document).on('click', '#draftConfirmAll', function(){
-    if (!confirm('確定要把 ' + BOARD.year + ' 年度所有草稿（風險表、溝通記錄、措施追蹤）一次確認成正式資料嗎？\n\n請確認您已經實際看過這些內容、內容屬實。確認後不再標示草稿。')) return;
-    post({action:'draft_confirm', year:BOARD.year}, function(){ loadDraftInfo(); alert('已確認為正式資料'); });
+    if (!confirm('確認 ' + BOARD.year + ' 年度風險與機會因應措施管制表成為正式資料？
+
+確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿（仍需您看過後再確認）。')) return;
+    post({action:'draft_confirm', year:BOARD.year}, draftCommDone);
+});
+$(document).on('click', '#draftCommGen', function(){
+    if (!confirm('依 ' + BOARD.year + ' 年度風險表的因應措施產生溝通記錄與措施追蹤草稿？
+
+會先清除尚未確認的舊溝通草稿（已確認的不動）。')) return;
+    post({action:'draft_comm_generate', year:BOARD.year}, draftCommDone);
+});
+$(document).on('click', '#draftCommConfirm', function(){
+    if (!confirm('確定把 ' + BOARD.year + ' 年度的溝通記錄與措施追蹤草稿全部確認成正式資料？
+
+請確認您已經實際看過、內容屬實。')) return;
+    post({action:'draft_confirm', what:'comm', year:BOARD.year}, function(){ loadDraftInfo(); alert('已確認為正式資料'); });
 });
 /* 與前一年度比較（2-GM-05 管理審查輸入：內外部議題的變更） */
 function cmpSummaryHtml(c){
@@ -812,8 +843,10 @@ $(document).on('click', '[data-ex]', function(){
 });
 $(document).on('click', '#docDraftConfirm', function(){
     var y = +String($('#fDate').val() || BOARD.year).slice(0, 4) || BOARD.year;
-    if (!confirm('確認這份草稿（以及同年度其他草稿的溝通記錄與措施追蹤）已經實際看過、內容屬實，要確認成正式資料嗎？')) return;
-    post({action:'draft_confirm', year:y}, function(){ closeMask('docMask'); loadDraftInfo(); if (typeof CUR !== 'undefined' && CUR.kind) loadList(CUR.kind); alert('已確認為正式資料'); });
+    if (!confirm('確認這份風險表已經實際看過、內容屬實，要確認成正式資料嗎？
+
+確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿。')) return;
+    post({action:'draft_confirm', year:y}, function(res){ closeMask('docMask'); draftCommDone(res); });
 });
 $(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); });
 $(document).on('change', '#bYear', function(){

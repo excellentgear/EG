@@ -41,7 +41,7 @@ if (!$uid) jerr('無使用權限（帳號非在職狀態）', 403);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類動作：先驗登入再驗 CSRF（順序不可顛倒，見 _config.php 的說明） */
-$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car', 'news_digest', 'draft_generate', 'draft_confirm'];
+$WRITE = ['doc_save', 'doc_delete', 'setting_save', 'asdoc_save', 'risk_generate', 'risk_open_car', 'news_digest', 'draft_generate', 'draft_confirm', 'draft_comm_generate'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['rm_csrf'], $tok))
@@ -275,28 +275,44 @@ if ($action === 'draft_status') {
 }
 if ($action === 'draft_generate') {
     require_once __DIR__ . '/../common/demo_seed_lib.php';
-    require_once __DIR__ . '/../common/ollama_lib.php';
     $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) jerr('年度不正確');
     $c = rmDraftCtx($db, $year);
     if (!$c) jerr($year . ' 年還沒有組織處境分析表，請先儲存處境分析表');
     if (!rmCanEdit($c, $P)) jerr('只有處境分析表的建立者與管理員可以產生草稿', 403);
-    $ai = !empty($_POST['ai']) && eg_ai_is_admin($db, $u) && eg_ai_setting($db, 'enabled', '0') === '1';
     try {
-        $rep = eg_demo_seed($db, ['year'=>$year, 'dates'=>eg_demo_default_dates($db, $year), 'draft'=>true, 'ai'=>$ai, 'cap'=>24, 'user'=>['id'=>$uid, 'name'=>$uname]]);
+        $rep = eg_draft_risk_generate($db, $year, ['id'=>$uid, 'name'=>$uname]);     // 只產生風險表草稿；溝通記錄／措施追蹤要等風險表確認後才依措施產生
     } catch (RuntimeException $e) { jerr($e->getMessage()); }
     jout(['report'=>$rep, 'status'=>eg_draft_status($db, $year)]);
 }
+/* 確認風險表草稿 → 風險表轉正式，並依風險表的因應措施自動產生溝通記錄＋措施追蹤「草稿」 */
 if ($action === 'draft_confirm') {
     require_once __DIR__ . '/../common/demo_seed_lib.php';
     $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) jerr('年度不正確');
     $c = rmDraftCtx($db, $year);
     if (!$c || !rmCanEdit($c, $P)) jerr('只有處境分析表的建立者與管理員可以確認草稿', 403);
-    $n = [];
-    $n['risk'] = $db->prepare("UPDATE rm_doc SET is_draft=0, draft_at=NULL WHERE is_draft=1 AND YEAR(fill_date)=?");  $n['risk']->execute([$year]);
-    $n['rec']  = $db->prepare("UPDATE comm_record SET is_draft=0 WHERE is_draft=1 AND YEAR(comm_date)=?");              $n['rec']->execute([$year]);
-    $n['trk']  = $db->prepare("UPDATE comm_track SET is_draft=0 WHERE is_draft=1 AND YEAR(react_date)=?");              $n['trk']->execute([$year]);
-    $cnt = ['risk'=>$n['risk']->rowCount(), 'records'=>$n['rec']->rowCount(), 'tracks'=>$n['trk']->rowCount()];
-    jout(['confirmed'=>$cnt, 'status'=>eg_draft_status($db, $year)]);
+    $what = (string)($_POST['what'] ?? 'risk');
+    if ($what === 'comm') {      // 溝通記錄與措施追蹤是實際發生的事，要人實際看過才確認
+        $r1 = $db->prepare("UPDATE comm_record SET is_draft=0 WHERE is_draft=1 AND YEAR(comm_date)=?"); $r1->execute([$year]);
+        $r2 = $db->prepare("UPDATE comm_track SET is_draft=0 WHERE is_draft=1 AND YEAR(react_date)=?"); $r2->execute([$year]);
+        jout(['confirmed'=>['records'=>$r1->rowCount(), 'tracks'=>$r2->rowCount()], 'status'=>eg_draft_status($db, $year)]);
+    }
+    $ids = array_column($db->query("SELECT doc_id FROM rm_doc WHERE is_draft=1 AND is_deleted=0 AND kind='risk' AND YEAR(fill_date)=" . (int)$year)->fetchAll(PDO::FETCH_ASSOC), 'doc_id');
+    $db->prepare("UPDATE rm_doc SET is_draft=0, draft_at=NULL WHERE is_draft=1 AND YEAR(fill_date)=?")->execute([$year]);
+    $gen = null;
+    $d = $ids ? (int)$ids[0] : (int)($db->query("SELECT doc_id FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND is_draft=0 AND YEAR(fill_date)=" . (int)$year . " ORDER BY doc_id DESC LIMIT 1")->fetchColumn() ?: 0);
+    if ($d) { try { $gen = eg_draft_comm_from_risk($db, $d, ['id'=>$uid, 'name'=>$uname]); } catch (RuntimeException $e) { jerr($e->getMessage()); } }
+    jout(['confirmed'=>['risk'=>count($ids)], 'generated'=>$gen, 'status'=>eg_draft_status($db, $year)]);
+}
+/* 風險表已是正式資料時，重新依措施產生溝通記錄＋措施追蹤草稿（會先清掉尚未確認的舊溝通草稿） */
+if ($action === 'draft_comm_generate') {
+    require_once __DIR__ . '/../common/demo_seed_lib.php';
+    $year = (int)($_POST['year'] ?? 0); if ($year < 2000 || $year > 2100) jerr('年度不正確');
+    $c = rmDraftCtx($db, $year);
+    if (!$c || !rmCanEdit($c, $P)) jerr('只有處境分析表的建立者與管理員可以產生', 403);
+    $d = (int)($db->query("SELECT doc_id FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND is_draft=0 AND YEAR(fill_date)=" . (int)$year . " ORDER BY doc_id DESC LIMIT 1")->fetchColumn() ?: 0);
+    if (!$d) jerr($year . ' 年還沒有已確認的風險與機會因應措施管制表');
+    try { $gen = eg_draft_comm_from_risk($db, $d, ['id'=>$uid, 'name'=>$uname]); } catch (RuntimeException $e) { jerr($e->getMessage()); }
+    jout(['generated'=>$gen, 'status'=>eg_draft_status($db, $year)]);
 }
 
 /* ---------------------------------------------------------------- 國際局勢新聞：貼入（可多則）→ 內網 AI 抓重點；AI 不能用時退回取每則第一行 */
