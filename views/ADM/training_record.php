@@ -607,6 +607,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <small style="color:#8a6d45;font-weight:normal;">（講師不列入名單）</small></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
                 <select id="attDept" style="width:150px;height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">選部門載入人員…</option></select>
+                <label style="margin:0;font-size:12px;color:#8a6d45;" title="勾選後也列出此部門底下所有子部門的人員（上層部門如總經理室可能涵蓋全公司）"><input type="checkbox" id="attIncSub"> 含下轄部門</label>
                 <button type="button" class="b-att" onclick="attAddChecked()"><i class="fa fa-user-plus"></i> 加入勾選人員</button>
                 <label style="margin:0;font-size:12px;color:#8a6d45;"><input type="checkbox" id="attPickAll"> 全選</label>
             </div>
@@ -1840,11 +1841,12 @@ function isTrainer(uid, uname){
     var t = $.trim(EXROW.trainer||'');
     return t!=='' && t === $.trim(uname||'');
 }
+$('#attIncSub').on('change', function(){ $('#attDept').trigger('change'); });
 $('#attDept').on('change', function(){
     var did=$(this).val(); var $b=$('#attPeopleBox');
     if(!did){ $b.html('<span class="empty">選部門載入人員</span>'); return; }
     $b.html('<span class="empty">載入中…</span>');
-    $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate()},function(res){
+    $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate(),include_sub:($('#attIncSub').is(':checked')?1:0)},function(res){
         if(!res.ok){ $b.html('<span class="empty">載入失敗</span>'); return; }
         var deptName=$('#attDept option:selected').text();
         var h='';
