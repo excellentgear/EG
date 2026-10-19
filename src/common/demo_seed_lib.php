@@ -543,7 +543,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $rec(['date' => $d(2, 10), 'type' => 'regular', 'cat' => '員工', 'party' => '技術課、生產課、生管組、品管課、業務課　接單評估作業確認', 'ch' => ['meeting'], 'maker' => $mk, 'items' => $ordItems]);
     $gateCat = 'new_customer';
     // 新客戶：首次出貨當下或 30 天內溝通
-    $ncQ = [['首次出貨後的使用情形，以及產品尺寸、外觀是否符合需求。', '客戶表示首批產品符合圖面要求，無異常。'], ['後續是否還有相同或類似料號的加工需求，預計的數量與時程。', '客戶預計下一季追加訂單，會提前提供預測量。'], ['交期與包裝方式是否需要調整。', '目前交期可接受，包裝維持現行方式。']];
+    $ncQ = [['首次出貨後的使用情形，以及產品尺寸、外觀是否符合需求。', '業務課於首次出貨後 30 天內向客戶確認使用情形（尺寸、外觀是否符合需求）並留存溝通記錄；客戶的實際回覆待溝通後補記。'], ['後續是否還有相同或類似料號的加工需求，預計的數量與時程。', '業務課向客戶詢問後續加工需求與預計時程；客戶的實際回覆待溝通後補記。'], ['交期與包裝方式是否需要調整。', '業務課向客戶確認交期與包裝方式是否需要調整；客戶的實際回覆待溝通後補記。']];
     foreach ($newC as $i => $nc) {
         $cc = $cust($nc['Client_name']);
         $dt = eg_demo_clamp(date('Y-m-d', strtotime($nc['fd'] . ' +' . ($i % 3 === 0 ? 0 : 3 + $i * 4) . ' days')), $today);
@@ -560,7 +560,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
             $cc = RM_RULE_CATS[$ck]; $its = []; $gi++;
             foreach ($cc['measures'] as $mt) {
                 $ow = null; foreach ($own as $dn => $o) if ($o && mb_strpos($mt, $dn) === 0) { $ow = $o; break; }
-                $its[] = ['q' => '「' . $cc['label'] . '」議題需要落實的作法：' . $mt, 'a' => '由負責部門依期限辦理：' . $mt, 'track' => ['owner' => $ow ?: $own['管理課'], 'due' => $eoy, 'action' => $mt]];
+                $its[] = ['q' => '「' . $cc['label'] . '」議題：針對「' . $mt . '」，需確認執行方式、負責單位與完成期限。', 'a' => '由' . (($ow ?: $own['管理課'])['dept'] ?? '管理課') . '負責，預計 ' . $eoy . ' 前完成，並以措施追蹤追蹤執行情形。', 'track' => ['owner' => $ow ?: $own['管理課'], 'due' => $eoy, 'action' => $mt]];
             }
             $rec(['date' => $d(6, 8 + $gi * 3), 'type' => 'regular', 'cat' => '員工', 'party' => $cc['label'] . '　議題追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $its]);
         }
@@ -866,7 +866,7 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
             foreach (array_merge([$ow['dept']], $help) as $d2) $involved[$d2] = $own[$d2] ?? $ow;
             // 溝通問題＝要處理的議題（為什麼要溝通）；回覆內容＝決議（誰負責、怎麼做、何時前完成、由哪一條措施追蹤）——兩欄不重複同一段文字
             $q = ($ci === 0 ? $issueTxt . '。' : '（同上議題）') . '針對「' . $cl . '」，需確認執行方式、負責單位與完成期限。';
-            $a = '決議照此辦理：由' . $ow['dept'] . '（' . $ow['name'] . '）負責' . ($help ? '，' . implode('、', $help) . '配合' : '')
+            $a = '由' . $ow['dept'] . '（' . $ow['name'] . '）負責' . ($help ? '，' . implode('、', $help) . '配合' : '')
                . '，預計 ' . $dueTxt . ' 前完成，並以措施追蹤 @@TRK@@ 追蹤執行情形。';
             $items[] = ['q' => $q, 'a' => $a, 'track' => ['owner' => $ow, 'due' => $due, 'action' => $cl]];
         }
