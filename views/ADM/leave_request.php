@@ -451,6 +451,42 @@ input[type=number]{-moz-appearance:textfield;}
         <button class="pm-tab-btn" id="sbYear"  onclick="statsSub('year',this)">年度比較</button>
         <button class="pm-tab-btn" id="sbTrend" onclick="statsSub('trend',this)">趨勢分析</button>
         <button class="pm-tab-btn" id="sbPeople" onclick="statsSub('people',this)">部門・人員分析</button>
+        <button class="pm-tab-btn" id="sbEvent" onclick="statsSub('event',this)">📅 假日・會議・訓練</button>
+      </div>
+
+      <!-- ── 行事曆活動統計（非請假：國定假日／颱風假／補班／會議／內外訓／客戶來訪／公出） ── -->
+      <div class="st-sub" id="st-event" style="display:none;">
+        <div class="cross-year-note"><i class="fa fa-info-circle"></i>
+          本分頁統計<b>行事曆上「非請假」的事件</b>（資料來自行事曆，類別由行事曆設定維護；<b>「通知」類不統計</b>）。
+          年度篩選與部門／人員篩選照常生效；<b>國定假日、颱風假這類沒有指定人員的全公司日子，不受部門／人員篩選影響；補班/調班、調配休假若有指定人員則依人員篩選</b>。月份以事件起日歸屬；全天或跨日事件算天數，同日有時間的事件算時數。
+          人次＝參與人員數加總（同一人參加多場各算一次）。</div>
+        <div id="evKpi" class="annual-box" style="gap:26px;"></div>
+        <div class="row">
+          <div class="col-md-8"><div class="lv-card">
+            <h4><i class="fa fa-bar-chart"></i> <span class="st-y"></span>每月事件數（依類別堆疊）</h4>
+            <div class="chart-box"><canvas id="cvEvMonth"></canvas></div>
+          </div></div>
+          <div class="col-md-4"><div class="lv-card">
+            <h4><i class="fa fa-pie-chart"></i> 類別佔比（事件數）</h4>
+            <div class="chart-box"><canvas id="cvEvCat"></canvas></div>
+          </div></div>
+        </div>
+        <div class="lv-card">
+          <h4><i class="fa fa-table"></i> 類別彙總</h4>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvCat"></table></div>
+        </div>
+        <div class="lv-card">
+          <h4><i class="fa fa-users"></i> 人員參與統計（會議／訓練／來訪／公出等活動，依參加次數排序）</h4>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvPerson"></table></div>
+        </div>
+        <div class="lv-card">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-list"></i> 事件明細</h4>
+            <select class="form-control input-sm" id="evCatSel" style="width:auto;" data-eg-skip onchange="renderEventDetail()"></select>
+            <span id="evDetailNote" style="font-size:12px;color:#9a7b4f;"></span>
+          </div>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvDetail"></table></div>
+        </div>
       </div>
 
       <!-- ── 月度統計 ── -->
@@ -704,6 +740,8 @@ input[type=number]{-moz-appearance:textfield;}
       <li><b>部門歸屬依「請假當時」</b>：年中調部門的人，調動前請的假算在原部門、調動後算在新部門
           （依員工管理的職務異動紀錄回推）。人員明細的部門欄會顯示「原部門→新部門」並標示「調動」。
           沒有補登異動紀錄的人一律以目前部門計算。</li>
+      <li><b>請假統計 →「📅 假日・會議・訓練」</b>：統計行事曆上非請假的事件——國定假日、颱風假、補班/調班、調配休假，以及會議、內訓、外訓、客戶來訪、公出等（<b>「通知」類不統計</b>），含每月件數、天數/時數、參與人次與每人參加次數。類別由行事曆設定維護，新增類別會自動出現。
+      </li>
       <li><b>請假統計</b>：人事／管理員看全公司，主管看自己部門（含下轄）。
           先選部門，<b>人員下拉就只會列出該部門底下的人</b>；要看全部人就把部門留在「全部部門」。
           部門旁的「<b>含下轄</b>」預設打勾（選「資材課」會一併算生管組／採購組／倉管組），
@@ -2375,8 +2413,67 @@ function usedTypes(buckets){
   return activeTypes().filter(t => buckets.some(b => (+((b.by_type||{})[t.id]) || 0) > 0));
 }
 
+/* ── 行事曆活動統計（假日・會議・訓練）：資料由後端 event_stats 全量算好，這裡只畫 ── */
+let EV = null;
+function loadEvents(){
+  $('#evKpi').html('<div class="empty-note" style="width:100%;">統計計算中…</div>');
+  $.getJSON(API, {action:'event_stats', year: $('#stYear').val() || CUR_YEAR, dept_id: $('#stDept').val() || 0,
+                  user_id: stUserId(), with_sub: $('#stWithSub').is(':checked') ? 1 : 0}, function(r){
+    if(!r.success){ $('#evKpi').html('<div class="empty-note" style="width:100%;color:#a3341f;">'+esc(r.message)+'</div>'); return; }
+    EV = r.data;
+    renderEvents();
+  });
+}
+function renderEvents(){
+  if(!EV) return;
+  const k = EV.kpi, cats = EV.cats || [];
+  const it = (lb, vl, un) => '<div class="it kpi-it"><div class="lb">'+lb+'</div><div class="vl">'+vl+(un?' <span class="un">'+un+'</span>':'')+'</div></div>';
+  $('#evKpi').html(it('活動場次（會議／訓練等）', k.act_count, '場') + it('活動總時數', num(k.act_hours), '小時')
+      + it('活動人次', k.act_people_times, '人次') + it('假日類天數', num(k.cal_days), '天')
+      + it('假日類筆數', k.cal_count, '筆'));
+  const used = cats.filter(c => c.count > 0);
+  mkChart('cvEvMonth', {type:'bar',
+    data:{labels:MON, datasets: used.map(c => ({label:c.name, backgroundColor:c.color, data:c.by_month}))},
+    options:{scales:axesStacked(), tooltips:{callbacks:{label:(ti,d)=> d.datasets[ti.datasetIndex].label+'：'+ti.yLabel+' 件'}}}});
+  mkChart('cvEvCat', {type:'doughnut',
+    data:{labels: used.map(c => c.name), datasets:[{data: used.map(c => c.count), backgroundColor: used.map(c => c.color),
+          borderColor:'#fffdf9', borderWidth:2}]}, options:{cutoutPercentage:52}});
+  let h = '<thead><tr><th>類別</th><th>性質</th><th class="numc">件數</th><th class="numc">天數</th><th class="numc">時數</th><th class="numc">參與人次</th></tr></thead><tbody>';
+  cats.forEach(c => { h += '<tr><td><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+c.color+';margin-right:6px;"></span>'+esc(c.name)+'</td>'
+      + '<td>'+(c.kind==='cal'?'假日／工作日調整':'活動')+'</td><td class="numc">'+c.count+'</td><td class="numc">'+num(c.days)+'</td>'
+      + '<td class="numc">'+num(c.hours)+'</td><td class="numc">'+(c.people_times||'—')+'</td></tr>'; });
+  $('#tbEvCat').html(h + '</tbody>');
+  // 人員參與表：欄位只列有人參加過的類別
+  const pc = cats.filter(c => c.kind === 'act' && (EV.by_person||[]).some(p => p.by_cat[c.id]));
+  let p = '<thead><tr><th>姓名</th>' + pc.map(c => '<th class="numc">'+esc(c.name)+'</th>').join('')
+        + '<th class="numc">合計(次)</th><th class="numc">時數</th></tr></thead><tbody>';
+  const ppl = (EV.by_person||[]).slice(0, 100);
+  if(!ppl.length) p += '<tr><td colspan="'+(3+pc.length)+'" class="empty-note">沒有資料</td></tr>';
+  ppl.forEach(x => { p += '<tr><td>'+esc(x.name)+'</td>' + pc.map(c => '<td class="numc">'+(x.by_cat[c.id]||'')+'</td>').join('')
+      + '<td class="numc"><b>'+x.count+'</b></td><td class="numc">'+num(x.hours)+'</td></tr>'; });
+  $('#tbEvPerson').html(p + '</tbody>');
+  const cur = $('#evCatSel').val() || '0';
+  $('#evCatSel').html('<option value="0">全部類別</option>' + cats.filter(c => c.count > 0).map(c => '<option value="'+c.id+'">'+esc(c.name)+'（'+c.count+'）</option>').join('')).val(cur);
+  if($('#evCatSel').val() === null) $('#evCatSel').val('0');
+  renderEventDetail();
+}
+function renderEventDetail(){
+  if(!EV) return;
+  const cid = +($('#evCatSel').val() || 0);
+  const rows = (EV.events||[]).filter(e => !cid || +e.category_id === cid);
+  let h = '<thead><tr><th>日期</th><th>時間</th><th>類別</th><th>事件</th><th class="numc">天數</th><th class="numc">時數</th><th>參與人員</th></tr></thead><tbody>';
+  if(!rows.length) h += '<tr><td colspan="7" class="empty-note">沒有資料</td></tr>';
+  rows.forEach(e => { h += '<tr><td>'+egFmtDate(e.date)+(e.end_date && e.end_date!==e.date ? '～'+egFmtDate(e.end_date) : '')+'</td><td>'+esc(e.time)+'</td><td>'+esc(e.category)+'</td><td>'+esc(e.title)+'</td>'
+      + '<td class="numc">'+(e.days?num(e.days):'')+'</td><td class="numc">'+(e.hours?num(e.hours):'')+'</td>'
+      + '<td>'+(e.people ? esc(e.names.join('、'))+(e.people>e.names.length?' 等'+e.people+'人':'') : '—')+'</td></tr>'; });
+  $('#tbEvDetail').html(h + '</tbody>');
+  $('#evDetailNote').text(EV.events_total > (EV.events||[]).length ? '（明細僅列最近 ' + EV.events.length + ' 筆，統計數字為全部 ' + EV.events_total + ' 筆）' : '');
+}
+
 function renderStats(){
   if(!ST) return;
+  $('#stKpi').toggle(stSub !== 'event');
+  if(stSub === 'event'){ loadEvents(); return; }
   renderKpi();
   if(stSub === 'month')  renderMonth();
   if(stSub === 'year')   renderYear();
@@ -2582,8 +2679,11 @@ function printStats(){
                trend:{title:'趨勢分析', canvas:[['cvTrend','逐月請假天數趨勢'],['cvTrendCnt','逐月請假件數'],['cvYoY','同期比較']],
                       tables:[['逐月明細','tbTrend']]},
                people:{title:'部門・人員分析', canvas:[['cvDept','各部門請假天數'],['cvTop','請假天數最多的人員（前 15 名）']],
-                      tables:[['部門統計','tbDept'], ['人員明細（全部人員）','tbPeople']]}};
+                      tables:[['部門統計','tbDept'], ['人員明細（全部人員）','tbPeople']]},
+               event:{title:'假日・會議・訓練', canvas:[['cvEvMonth','每月事件數（依類別堆疊）'],['cvEvCat','類別佔比（事件數）']],
+                      tables:[['類別彙總','tbEvCat'], ['人員參與統計','tbEvPerson'], ['事件明細','tbEvDetail']]}};
   const cfg = map[stSub];
+  if(stSub === 'event' && !EV){ alert('請先等統計載入完成'); return; }
   // 跨年度的兩個分頁不受年度篩選影響，紙本上要寫清楚，不可印成「2026 年度」讓人以為只有那一年
   const crossYear = (stSub === 'year' || stSub === 'trend');
   const yTxt = crossYear ? '全部年度（本表為跨年度比較）'

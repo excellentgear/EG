@@ -431,6 +431,35 @@ case 'stats': {
          ])]);
 }
 
+// ════════════════ 行事曆活動統計（國定假日／颱風假／補班／會議／內外訓／客戶來訪／公出…） ════════════════
+// 可視範圍與 stats 完全相同；計算在 leave_event_stats_lib.php（唯一實作）。
+case 'event_stats': {
+    require_once __DIR__ . '/../common/leave_event_stats_lib.php';
+    $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
+    if (!$VIEW_ALL && !$depts && !$CAN_STATS_ROLE) bad('您沒有檢視請假統計的權限');
+    $scopeIds = null;
+    if (!$VIEW_ALL) {
+        if (!$depts) {
+            $scopeIds = [$user_id];
+        } else {
+            $in = implode(',', array_map('intval', $depts));
+            $scopeIds = array_map('intval', $db->query(
+                "SELECT DISTINCT user_id FROM user_department_position_map WHERE department_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN));
+            if (!$scopeIds) $scopeIds = [0];
+        }
+    }
+    $yearRaw = trim((string)($_GET['year'] ?? date('Y')));
+    $year = ($yearRaw === 'all') ? 'all'
+          : ((ctype_digit($yearRaw) && (int)$yearRaw >= 1990 && (int)$yearRaw <= 9999) ? (int)$yearRaw : (int)date('Y'));
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    if ($deptId > 0 && !$VIEW_ALL && !in_array($deptId, array_map('intval', $depts), true)) $deptId = 0;
+    out(['success' => true, 'data' => eg_event_stats($db, [
+        'scope_user_ids' => $scopeIds, 'year' => $year, 'dept_id' => $deptId,
+        'user_id' => (int)($_GET['user_id'] ?? 0),
+        'with_sub' => (string)($_GET['with_sub'] ?? '1') !== '0',
+    ])]);
+}
+
 // ════════════════ 行事曆休假 → 自動建立假單（管理者設定 + 補舊資料） ════════════════
 // 商業邏輯一律在 src/common/leave_calendar_lib.php，這裡只做權限與參數守門。
 case 'cal_settings': {
