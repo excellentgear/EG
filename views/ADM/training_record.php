@@ -491,6 +491,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                     <button type="button" class="b-att nw" id="btnReqApplyDateSave" style="display:none;" onclick="reqSetApplyDate()">更新日期</button>
                 </div>
             </div>
+            <div style="grid-column:1/3;display:none;" id="reqApplicantWrap"><label>申請人（管理員補單可指定，避免顯示為管理員本人申請）</label>
+                <select id="reqApplicant" data-eg-filter="輸入姓名篩選…"><option value="">（本人）</option></select></div>
             <div style="grid-column:1/3;"><label>主旨 *</label><input type="text" id="reqSubject" maxlength="100"></div>
             <div style="grid-column:1/3;"><label>一、簡述內容</label><textarea id="reqContent" rows="2" maxlength="2000"></textarea></div>
             <div style="grid-column:1/3;"><label>二、主管要求學習重點</label><textarea id="reqFocus" rows="2" maxlength="2000"></textarea></div>
@@ -3672,6 +3674,19 @@ function reqAttRender(editable){
 }
 /* 受訓人員名單要依「申請日期」當時的部門人員顯示，不是一律列目前現況——補登舊申請單或申請日期填過去日期時，
    當時在此部門、現在已調走／離職的人也該列得出來（比照確認實行 modal 的 classAtDate() 同一套做法，ai-rules/14）。 */
+/* 申請人下拉（僅管理員）：候選＝申請單位（含子部門）人員；已選／原申請人若不在候選內仍保留 */
+var REQ_APPLICANT = {id:0, name:''};
+function reqApplicantFill(people){
+    if (!(PERMS && PERMS.canAdmin)) return;
+    var cur = $('#reqApplicant').val() || (REQ_APPLICANT.id ? String(REQ_APPLICANT.id) : '');
+    var h = '<option value="">（本人）</option>', has = false;
+    (people||[]).forEach(function(u){
+        if (String(u.id)===cur) has = true;
+        h += '<option value="'+u.id+'">'+esc((u.dept_name||'')+(u.position_name?' '+u.position_name:'')+' '+u.user_cname)+'</option>';
+    });
+    if (cur && !has) h += '<option value="'+esc(cur)+'">'+esc(REQ_APPLICANT.name||('#'+cur))+'</option>';
+    $('#reqApplicant').html(h).val(cur);
+}
 function reqAttLoadPeople(){
     var did = $('#reqDept').val();
     if (!did){ $('#reqAttPeopleBox').html('<span class="empty">請先選申請單位</span>'); $('#reqAttDeptHint').text('請先選申請單位'); return; }
@@ -3696,6 +3711,7 @@ function reqAttLoadPeople(){
         });
         $('#reqAttPeopleBox').html(h || '<span class="empty">此部門無人員</span>');
         $('#reqAttPickAll').prop('checked', false);
+        reqApplicantFill(res.people);
     });
 }
 $('#reqDept').on('change', function(){ REQ_ATT = []; reqAttRender(true); reqAttLoadPeople(); });
@@ -3780,6 +3796,9 @@ function openReq(id){
     $('#reqMask').data('rid', id);
     $('#reqTitle').text((editable?'編輯':'檢視')+'教育訓練需求申請單'+(r.status!=='draft'?'（'+(REQ_STATUS_LABEL[r.status]||r.status)+'）':''));
     reqDeptOptionsFill();
+    REQ_APPLICANT = {id:+r.user_id||0, name:r.user_name||''};
+    $('#reqApplicantWrap').toggle(!!(PERMS && PERMS.canAdmin));
+    $('#reqApplicant').html('<option value="">（本人）</option>'+(REQ_APPLICANT.id?'<option value="'+REQ_APPLICANT.id+'">'+esc(REQ_APPLICANT.name)+'</option>':'')).val(REQ_APPLICANT.id||'');
     $('#reqDept').val(r.dept_id||'');
     $('#reqApplyDate').val(r.apply_date||'');
     $('#reqSubject').val(r.subject||'');
@@ -3811,6 +3830,9 @@ $('#btnReqAdd').on('click', function(){
     $('#reqMask').data('rid', 0);
     $('#reqTitle').text('新增教育訓練需求申請單');
     reqDeptOptionsFill();
+    REQ_APPLICANT = {id:0, name:''};
+    $('#reqApplicantWrap').toggle(!!(PERMS && PERMS.canAdmin));
+    $('#reqApplicant').html('<option value="">（本人）</option>').val('');
     $('#reqDept').val((!(PERMS && PERMS.canAdmin) && MY_DEPTS.length===1) ? MY_DEPTS[0].id : '');
     $('#reqApplyDate').val(META.today);
     ['#reqSubject','#reqContent','#reqFocus','#reqHours','#reqLocation','#reqCost','#reqBrochure'].forEach(function(sel){ $(sel).val(''); });
@@ -3829,7 +3851,7 @@ function submitReq(mode){
     if (!$('#reqDept').val()){ alert('請選申請單位'); return; }
     if (!REQ_DAYS.length){ alert('請至少設定一天受訓時間'); return; }
     if (!reqDayValidate()){ alert('受訓時間有錯誤，請先修正'); return; }
-    $.post(API, {action:'request_save', request_id:$('#reqMask').data('rid'), dept_id:$('#reqDept').val(),
+    $.post(API, {action:'request_save', request_id:$('#reqMask').data('rid'), dept_id:$('#reqDept').val(), applicant_id:(PERMS.canAdmin ? ($('#reqApplicant').val()||'') : ''),
         apply_date:$('#reqApplyDate').val(), subject:$('#reqSubject').val(), content:$('#reqContent').val(),
         focus:$('#reqFocus').val(),
         trainees:JSON.stringify(REQ_ATT.map(function(a){ return {user_id:a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name}; })),

@@ -1092,17 +1092,28 @@ case 'request_save': {
         $traineeNames ? implode('、', $traineeNames) : null, $sd, $ed, $planDays, $hours,
         trim((string)($_POST['location'] ?? '')) ?: null, trim((string)($_POST['cost'] ?? '')) ?: null,
         ($_POST['brochure_count'] ?? '') === '' ? null : (int)$_POST['brochure_count']];
+    // 管理員補單可指定申請人（避免顯示為管理員本人）；非管理員送來的值一律忽略。沒送／空值＝不動（新單則為本人）
+    $appId = $uid; $appName = $uname; $appSet = false;
+    $reqApp = (int)($_POST['applicant_id'] ?? 0);
+    if ($perms['canAdmin'] && $reqApp > 0) {
+        $su = $db->prepare("SELECT user_cname FROM user WHERE id=? AND user_cname IS NOT NULL AND user_cname<>''");
+        $su->execute([$reqApp]);
+        $an = $su->fetchColumn();
+        if (!$an) jerr('指定的申請人不存在');
+        $appId = $reqApp; $appName = $an; $appSet = true;
+    }
     try {
         $db->beginTransaction();
         if ($rid > 0) {
             $db->prepare("UPDATE training_request SET dept_id=?,apply_date=?,subject=?,content=?,focus=?,trainees=?,
                           start_date=?,end_date=?,days=?,hours=?,location=?,cost=?,brochure_count=?,updated_at=NOW()
                           WHERE request_id=?")->execute(array_merge($fields, [$rid]));
+            if ($appSet) $db->prepare("UPDATE training_request SET user_id=?, user_name=? WHERE request_id=?")->execute([$appId, $appName, $rid]);
         } else {
             $db->prepare("INSERT INTO training_request (dept_id,apply_date,subject,content,focus,trainees,
                           start_date,end_date,days,hours,location,cost,brochure_count,user_id,user_name,status)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft')")
-               ->execute(array_merge($fields, [$uid, $uname]));
+               ->execute(array_merge($fields, [$appId, $appName]));
             $rid = (int)$db->lastInsertId();
         }
         $db->prepare("DELETE FROM training_request_day WHERE request_id=?")->execute([$rid]);
