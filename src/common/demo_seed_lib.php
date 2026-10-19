@@ -854,14 +854,28 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
         $date = eg_demo_wd($db, min($today, date('Y-m-d', strtotime($doc['fill_date'] . ' +' . (1 + $i * 2) . ' day'))), -1);
         if ($date < $doc['fill_date']) $date = $doc['fill_date'];
         $i++;
-        $items = [];
+        $items = []; $involved = []; $due = $Y . '-12-31'; $dueTxt = str_replace('-', '.', $due);
         $dn = (mb_strpos((string)($src['stakeholder'] ?? ''), '客戶') !== false) ? '業務課' : '管理課';     // 句中沒有部門名時的預設（客戶議題→業務課），之後沿用前一句的部門
-        foreach ($clauses as $cl) {
+        $issueTxt = trim((string)$src['issue']); if (mb_strlen($issueTxt) > 90) $issueTxt = mb_substr($issueTxt, 0, 90) . '…';
+        $nCl = count($clauses);
+        foreach ($clauses as $ci => $cl) {
             $dn = eg_draft_clause_dept($cl, array_keys($own), $dn); $ow = $own[$dn] ?? $own['管理課'];
-            $items[] = ['q' => '「' . $label . '」議題需要落實的作法：' . $cl, 'a' => '由' . $ow['dept'] . '依期限辦理：' . $cl,
-                        'track' => ['owner' => $ow, 'due' => $Y . '-12-31', 'action' => $cl]];
+            // 句中提到的其他部門＝配合單位（例如「業務課與生管組每月核對」：負責業務課，配合生管組）
+            $help = [];
+            foreach (array_keys($own) as $d2) if ($d2 !== $ow['dept'] && mb_strpos($cl, $d2) !== false) $help[] = $d2;
+            foreach (array_merge([$ow['dept']], $help) as $d2) $involved[$d2] = $own[$d2] ?? $ow;
+            // 溝通問題＝要處理的議題（為什麼要溝通）；回覆內容＝決議（誰負責、怎麼做、何時前完成、由哪一條措施追蹤）——兩欄不重複同一段文字
+            $q = $issueTxt . ($nCl > 1 ? '（措施 ' . ($ci + 1) . '／' . $nCl . '：需明確負責單位、執行方式與完成期限）' : '（需明確負責單位、執行方式與完成期限）');
+            $a = '決議由' . $ow['dept'] . '（' . $ow['name'] . '）負責執行：' . $cl . '。' . ($help ? '配合單位：' . implode('、', $help) . '。' : '')
+               . '預計 ' . $dueTxt . ' 前完成，執行情形由措施追蹤 @@TRK@@ 追蹤。';
+            $items[] = ['q' => $q, 'a' => $a, 'track' => ['owner' => $ow, 'due' => $due, 'action' => $cl]];
         }
-        $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $label . '　因應措施追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        // 溝通對象（類別＝員工）：涉及的部門＋人員，不限定一位
+        $partyTxt = implode('、', array_map(function ($d2, $o2) { return $d2 . ' ' . $o2['name']; }, array_keys($involved), array_values($involved)));
+        $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $partyTxt, 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        foreach ($made['tracks'] as $tid) {     // 回覆內容裡的追蹤編號：追蹤建立後才知道，逐條補上
+            $db->prepare("UPDATE comm_record_item SET reply=REPLACE(reply,'@@TRK@@',(SELECT track_no FROM comm_track WHERE track_id=?)) WHERE track_id=?")->execute([(int)$tid, (int)$tid]);
+        }
         if ($made['tracks'] && rm_trk_risk_col($db)) $db->exec("UPDATE comm_track SET src_risk_item_id=" . (int)$row['item_id'] . " WHERE track_id IN (" . implode(',', array_map('intval', $made['tracks'])) . ")");
         $nRec++; $nTrk += count($items);
     }
