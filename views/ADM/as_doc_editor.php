@@ -199,6 +199,9 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         /* 跳窗（沿用全站慣例；寬度一律固定像素，不可用 vw——vw 相對整個瀏覽器視窗會蓋過側選單） */
         .m-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10300; display:none; }
         .m-mask.open { display:block; }
+        /* 流程圖編輯器的遮罩是 10500；從流程圖按 +AS／偵測 開出的跳窗一定要疊在它上面，否則被遮在後面看不到 */
+        #mAsRef, #mRef { z-index:10600; }
+        #mArStyle { z-index:10650; }
         .m-win { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff;
             border-radius:6px; box-shadow:0 8px 30px rgba(0,0,0,.35); width:560px; max-width:96%; max-height:92%;
             display:flex; flex-direction:column; }
