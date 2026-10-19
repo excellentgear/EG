@@ -472,7 +472,7 @@ input[type=number]{-moz-appearance:textfield;}
           </div></div>
         </div>
         <div class="lv-card">
-          <h4><i class="fa fa-table"></i> 類別彙總</h4>
+          <h4><i class="fa fa-table"></i> 類別彙總 <small style="color:#9a7b4f;">（點任一列看日期清單）</small></h4>
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvCat"></table></div>
         </div>
         <div class="lv-card">
@@ -735,6 +735,20 @@ input[type=number]{-moz-appearance:textfield;}
 
 
 <!-- ═══ 使用說明 Modal（鐵律7）═══ -->
+<div class="modal fade" id="evCatMask" tabindex="-1"><div class="modal-dialog modal-lg" style="width:1000px;max-width:96%;"><div class="modal-content">
+  <div class="modal-header" style="background:var(--sand);">
+    <button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title" style="color:var(--amber-d);" id="evCatTitle"></h4>
+  </div>
+  <div class="modal-body">
+    <div class="pager" style="margin-bottom:10px;"><span id="evCInfo" style="font-size:12px;color:#9a7b4f;"></span>
+      <span style="font-size:12px;color:#9a7b4f;">每頁</span>
+      <select class="form-control input-sm" id="evCPer" style="width:auto;display:inline-block;" data-eg-skip onchange="evCPage=1;renderEvCat()">
+        <option>12</option><option selected>24</option><option>48</option><option>96</option></select>
+      <span id="evCPager"></span></div>
+    <div id="evCGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:8px;"></div>
+  </div>
+</div></div></div>
 <div class="modal fade" id="helpUseMask" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
   <div class="modal-header" style="background:var(--sand);">
     <button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -2428,7 +2442,7 @@ function usedTypes(buckets){
 }
 
 /* ── 行事曆活動統計（假日・會議・訓練）：資料由後端 event_stats 全量算好，這裡只畫 ── */
-let EV = null, evPPage = 1, evDPage = 1;
+let EV = null, evPPage = 1, evDPage = 1, evCPage = 1, evCCid = 0;
 function evPager(elId, fn, page, pages){
   let pg = '';
   if(pages > 1){
@@ -2438,6 +2452,27 @@ function evPager(elId, fn, page, pages){
     pg += '<button '+(page>=pages?'disabled':'')+' onclick="'+fn+'('+(page+1)+')">›</button>';
   }
   $('#'+elId).html(pg);
+}
+function evOpenCat(cid){
+  evCCid = cid; evCPage = 1;
+  const c = (EV.cats||[]).find(x => +x.id === +cid);
+  $('#evCatTitle').text((c ? c.name : '') + ' 日期清單（' + (String(EV.year)==='all' ? '全部年度' : EV.year + ' 年') + '）');
+  renderEvCat(); $('#evCatMask').modal('show');
+}
+function evGoC(n){ evCPage = n; renderEvCat(); }
+function renderEvCat(){
+  const rows = (EV.events||[]).filter(e => +e.category_id === +evCCid);
+  const per = parseInt($('#evCPer').val() || 24, 10), pages = Math.max(1, Math.ceil(rows.length / per));
+  if(evCPage > pages) evCPage = pages;
+  $('#evCGrid').html(rows.slice((evCPage-1)*per, evCPage*per).map(e =>
+    '<div style="border:1px solid var(--sand-d);border-radius:6px;padding:7px 10px;background:#fffdf9;">'
+    + '<div style="font-weight:700;color:#6b5638;">'+egFmtDate(e.date)+(e.end_date && e.end_date!==e.date ? '～'+egFmtDate(e.end_date) : '')
+    + ' <span style="font-weight:400;font-size:12px;color:#9a7b4f;">'+esc(e.time)+(e.days?'・'+num(e.days)+' 天':'')+(e.hours?'・'+num(e.hours)+' 小時':'')+'</span></div>'
+    + '<div>'+esc(e.title)+'</div>'
+    + (e.people ? '<div style="font-size:12px;color:#9a7b4f;">'+esc(e.names.join('、'))+(e.people>e.names.length?' 等'+e.people+'人':'')+'</div>' : '')
+    + '</div>').join('') || '<div class="empty-note">沒有資料</div>');
+  evPager('evCPager', 'evGoC', evCPage, pages);
+  $('#evCInfo').text('共 ' + rows.length + ' 筆，第 ' + evCPage + ' / ' + pages + ' 頁');
 }
 function evGoP(n){ evPPage = n; renderEvPerson(); }
 function evGoD(n){ evDPage = n; renderEventDetail(); }
@@ -2465,7 +2500,7 @@ function renderEvents(){
     data:{labels: used.map(c => c.name), datasets:[{data: used.map(c => c.count), backgroundColor: used.map(c => c.color),
           borderColor:'#fffdf9', borderWidth:2}]}, options:{cutoutPercentage:52}});
   let h = '<thead><tr><th>類別</th><th>性質</th><th class="numc">件數</th><th class="numc">天數</th><th class="numc">時數</th><th class="numc">參與人次</th></tr></thead><tbody>';
-  cats.forEach(c => { h += '<tr><td><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+c.color+';margin-right:6px;"></span>'+esc(c.name)+'</td>'
+  cats.forEach(c => { h += '<tr style="cursor:pointer;" title="點一下看日期清單" onclick="evOpenCat('+c.id+')"><td><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+c.color+';margin-right:6px;"></span>'+esc(c.name)+'</td>'
       + '<td>'+(c.kind==='cal'?'假日／工作日調整':'活動')+'</td><td class="numc">'+c.count+'</td><td class="numc">'+num(c.days)+'</td>'
       + '<td class="numc">'+num(c.hours)+'</td><td class="numc">'+(c.people_times||'—')+'</td></tr>'; });
   $('#tbEvCat').html(h + '</tbody>');
