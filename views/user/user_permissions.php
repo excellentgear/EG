@@ -94,6 +94,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_imgedit_workfile
         }
     }
 }
+// ── 批圖編輯器：每人「個人檔案」數量上限（system_settings: imgedit_personal_max_count）──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_imgedit_personal_max'])) {
+    if (!$canEdit) {
+        $msg = '無權限修改個人檔案上限';
+    } else {
+        $newPMax = (int)($_POST['imgedit_personal_max'] ?? 0);
+        if ($newPMax < 1 || $newPMax > 1000) {
+            $msg = '個人檔案上限需介於 1～1000 個';
+        } else {
+            try {
+                $conn_pdo->beginTransaction();
+                $st = $conn_pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                                          VALUES ('imgedit_personal_max_count', ?, ?, ?)
+                                          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                              updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)");
+                $st->execute([$newPMax, (int)$currentUser['id'], $_SESSION['userName'] ?? '']);
+                $conn_pdo->commit();
+                $msg = '個人檔案上限已更新為每人 ' . $newPMax . ' 個';
+            } catch (Exception $e) {
+                if ($conn_pdo->inTransaction()) $conn_pdo->rollBack();
+                $msg = '儲存失敗：' . $e->getMessage();
+            }
+        }
+    }
+}
+$imgeditPersonalMax = 100;
+try {
+    $v = $conn_pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_personal_max_count'")->fetchColumn();
+    if ($v !== false && (int)$v > 0) $imgeditPersonalMax = (int)$v;
+} catch (Exception $e) {}
 $imgeditWorkfileMax = 3;
 try {
     $v = $conn_pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_workfile_max_count'")->fetchColumn();
@@ -1906,6 +1936,19 @@ $_quotDepts = array_keys($_deptSet);
                                                value="<?= (int)$imgeditWorkfileMax ?>" <?= $canEdit ? '' : 'disabled' ?>>
                                         <?php if ($canEdit): ?>
                                         <button type="submit" name="save_imgedit_workfile_max" value="1" class="btn btn-primary btn-sm">
+                                            <i class="fa fa-save"></i> 儲存
+                                        </button>
+                                        <?php endif; ?>
+                                    </form>
+                                    <hr style="margin:14px 0 10px;">
+                                    <p style="font-size:12px;color:#888;">
+                                        「個人檔案」（批圖編輯器的暫存，只有本人看得到、不綁料號）每人最多可存幾個。達上限後使用者要先刪除舊檔才能再存（不會自動刪除）。
+                                    </p>
+                                    <form method="post" style="display:flex;gap:8px;align-items:center;max-width:300px;">
+                                        <input type="number" name="imgedit_personal_max" class="form-control input-sm" min="1" max="1000"
+                                               value="<?= (int)$imgeditPersonalMax ?>" <?= $canEdit ? '' : 'disabled' ?>>
+                                        <?php if ($canEdit): ?>
+                                        <button type="submit" name="save_imgedit_personal_max" value="1" class="btn btn-primary btn-sm">
                                             <i class="fa fa-save"></i> 儲存
                                         </button>
                                         <?php endif; ?>

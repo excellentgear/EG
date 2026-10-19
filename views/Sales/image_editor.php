@@ -236,6 +236,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['action'] ?? '') === 'part_fi
     exit;
 }
 
+// ── 個人檔案庫（2026-10-19）：非綁定料號、只有本人看得到的工作檔，分資料夾＋#標示＋預覽縮圖 ─────────
+// 存放位置＝全站統一附件根（eg_attach_dir）\批圖編輯器個人檔案\U<使用者id>\；DB 只存檔名（鐵律5）。
+// 內容與料號工作檔同一種（fabric JSON，底圖抽成實體檔），所以開啟後標籤／文字／球標全部仍可移動編輯。
+function imgedit_pf_dir(PDO $pdo, int $uid): string {
+    require_once __DIR__ . '/../../src/common/attach_lib.php';
+    $dir = eg_attach_dir($pdo, 'imgedit_personal_nas_dir', '批圖編輯器個人檔案') . 'U' . $uid . DIRECTORY_SEPARATOR;
+    eg_attach_ensure_dir($dir);
+    return $dir;
+}
+function imgedit_pf_max(PDO $pdo): int {
+    $n = 100;
+    try {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_personal_max_count'")->fetchColumn();
+        if ($v !== false && (int)$v > 0) $n = (int)$v;
+    } catch (Exception $e) {}
+    return $n;
+}
+function imgedit_pf_ensure(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_pf_folder (
+        folder_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        name VARCHAR(50) NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_user_name (user_id, name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_pf_file (
+        file_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        folder_id INT NULL,
+        name VARCHAR(100) NOT NULL,
+        tags VARCHAR(100) NOT NULL DEFAULT '',
+        work_file VARCHAR(80) NOT NULL,
+        thumb_file VARCHAR(80) NULL,
+        img_files TEXT NULL,
+        size_bytes BIGINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_user_folder (user_id, folder_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $done = true;
+}
+// 工作檔 JSON 裡引用到的個人檔案庫底圖檔名（含先前就已經是網址的）
+function imgedit_pf_collect_imgs($node, array &$out): void {
+    if (is_array($node)) { foreach ($node as $v) imgedit_pf_collect_imgs($v, $out); }
+    elseif (is_string($node) && preg_match('#image_editor\.php\?action=pf_file&f=(img_[A-Za-z0-9_.]+)$#', $node, $m)) $out[$m[1]] = true;
+}
+// 刪掉不再被「本人其他檔案」引用的底圖實體檔
+function imgedit_pf_drop_imgs(PDO $pdo, int $uid, int $exceptFileId, string $dir, array $names): void {
+    $chk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_pf_file WHERE user_id = ? AND file_id <> ? AND img_files LIKE ?");
+    foreach ($names as $n) {
+        if (!preg_match('/^img_[A-Za-z0-9_.]+$/', $n)) continue;
+        $chk->execute([$uid, $exceptFileId, '%"' . $n . '"%']);
+        if ((int)$chk->fetchColumn() === 0) @unlink($dir . $n);
+    }
+}
+// GET：個人檔案庫底圖／預覽縮圖（只服務「自己的」目錄，檔名一律 basename＋白名單格式）
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && in_array(($_GET['action'] ?? ''), ['pf_file', 'pf_thumb'], true)) {
+    $f = '';
+    if ($_GET['action'] === 'pf_file') {
+        $f = basename((string)($_GET['f'] ?? ''));
+        if (!preg_match('/^img_[A-Za-z0-9_.]+$/', $f)) { http_response_code(400); exit('bad path'); }
+    } else {
+        imgedit_pf_ensure($pdo);
+        $st = $pdo->prepare("SELECT thumb_file FROM imgedit_pf_file WHERE file_id = ? AND user_id = ?");
+        $st->execute([(int)($_GET['id'] ?? 0), $uid]);
+        $f = (string)$st->fetchColumn();
+        if ($f === '') { http_response_code(404); exit('no thumb'); }
+    }
+    $path = imgedit_pf_dir($pdo, $uid) . $f;
+    if (!is_file($path)) { http_response_code(404); exit('not found'); }
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    header('Content-Type: ' . (['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'bmp' => 'image/bmp'][$ext] ?? 'application/octet-stream'));
+    header('Content-Length: ' . filesize($path));
+    header('Cache-Control: private, max-age=60');
+    readfile($path);
+    exit;
+}
+
 // ── GET：標籤實體檔服務端點（NAS 檔案經此輸出給瀏覽器）─────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['action'] ?? '') === 'label_file') {
     $f = (string)($_GET['f'] ?? '');
@@ -1059,6 +1139,159 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st2->execute([$color, $uid, $userName]);
             $pdo->commit();
             echo json_encode(['success' => true, 'count' => count($ids), 'color' => $color]);
+        } elseif (strpos($act, 'pf_') === 0) {
+            // ── 個人檔案庫：每個動作一律以「本人 user_id」限定，沒有任何跨人讀寫的路徑 ──
+            imgedit_pf_ensure($pdo);
+            $pfDir = imgedit_pf_dir($pdo, $uid);
+            $ownFolder = function ($fid) use ($pdo, $uid) {
+                if ((int)$fid <= 0) return null;
+                $s = $pdo->prepare("SELECT folder_id FROM imgedit_pf_folder WHERE folder_id = ? AND user_id = ?");
+                $s->execute([(int)$fid, $uid]);
+                return $s->fetchColumn() ? (int)$fid : false;
+            };
+            $idList = function () {
+                $a = json_decode($_POST['ids'] ?? '[]', true);
+                return is_array($a) ? array_values(array_unique(array_filter(array_map('intval', $a)))) : [];
+            };
+            $cleanName = function ($s, $max) {
+                $s = trim(preg_replace('/[\r\n\t]+/', ' ', (string)$s));
+                if ($s === '') throw new Exception('名稱不可空白');
+                if (mb_strlen($s) > $max) throw new Exception('名稱最多 ' . $max . ' 個字（目前 ' . mb_strlen($s) . '）');
+                return $s;
+            };
+            if ($act === 'pf_list') {
+                $folders = $pdo->prepare("SELECT f.folder_id, f.name, (SELECT COUNT(*) FROM imgedit_pf_file x WHERE x.user_id = f.user_id AND x.folder_id = f.folder_id) AS cnt
+                                          FROM imgedit_pf_folder f WHERE f.user_id = ? ORDER BY f.name");
+                $folders->execute([$uid]);
+                $files = $pdo->prepare("SELECT file_id, folder_id, name, tags, size_bytes, (thumb_file IS NOT NULL AND thumb_file <> '') AS has_thumb, created_at, updated_at
+                                        FROM imgedit_pf_file WHERE user_id = ? ORDER BY updated_at DESC, file_id DESC");
+                $files->execute([$uid]);
+                $fl = $files->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['success' => true, 'folders' => $folders->fetchAll(PDO::FETCH_ASSOC), 'files' => $fl,
+                                  'max' => imgedit_pf_max($pdo), 'used' => count($fl)], JSON_UNESCAPED_UNICODE);
+            } elseif ($act === 'pf_save') {
+                $fileId = (int)($_POST['file_id'] ?? 0);
+                $name = $cleanName($_POST['name'] ?? '', 100);
+                $tags = $parseLabelTags($_POST['tags'] ?? '');
+                $work = $_POST['work'] ?? '';
+                $workArr = json_decode($work, true);
+                if (!is_array($workArr)) throw new Exception('工作檔資料異常');
+                $fid = $ownFolder($_POST['folder_id'] ?? 0);
+                if ($fid === false) throw new Exception('找不到這個資料夾');
+                $old = null;
+                if ($fileId > 0) {
+                    $s = $pdo->prepare("SELECT * FROM imgedit_pf_file WHERE file_id = ? AND user_id = ?");
+                    $s->execute([$fileId, $uid]);
+                    $old = $s->fetch(PDO::FETCH_ASSOC);
+                    if (!$old) throw new Exception('找不到要覆蓋的檔案（可能已被刪除）');
+                    // 覆蓋時沒送資料夾／#標示就沿用原值（沒送＝不動）
+                    if (!array_key_exists('folder_id', $_POST)) $fid = $old['folder_id'] !== null ? (int)$old['folder_id'] : null;
+                    if (!array_key_exists('tags', $_POST)) $tags = (string)$old['tags'];
+                } else {
+                    $used = (int)$pdo->query("SELECT COUNT(*) FROM imgedit_pf_file WHERE user_id = " . (int)$uid)->fetchColumn();
+                    $max = imgedit_pf_max($pdo);
+                    if ($used >= $max) throw new Exception('個人檔案已達上限 ' . $max . ' 個，請先刪除不需要的檔案（上限由管理員於「使用者權限管理」調整）');
+                }
+                $n = 0;
+                imgedit_extract_images($workArr, $pfDir, 'image_editor.php?action=pf_file&f=', $n);
+                $imgs = [];
+                imgedit_pf_collect_imgs($workArr, $imgs);
+                $imgNames = array_keys($imgs);
+                $stamp = date('Ymd_His') . '_' . bin2hex(random_bytes(3));
+                $workFile = 'pf_' . $stamp . '.json';
+                if (@file_put_contents($pfDir . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('檔案寫入失敗（NAS 權限？）');
+                $thumbFile = null;
+                $thumb = (string)($_POST['thumb'] ?? '');
+                if (preg_match('#^data:image/jpeg;base64,#', $thumb) && strlen($thumb) < 3 * 1048576) {
+                    $tb = base64_decode(substr($thumb, strpos($thumb, ',') + 1));
+                    if ($tb !== false && @file_put_contents($pfDir . 'pf_' . $stamp . '.jpg', $tb) !== false) $thumbFile = 'pf_' . $stamp . '.jpg';
+                }
+                $size = (int)@filesize($pfDir . $workFile);
+                foreach ($imgNames as $in) $size += (int)@filesize($pfDir . $in);
+                $imgJson = json_encode($imgNames);
+                if ($old) {
+                    $pdo->prepare("UPDATE imgedit_pf_file SET name=?, folder_id=?, tags=?, work_file=?, thumb_file=?, img_files=?, size_bytes=?, updated_at=NOW() WHERE file_id=? AND user_id=?")
+                        ->execute([$name, $fid, $tags, $workFile, $thumbFile ?: $old['thumb_file'], $imgJson, $size, $fileId, $uid]);
+                    // 舊的工作檔／縮圖／不再被引用的底圖實體檔清掉（寫新的成功之後才清，失敗不會兩頭落空）
+                    @unlink($pfDir . basename((string)$old['work_file']));
+                    if ($thumbFile && $old['thumb_file']) @unlink($pfDir . basename((string)$old['thumb_file']));
+                    $oldImgs = json_decode((string)$old['img_files'], true) ?: [];
+                    imgedit_pf_drop_imgs($pdo, $uid, $fileId, $pfDir, array_values(array_diff($oldImgs, $imgNames)));
+                    $newId = $fileId;
+                } else {
+                    $pdo->prepare("INSERT INTO imgedit_pf_file (user_id, folder_id, name, tags, work_file, thumb_file, img_files, size_bytes) VALUES (?,?,?,?,?,?,?,?)")
+                        ->execute([$uid, $fid, $name, $tags, $workFile, $thumbFile, $imgJson, $size]);
+                    $newId = (int)$pdo->lastInsertId();
+                }
+                echo json_encode(['success' => true, 'file_id' => $newId, 'updated' => (bool)$old], JSON_UNESCAPED_UNICODE);
+            } elseif ($act === 'pf_open') {
+                $s = $pdo->prepare("SELECT name, work_file FROM imgedit_pf_file WHERE file_id = ? AND user_id = ?");
+                $s->execute([(int)($_POST['file_id'] ?? 0), $uid]);
+                $r = $s->fetch(PDO::FETCH_ASSOC);
+                if (!$r) throw new Exception('找不到這個檔案');
+                $path = $pfDir . basename((string)$r['work_file']);
+                if (!is_file($path)) throw new Exception('檔案實體不存在（' . $r['work_file'] . '）');
+                $content = @file_get_contents($path);
+                if ($content === false || json_decode($content) === null) throw new Exception('檔案讀取失敗或格式異常');
+                echo json_encode(['success' => true, 'work' => $content, 'name' => $r['name']], JSON_UNESCAPED_UNICODE);
+            } elseif ($act === 'pf_update') {
+                // 改名／換資料夾／改 #標示；可一次對多個檔案（只有送出的欄位才更新）
+                $ids = $idList();
+                if (!$ids) throw new Exception('請先選擇檔案');
+                $sets = []; $vals = [];
+                if (array_key_exists('name', $_POST)) { $sets[] = 'name=?'; $vals[] = $cleanName($_POST['name'], 100); if (count($ids) > 1) throw new Exception('一次只能改一個檔案的名稱'); }
+                if (array_key_exists('tags', $_POST)) { $sets[] = 'tags=?'; $vals[] = $parseLabelTags($_POST['tags']); }
+                if (array_key_exists('folder_id', $_POST)) {
+                    $fid = $ownFolder($_POST['folder_id']);
+                    if ($fid === false) throw new Exception('找不到這個資料夾');
+                    $sets[] = 'folder_id=?'; $vals[] = $fid;
+                }
+                if (!$sets) throw new Exception('沒有要更新的欄位');
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $pdo->prepare("UPDATE imgedit_pf_file SET " . implode(',', $sets) . " WHERE user_id = ? AND file_id IN ($in)")
+                    ->execute(array_merge($vals, [$uid], $ids));
+                echo json_encode(['success' => true]);
+            } elseif ($act === 'pf_delete') {
+                $ids = $idList();
+                if (!$ids) throw new Exception('請先選擇檔案');
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $s = $pdo->prepare("SELECT * FROM imgedit_pf_file WHERE user_id = ? AND file_id IN ($in)");
+                $s->execute(array_merge([$uid], $ids));
+                $rows = $s->fetchAll(PDO::FETCH_ASSOC);
+                $pdo->prepare("DELETE FROM imgedit_pf_file WHERE user_id = ? AND file_id IN ($in)")->execute(array_merge([$uid], $ids));
+                foreach ($rows as $r) {   // 資料列先刪，再清實體檔；底圖要確認沒有本人其他檔案還在用才刪
+                    @unlink($pfDir . basename((string)$r['work_file']));
+                    if ($r['thumb_file']) @unlink($pfDir . basename((string)$r['thumb_file']));
+                    imgedit_pf_drop_imgs($pdo, $uid, 0, $pfDir, json_decode((string)$r['img_files'], true) ?: []);
+                }
+                echo json_encode(['success' => true, 'deleted' => count($rows)]);
+            } elseif ($act === 'pf_folder_save') {
+                $name = $cleanName($_POST['name'] ?? '', 50);
+                $fid = (int)($_POST['folder_id'] ?? 0);
+                $dup = $pdo->prepare("SELECT folder_id FROM imgedit_pf_folder WHERE user_id = ? AND name = ? AND folder_id <> ?");
+                $dup->execute([$uid, $name, $fid]);
+                if ($dup->fetchColumn()) throw new Exception('已經有同名的資料夾「' . $name . '」');
+                if ($fid > 0) {
+                    if ($ownFolder($fid) === false || $ownFolder($fid) === null) throw new Exception('找不到這個資料夾');
+                    $pdo->prepare("UPDATE imgedit_pf_folder SET name = ? WHERE folder_id = ? AND user_id = ?")->execute([$name, $fid, $uid]);
+                } else {
+                    if ((int)$pdo->query("SELECT COUNT(*) FROM imgedit_pf_folder WHERE user_id = " . (int)$uid)->fetchColumn() >= 100) throw new Exception('資料夾最多 100 個');
+                    $pdo->prepare("INSERT INTO imgedit_pf_folder (user_id, name) VALUES (?, ?)")->execute([$uid, $name]);
+                    $fid = (int)$pdo->lastInsertId();
+                }
+                echo json_encode(['success' => true, 'folder_id' => $fid], JSON_UNESCAPED_UNICODE);
+            } elseif ($act === 'pf_folder_delete') {
+                // 只刪資料夾本身，裡面的檔案退回「未分類」，不會跟著不見
+                $fid = (int)($_POST['folder_id'] ?? 0);
+                if (!$ownFolder($fid)) throw new Exception('找不到這個資料夾');
+                $pdo->beginTransaction();
+                $pdo->prepare("UPDATE imgedit_pf_file SET folder_id = NULL WHERE user_id = ? AND folder_id = ?")->execute([$uid, $fid]);
+                $pdo->prepare("DELETE FROM imgedit_pf_folder WHERE folder_id = ? AND user_id = ?")->execute([$fid, $uid]);
+                $pdo->commit();
+                echo json_encode(['success' => true]);
+            } else {
+                throw new Exception('未知的動作');
+            }
         } else {
             throw new Exception('未知的動作');
         }
@@ -1241,7 +1474,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：常用標籤（分公司共用／部門／私人），點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
     <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
-    <button class="tb-btn" onclick="openDraftModal()" title="暫存檔管理（這台電腦、依使用者區分）：暫存目前畫布（需命名，最多 5 件）、開啟先前的暫存、個別刪除或清除全部。內容有變動時每 60 秒自動更新「自動暫存」。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
+    <button class="tb-btn" onclick="openDraftModal()" title="個人檔案（伺服器、只有你看得到、不綁料號）：暫存目前畫布、分資料夾、加 #標示、縮圖預覽、搜尋、開啟後仍是可編輯的工作檔。內容有變動時每 60 秒自動更新本機「自動暫存」（當機還原用）"><i class="fa fa-clock-o"></i> 暫存</button>
     <button class="tb-btn" onclick="flattenAll()" title="把底圖＋所有標籤/文字/形狀燒成單一張圖（效果同存成圖片後重新開啟）。壓平後可用「框選搬移／套索」對任何圖形直接切缺口；可 Ctrl+Z 復原"><i class="fa fa-compress"></i> 壓平成圖</button>
     <button class="tb-btn primary" onclick="openExportModal()" title="列印或另存圖片"><i class="fa fa-download"></i> 匯出 / 列印</button>
     <div id="user-info">
@@ -1904,22 +2137,79 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     </div>
 </div>
 
-<!-- 暫存檔管理（這台電腦、依使用者區分） -->
+<!-- 個人檔案庫（伺服器、只有本人看得到、不綁料號、分資料夾）＋本機自動暫存 -->
+<style>
+    #draft-modal .pq-card { width: 150px; border: 1px solid #45494f; border-radius: 6px; background: #23262a; padding: 6px; cursor: pointer; position: relative; }
+    #draft-modal .pq-card:hover { border-color: #f0a24b; }
+    #draft-modal .pq-card.sel { border-color: #f0a24b; background: #33291c; }
+    #draft-modal .pq-th { height: 104px; display: flex; align-items: center; justify-content: center; background: #1b1d20; border-radius: 4px; overflow: hidden; }
+    #draft-modal .pq-th img { max-width: 100%; max-height: 104px; }
+    #draft-modal .pq-nm { margin-top: 4px; font-size: 12.5px; line-height: 1.3; word-break: break-all; max-height: 2.6em; overflow: hidden; }
+    #draft-modal .pq-meta { font-size: 11px; color: #8b949e; line-height: 1.35; }
+    #draft-modal .pq-tag { display: inline-block; background: #3a3226; color: #f0c78a; border-radius: 3px; padding: 0 4px; margin: 1px 2px 0 0; font-size: 11px; line-height: 16px; }
+    #draft-modal .pq-ck { position: absolute; left: 8px; top: 8px; z-index: 2; width: 16px; height: 16px; }
+    #draft-modal .pq-fd { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-radius: 4px; cursor: pointer; font-size: 12.5px; }
+    #draft-modal .pq-fd:hover { background: #33373c; }
+    #draft-modal .pq-fd.on { background: #4a3a22; color: #ffd9a3; }
+    #draft-modal .pq-fd .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #draft-modal .pq-fd .cn { color: #8b949e; font-size: 11px; }
+    #draft-modal .pq-fd .ic { color: #8b949e; padding: 0 2px; }
+    #draft-modal .pq-fd .ic:hover { color: #f0a24b; }
+    #pq-preview { position: absolute; inset: 0; background: rgba(0,0,0,.72); display: none; align-items: center; justify-content: center; z-index: 5; }
+    #pq-preview.show { display: flex; }
+</style>
 <div class="modal-mask" id="draft-modal">
-    <div class="modal-box">
-        <h3><i class="fa fa-clock-o"></i> 暫存檔（這台電腦）</h3>
+    <div class="modal-box" style="width:960px;max-width:96%;max-height:92vh;position:relative;">
+        <h3><i class="fa fa-folder-open"></i> 個人檔案（暫存＋資料夾）</h3>
         <div class="modal-body">
-            <div class="frm-row"><label>名稱</label>
-                <input type="text" id="dr-name" style="flex:1;" placeholder="輸入暫存名稱（同名＝覆蓋更新）"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();draftManualSave();}">
-                <button class="tb-btn primary" style="margin-left:6px;white-space:nowrap;" onclick="draftManualSave()"><i class="fa fa-save"></i> 暫存目前畫布</button>
+            <div class="frm-row" style="margin:0 0 4px;">
+                <label style="min-width:auto;">名稱</label>
+                <input type="text" id="pq-name" style="flex:2;min-width:0;" maxlength="100" placeholder="輸入檔名"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();pqSave();}">
+                <label style="min-width:auto;">資料夾</label>
+                <select id="pq-folder" style="flex:1;min-width:0;" data-eg-skip></select>
+                <label style="min-width:auto;">#標示</label>
+                <input type="text" id="pq-tags" style="flex:1.3;min-width:0;" placeholder="空白分隔，最多 10 個"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();pqSave();}">
+                <button class="tb-btn primary" style="white-space:nowrap;" onclick="pqSave()"><i class="fa fa-save"></i> 暫存目前畫布</button>
             </div>
-            <div style="font-size:11.5px;color:#8b949e;margin:4px 0 8px;">手動暫存最多 5 件（依使用者、只存在這台電腦的瀏覽器）；「自動暫存」是內容有變每 60 秒自動更新的還原點。要長期保存或跨電腦請用「料號附件」存工作檔。</div>
-            <div id="dr-list" style="max-height:46vh;overflow-y:auto;"></div>
+            <div style="font-size:11.5px;color:#8b949e;margin:2px 0 8px;">存在伺服器、<b>只有你自己看得到</b>、不綁料號，換電腦也能開。開啟後是完整工作檔（標籤／文字／球標都可再移動編輯）。<span id="pq-info"></span></div>
+            <div style="display:flex;gap:10px;">
+                <div style="width:190px;flex:none;">
+                    <div id="pq-side" style="max-height:52vh;overflow-y:auto;"></div>
+                    <button class="tb-btn" style="margin-top:6px;width:100%;" onclick="pqFolderEdit(0)"><i class="fa fa-plus"></i> 新增資料夾</button>
+                </div>
+                <div style="flex:1;min-width:0;">
+                    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+                        <input type="text" id="pq-search" style="flex:1;min-width:140px;" placeholder="搜尋檔名或 #標示（空白分隔，需全部符合）" oninput="pqRender()">
+                        <label style="white-space:nowrap;font-size:12px;"><input type="checkbox" id="pq-all" onchange="pqSelectAll(this.checked)"> 全選</label>
+                        <select id="pq-bulk-folder" style="max-width:140px;" data-eg-skip></select>
+                        <button class="tb-btn" onclick="pqBulkMove()" title="把勾選的檔案移到左邊選的資料夾"><i class="fa fa-share"></i> 移動</button>
+                        <button class="tb-btn" style="color:#ff8a80;" onclick="pqBulkDelete()"><i class="fa fa-trash"></i> 刪除選取</button>
+                    </div>
+                    <div id="pq-list" style="display:flex;flex-wrap:wrap;gap:8px;max-height:46vh;overflow-y:auto;align-content:flex-start;"></div>
+                </div>
+            </div>
+            <div id="dr-local" style="margin-top:10px;border-top:1px solid #333;padding-top:6px;"></div>
         </div>
-        <div class="modal-foot" style="display:flex;justify-content:space-between;">
-            <button class="tb-btn" style="color:#ff8a80;" onclick="draftClearAllConfirm()"><i class="fa fa-trash"></i> 清除全部暫存</button>
+        <div class="modal-foot" style="display:flex;justify-content:flex-end;">
             <button class="tb-btn" onclick="hideModal('draft-modal')">關閉</button>
+        </div>
+        <div id="pq-preview" onclick="if(event.target===this)pqPreviewClose()">
+            <div style="background:#2c2f33;border:1px solid #45494f;border-radius:8px;padding:12px;width:560px;max-width:94%;max-height:88%;overflow-y:auto;">
+                <div style="text-align:center;background:#1b1d20;border-radius:4px;min-height:120px;"><img id="pq-pv-img" style="max-width:100%;max-height:46vh;"></div>
+                <div class="frm-row"><label style="min-width:60px;">名稱</label><input type="text" id="pq-pv-name" maxlength="100" style="flex:1;"></div>
+                <div class="frm-row"><label style="min-width:60px;">資料夾</label><select id="pq-pv-folder" style="flex:1;" data-eg-skip></select></div>
+                <div class="frm-row"><label style="min-width:60px;">#標示</label><input type="text" id="pq-pv-tags" style="flex:1;" placeholder="空白分隔，最多 10 個、每個 12 字內"></div>
+                <div id="pq-pv-meta" style="font-size:11.5px;color:#8b949e;margin-bottom:8px;"></div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="tb-btn primary" onclick="pqPreviewOpen()"><i class="fa fa-folder-open"></i> 開啟編輯</button>
+                    <button class="tb-btn" onclick="pqPreviewSaveMeta()"><i class="fa fa-check"></i> 儲存名稱／資料夾／#標示</button>
+                    <button class="tb-btn" onclick="pqPreviewOverwrite()" title="用目前畫布內容覆蓋這個檔案"><i class="fa fa-refresh"></i> 以目前畫布覆蓋</button>
+                    <button class="tb-btn" style="color:#ff8a80;" onclick="pqPreviewDelete()"><i class="fa fa-trash"></i> 刪除</button>
+                    <button class="tb-btn" style="margin-left:auto;" onclick="pqPreviewClose()">返回</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -8022,17 +8312,23 @@ function autoSaveDraft() {
 setInterval(() => { if (draftDirty) autoSaveDraft(); }, 60000);
 window.addEventListener('pagehide', function () { if (draftDirty) autoSaveDraft(); });   // 關窗前盡力補存
 function openDraftModal() {
-    document.getElementById('dr-name').value = defaultFileName();
+    document.getElementById('pq-name').value = defaultFileName();
+    pqPreviewClose();
     renderDraftList();
     showModal('draft-modal');
+    pqLoad();
 }
+/* 本機暫存（IndexedDB）：只剩「自動暫存」還原點＋舊版留下的手動暫存，手動暫存改存到上面的個人檔案庫 */
 function renderDraftList() {
-    const box = document.getElementById('dr-list');
-    box.innerHTML = '載入中…';
+    const box = document.getElementById('dr-local');
+    box.innerHTML = '';
     draftLoadList().then(list => {
-        if (!list.length) { box.innerHTML = '<span style="color:#8b949e;font-size:12px;">目前沒有暫存檔。輸入名稱後按「暫存目前畫布」。</span>'; return; }
+        if (!list.length) return;
         const p = n => String(n).padStart(2, '0');
-        box.innerHTML = list.map(e => {
+        const head = '<div style="font-size:12px;color:#9aa4ad;margin-bottom:4px;display:flex;align-items:center;">' +
+            '<span style="flex:1;"><i class="fa fa-desktop"></i> 本機暫存（只存在這台電腦的瀏覽器；「自動暫存」內容有變每 60 秒自動更新，當機還原用）</span>' +
+            '<button class="tb-btn" style="color:#ff8a80;" onclick="draftClearAllConfirm()"><i class="fa fa-trash"></i> 清除本機暫存</button></div>';
+        box.innerHTML = head + list.map(e => {
             const d = new Date(e.ts || 0);
             const when = d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
             const mb = Math.round(((e.snap || '').length + (e.pool || []).reduce((s, x) => s + (x ? x.length : 0), 0)) / 1048576 * 10) / 10;
@@ -8044,24 +8340,192 @@ function renderDraftList() {
         }).join('');
     }).catch(() => { box.innerHTML = '<span style="color:#ff8a80;">暫存清單載入失敗</span>'; });
 }
-function draftManualSave() {
-    const name = document.getElementById('dr-name').value.trim();
-    if (!name) { toast('請先輸入暫存名稱'); return; }
-    const base = currentDraftSnapEntry(false);
-    if (!base) return;
-    draftLoadList().then(list => {
-        const i = list.findIndex(x => x.id !== 'auto' && x.name === name);
-        if (i >= 0) list[i] = Object.assign({ id: list[i].id, name: name }, base);   // 同名＝覆蓋更新
-        else {
-            if (list.filter(x => x.id !== 'auto').length >= 5) { toast('手動暫存最多 5 件，請先刪除不需要的再存'); return null; }
-            list.unshift(Object.assign({ id: 'm' + Date.now(), name: name }, base));
-        }
-        return draftSaveList(list).then(() => {
-            draftDirty = false;
-            toast('已暫存「' + name + '」（只存在這台電腦的瀏覽器）');
-            renderDraftList();
-        });
-    }).catch(e => toast('暫存失敗：' + ((e && e.message) || '瀏覽器儲存空間不足')));
+/* ── 個人檔案庫（伺服器）：資料夾／#標示／預覽縮圖／多選；後端一律以本人 user_id 限定 ── */
+const PQ = { folders: [], files: [], max: 100, used: 0, cur: 'all', sel: new Set(), pv: 0 };
+async function pqApi(action, params) {
+    const fd = new FormData();
+    fd.append('action', action);
+    Object.keys(params || {}).forEach(k => fd.append(k, params[k]));
+    const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+    if (!res.success) throw new Error(res.message || '操作失敗');
+    return res;
+}
+function pqFolderOptions(selected, withAll) {
+    let h = withAll ? '' : '<option value="0">未分類</option>';
+    PQ.folders.forEach(f => { h += '<option value="' + f.folder_id + '"' + (String(selected) === String(f.folder_id) ? ' selected' : '') + '>' + escHtml(f.name) + '</option>'; });
+    return h;
+}
+async function pqLoad() {
+    try {
+        const r = await pqApi('pf_list');
+        // PDO 回來的整數欄位是字串，Set／比對都用數字才不會對不上
+        PQ.folders = r.folders.map(f => Object.assign(f, { folder_id: Number(f.folder_id) }));
+        PQ.files = r.files.map(f => Object.assign(f, { file_id: Number(f.file_id), folder_id: f.folder_id === null ? null : Number(f.folder_id), size_bytes: Number(f.size_bytes) }));
+        PQ.max = r.max; PQ.used = r.used;
+        const ids = new Set(PQ.files.map(f => String(f.file_id)));
+        PQ.sel.forEach(id => { if (!ids.has(String(id))) PQ.sel.delete(id); });
+        if (PQ.cur !== 'all' && PQ.cur !== 'none' && !PQ.folders.some(f => String(f.folder_id) === String(PQ.cur))) PQ.cur = 'all';
+        pqRender();
+    } catch (e) { document.getElementById('pq-list').innerHTML = '<span style="color:#ff8a80;">個人檔案載入失敗：' + escHtml(e.message || '') + '</span>'; }
+}
+function pqVisibleFiles() {
+    const words = document.getElementById('pq-search').value.trim().toLowerCase().replace(/#/g, ' ').split(/[\s,，]+/).filter(Boolean);
+    return PQ.files.filter(f => {
+        if (PQ.cur === 'none' && f.folder_id) return false;
+        if (PQ.cur !== 'all' && PQ.cur !== 'none' && String(f.folder_id) !== String(PQ.cur)) return false;
+        const hay = (f.name + ' ' + f.tags).toLowerCase();
+        return words.every(w => hay.indexOf(w) !== -1);
+    });
+}
+function pqRender() {
+    const cnt = {}; let none = 0;
+    PQ.files.forEach(f => { if (f.folder_id) cnt[f.folder_id] = (cnt[f.folder_id] || 0) + 1; else none++; });
+    let side = '<div class="pq-fd' + (PQ.cur === 'all' ? ' on' : '') + '" data-pqf="all"><i class="fa fa-th-large ic"></i><span class="nm">全部</span><span class="cn">' + PQ.files.length + '</span></div>' +
+               '<div class="pq-fd' + (PQ.cur === 'none' ? ' on' : '') + '" data-pqf="none"><i class="fa fa-inbox ic"></i><span class="nm">未分類</span><span class="cn">' + none + '</span></div>';
+    PQ.folders.forEach(f => {
+        side += '<div class="pq-fd' + (String(PQ.cur) === String(f.folder_id) ? ' on' : '') + '" data-pqf="' + f.folder_id + '"><i class="fa fa-folder ic"></i><span class="nm" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</span><span class="cn">' + (cnt[f.folder_id] || 0) + '</span>' +
+                '<i class="fa fa-pencil ic" data-pqfe="' + f.folder_id + '" title="改資料夾名稱"></i><i class="fa fa-times ic" data-pqfd="' + f.folder_id + '" title="刪除資料夾（裡面的檔案會退回未分類，不會刪除）"></i></div>';
+    });
+    document.getElementById('pq-side').innerHTML = side;
+    // 下拉：暫存目標資料夾預設跟著目前瀏覽的資料夾
+    const sv = document.getElementById('pq-folder');
+    const keep = sv.value || (PQ.cur !== 'all' && PQ.cur !== 'none' ? PQ.cur : '0');
+    sv.innerHTML = pqFolderOptions(PQ.cur !== 'all' && PQ.cur !== 'none' ? PQ.cur : keep);
+    document.getElementById('pq-bulk-folder').innerHTML = pqFolderOptions(0);
+    document.getElementById('pq-info').textContent = '已存 ' + PQ.used + ' / 上限 ' + PQ.max + ' 個（上限由管理員設定）。';
+    const list = pqVisibleFiles();
+    const p = n => String(n).padStart(2, '0');
+    document.getElementById('pq-list').innerHTML = list.length ? list.map(f => {
+        const d = new Date(String(f.updated_at).replace(' ', 'T'));
+        const when = d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+        const mb = Math.max(0.1, Math.round(f.size_bytes / 1048576 * 10) / 10);
+        const tags = f.tags ? f.tags.split(' ').map(t => '<span class="pq-tag">#' + escHtml(t) + '</span>').join('') : '';
+        return '<div class="pq-card' + (PQ.sel.has(f.file_id) ? ' sel' : '') + '" data-pqid="' + f.file_id + '">' +
+            '<input type="checkbox" class="pq-ck" data-pqck="' + f.file_id + '"' + (PQ.sel.has(f.file_id) ? ' checked' : '') + '>' +
+            '<div class="pq-th">' + (Number(f.has_thumb) ? '<img loading="lazy" src="image_editor.php?action=pf_thumb&id=' + f.file_id + '&v=' + encodeURIComponent(f.updated_at) + '">' : '<i class="fa fa-file-image-o" style="font-size:32px;color:#555;"></i>') + '</div>' +
+            '<div class="pq-nm" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</div>' +
+            (tags ? '<div>' + tags + '</div>' : '') +
+            '<div class="pq-meta">' + when + '｜' + mb + 'MB</div></div>';
+    }).join('') : '<span style="color:#8b949e;font-size:12px;">' + (PQ.files.length ? '沒有符合的檔案' : '目前沒有個人檔案。輸入名稱後按「暫存目前畫布」。') + '</span>';
+    document.getElementById('pq-all').checked = list.length > 0 && list.every(f => PQ.sel.has(f.file_id));
+}
+function pqSelectAll(on) { pqVisibleFiles().forEach(f => { if (on) PQ.sel.add(f.file_id); else PQ.sel.delete(f.file_id); }); pqRender(); }
+document.addEventListener('click', function (ev) {
+    const t = ev.target;
+    if (!t.closest || !t.closest('#draft-modal')) return;
+    const fe = t.closest('[data-pqfe]'), fd = t.closest('[data-pqfd]');
+    if (fe) { ev.stopPropagation(); pqFolderEdit(Number(fe.getAttribute('data-pqfe'))); return; }
+    if (fd) { ev.stopPropagation(); pqFolderDelete(Number(fd.getAttribute('data-pqfd'))); return; }
+    const side = t.closest('[data-pqf]');
+    if (side) { const v = side.getAttribute('data-pqf'); PQ.cur = (v === 'all' || v === 'none') ? v : Number(v); document.getElementById('pq-folder').value = ''; pqRender(); return; }
+    const ck = t.closest('[data-pqck]');
+    if (ck) { const id = Number(ck.getAttribute('data-pqck')); if (ck.checked) PQ.sel.add(id); else PQ.sel.delete(id); pqRender(); return; }
+    const card = t.closest('[data-pqid]');
+    if (card) pqPreviewShow(Number(card.getAttribute('data-pqid')));
+});
+async function pqFolderEdit(fid) {
+    const cur = fid ? (PQ.folders.find(f => f.folder_id == fid) || {}).name : '';
+    const name = prompt(fid ? '資料夾新名稱：' : '新資料夾名稱：', cur || '');
+    if (name === null) return;
+    try {
+        const r = await pqApi('pf_folder_save', { folder_id: fid, name: name });
+        if (!fid) PQ.cur = r.folder_id;
+        await pqLoad(); toast(fid ? '已改名' : '已建立資料夾');
+    } catch (e) { toast(e.message); }
+}
+async function pqFolderDelete(fid) {
+    const f = PQ.folders.find(x => x.folder_id == fid); if (!f) return;
+    if (!confirm('刪除資料夾「' + f.name + '」？\n裡面的檔案不會被刪除，會退回「未分類」。')) return;
+    try { await pqApi('pf_folder_delete', { folder_id: fid }); if (String(PQ.cur) === String(fid)) PQ.cur = 'all'; await pqLoad(); toast('已刪除資料夾'); }
+    catch (e) { toast(e.message); }
+}
+function pqCanvasWork() {
+    if (restoring) { toast('還原進行中，請稍後再試'); return null; }
+    if (canvas.getObjects().filter(o => o.id !== '__artboard').length === 0) { toast('畫布是空的，沒有東西可暫存'); return null; }
+    flushPendingState();
+    let thumb = '';
+    try {
+        const mult = Math.min(1, 520 / Math.max(artW, artH));
+        thumb = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'jpeg', mult, 0.8);
+    } catch (e) { /* 縮圖失敗不影響存檔，卡片會顯示預設圖示 */ }
+    return { work: JSON.stringify(canvas.toJSON(SNAP_PROPS)), thumb: thumb };
+}
+async function pqSave() {
+    const name = document.getElementById('pq-name').value.trim();
+    if (!name) { toast('請先輸入檔名'); document.getElementById('pq-name').focus(); return; }
+    const folder = document.getElementById('pq-folder').value || '0';
+    const tags = document.getElementById('pq-tags').value.trim();
+    const same = PQ.files.find(f => f.name === name && String(f.folder_id || 0) === String(folder));
+    if (same && !confirm('這個資料夾已經有同名檔案「' + name + '」，要用目前畫布覆蓋它嗎？\n（按「取消」可改個名字另存）')) return;
+    const w = pqCanvasWork(); if (!w) return;
+    try {
+        const r = await pqApi('pf_save', { file_id: same ? same.file_id : 0, name: name, folder_id: folder, tags: tags, work: w.work, thumb: w.thumb });
+        draftDirty = false;
+        toast((r.updated ? '已覆蓋「' : '已暫存「') + name + '」到個人檔案（伺服器）');
+        document.getElementById('pq-tags').value = '';
+        await pqLoad();
+    } catch (e) { toast('暫存失敗：' + e.message); }
+}
+async function pqOpenFile(id) {
+    const f = PQ.files.find(x => x.file_id == id); if (!f) return;
+    if (!confirm('開啟「' + f.name + '」會取代目前畫布內容（未儲存的變更會消失），確定？')) return;
+    try {
+        const r = await pqApi('pf_open', { file_id: id });
+        restoreState(r.work);
+        undoStack = [r.work]; redoStack = [];
+        hideModal('draft-modal');
+        setTimeout(zoomFit, 200);
+        toast('已開啟「' + (r.name || f.name) + '」（標籤／文字／球標都仍可編輯）');
+    } catch (e) { toast('開啟失敗：' + e.message); }
+}
+function pqPreviewShow(id) {
+    const f = PQ.files.find(x => x.file_id == id); if (!f) return;
+    PQ.pv = id;
+    const img = document.getElementById('pq-pv-img');
+    img.src = Number(f.has_thumb) ? ('image_editor.php?action=pf_thumb&id=' + id + '&v=' + encodeURIComponent(f.updated_at)) : '';
+    document.getElementById('pq-pv-name').value = f.name;
+    document.getElementById('pq-pv-folder').innerHTML = pqFolderOptions(f.folder_id || 0);
+    document.getElementById('pq-pv-tags').value = f.tags ? f.tags.split(' ').map(t => '#' + t).join(' ') : '';
+    document.getElementById('pq-pv-meta').textContent = '建立 ' + f.created_at + '｜最後更新 ' + f.updated_at + '｜約 ' + Math.max(0.1, Math.round(f.size_bytes / 1048576 * 10) / 10) + ' MB';
+    document.getElementById('pq-preview').classList.add('show');
+}
+function pqPreviewClose() { PQ.pv = 0; document.getElementById('pq-preview').classList.remove('show'); }
+function pqPreviewOpen() { const id = PQ.pv; if (id) pqOpenFile(id); }
+async function pqPreviewSaveMeta() {
+    if (!PQ.pv) return;
+    try {
+        await pqApi('pf_update', { ids: JSON.stringify([PQ.pv]), name: document.getElementById('pq-pv-name').value,
+            folder_id: document.getElementById('pq-pv-folder').value, tags: document.getElementById('pq-pv-tags').value });
+        toast('已更新'); pqPreviewClose(); await pqLoad();
+    } catch (e) { toast(e.message); }
+}
+async function pqPreviewOverwrite() {
+    const f = PQ.files.find(x => x.file_id == PQ.pv); if (!f) return;
+    if (!confirm('用目前畫布內容覆蓋「' + f.name + '」？（原內容無法復原）')) return;
+    const w = pqCanvasWork(); if (!w) return;
+    try {
+        await pqApi('pf_save', { file_id: f.file_id, name: document.getElementById('pq-pv-name').value || f.name, work: w.work, thumb: w.thumb });
+        draftDirty = false; toast('已覆蓋「' + f.name + '」'); pqPreviewClose(); await pqLoad();
+    } catch (e) { toast('覆蓋失敗：' + e.message); }
+}
+async function pqPreviewDelete() {
+    const f = PQ.files.find(x => x.file_id == PQ.pv); if (!f) return;
+    if (!confirm('刪除「' + f.name + '」？（無法復原）')) return;
+    try { await pqApi('pf_delete', { ids: JSON.stringify([f.file_id]) }); PQ.sel.delete(f.file_id); toast('已刪除'); pqPreviewClose(); await pqLoad(); }
+    catch (e) { toast(e.message); }
+}
+async function pqBulkMove() {
+    const ids = Array.from(PQ.sel);
+    if (!ids.length) { toast('請先勾選要移動的檔案'); return; }
+    try { await pqApi('pf_update', { ids: JSON.stringify(ids), folder_id: document.getElementById('pq-bulk-folder').value }); toast('已移動 ' + ids.length + ' 個檔案'); PQ.sel.clear(); await pqLoad(); }
+    catch (e) { toast(e.message); }
+}
+async function pqBulkDelete() {
+    const ids = Array.from(PQ.sel);
+    if (!ids.length) { toast('請先勾選要刪除的檔案'); return; }
+    if (!confirm('刪除勾選的 ' + ids.length + ' 個檔案？（無法復原）')) return;
+    try { await pqApi('pf_delete', { ids: JSON.stringify(ids) }); PQ.sel.clear(); toast('已刪除 ' + ids.length + ' 個檔案'); await pqLoad(); }
+    catch (e) { toast(e.message); }
 }
 function draftOpen(id) {
     draftLoadList().then(list => {
