@@ -3656,7 +3656,9 @@ function reqFind(id){ return (REQUESTS||[]).find(function(x){ return +x.request_
 var REQ_ATT = [];
 function reqDeptOptionsFill(){
     var h = '<option value="">請選擇</option>';
-    (MY_DEPTS||[]).forEach(function(d){ h += '<option value="'+d.id+'">'+esc(d.name)+'</option>'; });
+    // 訓練管理員／系統管理者可代填任何部門（後端 request_save 同規則放行）；其餘人仍限本人所屬部門
+    var list = (PERMS && PERMS.canAdmin) ? (DEPTS||[]) : (MY_DEPTS||[]);
+    list.forEach(function(d){ h += '<option value="'+d.id+'">'+esc(d.name)+'</option>'; });
     $('#reqDept').html(h);
 }
 function reqAttRender(editable){
@@ -3809,7 +3811,7 @@ $('#btnReqAdd').on('click', function(){
     $('#reqMask').data('rid', 0);
     $('#reqTitle').text('新增教育訓練需求申請單');
     reqDeptOptionsFill();
-    $('#reqDept').val(MY_DEPTS.length===1 ? MY_DEPTS[0].id : '');
+    $('#reqDept').val((!(PERMS && PERMS.canAdmin) && MY_DEPTS.length===1) ? MY_DEPTS[0].id : '');
     $('#reqApplyDate').val(META.today);
     ['#reqSubject','#reqContent','#reqFocus','#reqHours','#reqLocation','#reqCost','#reqBrochure'].forEach(function(sel){ $(sel).val(''); });
     REQ_ATT = []; REQ_DAYS = [{date:'', start:'', end:''}];
