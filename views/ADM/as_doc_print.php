@@ -186,6 +186,11 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
     .bar span { font-size: 12px; color: #8A5A2B; margin-left: 10px; }
     body { padding-top: <?= $isEmbed ? '0' : '44px' ?>; }
 }
+<?php if ($isPreview): ?>
+/* 預覽／唯讀檢視：兩頁並排（左右頁），寬度不夠時整體等比縮小（見 startPreview） */
+@media screen { .spread { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; transform-origin: top left; }
+                .spread .adt-page { margin: 8px; flex: 0 0 auto; } }
+<?php endif; ?>
 @media print {
     .bar { display: none !important; }
     /* 列印時留白交給 @page，.adt-page 不再自己加內距（兩邊各留一次會把內容擠到中間又切邊）。
@@ -214,7 +219,9 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <?php endif; ?>
 <?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
          全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
+<?php if ($isPreview): ?><div class="spread" id="spread"><?php endif; ?>
 <?php foreach ($pagesHtml as $one) { echo $one; } ?>
+<?php if ($isPreview): ?></div><?php endif; ?>
 <?php
 require_once __DIR__ . '/../../src/common/org_role_lib.php';
 require_once __DIR__ . '/../../src/common/as_doc_sign_lib.php';
@@ -259,7 +266,21 @@ function startAutoPrint(){
     setTimeout(function(){ if (left > 0) { left = 0; go(); } }, 6000);
 }
 <?php if ($isPreview): ?>
-function startPreview(){ if (window.EGDocFit) EGDocFit.run(document); setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); }, 400); }
+function fitSpread(){
+    var sp = document.getElementById('spread'), pg = document.querySelector('.adt-page');
+    if (!sp || !pg) return;
+    sp.style.zoom = 1;
+    var need = pg.offsetWidth * 2 + 32, have = document.documentElement.clientWidth - 12;
+    sp.style.zoom = need > have ? (have / need) : 1;     // 放不下兩頁就等比縮小，永遠兩頁並排
+    try { if (window.frameElement) window.frameElement.style.height = (document.documentElement.scrollHeight + 20) + 'px'; } catch (e) {}
+}
+window.addEventListener('resize', fitSpread);
+function startPreview(){
+    if (window.EGDocFit) EGDocFit.run(document);
+    fitSpread();
+    setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); fitSpread(); }, 400);
+    setTimeout(fitSpread, 1500);
+}
 if (window.egDocStamps) egDocStamps(document, startPreview); else startPreview();
 <?php else: ?>
 if (window.egDocStamps) egDocStamps(document, startAutoPrint);
