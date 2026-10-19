@@ -598,6 +598,19 @@ function rm_rule_evidence(PDO $db, array $set, array $row, int $year): array
 /* ============================ 風險列的措施追蹤（顯示用） ============================
  * 風險表本身不另外填負責單位與預計完成日——那些資料已經在溝通管理的「措施追蹤」裡，
  * 兩邊各填一次遲早對不起來（鐵律4）。這裡即時把相關追蹤項目查出來顯示在因應措施底下。 */
+/** comm_track.src_risk_item_id＝這條追蹤是由風險表哪一列因應措施自動產生的（自動連結用）；沒有就補欄位（先 SHOW COLUMNS，這個 MySQL 沒有 ADD COLUMN IF NOT EXISTS） */
+if (!function_exists('rm_trk_risk_col')) {
+function rm_trk_risk_col(PDO $db): bool
+{
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    try {
+        $has = (bool)$db->query("SHOW COLUMNS FROM comm_track LIKE 'src_risk_item_id'")->fetch();
+        if (!$has) { $db->exec("ALTER TABLE comm_track ADD COLUMN src_risk_item_id INT NULL DEFAULT NULL COMMENT '由風險表哪一列因應措施自動產生（自動連結用）', ADD INDEX idx_trk_risk_item (src_risk_item_id)"); }
+        return $ok = true;
+    } catch (Throwable $e) { rm_sg_err($e); return $ok = false; }
+}
+}
 if (!function_exists('rm_item_tracks')) {
 function rm_item_tracks(PDO $db, int $year, array $row): array
 {
@@ -610,12 +623,25 @@ function rm_item_tracks(PDO $db, int $year, array $row): array
     [$cat] = rm_rule_classify(trim(($r['stakeholder'] ?? '') . ' ' . ($r['needs'] ?? '') . ' ' . ($r['issue'] ?? '')), (string)($r['dimension'] ?? ''));
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
     $out = [];
+    // ① 自動連結：由這一列因應措施自動產生的措施追蹤（不可移除，排在最前面）
+    if (!empty($row['item_id']) && rm_trk_risk_col($db)) {
+        $aq = $db->prepare("SELECT t.track_id, t.track_no, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.action, t.is_draft, r.rec_no
+                            FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id WHERE t.is_deleted=0 AND t.src_risk_item_id=? ORDER BY t.track_id");
+        $aq->execute([(int)$row['item_id']]);
+        foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $t) {
+            $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
+            $out[(int)$t['track_id']] = ['id'=>(int)$t['track_id'], 'no'=>(string)(!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']), 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''),
+                      'due'=>(string)($t['due_date'] ?? ''), 'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? ''), 'auto'=>true, 'draft'=>(int)$t['is_draft']];
+        }
+    }
+    // ② 措施欄註記「措施追蹤 編號」（人工引用）與關鍵字相關者
     foreach (rm_rule_tracks($db, $year, $cat, (string)($row['measure'] ?? '') . ' ' . (string)($row['issue'] ?? ''), trim((string)($row['rule_ids'] ?? '')) === '' && !empty($row['item_id']), true) as $t) {
         $st = (int)$t['is_closed'] ? 'closed' : (($t['due_date'] && $t['due_date'] < $today) ? 'over' : 'open');
-        $out[] = ['id'=>(int)$t['track_id'], 'no'=>(string)(!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']), 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
-                  'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? '')];
+        if (isset($out[(int)$t['track_id']])) continue;     // 已是自動連結的不重複列
+        $out[(int)$t['track_id']] = ['id'=>(int)$t['track_id'], 'no'=>(string)(!empty($t['track_no']) ? $t['track_no'] : '#' . $t['track_id']), 'owner'=>(string)$t['owner_name'], 'owner_dept'=>(string)($t['owner_dept_name'] ?? ''), 'due'=>(string)($t['due_date'] ?? ''),
+                  'state'=>$st, 'action'=>(string)$t['action'], 'rec_no'=>(string)($t['rec_no'] ?? ''), 'auto'=>false];
     }
-    return $out;
+    return array_slice(array_values($out), 0, 20);
 }
 }
 

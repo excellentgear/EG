@@ -156,6 +156,7 @@ $perms  = rm_perms($db, $rmUser);
         .trk { margin-top:5px; font-size:12px; color:#5b3a1e; background:#FBF4E8; border:1px solid #EADFC8; border-radius:4px; padding:4px 6px; }
         .trk.none { color:#9a8a74; }
         .trk-row { border-top:1px dotted #E0BE86; padding:3px 0 2px; }
+        .trk-no { color:#8a4b12; text-decoration:underline; cursor:pointer; } .trk-auto { display:inline-block; font-size:10px; line-height:14px; padding:0 5px; border-radius:7px; background:#F0A24B; color:#fff; vertical-align:1px; }
         .trk-row:first-of-type { border-top:0; }
         .trk-ac { color:#6b5a44; }
         .trk-st { padding:0 5px; border-radius:8px; font-size:11px; line-height:16px; display:inline-block; }
@@ -461,6 +462,13 @@ $perms  = rm_perms($db, $rmUser);
     <div class="rm-mft"><button type="button" id="btnDemoDateDefault">恢復預設日期</button><button type="button" data-close>取消</button><button type="button" class="btn-warm" id="btnDemoDateGo">依這些日期產生</button></div>
 </div></div>
 
+<!-- ============ 措施追蹤內容（唯讀） ============ -->
+<div class="rm-mask" id="trkMask"><div class="rm-modal" style="width:640px;">
+    <div class="rm-mhd"><span id="trkTitle">措施追蹤</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
+    <div class="rm-mbd" id="trkBody"></div>
+    <div class="rm-mft"><button type="button" data-close>關閉</button></div>
+</div></div>
+
 <!-- ============ 使用說明 ============ -->
 <div class="rm-mask" id="helpUseMask"><div class="rm-modal" style="width:860px;">
     <div class="rm-mhd"><span>使用說明　風險與機會管理</span><span class="x" data-close><i class="fa fa-times"></i></span></div>
@@ -478,7 +486,7 @@ $perms  = rm_perms($db, $rmUser);
         <ul><li>風險與機會<b>共用同一組評分</b>（分數算法相同），但顯示的用詞不同：風險是「嚴重度(S)／發生率(O)／風險等級（低度～極度危險）」，機會是「預期效益／實現可能性／機會等級（低度～最優先機會）」。把某列的「風險與機會」改成「機會」，欄位名稱與等級名稱會當場切換。</li>
             <li>機會等級名稱、機會的處理措施與欄位名稱都在「模組設定」維護。<b>機會不列入風險分布（表D）</b>，清單的「最高風險等級」也只看風險。</li></ul>
         <h4>因應措施的負責人與追蹤、重新評估、矯正單</h4>
-        <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次；要連結某一項，在因應措施文字裡寫「措施追蹤 #編號」，或在溝通管理建立追蹤項目。</li>
+        <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次。<b>由溝通管理依本表措施自動產生的追蹤會自動連結（標「自動」，不可移除）</b>；點編號可跳窗查看追蹤內容。想自己引用別的追蹤，可按「引用措施追蹤」或在因應措施文字裡寫「措施追蹤 編號」。</li>
             <li><b>重新評估</b>：年度中途因重大變化（例如某項指標已實際發生）重新評估時，填「重新評估」日期與原因。按「依資料產生佐證」時，若依當年資料算出的發生率比表上高，畫面會用紅字提示建議重新評估，但<b>不會自動改你的評分</b>。</li>
             <li><b>成效確認結果為「無效」</b>的列會出現「開矯正單」鈕，按下去由異常矯正處理單模組開單（一條風險只開一張，開完該列顯示單號）。需要先儲存、且只有表單建立者或管理員可以開。</li></ul>
         <h4>與管理審查（2-GM-05）的關係</h4>
@@ -1097,12 +1105,12 @@ function followHtml(it){
 function trackPickHtml(){ return '<div class="trk-pick" style="margin-top:4px;"><button type="button" class="b-mini" data-trkpick><i class="fa fa-link"></i> 引用措施追蹤</button></div>'; }
 function trackHtml(it){
     var ts = it.tracks || [];
-    if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（在溝通管理建立追蹤項目，或在因應措施文字裡寫「措施追蹤 #編號」即可連結）</div>';
-    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b><span class="hint" style="margin-left:6px;">編號（FYYYY-流水號）＝溝通管理「措施追蹤表」的追蹤編號</span>';
+    if (!ts.length) return '<div class="trk none">尚未連結措施追蹤（由溝通管理依本表措施自動產生的會自動連結；也可按下方「引用措施追蹤」自行引用，或在因應措施文字裡寫「措施追蹤 編號」）</div>';
+    var h = '<div class="trk"><b>相關措施追蹤（負責人／預計完成）</b><span class="hint" style="margin-left:6px;">點編號可查看追蹤內容；標「自動」的是依本表措施產生、自動連結且不可移除；其餘是引用或關鍵字相關</span>';
     $.each(ts, function(_, t){
         var cls = t.state === 'over' ? 'over' : (t.state === 'closed' ? 'done' : 'open');
         var txt = t.state === 'over' ? '逾期' : (t.state === 'closed' ? '已結案' : '執行中');
-        h += '<div class="trk-row ' + cls + '">' + esc(t.no || ('#' + t.id)) + '　' + esc((t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定負責人')) + '　' + (t.due ? dispDate(t.due) : '未定日期')
+        h += '<div class="trk-row ' + cls + '"><a href="#" class="trk-no" data-trkopen="' + (+t.id) + '" title="點一下查看這條措施追蹤的內容"><b>' + esc(t.no || ('#' + t.id)) + '</b></a>' + (t.auto ? ' <span class="trk-auto">自動</span>' : '') + (+t.draft ? ' <span class="draft-tag">草稿</span>' : '') + '　' + esc((t.owner_dept ? t.owner_dept + ' ' : '') + (t.owner || '未指定負責人')) + '　' + (t.due ? dispDate(t.due) : '未定日期')
            + '　<span class="trk-st">' + txt + '</span><div class="trk-ac">' + esc(t.action || '') + '</div></div>';
     });
     return h + '</div>';
@@ -1392,6 +1400,22 @@ function suggestRow(tr, ctxId){
             + (filled.length ? '；已填入空白欄位：' + esc(filled.join('、')) : '；各欄位原本都已有內容，沒有覆蓋') + '。<br>' + esc((s.why || []).slice(0, 3).join('；')) + '</div>');
     });
 }
+$(document).on('click', '[data-trkopen]', function(e){
+    e.preventDefault();
+    get({action:'track_get', track_id:+$(this).attr('data-trkopen')}, function(res){
+        var t = res.track || {}, row = function(k, v){ return '<tr><th style="width:110px;text-align:left;vertical-align:top;white-space:nowrap;">' + k + '</th><td style="text-align:left;">' + (v === '' || v == null ? '<span class="hint">（空白）</span>' : esc(String(v)).replace(/\n/g, '<br>')) + '</td></tr>'; };
+        $('#trkTitle').text('措施追蹤 ' + (t.track_no || ('#' + t.track_id)) + (+t.is_draft ? '　【草稿・待確認】' : ''));
+        $('#trkBody').html('<table class="grid" style="width:100%;"><tbody>'
+            + row('類別／對象', (t.cat_name ? t.cat_name + '／' : '') + (t.party || ''))
+            + row('溝通內容', t.content) + row('回應措施', t.action)
+            + row('負責人', (t.owner_dept_name ? t.owner_dept_name + ' ' : '') + (t.owner_name || ''))
+            + row('預計完成日', t.due_date ? dispDate(t.due_date) : '')
+            + row('狀態', +t.is_closed ? '已結案' + (t.closed_date ? ' ' + dispDate(t.closed_date) : '') + (t.close_note ? '：' + t.close_note : '') : '未結案')
+            + row('來源溝通記錄', t.rec_no ? t.rec_no + (t.comm_date ? '（' + dispDate(t.comm_date) + '）' : '') : '') + '</tbody></table>'
+            + '<div class="hint" style="margin-top:8px;">這裡只能查看；要修改請到「溝通管理」的措施追蹤表。</div>');
+        openMask('trkMask');
+    });
+});
 $(document).on('click', '[data-trkpick]', function(){
     var box = $(this).closest('.trk-pick'), tr = $(this).closest('tr'), y = +String($('#fDate').val() || META.today).slice(0, 4);
     box.find('select').remove();

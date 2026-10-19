@@ -252,6 +252,16 @@ if ($action === 'risk_suggest_row') {
                       'effect_check'=>$r['effect_check'], 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why'], 'rule_ids'=>$r['rule_ids']]]);
 }
 /* 人工填寫因應措施時要引用的措施追蹤（溝通管理）：選了就在措施欄寫上「措施追蹤 編號」，系統即可連結 */
+/* 風險表因應措施底下點措施追蹤編號：唯讀顯示追蹤內容與來源溝通記錄（全體在職員工都看得到，與 track_options 同一個可見範圍） */
+if ($action === 'track_get') {
+    $st = $db->prepare("SELECT t.track_id, t.track_no, t.party, t.content, t.action, t.react_date, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.closed_date, t.close_note, t.is_draft,
+                               r.rec_id, r.rec_no, r.comm_date, r.party_name, cc.name cat_name
+                        FROM comm_track t LEFT JOIN comm_record r ON r.rec_id=t.src_rec_id LEFT JOIN comm_track_cat cc ON cc.cat_id=t.cat_id WHERE t.track_id=? AND t.is_deleted=0");
+    $st->execute([(int)($_GET['track_id'] ?? 0)]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) jerr('查無此措施追蹤（可能已被刪除）', 404);
+    jout(['track'=>$r]);
+}
 if ($action === 'track_options') {
     $year = (int)($_GET['year'] ?? 0); if ($year < 2000 || $year > 2100) $year = (int)substr(rmToday($db), 0, 4);
     $st = $db->prepare("SELECT t.track_no, t.track_id, t.party, t.action, t.content, t.owner_name, t.owner_dept_name, t.due_date, t.is_closed, t.is_draft FROM comm_track t

@@ -832,6 +832,7 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
     $own = []; foreach ($depts as $dn) { $o = eg_demo_owner($db, $dn); if ($o) $own[$dn] = $o; }
     if (empty($own['管理課'])) throw new RuntimeException('找不到管理課的在職人員，無法指定負責人');
     $set = rm_settings($db); $nRec = 0; $nTrk = 0; $i = 0;
+    rm_trk_risk_col($db);        // 先確認連結欄位存在（ALTER 會隱式 commit，不能放在交易中）
     // 只清「尚未確認」的舊溝通草稿（已確認的不動）
     $ids = array_column(eg_demo_qa($db, "SELECT rec_id FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$Y]), 'rec_id');
     if ($ids) { $in = implode(',', array_map('intval', $ids)); $db->exec("DELETE FROM comm_track WHERE src_rec_id IN ($in)"); $db->exec("DELETE FROM comm_record_item WHERE rec_id IN ($in)"); $db->exec("DELETE FROM comm_record WHERE rec_id IN ($in)"); }
@@ -860,8 +861,24 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
             $items[] = ['q' => '「' . $label . '」議題需要落實的作法：' . $cl, 'a' => '由' . $ow['dept'] . '依期限辦理：' . $cl,
                         'track' => ['owner' => $ow, 'due' => $Y . '-12-31', 'action' => $cl]];
         }
-        eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $label . '　因應措施追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $label . '　因應措施追蹤', 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        if ($made['tracks'] && rm_trk_risk_col($db)) $db->exec("UPDATE comm_track SET src_risk_item_id=" . (int)$row['item_id'] . " WHERE track_id IN (" . implode(',', array_map('intval', $made['tracks'])) . ")");
         $nRec++; $nTrk += count($items);
     }
     return ['year' => $Y, 'records' => $nRec, 'tracks' => $nTrk];
+}
+
+/** 已經存在、但沒有連結的措施追蹤：措施內容完整出現在某一列因應措施裡的，補上自動連結（一次性補資料用；比對不到的不動） */
+function eg_link_tracks_by_text(PDO $db, int $riskDocId): int
+{
+    if (!rm_trk_risk_col($db)) return 0;
+    $doc = eg_demo_q1($db, "SELECT fill_date FROM rm_doc WHERE doc_id=?", [$riskDocId]); if (!$doc) return 0;
+    $Y = (int)substr((string)$doc['fill_date'], 0, 4); $n = 0;
+    $norm = function ($t) { return preg_replace('/[\s，,。；;、]+/u', '', (string)$t); };
+    $items = eg_demo_qa($db, "SELECT item_id, measure FROM rm_item WHERE doc_id=?", [$riskDocId]);
+    foreach (eg_demo_qa($db, "SELECT track_id, action FROM comm_track WHERE is_deleted=0 AND src_risk_item_id IS NULL AND YEAR(react_date)=?", [$Y]) as $t) {
+        $a = $norm($t['action']); if (mb_strlen($a) < 8) continue;
+        foreach ($items as $it) if (mb_strpos($norm($it['measure']), $a) !== false) { $db->prepare("UPDATE comm_track SET src_risk_item_id=? WHERE track_id=?")->execute([(int)$it['item_id'], (int)$t['track_id']]); $n++; break; }
+    }
+    return $n;
 }
