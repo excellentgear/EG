@@ -482,7 +482,7 @@ input[type=number]{-moz-appearance:textfield;}
             <div class="pager no-print"><span id="evPInfo" style="font-size:12px;color:#9a7b4f;"></span>
               <span style="font-size:12px;color:#9a7b4f;">每頁</span>
               <select class="form-control input-sm" id="evPPer" style="width:auto;display:inline-block;" data-eg-skip onchange="evPPage=1;renderEvPerson()">
-                <option>5</option><option>10</option><option selected>20</option><option>50</option></select>
+                <option>5</option><option selected>10</option><option>20</option><option>50</option></select>
               <span id="evPPager"></span></div>
           </div>
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvPerson"></table></div>
@@ -496,7 +496,7 @@ input[type=number]{-moz-appearance:textfield;}
             <div class="pager no-print"><span id="evDInfo" style="font-size:12px;color:#9a7b4f;"></span>
               <span style="font-size:12px;color:#9a7b4f;">每頁</span>
               <select class="form-control input-sm" id="evDPer" style="width:auto;display:inline-block;" data-eg-skip onchange="evDPage=1;renderEventDetail()">
-                <option>5</option><option>10</option><option selected>20</option><option>50</option></select>
+                <option>5</option><option selected>10</option><option>20</option><option>50</option></select>
               <span id="evDPager"></span></div>
           </div>
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvDetail"></table></div>
@@ -2514,7 +2514,7 @@ function renderEvPerson(){
   if(!EV) return;
   const cats = EV.cats || [];
   const pc = cats.filter(c => c.kind === 'act' && (EV.by_person||[]).some(p => p.by_cat[c.id]));
-  const all = EV.by_person || [], per = parseInt($('#evPPer').val() || 20, 10);
+  const all = EV.by_person || [], per = parseInt($('#evPPer').val() || 10, 10);
   const pages = Math.max(1, Math.ceil(all.length / per));
   if(evPPage > pages) evPPage = pages;
   const ppl = all.slice((evPPage-1)*per, evPPage*per);
@@ -2533,7 +2533,7 @@ function renderEventDetail(){
   const rows = (EV.events||[]).filter(e => !cid || +e.category_id === cid);
   let h = '<thead><tr><th>日期</th><th>時間</th><th>類別</th><th>事件</th><th class="numc">天數</th><th class="numc">時數</th><th>參與人員</th></tr></thead><tbody>';
   if(!rows.length) h += '<tr><td colspan="7" class="empty-note">沒有資料</td></tr>';
-  const per = parseInt($('#evDPer').val() || 20, 10), pages = Math.max(1, Math.ceil(rows.length / per));
+  const per = parseInt($('#evDPer').val() || 10, 10), pages = Math.max(1, Math.ceil(rows.length / per));
   if(evDPage > pages) evDPage = pages;
   const all = rows.length;
   rows.splice(0, rows.length, ...rows.slice((evDPage-1)*per, evDPage*per));
