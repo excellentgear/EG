@@ -103,9 +103,30 @@
             return;
         }
         if (el.value === '' || el.value == null) return;
-        el.value = '';
-        fire(el, 'input');
+        // 清空要「可復原」：用 execCommand('delete') 讓瀏覽器記進原生復原堆疊（Ctrl+Z 即可救回）；
+        // 直接 el.value='' 會把復原紀錄整個切掉，誤雙擊後內容就回不來。
+        // 不支援的欄位型別（number/date…）退回直接清空，並記下舊值讓 Ctrl+Z 還原。
+        var before = el.value, done = false;
+        try {
+            el.focus(); el.select();
+            if (document.execCommand && document.execCommand('delete') && el.value === '') done = true;
+        } catch (err) {}
+        if (!done) {
+            el._egPrev = before;
+            el.value = '';
+            fire(el, 'input');
+        }
         fire(el, 'change');
+    }, true);
+
+    /* 規則 1 的補強：被雙擊清空的欄位（原生復原堆疊不可用者），Ctrl+Z 還原 */
+    document.addEventListener('keydown', function (e) {
+        if (!(e.ctrlKey || e.metaKey) || e.shiftKey || (e.key || '').toLowerCase() !== 'z') return;
+        var el = e.target;
+        if (!el || el._egPrev == null || el.value !== '') return;
+        e.preventDefault();
+        el.value = el._egPrev; el._egPrev = null;
+        fire(el, 'input'); fire(el, 'change');
     }, true);
 
     /* ── 規則 2：聚焦已有資料自動全選 ─────────────────────────────────── */

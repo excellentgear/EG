@@ -303,7 +303,7 @@ foreach ($roleRows as $rr) {
 
 <!-- 建立/編輯 modal -->
 <div class="mt-mask" id="edMask"><div class="mt-modal wide">
-    <div class="m-head"><span id="edTitle">新增會議紀錄</span><span class="m-close" onclick="closeMask('edMask')">✕</span></div>
+    <div class="m-head"><span id="edTitle">新增會議紀錄</span><span class="m-close" onclick="edClose()">✕</span></div>
     <div class="m-body">
         <div class="grid3">
             <div style="grid-column:span 2;"><label>會議主題 *
@@ -415,7 +415,8 @@ foreach ($roleRows as $rr) {
         <div id="edFootHint" style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;">
             <b style="color:#8A5A2B;">存草稿</b>＝可隨時再修改；出席人員全部簽到且負責部門/指定人員全部確認回簽後，右下角按鈕才會變成<b style="color:#8A5A2B;">送出</b>並鎖定內容通知主席確認簽章（之後需退回才能再改）；負責人尚未確認完成前，按鈕是<b style="color:#8A5A2B;">存檔並通知</b>，只發通知不會送交主席。
         </div>
-        <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
+        <div id="edSaveState" style="text-align:left;font-size:12px;margin-bottom:6px;min-height:18px;color:#8a6d45;"></div>
+        <button class="b-cancel" onclick="edClose()">取消</button>
         <button class="b-ok" id="btnEdSaveDraft" style="background:#fff;color:#8A5A2B;" onclick="saveDraft(false)">存草稿</button>
         <button class="b-ok" id="btnEdSubmit" onclick="saveDraft(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
     </div>
@@ -1026,6 +1027,7 @@ function openCreate(noticeMode){
     loadCalendarMeetings();
     edApplyNoticeMode(noticeMode);
     openMask('edMask');
+    ED_SAVED_AT = ''; edMarkClean();
 }
 /* 從行事曆挑選「今天」的會議類別事件，自動帶入日期/時間/主題/出席人員（使用者明確要求限當天；只在新增時提供，編輯既有記錄不覆蓋） */
 var CAL_EVENTS = [];
@@ -1082,7 +1084,9 @@ function mtSyncYear(dateStr){
     if (!$y.find('option[value="'+y+'"]').length) $y.append('<option value="'+y+'">'+y+' 年</option>');
     if (String($y.val()) !== y) { $y.val(y); loadList(); }
 }
-function openEdit(id){
+function openEdit(id, keepSaved){
+    if (!keepSaved) ED_SAVED_AT = '';
+    var edScroll = keepSaved ? $('#edMask .m-body').scrollTop() : 0;
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var m = res.meeting;
@@ -1119,6 +1123,8 @@ function openEdit(id){
         PEOPLE_ASOF = ''; loadPeopleAsof(function(){ renderItems('directive'); renderItems('general'); });
         $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
         openMask('edMask');
+        if (edScroll) $('#edMask .m-body').scrollTop(edScroll);
+        edMarkClean();
     });
 }
 /* 刪除二次確認(2026-09-01 使用者明確要求)：改成必須手動輸入大寫 Y 才真的刪除。
@@ -2036,6 +2042,39 @@ function kpiInsertAfterDone(mid){
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '插入失敗'); });
 }
 
+/* 未存檔偵測／存檔時間提示(2026-10-19)：以「目前表單內容的簽名」與上次存檔(或開啟)時比對 */
+var ED_BASE = '', ED_SAVED_AT = '', ED_DIRTY = false;
+function edSig(){
+    var p = gatherPayload(); delete p.meeting_id; delete p.action; delete p.tpl_id;
+    return JSON.stringify(p);
+}
+function edNow(){
+    var d = new Date(), z = function(n){ return (n<10?'0':'')+n; };
+    return d.getFullYear()+'.'+z(d.getMonth()+1)+'.'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())+':'+z(d.getSeconds());
+}
+function edRenderState(){
+    var h;
+    if (ED_DIRTY) h = '<b style="color:#DD5138;">● 尚有未存檔的變更</b>' + (ED_SAVED_AT ? '　<span>上次存檔：'+ED_SAVED_AT+'</span>' : '');
+    else if (ED_SAVED_AT) h = '<b style="color:#8A5A2B;">✔ 已於 '+ED_SAVED_AT+' 存檔</b>';
+    else h = '<span>尚未修改</span>';
+    $('#edSaveState').html(h);
+}
+function edMarkClean(){ ED_BASE = edSig(); ED_DIRTY = false; edRenderState(); }
+function edCheckDirty(){
+    if ($('#edMask').css('display') === 'none') return;
+    var d = edSig() !== ED_BASE;
+    if (d !== ED_DIRTY){ ED_DIRTY = d; edRenderState(); }
+}
+function edClose(){
+    edCheckDirty();
+    if (ED_DIRTY && !confirm('有尚未存檔的變更，確定要關閉嗎？\n（關閉後這些變更會遺失；可按「取消」回去先存草稿）')) return;
+    closeMask('edMask');
+}
+$(document).on('input change keyup click', '#edMask', function(){ setTimeout(edCheckDirty, 50); });
+setInterval(edCheckDirty, 1000);
+window.addEventListener('beforeunload', function(e){
+    if ($('#edMask').css('display') !== 'none' && ED_DIRTY){ e.preventDefault(); e.returnValue = ''; }
+});
 /* 存草稿／送出 */
 function gatherPayload(){
     return {
@@ -2162,7 +2201,12 @@ function saveDraft(thenSubmit){
         // 這次存檔剛好把最後一個條件補齊(通常是指定主席)，後端已自動送出主席簽核——
         // 就不要再走 submitMeeting，否則會被擋「此會議記錄已送出過」
         if (res.auto_submitted){ alert('已儲存。出席簽到與負責部門回簽都已完成，系統已自動送出主席簽核。'); closeMask('edMask'); loadList(); return; }
-        if (!thenSubmit){ alert('已儲存草稿。'); closeMask('edMask'); loadList(); return; }
+        if (!thenSubmit){
+            // 存草稿不關閉(2026-10-19 使用者要求)：重新載入伺服器上的內容(新項目才拿得到 item_id)，並顯示存檔時間
+            ED_SAVED_AT = edNow(); loadList(); TEMP_ATTACH_IDS = [];
+            openEdit(EDIT_ID, true);
+            return;
+        }
         var rdy = mtReadiness();
         var doIt = (rdy.allSigned && rdy.pending>0) ? notifyPendingItems : submitMeeting;
         doIt(EDIT_ID, function(ok, msg){
