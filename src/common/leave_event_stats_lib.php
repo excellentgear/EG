@@ -145,7 +145,7 @@ if (!function_exists('eg_event_stats')) {
                 'cal_days'  => round(array_sum(array_column($cal, 'days')), 2),
             ],
             'by_person' => $persons,
-            'events' => array_slice($events, 0, 600),
+            'events' => $events,
             'events_total' => count($events),
             'filtered' => $allowed !== null,
         ];

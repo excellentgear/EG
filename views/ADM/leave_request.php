@@ -476,14 +476,28 @@ input[type=number]{-moz-appearance:textfield;}
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvCat"></table></div>
         </div>
         <div class="lv-card">
-          <h4><i class="fa fa-users"></i> 人員參與統計（會議／訓練／來訪／公出等活動，依參加次數排序）</h4>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-users"></i> 人員參與統計（會議／訓練／來訪／公出等活動，依參加次數排序）</h4>
+            <span style="flex:1;"></span>
+            <div class="pager no-print"><span id="evPInfo" style="font-size:12px;color:#9a7b4f;"></span>
+              <span style="font-size:12px;color:#9a7b4f;">每頁</span>
+              <select class="form-control input-sm" id="evPPer" style="width:auto;display:inline-block;" data-eg-skip onchange="evPPage=1;renderEvPerson()">
+                <option>5</option><option>10</option><option selected>20</option><option>50</option></select>
+              <span id="evPPager"></span></div>
+          </div>
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvPerson"></table></div>
         </div>
         <div class="lv-card">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
             <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-list"></i> 事件明細</h4>
-            <select class="form-control input-sm" id="evCatSel" style="width:auto;" data-eg-skip onchange="renderEventDetail()"></select>
+            <select class="form-control input-sm" id="evCatSel" style="width:auto;" data-eg-skip onchange="evDPage=1;renderEventDetail()"></select>
             <span id="evDetailNote" style="font-size:12px;color:#9a7b4f;"></span>
+            <span style="flex:1;"></span>
+            <div class="pager no-print"><span id="evDInfo" style="font-size:12px;color:#9a7b4f;"></span>
+              <span style="font-size:12px;color:#9a7b4f;">每頁</span>
+              <select class="form-control input-sm" id="evDPer" style="width:auto;display:inline-block;" data-eg-skip onchange="evDPage=1;renderEventDetail()">
+                <option>5</option><option>10</option><option selected>20</option><option>50</option></select>
+              <span id="evDPager"></span></div>
           </div>
           <div style="overflow-x:auto;"><table class="lv-tbl" id="tbEvDetail"></table></div>
         </div>
@@ -2414,7 +2428,19 @@ function usedTypes(buckets){
 }
 
 /* ── 行事曆活動統計（假日・會議・訓練）：資料由後端 event_stats 全量算好，這裡只畫 ── */
-let EV = null;
+let EV = null, evPPage = 1, evDPage = 1;
+function evPager(elId, fn, page, pages){
+  let pg = '';
+  if(pages > 1){
+    pg += '<button '+(page<=1?'disabled':'')+' onclick="'+fn+'('+(page-1)+')">‹</button>';
+    const from = Math.max(1, page-2), to = Math.min(pages, from+4);
+    for(let i=from;i<=to;i++) pg += '<button class="'+(i===page?'on':'')+'" onclick="'+fn+'('+i+')">'+i+'</button>';
+    pg += '<button '+(page>=pages?'disabled':'')+' onclick="'+fn+'('+(page+1)+')">›</button>';
+  }
+  $('#'+elId).html(pg);
+}
+function evGoP(n){ evPPage = n; renderEvPerson(); }
+function evGoD(n){ evDPage = n; renderEventDetail(); }
 function loadEvents(){
   $('#evKpi').html('<div class="empty-note" style="width:100%;">統計計算中…</div>');
   $.getJSON(API, {action:'event_stats', year: $('#stYear').val() || CUR_YEAR, dept_id: $('#stDept').val() || 0,
@@ -2443,19 +2469,28 @@ function renderEvents(){
       + '<td>'+(c.kind==='cal'?'假日／工作日調整':'活動')+'</td><td class="numc">'+c.count+'</td><td class="numc">'+num(c.days)+'</td>'
       + '<td class="numc">'+num(c.hours)+'</td><td class="numc">'+(c.people_times||'—')+'</td></tr>'; });
   $('#tbEvCat').html(h + '</tbody>');
-  // 人員參與表：欄位只列有人參加過的類別
-  const pc = cats.filter(c => c.kind === 'act' && (EV.by_person||[]).some(p => p.by_cat[c.id]));
-  let p = '<thead><tr><th>姓名</th>' + pc.map(c => '<th class="numc">'+esc(c.name)+'</th>').join('')
-        + '<th class="numc">合計(次)</th><th class="numc">時數</th></tr></thead><tbody>';
-  const ppl = (EV.by_person||[]).slice(0, 100);
-  if(!ppl.length) p += '<tr><td colspan="'+(3+pc.length)+'" class="empty-note">沒有資料</td></tr>';
-  ppl.forEach(x => { p += '<tr><td>'+esc(x.name)+'</td>' + pc.map(c => '<td class="numc">'+(x.by_cat[c.id]||'')+'</td>').join('')
-      + '<td class="numc"><b>'+x.count+'</b></td><td class="numc">'+num(x.hours)+'</td></tr>'; });
-  $('#tbEvPerson').html(p + '</tbody>');
+  evPPage = 1; renderEvPerson();
   const cur = $('#evCatSel').val() || '0';
   $('#evCatSel').html('<option value="0">全部類別</option>' + cats.filter(c => c.count > 0).map(c => '<option value="'+c.id+'">'+esc(c.name)+'（'+c.count+'）</option>').join('')).val(cur);
   if($('#evCatSel').val() === null) $('#evCatSel').val('0');
   renderEventDetail();
+}
+function renderEvPerson(){
+  if(!EV) return;
+  const cats = EV.cats || [];
+  const pc = cats.filter(c => c.kind === 'act' && (EV.by_person||[]).some(p => p.by_cat[c.id]));
+  const all = EV.by_person || [], per = parseInt($('#evPPer').val() || 20, 10);
+  const pages = Math.max(1, Math.ceil(all.length / per));
+  if(evPPage > pages) evPPage = pages;
+  const ppl = all.slice((evPPage-1)*per, evPPage*per);
+  let p = '<thead><tr><th>姓名</th>' + pc.map(c => '<th class="numc">'+esc(c.name)+'</th>').join('')
+        + '<th class="numc">合計(次)</th><th class="numc">時數</th></tr></thead><tbody>';
+  if(!ppl.length) p += '<tr><td colspan="'+(3+pc.length)+'" class="empty-note">沒有資料</td></tr>';
+  ppl.forEach(x => { p += '<tr><td>'+esc(x.name)+'</td>' + pc.map(c => '<td class="numc">'+(x.by_cat[c.id]||'')+'</td>').join('')
+      + '<td class="numc"><b>'+x.count+'</b></td><td class="numc">'+num(x.hours)+'</td></tr>'; });
+  $('#tbEvPerson').html(p + '</tbody>');
+  evPager('evPPager', 'evGoP', evPPage, pages);
+  $('#evPInfo').text('共 ' + all.length + ' 人，第 ' + evPPage + ' / ' + pages + ' 頁');
 }
 function renderEventDetail(){
   if(!EV) return;
@@ -2463,11 +2498,17 @@ function renderEventDetail(){
   const rows = (EV.events||[]).filter(e => !cid || +e.category_id === cid);
   let h = '<thead><tr><th>日期</th><th>時間</th><th>類別</th><th>事件</th><th class="numc">天數</th><th class="numc">時數</th><th>參與人員</th></tr></thead><tbody>';
   if(!rows.length) h += '<tr><td colspan="7" class="empty-note">沒有資料</td></tr>';
+  const per = parseInt($('#evDPer').val() || 20, 10), pages = Math.max(1, Math.ceil(rows.length / per));
+  if(evDPage > pages) evDPage = pages;
+  const all = rows.length;
+  rows.splice(0, rows.length, ...rows.slice((evDPage-1)*per, evDPage*per));
   rows.forEach(e => { h += '<tr><td>'+egFmtDate(e.date)+(e.end_date && e.end_date!==e.date ? '～'+egFmtDate(e.end_date) : '')+'</td><td>'+esc(e.time)+'</td><td>'+esc(e.category)+'</td><td>'+esc(e.title)+'</td>'
       + '<td class="numc">'+(e.days?num(e.days):'')+'</td><td class="numc">'+(e.hours?num(e.hours):'')+'</td>'
       + '<td>'+(e.people ? esc(e.names.join('、'))+(e.people>e.names.length?' 等'+e.people+'人':'') : '—')+'</td></tr>'; });
   $('#tbEvDetail').html(h + '</tbody>');
-  $('#evDetailNote').text(EV.events_total > (EV.events||[]).length ? '（明細僅列最近 ' + EV.events.length + ' 筆，統計數字為全部 ' + EV.events_total + ' 筆）' : '');
+  evPager('evDPager', 'evGoD', evDPage, pages);
+  $('#evDInfo').text('共 ' + all + ' 筆，第 ' + evDPage + ' / ' + pages + ' 頁');
+  $('#evDetailNote').text('');
 }
 
 function renderStats(){
