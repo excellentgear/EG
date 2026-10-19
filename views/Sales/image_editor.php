@@ -2155,7 +2155,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     #draft-modal .pq-fd .cn { color: #8b949e; font-size: 11px; }
     #draft-modal .pq-fd .ic { color: #8b949e; padding: 0 2px; }
     #draft-modal .pq-fd .ic:hover { color: #f0a24b; }
-    #pq-preview { position: absolute; inset: 0; background: rgba(0,0,0,.72); display: none; align-items: center; justify-content: center; z-index: 5; }
+    #pq-preview { position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none; align-items: center; justify-content: center; z-index: 10; }
     #pq-preview.show { display: flex; }
 </style>
 <div class="modal-mask" id="draft-modal">
@@ -2196,18 +2196,20 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <button class="tb-btn" onclick="hideModal('draft-modal')">關閉</button>
         </div>
         <div id="pq-preview" onclick="if(event.target===this)pqPreviewClose()">
-            <div style="background:#2c2f33;border:1px solid #45494f;border-radius:8px;padding:12px;width:560px;max-width:94%;max-height:88%;overflow-y:auto;">
-                <div style="text-align:center;background:#1b1d20;border-radius:4px;min-height:120px;"><img id="pq-pv-img" style="max-width:100%;max-height:46vh;"></div>
-                <div class="frm-row"><label style="min-width:60px;">名稱</label><input type="text" id="pq-pv-name" maxlength="100" style="flex:1;"></div>
-                <div class="frm-row"><label style="min-width:60px;">資料夾</label><select id="pq-pv-folder" style="flex:1;" data-eg-skip></select></div>
-                <div class="frm-row"><label style="min-width:60px;">#標示</label><input type="text" id="pq-pv-tags" style="flex:1;" placeholder="空白分隔，最多 10 個、每個 12 字內"></div>
-                <div id="pq-pv-meta" style="font-size:11.5px;color:#8b949e;margin-bottom:8px;"></div>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <button class="tb-btn primary" onclick="pqPreviewOpen()"><i class="fa fa-folder-open"></i> 開啟編輯</button>
-                    <button class="tb-btn" onclick="pqPreviewSaveMeta()"><i class="fa fa-check"></i> 儲存名稱／資料夾／#標示</button>
-                    <button class="tb-btn" onclick="pqPreviewOverwrite()" title="用目前畫布內容覆蓋這個檔案"><i class="fa fa-refresh"></i> 以目前畫布覆蓋</button>
-                    <button class="tb-btn" style="color:#ff8a80;" onclick="pqPreviewDelete()"><i class="fa fa-trash"></i> 刪除</button>
-                    <button class="tb-btn" style="margin-left:auto;" onclick="pqPreviewClose()">返回</button>
+            <div style="background:#2c2f33;border:1px solid #45494f;border-radius:8px;padding:12px;width:860px;max-width:96%;max-height:94vh;display:flex;gap:14px;">
+                <div style="flex:1 1 55%;min-width:0;display:flex;align-items:center;justify-content:center;background:#1b1d20;border-radius:4px;"><img id="pq-pv-img" style="max-width:100%;max-height:80vh;"></div>
+                <div style="flex:0 0 300px;display:flex;flex-direction:column;">
+                    <div class="frm-row" style="margin-top:0;"><label style="min-width:50px;">名稱</label><input type="text" id="pq-pv-name" maxlength="100" style="flex:1;min-width:0;"></div>
+                    <div class="frm-row"><label style="min-width:50px;">資料夾</label><select id="pq-pv-folder" style="flex:1;min-width:0;" data-eg-skip></select></div>
+                    <div class="frm-row"><label style="min-width:50px;">#標示</label><input type="text" id="pq-pv-tags" style="flex:1;min-width:0;" placeholder="空白分隔，最多 10 個"></div>
+                    <div id="pq-pv-meta" style="font-size:11.5px;color:#8b949e;margin-bottom:10px;line-height:1.5;"></div>
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:auto;">
+                        <button class="tb-btn primary" onclick="pqPreviewOpen()"><i class="fa fa-folder-open"></i> 開啟編輯</button>
+                        <button class="tb-btn" onclick="pqPreviewSaveMeta()"><i class="fa fa-check"></i> 儲存名稱／資料夾／#標示</button>
+                        <button class="tb-btn" onclick="pqPreviewOverwrite()" title="用目前畫布內容覆蓋這個檔案"><i class="fa fa-refresh"></i> 以目前畫布覆蓋</button>
+                        <button class="tb-btn" style="color:#ff8a80;" onclick="pqPreviewDelete()"><i class="fa fa-trash"></i> 刪除</button>
+                        <button class="tb-btn" onclick="pqPreviewClose()">返回</button>
+                    </div>
                 </div>
             </div>
         </div>
