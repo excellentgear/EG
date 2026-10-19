@@ -850,13 +850,12 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
         if ($cx > 0) { $q = eg_demo_q1($db, "SELECT dimension, stakeholder, needs, issue FROM rm_item WHERE item_id=?", [$cx]); if ($q) $src = array_merge($row, $q); }
         $ck = rm_rule_classify(trim(($src['stakeholder'] ?? '') . ' ' . ($src['needs'] ?? '') . ' ' . ($src['issue'] ?? '')), (string)($src['dimension'] ?? ''))[0] ?? '';
         $label = (string)(RM_RULE_CATS[$ck]['label'] ?? '');
-        if ($label === '' || $label === '一般議題') $label = mb_substr((string)$row['issue'], 0, 16) . '…';
+        if ($label === '' || $label === '一般議題') { $lp = preg_split('/[，,。；;]/u', trim((string)$row['issue'])); $label = mb_substr($lp[0], 0, 24); }     // 沒有對到固定類別：取議題的第一個短句當標題
         $date = eg_demo_wd($db, min($today, date('Y-m-d', strtotime($doc['fill_date'] . ' +' . (1 + $i * 2) . ' day'))), -1);
         if ($date < $doc['fill_date']) $date = $doc['fill_date'];
         $i++;
         $items = []; $involved = []; $due = $Y . '-12-31'; $dueTxt = str_replace('-', '.', $due);
         $dn = (mb_strpos((string)($src['stakeholder'] ?? ''), '客戶') !== false) ? '業務課' : '管理課';     // 句中沒有部門名時的預設（客戶議題→業務課），之後沿用前一句的部門
-        $issueTxt = trim((string)$src['issue']); if (mb_strlen($issueTxt) > 90) $issueTxt = mb_substr($issueTxt, 0, 90) . '…';
         $nCl = count($clauses);
         foreach ($clauses as $ci => $cl) {
             $dn = eg_draft_clause_dept($cl, array_keys($own), $dn); $ow = $own[$dn] ?? $own['管理課'];
@@ -865,9 +864,13 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
             foreach (array_keys($own) as $d2) if ($d2 !== $ow['dept'] && mb_strpos($cl, $d2) !== false) $help[] = $d2;
             foreach (array_merge([$ow['dept']], $help) as $d2) $involved[$d2] = $own[$d2] ?? $ow;
             // 溝通問題＝要處理的議題（為什麼要溝通）；回覆內容＝決議（誰負責、怎麼做、何時前完成、由哪一條措施追蹤）——兩欄不重複同一段文字
-            $q = ($ci === 0 ? $issueTxt . '。' : '（同上議題）') . '針對「' . $cl . '」，需確認執行方式、負責單位與完成期限。';
+            // 溝通問題要簡短：只寫「哪個議題、要確認什麼」（議題全文在風險表／處境分析表，不整段抄進來）；措施本身寫在回應措施與追蹤
+            $q = '【' . $label . '】需確認「' . $cl . '」的負責單位、執行方式與完成期限。';
+            // 持續性工作（定期、每月、持續…）與一次性工作的期限寫法不同：持續性的要寫明是「本年度執行」並於年底檢視
+            $recurring = (bool)preg_match('/(每[年月週周季日]|定期|持續|隨時|平時)/u', $cl);
             $a = '由' . $ow['dept'] . '（' . $ow['name'] . '）負責' . ($help ? '，' . implode('、', $help) . '配合' : '')
-               . '，預計 ' . $dueTxt . ' 前完成，並以措施追蹤 @@TRK@@ 追蹤執行情形。';
+               . ($recurring ? '，持續執行並於 ' . $dueTxt . ' 前完成本年度執行與檢視' : '，預計 ' . $dueTxt . ' 前完成')
+               . '；由措施追蹤 @@TRK@@ 追蹤執行情形。';
             $items[] = ['q' => $q, 'a' => $a, 'track' => ['owner' => $ow, 'due' => $due, 'action' => $cl]];
         }
         // 管道：公司內部以面談為主；涉及人數眾多（4 個部門以上）才用會議（勾「會議」要有會議紀錄佐證，所以不預設）
