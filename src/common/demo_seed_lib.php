@@ -865,7 +865,7 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
             foreach (array_merge([$ow['dept']], $help) as $d2) $involved[$d2] = $own[$d2] ?? $ow;
             // 溝通問題＝要處理的議題（為什麼要溝通）；回覆內容＝決議（誰負責、怎麼做、何時前完成、由哪一條措施追蹤）——兩欄不重複同一段文字
             // 溝通問題要簡短：只寫「哪個議題、要確認什麼」（議題全文在風險表／處境分析表，不整段抄進來）；措施本身寫在回應措施與追蹤
-            $q = '【' . $label . '】需確認「' . $cl . '」的負責單位、執行方式與完成期限。';
+            $q = '需確認「' . $cl . '」的負責單位、執行方式與完成期限（對應風險與機會因應措施管制表 ' . (trim((string)$row['confirm_no']) !== '' ? $row['confirm_no'] : '第 ' . (int)$row['seq'] . ' 項') . '）。';
             // 持續性工作（定期、每月、持續…）與一次性工作的期限寫法不同：持續性的要寫明是「本年度執行」並於年底檢視
             $recurring = (bool)preg_match('/(每[年月週周季日]|定期|持續|隨時|平時)/u', $cl);
             $a = '由' . $ow['dept'] . '（' . $ow['name'] . '）負責' . ($help ? '，' . implode('、', $help) . '配合' : '')
