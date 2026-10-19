@@ -149,7 +149,7 @@ function eg_demo_record(PDO $db, array $cats, array $o): array
         $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_cat_id, party_kind_other, party_name, party_ref_id, ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
                 maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort, status, is_draft, created_by, created_by_name, created_at, updated_at)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?,'draft',1,?,?,NOW(),NOW())")
-           ->execute([$no, $o['type'] ?? 'irregular', $date, $kind, (int)$cat['cat_id'], $kind === 'other' ? $o['cat'] : '', $o['party'], $o['ref'] ?? null,
+           ->execute([$no, $o['type'] ?? 'irregular', $date, $kind, (int)$cat['cat_id'], $kind === 'other' ? ($o['kind_other'] ?? $o['cat']) : '', $o['party'], $o['ref'] ?? null,
                       (int)in_array('phone', $o['ch']), (int)in_array('face', $o['ch']), (int)in_array('email', $o['ch']), (int)in_array('meeting', $o['ch']),
                       $maker['id'], $maker['name'], $mk['department_id'], $mk['department_name'], $mk['position_id'], $mk['position_name'], $mk['pos_sort'], $du['id'], $du['name']]);
     } else
@@ -159,7 +159,7 @@ function eg_demo_record(PDO $db, array $cats, array $o): array
             status, submit_date, submitted_at, mgr_skip, mgr_user_id, mgr_name, mgr_dept_name, mgr_pos_name, mgr_date, mgr_at,
             gm_user_id, gm_name, gm_date, gm_at, remark, created_by, created_by_name, created_at, updated_at)
           VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?,?,0,'',?,?,?,?,?,?,?,'closed',?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'超級管理員',?,?)")
-       ->execute([$no, $o['type'] ?? 'irregular', $date, $kind, (int)$cat['cat_id'], $kind === 'other' ? $o['cat'] : '', $o['party'], $o['ref'] ?? null,
+       ->execute([$no, $o['type'] ?? 'irregular', $date, $kind, (int)$cat['cat_id'], $kind === 'other' ? ($o['kind_other'] ?? $o['cat']) : '', $o['party'], $o['ref'] ?? null,
                   (int)in_array('phone', $o['ch']), (int)in_array('face', $o['ch']), (int)in_array('email', $o['ch']), (int)in_array('meeting', $o['ch']),
                   $maker['id'], $maker['name'], $mk['department_id'], $mk['department_name'], $mk['position_id'], $mk['position_name'], $mk['pos_sort'],
                   $date, $ts(9, 10), $mgr ? 0 : 1, $mgr['id'] ?? null, $mgr['name'] ?? null, $mgr['dept_name'] ?? null, $mgr['pos_name'] ?? null, $mgr ? $date : null, $mgr ? $ts(10, 20) : null,
@@ -407,7 +407,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $in = rm_audit_in($db, 'd_setting_id');
     $set = rm_settings($db);
     $cats = []; foreach (eg_demo_qa($db, "SELECT cat_id, name, kind FROM comm_track_cat") as $c) $cats[$c['name']] = $c;
-    foreach (['客戶', '供應商', '員工', '環保局', '消防局', '人事行政機關'] as $need) if (empty($cats[$need])) throw new RuntimeException('溝通管理缺少類別「' . $need . '」，請先到模組設定建立');
+    foreach (['客戶', '供應商', '員工', '主管機關'] as $need) if (empty($cats[$need])) throw new RuntimeException('溝通管理缺少類別「' . $need . '」，請先到模組設定建立');
 
     /* ---------- 1. 稽核製程的真實對象 ---------- */
     $dataYear = $Y - 1;
@@ -466,7 +466,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     $a1 = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q1], '生管組盤點稽核製程（插齒、齒研）負荷後回覆可行交期，並由業務課回覆客戶。');
     $q2 = '客戶希望每週了解訂單的出貨進度與交期狀況。';
     $a2 = eg_demo_text($db, $st, 'comm_reply', ['party' => $c1['name'], 'party_kind' => '客戶', 'question' => $q2], '業務課每週回報客戶出貨進度與交期狀況。');
-    $rec(['date' => $d(3, 24), 'type' => 'regular', 'cat' => '客戶', 'party' => $c1['name'], 'ref' => $c1['id'], 'ch' => ['meeting'], 'maker' => $mk, 'items' => [
+    $rec(['date' => $d(3, 24), 'type' => 'regular', 'cat' => '客戶', 'party' => $c1['name'], 'ref' => $c1['id'], 'ch' => ['face'], 'maker' => $mk, 'items' => [
         ['q' => $q1, 'a' => $a1, 'track' => ['owner' => $own['生管組'], 'due' => $d(4, 7), 'closed' => $d(4, 3), 'action' => '生管組盤點稽核製程（插齒、齒研）負荷並回覆交期', 'note' => '已盤點完成並回覆客戶。']],
         ['q' => $q2, 'a' => $a2, 'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => eg_demo_text($db, $st, 'comm_track_action', ['party' => $c1['name'], 'content' => $q2, 'reply' => $a2], '業務課每週回報客戶準時出貨進度與交期狀況', '交期')]],
     ]]);
@@ -474,7 +474,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     // 客戶集中度
     $q = '客戶希望每季提供一次訂單預測，雙方才能提早備料與預留產能。';
     $a = eg_demo_text($db, $st, 'comm_reply', ['party' => $c2['name'], 'party_kind' => '客戶', 'question' => $q], '同意每季溝通一次訂單預測，由業務課負責並提供生管組參考。');
-    $rec(['date' => $d(1, 20), 'type' => 'regular', 'cat' => '客戶', 'party' => $c2['name'], 'ref' => $c2['id'], 'ch' => ['meeting'], 'maker' => $mk, 'items' => [
+    $rec(['date' => $d(1, 20), 'type' => 'regular', 'cat' => '客戶', 'party' => $c2['name'], 'ref' => $c2['id'], 'ch' => ['face'], 'maker' => $mk, 'items' => [
         ['q' => $q, 'a' => $a, 'track' => ['owner' => $own['業務課'], 'due' => $eoy, 'action' => '每季與前三大客戶溝通訂單預測與產能預留，並提供生管組參考；持續開拓客源以分散風險']],
     ]]);
     $gateCat = 'quality';
@@ -519,7 +519,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     ]]);
     $gateCat = 'environment';
     // 環境議題：減碳與環保法規、客戶的環境要求
-    $rec(['date' => $d(8, 25), 'type' => 'regular', 'cat' => '環保局', 'party' => '環保局　環保與減碳法規諮詢窗口', 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
+    $rec(['date' => $d(8, 25), 'type' => 'regular', 'cat' => '主管機關', 'kind_other' => '環保局', 'party' => '環保局　環保與減碳法規諮詢窗口', 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
         ['q' => '環保與減碳相關法規近期的異動，以及本公司適用的申報與管制要求。', 'a' => '管理課盤點適用的法規與客戶環境要求，指定負責部門並列入溝通管制表。',
          'track' => ['owner' => $own['管理課'], 'due' => $d(9, 30), 'closed' => $d(9, 18), 'action' => '盤點適用的環保與減碳法規及客戶環境要求，指定負責部門並列入溝通管制表', 'note' => '已完成盤點並指定負責部門。']],
     ]]);
@@ -528,7 +528,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     foreach ([['環保局', '環保局　事業廢棄物申報窗口', '廢切削油與廢棄刀具的清運及網路申報方式、期限與聯單保存要求。', '依規定完成本期事業廢棄物申報，聯單歸檔', $d(5, 14), $d(6, 30), $d(6, 20)],
               ['消防局', '消防局　消防安全設備檢修申報窗口', '消防安全設備定期檢修申報的時程與應備文件。', '委託合格檢修業者辦理檢修並申報', $d(4, 22), $d(5, 29), $d(5, 22)],
               ['人事行政機關', '人事行政機關　勞工健康與職安衛申報窗口', '年度勞工健康檢查與職安衛教育訓練的申報及紀錄保存要求。', '完成健康檢查與職安衛教育訓練申報並留存紀錄', $d(3, 3), $d(4, 15), $d(4, 8)]] as $g) {
-        $rec(['date' => $g[4], 'type' => 'regular', 'cat' => $g[0], 'party' => $g[1], 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
+        $rec(['date' => $g[4], 'type' => 'regular', 'cat' => '主管機關', 'kind_other' => $g[0], 'party' => $g[1], 'ch' => ['phone'], 'maker' => $own['管理課'], 'items' => [
             ['q' => $g[2], 'a' => '依規定於期限內完成申報，並保存紀錄備查。', 'track' => ['owner' => $own['管理課'], 'due' => $g[5], 'closed' => $g[6], 'action' => $g[3], 'note' => '已完成並歸檔。']]]]);
     }
     $gateCat = 'inquiry';
@@ -572,7 +572,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $db->prepare("INSERT INTO comm_ctrl (maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_name, party_kind, party_kind_other, party, party_ref_id, party_user_id,
                 content, channel, freq, freq_n, freq_unit, freq_times, next_due_date, remind_enabled, remark, sort_order, created_by, created_by_name, created_at, updated_at)
               VALUES (?,?,?,?,?,'customer','',?,?,NULL,?,?,?,?,?,?,?,0,?,?,1,'超級管理員',NOW(),NOW())")
-           ->execute([$mkr['id'], $mkr['name'], $mi['department_id'], $mi['department_name'], $mi['position_name'], $cc['name'], $cc['id'], '訂單預測、交期與產能預留', '會議、電話',
+           ->execute([$mkr['id'], $mkr['name'], $mi['department_id'], $mi['department_name'], $mi['position_name'], $cc['name'], $cc['id'], '訂單預測、交期與產能預留', '面談、電話',
                       cm_freq_text(3, 'month', 1), 3, 'month', 1, $d(12, 15) > $today ? $d(12, 15) : date('Y-m-d', strtotime($today . ' +3 months')),
                       EG_DEMO_TAG . $Y . ' 年稽核製程出貨前三大客戶之一', ($i + 1) * 10]);
     }
@@ -870,9 +870,10 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
                . '預計 ' . $dueTxt . ' 前完成，執行情形由措施追蹤 @@TRK@@ 追蹤。';
             $items[] = ['q' => $q, 'a' => $a, 'track' => ['owner' => $ow, 'due' => $due, 'action' => $cl]];
         }
+        // 管道：公司內部以面談為主；涉及人數眾多（4 個部門以上）才用會議（勾「會議」要有會議紀錄佐證，所以不預設）
         // 溝通對象（類別＝員工）：涉及的部門＋人員，不限定一位
         $partyTxt = implode('、', array_map(function ($d2, $o2) { return $d2 . ' ' . $o2['name']; }, array_keys($involved), array_values($involved)));
-        $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $partyTxt, 'ch' => ['meeting'], 'maker' => $own['管理課'], 'items' => $items]);
+        $made = eg_demo_record($db, $cats, ['date' => $date, 'type' => 'regular', 'cat' => '員工', 'party' => $partyTxt, 'ch' => (count($involved) >= 4 ? ['meeting'] : ['face']), 'maker' => $own['管理課'], 'items' => $items]);
         foreach ($made['tracks'] as $tid) {     // 回覆內容裡的追蹤編號：追蹤建立後才知道，逐條補上
             $db->prepare("UPDATE comm_record_item SET reply=REPLACE(reply,'@@TRK@@',(SELECT track_no FROM comm_track WHERE track_id=?)) WHERE track_id=?")->execute([(int)$tid, (int)$tid]);
         }

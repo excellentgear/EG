@@ -229,15 +229,17 @@ function cm_ensure_schema(PDO $db): void
         }
         if ($fresh) {   // 第一次建立時的起點：原本寫死的四種＋使用者舉的三個例子，管理員可改名、停用、刪除或再新增
             $seed = [['客戶','customer',0,10], ['供應商','supplier',0,20], ['員工','employee',0,30],
-                     ['環保局','government',0,40], ['消防局','government',0,50], ['人事行政機關','government',0,60], ['其他','other',1,900]];
+                     ['主管機關','government',1,40], ['其他','other',1,900]];
             foreach ($seed as $s0) {
                 $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sort_order, created_by, created_at, updated_at) VALUES (?,?,?,?,'系統預設',NOW(),NOW())")->execute($s0);
             }
+            $db->exec("UPDATE comm_track_cat SET sub_options='環保局\n消防局\n人事行政機關' WHERE name='主管機關' AND kind='government'");
         }
     } catch (Throwable $e) {}
 
     /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
     $alters = [
+        "ALTER TABLE comm_track_cat ADD COLUMN sub_options TEXT NULL COMMENT '子選項（一行一個；選到此類別時要再勾一個子選項，另有「其他」自填）'",
         "ALTER TABLE comm_record ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
         "ALTER TABLE comm_track ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝草稿（同上）'",
         "ALTER TABLE comm_track ADD COLUMN cat_id INT NULL COMMENT '類別 comm_track_cat.cat_id（NULL＝未分類）' AFTER party",

@@ -72,7 +72,7 @@ function cmNow(PDO $db): array {
 
 /** 類別清單；$all=false 只回啟用中的（給下拉用），true 連停用的與使用筆數一起回（給管理員設定用） */
 function cmCatList(PDO $db, bool $all): array {
-    $sql = "SELECT c.cat_id, c.name, c.kind, c.free_text, c.sort_order, c.is_active,
+    $sql = "SELECT c.cat_id, c.name, c.kind, c.free_text, c.sub_options, c.sort_order, c.is_active,
                    (SELECT COUNT(*) FROM comm_track t WHERE t.cat_id=c.cat_id AND t.is_deleted=0) AS used_track,
                    (SELECT COUNT(*) FROM comm_record r WHERE r.party_cat_id=c.cat_id AND r.is_deleted=0) AS used_rec
             FROM comm_track_cat c " . ($all ? '' : 'WHERE c.is_active=1 ') . "ORDER BY c.sort_order, c.cat_id";
@@ -95,9 +95,10 @@ function cmKindText(PDO $db, array $r): string {
     $id = (int)($r['party_cat_id'] ?? 0);
     if ($id > 0) {
         if (!isset($cache[$id])) {
-            $st = $db->prepare("SELECT name, free_text FROM comm_track_cat WHERE cat_id=?"); $st->execute([$id]);
+            $st = $db->prepare("SELECT name, free_text, sub_options FROM comm_track_cat WHERE cat_id=?"); $st->execute([$id]);
             $cache[$id] = $st->fetch(PDO::FETCH_ASSOC) ?: false;
         }
+        if ($cache[$id] && trim((string)$cache[$id]['sub_options']) !== '') return (string)$cache[$id]['name'] . (($r['party_kind_other'] ?? '') !== '' ? '（' . $r['party_kind_other'] . '）' : '');     // 有子選項的類別：主管機關（環保局）
         if ($cache[$id]) return $cache[$id]['free_text'] ? (($r['party_kind_other'] ?? '') !== '' ? (string)$r['party_kind_other'] : (string)$cache[$id]['name']) : (string)$cache[$id]['name'];
     }
     $k = (string)($r['party_kind'] ?? '');
@@ -374,7 +375,7 @@ if ($action === 'rec_get') {
     $mgr   = cm_dept_manager_pool($db, (int)$r['maker_id'], (int)$r['maker_dept_id'], (int)$r['maker_pos_sort'], $biz);
     $r['kind_text'] = cmKindText($db, $r);
     $catRow = null;
-    if ((int)$r['party_cat_id'] > 0) { $cq = $db->prepare("SELECT cat_id, name, kind, free_text, is_active FROM comm_track_cat WHERE cat_id=?"); $cq->execute([(int)$r['party_cat_id']]); $catRow = $cq->fetch(PDO::FETCH_ASSOC) ?: null; }
+    if ((int)$r['party_cat_id'] > 0) { $cq = $db->prepare("SELECT cat_id, name, kind, free_text, sub_options, is_active FROM comm_track_cat WHERE cat_id=?"); $cq->execute([(int)$r['party_cat_id']]); $catRow = $cq->fetch(PDO::FETCH_ASSOC) ?: null; }
     jout([
         'rec'      => $r,
         'cat'      => $catRow,
@@ -1190,6 +1191,11 @@ if ($action === 'cat_save') {
     $kind = cmS($_POST['kind'] ?? 'other', 12);
     if (!isset(CM_CAT_KINDS[$kind])) jerr('挑對象的方式不正確');
     $free = (in_array($kind, ['other', 'government'], true) && !empty($_POST['free_text'])) ? 1 : 0;
+    // 子選項（只有「政府單位」類別可設）：一行一個、去重、不含「其他」（其他固定附在最後由填表人自填）
+    $subLines = [];
+    if ($kind === 'government') foreach (preg_split('/\r?\n/', (string)($_POST['sub_options'] ?? '')) as $l) { $l = cmS($l, 30); if ($l !== '' && $l !== '其他' && !in_array($l, $subLines, true)) $subLines[] = $l; }
+    $subs = $subLines ? implode("\n", array_slice($subLines, 0, 20)) : null;
+    if ($subs !== null) $free = 1;      // 有子選項＝選到時要再勾子選項／填其他內容，存在「類別說明」欄
     $q = $db->prepare("SELECT cat_id FROM comm_track_cat WHERE name=? AND cat_id<>?");
     $q->execute([$name, $id]);
     if ($q->fetchColumn()) jerr('已經有「' . $name . '」這個類別了');
@@ -1205,11 +1211,11 @@ if ($action === 'cat_save') {
             $u = $db->prepare("SELECT COUNT(*) FROM comm_record WHERE party_cat_id=? AND is_deleted=0"); $u->execute([$id]);
             if ((int)$u->fetchColumn() > 0) jerr('已有溝通記錄表使用這個類別，不能更改「挑對象的方式」；請另外新增一個類別。');
         }
-        $db->prepare("UPDATE comm_track_cat SET name=?, kind=?, free_text=?, sort_order=?, is_active=?, updated_at=? WHERE cat_id=?")->execute([$name, $kind, $free, $sort, $act, $now['n'], $id]);
+        $db->prepare("UPDATE comm_track_cat SET name=?, kind=?, free_text=?, sub_options=?, sort_order=?, is_active=?, updated_at=? WHERE cat_id=?")->execute([$name, $kind, $free, $subs, $sort, $act, $now['n'], $id]);
     } else {
         if (!$sort) $sort = (int)$db->query("SELECT COALESCE(MAX(CASE WHEN sort_order<900 THEN sort_order END),0)+10 FROM comm_track_cat")->fetchColumn();
-        $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sort_order, is_active, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)")
-           ->execute([$name, $kind, $free, $sort, $act, $uname, $now['n'], $now['n']]);
+        $db->prepare("INSERT INTO comm_track_cat (name, kind, free_text, sub_options, sort_order, is_active, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$name, $kind, $free, $subs, $sort, $act, $uname, $now['n'], $now['n']]);
         $id = (int)$db->lastInsertId();
     }
     jout(['cat_id'=>$id, 'track_cats'=>cmCatList($db, false), 'track_cats_all'=>cmCatList($db, true)]);

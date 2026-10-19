@@ -406,7 +406,8 @@ $roleLabel = cm_role_label($perms);
                 </div>
 
                 <div class="pk-box" id="pkOtherBox" style="display:none;">
-                    <div class="pk-line">
+                    <div id="pkSubRow" style="display:none;margin-bottom:6px;"></div>
+                    <div class="pk-line" id="pkOtherLine">
                         <label>類別說明 <span style="color:#DD5138;">*</span></label>
                         <input type="text" id="fKindOther" class="pk-grow" maxlength="100"
                                data-eg-hint="例如：主管機關、認證機構、社區、股東">
@@ -814,7 +815,7 @@ $roleLabel = cm_role_label($perms);
             「挑利害關係者的方式」決定記錄表選了這個類別之後怎麼填對象：客戶／供應商會搜尋主檔、員工先選部門再挑人、
             <b>環保局、消防局、人事行政機關這類機關選「政府單位」</b>（手動填寫名稱）；其他不屬於上面幾種的選「其他」。已經有資料使用的類別不能刪除、也不能改挑對象的方式，只能停用。</div>
         <table class="cm-table" style="margin-bottom:6px;">
-            <thead><tr><th>類別名稱</th><th>挑利害關係者的方式</th><th>類別說明</th><th>排序</th><th>啟用</th><th>使用中</th><th>操作</th></tr></thead>
+            <thead><tr><th>類別名稱</th><th>挑利害關係者的方式</th><th>類別說明</th><th>子選項（一行一個；僅政府單位）</th><th>排序</th><th>啟用</th><th>使用中</th><th>操作</th></tr></thead>
             <tbody id="catBody"></tbody>
         </table>
         <button class="b-mini warm" id="btnCatAdd"><i class="fa fa-plus"></i> 新增類別</button>
@@ -1591,7 +1592,7 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
         $.each(cats, function(_, c){ if (!cur && c.kind === kind && (kind === 'other' ? +c.free_text : !+c.free_text)) cur = +c.cat_id; });
     }
     $.each(cats, function(_, c){
-        kr.append('<label><input type="radio" name="cKind" value="' + c.cat_id + '" data-kind="' + esc(c.kind === 'government' ? 'other' : c.kind) + '" data-free="' + (+c.free_text ? 1 : 0) + '"'
+        kr.append('<label><input type="radio" name="cKind" value="' + c.cat_id + '" data-kind="' + esc(c.kind === 'government' ? 'other' : c.kind) + '" data-free="' + (+c.free_text ? 1 : 0) + '" data-sub="' + esc(c.sub_options || '') + '"'
             + (+c.cat_id === cur ? ' checked' : '') + '> ' + esc(c.name) + '</label>');
     });
     if (!cats.length) kr.append('<span class="hint">尚未設定任何類別，請洽溝通管理員到「模組設定」建立。</span>');
@@ -1619,6 +1620,25 @@ var PARTY = {ref_id:'', user_id:0, contact_id:0, contact_name:''};
 
 function currentKind(){ var el = $('input[name=cKind]:checked'); return el.length ? (el.attr('data-kind') || '') : ''; }   // 挑利害關係者的方式：customer/supplier/employee/other
 function currentCat(){ return +$('input[name=cKind]:checked').val() || 0; }
+function catSubs(){ var s = $.trim($('input[name=cKind]:checked').attr('data-sub') || ''); return s ? s.split(/\r?\n/) : []; }
+/** 有子選項的類別（例如「主管機關」）：單選 環保局／消防局／人事行政機關／其他（其他才出現輸入框）；選擇結果存在「類別說明」欄 */
+function showSubPicker(){
+    var subs = catSubs(), $row = $('#pkSubRow').empty().hide(), $line = $('#pkOtherLine');
+    $line.show().find('label').first().html('類別說明 <span style="color:#DD5138;">*</span>');
+    if (!subs.length) return;
+    var cur = $.trim($('#fKindOther').val() || ''), hit = subs.indexOf(cur) >= 0, ro = REC && !REC.can_edit;
+    var h = '<b>' + esc($.trim($('input[name=cKind]:checked').parent().text())) + '</b>　';
+    $.each(subs, function(_, n){ h += '<label style="font-weight:normal;margin-right:12px;"><input type="radio" name="cSub" value="' + esc(n) + '"' + (hit && cur === n ? ' checked' : '') + (ro ? ' disabled' : '') + '> ' + esc(n) + '</label>'; });
+    h += '<label style="font-weight:normal;"><input type="radio" name="cSub" value="__other"' + (!hit && cur ? ' checked' : '') + (ro ? ' disabled' : '') + '> 其他</label>';
+    $row.html(h).show();
+    $line.find('label').first().html('其他：請輸入內容 <span style="color:#DD5138;">*</span>');
+    $line.toggle(!hit && !!cur);
+}
+$(document).on('change', 'input[name=cSub]', function(){
+    var v = $('input[name=cSub]:checked').val(), subs = catSubs();
+    if (v === '__other'){ if (subs.indexOf($.trim($('#fKindOther').val())) >= 0) $('#fKindOther').val(''); $('#pkOtherLine').show(); $('#fKindOther').focus(); }
+    else { $('#fKindOther').val(v); $('#pkOtherLine').hide(); }
+});
 function catFree(){ return $('input[name=cKind]:checked').attr('data-free') === '1'; }                                  // 要再填「類別說明」的類別
 
 /** 依目前類別切換右側輸入區塊；$rec 有值＝開啟既有單據，要把已存的值回填 */
@@ -1664,12 +1684,13 @@ function resetPartyPicker(rec){
         fillDeptSel('#pkDept', PARTY.ref_id, '請選擇部門…');
         loadDeptPeople(PARTY.ref_id, '#pkUser', $('#fCommDate').val() || TODAY, PARTY.user_id, function(){ syncPartyFromPicker(); });
     } else if (kind === 'other'){
-        if (catFree()) $('#pkOtherBox').show();       // 一般的「其他」類別（環保局、消防局…）名稱就是類別，不必再填說明
+        if (catFree()){ $('#pkOtherBox').show(); showSubPicker(); }       // 一般的「其他」類別要填說明；有子選項的類別（主管機關）改成勾選子選項＋「其他」自填
     }
     if (kind !== 'customer' && kind !== 'supplier' && kind !== 'employee') syncPartyFromPicker();
 }
 $('#recKindRow').on('change', 'input[name=cKind]', function(){
     $('#fParty').val('');                 // 換類別＝換一套對象，舊的名稱留著只會誤導
+    $('#fKindOther').val('');
     resetPartyPicker(null);
 });
 
@@ -1892,7 +1913,7 @@ function collectRec(){
     d.party_kind = currentKind();
     if (!d.party_cat_id){ setErr('eKind', null, '請選擇類別'); ok = false; }
     d.party_kind_other = $('#fKindOther').val() || '';
-    if (d.party_cat_id && catFree() && !d.party_kind_other.trim()){ setErr('eKind', '#fKindOther', '這個類別需要填寫類別說明'); ok = false; }
+    if (d.party_cat_id && catFree() && !d.party_kind_other.trim()){ setErr('eKind', '#fKindOther', catSubs().length ? '請勾選機關，或選「其他」並輸入內容' : '這個類別需要填寫類別說明'); ok = false; }
     d.party_name = $('#fParty').val() || '';
     if (!d.party_name.trim()){ setErr('eParty', '#fParty', '請填寫利害關係者公司/代表人'); ok = false; }
     /* ① 依類別帶上挑到的對象；後端會用同一批來源再核對一次（鐵律8） */
@@ -2070,6 +2091,7 @@ function catRowHtml(c){
         + '<td><input type="text" class="cc-name" maxlength="40" value="' + esc(c.name) + '" style="width:130px;"></td>'
         + '<td><select class="cc-kind" style="width:190px;">' + kopts + '</select></td>'
         + '<td><label style="font-weight:normal;margin:0;"><input type="checkbox" class="cc-free"' + (+c.free_text ? ' checked' : '') + '> 需填說明</label></td>'
+        + '<td><textarea class="cc-sub" rows="3" style="width:150px;" ' + (c.kind === 'government' ? '' : 'disabled ') + 'data-eg-skip data-eg-hint="一行一個，例如：環保局">' + esc(c.sub_options || '') + '</textarea></td>'
         + '<td><input type="number" class="cc-sort" value="' + (+c.sort_order || 0) + '" style="width:64px;"></td>'
         + '<td><input type="checkbox" class="cc-act"' + (c.is_active === undefined || +c.is_active ? ' checked' : '') + '></td>'
         + '<td class="hint">' + (c.cat_id ? '記錄 ' + (+c.used_rec || 0) + '／追蹤 ' + (+c.used_track || 0) : '新增') + '</td>'
@@ -2079,7 +2101,7 @@ function catRowHtml(c){
 function renderCats(){
     var b = $('#catBody').empty();
     $.each(META.track_cats_all || [], function(_, c){ b.append(catRowHtml(c)); });
-    b.find('tr').each(function(){ var k = $(this).find('.cc-kind').val(); $(this).find('.cc-free').prop('disabled', !manualKind(k)); });
+    b.find('tr').each(function(){ var k = $(this).find('.cc-kind').val(); $(this).find('.cc-free').prop('disabled', !manualKind(k)); $(this).find('.cc-sub').prop('disabled', k !== 'government'); });
 }
 function catApply(res){
     META.track_cats = res.track_cats; META.track_cats_all = res.track_cats_all;
@@ -2088,6 +2110,7 @@ function catApply(res){
 $(document).on('change', '#catBody .cc-kind', function(){
     var tr = $(this).closest('tr'), manual = manualKind(this.value);
     tr.find('.cc-free').prop('disabled', !manual); if (!manual) tr.find('.cc-free').prop('checked', false);
+    tr.find('.cc-sub').prop('disabled', this.value !== 'government'); if (this.value !== 'government') tr.find('.cc-sub').val('');
 });
 $(document).on('click', '#btnCatAdd', function(){
     $('#catBody').append(catRowHtml({cat_id:0, name:'', kind:'other', free_text:0, sort_order:0, is_active:1}));
@@ -2097,7 +2120,7 @@ $(document).on('click', '[data-catsave]', function(){
     var tr = $(this).closest('tr');
     if (!$.trim(tr.find('.cc-name').val())){ alert('請填寫類別名稱'); return; }
     post({action:'cat_save', cat_id:tr.data('id') || 0, name:tr.find('.cc-name').val(), kind:tr.find('.cc-kind').val(),
-          free_text:tr.find('.cc-free').is(':checked') ? 1 : 0, sort_order:tr.find('.cc-sort').val() || 0,
+          free_text:tr.find('.cc-free').is(':checked') ? 1 : 0, sub_options:tr.find('.cc-sub').val() || '', sort_order:tr.find('.cc-sort').val() || 0,
           is_active:tr.find('.cc-act').is(':checked') ? 1 : 0}, function(res){ catApply(res); });
 });
 $(document).on('click', '[data-catdel]', function(){
@@ -2793,6 +2816,11 @@ function printRecord(id){
             if (res.cat && !pcats.some(function(c){ return +c.cat_id === +res.cat.cat_id; })) pcats.push(res.cat);
             $.each(pcats, function(_, c){
                 var on = +c.cat_id === (+r.party_cat_id || 0);
+                var subs = c.sub_options ? String(c.sub_options).split(/\r?\n/) : [];
+                if (subs.length){      // 有子選項的類別：☑主管機關（☑環保局 □消防局 □人事行政機關 □其他：＿）
+                    var ko = on ? $.trim(r.party_kind_other || '') : '', hit = subs.indexOf(ko) >= 0;
+                    kinds.push(mark(on) + esc(c.name) + '（' + $.map(subs, function(n){ return mark(on && ko === n) + esc(n); }).join(' ') + ' ' + mark(on && !hit && ko !== '') + '其他：' + (on && !hit ? esc(ko) : '＿＿＿') + '）');
+                } else
                 kinds.push(mark(on) + (+c.free_text ? esc(c.name) + '：' + (on ? esc(r.party_kind_other || '') : '') : esc(c.name)));
             });
             var types = [];
@@ -2925,7 +2953,7 @@ $(document).on('click', '.btnBlank', function(){
         if (which === 'record'){
             title = '利害關係者溝通記錄表';
             var chs = $.map(META.channels, function(v, k){ return mark + (k === 'other' ? '其他：＿＿＿＿' : esc(v)); });
-            var kinds = $.map(META.track_cats || [], function(c){ return mark + (+c.free_text ? esc(c.name) + '：＿＿＿＿' : esc(c.name)); });
+            var kinds = $.map(META.track_cats || [], function(c){ var subs = c.sub_options ? String(c.sub_options).split(/\r?\n/) : []; if (subs.length) return mark + esc(c.name) + '（' + $.map(subs, function(n){ return mark + esc(n); }).join(' ') + ' ' + mark + '其他：＿＿＿）'; return mark + (+c.free_text ? esc(c.name) + '：＿＿＿＿' : esc(c.name)); });
             var types = $.map(META.types, function(v){ return mark + esc(v); });
             body = printHead(meta, title)
                 + '<table class="pt"><colgroup><col style="width:80px;"><col><col style="width:150px;"><col style="width:230px;"></colgroup>'
