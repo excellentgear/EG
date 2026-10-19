@@ -135,7 +135,10 @@ function adc_perms(PDO $db, int $uid, int $docId = 0): array
     if ($admin) $src = 'admin';
     elseif (eg_asdoc_user_can($db, $uid, 'edit_content')) $src = 'role';
     elseif ($docId > 0 && adc_user_in_doc_depts($db, $uid, $docId)) $src = 'dept';
-    return ['view' => $view, 'edit' => $src !== '', 'admin' => $admin, 'edit_src' => $src];
+    /* 列印線上版（唯讀者的列印由角色控管，功能碼 asdoc_print_online；使用者 2026-10-19）。
+       管理員與能編輯這份文件的人本來就能列印預覽，不必另外勾。 */
+    $print = $src !== '' || eg_asdoc_user_can($db, $uid, 'print_online');
+    return ['view' => $view, 'edit' => $src !== '', 'admin' => $admin, 'edit_src' => $src, 'print' => $print];
 }
 
 /**

@@ -37,6 +37,7 @@ $err = '';
 if (!$P['view'])                                      $err = '沒有 AS 文件的檢視權限';
 elseif (!$V)                                          $err = '找不到這個版次';
 elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $err = '這份文件已廢止，只有管理員能開啟';
+elseif (empty($P['print']))                           $err = '沒有列印線上版的權限（請洽管理員於 AS 文件管理的角色設定勾選「列印線上版（唯讀者）」）';
 
 $C = $err === '' ? adc_content_by_version($db, $versionId) : null;
 if ($err === '' && (!$C || trim((string)$C['content_html']) === '')) $err = '這個版次還沒有線上版內容';
@@ -88,10 +89,15 @@ if ($err === '') {
        本來就是同一種「一個區塊算一頁」的算法，兩者現在也一致了。 */
     $sheetTotal = count($sys) + count($conts);
     $sheetNo    = 0;
-    $sheetFoot  = function (bool $suppress) use (&$sheetNo, $sheetTotal, $footRight): string {
+    $bodyTotal  = count($conts);
+    $sheetFoot  = function (bool $suppress, int $bodyNo = 0) use (&$sheetNo, $bodyTotal, $footRight): string {
         $sheetNo++;
+        // 使用者 2026-10-16：不需要印「第 X 頁／共 Y 頁　AS編號　版次」這一列——頁首表格已有頁次、頁尾已有文件編號，
+        // 這一列只會多佔一行高度、把剛好排滿的頁擠成多出一張紙。整列不輸出。
+        return '';
         if ($suppress) return '';
-        $left = $sheetTotal > 1 ? ('第 ' . $sheetNo . ' 頁／共 ' . $sheetTotal . ' 頁') : '';
+        // 頁次只算正文（與頁首表格的「頁次 N / 總頁數」同一個算法）；系統頁不印這一列
+        $left = ($bodyNo > 0 && $bodyTotal > 1) ? ('第 ' . $bodyNo . ' 頁／共 ' . $bodyTotal . ' 頁') : '';
         return '<div class="adt-pgno"><span>' . htmlspecialchars($left, ENT_QUOTES) . '</span>'
              . '<span>' . htmlspecialchars($footRight, ENT_QUOTES) . '</span></div>';
     };
@@ -106,14 +112,14 @@ if ($err === '') {
         $ftr = $isRevlog ? '' : adt_footer_html($ctx);
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
-                     . $ftr . $sheetFoot($isRevlog) . '</section>';
+                     . $ftr . $sheetFoot(true) . '</section>';   // 系統頁（封面／紀錄書／目錄）不印「第X頁／共Y頁＋版次」
     }
     foreach ($conts as $i => $one) {
         $no++;
         $pagesHtml[] = '<section class="adt-page">'
                      . adt_header_html($ctx, $no, $total, $pv[$i] ?? $ctx['version'])
                      . '<div class="adt-body eg-docbody">' . $one . '</div>'
-                     . adt_footer_html($ctx) . $sheetFoot(false) . '</section>';
+                     . adt_footer_html($ctx) . $sheetFoot(false, $no) . '</section>';
     }
 }
 ?>
@@ -146,6 +152,9 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
    這裡只加「列印特有」的規則，不可以再寫一份排版 */
 .adt-page thead { display: table-header-group; }   /* 表頭跨頁重複 */
 .adt-page tr { page-break-inside: avoid; }         /* 資料列不可被切成上下兩半 */
+/* 圖片不可以比一頁的可用高度還高：流程圖頁寬度設 97% 後高度剛好多出一點，頁尾就被擠到下一張只有一行字的紙。
+   可用高度＝可印區扣掉頁首表格與頁尾（保守留 60mm）；object-fit 保持比例不變形。 */
+.adt-page .adt-body img { max-height: <?= $printContentH - 60 ?>mm; object-fit: contain; }
 .adt-page hr[style*="page-break"] { display: none; }
 /* 編輯器的「強制換頁」標記（區塊的 page-break-before:always）只在編輯時用來決定這一頁從哪開始；
    列印時頁已經切好了，再讓瀏覽器照字面斷一次，頁首就會多出一張空白頁 */
@@ -202,6 +211,14 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
          全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
 <?php foreach ($pagesHtml as $one) { echo $one; } ?>
+<?php
+require_once __DIR__ . '/../../src/common/org_role_lib.php';
+require_once __DIR__ . '/../../src/common/as_doc_sign_lib.php';
+$__stTpl = ads_stamp_tpl($db);
+?>
+<script>window.__ownCompany = <?= json_encode(eg_company_full_name($db), JSON_UNESCAPED_UNICODE) ?>;
+window.EG_DOC_STAMP_SCHEMA = <?= json_encode($__stTpl ? $__stTpl['schema'] : null, JSON_UNESCAPED_UNICODE) ?>;</script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_doc_sign_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_sign_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>

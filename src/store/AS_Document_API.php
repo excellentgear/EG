@@ -431,6 +431,7 @@ $asGate = [
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
     'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings', 'tree_signers'=>'view',
+    'ref_pending_docs'=>'view',   // 哪些線上版文件的內文引用了「已改編號／改名／廢止」的 AS 文件、還沒確認
     'tree_web_pages'=>'view',   // 結構總覽「網頁」欄：哪些文件已經做成頁面（權限逐筆判定，見 case 內說明）
     'save_tree_exclude'=>'settings',   // 列印排除項目＝文管設定權限才能改（會影響正式文件內容）
     'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
@@ -521,6 +522,49 @@ case 'meta':
           'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents,'phrases'=>$phrases]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
+/**
+ * 待確認的「內文引用變更」清單（as_doc_ref_change.status='pending'），依「要改的那份文件」分組。
+ * 規則與偵測一律在 as_doc_ref_lib.php；這裡只把結果整理成管理頁橫幅要用的樣子。
+ * 寫入點不在這裡（套用／略過都在線上版編輯器，會補制修訂紀錄）。
+ */
+case 'ref_pending_docs':
+    require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+    adr_ensure_schema($db);
+    $rows = [];
+    try {
+        $rows = $db->query("SELECT c.id, c.target_doc_id, c.target_version_id, c.src_doc_id, c.src_kind,
+                                   c.src_old_no, c.src_new_no, c.src_old_name, c.src_new_name, c.src_note,
+                                   c.hits, c.flows, c.src_date,
+                                   t.doc_no AS t_no, t.doc_name AS t_name,
+                                   s.doc_no AS s_no, s.doc_name AS s_name
+                            FROM as_doc_ref_change c
+                            JOIN as_document t ON t.id=c.target_doc_id AND t.is_deleted=0
+                            LEFT JOIN as_document s ON s.id=c.src_doc_id
+                            WHERE c.status='pending'
+                            ORDER BY t.doc_no, c.id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $rows = []; }
+    $docs = [];
+    foreach ($rows as $r) {
+        $k = (int)$r['target_doc_id'];
+        if (!isset($docs[$k])) {
+            $docs[$k] = ['doc_id' => $k, 'doc_no' => (string)$r['t_no'], 'doc_name' => (string)$r['t_name'],
+                         'version_id' => (int)$r['target_version_id'], 'items' => []];
+        }
+        $docs[$k]['items'][] = [
+            'kind'     => (string)$r['src_kind'],            // renumber／rename／obsolete
+            'old_no'   => (string)$r['src_old_no'],
+            'new_no'   => (string)($r['src_new_no'] ?? ''),
+            'old_name' => (string)($r['src_old_name'] ?? ''),
+            'new_name' => (string)($r['src_new_name'] ?? ''),
+            'src_no'   => (string)($r['s_no'] ?? ''),
+            'src_name' => (string)($r['s_name'] ?? ''),
+            'hits'     => (int)$r['hits'],
+            'flows'    => (int)$r['flows'],
+            'date'     => (string)($r['src_date'] ?? ''),
+        ];
+    }
+    jout(['status' => 'success', 'docs' => array_values($docs), 'can_open' => asCan('edit_online') ? 1 : 0]);
+
 case 'list_documents':
     asRemarkEnsure($db);              // remark_html 由下方 d.* 一併帶出
     asFreqEnsure($db);                // freq_* 同樣由 d.* 帶出；負責課室另外撈成陣列
@@ -570,9 +614,12 @@ case 'list_documents':
     elseif ($sort === 'freq_desc') $orderSql = "ORDER BY $frank ASC, ($fdays) DESC, d.doc_no ASC";
     else                           $orderSql = "ORDER BY d.doc_no ASC";
 
+    try { require_once __DIR__ . '/../common/as_doc_content_lib.php'; adc_ensure_schema($db); } catch (Throwable $e) {}
     $sql = "SELECT d.*, dep.name AS dept_name,
                    v.revised_date, v.change_status, v.file_name AS current_file_name,
                    pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name,
+                   (SELECT COUNT(*) FROM as_doc_content oc WHERE oc.version_id = d.current_version_id
+                        AND oc.is_primary = 1 AND oc.content_html IS NOT NULL AND oc.content_html <> '') AS online_primary,
                    (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count,
                    (SELECT COUNT(*) FROM as_form_record fr WHERE fr.form_doc_id = d.id AND fr.is_deleted = 0) AS record_count,
                    rt.id AS rvf_tpl_id, rt.name AS rvf_tpl_name
@@ -587,6 +634,17 @@ case 'list_documents':
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 線上版：每份是否可進入編輯＝與編輯器／寫入端點同一支 adc_perms（逐文件：角色／管理員／負責課室）
+    foreach ($docs as &$_d) {
+        $_d['online_primary'] = (int)($_d['online_primary'] ?? 0) > 0 ? 1 : 0;
+        $_d['online_can_edit'] = 0;
+        if ($_d['online_primary'] && $currentUserId) {
+            try { $_d['online_can_edit'] = adc_perms($db, (int)$currentUserId, (int)$_d['id'])['edit'] ? 1 : 0; }
+            catch (Throwable $e) {}
+        }
+    }
+    unset($_d);
 
     // 關鍵字有命中「紀錄/附件」時，隨列回傳命中的附件明細（清單直接顯示，免點開跳窗）
     if ($docs && $kw !== '') {
@@ -672,7 +730,9 @@ case 'get_document':
             $_v['online_primary'] = isset($oc[$k]) && (int)$oc[$k]['is_primary'] === 1 && (int)$oc[$k]['has_html'] === 1 ? 1 : 0;
         }
         unset($_v);
+        $doc['online_can_edit'] = ($currentUserId && adc_perms($db, (int)$currentUserId, (int)$id)['edit']) ? 1 : 0;
     } catch (Throwable $e) {
+        $doc['online_can_edit'] = 0;
         foreach ($doc['versions'] as &$_v) { $_v['has_online'] = 0; $_v['online_primary'] = 0; }
         unset($_v);
     }

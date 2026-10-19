@@ -167,6 +167,16 @@ if ($deptPerm === 'R') {
       </div>
       <div class="clearfix"></div>
 
+      <!-- 內文引用的 AS 文件編號／名稱已變更、還沒確認的文件（資料來自 ref_pending_docs，沒有就整條不顯示） -->
+      <div id="refPendBar" style="display:none;margin:0 0 10px;padding:8px 12px;background:#FDF4E6;border:1px solid #E8C08A;border-radius:4px;color:#6B471A;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <i class="fa fa-exclamation-triangle" style="color:#E8890C"></i>
+          <b id="refPendTitle"></b>
+          <a href="#" id="refPendToggle" style="margin-left:auto;">展開清單</a>
+        </div>
+        <div id="refPendList" style="display:none;margin-top:8px;max-height:260px;overflow:auto;"></div>
+      </div>
+
       <div class="row">
         <div class="col-md-12">
           <div class="x_panel">
@@ -1780,12 +1790,21 @@ $(function(){
       const wp = WEB_PAGES[String(d.id)];
       const webOk = !!(wp && wp.can && wp.url && fileOk);
       // 已網頁化者不可以標「無檔」——那等於一直要求上傳一份系統根本不需要的空白表單檔
-      const noFileMark = (!d.current_file_name && curVer)
-        ? (wp ? ` <span class="label doc-webver" title="已網頁化：${esc(wp.name)}｜這份表單的正本是系統頁面，不需要上傳空白表單檔">網頁版</span>`
+      /* 線上版（程序書電子版）為正本：名稱後標「線上」，不標「無檔」（正本在系統裡，不需要上傳檔）；
+         點名稱與「檢視」都開唯讀線上版（?view=1）。要編輯的人在唯讀頁再按「進入編輯」，
+         可不可以進入編輯一律由後端 adc_perms 決定（online_can_edit），前端只顯示結果。 */
+      const onl = (d.online_primary==1 && curVer);
+      const onlUrl = `as_doc_editor.php?version_id=${curVer}&view=1`;
+      const noFileMark = onl
+        ? ' <span class="label label-success" title="此文件以線上版為正本，點名稱或「檢視」開啟唯讀線上版">線上</span>'
+        : (!d.current_file_name && curVer)
+        ? (wp ?` <span class="label doc-webver" title="已網頁化：${esc(wp.name)}｜這份表單的正本是系統頁面，不需要上傳空白表單檔">網頁版</span>`
               : ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>')
         : '';
       let nameCell = esc(d.doc_name);
-      if(webOk){
+      if(onl && fileOk){
+        nameCell = `<a href="${onlUrl}" target="_blank" rel="noopener" title="開啟唯讀線上版（另開新分頁）">${esc(d.doc_name)}</a>`;
+      } else if(webOk){
         nameCell = `<a href="${esc(wp.url)}" target="_blank" rel="noopener" class="doc-name-web"`
                  + ` title="已網頁化：${esc(wp.name)}｜點擊開啟線上版頁面（另開新分頁）">${esc(d.doc_name)}`
                  + ` <i class="fa fa-external-link text-muted" style="font-size:10px;"></i></a>`;
@@ -1806,7 +1825,9 @@ $(function(){
            連到一個印不出東西的網址比不連更難解釋）
          原本上傳的那份檔案入口刻意保留在「下載」鈕與「歷史版本」跳窗（使用者拍板），這裡不再重複。 */
       let sPrev;
-      if(webOk && wp.blank_url){
+      if(onl && fileOk){
+        sPrev = `<a class="btn btn-xs btn-default" href="${onlUrl}" target="_blank" rel="noopener" title="檢視線上版（唯讀）"><i class="fa fa-eye"></i></a>`;
+      } else if(webOk && wp.blank_url){
         sPrev = `<a class="btn btn-xs btn-default" href="${esc(wp.blank_url)}" target="_blank" rel="noopener"`
               + ` title="開啟「${esc(wp.name)}」線上版的空白表單列印畫面"><i class="fa fa-eye"></i></a>`;
       } else if(webOk){
@@ -3565,12 +3586,14 @@ $(function(){
         // 只有目前版本能替換檔案：傳錯檔當場換掉，不必再開一版
         const repBtn = (which,label)=> (canU && isCur)
           ? ` <label class="btn btn-xs btn-warning" style="margin:0;" title="替換此檔案（僅限目前版本 ${esc(curHistCurVer)}）">${label}<input type="file" class="ver-replace" data-ver="${v.id}" data-which="${which}" style="display:none;"></label>` : '';
-        let dl = '<span class="text-muted">無檔（補登）</span>';
+        let dl = v.online_primary
+          ? '<span class="text-muted" title="此版次以線上版為正本，不需要文件檔">線上版為正本</span>'
+          : '<span class="text-muted">無檔（補登）</span>';
         if(v.file_name){
           dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
           dl += repBtn('file','替換');
-        } else if(canU){
+        } else if(canU && !v.online_primary){
           // 補登缺檔 → 可補上傳（只允許補空缺，不可替換）
           dl = `<label class="btn btn-xs btn-primary" style="margin:0;" title="補上傳此版本的文件檔">補檔<input type="file" class="ver-attach" data-ver="${v.id}" data-which="file" style="display:none;"></label>`;
         }
@@ -3580,6 +3603,9 @@ $(function(){
           vw = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=view&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) vw += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=view&version_id=${v.id}">下載</a>`;
           vw += repBtn('view','替換');
+        } else if(v.online_primary){
+          // 線上版為正本：檢視版就是唯讀線上版（不必另外補傳檢視版）
+          vw = `<a class="btn btn-xs btn-default" href="as_doc_editor.php?version_id=${v.id}&view=1" target="_blank" rel="noopener" title="開啟唯讀線上版">預覽（線上版）</a>`;
         } else if(canU){
           vw += ` <label class="btn btn-xs btn-primary" style="margin:0 0 0 4px;" title="補傳此版本的檢視版（線上預覽會改用它）">補檢視版<input type="file" class="ver-attach" data-ver="${v.id}" data-which="view" style="display:none;"></label>`;
         }
@@ -3604,12 +3630,16 @@ $(function(){
            內容綁版次是刻意的——AS9100 的舊版必須永遠印得出當時的樣子。 */
         let onl;
         if(v.online_primary){
-          onl = `<a class="btn btn-xs btn-success" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
-                   title="這個版次以線上版為正本">線上版</a>`;
+          // 一律先開唯讀版；有編輯權（後端 online_can_edit＝adc_perms）的人另有「編輯」入口
+          onl = `<a class="btn btn-xs btn-success" href="as_doc_editor.php?version_id=${v.id}&view=1" target="_blank" rel="noopener"
+                   title="這個版次以線上版為正本（唯讀檢視）">線上版</a>`
+              + (r.data.online_can_edit ? ` <a class="btn btn-xs btn-warning" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener" title="進入編輯畫面">編輯</a>` : '');
         } else if(v.has_online){
-          onl = `<a class="btn btn-xs btn-default" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
-                   title="已有線上內容，但尚未設為此版次的正本（目前仍以 Word／PDF 為準）">草稿</a>`;
-        } else if(window.asPerm.edit_content){
+          onl = (r.data.online_can_edit || window.asPerm.edit_content)
+            ? `<a class="btn btn-xs btn-default" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
+                   title="已有線上內容，但尚未設為此版次的正本（目前仍以 Word／PDF 為準）">草稿</a>`
+            : '<span class="text-muted" title="線上內容尚未設為正本">草稿</span>';
+        } else if(window.asPerm.edit_content || r.data.online_can_edit){
           onl = `<a class="btn btn-xs btn-primary" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
                    title="把這個版次做成線上版（可從 Word 匯入文字與表格，流程圖用內建編輯器重畫）">建立</a>`;
         } else {
@@ -4572,6 +4602,7 @@ $(function(){
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'},
     {code:'asdoc_edit_content', label:'編輯線上內容（程序書電子版）'},
+    {code:'asdoc_print_online', label:'列印線上版（唯讀者；能編輯者本來就可列印）'},
     {code:'asdoc_no_attach',   label:'免附件補登'},
     {code:'asdoc_upload_record', label:'上傳紀錄'},
     {code:'asdoc_online_form_beta', label:'線上表單模板(測試功能)'},
@@ -4932,6 +4963,41 @@ $(document).on('click', '.own-save', function () {
   //   清單/流程說明手冊的「網頁」連結會帶這個參數進來）
   if (new URLSearchParams(location.search).get('tree') === '1') { setTimeout(function(){ $('#btnTree').click(); }, 300); }
   loadMeta(loadDocs);
+  /* 待確認的內文引用變更：被引用的文件改了編號／名稱／廢止，引用它的線上版文件要有人確認。
+     平常人不會一份一份開編輯器去看，所以在管理頁最上面直接列出「哪幾份文件、哪裡要確認」。 */
+  function loadRefPending(){
+    $.getJSON(API+'?action=ref_pending_docs', r=>{
+      const bar = $('#refPendBar');
+      if(!r || r.status!=='success' || !(r.docs||[]).length){ bar.hide(); return; }
+      const KIND = {renumber:'改編號', rename:'改名稱', obsolete:'已廢止'};
+      let n = 0, h = '';
+      r.docs.forEach(d=>{
+        n += d.items.length;
+        const items = d.items.map(it=>{
+          let t;
+          if(it.kind==='renumber') t = `${esc(it.old_no)} → ${esc(it.new_no)}`;
+          else if(it.kind==='rename') t = `「${esc(it.old_name)}」→「${esc(it.new_name)}」`;
+          else t = `${esc(it.old_no)}（已廢止）`;
+          return `<span style="display:inline-block;margin:1px 6px 1px 0;padding:0 6px;background:#fff;border:1px solid #E8C08A;border-radius:3px;">`
+               + `${KIND[it.kind]||esc(it.kind)}：${t}（${it.hits} 處${it.flows?`、流程圖 ${it.flows} 張`:''}）</span>`;
+        }).join('');
+        const go = r.can_open
+          ? `<a class="btn btn-xs btn-warning" target="_blank" rel="noopener" href="as_doc_editor.php?version_id=${d.version_id}">開啟確認</a>`
+          : `<span class="text-muted">（無線上版編輯權限）</span>`;
+        h += `<div style="padding:4px 0;border-top:1px dashed #E8C08A;"><b>${esc(d.doc_no)} ${esc(d.doc_name)}</b> ${go}<div>${items}</div></div>`;
+      });
+      $('#refPendTitle').text(`有 ${r.docs.length} 份文件的內文引用了已變更的 AS 文件編號／名稱，待確認（共 ${n} 項）`);
+      $('#refPendList').html(h);
+      bar.show();
+    });
+  }
+  $('#refPendToggle').on('click', function(e){
+    e.preventDefault();
+    const o = $('#refPendList').is(':visible');
+    $('#refPendList').toggle(!o);
+    $(this).text(o ? '展開清單' : '收合清單');
+  });
+  loadRefPending();
   loadWebPages();   // 「網頁」欄（清單與結構總覽共用一份，載入完會自己補畫）
 });
 </script>
