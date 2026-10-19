@@ -865,9 +865,9 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
             foreach (array_keys($own) as $d2) if ($d2 !== $ow['dept'] && mb_strpos($cl, $d2) !== false) $help[] = $d2;
             foreach (array_merge([$ow['dept']], $help) as $d2) $involved[$d2] = $own[$d2] ?? $ow;
             // 溝通問題＝要處理的議題（為什麼要溝通）；回覆內容＝決議（誰負責、怎麼做、何時前完成、由哪一條措施追蹤）——兩欄不重複同一段文字
-            $q = $issueTxt . ($nCl > 1 ? '（措施 ' . ($ci + 1) . '／' . $nCl . '：需明確負責單位、執行方式與完成期限）' : '（需明確負責單位、執行方式與完成期限）');
-            $a = '決議由' . $ow['dept'] . '（' . $ow['name'] . '）負責執行：' . $cl . '。' . ($help ? '配合單位：' . implode('、', $help) . '。' : '')
-               . '預計 ' . $dueTxt . ' 前完成，執行情形由措施追蹤 @@TRK@@ 追蹤。';
+            $q = ($ci === 0 ? $issueTxt . '。' : '（同上議題）') . '針對「' . $cl . '」，需確認執行方式、負責單位與完成期限。';
+            $a = '決議照此辦理：由' . $ow['dept'] . '（' . $ow['name'] . '）負責' . ($help ? '，' . implode('、', $help) . '配合' : '')
+               . '，預計 ' . $dueTxt . ' 前完成，並以措施追蹤 @@TRK@@ 追蹤執行情形。';
             $items[] = ['q' => $q, 'a' => $a, 'track' => ['owner' => $ow, 'due' => $due, 'action' => $cl]];
         }
         // 管道：公司內部以面談為主；涉及人數眾多（4 個部門以上）才用會議（勾「會議」要有會議紀錄佐證，所以不預設）
