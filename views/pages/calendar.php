@@ -1728,7 +1728,8 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
             window.egEndLock = function(){
                 var is24 = $('#end_hour').val() === '24';
                 if (is24) $('#end_minute').val('00');
-                $('#end_minute option').each(function(){ $(this).prop('disabled', is24 && this.value !== '00'); });
+                // 不用 disabled（disabled 欄位不會隨表單送出），改成擋掉操作＋灰底
+                $('#end_minute').css({'pointer-events': is24 ? 'none' : '', 'background': is24 ? '#eee' : ''}).attr('tabindex', is24 ? -1 : null);
             };
             $(document).on('change', '#end_hour', egEndLock);
             window.egEnd24 = function(h, m){
