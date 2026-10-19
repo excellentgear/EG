@@ -1490,6 +1490,7 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
                     var _e24 = egEnd24(endHour, endMinute);
                     $('#end_hour').val(_e24[0]);
                     $('#end_minute').val(_e24[1]);
+                    egEndLock();
 
                     // 改變按鈕狀態
                     $('#send').text('更新');
@@ -1723,6 +1724,13 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
             }
 
             // 已存成 23:59 的結束時間，回到畫面顯示為 24:00
+            // 結束 24:00 時分鐘只能是 00（不可超過 24:00）
+            window.egEndLock = function(){
+                var is24 = $('#end_hour').val() === '24';
+                if (is24) $('#end_minute').val('00');
+                $('#end_minute option').each(function(){ $(this).prop('disabled', is24 && this.value !== '00'); });
+            };
+            $(document).on('change', '#end_hour', egEndLock);
             window.egEnd24 = function(h, m){
                 h = ('0' + h).slice(-2); m = ('0' + m).slice(-2);
                 return (h === '23' && m === '59') ? ['24', '00'] : [h, m];
@@ -1738,6 +1746,7 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
             var _e24b = egEnd24(String(endContainer.data('end-hour')), String(endContainer.data('end-minute')));
             $('#end_hour').val(_e24b[0]);
             $('#end_minute').val(_e24b[1]);
+            egEndLock();
 
             // 如果是從列表編輯，也要更新按鈕狀態
             if ($('#userid').val() !== '') { $('#send').text('更新'); }
