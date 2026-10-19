@@ -28,6 +28,8 @@ if (isset($_POST["newSchdule"]) && empty($_POST["userid"]) && !empty($_POST["sch
         $end_minute = $_POST['end_minute'] ?? '00'; // 修正：避免重複使用 $_POST['end_minute']
         $start_datetime = $_POST['schdule_start'] . ' ' . $start_hour . ':' . $start_minute . ':00';
         $end_datetime = $_POST['schdule_end'] . ' ' . $_POST['end_hour'] . ':' . $_POST['end_minute'] . ':00';
+        // 24:00＝當天結束，存成 23:59:59（datetime 沒有 24:00，也不要讓使用者設到隔天清晨）
+        if ((int)$_POST['end_hour'] >= 24) $end_datetime = $_POST['schdule_end'] . ' 23:59:59';
     }
 
     // 處理重複事件資料
@@ -191,6 +193,7 @@ else if (isset($_POST["newSchdule"]) && !empty($_POST["userid"]) && !empty($_POS
         $end_minute = $_POST['end_minute'] ?? '00'; // 修正：避免重複使用 $_POST['end_minute']
         $start_datetime = $_POST['schdule_start'] . ' ' . $start_hour . ':' . $start_minute . ':00';
         $end_datetime = $_POST['schdule_end'] . ' ' . $end_hour . ':' . $end_minute . ':00';
+        if ((int)$end_hour >= 24) $end_datetime = $_POST['schdule_end'] . ' 23:59:59';
     }
 
     // 處理重複事件資料

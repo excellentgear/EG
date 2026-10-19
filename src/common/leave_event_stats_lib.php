@@ -98,6 +98,9 @@ if (!function_exists('eg_event_stats')) {
             }
             // 天數/時數：全天（或跨日）事件＝日曆天數；同日有時間＝時數
             $s = strtotime($r['st']); $e = strtotime($r['en']) ?: $s;
+            // 有時間的事件若結束在隔天 00:00:00，是「到當天結束」的舊式設法（時間選單只到 23:50），
+            // 不可算成跨兩天——視為前一天的結束
+            if ((int)$r['allday'] !== 1 && $e > $s && date('H:i:s', $e) === '00:00:00') $e -= 1;
             $sameDay = date('Y-m-d', $s) === date('Y-m-d', $e);
             if ((int)$r['allday'] === 1 || !$sameDay) {
                 $days = (float)(floor((strtotime(date('Y-m-d', $e)) - strtotime(date('Y-m-d', $s))) / 86400) + 1);
@@ -115,7 +118,7 @@ if (!function_exists('eg_event_stats')) {
                 $person[$u]['by_cat'][$cid] = ($person[$u]['by_cat'][$cid] ?? 0) + 1;
                 $person[$u]['count']++; $person[$u]['hours'] += $hours; $person[$u]['days'] += $days;
             }
-            $events[] = ['id' => $eid, 'date' => substr($r['st'], 0, 10), 'end_date' => substr($r['en'], 0, 10),
+            $events[] = ['id' => $eid, 'date' => substr($r['st'], 0, 10), 'end_date' => date('Y-m-d', ((int)$r['allday'] !== 1 && strtotime($r['en']) > strtotime($r['st']) && substr($r['en'], 11, 8) === '00:00:00') ? strtotime($r['en']) - 1 : strtotime($r['en'])),
                          'time' => ((int)$r['allday'] === 1) ? '全天' : (substr($r['st'], 11, 5) . '~' . substr($r['en'], 11, 5)),
                          'title' => (string)$r['title'], 'category_id' => $cid, 'category' => $cats[$cid]['name'],
                          'days' => $days, 'hours' => $hours, 'people' => count($act),

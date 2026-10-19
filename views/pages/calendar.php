@@ -1487,8 +1487,9 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
                     }
 
                     $('#datepicker_end').val(endDate);
-                    $('#end_hour').val(endHour);
-                    $('#end_minute').val(endMinute);
+                    var _e24 = egEnd24(endHour, endMinute);
+                    $('#end_hour').val(_e24[0]);
+                    $('#end_minute').val(_e24[1]);
 
                     // 改變按鈕狀態
                     $('#send').text('更新');
@@ -1708,27 +1709,35 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
             }
 
             // 填充時間下拉選單
-            function populateTimeSelects(hourSelect, minuteSelect) {
+            function populateTimeSelects(hourSelect, minuteSelect, allow24) {
                 for (var i = 0; i < 24; i++) {
                     var hour = ('0' + i).slice(-2);
                     hourSelect.append($('<option>', { value: hour, text: hour }));
                 }
+                // 結束時間可選 24:00＝當天結束（存檔時轉成 23:59:59，不必跨到隔天清晨）
+                if (allow24) hourSelect.append($('<option>', { value: '24', text: '24' }));
                 for (var i = 0; i < 60; i += 10) {
                     var minute = ('0' + i).slice(-2);
                     minuteSelect.append($('<option>', { value: minute, text: minute }));
                 }
             }
 
+            // 已存成 23:59 的結束時間，回到畫面顯示為 24:00
+            window.egEnd24 = function(h, m){
+                h = ('0' + h).slice(-2); m = ('0' + m).slice(-2);
+                return (h === '23' && m === '59') ? ['24', '00'] : [h, m];
+            };
             populateTimeSelects($('#start_hour'), $('#start_minute'));
-            populateTimeSelects($('#end_hour'), $('#end_minute'));
+            populateTimeSelects($('#end_hour'), $('#end_minute'), true);
 
             // 從 data-* 屬性設定從列表編輯時帶入的時間
             var startContainer = $('#datepicker').parent();
             var endContainer = $('#datepicker_end').parent();
             $('#start_hour').val(startContainer.data('start-hour'));
             $('#start_minute').val(startContainer.data('start-minute'));
-            $('#end_hour').val(endContainer.data('end-hour'));
-            $('#end_minute').val(endContainer.data('end-minute'));
+            var _e24b = egEnd24(String(endContainer.data('end-hour')), String(endContainer.data('end-minute')));
+            $('#end_hour').val(_e24b[0]);
+            $('#end_minute').val(_e24b[1]);
 
             // 如果是從列表編輯，也要更新按鈕狀態
             if ($('#userid').val() !== '') { $('#send').text('更新'); }
