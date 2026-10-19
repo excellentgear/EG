@@ -425,7 +425,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
             </span>
         </div>
 
-        <?php if ($__isDraft): ?>
+        <?php if ($__viewOnly): ?>
+        <?php elseif ($__isDraft): ?>
         <div class="alert alert-warning" style="margin:6px 0;padding:8px 12px;font-size:13px">
           <i class="fa fa-pencil"></i> 你正在編輯<b>新版草稿</b>（還沒簽核，不影響正式版）。
           <?php if ($__officialVid > 0): ?><a href="as_doc_editor.php?version_id=<?= (int)$__officialVid ?>">回到正式版</a><?php endif; ?>
@@ -512,6 +513,14 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
           <div id="adReportBody"></div>
         </div>
 
+        <?php if ($__viewOnly): ?>
+        <?php /* 唯讀檢視＝直接嵌入正式列印預覽（as_doc_print.php?preview=1），版面與發行後看到的完全一致；
+                 編輯器畫面（#adEditorHost 等）藏起來，只在背景載入供「簽核進度」等功能使用。 */ ?>
+        <style>#adEditorHost,#adReadonly,#adReport,#adRefBar{display:none !important}
+               #adViewFrame{width:100%;border:0;background:#efe9e0;min-height:600px;display:block}</style>
+        <iframe id="adViewFrame" src="as_doc_print.php?version_id=<?= (int)$versionId ?>&preview=1&embed=1"
+                onload="try{var d=this.contentDocument;this.style.height=(d.documentElement.scrollHeight+20)+'px';setTimeout(function(f){try{f.style.height=(f.contentDocument.documentElement.scrollHeight+20)+'px'}catch(e){}},1500,this);}catch(e){}"></iframe>
+        <?php endif; ?>
         <div id="adEditorHost"></div>
         <div id="adReadonly" style="display:none" class="egrt-wrap"></div>
         <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>

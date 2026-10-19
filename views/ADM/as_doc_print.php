@@ -30,6 +30,8 @@ $uid = (int)($_SESSION['id'] ?? 0);
 $P   = adc_perms($db, $uid);
 
 $versionId = (int)($_GET['version_id'] ?? 0);
+$isPreview = !empty($_GET['preview']);   // 只看不印（唯讀線上版嵌入用）：不自動跳列印、不要求列印權限
+$isEmbed   = !empty($_GET['embed']);
 $V = $versionId > 0 ? adc_version_info($db, $versionId) : null;
 if ($V) $P = adc_perms($db, $uid, (int)$V['doc_id']);   // 逐文件權限（見 adc_perms）
 
@@ -37,7 +39,7 @@ $err = '';
 if (!$P['view'])                                      $err = '沒有 AS 文件的檢視權限';
 elseif (!$V)                                          $err = '找不到這個版次';
 elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $err = '這份文件已廢止，只有管理員能開啟';
-elseif (empty($P['print']))                           $err = '沒有列印線上版的權限（請洽管理員於 AS 文件管理的角色設定勾選「列印線上版（唯讀者）」）';
+elseif (empty($P['print']) && !$isPreview)                         $err = '沒有列印線上版的權限（請洽管理員於 AS 文件管理的角色設定勾選「列印線上版（唯讀者）」）';
 
 $C = $err === '' ? adc_content_by_version($db, $versionId) : null;
 if ($err === '' && (!$C || trim((string)$C['content_html']) === '')) $err = '這個版次還沒有線上版內容';
@@ -182,7 +184,7 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
     .bar button { border: 1px solid #d98a33; background: #F0A24B; color: #fff; border-radius: 4px;
                   height: 28px; padding: 0 14px; font-size: 13px; }
     .bar span { font-size: 12px; color: #8A5A2B; margin-left: 10px; }
-    body { padding-top: 44px; }
+    body { padding-top: <?= $isEmbed ? '0' : '44px' ?>; }
 }
 @media print {
     .bar { display: none !important; }
@@ -203,11 +205,13 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <?php if ($err !== ''): ?>
     <div class="err"><?= htmlspecialchars($err) ?></div>
 <?php else: ?>
+<?php if (!$isEmbed): ?>
 <div class="bar">
-    <button onclick="doPrint()">列印</button>
+    <?php if (!empty($P['print'])): ?><button onclick="doPrint()">列印</button><?php endif; ?>
     <span>紙張 <?= $pageSize ?> <?= $orient === 'landscape' ? '橫式' : '直式' ?>
         <?= $isPrimary ? '' : '（此版次的線上內容尚未設為正本，目前僅供預覽）' ?></span>
 </div>
+<?php endif; ?>
 <?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
          全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
 <?php foreach ($pagesHtml as $one) { echo $one; } ?>
@@ -254,8 +258,13 @@ function startAutoPrint(){
     // 保險：圖片一直載不完也不要卡住不列印
     setTimeout(function(){ if (left > 0) { left = 0; go(); } }, 6000);
 }
+<?php if ($isPreview): ?>
+function startPreview(){ if (window.EGDocFit) EGDocFit.run(document); setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); }, 400); }
+if (window.egDocStamps) egDocStamps(document, startPreview); else startPreview();
+<?php else: ?>
 if (window.egDocStamps) egDocStamps(document, startAutoPrint);
 else startAutoPrint();
+<?php endif; ?>
 </script>
 <?php endif; ?>
 </body>
