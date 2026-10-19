@@ -775,7 +775,8 @@ function adr_apply(PDO $db, int $versionId, array $changeIds, int $uid, string $
     $sign = null;
     try {
         require_once __DIR__ . '/as_doc_sign_lib.php';
-        $sign = ads_submit($db, $newVid, [], $uid, $uname, $date);
+        // 這一版的制修訂列已經在上面補好了，簽完不要再自動補第二列
+        $sign = ads_submit($db, $newVid, [], $uid, $uname, $date, false, true);
     } catch (Throwable $e) {
         error_log('[adr] auto submit: ' . $e->getMessage());
         $sign = ['ok' => false, 'msg' => '自動送簽失敗：' . $e->getMessage()];

@@ -1955,7 +1955,7 @@ $('#btnRelease').on('click', function(){
     if (!confirm('正式發行之後：\n・這一版的線上內容會變成正本（大家看到與印出來的就是它）\n・AS 文件管理的「目前版次」會指到這一版\n・同一份文件其他版次的線上內容會退回草稿\n\n要發行嗎？')) return;
     $.post(API, { action:'sign_release', csrf:CSRF, version_id:VID }, function(r){
         if (!r.success) { alert(r.message || '發行失敗'); loadSign(); return; }
-        alert(r.message);
+        alert(r.message || r.msg || '已正式發行');
         $('#chkPrimary').prop('checked', true);
         loadSign();
     }, 'json');

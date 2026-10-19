@@ -99,6 +99,13 @@ function needAsset(PDO $db, array $P, int $assetId, ?int $vid = null): array {
     return $a;
 }
 
+/* 已正式發行（簽核完成＋設為正本）的版次鎖定：任何會改到內容或圖片的動作一律擋下，
+   不只是 save——否則從圖片或流程圖那條路仍然改得到正式內容。要改請按「編輯」另建新版草稿。 */
+if (in_array($action, ['upload_image', 'save_flow', 'crop', 'import_word', 'fork'], true)
+    && (int)($_POST['version_id'] ?? 0) > 0) {
+    require_once __DIR__ . '/../common/as_doc_autorev_lib.php';
+    if (adrv_locked($db, (int)$_POST['version_id'])) jerr('這一版已經是正式版本，不能直接修改。請按「編輯」建立新版草稿。', 'LOCKED');
+}
 try {
 switch ($action) {
 
@@ -211,7 +218,7 @@ case 'tpl': {
         'style_opts' => ['fonts' => adt_style_fonts(), 'fonts_en' => adt_style_fonts_en(),
                          'borders' => adt_style_borders(),
                          'widths' => adt_style_widths(), 'colors' => adt_style_colors(),
-                         'hdr_sizes' => adt_style_hdr_sizes()],
+                         'hdr_sizes' => adt_style_hdr_sizes(), 'rev_sizes' => adt_style_rev_sizes()],
         // 英數＋中文組好的 font-family，預覽直接套這一串（不要在前端再拼一次）
         'style_stack' => adt_style_font_stack(adt_style_get($db)),
         'depts'     => $depts,
@@ -260,8 +267,9 @@ case 'sign_cfg': {
         'people' => array_map(function ($p) {
             return ['id' => (int)$p['id'], 'name' => $p['user_cname'],
                     'dept' => $p['dept_name'] ?? '', 'pos' => $p['position_name'] ?? ''];
-        }, eg_people_list($db, [])),
+        }, eg_people_list($db, ['all_posts' => true])),   // 兼任者的主職也要列得出來（一個職務一列）
         'can_admin' => !empty($P['admin']),
+        'stamp_tpl_id' => ads_stamp_tpl_id($db), 'stamp_tpls' => ads_stamp_tpl_options($db),
     ]);
 }
 case 'sign_cfg_save': {
@@ -272,7 +280,13 @@ case 'sign_cfg_save': {
     if (!is_array($rows)) jerr('設定內容格式不正確');
     $r = ads_cfg_save($db, $deptId, $rows, $uid);
     if (empty($r['ok'])) jerr($r['msg']);
-    jout(true, ['message' => $r['msg'], 'count' => $r['count'] ?? 0]);
+    // 圖章樣式是全站共用一個設定（不分部門範圍）；沒送這個欄位＝不動
+    if (array_key_exists('stamp_tpl_id', $_POST)) {
+        $r2 = ads_stamp_tpl_save($db, (int)$_POST['stamp_tpl_id'], $uid);
+        if (empty($r2['ok'])) jerr($r2['msg']);
+    }
+    $tpl = ads_stamp_tpl($db);
+    jout(true, ['message' => $r['msg'], 'count' => $r['count'] ?? 0, 'stamp_schema' => $tpl ? $tpl['schema'] : null]);
 }
 
 /** 公版設定（管理員）：表格字型／字級／粗細與框線型式，全站文件共用 */
@@ -280,7 +294,8 @@ case 'tpl_style_save': {
     needAdmin($P);
     require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
     $in = [];
-    foreach (['tbl_font','tbl_font_en','tbl_size','tbl_weight','hdr_size','hdr_co_mode','brd_style','brd_w','brd_color','cell_pad',
+    foreach (['rev_co_size','rev_ttl_size','rev_ttl_bold','rev_ttl_ul','issue_dept_id',
+              'tbl_font','tbl_font_en','tbl_size','tbl_weight','hdr_size','hdr_co_mode','brd_style','brd_w','brd_color','cell_pad',
               'body_frame','body_pad','body_gap'] as $k) {
         if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
     }
@@ -295,13 +310,44 @@ case 'sign_state': {
     $vid = (int)($_GET['version_id'] ?? 0);
     needVersion($db, $P, $vid);
     // 帶目前使用者：最後修改人是系統帳號或已離職時，制修訂那一關退回用「現在這個人」
-    $plan = ads_plan($db, $vid, $uid);
+    $plan = ads_plan($db, $vid, $uid, !empty($P['admin']), (string)($_GET['draft_uid'] ?? ''));
     jout(true, [
         'state' => ads_state($db, $vid),
         'plan'  => $plan,
         'me'    => $uid,
         'perms' => $P,
     ]);
+}
+/** 送簽視窗的「制修訂紀錄」區：相對上一次簽核通過內容的條文變動與大小改版判斷 */
+/** 正式版按「編輯」→ 建立（或回到已有的）新版草稿 */
+case 'sign_start_draft': {
+    needEdit($P);
+    require_once __DIR__ . '/../common/as_doc_autorev_lib.php';
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $name = (string)($_SESSION['userCname'] ?? $_SESSION['userName'] ?? '');
+    $r = adrv_start_draft($db, $vid, $uid, $name);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
+}
+case 'sign_discard_draft': {
+    needEdit($P);
+    require_once __DIR__ . '/../common/as_doc_autorev_lib.php';
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $r = adrv_discard_draft($db, $vid);
+    if (empty($r['ok'])) jerr($r['msg']);
+    $doc = adc_version_info($db, $vid);
+    jout(true, $r);
+}
+case 'sign_rev_preview': {
+    adsLib();
+    require_once __DIR__ . '/../common/as_doc_autorev_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $r = adrv_items($db, $vid);
+    if (empty($r['ok'])) jerr($r['msg'] ?? '讀取失敗');
+    jout(true, $r);
 }
 case 'sign_submit': {
     needEdit($P);
@@ -315,7 +361,22 @@ case 'sign_submit': {
         $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
         $st->execute([$uid]); $name = (string)$st->fetchColumn();
     }
-    $r = ads_submit($db, $vid, $picks, $uid, $name);
+    // 送簽視窗使用者確認過的制修訂內容（沒送＝舊呼叫端，簽完走自動判斷）
+    $rev = [];
+    if (isset($_POST['rev_kind'])) {
+        $rev = ['kind' => (string)$_POST['rev_kind'], 'summary' => trim((string)($_POST['rev_summary'] ?? '')),
+                'pages' => (mb_strpos((string)($_POST['rev_pages'] ?? ''), '全冊') !== false) ? '全冊' : preg_replace('/[^0-9,]/', '', (string)($_POST['rev_pages'] ?? '')),
+                'hunks' => $_POST['rev_hunks'] ?? ''];
+        if (!in_array($rev['kind'], ['major', 'minor', 'none'], true)) jerr('請先確認這次是大改版、小改版，或不新增制修訂紀錄');
+    }
+    // 制修訂日期（＝送簽的業務日期）只有管理員能改，不填＝今天；補歷史紙本時用
+    $sd = '';
+    if (!empty($P['admin']) && trim((string)($_POST['submit_date'] ?? '')) !== '') {
+        $sd = trim((string)$_POST['submit_date']);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $sd) || !strtotime($sd)) jerr('制修訂日期格式不正確');
+        if ($sd > date('Y-m-d')) jerr('制修訂日期不可以是未來的日期');
+    }
+    $r = ads_submit($db, $vid, $picks, $uid, $name, $sd, !empty($P['admin']), false, $rev);
     if (empty($r['ok'])) jerr($r['msg'], !empty($r['need_cfg']) ? 'NEED_CFG' : '');
     jout(true, $r);
 }
@@ -351,6 +412,7 @@ case 'sign_release': {
     }
     $r = ads_release($db, $vid, $uid, $name);
     if (empty($r['ok'])) jerr($r['msg']);
+    $r['message'] = $r['msg'];     // 前端 alert 讀的是 message（只有 msg 會跳出「undefined」）
     jout(true, $r);
 }
 
@@ -359,6 +421,9 @@ case 'save': {
     needEdit($P);
     $vid = (int)($_POST['version_id'] ?? 0);
     needVersion($db, $P, $vid);
+    // 已簽核完成並設為正本的版次鎖定：直接存檔會改到正式內容（2026-10-16）；要改請按「編輯」另建新版草稿
+    require_once __DIR__ . '/../common/as_doc_autorev_lib.php';
+    if (adrv_locked($db, $vid)) jerr('這一版已經是正式版本，不能直接修改。請按「編輯」建立新版草稿。', 'LOCKED');
     $opt = [];
     // array_key_exists 判「有沒有送這個欄位」：沒送＝不要動它，送空的才是真的改
     //（本專案在 save_head／row_save／列印設定都踩過「沒送的欄位被寫成 NULL」）
@@ -597,6 +662,33 @@ case 'asref_build': {
         'text' => $pre . eg_asdoc_insert_text($mode, (string)$d['doc_no'], (string)$d['doc_name'], $tpl) . $post,
         'obsolete' => (int)$d['obs'],
     ]);
+}
+
+/**
+ * 自動偵測 AS：一次組出多個參照標記。前端只送 [{doc_id, mode, style}]，HTML 一律由這裡以資料庫現況組出。
+ */
+case 'asref_build_many': {
+    require_once __DIR__ . '/../common/asdoc_lib.php';
+    $list = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($list) || !$list) jerr('沒有要替換的項目');
+    $list = array_slice($list, 0, 500);
+    $styles = eg_asdoc_insert_styles($db);
+    $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document WHERE id=? AND is_deleted=0 LIMIT 1");
+    $out = [];
+    foreach ($list as $it) {
+        $mode = (string)($it['mode'] ?? 'both');
+        if (!in_array($mode, ['both', 'name', 'no'], true)) $mode = 'both';
+        $st->execute([(int)($it['doc_id'] ?? 0)]);
+        $d = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$d) { $out[] = null; continue; }
+        $tpl = '';
+        if ($mode === 'both') {
+            $tpl = $styles[0]['tpl'];
+            foreach ($styles as $x) if ($x['id'] === (string)($it['style'] ?? '')) { $tpl = $x['tpl']; break; }
+        }
+        $out[] = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl);
+    }
+    jout(true, ['html' => $out]);
 }
 
 /**

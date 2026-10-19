@@ -43,11 +43,18 @@ function ads_stages(): array
 function ads_modes(): array
 {
     return [
+        /* 2026-10-16 使用者指定：「制修訂一定會是送審的人，但全站管理員可以更改送審人員」。
+           ＝按下送簽的那個人；一般人固定是自己，頁面管理員可在送簽時改成別人（補歷史單據、代為送審）。 */
+        'submitter'  => '送審的人（管理員可更改）',
         'editor'     => '內容的最後修改人（表單修改人）',
         /* 2026-10-15 使用者指定：「審查應該要由最後修改人的上級主管簽核」。
            單位主管的解析一律走 ai-rules/24 的唯一實作 eg_unit_supervisor()——
            往上只追到「課」級，課級最高主管自己改的就從缺（那是核准欄的事）。 */
         'editor_sup' => '內容最後修改人的單位主管（依 ai-rules/24）',
+        /* 2026-10-16 使用者指定：「審查是此文件部門的單位主管審查」。
+           看的是**文件自己的部門**（所屬部門＋負責課室），跟「誰改的」無關；
+           與下面 doc_owner（管理員另外指派的那一位負責人）是兩回事。 */
+        'doc_dept_sup' => '這份文件所屬部門的單位主管（所屬部門＋負責課室的最高主管）',
         /* 這份文件的 AS 文件部門負責人（負責課室／文件負責部門指派的那一位）；
            他不在職或已調離時自動改用該部門的代理人（as_doc_owner_lib.php）。 */
         'doc_owner'  => '這份文件的 AS 文件部門負責人（不在時用代理人）',
@@ -141,6 +148,61 @@ function ads_cfg_rows(PDO $db, int $deptId): array
     return $rows;
 }
 
+/* ── 制修訂紀錄書的簽章圖章樣式（管理員設定；2026-10-16 使用者交辦）──────────────────
+   沒設定＝eg_stamp.js 的預設回墨印（上弧是本公司名）；有設定＝圖章管理裡設計好的模板
+   （例如「本人簽章(圓)」：上方公司名＋中間姓名＋日期）。存的只有模板 id，圖章內容一律即時由模板產生。 */
+if (!defined('ADS_STAMP_GROUP')) define('ADS_STAMP_GROUP', 'AS_DOC_SIGN');
+
+function ads_stamp_tpl_id(PDO $db): int
+{
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key='stamp_tpl_id' LIMIT 1");
+        $st->execute([ADS_STAMP_GROUP]);
+        return (int)($st->fetchColumn() ?: 0);
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 目前設定的圖章模板（沒設或模板被停用／刪除回 null＝用預設章） */
+function ads_stamp_tpl(PDO $db): ?array
+{
+    $id = ads_stamp_tpl_id($db);
+    if ($id <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$id]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        $sc = json_decode((string)$r['schema_json'], true);
+        return is_array($sc) ? ['id' => (int)$r['id'], 'name' => (string)$r['tpl_name'], 'schema' => $sc] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 設定頁下拉用：可選的圖章模板 */
+function ads_stamp_tpl_options(PDO $db): array
+{
+    try {
+        return $db->query("SELECT p.id, p.tpl_name AS name, t.type_name
+                           FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY t.type_name, p.tpl_name")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+function ads_stamp_tpl_save(PDO $db, int $tplId, int $uid): array
+{
+    if ($tplId > 0) {
+        $st = $db->prepare("SELECT COUNT(*) FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        if (!(int)$st->fetchColumn()) return ['ok' => false, 'msg' => '選到的圖章模板不存在或已停用'];
+    }
+    try {
+        $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,updated_by,updated_at)
+                      VALUES (?,'stamp_tpl_id',?,?,NOW())
+                      ON DUPLICATE KEY UPDATE param_value=VALUES(param_value), updated_by=VALUES(updated_by), updated_at=NOW()")
+           ->execute([ADS_STAMP_GROUP, (string)$tplId, (string)$uid]);
+    } catch (Throwable $e) { return ['ok' => false, 'msg' => '圖章樣式存檔失敗：' . $e->getMessage()]; }
+    return ['ok' => true];
+}
+
 /** 整組覆寫某一個範圍的設定（管理員存檔）。$rows 是已排好順序的陣列 */
 function ads_cfg_save(PDO $db, int $deptId, array $rows, int $uid): array
 {
@@ -212,12 +274,65 @@ function ads_cfg_save(PDO $db, int $deptId, array $rows, int $uid): array
    ══════════════════════════════════════════════════════════════════════ */
 
 /**
+ * 這個人在「指定的部門」底下的職務（一人兼任好幾個職務時，顯示與簽章要用他在那個部門的身分）。
+ * 為什麼要有這支：eg_people_list() 一人只回職級最高的那一個職務，
+ * 技術課工程師兼任生管組組長的人會被印成「生管組 組長」，跟管理員設定的「技術課 工程師」對不上
+ * （2026-10-16 使用者回報）。沒有符合的職務就退回預設職務。
+ */
+function ads_posts_at(PDO $db, int $uid, array $deptIds = []): array
+{
+    if ($uid <= 0) return [];
+    $rows = eg_people_list($db, ['user_ids' => [$uid], 'all_posts' => true]);
+    if ($deptIds) {
+        $ids = array_map('intval', $deptIds);
+        $hit = array_values(array_filter($rows, function ($p) use ($ids) { return in_array((int)($p['dept_id'] ?? 0), $ids, true); }));
+        if ($hit) return [$hit[0]];
+    }
+    return $rows ? [$rows[0]] : eg_people_list($db, ['user_ids' => [$uid]]);
+}
+
+/**
  * 這一列設定「現在」有哪些人可以簽。
  * 一律即時解析：設定存的是部門與職稱，人員異動不必回來改設定。
  */
-function ads_candidates(PDO $db, array $cfg, ?int $editorUid = null, int $docId = 0): array
+function ads_candidates(PDO $db, array $cfg, ?int $editorUid = null, int $docId = 0,
+                        int $submitUid = 0, bool $isAdmin = false, int $drafterUid = 0): array
 {
     $mode = (string)$cfg['mode'];
+    if ($mode === 'submitter') {
+        if ($submitUid <= 0) return [];
+        $me = eg_people_list($db, ['user_ids' => [$submitUid]]);
+        if (!$isAdmin) return $me;
+        /* 管理員可改成別人：自己排第一（預設值），其餘在職者一個職務一列（兼任者的主職也要列得出來，
+           CLAUDE.md 人員列表鐵則⑥）。 */
+        $all = eg_people_list($db, ['all_posts' => true]);
+        $first = []; $rest = [];
+        foreach ($all as $p) { if ((int)$p['id'] === $submitUid) $first[] = $p; else $rest[] = $p; }
+        return array_merge($first ?: $me, $rest);
+    }
+    if ($mode === 'doc_dept_sup') {
+        if ($docId <= 0) return [];
+        require_once __DIR__ . '/unit_supervisor_lib.php';
+        require_once __DIR__ . '/as_doc_content_lib.php';
+        $ids = []; $seen = []; $at = [];
+        foreach (adc_doc_dept_ids($db, $docId) as $dId) {
+            $h = eg_unit_dept_head($db, (int)$dId);
+            $hid = (int)($h['id'] ?? 0);
+            if ($hid > 0 && !isset($seen[$hid])) { $seen[$hid] = 1; $ids[] = $hid; $at[$hid] = (int)$dId; }
+        }
+        /* 制修訂的人自己就是文件部門的主管時，審查不能由他自己簽（球員兼裁判）：
+           改取「他的單位主管」＝往上一層單位（ai-rules/24，只追到課級）。
+           管理員在送簽視窗把制修訂換成別人，這一關也跟著重算。 */
+        if ($drafterUid > 0 && in_array($drafterUid, $ids, true)) {
+            $up = eg_unit_supervisor($db, $drafterUid);
+            $uid2 = (int)($up['id'] ?? 0);
+            // 往上找不到人（已經是最上層）就維持由他自己簽——ai-rules/24：最高主管本人開單時單位主管由申請人自己簽
+            if ($uid2 > 0 && $uid2 !== $drafterUid) { $ids = [$uid2]; $at = [$uid2 => (int)($up['dept_id'] ?? 0)]; }
+        }
+        $out = [];
+        foreach ($ids as $hid) { foreach (ads_posts_at($db, (int)$hid, isset($at[$hid]) ? [$at[$hid]] : []) as $r0) $out[] = $r0; }
+        return $out;
+    }
     if ($mode === 'editor') {
         if (!$editorUid) return [];
         $p = eg_people_list($db, ['user_ids' => [$editorUid]]);
@@ -231,14 +346,16 @@ function ads_candidates(PDO $db, array $cfg, ?int $editorUid = null, int $docId 
            而且完全不報錯（CLAUDE.md 2026-09-30 記過同一個坑）。 */
         $sup = eg_unit_supervisor($db, $editorUid);
         $sid = (int)($sup['id'] ?? 0);      // 回傳的鍵是 id（不是 user_id）
-        return $sid > 0 ? eg_people_list($db, ['user_ids' => [$sid]]) : [];
+        return $sid > 0 ? ads_posts_at($db, $sid, [(int)($sup['dept_id'] ?? 0)]) : [];
     }
     if ($mode === 'doc_owner') {
         if ($docId <= 0) return [];
         require_once __DIR__ . '/as_doc_owner_lib.php';
         $ow = ado_doc_owner($db, $docId);
         $oid = (int)($ow['uid'] ?? 0);
-        return $oid > 0 ? eg_people_list($db, ['user_ids' => [$oid]]) : [];
+        // 顯示他在「負責課室人員來源」範圍內的職務（例：技術課 工程師），不是職級最高的兼任職務
+        $scope = $oid > 0 ? ado_scope_ids($db, (int)($ow['dept_id'] ?? 0)) : [];
+        return $oid > 0 ? ads_posts_at($db, $oid, $scope) : [];
     }
     if ($mode === 'user') {
         $uid = (int)($cfg['user_id'] ?? 0);
@@ -270,7 +387,7 @@ function ads_editor_uid(PDO $db, int $versionId): int
  * 依設定算出「這次送簽要跑哪幾關、每一關有哪些人可選」。
  * 畫面與送出時的驗證共用同一份，兩邊各算一次一定會走鐘。
  */
-function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0): array
+function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0, bool $isAdmin = false, $draftUid = 0): array
 {
     ads_ensure_schema($db);
     $v = adc_version_info($db, $versionId);
@@ -287,9 +404,51 @@ function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0): array
         $editorUid = $fallbackUid;
     }
     $stages = ads_stages();
+    /* 管理員在送簽視窗把「制修訂」那一關改成別人（2026-10-16 使用者交辦）：
+       跟著這個人算的關卡（最後修改人／最後修改人的單位主管）一併換成以他為準，
+       所以改人之後其他關的簽核人會自動變動。只有頁面管理員的選擇才算數。 */
+    $ovr = 0; $draftKey = '';
+    // 畫面送來的是「uid:職務」的 post_key（同一個人兼任時要分得出選的是哪個職務）；舊呼叫端傳純 uid 也收
+    if (is_string($draftUid) && strpos($draftUid, ':') !== false) { $draftKey = $draftUid; $draftUid = (int)$draftUid; }
+    $draftUid = (int)$draftUid;
+    if ($isAdmin && $draftUid > 0 && eg_people_list($db, ['user_ids' => [$draftUid]])) $ovr = $draftUid;
+    // 「制修訂」那一關現在是誰（管理員改過就是他選的）——審查那關要避開同一個人
+    $drafterUid = $ovr;
+    if ($drafterUid <= 0) {
+        foreach ($cfg as $c0) {
+            if ($c0['stage'] !== 'draft') continue;
+            $d0 = ads_candidates($db, $c0, $editorUid, (int)$v['doc_id'], $fallbackUid, false);
+            $drafterUid = (int)($d0[0]['id'] ?? 0);
+            break;
+        }
+    }
     $out = [];
     foreach ($cfg as $c) {
-        $cand = ads_candidates($db, $c, $editorUid, (int)$v['doc_id']);
+        $edUid = ($ovr > 0 && in_array($c['mode'], ['editor', 'editor_sup'], true)) ? $ovr : $editorUid;
+        $cand = ads_candidates($db, $c, $edUid, (int)$v['doc_id'], $fallbackUid, $isAdmin, $drafterUid);
+        $draftOpen = ($isAdmin && $c['stage'] === 'draft');
+        if ($draftOpen) {
+            // 制修訂這一關管理員可改：目前人選排第一（預設值），其餘在職者一個職務一列
+            $all = eg_people_list($db, ['all_posts' => true]);
+            $first = $cand;
+            if ($ovr > 0) {
+                $first = array_values(array_filter($all, function ($p) use ($draftKey, $ovr) {
+                    return $draftKey !== '' ? ((string)($p['post_key'] ?? '') === $draftKey) : ((int)$p['id'] === $ovr);
+                }));
+                if (!$first) $first = eg_people_list($db, ['user_ids' => [$ovr]]);
+                $first = [$first[0]];
+            }
+            // 一個職務一列：同一個人的其他職務也要留在名單裡（只用 id 去重會把兼任者的主職吃掉）
+            $seen = []; foreach ($first as $p) $seen[(string)($p['post_key'] ?? $p['id'])] = 1;
+            $rest = [];
+            foreach ($all as $p) if (empty($seen[(string)($p['post_key'] ?? $p['id'])])) $rest[] = $p;
+            $cand = array_merge($first, $rest);
+        }
+        // 這幾種是「系統算出來的唯一人選」；文件有多個負責課室時單位主管可能不只一位，那就讓人挑
+        $isFixed = in_array($c['mode'], ['editor', 'editor_sup', 'doc_owner', 'user'], true)
+                || ($c['mode'] === 'submitter' && !$isAdmin)
+                || ($c['mode'] === 'doc_dept_sup' && count($cand) <= 1);
+        if ($draftOpen) $isFixed = false;
         $out[] = [
             'cfg_id'    => (int)$c['id'],
             'stage'     => $c['stage'],
@@ -298,9 +457,9 @@ function ads_plan(PDO $db, int $versionId, int $fallbackUid = 0): array
             'mode'      => $c['mode'],
             'auto_sign' => (int)$c['auto_sign'],
             // 這幾種是「系統算出來的唯一人選」，畫面上不給挑（挑了也只有一個）
-            'fixed'     => in_array($c['mode'], ['editor', 'editor_sup', 'doc_owner', 'user'], true),
+            'fixed'     => $isFixed,
             'candidates' => array_map(function ($p) {
-                return ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
+                return ['id' => (int)$p['id'], 'key' => (string)($p['post_key'] ?? $p['id']), 'name' => (string)$p['user_cname'],
                         'dept' => (string)($p['dept_name'] ?? ''), 'pos' => (string)($p['position_name'] ?? '')];
             }, $cand),
         ];
@@ -358,7 +517,7 @@ function ads_current_step(array $steps): ?array
  * auto_sign 的關卡不必挑，系統自動取候選名單第一位（ai-rules/21：池空才退回最高核准人員）。
  */
 function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $uname,
-                    string $submitDate = ''): array
+                    string $submitDate = '', bool $isAdmin = false, bool $noAutoRev = false, array $rev = []): array
 {
     ads_ensure_schema($db);
     $cur = ads_case($db, $versionId);
@@ -369,22 +528,35 @@ function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $una
     if (!$c || trim(strip_tags((string)$c['content_html'])) === '') {
         return ['ok' => false, 'msg' => '這個版次還沒有線上內容，沒有東西可以送簽'];
     }
-    $plan = ads_plan($db, $versionId, $uid);
+    $plan = ads_plan($db, $versionId, $uid, $isAdmin);
     if (empty($plan['ok'])) return ['ok' => false, 'msg' => $plan['msg'], 'need_cfg' => !empty($plan['need_cfg'])];
+    // 管理員改了制修訂的人 → 其他跟著他算的關卡也要以他為準重算（畫面看到的就是送出的，兩邊同一份 ads_plan）
+    if ($isAdmin) {
+        foreach ($plan['steps'] as $s0) {
+            if ($s0['stage'] !== 'draft') continue;
+            $pk = (string)($picks[$s0['cfg_id']] ?? '');
+            if ((int)$pk > 0) {
+                $plan2 = ads_plan($db, $versionId, $uid, true, $pk);
+                if (!empty($plan2['ok'])) $plan = $plan2;
+            }
+            break;
+        }
+    }
 
     // 先把每一關的簽核人決定好（含後端再驗一次前端挑的人真的在候選名單內＝鐵律8）
     $rows = [];
     foreach ($plan['steps'] as $s) {
         $cand = $s['candidates'];
-        $pickId = (int)($picks[$s['cfg_id']] ?? 0);
+        $pickId = (string)($picks[$s['cfg_id']] ?? '');
+        $isPick = function ($p) use ($pickId) { return (string)$p['key'] === $pickId || (string)$p['id'] === $pickId; };
         $chosen = null;
-        if ($s['auto_sign'] || $s['fixed'] || $pickId <= 0) {
+        if ($s['auto_sign'] || $s['fixed'] || (int)$pickId <= 0) {
             $chosen = $cand[0] ?? null;               // 自動簽核／固定人選：取候選第一位
-            if ($pickId > 0) {
-                foreach ($cand as $p) if ($p['id'] === $pickId) { $chosen = $p; break; }
+            if ((int)$pickId > 0) {
+                foreach ($cand as $p) if ($isPick($p)) { $chosen = $p; break; }
             }
         } else {
-            foreach ($cand as $p) if ($p['id'] === $pickId) { $chosen = $p; break; }
+            foreach ($cand as $p) if ($isPick($p)) { $chosen = $p; break; }
             if (!$chosen) {
                 return ['ok' => false, 'msg' => '「' . $s['stage_name'] . '」選到的人不在管理員設定的名單內（或他現在不在職）'];
             }
@@ -407,10 +579,17 @@ function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $una
     $own = !$db->inTransaction();
     if ($own) $db->beginTransaction();
     try {
+        require_once __DIR__ . '/as_doc_autorev_lib.php';
+        adrv_ensure_cols($db);
         $db->prepare("INSERT INTO as_doc_sign_case
-            (version_id, status, is_auto, submit_date, submitted_by, submitted_by_name, submitted_at)
-            VALUES (?, 'pending', ?, ?, ?, ?, NOW())")
-           ->execute([$versionId, $allAuto ? 1 : 0, $today, $uid, $uname]);
+            (version_id, status, is_auto, submit_date, submitted_by, submitted_by_name, submitted_at, no_autorev,
+             rev_summary, rev_pages, rev_kind, rev_hunks)
+            VALUES (?, 'pending', ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?)")
+           ->execute([$versionId, $allAuto ? 1 : 0, $today, $uid, $uname, $noAutoRev ? 1 : 0,
+                      ($rev['summary'] ?? '') !== '' ? mb_substr((string)$rev['summary'], 0, 500, 'UTF-8') : null,
+                      ($rev['pages'] ?? '') !== '' ? mb_substr((string)$rev['pages'], 0, 100, 'UTF-8') : null,
+                      in_array(($rev['kind'] ?? ''), ['major', 'minor', 'none'], true) ? $rev['kind'] : null,
+                      isset($rev['hunks']) && $rev['hunks'] !== '' ? (int)$rev['hunks'] : null]);
         $caseId = (int)$db->lastInsertId();
 
         $ins = $db->prepare("INSERT INTO as_doc_sign_step
@@ -429,10 +608,16 @@ function ads_submit(PDO $db, int $versionId, array $picks, int $uid, string $una
     // 自動簽核的關卡當場簽掉；剩下的通知第一位待簽者
     ads_run_auto($db, $caseId, $uid);
     ads_notify_next($db, $caseId, $uid);
-    $case = ads_case($db, $versionId);
-    return ['ok' => true, 'msg' => ($case && $case['status'] === 'approved')
-        ? '已自動簽核完成' : '已送出簽核', 'case_id' => $caseId,
-        'status' => $case['status'] ?? 'pending'];
+    // 簽核完成時案件可能已被搬到新補的版次列（自動補制修訂紀錄），所以一律以案件 id 查，不用原版次 id
+    $q = $db->prepare("SELECT status, version_id FROM as_doc_sign_case WHERE id=?");
+    $q->execute([$caseId]);
+    $case = $q->fetch(PDO::FETCH_ASSOC) ?: [];
+    $done = (($case['status'] ?? '') === 'approved');
+    $rev = $done ? ($GLOBALS['__ads_autorev'] ?? null) : null;
+    return ['ok' => true, 'msg' => $done
+        ? ('已自動簽核完成' . ($rev ? ('；制修訂紀錄已自動新增版別 ' . $rev['version'] . '（' . ($rev['major'] ? '大改版' : '小改版') . '，' . $rev['hunks'] . ' 處）') : ''))
+        : '已送出簽核', 'case_id' => $caseId,
+        'status' => $case['status'] ?? 'pending', 'version_id' => (int)($case['version_id'] ?? $versionId)];
 }
 
 /**
@@ -509,8 +694,16 @@ function ads_finish_if_done(PDO $db, int $caseId): void
         }
         if ($s['status'] !== 'ok') return;
     }
-    $db->prepare("UPDATE as_doc_sign_case SET status='approved', finished_at=NOW() WHERE id=? AND status='pending'")
-       ->execute([$caseId]);
+    $up = $db->prepare("UPDATE as_doc_sign_case SET status='approved', finished_at=NOW() WHERE id=? AND status='pending'");
+    $up->execute([$caseId]);
+    if ($up->rowCount() > 0) {
+        /* 簽核完成＝自動補制修訂紀錄一列（版別／日期／頁次／摘要），規則見 as_doc_autorev_lib.php。
+           包 try：補列失敗絕不可以讓「已經簽完」變成失敗。 */
+        try {
+            require_once __DIR__ . '/as_doc_autorev_lib.php';
+            $GLOBALS['__ads_autorev'] = adrv_run($db, $caseId);
+        } catch (Throwable $e) { error_log('[ads] autorev: ' . $e->getMessage()); }
+    }
 }
 
 /** 由簽核人做決定 */
@@ -548,11 +741,14 @@ function ads_decide(PDO $db, int $stepId, int $uid, bool $ok, string $note, bool
     ads_finish_if_done($db, (int)$row['cid']);
     ads_notify_next($db, (int)$row['cid'], $uid);
 
-    $st2 = $db->prepare("SELECT status FROM as_doc_sign_case WHERE id=?");
+    $st2 = $db->prepare("SELECT status, version_id FROM as_doc_sign_case WHERE id=?");
     $st2->execute([(int)$row['cid']]);
-    $sNow = (string)$st2->fetchColumn();
-    return ['ok' => true, 'msg' => $ok ? ($sNow === 'approved' ? '已簽核，本件全部完成' : '已簽核，已通知下一位')
-                                       : '已退回', 'status' => $sNow];
+    $c2 = $st2->fetch(PDO::FETCH_ASSOC) ?: [];
+    $sNow = (string)($c2['status'] ?? '');
+    $rev = ($sNow === 'approved') ? ($GLOBALS['__ads_autorev'] ?? null) : null;
+    return ['ok' => true, 'msg' => $ok ? ($sNow === 'approved' ? '已簽核，本件全部完成' . ($rev ? ('；制修訂紀錄已自動新增版別 ' . $rev['version'] . '（' . ($rev['major'] ? '大改版' : '小改版') . '，' . $rev['hunks'] . ' 處）') : '') : '已簽核，已通知下一位')
+                                       : '已退回', 'status' => $sNow,
+            'version_id' => (int)($c2['version_id'] ?? $row['version_id']), 'moved' => $rev ? 1 : 0];
 }
 
 function ads_cancel(PDO $db, int $versionId, int $uid): array
