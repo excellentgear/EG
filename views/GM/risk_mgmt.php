@@ -765,46 +765,32 @@ function loadDraftInfo(){
 $(document).on('click', '#bDraft', function(){
     if (!BOARD.doc){ alert('請先儲存組織處境分析表（草稿是依已儲存的內容產生的）'); return; }
     if (BOARD.dirty){ alert('處境分析表有修改還沒儲存，請先按「儲存」再產生草稿（草稿是依已儲存的內容產生的）'); return; }
-    var msg = DRAFT.risk_doc > 0 ? '已經有尚未確認的風險表草稿（' + DRAFT.risk_items + ' 項）。
-
-重新產生會先清除這份草稿（以及尚未確認的溝通記錄與措施追蹤草稿），再依目前的處境分析表重建。確定嗎？'
-                          : '要依目前儲存的處境分析表產生 ' + BOARD.year + ' 年度的風險與機會因應措施管制表草稿嗎？
-
-風險表確認後，系統會再依每條因應措施自動產生溝通記錄與措施追蹤草稿。';
+    var msg = DRAFT.risk_doc > 0 ? '已經有尚未確認的風險表草稿（' + DRAFT.risk_items + ' 項）。\n\n重新產生會先清除這份草稿（以及尚未確認的溝通記錄與措施追蹤草稿），再依目前的處境分析表重建。確定嗎？'
+                          : '要依目前儲存的處境分析表產生 ' + BOARD.year + ' 年度的風險與機會因應措施管制表草稿嗎？\n\n風險表確認後，系統會再依每條因應措施自動產生溝通記錄與措施追蹤草稿。';
     if (!confirm(msg)) return;
     var $b = $(this).prop('disabled', true); $('#draftInfo').text('產生中…');
     $.ajax({url:API, type:'POST', dataType:'json', timeout:900000, data:{action:'draft_generate', year:BOARD.year, csrf:CSRF}}).done(function(res){
         if (!res || !res.ok){ alert((res && res.error) || '產生失敗'); return; }
         var p = res.report || {};
-        alert('已產生風險表草稿：' + (p.risk_items || 0) + ' 項。
-
-請到「風險與機會因應措施管制表」看過、必要時修改，再按「確認風險表並產生溝通記錄／措施追蹤草稿」。');
+        alert('已產生風險表草稿：' + (p.risk_items || 0) + ' 項。\n\n請到「風險與機會因應措施管制表」看過、必要時修改，再按「確認風險表並產生溝通記錄／措施追蹤草稿」。');
         loadList('risk', true);
     }).fail(function(x){ var m = ''; try { m = JSON.parse(x.responseText).error; } catch (e) {} alert(m || '產生失敗，請稍後再試'); })
       .always(function(){ $b.prop('disabled', false); loadDraftInfo(); });
 });
 function draftCommDone(res){
     var g = res.generated; loadDraftInfo(); if (typeof CUR !== 'undefined' && CUR.kind) loadList(CUR.kind, true);
-    alert(g ? '風險表已確認為正式資料，並依因應措施產生溝通記錄 ' + g.records + ' 筆、措施追蹤 ' + g.tracks + ' 筆（草稿・待確認）。
-
-請到「溝通管理」看過、內容屬實後再確認。' : '已確認');
+    alert(g ? '風險表已確認為正式資料，並依因應措施產生溝通記錄 ' + g.records + ' 筆、措施追蹤 ' + g.tracks + ' 筆（草稿・待確認）。\n\n請到「溝通管理」看過、內容屬實後再確認。' : '已確認');
 }
 $(document).on('click', '#draftConfirmAll', function(){
-    if (!confirm('確認 ' + BOARD.year + ' 年度風險與機會因應措施管制表成為正式資料？
-
-確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿（仍需您看過後再確認）。')) return;
+    if (!confirm('確認 ' + BOARD.year + ' 年度風險與機會因應措施管制表成為正式資料？\n\n確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿（仍需您看過後再確認）。')) return;
     post({action:'draft_confirm', year:BOARD.year}, draftCommDone);
 });
 $(document).on('click', '#draftCommGen', function(){
-    if (!confirm('依 ' + BOARD.year + ' 年度風險表的因應措施產生溝通記錄與措施追蹤草稿？
-
-會先清除尚未確認的舊溝通草稿（已確認的不動）。')) return;
+    if (!confirm('依 ' + BOARD.year + ' 年度風險表的因應措施產生溝通記錄與措施追蹤草稿？\n\n會先清除尚未確認的舊溝通草稿（已確認的不動）。')) return;
     post({action:'draft_comm_generate', year:BOARD.year}, draftCommDone);
 });
 $(document).on('click', '#draftCommConfirm', function(){
-    if (!confirm('確定把 ' + BOARD.year + ' 年度的溝通記錄與措施追蹤草稿全部確認成正式資料？
-
-請確認您已經實際看過、內容屬實。')) return;
+    if (!confirm('確定把 ' + BOARD.year + ' 年度的溝通記錄與措施追蹤草稿全部確認成正式資料？\n\n請確認您已經實際看過、內容屬實。')) return;
     post({action:'draft_confirm', what:'comm', year:BOARD.year}, function(){ loadDraftInfo(); alert('已確認為正式資料'); });
 });
 /* 與前一年度比較（2-GM-05 管理審查輸入：內外部議題的變更） */
@@ -843,9 +829,7 @@ $(document).on('click', '[data-ex]', function(){
 });
 $(document).on('click', '#docDraftConfirm', function(){
     var y = +String($('#fDate').val() || BOARD.year).slice(0, 4) || BOARD.year;
-    if (!confirm('確認這份風險表已經實際看過、內容屬實，要確認成正式資料嗎？
-
-確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿。')) return;
+    if (!confirm('確認這份風險表已經實際看過、內容屬實，要確認成正式資料嗎？\n\n確認後系統會依每條因應措施自動產生溝通記錄與措施追蹤草稿。')) return;
     post({action:'draft_confirm', year:y}, function(res){ closeMask('docMask'); draftCommDone(res); });
 });
 $(document).on('click', '#bGuide', function(){ $('#pane_context').toggleClass('show-guide'); });
