@@ -1949,8 +1949,8 @@ function printDoc(docId){
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'
-            + '<div class="pt-meta"><span>相關部門：' + esc(d.dept_names) + '</span><span>填表日期：' + esc(dispDate(d.fill_date))
-            + (d.updated_at && String(d.updated_at).slice(0, 10) > d.fill_date ? '　最後更新：' + esc(dispDate(String(d.updated_at).slice(0, 10))) : '') + '</span></div>';
+            + '<div class="pt-meta"><span>表單建立日期：' + esc(dispDate(d.fill_date)) + '</span><span>'
+            + (d.updated_at && String(d.updated_at).slice(0, 10) > d.fill_date ? '最後更新：' + esc(dispDate(String(d.updated_at).slice(0, 10))) : '') + '</span></div>';
         var table;
         if (kind === 'context'){
             table = '<table class="pt"><colgroup><col style="width:40px;"><col style="width:70px;"><col style="width:100px;"><col style="width:140px;"><col><col></colgroup>'
@@ -1993,7 +1993,7 @@ function printBlank(kind){
                 + '.qh{background:#EFEFEF;font-weight:bold;font-size:13px;padding:4px 8px;border-bottom:1px solid #333;}table.pt.in{margin:0;font-size:11px;}table.pt.in th,table.pt.in td{padding:3px 4px;}'
                 + 'table.grid>tbody>tr{page-break-inside:avoid;}';
         } else {
-            head += '<div class="pt-meta"><span>相關部門：＿＿＿＿＿＿＿＿＿＿＿＿＿＿</span><span>填表日期：＿＿＿＿＿＿＿＿＿＿</span></div>';
+            head += '<div class="pt-meta"><span>表單建立日期：＿＿＿＿＿＿＿＿＿＿</span><span></span></div>';
             var rows = ''; for (var i = 1; i <= 10; i++) rows += '<tr><td>' + i + '</td>' + blankTd(12, 46).replace('<tr>', '').replace('</tr>', '') + '</tr>';
             body = head + '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
                 + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
