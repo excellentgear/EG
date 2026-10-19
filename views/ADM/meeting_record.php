@@ -2054,8 +2054,8 @@ function edNow(){
 }
 function edRenderState(){
     var h;
-    if (ED_DIRTY) h = '<b style="color:#DD5138;">● 尚有未存檔的變更</b>' + (ED_SAVED_AT ? '　<span>上次存檔：'+ED_SAVED_AT+'</span>' : '');
-    else if (ED_SAVED_AT) h = '<b style="color:#8A5A2B;">✔ 已於 '+ED_SAVED_AT+' 存檔</b>';
+    if (ED_DIRTY) h = '<b style="color:#DD5138;font-size:15px;">● 尚有未存檔的變更</b>' + (ED_SAVED_AT ? '　<span style="color:#DD5138;font-size:13px;">上次存檔：'+ED_SAVED_AT+'</span>' : '');
+    else if (ED_SAVED_AT) h = '<b style="color:#2E8B3D;font-size:15px;">✔ 已於 '+ED_SAVED_AT+' 存檔</b>';
     else h = '<span>尚未修改</span>';
     $('#edSaveState').html(h);
 }
