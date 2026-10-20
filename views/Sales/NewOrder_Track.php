@@ -4292,8 +4292,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php
                     $_gear_spec = $gear_map[(int)($order['d_id_ID'] ?? 0)] ?? '';
                     if (!empty($_gear_spec)): ?>
-                    <div style="overflow:hidden;white-space:pre-line;max-width:100%;margin-top:-8px;line-height:1.25;" title="<?= safe_html($_gear_spec) ?>">
-                        <span style="font-size:11px;color:#888;font-family:Consolas,monospace;letter-spacing:.5px;"><?= safe_html($_gear_spec) ?></span>
+                    <div style="overflow:hidden;max-width:100%;margin-top:-8px;line-height:1.25;" title="<?= safe_html($_gear_spec) ?>">
+                        <span style="display:block;white-space:pre-line;font-size:11px;color:#888;font-family:Consolas,monospace;letter-spacing:.5px;"><?= safe_html($_gear_spec) ?></span>
                     </div>
                     <?php endif; ?>
                 </td>
