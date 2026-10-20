@@ -2081,6 +2081,17 @@ function kpiRemove(){
     }, 'json');
 }
 /* 已完成核准(done)後插入/更新出貨目標達成率(檢視畫面用，非編輯表單)：一般人會清空簽核改回草稿，超級管理員維持已核准。 */
+function mrAttachImportAfterDone(mid){
+    if (!confirm(META.is_superadmin
+        ? '要匯入管審附件資料嗎？系統會依會議日期把相關資料各產生一份 PDF 附件（約十幾秒）。\n超級管理員身分：將維持已核准狀態，不需重新送審。'
+        : '要匯入管審附件資料嗎？系統會依會議日期把相關資料各產生一份 PDF 附件（約十幾秒）。\n此會議記錄已完成核准，匯入後會清空目前簽核紀錄、改回草稿狀態，需要重新送出取得主席／總經理簽章。')) return;
+    var $b = $('button[onclick^="mrAttachImportAfterDone"]').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 產生中，請稍候…');
+    $.post(API, {action:'mr_attach_import', meeting_id:mid}, function(res){
+        if (!res.ok){ $b.prop('disabled', false); alert(res.error||'匯入失敗'); return; }
+        alert('已匯入 ' + (res.files||[]).length + ' 份附件' + ((res.failed||[]).length ? '（轉檔失敗：' + res.failed.join('、') + '）' : '') + (res.removed ? '，已取代上一次系統產生的 ' + res.removed + ' 份' : '') + '。' + (res.reset_note ? '\n\n' + res.reset_note : ''));
+        openView(mid); loadList();
+    }, 'json').fail(function(x){ $b.prop('disabled', false); alert('匯入失敗：' + (x.responseJSON && x.responseJSON.error || x.status)); });
+}
 function kpiInsertAfterDone(mid){
     if (!confirm(META.is_superadmin
         ? '確定要插入/更新出貨目標達成率？（超級管理員身分：將維持已核准狀態，不需重新送審）'
@@ -2373,6 +2384,14 @@ function viewHtml(res){
            + '<span style="font-size:11px;color:#8a6d45;margin-left:6px;">'
            + (META.is_superadmin ? '超級管理員身分：插入後維持已核准狀態，不需重新送審' : '插入後會清空目前簽核紀錄改回草稿，需重新送出取得簽章')
            + '</span></div>';
+    }
+
+    // 管理審查會議：已完成核准後也可匯入管審附件資料（比照上面的出貨目標達成率：超級管理員維持已核准，其他人重置為草稿）
+    if (m.approval_status==='done' && /管理審查|管審/.test(m.subject||'') && PERMS.canEdit && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        h += '<div style="margin-top:8px;"><button type="button" class="b-att" onclick="mrAttachImportAfterDone('+m.meeting_id+')"><i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）</button>'
+           + '<span style="font-size:11px;color:#8a6d45;margin-left:6px;">'
+           + (META.is_superadmin ? '超級管理員身分：匯入後維持已核准狀態，不需重新送審' : '匯入後會清空目前簽核紀錄改回草稿，需重新送出取得簽章')
+           + '；重複匯入會取代上一次系統產生的附件</span></div>';
     }
 
     // 回簽中鎖定提示(2026-08-10使用者明確要求)：存檔並通知後，內容鎖定不可編輯，直到負責人全部回覆確認

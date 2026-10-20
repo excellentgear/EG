@@ -1251,10 +1251,28 @@ case 'mr_attach_import': {
     $m = meeting_load($db, $id);
     if (!meeting_is_mr($m)) jerr('只有管理審查會議可以匯入管審附件資料');
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可匯入', 403);
-    if (!in_array((string)$m['status'], ['draft', 'rejected'], true)) jerr('此會議記錄已送出，無法再變更附件');
+    // 草稿／退回可直接匯入；已完成核准(done)也可（比照插入出貨目標達成率）：超級管理員維持已核准，其他人重置為草稿重新送審；
+    // 簽核進行中不可（內容已送出給簽核人）
+    $ap = meeting_approval_status($db, $id);
+    $isDone = ($ap['status'] === 'done' || (string)$m['status'] === 'done');   // 記錄本身標完成（例如假資料沒有簽核紀錄）也算
+    if (!in_array($ap['status'], ['draft', 'rejected'], true) && !$isDone) jerr('此會議記錄簽核進行中，無法變更附件；僅草稿／退回，或已完成核准後可匯入');
     include_once $document_root . '/EGsystem/src/common/mr_attach_lib.php';
     $r = mr_attach_import($db, $m, $uid, $uname, meeting_attach_dir($db));
     if (empty($r['ok'])) jerr($r['error'] ?? '匯入失敗', 500);
+    if ($isDone) {
+        $isSuper = meeting_is_superadmin($db, $uid);
+        if (!$isSuper) {
+            if ($ap['chair']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['chair']['id']]);
+            if ($ap['gm']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['gm']['id']]);
+            meeting_close_notice($db, $id);
+            $db->prepare("UPDATE meeting_record SET status='draft', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+            $r['reset_note'] = '此會議記錄先前已完成簽核，匯入附件後已重置為草稿狀態，請重新送出以取得主席／總經理簽章。';
+        }
+        try {
+            $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by) VALUES ('views/ADM/meeting_record.php', ?, ?, NOW(), ?)")
+               ->execute([$isSuper ? '超級管理員於結案後匯入管審附件資料(維持已核准)' : '已核准會議記錄匯入管審附件資料(重置為草稿重新送審)', "meeting_id={$id}", $uname]);
+        } catch (Throwable $e) {}
+    }
     jout($r);
 }
 case 'attach_list': {
