@@ -13240,7 +13240,7 @@ foreach($dCounts as $c) {
         function oaOriginPagesHtml(f) {
             var m = f.origin_pages || {}, keys = Object.keys(m);
             if (!keys.length) return '';
-            return '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;" title="這份 PDF 內各料號原圖所在頁">原圖頁：' +
+            return '<span class="oa-origin-sum" style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;" title="這份 PDF 內各料號原圖所在頁">原圖頁：' +
                 keys.map(function(p) { return escapeHtml(p) + ' 第' + escapeHtml(m[p]) + '頁'; }).join('；') + '</span>';
         }
         $(document).on('change', '.oa-file-row .oa-tag-panel input[type=checkbox]', function() {
@@ -13705,6 +13705,11 @@ foreach($dCounts as $c) {
             var attId = $row.data('id');
             var $checked = $row.find('.oa-tag-panel input:checked');
             if (!$checked.length) return;
+            // 取消「原圖」會一併清掉已指定的各料號原圖頁，先讓使用者確認
+            var thisCat = (orderAttachCats || []).filter(function(x) { return String(x.id) === String($(this).val()); }.bind(this))[0];
+            if (!this.checked && thisCat && thisCat.category_name === '原圖' && $row.find('.oa-origin-sum').length) {
+                if (!confirm('取消「原圖」標籤，會同時清除這份 PDF 已指定的各料號原圖頁。\n\n確定要取消？')) { this.checked = true; $row.find('.oa-page-btn').show(); return; }
+            }
             var ids = [];
             $checked.each(function() { ids.push($(this).val()); });
             var names = ids.map(function(id) {
@@ -13718,6 +13723,8 @@ foreach($dCounts as $c) {
                 $row.css('background', '');
                 oaSyncCachedFile(attId, nameStr, ids.join(','));
                 oaRefreshRowPartSelect($row, ids);
+                var hasOrig = (orderAttachCats || []).some(function(c) { return c.category_name === '原圖' && ids.indexOf(String(c.id)) !== -1; });
+                if (!hasOrig) $row.find('.oa-origin-sum').remove();
             }, 'json');
         });
         $(document).on('click', '.oa-file-del', function() {

@@ -137,6 +137,12 @@ function oaInitTable(PDO $pdo): void {
     } catch (Exception $e) {}
 }
 
+/** 「原圖」類別 id（依名稱；找不到回 0） */
+function oaOrigCatId(PDO $pdo): int {
+    try { return (int)$pdo->query("SELECT id FROM quotation_file_categories WHERE category_name='原圖' AND is_active=1 ORDER BY id LIMIT 1")->fetchColumn(); }
+    catch (Exception $e) { return 0; }
+}
+
 /** 頁碼字串正規化（1,3-4；去空白、排序、合併不處理）；不合法回 null */
 function oaPageSpecNormalize(string $s): ?string {
     $s = preg_replace('/[\s，、]+/u', ',', trim($s));
@@ -409,6 +415,14 @@ switch ($action) {
         if (!$lockChk['ok']) { echo json_encode(['success'=>false,'message'=>$lockChk['msg'],'dl_locked'=>true]); break; }
         $pdo->prepare("UPDATE order_attachments SET category_ids=?, linked_part_no=?, dl_is_customer=? WHERE id=?")
             ->execute([$catStr, eg_oa_parts_encode($parts), $lockChk['new_is_customer'], $attId]);
+        // 取消勾選「原圖」＝取消這份 PDF 已指定的各料號原圖頁
+        $origId = oaOrigCatId($pdo);
+        if ($origId > 0 && !in_array($origId, $catIds, true)) {
+            $pdo->prepare("DELETE p FROM order_attachment_pages p
+                           JOIN order_attachments a ON a.filename=p.filename
+                           JOIN order_track ot ON ot.Order_id=a.order_id AND ot.Order_oo=p.order_oo
+                           WHERE a.id=?")->execute([$attId]);
+        }
         echo json_encode(['success' => true]);
         break;
     }
@@ -570,6 +584,19 @@ switch ($action) {
             $pdo->prepare("DELETE FROM order_attachment_pages WHERE filename=? AND order_oo=?")->execute([$row['filename'], $row['order_oo']]);
             $ins = $pdo->prepare("INSERT INTO order_attachment_pages (filename, order_oo, part_no, pages, created_by) VALUES (?,?,?,?,?)");
             foreach ($clean as $p => $n) $ins->execute([$row['filename'], $row['order_oo'], $p, $n, ($uid ?: null)]);
+            // 有指定原圖頁＝這份檔案要帶「原圖」標籤（這張訂單編號底下每一列都補上，已有的不動）
+            $origId = oaOrigCatId($pdo);
+            if ($clean && $origId > 0) {
+                $rq = $pdo->prepare("SELECT a.id, a.category_ids FROM order_attachments a
+                                     JOIN order_track ot ON ot.Order_id=a.order_id
+                                     WHERE a.status='active' AND a.filename=? AND ot.Order_oo=?");
+                $rq->execute([$row['filename'], $row['order_oo']]);
+                $upc = $pdo->prepare("UPDATE order_attachments SET category_ids=? WHERE id=?");
+                foreach ($rq->fetchAll(PDO::FETCH_ASSOC) as $ar) {
+                    $ids = array_values(array_filter(array_map('intval', explode(',', (string)$ar['category_ids']))));
+                    if (!in_array($origId, $ids, true)) { $ids[] = $origId; $upc->execute([implode(',', $ids), $ar['id']]); }
+                }
+            }
             $pdo->commit();
         } catch (Exception $e) {
             $pdo->rollBack();
