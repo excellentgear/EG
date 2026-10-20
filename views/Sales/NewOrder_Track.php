@@ -13236,6 +13236,13 @@ foreach($dCounts as $c) {
         function oaHasOrigCat(cats, checkedIds) {
             return (cats || []).some(function(c) { return c.category_name === '原圖' && checkedIds.indexOf(String(c.id)) !== -1; });
         }
+        // 已指定的「各料號原圖頁」摘要（來自 list_files 的 origin_pages）
+        function oaOriginPagesHtml(f) {
+            var m = f.origin_pages || {}, keys = Object.keys(m);
+            if (!keys.length) return '';
+            return '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;" title="這份 PDF 內各料號原圖所在頁">原圖頁：' +
+                keys.map(function(p) { return escapeHtml(p) + ' 第' + escapeHtml(m[p]) + '頁'; }).join('；') + '</span>';
+        }
         $(document).on('change', '.oa-file-row .oa-tag-panel input[type=checkbox]', function() {
             var $row = $(this).closest('.oa-file-row'), ids = [];
             $row.find('.oa-tag-panel input:checked').each(function() { ids.push(String($(this).val())); });
@@ -13295,6 +13302,7 @@ foreach($dCounts as $c) {
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 // 客戶訂單 PDF 內含多個料號的原圖：預覽縮圖、逐頁指定屬於哪個料號（只有已存檔、同訂單編號有多料號的 PDF 才給）
+                oaOriginPagesHtml(f) +
                 ((f.status === 'active' && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
                     ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;' + (oaHasOrigCat(cats, checkedIds) ? '' : 'display:none;') + '" title="預覽這份 PDF，指定每一頁是哪個料號的原圖"><i class="fa fa-th"></i> 原圖頁對應</span>' : '') +
                 delHtml +
@@ -13528,6 +13536,8 @@ foreach($dCounts as $c) {
                 if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
                 $('#oaPageMapModal').modal('hide');
                 showToast(r.message || '已儲存', 'info');
+                var oid = parseInt($('#hidden_Order_id').val()) || 0;
+                orderAttachRefresh(oid || null);
             }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
         }
 
@@ -16013,17 +16023,18 @@ foreach($dCounts as $c) {
 
     <!-- 客戶訂單 PDF：逐頁指定是哪個料號的原圖 -->
     <div class="modal fade" id="oaPageMapModal" tabindex="-1" role="dialog">
-      <div class="modal-dialog" style="width:97%;max-width:1500px;" role="document">
+      <div class="modal-dialog" style="width:92%;max-width:1300px;margin:12px auto;" role="document">
         <div class="modal-content">
-          <div class="modal-header" style="background:#8a5a2b;color:#fff;">
+          <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:10px 14px;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+            <button type="button" class="btn btn-sm btn-primary" style="float:right;margin:-1px 14px 0 0;" onclick="opmSave()"><i class="fa fa-check"></i> 儲存</button>
             <h4 class="modal-title"><i class="fa fa-th"></i> 原圖頁對應：這份 PDF 的每一頁是哪個料號的原圖</h4>
           </div>
           <div class="modal-body" style="padding:12px;">
             <div id="opm-file" style="font-size:12px;color:#5d4037;font-weight:600;"></div>
             <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號；點左邊縮圖會在中間顯示大圖（可捲動、可用上一頁／下一頁），確認內容後按大圖上方的「加入／取消」鈕指定給該料號（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
             <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-              <div id="opm-pages" style="flex:0 0 112px;max-height:72vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:4px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
+              <div id="opm-pages" style="flex:0 0 112px;max-height:calc(100vh - 250px);overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:4px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
               <div style="flex:1 1 520px;min-width:300px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                   <button type="button" class="btn btn-xs btn-default" onclick="opmFocus(opm.focus-1)"><i class="fa fa-chevron-left"></i> 上一頁</button>
@@ -16031,7 +16042,7 @@ foreach($dCounts as $c) {
                   <span id="opm-focus-label" style="font-size:12px;font-weight:600;color:#5d4037;"></span>
                   <button type="button" id="opm-toggle" class="btn btn-sm btn-warning" style="margin-left:auto;" onclick="opmToggleFocus()"></button>
                 </div>
-                <div id="opm-big" style="max-height:72vh;overflow:auto;border:1px solid #ddd;border-radius:4px;background:#fff;text-align:center;"><span style="color:#aaa;line-height:120px;">載入中…</span></div>
+                <div id="opm-big" style="max-height:calc(100vh - 250px);overflow:auto;border:1px solid #ddd;border-radius:4px;background:#fff;text-align:center;"><span style="color:#aaa;line-height:120px;">載入中…</span></div>
               </div>
               <div style="flex:0 0 250px;max-width:100%;">
                 <div id="opm-parts" style="max-height:60vh;overflow-y:auto;"></div>
@@ -16041,7 +16052,6 @@ foreach($dCounts as $c) {
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-            <button type="button" class="btn btn-primary" onclick="opmSave()"><i class="fa fa-check"></i> 儲存</button>
           </div>
         </div>
       </div>

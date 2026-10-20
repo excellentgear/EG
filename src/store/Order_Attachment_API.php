@@ -347,7 +347,23 @@ switch ($action) {
             $sq->execute($activeFilenames);
             $sharedSet = array_flip($sq->fetchAll(PDO::FETCH_COLUMN));
         }
+        // 客戶訂單 PDF 的「各料號原圖頁」對照（只取這張訂單的訂單編號底下）
+        $pageMapByFile = [];
+        if ($orderId > 0 && $activeFilenames) {
+            try {
+                $ooq = $pdo->prepare("SELECT Order_oo FROM order_track WHERE Order_id=?");
+                $ooq->execute([$orderId]);
+                $curOo = (string)$ooq->fetchColumn();
+                if ($curOo !== '') {
+                    $phF = implode(',', array_fill(0, count($activeFilenames), '?'));
+                    $pmq = $pdo->prepare("SELECT filename, part_no, pages FROM order_attachment_pages WHERE order_oo=? AND filename IN ($phF)");
+                    $pmq->execute(array_merge([$curOo], $activeFilenames));
+                    foreach ($pmq->fetchAll(PDO::FETCH_ASSOC) as $pm) { $pageMapByFile[$pm['filename']][$pm['part_no']] = $pm['pages']; }
+                }
+            } catch (Exception $e) {}
+        }
         foreach ($rows as &$r) {
+            $r['origin_pages'] = $pageMapByFile[$r['filename']] ?? new stdClass();
             $ids = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
             $r['category_name'] = implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
             $r['is_shared'] = isset($sharedSet[$r['filename']]);
