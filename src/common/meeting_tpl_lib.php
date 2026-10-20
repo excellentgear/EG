@@ -134,12 +134,14 @@ function meeting_tpl_source_text(PDO $db, string $src, string $meetingDate, arra
     $hdr = "{$y}年度（{$from}～{$to}）";
     try {
         switch ($src) {
-            case 'kpi': return meeting_tpl_text_kpi($db, $y, $mo, array_map('intval', (array)($opt['ids'] ?? [])));
+            case 'kpi': return meeting_tpl_text_kpi($db, $y, $mo, array_map('intval', (array)($opt['ids'] ?? [])), !empty($opt['full']));
             case 'ir':
                 include_once __DIR__ . '/ir_stats_lib.php';
-                return irs_text($db, $from, $to);
+                $t = irs_text($db, $from, $to);
+                if (empty($opt['full'])) { $t = explode("\n", $t)[0] . '（客戶別、退貨性質與原因分類明細見管審附件）'; }   // 項目內只留摘要，明細放附件 PDF
+                return $t;
             case 'vendor': return meeting_tpl_text_vendor($db, $y);
-            case 'mfg':    return meeting_tpl_text_mfg($db, $y, $from, $to, $mo);
+            case 'mfg':    return meeting_tpl_text_mfg($db, $y, $from, $to, $mo, !empty($opt['full']));
             case 'car':
                 $r = $db->prepare("SELECT status, COUNT(*) n FROM car_order WHERE fill_date BETWEEN ? AND ? GROUP BY status");
                 $r->execute([$from, $to]);
@@ -167,7 +169,7 @@ function meeting_tpl_source_text(PDO $db, string $src, string $meetingDate, arra
                 } catch (Throwable $e) {}
                 return $s;
             case 'risk': return meeting_tpl_text_risk($db, $y);
-            case 'prev': return meeting_tpl_text_prev($db, $meetingDate);
+            case 'prev': return meeting_tpl_text_prev($db, $meetingDate, !empty($opt['full']));
         }
     } catch (Throwable $e) {
         error_log('[meeting_tpl_source_text ' . $src . '] ' . $e->getMessage());
@@ -197,7 +199,7 @@ function meeting_tpl_text_risk(PDO $db, int $y): string {
 }
 
 /** 前次管理審查（會議日期之前最近一場）的決議項目：負責單位、應完成日、確認狀態——供逐項檢討執行情形 */
-function meeting_tpl_text_prev(PDO $db, string $meetingDate): string {
+function meeting_tpl_text_prev(PDO $db, string $meetingDate, bool $full = false): string {
     include_once __DIR__ . '/date_fmt_lib.php';
     $d = $meetingDate !== '' ? $meetingDate : date('Y-m-d');
     $q = $db->prepare("SELECT meeting_id, meeting_date FROM meeting_record
@@ -218,49 +220,72 @@ function meeting_tpl_text_prev(PDO $db, string $meetingDate): string {
                  . '；應完成：' . ($r['due_date'] ? eg_fmt_date($r['due_date']) : 'NA')
                  . '；負責人確認：' . ((int)$cf->fetchColumn() > 0 ? '已確認' : '尚無確認紀錄') . '）';
     }
-    return '【系統資料】前次管理審查（' . eg_fmt_date($m['meeting_date']) . '）決議事項共 ' . count($lines) . " 項：
+    $total = count($lines);
+    if (!$full && $total > 6) { $lines = array_slice($lines, 0, 6); $lines[] = '・…其餘 ' . ($total - 6) . ' 項見管審附件'; }
+    return '【系統資料】前次管理審查（' . eg_fmt_date($m['meeting_date']) . '）決議事項共 ' . $total . " 項：
 " . ($lines ? implode("
 ", $lines) : '・（前次沒有決議項目）');
 }
 
-function meeting_tpl_text_kpi(PDO $db, int $y, int $mo, array $ids = []): string {
+/** KPI 逐指標、逐月資料（供簡版文字與附件表格共用）：[['name','unit','dir','tg','months'=>[月=>值],'miss'=>[月=>值],'last'=>[月,值]|null] …] */
+function meeting_tpl_kpi_rows(PDO $db, int $y, int $mo, array $ids = [], array $calcKeys = []): array {
     include_once __DIR__ . '/kpi_as_lib.php';
     $sql = "SELECT i.indicator_id, i.name, y.target_direction, y.target_value, y.target_unit, y.target_text
               FROM kpi_as_indicator i JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
              WHERE i.is_active=1 AND y.is_active=1";
     $args = [$y];
     if ($ids) { $sql .= ' AND i.indicator_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $args = array_merge($args, $ids); }
+    if ($calcKeys) { $sql .= ' AND y.calculator_key IN (' . implode(',', array_fill(0, count($calcKeys), '?')) . ')'; $args = array_merge($args, $calcKeys); }
     $st = $db->prepare($sql . ' ORDER BY i.sort_order, i.indicator_id');
     $st->execute($args);
-    $inds = $st->fetchAll(PDO::FETCH_ASSOC);
-    if (!$inds) return "【系統資料】{$y}年度尚未設定 KPI 指標" . ($ids ? '（或所選指標未啟用）' : '') . '。';
-    $mq = $db->prepare("SELECT * FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month<=? ORDER BY month DESC");
-    $lines = []; $bad = 0;
-    foreach ($inds as $iy) {
+    $mq = $db->prepare("SELECT * FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month<=? ORDER BY month");
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $iy) {
         $mq->execute([(int)$iy['indicator_id'], $y, $mo]);
-        $all = $mq->fetchAll(PDO::FETCH_ASSOC);
-        $val = null; $mm = null; $trend = [];
-        foreach ($all as $mv) {
+        $months = []; $miss = [];
+        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $mv) {
             $v = kpi_as_display_value($mv);
             if ($v === null) continue;
-            if ($val === null) { $val = $v; $mm = (int)$mv['month']; }
-            $trend[(int)$mv['month']] = $v;
+            $months[(int)$mv['month']] = $v;
+            if (kpi_as_below_target($v, $iy)) $miss[(int)$mv['month']] = $v;
         }
         $dir = ['lte'=>'≤', 'yes'=>'', 'gte'=>'≥'][$iy['target_direction']] ?? '≥';
         $unit = (string)($iy['target_unit'] ?? '');
         $tg = $iy['target_value'] !== null ? ($dir . (float)$iy['target_value'] . $unit) : (string)($iy['target_text'] ?? '');
-        if ($val === null) { $lines[] = "・{$iy['name']}：尚無數據（目標 {$tg}）"; continue; }
-        $below = kpi_as_below_target($val, $iy);
-        if ($below) $bad++;
-        $line = "・{$iy['name']}：{$mm}月 " . (float)$val . $unit . "（目標 {$tg}）" . ($below ? '【未達標】' : '達標');
-        if ($ids && $trend) {   // 只挑了特定指標時，順便列出各月走勢
-            ksort($trend); $p = [];
-            foreach ($trend as $m => $v) $p[] = "{$m}月 " . (float)$v . $unit;
-            $line .= "\n　各月：" . implode('、', $p);
-        }
-        $lines[] = $line;
+        $last = null; if ($months) { $km = max(array_keys($months)); $last = [$km, $months[$km]]; }
+        $out[] = ['name' => (string)$iy['name'], 'unit' => $unit, 'tg' => $tg, 'months' => $months, 'miss' => $miss, 'last' => $last];
     }
-    return "【系統資料】{$y}年度 KPI 截至 {$mo} 月（未達標 {$bad} 項）：\n" . implode("\n", $lines);
+    return $out;
+}
+/** 簡版 KPI 行：只列未達標的指標與月份（達標的不逐項列出，免得資料過多混淆重點） */
+function meeting_tpl_kpi_miss_lines(array $rows): array {
+    $lines = [];
+    foreach ($rows as $r) {
+        if (!$r['miss']) continue;
+        $p = []; foreach ($r['miss'] as $m => $v) $p[] = "{$m}月 " . (float)$v . $r['unit'];
+        $shown = count($p) > 6 ? implode('、', array_slice($p, 0, 6)) . '…' : implode('、', $p);
+        $lines[] = "・{$r['name']}（目標 {$r['tg']}）：未達標 " . count($p) . " 個月（{$shown}）";
+    }
+    return $lines;
+}
+
+function meeting_tpl_text_kpi(PDO $db, int $y, int $mo, array $ids = [], bool $full = false): string {
+    $rows = meeting_tpl_kpi_rows($db, $y, $mo, $ids);
+    if (!$rows) return "【系統資料】{$y}年度尚未設定 KPI 指標" . ($ids ? '（或所選指標未啟用）' : '') . '。';
+    $withData = array_values(array_filter($rows, function ($r) { return $r['months']; }));
+    $bad = array_values(array_filter($withData, function ($r) { return $r['miss']; }));
+    if ($full) {
+        $L = [];
+        foreach ($rows as $r) {
+            if (!$r['months']) { $L[] = "・{$r['name']}：尚無數據（目標 {$r['tg']}）"; continue; }
+            [$km, $kv] = $r['last'];
+            $L[] = "・{$r['name']}：{$km}月 " . (float)$kv . $r['unit'] . "（目標 {$r['tg']}）" . (isset($r['miss'][$km]) ? '【未達標】' : '達標');
+        }
+        return "【系統資料】{$y}年度 KPI 截至 {$mo} 月（未達標 " . count($bad) . " 項）：\n" . implode("\n", $L);
+    }
+    $head = "【系統資料】{$y}年度 KPI 截至 {$mo} 月：有數據 " . count($withData) . ' 項，' . ($bad ? '其中 ' . count($bad) . ' 項有未達標月份：' : '全部達標。');
+    if (!$bad) return $head . (count($rows) > count($withData) ? '（另有 ' . (count($rows) - count($withData)) . ' 項尚無數據）' : '');
+    return $head . "\n" . implode("\n", meeting_tpl_kpi_miss_lines($bad)) . "\n（其餘 " . (count($withData) - count($bad)) . ' 項全數達標；逐月數值見管審附件）';
 }
 
 /** 供應商定期評核（與供應商稽核頁的定期評核同一支 vendor_periodic_eval，不另算） */
@@ -289,7 +314,7 @@ function meeting_tpl_text_vendor(PDO $db, int $y): string {
 }
 
 /** 製造過程能力：製程報工不良率（依製程類別）＋回廠 QC 檢驗不良＋成品出貨不良（取 KPI 月值） */
-function meeting_tpl_text_mfg(PDO $db, int $y, string $from, string $to, int $mo): string {
+function meeting_tpl_text_mfg(PDO $db, int $y, string $from, string $to, int $mo, bool $full = false): string {
     $L = ["【系統資料】{$y}年度（{$from}～{$to}）製造過程能力："];
     // ① 製程報工不良率
     $st = $db->prepare("SELECT COALESCE(pt.process_type, '（未分類）') t, SUM(r.produced_qty) q, COALESCE(SUM(g.ng),0) ng
@@ -305,7 +330,7 @@ function meeting_tpl_text_mfg(PDO $db, int $y, string $from, string $to, int $mo
         $tq = 0; $tn = 0; $p = [];
         foreach ($rows as $r) { $tq += (float)$r['q']; $tn += (float)$r['ng']; $p[] = "{$r['t']} " . (0 + $r['ng']) . '/' . (0 + $r['q']) . '＝' . round(100 * $r['ng'] / $r['q'], 2) . '%'; }
         $L[] = '・製程報工不良率：全廠 ' . (0 + $tn) . '/' . (0 + $tq) . '＝' . round(100 * $tn / max(1, $tq), 2) . '%（不良數/完成數）';
-        $L[] = '　各製程類別（由高至低）：' . implode('、', array_slice($p, 0, 8));
+        if ($full || $tn > 0) $L[] = '　各製程類別（由高至低）：' . implode('、', array_slice($p, 0, 8));
         // 不良原因前 5
         $rs = $db->prepare("SELECT COALESCE(nt.ng_txt,'（未填原因）') c, SUM(g.ng_qty) n
                               FROM pm_process_daily_ng g JOIN pm_process_daily_report r ON r.report_id=g.report_id
@@ -313,7 +338,7 @@ function meeting_tpl_text_mfg(PDO $db, int $y, string $from, string $to, int $mo
                              WHERE r.report_date BETWEEN ? AND ? GROUP BY c ORDER BY n DESC LIMIT 5");
         $rs->execute([$from, $to]);
         $pp = []; foreach ($rs->fetchAll(PDO::FETCH_ASSOC) as $r) $pp[] = $r['c'] . ' ' . (0 + $r['n']);
-        if ($pp) $L[] = '　主要不良原因（前5）：' . implode('、', $pp);
+        if ($pp && ($full || $tn > 0)) $L[] = '　主要不良原因（前5）：' . implode('、', $pp);
     } else $L[] = '・製程報工不良率：期間內沒有報工資料。';
     // ② 回廠 QC 檢驗
     $q = $db->prepare("SELECT QC_check, COUNT(*) n FROM bom_ing WHERE QC_check_date BETWEEN ? AND ? AND QC_check IS NOT NULL AND QC_check<>'' GROUP BY QC_check");
@@ -324,26 +349,17 @@ function meeting_tpl_text_mfg(PDO $db, int $y, string $from, string $to, int $mo
         $ng = (int)($m['ng'] ?? 0); $qq = (int)($m['QQ'] ?? 0); $aod = (int)($m['AOD'] ?? 0);
         $L[] = "・回廠 QC 檢驗：共 {$tot} 筆，驗退 {$ng} 筆（" . round(100 * $ng / $tot, 2) . "%）" . ($qq ? "、部分不良 {$qq} 筆" : '') . ($aod ? "、特採 {$aod} 筆" : '') . '。';
     } else $L[] = '・回廠 QC 檢驗：期間內沒有檢驗資料。';
-    // ③ KPI 上已設定的不良率指標（目標對照）
-    include_once __DIR__ . '/kpi_as_lib.php';
-    $ks = $db->prepare("SELECT i.indicator_id, i.name, y.target_direction, y.target_value, y.target_unit
-                          FROM kpi_as_indicator i JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
-                         WHERE i.is_active=1 AND y.is_active=1 AND y.calculator_key IN ('process_ng_rate','incoming_ng_rate','packing_ng_rate')
-                         ORDER BY i.sort_order");
-    $ks->execute([$y]);
-    $mq = $db->prepare("SELECT * FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month<=? ORDER BY month");
-    foreach ($ks->fetchAll(PDO::FETCH_ASSOC) as $k) {
-        $mq->execute([(int)$k['indicator_id'], $y, $mo]);
-        $num = 0; $den = 0; $p = [];
-        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $mv) {
-            $v = kpi_as_display_value($mv);
-            if ($mv['numerator'] !== null) $num += (float)$mv['numerator'];
-            if ($mv['denominator'] !== null) $den += (float)$mv['denominator'];
-            if ($v !== null) $p[] = (int)$mv['month'] . '月 ' . (float)$v . $k['target_unit'];
+    // ③ KPI 上已設定的不良率指標：完整版逐月列出；簡版只列未達標的月份
+    $kr = meeting_tpl_kpi_rows($db, $y, $mo, [], ['process_ng_rate', 'incoming_ng_rate', 'packing_ng_rate']);
+    if ($full) {
+        foreach ($kr as $k) {
+            $p = []; foreach ($k['months'] as $m => $v) $p[] = "{$m}月 " . (float)$v . $k['unit'];
+            $L[] = "・KPI「{$k['name']}」（目標 {$k['tg']}）：" . ($p ? implode('、', $p) : '尚無數據');
         }
-        $dir = ['lte'=>'≤', 'gte'=>'≥'][$k['target_direction']] ?? '';
-        $L[] = "・KPI「{$k['name']}」（目標 {$dir}" . (float)$k['target_value'] . $k['target_unit'] . '）：'
-             . ($den > 0 ? '累計 ' . (0 + $num) . '/' . (0 + $den) . '＝' . round(100 * $num / $den, 2) . '%；' : '') . implode('、', $p);
+    } else {
+        $ml = meeting_tpl_kpi_miss_lines($kr);
+        if ($ml) { $L[] = '・不良率類 KPI 有未達標月份：'; foreach ($ml as $x) $L[] = $x; }
+        elseif ($kr) $L[] = '・不良率類 KPI（' . implode('、', array_column($kr, 'name')) . '）全部達標。';
     }
     return implode("\n", $L);
 }

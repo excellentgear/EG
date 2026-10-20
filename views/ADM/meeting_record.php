@@ -410,6 +410,7 @@ foreach ($roleRows as $rr) {
                 <input type="file" id="edAttachFile" style="font-size:12px;">
                 <input type="text" id="edAttachType" maxlength="100" placeholder="附件類型／說明(自由輸入，選填)" style="width:220px;">
                 <button type="button" class="b-att" onclick="edUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
+                <button type="button" class="b-att" id="btnMrAttach" style="display:none;" onclick="mrAttachImport()" title="把相關系統資料（KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議）各自轉成 PDF，自動成為這場會議的附件；重複按會取代上一次系統產生的附件，人工上傳的不動"><i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）</button>
                 <span style="font-size:11px;color:#8a6d45;">單檔上限 20MB</span>
             </div>
         </div>
@@ -820,6 +821,7 @@ foreach ($roleRows as $rr) {
         <h4>管理審查會議：範本輸入框與結果摘要</h4>
         ・套用「管理審查會議」範本後，每個要項裡的 <b>【待填：提示】</b> 會變成一個<b>獨立輸入框</b>（標題就是提示文字），直接在框內填寫；條文與系統資料以灰底顯示。要項內容仍組成完整文字，<b>列印與檢視和其他會議紀錄相同</b>。沒填的輸入框送出前仍會被擋下；要把整段當一般文字自由改寫，按該項下方的「改為整段文字自由編輯」。<br>
         ・範本的項目取自程序書 2-GM-05 線上版（輸入 6.1.4、輸出 6.1.5）；程序書改版時，範本管理會提醒並可一鍵同步。「6.1.4.8 前次管理審查決議事項」會自動列出前一場管理審查的決議（負責單位、應完成日、確認狀態）。<br>
+        ・要項內的系統資料只留<b>重點摘要</b>（KPI 與不良率只列<b>未達標</b>的指標與月份）；完整明細按附件區的「<b>匯入管審附件資料（自動轉 PDF）</b>」：系統依已存檔的會議日期，把 KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議各產生一份 PDF 成為本會議附件（需先存草稿；重複按會取代上一次系統產生的，人工上傳的不動）。<br>
         ・會議主題含「管理審查」時，編輯畫面最下方多一個<b>管理審查結果摘要</b>，要回答 5 個問題（整體狀況、重要問題、管理階層決定、資源、後續追蹤），<b>送出前必填</b>（前後端都會檢查）。「依本次內容整理草稿」只整理已填的輸入與決議並帶入空白欄位，第 1 題整體判斷要由主席／管理代表自己填。列印時摘要另成一頁。<br>
         <h4>權限角色</h4>
         <b>可看到哪些會議記錄</b>：①<b>會議記錄登錄</b>＝只看得到<b>自己建立或與自己相關</b>（出席／主席／總經理／負責簽名）的會議記錄；②<b>產銷會議人員</b>（功能碼「檢視產銷會議」）＝<b>全部產銷會議</b>（主題含「產銷」、已送出者）＋自己建立或相關的其他會議；③<b>會議記錄檢索</b>（功能碼「檢索全部」）＝不限是否相關、可檢索全部已送出的會議記錄；④會議記錄管理員＝全部＋刪除、修改他人已送出記錄、維護常用設定；管理者全權。任何角色都<b>看不到他人尚未送出的草稿</b>（除非是自己建立或需要自己簽名）。新增/編輯/送出需「會議記錄登錄」。<br>
@@ -1576,7 +1578,7 @@ function mrCovered(c, text){
     return hit;
 }
 function mrRefresh(){
-    var on = mrIsMr(); $('#edSecMr').toggle(on); $('#edSecSum').toggle(on && !ED_NOTICE_MODE); if (!on) return;
+    var on = mrIsMr(); $('#edSecMr').toggle(on); $('#edSecSum').toggle(on && !ED_NOTICE_MODE); $('#btnMrAttach').toggle(on && !ED_NOTICE_MODE); if (!on) return;
     var d = $('#edDate').val() || META.today;
     if (MR_CL && MR_CL_DATE === d){ mrRender(); return; }
     if (MR_LOADING) return; MR_LOADING = true;
@@ -3093,6 +3095,22 @@ function mrSumDraft(){
     mrSumRender();
     alert(n ? ('已把整理出的草稿帶入 ' + n + ' 個空白欄位，請逐項確認、修改成實際會議的結論。\n\n第 1 題（整體狀況）請由主席／管理代表依會議判斷填寫，系統不代為產生。')
             : '目前沒有可整理的內容（要項還沒填，或欄位都已有內容）。\n第 1 題（整體狀況）請由主席／管理代表依會議判斷填寫。');
+}
+/* 匯入管審附件資料：把相關系統資料轉成 PDF 附件（後端依「已存檔的會議日期」計算；項目內只留摘要，完整明細在附件） */
+function mrAttachImport(){
+    if (!EDIT_ID){ alert('請先按「存草稿」建立會議（套用範本後也請先存檔），再匯入管審附件資料。'); return; }
+    if (!confirm('要匯入管審附件資料嗎？\n\n系統會依已存檔的會議日期，把 KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議各產生一份 PDF 附件。\n已有的「管審附件（系統產生）」會被取代，人工上傳的附件不受影響。\n（約需十幾秒）')) return;
+    var $b = $('#btnMrAttach').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 產生中，請稍候…');
+    $.post(API, {action:'mr_attach_import', meeting_id:EDIT_ID}, function(res){
+        $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）');
+        if (!res.ok){ alert(res.error || '匯入失敗'); return; }
+        $.getJSON(API, {action:'attach_list', meeting_id:EDIT_ID}, function(r){ EDIT_ATTACHES = r.attaches || []; renderEdAttach(); });
+        alert('已匯入 ' + (res.files||[]).length + ' 份附件：\n' + (res.files||[]).map(function(f){ return '・' + f; }).join('\n')
+              + ((res.failed||[]).length ? '\n\n以下轉檔失敗：' + res.failed.join('、') : '') + (res.removed ? '\n\n（已取代上一次系統產生的 ' + res.removed + ' 份）' : ''));
+    }, 'json').fail(function(x){
+        $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）');
+        alert('匯入失敗：' + (x.responseJSON && x.responseJSON.error || x.status));
+    });
 }
 function mrSumParse(m){ try { return m.mr_summary_json ? (JSON.parse(m.mr_summary_json) || null) : null; } catch (e) { return null; } }
 function mrSumTableHtml(m){

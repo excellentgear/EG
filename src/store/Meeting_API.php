@@ -1243,6 +1243,20 @@ case 'attach_delete': {
     $db->prepare("DELETE FROM meeting_attach WHERE attach_id=?")->execute([$aid]);
     jout([]);
 }
+/* 管理審查：把相關系統資料各自轉成 PDF，自動成為這場會議的附件（重複匯入＝取代上一次系統產生的，人工上傳的不動） */
+case 'mr_attach_import': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    if ($id <= 0) jerr('請先按「存草稿」建立會議後再匯入');
+    $m = meeting_load($db, $id);
+    if (!meeting_is_mr($m)) jerr('只有管理審查會議可以匯入管審附件資料');
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可匯入', 403);
+    if (!in_array((string)$m['status'], ['draft', 'rejected'], true)) jerr('此會議記錄已送出，無法再變更附件');
+    include_once $document_root . '/EGsystem/src/common/mr_attach_lib.php';
+    $r = mr_attach_import($db, $m, $uid, $uname, meeting_attach_dir($db));
+    if (empty($r['ok'])) jerr($r['error'] ?? '匯入失敗', 500);
+    jout($r);
+}
 case 'attach_list': {
     $mid = (int)($_GET['meeting_id'] ?? 0);
     if ($mid <= 0) jout(['attaches'=>[]]);
