@@ -75,7 +75,7 @@ if (!isset($_SESSION['userName'])) {
         @media print { .page-help-btn, .td-bar, .td-side { display:none !important; } }
     </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body">
   <div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html'; ?>
