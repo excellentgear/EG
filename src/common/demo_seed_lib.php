@@ -786,6 +786,35 @@ function eg_demo_mr_fill(PDO $db, int $mid, string $date): array
     return ['items' => $n, 'summary' => true];
 }
 
+/**
+ * 新增一場【假資料】管理審查會議（已完成狀態）：表頭／出席人員比照產生器，項目與摘要依範本（eg_demo_mr_fill）。
+ * 只新增，不動任何既有會議；同日已有【假資料】管審時拒絕（避免重複）。
+ */
+function eg_demo_mr_create(PDO $db, string $date): int
+{
+    eg_demo_mr_prepare($db);
+    if (eg_demo_q1($db, "SELECT meeting_id FROM meeting_record WHERE subject LIKE ? AND meeting_date=?", [EG_DEMO_TAG . '%管理審查%', $date])) throw new RuntimeException($date . ' 已有【假資料】管理審查會議');
+    $topU = eg_org_user($db, 'top_approver');
+    $own = [];
+    foreach (['業務課', '生管組', '生產課', '品管課', '技術課', '管理課', '倉管組', '採購組'] as $dn) $own[$dn] = eg_demo_owner($db, $dn);
+    if (!$topU || !$own['管理課']) throw new RuntimeException('找不到主席（最高核准人員）或管理課人員');
+    $chair = ['id' => (int)$topU['id'], 'name' => (string)($topU['user_cname'] ?? '')];
+    $att = [$chair['id'] => [$chair['name'], '總經理室', '總經理', 1]];
+    foreach ($own as $dn => $o) if ($o && !isset($att[$o['id']])) $att[$o['id']] = [$o['name'], $dn, $o['pos'], 0];
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO meeting_record (subject, meeting_date, start_time, end_time, location, chair_user_id, chair_name, recorder_user_id, recorder_name, status, created_at, created_by, created_by_name, updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,'done',?,1,'超級管理員',?)")
+           ->execute([EG_DEMO_TAG . '管理審查會議', $date, '09:00', '10:30', '大會議室', $chair['id'], $chair['name'], $own['管理課']['id'], $own['管理課']['name'], $date . ' 08:30:00', $date . ' 11:00:00']);
+        $mid = (int)$db->lastInsertId();
+        $ia = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name, position_name, is_chair, signed, signed_at) VALUES (?,?,?,?,?,?,1,?)");
+        foreach ($att as $uid => $a) $ia->execute([$mid, $uid, $a[0], $a[1], $a[2], $a[3], $date . ' 09:05:00']);
+        eg_demo_mr_fill($db, $mid, $date);
+        $db->commit();
+        return $mid;
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+}
+
 /** 把某年度既有的【假資料】管理審查會議，依目前範本重建項目與結果摘要（會議表頭、出席人員與簽核不動） */
 function eg_demo_mr_rebuild(PDO $db, int $Y): array
 {
