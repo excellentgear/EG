@@ -595,6 +595,18 @@ function ec_attach_url(string $kind, int $id, string $ref = '', string $fileName
     return '../../src/store/Part_Attachment_API.php?action=download&id=' . $id;
 }
 
+/** 「3」「3,5」「3-5」→ [3] / [3,5] / [3,4,5]；解析不出來回空陣列（＝不限制） */
+function ec_parse_pages(string $t): array
+{
+    $out = [];
+    foreach (preg_split('/[,，、\s]+/u', trim($t)) as $seg) {
+        if (preg_match('/^(\d+)\s*[-~～]\s*(\d+)$/u', $seg, $m) && (int)$m[2] >= (int)$m[1] && (int)$m[2] - (int)$m[1] < 200)
+            for ($i = (int)$m[1]; $i <= (int)$m[2]; $i++) $out[] = $i;
+        elseif (preg_match('/^\d+$/', $seg)) $out[] = (int)$seg;
+    }
+    return array_values(array_unique($out));
+}
+
 /**
  * 這個料號、某個標籤可以挑的附件（料號附件＋報價單附件＋訂單附件，新到舊）。
  * 同一份檔案（原始檔名＋檔案大小相同，或同訂單同實體檔）只列一次，優先序 料號>報價>訂單。
@@ -654,7 +666,10 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
     // ③ 訂單附件（同一訂單編號＋同實體檔只列一次：共用附件會被複製掛到每一列）
     try {
         $st = $db->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.uploaded_at,
-                                   COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo
+                                   COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo,
+                                   (SELECT p.pages FROM order_attachment_pages p
+                                     WHERE p.filename = a.filename AND p.order_oo = ot.Order_oo
+                                       AND p.part_no = ot.d_id LIMIT 1) AS ori_pages
                               FROM order_attachments a
                               JOIN order_track ot ON ot.Order_id = a.order_id
                               LEFT JOIN `user` u ON u.id = a.uploaded_by
@@ -677,7 +692,9 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
                   'show_name' => (string)($r['original_name'] ?: $r['filename']), 'note' => '',
                   'file_size' => (string)$r['file_size'], 'issue_stamp_date' => null,
                   'uploaded_at' => $r['uploaded_at'], 'uploaded_by' => (string)$r['uploaded_by'],
-                  'is_pdf' => $isPdf($r['filename']), 'url' => ec_attach_url('order', (int)$r['id'])]);
+                  'is_pdf' => $isPdf($r['filename']), 'url' => ec_attach_url('order', (int)$r['id']),
+                  // 原圖：訂單只設定某幾頁為原圖時，挑頁只准選這幾頁（「3」「3,5」「3-5」皆可）
+                  'only_pages' => $catId === 1 ? ec_parse_pages((string)$r['ori_pages']) : []]);
         }
     } catch (Throwable $e) { error_log('ec_attach_candidates order: ' . $e->getMessage()); }
 
@@ -711,6 +728,8 @@ function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attach
     $isPdf = (int)$a['is_pdf'] === 1;
     if ($isPdf && EC_ATTACH_SLOTS[$slot]['need_page'] && (int)$pageNo <= 0)
         throw new Exception('這是 PDF 檔，請指定要附上第幾頁');
+    if ($isPdf && !empty($a['only_pages']) && !in_array((int)$pageNo, $a['only_pages'], true))
+        throw new Exception('訂單內只設定第 ' . implode('、', $a['only_pages']) . ' 頁為原圖，不能挑其他頁');
     if (!$isPdf) { $pageNo = null; $pageCount = null; }
     if ($pageNo !== null && $pageCount !== null && $pageCount > 0 && $pageNo > $pageCount)
         throw new Exception('指定的頁數超過這份 PDF 的總頁數');

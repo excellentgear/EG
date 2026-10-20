@@ -1212,20 +1212,20 @@ function openAttPick(slot, catId){
               +  '上傳 ' + dispDate(f.uploaded_at) + '　' + esc(f.uploaded_by || '') + '</span>'
               +  '<button type="button" class="att-mini" onclick="window.open(\'' + f.url + '\',\'_blank\')">預覽</button>'
               +  '<button type="button" class="att-mini" onclick="pickAttFile(' + f.id + ',' + f.is_pdf + ','
-              +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ',\'' + f.src_kind + '\',\'' + esc(f.url) + '\')">選這一個</button>'
+              +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ',\'' + f.src_kind + '\',\'' + esc(f.url) + '\',' + JSON.stringify(f.only_pages || []) + ')">選這一個</button>'
               +  '</div>';
         });
         $('#attFiles').html(h);
     });
 }
 /** 選定檔案：要指定頁的 PDF 進第二步挑頁，其餘直接存 */
-function pickAttFile(attachId, isPdf, showName, needPage, srcKind, url){
+function pickAttFile(attachId, isPdf, showName, needPage, srcKind, url, onlyPages){
     ATT_FILE = {id:attachId, name:showName, src:srcKind || 'part'};
     if (!isPdf || !needPage) { saveAttach(attachId, 0, 0); return; }
     $('#attStep1').hide(); $('#attStep2').show();
     $('#attPickedName').html('<b>' + esc(showName) + '</b>　請點選要附上的那一頁');
     $('#attPages').html('<div style="color:#aaa;">正在載入 PDF…</div>');
-    renderPdfPages(url, attachId);
+    renderPdfPages(url, attachId, onlyPages || []);
 }
 $('#btnAttBack').on('click', function(){ $('#attStep2').hide(); $('#attStep1').show(); });
 
@@ -1249,14 +1249,17 @@ function loadPdfJs(){
     });
     return pdfjsLoading;
 }
-function renderPdfPages(url, attachId){
+function renderPdfPages(url, attachId, onlyPages){
     loadPdfJs().then(function(lib){
         return lib.getDocument(url).promise;
     }).then(function(pdf){
         var total = pdf.numPages;
         $('#attPages').empty();
         var chain = Promise.resolve();
+        var lim = (onlyPages && onlyPages.length) ? onlyPages : null;
+        if (lim) $('#attPages').append('<div style="width:100%;color:#8a5a00;font-size:12px;margin-bottom:6px;">訂單內只設定第 ' + lim.join('、') + ' 頁為原圖，其他頁不提供挑選。</div>');
         for (var p = 1; p <= total; p++) (function(pn){
+            if (lim && lim.indexOf(pn) < 0) return;
             chain = chain.then(function(){
                 return pdf.getPage(pn).then(function(page){
                     var vp0 = page.getViewport({scale:1});
