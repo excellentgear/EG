@@ -1108,7 +1108,7 @@ function openEdit(id, keepSaved){
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
                 owner_users:(it.owner_users?String(it.owner_users).split(','):[]), remark:it.remark||'',
                 owner_mode: it.owner_users ? 'user' : 'dept', confirm_mode: it.confirm_mode||'onsite', due_na: +it.due_na===1,
-                confirm_slots:it.confirm_slots||[]};
+                confirm_slots:it.confirm_slots||[], tpl:tplParse(it.tpl_json)};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
         });
@@ -1289,7 +1289,8 @@ $('#edTpl').on('change', function(){
         ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
         (t.items||[]).forEach(function(it){
             var row = {content:it.content, due_date:'', owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
-                       owner_users:[], remark:it.remark||'', owner_mode:'dept', confirm_slots:[]};
+                       owner_users:[], remark:it.remark||'', owner_mode:'dept', confirm_slots:[],
+                       tpl:(it.kind!=='announce' && /【待填[：:][^】]*】/.test(it.content||'') ?{t:it.content, v:[]} : null)};   // 有【待填】的項目→每個待填一個輸入框
             (it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G)).push(row);
         });
         if (!EDIT_ID) TPL_ID = +t.tpl_id;   // 只有新建的會議才會連通知單內容一起帶入
@@ -1658,6 +1659,41 @@ function itemAddGeneral(){ itemAdd('general'); }
 function itemDelLastGeneral(){ itemDelLast('general'); }
 function itemAddAnnounce(){ itemAdd('announce'); }
 function itemDelLastAnnounce(){ itemDelLast('announce'); }
+/* ---------- 範本項目的輸入框（2026-10-20 管理審查範本）----------
+   範本內容裡每個【待填：提示】在畫面上變成一個輸入框，固定文字（條文、系統資料）只讀顯示；
+   存檔時 content 仍是組好的完整文字（列印／檢視／通知都只讀 content，輸出與其他會議相同），
+   輸入框結構另存 tpl_json 供下次編輯還原；沒填的輸入框保留【待填】標記，送出前一樣會被擋下。 */
+function tplParse(s){
+    if (!s) return null;
+    try { var o = typeof s === 'string' ? JSON.parse(s) : s; return (o && o.t) ? {t:String(o.t), v:(o.v||[]).map(String)} : null; } catch (e) { return null; }
+}
+function tplFillJs(t, v){
+    var n = -1;
+    return t.replace(/【待填[：:][^】]*】/g, function(m){ n++; var x = $.trim(v[n]||''); return x === '' ? m : x; });
+}
+function tplCellHtml(kind, i, it){
+    var t = it.tpl.t, re = /【待填[：:]([^】]*)】/g, m, last = 0, n = 0, h = '';
+    var fixed = function(s){ s = s.replace(/^\s+|\s+$/g, ''); return s ? '<div style="white-space:pre-wrap;background:#FAF3E3;border-radius:4px;padding:4px 7px;margin-bottom:3px;font-size:13px;color:#5b3a1e;">'+esc(s)+'</div>' : ''; };
+    while ((m = re.exec(t))) {
+        h += fixed(t.slice(last, m.index));
+        var val = it.tpl.v[n] || '', empty = $.trim(val) === '';
+        h += '<label style="display:block;font-size:12px;font-weight:bold;color:#b5762a;margin:2px 0 1px;">'+esc(m[1])+'</label>'
+           + '<textarea rows="3" style="width:100%;margin-bottom:4px;'+(empty?'border-left:3px solid #F0A24B;':'')+'" placeholder="請在此輸入：'+esc(m[1])+'"'
+           + ' oninput="itemTplEdit(\''+kind+'\','+i+','+n+',this.value)" data-eg-skip>'+esc(val)+'</textarea>';
+        last = m.index + m[0].length; n++;
+    }
+    h += fixed(t.slice(last));
+    return h + '<a href="javascript:void(0)" style="font-size:11px;color:#8a6d45;" onclick="itemTplFree(\''+kind+'\','+i+')" title="把這一項整段當作一般文字自由編輯（輸入框會消失，已填的內容保留）">改為整段文字自由編輯</a>';
+}
+function itemTplEdit(kind, i, n, val){
+    var it = itemsArr(kind)[i]; if (!it || !it.tpl) return;
+    it.tpl.v[n] = val; it.content = tplFillJs(it.tpl.t, it.tpl.v);
+    clearTimeout(window.__mrT); window.__mrT = setTimeout(function(){ if (typeof mrRender === 'function') mrRender(); }, 350);
+}
+function itemTplFree(kind, i){
+    var it = itemsArr(kind)[i]; if (!it || !it.tpl) return;
+    it.content = tplFillJs(it.tpl.t, it.tpl.v); it.tpl = null; renderItems(kind);
+}
 function renderItems(kind){
     var a = itemsArr(kind), h = '';
     if (kind === 'announce') {
@@ -1678,7 +1714,7 @@ function renderItems(kind){
                         : (hasOwner ? '<span class="confirm-no">負責人本次未出席</span>' : '<span class="confirm-no">未指派負責人</span>');
         // 未指定負責人的列標紅底：送出時會被擋下(前端+後端)，要讓人在填的當下就看見，而不是按了送出才知道
         h += '<tr'+(hasOwner?'':' style="background:#FBE3DC;"')+'><td style="text-align:center;">'+(i+1)+'</td>'
-           + '<td><textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
+           + '<td>'+(it.tpl ? tplCellHtml(kind,i,it) : '<textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea>')+'</td>'
            + '<td>'+dueCellHtml(kind,i,it)+'</td>'
            + '<td>'+ownerPickHtml(kind,i,it)+'</td>'
            + '<td><input type="text" maxlength="200" value="'+esc(it.remark||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'remark\',this.value)" placeholder="'+confirmTxt.replace(/<[^>]+>/g,'')+'"></td>'

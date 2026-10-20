@@ -653,12 +653,15 @@ case 'save': {
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
-        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment, confirm_mode, due_na)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment, confirm_mode, due_na, tpl_json)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
         $n = 0;
         $keptOldIds = [];
         foreach ($items as $it) {
             $content = trim((string)($it['content'] ?? ''));
+            // 範本項目的輸入框結構：有就以它重算 content（前端送來的組好文字不採信）
+            [$tplJson, $tplContent] = meeting_tpl_clean($it['tpl'] ?? null);
+            if ($tplJson !== null) $content = trim($tplContent);
             if ($content === '') continue;
             $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
             $due = trim((string)($it['due_date'] ?? '')) ?: null;
@@ -675,7 +678,7 @@ case 'save': {
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
             $cmode = in_array($it['confirm_mode'] ?? '', ['later','ack'], true) ? $it['confirm_mode'] : 'onsite';
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null, $cmode, $dueNa]);
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null, $cmode, $dueNa, $tplJson]);
             if ($prev) {
                 $keptOldIds[] = $prevId;
                 $newItemId = (int)$db->lastInsertId();

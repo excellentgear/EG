@@ -128,6 +128,14 @@ function meeting_ensure_schema(PDO $db): void {
             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='discussion'")->fetchColumn();
         if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN discussion MEDIUMTEXT NULL COMMENT '討論過程紀錄(純文字)'");
     } catch (Throwable $e) {}
+    /* 範本項目的「輸入框」結構(2026-10-20 管理審查範本)：範本內容裡每個【待填：提示】在編輯畫面變成一個輸入框，
+       tpl_json={"t":範本原文,"v":[各輸入框填的值]}；content 仍然是組好的完整文字（列印／檢視／通知都只讀 content，
+       所以輸出和其他會議完全相同）。沒有 tpl_json 的舊項目與一般會議照舊用單一文字框。 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_item' AND COLUMN_NAME='tpl_json'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_item ADD COLUMN tpl_json TEXT NULL COMMENT '範本項目輸入框結構 {t,v}'");
+    } catch (Throwable $e) {}
     /* 負責人確認方式(2026-10-15 使用者要求)：每個項目一個設定。
          onsite＝出席者當場簽章、未出席者收通知回簽(預設，與舊行為相同)
          later ＝出席與否一律不當場簽，全部改收通知、會後確認（可回覆）
@@ -302,6 +310,28 @@ function meeting_ensure_schema(PDO $db): void {
 /* ============================================================
  * 使用者／權限
  * ============================================================ */
+/**
+ * 範本項目輸入框：把範本原文 $t 裡第 n 個【待填：…】換成 $v[n]（空白就保留原標記，送出前仍會被擋）。
+ * 前端與後端用同一規則；後端存檔時以此重算 content，不採信前端送來的組好文字（鐵律8）。
+ */
+function meeting_tpl_fill(string $t, array $v): string {
+    $n = -1;
+    return preg_replace_callback('/【待填[：:][^】]*】/u', function ($m) use (&$n, $v) {
+        $n++;
+        $val = trim((string)($v[$n] ?? ''));
+        return $val === '' ? $m[0] : $val;
+    }, $t);
+}
+/** 驗證前端送來的 tpl：回 [json字串, 重算後的 content]；不合格回 [null, null]（該項目退回單純文字） */
+function meeting_tpl_clean($raw): array {
+    if (!is_array($raw)) return [null, null];
+    $t = (string)($raw['t'] ?? '');
+    $cnt = preg_match_all('/【待填[：:][^】]*】/u', $t);
+    if ($t === '' || $cnt < 1 || mb_strlen($t, 'UTF-8') > 20000) return [null, null];
+    $v = [];
+    for ($i = 0; $i < $cnt; $i++) $v[] = mb_substr(trim((string)(((array)($raw['v'] ?? []))[$i] ?? '')), 0, 5000, 'UTF-8');
+    return [json_encode(['t' => $t, 'v' => $v], JSON_UNESCAPED_UNICODE), meeting_tpl_fill($t, $v)];
+}
 function meeting_current_user(PDO $db): ?array {
     $uname = $_SESSION['userName'] ?? '';
     if ($uname === '') return null;
