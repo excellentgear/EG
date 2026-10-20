@@ -387,6 +387,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                             </ul>
                         </li>
                         <li class="notice-foot">
+                            <a href="../liveEvent/my_todo.php" style="font-weight:700;"><i class="fa fa-inbox"></i> 我的待辦（可多選批次處理） <i class="fa fa-angle-right"></i></a>
                             <a href="../liveEvent/createEvent.php">查看所有公告 / 通知 <i class="fa fa-angle-right"></i></a>
                         </li>
                     </ul>
@@ -461,6 +462,10 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     window.addEventListener("load", function() {
         if (typeof $ === 'undefined') return;
 
+        // 側欄「我的待辦」選單項目旁顯示未處理數量（與鈴鐺同一份數字）
+        (function(){ var n = $('#menu1 li[id^="notice_item_"]').length;
+            $('#sidebar-menu a[href*="my_todo.php"]').each(function(){ if (!$(this).find('.td-menu-badge').length) $(this).append(' <span class="td-menu-badge" style="background:#DD5138;color:#fff;border-radius:10px;padding:0 7px;font-size:11px;line-height:16px;display:' + (n>0?'inline-block':'none') + ';">' + n + '</span>'); });
+        })();
         var nmId = null;
         var nmForUid = 0, nmForName = '';   // 這則通知是給哪位成員的（共用帳號代收時 > 0）
         var nmEsc = function(s) { return $('<i>').text(s == null ? '' : s).html(); };
