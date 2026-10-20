@@ -13285,6 +13285,9 @@ foreach($dCounts as $c) {
                     ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>'
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
+                // 客戶訂單 PDF 內含多個料號的原圖：預覽縮圖、逐頁指定屬於哪個料號（只有已存檔、同訂單編號有多料號的 PDF 才給）
+                ((f.status === 'active' && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
+                    ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;" title="預覽這份 PDF，指定每一頁是哪個料號的原圖"><i class="fa fa-th"></i> 原圖頁對應</span>' : '') +
                 delHtml +
                 '</div>' +
                 '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
@@ -13360,6 +13363,128 @@ foreach($dCounts as $c) {
                 (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) hit = f; });
             });
             return hit;
+        }
+
+        // ── 客戶訂單 PDF：逐頁指定各料號原圖（唯一實作；後端 page_map_get／page_map_save）────
+        var OPM_PDFJS_BASE = '../../resource/js/pdfjs/';
+        var OPM_PDFJS_V = '<?= @filemtime(__DIR__ . '/../../resource/js/pdfjs/pdf.min.js') ?>';
+        var OPM_COLORS = ['#E07B39', '#B5793A', '#C0392B', '#8E6B3E', '#D4A24B', '#A0522D', '#E9967A', '#6B4E2E'];
+        var opm = { attId: 0, parts: [], sets: {}, active: '', numPages: 0, token: 0 };
+        function opmLoadPdfJs() {
+            if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+            return new Promise(function(resolve, reject) {
+                var s = document.createElement('script');
+                s.src = OPM_PDFJS_BASE + 'pdf.min.js?v=' + OPM_PDFJS_V;
+                s.onload = function() {
+                    if (!window.pdfjsLib) { reject(new Error('pdfjsLib 未載入')); return; }
+                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = OPM_PDFJS_BASE + 'pdf.worker.min.js?v=' + OPM_PDFJS_V;
+                    resolve(window.pdfjsLib);
+                };
+                s.onerror = function() { reject(new Error('找不到 pdf.js')); };
+                document.head.appendChild(s);
+            });
+        }
+        function opmParse(spec) {
+            var out = {};
+            String(spec || '').split(',').forEach(function(seg) {
+                var p = seg.split('-'), a = parseInt(p[0], 10), b = p.length > 1 ? parseInt(p[1], 10) : a;
+                if (!(a >= 1) || !(b >= a)) return;
+                for (var i = a; i <= b && i <= 2000; i++) out[i] = true;
+            });
+            return out;
+        }
+        function opmFormat(set) {
+            var ns = Object.keys(set).map(Number).sort(function(a, b) { return a - b; });
+            var segs = [], i = 0;
+            while (i < ns.length) {
+                var j = i;
+                while (j + 1 < ns.length && ns[j + 1] === ns[j] + 1) j++;
+                segs.push(j > i ? ns[i] + '-' + ns[j] : String(ns[i]));
+                i = j + 1;
+            }
+            return segs.join(',');
+        }
+        $(document).on('click', '.oa-page-btn', function() {
+            var attId = $(this).closest('.oa-file-row').data('id');
+            // 點開即刷新：料號與既有對照一律跟後端要最新的
+            $.post(ORDER_ATTACH_API, { action: 'page_map_get', attachment_id: attId }, function(res) {
+                if (!res.success) { showToast(res.message || '讀取失敗', 'info'); return; }
+                opm = { attId: attId, parts: res.all_parts || [], sets: {}, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now() };
+                opm.parts.forEach(function(p) { opm.sets[p] = opmParse((res.map || {})[p]); });
+                $('#opm-file').text((res.display_name || '') + '（訂單 ' + (res.order_oo || '') + '）');
+                $('#opm-err').hide().text('');
+                $('#opm-pages').html('<span style="color:#aaa;">載入預覽中…</span>');
+                opmRenderParts();
+                $('#oaPageMapModal').modal('show');
+                opmRenderPages(attId, opm.token);
+            }, 'json').fail(function() { showToast('讀取失敗', 'info'); });
+        });
+        function opmColor(p) { var i = opm.parts.indexOf(p); return OPM_COLORS[(i < 0 ? 0 : i) % OPM_COLORS.length]; }
+        function opmRenderParts() {
+            $('#opm-parts').html(opm.parts.map(function(p) {
+                var sp = opmFormat(opm.sets[p] || {});
+                var on = (p === opm.active);
+                return '<div class="opm-part" data-p="' + escapeHtml(p) + '" style="cursor:pointer;padding:6px 8px;margin-bottom:5px;border-radius:4px;border:2px solid ' + (on ? opmColor(p) : '#E4D3BC') + ';background:' + (on ? '#FFF3E2' : '#fff') + ';">' +
+                    '<div style="display:flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:2px;background:' + opmColor(p) + ';flex:none;"></span>' +
+                    '<b style="font-size:12px;word-break:break-all;">' + escapeHtml(p) + '</b></div>' +
+                    '<div style="font-size:11px;color:#8a5a2b;margin-top:2px;">' + (sp ? '原圖：第 ' + escapeHtml(sp) + ' 頁' : '<span style="color:#aaa;">尚未指定</span>') + '</div></div>';
+            }).join('') || '<span style="color:#aaa;">這個訂單編號底下沒有料號</span>');
+        }
+        function opmRefreshBadges() {
+            $('#opm-pages .opm-pg').each(function() {
+                var n = parseInt($(this).data('pg'), 10), chips = '', on = false;
+                opm.parts.forEach(function(p) {
+                    if ((opm.sets[p] || {})[n]) {
+                        chips += '<span title="' + escapeHtml(p) + '" style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;line-height:14px;color:#fff;background:' + opmColor(p) + ';border-radius:3px;padding:0 3px;margin:1px;">' + escapeHtml(p) + '</span>';
+                        if (p === opm.active) on = true;
+                    }
+                });
+                $(this).css('border-color', on ? opmColor(opm.active) : '#ddd').find('.opm-chips').html(chips);
+            });
+            opmRenderParts();
+        }
+        async function opmRenderPages(attId, token) {
+            try {
+                var lib = await opmLoadPdfJs();
+                var doc = await lib.getDocument({ url: ORDER_ATTACH_API + '?action=download&id=' + attId, withCredentials: true }).promise;
+                if (opm.token !== token) return;
+                opm.numPages = doc.numPages;
+                $('#opm-pages').empty();
+                for (var n = 1; n <= doc.numPages; n++) {
+                    if (opm.token !== token) return;
+                    var page = await doc.getPage(n);
+                    var vp0 = page.getViewport({ scale: 1 });
+                    var vp = page.getViewport({ scale: 170 / vp0.width });
+                    var cv = document.createElement('canvas');
+                    cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+                    await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+                    var $d = $('<div class="opm-pg" style="width:178px;border:3px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;padding:2px;"></div>').attr('data-pg', n);
+                    $d.append(cv).append('<div style="font-size:11px;color:#555;text-align:center;">第 ' + n + ' 頁</div><div class="opm-chips" style="min-height:16px;"></div>');
+                    $(cv).css({ width: '100%', height: 'auto', display: 'block' });
+                    $('#opm-pages').append($d);
+                    if (n % 4 === 0) opmRefreshBadges();
+                }
+                opmRefreshBadges();
+            } catch (e) {
+                $('#opm-pages').html('<span style="color:#c0392b;">預覽失敗：' + escapeHtml(e && e.message ? e.message : String(e)) + '（可改在右側直接輸入頁碼）</span>');
+            }
+        }
+        $(document).on('click', '#opm-parts .opm-part', function() { opm.active = String($(this).data('p')); opmRefreshBadges(); });
+        $(document).on('click', '#opm-pages .opm-pg', function() {
+            if (!opm.active) { $('#opm-err').text('請先在右側點選料號').show(); return; }
+            $('#opm-err').hide();
+            var n = parseInt($(this).data('pg'), 10), s = opm.sets[opm.active] || (opm.sets[opm.active] = {});
+            if (s[n]) delete s[n]; else s[n] = true;
+            opmRefreshBadges();
+        });
+        function opmSave() {
+            var map = {};
+            opm.parts.forEach(function(p) { var sp = opmFormat(opm.sets[p] || {}); if (sp) map[p] = sp; });
+            $.post(ORDER_ATTACH_API, { action: 'page_map_save', attachment_id: opm.attId, map: JSON.stringify(map) }, function(r) {
+                if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
+                $('#oaPageMapModal').modal('hide');
+                showToast(r.message || '已儲存', 'info');
+            }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
         }
 
         // ── 附件連動整理（僅管理員；點開即向後端要最新狀態，ai-rules/08 第六節）────
@@ -15837,6 +15962,33 @@ foreach($dCounts as $c) {
           <div class="modal-footer">
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
             <button type="button" class="btn btn-primary" onclick="oappConfirm()"><i class="fa fa-check"></i> 確定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 客戶訂單 PDF：逐頁指定是哪個料號的原圖 -->
+    <div class="modal fade" id="oaPageMapModal" tabindex="-1" role="dialog">
+      <div class="modal-dialog" style="width:96%;max-width:1100px;" role="document">
+        <div class="modal-content">
+          <div class="modal-header" style="background:#8a5a2b;color:#fff;">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-th"></i> 原圖頁對應：這份 PDF 的每一頁是哪個料號的原圖</h4>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div id="opm-file" style="font-size:12px;color:#5d4037;font-weight:600;"></div>
+            <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號，再點左邊的頁面縮圖加上／取消（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
+            <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+              <div id="opm-pages" style="flex:1 1 560px;min-width:300px;max-height:60vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:8px;background:#fafafa;display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start;"></div>
+              <div style="flex:0 0 280px;max-width:100%;">
+                <div id="opm-parts" style="max-height:60vh;overflow-y:auto;"></div>
+              </div>
+            </div>
+            <div id="opm-err" style="font-size:11px;color:#c0392b;margin-top:6px;display:none;"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" onclick="opmSave()"><i class="fa fa-check"></i> 儲存</button>
           </div>
         </div>
       </div>

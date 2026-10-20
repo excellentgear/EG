@@ -120,6 +120,33 @@ function oaInitTable(PDO $pdo): void {
                         COMMENT '對應料號：NULL=共用(全部)；單一料號=原樣字串；多料號=JSON陣列'");
         }
     } catch (Exception $e) {}
+    // 「客戶訂單 PDF 裡各料號原圖在第幾頁」（2026-10-20）：檔案本身維持原標籤與共用行為不動，
+    // 這張表只是額外記「這份檔案的第幾頁是哪個料號的原圖」。原圖一律逐料號指定、不存在共用。
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS order_attachment_pages (
+            id         INT AUTO_INCREMENT PRIMARY KEY,
+            filename   VARCHAR(255) NOT NULL COMMENT '實體檔名（同 order_attachments.filename）',
+            order_oo   VARCHAR(50)  NOT NULL COMMENT '訂單編號',
+            part_no    VARCHAR(50)  NOT NULL COMMENT '訂單料號（order_track.d_id）',
+            pages      VARCHAR(255) NOT NULL COMMENT '頁碼，例 1,3-4',
+            created_by INT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_file_part (filename, order_oo, part_no),
+            INDEX idx_oo (order_oo)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單附件PDF：各料號原圖所在頁'");
+    } catch (Exception $e) {}
+}
+
+/** 頁碼字串正規化（1,3-4；去空白、排序、合併不處理）；不合法回 null */
+function oaPageSpecNormalize(string $s): ?string {
+    $s = preg_replace('/[\s，、]+/u', ',', trim($s));
+    $s = trim($s, ',');
+    if ($s === '' || !preg_match('/^\d{1,4}(-\d{1,4})?(,\d{1,4}(-\d{1,4})?)*$/', $s)) return null;
+    foreach (explode(',', $s) as $seg) {
+        $p = explode('-', $seg);
+        if ((int)$p[0] < 1 || (isset($p[1]) && (int)$p[1] < (int)$p[0])) return null;
+    }
+    return $s;
 }
 
 // 懶惰清除：已到期的暫存(temp)附件（實體檔＋DB列）
@@ -484,6 +511,59 @@ switch ($action) {
         break;
     }
 
+    // ── 客戶訂單 PDF：各料號原圖在第幾頁（讀）──
+    case 'page_map_get': {
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        $st = $pdo->prepare("SELECT a.filename, a.original_name, COALESCE(ot.Order_oo,'') AS order_oo
+                             FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件，或這份附件還沒歸屬到訂單（請先存檔）']); break; }
+        $mq = $pdo->prepare("SELECT part_no, pages FROM order_attachment_pages WHERE filename=? AND order_oo=?");
+        $mq->execute([$row['filename'], $row['order_oo']]);
+        echo json_encode(['success'=>true, 'order_oo'=>$row['order_oo'],
+            'display_name'=>$row['original_name'] ?: $row['filename'],
+            'all_parts'=>oaSiblingParts($pdo, $attId),
+            'map'=>$mq->fetchAll(PDO::FETCH_KEY_PAIR)], JSON_UNESCAPED_UNICODE);
+        break;
+    }
+
+    // ── 客戶訂單 PDF：各料號原圖在第幾頁（寫；以送來的整份對照為準，沒列到的料號＝清除）──
+    case 'page_map_save': {
+        if (!_oaCanEdit($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無訂單編輯權限']); break; }
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        $in = json_decode((string)($_POST['map'] ?? ''), true);
+        if (!is_array($in)) { echo json_encode(['success'=>false,'message'=>'資料格式錯誤']); break; }
+        $st = $pdo->prepare("SELECT a.filename, COALESCE(ot.Order_oo,'') AS order_oo
+                             FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
+        $all = oaSiblingParts($pdo, $attId);
+        $clean = [];
+        foreach ($in as $part => $spec) {
+            $part = (string)$part;
+            if (trim((string)$spec) === '') continue;
+            if (!in_array($part, $all, true)) { echo json_encode(['success'=>false,'message'=>'料號 ' . $part . ' 不在訂單編號 ' . $row['order_oo'] . ' 底下']); break 2; }
+            $n = oaPageSpecNormalize((string)$spec);
+            if ($n === null) { echo json_encode(['success'=>false,'message'=>'料號 ' . $part . ' 的頁碼格式不正確（例：1,3-4）']); break 2; }
+            $clean[$part] = $n;
+        }
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare("DELETE FROM order_attachment_pages WHERE filename=? AND order_oo=?")->execute([$row['filename'], $row['order_oo']]);
+            $ins = $pdo->prepare("INSERT INTO order_attachment_pages (filename, order_oo, part_no, pages, created_by) VALUES (?,?,?,?,?)");
+            foreach ($clean as $p => $n) $ins->execute([$row['filename'], $row['order_oo'], $p, $n, ($uid ?: null)]);
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>'儲存失敗：' . $e->getMessage()]);
+            break;
+        }
+        echo json_encode(['success'=>true, 'message'=>'已儲存 ' . count($clean) . ' 個料號的原圖頁碼']);
+        break;
+    }
+
     // ── 附件連動整理：找出「同一訂單編號＋同一份實體檔，卻掛在多個不同料號上」的組別 ──
     // 背景（2026-09-11）：改版前的同步程式只看標籤，不管附件有沒有綁料號，於是原本各自上傳到自己
     // 那張訂單的原圖，會在有人編輯同編號任一張訂單時被互相散佈到每個料號上。程式已修好不會再長，
@@ -623,6 +703,7 @@ switch ($action) {
         $del = $pdo->prepare("DELETE FROM order_attachments WHERE filename=?");
         $del->execute([$row['filename']]);
         $linkedRemoved = $del->rowCount() - 1;
+        try { $pdo->prepare("DELETE FROM order_attachment_pages WHERE filename=?")->execute([$row['filename']]); } catch (Exception $e) {}
         $fp = $dir . $row['filename'];
         if (is_file($fp)) @unlink($fp);
         $msg = $linkedRemoved > 0 ? ('已刪除（含自動連動的 ' . $linkedRemoved . ' 筆）') : '已刪除';

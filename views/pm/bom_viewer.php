@@ -541,7 +541,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
         // 不需要像報價附件那樣另外解析 linked_parts JSON
         $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size,
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at,
-                       ot.Order_oo, ot.d_id_ID, ot.Order_date, ot.Delivery_date, ot.Qty, ot.Client_name, ot.quote_no
+                       ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Order_date, ot.Delivery_date, ot.Qty, ot.Client_name, ot.quote_no
                 FROM order_attachments a
                 JOIN order_track ot ON ot.Order_id = a.order_id
                 LEFT JOIN user u ON u.id = a.uploaded_by
@@ -563,10 +563,23 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
         // 「共用附件」在建單時會被複製掛到每一列（見 _NewOrder_Track.php 的 eg_sync_shared_order_attachments），
         // 實體檔案其實只有一份；這裡不去重會讓使用者只上傳一個附件卻在本頁看到兩個。
         $seenOrderFile = [];
+        // 客戶訂單 PDF 內各料號原圖所在頁（Order_Attachment_API 的 order_attachment_pages；表不存在＝沒人用過，略過）
+        $pageMap = [];
+        try {
+            $pq = $pdo2->query("SELECT filename, order_oo, part_no, pages FROM order_attachment_pages");
+            foreach ($pq->fetchAll(PDO::FETCH_ASSOC) as $pr) { $pageMap[$pr['order_oo'] . '|' . $pr['filename']][$pr['part_no']] = $pr['pages']; }
+        } catch (Exception $_e) {}
+        $partsOfGroup = [];
+        foreach ($rows as $r) { $partsOfGroup[$r['Order_oo'] . '|' . $r['filename']][$r['d_id']] = true; }
         foreach ($rows as $r) {
             $dedupKey = $r['Order_oo'] . '|' . $r['filename'];
             if (isset($seenOrderFile[$dedupKey])) continue;
             $seenOrderFile[$dedupKey] = true;
+            $originPages = [];
+            foreach (array_keys($partsOfGroup[$dedupKey] ?? []) as $pp) {
+                if (isset($pageMap[$dedupKey][$pp])) $originPages[] = $pageMap[$dedupKey][$pp];
+            }
+            $originPages = implode(',', $originPages);
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
             $catNames = [];
             if ($r['category_ids']) {
@@ -575,11 +588,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                     if (isset($cats[$cid])) $catNames[] = $cats[$cid];
                 }
             }
+            if ($originPages !== '') $catNames[] = '原圖 第' . $originPages . '頁';
             $bindFrom = isset($bindLabelByDid[(int)$r['d_id_ID']]) ? $bindLabelByDid[(int)$r['d_id_ID']] : null;
             $result[] = [
                 'id'             => (int)$r['id'],
                 'filename'       => $r['filename'],
                 'display_name'   => $r['original_name'] ?: $r['filename'],
+                'open_page'      => $originPages !== '' ? (int)preg_replace('/[^0-9].*$/', '', $originPages) : 0,
                 'url'            => $dlBase . '?action=download&id=' . (int)$r['id'],
                 'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
@@ -1195,6 +1210,7 @@ function dwgToPreviewUrl(downloadUrl) {
 }
 
 // ── 檔案切換顯示 ─────────────────────────────────────────────────────────
+var _openPageByPath = {};   // 客戶訂單 PDF 裡「這個料號的原圖」所在頁：網址 → 第一頁頁碼
 function showFile(path, type, name, canDl) {
     _currentPath = path;
     _currentName = name || path;
@@ -1239,7 +1255,7 @@ function showFile(path, type, name, canDl) {
     var _isPaintable   = _paintFormats.indexOf(_currentType) !== -1;
 
     if (_currentType === 'pdf') {
-        $('#bom-pdf-frame').attr('src', viewPath).show();
+        $('#bom-pdf-frame').attr('src', viewPath + (_openPageByPath[path] ? '#page=' + _openPageByPath[path] : '')).show();
         $('#btn-save, #btn-print, #btn-rot-ccw, #btn-rot-cw').show();
     } else if (_currentType === 'dwg') {
         // DWG 瀏覽器讀不懂，伺服器端先轉成 PDF 再用同一個 PDF 檢視器顯示（唯一轉檔實作
@@ -2608,6 +2624,7 @@ function loadDidMode() {
         if (_canOrder) {
             reqs.push($.post('', { action: 'get_order_attachments_by_did', d_id: _d_id, pk: _pk }, function(res) {
                 _tabData.order_attach = (res && res.success && res.attachments) ? res.attachments : [];
+                _tabData.order_attach.forEach(function(a) { if (a.open_page > 0) _openPageByPath[a.url] = a.open_page; });
             }, 'json'));
         }
         if (_canQuote) {
