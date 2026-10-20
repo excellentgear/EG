@@ -1037,14 +1037,7 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
             $signedDepts[$deptId] = ['dept_name'=>$dName, 'signer_name'=>$avail['signer']['user_cname'], 'note_warnings'=>$avail['warnings']];
         }
         $db->commit();
-        if ($signedDepts) {
-            $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
-            if ($toUids && cnrv_all_depts_signed($db, $docId)) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
-                "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $adminUid);
-
-            if (cnrv_all_depts_signed($db, $docId)) cnrv_cc_notify($db, $docId, 'depts_signed', '合約訂單審查待決行',
-                "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，等待業務課決行。", $adminUid, $toUids);
-        }
+        // 管理員自動填寫並簽核：不發任何通知（使用者要求 2026-10-20，批次補單不打擾業務課與副本名單）。
         return ['sign_date'=>$signDate, 'filled'=>$filled, 'skipped_no_default'=>$skippedNoDefault,
                 'signed_depts'=>$signedDepts, 'unsigned_depts'=>$unsignedDepts];
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
