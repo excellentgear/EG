@@ -659,9 +659,14 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
                               JOIN order_track ot ON ot.Order_id = a.order_id
                               LEFT JOIN `user` u ON u.id = a.uploaded_by
                              WHERE a.status='active' AND ot.d_id_ID = ?
-                               AND FIND_IN_SET(?, REPLACE(COALESCE(a.category_ids,''), ' ', ''))
+                               AND (FIND_IN_SET(?, REPLACE(COALESCE(a.category_ids,''), ' ', ''))
+                                    OR (? = 1 AND EXISTS (SELECT 1 FROM order_attachment_pages p
+                                                           WHERE p.filename = a.filename AND p.order_oo = ot.Order_oo
+                                                             AND p.part_no = ot.d_id)))
                              ORDER BY a.uploaded_at DESC, a.id DESC LIMIT 200");
-        $st->execute([$dId, $catId]);
+        // ★「原圖」(id=1) 在訂單附件上不是掛標籤，而是訂單設定的「這個料號的原圖在客戶訂單 PDF 第幾頁」
+        //   （order_attachment_pages，圖面查閱顯示成「原圖 第N頁」），所以挑原圖時要一併認這張表
+        $st->execute([$dId, $catId, $catId]);
         $seenOo = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $k = $r['Order_oo'] . '|' . $r['filename'];
