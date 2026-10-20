@@ -410,7 +410,7 @@ foreach ($roleRows as $rr) {
                 <input type="file" id="edAttachFile" style="font-size:12px;">
                 <input type="text" id="edAttachType" maxlength="100" placeholder="附件類型／說明(自由輸入，選填)" style="width:220px;">
                 <button type="button" class="b-att" onclick="edUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
-                <button type="button" class="b-att" id="btnMrAttach" style="display:none;" onclick="mrAttachImport()" title="把相關系統資料（KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議）各自轉成 PDF，自動成為這場會議的附件；重複按會取代上一次系統產生的附件，人工上傳的不動"><i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）</button>
+                <button type="button" class="b-att" id="btnMrAttach" style="display:none;" onclick="mrAttachImport()" title="把相關表單的資料（關鍵績效指標 2-GM-04-01、客戶滿意度、供應商定期評核表、稽核報告表、異常矯正處理單、品質異常處理單、風險與機會因應措施管制表…）各自轉成 PDF，標題與右下角編號依會議日期回推該表單當時版次，自動成為這場會議的附件；重複按會取代上一次系統產生的附件，人工上傳的不動"><i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）</button>
                 <span style="font-size:11px;color:#8a6d45;">單檔上限 20MB</span>
             </div>
         </div>
@@ -2088,7 +2088,7 @@ function mrAttachImportAfterDone(mid){
     var $b = $('button[onclick^="mrAttachImportAfterDone"]').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 產生中，請稍候…');
     $.post(API, {action:'mr_attach_import', meeting_id:mid}, function(res){
         if (!res.ok){ $b.prop('disabled', false); alert(res.error||'匯入失敗'); return; }
-        alert('已匯入 ' + (res.files||[]).length + ' 份附件' + ((res.failed||[]).length ? '（轉檔失敗：' + res.failed.join('、') + '）' : '') + (res.removed ? '，已取代上一次系統產生的 ' + res.removed + ' 份' : '') + '。' + (res.reset_note ? '\n\n' + res.reset_note : ''));
+        alert('已匯入 ' + (res.files||[]).length + ' 份附件' + ((res.failed||[]).length ? '（轉檔失敗：' + res.failed.join('、') + '）' : '') + ((res.skipped||[]).length ? '（沒有資料未產生：' + res.skipped.join('、') + '）' : '') + (res.removed ? '，已取代上一次系統產生的 ' + res.removed + ' 份' : '') + '。' + (res.reset_note ? '\n\n' + res.reset_note : ''));
         openView(mid); loadList();
     }, 'json').fail(function(x){ $b.prop('disabled', false); alert('匯入失敗：' + (x.responseJSON && x.responseJSON.error || x.status)); });
 }
@@ -3132,7 +3132,8 @@ function mrAttachImport(){
         if (!res.ok){ alert(res.error || '匯入失敗'); return; }
         $.getJSON(API, {action:'attach_list', meeting_id:EDIT_ID}, function(r){ EDIT_ATTACHES = r.attaches || []; renderEdAttach(); });
         alert('已匯入 ' + (res.files||[]).length + ' 份附件：\n' + (res.files||[]).map(function(f){ return '・' + f; }).join('\n')
-              + ((res.failed||[]).length ? '\n\n以下轉檔失敗：' + res.failed.join('、') : '') + (res.removed ? '\n\n（已取代上一次系統產生的 ' + res.removed + ' 份）' : ''));
+              + ((res.failed||[]).length ? '\n\n以下轉檔失敗：' + res.failed.join('、') : '')
+              + ((res.skipped||[]).length ? '\n\n沒有資料、未產生：' + res.skipped.join('、') : '') + (res.removed ? '\n\n（已取代上一次系統產生的 ' + res.removed + ' 份）' : ''));
     }, 'json').fail(function(x){
         $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）');
         alert('匯入失敗：' + (x.responseJSON && x.responseJSON.error || x.status));
