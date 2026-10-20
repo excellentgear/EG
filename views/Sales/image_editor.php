@@ -6457,7 +6457,7 @@ function doCropMove(x, y, w, h) {
         const br = o.getBoundingRect(true, true);
         const ix = Math.max(x, br.left), iy = Math.max(y, br.top);
         const ix2 = Math.min(x + w, br.left + br.width), iy2 = Math.min(y + h, br.top + br.height);
-        if (ix2 > ix && iy2 > iy) canvas.add(new fabric.Rect({ left: ix, top: iy, width: ix2 - ix, height: iy2 - iy, fill: fillColor }));
+        if (ix2 > ix && iy2 > iy) canvas.add(new fabric.Rect({ left: ix, top: iy, width: ix2 - ix, height: iy2 - iy, fill: fillColor, selectable: false, evented: false, hasControls: false }));   // 遮板＝底圖的一部分：不可選取，免得框選/點選旁邊圖形時被它擋住
     });
     canvas.requestRenderAll();
     fabric.Image.fromURL(url, function (img) {
@@ -6745,7 +6745,7 @@ function doCropMoveLasso(points) {
     const fillColor = toHex(artboard.fill) || '#ffffff';
     let anySkipped = false;
     bgObjs.forEach(o => { if (!punchHoleInImage(o, b.x, b.y, b.w, b.h, fillColor, points)) anySkipped = true; });
-    if (anySkipped) canvas.add(new fabric.Polygon(points.slice(), { fill: fillColor }));   // 跟矩形版遮板一樣保持可選取，才能被使用者移動/刪除
+    if (anySkipped) canvas.add(new fabric.Polygon(points.slice(), { fill: fillColor, selectable: false, evented: false, hasControls: false }));   // 遮板不可選取（同矩形版），避免擋住旁邊圖形的選取；Ctrl+Z 可復原
     canvas.requestRenderAll();
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: b.x, top: b.y });
