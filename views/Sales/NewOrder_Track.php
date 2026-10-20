@@ -13232,6 +13232,15 @@ foreach($dCounts as $c) {
         var oaCanDeleteOthers = false; // 是否可刪除非本人上傳的附件（管理員或被指派 ot_attach_delete）；後端 delete_file 同規則再擋一次
         function orderAttachNewBatchKey() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 
+        // 有勾「原圖」標籤才顯示「原圖頁對應」（依標籤名稱判斷，同報價單附件類別表）
+        function oaHasOrigCat(cats, checkedIds) {
+            return (cats || []).some(function(c) { return c.category_name === '原圖' && checkedIds.indexOf(String(c.id)) !== -1; });
+        }
+        $(document).on('change', '.oa-file-row .oa-tag-panel input[type=checkbox]', function() {
+            var $row = $(this).closest('.oa-file-row'), ids = [];
+            $row.find('.oa-tag-panel input:checked').each(function() { ids.push(String($(this).val())); });
+            $row.find('.oa-page-btn').toggle(oaHasOrigCat(orderAttachCats, ids));
+        });
         // 產生單一附件列的 HTML（tagToggle/tagApply/fileDel 走事件委派，data-id 標記附件ID）
         // availableParts：showPart 情境下這批目前有哪些料號可選（>1 筆才顯示下拉，讓使用者事後改料號連結）
         function oaBuildFileRowHtml(f, cats, showPart, availableParts) {
@@ -13287,7 +13296,7 @@ foreach($dCounts as $c) {
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 // 客戶訂單 PDF 內含多個料號的原圖：預覽縮圖、逐頁指定屬於哪個料號（只有已存檔、同訂單編號有多料號的 PDF 才給）
                 ((f.status === 'active' && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
-                    ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;" title="預覽這份 PDF，指定每一頁是哪個料號的原圖"><i class="fa fa-th"></i> 原圖頁對應</span>' : '') +
+                    ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;' + (oaHasOrigCat(cats, checkedIds) ? '' : 'display:none;') + '" title="預覽這份 PDF，指定每一頁是哪個料號的原圖"><i class="fa fa-th"></i> 原圖頁對應</span>' : '') +
                 delHtml +
                 '</div>' +
                 '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
@@ -13458,11 +13467,11 @@ foreach($dCounts as $c) {
                     if (opm.token !== token) return;
                     var page = await doc.getPage(n);
                     var vp0 = page.getViewport({ scale: 1 });
-                    var vp = page.getViewport({ scale: 170 / vp0.width });
+                    var vp = page.getViewport({ scale: 190 / vp0.width });
                     var cv = document.createElement('canvas');
                     cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
                     await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-                    var $d = $('<div class="opm-pg" style="width:178px;border:3px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;padding:2px;"></div>').attr('data-pg', n);
+                    var $d = $('<div class="opm-pg" style="width:100%;border:3px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;padding:2px;"></div>').attr('data-pg', n);
                     $d.append(cv).append('<div style="font-size:11px;color:#555;text-align:center;">第 ' + n + ' 頁</div><div class="opm-chips" style="min-height:16px;"></div>');
                     $(cv).css({ width: '100%', height: 'auto', display: 'block' });
                     $('#opm-pages').append($d);
@@ -16014,7 +16023,7 @@ foreach($dCounts as $c) {
             <div id="opm-file" style="font-size:12px;color:#5d4037;font-weight:600;"></div>
             <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號；點左邊縮圖會在中間顯示大圖（可捲動、可用上一頁／下一頁），確認內容後按大圖上方的「加入／取消」鈕指定給該料號（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
             <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-              <div id="opm-pages" style="flex:0 0 200px;max-height:72vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
+              <div id="opm-pages" style="flex:0 0 112px;max-height:72vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:4px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
               <div style="flex:1 1 520px;min-width:300px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                   <button type="button" class="btn btn-xs btn-default" onclick="opmFocus(opm.focus-1)"><i class="fa fa-chevron-left"></i> 上一頁</button>
