@@ -174,6 +174,7 @@ function addGearRow(data) {
     data = data || {};
     gearRows.push({
         gear_id:              data.gear_id              || 0,
+        gear_label:           data.gear_label            || '',
         Gear_Type:            data.Gear_Type             || '',
         Module:               data.Module                || '',
         Teeth:                data.Teeth                 || '',
@@ -202,6 +203,30 @@ function addGearRow(data) {
         spec_spline_std:         data.spec_spline_std          || '',
         spec_spline_nominal_dia: data.spec_spline_nominal_dia  || ''
     });
+    renderGearRows();
+}
+
+// 齒型名稱下拉：預設列 A~D；已被其他齒型選走的不可再選；選到最後一個就自動多出下一個字母（最多到 Z）
+function _gsLabelOpts(idx) {
+    var used = {}, maxN = 4;
+    gearRows.forEach(function(r, j) {
+        var l = String(r.gear_label || '').toUpperCase();
+        if (!l) return;
+        if (j !== idx) used[l] = 1;
+        var n = l.charCodeAt(0) - 64;
+        if (n >= 1 && n <= 26 && n + 1 > maxN) maxN = n + 1;
+    });
+    var cur = String(gearRows[idx].gear_label || '').toUpperCase();
+    var o = '<option value="">—</option>';
+    for (var n = 1; n <= Math.min(26, maxN); n++) {
+        var L = String.fromCharCode(64 + n);
+        o += '<option value="'+L+'"'+(cur===L?' selected':'')+(used[L]?' disabled':'')+'>'+L+'</option>';
+    }
+    return o;
+}
+function onGearLabelChange(idx, val) {
+    collectGearRows();
+    gearRows[idx].gear_label = val;
     renderGearRows();
 }
 
@@ -247,7 +272,8 @@ function renderGearRows() {
         var dmsAngle = parseDMS(g.Helix_Angle_Str || String(g.Helix_Angle||''));
 
         html += '<div class="gear-row" id="gear-row-'+i+'"'+(isExisting&&!_gsCan('modify')?' style="opacity:.72;background:#f8f8f8;"':'')+' >';
-        html += '<div class="gear-row-title"><i class="fa fa-cog"></i> 齒型 ' + (i+1) + (isExisting&&!_gsCan('modify')?' <span style="font-size:10px;color:#aaa;font-weight:normal;">(唯讀)</span>':'') + '</div>';
+        html += '<div class="gear-row-title"><i class="fa fa-cog"></i> 齒型 ' + (i+1) + (isExisting&&!_gsCan('modify')?' <span style="font-size:10px;color:#aaa;font-weight:normal;">(唯讀)</span>':'')
+              + ' <span style="font-weight:normal;text-transform:none;margin-left:10px;color:#888;">名稱 <select class="input-sm gear-field" data-idx="'+i+'" data-field="gear_label" style="width:70px;height:24px;padding:0 4px;" title="齒型名稱（選填，僅供辨識；同一料號不可重複）" onchange="onGearLabelChange('+i+',this.value)" '+ro+'>'+_gsLabelOpts(i)+'</select></span></div>';
         if (rowEditable && !isExisting) {
             // new row: client-side remove
             html += '<button type="button" class="btn-remove-row" onclick="removeGearRow('+i+')" title="移除"><i class="fa fa-times"></i></button>';

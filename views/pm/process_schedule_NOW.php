@@ -1306,7 +1306,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // 基本資訊
             $sql_info = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.process_no, bi.pti01_ps, bi.`1_side`, bi.PS2,
                                 b.d_id, b.Client_Name, pn.ProcessName, pn.process_type_id,
-                                dsg.Module, dsg.module_display, dsg.Teeth, dsg.Face_Width, dsg.Workpiece_Length
+                                dsg.Module, dsg.module_display, dsg.Teeth, dsg.Face_Width, dsg.Workpiece_Length, ds_max.max_did AS ds_pk
                          FROM bom_ing bi
                          JOIN bom b ON bi.bom = b.bom
                          LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
@@ -1387,8 +1387,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $logs = $stmt_logs->fetchAll(PDO::FETCH_ASSOC);
 
             // 格式化齒輪規格
+            // 一律走共用 gear_spec_lib 的多行版（A：… L總長；與主檔管理同一份規則）。
+            // 查不到才退回原本只看第一個齒型的簡易字串。
             $gear_spec = '';
-            if (!empty($info['Module'])) {
+            try { $gear_spec = eg_gear_spec_for_part($pdo, (int)($info['ds_pk'] ?? 0), 'lines') ?? ''; } catch (Throwable $e) {}
+            if ($gear_spec === '' && !empty($info['Module'])) {
                 $gear_spec = eg_gear_module_text($info, true);   // DP/CP 不可印成 M
                 if (!empty($info['Teeth'])) $gear_spec .= " T" . floatval($info['Teeth']);
                 if (!empty($info['Face_Width'])) $gear_spec .= " W" . floatval($info['Face_Width']);
@@ -3525,6 +3528,7 @@ function get_state_badge($state)
         .gear-spec {
             color: #999;
             font-size: 11px;
+            white-space: pre-line;
         }
 
 /* 2026.03.12: 調整分頁標籤字體大小與間距 */
@@ -7201,7 +7205,7 @@ function get_state_badge($state)
                                             var bomPartCell = `<div style="line-height: 1.2;"><strong>${item.bom}</strong></div>
                                                        <div style="line-height: 1.2;"><span class="text-muted">${item.d_id}</span></div>`;
                                             if (item.gear_spec) {
-                                                bomPartCell += `<div style="line-height: 1.2; font-size: 11px; color: #777;">${item.gear_spec}</div>`;
+                                                bomPartCell += `<div style="line-height: 1.2; font-size: 11px; color: #777; white-space: pre-line;">${item.gear_spec}</div>`;
                                             }
 
                                             var html = `

@@ -1622,7 +1622,7 @@ try {
         //   ⑵ 不吃 dict_gear_type.display_template，所以壓力角不顯示、鏈輪／皮帶輪印不出正確寫法，
         //      同一支料號在這張報表與出貨單上長得不一樣。
         require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
-        $_gear_map = eg_gear_spec_map($conn->getPDO(), $_dsids);
+        $_gear_map = eg_gear_spec_map($conn->getPDO(), $_dsids, 'lines');
     }
     foreach ($rows as &$_r) {
         $_dsid = intval($_r['d_setting_id'] ?? 0);
@@ -4397,7 +4397,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                 ? '<a href="javascript:void(0);" class="btn-pid-files" data-pid="' + safe + '" style="text-decoration:underline; color:#337ab7;">' + safe + '</a>'
                                 : '<span>' + safe + '</span>';
                             // 齒輪規格顯示於料號下方
-                            var gearSpec = row.gear_spec ? '<div style="font-size:10px; color:#7f8c8d; margin-top:2px; line-height:1.3;" title="' + $('<span>').text(row.gear_spec).html() + '">' + $('<span>').text(row.gear_spec).html() + '</div>' : '';
+                            var gearSpec = row.gear_spec ? '<div style="font-size:10px; color:#7f8c8d; margin-top:2px; line-height:1.3; white-space:pre-line;" title="' + $('<span>').text(row.gear_spec).html() + '">' + $('<span>').text(row.gear_spec).html() + '</div>' : '';
                             var hasDsetting = row.d_setting_id && row.d_setting_id !== '';
                             var bindIcon = hasDsetting
                                 ? ' <i class="fa fa-chain btn-open-bind" style="color:#28a745; cursor:pointer;" data-is-id="' + row.IS_id + '" title="已綁定料號"></i>'

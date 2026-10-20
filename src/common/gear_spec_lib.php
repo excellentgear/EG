@@ -41,9 +41,9 @@ function eg_gear_module_text(array $gear, bool $normalize = false): string {
     return preg_match('/^m/i', $mod) ? $mod : 'M' . $mod;
 }
 
-function eg_gear_spec_for_part(PDO $db, int $dsPk): ?string {
+function eg_gear_spec_for_part(PDO $db, int $dsPk, string $mode = 'line'): ?string {
     if (!$dsPk) return null;
-    $m = eg_gear_spec_map($db, [$dsPk]);
+    $m = eg_gear_spec_map($db, [$dsPk], $mode);
     return $m[$dsPk] ?? null;
 }
 
@@ -53,7 +53,7 @@ function eg_gear_spec_for_part(PDO $db, int $dsPk): ?string {
  * 不要再另外複製一段同樣的樣板替換 SQL（鐵律4）。
  * @return array d_setting.d_id => 齒輪規格字串（查無規格的料號不會出現在回傳陣列裡）
  */
-function eg_gear_spec_map(PDO $db, array $dsPks): array {
+function eg_gear_spec_map(PDO $db, array $dsPks, string $mode = 'line'): array {
     $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
     if (!$dsPks) return [];
     try {
@@ -82,7 +82,8 @@ function eg_gear_spec_map(PDO $db, array $dsPks): array {
 
         $modExpr = eg_gear_module_sql('g');   // 樣板與無樣板兩條路都要用同一份（否則 DP/CP 只修好一半）
         $ph  = implode(',', array_fill(0, count($dsPks), '?'));
-        $sql = "SELECT g.d_setting_id, GROUP_CONCAT(
+        $lblSel = eg_gear_label_has_col($db) ? 'g.gear_label' : 'NULL';
+        $sql = "SELECT g.d_setting_id, g.gear_id, $lblSel AS gear_label, (
                     CASE
                       WHEN dt.display_template IS NOT NULL AND dt.display_template<>'' THEN
                         $tmplExpr
@@ -107,21 +108,83 @@ function eg_gear_spec_map(PDO $db, array $dsPks): array {
                                CONCAT(' X', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Profile_Shift_X AS CHAR)))), '')
                         )
                     END
-                    ORDER BY g.gear_id SEPARATOR ' / '
                 ) AS gear_str
                 FROM d_setting_gear g
                 LEFT JOIN dict_gear_type dt ON dt.gear_type_id = g.Gear_Type
                 WHERE g.d_setting_id IN ($ph)
-                GROUP BY g.d_setting_id";
+                ORDER BY g.d_setting_id, g.gear_id";
         $st = $db->prepare($sql);
         $st->execute($dsPks);
-        $out = [];
+        $by = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $v = eg_gear_spec_tidy((string)$r['gear_str']);
-            if ($v !== '') $out[(int)$r['d_setting_id']] = $v;
+            $by[(int)$r['d_setting_id']][] = $r;
+        }
+        $out = [];
+        $lens = ($mode === 'lines') ? eg_gear_workpiece_len_map($db, array_keys($by)) : [];
+        foreach ($by as $id => $rows) {
+            if ($mode !== 'lines') {
+                $segs = [];
+                foreach ($rows as $r) { $v = eg_gear_spec_tidy((string)$r['gear_str']); if ($v !== '') $segs[] = $v; }
+                if ($segs) $out[$id] = implode(' / ', $segs);
+                continue;
+            }
+            $v = eg_gear_spec_lines($rows, $lens[$id] ?? '');
+            if ($v !== '') $out[$id] = $v;
         }
         return $out;
     } catch (Throwable $e) { return []; }
+}
+
+/** d_setting_gear.gear_label（齒型名稱 A/B/C…）欄位在不在 */
+function eg_gear_label_has_col(PDO $db): bool {
+    static $has = null;
+    if ($has === null) {
+        try { $has = (bool)$db->query("SHOW COLUMNS FROM d_setting_gear LIKE 'gear_label'")->fetch(); }
+        catch (Throwable $e) { $has = false; }
+    }
+    return $has;
+}
+
+/** 工件總長（d_setting.workpiece_length，主檔管理「基本資訊」那一欄）：d_id => 顯示字串；沒填或 0 不回傳 */
+function eg_gear_workpiece_len_map(PDO $db, array $ids): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) return [];
+    try {
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT d_id, workpiece_length FROM d_setting WHERE d_id IN ($ph)");
+        $st->execute($ids);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['workpiece_length']);
+            if ($v === '') continue;
+            if (is_numeric($v)) { if ((float)$v <= 0) continue; $v = rtrim(rtrim(number_format((float)$v, 4, '.', ''), '0'), '.'); }
+            $out[(int)$r['d_id']] = $v;
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 多行顯示版（2026-10-20）：每個齒型一行，「A：DP12 T29 W8.35 PA30 L118.1」。
+ * ・單一齒型不印名稱；多齒型有填名稱才印「名稱：」，沒填就不補（使用者決定，不自動補 A/B/C）
+ * ・L（工件總長）只放在第一行——名稱為 A 的那一型，沒有 A 就放第一型
+ * ・沒填工件總長就不顯示
+ * @param array $rows 同一料號、依 gear_id 排序的列（含 gear_label、gear_str）
+ */
+function eg_gear_spec_lines(array $rows, string $len): string {
+    $multi = count($rows) > 1;
+    $lead = 0;
+    foreach ($rows as $i => $r) { if (strtoupper(trim((string)($r['gear_label'] ?? ''))) === 'A') { $lead = $i; break; } }
+    $lines = [];
+    foreach ($rows as $i => $r) {
+        $v = eg_gear_spec_tidy((string)$r['gear_str']);
+        if ($i === $lead && $len !== '') $v = trim($v . ' L' . $len);
+        if ($v === '') continue;
+        $lb = trim((string)($r['gear_label'] ?? ''));
+        if ($multi && $lb !== '') $v = $lb . '：' . $v;
+        $lines[] = $v;
+    }
+    return implode("\n", $lines);
 }
 
 /**
@@ -294,6 +357,19 @@ function eg_gear_rows_save(PDO $db, int $dId, array $gears, string $uid): int {
         }
     } catch (Throwable $_ge) {}
 
+    $hasLbl = eg_gear_label_has_col($db);
+    $lblCol = $hasLbl ? ',gear_label' : '';
+    $lblPh  = $hasLbl ? ',?' : '';
+
+    // 齒型名稱：同一料號不可重複（大小寫視為相同），沒填不補
+    $seenLbl = [];
+    foreach ($gears as $gg) {
+        $lb = strtoupper(trim((string)($gg['gear_label'] ?? '')));
+        if ($lb === '') continue;
+        if (isset($seenLbl[$lb])) throw new Exception("齒型名稱「{$lb}」重複，同一個料號的齒型名稱不可相同。");
+        $seenLbl[$lb] = 1;
+    }
+
     $sg = $db->prepare("INSERT INTO d_setting_gear (
         d_setting_id,Module,Teeth,Face_Width,Helix_Angle,Helix_Angle_Str,Helix_Direction,
         Pressure_Angle,Profile_Shift_X,Workpiece_Length,Gear_Type,Spec_No,Remark_Gear,
@@ -302,8 +378,8 @@ function eg_gear_rows_save(PDO $db, int $dId, array $gears, string $uid): int {
         spec_pulley_profile,spec_pld,
         spec_spline_type,spec_spline_major_dia,spec_spline_minor_dia,spec_spline_width,
         spec_spline_std,spec_spline_nominal_dia,
-        Created_By
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        Created_By{$lblCol}
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?{$lblPh})");
 
     $n = 0; $idx = 0;
     foreach ($gears as $g) {
@@ -344,7 +420,8 @@ function eg_gear_rows_save(PDO $db, int $dId, array $gears, string $uid): int {
             $v('spec_pulley_profile'),$vf('spec_pld'),
             $v('spec_spline_type'),$vf('spec_spline_major_dia'),$vf('spec_spline_minor_dia'),$vf('spec_spline_width'),
             $v('spec_spline_std'),$vf('spec_spline_nominal_dia'),
-            $uid]);
+            $uid]
+            + ($hasLbl ? [30 => (strtoupper(trim((string)($g['gear_label'] ?? ''))) ?: null)] : []));
         $n++;
     }
     return $n;

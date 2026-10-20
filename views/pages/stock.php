@@ -734,6 +734,14 @@ LBLSQL;
             $st->execute();
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
+            // 齒輪規格顯示字串走共用 gear_spec_lib 多行版（A：… L總長），與主檔管理／訂單追蹤同一份規則
+            try {
+                require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+                $__gm = eg_gear_spec_map($pdo, array_column($rows, 'd_setting_id'), 'lines');
+                foreach ($rows as &$__r) { if (array_key_exists('gear_spec_str', $__r)) $__r['gear_spec_str'] = $__gm[(int)($__r['d_setting_id'] ?? 0)] ?? null; }
+                unset($__r);
+            } catch (Throwable $__e) {}
+
             // 為本頁有 group_id 的品項，批量查詢同組所有料號（供列表顯示組合構成）
             $groupMembersMap = [];
             if ($hasGroupCol && $hasPcsPerSet) {
@@ -7166,7 +7174,7 @@ function renderTable(rows, page, ps){
             : '<strong>'+esc(r.d_id)+'</strong>';
         var specLine=(parseInt(r.show_spec)&&r.spec_no)?'<div style="font-size:11px;color:#666;margin-top:2px;">規格：'+esc(r.spec_no)+'</div>':'';
         var labelLine='';
-        if(r.gear_spec_str){ labelLine='<div style="font-size:11px;color:#666;margin-top:2px;"><i class="fa fa-cog"></i> '+esc(r.gear_spec_str)+'</div>'; }
+        if(r.gear_spec_str){ labelLine='<div style="font-size:11px;color:#666;margin-top:2px;white-space:pre-line;"><i class="fa fa-cog"></i> '+esc(r.gear_spec_str)+'</div>'; }
         else if(parseInt(r.show_label)&&r.labels_str){ var _lh=buildLabelsHtml(r.labels_str); if(_lh) labelLine='<div style="margin-top:3px;">'+_lh+'</div>'; }
         // 客戶欄：依設定附加 廠商 / 保管者
         var clientExtra='';
