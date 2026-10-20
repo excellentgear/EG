@@ -173,6 +173,13 @@ switch ($action) {
         // 製程標籤（選填）：同一料號不同加工項目各自一組新舊版，留空＝共用圖。
         // 前端是下拉，這裡照樣自己擋長度（直打 API 繞不過去＝鐵律8 不做半套）。
         $upProc = trim((string)($_POST['process_tag'] ?? ''));
+        // 新版：製程大類／小類可複選（process_sel＝JSON）；有送就以它為準，process_tag 自動寫成摘要文字
+        $upProcSel = null;
+        if (isset($_POST['process_sel']) && trim((string)$_POST['process_sel']) !== '') {
+            require_once __DIR__ . '/../common/attach_proc_lib.php';
+            $upProcSel = eg_apc_parse($pdo, $_POST['process_sel']);
+            $upProc = eg_apc_summary($upProcSel);
+        }
         if (mb_strlen($upProc, 'UTF-8') > 100) { echo json_encode(['success'=>false,'message'=>'製程標籤最多 100 個字']); exit; }
         // 判定要在寫入這一筆之前算，否則會拿自己跟自己比
         $dwgVerdict = dwg_classify_upload($pdo, $dId, $upCatIds, $upIssue, $upProc);
@@ -225,6 +232,7 @@ switch ($action) {
             $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,quote_no,maker_no,uploaded_by,uploaded_by_id,dl_is_customer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                 ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $upQuoteNo, $upMakerNo, $uploadedByName, $uploadedById, $upDlCust]);
             $newAttachId = (int)$pdo->lastInsertId();
+            if ($upProcSel) { try { eg_apc_save($pdo, $newAttachId, $upProcSel); } catch (Throwable $_ap) {} }
             // DWG 上傳成功就背景觸發一次轉檔（不等它跑完，不拖慢這次上傳的回應）——
             // 之後使用者點開預覽多半已經轉好，直接命中快取；唯一轉檔實作見 dwg_preview_lib
             if ($ext === 'dwg') {
@@ -287,6 +295,7 @@ switch ($action) {
         //   列在這裡會被誤認成正式圖面；工作檔的檢視/開啟/刪除都在批圖編輯器內完成。
         //   要存正式圖面請在編輯器勾「只存圖片，不建立工作檔」，那條路徑存出來的圖不受過濾。
         $data = imgedit_strip_workfiles($data, $pdo);
+        try { require_once __DIR__ . '/../common/attach_proc_lib.php'; $data = eg_apc_attach_sel($pdo, $data); } catch (Throwable $_ap) {}
 
         // 2. 報價單附件（明確 linked 或 linked_parts IS NULL 的「全部料號」附件）
         try {
@@ -819,6 +828,11 @@ switch ($action) {
 
     // ── 製程標籤候選（此料號訂單有過的加工項目＋此料號已經打過的）──────
     // 唯一實作在 dwg_change_lib.php，這裡只是端點；不列全公司製程主檔（使用者拍板 2026-08-20）
+    case 'process_dict':   // 製程大類／小類字典（附件製程標籤選擇器與料號清單篩選共用）
+        require_once __DIR__ . '/../common/attach_proc_lib.php';
+        echo json_encode(['success'=>true,'types'=>eg_apc_dict($pdo)], JSON_UNESCAPED_UNICODE);
+        break;
+
     case 'process_candidates':
         $pcDid = (int)($_GET['d_id'] ?? $_POST['d_id'] ?? 0);
         if ($pcDid <= 0) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
@@ -836,6 +850,14 @@ switch ($action) {
         // 製程標籤：比照 issue_stamp_date，沒送這個欄位＝這次不動它
         $hasProc = array_key_exists('process_tag', $_POST);
         $mProc   = $hasProc ? trim((string)$_POST['process_tag']) : '';
+        // 新版製程大類／小類（JSON，可為空陣列＝清除）：有送就以它為準，process_tag 自動寫成摘要文字
+        $mProcSel = null;
+        if (array_key_exists('process_sel', $_POST)) {
+            require_once __DIR__ . '/../common/attach_proc_lib.php';
+            $mProcSel = eg_apc_parse($pdo, $_POST['process_sel']);
+            $mProc = eg_apc_summary($mProcSel);
+            $hasProc = true;
+        }
         if ($hasProc && mb_strlen($mProc, 'UTF-8') > 100) { echo json_encode(['success'=>false,'message'=>'製程標籤最多 100 個字']); exit; }
         if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少 ID']); exit; }
         // 沒送 issue_stamp_date 這個欄位＝這次不動它（前端在欄位隱藏時就不送）。
@@ -888,6 +910,7 @@ switch ($action) {
         if ($hasMaker) { $sets[] = 'maker_no=?';         $vals[] = $mMaker; }
         $vals[] = $id;
         $pdo->prepare("UPDATE part_attachments SET " . implode(',', $sets) . " WHERE id=?")->execute($vals);
+        if ($mProcSel !== null) { try { eg_apc_save($pdo, (int)$id, $mProcSel); } catch (Throwable $_ap) {} }
         echo json_encode(['success'=>true]);
         break;
 

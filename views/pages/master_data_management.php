@@ -2119,6 +2119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $fgear       = intval($_POST['filter_gear'] ?? 0);
             $fsub        = intval($_POST['filter_sub'] ?? 0);
             $flabels_raw = trim($_POST['filter_labels'] ?? '');
+            $fattproc_raw = trim($_POST['filter_att_proc'] ?? '');   // 附件製程標籤（大類／小類複選）
             $pg  = max(1, intval($_POST['page'] ?? 1));
             $lmt = ($lmt_req > 0 && $lmt_req <= 9999) ? $lmt_req : 10;
             $off = ($pg - 1) * 10;
@@ -2164,6 +2165,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $phs = implode(',', array_map(function($i){ return ":ft$i"; }, array_keys($ftypes)));
                 $where .= " AND d.Type IN ($phs)";
                 foreach (array_values($ftypes) as $i => $tv) { $params[":ft$i"] = $tv; }
+            }
+            // 附件製程標籤：該料號有沒有掛著符合的附件（大類涵蓋底下小類；唯一實作 attach_proc_lib）
+            if ($fattproc_raw !== '' && $fattproc_raw !== '[]') {
+                try {
+                    require_once __DIR__ . '/../../src/common/attach_proc_lib.php';
+                    $where .= eg_apc_filter_sql($pdo, $fattproc_raw, 'd');
+                } catch (Throwable $__ea) {}
             }
             if ($fgear > 0) {
                 $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear g WHERE g.d_setting_id=d.d_id AND g.Gear_Type=:fgear)";
@@ -9219,6 +9227,11 @@ body { background:#F6F1EA; }
                     </div>
                     <span id="parts-cust-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
                 </div>
+                <!-- 附件製程篩選：料號底下有掛著符合製程（大類／小類可複選、可混合）的附件才列出 -->
+                <div class="filter-sub-row visible" id="parts-attproc-filter" style="align-items:center;flex-wrap:wrap;gap:4px;padding-bottom:4px;">
+                    <span class="filter-group-label" title="料號附件上標的製程標籤；選大類會包含底下所有小類，選小類也會包含標整個大類的附件">附件製程</span>
+                    <div id="parts-attproc-box" class="epp" style="min-width:260px;max-width:620px;"></div>
+                </div>
                 <!-- 齒輪類型子篩（僅選 G 時出現） -->
                 <div class="filter-sub-row" id="parts-gear-filter">
                     <span class="filter-group-label">齒輪類型</span>
@@ -12091,9 +12104,9 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             </div>
             <!-- 製程標籤：同一料號不同加工項目各自一組新舊版（2026-08-20 使用者要求）；
                  留空＝共用圖。候選只列此料號訂單有過的加工項目＋此料號已經打過的。 -->
-            <div class="form-group" style="margin-bottom:0;width:190px;flex-shrink:0;">
-                <label style="font-size:12px;">製程標籤</label>
-                <select id="pau-proc" class="form-control input-sm"><option value="">（共用）</option></select>
+            <div class="form-group" style="margin-bottom:0;width:280px;flex-shrink:0;">
+                <label style="font-size:12px;">製程標籤 <small style="color:#aaa;font-weight:normal;">（選填，可複選大類／小類）</small></label>
+                <div id="pau-proc" class="epp"></div>
             </div>
             <div class="form-group" style="margin-bottom:0;flex:1;">
                 <label style="font-size:12px;">備註</label>
@@ -12249,8 +12262,8 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
     </div>
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">製程標籤
-            <small style="color:#aaa;font-weight:normal;">（同料號不同加工項目的圖各自比新舊版；留空＝共用）</small></label>
-        <select id="pae-proc" class="form-control input-sm"><option value="">（共用）</option></select>
+            <small style="color:#aaa;font-weight:normal;">（選填；可複選製程大類／小類，同組合的圖各自比新舊版；留空＝共用）</small></label>
+        <div id="pae-proc" class="epp"></div>
     </div>
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">備註</label>
@@ -12471,6 +12484,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻） -->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
+<script src="../../resource/js/eg_proc_pick.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_proc_pick.js') ?>"></script>
 <!-- 階梯報價的數量區間／單價顯示格式（與 bom_viewer 共用同一份，禁止各頁自刻） -->
 <script src="../../resource/js/eg_quote_tier.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_quote_tier.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
@@ -13424,8 +13438,9 @@ function clearPartsCust() {
 // 目前有沒有套用任何篩選（唯一實作）：「取消篩選」鈕要不要出現、以及
 // 批次設定跳窗要不要寫明「已套用篩選」都問這一支，不要各自再列一次條件。
 // 註：這裡刻意不含搜尋框裡還沒按下 Enter 的即時關鍵字，維持原本按鈕的行為。
+var _attProcFilter = [];   // 料號清單「附件製程」篩選：[{t:'type'|'no', id}]
 function partsHasFilter() {
-    return !!(_partsFilter.types.length || _partsFilter.gear || _partsFilter.sub
+    return !!((_attProcFilter && _attProcFilter.length) || _partsFilter.types.length || _partsFilter.gear || _partsFilter.sub
         || (_partsFilter.labels && _partsFilter.labels.length)
         || _partsFilter.customerIds.length || _partsFilter.grades.length
         || _partsFilter.industries.length || _partsFilter.industrySubs.length
@@ -13447,7 +13462,16 @@ function updatePartsClearBtn() {
     if (btn) btn.style.display = partsHasFilter() ? '' : 'none';
 }
 
+document.addEventListener('DOMContentLoaded', function() {
+    var el = document.getElementById('parts-attproc-box');
+    if (el && window.EGProcPick) EGProcPick.mount(el, { url: PART_ATTACH_API_URL, onChange: function(sel) {
+        _attProcFilter = sel.map(function(x){ return { t:x.t, id:x.id }; });
+        loadParts(1);
+    } });
+});
+
 function clearPartsFilter() {
+    _attProcFilter = []; var _apEl = document.getElementById('parts-attproc-box'); if (_apEl && window.EGProcPick) EGProcPick.set(_apEl, []);
     _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
     ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
@@ -14691,6 +14715,7 @@ function partsFilterPayload() {
           filter_gear:             _partsFilter.gear,
           filter_sub:              _partsFilter.sub,
           filter_labels:           JSON.stringify(_partsFilter.labels||[]),
+          filter_att_proc:         JSON.stringify(_attProcFilter||[]),
           filter_tool_kind:        _partsFilter.tool.kind,
           filter_tool_module:      _partsFilter.tool.module,
           filter_tool_type:        _partsFilter.tool.type,
@@ -24179,7 +24204,7 @@ function _pauRenderFileRows(fileArr, cats) {
     html += '<th style="padding:5px 8px;text-align:left;width:22%;">檔案名稱</th>';
     html += '<th style="padding:5px 8px;text-align:left;">類別標籤</th>';
     html += '<th style="padding:5px 8px;text-align:left;width:90px;">版次</th>';
-    html += '<th style="padding:5px 8px;text-align:left;width:150px;">製程標籤</th>';
+    html += '<th style="padding:5px 8px;text-align:left;width:230px;">製程標籤</th>';
     html += '<th style="padding:5px 8px;text-align:left;width:18%;">備註</th>';
     html += '</tr></thead><tbody>';
     fileArr.forEach(function(f, idx) {
@@ -24191,7 +24216,7 @@ function _pauRenderFileRows(fileArr, cats) {
               + '<i class="fa '+_fileIcon(ext)+'" style="color:#888;margin-right:4px;"></i>'+escHtml(f.name)+'</a></td>';
         html += '<td style="padding:5px 8px;">'+_pauBuildFileCatChips(idx, cats, [])+'</td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-rev" data-fidx="'+idx+'" maxlength="50" placeholder="版次" style="font-size:11px;"></td>';
-        html += '<td style="padding:5px 8px;"><select class="form-control input-sm pau-row-proc" data-fidx="'+idx+'" style="font-size:11px;">'+_pauProcOptionsHtml('')+'</select></td>';
+        html += '<td style="padding:5px 8px;"><div class="epp pau-row-proc" data-fidx="'+idx+'"></div></td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-note" data-fidx="'+idx+'" maxlength="200" placeholder="備註（選填）" style="font-size:11px;"></td>';
         html += '</tr>';
     });
@@ -24203,6 +24228,7 @@ function _pauRenderFileRows(fileArr, cats) {
         + '</div>' + html;
     rows.innerHTML = wrapHtml;
     rows.style.display = '';
+    rows.querySelectorAll('.pau-row-proc').forEach(function(d){ EGProcPick.mount(d, { url: PART_ATTACH_API_URL }); });
 }
 
 // 多檔上傳表格：↑↓ 在同一欄的上下列之間移動（版次／備註），比照多列輸入表格的操作習慣
@@ -24229,6 +24255,7 @@ function pauApplyFirstToAll() {
     var firstRev = '';
     var revEl = document.querySelector('.pau-row-rev[data-fidx="0"]');
     if (revEl) firstRev = revEl.value;
+    var firstProc = EGProcPick.get(document.querySelector('.pau-row-proc[data-fidx="0"]')).map(function(x){ return { t:x.t, id:x.id, name:'' }; });
     var total = (window._pauFiles||[]).length;
     for (var i = 1; i < total; i++) {
         // 同步勾選
@@ -24239,6 +24266,8 @@ function pauApplyFirstToAll() {
         if (n) n.value = firstNote;
         var rv = document.querySelector('.pau-row-rev[data-fidx="'+i+'"]');
         if (rv) rv.value = firstRev;
+        var pr = document.querySelector('.pau-row-proc[data-fidx="'+i+'"]');
+        if (pr) { EGProcPick.mount(pr, { url: PART_ATTACH_API_URL, value: firstProc }); pr._epp.touched = true; }
     }
     showToast('已套用到全部 '+total+' 個檔案');
 }
@@ -24278,7 +24307,7 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     loadActiveCatsForUpload(function(cats) {
       _pauLoadProcCands(dId, function() {
         var _pp = document.getElementById('pau-proc');
-        if (_pp) _pp.innerHTML = _pauProcOptionsHtml('');
+        if (_pp) EGProcPick.mount(_pp, { url: PART_ATTACH_API_URL });
         if (fileArr.length > 1) {
             _pauRenderFileRows(fileArr, cats);
         } else {
@@ -24333,7 +24362,7 @@ function onPauFileChange(input) {
             // 清除舊勾選
             document.querySelectorAll('.pau-cat-chk').forEach(function(cb){ cb.checked = false; });
             var _pp2 = document.getElementById('pau-proc');
-            if (_pp2) _pp2.innerHTML = _pauProcOptionsHtml('');
+            if (_pp2) EGProcPick.mount(_pp2, { url: PART_ATTACH_API_URL });
         }
         refreshPauIssueRow();
         refreshPauAlbumRow();
@@ -24729,7 +24758,7 @@ function submitPartAttachUpload() {
             var revEl  = document.querySelector('.pau-row-rev[data-fidx="'+idx+'"]');
             var prcEl  = document.querySelector('.pau-row-proc[data-fidx="'+idx+'"]');
             return { catStr: catIds.join(','), note: noteEl ? noteEl.value.trim() : '', revision: revEl ? revEl.value.trim() : '',
-                     procTag: prcEl ? prcEl.value : '', tagVarStr: '' };
+                     procSel: prcEl ? EGProcPick.get(prcEl) : [], tagVarStr: '' };
         } else {
             var selectedCatIds = [];
             document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedCatIds.push(cb.value); });
@@ -24740,7 +24769,7 @@ function submitPartAttachUpload() {
             });
             return { catStr: selectedCatIds.join(','), note: (document.getElementById('pau-note').value||'').trim(),
                      revision: (document.getElementById('pau-revision').value||'').trim(),
-                     procTag: (document.getElementById('pau-proc')||{}).value || '',
+                     procSel: EGProcPick.get(document.getElementById('pau-proc')),
                      tagVarStr: Object.keys(tagVarValues).length ? JSON.stringify(tagVarValues) : '' };
         }
     });
@@ -24771,7 +24800,7 @@ function submitPartAttachUpload() {
         fd.append('tag_var_values', s.tagVarStr||'');
         fd.append('note', s.note||'');
         fd.append('revision', s.revision||'');
-        fd.append('process_tag', s.procTag||'');
+        if (s.procSel && s.procSel.length) fd.append('process_sel', JSON.stringify(s.procSel));
         fd.append('issue_stamp_date', issueDate);
         fd.append('album_id', albumId || 0);
         fd.append('quote_no', bindQuoteNo);
@@ -24903,10 +24932,8 @@ function pavEditMeta() {
     }
     _pauLoadQuoteCands(_pav.dId, function(){ refreshPaeLinkRows(); });
     // 製程標籤：候選依這筆附件所屬料號現查，目前值就算已不在候選內也會保留（見 _pauProcOptionsHtml）
-    _pauLoadProcCands(_pav.dId, function() {
-        var _pe = document.getElementById('pae-proc');
-        if (_pe) _pe.innerHTML = _pauProcOptionsHtml(f.process_tag || '');
-    });
+    var _pe = document.getElementById('pae-proc');
+    if (_pe) EGProcPick.mount(_pe, { url: PART_ATTACH_API_URL, value: f.process_sel || [], legacy: (f.process_sel && f.process_sel.length) ? '' : (f.process_tag || '') });
     var _paeBox0 = document.getElementById('pae-cat-chips'); if (_paeBox0) _paeBox0.style.borderColor = '';
     var _paeErr0 = document.getElementById('pae-cat-err'); if (_paeErr0) _paeErr0.style.display = 'none';
     loadActiveCatsForUpload(function(cats) {
@@ -25039,8 +25066,11 @@ function submitAttachEdit() {
     // 送空字串會把原本存好的發行章日期清成 NULL，而使用者只是改了標籤、完全不會發現。
     var shownIssue = (document.getElementById('pae-issue-wrap').style.display !== 'none');
     var issueDate  = shownIssue ? (document.getElementById('pae-issue-date').value||'') : null;
-    var procTag = (document.getElementById('pae-proc')||{}).value || '';
-    var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision, process_tag:procTag };
+    var _paeProcEl = document.getElementById('pae-proc');
+    var procTouched = EGProcPick.touched(_paeProcEl);   // 沒動過製程就不送，舊附件的文字標籤才不會被洗掉
+    var procSel = EGProcPick.get(_paeProcEl);
+    var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision };
+    if (procTouched) payload.process_sel = JSON.stringify(procSel);
     if (shownIssue) payload.issue_stamp_date = issueDate;
     // 綁定報價單／廠商：同樣「欄位沒顯示就不送」＝後端維持原值，不會被標籤一改就洗掉
     var shownQuote = (document.getElementById('pae-quote-wrap')||{}).style && document.getElementById('pae-quote-wrap').style.display !== 'none';
@@ -25052,7 +25082,8 @@ function submitAttachEdit() {
         // 更新本地資料
         var f = _pav.currentFile;
         if (f) {
-            f.category_ids = catIds.join(','); f.note = note; f.revision = revision; f.process_tag = procTag;
+            f.category_ids = catIds.join(','); f.note = note; f.revision = revision;
+            if (procTouched) { f.process_sel = _paeProcEl._epp.sel.slice(); f.process_tag = f.process_sel.map(function(x){ return x.name; }).join('、'); }
             if (shownIssue) f.issue_stamp_date = issueDate;   // 沒送就別動本地快取，否則下次開編輯又會變成空的
             if (shownQuote) f.bind_quote_no = payload.quote_no;
             if (shownMaker) f.maker_no = payload.maker_no;
