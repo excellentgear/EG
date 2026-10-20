@@ -13409,7 +13409,8 @@ foreach($dCounts as $c) {
             // 點開即刷新：料號與既有對照一律跟後端要最新的
             $.post(ORDER_ATTACH_API, { action: 'page_map_get', attachment_id: attId }, function(res) {
                 if (!res.success) { showToast(res.message || '讀取失敗', 'info'); return; }
-                opm = { attId: attId, parts: res.all_parts || [], sets: {}, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now() };
+                opm = { attId: attId, parts: res.all_parts || [], sets: {}, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now(), doc: null, focus: 0, bigTok: 0 };
+                $('#opm-big').html('<span style="color:#aaa;line-height:120px;">載入中…</span>'); $('#opm-focus-label').text('');
                 opm.parts.forEach(function(p) { opm.sets[p] = opmParse((res.map || {})[p]); });
                 $('#opm-file').text((res.display_name || '') + '（訂單 ' + (res.order_oo || '') + '）');
                 $('#opm-err').hide().text('');
@@ -13441,15 +13442,18 @@ foreach($dCounts as $c) {
                 });
                 $(this).css('border-color', on ? opmColor(opm.active) : '#ddd').find('.opm-chips').html(chips);
             });
+            if (opm.focus) $('#opm-pages .opm-pg[data-pg="' + opm.focus + '"]').css('outline', '3px solid #337ab7');
             opmRenderParts();
+            opmRefreshToggle();
         }
         async function opmRenderPages(attId, token) {
             try {
                 var lib = await opmLoadPdfJs();
                 var doc = await lib.getDocument({ url: ORDER_ATTACH_API + '?action=download&id=' + attId, withCredentials: true }).promise;
                 if (opm.token !== token) return;
-                opm.numPages = doc.numPages;
+                opm.numPages = doc.numPages; opm.doc = doc;
                 $('#opm-pages').empty();
+                opmFocus(1);
                 for (var n = 1; n <= doc.numPages; n++) {
                     if (opm.token !== token) return;
                     var page = await doc.getPage(n);
@@ -13470,13 +13474,44 @@ foreach($dCounts as $c) {
             }
         }
         $(document).on('click', '#opm-parts .opm-part', function() { opm.active = String($(this).data('p')); opmRefreshBadges(); });
-        $(document).on('click', '#opm-pages .opm-pg', function() {
+        $(document).on('click', '#opm-pages .opm-pg', function() { opmFocus(parseInt($(this).data('pg'), 10)); });
+        // 中間大圖：縮圖太小看不到字，點縮圖後以大尺寸重畫該頁
+        async function opmFocus(n) {
+            if (!opm.doc || n < 1 || n > opm.numPages) return;
+            opm.focus = n;
+            var my = ++opm.bigTok;
+            $('#opm-pages .opm-pg').css('outline', 'none').filter('[data-pg="' + n + '"]').css('outline', '3px solid #337ab7');
+            var el = $('#opm-pages .opm-pg[data-pg="' + n + '"]')[0];
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+            $('#opm-focus-label').text('第 ' + n + ' / ' + opm.numPages + ' 頁');
+            opmRefreshToggle();
+            try {
+                var page = await opm.doc.getPage(n);
+                var w = Math.max(400, $('#opm-big').width() - 4), vp0 = page.getViewport({ scale: 1 });
+                var dpr = Math.min(2, window.devicePixelRatio || 1);
+                var vp = page.getViewport({ scale: (w / vp0.width) * dpr });
+                var cv = document.createElement('canvas');
+                cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+                await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+                if (my !== opm.bigTok) return;
+                $(cv).css({ width: w + 'px', height: 'auto', display: 'block', margin: '0 auto' });
+                $('#opm-big').empty().append(cv);
+            } catch (e) { if (my === opm.bigTok) $('#opm-big').html('<span style="color:#c0392b;">大圖載入失敗</span>'); }
+        }
+        function opmRefreshToggle() {
+            var has = !!(opm.active && opm.focus && (opm.sets[opm.active] || {})[opm.focus]);
+            $('#opm-toggle').html(has ? '<i class="fa fa-minus-circle"></i> 取消：第 ' + opm.focus + ' 頁不是 ' + escapeHtml(opm.active) + ' 的原圖'
+                                      : '<i class="fa fa-plus-circle"></i> 加入：第 ' + (opm.focus || '') + ' 頁是 ' + escapeHtml(opm.active || '（請先選料號）') + ' 的原圖')
+                .toggleClass('btn-warning', !has).toggleClass('btn-default', has);
+        }
+        function opmToggleFocus() {
             if (!opm.active) { $('#opm-err').text('請先在右側點選料號').show(); return; }
+            if (!opm.focus) return;
             $('#opm-err').hide();
-            var n = parseInt($(this).data('pg'), 10), s = opm.sets[opm.active] || (opm.sets[opm.active] = {});
-            if (s[n]) delete s[n]; else s[n] = true;
+            var s = opm.sets[opm.active] || (opm.sets[opm.active] = {});
+            if (s[opm.focus]) delete s[opm.focus]; else s[opm.focus] = true;
             opmRefreshBadges();
-        });
+        }
         function opmSave() {
             var map = {};
             opm.parts.forEach(function(p) { var sp = opmFormat(opm.sets[p] || {}); if (sp) map[p] = sp; });
@@ -15969,7 +16004,7 @@ foreach($dCounts as $c) {
 
     <!-- 客戶訂單 PDF：逐頁指定是哪個料號的原圖 -->
     <div class="modal fade" id="oaPageMapModal" tabindex="-1" role="dialog">
-      <div class="modal-dialog" style="width:96%;max-width:1100px;" role="document">
+      <div class="modal-dialog" style="width:97%;max-width:1500px;" role="document">
         <div class="modal-content">
           <div class="modal-header" style="background:#8a5a2b;color:#fff;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
@@ -15977,10 +16012,19 @@ foreach($dCounts as $c) {
           </div>
           <div class="modal-body" style="padding:12px;">
             <div id="opm-file" style="font-size:12px;color:#5d4037;font-weight:600;"></div>
-            <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號，再點左邊的頁面縮圖加上／取消（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
-            <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-              <div id="opm-pages" style="flex:1 1 560px;min-width:300px;max-height:60vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:8px;background:#fafafa;display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start;"></div>
-              <div style="flex:0 0 280px;max-width:100%;">
+            <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號；點左邊縮圖會在中間顯示大圖（可捲動、可用上一頁／下一頁），確認內容後按大圖上方的「加入／取消」鈕指定給該料號（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
+            <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+              <div id="opm-pages" style="flex:0 0 200px;max-height:72vh;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
+              <div style="flex:1 1 520px;min-width:300px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                  <button type="button" class="btn btn-xs btn-default" onclick="opmFocus(opm.focus-1)"><i class="fa fa-chevron-left"></i> 上一頁</button>
+                  <button type="button" class="btn btn-xs btn-default" onclick="opmFocus(opm.focus+1)">下一頁 <i class="fa fa-chevron-right"></i></button>
+                  <span id="opm-focus-label" style="font-size:12px;font-weight:600;color:#5d4037;"></span>
+                  <button type="button" id="opm-toggle" class="btn btn-sm btn-warning" style="margin-left:auto;" onclick="opmToggleFocus()"></button>
+                </div>
+                <div id="opm-big" style="max-height:72vh;overflow:auto;border:1px solid #ddd;border-radius:4px;background:#fff;text-align:center;"><span style="color:#aaa;line-height:120px;">載入中…</span></div>
+              </div>
+              <div style="flex:0 0 250px;max-width:100%;">
                 <div id="opm-parts" style="max-height:60vh;overflow-y:auto;"></div>
               </div>
             </div>
