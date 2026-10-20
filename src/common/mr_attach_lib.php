@@ -63,41 +63,108 @@ function mr_attach_kpi_table(PDO $db, int $y, int $mo): string {
     return $h . '</tbody></table><div class="sub" style="margin-top:6px;text-align:left">紅底＝該月未達標；空白＝尚無數據。單位依各指標目標。</div>';
 }
 
+/** 系統資料來源的對應：來源代碼 => [主表單編號（標題與右下編號）, 無主表單時的標題, 橫式?]；來源所屬的其他表單取自 meeting_tpl_source_meta()（唯一登記處） */
+function mr_attach_src_defs(): array {
+    return [
+        'kpi'    => ['2-GM-04-01', '', true],
+        'ir'     => [null, '客戶退貨（客訴）統計', false],
+        'vendor' => ['2-PH-01-05', '', false],
+        'mfg'    => [null, '製造過程能力彙整', false],
+        'car'    => ['2-QA-01-04', '', false],
+        'ia'     => ['2-GM-06-08', '', false],
+        'qa'     => ['2-QA-01-01', '', false],
+        'risk'   => ['2-GM-03-01', '', false],
+        'prev'   => [null, '前次管理審查決議事項', false],
+    ];
+}
+
+/**
+ * 依「管理審查會議範本」自動決定要附哪些資料（範本的項目掛了哪些系統資料來源、哪些 AS 表單，就附那些）：
+ *   ①項目掛的系統資料來源（kpi／ir／mfg…）→ 各一份彙整（對應 mr_attach_src_defs）
+ *   ②項目掛的 AS 表單：屬於某個系統資料來源的表單併入該來源那一份（例：稽核報告表→內稽統計）；
+ *     其餘表單一律列出「該表單期間內的填寫紀錄」（需已做成系統頁面；沒有網頁的表單略過並說明）
+ * 範本日後新增項目／換掛表單，附件就自動跟著變，不必改程式。
+ * @return array [['type'=>'src'|'doc','key'=>來源代碼或 as_document.id]…]（依範本出現順序、不重複）
+ */
+function mr_attach_units(PDO $db): array {
+    $tpl = null;
+    foreach (meeting_tpl_list($db) as $t) if ($t['name'] === '管理審查會議') { $tpl = $t; break; }
+    if (!$tpl) return [];
+    $docSrc = [];   // 表單編號 => 來源代碼
+    foreach (meeting_tpl_source_meta() as $k => $meta) foreach ($meta['docs'] as $no) $docSrc[$no] = $k;
+    $byId = [];
+    foreach ($db->query("SELECT id, doc_no FROM as_document WHERE is_deleted=0")->fetchAll(PDO::FETCH_ASSOC) as $r) $byId[(int)$r['id']] = $r['doc_no'];
+    $units = []; $seen = [];
+    $add = function (string $type, $key) use (&$units, &$seen) { $k = $type . ':' . $key; if (isset($seen[$k])) return; $seen[$k] = 1; $units[] = ['type' => $type, 'key' => $key]; };
+    foreach ($tpl['items'] as $it) {
+        foreach (meeting_tpl_item_srcs($it) as $sr) if (isset(mr_attach_src_defs()[$sr['k']])) $add('src', $sr['k']);
+        foreach (array_filter(array_map('intval', explode(',', (string)($it['as_docs'] ?? '')))) as $did) {
+            $no = $byId[$did] ?? null; if ($no === null) continue;
+            if (isset($docSrc[$no]) && isset(mr_attach_src_defs()[$docSrc[$no]])) $add('src', $docSrc[$no]); else $add('doc', $did);
+        }
+    }
+    return $units;
+}
+
+/** 表單在期間內的填寫紀錄表（沒有專屬彙整的表單用）：回 [HTML, 筆數] */
+function mr_attach_fill_table(PDO $db, int $docId, string $from, string $to): array {
+    require_once __DIR__ . '/asdoc_record_lib.php';
+    $rows = array_values(array_filter(eg_asdoc_fill_rows($db, $docId), function ($r) use ($from, $to) { $d = substr((string)($r['rec_date'] ?? ''), 0, 10); return $d !== '' && $d >= $from && $d <= $to; }));
+    usort($rows, function ($a, $b) { return strcmp((string)$a['rec_date'], (string)$b['rec_date']); });
+    if (!$rows) return ['', 0];
+    $e = function ($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); };
+    $h = '<table><thead><tr><th style="width:80px">日期</th><th>名稱／單號</th><th style="width:70px">人員</th><th style="width:70px">狀態</th><th style="width:70px">來源</th></tr></thead><tbody>';
+    foreach ($rows as $r) $h .= '<tr><td>' . $e(eg_fmt_date(substr((string)$r['rec_date'], 0, 10))) . '</td><td class="n">' . $e($r['title'] ?? '') . '</td><td>' . $e($r['person'] ?? '') . '</td><td>' . $e($r['status'] ?? '') . '</td><td>' . $e($r['src_name'] ?? '') . '</td></tr>';
+    return [$h . '</tbody></table>', count($rows)];
+}
+
 /**
  * 這場會議要產生的附件清單：[[檔名, HTML]…]，另回報略過的項目（沒有資料不產生空白附件）。
- * 每一份對應一張 AS 表單：標題＝表單名稱、右下角印該表單依「會議日期」回推當時版次的編號（ai-rules/16）；
- * 該表單的內容就是系統裡這張表單的資料彙整。沒有專屬表單的（客戶退貨統計、製造過程能力…）不印編號，
- * 但在副標題寫明「對應表單：編號 名稱」。
+ * 每一份對應 AS 表單：標題＝表單名稱、右下角印該表單依「會議日期」回推當時版次的編號（ai-rules/16）；
+ * 沒有專屬表單的彙整（客戶退貨、製造過程能力…）不印編號，副標題寫明「對應表單：編號 名稱」。
  * @return array ['list'=>[[檔名,HTML]], 'skipped'=>[說明]]
  */
 function mr_attach_build(PDO $db, string $date): array {
+    require_once __DIR__ . '/asdoc_page_lib.php';
     [$y, $from, $to, $mo] = meeting_tpl_period($date);
     $base = $y . ' 年度資料（' . eg_fmt_date($from) . '～' . eg_fmt_date($to) . '）　會議日期 ' . eg_fmt_date($date);
-    $src = function (string $k, array $o = []) use ($db, $date) { return meeting_tpl_source_text($db, $k, $date, $o + ['full' => true]); };
+    $src = function (string $k) use ($db, $date) { return meeting_tpl_source_text($db, $k, $date, ['full' => true]); };
     $empty = '/尚未建立|尚未設定 KPI|沒有納管且有進貨|系統內查無前次/u';
-    // [檔名前綴, 表單編號(主)＝標題與右下編號, 對應表單(僅副標題提示), 標題(沒有主表單時), 內文HTML, 橫式, 沒資料時略過]
-    $defs = [
-        ['01', '2-GM-04-01', [], '', mr_attach_kpi_table($db, $y, $mo), true, false],
-        ['02', '2-SM-02-03', [], '', mr_attach_pre(mr_attach_satis_text($db, $y, $mo, $date)), false, true],
-        ['03', null, [], '客戶退貨（客訴）統計', mr_attach_pre($src('ir')), false, false],
-        ['04', '2-PH-01-05', [], '', mr_attach_pre($src('vendor')), false, true],
-        ['05', null, ['2-QA-01-02', '2-QA-01-06', '2-QA-01-09'], '製造過程能力彙整', mr_attach_pre($src('mfg')), false, false],
-        ['06', '2-GM-06-08', ['2-GM-06-07'], '', mr_attach_pre($src('ia')), false, false],
-        ['07', '2-QA-01-04', [], '', mr_attach_pre($src('car')), false, false],
-        ['08', '2-QA-01-01', ['2-QA-01-03'], '', mr_attach_pre($src('qa')), false, false],
-        ['09', '2-GM-03-01', [], '', mr_attach_pre($src('risk')), false, true],
-        ['10', null, ['2-GM-05-01'], '前次管理審查決議事項', mr_attach_pre($src('prev')), false, true],
-    ];
-    $list = []; $skipped = [];
-    foreach ($defs as [$no, $docNo, $related, $title, $body, $land, $skipEmpty]) {
-        $doc = $docNo ? mr_attach_doc($db, $docNo, $date) : null;
-        $name = $doc ? $doc['name'] : $title;
-        if ($skipEmpty && preg_match($empty, strip_tags($body)) ) { $skipped[] = ($doc ? $doc['no'] . ' ' : '') . $name . '（期間內沒有資料）'; continue; }
-        $rel = [];
-        foreach ($related as $rn) { $d = mr_attach_doc($db, $rn, $date); if ($d) $rel[] = $d['full'] . ' ' . $d['name']; }
+    $meta = meeting_tpl_source_meta(); $defs = mr_attach_src_defs();
+    $pageMap = eg_asdoc_page_map($db);
+    $list = []; $skipped = []; $n = 0;
+    $push = function (string $docNo, string $name, array $rel, string $body, bool $land, string $asNo, bool $withYear) use (&$list, &$n, $db, $base, $y) {
+        $n++;
         $sub = $base . ($rel ? '　對應表單：' . implode('、', $rel) : '') . '　（管理審查資料彙整）';
-        $fileBase = '管審附件_' . $no . '_' . ($doc ? $doc['full'] . ' ' : '') . $name . ($no === '10' ? '' : '_' . $y . '年度');
-        $list[] = [$fileBase, mr_attach_html($db, $name, $sub, $body, $land, $doc ? $doc['full'] : '')];
+        $file = '管審附件_' . sprintf('%02d', $n) . '_' . ($asNo !== '' ? $asNo . ' ' : '') . $name . ($withYear ? '_' . $y . '年度' : '');
+        $list[] = [$file, mr_attach_html($db, $name, $sub, $body, $land, $asNo)];
+    };
+    foreach (mr_attach_units($db) as $u) {
+        if ($u['type'] === 'src') {
+            $k = $u['key']; [$primary, $title, $land] = $defs[$k];
+            $doc = $primary ? mr_attach_doc($db, $primary, $date) : null;
+            $name = $doc ? $doc['name'] : $title;
+            $body = $k === 'kpi' ? mr_attach_kpi_table($db, $y, $mo) : mr_attach_pre($src($k));
+            if (in_array($k, ['vendor', 'risk', 'prev'], true) && preg_match($empty, strip_tags($body))) { $skipped[] = ($doc ? $doc['no'] . ' ' : '') . $name . '（期間內沒有資料）'; continue; }
+            $rel = [];
+            foreach (array_merge($primary ? [] : [], $meta[$k]['docs'] ?? []) as $rn) {
+                if ($rn === $primary) continue;
+                $d = mr_attach_doc($db, $rn, $date); if ($d && isset($pageMap[$d['id']])) $rel[] = $d['full'] . ' ' . $d['name'];
+            }
+            if ($k === 'prev') { $d = mr_attach_doc($db, '2-GM-05-01', $date); if ($d) $rel[] = $d['full'] . ' ' . $d['name']; }
+            $push($primary ?? '', $name, $rel, $body, (bool)$land, $doc ? $doc['full'] : '', $k !== 'prev');
+            continue;
+        }
+        // 單一 AS 表單（沒有專屬彙整）：需有系統頁面才附；客戶滿意度統計資料表有專屬內容
+        $did = (int)$u['key'];
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE id=?"); $st->execute([$did]);
+        $no = (string)$st->fetchColumn(); $doc = $no !== '' ? mr_attach_doc($db, $no, $date) : null;
+        if (!$doc) continue;
+        if (!isset($pageMap[$did])) { $skipped[] = $doc['no'] . ' ' . $doc['name'] . '（尚未做成系統頁面，無資料可彙整）'; continue; }
+        if ($no === '2-SM-02-03') { $body = mr_attach_pre(mr_attach_satis_text($db, $y, $mo, $date)); $cnt = preg_match('/尚未建立/u', $body) ? 0 : 1; }
+        else [$body, $cnt] = mr_attach_fill_table($db, $did, $from, $to);
+        if (!$cnt) { $skipped[] = $doc['no'] . ' ' . $doc['name'] . '（期間內沒有資料）'; continue; }
+        $push($no, $doc['name'], [], $body, false, $doc['full'], true);
     }
     return ['list' => $list, 'skipped' => $skipped];
 }

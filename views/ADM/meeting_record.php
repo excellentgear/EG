@@ -821,7 +821,7 @@ foreach ($roleRows as $rr) {
         <h4>管理審查會議：範本輸入框與結果摘要</h4>
         ・套用「管理審查會議」範本後，每個要項裡的 <b>【待填：提示】</b> 會變成一個<b>獨立輸入框</b>（標題就是提示文字），直接在框內填寫；條文與系統資料以灰底顯示。要項內容仍組成完整文字，<b>列印與檢視和其他會議紀錄相同</b>。沒填的輸入框送出前仍會被擋下；要把整段當一般文字自由改寫，按該項下方的「改為整段文字自由編輯」。<br>
         ・範本的項目取自程序書 2-GM-05 線上版（輸入 6.1.4、輸出 6.1.5）；程序書改版時，範本管理會提醒並可一鍵同步。「6.1.4.8 前次管理審查決議事項」會自動列出前一場管理審查的決議（負責單位、應完成日、確認狀態）。<br>
-        ・要項內的系統資料只留<b>重點摘要</b>（KPI 與不良率只列<b>未達標</b>的指標與月份）；完整明細按附件區的「<b>匯入管審附件資料（自動轉 PDF）</b>」：系統依已存檔的會議日期，把 KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議各產生一份 PDF 成為本會議附件（需先存草稿；重複按會取代上一次系統產生的，人工上傳的不動）。<br>
+        ・要項內的系統資料只留<b>重點摘要</b>（KPI 與不良率只列<b>未達標</b>的指標與月份）；完整明細按附件區的「<b>匯入管審附件資料（自動轉 PDF）</b>」：系統依已存檔的會議日期，把 KPI 逐月達成、客訴退貨、供應商評核、製造過程能力、不符合與異常統計、風險與機會、前次決議各產生一份 PDF 成為本會議附件（附件清單依<b>範本各項目掛的系統資料來源與 AS 表單</b>自動決定，沒有資料的不產生；範本新增項目或換掛表單，附件跟著變。<b>套用管審範本新建的會議，第一次存草稿後會自動匯入</b>；之後要更新按按鈕，重複按會取代上一次系統產生的，人工上傳的不動）。<br>
         ・會議主題含「管理審查」時，編輯畫面最下方多一個<b>管理審查結果摘要</b>，要回答 5 個問題（整體狀況、重要問題、管理階層決定、資源、後續追蹤），<b>送出前必填</b>（前後端都會檢查）。「依本次內容整理草稿」只整理已填的輸入與決議並帶入空白欄位，第 1 題整體判斷要由主席／管理代表自己填。列印時摘要另成一頁。<br>
         <h4>權限角色</h4>
         <b>可看到哪些會議記錄</b>：①<b>會議記錄登錄</b>＝只看得到<b>自己建立或與自己相關</b>（出席／主席／總經理／負責簽名）的會議記錄；②<b>產銷會議人員</b>（功能碼「檢視產銷會議」）＝<b>全部產銷會議</b>（主題含「產銷」、已送出者）＋自己建立或相關的其他會議；③<b>會議記錄檢索</b>（功能碼「檢索全部」）＝不限是否相關、可檢索全部已送出的會議記錄；④會議記錄管理員＝全部＋刪除、修改他人已送出記錄、維護常用設定；管理者全權。任何角色都<b>看不到他人尚未送出的草稿</b>（除非是自己建立或需要自己簽名）。新增/編輯/送出需「會議記錄登錄」。<br>
@@ -2268,6 +2268,7 @@ function saveDraft(thenSubmit){
     }
     $.post(API, gatherPayload(), function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        var wasNewFromTpl = !EDIT_ID && TPL_ID > 0 && mrIsMr();   // 套管審範本新建的會議，第一次存檔後自動匯入管審附件
         EDIT_ID = res.meeting_id;
         // 這次存檔剛好把最後一個條件補齊(通常是指定主席)，後端已自動送出主席簽核——
         // 就不要再走 submitMeeting，否則會被擋「此會議記錄已送出過」
@@ -2276,6 +2277,7 @@ function saveDraft(thenSubmit){
             // 存草稿不關閉(2026-10-19 使用者要求)：重新載入伺服器上的內容(新項目才拿得到 item_id)，並顯示存檔時間
             ED_SAVED_AT = edNow(); loadList(); TEMP_ATTACH_IDS = [];
             openEdit(EDIT_ID, true);
+            if (wasNewFromTpl) mrAttachImportAuto(EDIT_ID);
             return;
         }
         var rdy = mtReadiness();
@@ -3138,6 +3140,16 @@ function mrAttachImport(){
         $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）');
         alert('匯入失敗：' + (x.responseJSON && x.responseJSON.error || x.status));
     });
+}
+/* 套管審範本新建會議後第一次存檔：背景自動匯入管審附件（附件清單依範本掛的資料來源／AS 表單自動決定，不必再按按鈕；之後要更新再手動按） */
+function mrAttachImportAuto(mid){
+    var $b = $('#btnMrAttach').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 自動匯入管審附件中…');
+    $.post(API, {action:'mr_attach_import', meeting_id:mid}, function(res){
+        $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）');
+        if (EDIT_ID !== mid) return;
+        if (res.ok) $.getJSON(API, {action:'attach_list', meeting_id:mid}, function(r){ EDIT_ATTACHES = r.attaches || []; renderEdAttach(); });
+        else alert('自動匯入管審附件失敗：' + (res.error || '') + '\n可稍後按「匯入管審附件資料」重試。');
+    }, 'json').fail(function(){ $b.prop('disabled', false).html('<i class="fa fa-file-pdf-o"></i> 匯入管審附件資料（自動轉 PDF）'); });
 }
 function mrSumParse(m){ try { return m.mr_summary_json ? (JSON.parse(m.mr_summary_json) || null) : null; } catch (e) { return null; } }
 function mrSumTableHtml(m){
