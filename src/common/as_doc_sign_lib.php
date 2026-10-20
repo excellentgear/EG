@@ -739,7 +739,7 @@ function ads_decide(PDO $db, int $stepId, int $uid, bool $ok, string $note, bool
     }
     ads_run_auto($db, (int)$row['cid'], $uid);
     ads_finish_if_done($db, (int)$row['cid']);
-    ads_notify_next($db, (int)$row['cid'], $uid);
+    if (!$proxy) ads_notify_next($db, (int)$row['cid'], $uid);   // 管理員代簽不發通知（使用者要求 2026-10-20）
 
     $st2 = $db->prepare("SELECT status, version_id FROM as_doc_sign_case WHERE id=?");
     $st2->execute([(int)$row['cid']]);

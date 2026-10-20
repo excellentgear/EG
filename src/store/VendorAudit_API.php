@@ -1031,7 +1031,8 @@ case 'sign_decide': {
         }
         vendor_audit_close_sign_notice($db, $tid, $uid);
     } catch (Throwable $e) { error_log('[vendor_audit] sign_decide post-process failed: '.$e->getMessage()); }
-    vendor_audit_notify_sign_result($db, $tid, (string)$row['maker_id'], (int)($row['completed_by'] ?? 0), $uname, $decision, $noteIn ?: null);
+    // 管理員代簽（操作者不是該筆的簽核人）不發結果通知（使用者要求 2026-10-20）
+    if ($signer && (int)$signer['id'] === $uid) vendor_audit_notify_sign_result($db, $tid, (string)$row['maker_id'], (int)($row['completed_by'] ?? 0), $uname, $decision, $noteIn ?: null);
     jout(['status'=>$decision==='approved'?'approved':'rejected']);
 }
 

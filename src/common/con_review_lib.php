@@ -917,6 +917,7 @@ function cnrv_dept_sign(PDO $db, int $docId, int $deptId, int $uid, string $unam
                       is_proxy=VALUES(is_proxy),proxy_uid=VALUES(proxy_uid),proxy_name=VALUES(proxy_name)")
        ->execute([$docId, $deptId, $note, $signerId, $signerName, $signDate, $isBackfill?1:0, $backfillByName, $isProxy, $proxyUid, $proxyName]);
 
+    if ($isProxy || $isBackfill) return;   // 管理員代簽／補登不發通知（使用者要求 2026-10-20）
     $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
     if ($toUids) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $uid);
@@ -1088,6 +1089,7 @@ function cnrv_decide(PDO $db, int $docId, int $uid, string $uname, string $decis
     $db->prepare("UPDATE con_review_doc SET decision=?,decision_note=?,sales_decided_by=?,sales_decided_by_name=?,sales_decided_at=NOW(),sales_decided_date=?,
                   sales_decided_is_proxy=?,sales_decided_proxy_uid=?,sales_decided_proxy_name=? WHERE id=?")
        ->execute([$decision, $note, $signerId, $signerName, $doc['business_date'], $isProxy, $proxyUid, $proxyName, $docId]);
+    if ($isProxy) return;   // 管理員代簽不發通知（使用者要求 2026-10-20）
     $gm = cnrv_gm_signer($db, $docId);
     if ($gm) cnrv_notify($db, $docId, [(int)$gm['id']], '合約訂單審查待核准',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已決行為「" . CNRV_DECISIONS[$decision] . "」，請核准。", $uid);
