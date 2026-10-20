@@ -588,13 +588,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                     if (isset($cats[$cid])) $catNames[] = $cats[$cid];
                 }
             }
-            if ($originPages !== '') $catNames[] = '原圖 第' . $originPages . '頁';
+            // 有指定原圖頁：本列維持「客戶訂單」等標籤（拿掉原圖，避免整份被當成原圖），原圖另列一筆（見迴圈尾）
+            if ($originPages !== '') $catNames = array_values(array_filter($catNames, fn($n) => $n !== '原圖'));
             $bindFrom = isset($bindLabelByDid[(int)$r['d_id_ID']]) ? $bindLabelByDid[(int)$r['d_id_ID']] : null;
             $result[] = [
                 'id'             => (int)$r['id'],
                 'filename'       => $r['filename'],
                 'display_name'   => $r['original_name'] ?: $r['filename'],
-                'open_page'      => $originPages !== '' ? (int)preg_replace('/[^0-9].*$/', '', $originPages) : 0,
+                'open_page'      => 0,
                 'url'            => $dlBase . '?action=download&id=' . (int)$r['id'],
                 'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                 'ext'            => $ext,
@@ -612,6 +613,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                 'client_name'    => $r['Client_name'] ?: null,
                 'quote_no'       => $r['quote_no'] ?: null,
             ];
+            if ($originPages !== '') {
+                $one = $result[count($result) - 1];
+                $one['display_name']   = $one['display_name'] . '（原圖 第' . $originPages . '頁）';
+                $one['url']            = $one['url'] . '&origin_page=' . rawurlencode($originPages);
+                $one['open_page']      = (int)preg_replace('/[^0-9].*$/', '', $originPages);
+                $one['category_names'] = ['原圖'];
+                $one['origin_entry']   = true;
+                $result[] = $one;
+            }
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
     } catch (Exception $e) {
