@@ -247,14 +247,66 @@ function doPrint(){
     }
     window.print();
 }
+/* 正文頁自動回流（列印／預覽一律先做）：
+   編輯器載入時會把「超出一頁」的內容在畫面上自動搬到下一頁，但存進資料庫的內容若是程式寫入、
+   或沒有再存檔，仍是舊的分頁——列印就會多出一張只有幾行的紙（使用者 2026-10-20 實測：編輯器看起來
+   一頁，列印多兩張）。這裡在列印當下依「這一頁實際放得下多少」把超出的區塊往後搬到新的一頁，
+   並重編頁首的「頁次 N / 總頁數」，列印結果就不再依賴存檔當時有沒有分好頁。
+   只搬頂層區塊；單一區塊（一張長表格）本身比一頁高就不搬，交給列印引擎依 page-break 規則跨頁。 */
+var ADT_PAGE_H_MM = <?= (float)($printContentH ?? 0) ?>;
+function adtReflow(){
+    var mmPx = 96 / 25.4, safe = 2 * mmPx;
+    var pages = Array.prototype.slice.call(document.querySelectorAll('.adt-page')).filter(function(p){ return p.querySelector('.adt-hdr') && p.querySelector(':scope > .adt-body'); });
+    if (!pages.length || !(ADT_PAGE_H_MM > 0)) return;
+    var avail = function(p){
+        var hdr = p.querySelector(':scope > .adt-hdr'), ftr = p.querySelector(':scope > .adt-ftr');
+        return ADT_PAGE_H_MM * mmPx - hdr.getBoundingClientRect().height - (ftr ? ftr.getBoundingClientRect().height : 0) - safe;
+    };
+    var used = function(b){            // 內容實際佔的高度（不受 flex 撐高影響）
+        var last = b.lastElementChild; if (!last) return 0;
+        var br = b.getBoundingClientRect(), lr = last.getBoundingClientRect();
+        var cs = getComputedStyle(b), mb = parseFloat(getComputedStyle(last).marginBottom) || 0;
+        return (lr.bottom - br.top) + mb + (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    };
+    var moved = 0;
+    for (var i = 0; i < pages.length && moved < 400; i++) {
+        var p = pages[i], b = p.querySelector(':scope > .adt-body'), lim = avail(p);
+        var carry = [];
+        while (b.children.length > 1 && used(b) > lim && moved < 400) {
+            carry.unshift(b.lastElementChild);
+            b.removeChild(b.lastElementChild); moved++;
+        }
+        // 一個區塊也沒搬、或搬完仍放不下（單一大區塊）→ 不處理
+        if (!carry.length) continue;
+        var nxt = p.cloneNode(false);
+        nxt.className = p.className;
+        nxt.appendChild(p.querySelector(':scope > .adt-hdr').cloneNode(true));
+        var nb = b.cloneNode(false); carry.forEach(function(n){ nb.appendChild(n); });
+        nxt.appendChild(nb);
+        var f = p.querySelector(':scope > .adt-ftr'); if (f) nxt.appendChild(f.cloneNode(true));
+        p.parentNode.insertBefore(nxt, p.nextSibling);
+        pages.splice(i + 1, 0, nxt);
+    }
+    if (!moved) return;
+    pages.forEach(function(p, idx){
+        var ks = p.querySelectorAll('.adt-hdr .adt-hdr-k');
+        for (var k = 0; k < ks.length; k++) {
+            if (ks[k].textContent.replace(/\s|　/g, '') === '頁次') {
+                var sp = ks[k].nextElementSibling && ks[k].nextElementSibling.querySelector('.adt-fit');
+                if (sp) sp.textContent = (idx + 1) + ' / ' + pages.length;
+            }
+        }
+    });
+}
 // 圖片沒載完就叫 print() 會印出空白的圖框，所以等全部圖片就緒（含失敗的）才自動跳列印。
 // 簽章要**先畫**再等圖片：掃描實體章本身也是圖，先畫才會被下面那一輪等到。
 function startAutoPrint(){
     // 頁首太長的字先縮到放得下再印（縮放要在量得到版面之後、print() 之前）
+    try { adtReflow(); } catch (e) {}
     if (window.EGDocFit) EGDocFit.run(document);
     var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
-    function go(){ setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250); }
+    function go(){ setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250); }
     if (!left) { go(); return; }
     imgs.forEach(function(i){
         if (i.complete) return;
@@ -276,9 +328,10 @@ function fitSpread(){
 }
 window.addEventListener('resize', fitSpread);
 function startPreview(){
+    try { adtReflow(); } catch (e) {}
     if (window.EGDocFit) EGDocFit.run(document);
     fitSpread();
-    setTimeout(function(){ if (window.EGDocFit) EGDocFit.run(document); fitSpread(); }, 400);
+    setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); fitSpread(); }, 400);
     setTimeout(fitSpread, 1500);
 }
 if (window.egDocStamps) egDocStamps(document, startPreview); else startPreview();
