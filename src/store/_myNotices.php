@@ -14,6 +14,9 @@ $page = max(1, (int)($_GET['page'] ?? 1));
 $size = (int)($_GET['size'] ?? 20);
 if ($size < 1 || $size > 100) $size = 20;
 $off = ($page - 1) * $size;
+// 篩選（我的待辦頁用）：state=''/done/todo，source=來源名稱。沒帶＝與舊版（手機頁）完全相同。
+$state  = in_array(($_GET['state'] ?? ''), ['done', 'todo'], true) ? $_GET['state'] : '';
+$source = trim((string)($_GET['source'] ?? ''));
 
 try {
     // 我的身分（含兼任 status2/status3）
@@ -49,10 +52,19 @@ try {
              OR (t.target_type='dept'   AND t.target_id IN ($deptIn))
              OR (t.target_type='user'   AND t.target_id IN ($viewIn)) )";
 
+    $srcSql = '';
+    if ($source !== '') $srcSql = " AND le.source = " . $db->quote($source);
+
+    // 我收到的通知涵蓋哪些來源（下拉用；不受 source／state 篩選影響）
+    $sources = $db->query("SELECT DISTINCT le.source FROM live_event le
+                           JOIN live_event_target t ON t.live_event_id = le.id
+                           WHERE $match AND le.source IS NOT NULL AND le.source <> ''
+                           ORDER BY le.source")->fetchAll(PDO::FETCH_COLUMN);
+
     // 總筆數（去重）
     $total = (int)$db->query("SELECT COUNT(*) FROM (SELECT le.id FROM live_event le
                               JOIN live_event_target t ON t.live_event_id = le.id
-                              WHERE $match GROUP BY le.id) x")->fetchColumn();
+                              WHERE $match $srcSql GROUP BY le.id) x")->fetchColumn();
 
     // 來源參照欄位（品質異常單通知用；欄位由 qa_notify 模組建立，尚未建立時略過）
     $hasRef = false;
@@ -65,10 +77,10 @@ try {
                         FROM live_event le
                         JOIN live_event_target t ON t.live_event_id = le.id
                         LEFT JOIN `user` u ON u.id = le.created_by
-                        WHERE $match
+                        WHERE $match $srcSql
                         GROUP BY le.id
                         ORDER BY le.eventdate DESC, le.id DESC
-                        LIMIT $size OFFSET $off")->fetchAll(PDO::FETCH_ASSOC);
+                        " . ($state !== '' ? "LIMIT 1500" : "LIMIT $size OFFSET $off"))->fetchAll(PDO::FETCH_ASSOC);
 
     $ids = array_column($rows, 'id');
     require_once __DIR__ . '/../common/notice_mode_lib.php';
@@ -149,8 +161,15 @@ try {
         ];
     }
 
+    // 已處理／未處理要看過每則的完成狀態才知道，所以先全撈（上限 1500 則）再在這裡篩選、分頁
+    if ($state !== '') {
+        $data = array_values(array_filter($data, function ($r) use ($state) { return $state === 'done' ? $r['done'] : !$r['done']; }));
+        $total = count($data);
+        $data = array_slice($data, $off, $size);
+    }
+
     echo json_encode([
-        'ok' => true, 'total' => $total, 'page' => $page, 'size' => $size,
+        'ok' => true, 'sources' => $sources, 'total' => $total, 'page' => $page, 'size' => $size,
         'pages' => max(1, (int)ceil($total / $size)), 'rows' => $data,
     ], JSON_UNESCAPED_UNICODE);
 } catch (PDOException $e) {

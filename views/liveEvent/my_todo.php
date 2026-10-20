@@ -40,6 +40,14 @@ if (!isset($_SESSION['userName'])) {
         .page-title-row { display:flex; align-items:center; gap:10px; margin:6px 0 14px; }
         .page-title-row h3 { margin:0; color:#2A3F54; }
         .page-help-btn { margin-left:auto; border:1px solid #d9a35b; background:#fff7ea; color:#8a5a14; border-radius:16px; padding:5px 14px; font-size:13px; cursor:pointer; }
+        .td-tabs { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+        .td-tabs .tab { border:1px solid #e0c9a3; background:#fff; color:#6b4a1a; border-radius:8px 8px 0 0; padding:7px 18px; font-weight:700; }
+        .td-tabs .tab.on { background:#F0A24B; border-color:#F0A24B; color:#fff; }
+        .td-tabs .src { margin-left:auto; display:flex; align-items:center; gap:6px; }
+        .td-tabs .src select { min-width:200px; }
+        .tg-done { background:#e6f2e6; color:#2f6b2f; }
+        .tg-undone { background:#fde3dd; color:#a8341f; }
+        .td-more { display:block; width:100%; border:1px solid #e0c9a3; background:#fff; color:#6b4a1a; border-radius:8px; padding:10px; font-weight:600; margin-top:10px; }
         .td-bar { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:8px; background:#fff; border:1px solid #e6ecf1; border-radius:10px; padding:10px 12px; margin-bottom:10px; }
         .td-bar label.td-all { margin:0; display:flex; align-items:center; gap:6px; font-weight:600; cursor:pointer; }
         .td-filter { display:flex; gap:6px; flex-wrap:wrap; }
@@ -109,7 +117,15 @@ foreach (($event ?? []) as $ev) {
 $cnt = ['read' => 0, 'sign' => 0, 'open' => 0];
 foreach ($items as $it) $cnt[$it['kind']]++;
 ?>
-        <div class="td-bar">
+        <div class="td-tabs" id="tdTabs">
+          <button type="button" class="tab on" data-t="todo">待處理 <span id="tTodo"><?= count($items) ?></span></button>
+          <button type="button" class="tab" data-t="done">已處理</button>
+          <button type="button" class="tab" data-t="all">全部收到的通知</button>
+          <div class="src"><label for="tdSrc" style="margin:0;">來源</label>
+            <select id="tdSrc" class="form-control input-sm" data-eg-filter="輸入來源名稱篩選…"><option value="">全部來源</option></select></div>
+        </div>
+
+        <div class="td-bar" id="tdBar">
           <label class="td-all"><input type="checkbox" id="tdAll"> 全選</label>
           <div class="td-filter" id="tdFilter">
             <button type="button" class="on" data-f="all">全部 <span id="cAll"><?= count($items) ?></span></button>
@@ -130,7 +146,7 @@ foreach ($items as $it) $cnt[$it['kind']]++;
     $label = $k === 'read' ? '已閱' : ($k === 'sign' ? '需回簽' : ($it['need'] === 3 ? '需回覆' : ($it['need'] === 2 ? '需回簽' : '請開啟處理')));
     $cls = $k === 'read' ? 'tg-read' : ($k === 'sign' ? 'tg-sign' : 'tg-open');
 ?>
-          <div class="td-row" id="td_<?= (int)$ev['id'] ?>" data-id="<?= (int)$ev['id'] ?>" data-kind="<?= $k ?>">
+          <div class="td-row" id="td_<?= (int)$ev['id'] ?>" data-id="<?= (int)$ev['id'] ?>" data-kind="<?= $k ?>" data-source="<?= htmlspecialchars((string)($ev['source'] ?? ''), ENT_QUOTES) ?>">
             <div class="td-chk"><?php if ($k !== 'open'): ?><input type="checkbox" class="td-ck"><?php endif; ?></div>
             <div class="td-main">
               <div class="td-title"><span class="td-tag <?= $cls ?>"><?= $label ?></span><?php if (!empty($ev['for_uid'])): ?><span class="td-tag tg-open">給 <?= htmlspecialchars((string)($ev['for_name'] ?: ('員工#' . (int)$ev['for_uid'])), ENT_QUOTES) ?></span><?php endif; ?><?= htmlspecialchars((string)$ev['title'], ENT_QUOTES) ?></div>
@@ -142,6 +158,8 @@ foreach ($items as $it) $cnt[$it['kind']]++;
 <?php endforeach; ?>
           <div class="td-empty" id="tdEmpty"<?= $items ? ' style="display:none;"' : '' ?>><i class="fa fa-check-circle"></i> 目前沒有待處理的事</div>
         </div>
+        <div class="td-list" id="hList" style="display:none;"></div>
+        <button type="button" class="td-more" id="hMore" style="display:none;">載入更多</button>
       </div>
     </div>
   </div>
@@ -163,6 +181,12 @@ foreach ($items as $it) $cnt[$it['kind']]++;
           <li>按「標示已閱」或「回簽」，系統會逐筆處理並顯示成功筆數；已處理的會從清單與鈴鐺消失。</li>
           <li>點某一列右側的按鈕可以開啟完整內容；需要審核、回覆或附件的事，請在開啟後處理。</li>
         </ol>
+        <h4>三個分頁與來源篩選</h4>
+        <ul>
+          <li><b>待處理</b>：還沒做完的事（可批次）。<b>已處理</b>：我已經已閱／回簽／回覆過的。<b>全部收到的通知</b>：所有通知給我的，不管處理與否。</li>
+          <li>右上「來源」可只看某一類通知（例如只看「訂單變更」）；已處理與全部分頁一次載入 20 則，按「載入更多」看更多。</li>
+          <li>已處理與全部分頁的「查看」會另開頁面顯示完整內容與附件。</li>
+        </ul>
         <h4>哪些可以批次？</h4>
         <ul>
           <li><b>可批次</b>：一般公告的「已閱」「回簽」，以及結果、資訊類通知。</li>
@@ -181,30 +205,33 @@ foreach ($items as $it) $cnt[$it['kind']]++;
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(function () {
     $('#sidebar-menu').css('visibility', 'visible');
     $('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
 
-    var filter = 'all', busy = false;
+    var filter = 'all', busy = false, tab = 'todo', src = '';
     function toast(m) { var $t = $('#tdToast').text(m).fadeIn(120); clearTimeout($t.data('h')); $t.data('h', setTimeout(function () { $t.fadeOut(300); }, 3200)); }
-    function visibleRows() { return $('.td-row').filter(function () { return filter === 'all' || $(this).data('kind') === filter; }); }
+    function srcOk($r) { return !src || String($r.attr('data-source') || '') === src; }
+    function visibleRows() { return $('#tdList .td-row').filter(function () { return (filter === 'all' || $(this).data('kind') === filter) && srcOk($(this)); }); }
     function applyFilter() {
         $('.td-row').each(function () {
-            var show = filter === 'all' || $(this).data('kind') === filter;
+            var show = (filter === 'all' || $(this).data('kind') === filter) && srcOk($(this));
             $(this).toggle(show);
         });
-        $('#tdEmpty').toggle($('.td-row:visible').length === 0);
+        $('#tdEmpty').toggle($('#tdList .td-row:visible').length === 0);
+        $('#tTodo').text($('#tdList .td-row').length);
         refresh();
     }
-    function checkedRows(kind) { return $('.td-row').filter(function () { return $(this).data('kind') === kind && $(this).find('.td-ck').prop('checked'); }); }
+    function checkedRows(kind) { return $('#tdList .td-row').filter(function () { return $(this).data('kind') === kind && $(this).find('.td-ck').prop('checked'); }); }
     function refresh() {
         var r = checkedRows('read').length, s = checkedRows('sign').length;
         $('#nRead').text(r); $('#nSign').text(s);
         $('#btnRead').prop('disabled', busy || r === 0); $('#btnSign').prop('disabled', busy || s === 0);
-        $('.td-row').each(function () { $(this).toggleClass('sel', $(this).find('.td-ck').prop('checked')); });
+        $('#tdList .td-row').each(function () { $(this).toggleClass('sel', $(this).find('.td-ck').prop('checked')); });
         var c = { all: 0, read: 0, sign: 0, open: 0 };
-        $('.td-row').each(function () { c.all++; c[$(this).data('kind')]++; });
+        $('#tdList .td-row').each(function () { if (!srcOk($(this))) return; c.all++; c[$(this).data('kind')]++; });
         $('#cAll').text(c.all); $('#cRead').text(c.read); $('#cSign').text(c.sign); $('#cOpen').text(c.open);
         var $vis = visibleRows().find('.td-ck:visible');
         $('#tdAll').prop('checked', $vis.length > 0 && $vis.filter(':checked').length === $vis.length);
@@ -247,7 +274,7 @@ $(function () {
     var bell = document.getElementById('menu1');
     if (bell && window.MutationObserver) {
         new MutationObserver(function () {
-            $('.td-row').each(function () {
+            $('#tdList .td-row').each(function () {
                 var id = $(this).data('id');
                 if (!$('#notice_item_' + id).length) { $(this).remove(); }
             });
@@ -283,6 +310,55 @@ $(function () {
     }
     $('#btnRead').on('click', function () { runBatch('read'); });
     $('#btnSign').on('click', function () { runBatch('sign'); });
+
+    // ---- 分頁（待處理／已處理／全部）與來源篩選 ----
+    var API = '../../src/store/_myNotices.php', hPage = 1, hPages = 1;
+    var esc = function (t) { return $('<i>').text(t == null ? '' : t).html(); };
+    function fmt(d) { return d ? String(d).substr(0, 10).replace(/-/g, '.') : ''; }
+    function fillSources(list) {
+        list = (list || []).slice();
+        $('#tdList .td-row').each(function () { var v = $(this).attr('data-source'); if (v) list.push(v); });
+        list.forEach(function (v) {
+            if (v && !$('#tdSrc option').filter(function () { return this.value === v; }).length) $('#tdSrc').append($('<option>').val(v).text(v));
+        });
+    }
+    function histRow(r) {
+        var tg = r.done ? '<span class="td-tag tg-done">已處理</span>' : '<span class="td-tag tg-undone">未處理</span>';
+        var mode = { autoread: '已閱', read: '已閱', sign: '回簽', reply: '回覆+回簽' }[r.mode] || '';
+        return '<div class="td-row" data-id="' + r.id + '"><div class="td-chk"></div><div class="td-main">'
+            + '<div class="td-title">' + tg + '<span class="td-tag tg-read">' + esc(mode) + '</span>' + esc(r.title) + '</div>'
+            + '<div class="td-prev">' + esc(r.snippet) + '</div>'
+            + '<div class="td-meta"><i class="fa fa-clock-o"></i> ' + fmt(r.eventdate) + (r.source ? '　來源：' + esc(r.source) : '') + (r.creator ? '　發布：' + esc(r.creator) : '') + '</div>'
+            + '</div><div class="td-side"><a class="td-open" target="_blank" style="text-decoration:none;display:inline-block;" href="mobile.php?event=' + r.id + '">查看</a></div></div>';
+    }
+    function loadHist(reset) {
+        if (reset) { hPage = 1; $('#hList').empty(); } else hPage++;
+        var q = { page: hPage, size: 20, source: src };
+        if (tab === 'done') q.state = 'done';
+        $('#hMore').prop('disabled', true).text('載入中…').show();
+        $.get(API, q, null, 'json').done(function (res) {
+            if (!res || !res.ok) { toast((res && res.msg) || '載入失敗'); return; }
+            hPages = res.pages;
+            fillSources(res.sources || []);
+            res.rows.forEach(function (r) { $('#hList').append(histRow(r)); });
+            if (!$('#hList .td-row').length) $('#hList').html('<div class="td-empty"><i class="fa fa-inbox"></i> 沒有符合的通知</div>');
+            $('#hMore').prop('disabled', false).text('載入更多 (' + $('#hList .td-row').length + ' / ' + res.total + ')').toggle(hPage < hPages);
+        }).fail(function () { toast('連線失敗'); $('#hMore').prop('disabled', false).text('載入更多'); });
+    }
+    function showTab(t) {
+        tab = t;
+        $('#tdTabs .tab').removeClass('on').filter('[data-t="' + t + '"]').addClass('on');
+        var todo = t === 'todo';
+        $('#tdBar, #tdList').toggle(todo);
+        $('#hList').toggle(!todo); $('#hMore').hide();
+        if (todo) applyFilter(); else loadHist(true);
+    }
+    $('#tdTabs').on('click', '.tab', function () { showTab($(this).data('t')); });
+    $('#tdSrc').on('change', function () { src = $(this).val(); if (tab === 'todo') applyFilter(); else loadHist(true); });
+    $('#hMore').on('click', function () { loadHist(false); });
+    // 來源下拉：待處理清單的來源 + 我收到的所有通知的來源
+    fillSources([]);
+    $.get(API, { page: 1, size: 1 }, null, 'json').done(function (res) { if (res && res.ok) fillSources(res.sources || []); });
 
     applyFilter();
 });
