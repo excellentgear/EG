@@ -2738,6 +2738,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     unset($row);
                 } catch(Exception $ex) {}
             }
+            // 齒輪規格顯示字串一律走共用 gear_spec_lib 的多行版（A：… L總長；與訂單追蹤等頁同一份規則）
+            try {
+                require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+                $__gm = eg_gear_spec_map($pdo, array_column($rows, 'd_id'), 'lines');
+                foreach ($rows as &$__r) { if (isset($__r['gear_spec_str'])) $__r['gear_spec_str'] = $__gm[(int)($__r['d_id'] ?? 0)] ?? ''; }
+                unset($__r);
+            } catch (Throwable $__e) {}
             echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'pages'=>ceil($total/$lmt),'page'=>$pg]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -14817,7 +14824,7 @@ function renderPartsTable(rows, total, pg, pages) {
             html += '<td style="color:#aaa;font-size:11px;">'+(((pg-1)*10)+i+1)+'</td>';
             // 齒輪規格小字（僅 G 種類）
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
-                ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.2;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
+                ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:220px;overflow:hidden;white-space:pre-line;line-height:1.25;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = '';
             // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
@@ -22632,7 +22639,11 @@ function _pavRenderList() {
         var mkTag = f.maker_no
             ? '<span style="font-size:12px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:4px;padding:1px 7px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>'
             : '';
-        html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+mkTag+'</span>';
+        // 製程標籤（上傳／編輯附件時選的加工項目；留空＝共用圖就不顯示）
+        var procTagHtml = (f.source !== 'quote' && f.process_tag)
+            ? '<span style="font-size:12px;font-weight:600;background:#F3E9DC;color:#6B4A2B;border:1px solid #E4D3BC;border-radius:4px;padding:1px 7px;" title="製程標籤"><i class="fa fa-cogs" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.process_tag)+'</span>'
+            : '';
+        html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+procTagHtml+mkTag+'</span>';
         if (isObs) html += '<span style="flex-shrink:0;background:#e74c3c;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;letter-spacing:1px;">作廢</span>';
         // 版次 0 也要顯示：不可用 if(f.revision) 判斷（0 / "0" 會被當成沒填）
         if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
@@ -25096,6 +25107,11 @@ function _buildAttachCellHtml(dId, partNo, data) {
     var files    = data.latest || [];
     var html     = '<div style="display:flex;flex-wrap:wrap;gap:3px;align-items:center;">';
 
+    // ── 迴紋針固定顯示在最左側（開全部附件）
+    if (MD_CAN_OTHER) {
+        html += '<button class="btn btn-xs" onclick="openAttachAllView('+dId+',\''+escAttr(pno)+'\')" style="font-size:12px;color:#1a5276;background:none;border:none;padding:1px 4px;" title="開啟全部附件"><i class="fa fa-paperclip"></i></button>';
+    }
+
     // ── 有勾選「顯示在列表」的標籤 → 顯示標籤按鈕（有對應附件才顯示）
     var anyShowTag = false;
     showCats.forEach(function(cat) {
@@ -25133,9 +25149,6 @@ function _buildAttachCellHtml(dId, partNo, data) {
                   + 'style="font-size:10px;color:#555;background:#f5f5f5;border:1px solid #ddd;border-radius:10px;padding:1px 7px;" '
                   + 'title="全部附件 ('+data.total+')">'+plusLabel+'</button>';
         }
-    } else if (MD_CAN_OTHER && CAN_PART_ATTACH) {
-        // 有報價但無一般附件 → 顯示新增按鈕
-        html += '<button class="btn btn-xs" onclick="openAttachAllView('+dId+',\''+escAttr(pno)+'\')" style="font-size:10px;color:#bbb;background:none;border:none;padding:1px 4px;" title="無附件，點擊新增"><i class="fa fa-paperclip"></i></button>';
     }
 
     html += '</div>';
