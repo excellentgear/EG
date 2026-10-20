@@ -24177,8 +24177,8 @@ function openPartAttachUpload(dId, partNo) {
 }
 
 // 建立單一檔案列的類別 chips HTML
-function _pauBuildFileCatChips(fileIdx, cats, checkedIds) {
-    var html = '<div id="pau-row-cat-wrap-'+fileIdx+'" style="display:flex;flex-wrap:wrap;gap:3px;">';
+function _pauBuildFileCatChips(fileIdx, cats, checkedIds, inline) {
+    var html = '<div id="pau-row-cat-wrap-'+fileIdx+'" style="display:'+(inline?'inline-flex':'flex')+';flex-wrap:wrap;gap:3px;vertical-align:top;max-width:100%;">';
     cats.forEach(function(c) {
         var ck = (checkedIds||[]).indexOf(String(c.id)) >= 0 ? 'checked' : '';
         html += '<label style="display:inline-flex;align-items:center;gap:3px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:8px;padding:1px 8px;cursor:pointer;font-weight:normal;font-size:11px;margin-bottom:2px;">'
@@ -24201,24 +24201,26 @@ function _pauRenderFileRows(fileArr, cats) {
     if (single) single.style.display = 'none';
     var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html += '<thead><tr style="background:#f0f4fb;border-bottom:2px solid #d6eaf8;">';
-    html += '<th style="padding:5px 8px;text-align:left;width:22%;">檔案名稱</th>';
-    html += '<th style="padding:5px 8px;text-align:left;">類別標籤</th>';
-    html += '<th style="padding:5px 8px;text-align:left;width:90px;">版次</th>';
-    html += '<th style="padding:5px 8px;text-align:left;width:230px;">製程標籤</th>';
-    html += '<th style="padding:5px 8px;text-align:left;width:18%;">備註</th>';
+    // 版面：每個檔案兩列——上列放檔名／版次／製程／備註，下列整列寬放類別標籤（原本擠在窄欄裡一個一行，列高很高）
+    html += '<th style="padding:5px 8px;text-align:left;width:30%;">檔案名稱</th>';
+    html += '<th style="padding:5px 8px;text-align:left;width:80px;">版次</th>';
+    html += '<th style="padding:5px 8px;text-align:left;">製程標籤</th>';
+    html += '<th style="padding:5px 8px;text-align:left;width:24%;">備註</th>';
     html += '</tr></thead><tbody>';
     fileArr.forEach(function(f, idx) {
         var ext = (f.name||'').split('.').pop().toLowerCase();
-        html += '<tr style="border-bottom:1px solid #e4e8ed;'+(idx%2===1?'background:#fafbfc;':'')+'vertical-align:top;">';
+        var _rowBg = (idx%2===1?'background:#fafbfc;':'');
+        html += '<tr style="'+_rowBg+'vertical-align:top;">';
         html += '<td style="padding:5px 8px;word-break:break-all;font-weight:600;">'
               + '<a href="javascript:void(0)" onclick="pauPreviewFile('+idx+')" title="點一下預覽這個檔案（還沒上傳也看得到）"'
               + ' style="color:#1a5276;text-decoration:underline;text-underline-offset:2px;">'
               + '<i class="fa '+_fileIcon(ext)+'" style="color:#888;margin-right:4px;"></i>'+escHtml(f.name)+'</a></td>';
-        html += '<td style="padding:5px 8px;">'+_pauBuildFileCatChips(idx, cats, [])+'</td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-rev" data-fidx="'+idx+'" maxlength="50" placeholder="版次" style="font-size:11px;"></td>';
         html += '<td style="padding:5px 8px;"><div class="epp pau-row-proc" data-fidx="'+idx+'"></div></td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-note" data-fidx="'+idx+'" maxlength="200" placeholder="備註（選填）" style="font-size:11px;"></td>';
         html += '</tr>';
+        html += '<tr style="border-bottom:1px solid #e4e8ed;'+_rowBg+'"><td colspan="4" style="padding:0 8px 6px 8px;">'
+              + '<span style="font-size:11px;color:#888;margin-right:4px;">類別標籤</span>'+_pauBuildFileCatChips(idx, cats, [], true)+'</td></tr>';
     });
     html += '</tbody></table>';
     // 套用到全部按鈕（在第一列上方）
