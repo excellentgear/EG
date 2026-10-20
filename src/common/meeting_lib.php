@@ -136,6 +136,13 @@ function meeting_ensure_schema(PDO $db): void {
             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_item' AND COLUMN_NAME='tpl_json'")->fetchColumn();
         if ($c === 0) $db->exec("ALTER TABLE meeting_item ADD COLUMN tpl_json TEXT NULL COMMENT '範本項目輸入框結構 {t,v}'");
     } catch (Throwable $e) {}
+    /* 管理審查結果摘要(2026-10-20)：管理審查會議最後的 5 欄摘要（整體狀況／重要問題／管理階層決定／資源／後續追蹤），
+       JSON {a,b,c,d,e}；只對主題含「管理審查」的會議使用，其他會議此欄一律是 NULL。 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='mr_summary_json'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN mr_summary_json TEXT NULL COMMENT '管理審查結果摘要 {a,b,c,d,e}'");
+    } catch (Throwable $e) {}
     /* 負責人確認方式(2026-10-15 使用者要求)：每個項目一個設定。
          onsite＝出席者當場簽章、未出席者收通知回簽(預設，與舊行為相同)
          later ＝出席與否一律不當場簽，全部改收通知、會後確認（可回覆）
@@ -331,6 +338,34 @@ function meeting_tpl_clean($raw): array {
     $v = [];
     for ($i = 0; $i < $cnt; $i++) $v[] = mb_substr(trim((string)(((array)($raw['v'] ?? []))[$i] ?? '')), 0, 5000, 'UTF-8');
     return [json_encode(['t' => $t, 'v' => $v], JSON_UNESCAPED_UNICODE), meeting_tpl_fill($t, $v)];
+}
+/** 管理審查結果摘要的 5 個問題（唯一登記處；前端 MR_SUM_Q 與列印用同樣的鍵與標題） */
+function meeting_mr_summary_questions(): array {
+    return ['a' => '品質管理系統目前整體狀況如何？（適切性、充分性、有效性及與組織策略方向的一致性）',
+            'b' => '本次管理審查發現哪些重要問題？（品質目標、交期、客訴、稽核、風險與機會等重要結果）',
+            'c' => '管理階層決定了什麼？（改善事項、品質管理系統變更及風險處理決議）',
+            'd' => '是否需要調整資源？（資源需求及管理階層的處理決定）',
+            'e' => '後續有哪些事項需要追蹤？（決議內容、負責人或單位、預定完成日期及追蹤安排）'];
+}
+function meeting_is_mr(array $m): bool { return (bool)preg_match('/管理審查|管審/u', (string)($m['subject'] ?? '')); }
+/** 驗證＋整理前端送來的摘要；全空回 null */
+function meeting_mr_summary_clean($raw): ?string {
+    $a = is_array($raw) ? $raw : json_decode((string)$raw, true);
+    if (!is_array($a)) return null;
+    $out = []; $any = false;
+    foreach (array_keys(meeting_mr_summary_questions()) as $k) {
+        $v = mb_substr(trim((string)($a[$k] ?? '')), 0, 6000, 'UTF-8');
+        $out[$k] = $v; if ($v !== '') $any = true;
+    }
+    return $any ? json_encode($out, JSON_UNESCAPED_UNICODE) : null;
+}
+/** 管理審查會議送出前缺的摘要欄位標題（不是管理審查、或 5 欄都有填＝空陣列） */
+function meeting_mr_summary_missing(array $m): array {
+    if (!meeting_is_mr($m)) return [];
+    $v = json_decode((string)($m['mr_summary_json'] ?? ''), true);
+    $miss = [];
+    foreach (meeting_mr_summary_questions() as $k => $q) if (trim((string)($v[$k] ?? '')) === '') $miss[] = mb_substr($q, 0, mb_strpos($q, '？') + 1, 'UTF-8');
+    return $miss;
 }
 function meeting_current_user(PDO $db): ?array {
     $uname = $_SESSION['userName'] ?? '';
@@ -543,6 +578,7 @@ function meeting_display_status(PDO $db, array $m): string {
     if (meeting_has_active_item_notices($db, $meetingId)) return 'notifying';
     // 表頭必填欄位沒補齊就還不能送（meeting_submit_blocker 會擋），不可標成「待送簽核」
     if (meeting_head_missing($m)) return $raw;
+    if (meeting_mr_summary_missing($m)) return $raw;
     if (!$m['chair_user_id']) return $raw;
     $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?");
     $ac->execute([$meetingId]);
@@ -1021,6 +1057,8 @@ function meeting_submit_blocker(PDO $db, array $m): string {
     $headMiss = meeting_head_missing($m);
     if ($headMiss) return '尚未填寫：' . implode('、', $headMiss) . '，這幾欄是送出前的必填欄位';
     if (!$m['chair_user_id']) return '請先指定本次會議主席';
+    $sumMiss = meeting_mr_summary_missing($m);
+    if ($sumMiss) return '管理審查會議送出前，「管理審查結果摘要」5 個問題都要回答，尚未填寫：' . implode('、', $sumMiss);
     $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?"); $ac->execute([$id]);
     if ((int)$ac->fetchColumn() === 0) return '請先加入出席人員名單';
     $itq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=? ORDER BY kind, sort_order, item_id");

@@ -600,6 +600,9 @@ case 'save': {
         if ($blk) jerr('下列人員在會議時段內請假，不可列入出席人員：' . implode('、', $blk));
     }
 
+    // 範本表的建表(CREATE TABLE IF NOT EXISTS)是 DDL，在交易內執行會隱式 commit，後面 commit() 就會丟「There is no active transaction」
+    // （套範本新建會議存不進去的原因）——一律在開交易之前先確保
+    if ((int)($_POST['tpl_id'] ?? 0) > 0) { include_once $document_root . '/EGsystem/src/common/meeting_tpl_lib.php'; meeting_tpl_ensure($db); }
     try {
         $db->beginTransaction();
         if ($id > 0) {
@@ -717,6 +720,13 @@ case 'save': {
             }
             $db->prepare("UPDATE meeting_record SET mr_waive=? WHERE meeting_id=?")->execute([$keep ? json_encode($keep, JSON_UNESCAPED_UNICODE) : null, $id]);
         }
+        // 管理審查結果摘要：沒送這個欄位＝不動；只有主題含「管理審查」的會議才存（其他會議一律忽略）
+        if (array_key_exists('mr_summary', $_POST)) {
+            $subjNow = (string)$db->query("SELECT subject FROM meeting_record WHERE meeting_id=" . (int)$id)->fetchColumn();
+            if (meeting_is_mr(['subject' => $subjNow])) {
+                $db->prepare("UPDATE meeting_record SET mr_summary_json=? WHERE meeting_id=?")->execute([meeting_mr_summary_clean($_POST['mr_summary']), $id]);
+            }
+        }
         // 討論過程紀錄：沒送這個欄位＝不動（舊呼叫端不可被洗掉），送空字串才是清空
         if (array_key_exists('discussion_json', $_POST)) {
             $rows = json_decode((string)$_POST['discussion_json'], true);
@@ -733,7 +743,7 @@ case 'save': {
                ->execute([$clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null, $id]);
         }
         $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 存檔本身也可能讓最後一個條件成立（最常見的是這次才指定主席）；交易外才做，避免自動送出的通知
     // 被存檔失敗的 rollback 一起回捲（通知已經推播出去就收不回來了）
     jout(['meeting_id'=>$id, 'auto_submitted'=>meeting_try_auto_submit($db, $id)]);

@@ -654,6 +654,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     foreach ($draft ? [] : ['mr' => '管理審查會議'] as $k => $nm) if ($DT[$k] === '') $warn[] = $nm . '：日期留白，已略過不建立';
     $deptList = eg_demo_qa($db, "SELECT id, name FROM department ORDER BY CHAR_LENGTH(name) DESC");
     $mCount = 0;
+    if ($meetings) eg_demo_mr_prepare($db);
     foreach ($meetings as $m) {
         // 管理審查排在年初（早於本年度成效確認日）＝審查的是前一年度，內容要引用前一年度的風險表，不能引用還沒發生的本年度成效
         $mYear = $Y; $mRisk = $riskId;
@@ -675,7 +676,8 @@ function eg_demo_seed(PDO $db, array $opt = []): array
                 $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name, position_name, is_chair, signed, signed_at) VALUES (?,?,?,?,?,?,1,?)")
                    ->execute([$mid, $uid, $a[0], $a[1], $a[2], $a[3], $m['date'] . ' 09:05:00']);
             $itemN = 0;
-            foreach (['general' => 4, 'directive' => 2] as $kind => $want) {
+            if ($m['mk'] === 'mr') { $itemN = eg_demo_mr_fill($db, $mid, $m['date'])['items']; }   // 管理審查：依範本逐項建立（含結果摘要）
+            else foreach (['general' => 4, 'directive' => 2] as $kind => $want) {
                 $lines = eg_demo_lines($db, $st, 'meeting_items', ['meeting_kind' => $m['mk'], 'subject' => $m['subj'], 'year' => $mYear, 'item_kind' => $kind]);
                 if (!$lines) $lines = eg_demo_meeting_fallback($db, $m['mk'], $kind, $mYear, $mRisk);
                 $so = 0;
@@ -701,6 +703,101 @@ function eg_demo_seed(PDO $db, array $opt = []): array
     return ['year' => $Y, 'cleared' => $clear, 'comm_records' => count($R), 'comm_tracks' => array_sum(array_map(function ($r) { return count($r['tracks']); }, $R)),
             'dates' => $DT, 'context_items' => count($ctx), 'risk_items' => $seq, 'effect_filled' => $effN, 'meetings' => $mCount, 'from_context' => $fromCtx, 'draft' => $draft,
             'ai' => ['enabled' => !empty($opt['ai']), 'calls' => $st['calls'], 'ok' => $st['ai_ok'], 'fallback' => $st['fallback'], 'error' => $st['ai_err']], 'warn' => $warn];
+}
+
+/**
+ * 管理審查【假資料】會議的項目與結果摘要：依「管理審查會議」範本（取自程序書 2-GM-05 線上版）逐項建立——
+ * 每個項目＝範本內容＋系統資料（meeting_tpl_item_text），【待填】輸入框以系統事實組句填入（存 tpl_json，編輯時仍是輸入框）；
+ * 結果摘要 5 欄也由已填內容與決議整理。全部是擬稿（會議主題已標【假資料】），不寫對方回應、不編數字（數字只引用系統資料）。
+ * @return array ['items'=>筆數,'summary'=>bool]
+ */
+function eg_demo_mr_prepare(PDO $db): void
+{
+    require_once __DIR__ . '/meeting_tpl_lib.php';
+    require_once __DIR__ . '/meeting_lib.php';
+    require_once __DIR__ . '/mr_clause_lib.php';
+    require_once __DIR__ . '/date_fmt_lib.php';
+    if (!$db->inTransaction()) { meeting_ensure_schema($db); meeting_tpl_ensure($db); }   // DDL 不可在交易內（會隱式 commit）
+}
+function eg_demo_mr_fill(PDO $db, int $mid, string $date): array
+{
+    eg_demo_mr_prepare($db);
+    $tpl = null;
+    foreach (meeting_tpl_list($db) as $t) if ($t['name'] === '管理審查會議') { $tpl = $t; break; }
+    if (!$tpl) throw new RuntimeException('找不到「管理審查會議」範本');
+    $cat = mr_clause_catalog($db, $date);
+    $facts = []; foreach ($cat['clauses'] as $c) $facts[$c['no']] = (string)$c['fact'];
+    $eoy = substr($date, 0, 4) . '-12-31';
+    $due = eg_demo_clamp(date('Y-m-d', strtotime($date . ' +30 days')), $eoy);
+    // 條文 → 主要負責部門（假資料用；實際會議由記錄人指定）
+    $own = ['6.1.4.1' => ['管理課', '品管課'], '6.1.4.2.1' => ['業務課'], '6.1.4.2.2' => ['業務課'], '6.1.4.3' => ['生管組', '採購組'],
+            '6.1.4.4.1' => ['管理課'], '6.1.4.4.2' => ['生產課', '品管課'], '6.1.4.4.3' => ['品管課'], '6.1.4.4.4' => ['業務課', '生管組'],
+            '6.1.4.5' => ['品管課'], '6.1.4.6' => ['管理課'], '6.1.4.7.1' => ['管理課'], '6.1.4.7.2' => ['管理課'], '6.1.4.8' => ['管理課'],
+            '6.1.4.9' => ['管理課', '業務課'], '6.1.4.10' => ['管理課'], '6.1.4.11' => ['管理課'], '6.1.4.12' => ['管理課'],
+            '6.1.5.1' => ['管理課'], '6.1.5.2' => ['業務課'], '6.1.5.3' => ['管理課'], '6.1.5.4' => ['管理課', '品管課'], '6.1.5.5' => ['管理課'], '6.1.5.6' => ['管理課']];
+    $bad = '/其中 [1-9]\d* 項有月份未達標|[1-9]\d* 個月未達標|逾期 [1-9]|尚未結案 [1-9]|未結案 [1-9]|無效 [1-9]|不合格 [1-9]/u';   // 只認「數量不是 0」的問題
+    $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$mid]);
+    $ins = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, confirm_mode, due_na, tpl_json) VALUES (?,?,?,?,?,?,?,'onsite',0,?)");
+    $n = 0; $problems = []; $decisions = []; $resources = []; $trace = [];
+    foreach ($tpl['items'] as $it) {
+        $clause = (string)($it['clause'] ?? '');
+        if (!in_array($it['kind'], ['general', 'directive'], true)) continue;
+        $content = rtrim((string)$it['content']);
+        $sys = meeting_tpl_item_text($db, $it, $date);
+        if ($sys !== '') $content .= "\n" . $sys;
+        $fact = $facts[$clause] ?? '';
+        $hasProblem = $fact !== '' && preg_match($bad, $fact);
+        $names = $own[$clause] ?? ['管理課']; $ids = []; foreach ($names as $nm) { $d = eg_demo_dept_id($db, $nm); if ($d) $ids[] = $d; }
+        $vals = []; $k = 0;
+        preg_replace_callback('/【待填[：:]([^】]*)】/u', function ($m) use (&$vals, &$k, $it, $fact, $hasProblem, $names, $due, $clause, &$problems) {
+            $hint = $m[1]; $k++;
+            if ($it['kind'] === 'directive') {
+                if (mb_strpos($hint, '變更品質管理系統') !== false) $vals[] = '本次審查後，現行程序與表單尚能支持運作，暫無需變更品質管理系統；若後續檢討發現需修訂，依文件制修訂流程辦理。';
+                elseif (mb_strpos($hint, '次年度目標') !== false) $vals[] = '次年度品質目標沿用現行 KPI 架構，未達標項目由各權責部門於年初檢討目標值是否合理。';
+                else $vals[] = implode('、', $names) . '依本次審查結果持續追蹤，於 ' . eg_fmt_date($due) . ' 前完成，並於下次管理審查報告執行情形。';
+                return '';
+            }
+            if (mb_strpos($hint, '是否') === 0 || mb_strpos($hint, '需要') === 0) {   // 追問「是否需後續行動／調整」的欄位；其餘是檢討內容
+                $vals[] = $hasProblem ? '需要：由' . implode('、', $names) . '提出原因分析與改善措施，並追蹤至結案。' : '無';
+            } else {
+                if ($clause === '6.1.4.8') { $vals[] = '系統內查無前次管理審查決議需追蹤；溝通管理的措施追蹤另依各項期限列管，由' . implode('、', $names) . '彙整。'; return ''; }
+                $vals[] = $fact !== ''
+                    ? ($hasProblem ? '依系統資料，部分項目有未達標或未結案事項，已請' . implode('、', $names) . '說明原因並提出改善；其餘項目運作情形正常。'
+                                   : '依系統資料檢視，目前運作情形符合要求，持續依現行管制辦理。')
+                    : '本期無特別異常，由' . implode('、', $names) . '依現行作業持續維持，並留存相關紀錄。';
+            }
+            return '';
+        }, $content);
+        $tplArr = ['t' => $content, 'v' => $vals];
+        $filled = meeting_tpl_fill($content, $vals);
+        $ins->execute([$mid, $it['kind'], ++$n, mb_substr($filled, 0, 8000), $due, implode(',', $ids), implode('、', $names), json_encode($tplArr, JSON_UNESCAPED_UNICODE)]);
+        if ($hasProblem && $it['kind'] === 'general' && $fact !== '') $problems[] = '[' . $clause . '] ' . mb_substr($fact, 0, 80, 'UTF-8');
+        if ($it['kind'] === 'directive') { $decisions[] = '[' . $clause . '] ' . ($vals[0] ?? ''); $trace[] = '[' . $clause . '] ' . mb_substr((string)$it['title_text'], 0, 30, 'UTF-8') . '：' . implode('、', $names) . '負責，應完成 ' . eg_fmt_date($due); }
+        if ($clause === '6.1.5.3') $resources[] = $vals[0] ?? '';
+    }
+    $sum = [
+        'a' => '依本次各項輸入檢討，品質管理系統整體運作持續符合要求，具適切性與充分性，與組織策略方向一致；' . ($problems ? '部分項目有待追蹤事項，已列入決議由各權責部門追蹤。' : '本次未發現需要管理階層特別處理的系統性問題。'),
+        'b' => $problems ? implode("\n", array_map(function ($x) { return '・' . $x; }, $problems)) : '各項輸入（稽核、客戶回饋、供應商、品質目標、準時交貨、風險與機會）本次未發現重大問題。',
+        'c' => $decisions ? implode("\n", array_map(function ($x) { return '・' . $x; }, array_slice($decisions, 0, 6))) : '本次無新增決議。',
+        'd' => '本次審查未提出新增人力或設備需求' . ($resources ? '；資源相關決議（6.1.5.3）：' . implode('；', $resources) : '。'),
+        'e' => implode("\n", array_map(function ($x) { return '・' . $x; }, $trace)),
+    ];
+    $db->prepare("UPDATE meeting_record SET mr_summary_json=? WHERE meeting_id=?")->execute([json_encode($sum, JSON_UNESCAPED_UNICODE), $mid]);
+    return ['items' => $n, 'summary' => true];
+}
+
+/** 把某年度既有的【假資料】管理審查會議，依目前範本重建項目與結果摘要（會議表頭、出席人員與簽核不動） */
+function eg_demo_mr_rebuild(PDO $db, int $Y): array
+{
+    eg_demo_mr_prepare($db);
+    $ms = eg_demo_qa($db, "SELECT meeting_id, meeting_date FROM meeting_record WHERE subject LIKE ? AND YEAR(meeting_date)=?", [EG_DEMO_TAG . '%管理審查%', $Y]);
+    $out = [];
+    foreach ($ms as $m) {
+        $db->beginTransaction();
+        try { $out[] = ['meeting_id' => (int)$m['meeting_id']] + eg_demo_mr_fill($db, (int)$m['meeting_id'], (string)$m['meeting_date']); $db->commit(); }
+        catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+    return $out;
 }
 
 /** 沒用 AI 或 AI 失敗時的會議要項：由系統事實直接組句（每項一行） */

@@ -391,6 +391,13 @@ foreach ($roleRows as $rr) {
             <button type="button" class="b-att wt" onclick="discAdd()"><i class="fa fa-plus"></i> 新增討論項目</button>
         </div>
 
+        <div class="mt-sec" id="edSecSum" style="display:none;">
+            <div class="mt-sec-title">管理審查結果摘要（管理審查會議必填：整場會議的整體判斷與管理階層決策）</div>
+            <p style="font-size:12px;color:#8a6d45;margin:0 0 6px;">前面的要項記錄各項檢討內容；這裡只回答 5 個問題，呈現管理階層的整體判斷與決策，<b>請依實際會議討論與決議填寫</b>（不得預填未經會議確認的結論，也不是把前面欄位串起來）。
+                <button type="button" class="b-att wt" onclick="mrSumDraft()" title="只用本次已經填好的要項輸入與決議整理成草稿，帶入空白的欄位；整體狀況（第 1 題）要由主席／管理代表自己判斷，系統不代為產生"><i class="fa fa-magic"></i> 依本次內容整理草稿</button></p>
+            <div id="mrSumBox"></div>
+        </div>
+
         <div class="mt-sec" id="edSecKpi">
             <div class="mt-sec-title">出貨目標達成率（產銷會議可插入本月數據佐證，非必要可略過）</div>
             <div id="kpiBox"></div>
@@ -810,6 +817,10 @@ foreach ($roleRows as $rr) {
         ・會議主題含「管理審查」時，編輯畫面上方會出現「<b>管理審查條文檢查</b>」：列出 2-GM-05 管理審查<b>輸入（6.1.4）</b>與<b>輸出（6.1.5）</b>的每一條，條號與文字<b>即時取自 AS 文件線上版目前的內容</b>（程序書改版自動跟著變）。<br>
         ・每一條都有<b>解說</b>（要報告什麼、權責單位）與<b>系統查到的資料</b>（稽核不符合、客訴與退貨、KPI 達標、供應商績效、矯正單、組織處境分析表與風險表、措施追蹤逾期…），1～3 月開的管理審查看的是前一年度資料。<br>
         ・會議要項／討論紀錄裡出現該條的號碼或關鍵字就算<b>已列入</b>；沒列入的可按「<b>加入會議要項（帶入系統資料）</b>」，或按「已檢視，本次不需列入」並寫一句原因（隨會議存檔）。送出時若仍有沒列入的條文會提醒一次，可先存草稿補齊再送。<br>
+        <h4>管理審查會議：範本輸入框與結果摘要</h4>
+        ・套用「管理審查會議」範本後，每個要項裡的 <b>【待填：提示】</b> 會變成一個<b>獨立輸入框</b>（標題就是提示文字），直接在框內填寫；條文與系統資料以灰底顯示。要項內容仍組成完整文字，<b>列印與檢視和其他會議紀錄相同</b>。沒填的輸入框送出前仍會被擋下；要把整段當一般文字自由改寫，按該項下方的「改為整段文字自由編輯」。<br>
+        ・範本的項目取自程序書 2-GM-05 線上版（輸入 6.1.4、輸出 6.1.5）；程序書改版時，範本管理會提醒並可一鍵同步。「6.1.4.8 前次管理審查決議事項」會自動列出前一場管理審查的決議（負責單位、應完成日、確認狀態）。<br>
+        ・會議主題含「管理審查」時，編輯畫面最下方多一個<b>管理審查結果摘要</b>，要回答 5 個問題（整體狀況、重要問題、管理階層決定、資源、後續追蹤），<b>送出前必填</b>（前後端都會檢查）。「依本次內容整理草稿」只整理已填的輸入與決議並帶入空白欄位，第 1 題整體判斷要由主席／管理代表自己填。列印時摘要另成一頁。<br>
         <h4>權限角色</h4>
         <b>可看到哪些會議記錄</b>：①<b>會議記錄登錄</b>＝只看得到<b>自己建立或與自己相關</b>（出席／主席／總經理／負責簽名）的會議記錄；②<b>產銷會議人員</b>（功能碼「檢視產銷會議」）＝<b>全部產銷會議</b>（主題含「產銷」、已送出者）＋自己建立或相關的其他會議；③<b>會議記錄檢索</b>（功能碼「檢索全部」）＝不限是否相關、可檢索全部已送出的會議記錄；④會議記錄管理員＝全部＋刪除、修改他人已送出記錄、維護常用設定；管理者全權。任何角色都<b>看不到他人尚未送出的草稿</b>（除非是自己建立或需要自己簽名）。新增/編輯/送出需「會議記錄登錄」。<br>
         ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
@@ -1017,7 +1028,7 @@ function edApplyNoticeMode(on){
     $('#btnEdSubmit').html(on ? '<i class="fa fa-bullhorn"></i> 建立並填寫通知單' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
 }
 function openCreate(noticeMode){
-    DISC = []; renderDisc();
+    DISC = []; renderDisc(); MR_SUM = {}; mrSumRender();
     EDIT_ID = 0; TPL_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = []; MR_WAIVE = {}; MR_CL = null;
     $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
@@ -1113,6 +1124,7 @@ function openEdit(id, keepSaved){
             target.push(row);
         });
         DISC = discParse(m); renderDisc();
+        try { MR_SUM = m.mr_summary_json ? (JSON.parse(m.mr_summary_json) || {}) : {}; } catch (e) { MR_SUM = {}; } mrSumRender();
         try { MR_WAIVE = m.mr_waive ? (JSON.parse(m.mr_waive) || {}) : {}; } catch (e) { MR_WAIVE = {}; } MR_CL = null;
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
@@ -1564,7 +1576,7 @@ function mrCovered(c, text){
     return hit;
 }
 function mrRefresh(){
-    var on = mrIsMr(); $('#edSecMr').toggle(on); if (!on) return;
+    var on = mrIsMr(); $('#edSecMr').toggle(on); $('#edSecSum').toggle(on && !ED_NOTICE_MODE); if (!on) return;
     var d = $('#edDate').val() || META.today;
     if (MR_CL && MR_CL_DATE === d){ mrRender(); return; }
     if (MR_LOADING) return; MR_LOADING = true;
@@ -2120,6 +2132,7 @@ function gatherPayload(){
         tpl_id: EDIT_ID ? 0 : TPL_ID, mr_waive: JSON.stringify(MR_WAIVE),
         attendees: JSON.stringify(ATT),
         discussion_json: JSON.stringify(DISC.filter(function(r){ return $.trim(r.content||'')!==''; })),
+        mr_summary: mrIsMr() ? JSON.stringify(MR_SUM) : undefined,   // 沒送＝後端不動；非管理審查會議不送
         items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
                     .concat(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); }))
                     .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); }))),
@@ -2222,6 +2235,15 @@ function saveDraft(thenSubmit){
         if (blankItems.length) {
             alert('下列項目還有【待填：…】的內容沒有填寫，請先填入再送出：\n\n' + blankItems.map(function(it){ return '・'+String(it.content).replace(/\s+/g,' ').substr(0,30)+'…'; }).join('\n'));
             return;
+        }
+        if (mrIsMr()) {
+            var sumMiss = mrSumMissing();
+            if (sumMiss.length) {
+                mrSumRender(true);
+                alert('管理審查會議送出前，「管理審查結果摘要」5 個問題都要回答，尚未填寫：\n\n' + sumMiss.map(function(q){ return '・' + q; }).join('\n'));
+                $('#edSecSum')[0].scrollIntoView({block:'center'});
+                return;
+            }
         }
         var miss = mtReadiness().noOwner;
         if (miss.length) {
@@ -2337,6 +2359,7 @@ function viewHtml(res){
     h += announceTable() + itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
 
     if (discParse(m).length) h += '<h5>討論過程紀錄</h5>' + discussionTableHtml(m, res.items);
+    if (mrSumParse(m)) h += '<h5>管理審查結果摘要</h5>' + mrSumTableHtml(m);
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
@@ -3017,6 +3040,75 @@ function discRefLabel(ref, items){
     var nm = kind==='directive' ? '上級指示要項' : '會議要項';
     return hit ? (nm+' 第'+no+'項：'+String(hit.content||'').replace(/\s+/g,' ').substr(0,24)) : (nm+' 第'+no+'項（項目已變動）');
 }
+/* ---------- 管理審查結果摘要（2026-10-20）：5 個問題，存 meeting_record.mr_summary_json {a..e} ---------- */
+var MR_SUM = {};
+var MR_SUM_Q = {a:'品質管理系統目前整體狀況如何？（適切性、充分性、有效性及與組織策略方向的一致性）',
+                b:'本次管理審查發現哪些重要問題？（品質目標、交期、客訴、稽核、風險與機會等重要結果）',
+                c:'管理階層決定了什麼？（改善事項、品質管理系統變更及風險處理決議）',
+                d:'是否需要調整資源？（資源需求及管理階層的處理決定）',
+                e:'後續有哪些事項需要追蹤？（決議內容、負責人或單位、預定完成日期及追蹤安排）'};
+function mrSumRender(showErr){
+    var h = '';
+    $.each(MR_SUM_Q, function(k, q){
+        var v = MR_SUM[k] || '', bad = showErr && $.trim(v) === '';
+        h += '<div style="margin-bottom:6px;"><label style="display:block;font-weight:bold;font-size:13px;color:#5b3a1e;margin-bottom:2px;">'+(k.charCodeAt(0)-96)+'. '+esc(q)+'</label>'
+           + '<textarea rows="3" style="width:100%;'+(bad?'border:1px solid #DD5138;':'')+'" data-eg-skip oninput="MR_SUM[\''+k+'\']=this.value"'
+           + ' placeholder="請依實際會議討論與決議填寫">'+esc(v)+'</textarea>'
+           + (bad ? '<div class="errmsg">送出前必填：請回答這個問題（沒有特別事項請如實寫明）</div>' : '') + '</div>';
+    });
+    $('#mrSumBox').html(h);
+}
+function mrSumMissing(){
+    var out = [];
+    $.each(MR_SUM_Q, function(k, q){ if ($.trim(MR_SUM[k]||'') === '') out.push(q.split('？')[0] + '？'); });
+    return out;
+}
+function mrSumOwnerText(it){
+    if (it.owner_users && it.owner_users.length) return '指定人員';
+    return (it.owner_depts||[]).map(function(id){
+        var d = (typeof DEPTS !== 'undefined' ? DEPTS : []).filter(function(x){ return String(x.id) === String(id); })[0];
+        return d ? d.name : '';
+    }).filter(Boolean).join('、');
+}
+/* 草稿：只整理「本次已填好」的輸入與決議；沒有內容的欄位不編造；第 1 題（整體判斷）不代為產生 */
+function mrSumDraft(){
+    var cl = function(it){ var m = String(it.content||'').match(/^\s*(\d+(?:\.\d+)+)/); return m ? m[1] : ''; };
+    var one = function(s){ return String(s).replace(/\s*\n\s*/g, ' '); };
+    // 該項目使用者填的內容（輸入框值；填「無」的略過；沒有輸入框結構的項目不取，避免把整段制式文字當成結論）
+    var filled = function(it){
+        return (it.tpl && it.tpl.v ? it.tpl.v : []).map(function(x){ return $.trim(x); }).filter(function(x){ return x && x.replace(/\s/g, '') !== '無'; });
+    };
+    var line = function(it, txt){ return '・' + (cl(it) ? '[' + cl(it) + '] ' : '') + one(txt); };
+    var d = {};
+    d.b = ITEMS_G.filter(function(it){ return filled(it).length; }).map(function(it){ return line(it, filled(it).join('；')); }).join('\n');
+    d.c = ITEMS_D.filter(function(it){ return cl(it) !== '6.1.5.3' && filled(it).length; }).map(function(it){ return line(it, filled(it).join('；')); }).join('\n');
+    d.d = ITEMS_G.filter(function(it){ return cl(it) === '6.1.4.10' && filled(it).length; }).concat(ITEMS_D.filter(function(it){ return cl(it) === '6.1.5.3' && filled(it).length; }))
+            .map(function(it){ return line(it, filled(it).join('；')); }).join('\n');
+    d.e = ITEMS_D.filter(function(it){ return !it.due_na && (it.due_date || mrSumOwnerText(it)); }).map(function(it){
+        var f = filled(it), t = f.length ? f.join('；') : String(it.content||'').split('\n')[0];
+        return line(it, t + '（負責：' + (mrSumOwnerText(it) || '未指定') + '；應完成：' + (it.due_date ? dispDate(it.due_date) : '未訂') + '）');
+    }).join('\n');
+    var n = 0;
+    $.each(d, function(k, v){ if (v && $.trim(MR_SUM[k]||'') === ''){ MR_SUM[k] = v; n++; } });
+    mrSumRender();
+    alert(n ? ('已把整理出的草稿帶入 ' + n + ' 個空白欄位，請逐項確認、修改成實際會議的結論。\n\n第 1 題（整體狀況）請由主席／管理代表依會議判斷填寫，系統不代為產生。')
+            : '目前沒有可整理的內容（要項還沒填，或欄位都已有內容）。\n第 1 題（整體狀況）請由主席／管理代表依會議判斷填寫。');
+}
+function mrSumParse(m){ try { return m.mr_summary_json ? (JSON.parse(m.mr_summary_json) || null) : null; } catch (e) { return null; } }
+function mrSumTableHtml(m){
+    var v = mrSumParse(m); if (!v) return '';
+    return '<table class="mr-items" style="width:100%;border-collapse:collapse;"><thead><tr><th style="width:32%;">問題</th><th>摘要</th></tr></thead><tbody>'
+        + Object.keys(MR_SUM_Q).map(function(k){
+            return '<tr><td style="vertical-align:top;text-align:left;">'+(k.charCodeAt(0)-96)+'. '+esc(MR_SUM_Q[k])+'</td><td style="vertical-align:top;white-space:pre-wrap;text-align:left;">'+esc(v[k]||'')+'</td></tr>';
+        }).join('') + '</tbody></table>';
+}
+function mrSumPageHtml(m){
+    var tbl = mrSumTableHtml(m); if (!tbl) return '';
+    return '<div class="mr-page" style="break-before:page;">'
+        + '<div class="mr-title">'+esc(META.company_name||'')+'-管理審查結果摘要</div>'
+        + '<div style="margin:6px 0 10px;font-size:13px;"><b>主題：</b>'+esc(m.subject||'')+'　<b>日期：</b>'+dispDate(m.meeting_date)+'　<b>記錄：</b>'+esc(m.recorder_name||'')+'</div>'
+        + tbl + '</div>';
+}
 function discParse(m){
     var rows = [];
     try { rows = m.discussion_json ? JSON.parse(m.discussion_json) : []; } catch(e){ rows = []; }
@@ -3140,7 +3232,7 @@ function printMeetingRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting, res = VIEW;
     mtPrintLog('會議記錄 '+(m.subject||'')+' '+dispDate(m.meeting_date), m.meeting_id);
-    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + discussionPageHtml(m, res) + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + discussionPageHtml(m, res) + mrSumPageHtml(m) + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;

@@ -79,6 +79,8 @@ function meeting_tpl_sources(): array {
         'car'    => '異常矯正處理單（矯正單）統計',
         'ia'     => '內部稽核不符合事項統計',
         'qa'     => '品質異常處理單統計（含不良品成本）',
+        'risk'   => '風險與機會因應措施管制表（措施與成效）',
+        'prev'   => '前次管理審查決議事項（執行情形追蹤）',
     ];
 }
 
@@ -95,6 +97,8 @@ function meeting_tpl_source_meta(): array {
         'car'    => ['param' => null,  'docs' => ['2-QA-01-04']],
         'ia'     => ['param' => null,  'docs' => ['2-GM-06-01', '2-GM-06-02', '2-GM-06-03', '2-GM-06-04', '2-GM-06-06', '2-GM-06-07', '2-GM-06-08']],
         'qa'     => ['param' => null,  'docs' => ['2-QA-01-01', '2-QA-01-03']],
+        'risk'   => ['param' => null,  'docs' => ['2-GM-03-01']],
+        'prev'   => ['param' => null,  'docs' => []],
     ];
 }
 
@@ -162,12 +166,61 @@ function meeting_tpl_source_text(PDO $db, string $src, string $meetingDate, arra
                     $s .= "\n・不良品成本（已確認採用的扣款金額合計）：" . number_format((float)$c->fetchColumn()) . ' 元。';
                 } catch (Throwable $e) {}
                 return $s;
+            case 'risk': return meeting_tpl_text_risk($db, $y);
+            case 'prev': return meeting_tpl_text_prev($db, $meetingDate);
         }
     } catch (Throwable $e) {
         error_log('[meeting_tpl_source_text ' . $src . '] ' . $e->getMessage());
         return '【系統資料】（' . (meeting_tpl_sources()[$src] ?? $src) . '取得失敗，請手動填入）';
     }
     return '';
+}
+
+/** 風險與機會因應措施管制表（該年度最新一張真實表單；沒有真實的才退回假資料表）：項數、需因應措施數、成效確認結果分布 */
+function meeting_tpl_text_risk(PDO $db, int $y): string {
+    $q = $db->prepare("SELECT doc_id, doc_no, fill_date FROM rm_doc WHERE kind='risk' AND is_deleted=0 AND YEAR(fill_date)=?
+                       ORDER BY (remark IS NOT NULL AND remark LIKE '【假資料】%'), doc_id DESC LIMIT 1");
+    $q->execute([$y]);
+    $d = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$d) return "【系統資料】{$y}年度尚未建立風險與機會因應措施管制表。";
+    $st = $db->prepare("SELECT ro_kind, confirm_no, effect_status, resources FROM rm_item WHERE doc_id=?");
+    $st->execute([(int)$d['doc_id']]);
+    $r = 0; $o = 0; $act = 0; $res = 0; $eff = ['effective' => 0, 'partial' => 0, 'ineffective' => 0, 'doing' => 0, '' => 0];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
+        if ($it['ro_kind'] === 'opportunity') $o++; else $r++;
+        if ((string)$it['confirm_no'] !== '') { $act++; $k = (string)($it['effect_status'] ?? ''); $eff[isset($eff[$k]) ? $k : ''] ++; }
+        if ((string)$it['resources'] !== '') $res++;
+    }
+    return "【系統資料】{$y}年度風險與機會因應措施管制表（{$d['doc_no']}）：風險 {$r} 項、機會 {$o} 項，其中 {$act} 項需因應措施。
+"
+         . "・成效確認：有效 {$eff['effective']} 項、部分有效 {$eff['partial']} 項、無效 {$eff['ineffective']} 項、執行中 {$eff['doing']} 項、尚未確認 {$eff['']} 項；所需資源已列 {$res} 項。";
+}
+
+/** 前次管理審查（會議日期之前最近一場）的決議項目：負責單位、應完成日、確認狀態——供逐項檢討執行情形 */
+function meeting_tpl_text_prev(PDO $db, string $meetingDate): string {
+    include_once __DIR__ . '/date_fmt_lib.php';
+    $d = $meetingDate !== '' ? $meetingDate : date('Y-m-d');
+    $q = $db->prepare("SELECT meeting_id, meeting_date FROM meeting_record
+                       WHERE subject LIKE '%管理審查%' AND meeting_date<? AND status<>'deleted'
+                       ORDER BY (subject LIKE '【假資料】%'), meeting_date DESC LIMIT 1");
+    $q->execute([$d]);
+    $m = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$m) return '【系統資料】系統內查無前次管理審查會議紀錄（本次為系統內第一次，或前次紀錄在系統外）。';
+    $it = $db->prepare("SELECT item_id, content, owner_dept_names, due_date, due_na FROM meeting_item WHERE meeting_id=? AND kind='directive' ORDER BY sort_order, item_id");
+    $it->execute([(int)$m['meeting_id']]);
+    $cf = $db->prepare("SELECT COUNT(*) FROM meeting_item_confirm WHERE item_id=?");
+    $lines = [];
+    foreach ($it->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $cf->execute([(int)$r['item_id']]);
+        $txt = trim(preg_replace('/\s+/u', ' ', (string)$r['content']));
+        $lines[] = '・' . mb_substr($txt, 0, 90, 'UTF-8') . (mb_strlen($txt, 'UTF-8') > 90 ? '…' : '')
+                 . '（負責：' . ((string)$r['owner_dept_names'] !== '' ? $r['owner_dept_names'] : '未指定')
+                 . '；應完成：' . ($r['due_date'] ? eg_fmt_date($r['due_date']) : 'NA')
+                 . '；負責人確認：' . ((int)$cf->fetchColumn() > 0 ? '已確認' : '尚無確認紀錄') . '）';
+    }
+    return '【系統資料】前次管理審查（' . eg_fmt_date($m['meeting_date']) . '）決議事項共 ' . count($lines) . " 項：
+" . ($lines ? implode("
+", $lines) : '・（前次沒有決議項目）');
 }
 
 function meeting_tpl_text_kpi(PDO $db, int $y, int $mo, array $ids = []): string {
