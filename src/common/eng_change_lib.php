@@ -1888,7 +1888,7 @@ function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int 
             // 一般關卡：先把單子推到那一關（代簽本來就是在補流程），再用同一支簽核函式蓋章
             if ((string)$row['status'] !== $t['slot']['key'])
                 $db->prepare("UPDATE eng_change SET status=? WHERE ec_id=?")->execute([$t['slot']['key'], $ecId]);
-            ec_sign_stage($db, $ecId, (string)$t['slot']['key'], $uid, $uname, [], $t['pick'], $at);
+            ec_sign_stage($db, $ecId, (string)$t['slot']['key'], $uid, $uname, [], $t['pick'], $at, true);
         }
         $n++;
     }
@@ -2047,11 +2047,11 @@ function ec_submit(PDO $db, int $ecId, int $uid, string $uname): array
 }
 
 /** 把單子推到某一關：寫一筆待簽核紀錄（approval_record）＋發通知 */
-function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, string $fromName): void
+function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, string $fromName, bool $silent = false): void
 {
     $ecId = (int)$row['ec_id'];
     ec_close_notices($db, $ecId, ['ENG_CHANGE_APPROVAL']);
-    if ($stage === 'REVIEW') { ec_route_to_review($db, $row, $fromUid, $fromName); return; }
+    if ($stage === 'REVIEW') { ec_route_to_review($db, $row, $fromUid, $fromName, $silent); return; }
     if (!isset(EC_STAGES[$stage])) return;
 
     // 一筆待簽核紀錄對應這一關；名單有多人時每個人都發通知（誰先簽就算誰的，OR-gate）
@@ -2060,6 +2060,7 @@ function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, str
         $aid = eg_approval_submit($db, EC_APPROVAL_MODULE, $ecId, $stage, $fromUid, $fromName);
         $firstEid = 0;
         foreach ($pool as $p) {
+            if ($silent) break;     // 管理員一次代簽（自動簽核）：只留簽核紀錄，不發通知
             $eid = ec_notify_stage($db, $row, $stage, (int)$p['id'], $fromUid);
             if ($eid && !$firstEid) $firstEid = $eid;
         }
@@ -2068,7 +2069,7 @@ function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, str
 }
 
 /** 進入會審關卡：只通知技術課勾選為「需會審」的單位 */
-function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName): void
+function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName, bool $silent = false): void
 {
     $ecId = (int)$row['ec_id'];
     foreach (ec_review_rows($db, $ecId) as $r) {
@@ -2076,7 +2077,7 @@ function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName)
         $s = ec_review_signer($db, $row, (string)$r['unit_key']);
         try {
             $aid = eg_approval_submit($db, EC_APPROVAL_MODULE, $ecId, 'REVIEW:' . $r['unit_key'], $fromUid, $fromName);
-            $eid = ec_notify_review($db, $row, (string)$r['unit_key'], (int)$s['id'], $fromUid);
+            $eid = $silent ? 0 : ec_notify_review($db, $row, (string)$r['unit_key'], (int)$s['id'], $fromUid);
             if ($eid) eg_approval_set_live_event($db, $aid, $eid);
         } catch (Throwable $e) {}
     }
@@ -2087,7 +2088,7 @@ function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName)
  * $fields＝這一關自己要填的欄位（例：倉管的庫存數量、技術的設計分析），先存再驗再簽。
  */
 function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $uname, array $fields = [],
-                       int $signAsId = 0, string $signAt = ''): array
+                       int $signAsId = 0, string $signAt = '', bool $silent = false): array
 {
     ec_ensure_schema($db);
     $row = ec_row($db, $ecId);
@@ -2194,12 +2195,12 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
     $next = (string)$row2['status'];
     if ($next === 'CLOSED') {
         ec_close_notices($db, $ecId);
-        ec_notify_result($db, $row2, (int)$row2['applicant_id'],
+        if (!$silent) ec_notify_result($db, $row2, (int)$row2['applicant_id'],
             ec_notify_body($row2) . "\n\n此工程變更申請單已全部簽核完成、結案。", $uid);
     } else {
         // 「送出人員」一律記成**上一關實際蓋章的那個人**，不是按下按鈕的管理員
         //（使用者要求 2026-09-23）。管理員代簽的事實另外記在 sign_*_proxy_* 欄位。
-        ec_route_to_stage($db, $row2, $next, $signId ?: $uid, $signName !== '' ? $signName : $uname);
+        ec_route_to_stage($db, $row2, $next, $signId ?: $uid, $signName !== '' ? $signName : $uname, $silent);
     }
     return ['ec_id' => $ecId, 'status' => $next];
 }
