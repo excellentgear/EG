@@ -2373,6 +2373,13 @@ function viewHtml(res){
 
     if (discParse(m).length) h += '<h5>討論過程紀錄</h5>' + discussionTableHtml(m, res.items);
     if (mrSumParse(m)) h += '<h5>管理審查結果摘要</h5>' + mrSumTableHtml(m);
+    if ((res.attaches||[]).length) {   // 附件清單（原本檢視畫面看不到附件，只有編輯畫面才列）
+        h += '<h5>附件</h5><div style="font-size:13px;line-height:1.9;">' + res.attaches.map(function(x){
+            return x.exists ? '<div><a href="'+API+'?action=download_attach&attach_id='+x.attach_id+'" target="_blank" style="color:#b5762a;">📄 '+esc(x.original_name||'')+'</a>'
+                              + (x.attach_type ? '<span style="color:#8a6d45;font-size:11px;margin-left:6px;">'+esc(x.attach_type)+'</span>' : '') + '</div>'
+                            : '<div style="color:#c9bda9;text-decoration:line-through;">📄 '+esc(x.original_name||'')+'（檔案不存在）</div>';
+        }).join('') + '</div>';
+    }
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
