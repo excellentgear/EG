@@ -495,8 +495,9 @@ $openId = (int)($_GET['id'] ?? 0);
         <div class="fld"><label>這一關要代誰簽 <span style="color:#DD5138">*</span></label>
             <select id="proxyWho" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select></div>
         <div class="fld" style="margin-top:6px;"><label>簽章時間
-                <small style="font-weight:normal;color:#aaa;">（留空＝現在；不可早於申請單日期）</small></label>
-            <input type="datetime-local" id="proxyAt" class="form-control"></div>
+                <small style="font-weight:normal;color:#aaa;">（自動接在上一關後面，可手動調整；至少要比上一關晚 5 分鐘）</small></label>
+            <input type="datetime-local" id="proxyAt" class="form-control">
+            <div id="proxyAtNote" style="font-size:11px;color:#8a6d45;margin-top:2px;"></div></div>
     </div>
     <div class="m-foot"><button class="b-ok" id="btnProxyOk">確定代簽</button></div>
 </div></div>
@@ -1771,7 +1772,16 @@ function doSign(fields){
     if (!mine && list.length >= 1) {
         var s = $('#proxyWho').empty();
         list.forEach(function(x){ s.append('<option value="'+x.id+'">'+esc(x.label)+'</option>'); });
-        $('#proxyAt').val('');
+        $('#proxyAt').val(''); $('#proxyAtNote').text('');
+        var loadSuggest = function(){
+            $.getJSON(API, {action:'sign_suggest', id:CUR.ec_id, stage:fields.stage, signer:$('#proxyWho').val() || 0}, function(r){
+                if (!r.ok) return;
+                $('#proxyAt').val(r.at || '');
+                $('#proxyAtNote').text((r.prev ? '上一關簽章時間：' + r.prev.replace('T', ' ') + '。' : '') + (r.note || ''));
+            });
+        };
+        $('#proxyWho').off('change.sg').on('change.sg', loadSuggest);
+        loadSuggest();
         $('#btnProxyOk').off('click').on('click', function(){
             fields.sign_as = $('#proxyWho').val() || 0;
             // 管理員代簽時可以自己指定簽章時間（使用者要求 2026-09-23）；後端會擋「早於申請單日期」

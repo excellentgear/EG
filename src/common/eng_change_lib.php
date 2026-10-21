@@ -1827,6 +1827,84 @@ function ec_sign_time_series(int $n, string $date, string $after = '', string $n
     return $out;
 }
 
+const EC_WORK_START = '08:30';      // 上班時間：自動簽章換日後從這之後開始隨機
+const EC_WORK_END   = '17:30';      // 下班時間：自動算出的簽章時間超過就換到下一個工作日
+const EC_SIGN_MIN_GAP_MIN = 5;      // 管理員代簽：簽章時間至少要比上一關晚幾分鐘
+
+/** 上一關（本關之前已經簽過的格子裡最晚的那一個）的簽章時間；沒有回 '' */
+function ec_prev_sign_at(PDO $db, array $row, string $stage): string
+{
+    $prev = '';
+    foreach (ec_sign_slots($db, $row) as $s) {
+        if ((string)$s['key'] === $stage) break;
+        $st = ec_slot_state($db, $row, (string)$s['key']);
+        if ($st['signed'] && $st['at'] > $prev) $prev = (string)$st['at'];
+    }
+    return $prev;
+}
+
+/** 這個人在某一天某個時間點有沒有事（請假／公出／內外訓／會議／行事曆），有就回原因 */
+function ec_signer_busy_reason(PDO $db, int $uid, string $date, string $time): string
+{
+    if ($uid <= 0) return '';
+    try {
+        require_once __DIR__ . '/person_schedule_lib.php';
+        $end = date('H:i', strtotime($date . ' ' . $time) + 10 * 60);     // 簽章當下往後 10 分鐘內有事也算
+        $m = eg_psched_for_users($db, [$uid], $date, substr($time, 0, 5), $end);
+        foreach ($m[$uid] ?? [] as $it) if (!empty($it['overlap'])) return (string)$it['text'];
+    } catch (Throwable $e) {}
+    return '';
+}
+
+/**
+ * 管理員代簽時「自動建議的簽章時間」（使用者要求 2026-10-21）：
+ *   ① 從上一關簽章時間往後隨機 8~54 分鐘（含秒，不整分）；
+ *   ② 超過下班時間、或那天不是工作日、或簽章人那天（那個時間）請假／公出／有訓練會議行事曆 →
+ *      換到下一個符合的工作日，從 08:30 之後隨機開始（不會剛好 08:30:00）；
+ *   ③ 不可以是未來——算出來比現在晚就改用現在，並在 note 說明。
+ * @return array{at:string,note:string}
+ */
+function ec_suggest_sign_at(PDO $db, array $row, string $stage, int $signerId): array
+{
+    $now  = ec_db_now($db)['dt'];
+    $prev = ec_prev_sign_at($db, $row, $stage);
+    $t = $prev !== '' ? strtotime($prev) : strtotime((string)$row['apply_date'] . ' ' . EC_WORK_START . ':00');
+    if ($prev !== '') $t += random_int(8 * 60, 54 * 60);
+    require_once __DIR__ . '/leave_lib.php';
+    $notes = [];
+    for ($i = 0; $i < 40; $i++) {
+        $day = date('Y-m-d', $t);
+        $hm  = date('H:i', $t);
+        $why = '';
+        if ($hm > EC_WORK_END)                          $why = '超過下班時間';
+        elseif ($hm < EC_WORK_START)                    $why = '早於上班時間';
+        elseif (!eg_leave_is_workday($db, $day))        $why = eg_fmt_date($day) . ' 不是工作日';
+        else {
+            $b = ec_signer_busy_reason($db, $signerId, $day, $hm);
+            if ($b !== '') $why = '簽章人當時有行程（' . $b . '）';
+        }
+        if ($why === '') break;
+        $notes[] = $why;
+        // 換到下一個日曆日的上班時間後，隨機 7~95 分鐘（含秒），不剛好落在 08:30:00
+        $t = strtotime(date('Y-m-d', $t + 86400) . ' ' . EC_WORK_START . ':00') + random_int(7 * 60, 95 * 60) + random_int(1, 59);
+        if ($hm < EC_WORK_START && $i === 0) $t = strtotime($day . ' ' . EC_WORK_START . ':00') + random_int(7 * 60, 95 * 60) + random_int(1, 59);
+    }
+    $at = date('Y-m-d H:i:s', $t);
+    $note = $notes ? ('原本的時間' . $notes[0] . '，已自動換到下一個符合的工作日') : '';
+    if ($at > $now) { $at = $now; $note = ($note !== '' ? $note . '；' : '') . '算出的時間晚於現在，改用現在'; }
+    return ['at' => $at, 'note' => $note];
+}
+
+/** 管理員代簽指定的時間：至少要比上一關晚 EC_SIGN_MIN_GAP_MIN 分鐘（真人自己簽的不走這裡，不限制） */
+function ec_check_proxy_gap(PDO $db, array $row, string $stage, string $at): void
+{
+    $prev = ec_prev_sign_at($db, $row, $stage);
+    if ($prev === '' || $at === '') return;
+    if (strtotime($at) < strtotime($prev) + EC_SIGN_MIN_GAP_MIN * 60)
+        throw new Exception('簽章時間至少要比上一關（' . eg_fmt_date(substr($prev, 0, 10)) . ' ' . substr($prev, 11, 5)
+                          . '）晚 ' . EC_SIGN_MIN_GAP_MIN . ' 分鐘以上');
+}
+
 /** 簽章時間的合法性（使用者要求：不可早於申請單日期；也不可以是未來） */
 function ec_check_sign_at(PDO $db, array $row, string $at): string
 {
@@ -2256,6 +2334,9 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         $sets[] = "sign_{$k}_dept_id=?";    $args[] = ((int)($signer['dept_id'] ?? 0)) ?: null;
         // 管理員代簽時可以自己指定簽章時間（使用者要求 2026-09-23，不可早於申請單日期＝已由
         // ec_check_sign_at() 擋過）；沒指定就是當下
+        // 管理員代簽：沒指定時間就用自動建議（接在上一關後面、避開下班與請假行程）；指定了就要晚於上一關 5 分鐘以上
+        if ($isProxy && $signAt === '') $signAt = ec_suggest_sign_at($db, $cur, $stage, (int)$signId)['at'];
+        elseif ($isProxy && $signAt !== '') ec_check_proxy_gap($db, $cur, $stage, ec_check_sign_at($db, $cur, $signAt));
         if ($signAt !== '') { $sets[] = "sign_{$k}_at=?"; $args[] = ec_check_sign_at($db, $cur, $signAt); }
         else                { $sets[] = "sign_{$k}_at=NOW()"; }
 

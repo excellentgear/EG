@@ -416,6 +416,19 @@ try {
         jout(ec_save_stage_fields($db, $ecId, $stage, $fields, $uid));
     }
 
+    /** 管理員代簽：依上一關簽章時間建議這一關的簽章時間（避開下班、非工作日與簽章人的行程） */
+    if ($action === 'sign_suggest') {
+        if (!$P['canAdmin']) jerr('只有管理員可以代簽', 403);
+        $ecId  = (int)($_GET['id'] ?? 0);
+        $stage = trim((string)($_GET['stage'] ?? ''));
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!isset(EC_STAGES[$stage])) jerr('無效的關卡', 400);
+        $s = ec_suggest_sign_at($db, $r, $stage, (int)($_GET['signer'] ?? 0));
+        $prev = ec_prev_sign_at($db, $r, $stage);
+        jout(['at' => str_replace(' ', 'T', substr($s['at'], 0, 16)), 'note' => $s['note'], 'prev' => $prev !== '' ? substr($prev, 0, 16) : '']);
+    }
+
     if ($action === 'sign_stage') {
         $ecId  = (int)($_POST['ec_id'] ?? 0);
         $stage = trim((string)($_POST['stage'] ?? ''));
