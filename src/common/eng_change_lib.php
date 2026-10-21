@@ -72,10 +72,13 @@ const EC_VERDICTS = [
 const EC_STAGES = [
     'SUP'     => ['order' => 1, 'label' => '單位主管',     'sign_key' => 'sup',  'setting' => 'ec_sign_sup',  'default_src' => 'unit_sup'],
     'WH'      => ['order' => 2, 'label' => '倉管組',       'sign_key' => 'wh',   'setting' => 'ec_sign_wh',   'default_src' => 'wh_dept_mgr'],
-    'TD'      => ['order' => 3, 'label' => '技術課',       'sign_key' => 'td',   'setting' => 'ec_sign_td',   'default_src' => 'rd_dept_mgr'],
-    'APPROVE' => ['order' => 4, 'label' => '核准',         'sign_key' => 'appr', 'setting' => 'ec_sign_appr', 'default_src' => 'top'],
-    'REVIEW'  => ['order' => 5, 'label' => '相關單位會審', 'sign_key' => '',     'setting' => '',             'default_src' => ''],
-    'CTRL'    => ['order' => 6, 'label' => '管制員',       'sign_key' => 'ctrl', 'setting' => 'ec_sign_ctrl', 'default_src' => 'rd_dept_mgr'],
+    // 使用者要求 2026-10-21：技術課有兩道簽核——設計分析由技術課「人員」填完先簽，再由技術課主管簽。
+    //（兩關共用同一組設計分析欄位：人員那一關填＋簽，主管那一關可複核修改後簽）
+    'TDS'     => ['order' => 3, 'label' => '技術課人員',   'sign_key' => 'tds',  'setting' => 'ec_sign_tds',  'default_src' => 'rd_dept_staff'],
+    'TD'      => ['order' => 4, 'label' => '技術課主管',   'sign_key' => 'td',   'setting' => 'ec_sign_td',   'default_src' => 'rd_dept_mgr'],
+    'APPROVE' => ['order' => 5, 'label' => '核准',         'sign_key' => 'appr', 'setting' => 'ec_sign_appr', 'default_src' => 'top'],
+    'REVIEW'  => ['order' => 6, 'label' => '相關單位會審', 'sign_key' => '',     'setting' => '',             'default_src' => ''],
+    'CTRL'    => ['order' => 7, 'label' => '管制員',       'sign_key' => 'ctrl', 'setting' => 'ec_sign_ctrl', 'default_src' => 'rd_dept_mgr'],
 ];
 
 /** 簽章人來源選項（值存設定；不在別處寫死人名，鐵律4） */
@@ -90,6 +93,7 @@ const EC_SIGN_SOURCES = [
     'applicant_sup'   => '單位主管（同上，舊設定值相容）',
     'wh_dept_mgr'     => '倉管部門主管（組織角色綁定）',
     'rd_dept_mgr'     => '設計／技術部門主管（組織角色綁定）',
+    'rd_dept_staff'   => '設計／技術部門人員（組織角色綁定，部門內任一位皆可簽）',
     'qc_dept_mgr'     => '品管部門主管（組織角色綁定）',
     'pm_dept_mgr'     => '生管部門主管（組織角色綁定）',
     'sales_dept_mgr'  => '業務部門主管（組織角色綁定）',
@@ -134,7 +138,7 @@ const EC_REVIEW_UNITS = [
  * 值是組織角色綁定的 key，實際是哪個部門一律即時查綁定，不寫死部門 id（鐵律4）。
  * SUP／APPROVE 沒有欄位可填，故不列入。
  */
-const EC_STAGE_DEPT = ['WH' => 'wh_dept', 'TD' => 'rd_dept', 'CTRL' => 'rd_dept'];
+const EC_STAGE_DEPT = ['WH' => 'wh_dept', 'TDS' => 'rd_dept', 'TD' => 'rd_dept', 'CTRL' => 'rd_dept'];
 
 /**
  * 附件區塊（使用者要求 2026-09-23）。
@@ -185,12 +189,12 @@ function ec_sign_slots(PDO $db, array $row): array
 }
 
 const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
-                         'ec_sign_sup', 'ec_sign_wh', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
+                         'ec_sign_sup', 'ec_sign_wh', 'ec_sign_tds', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
                          // 來源選「指定人員」時用的：_users＝勾選的 user.id（逗號字串）、
                          // _dept＝挑人跳窗當時篩的課室（只是記住上次選哪一課，判定不看它）
-                         'ec_sign_sup_users', 'ec_sign_wh_users', 'ec_sign_td_users',
+                         'ec_sign_sup_users', 'ec_sign_wh_users', 'ec_sign_tds_users', 'ec_sign_td_users',
                          'ec_sign_appr_users', 'ec_sign_ctrl_users',
-                         'ec_sign_sup_dept', 'ec_sign_wh_dept', 'ec_sign_td_dept',
+                         'ec_sign_sup_dept', 'ec_sign_wh_dept', 'ec_sign_tds_dept', 'ec_sign_td_dept',
                          'ec_sign_appr_dept', 'ec_sign_ctrl_dept',
                          'ec_auto_from_dwg',
                          // 附件：可選的標籤（逗號分隔 quotation_file_categories.id）與畫面提示文字
@@ -267,7 +271,7 @@ function ec_ensure_schema(PDO $db): void
 
     // 各關卡簽章欄位（誰簽的、什麼時候簽的）。簽核事實同時寫 approval_record（ai-rules/23），
     // 這裡存一份是為了列印時直接取得該格要蓋誰的章、不必每次回頭掃簽核紀錄。
-    foreach (['applicant', 'sup', 'wh', 'td', 'appr', 'ctrl'] as $k) {
+    foreach (['applicant', 'sup', 'wh', 'tds', 'td', 'appr', 'ctrl'] as $k) {
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_id INT NULL"); } catch (Throwable $e) {}
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_name VARCHAR(60) NULL"); } catch (Throwable $e) {}
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_at DATETIME NULL"); } catch (Throwable $e) {}
@@ -1206,6 +1210,32 @@ function ec_stage_signer_pool(PDO $db, array $row, string $stage): array
         return $out;
     }
 
+    if ($src === 'rd_dept_staff') {
+        // 技術部門人員（含兼任、一個職務一個身分），任一位都可簽（OR-gate）；
+        // 一律以本單日期回推當時在職者與當時的部門職稱（ai-rules/22）
+        $ids = eg_org_dept_ids($db, 'rd_dept');
+        if (!$ids) return [];
+        $out = []; $seenU = [];
+        foreach (eg_people_list_asof($db, ['dept_ids' => $ids, 'all_posts' => true], (string)($row['apply_date'] ?? '')) as $p) {
+            if (isset($seenU[(int)$p['id']])) continue;
+            $seenU[(int)$p['id']] = 1;
+            $d = ec_apply_delegate($db, (int)$p['id'], (string)$p['user_cname']);
+            if (!$d['for_id']) {
+                $d['dept_id']       = (int)($p['dept_id'] ?? 0);
+                $d['dept_name']     = (string)($p['dept_name'] ?? '');
+                $d['position_name'] = (string)($p['position_name'] ?? '');
+            }
+            $out[] = $d;
+        }
+        // 技術課主管不放進「人員」這一關（否則主管可以自己簽完兩關）；全部被排掉才保留原名單
+        if ($stage === 'TDS' && $out) {
+            $mgrIds = array_map(fn($p) => (int)$p['id'], ec_stage_signer_pool($db, $row, 'TD'));
+            $f = array_values(array_filter($out, fn($p) => !in_array((int)$p['id'], $mgrIds, true)));
+            if ($f) $out = $f;
+        }
+        return $out;
+    }
+
     if ($src === 'sup_above') {
         // 職級高於申請人的主管：全部都放進名單，誰先簽就算誰的（OR-gate）。
         // ★部門與職稱一定要沿用「他是以哪個單位的身分入選」那一筆，不可以讓呼叫端自己去解析——
@@ -1517,7 +1547,7 @@ function ec_validate_stage(array $r, string $stage, ?PDO $db = null, int $ecId =
     if ($stage === 'WH') {
         if (trim((string)($r['stock_qty'] ?? '')) === '') $e['stock_qty'] = '請填寫庫存數量';
         if (trim((string)($r['wip_qty'] ?? '')) === '')   $e['wip_qty'] = '請填寫已完工待入庫數量';
-    } elseif ($stage === 'TD') {
+    } elseif ($stage === 'TD' || $stage === 'TDS') {
         if (!array_key_exists((string)($r['design_result'] ?? ''), EC_DESIGN_RESULTS))
             $e['design_result'] = '請選擇設計分析結果';
         // 單一製程（不需確認庫存）連動：這種情況下不必經過倉管，庫存舊料的可否修改也一併不必判定
@@ -2326,6 +2356,7 @@ function ec_stage_editable_fields(string $stage): array
 {
     switch ($stage) {
         case 'WH':      return ['stock_qty', 'wip_qty'];
+        case 'TDS':
         case 'TD':      return ['design_result', 'design_note', 'old_stock', 'single_process'];
         case 'APPROVE': return ['verdict', 'verdict_other', 'verdict_note'];
         case 'CTRL':    return ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual'];

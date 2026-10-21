@@ -321,6 +321,8 @@ try {
         }
         $p = ec_fix_applicant_post($db, $p);
         $ecId = ec_create($db, $p, $uid, $uname);
+        if (array_key_exists('single_process', $_POST))     // 客供料（不需倉管確認庫存）：申請內容的欄位
+            $db->prepare("UPDATE eng_change SET single_process=? WHERE ec_id=?")->execute([((int)$_POST['single_process']) ? 1 : 0, $ecId]);
         $r = ec_row($db, $ecId);
         jout(['ec_id' => $ecId, 'doc_no' => (string)$r['doc_no']]);
     }
@@ -362,6 +364,8 @@ try {
            ->execute([$p['apply_date'], ($p['customer_id'] !== '' ? $p['customer_id'] : null), $p['customer_name'], $p['d_id'] ?: null, $p['part_no'],
                       $p['apply_dept_id'] ?: null, $p['apply_dept_name'], $p['applicant_id'] ?: null, $p['applicant_name'],
                       $p['change_type'], $p['change_reason'], $uid, $ecId]);
+        if (array_key_exists('single_process', $_POST))     // 客供料：只有表頭可編輯者送得到這裡（上面已擋過）
+            $db->prepare("UPDATE eng_change SET single_process=? WHERE ec_id=?")->execute([((int)$_POST['single_process']) ? 1 : 0, $ecId]);
         // 日期改了就重編文件編號（前八碼永遠＝表單上的日期）；日期鎖住時不會變，不必重編
         if (!$dateLocked) ec_sync_doc_no($db, $ecId);
         $r2 = ec_row($db, $ecId);

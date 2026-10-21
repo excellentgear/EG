@@ -298,6 +298,11 @@ $openId = (int)($_GET['id'] ?? 0);
                     <div id="e_reason_lock" style="display:none;font-size:11px;color:#8a6d45;margin-top:2px;">
                         目前的變更方式不需要填寫設變事由說明（僅「其他變更」須填寫）。</div>
                     <div class="err"></div></div>
+                <!-- 客供料＝庫存不經過倉管確認（使用者要求 2026-10-21：原「單一製程」改名並移到申請內容）。
+                     勾了之後送簽自動略過倉管那一關、也不通知倉管，庫存舊料那一題也一併不必判定。 -->
+                <div class="fld full"><label>客供料</label>
+                    <label class="chk"><input type="checkbox" id="e_single_process"> 是客供料（不需確認庫存）
+                        <small style="color:#8a6d45;">勾選後<b>不經過倉管組確認庫存</b>，送簽時自動略過那一關、也不會通知倉管。</small></label></div>
             </div>
         </div></div>
 
@@ -328,14 +333,9 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fld" style="margin-top:6px;" id="attDesignWrap"><label>附件（更新圖面需附上）
                     <small style="font-weight:normal;color:#aaa;" id="attDesignHint"></small></label>
                 <div class="att-box" id="attDesignBox"></div><div class="err"></div></div>
-            <!-- 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23）；勾了之後送簽自動略過倉管那一關，
-                 庫存舊料這一題也一併不必判定（同一件事：既然不需要確認庫存，庫存舊料能不能修改也就無所謂）。 -->
-            <div class="fld" style="margin-top:6px;"><label>製程型態</label>
-                <label class="chk"><input type="checkbox" id="e_single_process"> 單一製程（不需確認庫存）
-                    <small style="color:#8a6d45;">勾選後<b>不經過倉管組確認庫存</b>，送簽時自動略過那一關、也不會通知倉管。</small></label></div>
             <div class="fld" style="margin-top:6px;"><label>庫存舊料</label><div id="e_oldstock"></div>
                 <div id="e_oldstock_na" style="display:none;color:#8a6d45;font-size:12px;">
-                    （單一製程不需確認庫存，此項不需確認）</div>
+                    （客供料不需確認庫存，此項不需確認）</div>
                 <div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>設計分析補充</label>
                 <textarea id="e_design_note" class="form-control" rows="2"></textarea></div>
@@ -634,11 +634,11 @@ $openId = (int)($_GET['id'] ?? 0);
             <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。這兩個數字系統會<b>自動帶入讓你確認是否相同</b>——
                 庫存數量取自庫存管理、已完工待入庫取自「未結案 BOM 中最後一道製程已完工」的批次；
                 <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原。
-                <b>技術課勾了「單一製程（不需確認庫存）」時，這一關會整個跳過、也不會通知倉管。</b></li>
-            <li><b>技術課</b>：做設計分析——勾<b>「僅修改圖面（修改後結案）」</b>就不跑會審；
+                <b>申請內容勾了「客供料（不需確認庫存）」時，這一關會整個跳過、也不會通知倉管。</b></li>
+            <li><b>技術課人員／技術課主管（兩道簽核）</b>：<b>先由技術課人員填完設計分析並簽核，再由技術課主管簽核</b>（主管可複核修改）。設計分析——勾<b>「僅修改圖面（修改後結案）」</b>就不跑會審；
                 勾<b>「需修改圖面與會審」</b>要一併勾選需要哪些單位會審。同時判定庫存舊料可否修改。
                 <b>選了「更新圖面需附上」的任一結果，就一定要挑附件才簽得下去。</b>
-                另可勾<b>「單一製程（不需確認庫存）」</b>＝這張單不必經過倉管（在送出前勾才來得及跳過那一關）。</li>
+                <b>是否為客供料</b>在上方「申請內容」勾選（客供料＝不必經過倉管確認庫存，要在送出前勾才來得及跳過那一關）。</li>
             <li><b>核准</b>：核示「准予變更／暫緩變更／其他」，可填補充意見。</li>
             <li><b>相關單位會審</b>：<b>由技術課那一關的填寫人員決定哪些單位需要會審</b>，不是六個單位一律都會簽——
                 沒有被勾選的單位不會收到通知、也不必簽。被勾選的單位<b>各自獨立、不分先後</b>，
@@ -899,7 +899,7 @@ function fillEc(r){
     var d = r.row;
     $('#ecTitle').text('工程變更申請單　' + (d.doc_no || '') + '　' + (d.status_label || ''));
     // 流程圖
-    var order = ['SUP','WH','TD','APPROVE','REVIEW','CTRL'], flow = '';
+    var order = ['SUP','WH','TDS','TD','APPROVE','REVIEW','CTRL'], flow = '';
     var curIdx = order.indexOf(d.status);
     order.forEach(function(k, i){
         if (k === 'REVIEW' && d.design_result !== 'need_review') return;   // 不需會審就不畫這一格
@@ -968,7 +968,7 @@ function applyStageUI(d, signers){
     // 輪到自己那一關時當然也能填，所以兩者取聯集。
     var pre = d.prefill || [];
     var may = function(stage){ return pre.indexOf(stage) >= 0 || (mine && st === stage); };
-    var canWH = may('WH'), canTD = may('TD'), canCT = may('CTRL');
+    var canWH = may('WH'), canTD = may('TD') || may('TDS'), canCT = may('CTRL');
     // 核示沒有「本身部門」的概念，所以一般人只有輪到自己那一關才填得了；
     // 但管理員要能提早填（後端 ec_can_prefill_stage 也是同一套），否則「一次代簽全部」
     // 永遠會卡在「請選擇核示結果」——那一關的欄位在單子走到之前根本打不開。
@@ -976,7 +976,8 @@ function applyStageUI(d, signers){
 
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
     $('input[name=design],.rv-need').prop('disabled', !canTD);
-    $('#e_design_note,#e_single_process').prop('disabled', !canTD);
+    $('#e_design_note').prop('disabled', !canTD);
+    $('#e_single_process').prop('disabled', !editHead);
     syncSingleProcess(canTD);
     // 附件能不能改：申請內容那一段跟著表頭、設計分析那一段跟著技術課（後端 ec_attach_can_edit 同一套）
     ATT_EDIT = {apply: editHead, design: canTD};
@@ -1531,7 +1532,7 @@ function hasNeeded(){ return (CUR_REVIEWS || []).some(function(x){ return x.need
  */
 function syncSingleProcess(canEdit){
     var sp = $('#e_single_process').is(':checked');
-    if (canEdit === undefined) canEdit = !$('#e_single_process').is(':disabled');
+    if (canEdit === undefined) canEdit = !!window.CUR_CAN_TD;
     $('#e_oldstock_na').toggle(sp);
     $('input[name=oldstock]').prop('disabled', !canEdit || sp);
     if (sp) $('#e_oldstock').css('opacity', '.5'); else $('#e_oldstock').css('opacity', '1');
@@ -1603,6 +1604,7 @@ function headPayload(){
         apply_dept_id: $('#e_post').val() || 0,
         apply_dept_name: $('#e_post').find('option:selected').data('deptname') || '',
         change_type: $('input[name=ctype]:checked').val() || '',
+        single_process: $('#e_single_process').is(':checked') ? 1 : 0,
         change_reason: $('#e_reason').val()
     };
 }
@@ -1660,7 +1662,7 @@ $('#btnNew').on('click', function(){
 /** 目前畫面上「這一關的欄位」值 */
 function stageFields(stage){
     if (stage === 'WH')   return {stock_qty:$('#e_stock_qty').val(), wip_qty:$('#e_wip_qty').val()};
-    if (stage === 'TD')   return {design_result:$('input[name=design]:checked').val()||'',
+    if (stage === 'TD' || stage === 'TDS') return {design_result:$('input[name=design]:checked').val()||'',
                                   old_stock:$('input[name=oldstock]:checked').val()||'',
                                   single_process:$('#e_single_process').is(':checked')?1:0,
                                   design_note:$('#e_design_note').val()};
@@ -1724,7 +1726,7 @@ $('#btnEcSign').on('click', function(){
     if (st === 'WH') {
         fields.stock_qty = $('#e_stock_qty').val(); fields.wip_qty = $('#e_wip_qty').val();
         if (!fields.stock_qty.trim() || !fields.wip_qty.trim()) { alert('請先填寫庫存數量與已完工待入庫數量'); return; }
-    } else if (st === 'TD') {
+    } else if (st === 'TD' || st === 'TDS') {
         fields.design_result   = $('input[name=design]:checked').val() || '';
         fields.old_stock       = $('input[name=oldstock]:checked').val() || '';
         fields.single_process  = $('#e_single_process').is(':checked') ? 1 : 0;
@@ -1884,7 +1886,7 @@ function renderBulkStageFields(key){
           + '<div>更新圖面需附上：' + rd('bulk_design_TD', DICT.design_results, d.design_result||'') + '</div>'
           + '<div style="margin-top:2px;">'
           +   '<label class="chk"><input type="checkbox" class="bulk-f" data-f="single_process" id="bulk_sp"'
-          +     (sp?' checked':'')+'> 單一製程（不需確認庫存）</label></div>'
+          +     (sp?' checked':'')+'> 客供料（不需確認庫存）</label></div>'
           + '<div style="margin-top:2px;" id="bulk_oldstock_wrap">庫存舊料：'
           +   rd('bulk_oldstock_TD', DICT.old_stock, d.old_stock||'') + '</div>'
           + '</div>';
@@ -2065,7 +2067,7 @@ $('#btnRvOk').on('click', function(){
 
 /* ══════════════════ 設定 ══════════════════ */
 <?php if ($P['canAdmin']): ?>
-var STAGE_KEY = {SUP:'ec_sign_sup', WH:'ec_sign_wh', TD:'ec_sign_td', APPROVE:'ec_sign_appr', CTRL:'ec_sign_ctrl'};
+var STAGE_KEY = {SUP:'ec_sign_sup', WH:'ec_sign_wh', TDS:'ec_sign_tds', TD:'ec_sign_td', APPROVE:'ec_sign_appr', CTRL:'ec_sign_ctrl'};
 var SET_DEPTS = null;
 function buildSettings(){
     var h = '';
@@ -2443,20 +2445,20 @@ function printHtml(res){
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lbs">確認庫存</td>'
         +     '<td class="opt optT">' + (+d.single_process === 1
-                ? '☑ 單一製程，不需確認庫存'
+                ? '☑ 客供料，不需確認庫存'
                 : ('庫存數量：' + esc(d.stock_qty || '') + '<br>已完工待入庫數量：' + esc(d.wip_qty || ''))) + '</td>'
         +     '<td class="lbs">倉管組</td><td class="sig">' + sg('wh') + '</td></tr>'
         + '</table>'
 
         // 設計分析（技術課）＋ 庫存舊料
-        + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
+        + '<table><colgroup><col style="width:22mm"><col style="width:82mm"><col style="width:22mm"><col style="width:68mm"></colgroup>'
         + '<tr><td class="lbs"><span class="sub">(更新圖面需附上)</span>設計分析</td>'
         // 單一製程只印在「確認庫存」那一格，這裡不重複（使用者要求 2026-09-23）
         +     '<td class="opt optT">' + box(dr === 'drawing_only') + ' 僅修改圖面(修改後結案)<br>'
         +       box(dr === 'need_review') + ' 需修改圖面與會審(單據續跑，下方需勾選)'
         +       attLines('design')
         +       (d.design_note ? '<br>' + esc(d.design_note) : '') + '</td>'
-        +     '<td class="lbs">技術課</td><td class="sig">' + sg('td') + '</td></tr>'
+        +     '<td class="lbs">技術課<span class="sub">(人員／主管)</span></td><td class="sig">' + sg('tds') + sg('td') + '</td></tr>'
         // 單一製程時庫存舊料不需要判定，直接印「不需確認」（使用者要求 2026-09-23）
         + '<tr><td colspan="4" class="opt">庫存舊料：' + (+d.single_process === 1
                 ? '不需確認'
