@@ -2310,6 +2310,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
             } else {
                 $plist = eg_people_list($pdo, $peopleOpt);
             }
+            $employedIds = null;
+            if (isset($plist) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asof)) {
+                // 當天所有在職者（不限部門），前端用來判斷「已選的人當天還在不在」
+                $employedIds = [];
+                foreach (eg_people_posts_asof($pdo, [], $asof) as $ep) $employedIds[(string)$ep['id']] = 1;
+                $employedIds = array_keys($employedIds);
+            }
             foreach ($plist as $p) {
                 $post = trim(((string)($p['dept_name'] ?? '')) . ' ' . ((string)($p['position_name'] ?? '')));
                 $disp = trim($post . ' ' . (string)$p['user_cname']);
@@ -2321,7 +2328,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
         } else {
             throw new Exception('對象類別不正確');
         }
-        echo json_encode(['success' => true, 'rows' => $rows]);
+        echo json_encode(['success' => true, 'rows' => $rows, 'employed' => $employedIds ?? null]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -9920,15 +9927,15 @@ foreach($dCounts as $c) {
         function ateQAsofDate(ns) {
             var fn = ATE_Q.tpDate && ATE_Q.tpDate[ns];
             var d = fn ? String(fn() || '') : '';
-            return (/^\d{4}-\d{2}-\d{2}$/.test(d) && d !== (ATE_Q.today || '')) ? d : '';
+            return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '';
         }
         function ateQEnsureAsof(date, cb) {
             ATE_Q.candsAsof = ATE_Q.candsAsof || {};
             if (ATE_Q.candsAsof[date]) { cb(); return; }
             $.post('', { action: 'ate_q_target_search', type: 'user', kw: '', asof: date }, function(res) {
-                ATE_Q.candsAsof[date] = (res && res.success) ? res.rows : null;
+                ATE_Q.candsAsof[date] = (res && res.success) ? { rows: res.rows, employed: res.employed || null } : { rows: null, employed: null };
                 cb();
-            }, 'json').fail(function() { cb(); });
+            }, 'json').fail(function() { ATE_Q.candsAsof[date] = { rows: null, employed: null }; cb(); });
         }
         // 回覆日期改變：重抓當時在職清單，已選的人若當天不在就清成「請選擇」並提示
         function ateQTpDateChanged(ns) {
@@ -9937,8 +9944,9 @@ foreach($dCounts as $c) {
             var apply = function() {
                 var pick = ateQTargetPick(st.target_type);
                 if (d && pick === 'user' && st.target_id && st.target_type !== 'self') {
-                    var list = ATE_Q.candsAsof && ATE_Q.candsAsof[d];
-                    if (list && !list.some(function(x) { return String(x.id) === String(st.target_id); })) {
+                    var ca = ATE_Q.candsAsof && ATE_Q.candsAsof[d];
+                    var emp = ca && ca.employed;
+                    if (emp && emp.map(String).indexOf(String(st.target_id)) < 0) {
                         var nm = st.target_label || '';
                         st.target_id = ''; st.target_label = ''; st.target_post = '';
                         alert('「' + nm + '」在 ' + (typeof egFmtDate === 'function' ? egFmtDate(d) : d) + ' 當天已離職或尚未到職，請重新選擇回覆者。');
@@ -10309,7 +10317,7 @@ foreach($dCounts as $c) {
                 // allowSelf=true：note 的 ATE_Q.curUser 是 null，按鈕自然不會出現（鐵律：
                 // 嚴禁影響現有使用者），process 才會真的多出「本人」快選鈕。
                 ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); }, true, false,
-                    function() { return $('#ate-q-replydate-' + it.id).val() || ''; });
+                    function() { return $('#ate-q-replydate-' + it.id).val() || ATE_Q.today || ''; });
                 // 回覆對象／回覆者：設計備註問答維持「回覆對象」（既有行為不變），製程中紀錄
                 // 改稱「回覆者」（2026-10-06 使用者要求，與新增紀錄 composer 的欄位名一致）。
                 var replyByLabel = (ATE_Q.kind === 'process') ? '回覆者' : '回覆對象';
@@ -11100,7 +11108,9 @@ foreach($dCounts as $c) {
             }
             if (pick === 'user') {
                 var asofD = ateQAsofDate(ns);
-                var asofList = asofD && ATE_Q.candsAsof && ATE_Q.candsAsof[asofD];
+                var asofC = asofD && ATE_Q.candsAsof && ATE_Q.candsAsof[asofD];
+                var asofList = asofC && asofC.rows;
+                if (asofD && !asofC) setTimeout(function() { ateQTpDateChanged(ns); }, 0);   // 第一次顯示：補抓當天名單並檢查已選的人
                 return '<select class="form-control ate-tp-sel" data-eg-filter="輸入姓名篩選…" onchange="ateQTpUserPick(\'' + ns + '\',this)">'
                      + ateQCandOptions('user', st.target_id, st.target_label, st.target_post, asofList || null) + '</select>';
             }
