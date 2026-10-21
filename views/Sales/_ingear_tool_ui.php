@@ -78,7 +78,6 @@ if (!isset($can_ingear_calc)) {
         <span><button type="button" onclick="clearInGearTool()">清除</button><button type="button" onclick="closeInGearTool()">✕ 關閉</button></span>
     </div>
     <div id="ig-body">
-        <div class="ig-note">內齒輪的量銷（跨銷）計算：算跨銷距、標準跨銷徑，以及把<b>客戶的銷徑與跨銷距換算成我方銷徑</b>；右側圖示會畫出銷與齒面的接觸位置，<b>銷徑過大（接觸點超出齒頂）或過小（碰到齒根）會以紅色標示</b>。灰底欄位自己填。</div>
         <div class="ig-row">
             <div class="ig-f"><label>模數 m</label><input class="ig-in" id="ig-m" type="text" inputmode="decimal"></div>
             <div class="ig-f"><label>齒數 z</label><input class="ig-in" id="ig-z" type="text" inputmode="numeric"></div>
@@ -204,7 +203,7 @@ if (!isset($can_ingear_calc)) {
     function rangeRows(g, e){
         var u = usableRange(g, e, 1), sf = usableRange(g, e, 0);
         return row('可用跨銷徑範圍', u ? f(u[0], 2) + ' ~ ' + f(u[1], 2) + ' mm' : '無', 'ig-big') +
-               row('建議範圍（不靠近齒頂／齒根）', sf ? f(sf[0], 2) + ' ~ ' + f(sf[1], 2) + ' mm' : '無');
+               row('建議範圍<span style="font-size:9px;white-space:nowrap">（不靠近齒頂／齒根）</span>', sf ? f(sf[0], 2) + ' ~ ' + f(sf[1], 2) + ' mm' : '無');
     }
 
     /* ───── 小工具 ───── */
@@ -339,12 +338,11 @@ if (!isset($can_ingear_calc)) {
         var r = pinAt(g, e, D);
         if (!r) { bad('ig-d', true); res.innerHTML = h + '<div class="ig-err">此銷徑太大，銷放不進齒槽（算不出解）</div>'; clearGraphics(); return; }
         var j = judge(g, r), col = colOf(j);
-        h += '<table class="ig-t">' + row('跨銷距 M（銷與銷之間）', f(r.M, 4) + ' mm', 'ig-big') +
-             row('銷中心圓徑', f(2 * r.rp, 4) + ' mm') +
+        h += '<table class="ig-t">' + row('銷中心圓徑', f(2 * r.rp, 4) + ' mm') +
              row('接觸點直徑', f(2 * r.rk, 4) + ' mm') +
              row('接觸點壓力角', f(r.ak * 180 / Math.PI, 3) + ' °') +
              row('有效齒面範圍', 'Ø' + f(g.dTip, 2) + ' ～ Ø' + f(g.dRoot, 2)) +
-             row('齒數類型', g.z % 2 === 0 ? '偶數齒（銷在正對面）' : '奇數齒（兩銷差半個齒距）') + '</table>' + badge(j);
+             row('齒數類型', g.z % 2 === 0 ? '偶數齒（銷在正對面）' : '奇數齒（兩銷差半個齒距）') + '</table>';
         res.innerHTML = h;
         keyBox(row('跨銷距 M', f(r.M, 4) + ' mm', 'ig-big'), j);
         drawZoom(g, e, [{ r: r, col: col, lbl: '銷 Ø' + f(D, 3) }]);
@@ -375,14 +373,10 @@ if (!isset($can_ingear_calc)) {
         if (lo !== null && hi !== null && lo > hi) { var tmp = lo; lo = hi; hi = tmp; }
         var worst = judge(g, r2), cand = [rL, rU], i, jj;
         for (i = 0; i < cand.length; i++) { if (cand[i]) { jj = judge(g, cand[i]); if (jj.lv > worst.lv) worst = jj; } }
-        h += '<table class="ig-t">' + row('我方跨銷距 M2（含公差區間）', (lo === null ? '—' : f(lo, 3)) + ' ~ ' + (hi === null ? '—' : f(hi, 3)) + ' mm', 'ig-big') +
-             row('公稱值（客戶 M1 換算）', f(r2.M, 4) + ' mm') +
+        h += '<table class="ig-t">' + row('公稱值（客戶 M1 換算）', f(r2.M, 4) + ' mm') +
              row('上差 / 下差', (hi === null ? '—' : (hi - r2.M >= 0 ? '+' : '') + f(hi - r2.M, 3)) + ' / ' + (lo === null ? '—' : (lo - r2.M >= 0 ? '+' : '') + f(lo - r2.M, 3))) +
-             row('公差帶寬（客戶→我方）', f(ut - lt, 3) + ' → ' + (lo !== null && hi !== null ? f(hi - lo, 3) : '—')) +
-             row('銷徑差 / 跨銷距差', f(D2 - D1, 4) + ' / ' + f(r2.M - M1, 4)) +
              row('接觸點直徑（我方銷）', f(2 * r2.rk, 4) + ' mm') +
-             row('有效齒面範圍', 'Ø' + f(g.dTip, 2) + ' ～ Ø' + f(g.dRoot, 2)) + '</table>' +
-             '<div style="font-size:11px;color:#6b4423;margin-top:4px">我方銷 Ø' + f(D2, 4) + '（含公差上下限兩端一起判定）：</div>' + badge(worst);
+             row('有效齒面範圍', 'Ø' + f(g.dTip, 2) + ' ～ Ø' + f(g.dRoot, 2)) + '</table>';
         res.innerHTML = h;
         keyBox(row('我方跨銷距 M2（含公差區間）', (lo === null ? '—' : f(lo, 3)) + ' ~ ' + (hi === null ? '—' : f(hi, 3)) + ' mm', 'ig-big'), worst);
         var pins = [{ r: r2, col: colOf(worst), dash: false, lbl: '我方 Ø' + f(D2, 3) }];
