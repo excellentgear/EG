@@ -289,6 +289,8 @@ function ec_ensure_schema(PDO $db): void
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_dept_id INT NULL COMMENT '簽核當下採用的部門 id（兼任者的圖章職稱要用這個）'"); } catch (Throwable $e) {}
     }
 
+    // 送出後 5 個工作天未完成的提醒：記最後一次提醒時間（之後每滿 5 個工作天再提醒一次）
+    try { $db->exec("ALTER TABLE eng_change ADD COLUMN remind_sent_at DATETIME NULL COMMENT '最後一次「未完成」提醒申請人的時間'"); } catch (Throwable $e) {}
     // 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23，欄位放在技術課那一段）
     try { $db->exec("ALTER TABLE eng_change ADD COLUMN single_process TINYINT NOT NULL DEFAULT 0 COMMENT '1=單一製程，不需倉管確認庫存（送簽自動略過 WH 關卡）'"); } catch (Throwable $e) {}
     // 管理員代簽：記下「這一格是管理員代誰簽的」——列印不印，只在畫面的簽核紀錄顯示
@@ -2371,6 +2373,8 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         }
     } catch (Throwable $e) {}
 
+    // 管理員代簽（章蓋別人的）一律不發任何通知（使用者要求 2026-10-21）
+    if ($isProxy) $silent = true;
     $row2 = ec_row($db, $ecId);
     $next = (string)$row2['status'];
     if ($next === 'CLOSED') {

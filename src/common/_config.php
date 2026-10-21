@@ -90,6 +90,14 @@ try {
     error_log('[comm_ctrl] tick hook failed: ' . $e->getMessage());
 }
 
+// === 工程變更申請單「送出後 5 個工作天未完成」提醒申請人（2026-10-21 新增；一小時最多檢查一次）===
+try {
+    require_once __DIR__ . '/eng_change_remind_tick.php';
+    eg_ec_remind_tick();
+} catch (Throwable $e) {
+    error_log('[eng_change_remind] tick hook failed: ' . $e->getMessage());
+}
+
 // === 矯正單(CAR)逾期提醒 順路觸發（2026-07-20 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 900 秒才背景啟動掃描，卡關超過設定工作天數的單據依狀態通知相關人員
 try {
