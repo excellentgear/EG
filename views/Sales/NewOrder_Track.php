@@ -2301,7 +2301,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
             $salesDeptIds = eg_org_dept_ids($pdo, 'sales_dept');
             $peopleOpt = ['all_posts' => true];
             if ($salesDeptIds) $peopleOpt['dept_ids'] = $salesDeptIds;
-            foreach (eg_people_list($pdo, $peopleOpt) as $p) {
+            // 有帶 asof（回覆日期）才改依該日當時在職者列出（ai-rules/22）；沒帶＝維持原行為
+            $asof = trim((string)($_POST['asof'] ?? ''));
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $asof)) {
+                unset($peopleOpt['all_posts']);
+                $plist = eg_people_posts_asof($pdo, $peopleOpt, $asof);
+                foreach ($plist as &$pp) { $pp['post_key'] = $pp['post_key'] ?? $pp['id']; } unset($pp);
+            } else {
+                $plist = eg_people_list($pdo, $peopleOpt);
+            }
+            foreach ($plist as $p) {
                 $post = trim(((string)($p['dept_name'] ?? '')) . ' ' . ((string)($p['position_name'] ?? '')));
                 $disp = trim($post . ' ' . (string)$p['user_cname']);
                 if ($kw !== '' && mb_stripos($disp, $kw) === false) continue;
@@ -9906,6 +9915,40 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { ATE_Q.cands[type] = []; cb(); });
         }
 
+        // 依「回覆日期」當時在職者的人員候選（只有回覆者／回覆對象下拉用；日期為空或＝今天
+        // 時一律沿用原本的候選清單，不影響現有行為）
+        function ateQAsofDate(ns) {
+            var fn = ATE_Q.tpDate && ATE_Q.tpDate[ns];
+            var d = fn ? String(fn() || '') : '';
+            return (/^\d{4}-\d{2}-\d{2}$/.test(d) && d !== (ATE_Q.today || '')) ? d : '';
+        }
+        function ateQEnsureAsof(date, cb) {
+            ATE_Q.candsAsof = ATE_Q.candsAsof || {};
+            if (ATE_Q.candsAsof[date]) { cb(); return; }
+            $.post('', { action: 'ate_q_target_search', type: 'user', kw: '', asof: date }, function(res) {
+                ATE_Q.candsAsof[date] = (res && res.success) ? res.rows : null;
+                cb();
+            }, 'json').fail(function() { cb(); });
+        }
+        // 回覆日期改變：重抓當時在職清單，已選的人若當天不在就清成「請選擇」並提示
+        function ateQTpDateChanged(ns) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            var d = ateQAsofDate(ns);
+            var apply = function() {
+                var pick = ateQTargetPick(st.target_type);
+                if (d && pick === 'user' && st.target_id && st.target_type !== 'self') {
+                    var list = ATE_Q.candsAsof && ATE_Q.candsAsof[d];
+                    if (list && !list.some(function(x) { return String(x.id) === String(st.target_id); })) {
+                        var nm = st.target_label || '';
+                        st.target_id = ''; st.target_label = ''; st.target_post = '';
+                        alert('「' + nm + '」在 ' + (typeof egFmtDate === 'function' ? egFmtDate(d) : d) + ' 當天已離職或尚未到職，請重新選擇回覆者。');
+                    }
+                }
+                ateQTpRedraw(ns);
+            };
+            if (d) ateQEnsureAsof(d, apply); else apply();
+        }
+
         function ateQTargetLabel(it) {
             if (!it.target_type) return 'PS';   // 純備註前端簡寫（使用者要求，舊資料仍可能有）
             var pick = ateQTargetPick(it.target_type);
@@ -10265,7 +10308,8 @@ foreach($dCounts as $c) {
                 if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
                 // allowSelf=true：note 的 ATE_Q.curUser 是 null，按鈕自然不會出現（鐵律：
                 // 嚴禁影響現有使用者），process 才會真的多出「本人」快選鈕。
-                ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); }, true);
+                ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); }, true, false,
+                    function() { return $('#ate-q-replydate-' + it.id).val() || ''; });
                 // 回覆對象／回覆者：設計備註問答維持「回覆對象」（既有行為不變），製程中紀錄
                 // 改稱「回覆者」（2026-10-06 使用者要求，與新增紀錄 composer 的欄位名一致）。
                 var replyByLabel = (ATE_Q.kind === 'process') ? '回覆者' : '回覆對象';
@@ -10287,7 +10331,7 @@ foreach($dCounts as $c) {
                     // 客戶窗口的話），與新增問題共用同一套按鈕式選擇器
                     +   '<div class="ate-q-replyby"><label>' + replyByLabel + '：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
                     +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
-                    +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
+                    +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '" onchange="ateQTpDateChanged(\'' + rns + '\')"></div>'
                     +   '</div>'
                     +   ((ATE_Q.canResolve && it.can_resolve_item !== 0) ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
                     +   '<button type="button" class="btn btn-xs btn-warm" id="ate-q-sendbtn-' + it.id + '" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
@@ -10863,7 +10907,9 @@ foreach($dCounts as $c) {
         // composer（此時 state 就是 r，直接讀寫 r.is_note，不另存一份），回覆選擇器不開放
         // （回覆是對既有問題的回覆，不是在建立新的備註項目）。存進 ATE_Q.tpNoteToggle[ns]
         // 讓 ateQTpRedraw() 局部重繪時不必重新傳一次。
-        function ateQTpRegister(ns, state, onChange, allowSelf, noteToggle) {
+        function ateQTpRegister(ns, state, onChange, allowSelf, noteToggle, dateFn) {
+            ATE_Q.tpDate = ATE_Q.tpDate || {};
+            if (dateFn) ATE_Q.tpDate[ns] = dateFn; else delete ATE_Q.tpDate[ns];
             ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; ATE_Q.tpAllowSelf[ns] = !!allowSelf;
             ATE_Q.tpNoteToggle[ns] = !!noteToggle;
         }
@@ -11020,8 +11066,8 @@ foreach($dCounts as $c) {
         // 候選清單一律從清單挑（打名字日後對方改名就對不到了），但目前已選定的值萬一不在
         // 候選清單裡（例如業務預設值剛好不屬於業務課、或舊資料的人已離開候選範圍）仍要讓
         // 下拉顯示得出目前選的是誰，不能讓畫面看起來「選了卻又沒選」。
-        function ateQCandOptions(type, selId, selLabel, selPost) {
-            var list = (ATE_Q.cands[type] || []).slice();
+        function ateQCandOptions(type, selId, selLabel, selPost, overrideList) {
+            var list = (overrideList || ATE_Q.cands[type] || []).slice();
             if (selId && !list.some(function(x) { return String(x.id) === String(selId); })) {
                 list = [{ id: selId, label: selLabel || selId,
                            display: ((selPost ? selPost + ' ' : '') + (selLabel || selId)), post: selPost || '' }].concat(list);
@@ -11053,8 +11099,10 @@ foreach($dCounts as $c) {
                      + '<i class="fa fa-user-circle"></i> ' + escapeHtml(st.target_label || '') + '（本人）</span></div>';
             }
             if (pick === 'user') {
+                var asofD = ateQAsofDate(ns);
+                var asofList = asofD && ATE_Q.candsAsof && ATE_Q.candsAsof[asofD];
                 return '<select class="form-control ate-tp-sel" data-eg-filter="輸入姓名篩選…" onchange="ateQTpUserPick(\'' + ns + '\',this)">'
-                     + ateQCandOptions('user', st.target_id, st.target_label, st.target_post) + '</select>';
+                     + ateQCandOptions('user', st.target_id, st.target_label, st.target_post, asofList || null) + '</select>';
             }
             if (pick === 'customer' || pick === 'maker') {
                 if (st.target_id) {
@@ -11281,7 +11329,8 @@ foreach($dCounts as $c) {
         function ateQRecRowHtml(r, idx) {
             var ns = 'new' + idx, rns = 'newReply' + idx;
             ateQTpRegister(ns, r, ateQRedrawComposer);          // 回報來源：不開放「本人」快選（誰提出不一定是自己）
-            ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer, true);  // 回覆者：開放「本人」快選
+            ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer, true, false,
+                function() { return (ATE_Q.rows[idx] && ATE_Q.rows[idx].reply_date) || ATE_Q.today || ''; });  // 回覆者：開放「本人」快選
             var delBtn = ATE_Q.rows.length > 1
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             var html = '<tr><td class="ate-rec-cell">';
@@ -11328,7 +11377,11 @@ foreach($dCounts as $c) {
             ATE_Q.rows[idx].channel = code;
             ateQRedrawComposer();
         }
-        function ateQRowReplyDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].reply_date = val; }
+        function ateQRowReplyDateChange(idx, val) {
+            if (!ATE_Q.rows[idx]) return;
+            ATE_Q.rows[idx].reply_date = val;
+            ateQTpDateChanged('newReply' + idx);
+        }
         function ateQRowReplyContentChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].reply_content = val; }
 
         function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
