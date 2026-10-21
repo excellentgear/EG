@@ -2231,7 +2231,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $fmod_min = trim($_POST['filter_gear_mod_min'] ?? '');
             $fmod_max = trim($_POST['filter_gear_mod_max'] ?? '');
             if ((is_numeric($fmod_min) || is_numeric($fmod_max)) && in_array($fmod_sys, ['all','M','CP','DP'], true)) {
-                $mv = "CAST(NULLIF(REGEXP_REPLACE(COALESCE(NULLIF(gmr.module_display,''),gmr.Module),'[^0-9.]',''),'') AS DECIMAL(20,6))";
+                // 注意：不可用 CAST(REGEXP_REPLACE(...) AS DECIMAL)——實測 REGEXP_REPLACE 回傳的字串轉數字會變 0（M0.3 被算成 0）
+                $mv = "CAST(REPLACE(REPLACE(REPLACE(UPPER(TRIM(COALESCE(NULLIF(gmr.module_display,''),gmr.Module))),'DP',''),'CP',''),'M','') AS DECIMAL(20,6))";
                 $mt = "COALESCE(NULLIF(gmr.module_input_type,''),'M')";
                 $mc = "gmr.d_setting_id=d.d_id AND $mv > 0";
                 if ($fmod_sys === 'all') {
