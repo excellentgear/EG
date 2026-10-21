@@ -147,7 +147,12 @@ function ec_status_label(array $r): string
     if ($s === 'DRAFT')    return '草稿';
     if ($s === 'CLOSED')   return '已結案';
     if ($s === 'REJECTED') return '已退回（' . (EC_STAGES[(string)$r['reject_stage']]['label'] ?? '') . '）';
-    return '待簽核：' . (EC_STAGES[$s]['label'] ?? $s);
+    $lab = '待簽核：' . (EC_STAGES[$s]['label'] ?? $s);
+    // 這一關已排好簽核時間（管理員開了自動簽認）：顯示預計時間，免得被誤會成沒有動作
+    $at = (string)($r['auto_sign_at'] ?? '');
+    if ($at !== '' && (string)($r['auto_sign_stage'] ?? '') === $s)
+        $lab .= '（預計 ' . (substr($at, 0, 10) === date('Y-m-d') ? '' : substr($at, 5, 5) . ' ') . substr($at, 11, 5) . ' 簽核）';
+    return $lab;
 }
 
 /* ---------------------------------------------------------------- 動作 */
