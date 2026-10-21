@@ -558,6 +558,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         <div class="gear-out-row"><span class="gear-out-label">驗算：跨齒厚上限</span><span class="gear-output-val" id="m2-wk-up-chk">—</span></div>
                         <div class="gear-out-row"><span class="gear-out-label">驗算：跨齒厚下限</span><span class="gear-output-val" id="m2-wk-dn-chk">—</span></div>
                     </div>
+                    <div id="m2-pv"></div>
                 </div>
             </div>
         </div><!-- /pane-m2 -->
@@ -749,6 +750,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                             <div class="gear-out-row"><span class="gear-out-label">客戶 M 下限（驗算）</span><span class="gear-output-val" id="m5-m-cust-dn">—</span></div>
                         </div>
                     </div>
+                    <div id="m5-pv"></div>
                 </div>
             </div>
 
@@ -1872,7 +1874,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         // 儲存共享參數
         _baseParams = { mn: mn, z: z, alpha_n: alpha_n, beta: beta, an_dec: an_dec,
                         alpha_t: alpha_t, inv_alpha_t: inv_alpha_t, k: k_val,
-                        Wk: Wk, Wk_actual: Wk_actual, da: da, dp: dp_used, x: x_in };
+                        Wk: Wk, Wk_actual: Wk_actual, da: da, df: df, dp: dp_used, x: x_in };
 
         // 輸出
         setOut('go-mt', fmtNum(mt, 5));
@@ -2047,6 +2049,135 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     };
 
     // ══ 模組二：跨齒厚 → 跨珠值 ════════════════════════════════════════════
+    // ══ 外齒跨珠圖示與建議範圍（2026-10-21 新增，純顯示；不參與、不改變任何既有計算）══════
+    //    與內齒計算工具（_ingear_tool_ui.php）同一套畫法：上＝珠與齒槽放大，下＝整顆齒輪與兩顆量測珠。
+    //    斜齒輪以端面近似（珠徑採 dp/cosβb，與 calcM 的 inv 公式一致）。
+    function gpvInvInv(v) {
+        if (!(v >= 0)) return null;
+        var lo = 0, hi = 1.5, i, mid;
+        for (i = 0; i < 80; i++) { mid = (lo + hi) / 2; if (inv(mid) < v) lo = mid; else hi = mid; }
+        return (lo + hi) / 2;
+    }
+    function gpvGeom(p, x) {
+        var cos_b = Math.cos(p.beta), mt = p.mn / cos_b, d = mt * p.z, at = p.alpha_t;
+        var sin_bb = Math.sin(p.beta) * Math.cos(p.alpha_n);
+        return { z: p.z, d: d, at: at, db: d * Math.cos(at), cbb: Math.sqrt(1 - sin_bb * sin_bb),
+                 stD: (PI / (2 * p.z)) + (2 * x * Math.tan(p.alpha_n) / p.z), ra: p.da / 2, rf: p.df / 2, mn: p.mn };
+    }
+    function gpvPin(g, dp) {
+        var D = dp / g.cbb, ap = gpvInvInv(g.stD + inv(g.at) + D / g.db - PI / g.z);
+        if (ap === null) return null;
+        var rp = g.db / 2 / Math.cos(ap), tk = Math.tan(ap) - D / g.db;
+        if (tk <= 0) return null;
+        var ak = Math.atan(tk), rk = g.db / 2 / Math.cos(ak);
+        var M = (g.z % 2 === 0 ? 2 * rp : 2 * rp * Math.cos(PI / (2 * g.z))) + dp;
+        return { D: D, dp: dp, rp: rp, ak: ak, rk: rk, psik: g.stD + inv(g.at) - inv(ak), M: M };
+    }
+    function gpvJudge(g, q) {
+        var span = g.ra - g.rf, rho = q.D / 2;
+        if (q.rk > g.ra + 1e-9) return { lv: 2, txt: '✗ 跨珠徑過大：接觸點 Ø' + fmtNum(2 * q.rk, 3) + ' 已超出齒頂圓 Ø' + fmtNum(2 * g.ra, 3) + '（珠壓在齒頂以外，無法正確量測）' };
+        if (q.rp - rho < g.rf - 1e-9) return { lv: 2, txt: '✗ 跨珠徑過小：珠底 Ø' + fmtNum(2 * (q.rp - rho), 3) + ' 已碰到齒根圓 Ø' + fmtNum(2 * g.rf, 3) + '（珠落到齒根，無法正確量測）' };
+        if (q.rk < g.rf) return { lv: 2, txt: '✗ 跨珠徑過小：接觸點 Ø' + fmtNum(2 * q.rk, 3) + ' 低於齒根圓 Ø' + fmtNum(2 * g.rf, 3) };
+        if (g.ra - q.rk < 0.1 * span) return { lv: 1, txt: '⚠ 接觸點很靠近齒頂（離齒頂圓只剩 ' + fmtNum(g.ra - q.rk, 3) + ' mm），珠再大一點就量不準' };
+        if (q.rk - g.rf < 0.1 * span) return { lv: 1, txt: '⚠ 接觸點很靠近齒根（離齒根圓只剩 ' + fmtNum(q.rk - g.rf, 3) + ' mm），可能碰到齒根圓角' };
+        return { lv: 0, txt: '✓ 可正常量測：接觸點在有效齒面內（離齒頂 ' + fmtNum(g.ra - q.rk, 3) + ' mm、離齒根 ' + fmtNum(q.rk - g.rf, 3) + ' mm）' };
+    }
+    function gpvRange(p, xs, maxLv) { // 多個 x 取交集
+        var gs = xs.map(function(x){ return gpvGeom(p, x); }), D, i, ok, q, lo = null, hi = null, lim = p.mn * 6;
+        for (D = 0.02; D <= lim; D += 0.004) {
+            ok = true;
+            for (i = 0; i < gs.length && ok; i++) { q = gpvPin(gs[i], D); ok = !!q && gpvJudge(gs[i], q).lv <= maxLv; }
+            if (ok) { if (lo === null) lo = D; hi = D; } else if (lo !== null) break;
+        }
+        if (lo === null) return null;
+        var a = Math.ceil(lo * 100 - 1e-9) / 100, b = Math.floor(hi * 100 + 1e-9) / 100;
+        return a <= b ? [a, b] : null;
+    }
+    function gpvZoom(g, pins) {
+        var W = 450, H = 245, m = g.mn, x0 = g.rf - 0.9 * m, x1 = g.ra + 0.9 * m, s = W / (x1 - x0), N = 10, i, k, out = '';
+        var step = 2 * PI / g.z, rb = g.db / 2;
+        function X(x){ return (x - x0) * s; }
+        function Y(y){ return H / 2 - y * s; }
+        function P(r, ph){ return X(r * Math.cos(ph)).toFixed(1) + ',' + Y(r * Math.sin(ph)).toFixed(1); }
+        function ps(r){ var rr = Math.max(r, rb + 1e-6); return Math.max(0, g.stD + inv(g.at) - inv(Math.acos(Math.min(1, rb / rr)))); }
+        var rIn = g.rf - 2 * m, body = [];
+        for (i = -12; i <= 12; i++) body.push(P(g.rf, i * step * 0.2));
+        for (i = 12; i >= -12; i--) body.push(P(rIn, i * step * 0.2));
+        out += '<polygon points="' + body.join(' ') + '" fill="#F7E0BD"/>';
+        for (k = 0; k <= 1; k++) { // 兩側各一顆齒：中心在 ±π/z，珠在角度 0 的齒槽
+            var tc = (k === 0 ? -1 : 1) * step / 2, t = [], r, fl = [], fl2 = [];
+            for (i = 0; i <= N; i++) { r = g.rf + (g.ra - g.rf) * i / N; t.push(P(r, tc - ps(r))); }
+            for (i = 1; i <= 3; i++) t.push(P(g.ra, tc - ps(g.ra) + 2 * ps(g.ra) * i / 4));
+            for (i = N; i >= 0; i--) { r = g.rf + (g.ra - g.rf) * i / N; t.push(P(r, tc + ps(r))); }
+            out += '<polygon points="' + t.join(' ') + '" fill="#F7E0BD"/>';
+            for (i = 0; i <= N; i++) { r = g.rf + (g.ra - g.rf) * i / N; fl.push(P(r, tc - ps(r))); fl2.push(P(r, tc + ps(r))); }
+            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + fl.join(' ') + '"/>';
+            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + fl2.join(' ') + '"/>';
+        }
+        var main = pins[0] ? pins[0].q : null;
+        var lines = [[g.rf, '齒根Ø' + fmtNum(2 * g.rf, 2), 12], [g.d / 2, '分度Ø' + fmtNum(g.d, 2), 24], [g.ra, '齒頂Ø' + fmtNum(2 * g.ra, 2), 12]];
+        if (main) lines.push([main.rk, '接觸Ø' + fmtNum(2 * main.rk, 2), 36]);
+        for (i = 0; i < lines.length; i++) {
+            var lx = X(lines[i][0]);
+            out += '<line x1="' + lx.toFixed(1) + '" x2="' + lx.toFixed(1) + '" y1="' + (lines[i][2] + 4) + '" y2="' + H + '" stroke="#b58b5a" stroke-width="1" stroke-dasharray="4 3"/>';
+            out += '<text x="' + (lx + 3).toFixed(1) + '" y="' + lines[i][2] + '" font-size="10" fill="#6b4423">' + lines[i][1] + '</text>';
+        }
+        for (i = pins.length - 1; i >= 0; i--) {
+            var pn = pins[i], q = pn.q; if (!q) continue;
+            var cx = X(q.rp), cy = Y(0), rad = q.D / 2 * s;
+            out += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="' + rad.toFixed(1) + '" fill="' + (pn.dash ? 'none' : pn.col) + '" fill-opacity="' + (pn.dash ? 0 : 0.45) + '" stroke="' + pn.col + '" stroke-width="1.6"' + (pn.dash ? ' stroke-dasharray="5 3"' : '') + '/>';
+            var kph = PI / g.z - q.psik, kx = q.rk * Math.cos(kph), ky = q.rk * Math.sin(kph);
+            out += '<circle cx="' + X(kx).toFixed(1) + '" cy="' + Y(ky).toFixed(1) + '" r="3.2" fill="' + pn.col + '" stroke="#fff"/>';
+            out += '<circle cx="' + X(kx).toFixed(1) + '" cy="' + Y(-ky).toFixed(1) + '" r="3.2" fill="' + pn.col + '" stroke="#fff"/>';
+            out += '<text x="' + cx.toFixed(1) + '" y="' + (cy + 15 + 12 * i).toFixed(1) + '" text-anchor="middle" font-size="10.5" fill="#333">' + pn.lbl + '</text>';
+        }
+        out += '<text x="6" y="' + (H - 8) + '" font-size="10" fill="#6b4423">← 齒輪中心</text>';
+        return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;background:#fffdf9;border:1px solid #e3d3b8;border-radius:6px">' + out + '</svg>';
+    }
+    function gpvOverview(g, q, col) {
+        var S = 188, c = S / 2, Ro = g.ra * 1.08, s = (c - 6) / Ro, step = 2 * PI / g.z, rb = g.db / 2, pts = [], k, i, N = 4;
+        function PX(r, ph){ return (c + r * Math.cos(ph) * s).toFixed(1) + ',' + (c - r * Math.sin(ph) * s).toFixed(1); }
+        function ps(r){ var rr = Math.max(r, rb + 1e-6); return Math.max(0, g.stD + inv(g.at) - inv(Math.acos(Math.min(1, rb / rr)))); }
+        for (k = 0; k < g.z; k++) {
+            var tc = k * step, r;
+            for (i = 0; i <= N; i++) { r = g.rf + (g.ra - g.rf) * i / N; pts.push(PX(r, tc - ps(r))); }
+            pts.push(PX(g.ra, tc - ps(g.ra) / 3)); pts.push(PX(g.ra, tc + ps(g.ra) / 3));
+            for (i = N; i >= 0; i--) { r = g.rf + (g.ra - g.rf) * i / N; pts.push(PX(r, tc + ps(r))); }
+        }
+        var out = '<polygon points="' + pts.join(' ') + '" fill="#F7E0BD" stroke="#6b4423" stroke-width="0.8"/>';
+        out += '<circle cx="' + c + '" cy="' + c + '" r="' + (g.d / 2 * s).toFixed(1) + '" fill="none" stroke="#b58b5a" stroke-dasharray="3 3"/>';
+        if (q) {
+            var pa = PI / g.z, pb = pa + Math.floor(g.z / 2) * step, A = [q.rp * Math.cos(pa) * s, q.rp * Math.sin(pa) * s], B = [q.rp * Math.cos(pb) * s, q.rp * Math.sin(pb) * s];
+            out += '<line x1="' + (c + A[0]).toFixed(1) + '" y1="' + (c - A[1]).toFixed(1) + '" x2="' + (c + B[0]).toFixed(1) + '" y2="' + (c - B[1]).toFixed(1) + '" stroke="#DD5138" stroke-dasharray="4 3"/>';
+            [A, B].forEach(function(u){ out += '<circle cx="' + (c + u[0]).toFixed(1) + '" cy="' + (c - u[1]).toFixed(1) + '" r="' + Math.max(2.5, q.D / 2 * s).toFixed(1) + '" fill="' + col + '" stroke="#5a3a12"/>'; });
+            out += '<text x="' + (c - 26) + '" y="' + (c + 14) + '" font-size="10.5" fill="#DD5138">M ' + fmtNum(q.M, 3) + '</text>';
+        }
+        return '<svg viewBox="0 0 ' + S + ' ' + S + '" style="width:' + S + 'px;height:' + S + 'px;flex-shrink:0;display:block;background:#fffdf9;border:1px solid #e3d3b8;border-radius:6px">' + out + '</svg>';
+    }
+    // hostId：放圖示的容器；xs：要同時滿足的轉位係數（公差上下限）；dpMain：我方珠徑；dpGhost：客戶珠徑（可 null）
+    window.gearPinView = function(hostId, p, xs, dpMain, dpGhost) {
+        var host = document.getElementById(hostId); if (!host) return;
+        if (!p || p.internal || !(p.df > 0) || !(p.da > 0) || !(dpMain > 0)) { host.innerHTML = ''; return; }
+        var xm = (xs[0] + xs[xs.length - 1]) / 2, g = gpvGeom(p, xm), q = gpvPin(g, dpMain);
+        if (!q) { host.innerHTML = '<div style="margin-top:8px;color:#c0392b;font-size:11px">此珠徑算不出接觸位置（珠太大放不進齒槽，或轉位係數超出範圍），無法繪圖</div>'; return; }
+        var worst = gpvJudge(g, q), i, qq, jj, gg;
+        for (i = 0; i < xs.length; i++) { gg = gpvGeom(p, xs[i]); qq = gpvPin(gg, dpMain); if (!qq) continue; jj = gpvJudge(gg, qq); if (jj.lv > worst.lv) worst = jj; }
+        var col = worst.lv === 0 ? '#F0A24B' : (worst.lv === 1 ? '#E67E22' : '#DD5138');
+        var u = gpvRange(p, xs, 1), sf = gpvRange(p, xs, 0);
+        var pins = [{ q: q, col: col, dash: false, lbl: '我方 Ø' + fmtNum(dpMain, 3) }];
+        if (dpGhost > 0) { var qg = gpvPin(g, dpGhost); if (qg) pins.push({ q: qg, col: '#8c8c8c', dash: true, lbl: '客戶 Ø' + fmtNum(dpGhost, 3) }); }
+        var bg = worst.lv === 0 ? 'background:#F7E0BD;color:#5a3a12;border:1px solid #e0b27a' : (worst.lv === 1 ? 'background:#F0A24B;color:#3d2200' : 'background:#DD5138;color:#fff');
+        host.innerHTML =
+            '<div style="margin-top:10px;border:1px solid #e3d3b8;border-radius:6px;padding:6px 8px;background:#fffaf2">' +
+            '<div style="font-weight:700;color:#6b4423;margin-bottom:3px">跨珠位置圖示與可用珠徑</div>' +
+            '<div style="display:flex;justify-content:space-between"><span>可用跨珠徑範圍</span><b style="color:#b85c0d;font-size:14px">' + (u ? fmtNum(u[0], 2) + ' ~ ' + fmtNum(u[1], 2) + ' mm' : '無') + '</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span style="white-space:nowrap">建議範圍<span style="font-size:9px">（不靠近齒頂／齒根）</span></span><b>' + (sf ? fmtNum(sf[0], 2) + ' ~ ' + fmtNum(sf[1], 2) + ' mm' : '無') + '</b></div>' +
+            '<div style="margin:5px 0;padding:5px 8px;border-radius:5px;font-weight:700;font-size:11.5px;' + bg + '">' + worst.txt + '</div>' +
+            gpvZoom(g, pins) +
+            '<div style="display:flex;gap:8px;margin-top:6px;align-items:flex-start">' + gpvOverview(g, q, col) +
+            '<div style="font-size:10px;color:#6b4423;line-height:1.35"><b>圖示說明</b><br>上：珠與齒槽放大，棕線＝齒面，圓點＝珠與齒面的接觸點。虛線由左至右：齒根圓、分度圓、接觸點、齒頂圓。<br>珠顏色：琥珀＝可量測；橘＝接近極限；<span style="color:#DD5138;font-weight:700">紅＝不可量測</span>。有客戶珠徑時以灰色虛線疊上客戶的珠。<br>左下：整顆齒輪與兩顆量測珠（奇數齒兩珠差半個齒距）。斜齒輪以端面近似。<br>範圍已同時滿足公差上下限兩端；齒頂、齒根圓徑取基本計算的結果。</div></div></div>';
+    };
+
     window.calcGearM2 = function() {
         if (!_baseParams) { alert('請先執行基本計算'); return; }
         var p = _baseParams;
@@ -2077,6 +2208,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         setOut('m2-wk-up-chk', fmtNum(Wk_uc, 5));
         setOut('m2-wk-dn-chk', fmtNum(Wk_dc, 5));
         showWarn('g-m2-warn', warns.length ? warns.join('；') : '');
+        try { gearPinView('m2-pv', p, [x_min, x_max], dp2, null); } catch (e) {}
     };
 
     // ══ 模組三：跨珠值 → 跨齒厚 ════════════════════════════════════════════
@@ -2275,6 +2407,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (allow5 <= 0 && !boss5)
             warns.push('查不到模數或外徑對應的預留量，建議滾齒尺寸無法計算（請至「預留量管理」新增）');
         showWarn('g-m5-warn', warns.length ? warns.join('；') : '');
+        try { gearPinView('m5-pv', p, [x_dn, x_up], dp_m, dp_c); } catch (e) {}
     };
 
     // ══ 模組五附加：跨齒轉換（客戶跨齒厚規格 → 我方跨齒數＋建議滾齒）═════════
