@@ -291,6 +291,13 @@ if ($reply_id != "") {
     }
     .qc-status-btn.active .dot { opacity:1; }
 
+    /* 報工進度徽章（與正式版 QC_check_list.php 相同） */
+    .qc-prog-badge { display:inline-block; margin-top:3px; padding:1px 6px; border-radius:10px; font-size:10px; line-height:15px; white-space:nowrap; border:1px solid transparent; }
+    .qc-prog-full { background:#F7E0BD; border-color:#E0B77A; color:#7A4A12; font-weight:600; }
+    .qc-prog-part { background:#FFFDF8; border-color:#E0B77A; border-style:dashed; color:#A8814A; }
+    .qc-prog-next { background:#FDF3E3; border-color:#C9A063; color:#8a5a1a; }
+    .qc-prog-badge + .qc-prog-badge { margin-left:3px; }
+
     /* 製程篩選按鈕 */
     .qc-pti-btn {
         padding: 3px 9px;
@@ -789,6 +796,15 @@ if ($reply_id != "") {
 
                                     <div class="qc-filter-divider"></div>
 
+                                    <div class="qc-filter-group">
+                                        <span class="qc-filter-label">報工</span>
+                                        <button class="qc-status-btn" data-qc="full" onclick="setQcProgFilter('full')" title="報工數量已達總數，只差沒有人按【完成】">已驗滿·待按完成</button>
+                                        <button class="qc-status-btn" data-qc="part" onclick="setQcProgFilter('part')" title="有報工但還沒報滿">只驗一部分</button>
+                                        <button class="qc-status-btn" data-qc="nextstarted" onclick="setQcProgFilter('nextstarted')" title="同一個 BOM 後面的站別已經發單開工了">後站已開工</button>
+                                    </div>
+
+                                    <div class="qc-filter-divider"></div>
+
                                     <!-- 製程篩選 -->
                                     <div class="qc-filter-group" style="flex:1;flex-wrap:wrap;">
                                         <span class="qc-filter-label">製程</span>
@@ -1182,6 +1198,19 @@ if ($reply_id != "") {
                 setPtiFilter(ptiValue);
             }
         }
+
+        function setQcProgFilter(qcVal) {
+            setQcFilter(currentQcCheckFilter === qcVal ? 'all' : qcVal);
+        }
+
+        window.qcProgress = function(item) {
+            var rawTotal = parseFloat(item && item.sqty) || 0;
+            var scrapQty = parseFloat(item && item.outsource_scrap_qty) || 0;
+            var total = Math.max(0, rawTotal - scrapQty);
+            var done = (parseFloat(item.QC_ok_sqty)||0) + (parseFloat(item.QC_QQ_sqty)||0) + (parseFloat(item.QC_ng_sqty)||0) + (parseFloat(item.QC_aod_sqty)||0);
+            return { total: total, rawTotal: rawTotal, scrapQty: scrapQty, done: done, short: Math.max(0, total - done),
+                     full: (total > 0 && done >= total), part: (done > 0 && (total <= 0 || done < total)) };
+        };
 
         function setQcFilter(qcVal) {
             currentQcCheckFilter = qcVal;
@@ -1652,6 +1681,10 @@ if ($reply_id != "") {
 
                 var qcCheckFilterState = window.currentQcCheckFilter;
                 if (qcCheckFilterState === "all") {
+                    return true;
+                }
+                // 報工進度三種由後端 SQL 已篩好，前端不可再濾（否則筆數與表格對不上）
+                if (qcCheckFilterState === "full" || qcCheckFilterState === "part" || qcCheckFilterState === "nextstarted") {
                     return true;
                 }
 
@@ -2182,9 +2215,24 @@ if ($reply_id != "") {
                         statusHtml = `<div class="qc-flex">${statusParts.join('&emsp;')}</div>`;
                     }
 
+                    var _prog = window.qcProgress(item);
+                    var _badges = '';
+                    var _scrapNote = _prog.scrapQty > 0 ? `（發包量 ${he(String(_prog.rawTotal))} 已扣外包回廠報廢 ${he(String(_prog.scrapQty))} 件）` : '';
+                    if (_prog.full) {
+                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}${_scrapNote}，只差按【完成】">✓ 已驗滿·待按完成</span>`;
+                    } else if (_prog.part) {
+                        _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}${_scrapNote}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
+                    }
+                    if (+item.next_started) {
+                        var _ni = String(item.next_started_info || '').split('|');
+                        var _nName = _ni[0] || '', _nDate = _ni[1] || '';
+                        _badges += `<span class="qc-prog-badge qc-prog-next" title="這個 BOM 後面的站別（${he(_nName)}${_nDate ? ' ' + he(_nDate) + ' 發單' : ''}）已經開工了，這一站多半是事後才補按回廠的">後站已開工${_nName ? '·' + he(_nName) : ''}</span>`;
+                    }
+                    if (_badges) statusHtml += `<div style="line-height:1;">${_badges}</div>`;
+
                     // QR code and BOM/button functionality
                     var qrCodeButtonHtml = `
-            <button type="button" class="btn btn-xs btn-default qr-code-btn-tooltip" style="margin-right: 3px; padding: 1px 5px; display: inline-flex; align-items: center; justify-content: center;" data-toggle="modal" data-target="#myModal_qrcode_${he(item.bom_ing_fid)}" title="顯示QR Code">
+            <button type="button" class="btn btn-xs btn-default qr-code-btn-tooltip" style="margin-right: 3px; padding: 1px 5px; display: inline-flex; align-items: center; justify-content: center;" onclick="openQCModal('qrcode','${he(item.bom_ing_fid)}')" title="顯示QR Code">
                 <i class="fa fa-qrcode" style="font-size: 1.2em;"></i>
             </button>`;
                     var bomHtml = `

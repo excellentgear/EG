@@ -124,12 +124,31 @@ if ($filterSearch !== '') {
     $extraParts[] = "(bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR bi.maker_id LIKE ? OR pn.ProcessName LIKE ?)";
     $extraBinds   = array_merge($extraBinds, [$like, $like, $like, $like, $like]);
 }
+// 已檢驗數量＝允收＋異常＋驗退＋特採（與正式版 _fetch_qc_data.php 同一算法）；有效量扣外包回廠報廢
+const QC_DONE_SUM = "(COALESCE(qc.QC_ok_sqty,0)+COALESCE(qc.QC_QQ_sqty,0)+COALESCE(qc.QC_ng_sqty,0)+COALESCE(qc.QC_aod_sqty,0))";
+const QC_EFFECTIVE_SQTY = "(bi.sqty - COALESCE(ob.scrap_qty,0))";
+// 後站已開工：同 BOM 更後面的站別已發單且進行中／已回廠
+const QC_NEXT_STARTED_SQL = "EXISTS (
+        SELECT 1 FROM bom_ing nb
+        WHERE nb.bom = bi.bom
+          AND nb.bom_sn > bi.bom_sn
+          AND nb.is_consumed = 0
+          AND nb.outsource_date IS NOT NULL
+          AND nb.processing_state IN ('ing','Q','P','E')
+    )";
+
 if ($filterQC === 'gray') {
     $extraParts[] = "(bi.QC_check IS NULL OR bi.QC_check='') AND COALESCE(qc.QC_QQ_sqty,0)=0 AND COALESCE(qc.QC_ok_sqty,0)=0";
 } elseif ($filterQC === 'qq') {
     $extraParts[] = "COALESCE(qc.QC_QQ_sqty,0) > 0";
 } elseif ($filterQC === 'green') {
     $extraParts[] = "COALESCE(qc.QC_ok_sqty,0) > 0";
+} elseif ($filterQC === 'full') {
+    $extraParts[] = QC_EFFECTIVE_SQTY . " > 0 AND " . QC_DONE_SUM . " >= " . QC_EFFECTIVE_SQTY;
+} elseif ($filterQC === 'part') {
+    $extraParts[] = QC_DONE_SUM . " > 0 AND (" . QC_EFFECTIVE_SQTY . " <= 0 OR " . QC_DONE_SUM . " < " . QC_EFFECTIVE_SQTY . ")";
+} elseif ($filterQC === 'nextstarted') {
+    $extraParts[] = QC_NEXT_STARTED_SQL;
 }
 
 $extraWhere = empty($extraParts) ? '' : ' AND ' . implode(' AND ', $extraParts);
@@ -171,7 +190,17 @@ SELECT SQL_CALC_FOUND_ROWS
     qq_date.latest_QQ_date_formatted,
     ok_date.latest_ok_date_formatted,
     qao.abnormal_order_no,
-    qao.id AS qa_abnormal_id
+    qao.id AS qa_abnormal_id,
+    " . QC_NEXT_STARTED_SQL . " AS next_started,
+    (SELECT CONCAT(COALESCE(pnn.ProcessName,''), '|', COALESCE(DATE_FORMAT(nb2.outsource_date,'%m/%d'),''))
+       FROM bom_ing nb2
+       LEFT JOIN process_no pnn ON pnn.ProcessNo = nb2.process_no
+      WHERE nb2.bom = bi.bom
+        AND nb2.bom_sn > bi.bom_sn
+        AND nb2.is_consumed = 0
+        AND nb2.outsource_date IS NOT NULL
+        AND nb2.processing_state IN ('ing','Q','P','E')
+      ORDER BY nb2.bom_sn ASC LIMIT 1) AS next_started_info
 FROM bom_ing bi
 JOIN (
     SELECT bom, COALESCE(bom_sn, -1) AS sn, COALESCE(batch_label, '') AS bl, MAX(outsource_date) AS max_date
