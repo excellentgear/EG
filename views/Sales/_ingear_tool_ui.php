@@ -187,6 +187,24 @@ if (!isset($can_ingear_calc)) {
         return { lv: 0, txt: '✓ 可正常量測：接觸點在有效齒面內（離齒頂 ' + f(r.rk - rt, 3) + ' mm、離齒根 ' + f(rr - r.rk, 3) + ' mm）' };
     }
 
+    // 可用銷徑區間：掃描銷徑，取第一段連續「判定等級 ≤ maxLv」的範圍（下限進位、上限捨去到 0.01，確保區間內每個值都真的可用）
+    function usableRange(g, e, maxLv){
+        var D, q, ok, lo = null, hi = null, step = 0.002, lim = g.m * 3;
+        for (D = 0.02; D <= lim; D += step) {
+            q = pinAt(g, e, D); ok = q && judge(g, q).lv <= maxLv;
+            if (ok) { if (lo === null) lo = D; hi = D; }
+            else if (lo !== null) break;
+        }
+        if (lo === null) return null;
+        var a = Math.ceil(lo * 100 - 1e-9) / 100, b = Math.floor(hi * 100 + 1e-9) / 100;
+        return a <= b ? [a, b] : null;
+    }
+    function rangeRows(g, e){
+        var u = usableRange(g, e, 1), sf = usableRange(g, e, 0);
+        return row('可用跨銷徑範圍', u ? f(u[0], 2) + ' ~ ' + f(u[1], 2) + ' mm' : '無', 'ig-big') +
+               row('建議範圍（不靠近齒頂／齒根）', sf ? f(sf[0], 2) + ' ~ ' + f(sf[1], 2) + ' mm' : '無');
+    }
+
     /* ───── 小工具 ───── */
     function $(id){ return document.getElementById(id); }
     function f(v, n){ return (v === null || v === undefined || !isFinite(v)) ? '—' : (+v).toFixed(n); }
@@ -309,7 +327,7 @@ if (!isset($can_ingear_calc)) {
         bad('ig-x', x === null); bad('ig-d', false);
         if (x === null) { res.innerHTML = '<span class="ig-err">請輸入轉位係數 x（沒有轉位填 0）</span>'; clearGraphics(); return; }
         var e = eOf(g, x), Ds = stdPin(g, e), h = '';
-        h += '<table class="ig-t">' + row('分度圓齒槽寬 e', f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + '</table>';
+        h += '<table class="ig-t">' + row('分度圓齒槽寬 e', f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + rangeRows(g, e) + '</table>';
         if (D === null || D <= 0) {
             res.innerHTML = h + '<div class="ig-err">請輸入銷徑，或按「帶入標準跨銷徑」</div>';
             if (Ds) { var qs = pinAt(g, e, Ds); drawZoom(g, e, [{ r: qs, col: '#F0A24B', lbl: '標準銷 Ø' + f(Ds, 3) }]); drawOverview(g, e, qs, '#F0A24B'); } else clearGraphics();
@@ -336,7 +354,7 @@ if (!isset($can_ingear_calc)) {
         var e = solveE(g, M1, D1);
         if (e === null) { bad('ig-m1', true); res.innerHTML = '<span class="ig-err">用這組齒輪資料與客戶銷徑，反推不出合理的齒槽寬，請確認模數、齒數、壓力角與客戶跨銷距</span>'; clearGraphics(); return; }
         var h = '<table class="ig-t">' + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
-                row('此齒輪標準跨銷徑', f(stdPin(g, e), 4) + ' mm') + '</table>';
+                row('此齒輪標準跨銷徑', f(stdPin(g, e), 4) + ' mm') + rangeRows(g, e) + '</table>';
         var r1 = pinAt(g, e, D1), j1 = r1 ? judge(g, r1) : null;
         if (j1) h += '<div style="font-size:11px;color:#6b4423;margin-top:4px">客戶銷 Ø' + f(D1, 4) + '：' + j1.txt + '</div>';
         if (D2 === null || D2 <= 0) {
