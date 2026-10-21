@@ -477,6 +477,8 @@ $OreadyReply_list_base = $conn->getAll("SELECT
     ml.contact_person,
     ml.contact_title,
     u_sales_primary.id AS PrimarySalesId,
+    u_sales_primary.state AS PrimarySalesState,
+    u_sales_deputy.state AS DeputySalesState,
     u_sales_primary.user_cname AS PrimarySalesName,
     u_sales_deputy.id AS DeputySalesId,
     u_sales_deputy.user_cname AS DeputySalesName,
@@ -1248,8 +1250,8 @@ if (is_array($OreadyReply_list_base)) {
         $item_ref['has_any_pm_report'] = isset($max_reported_sn_map[$item_ref['bom']]);
 
         // Add leave status
-        $item_ref['IsPrimaryOnLeave'] = !empty($item_ref['PrimarySalesId']) && in_array(intval($item_ref['PrimarySalesId']), $users_on_leave_ids, true);
-        $item_ref['IsDeputyOnLeave'] = !empty($item_ref['DeputySalesId']) && in_array(intval($item_ref['DeputySalesId']), $users_on_leave_ids, true);
+        $item_ref['IsPrimaryOnLeave'] = !empty($item_ref['PrimarySalesId']) && in_array(intval($item_ref['PrimarySalesId']), $users_on_leave_ids, true) || (!empty($item_ref['PrimarySalesId']) && isset($item_ref['PrimarySalesState']) && (string)$item_ref['PrimarySalesState'] === '0');
+        $item_ref['IsDeputyOnLeave'] = !empty($item_ref['DeputySalesId']) && in_array(intval($item_ref['DeputySalesId']), $users_on_leave_ids, true) || (!empty($item_ref['DeputySalesId']) && isset($item_ref['DeputySalesState']) && (string)$item_ref['DeputySalesState'] === '0');
 
         $latest_info = $latest_report_data_map[$item_ref['bom']] ?? null;
         $item_ref['latest_report_process'] = $latest_info['process'] ?? '';

@@ -208,6 +208,8 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
         ml.m_tel, ml.m_fax, ml.m_tel2, ml.factory_address, ml.contact_person, ml.contact_title,
         IFNULL(unshipped_orders.total_open_qty, 0)  AS unshipped_qty,
         u_sales_primary.id          AS PrimarySalesId,
+        u_sales_primary.state AS PrimarySalesState,
+        u_sales_deputy.state AS DeputySalesState,
         u_sales_primary.user_cname  AS PrimarySalesName,
         u_sales_deputy.id           AS DeputySalesId,
         u_sales_deputy.user_cname   AS DeputySalesName "
@@ -710,7 +712,7 @@ if (is_array($OreadyReply_list_base)) {
             $item['has_any_pm_report']      = isset($max_reported_sn_map[$item['bom']]);
 
             // ✅【業務休假】與主頁面一致
-            $item['IsPrimaryOnLeave'] = !empty($item['PrimarySalesId']) && in_array(intval($item['PrimarySalesId']), $users_on_leave_ids, true);
+            $item['IsPrimaryOnLeave'] = !empty($item['PrimarySalesId']) && in_array(intval($item['PrimarySalesId']), $users_on_leave_ids, true) || (!empty($item['PrimarySalesId']) && isset($item['PrimarySalesState']) && (string)$item['PrimarySalesState'] === '0');
             $item['IsDeputyOnLeave']  = !empty($item['DeputySalesId'])  && in_array(intval($item['DeputySalesId']),  $users_on_leave_ids, true);
 
             $data_to_return[] = $item;
