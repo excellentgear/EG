@@ -1273,6 +1273,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
+        // =====================================================================
+        // 歷史檢驗清單（不限料號）：沒有從待驗清單進來也能查全部已存檔的檢驗單
+        // 後端分頁；關鍵字比對 檢驗單號／料號／製令／製程／檢驗人
+        // =====================================================================
+        if ($_POST['action'] === 'history_search') {
+            requireViewPerm($pdo, $user_id);
+            $per  = max(5, min(100, (int)($_POST['per'] ?? 20)));
+            $page = max(1, (int)($_POST['page'] ?? 1));
+            $where = ["f.status <> 'DRAFT'"]; $par = [];
+            $dFrom = trim((string)($_POST['date_from'] ?? '')); $dTo = trim((string)($_POST['date_to'] ?? ''));
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dFrom)) { $where[] = 'COALESCE(f.check_date, DATE(f.created_at)) >= ?'; $par[] = $dFrom; }
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dTo))   { $where[] = 'COALESCE(f.check_date, DATE(f.created_at)) <= ?'; $par[] = $dTo; }
+            $res = trim((string)($_POST['result'] ?? ''));
+            if ($res === 'NG')      { $where[] = "f.check_result = 'NG'"; }
+            elseif ($res === 'OK')  { $where[] = "(f.check_result IS NULL OR f.check_result <> 'NG')"; }
+            foreach (preg_split('/\s+/u', trim((string)($_POST['kw'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) as $w) {
+                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $w) . '%';
+                $where[] = "(f.insp_no LIKE ? OR ds.D_Setting_Id LIKE ? OR bi.bom LIKE ? OR f.process_name LIKE ? OR u.user_cname LIKE ?)";
+                array_push($par, $like, $like, $like, $like, $like);
+            }
+            $from = "FROM qc_check_form f
+                     LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
+                     LEFT JOIN d_setting ds ON ds.d_id = f.d_id
+                     LEFT JOIN user u ON TRIM(COALESCE(f.inspector_by, f.created_by)) = u.id
+                     LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
+                     WHERE " . implode(' AND ', $where);
+            $cq = $pdo->prepare("SELECT COUNT(*) $from"); $cq->execute($par);
+            $total = (int)$cq->fetchColumn();
+            $off = ($page - 1) * $per;
+            $q = $pdo->prepare(
+                "SELECT f.qc_form_id, f.insp_no, f.batch_no, f.round_no, f.process_name, f.insp_kind,
+                        f.check_date, f.created_at, f.check_result, f.ng_qty, f.d_id, ds.D_Setting_Id AS part_no,
+                        u.user_cname, f.created_by, bi.bom, f.abnormal_order_id, qa.abnormal_order_no
+                 $from ORDER BY COALESCE(f.check_date, DATE(f.created_at)) DESC, f.qc_form_id DESC LIMIT $per OFFSET $off");
+            $q->execute($par);
+            echo json_encode(['success'=>true, 'total'=>$total, 'page'=>$page, 'per'=>$per,
+                              'rows'=>$q->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         throw new Exception('未知的 action: ' . $_POST['action']);
     } catch (QcPermException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();

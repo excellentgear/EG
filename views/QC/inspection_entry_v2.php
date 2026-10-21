@@ -6788,9 +6788,80 @@ $(function(){
 
     // ============ #8 同料號歷次檢驗查詢 ============
     $('#btn-history').on('click', function(){
-        if(!ctx || !ctx.d_id){ alert('請先由待驗清單開啟一筆檢驗（需有料號）再查詢歷史。'); return; }
+        // 沒有帶入料號（直接開頁面）→ 改開「全部歷史檢驗清單」，有料號維持原本的同料號歷次檢驗
+        if(!ctx || !ctx.d_id){ openAllHistory(); return; }
         openPartHistory();
     });
+
+    // ============ 全部歷史檢驗清單（不限料號，可篩選、分頁） ============
+    var AH = {page:1, per:20};
+    function ensureAllHistModal(){
+        if($('#allHistModal').length) return;
+        $('body').append(
+          '<div class="modal fade" id="allHistModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg" style="width:1000px;max-width:96%;"><div class="modal-content">'+
+          '<div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>'+
+          '<h4 class="modal-title"><i class="fa fa-history"></i> 歷史檢驗清單</h4></div>'+
+          '<div class="modal-body">'+
+            '<div class="form-inline" style="margin-bottom:8px;">'+
+              '<input type="text" id="ah-kw" class="form-control input-sm" style="width:240px;" placeholder="檢驗單號／料號／製令／製程／檢驗人" data-eg-hint="多個關鍵字用空白分隔">　'+
+              '<input type="date" id="ah-from" class="form-control input-sm"> ~ <input type="date" id="ah-to" class="form-control input-sm">　'+
+              '<select id="ah-res" class="form-control input-sm"><option value="">全部判定</option><option value="OK">合格</option><option value="NG">不良</option></select>　'+
+              '<select id="ah-per" class="form-control input-sm"><option>20</option><option>50</option><option>100</option></select> 筆/頁'+
+            '</div>'+
+            '<div id="allHistList">載入中…</div><div id="allHistDetail" style="margin-top:12px;"></div>'+
+          '</div>'+
+          '<div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>'+
+          '</div></div></div>');
+        var tm=null;
+        $('#allHistModal').on('input change','#ah-kw,#ah-from,#ah-to,#ah-res,#ah-per',function(){
+            clearTimeout(tm); tm=setTimeout(function(){ AH.page=1; loadAllHistory(); },350);
+        });
+        $('#allHistModal').on('click','.ah-pg',function(){ AH.page=parseInt($(this).data('p'),10)||1; loadAllHistory(); });
+        $('#allHistModal').on('click','.ah-view',function(){
+            var id=$(this).data('id'); $('#allHistDetail').html('載入中…');
+            $.post(API,{action:'get_history_record',qc_form_id:id},function(res){
+                if(!res.success){ $('#allHistDetail').html('載入失敗：'+esc(res.message||'')); return; }
+                $('#allHistDetail').html(renderHistDetail(res));
+                var el=document.getElementById('allHistDetail'); if(el&&el.scrollIntoView) el.scrollIntoView({block:'nearest'});
+            },'json');
+        });
+    }
+    function openAllHistory(){
+        ensureAllHistModal();
+        $('#allHistDetail').empty(); AH.page=1;
+        $('#allHistModal').modal('show');
+        loadAllHistory();
+    }
+    function loadAllHistory(){
+        AH.per=parseInt($('#ah-per').val(),10)||20;
+        $('#allHistList').html('載入中…');
+        $.post(API,{action:'history_search', kw:$('#ah-kw').val(), date_from:$('#ah-from').val(), date_to:$('#ah-to').val(),
+                    result:$('#ah-res').val(), page:AH.page, per:AH.per}, function(res){
+            if(!res.success){ $('#allHistList').html('<span class="text-danger">查詢失敗：'+esc(res.message||'')+'</span>'); return; }
+            var rows=res.rows||[];
+            if(!rows.length){ $('#allHistList').html('<div class="text-muted">沒有符合條件的歷史檢驗紀錄。</div>'); return; }
+            var h='<div class="text-muted" style="margin-bottom:6px;">共 '+res.total+' 筆（點「檢視」看逐項實測）</div>'+
+              '<div style="max-height:320px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
+              '<th>日期</th><th>檢驗單號</th><th>料號</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
+            rows.forEach(function(r){
+                var d=String(r.check_date||r.created_at||'').substring(0,10);
+                var ncr=r.abnormal_order_no?'<a href="../QA/qa_abnormal_view.php?id='+r.abnormal_order_id+'" target="_blank">'+esc(r.abnormal_order_no)+'</a>':'';
+                h+='<tr><td>'+esc(d)+'</td><td>'+esc(r.insp_no||'')+'</td><td>'+esc(r.part_no||'')+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
+                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+inspKindBadge(r.insp_kind)+'</td><td>'+statusLabel(r.check_result)+'</td><td>'+(r.ng_qty||0)+'</td>'+
+                   '<td>'+esc(r.user_cname||r.created_by||'')+'</td><td>'+ncr+'</td>'+
+                   '<td><button class="btn btn-xs btn-primary ah-view" data-id="'+r.qc_form_id+'">檢視</button></td></tr>';
+            });
+            h+='</tbody></table></div>';
+            var pages=Math.max(1,Math.ceil(res.total/res.per));
+            if(pages>1){
+                h+='<div style="margin-top:6px;text-align:right;">'+
+                   '<button class="btn btn-xs btn-default ah-pg" data-p="'+(res.page-1)+'"'+(res.page<=1?' disabled':'')+'>上一頁</button> '+
+                   '第 '+res.page+' / '+pages+' 頁 '+
+                   '<button class="btn btn-xs btn-default ah-pg" data-p="'+(res.page+1)+'"'+(res.page>=pages?' disabled':'')+'>下一頁</button></div>';
+            }
+            $('#allHistList').html(h);
+        },'json').fail(function(x){ $('#allHistList').html('<span class="text-danger">'+(x.status===403?'您沒有檢閱檢驗表的權限':'查詢失敗')+'</span>'); });
+    }
     function ensureHistoryModal(){
         if($('#partHistModal').length) return;
         $('body').append(
@@ -6809,7 +6880,7 @@ $(function(){
             if(!res.success){ $('#partHistList').html('查詢失敗：'+esc(res.message||'')); return; }
             var rows=res.rows||[];
             if(!rows.length){ $('#partHistList').html('<div class="text-muted">此料號尚無歷史檢驗紀錄。</div>'); return; }
-            var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視」看逐項實測與同尺寸落點）</div>'+
+            var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視」看逐項實測與同尺寸落點）　<a href="#" id="ph-to-all">查看全部歷史檢驗（不限料號）</a></div>'+
               '<div style="max-height:230px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
               '<th>日期</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
             rows.forEach(function(r){
@@ -6827,6 +6898,9 @@ $(function(){
             $('#partHistList').html(h);
         }, 'json');
     }
+    $(document).on('click','#ph-to-all', function(e){
+        e.preventDefault(); $('#partHistModal').modal('hide'); setTimeout(openAllHistory, 350);
+    });
     $(document).on('click','.ph-view', function(){
         var id=$(this).data('id');
         $('#partHistDetail').html('載入中…');
