@@ -390,9 +390,10 @@ if (!isset($can_ingear_calc)) {
         calc();
     };
     window.clearInGearTool = function(){
-        ['ig-d', 'ig-d1', 'ig-m1', 'ig-d2', 'ig-dtip', 'ig-droot'].forEach(function(id){ var el = $(id); if (el) el.value = ''; });
-        $('ig-x').value = '0'; $('ig-ut').value = '0'; $('ig-lt').value = '0';
+        ['ig-m', 'ig-z', 'ig-d', 'ig-d1', 'ig-m1', 'ig-d2', 'ig-dtip', 'ig-droot'].forEach(function(id){ var el = $(id); if (el) el.value = ''; });
+        $('ig-al').value = '20'; $('ig-x').value = '0'; $('ig-ut').value = '0'; $('ig-lt').value = '0';
         calc();
+        var mEl = $('ig-m'); if (mEl) mEl.focus();
     };
     window.closeInGearTool = function(){ var w = $('ig-win'); if (w) w.style.display = 'none'; };
     window.openInGearTool = function(){
