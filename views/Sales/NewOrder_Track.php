@@ -5590,7 +5590,7 @@ foreach($dCounts as $c) {
                             onclick="openGearTool()"
                             title="齒輪計算工具（技術課專用）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a252f,#2980b9);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 齒輪計算</span>
+                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 齒輪</span>
                         </button>
                         <?php endif; ?>
                         <?php if ($can_keyway_calc): ?>
@@ -5598,7 +5598,7 @@ foreach($dCounts as $c) {
                             onclick="openKwTool()"
                             title="軸件鍵槽計算工具"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a3a2a,#27ae60);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽計算</span>
+                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽</span>
                         </button>
                         <?php endif; ?>
                         <?php if ($show_gear_tool): ?>
@@ -5606,7 +5606,7 @@ foreach($dCounts as $c) {
                             onclick="openInGearTool()"
                             title="內齒計算（跨銷距、標準跨銷徑、客戶銷徑換算；權限同齒輪計算）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5b3a1a,#e67e22);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 內齒計算</span>
+                            <i class="fa fa-calculator" style="font-size:13px;"></i><span class="fb-txt"> 內齒</span>
                         </button>
                         <?php endif; ?>
                         <!-- 訂單變更：變更(全部歷史) + 設定(限A權限，見 $can_order_change_setting)，緊鄰鍵槽計算右側 -->
