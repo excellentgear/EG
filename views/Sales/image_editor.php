@@ -1796,16 +1796,16 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <input type="checkbox" id="frame-clip" checked onchange="onFrameClipToggle()"> 圖框裁切
             </label>
 <?php if ($show_gear_tool): ?>
-            <button class="tb-btn" onclick="openGearTool()" title="開啟齒輪計算工具：預設停靠在畫布右緣的側邊面板（可拖左緣調寬、按面板上的「浮出」變回可拖曳的獨立視窗）。與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-cog"></i> 齒輪計算</button>
+            <button class="tb-btn" onclick="openGearTool()" title="開啟齒輪計算工具：預設停靠在畫布右緣的側邊面板（可拖左緣調寬、按面板上的「浮出」變回可拖曳的獨立視窗）。與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-calculator"></i> 齒輪計算</button>
 <?php endif; ?>
 <?php if ($can_grind3d): ?>
             <button class="tb-btn" onclick="openGrind3D()" title="開啟砂輪/刀具干涉 3D 模擬：齒輪計算「出尾計算」的 3D 版本，可拖曳旋轉、含砂輪傾角。輸入砂輪外徑／刃寬／側面角／傾角與工件齒底徑／肩部尺寸，直接算出砂輪最靠近肩部又不會撞到的極限位置、該位置的出尾長度，以及任意位置「還能再靠近幾 mm／必須往外退幾 mm」，壓到肩部的部分在 3D 上以紅色標示。注意出尾計算的 2D 公式只在砂輪傾角 0 時成立，有傾角時要以這裡的結果為準。也可以從齒輪計算工具的「出尾計算」分頁右側開啟（那樣會自動帶入已填好的尺寸）"><i class="fa fa-cube"></i> 砂輪/刀具干涉3D</button>
 <?php endif; ?>
 <?php if ($can_keyway_calc): ?>
-            <button class="tb-btn" onclick="openKwTool()" title="開啟鍵槽計算工具：與訂單追蹤頁同一個工具、同一套算法。軸件分頁＝軸上鍵槽（軸徑、槽寬、槽深與圓心到槽底），片狀分頁＝孔內鍵槽；填公稱值與上下偏差自動算出極限值與加工尺寸"><i class="fa fa-key"></i> 鍵槽計算</button>
+            <button class="tb-btn" onclick="openKwTool()" title="開啟鍵槽計算工具：與訂單追蹤頁同一個工具、同一套算法。軸件分頁＝軸上鍵槽（軸徑、槽寬、槽深與圓心到槽底），片狀分頁＝孔內鍵槽；填公稱值與上下偏差自動算出極限值與加工尺寸"><i class="fa fa-calculator"></i> 鍵槽計算</button>
 <?php endif; ?>
 <?php if ($show_gear_tool): ?>
-            <button class="tb-btn" onclick="openInGearTool()" title="開啟內齒計算工具：內齒輪跨銷距、標準跨銷徑，以及把客戶的銷徑與跨銷距換算成我方銷徑（含公差範圍），並以圖示標出銷是否過大／過小而無法量測。與訂單追蹤頁同一個工具，權限同齒輪計算"><i class="fa fa-circle-o-notch"></i> 內齒計算</button>
+            <button class="tb-btn" onclick="openInGearTool()" title="開啟內齒計算工具：內齒輪跨銷距、標準跨銷徑，以及把客戶的銷徑與跨銷距換算成我方銷徑（含公差範圍），並以圖示標出銷是否過大／過小而無法量測。與訂單追蹤頁同一個工具，權限同齒輪計算"><i class="fa fa-calculator"></i> 內齒計算</button>
 <?php endif; ?>
 <?php if ($can_len_reserve): ?>
             <button class="tb-btn" onclick="openLenTool()" title="開啟車床預留量計算：填入成品尺寸（基準值＋上下公差）與這一面研磨後會增加／減少多少，自動算出建議的車床（加工）尺寸；也可以直接輸入已經標好的車床尺寸，驗算研磨後是否仍符合成品公差"><i class="fa fa-arrows-h"></i> 預留量計算</button>

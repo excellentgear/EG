@@ -357,7 +357,7 @@ if (!isset($can_ingear_calc)) {
         var e = solveE(g, M1, D1);
         if (e === null) { bad('ig-m1', true); res.innerHTML = '<span class="ig-err">用這組齒輪資料與客戶銷徑，反推不出合理的齒槽寬，請確認模數、齒數、壓力角與客戶跨銷距</span>'; clearGraphics(); return; }
         var h = '<table class="ig-t">' + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
-                row('此齒輪標準跨銷徑', f(stdPin(g, e), 4) + ' mm') + '</table>';
+                row('此齒輪標準跨銷徑 <span style="color:#DD5138;font-size:10px">待確認</span>', f(stdPin(g, e), 4) + ' mm') + '</table>';
         $('ig-rng-b').innerHTML = '<table class="ig-t">' + rangeRows(g, e) + '</table>';
         var r1 = pinAt(g, e, D1), j1 = r1 ? judge(g, r1) : null;
         if (j1) h += '<div style="font-size:11px;color:#6b4423;margin-top:4px">客戶銷 Ø' + f(D1, 4) + '：' + j1.txt + '</div>';
