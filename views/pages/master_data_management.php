@@ -9791,6 +9791,10 @@ body { background:#F6F1EA; }
         </div>
     </div>
 </div>
+<!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示；放在基本資料區，緊湊排列，點選後輸入框直接出現並取得焦點 -->
+<div id="shape-section" style="display:none;margin:0 0 8px;padding:4px 8px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
+    <div id="shape-form-box"></div>
+</div>
 <!-- ─ 客戶代號／等同料號（別名）─
      一個代號要能唯一對應到我方料號：客戶圖上印的編號多半沒建成料號，
      客戶改料號沒改圖時新舊其實同一個東西，報價料號與訂單料號也常不同。
@@ -9951,10 +9955,6 @@ include __DIR__ . '/_gear_spec_ui.php';
 eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wrap', 'can_edit' => (bool)$can_edit_gear]);
 ?>
 <!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示（跟著齒輪規格區塊的顯示狀態走） -->
-<div id="shape-section" style="display:none;margin:8px 0;padding:8px 10px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
-    <div style="font-weight:bold;color:#5a3d1c;margin-bottom:2px;"><i class="fa fa-cube"></i> 外形與內孔（用來快速找類似齒輪）</div>
-    <div id="shape-form-box"></div>
-</div>
 <script>window.EG_SHAPE_DEFS = <?= json_encode(eg_shape_defs(), JSON_UNESCAPED_UNICODE) ?>;</script>
 <script src="../../resource/js/eg_part_shape.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_shape.js') ?>"></script>
 <script>

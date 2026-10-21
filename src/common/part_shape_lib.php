@@ -217,20 +217,21 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
     $pick = function (string $key, array $valid): array {
         $raw = trim((string)($_POST[$key] ?? ''));
         if ($raw === '') return [];
-        $a = array_filter(array_map('trim', explode(',', $raw)), function ($v) use ($valid) { return $v === 'other' || isset($valid[$v]); });
+        $a = array_filter(array_map('trim', explode(',', $raw)), function ($v) use ($valid) { return $v === 'other' || $v === 'none' || isset($valid[$v]); });
         return array_values(array_unique($a));
     };
     foreach ([['filter_shape_outer', 'outer_shape', $defs['outer'], 'fso'], ['filter_shape_bore', 'bore_type', $defs['bore'], 'fsb']] as [$key, $col, $valid, $pre]) {
         $vals = $pick($key, $valid);
         if (!$vals) continue;
         $conds = []; $i = 0;
-        $in = array_values(array_filter($vals, function ($v) { return $v !== 'other'; }));
+        $in = array_values(array_filter($vals, function ($v) { return $v !== 'other' && $v !== 'none'; }));
         if ($in) {
             $phs = [];
             foreach ($in as $v) { $p = ":{$pre}{$i}"; $phs[] = $p; $prm[$p] = $v; $i++; }
             $conds[] = "EXISTS (SELECT 1 FROM d_setting_shape s_$pre WHERE s_$pre.d_id={$alias}.d_id AND s_$pre.$col IN (" . implode(',', $phs) . "))";
         }
-        if (in_array('other', $vals, true)) {
+        // 'other'（外形其他）／'none'（內孔無孔）＝這個欄位沒有選任何值（含根本沒有資料列的料號）
+        if (in_array('other', $vals, true) || in_array('none', $vals, true)) {
             $conds[] = "NOT EXISTS (SELECT 1 FROM d_setting_shape s_{$pre}o WHERE s_{$pre}o.d_id={$alias}.d_id AND s_{$pre}o.$col IS NOT NULL)";
         }
         $sql .= ' AND (' . implode(' OR ', $conds) . ')';
