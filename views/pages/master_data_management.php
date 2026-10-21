@@ -1489,6 +1489,10 @@ try {
 endif; // end !$_mdm_skip_migration
 unset($_mdm_skip_migration);
 
+// ── 齒輪外形／內孔分類（2026-10-21）：不放在版本鎖內，建表本身已有存在檢查 ──
+require_once __DIR__ . '/../../src/common/part_shape_lib.php';
+eg_shape_ensure_table($pdo);
+
 // ── 齒部外徑（da）計算式：唯一實作 ──────────────────────────────────────
 // 列表顯示的「齒部外徑」籤與「齒部外徑區間篩選」一律用這一支產生 SQL，
 // 兩邊各寫一份的話，DIN5480 花鍵（短齒型 da=mz+2m(0.4+x)）這種分支會只有
@@ -2221,6 +2225,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $fgear_teeth_max   = trim($_POST['filter_gear_teeth_max'] ?? '');
             $fgear_fw_min      = trim($_POST['filter_gear_fw_min'] ?? '');
             $fgear_fw_max      = trim($_POST['filter_gear_fw_max'] ?? '');
+            // 外形／內孔分類篩選（唯一實作 part_shape_lib.php，參數名 filter_shape_*）
+            [$__shSql, $__shPrm] = eg_shape_filter_sql($_POST);
+            if ($__shSql !== '') { $where .= $__shSql; $params = array_merge($params, $__shPrm); }
             if ($fgear_modules_raw !== '' && $fgear_modules_raw !== '[]') {
                 $fgear_modules = json_decode($fgear_modules_raw, true) ?: [];
                 if (!empty($fgear_modules)) {
@@ -2753,6 +2760,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($rows as &$__r) { if (isset($__r['gear_spec_str'])) $__r['gear_spec_str'] = $__gm[(int)($__r['d_id'] ?? 0)] ?? ''; }
                 unset($__r);
             } catch (Throwable $__e) {}
+            // 外形／內孔摘要（清單料號下方小字）
+            try {
+                $__sm = eg_shape_summary_map($pdo, array_column($rows, 'd_id'));
+                foreach ($rows as &$__r) {
+                    $__x = $__sm[(int)($__r['d_id'] ?? 0)] ?? null;
+                    if (!$__x) { $__r['shape_txt'] = ''; continue; }
+                    $__bt = $__x['bore_nm'] . ($__x['dias'] ? ' Ø' . implode('→Ø', $__x['dias']) : '');
+                    $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'], $__bt]));
+                }
+                unset($__r);
+            } catch (Throwable $__e) {}
             echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'pages'=>ceil($total/$lmt),'page'=>$pg]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -2782,6 +2800,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st_tool = $pdo->prepare("SELECT * FROM d_setting_tool WHERE d_setting_id=? LIMIT 1");
             $st_tool->execute([$d_id]);
             $row['tool'] = $st_tool->fetch(PDO::FETCH_ASSOC) ?: null;
+            $row['shape'] = eg_shape_get($pdo, (int)$d_id);   // 齒輪外形／內孔分類
             // BOM 子件資料
             $bom_children = [];
             if ($row['Is_Assembly'] == 1) {
@@ -3187,6 +3206,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 齒輪規格的寫入收斂到共用庫（與報價單管理「新增料號」同一支、同一套規則）
             require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
             eg_gear_rows_save($pdo, (int)$d_id, ($Type === 'G') ? $gears : [], $uid);
+
+            // ── 齒輪外形／內孔分類（沒送 shape_spec＝舊呼叫端，不動；不是齒輪一律清除）──
+            if ($Type !== 'G') {
+                eg_shape_save($pdo, (int)$d_id, null);
+            } elseif (array_key_exists('shape_spec', $_POST)) {
+                [$__shapeRow, $__shapeErr] = eg_shape_normalize(json_decode((string)$_POST['shape_spec'], true));
+                if ($__shapeErr) throw new Exception($__shapeErr);   // 後端同規則再擋一次（鐵律8）
+                eg_shape_save($pdo, (int)$d_id, $__shapeRow, (string)($_SESSION['userName'] ?? ''));
+            }
 
             // ── 組合件 BOM 子件 ──
             $pdo->prepare("DELETE FROM d_setting_bom WHERE parent_d_id=?")->execute([$d_id]);
@@ -9278,6 +9306,8 @@ body { background:#F6F1EA; }
                            title="齒部外徑最大值（含）。留空＝不限上限。" data-eg-hint="齒部外徑 da 由系統依齒輪規格即時計算；只填一邊＝大於等於／小於等於">
                     <span style="font-size:11px;color:#888;margin-left:3px;">mm</span>
                 </div>
+                <!-- 齒輪外形／內孔篩選（類型=G時出現） -->
+                <div class="filter-sub-row" id="parts-gear-shape-filter" style="flex-wrap:wrap;gap:4px;align-items:center;"></div>
                 <!-- 小類子篩（選非全部時出現） -->
                 <div class="filter-sub-row" id="parts-sub-filter">
                     <span class="filter-group-label">小類</span>
@@ -9920,6 +9950,25 @@ $GEAR_SPEC_CFG = [
 include __DIR__ . '/_gear_spec_ui.php';
 eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wrap', 'can_edit' => (bool)$can_edit_gear]);
 ?>
+<!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示（跟著齒輪規格區塊的顯示狀態走） -->
+<div id="shape-section" style="display:none;margin:8px 0;padding:8px 10px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
+    <div style="font-weight:bold;color:#5a3d1c;margin-bottom:2px;"><i class="fa fa-cube"></i> 外形與內孔（用來快速找類似齒輪）</div>
+    <div id="shape-form-box"></div>
+</div>
+<script>window.EG_SHAPE_DEFS = <?= json_encode(eg_shape_defs(), JSON_UNESCAPED_UNICODE) ?>;</script>
+<script src="../../resource/js/eg_part_shape.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_shape.js') ?>"></script>
+<script>
+(function(){
+  if (!window.EGPartShape) return;
+  EGPartShape.form.mount(document.getElementById('shape-form-box'));
+  var fb = document.getElementById('parts-gear-shape-filter');
+  if (fb) EGPartShape.filter.mount(fb, function(){ if (typeof updatePartsClearBtn==='function') updatePartsClearBtn(); if (typeof loadParts==='function') loadParts(1); });
+  var gs = document.getElementById('gear-section'), ss = document.getElementById('shape-section');
+  function sync(){ ss.style.display = (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none') ? '' : 'none'; }
+  if (gs) { new MutationObserver(sync).observe(gs, {attributes:true, attributeFilter:['style','class']}); sync(); }
+})();
+</script>
+
 
 <!-- ─ 刀具規格（Type=H/OH 時顯示）─ 2026-08-24 由料號標籤改為專屬表 d_setting_tool -->
 <div id="tool-section" style="display:none;">
@@ -13098,6 +13147,7 @@ function setPartFilter(dim, val, el) {
         var rangeRow = document.getElementById('parts-gear-range-filter');
         if (specRow)  specRow.classList.toggle('visible', showGear);
         if (rangeRow) rangeRow.classList.toggle('visible', showGear);
+        var shapeRow = document.getElementById('parts-gear-shape-filter'); if (shapeRow) shapeRow.classList.toggle('visible', showGear);
         if (showGear) {
             document.querySelectorAll('#parts-gear-filter .fc').forEach(function(c){
                 c.classList.remove('active'); c.style.background=''; c.style.color=''; c.style.borderColor='';
@@ -13456,6 +13506,7 @@ function partsHasFilter() {
         || _partsFilter.gearFwMin !== null || _partsFilter.gearFwMax !== null
         || _partsFilter.gearHaMin !== null || _partsFilter.gearHaMax !== null
         || _partsFilter.wlMin != null || _partsFilter.wlMax != null
+        || (window.EGPartShape && EGPartShape.filter.active())
         || _partsFilter.shipSort);
 }
 
@@ -13474,6 +13525,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function clearPartsFilter() {
+    if (window.EGPartShape) EGPartShape.filter.reset();
     _attProcFilter = []; var _apEl = document.getElementById('parts-attproc-box'); if (_apEl && window.EGProcPick) EGProcPick.set(_apEl, []);
     _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
     ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
@@ -13500,7 +13552,7 @@ function clearPartsFilter() {
     var allType = document.querySelector('#parts-type-group .fc[data-type=""]');
     if (allType) { allType.classList.add('active'); allType.style.background='#2A3F54'; allType.style.color='#fff'; }
     // Hide collapsible sub-rows (not grade/industry — those are always visible)
-    ['parts-gear-filter','parts-gear-spec-filter','parts-gear-range-filter','parts-sub-filter','parts-label-filter','parts-industry-sub-filter'].forEach(function(id) {
+    ['parts-gear-filter','parts-gear-spec-filter','parts-gear-range-filter','parts-gear-shape-filter','parts-sub-filter','parts-label-filter','parts-industry-sub-filter'].forEach(function(id) {
         var el = document.getElementById(id); if (el) el.classList.remove('visible');
     });
     // Reset grade chips
@@ -14740,6 +14792,10 @@ function partsFilterPayload() {
           filter_gear_fw_max:      _partsFilter.gearFwMax !== null ? _partsFilter.gearFwMax : '',
           filter_gear_ha_min:      _partsFilter.gearHaMin !== null ? _partsFilter.gearHaMin : '',
           filter_gear_ha_max:      _partsFilter.gearHaMax !== null ? _partsFilter.gearHaMax : '',
+          filter_shape_outer:      window.EGPartShape ? EGPartShape.filter.params().filter_shape_outer : '',
+          filter_shape_bore:       window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore : '',
+          filter_shape_bore_min:   window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore_min : '',
+          filter_shape_bore_max:   window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore_max : '',
           filter_pinned_part_ids:  _partsFilter.pinnedPartIds.join(','),
           filter_customer_ids:     _partsFilter.customerIds.join(','),
           filter_grades_p:         _partsFilter.grades.join(','),
@@ -14853,6 +14909,7 @@ function renderPartsTable(rows, total, pg, pages) {
             // 齒輪規格小字（僅 G 種類）
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
                 ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:220px;overflow:hidden;white-space:pre-line;line-height:1.25;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
+            if (r.Type==='G' && r.shape_txt) gearSpec += '<span style="font-size:10px;color:#8A5A2B;display:block;max-width:220px;line-height:1.25;margin-top:1px;" title="外形｜內孔">◧ '+escHtml(r.shape_txt)+'</span>';
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = '';
             // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
@@ -17825,6 +17882,7 @@ function openPartModal(d_id) {
                 pfAcLoadFromPart(d);
                 // 這支料號參與了哪幾個整組（get_part 已經一起回傳，不必再打一次 API）
                 CUR_PART_DID = parseInt(d.d_id || 0);
+                if (window.EGPartShape) EGPartShape.form.set(d.shape || null);
                 PART_SETS = d.part_sets || [];
                 renderPartSets();
             });
@@ -17876,6 +17934,7 @@ function openPartModal(d_id) {
         pfWlRefresh();
         pfAcReset();   // 清空 廠商 / 專用料號 / 專用機台 / 價格
         CUR_PART_DID = 0; PART_SETS = []; renderPartSets();   // 新增中還沒有 d_id，所屬整組一律收起來
+        if (window.EGPartShape) EGPartShape.form.set(null);
         _curPartIsAssembly = false;
         _loadPartTypeOptions('N', function(){ onTypeChange('N'); });
         document.getElementById('pf-Customer_Id').value = '';
@@ -17979,8 +18038,14 @@ function submitPartForm() {
             }
         }
     }
+    // 齒輪外形／內孔：有輸入錯誤就在送出前擋下（後端同規則再擋一次）
+    if (type === 'G' && window.EGPartShape) {
+        var _shErr = EGPartShape.form.validate();
+        if (_shErr) { showToast('外形與內孔：' + _shErr, 'error'); return; }
+    }
     var data = {
         action:       'save_part',
+        shape_spec:   (type === 'G' && window.EGPartShape) ? JSON.stringify(EGPartShape.form.get()) : undefined,
         d_id:         document.getElementById('pf-d_id').value,
         D_Setting_Id: document.getElementById('pf-D_Setting_Id').value.trim(),
         Spec_No:      document.getElementById('pf-Spec_No').value,
@@ -18161,6 +18226,7 @@ function copyPartModal(d_id) {
         var d = r.data;
         var _copyLabelsAndGears = confirm('是否一併複製來源料號的標籤與齒輪資料？\n按「取消」則只複製料號基本資料，標籤與齒輪資料需另行設定。');
         gearRows = []; bomRows = [];
+        if (window.EGPartShape) EGPartShape.form.set(_copyLabelsAndGears ? (d.shape || null) : null);
         // 先 reset 避免殘留值或瀏覽器自動填充
         document.getElementById('partForm').reset();
         document.getElementById('partModal-title').textContent = '複製料號（來源：' + d.D_Setting_Id + '）';
