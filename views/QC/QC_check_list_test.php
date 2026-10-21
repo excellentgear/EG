@@ -14,6 +14,7 @@ if (!isset($_SESSION['userName'])) //若使用者未設定，則返回登入頁
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/qc_container_lib.php'; // 容器選項唯一來源（設定入口：BOM總表 →「容器設定」）
 
 @$id = $_GET['id'];
 @$new = $_GET['new'];
@@ -939,7 +940,12 @@ if ($reply_id != "") {
                                         </tr>
                                         <tr>
                                             <td style="vertical-align:middle;">料號</td>
-                                            <td><input name="dId" type="text" class="form-control input-sm" readonly></td>
+                                            <td>
+                                                <div style="display:flex;gap:6px;align-items:center;">
+                                                    <input name="dId" type="text" class="form-control input-sm" style="width:66%;" readonly>
+                                                    <button type="button" id="btn-custom-qrcode" class="btn btn-default btn-sm" style="display:none;padding:1px 8px;" title="顯示QR Code"><i class="fa fa-qrcode" style="font-size:1.2em;"></i></button>
+                                                </div>
+                                            </td>
                                         </tr>
                                         <tr>
                                             <td style="vertical-align:middle;">製程</td>
@@ -949,6 +955,12 @@ if ($reply_id != "") {
                                                         style="width:auto;min-width:200px;font-family:'Courier New',monospace;">
                                                     <option value="">請先輸入 BOM 後點更新</option>
                                                 </select>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td style="vertical-align:middle;">容器</td>
+                                            <td>
+                                                <div id="custom-container-info" style="font-size:13px;color:#7A4A12;background:#FDF3E3;border:1px dashed #E0B77A;border-radius:3px;padding:4px 8px;">－</div>
                                             </td>
                                         </tr>
                                         <tr class="custom-modal-options" style="display:none;">
@@ -1053,6 +1065,28 @@ if ($reply_id != "") {
         var currentUserId = <?php echo json_encode($id ?? null); ?>;
         var currentUserStatus = <?php echo json_encode($user_status ?? null); ?>;
         console.log('[QC_check_list_test.php] JavaScript loaded and executing.');
+
+        // 容器選項：唯一來源 system_parameters(QC_CONTAINER/options)，在 BOM總表 →「容器設定」維護
+        window.EG_QC_CONTAINERS = <?php echo json_encode(eg_qc_container_options($db ?? null), JSON_UNESCAPED_UNICODE); ?>;
+        function qcCtnOptionsHtml(withBlank, selected) {
+            var h = withBlank ? '<option value="">請選擇</option>' : '';
+            (window.EG_QC_CONTAINERS || []).forEach(function (o) {
+                var sel = (selected != null && String(selected) === String(o.code)) ? ' selected' : '';
+                h += '<option value="' + qcCtnEsc(o.code) + '"' + sel + '>' + qcCtnEsc(o.name) + '</option>';
+            });
+            return h;
+        }
+        function qcCtnNamesHtml() { // 只有名稱、沒有 value 的下拉（箱數計算用）
+            return (window.EG_QC_CONTAINERS || []).map(function (o) {
+                return '<option>' + qcCtnEsc(o.name) + '</option>';
+            }).join('');
+        }
+        function qcCtnFirstName() { var a = window.EG_QC_CONTAINERS || []; return a.length ? a[0].name : ''; }
+        function qcCtnEsc(t) {
+            return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
         var initialNgTxtList = <?php echo json_encode($ng_txt_list ?? []); ?>;
 
         // 分頁狀態
@@ -1518,15 +1552,7 @@ if ($reply_id != "") {
             $targetRow.attr('data-qc-check', qcCheck || ''); // Update the raw QC_check status attribute on the TR for filtering
 
             // 2. 更新容器 Cell (第 10 個可見欄位，DataTables 索引為 9)
-            var containerHtml = '<div class="container-cell">';
-            // ⭐ 修正點 1: 從 bomIngDetails 中讀取容器資料
-            if (bomIngDetails.BIQC_ps && bomIngDetails.BIQC_ps.trim()) {
-                containerHtml += `<button type="button" class="container-btn">${he(bomIngDetails.BIQC_ps)}</button>`;
-            }
-            if (bomIngDetails.BIQC_ps2 && bomIngDetails.BIQC_ps2.trim()) {
-                containerHtml += `<button type="button" class="container-btn">${he(bomIngDetails.BIQC_ps2)}</button>`;
-            }
-            containerHtml += '</div>';
+            var containerHtml = qcContainerCellHtml(bomIngDetails);
             // ⭐ 修正點 2: 使用正確的索引 9 來更新「容器」欄位
             window.dataTableInstance.cell($targetRow.find('td:eq(8)')).data(containerHtml);
 
@@ -1939,10 +1965,7 @@ if ($reply_id != "") {
                         <label class="col-xs-2 control-label qr-modal-label">容器：</label>
                         <div class="col-xs-4 qr-modal-input-group">
                             <select class="form-control packaging-type" id="packaging-type-${bomIngFidEsc}">
-                                <option>PP箱</option>
-                                <option>蝴蝶籠</option>
-                                <option>鐵桶</option>
-                                <option>棧板</option>
+                                ${qcCtnNamesHtml()}
                             </select>
                         </div>
                         <label class="col-xs-2 control-label qr-modal-label">箱數：</label>
@@ -1953,7 +1976,7 @@ if ($reply_id != "") {
                 </div>                
                 <div class="form-group" style="margin-top: 0;">
                     <div class="row">
-                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? PP箱</div> <!-- Updated initial text -->
+                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? ${qcCtnEsc(qcCtnFirstName())}</div> <!-- 容器名稱由設定帶出 -->
                     </div>
                 </div>
                 <div class="form-group qrcode-display-area" style="text-align: center; margin-top: 15px; display: none;">
@@ -2100,22 +2123,14 @@ if ($reply_id != "") {
                                         <div class="form-group" style="display: flex; align-items: center; gap: 5px; margin-bottom: 5px;">
                                             <label style="white-space: nowrap; margin-bottom: 0;">容器:</label>
                                             <select class="form-control" name="container[]" style="width: 100px; height: 30px; padding: 2px 6px;">
-                                                <option value="">請選擇</option>
-                                                <option value="P">PP箱</option>
-                                                <option value="E">蝴蝶籠</option>
-                                                <option value="T">鐵桶</option>
-                                                <option value="板">棧板</option>
+                                                ${qcCtnOptionsHtml(true)}
                                             </select>
                                             <label style="white-space: nowrap; margin-left: 10px; margin-bottom: 0;">箱數:</label>
                                             <input type="number" name="quantity[]" class="form-control" min="0" step="1" oninput="this.value = this.value.replace(/[^0-9]/g, '')" style="width: 70px; height: 30px; padding: 2px 6px;"></div>
                                         <div class="form-group" style="display: flex; align-items: center; gap: 5px; margin-bottom: 0;">
                                             <label style="white-space: nowrap; margin-bottom: 0;">容器:</label>
                                             <select class="form-control" name="container[]" style="width: 100px; height: 30px; padding: 2px 6px;">
-                                                <option value="">請選擇</option>
-                                                <option value="P">PP箱</option>
-                                                <option value="E">蝴蝶籠</option>
-                                                <option value="T">鐵桶</option>
-                                                <option value="板">棧板</option>
+                                                ${qcCtnOptionsHtml(true)}
                                             </select>
                                             <label style="white-space: nowrap; margin-left: 10px; margin-bottom: 0;">箱數:</label>
                                             <input type="number" name="quantity[]" class="form-control" min="0" step="1" oninput="this.value = this.value.replace(/[^0-9]/g, '')" style="width: 70px; height: 30px; padding: 2px 6px;"></div>
@@ -2261,14 +2276,7 @@ if ($reply_id != "") {
                     var makerIdHtml = he(item.maker_id);
                     var sqtyHtml = he(item.sqty);
 
-                    var containerHtml = '<div class="container-cell">';
-                    if (item.BIQC_ps && item.BIQC_ps.trim()) {
-                        containerHtml += `<button type="button" class="container-btn">${he(item.BIQC_ps)}</button>`;
-                    }
-                    if (item.BIQC_ps2 && item.BIQC_ps2.trim()) {
-                        containerHtml += `<button type="button" class="container-btn">${he(item.BIQC_ps2)}</button>`;
-                    }
-                    containerHtml += '</div>';
+                    var containerHtml = qcContainerCellHtml(item);
 
 
                     // 「備註」欄由 generatePsHtml 處理
@@ -4338,7 +4346,9 @@ if ($reply_id != "") {
                 $modal.find('#input-bom-query').val('');
                 $modal.find('[name=clientName], [name=dId], [name=sqty], [name=ps]').val('');
                 $modal.find('#select-bom-ing').html('<option value="">請先更新BOM</option>');
+                $('#btn-custom-qrcode').hide();
                 customBomData = null; // 清除暫存資料
+                $('#custom-container-info').text('－');
             });
 
             // Modal 完全展開後，游標自動對焦到 BOM 查詢輸入框
@@ -4425,11 +4435,99 @@ if ($reply_id != "") {
                         $sel.append('<option value="">此BOM無製程資料</option>');
                         $modal.find('.custom-modal-options').hide();
                     }
+                    refreshCustomContainer();
                 }).fail(function() {
                     $btn.prop('disabled', false).text('更新');
                     customBomData = null;
                     alert('伺服器錯誤，無法取得BOM資料。');
                 });
+            });
+
+            // 容器欄：品管填 BIQC_ps/BIQC_ps2，生管在 BOM 總覽填 BIPM_ps/BIPM_ps2
+            // 兩邊相同或只有一邊 → 照舊顯示；都有且不同 → 兩顆各自標示來源，生管那顆用警示色
+            function qcContainerCellHtml(o) {
+                var join = function(a, b) {
+                    var out = [];
+                    [a, b].forEach(function(v) { v = (v == null ? '' : String(v)).trim(); if (v) out.push(v); });
+                    return out.join('+');
+                };
+                var q = join(o && o.BIQC_ps, o && o.BIQC_ps2);
+                var p = join(o && o.BIPM_ps, o && o.BIPM_ps2);
+                var html = '<div class="container-cell">';
+                if (!q && !p) return html + '</div>';
+                if (!q || !p || q === p) {
+                    html += '<button type="button" class="container-btn" title="' + he(q ? (p ? 'QC 與生管回報相同' : 'QC 品管回報') : '生管回報') + '">' + he(q || p) + '</button>';
+                } else {
+                    html += '<button type="button" class="container-btn" title="QC 品管回報">QC：' + he(q) + '</button>';
+                    html += '<button type="button" class="container-btn" style="border-color:#DD5138;color:#DD5138;font-weight:bold;" title="生管回報（與 QC 不一致）">生管：' + he(p) + '</button>';
+                }
+                return html + '</div>';
+            }
+
+            // 容器顯示：直接顯示「此 BOM 最新容器資訊」（取 bom_sn 最大且有填容器的那一站）
+            function customContainerText(p1, p2) {
+                var names = {}; // 代碼→名稱：唯一來源 window.EG_QC_CONTAINERS（BOM總表「容器設定」維護）
+                (window.EG_QC_CONTAINERS || []).forEach(function(o){ names[o.code] = o.name; });
+                var out = [];
+                [p1, p2].forEach(function(v) {
+                    v = (v == null ? '' : String(v)).trim();
+                    if (!v) return;
+                    var m = v.match(/^(\d+)\s*(.+)$/);
+                    out.push(m ? (m[1] + ' ' + (names[m[2]] || m[2])) : v);
+                });
+                return out.join('、');
+            }
+            function refreshCustomContainer() {
+                var $box = $('#custom-container-info');
+                var procs = (customBomData && customBomData.processes) ? customBomData.processes : null;
+                if (!procs || !procs.length) { $box.text('－'); return; }
+                var latest = null;
+                procs.forEach(function(p) {
+                    if (!p.BIQC_ps && !p.BIQC_ps2 && !p.BIPM_ps && !p.BIPM_ps2) return;
+                    if (!latest || parseInt(p.bom_sn || 0, 10) >= parseInt(latest.bom_sn || 0, 10)) latest = p;
+                });
+                if (!latest) { $box.text('此 BOM 尚無容器紀錄'); return; }
+                var txt = customContainerText(latest.BIQC_ps || latest.BIPM_ps, latest.BIQC_ps2 || latest.BIPM_ps2);
+                var from = '[' + (latest.bom_sn || '') + '] ' + (latest.ProcessName || '');
+                $box.empty()
+                    .append($('<b>').text(txt || '－'))
+                    .append($('<span style="color:#8a6a3a;font-size:12px;">').text('　最新來自 ' + from));
+            }
+
+            // 製程有選取才顯示 QR Code 按鈕
+            $(document).on('change', '#select-bom-ing', function() {
+                $('#btn-custom-qrcode').toggle(!!$(this).val());
+                refreshCustomContainer();
+            });
+
+            // 新增報工 Modal 的 QR Code 按鈕（與列表上的 QR Code 同功能）
+            $(document).on('click', '#btn-custom-qrcode', function() {
+                var selectedFid = $('#select-bom-ing').val();
+                if (!selectedFid) { alert('請先選擇製程'); return; }
+
+                var existing = (window.allRawData || []).find(function(d) {
+                    return String(d.bom_ing_fid) === String(selectedFid);
+                });
+                if (existing) {
+                    $('#myModal_reply_custom').modal('hide');
+                    openQCModal('qrcode', selectedFid);
+                    return;
+                }
+                if (!customBomData || !customBomData.success) {
+                    alert('無法建立彈窗，請先點擊「更新」');
+                    return;
+                }
+                var selectedProcess = customBomData.processes.find(function(p) {
+                    return String(p.bom_ing_fid) === String(selectedFid);
+                });
+                if (!selectedProcess) { alert('找不到所選製程的資料'); return; }
+
+                var targetModalId = '#myModal_qrcode_' + selectedFid;
+                if (!$(targetModalId).length) {
+                    $('#modals-container').append(generateModalsForItem(selectedProcess));
+                }
+                $('#myModal_reply_custom').modal('hide');
+                $(targetModalId).modal('show');
             });
 
             // 在 myModal_reply_custom 中，檢驗 按鈕直接開啟檢驗結果輸入視窗（同列表上的「檢驗」鈕）
