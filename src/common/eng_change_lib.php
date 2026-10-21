@@ -2688,6 +2688,13 @@ function ec_dwg_suggestions(PDO $db, int $limit = 100): array
                 if ($st->fetchColumn()) continue;           // 同一次變更已有單
             } catch (Throwable $e) {}
         }
+        // 同一料號、同一天已經有人手動開了申請單（沒有綁來源變更紀錄）也算已開立（退回的不算）
+        try {
+            $st = $db->prepare("SELECT 1 FROM eng_change WHERE d_id = ? AND status <> 'REJECTED'
+                                  AND apply_date = ? LIMIT 1");
+            $st->execute([(int)$r['d_id'], substr((string)$r['change_date'], 0, 10)]);
+            if ($st->fetchColumn()) continue;
+        } catch (Throwable $e) {}
         $isCust = (string)$r['source'] === '客戶';
         $out[] = ['id' => (int)$r['id'], 'change_no' => (string)$r['change_no'], 'part_no' => (string)$r['part_no'],
                   'customer' => (string)$r['customer'], 'change_date' => (string)$r['change_date'],
