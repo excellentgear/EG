@@ -11700,8 +11700,11 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
         <label style="font-size:12px;color:#888;">備註內容</label>
         <textarea class="form-control" id="nm-note_text" rows="6" placeholder="請輸入備註內容…" style="resize:vertical;"></textarea>
     </div>
-    <div id="nm-new-note-hint" style="display:none;font-size:11px;color:#888;margin-top:4px;background:#f8f9fa;border-radius:4px;padding:5px 8px;">
-        <i class="fa fa-info-circle" style="color:#3498db;"></i> 儲存備註後才可使用圖片上傳功能
+    <div id="nm-new-note-hint" style="display:none;"></div>
+    <div id="nm-pend-box" style="margin-top:6px;">
+        <input type="file" id="nm-pend-input" multiple style="font-size:12px;" onchange="nmPendPick(this)">
+        <div style="font-size:11px;color:#888;margin-top:3px;"><i class="fa fa-paperclip"></i> 可在備註輸入框按 Ctrl+V 直接貼上圖片，或把檔案拖進來；按「儲存」時才會一併上傳</div>
+        <div id="nm-pend-th" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;"></div>
     </div>
     <div id="nm-images-section" style="display:none;margin-top:8px;">
         <div style="font-size:12px;color:#888;margin-bottom:6px;font-weight:600;"><i class="fa fa-image"></i> 已附加圖片</div>
@@ -28819,11 +28822,69 @@ function openProcessNoteModal(pno, noteType, noteId, noteText) {
     document.getElementById('noteModal-title').textContent = (noteId ? '編輯' : '新增') + typeLabel;
     document.getElementById('nm-note_text').value = noteText || '';
     document.getElementById('nm-images-section').style.display = 'none';
-    var hint = document.getElementById('nm-new-note-hint');
-    if (hint) hint.style.display = noteId ? 'none' : '';
+    nmPendReset();
     document.getElementById('noteModal').style.zIndex = '1060';
     $('#noteModal').modal('show');
     setTimeout(function() { $('.modal-backdrop').last().css('z-index', 1055); }, 50);
+}
+
+// ── 備註跳窗：儲存前就能附加檔案（選檔／Ctrl+V 貼圖／拖曳），按儲存才一併上傳 ──
+var _nmPend = [];
+function nmPendReset() { _nmPend.forEach(function(x){ if (x.url) { try { URL.revokeObjectURL(x.url); } catch(e){} } }); _nmPend = []; nmPendRedraw(); var i = document.getElementById('nm-pend-input'); if (i) i.value = ''; }
+function nmPendAdd(files) {
+    Array.prototype.forEach.call(files || [], function(f) {
+        if (!f || !f.size) return;
+        if (f.size > 30 * 1024 * 1024) { showToast('「' + f.name + '」超過 30MB，未加入', 'error'); return; }
+        var ext = (f.name.split('.').pop() || '').toLowerCase();
+        if (['php','phtml','phar','exe','bat','sh','cmd','com','msi','vbs','js','asp','aspx','jsp','py'].indexOf(ext) >= 0) { showToast('不允許上傳「' + f.name + '」這種類型', 'error'); return; }
+        if (_nmPend.some(function(x){ return x.f.name === f.name && x.f.size === f.size && x.f.lastModified === f.lastModified; })) return;
+        _nmPend.push({ f: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : '' });
+    });
+    nmPendRedraw();
+}
+function nmPendPick(inp) { nmPendAdd(inp.files); inp.value = ''; }
+function nmPendRemove(i) { var x = _nmPend.splice(i, 1)[0]; if (x && x.url) { try { URL.revokeObjectURL(x.url); } catch(e){} } nmPendRedraw(); }
+function nmPendRedraw() {
+    var h = '';
+    _nmPend.forEach(function(x, i) {
+        h += '<span style="position:relative;display:inline-block;">'
+           + (x.url ? '<img src="' + x.url + '" style="max-width:120px;max-height:90px;border:1px solid #ddd;border-radius:4px;" title="' + escAttr(x.f.name) + '">'
+                    : '<span style="display:inline-block;max-width:140px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;background:#f8f9fa;font-size:11px;word-break:break-all;"><i class="fa fa-file-o"></i> ' + escHtml(x.f.name) + '</span>')
+           + '<button type="button" onclick="nmPendRemove(' + i + ')" style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;border:1px solid #ccc;background:#fff;cursor:pointer;padding:0;line-height:14px;font-size:9px;color:#e74c3c;" title="移除">✕</button></span>';
+    });
+    var th = document.getElementById('nm-pend-th'); if (th) th.innerHTML = h;
+}
+// 貼上圖片（純文字貼上不攔截）與拖曳；事件委派，只作用在備註跳窗
+$(document).on('paste', '#noteModal', function(e) {
+    var cd = e.originalEvent && e.originalEvent.clipboardData;
+    if (!cd || !cd.files || !cd.files.length) return;
+    e.preventDefault();
+    var d = new Date(), pad = function(n){ return (n < 10 ? '0' : '') + n; }, out = [];
+    Array.prototype.forEach.call(cd.files, function(f, i) {
+        var ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+        out.push(new File([f], '貼上圖片_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + (i ? '_' + i : '') + '.' + ext, { type: f.type, lastModified: Date.now() + i }));
+    });
+    nmPendAdd(out);
+});
+$(document).on('dragover', '#noteModal .modal-body', function(e) { e.preventDefault(); });
+$(document).on('drop', '#noteModal .modal-body', function(e) {
+    var dt = e.originalEvent && e.originalEvent.dataTransfer;
+    if (!dt || !dt.files || !dt.files.length) return;
+    e.preventDefault();
+    nmPendAdd(dt.files);
+});
+// 依序上傳暫存的檔案；全部完成（或失敗）後呼叫 done(失敗數)
+function nmPendUpload(noteId, imgNoteType, done) {
+    var list = _nmPend.slice(), i = 0, fail = 0;
+    (function next() {
+        if (i >= list.length) return done(fail);
+        var fd = new FormData();
+        fd.append('action', 'upload_note_image'); fd.append('note_id', noteId); fd.append('note_type', imgNoteType); fd.append('image', list[i].f, list[i].f.name);
+        $.ajax({ url:SELF_URL, type:'POST', data:fd, processData:false, contentType:false, dataType:'json' })
+            .done(function(r) { if (!r || !r.success) fail++; })
+            .fail(function() { fail++; })
+            .always(function() { i++; next(); });
+    })();
 }
 
 function editNoteFromCache(noteId) {
@@ -28850,23 +28911,29 @@ function submitNoteModal() {
         postData.target_type = _nm.subjectType;
         postData.target_id = _nm.subjectId;
     }
+    // 備註內容可留空但有附件：仍可儲存（原本空內容的規則由後端決定，這裡不另加限制）
     $.post(SELF_URL, postData, function(r) {
-        btn.disabled = false;
-        if (r.success) {
+        if (!r.success) { btn.disabled = false; showToast(r.message||'儲存失敗', 'error'); return; }
+        var nid = r.note_id || _nm.noteId;
+        var imgType = (_nm.subjectType === 'process') ? ('process_' + _nm.noteType)
+                    : (_nm.subjectType === 'part' ? 'part_design' : 'customer_design');
+        var subj = { type: _nm.subjectType, id: _nm.subjectId };
+        var finish = function(fail) {
+            btn.disabled = false;
+            nmPendReset();
             $('#noteModal').modal('hide');
-            showToast('備註已儲存');
-            if (_nm.subjectType === 'process') {
-                loadProcModalNotes(_nm.subjectId);
+            showToast(fail ? ('備註已儲存，但有 ' + fail + ' 個附件上傳失敗，請到備註上重新上傳') : '備註已儲存', fail ? 'error' : undefined);
+            if (subj.type === 'process') {
+                loadProcModalNotes(subj.id);
                 loadProcessList();
-            } else if (_nm.subjectType === 'part') {
-                loadDesignNotes('part', _nm.subjectId);
-            } else if (_nm.subjectType === 'customer') {
-                loadDesignNotes('customer', _nm.subjectId);
+            } else if (subj.type === 'part') {
+                loadDesignNotes('part', subj.id);
+            } else if (subj.type === 'customer') {
+                loadDesignNotes('customer', subj.id);
             }
-        } else {
-            showToast(r.message||'儲存失敗', 'error');
-        }
-    });
+        };
+        if (_nmPend.length && nid) nmPendUpload(nid, imgType, finish); else finish(0);
+    }, 'json');
 }
 
 // 檔案讀不到時不要整個藏起來——那會讓附件像憑空消失（清單上還標著「含圖片」、
@@ -28950,8 +29017,7 @@ function openDesignNoteModal(targetType, targetId, noteId, noteText) {
     document.getElementById('noteModal-title').textContent = (noteId ? '編輯' : '新增') + '設計備註';
     document.getElementById('nm-note_text').value = noteText || '';
     document.getElementById('nm-images-section').style.display = 'none';
-    var hint = document.getElementById('nm-new-note-hint');
-    if (hint) hint.style.display = noteId ? 'none' : '';
+    nmPendReset();
     document.getElementById('noteModal').style.zIndex = '1060';
     $('#noteModal').modal('show');
     setTimeout(function() { $('.modal-backdrop').last().css('z-index', 1055); }, 50);
