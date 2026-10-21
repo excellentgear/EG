@@ -291,6 +291,8 @@ function ec_ensure_schema(PDO $db): void
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_dept_id INT NULL COMMENT '簽核當下採用的部門 id（兼任者的圖章職稱要用這個）'"); } catch (Throwable $e) {}
     }
 
+    // 當天送出的自動簽認先蓋章（時間暫用當下），等下一關真的簽完再把時間倒推到兩關之間；這裡記「還沒倒推」的關卡
+    try { $db->exec("ALTER TABLE eng_change ADD COLUMN auto_fix_stages VARCHAR(64) NULL COMMENT '暫時時間、待倒推的自動簽認關卡（逗號分隔）'"); } catch (Throwable $e) {}
     // 自動簽認排程：目前這一關預計由誰、在什麼時候（業務時間）自動簽；時間未到由順路觸發補簽
     foreach (['auto_sign_stage VARCHAR(8) NULL', 'auto_sign_at DATETIME NULL', 'auto_sign_uid INT NULL'] as $def) {
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN $def"); } catch (Throwable $e) {}
@@ -2261,11 +2263,14 @@ function ec_submit(PDO $db, int $ecId, int $uid, string $uname): array
         // 按下送出的不是申請人本人時（管理員代開歷史單）＝這一格也是代簽，要記下實際操作者，
         // 事後才改得動（只有代簽過的格子可以由管理員更正，見 ec_fix_sign）
         $proxy = ((int)$ap['id'] > 0 && (int)$ap['id'] !== $uid) ? $uid : 0;
-        $db->prepare("UPDATE eng_change SET status='SUP', submitted_at=NOW(),
-                        sign_applicant_id=?, sign_applicant_name=?, sign_applicant_for_id=?, sign_applicant_at=NOW(),
+        // 補舊文件（申請日期在過去）：送出日期＝設計分析附件裡最早的發行日（沒有附件日期就用申請日期），
+        // 不蓋「今天」（使用者要求 2026-10-21）；當天的單據照舊用當下時間
+        $subAt = ec_backfill_submit_at($db, $row, $now);
+        $db->prepare("UPDATE eng_change SET status='SUP', submitted_at=COALESCE(?, NOW()),
+                        sign_applicant_id=?, sign_applicant_name=?, sign_applicant_for_id=?, sign_applicant_at=COALESCE(?, NOW()),
                         sign_applicant_dept_id=?, sign_applicant_proxy_by=?, sign_applicant_proxy_name=?,
                         updated_by=?, updated_at=NOW() WHERE ec_id=?")
-           ->execute([$ap['id'] ?: null, $ap['name'], $ap['for_id'] ?: null,
+           ->execute([$subAt ?: null, $ap['id'] ?: null, $ap['name'], $ap['for_id'] ?: null, $subAt ?: null,
                       ((int)($row['apply_dept_id'] ?? 0)) ?: null,
                       $proxy ?: null, $proxy ? $uname : '', $uid ?: null, $ecId]);
         $db->commit();
@@ -2277,6 +2282,41 @@ function ec_submit(PDO $db, int $ecId, int $uid, string $uname): array
     $row = ec_row($db, $ecId);
     ec_route_to_stage($db, $row, 'SUP', $uid, $uname);
     return ['ec_id' => $ecId, 'doc_no' => (string)$row['doc_no'], 'status' => 'SUP'];
+}
+
+/**
+ * 補舊文件時的送出時間：申請日期早於今天才有值（否則回 ''＝用當下）。
+ * 日期＝「設計分析附件」中最早的發行日期（料號附件取發行章日期，其他來源取上傳日），
+ * 不早於申請日期、不晚於今天；沒有附件日期就用申請日期。時間在 08:35~16:30 之間隨機（含秒）。
+ */
+function ec_backfill_submit_at(PDO $db, array $row, array $now): string
+{
+    $apply = substr((string)($row['apply_date'] ?? ''), 0, 10);
+    if ($apply === '' || $apply >= $now['d']) return '';
+    $min = '';
+    try {
+        $st = $db->prepare("SELECT a.src_kind, a.attach_id FROM eng_change_attach a WHERE a.ec_id=? AND a.slot='design'");
+        $st->execute([(int)$row['ec_id']]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
+            $d = '';
+            if ((string)$a['src_kind'] === 'part') {
+                $q = $db->prepare("SELECT COALESCE(issue_stamp_date, DATE(uploaded_at)) FROM part_attachments WHERE id=?");
+                $q->execute([(int)$a['attach_id']]); $d = (string)$q->fetchColumn();
+            } elseif ((string)$a['src_kind'] === 'order') {
+                $q = $db->prepare("SELECT DATE(uploaded_at) FROM order_attachments WHERE id=?");
+                $q->execute([(int)$a['attach_id']]); $d = (string)$q->fetchColumn();
+            } else {
+                $q = $db->prepare("SELECT DATE(uploaded_at) FROM quotation_attachments WHERE id=?");
+                $q->execute([(int)$a['attach_id']]); $d = (string)$q->fetchColumn();
+            }
+            if ($d !== '' && ($min === '' || $d < $min)) $min = $d;
+        }
+    } catch (Throwable $e) {}
+    $day = $min !== '' ? max($apply, $min) : $apply;
+    if ($day > $now['d']) $day = $now['d'];
+    $t = strtotime($day . ' 08:35:00') + random_int(0, 7 * 3600 + 55 * 60);
+    if (date('Y-m-d H:i:s', $t) > $now['dt']) $t = strtotime($now['dt']);
+    return date('Y-m-d H:i:s', $t);
 }
 
 /** 把單子推到某一關：寫一筆待簽核紀錄（approval_record）＋發通知 */
@@ -2353,18 +2393,18 @@ function ec_auto_sign_try(PDO $db, int $ecId, int $depth = 0): string
     if (!$pool) return '';
     $now = ec_db_now($db)['dt'];
 
-    $at = (string)($row['auto_sign_at'] ?? ''); $uid = (int)($row['auto_sign_uid'] ?? 0);
-    if ((string)($row['auto_sign_stage'] ?? '') !== $stage || $at === '' || $uid <= 0) {
-        $best = null;
-        foreach ($pool as $p) {
-            $s = ec_suggest_sign_at($db, $row, $stage, (int)$p['id'], false);
-            if ($best === null || $s['at'] < $best['at']) $best = ['at' => $s['at'], 'p' => $p];
-        }
-        $at = $best['at']; $uid = (int)$best['p']['id'];
-        $db->prepare("UPDATE eng_change SET auto_sign_stage=?, auto_sign_at=?, auto_sign_uid=? WHERE ec_id=?")
-           ->execute([$stage, $at, $uid, $ecId]);
+    // 簽核人＝預計簽章時間最早且當時沒行程的那一位
+    $best = null;
+    foreach ($pool as $p) {
+        $s = ec_suggest_sign_at($db, $row, $stage, (int)$p['id'], false);
+        if ($best === null || $s['at'] < $best['at']) $best = ['at' => $s['at'], 'p' => $p];
     }
-    if ($at > $now) return 'waiting';
+    $at = $best['at']; $uid = (int)$best['p']['id'];
+    // 預計時間已過（補舊文件）→ 直接用那個過去的時間簽，不等待；
+    // 預計時間在未來（當天送出）→ 先蓋章（時間暫用現在，畫面不會卡在這一關），
+    // 等下一關真的簽完，再由 ec_auto_fix_times() 把時間倒推到上一關與下一關之間
+    $provisional = $at > $now;
+    if ($provisional) $at = $now;
 
     $name = '';
     foreach ($pool as $p) if ((int)$p['id'] === $uid) $name = (string)$p['name'];
@@ -2380,7 +2420,64 @@ function ec_auto_sign_try(PDO $db, int $ecId, int $depth = 0): string
         return '';
     }
     $db->prepare("UPDATE eng_change SET auto_sign_stage=NULL, auto_sign_at=NULL, auto_sign_uid=NULL WHERE ec_id=?")->execute([$ecId]);
+    if ($provisional) {
+        $cur = (string)($db->query("SELECT auto_fix_stages FROM eng_change WHERE ec_id=" . (int)$ecId)->fetchColumn() ?: '');
+        $keys = array_values(array_filter(array_unique(array_merge(explode(',', $cur), [$stage]))));
+        $db->prepare("UPDATE eng_change SET auto_fix_stages=? WHERE ec_id=?")->execute([implode(',', $keys), $ecId]);
+    }
     return 'signed';
+}
+
+/**
+ * 把「暫時時間」的自動簽認倒推成真實合理的時間：落在「上一個非暫時簽章」與「下一個非暫時簽章」之間
+ * （連續好幾關都是暫時的就一起隨機排序分配）。下一關還沒簽完就先不動。
+ */
+function ec_auto_fix_times(PDO $db, int $ecId): void
+{
+    $row = ec_row($db, $ecId);
+    if (!$row) return;
+    $fix = array_values(array_filter(explode(',', (string)($row['auto_fix_stages'] ?? ''))));
+    if (!$fix) return;
+    $slots = ec_sign_slots($db, $row);
+    $states = [];
+    foreach ($slots as $i => $s) $states[$i] = ec_slot_state($db, $row, (string)$s['key']) + ['key' => (string)$s['key']];
+
+    $done = [];
+    $i = 0; $n = count($slots);
+    while ($i < $n) {
+        if (!$states[$i]['signed'] || !in_array($states[$i]['key'], $fix, true)) { $i++; continue; }
+        $j = $i;                                            // 找出連續的暫時簽章
+        while ($j + 1 < $n && $states[$j + 1]['signed'] && in_array($states[$j + 1]['key'], $fix, true)) $j++;
+        $lo = '';
+        for ($k = 0; $k < $i; $k++) if ($states[$k]['signed'] && !in_array($states[$k]['key'], $fix, true) && $states[$k]['at'] > $lo) $lo = $states[$k]['at'];
+        $hi = '';
+        for ($k = $j + 1; $k < $n; $k++) if ($states[$k]['signed'] && !in_array($states[$k]['key'], $fix, true)) { $hi = $states[$k]['at']; break; }
+        if ($hi !== '' && $lo !== '') {
+            $cnt = $j - $i + 1;
+            $a = strtotime($lo) + 60; $b = strtotime($hi) - 30;
+            if ($b <= $a) { $a = strtotime($lo); $b = strtotime($hi); }
+            $ts = [];
+            for ($m = 0; $m < $cnt; $m++) $ts[] = ($b > $a) ? random_int($a, $b) : $a;
+            sort($ts);
+            for ($m = 0; $m < $cnt; $m++) {
+                $key = $states[$i + $m]['key'];
+                $sk = EC_STAGES[$key]['sign_key'] ?? '';
+                if ($sk === '') continue;
+                $at = date('Y-m-d H:i:s', $ts[$m]);
+                $db->prepare("UPDATE eng_change SET sign_{$sk}_at=? WHERE ec_id=?")->execute([$at, $ecId]);
+                try {
+                    $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, $key);
+                    if ($rec) $db->prepare("UPDATE approval_record SET decided_at=? WHERE id=?")->execute([$at, (int)$rec['id']]);
+                } catch (Throwable $e) {}
+                $done[] = $key;
+            }
+        }
+        $i = $j + 1;
+    }
+    if ($done) {
+        $left = array_values(array_diff($fix, $done));
+        $db->prepare("UPDATE eng_change SET auto_fix_stages=? WHERE ec_id=?")->execute([$left ? implode(',', $left) : null, $ecId]);
+    }
 }
 
 /** 進入會審關卡：只通知技術課勾選為「需會審」的單位 */
@@ -2522,7 +2619,8 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         //（使用者要求 2026-09-23）。管理員代簽的事實另外記在 sign_*_proxy_* 欄位。
         ec_route_to_stage($db, $row2, $next, $signId ?: $uid, $signName !== '' ? $signName : $uname, $silent);
     }
-    return ['ec_id' => $ecId, 'status' => $next];
+    ec_auto_fix_times($db, $ecId);     // 這一關簽完，可能讓前面「暫時時間」的自動簽認可以倒推成真實時間了
+    return ['ec_id' => $ecId, 'status' => (string)ec_row($db, $ecId)['status']];
 }
 
 /**
