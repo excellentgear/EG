@@ -597,15 +597,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
             // 有指定原圖頁：本列維持「客戶訂單」等標籤（拿掉原圖，避免整份被當成原圖），原圖另列一筆（見迴圈尾）
             if ($originPages !== '') $catNames = array_values(array_filter($catNames, fn($n) => $n !== '原圖'));
             // 其他標籤若有指定頁：同樣拿掉，改另列「只含那幾頁」的一筆
-            $tagEntries = [];
+            $tagEntries = []; $stripNames = [];
             foreach (($tagPageMap[$dedupKey] ?? []) as $tcid => $byPart) {
                 if (!isset($cats[$tcid])) continue;
                 $tp = [];
                 foreach (array_keys($partsOfGroup[$dedupKey] ?? []) as $pp) { if (isset($byPart[$pp])) $tp[] = $byPart[$pp]; }
                 if (!$tp) continue;
                 $tagEntries[$tcid] = implode(',', $tp);
-                $catNames = array_values(array_filter($catNames, fn($n) => $n !== $cats[$tcid]));
+                $stripNames[] = $cats[$tcid];
             }
+            // 拿掉已另列的標籤；但若拿完整份檔案就沒有任何標籤（畫面上變成「沒標籤的附件」），就保留原標籤
+            $left = array_values(array_filter($catNames, fn($n) => !in_array($n, $stripNames, true)));
+            if ($left) $catNames = $left;
             $baseIdx = count($result);
             $bindFrom = isset($bindLabelByDid[(int)$r['d_id_ID']]) ? $bindLabelByDid[(int)$r['d_id_ID']] : null;
             $result[] = [
