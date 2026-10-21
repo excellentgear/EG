@@ -948,14 +948,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } elseif ($act === 'list_workfiles') {
             $dId = (int)($_POST['d_id'] ?? 0);
             if ($dId <= 0) throw new Exception('缺少料號');
+            // 存檔人：uploaded_by 存的是登入帳號（如 005），畫面要顯示姓名 → 以 uploaded_by_id 回查 user.user_cname
+            // 附件標籤：工作檔本身不掛標籤，標籤掛在同一次存檔的壓平 PNG（檔名只差副檔名）上，用檔名配對取得
             $st = $pdo->prepare("SELECT pa.id, pa.original_name, pa.uploaded_by, pa.uploaded_by_id, pa.uploaded_at,
-                                        m.owner_type, m.owner_dept_id
+                                        m.owner_type, m.owner_dept_id, u.user_cname AS uploader_cname,
+                                        (SELECT p2.category_ids FROM part_attachments p2
+                                          WHERE p2.d_id = pa.d_id
+                                            AND p2.filename = CONCAT(SUBSTRING(pa.filename, 1, CHAR_LENGTH(pa.filename) - 12), '.png')
+                                          ORDER BY p2.id DESC LIMIT 1) AS png_cat_ids
                                  FROM part_attachments pa
                                  LEFT JOIN imgedit_workfile_meta m ON m.attachment_id = pa.id
+                                 LEFT JOIN user u ON u.id = pa.uploaded_by_id
                                  WHERE pa.d_id = ? AND pa.deleted_at IS NULL AND pa.filename LIKE '%.egwork.json'
                                  ORDER BY pa.id DESC LIMIT 30");
             $st->execute([$dId]);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $catNameMap = [];
+            foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                $catNameMap[(int)$cr['id']] = $cr['category_name'];
+            }
             $shareChk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
             $out = [];
             foreach ($rows as $i => $r) {
@@ -971,7 +982,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 自己存的暫存工作檔自己要刪得掉（2026-10-12 使用者交辦）：$canDeleteWorkfile 那個角色
                 // 管的是「刪別人的」，不該連「刪自己的」都一併卡住；最新那份仍不給刪（is_latest）。
                 $isOwnWf = ((int)$r['uploaded_by_id'] === $uid);
-                $out[] = ['id' => $r['id'], 'original_name' => $r['original_name'], 'uploaded_by' => $r['uploaded_by'],
+                $tagNames = [];
+                foreach (array_filter(array_map('intval', explode(',', (string)$r['png_cat_ids']))) as $cid) {
+                    if (isset($catNameMap[$cid])) $tagNames[] = $catNameMap[$cid];
+                }
+                $out[] = ['id' => $r['id'], 'original_name' => $r['original_name'],
+                          'uploaded_by' => ($r['uploader_cname'] !== null && $r['uploader_cname'] !== '') ? $r['uploader_cname'] : $r['uploaded_by'],
+                          'tags' => $tagNames,
                           'uploaded_at' => $r['uploaded_at'], 'scope' => $ownerType,
                           'is_latest' => ($i === 0), 'is_own' => $isOwnWf,
                           'can_delete' => (($canDeleteWorkfile || $isOwnWf) && $i !== 0)];
@@ -2629,7 +2646,17 @@ function onFrameClipToggle() {
     toast(frameClipOn ? '已開啟圖框裁切：超出白色畫布的部分不顯示也不會印出來' : '已關閉圖框裁切：所有物件完整顯示');
 }
 (function installFrameClip() {
-    const orig = fabric.Object.prototype.render;
+    const orig0 = fabric.Object.prototype.render;
+    /* 穩定性（2026-10-21）：單一物件繪製丟例外時，fabric 的 renderAll 沒有 try/catch，整個畫格會中途中斷
+       （後面的物件沒畫、上一格殘留＝殘影），而且下面 save/clip 若沒 restore，裁切區會一路漏到後續所有物件。
+       所以一律 try/catch 吞掉「這一個物件」的例外（只在主控台提醒一次），clip 路徑用 finally 保證 restore。 */
+    let __renderWarned = 0;
+    const orig = function (ctx) {
+        try { orig0.call(this, ctx); }
+        catch (e) {
+            if (__renderWarned++ < 3) console.warn('[EGdraw] 物件繪製失敗已略過：', this && (this.type || ''), e && e.message);
+        }
+    };
     fabric.Object.prototype.render = function (ctx) {
         if (!frameClipOn || this.id === '__artboard' || !this.canvas
             || (this.group && this.group.type !== 'activeSelection')) return orig.call(this, ctx);
@@ -2642,20 +2669,25 @@ function onFrameClipToggle() {
         let cx, cy;
         try { const m = this.calcTransformMatrix(); cx = m[4]; cy = m[5]; }
         catch (e) { return orig.call(this, ctx); }
+        if (!isFinite(cx) || !isFinite(cy)) return orig.call(this, ctx);
         // 中心在圖框外＝不屬於這個圖框（Figma 裡就是畫布上的獨立物件），完整顯示不裁切
         if (cx < ab.left || cx > ab.left + w || cy < ab.top || cy > ab.top + h) return orig.call(this, ctx);
         // 完全在圖框內＝不用裁，省下每個物件一次 save/clip/restore（沒被群組時 bounding rect 才是絕對座標）
         if (!this.group) {
-            const br = this.getBoundingRect(true, true);
+            let br = null;
+            try { br = this.getBoundingRect(true, true); } catch (e) { return orig.call(this, ctx); }
             if (br.left >= ab.left && br.top >= ab.top
                 && br.left + br.width <= ab.left + w && br.top + br.height <= ab.top + h) return orig.call(this, ctx);
         }
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(ab.left, ab.top, w, h);   // 此處 ctx 已套用 viewportTransform＝場景座標
-        ctx.clip();
-        orig.call(this, ctx);
-        ctx.restore();
+        try {
+            ctx.beginPath();
+            ctx.rect(ab.left, ab.top, w, h);   // 此處 ctx 已套用 viewportTransform＝場景座標
+            ctx.clip();
+            orig.call(this, ctx);
+        } finally {
+            ctx.restore();
+        }
     };
 })();
 function findArtboard() {
@@ -2853,6 +2885,7 @@ function applyFrameFitFromSelect() {
 /* ── 視窗尺寸/縮放/平移 ── */
 const wrap = document.getElementById('canvas-wrap');
 function resizeViewport() {
+    if (!(wrap.clientWidth > 0) || !(wrap.clientHeight > 0)) return;   // 分頁隱藏/最小化時尺寸為 0，設成 0 會讓畫布清空且回來後殘影
     canvas.setDimensions({ width: wrap.clientWidth, height: wrap.clientHeight });
     canvas.requestRenderAll();
 }
@@ -7505,7 +7538,10 @@ async function pfLoadWorkfiles() {
         box.innerHTML = res.works.length ? res.works.map(w =>
             '<div style="display:flex;align-items:center;gap:6px;padding:4px 2px;border-bottom:1px solid #333;">' +
             '<span style="flex:1;">' + escHtml((w.original_name || '').replace('.egwork.json', '')) + '｜' + escHtml(w.uploaded_at || '') + '｜' + escHtml(w.uploaded_by || '') +
-            '　<b style="color:#6fc3ff;">' + (PF_SCOPE_LABEL[w.scope] || w.scope) + '</b>' + (w.is_latest ? ' <b style="color:#7ed957;">（最新）</b>' : '') + '</span>' +
+            '　<b style="color:#6fc3ff;">' + (PF_SCOPE_LABEL[w.scope] || w.scope) + '</b>' + (w.is_latest ? ' <b style="color:#7ed957;">（最新）</b>' : '') +
+            '<div style="margin-top:2px;">' + ((w.tags && w.tags.length)
+                ? w.tags.map(t => '<span style="display:inline-block;background:#3a4a5c;color:#cfe8ff;border-radius:3px;padding:0 6px;margin-right:4px;font-size:11px;line-height:16px;">' + escHtml(t) + '</span>').join('')
+                : '<span style="color:#8b949e;font-size:11px;">（無標籤）</span>') + '</div></span>' +
             '<button class="tb-btn" onclick="pfOpenWork(' + w.id + ')" title="開啟"><i class="fa fa-folder-open"></i></button>' +
             (w.can_delete ? '<button class="tb-btn" style="color:#ff8a80;" onclick="pfDeleteWork(' + w.id + ')" title="刪除"><i class="fa fa-trash"></i></button>' : '') +
             '</div>').join('')
