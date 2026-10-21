@@ -505,6 +505,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             PRIMARY KEY (user_id, label_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        // 私人標籤分類清單（每人一份）：分類原本只是標籤上的文字，沒有標籤就不存在，
+        // 所以「先建立空分類」「改名」「刪除」都需要這張表當分類本體。
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_label_cat (
+            user_id INT NOT NULL,
+            cat_name VARCHAR(50) NOT NULL,
+            PRIMARY KEY (user_id, cat_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
         /* #標示解析（唯一實作，save_label 與 set_label_tags 共用，避免兩邊規則走鐘）：
            空白/逗號/井號分隔，# 可省略，去重後統一存成「無#、空格分隔」。
            超過上限一律丟例外講原因，**不可默默截掉**——使用者打了 6 個只存進 3 個又不報錯，
@@ -552,8 +560,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($isMgr) {
                 try { $allDepts = $pdo->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Exception $e) {}
             }
+            $myCats = $pdo->prepare("SELECT cat_name FROM imgedit_label_cat WHERE user_id = ? ORDER BY cat_name");
+            $myCats->execute([$uid]);
             echo json_encode(['success' => true, 'labels' => $st->fetchAll(PDO::FETCH_ASSOC),
+                              'my_cats' => $myCats->fetchAll(PDO::FETCH_COLUMN),
                               'my_depts' => $myDepts, 'all_depts' => $allDepts, 'is_mgr' => $isMgr, 'uid' => $uid]);
+        } elseif (in_array($act, ['pcat_add', 'pcat_rename', 'pcat_delete'], true)) {
+            // 私人標籤分類維護：只動自己的私人標籤，部門／公司標籤不受影響
+            $name = trim($_POST['name'] ?? '');
+            if ($name === '' || mb_strlen($name) > 50) throw new Exception('分類名稱必填且最多 50 字');
+            if ($name === '未分類') throw new Exception('「未分類」是系統保留名稱');
+            $exists = function ($n) use ($pdo, $uid) {
+                $q = $pdo->prepare("SELECT 1 FROM imgedit_label_cat WHERE user_id = ? AND cat_name = ?");
+                $q->execute([$uid, $n]);
+                return (bool)$q->fetchColumn();
+            };
+            if ($act === 'pcat_add') {
+                if ($exists($name)) throw new Exception('已有同名分類');
+                $pdo->prepare("INSERT INTO imgedit_label_cat (user_id, cat_name) VALUES (?, ?)")->execute([$uid, $name]);
+            } elseif ($act === 'pcat_rename') {
+                $new = trim($_POST['new_name'] ?? '');
+                if ($new === '' || mb_strlen($new) > 50) throw new Exception('新名稱必填且最多 50 字');
+                if ($new === '未分類') throw new Exception('「未分類」是系統保留名稱');
+                if ($new !== $name && $exists($new)) throw new Exception('已有同名分類');
+                $pdo->beginTransaction();
+                $pdo->prepare("DELETE FROM imgedit_label_cat WHERE user_id = ? AND cat_name = ?")->execute([$uid, $name]);
+                $pdo->prepare("INSERT IGNORE INTO imgedit_label_cat (user_id, cat_name) VALUES (?, ?)")->execute([$uid, $new]);
+                $pdo->prepare("UPDATE imgedit_labels SET category = ? WHERE owner_type = 'private' AND owner_user_id = ? AND category = ?")
+                    ->execute([$new, $uid, $name]);
+                $pdo->commit();
+            } else {
+                // 刪除：分類底下還有標籤就必須先移到其他分類（move_to；空字串＝移到未分類），沒指定就擋下
+                $cnt = $pdo->prepare("SELECT COUNT(*) FROM imgedit_labels WHERE owner_type = 'private' AND owner_user_id = ? AND category = ?");
+                $cnt->execute([$uid, $name]);
+                $n = (int)$cnt->fetchColumn();
+                if ($n > 0) {
+                    if (!array_key_exists('move_to', $_POST)) {
+                        echo json_encode(['success' => false, 'need_move' => true, 'count' => $n,
+                                          'message' => '此分類底下還有 ' . $n . ' 個標籤，請先移到其他分類後才可刪除']);
+                        exit;
+                    }
+                    $to = trim($_POST['move_to']);
+                    if ($to === $name) throw new Exception('不能移到要刪除的分類本身');
+                    if ($to !== '' && mb_strlen($to) <= 50) {   // 舊資料的分類只存在標籤上，移入時順便補進分類清單
+                        $pdo->prepare("INSERT IGNORE INTO imgedit_label_cat (user_id, cat_name) VALUES (?, ?)")->execute([$uid, $to]);
+                    }
+                    $pdo->prepare("UPDATE imgedit_labels SET category = ? WHERE owner_type = 'private' AND owner_user_id = ? AND category = ?")
+                        ->execute([($to !== '' ? $to : null), $uid, $name]);
+                }
+                $pdo->prepare("DELETE FROM imgedit_label_cat WHERE user_id = ? AND cat_name = ?")->execute([$uid, $name]);
+            }
+            echo json_encode(['success' => true]);
         } elseif ($act === 'save_label') {
             $name  = trim($_POST['name'] ?? '');
             $cat   = trim($_POST['category'] ?? '');
@@ -1938,6 +1995,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 </span>
                 <span style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="pb-btn" onclick="lmMakeGroupLabel()" title="把選取的多個標籤組成一個「群組標籤」存進庫：之後點一下整組插入圖面，不用每次自己拉再群組"><i class="fa fa-object-group"></i> 組成群組標籤</button>
+                    <button class="pb-btn" onclick="pcOpen()" title="新增／改名／刪除「私人標籤」的分類；刪除分類前須先把底下的標籤移到其他分類"><i class="fa fa-folder-open-o"></i> 私人分類管理</button>
                     <button class="pb-btn" onclick="lmOpenSetCat()" title="批次設定選取標籤的分類（分類名稱自訂，輸入新名稱即新增分類）"><i class="fa fa-folder-o"></i> 設定分類</button>
                     <button class="pb-btn" onclick="lmOpenSetTags()" title="批次設定選取標籤的 #標示：以有底色小徽章固定顯示在縮圖左上角，標籤庫搜尋框可用「#關鍵字」快速找到"><i class="fa fa-hashtag"></i> 設定#標示</button>
                     <button class="pb-btn" onclick="lmSetHideName(1)" title="選取的標籤在標籤庫不顯示名稱（標籤內容與名稱幾乎相同時用；滑鼠停留仍會提示）"><i class="fa fa-eye-slash"></i> 隱藏名稱</button>
@@ -2115,6 +2173,25 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('newlabel-modal')">取消</button>
             <button class="tb-btn primary" onclick="confirmNewLabel()"><i class="fa fa-save"></i> 建立</button>
+        </div>
+    </div>
+</div>
+
+<!-- 私人標籤分類管理 -->
+<div class="modal-mask" id="pcat-modal">
+    <div class="modal-box" style="width:480px;">
+        <h3><i class="fa fa-folder-open-o"></i> 私人標籤分類管理</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>新增分類</label>
+                <input type="text" id="pc-new" maxlength="50" style="flex:1;" placeholder="輸入分類名稱後按 Enter 或「新增」"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();pcAdd();}">
+                <button class="tb-btn primary" onclick="pcAdd()"><i class="fa fa-plus"></i> 新增</button>
+            </div>
+            <div id="pc-list" style="max-height:320px;overflow:auto;margin-top:8px;"></div>
+            <div style="font-size:11.5px;color:#8b949e;margin-top:6px;">只影響你自己的私人標籤，部門／公司標籤的分類不受影響。分類底下還有標籤時不能直接刪除，需先選擇移到哪個分類。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn primary" onclick="hideModal('pcat-modal')">完成</button>
         </div>
     </div>
 </div>
@@ -5264,8 +5341,10 @@ function allTags() {
     customLabels.forEach(r => String(r.tags || '').trim().split(/\s+/).filter(Boolean).forEach(t => set.add(t)));
     return Array.from(set);
 }
+let MY_CATS = [];   // 我的私人分類清單（含目前沒有標籤的空分類）
 function allCategories() {
     const cats = [];
+    MY_CATS.forEach(c => { if (!cats.includes(c)) cats.push(c); });
     customLabels.forEach(r => { const c = r.category || '未分類'; if (!cats.includes(c)) cats.push(c); });
     return cats;
 }
@@ -5601,6 +5680,74 @@ function lmMakeGroupLabel() {
     showModal('savelabel-modal');
     document.getElementById('sl-name').focus();
 }
+/* 私人標籤分類管理：新增／改名／刪除（刪除前須先移走底下標籤） */
+function pcCats() {   // 分類清單＝已登記的 + 自己私人標籤上出現過的（舊資料）
+    const m = new Map();
+    MY_CATS.forEach(c => m.set(c, 0));
+    customLabels.filter(r => r.owner_type === 'private' && Number(r.owner_user_id) === LIB_UID).forEach(r => {
+        if (r.category) m.set(r.category, (m.get(r.category) || 0) + 1);
+    });
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+async function pcCall(params) {
+    const fd = new FormData();
+    Object.keys(params).forEach(k => fd.append(k, params[k]));
+    return await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+}
+async function pcReload() { await loadLabelLibrary(); pcRender(); if (document.getElementById('libmgr-modal').classList.contains('show')) renderLibMgr(); }
+function pcRender() {
+    const rows = pcCats();
+    document.getElementById('pc-list').innerHTML = rows.length ? rows.map(([n, c], i) =>
+        '<div style="display:flex;align-items:center;gap:6px;padding:5px 2px;border-bottom:1px solid #3a3e44;">' +
+        '<span style="flex:1;">' + escHtml(n) + ' <span style="color:#8b949e;font-size:11.5px;">（' + c + ' 個標籤）</span></span>' +
+        '<button class="tb-btn" data-pc-ren="' + i + '"><i class="fa fa-pencil"></i> 改名</button>' +
+        '<button class="tb-btn" style="color:#ff8a80;" data-pc-del="' + i + '"><i class="fa fa-trash"></i> 刪除</button></div>'
+    ).join('') : '<div style="color:#8b949e;padding:8px;">還沒有私人分類</div>';
+    document.querySelectorAll('#pc-list [data-pc-ren]').forEach(b => b.onclick = () => pcRename(rows[b.dataset.pcRen][0]));
+    document.querySelectorAll('#pc-list [data-pc-del]').forEach(b => b.onclick = () => pcDelete(rows[b.dataset.pcDel][0], rows[b.dataset.pcDel][1], rows.map(r => r[0])));
+}
+function pcOpen() { document.getElementById('pc-new').value = ''; pcRender(); showModal('pcat-modal'); document.getElementById('pc-new').focus(); }
+async function pcAdd() {
+    const n = document.getElementById('pc-new').value.trim();
+    if (!n) { toast('請輸入分類名稱'); return; }
+    try {
+        const res = await pcCall({ action: 'pcat_add', name: n });
+        if (!res.success) throw new Error(res.message || '');
+        document.getElementById('pc-new').value = '';
+        await pcReload();
+    } catch (e) { toast('新增失敗：' + (e.message || '')); }
+}
+async function pcRename(old) {
+    const n = (prompt('把分類「' + old + '」改名為：', old) || '').trim();
+    if (!n || n === old) return;
+    try {
+        const res = await pcCall({ action: 'pcat_rename', name: old, new_name: n });
+        if (!res.success) throw new Error(res.message || '');
+        await pcReload();
+        toast('已改名為「' + n + '」');
+    } catch (e) { toast('改名失敗：' + (e.message || '')); }
+}
+async function pcDelete(name, cnt, all) {
+    let moveTo = null;
+    if (cnt > 0) {
+        const others = all.filter(c => c !== name);
+        const hint = others.length ? ('\n可輸入的分類：' + others.join('、')) : '';
+        const ans = prompt('分類「' + name + '」底下還有 ' + cnt + ' 個標籤，需先移到其他分類才能刪除。\n請輸入要移到的分類名稱（留空＝移到「未分類」）：' + hint, '');
+        if (ans === null) return;
+        moveTo = ans.trim();
+        if (moveTo === name) { toast('不能移到要刪除的分類本身'); return; }
+        if (moveTo.length > 50) { toast('分類名稱最多 50 字'); return; }
+    } else if (!confirm('刪除分類「' + name + '」？')) return;
+    try {
+        const p = { action: 'pcat_delete', name: name };
+        if (moveTo !== null) p.move_to = moveTo;
+        const res = await pcCall(p);
+        if (!res.success) throw new Error(res.message || '');
+        await pcReload();
+        toast('已刪除分類「' + name + '」');
+    } catch (e) { toast('刪除失敗：' + (e.message || '')); }
+}
+
 /* 批次設定分類 */
 function lmOpenSetCat() {
     if (!lmSel.size) { toast('請先選取標籤'); return; }
@@ -5753,6 +5900,7 @@ async function loadLabelLibrary() {
             try { row.spec = JSON.parse(row.spec_json); row.label_id = Number(row.label_id); customLabels.push(row); } catch (e) { /* 略過壞資料 */ }
         });
         LIB_UID = Number(res.uid || 0);
+        MY_CATS = res.my_cats || [];
         ALL_DEPTS = res.all_depts || [];
         if (Array.isArray(res.my_depts)) {   // 以後端最新回傳為準（修正頁面載入時的舊資料）
             MY_DEPTS.length = 0;
