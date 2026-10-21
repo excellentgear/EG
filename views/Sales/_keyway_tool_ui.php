@@ -173,49 +173,7 @@ if (!isset($can_keyway_calc)) {
 
             <!-- ════ 中間：CSS 示意圖 (縮小版, pointer-events:none 讓標注線可跨欄) ════ -->
             <div style="position:relative;width:245px;height:155px;flex-shrink:0;overflow:visible;z-index:5;pointer-events:none;">
-                <!-- Centerlines (dash-dot) -->
-                <div style="position:absolute;top:59px;left:47px;width:148px;height:1px;background:repeating-linear-gradient(to right,#555 0,#555 8px,transparent 8px,transparent 10px,#555 10px,#555 12px,transparent 12px,transparent 14px);"></div>
-                <div style="position:absolute;top:12px;left:120px;width:1px;height:102px;background:repeating-linear-gradient(to bottom,#555 0,#555 8px,transparent 8px,transparent 10px,#555 10px,#555 12px,transparent 12px,transparent 14px);"></div>
-                <!-- Main circle -->
-                <div style="position:absolute;top:20px;left:80px;width:80px;height:80px;border:2px solid black;border-radius:50%;box-sizing:border-box;z-index:1;"></div>
-                <!-- Dashed arc (keyway opening) -->
-                <div style="position:absolute;top:20px;left:80px;width:80px;height:80px;border:2px dashed black;border-radius:50%;box-sizing:border-box;z-index:0;clip-path:inset(30% 80% 30% 0);"></div>
-                <!-- Keyway cutout -->
-                <div style="position:absolute;top:48px;left:78px;width:24px;height:24px;background:white;border-top:2px solid black;border-right:2px solid black;border-bottom:2px solid black;box-sizing:border-box;z-index:2;"></div>
-                <!-- Center mark -->
-                <div style="position:absolute;top:59px;left:116px;width:8px;height:2px;background:#333;z-index:3;"></div>
-                <div style="position:absolute;top:55px;left:120px;width:2px;height:9px;background:#333;z-index:3;"></div>
-                <!-- RED: OD diagonal double arrow -->
-                <div style="position:absolute;top:59px;left:80px;width:80px;height:2px;background:#c0392b;transform:rotate(45deg);transform-origin:50% 50%;z-index:3;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #c0392b;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #c0392b;right:-1px;top:-3px;"></div>
-                </div>
-                <!-- Red extension RIGHT → 右上（延伸進右欄 50px） -->
-                <div style="position:absolute;top:89px;left:149px;width:146px;height:2px;background:#c0392b;z-index:3;"></div>
-                <!-- Vertical guide lines -->
-                <div style="position:absolute;top:72px;left:82px;width:2px;height:16px;background:#5b2c6f;z-index:2;"></div>
-                <div style="position:absolute;top:72px;left:102px;width:2px;height:191px;background:#5b8bb8;z-index:2;"></div>
-                <div style="position:absolute;top:113px;left:121px;width:2px;height:13px;z-index:2;background:repeating-linear-gradient(to bottom,#1a5276 0,#1a5276 3px,transparent 3px,transparent 5px);"></div>
-                <div style="position:absolute;top:72px;left:161px;width:2px;height:191px;background:#e67e22;z-index:2;"></div>
-                <!-- PURPLE (左上): 延伸進左欄 50px + double arrow -->
-                <div style="position:absolute;top:86px;left:-50px;width:132px;height:2px;background:#5b2c6f;z-index:3;"></div>
-                <div style="position:absolute;top:86px;left:82px;width:21px;height:2px;background:#5b2c6f;z-index:3;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #5b2c6f;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #5b2c6f;right:-1px;top:-3px;"></div>
-                </div>
-                <!-- BLUE (左下): L-shape 從量測點(y=119)下折到左下卡片位置(y=162)，延伸進左欄 -->
-                <div style="position:absolute;top:119px;left:-50px;width:134px;height:43px;border-bottom:2px solid #1a5276;border-right:2px solid #1a5276;box-sizing:border-box;z-index:3;"></div>
-                <div style="position:absolute;top:119px;left:84px;width:18px;height:2px;background:#1a5276;z-index:3;"></div>
-                <div style="position:absolute;top:119px;left:102px;width:18px;height:2px;background:#1a5276;z-index:3;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #1a5276;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #1a5276;right:-1px;top:-3px;"></div>
-                </div>
-                <!-- ORANGE (右下): double arrow 對齊右下卡片位置(y≈263)，延伸進右欄 -->
-                <div style="position:absolute;top:263px;left:102px;width:59px;height:2px;background:#e67e22;z-index:3;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #e67e22;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #e67e22;right:-1px;top:-3px;"></div>
-                </div>
-                <div style="position:absolute;top:263px;left:161px;width:134px;height:2px;background:#e67e22;z-index:3;"></div>
+                <svg width="245" height="155" viewBox="0 0 245 155" style="position:absolute;left:0;top:0;overflow:visible" aria-hidden="true"><defs><marker id="kwm-r-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#c0392b"/></marker><marker id="kwm-p-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#5b2c6f"/></marker><marker id="kwm-b-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#1a5276"/></marker><marker id="kwm-o-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#e67e22"/></marker><radialGradient id="kwg-s" cx="40%" cy="35%" r="75%"><stop offset="0" stop-color="#f7f9fa"/><stop offset="1" stop-color="#d9e0e6"/></radialGradient></defs><path d="M81.84,72 A40,40 0 1 0 81.84,48" fill="url(#kwg-s)" stroke="#222" stroke-width="2" stroke-linejoin="round"/><path d="M81.84,48 L102,48 L102,72 L81.84,72 Z" fill="#fff"/><path d="M81.84,48 A40,40 0 0 0 81.84,72" fill="none" stroke="#222" stroke-width="1.4" stroke-dasharray="3 2.5"/><path d="M81.84,48 L102,48 L102,72 L81.84,72" fill="none" stroke="#222" stroke-width="2" stroke-linejoin="round"/><line x1="47" y1="59.5" x2="195" y2="59.5" stroke="#6b6b6b" stroke-width="1" stroke-dasharray="9 2 2 2"/><line x1="120.5" y1="12" x2="120.5" y2="114" stroke="#6b6b6b" stroke-width="1" stroke-dasharray="9 2 2 2"/><circle cx="120.5" cy="59.5" r="2" fill="#333"/><line x1="93" y1="32.5" x2="147.5" y2="87.5" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" marker-start="url(#kwm-r-s)" marker-end="url(#kwm-r-s)"/><line x1="148" y1="89" x2="295" y2="89" stroke="#c0392b" stroke-width="1.4" stroke-linecap="round"/><line x1="82.5" y1="72" x2="82.5" y2="90" stroke="#5b2c6f" stroke-width="1" stroke-dasharray="2 2"/><line x1="-50" y1="86" x2="82" y2="86" stroke="#5b2c6f" stroke-width="1.4" stroke-linecap="round"/><line x1="82" y1="86" x2="103" y2="86" stroke="#5b2c6f" stroke-width="1.6" marker-start="url(#kwm-p-s)" marker-end="url(#kwm-p-s)"/><line x1="103" y1="72" x2="103" y2="263" stroke="#5b8bb8" stroke-width="1" stroke-dasharray="2 2"/><polyline points="-50,162 84,162 84,119 102,119" fill="none" stroke="#1a5276" stroke-width="1.4" stroke-linejoin="round"/><line x1="102" y1="119" x2="120" y2="119" stroke="#1a5276" stroke-width="1.6" marker-start="url(#kwm-b-s)" marker-end="url(#kwm-b-s)"/><line x1="121.5" y1="112" x2="121.5" y2="127" stroke="#1a5276" stroke-width="1" stroke-dasharray="3 2"/><line x1="162" y1="72" x2="162" y2="263" stroke="#e67e22" stroke-width="1" stroke-dasharray="2 2"/><line x1="102" y1="263" x2="161" y2="263" stroke="#e67e22" stroke-width="1.6" marker-start="url(#kwm-o-s)" marker-end="url(#kwm-o-s)"/><line x1="161" y1="263" x2="295" y2="263" stroke="#e67e22" stroke-width="1.4" stroke-linecap="round"/><circle cx="82.5" cy="86" r="2" fill="#5b2c6f"/><circle cx="102" cy="119" r="2" fill="#1a5276"/><circle cx="161.5" cy="263" r="2" fill="#e67e22"/></svg>
             </div><!-- /diagram -->
 
             <!-- ════ 右欄 ════ -->
@@ -301,34 +259,7 @@ if (!isset($can_keyway_calc)) {
 
             <!-- ════ 中間：示意圖（片狀孔內鍵槽，凸出去）════ -->
             <div style="position:relative;width:245px;height:155px;flex-shrink:0;overflow:visible;z-index:5;pointer-events:none;">
-                <!-- 中心線 -->
-                <div style="position:absolute;top:59px;left:47px;width:148px;height:1px;background:repeating-linear-gradient(to right,#555 0,#555 8px,transparent 8px,transparent 10px,#555 10px,#555 12px,transparent 12px,transparent 14px);"></div>
-                <div style="position:absolute;top:12px;left:120px;width:1px;height:102px;background:repeating-linear-gradient(to bottom,#555 0,#555 8px,transparent 8px,transparent 10px,#555 10px,#555 12px,transparent 12px,transparent 14px);"></div>
-                <!-- 孔（bore）圓形 — 淺灰底表示中空 -->
-                <div style="position:absolute;top:20px;left:80px;width:80px;height:80px;border:2px solid black;border-radius:50%;box-sizing:border-box;z-index:1;background:#eee;"></div>
-                <!-- 凸出的鍵槽（往左突出，代表在板材上切出的槽） -->
-                <div style="position:absolute;top:48px;left:55px;width:25px;height:24px;background:white;border-top:2px solid black;border-left:2px solid black;border-bottom:2px solid black;box-sizing:border-box;z-index:2;"></div>
-                <!-- 遮蓋孔圓弧在鍵槽開口處 -->
-                <div style="position:absolute;top:50px;left:78px;width:5px;height:20px;background:#eee;z-index:3;"></div>
-                <!-- 中心標記 -->
-                <div style="position:absolute;top:59px;left:116px;width:8px;height:2px;background:#333;z-index:3;"></div>
-                <div style="position:absolute;top:55px;left:120px;width:2px;height:9px;background:#333;z-index:3;"></div>
-                <!-- RED：內徑對角雙箭頭（右上：圓柱內徑） -->
-                <div style="position:absolute;top:59px;left:80px;width:80px;height:2px;background:#c0392b;transform:rotate(45deg);transform-origin:50% 50%;z-index:3;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #c0392b;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #c0392b;right:-1px;top:-3px;"></div>
-                </div>
-                <!-- RED 往右延伸 → 右欄右上 -->
-                <div style="position:absolute;top:89px;left:149px;width:146px;height:2px;background:#c0392b;z-index:3;"></div>
-                <!-- 橘色垂直刻度（鍵槽外壁位置標記） -->
-                <div style="position:absolute;top:50px;left:57px;width:2px;height:18px;background:#e67e22;z-index:4;"></div>
-                <!-- ORANGE 延伸線：往左進左欄 (x=-50 to x=55) -->
-                <div style="position:absolute;top:59px;left:-50px;width:107px;height:2px;background:#e67e22;z-index:4;"></div>
-                <!-- ORANGE 雙箭頭：鍵槽外壁 (x=55) → 東四分點 (x=160)，寬105px -->
-                <div style="position:absolute;top:59px;left:55px;width:105px;height:2px;background:#e67e22;z-index:4;">
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-right:8px solid #e67e22;left:-1px;top:-3px;"></div>
-                    <div style="position:absolute;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:8px solid #e67e22;right:-1px;top:-3px;"></div>
-                </div>
+                <svg width="245" height="155" viewBox="0 0 245 155" style="position:absolute;left:0;top:0;overflow:visible" aria-hidden="true"><defs><marker id="kwm-r-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#c0392b"/></marker><marker id="kwm-p-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#5b2c6f"/></marker><marker id="kwm-b-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#1a5276"/></marker><marker id="kwm-o-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#e67e22"/></marker><radialGradient id="kwg-p" cx="40%" cy="35%" r="75%"><stop offset="0" stop-color="#f7f9fa"/><stop offset="1" stop-color="#d9e0e6"/></radialGradient></defs><circle cx="120" cy="60" r="40" fill="#eef1f3" stroke="#222" stroke-width="2"/><path d="M81.84,48 L57,48 L57,72 L81.84,72 Z" fill="#fff"/><path d="M82,49.5 L82,70.5" stroke="#eef1f3" stroke-width="4"/><path d="M81.84,48 L57,48 L57,72 L81.84,72" fill="none" stroke="#222" stroke-width="2" stroke-linejoin="round"/><line x1="47" y1="59.5" x2="195" y2="59.5" stroke="#6b6b6b" stroke-width="1" stroke-dasharray="9 2 2 2"/><line x1="120.5" y1="12" x2="120.5" y2="114" stroke="#6b6b6b" stroke-width="1" stroke-dasharray="9 2 2 2"/><circle cx="120.5" cy="59.5" r="2" fill="#333"/><line x1="93" y1="32.5" x2="147.5" y2="87.5" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" marker-start="url(#kwm-r-p)" marker-end="url(#kwm-r-p)"/><line x1="148" y1="89" x2="295" y2="89" stroke="#c0392b" stroke-width="1.4" stroke-linecap="round"/><line x1="57" y1="50" x2="57" y2="70" stroke="#e67e22" stroke-width="1" stroke-dasharray="2 2"/><line x1="-50" y1="59" x2="56" y2="59" stroke="#e67e22" stroke-width="1.4" stroke-linecap="round"/><line x1="56" y1="59" x2="160" y2="59" stroke="#e67e22" stroke-width="1.6" marker-start="url(#kwm-o-p)" marker-end="url(#kwm-o-p)"/><line x1="160.5" y1="52" x2="160.5" y2="68" stroke="#e67e22" stroke-width="1" stroke-dasharray="2 2"/><circle cx="57" cy="59" r="2" fill="#e67e22"/></svg>
             </div><!-- /diagram -->
 
             <!-- ════ 右欄 ════ -->
