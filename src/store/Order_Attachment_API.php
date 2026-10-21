@@ -876,6 +876,35 @@ switch ($action) {
             default        => 'application/octet-stream',
         };
         $dispName = $row['original_name'] ?: $row['filename'];
+        // 多頁 PDF 只取指定頁（圖面查閱：該料號在這份 PDF 裡只佔其中幾頁）。FPDI 匯入原頁、不轉點陣圖；
+        // 任何失敗（加密 PDF、頁碼超出）一律退回整份檔案，不讓畫面變空白。
+        $pgSpec = oaPageSpecNormalize((string)($_GET['pages'] ?? ''));
+        if ($ext === 'pdf' && $pgSpec !== null) {
+            try {
+                require_once __DIR__ . '/../../vendor/autoload.php';
+                $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
+                $pdf->setPrintHeader(false); $pdf->setPrintFooter(false); $pdf->SetAutoPageBreak(false, 0);
+                $total = $pdf->setSourceFile($fp);
+                $want = [];
+                foreach (explode(',', $pgSpec) as $seg) {
+                    $p = explode('-', $seg); $a = (int)$p[0]; $b = isset($p[1]) ? (int)$p[1] : $a;
+                    for ($i = $a; $i <= $b && $i <= $total; $i++) $want[$i] = true;
+                }
+                if ($want) {
+                    foreach (array_keys($want) as $i) {
+                        $tpl = $pdf->importPage($i); $sz = $pdf->getTemplateSize($tpl);
+                        $pdf->AddPage($sz['width'] > $sz['height'] ? 'L' : 'P', [$sz['width'], $sz['height']]);
+                        $pdf->useTemplate($tpl, 0, 0, $sz['width'], $sz['height']);
+                    }
+                    $out = $pdf->Output('', 'S');
+                    header('Content-Type: application/pdf');
+                    eg_attach_send_disposition($dispName);
+                    header('Content-Length: ' . strlen($out));
+                    echo $out;
+                    exit;
+                }
+            } catch (Throwable $e) { /* 退回整份 */ }
+        }
         header('Content-Type: ' . $mime);
         // inline 預覽／?dl=1 另存新檔（可用 dl_name 指定檔名）＋快取標頭，共用實作見 attach_lib
         eg_attach_send_disposition($dispName);

@@ -569,6 +569,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
             $pq = $pdo2->query("SELECT filename, order_oo, part_no, pages FROM order_attachment_pages");
             foreach ($pq->fetchAll(PDO::FETCH_ASSOC) as $pr) { $pageMap[$pr['order_oo'] . '|' . $pr['filename']][$pr['part_no']] = $pr['pages']; }
         } catch (Exception $_e) {}
+        // 原圖以外標籤的各料號所在頁（order_attachment_tag_pages）：[訂單編號|檔名][標籤id][料號]=頁碼
+        $tagPageMap = [];
+        try {
+            $tq = $pdo2->query("SELECT filename, order_oo, category_id, part_no, pages FROM order_attachment_tag_pages");
+            foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $tr) { $tagPageMap[$tr['order_oo'] . '|' . $tr['filename']][(int)$tr['category_id']][$tr['part_no']] = $tr['pages']; }
+        } catch (Exception $_e) {}
         $partsOfGroup = [];
         foreach ($rows as $r) { $partsOfGroup[$r['Order_oo'] . '|' . $r['filename']][$r['d_id']] = true; }
         foreach ($rows as $r) {
@@ -590,6 +596,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
             }
             // 有指定原圖頁：本列維持「客戶訂單」等標籤（拿掉原圖，避免整份被當成原圖），原圖另列一筆（見迴圈尾）
             if ($originPages !== '') $catNames = array_values(array_filter($catNames, fn($n) => $n !== '原圖'));
+            // 其他標籤若有指定頁：同樣拿掉，改另列「只含那幾頁」的一筆
+            $tagEntries = [];
+            foreach (($tagPageMap[$dedupKey] ?? []) as $tcid => $byPart) {
+                if (!isset($cats[$tcid])) continue;
+                $tp = [];
+                foreach (array_keys($partsOfGroup[$dedupKey] ?? []) as $pp) { if (isset($byPart[$pp])) $tp[] = $byPart[$pp]; }
+                if (!$tp) continue;
+                $tagEntries[$tcid] = implode(',', $tp);
+                $catNames = array_values(array_filter($catNames, fn($n) => $n !== $cats[$tcid]));
+            }
+            $baseIdx = count($result);
             $bindFrom = isset($bindLabelByDid[(int)$r['d_id_ID']]) ? $bindLabelByDid[(int)$r['d_id_ID']] : null;
             $result[] = [
                 'id'             => (int)$r['id'],
@@ -616,10 +633,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
             if ($originPages !== '') {
                 $one = $result[count($result) - 1];
                 $one['display_name']   = $one['display_name'] . '（原圖 第' . $originPages . '頁）';
-                $one['url']            = $one['url'] . '&origin_page=' . rawurlencode($originPages);
-                $one['open_page']      = (int)preg_replace('/[^0-9].*$/', '', $originPages);
+                $one['url']            = $one['url'] . '&pages=' . rawurlencode($originPages);   // 後端只輸出這幾頁
+                $one['open_page']      = 0;
                 $one['category_names'] = ['原圖'];
                 $one['origin_entry']   = true;
+                $result[] = $one;
+            }
+            foreach ($tagEntries as $tcid => $tpages) {
+                $one = $result[$baseIdx];
+                $one['display_name']   = $one['display_name'] . '（' . $cats[$tcid] . ' 第' . $tpages . '頁）';
+                $one['url']            = $one['url'] . '&pages=' . rawurlencode($tpages);
+                $one['open_page']      = 0;
+                $one['category_names'] = [$cats[$tcid]];
                 $result[] = $one;
             }
         }
