@@ -9791,10 +9791,6 @@ body { background:#F6F1EA; }
         </div>
     </div>
 </div>
-<!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示；放在基本資料區，緊湊排列，點選後輸入框直接出現並取得焦點 -->
-<div id="shape-section" style="display:none;margin:0 0 8px;padding:4px 8px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
-    <div id="shape-form-box"></div>
-</div>
 <!-- ─ 客戶代號／等同料號（別名）─
      一個代號要能唯一對應到我方料號：客戶圖上印的編號多半沒建成料號，
      客戶改料號沒改圖時新舊其實同一個東西，報價料號與訂單料號也常不同。
@@ -9929,6 +9925,10 @@ body { background:#F6F1EA; }
 <?php endif; ?>
 
 <!-- ─ 標籤（依 Type 動態顯示）─ -->
+<!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示；放在「標籤」區塊上方，緊湊排列，點選後輸入框直接出現並取得焦點 -->
+<div id="shape-section" style="display:none;margin:0 0 8px;padding:4px 8px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
+    <div id="shape-form-box"></div>
+</div>
 <div id="pf-label-section" style="display:none;">
     <div class="form-section-title" style="color:#1ABB9C;font-size:12px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:8px;">
         <span><i class="fa fa-tags"></i> 標籤</span>
@@ -16388,9 +16388,10 @@ function _jigRenderList(kind) {
     if (!arr.length) { box.innerHTML = '<span style="font-size:11px;color:#aaa;">（尚未挑選）</span>'; return; }
     var h = '';
     arr.forEach(function(it, idx){
-        h += '<div style="display:flex;align-items:flex-start;gap:5px;background:#fdf0e3;color:#a0522d;border:1px solid #f0d9bd;border-radius:4px;padding:3px 8px;font-size:12px;margin:0 4px 4px 0;">'
-           + '<span style="flex:1;">' + _jigKindBadge(it) + _pfEsc(it.title||'')
-           + (it.sub ? '<br><span style="font-size:10px;color:#b08968;">'+_pfEsc(it.sub)+'</span>' : '') + '</span>'
+        // 料號在左、規格／客戶在同一行右側（不換行，避免中間留一大塊空白）
+        h += '<div style="display:flex;align-items:center;gap:8px;background:#fdf0e3;color:#a0522d;border:1px solid #f0d9bd;border-radius:4px;padding:3px 8px;font-size:12px;margin:0 4px 4px 0;" title="' + _pfEsc((it.title||'') + (it.sub ? '　' + it.sub : '')) + '">'
+           + '<span style="white-space:nowrap;">' + _jigKindBadge(it) + _pfEsc(it.title||'') + '</span>'
+           + '<span style="flex:1;min-width:0;text-align:right;font-size:11px;color:#b08968;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (it.sub ? _pfEsc(it.sub) : '') + '</span>'
            + '<span style="cursor:pointer;color:#e74c3c;font-weight:bold;" onclick="_jigRemove(\'' + kind + '\','+idx+')" title="移除">×</span></div>';
     });
     box.innerHTML = h;
