@@ -5601,6 +5601,14 @@ foreach($dCounts as $c) {
                             <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽計算</span>
                         </button>
                         <?php endif; ?>
+                        <?php if ($show_gear_tool): ?>
+                        <button type="button" id="btn-open-ingear-tool"
+                            onclick="openInGearTool()"
+                            title="內齒計算（跨銷距、標準跨銷徑、客戶銷徑換算；權限同齒輪計算）"
+                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5b3a1a,#e67e22);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
+                            <i class="fa fa-circle-o-notch" style="font-size:13px;"></i><span class="fb-txt"> 內齒計算</span>
+                        </button>
+                        <?php endif; ?>
                         <!-- 訂單變更：變更(全部歷史) + 設定(限A權限，見 $can_order_change_setting)，緊鄰鍵槽計算右側 -->
                         <button type="button" id="btn-order-change-history"
                             onclick="openChangeHistory()"
@@ -17489,6 +17497,9 @@ include __DIR__ . '/_gear_tool_ui.php';
 //   畫面：views/Sales/_keyway_tool_ui.php｜權限：src/common/keyway_tool_lib.php
 // 顯示與否沿用本頁上方已算好的 $can_keyway_calc。
 include __DIR__ . '/_keyway_tool_ui.php';
+// 內齒計算工具（2026-10-21 新增，獨立外掛檔、純前端；權限同齒輪計算＝$show_gear_tool）
+$INGEAR_TOOL_PDO = $pdo ?? null;
+include __DIR__ . '/_ingear_tool_ui.php';
 ?>
 
 <?php if ($IS_OT_RBAC_ADMIN): ?>

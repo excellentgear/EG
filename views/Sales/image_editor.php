@@ -1804,6 +1804,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php if ($can_keyway_calc): ?>
             <button class="tb-btn" onclick="openKwTool()" title="開啟鍵槽計算工具：與訂單追蹤頁同一個工具、同一套算法。軸件分頁＝軸上鍵槽（軸徑、槽寬、槽深與圓心到槽底），片狀分頁＝孔內鍵槽；填公稱值與上下偏差自動算出極限值與加工尺寸"><i class="fa fa-key"></i> 鍵槽計算</button>
 <?php endif; ?>
+<?php if ($show_gear_tool): ?>
+            <button class="tb-btn" onclick="openInGearTool()" title="開啟內齒計算工具：內齒輪跨銷距、標準跨銷徑，以及把客戶的銷徑與跨銷距換算成我方銷徑（含公差範圍），並以圖示標出銷是否過大／過小而無法量測。與訂單追蹤頁同一個工具，權限同齒輪計算"><i class="fa fa-circle-o-notch"></i> 內齒計算</button>
+<?php endif; ?>
 <?php if ($can_len_reserve): ?>
             <button class="tb-btn" onclick="openLenTool()" title="開啟車床預留量計算：填入成品尺寸（基準值＋上下公差）與這一面研磨後會增加／減少多少，自動算出建議的車床（加工）尺寸；也可以直接輸入已經標好的車床尺寸，驗算研磨後是否仍符合成品公差"><i class="fa fa-arrows-h"></i> 預留量計算</button>
 <?php endif; ?>
@@ -9820,6 +9823,9 @@ include __DIR__ . '/_gear_tool_ui.php';
 // 鍵槽計算工具視窗（CSS＋HTML＋JS）：與訂單追蹤頁共用同一份，禁止在本頁複製一套（鐵律4）
 $KEYWAY_TOOL_PDO = $pdo ?? null;
 include __DIR__ . '/_keyway_tool_ui.php';
+// 內齒計算工具（2026-10-21 新增，獨立外掛檔、純前端；權限同齒輪計算＝$show_gear_tool）
+$INGEAR_TOOL_PDO = $pdo ?? null;
+include __DIR__ . '/_ingear_tool_ui.php';
 ?>
 </body>
 </html>
