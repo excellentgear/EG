@@ -1210,7 +1210,7 @@ function openAttPick(slot, catId){
               +  (f.note ? '<br><span class="mt">' + esc(f.note) + '</span>' : '') + '</span>'
               +  '<span class="mt">' + (f.issue_stamp_date ? '發行 ' + dispDate(f.issue_stamp_date) + '　' : '')
               +  '上傳 ' + dispDate(f.uploaded_at) + '　' + esc(f.uploaded_by || '') + '</span>'
-              +  '<button type="button" class="att-mini" onclick="window.open(\'' + f.url + '\',\'_blank\')">預覽</button>'
+              +  '<button type="button" class="att-mini" onclick="window.open(\'' + f.url + ((f.is_pdf && f.only_pages && f.only_pages.length) ? '#page=' + f.only_pages[0] : '') + '\',\'_blank\')">預覽' + ((f.only_pages && f.only_pages.length) ? '（原圖第' + f.only_pages.join('、') + '頁）' : '') + '</button>'
               +  '<button type="button" class="att-mini" onclick="pickAttFile(' + f.id + ',' + f.is_pdf + ','
               +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ',\'' + f.src_kind + '\',\'' + esc(f.url) + '\',' + JSON.stringify(f.only_pages || []) + ')">選這一個</button>'
               +  '</div>';
