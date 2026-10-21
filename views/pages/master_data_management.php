@@ -2225,6 +2225,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $fgear_teeth_max   = trim($_POST['filter_gear_teeth_max'] ?? '');
             $fgear_fw_min      = trim($_POST['filter_gear_fw_min'] ?? '');
             $fgear_fw_max      = trim($_POST['filter_gear_fw_max'] ?? '');
+            // 模數區間篩選（2026-10-21）：M／CP／DP 三種規格可分開篩，或一律換算成 M 一起篩
+            // 換算與齒輪計算工具一致：CP→M=值/π、DP→M=25.4/值；數值取自 module_display（沒有才退回 Module）
+            $fmod_sys = trim($_POST['filter_gear_mod_sys'] ?? 'all');
+            $fmod_min = trim($_POST['filter_gear_mod_min'] ?? '');
+            $fmod_max = trim($_POST['filter_gear_mod_max'] ?? '');
+            if ((is_numeric($fmod_min) || is_numeric($fmod_max)) && in_array($fmod_sys, ['all','M','CP','DP'], true)) {
+                $mv = "CAST(NULLIF(REGEXP_REPLACE(COALESCE(NULLIF(gmr.module_display,''),gmr.Module),'[^0-9.]',''),'') AS DECIMAL(20,6))";
+                $mt = "COALESCE(NULLIF(gmr.module_input_type,''),'M')";
+                $mc = "gmr.d_setting_id=d.d_id AND $mv > 0";
+                if ($fmod_sys === 'all') {
+                    $mx = "ROUND(CASE $mt WHEN 'DP' THEN 25.4/$mv WHEN 'CP' THEN $mv/PI() ELSE $mv END, 4)";
+                } else {
+                    $mx = "ROUND($mv, 4)";
+                    $mc .= " AND $mt = :fmsys"; $params[':fmsys'] = $fmod_sys;
+                }
+                if (is_numeric($fmod_min)) { $mc .= " AND $mx >= :fmmin"; $params[':fmmin'] = $fmod_min; }
+                if (is_numeric($fmod_max)) { $mc .= " AND $mx <= :fmmax"; $params[':fmmax'] = $fmod_max; }
+                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gmr WHERE $mc)";
+            }
             // 外形／內孔分類篩選（唯一實作 part_shape_lib.php，參數名 filter_shape_*）
             [$__shSql, $__shPrm] = eg_shape_filter_sql($_POST);
             if ($__shSql !== '') { $where .= $__shSql; $params = array_merge($params, $__shPrm); }
@@ -9267,9 +9286,14 @@ body { background:#F6F1EA; }
                 </div>
                 <!-- 齒輪規格 Tag 篩選（類型=G時出現） -->
                 <div class="filter-sub-row" id="parts-gear-spec-filter" style="flex-wrap:wrap;gap:4px;align-items:center;">
-                    <span class="filter-group-label">模數</span>
-                    <span class="fc fc-sub active" data-gmod="" onclick="setGearSpecFilter('module','',this)">全部</span>
-                    <span id="fg-module-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
+                    <span class="filter-group-label" title="模數有 M(公制模數)、CP(周節)、DP(徑節) 三種規格。選「全部換算成 M」＝所有料號依 CP→M=值/π、DP→M=25.4/值 換算後一起篩選；選單一規格＝只篩該規格、用該規格自己的數值。只填一邊＝大於等於／小於等於。">模數</span>
+                    <select id="fg-mod-sys" class="form-control input-sm" style="width:auto;display:inline-block;height:24px;padding:0 4px;font-size:12px;" onchange="onGearRangeInput()">
+                        <option value="all">全部換算成 M</option><option value="M">M 模數</option><option value="CP">CP 周節</option><option value="DP">DP 徑節</option>
+                    </select>
+                    <input type="number" step="any" id="fg-mod-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
+                    <span style="color:#888;margin:0 2px;">~</span>
+                    <input type="number" step="any" id="fg-mod-max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
+                    <span id="fg-module-chips" style="display:none;"></span>
                     <span style="margin:0 6px;color:#ddd;align-self:center;">│</span>
                     <span class="filter-group-label">旋向</span>
                     <span class="fc fc-sub active" data-ghd="" onclick="setGearSpecFilter('helixDir','',this)">全部</span>
@@ -13222,13 +13246,7 @@ function loadGearSpecOptions() {
         var modC = document.getElementById('fg-module-chips');
         var paC  = document.getElementById('fg-pa-chips');
         if (!modC || !paC) return;
-        modC.innerHTML = '';
-        r.modules.forEach(function(m) {
-            var c = document.createElement('span');
-            c.className = 'fc fc-sub'; c.dataset.gmod = m; c.textContent = m;
-            c.onclick = function(){ setGearSpecFilter('module', m, this); };
-            modC.appendChild(c);
-        });
+        modC.innerHTML = '';   // 模數改用區間輸入（#fg-mod-sys／min／max），不再列出所有模數
         paC.innerHTML = '';
         r.pressures.forEach(function(p) {
             var c = document.createElement('span');
@@ -13506,6 +13524,7 @@ function partsHasFilter() {
         || _partsFilter.gearFwMin !== null || _partsFilter.gearFwMax !== null
         || _partsFilter.gearHaMin !== null || _partsFilter.gearHaMax !== null
         || _partsFilter.wlMin != null || _partsFilter.wlMax != null
+        || ((document.getElementById('fg-mod-min')||{value:''}).value !== '' || (document.getElementById('fg-mod-max')||{value:''}).value !== '')
         || (window.EGPartShape && EGPartShape.filter.active())
         || _partsFilter.shipSort);
 }
@@ -13528,7 +13547,7 @@ function clearPartsFilter() {
     if (window.EGPartShape) EGPartShape.filter.reset();
     _attProcFilter = []; var _apEl = document.getElementById('parts-attproc-box'); if (_apEl && window.EGProcPick) EGProcPick.set(_apEl, []);
     _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
-    ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    ['fg-mod-min','fg-mod-max','fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
         var isDefault = c.dataset.shipsort === '';
         c.classList.toggle('active', isDefault);
@@ -14792,6 +14811,9 @@ function partsFilterPayload() {
           filter_gear_fw_max:      _partsFilter.gearFwMax !== null ? _partsFilter.gearFwMax : '',
           filter_gear_ha_min:      _partsFilter.gearHaMin !== null ? _partsFilter.gearHaMin : '',
           filter_gear_ha_max:      _partsFilter.gearHaMax !== null ? _partsFilter.gearHaMax : '',
+          filter_gear_mod_sys:     (document.getElementById('fg-mod-sys')||{value:'all'}).value,
+          filter_gear_mod_min:     (document.getElementById('fg-mod-min')||{value:''}).value,
+          filter_gear_mod_max:     (document.getElementById('fg-mod-max')||{value:''}).value,
           filter_shape_outer:      window.EGPartShape ? EGPartShape.filter.params().filter_shape_outer : '',
           filter_shape_bore:       window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore : '',
           filter_shape_bore_min:   window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore_min : '',
@@ -21288,7 +21310,8 @@ var dictConfig = {
     st.textContent = '#dict-table.dict-2col thead{display:none}#dict-table.dict-2col,#dict-table.dict-2col tbody{display:block;width:100%}'
         + '#dict-table.dict-2col tbody{display:grid;grid-template-columns:1fr 1fr;column-gap:14px}'
         + '#dict-table.dict-2col tbody tr{display:flex;align-items:center;border-bottom:1px solid #eee;min-width:0}'
-        + '#dict-table.dict-2col tbody td{border:0 !important;padding:6px 6px}';
+        + '#dict-table.dict-2col tbody td{border:0 !important;padding:6px 6px}'
+        + '#dict-table.dict-2col tbody td:last-child{margin-left:auto;white-space:nowrap}';
     document.head.appendChild(st); })();
 var dictTableHead = {
     'workpiece':     '<th style="width:80px;">代碼</th><th>名稱</th><th style="width:90px;text-align:center;">操作</th>',
@@ -21744,7 +21767,7 @@ function renderDictTable(type, data) {
     _dictDataCache = {};  // reset cache
     var html = '';
     var _tblEl = document.getElementById('dict-table');
-    if (_tblEl) _tblEl.classList.toggle('dict-2col', type === 'maker-sub');
+    if (_tblEl) _tblEl.classList.toggle('dict-2col', type === 'maker-sub' || type === 'gear');
     if (!data.length) {
         html = '<tr style="grid-column:1/-1;"><td colspan="3" class="text-center" style="padding:32px;color:#aaa;"><i class="fa fa-inbox" style="font-size:24px;display:block;margin-bottom:8px;"></i>目前無資料，請使用上方表單新增</td></tr>';
     } else {

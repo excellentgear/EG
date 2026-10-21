@@ -233,10 +233,9 @@
       } else {
         h += '<span class="eg-shape-hint">未選＝無孔（軸狀工件也是無孔）</span>';
       }
-      h += '</div>';
-
+      // 輸入框直接接在選項同一排（跟標籤一樣：點了就在旁邊出現可輸入的欄位）
       if (s.hole && s.mode) {
-        h += '<div class="eg-shape-line">';
+        h += '<span class="eg-shape-sep">│</span>';
         if (s.mode === 'steps') {
           h += '<label class="eg-shape-in">孔數 <input type="number" min="' + defs.steps_min + '" max="' + defs.steps_max + '" step="1" data-cnt="1" value="' + (s.bore_steps || '') + '" class="form-control input-sm no-spin-input" style="width:56px" placeholder="' + defs.steps_min + '～' + defs.steps_max + '"></label>' +
             '<span class="eg-shape-hint">輸入後按 Enter，自動開始輸入孔徑；大到小或小到大都可以，系統自動排列</span>';
@@ -249,8 +248,8 @@
         } else {
           h += this._in(0, '兩端孔徑', 'd') + this._in(1, '中間孔徑', 'd') + '<span class="eg-shape-hint">兩端孔徑相同只輸入一次</span>';
         }
-        h += '</div>';
       }
+      h += '</div>';
       h += '<div class="eg-shape-ok" style="font-size:12px;color:#5a3d1c;font-weight:bold;min-height:0"></div><div class="eg-shape-err"></div>';
       this.el.innerHTML = h;
       this._showJudge();
