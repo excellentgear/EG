@@ -119,6 +119,7 @@ if (!isset($can_ingear_calc)) {
                             <div class="ig-f"><label>&nbsp;</label><button type="button" class="ig-btn" onclick="inGearUseStd2()" title="把我方銷徑填成這顆齒輪的標準跨銷徑">帶入標準跨銷徑</button></div>
                         </div>
                         <div style="font-size:10.5px;color:#6b4423;margin-top:4px">由客戶的銷徑與跨銷距反推這顆齒輪的齒槽寬（轉位係數 x），再換算成我方銷徑的跨銷距與公差範圍。上方的轉位係數欄位在這個分頁不使用。</div>
+                        <div id="ig-rng-b" style="margin-top:4px"></div>
                     </div></div>
                 </div>
                 <div class="ig-card"><div class="ig-ch">計算結果</div><div class="ig-cb" id="ig-res"></div></div>
@@ -350,11 +351,13 @@ if (!isset($can_ingear_calc)) {
     function calcB(g){
         var D1 = pv('ig-d1'), M1 = pv('ig-m1'), ut = pv('ig-ut') || 0, lt = pv('ig-lt') || 0, D2 = pv('ig-d2'), res = $('ig-res');
         bad('ig-d1', false); bad('ig-m1', false); bad('ig-d2', false);
+        $('ig-rng-b').innerHTML = '';
         if (D1 === null || D1 <= 0 || M1 === null) { res.innerHTML = '<span class="ig-err">請輸入客戶銷徑與客戶跨銷距</span>'; clearGraphics(); return; }
         var e = solveE(g, M1, D1);
         if (e === null) { bad('ig-m1', true); res.innerHTML = '<span class="ig-err">用這組齒輪資料與客戶銷徑，反推不出合理的齒槽寬，請確認模數、齒數、壓力角與客戶跨銷距</span>'; clearGraphics(); return; }
         var h = '<table class="ig-t">' + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
-                row('此齒輪標準跨銷徑', f(stdPin(g, e), 4) + ' mm') + rangeRows(g, e) + '</table>';
+                row('此齒輪標準跨銷徑', f(stdPin(g, e), 4) + ' mm') + '</table>';
+        $('ig-rng-b').innerHTML = '<table class="ig-t">' + rangeRows(g, e) + '</table>';
         var r1 = pinAt(g, e, D1), j1 = r1 ? judge(g, r1) : null;
         if (j1) h += '<div style="font-size:11px;color:#6b4423;margin-top:4px">客戶銷 Ø' + f(D1, 4) + '：' + j1.txt + '</div>';
         if (D2 === null || D2 <= 0) {
@@ -369,8 +372,9 @@ if (!isset($can_ingear_calc)) {
         if (lo !== null && hi !== null && lo > hi) { var tmp = lo; lo = hi; hi = tmp; }
         var worst = judge(g, r2), cand = [rL, rU], i, jj;
         for (i = 0; i < cand.length; i++) { if (cand[i]) { jj = judge(g, cand[i]); if (jj.lv > worst.lv) worst = jj; } }
-        h += '<table class="ig-t">' + row('我方跨銷距 M2（公稱）', f(r2.M, 4) + ' mm', 'ig-big') +
-             row('換算後區間', (lo === null ? '—' : f(lo, 3)) + ' ～ ' + (hi === null ? '—' : f(hi, 3))) +
+        h += '<table class="ig-t">' + row('我方跨銷距 M2（含公差區間）', (lo === null ? '—' : f(lo, 3)) + ' ~ ' + (hi === null ? '—' : f(hi, 3)) + ' mm', 'ig-big') +
+             row('公稱值（客戶 M1 換算）', f(r2.M, 4) + ' mm') +
+             row('上差 / 下差', (hi === null ? '—' : (hi - r2.M >= 0 ? '+' : '') + f(hi - r2.M, 3)) + ' / ' + (lo === null ? '—' : (lo - r2.M >= 0 ? '+' : '') + f(lo - r2.M, 3))) +
              row('公差帶寬（客戶→我方）', f(ut - lt, 3) + ' → ' + (lo !== null && hi !== null ? f(hi - lo, 3) : '—')) +
              row('銷徑差 / 跨銷距差', f(D2 - D1, 4) + ' / ' + f(r2.M - M1, 4)) +
              row('接觸點直徑（我方銷）', f(2 * r2.rk, 4) + ' mm') +
