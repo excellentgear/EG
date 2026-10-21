@@ -97,6 +97,8 @@ if (!isset($can_keyway_calc)) {
         /* Small note */
         .kw-note { font-size:9.5px; color:#777; padding:2px 7px; background:#f4f4f4; border-bottom:1px solid #e0e0e0; }
         /* Message box */
+        #kwp-msg-box { font-size:11px; padding:5px 10px; border-radius:4px; margin-top:6px; display:none; }
+        #kwp-msg-box.warn { background:#fffbea; border:1px solid #f5c518; color:#856404; display:block; }
         #kw-msg-box { font-size:11px; padding:5px 10px; border-radius:4px; margin-top:6px; display:none; }
         #kw-msg-box.warn { background:#fffbea; border:1px solid #f5c518; color:#856404; display:block; }
         #kw-msg-box.err  { background:#fff0f0; border:1px solid #e74c3c; color:#c0392b; display:block; }
@@ -236,6 +238,24 @@ if (!isset($can_keyway_calc)) {
             <!-- ════ 左欄：右下（實心端）════ -->
             <div style="width:210px;flex-shrink:0;">
                 <div class="kw-card">
+                    <div class="kw-ch kw-ch-lt">成品尺寸（左上：孔緣→凸出處）</div>
+                    <div class="kw-dr">
+                        <input id="kwp-lt-nom" type="number" class="kw-ni" oninput="calcKwP()">
+                        <div class="kw-tc">
+                            <div class="kw-tr"><input id="kwp-lt-utol" type="number" class="kw-ti" oninput="calcKwP()"><span class="kw-lv" id="kwp-lt-ulim">—</span></div>
+                            <div class="kw-tr"><input id="kwp-lt-ltol" type="number" class="kw-ti" oninput="calcKwP()"><span class="kw-lv" id="kwp-lt-llim">—</span></div>
+                        </div>
+                    </div>
+                    <div class="kw-ch kw-ch-mach">加工 / 檢驗尺寸</div>
+                    <div class="kw-dr">
+                        <span class="kw-no" id="kwp-lt-mnom">—</span>
+                        <div class="kw-tc">
+                            <div class="kw-tr"><span class="kw-to" id="kwp-lt-mutol">—</span><span class="kw-lv" id="kwp-lt-mulim">—</span></div>
+                            <div class="kw-tr"><span class="kw-to">0</span><span class="kw-lv" id="kwp-lt-mllim">—</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="kw-card">
                     <div class="kw-ch kw-ch-rb">成品尺寸（右下：實心端）</div>
                     <div class="kw-dr">
                         <input id="kwp-rb-nom" type="number" class="kw-ni" oninput="calcKwP()">
@@ -244,6 +264,7 @@ if (!isset($can_keyway_calc)) {
                             <div class="kw-tr"><input id="kwp-rb-ltol" type="number" class="kw-ti" oninput="calcKwP()"><span class="kw-lv" id="kwp-rb-llim">—</span></div>
                         </div>
                     </div>
+                    <div id="kwp-rb-src" style="display:none;font-size:10px;color:#1a5276;background:#eaf4fb;padding:2px 6px;border-top:1px solid #cfe3f3;"></div>
                     <div class="kw-ch kw-ch-mach">加工 / 檢驗尺寸</div>
                     <div class="kw-dr">
                         <span class="kw-no" id="kwp-rb-mnom">—</span>
@@ -256,7 +277,7 @@ if (!isset($can_keyway_calc)) {
             </div><!-- /left col -->
 
             <!-- ════ 中間：示意圖（片狀孔內鍵槽，凸出去）════ -->
-            <div style="position:relative;width:300px;flex-shrink:0;z-index:5;pointer-events:none;"><svg width="300" height="235" viewBox="0 0 300 235" style="display:block;overflow:visible" aria-hidden="true"><defs><marker id="kwm-r-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#c0392b"/></marker><marker id="kwm-p-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#5b2c6f"/></marker><marker id="kwm-b-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#1a5276"/></marker><marker id="kwm-o-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#d35400"/></marker><radialGradient id="kwg-p" cx="38%" cy="32%" r="80%"><stop offset="0" stop-color="#fbfcfd"/><stop offset="1" stop-color="#d3dbe2"/></radialGradient></defs><rect x="0.75" y="0.75" width="298.5" height="233.5" rx="8" fill="#fffdf9" stroke="#e3d3b8"/><circle cx="150" cy="98" r="62" fill="#eef1f3" stroke="#222" stroke-width="2.2"/><path d="M91,79 L49,79 L49,117 L91,117 Z" fill="#fff"/><path d="M91.6,81 L91.6,115" stroke="#eef1f3" stroke-width="4"/><path d="M91,79 L49,79 L49,117 L91,117" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/><line x1="62" y1="98" x2="238" y2="98" stroke="#7a7a7a" stroke-width="1" stroke-dasharray="10 2.5 2 2.5"/><line x1="150" y1="26" x2="150" y2="170" stroke="#7a7a7a" stroke-width="1" stroke-dasharray="10 2.5 2 2.5"/><circle cx="150" cy="98" r="2.2" fill="#444"/><line x1="106.2" y1="141.8" x2="193.8" y2="54.2" stroke="#c0392b" stroke-width="1.7" marker-start="url(#kwm-r-p)" marker-end="url(#kwm-r-p)"/><rect x="196" y="26" width="66" height="17" rx="4" fill="#fff" stroke="#c0392b" stroke-width="1.2"/><text x="229.0" y="38.5" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b" font-family="Microsoft JhengHei,PingFang TC,sans-serif">右上 內徑</text><line x1="49" y1="117" x2="49" y2="192" stroke="#d35400" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="212" y1="98" x2="212" y2="192" stroke="#d35400" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="49" y1="184" x2="212" y2="184" stroke="#d35400" stroke-width="1.7" marker-start="url(#kwm-o-p)" marker-end="url(#kwm-o-p)"/><rect x="62" y="194" width="140" height="17" rx="4" fill="#fff" stroke="#d35400" stroke-width="1.2"/><text x="132.0" y="206.5" text-anchor="middle" font-size="11" font-weight="700" fill="#d35400" font-family="Microsoft JhengHei,PingFang TC,sans-serif">右下 鍵槽外壁→對面孔緣</text><polyline points="193.8,54.2 282,54.2 282,12 312,12" fill="none" stroke="#c0392b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="312" cy="12" r="2.6" fill="#c0392b"/><polyline points="49,79 49,13 -12,13" fill="none" stroke="#d35400" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="-12" cy="13" r="2.6" fill="#d35400"/></svg></div><!-- /diagram -->
+            <div style="position:relative;width:300px;flex-shrink:0;z-index:5;pointer-events:none;"><svg width="300" height="235" viewBox="0 0 300 235" style="display:block;overflow:visible" aria-hidden="true"><defs><marker id="kwm-r-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#c0392b"/></marker><marker id="kwm-p-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#5b2c6f"/></marker><marker id="kwm-b-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#1a5276"/></marker><marker id="kwm-o-p" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 Z" fill="#d35400"/></marker><radialGradient id="kwg-p" cx="38%" cy="32%" r="80%"><stop offset="0" stop-color="#fbfcfd"/><stop offset="1" stop-color="#d3dbe2"/></radialGradient></defs><rect x="0.75" y="0.75" width="298.5" height="233.5" rx="8" fill="#fffdf9" stroke="#e3d3b8"/><circle cx="150" cy="98" r="62" fill="#eef1f3" stroke="#222" stroke-width="2.2"/><path d="M91,79 L49,79 L49,117 L91,117 Z" fill="#fff"/><path d="M91.6,81 L91.6,115" stroke="#eef1f3" stroke-width="4"/><path d="M91,79 L49,79 L49,117 L91,117" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/><line x1="62" y1="98" x2="238" y2="98" stroke="#7a7a7a" stroke-width="1" stroke-dasharray="10 2.5 2 2.5"/><line x1="150" y1="26" x2="150" y2="170" stroke="#7a7a7a" stroke-width="1" stroke-dasharray="10 2.5 2 2.5"/><circle cx="150" cy="98" r="2.2" fill="#444"/><line x1="106.2" y1="141.8" x2="193.8" y2="54.2" stroke="#c0392b" stroke-width="1.7" marker-start="url(#kwm-r-p)" marker-end="url(#kwm-r-p)"/><rect x="196" y="26" width="66" height="17" rx="4" fill="#fff" stroke="#c0392b" stroke-width="1.2"/><text x="229.0" y="38.5" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b" font-family="Microsoft JhengHei,PingFang TC,sans-serif">右上 內徑</text><line x1="49" y1="117" x2="49" y2="192" stroke="#d35400" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="212" y1="98" x2="212" y2="192" stroke="#d35400" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="49" y1="184" x2="212" y2="184" stroke="#d35400" stroke-width="1.7" marker-start="url(#kwm-o-p)" marker-end="url(#kwm-o-p)"/><rect x="62" y="194" width="140" height="17" rx="4" fill="#fff" stroke="#d35400" stroke-width="1.2"/><text x="132.0" y="206.5" text-anchor="middle" font-size="11" font-weight="700" fill="#d35400" font-family="Microsoft JhengHei,PingFang TC,sans-serif">右下 鍵槽外壁→對面孔緣</text><polyline points="193.8,54.2 282,54.2 282,12 312,12" fill="none" stroke="#c0392b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="312" cy="12" r="2.6" fill="#c0392b"/><polyline points="49,175 -12,175" fill="none" stroke="#d35400" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="-12" cy="175" r="2.6" fill="#d35400"/><line x1="49" y1="79" x2="49" y2="20" stroke="#5b2c6f" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="88" y1="98" x2="88" y2="54" stroke="#5b2c6f" stroke-width="1" stroke-dasharray="3 2.5" opacity=".85"/><line x1="49" y1="60" x2="88" y2="60" stroke="#5b2c6f" stroke-width="1.7" marker-start="url(#kwm-p-p)" marker-end="url(#kwm-p-p)"/><rect x="4" y="3" width="108" height="17" rx="4" fill="#fff" stroke="#5b2c6f" stroke-width="1.2"/><text x="58" y="15.5" text-anchor="middle" font-size="11" font-weight="700" fill="#5b2c6f" font-family="Microsoft JhengHei,PingFang TC,sans-serif">左上 孔緣→凸出處</text><polyline points="49,12 -12,12" fill="none" stroke="#5b2c6f" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="-12" cy="12" r="2.6" fill="#5b2c6f"/></svg></div><!-- /diagram -->
 
             <!-- ════ 右欄 ════ -->
             <div style="flex:1;min-width:0;">
@@ -351,7 +372,8 @@ if (!isset($can_keyway_calc)) {
     }
 
     function initKwEnterNavP() {
-        var order = ['kwp-rb-nom','kwp-rb-utol','kwp-rb-ltol',
+        var order = ['kwp-lt-nom','kwp-lt-utol','kwp-lt-ltol',
+                     'kwp-rb-nom','kwp-rb-utol','kwp-rb-ltol',
                      'kwp-rt-nom','kwp-rt-utol','kwp-rt-ltol',
                      'kwp-rr-nom','kwp-rr-utol','kwp-rr-ltol'];
         order.forEach(function(id, i) {
@@ -400,7 +422,8 @@ if (!isset($can_keyway_calc)) {
         var platePane = document.getElementById('kw-pane-plate');
         var isPlate   = platePane && platePane.style.display !== 'none';
         if (isPlate) {
-            ['kwp-rb-nom','kwp-rb-utol','kwp-rb-ltol',
+            ['kwp-lt-nom','kwp-lt-utol','kwp-lt-ltol',
+             'kwp-rb-nom','kwp-rb-utol','kwp-rb-ltol',
              'kwp-rt-nom','kwp-rt-utol','kwp-rt-ltol',
              'kwp-rr-nom','kwp-rr-utol','kwp-rr-ltol'].forEach(function(id){
                 var el = document.getElementById(id); if (el) el.value = '';
@@ -467,10 +490,39 @@ if (!isset($can_keyway_calc)) {
         pS('kwp-grind1-u', grnd1U!==null?kwFmt(parseFloat(grnd1U.toFixed(5))):null);
         pS('kwp-grind1-l', grnd1L!==null?kwFmt(parseFloat(grnd1L.toFixed(5))):null);
 
-        // 右下（已移至左欄）
+        // 左上（內徑左緣→凸出處＝槽深）：研磨內徑時左緣往外移，槽深變小，所以加工值要加回研磨量
+        var ltN=pV('kwp-lt-nom'),ltU=pV('kwp-lt-utol'),ltL=pV('kwp-lt-ltol');
+        var ltUlim=(ltN!==null&&ltU!==null)?ltN+ltU:null;
+        var ltLlim=(ltN!==null&&ltL!==null)?ltN+ltL:null;
+        pS('kwp-lt-ulim', kwFmtLim(ltUlim!==null?parseFloat(ltUlim.toFixed(5)):null));
+        pS('kwp-lt-llim', kwFmtLim(ltLlim!==null?parseFloat(ltLlim.toFixed(5)):null));
+        var ltMU=null,ltML=null,ltBad=false;
+        if(ltUlim!==null&&ltLlim!==null&&grnd1U!==null&&grnd1L!==null){
+            ltMU = kwRD(parseFloat((ltUlim + grnd1L).toFixed(7)), 2);   // 研磨後 = 加工 − 研磨量 ≤ 成品上限
+            ltML = kwRU(parseFloat((ltLlim + grnd1U).toFixed(7)), 2);   // 研磨後 ≥ 成品下限
+            if(ltMU < ltML){ ltBad=true; ltMU=null; ltML=null; }
+        }
+        pS('kwp-lt-mnom',  ltML!==null?kwFmt(ltML):null);
+        pS('kwp-lt-mutol', ltMU!==null&&ltML!==null?kwFmt(parseFloat((ltMU-ltML).toFixed(5))):null);
+        pS('kwp-lt-mulim', ltMU!==null?kwFmtLim(ltMU):null);
+        pS('kwp-lt-mllim', ltML!==null?kwFmtLim(ltML):null);
+
+        // 右下（實心端＝鍵槽外壁→對面孔緣）：可手填，或由「內徑＋左上」自動算出（兩者擇一）
         var rbN=pV('kwp-rb-nom'),rbU=pV('kwp-rb-utol'),rbL=pV('kwp-rb-ltol');
         var rbUlim=(rbN!==null&&rbU!==null)?rbN+rbU:null;
         var rbLlim=(rbN!==null&&rbL!==null)?rbN+rbL:null;
+        var rbSrc=document.getElementById('kwp-rb-src'), msgEl=document.getElementById('kwp-msg-box');
+        var msgs=[];
+        var rbManual=(rbN!==null), ltHas=(ltN!==null);
+        if(rbManual&&ltHas) msgs.push('⚠ 右下與左上只能擇一填寫，目前以右下為準，請清除其中一個。');
+        if(ltBad) msgs.push('⚠ 左上公差太小：研磨量的變動範圍大於公差帶，沒有可行的加工尺寸。');
+        if(!rbManual && ltHas && rtUlim!==null && rtLlim!==null && ltUlim!==null && ltLlim!==null){
+            // 對面孔緣到凸出處 ＝ 內徑 ＋ 槽深（上下限各自相加）
+            rbUlim = parseFloat((rtUlim+ltUlim).toFixed(5));
+            rbLlim = parseFloat((rtLlim+ltLlim).toFixed(5));
+            if(rbSrc){ rbSrc.style.display='block'; rbSrc.textContent='由內徑＋左上計算：公稱 '+kwFmt(parseFloat(((rbUlim+rbLlim)/2).toFixed(5)))+'（上限 '+kwFmt(rbUlim)+'／下限 '+kwFmt(rbLlim)+'）'; }
+        } else if(rbSrc){ rbSrc.style.display='none'; rbSrc.textContent=''; }
+        if(msgEl){ msgEl.className = msgs.length?'warn':''; msgEl.innerHTML = msgs.join('<br>'); }
         pS('kwp-rb-ulim', kwFmtLim(rbUlim!==null?parseFloat(rbUlim.toFixed(5)):null));
         pS('kwp-rb-llim', kwFmtLim(rbLlim!==null?parseFloat(rbLlim.toFixed(5)):null));
         var rbMU=null,rbML=null;
