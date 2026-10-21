@@ -286,6 +286,9 @@ try {
         // 附件：已選的（含編號）＋各段可挑的標籤＋這個變更方式的附件規則
         $attachCats = [];
         foreach (array_keys(EC_ATTACH_SLOTS) as $slot) $attachCats[$slot] = ec_attach_allowed_cats($db, $slot);
+        // 申請內容只顯示「主要標籤」一組（舊／新），替代標籤（如報價圖）在挑選視窗裡才出現
+        $g = ec_attach_apply_group($db);
+        $attachCats['apply'] = $g ? [['id' => $g['id'], 'name' => $g['name'], 'subs' => array_column($g['subs'], 'name')]] : [];
         // 各簽章格目前蓋的是誰（畫面的「簽核紀錄」直接用這一份，不必從 approval_record 湊，
         // 申請人那一格本來就沒有 approval_record）。候選名單是重運算，這裡不帶，
         // 要代簽時才另外打 sign_slots。
@@ -557,7 +560,8 @@ try {
         if (!in_array($cat, $allow, true)) jerr('這個附件標籤不在管理員允許的清單內', 400);
         if (!(int)$r['d_id']) jout(['rows' => [], 'no_part' => 1]);
         // 料號附件＋報價單附件＋訂單附件（同一份檔案只列一次）
-        $rows = ec_attach_mark_suggest(ec_attach_candidates($db, (int)$r['d_id'], $cat), (string)($_GET['role'] ?? ''));
+        $rows = ($slot === 'apply') ? ec_attach_candidates_group($db, (int)$r['d_id']) : ec_attach_candidates($db, (int)$r['d_id'], $cat);
+        $rows = ec_attach_mark_suggest($rows, (string)($_GET['role'] ?? ''));
         jout(['rows' => $rows, 'need_page' => (int)EC_ATTACH_SLOTS[$slot]['need_page']]);
     }
 

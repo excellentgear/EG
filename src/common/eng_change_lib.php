@@ -200,7 +200,7 @@ const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          // 自動簽認（管理員逐關開關，1＝開）：單位主管／技術課主管／核准（核准僅在不需會審時才會自動）
                          'ec_auto_sign_sup', 'ec_auto_sign_td', 'ec_auto_sign_appr',
                          // 附件：可選的標籤（逗號分隔 quotation_file_categories.id）與畫面提示文字
-                         'ec_attach_cats_apply', 'ec_attach_cats_design',
+                         'ec_attach_cats_apply', 'ec_attach_cats_design', 'ec_attach_primary_apply',
                          'ec_attach_hint_apply', 'ec_attach_hint_design',
                          // 變更方式 × 附件規則（required/optional/none）；鍵名對應 EC_CHANGE_TYPES 的 key
                          'ec_attach_rule_customer_notify', 'ec_attach_rule_blueprint_error', 'ec_attach_rule_other',
@@ -469,6 +469,8 @@ function ec_save_setting(PDO $db, string $key, $val): void
         $val = (string)((int)$val ?: '');
     } elseif (strpos($key, 'ec_auto_sign_') === 0) {
         $val = ((int)$val) ? 1 : 0;
+    } elseif ($key === 'ec_attach_primary_apply') {
+        $val = (string)((int)$val ?: '');
     } elseif (strpos($key, 'ec_attach_cats_') === 0) {
         // 只收真的存在且啟用中的附件標籤 id（打錯一個 id 那個標籤永遠不會出現，而且完全不報錯）
         $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$val)), fn($i) => $i > 0)));
@@ -538,6 +540,43 @@ function ec_attach_allowed_cats(PDO $db, string $slot): array
     $map = ec_attach_cat_map($db);
     $out = [];
     foreach (ec_filter_valid_cat_ids($db, $ids) as $id) $out[] = ['id' => $id, 'name' => $map[$id]['name']];
+    return $out;
+}
+
+/**
+ * 申請內容附件的「主要標籤」（使用者要求 2026-10-21：業務常沒上傳原圖，報價圖只是原圖的替代，
+ * 不是兩種都要）。設定 ec_attach_primary_apply 指定主要標籤（例：原圖），其餘勾選的標籤＝替代標籤（例：報價圖）。
+ * 沒設定或設定的不在允許清單內時，取允許清單的第一個。回傳 ['id','name','subs'=>[['id','name'],…]]；沒有可挑標籤回 null。
+ */
+function ec_attach_apply_group(PDO $db): ?array
+{
+    $allowed = ec_attach_allowed_cats($db, 'apply');
+    if (!$allowed) return null;
+    $want = (int)(ec_settings($db)['ec_attach_primary_apply'] ?? 0);
+    $primary = $allowed[0];
+    foreach ($allowed as $c) if ((int)$c['id'] === $want) { $primary = $c; break; }
+    $subs = array_values(array_filter($allowed, fn($c) => (int)$c['id'] !== (int)$primary['id']));
+    return ['id' => (int)$primary['id'], 'name' => (string)$primary['name'], 'subs' => $subs];
+}
+
+/** 申請內容的候選：主要標籤的檔案＋替代標籤的檔案（標 is_sub），同一份檔案只列一次 */
+function ec_attach_candidates_group(PDO $db, int $dId): array
+{
+    $g = ec_attach_apply_group($db);
+    if (!$g) return [];
+    $out = []; $seen = [];
+    $catList = array_merge([['id' => $g['id'], 'name' => $g['name']]], $g['subs']);
+    foreach ($catList as $i => $c) {
+        foreach (ec_attach_candidates($db, $dId, (int)$c['id']) as $x) {
+            $k = $x['src_kind'] . '|' . $x['id'];
+            if (isset($seen[$k])) continue;
+            $seen[$k] = 1;
+            $x['cat_id'] = (int)$c['id']; $x['cat_name'] = (string)$c['name']; $x['is_sub'] = $i > 0 ? 1 : 0;
+            $out[] = $x;
+        }
+    }
+    usort($out, fn($a, $b) => strcmp((string)($b['issue_stamp_date'] ?: $b['uploaded_at']),
+                                     (string)($a['issue_stamp_date'] ?: $a['uploaded_at'])));
     return $out;
 }
 
@@ -616,9 +655,10 @@ function ec_attach_apply_missing(PDO $db, int $ecId): array
     foreach (ec_attach_rows($db, $ecId) as $a)
         if ((string)$a['slot'] === 'apply') $have[(int)$a['cat_id'] . '|' . $a['role']] = 1;
     $miss = [];
-    foreach (ec_attach_allowed_cats($db, 'apply') as $c) {
-        if (empty($have[$c['id'] . '|old'])) $miss[] = '舊' . $c['name'];
-        if (empty($have[$c['id'] . '|new'])) $miss[] = '新' . $c['name'];
+    $g = ec_attach_apply_group($db);
+    if ($g) {
+        if (empty($have[$g['id'] . '|old'])) $miss[] = '舊' . $g['name'];
+        if (empty($have[$g['id'] . '|new'])) $miss[] = '新' . $g['name'];
     }
     return $miss;
 }
@@ -630,7 +670,10 @@ function ec_attach_apply_missing(PDO $db, int $ecId): array
 function ec_attach_mark_suggest(array $rows, string $role): array
 {
     $live = []; $void = [];
-    foreach ($rows as $i => $r) { if (!empty($r['is_void'])) $void[] = $i; else $live[] = $i; }
+    // 主要標籤（原圖）的檔案優先於替代標籤（報價圖）；各自仍依日期新到舊
+    $idx = array_keys($rows);
+    usort($idx, fn($a, $b) => [(int)($rows[$a]['is_sub'] ?? 0), $a] <=> [(int)($rows[$b]['is_sub'] ?? 0), $b]);
+    foreach ($idx as $i) { if (!empty($rows[$i]['is_void'])) $void[] = $i; else $live[] = $i; }
     $pick = null;
     if ($role === 'new') $pick = $live[0] ?? ($void[0] ?? null);
     elseif ($role === 'old') $pick = $void[0] ?? ($live[1] ?? null);
@@ -781,7 +824,9 @@ function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attach
         throw new Exception('這個附件標籤不在管理員允許的清單內');
 
     $a = null;
-    foreach (ec_attach_candidates($db, (int)$row['d_id'], $catId) as $c)
+    $cands = ($slot === 'apply') ? ec_attach_candidates_group($db, (int)$row['d_id'])
+                                 : ec_attach_candidates($db, (int)$row['d_id'], $catId);
+    foreach ($cands as $c)
         if ($c['src_kind'] === $srcKind && (int)$c['id'] === $attachId) { $a = $c; break; }
     if (!$a) throw new Exception('查無這個附件，或它不屬於本單料號／沒有掛這個標籤');
 
@@ -803,7 +848,7 @@ function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attach
                                  file_name=VALUES(file_name), orig_name=VALUES(orig_name), note=VALUES(note),
                                  page_no=VALUES(page_no), page_count=VALUES(page_count),
                                  created_by=VALUES(created_by), created_at=VALUES(created_at)")
-       ->execute([$ecId, $slot, $catId, $role, ($map[$catId]['name'] ?? ''), $attachId, $srcKind, (string)$a['src_ref'],
+       ->execute([$ecId, $slot, $catId, $role, ($slot === 'apply' && !empty($a['cat_name']) ? $a['cat_name'] : ($map[$catId]['name'] ?? '')), $attachId, $srcKind, (string)$a['src_ref'],
                   (string)$a['filename'], (string)$a['show_name'],
                   mb_substr(trim((string)$a['note']), 0, 255, 'UTF-8'),
                   $pageNo ?: null, $pageCount ?: null, $uid ?: null]);

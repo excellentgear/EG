@@ -542,7 +542,10 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fgrid">
                 <div class="fld half"><label>申請內容可挑的標籤
                         <small style="font-weight:normal;color:#aaa;">（PDF 必須指定一頁）</small></label>
-                    <div class="cat-pick" id="catPickApply"></div></div>
+                    <div class="cat-pick" id="catPickApply"></div>
+                    <div style="margin-top:6px;font-size:12px;">主要標籤（舊／新各挑一個）：
+                        <select id="set_primary_apply" class="form-control input-sm" style="display:inline-block;width:auto;"></select>
+                        <div style="color:#8a6d45;font-size:11px;margin-top:2px;">其餘勾選的標籤視為<b>替代標籤</b>（例：業務沒上傳原圖時，可挑報價圖代替；<b>不是兩種都要</b>）。有主要標籤的檔案時，系統優先建議主要標籤。</div></div></div>
                 <div class="fld half"><label>設計分析可挑的標籤
                         <small style="font-weight:normal;color:#aaa;">（PDF 可整份多頁）</small></label>
                     <div class="cat-pick" id="catPickDesign"></div></div>
@@ -1144,6 +1147,7 @@ function renderAttach(slot){
         h += '<div class="att-row"><span class="att-cat">'+esc(rr[2] + c.name)+'</span><span class="att-file">';
         if (a) {
             h += '<span class="att-seq">'+esc(a.seq_label)+'</span>' + esc(a.orig_name)
+               + (a.cat_name && a.cat_name !== c.name ? '　<span style="color:#B07A3A;">〔以' + esc(a.cat_name) + '替代〕</span>' : '')
                + (a.page_no ? '　<b>第 '+a.page_no+' 頁</b>' + (a.page_count ? '／共 '+a.page_count+' 頁' : '') : '')
                + (a.note ? '　<span style="color:#8a6d45;">'+esc(a.note)+'</span>' : '');
         } else {
@@ -1198,7 +1202,8 @@ function openAttPick(slot, catId, role){
     $('#attStep1').show(); $('#attStep2').hide();
     $('#attFiles').html('<div style="color:#aaa;">載入中…</div>');
     $('#attHint').html(esc(ATT_HINT[slot] || '') + '<br>列出本單料號「<b>' + esc(CUR.part_no || '') + '</b>」的<b>料號附件、報價單附件、訂單附件</b>中掛「'
-                     + esc(cat.name) + '」標籤者（同一份檔案只列一次），<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。' + (role ? '<br>系統依發行／上傳日期自動標出<b>「建議」</b>；掛「作廢」標籤的檔案會標紅。' : ''));
+                     + esc(cat.name) + '」標籤者（同一份檔案只列一次），<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。'
+                     + ((cat.subs && cat.subs.length) ? '<br>沒有「' + esc(cat.name) + '」時可改挑<b>' + esc(cat.subs.join('、')) + '</b>代替（標示「替代」），不是兩種都要。' : '') + (role ? '<br>系統依發行／上傳日期自動標出<b>「建議」</b>；掛「作廢」標籤的檔案會標紅。' : ''));
     openMask('attMask');
     $.getJSON(API, {action:'attach_candidates', id:CUR.ec_id, slot:slot, cat_id:catId, role:role}, function(r){
         if (!r.ok) return;
@@ -1211,7 +1216,7 @@ function openAttPick(slot, catId, role){
         var h = '';
         rows.forEach(function(f){
             h += '<div class="att-f"' + (f.suggest ? ' style="border-color:#F0A24B;background:#FFF6E6;"' : '') + '>'
-              +  '<span class="nm">' + (f.suggest ? '<span class="pill" style="background:#F0A24B;color:#fff;margin-right:4px;">建議</span>' : '')
+              +  '<span class="nm">' + (f.is_sub ? '<span class="pill" style="background:#B07A3A;color:#fff;margin-right:4px;">替代：' + esc(f.cat_name || '') + '</span>' : '') + (f.suggest ? '<span class="pill" style="background:#F0A24B;color:#fff;margin-right:4px;">建議</span>' : '')
               +  (f.is_void ? '<span class="pill" style="background:#DD5138;color:#fff;margin-right:4px;">作廢</span>' : '') + '<span class="pill draft" style="margin-right:4px;">' + esc(f.src_label || '料號附件') + '</span>' + esc(f.show_name)
               +  (f.is_pdf ? ' <span class="pill draft">PDF</span>' : '')
               +  (f.note ? '<br><span class="mt">' + esc(f.note) + '</span>' : '') + '</span>'
@@ -2159,6 +2164,11 @@ function buildAttachSettings(){
             });
             $(p[1]).html(h || '<span style="color:#aaa;">目前沒有啟用中的附件標籤</span>');
         });
+        var ph = '<option value="">（依勾選順序第一個）</option>';
+        (r.rows || []).forEach(function(c){
+            ph += '<option value="'+c.id+'"'+(String(SETTINGS.ec_attach_primary_apply||'') === String(c.id) ? ' selected' : '')+'>'+esc(c.name)+'</option>';
+        });
+        $('#set_primary_apply').html(ph);
     });
 }
 function showAsDoc(){
@@ -2252,6 +2262,7 @@ $('#btnSetSave').on('click', function(){
              ec_stamp_tpl_id: $('#set_stamp').val() || '', ec_review_stamp_tpl_id: $('#set_rv_stamp').val() || '',
              ec_attach_hint_apply: $('#set_hint_apply').val() || '',
              ec_attach_hint_design: $('#set_hint_design').val() || ''};
+    p.ec_attach_primary_apply = $('#set_primary_apply').val() || '';
     ['apply','design'].forEach(function(slot){
         p['ec_attach_cats_' + slot] = $('.cat-u[data-slot="'+slot+'"]:checked')
             .map(function(){ return this.value; }).get().join(',');
