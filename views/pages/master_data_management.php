@@ -2787,7 +2787,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $__x = $__sm[(int)($__r['d_id'] ?? 0)] ?? null;
                     if (!$__x) { $__r['shape_txt'] = ''; continue; }
                     $__bt = $__x['bore_nm'] . ($__x['dias'] ? ' Ø' . implode('→Ø', $__x['dias']) : '');
-                    $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'], $__bt]));
+                    $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'] . ($__x['hub'] !== '' ? ' 凸出Ø' . $__x['hub'] : ''), $__bt]));
                 }
                 unset($__r);
             } catch (Throwable $__e) {}
@@ -14815,6 +14815,8 @@ function partsFilterPayload() {
           filter_gear_mod_sys:     (document.getElementById('fg-mod-sys')||{value:'all'}).value,
           filter_gear_mod_min:     (document.getElementById('fg-mod-min')||{value:''}).value,
           filter_gear_mod_max:     (document.getElementById('fg-mod-max')||{value:''}).value,
+          filter_shape_hub_min:    window.EGPartShape ? EGPartShape.filter.params().filter_shape_hub_min : '',
+          filter_shape_hub_max:    window.EGPartShape ? EGPartShape.filter.params().filter_shape_hub_max : '',
           filter_shape_outer:      window.EGPartShape ? EGPartShape.filter.params().filter_shape_outer : '',
           filter_shape_bore:       window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore : '',
           filter_shape_bore_min:   window.EGPartShape ? EGPartShape.filter.params().filter_shape_bore_min : '',

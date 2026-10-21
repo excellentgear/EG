@@ -44,12 +44,19 @@ function eg_shape_ensure_table(PDO $pdo): void {
     $done = true;
     try {
         $has = $pdo->query("SHOW TABLES LIKE 'd_setting_shape'")->fetchColumn();
-        if ($has) return;
+        if ($has) {
+            // 補欄：最大凸出外徑（2026-10-21）。DDL 會隱式 commit，交易中不做；先查再 ALTER（本機 MySQL 沒有 ADD COLUMN IF NOT EXISTS）
+            if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_dia'")->fetchColumn()) {
+                $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_dia DECIMAL(10,3) NULL COMMENT '最大凸出外徑（單邊/雙邊凸出才填）' AFTER outer_shape");
+            }
+            return;
+        }
         // DDL 會造成隱式 commit：交易中不可建表（建表放在頁面載入的 migration 區，這裡只是保險）
         if ($pdo->inTransaction()) return;
         $pdo->exec("CREATE TABLE d_setting_shape (
             d_id INT NOT NULL COMMENT '料號主檔 d_setting.d_id',
             outer_shape VARCHAR(12) NULL COMMENT '外形代碼，NULL＝其他',
+            hub_dia DECIMAL(10,3) NULL COMMENT '最大凸出外徑（單邊/雙邊凸出才填）',
             bore_type VARCHAR(16) NULL COMMENT '內孔孔型代碼，NULL＝其他',
             bore_steps TINYINT NULL COMMENT '多階層的階數',
             bore_json TEXT NULL COMMENT '[{d:孔徑,l:深度}]，多階層由大到小',
@@ -87,6 +94,12 @@ function eg_shape_normalize($in): array {
     $defs  = eg_shape_defs();
     $outer = trim((string)($in['outer'] ?? ''));
     if ($outer !== '' && !isset($defs['outer'][$outer])) return [null, '外形代碼不正確'];
+    // 最大凸出外徑：只有單邊／雙邊凸出才有意義，其他外形一律清除
+    $hub = null;
+    if ($outer === 'one_side' || $outer === 'both_sides') {
+        $hub = eg_shape_num($in['hub_dia'] ?? '');
+        if ($hub === false) return [null, '最大凸出外徑必須是大於 0 的數字'];
+    }
     $mode  = trim((string)($in['mode'] ?? ''));
     if ($mode !== '' && !in_array($mode, ['single', 'steps', 'ends'], true)) return [null, '內孔型態不正確'];
     $blind = !empty($in['blind']);
@@ -97,10 +110,8 @@ function eg_shape_normalize($in): array {
         if ($mode === 'single') {
             $btype = $blind ? 'blind' : 'through';
             $d = eg_shape_num($raw[0]['d'] ?? '');
-            $l = eg_shape_num($raw[0]['l'] ?? '');
             if ($d === false) return [null, '孔徑必須是大於 0 的數字'];
-            if ($l === false) return [null, '深度必須是大於 0 的數字'];
-            if ($d !== null) $list[] = ['d' => $d, 'l' => $blind ? $l : null];
+            if ($d !== null) $list[] = ['d' => $d, 'l' => null];   // 深度先不記錄
         } elseif ($mode === 'steps') {
             $btype = $blind ? 'step_blind' : 'step_through';
             $steps = (int)($in['bore_steps'] ?? 0);
@@ -109,11 +120,9 @@ function eg_shape_normalize($in): array {
             $any = false; $tmp = [];
             for ($i = 0; $i < $steps; $i++) {
                 $d = eg_shape_num($raw[$i]['d'] ?? '');
-                $l = eg_shape_num($raw[$i]['l'] ?? '');
                 if ($d === false) return [null, '第 ' . ($i + 1) . ' 個孔徑必須是大於 0 的數字'];
-                if ($l === false) return [null, '第 ' . ($i + 1) . ' 個深度必須是大於 0 的數字'];
                 if ($d !== null) $any = true;
-                $tmp[] = ['d' => $d, 'l' => $l];
+                $tmp[] = ['d' => $d, 'l' => null];
             }
             if ($any) {
                 foreach ($tmp as $i => $r) if ($r['d'] === null) return [null, '第 ' . ($i + 1) . ' 個孔徑還沒填'];
@@ -149,6 +158,7 @@ function eg_shape_normalize($in): array {
     if ($outer === '' && $btype === null) return [null, null];
     return [[
         'outer_shape' => $outer !== '' ? $outer : null,
+        'hub_dia'     => $hub,
         'bore_type'   => $btype,
         'bore_steps'  => $steps,
         'bore_json'   => $list ? json_encode($list, JSON_UNESCAPED_UNICODE) : null,
@@ -162,17 +172,17 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
         $pdo->prepare("DELETE FROM d_setting_shape WHERE d_id=?")->execute([$dId]);
         return;
     }
-    $pdo->prepare("INSERT INTO d_setting_shape (d_id,outer_shape,bore_type,bore_steps,bore_json,bore_max,bore_min,modified_by,modified_at)
-                   VALUES (?,?,?,?,?,?,?,?,NOW())
-                   ON DUPLICATE KEY UPDATE outer_shape=VALUES(outer_shape),bore_type=VALUES(bore_type),bore_steps=VALUES(bore_steps),
+    $pdo->prepare("INSERT INTO d_setting_shape (d_id,outer_shape,hub_dia,bore_type,bore_steps,bore_json,bore_max,bore_min,modified_by,modified_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,NOW())
+                   ON DUPLICATE KEY UPDATE outer_shape=VALUES(outer_shape),hub_dia=VALUES(hub_dia),bore_type=VALUES(bore_type),bore_steps=VALUES(bore_steps),
                    bore_json=VALUES(bore_json),bore_max=VALUES(bore_max),bore_min=VALUES(bore_min),modified_by=VALUES(modified_by),modified_at=NOW()")
-        ->execute([$dId, $row['outer_shape'], $row['bore_type'], $row['bore_steps'], $row['bore_json'], $row['bore_max'], $row['bore_min'], $by !== '' ? $by : null]);
+        ->execute([$dId, $row['outer_shape'], $row['hub_dia'], $row['bore_type'], $row['bore_steps'], $row['bore_json'], $row['bore_max'], $row['bore_min'], $by !== '' ? $by : null]);
 }
 
 /** 讀單一料號（給編輯畫面）。沒有資料回 null。 */
 function eg_shape_get(PDO $pdo, int $dId): ?array {
     try {
-        $st = $pdo->prepare("SELECT outer_shape,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
+        $st = $pdo->prepare("SELECT outer_shape,hub_dia,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
         $st->execute([$dId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
@@ -189,7 +199,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
     $out = [];
     try {
         $ph = implode(',', array_fill(0, count($dIds), '?'));
-        $st = $pdo->prepare("SELECT d_id,outer_shape,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
+        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
         $st->execute($dIds);
         $defs = eg_shape_defs();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -198,6 +208,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
             $out[(int)$r['d_id']] = [
                 'outer'     => $r['outer_shape'],
                 'outer_nm'  => $r['outer_shape'] ? ($defs['outer'][$r['outer_shape']] ?? '') : '',
+                'hub'       => $r['hub_dia'] !== null ? rtrim(rtrim(number_format((float)$r['hub_dia'], 3, '.', ''), '0'), '.') : '',
                 'bore_type' => $r['bore_type'],
                 'bore_nm'   => $r['bore_type'] ? ($defs['bore'][$r['bore_type']]['name'] ?? '') : '',
                 'dias'      => $ds,
@@ -235,6 +246,14 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
             $conds[] = "NOT EXISTS (SELECT 1 FROM d_setting_shape s_{$pre}o WHERE s_{$pre}o.d_id={$alias}.d_id AND s_{$pre}o.$col IS NOT NULL)";
         }
         $sql .= ' AND (' . implode(' OR ', $conds) . ')';
+    }
+    $hmn = trim((string)($_POST['filter_shape_hub_min'] ?? ''));
+    $hmx = trim((string)($_POST['filter_shape_hub_max'] ?? ''));
+    if (is_numeric($hmn) || is_numeric($hmx)) {
+        $c = "s_hb.d_id={$alias}.d_id AND s_hb.hub_dia IS NOT NULL";
+        if (is_numeric($hmn)) { $c .= " AND s_hb.hub_dia >= :fshmin"; $prm[':fshmin'] = $hmn; }
+        if (is_numeric($hmx)) { $c .= " AND s_hb.hub_dia <= :fshmax"; $prm[':fshmax'] = $hmx; }
+        $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_hb WHERE $c)";
     }
     $mn = trim((string)($_POST['filter_shape_bore_min'] ?? ''));
     $mx = trim((string)($_POST['filter_shape_bore_max'] ?? ''));

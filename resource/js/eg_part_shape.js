@@ -73,6 +73,10 @@
   // 回傳 { msg:錯誤原因, bad:{欄位:1}, info:判定結果文字, type:孔型代碼 }
   function judge(st) {
     var defs = D(), bad = {}, i, d, l, r = { msg: '', bad: bad, info: '', type: '' };
+    if (st.outer === 'one_side' || st.outer === 'both_sides') {
+      var hv = num(st.hub);
+      if (hv === false) { bad['hub'] = 1; r.msg = '最大凸出外徑必須是大於 0 的數字'; return r; }
+    }
     if (!st.mode) return r;
     if (st.mode === 'single') {
       r.type = st.blind ? 'blind' : 'through';
@@ -124,12 +128,13 @@
   // 流程：內孔 無孔(預設/軸狀)｜通孔｜盲孔 → 點了就直接出現輸入框並取得焦點（預設單一孔徑）
   //       → 需要時改選 多階孔徑（先輸入孔數，Enter 後自動開始輸入）或 兩端同徑中間不同 → 系統自動判定孔型
   var form = {
-    el: null, st: { outer: '', hole: '', mode: '', bore_steps: 0, bore: [] },
+    el: null, st: { outer: '', hub: '', hole: '', mode: '', bore_steps: 0, bore: [] },
     mount: function (el) { injectCss(); this.el = el; this.render(); this._bind(); },
     set: function (data) {
-      var s = { outer: '', hole: '', mode: '', bore_steps: 0, bore: [] };
+      var s = { outer: '', hub: '', hole: '', mode: '', bore_steps: 0, bore: [] };
       if (data) {
         s.outer = data.outer_shape || '';
+        s.hub = (data.hub_dia == null || data.hub_dia === '') ? '' : String(parseFloat(data.hub_dia));
         var bt = data.bore_type || '';
         if (bt === 'through' || bt === 'blind') s.mode = 'single';
         else if (bt === 'step_through' || bt === 'step_blind') s.mode = 'steps';
@@ -140,10 +145,10 @@
       }
       this.st = s; if (this.el) this.render();
     },
-    _j: function () { var s = this.st; return { outer: s.outer, blind: s.hole === 'blind', mode: s.hole ? s.mode : '', bore_steps: s.bore_steps, bore: s.bore }; },
+    _j: function () { var s = this.st; return { outer: s.outer, hub: s.hub, blind: s.hole === 'blind', mode: s.hole ? s.mode : '', bore_steps: s.bore_steps, bore: s.bore }; },
     get: function () {
       var j = this._j();
-      return { outer: j.outer, blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return { d: b.d, l: b.l }; }) };
+      return { outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return { d: b.d, l: b.l }; }) };
     },
     validate: function () { return judge(this._j()).msg; },
     _bind: function () {
@@ -155,6 +160,11 @@
         var t = ev.target;
         if (ev.key === 'Enter') {
           if (t.hasAttribute && t.hasAttribute('data-cnt')) { ev.preventDefault(); ev.stopPropagation(); self._applyCount(true); return; }
+          if (t.matches && t.matches('input[data-hub]')) {
+            ev.preventDefault(); ev.stopPropagation();
+            var nx = el.querySelector('input[data-cnt]') || el.querySelector('input[data-i]'); if (nx) { nx.focus(); nx.select(); } else { t.blur(); }
+            return;
+          }
           if (t.matches && t.matches('input[data-i]')) {
             ev.preventDefault(); ev.stopPropagation();           // Enter 只在這個區塊內跳下一格，不觸發表單送出
             var ins = [].slice.call(el.querySelectorAll('input[data-i]')), ix = ins.indexOf(t);
@@ -165,6 +175,8 @@
         if ((ev.key === 'Enter' || ev.key === ' ') && t.classList && t.classList.contains('eg-shape-chip')) { ev.preventDefault(); self._pick(t); }
       }, true);
       el.addEventListener('input', function (ev) {
+        var hb = ev.target.closest('input[data-hub]');
+        if (hb) { self.st.hub = hb.value; self._showJudge(); return; }
         var inp = ev.target.closest('input[data-i]'); if (!inp) return;
         var i = parseInt(inp.getAttribute('data-i'), 10), f = inp.getAttribute('data-f');
         while (self.st.bore.length <= i) self.st.bore.push({ d: '', l: '' });
@@ -191,8 +203,12 @@
       if (focusFirst) { var f = this.el.querySelector('input[data-i="0"][data-f="d"]'); if (f) f.focus(); }
     },
     _pick: function (chip) {
-      var kind = chip.getAttribute('data-kind'), code = chip.getAttribute('data-code'), s = this.st, focus = false;
-      if (kind === 'outer') { s.outer = (code === 'other' || s.outer === code) ? '' : code; }
+      var kind = chip.getAttribute('data-kind'), code = chip.getAttribute('data-code'), s = this.st, focus = false, focusHub = false;
+      if (kind === 'outer') {
+        s.outer = (code === 'other' || s.outer === code) ? '' : code;
+        if (s.outer !== 'one_side' && s.outer !== 'both_sides') s.hub = '';
+        else focusHub = true;
+      }
       else if (kind === 'hole') {
         if (code === 'none') { s.hole = ''; s.mode = ''; s.bore = []; s.bore_steps = 0; }
         else {
@@ -206,6 +222,7 @@
         focus = true;
       }
       this.render();
+      if (focusHub) { var hi = this.el.querySelector('input[data-hub]'); if (hi) { hi.focus(); hi.select(); } }
       if (focus) this._focusFirst();
     },
     _showJudge: function () {
@@ -216,12 +233,17 @@
       this.el.querySelectorAll('input[data-i]').forEach(function (inp) {
         inp.classList.toggle('bad', !!v.bad[inp.getAttribute('data-i') + inp.getAttribute('data-f')]);
       });
+      var hb = this.el.querySelector('input[data-hub]'); if (hb) hb.classList.toggle('bad', !!v.bad['hub']);
     },
     render: function () {
       var defs = D(), s = this.st, h = '', blind = s.hole === 'blind';
       h += '<div class="eg-shape-line"><span class="eg-shape-lab" title="齒寬幾乎＝工件總長選「平板型」；一側有輪轂選「單邊凸出」；兩側都有選「雙邊凸出」；沒選＝其他。再點一次已選的可取消。">外形</span>';
       Object.keys(defs.outer).forEach(function (c) { h += chipHtml('outer', c, defs.outer[c], s.outer === c); });
-      h += chipHtml('outer', 'other', '其他', s.outer === '') + '</div>';
+      h += chipHtml('outer', 'other', '其他', s.outer === '');
+      if (s.outer === 'one_side' || s.outer === 'both_sides') {
+        h += '<span class="eg-shape-sep">│</span><label class="eg-shape-in">最大凸出外徑 <input type="number" step="any" min="0" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label>';
+      }
+      h += '</div>';
 
       h += '<div class="eg-shape-line"><span class="eg-shape-lab" title="沒選或軸狀工件＝無孔">內孔</span>' +
         chipHtml('hole', 'none', '無孔', s.hole === '') + chipHtml('hole', 'through', '通孔', s.hole === 'through') + chipHtml('hole', 'blind', '盲孔', s.hole === 'blind');
@@ -241,10 +263,10 @@
             '<span class="eg-shape-hint">輸入後按 Enter，自動開始輸入孔徑；大到小或小到大都可以，系統自動排列</span>';
           if (s.bore_steps) {
             h += '</div><div class="eg-shape-line">';
-            for (var i = 0; i < s.bore_steps; i++) h += this._in(i, '第' + (i + 1) + '孔徑', 'd') + this._in(i, '深度(選填)', 'l');
+            for (var i = 0; i < s.bore_steps; i++) h += this._in(i, '第' + (i + 1) + '孔徑', 'd');
           }
         } else if (s.mode === 'single') {
-          h += this._in(0, '孔徑', 'd') + (blind ? this._in(0, '深度(選填)', 'l') : '');
+          h += this._in(0, '孔徑', 'd');
         } else {
           h += this._in(0, '兩端孔徑', 'd') + this._in(1, '中間孔徑', 'd') + '<span class="eg-shape-hint">兩端孔徑相同只輸入一次</span>';
         }
@@ -284,7 +306,12 @@
       h += '<br><span class="filter-group-label">內孔</span><span class="eg-shape-row" style="display:inline-flex;margin:0">';
       Object.keys(defs.bore).forEach(function (c) { h += chipHtml('bore', c, defs.bore[c].name, self.bore.indexOf(c) >= 0); });
       h += chipHtml('bore', 'none', '無孔', self.bore.indexOf('none') >= 0) + '</span>';
-      h += '<br><span class="filter-group-label" title="只要這個料號有任何一階孔徑落在範圍內就會出現">孔徑</span>' +
+      h += '<br><span class="filter-group-label" title="單邊／雙邊凸出的最大凸出外徑">凸出外徑</span>' +
+        '<input type="number" step="any" data-sh="min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
+        '<span style="color:#888;margin:0 2px;">~</span>' +
+        '<input type="number" step="any" data-sh="max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
+        '<span style="font-size:11px;color:#888;margin:0 12px 0 3px;">mm</span>' +
+        '<span class="filter-group-label" title="只要這個料號有任何一階孔徑落在範圍內就會出現">孔徑</span>' +
         '<input type="number" step="any" data-sb="min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
         '<span style="color:#888;margin:0 2px;">~</span>' +
         '<input type="number" step="any" data-sb="max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
@@ -292,10 +319,11 @@
       this.el.innerHTML = h;
     },
     _v: function (k) { var i = this.el && this.el.querySelector('input[data-sb="' + k + '"]'); return i ? i.value.trim() : ''; },
+    _h: function (k) { var i = this.el && this.el.querySelector('input[data-sh="' + k + '"]'); return i ? i.value.trim() : ''; },
     params: function () {
-      return { filter_shape_outer: this.outer.join(','), filter_shape_bore: this.bore.join(','), filter_shape_bore_min: this._v('min'), filter_shape_bore_max: this._v('max') };
+      return { filter_shape_outer: this.outer.join(','), filter_shape_bore: this.bore.join(','), filter_shape_bore_min: this._v('min'), filter_shape_bore_max: this._v('max'), filter_shape_hub_min: this._h('min'), filter_shape_hub_max: this._h('max') };
     },
-    active: function () { return !!(this.outer.length || this.bore.length || this._v('min') !== '' || this._v('max') !== ''); },
+    active: function () { return !!(this.outer.length || this.bore.length || this._v('min') !== '' || this._v('max') !== '' || this._h('min') !== '' || this._h('max') !== ''); },
     reset: function () { this.outer = []; this.bore = []; if (this.el) this.render(); }
   };
 
