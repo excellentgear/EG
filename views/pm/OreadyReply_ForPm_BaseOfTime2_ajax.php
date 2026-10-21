@@ -757,6 +757,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_sales_settings_dat
                      FROM user u 
                      JOIN user_department_position_map m ON u.id = m.user_id 
                      JOIN position p ON m.position_id = p.id 
+                     WHERE COALESCE(u.state,1) NOT IN (0,90)
                      ORDER BY u.user_cname ASC, m.is_main DESC";
         $users = $db->query($sqlUsers)->fetchAll(PDO::FETCH_ASSOC);
         

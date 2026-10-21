@@ -1250,8 +1250,10 @@ if (is_array($OreadyReply_list_base)) {
         $item_ref['has_any_pm_report'] = isset($max_reported_sn_map[$item_ref['bom']]);
 
         // Add leave status
-        $item_ref['IsPrimaryOnLeave'] = !empty($item_ref['PrimarySalesId']) && in_array(intval($item_ref['PrimarySalesId']), $users_on_leave_ids, true) || (!empty($item_ref['PrimarySalesId']) && isset($item_ref['PrimarySalesState']) && (string)$item_ref['PrimarySalesState'] === '0');
-        $item_ref['IsDeputyOnLeave'] = !empty($item_ref['DeputySalesId']) && in_array(intval($item_ref['DeputySalesId']), $users_on_leave_ids, true) || (!empty($item_ref['DeputySalesId']) && isset($item_ref['DeputySalesState']) && (string)$item_ref['DeputySalesState'] === '0');
+        $item_ref['IsPrimaryOnLeave'] = !empty($item_ref['PrimarySalesId']) && in_array(intval($item_ref['PrimarySalesId']), $users_on_leave_ids, true);
+        $item_ref['IsDeputyOnLeave'] = !empty($item_ref['DeputySalesId']) && in_array(intval($item_ref['DeputySalesId']), $users_on_leave_ids, true);
+        $item_ref['PrimaryGone'] = !empty($item_ref['PrimarySalesId']) && in_array((string)($item_ref['PrimarySalesState'] ?? ''), ['0','90'], true);
+        $item_ref['DeputyGone'] = !empty($item_ref['DeputySalesId']) && in_array((string)($item_ref['DeputySalesState'] ?? ''), ['0','90'], true);
 
         $latest_info = $latest_report_data_map[$item_ref['bom']] ?? null;
         $item_ref['latest_report_process'] = $latest_info['process'] ?? '';
@@ -4692,7 +4694,10 @@ echo "</script>\n";
             tdClient.appendChild(clientNameSpan);
 
             // --- NEW: Salesperson Display Logic (Refined for strict height/spacing consistency) ---
-            if (row.PrimarySalesName) {
+            {
+                const primaryGone = !!row.PrimaryGone, deputyGone = !!row.DeputyGone;
+                const hasPrimary = !!row.PrimarySalesName && !primaryGone;
+                const hasDeputy = !!row.DeputySalesName && !deputyGone;
                 const getShortName = (fullName) => {
                     if (!fullName) return '';
                     const name = String(fullName);
@@ -4740,7 +4745,15 @@ echo "</script>\n";
                     return div;
                 };
 
-                if (row.IsPrimaryOnLeave && row.DeputySalesName) {
+                if (!hasPrimary && hasDeputy) {
+                    // 主要業務已離職/特殊帳號或未設定：直接顯示代理業務
+                    let dHtml = escapeHtml(deputyShortName);
+                    if (row.IsDeputyOnLeave) dHtml += ' <span style="color: red;">(休)</span>';
+                    dHtml += ' <span style="color: blue;">(代)</span>';
+                    textContainer.appendChild(createLine(dHtml));
+                } else if (!hasPrimary) {
+                    textContainer.appendChild(createLine('未設定', '#999'));
+                } else if (row.IsPrimaryOnLeave && hasDeputy) {
                     // Case 1: Primary on leave, deputy exists. Display in two compact lines.
                     let deputyHtml = escapeHtml(deputyShortName);
                     if (row.IsDeputyOnLeave) {
@@ -6706,12 +6719,13 @@ echo "</script>\n";
 
             // NEW Sales Logic for filter dropdown and case count
             let effectiveSalesName = null;
-            if (row.PrimarySalesName) {
+            if ((row.PrimaryGone || !row.PrimarySalesName) && row.DeputySalesName && !row.DeputyGone) effectiveSalesName = row.DeputySalesName;
+            if (row.PrimarySalesName && !row.PrimaryGone) {
                 if (!row.IsPrimaryOnLeave) {
                     // Primary is working, case belongs to them.
                     effectiveSalesName = row.PrimarySalesName;
                 } else { // Primary is on leave
-                    if (row.DeputySalesName && !row.IsDeputyOnLeave) {
+                    if (row.DeputySalesName && !row.DeputyGone && !row.IsDeputyOnLeave) {
                         // Deputy is working, case belongs to them.
                         effectiveSalesName = row.DeputySalesName;
                     } else {
@@ -7955,13 +7969,14 @@ echo "</script>\n";
             if (filters.sales) {
                 const salesNameOnly = filters.sales.split(' (')[0];
                 let effectiveSalesName = null;
+                if ((row.PrimaryGone || !row.PrimarySalesName) && row.DeputySalesName && !row.DeputyGone) effectiveSalesName = row.DeputySalesName;
 
-                if (row.PrimarySalesName) {
+                if (row.PrimarySalesName && !row.PrimaryGone) {
                     if (!row.IsPrimaryOnLeave) {
                         // Primary is working
                         effectiveSalesName = row.PrimarySalesName;
                     } else { // Primary is on leave
-                        if (row.DeputySalesName && !row.IsDeputyOnLeave) {
+                        if (row.DeputySalesName && !row.DeputyGone && !row.IsDeputyOnLeave) {
                             // Deputy is working
                             effectiveSalesName = row.DeputySalesName;
                         } else {

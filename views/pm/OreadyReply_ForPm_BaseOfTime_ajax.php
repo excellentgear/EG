@@ -766,6 +766,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_sales_settings_dat
                      FROM user u 
                      JOIN user_department_position_map m ON u.id = m.user_id 
                      JOIN position p ON m.position_id = p.id 
+                     WHERE COALESCE(u.state,1) NOT IN (0,90)
                      ORDER BY u.user_cname ASC, m.is_main DESC";
         $users = $db->query($sqlUsers)->fetchAll(PDO::FETCH_ASSOC);
         
@@ -2362,7 +2363,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
             $returnQty = (float)($_POST['return_qty'] ?? 0);
             $scrapQty  = (float)($_POST['scrap_qty'] ?? 0);
             if ($returnQty <= 0 && $scrapQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠數量與報廢數量至少要填一個']); exit; }
-            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid);
+            $retDate = trim((string)($_POST['return_date'] ?? ''));
+            if ($retDate !== '') {
+                $dt = DateTime::createFromFormat('Y-m-d', $retDate);
+                if (!$dt || $dt->format('Y-m-d') !== $retDate) { echo json_encode(['success'=>false,'message'=>'回廠日格式不正確']); exit; }
+                if ($retDate > date('Y-m-d')) { echo json_encode(['success'=>false,'message'=>'回廠日不可晚於今天']); exit; }
+            } else { $retDate = null; }
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate);
             $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
             if ($r['closed']) $msg .= '，此批已結清。';
             $resp = ['success'=>true, 'message'=>$msg, 'result'=>$r];

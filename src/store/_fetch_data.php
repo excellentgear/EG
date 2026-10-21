@@ -712,8 +712,10 @@ if (is_array($OreadyReply_list_base)) {
             $item['has_any_pm_report']      = isset($max_reported_sn_map[$item['bom']]);
 
             // ✅【業務休假】與主頁面一致
-            $item['IsPrimaryOnLeave'] = !empty($item['PrimarySalesId']) && in_array(intval($item['PrimarySalesId']), $users_on_leave_ids, true) || (!empty($item['PrimarySalesId']) && isset($item['PrimarySalesState']) && (string)$item['PrimarySalesState'] === '0');
+            $item['IsPrimaryOnLeave'] = !empty($item['PrimarySalesId']) && in_array(intval($item['PrimarySalesId']), $users_on_leave_ids, true);
             $item['IsDeputyOnLeave']  = !empty($item['DeputySalesId'])  && in_array(intval($item['DeputySalesId']),  $users_on_leave_ids, true);
+            $item['PrimaryGone'] = !empty($item['PrimarySalesId']) && in_array((string)($item['PrimarySalesState'] ?? ''), ['0','90'], true);
+            $item['DeputyGone'] = !empty($item['DeputySalesId']) && in_array((string)($item['DeputySalesState'] ?? ''), ['0','90'], true);
 
             $data_to_return[] = $item;
         }
