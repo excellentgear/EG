@@ -336,12 +336,6 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 <!-- 左：輸入 -->
                 <div class="gear-col-left">
                     <div class="gear-section-title">輸入參數</div>
-                    <div style="margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-                        <span style="font-size:12px;color:#555;font-weight:600;">齒型：</span>
-                        <button type="button" class="gear-preset-btn active" id="g-mode-ext" onclick="setGearMode('ext')">外齒</button>
-                        <button type="button" class="gear-preset-btn" id="g-mode-int" onclick="setGearMode('int')">內齒</button>
-                        <small id="g-mode-hint" style="color:#999;font-weight:400;">外齒：跨齒厚＋建議滾齒；內齒：跨銷徑/跨銷值</small>
-                    </div>
                     <div style="display:flex;gap:10px;">
                         <div class="gear-field-group" style="flex:1;">
                             <label>法向模數 mn <span style="color:#e74c3c">*</span> <small style="color:#999;font-weight:400;">可選 M/CP/DP</small></label>
