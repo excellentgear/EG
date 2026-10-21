@@ -80,8 +80,8 @@ if (!isset($can_ingear_calc)) {
     <div id="ig-body">
         <div class="ig-note">內齒輪的量銷（跨銷）計算：算跨銷距、標準跨銷徑，以及把<b>客戶的銷徑與跨銷距換算成我方銷徑</b>；右側圖示會畫出銷與齒面的接觸位置，<b>銷徑過大（接觸點超出齒頂）或過小（碰到齒根）會以紅色標示</b>。灰底欄位自己填。</div>
         <div class="ig-row">
-            <div class="ig-f"><label>模數 m</label><input class="ig-in" id="ig-m" type="text" inputmode="decimal" value="3.175"></div>
-            <div class="ig-f"><label>齒數 z</label><input class="ig-in" id="ig-z" type="text" inputmode="numeric" value="63"></div>
+            <div class="ig-f"><label>模數 m</label><input class="ig-in" id="ig-m" type="text" inputmode="decimal"></div>
+            <div class="ig-f"><label>齒數 z</label><input class="ig-in" id="ig-z" type="text" inputmode="numeric"></div>
             <div class="ig-f"><label>壓力角 α（度）</label><input class="ig-in" id="ig-al" type="text" inputmode="decimal" value="20"></div>
             <div class="ig-f"><label title="內齒的齒頂圓（內徑，較小的那一圈）。空白＝自動：分度圓徑 − 2m">齒頂圓徑 Di（空白自動）</label><input class="ig-in" id="ig-dtip" type="text" inputmode="decimal"></div>
             <div class="ig-f"><label title="內齒的齒根圓（較大的那一圈）。空白＝自動：分度圓徑 + 2.5m">齒根圓徑 Df（空白自動）</label><input class="ig-in" id="ig-droot" type="text" inputmode="decimal"></div>
@@ -203,6 +203,7 @@ if (!isset($can_ingear_calc)) {
     function readGear(){
         var m = pv('ig-m'), z = pv('ig-z'), al = pv('ig-al'), dt = pv('ig-dtip'), dr = pv('ig-droot'), msg = '';
         bad('ig-m', false); bad('ig-z', false); bad('ig-al', false); bad('ig-dtip', false); bad('ig-droot', false);
+        if (m === null && z === null) { $('ig-gerr').textContent = ''; return null; } // 剛開啟／清除後：先不報錯，等使用者輸入
         if (m === null || m <= 0) { bad('ig-m', true); msg = '請輸入大於 0 的模數'; }
         else if (z === null || z < 6 || Math.floor(z) !== z) { bad('ig-z', true); msg = '齒數需為 6 以上的整數'; }
         else if (al === null || al <= 0 || al >= 45) { bad('ig-al', true); msg = '壓力角需介於 0～45 度之間'; }
@@ -400,7 +401,7 @@ if (!isset($can_ingear_calc)) {
         ensureDom();
         var w = $('ig-win'); if (w) w.style.display = 'flex';
         calc();
-        setTimeout(function(){ var el = $(tab === 'a' ? 'ig-d' : 'ig-d1'); if (el) el.focus(); }, 60);
+        setTimeout(function(){ var el = $('ig-m'); if (el) el.focus(); }, 60);
     };
 
     function initDrag(){
