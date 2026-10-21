@@ -94,6 +94,7 @@ try {
 try {
     require_once __DIR__ . '/eng_change_remind_tick.php';
     eg_ec_remind_tick();
+    eg_ec_autosign_tick();
 } catch (Throwable $e) {
     error_log('[eng_change_remind] tick hook failed: ' . $e->getMessage());
 }

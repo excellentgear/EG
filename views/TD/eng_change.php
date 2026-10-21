@@ -632,9 +632,9 @@ $openId = (int)($_GET['id'] ?? 0);
                 請選<b>「職級高於申請人的主管」</b>——例如業務課組員開單，經理與課長<b>兩位都會收到通知</b>，誰先簽就算誰的。
                 選「單位主管」或「申請部門主管」時只會解析出<b>一位</b>（該單位職級最高的那個），其他主管收不到通知。
                 該單位一位主管都沒有時才往上一層單位找，<b>只追溯到「課」級</b>（規則見 ai-rules/24 審核層級規範）。</li>
-            <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。這兩個數字系統會<b>自動帶入讓你確認是否相同</b>——
-                庫存數量取自庫存管理、已完工待入庫取自「未結案 BOM 中最後一道製程已完工」的批次；
-                <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原。
+            <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。「庫存數量」系統會<b>預設代入目前庫存管理的數量</b>讓你確認；
+                「已完工待入庫數量」<b>不自動代入</b>，只在欄位下方顯示系統目前數字（取自「未結案 BOM 中最後一道製程已完工」的批次）供參考；
+                <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原庫存數量。
                 <b>申請內容勾了「客供料（不需確認庫存）」時，這一關會整個跳過、也不會通知倉管。</b></li>
             <li><b>技術課人員／技術課主管（兩道簽核）</b>：<b>先由技術課人員填完設計分析並簽核，再由技術課主管簽核</b>（主管可複核修改）。設計分析——勾<b>「僅修改圖面（修改後結案）」</b>就不跑會審；
                 勾<b>「需修改圖面與會審」</b>要一併勾選需要哪些單位會審。同時判定庫存舊料可否修改。
@@ -1311,7 +1311,7 @@ function saveAttach(attachId, pageNo, pageCount){
 
 /* ── 確認庫存：系統自動帶入讓倉管比對（使用者要求 2026-08-25）──────────────
    ① 每次開單都去算一次目前的庫存數量與已完工待入庫數量，顯示在欄位下方供比對
-   ② 欄位還空著時（倉管還沒填過）就直接帶進去，倉管確認一下就好
+   ② 庫存數量欄位還空著時（倉管還沒填過）就直接帶進去，倉管確認一下就好；已完工待入庫數量不自動帶（只顯示系統數字參考）
    ③ 已經填過的不覆蓋——那是倉管實際清點的結果，不可以被系統值洗掉 */
 var STOCK_SNAP = null;
 function loadStockSnap(d){
@@ -1323,12 +1323,11 @@ function loadStockSnap(d){
         if (!r.ok) return;
         STOCK_SNAP = r.snap;
         showStockSnap();
-        var canWH = (d.status === 'WH' && +d.can_sign === 1);
+        // 可以填倉管欄位的人（輪到倉管簽、或本身就能提早填）：庫存數量預設代入系統目前數量；
+        // 「已完工待入庫數量」不自動代入（使用者要求 2026-10-21），系統數字只顯示在欄位下方供參考
+        var canWH = (d.status === 'WH' && +d.can_sign === 1) || ((d.prefill || []).indexOf('WH') >= 0);
         $('#btnStockReload').toggle(canWH);
-        if (canWH) {
-            if (!$('#e_stock_qty').val().trim()) $('#e_stock_qty').val(String(r.snap.stock_qty));
-            if (!$('#e_wip_qty').val().trim())   $('#e_wip_qty').val(String(r.snap.wip_qty));
-        }
+        if (canWH && !$('#e_stock_qty').val().trim()) $('#e_stock_qty').val(String(r.snap.stock_qty));
     });
 }
 function showStockSnap(){
@@ -1340,7 +1339,6 @@ function showStockSnap(){
 $('#btnStockReload').on('click', function(){
     if (!STOCK_SNAP) return;
     $('#e_stock_qty').val(String(STOCK_SNAP.stock_qty));
-    $('#e_wip_qty').val(String(STOCK_SNAP.wip_qty));
 });
 
 /* ── 料號 → 客戶（客戶欄由綁定產生、反灰不可改）─────────────────────────
@@ -2077,6 +2075,7 @@ $('#btnRvOk').on('click', function(){
 
 /* ══════════════════ 設定 ══════════════════ */
 <?php if ($P['canAdmin']): ?>
+var AUTO_KEYS = {SUP:'ec_auto_sign_sup', TD:'ec_auto_sign_td', APPROVE:'ec_auto_sign_appr'};
 var STAGE_KEY = {SUP:'ec_sign_sup', WH:'ec_sign_wh', TDS:'ec_sign_tds', TD:'ec_sign_td', APPROVE:'ec_sign_appr', CTRL:'ec_sign_ctrl'};
 var SET_DEPTS = null;
 function buildSettings(){
@@ -2089,6 +2088,9 @@ function buildSettings(){
             h += '<option value="'+esc(v)+'"'+(SETTINGS[key] === v ? ' selected' : '')+'>'+esc(t)+'</option>';
         });
         h += '</select>'
+          + (AUTO_KEYS[k] ? '<label class="chk" style="display:block;margin-top:3px;font-size:12px;"><input type="checkbox" class="set-auto" data-k="'+AUTO_KEYS[k]+'"'
+              + (+SETTINGS[AUTO_KEYS[k]] === 1 ? ' checked' : '') + '> 自動簽認（依管理員代簽的時間規則，自動以上面的簽核人簽核）'
+              + (k === 'APPROVE' ? '<br><small style="color:#8a6d45;">核准僅在「不需會審」時才會自動簽，需要會審的單據仍由人工核示。</small>' : '') + '</label>' : '')
           // 選「指定人員」才展開：先選課室、再從該課室（含子部門）勾人，可複選
           +  '<div class="pick-wrap" data-k="'+key+'" style="display:none;margin-top:4px;border:1px solid #E8D5B5;'
           +    'border-radius:4px;padding:6px;background:#FFF7E8;">'
@@ -2264,6 +2266,7 @@ $('#btnSetSave').on('click', function(){
     if (badRule) { alert('「' + badRule + '」設成必選附件，但「申請內容可挑的標籤」一個都沒有勾——'
                        + '這樣申請人永遠挑不到附件、也永遠送不出單。請先勾選至少一個標籤。'); return; }
     $('.set-sign').each(function(){ p[$(this).data('k')] = this.value; });
+    $('.set-auto').each(function(){ p[$(this).data('k')] = this.checked ? 1 : 0; });
     var bad = '';
     $('.pick-wrap').each(function(){
         var k = $(this).data('k'), picked = $(this).data('picked') || [];

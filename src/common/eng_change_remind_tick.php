@@ -44,3 +44,31 @@ if (!function_exists('eg_ec_remind_tick')) {
         }
     }
 }
+
+// 自動簽認補簽（使用者要求 2026-10-21）：自動簽認排定的時間（auto_sign_at）到了就補簽。
+// 兩分鐘最多檢查一次；只掃 auto_sign_at 已到的單據，量極小。
+if (!function_exists('eg_ec_autosign_tick')) {
+    function eg_ec_autosign_tick(): void
+    {
+        static $done = false;
+        if ($done) return;
+        $done = true;
+        try {
+            $stateFile = __DIR__ . '/eng_change_autosign_last_check.txt';
+            $last = @filemtime($stateFile);
+            if ($last && (time() - $last) < 120) return;
+            @touch($stateFile);
+            clearstatcache(true, $stateFile);
+
+            require_once __DIR__ . '/DBConnection.php';
+            require_once __DIR__ . '/eng_change_lib.php';
+            $db = (new DBConnection())->getPDO();
+            ec_ensure_schema($db);
+            $ids = $db->query("SELECT ec_id FROM eng_change WHERE auto_sign_at IS NOT NULL AND auto_sign_at <= NOW()
+                                  AND status NOT IN ('DRAFT','CLOSED','REJECTED')")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($ids as $id) ec_auto_sign_try($db, (int)$id);
+        } catch (\Throwable $e) {
+            error_log('[eng_change_autosign] tick failed: ' . $e->getMessage());
+        }
+    }
+}

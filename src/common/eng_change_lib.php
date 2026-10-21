@@ -197,6 +197,8 @@ const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_sup_dept', 'ec_sign_wh_dept', 'ec_sign_tds_dept', 'ec_sign_td_dept',
                          'ec_sign_appr_dept', 'ec_sign_ctrl_dept',
                          'ec_auto_from_dwg',
+                         // 自動簽認（管理員逐關開關，1＝開）：單位主管／技術課主管／核准（核准僅在不需會審時才會自動）
+                         'ec_auto_sign_sup', 'ec_auto_sign_td', 'ec_auto_sign_appr',
                          // 附件：可選的標籤（逗號分隔 quotation_file_categories.id）與畫面提示文字
                          'ec_attach_cats_apply', 'ec_attach_cats_design',
                          'ec_attach_hint_apply', 'ec_attach_hint_design',
@@ -289,6 +291,10 @@ function ec_ensure_schema(PDO $db): void
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_dept_id INT NULL COMMENT '簽核當下採用的部門 id（兼任者的圖章職稱要用這個）'"); } catch (Throwable $e) {}
     }
 
+    // 自動簽認排程：目前這一關預計由誰、在什麼時候（業務時間）自動簽；時間未到由順路觸發補簽
+    foreach (['auto_sign_stage VARCHAR(8) NULL', 'auto_sign_at DATETIME NULL', 'auto_sign_uid INT NULL'] as $def) {
+        try { $db->exec("ALTER TABLE eng_change ADD COLUMN $def"); } catch (Throwable $e) {}
+    }
     // 送出後 5 個工作天未完成的提醒：記最後一次提醒時間（之後每滿 5 個工作天再提醒一次）
     try { $db->exec("ALTER TABLE eng_change ADD COLUMN remind_sent_at DATETIME NULL COMMENT '最後一次「未完成」提醒申請人的時間'"); } catch (Throwable $e) {}
     // 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23，欄位放在技術課那一段）
@@ -424,6 +430,7 @@ function ec_settings(PDO $db): array
 {
     $out = ['ec_stamp_tpl_id' => null, 'ec_review_stamp_tpl_id' => null, 'ec_auto_from_dwg' => 1,
             'ec_print_sign_log' => 0,
+            'ec_auto_sign_sup' => 0, 'ec_auto_sign_td' => 0, 'ec_auto_sign_appr' => 0,
             'ec_attach_cats_apply' => '', 'ec_attach_cats_design' => '',
             // 使用者指定的提示文字（做成設定值，往後改口徑不必動程式）
             'ec_attach_hint_apply'  => '僅需點選最新客戶圖面',
@@ -443,7 +450,7 @@ function ec_settings(PDO $db): array
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $k = (string)$r['setting_key']; $v = $r['setting_value'];
             if (substr($k, -7) === '_tpl_id')      $out[$k] = ($v === '' || $v === null) ? null : (int)$v;
-            elseif ($k === 'ec_auto_from_dwg' || $k === 'ec_print_sign_log') $out[$k] = (int)$v;
+            elseif ($k === 'ec_auto_from_dwg' || $k === 'ec_print_sign_log' || strpos($k, 'ec_auto_sign_') === 0) $out[$k] = (int)$v;
             else                                   $out[$k] = (string)$v;   // _users / _dept / 附件設定都是字串
         }
     } catch (Throwable $e) {}
@@ -460,6 +467,8 @@ function ec_save_setting(PDO $db, string $key, $val): void
         $val = implode(',', array_slice($ids, 0, 50));   // 上限 50 人，避免一次通知全公司
     } elseif (substr($key, -5) === '_dept') {
         $val = (string)((int)$val ?: '');
+    } elseif (strpos($key, 'ec_auto_sign_') === 0) {
+        $val = ((int)$val) ? 1 : 0;
     } elseif (strpos($key, 'ec_attach_cats_') === 0) {
         // 只收真的存在且啟用中的附件標籤 id（打錯一個 id 那個標籤永遠不會出現，而且完全不報錯）
         $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$val)), fn($i) => $i > 0)));
@@ -1866,7 +1875,7 @@ function ec_signer_busy_reason(PDO $db, int $uid, string $date, string $time): s
  *   ③ 不可以是未來——算出來比現在晚就改用現在，並在 note 說明。
  * @return array{at:string,note:string}
  */
-function ec_suggest_sign_at(PDO $db, array $row, string $stage, int $signerId): array
+function ec_suggest_sign_at(PDO $db, array $row, string $stage, int $signerId, bool $clamp = true): array
 {
     $now  = ec_db_now($db)['dt'];
     $prev = ec_prev_sign_at($db, $row, $stage);
@@ -1893,7 +1902,7 @@ function ec_suggest_sign_at(PDO $db, array $row, string $stage, int $signerId): 
     }
     $at = date('Y-m-d H:i:s', $t);
     $note = $notes ? ('原本的時間' . $notes[0] . '，已自動換到下一個符合的工作日') : '';
-    if ($at > $now) { $at = $now; $note = ($note !== '' ? $note . '；' : '') . '算出的時間晚於現在，改用現在'; }
+    if ($clamp && $at > $now) { $at = $now; $note = ($note !== '' ? $note . '；' : '') . '算出的時間晚於現在，改用現在'; }
     return ['at' => $at, 'note' => $note];
 }
 
@@ -2235,16 +2244,98 @@ function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, str
 
     // 一筆待簽核紀錄對應這一關；名單有多人時每個人都發通知（誰先簽就算誰的，OR-gate）
     $pool = ec_stage_signer_pool($db, $row, $stage);
+    // 這一關開了自動簽認（而且現在符合自動條件）就不通知任何人，交給自動簽認排程
+    $auto = !$silent && ec_auto_sign_enabled($db, $row, $stage) && $pool;
+    // 技術課人員那一關：只通知「此料號最新訂單的負責設計」那一位（他在名單內才縮小；其他人仍可簽）
+    $notifyPool = $pool;
+    if ($stage === 'TDS' && $pool) {
+        $des = ec_latest_designer($db, (int)($row['d_id'] ?? 0));
+        if ($des) {
+            $one = array_values(array_filter($pool, fn($p) => (int)$p['id'] === $des));
+            if ($one) $notifyPool = $one;
+        }
+    }
     try {
         $aid = eg_approval_submit($db, EC_APPROVAL_MODULE, $ecId, $stage, $fromUid, $fromName);
         $firstEid = 0;
-        foreach ($pool as $p) {
-            if ($silent) break;     // 管理員一次代簽（自動簽核）：只留簽核紀錄，不發通知
+        foreach ($notifyPool as $p) {
+            if ($silent || $auto) break;     // 管理員一次代簽／自動簽認：只留簽核紀錄，不發通知
             $eid = ec_notify_stage($db, $row, $stage, (int)$p['id'], $fromUid);
             if ($eid && !$firstEid) $firstEid = $eid;
         }
         if ($firstEid) eg_approval_set_live_event($db, $aid, $firstEid);
     } catch (Throwable $e) {}
+    if ($auto) ec_auto_sign_try($db, $ecId);
+}
+
+/** 此料號最新訂單（依訂單日期、訂單序）負責設計的使用者 id（order_track.ate）；沒有回 0 */
+function ec_latest_designer(PDO $db, int $dId): int
+{
+    if ($dId <= 0) return 0;
+    try {
+        $st = $db->prepare("SELECT ate FROM order_track WHERE d_id_ID=? AND ate IS NOT NULL AND ate<>0
+                             ORDER BY Order_date DESC, Order_id DESC LIMIT 1");
+        $st->execute([$dId]);
+        return (int)$st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 這一關現在要不要自動簽認：管理員有開＋（核准只有「不需會審」時才自動） */
+function ec_auto_sign_enabled(PDO $db, array $row, string $stage): bool
+{
+    $map = ['SUP' => 'ec_auto_sign_sup', 'TD' => 'ec_auto_sign_td', 'APPROVE' => 'ec_auto_sign_appr'];
+    if (!isset($map[$stage])) return false;
+    if ((int)(ec_settings($db)[$map[$stage]] ?? 0) !== 1) return false;
+    if ($stage === 'APPROVE' && (string)($row['design_result'] ?? '') === 'need_review') return false;
+    return true;
+}
+
+/**
+ * 自動簽認（使用者要求 2026-10-21）：規則與「管理員代簽」完全相同（見 ai-rules/21 第二部分）——
+ * 簽核人＝這一關合格名單裡「預計簽章時間最早、且當時沒行程」的那一位（章蓋真實姓名），
+ * 時間＝上一關 +8~54 分鐘（含秒），超過下班／非工作日／簽章人有行程就換到下一工作日 08:30 後隨機。
+ * 預計時間還沒到就先記在 auto_sign_at，由順路觸發在時間到了補簽；到了就當場簽。
+ * @return string 'signed'（這一關簽掉了）／'waiting'（已排程等時間）／''（不適用）
+ */
+function ec_auto_sign_try(PDO $db, int $ecId, int $depth = 0): string
+{
+    if ($depth > 6) return '';
+    $row = ec_row($db, $ecId);
+    if (!$row) return '';
+    $stage = (string)$row['status'];
+    if (!ec_auto_sign_enabled($db, $row, $stage)) return '';
+    $pool = ec_stage_signer_pool($db, $row, $stage);
+    if (!$pool) return '';
+    $now = ec_db_now($db)['dt'];
+
+    $at = (string)($row['auto_sign_at'] ?? ''); $uid = (int)($row['auto_sign_uid'] ?? 0);
+    if ((string)($row['auto_sign_stage'] ?? '') !== $stage || $at === '' || $uid <= 0) {
+        $best = null;
+        foreach ($pool as $p) {
+            $s = ec_suggest_sign_at($db, $row, $stage, (int)$p['id'], false);
+            if ($best === null || $s['at'] < $best['at']) $best = ['at' => $s['at'], 'p' => $p];
+        }
+        $at = $best['at']; $uid = (int)$best['p']['id'];
+        $db->prepare("UPDATE eng_change SET auto_sign_stage=?, auto_sign_at=?, auto_sign_uid=? WHERE ec_id=?")
+           ->execute([$stage, $at, $uid, $ecId]);
+    }
+    if ($at > $now) return 'waiting';
+
+    $name = '';
+    foreach ($pool as $p) if ((int)$p['id'] === $uid) $name = (string)$p['name'];
+    if ($name === '') {                       // 名單在等待期間變了：重新排程
+        $db->prepare("UPDATE eng_change SET auto_sign_stage=NULL, auto_sign_at=NULL, auto_sign_uid=NULL WHERE ec_id=?")->execute([$ecId]);
+        return ec_auto_sign_try($db, $ecId, $depth + 1);
+    }
+    $fields = $stage === 'APPROVE' ? ['verdict' => 'approve'] : [];
+    try {
+        ec_sign_stage($db, $ecId, $stage, $uid, $name, $fields, 0, $at, false);
+    } catch (Throwable $e) {
+        error_log('[eng_change auto_sign] ' . $ecId . ' ' . $stage . ': ' . $e->getMessage());
+        return '';
+    }
+    $db->prepare("UPDATE eng_change SET auto_sign_stage=NULL, auto_sign_at=NULL, auto_sign_uid=NULL WHERE ec_id=?")->execute([$ecId]);
+    return 'signed';
 }
 
 /** 進入會審關卡：只通知技術課勾選為「需會審」的單位 */
