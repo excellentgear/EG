@@ -31,7 +31,7 @@ if (!isset($can_ingear_calc)) {
 ?>
 <?php if ($can_ingear_calc): ?>
 <style>
-    #ig-win { position:fixed; z-index:10410; display:none; width:930px; max-width:96vw; max-height:97vh; top:8px; left:50%; transform:translateX(-50%);
+    #ig-win { position:fixed; z-index:10410; display:none; width:930px; max-width:96vw; top:8px; left:50%; transform:translateX(-50%);
         background:#fff; color:#333; border-radius:8px; box-shadow:0 12px 40px rgba(0,0,0,.35); border:1px solid #e0b27a;
         font-family:"Microsoft JhengHei","PingFang TC",sans-serif; font-size:12px; line-height:1.4; box-sizing:border-box; flex-direction:column; }
     #ig-win * { box-sizing:border-box; }
@@ -39,7 +39,7 @@ if (!isset($can_ingear_calc)) {
     #ig-hdr .ig-title { font-weight:700; font-size:13px; }
     #ig-hdr button { background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:4px; padding:2px 9px; font-size:12px; cursor:pointer; margin-left:5px; }
     #ig-hdr button:hover { background:rgba(255,255,255,.32); }
-    #ig-body { padding:6px 12px 8px; overflow:auto; }
+    #ig-body { padding:6px 12px 8px; }
     #ig-win .ig-row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
     #ig-win .ig-f { display:flex; flex-direction:column; }
     #ig-win .ig-f label { font-size:11px; color:#6b4423; font-weight:600; margin-bottom:2px; }
@@ -117,7 +117,7 @@ if (!isset($can_ingear_calc)) {
                             <div class="ig-f"><label>我方銷徑 D2</label><input class="ig-in" id="ig-d2" type="text" inputmode="decimal"></div>
                             <div class="ig-f"><label>&nbsp;</label><button type="button" class="ig-btn" onclick="inGearUseStd2()" title="把我方銷徑填成這顆齒輪的標準跨銷徑">帶入標準跨銷徑</button></div>
                         </div>
-                        <div style="font-size:10.5px;color:#6b4423;margin-top:4px">由客戶的銷徑與跨銷距反推這顆齒輪的齒槽寬（轉位係數 x），再換算成我方銷徑的跨銷距與公差範圍。上方的轉位係數欄位在這個分頁不使用。</div>
+                        <div style="font-size:10.5px;color:#6b4423;margin-top:4px">轉位係數欄位在這個分頁不使用。</div>
                         <div id="ig-rng-b" style="margin-top:4px"></div>
                     </div></div>
                 </div>
@@ -385,8 +385,16 @@ if (!isset($can_ingear_calc)) {
         drawOverview(g, e, r2, colOf(worst));
     }
 
+    var zoomV = 1;
+    function fit(){
+        var w = $('ig-win'); if (!w || w.style.display === 'none') return;
+        w.style.zoom = 1; var h = w.offsetHeight, av = window.innerHeight - 16;
+        zoomV = h > av ? Math.max(0.5, av / h) : 1; w.style.zoom = zoomV;
+    }
+    window.addEventListener('resize', fit);
     function calc(){
         if (!domInited) return;
+        setTimeout(fit, 0);
         var g = readGear();
         $('ig-key').innerHTML = '';
         if (!g) { $('ig-res').innerHTML = ''; clearGraphics(); return; }
@@ -431,13 +439,13 @@ if (!isset($can_ingear_calc)) {
         hdr.addEventListener('mousedown', function(e){
             if (e.target.tagName === 'BUTTON') return;
             sx = e.clientX; sy = e.clientY;
-            sl = parseInt(win.style.left) || win.getBoundingClientRect().left;
-            st = parseInt(win.style.top) || win.getBoundingClientRect().top;
+            sl = parseFloat(win.style.left) || win.getBoundingClientRect().left / zoomV;
+            st = parseFloat(win.style.top) || win.getBoundingClientRect().top / zoomV;
             win.style.transform = 'none'; win.style.left = sl + 'px'; win.style.top = st + 'px';
             document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
             e.preventDefault();
         });
-        function mv(e){ win.style.left = (sl + e.clientX - sx) + 'px'; win.style.top = (st + e.clientY - sy) + 'px'; }
+        function mv(e){ win.style.left = (sl + (e.clientX - sx) / zoomV) + 'px'; win.style.top = (st + (e.clientY - sy) / zoomV) + 'px'; }
         function up(){ document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); }
     }
 
