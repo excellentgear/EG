@@ -31,7 +31,7 @@ if (!isset($can_ingear_calc)) {
 ?>
 <?php if ($can_ingear_calc): ?>
 <style>
-    #ig-win { position:fixed; z-index:10410; display:none; width:930px; max-width:96vw; max-height:94vh; top:30px; left:50%; transform:translateX(-50%);
+    #ig-win { position:fixed; z-index:10410; display:none; width:930px; max-width:96vw; max-height:97vh; top:8px; left:50%; transform:translateX(-50%);
         background:#fff; color:#333; border-radius:8px; box-shadow:0 12px 40px rgba(0,0,0,.35); border:1px solid #e0b27a;
         font-family:"Microsoft JhengHei","PingFang TC",sans-serif; font-size:12px; line-height:1.4; box-sizing:border-box; flex-direction:column; }
     #ig-win * { box-sizing:border-box; }
@@ -39,16 +39,16 @@ if (!isset($can_ingear_calc)) {
     #ig-hdr .ig-title { font-weight:700; font-size:13px; }
     #ig-hdr button { background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:4px; padding:2px 9px; font-size:12px; cursor:pointer; margin-left:5px; }
     #ig-hdr button:hover { background:rgba(255,255,255,.32); }
-    #ig-body { padding:8px 12px 12px; overflow:auto; }
+    #ig-body { padding:6px 12px 8px; overflow:auto; }
     #ig-win .ig-row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
     #ig-win .ig-f { display:flex; flex-direction:column; }
     #ig-win .ig-f label { font-size:11px; color:#6b4423; font-weight:600; margin-bottom:2px; }
     #ig-win .ig-in { width:96px; padding:3px 6px; border:1px solid #c9b79c; border-radius:4px; background:#f3f3f3; font-size:12px; font-family:Consolas,monospace; color:#333; }
     #ig-win .ig-in:focus { outline:none; border-color:#e67e22; background:#fff; }
     #ig-win .ig-in.ig-bad { border-color:#DD5138; background:#fdeeea; }
-    #ig-win .ig-note { font-size:10.5px; color:#6b4423; background:#FBF1E1; border:1px solid #F0D2A0; border-radius:4px; padding:4px 9px; margin-bottom:6px; }
+    #ig-win .ig-note { font-size:10.5px; color:#6b4423; background:#FBF1E1; border:1px solid #F0D2A0; border-radius:4px; padding:3px 9px; margin-bottom:4px; }
     #ig-win .ig-err { font-size:11px; color:#DD5138; margin-top:3px; min-height:14px; }
-    #ig-tabs { display:flex; border-bottom:2px solid #d9c3a3; background:#faf4ea; padding:0 6px; margin:8px 0; }
+    #ig-tabs { display:flex; border-bottom:2px solid #d9c3a3; background:#faf4ea; padding:0 6px; margin:4px 0 6px; }
     #ig-tabs button { padding:6px 14px; border:none; border-bottom:2px solid transparent; background:transparent; color:#777; font-size:12px; font-weight:600; cursor:pointer; margin-bottom:-2px; }
     #ig-tabs button.on { border-bottom-color:#e67e22; color:#b85c0d; }
     #ig-cols { display:flex; gap:12px; align-items:flex-start; }
@@ -125,10 +125,11 @@ if (!isset($can_ingear_calc)) {
                 <div class="ig-card"><div class="ig-ch">計算結果</div><div class="ig-cb" id="ig-res"></div></div>
             </div>
             <div id="ig-right">
+                <div id="ig-key"></div>
                 <div id="ig-zoom"></div>
-                <div style="display:flex;gap:8px;margin-top:8px;align-items:flex-start">
+                <div style="display:flex;gap:8px;margin-top:6px;align-items:flex-start">
                     <div id="ig-over" style="flex-shrink:0"></div>
-                    <div style="font-size:10.5px;color:#6b4423">
+                    <div style="font-size:10px;color:#6b4423;line-height:1.35">
                         <div><b>圖示說明</b></div>
                         <div>左上：銷與齒槽放大。棕線＝齒面，<span style="color:#b85c0d">●</span> 銷與齒面的接觸點。</div>
                         <div>虛線由左至右依序：齒頂圓（內徑）、分度圓、接觸點、齒根圓。</div>
@@ -239,7 +240,7 @@ if (!isset($can_ingear_calc)) {
 
     /* ───── 繪圖 ───── */
     function drawZoom(g, e, pins){ // pins: [{r, col, dash, lbl}]
-        var W = 450, H = 320, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m;
+        var W = 450, H = 245, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m;
         var x0 = rt - 0.9 * m, x1 = rr + 0.9 * m, s = W / (x1 - x0), N = 10, i, k;
         function X(x){ return (x - x0) * s; }
         function Y(y){ return H / 2 - y * s; }
@@ -286,14 +287,14 @@ if (!isset($can_ingear_calc)) {
             var kx = q.rk * Math.cos(q.psik), ky = q.rk * Math.sin(q.psik);
             out += '<circle cx="' + X(kx).toFixed(1) + '" cy="' + Y(ky).toFixed(1) + '" r="3.2" fill="' + pn2.col + '" stroke="#fff"/>';
             out += '<circle cx="' + X(kx).toFixed(1) + '" cy="' + Y(-ky).toFixed(1) + '" r="3.2" fill="' + pn2.col + '" stroke="#fff"/>';
-            out += '<text x="' + (cx - rad).toFixed(1) + '" y="' + (cy + rad + 13).toFixed(1) + '" font-size="10.5" fill="#333">' + pn2.lbl + '</text>';
+            out += '<text x="' + cx.toFixed(1) + '" y="' + (cy + 15 + 12 * i).toFixed(1) + '" text-anchor="middle" font-size="10.5" fill="#333">' + pn2.lbl + '</text>';
         }
         out += '<text x="6" y="' + (H - 8) + '" font-size="10" fill="#6b4423">← 齒輪中心</text>';
         $('ig-zoom').innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + out + '</svg>';
     }
 
     function drawOverview(g, e, q, col){
-        var S = 230, c = S / 2, rr = g.dRoot / 2, rt = g.dTip / 2, Ro = rr * 1.1, s = (c - 6) / Ro, N = 5, i, k, pts = [], step = 2 * Math.PI / g.z;
+        var S = 188, c = S / 2, rr = g.dRoot / 2, rt = g.dTip / 2, Ro = rr * 1.1, s = (c - 6) / Ro, N = 5, i, k, pts = [], step = 2 * Math.PI / g.z;
         function PX(r, ph){ return (c + r * Math.cos(ph) * s).toFixed(1) + ',' + (c - r * Math.sin(ph) * s).toFixed(1); }
         function ps(r){ return Math.max(0, psiAt(g, e, r)); }
         for (k = 0; k < g.z; k++) {
@@ -319,7 +320,8 @@ if (!isset($can_ingear_calc)) {
         $('ig-over').innerHTML = '<svg width="' + S + '" height="' + S + '" viewBox="0 0 ' + S + ' ' + S + '">' + out + '</svg>';
     }
 
-    function clearGraphics(){ $('ig-zoom').innerHTML = ''; $('ig-over').innerHTML = ''; }
+    function clearGraphics(){ $('ig-zoom').innerHTML = ''; $('ig-over').innerHTML = ''; $('ig-key').innerHTML = ''; }
+    function keyBox(rows, j){ $('ig-key').innerHTML = '<div class="ig-card" style="margin-bottom:6px"><div class="ig-cb"><table class="ig-t">' + rows + '</table>' + badge(j) + '</div></div>'; }
     function colOf(j){ return j.lv === 0 ? '#F0A24B' : (j.lv === 1 ? '#E67E22' : '#DD5138'); }
 
     /* ───── 兩個分頁的計算 ───── */
@@ -344,6 +346,7 @@ if (!isset($can_ingear_calc)) {
              row('有效齒面範圍', 'Ø' + f(g.dTip, 2) + ' ～ Ø' + f(g.dRoot, 2)) +
              row('齒數類型', g.z % 2 === 0 ? '偶數齒（銷在正對面）' : '奇數齒（兩銷差半個齒距）') + '</table>' + badge(j);
         res.innerHTML = h;
+        keyBox(row('跨銷距 M', f(r.M, 4) + ' mm', 'ig-big'), j);
         drawZoom(g, e, [{ r: r, col: col, lbl: '銷 Ø' + f(D, 3) }]);
         drawOverview(g, e, r, col);
     }
@@ -381,6 +384,7 @@ if (!isset($can_ingear_calc)) {
              row('有效齒面範圍', 'Ø' + f(g.dTip, 2) + ' ～ Ø' + f(g.dRoot, 2)) + '</table>' +
              '<div style="font-size:11px;color:#6b4423;margin-top:4px">我方銷 Ø' + f(D2, 4) + '（含公差上下限兩端一起判定）：</div>' + badge(worst);
         res.innerHTML = h;
+        keyBox(row('我方跨銷距 M2（含公差區間）', (lo === null ? '—' : f(lo, 3)) + ' ~ ' + (hi === null ? '—' : f(hi, 3)) + ' mm', 'ig-big'), worst);
         var pins = [{ r: r2, col: colOf(worst), dash: false, lbl: '我方 Ø' + f(D2, 3) }];
         if (r1) pins.push({ r: r1, col: '#8c8c8c', dash: true, lbl: '客戶 Ø' + f(D1, 3) });
         drawZoom(g, e, pins);
@@ -390,6 +394,7 @@ if (!isset($can_ingear_calc)) {
     function calc(){
         if (!domInited) return;
         var g = readGear();
+        $('ig-key').innerHTML = '';
         if (!g) { $('ig-res').innerHTML = ''; clearGraphics(); return; }
         if (tab === 'a') calcA(g); else calcB(g);
     }
