@@ -1982,7 +1982,6 @@ if ($reply_id != "") {
                 <div class="form-group qrcode-display-area" style="text-align: center; margin-top: 15px; display: none;">
                     <!-- This area will no longer be used for preview -->
                     <div id="qrcode_image_container_${bomIngFidEsc}" style="margin-bottom: 10px;"></div>
-                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -2193,6 +2192,10 @@ if ($reply_id != "") {
                     item.d_id = item.d_id || '';
                     item.QC_QQ_sqty = item.QC_QQ_sqty || 0;
                     item.QC_ok_sqty = item.QC_ok_sqty || 0;
+                    item.QC_ng_sqty = item.QC_ng_sqty || 0;
+                    item.QC_aod_sqty = item.QC_aod_sqty || 0;
+                    item.next_started = item.next_started || 0;
+                    item.next_started_info = item.next_started_info || '';
                     item.latest_QQ_date_formatted = item.latest_QQ_date_formatted || '';
                     item.latest_ok_date_formatted = item.latest_ok_date_formatted || '';
                     item.return_date = item.return_date || '';
@@ -2240,18 +2243,27 @@ if ($reply_id != "") {
                         statusHtml = `<div class="qc-flex">${statusParts.join('&emsp;')}</div>`;
                     }
 
+                    // ── 報工進度／補按回廠 徽章（純顯示，不影響任何既有判定）──
                     var _prog = window.qcProgress(item);
                     var _badges = '';
-                    var _scrapNote = _prog.scrapQty > 0 ? `（發包量 ${he(String(_prog.rawTotal))} 已扣外包回廠報廢 ${he(String(_prog.scrapQty))} 件）` : '';
+                    // 2026-10-07：有扣外包回廠報廢時，提示裡要講清楚是哪家廠商回報的，
+                    // 品管看到總數跟BOM發包量對不上才找得到人問原因。
+                    var _scrapNote = _prog.scrapQty > 0
+                        ? `（發包量 ${he(String(_prog.rawTotal))} 已扣外包回廠報廢 ${he(String(_prog.scrapQty))} 件：${he(String(item.outsource_scrap_vendors || ''))}）`
+                        : '';
                     if (_prog.full) {
-                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}${_scrapNote}，只差按【完成】">✓ 已驗滿·待按完成</span>`;
+                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}${_scrapNote}，只差按【完成】。按了才會離開待驗清單並寫進 QC完工紀錄">✓ 已驗滿·待按完成</span>`;
                     } else if (_prog.part) {
                         _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}${_scrapNote}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
                     }
+                    if (_prog.scrapQty > 0) {
+                        _badges += `<span class="qc-prog-badge" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="${_scrapNote}"><i class="fa fa-truck"></i> 已扣外包報廢 ${he(String(_prog.scrapQty))}</span>`;
+                    }
                     if (+item.next_started) {
                         var _ni = String(item.next_started_info || '').split('|');
-                        var _nName = _ni[0] || '', _nDate = _ni[1] || '';
-                        _badges += `<span class="qc-prog-badge qc-prog-next" title="這個 BOM 後面的站別（${he(_nName)}${_nDate ? ' ' + he(_nDate) + ' 發單' : ''}）已經開工了，這一站多半是事後才補按回廠的">後站已開工${_nName ? '·' + he(_nName) : ''}</span>`;
+                        var _nName = _ni[0] || '';
+                        var _nDate = _ni[1] || '';
+                        _badges += `<span class="qc-prog-badge qc-prog-next" title="這個 BOM 後面的站別（${he(_nName)}${_nDate ? ' ' + he(_nDate) + ' 發單' : ''}）已經開工了，這一站多半是事後才補按回廠的，確認過就可以直接按【完成】">後站已開工${_nName ? '·' + he(_nName) : ''}</span>`;
                     }
                     if (_badges) statusHtml += `<div style="line-height:1;">${_badges}</div>`;
 
