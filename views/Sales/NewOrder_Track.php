@@ -13307,6 +13307,22 @@ foreach($dCounts as $c) {
         function oaHasOrigCat(cats, checkedIds) {
             return (cats || []).some(function(c) { return c.category_name === '原圖' && checkedIds.indexOf(String(c.id)) !== -1; });
         }
+        // 多頁 PDF 勾選任何標籤都可逐料號指定所在頁（2026-10-21，原本只有「原圖」）
+        function oaHasAnyCat(cats, checkedIds) {
+            return (cats || []).some(function(c) { return checkedIds.indexOf(String(c.id)) !== -1; });
+        }
+        // 原圖以外標籤已指定的頁碼摘要（來自 list_files 的 tag_pages：標籤id → 料號 → 頁碼）
+        function oaTagPagesHtml(f, cats) {
+            var tp = f.tag_pages || {}, out = '';
+            Object.keys(tp).forEach(function(cid) {
+                var c = (cats || []).filter(function(x) { return String(x.id) === String(cid); })[0];
+                var m = tp[cid] || {}, keys = Object.keys(m);
+                if (!c || !keys.length) return;
+                out += '<span class="oa-tagpg-sum" data-cat="' + escapeHtml(cid) + '" style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;" title="這份 PDF 內各料號「' + escapeHtml(c.category_name) + '」所在頁">' + escapeHtml(c.category_name) + '頁：' +
+                    keys.map(function(p) { return escapeHtml(p) + ' 第' + escapeHtml(m[p]) + '頁'; }).join('；') + '</span> ';
+            });
+            return out;
+        }
         // 已指定的「各料號原圖頁」摘要（來自 list_files 的 origin_pages）
         function oaOriginPagesHtml(f) {
             var m = f.origin_pages || {}, keys = Object.keys(m);
@@ -13317,7 +13333,7 @@ foreach($dCounts as $c) {
         $(document).on('change', '.oa-file-row .oa-tag-panel input[type=checkbox]', function() {
             var $row = $(this).closest('.oa-file-row'), ids = [];
             $row.find('.oa-tag-panel input:checked').each(function() { ids.push(String($(this).val())); });
-            $row.find('.oa-page-btn').toggle(oaHasOrigCat(orderAttachCats, ids));
+            $row.find('.oa-page-btn').toggle(oaHasAnyCat(orderAttachCats, ids));
         });
         // 產生單一附件列的 HTML（tagToggle/tagApply/fileDel 走事件委派，data-id 標記附件ID）
         // availableParts：showPart 情境下這批目前有哪些料號可選（>1 筆才顯示下拉，讓使用者事後改料號連結）
@@ -13373,9 +13389,9 @@ foreach($dCounts as $c) {
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 // 客戶訂單 PDF 內含多個料號的原圖：預覽縮圖、逐頁指定屬於哪個料號（只有已存檔、同訂單編號有多料號的 PDF 才給）
-                oaOriginPagesHtml(f) +
+                oaOriginPagesHtml(f) + oaTagPagesHtml(f, cats) +
                 ((f.status === 'active' && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
-                    ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;' + (oaHasOrigCat(cats, checkedIds) ? '' : 'display:none;') + '" title="預覽這份 PDF，指定每一頁是哪個料號的原圖"><i class="fa fa-th"></i> 原圖頁對應</span>' : '') +
+                    ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;' + (oaHasAnyCat(cats, checkedIds) ? '' : 'display:none;') + '" title="預覽這份 PDF，依已勾選的標籤（原圖、規格書…），指定每一頁屬於哪個料號"><i class="fa fa-th"></i> 頁面對應</span>' : '') +
                 delHtml +
                 '</div>' +
                 '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
@@ -13493,20 +13509,50 @@ foreach($dCounts as $c) {
             return segs.join(',');
         }
         $(document).on('click', '.oa-page-btn', function() {
-            var attId = $(this).closest('.oa-file-row').data('id');
-            // 點開即刷新：料號與既有對照一律跟後端要最新的
+            var $row = $(this).closest('.oa-file-row'), attId = $row.data('id');
+            var cats = [];
+            $row.find('.oa-tag-panel input:checked').each(function() {
+                var cid = String($(this).val());
+                var c = (orderAttachCats || []).filter(function(x) { return String(x.id) === cid; })[0];
+                if (c) cats.push({ id: cid, name: c.category_name, orig: c.category_name === '原圖' });
+            });
+            if (!cats.length) { showToast('請先勾選至少一個標籤', 'info'); return; }
+            cats.sort(function(a, b) { return (b.orig ? 1 : 0) - (a.orig ? 1 : 0); }); // 原圖排最前
+            // 點開即刷新：料號與既有對照一律跟後端要最新的（原圖走舊 action，其他標籤走 tag_page_map_get）
             $.post(ORDER_ATTACH_API, { action: 'page_map_get', attachment_id: attId }, function(res) {
                 if (!res.success) { showToast(res.message || '讀取失敗', 'info'); return; }
-                opm = { attId: attId, parts: res.all_parts || [], sets: {}, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now(), doc: null, focus: 0, bigTok: 0 };
-                $('#opm-big').html('<span style="color:#aaa;line-height:120px;">載入中…</span>'); $('#opm-focus-label').text('');
-                opm.parts.forEach(function(p) { opm.sets[p] = opmParse((res.map || {})[p]); });
-                $('#opm-file').text((res.display_name || '') + '（訂單 ' + (res.order_oo || '') + '）');
-                $('#opm-err').hide().text('');
-                $('#opm-pages').html('<span style="color:#aaa;">載入預覽中…</span>');
-                opmRenderParts();
-                $('#oaPageMapModal').modal('show');
-                opmRenderPages(attId, opm.token);
+                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_get', attachment_id: attId }, function(r2) {
+                    var tmaps = (r2 && r2.success && r2.maps) ? r2.maps : {};
+                    opm = { attId: attId, parts: res.all_parts || [], sets: {}, all: {}, cats: cats, cat: cats[0].id, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now(), doc: null, focus: 0, bigTok: 0 };
+                    cats.forEach(function(c) {
+                        var src = c.orig ? (res.map || {}) : (tmaps[c.id] || {}), o = {};
+                        opm.parts.forEach(function(p) { o[p] = opmParse(src[p]); });
+                        opm.all[c.id] = o;
+                    });
+                    opm.sets = opm.all[opm.cat];
+                    $('#opm-big').html('<span style="color:#aaa;line-height:120px;">載入中…</span>'); $('#opm-focus-label').text('');
+                    $('#opm-file').text((res.display_name || '') + '（訂單 ' + (res.order_oo || '') + '）');
+                    $('#opm-err').hide().text('');
+                    $('#opm-pages').html('<span style="color:#aaa;">載入預覽中…</span>');
+                    opmRenderCats();
+                    opmRenderParts();
+                    $('#oaPageMapModal').modal('show');
+                    opmRenderPages(attId, opm.token);
+                }, 'json').fail(function() { showToast('讀取失敗', 'info'); });
             }, 'json').fail(function() { showToast('讀取失敗', 'info'); });
+        });
+        // 標籤切換列（勾了多個標籤才顯示）：每個標籤各自一份「哪頁屬於哪個料號」，一起儲存
+        function opmCatName() { var c = (opm.cats || []).filter(function(x) { return x.id === opm.cat; })[0]; return c ? c.name : ''; }
+        function opmRenderCats() {
+            $('#opm-title').text(opm.cats.length > 1 ? '頁面對應：這份 PDF 的每一頁屬於哪個料號' : opmCatName() + '頁對應：這份 PDF 的每一頁是哪個料號的' + opmCatName());
+            $('#opm-cats').toggle(opm.cats.length > 1).html(opm.cats.map(function(c) {
+                var on = c.id === opm.cat;
+                return '<span class="opm-cat" data-c="' + escapeHtml(c.id) + '" style="cursor:pointer;display:inline-block;padding:2px 10px;margin:0 6px 4px 0;border-radius:12px;font-size:12px;border:2px solid ' + (on ? '#8a5a2b' : '#E4D3BC') + ';background:' + (on ? '#8a5a2b' : '#fff') + ';color:' + (on ? '#fff' : '#8a5a2b') + ';">' + escapeHtml(c.name) + '</span>';
+            }).join(''));
+        }
+        $(document).on('click', '#opm-cats .opm-cat', function() {
+            opm.cat = String($(this).data('c')); opm.sets = opm.all[opm.cat];
+            opmRenderCats(); opmRefreshBadges();
         });
         function opmColor(p) { var i = opm.parts.indexOf(p); return OPM_COLORS[(i < 0 ? 0 : i) % OPM_COLORS.length]; }
         function opmRenderParts() {
@@ -13516,7 +13562,7 @@ foreach($dCounts as $c) {
                 return '<div class="opm-part" data-p="' + escapeHtml(p) + '" style="cursor:pointer;padding:6px 8px;margin-bottom:5px;border-radius:4px;border:2px solid ' + (on ? opmColor(p) : '#E4D3BC') + ';background:' + (on ? '#FFF3E2' : '#fff') + ';">' +
                     '<div style="display:flex;align-items:center;gap:6px;"><span style="width:12px;height:12px;border-radius:2px;background:' + opmColor(p) + ';flex:none;"></span>' +
                     '<b style="font-size:12px;word-break:break-all;">' + escapeHtml(p) + '</b></div>' +
-                    '<div style="font-size:11px;color:#8a5a2b;margin-top:2px;">' + (sp ? '原圖：第 ' + escapeHtml(sp) + ' 頁' : '<span style="color:#aaa;">尚未指定</span>') + '</div></div>';
+                    '<div style="font-size:11px;color:#8a5a2b;margin-top:2px;">' + (sp ? escapeHtml(opmCatName()) + '：第 ' + escapeHtml(sp) + ' 頁' : '<span style="color:#aaa;">尚未指定</span>') + '</div></div>';
             }).join('') || '<span style="color:#aaa;">這個訂單編號底下沒有料號</span>');
         }
         function opmRefreshBadges() {
@@ -13588,8 +13634,8 @@ foreach($dCounts as $c) {
         }
         function opmRefreshToggle() {
             var has = !!(opm.active && opm.focus && (opm.sets[opm.active] || {})[opm.focus]);
-            $('#opm-toggle').html(has ? '<i class="fa fa-minus-circle"></i> 取消：第 ' + opm.focus + ' 頁不是 ' + escapeHtml(opm.active) + ' 的原圖'
-                                      : '<i class="fa fa-plus-circle"></i> 加入：第 ' + (opm.focus || '') + ' 頁是 ' + escapeHtml(opm.active || '（請先選料號）') + ' 的原圖')
+            $('#opm-toggle').html(has ? '<i class="fa fa-minus-circle"></i> 取消：第 ' + opm.focus + ' 頁不是 ' + escapeHtml(opm.active) + ' 的' + escapeHtml(opmCatName())
+                                      : '<i class="fa fa-plus-circle"></i> 加入：第 ' + (opm.focus || '') + ' 頁是 ' + escapeHtml(opm.active || '（請先選料號）') + ' 的' + escapeHtml(opmCatName()))
                 .toggleClass('btn-warning', !has).toggleClass('btn-default', has);
         }
         function opmToggleFocus() {
@@ -13601,14 +13647,30 @@ foreach($dCounts as $c) {
             opmRefreshBadges();
         }
         function opmSave() {
-            var map = {};
-            opm.parts.forEach(function(p) { var sp = opmFormat(opm.sets[p] || {}); if (sp) map[p] = sp; });
-            $.post(ORDER_ATTACH_API, { action: 'page_map_save', attachment_id: opm.attId, map: JSON.stringify(map) }, function(r) {
-                if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
+            // 每個標籤各自整份送出：原圖走舊 action（行為不變），其他標籤走 tag_page_map_save
+            var origMap = null, tagMaps = {}, hasTag = false;
+            opm.cats.forEach(function(c) {
+                var m = {};
+                opm.parts.forEach(function(p) { var sp = opmFormat((opm.all[c.id] || {})[p] || {}); if (sp) m[p] = sp; });
+                if (c.orig) origMap = m; else { tagMaps[c.id] = m; hasTag = true; }
+            });
+            function done(msg) {
                 $('#oaPageMapModal').modal('hide');
-                showToast(r.message || '已儲存', 'info');
+                showToast(msg || '已儲存', 'info');
                 var oid = parseInt($('#hidden_Order_id').val()) || 0;
                 orderAttachRefresh(oid || null);
+            }
+            function saveTags(msg) {
+                if (!hasTag) { done(msg); return; }
+                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_save', attachment_id: opm.attId, maps: JSON.stringify(tagMaps) }, function(r) {
+                    if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
+                    done(r.message);
+                }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
+            }
+            if (origMap === null) { saveTags(); return; }
+            $.post(ORDER_ATTACH_API, { action: 'page_map_save', attachment_id: opm.attId, map: JSON.stringify(origMap) }, function(r) {
+                if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
+                saveTags(r.message);
             }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
         }
 
@@ -13780,6 +13842,10 @@ foreach($dCounts as $c) {
             var thisCat = (orderAttachCats || []).filter(function(x) { return String(x.id) === String($(this).val()); }.bind(this))[0];
             if (!this.checked && thisCat && thisCat.category_name === '原圖' && $row.find('.oa-origin-sum').length) {
                 if (!confirm('取消「原圖」標籤，會同時清除這份 PDF 已指定的各料號原圖頁。\n\n確定要取消？')) { this.checked = true; $row.find('.oa-page-btn').show(); return; }
+            }
+            if (!this.checked && thisCat && thisCat.category_name !== '原圖' && $row.find('.oa-tagpg-sum[data-cat="' + thisCat.id + '"]').length) {
+                if (!confirm('取消「' + thisCat.category_name + '」標籤，會同時清除這份 PDF 已指定的該標籤頁碼。\n\n確定要取消？')) { this.checked = true; return; }
+                $row.find('.oa-tagpg-sum[data-cat="' + thisCat.id + '"]').remove();
             }
             var ids = [];
             $checked.each(function() { ids.push($(this).val()); });
@@ -16106,11 +16172,12 @@ foreach($dCounts as $c) {
           <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:10px 14px;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
             <button type="button" class="btn btn-sm btn-primary" style="float:right;margin:-1px 14px 0 0;" onclick="opmSave()"><i class="fa fa-check"></i> 儲存</button>
-            <h4 class="modal-title"><i class="fa fa-th"></i> 原圖頁對應：這份 PDF 的每一頁是哪個料號的原圖</h4>
+            <h4 class="modal-title"><i class="fa fa-th"></i> <span id="opm-title">頁面對應</span></h4>
           </div>
           <div class="modal-body" style="padding:12px;">
             <div id="opm-file" style="font-size:12px;color:#5d4037;font-weight:600;"></div>
-            <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號；點左邊縮圖會在中間顯示大圖（可捲動、可用上一頁／下一頁），確認內容後按大圖上方的「加入／取消」鈕指定給該料號（一頁可同時屬於多個料號）。這份檔案本身的「客戶訂單」標籤與共用方式不變，這裡只是額外標明各料號原圖在第幾頁；圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
+            <div id="opm-cats" style="margin:6px 0 2px;display:none;"></div>
+            <div style="font-size:11px;color:#888;margin:4px 0 8px;line-height:1.6;">先在右邊點選料號；點左邊縮圖會在中間顯示大圖（可捲動、可用上一頁／下一頁），確認內容後按大圖上方的「加入／取消」鈕指定給該料號（一頁可同時屬於多個料號）。這份檔案本身的標籤與共用方式不變，這裡只是額外標明各料號在第幾頁；勾了多個標籤時，用上方標籤列切換，各標籤分別指定、一起儲存。「原圖」在圖面查閱時該料號會看到「原圖 第N頁」並直接跳到那一頁。</div>
             <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
               <div id="opm-pages" style="flex:0 0 112px;max-height:calc(100vh - 250px);overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:4px;background:#fafafa;display:flex;flex-direction:column;gap:6px;"></div>
               <div style="flex:1 1 520px;min-width:300px;">

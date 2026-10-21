@@ -135,6 +135,22 @@ function oaInitTable(PDO $pdo): void {
             INDEX idx_oo (order_oo)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單附件PDF：各料號原圖所在頁'");
     } catch (Exception $e) {}
+    // 多頁附件勾選「原圖以外」的標籤時，同樣可逐料號指定所在頁（2026-10-21）。
+    // 原圖維持舊表 order_attachment_pages 完全不動（圖面查閱／工程變更仍讀它），其他標籤另存此表。
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS order_attachment_tag_pages (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            filename    VARCHAR(255) NOT NULL COMMENT '實體檔名（同 order_attachments.filename）',
+            order_oo    VARCHAR(50)  NOT NULL COMMENT '訂單編號',
+            category_id INT          NOT NULL COMMENT '標籤 quotation_file_categories.id（不含原圖）',
+            part_no     VARCHAR(50)  NOT NULL COMMENT '訂單料號（order_track.d_id）',
+            pages       VARCHAR(255) NOT NULL COMMENT '頁碼，例 1,3-4',
+            created_by  INT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_file_cat_part (filename, order_oo, category_id, part_no),
+            INDEX idx_oo (order_oo)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單附件PDF：各標籤、各料號所在頁（原圖除外）'");
+    } catch (Exception $e) {}
 }
 
 /** 「原圖」類別 id（依名稱；找不到回 0） */
@@ -355,6 +371,7 @@ switch ($action) {
         }
         // 客戶訂單 PDF 的「各料號原圖頁」對照（只取這張訂單的訂單編號底下）
         $pageMapByFile = [];
+        $tagPagesByFile = []; // 原圖以外標籤的頁碼：filename → category_id → part_no → pages
         if ($orderId > 0 && $activeFilenames) {
             try {
                 $ooq = $pdo->prepare("SELECT Order_oo FROM order_track WHERE Order_id=?");
@@ -365,11 +382,15 @@ switch ($action) {
                     $pmq = $pdo->prepare("SELECT filename, part_no, pages FROM order_attachment_pages WHERE order_oo=? AND filename IN ($phF)");
                     $pmq->execute(array_merge([$curOo], $activeFilenames));
                     foreach ($pmq->fetchAll(PDO::FETCH_ASSOC) as $pm) { $pageMapByFile[$pm['filename']][$pm['part_no']] = $pm['pages']; }
+                    $tpq = $pdo->prepare("SELECT filename, category_id, part_no, pages FROM order_attachment_tag_pages WHERE order_oo=? AND filename IN ($phF)");
+                    $tpq->execute(array_merge([$curOo], $activeFilenames));
+                    foreach ($tpq->fetchAll(PDO::FETCH_ASSOC) as $tp) { $tagPagesByFile[$tp['filename']][$tp['category_id']][$tp['part_no']] = $tp['pages']; }
                 }
             } catch (Exception $e) {}
         }
         foreach ($rows as &$r) {
             $r['origin_pages'] = $pageMapByFile[$r['filename']] ?? new stdClass();
+            $r['tag_pages'] = $tagPagesByFile[$r['filename']] ?? new stdClass();
             $ids = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
             $r['category_name'] = implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
             $r['is_shared'] = isset($sharedSet[$r['filename']]);
@@ -423,6 +444,16 @@ switch ($action) {
                            JOIN order_track ot ON ot.Order_id=a.order_id AND ot.Order_oo=p.order_oo
                            WHERE a.id=?")->execute([$attId]);
         }
+        // 取消勾選的其他標籤：一併清掉該標籤已指定的頁碼
+        try {
+            $tq = $pdo->prepare("SELECT a.filename, ot.Order_oo FROM order_attachments a JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
+            $tq->execute([$attId]);
+            if ($tr = $tq->fetch(PDO::FETCH_ASSOC)) {
+                $keep = $catIds ? implode(',', array_map('intval', $catIds)) : '0';
+                $pdo->prepare("DELETE FROM order_attachment_tag_pages WHERE filename=? AND order_oo=? AND category_id NOT IN ($keep)")
+                    ->execute([$tr['filename'], $tr['Order_oo']]);
+            }
+        } catch (Exception $e) {}
         echo json_encode(['success' => true]);
         break;
     }
@@ -607,6 +638,67 @@ switch ($action) {
         break;
     }
 
+    // ── 多頁附件：原圖以外的標籤，各料號所在頁（讀）──
+    case 'tag_page_map_get': {
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        $st = $pdo->prepare("SELECT a.filename, COALESCE(ot.Order_oo,'') AS order_oo FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件，或這份附件還沒歸屬到訂單（請先存檔）']); break; }
+        $maps = [];
+        $mq = $pdo->prepare("SELECT category_id, part_no, pages FROM order_attachment_tag_pages WHERE filename=? AND order_oo=?");
+        $mq->execute([$row['filename'], $row['order_oo']]);
+        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $m) { $maps[$m['category_id']][$m['part_no']] = $m['pages']; }
+        echo json_encode(['success'=>true, 'maps'=>$maps ?: new stdClass(), 'orig_id'=>oaOrigCatId($pdo)], JSON_UNESCAPED_UNICODE);
+        break;
+    }
+
+    // ── 多頁附件：原圖以外的標籤，各料號所在頁（寫；送來的每個標籤各自以整份為準）──
+    case 'tag_page_map_save': {
+        if (!_oaCanEdit($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無訂單編輯權限']); break; }
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        $in = json_decode((string)($_POST['maps'] ?? ''), true);
+        if (!is_array($in)) { echo json_encode(['success'=>false,'message'=>'資料格式錯誤']); break; }
+        $st = $pdo->prepare("SELECT a.filename, a.category_ids, COALESCE(ot.Order_oo,'') AS order_oo FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
+        $has = array_map('intval', explode(',', (string)$row['category_ids']));
+        $origId = oaOrigCatId($pdo);
+        $all = oaSiblingParts($pdo, $attId);
+        $clean = [];
+        foreach ($in as $cid => $pm) {
+            $cid = (int)$cid;
+            if ($cid <= 0 || $cid === $origId || !in_array($cid, $has, true) || !is_array($pm)) { echo json_encode(['success'=>false,'message'=>'標籤不正確或這份附件沒有勾選該標籤']); break 2; }
+            $clean[$cid] = [];
+            foreach ($pm as $part => $spec) {
+                $part = (string)$part;
+                if (trim((string)$spec) === '') continue;
+                if (!in_array($part, $all, true)) { echo json_encode(['success'=>false,'message'=>'料號 ' . $part . ' 不在訂單編號 ' . $row['order_oo'] . ' 底下']); break 3; }
+                $n = oaPageSpecNormalize((string)$spec);
+                if ($n === null) { echo json_encode(['success'=>false,'message'=>'料號 ' . $part . ' 的頁碼格式不正確（例：1,3-4）']); break 3; }
+                $clean[$cid][$part] = $n;
+            }
+        }
+        $pdo->beginTransaction();
+        try {
+            $del = $pdo->prepare("DELETE FROM order_attachment_tag_pages WHERE filename=? AND order_oo=? AND category_id=?");
+            $ins = $pdo->prepare("INSERT INTO order_attachment_tag_pages (filename, order_oo, category_id, part_no, pages, created_by) VALUES (?,?,?,?,?,?)");
+            $cnt = 0;
+            foreach ($clean as $cid => $pm) {
+                $del->execute([$row['filename'], $row['order_oo'], $cid]);
+                foreach ($pm as $p => $n) { $ins->execute([$row['filename'], $row['order_oo'], $cid, $p, $n, ($uid ?: null)]); $cnt++; }
+            }
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>'儲存失敗：' . $e->getMessage()]);
+            break;
+        }
+        echo json_encode(['success'=>true, 'message'=>'已儲存 ' . $cnt . ' 筆頁碼對應']);
+        break;
+    }
+
     // ── 附件連動整理：找出「同一訂單編號＋同一份實體檔，卻掛在多個不同料號上」的組別 ──
     // 背景（2026-09-11）：改版前的同步程式只看標籤，不管附件有沒有綁料號，於是原本各自上傳到自己
     // 那張訂單的原圖，會在有人編輯同編號任一張訂單時被互相散佈到每個料號上。程式已修好不會再長，
@@ -747,6 +839,7 @@ switch ($action) {
         $del->execute([$row['filename']]);
         $linkedRemoved = $del->rowCount() - 1;
         try { $pdo->prepare("DELETE FROM order_attachment_pages WHERE filename=?")->execute([$row['filename']]); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM order_attachment_tag_pages WHERE filename=?")->execute([$row['filename']]); } catch (Exception $e) {}
         $fp = $dir . $row['filename'];
         if (is_file($fp)) @unlink($fp);
         $msg = $linkedRemoved > 0 ? ('已刪除（含自動連動的 ' . $linkedRemoved . ' 筆）') : '已刪除';
