@@ -2734,10 +2734,12 @@ function ec_auto_from_dwg_change(PDO $db, int $changeId, int $uid, string $uname
         'applicant_name'   => $idt['user_name'] !== '' ? $idt['user_name'] : $uname,
         // 圖面變更來源＝客戶才會走到這裡，所以變更方式預設「客戶通知變更」
         'change_type'      => 'customer_notify',
-        'change_reason'    => trim((string)$c['summary']),
+        // 設變事由說明「僅其他變更」才填；圖面變更的摘要屬於設計分析，帶到「設計分析補充」
+        'change_reason'    => '',
         'source_change_id' => $changeId,
         'create_source'    => 'dwg',
     ], $uid, $uname);
+    $db->prepare("UPDATE eng_change SET design_note=? WHERE ec_id=?")->execute([trim((string)$c['summary']), $ecId]);
     $row = ec_row($db, $ecId);
     return ['ok' => true, 'ec_id' => $ecId, 'doc_no' => (string)$row['doc_no'], 'existed' => false,
             'message' => '已依圖面變更 ' . (string)$c['change_no'] . ' 自動建立工程變更申請單草稿 '
