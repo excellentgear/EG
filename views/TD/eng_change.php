@@ -754,7 +754,7 @@ var PART_CACHE = {};
 /* 附件（使用者要求 2026-09-23）：CUR_ATT 已經由後端編好號（附件1、附件2…），
    畫面／列印／「列印所有附件」三處一律沿用同一份順序，不在前端重排。 */
 var CUR_ATT = [], ATT_CATS = {apply:[], design:[]}, ATT_RULE = 'optional', ATT_RULES_ALL = {}, ATT_HINT = {};
-var ATT_SLOT = '', ATT_CAT = 0, ATT_FILE = null;   // 挑選跳窗目前的狀態
+var ATT_SLOT = '', ATT_CAT = 0, ATT_ROLE = '', ATT_FILE = null;   // 挑選跳窗目前的狀態
 var CUR_SIGNERS = {}, ATT_EDIT = {apply:false, design:false};
 var CUR_SLOTS = [], FIX_SLOT = '';   // 各簽章格的狀態／正在更正哪一格
 
@@ -1106,9 +1106,9 @@ function renderHist(approvals, d){
      ③ 申請內容的 PDF 要指定其中一頁；設計分析可以整份多頁
      ④ 變更方式決定申請內容的附件是必選／可選／不可選
    附件編號（附件1、附件2…）一律由後端算好帶回來，前端不重排。 */
-function attOf(slot, catId){
+function attOf(slot, catId, role){
     for (var i = 0; i < CUR_ATT.length; i++)
-        if (CUR_ATT[i].slot === slot && +CUR_ATT[i].cat_id === +catId) return CUR_ATT[i];
+        if (CUR_ATT[i].slot === slot && +CUR_ATT[i].cat_id === +catId && (CUR_ATT[i].role || '') === (role || '')) return CUR_ATT[i];
     return null;
 }
 function renderAttach(slot){
@@ -1134,9 +1134,12 @@ function renderAttach(slot){
     var canEdit = !!ATT_EDIT[slot];
     var hint = ATT_HINT[slot] || '';
     var h = hint ? '<div style="font-size:11px;color:#8a6d45;margin-bottom:3px;">'+esc(hint)+'</div>' : '';
-    cats.forEach(function(c){
-        var a = attOf(slot, c.id);
-        h += '<div class="att-row"><span class="att-cat">'+esc(c.name)+'</span><span class="att-file">';
+    var roles = isApply ? [['old','舊'],['new','新']] : [['','']];   // 申請內容：每個標籤舊、新各挑一個
+    var rows = [];
+    cats.forEach(function(c){ roles.forEach(function(ro){ rows.push([c, ro[0], ro[1]]); }); });
+    rows.forEach(function(rr){
+        var c = rr[0], role = rr[1], a = attOf(slot, c.id, role);
+        h += '<div class="att-row"><span class="att-cat">'+esc(rr[2] + c.name)+'</span><span class="att-file">';
         if (a) {
             h += '<span class="att-seq">'+esc(a.seq_label)+'</span>' + esc(a.orig_name)
                + (a.page_no ? '　<b>第 '+a.page_no+' 頁</b>' + (a.page_count ? '／共 '+a.page_count+' 頁' : '') : '')
@@ -1147,7 +1150,7 @@ function renderAttach(slot){
         h += '</span>';
         if (a) h += '<button type="button" class="att-mini" onclick="openAttFile(\''+esc(a.url)+'\')">檢視</button>';
         if (canEdit) {
-            h += '<button type="button" class="att-mini" onclick="openAttPick(\''+slot+'\','+c.id+')">'
+            h += '<button type="button" class="att-mini" onclick="openAttPick(\''+slot+'\','+c.id+',\''+role+'\')">'
                + (a ? '換一個' : '挑選…') + '</button>';
             if (a) h += '<button type="button" class="att-mini del" onclick="delAttach('+a.id+')">移除</button>';
         }
@@ -1169,7 +1172,8 @@ function delAttach(rowId){
             .html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
     });
 }
-function openAttPick(slot, catId){
+function openAttPick(slot, catId, role){
+    role = role || '';
     if (!CUR) return;
     /* ★候選清單是依「DB 上這張單的料號」篩的，所以剛開的草稿在畫面上打完料號、
        還沒按儲存就來挑附件時，後端看到的 d_id 還是空的 → 候選永遠 0 筆，
@@ -1181,20 +1185,20 @@ function openAttPick(slot, catId){
             if (!r.ok) return;
             $('#e_doc_no').val(r.doc_no || '');
             CUR.d_id = uiDid; CUR.part_no = $('#e_part_kw').val().trim();
-            openAttPick(slot, catId);
+            openAttPick(slot, catId, role);
         });
         return;
     }
     if (!+(CUR.d_id || 0)) { alert('請先選好料號（附件是從這張單料號底下的料號附件裡挑）'); return; }
-    ATT_SLOT = slot; ATT_CAT = catId; ATT_FILE = null;
+    ATT_SLOT = slot; ATT_CAT = catId; ATT_ROLE = role; ATT_FILE = null;
     var cat = (ATT_CATS[slot] || []).filter(function(c){ return +c.id === +catId; })[0] || {name:''};
-    $('#attTitle').text('挑選附件　' + (DICT.attach_slots[slot] ? DICT.attach_slots[slot].label : slot) + '　—　' + cat.name);
+    $('#attTitle').text('挑選附件　' + (DICT.attach_slots[slot] ? DICT.attach_slots[slot].label : slot) + '　—　' + (role === 'old' ? '舊' : role === 'new' ? '新' : '') + cat.name);
     $('#attStep1').show(); $('#attStep2').hide();
     $('#attFiles').html('<div style="color:#aaa;">載入中…</div>');
     $('#attHint').html(esc(ATT_HINT[slot] || '') + '<br>列出本單料號「<b>' + esc(CUR.part_no || '') + '</b>」的<b>料號附件、報價單附件、訂單附件</b>中掛「'
-                     + esc(cat.name) + '」標籤者（同一份檔案只列一次），<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。');
+                     + esc(cat.name) + '」標籤者（同一份檔案只列一次），<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。' + (role ? '<br>系統依發行／上傳日期自動標出<b>「建議」</b>；掛「作廢」標籤的檔案會標紅。' : ''));
     openMask('attMask');
-    $.getJSON(API, {action:'attach_candidates', id:CUR.ec_id, slot:slot, cat_id:catId}, function(r){
+    $.getJSON(API, {action:'attach_candidates', id:CUR.ec_id, slot:slot, cat_id:catId, role:role}, function(r){
         if (!r.ok) return;
         var rows = r.rows || [];
         if (!rows.length) {
@@ -1204,8 +1208,9 @@ function openAttPick(slot, catId){
         }
         var h = '';
         rows.forEach(function(f){
-            h += '<div class="att-f">'
-              +  '<span class="nm"><span class="pill draft" style="margin-right:4px;">' + esc(f.src_label || '料號附件') + '</span>' + esc(f.show_name)
+            h += '<div class="att-f"' + (f.suggest ? ' style="border-color:#F0A24B;background:#FFF6E6;"' : '') + '>'
+              +  '<span class="nm">' + (f.suggest ? '<span class="pill" style="background:#F0A24B;color:#fff;margin-right:4px;">建議</span>' : '')
+              +  (f.is_void ? '<span class="pill" style="background:#DD5138;color:#fff;margin-right:4px;">作廢</span>' : '') + '<span class="pill draft" style="margin-right:4px;">' + esc(f.src_label || '料號附件') + '</span>' + esc(f.show_name)
               +  (f.is_pdf ? ' <span class="pill draft">PDF</span>' : '')
               +  (f.note ? '<br><span class="mt">' + esc(f.note) + '</span>' : '') + '</span>'
               +  '<span class="mt">' + (f.issue_stamp_date ? '發行 ' + dispDate(f.issue_stamp_date) + '　' : '')
@@ -1292,7 +1297,7 @@ function renderPdfPages(url, attachId, onlyPages){
 }
 function saveAttach(attachId, pageNo, pageCount){
     post({action:'attach_save', ec_id:CUR.ec_id, slot:ATT_SLOT, cat_id:ATT_CAT,
-          attach_id:attachId, src_kind:(ATT_FILE && ATT_FILE.src) || 'part', page_no:pageNo || 0, page_count:pageCount || 0}, function(r){
+          role:ATT_ROLE, attach_id:attachId, src_kind:(ATT_FILE && ATT_FILE.src) || 'part', page_no:pageNo || 0, page_count:pageCount || 0}, function(r){
         if (!r.ok) return;
         CUR_ATT = r.rows || [];
         closeMask('attMask');

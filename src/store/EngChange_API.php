@@ -540,7 +540,7 @@ try {
         if (!in_array($cat, $allow, true)) jerr('這個附件標籤不在管理員允許的清單內', 400);
         if (!(int)$r['d_id']) jout(['rows' => [], 'no_part' => 1]);
         // 料號附件＋報價單附件＋訂單附件（同一份檔案只列一次）
-        $rows = ec_attach_candidates($db, (int)$r['d_id'], $cat);
+        $rows = ec_attach_mark_suggest(ec_attach_candidates($db, (int)$r['d_id'], $cat), (string)($_GET['role'] ?? ''));
         jout(['rows' => $rows, 'need_page' => (int)EC_ATTACH_SLOTS[$slot]['need_page']]);
     }
 
@@ -552,7 +552,7 @@ try {
         if (!ec_attach_can_edit($db, $r, $slot, $P, $uid)) jerr('你現在不能修改這一段的附件', 403);
         jout(ec_attach_set($db, $ecId, $slot, (int)($_POST['cat_id'] ?? 0), (int)($_POST['attach_id'] ?? 0),
                            ((int)($_POST['page_no'] ?? 0)) ?: null, ((int)($_POST['page_count'] ?? 0)) ?: null, $uid,
-                           (string)($_POST['src_kind'] ?? 'part')));
+                           (string)($_POST['src_kind'] ?? 'part'), (string)($_POST['role'] ?? '')));
     }
 
     if ($action === 'attach_del') {

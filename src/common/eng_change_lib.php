@@ -320,6 +320,13 @@ function ec_ensure_schema(PDO $db): void
             $db->exec("ALTER TABLE eng_change_attach ADD COLUMN src_kind VARCHAR(10) NOT NULL DEFAULT 'part' COMMENT 'part/quote/order＝attach_id 指向哪張表'");
         if (!in_array('src_ref', $have, true))
             $db->exec("ALTER TABLE eng_change_attach ADD COLUMN src_ref VARCHAR(40) NULL COMMENT '報價附件的 quote_no（下載要用）'");
+        // 申請內容附件分「舊(變更前)／新(變更後)」兩份：同一標籤要能各挑一個（設計分析附件維持空字串）
+        if (!in_array('role', $have, true)) {
+            $db->exec("ALTER TABLE eng_change_attach ADD COLUMN role VARCHAR(4) NOT NULL DEFAULT '' COMMENT 'old 舊／new 新／空＝不分'");
+            $db->exec("ALTER TABLE eng_change_attach DROP INDEX uk_ec_slot_cat, ADD UNIQUE KEY uk_ec_slot_cat (ec_id, slot, cat_id, role)");
+            // 既有只挑了一份的申請內容附件視為「新」
+            $db->exec("UPDATE eng_change_attach SET role='new' WHERE slot='apply' AND role=''");
+        }
     } catch (Throwable $e) {}
 
     try {
@@ -547,8 +554,9 @@ function ec_attach_rows(PDO $db, int $ecId): array
     usort($rows, function ($a, $b) use ($slotOrder, $map) {
         $sa = array_search((string)$a['slot'], $slotOrder, true); $sa = $sa === false ? 99 : $sa;
         $sb = array_search((string)$b['slot'], $slotOrder, true); $sb = $sb === false ? 99 : $sb;
-        return [$sa, $map[(int)$a['cat_id']]['sort'] ?? 999, (int)$a['id']]
-           <=> [$sb, $map[(int)$b['cat_id']]['sort'] ?? 999, (int)$b['id']];
+        $ra = (string)($a['role'] ?? '') === 'old' ? 0 : 1; $rb = (string)($b['role'] ?? '') === 'old' ? 0 : 1;
+        return [$sa, $map[(int)$a['cat_id']]['sort'] ?? 999, $ra, (int)$a['id']]
+           <=> [$sb, $map[(int)$b['cat_id']]['sort'] ?? 999, $rb, (int)$b['id']];
     });
     $out = []; $n = 0;
     foreach ($rows as $r) {
@@ -560,6 +568,7 @@ function ec_attach_rows(PDO $db, int $ecId): array
             'slot_label' => EC_ATTACH_SLOTS[(string)$r['slot']]['label'] ?? (string)$r['slot'],
             'cat_id'     => (int)$r['cat_id'],
             'cat_name'   => $cat,
+            'role'       => (string)($r['role'] ?? ''),
             'attach_id'  => (int)$r['attach_id'],
             'src_kind'   => ((string)($r['src_kind'] ?? 'part')) ?: 'part',
             'url'        => ec_attach_url(((string)($r['src_kind'] ?? 'part')) ?: 'part', (int)$r['attach_id'],
@@ -572,7 +581,7 @@ function ec_attach_rows(PDO $db, int $ecId): array
             'seq'        => $n,
             'seq_label'  => '附件' . $n,
             // 列印格內要印的那一行（使用者指定：編號＋一個空白＋標籤名稱＋附件備註）
-            'print_text' => '附件' . $n . ' ' . $cat . ((string)$r['note'] !== '' ? '　' . (string)$r['note'] : ''),
+            'print_text' => '附件' . $n . ' ' . ((string)($r['role'] ?? '') === 'old' ? '舊' : ((string)($r['role'] ?? '') === 'new' ? '新' : '')) . $cat . ((string)$r['note'] !== '' ? '　' . (string)$r['note'] : ''),
         ];
     }
     return $out;
@@ -583,6 +592,35 @@ function ec_attach_has(PDO $db, int $ecId, string $slot): bool
 {
     foreach (ec_attach_rows($db, $ecId) as $a) if ((string)$a['slot'] === $slot) return true;
     return false;
+}
+
+/** 申請內容附件：每個允許的標籤，舊(變更前)與新(變更後)兩份都挑了才算齊；回傳缺的描述（空陣列＝齊全） */
+function ec_attach_apply_missing(PDO $db, int $ecId): array
+{
+    $have = [];
+    foreach (ec_attach_rows($db, $ecId) as $a)
+        if ((string)$a['slot'] === 'apply') $have[(int)$a['cat_id'] . '|' . $a['role']] = 1;
+    $miss = [];
+    foreach (ec_attach_allowed_cats($db, 'apply') as $c) {
+        if (empty($have[$c['id'] . '|old'])) $miss[] = '舊' . $c['name'];
+        if (empty($have[$c['id'] . '|new'])) $miss[] = '新' . $c['name'];
+    }
+    return $miss;
+}
+
+/**
+ * 候選清單標出「建議」：新＝最新且未掛作廢的；舊＝掛了作廢標籤者中最新的，
+ * 沒有就取「新」的下一份較舊檔案（排序已是新到舊，依發行日期／上傳日期）。
+ */
+function ec_attach_mark_suggest(array $rows, string $role): array
+{
+    $live = []; $void = [];
+    foreach ($rows as $i => $r) { if (!empty($r['is_void'])) $void[] = $i; else $live[] = $i; }
+    $pick = null;
+    if ($role === 'new') $pick = $live[0] ?? ($void[0] ?? null);
+    elseif ($role === 'old') $pick = $void[0] ?? ($live[1] ?? null);
+    foreach ($rows as $i => $r) $rows[$i]['suggest'] = ($pick === $i) ? 1 : 0;
+    return $rows;
 }
 
 /** 附件下載網址（相對於 views/TD/）；三種來源的下載端點不同 */
@@ -623,9 +661,11 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
         $out[] = $x;
     };
     $isPdf = fn($f) => strtolower(pathinfo((string)$f, PATHINFO_EXTENSION)) === 'pdf' ? 1 : 0;
+    // 掛了「作廢」標籤（quotation_file_categories.id=9）的附件：畫面上標出來，並當作「舊原圖」的建議
+    $isVoid = fn($ids) => in_array('9', array_map('trim', explode(',', (string)$ids)), true) ? 1 : 0;
 
     // ① 料號附件
-    $st = $db->prepare("SELECT pa.id, pa.filename, pa.original_name, pa.note, pa.file_size,
+    $st = $db->prepare("SELECT pa.id, pa.filename, pa.original_name, pa.note, pa.file_size, pa.category_ids,
                                pa.issue_stamp_date, pa.uploaded_at,
                                COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by
                           FROM part_attachments pa LEFT JOIN `user` u ON u.id = pa.uploaded_by_id
@@ -639,6 +679,7 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
               'note' => (string)$r['note'], 'file_size' => (string)$r['file_size'],
               'issue_stamp_date' => $r['issue_stamp_date'], 'uploaded_at' => $r['uploaded_at'],
               'uploaded_by' => (string)$r['uploaded_by'], 'is_pdf' => $isPdf($r['filename']),
+              'is_void' => $isVoid($r['category_ids']),
               'url' => ec_attach_url('part', (int)$r['id'])]);
     }
 
@@ -646,7 +687,7 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
     try {
         require_once __DIR__ . '/quote_attach_scope_lib.php';
         $bel = eg_quote_attach_scope_cond(eg_quote_attach_part_nos($db, [$dId]), [$dId], 'a');
-        $st = $db->prepare("SELECT a.id, a.quote_no, a.filename, a.original_name, a.note, a.file_size, a.uploaded_at, a.uploaded_by
+        $st = $db->prepare("SELECT a.id, a.quote_no, a.filename, a.original_name, a.note, a.file_size, a.uploaded_at, a.uploaded_by, a.category_ids
                               FROM quotation_attachments a
                              WHERE a.status='active' AND {$bel['sql']}
                                AND (a.category_id = ? OR FIND_IN_SET(?, REPLACE(COALESCE(a.category_ids,''), ' ', '')))
@@ -658,14 +699,14 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
                   'show_name' => (string)($r['original_name'] ?: $r['filename']), 'note' => (string)$r['note'],
                   'file_size' => (string)$r['file_size'], 'issue_stamp_date' => null,
                   'uploaded_at' => $r['uploaded_at'], 'uploaded_by' => (string)$r['uploaded_by'],
-                  'is_pdf' => $isPdf($r['filename']),
+                  'is_pdf' => $isPdf($r['filename']), 'is_void' => $isVoid($r['category_ids']),
                   'url' => ec_attach_url('quote', (int)$r['id'], (string)$r['quote_no'], (string)$r['filename'])]);
         }
     } catch (Throwable $e) { error_log('ec_attach_candidates quote: ' . $e->getMessage()); }
 
     // ③ 訂單附件（同一訂單編號＋同實體檔只列一次：共用附件會被複製掛到每一列）
     try {
-        $st = $db->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.uploaded_at,
+        $st = $db->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.uploaded_at, a.category_ids,
                                    COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo,
                                    (SELECT p.pages FROM order_attachment_pages p
                                      WHERE p.filename = a.filename AND p.order_oo = ot.Order_oo
@@ -692,7 +733,8 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
                   'show_name' => (string)($r['original_name'] ?: $r['filename']), 'note' => '',
                   'file_size' => (string)$r['file_size'], 'issue_stamp_date' => null,
                   'uploaded_at' => $r['uploaded_at'], 'uploaded_by' => (string)$r['uploaded_by'],
-                  'is_pdf' => $isPdf($r['filename']), 'url' => ec_attach_url('order', (int)$r['id']),
+                  'is_pdf' => $isPdf($r['filename']), 'is_void' => $isVoid($r['category_ids']),
+                  'url' => ec_attach_url('order', (int)$r['id']),
                   // 原圖：訂單只設定某幾頁為原圖時，挑頁只准選這幾頁（「3」「3,5」「3-5」皆可）
                   'only_pages' => $catId === 1 ? ec_parse_pages((string)$r['ori_pages']) : []]);
         }
@@ -708,8 +750,11 @@ function ec_attach_candidates(PDO $db, int $dId, int $catId): array
  * 一律重查候選清單驗證（來源、料號歸屬、標籤都以後端查到的為準），不採信前端送來的字（鐵律8）。
  */
 function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attachId,
-                       ?int $pageNo, ?int $pageCount, int $uid, string $srcKind = 'part'): array
+                       ?int $pageNo, ?int $pageCount, int $uid, string $srcKind = 'part', string $role = ''): array
 {
+    // 申請內容附件一定要指定舊／新；其他段不分
+    $role = $slot === 'apply' ? $role : '';
+    if ($slot === 'apply' && !in_array($role, ['old', 'new'], true)) throw new Exception('請指定這是舊(變更前)還是新(變更後)的附件');
     ec_ensure_schema($db);
     if (!isset(EC_ATTACH_SLOTS[$slot])) throw new Exception('無效的附件區塊');
     $row = ec_row($db, $ecId);
@@ -736,14 +781,14 @@ function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attach
 
     $map = ec_attach_cat_map($db);
     $db->prepare("INSERT INTO eng_change_attach
-            (ec_id, slot, cat_id, cat_name, attach_id, src_kind, src_ref, file_name, orig_name, note, page_no, page_count, created_by, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
+            (ec_id, slot, cat_id, role, cat_name, attach_id, src_kind, src_ref, file_name, orig_name, note, page_no, page_count, created_by, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())
          ON DUPLICATE KEY UPDATE cat_name=VALUES(cat_name), attach_id=VALUES(attach_id),
                                  src_kind=VALUES(src_kind), src_ref=VALUES(src_ref),
                                  file_name=VALUES(file_name), orig_name=VALUES(orig_name), note=VALUES(note),
                                  page_no=VALUES(page_no), page_count=VALUES(page_count),
                                  created_by=VALUES(created_by), created_at=VALUES(created_at)")
-       ->execute([$ecId, $slot, $catId, ($map[$catId]['name'] ?? ''), $attachId, $srcKind, (string)$a['src_ref'],
+       ->execute([$ecId, $slot, $catId, $role, ($map[$catId]['name'] ?? ''), $attachId, $srcKind, (string)$a['src_ref'],
                   (string)$a['filename'], (string)$a['show_name'],
                   mb_substr(trim((string)$a['note']), 0, 255, 'UTF-8'),
                   $pageNo ?: null, $pageCount ?: null, $uid ?: null]);
@@ -1456,8 +1501,8 @@ function ec_validate(PDO $db, array $r): array
     // 變更方式 × 附件規則（管理員逐項設定）：設成「必選附件」的就一定要挑一個附件才送得出去
     if ($ct !== '' && array_key_exists($ct, EC_CHANGE_TYPES) && (int)($r['ec_id'] ?? 0) > 0) {
         $rule = ec_attach_rule($db, $ct);
-        if ($rule === 'required' && !ec_attach_has($db, (int)$r['ec_id'], 'apply'))
-            $e['attach_apply'] = '變更方式「' . EC_CHANGE_TYPES[$ct] . '」必須附上附件，請在申請內容右側挑選料號附件';
+        if ($rule === 'required' && ($miss = ec_attach_apply_missing($db, (int)$r['ec_id'])))
+            $e['attach_apply'] = '變更方式「' . EC_CHANGE_TYPES[$ct] . '」必須附上附件，請在申請內容右側挑選：' . implode('、', $miss);
     }
     return $e;
 }
