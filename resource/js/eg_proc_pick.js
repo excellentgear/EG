@@ -102,7 +102,12 @@
                 MODAL.querySelector('#epp-kw').addEventListener('input', function () { drawList(); });
             }
             // Bootstrap 的 modal 會把焦點鎖在自己裡面，輸入框要打字就得把本視窗放進目前開著的 modal 內
-            var host = document.querySelector('.modal.in') || document.body;
+            // 疊了好幾層 modal 時要放進「最上層」那一個（z-index 最大、同值取 DOM 較後者），否則會被上層 modal 蓋住
+            var host = document.body, bestZ = -1;
+            Array.prototype.forEach.call(document.querySelectorAll('.modal.in'), function (m) {
+                var z = parseInt(window.getComputedStyle(m).zIndex, 10); if (isNaN(z)) z = 0;
+                if (z >= bestZ) { bestZ = z; host = m; }
+            });
             if (MODAL.parentNode !== host) host.appendChild(MODAL);
             MODAL._work = { type: {}, no: {} };
             el._epp.sel.forEach(function (x) { MODAL._work[x.t][x.id] = 1; });
