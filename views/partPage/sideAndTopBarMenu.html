@@ -712,6 +712,18 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
                 return;
             }
+            if (refType === 'NOTICE_APPROVAL') {
+                // 公告/通知/聯絡單待核准：開公告管理頁自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)
+                window.open('../liveEvent/createEvent.php?notice_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'NOTICE_APPROVAL_RESULT') {
+                // 核准/退回結果（給送審人）：純資訊型，開公告管理頁後標記已讀移除
+                window.open('../liveEvent/createEvent.php?event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'BUSINESS_TRIP_RESULT') {
                 // 核准/退回結果通知（給申請人）：純資訊型，開該張公出單後標記已讀移除
                 window.open('../ADM/business_trip.php?trip_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);

@@ -95,6 +95,9 @@ function nc_ensure_schema(PDO $db): void
                 KEY idx_lecs_ev (live_event_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聯絡單列印用補簽（只影響紙上的章，不動 live_event_response）'");
         }
+        // 種類／圖文內容／張貼期限／草稿（2026-10-22）
+        require_once __DIR__ . '/notice_doc_lib.php';
+        ndoc_ensure_schema($db);
     } catch (Throwable $e) {
         error_log('[notice_contact] ensure_schema: ' . $e->getMessage());
     }
@@ -842,6 +845,13 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
 
     $makerId = (int)($cfg['maker_user_id'] ?: $def['maker']);
     $apprId  = (int)($cfg['approver_user_id'] ?: $def['approver']);
+    // 有核准紀錄（自動簽核或核准人按核准）時，核准章＝紀錄上的人與核准日期；管理員在列印設定另外指定者優先
+    $apprDate = '';
+    try {
+        require_once __DIR__ . '/notice_doc_lib.php';
+        $ar = ndoc_appr_get($db, $eventId);
+        if ($ar && !(int)$cfg['approver_user_id']) { $apprId = (int)$ar['approver_id']; $apprDate = (string)$ar['approved_date']; }
+    } catch (Throwable $e) {}
 
     $files = [];
     try {
@@ -850,8 +860,13 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         $files = $f->fetchAll(PDO::FETCH_COLUMN);
     } catch (Throwable $e) {}
 
+    // 種類：只有「聯絡單」才有聯絡單號與 AS 文件編號；公告／通知標題改成種類名稱、右下角不印文件編號
+    require_once __DIR__ . '/notice_doc_lib.php';
+    $kind = ndoc_kind_norm($ev['kind'] ?? 'notice');
+    $isContact = ($kind === 'contact');
     $contactNo = trim((string)$ev['contact_no']);
-    if ($alloc && $contactNo === '') $contactNo = nc_ensure_contact_no($db, $eventId);
+    if ($isContact && $alloc && $contactNo === '') $contactNo = nc_ensure_contact_no($db, $eventId);
+    if (!$isContact) $contactNo = '';
 
     return [
         'ok'         => true,
@@ -862,6 +877,10 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         'date_disp'  => eg_fmt_date($asof),
         'title'      => (string)$ev['title'],
         'content'    => (string)$ev['content'],
+        'content_html' => trim((string)($ev['content_html'] ?? '')) !== '' ? ndoc_hydrate((string)$ev['content_html']) : '',
+        'kind'       => $kind,
+        'kind_name'  => ndoc_kinds()[$kind],
+        'post_until' => ($kind === 'announce' && !empty($ev['post_until'])) ? substr((string)$ev['post_until'], 0, 10) : '',
         'source'     => (string)$ev['source'],
         'files'      => $files,
         /* 發文者：①管理員在列印設定填的 → ②公告建立者（部門 職稱 姓名）→ ③來源（多半就是發文的部門名稱）
@@ -873,14 +892,14 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         'to_text'    => $cfg['to_text'] !== null && $cfg['to_text'] !== ''
                         ? (string)$cfg['to_text'] : nc_targets_text($db, $eventId),
         'maker'      => nc_person($db, $makerId, $asof) + ['date' => (string)($cfg['maker_date'] ?: $asof)],
-        'approver'   => nc_person($db, $apprId, $asof) + ['date' => (string)($cfg['approver_date'] ?: $asof)],
+        'approver'   => nc_person($db, $apprId, $asof) + ['date' => (string)($cfg['approver_date'] ?: ($apprDate ?: $asof))],
         'people'     => nc_people($db, $eventId, $asof),
         'include'    => $cfg['include_uids'],
         'show_reply' => (int)$cfg['show_reply'],
         'is_backfill'=> (int)$cfg['is_backfill'],
         'company'    => nc_company($db),
-        'doc_name'   => $doc['doc_name'] ?? '聯絡單',
-        'doc_no'     => $docId ? eg_asdoc_no_asof_id($db, $docId, $asof) : '',
+        'doc_name'   => $isContact ? ($doc['doc_name'] ?? '聯絡單') : ndoc_kinds()[$kind],
+        'doc_no'     => ($isContact && $docId) ? eg_asdoc_no_asof_id($db, $docId, $asof) : '',
         'stamp_tpl'  => nc_stamp_template($db),            // 製表人 / 核准
         'stamp_tpl_read' => nc_stamp_template($db, 'read'), // 已閱簽章
     ];

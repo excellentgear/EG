@@ -279,6 +279,17 @@ $__notice_features = [];
 if (isset($_POST["newEvent"]) || isset($_POST["upDateEvent"])) {
     require_once __DIR__ . '/../common/rbac.php';
     $__notice_features = rbac_user_features($db, (int)($_SESSION['id'] ?? 0));
+    // 圖文內容（2026-10-22）：content_html 由後端清洗，並以它重算純文字 content
+    // （推播／鈴鐺／列表一律讀純文字，不採信前端送的 content）
+    try {
+        require_once __DIR__ . '/../common/notice_doc_lib.php';
+        ndoc_ensure_schema($db);
+        if (isset($_POST['content_html'])) {
+            [$__h, $__t] = ndoc_clean_content((string)$_POST['content_html']);
+            $_POST['content_html'] = $__h;
+            $_POST['content'] = $__t;
+        }
+    } catch (Throwable $e) { error_log('[notice] content_html prepare failed: ' . $e->getMessage()); }
 }
 
 // 鎖定：來源『訂單變更』的通知禁止在公告/通知頁修改（單一真相來源為 order_change_log，請至訂單頁操作變更單）
@@ -294,83 +305,26 @@ if (isset($_POST["upDateEvent"]) && !empty($_POST["eventid"])) {
 // 新增通知
 if (isset($_POST["newEvent"]) && rbac_has($__notice_features, 'notice_create') && $_POST["eventid"] == "" && $_POST["title"] != "" && $_POST["content"] != "" && !empty($_POST['targets'])) {
 
-    $enddate = !empty($_POST['enddate']) ? $_POST['enddate'] : null;
-    $replyDeadline = !empty($_POST['reply_deadline']) ? $_POST['reply_deadline'] : null;
-    $showStatus = !empty($_POST['show_status_to_others']) ? 1 : 0;
-    $modes = json_decode($_POST['target_modes'] ?? '{}', true) ?: [];
-    $__uid   = (int)($_SESSION['id'] ?? 0);
-    // 來源：有頁面/動作傳入則用之(如『訂單變更』)，否則用建立者部門名稱
-    $__source = !empty($_POST['source']) ? trim($_POST['source']) : eg_user_main_dept($db, $__uid);
-
-    $sth = $db->prepare("INSERT INTO `live_event`(`eventdate`,`enddate`,`title`,`content`,`status`,`created_by`,`source`,`reply_deadline`,`show_status_to_others`) VALUES (:eventdate, :enddate, :title, :content, 0, :cb, :src, :rd, :ss)");
-    $sth->execute([
-        ':eventdate' => $_POST['eventdate'],
-        ':enddate' => $enddate,
-        ':title' => $_POST['title'],
-        ':content' => $_POST['content'],
-        ':cb' => ($__uid ?: null),
-        ':src' => $__source,
-        ':rd' => $replyDeadline,
-        ':ss' => $showStatus
-    ]);
-    $newEventId = $db->lastInsertId();
-
-    // 產生公告編號（PU+民國年+月日+當日流水號）
-    require_once __DIR__ . '/../common/notice_files.php';
-    $eventNo = eg_gen_event_no($db, $_POST['eventdate']);
-    $db->prepare("UPDATE live_event SET event_no=? WHERE id=?")->execute([$eventNo, $newEventId]);
-
-    // 寫入對象(含通知方式)，並回填 status 相容欄位
-    $primaryStatus = eg_save_event_targets($db, $newEventId, $_POST['targets'], $modes);
-    $db->prepare("UPDATE live_event SET status=? WHERE id=?")->execute([$primaryStatus, $newEventId]);
-
-    // 共同編輯者（部門或最多 5 位人員）
-    if (isset($_POST['co_editors'])) {
-        try { eg_save_event_editors($db, $newEventId, $_POST['co_editors']); }
-        catch (Throwable $e) { error_log('[notice] save co_editors failed: ' . $e->getMessage()); }
-    }
-
-    // 公告附件（存到 {設定基礎路徑}\{公告編號}\）
-    if (!empty($_FILES['notice_files']['name'][0])) {
-        foreach (eg_notice_save_files($_FILES['notice_files'], eg_notice_event_dir($db, $eventNo)) as $sf) {
-            $db->prepare("INSERT INTO live_event_file (live_event_id, file_name, file_path) VALUES (?,?,?)")->execute([$newEventId, $sf['name'], $sf['path']]);
-        }
-    }
-
-    // 新版附件（AJAX 暫存 → 綁定入庫；含標籤/說明；Excel/Word 已轉 PDF）＋「直接顯示附件」勾選
-    try {
-        require_once __DIR__ . '/../common/attachment_lib.php';
-        eg_att_ensure_schema($db);
-        eg_notice_bind_att_items($db, (int)$newEventId, $eventNo, $_POST['att_items'] ?? '', $__uid);
-        $db->prepare("UPDATE live_event SET show_attach_inline=? WHERE id=?")
-           ->execute([!empty($_POST['show_attach_inline']) ? 1 : 0, (int)$newEventId]);
-    } catch (Throwable $e) { error_log('[notice] bind att_items on create failed: ' . $e->getMessage()); }
-
-    // 修改歷史：新增
-    eg_log_event_history($db, $newEventId, 'create', $__uid, null, eg_event_snapshot($db, $newEventId));
-
-    // 發布公告時自動 Web Push 推播給所有對象（失敗不影響發布流程）
-    try {
-        require_once __DIR__ . '/../push/push_send.php';
-        eg_push_for_event($db, (int)$newEventId);
-    } catch (\Throwable $e) {
-        error_log('[push] on create event failed: ' . $e->getMessage());
-    }
-
-    // Telegram 推播（2026-07-07 恢復啟用；未設 Token 或未綁定 chat_id 者自動跳過）
-    try {
-        require_once __DIR__ . '/../../telegram/notify_event.php';
-        eg_telegram_for_event($db, (int)$newEventId);
-    } catch (\Throwable $e) {
-        error_log('[telegram] on create event failed: ' . $e->getMessage());
+    // 發布流程已抽成 ndoc_publish_new()（src/common/notice_doc_lib.php），直接發布與「核准後發布」走同一份程式。
+    // 種類若被超級管理員設成「需核准」就先送審，核准人按核准後才發布；核准人本人送出則不必等自己。
+    $__uid  = (int)($_SESSION['id'] ?? 0);
+    $__kind = ndoc_kind_norm($_POST['kind'] ?? 'notice');
+    $__mode = ndoc_appr_mode($db, $__kind);
+    $__apprUid = ndoc_appr_approver($db);
+    if ($__mode === 'required' && $__apprUid > 0 && $__apprUid !== $__uid) {
+        $__r = ndoc_submit_pending($db, $__uid, (int)($_POST['draft_id'] ?? 0), $_POST);
+        $msg = isset($__r['error']) ? $__r['error'] : '已送出核准，核准人核准後才會正式發布。';
+    } else {
+        // 自動簽核（或核准人本人送出）＝直接發布，並留下核准紀錄供列印簽章
+        $__appr = $__apprUid > 0 ? ['approver' => $__apprUid, 'date' => (string)$_POST['eventdate'], 'auto' => ($__mode !== 'required'), 'by' => ($__mode === 'required' ? $__uid : null)] : null;
+        ndoc_publish_new($db, $_POST, $__uid, $_FILES['notice_files'] ?? null, $__appr);
+        $msg = '新增成功！';
     }
 
     unset($_POST['title']);
     unset($_POST['content']);
     unset($_POST['targets']);
     unset($_POST['enddate']);
-
-    $msg = '新增成功！';
 
 } else if (isset($_POST["upDateEvent"]) && $_POST["eventid"] != "" && $_POST["title"] != "" && $_POST["content"] != "" && $_POST["eventdate"] != "" && !empty($_POST['targets'])
     // 編輯權限：系統管理員(all)可改任何公告；其他人須有 notice_edit 且為本人建立，或本人為共同編輯者
@@ -416,6 +370,10 @@ if (isset($_POST["newEvent"]) && rbac_has($__notice_features, 'notice_create') &
         ':ss' => $showStatus,
         ':eventid' => $eventId
     ]) or die("存入資料庫失敗");
+
+    // 種類／圖文內容／張貼期限（2026-10-22）
+    try { ndoc_apply_post($db, $eventId, (int)($_SESSION['id'] ?? 0), $_POST, false); }
+    catch (Throwable $e) { error_log('[notice] ndoc_apply_post(update) failed: ' . $e->getMessage()); }
 
     // 公告附件：刪除勾選的、加入新上傳的
     require_once __DIR__ . '/../common/notice_files.php';

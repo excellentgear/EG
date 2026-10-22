@@ -102,6 +102,8 @@ $h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
         .ve-meta b { color:#4a5a68; font-weight:600; }
         .ve-title { font-size:20px; font-weight:700; color:var(--dark); margin:0 0 10px; }
         .ve-content { white-space:pre-line; line-height:1.75; font-size:14.5px; word-break:break-word; }
+        .ve-rich table { border-collapse:collapse; max-width:100%; } .ve-rich td, .ve-rich th { border:1px solid #999; padding:3px 8px; vertical-align:top; }
+        .ve-rich img { max-width:100%; } .ve-rich p { margin:0 0 6px; }
         .ve-card { background:#fff; border:1px solid var(--line); border-radius:8px; margin-bottom:14px; overflow:hidden; }
         .ve-card-head { padding:10px 16px; font-size:14px; font-weight:700; color:var(--dark); background:#f5f8fb; border-bottom:1px solid var(--line); }
         .ve-att-frame { width:100%; height:70vh; border:0; display:block; background:#525659; }
@@ -147,7 +149,12 @@ $h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
                 <?php if (!empty($ev['enddate'])) : ?><span><b>結束</b>　<?= $h($ev['enddate']) ?></span><?php endif; ?>
                 <?php if (!empty($ev['reply_deadline'])) : ?><span><b>回覆/回簽期限</b>　<?= $h($ev['reply_deadline']) ?></span><?php endif; ?>
             </div>
-            <div class="ve-content"><?= $h($ev['content']) ?></div>
+            <?php if (!empty($ev['content_html'])) : ?>
+                <?php require_once '../../src/common/notice_doc_lib.php'; ?>
+                <div class="ve-content ve-rich" style="white-space:normal;"><?= ndoc_hydrate((string)$ev['content_html']) ?></div>
+            <?php else : ?>
+                <div class="ve-content"><?= $h($ev['content']) ?></div>
+            <?php endif; ?>
         </div>
 
         <!-- 右：附件顯示區 -->

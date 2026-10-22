@@ -28,6 +28,14 @@ $IS_ADMIN   = rbac_has($_features, 'all');
 $can_manage = $CAN_EDIT || $CAN_DELETE; // 列表「已讀/操作」欄是否顯示
 $can_batch  = $CAN_EDIT || $IS_ADMIN;   // 列表是否顯示勾選欄與「批次改對象」（逐則權限後端再擋一次）
 
+// 指定的核准人員從通知點進來（?notice_approve=）時，即使沒有「檢視公告/通知」角色也要進得來核准（2026-10-22）
+if (!$CAN_VIEW && !empty($_GET['notice_approve'])) {
+    require_once '../../src/common/notice_doc_lib.php';
+    $__apPdo = $conn->getPDO();
+    ndoc_ensure_schema($__apPdo);
+    if ((int)$id > 0 && (int)$id === ndoc_appr_approver($__apPdo)) $CAN_VIEW = true;
+}
+
 // 無檢視權限（且非初始全權狀態）→ 導回儀表板
 // 注意：此處使用者「已登入」，不可設定 lastpage 再導回登入頁，
 // 否則登入成功後又被導回本頁→再踢回登入頁，形成無限循環（帳密正確也永遠登不進去）
@@ -211,6 +219,45 @@ if ($is_edit) {
         }
     } catch (Exception $e) {}
 }
+
+/* === 種類／圖文內容／草稿／核准（2026-10-22）=== 判定與存取一律走 src/common/notice_doc_lib.php */
+require_once '../../src/common/notice_doc_lib.php';
+ndoc_ensure_schema($NC_PDO);
+if (empty($_SESSION['ndoc_csrf'])) $_SESSION['ndoc_csrf'] = bin2hex(random_bytes(16));
+$ND_CSRF     = $_SESSION['ndoc_csrf'];
+$ND_ADMIN    = !empty($NC_PERMS['isAdmin']);
+$ND_APPR     = ndoc_appr_settings($NC_PDO);
+$ND_APPR_UID = ndoc_appr_approver($NC_PDO);
+$ND_KIND     = $is_edit ? ndoc_kind_norm($ev['kind'] ?? 'notice') : 'notice';
+$ND_UNTIL    = $is_edit ? substr((string)($ev['post_until'] ?? ''), 0, 10) : '';
+$ND_HTML     = $is_edit ? (string)($ev['content_html'] ?? '') : '';
+$ND_DRAFT_ID = 0;
+$ND_REJECT   = '';
+if (!$is_edit && !empty($_GET['draft'])) {
+    // 載入草稿（或被退回的送審單）到表單，之後照一般新增流程送出／再存草稿
+    $__d = ndoc_draft_get($NC_PDO, (int)$id, (int)$_GET['draft']);
+    if ($__d && in_array($__d['state'], ['draft', 'rejected'], true)) {
+        $__x = $__d['data'];
+        $ND_DRAFT_ID = (int)$__d['id'];
+        $ND_REJECT   = ($__d['state'] === 'rejected') ? (string)$__d['reject_reason'] : '';
+        $ND_KIND     = ndoc_kind_norm($__x['kind'] ?? 'notice');
+        $ND_UNTIL    = (string)($__x['post_until'] ?? '');
+        $ND_HTML     = (string)($__x['content_html'] ?? '');
+        $title       = (string)($__x['title'] ?? '');
+        $eventdate   = (string)($__x['eventdate'] ?? '');
+        $enddate     = (string)($__x['enddate'] ?? '');
+        $reply_deadline = (string)($__x['reply_deadline'] ?? '');
+        $show_status = (int)($__x['show_status_to_others'] ?? 0);
+        $content     = $ND_HTML !== '' ? trim(eg_richtext_to_text($ND_HTML)) : '';
+        $selected_target_modes = (array)($__x['target_modes'] ?? []);
+        foreach ((array)($__x['targets'] ?? []) as $__c) { $selected_targets[] = $__c; }
+        $__ce = json_decode((string)($__x['co_editors'] ?? ''), true);
+        if (is_array($__ce)) foreach ($__ce as $__e) {
+            if (isset($__e['type'], $__e['id'])) $selected_editors[] = ['type' => $__e['type'], 'id' => (int)$__e['id'], 'name' => (string)($__e['name'] ?? '')];
+        }
+    }
+}
+$ND_MY_DRAFTS = ndoc_draft_list($NC_PDO, (int)$id);   // 含 state 為 draft／pending／rejected 的自己的單
 
 // 搜尋
 $result = null;
@@ -639,6 +686,7 @@ if (isset($_POST['btn_go_events'])) {
                             <?php if ($IS_ADMIN) : ?>
                                 <button type="button" class="eg-btn-perm" data-toggle="modal" data-target="#permModal" title="設定角色與權限"><i class="fa fa-key"></i> 權限設定</button>
                                 <button type="button" class="eg-btn-perm" id="eg-settings-btn" title="附件儲存位置設定"><i class="fa fa-cog"></i> 設定</button>
+                                <button type="button" class="eg-btn-perm" id="nd-appr-btn" title="公告／通知／聯絡單：哪些自動簽核、哪些需要核准，以及核准人員"><i class="fa fa-check-square-o"></i> 核准設定</button>
                                 <?php // Telegram 已於 2026-07-07 恢復啟用（原 2026-07-06 暫停測試） ?>
                                 <button type="button" class="eg-btn-perm" onclick="location.href='../../telegram/get_chat_id.php'" title="Telegram 推播綁定與測試（與 Web Push 並行）"><i class="fa fa-paper-plane"></i> Telegram</button>
                             <?php endif; ?>
@@ -660,6 +708,12 @@ if (isset($_POST['btn_go_events'])) {
                         </div>
                     </div>
 
+                    <!-- 我的草稿與送審／待我核准 -->
+                    <div class="eg-card" id="nd-panel" style="display:none;">
+                        <div class="eg-card-head"><i class="fa fa-inbox"></i><h2>草稿與核准</h2></div>
+                        <div class="eg-card-body" id="nd-panel-body" style="font-size:13px;"></div>
+                    </div>
+
                     <!-- 新增 / 修改（依角色權限） -->
                     <?php if (($CAN_CREATE && !$is_edit) || ($CAN_EDIT && $is_edit)) : ?>
                         <div class="eg-card eg-card-form">
@@ -672,6 +726,25 @@ if (isset($_POST['btn_go_events'])) {
                                     <div class="eg-form-2col">
                                         <!-- 左區塊：日期 / 期限 / 標題 / 內容 -->
                                         <div class="eg-col">
+                                            <input type="hidden" name="draft_id" id="draft_id" value="<?= (int)$ND_DRAFT_ID ?>">
+                                            <?php if ($ND_REJECT !== '') : ?>
+                                                <div style="background:#fdecea;border:1px solid #f5b7b1;color:#a33;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:13px;"><b>被退回</b>：<?= htmlspecialchars($ND_REJECT) ?>　（修改後可重新送出）</div>
+                                            <?php endif; ?>
+                                            <div class="eg-2">
+                                                <div class="eg-field">
+                                                    <label for="kind">種類 <span class="req">*</span></label>
+                                                    <select id="kind" name="kind" class="eg-input">
+                                                        <?php foreach (ndoc_kinds() as $__k => $__n) : ?>
+                                                            <option value="<?= $__k ?>" <?= $ND_KIND === $__k ? 'selected' : '' ?>><?= htmlspecialchars($__n) ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <span class="hint" id="kind-hint" style="display:block;margin-top:3px;"></span>
+                                                </div>
+                                                <div class="eg-field" id="post-until-wrap" style="<?= $ND_KIND === 'announce' ? '' : 'display:none;' ?>">
+                                                    <label for="post_until">張貼期限 <span class="hint">印在公告右下角</span></label>
+                                                    <input type="date" id="post_until" name="post_until" class="eg-input" value="<?= htmlspecialchars($ND_UNTIL) ?>">
+                                                </div>
+                                            </div>
                                             <div class="eg-2">
                                                 <div class="eg-field">
                                                     <label for="eventdate">發布日期 <span class="req">*</span></label>
@@ -697,8 +770,11 @@ if (isset($_POST['btn_go_events'])) {
                                                 <input type="text" id="title" name="title" class="eg-input" value="<?= htmlspecialchars($title) ?>" maxlength="100" required>
                                             </div>
                                             <div class="eg-field">
-                                                <label for="content">內容 <span class="req">*</span><span class="hint" id="content-count" style="font-weight:400;"></span></label>
-                                                <textarea id="content" name="content" class="eg-textarea" style="min-height:120px;" maxlength="2000" required><?= htmlspecialchars($content) ?></textarea>
+                                                <label>內容 <span class="req">*</span><span class="hint" id="content-count" style="font-weight:400;"></span>
+                                                    <span class="hint" style="font-weight:400;">可貼上 Word 的表格與格式；工具列「圖片」或直接貼上截圖即可把圖放在文字中間</span></label>
+                                                <div id="contentEditor"></div>
+                                                <textarea id="content" name="content" style="display:none;" maxlength="2000"><?= htmlspecialchars($content) ?></textarea>
+                                                <input type="hidden" id="content_html" name="content_html" value="">
                                             </div>
                                             <div class="eg-field">
                                                 <label for="notice_files">公告附件
@@ -811,7 +887,8 @@ if (isset($_POST['btn_go_events'])) {
                                         <?php if ($is_edit) : ?>
                                             <button id="send" name="upDateEvent" type="submit" class="eg-btn eg-btn-primary"><i class="fa fa-check"></i> 儲存修改</button>
                                         <?php else : ?>
-                                            <button id="send" name="newEvent" type="submit" class="eg-btn eg-btn-primary"><i class="fa fa-paper-plane"></i> 送出發布</button>
+                                            <button id="btnSaveDraft" type="button" class="eg-btn eg-btn-ghost" title="先存起來，不會通知任何人；之後可從上方「我的草稿與送審」繼續"><i class="fa fa-floppy-o"></i> 儲存草稿</button>
+                                            <button id="send" name="newEvent" type="submit" class="eg-btn eg-btn-primary"><i class="fa fa-paper-plane"></i> <span id="send-label">送出發布</span></button>
                                         <?php endif; ?>
                                     </div>
                                 </form>
@@ -1268,6 +1345,10 @@ if (isset($_POST['btn_go_events'])) {
                     <h4>這頁在做什麼</h4>
                     <ul>
                         <li>發布公告 / 通知給全體、部門、職稱或指定人員，並追蹤誰看過、誰回簽、誰回覆。</li>
+                        <li><b>種類</b>：公告／通知／聯絡單。列印大標題依種類變化；<b>只有聯絡單</b>右下角印 AS 文件編號；公告可設「張貼期限」，印在右下角。</li>
+                        <li><b>內容</b>可貼上 Word 的表格與格式，圖片可按工具列「圖片」鈕或直接貼上截圖，放在文字中間。</li>
+                        <li><b>儲存草稿</b>：先存起來不通知任何人，之後從上方「草稿與核准」繼續編輯。</li>
+                        <li><b>核准</b>：超級管理員在「核准設定」逐種設定「自動簽核蓋准章」或「需要核准」，核准人員三種相同。需核准的單送出後交給核准人（站內通知可直接開啟核准／退回，退回須填原因），核准後才發布；送審中可撤回修改。核准章與日期印在列印版「核准」欄。</li>
                         <li>各模組（請假、報價單、異常單…）自動送出的通知也會匯集在這裡，來源欄可看出是哪一個模組發的。</li>
                     </ul>
 
@@ -1651,6 +1732,8 @@ if (isset($_POST['btn_go_events'])) {
     <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
     <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
     <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+    <script src="../../resource/js/eg_richtext.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_richtext.js') ?>"></script>
+    <?php include __DIR__ . '/_notice_doc_ui.php'; ?>
     <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 
     <!-- 附件標籤/轉檔/預覽 共用元件（標籤管理跳窗、Excel工作表選擇、PDF預覽確認） -->
@@ -1774,6 +1857,9 @@ if (isset($_POST['btn_go_events'])) {
 
     <script>
         $(function() {
+            // 給草稿儲存用（_notice_doc_ui.php）：函式宣告會提升，所以放在最前面也拿得到
+            window.egSyncTargetModes = function() { return egSyncTargetModes.apply(this, arguments); };
+            window.egCoEditorsJson = function() { return egCoEditorsJson.apply(this, arguments); };
             // 跳窗統一移到 body 底下（避免被版面容器的定位/裁切影響），關閉後清除殘留背板
             $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal,#autoReadModal,#autoReadSrcModal,#ncPrintModal,#ncSetModal,#ncBackfillModal').appendTo('body');
             $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
@@ -2284,7 +2370,8 @@ if (isset($_POST['btn_go_events'])) {
                     // 操作欄：逐列權限（只有系統管理員可改/刪任何公告；其他人僅本人建立或本人為共同編輯者）
                     html += '<td class="eg-op">';
                     // 聯絡單（2-DC-02-01）：列印不是修改，所以連「訂單變更」這種鎖定的通知也印得出來
-                    html += '<a href="javascript:;" class="nc-print-btn" data-eid="' + r.id + '" title="列印成紙本聯絡單 2-DC-02-01（回簽者會蓋章）"><span class="eg-mini nc-mini"><i class="fa fa-print"></i> 聯絡單</span></a>';
+                    var kindNm = ({announce: '公告', contact: '聯絡單'})[r.kind] || '通知';
+                    html += '<a href="javascript:;" class="nc-print-btn" data-eid="' + r.id + '" title="列印成紙本' + kindNm + (r.kind === 'contact' ? '（AS 2-DC-02-01）' : '') + '（回簽者會蓋章）"><span class="eg-mini nc-mini"><i class="fa fa-print"></i> ' + kindNm + '</span></a>';
                     if (r.source === '訂單變更') {
                         // 來源『訂單變更』的通知為衍生副本，鎖定禁止刪改（請至訂單頁作廢變更單，會連動移除通知）
                         html += '<span class="eg-mini" style="background:#eceff1;color:#90a4ae;cursor:not-allowed;" title="此通知由「訂單變更」產生已鎖定；如需移除請至訂單追蹤頁作廢該變更單"><i class="fa fa-lock"></i> 鎖定</span>';
@@ -3008,14 +3095,19 @@ if (isset($_POST['btn_go_events'])) {
             var co = d.company || {};
             var h = '<div class="ct-head"><div class="co">' + esc(co.name) + '</div>'
                   + '<div class="ad">' + esc(co.addr) + (co.tel ? '　TEL:' + esc(co.tel) : '') + (co.fax ? '　FAX:' + esc(co.fax) : '') + '</div></div>';
-            h += '<div class="ct-no"><span>聯絡單號：' + esc(d.contact_no || '') + '</span>'
+            // 種類：只有聯絡單印聯絡單號；公告／通知印公告編號，標題換成種類名稱
+            var isContact = (d.kind || 'contact') === 'contact';
+            h += '<div class="ct-no"><span>' + (isContact ? '聯絡單號：' + esc(d.contact_no || '') : '編號：' + esc(d.event_no || '')) + '</span>'
                + '<span>DATE：' + esc(d.date_disp || '') + '</span></div>';
-            h += '<div class="ct-tt">' + esc(d.doc_name || '聯絡單') + '</div>';
+            h += '<div class="ct-tt">' + esc(d.doc_name || d.kind_name || '聯絡單') + '</div>';
             h += '<div class="ct-fr">發文者：<u>' + esc(d.from_text || '') + '</u></div>';
             h += '<div class="ct-to">受文者：<u>' + esc(d.to_text || '') + '</u></div>';
 
             h += '<table class="ct-box"><tr><td class="ct-title">標題：' + esc(d.title || '') + '</td></tr>';
-            var body = '<div class="ct-text">' + esc(d.content || '').replace(/\n/g, '<br>') + '</div>';
+            // 圖文內容（可有表格與圖片）優先；舊的純文字公告照舊
+            var body = d.content_html
+                ? '<div class="ct-text ct-rich">' + d.content_html + '</div>'
+                : '<div class="ct-text">' + esc(d.content || '').replace(/\n/g, '<br>') + '</div>';
             if (d.files && d.files.length) {
                 body += '<div class="ct-att">附件：' + d.files.map(function (f) { return esc(f); }).join('、') + '</div>';
             }
@@ -3041,6 +3133,11 @@ if (isset($_POST['btn_go_events'])) {
                + '<td class="l"><span class="lb">核准：</span>' + stampHtml(ap.name, ap.date, ap.dept, ap.position) + '</td>'
                + '</tr></table></td></tr>';
             h += '</table>';
+            // 公告：張貼期限印在右下角（例：此公告張貼至 2026 年 08 月 10 日）
+            if (d.post_until) {
+                var pu = String(d.post_until).split('-');
+                h += '<div class="ct-post">此公告張貼至　' + pu[0] + ' 年 ' + pu[1] + ' 月 ' + pu[2] + ' 日</div>';
+            }
             return h;
         }
         /* 列印視窗：四邊留白用 ai-rules/16 四之二之二的兩段式（@page 14mm ＋ body 5mm 保險），
@@ -3068,6 +3165,9 @@ if (isset($_POST['btn_go_events'])) {
                        內容長就自己撐開、不會被截掉；短的時候版面也不會縮成薄薄一條 */
                     + '.ct-body{height:330px;vertical-align:top;font-size:14px;line-height:1.9;}'
                     + '.ct-text{white-space:normal;}'
+                    + '.ct-rich table{border-collapse:collapse;max-width:100%;} .ct-rich td,.ct-rich th{border:1px solid #000;padding:2px 6px;vertical-align:top;}'
+                    + '.ct-rich img{max-width:100%;} .ct-rich p{margin:0 0 4px;}'
+                    + '.ct-post{text-align:right;font-size:13px;margin-top:10px;letter-spacing:1px;}'
                     + '.ct-att{margin-top:10px;font-size:12px;color:#333;}'
                     + '.ct-rep{margin-top:12px;border-top:1px dashed #999;padding-top:6px;font-size:12.5px;line-height:1.8;}'
                     + '.ct-rep-h{font-weight:bold;margin-bottom:2px;}'
@@ -3290,11 +3390,11 @@ if (isset($_POST['btn_go_events'])) {
                 // 按下列印才配聯絡單號（使用者要求：有列印才產生）
                 loadPrint(NC.eid, true, function (d) {
                     whenStampReady(function () {
-                        printWindow('聯絡單 ' + (d.contact_no || '') + ' ' + d.title, buildBody(d, printablePeople(d)), d.doc_no);
+                        printWindow((d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + ' ' + d.title, buildBody(d, printablePeople(d)), d.doc_no);
                         try {
                             if (window.EGPrintLog) EGPrintLog.record({
                                 source: 'notice_contact', doc_kind: 'form',
-                                doc_name: '聯絡單 ' + (d.contact_no || '') + '　' + d.title,
+                                doc_name: (d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + '　' + d.title,
                                 ref_table: 'live_event', ref_id: d.event_id
                             });
                         } catch (e) {}
