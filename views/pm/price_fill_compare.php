@@ -175,6 +175,9 @@ $('#btnAllMatch').on('click',function(){
 $('#btnClear').on('click',function(){ SEL={}; $('#body .ck').prop('checked',false); $('#ckAll').prop('checked',false); refreshSel(); });
 $('#pPrev').on('click',function(){ PAGE--; load(); }); $('#pNext').on('click',function(){ PAGE++; load(); });
 $('#per,#pstate').on('change',function(){ PAGE=1; load(); });
+// 輸入框快速連點兩下＝清除內容並解除該篩選；製程狀態下拉連點兩下＝回到「全部」
+$('#q,#lproc,#rproc').on('dblclick',function(){ if($(this).val()!==''){ $(this).val('').trigger('input'); } });
+$('#pstate').on('dblclick',function(){ if($(this).val()!==''){ $(this).val('').trigger('change'); } });
 var qt=null; $('#q,#lproc,#rproc').on('input',function(){ clearTimeout(qt); qt=setTimeout(function(){ PAGE=1; load(); },350); });
 function fillToast(t){
     var $t=$('<div></div>').text(t).css({position:'fixed',right:'20px',bottom:'24px',zIndex:99999,background:'#7A4A1E',color:'#fff',padding:'10px 16px',borderRadius:'6px',fontSize:'14px',boxShadow:'0 2px 8px rgba(0,0,0,.3)'}).appendTo('body');
