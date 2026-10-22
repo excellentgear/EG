@@ -137,6 +137,10 @@ function pcHtml(c){   // 多個單價：選「加總」或單一單價
     return '<div class="pf-pm">採用單價：<select class="pc-sel" data-id="'+c.order_id+'">'+h+'</select></div>';
 }
 var PF = {};   // 自動預填的製程（用來判斷「沒勾同時補製程」時不要送出）
+function ooHtml(c){   // 查無 ERP 資料的訂單：多半是單號打錯，可直接輸入正確單號修改
+    if(c.cat!=='D') return '';
+    return '<div class="pf-pm">更正單號：<input type="text" class="oo-in" data-id="'+c.order_id+'" placeholder="輸入正確單號，例 OO1150601001" maxlength="12" data-eg-skip> <button type="button" class="pf-btn oo-go" data-id="'+c.order_id+'" style="height:24px;padding:0 10px">改單號</button></div>';
+}
 function pmHtml(c){   // 訂單製程空白時：補入製程輸入框（預填 ERP 製程）＋ERP 候選快速帶入；所有可轉的類別都適用
     var blank = String(c.order.Processing_items||'').trim()==='';
     if(c.cat==='PROCM'){}
@@ -153,7 +157,7 @@ function ordHtml(c){
            '料號 <b>'+esc(o.d_id)+'</b>　數量 <b>'+esc(o.Qty)+'</b>　目前單價 <span class="pf-diff">'+fmtP(o.unit_price)+'</span>'+
            (c.proc_fill ? '<br><span class="pf-tag w">將補製程</span><b>'+esc(c.proc_fill)+'</b>' : '')+(c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
            '製程：<span class="pf-proc-'+ordProcState(c)+'">'+(esc(o.Processing_items)||'（空白）')+'</span><br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
-           (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>'+pmHtml(c)+pcHtml(c);
+           (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>'+pmHtml(c)+pcHtml(c)+ooHtml(c);
 }
 function render(res){
     ROWS={}; var h='';
@@ -181,11 +185,25 @@ function load(){
 }
 $('#tabs').on('click','.pf-tab',function(){ CAT=$(this).data('c'); PAGE=1; SEL={}; load(); });
 $('#body').on('dblclick','.pf-pick',function(e){ e.stopPropagation(); $(this).closest('tr').find('.pm-in').val($(this).data('v')).trigger('input'); window.getSelection().removeAllRanges(); });
+$('#body').on('input','.oo-in',function(){ var p=this.selectionStart; this.value=this.value.toUpperCase().replace(/\s+/g,''); try{this.setSelectionRange(p,p);}catch(e){} });
+$('#body').on('keydown','.oo-in',function(e){ if(e.key==='Enter'){ e.preventDefault(); $(this).closest('.pf-pm').find('.oo-go').click(); } });
+$('#body').on('dblclick','.oo-in',function(){ $(this).val(''); });
+$('#body').on('click','.oo-go',function(e){
+    e.stopPropagation(); var id=$(this).data('id'), v=($(this).closest('.pf-pm').find('.oo-in').val()||'').trim().toUpperCase();
+    if(!/^OO\d{10}$/.test(v)){ alert('單號格式應為 OO＋民國年3碼＋月2碼＋日2碼＋流水號3碼（共12碼，大寫），例：OO1150601001'); return; }
+    var c=ROWS[id]||{order:{}};
+    if(!confirm('把訂單 #'+id+' 的單號：'+(c.order.Order_oo||'')+'　改為：'+v+'　確定？')) return;
+    api('fix_oo',{order_id:id,new_oo:v}).done(function(res){
+        if(!res.ok){ alert(res.error); return; }
+        alert('已改為 '+res.new_oo+(res.erp_rows? '（ERP 有此單號＋料號的資料 '+res.erp_rows+' 筆，重新整理後會移到對應分頁）':'（ERP 查無此單號＋料號的資料）'));
+        load();
+    }).fail(function(x){ alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
 $('#body').on('click','.pf-chip',function(e){ e.stopPropagation(); var $in=$(this).closest('.pf-pm').find('.pm-in'); $in.val($(this).data('v')).trigger('input'); });
 $('#body').on('input','.pm-in',function(){ PM[$(this).data('id')]=$(this).val(); var $ck=$(this).closest('tr').find('.ck'); if($(this).val().trim() && !$ck.prop('checked')){ $ck.prop('checked',true).trigger('change'); } });
 $('#body').on('dblclick','.pm-in',function(){ $(this).val('').trigger('input'); });
 $('#body').on('change','.ck',function(){ var id=$(this).val(); if(this.checked) SEL[id]=1; else delete SEL[id]; refreshSel(); });
-$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,select,option,.pf-chip')) return;
+$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,select,option,button,.pf-chip')) return;
     if(String(window.getSelection?window.getSelection():'').length>0) return;   // 正在選取文字（要複製）時不切換勾選
     var $c=$(this).closest('tr').find('.ck'); if($c.length){ $c.prop('checked',!$c.prop('checked')).trigger('change'); } });
 $('#ckAll,#btnPage').on('click',function(){ $('#body .ck').each(function(){ $(this).prop('checked',true); SEL[$(this).val()]=1; }); refreshSel(); });

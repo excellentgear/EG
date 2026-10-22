@@ -350,3 +350,31 @@ function opf_auto_close_exact(PDO $db): int {
     }
     return $n;
 }
+
+
+/**
+ * 直接更正訂單單號（2026-10-22）：只改 order_track.Order_oo（比照訂單編輯畫面的做法），不動修改時間／修改人。
+ * 單號格式：OO＋民國年3碼＋月2碼＋日2碼＋流水號3碼（大寫），並驗證月日合法；原值記在 order_oo_fix_log。
+ * 回傳 ['ok'=>bool,'error'=>?,'new_oo'=>?,'erp_rows'=>該單號＋料號在 ERP 資料的筆數]
+ */
+function opf_fix_oo(PDO $db, int $orderId, string $newOo, int $uid): array {
+    $new = strtoupper(trim($newOo));
+    if (!preg_match('/^OO(\d{3})(\d{2})(\d{2})(\d{3})$/', $new, $m)) return ['ok' => false, 'error' => '單號格式應為 OO＋民國年3碼＋月2碼＋日2碼＋流水號3碼（共12碼，大寫），例：OO1150601001'];
+    $mo = (int)$m[2]; $dy = (int)$m[3]; $yr = (int)$m[1] + 1911;
+    if ($mo < 1 || $mo > 12 || $dy < 1 || $dy > cal_days_in_month(CAL_GREGORIAN, $mo, $yr)) return ['ok' => false, 'error' => "單號中的日期不存在（{$yr}-{$m[2]}-{$m[3]}）"];
+    $db->exec("CREATE TABLE IF NOT EXISTS order_oo_fix_log (
+      id INT AUTO_INCREMENT PRIMARY KEY, order_id INT NOT NULL, old_oo VARCHAR(60) NULL, new_oo VARCHAR(60) NULL, fixed_at DATETIME NOT NULL,
+      KEY idx_order (order_id)) CHARACTER SET utf8mb4 COMMENT='訂單單號大小寫修正紀錄'");
+    $q = $db->prepare("SELECT Order_oo, d_id FROM order_track WHERE Order_id=?"); $q->execute([$orderId]);
+    $o = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$o) return ['ok' => false, 'error' => '找不到這張訂單'];
+    if (strtoupper(trim((string)$o['Order_oo'])) === $new && (string)$o['Order_oo'] === $new) return ['ok' => false, 'error' => '單號沒有變更'];
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE order_track SET Order_oo=? WHERE Order_id=?")->execute([$new, $orderId]);
+        $db->prepare("INSERT INTO order_oo_fix_log (order_id,old_oo,new_oo,fixed_at) VALUES (?,?,?,NOW())")->execute([$orderId, $o['Order_oo'], $new]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    $c = $db->prepare("SELECT COUNT(*) FROM order_list WHERE Order_oo=? AND d_id=?"); $c->execute([$new, $o['d_id']]);
+    return ['ok' => true, 'new_oo' => $new, 'old_oo' => $o['Order_oo'], 'erp_rows' => (int)$c->fetchColumn()];
+}

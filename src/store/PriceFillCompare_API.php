@@ -65,5 +65,8 @@ case 'apply': {
     $r = opf_apply($db, $ids, $cat, $uid, !empty($_POST['fill_proc']), (array)json_decode($_POST['proc_map'] ?? '{}', true), (array)json_decode($_POST['price_map'] ?? '{}', true));
     pfcOut(['ok' => true] + $r);
 }
+case 'fix_oo': {
+    pfcOut(opf_fix_oo($db, (int)($_POST['order_id'] ?? 0), (string)($_POST['new_oo'] ?? ''), $uid));
+}
 default: pfcOut(['ok' => false, 'error' => '未知的動作']);
 }
