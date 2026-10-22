@@ -11996,6 +11996,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
         <div style="padding:8px;background:#eef4fb;border-bottom:1px solid #d6eaf8;display:flex;align-items:center;justify-content:space-between;">
             <span style="font-size:11px;font-weight:700;color:#1a5276;" id="pav-list-title">附件列表</span>
             <?php if ($can_part_attach): ?>
+            <span style="display:inline-flex;align-items:center;">
             <label style="margin:0;cursor:pointer;" title="上傳附件">
                 <span class="btn btn-xs btn-primary" style="padding:1px 6px;"><i class="fa fa-upload"></i></span>
                 <input type="file" id="pav-upload-input" style="display:none;" multiple onchange="openPartAttachUploadFromView(this)">
@@ -12003,6 +12004,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             <!-- 組合圖專用上傳（2026-10-12 使用者交辦）：Pack and Go 的 ZIP，或一次多選組合檔＋零件檔。
                  零件會自動收進組合那一列，不會在清單上平鋪一堆（唯一關聯實作見 part_assembly_lib.php）-->
             <button type="button" class="btn btn-xs btn-warning" style="padding:1px 6px;margin-left:2px;" title="上傳組合圖（.iam）與它用到的零件檔" onclick="pavAsmUploadOpen()"><i class="fa fa-cubes"></i></button>
+            </span>
             <?php endif; ?>
         </div>
         <div id="pav-file-list" style="flex:1;overflow-y:auto;padding:4px 0;">
