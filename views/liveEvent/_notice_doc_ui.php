@@ -19,8 +19,8 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     .nd-btn { border: 1px solid #d8c7b0; background: #faf6f0; color: #6B471A; border-radius: 4px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
     .nd-btn:hover { background: #f2e6d4; }
     #contentEditor .egrt-doc-scroll { background: #e9e4dc; }
-    #nd-dirty { position: fixed; right: 18px; bottom: 16px; z-index: 2000; background: #F8DCD5; color: #8a3a2a; border: 1px solid #e9b8ac; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; }
-    #nd-toast { position: fixed; right: 18px; bottom: 16px; z-index: 2001; background: #F7E0BD; color: #6B471A; border-radius: 6px; padding: 6px 14px; font-size: 13px; display: none; }
+    #nd-dirty { position: fixed; right: 18px; bottom: 16px; z-index: 2000; background: #F8DCD5; color: #8a3a2a; border: 1px solid #e9b8ac; border-radius: 6px; padding: 10px 24px; font-size: 26px; font-weight: 700; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; }
+    #nd-toast { position: fixed; right: 18px; bottom: 16px; z-index: 2001; background: #F7E0BD; color: #6B471A; border-radius: 6px; padding: 10px 24px; font-size: 22px; display: none; }
     /* 公告編輯區只有半個版面寬，兩張 A4 並排放不下、會一直重排當機 → 不提供一頁／雙頁切換（固定單頁） */
     #contentEditor [data-view] { display: none !important; }
 </style>
