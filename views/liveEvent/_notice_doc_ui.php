@@ -161,13 +161,24 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     function kindUi() {
         var k = $('#kind').val();
         $('#post-until-wrap').toggle(k === 'announce');
+        // 回簽只有聯絡單：公告不需回簽、通知只要已閱 → 隱藏「回簽／回覆+回簽」區塊，其中的對象移回「已閱」
+        var isC = (k === 'contact');
+        $('.eg-tmzone[data-mode="sign"],.eg-tmzone[data-mode="reply"]').toggle(isC);
+        $('#reply_deadline').closest('.eg-field').toggle(isC);
+        if (!isC) {
+            var $mv = $('#zone-sign .eg-tmchip,#zone-reply .eg-tmchip');
+            if ($mv.length) { $mv.appendTo('#zone-read'); try { window.egSyncTargetModes(); } catch (e) {} }
+        }
         var req = ND.modes[k] === 'required';
         $('#send-label').text(req ? '送出核准' : '送出發布');
         var h = req ? '此種類需經核准人員' + (ND.apprName ? '（' + ND.apprName + '）' : '') + '核准後才會發布給對象。'
                     : '依設定自動簽核蓋准章，送出即發布。';
         if (k === 'contact') h += '列印時右下角印 AS 文件編號。'; else h += '列印時右下角不印文件編號。';
+        h += k === 'announce' ? '公告不需回簽。' : (k === 'notice' ? '通知只需已閱。' : '聯絡單可設已閱或回簽（逐對象設定）。');
         $('#kind-hint').text(h);
     }
+    $(document).on('change', '#targets', function () { setTimeout(kindUi, 50); });
+    $(function () { setTimeout(kindUi, 900); });
     $(document).on('change', '#kind', kindUi);
     $(kindUi);
 

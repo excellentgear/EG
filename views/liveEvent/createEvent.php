@@ -3124,7 +3124,7 @@ if (isset($_POST['btn_go_events'])) {
             }
             h += '<tr><td class="ct-body">' + body + '</td></tr>';
 
-            var stamps = signStamps(people);
+            var stamps = (d.kind === 'announce') ? '' : signStamps(people);   // 公告不需回簽／已閱章
             if (stamps) h += '<tr><td class="ct-sign"><div class="ct-sign-h">已閱簽章</div><div class="ct-sw">' + stamps + '</div></td></tr>';
 
             var mk = d.maker || {}, ap = d.approver || {};

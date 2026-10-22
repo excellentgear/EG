@@ -289,6 +289,13 @@ if (isset($_POST["newEvent"]) || isset($_POST["upDateEvent"])) {
             $_POST['content_html'] = $__h;
             $_POST['content'] = $__t;
         }
+        // 回簽只有「聯絡單」才有：公告不需回簽、通知只要已閱（後端強制，不只靠前端藏起來）
+        if (isset($_POST['kind']) && ndoc_kind_norm($_POST['kind']) !== 'contact') {
+            $__m = json_decode((string)($_POST['target_modes'] ?? '{}'), true) ?: [];
+            foreach ($__m as $__c => $__v) { if ($__v === 'sign' || $__v === 'reply') $__m[$__c] = 'read'; }
+            $_POST['target_modes'] = json_encode((object)$__m);
+            $_POST['reply_deadline'] = '';
+        }
     } catch (Throwable $e) { error_log('[notice] content_html prepare failed: ' . $e->getMessage()); }
 }
 
