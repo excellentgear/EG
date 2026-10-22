@@ -3091,6 +3091,24 @@ if (isset($_POST['btn_go_events'])) {
                 .map(function (p) { return '<span class="ct-si">' + stampHtml(p.name, p.sign_date, p.dept, p.position, 'read') + '</span>'; })
                 .join('');
         }
+        /* 圖文內容的表格寬度是編輯區裡的 px，列印版內文寬不同，直接套會與編輯畫面差很多：
+           一律換算成「佔內文寬的百分比」（表格＝px／編輯區內文寬；儲存格＝px／表格 px），兩邊比例就一致 */
+        function scaleRich(html) {
+            if (!/<table/i.test(html || '')) return html;
+            var W = (window.ndEditorContentWidth && window.ndEditorContentWidth()) || 643;
+            var box = document.createElement('div'); box.innerHTML = html;
+            var rx = /(?:^|;)\s*width:\s*([\d.]+)px/;
+            Array.prototype.forEach.call(box.querySelectorAll('table'), function (t) {
+                var m = rx.exec(t.getAttribute('style') || ''); if (!m) return;
+                var T = parseFloat(m[1]);
+                t.style.width = Math.min(100, T / W * 100).toFixed(1) + '%';
+                Array.prototype.forEach.call(t.querySelectorAll('td,th'), function (c) {
+                    var mm = rx.exec(c.getAttribute('style') || '');
+                    if (mm) c.style.width = Math.min(100, parseFloat(mm[1]) / T * 100).toFixed(1) + '%';
+                });
+            });
+            return box.innerHTML;
+        }
         function buildBody(d, people) {
             var co = d.company || {};
             var h = '<div class="ct-head"><div class="co">' + esc(co.name) + '</div>'
@@ -3106,7 +3124,7 @@ if (isset($_POST['btn_go_events'])) {
             h += '<table class="ct-box"><tr><td class="ct-title">標題：' + esc(d.title || '') + '</td></tr>';
             // 圖文內容（可有表格與圖片）優先；舊的純文字公告照舊
             var body = d.content_html
-                ? '<div class="ct-text ct-rich">' + d.content_html + '</div>'
+                ? '<div class="ct-text ct-rich">' + scaleRich(d.content_html) + '</div>'
                 : '<div class="ct-text">' + esc(d.content || '').replace(/\n/g, '<br>') + '</div>';
             if (d.files && d.files.length) {
                 body += '<div class="ct-att">附件：' + d.files.map(function (f) { return esc(f); }).join('、') + '</div>';

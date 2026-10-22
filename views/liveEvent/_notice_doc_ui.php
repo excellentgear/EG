@@ -157,6 +157,12 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             upload(f, function (id) { ed.insertAsset(id, { width: '60%' }); sync(); });
         }, true);
         $('form').has('#contentEditor').on('submit', sync);
+        // 列印用：編輯區內文寬（CSS px，不含 zoom），列印時把表格 px 寬度換算成佔內文寬的比例
+        window.ndEditorContentWidth = function () {
+            var m = document.querySelector('#contentEditor .egrt-main'); if (!m) return 0;
+            var cs = getComputedStyle(m);
+            return m.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
+        };
 
         /* 表格「最後一欄」右邊框往右拖＝整張表加寬（共用編輯器只能在相鄰兩欄之間分配寬度、總寬不變，
            最後一欄右邊沒有鄰欄所以拉不動，使用者回報「無法拉寬表格」）。上限＝紙張內文寬度。
@@ -179,16 +185,19 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             var tbl = cell.closest('table'), main = cell.closest('.egrt-main');
             e.preventDefault(); e.stopPropagation();
             var cs = getComputedStyle(main), maxW = main.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
-            var w0 = tbl.getBoundingClientRect().width, wc = cell.getBoundingClientRect().width, x0 = e.clientX;
+            // 編輯區會依視窗寬度用 CSS zoom 縮小整頁（fitPages），getBoundingClientRect 與滑鼠座標都是縮放後的值，
+            // 寫進 style 的 px 一律要除回 zoom，否則存下來的寬度與列印／檢視對不起來
+            var k = parseFloat(getComputedStyle(main.closest('.egrt-pages') || main).zoom) || 1;
+            var w0 = tbl.getBoundingClientRect().width / k, wc = cell.getBoundingClientRect().width / k, x0 = e.clientX;
             var lasts = [];
             Array.prototype.slice.call(tbl.rows).forEach(function (row) {
                 Array.prototype.slice.call(row.cells).forEach(function (c) {
-                    if ((c.colSpan || 1) === 1) c.style.width = Math.round(c.getBoundingClientRect().width * 10) / 10 + 'px';   // 先凍結，拖動時不被重新分配
+                    if ((c.colSpan || 1) === 1) c.style.width = Math.round(c.getBoundingClientRect().width / k * 10) / 10 + 'px';   // 先凍結，拖動時不被重新分配
                 });
                 if (row.cells.length) lasts.push(row.cells[row.cells.length - 1]);
             });
             function mv(ev) {
-                var dx = Math.max(-(wc - 30), Math.min(maxW - w0, ev.clientX - x0));
+                var dx = Math.max(-(wc - 30), Math.min(maxW - w0, (ev.clientX - x0) / k));
                 lasts.forEach(function (c) { if ((c.colSpan || 1) === 1) c.style.width = (Math.round((wc + dx) * 10) / 10) + 'px'; });
                 tbl.style.width = (Math.round((w0 + dx) * 10) / 10) + 'px';
             }
