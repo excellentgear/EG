@@ -837,6 +837,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 製程標籤（選填）：同一料號不同加工項目各自一組新舊版，留空＝共用圖。
             // 前端是下拉，後端照樣自己擋長度（直打 API 繞不過去＝鐵律8 不做半套）。
             $procTag = trim($_POST['process_tag'] ?? '');
+            // 製程大類／小類（JSON，可複選）：有送就以它為準，process_tag 由摘要文字自動帶（圖面變更判定仍比對這串文字）
+            $procSel = null;
+            if (isset($_POST['process_sel']) && trim((string)$_POST['process_sel']) !== '') {
+                require_once __DIR__ . '/../../src/common/attach_proc_lib.php';
+                $procSel = eg_apc_parse($pdo, $_POST['process_sel']);
+                $procTag = eg_apc_summary($procSel);
+                if (!$procSel) $procSel = null;
+            }
             if (mb_strlen($procTag, 'UTF-8') > 100) throw new Exception('製程標籤最多 100 個字');
             // 設變說明（選填）：前端從畫布上「號碼最大」那一組設變列表抄過來的文字，日期前綴已在前端去掉。
             // 只是帶值用、不參與任何判定，故超長直接截斷而不報錯（不能因為說明太長就讓整張圖存不進去）。
@@ -849,6 +857,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 故一律不掛發行章日期、也不做圖面變更判定（要正式發行請勾「只存圖片，不建立工作檔」）。
                 $issueDate = null;
                 $procTag = '';
+                $procSel = null;
                 $dwgVerdict = ['kind' => 'none'];
             } else {
                 if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
@@ -889,6 +898,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
             $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, ($procTag !== '' ? $procTag : null), '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
+            if ($procSel) eg_apc_save($pdo, (int)$pngId, $procSel);   // 製程大類／小類對照（與料號附件頁同一張表）
             if ($dcSummary !== '') {
                 $pdo->prepare("INSERT INTO imgedit_dc_note (attachment_id, dc_number, summary) VALUES (?,?,?)
                                ON DUPLICATE KEY UPDATE dc_number=VALUES(dc_number), summary=VALUES(summary)")
@@ -2077,9 +2087,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                  候選只列「此料號訂單有過的加工項目」＋「此料號已經打過的」，不列全公司製程主檔。 -->
             <div class="frm-row"><label>製程標籤</label>
                 <div style="flex:1;">
-                    <select id="pf-proc" style="width:260px;" onchange="pfRenderProcHint()">
-                        <option value="">（共用，不分製程）</option>
-                    </select>
+                    <div id="pf-proc" class="epp" style="max-width:440px;"></div><!-- 製程大類／小類選擇器（共用 eg_proc_pick.js，與料號主檔附件的製程標籤同一套） -->
                     <div id="pf-proc-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。同一料號不同加工項目的圖請各自選製程，新舊版才不會互相誤判。</div>
                 </div>
             </div>
@@ -2489,6 +2497,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script><!-- 日期顯示一律 YYYY.MM.DD（ai-rules/20） -->
 <script src="../../resource/js/pdfmake.min.js"></script><!-- 列印走 PDF 管線用（已含字型 vfs）：把畫布高解析影像包成 PDF 再列印，畫質最接近「存檔後本機列印」 -->
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script><!-- 列印紀錄（ai-rules/23） -->
+<script src="../../resource/js/eg_proc_pick.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_proc_pick.js') ?>"></script><!-- 製程標籤選擇器（大類／小類／常用組合，全站共用） -->
 <script>
 'use strict';
 /* Fabric 5.3.0 已知 bug 修補（本地 fabric.min.js 已修字，這裡是多層保險）：
@@ -7481,47 +7490,26 @@ function pfApplyPartToName() {
     const p = pfPartsMap[document.getElementById('pf-part').value];
     if (p && p.D_Setting_Id) document.getElementById('pf-name').value = p.D_Setting_Id;
 }
-/* 製程標籤候選：換料號就重載。分兩組——「此料號用過的」放前面（＝使用者要的每料號自動記憶），
-   「此料號訂單的加工項目」放後面。選項一多就靠共用檔的 data-eg-filter 打字篩選。 */
-async function pfLoadProcTags() {
-    const sel = document.getElementById('pf-proc');
-    if (!sel) return;
-    const keep = sel.value;
-    const d = document.getElementById('pf-part').value;
-    sel.innerHTML = '<option value="">（共用，不分製程）</option>';
-    if (!d) { pfRenderProcHint(); return; }
-    try {
-        const fd = new FormData();
-        fd.append('action', 'process_candidates'); fd.append('d_id', d);
-        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
-        if (!res.success) throw new Error(res.message || '');
-        const used = (res.items || []).filter(i => i.source === 'used');
-        const ord  = (res.items || []).filter(i => i.source !== 'used');
-        const addGroup = (label, arr) => {
-            if (!arr.length) return;
-            const g = document.createElement('optgroup');
-            g.label = label;
-            arr.forEach(i => { const o = document.createElement('option'); o.value = i.value; o.textContent = i.value; g.appendChild(o); });
-            sel.appendChild(g);
-        };
-        addGroup('此料號已經用過', used);
-        addGroup('此料號的訂單加工項目', ord);
-        if (keep) { for (const o of sel.options) { if (o.value === keep) { sel.value = keep; break; } } }
-    } catch (e) { /* 候選載不到不擋存檔，留「共用」即可 */ }
-    pfRenderProcHint();
+/* 製程標籤：改用共用選擇器 EGProcPick（製程大類／小類／常用組合，與料號主檔附件的製程標籤完全相同）。
+   選擇內容不跟料號綁定（是製程主檔），換料號時保留目前的選擇。 */
+function pfProcMount() {
+    const el = document.getElementById('pf-proc');
+    if (!el || !window.EGProcPick) return null;
+    if (!el._epp) EGProcPick.mount(el, { url: '../../src/store/Part_Attachment_API.php', onChange: pfRenderProcHint });
+    return el;
 }
+function pfLoadProcTags() { pfProcMount(); pfRenderProcHint(); }
+function pfProcSel() { const el = pfProcMount(); return el ? EGProcPick.get(el) : []; }
 function pfRenderProcHint() {
-    const sel = document.getElementById('pf-proc'), hint = document.getElementById('pf-proc-hint');
-    if (!sel || !hint) return;
-    const n = sel.querySelectorAll('option').length - 1;   // 扣掉「共用」
-    if (sel.value) {
+    const el = document.getElementById('pf-proc'), hint = document.getElementById('pf-proc-hint');
+    if (!el || !hint || !el._epp) return;
+    const names = el._epp.sel.map(x => x.name).filter(Boolean);
+    if (el._epp.sel.length) {
         hint.style.color = '#7ed957';
-        hint.textContent = '這張圖屬於「' + sel.value + '」；只會跟同料號、同標籤、同製程（或未指定製程的共用圖）比新舊版。';
+        hint.textContent = '這張圖屬於「' + names.join('、') + '」；只會跟同料號、同標籤、同製程（或未指定製程的共用圖）比新舊版。';
     } else {
         hint.style.color = '#8b949e';
-        hint.textContent = n > 0
-            ? '選填。留空＝共用圖，會跟這個料號同標籤的所有製程一起比新舊版；不同加工項目各自一張圖時請選製程。'
-            : '此料號的訂單還沒有加工項目可選，留空＝共用圖。';
+        hint.textContent = '選填。留空＝共用圖，會跟這個料號同標籤的所有製程一起比新舊版；不同加工項目各自一張圖時請選製程（大類＝整個大類，小類＝個別製程，可用常用組合）。';
     }
 }
 const PF_SCOPE_LABEL = { private: '私人', dept: '部門共用', custom: '指定人員', company: '公司共用（舊資料）' };
@@ -7645,7 +7633,7 @@ async function pfSave() {
         fd.append('category_ids', cats.join(','));
         fd.append('issue_stamp_date', issueDate);
         fd.append('revision', document.getElementById('pf-revision').value.trim());
-        fd.append('process_tag', document.getElementById('pf-proc').value || '');
+        fd.append('process_sel', JSON.stringify(pfProcSel()));
         const dcNote = dcLatestNote();
         if (dcNote.text) { fd.append('dc_summary', dcNote.text); fd.append('dc_number', String(dcNote.num)); }
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
