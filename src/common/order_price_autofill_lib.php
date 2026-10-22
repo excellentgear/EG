@@ -11,6 +11,7 @@
  *   DONE 已補過單價(有 autofill_log)，但補資料暫存列仍是「待轉入」→ 只需把暫存列認定為已轉入
  *   A   建議：ERP 訂單資料(order_list)同單號＋料號＋數量，單價唯一且製程一致
  *   B   建議：ERP 單價唯一，但訂單製程空白／不一致（需人工抽查）
+ *   P   一對一配對：同單號＋料號＋數量，ERP 明細筆數＝訂單筆數（各自單價／製程不同）→ 先以製程相符者配對，其餘依序（訂單編號小→ERP 明細先）一對一，轉入該筆單價與製程；順序需人工確認
  *   C   ERP 有多個單價：可選「加總」（訂單把多筆合併成一筆時）或只採用其中一個單價，由人在畫面選定後轉入
  *   D   建議：查無 ERP 資料（僅顯示，不可批次）
  * 可批次轉價格＝R1 R2 DONE A B。套用時一律在後端重新判定，不採信前端送來的價格。
@@ -18,7 +19,7 @@
  */
 
 const OPF_MARK = '【自動補單價】';
-const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC', 'PROCM', 'C'];
+const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC', 'PROCM', 'C', 'P'];
 
 function opf_ensure_schema(PDO $db): void {
     static $done = false;
@@ -184,11 +185,57 @@ function opf_candidates(PDO $db): array {
     $L = [];
     foreach ($db->query("SELECT Order_oo,d_id,Qty,Specification,unit_price,Order_date FROM order_list WHERE unit_price>0") as $r)
         $L[$r['Order_oo'] . '|' . $r['d_id'] . '|' . (int)$r['Qty']][] = $r;
+    // 一對一配對用：訂單端（含已有單價者）與 ERP 端（全部明細）依訂單編號／ERP 序排序
+    $OG = [];
+    foreach (array_chunk(array_keys($needByOO), 400) as $ch) {
+        $q = $db->prepare("SELECT Order_id,Order_oo,d_id,Qty,Processing_items FROM order_track WHERE Order_oo IN (" . implode(',', array_fill(0, count($ch), '?')) . ") AND (Order_status IS NULL OR Order_status<>6) ORDER BY Order_id");
+        $q->execute($ch);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $OG[$r['Order_oo'] . '|' . $r['d_id'] . '|' . (int)$r['Qty']][] = $r;
+    }
+    $LL = [];
+    foreach ($db->query("SELECT Order_id lid,Order_oo,d_id,Qty,Specification,unit_price,Order_date FROM order_list ORDER BY Order_id") as $r)
+        $LL[$r['Order_oo'] . '|' . $r['d_id'] . '|' . (int)$r['Qty']][] = $r;
+    $pairCache = [];
+    $pairOf = function (string $key) use (&$pairCache, $OG, $LL): array {
+        if (isset($pairCache[$key])) return $pairCache[$key];
+        $O = $OG[$key] ?? []; $E = $LL[$key] ?? [];
+        if (count($E) < 2 || count($O) !== count($E)) return $pairCache[$key] = [];
+        $map = []; $usedE = [];
+        foreach ($O as $oi => $o) {   // 先以訂單已有的製程配對
+            if (opf_norm($o['Processing_items']) === '') continue;
+            foreach ($E as $ei => $e) {
+                if (isset($usedE[$ei])) continue;
+                $st = opf_proc_state((string)$o['Processing_items'], opf_erp_proc(['spec_text' => $e['Specification']]));
+                if ($st === 'ok' || $st === 'syn') { $map[$o['Order_id']] = $ei; $usedE[$ei] = true; break; }
+            }
+        }
+        $free = []; foreach ($E as $ei => $e) if (!isset($usedE[$ei])) $free[] = $ei;
+        foreach ($O as $oi => $o) { if (isset($map[$o['Order_id']])) continue; $map[$o['Order_id']] = array_shift($free); }
+        return $pairCache[$key] = $map;
+    };
     foreach ($orders as $o) {
         if (isset($handled[$o['Order_id']])) continue;
         $cand = $L[$o['Order_oo'] . '|' . $o['d_id'] . '|' . (int)$o['Qty']] ?? [];
         $px = opf_norm($o['Processing_items']);
         $pr = array_unique(array_map(fn($r) => round((float)$r['unit_price'], 4), $cand));
+        // 一對一配對（ERP 明細各自單價／製程不同，且筆數與訂單筆數相同）
+        $keyP = $o['Order_oo'] . '|' . $o['d_id'] . '|' . (int)$o['Qty'];
+        $allE = $LL[$keyP] ?? [];
+        if (count($allE) >= 2) {
+            $allPr = array_unique(array_map(fn($r) => round((float)$r['unit_price'], 4), $allE));
+            $allPc = array_unique(array_map(fn($r) => opf_proc_canon(opf_erp_proc(['spec_text' => $r['Specification']])), $allE));
+            $pm = $pairOf($keyP);
+            if ((count($allPr) > 1 || count($allPc) > 1) && isset($pm[$o['Order_id']])) {
+                $e = $allE[$pm[$o['Order_id']]];
+                if ((float)$e['unit_price'] > 0) {
+                    $idx = array_search($o['Order_id'], array_column($OG[$keyP], 'Order_id'), true);
+                    $res[] = ['order_id' => (int)$o['Order_id'], 'cat' => 'P', 'price' => round((float)$e['unit_price'], 4), 'stage_ids' => [], 'order' => $o,
+                              'src' => [['order_oo' => $e['Order_oo'], 'part_no' => $e['d_id'], 'qty' => $e['Qty'], 'spec_text' => $e['Specification'], 'unit_price' => $e['unit_price'], 'order_date' => $e['Order_date'], 'state' => 'ERP']],
+                              'note' => '一對一配對：同單號＋料號＋數量共 ' . count($allE) . ' 筆，此訂單為第 ' . (($idx === false ? 0 : $idx) + 1) . ' 筆 ↔ ERP 明細第 ' . ($pm[$o['Order_id']] + 1) . ' 筆（先以製程相符者配對，其餘依序）；請確認順序'];
+                    continue;
+                }
+            }
+        }
         $src = array_map(fn($r) => ['order_oo' => $r['Order_oo'], 'part_no' => $r['d_id'], 'qty' => $r['Qty'], 'spec_text' => $r['Specification'], 'unit_price' => $r['unit_price'], 'order_date' => $r['Order_date'], 'state' => 'ERP'], $cand);
         if (!$cand)            { $cat = 'D'; $price = null; $note = '查無 ERP 資料：請業務依報價補單價或綁定報價單'; }
         elseif (count($pr) > 1) {
@@ -254,9 +301,11 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
                 $up->execute([$c['price'], $like, $like, $c['order_id']]);
                 if (!$up->rowCount()) { $msgs[] = '訂單 ' . $c['order_id'] . ' 單價已有值，略過'; continue; }
                 $oldP = null; $newP = null;
-                if ($fillProc && !empty($c['proc_fill'])) {
-                    $upp->execute([$c['proc_fill'], $c['order_id']]);
-                    if ($upp->rowCount()) { $oldP = (string)$c['order']['Processing_items']; $newP = $c['proc_fill']; $procFilled++; }
+                $manualP = trim((string)($procMap[$c['order_id']] ?? ''));   // 畫面上手動填寫的製程優先
+                $pvP = $manualP !== '' ? $manualP : (($fillProc && !empty($c['proc_fill'])) ? $c['proc_fill'] : '');
+                if ($pvP !== '' && mb_strlen($pvP) <= 100) {
+                    $upp->execute([$pvP, $c['order_id']]);
+                    if ($upp->rowCount()) { $oldP = (string)$c['order']['Processing_items']; $newP = $pvP; $procFilled++; }
                 }
                 $lg->execute([$c['order_id'], $c['order']['Order_oo'], $ruleCode ?? $cat, null, $c['price'], $c['stage_ids'][0] ?? null, $oldP, $newP]);
                 unset($ruleCode);
