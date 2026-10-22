@@ -38,7 +38,7 @@ if (!$isAdminPage) { http_response_code(403); echo '僅系統管理員可使用�
 .pf-btn:disabled { opacity:.45; cursor:not-allowed; }
 table.pf { width:100%; border-collapse:collapse; font-size:12px; background:#fff; table-layout:fixed; }
 table.pf th { background:#F7E0BD; color:#5b3a1e; padding:5px 6px; border:1px solid #E5C79A; position:sticky; top:0; z-index:2; }
-table.pf td { border:1px solid #EAD9BF; padding:4px 6px; vertical-align:top; word-break:break-all; line-height:1.5; }
+table.pf td { user-select:text; border:1px solid #EAD9BF; padding:4px 6px; vertical-align:top; word-break:break-all; line-height:1.5; }
 table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
 .pf-grp { background:#F7E0BD; font-weight:600; color:#5b3a1e; }
 .pf-price { font-weight:700; color:#8A5A2B; } .pf-diff { color:#DD5138; font-weight:700; }
@@ -48,6 +48,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
 .pf-proc-ok { background:#DDEFD0; color:#3b5d22; font-weight:700; padding:0 4px; border-radius:3px; }
 .pf-proc-syn { background:#DDEFD0; color:#3b5d22; font-weight:700; padding:0 4px; border-radius:3px; border-bottom:2px dashed #7aa65a; }
 .pf-proc-na { background:#F7E0BD; color:#8A5A2B; padding:0 4px; border-radius:3px; }
+.pf-pick { cursor:copy; }
 .pf-pm { margin-top:4px; } .pf-pm .pm-in { width:180px; height:24px; }
 .pf-chip { display:inline-block; cursor:pointer; border:1px solid #d98a33; background:#FFF3DD; color:#8A5A2B; border-radius:10px; padding:0 8px; margin:2px 3px 0 0; font-size:11px; }
 .pf-chip:hover { background:#F0A24B; color:#fff; }
@@ -122,7 +123,7 @@ function srcHtml(c){
     return (c.src||[]).map(function(s){
         var st = s.state==='ERP' ? '<span class="pf-tag g">ERP</span>' : '<span class="pf-tag'+(s.state==='converted'?' g':'')+'">暫存·'+esc({pending:'待轉入',skipped:'已略過',converted:'已轉入'}[s.state]||s.state)+'</span>';
         var sp=specSplit(s.spec_text), ps = c.proc_state;
-        var specH = s.spec_text ? '品名規格：'+esc(sp.head)+'<span class="pf-proc-'+ps+'">'+esc(sp.tail)+'</span>' : '';
+        var specH = s.spec_text ? '品名規格：'+esc(sp.head)+'<span class="pf-proc-'+ps+(c.cat==='PROCM'?' pf-pick':'')+'" '+(c.cat==='PROCM'?'data-v="'+esc(sp.tail)+'" title="雙擊帶入右側「補入製程」"':'')+'>'+esc(sp.tail)+'</span>' : '';
         return '<div class="pf-src">'+st+'單號 <b>'+esc(s.order_oo)+'</b>　料號 <b>'+esc(s.part_no)+'</b>　數量 <b>'+esc(s.qty)+'</b>　單價 <span class="pf-price">'+fmtP(s.unit_price)+'</span><br>'+
                (s.process_text!=null ? '製程：<span class="pf-proc-'+ps+'">'+(esc(s.process_text)||'（空白）')+'</span><br>' : '')+
                specH+(s.order_date?'　日期：'+dd(s.order_date):'')+'</div>';
@@ -132,7 +133,7 @@ function ordProcState(c){ return c.proc_state; }
 function pmHtml(c){   // 需人工補製程：輸入框＋ERP 候選製程快速帶入
     if(c.cat!=='PROCM') return '';
     var chips=(c.proc_options||[]).map(function(o){ return '<span class="pf-chip" data-v="'+esc(o)+'">'+esc(o)+'</span>'; }).join('');
-    return '<div class="pf-pm">補入製程：<input type="text" class="pm-in" data-id="'+c.order_id+'" value="'+esc(PM[c.order_id]||'')+'" placeholder="輸入或點下方候選" data-eg-skip> '+chips+'</div>';
+    return '<div class="pf-pm">補入製程：<input type="text" class="pm-in" data-id="'+c.order_id+'" value="'+esc(PM[c.order_id]||'')+'" placeholder="直接輸入／貼上，或點下方候選" data-eg-skip> '+chips+'</div>';
 }
 function ordHtml(c){
     var o=c.order, same = c.src && c.src[0] && String(c.src[0].qty)===String(o.Qty);
@@ -167,11 +168,14 @@ function load(){
     }).fail(function(x){ alert('讀取失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 $('#tabs').on('click','.pf-tab',function(){ CAT=$(this).data('c'); PAGE=1; SEL={}; load(); });
+$('#body').on('dblclick','.pf-pick',function(e){ e.stopPropagation(); $(this).closest('tr').find('.pm-in').val($(this).data('v')).trigger('input'); window.getSelection().removeAllRanges(); });
 $('#body').on('click','.pf-chip',function(e){ e.stopPropagation(); var $in=$(this).closest('.pf-pm').find('.pm-in'); $in.val($(this).data('v')).trigger('input'); });
 $('#body').on('input','.pm-in',function(){ PM[$(this).data('id')]=$(this).val(); var $ck=$(this).closest('tr').find('.ck'); if($(this).val().trim() && !$ck.prop('checked')){ $ck.prop('checked',true).trigger('change'); } });
 $('#body').on('dblclick','.pm-in',function(){ $(this).val('').trigger('input'); });
 $('#body').on('change','.ck',function(){ var id=$(this).val(); if(this.checked) SEL[id]=1; else delete SEL[id]; refreshSel(); });
-$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,.pf-chip')) return; var $c=$(this).closest('tr').find('.ck'); if($c.length){ $c.prop('checked',!$c.prop('checked')).trigger('change'); } });
+$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,.pf-chip')) return;
+    if(String(window.getSelection?window.getSelection():'').length>0) return;   // 正在選取文字（要複製）時不切換勾選
+    var $c=$(this).closest('tr').find('.ck'); if($c.length){ $c.prop('checked',!$c.prop('checked')).trigger('change'); } });
 $('#ckAll,#btnPage').on('click',function(){ $('#body .ck').each(function(){ $(this).prop('checked',true); SEL[$(this).val()]=1; }); refreshSel(); });
 $('#btnAllMatch').on('click',function(){
     if(CANAPPLY.indexOf(CAT)<0){ fillToast('此類別不可批次轉入'); return; }
