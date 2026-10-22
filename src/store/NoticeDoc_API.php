@@ -45,6 +45,7 @@ if ($action === 'pending_list' || $action === 'pending_view') {
     $d = $st->fetch(PDO::FETCH_ASSOC);
     if (!$d || !($adm || (int)$d['user_id'] === $uid || (int)$d['approver_id'] === $uid)) ndErr('找不到這份單', 404);
     $data = json_decode((string)$d['payload'], true) ?: [];
+    if ($action === 'pending_view' && !empty($_GET['print'])) ndOut(['data' => ndoc_draft_print_data($db, $d)]);
     ndOut(['title' => $d['title'], 'kind' => ndoc_kind_label_of($d['kind']), 'state' => $d['state'],
            'html' => ndoc_hydrate((string)($data['content_html'] ?? '')),
            'eventdate' => $data['eventdate'] ?? '', 'post_until' => $data['post_until'] ?? '',

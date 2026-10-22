@@ -605,4 +605,39 @@ function ndoc_pending_lists(PDO $db, int $uid, bool $isAdmin): array
     return ['to_me' => $toMe->fetchAll(PDO::FETCH_ASSOC), 'mine' => $mine->fetchAll(PDO::FETCH_ASSOC)];
 }
 
+/** 草稿／送審單的預覽列印資料（格式與 nc_print_data 相同，讓前端共用同一支 buildBody；不配號、不寫列印紀錄） */
+function ndoc_draft_print_data(PDO $db, array $d): array
+{
+    require_once __DIR__ . '/notice_contact_lib.php';
+    require_once __DIR__ . '/asdoc_lib.php';
+    $x = json_decode((string)$d['payload'], true) ?: [];
+    $kind = ndoc_kind_norm($x['kind'] ?? $d['kind']);
+    $asof = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($x['eventdate'] ?? '')) ? $x['eventdate'] : (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $isC = ($kind === 'contact');
+    $docId = $isC ? eg_asdoc_id($db, NC_ASDOC_MODULE) : 0;
+    $doc = $isC ? eg_asdoc_get($db, NC_ASDOC_MODULE) : null;
+    $uid = (int)$d['user_id'];
+    $appr = (int)($d['approver_id'] ?: ndoc_appr_approver($db));
+    $html = (string)($x['content_html'] ?? '');
+    return [
+        'ok' => true, 'preview' => true, 'event_id' => 0,
+        'contact_no' => $isC ? '（預覽，列印時才配號）' : '', 'event_no' => '（預覽）',
+        'eventdate' => $asof, 'date_disp' => eg_fmt_date($asof),
+        'title' => (string)($x['title'] ?? ''), 'content' => trim(eg_richtext_to_text($html)),
+        'content_html' => $html === '' ? '' : ndoc_hydrate($html),
+        'kind' => $kind, 'kind_name' => ndoc_kinds()[$kind],
+        'post_until' => ($kind === 'announce' && !empty($x['post_until'])) ? $x['post_until'] : '',
+        'files' => [],
+        'from_text' => nc_person_label(nc_person($db, $uid, $asof)),
+        'to_text' => '',
+        'maker' => nc_person($db, $uid, $asof) + ['date' => $asof],
+        'approver' => nc_person($db, $appr, $asof) + ['date' => ''],
+        'people' => [], 'include' => null, 'show_reply' => 0, 'is_backfill' => 0,
+        'company' => nc_company($db),
+        'doc_name' => $isC ? ($doc['doc_name'] ?? '聯絡單') : ndoc_kinds()[$kind],
+        'doc_no' => ($isC && $docId) ? eg_asdoc_no_asof_id($db, $docId, $asof) : '',
+        'stamp_tpl' => nc_stamp_template($db), 'stamp_tpl_read' => nc_stamp_template($db, 'read'),
+    ];
+}
+
 }

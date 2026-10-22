@@ -3334,6 +3334,12 @@ if (isset($_POST['btn_go_events'])) {
             };
         }
 
+        /* 草稿／送審單的預覽列印（_notice_doc_ui.php 呼叫）：不配號、不留列印紀錄 */
+        window.ncPreviewPrint = function (d) {
+            NC.d = d;
+            whenStampReady(function () { printWindow('預覽 ' + (d.kind_name || '') + ' ' + d.title, buildBody(d, []), d.doc_no); });
+        };
+
         $(document).on('click', '.nc-print-btn', function () {
             $('#ncPrintBody').html('<div style="text-align:center;padding:26px;color:#9aa7b3;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
             $('#ncPrintMsg').text('');

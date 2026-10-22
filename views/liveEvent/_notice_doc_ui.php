@@ -69,6 +69,7 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             <div id="ndDecMsg" style="color:#c0392b;min-height:20px;margin-top:6px;"></div>
         </div>
         <div class="modal-footer">
+            <button type="button" class="btn btn-default nd-pv-cur"><i class="fa fa-print"></i> 預覽列印</button>
             <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
             <button type="button" class="btn btn-danger" id="ndDecReject">退回</button>
             <button type="button" class="btn btn-primary" id="ndDecApprove">核准並發布</button>
@@ -196,6 +197,7 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             toMe.forEach(function (r) {
                 h += '<div class="nd-row"><span class="nd-tag">' + esc(ND.kinds[r.kind] || '') + '</span><span class="nd-t">' + esc(r.title) + '</span>'
                    + '<span style="color:#8a7a68;">送審人 ' + esc(r.submitter || '') + '　' + esc(fmtD(r.submitted_at)) + '</span>'
+                   + '<button type="button" class="nd-btn nd-pv" data-id="' + r.id + '"><i class="fa fa-print"></i> 預覽列印</button>'
                    + '<button type="button" class="nd-btn nd-open" data-id="' + r.id + '">檢視／核准</button></div>';
             });
         }
@@ -204,6 +206,7 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             ND.drafts.forEach(function (r) {
                 h += '<div class="nd-row"><span class="nd-tag">' + esc(ND.kinds[r.kind] || '') + '</span><span class="nd-t">' + esc(r.title || '（未填標題）') + '</span>'
                    + '<span style="color:#8a7a68;">' + esc(fmtD(r.updated_at)) + '</span>'
+                   + '<button type="button" class="nd-btn nd-pv" data-id="' + r.id + '"><i class="fa fa-print"></i> 預覽列印</button>'
                    + '<a class="nd-btn" href="createEvent.php?draft=' + r.id + '">繼續編輯</a>'
                    + '<button type="button" class="nd-btn nd-del" data-id="' + r.id + '">刪除</button></div>';
             });
@@ -214,10 +217,12 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
                 if (r.state === 'pending') {
                     h += '<div class="nd-row"><span class="nd-tag">' + esc(ND.kinds[r.kind] || '') + '</span><span class="nd-t">' + esc(r.title) + '</span><span class="nd-tag">核准中</span>'
                        + '<button type="button" class="nd-btn nd-open" data-id="' + r.id + '" data-view="1">檢視</button>'
+                       + '<button type="button" class="nd-btn nd-pv" data-id="' + r.id + '"><i class="fa fa-print"></i> 預覽列印</button>'
                        + '<button type="button" class="nd-btn nd-wd" data-id="' + r.id + '">撤回修改</button></div>';
                 } else {
                     h += '<div class="nd-row"><span class="nd-tag">' + esc(ND.kinds[r.kind] || '') + '</span><span class="nd-t">' + esc(r.title) + '</span><span class="nd-tag bad">已退回</span>'
                        + '<span style="color:#a33;flex-basis:100%;">原因：' + esc(r.reject_reason || '') + '</span>'
+                       + '<button type="button" class="nd-btn nd-pv" data-id="' + r.id + '"><i class="fa fa-print"></i> 預覽列印</button>'
                        + '<a class="nd-btn" href="createEvent.php?draft=' + r.id + '">修改後重送</a>'
                        + '<button type="button" class="nd-btn nd-del" data-id="' + r.id + '">刪除</button></div>';
                 }
@@ -274,6 +279,15 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     }
     $(document).on('click', '#ndDecApprove', function () { decide('approve'); });
     $(document).on('click', '#ndDecReject', function () { decide('reject'); });
+
+    function previewPrint(id) {
+        // 列印視窗必須在使用者點擊當下開啟，所以先取資料、拿到後立刻開（資料很小，不會被彈出視窗封鎖擋掉時請允許彈出視窗）
+        $.getJSON(API, { action: 'pending_view', id: id, print: 1 }, function (r) {
+            if (r && r.ok && window.ncPreviewPrint) window.ncPreviewPrint(r.data); else alert((r && r.error) || '預覽失敗');
+        }).fail(function () { alert('預覽失敗'); });
+    }
+    $(document).on('click', '.nd-pv', function () { previewPrint(+$(this).data('id')); });
+    $(document).on('click', '.nd-pv-cur', function () { previewPrint(curId); });
 
     /* ---------- 核准設定（超級管理員） ---------- */
     $(document).on('click', '#nd-appr-btn', function () {
