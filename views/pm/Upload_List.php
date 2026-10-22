@@ -628,13 +628,14 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <input type="text" id="oeiQ" class="form-control input-sm" style="width:200px" placeholder="搜尋單號/產品編號/客戶" data-eg-skip>
                                             <select id="oeiStatus" class="form-control input-sm" style="width:150px" data-eg-skip title="依狀態篩選">
                                                 <option value="">全部狀態</option><option value="new_order">新建訂單</option><option value="add_to_order">補進既有訂單</option>
-                                                <option value="diff">同料號·內容不同</option><option value="no_part">料號主檔未對應</option>
+                                                <option value="diff">同料號·內容不同</option><option value="new_part">自動建立料號</option><option value="no_part">料號主檔未對應</option>
                                             </select>
                                             <input type="text" id="oeiNote" class="form-control input-sm" style="width:200px" placeholder="篩選說明內容（如：補差額）" data-eg-skip>
                                             <span class="text-muted" style="font-size:12px" id="oeiShown"></span>
                                             <span style="flex:1"></span>
                                             <span id="oeiActs">
                                                 <button type="button" class="btn btn-sm btn-success" id="btnOeiConvert"><i class="fa fa-exchange"></i> 轉成正式訂單（<span id="oeiSel">0</span>）</button>
+                                                <button type="button" class="btn btn-sm btn-warning" id="btnOeiCust" title="報表上的客戶名稱對不到客戶主檔時，指定它對應哪一家"><i class="fa fa-link"></i> 設定客戶對應</button>
                                                 <button type="button" class="btn btn-sm btn-default" id="btnOeiSkip">略過選取</button>
                                                 <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel">刪除選取</button>
                                             </span>
@@ -650,6 +651,23 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                         <div class="text-muted" style="font-size:11px;margin-top:6px">「轉成正式訂單」會在訂單追蹤新增該筆（業務備註＝補訂單資料），轉入當下會再比對一次，已有相同明細的自動略過；「同單號已有此產品但內容不同」預設不勾選，確認是另一筆明細才勾選補入。</div>
                                     </div>
+
+<div class="modal fade" id="oeiCustModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:860px;max-width:96%">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#F7E0BD"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><strong>設定補資料客戶對應</strong></h4></div>
+            <div class="modal-body" style="max-height:70vh;overflow:auto">
+                <div class="text-muted" style="font-size:12px;margin-bottom:8px">下列是「料號主檔未對應」且客戶也對不上客戶主檔的報表客戶名稱。在右側輸入客戶名稱或編號挑選對應的客戶（已預填建議），按「儲存並重新判定」後，這些列會變成「自動建立料號」，轉入時會用該客戶建立料號。對應會記住，之後上傳同名客戶自動套用。</div>
+                <datalist id="oeiCustList"></datalist>
+                <div id="oeiCustBody"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                <button type="button" class="btn btn-warning" id="btnOeiCustSave">儲存並重新判定</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="modal fade" id="oeiModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" style="width:1100px;max-width:96%">
@@ -670,7 +688,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var API = '../../src/store/OrderErpImport_API.php', ST = 'pending';
     var LB = {
         new_order:   ['新建訂單', '#2e7d32'], add_to_order: ['補進既有訂單', '#8a5a2b'], exact: ['已存在·相同', '#888'],
-        diff:        ['同料號·內容不同', '#DD5138'], no_part: ['料號主檔未對應', '#b71c1c']
+        diff:        ['同料號·內容不同', '#DD5138'], new_part: ['自動建立料號', '#B8731F'], no_part: ['料號主檔未對應', '#b71c1c']
     };
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
     function fd(d) { return d ? String(d).replace(/-/g, '.') : ''; }
@@ -694,7 +712,7 @@ document.addEventListener('DOMContentLoaded', function () {
         post('preview', form, true).done(function (res) {
             if (!res.ok) { $('#oeiModalBody').html('<div class="alert alert-danger">' + esc(res.error) + '</div>'); return; }
             var c = res.counts, h = '<table class="table table-condensed table-bordered" style="font-size:13px;width:auto"><tr><td>解析到</td><td><b>' + res.total + '</b> 筆明細／' + res.orders + ' 張訂單</td></tr>';
-            Object.keys(LB).forEach(function (k) { if (c[k]) h += '<tr><td>' + badge(k) + '</td><td><b>' + c[k] + '</b> 筆' + (k === 'exact' ? '（不會存入暫存區）' : k === 'no_part' ? '（存入後無法轉入，需先建料號主檔）' : '') + '</td></tr>'; });
+            Object.keys(LB).forEach(function (k) { if (c[k]) h += '<tr><td>' + badge(k) + '</td><td><b>' + c[k] + '</b> 筆' + (k === 'exact' ? '（不會存入暫存區）' : k === 'new_part' ? '（轉入時自動建立料號並綁定客戶）' : k === 'no_part' ? '（存入後無法轉入，需先建料號主檔）' : '') + '</td></tr>'; });
             h += '</table>';
             if (res.warnings && res.warnings.length) h += '<div class="alert alert-warning" style="font-size:12px">' + res.warnings.map(esc).join('<br>') + '</div>';
             h += '<div style="overflow-x:auto"><table class="table table-condensed table-striped" style="font-size:12px;white-space:nowrap"><thead><tr><th>狀態</th><th>訂單編號</th><th>單據日期</th><th>交期</th><th>客戶</th><th>產品編號</th><th>製程</th><th>數量</th><th>單價</th><th>說明</th></tr></thead><tbody>';
@@ -711,6 +729,57 @@ document.addEventListener('DOMContentLoaded', function () {
             alert('已存入暫存區 ' + res.staged + ' 筆' + (res.exact ? '；訂單內已有相同明細 ' + res.exact + ' 筆已略過' : '') + (res.dup ? '；與暫存區既有待處理重複 ' + res.dup + ' 筆已略過' : ''));
             ST = 'pending'; load();
         }).fail(function (x) { fail(x); b.prop('disabled', false); });
+    });
+
+    // ── 客戶對應：報表客戶名稱 → 客戶主檔 ──
+    var CUSTLBL = {};   // 「編號｜名稱」→ 編號
+    function custLabel(c) { return c.customer_id + '｜' + c.customer; }
+    function resolveCust(v) { v = $.trim(v); if (!v) return ''; if (CUSTLBL[v]) return CUSTLBL[v]; var m = v.match(/^([^｜|\s]+)[｜|]/); return m ? m[1] : v; }
+    function loadCust() {
+        $('#oeiCustBody').html('<div class="text-muted">載入中…</div>'); $('#oeiCustModal').appendTo('body').modal('show');
+        post('cust_unmapped', {}).done(function (res) {
+            if (!res.ok) { $('#oeiCustBody').html(esc(res.error)); return; }
+            CUSTLBL = {}; var dl = '';
+            res.customers.forEach(function (c) { var l = custLabel(c); CUSTLBL[l] = c.customer_id; dl += '<option value="' + esc(l) + '">'; });
+            $('#oeiCustList').html(dl);
+            var h = '';
+            if (res.groups.length) {
+                h += '<table class="table table-condensed table-bordered" style="font-size:12px"><thead><tr><th>報表客戶名稱</th><th>ERP編號</th><th>筆數</th><th style="width:330px">對應客戶主檔（輸入名稱／編號）</th></tr></thead><tbody>';
+                res.groups.forEach(function (g) {
+                    var pre = g.suggest && g.suggest.length === 1 ? custLabel(g.suggest[0]) : '';
+                    var sg = (g.suggest || []).map(function (s) { return '<a href="#" class="oei-sg" data-v="' + esc(custLabel(s)) + '">' + esc(s.customer) + '</a>'; }).join('、');
+                    h += '<tr><td>' + esc(g.client_name || '(空白)') + '</td><td>' + esc(g.client_id) + '</td><td>' + g.n + '</td><td><input class="form-control input-sm oei-cm" list="oeiCustList" data-name="' + esc(g.client_name) + '" value="' + esc(pre) + '" data-eg-skip>' + (sg ? '<div style="font-size:11px">建議：' + sg + '</div>' : '') + '</td></tr>';
+                });
+                h += '</tbody></table>';
+            } else h += '<div class="alert alert-success">目前沒有客戶對不上的待轉入資料。</div>';
+            if (res.map.length) {
+                h += '<b style="font-size:12px">已設定的對應</b><table class="table table-condensed table-bordered" style="font-size:12px"><tbody>';
+                res.map.forEach(function (m) { h += '<tr><td>' + esc(m.erp_name) + '</td><td>' + esc(m.customer_id) + '｜' + esc(m.customer || '(客戶已不存在)') + '</td><td style="width:60px"><a href="#" class="oei-md" data-name="' + esc(m.erp_name) + '">取消</a></td></tr>'; });
+                h += '</tbody></table>';
+            }
+            $('#oeiCustBody').html(h);
+        }).fail(fail);
+    }
+    $('#btnOeiCust').on('click', loadCust);
+    $(document).on('click', '.oei-sg', function (e) { e.preventDefault(); $(this).closest('td').find('.oei-cm').val($(this).data('v')); });
+    $(document).on('click', '.oei-md', function (e) {
+        e.preventDefault(); var nm = $(this).data('name');
+        if (!confirm('取消「' + nm + '」的客戶對應？')) return;
+        post('cust_map_save', { maps: JSON.stringify([{ erp_name: nm, customer_id: '' }]) }).done(function (r) { if (!r.ok) alert(r.error); load(); loadCust(); }).fail(fail);
+    });
+    $('#btnOeiCustSave').on('click', function () {
+        var maps = [], bad = '';
+        $('#oeiCustBody .oei-cm').each(function () {
+            var v = $.trim($(this).val()); if (!v) return;
+            var id = resolveCust(v); if (!id || !Object.keys(CUSTLBL).some(function (k) { return CUSTLBL[k] === id; })) { bad = '「' + v + '」不是客戶主檔裡的客戶，請從清單挑選'; return false; }
+            maps.push({ erp_name: $(this).data('name'), customer_id: id });
+        });
+        if (bad) { alert(bad); return; }
+        if (!maps.length) { alert('尚未選擇任何對應'); return; }
+        post('cust_map_save', { maps: JSON.stringify(maps) }).done(function (r) {
+            if (!r.ok) { alert(r.error); return; }
+            alert('已儲存 ' + r.saved + ' 筆對應，並重新判定 ' + r.rematched + ' 筆待轉入資料'); load(); loadCust();
+        }).fail(fail);
     });
 
     function selIds() { return $('#oeiBody .oei-ck:checked').map(function () { return +this.value; }).get(); }
@@ -737,7 +806,7 @@ document.addEventListener('DOMContentLoaded', function () {
             var h = '';
             res.rows.forEach(function (r) {
                 var dis = (ST !== 'converted' && r.match_status === 'no_part') ? ' disabled' : '';
-                var chk = (ST === 'pending' && (r.match_status === 'new_order' || r.match_status === 'add_to_order')) ? ' checked' : '';
+                var chk = (ST === 'pending' && (r.match_status === 'new_order' || r.match_status === 'add_to_order' || r.match_status === 'new_part')) ? ' checked' : '';
                 var note = ST === 'converted' ? '已轉入 訂單 #' + esc(r.converted_order_id) + '　' + esc(r.converted_at || '') : esc(r.match_note);
                 h += '<tr><td style="cursor:pointer;user-select:none">' + (ST === 'converted' ? '' : '<input type="checkbox" class="oei-ck" style="pointer-events:none" value="' + r.id + '"' + dis + chk + '>') + '</td>' + rowTds(r).replace(/<td>[^<]*<\/td>$/, '') + '<td>' + note + '</td></tr>';
             });

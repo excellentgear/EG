@@ -18,6 +18,13 @@ function oei_ensure_schema(PDO $db): void {
     static $done = false;
     if ($done) return;
     $done = true;
+    if (!$db->inTransaction() && !$db->query("SHOW TABLES LIKE 'order_erp_customer_map'")->fetchColumn()) {
+        $db->exec("CREATE TABLE order_erp_customer_map (
+            erp_name VARCHAR(50) NOT NULL PRIMARY KEY COMMENT '補資料報表上的客戶名稱',
+            customer_id VARCHAR(11) NOT NULL COMMENT '對應 customer_list.customer_id',
+            created_by INT NULL, created_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ERP訂購單補資料：報表客戶名稱→客戶主檔對應'");
+    }
     $r = $db->query("SHOW TABLES LIKE 'order_erp_import_stage'")->fetchColumn();
     if ($r) {
         if (!$db->inTransaction() && !$db->query("SHOW COLUMNS FROM order_erp_import_stage LIKE 'part_total'")->fetchColumn()) {
@@ -141,6 +148,36 @@ function oei_part_lookup(PDO $db, string $partNo, ?string $clientId): array {
 }
 
 /**
+ * 解析客戶主檔：先用 ERP 客戶編號，找不到再用客戶名稱「完全相同」（customer／customer_full）且只有一筆者。
+ * 找不到或有多筆同名一律回 null（不猜）。
+ */
+function oei_resolve_customer(PDO $db, ?string $cid, ?string $cname): ?string {
+    static $cache = [];
+    if ($cid === '__reset__') { $cache = []; return null; }
+    $k = $cid . '|' . $cname;
+    if (array_key_exists($k, $cache)) return $cache[$k];
+    $hit = null;
+    // 管理員在「設定客戶對應」手動指定的優先
+    if ($cname !== null && trim($cname) !== '') {
+        $s = $db->prepare("SELECT m.customer_id FROM order_erp_customer_map m JOIN customer_list c ON c.customer_id=m.customer_id WHERE m.erp_name=? LIMIT 1");
+        $s->execute([trim($cname)]);
+        $hit = $s->fetchColumn() ?: null;
+        if ($hit !== null) return $cache[$k] = (string)$hit;
+    }
+    if ($cid !== null && $cid !== '') {
+        $s = $db->prepare("SELECT customer_id FROM customer_list WHERE customer_id=? LIMIT 1"); $s->execute([$cid]);
+        $hit = $s->fetchColumn() ?: null;
+    }
+    if ($hit === null && $cname !== null && trim($cname) !== '') {
+        $s = $db->prepare("SELECT customer_id FROM customer_list WHERE customer=? OR customer_full=? LIMIT 2");
+        $s->execute([trim($cname), trim($cname)]);
+        $ids = array_values(array_unique($s->fetchAll(PDO::FETCH_COLUMN)));
+        if (count($ids) === 1) $hit = (string)$ids[0];
+    }
+    return $cache[$k] = $hit;
+}
+
+/**
  * 逐列比對。回傳每列補上 d_id_id／process_text／match_status／match_note／existing_order_id。
  * 同單號底下可能有多筆「料號、數量、製程、單價」都相同的列，所以採「一對一消耗」：
  * 每筆 Excel 列只會對應一筆既有訂單列，且每筆既有列只被對應一次。
@@ -196,7 +233,17 @@ function oei_match(PDO $db, array $rows): array {
     unset($r);
     foreach ($rows as &$r) {
         if ($r['match_status'] !== '') continue;
-        if ($r['d_id_id'] === null) { $r['match_status'] = 'no_part'; $r['match_note'] = $r['_lknote'] . '，請先到料號主檔建立'; continue; }
+        if ($r['d_id_id'] === null) {
+            // 查無料號：客戶能對上主檔（編號或名稱完全相同）者，轉入時自動建立料號並綁該客戶
+            $cu = ($r['_lknote'] === '料號主檔查無此產品編號') ? oei_resolve_customer($db, $r['client_id'], $r['client_name']) : null;
+            if ($cu !== null) {
+                $r['client_id'] = $cu;
+                $r['match_status'] = 'new_part'; $r['match_note'] = '料號主檔查無此產品編號，轉入時將自動建立料號並綁定客戶 ' . $cu;
+            } else {
+                $r['match_status'] = 'no_part'; $r['match_note'] = $r['_lknote'] . '，請先到料號主檔建立（客戶亦無法對應主檔）';
+            }
+            continue;
+        }
         if (!isset($exist[$r['order_oo']])) { $r['match_status'] = 'new_order'; $r['match_note'] = '單號不存在，將新建此訂單'; continue; }
         $same = array_values(array_filter($exist[$r['order_oo']], fn($e) => $samePart($e, $r)));
         $r['existing_order_id'] = (int)$exist[$r['order_oo']][0]['Order_id'];
@@ -226,7 +273,23 @@ function oei_convert_one(PDO $db, int $stageId, int $uid): array {
     $s->execute([$stageId]);
     $r = $s->fetch(PDO::FETCH_ASSOC);
     if (!$r || $r['state'] !== 'pending') return [false, '此筆已處理過或不存在', null];
-    if (!$r['d_id_id']) return [false, '料號主檔未對應，無法轉入', null];
+    if (!$r['d_id_id']) {
+        // 自動建立料號：客戶必須對得上主檔；同編號同客戶已存在就沿用（同批前一筆可能剛建過）
+        $cu = oei_resolve_customer($db, $r['client_id'], $r['client_name']);
+        if ($cu === null) return [false, '料號主檔未對應，且客戶無法對應客戶主檔，無法轉入', null];
+        $f = $db->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id=? ORDER BY d_id LIMIT 2");
+        $f->execute([$r['part_no'], $cu]);
+        $ex = $f->fetchAll(PDO::FETCH_COLUMN);
+        if (count($ex) > 1) return [false, '料號主檔同編號同客戶有多筆，無法判定', null];
+        if ($ex) $newId = (int)$ex[0];
+        else {
+            $db->prepare("INSERT INTO d_setting (D_Setting_Id,Type,Customer_Id,Created_By,Created_At) VALUES (?,'N',?,?,NOW())")
+               ->execute([$r['part_no'], $cu, (string)$uid]);
+            $newId = (int)$db->lastInsertId();
+        }
+        $db->prepare("UPDATE order_erp_import_stage SET d_id_id=?, client_id=? WHERE id=?")->execute([$newId, $cu, $stageId]);
+        $r['d_id_id'] = $newId; $r['client_id'] = $cu;
+    }
     if (!$r['order_date']) return [false, '單據日期缺漏', null];
     // 轉入當下重新比對（不比對交期）：訂單內此料號筆數已 ≥ Excel 此料號筆數 → 都已存在，略過
     // 「同料號·內容不同」是使用者明確勾選要補入的，不套這個檢查；舊版暫存列(part_total=0)也不套
@@ -255,4 +318,34 @@ function oei_convert_one(PDO $db, int $stageId, int $uid): array {
     $db->prepare("UPDATE order_erp_import_stage SET state='converted', converted_order_id=?, converted_by=?, converted_at=NOW() WHERE id=?")
        ->execute([$oid, $uid, $stageId]);
     return [true, 'ok', $oid];
+}
+
+/**
+ * 重新判定暫存區「待轉入」裡料號未對應(no_part／new_part)的列：
+ * 客戶對應或料號主檔有變動後呼叫。只調整狀態／說明／d_id_id，不動訂單資料。回傳異動筆數。
+ */
+function oei_rematch_pending(PDO $db): int {
+    oei_resolve_customer($db, '__reset__', null);
+    $rows = $db->query("SELECT id, order_oo, part_no, client_id, client_name, match_status FROM order_erp_import_stage
+                        WHERE state='pending' AND match_status IN ('no_part','new_part')")->fetchAll(PDO::FETCH_ASSOC);
+    $up = $db->prepare("UPDATE order_erp_import_stage SET match_status=?, match_note=?, d_id_id=?, client_id=? WHERE id=?");
+    $oc = $db->prepare("SELECT 1 FROM order_track WHERE Order_oo=? LIMIT 1");
+    $n = 0;
+    foreach ($rows as $r) {
+        $cu = oei_resolve_customer($db, $r['client_id'], $r['client_name']);
+        $lk = oei_part_lookup($db, $r['part_no'], $cu ?? $r['client_id']);
+        $cid = $cu ?? $r['client_id'];
+        if ($lk['row']) {
+            $oc->execute([$r['order_oo']]);
+            $st = $oc->fetchColumn() ? 'add_to_order' : 'new_order';
+            $note = $st === 'add_to_order' ? '單號已存在但無此產品編號，將補進去' : '單號不存在，將新建此訂單';
+            $up->execute([$st, $note, (int)$lk['row']['d_id'], $cid, $r['id']]);
+        } elseif ($lk['note'] === '料號主檔查無此產品編號' && $cu !== null) {
+            $up->execute(['new_part', '料號主檔查無此產品編號，轉入時將自動建立料號並綁定客戶 ' . $cu, null, $cid, $r['id']]);
+        } else {
+            $up->execute(['no_part', $lk['note'] . '，請先到料號主檔建立（客戶亦無法對應主檔）', null, $r['client_id'], $r['id']]);
+        }
+        $n++;
+    }
+    return $n;
 }

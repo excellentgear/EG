@@ -88,6 +88,42 @@ case 'convert': {  // 轉成正式訂單：每筆各自交易，失敗不影響�
     }
     oeiOut(['ok' => true, 'converted' => $done, 'failed' => $fail]);
 }
+case 'cust_unmapped': {   // 待轉入裡「客戶對不上主檔」的報表客戶名稱＋建議＋已設定的對應
+    oei_resolve_customer($db, '__reset__', null);
+    $g = $db->query("SELECT client_name, MAX(client_id) client_id, COUNT(*) n FROM order_erp_import_stage
+                     WHERE state='pending' AND match_status='no_part' GROUP BY client_name ORDER BY n DESC")->fetchAll(PDO::FETCH_ASSOC);
+    $sg = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE (customer LIKE ? OR ? LIKE CONCAT('%', customer, '%')) AND customer<>'' LIMIT 3");
+    foreach ($g as &$x) {
+        $nm = trim((string)$x['client_name']);
+        $x['suggest'] = [];
+        if ($nm !== '') { $sg->execute(['%' . $nm . '%', $nm]); $x['suggest'] = $sg->fetchAll(PDO::FETCH_ASSOC); }
+    }
+    unset($x);
+    $cust = $db->query("SELECT customer_id, customer FROM customer_list WHERE customer<>'' ORDER BY customer")->fetchAll(PDO::FETCH_ASSOC);
+    $map = $db->query("SELECT m.erp_name, m.customer_id, c.customer FROM order_erp_customer_map m LEFT JOIN customer_list c ON c.customer_id=m.customer_id ORDER BY m.erp_name")->fetchAll(PDO::FETCH_ASSOC);
+    oeiOut(['ok' => true, 'groups' => $g, 'customers' => $cust, 'map' => $map]);
+}
+case 'cust_map_save': {   // 一次存多筆：maps=[{erp_name,customer_id}]；customer_id 空白＝取消該對應
+    $maps = json_decode($_POST['maps'] ?? '[]', true); if (!is_array($maps)) $maps = [];
+    $ck = $db->prepare("SELECT 1 FROM customer_list WHERE customer_id=?");
+    $up = $db->prepare("INSERT INTO order_erp_customer_map (erp_name,customer_id,created_by,created_at) VALUES (?,?,?,NOW())
+                        ON DUPLICATE KEY UPDATE customer_id=VALUES(customer_id), created_by=VALUES(created_by), created_at=NOW()");
+    $de = $db->prepare("DELETE FROM order_erp_customer_map WHERE erp_name=?");
+    $saved = 0;
+    foreach ($maps as $m) {
+        $nm = trim((string)($m['erp_name'] ?? '')); $cid = trim((string)($m['customer_id'] ?? ''));
+        if ($nm === '') continue;
+        if ($cid === '') { $de->execute([$nm]); continue; }
+        $ck->execute([$cid]);
+        if (!$ck->fetchColumn()) oeiOut(['ok' => false, 'error' => "客戶主檔查無編號 {$cid}（{$nm}）"]);
+        $up->execute([$nm, $cid, $uid]); $saved++;
+    }
+    $n = oei_rematch_pending($db);
+    oeiOut(['ok' => true, 'saved' => $saved, 'rematched' => $n]);
+}
+case 'rematch': {
+    oeiOut(['ok' => true, 'rematched' => oei_rematch_pending($db)]);
+}
 case 'skip': {
     $n = 0; $s = $db->prepare("UPDATE order_erp_import_stage SET state='skipped' WHERE id=? AND state='pending'");
     foreach ($ids() as $id) { $s->execute([$id]); $n += $s->rowCount(); }
