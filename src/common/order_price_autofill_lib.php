@@ -175,7 +175,7 @@ function opf_candidates(PDO $db): array {
                 continue;
             }
             $seen[$r['oid']] = true;
-            $res[] = ['order_id' => (int)$r['oid'], 'cat' => 'PROC', 'price' => null, 'stage_ids' => [], 'src' => $src, 'order' => $ord,
+            $res[] = ['order_id' => (int)$r['oid'], 'cat' => 'PROC', 'price' => null, 'stage_ids' => [], 'src' => $src, 'order' => $ord, 'proc_fill' => reset($procs),
                       'note' => '單價已補入，訂單製程仍空白：補入 ERP 製程「' . reset($procs) . '」'];
         }
     }
@@ -202,7 +202,7 @@ function opf_candidates(PDO $db): array {
     }
     foreach ($res as &$rr) {
         $erp = opf_erp_proc($rr['src'][0] ?? []);
-        $rr['erp_proc'] = $erp; $rr['proc_fill'] = opf_proc_fillable((string)$rr['order']['Processing_items'], $erp); $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
+        $rr['erp_proc'] = $erp; if (!array_key_exists('proc_fill', $rr)) $rr['proc_fill'] = opf_proc_fillable((string)$rr['order']['Processing_items'], $erp); $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
     }
     unset($rr);
     return $res;
@@ -225,6 +225,7 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
         $like = '%' . OPF_MARK . '%';
         foreach ($cands as $c) {
             if ($cat === 'PROC') {
+                if (empty($c['proc_fill'])) continue;
                 $upp->execute([$c['proc_fill'], $c['order_id']]);
                 if ($upp->rowCount()) {
                     $lg->execute([$c['order_id'], $c['order']['Order_oo'], 'PROC', null, (float)$c['order']['unit_price'], null, '', $c['proc_fill']]);
