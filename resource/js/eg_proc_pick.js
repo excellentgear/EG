@@ -110,8 +110,8 @@
                 MODAL.innerHTML = '<div id="epp-box"><header><span>選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）</span><a href="javascript:void(0)" data-epp-x="1" style="color:#fff;">✕</a></header>'
                     + '<div class="epp-main"><div class="epp-body"><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" autocomplete="off" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
                     + '<div class="epp-side"><h5>常用組合（大類＋小類可混合）</h5><div class="epp-clist" id="epp-clist"></div>'
-                    + '<div class="epp-saver"><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（至少 2 項）</div>'
-                    + '<div style="display:flex;gap:4px;"><input type="text" id="epp-cname" class="form-control input-sm" maxlength="60" placeholder="組合名稱，例如：熱處理＋齒研" autocomplete="off">'
+                    + '<div class="epp-saver"><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（單一大類或小類也可以；名稱預設自動帶入，可自行修改）</div>'
+                    + '<div style="display:flex;gap:4px;"><input type="text" id="epp-cname" class="form-control input-sm" maxlength="60" placeholder="組合名稱（自動帶入：製程1+製程2…）" autocomplete="off">'
                     + '<button type="button" class="btn btn-warning btn-sm" data-epp-csave="1" style="white-space:nowrap;">存成組合</button></div>'
                     + '<div id="epp-cmsg" style="font-size:11px;margin-top:3px;min-height:15px;"></div></div></div></div>'
                     + '<footer><span id="epp-cnt" style="margin-right:auto;font-size:12px;color:#888;"></span>'
@@ -124,6 +124,7 @@
                 ['input', 'keyup', 'compositionend', 'change'].forEach(function (ev) { kwEl.addEventListener(ev, function () { drawList(); }); });
                 // Bootstrap modal 的 focusin 鎖會把焦點搶回自己，輸入框就打不了字（也就不會篩選）；本視窗內的焦點事件不往上傳
                 MODAL.addEventListener('focusin', function (e) { e.stopPropagation(); });
+                MODAL.querySelector('#epp-cname').addEventListener('input', function () { MODAL._nameTouched = this.value.trim() !== ''; });
                 MODAL.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'epp-kw') e.preventDefault(); });
             }
             // Bootstrap 的 modal 會把焦點鎖在自己裡面，輸入框要打字就得把本視窗放進目前開著的 modal 內
@@ -138,6 +139,7 @@
             el._epp.sel.forEach(function (x) { MODAL._work[x.t][x.id] = 1; });
             MODAL.querySelector('#epp-kw').value = '';
             MODAL._open = {};
+            MODAL._nameTouched = false;
             drawList();
             drawCombos();
             loadCombos(el._epp.url, function () { drawCombos(); });
@@ -168,6 +170,7 @@
         MODAL.querySelector('#epp-list').innerHTML = h || '<div style="color:#aaa;padding:10px;">查無符合的製程</div>';
         var n = Object.keys(W.type).length + Object.keys(W.no).length;
         MODAL.querySelector('#epp-cnt').textContent = '已選 ' + n + ' 項';
+        syncName();
     }
 
     function loadCombos(url, cb) {
@@ -195,12 +198,37 @@
         xhr.send(body);
     }
     function comboMsg(t, ok) { var m = MODAL.querySelector('#epp-cmsg'); m.style.color = ok ? '#2e7d32' : '#c0392b'; m.textContent = t; }
+    // 小類依所屬大類併成一個標籤：「齒研：齒研、結合齒研、磨齒」（大類整個綁定則顯示 ◆大類名）
+    function comboChips(items) {
+        var h = '', groups = [], gi = {};
+        items.forEach(function (x) {
+            if (x.t === 'type') { h += '<span class="epp-chip"><b>◆</b> ' + esc(x.name) + '</span>'; return; }
+            var pn = '';
+            DICT.forEach(function (t) { if (t.subs.some(function (s) { return s.id === x.id; })) pn = t.name; });
+            if (!(pn in gi)) { gi[pn] = groups.length; groups.push({ p: pn, n: [] }); }
+            groups[gi[pn]].n.push(x.name);
+        });
+        groups.forEach(function (g) {
+            h += '<span class="epp-chip" title="只綁定這個大類中的這幾個小類">' + (g.p ? esc(g.p) + '：' : '') + g.n.map(esc).join('、') + '</span>';
+        });
+        return h;
+    }
+    // 目前勾選的內容（大類在前、小類在後，與存檔順序一致）
+    function curNames() {
+        var W = MODAL._work, a = [];
+        DICT.forEach(function (t) { if (W.type[t.id]) a.push(t.name); });
+        DICT.forEach(function (t) { t.subs.forEach(function (s) { if (W.no[s.id]) a.push(s.name); }); });
+        return a;
+    }
+    function autoName() { var n = curNames().join('+'); return n.length > 60 ? n.slice(0, 59) + '…' : n; }
+    function syncName() {
+        var el = MODAL.querySelector('#epp-cname');
+        if (!MODAL._nameTouched) el.value = autoName();
+    }
     function drawCombos() {
         var box = MODAL.querySelector('#epp-clist'), h = '';
         COMBOS.forEach(function (c) {
-            var chips = c.items.map(function (x) {
-                return '<span class="epp-chip">' + (x.t === 'type' ? '<b>◆</b> ' : '') + esc(x.name) + '</span>';
-            }).join('');
+            var chips = comboChips(c.items);
             h += '<div class="epp-combo"><b>' + esc(c.name) + '</b>'
               + ((c.created_by === MY_UID || MY_UID === 1) ? '<span class="epp-cd" data-epp-cdel="' + c.id + '" title="刪除這個組合">刪除</span>' : '')
               + '<div class="epp-ci">' + (chips || '<span class="epp-none">（內容的製程已不存在）</span>') + '</div>'
@@ -244,11 +272,12 @@
             var sel = [], W = MODAL._work;
             DICT.forEach(function (d) { if (W.type[d.id]) sel.push({ t: 'type', id: d.id }); d.subs.forEach(function (s) { if (W.no[s.id]) sel.push({ t: 'no', id: s.id }); }); });
             var nm = MODAL.querySelector('#epp-cname').value.trim();
+            if (!nm) { nm = autoName(); }
             if (!nm) { comboMsg('請先輸入組合名稱', false); return; }
-            if (sel.length < 2) { comboMsg('左側至少要勾選 2 項才能存成組合', false); return; }
+            if (sel.length < 1) { comboMsg('左側請先勾選要存的大類或小類', false); return; }
             postCombo('process_combo_save', { name: nm, items: JSON.stringify(sel) }, function (r) {
                 drawCombos(); comboMsg(r.message || '', !!r.success);
-                if (r.success) MODAL.querySelector('#epp-cname').value = '';
+                if (r.success) { MODAL._nameTouched = false; syncName(); }
             });
             return;
         }

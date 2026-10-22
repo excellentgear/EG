@@ -183,7 +183,7 @@ function eg_apc_combo_save(PDO $pdo, string $name, $items, int $uid): array {
     $name = trim(preg_replace('/\s+/u', ' ', $name));
     if ($name === '' || mb_strlen($name) > 60) return [false, '組合名稱必填，且不可超過 60 字'];
     $sel = eg_apc_parse($pdo, $items);
-    if (count($sel) < 2) return [false, '組合至少要選 2 項（只選 1 項直接勾選就好）'];
+    if (count($sel) < 1) return [false, '請先勾選要存成組合的大類或小類'];
     $json = json_encode(array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $sel));
     $st = $pdo->prepare("SELECT combo_id, created_by FROM part_attach_proc_combo WHERE combo_name=?");
     $st->execute([$name]);
