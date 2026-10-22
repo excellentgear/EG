@@ -193,11 +193,16 @@ $('#body').on('click','.oo-go',function(e){
     if(!/^OO\d{10}$/.test(v)){ alert('單號格式應為 OO＋民國年3碼＋月2碼＋日2碼＋流水號3碼（共12碼，大寫），例：OO1150601001'); return; }
     var c=ROWS[id]||{order:{}};
     if(!confirm('把訂單 #'+id+' 的單號：'+(c.order.Order_oo||'')+'　改為：'+v+'　確定？')) return;
+    var $btn=$(this).prop('disabled',true);
     api('fix_oo',{order_id:id,new_oo:v}).done(function(res){
+        $btn.prop('disabled',false);
         if(!res.ok){ alert(res.error); return; }
-        alert('已改為 '+res.new_oo+(res.erp_rows? '（ERP 有此單號＋料號的資料 '+res.erp_rows+' 筆，重新整理後會移到對應分頁）':'（ERP 查無此單號＋料號的資料）'));
-        load();
-    }).fail(function(x){ alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        // AJAX 就地更新該列，不重載整頁、不再跳第二個提示
+        c.order.Order_oo=res.new_oo;
+        var $tr=$('#body tr[data-id="'+id+'"]');
+        $tr.find('td.r').html(ordHtml(c));
+        $tr.find('td.r .pf-pm').last().append('<div style="color:#2E7D32;margin-top:3px">✔ 已改為 '+esc(res.new_oo)+(res.erp_rows? '（ERP 有此單號＋料號的資料 '+res.erp_rows+' 筆，切換分頁或重新查詢後會移到對應分頁）':'（ERP 查無此單號＋料號的資料）')+'</div>');
+    }).fail(function(x){ $btn.prop('disabled',false); alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
 $('#body').on('click','.pf-chip',function(e){ e.stopPropagation(); var $in=$(this).closest('.pf-pm').find('.pm-in'); $in.val($(this).data('v')).trigger('input'); });
 $('#body').on('input','.pm-in',function(){ PM[$(this).data('id')]=$(this).val(); var $ck=$(this).closest('tr').find('.ck'); if($(this).val().trim() && !$ck.prop('checked')){ $ck.prop('checked',true).trigger('change'); } });
