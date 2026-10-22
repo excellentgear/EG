@@ -142,7 +142,9 @@ function oei_part_lookup(PDO $db, string $partNo, ?string $clientId): array {
     if (count($rows) === 1) $pick = $rows[0];
     elseif (count($rows) > 1) {
         $m = array_values(array_filter($rows, fn($x) => $clientId !== null && (string)$x['Customer_Id'] === $clientId));
-        if (count($m) === 1) $pick = $m[0]; else $note = '料號主檔有 ' . count($rows) . ' 筆同編號且無法由客戶判定';
+        if (count($m) === 1) $pick = $m[0];
+        elseif (!$m && $clientId !== null && $clientId !== '') $note = '料號主檔查無此產品編號';   // 同編號的料號都屬別家客戶＝此客戶尚無此料號
+        else $note = '料號主檔有 ' . count($rows) . ' 筆同編號' . ($m ? '且同客戶仍有 ' . count($m) . ' 筆' : '且無法由客戶判定');
     } else $note = '料號主檔查無此產品編號';
     return $cache[$k] = ['row' => $pick, 'note' => $note];
 }
@@ -240,7 +242,7 @@ function oei_match(PDO $db, array $rows): array {
                 $r['client_id'] = $cu;
                 $r['match_status'] = 'new_part'; $r['match_note'] = '料號主檔查無此產品編號，轉入時將自動建立料號並綁定客戶 ' . $cu;
             } else {
-                $r['match_status'] = 'no_part'; $r['match_note'] = $r['_lknote'] . '，請先到料號主檔建立（客戶亦無法對應主檔）';
+                $r['match_status'] = 'no_part'; $r['match_note'] = $r['_lknote'] . ($r['_lknote'] === '料號主檔查無此產品編號' ? '，且客戶無法對應客戶主檔（請用「設定客戶對應」）' : '，請到料號主檔整理後再轉入');
             }
             continue;
         }
@@ -343,7 +345,7 @@ function oei_rematch_pending(PDO $db): int {
         } elseif ($lk['note'] === '料號主檔查無此產品編號' && $cu !== null) {
             $up->execute(['new_part', '料號主檔查無此產品編號，轉入時將自動建立料號並綁定客戶 ' . $cu, null, $cid, $r['id']]);
         } else {
-            $up->execute(['no_part', $lk['note'] . '，請先到料號主檔建立（客戶亦無法對應主檔）', null, $r['client_id'], $r['id']]);
+            $up->execute(['no_part', $lk['note'] . ($lk['note'] === '料號主檔查無此產品編號' ? '，且客戶無法對應客戶主檔（請用「設定客戶對應」）' : '，請到料號主檔整理後再轉入'), null, $r['client_id'], $r['id']]);
         }
         $n++;
     }

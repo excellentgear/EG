@@ -90,18 +90,30 @@ case 'convert': {  // 轉成正式訂單：每筆各自交易，失敗不影響�
 }
 case 'cust_unmapped': {   // 待轉入裡「客戶對不上主檔」的報表客戶名稱＋建議＋已設定的對應
     oei_resolve_customer($db, '__reset__', null);
-    $g = $db->query("SELECT client_name, MAX(client_id) client_id, COUNT(*) n FROM order_erp_import_stage
+    $g0 = $db->query("SELECT client_name, MAX(client_id) client_id, COUNT(*) n FROM order_erp_import_stage
                      WHERE state='pending' AND match_status='no_part' GROUP BY client_name ORDER BY n DESC")->fetchAll(PDO::FETCH_ASSOC);
     $sg = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE (customer LIKE ? OR ? LIKE CONCAT('%', customer, '%')) AND customer<>'' LIMIT 3");
-    foreach ($g as &$x) {
+    $g = [];
+    foreach ($g0 as $x) {
+        if (oei_resolve_customer($db, $x['client_id'], $x['client_name']) !== null) continue;   // 客戶已對上，不是客戶問題
         $nm = trim((string)$x['client_name']);
         $x['suggest'] = [];
         if ($nm !== '') { $sg->execute(['%' . $nm . '%', $nm]); $x['suggest'] = $sg->fetchAll(PDO::FETCH_ASSOC); }
+        $g[] = $x;
     }
-    unset($x);
+    // 客戶已對上、料號仍無法對應的原因（與客戶對應無關，需到料號主檔處理）
+    $other = $db->query("SELECT client_name, part_no, match_note FROM order_erp_import_stage WHERE state='pending' AND match_status='no_part' ORDER BY client_name, part_no")->fetchAll(PDO::FETCH_ASSOC);
+    $oth = [];
+    foreach ($other as $o) {
+        $isUnres = false; foreach ($g as $gg) if ($gg['client_name'] === $o['client_name']) { $isUnres = true; break; }
+        if ($isUnres) continue;
+        $k = preg_replace('/，(請|且).*$/u', '', $o['match_note']);
+        $oth[$k]['note'] = $k; $oth[$k]['n'] = ($oth[$k]['n'] ?? 0) + 1;
+        if (count($oth[$k]['parts'] ?? []) < 6 && !in_array($o['client_name'] . ' ' . $o['part_no'], $oth[$k]['parts'] ?? [], true)) $oth[$k]['parts'][] = $o['client_name'] . ' ' . $o['part_no'];
+    }
     $cust = $db->query("SELECT customer_id, customer FROM customer_list WHERE customer<>'' ORDER BY customer")->fetchAll(PDO::FETCH_ASSOC);
     $map = $db->query("SELECT m.erp_name, m.customer_id, c.customer FROM order_erp_customer_map m LEFT JOIN customer_list c ON c.customer_id=m.customer_id ORDER BY m.erp_name")->fetchAll(PDO::FETCH_ASSOC);
-    oeiOut(['ok' => true, 'groups' => $g, 'customers' => $cust, 'map' => $map]);
+    oeiOut(['ok' => true, 'groups' => $g, 'other' => array_values($oth), 'customers' => $cust, 'map' => $map]);
 }
 case 'cust_map_save': {   // 一次存多筆：maps=[{erp_name,customer_id}]；customer_id 空白＝取消該對應
     $maps = json_decode($_POST['maps'] ?? '[]', true); if (!is_array($maps)) $maps = [];

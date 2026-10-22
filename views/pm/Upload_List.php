@@ -751,7 +751,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     h += '<tr><td>' + esc(g.client_name || '(空白)') + '</td><td>' + esc(g.client_id) + '</td><td>' + g.n + '</td><td><input class="form-control input-sm oei-cm" list="oeiCustList" data-name="' + esc(g.client_name) + '" value="' + esc(pre) + '" data-eg-skip>' + (sg ? '<div style="font-size:11px">建議：' + sg + '</div>' : '') + '</td></tr>';
                 });
                 h += '</tbody></table>';
-            } else h += '<div class="alert alert-success">目前沒有客戶對不上的待轉入資料。</div>';
+            } else h += '<div class="alert alert-success">目前沒有客戶對不上的待轉入資料（先前設定的對應已生效，列在下方）。</div>';
+            if (res.other && res.other.length) {
+                h += '<b style="font-size:12px">客戶已對上，但料號仍無法對應（與客戶對應無關，需到料號主檔處理）</b><table class="table table-condensed table-bordered" style="font-size:12px"><thead><tr><th>原因</th><th>筆數</th><th>範例（客戶 料號）</th></tr></thead><tbody>';
+                res.other.forEach(function (o) { h += '<tr><td>' + esc(o.note) + '</td><td>' + o.n + '</td><td>' + esc((o.parts || []).join('；')) + '</td></tr>'; });
+                h += '</tbody></table>';
+            }
             if (res.map.length) {
                 h += '<b style="font-size:12px">已設定的對應</b><table class="table table-condensed table-bordered" style="font-size:12px"><tbody>';
                 res.map.forEach(function (m) { h += '<tr><td>' + esc(m.erp_name) + '</td><td>' + esc(m.customer_id) + '｜' + esc(m.customer || '(客戶已不存在)') + '</td><td style="width:60px"><a href="#" class="oei-md" data-name="' + esc(m.erp_name) + '">取消</a></td></tr>'; });
