@@ -88,6 +88,8 @@ function oei_proc_ok(string $dbProc, string $xlProc): bool {
     $a = oei_norm($dbProc); $b = oei_norm($xlProc);
     return $a === '' || $b === '' || $a === $b;
 }
+/** 品名規格含取消／中止／作廢／無效／撤單字樣＝ERP 上已中止的訂單（報表本身沒有訂單狀況欄） */
+function oei_is_cancel_text(string $s): bool { return (bool)preg_match('/取消|中止|作廢|無效|撤單/u', $s); }
 function oei_norm(string $s): string { return preg_replace('/\s+/u', '', trim($s)); }
 
 /** 解析整張工作表 → 列陣列（單據日期／單號向下延續） */
@@ -302,6 +304,12 @@ function oei_match(PDO $db, array $rows): array {
     unset($r);
     foreach ($rows as &$r) {
         if ($r['match_status'] !== '') continue;
+        // ERP 報表沒有訂單狀況欄：品名規格寫了取消／中止字樣者視為已中止，不可轉入（2026-10-22）
+        if (oei_is_cancel_text((string)$r['spec_text'])) {
+            $r['match_status'] = 'cancel';
+            $r['match_note'] = '品名規格含「取消／中止」字樣，視為已中止訂單，不轉入';
+            continue;
+        }
         if ($r['d_id_id'] === null) {
             // 查無料號：客戶能對上主檔（編號或名稱完全相同）者，轉入時自動建立料號並綁該客戶
             $cu = ($r['_lknote'] === '料號主檔查無此產品編號') ? oei_resolve_customer($db, $r['client_id'], $r['client_name']) : null;
@@ -342,6 +350,7 @@ function oei_convert_one(PDO $db, int $stageId, int $uid): array {
     $s->execute([$stageId]);
     $r = $s->fetch(PDO::FETCH_ASSOC);
     if (!$r || $r['state'] !== 'pending') return [false, '此筆已處理過或不存在', null];
+    if ($r['match_status'] === 'cancel' || oei_is_cancel_text((string)$r['spec_text'])) return [false, '品名規格含取消／中止字樣，視為已中止訂單，不可轉入', null];
     if (!$r['d_id_id']) {
         // 自動建立料號：客戶必須對得上主檔；同編號同客戶已存在就沿用（同批前一筆可能剛建過）
         $cu = oei_resolve_customer($db, $r['client_id'], $r['client_name']);

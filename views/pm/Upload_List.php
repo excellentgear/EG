@@ -718,7 +718,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var API = '../../src/store/OrderErpImport_API.php', ST = 'pending';
     var LB = {
         new_order:   ['新建訂單', '#2e7d32'], add_to_order: ['補進既有訂單', '#8a5a2b'], exact: ['已存在·相同', '#888'],
-        diff:        ['同料號·內容不同', '#DD5138'], new_part: ['自動建立料號', '#B8731F'], no_part: ['料號主檔未對應', '#b71c1c']
+        diff:        ['同料號·內容不同', '#DD5138'], new_part: ['自動建立料號', '#B8731F'], no_part: ['料號主檔未對應', '#b71c1c'], cancel: ['已中止（規格含取消字樣）', '#7a2a2a']
     };
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
     function fd(d) { return d ? String(d).replace(/-/g, '.') : ''; }
@@ -897,7 +897,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var all = res.rows;
         // 狀態篩選只列「目前分頁裡有資料」的狀態（沒資料的不顯示）
         var cntSt = {}; all.forEach(function (r) { cntSt[r.match_status] = (cntSt[r.match_status] || 0) + 1; });
-        var ORDER = ['new_order', 'add_to_order', 'diff', 'new_part', 'no_part'], oh = '<option value="">全部狀態</option>';
+        var ORDER = ['new_order', 'add_to_order', 'diff', 'new_part', 'no_part', 'cancel'], oh = '<option value="">全部狀態</option>';
         ORDER.forEach(function (k) { if (cntSt[k]) oh += '<option value="' + k + '">' + LB[k][0] + '（' + (cntSt[k] || 0) + '）</option>'; });
         if (fs && !cntSt[fs]) fs = '';   // 選到的狀態已沒資料就回到全部
         if ($('#oeiStatus').data('sig') !== oh) $('#oeiStatus').html(oh).data('sig', oh);
@@ -912,8 +912,8 @@ document.addEventListener('DOMContentLoaded', function () {
             $('#oeiCntPending').text(res.counts.pending || 0); $('#oeiCntConverted').text(res.counts.converted || 0); $('#oeiCntSkipped').text(res.counts.skipped || 0);
             var h = '';
             res.rows.forEach(function (r) {
-                var dis = (ST !== 'converted' && r.match_status === 'no_part') ? ' disabled' : '';
-                var chk = (ST === 'pending' && (r.match_status === 'new_order' || r.match_status === 'add_to_order' || r.match_status === 'new_part')) ? ' checked' : '';
+                var dis = (ST !== 'converted' && (r.match_status === 'no_part' || r.match_status === 'cancel')) ? ' disabled' : '';
+                var chk = '';   // ERP 報表無訂單狀況欄，無法確認是否中止：一律不預設勾選，需人工逐筆確認（2026-10-22）
                 var note = ST === 'converted' ? '已轉入 訂單 #' + esc(r.converted_order_id) + '　' + esc(r.converted_at || '') : esc(r.match_note);
                 h += '<tr><td style="cursor:pointer;user-select:none">' + (ST === 'converted' ? '' : '<input type="checkbox" class="oei-ck" style="pointer-events:none" value="' + r.id + '"' + dis + chk + '>') + '</td>' + rowTds(r).replace(/<td>[^<]*<\/td>$/, '') + '<td>' + note + '</td></tr>';
             });
