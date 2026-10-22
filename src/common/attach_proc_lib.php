@@ -165,32 +165,90 @@ function eg_apc_combo_ensure(PDO $pdo): void {
     } catch (Throwable $e) {}
 }
 
+/**
+ * 組合的內容 ＝ 「製程」的清單；每個製程是一組項目（大類／小類），組內是「或」（任一個即可）。
+ * 例：[[精滾, 滾齒], [壓檔片]] ＝ 「精滾 或 滾齒」＋「壓檔片」。
+ * 存 {"procs":[[{t,id},…],…]}；舊格式（單純一串 {t,id}）讀進來時：大類各自一個製程、
+ * 同一大類底下的小類併成一個製程（＝舊版的語意：同大類內任一個皆可）。
+ * 回傳 [[{t,id,name},…],…]；已不存在的製程自動濾掉，空的製程整個拿掉。
+ */
+function eg_apc_combo_procs(PDO $pdo, $raw): array {
+    if (is_string($raw)) $raw = json_decode($raw, true);
+    if (is_array($raw) && isset($raw['procs'])) $raw = $raw['procs'];
+    if (!is_array($raw) || !$raw) return [];
+    $procs = [];
+    if (isset($raw[0]['t'])) {   // 舊格式：flat
+        $dict = eg_apc_dict($pdo);
+        $noType = [];
+        foreach ($dict as $t) foreach ($t['subs'] as $s) $noType[$s['id']] = $t['id'];
+        $byType = [];
+        foreach ($raw as $x) {
+            if (!is_array($x)) continue;
+            if (($x['t'] ?? '') === 'type') $procs[] = [$x];
+            elseif (($x['t'] ?? '') === 'no' && isset($noType[(int)($x['id'] ?? 0)])) $byType[$noType[(int)$x['id']]][] = $x;
+        }
+        foreach ($byType as $g) $procs[] = $g;
+    } else {
+        foreach ($raw as $g) if (is_array($g)) $procs[] = $g;
+    }
+    $out = [];
+    foreach ($procs as $g) {
+        $sel = eg_apc_parse($pdo, $g);
+        if ($sel) $out[] = $sel;
+    }
+    return $out;
+}
+
+/** 組合自動名稱：製程之間「+」、同一製程內的替代項目「/」，例「精滾/滾齒+壓檔片」（上限 60 字） */
+function eg_apc_combo_autoname(array $procs): string {
+    $parts = [];
+    foreach ($procs as $g) $parts[] = implode('/', array_map(function ($x) { return $x['name']; }, $g));
+    $n = implode('+', $parts);
+    return mb_strlen($n) > 60 ? mb_substr($n, 0, 59) . '…' : $n;
+}
+
 function eg_apc_combo_list(PDO $pdo): array {
     eg_apc_combo_ensure($pdo);
     $out = [];
     try {
         foreach ($pdo->query("SELECT combo_id, combo_name, items_json, created_by FROM part_attach_proc_combo ORDER BY combo_name")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $items = eg_apc_parse($pdo, $r['items_json']);   // 已不存在的製程自動濾掉
-            $out[] = ['id' => (int)$r['combo_id'], 'name' => $r['combo_name'], 'items' => $items, 'created_by' => (int)$r['created_by']];
+            $procs = eg_apc_combo_procs($pdo, $r['items_json']);
+            $flat = [];
+            foreach ($procs as $g) foreach ($g as $x) $flat[$x['t'] . ':' . $x['id']] = $x;
+            $out[] = ['id' => (int)$r['combo_id'], 'name' => $r['combo_name'], 'procs' => $procs,
+                      'items' => array_values($flat), 'created_by' => (int)$r['created_by']];
         }
     } catch (Throwable $e) {}
     return $out;
 }
 
-/** 新增；同名則覆寫內容（只有建立者／管理員可覆寫）。回 [ok, message] */
-function eg_apc_combo_save(PDO $pdo, string $name, $items, int $uid): array {
+/** 新增或更新（$id>0＝更新，限建立者／管理員）。名稱留空＝自動名稱。回 [ok, message] */
+function eg_apc_combo_save(PDO $pdo, string $name, $procsRaw, int $uid, int $id = 0): array {
     eg_apc_combo_ensure($pdo);
+    $procs = eg_apc_combo_procs($pdo, $procsRaw);
+    if (!$procs) return [false, '請先勾選要存成組合的大類或小類'];
     $name = trim(preg_replace('/\s+/u', ' ', $name));
-    if ($name === '' || mb_strlen($name) > 60) return [false, '組合名稱必填，且不可超過 60 字'];
-    $sel = eg_apc_parse($pdo, $items);
-    if (count($sel) < 1) return [false, '請先勾選要存成組合的大類或小類'];
-    $json = json_encode(array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $sel));
+    if ($name === '') $name = eg_apc_combo_autoname($procs);
+    if (mb_strlen($name) > 60) return [false, '組合名稱不可超過 60 字'];
+    $json = json_encode(['procs' => array_map(function ($g) {
+        return array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $g);
+    }, $procs)]);
     $st = $pdo->prepare("SELECT combo_id, created_by FROM part_attach_proc_combo WHERE combo_name=?");
     $st->execute([$name]);
-    $ex = $st->fetch(PDO::FETCH_ASSOC);
-    if ($ex) {
-        if ((int)$ex['created_by'] !== $uid && $uid !== 1) return [false, '已有同名組合，且不是你建立的，請換個名稱'];
-        $pdo->prepare("UPDATE part_attach_proc_combo SET items_json=? WHERE combo_id=?")->execute([$json, $ex['combo_id']]);
+    $same = $st->fetch(PDO::FETCH_ASSOC);
+    if ($id > 0) {
+        $s2 = $pdo->prepare("SELECT created_by FROM part_attach_proc_combo WHERE combo_id=?");
+        $s2->execute([$id]);
+        $by = $s2->fetchColumn();
+        if ($by === false) return [false, '這個組合已被刪除，請重新整理'];
+        if ((int)$by !== $uid && $uid !== 1) return [false, '只有建立者或系統管理員可以修改'];
+        if ($same && (int)$same['combo_id'] !== $id) return [false, '已有同名組合「' . $name . '」，請換個名稱'];
+        $pdo->prepare("UPDATE part_attach_proc_combo SET combo_name=?, items_json=? WHERE combo_id=?")->execute([$name, $json, $id]);
+        return [true, '已更新組合「' . $name . '」'];
+    }
+    if ($same) {
+        if ((int)$same['created_by'] !== $uid && $uid !== 1) return [false, '已有同名組合，且不是你建立的，請換個名稱'];
+        $pdo->prepare("UPDATE part_attach_proc_combo SET items_json=? WHERE combo_id=?")->execute([$json, $same['combo_id']]);
         return [true, '已更新組合「' . $name . '」'];
     }
     $pdo->prepare("INSERT INTO part_attach_proc_combo (combo_name, items_json, created_by) VALUES (?,?,?)")->execute([$name, $json, $uid]);

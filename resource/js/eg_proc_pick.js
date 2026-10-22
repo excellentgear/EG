@@ -85,11 +85,19 @@
             + '.epp-side .epp-clist{flex:1;overflow-y:auto;padding:0 14px 8px;}'
             + '.epp-combo{background:#fff;border:1px solid #E4D3BC;border-radius:5px;padding:6px 8px;margin-bottom:6px;}'
             + '.epp-combo b{color:#4A3524;font-size:13px;}'
-            + '.epp-combo .epp-ci{margin:3px 0 5px;line-height:1.9;}'
-            + '.epp-combo .epp-chip{margin-right:3px;}'
+            + '.epp-combo .epp-ci{margin:5px 0 2px;line-height:2;}'
+            + '.epp-combo .epp-chip{margin-right:0;}'
+            + '.epp-chead{display:flex;align-items:center;gap:4px;}'
+            + '.epp-chead b{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+            + '.epp-cl{margin-left:auto;white-space:nowrap;}.epp-cl a{color:#a0522d;cursor:pointer;font-size:11px;margin-left:8px;text-decoration:none;}'
+            + '.epp-ent{display:inline-block;border:1px solid #E4B27A;border-radius:12px;padding:1px 3px;background:#FFFAF2;margin:0 0 3px 0;}'
+            + '.epp-or-sep{font-size:10px;color:#a0522d;margin:0 3px;}.epp-plus{font-size:12px;font-weight:700;color:#7A4A12;margin:0 4px;}'
+            + '.epp-editing{border-color:#E4802A;box-shadow:0 0 0 2px #FBE3C6;}'
+            + '.epp-pick{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:#7A4A12;}.epp-pick select{flex:1;}'
+            + '.epp-tgt{background:#FFF1DC;border:1px solid #E4B27A;border-radius:4px;padding:4px 8px;margin-bottom:6px;font-size:12px;color:#6B4A2B;}.epp-tgt a{color:#a0522d;cursor:pointer;margin-left:6px;}'
+            + '.epp-orl{margin:0 0 0 8px;font-size:11px;font-weight:600;color:#a0522d;cursor:pointer;}.epp-orn{font-weight:400;color:#888;}'
             + '.epp-pk{cursor:pointer;}.epp-pk:hover{background:#F0DFC6;}'
             + '.epp-combo .epp-cb{font-size:11px;padding:0 8px;border:1px solid #E4B27A;background:#FFF3E2;color:#8a5a12;border-radius:3px;cursor:pointer;margin-right:4px;}'
-            + '.epp-combo .epp-cd{float:right;color:#a0522d;cursor:pointer;font-size:11px;}'
             + '.epp-saver{border-top:1px solid #eadfce;padding:8px 14px;}'
             + '#epp-box footer{padding:8px 14px;border-top:1px solid #eee;display:flex;gap:6px;justify-content:flex-end;align-items:center;}'
             + '.epp-t{border-bottom:1px solid #f0e6d8;padding:4px 0;}'
@@ -111,7 +119,7 @@
                 MODAL.innerHTML = '<div id="epp-box"><header><span>選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）</span><a href="javascript:void(0)" data-epp-x="1" style="color:#fff;">✕</a></header>'
                     + '<div class="epp-main"><div class="epp-body"><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" autocomplete="off" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
                     + '<div class="epp-side"><h5>常用組合（大類＋小類可混合）</h5><div class="epp-clist" id="epp-clist"></div>'
-                    + '<div class="epp-saver"><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（單一大類或小類也可以；名稱預設自動帶入，可自行修改）</div>'
+                    + '<div class="epp-saver"><div id="epp-tgt" class="epp-tgt" style="display:none;"></div><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（單一大類或小類也可以；名稱預設自動帶入，可自行修改）</div>'
                     + '<div style="display:flex;gap:4px;"><input type="text" id="epp-cname" class="form-control input-sm" maxlength="60" placeholder="組合名稱（自動帶入：製程1+製程2…）" autocomplete="off">'
                     + '<button type="button" class="btn btn-warning btn-sm" data-epp-csave="1" style="white-space:nowrap;">存成組合</button></div>'
                     + '<div id="epp-cmsg" style="font-size:11px;margin-top:3px;min-height:15px;"></div></div></div></div>'
@@ -125,6 +133,13 @@
                 ['input', 'keyup', 'compositionend', 'change'].forEach(function (ev) { kwEl.addEventListener(ev, function () { drawList(); }); });
                 // Bootstrap modal 的 focusin 鎖會把焦點搶回自己，輸入框就打不了字（也就不會篩選）；本視窗內的焦點事件不往上傳
                 MODAL.addEventListener('focusin', function (e) { e.stopPropagation(); });
+                MODAL.addEventListener('change', function (e) {
+                    var sel = e.target, cid = sel.getAttribute && sel.getAttribute('data-epp-cpick');
+                    if (!cid || sel.value === '') return;
+                    var kind = MODAL._pick ? MODAL._pick.kind : 'edit';
+                    if (sel.value === 'w') startEdit(parseInt(cid, 10), 'whole', 0);
+                    else startEdit(parseInt(cid, 10), kind === 'alt' ? 'alt' : 'entry', parseInt(sel.value, 10));
+                });
                 MODAL.querySelector('#epp-cname').addEventListener('input', function () { MODAL._nameTouched = this.value.trim() !== ''; });
                 MODAL.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'epp-kw') e.preventDefault(); });
             }
@@ -141,6 +156,8 @@
             MODAL.querySelector('#epp-kw').value = '';
             MODAL._open = {};
             MODAL._nameTouched = false;
+            MODAL._split = {}; MODAL._tgt = null; MODAL._pick = null;
+            updateTgtUi();
             drawList();
             drawCombos();
             loadCombos(el._epp.url, function () { drawCombos(); });
@@ -162,6 +179,9 @@
             var nSel = t.subs.filter(function (s) { return W.no[s.id]; }).length;
             h += '<div class="epp-t' + (open ? ' open' : '') + '" data-tid="' + t.id + '"><label><input type="checkbox" data-epp-type="' + t.id + '"' + (covered ? ' checked' : '') + '> ' + esc(t.name) + '</label>'
               + (t.subs.length ? '<span class="epp-tg" data-epp-tg="' + t.id + '">' + (open ? '▾' : '▸') + ' 小類 ' + t.subs.length + (nSel ? '（已選 ' + nSel + '）' : '') + '</span>' : '')
+              + ((!covered && nSel >= 2)
+                  ? '<label class="epp-orl" title="勾選＝這幾個小類是同一個製程（任一個即可）；取消勾選＝各自是不同製程"><input type="checkbox" data-epp-or="' + t.id + '"' + (MODAL._split[t.id] ? '' : ' checked') + '> 或' + (MODAL._split[t.id] ? '<span class="epp-orn">（各為不同製程）</span>' : '') + '</label>'
+                  : '')
               + '<div class="epp-subs">';
             subs.forEach(function (s) {
                 h += '<label class="' + (covered ? 'cov' : '') + '"><input type="checkbox" data-epp-no="' + s.id + '"' + ((covered || W.no[s.id]) ? ' checked' : '') + (covered ? ' disabled' : '') + '> ' + esc(s.name) + '</label>';
@@ -199,66 +219,165 @@
         xhr.send(body);
     }
     function comboMsg(t, ok) { var m = MODAL.querySelector('#epp-cmsg'); m.style.color = ok ? '#2e7d32' : '#c0392b'; m.textContent = t; }
-    // 每個項目各自一個標籤（大類有 ◆）；點標籤＝只把這一項加進左側勾選。
-    // 小類名稱若和某個大類同名（例如大類「齒研」與小類「齒研」），前面補上所屬大類以免混淆。
-    function comboChips(items) {
-        var typeNames = {}; DICT.forEach(function (t) { typeNames[t.name] = 1; });
-        return items.map(function (x) {
-            if (x.t === 'type') return '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
-            var pn = '';
-            DICT.forEach(function (t) { if (t.subs.some(function (s) { return s.id === x.id; })) pn = t.name; });
-            var label = (typeNames[x.name] && pn) ? pn + '›' + x.name : x.name;
-            return '<span class="epp-chip epp-pk" data-epp-citem="no:' + x.id + '" title="' + esc(pn ? '屬於大類：' + pn + '；點一下只加入這一項' : '點一下只加入這一項') + '">' + esc(label) + '</span>';
-        }).join('');
+    // ── 組合 ＝ 「製程」的清單；每個製程是一組項目（組內是「或」：任一個即可），製程之間用「＋」連接 ──
+    // 左側勾選：同一大類裡勾 2 個以上小類時，預設為「或」（同一個製程）；取消「或」＝各自是不同製程。
+    function curProcs() {
+        var W = MODAL._work, sp = MODAL._split || {}, out = [];
+        DICT.forEach(function (t) {
+            if (W.type[t.id]) { out.push([{ t: 'type', id: t.id, name: t.name }]); return; }
+            var subs = t.subs.filter(function (s) { return W.no[s.id]; }).map(function (s) { return { t: 'no', id: s.id, name: s.name }; });
+            if (!subs.length) return;
+            if (sp[t.id]) subs.forEach(function (x) { out.push([x]); });
+            else out.push(subs);
+        });
+        return out;
     }
-    // 目前勾選的內容（大類在前、小類在後，與存檔順序一致）
-    function curNames() {
-        var W = MODAL._work, a = [];
-        DICT.forEach(function (t) { if (W.type[t.id]) a.push(t.name); });
-        DICT.forEach(function (t) { t.subs.forEach(function (s) { if (W.no[s.id]) a.push(s.name); }); });
-        return a;
+    function procsName(procs) {
+        var n = procs.map(function (g) { return g.map(function (x) { return x.name; }).join('/'); }).join('+');
+        return n.length > 60 ? n.slice(0, 59) + '…' : n;
     }
-    function autoName() { var n = curNames().join('+'); return n.length > 60 ? n.slice(0, 59) + '…' : n; }
+    function autoName() { return procsName(curProcs()); }
     function syncName() {
         var el = MODAL.querySelector('#epp-cname');
         if (!MODAL._nameTouched) el.value = autoName();
     }
+    function parentName(id) {
+        var pn = ''; DICT.forEach(function (t) { if (t.subs.some(function (s) { return s.id === id; })) pn = t.name; }); return pn;
+    }
+    // 一個製程 ＝ 一個外框，裡面的項目用「或」連接；點項目＝只把這一項加進左側勾選
+    function procChips(procs) {
+        var typeNames = {}; DICT.forEach(function (t) { typeNames[t.name] = 1; });
+        return procs.map(function (g) {
+            return '<span class="epp-ent">' + g.map(function (x) {
+                if (x.t === 'type') return '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="大類（整個大類）；點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
+                var pn = parentName(x.id), label = (typeNames[x.name] && pn) ? pn + '›' + x.name : x.name;
+                return '<span class="epp-chip epp-pk" data-epp-citem="no:' + x.id + '" title="' + esc(pn ? '屬於大類：' + pn + '；點一下只加入這一項' : '點一下只加入這一項') + '">' + esc(label) + '</span>';
+            }).join('<span class="epp-or-sep">或</span>') + '</span>';
+        }).join('<span class="epp-plus">＋</span>');
+    }
+    function findCombo(id) { var c = null; COMBOS.forEach(function (x) { if (x.id === id) c = x; }); return c; }
+    function entryText(g) { return g.map(function (x) { return x.name; }).join('/'); }
+
     function drawCombos() {
         var box = MODAL.querySelector('#epp-clist'), h = '';
         COMBOS.forEach(function (c) {
-            var chips = comboChips(c.items);
-            h += '<div class="epp-combo"><b>' + esc(c.name) + '</b>'
-              + ((c.created_by === MY_UID || MY_UID === 1) ? '<span class="epp-cd" data-epp-cdel="' + c.id + '" title="刪除這個組合">刪除</span>' : '')
-              + '<div class="epp-ci">' + (chips || '<span class="epp-none">（內容的製程已不存在）</span>') + '</div>'
+            var mine = (c.created_by === MY_UID || MY_UID === 1);
+            var pk = MODAL._pick && MODAL._pick.id === c.id ? MODAL._pick : null;
+            h += '<div class="epp-combo' + (MODAL._tgt && MODAL._tgt.id === c.id ? ' epp-editing' : '') + '">'
+              + '<div class="epp-chead">'
               + '<button type="button" class="epp-cb" data-epp-capply="' + c.id + '" title="用這個組合取代目前勾選">套用</button>'
-              + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button></div>';
+              + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button>'
+              + '<b title="' + esc(c.name) + '">' + esc(c.name) + '</b>'
+              + (mine ? '<span class="epp-cl"><a data-epp-cedit="' + c.id + '" title="修改這個組合的內容">編輯</a><a data-epp-calt="' + c.id + '" title="替某個製程新增一個「或」的替代項目">相同製程</a><a data-epp-cdel="' + c.id + '" title="刪除這個組合">刪除</a></span>' : '')
+              + '</div>'
+              + '<div class="epp-ci">' + (c.procs.length ? procChips(c.procs) : '<span class="epp-none">（內容的製程已不存在）</span>') + '</div>';
+            if (pk) {
+                h += '<div class="epp-pick"><span>' + (pk.kind === 'edit' ? '要編輯哪一個？' : '要替哪個製程新增「或」？') + '</span><select data-epp-cpick="' + c.id + '" class="form-control input-sm">'
+                  + '<option value="">請選擇…</option>'
+                  + (pk.kind === 'edit' ? '<option value="w">整個組合</option>' : '')
+                  + c.procs.map(function (g, i) { return '<option value="' + i + '">第 ' + (i + 1) + ' 個製程：' + esc(entryText(g)) + '</option>'; }).join('')
+                  + '</select></div>';
+            }
+            h += '</div>';
         });
-        box.innerHTML = h || '<div style="color:#aaa;font-size:12px;padding:6px 0;">還沒有組合。左側勾好常用的大類／小類後，在下方命名存起來，之後一鍵套用。</div>';
+        box.innerHTML = h || '<div style="color:#aaa;font-size:12px;padding:6px 0;">還沒有組合。左側勾好常用的大類／小類後，在下方存成組合，之後一鍵套用。</div>';
+    }
+
+    // 把組合的製程放進左側勾選（replace＝取代；否則疊加），並依結構還原各大類的「或／且」
+    function applyProcs(procs, merge) {
+        var W = merge ? MODAL._work : { type: {}, no: {} };
+        if (!merge) MODAL._split = {};
+        MODAL._work = W;
+        procs.forEach(function (g) { g.forEach(function (x) { if (x.t === 'type') W.type[x.id] = 1; }); });
+        DICT.forEach(function (t) { if (W.type[t.id]) t.subs.forEach(function (s) { delete W.no[s.id]; }); });
+        procs.forEach(function (g) {
+            g.forEach(function (x) {
+                if (x.t !== 'no') return;
+                var cov = DICT.some(function (t) { return W.type[t.id] && t.subs.some(function (s) { return s.id === x.id; }); });
+                if (!cov) W.no[x.id] = 1;
+            });
+        });
+        // 同一大類的小類分散在 2 個以上製程＝「且」（不同製程）
+        DICT.forEach(function (t) {
+            var n = 0;
+            procs.forEach(function (g) { if (g.some(function (x) { return x.t === 'no' && t.subs.some(function (s) { return s.id === x.id; }); })) n++; });
+            if (n >= 2) MODAL._split[t.id] = true;
+        });
     }
     function comboApply(id, merge) {
-        var c = null; COMBOS.forEach(function (x) { if (x.id === id) c = x; });
-        if (!c) return;
-        var W = merge ? MODAL._work : { type: {}, no: {} };
-        MODAL._work = W;
-        c.items.forEach(function (x) { if (x.t === 'type') W.type[x.id] = 1; });
-        DICT.forEach(function (t) { if (W.type[t.id]) t.subs.forEach(function (s) { delete W.no[s.id]; }); });
-        c.items.forEach(function (x) {
-            if (x.t !== 'no') return;
-            var cov = DICT.some(function (t) { return W.type[t.id] && t.subs.some(function (s) { return s.id === x.id; }); });
-            if (!cov) W.no[x.id] = 1;
-        });
+        var c = findCombo(id); if (!c) return;
+        applyProcs(c.procs, merge);
         drawList();
         comboMsg('已' + (merge ? '加入' : '套用') + '「' + c.name + '」，按「確定」才會帶入欄位', true);
+    }
+
+    // ── 編輯／新增「或」：左側勾選區變成編輯區，存檔鈕改成「更新…」 ──
+    function updateTgtUi() {
+        var T = MODAL._tgt, bar = MODAL.querySelector('#epp-tgt'), btn = MODAL.querySelector('[data-epp-csave]');
+        if (!T) { bar.style.display = 'none'; btn.textContent = '存成組合'; return; }
+        var c = findCombo(T.id) || { name: '', procs: [] };
+        var txt = T.mode === 'whole' ? '編輯中：「' + c.name + '」（整個組合）'
+            : T.mode === 'entry' ? '編輯中：「' + c.name + '」第 ' + (T.idx + 1) + ' 個製程（' + entryText(c.procs[T.idx] || []) + '）'
+            : '「' + c.name + '」第 ' + (T.idx + 1) + ' 個製程（' + entryText(c.procs[T.idx] || []) + '）新增「或」：請在左側勾選要加入的項目';
+        bar.innerHTML = '<b>' + esc(txt) + '</b> <a data-epp-ctgt-x="1">取消編輯</a>';
+        bar.style.display = 'block';
+        btn.textContent = T.mode === 'whole' ? '更新組合' : T.mode === 'entry' ? '更新這個製程' : '加入為「或」';
+    }
+    function startEdit(id, mode, idx) {
+        var c = findCombo(id); if (!c) return;
+        MODAL._pick = null;
+        MODAL._tgt = { id: id, mode: mode, idx: idx };
+        if (mode === 'whole') applyProcs(c.procs, false);
+        else if (mode === 'entry') applyProcs([c.procs[idx]], false);
+        else { MODAL._work = { type: {}, no: {} }; MODAL._split = {}; }
+        MODAL.querySelector('#epp-cname').value = c.name;
+        MODAL._nameTouched = true;
+        updateTgtUi(); drawList(); drawCombos();
+        comboMsg('', true);
+    }
+    function endEdit() {
+        MODAL._tgt = null; MODAL._pick = null; MODAL._nameTouched = false;
+        updateTgtUi(); syncName(); drawCombos();
+    }
+    function flatOf(g) { return g.map(function (x) { return { t: x.t, id: x.id, name: x.name }; }); }
+    function workFlat() { var a = []; curProcs().forEach(function (g) { g.forEach(function (x) { a.push(x); }); }); return a; }
+
+    function saveCombo() {
+        var T = MODAL._tgt, nm = MODAL.querySelector('#epp-cname').value.trim(), procs, c = T ? findCombo(T.id) : null;
+        if (T && !c) { comboMsg('這個組合已不存在，請重新整理', false); return; }
+        if (T && T.mode !== 'whole') {
+            var cur = workFlat();
+            if (!cur.length) { comboMsg('左側請先勾選要' + (T.mode === 'alt' ? '加入' : '更新') + '的項目', false); return; }
+            procs = c.procs.map(flatOf);
+            if (T.mode === 'entry') procs[T.idx] = cur;
+            else cur.forEach(function (x) { if (!procs[T.idx].some(function (y) { return y.t === x.t && y.id === x.id; })) procs[T.idx].push(x); });
+        } else {
+            procs = curProcs();
+            if (!procs.length) { comboMsg('左側請先勾選要存的大類或小類', false); return; }
+        }
+        // 名稱：沿用原本的自動命名規則（原名稱是自動產生的才跟著新內容更新；自己取的名稱不動）
+        if (T && (!nm || nm === c.name) && c.name === procsName(c.procs)) nm = procsName(procs);
+        else if (!nm) nm = procsName(procs);
+        var data = { name: nm, procs: JSON.stringify(procs.map(function (g) { return g.map(function (x) { return { t: x.t, id: x.id }; }); })) };
+        if (T) data.id = T.id;
+        postCombo('process_combo_save', data, function (r) {
+            comboMsg(r.message || '', !!r.success);
+            if (r.success) { MODAL._tgt = null; MODAL._pick = null; MODAL._nameTouched = false; updateTgtUi(); syncName(); }
+            drawCombos();
+        });
     }
 
     function modalClick(e) {
         var t = e.target;
         if (t.getAttribute('data-epp-x')) { close(); return; }
         if (t === MODAL) { close(); return; }
-        if (t.getAttribute('data-epp-clear')) { MODAL._work = { type: {}, no: {} }; drawList(); return; }
+        if (t.getAttribute('data-epp-clear')) { MODAL._work = { type: {}, no: {} }; MODAL._split = {}; drawList(); return; }
         if (t.getAttribute('data-epp-tg')) { var id = t.getAttribute('data-epp-tg'); MODAL._open[id] = !MODAL._open[id]; drawList(); return; }
         if (t.getAttribute('data-epp-ok')) { commit(); return; }
+        var orT = t.getAttribute('data-epp-or');
+        if (orT) { if (t.checked) delete MODAL._split[orT]; else MODAL._split[orT] = true; drawList(); return; }
         var ca = t.getAttribute('data-epp-capply'), cd = t.getAttribute('data-epp-cadd'), cx = t.getAttribute('data-epp-cdel');
+        var ce = t.getAttribute('data-epp-cedit'), cl = t.getAttribute('data-epp-calt');
         var ci = t.getAttribute('data-epp-citem');
         if (ci) {
             var pr = ci.split(':'), id1 = parseInt(pr[1], 10), W1 = MODAL._work;
@@ -270,24 +389,23 @@
         }
         if (ca) { comboApply(parseInt(ca, 10), false); return; }
         if (cd) { comboApply(parseInt(cd, 10), true); return; }
+        if (ce || cl) {
+            var cid = parseInt(ce || cl, 10), cc = findCombo(cid); if (!cc) return;
+            var hasAlt = cc.procs.some(function (g) { return g.length > 1; });
+            if (ce && !hasAlt) { startEdit(cid, 'whole', 0); return; }
+            if (cl && cc.procs.length === 1) { startEdit(cid, 'alt', 0); return; }
+            MODAL._pick = { id: cid, kind: ce ? 'edit' : 'alt' }; drawCombos(); return;
+        }
+        if (t.getAttribute('data-epp-ctgt-x')) { endEdit(); return; }
         if (cx) {
             if (!confirm('確定刪除這個組合？（已套用過的附件不受影響）')) return;
-            postCombo('process_combo_del', { id: cx }, function (r) { drawCombos(); comboMsg(r.message || '', !!r.success); });
-            return;
-        }
-        if (t.getAttribute('data-epp-csave')) {
-            var sel = [], W = MODAL._work;
-            DICT.forEach(function (d) { if (W.type[d.id]) sel.push({ t: 'type', id: d.id }); d.subs.forEach(function (s) { if (W.no[s.id]) sel.push({ t: 'no', id: s.id }); }); });
-            var nm = MODAL.querySelector('#epp-cname').value.trim();
-            if (!nm) { nm = autoName(); }
-            if (!nm) { comboMsg('請先輸入組合名稱', false); return; }
-            if (sel.length < 1) { comboMsg('左側請先勾選要存的大類或小類', false); return; }
-            postCombo('process_combo_save', { name: nm, items: JSON.stringify(sel) }, function (r) {
+            postCombo('process_combo_del', { id: cx }, function (r) {
+                if (MODAL._tgt && String(MODAL._tgt.id) === cx) { MODAL._tgt = null; updateTgtUi(); }
                 drawCombos(); comboMsg(r.message || '', !!r.success);
-                if (r.success) { MODAL._nameTouched = false; syncName(); }
             });
             return;
         }
+        if (t.getAttribute('data-epp-csave')) { saveCombo(); return; }
         var ty = t.getAttribute && t.getAttribute('data-epp-type');
         if (ty) {
             ty = parseInt(ty, 10);
