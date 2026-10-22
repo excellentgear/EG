@@ -44,6 +44,9 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
 .pf-price { font-weight:700; color:#8A5A2B; } .pf-diff { color:#DD5138; font-weight:700; }
 .pf-tag { display:inline-block; border-radius:3px; padding:0 6px; font-size:11px; background:#F0A24B; color:#fff; margin-right:4px; line-height:16px; }
 .pf-tag.g { background:#8A8A8A; } .pf-tag.w { background:#DD5138; }
+.pf-proc-bad { background:#DD5138; color:#fff; font-weight:700; padding:0 4px; border-radius:3px; }
+.pf-proc-ok { background:#DDEFD0; color:#3b5d22; font-weight:700; padding:0 4px; border-radius:3px; }
+.pf-proc-na { background:#F7E0BD; color:#8A5A2B; padding:0 4px; border-radius:3px; }
 .pf-src { border-bottom:1px dotted #E5C79A; padding:2px 0; } .pf-src:last-child { border:0; }
 .pf-wrap { overflow:auto; max-height:70vh; border:1px solid #E5C79A; }
 .pf-pager { display:flex; gap:6px; align-items:center; margin:8px 0; font-size:12px; }
@@ -59,7 +62,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
     <b>只會填「單價空白」的訂單，不覆蓋任何既有單價</b>；補入者業務備註加註「【自動補單價】」並留紀錄（order_price_autofill_log）。<br>
     <b>規則1</b>＝同訂單編號下料號與數量組合完全相同；<b>規則2</b>＝同訂單＋料號＋數量＋製程完全相同（製程不可空白）。
     補資料待轉入列只要「訂單內已有相同料號與數量明細」，系統會自動認定為「已存在，不需轉入」；規則1／2 轉價格後也一樣。<br>
-    A／B 是依 ERP 訂單資料的建議（B 的製程空白或不一致，請抽查）；C、D 只供參考，不可批次。
+    <b>製程比對色</b>：<span class="pf-proc-ok">綠＝一致</span>　<span class="pf-proc-bad">紅＝不一致（左邊品名規格最後一段＝製程，右邊訂單製程同步標色）</span>　<span class="pf-proc-na">橘＝其中一邊空白，無法比對</span><br>A／B 是依 ERP 訂單資料的建議（B 的製程空白或不一致，請抽查）；C、D 只供參考，不可批次。
   </div>
   <div id="autoMsg" class="pf-note" style="display:none;background:#EFF7E8;border-color:#7aa65a"></div>
   <div class="pf-tabs" id="tabs"></div>
@@ -106,20 +109,36 @@ function renderTabs(){
     var h=''; CATS.forEach(function(c){ h+='<span class="pf-tab'+(c[0]===CAT?' on':'')+'" data-c="'+c[0]+'">'+c[1]+'<span class="n">'+(COUNTS[c[0]]||0)+'</span></span>'; });
     $('#tabs').html(h);
 }
+function nz(s){ return String(s==null?'':s).replace(/\s+/g,''); }
+// 品名規格＝品名 ＋ 規格 ＋ 空白 ＋ 製程：製程取「最後一個空白之後」
+function specSplit(spec){ var t=String(spec||'').trim(), i=t.search(/\s\S*$/); return i<0 ? {head:'',tail:t} : {head:t.slice(0,i+1), tail:t.slice(i+1)}; }
+function procState(c, erpProc){   // 回傳 ok／bad／na（任一邊空白無法比對）
+    var a=nz(c.order.Processing_items), b=nz(erpProc);
+    if(!a || !b) return 'na';
+    return (a===b || b.slice(-a.length)===a || a.slice(-b.length)===b) ? 'ok' : 'bad';
+}
 function srcHtml(c){
     return (c.src||[]).map(function(s){
         var st = s.state==='ERP' ? '<span class="pf-tag g">ERP</span>' : '<span class="pf-tag'+(s.state==='converted'?' g':'')+'">暫存·'+esc({pending:'待轉入',skipped:'已略過',converted:'已轉入'}[s.state]||s.state)+'</span>';
+        var sp=specSplit(s.spec_text), erpProc = (s.process_text!=null && s.process_text!=='') ? s.process_text : sp.tail;
+        var ps = procState(c, erpProc);
+        var specH = s.spec_text ? '品名規格：'+esc(sp.head)+'<span class="pf-proc-'+ps+'">'+esc(sp.tail)+'</span>' : '';
         return '<div class="pf-src">'+st+'單號 <b>'+esc(s.order_oo)+'</b>　料號 <b>'+esc(s.part_no)+'</b>　數量 <b>'+esc(s.qty)+'</b>　單價 <span class="pf-price">'+fmtP(s.unit_price)+'</span><br>'+
-               (s.process_text!=null ? '製程：'+(esc(s.process_text)||'<i>（空白）</i>')+'<br>' : '')+
-               (s.spec_text ? '品名規格：'+esc(s.spec_text) : '')+(s.order_date?'　日期：'+dd(s.order_date):'')+'</div>';
+               (s.process_text!=null ? '製程：<span class="pf-proc-'+ps+'">'+(esc(s.process_text)||'（空白）')+'</span><br>' : '')+
+               specH+(s.order_date?'　日期：'+dd(s.order_date):'')+'</div>';
     }).join('') || '<i style="color:#999">（無對應來源明細）</i>';
+}
+function ordProcState(c){   // 訂單製程 vs 來源（取第一筆有資料者）
+    var s=(c.src||[])[0]; if(!s) return 'na';
+    var sp=specSplit(s.spec_text), erpProc=(s.process_text!=null && s.process_text!=='')?s.process_text:sp.tail;
+    return procState(c, erpProc);
 }
 function ordHtml(c){
     var o=c.order, same = c.src && c.src[0] && String(c.src[0].qty)===String(o.Qty);
     return '<span class="pf-tag g">訂單 #'+esc(o.Order_id)+'</span>單號 <b>'+esc(o.Order_oo)+'</b>　客戶 '+esc(o.client_display||'')+'<br>'+
            '料號 <b>'+esc(o.d_id)+'</b>　數量 <b>'+esc(o.Qty)+'</b>　目前單價 <span class="pf-diff">'+fmtP(o.unit_price)+'</span>'+
            (c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
-           '製程：'+(esc(o.Processing_items)||'<i>（空白）</i>')+'<br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
+           '製程：<span class="pf-proc-'+ordProcState(c)+'">'+(esc(o.Processing_items)||'（空白）')+'</span><br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
            (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>';
 }
 function render(res){
