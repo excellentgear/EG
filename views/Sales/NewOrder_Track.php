@@ -5557,7 +5557,13 @@ foreach($dCounts as $c) {
                             <option value="ALL" <?= $selectedYear === 'ALL' ? 'selected' : '' ?>>全部年份</option>
                             <?php 
                             $currY = date('Y');
-                            for($y=2024; $y<=$currY; $y++) {
+                            // 起始年度取訂單實際最早年份（原本寫死 2024，2018~2023 的訂單選不到）
+                            $minY = 2024;
+                            try {
+                                $mv = $db->query("SELECT MIN(YEAR(Order_date)) FROM order_track WHERE Order_date IS NOT NULL AND Order_date>'2000-01-01'")->fetchColumn();
+                                if ($mv && (int)$mv >= 2000 && (int)$mv <= $currY) $minY = (int)$mv;
+                            } catch (Exception $eMinY) {}
+                            for($y=$minY; $y<=$currY; $y++) {
                                 $sel = ($y == $selectedYear) ? 'selected' : '';
                                 echo "<option value='$y' $sel>$y 年</option>";
                             }
