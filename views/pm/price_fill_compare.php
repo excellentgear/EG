@@ -77,6 +77,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
     <button class="pf-btn sec" id="btnAllMatch">勾選全部符合（不分頁）</button>
     <button class="pf-btn sec" id="btnClear">取消勾選</button>
     <span id="selInfo" style="font-size:12px;color:#8A5A2B">已選 0 筆</span>
+    <label style="margin:0;font-size:12px;color:#5b3a1e;cursor:pointer"><input type="checkbox" id="fillProc" checked> 同時把 ERP 製程填入訂單製程空白者</label>
     <button class="pf-btn" id="btnApply" disabled><i class="fa fa-exchange"></i> 轉價格（已選 <span id="selN">0</span>）</button>
   </div>
   <div class="pf-wrap"><table class="pf" id="tb">
@@ -129,7 +130,7 @@ function ordHtml(c){
     var o=c.order, same = c.src && c.src[0] && String(c.src[0].qty)===String(o.Qty);
     return '<span class="pf-tag g">訂單 #'+esc(o.Order_id)+'</span>單號 <b>'+esc(o.Order_oo)+'</b>　客戶 '+esc(o.client_display||'')+'<br>'+
            '料號 <b>'+esc(o.d_id)+'</b>　數量 <b>'+esc(o.Qty)+'</b>　目前單價 <span class="pf-diff">'+fmtP(o.unit_price)+'</span>'+
-           (c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
+           (c.proc_fill ? '<br><span class="pf-tag w">將補製程</span><b>'+esc(c.proc_fill)+'</b>' : '')+(c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
            '製程：<span class="pf-proc-'+ordProcState(c)+'">'+(esc(o.Processing_items)||'（空白）')+'</span><br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
            (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>';
 }
@@ -190,7 +191,7 @@ $('#btnApply').on('click',function(){
     var what = CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
     if(!confirm('類別：'+label+'\n確定對 '+ids.length+' 筆：'+what+'？'+warn)) return;
     var $b=$(this).prop('disabled',true);
-    api('apply',{cat:CAT,ids:JSON.stringify(ids)}).done(function(res){
+    api('apply',{cat:CAT,ids:JSON.stringify(ids),fill_proc:$('#fillProc').prop('checked')?1:0}).done(function(res){
         if(!res.ok){ alert(res.error); $b.prop('disabled',false); return; }
         var doneTxt='完成：補入單價 '+res.filled+' 筆、補資料認定已轉入 '+res.staged+' 筆、略過 '+res.skipped+' 筆';
         if(res.msgs&&res.msgs.length){ alert(doneTxt+'\n'+res.msgs.slice(0,10).join('\n')); }

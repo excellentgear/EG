@@ -26,6 +26,10 @@ function opf_ensure_schema(PDO $db): void {
       id INT AUTO_INCREMENT PRIMARY KEY, order_id INT NOT NULL, order_oo VARCHAR(40) NULL, rule_code VARCHAR(10) NOT NULL,
       old_price DECIMAL(15,4) NULL, new_price DECIMAL(15,4) NOT NULL, stage_id INT NULL, created_at DATETIME NOT NULL,
       KEY idx_order (order_id)) CHARACTER SET utf8mb4 COMMENT='自動補單價紀錄'");
+    foreach (['old_process', 'new_process'] as $col) {
+        if (!$db->query("SHOW COLUMNS FROM order_price_autofill_log LIKE '$col'")->fetchColumn())
+            $db->exec("ALTER TABLE order_price_autofill_log ADD COLUMN $col VARCHAR(255) NULL COMMENT '同時補製程時的舊/新值'");
+    }
 }
 
 function opf_norm($s): string { return preg_replace('/\s+/u', '', trim((string)$s)); }
@@ -47,6 +51,13 @@ function opf_proc_canon(string $s): string {
     $n = str_replace(['到', '至'], '', $n);
     if (preg_match('/^(代料)?(全製|完成|成品|成品完成|全製完成)$/u', $n)) return 'FULL';
     return $n;
+}
+/** 訂單製程空白、而 ERP 有製程時，回傳可補入的製程文字（看起來像規格/型號、含數字或過長者不補），否則 null */
+function opf_proc_fillable(string $orderProc, string $erpProc): ?string {
+    $e = trim($erpProc);
+    if (opf_norm($orderProc) !== '' || $e === '') return null;
+    if (preg_match('/\d/u', $e) || mb_strlen($e) > 20) return null;
+    return $e;
 }
 /** 回傳 ok（一致/包含）｜syn（同義）｜bad（不一致）｜na（任一邊空白無法比對） */
 function opf_proc_state(string $orderProc, string $erpProc): string {
@@ -150,7 +161,7 @@ function opf_candidates(PDO $db): array {
     }
     foreach ($res as &$rr) {
         $erp = opf_erp_proc($rr['src'][0] ?? []);
-        $rr['erp_proc'] = $erp; $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
+        $rr['erp_proc'] = $erp; $rr['proc_fill'] = opf_proc_fillable((string)$rr['order']['Processing_items'], $erp); $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
     }
     unset($rr);
     return $res;
@@ -159,29 +170,35 @@ function opf_candidates(PDO $db): array {
 /**
  * 套用：只接受 $orderIds 與 $cat，價格／暫存列一律重新判定。回傳 ['filled'=>n,'staged'=>n,'skipped'=>n,'msgs'=>[]]
  */
-function opf_apply(PDO $db, array $orderIds, string $cat, int $uid): array {
+function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillProc = false): array {
     if (!in_array($cat, OPF_APPLY_CATS, true)) return ['filled' => 0, 'staged' => 0, 'skipped' => count($orderIds), 'msgs' => ['此類別不可批次轉價格']];
     $want = array_flip(array_map('intval', $orderIds));
     $cands = array_filter(opf_candidates($db), fn($c) => $c['cat'] === $cat && isset($want[$c['order_id']]));
-    $filled = $staged = 0; $msgs = [];
+    $filled = $staged = $procFilled = 0; $msgs = [];
     $db->beginTransaction();
     try {
         $up  = $db->prepare("UPDATE order_track SET unit_price=?, Order_ps=CONCAT(IFNULL(Order_ps,''), IF(IFNULL(Order_ps,'') LIKE ?,'',IF(IFNULL(Order_ps,'')='','',' ')), IF(IFNULL(Order_ps,'') LIKE ?,'','" . OPF_MARK . "')) WHERE Order_id=? AND (unit_price IS NULL OR unit_price=0)");
-        $lg  = $db->prepare("INSERT INTO order_price_autofill_log (order_id,order_oo,rule_code,old_price,new_price,stage_id,created_at) VALUES (?,?,?,?,?,?,NOW())");
+        $lg  = $db->prepare("INSERT INTO order_price_autofill_log (order_id,order_oo,rule_code,old_price,new_price,stage_id,old_process,new_process,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())");
+        $upp = $db->prepare("UPDATE order_track SET Processing_items=?, Order_ps=CONCAT(IFNULL(Order_ps,''), IF(IFNULL(Order_ps,'')='','',' '), '【自動補製程】') WHERE Order_id=? AND (Processing_items IS NULL OR TRIM(Processing_items)='')");
         $stg = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', existing_order_id=?, match_note='訂單內已有相同明細（僅補單價），不需轉入' WHERE id=? AND state='pending'");
         $like = '%' . OPF_MARK . '%';
         foreach ($cands as $c) {
             if ($cat !== 'DONE') {
                 $up->execute([$c['price'], $like, $like, $c['order_id']]);
                 if (!$up->rowCount()) { $msgs[] = '訂單 ' . $c['order_id'] . ' 單價已有值，略過'; continue; }
-                $lg->execute([$c['order_id'], $c['order']['Order_oo'], $cat, null, $c['price'], $c['stage_ids'][0] ?? null]);
+                $oldP = null; $newP = null;
+                if ($fillProc && !empty($c['proc_fill'])) {
+                    $upp->execute([$c['proc_fill'], $c['order_id']]);
+                    if ($upp->rowCount()) { $oldP = (string)$c['order']['Processing_items']; $newP = $c['proc_fill']; $procFilled++; }
+                }
+                $lg->execute([$c['order_id'], $c['order']['Order_oo'], $cat, null, $c['price'], $c['stage_ids'][0] ?? null, $oldP, $newP]);
                 $filled++;
             }
             foreach ($c['stage_ids'] as $sid) { $stg->execute([$c['order_id'], $sid]); $staged += $stg->rowCount(); }
         }
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
-    return ['filled' => $filled, 'staged' => $staged, 'skipped' => count($want) - count($cands), 'msgs' => $msgs];
+    return ['filled' => $filled, 'staged' => $staged, 'proc_filled' => $procFilled, 'skipped' => count($want) - count($cands), 'msgs' => $msgs];
 }
 
 
