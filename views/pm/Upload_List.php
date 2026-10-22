@@ -138,6 +138,8 @@ function lastUpdateBadge($info, $color = '#555') {
 </head>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 <style>
+#oeiBody tr.oei-picked > td { background: #FFE2A8 !important; }
+#oeiBody tr.oei-picked > td:first-child { box-shadow: inset 3px 0 0 #DD5138; }
     .button-container {
         display: flex;
         flex-wrap: wrap;
@@ -878,7 +880,10 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     function selIds() { return $('#oeiBody .oei-ck:checked').map(function () { return +this.value; }).get(); }
-    function updSel() { $('#oeiSel').text(selIds().length); }
+    function updSel() {
+        $('#oeiSel').text(selIds().length);
+        $('#oeiBody .oei-ck').each(function () { $(this).closest('tr').toggleClass('oei-picked', this.checked); });
+    }
     function load() {
         post('list', { state: ST, q: $('#oeiQ').val() }).done(function (res) {
             if (!res.ok) return;
