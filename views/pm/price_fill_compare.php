@@ -46,6 +46,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
 .pf-tag.g { background:#8A8A8A; } .pf-tag.w { background:#DD5138; }
 .pf-proc-bad { background:#DD5138; color:#fff; font-weight:700; padding:0 4px; border-radius:3px; }
 .pf-proc-ok { background:#DDEFD0; color:#3b5d22; font-weight:700; padding:0 4px; border-radius:3px; }
+.pf-proc-syn { background:#DDEFD0; color:#3b5d22; font-weight:700; padding:0 4px; border-radius:3px; border-bottom:2px dashed #7aa65a; }
 .pf-proc-na { background:#F7E0BD; color:#8A5A2B; padding:0 4px; border-radius:3px; }
 .pf-src { border-bottom:1px dotted #E5C79A; padding:2px 0; } .pf-src:last-child { border:0; }
 .pf-wrap { overflow:auto; max-height:70vh; border:1px solid #E5C79A; }
@@ -62,7 +63,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
     <b>只會填「單價空白」的訂單，不覆蓋任何既有單價</b>；補入者業務備註加註「【自動補單價】」並留紀錄（order_price_autofill_log）。<br>
     <b>規則1</b>＝同訂單編號下料號與數量組合完全相同；<b>規則2</b>＝同訂單＋料號＋數量＋製程完全相同（製程不可空白）。
     補資料待轉入列只要「訂單內已有相同料號與數量明細」，系統會自動認定為「已存在，不需轉入」；規則1／2 轉價格後也一樣。<br>
-    <b>製程比對色</b>：<span class="pf-proc-ok">綠＝一致</span>　<span class="pf-proc-bad">紅＝不一致（左邊品名規格最後一段＝製程，右邊訂單製程同步標色）</span>　<span class="pf-proc-na">橘＝其中一邊空白，無法比對</span><br>A／B 是依 ERP 訂單資料的建議（B 的製程空白或不一致，請抽查）；C、D 只供參考，不可批次。
+    <b>製程比對色</b>：<span class="pf-proc-ok">綠＝一致</span>　<span class="pf-proc-bad">紅＝不一致（左邊品名規格最後一段＝製程，右邊訂單製程同步標色）</span>　<span class="pf-proc-syn">綠＋虛線＝用語不同但意思相同（全製＝代料完成＝代料到成品…，自動判定一致）</span>　<span class="pf-proc-na">橘＝其中一邊空白，無法比對</span><br>A／B 是依 ERP 訂單資料的建議（B 的製程空白或不一致，請抽查）；C、D 只供參考，不可批次。
   </div>
   <div id="autoMsg" class="pf-note" style="display:none;background:#EFF7E8;border-color:#7aa65a"></div>
   <div class="pf-tabs" id="tabs"></div>
@@ -109,30 +110,18 @@ function renderTabs(){
     var h=''; CATS.forEach(function(c){ h+='<span class="pf-tab'+(c[0]===CAT?' on':'')+'" data-c="'+c[0]+'">'+c[1]+'<span class="n">'+(COUNTS[c[0]]||0)+'</span></span>'; });
     $('#tabs').html(h);
 }
-function nz(s){ return String(s==null?'':s).replace(/\s+/g,''); }
-// 品名規格＝品名 ＋ 規格 ＋ 空白 ＋ 製程：製程取「最後一個空白之後」
 function specSplit(spec){ var t=String(spec||'').trim(), i=t.search(/\s\S*$/); return i<0 ? {head:'',tail:t} : {head:t.slice(0,i+1), tail:t.slice(i+1)}; }
-function procState(c, erpProc){   // 回傳 ok／bad／na（任一邊空白無法比對）
-    var a=nz(c.order.Processing_items), b=nz(erpProc);
-    if(!a || !b) return 'na';
-    return (a===b || b.slice(-a.length)===a || a.slice(-b.length)===b) ? 'ok' : 'bad';
-}
 function srcHtml(c){
     return (c.src||[]).map(function(s){
         var st = s.state==='ERP' ? '<span class="pf-tag g">ERP</span>' : '<span class="pf-tag'+(s.state==='converted'?' g':'')+'">暫存·'+esc({pending:'待轉入',skipped:'已略過',converted:'已轉入'}[s.state]||s.state)+'</span>';
-        var sp=specSplit(s.spec_text), erpProc = (s.process_text!=null && s.process_text!=='') ? s.process_text : sp.tail;
-        var ps = procState(c, erpProc);
+        var sp=specSplit(s.spec_text), ps = c.proc_state;
         var specH = s.spec_text ? '品名規格：'+esc(sp.head)+'<span class="pf-proc-'+ps+'">'+esc(sp.tail)+'</span>' : '';
         return '<div class="pf-src">'+st+'單號 <b>'+esc(s.order_oo)+'</b>　料號 <b>'+esc(s.part_no)+'</b>　數量 <b>'+esc(s.qty)+'</b>　單價 <span class="pf-price">'+fmtP(s.unit_price)+'</span><br>'+
                (s.process_text!=null ? '製程：<span class="pf-proc-'+ps+'">'+(esc(s.process_text)||'（空白）')+'</span><br>' : '')+
                specH+(s.order_date?'　日期：'+dd(s.order_date):'')+'</div>';
     }).join('') || '<i style="color:#999">（無對應來源明細）</i>';
 }
-function ordProcState(c){   // 訂單製程 vs 來源（取第一筆有資料者）
-    var s=(c.src||[])[0]; if(!s) return 'na';
-    var sp=specSplit(s.spec_text), erpProc=(s.process_text!=null && s.process_text!=='')?s.process_text:sp.tail;
-    return procState(c, erpProc);
-}
+function ordProcState(c){ return c.proc_state; }
 function ordHtml(c){
     var o=c.order, same = c.src && c.src[0] && String(c.src[0].qty)===String(o.Qty);
     return '<span class="pf-tag g">訂單 #'+esc(o.Order_id)+'</span>單號 <b>'+esc(o.Order_oo)+'</b>　客戶 '+esc(o.client_display||'')+'<br>'+

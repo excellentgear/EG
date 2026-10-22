@@ -32,6 +32,28 @@ function opf_norm($s): string { return preg_replace('/\s+/u', '', trim((string)$
 function opf_pk($d, $p): string { return $d ? 'd' . $d : 'p' . opf_norm($p); }
 function opf_empty_price($v): bool { return !((float)$v > 0); }
 
+/** ERP 品名規格＝品名＋規格＋空白＋製程，製程取最後一個空白之後；有獨立製程欄（暫存區）就用它 */
+function opf_erp_proc(array $src): string {
+    if (isset($src['process_text']) && trim((string)$src['process_text']) !== '') return (string)$src['process_text'];
+    $t = trim((string)($src['spec_text'] ?? ''));
+    $i = strrpos($t, ' ');
+    return $i === false ? $t : substr($t, $i + 1);
+}
+/** 製程同義正規化：「全製」「代料完成」「代料到完成」「代料至成品」「代料全製」…都是同一種做法 → FULL */
+function opf_proc_canon(string $s): string {
+    $n = str_replace(['到', '至'], '', opf_norm($s));
+    if (preg_match('/^(代料)?(全製|完成|成品|成品完成|全製完成)$/u', $n)) return 'FULL';
+    return $n;
+}
+/** 回傳 ok（一致/包含）｜syn（同義）｜bad（不一致）｜na（任一邊空白無法比對） */
+function opf_proc_state(string $orderProc, string $erpProc): string {
+    $a = opf_norm($orderProc); $b = opf_norm($erpProc);
+    if ($a === '' || $b === '') return 'na';
+    if ($a === $b || mb_substr($b, -mb_strlen($a)) === $a || mb_substr($a, -mb_strlen($b)) === $b) return 'ok';
+    return opf_proc_canon($a) === opf_proc_canon($b) ? 'syn' : 'bad';
+}
+
+
 /** 回傳全部候選列：['order_id','cat','price','note','stage_ids'=>[...],'src'=>[來源明細...]]，另附 'order'=>訂單列 */
 function opf_candidates(PDO $db): array {
     opf_ensure_schema($db);
@@ -111,13 +133,19 @@ function opf_candidates(PDO $db): array {
         if (!$cand)            { $cat = 'D'; $price = null; $note = '查無 ERP 資料：請業務依報價補單價或綁定報價單'; }
         elseif (count($pr) > 1) { $cat = 'C'; $price = null; $note = 'ERP 有多個單價（' . implode(' / ', $pr) . '）：請人工確認'; }
         else {
-            $m = false;
-            if ($px !== '') foreach ($cand as $r) if (mb_substr(opf_norm($r['Specification']), -mb_strlen($px)) === $px) { $m = true; break; }
+            $m = false; $bestSt = 'bad';
+            foreach ($cand as $r) { $st0 = opf_proc_state((string)$o['Processing_items'], opf_erp_proc(['spec_text' => $r['Specification']]));
+                if ($st0 === 'ok' || $st0 === 'syn') { $m = true; $bestSt = $st0; break; } if ($st0 === 'na') $bestSt = 'na'; }
             $cat = $m ? 'A' : 'B'; $price = (float)$pr[0];
-            $note = $m ? 'ERP 單價唯一且製程一致' : 'ERP 單價唯一，但訂單製程' . ($px === '' ? '空白' : '與 ERP 不一致') . '，請抽查';
+            $note = $m ? ($bestSt === 'syn' ? 'ERP 單價唯一，製程用語不同但意思相同（全製＝代料完成…）' : 'ERP 單價唯一且製程一致') : 'ERP 單價唯一，但訂單製程' . ($px === '' ? '空白' : '與 ERP 不一致') . '，請抽查';
         }
         $res[] = ['order_id' => (int)$o['Order_id'], 'cat' => $cat, 'price' => $price, 'stage_ids' => [], 'src' => $src, 'order' => $o, 'note' => $note];
     }
+    foreach ($res as &$rr) {
+        $erp = opf_erp_proc($rr['src'][0] ?? []);
+        $rr['erp_proc'] = $erp; $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
+    }
+    unset($rr);
     return $res;
 }
 
