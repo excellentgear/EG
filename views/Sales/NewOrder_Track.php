@@ -12124,8 +12124,18 @@ foreach($dCounts as $c) {
             key: '',             // 目前選到的 'tagid:scope'（空＝未設定）
             loadedClient: null,  // 上次載入選項時的客戶ID（null＝還沒初始化過）
             needPick: false,     // 客戶被換掉了、要求重新確認
-            loading: false
+            loading: false,
+            procBase: null,      // 編輯訂單開啟當下的製程（null＝新增模式／未初始化，不做製程變更判定）
+            procOk: ''           // 使用者在改製程之後已重新確認標籤時的製程值
         };
+
+        /** 編輯既有訂單時，製程被改掉、且原本有標籤，還沒重新點選確認（2026-10-22） */
+        function astagProcPending() {
+            if (ASTAG.procBase === null || !ASTAG.key) return false;
+            var cur = ($('#process_input').val() || '').trim();
+            return cur !== ASTAG.procBase && cur !== ASTAG.procOk;
+        }
+        $(document).on('input change', '#process_input', function () { astagRender(); });
 
         function astagApiBase() { return '../../src/store/OrderAsTag_API.php'; }
 
@@ -12163,6 +12173,9 @@ foreach($dCounts as $c) {
             if (ASTAG.needPick) {
                 $hint.text('客戶已變更，請重新確認製程標籤').css({ background: '#FFD9A0', color: '#4A2A0A' }).show();
                 $('#as-tag-bar').addClass('need-pick');
+            } else if (astagProcPending()) {
+                $hint.text('製程已變更，請重新確認製程標籤').css({ background: '#FFD9A0', color: '#4A2A0A' }).show();
+                $('#as-tag-bar').addClass('need-pick');
             } else if (window.AS_TAG_REQUIRE && !ASTAG.key) {
                 $hint.text('存檔前必須選一個').css({ background: '#DD5138', color: '#fff' }).show();
                 $('#as-tag-bar').removeClass('need-pick');
@@ -12180,6 +12193,7 @@ foreach($dCounts as $c) {
             if (String(k) === ASTAG.key && !window.AS_TAG_REQUIRE) astagSet('');
             else astagSet(String(k));
             ASTAG.needPick = false;   // 使用者已經重新確認過了
+            ASTAG.procOk = ($('#process_input').val() || '').trim();   // 製程變更後的重新確認
             astagRender();
         });
 
@@ -12205,6 +12219,7 @@ foreach($dCounts as $c) {
         /** 開啟新增/編輯訂單時呼叫：先「認帳」目前的客戶與標籤，之後才判斷有沒有被換掉 */
         function astagOnOrderLoaded(clientId, tagId, scope) {
             ASTAG.needPick = false;
+            ASTAG.procBase = null; ASTAG.procOk = '';
             ASTAG.key = (parseInt(tagId || 0, 10) > 0) ? (parseInt(tagId, 10) + ':' + (scope || '')) : '';
             $('#hidden_as_tag_id').val(parseInt(tagId || 0, 10) > 0 ? parseInt(tagId, 10) : '');
             $('#hidden_as_tag_scope').val(parseInt(tagId || 0, 10) > 0 ? (scope || '') : '');
@@ -12236,6 +12251,11 @@ foreach($dCounts as $c) {
             if (!$('#as-tag-bar').length) return true;
             if (ASTAG.needPick) {
                 showOrderAlert('客戶已變更，請重新確認標題右側的「製程標籤」（確認無誤再點一次即可）。');
+                return false;
+            }
+            if (astagProcPending()) {
+                showOrderAlert('製程已變更，請重新確認標題右側的「製程標籤」（確認無誤再點一次即可）。');
+                $('#as-tag-bar').addClass('need-pick');
                 return false;
             }
             if (window.AS_TAG_REQUIRE && !ASTAG.key) {
@@ -13275,6 +13295,7 @@ foreach($dCounts as $c) {
                 form.find('input[name="Client_OrderNo"]').val(data.Client_OrderNo || '');
                 form.find('input[name="d_id"]').val(data.d_id || '');
                 form.find('input[name="Process"]').val(data.Process || '');
+                ASTAG.procBase = String(data.Process || '').trim();   // 之後製程被改就要求重新確認標籤（2026-10-22）
                 form.find('input[name="Qty"]').val(data.Qty || '');
                 // 單價 debug + 帶入
                 console.log('[editOrder] unit_price raw:', data.unit_price, 'source:', data.unit_price_source, 'type:', typeof data.unit_price);
