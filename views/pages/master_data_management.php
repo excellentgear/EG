@@ -22763,7 +22763,10 @@ function _pavRenderList() {
             ? '<span style="font-size:12px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:4px;padding:1px 7px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>'
             : '';
         // 製程標籤（上傳／編輯附件時選的加工項目；留空＝共用圖就不顯示）
-        var procTagHtml = (f.source !== 'quote' && f.process_tag)
+        // 選到的內容剛好等於某個「常用組合」時，標籤直接顯示組合名稱（完整內容放在提示）
+        var procTagHtml = (f.source !== 'quote' && f.process_combo)
+            ? '<span style="font-size:12px;font-weight:600;background:#FCE9CF;color:#6B4A2B;border:1px solid #E4B27A;border-radius:4px;padding:1px 7px;" title="'+escHtml('製程組合「'+f.process_combo.name+'」：'+f.process_combo.full)+'"><i class="fa fa-cogs" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.process_combo.name)+'</span>'
+            : (f.source !== 'quote' && f.process_tag)
             ? '<span style="font-size:12px;font-weight:600;background:#F3E9DC;color:#6B4A2B;border:1px solid #E4D3BC;border-radius:4px;padding:1px 7px;" title="製程標籤"><i class="fa fa-cogs" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.process_tag)+'</span>'
             : '';
         html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+procTagHtml+mkTag+'</span>';

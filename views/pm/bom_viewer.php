@@ -201,6 +201,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
         $rows = imgedit_filter_attachment_rows($pdo2, $rows, intval($_SESSION['id'] ?? 0));
         $rows = imgedit_strip_workfiles($rows, $pdo2);   // 工作檔與它配對的暫存輸出圖只在批圖編輯器裡看得到，檢視端不列
+        // 製程標籤：選到的內容剛好等於某個常用組合時顯示組合名稱（唯一實作 attach_proc_lib）
+        $_pcMap = [];
+        try {
+            require_once __DIR__ . '/../../src/common/attach_proc_lib.php';
+            $_tmp = array_map(function ($x) { $x['source'] = 'part'; return $x; }, $rows);
+            foreach (eg_apc_attach_sel($pdo2, $_tmp) as $x) if (!empty($x['process_combo'])) $_pcMap[(int)$x['id']] = $x['process_combo'];
+        } catch (Throwable $_e) {}
         // 類別名稱對照（順便取 is_own_drawing：自家出的圖才需要發行章日期，沒填要標紅提醒）
         $cats = [];
         $ownDrawCats = [];
@@ -261,7 +268,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 // 發行章日期是圖面變更的新舊判定依據（ai-rules/15），檢視端也要看得到。
                 'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
                 'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
-                'process_tag'      => (string)($r['process_tag'] ?? ''),   // 製程標籤（與料號主檔附件清單同一欄；空＝共用圖）
+                'process_tag'      => (string)($r['process_tag'] ?? ''),
+                'process_combo'    => $_pcMap[(int)$r['id']] ?? null,   // 製程標籤（與料號主檔附件清單同一欄；空＝共用圖）
                 'is_own_drawing'   => $isOwnDraw ? 1 : 0,
                 // is_album＝此附件屬於「以相簿檢視」的標籤（標籤設定勾的，不寫死標籤名稱）
                 'is_album'         => pa_album_cat_of($r['category_ids'], $albumCatIds) > 0,
@@ -2164,7 +2172,9 @@ function makeAttItem(att, showSource, hideName) {
         ? '<span style="font-size:10px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:3px;padding:0 5px;margin-right:4px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;"></i>'+escapeHtml(att.maker_name || att.maker_no)+'</span>'
         : '';
     // 製程標籤（上傳／編輯附件時選的加工項目；留空＝共用圖就不顯示。與料號主檔的附件清單一致）
-    var procBadge = (att.source !== 'quote' && att.process_tag)
+    var procBadge = (att.source !== 'quote' && att.process_combo)
+        ? '<span style="font-size:10px;font-weight:600;background:#FCE9CF;color:#6B4A2B;border:1px solid #E4B27A;border-radius:3px;padding:0 5px;margin-right:4px;" title="'+escapeHtml('製程組合「'+att.process_combo.name+'」：'+att.process_combo.full)+'"><i class="fa fa-cogs" style="margin-right:2px;"></i>'+escapeHtml(att.process_combo.name)+'</span>'
+        : (att.source !== 'quote' && att.process_tag)
         ? '<span style="font-size:10px;font-weight:600;background:#F3E9DC;color:#6B4A2B;border:1px solid #E4D3BC;border-radius:3px;padding:0 5px;margin-right:4px;" title="製程標籤"><i class="fa fa-cogs" style="margin-right:2px;"></i>'+escapeHtml(att.process_tag)+'</span>'
         : '';
     // 不顯示檔名時，整列至少要有東西可辨識：類別標籤／廠商都沒有才退回「（未分類）」

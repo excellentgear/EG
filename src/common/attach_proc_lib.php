@@ -114,7 +114,12 @@ function eg_apc_attach_sel(PDO $pdo, array $rows): array {
             }
         } catch (Throwable $e) {}
     }
-    foreach ($rows as &$r) { if (($r['source'] ?? '') === 'part') $r['process_sel'] = $map[(int)$r['id']] ?? []; }
+    foreach ($rows as &$r) {
+        if (($r['source'] ?? '') !== 'part') continue;
+        $r['process_sel'] = $map[(int)$r['id']] ?? [];
+        $mc = eg_apc_match_combo($pdo, $r['process_sel']);
+        $r['process_combo'] = $mc ? ['id' => $mc['id'], 'name' => $mc['name'], 'full' => eg_apc_combo_full($pdo, $mc)] : null;
+    }
     unset($r);
     return $rows;
 }
@@ -288,4 +293,42 @@ function eg_apc_combo_del(PDO $pdo, int $id, int $uid): array {
     if ((int)$by !== $uid && $uid !== 1) return [false, '只有建立者或系統管理員可以刪除'];
     $pdo->prepare("DELETE FROM part_attach_proc_combo WHERE combo_id=?")->execute([$id]);
     return [true, '已刪除'];
+}
+
+/** 選擇的內容（[{t,id}]）剛好等於某個組合的全部項目 → 回傳該組合（附件上就顯示組合名稱）；沒有則 null */
+function eg_apc_match_combo(PDO $pdo, array $sel): ?array {
+    static $combos = null;
+    if (count($sel) < 1) return null;
+    if ($combos === null) { try { $combos = eg_apc_combo_list($pdo); } catch (Throwable $e) { $combos = []; } }
+    $key = [];
+    foreach ($sel as $x) $key[$x['t'] . ':' . $x['id']] = 1;
+    foreach ($combos as $c) {
+        if (count($c['items']) !== count($key)) continue;
+        $ok = true;
+        foreach ($c['items'] as $x) if (!isset($key[$x['t'] . ':' . $x['id']])) { $ok = false; break; }
+        if ($ok) return $c;
+    }
+    return null;
+}
+
+/** 組合的完整寫法（提示用）：粗滾＋齒研›齒研或結合齒研或磨齒；多種做法時「（…）或（…）」 */
+function eg_apc_combo_full(PDO $pdo, array $c): string {
+    $parent = []; $typeNames = [];
+    foreach (eg_apc_dict($pdo) as $t) { $typeNames[$t['name']] = 1; foreach ($t['subs'] as $s) $parent[$s['id']] = $t['name']; }
+    $vs = [];
+    foreach ($c['variants'] as $procs) {
+        $ps = [];
+        foreach ($procs as $g) {
+            $parts = []; $subs = [];
+            foreach ($g as $x) { if ($x['t'] === 'type') $parts[] = '◆' . $x['name']; else $subs[] = $x; }
+            if ($subs) {
+                $nm = implode('或', array_map(function ($x) { return $x['name']; }, $subs));
+                $pn = $parent[$subs[0]['id']] ?? '';
+                $parts[] = ($pn !== '' && (count($subs) > 1 || isset($typeNames[$subs[0]['name']]))) ? $pn . '›' . $nm : $nm;
+            }
+            $ps[] = implode('或', $parts);
+        }
+        $vs[] = implode('＋', $ps);
+    }
+    return count($vs) > 1 ? implode('或', array_map(function ($v) { return '（' . $v . '）'; }, $vs)) : implode('', $vs);
 }

@@ -86,6 +86,9 @@
         if (mc) {
             h += '<span class="epp-chip epp-cchip" title="' + esc('組合「' + mc.name + '」：' + comboFull(mc)) + '"><b>▣</b> ' + esc(mc.name)
               + (st.ro ? '' : ' <a href="javascript:void(0)" data-epp-delall="1" title="移除整個組合">×</a>') + '</span>';
+            // 組合名稱下方：顯示組合的內容（每種做法一個大框、製程用＋連接、同一製程的替代項用「或」）
+            if (!(mc.variants || []).length) { /* 組合內容已不存在 */ }
+            else h += '<div class="epp-struct">' + mc.variants.map(function (v) { return '<span class="epp-var">' + procChips(v, true) + '</span>'; }).join('<span class="epp-vor">或</span>') + '</div>';
         } else st.sel.forEach(function (x, i) {
             h += '<span class="epp-chip" title="' + (x.t === 'type' ? '製程大類（整個大類）' : '製程小類') + '">'
               + (x.t === 'type' ? '<b>◆</b> ' : '') + esc(x.name)
@@ -139,6 +142,7 @@
             + '#epp-mbanner{background:#FFF1DC;border:1px solid #E4B27A;border-radius:4px;padding:5px 8px;margin-bottom:6px;font-size:12px;color:#6B4A2B;}'
             + '.epp-mgl{float:right;font-size:11px;font-weight:600;color:#a0522d;cursor:pointer;}'
             + '.epp-cchip{background:#FCE9CF;border-color:#E4B27A;}'
+            + '.epp-struct{flex-basis:100%;order:3;padding:1px 0 2px;}.epp .epp-btn{order:2;}.epp-struct .epp-chip{font-size:10.5px;line-height:16px;padding:0 6px;}'
             + '#epp-box footer{padding:8px 14px;border-top:1px solid #eee;display:flex;gap:6px;justify-content:flex-end;align-items:center;}'
             + '.epp-t{border-bottom:1px solid #f0e6d8;padding:4px 0;}'
             + '.epp-t label{margin:0;font-weight:700;cursor:pointer;color:#4A3524;}'
@@ -291,12 +295,14 @@
         var pn = ''; DICT.forEach(function (t) { if (t.subs.some(function (s) { return s.id === id; })) pn = t.name; }); return pn;
     }
     // 一個製程 ＝ 一個外框，裡面的項目用「或」連接；點項目＝只把這一項加進左側勾選
-    function procChips(procs) {
+    function procChips(procs, nopick) {
         var typeNames = {}; DICT.forEach(function (t) { typeNames[t.name] = 1; });
         return procs.map(function (g) {
             return '<span class="epp-ent' + (g.length > 1 ? ' multi' : '') + '">' + g.map(function (x) {
-                if (x.t === 'type') return '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="大類（整個大類）；點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
+                if (x.t === 'type') return nopick ? '<span class="epp-chip" title="大類（整個大類）">◆ ' + esc(x.name) + '</span>'
+                    : '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="大類（整個大類）；點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
                 var pn = parentName(x.id), label = (typeNames[x.name] && pn) ? pn + '›' + x.name : x.name;
+                if (nopick) return '<span class="epp-chip" title="' + esc(pn ? '屬於大類：' + pn : '') + '">' + esc(label) + '</span>';
                 return '<span class="epp-chip epp-pk" data-epp-citem="no:' + x.id + '" title="' + esc(pn ? '屬於大類：' + pn + '；點一下只加入這一項' : '點一下只加入這一項') + '">' + esc(label) + '</span>';
             }).join('<span class="epp-or-sep">或</span>') + '</span>';
         }).join('<span class="epp-plus">＋</span>');
