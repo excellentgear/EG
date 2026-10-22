@@ -136,10 +136,15 @@ function pcHtml(c){   // 多個單價：選「加總」或單一單價
     o.each.forEach(function(p){ h+='<option value="'+p+'">只採用 '+fmtP(p)+'</option>'; });
     return '<div class="pf-pm">採用單價：<select class="pc-sel" data-id="'+c.order_id+'">'+h+'</select></div>';
 }
-function pmHtml(c){   // 需人工補製程：輸入框＋ERP 候選製程快速帶入
-    if(c.cat==='P' && String(c.order.Processing_items||'').trim()==='' && PM[c.order_id]===undefined && c.proc_fill) PM[c.order_id]=c.proc_fill;
-    if(c.cat!=='PROCM' && !(c.cat==='P' && String(c.order.Processing_items||'').trim()==='')) return '';
-    var chips=(c.proc_options||[]).map(function(o){ return '<span class="pf-chip" data-v="'+esc(o)+'">'+esc(o)+'</span>'; }).join('');
+var PF = {};   // 自動預填的製程（用來判斷「沒勾同時補製程」時不要送出）
+function pmHtml(c){   // 訂單製程空白時：補入製程輸入框（預填 ERP 製程）＋ERP 候選快速帶入；所有可轉的類別都適用
+    var blank = String(c.order.Processing_items||'').trim()==='';
+    if(c.cat==='PROCM'){}
+    else if(!(blank && c.cat!=='DONE' && c.cat!=='D')) return '';
+    if(blank && PM[c.order_id]===undefined && c.proc_fill){ PM[c.order_id]=c.proc_fill; PF[c.order_id]=c.proc_fill; }
+    var opts=(c.proc_options||[]).slice();
+    (c.src||[]).forEach(function(s){ var t=(s.process_text!=null&&s.process_text!=='')?s.process_text:specSplit(s.spec_text).tail; t=String(t||'').trim(); if(t && opts.indexOf(t)<0) opts.push(t); });
+    var chips=opts.map(function(o){ return '<span class="pf-chip" data-v="'+esc(o)+'">'+esc(o)+'</span>'; }).join('');
     return '<div class="pf-pm">補入製程：<input type="text" class="pm-in" data-id="'+c.order_id+'" value="'+esc(PM[c.order_id]||'')+'" placeholder="直接輸入／貼上，或點下方候選" data-eg-skip> '+chips+'</div>';
 }
 function ordHtml(c){
@@ -210,7 +215,7 @@ $('#btnApply').on('click',function(){
     var ids=Object.keys(SEL).map(Number); if(!ids.length) return;
     var label=(CATS.filter(function(c){return c[0]===CAT;})[0]||[])[1]||CAT;
     var pm = {}, pc = {};
-    if (CAT==='P') { ids.forEach(function(id){ var v=(PM[id]||'').trim(); if(v) pm[id]=v; }); }
+    if (CAT!=='PROCM' && CAT!=='DONE') { var fp=$('#fillProc').prop('checked'); ids.forEach(function(id){ var v=(PM[id]||'').trim(); if(!v) return; if(!fp && PF[id]!==undefined && v===PF[id]) return; pm[id]=v; }); }
     if (CAT==='C') { ids.forEach(function(id){ pc[id]=$('.pc-sel[data-id="'+id+'"]').val(); }); }
     if (CAT==='PROCM') { var miss=0; ids.forEach(function(id){ var v=(PM[id]||'').trim(); if(!v) miss++; else pm[id]=v; }); if(miss){ alert('有 '+miss+' 筆還沒填「補入製程」，請填寫或取消勾選。'); return; } }
     var warn = CAT==='B' ? '\n\n※ 建議B 的製程空白或與 ERP 不一致，請確認已抽查。' : '';
