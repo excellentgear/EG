@@ -87,6 +87,7 @@
             + '.epp-combo b{color:#4A3524;font-size:13px;}'
             + '.epp-combo .epp-ci{margin:3px 0 5px;line-height:1.9;}'
             + '.epp-combo .epp-chip{margin-right:3px;}'
+            + '.epp-pk{cursor:pointer;}.epp-pk:hover{background:#F0DFC6;}'
             + '.epp-combo .epp-cb{font-size:11px;padding:0 8px;border:1px solid #E4B27A;background:#FFF3E2;color:#8a5a12;border-radius:3px;cursor:pointer;margin-right:4px;}'
             + '.epp-combo .epp-cd{float:right;color:#a0522d;cursor:pointer;font-size:11px;}'
             + '.epp-saver{border-top:1px solid #eadfce;padding:8px 14px;}'
@@ -198,20 +199,17 @@
         xhr.send(body);
     }
     function comboMsg(t, ok) { var m = MODAL.querySelector('#epp-cmsg'); m.style.color = ok ? '#2e7d32' : '#c0392b'; m.textContent = t; }
-    // 小類依所屬大類併成一個標籤：「齒研：齒研、結合齒研、磨齒」（大類整個綁定則顯示 ◆大類名）
+    // 每個項目各自一個標籤（大類有 ◆）；點標籤＝只把這一項加進左側勾選。
+    // 小類名稱若和某個大類同名（例如大類「齒研」與小類「齒研」），前面補上所屬大類以免混淆。
     function comboChips(items) {
-        var h = '', groups = [], gi = {};
-        items.forEach(function (x) {
-            if (x.t === 'type') { h += '<span class="epp-chip"><b>◆</b> ' + esc(x.name) + '</span>'; return; }
+        var typeNames = {}; DICT.forEach(function (t) { typeNames[t.name] = 1; });
+        return items.map(function (x) {
+            if (x.t === 'type') return '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
             var pn = '';
             DICT.forEach(function (t) { if (t.subs.some(function (s) { return s.id === x.id; })) pn = t.name; });
-            if (!(pn in gi)) { gi[pn] = groups.length; groups.push({ p: pn, n: [] }); }
-            groups[gi[pn]].n.push(x.name);
-        });
-        groups.forEach(function (g) {
-            h += '<span class="epp-chip" title="只綁定這個大類中的這幾個小類">' + (g.p ? esc(g.p) + '：' : '') + g.n.map(esc).join('、') + '</span>';
-        });
-        return h;
+            var label = (typeNames[x.name] && pn) ? pn + '›' + x.name : x.name;
+            return '<span class="epp-chip epp-pk" data-epp-citem="no:' + x.id + '" title="' + esc(pn ? '屬於大類：' + pn + '；點一下只加入這一項' : '點一下只加入這一項') + '">' + esc(label) + '</span>';
+        }).join('');
     }
     // 目前勾選的內容（大類在前、小類在後，與存檔順序一致）
     function curNames() {
@@ -261,6 +259,15 @@
         if (t.getAttribute('data-epp-tg')) { var id = t.getAttribute('data-epp-tg'); MODAL._open[id] = !MODAL._open[id]; drawList(); return; }
         if (t.getAttribute('data-epp-ok')) { commit(); return; }
         var ca = t.getAttribute('data-epp-capply'), cd = t.getAttribute('data-epp-cadd'), cx = t.getAttribute('data-epp-cdel');
+        var ci = t.getAttribute('data-epp-citem');
+        if (ci) {
+            var pr = ci.split(':'), id1 = parseInt(pr[1], 10), W1 = MODAL._work;
+            if (pr[0] === 'type') {
+                W1.type[id1] = 1;
+                DICT.forEach(function (d) { if (d.id === id1) d.subs.forEach(function (s) { delete W1.no[s.id]; }); });
+            } else if (!DICT.some(function (d) { return W1.type[d.id] && d.subs.some(function (s) { return s.id === id1; }); })) { W1.no[id1] = 1; }
+            drawList(); return;
+        }
         if (ca) { comboApply(parseInt(ca, 10), false); return; }
         if (cd) { comboApply(parseInt(cd, 10), true); return; }
         if (cx) {
