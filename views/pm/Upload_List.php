@@ -844,6 +844,13 @@ document.addEventListener('DOMContentLoaded', function () {
         var res = { rows: ROWS, counts: CNT };
         var fs = $('#oeiStatus').val(), fn = $.trim($('#oeiNote').val()).toLowerCase();
         var all = res.rows;
+        // 狀態篩選只列「目前分頁裡有資料」的狀態（沒資料的不顯示）
+        var cntSt = {}; all.forEach(function (r) { cntSt[r.match_status] = (cntSt[r.match_status] || 0) + 1; });
+        var ORDER = ['new_order', 'add_to_order', 'diff', 'new_part', 'no_part'], oh = '<option value="">全部狀態</option>';
+        ORDER.forEach(function (k) { if (cntSt[k]) oh += '<option value="' + k + '">' + LB[k][0] + '（' + (cntSt[k] || 0) + '）</option>'; });
+        if (fs && !cntSt[fs]) fs = '';   // 選到的狀態已沒資料就回到全部
+        if ($('#oeiStatus').data('sig') !== oh) $('#oeiStatus').html(oh).data('sig', oh);
+        $('#oeiStatus').val(fs);
         res.rows = all.filter(function (r) {
             if (fs && r.match_status !== fs) return false;
             if (fn && String(r.match_note || '').toLowerCase().indexOf(fn) < 0) return false;
