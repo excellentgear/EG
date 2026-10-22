@@ -51,9 +51,42 @@
         return '';
     }
 
+    // 組合的完整寫法（欄位標籤的提示用）：粗滾＋齒研›齒研或結合齒研或磨齒；多種做法時 (…)或(…)
+    function comboFull(c) {
+        var typeNames = {}; DICT && DICT.forEach(function (t) { typeNames[t.name] = 1; });
+        var vs = c.variants.map(function (procs) {
+            return procs.map(function (g) {
+                var subs = g.filter(function (x) { return x.t === 'no'; }), ty = g.filter(function (x) { return x.t === 'type'; });
+                var parts = ty.map(function (x) { return '◆' + x.name; });
+                if (subs.length) {
+                    var pn = parentName(subs[0].id);
+                    var nm = subs.map(function (x) { return x.name; }).join('或');
+                    parts.push((pn && (subs.length > 1 || typeNames[subs[0].name])) ? pn + '›' + nm : nm);
+                }
+                return parts.join('或');
+            }).join('＋');
+        });
+        return vs.length > 1 ? vs.map(function (v) { return '（' + v + '）'; }).join('或') : vs.join('');
+    }
+    // 目前選擇的內容剛好是某個組合的全部項目 → 回傳那個組合（欄位上就顯示組合名稱）
+    function matchCombo(sel) {
+        if (!sel.length || !COMBOS.length) return null;
+        var key = {}; sel.forEach(function (x) { key[x.t + ':' + x.id] = 1; });
+        var best = null;
+        COMBOS.forEach(function (c) {
+            if (c.items.length !== sel.length) return;
+            if (c.items.every(function (x) { return key[x.t + ':' + x.id]; })) { if (!best) best = c; }
+        });
+        return best;
+    }
+
     function renderBox(el) {
         var st = el._epp, h = '';
-        st.sel.forEach(function (x, i) {
+        var mc = (!st.legacy && DICT) ? matchCombo(st.sel) : null;
+        if (mc) {
+            h += '<span class="epp-chip epp-cchip" title="' + esc('組合「' + mc.name + '」：' + comboFull(mc)) + '"><b>▣</b> ' + esc(mc.name)
+              + (st.ro ? '' : ' <a href="javascript:void(0)" data-epp-delall="1" title="移除整個組合">×</a>') + '</span>';
+        } else st.sel.forEach(function (x, i) {
             h += '<span class="epp-chip" title="' + (x.t === 'type' ? '製程大類（整個大類）' : '製程小類') + '">'
               + (x.t === 'type' ? '<b>◆</b> ' : '') + esc(x.name)
               + (st.ro ? '' : ' <a href="javascript:void(0)" data-epp-del="' + i + '" title="移除">×</a>') + '</span>';
@@ -102,6 +135,10 @@
             + '.epp-pk{cursor:pointer;}.epp-pk:hover{background:#F0DFC6;}'
             + '.epp-combo .epp-cb{font-size:11px;padding:0 8px;border:1px solid #E4B27A;background:#FFF3E2;color:#8a5a12;border-radius:3px;cursor:pointer;margin-right:4px;}'
             + '.epp-saver{border-top:1px solid #eadfce;padding:8px 14px;}'
+            + '.epp-mgonly{display:none;}#epp-mask.epp-mg .epp-mgonly{display:block;}#epp-mask.epp-mg button.epp-mgonly{display:inline-block;}#epp-mask.epp-mg .epp-pickonly{display:none;}'
+            + '#epp-mbanner{background:#FFF1DC;border:1px solid #E4B27A;border-radius:4px;padding:5px 8px;margin-bottom:6px;font-size:12px;color:#6B4A2B;}'
+            + '.epp-mgl{float:right;font-size:11px;font-weight:600;color:#a0522d;cursor:pointer;}'
+            + '.epp-cchip{background:#FCE9CF;border-color:#E4B27A;}'
             + '#epp-box footer{padding:8px 14px;border-top:1px solid #eee;display:flex;gap:6px;justify-content:flex-end;align-items:center;}'
             + '.epp-t{border-bottom:1px solid #f0e6d8;padding:4px 0;}'
             + '.epp-t label{margin:0;font-weight:700;cursor:pointer;color:#4A3524;}'
@@ -120,16 +157,17 @@
             if (!MODAL) {
                 MODAL = document.createElement('div'); MODAL.id = 'epp-mask';
                 MODAL.innerHTML = '<div id="epp-box"><header><span>選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）</span><a href="javascript:void(0)" data-epp-x="1" style="color:#fff;">✕</a></header>'
-                    + '<div class="epp-main"><div class="epp-body"><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" autocomplete="off" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
-                    + '<div class="epp-side"><h5>常用組合（大類＋小類可混合）</h5><div class="epp-clist" id="epp-clist"></div>'
-                    + '<div class="epp-saver"><div id="epp-tgt" class="epp-tgt" style="display:none;"></div><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（單一大類或小類也可以；名稱預設自動帶入，可自行修改）</div>'
+                    + '<div class="epp-main"><div class="epp-body"><div id="epp-mbanner" class="epp-mgonly">組合設定模式：在左側勾選製程（大類／小類可混合），再到右下角存成組合。這裡的勾選不會帶入附件欄位。</div><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" autocomplete="off" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
+                    + '<div class="epp-side"><h5><span id="epp-ctitle">常用組合</span><a class="epp-mgl epp-pickonly" data-epp-mgmt="1" title="新增、編輯、刪除常用組合">管理組合</a></h5><div class="epp-clist" id="epp-clist"></div>'
+                    + '<div class="epp-saver epp-mgonly"><div id="epp-tgt" class="epp-tgt" style="display:none;"></div><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（單一大類或小類也可以；名稱預設自動帶入，可自行修改）</div>'
                     + '<div style="display:flex;gap:4px;"><input type="text" id="epp-cname" class="form-control input-sm" maxlength="60" placeholder="組合名稱（自動帶入：製程1+製程2…）" autocomplete="off">'
                     + '<button type="button" class="btn btn-warning btn-sm" data-epp-csave="1" style="white-space:nowrap;">存成組合</button></div>'
                     + '<div id="epp-cmsg" style="font-size:11px;margin-top:3px;min-height:15px;"></div></div></div></div>'
                     + '<footer><span id="epp-cnt" style="margin-right:auto;font-size:12px;color:#888;"></span>'
                     + '<button type="button" class="btn btn-default btn-sm" data-epp-clear="1">全部清除</button>'
                     + '<button type="button" class="btn btn-default btn-sm" data-epp-x="1">取消</button>'
-                    + '<button type="button" class="btn btn-warning btn-sm" data-epp-ok="1">確定</button></footer></div>';
+                    + '<button type="button" class="btn btn-default btn-sm epp-mgonly" data-epp-mgmt-off="1">返回選擇</button>'
+                    + '<button type="button" class="btn btn-warning btn-sm epp-pickonly" data-epp-ok="1">確定</button></footer></div>';
                 document.body.appendChild(MODAL);
                 MODAL.addEventListener('click', modalClick);
                 var kwEl = MODAL.querySelector('#epp-kw');
@@ -158,10 +196,13 @@
             MODAL._open = {};
             MODAL._nameTouched = false;
             MODAL._split = {}; MODAL._tgt = null; MODAL._pick = null;
+            MODAL._mgmt = false; MODAL._bak = null; MODAL.classList.remove('epp-mg');
+            MODAL.querySelector('#epp-ctitle').textContent = '常用組合';
+            MODAL.querySelector('header span').textContent = '選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）';
             updateTgtUi();
             drawList();
             drawCombos();
-            loadCombos(el._epp.url, function () { drawCombos(); });
+            loadCombos(el._epp.url, function () { drawCombos(); }, true);
             MODAL.style.display = 'block';
             MODAL.querySelector('#epp-kw').focus();
         });
@@ -195,11 +236,13 @@
         syncName();
     }
 
-    function loadCombos(url, cb) {
+    var COMBOS_LOADED = false;
+    function loadCombos(url, cb, force) {
+        if (COMBOS_LOADED && !force) { if (cb) cb(); return; }
         var xhr = new XMLHttpRequest();
         xhr.open('GET', url + (url.indexOf('?') >= 0 ? '&' : '?') + 'action=process_combo_list');
         xhr.onload = function () {
-            try { var r = JSON.parse(xhr.responseText); if (r && r.success) { COMBOS = r.combos || []; MY_UID = r.uid || 0; } } catch (e) {}
+            try { var r = JSON.parse(xhr.responseText); if (r && r.success) { COMBOS = r.combos || []; MY_UID = r.uid || 0; COMBOS_LOADED = true; } } catch (e) {}
             if (cb) cb();
         };
         xhr.send();
@@ -211,7 +254,7 @@
         xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
         xhr.onload = function () {
             var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
-            if (r && r.combos) { COMBOS = r.combos; MY_UID = r.uid || MY_UID; }
+            if (r && r.combos) { COMBOS = r.combos; MY_UID = r.uid || MY_UID; COMBOS_LOADED = true; }
             cb(r || { success: false, message: '伺服器回應異常' });
         };
         xhr.onerror = function () { cb({ success: false, message: '連線失敗' }); };
@@ -267,10 +310,10 @@
             var pk = MODAL._pick && MODAL._pick.id === c.id;
             h += '<div class="epp-combo' + (MODAL._tgt && MODAL._tgt.id === c.id ? ' epp-editing' : '') + '">'
               + '<div class="epp-chead">'
-              + '<button type="button" class="epp-cb" data-epp-capply="' + c.id + '" title="用這個組合取代目前勾選">套用</button>'
-              + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button>'
+              + (MODAL._mgmt ? '' : '<button type="button" class="epp-cb" data-epp-capply="' + c.id + '" title="用這個組合取代目前勾選">套用</button>'
+                  + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button>')
               + '<b title="' + esc(c.name) + '">' + esc(c.name) + '</b>'
-              + (mine ? '<span class="epp-cl"><a data-epp-cedit="' + c.id + '" title="修改這個組合的內容">編輯</a><a data-epp-calt="' + c.id + '" title="新增一種「或」的做法（先帶入現有內容，改成另一種再存）">相同製程</a><a data-epp-cdel="' + c.id + '" title="刪除整個組合">刪除</a></span>' : '')
+              + (mine && MODAL._mgmt ? '<span class="epp-cl"><a data-epp-cedit="' + c.id + '" title="修改這個組合的內容">編輯</a><a data-epp-calt="' + c.id + '" title="新增一種「或」的做法（先帶入現有內容，改成另一種再存）">相同製程</a><a data-epp-cdel="' + c.id + '" title="刪除整個組合">刪除</a></span>' : '')
               + '</div>'
               + '<div class="epp-ci">' + (c.variants.length
                   ? c.variants.map(function (v) { return '<span class="epp-var">' + procChips(v) + '</span>'; }).join('<span class="epp-vor">或</span>')
@@ -380,6 +423,22 @@
         postVariants(c, vs, '');
     }
 
+    // 選擇模式 ⇄ 組合設定模式：進設定時先把「選擇」的勾選收起來，回來時還原，兩邊不互相干擾
+    function setMode(mg) {
+        mg = !!mg;
+        if (!!MODAL._mgmt === mg) return;
+        if (mg) { MODAL._bak = { work: MODAL._work, split: MODAL._split }; MODAL._work = { type: {}, no: {} }; MODAL._split = {}; }
+        else {
+            MODAL._tgt = null; MODAL._pick = null; MODAL._nameTouched = false;
+            if (MODAL._bak) { MODAL._work = MODAL._bak.work; MODAL._split = MODAL._bak.split; MODAL._bak = null; }
+        }
+        MODAL._mgmt = mg;
+        MODAL.classList.toggle('epp-mg', mg);
+        MODAL.querySelector('#epp-ctitle').textContent = mg ? '管理常用組合（新增／編輯／刪除）' : '常用組合';
+        MODAL.querySelector('header span').textContent = mg ? '常用組合設定' : '選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）';
+        updateTgtUi(); comboMsg('', true); drawList(); drawCombos();
+    }
+
     function modalClick(e) {
         var t = e.target;
         if (t.getAttribute('data-epp-x')) { close(); return; }
@@ -387,6 +446,8 @@
         if (t.getAttribute('data-epp-clear')) { MODAL._work = { type: {}, no: {} }; MODAL._split = {}; drawList(); return; }
         if (t.getAttribute('data-epp-tg')) { var id = t.getAttribute('data-epp-tg'); MODAL._open[id] = !MODAL._open[id]; drawList(); return; }
         if (t.getAttribute('data-epp-ok')) { commit(); return; }
+        if (t.getAttribute('data-epp-mgmt')) { setMode(true); return; }
+        if (t.getAttribute('data-epp-mgmt-off')) { setMode(false); return; }
         var orT = t.getAttribute('data-epp-or');
         if (orT) { if (t.checked) delete MODAL._split[orT]; else MODAL._split[orT] = true; drawList(); return; }
         var ca = t.getAttribute('data-epp-capply'), cd = t.getAttribute('data-epp-cadd'), cx = t.getAttribute('data-epp-cdel');
@@ -455,6 +516,10 @@
             if (!el._eppBound) {
                 el._eppBound = true;
                 el.addEventListener('click', function (e) {
+                    if (e.target.getAttribute && e.target.getAttribute('data-epp-delall')) {
+                        el._epp.sel = []; el._epp.touched = true; renderBox(el);
+                        if (el._epp.onChange) el._epp.onChange(el._epp.sel); return;
+                    }
                     var d = e.target.getAttribute && e.target.getAttribute('data-epp-del');
                     if (d !== null && d !== undefined && d !== '') {
                         el._epp.sel.splice(parseInt(d, 10), 1); el._epp.touched = true; renderBox(el);
@@ -468,6 +533,7 @@
             loadDict(el._epp.url, function () {   // 字典載回來後補上缺的名稱
                 el._epp.sel.forEach(function (x) { if (!x.name) x.name = nameOf(x.t, x.id); });
                 renderBox(el);
+                loadCombos(el._epp.url, function () { renderBox(el); });   // 組合載回來後，剛好等於某組合的就改顯示組合名稱
             });
         },
         get: function (el) { return el && el._epp ? el._epp.sel.map(function (x) { return { t: x.t, id: x.id }; }) : []; },
