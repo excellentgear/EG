@@ -3540,7 +3540,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $has_quote_map   = [];   // d_id string => true（報價單附件／報價明細）
     $has_att_map     = [];   // d_id string => true（料號其他附件）
     $has_order_map   = [];   // d_id string => true（訂單附件）
-    // 加工圖面（2026-10-22）：d_id string => true＝料號已有「自家圖」標籤的附件（管理員在料號主檔
+    // 加工圖面（2026-10-22）：d_id_ID(int) => true＝料號主檔已有「自家圖」標籤的附件（管理員在料號主檔
     // 「類別字典設定→附件類別標籤設定」勾選自家圖的標籤）。只供「無加工圖」小徽章使用，獨立於上面
     // 既有的圖面／報價／附件判斷，查詢失敗時維持空陣列＝不顯示徽章，不影響任何既有功能。
     $own_draw_map    = [];
@@ -3817,26 +3817,27 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             } catch(Exception $e) {}
         }
 
-        // 加工圖面偵測（2026-10-22）：整頁一次查完。判定＝同料號（含同料號文字的其他客戶主檔，
-        // 與圖面變更判定 dwg_sibling_d_ids 同口徑）名下，有未刪除且掛「自家圖」標籤的附件。
+        // 加工圖面偵測（2026-10-22）：整頁一次查完。判定＝該筆料號主檔（d_id）名下，有未刪除且掛「自家圖」標籤的附件。
         // 批圖編輯器「有建立工作檔」的暫存圖不算（與圖面查閱清單同規則 imgedit_strip_workfiles）。
-        if (!empty($all_d_ids)) {
+        // 一律以「料號主檔 ID（d_setting.d_id＝訂單的 d_id_ID）」判定，不用料號文字、也不併同名主檔，
+        // 避免不同客戶／不同資料的同名料號互相混淆；訂單沒綁主檔者（d_id_ID 空）不判定、不顯示徽章。
+        $__ownPks = array_values(array_unique(array_filter(array_map('intval', array_column($order_list, 'd_id_ID')))));
+        if (!empty($__ownPks)) {
             try {
                 $__ownCats = $pdo->query("SELECT id FROM quotation_file_categories WHERE is_own_drawing=1 AND is_active=1")->fetchAll(PDO::FETCH_COLUMN);
                 if ($__ownCats) {
-                    $__phO  = implode(',', array_fill(0, count($all_d_ids), '?'));
+                    $__phO  = implode(',', array_fill(0, count($__ownPks), '?'));
                     $__orC  = implode(' OR ', array_fill(0, count($__ownCats), 'FIND_IN_SET(?, pa.category_ids)'));
-                    $__stO  = $pdo->prepare("SELECT pa.id, pa.d_id, pa.filename, s.D_Setting_Id AS pn
+                    $__stO  = $pdo->prepare("SELECT pa.id, pa.d_id, pa.filename
                                                FROM part_attachments pa
-                                               JOIN d_setting s ON s.d_id = pa.d_id
-                                              WHERE s.D_Setting_Id IN ($__phO) AND pa.deleted_at IS NULL
+                                              WHERE pa.d_id IN ($__phO) AND pa.deleted_at IS NULL
                                                 AND ($__orC)");
-                    $__stO->execute(array_merge(array_values($all_d_ids), array_map('intval', $__ownCats)));
+                    $__stO->execute(array_merge($__ownPks, array_map('intval', $__ownCats)));
                     $__rowsO = $__stO->fetchAll(PDO::FETCH_ASSOC);
                     if ($__rowsO) {
                         require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
                         $__rowsO = imgedit_strip_workfiles($__rowsO, $pdo);
-                        foreach ($__rowsO as $__rO) { $own_draw_map[(string)$__rO['pn']] = true; }
+                        foreach ($__rowsO as $__rO) { $own_draw_map[(int)$__rO['d_id']] = true; }
                     }
                     $own_draw_ready = true;   // 查詢成功才敢說「沒有」；失敗或沒設定自家圖標籤時一律不顯示徽章
                 }
@@ -4255,7 +4256,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                  附件類別標籤設定勾選自家圖的標籤＝加工圖面）。只在還沒轉生管時顯示（批圖階段才需要
                                  補圖），已有 NEW 徽章時不重複標（新案件本來就還沒有圖）；已有加工圖＝正常狀態不顯示。
                                  查詢失敗／沒設定自家圖標籤（$own_draw_ready=false）時一律不顯示，避免誤判。 */ ?>
-                        <?php if ($own_draw_ready && !$_is_new_case && empty($order['pmGet_formatted']) && !empty($order['d_id']) && empty($own_draw_map[$order['d_id']])): ?>
+                        <?php if ($own_draw_ready && !$_is_new_case && empty($order['pmGet_formatted']) && !empty($order['d_id_ID']) && empty($own_draw_map[(int)$order['d_id_ID']])): ?>
                         <span style="background:#FFF3E2;color:#C77C1A;border:1px solid #F0A24B;border-radius:3px;padding:0 4px;font-size:9px;line-height:14px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
                               title="這個料號還沒有加工圖面（附件裡找不到掛「自家圖」標籤的檔案）。管理員可在料號主檔→類別字典設定→附件類別標籤設定，決定哪些標籤算加工圖面">無加工圖</span>
                         <?php endif; ?>
