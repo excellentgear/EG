@@ -62,7 +62,7 @@ case 'apply': {
     if (!is_array($ids) || !$ids) pfcOut(['ok' => false, 'error' => '請先勾選']);
     if (count($ids) > 5000) pfcOut(['ok' => false, 'error' => '一次最多 5000 筆']);
     set_time_limit(600);
-    $r = opf_apply($db, $ids, $cat, $uid, !empty($_POST['fill_proc']));
+    $r = opf_apply($db, $ids, $cat, $uid, !empty($_POST['fill_proc']), (array)json_decode($_POST['proc_map'] ?? '{}', true));
     pfcOut(['ok' => true] + $r);
 }
 default: pfcOut(['ok' => false, 'error' => '未知的動作']);

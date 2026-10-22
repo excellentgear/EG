@@ -18,7 +18,7 @@
  */
 
 const OPF_MARK = '【自動補單價】';
-const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC'];
+const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC', 'PROCM'];
 
 function opf_ensure_schema(PDO $db): void {
     static $done = false;
@@ -170,6 +170,7 @@ function opf_candidates(PDO $db): array {
             if (count($procs) !== 1) {      // 沒有、或有多種不同製程 → 不自動補，列出供人工判斷
                 $seen[$r['oid']] = true;
                 $res[] = ['order_id' => (int)$r['oid'], 'cat' => 'PROCM', 'price' => null, 'stage_ids' => [], 'src' => $src, 'order' => $ord,
+                          'proc_options' => array_values(array_unique(array_filter(array_map(fn($e) => trim(opf_erp_proc($e)), $src), fn($x) => $x !== ''))),
                           'note' => $procs ? '同單號＋料號＋數量的 ERP 明細有多種製程（' . implode(' / ', $procs) . '），請人工判斷後到訂單追蹤手動補製程'
                                            : 'ERP 品名規格最後一段看起來不像製程，請人工判斷後到訂單追蹤手動補製程'];
                 continue;
@@ -211,7 +212,7 @@ function opf_candidates(PDO $db): array {
 /**
  * 套用：只接受 $orderIds 與 $cat，價格／暫存列一律重新判定。回傳 ['filled'=>n,'staged'=>n,'skipped'=>n,'msgs'=>[]]
  */
-function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillProc = false): array {
+function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillProc = false, array $procMap = []): array {
     if (!in_array($cat, OPF_APPLY_CATS, true)) return ['filled' => 0, 'staged' => 0, 'skipped' => count($orderIds), 'msgs' => ['此類別不可批次轉價格']];
     $want = array_flip(array_map('intval', $orderIds));
     $cands = array_filter(opf_candidates($db), fn($c) => $c['cat'] === $cat && isset($want[$c['order_id']]));
@@ -224,11 +225,12 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
         $stg = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', existing_order_id=?, match_note='訂單內已有相同明細（僅補單價），不需轉入' WHERE id=? AND state='pending'");
         $like = '%' . OPF_MARK . '%';
         foreach ($cands as $c) {
-            if ($cat === 'PROC') {
-                if (empty($c['proc_fill'])) continue;
-                $upp->execute([$c['proc_fill'], $c['order_id']]);
+            if ($cat === 'PROC' || $cat === 'PROCM') {
+                $pv = $cat === 'PROCM' ? trim((string)($procMap[$c['order_id']] ?? '')) : (string)($c['proc_fill'] ?? '');
+                if ($pv === '' || mb_strlen($pv) > 100) { $msgs[] = '訂單 ' . $c['order_id'] . ' 未指定製程，略過'; continue; }
+                $upp->execute([$pv, $c['order_id']]);
                 if ($upp->rowCount()) {
-                    $lg->execute([$c['order_id'], $c['order']['Order_oo'], 'PROC', null, (float)$c['order']['unit_price'], null, '', $c['proc_fill']]);
+                    $lg->execute([$c['order_id'], $c['order']['Order_oo'], $cat, null, (float)$c['order']['unit_price'], null, '', $pv]);
                     $procFilled++;
                 }
                 continue;
