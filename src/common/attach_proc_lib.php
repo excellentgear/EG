@@ -199,11 +199,33 @@ function eg_apc_combo_procs(PDO $pdo, $raw): array {
     return $out;
 }
 
-/** 組合自動名稱：製程之間「+」、同一製程內的替代項目「/」，例「精滾/滾齒+壓檔片」（上限 60 字） */
-function eg_apc_combo_autoname(array $procs): string {
+/**
+ * 一個組合可有多種做法（variants，彼此是「或」）：每一種是一串「製程」，例
+ *   第1種 [精滾]+[壓檔片]　或　第2種 [滾齒]+[壓檔片]
+ * 存 {"variants":[ procs, procs, … ]}（procs 格式見上）；舊格式 {"procs":…}／flat 讀進來＝只有 1 種。
+ */
+function eg_apc_combo_variants(PDO $pdo, $raw): array {
+    if (is_string($raw)) $raw = json_decode($raw, true);
+    $vs = [];
+    if (is_array($raw) && isset($raw['variants']) && is_array($raw['variants'])) {
+        foreach ($raw['variants'] as $v) { $p = eg_apc_combo_procs($pdo, $v); if ($p) $vs[] = $p; }
+    } else {
+        $p = eg_apc_combo_procs($pdo, $raw);
+        if ($p) $vs[] = $p;
+    }
+    return $vs;
+}
+
+/** 一種做法的名稱：製程之間「+」、同一製程內的替代項目「/」 */
+function eg_apc_procs_name(array $procs): string {
     $parts = [];
     foreach ($procs as $g) $parts[] = implode('/', array_map(function ($x) { return $x['name']; }, $g));
-    $n = implode('+', $parts);
+    return implode('+', $parts);
+}
+
+/** 組合自動名稱：各種做法之間「 或 」，例「精滾+壓檔片 或 滾齒+壓檔片」（上限 60 字） */
+function eg_apc_combo_autoname(array $variants): string {
+    $n = implode(' 或 ', array_map('eg_apc_procs_name', $variants));
     return mb_strlen($n) > 60 ? mb_substr($n, 0, 59) . '…' : $n;
 }
 
@@ -212,10 +234,10 @@ function eg_apc_combo_list(PDO $pdo): array {
     $out = [];
     try {
         foreach ($pdo->query("SELECT combo_id, combo_name, items_json, created_by FROM part_attach_proc_combo ORDER BY combo_name")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $procs = eg_apc_combo_procs($pdo, $r['items_json']);
+            $vs = eg_apc_combo_variants($pdo, $r['items_json']);
             $flat = [];
-            foreach ($procs as $g) foreach ($g as $x) $flat[$x['t'] . ':' . $x['id']] = $x;
-            $out[] = ['id' => (int)$r['combo_id'], 'name' => $r['combo_name'], 'procs' => $procs,
+            foreach ($vs as $procs) foreach ($procs as $g) foreach ($g as $x) $flat[$x['t'] . ':' . $x['id']] = $x;
+            $out[] = ['id' => (int)$r['combo_id'], 'name' => $r['combo_name'], 'variants' => $vs,
                       'items' => array_values($flat), 'created_by' => (int)$r['created_by']];
         }
     } catch (Throwable $e) {}
@@ -223,16 +245,18 @@ function eg_apc_combo_list(PDO $pdo): array {
 }
 
 /** 新增或更新（$id>0＝更新，限建立者／管理員）。名稱留空＝自動名稱。回 [ok, message] */
-function eg_apc_combo_save(PDO $pdo, string $name, $procsRaw, int $uid, int $id = 0): array {
+function eg_apc_combo_save(PDO $pdo, string $name, $raw, int $uid, int $id = 0): array {
     eg_apc_combo_ensure($pdo);
-    $procs = eg_apc_combo_procs($pdo, $procsRaw);
-    if (!$procs) return [false, '請先勾選要存成組合的大類或小類'];
+    $vs = eg_apc_combo_variants($pdo, $raw);
+    if (!$vs) return [false, '請先勾選要存成組合的大類或小類'];
     $name = trim(preg_replace('/\s+/u', ' ', $name));
-    if ($name === '') $name = eg_apc_combo_autoname($procs);
+    if ($name === '') $name = eg_apc_combo_autoname($vs);
     if (mb_strlen($name) > 60) return [false, '組合名稱不可超過 60 字'];
-    $json = json_encode(['procs' => array_map(function ($g) {
-        return array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $g);
-    }, $procs)]);
+    $json = json_encode(['variants' => array_map(function ($procs) {
+        return array_map(function ($g) {
+            return array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $g);
+        }, $procs);
+    }, $vs)]);
     $st = $pdo->prepare("SELECT combo_id, created_by FROM part_attach_proc_combo WHERE combo_name=?");
     $st->execute([$name]);
     $same = $st->fetch(PDO::FETCH_ASSOC);
