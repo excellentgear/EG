@@ -602,7 +602,9 @@ function ndoc_pending_lists(PDO $db, int $uid, bool $isAdmin): array
     $toMe->execute([$uid, $isAdmin ? 1 : 0]);
     $mine = $db->prepare("SELECT id,kind,title,state,submitted_at,reject_reason,updated_at FROM live_event_draft WHERE user_id=? AND state IN ('pending','rejected') ORDER BY updated_at DESC");
     $mine->execute([$uid]);
-    return ['to_me' => $toMe->fetchAll(PDO::FETCH_ASSOC), 'mine' => $mine->fetchAll(PDO::FETCH_ASSOC)];
+    $dr = $db->prepare("SELECT id,kind,title,state,updated_at FROM live_event_draft WHERE user_id=? AND state='draft' ORDER BY updated_at DESC LIMIT 50");
+    $dr->execute([$uid]);
+    return ['to_me' => $toMe->fetchAll(PDO::FETCH_ASSOC), 'mine' => $mine->fetchAll(PDO::FETCH_ASSOC), 'drafts' => $dr->fetchAll(PDO::FETCH_ASSOC)];
 }
 
 /** 草稿／送審單的預覽列印資料（格式與 nc_print_data 相同，讓前端共用同一支 buildBody；不配號、不寫列印紀錄） */

@@ -19,9 +19,14 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     .nd-btn { border: 1px solid #d8c7b0; background: #faf6f0; color: #6B471A; border-radius: 4px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
     .nd-btn:hover { background: #f2e6d4; }
     #contentEditor .egrt-doc-scroll { background: #e9e4dc; }
+    #nd-dirty { position: fixed; right: 18px; bottom: 16px; z-index: 2000; background: #F8DCD5; color: #8a3a2a; border: 1px solid #e9b8ac; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; }
+    #nd-toast { position: fixed; right: 18px; bottom: 16px; z-index: 2001; background: #F7E0BD; color: #6B471A; border-radius: 6px; padding: 6px 14px; font-size: 13px; display: none; }
     /* 公告編輯區只有半個版面寬，兩張 A4 並排放不下、會一直重排當機 → 不提供一頁／雙頁切換（固定單頁） */
     #contentEditor [data-view] { display: none !important; }
 </style>
+
+<div id="nd-dirty"><i class="fa fa-exclamation-circle"></i> 未儲存</div>
+<div id="nd-toast"></div>
 
 <!-- 核准設定（超級管理員） -->
 <div class="modal fade" id="ndApprModal" tabindex="-1" role="dialog" aria-hidden="true">
@@ -94,7 +99,6 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
         kinds: <?= json_encode($__ndKinds, JSON_UNESCAPED_UNICODE) ?>,
         html: <?= json_encode($ND_HTML, JSON_UNESCAPED_UNICODE) ?>,
         isEdit: <?= $is_edit ? 'true' : 'false' ?>,
-        drafts: <?= json_encode(array_values(array_filter($ND_MY_DRAFTS, function ($d) { return ($d['state'] ?? 'draft') === 'draft'; })), JSON_UNESCAPED_UNICODE) ?>,
         approveId: <?= (int)($_GET['notice_approve'] ?? 0) ?>
     };
     var ed = null;
@@ -235,37 +239,53 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     $(kindUi);
 
     /* ---------- 草稿 ---------- */
-    $(document).on('click', '#btnSaveDraft', function () {
+    /* 未儲存提示（右下角淺紅）：表單有任何更動就亮，存成草稿（或預覽時自動存）後消失；
+       正式送出／取消／清除時不再提示離開。初始化期間編輯器會 sync 好幾次，所以延遲開始追蹤。 */
+    var dirty = false, track = false;
+    function setDirty(v) { dirty = v; $('#nd-dirty').toggle(!!v); }
+    function mark() { if (track && !dirty) setDirty(true); }
+    $(function () { setTimeout(function () { track = true; }, 1500); });
+    $(document).on('input change', '.eg-card-form form :input:not([type=file])', mark);
+    $(document).on('dragend click', '#eg-zones', function () { setTimeout(mark, 0); });
+    $(document).on('click', '#eg-zones .eg-tmchip', function () { mark(); });
+    $(document).on('submit', '.eg-card-form form', function () { setDirty(false); track = false; });
+    $(document).on('click', 'button[name="resetEvent"]', function () { setDirty(false); track = false; });
+    window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+    function toast(m) { $('#nd-toast').text(m).stop(true, true).fadeIn(120).delay(1800).fadeOut(300); }
+
+    function draftPayload() {
         sync();
-        var title = ($('#title').val() || '').trim();
-        if (!title && !$('#content_html').val()) { alert('標題與內容都是空的，沒有東西可存'); return; }
         try { window.egSyncTargetModes(); } catch (e) {}
-        var d = {
-            action: 'draft_save', draft_id: $('#draft_id').val() || 0, kind: $('#kind').val(),
+        return {
+            action: 'draft_save',
+            draft_id: $('#draft_id').val() || 0, kind: $('#kind').val(),
             eventdate: $('#eventdate').val(), enddate: $('#enddate').val(), reply_deadline: $('#reply_deadline').val(),
-            post_until: $('#post_until').val(), title: title, content_html: $('#content_html').val(),
+            post_until: $('#post_until').val(), title: ($('#title').val() || '').trim(), content_html: $('#content_html').val(),
             show_status_to_others: $('input[name="show_status_to_others"]').is(':checked') ? 1 : 0,
             targets: $('#targets').val() || [], target_modes: $('#target_modes').val() || '{}',
             co_editors: (function () { try { return window.egCoEditorsJson(); } catch (e) { return ''; } })()
         };
-        post(d, function (r) { location.href = 'createEvent.php?draft=' + r.id + '&saved=1'; });
-    });
+    }
+    /* AJAX 存草稿：不重新載入頁面。存好後記下草稿編號（之後再存是更新同一份）、網址換成 ?draft=、重畫面板 */
+    function saveDraft(done) {
+        var d = draftPayload();
+        if (!d.title && !d.content_html) { alert('標題與內容都是空的，沒有東西可存'); return; }
+        $('#btnSaveDraft').prop('disabled', true);
+        post(d, function (r) {
+            $('#btnSaveDraft').prop('disabled', false);
+            $('#draft_id').val(r.id);
+            try { history.replaceState(null, '', 'createEvent.php?draft=' + r.id); } catch (e) {}
+            setDirty(false);
+            loadPanel();
+            if (done) done(r.id); else toast('草稿已儲存');
+        }, function (m) { $('#btnSaveDraft').prop('disabled', false); alert(m); });
+    }
+    $(document).on('click', '#btnSaveDraft', function () { saveDraft(); });
 
     /* 預覽列印用「目前表單上的內容」：先靜默存成草稿（同一份草稿重複更新），再預覽。
        預覽讀的是已存的內容，所以改了表格置中／寬度之後一定要先存，這顆鈕會自動幫忙存。 */
     $(document).on('click', '#btnPreviewForm', function () {
-        sync();
-        var title = ($('#title').val() || '').trim();
-        if (!title && !$('#content_html').val()) { alert('標題與內容都是空的，沒有東西可預覽'); return; }
-        try { window.egSyncTargetModes(); } catch (e) {}
-        post({
-            action: 'draft_save', draft_id: $('#draft_id').val() || 0, kind: $('#kind').val(),
-            eventdate: $('#eventdate').val(), enddate: $('#enddate').val(), reply_deadline: $('#reply_deadline').val(),
-            post_until: $('#post_until').val(), title: title, content_html: $('#content_html').val(),
-            show_status_to_others: $('input[name="show_status_to_others"]').is(':checked') ? 1 : 0,
-            targets: $('#targets').val() || [], target_modes: $('#target_modes').val() || '{}',
-            co_editors: (function () { try { return window.egCoEditorsJson(); } catch (e) { return ''; } })()
-        }, function (r) { $('#draft_id').val(r.id); previewPrint(r.id); });
+        saveDraft(function (id) { previewPrint(id); });
     });
 
     /* ---------- 草稿／送審／待核准 面板 ---------- */
@@ -281,9 +301,10 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
                    + '<button type="button" class="nd-btn nd-open" data-id="' + r.id + '">檢視／核准</button></div>';
             });
         }
-        if (ND.drafts.length) {
+        var drafts = pend.drafts || [];
+        if (drafts.length) {
             any = true; h += '<div class="nd-sec">我的草稿（只有自己看得到，不會通知任何人）</div>';
-            ND.drafts.forEach(function (r) {
+            drafts.forEach(function (r) {
                 h += '<div class="nd-row"><span class="nd-tag">' + esc(ND.kinds[r.kind] || '') + '</span><span class="nd-t">' + esc(r.title || '（未填標題）') + '</span>'
                    + '<span style="color:#8a7a68;">' + esc(fmtD(r.updated_at)) + '</span>'
                    + '<button type="button" class="nd-btn nd-pv" data-id="' + r.id + '"><i class="fa fa-print"></i> 預覽列印</button>'
