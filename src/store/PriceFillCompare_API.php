@@ -68,5 +68,11 @@ case 'apply': {
 case 'fix_oo': {
     pfcOut(opf_fix_oo($db, (int)($_POST['order_id'] ?? 0), (string)($_POST['new_oo'] ?? ''), $uid));
 }
+case 'set_exempt': {
+    $ids = json_decode($_POST['ids'] ?? '[]', true);
+    if (!is_array($ids) || !$ids || count($ids) > 500) pfcOut(['ok' => false, 'error' => '請指定訂單（一次最多 500 筆）']);
+    $n = opf_set_exempt($db, $ids, !empty($_POST['flag']), $uid);
+    pfcOut(['ok' => true, 'changed' => $n]);
+}
 default: pfcOut(['ok' => false, 'error' => '未知的動作']);
 }

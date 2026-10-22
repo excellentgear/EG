@@ -106,7 +106,7 @@ $(document).ready(function(){
     $('#sidebar-menu').css('visibility','visible');
 });
 var API = '../../src/store/PriceFillCompare_API.php';
-var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['PROC','已補價·補製程（可轉）'],['PROCM','補製程·需人工（可填寫後轉）'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['P','一對一配對（可轉・確認順序）'],['C','C 多個單價（可選加總）'],['D','D 無ERP資料']];
+var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['PROC','已補價·補製程（可轉）'],['PROCM','補製程·需人工（可填寫後轉）'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['P','一對一配對（可轉・確認順序）'],['C','C 多個單價（可選加總）'],['D','D 無ERP資料'],['N','非訂單（治具／繪圖）']];
 var PM = {}, CAT = 'R1', FIRST = true, PAGE = 1, TOTAL = 0, PER = 50, COUNTS = {}, CANAPPLY = [], SEL = {}, ROWS = {};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function fmtP(v){ if(v===null||v===''||v===undefined) return '—'; var n=parseFloat(v); return isNaN(n)?esc(v):n.toLocaleString('en-US',{maximumFractionDigits:4}); }
@@ -138,8 +138,9 @@ function pcHtml(c){   // 多個單價：選「加總」或單一單價
 }
 var PF = {};   // 自動預填的製程（用來判斷「沒勾同時補製程」時不要送出）
 function ooHtml(c){   // 查無 ERP 資料的訂單：多半是單號打錯，可直接輸入正確單號修改
+    if(c.cat==='N') return '<div class="pf-pm"><button type="button" class="pf-btn ex-go" data-id="'+c.order_id+'" data-flag="0" style="height:24px;padding:0 10px">取消非訂單標記</button></div>';
     if(c.cat!=='D') return '';
-    return '<div class="pf-pm">更正單號：<input type="text" class="oo-in" data-id="'+c.order_id+'" placeholder="輸入正確單號，例 OO1150601001" maxlength="12" data-eg-skip> <button type="button" class="pf-btn oo-go" data-id="'+c.order_id+'" style="height:24px;padding:0 10px">改單號</button></div>';
+    return '<div class="pf-pm"><button type="button" class="pf-btn ex-go" data-id="'+c.order_id+'" data-flag="1" style="height:24px;padding:0 10px" title="治具或只有繪製圖面、為統計工作量才列入的，不需補單價">非訂單</button>　更正單號：<input type="text" class="oo-in" data-id="'+c.order_id+'" placeholder="輸入正確單號，例 OO1150601001" maxlength="12" data-eg-skip> <button type="button" class="pf-btn oo-go" data-id="'+c.order_id+'" style="height:24px;padding:0 10px">改單號</button></div>';
 }
 function pmHtml(c){   // 訂單製程空白時：補入製程輸入框（預填 ERP 製程）＋ERP 候選快速帶入；所有可轉的類別都適用
     var blank = String(c.order.Processing_items||'').trim()==='';
@@ -203,6 +204,19 @@ $('#body').on('click','.oo-go',function(e){
         $tr.find('td.r').html(ordHtml(c));
         $tr.find('td.r .pf-pm').last().append('<div style="color:#2E7D32;margin-top:3px">✔ 已改為 '+esc(res.new_oo)+(res.erp_rows? '（ERP 有此單號＋料號的資料 '+res.erp_rows+' 筆，切換分頁或重新查詢後會移到對應分頁）':'（ERP 查無此單號＋料號的資料）')+'</div>');
     }).fail(function(x){ $btn.prop('disabled',false); alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+// 標記／取消「非訂單」：只確認一次，AJAX 就地移除該列並更新分頁筆數
+$('#body').on('click','.ex-go',function(e){
+    e.stopPropagation(); var $b=$(this), id=$b.data('id'), flag=String($b.data('flag'))==='1', c=ROWS[id]||{order:{}};
+    if(!confirm(flag ? '把訂單 #'+id+'（'+(c.order.Order_oo||'')+'）標記為「非訂單」（治具／只繪製圖面，統計工作量用）？不會再列入補單價。' : '取消訂單 #'+id+' 的「非訂單」標記？')) return;
+    $b.prop('disabled',true);
+    api('set_exempt',{ids:JSON.stringify([id]),flag:flag?1:0}).done(function(res){
+        if(!res.ok){ $b.prop('disabled',false); alert(res.error); return; }
+        var from=flag?'D':'N';
+        $('#body tr[data-id="'+id+'"]').fadeOut(150,function(){ $(this).remove(); });
+        if(COUNTS[from]) COUNTS[from]--; if(!flag) COUNTS.N=COUNTS.N||0; if(flag) COUNTS.N=(COUNTS.N||0)+1;
+        TOTAL--; renderTabs();
+    }).fail(function(x){ $b.prop('disabled',false); alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
 $('#body').on('click','.pf-chip',function(e){ e.stopPropagation(); var $in=$(this).closest('.pf-pm').find('.pm-in'); $in.val($(this).data('v')).trigger('input'); });
 $('#body').on('input','.pm-in',function(){ PM[$(this).data('id')]=$(this).val(); var $ck=$(this).closest('tr').find('.ck'); if($(this).val().trim() && !$ck.prop('checked')){ $ck.prop('checked',true).trigger('change'); } });

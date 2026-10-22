@@ -29,6 +29,10 @@ function opf_ensure_schema(PDO $db): void {
       id INT AUTO_INCREMENT PRIMARY KEY, order_id INT NOT NULL, order_oo VARCHAR(40) NULL, rule_code VARCHAR(10) NOT NULL,
       old_price DECIMAL(15,4) NULL, new_price DECIMAL(15,4) NOT NULL, stage_id INT NULL, created_at DATETIME NOT NULL,
       KEY idx_order (order_id)) CHARACTER SET utf8mb4 COMMENT='自動補單價紀錄'");
+    // 非訂單（治具／只繪製圖面，為統計工作量才列入）：標記後不再出現在補單價各分頁
+    $db->exec("CREATE TABLE IF NOT EXISTS order_price_fill_exempt (
+      order_id INT NOT NULL PRIMARY KEY, marked_by INT NULL, marked_at DATETIME NOT NULL
+      ) CHARACTER SET utf8mb4 COMMENT='補單價比對：標記為非訂單（不需補單價）'");
     foreach (['old_process', 'new_process'] as $col) {
         if (!$db->query("SHOW COLUMNS FROM order_price_autofill_log LIKE '$col'")->fetchColumn())
             $db->exec("ALTER TABLE order_price_autofill_log ADD COLUMN $col VARCHAR(255) NULL COMMENT '同時補製程時的舊/新值'");
@@ -84,6 +88,17 @@ function opf_candidates(PDO $db): array {
     $orders = $db->query("SELECT $cols FROM order_track WHERE (Order_status IS NULL OR Order_status<>6) AND (unit_price IS NULL OR unit_price=0)")
                  ->fetchAll(PDO::FETCH_ASSOC);
     if (!$orders) return [];
+    // 已標記「非訂單」者：不參與一般判定，單獨歸入 N 類（可取消標記）
+    $exempt = array_flip(array_map('intval', $db->query("SELECT order_id FROM order_price_fill_exempt")->fetchAll(PDO::FETCH_COLUMN)));
+    $exRows = [];
+    if ($exempt) {
+        $orders = array_values(array_filter($orders, function ($o) use ($exempt, &$exRows) {
+            if (!isset($exempt[(int)$o['Order_id']])) return true;
+            $exRows[] = ['order_id' => (int)$o['Order_id'], 'cat' => 'N', 'price' => null, 'stage_ids' => [], 'src' => [], 'order' => $o,
+                         'note' => '已標記為非訂單（治具／只繪製圖面等，為統計工作量列入），不需補單價'];
+            return false;
+        }));
+    }
     $needByOO = [];
     foreach ($orders as $o) $needByOO[$o['Order_oo']][] = $o;
 
@@ -260,7 +275,25 @@ function opf_candidates(PDO $db): array {
         $rr['erp_proc'] = $erp; if (!array_key_exists('proc_fill', $rr)) $rr['proc_fill'] = opf_proc_fillable((string)$rr['order']['Processing_items'], $erp); $rr['proc_state'] = opf_proc_state((string)$rr['order']['Processing_items'], $erp);
     }
     unset($rr);
+    foreach ($exRows as $x) { $x['erp_proc'] = ''; $x['proc_fill'] = null; $x['proc_state'] = 'na'; $res[] = $x; }
     return $res;
+}
+
+/** 標記／取消標記「非訂單」。只動 order_price_fill_exempt，不改 order_track。回傳實際異動筆數 */
+function opf_set_exempt(PDO $db, array $orderIds, bool $flag, int $uid): int {
+    opf_ensure_schema($db);
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+    $n = 0;
+    if ($flag) {
+        // 只接受目前確實是「單價空白、未取消」的訂單
+        $chk = $db->prepare("SELECT 1 FROM order_track WHERE Order_id=? AND (Order_status IS NULL OR Order_status<>6) AND (unit_price IS NULL OR unit_price=0)");
+        $ins = $db->prepare("INSERT IGNORE INTO order_price_fill_exempt (order_id,marked_by,marked_at) VALUES (?,?,NOW())");
+        foreach ($ids as $id) { $chk->execute([$id]); if ($chk->fetchColumn()) { $ins->execute([$id, $uid]); $n += $ins->rowCount(); } }
+    } else {
+        $del = $db->prepare("DELETE FROM order_price_fill_exempt WHERE order_id=?");
+        foreach ($ids as $id) { $del->execute([$id]); $n += $del->rowCount(); }
+    }
+    return $n;
 }
 
 /**
