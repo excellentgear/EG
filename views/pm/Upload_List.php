@@ -650,6 +650,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </table>
                                         </div>
                                         <div class="text-muted" style="font-size:11px;margin-top:6px">「轉成正式訂單」會在訂單追蹤新增該筆（業務備註＝補訂單資料），轉入當下會再比對一次，已有相同明細的自動略過；「同單號已有此產品但內容不同」預設不勾選，確認是另一筆明細才勾選補入。</div>
+                                    <div style="margin-top:6px"><a href="price_fill_compare.php" target="_blank" class="btn btn-sm btn-warning"><i class="fa fa-columns"></i> 補單價比對（左：補資料／ERP，右：訂單追蹤，可批次轉價格）</a></div>
                                     </div>
 
 <div class="modal fade" id="oeiCustModal" tabindex="-1" role="dialog">
