@@ -106,7 +106,7 @@ $(document).ready(function(){
     $('#sidebar-menu').css('visibility','visible');
 });
 var API = '../../src/store/PriceFillCompare_API.php';
-var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['PROC','已補價·補製程（可轉）'],['PROCM','補製程·需人工（可填寫後轉）'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['C','C 多個單價'],['D','D 無ERP資料']];
+var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['PROC','已補價·補製程（可轉）'],['PROCM','補製程·需人工（可填寫後轉）'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['C','C 多個單價（可選加總）'],['D','D 無ERP資料']];
 var PM = {}, CAT = 'R1', FIRST = true, PAGE = 1, TOTAL = 0, PER = 50, COUNTS = {}, CANAPPLY = [], SEL = {}, ROWS = {};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function fmtP(v){ if(v===null||v===''||v===undefined) return '—'; var n=parseFloat(v); return isNaN(n)?esc(v):n.toLocaleString('en-US',{maximumFractionDigits:4}); }
@@ -130,6 +130,12 @@ function srcHtml(c){
     }).join('') || '<i style="color:#999">（無對應來源明細）</i>';
 }
 function ordProcState(c){ return c.proc_state; }
+function pcHtml(c){   // 多個單價：選「加總」或單一單價
+    if(c.cat!=='C' || !c.price_options) return '';
+    var o=c.price_options, h='<option value="'+o.sum+'">加總 → '+fmtP(o.sum)+'</option>';
+    o.each.forEach(function(p){ h+='<option value="'+p+'">只採用 '+fmtP(p)+'</option>'; });
+    return '<div class="pf-pm">採用單價：<select class="pc-sel" data-id="'+c.order_id+'">'+h+'</select></div>';
+}
 function pmHtml(c){   // 需人工補製程：輸入框＋ERP 候選製程快速帶入
     if(c.cat!=='PROCM') return '';
     var chips=(c.proc_options||[]).map(function(o){ return '<span class="pf-chip" data-v="'+esc(o)+'">'+esc(o)+'</span>'; }).join('');
@@ -141,7 +147,7 @@ function ordHtml(c){
            '料號 <b>'+esc(o.d_id)+'</b>　數量 <b>'+esc(o.Qty)+'</b>　目前單價 <span class="pf-diff">'+fmtP(o.unit_price)+'</span>'+
            (c.proc_fill ? '<br><span class="pf-tag w">將補製程</span><b>'+esc(c.proc_fill)+'</b>' : '')+(c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
            '製程：<span class="pf-proc-'+ordProcState(c)+'">'+(esc(o.Processing_items)||'（空白）')+'</span><br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
-           (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>'+pmHtml(c);
+           (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>'+pmHtml(c)+pcHtml(c);
 }
 function render(res){
     ROWS={}; var h='';
@@ -173,7 +179,7 @@ $('#body').on('click','.pf-chip',function(e){ e.stopPropagation(); var $in=$(thi
 $('#body').on('input','.pm-in',function(){ PM[$(this).data('id')]=$(this).val(); var $ck=$(this).closest('tr').find('.ck'); if($(this).val().trim() && !$ck.prop('checked')){ $ck.prop('checked',true).trigger('change'); } });
 $('#body').on('dblclick','.pm-in',function(){ $(this).val('').trigger('input'); });
 $('#body').on('change','.ck',function(){ var id=$(this).val(); if(this.checked) SEL[id]=1; else delete SEL[id]; refreshSel(); });
-$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,.pf-chip')) return;
+$('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input,select,option,.pf-chip')) return;
     if(String(window.getSelection?window.getSelection():'').length>0) return;   // 正在選取文字（要複製）時不切換勾選
     var $c=$(this).closest('tr').find('.ck'); if($c.length){ $c.prop('checked',!$c.prop('checked')).trigger('change'); } });
 $('#ckAll,#btnPage').on('click',function(){ $('#body .ck').each(function(){ $(this).prop('checked',true); SEL[$(this).val()]=1; }); refreshSel(); });
@@ -202,13 +208,14 @@ function fillToast(t){
 $('#btnApply').on('click',function(){
     var ids=Object.keys(SEL).map(Number); if(!ids.length) return;
     var label=(CATS.filter(function(c){return c[0]===CAT;})[0]||[])[1]||CAT;
-    var pm = {};
+    var pm = {}, pc = {};
+    if (CAT==='C') { ids.forEach(function(id){ pc[id]=$('.pc-sel[data-id="'+id+'"]').val(); }); }
     if (CAT==='PROCM') { var miss=0; ids.forEach(function(id){ var v=(PM[id]||'').trim(); if(!v) miss++; else pm[id]=v; }); if(miss){ alert('有 '+miss+' 筆還沒填「補入製程」，請填寫或取消勾選。'); return; } }
     var warn = CAT==='B' ? '\n\n※ 建議B 的製程空白或與 ERP 不一致，請確認已抽查。' : '';
-    var what = CAT==='PROCM' ? '把你填寫的製程寫入訂單製程空白者（單價不動，業務備註加註【自動補製程】）' : CAT==='PROC' ? '只把 ERP 製程填入訂單製程空白者（單價不動，業務備註加註【自動補製程】）' : CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
+    var what = CAT==='C' ? '把你在每列選定的單價（加總或單一單價）轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）' : CAT==='PROCM' ? '把你填寫的製程寫入訂單製程空白者（單價不動，業務備註加註【自動補製程】）' : CAT==='PROC' ? '只把 ERP 製程填入訂單製程空白者（單價不動，業務備註加註【自動補製程】）' : CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
     if(!confirm('類別：'+label+'\n確定對 '+ids.length+' 筆：'+what+'？'+warn)) return;
     var $b=$(this).prop('disabled',true);
-    api('apply',{cat:CAT,ids:JSON.stringify(ids),fill_proc:$('#fillProc').prop('checked')?1:0,proc_map:JSON.stringify(pm)}).done(function(res){
+    api('apply',{cat:CAT,ids:JSON.stringify(ids),fill_proc:$('#fillProc').prop('checked')?1:0,proc_map:JSON.stringify(pm),price_map:JSON.stringify(pc)}).done(function(res){
         if(!res.ok){ alert(res.error); $b.prop('disabled',false); return; }
         var doneTxt='完成：補入單價 '+res.filled+' 筆、補資料認定已轉入 '+res.staged+' 筆、略過 '+res.skipped+' 筆';
         if(res.msgs&&res.msgs.length){ alert(doneTxt+'\n'+res.msgs.slice(0,10).join('\n')); }

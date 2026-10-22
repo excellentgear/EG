@@ -11,14 +11,14 @@
  *   DONE 已補過單價(有 autofill_log)，但補資料暫存列仍是「待轉入」→ 只需把暫存列認定為已轉入
  *   A   建議：ERP 訂單資料(order_list)同單號＋料號＋數量，單價唯一且製程一致
  *   B   建議：ERP 單價唯一，但訂單製程空白／不一致（需人工抽查）
- *   C   建議：ERP 有多個單價（僅顯示，不可批次）
+ *   C   ERP 有多個單價：可選「加總」（訂單把多筆合併成一筆時）或只採用其中一個單價，由人在畫面選定後轉入
  *   D   建議：查無 ERP 資料（僅顯示，不可批次）
  * 可批次轉價格＝R1 R2 DONE A B。套用時一律在後端重新判定，不採信前端送來的價格。
  * 補入者：Order_ps 加註「【自動補單價】」、寫 order_price_autofill_log；不動 Modified_At／Modified_By。
  */
 
 const OPF_MARK = '【自動補單價】';
-const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC', 'PROCM'];
+const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC', 'PROCM', 'C'];
 
 function opf_ensure_schema(PDO $db): void {
     static $done = false;
@@ -191,7 +191,12 @@ function opf_candidates(PDO $db): array {
         $pr = array_unique(array_map(fn($r) => round((float)$r['unit_price'], 4), $cand));
         $src = array_map(fn($r) => ['order_oo' => $r['Order_oo'], 'part_no' => $r['d_id'], 'qty' => $r['Qty'], 'spec_text' => $r['Specification'], 'unit_price' => $r['unit_price'], 'order_date' => $r['Order_date'], 'state' => 'ERP'], $cand);
         if (!$cand)            { $cat = 'D'; $price = null; $note = '查無 ERP 資料：請業務依報價補單價或綁定報價單'; }
-        elseif (count($pr) > 1) { $cat = 'C'; $price = null; $note = 'ERP 有多個單價（' . implode(' / ', $pr) . '）：請人工確認'; }
+        elseif (count($pr) > 1) {
+            $cat = 'C'; $price = null;
+            $sumAll = round(array_sum(array_map(fn($r) => (float)$r['unit_price'], $cand)), 4);
+            $copt = ['sum' => $sumAll, 'each' => array_values($pr)];
+            $note = 'ERP 有多個單價（' . implode(' / ', $pr) . '）；若訂單是把多筆合併成一筆，可選「加總」＝' . $sumAll;
+        }
         else {
             $m = false; $bestSt = 'bad';
             foreach ($cand as $r) { $st0 = opf_proc_state((string)$o['Processing_items'], opf_erp_proc(['spec_text' => $r['Specification']]));
@@ -199,7 +204,9 @@ function opf_candidates(PDO $db): array {
             $cat = $m ? 'A' : 'B'; $price = (float)$pr[0];
             $note = $m ? ($bestSt === 'syn' ? 'ERP 單價唯一，製程用語不同但意思相同（全製＝代料完成…）' : 'ERP 單價唯一且製程一致') : 'ERP 單價唯一，但訂單製程' . ($px === '' ? '空白' : '與 ERP 不一致') . '，請抽查';
         }
-        $res[] = ['order_id' => (int)$o['Order_id'], 'cat' => $cat, 'price' => $price, 'stage_ids' => [], 'src' => $src, 'order' => $o, 'note' => $note];
+        $row = ['order_id' => (int)$o['Order_id'], 'cat' => $cat, 'price' => $price, 'stage_ids' => [], 'src' => $src, 'order' => $o, 'note' => $note];
+        if (isset($copt)) { $row['price_options'] = $copt; unset($copt); }
+        $res[] = $row;
     }
     foreach ($res as &$rr) {
         $erp = opf_erp_proc($rr['src'][0] ?? []);
@@ -212,7 +219,7 @@ function opf_candidates(PDO $db): array {
 /**
  * 套用：只接受 $orderIds 與 $cat，價格／暫存列一律重新判定。回傳 ['filled'=>n,'staged'=>n,'skipped'=>n,'msgs'=>[]]
  */
-function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillProc = false, array $procMap = []): array {
+function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillProc = false, array $procMap = [], array $priceMap = []): array {
     if (!in_array($cat, OPF_APPLY_CATS, true)) return ['filled' => 0, 'staged' => 0, 'skipped' => count($orderIds), 'msgs' => ['此類別不可批次轉價格']];
     $want = array_flip(array_map('intval', $orderIds));
     $cands = array_filter(opf_candidates($db), fn($c) => $c['cat'] === $cat && isset($want[$c['order_id']]));
@@ -235,6 +242,14 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
                 }
                 continue;
             }
+            if ($cat === 'C') {   // 多個單價：只接受「加總」或「其中一個 ERP 單價」，並在後端重新驗證
+                $pv = round((float)($priceMap[$c['order_id']] ?? 0), 4);
+                $allowed = array_merge([$c['price_options']['sum']], $c['price_options']['each']);
+                $okP = false; foreach ($allowed as $a0) if (abs($a0 - $pv) < 0.00005) { $okP = true; break; }
+                if (!($pv > 0) || !$okP) { $msgs[] = '訂單 ' . $c['order_id'] . ' 未選定有效單價，略過'; continue; }
+                $c['price'] = $pv;
+                $ruleCode = abs($pv - $c['price_options']['sum']) < 0.00005 ? 'C加總' : 'C單選';
+            }
             if ($cat !== 'DONE') {
                 $up->execute([$c['price'], $like, $like, $c['order_id']]);
                 if (!$up->rowCount()) { $msgs[] = '訂單 ' . $c['order_id'] . ' 單價已有值，略過'; continue; }
@@ -243,7 +258,8 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
                     $upp->execute([$c['proc_fill'], $c['order_id']]);
                     if ($upp->rowCount()) { $oldP = (string)$c['order']['Processing_items']; $newP = $c['proc_fill']; $procFilled++; }
                 }
-                $lg->execute([$c['order_id'], $c['order']['Order_oo'], $cat, null, $c['price'], $c['stage_ids'][0] ?? null, $oldP, $newP]);
+                $lg->execute([$c['order_id'], $c['order']['Order_oo'], $ruleCode ?? $cat, null, $c['price'], $c['stage_ids'][0] ?? null, $oldP, $newP]);
+                unset($ruleCode);
                 $filled++;
             }
             foreach ($c['stage_ids'] as $sid) { $stg->execute([$c['order_id'], $sid]); $staged += $stg->rowCount(); }
