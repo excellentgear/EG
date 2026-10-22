@@ -3174,11 +3174,9 @@ if (isset($_POST['btn_go_events'])) {
                     + '*{box-sizing:border-box;} img{max-width:100%;}'
                     + '.ct-head{text-align:center;}'
                     + '.ct-head .co{font-size:30px;font-weight:bold;letter-spacing:3px;}'
+                    + '.ct-rich{font-size:16px;line-height:1.7;}'   /* 與編輯器預設 12pt 同大 */
                     + '.fit1 .ct-body{height:auto;}'
-                    + '.fit2 .ct-body{height:auto;font-size:13px;line-height:1.65;} .fit3 .ct-body{height:auto;font-size:12px;line-height:1.55;}'
-                    + '.fit4 .ct-body{height:auto;font-size:11px;line-height:1.45;} .fit5 .ct-body{height:auto;font-size:10px;line-height:1.4;}'
-                    + '.fit3 .ct-rich *,.fit4 .ct-rich *,.fit5 .ct-rich *{font-size:inherit !important;line-height:inherit !important;}'
-                    + '.fit2 .ct-rich td,.fit3 .ct-rich td,.fit4 .ct-rich td,.fit5 .ct-rich td{padding:1px 5px;}'
+
                     + '.ct-head .ad{font-size:11px;margin-top:2px;}'
                     + '.ct-no{display:flex;justify-content:space-between;font-size:14px;margin:10px 0 2px;}'
                     + '.ct-tt{text-align:center;font-size:24px;font-weight:bold;letter-spacing:12px;margin:2px 0 6px;}'
@@ -3229,9 +3227,11 @@ if (isset($_POST['btn_go_events'])) {
             var onePage = Math.round((297 - MG * 2 - PAD * 2) * 96 / 25.4);
             var pageW = Math.round((210 - MG * 2) * 96 / 25.4);
             /* 內容要盡量塞進一張 A4：先把視窗寬度固定成列印實際寬度再量（視窗 1280px 與列印寬度排版高度不同），
-               超出就逐級縮小內文（fit1 去掉書寫區最低高度，fit2~fit5 字級 13→10px），圖章不縮；縮到最小仍放不下才分頁。 */
+               超出就逐級縮小內文（fit1 去掉書寫區最低高度，再以 zoom 0.95→0.7 等比縮小內文），圖章不縮；縮到最小仍放不下才分頁。 */
             var js = 'document.body.style.width="' + pageW + 'px";'
-                   + 'for(var i=1;i<=5&&document.body.scrollHeight>' + (onePage - 4) + ';i++){document.body.className="fit"+i;}'
+                   + 'if(document.body.scrollHeight>' + (onePage - 4) + '){document.body.className="fit1";'
+                   + 'var tx=document.querySelector(".ct-text");'
+                   + 'for(var z=0.95;tx&&z>=0.699&&document.body.scrollHeight>' + (onePage - 4) + ';z-=0.05){tx.style.zoom=z;}}'
                    + 'if(document.body.scrollHeight>' + onePage + '){var st=document.createElement("style");'
                    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
                    + 'document.head.appendChild(st);}';
