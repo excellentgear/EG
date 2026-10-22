@@ -251,6 +251,23 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
         post(d, function (r) { location.href = 'createEvent.php?draft=' + r.id + '&saved=1'; });
     });
 
+    /* 預覽列印用「目前表單上的內容」：先靜默存成草稿（同一份草稿重複更新），再預覽。
+       預覽讀的是已存的內容，所以改了表格置中／寬度之後一定要先存，這顆鈕會自動幫忙存。 */
+    $(document).on('click', '#btnPreviewForm', function () {
+        sync();
+        var title = ($('#title').val() || '').trim();
+        if (!title && !$('#content_html').val()) { alert('標題與內容都是空的，沒有東西可預覽'); return; }
+        try { window.egSyncTargetModes(); } catch (e) {}
+        post({
+            action: 'draft_save', draft_id: $('#draft_id').val() || 0, kind: $('#kind').val(),
+            eventdate: $('#eventdate').val(), enddate: $('#enddate').val(), reply_deadline: $('#reply_deadline').val(),
+            post_until: $('#post_until').val(), title: title, content_html: $('#content_html').val(),
+            show_status_to_others: $('input[name="show_status_to_others"]').is(':checked') ? 1 : 0,
+            targets: $('#targets').val() || [], target_modes: $('#target_modes').val() || '{}',
+            co_editors: (function () { try { return window.egCoEditorsJson(); } catch (e) { return ''; } })()
+        }, function (r) { $('#draft_id').val(r.id); previewPrint(r.id); });
+    });
+
     /* ---------- 草稿／送審／待核准 面板 ---------- */
     function renderPanel(pend) {
         var h = '', any = false;

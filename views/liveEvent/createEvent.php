@@ -887,6 +887,7 @@ if (isset($_POST['btn_go_events'])) {
                                         <?php if ($is_edit) : ?>
                                             <button id="send" name="upDateEvent" type="submit" class="eg-btn eg-btn-primary"><i class="fa fa-check"></i> 儲存修改</button>
                                         <?php else : ?>
+                                            <button id="btnPreviewForm" type="button" class="eg-btn eg-btn-ghost" title="用目前表單上的內容預覽列印（會先自動存成草稿）"><i class="fa fa-print"></i> 預覽列印</button>
                                             <button id="btnSaveDraft" type="button" class="eg-btn eg-btn-ghost" title="先存起來，不會通知任何人；之後可從上方「我的草稿與送審」繼續"><i class="fa fa-floppy-o"></i> 儲存草稿</button>
                                             <button id="send" name="newEvent" type="submit" class="eg-btn eg-btn-primary"><i class="fa fa-paper-plane"></i> <span id="send-label">送出發布</span></button>
                                         <?php endif; ?>
@@ -3095,7 +3096,10 @@ if (isset($_POST['btn_go_events'])) {
            一律換算成「佔內文寬的百分比」（表格＝px／編輯區內文寬；儲存格＝px／表格 px），兩邊比例就一致 */
         function scaleRich(html) {
             if (!/<table/i.test(html || '')) return html;
-            var W = (window.ndEditorContentWidth && window.ndEditorContentWidth()) || 643;
+            // 編輯區紙張內文寬固定＝A4 210mm 扣左右各 15mm 內距＝約 680 CSS px（與視窗大小、有沒有編輯區無關）。
+            // 不可以讀目前頁面上的編輯區：沒有新增權限的人（如核准人員）頁面上沒有編輯區，會退回另一個數字，
+            // 同一份內容兩個人預覽出來就不一樣。
+            var W = 680;
             var box = document.createElement('div'); box.innerHTML = html;
             var rx = /(?:^|;)\s*width:\s*([\d.]+)px/;
             Array.prototype.forEach.call(box.querySelectorAll('table'), function (t) {
