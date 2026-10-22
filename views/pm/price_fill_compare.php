@@ -69,6 +69,9 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
   <div class="pf-tabs" id="tabs"></div>
   <div class="pf-bar">
     <input type="text" id="q" placeholder="搜尋 訂單編號／料號／客戶／製程（空白分隔多關鍵字）" data-eg-skip>
+    <input type="text" id="lproc" placeholder="左側製程篩選（補資料／ERP）" data-eg-skip style="width:190px">
+    <input type="text" id="rproc" placeholder="右側製程篩選（訂單追蹤）" data-eg-skip style="width:190px">
+    <select id="pstate" class="form-control input-sm" style="width:130px"><option value="">製程：全部</option><option value="bad">不一致</option><option value="na">一邊空白</option><option value="syn">同義</option><option value="ok">一致</option></select>
     <select id="per" class="form-control input-sm" style="width:90px"><option>50</option><option>100</option><option>200</option></select>
     <button class="pf-btn sec" id="btnPage">勾選本頁全部</button>
     <button class="pf-btn sec" id="btnAllMatch">勾選全部符合（不分頁）</button>
@@ -146,7 +149,7 @@ function render(res){
 }
 function load(){
     $('#body').html('<tr><td colspan="3" style="text-align:center;padding:20px">載入中…</td></tr>');
-    api('list',{cat:CAT,q:$('#q').val(),page:PAGE,per:$('#per').val()}).done(function(res){
+    api('list',{cat:CAT,q:$('#q').val(),lproc:$('#lproc').val(),rproc:$('#rproc').val(),pstate:$('#pstate').val(),page:PAGE,per:$('#per').val()}).done(function(res){
         if(!res.ok){ alert(res.error); return; }
         COUNTS=res.counts; CANAPPLY=res.can_apply; TOTAL=res.total;
         if (res.auto_closed) { $('#autoMsg').text('已自動將 '+res.auto_closed+' 筆「訂單內已有相同明細」的補資料待轉入列認定為已存在').show(); }
@@ -171,8 +174,8 @@ $('#btnAllMatch').on('click',function(){
 });
 $('#btnClear').on('click',function(){ SEL={}; $('#body .ck').prop('checked',false); $('#ckAll').prop('checked',false); refreshSel(); });
 $('#pPrev').on('click',function(){ PAGE--; load(); }); $('#pNext').on('click',function(){ PAGE++; load(); });
-$('#per').on('change',function(){ PAGE=1; load(); });
-var qt=null; $('#q').on('input',function(){ clearTimeout(qt); qt=setTimeout(function(){ PAGE=1; load(); },350); });
+$('#per,#pstate').on('change',function(){ PAGE=1; load(); });
+var qt=null; $('#q,#lproc,#rproc').on('input',function(){ clearTimeout(qt); qt=setTimeout(function(){ PAGE=1; load(); },350); });
 function fillToast(t){
     var $t=$('<div></div>').text(t).css({position:'fixed',right:'20px',bottom:'24px',zIndex:99999,background:'#7A4A1E',color:'#fff',padding:'10px 16px',borderRadius:'6px',fontSize:'14px',boxShadow:'0 2px 8px rgba(0,0,0,.3)'}).appendTo('body');
     setTimeout(function(){ $t.fadeOut(400,function(){ $t.remove(); }); },3000);

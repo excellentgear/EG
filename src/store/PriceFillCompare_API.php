@@ -33,8 +33,13 @@ case 'list': {
     $closed = opf_auto_close_exact($db);   // 訂單內已有相同明細的待轉入列，自動認定為已存在
     $all = opf_candidates($db);
     $counts = []; foreach ($all as $c) $counts[$c['cat']] = ($counts[$c['cat']] ?? 0) + 1;
-    $rows = array_values(array_filter($all, function ($c) use ($cat, $q) {
+    $lp = trim((string)($_POST['lproc'] ?? '')); $rp = trim((string)($_POST['rproc'] ?? '')); $ps = (string)($_POST['pstate'] ?? '');
+    $hit = function ($hay, $kw) { foreach (preg_split('/\s+/u', $kw) as $w) if ($w !== '' && mb_stripos($hay, $w) === false) return false; return true; };
+    $rows = array_values(array_filter($all, function ($c) use ($cat, $q, $lp, $rp, $ps, $hit) {
         if ($cat !== '' && $c['cat'] !== $cat) return false;
+        if ($ps !== '' && ($c['proc_state'] ?? '') !== $ps) return false;
+        if ($lp !== '' && !$hit((string)($c['erp_proc'] ?? ''), $lp)) return false;
+        if ($rp !== '' && !$hit((string)$c['order']['Processing_items'], $rp)) return false;
         if ($q !== '') { $h = $c['order']['Order_oo'] . ' ' . $c['order']['d_id'] . ' ' . $c['order']['Client_name'] . ' ' . $c['order']['Processing_items'] . ' ' . $c['order']['Order_id'];
             foreach (preg_split('/\s+/u', $q) as $w) if ($w !== '' && mb_stripos($h, $w) === false) return false; }
         return true;

@@ -39,9 +39,12 @@ function opf_erp_proc(array $src): string {
     $i = strrpos($t, ' ');
     return $i === false ? $t : substr($t, $i + 1);
 }
-/** 製程同義正規化：「全製」「代料完成」「代料到完成」「代料至成品」「代料全製」…都是同一種做法 → FULL */
+/** 製程同義正規化：去掉備註（「-單價候補」「-特急件」「有設定報告」）、帶→代、「全製／代料完成／代料到成品…」→ FULL */
 function opf_proc_canon(string $s): string {
-    $n = str_replace(['到', '至'], '', opf_norm($s));
+    $n = opf_norm($s);
+    $n = preg_replace('/[-－—–].*$/u', '', $n);          // 破折號之後多半是備註
+    $n = str_replace(['有設定報告', '帶'], ['', '代'], $n);
+    $n = str_replace(['到', '至'], '', $n);
     if (preg_match('/^(代料)?(全製|完成|成品|成品完成|全製完成)$/u', $n)) return 'FULL';
     return $n;
 }
@@ -50,7 +53,11 @@ function opf_proc_state(string $orderProc, string $erpProc): string {
     $a = opf_norm($orderProc); $b = opf_norm($erpProc);
     if ($a === '' || $b === '') return 'na';
     if ($a === $b || mb_substr($b, -mb_strlen($a)) === $a || mb_substr($a, -mb_strlen($b)) === $b) return 'ok';
-    return opf_proc_canon($a) === opf_proc_canon($b) ? 'syn' : 'bad';
+    $ca = opf_proc_canon($a); $cb = opf_proc_canon($b);
+    if ($ca === $cb && $ca !== '') return 'syn';
+    // 其中一邊完整包含另一邊（例：「成型磨齒研有設定報告」含「齒研」）→ 視為同義，供人快速確認
+    if ($ca !== '' && $cb !== '' && min(mb_strlen($ca), mb_strlen($cb)) >= 2 && (mb_strpos($ca, $cb) !== false || mb_strpos($cb, $ca) !== false)) return 'syn';
+    return 'bad';
 }
 
 
