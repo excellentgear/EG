@@ -6,6 +6,8 @@
  * 類別（cat）：
  *   R1  規則1：補資料暫存區同訂單編號下 (料號,數量) 組合與筆數，與訂單追蹤現有完全相同 → 可直接補
  *   R2  規則2：不符規則1，但同訂單編號＋同料號＋同數量＋製程完全相同（製程不可空白）→ 可補
+ *   PROC 已補過單價、但訂單製程仍空白且 ERP 有製程 → 只補製程（補早期轉入時沒帶到製程的）
+ *   PROCM 同上但無法自動判定（多種製程／尾段不像製程）→ 僅顯示，請人工補
  *   DONE 已補過單價(有 autofill_log)，但補資料暫存列仍是「待轉入」→ 只需把暫存列認定為已轉入
  *   A   建議：ERP 訂單資料(order_list)同單號＋料號＋數量，單價唯一且製程一致
  *   B   建議：ERP 單價唯一，但訂單製程空白／不一致（需人工抽查）
@@ -16,7 +18,7 @@
  */
 
 const OPF_MARK = '【自動補單價】';
-const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B'];
+const OPF_APPLY_CATS = ['R1', 'R2', 'DONE', 'A', 'B', 'PROC'];
 
 function opf_ensure_schema(PDO $db): void {
     static $done = false;
@@ -56,6 +58,8 @@ function opf_proc_canon(string $s): string {
 function opf_proc_fillable(string $orderProc, string $erpProc): ?string {
     $e = trim($erpProc);
     if (opf_norm($orderProc) !== '' || $e === '') return null;
+    $e = preg_replace('/^[0-9A-Za-z]+(?=[\x{4e00}-\x{9fff}])/u', '', $e);   // 開頭的治具／型號代碼（例：2GG1雷刻 → 雷刻）
+    if ($e === '') return null;
     if (preg_match('/\d/u', $e) || mb_strlen($e) > 20) return null;
     return $e;
 }
@@ -138,6 +142,43 @@ function opf_candidates(PDO $db): array {
         $res[] = ['order_id' => (int)$r['order_id'], 'cat' => 'DONE', 'price' => (float)$r['new_price'], 'stage_ids' => [(int)$r['sid']], 'src' => [$src], 'order' => $ord,
                   'note' => '單價已補入（' . $r['rule_code'] . '），補資料暫存列尚未結案'];
     }
+    // ---- PROC：已補過單價，但訂單製程仍空白、ERP 有製程 → 只補製程 ----
+    $pr = $db->query("SELECT DISTINCT l.order_id, l.stage_id, o.Order_id oid,o.Order_oo,o.Order_date,o.Delivery_date,o.Client_name,o.Client_name_ID,o.d_id,o.d_id_ID,o.Qty,o.Processing_items,o.unit_price,o.Order_ps,o.Order_status,o.quote_no
+                      FROM order_price_autofill_log l JOIN order_track o ON o.Order_id=l.order_id
+                      WHERE (o.Processing_items IS NULL OR TRIM(o.Processing_items)='') AND l.rule_code<>'PROC'")->fetchAll(PDO::FETCH_ASSOC);
+    if ($pr) {
+        $L2 = [];
+        foreach ($db->query("SELECT Order_oo,d_id,Qty,Specification,Order_date FROM order_list") as $r) $L2[$r['Order_oo'] . '|' . $r['d_id'] . '|' . (int)$r['Qty']][] = $r;
+        $stIds = array_values(array_unique(array_filter(array_column($pr, 'stage_id'))));
+        $stMap = [];
+        foreach (array_chunk($stIds, 500) as $ch) {
+            $q = $db->prepare("SELECT id,order_oo,part_no,spec_text,process_text,qty,unit_price,state,order_date FROM order_erp_import_stage WHERE id IN (" . implode(',', array_fill(0, count($ch), '?')) . ")");
+            $q->execute($ch); foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $stMap[$r['id']] = $r;
+        }
+        $seen = [];
+        foreach ($pr as $r) {
+            if (isset($seen[$r['oid']])) continue;
+            $ord = ['Order_id' => $r['oid'], 'Order_oo' => $r['Order_oo'], 'Order_date' => $r['Order_date'], 'Delivery_date' => $r['Delivery_date'], 'Client_name' => $r['Client_name'],
+                    'Client_name_ID' => $r['Client_name_ID'], 'd_id' => $r['d_id'], 'd_id_ID' => $r['d_id_ID'], 'Qty' => $r['Qty'], 'Processing_items' => $r['Processing_items'],
+                    'unit_price' => $r['unit_price'], 'Order_ps' => $r['Order_ps'], 'Order_status' => $r['Order_status'], 'quote_no' => $r['quote_no']];
+            $src = [];
+            if (!empty($r['stage_id']) && isset($stMap[$r['stage_id']])) $src[] = $stMap[$r['stage_id']];
+            foreach ($L2[$r['Order_oo'] . '|' . $r['d_id'] . '|' . (int)$r['Qty']] ?? [] as $e)
+                $src[] = ['order_oo' => $e['Order_oo'], 'part_no' => $e['d_id'], 'qty' => $e['Qty'], 'spec_text' => $e['Specification'], 'unit_price' => null, 'order_date' => $e['Order_date'], 'state' => 'ERP'];
+            $procs = [];
+            foreach ($src as $e) { $f = opf_proc_fillable('', opf_erp_proc($e)); if ($f !== null) $procs[opf_norm($f)] = $f; }
+            if (count($procs) !== 1) {      // 沒有、或有多種不同製程 → 不自動補，列出供人工判斷
+                $seen[$r['oid']] = true;
+                $res[] = ['order_id' => (int)$r['oid'], 'cat' => 'PROCM', 'price' => null, 'stage_ids' => [], 'src' => $src, 'order' => $ord,
+                          'note' => $procs ? '同單號＋料號＋數量的 ERP 明細有多種製程（' . implode(' / ', $procs) . '），請人工判斷後到訂單追蹤手動補製程'
+                                           : 'ERP 品名規格最後一段看起來不像製程，請人工判斷後到訂單追蹤手動補製程'];
+                continue;
+            }
+            $seen[$r['oid']] = true;
+            $res[] = ['order_id' => (int)$r['oid'], 'cat' => 'PROC', 'price' => null, 'stage_ids' => [], 'src' => $src, 'order' => $ord,
+                      'note' => '單價已補入，訂單製程仍空白：補入 ERP 製程「' . reset($procs) . '」'];
+        }
+    }
     // ---- 建議：ERP 訂單資料 ----
     $L = [];
     foreach ($db->query("SELECT Order_oo,d_id,Qty,Specification,unit_price,Order_date FROM order_list WHERE unit_price>0") as $r)
@@ -183,6 +224,14 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid, bool $fillPr
         $stg = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', existing_order_id=?, match_note='訂單內已有相同明細（僅補單價），不需轉入' WHERE id=? AND state='pending'");
         $like = '%' . OPF_MARK . '%';
         foreach ($cands as $c) {
+            if ($cat === 'PROC') {
+                $upp->execute([$c['proc_fill'], $c['order_id']]);
+                if ($upp->rowCount()) {
+                    $lg->execute([$c['order_id'], $c['order']['Order_oo'], 'PROC', null, (float)$c['order']['unit_price'], null, '', $c['proc_fill']]);
+                    $procFilled++;
+                }
+                continue;
+            }
             if ($cat !== 'DONE') {
                 $up->execute([$c['price'], $like, $like, $c['order_id']]);
                 if (!$up->rowCount()) { $msgs[] = '訂單 ' . $c['order_id'] . ' 單價已有值，略過'; continue; }

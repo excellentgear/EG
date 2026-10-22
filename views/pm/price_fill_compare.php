@@ -102,7 +102,7 @@ $(document).ready(function(){
     $('#sidebar-menu').css('visibility','visible');
 });
 var API = '../../src/store/PriceFillCompare_API.php';
-var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['C','C 多個單價'],['D','D 無ERP資料']];
+var CATS = [['R1','規則1（可轉）'],['R2','規則2（可轉）'],['DONE','已補價待結案（可轉）'],['PROC','已補價·補製程（可轉）'],['PROCM','補製程·需人工'],['A','建議A（可轉）'],['B','建議B 需抽查（可轉）'],['C','C 多個單價'],['D','D 無ERP資料']];
 var CAT = 'R1', FIRST = true, PAGE = 1, TOTAL = 0, PER = 50, COUNTS = {}, CANAPPLY = [], SEL = {}, ROWS = {};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 function fmtP(v){ if(v===null||v===''||v===undefined) return '—'; var n=parseFloat(v); return isNaN(n)?esc(v):n.toLocaleString('en-US',{maximumFractionDigits:4}); }
@@ -188,7 +188,7 @@ $('#btnApply').on('click',function(){
     var ids=Object.keys(SEL).map(Number); if(!ids.length) return;
     var label=(CATS.filter(function(c){return c[0]===CAT;})[0]||[])[1]||CAT;
     var warn = CAT==='B' ? '\n\n※ 建議B 的製程空白或與 ERP 不一致，請確認已抽查。' : '';
-    var what = CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
+    var what = CAT==='PROC' ? '只把 ERP 製程填入訂單製程空白者（單價不動，業務備註加註【自動補製程】）' : CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
     if(!confirm('類別：'+label+'\n確定對 '+ids.length+' 筆：'+what+'？'+warn)) return;
     var $b=$(this).prop('disabled',true);
     api('apply',{cat:CAT,ids:JSON.stringify(ids),fill_proc:$('#fillProc').prop('checked')?1:0}).done(function(res){
