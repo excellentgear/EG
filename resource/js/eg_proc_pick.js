@@ -319,7 +319,7 @@
         var c = findCombo(T.id) || { name: '', variants: [] }, multi = c.variants.length > 1;
         var txt = T.mode === 'edit'
             ? '編輯中：「' + c.name + '」' + (multi ? '第 ' + (T.idx + 1) + ' 種' : '')
-            : '「' + c.name + '」新增相同製程（或）：已帶入現有內容，請改成另一種做法（例如把精滾換成滾齒）再按「加入為「或」」';
+            : '「' + c.name + '」新增相同製程（或）：請在左側勾選另一種做法（例如 滾齒＋壓檔片；同大類的小類要各自成為不同製程時，先取消該大類旁的「或」），再按「加入為「或」」';
         bar.innerHTML = '<b>' + esc(txt) + '</b> <a data-epp-ctgt-x="1">取消</a>'
             + (T.mode === 'edit' && multi ? ' <a data-epp-cvdel="1" title="只刪除這一種，其他種保留">刪除這一種</a>' : '');
         bar.style.display = 'block';
@@ -329,7 +329,8 @@
         var c = findCombo(id); if (!c || !c.variants.length) return;
         MODAL._pick = null;
         MODAL._tgt = { id: id, mode: mode, idx: idx };
-        applyProcs(c.variants[idx], false);
+        if (mode === 'new') { MODAL._work = { type: {}, no: {} }; MODAL._split = {}; }   // 相同製程：左側從空白開始，勾另一種做法
+        else applyProcs(c.variants[idx], false);
         MODAL.querySelector('#epp-cname').value = c.name;
         MODAL._nameTouched = true;
         updateTgtUi(); drawList(); drawCombos();
@@ -350,7 +351,11 @@
         if (c) data.id = c.id;
         postCombo('process_combo_save', data, function (r) {
             comboMsg(r.message || '', !!r.success);
-            if (r.success) { MODAL._tgt = null; MODAL._pick = null; MODAL._nameTouched = false; updateTgtUi(); syncName(); }
+            if (r.success) {
+                MODAL._tgt = null; MODAL._pick = null; MODAL._nameTouched = false;
+                MODAL._work = { type: {}, no: {} }; MODAL._split = {};      // 存好了，左側勾選清空
+                updateTgtUi(); drawList();
+            }
             drawCombos();
         });
     }
