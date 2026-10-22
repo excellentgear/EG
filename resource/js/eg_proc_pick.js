@@ -83,16 +83,18 @@
             + '#epp-box .epp-side{width:420px;flex-shrink:0;border-left:1px solid #eadfce;background:#FBF6EE;display:flex;flex-direction:column;min-height:0;}'
             + '.epp-side h5{margin:0;padding:10px 14px 6px;font-weight:700;color:#7A4A12;font-size:13px;}'
             + '.epp-side .epp-clist{flex:1;overflow-y:auto;padding:0 14px 8px;}'
-            + '.epp-combo{background:#fff;border:1px solid #E4D3BC;border-radius:5px;padding:6px 8px;margin-bottom:6px;}'
+            + '.epp-combo{background:#fff;border:1px solid #E4D3BC;border-radius:5px;padding:4px 7px;margin-bottom:4px;}'
             + '.epp-combo b{color:#4A3524;font-size:13px;}'
-            + '.epp-combo .epp-ci{margin:5px 0 2px;line-height:2;}'
+            + '.epp-combo .epp-ci{margin:3px 0 0;line-height:1.9;}'
             + '.epp-combo .epp-chip{margin-right:0;}'
             + '.epp-chead{display:flex;align-items:center;gap:4px;}'
             + '.epp-chead b{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
             + '.epp-cl{margin-left:auto;white-space:nowrap;}.epp-cl a{color:#a0522d;cursor:pointer;font-size:11px;margin-left:8px;text-decoration:none;}'
-            + '.epp-ent{display:inline-block;border:1px solid #E4B27A;border-radius:12px;padding:1px 3px;background:#FFFAF2;margin:0 0 3px 0;}'
-            + '.epp-var{margin:0;}.epp-vor{font-size:11px;font-weight:700;color:#E4802A;margin:1px 0 1px 6px;}'
-            + '.epp-or-sep{font-size:10px;color:#a0522d;margin:0 3px;}.epp-plus{font-size:12px;font-weight:700;color:#7A4A12;margin:0 4px;}'
+            + '.epp-ent{display:inline-block;}.epp-ent.multi{border:1px dashed #E4B27A;border-radius:10px;padding:0 2px;}'
+            + '.epp-combo .epp-chip{font-size:10.5px;line-height:16px;padding:0 6px;}'
+            + '.epp-var{display:inline-block;border:1.5px solid #D9A15E;border-radius:9px;padding:1px 4px;background:#FFFCF7;}'
+            + '.epp-vor{font-size:11px;font-weight:700;color:#E4802A;margin:0 6px;}'
+            + '.epp-or-sep{font-size:10px;color:#a0522d;margin:0 2px;}.epp-plus{font-size:11px;font-weight:700;color:#7A4A12;margin:0 2px;}'
             + '.epp-editing{border-color:#E4802A;box-shadow:0 0 0 2px #FBE3C6;}'
             + '.epp-pick{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:#7A4A12;}.epp-pick select{flex:1;}'
             + '.epp-tgt{background:#FFF1DC;border:1px solid #E4B27A;border-radius:4px;padding:4px 8px;margin-bottom:6px;font-size:12px;color:#6B4A2B;}.epp-tgt a{color:#a0522d;cursor:pointer;margin-left:6px;}'
@@ -249,7 +251,7 @@
     function procChips(procs) {
         var typeNames = {}; DICT.forEach(function (t) { typeNames[t.name] = 1; });
         return procs.map(function (g) {
-            return '<span class="epp-ent">' + g.map(function (x) {
+            return '<span class="epp-ent' + (g.length > 1 ? ' multi' : '') + '">' + g.map(function (x) {
                 if (x.t === 'type') return '<span class="epp-chip epp-pk" data-epp-citem="type:' + x.id + '" title="大類（整個大類）；點一下只加入這一項">◆ ' + esc(x.name) + '</span>';
                 var pn = parentName(x.id), label = (typeNames[x.name] && pn) ? pn + '›' + x.name : x.name;
                 return '<span class="epp-chip epp-pk" data-epp-citem="no:' + x.id + '" title="' + esc(pn ? '屬於大類：' + pn + '；點一下只加入這一項' : '點一下只加入這一項') + '">' + esc(label) + '</span>';
@@ -271,7 +273,7 @@
               + (mine ? '<span class="epp-cl"><a data-epp-cedit="' + c.id + '" title="修改這個組合的內容">編輯</a><a data-epp-calt="' + c.id + '" title="新增一種「或」的做法（先帶入現有內容，改成另一種再存）">相同製程</a><a data-epp-cdel="' + c.id + '" title="刪除整個組合">刪除</a></span>' : '')
               + '</div>'
               + '<div class="epp-ci">' + (c.variants.length
-                  ? c.variants.map(function (v) { return '<div class="epp-var">' + procChips(v) + '</div>'; }).join('<div class="epp-vor">或</div>')
+                  ? c.variants.map(function (v) { return '<span class="epp-var">' + procChips(v) + '</span>'; }).join('<span class="epp-vor">或</span>')
                   : '<span class="epp-none">（內容的製程已不存在）</span>') + '</div>';
             if (pk) {
                 h += '<div class="epp-pick"><span>要編輯哪一種？</span><select data-epp-cpick="' + c.id + '" class="form-control input-sm">'
@@ -344,8 +346,8 @@
     function cloneVariants(c) { return c.variants.map(function (v) { return v.map(flatOf); }); }
 
     function postVariants(c, variants, nm) {
-        // 名稱：原名稱是自動產生的才跟著新內容更新；自己取的名稱不動
-        if (c && (!nm || nm === c.name) && c.name === variantsName(c.variants)) nm = variantsName(variants);
+        // 名稱：既有組合維持原名稱（加入相同製程、改內容都不代表要改名）；要改名自己改名稱欄
+        if (c) { if (!nm) nm = c.name; }
         else if (!nm) nm = variantsName(variants);
         var data = { name: nm, variants: JSON.stringify(variants.map(function (v) { return v.map(function (g) { return g.map(function (x) { return { t: x.t, id: x.id }; }); }); })) };
         if (c) data.id = c.id;
