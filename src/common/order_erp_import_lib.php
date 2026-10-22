@@ -380,7 +380,7 @@ function oei_convert_one(PDO $db, int $stageId, int $uid): array {
         Order_oo=?, d_id=?, Specification=NULL, Order_ps=?, Client_name=?, Qty=?, Order_date=?, Delivery_date=?,
         Processing_items=?, unit_price=?, currency=?, Order_status=NULL, split_seq=1, parent_order_id=NULL,
         Created_At=NOW(), Created_By=?, Client_name_ID=?, d_id_ID=?, pmGet=?")
-       ->execute([$r['order_oo'], $r['part_no'], OEI_PS_TEXT, $clientName, (int)$r['qty'], $r['order_date'],
+       ->execute([strtoupper(trim((string)$r['order_oo'])), $r['part_no'], OEI_PS_TEXT, $clientName, (int)$r['qty'], $r['order_date'],
                   $r['delivery_date'] ?: $r['order_date'], $r['process_text'] ?: null, $r['unit_price'], $r['currency'],
                   $uid, $clientId, (int)$r['d_id_id'], $r['order_date']]); // 補資料：轉生管日＝接單日；指派設計／設計接收日可留空故不填
     $oid = (int)$db->lastInsertId();

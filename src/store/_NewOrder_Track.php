@@ -31,7 +31,16 @@ try {
 
     // 訂單編號前綴強制大寫（雙重保險）
     if (isset($_POST['OrderNo'])) {
-        $_POST['OrderNo'] = strtoupper(trim($_POST['OrderNo']));
+        // 存檔前檢查（2026-10-22 使用者要求）：新增／複製／修改訂單時，單號一定要是大寫（OO…）。
+        // 正常使用畫面送出前前端已自動轉大寫，所以只會擋到繞過前端直打 API 的小寫單號；
+        // 其他動作（拆批、快速綁定等）維持原本的「靜默轉大寫」不受影響。
+        $__rawNo = trim((string)$_POST['OrderNo']);
+        if ((isset($_POST['or_new']) || isset($_POST['or_new_copy']) || isset($_POST['or_update']))
+            && $__rawNo !== strtoupper($__rawNo)) {
+            echo json_encode(['success' => false, 'message' => '訂單編號必須為大寫（例：OO1150601001），您輸入的是「' . $__rawNo . '」。']);
+            exit;
+        }
+        $_POST['OrderNo'] = strtoupper($__rawNo);
     }
 
     $clientNameId = !empty($_POST['Client_name_ID']) ? $_POST['Client_name_ID'] : null;
