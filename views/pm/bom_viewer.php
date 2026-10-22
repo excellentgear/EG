@@ -189,7 +189,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
         $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note,
-            pa.revision, pa.issue_stamp_date, pa.album_id,
+            pa.revision, pa.issue_stamp_date, pa.album_id, pa.process_tag,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -261,6 +261,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 // 發行章日期是圖面變更的新舊判定依據（ai-rules/15），檢視端也要看得到。
                 'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
                 'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
+                'process_tag'      => (string)($r['process_tag'] ?? ''),   // 製程標籤（與料號主檔附件清單同一欄；空＝共用圖）
                 'is_own_drawing'   => $isOwnDraw ? 1 : 0,
                 // is_album＝此附件屬於「以相簿檢視」的標籤（標籤設定勾的，不寫死標籤名稱）
                 'is_album'         => pa_album_cat_of($r['category_ids'], $albumCatIds) > 0,
@@ -2162,6 +2163,10 @@ function makeAttItem(att, showSource, hideName) {
     var makerBadge = att.maker_no
         ? '<span style="font-size:10px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:3px;padding:0 5px;margin-right:4px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;"></i>'+escapeHtml(att.maker_name || att.maker_no)+'</span>'
         : '';
+    // 製程標籤（上傳／編輯附件時選的加工項目；留空＝共用圖就不顯示。與料號主檔的附件清單一致）
+    var procBadge = (att.source !== 'quote' && att.process_tag)
+        ? '<span style="font-size:10px;font-weight:600;background:#F3E9DC;color:#6B4A2B;border:1px solid #E4D3BC;border-radius:3px;padding:0 5px;margin-right:4px;" title="製程標籤"><i class="fa fa-cogs" style="margin-right:2px;"></i>'+escapeHtml(att.process_tag)+'</span>'
+        : '';
     // 不顯示檔名時，整列至少要有東西可辨識：類別標籤／廠商都沒有才退回「（未分類）」
     var nameHtml = hideName
         ? ((catBadges || makerBadge) ? '' : '<span style="color:#aaa;">（未分類）</span>')
@@ -2181,7 +2186,7 @@ function makeAttItem(att, showSource, hideName) {
         + ' style="'+st+'">'
         + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
-        + srcBadge + fromPartBadge + extBadge + catBadges + makerBadge + revBadge + issBadge + nameHtml
+        + srcBadge + fromPartBadge + extBadge + catBadges + procBadge + makerBadge + revBadge + issBadge + nameHtml
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
         + bindTag
         + '</p></a>';
