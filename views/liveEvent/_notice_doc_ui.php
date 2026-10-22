@@ -19,6 +19,8 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
     .nd-btn { border: 1px solid #d8c7b0; background: #faf6f0; color: #6B471A; border-radius: 4px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
     .nd-btn:hover { background: #f2e6d4; }
     #contentEditor .egrt-doc-scroll { background: #e9e4dc; }
+    /* 公告編輯區只有半個版面寬，兩張 A4 並排放不下、會一直重排當機 → 不提供一頁／雙頁切換（固定單頁） */
+    #contentEditor [data-view] { display: none !important; }
 </style>
 
 <!-- 核准設定（超級管理員） -->

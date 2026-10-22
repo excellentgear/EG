@@ -3151,7 +3151,12 @@ if (isset($_POST['btn_go_events'])) {
                     + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
                     + '*{box-sizing:border-box;} img{max-width:100%;}'
                     + '.ct-head{text-align:center;}'
-                    + '.ct-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
+                    + '.ct-head .co{font-size:30px;font-weight:bold;letter-spacing:3px;}'
+                    + '.fit1 .ct-body{height:auto;}'
+                    + '.fit2 .ct-body{height:auto;font-size:13px;line-height:1.65;} .fit3 .ct-body{height:auto;font-size:12px;line-height:1.55;}'
+                    + '.fit4 .ct-body{height:auto;font-size:11px;line-height:1.45;} .fit5 .ct-body{height:auto;font-size:10px;line-height:1.4;}'
+                    + '.fit3 .ct-rich *,.fit4 .ct-rich *,.fit5 .ct-rich *{font-size:inherit !important;line-height:inherit !important;}'
+                    + '.fit2 .ct-rich td,.fit3 .ct-rich td,.fit4 .ct-rich td,.fit5 .ct-rich td{padding:1px 5px;}'
                     + '.ct-head .ad{font-size:11px;margin-top:2px;}'
                     + '.ct-no{display:flex;justify-content:space-between;font-size:14px;margin:10px 0 2px;}'
                     + '.ct-tt{text-align:center;font-size:24px;font-weight:bold;letter-spacing:12px;margin:2px 0 6px;}'
@@ -3199,8 +3204,13 @@ if (isset($_POST['btn_go_events'])) {
             var w = window.open('', '_blank');
             if (!w) { alert('請允許彈出視窗才能列印'); return; }
             // 可印高度＝紙張高 − 上下 @page 留白 − 上下 body padding（只決定要不要印頁碼，不影響分頁）
-            var onePage = Math.round((297 - MG * 2 - PAD * 2) * 96 / 25.4 * 0.92);
-            var js = 'if(document.body.scrollHeight>' + onePage + '){var st=document.createElement("style");'
+            var onePage = Math.round((297 - MG * 2 - PAD * 2) * 96 / 25.4);
+            var pageW = Math.round((210 - MG * 2) * 96 / 25.4);
+            /* 內容要盡量塞進一張 A4：先把視窗寬度固定成列印實際寬度再量（視窗 1280px 與列印寬度排版高度不同），
+               超出就逐級縮小內文（fit1 去掉書寫區最低高度，fit2~fit5 字級 13→10px），圖章不縮；縮到最小仍放不下才分頁。 */
+            var js = 'document.body.style.width="' + pageW + 'px";'
+                   + 'for(var i=1;i<=5&&document.body.scrollHeight>' + (onePage - 4) + ';i++){document.body.className="fit"+i;}'
+                   + 'if(document.body.scrollHeight>' + onePage + '){var st=document.createElement("style");'
                    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
                    + 'document.head.appendChild(st);}';
             // <!DOCTYPE html> 不可省略：少了它會落入 Quirks Mode，scrollHeight 量不準、單頁也會印出「第1頁／共1頁」
