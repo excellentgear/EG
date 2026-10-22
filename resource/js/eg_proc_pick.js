@@ -12,11 +12,14 @@
  *   EGProcPick.get(el)      → 目前選擇（陣列）
  *   EGProcPick.touched(el)  → 使用者是否動過（沒動過就不要送出，免得把舊文字洗掉）
  *   EGProcPick.set(el, sel, legacy)
+ * 視窗左側是大類／小類清單（兩欄），右側是「組合」：常用的 大類/小類 混合選擇可存成一組、一鍵套用
+ * （全公司共用，存 part_attach_proc_combo，見 attach_proc_lib）。
  * 配色走暖色系（ai-rules/10）；視窗寬度用固定像素（不用 vw）。
  */
 (function (w) {
     'use strict';
     var DICT = null, DICT_CBS = null, DICT_URL = '';
+    var COMBOS = [], MY_UID = 0;
     var MODAL = null, CUR = null;       // CUR＝目前正在編輯的掛載元素
 
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -71,15 +74,28 @@
             + '.epp-none{font-size:11px;color:#aaa;}'
             + '.epp-btn{margin-left:auto;font-size:11px;padding:1px 8px;border:1px solid #E4B27A;background:#FFF3E2;color:#8a5a12;border-radius:3px;cursor:pointer;}'
             + '#epp-mask{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(60,40,20,.45);z-index:20000;display:none;}'
-            + '#epp-box{position:absolute;left:50%;top:6vh;margin-left:-290px;width:580px;max-height:86vh;background:#fff;border-radius:6px;box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;flex-direction:column;}'
+            + '#epp-box{position:absolute;left:50%;top:6vh;margin-left:-580px;width:1160px;max-height:86vh;background:#fff;border-radius:6px;box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;flex-direction:column;}'
             + '#epp-box header{padding:10px 14px;background:#7A4A12;color:#fff;border-radius:6px 6px 0 0;font-weight:700;display:flex;justify-content:space-between;}'
-            + '#epp-box .epp-body{padding:10px 14px;overflow-y:auto;flex:1;}'
+            + '#epp-box .epp-main{display:flex;flex:1;min-height:0;}'
+            + '#epp-box .epp-body{padding:10px 14px;overflow-y:auto;flex:1;min-width:0;}'
+            + '#epp-list{column-count:2;column-gap:22px;}'
+            + '#epp-list .epp-t{break-inside:avoid;}'
+            + '#epp-box .epp-side{width:420px;flex-shrink:0;border-left:1px solid #eadfce;background:#FBF6EE;display:flex;flex-direction:column;min-height:0;}'
+            + '.epp-side h5{margin:0;padding:10px 14px 6px;font-weight:700;color:#7A4A12;font-size:13px;}'
+            + '.epp-side .epp-clist{flex:1;overflow-y:auto;padding:0 14px 8px;}'
+            + '.epp-combo{background:#fff;border:1px solid #E4D3BC;border-radius:5px;padding:6px 8px;margin-bottom:6px;}'
+            + '.epp-combo b{color:#4A3524;font-size:13px;}'
+            + '.epp-combo .epp-ci{margin:3px 0 5px;line-height:1.9;}'
+            + '.epp-combo .epp-chip{margin-right:3px;}'
+            + '.epp-combo .epp-cb{font-size:11px;padding:0 8px;border:1px solid #E4B27A;background:#FFF3E2;color:#8a5a12;border-radius:3px;cursor:pointer;margin-right:4px;}'
+            + '.epp-combo .epp-cd{float:right;color:#a0522d;cursor:pointer;font-size:11px;}'
+            + '.epp-saver{border-top:1px solid #eadfce;padding:8px 14px;}'
             + '#epp-box footer{padding:8px 14px;border-top:1px solid #eee;display:flex;gap:6px;justify-content:flex-end;align-items:center;}'
             + '.epp-t{border-bottom:1px solid #f0e6d8;padding:4px 0;}'
             + '.epp-t label{margin:0;font-weight:700;cursor:pointer;color:#4A3524;}'
             + '.epp-subs{margin:4px 0 2px 24px;display:none;flex-wrap:wrap;gap:2px 14px;}'
             + '.epp-t.open .epp-subs{display:flex;}'
-            + '.epp-subs label{font-weight:400;font-size:12px;min-width:150px;}'
+            + '.epp-subs label{font-weight:400;font-size:12px;min-width:110px;}'
             + '.epp-subs label.cov{color:#bbb;}'
             + '.epp-tg{cursor:pointer;color:#8a5a12;font-size:11px;margin-left:6px;}';
         document.head.appendChild(s);
@@ -92,14 +108,23 @@
             if (!MODAL) {
                 MODAL = document.createElement('div'); MODAL.id = 'epp-mask';
                 MODAL.innerHTML = '<div id="epp-box"><header><span>選擇製程（大類＝整個大類，小類＝個別製程，可混合複選）</span><a href="javascript:void(0)" data-epp-x="1" style="color:#fff;">✕</a></header>'
-                    + '<div class="epp-body"><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
+                    + '<div class="epp-main"><div class="epp-body"><input type="text" id="epp-kw" class="form-control input-sm" placeholder="輸入關鍵字篩選大類或製程名稱" autocomplete="off" style="margin-bottom:6px;"><div id="epp-list"></div></div>'
+                    + '<div class="epp-side"><h5>常用組合（大類＋小類可混合）</h5><div class="epp-clist" id="epp-clist"></div>'
+                    + '<div class="epp-saver"><div style="font-size:11px;color:#888;margin-bottom:4px;">把左側目前勾選的內容存成一組（至少 2 項）</div>'
+                    + '<div style="display:flex;gap:4px;"><input type="text" id="epp-cname" class="form-control input-sm" maxlength="60" placeholder="組合名稱，例如：熱處理＋齒研" autocomplete="off">'
+                    + '<button type="button" class="btn btn-warning btn-sm" data-epp-csave="1" style="white-space:nowrap;">存成組合</button></div>'
+                    + '<div id="epp-cmsg" style="font-size:11px;margin-top:3px;min-height:15px;"></div></div></div></div>'
                     + '<footer><span id="epp-cnt" style="margin-right:auto;font-size:12px;color:#888;"></span>'
                     + '<button type="button" class="btn btn-default btn-sm" data-epp-clear="1">全部清除</button>'
                     + '<button type="button" class="btn btn-default btn-sm" data-epp-x="1">取消</button>'
                     + '<button type="button" class="btn btn-warning btn-sm" data-epp-ok="1">確定</button></footer></div>';
                 document.body.appendChild(MODAL);
                 MODAL.addEventListener('click', modalClick);
-                MODAL.querySelector('#epp-kw').addEventListener('input', function () { drawList(); });
+                var kwEl = MODAL.querySelector('#epp-kw');
+                ['input', 'keyup', 'compositionend', 'change'].forEach(function (ev) { kwEl.addEventListener(ev, function () { drawList(); }); });
+                // Bootstrap modal 的 focusin 鎖會把焦點搶回自己，輸入框就打不了字（也就不會篩選）；本視窗內的焦點事件不往上傳
+                MODAL.addEventListener('focusin', function (e) { e.stopPropagation(); });
+                MODAL.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'epp-kw') e.preventDefault(); });
             }
             // Bootstrap 的 modal 會把焦點鎖在自己裡面，輸入框要打字就得把本視窗放進目前開著的 modal 內
             // 疊了好幾層 modal 時要放進「最上層」那一個（z-index 最大、同值取 DOM 較後者），否則會被上層 modal 蓋住
@@ -114,6 +139,8 @@
             MODAL.querySelector('#epp-kw').value = '';
             MODAL._open = {};
             drawList();
+            drawCombos();
+            loadCombos(el._epp.url, function () { drawCombos(); });
             MODAL.style.display = 'block';
             MODAL.querySelector('#epp-kw').focus();
         });
@@ -143,6 +170,61 @@
         MODAL.querySelector('#epp-cnt').textContent = '已選 ' + n + ' 項';
     }
 
+    function loadCombos(url, cb) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url + (url.indexOf('?') >= 0 ? '&' : '?') + 'action=process_combo_list');
+        xhr.onload = function () {
+            try { var r = JSON.parse(xhr.responseText); if (r && r.success) { COMBOS = r.combos || []; MY_UID = r.uid || 0; } } catch (e) {}
+            if (cb) cb();
+        };
+        xhr.send();
+    }
+    function postCombo(action, data, cb) {
+        var url = CUR ? CUR._epp.url : DICT_URL;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        xhr.onload = function () {
+            var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+            if (r && r.combos) { COMBOS = r.combos; MY_UID = r.uid || MY_UID; }
+            cb(r || { success: false, message: '伺服器回應異常' });
+        };
+        xhr.onerror = function () { cb({ success: false, message: '連線失敗' }); };
+        var body = 'action=' + action;
+        Object.keys(data).forEach(function (k) { body += '&' + k + '=' + encodeURIComponent(data[k]); });
+        xhr.send(body);
+    }
+    function comboMsg(t, ok) { var m = MODAL.querySelector('#epp-cmsg'); m.style.color = ok ? '#2e7d32' : '#c0392b'; m.textContent = t; }
+    function drawCombos() {
+        var box = MODAL.querySelector('#epp-clist'), h = '';
+        COMBOS.forEach(function (c) {
+            var chips = c.items.map(function (x) {
+                return '<span class="epp-chip">' + (x.t === 'type' ? '<b>◆</b> ' : '') + esc(x.name) + '</span>';
+            }).join('');
+            h += '<div class="epp-combo"><b>' + esc(c.name) + '</b>'
+              + ((c.created_by === MY_UID || MY_UID === 1) ? '<span class="epp-cd" data-epp-cdel="' + c.id + '" title="刪除這個組合">刪除</span>' : '')
+              + '<div class="epp-ci">' + (chips || '<span class="epp-none">（內容的製程已不存在）</span>') + '</div>'
+              + '<button type="button" class="epp-cb" data-epp-capply="' + c.id + '" title="用這個組合取代目前勾選">套用</button>'
+              + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button></div>';
+        });
+        box.innerHTML = h || '<div style="color:#aaa;font-size:12px;padding:6px 0;">還沒有組合。左側勾好常用的大類／小類後，在下方命名存起來，之後一鍵套用。</div>';
+    }
+    function comboApply(id, merge) {
+        var c = null; COMBOS.forEach(function (x) { if (x.id === id) c = x; });
+        if (!c) return;
+        var W = merge ? MODAL._work : { type: {}, no: {} };
+        MODAL._work = W;
+        c.items.forEach(function (x) { if (x.t === 'type') W.type[x.id] = 1; });
+        DICT.forEach(function (t) { if (W.type[t.id]) t.subs.forEach(function (s) { delete W.no[s.id]; }); });
+        c.items.forEach(function (x) {
+            if (x.t !== 'no') return;
+            var cov = DICT.some(function (t) { return W.type[t.id] && t.subs.some(function (s) { return s.id === x.id; }); });
+            if (!cov) W.no[x.id] = 1;
+        });
+        drawList();
+        comboMsg('已' + (merge ? '加入' : '套用') + '「' + c.name + '」，按「確定」才會帶入欄位', true);
+    }
+
     function modalClick(e) {
         var t = e.target;
         if (t.getAttribute('data-epp-x')) { close(); return; }
@@ -150,6 +232,26 @@
         if (t.getAttribute('data-epp-clear')) { MODAL._work = { type: {}, no: {} }; drawList(); return; }
         if (t.getAttribute('data-epp-tg')) { var id = t.getAttribute('data-epp-tg'); MODAL._open[id] = !MODAL._open[id]; drawList(); return; }
         if (t.getAttribute('data-epp-ok')) { commit(); return; }
+        var ca = t.getAttribute('data-epp-capply'), cd = t.getAttribute('data-epp-cadd'), cx = t.getAttribute('data-epp-cdel');
+        if (ca) { comboApply(parseInt(ca, 10), false); return; }
+        if (cd) { comboApply(parseInt(cd, 10), true); return; }
+        if (cx) {
+            if (!confirm('確定刪除這個組合？（已套用過的附件不受影響）')) return;
+            postCombo('process_combo_del', { id: cx }, function (r) { drawCombos(); comboMsg(r.message || '', !!r.success); });
+            return;
+        }
+        if (t.getAttribute('data-epp-csave')) {
+            var sel = [], W = MODAL._work;
+            DICT.forEach(function (d) { if (W.type[d.id]) sel.push({ t: 'type', id: d.id }); d.subs.forEach(function (s) { if (W.no[s.id]) sel.push({ t: 'no', id: s.id }); }); });
+            var nm = MODAL.querySelector('#epp-cname').value.trim();
+            if (!nm) { comboMsg('請先輸入組合名稱', false); return; }
+            if (sel.length < 2) { comboMsg('左側至少要勾選 2 項才能存成組合', false); return; }
+            postCombo('process_combo_save', { name: nm, items: JSON.stringify(sel) }, function (r) {
+                drawCombos(); comboMsg(r.message || '', !!r.success);
+                if (r.success) MODAL.querySelector('#epp-cname').value = '';
+            });
+            return;
+        }
         var ty = t.getAttribute && t.getAttribute('data-epp-type');
         if (ty) {
             ty = parseInt(ty, 10);

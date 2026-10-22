@@ -833,6 +833,21 @@ switch ($action) {
         echo json_encode(['success'=>true,'types'=>eg_apc_dict($pdo)], JSON_UNESCAPED_UNICODE);
         break;
 
+    case 'process_combo_list':
+        require_once __DIR__ . '/../common/attach_proc_lib.php';
+        echo json_encode(['success'=>true,'combos'=>eg_apc_combo_list($pdo),'uid'=>$uploadedById], JSON_UNESCAPED_UNICODE);
+        break;
+    case 'process_combo_save':
+        require_once __DIR__ . '/../common/attach_proc_lib.php';
+        list($okc,$msgc) = eg_apc_combo_save($pdo, (string)($_POST['name'] ?? ''), $_POST['items'] ?? '[]', $uploadedById);
+        echo json_encode(['success'=>$okc,'message'=>$msgc,'combos'=>eg_apc_combo_list($pdo),'uid'=>$uploadedById], JSON_UNESCAPED_UNICODE);
+        break;
+    case 'process_combo_del':
+        require_once __DIR__ . '/../common/attach_proc_lib.php';
+        list($okc,$msgc) = eg_apc_combo_del($pdo, intval($_POST['id'] ?? 0), $uploadedById);
+        echo json_encode(['success'=>$okc,'message'=>$msgc,'combos'=>eg_apc_combo_list($pdo),'uid'=>$uploadedById], JSON_UNESCAPED_UNICODE);
+        break;
+
     case 'process_candidates':
         $pcDid = (int)($_GET['d_id'] ?? $_POST['d_id'] ?? 0);
         if ($pcDid <= 0) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }

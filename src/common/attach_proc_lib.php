@@ -143,3 +143,67 @@ function eg_apc_filter_sql(PDO $pdo, $raw, string $dAlias = 'd'): string {
          . " WHERE apa.d_id={$dAlias}.d_id AND apa.deleted_at IS NULL AND " . imgedit_sql_not_draft('apa')
          . " AND (" . implode(' OR ', $conds) . "))";
 }
+
+/* ═══ 製程選擇「組合」（2026-10-22）：常用的 大類/小類 混合選擇存成一組，之後一鍵套用 ═══
+ * 全公司共用一份（現場常用的組合大家都一樣）；任何人可新增，刪除限建立者與系統管理員(id=1)。
+ * 只存 [{t,id}]，名稱一律即時對字典取，主檔改名組合跟著變。 */
+function eg_apc_combo_ensure(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        if (!$pdo->query("SHOW TABLES LIKE 'part_attach_proc_combo'")->fetch() && !$pdo->inTransaction()) {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS part_attach_proc_combo (
+                combo_id INT AUTO_INCREMENT PRIMARY KEY,
+                combo_name VARCHAR(60) NOT NULL,
+                items_json TEXT NOT NULL COMMENT '[{t:type|no,id}]',
+                created_by INT NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_name (combo_name)
+            ) COMMENT='製程選擇組合（大類/小類混合）'");
+        }
+    } catch (Throwable $e) {}
+}
+
+function eg_apc_combo_list(PDO $pdo): array {
+    eg_apc_combo_ensure($pdo);
+    $out = [];
+    try {
+        foreach ($pdo->query("SELECT combo_id, combo_name, items_json, created_by FROM part_attach_proc_combo ORDER BY combo_name")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $items = eg_apc_parse($pdo, $r['items_json']);   // 已不存在的製程自動濾掉
+            $out[] = ['id' => (int)$r['combo_id'], 'name' => $r['combo_name'], 'items' => $items, 'created_by' => (int)$r['created_by']];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 新增；同名則覆寫內容（只有建立者／管理員可覆寫）。回 [ok, message] */
+function eg_apc_combo_save(PDO $pdo, string $name, $items, int $uid): array {
+    eg_apc_combo_ensure($pdo);
+    $name = trim(preg_replace('/\s+/u', ' ', $name));
+    if ($name === '' || mb_strlen($name) > 60) return [false, '組合名稱必填，且不可超過 60 字'];
+    $sel = eg_apc_parse($pdo, $items);
+    if (count($sel) < 2) return [false, '組合至少要選 2 項（只選 1 項直接勾選就好）'];
+    $json = json_encode(array_map(function ($x) { return ['t' => $x['t'], 'id' => $x['id']]; }, $sel));
+    $st = $pdo->prepare("SELECT combo_id, created_by FROM part_attach_proc_combo WHERE combo_name=?");
+    $st->execute([$name]);
+    $ex = $st->fetch(PDO::FETCH_ASSOC);
+    if ($ex) {
+        if ((int)$ex['created_by'] !== $uid && $uid !== 1) return [false, '已有同名組合，且不是你建立的，請換個名稱'];
+        $pdo->prepare("UPDATE part_attach_proc_combo SET items_json=? WHERE combo_id=?")->execute([$json, $ex['combo_id']]);
+        return [true, '已更新組合「' . $name . '」'];
+    }
+    $pdo->prepare("INSERT INTO part_attach_proc_combo (combo_name, items_json, created_by) VALUES (?,?,?)")->execute([$name, $json, $uid]);
+    return [true, '已建立組合「' . $name . '」'];
+}
+
+function eg_apc_combo_del(PDO $pdo, int $id, int $uid): array {
+    eg_apc_combo_ensure($pdo);
+    $st = $pdo->prepare("SELECT created_by FROM part_attach_proc_combo WHERE combo_id=?");
+    $st->execute([$id]);
+    $by = $st->fetchColumn();
+    if ($by === false) return [false, '組合不存在（可能已被刪除）'];
+    if ((int)$by !== $uid && $uid !== 1) return [false, '只有建立者或系統管理員可以刪除'];
+    $pdo->prepare("DELETE FROM part_attach_proc_combo WHERE combo_id=?")->execute([$id]);
+    return [true, '已刪除'];
+}
