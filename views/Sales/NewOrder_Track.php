@@ -4258,7 +4258,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                  查詢失敗／沒設定自家圖標籤（$own_draw_ready=false）時一律不顯示，避免誤判。 */ ?>
                         <?php if ($own_draw_ready && !$_is_new_case && empty($order['pmGet_formatted']) && !empty($order['d_id_ID']) && empty($own_draw_map[(int)$order['d_id_ID']])): ?>
                         <span style="background:#FFF3E2;color:#C77C1A;border:1px solid #F0A24B;border-radius:3px;padding:0 4px;font-size:9px;line-height:14px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
-                              title="這個料號還沒有加工圖面（附件裡找不到掛「自家圖」標籤的檔案）。管理員可在料號主檔→類別字典設定→附件類別標籤設定，決定哪些標籤算加工圖面">無加工圖</span>
+                              title="這個料號還沒有加工圖面（附件裡找不到掛「自家圖」標籤的檔案）。管理員可在料號主檔→類別字典設定→附件類別標籤設定，決定哪些標籤算加工圖面"><i class="fa fa-times" style="font-size:8px;margin-right:2px;"></i>加工圖</span>
                         <?php endif; ?>
                         <?php endif; ?>
                         <?php if ($_stk_t > 0): ?>
