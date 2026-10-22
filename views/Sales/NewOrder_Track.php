@@ -5558,12 +5558,16 @@ foreach($dCounts as $c) {
                             <?php 
                             $currY = date('Y');
                             // 起始年度取訂單實際最早年份（原本寫死 2024，2018~2023 的訂單選不到）
-                            $minY = 2024;
+                            // 只列出「真的有訂單」的年份（沒有資料的年份不顯示）
+                            $yearList = [];
                             try {
-                                $mv = $db->query("SELECT MIN(YEAR(Order_date)) FROM order_track WHERE Order_date IS NOT NULL AND Order_date>'2000-01-01'")->fetchColumn();
-                                if ($mv && (int)$mv >= 2000 && (int)$mv <= $currY) $minY = (int)$mv;
+                                $yearList = $db->query("SELECT DISTINCT YEAR(Order_date) FROM order_track WHERE Order_date IS NOT NULL AND Order_date>'2000-01-01' ORDER BY 1")->fetchAll(PDO::FETCH_COLUMN);
                             } catch (Exception $eMinY) {}
-                            for($y=$minY; $y<=$currY; $y++) {
+                            if (empty($yearList)) $yearList = range(2024, (int)$currY);
+                            if (ctype_digit((string)$selectedYear) && !in_array((int)$selectedYear, array_map('intval', $yearList), true)) $yearList[] = (int)$selectedYear; // 網址指定的年份仍保留，避免選單與內容對不上
+                            sort($yearList);
+                            foreach($yearList as $y) {
+                                $y = (int)$y;
                                 $sel = ($y == $selectedYear) ? 'selected' : '';
                                 echo "<option value='$y' $sel>$y 年</option>";
                             }
