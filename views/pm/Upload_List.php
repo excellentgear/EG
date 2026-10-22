@@ -637,6 +637,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                                 <button type="button" class="btn btn-sm btn-success" id="btnOeiConvert"><i class="fa fa-exchange"></i> 轉成正式訂單（<span id="oeiSel">0</span>）</button>
                                                 <button type="button" class="btn btn-sm btn-warning" id="btnOeiMulti" title="同客戶同編號在料號主檔有多筆時，左右對照後指定用哪一筆"><i class="fa fa-columns"></i> 料號多筆對照</button>
                                                 <button type="button" class="btn btn-sm btn-warning" id="btnOeiCust"title="報表上的客戶名稱對不到客戶主檔時，指定它對應哪一家"><i class="fa fa-link"></i> 設定客戶對應</button>
+                                                <button type="button" class="btn btn-sm btn-info" id="btnOeiCmp" title="同單號已有此產品但內容不同：左＝補資料、右＝訂單追蹤現有"><i class="fa fa-columns"></i> 內容不同比較表</button>
                                                 <button type="button" class="btn btn-sm btn-default" id="btnOeiSkip">略過選取</button>
                                                 <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel">刪除選取</button>
                                             </span>
@@ -666,6 +667,19 @@ function lastUpdateBadge($info, $color = '#555') {
         </div>
     </div>
 </div>
+<div class="modal fade" id="oeiCmpModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:1100px;max-width:96%">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#F7E0BD"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><strong>同料號·內容不同 比較表：左＝補資料（ERP），右＝訂單追蹤現有</strong></h4></div>
+            <div class="modal-body" style="max-height:72vh;overflow:auto">
+                <div class="text-muted" style="font-size:12px;margin-bottom:8px">依「單號＋產品編號」分組。紅字是兩邊不同的欄位；兩邊數量合計相同表示只是分批拆法不同。確定是另一筆明細才回到清單勾選補入，否則略過。<span id="oeiCmpInfo"></span></div>
+                <div id="oeiCmpBody"></div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade" id="oeiCustModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" style="width:860px;max-width:96%">
         <div class="modal-content">
@@ -828,6 +842,38 @@ document.addEventListener('DOMContentLoaded', function () {
         post('cust_map_save', { maps: JSON.stringify(maps) }).done(function (r) {
             if (!r.ok) { alert(r.error); return; }
             alert('已儲存 ' + r.saved + ' 筆對應，並重新判定 ' + r.rematched + ' 筆待轉入資料'); load(); loadCust();
+        }).fail(fail);
+    });
+
+    // ── 同料號·內容不同 比較表 ──
+    function fnum(v) { return v == null || v === '' ? '' : Number(v).toLocaleString(); }
+    $('#btnOeiCmp').on('click', function () {
+        $('#oeiCmpBody').html('<div class="text-muted">載入中…</div>'); $('#oeiCmpModal').appendTo('body').modal('show');
+        post('diff_compare', { q: $('#oeiQ').val() }).done(function (res) {
+            if (!res.ok) { $('#oeiCmpBody').html(esc(res.error)); return; }
+            $('#oeiCmpInfo').text(res.total_groups > res.groups.length ? '（共 ' + res.total_groups + ' 組，只顯示前 ' + res.groups.length + ' 組，可用上方搜尋縮小）' : '（共 ' + res.groups.length + ' 組）');
+            var h = '';
+            res.groups.forEach(function (g) {
+                var xp = {}, xpr = {}; g.xl.forEach(function (r) { xp[$.trim(r.process_text || '')] = 1; xpr[Number(r.unit_price)] = 1; });
+                var same = g.xl_sum === g.ex_sum;
+                h += '<table class="table table-condensed table-bordered" style="font-size:12px;margin-bottom:10px"><thead><tr style="background:#F7E0BD"><th colspan="2">' + esc(g.order_oo) + '　' + esc(g.client_name) + '　' + esc(g.part_no) + '</th><th colspan="2" style="text-align:right">補資料合計 <b style="color:' + (same ? '#2e7d32' : '#DD5138') + '">' + fnum(g.xl_sum) + '</b>　訂單追蹤合計 <b style="color:' + (same ? '#2e7d32' : '#DD5138') + '">' + fnum(g.ex_sum) + '</b></th></tr>' +
+                    '<tr><th style="width:50%" colspan="2">補資料（ERP 報表）</th><th colspan="2">訂單追蹤現有</th></tr></thead><tbody>';
+                var n = Math.max(g.xl.length, g.ex.length);
+                for (var i = 0; i < n; i++) {
+                    var a = g.xl[i], b = g.ex[i], l = '', rr = '';
+                    if (a) {
+                        l = '<td colspan="2">數量 <b>' + fnum(a.qty) + '</b>　製程 ' + esc(a.process_text || '(空)') + '　單價 ' + fnum(a.unit_price) + '　交期 ' + fd(a.delivery_date) + '</td>';
+                    } else l = '<td colspan="2" class="text-muted">—</td>';
+                    if (b) {
+                        var dq = a && Number(a.qty) !== Number(b.Qty), dp = a && String($.trim(a.process_text || '')) !== '' && $.trim(b.Processing_items || '') !== '' && $.trim(a.process_text) !== $.trim(b.Processing_items), du = a && a.unit_price != null && b.unit_price != null && Math.abs(a.unit_price - b.unit_price) >= 0.005;
+                        var red = function (t, f) { return f ? '<span style="color:#DD5138;font-weight:bold">' + t + '</span>' : t; };
+                        rr = '<td colspan="2">#' + b.Order_id + '　數量 ' + red('<b>' + fnum(b.Qty) + '</b>', dq) + '　製程 ' + red(esc(b.Processing_items || '(空)'), dp) + '　單價 ' + red(fnum(b.unit_price), du) + '　交期 ' + fd(b.Delivery_date) + (b.Order_ps ? '　<span class="text-muted">' + esc(b.Order_ps) + '</span>' : '') + '</td>';
+                    } else rr = '<td colspan="2" class="text-muted">—（訂單內沒有對應的列）</td>';
+                    h += '<tr>' + l + rr + '</tr>';
+                }
+                h += '</tbody></table>';
+            });
+            $('#oeiCmpBody').html(h || '<div class="alert alert-success">目前沒有「同料號·內容不同」的待轉入資料。</div>');
         }).fail(fail);
     });
 

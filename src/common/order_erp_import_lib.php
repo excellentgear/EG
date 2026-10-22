@@ -180,6 +180,29 @@ function oei_resolve_customer(PDO $db, ?string $cid, ?string $cname): ?string {
 }
 
 /**
+ * Excel 把同一筆訂單拆成多行（如 30＋70＋2），訂單追蹤卻打成一筆（102）：
+ * 在「尚未對應的既有訂單列」中找一組，數量合計剛好等於這些 Excel 行的合計，且製程／單價沒有衝突。
+ * $xl＝[['qty','proc','price'],…]；$ex＝[['Qty','Processing_items','unit_price'],…]；回傳既有列的索引陣列，找不到回 null。
+ */
+function oei_group_sum_match(array $xl, array $ex): ?array {
+    if (count($xl) < 2 || !$ex || count($ex) > 12) return null;
+    $target = 0; foreach ($xl as $x) $target += (int)$x['qty'];
+    $n = count($ex);
+    for ($mask = 1; $mask < (1 << $n); $mask++) {
+        $sum = 0; $idx = [];
+        for ($i = 0; $i < $n; $i++) if ($mask & (1 << $i)) { $sum += (int)$ex[$i]['Qty']; $idx[] = $i; }
+        if ($sum !== $target) continue;
+        $ok = true;
+        foreach ($idx as $i) foreach ($xl as $x) {
+            if (!oei_proc_ok((string)$ex[$i]['Processing_items'], (string)$x['proc'])) { $ok = false; break 2; }
+            if ($ex[$i]['unit_price'] !== null && $x['price'] !== null && abs((float)$ex[$i]['unit_price'] - (float)$x['price']) >= 0.005) { $ok = false; break 2; }
+        }
+        if ($ok) return $idx;
+    }
+    return null;
+}
+
+/**
  * 逐列比對。回傳每列補上 d_id_id／process_text／match_status／match_note／existing_order_id。
  * 同單號底下可能有多筆「料號、數量、製程、單價」都相同的列，所以採「一對一消耗」：
  * 每筆 Excel 列只會對應一筆既有訂單列，且每筆既有列只被對應一次。
@@ -233,6 +256,23 @@ function oei_match(PDO $db, array $rows): array {
         unset($e);
     }
     unset($r);
+    // 第二輪：Excel 同單同料多行，合計＝訂單內未對應的一筆（或幾筆）→ 視為已存在
+    $grp = [];
+    foreach ($rows as $i => $r) { if ($r['match_status'] === '' && isset($exist[$r['order_oo']])) $grp[$partKey($r)][] = $i; }
+    foreach ($grp as $idxs) {
+        $r0 = $rows[$idxs[0]];
+        $cand = [];
+        foreach ($exist[$r0['order_oo']] as $k => $e) if (!$e['used'] && $samePart($e, $r0)) $cand[] = $k;
+        if (!$cand) continue;
+        $xl = array_map(fn($i) => ['qty' => $rows[$i]['qty'], 'proc' => $rows[$i]['process_text'], 'price' => $rows[$i]['unit_price']], $idxs);
+        $hit = oei_group_sum_match($xl, array_map(fn($k) => $exist[$r0['order_oo']][$k], $cand));
+        if ($hit === null) continue;
+        foreach ($hit as $h) { $exist[$r0['order_oo']][$cand[$h]]['used'] = true; $eid = (int)$exist[$r0['order_oo']][$cand[$h]]['Order_id']; }
+        foreach ($idxs as $i) {
+            $rows[$i]['match_status'] = 'exact'; $rows[$i]['existing_order_id'] = $eid;
+            $rows[$i]['match_note'] = 'Excel 此單此料 ' . count($idxs) . ' 行合計 ' . array_sum(array_column($xl, 'qty')) . '＝訂單內 ' . count($hit) . ' 筆合計，視為已存在，略過';
+        }
+    }
     foreach ($rows as &$r) {
         if ($r['match_status'] !== '') continue;
         if ($r['d_id_id'] === null) {
@@ -348,6 +388,20 @@ function oei_rematch_pending(PDO $db): int {
             $up->execute(['no_part', $lk['note'] . ($lk['note'] === '料號主檔查無此產品編號' ? '，且客戶無法對應客戶主檔（請用「設定客戶對應」）' : '，請到料號主檔整理後再轉入'), null, $r['client_id'], $r['id']]);
         }
         $n++;
+    }
+    // 同料號·內容不同：Excel 多行合計＝訂單內既有列合計者，改為已存在（略過）
+    $g = [];
+    foreach ($db->query("SELECT id, order_oo, part_no, d_id_id, qty, process_text, unit_price FROM order_erp_import_stage WHERE state='pending' AND match_status='diff'")->fetchAll(PDO::FETCH_ASSOC) as $r)
+        $g[$r['order_oo'] . '|' . $r['part_no']][] = $r;
+    $exs = $db->prepare("SELECT Order_id, Qty, Processing_items, unit_price FROM order_track WHERE Order_oo=? AND (d_id=? OR d_id_ID=?)");
+    $sk = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', match_note=?, existing_order_id=? WHERE id=? AND state='pending'");
+    foreach ($g as $rs) {
+        $exs->execute([$rs[0]['order_oo'], $rs[0]['part_no'], (int)$rs[0]['d_id_id']]);
+        $ex = $exs->fetchAll(PDO::FETCH_ASSOC);
+        $xl = array_map(fn($r) => ['qty' => $r['qty'], 'proc' => (string)$r['process_text'], 'price' => $r['unit_price'] === null ? null : (float)$r['unit_price']], $rs);
+        $hit = oei_group_sum_match($xl, $ex);
+        if ($hit === null) continue;
+        foreach ($rs as $r) { $sk->execute(['Excel 此單此料 ' . count($rs) . ' 行合計＝訂單內 ' . count($hit) . ' 筆合計，視為已存在，略過', (int)$ex[$hit[0]]['Order_id'], $r['id']]); $n++; }
     }
     return $n;
 }

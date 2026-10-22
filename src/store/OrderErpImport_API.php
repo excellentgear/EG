@@ -181,6 +181,30 @@ case 'multi_pick': {   // 指定該組補資料用哪一筆料號主檔 → 改�
 case 'rematch': {
     oeiOut(['ok' => true, 'rematched' => oei_rematch_pending($db)]);
 }
+case 'diff_compare': {   // 同料號·內容不同：左＝補資料行、右＝訂單追蹤既有列（依單號＋產品編號分組）
+    $q = trim($_POST['q'] ?? '');
+    $sql = "SELECT id, order_oo, part_no, d_id_id, client_name, qty, process_text, unit_price, delivery_date, order_date FROM order_erp_import_stage WHERE state='pending' AND match_status='diff'";
+    $p = [];
+    if ($q !== '') { $sql .= " AND (order_oo LIKE ? OR part_no LIKE ? OR client_name LIKE ?)"; $l = "%$q%"; array_push($p, $l, $l, $l); }
+    $sql .= " ORDER BY order_oo, part_no, line_no, id LIMIT 3000";
+    $s = $db->prepare($sql); $s->execute($p);
+    $g = [];
+    foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $k = $r['order_oo'] . '|' . $r['part_no'];
+        if (!isset($g[$k])) $g[$k] = ['order_oo' => $r['order_oo'], 'part_no' => $r['part_no'], 'd_id_id' => $r['d_id_id'], 'client_name' => $r['client_name'], 'xl' => [], 'ex' => []];
+        $g[$k]['xl'][] = $r;
+    }
+    $ex = $db->prepare("SELECT Order_id, Qty, Processing_items, unit_price, Delivery_date, Order_date, Order_ps FROM order_track WHERE Order_oo=? AND (d_id=? OR d_id_ID=?) ORDER BY Order_id");
+    $out = [];
+    foreach ($g as $x) {
+        if (count($out) >= 300) break;
+        $ex->execute([$x['order_oo'], $x['part_no'], (int)$x['d_id_id']]);
+        $x['ex'] = $ex->fetchAll(PDO::FETCH_ASSOC);
+        $x['xl_sum'] = array_sum(array_column($x['xl'], 'qty')); $x['ex_sum'] = array_sum(array_column($x['ex'], 'Qty'));
+        $out[] = $x;
+    }
+    oeiOut(['ok' => true, 'groups' => $out, 'total_groups' => count($g)]);
+}
 case 'skip': {
     $n = 0; $s = $db->prepare("UPDATE order_erp_import_stage SET state='skipped' WHERE id=? AND state='pending'");
     foreach ($ids() as $id) { $s->execute([$id]); $n += $s->rowCount(); }
