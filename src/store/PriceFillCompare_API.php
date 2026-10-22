@@ -41,6 +41,7 @@ case 'list': {
     }));
     usort($rows, fn($a, $b) => strcmp((string)$b['order']['Order_oo'], (string)$a['order']['Order_oo']) ?: $a['order_id'] <=> $b['order_id']);
     $total = count($rows);
+    if (!empty($_POST['ids_only'])) pfcOut(['ok' => true, 'ids' => array_map(fn($c) => (int)$c['order_id'], $rows)]);   // 一次全選：回傳符合條件的全部 id
     $rows = array_slice($rows, ($page - 1) * $per, $per);
     // 客戶名稱（已綁定者取主檔）
     $cid = array_values(array_unique(array_filter(array_map(fn($c) => $c['order']['Client_name_ID'], $rows))));
@@ -54,7 +55,8 @@ case 'apply': {
     $ids = json_decode($_POST['ids'] ?? '[]', true);
     $cat = (string)($_POST['cat'] ?? '');
     if (!is_array($ids) || !$ids) pfcOut(['ok' => false, 'error' => '請先勾選']);
-    if (count($ids) > 2000) pfcOut(['ok' => false, 'error' => '一次最多 2000 筆']);
+    if (count($ids) > 5000) pfcOut(['ok' => false, 'error' => '一次最多 5000 筆']);
+    set_time_limit(600);
     $r = opf_apply($db, $ids, $cat, $uid);
     pfcOut(['ok' => true] + $r);
 }

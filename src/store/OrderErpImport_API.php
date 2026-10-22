@@ -133,6 +133,51 @@ case 'cust_map_save': {   // 一次存多筆：maps=[{erp_name,customer_id}]；c
     $n = oei_rematch_pending($db);
     oeiOut(['ok' => true, 'saved' => $saved, 'rematched' => $n]);
 }
+case 'multi_list': {   // 料號主檔同編號多筆：左＝補資料（依客戶＋產品編號分組），右＝候選料號主檔
+    oei_resolve_customer($db, '__reset__', null);
+    $rows = $db->query("SELECT id, order_oo, client_id, client_name, part_no, qty, unit_price, process_text, spec_text FROM order_erp_import_stage
+                        WHERE state='pending' AND match_status='no_part' AND match_note LIKE '%筆同編號%' ORDER BY client_name, part_no, id")->fetchAll(PDO::FETCH_ASSOC);
+    $grp = [];
+    foreach ($rows as $r) {
+        $k = $r['client_name'] . '|' . $r['part_no'];
+        if (!isset($grp[$k])) $grp[$k] = ['client_name' => $r['client_name'], 'client_id' => $r['client_id'], 'part_no' => $r['part_no'], 'ids' => [], 'rows' => []];
+        $grp[$k]['ids'][] = (int)$r['id'];
+        if (count($grp[$k]['rows']) < 5) $grp[$k]['rows'][] = $r;
+    }
+    $cs = $db->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Revision, d.Issue_Date, d.Created_At, d.Customer_Id, c.customer,
+                               (SELECT COUNT(*) FROM order_track o WHERE o.d_id_ID=d.d_id) order_cnt,
+                               (SELECT MAX(o.Order_date) FROM order_track o WHERE o.d_id_ID=d.d_id) last_order
+                        FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.D_Setting_Id=? ORDER BY d.d_id");
+    $out = [];
+    foreach ($grp as $g) {
+        $cu = oei_resolve_customer($db, $g['client_id'], $g['client_name']);
+        $cs->execute([$g['part_no']]);
+        $all = $cs->fetchAll(PDO::FETCH_ASSOC);
+        $g['cands'] = $cu !== null ? array_values(array_filter($all, fn($x) => (string)$x['Customer_Id'] === (string)$cu)) : $all;
+        $g['cust_ok'] = $cu !== null;
+        $out[] = $g;
+    }
+    oeiOut(['ok' => true, 'groups' => $out]);
+}
+case 'multi_pick': {   // 指定該組補資料用哪一筆料號主檔 → 改成可轉入
+    $pid = (int)($_POST['d_id'] ?? 0); $sids = $ids();
+    if (!$pid || !$sids) oeiOut(['ok' => false, 'error' => '參數不足']);
+    $p = $db->prepare("SELECT d_id, D_Setting_Id, Customer_Id FROM d_setting WHERE d_id=?"); $p->execute([$pid]);
+    $part = $p->fetch(PDO::FETCH_ASSOC);
+    if (!$part) oeiOut(['ok' => false, 'error' => '料號主檔查無此筆']);
+    $sel = $db->prepare("SELECT id, order_oo, part_no FROM order_erp_import_stage WHERE id=? AND state='pending' AND match_status='no_part'");
+    $oc = $db->prepare("SELECT 1 FROM order_track WHERE Order_oo=? LIMIT 1");
+    $up = $db->prepare("UPDATE order_erp_import_stage SET match_status=?, match_note=?, d_id_id=?, client_id=COALESCE(NULLIF(?,''),client_id) WHERE id=?");
+    $n = 0;
+    foreach ($sids as $sid) {
+        $sel->execute([$sid]); $r = $sel->fetch(PDO::FETCH_ASSOC);
+        if (!$r || $r['part_no'] !== $part['D_Setting_Id']) continue;
+        $oc->execute([$r['order_oo']]); $has = (bool)$oc->fetchColumn();
+        $up->execute([$has ? 'add_to_order' : 'new_order', ($has ? '單號已存在但無此產品編號，將補進去' : '單號不存在，將新建此訂單') . '（已人工指定料號主檔 #' . $pid . '）', $pid, (string)$part['Customer_Id'], $sid]);
+        $n += $up->rowCount() ? 1 : 0;
+    }
+    oeiOut(['ok' => true, 'n' => $n]);
+}
 case 'rematch': {
     oeiOut(['ok' => true, 'rematched' => oei_rematch_pending($db)]);
 }

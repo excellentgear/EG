@@ -635,7 +635,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <span style="flex:1"></span>
                                             <span id="oeiActs">
                                                 <button type="button" class="btn btn-sm btn-success" id="btnOeiConvert"><i class="fa fa-exchange"></i> 轉成正式訂單（<span id="oeiSel">0</span>）</button>
-                                                <button type="button" class="btn btn-sm btn-warning" id="btnOeiCust" title="報表上的客戶名稱對不到客戶主檔時，指定它對應哪一家"><i class="fa fa-link"></i> 設定客戶對應</button>
+                                                <button type="button" class="btn btn-sm btn-warning" id="btnOeiMulti" title="同客戶同編號在料號主檔有多筆時，左右對照後指定用哪一筆"><i class="fa fa-columns"></i> 料號多筆對照</button>
+                                                <button type="button" class="btn btn-sm btn-warning" id="btnOeiCust"title="報表上的客戶名稱對不到客戶主檔時，指定它對應哪一家"><i class="fa fa-link"></i> 設定客戶對應</button>
                                                 <button type="button" class="btn btn-sm btn-default" id="btnOeiSkip">略過選取</button>
                                                 <button type="button" class="btn btn-sm btn-danger" id="btnOeiDel">刪除選取</button>
                                             </span>
@@ -653,6 +654,18 @@ function lastUpdateBadge($info, $color = '#555') {
                                     <div style="margin-top:6px"><a href="price_fill_compare.php" target="_blank" class="btn btn-sm btn-warning"><i class="fa fa-columns"></i> 補單價比對（左：補資料／ERP，右：訂單追蹤，可批次轉價格）</a></div>
                                     </div>
 
+<div class="modal fade" id="oeiMultiModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:1100px;max-width:96%">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#F7E0BD"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><strong>料號主檔同編號多筆：左＝補資料，右＝候選料號主檔</strong></h4></div>
+            <div class="modal-body" style="max-height:72vh;overflow:auto">
+                <div class="text-muted" style="font-size:12px;margin-bottom:8px">同客戶、同產品編號在料號主檔有多筆，系統不猜。請依圖號／規格／版次／既有訂單數判斷，按右側「用這筆」，該組所有補資料列就會綁定該料號並變成可轉入。</div>
+                <div id="oeiMultiBody"></div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+        </div>
+    </div>
+</div>
 <div class="modal fade" id="oeiCustModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" style="width:860px;max-width:96%">
         <div class="modal-content">
@@ -766,6 +779,36 @@ document.addEventListener('DOMContentLoaded', function () {
             $('#oeiCustBody').html(h);
         }).fail(fail);
     }
+    // ── 料號主檔同編號多筆：左右對照後指定 ──
+    function loadMulti() {
+        $('#oeiMultiBody').html('<div class="text-muted">載入中…</div>'); $('#oeiMultiModal').appendTo('body').modal('show');
+        post('multi_list', {}).done(function (res) {
+            if (!res.ok) { $('#oeiMultiBody').html(esc(res.error)); return; }
+            if (!res.groups.length) { $('#oeiMultiBody').html('<div class="alert alert-success">目前沒有「料號主檔同編號多筆」的待轉入資料。</div>'); return; }
+            var h = '<table class="table table-bordered" style="font-size:12px"><colgroup><col style="width:38%"><col></colgroup><thead><tr><th>補資料（ERP）</th><th>料號主檔候選</th></tr></thead><tbody>';
+            res.groups.forEach(function (g) {
+                h += '<tr><td><b>' + esc(g.client_name || '(空白)') + '</b>　產品編號 <b>' + esc(g.part_no) + '</b><br>共 ' + g.ids.length + ' 筆補資料' + (g.cust_ok ? '' : '<br><span style="color:#DD5138">客戶未對上主檔，候選為全部客戶</span>');
+                g.rows.forEach(function (r) { h += '<div style="margin-top:4px;color:#555">' + esc(r.order_oo) + '　數量 ' + esc(r.qty) + '　單價 ' + (r.unit_price == null ? '' : esc(r.unit_price)) + '<br>' + esc(r.spec_text || '') + '</div>'; });
+                if (g.ids.length > g.rows.length) h += '<div class="text-muted">…其餘 ' + (g.ids.length - g.rows.length) + ' 筆</div>';
+                h += '</td><td><table class="table table-condensed" style="margin:0;font-size:12px"><thead><tr><th>#</th><th>客戶</th><th>圖號</th><th>規格</th><th>版次</th><th>建立</th><th>既有訂單</th><th></th></tr></thead><tbody>';
+                g.cands.forEach(function (c) {
+                    h += '<tr><td>' + c.d_id + '</td><td>' + esc(c.customer || c.Customer_Id || '') + '</td><td>' + esc(c.Drawing_No || '') + '</td><td>' + esc(c.Spec_No || '') + '</td><td>' + esc(c.Revision || '') + '</td><td>' + esc(String(c.Created_At || '').substr(0, 10)) + '</td><td>' + c.order_cnt + (c.last_order ? '（最近 ' + esc(String(c.last_order).substr(0, 10)) + '）' : '') + '</td>' +
+                         '<td><button class="btn btn-xs btn-warning oei-mp" data-did="' + c.d_id + '" data-ids="' + g.ids.join(',') + '">用這筆</button></td></tr>';
+                });
+                h += '</tbody></table></td></tr>';
+            });
+            $('#oeiMultiBody').html(h + '</tbody></table>');
+        }).fail(fail);
+    }
+    $('#btnOeiMulti').on('click', loadMulti);
+    $(document).on('click', '.oei-mp', function () {
+        var b = $(this); if (!confirm('該組全部補資料列都綁定料號主檔 #' + b.data('did') + '？')) return;
+        b.prop('disabled', true);
+        post('multi_pick', { d_id: b.data('did'), ids: JSON.stringify(String(b.data('ids')).split(',').map(Number)) }).done(function (r) {
+            if (!r.ok) { alert(r.error); b.prop('disabled', false); return; }
+            load(); loadMulti();
+        }).fail(function (x) { fail(x); b.prop('disabled', false); });
+    });
     $('#btnOeiCust').on('click', loadCust);
     $(document).on('click', '.oei-sg', function (e) { e.preventDefault(); $(this).closest('td').find('.oei-cm').val($(this).data('v')); });
     $(document).on('click', '.oei-md', function (e) {

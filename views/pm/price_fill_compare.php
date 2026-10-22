@@ -67,6 +67,7 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
     <input type="text" id="q" placeholder="搜尋 訂單編號／料號／客戶／製程（空白分隔多關鍵字）" data-eg-skip>
     <select id="per" class="form-control input-sm" style="width:90px"><option>50</option><option>100</option><option>200</option></select>
     <button class="pf-btn sec" id="btnPage">勾選本頁全部</button>
+    <button class="pf-btn sec" id="btnAllMatch">勾選全部符合（不分頁）</button>
     <button class="pf-btn sec" id="btnClear">取消勾選</button>
     <span id="selInfo" style="font-size:12px;color:#8A5A2B">已選 0 筆</span>
     <button class="pf-btn" id="btnApply" disabled><i class="fa fa-exchange"></i> 轉價格（已選 <span id="selN">0</span>）</button>
@@ -149,6 +150,17 @@ $('#tabs').on('click','.pf-tab',function(){ CAT=$(this).data('c'); PAGE=1; SEL={
 $('#body').on('change','.ck',function(){ var id=$(this).val(); if(this.checked) SEL[id]=1; else delete SEL[id]; refreshSel(); });
 $('#body').on('click','td.l,td.r',function(e){ if($(e.target).is('a,input')) return; var $c=$(this).closest('tr').find('.ck'); if($c.length){ $c.prop('checked',!$c.prop('checked')).trigger('change'); } });
 $('#ckAll,#btnPage').on('click',function(){ $('#body .ck').each(function(){ $(this).prop('checked',true); SEL[$(this).val()]=1; }); refreshSel(); });
+$('#btnAllMatch').on('click',function(){
+    if(CANAPPLY.indexOf(CAT)<0){ fillToast('此類別不可批次轉入'); return; }
+    var $b=$(this).prop('disabled',true);
+    api('list',{cat:CAT,q:$('#q').val(),ids_only:1}).done(function(res){
+        $b.prop('disabled',false);
+        if(!res.ok){ alert(res.error); return; }
+        res.ids.forEach(function(id){ SEL[id]=1; });
+        $('#body .ck').each(function(){ $(this).prop('checked',!!SEL[$(this).val()]); });
+        refreshSel(); fillToast('已勾選全部符合的 '+res.ids.length+' 筆（含其他頁）');
+    }).fail(function(){ $b.prop('disabled',false); alert('讀取失敗'); });
+});
 $('#btnClear').on('click',function(){ SEL={}; $('#body .ck').prop('checked',false); $('#ckAll').prop('checked',false); refreshSel(); });
 $('#pPrev').on('click',function(){ PAGE--; load(); }); $('#pNext').on('click',function(){ PAGE++; load(); });
 $('#per').on('change',function(){ PAGE=1; load(); });
