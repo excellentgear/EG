@@ -13,6 +13,10 @@
  */
 
 const OEI_PS_TEXT = '補訂單資料';
+/** 訂單追蹤數量可比 ERP 多打的備品比例（例：ERP 90、訂單追蹤打 100 含備品）；超過就仍算「內容不同」 */
+const OEI_SPARE_PCT = 0.12;
+/** 數量太小時多幾件的比例很大、無法判定是備品，不套用 */
+const OEI_SPARE_MIN_QTY = 20;
 
 function oei_ensure_schema(PDO $db): void {
     static $done = false;
@@ -179,6 +183,14 @@ function oei_resolve_customer(PDO $db, ?string $cid, ?string $cname): ?string {
     return $cache[$k] = $hit;
 }
 
+/** 訂單追蹤數量 > Excel 數量且多出的部分在備品比例內，製程／單價沒有衝突 */
+function oei_spare_ok(array $e, int $xqty, string $xproc, ?float $xprice): bool {
+    $eq = (int)$e['Qty'];
+    if ($eq <= $xqty || $xqty < OEI_SPARE_MIN_QTY || $eq > (int)floor($xqty * (1 + OEI_SPARE_PCT))) return false;
+    if (!oei_proc_ok((string)$e['Processing_items'], $xproc)) return false;
+    return !($e['unit_price'] !== null && $xprice !== null && abs((float)$e['unit_price'] - $xprice) >= 0.005);
+}
+
 /**
  * Excel 把同一筆訂單拆成多行（如 30＋70＋2），訂單追蹤卻打成一筆（102）：
  * 在「尚未對應的既有訂單列」中找一組，數量合計剛好等於這些 Excel 行的合計，且製程／單價沒有衝突。
@@ -273,6 +285,21 @@ function oei_match(PDO $db, array $rows): array {
             $rows[$i]['match_note'] = 'Excel 此單此料 ' . count($idxs) . ' 行合計 ' . array_sum(array_column($xl, 'qty')) . '＝訂單內 ' . count($hit) . ' 筆合計，視為已存在，略過';
         }
     }
+    // 第三輪：訂單追蹤數量含備品（比 Excel 多一點）→ 視為已存在，一對一消耗，取差額最小者
+    foreach ($rows as &$r) {
+        if ($r['match_status'] !== '' || !isset($exist[$r['order_oo']])) continue;
+        $best = null;
+        foreach ($exist[$r['order_oo']] as $k => $e) {
+            if ($e['used'] || !$samePart($e, $r) || !oei_spare_ok($e, $r['qty'], $r['process_text'], $r['unit_price'])) continue;
+            if ($best === null || (int)$e['Qty'] < (int)$exist[$r['order_oo']][$best]['Qty']) $best = $k;
+        }
+        if ($best !== null) {
+            $exist[$r['order_oo']][$best]['used'] = true;
+            $r['match_status'] = 'exact'; $r['existing_order_id'] = (int)$exist[$r['order_oo']][$best]['Order_id'];
+            $r['match_note'] = '訂單追蹤數量 ' . $exist[$r['order_oo']][$best]['Qty'] . ' 含備品（Excel ' . $r['qty'] . '），視為已存在，略過';
+        }
+    }
+    unset($r);
     foreach ($rows as &$r) {
         if ($r['match_status'] !== '') continue;
         if ($r['d_id_id'] === null) {
@@ -400,7 +427,20 @@ function oei_rematch_pending(PDO $db): int {
         $ex = $exs->fetchAll(PDO::FETCH_ASSOC);
         $xl = array_map(fn($r) => ['qty' => $r['qty'], 'proc' => (string)$r['process_text'], 'price' => $r['unit_price'] === null ? null : (float)$r['unit_price']], $rs);
         $hit = oei_group_sum_match($xl, $ex);
-        if ($hit === null) continue;
+        if ($hit === null) {
+            $usedE = [];
+            foreach ($rs as $r) {
+                $best = null;
+                foreach ($ex as $k => $e) {
+                    if (isset($usedE[$k]) || !oei_spare_ok($e, (int)$r['qty'], (string)$r['process_text'], $r['unit_price'] === null ? null : (float)$r['unit_price'])) continue;
+                    if ($best === null || (int)$e['Qty'] < (int)$ex[$best]['Qty']) $best = $k;
+                }
+                if ($best === null) continue;
+                $usedE[$best] = true;
+                $sk->execute(['訂單追蹤數量 ' . $ex[$best]['Qty'] . ' 含備品（Excel ' . $r['qty'] . '），視為已存在，略過', (int)$ex[$best]['Order_id'], $r['id']]); $n++;
+            }
+            continue;
+        }
         foreach ($rs as $r) { $sk->execute(['Excel 此單此料 ' . count($rs) . ' 行合計＝訂單內 ' . count($hit) . ' 筆合計，視為已存在，略過', (int)$ex[$hit[0]]['Order_id'], $r['id']]); $n++; }
     }
     return $n;
