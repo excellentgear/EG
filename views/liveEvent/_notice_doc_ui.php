@@ -155,6 +155,47 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             upload(f, function (id) { ed.insertAsset(id, { width: '60%' }); sync(); });
         }, true);
         $('form').has('#contentEditor').on('submit', sync);
+
+        /* 表格「最後一欄」右邊框往右拖＝整張表加寬（共用編輯器只能在相鄰兩欄之間分配寬度、總寬不變，
+           最後一欄右邊沒有鄰欄所以拉不動，使用者回報「無法拉寬表格」）。上限＝紙張內文寬度。
+           寬度寫在儲存格與 table 的 style width（白名單本來就放行 px），不動共用檔。 */
+        var host = $('#contentEditor')[0];
+        function lastEdge(e) {
+            var c = e.target && e.target.closest ? e.target.closest('td,th') : null;
+            if (!c || !host.contains(c) || !c.closest('.egrt-main') || c.nextElementSibling) return null;
+            var r = c.getBoundingClientRect();
+            return (r.right - e.clientX <= 5 && r.right - e.clientX >= -2) ? c : null;
+        }
+        host.addEventListener('mousemove', function (e) {
+            if (e.buttons) return;
+            var c = lastEdge(e);
+            if (c) c.closest('.egrt-main').style.cursor = 'col-resize';   // 在共用編輯器的 mousemove 之後執行，不會被它清掉
+        });
+        host.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            var cell = lastEdge(e); if (!cell) return;
+            var tbl = cell.closest('table'), main = cell.closest('.egrt-main');
+            e.preventDefault(); e.stopPropagation();
+            var cs = getComputedStyle(main), maxW = main.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
+            var w0 = tbl.getBoundingClientRect().width, wc = cell.getBoundingClientRect().width, x0 = e.clientX;
+            var lasts = [];
+            Array.prototype.slice.call(tbl.rows).forEach(function (row) {
+                Array.prototype.slice.call(row.cells).forEach(function (c) {
+                    if ((c.colSpan || 1) === 1) c.style.width = Math.round(c.getBoundingClientRect().width * 10) / 10 + 'px';   // 先凍結，拖動時不被重新分配
+                });
+                if (row.cells.length) lasts.push(row.cells[row.cells.length - 1]);
+            });
+            function mv(ev) {
+                var dx = Math.max(-(wc - 30), Math.min(maxW - w0, ev.clientX - x0));
+                lasts.forEach(function (c) { if ((c.colSpan || 1) === 1) c.style.width = (Math.round((wc + dx) * 10) / 10) + 'px'; });
+                tbl.style.width = (Math.round((w0 + dx) * 10) / 10) + 'px';
+            }
+            function up() {
+                document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
+                main.dispatchEvent(new Event('input', { bubbles: true }));   // 讓編輯器存入變更
+            }
+            document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+        }, true);
     });
 
     /* ---------- 種類切換 ---------- */
