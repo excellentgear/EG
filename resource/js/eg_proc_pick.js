@@ -142,6 +142,7 @@
             + '#epp-mbanner{background:#FFF1DC;border:1px solid #E4B27A;border-radius:4px;padding:5px 8px;margin-bottom:6px;font-size:12px;color:#6B4A2B;}'
             + '.epp-mgl{float:right;font-size:11px;font-weight:600;color:#a0522d;cursor:pointer;}'
             + '.epp-cchip{background:#FCE9CF;border-color:#E4B27A;}'
+            + '.epp-combo .epp-cb.epp-cb-add{margin:0 0 0 auto;margin-right:0;padding:1px 14px;font-size:12px;font-weight:700;background:#E4802A;border-color:#C96A18;color:#fff;}.epp-combo .epp-cb.epp-cb-add:hover{background:#C96A18;}'
             + '.epp-struct{flex-basis:100%;order:3;padding:1px 0 2px;}.epp .epp-btn{order:2;}.epp-struct .epp-chip{font-size:10.5px;line-height:16px;padding:0 6px;}'
             + '#epp-box footer{padding:8px 14px;border-top:1px solid #eee;display:flex;gap:6px;justify-content:flex-end;align-items:center;}'
             + '.epp-t{border-bottom:1px solid #f0e6d8;padding:4px 0;}'
@@ -316,9 +317,8 @@
             var pk = MODAL._pick && MODAL._pick.id === c.id;
             h += '<div class="epp-combo' + (MODAL._tgt && MODAL._tgt.id === c.id ? ' epp-editing' : '') + '">'
               + '<div class="epp-chead">'
-              + (MODAL._mgmt ? '' : '<button type="button" class="epp-cb" data-epp-capply="' + c.id + '" title="用這個組合取代目前勾選">套用</button>'
-                  + '<button type="button" class="epp-cb" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button>')
               + '<b title="' + esc(c.name) + '">' + esc(c.name) + '</b>'
+              + (MODAL._mgmt ? '' : '<button type="button" class="epp-cb epp-cb-add" data-epp-cadd="' + c.id + '" title="把這個組合加進目前勾選">加入</button>')
               + (mine && MODAL._mgmt ? '<span class="epp-cl"><a data-epp-cedit="' + c.id + '" title="修改這個組合的內容">編輯</a><a data-epp-calt="' + c.id + '" title="新增一種「或」的做法（先帶入現有內容，改成另一種再存）">相同製程</a><a data-epp-cdel="' + c.id + '" title="刪除整個組合">刪除</a></span>' : '')
               + '</div>'
               + '<div class="epp-ci">' + (c.variants.length
