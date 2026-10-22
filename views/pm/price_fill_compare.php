@@ -153,6 +153,10 @@ $('#btnClear').on('click',function(){ SEL={}; $('#body .ck').prop('checked',fals
 $('#pPrev').on('click',function(){ PAGE--; load(); }); $('#pNext').on('click',function(){ PAGE++; load(); });
 $('#per').on('change',function(){ PAGE=1; load(); });
 var qt=null; $('#q').on('input',function(){ clearTimeout(qt); qt=setTimeout(function(){ PAGE=1; load(); },350); });
+function fillToast(t){
+    var $t=$('<div></div>').text(t).css({position:'fixed',right:'20px',bottom:'24px',zIndex:99999,background:'#7A4A1E',color:'#fff',padding:'10px 16px',borderRadius:'6px',fontSize:'14px',boxShadow:'0 2px 8px rgba(0,0,0,.3)'}).appendTo('body');
+    setTimeout(function(){ $t.fadeOut(400,function(){ $t.remove(); }); },3000);
+}
 $('#btnApply').on('click',function(){
     var ids=Object.keys(SEL).map(Number); if(!ids.length) return;
     var label=(CATS.filter(function(c){return c[0]===CAT;})[0]||[])[1]||CAT;
@@ -162,7 +166,9 @@ $('#btnApply').on('click',function(){
     var $b=$(this).prop('disabled',true);
     api('apply',{cat:CAT,ids:JSON.stringify(ids)}).done(function(res){
         if(!res.ok){ alert(res.error); $b.prop('disabled',false); return; }
-        alert('完成：補入單價 '+res.filled+' 筆、補資料認定已轉入 '+res.staged+' 筆、略過 '+res.skipped+' 筆'+(res.msgs&&res.msgs.length?'\n'+res.msgs.slice(0,10).join('\n'):''));
+        var doneTxt='完成：補入單價 '+res.filled+' 筆、補資料認定已轉入 '+res.staged+' 筆、略過 '+res.skipped+' 筆';
+        if(res.msgs&&res.msgs.length){ alert(doneTxt+'\n'+res.msgs.slice(0,10).join('\n')); }
+        else { fillToast(doneTxt); }
         SEL={}; load();
     }).fail(function(x){ alert('失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); $b.prop('disabled',false); });
 });
