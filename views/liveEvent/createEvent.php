@@ -3155,7 +3155,7 @@ if (isset($_POST['btn_go_events'])) {
                     + '.ct-head .ad{font-size:11px;margin-top:2px;}'
                     + '.ct-no{display:flex;justify-content:space-between;font-size:14px;margin:10px 0 2px;}'
                     + '.ct-tt{text-align:center;font-size:24px;font-weight:bold;letter-spacing:12px;margin:2px 0 6px;}'
-                    + '.ct-fr{text-align:center;font-size:14px;}'
+                    + '.ct-fr{text-align:right;font-size:14px;}'
                     + '.ct-to{font-size:16px;margin:4px 0 6px;}'
                     + '.ct-fr u,.ct-to u{text-underline-offset:3px;}'
                     + 'table.ct-box{width:100%;border-collapse:collapse;table-layout:fixed;border:2px double #000;}'

@@ -631,7 +631,7 @@ function ndoc_draft_print_data(PDO $db, array $d): array
         'from_text' => nc_person_label(nc_person($db, $uid, $asof)),
         'to_text' => '',
         'maker' => nc_person($db, $uid, $asof) + ['date' => $asof],
-        'approver' => nc_person($db, $appr, $asof) + ['date' => ''],
+        'approver' => ['id' => 0, 'name' => '', 'dept' => '', 'position' => '', 'date' => ''],   // 尚未核准前不蓋核准章
         'people' => [], 'include' => null, 'show_reply' => 0, 'is_backfill' => 0,
         'company' => nc_company($db),
         'doc_name' => $isC ? ($doc['doc_name'] ?? '聯絡單') : ndoc_kinds()[$kind],
