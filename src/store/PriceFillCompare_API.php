@@ -30,6 +30,7 @@ case 'list': {
     $q   = trim((string)($_POST['q'] ?? ''));
     $page = max(1, (int)($_POST['page'] ?? 1));
     $per  = min(200, max(10, (int)($_POST['per'] ?? 50)));
+    $closed = opf_auto_close_exact($db);   // 訂單內已有相同明細的待轉入列，自動認定為已存在
     $all = opf_candidates($db);
     $counts = []; foreach ($all as $c) $counts[$c['cat']] = ($counts[$c['cat']] ?? 0) + 1;
     $rows = array_values(array_filter($all, function ($c) use ($cat, $q) {
@@ -47,7 +48,7 @@ case 'list': {
     if ($cid) { $s = $db->prepare("SELECT customer_id,customer FROM customer_list WHERE customer_id IN (" . implode(',', array_fill(0, count($cid), '?')) . ")"); $s->execute($cid); foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $cn[$r['customer_id']] = $r['customer']; }
     foreach ($rows as &$r) $r['order']['client_display'] = $cn[$r['order']['Client_name_ID']] ?? $r['order']['Client_name'];
     unset($r);
-    pfcOut(['ok' => true, 'total' => $total, 'page' => $page, 'per' => $per, 'counts' => $counts, 'rows' => $rows, 'can_apply' => OPF_APPLY_CATS]);
+    pfcOut(['ok' => true, 'total' => $total, 'page' => $page, 'per' => $per, 'counts' => $counts, 'rows' => $rows, 'auto_closed' => $closed, 'can_apply' => OPF_APPLY_CATS]);
 }
 case 'apply': {
     $ids = json_decode($_POST['ids'] ?? '[]', true);

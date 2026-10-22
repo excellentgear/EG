@@ -58,9 +58,10 @@ table.pf td.l { background:#FFF9EF; } table.pf td.r { background:#fff; }
     左欄＝補資料（暫存區）或 ERP 訂單資料的內容，右欄＝對應的訂單追蹤內容，逐筆對照。<br>
     <b>只會填「單價空白」的訂單，不覆蓋任何既有單價</b>；補入者業務備註加註「【自動補單價】」並留紀錄（order_price_autofill_log）。<br>
     <b>規則1</b>＝同訂單編號下料號與數量組合完全相同；<b>規則2</b>＝同訂單＋料號＋數量＋製程完全相同（製程不可空白）。
-    規則1／2 轉價格後，對應的補資料待轉入列會自動認定為「已轉入」。<b>已補價待結案</b>＝單價已補、只需把補資料列結案。<br>
+    補資料待轉入列只要「訂單內已有相同料號與數量明細」，系統會自動認定為「已存在，不需轉入」；規則1／2 轉價格後也一樣。<br>
     A／B 是依 ERP 訂單資料的建議（B 的製程空白或不一致，請抽查）；C、D 只供參考，不可批次。
   </div>
+  <div id="autoMsg" class="pf-note" style="display:none;background:#EFF7E8;border-color:#7aa65a"></div>
   <div class="pf-tabs" id="tabs"></div>
   <div class="pf-bar">
     <input type="text" id="q" placeholder="搜尋 訂單編號／料號／客戶／製程（空白分隔多關鍵字）" data-eg-skip>
@@ -116,7 +117,7 @@ function ordHtml(c){
     var o=c.order, same = c.src && c.src[0] && String(c.src[0].qty)===String(o.Qty);
     return '<span class="pf-tag g">訂單 #'+esc(o.Order_id)+'</span>單號 <b>'+esc(o.Order_oo)+'</b>　客戶 '+esc(o.client_display||'')+'<br>'+
            '料號 <b>'+esc(o.d_id)+'</b>　數量 <b>'+esc(o.Qty)+'</b>　目前單價 <span class="pf-diff">'+fmtP(o.unit_price)+'</span>'+
-           (c.price!=null ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
+           (c.price!=null && c.cat!=='DONE' ? '　→　<span class="pf-price">補入 '+fmtP(c.price)+'</span>' : '')+'<br>'+
            '製程：'+(esc(o.Processing_items)||'<i>（空白）</i>')+'<br>接單 '+dd(o.Order_date)+'　交期 '+dd(o.Delivery_date)+(o.quote_no?'　報價 '+esc(o.quote_no):'')+
            (o.Order_ps?'<br>業務備註：'+esc(o.Order_ps):'')+'<div style="color:#8A5A2B;margin-top:2px">▶ '+esc(c.note)+'</div>';
 }
@@ -139,6 +140,7 @@ function load(){
     api('list',{cat:CAT,q:$('#q').val(),page:PAGE,per:$('#per').val()}).done(function(res){
         if(!res.ok){ alert(res.error); return; }
         COUNTS=res.counts; CANAPPLY=res.can_apply; TOTAL=res.total;
+        if (res.auto_closed) { $('#autoMsg').text('已自動將 '+res.auto_closed+' 筆「訂單內已有相同明細」的補資料待轉入列認定為已存在').show(); }
         if (FIRST) { FIRST=false; if (!COUNTS[CAT]) { var f=CATS.filter(function(c){return COUNTS[c[0]];})[0]; if (f) { CAT=f[0]; load(); return; } } }
         renderTabs(); render(res);
     }).fail(function(x){ alert('讀取失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
@@ -155,7 +157,7 @@ $('#btnApply').on('click',function(){
     var ids=Object.keys(SEL).map(Number); if(!ids.length) return;
     var label=(CATS.filter(function(c){return c[0]===CAT;})[0]||[])[1]||CAT;
     var warn = CAT==='B' ? '\n\n※ 建議B 的製程空白或與 ERP 不一致，請確認已抽查。' : '';
-    var what = CAT==='DONE' ? '把對應的補資料列認定為「已轉入」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已轉入」':'');
+    var what = CAT==='DONE' ? '把對應的補資料列認定為「已存在」（不改單價）' : '把單價轉入訂單追蹤（只填空白、業務備註加註【自動補單價】）'+(CAT==='R1'||CAT==='R2'?'，並把對應的補資料待轉入列認定為「已存在，不需轉入」':'');
     if(!confirm('類別：'+label+'\n確定對 '+ids.length+' 筆：'+what+'？'+warn)) return;
     var $b=$(this).prop('disabled',true);
     api('apply',{cat:CAT,ids:JSON.stringify(ids)}).done(function(res){

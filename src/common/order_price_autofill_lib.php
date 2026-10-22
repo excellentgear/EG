@@ -133,7 +133,7 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid): array {
     try {
         $up  = $db->prepare("UPDATE order_track SET unit_price=?, Order_ps=CONCAT(IFNULL(Order_ps,''), IF(IFNULL(Order_ps,'') LIKE ?,'',IF(IFNULL(Order_ps,'')='','',' ')), IF(IFNULL(Order_ps,'') LIKE ?,'','" . OPF_MARK . "')) WHERE Order_id=? AND (unit_price IS NULL OR unit_price=0)");
         $lg  = $db->prepare("INSERT INTO order_price_autofill_log (order_id,order_oo,rule_code,old_price,new_price,stage_id,created_at) VALUES (?,?,?,?,?,?,NOW())");
-        $stg = $db->prepare("UPDATE order_erp_import_stage SET state='converted', converted_order_id=?, converted_by=?, converted_at=NOW(), match_note='訂單已存在，僅補單價（自動補單價）' WHERE id=? AND state='pending'");
+        $stg = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', existing_order_id=?, match_note='訂單內已有相同明細（僅補單價），不需轉入' WHERE id=? AND state='pending'");
         $like = '%' . OPF_MARK . '%';
         foreach ($cands as $c) {
             if ($cat !== 'DONE') {
@@ -142,9 +142,42 @@ function opf_apply(PDO $db, array $orderIds, string $cat, int $uid): array {
                 $lg->execute([$c['order_id'], $c['order']['Order_oo'], $cat, null, $c['price'], $c['stage_ids'][0] ?? null]);
                 $filled++;
             }
-            foreach ($c['stage_ids'] as $sid) { $stg->execute([$c['order_id'], $uid, $sid]); $staged += $stg->rowCount(); }
+            foreach ($c['stage_ids'] as $sid) { $stg->execute([$c['order_id'], $sid]); $staged += $stg->rowCount(); }
         }
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
     return ['filled' => $filled, 'staged' => $staged, 'skipped' => count($want) - count($cands), 'msgs' => $msgs];
+}
+
+
+/**
+ * 自動認定：補資料暫存區「待轉入」列，若同訂單編號下 (料號,數量) 組合與筆數和訂單追蹤現有完全相同
+ * ＝訂單內已有這些明細，不需轉入 → 認定為「已略過·已存在」（state=skipped, match_status=exact）。
+ * 只改暫存列狀態，不動 order_track。回傳認定筆數。
+ */
+function opf_auto_close_exact(PDO $db): int {
+    $oos = $db->query("SELECT DISTINCT order_oo FROM order_erp_import_stage WHERE state='pending'")->fetchAll(PDO::FETCH_COLUMN);
+    $n = 0;
+    $up = $db->prepare("UPDATE order_erp_import_stage SET state='skipped', match_status='exact', existing_order_id=?, match_note='訂單內已有相同料號與數量明細，不需轉入' WHERE id=? AND state='pending'");
+    foreach (array_chunk($oos, 400) as $ch) {
+        $ph = implode(',', array_fill(0, count($ch), '?'));
+        $s = $db->prepare("SELECT id,order_oo,part_no,d_id_id,qty,state FROM order_erp_import_stage WHERE order_oo IN ($ph)");
+        $s->execute($ch);
+        $S = []; foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $S[$r['order_oo']][] = $r;
+        $o = $db->prepare("SELECT Order_id,Order_oo,d_id,d_id_ID,Qty FROM order_track WHERE Order_oo IN ($ph) AND (Order_status IS NULL OR Order_status<>6) ORDER BY Order_id");
+        $o->execute($ch);
+        $O = []; foreach ($o->fetchAll(PDO::FETCH_ASSOC) as $r) $O[$r['Order_oo']][] = $r;
+        foreach ($ch as $oo) {
+            $ks = array_map(fn($r) => opf_pk($r['d_id_id'], $r['part_no']) . '|' . (int)$r['qty'], $S[$oo] ?? []); sort($ks);
+            $ko = array_map(fn($r) => opf_pk($r['d_id_ID'], $r['d_id']) . '|' . (int)$r['Qty'], $O[$oo] ?? []); sort($ko);
+            if (!$ks || $ks !== $ko) continue;
+            $byKey = []; foreach ($O[$oo] as $r) $byKey[opf_pk($r['d_id_ID'], $r['d_id']) . '|' . (int)$r['Qty']][] = (int)$r['Order_id'];
+            foreach ($S[$oo] as $r) {
+                $k = opf_pk($r['d_id_id'], $r['part_no']) . '|' . (int)$r['qty'];
+                $oid = array_shift($byKey[$k]);
+                if ($r['state'] === 'pending') { $up->execute([$oid, $r['id']]); $n += $up->rowCount(); }
+            }
+        }
+    }
+    return $n;
 }
