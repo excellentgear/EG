@@ -6985,6 +6985,7 @@ foreach($dCounts as $c) {
         window.canCreate = <?= json_encode($can_create) ?>;
         window.canUpdate = <?= json_encode($can_update) ?>;
         window.canDelete = <?= json_encode($can_delete) ?>;
+        window.OT_IS_ADMIN = <?= json_encode((bool)$OT_IS_ADMIN_ANY) ?>;
         window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
         window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
         window.OT_CAN_CHANGE_SETTING = <?= json_encode((bool)$can_order_change_setting) ?>; // 訂單變更設定（ot_order_change_setting）
@@ -14152,7 +14153,7 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { alert('讀取資料失敗'); });
         }
 
-        function validateOrderNo(orderNo) {
+        function validateOrderNo(orderNo, allowAnyYear) {
             // 格式：OO + 民國年3碼 + 月2碼 + 日2碼 + 流水號3碼
             var m = orderNo.match(/^OO(\d{3})(\d{2})(\d{2})(\d{3})$/);
             if (!m) return { valid: false, msg: '格式應為 OO＋民國年3碼＋月2碼＋日2碼＋流水號3碼（共12碼），例：OO1150601001' };
@@ -14164,7 +14165,7 @@ foreach($dCounts as $c) {
             // 民國年：只接受今年 ±1
             var todayAD = new Date();
             var curRoc  = todayAD.getFullYear() - 1911;
-            if (rocYear < curRoc - 1 || rocYear > curRoc + 1) {
+            if (!allowAnyYear && (rocYear < curRoc - 1 || rocYear > curRoc + 1)) {
                 return { valid: false, msg: '民國年 ' + rocYear + ' 超出允許範圍（' + (curRoc-1) + '～' + (curRoc+1) + '）' };
             }
 
@@ -14202,7 +14203,8 @@ foreach($dCounts as $c) {
             var upperNo = rawNo.toUpperCase();
             $('input[name="OrderNo"]').val(upperNo);
             if (upperNo !== 'NA') {
-                var vr = validateOrderNo(upperNo);
+                // 管理員更新既有舊訂單時不限民國年（只能更新、不可新增）
+                var vr = validateOrderNo(upperNo, !!window.OT_IS_ADMIN && !!$('#hidden_Order_id').val() && !isCopy);
                 if (!vr.valid) {
                     showOrderAlert('訂單編號有誤：\n' + vr.msg); $('input[name="OrderNo"]').focus(); return;
                 }
