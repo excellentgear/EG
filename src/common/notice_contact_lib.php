@@ -361,7 +361,7 @@ function nc_targets_text(PDO $db, int $eventId): string
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $id = (int)$t['target_id'];
             switch ($t['target_type']) {
-                case 'all':    $out[] = '全體員工'; break;
+                case 'all':    $out[] = '全體同仁'; break;
                 case 'dept':   $out[] = (string)nc_name_of($db, 'department', 'name', $id); break;
                 case 'status': $out[] = (string)nc_name_of($db, 'user_status', 'title', $id); break;
                 case 'user':   $out[] = (string)nc_name_of($db, 'user', 'user_cname', $id); break;

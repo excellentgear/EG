@@ -629,7 +629,15 @@ function ndoc_draft_print_data(PDO $db, array $d): array
         'post_until' => ($kind === 'announce' && !empty($x['post_until'])) ? $x['post_until'] : '',
         'files' => [],
         'from_text' => nc_person_label(nc_person($db, $uid, $asof)),
-        'to_text' => '',
+        'to_text' => (function () use ($db, $x) {
+            $o = [];
+            foreach ((array)($x['targets'] ?? []) as $c) {
+                if ($c === 'all') { $o[] = '全體同仁'; continue; }
+                if (!preg_match('/^(dept|status|user)-(\d+)$/', (string)$c, $m)) continue;
+                $o[] = (string)(['dept' => nc_name_of($db, 'department', 'name', (int)$m[2]), 'status' => nc_name_of($db, 'user_status', 'title', (int)$m[2]), 'user' => nc_name_of($db, 'user', 'user_cname', (int)$m[2])][$m[1]] ?? '');
+            }
+            return implode('、', array_filter($o));
+        })(),
         'maker' => nc_person($db, $uid, $asof) + ['date' => $asof],
         'approver' => ['id' => 0, 'name' => '', 'dept' => '', 'position' => '', 'date' => ''],   // 尚未核准前不蓋核准章
         'people' => [], 'include' => null, 'show_reply' => 0, 'is_backfill' => 0,
