@@ -2940,14 +2940,14 @@ $(function(){
   }
   function qrKeeper(it){
     if(it.keeper_dept_id) return it.keeper_dept_name||'';
-    return it.doc_dept_name||'';
+    return it.owner_dept_name||it.doc_dept_name||'';   // 負責課室（僅一個時）優先，否則所屬部門
   }
   function qrRenderRows(){
     const tb=$('#qrRows').empty();
     const ed=QR.can_edit;
     if(!QR.items.length){ tb.append('<tr><td colspan="7" class="text-center text-muted">尚未選入任何表單——點「加入表單」挑選</td></tr>'); }
     QR.items.forEach((it,i)=>{
-      const deptOpts = '<option value="">（用該表單所屬部門）</option>'
+      const deptOpts = '<option value="">（'+esc(it.owner_dept_name?'用負責課室：'+it.owner_dept_name:'用該表單所屬部門')+'）</option>'
         + QR.departments.map(d=>`<option value="${d.id}" ${String(it.keeper_dept_id||'')===String(d.id)?'selected':''}>${esc(d.name)}</option>`).join('');
       const obTag = it.is_obsolete==1 ? ` <span class="label ob-tag" style="font-size:10px;">已廢止 ${esc(dispDate(it.obsolete_date||''))}</span>` : '';
       tb.append(`<tr data-i="${i}" class="${it.is_obsolete==1?'doc-obsolete':''}">

@@ -1455,6 +1455,13 @@ case 'qr_get':
                          LEFT JOIN department dep0 ON dep0.id = d.department_id
                          LEFT JOIN department dep1 ON dep1.id = i.keeper_dept_id
                          ORDER BY i.sort_order, d.doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    // 負責課室只有一個時，保管單位留空就用它（多個時無法判定，退回所屬部門）
+    $ownMap = [];
+    foreach ($db->query("SELECT o.doc_id, o.department_id, dp.name FROM as_doc_owner_dept o JOIN department dp ON dp.id=o.department_id")->fetchAll(PDO::FETCH_ASSOC) as $o) $ownMap[(int)$o['doc_id']][] = $o;
+    foreach ($items as &$itm) {
+        $os = $ownMap[(int)$itm['doc_id']] ?? [];
+        $itm['owner_dept_name'] = count($os) === 1 ? $os[0]['name'] : '';
+    } unset($itm);
 
     // 可挑選的表單：四階/表單，未刪除；已廢止者仍可留在一覽表（歷史紀錄還在保存期內），但不主動列入候選
     $cand = $db->query("SELECT d.id, d.doc_no, d.doc_name, d.department_id, dep.name AS dept_name, d.is_obsolete
