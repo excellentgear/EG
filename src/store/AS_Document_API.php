@@ -206,6 +206,26 @@ function asSetSetting(PDO $db, string $key, string $val): void {
                   ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
        ->execute([$key, $val]);
 }
+/** 品質記錄一覽表：移除已廢止的表單，回傳被移除的清單（doc_no/doc_name）。
+ *  $ids＝只處理這幾份（廢止當下），null＝掃全部歷史殘留；$doDelete=false 只回傳不動資料。 */
+function asQrPurgeObsolete(PDO $db, ?array $ids, bool $doDelete): array {
+    if (!$doDelete) return [];
+    $sql = "SELECT i.id AS item_id, d.doc_no, d.doc_name FROM as_quality_record_item i
+            JOIN as_document d ON d.id=i.doc_id WHERE d.is_obsolete=1";
+    $par = [];
+    if ($ids !== null) {
+        if (!$ids) return [];
+        $sql .= ' AND i.doc_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        $par = array_values($ids);
+    }
+    $st = $db->prepare($sql . ' ORDER BY d.doc_no');
+    $st->execute($par);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+    $iids = array_map('intval', array_column($rows, 'item_id'));
+    $db->exec('DELETE FROM as_quality_record_item WHERE id IN (' . implode(',', $iids) . ')');
+    return array_map(fn($r) => ['doc_no'=>$r['doc_no'], 'doc_name'=>$r['doc_name']], $rows);
+}
 /* 路徑規則已收斂進共用庫 src/common/asdoc_lib.php（鐵律4）——二階文件線上版要讀
    同一批 Word 原始檔做匯入，而本檔是 API（頂層有 session 與權限判定）不能被 include。
    這裡只留薄包裝，既有呼叫端不必改。 */
@@ -1419,6 +1439,8 @@ case 'restore_document':
  * 預設保存年限放 system_settings，逐筆可覆寫（NULL＝套用預設，改預設值時未覆寫者一起跟著變）。 */
 case 'qr_get':
     if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
+    // 已廢止的表單不留在一覽表上（歷史殘留也一併清掉；有設定權限者才會動到資料）
+    $qrRemoved = asQrPurgeObsolete($db, null, asCan('settings'));
     $defYears = (int)(asGetSetting($db, 'as_doc_qr_default_years') ?: 3);
     $makeDate = asGetSetting($db, 'as_doc_qr_make_date');
     $bound    = eg_asdoc_get($db, 'as_doc_quality_record_list');
@@ -1446,6 +1468,7 @@ case 'qr_get':
           'company_name'=>asOwnCompanyName($db),
           'departments'=>$db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
           'items'=>$items, 'candidates'=>$cand,
+          'removed_obsolete'=>$qrRemoved,
           'can_edit'=>asCan('settings')]);
 
 case 'qr_save_settings':
@@ -1548,6 +1571,11 @@ case 'doc_obsolete':
         $db->commit();
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
 
+    // 品質記錄一覽表自動移除已廢止的表單（commit 之後、獨立處理：失敗不可讓廢止本身變失敗）
+    $qrRemoved = [];
+    try { $qrRemoved = asQrPurgeObsolete($db, array_merge([$id], array_map('intval', array_column($kids, 'id'))), true); }
+    catch (Throwable $e) { error_log('[as_doc] qr purge: ' . $e->getMessage()); }
+
     /* 廢止之後掃一次線上版內文：有哪幾份一階／二階的線上版還引用著這個編號（2026-09-22）。
        廢止**沒有新編號可以換**，所以一律只標示不自動改（使用者拍板）——
        要改指到別份文件、還是整段刪掉，只有寫那份程序書的人知道。
@@ -1566,7 +1594,7 @@ case 'doc_obsolete':
         }
     } catch (Throwable $e) { error_log('[as_doc] obsolete ref scan: ' . $e->getMessage()); }
 
-    jout(['status'=>'success','children'=>count($kids),'ref_scan'=>$refScan]);
+    jout(['status'=>'success','children'=>count($kids),'ref_scan'=>$refScan,'qr_removed'=>$qrRemoved]);
 
 case 'doc_unobsolete':
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'取消廢止僅限管理員使用']);

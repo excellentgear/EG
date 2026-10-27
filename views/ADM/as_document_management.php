@@ -3001,7 +3001,25 @@ $(function(){
       if(cb) cb();
     });
   }
-  $('#btnQrOpen').on('click', function(){ qrLoad(()=>$('#qrModal').modal('show')); });
+  /** 廢止的表單已自動從品質記錄一覽表移除 → 提示需要重新列印；要不要現在開一覽表由使用者決定 */
+  function qrObsoleteNotice(removed){
+    if(!removed || !removed.length) return;
+    const list = removed.map(x=>'　‧ '+x.doc_no+' '+x.doc_name).join('\n');
+    if(confirm('下列已廢止的表單已自動從「品質記錄一覽表」移除：\n'+list
+        +'\n\n⚠ 一覽表內容已變動，需要重新列印「品質記錄一覽表」。\n要現在開啟一覽表嗎？')){
+      qrLoad(()=>$('#qrModal').modal('show'));
+    }
+  }
+  $('#btnQrOpen').on('click', function(){
+    qrLoad(function(){
+      $('#qrModal').modal('show');
+      if(QR.removed_obsolete && QR.removed_obsolete.length){
+        $('#qrResult').html('<div class="alert alert-warning">已廢止的表單已自動移出一覽表（'
+          + QR.removed_obsolete.map(x=>esc(x.doc_no)).join('、')
+          + '），<b>需要重新列印品質記錄一覽表</b>。</div>');
+      }
+    });
+  });
   $('#qrDefYears').on('change input', function(){ QR.default_years = parseInt(this.value)||0; if(!QR.can_edit) qrRenderRows(); });
   $('#qrMakeDate').on('change', qrLoadSigners);
   $('#qrAsDocBtn').on('click', function(){
@@ -3757,6 +3775,7 @@ $(function(){
         $('#obsoleteModal').modal('hide');
         showToast('已廢止此文件' + (r.children ? `（含 ${r.children} 份子文件）` : ''));
         loadDocs(true);
+        qrObsoleteNotice(r.qr_removed);
       } else { $('#obResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}</div>`); }
     },'json').fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
