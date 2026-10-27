@@ -359,7 +359,8 @@ try {
         $.ajax({
             url: '../../src/store/_employee_api.php',
             type: 'GET',
-            data: { action: 'get_organization_data', scope: 'as' },
+            data: { action: 'get_organization_data', scope: 'as', _t: Date.now() },
+            cache: false,
             dataType: 'json',
             success: function(response) {
                 if (response.status === 'success' && response.data) {
