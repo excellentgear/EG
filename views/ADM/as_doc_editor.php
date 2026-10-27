@@ -486,7 +486,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
               <button class="btn btn-default btn-sm" id="btnApx" title="附錄整理：檢查附錄編號（重複／跳號）、附錄自動從新的一頁開始、把內文裡的「附錄 X」連到對應附錄，附錄改編號時自動更新">
                 <i class="fa fa-paperclip"></i> 附錄整理</button>
               <button class="btn btn-default btn-sm" id="btnLst" title="編號統一：條文底下第一層 a. b. c.、第二層 1) 2) 3)，自動辨識並列出要改的地方；在清單項目按 Enter 會自動接下一個編號">
-                <i class="fa fa-list-ol"></i> 編號統一</button>
+                <i class="fa fa-list-ol"></i> 編號與縮排</button>
             <?php endif; ?>
             <?php if ($P['admin']): ?>
               <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
@@ -3167,7 +3167,7 @@ $(document).on('click', '#adEditorHost .egrt-main .eg-apref', function(e){
     if (hit) hit.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
 
-/* ── 條文下的清單編號統一（2026-10-27）────────────────────────────────
+/* ── 條文下的清單編號與縮排統一（2026-10-27）────────────────────────────────
    標準：條文（10.1、10.2.1…）底下第一層一律 a. b. c.，第二層一律 1) 2) 3)。
    手冊裡同一層常混用 a. ／ a： ／ （a）／ 1） ／ 1)，所以「編號統一」依結構辨識層級、重排編號、列出清單讓人確認再套用；
    另外在清單項目按 Enter 時自動接下一個編號（空項目再按 Enter ＝ 結束清單）。 */
@@ -3184,21 +3184,51 @@ function lstBlocks() {
     return out;
 }
 function lstTarget(level, n) { return level === 1 ? String.fromCharCode(96 + n) + '.' : n + ')'; }
+function lstDepth(t) { var m = LST_CLAUSE.exec(t); return m ? m[0].trim().split('.').length : 0; }
+/** 標題的「標題文字起點」＝左縮 ＋ 內縮（em）；讀不到就用同深度的標準值 */
+function lstTitleStart(el, depth) {
+    var st = el.style, ml = parseFloat(st.marginLeft), pl = parseFloat(st.paddingLeft);
+    if (/em$/.test(st.marginLeft || '') && /em$/.test(st.paddingLeft || '') && !isNaN(ml) && !isNaN(pl)) return ml + pl;
+    return ({ 2: 3.7, 3: 6.5, 4: 9.3, 5: 12.1 })[depth] || 3.7;
+}
+function lstWhy(cur, tgt) {
+    if (/[）]/.test(cur) && /[)]/.test(tgt)) return '全形括號改半形';
+    if (/^[（(]/.test(cur)) return '去掉前括號';
+    if (/[:：、]$/.test(cur)) return '句尾改成「.」';
+    return '統一寫法';
+}
 function lstScan() {
-    var rows = [], hints = [], lastL1 = false;
+    var rows = [], hints = [], layout = [], lastL1 = false, ts = null, depth = 0;
     lstBlocks().forEach(function(b){
         var t = b.el.textContent || '';
-        if (/^H[1-6]$/.test(b.el.tagName) || LST_CLAUSE.test(t)) { lastL1 = false; return; }
+        var hd = /^H[1-6]$/.test(b.el.tagName) || LST_CLAUSE.test(t);
+        if (hd) {
+            lastL1 = false; depth = lstDepth(t);
+            ts = depth >= 2 ? lstTitleStart(b.el, depth) : null;
+            return;
+        }
         var m = LST_RE.exec(t);
-        if (!m) { if (/[：:]\s*$/.test(t.trim())) lastL1 = false; return; }
-        var cur = m[0].replace(/[\s\u00A0\u3000]+$/, '').replace(/^[\s\u00A0\u3000]+/, '');
+        var plain = !m && t.trim() !== '' && !b.el.querySelector('img,table') && !/text-align:\s*(center|right)/.test(b.el.getAttribute('style') || '');
+        if (!m) {
+            if (/[：:]\s*$/.test(t.trim())) lastL1 = false;
+            if (plain && ts !== null) layout.push({ el: b.el, page: b.page, ml: ts, pl: 0, ti: 0, kind: '內文', ctx: t.trim().slice(0, 16) });
+            return;
+        }
+        var cur = m[0].replace(/[\s 　]+$/, '').replace(/^[\s 　]+/, '');
         var tgt = m[1] ? m[1] + '.' : m[2] + ')';
-        var ctx = t.slice(m[0].length, m[0].length + 18);
+        var ctx = t.slice(m[0].length, m[0].length + 18), level = m[1] ? 1 : (lastL1 ? 2 : 1);
         if (m[1]) lastL1 = true;
-        else if (!lastL1) hints.push({ page: b.page, from: cur, ctx: ctx });      // 條文下直接用 1) ：第一層應為 a.
-        if (cur !== tgt) rows.push({ el: b.el, page: b.page, from: cur, to: tgt, level: m[1] ? 1 : 2, ctx: ctx });
+        else if (!lastL1) hints.push({ page: b.page, from: cur, ctx: ctx });
+        if (cur !== tgt) rows.push({ el: b.el, page: b.page, from: cur, to: tgt, level: level, why: lstWhy(cur, tgt), ctx: ctx });
+        if (ts !== null) layout.push({ el: b.el, page: b.page, ml: ts + (level === 2 ? 1.5 : 0), pl: 1.5, ti: -1.5, kind: level === 1 ? '第1層清單' : '第2層清單', ctx: ctx });
     });
-    rows.hints = hints;
+    // 已經是標準位置的不列
+    layout = layout.filter(function(x){
+        var st = x.el.style;
+        return !(Math.abs(parseFloat(st.marginLeft) - x.ml) < 0.05 && /em$/.test(st.marginLeft || '') && !st.marginRight &&
+                 Math.abs((parseFloat(st.paddingLeft) || 0) - x.pl) < 0.05 && Math.abs((parseFloat(st.textIndent) || 0) - x.ti) < 0.05);
+    });
+    rows.hints = hints; rows.layout = layout;
     return rows;
 }
 /** 取得區塊文字第 pos 個字元所在的 (文字節點, 位移) */
@@ -3227,33 +3257,55 @@ function lstSetMarker(el, newMarker) {
 }
 function lstShow(rows) {
     var old = document.getElementById('lstDlg'); if (old) old.remove();
-    var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:6px;color:#6B4423"><i class="fa fa-list-ol"></i> 清單編號統一</div>'
-          + '<div style="color:#555;margin-bottom:6px">標準：條文（如 10.1）底下第一層 <b>a. b. c.</b>、第二層 <b>1) 2) 3)</b>。下列項目的<b>標點寫法</b>與標準不同（只統一標點，字母與數字不動——手冊的 a、b、c 常對應標準條文，跳號是刻意的）：</div>';
-    if (!rows.length) h += '<div style="color:#3E6B2E">所有清單編號的標點都已符合標準。</div>';
+    var lay = rows.layout || [], hs = rows.hints || [];
+    var TD = 'padding:3px 6px;border-top:1px solid #eadfcb';
+    var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:6px;color:#6B4423"><i class="fa fa-list-ol"></i> 編號與縮排統一</div>'
+      + '<div style="background:#FBF3E4;border:1px solid #eadfcb;border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.7;margin-bottom:8px"><b>目前的規則</b>'
+      + '<table style="width:100%;border-collapse:collapse;margin-top:4px"><tr style="background:#F5E9D6"><th style="padding:2px 6px;text-align:left;width:130px">種類</th><th style="padding:2px 6px;text-align:left;width:150px">寫法</th><th style="padding:2px 6px;text-align:left">怎麼判斷／怎麼縮排</th></tr>'
+      + '<tr><td style="' + TD + '">條文標題</td><td style="' + TD + '">10　10.1　10.2.1　7.1.5.1</td><td style="' + TD + '">章節層級，<b>不是清單、不會被改</b>；越深縮排越多（第2層 2em、第3層 4em、第4層 6em）</td></tr>'
+      + '<tr><td style="' + TD + '">條文底下的內文</td><td style="' + TD + '">一般段落</td><td style="' + TD + '">自動對齊<b>上方條文標題的文字起點</b>（標題數字之後那個字）</td></tr>'
+      + '<tr><td style="' + TD + '">清單第 1 層</td><td style="' + TD + '"><b>a.</b>　b.　c.</td><td style="' + TD + '">開頭是英文字母＋句點／冒號／頓號／括號（a： a、 （a））就算；寫法統一成「a.」；縮排同內文，折行時對齊字後面</td></tr>'
+      + '<tr><td style="' + TD + '">清單第 2 層</td><td style="' + TD + '"><b>1)</b>　2)　3)</td><td style="' + TD + '">開頭是數字＋括號（1） （1） 1)），而且<b>前面已經有 a. 項目</b>才算第 2 層；寫法統一成「1)」；比第 1 層再縮 1.5em</td></tr>'
+      + '<tr><td style="' + TD + '">不處理</td><td style="' + TD + '">1.　2.　（①）</td><td style="' + TD + '">數字加句點容易跟條文編號混淆，不動</td></tr>'
+      + '</table><div style="margin-top:4px;color:#8A5A2B">只統一標點與縮排，<b>字母與數字不動</b>（a、b、c 常對應標準條文，跳號是刻意的）；內文原本殘留的大塊右邊界（讓文字擠成窄窄一欄）會一併清掉。</div></div>';
+    h += '<div style="font-weight:bold;margin:6px 0 3px">① 標點寫法（' + rows.length + ' 處）</div>';
+    if (!rows.length) h += '<div style="color:#3E6B2E">都已符合標準。</div>';
     else {
-        h += '<div style="max-height:46vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:50px">頁次</th><th style="padding:3px 6px;text-align:left;width:50px">層級</th><th style="padding:3px 6px;text-align:left;width:120px">編號</th><th style="padding:3px 6px;text-align:left">內容</th></tr>';
-        rows.forEach(function(r){ h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + r.page + ' 頁</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + r.level + ' 層</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + apxEsc(r.from) + ' → <b style="color:#cc0000">' + apxEsc(r.to) + '</b></td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">' + apxEsc(r.ctx) + '…</td></tr>'; });
-        h += '</table></div><div style="margin-top:6px;color:#8A5A2B;font-size:12px">只改編號，不動內容。套用後尚未存檔；不滿意可以重新整理頁面放棄。若某一份清單的層級判斷不對，請套用後手動改那幾項。</div>';
+        h += '<div style="max-height:22vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:50px">頁次</th><th style="padding:3px 6px;text-align:left;width:60px">層級</th><th style="padding:3px 6px;text-align:left;width:150px">改前 → 改後</th><th style="padding:3px 6px;text-align:left;width:110px">原因</th><th style="padding:3px 6px;text-align:left">內容</th></tr>';
+        rows.forEach(function(r){ h += '<tr><td style="' + TD + '">第 ' + r.page + ' 頁</td><td style="' + TD + '">第 ' + r.level + ' 層</td><td style="' + TD + '">' + apxEsc(r.from) + '（' + r.from.length + ' 字）→ <b style="color:#cc0000">' + apxEsc(r.to) + '</b></td><td style="' + TD + '">' + r.why + '</td><td style="' + TD + ';color:#555">' + apxEsc(r.ctx) + '…</td></tr>'; });
+        h += '</table></div>';
     }
-    var hs = rows.hints || [];
+    h += '<div style="font-weight:bold;margin:8px 0 3px">② 縮排對齊（' + lay.length + ' 段）</div>';
+    if (!lay.length) h += '<div style="color:#3E6B2E">都已對齊。</div>';
+    else {
+        var byPage = {}; lay.forEach(function(x){ byPage[x.page] = (byPage[x.page] || 0) + 1; });
+        h += '<div style="font-size:12px;color:#555">這些段落會對齊所屬條文標題的文字起點：' + Object.keys(byPage).map(function(p){ return '第 ' + p + ' 頁 ' + byPage[p] + ' 段'; }).join('、') + '</div>';
+    }
     if (hs.length) {
-        h += '<div style="margin-top:8px;color:#8A5A2B;font-weight:bold">層級提示（不會自動改，請自行判斷）：下列 ' + hs.length + ' 處在條文底下直接用了 1) 2)，依標準第一層應為 a. b.：</div><div style="max-height:18vh;overflow:auto;font-size:12px;color:#555">';
+        h += '<div style="margin-top:8px;color:#8A5A2B;font-weight:bold">③ 層級提示（不會自動改，請自行判斷）：下列 ' + hs.length + ' 處在條文底下<u>直接</u>用 1) 2)（前面沒有 a. 項目），依標準第一層應為 a. b.：</div><div style="max-height:14vh;overflow:auto;font-size:12px;color:#555">';
         hs.forEach(function(x){ h += '<div>第 ' + x.page + ' 頁　' + apxEsc(x.from) + ' ' + apxEsc(x.ctx) + '…</div>'; });
         h += '</div>';
     }
-    h += '<div style="margin-top:10px;text-align:right">' + (rows.length ? '<button type="button" class="btn btn-warning btn-sm" id="lstApply">套用 ' + rows.length + ' 處</button> ' : '') + '<button type="button" class="btn btn-default btn-sm" id="lstClose">關閉</button></div>';
+    var tot = rows.length + lay.length;
+    h += '<div style="margin-top:10px;text-align:right;color:#8A5A2B;font-size:12px">套用後尚未存檔；不滿意重新整理頁面即可放棄。</div><div style="text-align:right">' + (tot ? '<button type="button" class="btn btn-warning btn-sm" id="lstApply">套用（標點 ' + rows.length + '、縮排 ' + lay.length + '）</button> ' : '') + '<button type="button" class="btn btn-default btn-sm" id="lstClose">關閉</button></div>';
     var d = document.createElement('div');
     d.id = 'lstDlg';
-    d.style.cssText = 'position:fixed;z-index:10700;left:50%;top:50%;transform:translate(-50%,-50%);width:700px;max-width:94vw;max-height:84vh;overflow:auto;background:#fff;border:1px solid #E8890C;border-radius:8px;padding:16px 18px;box-shadow:0 10px 36px rgba(0,0,0,.35);font-size:13px;line-height:1.7;color:#333';
+    d.style.cssText = 'position:fixed;z-index:10700;left:50%;top:50%;transform:translate(-50%,-50%);width:780px;max-width:94vw;max-height:88vh;overflow:auto;background:#fff;border:1px solid #E8890C;border-radius:8px;padding:16px 18px;box-shadow:0 10px 36px rgba(0,0,0,.35);font-size:13px;line-height:1.7;color:#333';
     d.innerHTML = h; document.body.appendChild(d);
     document.getElementById('lstClose').onclick = function(){ d.remove(); };
     var ap = document.getElementById('lstApply');
     if (ap) ap.onclick = function(){
-        var ok = 0;
+        var ok = 0, ok2 = 0;
         rows.forEach(function(r){ if (lstSetMarker(r.el, r.to)) ok++; });
+        lay.forEach(function(x){
+            var st = x.el.style;
+            st.marginLeft = x.ml + 'em'; st.marginRight = '';
+            if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
+            ok2++;
+        });
         d.remove(); setDirty(true);
         try { ED.reflowQuiet(); } catch (e) {}
-        apxToast('已統一 ' + ok + ' 處清單編號（記得存檔）');
+        apxToast('已統一 ' + ok + ' 處標點、對齊 ' + ok2 + ' 段（記得存檔）');
     };
 }
 $('#btnLst').on('click', function(){ if (ED) lstShow(lstScan()); });
