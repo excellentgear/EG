@@ -240,6 +240,7 @@ window.EG_DOC_STAMP_SCHEMA = <?= json_encode($__stTpl ? $__stTpl['schema'] : nul
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_doc_fit.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_fit.js') ?>"></script>
 <script>
+var __printed = false;        // 自動列印只跳一次：取消列印後不可以再自己跳出來
 function doPrint(){
     // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，送出即忘不影響列印
     if (window.EGPrintLog) {
@@ -311,7 +312,11 @@ function startAutoPrint(){
     if (window.EGDocFit) EGDocFit.run(document);
     var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
-    function go(){ setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250); }
+    function go(){
+        if (__printed) return;
+        __printed = true;
+        setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250);
+    }
     if (!left) { go(); return; }
     imgs.forEach(function(i){
         if (i.complete) return;

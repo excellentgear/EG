@@ -87,7 +87,7 @@
 .adt-body > .adt-cover { min-height: 100%; }
 .adt-cover-co { font-size: 22pt; letter-spacing: 3px; }
 .adt-cover-coen { font-size: 13pt; margin-top: 1mm; letter-spacing: .5px; }
-.adt-cover-box { border: calc(var(--adt-brd-w) * 2) var(--adt-brd-style) var(--adt-brd-color); margin: 14mm 0 0; padding: 6mm;
+.adt-cover-box { border: 0; margin: 14mm 0 0; padding: 6mm;
     flex: 1 1 auto; min-height: 100mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 .adt-cover-name { font-size: 40pt; letter-spacing: 12px; font-weight: bold; }
 .adt-cover-nameen { font-size: 22pt; margin-top: 8mm; letter-spacing: 1px; }
