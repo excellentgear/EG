@@ -98,6 +98,9 @@
 .egf-ic-term{border-radius:9px;}
 .egf-ic-judge{width:22px;height:22px;transform:rotate(45deg) scale(.78);}
 .egf-ic-doc{transform:skewX(-12deg);}
+.egf-ic-circle{border-radius:50%;width:22px;height:22px;}
+.egf-ic-round{border-radius:6px;}
+.egf-ic-tri{width:0;height:0;border:0;background:none;border-left:12px solid transparent;border-right:12px solid transparent;border-bottom:22px solid #8A5A2B;border-radius:0;}
 .egf-ic-text{border:0;background:none;font-size:15px;color:#6B471A;line-height:18px;text-align:center;font-weight:bold;}
 .egf-ic-arrow,.egf-ic-line{height:0;border:0;border-top:2px solid #6B471A;width:34px;margin-top:8px;position:relative;}
 .egf-ic-arrow:after{content:'';position:absolute;right:-1px;top:-4px;border-left:7px solid #6B471A;
@@ -207,6 +210,12 @@
               <span class="egf-ic egf-ic-text">字</span><i>文字</i></div>
           </div>
           <div class="egf-pal-t">連線（在畫布上畫）</div>
+            <div class="egf-tile" draggable="true" data-drag="circle" title="圓形（拉成長寬不同＝橢圓）">
+              <span class="egf-ic egf-ic-circle"></span><i>圓形</i></div>
+            <div class="egf-tile" draggable="true" data-drag="round" title="四周圓角的方形">
+              <span class="egf-ic egf-ic-round"></span><i>圓角方</i></div>
+            <div class="egf-tile" draggable="true" data-drag="tri" title="三角形">
+              <span class="egf-ic egf-ic-tri"></span><i>三角形</i></div>
           <div class="egf-tiles">
             <div class="egf-tile" data-add="arrow" title="點一下起點、再點一下終點就連起來；中間想轉幾個彎就多點幾下，最後雙擊（或按 Enter）結束。也可以直接由起點拖到終點畫一段。">
               <span class="egf-ic egf-ic-arrow"></span><i>箭頭</i></div>
@@ -385,6 +394,12 @@
       sh = new fabric.Polygon([{x:14,y:0},{x:134,y:0},{x:120,y:48},{x:0,y:48}], baseShapeOpts(x, y));
     } else {
       sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 50 }));
+    } else if (kind === 'circle') {
+      sh = new fabric.Ellipse(Object.assign(baseShapeOpts(x, y), { rx: 44, ry: 44 }));
+    } else if (kind === 'round') {
+      sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 60, rx: 14, ry: 14 }));
+    } else if (kind === 'tri') {
+      sh = new fabric.Polygon([{x:50,y:0},{x:100,y:86},{x:0,y:86}], baseShapeOpts(x, y));
     }
     sh.egRole = 'shape'; sh.egId = id; sh.egKind = kind;
     cv.add(sh);
@@ -481,6 +496,20 @@
       // 平行四邊形：上下邊依傾斜量內縮，點才會貼在實際的邊上
       var off = Math.min(W * 0.1, 14);
       return { N: {x: cx + off / 2, y: T}, S: {x: cx - off / 2, y: T + H},
+    if (sh.egKind === 'circle') {
+      // 圓（橢圓）：四個方位點＋45 度的四個點，點才會貼在弧線上而不是外框角上
+      var kx = 0.5 * Math.SQRT1_2 * W, ky = 0.5 * Math.SQRT1_2 * H;
+      return { N: {x: cx, y: T}, E: {x: L + W, y: cy}, S: {x: cx, y: T + H}, W: {x: L, y: cy},
+               NE: {x: cx + kx, y: cy - ky}, SE: {x: cx + kx, y: cy + ky},
+               SW: {x: cx - kx, y: cy + ky}, NW: {x: cx - kx, y: cy - ky} };
+    }
+    if (sh.egKind === 'tri') {
+      // 三角形：頂點、底邊兩角、底邊中點，以及兩條斜邊的中點與 1/4 處
+      return { N: {x: cx, y: T}, S: {x: cx, y: T + H},
+               SW: {x: L, y: T + H}, SE: {x: L + W, y: T + H},
+               W: {x: L + W * 0.25, y: cy}, E: {x: L + W * 0.75, y: cy},
+               NW: {x: L + W * 0.375, y: T + H * 0.25}, NE: {x: L + W * 0.625, y: T + H * 0.25} };
+    }
                E: {x: L + W - off / 2, y: cy}, W: {x: L + off / 2, y: cy},
                NE: {x: L + W, y: T}, SE: {x: L + W - off, y: T + H},
                SW: {x: L, y: T + H}, NW: {x: L + off, y: T} };
