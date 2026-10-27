@@ -1990,6 +1990,7 @@
        與把頁首樣板裡的 {{PAGE}}/{{TOTAL}}/{{VER}} 代入。
        **不在這裡再組一次版面**——兩邊各寫一份版面一定會走鐘（鐵律4）。 */
     var chrome = null;
+    var hdrChanged = true, fitForce = true;   // 頁首有重寫、或外部要求重量時，才重新跑「太長自動縮字」
 
     function mkSysSheet(sp) {
       var wrap = d.createElement('div');
@@ -2045,13 +2046,19 @@
       if (!sh) return;
       var h = sh.querySelector('.egrt-chrome-hdr');
       var f = sh.querySelector('.egrt-chrome-ftr');
+      /* 內容沒變就不重寫：81 頁每次回流都整段 innerHTML 重建頁首、再量一遍縮字，
+         是大文件操作卡頓的主因（使用者 2026-10-27 回報）。 */
       if (h) {
-        h.innerHTML = (chrome && chrome.hdrTpl)
+        var hs = (chrome && chrome.hdrTpl)
           ? String(chrome.hdrTpl).split('{{PAGE}}').join(pageNo)
               .split('{{TOTAL}}').join(total).split('{{VER}}').join(ver)
           : '';
+        if (h.__egk !== hs) { h.innerHTML = hs; h.__egk = hs; hdrChanged = true; }
       }
-      if (f) f.innerHTML = (chrome && chrome.ftr) || '';
+      if (f) {
+        var fs = (chrome && chrome.ftr) || '';
+        if (f.__egk !== fs) { f.innerHTML = fs; f.__egk = fs; }
+      }
     }
 
     function numberPages() {
@@ -2100,7 +2107,7 @@
       });
       /* 頁首是每次都整段 innerHTML 重寫的（fillChrome），所以「太長自動縮字」
          一定要在這裡再跑一次，不然重新分頁之後就被打回原本的字級。 */
-      if (w.EGDocFit) w.EGDocFit.run(pagesBox || host);
+      if (w.EGDocFit && (hdrChanged || fitForce)) { hdrChanged = false; fitForce = false; w.EGDocFit.run(pagesBox || host); }
     }
 
     /**
@@ -2461,7 +2468,7 @@
 
     var reflowing = false;
     /** @param {number} [from] 從第幾頁開始（打字時只從目前那一頁往後算，整份文件才不會每次都重排） */
-    function reflow(from) {
+    function reflow(from, quick) {
       if (!isDoc || reflowing) return;
       reflowing = true;
       var anchor = scrollAnchor();
@@ -2479,10 +2486,16 @@
 
       enforceHardBreaks(start);
       var guard = 0, i = start;
+      /* quick（打字後的延遲回流）：只動到目前這一頁往後，所以一旦某頁沒有往後推、
+         後面的頁就跟改之前一樣穩定，不必把 80 幾頁逐頁量一遍（大文件卡頓的另一個主因）。 */
+      var touchedMax = start, movedPrev = true;
       // ① 往後推：超出的區塊搬到下一頁；只剩一張長表格就改「拆列」
       for (; i < sheets().length && guard < 4000; i++) {
+        if (quick && i > start && !movedPrev) break;
         var s = sheets()[i];
+        movedPrev = false;
         while (!fitsPage(s) && guard++ < 4000) {
+          movedPrev = true; touchedMax = i + 1;
           var ks = blocksOf(s);
           if (ks.length <= 1) {
             // 拆列 → 拆不動就試著拆掉 Word 頁框 → 都不行才放棄（那一頁自己加長）
@@ -2494,7 +2507,7 @@
       }
       // ② 往前拉：下一頁的第一個區塊如果這一頁放得下就拉回來（刪字之後版面才會回流）
       for (i = start; i < sheets().length - 1 && guard < 9000; i++) {
-        var a = sheets()[i], b = sheets()[i + 1];
+        var a = sheets()[i], b = sheets()[i + 1], pulled = false;
         while (guard++ < 9000) {
           var bk = blocksOf(b);
           if (!bk.length) break;
@@ -2502,7 +2515,9 @@
           if (isHard(node)) break;                              // 強制換頁的區塊不拉回上一頁
           appendBlock(a, node);
           if (!fitsPage(a)) { prependBlock(b, node); break; }   // 放不下就還回去
+          pulled = true;
         }
+        if (quick && !pulled && i >= touchedMax) break;         // 這一對沒動、後面也沒被動過＝已穩定
       }
       // ③ 清掉搬空的頁（第一頁永遠留著）
       sheets().forEach(function (s, idx) {
@@ -2525,7 +2540,7 @@
       reflowTimer = setTimeout(function () {
         reflowTimer = null;
         var idx = sheets().indexOf(body);
-        reflow(idx > 0 ? idx : 0);
+        reflow(idx > 0 ? idx : 0, true);
       }, 350);
     }
 
@@ -2902,10 +2917,10 @@
       viewMode: function () { return viewMode; },
       pageCount: function () { return isDoc ? sheets().length : 1; },
       addPage: function () { var s = mkSheet(); numberPages(); fitPages(); changed(); s.focus(); body = s; return s; },
-      refit: function () { fitPages(); markOverflow(); },
+      refit: function () { fitForce = true; fitPages(); markOverflow(); },
       /** 帶入版面樣板（由 API action=tpl 取得）：系統頁、頁首樣板、頁尾、頁版別 */
       setChrome: function (o) {
-        chrome = o || null;
+        chrome = o || null; fitForce = true;
         renderSysPages();
         numberPages();
         reflow(0);      // 頁首頁尾會佔掉高度，要重新分頁
