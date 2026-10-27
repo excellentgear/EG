@@ -81,12 +81,15 @@
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 一階封面 ───────────────────────────────────────────────────────── */
-.adt-cover { text-align: center; padding-top: 18mm; }
-.adt-cover-co { font-size: 15pt; letter-spacing: 2px; }
-.adt-cover-coen { font-size: 11pt; margin-top: 1mm; letter-spacing: .5px; }
-.adt-cover-box { border: calc(var(--adt-brd-w) * 2) var(--adt-brd-style) var(--adt-brd-color); margin: 26mm 6mm 0; padding: 34mm 6mm; }
-.adt-cover-name { font-size: 26pt; letter-spacing: 8px; font-weight: bold; }
-.adt-cover-nameen { font-size: 14pt; margin-top: 6mm; letter-spacing: 1px; }
+/* 尺寸比照原 Word 封面（使用者 2026-10-27 回報：外框與書名太小、縮在中間一小區）：
+   外框撐成大塊、內容垂直置中，書名放大。 */
+.adt-cover { text-align: center; padding-top: 10mm; }
+.adt-cover-co { font-size: 22pt; letter-spacing: 3px; }
+.adt-cover-coen { font-size: 13pt; margin-top: 1mm; letter-spacing: .5px; }
+.adt-cover-box { border: calc(var(--adt-brd-w) * 2) var(--adt-brd-style) var(--adt-brd-color); margin: 14mm 0 0; padding: 6mm;
+    min-height: 150mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+.adt-cover-name { font-size: 40pt; letter-spacing: 12px; font-weight: bold; }
+.adt-cover-nameen { font-size: 22pt; margin-top: 8mm; letter-spacing: 1px; }
 
 /* ── 文件制修訂紀錄書 ───────────────────────────────────────────────── */
 /* 中間空白列：撐滿剩餘高度，讓「發行單位」簽章區落在跟其他頁面同一條底線
@@ -101,9 +104,12 @@
 .adt-rev-mid { flex: 1 1 auto; min-height: 4mm;
     border-left: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
     border-right: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); }
-.adt-rev-co { text-align: center; font-size: 14pt; }
-.adt-rev-coen { text-align: center; font-size: 10pt; margin-top: .5mm; }
-.adt-rev-ttl { text-align: center; font-size: 16pt; font-weight: bold; letter-spacing: 4px;
+.adt-rev-co { text-align: center; font-size: var(--adt-rev-co-size, 18pt); line-height: 1.3; }
+.adt-rev-coen { text-align: center; font-size: calc(var(--adt-rev-co-size, 18pt) * 0.7); line-height: 1.3; margin-top: .5mm; }
+/* 標題的字級／粗體／底線由公版設定決定（預設 22pt 粗體加底線） */
+.adt-rev-ttl { text-align: center; font-size: var(--adt-rev-ttl-size, 22pt); letter-spacing: 4px; line-height: 1.3;
+               font-weight: var(--adt-rev-ttl-weight, bold); text-decoration: var(--adt-rev-ttl-deco, underline);
+               text-underline-offset: 3px;
                margin: 2mm 0 4mm; }
 /* 抬頭／紀錄本體共用同一組四欄格線，直框線才會上下對齊 */
 .adt-rev-head, .adt-rev-tbl { table-layout: fixed; }
@@ -118,9 +124,10 @@
 .adt-rev-head .adt-rev-name { text-align: center; font-size: 15pt; font-weight: bold;
                               letter-spacing: 2px; }
 .adt-rev-tbl { width: 100%; border-collapse: collapse; margin-top: -1px; }
-.adt-rev-tbl td, .adt-rev-tbl th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 1.4mm 2mm; font-size: 10.5pt;
+.adt-rev-tbl td, .adt-rev-tbl th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .7mm 2mm; font-size: 10.5pt;
+                                   line-height: 1.3;   /* 列高只要能完整顯示內容就好（2026-10-16 使用者要求）；整頁高度不變，靠增加空白列補回 */
                                    text-align: center; vertical-align: middle; }
-.adt-rev-tbl .adt-rev-cap { letter-spacing: 6px; font-size: 12pt; font-weight: bold; padding: 1.6mm; }
+.adt-rev-tbl .adt-rev-cap { letter-spacing: 6px; font-size: 12pt; font-weight: bold; padding: 1.2mm; }
 .adt-rev-tbl th { font-weight: normal; }
 /* 欄寬一律由上面的 colgroup 決定，這裡不再逐欄指定
    （nth-child 遇到 colspan 的那一列會算錯欄位） */
@@ -174,6 +181,10 @@
 .adt-hdr .adt-c3 { width: 16%; }
 .adt-hdr .adt-c4 { width: 26%; }
 .adt-hdr .adt-hdr-co { text-align: center; vertical-align: middle; }
+/* 公司名稱的外層 div 若繼承 body 的 line-height:1.6，行盒比文字高一截，內層 nowrap 的 span 又是 vertical-align:top，
+   文字就貼在格子偏上的位置（2026-10-16 使用者回報頁首公司名稱沒有上下置中）。行高壓成跟 span 一致、整個置中。 */
+.adt-hdr .adt-hdr-co > div { line-height: 1.35; }
+.adt-hdr .adt-hdr-co .adt-fit { vertical-align: middle; }
 /* 公司名稱跟著「頁首字級」走：預設 9.5pt 時英文 9pt／中文 11pt（與改版前相同），
    字級一變兩行一起等量增減，維持原本的大小關係。 */
 .adt-hdr-coen { font-size: calc(var(--adt-hdr-size, 9.5pt) - 0.5pt); }
