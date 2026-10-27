@@ -82,6 +82,17 @@ function act_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='對帳進度追蹤：每側(AR/AP)每個對象每個結帳月份一列，列表時自動補建（lazy create）'");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_manual (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            side            ENUM('ar','ap') NOT NULL,
+            party_key       VARCHAR(30) NOT NULL COMMENT 'ar: customer_id；ap: maker_id_no',
+            billing_month   CHAR(7) NOT NULL,
+            created_at      DATETIME NULL,
+            created_by      INT NULL,
+            created_by_name VARCHAR(50) NULL,
+            UNIQUE KEY uk_manual (side, party_key, billing_month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='對帳進度追蹤：人工新增的應收/應付對象（金額留空）'");
+
         $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_status_log (
             id              INT AUTO_INCREMENT PRIMARY KEY,
             track_id        INT NOT NULL,
@@ -576,7 +587,77 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'net_days'        => $r['net_days'] ?? null,
         ];
     }
+    // 人工新增的對象：系統查無資料而未出現者才補列（金額留空）
+    $have = array_column($out, 'party_key');
+    foreach (act_manual_keys($db, 'ar', $billingMonth) as $key) {
+        if (in_array($key, $have, true)) continue;
+        $c = null;
+        foreach ($cust as $cc) { if ((string)($cc['customer_id'] ?? '') === $key) { $c = $cc; break; } }
+        if (!$c) continue;
+        $partyName = $c['customer'] ?: ($c['customer_full'] ?? $key);
+        $cutoff    = act_cutoff_date_ar($db, $c, $billingMonth);
+        $track     = act_track_get_or_create($db, 'ar', $key, $partyName, $billingMonth, $cutoff);
+        $owner     = act_owner_for($db, $key, $billingMonth);
+        $out[] = [
+            'track_id' => (int)$track['id'], 'side' => 'ar', 'party_key' => $key, 'party_id' => $key,
+            'party_short' => $c['customer'], 'party_name' => $partyName, 'in_master' => true, 'manual' => true,
+            'billing_month' => $billingMonth, 'cutoff_date' => $track['cutoff_date'], 'status' => $track['status'],
+            'card_status' => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
+            'owner_id' => $owner['owner_id'], 'owner_name' => $owner['owner_name'],
+            'ship_amt' => 0, 'ret_amt' => 0, 'net_amt' => 0, 'tax_amt' => 0, 'total_amt' => 0,
+            'need_recon_stmt' => $c['need_recon_stmt'] ?? null, 'recon_provide_by' => $c['recon_provide_by'] ?? null,
+            'settlement_mode' => $c['settlement_mode'] ?? null, 'settlement_day' => $c['settlement_day'] ?? null,
+            'payment_method' => $c['payment_method'] ?? null, 'net_days' => $c['net_days'] ?? null,
+        ];
+    }
     return $out;
+}}
+
+if (!function_exists('act_manual_keys')) {
+function act_manual_keys(PDO $db, string $side, string $bm): array
+{
+    try {
+        $st = $db->prepare("SELECT party_key FROM acc_recon_track_manual WHERE side=? AND billing_month=?");
+        $st->execute([$side, $bm]);
+        return array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+}}
+
+if (!function_exists('act_party_search')) {
+/** 人工新增用：依 ID 或名稱模糊搜尋客戶（ar）／廠商（ap） */
+function act_party_search(PDO $db, string $side, string $kw): array
+{
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    $like = '%' . $kw . '%';
+    if ($side === 'ar') {
+        $st = $db->prepare("SELECT customer_id AS id, customer AS short_name, customer_full AS full_name
+                            FROM customer_list
+                            WHERE COALESCE(is_inactive,0)=0 AND (customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?)
+                            ORDER BY customer LIMIT 30");
+    } else {
+        $st = $db->prepare("SELECT maker_id_no AS id, maker_id AS short_name, maker_id_all AS full_name
+                            FROM maker_list
+                            WHERE COALESCE(status,'')<>'X' AND (maker_id_no LIKE ? OR maker_id LIKE ? OR maker_id_all LIKE ?)
+                            ORDER BY maker_id LIMIT 30");
+    }
+    $st->execute([$like, $like, $like]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}}
+
+if (!function_exists('act_manual_add')) {
+function act_manual_add(PDO $db, string $side, string $partyKey, string $bm, int $uid, string $uname): array
+{
+    if ($side === 'ar') {
+        $st = $db->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+    } else {
+        $st = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=? LIMIT 1");
+    }
+    $st->execute([$partyKey]);
+    if ($st->fetchColumn() === false) return ['success' => false, 'message' => '主檔查無此' . ($side === 'ar' ? '客戶' : '廠商')];
+    $db->prepare("INSERT IGNORE INTO acc_recon_track_manual (side,party_key,billing_month,created_at,created_by,created_by_name)
+                  VALUES (?,?,?,NOW(),?,?)")->execute([$side, $partyKey, $bm, $uid, $uname]);
+    return ['success' => true, 'message' => '已新增'];
 }}
 
 if (!function_exists('act_maker_map')) {
@@ -641,6 +722,22 @@ function act_ap_rows(PDO $db, string $billingMonth): array
             'settlement_day' => $m['settlement_day'] ?? null,
             'payment_method' => $m['payment_method'] ?? null,
             'net_days'       => $m['net_days'] ?? null,
+        ];
+    }
+    $have = array_column($out, 'party_key');
+    foreach (act_manual_keys($db, 'ap', $billingMonth) as $id) {
+        if (in_array($id, $have, true) || empty($mk[$id])) continue;
+        $m = $mk[$id];
+        $partyName = $m['maker_id'] ?? ($m['maker_id_all'] ?? $id);
+        $track = act_track_get_or_create($db, 'ap', $id, $partyName, $billingMonth, act_cutoff_date_ap($db, $id, $billingMonth));
+        $out[] = [
+            'track_id' => (int)$track['id'], 'side' => 'ap', 'party_key' => $id, 'party_id' => $id,
+            'party_short' => $m['maker_id'] ?? $id, 'party_name' => $partyName, 'in_master' => true, 'manual' => true,
+            'billing_month' => $billingMonth, 'cutoff_date' => $track['cutoff_date'], 'status' => $track['status'],
+            'card_status' => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
+            'cnt' => 0, 'amount' => 0, 'tax_amount' => 0, 'total_amt' => 0,
+            'settlement_mode' => $m['settlement_mode'] ?? null, 'settlement_day' => $m['settlement_day'] ?? null,
+            'payment_method' => $m['payment_method'] ?? null, 'net_days' => $m['net_days'] ?? null,
         ];
     }
     return $out;

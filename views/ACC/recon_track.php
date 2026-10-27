@@ -247,6 +247,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
           </div>
           <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="applyFilters()"><option value="">— 全部負責人 —</option></select>
           <button class="btn btn-sm btn-warm-o" onclick="clearFilters()"><i class="fa fa-times"></i> 取消篩選</button>
+          <button class="btn btn-sm btn-warm" id="btnManualAdd" onclick="openManualAdd()"><i class="fa fa-plus"></i> <span id="btnManualAddTxt">人工新增應收</span></button>
         </div>
       </h4>
       <div class="st-cards" id="stCards"></div>
@@ -391,6 +392,26 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <div class="m-foot">
       <button class="btn btn-default" data-close="settleMask">關閉</button>
       <button class="btn btn-warm" onclick="saveSettle()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 人工新增應收／應付 ══════════ -->
+<div class="m-mask" id="manualMask">
+  <div class="m-win" style="width:460px;">
+    <div class="m-head"><span id="manualTitle">人工新增應收</span> <span class="x" data-close="manualMask">✕</span></div>
+    <div class="m-body">
+      <p style="color:var(--brown);font-size:12px;">加入目前所選結帳月份的清單；金額留空，不影響系統自動帶出的資料。</p>
+      <div class="form-group"><label id="manualLbl">客戶（ID 或名稱）</label>
+        <input type="text" id="manualKw" class="form-control" autocomplete="off" placeholder="輸入 ID 或名稱即時搜尋…" oninput="manualSearch()">
+      </div>
+      <div id="manualList" style="max-height:240px;overflow:auto;border:1px solid var(--sand);border-radius:4px;display:none;"></div>
+      <div id="manualPick" style="margin-top:8px;font-weight:700;color:var(--ink);"></div>
+      <div class="err-txt" id="manualErr"></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-default" data-close="manualMask">關閉</button>
+      <button class="btn btn-warm" onclick="manualSave()">新增</button>
     </div>
   </div>
 </div>
@@ -551,6 +572,7 @@ function setSide(s){
     document.getElementById('sideAr').classList.toggle('on', s==='ar');
     document.getElementById('sideAp').classList.toggle('on', s==='ap');
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
+    document.getElementById('btnManualAddTxt').textContent = '人工新增' + (s==='ar' ? '應收' : '應付');
     document.getElementById('fOwner').style.display = (s==='ar') ? '' : 'none';
     document.getElementById('fOwner').value = '';
     hideKwSuggest();
@@ -623,6 +645,60 @@ function allowedTargets(row){
 
 var ALL_ROWS = [];        // 這個月份／側別撈回來的全部資料（不受篩選影響）
 var FILTERED_ROWS = [];   // 套用狀態卡片／搜尋／負責人篩選後的結果，renderListTbl() 只讀這個
+
+var MANUAL_KEY = '', MANUAL_TMR = null;
+function manualAllowed(){
+    return PERMS.canAdmin || PERMS.isAcc || (SIDE==='ar' ? PERMS.isSales : PERMS.isPm);
+}
+function openManualAdd(){
+    if (!manualAllowed()) { showToast('沒有人工新增的權限', 'error'); return; }
+    var t = SIDE==='ar' ? '應收' : '應付';
+    document.getElementById('manualTitle').textContent = '人工新增' + t;
+    document.getElementById('manualLbl').textContent = (SIDE==='ar' ? '客戶' : '廠商') + '（ID 或名稱）';
+    document.getElementById('manualKw').value = '';
+    document.getElementById('manualList').style.display = 'none';
+    document.getElementById('manualPick').textContent = '';
+    document.getElementById('manualErr').textContent = '';
+    MANUAL_KEY = '';
+    openMask('manualMask');
+    setTimeout(function(){ document.getElementById('manualKw').focus(); }, 50);
+}
+function manualSearch(){
+    MANUAL_KEY = '';
+    document.getElementById('manualPick').textContent = '';
+    clearTimeout(MANUAL_TMR);
+    MANUAL_TMR = setTimeout(function(){
+        var kw = document.getElementById('manualKw').value.trim();
+        var box = document.getElementById('manualList');
+        if (!kw) { box.style.display = 'none'; return; }
+        apiGet('party_search', {side:SIDE, kw:kw}).done(function(r){
+            if (!r || !r.ok) return;
+            if (!r.rows.length) { box.innerHTML = '<div style="padding:8px;color:var(--brown);">查無符合的資料</div>'; box.style.display = 'block'; return; }
+            box.innerHTML = r.rows.map(function(p){
+                var nm = p.short_name || p.full_name || '';
+                var full = (p.full_name && p.full_name !== nm) ? ' <span style="color:var(--brown);">' + esc(p.full_name) + '</span>' : '';
+                return '<div class="mp-it" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--sand);" data-id="' + esc(p.id) + '" data-nm="' + esc(nm) + '">' +
+                       '<b>' + esc(p.id) + '</b>　' + esc(nm) + full + '</div>';
+            }).join('');
+            box.style.display = 'block';
+        });
+    }, 250);
+}
+document.addEventListener('click', function(e){
+    var it = e.target.closest ? e.target.closest('.mp-it') : null;
+    if (!it) return;
+    MANUAL_KEY = it.dataset.id;
+    document.getElementById('manualPick').textContent = '已選擇：' + it.dataset.id + '　' + it.dataset.nm;
+    document.getElementById('manualList').style.display = 'none';
+    document.getElementById('manualErr').textContent = '';
+});
+function manualSave(){
+    if (!MANUAL_KEY) { document.getElementById('manualErr').textContent = '請先搜尋並從清單點選一筆' + (SIDE==='ar' ? '客戶' : '廠商'); return; }
+    var bm = document.getElementById('fBm').value || defaultBm();
+    api({action:'manual_add', side:SIDE, bm:bm, party_key:MANUAL_KEY}).done(function(r){
+        if (r && r.ok) { closeMask('manualMask'); showToast('已新增'); loadList(); }
+    });
+}
 
 function loadList(){
     var bm = document.getElementById('fBm').value || defaultBm();

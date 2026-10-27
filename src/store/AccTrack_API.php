@@ -50,7 +50,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
-          'owner_pool_add', 'owner_pool_remove', 'owner_set_batch'];
+          'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['act_csrf'], $tok)) {
@@ -303,6 +303,25 @@ switch ($action) {
         $r = act_owner_set_batch($db, $ids, $ownerId, $ownerName, $perms);
         if (!$r['success']) actErr($r['message']);
         actOut($r);
+    }
+
+    /* ── 人工新增應收／應付對象（金額留空）──────────────────────── */
+    case 'party_search': {
+        $side = actSide($_GET['side'] ?? 'ar');
+        actOut(['rows' => act_party_search($db, $side, (string)($_GET['kw'] ?? ''))]);
+    }
+
+    case 'manual_add': {
+        $side = actSide($_POST['side'] ?? 'ar');
+        $ok = $perms['canAdmin'] || $perms['isAcc'] || ($side === 'ar' ? $perms['isSales'] : $perms['isPm']);
+        if (!$ok) actErr('沒有人工新增的權限', 403);
+        $bm = (string)($_POST['bm'] ?? '');
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
+        $key = trim((string)($_POST['party_key'] ?? ''));
+        if ($key === '') actErr('請先搜尋並選擇' . ($side === 'ar' ? '客戶' : '廠商'));
+        $r = act_manual_add($db, $side, $key, $bm, $uid, $uname);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
     }
 
     default:
