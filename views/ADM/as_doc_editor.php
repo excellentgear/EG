@@ -485,6 +485,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
             <?php if ($P['edit'] && !$__locked): ?>
               <button class="btn btn-default btn-sm" id="btnApx" title="附錄整理：檢查附錄編號（重複／跳號）、附錄自動從新的一頁開始、把內文裡的「附錄 X」連到對應附錄，附錄改編號時自動更新">
                 <i class="fa fa-paperclip"></i> 附錄整理</button>
+              <button class="btn btn-default btn-sm" id="btnLst" title="編號統一：條文底下第一層 a. b. c.、第二層 1) 2) 3)，自動辨識並列出要改的地方；在清單項目按 Enter 會自動接下一個編號">
+                <i class="fa fa-list-ol"></i> 編號統一</button>
             <?php endif; ?>
             <?php if ($P['admin']): ?>
               <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
@@ -3163,6 +3165,118 @@ $(document).on('click', '#adEditorHost .egrt-main .eg-apref', function(e){
     var k = this.getAttribute('data-apt') || '', hit = null;
     apxHeads().forEach(function(h){ if (!hit && apxKey(h) === k) hit = h; });
     if (hit) hit.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+/* ── 條文下的清單編號統一（2026-10-27）────────────────────────────────
+   標準：條文（10.1、10.2.1…）底下第一層一律 a. b. c.，第二層一律 1) 2) 3)。
+   手冊裡同一層常混用 a. ／ a： ／ （a）／ 1） ／ 1)，所以「編號統一」依結構辨識層級、重排編號、列出清單讓人確認再套用；
+   另外在清單項目按 Enter 時自動接下一個編號（空項目再按 Enter ＝ 結束清單）。 */
+var LST_WS = '[\\s\\u00A0\\u3000]';
+var LST_RE = new RegExp('^' + LST_WS + '*(?:[（(]?([a-z])[)）.．、:：](?![a-zA-Z])|[（(]?(\\d{1,2})[)）])' + LST_WS + '*');
+var LST_CLAUSE = new RegExp('^' + LST_WS + '*\\d+(?:\\.\\d+)+(?:' + LST_WS + '|$)');
+function lstBlocks() {
+    var out = [];
+    apxSheets().forEach(function(sh, si){
+        Array.prototype.forEach.call(sh.children, function(b){
+            if (/^(P|DIV|H[1-6])$/.test(b.tagName)) out.push({ el: b, page: si + 1 });
+        });
+    });
+    return out;
+}
+function lstTarget(level, n) { return level === 1 ? String.fromCharCode(96 + n) + '.' : n + ')'; }
+function lstScan() {
+    var rows = [], hints = [], lastL1 = false;
+    lstBlocks().forEach(function(b){
+        var t = b.el.textContent || '';
+        if (/^H[1-6]$/.test(b.el.tagName) || LST_CLAUSE.test(t)) { lastL1 = false; return; }
+        var m = LST_RE.exec(t);
+        if (!m) { if (/[：:]\s*$/.test(t.trim())) lastL1 = false; return; }
+        var cur = m[0].replace(/[\s\u00A0\u3000]+$/, '').replace(/^[\s\u00A0\u3000]+/, '');
+        var tgt = m[1] ? m[1] + '.' : m[2] + ')';
+        var ctx = t.slice(m[0].length, m[0].length + 18);
+        if (m[1]) lastL1 = true;
+        else if (!lastL1) hints.push({ page: b.page, from: cur, ctx: ctx });      // 條文下直接用 1) ：第一層應為 a.
+        if (cur !== tgt) rows.push({ el: b.el, page: b.page, from: cur, to: tgt, level: m[1] ? 1 : 2, ctx: ctx });
+    });
+    rows.hints = hints;
+    return rows;
+}
+/** 取得區塊文字第 pos 個字元所在的 (文字節點, 位移) */
+function lstLocate(el, pos, isEnd) {
+    var tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false), n, s = 0;
+    while ((n = tw.nextNode())) {
+        var e = s + n.nodeValue.length;
+        if (isEnd ? (pos > s && pos <= e) : (pos >= s && pos < e)) return { n: n, o: pos - s };
+        s = e;
+    }
+    return null;
+}
+/** 把區塊開頭的編號換成 newMarker（空字串＝移除編號）。保留編號前後的空白與字型 */
+function lstSetMarker(el, newMarker) {
+    var t = el.textContent || '', m = LST_RE.exec(t);
+    if (!m) return false;
+    var lead = (/^[\s 　]*/.exec(t) || [''])[0].length;
+    var end = m[0].replace(/[\s 　]+$/, '').length;
+    var a = lstLocate(el, lead, false), b = lstLocate(el, end, true);
+    if (!a || !b) return false;
+    var rg = document.createRange();
+    rg.setStart(a.n, a.o); rg.setEnd(b.n, b.o);
+    rg.deleteContents();
+    if (newMarker) { var tn = document.createTextNode(newMarker); rg.insertNode(tn); }
+    return true;
+}
+function lstShow(rows) {
+    var old = document.getElementById('lstDlg'); if (old) old.remove();
+    var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:6px;color:#6B4423"><i class="fa fa-list-ol"></i> 清單編號統一</div>'
+          + '<div style="color:#555;margin-bottom:6px">標準：條文（如 10.1）底下第一層 <b>a. b. c.</b>、第二層 <b>1) 2) 3)</b>。下列項目的<b>標點寫法</b>與標準不同（只統一標點，字母與數字不動——手冊的 a、b、c 常對應標準條文，跳號是刻意的）：</div>';
+    if (!rows.length) h += '<div style="color:#3E6B2E">所有清單編號的標點都已符合標準。</div>';
+    else {
+        h += '<div style="max-height:46vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:50px">頁次</th><th style="padding:3px 6px;text-align:left;width:50px">層級</th><th style="padding:3px 6px;text-align:left;width:120px">編號</th><th style="padding:3px 6px;text-align:left">內容</th></tr>';
+        rows.forEach(function(r){ h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + r.page + ' 頁</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + r.level + ' 層</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + apxEsc(r.from) + ' → <b style="color:#cc0000">' + apxEsc(r.to) + '</b></td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">' + apxEsc(r.ctx) + '…</td></tr>'; });
+        h += '</table></div><div style="margin-top:6px;color:#8A5A2B;font-size:12px">只改編號，不動內容。套用後尚未存檔；不滿意可以重新整理頁面放棄。若某一份清單的層級判斷不對，請套用後手動改那幾項。</div>';
+    }
+    var hs = rows.hints || [];
+    if (hs.length) {
+        h += '<div style="margin-top:8px;color:#8A5A2B;font-weight:bold">層級提示（不會自動改，請自行判斷）：下列 ' + hs.length + ' 處在條文底下直接用了 1) 2)，依標準第一層應為 a. b.：</div><div style="max-height:18vh;overflow:auto;font-size:12px;color:#555">';
+        hs.forEach(function(x){ h += '<div>第 ' + x.page + ' 頁　' + apxEsc(x.from) + ' ' + apxEsc(x.ctx) + '…</div>'; });
+        h += '</div>';
+    }
+    h += '<div style="margin-top:10px;text-align:right">' + (rows.length ? '<button type="button" class="btn btn-warning btn-sm" id="lstApply">套用 ' + rows.length + ' 處</button> ' : '') + '<button type="button" class="btn btn-default btn-sm" id="lstClose">關閉</button></div>';
+    var d = document.createElement('div');
+    d.id = 'lstDlg';
+    d.style.cssText = 'position:fixed;z-index:10700;left:50%;top:50%;transform:translate(-50%,-50%);width:700px;max-width:94vw;max-height:84vh;overflow:auto;background:#fff;border:1px solid #E8890C;border-radius:8px;padding:16px 18px;box-shadow:0 10px 36px rgba(0,0,0,.35);font-size:13px;line-height:1.7;color:#333';
+    d.innerHTML = h; document.body.appendChild(d);
+    document.getElementById('lstClose').onclick = function(){ d.remove(); };
+    var ap = document.getElementById('lstApply');
+    if (ap) ap.onclick = function(){
+        var ok = 0;
+        rows.forEach(function(r){ if (lstSetMarker(r.el, r.to)) ok++; });
+        d.remove(); setDirty(true);
+        try { ED.reflowQuiet(); } catch (e) {}
+        apxToast('已統一 ' + ok + ' 處清單編號（記得存檔）');
+    };
+}
+$('#btnLst').on('click', function(){ if (ED) lstShow(lstScan()); });
+// 在清單項目按 Enter：自動接下一個編號；空項目再按 Enter ＝ 結束清單
+$(document).on('keydown', '#adEditorHost .egrt-main', function(e){
+    if (LOCKED || e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.isComposing) return;
+    var sel = window.getSelection(); if (!sel || !sel.rangeCount || !sel.isCollapsed) return;
+    var host = this, b = sel.anchorNode;
+    while (b && b.parentNode !== host) b = b.parentNode;
+    if (!b || b.nodeType !== 1 || !/^(P|DIV)$/.test(b.tagName)) return;
+    var t = b.textContent || '';
+    if (LST_CLAUSE.test(t)) return;
+    var m = LST_RE.exec(t); if (!m) return;
+    var tail = document.createRange(); tail.setStart(sel.anchorNode, sel.anchorOffset); tail.setEnd(b, b.childNodes.length);
+    if (tail.toString().trim() !== '') return;                       // 游標在文字中間＝一般的斷行
+    if (t.slice(m[0].length).trim() === '') { e.preventDefault(); lstSetMarker(b, ''); return; }
+    var next = m[1] ? String.fromCharCode(m[1].charCodeAt(0) + 1) + '.' : (parseInt(m[2], 10) + 1) + ')';
+    if (m[1] && m[1] === 'z') return;
+    setTimeout(function(){
+        var s2 = window.getSelection(); if (!s2 || !s2.rangeCount) return;
+        var nb = s2.anchorNode; while (nb && nb.parentNode !== host) nb = nb.parentNode;
+        if (nb && nb !== b && (nb.textContent || '').trim() === '') document.execCommand('insertText', false, next);
+    }, 0);
 });
 
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
