@@ -44,8 +44,14 @@ function adt_ensure_schema(PDO $db): void
     try {
         $st = $db->prepare("SHOW TABLES LIKE ?");
         $st->execute(['as_doc_tpl']);
-        if ($st->fetchColumn() !== false) { $done = true; return; }
-    } catch (Throwable $e) { return; }
+        if ($st->fetchColumn() !== false) {
+            // 表已存在：只補缺的欄位（這條早退路徑上也要做，否則新欄位永遠加不上去）
+            if (!$db->inTransaction() && !$db->query("SHOW COLUMNS FROM as_doc_tpl LIKE 'toc_first'")->fetch()) {
+                $db->exec("ALTER TABLE as_doc_tpl ADD COLUMN toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）' AFTER toc_on");
+            }
+            $done = true; return;
+        }
+    } catch (Throwable $e) { error_log('[adt] ensure_schema: ' . $e->getMessage()); return; }
     if ($db->inTransaction()) return;
     try {
         $db->exec("CREATE TABLE IF NOT EXISTS as_doc_tpl (
@@ -59,12 +65,6 @@ function adt_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件線上版的版面樣板設定'");
         $done = true;
     } catch (Throwable $e) { error_log('[adt] ensure_schema: ' . $e->getMessage()); }
-    // 既有的表補欄位（MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加）
-    try {
-        if (!$db->query("SHOW COLUMNS FROM as_doc_tpl LIKE 'toc_first'")->fetch()) {
-            $db->exec("ALTER TABLE as_doc_tpl ADD COLUMN toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）' AFTER toc_on");
-        }
-    } catch (Throwable $e) { error_log('[adt] ensure toc_first: ' . $e->getMessage()); }
 }
 
 function adt_settings(PDO $db, int $docId): array
