@@ -145,7 +145,8 @@ try {
             .right_col { margin-left: 0 !important; padding: 0 !important; min-height: 0 !important; }
             body, .container.body, .main_container { background: #fff !important; }
             .x_panel { border: 0 !important; padding: 0 !important; }
-            .org-chart-container { overflow: visible !important; min-height: 0 !important; }
+            .org-chart-container { overflow: visible !important; min-height: 0 !important; page-break-inside: avoid; break-inside: avoid; }
+            html, body { height: auto !important; overflow: hidden !important; }
             #summary-overlay { position: static !important; display: inline-block !important; margin-bottom: 8px; box-shadow: none !important; }
             * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
@@ -290,9 +291,15 @@ try {
             const box = document.getElementById('org-chart-container');
             const tbl = box && box.querySelector('table');
             if (!tbl) return;
-            const w = tbl.scrollWidth, avail = 1030;   // A4 橫式可印寬度約 1030px
+            // A4 橫式扣邊界 10mm 後可印約 1047x718px，保守取 1000x680（含摘要框高度）
+            const availW = 1000, availH = 680;
             box.dataset.pz = box.style.zoom || '';
-            if (w > avail) box.style.zoom = (avail / w).toFixed(3);
+            box.style.zoom = '1';
+            const ov = document.getElementById('summary-overlay');
+            const ovH = (ov && ov.offsetParent !== null) ? ov.offsetHeight + 8 : 0;
+            const w = tbl.scrollWidth, h = tbl.offsetHeight;
+            const z = Math.min(availW / w, (availH - ovH) / h, 1.5);
+            box.style.zoom = z.toFixed(3);
         });
         window.addEventListener('afterprint', function () {
             const box = document.getElementById('org-chart-container');
