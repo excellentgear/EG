@@ -1272,6 +1272,19 @@ function getOrganizationData() {
         if (($_GET['scope'] ?? '') === 'as') {
             require_once __DIR__ . '/../common/org_chart_hide_lib.php';
             $och_hide = och_get($db);
+            // 被隱藏的部門連同其下轄部門整個從圖上移除
+            $hiddenIds = array_flip($och_hide['depts']);
+            do {
+                $added = false;
+                foreach ($departments as $dd) {
+                    if (!isset($hiddenIds[(int)$dd['id']]) && $dd['parent_id'] !== null && isset($hiddenIds[(int)$dd['parent_id']])) {
+                        $hiddenIds[(int)$dd['id']] = true; $added = true;
+                    }
+                }
+            } while ($added);
+            $departments = array_values(array_filter($departments, function ($dd) use ($hiddenIds) {
+                return !isset($hiddenIds[(int)$dd['id']]);
+            }));
         }
         // 3. 遍歷部門，將員工資料填充進去
         $organization_data = [];
