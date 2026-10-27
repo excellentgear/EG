@@ -706,7 +706,7 @@ function act_maker_map(PDO $db): array
 }}
 
 if (!function_exists('act_ap_rows')) {
-function act_ap_rows(PDO $db, string $billingMonth): array
+function act_ap_rows(PDO $db, string $billingMonth, bool $includeZero = false): array
 {
     act_ensure_schema($db);
     // 把這個廠商這個結帳月的 bill_ym 補齊（只補空值，已有人工覆寫或已算過的不動）
@@ -719,7 +719,7 @@ function act_ap_rows(PDO $db, string $billingMonth): array
                SUM(COALESCE(t.process_amount,0))    AS amt,
                SUM(COALESCE(t.tax_amount,0))        AS tax
         FROM bom_ing_transfer_log t
-        WHERE t.bill_ym = ? AND COALESCE(t.process_amount,0) <> 0
+        WHERE t.bill_ym = ?" . ($includeZero ? '' : " AND COALESCE(t.process_amount,0) <> 0") . "
         GROUP BY t.maker_from");
     $st->execute([$ym6]);
     $mk = act_maker_map($db);

@@ -245,6 +245,9 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
                    oninput="onKwInput()" onfocus="onKwInput()" onblur="setTimeout(hideKwSuggest,150)">
             <div class="kw-suggest" id="kwSuggest"></div>
           </div>
+          <label id="zeroWrap" style="display:none;font-weight:normal;margin:0 6px;cursor:pointer;" title="勾選後，加工金額為 0 的移轉紀錄也會列入應付清單">
+            <input type="checkbox" id="fZero" onchange="try{localStorage.setItem('act_ap_zero',this.checked?'1':'0')}catch(e){}; loadList()"> 金額為 0 也列入
+          </label>
           <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="applyFilters()"><option value="">— 全部負責人 —</option></select>
           <button class="btn btn-sm btn-warm-o" onclick="clearFilters()"><i class="fa fa-times"></i> 取消篩選</button>
           <button class="btn btn-sm btn-warm" id="btnManualAdd" onclick="openManualAdd()"><i class="fa fa-plus"></i> <span id="btnManualAddTxt">人工新增應收</span></button>
@@ -574,6 +577,7 @@ function setSide(s){
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
     document.getElementById('btnManualAddTxt').textContent = '人工新增' + (s==='ar' ? '應收' : '應付');
     document.getElementById('fOwner').style.display = (s==='ar') ? '' : 'none';
+    document.getElementById('zeroWrap').style.display = (s==='ap') ? '' : 'none';
     document.getElementById('fOwner').value = '';
     hideKwSuggest();
     clearSelection();
@@ -711,7 +715,7 @@ function loadList(){
     var bm = document.getElementById('fBm').value || defaultBm();
     document.getElementById('fBm').value = bm;
     // 篩選一律即時在前端做（不需要查詢按鈕）：這裡只在換結帳月份／側別時才打後端拿整個月的資料
-    apiGet('list', {side:SIDE, bm:bm, _:Date.now()}).done(function(r){
+    apiGet('list', {side:SIDE, bm:bm, zero:(SIDE==='ap' && document.getElementById('fZero').checked)?1:0, _:Date.now()}).done(function(r){
         if (!r || !r.ok) return;
         ALL_ROWS = r.rows;
         renderStCards(r.counts);
@@ -1229,6 +1233,7 @@ function saveSetting(){
 $(function(){
     $('#sidebar-menu').css('visibility','visible');
     document.getElementById('fBm').value = defaultBm();
+    try { document.getElementById('fZero').checked = (localStorage.getItem('act_ap_zero') === '1'); } catch(e) {}
     $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;
