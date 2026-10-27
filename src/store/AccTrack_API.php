@@ -330,6 +330,10 @@ switch ($action) {
         $bm = (string)($_POST['bm'] ?? '');
         $key = trim((string)($_POST['party_key'] ?? ''));
         if (!preg_match('/^\d{4}-\d{2}$/', $bm) || $key === '') actErr('缺少參數');
+        // 已有進度（按過狀態鈕）的不可刪：進度與按鈕日期要保留，之後匯入資料出現同一對象時自動沿用
+        $stc = $db->prepare("SELECT status FROM acc_recon_track WHERE side=? AND party_key=? AND billing_month=? LIMIT 1");
+        $stc->execute([$side, $key, $bm]);
+        if ((string)$stc->fetchColumn() !== '') actErr('此對象已有對帳進度紀錄，不可刪除（進度與日期須保留）');
         $db->prepare("DELETE FROM acc_recon_track_manual WHERE side=? AND party_key=? AND billing_month=?")->execute([$side, $key, $bm]);
         actOut(['message' => '已刪除']);
     }
