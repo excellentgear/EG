@@ -873,7 +873,10 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
       <label style="font-weight:normal;font-size:13px;color:#6B471A;margin:0;">
         <input type="checkbox" id="tplToc"> 自動產生目錄頁（排在制修訂紀錄書之後）
       </label>
-      <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。</div>
+      <label style="font-weight:normal;font-size:13px;color:#6B471A;margin:4px 0 0;display:block;">
+        <input type="checkbox" id="tplTocFirst"> 目錄頁算第 1 頁（目錄也印頁首，正文從第 2 頁起算）
+      </label>
+      <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。不勾選時，頁次只算正文（目錄不計頁）。</div>
     </div>
 
     <?php if ($P['admin']): ?>
@@ -2146,6 +2149,7 @@ $('#btnTpl').on('click', function(){
     $('#tplFoot').val(cfg.foot_left || '');
     $('#tplCoverEn').val(cfg.cover_en || '');
     $('#tplToc').prop('checked', !(String(cfg.toc_on) === '0'));
+    $('#tplTocFirst').prop('checked', String(cfg.toc_first) === '1');
     // 封面英文與目錄只有一階用得到，二階以下顯示出來只會讓人以為設了有效
     // （階別存的是中文，判定由後端給旗標，前端不自己比字串）
     $('.tpl-l1').toggle(!!TPL.is_level1);
@@ -2247,7 +2251,8 @@ $('#btnTplSave').on('click', function(){
         issue_dept_id: $('#tplDept').val() || 0,
         foot_left:     $('#tplFoot').val(),
         cover_en:      $('#tplCoverEn').val(),
-        toc_on:        $('#tplToc').prop('checked') ? 1 : 0
+        toc_on:        $('#tplToc').prop('checked') ? 1 : 0,
+        toc_first:     $('#tplTocFirst').prop('checked') ? 1 : 0
     }, function(r){
         $b.prop('disabled', false);
         if (!r.success) { $('#tplMsg').text(''); alert(r.message || '設定存檔失敗'); return; }

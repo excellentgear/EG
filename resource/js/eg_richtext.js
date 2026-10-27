@@ -2058,22 +2058,24 @@
       var ss = sheets(), n = ss.length;
       /* 頁次只算正文（使用者 2026-09-23 指定：文件制修訂紀錄書與目錄都不算一頁），
          所以正文從第 1 頁開始、總頁數也只算正文。系統頁的籤改成寫它自己是什麼。 */
-      var total = n;
+      var tocFirst = !!(chrome && chrome.sys && chrome.sys.some(function (x) { return x.key === 'toc' && x.hdr; }));
+      var off = tocFirst ? 1 : 0;
+      var total = n + off;
       var sysLabels = (chrome && chrome.sys) ? chrome.sys : [];
       Array.prototype.slice.call(pagesBox ? pagesBox.querySelectorAll('.egrt-sheetwrap.egrt-sys') : [])
         .forEach(function (wp, i) {
           var no2 = wp.querySelector('.egrt-pageno');
           if (no2) {
             var lb = (sysLabels[i] && sysLabels[i].label) ? sysLabels[i].label : '系統頁';
-            no2.textContent = lb + '（不計入頁次）';
+            no2.textContent = (tocFirst && sysLabels[i] && sysLabels[i].key === 'toc') ? '目錄（第 1 頁 / 共 ' + total + ' 頁）' : lb + '（不計入頁次）';
           }
         });
       ss.forEach(function (s, i) {
         var wrap = wrapOf(s);
         if (!wrap) return;
-        fillChrome(s, i + 1, total, pageVerOf(i));
+        fillChrome(s, i + 1 + off, total, pageVerOf(i));
         var no = wrap.querySelector('.egrt-pageno');
-        if (no) no.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + total + ' 頁';
+        if (no) no.textContent = '第 ' + (i + 1 + off) + ' 頁 / 共 ' + total + ' 頁';
         var del = wrap.querySelector('.egrt-delpage');
         if (n > 1) {
           if (!del) {
@@ -2301,6 +2303,13 @@
        這裡是為了救「之前就已經匯進來的舊內容」。 */
     function unwrapFrameTable(s) {
       var ks = blocksOf(s);
+      // 目錄算第 1 頁時要有頁首（後端給 hdr，結構只有 PHP 一份）
+      if (sp.hdr) {
+        var hd = d.createElement('div');
+        hd.className = 'egrt-chrome egrt-chrome-hdr';
+        hd.innerHTML = sp.hdr;
+        sh.appendChild(hd);
+      }
       if (ks.length !== 1) return false;
       var t = ks[0];
       if (!t || t.tagName !== 'TABLE') return false;

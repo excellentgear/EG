@@ -233,7 +233,7 @@ case 'tpl_save': {
     $vid = (int)($_POST['version_id'] ?? 0);
     $v = needVersion($db, $P, $vid);
     $in = [];
-    foreach (['issue_dept_id', 'cover_en', 'foot_left', 'toc_on'] as $k) {
+    foreach (['issue_dept_id', 'cover_en', 'foot_left', 'toc_on', 'toc_first'] as $k) {
         if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
     }
     if (!empty($in['issue_dept_id'])) {

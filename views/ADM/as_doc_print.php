@@ -77,7 +77,9 @@ if ($err === '') {
     $sys   = adt_system_pages($ctx, $conts);
     /* 頁次只算正文（使用者 2026-09-23 指定：文件制修訂紀錄書與目錄都不算一頁），
        所以正文第一頁就是「1 / 正文總頁數」。 */
-    $total = count($conts);
+    $tocFirst = false;
+    foreach ($sys as $s0) { if ($s0['key'] === 'toc' && !empty($s0['hdr'])) $tocFirst = true; }
+    $total = count($conts) + ($tocFirst ? 1 : 0);
     $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
 
     /* 「第 X 頁／共 Y 頁」＋AS編號版次：改用 PHP 直接算好印成一般 HTML，
@@ -104,7 +106,7 @@ if ($err === '') {
              . '<span>' . htmlspecialchars($footRight, ENT_QUOTES) . '</span></div>';
     };
 
-    $no    = 0;
+    $no    = $tocFirst ? 1 : 0;   // 目錄算第 1 頁時，正文從第 2 頁起
     foreach ($sys as $s) {
         // 系統頁不印頁首（它們自己就是完整版面），也不計入頁次。
         // 頁尾（自訂文字＋AS編號）原則上照印，但「文件制修訂紀錄書」自己的
@@ -114,6 +116,7 @@ if ($err === '') {
         // 紀錄書不顯示頁尾，但要「佔著同樣的高度」（隱藏不是移除），框線底緣才會與其他頁對齊
         $ftr = $isRevlog ? '<div style="visibility:hidden">' . adt_footer_html($ctx) . '</div>' : adt_footer_html($ctx);
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
+                     . ($s['hdr'] ?? '')
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
                      . $ftr . $sheetFoot(true) . '</section>';   // 系統頁（封面／紀錄書／目錄）不印「第X頁／共Y頁＋版次」
     }

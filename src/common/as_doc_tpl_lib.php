@@ -54,10 +54,17 @@ function adt_ensure_schema(PDO $db): void
             cover_en VARCHAR(255) NULL COMMENT '一階封面中文書名下方的英文（可自行輸入）',
             foot_left VARCHAR(190) NULL COMMENT '頁尾左下字樣；空＝用預設「(本文件不得擅自塗改或影印)」',
             toc_on TINYINT(1) NOT NULL DEFAULT 1 COMMENT '要不要自動產生目錄頁（一階預設要）',
+            toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）',
             updated_by INT NULL, updated_at DATETIME NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件線上版的版面樣板設定'");
         $done = true;
     } catch (Throwable $e) { error_log('[adt] ensure_schema: ' . $e->getMessage()); }
+    // 既有的表補欄位（MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加）
+    try {
+        if (!$db->query("SHOW COLUMNS FROM as_doc_tpl LIKE 'toc_first'")->fetch()) {
+            $db->exec("ALTER TABLE as_doc_tpl ADD COLUMN toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）' AFTER toc_on");
+        }
+    } catch (Throwable $e) { error_log('[adt] ensure toc_first: ' . $e->getMessage()); }
 }
 
 function adt_settings(PDO $db, int $docId): array
@@ -75,6 +82,7 @@ function adt_settings(PDO $db, int $docId): array
         'cover_en'      => (string)($row['cover_en'] ?? ''),
         'foot_left'     => (string)($row['foot_left'] ?? ''),
         'toc_on'        => isset($row['toc_on']) ? (int)$row['toc_on'] : 1,
+        'toc_first'     => isset($row['toc_first']) ? (int)$row['toc_first'] : 0,
     ];
 }
 
@@ -87,13 +95,14 @@ function adt_settings_save(PDO $db, int $docId, array $in, int $uid): bool
     $cvEn = array_key_exists('cover_en', $in)  ? mb_substr(trim((string)$in['cover_en']), 0, 255)  : $cur['cover_en'];
     $foot = array_key_exists('foot_left', $in) ? mb_substr(trim((string)$in['foot_left']), 0, 190) : $cur['foot_left'];
     $toc  = array_key_exists('toc_on', $in)    ? (!empty($in['toc_on']) ? 1 : 0)                   : $cur['toc_on'];
+    $tocFirst = array_key_exists('toc_first', $in) ? (!empty($in['toc_first']) ? 1 : 0) : $cur['toc_first'];
     try {
-        $st = $db->prepare("INSERT INTO as_doc_tpl (doc_id, issue_dept_id, cover_en, foot_left, toc_on, updated_by, updated_at)
-                            VALUES (?,?,?,?,?,?,NOW())
+        $st = $db->prepare("INSERT INTO as_doc_tpl (doc_id, issue_dept_id, cover_en, foot_left, toc_on, toc_first, updated_by, updated_at)
+                            VALUES (?,?,?,?,?,?,?,NOW())
                             ON DUPLICATE KEY UPDATE issue_dept_id=VALUES(issue_dept_id), cover_en=VALUES(cover_en),
-                                foot_left=VALUES(foot_left), toc_on=VALUES(toc_on),
+                                foot_left=VALUES(foot_left), toc_on=VALUES(toc_on), toc_first=VALUES(toc_first),
                                 updated_by=VALUES(updated_by), updated_at=NOW()");
-        $st->execute([$docId, $dept ?: null, $cvEn !== '' ? $cvEn : null, $foot !== '' ? $foot : null, $toc, $uid ?: null]);
+        $st->execute([$docId, $dept ?: null, $cvEn !== '' ? $cvEn : null, $foot !== '' ? $foot : null, $toc, $tocFirst, $uid ?: null]);
         return true;
     } catch (Throwable $e) { error_log('[adt] settings_save: ' . $e->getMessage()); return false; }
 }
@@ -700,8 +709,13 @@ function adt_system_pages(array $ctx, array $contentPages): array
     // 設定值仍然保留，但二階以下一律不產生——否則舊設定會讓程序書冒出一頁空目錄。
     if (adt_is_level1($ctx) && !empty($ctx['cfg']['toc_on'])) {
         // 目錄本身也佔一頁，所以正文從「系統頁數＋1」開始編號
-        $startNo = count($out) + 2;
-        $out[] = ['key' => 'toc', 'label' => '目錄', 'html' => adt_toc_html($ctx, $contentPages, $startNo)];
+        /* 頁碼：目錄算第 1 頁時（toc_first）正文從第 2 頁起，且目錄也印頁首；
+           不算時正文從第 1 頁起（頁次只算正文）。目錄裡的頁碼要跟正文頁首同一套算法。 */
+        $tocFirst = !empty($ctx['cfg']['toc_first']);
+        $startNo = $tocFirst ? 2 : 1;
+        $item = ['key' => 'toc', 'label' => '目錄', 'html' => adt_toc_html($ctx, $contentPages, $startNo)];
+        if ($tocFirst) $item['hdr'] = adt_header_html($ctx, 1, count($contentPages) + 1, (string)$ctx['version']);
+        $out[] = $item;
     }
     return $out;
 }
