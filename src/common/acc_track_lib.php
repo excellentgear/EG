@@ -587,10 +587,16 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'net_days'        => $r['net_days'] ?? null,
         ];
     }
-    // 人工新增的對象：系統查無資料而未出現者才補列（金額留空）
+    // 金額為 0 的出貨單（業務常以 $0 出貨）也算有效出貨：本月有出貨單、但應收彙總沒列出的客戶補列（金額 0）
     $have = array_column($out, 'party_key');
-    foreach (act_manual_keys($db, 'ar', $billingMonth) as $key) {
+    $zeroIds = act_zero_ship_customer_ids($db, $billingMonth, $cust);
+    // 人工新增的對象：系統查無資料而未出現者才補列（金額留空）
+    $manualSet = array_flip(act_manual_keys($db, 'ar', $billingMonth));
+    $extraKeys = array_values(array_unique(array_merge($zeroIds, array_keys($manualSet))));
+    foreach ($extraKeys as $key) {
+        $key = (string)$key;
         if (in_array($key, $have, true)) continue;
+        $isManual = isset($manualSet[$key]);
         $c = null;
         foreach ($cust as $cc) { if ((string)($cc['customer_id'] ?? '') === $key) { $c = $cc; break; } }
         if (!$c) continue;
@@ -600,7 +606,7 @@ function act_ar_rows(PDO $db, string $billingMonth): array
         $owner     = act_owner_for($db, $key, $billingMonth);
         $out[] = [
             'track_id' => (int)$track['id'], 'side' => 'ar', 'party_key' => $key, 'party_id' => $key,
-            'party_short' => $c['customer'], 'party_name' => $partyName, 'in_master' => true, 'manual' => true,
+            'party_short' => $c['customer'], 'party_name' => $partyName, 'in_master' => true, 'manual' => ($isManual && !in_array($key, $zeroIds, true)), 'zero_ship' => in_array($key, $zeroIds, true),
             'billing_month' => $billingMonth, 'cutoff_date' => $track['cutoff_date'], 'status' => $track['status'],
             'card_status' => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
             'owner_id' => $owner['owner_id'], 'owner_name' => $owner['owner_name'],
@@ -611,6 +617,30 @@ function act_ar_rows(PDO $db, string $billingMonth): array
         ];
     }
     return $out;
+}}
+
+if (!function_exists('act_zero_ship_customer_ids')) {
+/** 該帳款月份內「有出貨單、但金額全為 0」的客戶主檔編號（歸戶與帳款月份判定與應收彙總完全相同） */
+function act_zero_ship_customer_ids(PDO $db, string $bm, array $cust): array
+{
+    try {
+        [$scanFrom, $scanTo] = acc_scan_range($bm, $bm);
+        $global = acc_global_cutoff($db);
+        $st = $db->prepare("SELECT Client_name, Order_date, billing_month_override FROM is_list
+                            WHERE ((Order_date BETWEEN ? AND ?) OR (billing_month_override IS NOT NULL AND billing_month_override = ?))
+                            AND ABS(Qty * Unit_price) < 0.0001");
+        $st->execute([$scanFrom, $scanTo, $bm]);
+        $ids = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $name = trim((string)$r['Client_name']);
+            $c = $cust[$name] ?? null;
+            if ($name === '' || !$c) continue;
+            $o = trim((string)$r['billing_month_override']);
+            $m = preg_match('/^\d{4}-\d{2}$/', $o) ? $o : acc_bm_for($db, $r['Order_date'], $c, $global);
+            if ($m === $bm) $ids[(string)$c['customer_id']] = true;
+        }
+        return array_keys($ids);
+    } catch (Throwable $e) { return []; }
 }}
 
 if (!function_exists('act_manual_keys')) {
