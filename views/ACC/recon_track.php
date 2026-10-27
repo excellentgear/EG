@@ -648,7 +648,7 @@ var FILTERED_ROWS = [];   // 套用狀態卡片／搜尋／負責人篩選後的
 
 var MANUAL_KEY = '', MANUAL_TMR = null;
 function manualAllowed(){
-    return PERMS.canAdmin || PERMS.isAcc || (SIDE==='ar' ? PERMS.isSales : PERMS.isPm);
+    return PERMS.canAdmin || PERMS.isAcc || PERMS.isSales || PERMS.isPm;
 }
 function openManualAdd(){
     if (!manualAllowed()) { showToast('沒有人工新增的權限', 'error'); return; }
@@ -692,6 +692,13 @@ document.addEventListener('click', function(e){
     document.getElementById('manualList').style.display = 'none';
     document.getElementById('manualErr').textContent = '';
 });
+function manualDel(side, key){
+    if (!confirm('確定刪除這筆人工新增的對象？（僅移出此結帳月份的清單）')) return;
+    var bm = document.getElementById('fBm').value || defaultBm();
+    api({action:'manual_delete', side:side, bm:bm, party_key:key}).done(function(r){
+        if (r && r.ok) { showToast('已刪除'); loadList(); }
+    });
+}
 function manualSave(){
     if (!MANUAL_KEY) { document.getElementById('manualErr').textContent = '請先搜尋並從清單點選一筆' + (SIDE==='ar' ? '客戶' : '廠商'); return; }
     var bm = document.getElementById('fBm').value || defaultBm();
@@ -839,7 +846,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(''+r.side+'',''+esc(r.party_key)+'')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
