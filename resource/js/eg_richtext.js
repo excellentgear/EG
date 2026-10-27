@@ -970,7 +970,19 @@
       try { d.execCommand('styleWithCSS', false, TAG_CMDS.indexOf(cmd) < 0); } catch (e) {}
     }
 
+    var countTimer = null;
     function refreshCount() {
+      if (!count) return;
+      /* 多頁模式要把全部頁序列化成字串才數得出字數，81 頁每個按鍵做一次會明顯卡；
+         合併成「停手 400ms 後算一次」。 */
+      if (isDoc) {
+        if (countTimer) clearTimeout(countTimer);
+        countTimer = setTimeout(function () { countTimer = null; refreshCountNow(); }, 400);
+        return;
+      }
+      refreshCountNow();
+    }
+    function refreshCountNow() {
       if (!count) return;
       // 多頁模式要算全部頁的字數
       var n = toText(isDoc ? joinPages() : body.innerHTML).length;
@@ -1329,14 +1341,15 @@
     }
     /** 依資產編號把 <img> 的 src 補回來。
      *  src 刻意不存進內容（見 richtext_lib.php 的說明），所以每次帶入內容都要補一次。 */
-    function hydrate() {
+    function hydrate(scope) {
       if (!isDoc || !opt.assetUrl) return;
-      // 多頁模式要掃所有頁，不能只掃目前那一頁
-      Array.prototype.slice.call(pagesBox.querySelectorAll('img[data-asset]')).forEach(function (im) {
+      // 預設掃所有頁；打字／貼上時只傳目前那一頁（81 頁 104 張圖每個按鍵都重寫一遍很浪費）
+      Array.prototype.slice.call((scope || pagesBox).querySelectorAll('img[data-asset]')).forEach(function (im) {
         var id = im.getAttribute('data-asset');
-        im.setAttribute('src', opt.assetUrl(id));
-        im.setAttribute('draggable', 'false');
-        im.setAttribute('alt', '');
+        var url = opt.assetUrl(id);
+        if (im.getAttribute('src') !== url) im.setAttribute('src', url);
+        if (im.getAttribute('draggable') !== 'false') im.setAttribute('draggable', 'false');
+        if (im.getAttribute('alt') !== '') im.setAttribute('alt', '');
       });
     }
 
@@ -1840,7 +1853,7 @@
     function afterEdit() {
       // 貼上的 <img data-asset="N"> 會被清洗掉 src（src 一律不存，見 hydrate 的說明），
       // 不補回來就是一張破圖——使用者 2026-10-15 回報「複製貼上到別的頁面」看不到東西
-      if (isDoc) hydrate();
+      if (isDoc) hydrate(body);
       // 即時依編號自動縮排：只掃游標目前所在的那一段（不是整份文件），
       // 打字打出「2.1」的當下那一段就自動排縮，不必等按「依編號自動縮排」。
       if (isDoc) {
@@ -1849,7 +1862,7 @@
         if (blk) applyNumIndent(blk);
       }
       refreshCount();
-      markOverflow();
+      markOverflow(body);
       reflowSoon();      // 打滿一頁就自動流到下一頁（刪字之後也會把下一頁的內容拉回來）
       if (typeof uNote === 'function') uNote();
       if (opt.onChange) opt.onChange();
@@ -2133,8 +2146,8 @@
       return over;
     }
 
-    function markOverflow() {
-      sheets().forEach(function (s) {
+    function markOverflow(only) {
+      (only ? [only] : sheets()).forEach(function (s) {
         var sh = sheetOf(s) || s;
         var over = isOverPage(s);
         if (over && blocksOf(s).length <= 1) {
