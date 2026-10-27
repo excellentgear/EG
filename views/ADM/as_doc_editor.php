@@ -3212,6 +3212,8 @@ function lstScan() {
             var depth = isCl ? lstDepth(t) : 1;
             ts = lstTitleStart(b.el, depth); hPx = lstPx(b.el);
             // 章標題（1. 2. 3.）是最上層，靠最左；底下的條文（3.1）才往內縮
+            // 條文標題上殘留的大塊右邊界（Word 匯入）會讓標題擠成窄窄一欄、莫名折行（例：6.2.2 在「組／織」之間斷開）
+            if (!isChap && parseFloat(b.el.style.marginRight) > 0) layout.push({ el: b.el, page: b.page, onlyRight: true, kind: '標題右邊界', ctx: tt.slice(0, 16) });
             if (isChap) layout.push({ el: b.el, page: b.page, ml: 0, pl: 1.1, ti: -1.1, kind: '章標題', ctx: tt.slice(0, 16) });
             return;
         }
@@ -3235,6 +3237,7 @@ function lstScan() {
     // 已經是標準位置的不列
     function nn(v) { return parseFloat(v) || 0; }
     layout = layout.filter(function(x){
+        if (x.onlyRight) return true;
         var st = x.el.style;
         return !(Math.abs(nn(st.marginLeft) - x.ml) < 0.05 && (x.ml === 0 || /em$/.test(st.marginLeft || '')) && !st.marginRight &&
                  Math.abs(nn(st.paddingLeft) - x.pl) < 0.05 && Math.abs(nn(st.textIndent) - x.ti) < 0.05);
@@ -3268,6 +3271,7 @@ function lstSetMarker(el, newMarker) {
 }
 function lstApplyLayout(x) {
     var st = x.el.style;
+    if (x.onlyRight) { st.marginRight = ''; return; }
     st.marginLeft = x.ml ? x.ml + 'em' : ''; st.marginRight = '';
     if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
 }
