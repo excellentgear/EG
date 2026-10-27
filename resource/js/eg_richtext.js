@@ -39,12 +39,12 @@
     'IMG','HR','SUB','SUP'
   ]);
   // span 的那一組＝AS 文件參照標記（見後端 EG_RT_DOC_ATTRS 的說明，兩邊必須一致）
-  var DOC_ATTRS = { 'TD': ['colspan','rowspan'], 'TH': ['colspan','rowspan'],
+  var DOC_ATTRS = { 'TD': ['colspan','rowspan','data-sign','data-stamp-name','data-stamp-dept','data-stamp-pos','data-stamp-date'], 'TH': ['colspan','rowspan'],
                     'IMG': ['data-asset'], 'COL': ['span'],
                     'SPAN': ['class','data-asdoc','data-asno','data-asname','data-asmode','data-astpl','data-apt'] };
   var DOC_ATTR_PAT = { 'colspan': /^([1-9]|[1-9]\d)$/, 'rowspan': /^([1-9]|[1-9]\d)$/,
                        'span': /^([1-9]|[1-9]\d)$/, 'data-asset': /^[1-9]\d{0,9}$/,
-                       'class': /^eg-(asref|apref)$/, 'data-apt': /^[^<>\r\n]{1,120}$/, 'data-asdoc': /^[1-9]\d{0,9}$/,
+                       'class': /^eg-(asref|apref)$/, 'data-apt': /^[^<>\r\n]{1,120}$/, 'data-sign': /^[a-z_]{1,20}$/, 'data-stamp-name': /^[^<>\r\n]{1,40}$/, 'data-stamp-dept': /^[^<>\r\n]{0,40}$/, 'data-stamp-pos': /^[^<>\r\n]{0,40}$/, 'data-stamp-date': /^[0-9.\-\/]{0,12}$/, 'data-asdoc': /^[1-9]\d{0,9}$/,
                        'data-asno': /^[0-9A-Za-z\-_.\/]{1,40}$/,
                        'data-asname': /^[^<>\r\n]{1,120}$/,
                        'data-asmode': /^(both|name|no)$/,
@@ -2515,7 +2515,11 @@
             if (!splitTailTable(s) && !unwrapFrameTable(s)) break;
             continue;
           }
-          prependBlock(nextSheet(s, true), ks[ks.length - 1]);
+          /* 下一頁是「強制換頁」開頭時，溢出的區塊不可以塞到它前面（強制換頁的區塊會落到頁中間、標著「強制換頁」卻沒換頁），
+             要另開一頁接住。（2026-10-27 附錄頁掉進前一頁的真因；整份手冊原本就有 11 處這樣） */
+          var ns = nextSheet(s, true), nf = ns ? blocksOf(ns)[0] : null;
+          if (nf && isHard(nf)) { var allS = sheets(); ns = mkSheet('', allS[allS.indexOf(s) + 1] || null); ns.innerHTML = ''; }
+          prependBlock(ns, ks[ks.length - 1]);
         }
       }
       // ② 往前拉：下一頁的第一個區塊如果這一頁放得下就拉回來（刪字之後版面才會回流）

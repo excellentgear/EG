@@ -105,7 +105,8 @@ define('EG_RT_DOC_STYLES', array_merge(EG_RT_STYLES, [
  * 沒列在這裡的標籤＝屬性全清，行為與 basic 完全相同。
  */
 define('EG_RT_DOC_ATTRS', [
-    'td'  => ['colspan','rowspan'],
+    // 簽章格（附錄頁的總經理圖章）：只輸出「要蓋誰的章」，由 eg_doc_sign_stamp.js 畫成圖章
+    'td'  => ['colspan','rowspan','data-sign','data-stamp-name','data-stamp-dept','data-stamp-pos','data-stamp-date'],
     'th'  => ['colspan','rowspan'],
     'img' => ['data-asset'],
     'col' => ['span'],
@@ -130,6 +131,11 @@ define('EG_RT_DOC_ATTR_PAT', [
     'data-asname' => '/^[^<>\r\n]{1,120}$/u',
     'data-asmode' => '/^(both|name|no)$/',
     'data-astpl'  => '/^[^<>\r\n]{1,60}$/u',
+    'data-sign'       => '/^[a-z_]{1,20}$/',
+    'data-stamp-name' => '/^[^<>\r\n]{1,40}$/u',
+    'data-stamp-dept' => '/^[^<>\r\n]{0,40}$/u',
+    'data-stamp-pos'  => '/^[^<>\r\n]{0,40}$/u',
+    'data-stamp-date' => '/^[0-9.\-\/]{0,12}$/',
     'data-apt'    => '/^[^<>\r\n]{1,120}$/u',    // 參照的附錄「標題」（編號會變，標題才是身分）
 ]);
 
