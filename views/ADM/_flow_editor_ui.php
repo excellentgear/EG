@@ -141,6 +141,8 @@
         <span class="egf-lab" style="margin-left:0">×</span>
         <input type="number" class="egf-num" id="egfCH" value="560" min="200" max="3000" step="20" data-eg-skip>
         <button type="button" class="egf-btn" id="egfResize">套用</button>
+        <button type="button" class="egf-btn" id="egfScaleDn" title="把整張圖（圖形、文字、連線）等比縮小 15%，空出四周的位置可以加字；可重複按"><i class="fa fa-search-minus"></i> 縮小全部</button>
+        <button type="button" class="egf-btn" id="egfScaleUp" title="把整張圖等比放大 約 18%（縮小的反向）"><i class="fa fa-search-plus"></i> 放大全部</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">圖內文字</span>
         <button type="button" class="egf-btn" id="egfTxtL" title="圖形內文字靠左"><i class="fa fa-align-left"></i></button>
@@ -783,6 +785,44 @@
   function connHeadKinds(kind) {
     if (kind === 'darrow') return ['a', 'b'];
     if (kind === 'rarrow') return ['a'];
+  /** 整張圖等比縮放（圖形、圖內文字、獨立文字、連線的每個折點一起），以全部內容的中心為基準。
+      字級跟著縮（最小 6），線寬不變。 */
+  function scaleAll(k) {
+    cv.discardActiveObject();
+    var objs = cv.getObjects().filter(function (o) { return o.egRole && o.egRole !== 'handle' && o.egRole !== 'port' && o.egRole !== 'guide'; });
+    if (!objs.length) { stat('畫布是空的'); return; }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    objs.forEach(function (o) {
+      if (o.egRole === 'head') return;
+      var r = o.getBoundingRect(true, true);
+      minX = Math.min(minX, r.left); minY = Math.min(minY, r.top);
+      maxX = Math.max(maxX, r.left + r.width); maxY = Math.max(maxY, r.top + r.height);
+    });
+    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    function moveC(o) {
+      var m = o.calcTransformMatrix();
+      o.set({ left: o.left + (cx + (m[4] - cx) * k - m[4]), top: o.top + (cy + (m[5] - cy) * k - m[5]) });
+      o.setCoords();
+    }
+    var shapes = [];
+    objs.forEach(function (o) {
+      if (o.egRole === 'shape') {
+        o.set({ scaleX: o.scaleX * k, scaleY: o.scaleY * k });
+        moveC(o); shapes.push(o);
+      } else if (o.egRole === 'text' || o.egRole === 'label') {
+        o.set({ fontSize: Math.max(6, Math.round((o.fontSize || 12) * k * 10) / 10) });
+        if (o.egRole === 'text') moveC(o);
+      } else if (o.egRole === 'conn') {
+        setConnPts(o, connPts(o).map(function (q) { return { x: cx + (q.x - cx) * k, y: cy + (q.y - cy) * k }; }));
+      }
+    });
+    shapes.forEach(function (sh) { syncLabel(sh); });
+    objs.forEach(function (o) { if (o.egRole === 'conn') syncConn(o); });
+    cv.requestRenderAll();
+    snapshot();
+    stat(k < 1 ? '已把整張圖縮小，四周空出位置可以加字' : '已把整張圖放大');
+  }
+
     if (kind === 'arrow')  return ['b'];
     return [];
   }
@@ -2254,6 +2294,8 @@
     var ck = el('egfConnKind');
     if (ck) ck.addEventListener('change', function () {
       var o = cv && cv.getActiveObject();
+        case 'egfScaleDn': scaleAll(0.85); break;
+        case 'egfScaleUp': scaleAll(1 / 0.85); break;
       if (o && o.egRole === 'conn') { setConnKind(o, ck.value); showHandles(o); snapshot(); stat('已換成' + ck.options[ck.selectedIndex].text); }
     });
 
