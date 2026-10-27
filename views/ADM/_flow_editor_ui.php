@@ -1424,7 +1424,11 @@
         return;
       }
       if (jj && jj.egW && jj.egH) setLogicalSize(jj.egW, jj.egH);
-    } catch (e) {}
+      // 工作檔裡的底圖（拿既有圖片當底圖開啟的那張）：載入失敗時 fabric 會「安靜地把它丟掉」，
+      // 使用者看到的就是只剩文字、圖不見了，再存檔就把底圖永遠存丟了 → 記下來，載完後補載＋擋存檔
+      bgExpect = (jj && jj.objects || []).filter(function (o) { return o && o.type === 'image' && o.egRole === 'bg'; });
+    } catch (e) { bgExpect = []; }
+    bgMissing = false;
     cv.loadFromJSON(j, function () {
       // 還原後要把 egId 的最大值找回來，否則新增的節點會撞到既有 id
       var mx = 0, oldLines = [];
@@ -1516,6 +1520,33 @@
     paintSwatches();
     var objs = cv.getActiveObjects();
     if (!objs.length) { stat('已選好顏色，接下來新增的圖形會用這個顏色'); return; }
+  var bgExpect = [], bgMissing = false;
+  /** 底圖沒有載回來時：用工作檔記的網址再載一次（最多 3 次、不帶跨來源模式），還是不行就標記起來讓存檔被擋下 */
+  function bgRecover() {
+    var have = cv.getObjects().some(function (o) { return o.egRole === 'bg'; });
+    if (have || !bgExpect.length) { bgMissing = false; return; }
+    bgMissing = true;
+    stat('底圖載入中…');
+    var o0 = bgExpect[0], tries = 0;
+    (function go() {
+      tries++;
+      fabric.Image.fromURL(o0.src, function (img) {
+        if (!img || !img.width) {
+          if (tries < 3) { setTimeout(go, 600); return; }
+          stat('底圖載入失敗：請取消後重新開啟，不要在這個狀態存檔（會把底圖存丟）');
+          return;
+        }
+        img.set({ left: o0.left || 0, top: o0.top || 0, originX: o0.originX || 'left', originY: o0.originY || 'top',
+                  scaleX: o0.scaleX || 1, scaleY: o0.scaleY || 1, selectable: false, evented: false, hasControls: false });
+        img.egRole = 'bg';
+        cv.add(img); cv.sendToBack(img);
+        bgMissing = false;
+        cv.requestRenderAll();
+        stat('底圖已載入');
+      });
+    })();
+  }
+
     objs.forEach(function (o) {
       if (o.egRole === 'handle') return;
       if (kind === 'line') {
@@ -1544,6 +1575,7 @@
     if (fabric.Polyline.prototype.__egHitPatched) return;
     var orig = fabric.Polyline.prototype.containsPoint;
     fabric.Polyline.prototype.containsPoint = function (point, absolute, calculate) {
+      bgRecover();
       if (this.egRole === 'conn' && point && this.points && this.points.length > 1) {
         /* ⚠ fabric 傳進來的 point 是「畫面座標」（含縮放位移），節點是場景座標，
            直接比對在縮放時永遠不會命中，要先反算回場景座標。 */
@@ -2564,6 +2596,7 @@
         cv.sendToBack(img);
         cv.requestRenderAll();
         afterLoad();
+    if (bgMissing) { stat('底圖還沒載入（或載入失敗），先不要存：存下去會把底圖永遠存丟。請稍等一下再按，或取消後重新開啟。'); return; }
       }, { crossOrigin: 'anonymous' });
     } else {
       cv.clear();
