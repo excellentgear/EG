@@ -901,6 +901,9 @@
       '.egrt-imgbar button{border:1px solid #e4d3ba;background:#faf6f0;color:#6B471A;font-size:11px;',
       'line-height:20px;height:22px;padding:0 6px;border-radius:3px;margin:0 1px;}',
       '.egrt-imgbar button:hover{background:#f2e6d4;}',
+      /* 系統頁本體撐滿剩餘高度，大框底緣才會與正文頁（.egrt-main）同一條線 */
+      '.egrt-sysbody{flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;}',
+      '.egrt-sysbody>.adt-rev,.egrt-sysbody>.adt-cover{flex:1 1 auto;min-height:0;}',
       '.egrt-imgbar .egrt-ib-del{color:#DD5138;}',
       '.egrt-handle{position:absolute;z-index:2299;width:12px;height:12px;background:#F0A24B;',
       'border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:nwse-resize;}'
@@ -2003,7 +2006,9 @@
       ft.className = 'egrt-chrome egrt-chrome-ftr';
       // 「文件制修訂紀錄書」自己的表格已經印了文件編號／版次（使用者 2026-09-23 指定），
       // 系統頁尾（頁碼＋AS編號版次）在這一頁不印，跟列印版（as_doc_print.php）同規則
-      ft.innerHTML = (sp.key === 'revlog') ? '' : ((chrome && chrome.ftr) || '');
+      ft.innerHTML = (chrome && chrome.ftr) || '';
+      // 紀錄書不顯示頁尾，但要佔著同樣高度（隱藏≠移除），框線底緣才與其他頁對齊
+      if (sp.key === 'revlog') ft.style.visibility = 'hidden';
       sh.appendChild(ft);
       applyPaper(sh);
       var lab = d.createElement('span');

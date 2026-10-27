@@ -83,11 +83,12 @@
 /* ── 一階封面 ───────────────────────────────────────────────────────── */
 /* 尺寸比照原 Word 封面（使用者 2026-10-27 回報：外框與書名太小、縮在中間一小區）：
    外框撐成大塊、內容垂直置中，書名放大。 */
-.adt-cover { text-align: center; padding-top: 10mm; }
+.adt-cover { text-align: center; padding-top: 10mm; display: flex; flex-direction: column; box-sizing: border-box; }
+.adt-body > .adt-cover { min-height: 100%; }
 .adt-cover-co { font-size: 22pt; letter-spacing: 3px; }
 .adt-cover-coen { font-size: 13pt; margin-top: 1mm; letter-spacing: .5px; }
 .adt-cover-box { border: calc(var(--adt-brd-w) * 2) var(--adt-brd-style) var(--adt-brd-color); margin: 14mm 0 0; padding: 6mm;
-    min-height: 150mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+    flex: 1 1 auto; min-height: 100mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 .adt-cover-name { font-size: 40pt; letter-spacing: 12px; font-weight: bold; }
 .adt-cover-nameen { font-size: 22pt; margin-top: 8mm; letter-spacing: 1px; }
 

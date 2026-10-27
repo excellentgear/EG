@@ -111,7 +111,8 @@ if ($err === '') {
         // 表格已經印了文件編號／版次（使用者 2026-09-23 指定），再印一次頁尾／
         // 頁碼列都是重複，兩個都關掉。
         $isRevlog = ($s['key'] === 'revlog');
-        $ftr = $isRevlog ? '' : adt_footer_html($ctx);
+        // 紀錄書不顯示頁尾，但要「佔著同樣的高度」（隱藏不是移除），框線底緣才會與其他頁對齊
+        $ftr = $isRevlog ? '<div style="visibility:hidden">' . adt_footer_html($ctx) . '</div>' : adt_footer_html($ctx);
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
                      . $ftr . $sheetFoot(true) . '</section>';   // 系統頁（封面／紀錄書／目錄）不印「第X頁／共Y頁＋版次」
