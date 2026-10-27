@@ -489,6 +489,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
                 <i class="fa fa-list-ol"></i> 編號與縮排</button>
               <button class="btn btn-default btn-sm" id="btnLck" title="列印排版檢查：用實際列印的排法檢查有沒有哪幾頁會被切成兩張紙（框線沒到底），依已存檔內容">
                 <i class="fa fa-print"></i> 列印排版檢查</button>
+              <button class="btn btn-default btn-sm" id="btnFr" title="尋找與取代（Ctrl＋H）：例如把中文輸入法打出來的全形「：」一次換成半形「:」">
+                <i class="fa fa-exchange"></i> 取代</button>
             <?php endif; ?>
             <?php if ($P['admin']): ?>
               <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
@@ -3231,6 +3233,7 @@ $(document).on('click', '#adEditorHost .egrt-main .eg-apref', function(e){
    標準：條文（10.1、10.2.1…）底下第一層一律 a. b. c.，第二層一律 1) 2) 3)。
    手冊裡同一層常混用 a. ／ a： ／ （a）／ 1） ／ 1)，所以「編號統一」依結構辨識層級、重排編號、列出清單讓人確認再套用；
    另外在清單項目按 Enter 時自動接下一個編號（空項目再按 Enter ＝ 結束清單）。 */
+var LST_NEW = null;      // 剛按 Enter 產生的空段落（要套對齊）
 var LST_WS = '[\\s\\u00A0\\u3000]';
 var LST_RE = new RegExp('^' + LST_WS + '*(?:[（(]?([a-z])[)）.．、:：](?![a-zA-Z])|[（(]?(\\d{1,2})[)）])' + LST_WS + '*');
 var LST_CLAUSE = new RegExp('^' + LST_WS + '*\\d+(?:\\.\\d+)+(?:' + LST_WS + '|$)');
@@ -3278,7 +3281,7 @@ function lstScan() {
             return;
         }
         var m = LST_RE.exec(t);
-        var plain = !m && tt !== '' && !b.el.querySelector('img,table') && !/text-align:\s*(center|right)/.test(b.el.getAttribute('style') || '');
+        var plain = !m && (tt !== '' || b.el === LST_NEW) && !b.el.querySelector('img,table') && !/text-align:\s*(center|right)/.test(b.el.getAttribute('style') || '');
         // 段落字級不同於標題時，em 要換算（em 是以「該段自己的字級」算的）
         var f = hPx / lstPx(b.el);
         if (!m) {
@@ -3509,6 +3512,134 @@ function lckGo(key, nth) {
 }
 $('#btnLck').on('click', function(){ LCK_MANUAL = true; apxToast('檢查列印排版中（約 10 秒）…'); layoutCheck(); });
 if (!LOCKED) setTimeout(layoutCheck, 4000);        // 開啟編輯器就檢查一次
+
+/* ── 尋找／取代（2026-10-27；Ctrl＋H）────────────────────────────────────
+   整份文件（所有頁）逐段文字比對。「取代全部」直接改文字節點（不能 Ctrl+Z 一次還原，所以會先講明筆數）；
+   「取代」只改目前選到的那一處（走 insertText，可以復原）。
+   常見用途：中文輸入法的全形標點（：；，）一次換成半形（: ; ,），或反過來。 */
+var FR = { pos: 0 };
+function frNodes() {
+    var out = [];
+    apxSheets().forEach(function(sh){
+        var tw = document.createTreeWalker(sh, NodeFilter.SHOW_TEXT, null, false), n;
+        while ((n = tw.nextNode())) out.push(n);
+    });
+    return out;
+}
+function frVals() {
+    return { f: document.getElementById('frFind').value, r: document.getElementById('frRep').value, ic: document.getElementById('frIc').checked };
+}
+function frMatches(v) {
+    var out = [];
+    if (!v.f) return out;
+    var needle = v.ic ? v.f.toLowerCase() : v.f;
+    frNodes().forEach(function(n){
+        var hay = v.ic ? n.nodeValue.toLowerCase() : n.nodeValue, i = 0;
+        while ((i = hay.indexOf(needle, i)) >= 0) { out.push({ n: n, i: i }); i += needle.length; }
+    });
+    return out;
+}
+function frSay(msg) { var e = document.getElementById('frMsg'); if (e) e.textContent = msg; }
+function frSelect(m, len) {
+    var rg = document.createRange();
+    rg.setStart(m.n, m.i); rg.setEnd(m.n, m.i + len);
+    var sh = m.n.parentElement && m.n.parentElement.closest('.egrt-main'); if (sh) sh.focus();
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+    var el = m.n.parentElement; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+}
+function frNext() {
+    var v = frVals(), ms = frMatches(v);
+    if (!ms.length) { frSay('找不到「' + v.f + '」'); return null; }
+    // 從目前游標之後找起，找不到就繞回最前面
+    var sel = window.getSelection(), cur = -1;
+    if (sel.rangeCount) {
+        var r0 = sel.getRangeAt(0);
+        for (var k = 0; k < ms.length; k++) {
+            var t = document.createRange(); t.setStart(ms[k].n, ms[k].i);
+            if (t.compareBoundaryPoints(Range.START_TO_START, r0) > 0 || (t.compareBoundaryPoints(Range.START_TO_START, r0) === 0 && !r0.collapsed && false)) { cur = k; break; }
+        }
+    }
+    if (cur < 0) cur = 0;
+    frSelect(ms[cur], v.f.length);
+    frSay('第 ' + (cur + 1) + ' / ' + ms.length + ' 處');
+    return ms[cur];
+}
+function frReplaceOne() {
+    var v = frVals(); if (!v.f) return;
+    var sel = window.getSelection(), txt = sel.rangeCount ? sel.toString() : '';
+    if ((v.ic ? txt.toLowerCase() : txt) === (v.ic ? v.f.toLowerCase() : v.f)) {
+        document.execCommand('insertText', false, v.r);
+        setDirty(true);
+    }
+    frNext();
+}
+function frReplaceAll() {
+    var v = frVals(); if (!v.f) { frSay('請先輸入要找的文字'); return; }
+    var ms = frMatches(v);
+    if (!ms.length) { frSay('找不到「' + v.f + '」'); return; }
+    if (!confirm('要把全文 ' + ms.length + ' 處「' + v.f + '」都換成「' + v.r + '」嗎？\n（換完可以重新整理頁面放棄；存檔後就不能復原了）')) return;
+    var byNode = [];
+    ms.forEach(function(m){ var o = byNode.filter(function(x){ return x.n === m.n; })[0]; if (!o) byNode.push(o = { n: m.n, ix: [] }); o.ix.push(m.i); });
+    byNode.forEach(function(o){
+        var s = o.n.nodeValue;
+        o.ix.sort(function(a, b){ return b - a; }).forEach(function(i){ s = s.slice(0, i) + v.r + s.slice(i + v.f.length); });
+        o.n.nodeValue = s;
+    });
+    setDirty(true);
+    try { ED.reflowQuiet(); } catch (e) {}
+    frSay('已取代 ' + ms.length + ' 處（記得存檔）');
+    apxToast('已取代 ' + ms.length + ' 處');
+}
+function frOpen(pre) {
+    var d = document.getElementById('frDlg');
+    if (!d) {
+        d = document.createElement('div'); d.id = 'frDlg';
+        d.style.cssText = 'position:fixed;z-index:10650;right:24px;top:120px;width:360px;background:#fff;border:1px solid #E8890C;border-radius:8px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.3);font-size:13px;color:#333';
+        d.innerHTML = '<div style="font-weight:bold;margin-bottom:6px;color:#6B4423"><i class="fa fa-exchange"></i> 尋找與取代 <span id="frX" style="float:right;cursor:pointer;color:#999">✕</span></div>'
+          + '<input id="frFind" class="form-control input-sm" placeholder="尋找" data-eg-skip style="margin-bottom:5px">'
+          + '<input id="frRep" class="form-control input-sm" placeholder="取代為（留空＝刪除）" data-eg-skip style="margin-bottom:6px">'
+          + '<label style="font-weight:normal;margin:0 0 6px"><input type="checkbox" id="frIc"> 不分大小寫</label>'
+          + '<div style="margin-bottom:6px;font-size:12px;color:#8A5A2B">快速帶入：<a href="#" class="fr-pre" data-f="：" data-r=":">全形 ： → 半形 :</a>　<a href="#" class="fr-pre" data-f=":" data-r="：">半形 : → 全形 ：</a></div>'
+          + '<div><button type="button" class="btn btn-default btn-sm" id="frNext">找下一個</button> <button type="button" class="btn btn-default btn-sm" id="frOne">取代</button> <button type="button" class="btn btn-warning btn-sm" id="frAll">全部取代</button></div>'
+          + '<div id="frMsg" style="margin-top:6px;color:#6B4423;min-height:18px"></div>';
+        document.body.appendChild(d);
+        document.getElementById('frX').onclick = function(){ d.style.display = 'none'; };
+        document.getElementById('frNext').onclick = frNext;
+        document.getElementById('frOne').onclick = frReplaceOne;
+        document.getElementById('frAll').onclick = frReplaceAll;
+        Array.prototype.forEach.call(d.querySelectorAll('.fr-pre'), function(a){
+            a.onclick = function(e){ e.preventDefault(); document.getElementById('frFind').value = a.getAttribute('data-f'); document.getElementById('frRep').value = a.getAttribute('data-r'); frSay('已帶入，按「全部取代」'); };
+        });
+        d.addEventListener('keydown', function(e){
+            if (e.key === 'Enter') { e.preventDefault(); frNext(); }
+            if (e.key === 'Escape') d.style.display = 'none';
+        });
+    }
+    d.style.display = '';
+    var f = document.getElementById('frFind');
+    var sel = window.getSelection(), st = (pre != null) ? pre : (sel && sel.rangeCount && !sel.isCollapsed ? sel.toString() : '');
+    if (st && st.length < 60) f.value = st;
+    f.focus(); f.select();
+}
+$('#btnFr').on('click', function(){ frOpen(); });
+$(document).on('keydown', function(e){
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'h' && !LOCKED && ED) { e.preventDefault(); frOpen(); }
+});
+
+// 在條文／內文按 Enter 換行：新的一段自動對齊上方條文標題的文字起點（不照搬標題的懸掛縮排）
+$(document).on('keydown', '#adEditorHost .egrt-main', function(e){
+    if (LOCKED || e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.isComposing) return;
+    var host = this, sel = window.getSelection(); if (!sel || !sel.rangeCount) return;
+    var b = sel.anchorNode; while (b && b.parentNode !== host) b = b.parentNode;
+    if (!b || b.nodeType !== 1 || !/^(P|DIV|H[1-6])$/.test(b.tagName)) return;
+    setTimeout(function(){
+        var s2 = window.getSelection(); if (!s2 || !s2.rangeCount) return;
+        var nb = s2.anchorNode; while (nb && nb.parentNode !== host) nb = nb.parentNode;
+        if (!nb || nb === b || nb.nodeType !== 1 || !/^(P|DIV)$/.test(nb.tagName)) return;
+        LST_NEW = nb;
+        try { lstScan().layout.forEach(function(x){ if (x.el === nb) lstApplyLayout(x); }); } finally { LST_NEW = null; }
+    }, 40);
+});
 
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
 var SAVED_HTML = null, SAVED_TS = 0;
