@@ -190,11 +190,28 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
 
         /* 回頂端（編輯區塊右下角，內容一多捲下去就看不到上方工具列，比照
            td_dev_eval.php 既有寫法，使用者 2026-09-24 交辦） */
-        .ad-back-top { position:fixed; right:22px; bottom:22px; width:38px; height:38px; border-radius:50%;
+        .ad-float { position:fixed; right:22px; bottom:22px; z-index:120; display:flex; flex-direction:column;
+            align-items:flex-end; gap:10px; }
+        .ad-back-top { width:38px; height:38px; border-radius:50%;
             background:#F0A24B; color:#fff; text-align:center; line-height:38px; font-size:16px;
-            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; z-index:120; }
+            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; }
         .ad-back-top:hover { background:#d98a33; }
         .ad-back-top.show { display:block; }
+        /* 快速跳到大標題／附件：滑鼠移過圖示才展開清單（比照訂單分析的右下快速導覽） */
+        .ad-qnav { position:relative; }
+        .ad-qnav-fab { width:38px; height:38px; border-radius:50%; border:1px solid #e4d3ba; background:#fff; color:#8a5a2b;
+            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; font-size:15px; opacity:.7;
+            display:flex; align-items:center; justify-content:center; }
+        .ad-qnav:hover .ad-qnav-fab { opacity:1; }
+        .ad-qnav-panel { position:absolute; right:46px; bottom:0; min-width:200px; max-width:340px; max-height:62vh; overflow:auto;
+            background:rgba(255,253,250,.98); border:1px solid #e4d3ba; border-radius:10px; padding:6px;
+            box-shadow:0 6px 18px rgba(0,0,0,.22); display:flex; flex-direction:column; gap:2px;
+            opacity:0; pointer-events:none; transform:translateX(6px); transition:opacity .15s, transform .15s; }
+        .ad-qnav:hover .ad-qnav-panel { opacity:1; pointer-events:auto; transform:translateX(0); }
+        .ad-qnav-panel a { font-size:12px; color:#6B4423; padding:4px 10px; border-radius:6px; text-decoration:none;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; line-height:1.5; }
+        .ad-qnav-panel a:hover { background:#F5E9D6; }
+        .ad-qnav-panel .ad-qnav-empty { font-size:12px; color:#8A5A2B; padding:6px 10px; white-space:normal; }
 
         /* 跳窗（沿用全站慣例；寬度一律固定像素，不可用 vw——vw 相對整個瀏覽器視窗會蓋過側選單） */
         .m-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10300; display:none; }
@@ -526,7 +543,13 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         <?php endif; ?>
         <div id="adEditorHost"></div>
         <div id="adReadonly" style="display:none" class="egrt-wrap"></div>
-        <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
+        <div class="ad-float">
+            <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
+            <div class="ad-qnav">
+                <button type="button" class="ad-qnav-fab" title="快速跳到大標題／附件"><i class="fa fa-list-ul"></i></button>
+                <div class="ad-qnav-panel" id="adQnavPanel"></div>
+            </div>
+        </div>
 <?php endif; ?>
     </div>
 </div>
@@ -1215,6 +1238,49 @@ $('#adReportX').on('click', function(){ $('#adReport').hide(); });
 /* 回到頂端：內容一多捲下去就看不到上方工具列與存檔鈕（使用者 2026-09-24 交辦） */
 $(window).on('scroll', function(){ $('#btnBackTop').toggleClass('show', $(window).scrollTop() > 300); });
 $('#btnBackTop').on('click', function(){ $('html,body').animate({ scrollTop: 0 }, 200); });
+
+/* 快速跳到大標題／附件：滑鼠移到右下圖示時才掃描正文（81 頁掃一次很快，平常不花成本）。
+   「什麼算大標題」與目錄的自動抓取同一套規則（as_doc_tpl_lib.php 的 adt_toc_auto_level，第 1 層＋附件），
+   手動設成「標題 1」的段落一律收。 */
+var QNAV_ITEMS = [];
+function qnavIsTop(el, inTbl) {
+    var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 40) return false;
+    if (/^(?:附件|附[錄\uF900-\uFAFF])\s*[A-Za-zＡ-Ｚ0-9０-９一二三四五六七八九十]{1,3}(?![A-Za-z0-9])(?!\s*用)/.test(t) && !/[，。；;,]/.test(t)) return true;
+    if (inTbl) return false;                                         // 表格裡只收附件格式
+    if (/[，。；：:;,]/.test(t)) return false;
+    var m = /^(\d{1,2}(?:\.\d{1,2}){0,2})(\.?)\s*(\S.*)$/.exec(t);
+    if (!m || m[1].indexOf('.') >= 0) return false;                 // 只要大標題（1. 這種），不要 1.1
+    if (el.style && parseFloat(el.style.marginLeft) > 0) return false; // 有縮排的是條列
+    if (m[2] !== '.') {
+        return /^\d{1,2}\s+/.test(t) && m[3].length <= 15 && /^[\u4e00-\u9fff]/.test(m[3]) && !/^(?:年|月|日|件|個|項|次|天|人|頁|%)/.test(m[3]);
+    }
+    return t.length <= 30;
+}
+function qnavBuild() {
+    QNAV_ITEMS = [];
+    var $p = $('#adQnavPanel').empty();
+    document.querySelectorAll('.egrt-main h1, .egrt-main p').forEach(function(el){
+        var inTbl = !!el.closest('table');
+        if (el.tagName === 'H1' ? !inTbl : qnavIsTop(el, inTbl)) {
+            var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            if (t) QNAV_ITEMS.push({ el: el, t: t });
+        }
+    });
+    if (!QNAV_ITEMS.length) {
+        $p.append('<div class="ad-qnav-empty">還沒有大標題。把段落設成「標題 1」，或使用「1. 標題」「附件A」這種寫法。</div>');
+        return;
+    }
+    QNAV_ITEMS.forEach(function(it, i){
+        $p.append($('<a>').attr({ 'data-i': i, title: it.t }).text(it.t));
+    });
+}
+$('.ad-qnav').on('mouseenter', qnavBuild);
+$('#adQnavPanel').on('click', 'a', function(){
+    var it = QNAV_ITEMS[+$(this).attr('data-i')];
+    if (!it || !it.el.isConnected) { qnavBuild(); return; }
+    it.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 // 單頁／雙頁並排的選擇記下來，下次開同一頁不必再切
 $(document).on('click', '#adEditorHost .egrt-btn[data-view]', function(){
     try { localStorage.setItem('adc_view_mode', $(this).attr('data-view')); } catch(e) {}

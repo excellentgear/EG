@@ -620,16 +620,23 @@ function adt_revlog_pages_html(array $ctx): array
  * 含「，。；：:」這類句子標點的一律不算（那是敘述，例如「1.1.1 公司名稱：超正齒輪…」）。
  * 判斷不準的，到編輯器把該段落設成「標題 1～4」就一定會進目錄。
  */
-function adt_toc_auto_level(string $attr, string $txt): int
+function adt_toc_auto_level(string $attr, string $txt, bool $inTable = false): int
 {
     if ($txt === '' || mb_strlen($txt, 'UTF-8') > 40) return 0;
     // 附件：「附件A」「附件 B 組織圖」這種獨立短行（算第 1 層）。敘述句（含句點、逗號）不算
-    if (preg_match('/^附件\s*[A-Za-zＡ-Ｚ0-9０-９一二三四五六七八九十]{1,3}(?![A-Za-z0-9])(?!\s*用)/u', $txt)
+    if (preg_match('/^(?:附件|附[錄\x{F900}-\x{FAFF}])\s*[A-Za-zＡ-Ｚ0-9０-９一二三四五六七八九十]{1,3}(?![A-Za-z0-9])(?!\s*用)/u', $txt)
         && !preg_match('/[，。；;,]/u', $txt)) return 1;
-    if (preg_match('/[，。；：:;,、]/u', $txt)) return 0;
+    if ($inTable) return 0;                                           // 表格裡只收附件格式
+    if (preg_match('/[，。；：:;,]/u', $txt)) return 0;
     if (!preg_match('/^(\d{1,2}(?:\.\d{1,2}){0,2})(\.?)\s*(\S.*)$/u', $txt, $mm)) return 0;
     $dots = substr_count($mm[1], '.');
-    if ($dots === 0 && $mm[2] !== '.') return 0;                    // 單一數字一定要帶「.」（「2024 年…」之類不算）
+    /* 單一數字沒帶「.」（「9 績效評估」「10 改善」）：只收「數字＋空白＋中文短標題」，
+       「2024 年…」「10 件」這類一般敘述不收（標題要 15 字內且第一個字是中文、不是單位）。 */
+    if ($dots === 0 && $mm[2] !== '.') {
+        if (!preg_match('/^\d{1,2}\s+/u', $txt)) return 0;
+        if (mb_strlen($mm[3], 'UTF-8') > 15 || !preg_match('/^[\x{4e00}-\x{9fff}]/u', $mm[3])) return 0;
+        if (preg_match('/^(?:年|月|日|件|個|項|次|天|人|頁|%)/u', $mm[3])) return 0;
+    }
     $lv = $dots + 1;
     if ($lv === 1 && preg_match('/margin-left:\s*[1-9]/i', $attr)) return 0;   // 有縮排的條列不是大標題
     if ($lv !== 2 && mb_strlen($txt, 'UTF-8') > 30) return 0;
@@ -642,18 +649,27 @@ function adt_toc_html(array $ctx, array $pages, int $startNo): string
     $items = [];
     $depth = (int)($ctx['cfg']['toc_auto_depth'] ?? 2);
     foreach ($pages as $i => $html) {
-        // 表格裡的段落不是標題；先整段拿掉再掃（自動抓標題與手動設定的標題按出現順序合併）
-        $scan = preg_replace('#<table\b.*?</table>#is', '', (string)$html);
-        if (!preg_match_all('#<h([1-4])[^>]*>(.*?)</h\1>|<p\b([^>]*)>(.*?)</p>#is', (string)$scan, $m, PREG_SET_ORDER)) continue;
+        // 表格裡的段落一般不是標題（只有「附件A」這種格式才收，Word 常把附件標題放在表格裡）
+        $html = (string)$html;
+        $spans = [];
+        if (preg_match_all('#<table\b.*?</table>#is', $html, $tm, PREG_OFFSET_CAPTURE)) {
+            foreach ($tm[0] as $t0) $spans[] = [$t0[1], $t0[1] + strlen($t0[0])];
+        }
+        $inTable = function (int $pos) use ($spans): bool {
+            foreach ($spans as $sp) { if ($pos >= $sp[0] && $pos < $sp[1]) return true; }
+            return false;
+        };
+        if (!preg_match_all('#<h([1-4])[^>]*>(.*?)</h\1>|<p\b([^>]*)>(.*?)</p>#is', $html, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) continue;
         foreach ($m as $one) {
-            if ($one[1] !== '') {                    // 手動設成「標題 1～4」的，永遠收
-                $txt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[2])));
-                if ($txt !== '') $items[] = ['lv' => (int)$one[1], 'txt' => $txt, 'page' => $startNo + $i];
+            $tbl = $inTable((int)$one[0][1]);
+            if (($one[1][0] ?? '') !== '' && !$tbl) {      // 手動設成「標題 1～4」的，永遠收
+                $txt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[2][0])));
+                if ($txt !== '') $items[] = ['lv' => (int)$one[1][0], 'txt' => $txt, 'page' => $startNo + $i];
                 continue;
             }
-            if ($depth <= 0) continue;
-            $ptxt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[4] ?? '')));
-            $lv = adt_toc_auto_level((string)($one[3] ?? ''), $ptxt);
+            if ($depth <= 0 || empty($one[4])) continue;
+            $ptxt = trim(preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', strip_tags($one[4][0])));
+            $lv = adt_toc_auto_level((string)($one[3][0] ?? ''), $ptxt, $tbl);
             if ($lv > 0 && $lv <= $depth) $items[] = ['lv' => $lv, 'txt' => $ptxt, 'page' => $startNo + $i];
         }
     }
