@@ -87,7 +87,7 @@ function adt_settings(PDO $db, int $docId): array
         'foot_left'     => (string)($row['foot_left'] ?? ''),
         'toc_on'        => isset($row['toc_on']) ? (int)$row['toc_on'] : 1,
         'toc_first'     => isset($row['toc_first']) ? (int)$row['toc_first'] : 0,
-        'toc_auto_depth'=> isset($row['toc_auto_depth']) ? (int)$row['toc_auto_depth'] : 2,
+        'toc_auto_depth'=> isset($row['toc_auto_depth']) ? min(2, (int)$row['toc_auto_depth']) : 2,
     ];
 }
 
@@ -101,7 +101,7 @@ function adt_settings_save(PDO $db, int $docId, array $in, int $uid): bool
     $foot = array_key_exists('foot_left', $in) ? mb_substr(trim((string)$in['foot_left']), 0, 190) : $cur['foot_left'];
     $toc  = array_key_exists('toc_on', $in)    ? (!empty($in['toc_on']) ? 1 : 0)                   : $cur['toc_on'];
     $tocFirst = array_key_exists('toc_first', $in) ? (!empty($in['toc_first']) ? 1 : 0) : $cur['toc_first'];
-    $tocDepth = array_key_exists('toc_auto_depth', $in) ? max(0, min(3, (int)$in['toc_auto_depth'])) : $cur['toc_auto_depth'];
+    $tocDepth = array_key_exists('toc_auto_depth', $in) ? max(0, min(2, (int)$in['toc_auto_depth'])) : $cur['toc_auto_depth'];
     try {
         $st = $db->prepare("INSERT INTO as_doc_tpl (doc_id, issue_dept_id, cover_en, foot_left, toc_on, toc_first, toc_auto_depth, updated_by, updated_at)
                             VALUES (?,?,?,?,?,?,?,?,NOW())
@@ -623,6 +623,9 @@ function adt_revlog_pages_html(array $ctx): array
 function adt_toc_auto_level(string $attr, string $txt): int
 {
     if ($txt === '' || mb_strlen($txt, 'UTF-8') > 40) return 0;
+    // 附件：「附件A」「附件 B 組織圖」這種獨立短行（算第 1 層）。敘述句（含句點、逗號）不算
+    if (preg_match('/^附件\s*[A-Za-zＡ-Ｚ0-9０-９一二三四五六七八九十]{1,3}(?![A-Za-z0-9])(?!\s*用)/u', $txt)
+        && !preg_match('/[，。；;,]/u', $txt)) return 1;
     if (preg_match('/[，。；：:;,、]/u', $txt)) return 0;
     if (!preg_match('/^(\d{1,2}(?:\.\d{1,2}){0,2})(\.?)\s*(\S.*)$/u', $txt, $mm)) return 0;
     $dots = substr_count($mm[1], '.');

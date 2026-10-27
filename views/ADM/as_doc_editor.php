@@ -880,12 +880,11 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         自動抓標題：
         <select id="tplTocDepth" style="height:26px;">
           <option value="0">不自動抓（只收設成「標題 1～4」的段落）</option>
-          <option value="1">第 1 層（1. 大標題）</option>
-          <option value="2">第 1～2 層（含 1.1 標題）</option>
-          <option value="3">第 1～3 層（含 1.1.1 標題）</option>
+          <option value="1">大標題 ＋ 附件（1. 大標題、附件A）</option>
+          <option value="2">大標題 ＋ 第一層子標題 ＋ 附件（含 1.1）</option>
         </select>
       </div>
-      <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。「編號＋短標題」（例：2. 組織圖與管理代表派令）會自動抓；含逗號、句號、冒號的敘述句與有縮排的條列不會。被漏掉的，把該段落設成「標題 1～4」就一定會進目錄。不勾選「目錄頁算第 1 頁」時，頁次只算正文（目錄不計頁）。</div>
+      <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。「編號＋短標題」（例：2. 組織圖與管理代表派令）會自動抓；含逗號、句號、冒號的敘述句與有縮排的條列不會。附件是「附件A」「附件 B 組織圖」這種獨立短行。被漏掉的，把該段落設成「標題 1～4」就一定會進目錄。不勾選「目錄頁算第 1 頁」時，頁次只算正文（目錄不計頁）。</div>
     </div>
 
     <?php if ($P['admin']): ?>
@@ -2159,7 +2158,7 @@ $('#btnTpl').on('click', function(){
     $('#tplCoverEn').val(cfg.cover_en || '');
     $('#tplToc').prop('checked', !(String(cfg.toc_on) === '0'));
     $('#tplTocFirst').prop('checked', String(cfg.toc_first) === '1');
-    $('#tplTocDepth').val(String(cfg.toc_auto_depth === undefined ? 2 : cfg.toc_auto_depth));
+    $('#tplTocDepth').val(String(cfg.toc_auto_depth === undefined ? 2 : Math.min(2, cfg.toc_auto_depth)));
     // 封面英文與目錄只有一階用得到，二階以下顯示出來只會讓人以為設了有效
     // （階別存的是中文，判定由後端給旗標，前端不自己比字串）
     $('.tpl-l1').toggle(!!TPL.is_level1);
