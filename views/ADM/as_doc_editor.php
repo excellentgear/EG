@@ -1318,6 +1318,60 @@ function setEditorReady(on) {
     $('#adLayout').toggle(!on);
 }
 
+/* ── 表格整理（2026-10-27）──────────────────────────────────────────────
+   ① 過長的表格自動分割：把編輯器排版時自動拆出來的「續表」固定成一般的獨立表格
+      （編輯器原本只在畫面上拆、存檔時又接回一張——但列印是照存檔的內容印，整張表一頁放不下就被切成兩張紙、框線沒到底）。
+      續表沿用欄寬與表頭，之後就是一張張獨立的表，每張都放得進一頁。
+   ② 分割出來的每一張續表，上方留一行空白段落（要補標題才有地方打字）。
+   ③ 表格比頁寬還寬就等比縮小表內字級，直到放得進頁寬。
+   載入排版穩定後、匯入完成後各跑一次（會自動重排並重複到沒有新的續表為止）；有動就標成未存檔。 */
+function tblTidy(done) {
+    var total = 0, pass = 0, SEL = '#adEditorHost .egrt-main ';
+    (function step(){
+        var n = 0, conts = [];
+        // ① 固定續表
+        Array.prototype.slice.call(document.querySelectorAll(SEL + 'table[data-egrt-cont]')).forEach(function(c){
+            var id = c.getAttribute('data-egrt-split');
+            c.removeAttribute('data-egrt-cont'); c.removeAttribute('data-egrt-split');
+            var cb = c.closest('.egrt-main > *'); if (cb) conts.push(cb);
+            if (id) Array.prototype.forEach.call(document.querySelectorAll(SEL + 'table[data-egrt-split="' + id + '"]'), function(o){ o.removeAttribute('data-egrt-split'); });
+            n++;
+        });
+        apxSheets().forEach(function(sh){
+            // ② 剛分割出來的續表（一定接在「已經填滿的一頁」後面，空行不會被拉回上一頁）上方補一行空白
+            conts.forEach(function(blk){
+                if (blk.parentNode !== sh) return;
+                var p = blk.previousElementSibling;
+                if (p && /^(P|DIV|H[1-6])$/.test(p.tagName)) return;
+                var np = document.createElement('p'); np.innerHTML = '<br>';
+                sh.insertBefore(np, blk); n++;
+            });
+            // ③ 超寬表格縮字級
+            var cs = getComputedStyle(sh), inner = sh.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+            if (!(inner > 100)) return;
+            Array.prototype.forEach.call(sh.querySelectorAll('table'), function(t){
+                if (t.parentElement && t.parentElement.closest('table')) return;
+                var guard = 0, did = false;
+                while (t.getBoundingClientRect().width > inner + 2 && guard++ < 8) {
+                    var any = false;
+                    Array.prototype.forEach.call(t.querySelectorAll('[style*="font-size"]'), function(e){
+                        var m = /font-size:\s*([\d.]+)pt/.exec(e.getAttribute('style') || '');
+                        if (!m) return;
+                        var v = parseFloat(m[1]), nv = Math.max(6, Math.round(v * 0.92 * 2) / 2);
+                        if (nv < v) { e.style.fontSize = nv + 'pt'; any = true; }
+                    });
+                    if (!any) break;
+                    did = true;
+                }
+                if (did) n++;
+            });
+        });
+        total += n;
+        if (n && pass++ < 6) { try { ED.reflowQuiet(); } catch (e) {} setTimeout(step, 600); }
+        else if (typeof done === 'function') done(total);
+    })();
+}
+
 /** 等自動分頁穩定下來（頁數連續 3 次不變＝排完了），最多等 20 秒。
  *  cb：排版真的穩定、EDITOR_READY 變 true 之後才執行（例如匯入後要在這時候再做事，
  *  提早做的話量到的還是排版中途的頁數，縮排／存檔都會用到還沒定案的分頁）。 */
@@ -1351,13 +1405,14 @@ function applyEditorHtml(html, c, seeded) {
         // 縮排造成的換行又會再引發一次重排，兩件事疊在一起會亂套）；
         // 縮排完馬上存檔——不然畫面上看到的是縮排後的新分頁，
         // 資料庫裡存的、列印會印出來的卻還是縮排前的舊分頁，兩邊對不起來。
-        waitLayout(function(){ ED.autoNumIndent(); save(); });
+        waitLayout(function(){ ED.autoNumIndent(); tblTidy(function(){ save(); }); });
     } else {
         /* 排版穩定後自動排一次分頁（使用者 2026-10-16：載入後文字會被頁框擋住，每次都要自己按「自動分頁」）。
            只有排完內容真的變了才標成「有未存檔的變更」，沒變就不打擾。 */
         waitLayout(function(){
             var before = ED.get();
             try { ED.reflowQuiet(); } catch (e) {}
+            if (!LOCKED) tblTidy(function(n){ if (n) setDirty(true); });
             /* 空白差異不算改；但分頁位置變了一定要算「有改」——列印是照「存檔的分頁」印的，
                長表格在編輯器裡被拆到好幾頁，沒存的話列印還是整張表一頁、就會超出一張紙 */
             var unpg = function(h){ return String(h).replace(/\s+/g, ''); };
