@@ -1269,7 +1269,14 @@ function getOrganizationData() {
         $stmt_all_positions = $db->prepare($sql_all_positions);
 
         $och_hide = null;
-        if (($_GET['scope'] ?? '') === 'as') {
+        // AS認證範圍版本只給管理員（超級管理員／AS文件管理員）；其他人一律看原本完整組織圖
+        $och_uid = (int)($_SESSION['id'] ?? 0);
+        $och_adm = false;
+        if (($_GET['scope'] ?? '') === 'as' && $och_uid > 0) {
+            require_once __DIR__ . '/../common/asdoc_lib.php';
+            $och_adm = $och_uid === 1 || eg_asdoc_is_admin($db, $och_uid);
+        }
+        if ($och_adm) {
             require_once __DIR__ . '/../common/org_chart_hide_lib.php';
             $och_hide = och_get($db);
             // 被隱藏的部門連同其下轄部門整個從圖上移除
