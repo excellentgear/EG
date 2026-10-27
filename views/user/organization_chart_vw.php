@@ -138,6 +138,17 @@ try {
     </style>
     <!-- 新增：摘要資訊浮動框的樣式 -->
     <style>
+        @page { size: A4 landscape; margin: 10mm; }
+        @media print {
+            .left_col, .top_nav, .nav_menu, footer, .page-title, .panel_toolbox,
+            .x_title .navbar-right, #och-modal { display: none !important; }
+            .right_col { margin-left: 0 !important; padding: 0 !important; min-height: 0 !important; }
+            body, .container.body, .main_container { background: #fff !important; }
+            .x_panel { border: 0 !important; padding: 0 !important; }
+            .org-chart-container { overflow: visible !important; min-height: 0 !important; }
+            #summary-overlay { position: static !important; display: inline-block !important; margin-bottom: 8px; box-shadow: none !important; }
+            * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
         #summary-overlay {
             position: absolute;
             top: 10px;
@@ -270,46 +281,22 @@ try {
 
         // 綁定列印按鈕事件
         $('#print-btn').on('click', function() {
-            if (!chart) {
-                alert('圖表尚未生成，請稍候');
-                return;
-            }
-            // 獲取圖表標題和摘要資訊
-            const title = $('.x_title h2').text();
-            const summaryHtml = $('#summary-overlay').html();
-            // 獲取圖表的圖片 URI
-            const chartImgUri = chart.getImageURI();
+            if (!chart) { alert('圖表尚未生成，請稍候'); return; }
+            window.print();
+        });
 
-            // 建立一個用於列印的新視窗
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(`
-                <html>
-                    <head><title>列印 - ${title}</title>
-                    <style>
-                        body { font-family: sans-serif; }
-                        .print-container { text-align: center; width: 100%; page-break-inside: avoid; }
-                        h2 { text-align: left; }
-                        img { max-width: 100%; height: auto; }
-                        #summary-overlay { background-color: #f0f0f0; border: 1px solid #ccc; padding: 10px; margin-bottom: 20px; text-align: left; display: inline-block; }
-                        #summary-overlay ul { list-style-type: none; padding-left: 0; margin-bottom: 0; }
-                    </style>
-                    </head>
-                    <body style="margin:0;">
-                        <div class="print-container">
-                            <h2>${title}</h2>
-                            <div id="summary-overlay" style="display: block !important;">${summaryHtml}</div>
-                            <img id="chart-img" src="${chartImgUri}" />
-                        </div>
-                        <script>
-                            const img = document.getElementById('chart-img');
-                            // 確保圖片載入完成後才觸發列印
-                            img.onload = function() { window.print(); };
-                            if (img.complete) { img.onload(); } // 如果圖片已在快取中，手動觸發
-                        <\/script>
-                    </body>
-                </html>
-            `);
-            printWindow.document.close();
+        // 列印時把組織圖等比縮到一頁寬（A4 橫式），列印後還原
+        window.addEventListener('beforeprint', function () {
+            const box = document.getElementById('org-chart-container');
+            const tbl = box && box.querySelector('table');
+            if (!tbl) return;
+            const w = tbl.scrollWidth, avail = 1030;   // A4 橫式可印寬度約 1030px
+            box.dataset.pz = box.style.zoom || '';
+            if (w > avail) box.style.zoom = (avail / w).toFixed(3);
+        });
+        window.addEventListener('afterprint', function () {
+            const box = document.getElementById('org-chart-container');
+            if (box) box.style.zoom = box.dataset.pz || '';
         });
 
         // 綁定另存為 PDF 按鈕事件
