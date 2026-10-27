@@ -223,11 +223,12 @@ try {
     </div>
 </div>
 <?php if ($ochIsAdmin): ?>
-<div class="modal fade" id="och-modal" tabindex="-1" role="dialog">
-  <div class="modal-dialog modal-lg" role="document"><div class="modal-content">
-    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-      <h4 class="modal-title">AS認證範圍設定：組織圖隱藏的部門／人員</h4></div>
-    <div class="modal-body">
+<div id="och-modal" style="display:none;position:fixed;inset:0;z-index:20000;background:rgba(0,0,0,.45);overflow:auto">
+  <div style="background:#fff;width:860px;max-width:94vw;margin:40px auto;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,.3)">
+    <div style="padding:14px 18px;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;align-items:center">
+      <h4 style="margin:0">AS認證範圍設定：組織圖隱藏的部門／人員</h4>
+      <button type="button" class="close och-close" style="font-size:24px">&times;</button></div>
+    <div style="padding:16px 18px">
       <p class="text-muted">勾選的部門，其<b>所有人員</b>不顯示（部門框保留）；勾選的人員不顯示。被隱藏者不計入「總人數」，僅影響本頁組織圖，不影響員工資料。</p>
       <div class="row">
         <div class="col-sm-6"><h5>隱藏部門</h5>
@@ -239,9 +240,9 @@ try {
       </div>
       <div id="och-msg" class="text-danger" style="margin-top:8px"></div>
     </div>
-    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button>
+    <div style="padding:12px 18px;border-top:1px solid #e5e5e5;text-align:right"><button class="btn btn-default och-close">取消</button>
       <button class="btn btn-primary" id="och-save">儲存</button></div>
-  </div></div>
+  </div>
 </div>
 <?php endif; ?>
 <!-- jQuery -->
@@ -331,9 +332,10 @@ try {
             $('#och-dept').html(r.depts.map(d => `<label style="display:block;font-weight:normal" data-k="${esc(d.name)}"><input type="checkbox" value="${d.id}" ${hd.has(+d.id) ? 'checked' : ''}> ${esc(d.name)}</label>`).join(''));
             $('#och-user').html(r.people.map(p => `<label style="display:block;font-weight:normal" data-k="${esc(p.user_cname)} ${esc(p.dept)}"><input type="checkbox" value="${p.id}" ${hu.has(+p.id) ? 'checked' : ''}> ${esc(p.dept)}　${esc(p.user_cname)}</label>`).join(''));
             $('.och-q').val('');
-            $('#och-modal').modal('show');
+            $('#och-modal').show();
         });
     });
+    $(document).on('click', '.och-close', function () { $('#och-modal').hide(); });
     $(document).on('input', '.och-q', function () {
         const q = this.value.trim().toLowerCase();
         $('#' + $(this).data('t') + ' label').each(function () {
@@ -345,7 +347,7 @@ try {
         $.post('../../src/store/OrgChartHide_API.php?action=save', {
             csrf: OCH_CSRF, depts: JSON.stringify(ids('#och-dept')), users: JSON.stringify(ids('#och-user'))
         }, function (r) {
-            if (r.status === 'success') { $('#och-modal').modal('hide'); fetchOrganizationData(); }
+            if (r.status === 'success') { $('#och-modal').hide(); fetchOrganizationData(); }
             else $('#och-msg').text(r.message || '儲存失敗');
         }, 'json').fail(function (x) {
             $('#och-msg').text((x.responseJSON && x.responseJSON.message) || '儲存失敗');
