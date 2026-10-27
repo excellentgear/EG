@@ -305,6 +305,7 @@
   var onSaveCb = null;
   var GRID = 10;
   // 用既有圖片當底圖時，畫布上限（等比例縮）：太大打開就要一直捲才看得到全貌
+  var exportPad = 36;
   var EGF_BG_MAX_W = 1400, EGF_BG_MAX_H = 1000;
   var fontZh = '微軟正黑體', fontEn = 'Arial';
   function fontStack() { return '"' + fontEn + '","' + fontZh + '",sans-serif'; }
@@ -2537,7 +2538,7 @@
     /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
        （使用者：插入文件上時，應該依照實際大小插入，不是連旁邊畫布空白都插入）。
        取所有物件的外接矩形再留一點邊，並夾在畫布範圍內。 */
-    var PAD = 36;      // 四周留白：圖插進文件後旁邊要有空間可以加字、不會貼著邊
+    var PAD = exportPad;   // 四周留白（預設 36）：圖插進文件後旁邊要有空間可以加字；呼叫端可用 open({pad:n}) 改小，要讓圖緊貼時用
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     objs.forEach(function (o) {
       var r = o.getBoundingRect(true, true);
@@ -2662,3 +2663,4 @@
   w.EGFlow = { open: open, close: close, canvas: function () { return cv; } };
 })(window, document);
 </script>
+    exportPad = (typeof opt.pad === 'number' && opt.pad >= 0) ? opt.pad : 36;
