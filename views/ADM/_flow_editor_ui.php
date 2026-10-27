@@ -806,9 +806,9 @@
     }
     var shapes = [];
     objs.forEach(function (o) {
-      if (o.egRole === 'shape') {
+      if (o.egRole === 'shape' || o.egRole === 'bg') {   // bg＝拿既有圖片當底圖開啟時的那張圖，一起縮
         o.set({ scaleX: o.scaleX * k, scaleY: o.scaleY * k });
-        moveC(o); shapes.push(o);
+        moveC(o); if (o.egRole === 'shape') shapes.push(o);
       } else if (o.egRole === 'text' || o.egRole === 'label') {
         o.set({ fontSize: Math.max(6, Math.round((o.fontSize || 12) * k * 10) / 10) });
         if (o.egRole === 'text') moveC(o);
