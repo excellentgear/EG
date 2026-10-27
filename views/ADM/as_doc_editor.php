@@ -1331,6 +1331,13 @@ function tblTidy(done) {
     var total = 0, pass = 0, SEL = '#adEditorHost .egrt-main ';
     (function step(){
         var n = 0, conts = [];
+        // ⓪ 清掉先前版本誤加的「強制換頁空行」（樣式剛好只有 page-break-before:always、內容完全空白的段落）：
+        //    它們把每個表格硬釘在頁首，也會讓在附近按 Enter 時整頁內容被推到下一頁
+        if (pass === 0) Array.prototype.slice.call(document.querySelectorAll(SEL + '> p')).forEach(function(p){
+            if ((p.getAttribute('style') || '').replace(/\s+/g, '') === 'page-break-before:always;' || (p.getAttribute('style') || '').replace(/\s+/g, '') === 'page-break-before:always') {
+                if ((p.textContent || '').replace(/[\s 　]/g, '') === '' && !p.querySelector('img,table')) { p.parentNode.removeChild(p); n++; }
+            }
+        });
         // ① 固定續表
         Array.prototype.slice.call(document.querySelectorAll(SEL + 'table[data-egrt-cont]')).forEach(function(c){
             var id = c.getAttribute('data-egrt-split');
