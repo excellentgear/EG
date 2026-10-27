@@ -655,8 +655,8 @@ if ($deptPerm === 'R') {
           </div>
           <div class="col-md-3">
             <label style="font-size:12px;">預設保存年限（年）</label>
-            <input type="number" class="form-control input-sm" id="qrDefYears" min="0" max="99" style="max-width:110px;">
-            <span class="text-muted" style="font-size:11px;">沒有個別填寫的表單一律套用這個值。</span>
+            <input type="number" class="form-control input-sm" id="qrDefYears" min="3" max="99" style="max-width:110px;">
+            <span class="text-muted" style="font-size:11px;">最短 3 年；沒有個別指定的表單一律套用這個值。</span>
           </div>
           <div class="col-md-4">
             <label style="font-size:12px;">製表日期（簽章與版次回推用）</label>
@@ -666,13 +666,13 @@ if ($deptPerm === 'R') {
         </div>
         <div style="border-top:1px solid #eee;padding-top:8px;">
           <button type="button" class="btn btn-sm btn-success qr-edit" id="qrAddBtn"><i class="fa fa-plus"></i> 加入表單（可多選）</button>
-          <span class="text-muted" style="font-size:11px;margin-left:8px;">保存年限留空＝套用預設；保管單位留空＝用該表單所屬部門。用 ↑↓ 調整列印順序。</span>
+          <span class="text-muted" style="font-size:11px;margin-left:8px;">保存年限可選：套用預設／指定年限（最短 3 年）／永久保存／依客戶指定；保管單位留空＝用該表單所屬部門。用 ↑↓ 調整列印順序。</span>
         </div>
         <div class="table-responsive" style="margin-top:6px;">
           <table class="table table-condensed table-bordered" style="font-size:12px;">
             <thead><tr>
               <th style="width:44px;">項次</th><th style="width:130px;">表單號碼</th><th>表單名稱</th>
-              <th style="width:110px;">保存年限</th><th style="width:150px;">保管單位</th><th style="width:170px;">備註</th>
+              <th style="width:150px;">保存年限</th><th style="width:150px;">保管單位</th><th style="width:170px;">備註</th>
               <th style="width:76px;">操作</th>
             </tr></thead>
             <tbody id="qrRows"></tbody>
@@ -2956,6 +2956,12 @@ $(function(){
     const v = String(it.retention_years==null?'':it.retention_years).trim();
     return v==='' ? (parseInt($('#qrDefYears').val())||0) : parseInt(v);
   }
+  /** 保存年限顯示文字（列印與唯讀畫面共用）：永久保存／依客戶指定／N 年 */
+  function qrRetText(it){
+    if(it.retention_mode==='permanent') return '永久保存';
+    if(it.retention_mode==='customer') return '依客戶指定';
+    return qrYears(it)+' 年';
+  }
   function qrKeeper(it){
     if(it.keeper_dept_id) return it.keeper_dept_name||'';
     return it.owner_dept_name||it.doc_dept_name||'';   // 負責課室（僅一個時）優先，否則所屬部門
@@ -2972,8 +2978,13 @@ $(function(){
         <td class="text-center">${i+1}</td>
         <td>${esc(it.doc_no)}${obTag}</td>
         <td>${esc(it.doc_name)}</td>
-        <td>${ed?`<input type="number" class="form-control input-sm qr-yr" min="0" max="99" value="${esc(it.retention_years==null?'':it.retention_years)}" placeholder="預設 ${QR.default_years}">`
-                :(qrYears(it)+' 年')}</td>
+        <td>${ed?`<select class="form-control input-sm qr-rm">
+              <option value="" ${!it.retention_mode?'selected':''}>套用預設（${QR.default_years} 年）</option>
+              <option value="years" ${it.retention_mode==='years'?'selected':''}>指定年限</option>
+              <option value="permanent" ${it.retention_mode==='permanent'?'selected':''}>永久保存</option>
+              <option value="customer" ${it.retention_mode==='customer'?'selected':''}>依客戶指定</option></select>
+            <input type="number" class="form-control input-sm qr-yr" min="3" max="99" value="${esc(it.retention_years==null?'':it.retention_years)}" placeholder="年（≥3）" style="margin-top:3px;${it.retention_mode==='years'?'':'display:none;'}">`
+                :esc(qrRetText(it))}</td>
         <td>${ed?`<select class="form-control input-sm qr-kd" data-eg-filter="輸入部門名稱篩選…">${deptOpts}</select>`:esc(qrKeeper(it))}</td>
         <td>${ed?`<input type="text" class="form-control input-sm qr-note" maxlength="255" value="${esc(it.note||'')}">`:esc(it.note||'')}</td>
         <td class="text-nowrap">${ed?`<a href="javascript:void(0)" class="qr-up" title="上移"><i class="fa fa-arrow-up"></i></a>
@@ -2988,7 +2999,8 @@ $(function(){
     if(!QR.can_edit) return;
     $('#qrRows tr[data-i]').each(function(){
       const it=QR.items[+$(this).data('i')]; if(!it) return;
-      it.retention_years = $(this).find('.qr-yr').val().trim()===''? null : parseInt($(this).find('.qr-yr').val());
+      it.retention_mode = $(this).find('.qr-rm').val()||'';
+      it.retention_years = (it.retention_mode==='years' && $(this).find('.qr-yr').val().trim()!=='') ? parseInt($(this).find('.qr-yr').val()) : null;
       const kd=$(this).find('.qr-kd').val();
       it.keeper_dept_id = kd? +kd : null;
       it.keeper_dept_name = kd? ((QR.departments.find(d=>String(d.id)===String(kd))||{}).name||'') : '';
@@ -3048,6 +3060,10 @@ $(function(){
         },'json');
       }});
   });
+  $('#qrRows').on('change','.qr-rm', function(){
+    const $y=$(this).closest('td').find('.qr-yr');
+    $y.toggle(this.value==='years'); if(this.value==='years' && !$y.val()) $y.val(QR.default_years).focus();
+  });
   $('#qrRows').on('click','.qr-del', function(){
     qrCollect(); QR.items.splice(+$(this).closest('tr').data('i'),1); qrRenderRows();
   });
@@ -3097,7 +3113,7 @@ $(function(){
   });
   $('#qrSave').on('click', function(){
     qrCollect();
-    const rows = QR.items.map(it=>({doc_id:it.doc_id, retention_years: it.retention_years==null?'':it.retention_years,
+    const rows = QR.items.map(it=>({doc_id:it.doc_id, retention_years: it.retention_years==null?'':it.retention_years, retention_mode: it.retention_mode||'',
                                     keeper_dept_id: it.keeper_dept_id||'', note: it.note||''}));
     const $b=$(this).prop('disabled',true); NProgress.start();
     $.post(API+'?action=qr_save_settings', {default_years:$('#qrDefYears').val(), make_date:$('#qrMakeDate').val()}, r1=>{
@@ -3112,6 +3128,8 @@ $(function(){
   // ── 列印品質記錄一覽表（格式比照紙本 2-DC-01-03：6 欄＋頁尾製表/審核）──
   $('#qrPrint').on('click', function(){
     qrCollect();
+    const bad = QR.items.find(it=>it.retention_mode==='years' && !(it.retention_years>=3));
+    if(bad){ alert('「'+bad.doc_no+'」指定年限最短 3 年，請修正後再列印'); return; }
     if(!QR.items.length){ alert('尚無表單可列印，請先加入表單'); return; }
     const md = qrMakeDate(), dot = md.replace(/-/g,'.');
     const asDoc = QR.as_doc;
@@ -3131,7 +3149,7 @@ $(function(){
     QR.items.forEach((it,i)=>{
       const note = [it.note||'', (it.is_obsolete==1 ? '廢止 '+dispDate(it.obsolete_date||'') : '')].filter(Boolean).join('／');
       body += `<tr><td>${i+1}</td><td>${esc(it.doc_no)}</td><td class="tl">${esc(it.doc_name)}</td>`
-            + `<td>${qrYears(it)} 年</td><td>${esc(qrKeeper(it))}</td><td>${esc(note)}</td></tr>`;
+            + `<td>${esc(qrRetText(it))}</td><td>${esc(qrKeeper(it))}</td><td>${esc(note)}</td></tr>`;
     });
     body += `</tbody></table>
       <div class="p-sign"><div class="s-cell">製表：${st(mkName)}</div><div class="s-cell">審核：${st(apName)}</div></div>`;

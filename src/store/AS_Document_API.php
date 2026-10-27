@@ -227,6 +227,12 @@ function asQrPurgeObsolete(PDO $db, ?array $ids, bool $doDelete): array {
     asQrPendingAdd($db, 'remove', $rows);
     return array_map(fn($r) => ['doc_no'=>$r['doc_no'], 'doc_name'=>$r['doc_name']], $rows);
 }
+/** 保存方式欄位（''＝套用預設年限／years＝指定年限／permanent＝永久保存／customer＝依客戶指定）；最短年限 3 年 */
+const AS_QR_MIN_YEARS = 3;
+function asQrEnsureCols(PDO $db): void {
+    $has = $db->query("SHOW COLUMNS FROM as_quality_record_item LIKE 'retention_mode'")->fetch();
+    if (!$has) $db->exec("ALTER TABLE as_quality_record_item ADD COLUMN retention_mode VARCHAR(10) NOT NULL DEFAULT '' AFTER retention_years");
+}
 /** 「一覽表內容變動、需重新列印」的待辦清單（存 system_settings，列印後由 qr_ack 清掉） */
 function asQrPendingGet(PDO $db): array {
     $a = json_decode((string)asGetSetting($db, 'as_doc_qr_reprint'), true);
@@ -1465,6 +1471,7 @@ case 'restore_document':
 case 'qr_get':
     if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
     // 已廢止的表單不留在一覽表上（歷史殘留也一併清掉；有設定權限者才會動到資料）
+    asQrEnsureCols($db);
     $qrRemoved = asQrPurgeObsolete($db, null, true);
     asQrSyncNew($db);
     $defYears = (int)(asGetSetting($db, 'as_doc_qr_default_years') ?: 3);
@@ -1518,7 +1525,7 @@ case 'qr_ack':      // 已重新列印 → 清掉待辦
 case 'qr_save_settings':
     if (!asCan('settings')) jout(['status'=>'error','message'=>'無設定權限']);
     $years = (int)($_POST['default_years'] ?? 0);
-    if ($years < 0 || $years > 99) jout(['status'=>'error','message'=>'預設保存年限請填 0~99 年']);
+    if ($years < AS_QR_MIN_YEARS || $years > 99) jout(['status'=>'error','message'=>'預設保存年限最短 '.AS_QR_MIN_YEARS.' 年，請填 '.AS_QR_MIN_YEARS.'~99']);
     $md = trim((string)($_POST['make_date'] ?? ''));
     if ($md !== '') {
         $chk = DateTime::createFromFormat('Y-m-d', $md);
@@ -1542,9 +1549,11 @@ case 'qr_save_items':
         if ($did <= 0) jout(['status'=>'error','message'=>'第'.($i+1).'列：缺少文件']);
         if (isset($seen[$did])) jout(['status'=>'error','message'=>'第'.($i+1).'列：同一份表單重複列入']);
         $seen[$did] = true;
+        $rm = (string)($r['retention_mode'] ?? '');
+        if (!in_array($rm, ['', 'years', 'permanent', 'customer'], true)) jout(['status'=>'error','message'=>'第'.($i+1).'列：保存方式不正確']);
         $ry = trim((string)($r['retention_years'] ?? ''));
-        if ($ry !== '' && (!ctype_digit($ry) || (int)$ry > 99))
-            jout(['status'=>'error','message'=>'第'.($i+1).'列：保存年限請填 0~99 的整數，或留空套用預設']);
+        if ($rm === 'years' && (!ctype_digit($ry) || (int)$ry < AS_QR_MIN_YEARS || (int)$ry > 99))
+            jout(['status'=>'error','message'=>'第'.($i+1).'列：指定年限最短 '.AS_QR_MIN_YEARS.' 年（'.AS_QR_MIN_YEARS.'~99 的整數）']);
     }
     // 文件必須存在且未刪除（避免刪掉的文件還被列印出來）
     if ($seen) {
@@ -1553,15 +1562,17 @@ case 'qr_save_items':
         $st->execute(array_keys($seen));
         if ((int)$st->fetchColumn() !== count($seen)) jout(['status'=>'error','message'=>'有文件不存在或已刪除，請重新整理後再存']);
     }
+    asQrEnsureCols($db);   // DDL 一律在交易外（隱式 commit）
     try {
         $db->beginTransaction();
         $db->exec("DELETE FROM as_quality_record_item");
-        $ins = $db->prepare("INSERT INTO as_quality_record_item (doc_id, retention_years, keeper_dept_id, note, sort_order)
-                             VALUES (?,?,?,?,?)");
+        $ins = $db->prepare("INSERT INTO as_quality_record_item (doc_id, retention_years, retention_mode, keeper_dept_id, note, sort_order)
+                             VALUES (?,?,?,?,?,?)");
         foreach ($rows as $i => $r) {
+            $rm = (string)($r['retention_mode'] ?? '');
             $ry = trim((string)($r['retention_years'] ?? ''));
             $kd = trim((string)($r['keeper_dept_id'] ?? ''));
-            $ins->execute([(int)$r['doc_id'], $ry === '' ? null : (int)$ry,
+            $ins->execute([(int)$r['doc_id'], $rm === 'years' ? (int)$ry : null, $rm,
                            $kd === '' ? null : (int)$kd,
                            (trim((string)($r['note'] ?? '')) ?: null), $i]);
         }
