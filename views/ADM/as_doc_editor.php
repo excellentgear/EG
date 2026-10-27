@@ -1356,7 +1356,10 @@ function applyEditorHtml(html, c, seeded) {
         waitLayout(function(){
             var before = ED.get();
             try { ED.reflowQuiet(); } catch (e) {}
-            if (!LOCKED && ED.get() !== before) setDirty(true);
+            /* 只是分頁位置挪了（頁界 <hr>）不算「有改內容」：分頁是排版算出來的，印出時也會重算，
+               不然存檔後重新載入，只因為字型/渲染差一行就又顯示「有未存檔的變更」 */
+            var unpg = function(h){ return String(h).replace(/<hr[^>]*page-break-after[^>]*>/gi, ''); };
+            if (!LOCKED && unpg(ED.get()) !== unpg(before)) setDirty(true);
         });
     }
     if (!seeded && c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));

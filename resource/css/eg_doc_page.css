@@ -53,9 +53,9 @@
    這一條就是編輯器與列印版換頁位置對不對得上的關鍵。 */
 .eg-docbody p { margin: 0 0 4px; }
 
-.eg-docbody h1 { font-size: 18pt; margin: 0 0 10px; }
-.eg-docbody h2 { font-size: 15pt; margin: 14px 0 8px; }
-.eg-docbody h3 { font-size: 13pt; margin: 12px 0 6px; }
+.eg-docbody h1 { font-size: 18pt; margin: 0 0 10px; font-weight: normal; }
+.eg-docbody h2 { font-size: 15pt; margin: 14px 0 8px; font-weight: normal; }
+.eg-docbody h3 { font-size: 13pt; margin: 12px 0 6px; font-weight: normal; }
 .eg-docbody h4 { font-size: 12pt; margin: 10px 0 5px; font-weight: bold; }
 .eg-docbody h5,
 .eg-docbody h6 { font-size: 12pt; margin: 8px 0 4px; font-weight: bold; }
