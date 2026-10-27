@@ -3184,9 +3184,13 @@ function lstBlocks() {
     return out;
 }
 function lstTarget(level, n) { return level === 1 ? String.fromCharCode(96 + n) + '.' : n + ')'; }
+var LST_CHAPTER = new RegExp('^' + LST_WS + '*\\d{1,2}\\.' + LST_WS + '+\\S');
 function lstDepth(t) { var m = LST_CLAUSE.exec(t); return m ? m[0].trim().split('.').length : 0; }
-/** 標題的「標題文字起點」＝左縮 ＋ 內縮（em）；讀不到就用同深度的標準值 */
+function lstPx(el) { return parseFloat(getComputedStyle(el).fontSize) || 16; }
+function lstR2(v) { return Math.round(v * 100) / 100; }
+/** 標題的「標題文字起點」＝左縮 ＋ 內縮（em，以標題自己的字級為準）；章標題（1. 2. 3.）固定 1.1em */
 function lstTitleStart(el, depth) {
+    if (depth === 1) return 1.1;
     var st = el.style, ml = parseFloat(st.marginLeft), pl = parseFloat(st.paddingLeft);
     if (/em$/.test(st.marginLeft || '') && /em$/.test(st.paddingLeft || '') && !isNaN(ml) && !isNaN(pl)) return ml + pl;
     return ({ 2: 3.7, 3: 6.5, 4: 9.3, 5: 12.1 })[depth] || 3.7;
@@ -3198,20 +3202,26 @@ function lstWhy(cur, tgt) {
     return '統一寫法';
 }
 function lstScan() {
-    var rows = [], hints = [], layout = [], lastL1 = false, ts = null, depth = 0;
+    var rows = [], hints = [], layout = [], lastL1 = false, ts = null, hPx = 16;
     lstBlocks().forEach(function(b){
-        var t = b.el.textContent || '';
-        var hd = /^H[1-6]$/.test(b.el.tagName) || LST_CLAUSE.test(t);
-        if (hd) {
-            lastL1 = false; depth = lstDepth(t);
-            ts = depth >= 2 ? lstTitleStart(b.el, depth) : null;
+        var t = b.el.textContent || '', tt = t.trim();
+        var isH = /^H[1-6]$/.test(b.el.tagName), isCl = LST_CLAUSE.test(t);
+        var isChap = !isH && !isCl && LST_CHAPTER.test(t) && tt.length <= 40 && !b.el.querySelector('img,table');
+        if (isH || isCl || isChap) {
+            lastL1 = false;
+            var depth = isCl ? lstDepth(t) : 1;
+            ts = lstTitleStart(b.el, depth); hPx = lstPx(b.el);
+            // 章標題（1. 2. 3.）是最上層，靠最左；底下的條文（3.1）才往內縮
+            if (isChap) layout.push({ el: b.el, page: b.page, ml: 0, pl: 1.1, ti: -1.1, kind: '章標題', ctx: tt.slice(0, 16) });
             return;
         }
         var m = LST_RE.exec(t);
-        var plain = !m && t.trim() !== '' && !b.el.querySelector('img,table') && !/text-align:\s*(center|right)/.test(b.el.getAttribute('style') || '');
+        var plain = !m && tt !== '' && !b.el.querySelector('img,table') && !/text-align:\s*(center|right)/.test(b.el.getAttribute('style') || '');
+        // 段落字級不同於標題時，em 要換算（em 是以「該段自己的字級」算的）
+        var f = hPx / lstPx(b.el);
         if (!m) {
-            if (/[：:]\s*$/.test(t.trim())) lastL1 = false;
-            if (plain && ts !== null) layout.push({ el: b.el, page: b.page, ml: ts, pl: 0, ti: 0, kind: '內文', ctx: t.trim().slice(0, 16) });
+            if (/[：:]\s*$/.test(tt)) lastL1 = false;
+            if (plain && ts !== null) layout.push({ el: b.el, page: b.page, ml: lstR2(ts * f), pl: 0, ti: 0, kind: '內文', ctx: tt.slice(0, 16) });
             return;
         }
         var cur = m[0].replace(/[\s 　]+$/, '').replace(/^[\s 　]+/, '');
@@ -3220,13 +3230,14 @@ function lstScan() {
         if (m[1]) lastL1 = true;
         else if (!lastL1) hints.push({ page: b.page, from: cur, ctx: ctx });
         if (cur !== tgt) rows.push({ el: b.el, page: b.page, from: cur, to: tgt, level: level, why: lstWhy(cur, tgt), ctx: ctx });
-        if (ts !== null) layout.push({ el: b.el, page: b.page, ml: ts + (level === 2 ? 1.5 : 0), pl: 1.5, ti: -1.5, kind: level === 1 ? '第1層清單' : '第2層清單', ctx: ctx });
+        if (ts !== null) layout.push({ el: b.el, page: b.page, ml: lstR2((ts + (level === 2 ? 1.5 : 0)) * f), pl: lstR2(1.5 * f), ti: lstR2(-1.5 * f), kind: level === 1 ? '第1層清單' : '第2層清單', ctx: ctx });
     });
     // 已經是標準位置的不列
+    function nn(v) { return parseFloat(v) || 0; }
     layout = layout.filter(function(x){
         var st = x.el.style;
-        return !(Math.abs(parseFloat(st.marginLeft) - x.ml) < 0.05 && /em$/.test(st.marginLeft || '') && !st.marginRight &&
-                 Math.abs((parseFloat(st.paddingLeft) || 0) - x.pl) < 0.05 && Math.abs((parseFloat(st.textIndent) || 0) - x.ti) < 0.05);
+        return !(Math.abs(nn(st.marginLeft) - x.ml) < 0.05 && (x.ml === 0 || /em$/.test(st.marginLeft || '')) && !st.marginRight &&
+                 Math.abs(nn(st.paddingLeft) - x.pl) < 0.05 && Math.abs(nn(st.textIndent) - x.ti) < 0.05);
     });
     rows.hints = hints; rows.layout = layout;
     return rows;
@@ -3257,7 +3268,7 @@ function lstSetMarker(el, newMarker) {
 }
 function lstApplyLayout(x) {
     var st = x.el.style;
-    st.marginLeft = x.ml + 'em'; st.marginRight = '';
+    st.marginLeft = x.ml ? x.ml + 'em' : ''; st.marginRight = '';
     if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
 }
 function lstShow(rows) {
@@ -3267,7 +3278,7 @@ function lstShow(rows) {
     var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:6px;color:#6B4423"><i class="fa fa-list-ol"></i> 編號與縮排統一</div>'
       + '<div style="background:#FBF3E4;border:1px solid #eadfcb;border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.7;margin-bottom:8px"><b>目前的規則</b>'
       + '<table style="width:100%;border-collapse:collapse;margin-top:4px"><tr style="background:#F5E9D6"><th style="padding:2px 6px;text-align:left;width:130px">種類</th><th style="padding:2px 6px;text-align:left;width:150px">寫法</th><th style="padding:2px 6px;text-align:left">怎麼判斷／怎麼縮排</th></tr>'
-      + '<tr><td style="' + TD + '">條文標題</td><td style="' + TD + '">10　10.1　10.2.1　7.1.5.1</td><td style="' + TD + '">章節層級，<b>不是清單、不會被改</b>；越深縮排越多（第2層 2em、第3層 4em、第4層 6em）</td></tr>'
+      + '<tr><td style="' + TD + '">章標題</td><td style="' + TD + '">1. 公司簡介　3. 術語與定義</td><td style="' + TD + '">最上層，靠最左；底下條文（3.1）往內縮，所以章標題<b>不會</b>比條文更靠右</td></tr><tr><td style="' + TD + '">條文標題</td><td style="' + TD + '">10　10.1　10.2.1　7.1.5.1</td><td style="' + TD + '">章節層級，<b>不是清單、不會被改</b>；越深縮排越多（第2層 2em、第3層 4em、第4層 6em）</td></tr>'
       + '<tr><td style="' + TD + '">條文底下的內文</td><td style="' + TD + '">一般段落</td><td style="' + TD + '">自動對齊<b>上方條文標題的文字起點</b>（標題數字之後那個字）</td></tr>'
       + '<tr><td style="' + TD + '">清單第 1 層</td><td style="' + TD + '"><b>a.</b>　b.　c.</td><td style="' + TD + '">開頭是英文字母＋句點／冒號／頓號／括號（a： a、 （a））就算；寫法統一成「a.」；縮排同內文，折行時對齊字後面</td></tr>'
       + '<tr><td style="' + TD + '">清單第 2 層</td><td style="' + TD + '"><b>1)</b>　2)　3)</td><td style="' + TD + '">開頭是數字＋括號（1） （1） 1)），而且<b>前面已經有 a. 項目</b>才算第 2 層；寫法統一成「1)」；比第 1 層再縮 1.5em</td></tr>'
