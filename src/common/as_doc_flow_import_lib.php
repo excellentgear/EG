@@ -53,6 +53,7 @@ function adfi_cm(?string $v): ?float
 function adfi_parse(string $fodtPath): array
 {
     if (!is_file($fodtPath)) return ['byName' => [], 'order' => []];
+    @ini_set('memory_limit', '768M');   // 含內嵌圖片的 .fodt 可達數十 MB，DOM 展開後更大
     $xml = (string)@file_get_contents($fodtPath);
     if ($xml === '') return ['byName' => [], 'order' => []];
 
@@ -167,10 +168,21 @@ function adfi_text(DOMElement $e): string
     $lines = [];
     foreach ($e->getElementsByTagName('*') as $c) {
         if ($c->nodeName !== 'text:p') continue;
-        $t = trim(preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', $c->textContent));
+        $t = trim((string)preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', adfi_plain($c)));
         if ($t !== '') $lines[] = $t;
     }
     return implode("\n", $lines);
+}
+
+/** 取節點內的純文字，跳過內嵌圖片的 base64（textContent 會把它整包吃進來，單次可達數十 MB 而爆記憶體） */
+function adfi_plain(DOMNode $n): string
+{
+    $s = '';
+    foreach ($n->childNodes as $c) {
+        if ($c->nodeType === XML_TEXT_NODE || $c->nodeType === XML_CDATA_SECTION_NODE) $s .= $c->nodeValue;
+        elseif ($c->nodeType === XML_ELEMENT_NODE && $c->nodeName !== 'office:binary-data') $s .= adfi_plain($c);
+    }
+    return $s;
 }
 
 /**
