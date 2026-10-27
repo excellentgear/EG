@@ -3255,6 +3255,11 @@ function lstSetMarker(el, newMarker) {
     if (newMarker) { var tn = document.createTextNode(newMarker); rg.insertNode(tn); }
     return true;
 }
+function lstApplyLayout(x) {
+    var st = x.el.style;
+    st.marginLeft = x.ml + 'em'; st.marginRight = '';
+    if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
+}
 function lstShow(rows) {
     var old = document.getElementById('lstDlg'); if (old) old.remove();
     var lay = rows.layout || [], hs = rows.hints || [];
@@ -3297,18 +3302,25 @@ function lstShow(rows) {
     if (ap) ap.onclick = function(){
         var ok = 0, ok2 = 0;
         rows.forEach(function(r){ if (lstSetMarker(r.el, r.to)) ok++; });
-        lay.forEach(function(x){
-            var st = x.el.style;
-            st.marginLeft = x.ml + 'em'; st.marginRight = '';
-            if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
-            ok2++;
-        });
+        lay.forEach(function(x){ lstApplyLayout(x); ok2++; });
         d.remove(); setDirty(true);
         try { ED.reflowQuiet(); } catch (e) {}
         apxToast('已統一 ' + ok + ' 處標點、對齊 ' + ok2 + ' 段（記得存檔）');
     };
 }
 $('#btnLst').on('click', function(){ if (ED) lstShow(lstScan()); });
+// 貼上內容時：新貼進來的段落自動套標準（標點＋對齊上方條文標題）；原有段落不動，免得蓋掉刻意的縮排
+$(document).on('paste', '#adEditorHost .egrt-main', function(){
+    if (LOCKED || !ED) return;
+    var before = new Set();
+    lstBlocks().forEach(function(b){ before.add(b.el); });
+    setTimeout(function(){
+        var r = lstScan(), n = 0;
+        r.forEach(function(x){ if (!before.has(x.el) && lstSetMarker(x.el, x.to)) n++; });
+        r.layout.forEach(function(x){ if (!before.has(x.el)) { lstApplyLayout(x); n++; } });
+        if (n) { setDirty(true); try { ED.reflowQuiet(); } catch (e) {} apxToast('已自動對齊貼上的內容（' + n + ' 處，對齊上方條文標題）'); }
+    }, 150);
+});
 // 在清單項目按 Enter：自動接下一個編號；空項目再按 Enter ＝ 結束清單
 $(document).on('keydown', '#adEditorHost .egrt-main', function(e){
     if (LOCKED || e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.isComposing) return;
