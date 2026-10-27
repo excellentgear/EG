@@ -317,10 +317,14 @@
        + '<div class="egrt-pf"><label><input type="checkbox" class="egrt-th-chk" checked data-eg-skip> 第一列為表頭</label></div>'
        + '<div style="text-align:right"><button type="button" class="btn btn-xs btn-warning egrt-tbl-ins">插入</button></div>'
        + '</div></span>';
-    h += btn('egRowAdd', 'plus-square-o', '在下方插入一列（游標要在表格內）')
+    h += btn('egRowAddUp', 'level-up', '在上方插入一列（游標要在表格內）')
+       + btn('egRowAdd', 'plus-square-o', '在下方插入一列（游標要在表格內）')
        + btn('egRowDel', 'minus-square-o', '刪除這一列')
+       + btn('egColAddLeft', 'caret-square-o-left', '在左方插入一欄')
        + btn('egColAdd', 'columns', '在右方插入一欄')
        + btn('egColDel', 'trash-o', '刪除這一欄')
+       + btn('egMerge', 'compress', '合併儲存格：用滑鼠拖曳選取相鄰的幾格再按；只點在一格時＝跟右邊那一格合併')
+       + btn('egSplit', 'expand', '分割儲存格：已合併的格子還原成原本的格數；沒合併過的格子＝分成左右兩格')
        + '<span class="egrt-sep"></span>';
     if (opt.onInsertImage) h += btn('egImage', 'picture-o', '插入圖片');
     if (opt.onInsertFlow)  h += btn('egFlow', 'sitemap', '插入流程圖');
@@ -387,39 +391,193 @@
   function tableOp(body, op) {
     var cell = cellOf(body);
     if (!cell) return false;
-    var row = cell.parentNode, tbl = row;
+    var tbl = cell;
     while (tbl && tbl.nodeName !== 'TABLE') tbl = tbl.parentNode;
     if (!tbl) return false;
-    var idx = Array.prototype.indexOf.call(row.children, cell);
+    // 全部改走格線矩陣：表格裡有合併過的格子（rowspan／colspan）時，用 children 的順序算位置會整張錯位
+    var grid = tblGrid(tbl), ci = cellInfo(grid, cell);
+    if (!ci) return false;
+    var g = grid.g, nR = grid.rows.length, nC = 0;
+    g.forEach(function (r) { nC = Math.max(nC, r.length); });
+    var tagAt = function (el) { return el && el.nodeName === 'TH' ? 'th' : 'td'; };
+    function insertAt(ri, col, nc) {      // 接在這一列「欄位比 col 小」的最後一個格子後面
+      var rowEl = grid.rows[ri], prev = null;
+      grid.info.forEach(function (i) { if (i.el.parentNode === rowEl && i.c0 < col && (!prev || i.c0 > prev.c0)) prev = i; });
+      rowEl.insertBefore(nc, prev ? prev.el.nextSibling : rowEl.firstChild);
+    }
+    function bump(el, attr, d) {
+      var n = Math.max(1, (attr === 'colspan' ? el.colSpan : el.rowSpan) || 1) + d;
+      if (n > 1) el.setAttribute(attr, String(n)); else el.removeAttribute(attr);
+      if (attr === 'colspan') el.style.removeProperty('width');
+    }
+    var keep = cell, done, seen;
 
-    var keep = cell;                       // 做完之後游標要落在哪一格
-    if (op === 'egRowAdd') {
-      var nr = d.createElement('tr');
-      for (var i = 0; i < row.children.length; i++) nr.appendChild(newCell('td'));
-      row.parentNode.insertBefore(nr, row.nextSibling);
-      keep = nr.children[idx] || nr.children[0];     // 游標移到新加的那一列同一欄
+    if (op === 'egRowAdd' || op === 'egRowAddUp') {
+      // 在這一格「下方」（或上方）插入一列：被上面跨下來的格子（rowspan）就加高，不是新增格子
+      var at = (op === 'egRowAdd') ? ci.r0 + ci.rs : ci.r0;        // 新列的位置（插在第 at 列之前）
+      var nr = d.createElement('tr'); seen = [];
+      for (var c = 0; c < nC; c++) {
+        var up = at > 0 && at < nR ? g[at - 1][c] : null, dn = at < nR ? g[at][c] : null;
+        if (up && dn && up === dn) { if (seen.indexOf(up) < 0) { seen.push(up); bump(up, 'rowspan', 1); } continue; }
+        var nc = newCell(tagAt(g[Math.min(Math.max(ci.r0, 0), nR - 1)][c]) === 'th' && at === 0 ? 'th' : 'td');
+        nr.appendChild(nc);
+        if (c === ci.c0) keep = nc;
+      }
+      if (at >= nR) grid.rows[nR - 1].parentNode.appendChild(nr);
+      else grid.rows[at].parentNode.insertBefore(nr, grid.rows[at]);
     } else if (op === 'egRowDel') {
-      // 只剩一列就不給刪整列（整張表都不見了使用者會以為系統壞掉），請他刪整張表
-      if (tbl.rows && tbl.rows.length <= 1) return false;
-      var rows = Array.prototype.slice.call(tbl.rows), ri = rows.indexOf(row);
-      var nextRow = rows[ri + 1] || rows[ri - 1];    // 刪完接手的那一列：優先下面那列
-      keep = nextRow ? (nextRow.children[idx] || nextRow.children[0]) : null;
-      row.parentNode.removeChild(row);
-    } else if (op === 'egColAdd') {
-      Array.prototype.slice.call(tbl.rows).forEach(function (r) {
-        var ref = r.children[idx];
-        var nc = newCell(ref && ref.nodeName === 'TH' ? 'th' : 'td');
-        r.insertBefore(nc, ref ? ref.nextSibling : null);
-      });
-      keep = row.children[idx + 1] || cell;
+      if (nR <= 1) return false;
+      var rr = ci.r0, nextRow = grid.rows[rr + 1] || grid.rows[rr - 1]; seen = [];
+      for (var c2 = 0; c2 < nC; c2++) {
+        var el = g[rr] && g[rr][c2]; if (!el || seen.indexOf(el) >= 0) continue; seen.push(el);
+        var inf = cellInfo(grid, el);
+        if (inf.r0 < rr) bump(el, 'rowspan', -1);                       // 上面跨下來的：少一列
+        else if (inf.rs > 1) {                                            // 從這列往下跨的：搬到下一列，高度減一
+          bump(el, 'rowspan', -1);
+          var below = grid.rows[rr + 1], before = null;
+          grid.info.forEach(function (i) { if (i.el.parentNode === below && i.c0 > inf.c0 && (!before || i.c0 < before.c0)) before = i; });
+          below.insertBefore(el, before ? before.el : null);
+        }
+      }
+      grid.rows[rr].parentNode.removeChild(grid.rows[rr]);
+      var ng = tblGrid(tbl); var rrow = ng.rows[Math.min(rr, ng.rows.length - 1)];
+      keep = (ng.g[Math.min(rr, ng.g.length - 1)] || [])[ci.c0] || (rrow && rrow.children[0]) || null;
+      if (!nextRow) keep = null;
+    } else if (op === 'egColAdd' || op === 'egColAddLeft') {
+      var col = (op === 'egColAdd') ? ci.c0 + ci.cs : ci.c0;           // 新欄的位置（插在第 col 欄之前）
+      seen = [];
+      for (var r = 0; r < nR; r++) {
+        var lf = col > 0 ? g[r][col - 1] : null, rt = col < nC ? g[r][col] : null;
+        if (lf && rt && lf === rt) { if (seen.indexOf(lf) < 0) { seen.push(lf); bump(lf, 'colspan', 1); } continue; }
+        var ncc = newCell(tagAt(g[r][Math.min(col, nC - 1)] || g[r][0]));
+        insertAt(r, col, ncc);
+        if (r === ci.r0) keep = ncc;
+      }
     } else if (op === 'egColDel') {
-      if (row.children.length <= 1) return false;
-      Array.prototype.slice.call(tbl.rows).forEach(function (r) {
-        if (r.children[idx]) r.removeChild(r.children[idx]);
-      });
-      keep = row.children[idx] || row.children[row.children.length - 1];
+      if (nC <= 1) return false;
+      var cc = ci.c0; seen = [];
+      for (var r3 = 0; r3 < nR; r3++) {
+        var e3 = g[r3] && g[r3][cc]; if (!e3 || seen.indexOf(e3) >= 0) continue; seen.push(e3);
+        if ((e3.colSpan || 1) > 1) bump(e3, 'colspan', -1);
+        else e3.parentNode.removeChild(e3);
+      }
+      var ng2 = tblGrid(tbl);
+      keep = (ng2.g[Math.min(ci.r0, ng2.g.length - 1)] || [])[Math.min(cc, nC - 2)] || null;
     } else return false;
     return keep || true;
+  }
+
+  /* ── 合併／分割儲存格（2026-10-27 使用者交辦）──────────────────────────────
+     用「格線矩陣」處理 colspan／rowspan：矩陣每一格記它屬於哪個 TD/TH，
+     所以不管已經合併過幾次，算出來的選取矩形、插入位置都是對的。 */
+  function tblGrid(tbl) {
+    var rows = Array.prototype.slice.call(tbl.rows), g = [], info = [];
+    rows.forEach(function (r, ri) {
+      g[ri] = g[ri] || [];
+      var ci = 0;
+      Array.prototype.forEach.call(r.children, function (c) {
+        if (c.nodeName !== 'TD' && c.nodeName !== 'TH') return;
+        while (g[ri][ci]) ci++;
+        var cs = Math.max(1, c.colSpan || 1), rs = Math.max(1, c.rowSpan || 1);
+        info.push({ el: c, r0: ri, c0: ci, rs: rs, cs: cs });
+        for (var a = 0; a < rs; a++) { g[ri + a] = g[ri + a] || []; for (var b = 0; b < cs; b++) g[ri + a][ci + b] = c; }
+        ci += cs;
+      });
+    });
+    return { g: g, info: info, rows: rows };
+  }
+  function cellInfo(grid, el) { for (var i = 0; i < grid.info.length; i++) if (grid.info[i].el === el) return grid.info[i]; return null; }
+  function selectedCells(body, tbl) {
+    var sel = w.getSelection(), out = [];
+    if (!sel || !sel.rangeCount) return out;
+    var cells = Array.prototype.slice.call(tbl.querySelectorAll('td,th'));
+    function cellAt(n) { while (n && n !== tbl) { if (n.nodeType === 1 && (n.nodeName === 'TD' || n.nodeName === 'TH')) return n; n = n.parentNode; } return null; }
+    if (sel.rangeCount === 1) {            // 一整段選取橫跨多格：只取頭尾兩格（中間的格子由合併時補成長方形，不會把整列整欄都吃進去）
+      var r0 = sel.getRangeAt(0), ca = cellAt(r0.startContainer), cb = cellAt(r0.endContainer);
+      if (ca && cb && ca !== cb && cells.indexOf(ca) >= 0 && cells.indexOf(cb) >= 0) return [ca, cb];
+    }
+    for (var i = 0; i < sel.rangeCount; i++) {
+      var rg = sel.getRangeAt(i);
+      cells.forEach(function (c) {
+        if (out.indexOf(c) >= 0) return;
+        try { if (rg.intersectsNode(c)) out.push(c); } catch (e) {}
+      });
+    }
+    return out;
+  }
+  /** 回傳 {cell}＝做完之後游標要落的格子；失敗回傳 {msg} */
+  function mergeCells(body) {
+    var cell = cellOf(body); if (!cell) return { msg: '請先把游標點進表格裡的儲存格（要合併多格請用滑鼠拖曳選取）。' };
+    var tbl = cell; while (tbl && tbl.nodeName !== 'TABLE') tbl = tbl.parentNode;
+    var grid = tblGrid(tbl), sel = selectedCells(body, tbl);
+    if (sel.length < 2) {                         // 只點一格：跟右邊那一格合併
+      var ci = cellInfo(grid, cell); if (!ci) return { msg: '找不到這一格的位置。' };
+      var right = grid.g[ci.r0][ci.c0 + ci.cs];
+      if (!right) return { msg: '這一格右邊已經沒有格子了。要合併多格，請用滑鼠拖曳選取相鄰的幾格再按。' };
+      sel = [cell, right];
+    }
+    var r0 = 1e9, c0 = 1e9, r1 = -1, c1 = -1;
+    function ext() {
+      r0 = 1e9; c0 = 1e9; r1 = -1; c1 = -1;
+      sel.forEach(function (el) { var i = cellInfo(grid, el); if (!i) return;
+        r0 = Math.min(r0, i.r0); c0 = Math.min(c0, i.c0); r1 = Math.max(r1, i.r0 + i.rs - 1); c1 = Math.max(c1, i.c0 + i.cs - 1); });
+    }
+    ext();
+    // 選取矩形碰到的格子如果伸出矩形外，就把矩形擴大到完整包住它（合併後才會是一個長方形）
+    for (var guard = 0; guard < 20; guard++) {
+      var grew = false;
+      for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) {
+        var el = grid.g[r] && grid.g[r][c];
+        if (el && sel.indexOf(el) < 0) { sel.push(el); grew = true; }
+      }
+      if (!grew) break;
+      ext();
+    }
+    var target = grid.g[r0][c0], html = [];
+    sel.forEach(function (el) {
+      if (el === target) return;
+      var t = (el.innerHTML || '').replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/g, '').trim();
+      if (t) html.push(el.innerHTML);
+    });
+    if (html.length) {
+      var base = (target.innerHTML || '').replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/g, '').trim() ? target.innerHTML : '';
+      target.innerHTML = (base ? base + '<br>' : '') + html.join('<br>');
+    }
+    sel.forEach(function (el) { if (el !== target && el.parentNode) el.parentNode.removeChild(el); });
+    var cs = c1 - c0 + 1, rs = r1 - r0 + 1;
+    if (cs > 1) target.setAttribute('colspan', String(cs)); else target.removeAttribute('colspan');
+    if (rs > 1) target.setAttribute('rowspan', String(rs)); else target.removeAttribute('rowspan');
+    if (cs > 1) target.style.removeProperty('width');     // 寬度改由欄位撐，不要留舊的單格寬
+    return { cell: target };
+  }
+  function splitCell(body) {
+    var cell = cellOf(body); if (!cell) return { msg: '請先把游標點進要分割的儲存格。' };
+    var tbl = cell; while (tbl && tbl.nodeName !== 'TABLE') tbl = tbl.parentNode;
+    var grid = tblGrid(tbl), ci = cellInfo(grid, cell); if (!ci) return { msg: '找不到這一格的位置。' };
+    var tag = cell.nodeName.toLowerCase();
+    function insertAt(ri, col, nc) {      // 在第 ri 列、欄位 col 的位置放一格：接在這一列「欄位比 col 小」的最後一個格子後面
+      var rowEl = grid.rows[ri], prev = null;
+      grid.info.forEach(function (i) { if (i.el.parentNode === rowEl && i.c0 < col && (!prev || i.c0 > prev.c0)) prev = i; });
+      rowEl.insertBefore(nc, prev ? prev.el.nextSibling : rowEl.firstChild);
+    }
+    if (ci.cs > 1 || ci.rs > 1) {
+      cell.removeAttribute('colspan'); cell.removeAttribute('rowspan');
+      for (var a = 0; a < ci.rs; a++) for (var b = 0; b < ci.cs; b++) {
+        if (!a && !b) continue;
+        insertAt(ci.r0 + a, ci.c0 + b, newCell(tag));
+      }
+      return { cell: cell };
+    }
+    // 沒合併過：分成左右兩格——新增一欄，別列跨過這一欄的格子 colspan＋1
+    var nc = newCell(tag); cell.parentNode.insertBefore(nc, cell.nextSibling);
+    var seen = [];
+    for (var r = 0; r < grid.g.length; r++) {
+      var el = grid.g[r] && grid.g[r][ci.c0];
+      if (!el || el === cell || seen.indexOf(el) >= 0) continue;
+      seen.push(el);
+      el.setAttribute('colspan', String((el.colSpan || 1) + 1));
+    }
+    return { cell: cell };
   }
 
   /** 把游標放進某一格（並讓那一頁成為目前的編輯區），不捲動畫面 */
@@ -1015,7 +1173,7 @@
         }
         blkSel.value = nm;
       }
-      var tblBtns = ['egRowAdd', 'egRowDel', 'egColAdd', 'egColDel'];
+      var tblBtns = ['egRowAdd', 'egRowAddUp', 'egRowDel', 'egColAdd', 'egColAddLeft', 'egColDel', 'egMerge', 'egSplit'];
       var inCell = !!cellOf(body);
       tblBtns.forEach(function (c) {
         var b3 = host.querySelector('.egrt-btn[data-cmd="' + c + '"]');
@@ -1383,7 +1541,7 @@
         return;
       }
       if (isDoc) {
-        if (cmd === 'egRowAdd' || cmd === 'egRowDel' || cmd === 'egColAdd' || cmd === 'egColDel') {
+        if (cmd === 'egRowAdd' || cmd === 'egRowAddUp' || cmd === 'egRowDel' || cmd === 'egColAdd' || cmd === 'egColAddLeft' || cmd === 'egColDel') {
           var keepCell = tableOp(body, cmd);
           if (!keepCell) {
             alert(cmd === 'egRowDel' ? '只剩一列了，不能再刪。要整張表拿掉請把表格選起來按 Delete。'
@@ -1393,6 +1551,13 @@
           }
           // 游標留在「接手的那一格」，不要讓它掉到文件開頭（焦點跳動）
           if (keepCell && keepCell.nodeType === 1) caretIntoCell(keepCell);
+          changed();
+          return;
+        }
+        if (cmd === 'egMerge' || cmd === 'egSplit') {
+          var mr = cmd === 'egMerge' ? mergeCells(body) : splitCell(body);
+          if (mr.msg) { alert(mr.msg); return; }
+          if (mr.cell) caretIntoCell(mr.cell);
           changed();
           return;
         }
