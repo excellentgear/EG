@@ -2159,6 +2159,7 @@
         Array.prototype.forEach.call(n.querySelectorAll('table[data-egrt-split]'), function (t) {
           t.removeAttribute('data-egrt-split'); t.removeAttribute('data-egrt-cont');
         });
+        mendSpans(n);
       });
       return cs.map(function (n) { return n.innerHTML; }).join(PAGE_MARK);
     }
@@ -2431,6 +2432,43 @@
       c.appendChild(d.createElement('tbody'));
       return c;
     }
+    /** 在列 splitIdx 切開表格時，跨過切口的合併儲存格（rowspan）：
+     *  原表那一格改成只高到切口，續表第一列在同一欄補一個空白格（框線樣式照抄、高度＝剩下的列數），
+     *  這樣兩頁的框線都是完整的，不會缺一角。補的格子標 data-egrt-fill，接回去時整個拿掉、原格高度還原。 */
+    function fixSpanSplit(cont, grid, splitIdx) {
+      var firstRow = tblRows(cont)[0]; if (!firstRow) return;
+      var fills = [], placed = [];
+      grid.info.forEach(function (i) {
+        if (i.r0 === splitIdx) placed.push({ el: i.el, c0: i.c0 });
+        if (i.r0 < splitIdx && i.r0 + i.rs > splitIdx) {
+          var ext = i.r0 + i.rs - splitIdx, keepN = splitIdx - i.r0;
+          if (!i.el.hasAttribute('data-egrt-rs0')) i.el.setAttribute('data-egrt-rs0', String(i.rs));
+          if (keepN > 1) i.el.setAttribute('rowspan', String(keepN)); else i.el.removeAttribute('rowspan');
+          var f = d.createElement(i.el.tagName.toLowerCase());
+          f.setAttribute('style', i.el.getAttribute('style') || '');
+          f.setAttribute('data-egrt-fill', '1');
+          if (ext > 1) f.setAttribute('rowspan', String(ext));
+          if (i.cs > 1) f.setAttribute('colspan', String(i.cs));
+          f.innerHTML = '<br>';
+          fills.push({ el: f, c0: i.c0 });
+        }
+      });
+      fills.sort(function (a, b) { return a.c0 - b.c0; }).forEach(function (f) {
+        var prev = null;
+        placed.forEach(function (p) { if (p.c0 < f.c0 && (!prev || p.c0 > prev.c0)) prev = p; });
+        firstRow.insertBefore(f.el, prev ? prev.el.nextSibling : firstRow.firstChild);
+        placed.push(f);
+      });
+    }
+    /** 續表接回去之後：拿掉補的空白格、把被截短的合併格高度還原 */
+    function mendSpans(root) {
+      Array.prototype.slice.call(root.querySelectorAll('[data-egrt-fill]')).forEach(function (f) { if (f.parentNode) f.parentNode.removeChild(f); });
+      Array.prototype.forEach.call(root.querySelectorAll('[data-egrt-rs0]'), function (c) {
+        var v = parseInt(c.getAttribute('data-egrt-rs0'), 10);
+        if (v > 1) c.setAttribute('rowspan', String(v)); else c.removeAttribute('rowspan');
+        c.removeAttribute('data-egrt-rs0');
+      });
+    }
     /** 這一頁最後一個區塊是表格的話，把放不下的列搬到下一頁。回傳有沒有真的搬 */
     function splitTailTable(s) {
       var ks = blocksOf(s);
@@ -2447,12 +2485,14 @@
       var id = tbl.getAttribute('data-egrt-split') || ('sp' + (++splitSeq) + '-' + Date.now().toString(36));
       tbl.setAttribute('data-egrt-split', id);
       var cont = mkContTable(tbl, id), cb = tblBody(cont), moved = 0;
+      var grid0 = tblGrid(tbl), nRows0 = grid0.rows.length;     // 拆之前的格線（跨列合併的格子要在續表補回）
       while (rows.length - moved > 1) {
         cb.insertBefore(rows[rows.length - 1 - moved], cb.firstChild);
         moved++;
         if (fitsPage(s)) break;
       }
       if (!moved) return false;
+      fixSpanSplit(cont, grid0, nRows0 - moved);
       var blk = cont;
       if (box) { blk = box.cloneNode(false); blk.appendChild(cont); }
       prependBlock(nextSheet(s, true), blk);
@@ -2531,6 +2571,7 @@
       Array.prototype.forEach.call(host.querySelectorAll('.egrt-main table[data-egrt-split]'), function (t) {
         t.removeAttribute('data-egrt-split');
       });
+      mendSpans(host);
       return minIdx;
     }
 
@@ -2680,6 +2721,11 @@
             if (!splitTailTable(s) && !unwrapFrameTable(s)) break;
             continue;
           }
+          /* 有「表頭列」（thead）的長表格：緊接在標題下面開始時，不要整張搬到下一頁（會在標題頁留一大片空白），
+             改成在這一頁先放得下的列、剩下的接到下一頁的續表（表頭每頁重複）。
+             沒有表頭列的表格仍維持整張搬到下一頁的老做法，不影響其他文件。 */
+          var lastK = ks[ks.length - 1], lastT = lastK && lastK.tagName === 'TABLE' ? lastK : null;
+          if (lastT && lastT.tHead && tblRows(lastT).length >= 3 && splitTailTable(s)) continue;
           /* 下一頁是「強制換頁」開頭時，溢出的區塊不可以塞到它前面（強制換頁的區塊會落到頁中間、標著「強制換頁」卻沒換頁），
              要另開一頁接住。（2026-10-27 附錄頁掉進前一頁的真因；整份手冊原本就有 11 處這樣） */
           var ns = nextSheet(s, true), nf = ns ? blocksOf(ns)[0] : null;

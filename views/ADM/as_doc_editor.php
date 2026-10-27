@@ -1339,12 +1339,23 @@ function tblTidy(done) {
             }
         });
         // ① 固定續表
+        var frozen = [];
         Array.prototype.slice.call(document.querySelectorAll(SEL + 'table[data-egrt-cont]')).forEach(function(c){
+            // 有表頭列（thead）的長表格不固定：它每頁自己重複表頭、存檔時接回一張，下次載入再依紙張重拆；
+            // 固定下來反而會讓每一段各自多一份表頭而溢出、一路連鎖多拆出一堆只有一兩列的小表
+            if (c.tHead) return;
             var id = c.getAttribute('data-egrt-split');
+            frozen.push(c);
             c.removeAttribute('data-egrt-cont'); c.removeAttribute('data-egrt-split');
             var cb = c.closest('.egrt-main > *'); if (cb) conts.push(cb);
-            if (id) Array.prototype.forEach.call(document.querySelectorAll(SEL + 'table[data-egrt-split="' + id + '"]'), function(o){ o.removeAttribute('data-egrt-split'); });
+            if (id) Array.prototype.forEach.call(document.querySelectorAll(SEL + 'table[data-egrt-split="' + id + '"]'), function(o){ frozen.push(o); o.removeAttribute('data-egrt-split'); });
             n++;
+        });
+        // 固定下來的續表，跨頁補的空白格（data-egrt-fill）與被截短的合併格（data-egrt-rs0）從此就是正式的格子，把暫時記號拿掉
+        frozen.forEach(function(t){
+            Array.prototype.forEach.call(t.querySelectorAll('[data-egrt-fill],[data-egrt-rs0]'), function(e){
+                e.removeAttribute('data-egrt-fill'); e.removeAttribute('data-egrt-rs0');
+            });
         });
         apxSheets().forEach(function(sh){
             // ② 剛分割出來的續表（一定接在「已經填滿的一頁」後面，空行不會被拉回上一頁）上方補一行空白
