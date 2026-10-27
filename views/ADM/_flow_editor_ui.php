@@ -2376,7 +2376,7 @@
     /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
        （使用者：插入文件上時，應該依照實際大小插入，不是連旁邊畫布空白都插入）。
        取所有物件的外接矩形再留一點邊，並夾在畫布範圍內。 */
-    var PAD = 8;
+    var PAD = 36;      // 四周留白：圖插進文件後旁邊要有空間可以加字、不會貼著邊
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     objs.forEach(function (o) {
       var r = o.getBoundingRect(true, true);
@@ -2385,9 +2385,10 @@
       if (r.left + r.width  > maxX) maxX = r.left + r.width;
       if (r.top  + r.height > maxY) maxY = r.top + r.height;
     });
-    var cx = Math.max(0, Math.floor(minX - PAD)), cy = Math.max(0, Math.floor(minY - PAD));
-    var cw = Math.min(LOGW - cx, Math.ceil(maxX - minX + PAD * 2));
-    var ch = Math.min(LOGH - cy, Math.ceil(maxY - minY + PAD * 2));
+    // 不夾在畫布範圍內：圖形貼著畫布邊緣時，留白照樣要有（超出畫布的部分是空白）
+    var cx = Math.floor(minX - PAD), cy = Math.floor(minY - PAD);
+    var cw = Math.ceil(maxX - minX + PAD * 2);
+    var ch = Math.ceil(maxY - minY + PAD * 2);
     if (!(cw > 0 && ch > 0)) { cx = 0; cy = 0; cw = LOGW; ch = LOGH; }
     // multiplier 2.5＝列印時不會鋸齒（列印是 300dpi 等級，螢幕 1x 印出來會糊）
     var png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false,

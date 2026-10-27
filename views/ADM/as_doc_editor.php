@@ -3254,7 +3254,7 @@ function lstBlocks() {
     return out;
 }
 function lstTarget(level, n) { return level === 1 ? String.fromCharCode(96 + n) + '.' : n + ')'; }
-var LST_CHAPTER = new RegExp('^' + LST_WS + '*(?:\\d{1,2}\\.' + LST_WS + '+\\S|\\d{1,2}' + LST_WS + '+[^\\s\\d.、,，;；:：。][^。；;，,：:]{0,18}$)');   // 「3. 術語」；以及沒有句點的短標題「10 改善」（無句讀）
+var LST_CHAPTER = new RegExp('^' + LST_WS + '*\\d{1,2}\\.' + LST_WS + '*[^\\s\\d.]');   // 「3. 術語」「10.改善」（一定要有句點才算章標題；沒有句點的「10 改善」不算）
 function lstDepth(t) { var m = LST_CLAUSE.exec(t); return m ? m[0].trim().split('.').length : 0; }
 function lstPx(el) { return parseFloat(getComputedStyle(el).fontSize) || 16; }
 function lstR2(v) { return Math.round(v * 10) / 10; }      // 一位小數：清洗白名單只收一位小數，多了存檔會被整個濾掉
