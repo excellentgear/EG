@@ -846,7 +846,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(''+r.side+'',''+esc(r.party_key)+'')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
