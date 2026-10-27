@@ -147,7 +147,8 @@ if (!$isAdmin && !empty($me['id'])) {
         請到下方「關鍵人員綁定」直接指定該欄位的簽章人（人員綁定優先於部門主管推算）。<br>
         ・部門綁定右欄會顯示<b>目前該部門的部門主管</b>（職級最高者，同級優先取指定負責人；含子部門時會在整個子樹裡找職級最高者）——表單的「審核」欄多半就是這個人。<br>
         ・若該部門沒有設定職級（position_level）而抓不到主管，請改用「人事表單審核者」直接指定人員。<br>
-        ・被綁定的人若離職，讀取時視同未設定（不會蓋到離職者的章），請回來重設。
+        ・被綁定的人若離職，讀取時視同未設定（不會蓋到離職者的章），請回來重設。<br>
+        ・<b>管理代表的生效日</b>（派令日期）：一階品質手冊的「附件A 管理代表派令」會依這裡綁定的管理代表自動產生，頁面上總經理圖章的日期就是這個生效日；換管理代表時改人員並填新的生效日即可，不必動文件。沒填生效日時圖章留空。
         <h4>權限</h4>
         僅<b>系統管理者</b>可修改；其他人開啟只會看到權限提示。
     </div>
@@ -231,8 +232,14 @@ function render(){
                      : '<span style="color:#DD5138;">抓不到（該部門無職級設定，請改用下方「人事表單審核者」指定）</span>')
                +  '</div></td></tr>';
         } else if (r.type==='user') {
+            // 生效日（管理代表派令日期）：日期欄一律可點出月曆，不給手打
+            var eff = r.has_effective_date
+                ? '<div style="margin-top:6px;"><label style="font-weight:normal;color:#5a3d18;">生效日（派令日期）：'
+                  +'<input type="date" class="or-eff" data-key="'+k+'" value="'+esc(b.effective_date||'')+'" style="height:28px;"></label>'
+                  +'<span class="or-desc" id="effHint_'+k+'" style="margin-left:6px;"></span></div>'
+                : '';
             uh += '<tr><td><b>'+esc(r.label)+'</b></td><td>'+userSel(k, b.user_id||'')+'</td>'
-               +  '<td class="or-desc">'+esc(r.desc)+'</td></tr>';
+               +  '<td><div class="or-desc">'+esc(r.desc)+'</div>'+eff+'</td></tr>';
         } else if (r.type==='dept_or_user') {
             mh += '<tr><td><b>'+esc(r.label)+'</b></td>'
                +  '<td>'+deptSel(k, b.dept_id||'', 'or-mix-dept')+'</td>'
@@ -252,6 +259,10 @@ $(document).on('change', '.or-dept, .or-sub', function(){
              ? (subs.length ? '一併認列：'+subs.join('、') : '（此部門無子部門）')
              : '只認列該部門本身'));
 });
+$(document).on('change input', '.or-eff', function(){
+    var k=$(this).data('key');
+    $('#effHint_'+k).text(this.value ? '' : '尚未設定生效日：附件A 的總經理圖章會是空白（可手簽）').css('color', this.value?'':'#DD5138');
+});
 $('#btnSave').on('click', function(){
     var list=[];
     $('.or-dept').each(function(){
@@ -259,7 +270,12 @@ $('#btnSave').on('click', function(){
         list.push({role_key:k, dept_id:this.value, user_id:'',
                    include_sub: $('.or-sub[data-key="'+k+'"]').prop('checked') ? 1 : 0});
     });
-    $('.or-user').each(function(){ list.push({role_key:$(this).data('key'), dept_id:'', user_id:this.value}); });
+    $('.or-user').each(function(){
+        var k=$(this).data('key'), row={role_key:k, dept_id:'', user_id:this.value};
+        var $e=$('.or-eff[data-key="'+k+'"]');
+        if ($e.length) row.effective_date = this.value ? $e.val() : '';   // 沒綁人就沒有生效日
+        list.push(row);
+    });
     // 部門或人員擇一：兩個下拉共用同一個 role_key，合成同一筆(部門優先)，不能像上面兩段各自獨立push，
     // 否則後端依 role_key 覆寫時後寫的那段會蓋掉先寫的
     $('.or-mix-dept').each(function(){

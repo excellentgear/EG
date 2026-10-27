@@ -71,7 +71,8 @@ $pagesHtml = [];
 if ($err === '') {
     require_once '../../src/common/as_doc_tpl_lib.php';
     $ctx  = adt_context($db, $versionId);
-    $body = adc_hydrate_html($db, (string)$C['content_html'], (int)$C['id'],
+    require_once '../../src/common/as_doc_appendix_lib.php';   // 一階：附件A 管理代表派令（依組織角色綁定即時產生）
+    $body = adc_hydrate_html($db, adx_apply($db, (string)$C['content_html'], (string)$ctx['doc_level']), (int)$C['id'],
                              '../../src/store/AsDocContent_API.php?action=asset&id=');
     $conts = adt_split_pages($body);
     $sys   = adt_system_pages($ctx, $conts);

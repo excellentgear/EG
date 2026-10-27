@@ -153,7 +153,11 @@ case 'get': {
         'version' => $v,
         'content' => $c ? [
             'id' => (int)$c['id'],
-            'html' => (string)$c['content_html'],
+            // 一階：「附件A 管理代表派令」依組織角色綁定即時產生（as_doc_appendix_lib.php）
+            'html' => (function () use ($db, $c, $v) {
+                require_once __DIR__ . '/../common/as_doc_appendix_lib.php';
+                return adx_apply($db, (string)$c['content_html'], (string)($v['doc_level'] ?? ''));
+            })(),
             'is_primary' => (int)$c['is_primary'],
             'page_size' => $c['page_size'], 'orientation' => $c['orientation'],
             'import_src' => $c['import_src'], 'imported_at' => $c['imported_at'],
@@ -177,7 +181,8 @@ case 'tpl': {
     $ctx = adt_context($db, $vid);
     if (!$ctx) jerr('找不到這個版次');
     $c = adc_content_by_version($db, $vid);
-    $body = $c ? adc_hydrate_html($db, (string)$c['content_html'], (int)$c['id'],
+    require_once __DIR__ . '/../common/as_doc_appendix_lib.php';
+    $body = $c ? adc_hydrate_html($db, adx_apply($db, (string)$c['content_html'], (string)$ctx['doc_level']), (int)$c['id'],
                                   '../../src/store/AsDocContent_API.php?action=asset&id=') : '';
     $conts = adt_split_pages($body);
     $sys   = adt_system_pages($ctx, $conts);

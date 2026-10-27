@@ -75,6 +75,12 @@ case 'save': {
             $u = ($b['user_id'] ?? '') === '' ? null : (int)$b['user_id'];
             $s = isset($b['include_sub']) ? (int)$b['include_sub'] : 1;
             eg_org_save($db, $k, $d, $u, (string)$me['user_cname'], $s);
+            // 生效日：沒送這個欄位＝不動；送空字串＝清除；格式不對直接擋下（鐵律8，前端也擋一次）
+            if (array_key_exists('effective_date', $b) && !empty(EG_ORG_ROLES[$k]['has_effective_date'])) {
+                $ed = trim((string)$b['effective_date']);
+                if ($ed !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $ed)) throw new RuntimeException('生效日格式不正確');
+                eg_org_effective_date_save($db, $k, $ed === '' ? null : $ed);
+            }
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); ojerr('儲存失敗：'.$e->getMessage(), 500); }

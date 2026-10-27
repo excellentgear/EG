@@ -30,7 +30,8 @@ if (!defined('EG_ORG_ROLES')) define('EG_ORG_ROLES', [
     'material_dept' => ['label'=>'資材部門',       'type'=>'dept', 'desc'=>'資材課（生管／採購／倉管彙總）；產品開發評估表等表單的「資材課」欄使用，2026-08-12 新增'],
     // ── 人員類（「系統認定的某某人」）──
     'top_approver'  => ['label'=>'最高核准人員', 'type'=>'user', 'desc'=>'各式表單最後一關「核准」欄的簽章人（多數表單都是同一人）'],
-    'mgmt_rep'      => ['label'=>'管理代表',     'type'=>'user', 'desc'=>'AS9100 管理代表'],
+    'mgmt_rep'      => ['label'=>'管理代表',     'type'=>'user', 'has_effective_date'=>true,
+        'desc'=>'AS9100 管理代表。生效日＝管理代表派令的日期，一階品質手冊的「附件A 管理代表派令」會依此人員自動產生，總經理圖章上的日期就是這個生效日'],
     'hr_signer'     => ['label'=>'人事簽章人員', 'type'=>'user', 'desc'=>'人事表單「人事」欄的簽章人；應同時具備 HR 相關頁面的管理員權限'],
     'hr_reviewer'   => ['label'=>'人事表單審核者', 'type'=>'user', 'desc'=>'人事表單「審核」欄；留空＝自動取「人事／管理部門」的部門主管'],
     // ── 部門或人員擇一類（「部門內任一主管，或固定某關鍵人員，都未設定則自動判斷」）──
@@ -55,6 +56,11 @@ function eg_org_ensure_schema(PDO $db): void {
             updated_at DATETIME NULL,
             updated_by VARCHAR(50) NULL
         ) DEFAULT CHARSET=utf8mb4 COMMENT='全站組織角色綁定(哪個部門是人事部門/誰是最高核准人)'");
+        // 生效日（管理代表派令日期）：MySQL 9 沒有 ADD COLUMN IF NOT EXISTS，先查再加
+        try {
+            if (!$db->query("SHOW COLUMNS FROM org_role_binding LIKE 'effective_date'")->fetch())
+                $db->exec("ALTER TABLE org_role_binding ADD COLUMN effective_date DATE NULL COMMENT '生效日（派令日期）' AFTER note");
+        } catch (Throwable $e) {}
         try { $db->exec("ALTER TABLE org_role_binding ADD COLUMN include_sub TINYINT NOT NULL DEFAULT 1
                          COMMENT '1=連同該部門底下所有子部門一併認列' AFTER user_id"); } catch (Throwable $e) {}
     } catch (Throwable $e) {}
@@ -116,6 +122,26 @@ function eg_org_dept_ids(PDO $db, string $key): array {
 /** 某部門 id 是否被認列為該角色（含子部門判定） */
 function eg_org_in_dept(PDO $db, string $key, ?int $deptId): bool {
     return $deptId && in_array((int)$deptId, eg_org_dept_ids($db, $key), true);
+}
+
+/** 某角色綁定的生效日（Y-m-d；未設定回 null） */
+function eg_org_effective_date(PDO $db, string $key): ?string {
+    try {
+        $st = $db->prepare("SELECT effective_date FROM org_role_binding WHERE role_key=?");
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        return $v ? (string)$v : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 儲存生效日（只有 has_effective_date 的角色；綁定列必須已存在，沒綁人就沒有生效日可言）。
+ * 呼叫端已在 transaction 內時可直接呼叫（只有 UPDATE，不含 DDL）。
+ */
+function eg_org_effective_date_save(PDO $db, string $key, ?string $date): void {
+    if (empty(EG_ORG_ROLES[$key]['has_effective_date'])) return;
+    $date = ($date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) ? $date : null;
+    $db->prepare("UPDATE org_role_binding SET effective_date=? WHERE role_key=?")->execute([$date, $key]);
 }
 
 /** 某角色綁定的人員（回 user 列或 null；只回在職者，離職/特殊帳號視同未設定） */
