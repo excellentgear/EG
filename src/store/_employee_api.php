@@ -1268,11 +1268,26 @@ function getOrganizationData() {
                               ORDER BY p.sort_order ASC";
         $stmt_all_positions = $db->prepare($sql_all_positions);
 
+        $och_hide = null;
+        if (($_GET['scope'] ?? '') === 'as') {
+            require_once __DIR__ . '/../common/org_chart_hide_lib.php';
+            $och_hide = och_get($db);
+        }
         // 3. 遍歷部門，將員工資料填充進去
         $organization_data = [];
         foreach ($departments as $dept) {
             $stmt_employees->execute([$dept['id']]);
             $employees = $stmt_employees->fetchAll(PDO::FETCH_ASSOC);
+            // AS認證範圍檢視（scope=as）才套用管理員設定的隱藏部門／人員；其他呼叫端不受影響
+            if ($och_hide !== null) {
+                if (in_array((int)$dept['id'], $och_hide['depts'], true)) {
+                    $employees = [];
+                } else {
+                    $employees = array_values(array_filter($employees, function ($e) use ($och_hide) {
+                        return !in_array((int)$e['user_id'], $och_hide['users'], true);
+                    }));
+                }
+            }
             $dept['employees'] = $employees;
 
             $stmt_all_positions->execute([$dept['id']]);

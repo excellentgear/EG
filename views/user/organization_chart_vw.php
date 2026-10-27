@@ -2,6 +2,13 @@
 session_start();
 include_once '../../src/common/_config.php';
 include ("../../src/common/DBConnection.php");
+require_once '../../src/common/asdoc_lib.php';
+$ochIsAdmin = false;
+try {
+    $__db = (new DBConnection())->getPDO();
+    $__uid = (int)($_SESSION['id'] ?? 0);
+    $ochIsAdmin = $__uid === 1 || eg_asdoc_is_admin($__db, $__uid);
+} catch (Throwable $e) {}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -173,12 +180,17 @@ include ("../../src/common/DBConnection.php");
                                         <option value="all" data-html2canvas-ignore="true">顯示所有職位</option>
                                     </select>
                                     <!-- 新增列印與PDF按鈕 -->
-                                    <!-- <button id="print-btn" class="btn btn-default" style="margin-left: 10px;" data-html2canvas-ignore="true">
+                                    <button id="print-btn" class="btn btn-default" style="margin-left: 10px;" data-html2canvas-ignore="true">
                                         <i class="fa fa-print"></i> 列印圖表
-                                    </button> -->
-                                    <!-- <button id="pdf-btn" class="btn btn-default" data-html2canvas-ignore="true">
+                                    </button>
+                                    <button id="pdf-btn" class="btn btn-default" data-html2canvas-ignore="true">
                                         <i class="fa fa-file-pdf-o"></i> 另存為 PDF
-                                    </button> -->
+                                    </button>
+                                    <?php if ($ochIsAdmin): ?>
+                                    <button id="och-set-btn" class="btn btn-warning" data-html2canvas-ignore="true">
+                                        <i class="fa fa-eye-slash"></i> AS認證範圍設定
+                                    </button>
+                                    <?php endif; ?>
                                 </div>
                                 <ul class="nav navbar-right panel_toolbox">
                                     <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
@@ -210,6 +222,28 @@ include ("../../src/common/DBConnection.php");
         <!-- /footer content -->
     </div>
 </div>
+<?php if ($ochIsAdmin): ?>
+<div class="modal fade" id="och-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" role="document"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+      <h4 class="modal-title">AS認證範圍設定：組織圖隱藏的部門／人員</h4></div>
+    <div class="modal-body">
+      <p class="text-muted">勾選的部門，其<b>所有人員</b>不顯示（部門框保留）；勾選的人員不顯示。被隱藏者不計入「總人數」，僅影響本頁組織圖，不影響員工資料。</p>
+      <div class="row">
+        <div class="col-sm-6"><h5>隱藏部門</h5>
+          <input type="text" class="form-control och-q" data-t="och-dept" placeholder="輸入部門名稱篩選">
+          <div id="och-dept" style="max-height:320px;overflow:auto;border:1px solid #ddd;padding:6px;margin-top:6px"></div></div>
+        <div class="col-sm-6"><h5>隱藏人員</h5>
+          <input type="text" class="form-control och-q" data-t="och-user" placeholder="輸入姓名或部門篩選">
+          <div id="och-user" style="max-height:320px;overflow:auto;border:1px solid #ddd;padding:6px;margin-top:6px"></div></div>
+      </div>
+      <div id="och-msg" class="text-danger" style="margin-top:8px"></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button>
+      <button class="btn btn-primary" id="och-save">儲存</button></div>
+  </div></div>
+</div>
+<?php endif; ?>
 <!-- jQuery -->
 <script src="../../resource/js/jquery.min.js"></script>
 <!-- Bootstrap -->
@@ -286,12 +320,44 @@ include ("../../src/common/DBConnection.php");
         });
     });
 
+    let OCH_CSRF = '';
+    $(document).on('click', '#och-set-btn', function () {
+        $('#och-msg').text('');
+        $.getJSON('../../src/store/OrgChartHide_API.php', { action: 'get' }, function (r) {
+            if (r.status !== 'success') { alert(r.message || '載入失敗'); return; }
+            OCH_CSRF = r.csrf;
+            const hd = new Set(r.hide.depts), hu = new Set(r.hide.users);
+            const esc = t => $('<div>').text(t == null ? '' : t).html();
+            $('#och-dept').html(r.depts.map(d => `<label style="display:block;font-weight:normal" data-k="${esc(d.name)}"><input type="checkbox" value="${d.id}" ${hd.has(+d.id) ? 'checked' : ''}> ${esc(d.name)}</label>`).join(''));
+            $('#och-user').html(r.people.map(p => `<label style="display:block;font-weight:normal" data-k="${esc(p.user_cname)} ${esc(p.dept)}"><input type="checkbox" value="${p.id}" ${hu.has(+p.id) ? 'checked' : ''}> ${esc(p.dept)}　${esc(p.user_cname)}</label>`).join(''));
+            $('.och-q').val('');
+            $('#och-modal').modal('show');
+        });
+    });
+    $(document).on('input', '.och-q', function () {
+        const q = this.value.trim().toLowerCase();
+        $('#' + $(this).data('t') + ' label').each(function () {
+            $(this).toggle(!q || String($(this).data('k')).toLowerCase().indexOf(q) >= 0);
+        });
+    });
+    $(document).on('click', '#och-save', function () {
+        const ids = sel => $(sel + ' input:checked').map(function () { return +this.value; }).get();
+        $.post('../../src/store/OrgChartHide_API.php?action=save', {
+            csrf: OCH_CSRF, depts: JSON.stringify(ids('#och-dept')), users: JSON.stringify(ids('#och-user'))
+        }, function (r) {
+            if (r.status === 'success') { $('#och-modal').modal('hide'); fetchOrganizationData(); }
+            else $('#och-msg').text(r.message || '儲存失敗');
+        }, 'json').fail(function (x) {
+            $('#och-msg').text((x.responseJSON && x.responseJSON.message) || '儲存失敗');
+        });
+    });
+
     function fetchOrganizationData() {
         $('#org-chart-container').html('<p>正在載入組織圖資料...</p>');
         $.ajax({
             url: '../../src/store/_employee_api.php',
             type: 'GET',
-            data: { action: 'get_organization_data' },
+            data: { action: 'get_organization_data', scope: 'as' },
             dataType: 'json',
             success: function(response) {
                 if (response.status === 'success' && response.data) {
