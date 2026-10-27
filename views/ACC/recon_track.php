@@ -1233,7 +1233,9 @@ function saveSetting(){
 $(function(){
     $('#sidebar-menu').css('visibility','visible');
     document.getElementById('fBm').value = defaultBm();
-    try { document.getElementById('fZero').checked = (localStorage.getItem('act_ap_zero') === '1'); } catch(e) {}
+    var zc = document.getElementById('fZero');
+    if (PERMS.canAdmin || PERMS.isPm || PERMS.isSales || PERMS.isAcc) { try { zc.checked = (localStorage.getItem('act_ap_zero') === '1'); } catch(e) {} }
+    else { zc.disabled = true; zc.parentNode.title = '唯讀權限不能變更此選項'; }
     $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;

@@ -82,7 +82,7 @@ switch ($action) {
         $side = actSide($_GET['side'] ?? 'ar');
         $bm   = (string)($_GET['bm'] ?? date('Y-m'));
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
-        $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm, !empty($_GET['zero']));
+        $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm, !empty($_GET['zero']) && ($perms['canAdmin'] || $perms['isPm'] || $perms['isSales'] || $perms['isAcc']));
 
         // 依結帳日由先到後排序（使用者要求）；沒有結帳日的排最後，同一天再依名稱排序求穩定
         usort($allRows, function ($a, $b) {
