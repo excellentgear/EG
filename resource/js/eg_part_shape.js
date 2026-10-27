@@ -237,11 +237,11 @@
     },
     render: function () {
       var defs = D(), s = this.st, h = '', blind = s.hole === 'blind';
-      h += '<div class="eg-shape-line"><span class="eg-shape-lab" title="齒寬幾乎＝工件總長選「平板型」；一側有輪轂選「單邊凸出」；兩側都有選「雙邊凸出」；沒選＝其他。再點一次已選的可取消。">外形</span>';
+      h += '<div class="eg-shape-line"><span class="eg-shape-lab" title="齒寬幾乎＝工件總長選「平板型」；一側有輪轂選「單邊凸出」；兩側都有選「雙邊凸出」；沒選＝其他。凸出量須 ≥5mm 才算凸出，凸出不到 5mm 視為平板型。再點一次已選的可取消。">外形</span>';
       Object.keys(defs.outer).forEach(function (c) { h += chipHtml('outer', c, defs.outer[c], s.outer === c); });
       h += chipHtml('outer', 'other', '其他', s.outer === '');
       if (s.outer === 'one_side' || s.outer === 'both_sides') {
-        h += '<span class="eg-shape-sep">│</span><label class="eg-shape-in">最大凸出外徑 <input type="number" step="any" min="0" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label>';
+        h += '<span class="eg-shape-sep">│</span><label class="eg-shape-in">最大凸出外徑 <input type="number" step="any" min="0" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label><span class="eg-shape-hint">凸出須 ≥5mm 才算，未滿 5mm 請選平板型</span>';
       }
       h += '</div>';
 
