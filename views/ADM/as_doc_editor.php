@@ -192,11 +192,13 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
            td_dev_eval.php 既有寫法，使用者 2026-09-24 交辦） */
         .ad-float { position:fixed; right:22px; bottom:22px; z-index:120; display:flex; flex-direction:column;
             align-items:flex-end; gap:10px; }
+        /* 回頂端放在切換頁面（快速導覽）鈕的下方；用 visibility 而不是 display:none，
+           出現時上面那顆才不會被擠得往上跳 */
         .ad-back-top { width:38px; height:38px; border-radius:50%;
             background:#F0A24B; color:#fff; text-align:center; line-height:38px; font-size:16px;
-            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; }
+            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; visibility:hidden; }
         .ad-back-top:hover { background:#d98a33; }
-        .ad-back-top.show { display:block; }
+        .ad-back-top.show { visibility:visible; }
         /* 快速跳到大標題／附件：滑鼠移過圖示才展開清單（比照訂單分析的右下快速導覽） */
         .ad-qnav { position:relative; }
         .ad-qnav-fab { width:38px; height:38px; border-radius:50%; border:1px solid #e4d3ba; background:#fff; color:#8a5a2b;
@@ -344,6 +346,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         .ar-prev { font-weight:bold; color:#6B471A; background:#f0dfc4; padding:4px 10px; border-radius:3px; }
         /* 內文裡的參照標記：畫面上淡淡標起來，知道這段字跟哪份文件連著；列印一律不標 */
         .egrt-main .eg-asref { background:#FBE6C2; border-bottom:1px solid #E8890C; }
+        .egrt-main .eg-apref { border-bottom:1px dotted #8A5A2B; cursor:pointer; }
         /* 有綁定 AS 文件的字尾端多一個橘色「AS」小標＝有綁定；沒有底色也沒有小標＝只是普通文字。
            小標是 ::after 偽元素：不是內容的一部分，複製貼上與存檔都不會帶走，列印一律不顯示（下面 @media print 再關一次）。 */
         .egrt-main .eg-asref::after { content:"AS"; font:bold 8px/1 sans-serif; color:#fff; background:#E8890C;
@@ -479,6 +482,10 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
               <i class="fa fa-copy"></i> 從其他版次複製</button>
             <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
               <i class="fa fa-sliders"></i> 版面設定</button>
+            <?php if ($P['edit'] && !$__locked): ?>
+              <button class="btn btn-default btn-sm" id="btnApx" title="附錄整理：檢查附錄編號（重複／跳號）、附錄自動從新的一頁開始、把內文裡的「附錄 X」連到對應附錄，附錄改編號時自動更新">
+                <i class="fa fa-paperclip"></i> 附錄整理</button>
+            <?php endif; ?>
             <?php if ($P['admin']): ?>
               <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
                 <i class="fa fa-list-alt"></i> 標題範本設定</button>
@@ -544,11 +551,11 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         <div id="adEditorHost"></div>
         <div id="adReadonly" style="display:none" class="egrt-wrap"></div>
         <div class="ad-float">
-            <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
             <div class="ad-qnav">
                 <button type="button" class="ad-qnav-fab" title="快速跳到大標題／附件"><i class="fa fa-list-ul"></i></button>
                 <div class="ad-qnav-panel" id="adQnavPanel"></div>
             </div>
+            <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
         </div>
 <?php endif; ?>
     </div>
@@ -2913,6 +2920,251 @@ $('#btnCropReset').on('click', function(){
     }, 'json');
 });
 
+/* ── 附錄整理（2026-10-27 使用者交辦）──────────────────────────────────────
+   ①打「附錄」兩字時提示目前編號用到哪、下一個是哪個、哪些跳號沒用
+   ②每個附錄自動從新的一頁開始（附錄本身只有半頁以下才可以跟前面共用一頁）
+   ③內文裡的「附錄 X」連到對應附錄（參照＝<span class="eg-apref" data-apt="附錄標題">）；
+     附錄改編號時按標題找回來自動改，改過的字標紅並列出在哪一頁。
+   身分用「附錄標題」而不是編號：編號本來就會變，標題才是同一個附錄的依據。 */
+var APX_PREFIX = '(?:附件|附[錄\\uF900-\\uFAFF])';
+var APX_HEAD_RE = new RegExp('^(' + APX_PREFIX + ')\\s*([A-Z])');
+var APX_REF_RE = new RegExp('(' + APX_PREFIX + ')(\\s*)([A-Z])(?![A-Za-z0-9])', 'g');
+var APX_RED = '#cc0000';
+function apxNorm(t) { return String(t || '').replace(/[\s 　]+/g, ' ').trim(); }
+function apxEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function apxSheets() { return Array.prototype.slice.call(document.querySelectorAll('#adEditorHost .egrt-main')); }
+function apxIsHard(el) { return !!(el && el.nodeType === 1 && /(page-break-before\s*:\s*always|break-before\s*:\s*page)/i.test(el.getAttribute('style') || '')); }
+function apxSetHard(el) {
+    /* 不可用 el.style.pageBreakBefore：Chrome 會改寫成 break-before，清洗白名單只認舊寫法（eg_richtext.js 同一個坑） */
+    var st = String(el.getAttribute('style') || '').replace(/(^|;)\s*(page-break-before|break-before)\s*:[^;]*/gi, '$1').replace(/^[\s;]+|[\s;]+$/g, '');
+    el.setAttribute('style', (st ? st + ';' : '') + 'page-break-before:always');
+}
+/** 目前文件裡所有「附錄標題」（手動設成標題的一律算；一般段落要短、無句子標點、不是「附錄 A 用以…」這種敘述） */
+function apxHeads() {
+    var out = [];
+    apxSheets().forEach(function(sh, pi){
+        Array.prototype.forEach.call(sh.querySelectorAll('h1,h2,h3,h4,p,td'), function(el){
+            if (el.closest('.eg-apref')) return;
+            var tag = el.tagName, t = apxNorm(el.textContent), m = APX_HEAD_RE.exec(t);
+            if (!m) return;
+            if (tag === 'TD' && el.querySelector('p,h1,h2,h3,h4')) return;
+            if (!/^H[1-4]$/.test(tag)) {
+                if (t.length > 60 || /[，。；;,：:]/.test(t)) return;
+                if (new RegExp('^' + APX_PREFIX + '\\s*[A-Z]\\s*用').test(t)) return;
+            }
+            out.push({ el: el, page: pi + 1, prefix: m[1], letter: m[2], title: apxNorm(t.slice(m[0].length)), top: el.parentNode === sh });
+        });
+    });
+    return out;
+}
+function apxKey(h) { return h.title || ('#' + h.letter); }
+
+/* ① 打「附錄」時的編號提示 */
+var APX_HINT = null;
+function apxHideHint() { if (APX_HINT) { APX_HINT.remove(); APX_HINT = null; } }
+function apxHint() {
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) { apxHideHint(); return; }
+    var r = sel.getRangeAt(0), n = r.startContainer;
+    if (n.nodeType !== 3 || !n.parentNode.closest || !n.parentNode.closest('#adEditorHost .egrt-main')) { apxHideHint(); return; }
+    if (!new RegExp(APX_PREFIX + '\\s*$').test(n.textContent.slice(0, r.startOffset))) { apxHideHint(); return; }
+    var seen = {}, rows = [], max = '';
+    apxHeads().forEach(function(h){
+        if (h.el.contains(n)) return;
+        if (!seen[h.letter]) { seen[h.letter] = 1; rows.push(h); if (h.letter > max) max = h.letter; }
+    });
+    rows.sort(function(a, b){ return a.letter < b.letter ? -1 : 1; });
+    var gaps = [];
+    if (max) for (var c = 65; c < max.charCodeAt(0); c++) { if (!seen[String.fromCharCode(c)]) gaps.push(String.fromCharCode(c)); }
+    var next = max ? String.fromCharCode(Math.min(90, max.charCodeAt(0) + 1)) : 'A';
+    var h = '<div style="font-weight:bold;margin-bottom:3px;color:#8A5A2B">目前附錄編號</div>';
+    if (!rows.length) h += '<div>（文件裡還沒有附錄）</div>';
+    rows.forEach(function(x){ h += '<div>' + apxEsc(x.prefix) + ' <b>' + x.letter + '</b>　' + apxEsc(x.title.slice(0, 22)) + '<span style="color:#999">　第 ' + x.page + ' 頁</span></div>'; });
+    h += '<div style="margin-top:4px;border-top:1px solid #eadfcb;padding-top:3px">下一個可用：<b style="color:#D6851F">' + next + '</b>'
+       + (gaps.length ? '　<span style="color:#999">（' + gaps.join('、') + ' 目前沒有用到）</span>' : '') + '</div>';
+    apxHideHint();
+    var rect = r.getBoundingClientRect();
+    if (!rect || (!rect.top && !rect.left)) rect = n.parentNode.getBoundingClientRect();
+    APX_HINT = document.createElement('div');
+    APX_HINT.style.cssText = 'position:fixed;z-index:10650;background:#fffdf8;border:1px solid #E8890C;border-radius:6px;padding:7px 10px;'
+        + 'font-size:12px;line-height:1.7;color:#4a3213;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:380px;'
+        + 'left:' + Math.max(8, Math.min(window.innerWidth - 400, rect.left)) + 'px;top:' + (rect.bottom + 6) + 'px';
+    APX_HINT.innerHTML = h;
+    document.body.appendChild(APX_HINT);
+    setTimeout(apxHideHint, 9000);
+}
+var APX_T1 = null, APX_T2 = null;
+$(document).on('input keyup compositionend', '#adEditorHost .egrt-main', function(e){
+    clearTimeout(APX_T1); APX_T1 = setTimeout(apxHint, 160);
+    if (e.type === 'input') {          // 剛打好一個附錄標題：自動讓它從新的一頁開始
+        clearTimeout(APX_T2);
+        APX_T2 = setTimeout(function(){
+            var sel = window.getSelection(), n = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+            var blk = n && (n.nodeType === 3 ? n.parentNode : n);
+            blk = blk && blk.closest ? blk.closest('h1,h2,h3,h4,p') : null;
+            if (blk && APX_HEAD_RE.test(apxNorm(blk.textContent))) { var rp = apxRun(false); if (rp.breaks.length) apxToast('「' + rp.breaks[0].letter + '」附錄已自動從新的一頁開始'); }
+        }, 1300);
+    }
+});
+$(document).on('keydown mousedown', function(e){ if (APX_HINT && (e.type === 'mousedown' || e.key === 'Escape')) apxHideHint(); });
+function apxToast(msg) {
+    var t = document.createElement('div');
+    t.style.cssText = 'position:fixed;z-index:10700;right:80px;bottom:30px;background:#6B4423;color:#fff;padding:8px 14px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+    t.textContent = msg; document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 3500);
+}
+
+/* ② 附錄自動換頁：附錄（標題到下一個附錄／強制換頁之前）超過半頁高就強制從新的一頁開始 */
+function apxAutoBreaks(heads) {
+    var done = [], blocks = [], sheets = apxSheets();
+    if (!sheets.length) return done;
+    sheets.forEach(function(sh){ Array.prototype.forEach.call(sh.children, function(b){ blocks.push(b); }); });
+    var half = sheets[0].clientHeight / 2, headEls = heads.map(function(h){ return h.el; });
+    heads.forEach(function(h){
+        if (!h.top || apxIsHard(h.el)) return;
+        var idx = blocks.indexOf(h.el);
+        if (idx <= 0) return;
+        var size = 0;
+        for (var i = idx; i < blocks.length; i++) {
+            if (i > idx && (headEls.indexOf(blocks[i]) >= 0 || apxIsHard(blocks[i]))) break;
+            size += blocks[i].getBoundingClientRect().height;
+        }
+        if (size > half) { apxSetHard(h.el); done.push(h); }
+    });
+    return done;
+}
+
+/* ③ 內文參照：連結＋改編號時自動更新（改過的標紅） */
+function apxContext(el) {
+    var b = el.closest ? el.closest('p,td,li,h1,h2,h3,h4') : null;
+    var t = apxNorm((b || el).textContent);
+    var i = t.indexOf(apxNorm(el.textContent));
+    return t.slice(Math.max(0, i - 12), i + 36);
+}
+function apxPageOf(el) {
+    var sh = el.closest ? el.closest('.egrt-main') : null;
+    return sh ? apxSheets().indexOf(sh) + 1 : 0;
+}
+function apxSyncRefs(heads, link) {
+    var byKey = {}, byLetter = {}, res = { changes: [], missing: [], linked: 0 };
+    heads.forEach(function(h){ var k = apxKey(h); if (!byKey[k]) byKey[k] = h; if (!byLetter[h.letter]) byLetter[h.letter] = h; });
+    var lblRe = new RegExp('^(' + APX_PREFIX + ')(\\s*)([A-Z])');
+    // 已連結的參照：照標題找回附錄，編號變了就改字、標紅
+    document.querySelectorAll('#adEditorHost .egrt-main .eg-apref').forEach(function(sp){
+        var h = byKey[sp.getAttribute('data-apt') || ''], m = lblRe.exec(sp.textContent);
+        if (!h) { sp.style.color = APX_RED; res.missing.push({ page: apxPageOf(sp), text: apxNorm(sp.textContent), ctx: apxContext(sp) }); return; }
+        if (m && m[3] !== h.letter) {
+            var old = sp.textContent;
+            sp.textContent = m[1] + m[2] + h.letter + sp.textContent.slice(m[0].length);
+            sp.style.color = APX_RED;
+            res.changes.push({ page: apxPageOf(sp), from: apxNorm(old), to: apxNorm(sp.textContent), ctx: apxContext(sp) });
+        }
+    });
+    if (!link) return res;
+    // 還沒連結的純文字「附錄 X」：連到同編號的附錄（附錄標題本身、已連結的、AS 參照裡的不動）。
+    // 「附錄」與「A」常被拆在不同的 <span> 裡（Word 匯入的字型切換），所以要以「整個段落的文字」比對、
+    // 再用 Range 把跨節點的那一段包起來，不能逐個文字節點比。
+    var headEls = heads.map(function(h){ return h.el; });
+    var blocks = [];
+    apxSheets().forEach(function(sh){
+        sh.querySelectorAll('p,td,li,h2,h3,h4').forEach(function(b){
+            if (b.querySelector('p,td,li,h1,h2,h3,h4,table')) return;      // 只處理最內層的區塊
+            if (b.closest('.eg-asref') || headEls.some(function(e){ return e === b || e.contains(b) || b.contains(e); })) return;
+            blocks.push(b);
+        });
+    });
+    blocks.forEach(function(b){
+        var tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT, null, false), n, full = '', map = [];
+        while ((n = tw.nextNode())) {
+            if (n.parentNode.closest('.eg-apref,.eg-asref')) { full += '\u0001'.repeat(n.nodeValue.length); }   // 已連結的不再比對
+            else full += n.nodeValue;
+            map.push({ n: n, s: full.length - n.nodeValue.length });
+        }
+        if (!new RegExp(APX_PREFIX).test(full)) return;
+        var found = [], m;
+        APX_REF_RE.lastIndex = 0;
+        while ((m = APX_REF_RE.exec(full))) { if (byLetter[m[3]]) found.push({ i: m.index, len: m[0].length, h: byLetter[m[3]] }); }
+        function locate(pos, isEnd) {      // 全文位置 → (文字節點, 位移)
+            for (var k = 0; k < map.length; k++) {
+                var e = map[k].s + map[k].n.nodeValue.length;
+                if (isEnd ? (pos > map[k].s && pos <= e) : (pos >= map[k].s && pos < e)) return { n: map[k].n, o: pos - map[k].s };
+            }
+            return null;
+        }
+        for (var q = found.length - 1; q >= 0; q--) {            // 由後往前包，前面的位移才不會跑掉
+            var f = found[q], a1 = locate(f.i, false), b1 = locate(f.i + f.len, true);
+            if (!a1 || !b1) continue;
+            var rg = document.createRange();
+            rg.setStart(a1.n, a1.o); rg.setEnd(b1.n, b1.o);
+            var sp = document.createElement('span');
+            sp.className = 'eg-apref'; sp.setAttribute('data-apt', apxKey(f.h).slice(0, 120));
+            sp.title = '連到「' + apxKey(f.h) + '」（附錄改編號時這裡會自動跟著改；Ctrl＋點擊跳到該附錄）';
+            sp.appendChild(rg.extractContents());
+            rg.insertNode(sp);
+            res.linked++;
+        }
+    });
+    return res;
+}
+/** 整套：回傳報告；有動到內容就標成未存檔並重排 */
+function apxRun(link) {
+    var heads = apxHeads(), rep = { dups: [], gaps: [], breaks: [], linked: 0, changes: [], missing: [], rows: [] }, cnt = {}, max = '';
+    heads.forEach(function(h){ cnt[h.letter] = (cnt[h.letter] || 0) + 1; if (h.letter > max) max = h.letter; });
+    Object.keys(cnt).forEach(function(k){ if (cnt[k] > 1) rep.dups.push(k); });
+    if (max) for (var c = 65; c < max.charCodeAt(0); c++) { if (!cnt[String.fromCharCode(c)]) rep.gaps.push(String.fromCharCode(c)); }
+    rep.rows = heads;
+    var r = apxSyncRefs(heads, link);
+    rep.linked = r.linked; rep.changes = r.changes; rep.missing = r.missing;
+    rep.breaks = apxAutoBreaks(heads);
+    if (rep.linked || rep.changes.length || rep.missing.length || rep.breaks.length) setDirty(true);
+    if (rep.breaks.length && ED) { try { ED.reflowQuiet(); } catch (e) {} }
+    return rep;
+}
+function apxShow(rep) {
+    var old = document.getElementById('apxDlg'); if (old) old.remove();
+    var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:8px;color:#6B4423"><i class="fa fa-paperclip"></i> 附錄整理結果</div>';
+    h += '<div style="margin-bottom:6px"><b>目前附錄：</b>' + (rep.rows.length ? rep.rows.map(function(x){ return apxEsc(x.prefix) + ' ' + x.letter + '（第 ' + x.page + ' 頁）'; }).join('、') : '（沒有）') + '</div>';
+    if (rep.dups.length) h += '<div style="color:#DD5138">⚠ 編號重複：' + rep.dups.join('、') + '（請改成不同編號，否則內文的連結會對到第一個）</div>';
+    if (rep.gaps.length) h += '<div style="color:#8A5A2B">編號跳號（沒有用到）：' + rep.gaps.join('、') + '</div>';
+    if (rep.breaks.length) h += '<div>已讓 ' + rep.breaks.map(function(b){ return b.letter; }).join('、') + ' 附錄自動從新的一頁開始（附錄超過半頁高）。</div>';
+    if (rep.linked) h += '<div>已把內文裡 ' + rep.linked + ' 處「附錄 X」連到對應附錄（改編號時會自動更新）。</div>';
+    if (rep.changes.length) {
+        h += '<div style="margin-top:8px;color:#cc0000;font-weight:bold">附錄編號改了，下列 ' + rep.changes.length + ' 處內文已自動更改（文中以紅字標示）：</div>'
+           + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:3px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:50px">頁次</th><th style="padding:3px 6px;text-align:left;width:150px">更改</th><th style="padding:3px 6px;text-align:left">所在段落</th></tr>';
+        rep.changes.forEach(function(c){ h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + c.page + ' 頁</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + apxEsc(c.from) + ' → <b style="color:#cc0000">' + apxEsc(c.to) + '</b></td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">…' + apxEsc(c.ctx) + '…</td></tr>'; });
+        h += '</table>';
+    }
+    if (rep.missing.length) {
+        h += '<div style="margin-top:8px;color:#DD5138;font-weight:bold">下列 ' + rep.missing.length + ' 處找不到對應的附錄（附錄標題被改掉或刪除了），請手動確認（已標紅）：</div>';
+        rep.missing.forEach(function(c){ h += '<div style="font-size:12px">第 ' + c.page + ' 頁：' + apxEsc(c.text) + '　<span style="color:#555">…' + apxEsc(c.ctx) + '…</span></div>'; });
+    }
+    if (!rep.dups.length && !rep.gaps.length && !rep.breaks.length && !rep.linked && !rep.changes.length && !rep.missing.length)
+        h += '<div style="color:#3E6B2E">附錄編號、換頁與內文參照都沒有問題。</div>';
+    h += '<div style="margin-top:12px;text-align:right"><button type="button" class="btn btn-default btn-sm" id="apxClearRed">清除紅字標記</button> '
+       + '<button type="button" class="btn btn-warning btn-sm" id="apxClose">關閉</button></div>';
+    var d = document.createElement('div');
+    d.id = 'apxDlg';
+    d.style.cssText = 'position:fixed;z-index:10700;left:50%;top:50%;transform:translate(-50%,-50%);width:780px;max-width:94vw;max-height:80vh;overflow:auto;background:#fff;border:1px solid #E8890C;border-radius:8px;padding:16px 18px;box-shadow:0 10px 36px rgba(0,0,0,.35);font-size:13px;line-height:1.7;color:#333';
+    d.innerHTML = h; document.body.appendChild(d);
+    document.getElementById('apxClose').onclick = function(){ d.remove(); };
+    document.getElementById('apxClearRed').onclick = function(){
+        document.querySelectorAll('#adEditorHost .egrt-main .eg-apref').forEach(function(sp){
+            sp.style.removeProperty('color'); if (!sp.getAttribute('style')) sp.removeAttribute('style');
+        });
+        setDirty(true); apxToast('已清除紅字標記');
+    };
+}
+$('#btnApx').on('click', function(){
+    if (!ED) return;
+    apxShow(apxRun(true));
+});
+// Ctrl＋點內文裡的附錄參照＝跳到那個附錄
+$(document).on('click', '#adEditorHost .egrt-main .eg-apref', function(e){
+    if (!(e.ctrlKey || e.metaKey)) return;
+    var k = this.getAttribute('data-apt') || '', hit = null;
+    apxHeads().forEach(function(h){ if (!hit && apxKey(h) === k) hit = h; });
+    if (hit) hit.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
 var SAVED_HTML = null, SAVED_TS = 0;
 function save(cb) {
@@ -2927,6 +3179,9 @@ function save(cb) {
     /* 最後一道防線：編輯器上明明有好幾頁，產出的內容卻一個分頁標記都沒有，
        那一定是哪裡出了問題（曾經因此把整份文件的分頁洗成一頁）。
        這種情況寧可不存，也不要覆蓋掉好的資料。 */
+    // 附錄：存檔前把已連結的內文參照照附錄標題更新編號、讓大附錄從新的一頁開始；有改動存完後跳出清單
+    var apxRep = null;
+    try { apxRep = apxRun(false); } catch (e) { apxRep = null; }
     var _html = ED.get();
     var _pages = ED.pageCount();
     var _marks = (String(_html).match(/page-break-after/g) || []).length;
@@ -2950,6 +3205,7 @@ function save(cb) {
         SAVED_HTML = _html; SAVED_TS = Date.now();
         $('#adSaved').text('已存檔 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'}));
         paintPrimaryBadge({ html: ED.get(), is_primary: $('#chkPrimary').is(':checked') ? 1 : 0 });
+        if (apxRep && (apxRep.changes.length || apxRep.missing.length || apxRep.breaks.length)) apxShow(apxRep);
         if (cb) cb();
     }, 'json').fail(function(){ $b.prop('disabled', false); });
 }
