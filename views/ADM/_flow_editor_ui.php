@@ -100,6 +100,7 @@
 .egf-ic-doc{transform:skewX(-12deg);}
 .egf-ic-circle{border-radius:50%;width:22px;height:22px;}
 .egf-ic-round{border-radius:6px;}
+.egf-ic-barrow,.egf-ic-darrowb{border:0;background:none;font-size:22px;line-height:22px;color:#333;text-align:center;font-weight:bold;}
 .egf-ic-tri{width:0;height:0;border:0;background:none;border-left:12px solid transparent;border-right:12px solid transparent;border-bottom:22px solid #8A5A2B;border-radius:0;}
 .egf-ic-text{border:0;background:none;font-size:15px;color:#6B471A;line-height:18px;text-align:center;font-weight:bold;}
 .egf-ic-arrow,.egf-ic-line{height:0;border:0;border-top:2px solid #6B471A;width:34px;margin-top:8px;position:relative;}
@@ -216,6 +217,14 @@
               <span class="egf-ic egf-ic-round"></span><i>圓角方</i></div>
             <div class="egf-tile" draggable="true" data-drag="tri" title="三角形">
               <span class="egf-ic egf-ic-tri"></span><i>三角形</i></div>
+            <div class="egf-tile" draggable="true" data-drag="barrow" title="粗箭頭（單向）：選起來後拉四周的點改大小、拉上方的圓點旋轉方向">
+              <span class="egf-ic egf-ic-barrow">➡</span><i>粗箭頭</i></div>
+            <div class="egf-tile" draggable="true" data-drag="darrowb" title="粗箭頭（雙向）：選起來後拉四周的點改大小、拉上方的圓點旋轉方向">
+              <span class="egf-ic egf-ic-darrowb">⬌</span><i>雙向粗箭頭</i></div>
+            <div class="egf-tile" draggable="true" data-drag="text"  title="純文字說明">
+              <span class="egf-ic egf-ic-text">字</span><i>文字</i></div>
+          </div>
+          <div class="egf-pal-t">連線（在畫布上畫）</div>
           <div class="egf-tiles">
             <div class="egf-tile" data-add="arrow" title="點一下起點、再點一下終點就連起來；中間想轉幾個彎就多點幾下，最後雙擊（或按 Enter）結束。也可以直接由起點拖到終點畫一段。">
               <span class="egf-ic egf-ic-arrow"></span><i>箭頭</i></div>
@@ -394,6 +403,12 @@
       sh = new fabric.Polygon([{x:14,y:0},{x:134,y:0},{x:120,y:48},{x:0,y:48}], baseShapeOpts(x, y));
     } else {
       sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 50 }));
+    } else if (kind === 'barrow') {
+      // 粗箭頭（單向，指向右；要換方向就轉動它）
+      sh = new fabric.Polygon([{x:0,y:14},{x:76,y:14},{x:76,y:0},{x:110,y:30},{x:76,y:60},{x:76,y:46},{x:0,y:46}], Object.assign(baseShapeOpts(x, y), { fill: lineColor }));
+    } else if (kind === 'darrowb') {
+      // 粗箭頭（雙向）
+      sh = new fabric.Polygon([{x:0,y:30},{x:34,y:0},{x:34,y:14},{x:76,y:14},{x:76,y:0},{x:110,y:30},{x:76,y:60},{x:76,y:46},{x:34,y:46},{x:34,y:60}], Object.assign(baseShapeOpts(x, y), { fill: lineColor }));
     } else if (kind === 'circle') {
       sh = new fabric.Ellipse(Object.assign(baseShapeOpts(x, y), { rx: 44, ry: 44 }));
     } else if (kind === 'round') {
