@@ -2686,7 +2686,12 @@ function mkEditor() {
         placeholder: '在這裡編輯這份文件的內容…（可先按上方「從 Word 匯入」把舊內容帶進來）',
         assetUrl: assetUrl,
         assetKind: function(id){ return ASSET_KIND[String(id)] || 'image'; },
-        onChange: function(){ setDirty(true); },
+        onChange: function(){
+            /* 存檔剛完成時編輯器會因版面樣板／頁碼重繪再觸發一次 change，
+               內容其實沒變，不可因此又標成「有未存檔的變更」（使用者 2026-10-27 回報） */
+            if (SAVED_HTML !== null && Date.now() - SAVED_TS < 3000 && ED && ED.get() === SAVED_HTML) return;
+            setDirty(true);
+        },
         onInsertImage: function(insert){ openUpload(insert); },
         onInsertAsRef: function(insertHtml){
             AR.insert = insertHtml;
@@ -2828,6 +2833,7 @@ $('#btnCropReset').on('click', function(){
 });
 
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
+var SAVED_HTML = null, SAVED_TS = 0;
 function save(cb) {
     if (!CAN_EDIT || !ED || LOCKED) return;
     /* 還沒排版完就存檔，ED.get() 只會拿到還沒分頁的那一大團內容，
@@ -2860,6 +2866,7 @@ function save(cb) {
         $b.prop('disabled', false);
         if (!r.success) { alert(r.message || '存檔失敗'); return; }
         setDirty(false);
+        SAVED_HTML = _html; SAVED_TS = Date.now();
         $('#adSaved').text('已存檔 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'}));
         paintPrimaryBadge({ html: ED.get(), is_primary: $('#chkPrimary').is(':checked') ? 1 : 0 });
         if (cb) cb();
