@@ -487,6 +487,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
                 <i class="fa fa-paperclip"></i> 附錄整理</button>
               <button class="btn btn-default btn-sm" id="btnLst" title="編號統一：條文底下第一層 a. b. c.、第二層 1) 2) 3)，自動辨識並列出要改的地方；在清單項目按 Enter 會自動接下一個編號">
                 <i class="fa fa-list-ol"></i> 編號與縮排</button>
+              <button class="btn btn-default btn-sm" id="btnLck" title="列印排版檢查：用實際列印的排法檢查有沒有哪幾頁會被切成兩張紙（框線沒到底），依已存檔內容">
+                <i class="fa fa-print"></i> 列印排版檢查</button>
             <?php endif; ?>
             <?php if ($P['admin']): ?>
               <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
@@ -3362,6 +3364,65 @@ $(document).on('keydown', '#adEditorHost .egrt-main', function(e){
     }, 0);
 });
 
+/* ── 列印排版檢查（2026-10-27）──────────────────────────────────────────
+   「編輯畫面看起來一頁、印出來卻被切成兩張紙、框線沒到底」——最常見的原因是 Word 匯入的大表格比頁寬還寬。
+   編輯畫面量不出來（編輯器內表格會被框住），所以用隱藏的 iframe 載入實際的列印頁（as_doc_print.php?check=1），
+   量排完之後哪幾張比一張紙高，回報到這裡並在編輯器上方掛紅色提示，要求處理。檢查的是「已存檔的內容」。 */
+var LCK_LAST = null, LCK_MANUAL = false;
+function layoutCheck() {
+    if (!VID) return;
+    var old = document.getElementById('lckFrame'); if (old) old.remove();
+    var f = document.createElement('iframe');
+    f.id = 'lckFrame';
+    f.style.cssText = 'position:fixed;left:-12000px;top:0;width:900px;height:1200px;border:0;visibility:hidden';
+    f.src = 'as_doc_print.php?version_id=' + VID + '&check=1';
+    document.body.appendChild(f);
+    setTimeout(function(){ var x = document.getElementById('lckFrame'); if (x) x.remove(); }, 90000);
+}
+window.addEventListener('message', function(e){
+    var d = e.data;
+    if (e.origin !== location.origin || !d || !d.egDocCheck) return;
+    var f = document.getElementById('lckFrame'); if (f) f.remove();
+    LCK_LAST = d; lckBar(d);
+});
+function lckBar(d) {
+    var bar = document.getElementById('lckBar');
+    if (!d.bad.length) { if (bar) bar.remove(); if (LCK_MANUAL) apxToast('列印排版檢查：每一頁印出來都是一張紙，沒有問題'); LCK_MANUAL = false; return; }
+    LCK_MANUAL = false;
+    if (!bar) {
+        bar = document.createElement('div'); bar.id = 'lckBar';
+        bar.style.cssText = 'margin:6px 0;padding:8px 12px;background:#FBE3DC;border:1px solid #DD5138;border-radius:6px;color:#8a2a12;font-size:13px;line-height:1.7;cursor:pointer';
+        var host = document.getElementById('adEditorHost'); host.parentNode.insertBefore(bar, host);
+        bar.onclick = function(){ lckShow(LCK_LAST); };
+    }
+    bar.innerHTML = '<b><i class="fa fa-exclamation-triangle"></i> 列印時有 ' + d.bad.length + ' 頁內容比一張紙還高，會被切到下一張、框線沒到底：</b>'
+        + d.bad.map(function(x){ return '第 ' + apxEsc(String(x.page || x.idx).split('/')[0].trim()) + ' 頁'; }).join('、')
+        + '　<u>點這裡看原因與處理方式</u>（依已存檔內容檢查）';
+}
+function lckShow(d) {
+    var old = document.getElementById('lckDlg'); if (old) old.remove();
+    var h = '<div style="font-weight:bold;font-size:15px;margin-bottom:6px;color:#6B4423"><i class="fa fa-exclamation-triangle"></i> 列印排版檢查（共 ' + d.total + ' 張，' + d.bad.length + ' 張超出）</div>'
+      + '<div style="color:#555;margin-bottom:6px">下列頁面在<b>實際列印</b>時比一張紙高，會被切成兩張，第二張只剩半截框線。編輯畫面看起來沒問題，是因為編輯器把超出的部分框住了。</div>'
+      + '<table style="width:100%;border-collapse:collapse;font-size:12px"><tr style="background:#F5E9D6"><th style="padding:3px 6px;text-align:left;width:70px">頁次</th><th style="padding:3px 6px;text-align:left;width:80px">印出高度</th><th style="padding:3px 6px;text-align:left;width:110px">原因</th><th style="padding:3px 6px;text-align:left">內容開頭</th></tr>';
+    d.bad.forEach(function(x){
+        h += '<tr><td style="padding:3px 6px;border-top:1px solid #eadfcb">第 ' + apxEsc(String(x.page || x.idx).split('/')[0].trim()) + ' 頁</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + x.mm + ' mm</td><td style="padding:3px 6px;border-top:1px solid #eadfcb">' + (x.wide ? '表格比頁寬寬（' + x.wide + ' 個）' : '內容太高') + '</td><td style="padding:3px 6px;border-top:1px solid #eadfcb;color:#555">' + apxEsc(x.text) + '…</td></tr>';
+    });
+    h += '</table><div style="margin-top:8px;background:#FBF3E4;border:1px solid #eadfcb;border-radius:6px;padding:8px 10px;font-size:12px"><b>處理方式（擇一）：</b>'
+      + '<ol style="margin:4px 0 0 18px;padding:0"><li>把該頁的表格縮窄（拖曳表格邊框，或刪掉多餘的欄、空白欄），讓它不超過頁寬；</li>'
+      + '<li>表格太大（例如組織圖、流程表）：改成圖片（用「插入流程圖」重畫，或貼圖檔），圖片會自動縮進一頁；</li>'
+      + '<li>內容太高：把表格拆成兩頁，在中間插入分頁。</li></ol>'
+      + '<div style="margin-top:4px;color:#8A5A2B">改完請存檔，存檔後系統會自動重新檢查；紅色提示消失就代表印出來每頁都是一張紙。</div></div>'
+      + '<div style="margin-top:10px;text-align:right"><button type="button" class="btn btn-default btn-sm" id="lckRe">重新檢查</button> <button type="button" class="btn btn-warning btn-sm" id="lckClose">關閉</button></div>';
+    var dg = document.createElement('div');
+    dg.id = 'lckDlg';
+    dg.style.cssText = 'position:fixed;z-index:10700;left:50%;top:50%;transform:translate(-50%,-50%);width:720px;max-width:94vw;max-height:84vh;overflow:auto;background:#fff;border:1px solid #DD5138;border-radius:8px;padding:16px 18px;box-shadow:0 10px 36px rgba(0,0,0,.35);font-size:13px;line-height:1.7;color:#333';
+    dg.innerHTML = h; document.body.appendChild(dg);
+    document.getElementById('lckClose').onclick = function(){ dg.remove(); };
+    document.getElementById('lckRe').onclick = function(){ dg.remove(); apxToast('重新檢查中…'); layoutCheck(); };
+}
+$('#btnLck').on('click', function(){ LCK_MANUAL = true; apxToast('檢查列印排版中（約 10 秒）…'); layoutCheck(); });
+if (!LOCKED) setTimeout(layoutCheck, 4000);        // 開啟編輯器就檢查一次
+
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
 var SAVED_HTML = null, SAVED_TS = 0;
 function save(cb) {
@@ -3403,6 +3464,7 @@ function save(cb) {
         $('#adSaved').text('已存檔 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'}));
         paintPrimaryBadge({ html: ED.get(), is_primary: $('#chkPrimary').is(':checked') ? 1 : 0 });
         if (apxRep && (apxRep.changes.length || apxRep.missing.length || apxRep.breaks.length)) apxShow(apxRep);
+        setTimeout(layoutCheck, 800);       // 存完用實際列印排法再檢查一次
         if (cb) cb();
     }, 'json').fail(function(){ $b.prop('disabled', false); });
 }

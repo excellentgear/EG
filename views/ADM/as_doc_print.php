@@ -30,7 +30,8 @@ $uid = (int)($_SESSION['id'] ?? 0);
 $P   = adc_perms($db, $uid);
 
 $versionId = (int)($_GET['version_id'] ?? 0);
-$isPreview = !empty($_GET['preview']);   // 只看不印（唯讀線上版嵌入用）：不自動跳列印、不要求列印權限
+$isCheck   = !empty($_GET['check']);     // 排版檢查（編輯器背景載入）：量「印出來哪幾頁會超出一張紙」後回報給編輯器，不跳列印、不並排
+$isPreview = !empty($_GET['preview']) || $isCheck;   // 只看不印（唯讀線上版嵌入用）：不自動跳列印、不要求列印權限
 $isEmbed   = !empty($_GET['embed']);
 $V = $versionId > 0 ? adc_version_info($db, $versionId) : null;
 if ($V) $P = adc_perms($db, $uid, (int)$V['doc_id']);   // 逐文件權限（見 adc_perms）
@@ -224,9 +225,9 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <?php endif; ?>
 <?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
          全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
-<?php if ($isPreview): ?><div class="spread" id="spread"><?php endif; ?>
+<?php if ($isPreview && !$isCheck): ?><div class="spread" id="spread"><?php endif; ?>
 <?php foreach ($pagesHtml as $one) { echo $one; } ?>
-<?php if ($isPreview): ?></div><?php endif; ?>
+<?php if ($isPreview && !$isCheck): ?></div><?php endif; ?>
 <?php
 require_once __DIR__ . '/../../src/common/org_role_lib.php';
 require_once __DIR__ . '/../../src/common/as_doc_sign_lib.php';
@@ -327,7 +328,33 @@ function startAutoPrint(){
     // 保險：圖片一直載不完也不要卡住不列印
     setTimeout(function(){ if (left > 0) { left = 0; go(); } }, 6000);
 }
-<?php if ($isPreview): ?>
+<?php if ($isCheck): ?>
+/* 排版檢查：量每一張 .adt-page 排完之後有沒有比一張紙高（＝印出來會被切到下一張，框線沒到底），
+   結果用 postMessage 交給編輯器（編輯器用隱藏 iframe 載這一頁）。表格比頁寬寬也一併回報（那是最常見的原因）。 */
+function startCheck(){
+    try { adtReflow(); } catch (e) {}
+    if (window.EGDocFit) EGDocFit.run(document);
+    setTimeout(function(){
+        try { adtReflow(); } catch (e) {}
+        var limit = <?= (float)$paperWH[1] ?> * 96 / 25.4 + 4, out = [];
+        var pages = document.querySelectorAll('.adt-page');
+        Array.prototype.forEach.call(pages, function(p, i){
+            var h = p.getBoundingClientRect().height;
+            if (h <= limit) return;
+            var no = '', ks = p.querySelectorAll('.adt-hdr .adt-hdr-k');
+            for (var k = 0; k < ks.length; k++) {
+                if (ks[k].textContent.replace(/\s|　/g, '') === '頁次' && ks[k].nextElementSibling) { no = ks[k].nextElementSibling.textContent.replace(/\s+/g, ' ').trim(); break; }
+            }
+            var b = p.querySelector(':scope > .adt-body'), bw = b ? b.clientWidth : 0, wide = 0;
+            if (b) Array.prototype.forEach.call(b.querySelectorAll('table'), function(t){ if (t.getBoundingClientRect().width > bw + 2) wide++; });
+            var txt = ((b || p).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+            out.push({ idx: i + 1, page: no, mm: Math.round(h / 3.7795), wide: wide, text: txt });
+        });
+        try { parent.postMessage({ egDocCheck: true, total: pages.length, bad: out }, location.origin); } catch (e) {}
+    }, 1200);
+}
+if (window.egDocStamps) egDocStamps(document, startCheck); else startCheck();
+<?php elseif ($isPreview): ?>
 function fitSpread(){
     var sp = document.getElementById('spread'), pg = document.querySelector('.adt-page');
     if (!sp || !pg) return;
