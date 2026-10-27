@@ -10934,10 +10934,11 @@ foreach($dCounts as $c) {
             var name = (st && st.target_label) ? st.target_label : '';
             // fixed（例如 BOSS）名稱本身就是對象，「BOSSBOSS 已處理完成」會很怪
             if (tt && ateQTargetPick(tt) === 'fixed') { name = name || typeLabel; typeLabel = ''; }
-            var who = (typeLabel + name) || '（未指定對象）';
+            // 對象是「本人」＝只是代為記錄、順手勾已處理，不要印出勾選者自己的名字（2026-10-27 使用者回報）
+            var who = (tt === 'self') ? '' : ((typeLabel + name) || '（未指定對象）');
             var today = ATE_Q.today || '', md = '';
             if (today.length >= 10) md = parseInt(today.substring(5, 7), 10) + '/' + parseInt(today.substring(8, 10), 10);
-            return (md ? md + ' ' : '') + who + ' 已處理完成';
+            return (md ? md + ' ' : '') + (who ? who + ' ' : '') + '已處理完成';
         }
         function ateQResolve(itemId, status) {
             if (status === 'resolved') {
