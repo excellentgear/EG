@@ -224,7 +224,32 @@ function asQrPurgeObsolete(PDO $db, ?array $ids, bool $doDelete): array {
     if (!$rows) return [];
     $iids = array_map('intval', array_column($rows, 'item_id'));
     $db->exec('DELETE FROM as_quality_record_item WHERE id IN (' . implode(',', $iids) . ')');
+    asQrPendingAdd($db, 'remove', $rows);
     return array_map(fn($r) => ['doc_no'=>$r['doc_no'], 'doc_name'=>$r['doc_name']], $rows);
+}
+/** 「一覽表內容變動、需重新列印」的待辦清單（存 system_settings，列印後由 qr_ack 清掉） */
+function asQrPendingGet(PDO $db): array {
+    $a = json_decode((string)asGetSetting($db, 'as_doc_qr_reprint'), true);
+    return is_array($a) ? $a : [];
+}
+function asQrPendingAdd(PDO $db, string $type, array $rows): void {
+    if (!$rows) return;
+    $cur = asQrPendingGet($db);
+    foreach ($rows as $r) $cur[] = ['t'=>$type, 'no'=>(string)$r['doc_no'], 'name'=>(string)$r['doc_name']];
+    asSetSetting($db, 'as_doc_qr_reprint', json_encode($cur, JSON_UNESCAPED_UNICODE));
+}
+/** 一覽表要涵蓋所有（未刪除、未廢止的）表單：缺的自動補進去，並記入待重新列印。回傳新加入的清單。 */
+function asQrSyncNew(PDO $db): array {
+    $st = $db->query("SELECT d.id, d.doc_no, d.doc_name FROM as_document d
+                      WHERE d.is_deleted=0 AND d.is_obsolete=0 AND (d.doc_type='表單' OR d.doc_level='四階')
+                        AND d.id NOT IN (SELECT doc_id FROM as_quality_record_item) ORDER BY d.doc_no");
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+    $mx = (int)$db->query("SELECT COALESCE(MAX(sort_order),-1) FROM as_quality_record_item")->fetchColumn();
+    $ins = $db->prepare("INSERT INTO as_quality_record_item (doc_id, sort_order) VALUES (?,?)");
+    foreach ($rows as $r) $ins->execute([(int)$r['id'], ++$mx]);
+    asQrPendingAdd($db, 'add', $rows);
+    return $rows;
 }
 /* 路徑規則已收斂進共用庫 src/common/asdoc_lib.php（鐵律4）——二階文件線上版要讀
    同一批 Word 原始檔做匯入，而本檔是 API（頂層有 session 與權限判定）不能被 include。
@@ -1440,7 +1465,8 @@ case 'restore_document':
 case 'qr_get':
     if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
     // 已廢止的表單不留在一覽表上（歷史殘留也一併清掉；有設定權限者才會動到資料）
-    $qrRemoved = asQrPurgeObsolete($db, null, asCan('settings'));
+    $qrRemoved = asQrPurgeObsolete($db, null, true);
+    asQrSyncNew($db);
     $defYears = (int)(asGetSetting($db, 'as_doc_qr_default_years') ?: 3);
     $makeDate = asGetSetting($db, 'as_doc_qr_make_date');
     $bound    = eg_asdoc_get($db, 'as_doc_quality_record_list');
@@ -1475,8 +1501,19 @@ case 'qr_get':
           'company_name'=>asOwnCompanyName($db),
           'departments'=>$db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
           'items'=>$items, 'candidates'=>$cand,
-          'removed_obsolete'=>$qrRemoved,
+          'removed_obsolete'=>$qrRemoved, 'reprint'=>asQrPendingGet($db),
           'can_edit'=>asCan('settings')]);
+
+case 'qr_status':   // 頁面載入／清單重整時呼叫：同步一覽表（補新表單、移除廢止）並回傳待重新列印項目
+    if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
+    asQrPurgeObsolete($db, null, true);
+    asQrSyncNew($db);
+    jout(['status'=>'success','reprint'=>asQrPendingGet($db)]);
+
+case 'qr_ack':      // 已重新列印 → 清掉待辦
+    if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
+    asSetSetting($db, 'as_doc_qr_reprint', '[]');
+    jout(['status'=>'success']);
 
 case 'qr_save_settings':
     if (!asCan('settings')) jout(['status'=>'error','message'=>'無設定權限']);

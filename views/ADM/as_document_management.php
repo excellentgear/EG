@@ -1654,8 +1654,26 @@ $(function(){
       DOCS = r.data;
       if(!keepPage) curPage = 1; // 編輯/改版等操作後傳 true＝留在原頁；篩選/搜尋則回第一頁
       renderDocs(); renderParentIndicator();
+      qrCheck();
     });
   }
+  /** 品質記錄一覽表有新增／移除表單 → 文件清單上方顯示「需重新列印」提示（列印後才消失） */
+  function qrReprintHtml(list){
+    const add=list.filter(x=>x.t==='add'), rm=list.filter(x=>x.t!=='add');
+    const f=a=>a.slice(0,8).map(x=>esc(x.no)).join('、')+(a.length>8?` 等 ${a.length} 份`:'');
+    return (add.length?`新增表單：${f(add)}　`:'')+(rm.length?`移除（已廢止）：${f(rm)}`:'');
+  }
+  function qrCheck(){
+    $.getJSON(API+'?action=qr_status', r=>{
+      $('#qrReprintBar').remove();
+      if(r.status!=='success' || !(r.reprint||[]).length) return;
+      $('<div id="qrReprintBar" class="alert alert-warning" style="margin:8px 0;"><i class="fa fa-print"></i> '
+        + '<b>品質記錄一覽表內容已變動，需要重新列印。</b> '+qrReprintHtml(r.reprint)
+        + ' <button type="button" class="btn btn-warning btn-xs" id="qrReprintOpen" style="margin-left:8px;">開啟一覽表</button></div>')
+        .insertAfter($('#docTableBody').closest('.x_panel').find('.x_title').first());
+    });
+  }
+  $(document).on('click','#qrReprintOpen',function(){ $('#btnQrOpen').trigger('click'); });
 
   // 「檢視某文件底下表單」狀態指示
   function renderParentIndicator(){
@@ -3013,10 +3031,9 @@ $(function(){
   $('#btnQrOpen').on('click', function(){
     qrLoad(function(){
       $('#qrModal').modal('show');
-      if(QR.removed_obsolete && QR.removed_obsolete.length){
-        $('#qrResult').html('<div class="alert alert-warning">已廢止的表單已自動移出一覽表（'
-          + QR.removed_obsolete.map(x=>esc(x.doc_no)).join('、')
-          + '），<b>需要重新列印品質記錄一覽表</b>。</div>');
+      if(QR.reprint && QR.reprint.length){
+        $('#qrResult').html('<div class="alert alert-warning"><b>一覽表內容已變動，需要重新列印。</b> '
+          + qrReprintHtml(QR.reprint)+'</div>');
       }
     });
   });
@@ -3100,6 +3117,7 @@ $(function(){
     const asDoc = QR.as_doc;
     const title = asDoc ? asDoc.doc_name : '品質記錄一覽表';   // 表頭＝綁定文件的表單名稱，禁寫死
     EGPrintLog.record({source:'as_doc', doc_kind:'form', doc_name:(asDoc?(asDoc.doc_no+' '):'')+title});   // ai-rules/23
+    $.post(API+'?action=qr_ack', {}, ()=>{ $('#qrReprintBar').remove(); $('#qrResult').empty(); }, 'json');   // 已列印＝清掉「需重新列印」
     const mkName = (QR_SIGN.by_date[md]||{}).name || '';
     const apName = (QR_SIGN.approver||{}).name || '';
     const st = nm => (nm && window.EGStamp)
