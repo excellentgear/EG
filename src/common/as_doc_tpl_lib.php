@@ -49,6 +49,9 @@ function adt_ensure_schema(PDO $db): void
             if (!$db->inTransaction() && !$db->query("SHOW COLUMNS FROM as_doc_tpl LIKE 'toc_first'")->fetch()) {
                 $db->exec("ALTER TABLE as_doc_tpl ADD COLUMN toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）' AFTER toc_on");
             }
+            if (!$db->inTransaction() && !$db->query("SHOW COLUMNS FROM as_doc_tpl LIKE 'toc_auto_depth'")->fetch()) {
+                $db->exec("ALTER TABLE as_doc_tpl ADD COLUMN toc_auto_depth TINYINT(1) NOT NULL DEFAULT 2 COMMENT '目錄自動抓「編號＋短標題」的段落當標題：0=不抓，1~3=抓到第幾層' AFTER toc_first");
+            }
             $done = true; return;
         }
     } catch (Throwable $e) { error_log('[adt] ensure_schema: ' . $e->getMessage()); return; }
@@ -61,6 +64,7 @@ function adt_ensure_schema(PDO $db): void
             foot_left VARCHAR(190) NULL COMMENT '頁尾左下字樣；空＝用預設「(本文件不得擅自塗改或影印)」',
             toc_on TINYINT(1) NOT NULL DEFAULT 1 COMMENT '要不要自動產生目錄頁（一階預設要）',
             toc_first TINYINT(1) NOT NULL DEFAULT 0 COMMENT '目錄頁是否算第 1 頁（算的話目錄也印頁首、正文從第 2 頁起）',
+            toc_auto_depth TINYINT(1) NOT NULL DEFAULT 2 COMMENT '目錄自動抓「編號＋短標題」的段落當標題：0=不抓，1~3=抓到第幾層',
             updated_by INT NULL, updated_at DATETIME NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件線上版的版面樣板設定'");
         $done = true;
@@ -83,6 +87,7 @@ function adt_settings(PDO $db, int $docId): array
         'foot_left'     => (string)($row['foot_left'] ?? ''),
         'toc_on'        => isset($row['toc_on']) ? (int)$row['toc_on'] : 1,
         'toc_first'     => isset($row['toc_first']) ? (int)$row['toc_first'] : 0,
+        'toc_auto_depth'=> isset($row['toc_auto_depth']) ? (int)$row['toc_auto_depth'] : 2,
     ];
 }
 
@@ -96,13 +101,14 @@ function adt_settings_save(PDO $db, int $docId, array $in, int $uid): bool
     $foot = array_key_exists('foot_left', $in) ? mb_substr(trim((string)$in['foot_left']), 0, 190) : $cur['foot_left'];
     $toc  = array_key_exists('toc_on', $in)    ? (!empty($in['toc_on']) ? 1 : 0)                   : $cur['toc_on'];
     $tocFirst = array_key_exists('toc_first', $in) ? (!empty($in['toc_first']) ? 1 : 0) : $cur['toc_first'];
+    $tocDepth = array_key_exists('toc_auto_depth', $in) ? max(0, min(3, (int)$in['toc_auto_depth'])) : $cur['toc_auto_depth'];
     try {
-        $st = $db->prepare("INSERT INTO as_doc_tpl (doc_id, issue_dept_id, cover_en, foot_left, toc_on, toc_first, updated_by, updated_at)
-                            VALUES (?,?,?,?,?,?,?,NOW())
+        $st = $db->prepare("INSERT INTO as_doc_tpl (doc_id, issue_dept_id, cover_en, foot_left, toc_on, toc_first, toc_auto_depth, updated_by, updated_at)
+                            VALUES (?,?,?,?,?,?,?,?,NOW())
                             ON DUPLICATE KEY UPDATE issue_dept_id=VALUES(issue_dept_id), cover_en=VALUES(cover_en),
-                                foot_left=VALUES(foot_left), toc_on=VALUES(toc_on), toc_first=VALUES(toc_first),
+                                foot_left=VALUES(foot_left), toc_on=VALUES(toc_on), toc_first=VALUES(toc_first), toc_auto_depth=VALUES(toc_auto_depth),
                                 updated_by=VALUES(updated_by), updated_at=NOW()");
-        $st->execute([$docId, $dept ?: null, $cvEn !== '' ? $cvEn : null, $foot !== '' ? $foot : null, $toc, $tocFirst, $uid ?: null]);
+        $st->execute([$docId, $dept ?: null, $cvEn !== '' ? $cvEn : null, $foot !== '' ? $foot : null, $toc, $tocFirst, $tocDepth, $uid ?: null]);
         return true;
     } catch (Throwable $e) { error_log('[adt] settings_save: ' . $e->getMessage()); return false; }
 }
@@ -605,16 +611,47 @@ function adt_revlog_pages_html(array $ctx): array
     return $pages;
 }
 
+/**
+ * 自動判斷一個段落是不是「大標題」：回傳層級 1～3，不是則 0。
+ * 判準（Word 匯入的手冊都是「編號＋短標題」，條文內容則有句子標點或縮排）：
+ *   1. 標題　　　　→ 第 1 層：整行不超過 30 字、段落沒有左縮排（有縮排的是條列內容）
+ *   1.1 標題　　　→ 第 2 層：不超過 40 字
+ *   1.1.1 標題　　→ 第 3 層：不超過 30 字
+ * 含「，。；：:」這類句子標點的一律不算（那是敘述，例如「1.1.1 公司名稱：超正齒輪…」）。
+ * 判斷不準的，到編輯器把該段落設成「標題 1～4」就一定會進目錄。
+ */
+function adt_toc_auto_level(string $attr, string $txt): int
+{
+    if ($txt === '' || mb_strlen($txt, 'UTF-8') > 40) return 0;
+    if (preg_match('/[，。；：:;,、]/u', $txt)) return 0;
+    if (!preg_match('/^(\d{1,2}(?:\.\d{1,2}){0,2})(\.?)\s*(\S.*)$/u', $txt, $mm)) return 0;
+    $dots = substr_count($mm[1], '.');
+    if ($dots === 0 && $mm[2] !== '.') return 0;                    // 單一數字一定要帶「.」（「2024 年…」之類不算）
+    $lv = $dots + 1;
+    if ($lv === 1 && preg_match('/margin-left:\s*[1-9]/i', $attr)) return 0;   // 有縮排的條列不是大標題
+    if ($lv !== 2 && mb_strlen($txt, 'UTF-8') > 30) return 0;
+    return $lv;
+}
+
 /** 目錄（由正文各頁的標題產生；$pages＝各頁 HTML，$startNo＝正文第一頁的頁碼） */
 function adt_toc_html(array $ctx, array $pages, int $startNo): string
 {
     $items = [];
+    $depth = (int)($ctx['cfg']['toc_auto_depth'] ?? 2);
     foreach ($pages as $i => $html) {
-        if (!preg_match_all('#<h([1-4])[^>]*>(.*?)</h\1>#is', (string)$html, $m, PREG_SET_ORDER)) continue;
+        // 表格裡的段落不是標題；先整段拿掉再掃（自動抓標題與手動設定的標題按出現順序合併）
+        $scan = preg_replace('#<table\b.*?</table>#is', '', (string)$html);
+        if (!preg_match_all('#<h([1-4])[^>]*>(.*?)</h\1>|<p\b([^>]*)>(.*?)</p>#is', (string)$scan, $m, PREG_SET_ORDER)) continue;
         foreach ($m as $one) {
-            $txt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[2])));
-            if ($txt === '') continue;
-            $items[] = ['lv' => (int)$one[1], 'txt' => $txt, 'page' => $startNo + $i];
+            if ($one[1] !== '') {                    // 手動設成「標題 1～4」的，永遠收
+                $txt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[2])));
+                if ($txt !== '') $items[] = ['lv' => (int)$one[1], 'txt' => $txt, 'page' => $startNo + $i];
+                continue;
+            }
+            if ($depth <= 0) continue;
+            $ptxt = trim(preg_replace('/\s+/u', ' ', strip_tags($one[4] ?? '')));
+            $lv = adt_toc_auto_level((string)($one[3] ?? ''), $ptxt);
+            if ($lv > 0 && $lv <= $depth) $items[] = ['lv' => $lv, 'txt' => $ptxt, 'page' => $startNo + $i];
         }
     }
     $h = '<div class="adt-toc"><div class="adt-toc-ttl">目　錄　Index</div>';
