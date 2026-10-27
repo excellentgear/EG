@@ -143,6 +143,7 @@
         <button type="button" class="egf-btn" id="egfResize">套用</button>
         <button type="button" class="egf-btn" id="egfScaleDn" title="把整張圖（圖形、文字、連線）等比縮小 15%，空出四周的位置可以加字；可重複按"><i class="fa fa-search-minus"></i> 縮小全部</button>
         <button type="button" class="egf-btn" id="egfScaleUp" title="把整張圖等比放大 約 18%（縮小的反向）"><i class="fa fa-search-plus"></i> 放大全部</button>
+        <button type="button" class="egf-btn" id="egfCenterAll" title="把整張圖（含底圖、圖形、文字、連線）整組移到畫布正中央；底圖是鎖住的點不到，用這顆置中"><i class="fa fa-arrows"></i> 全部置中</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">圖內文字</span>
         <button type="button" class="egf-btn" id="egfTxtL" title="圖形內文字靠左"><i class="fa fa-align-left"></i></button>
@@ -823,6 +824,35 @@
     stat(k < 1 ? '已把整張圖縮小，四周空出位置可以加字' : '已把整張圖放大');
   }
 
+  /** 整張圖（含鎖住的底圖）整組移到畫布正中央 */
+  function centerAll() {
+    cv.discardActiveObject();
+    var objs = cv.getObjects().filter(function (o) { return o.egRole && o.egRole !== 'handle' && o.egRole !== 'port' && o.egRole !== 'guide'; });
+    if (!objs.length) { stat('畫布是空的'); return; }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    objs.forEach(function (o) {
+      if (o.egRole === 'head') return;
+      var r = o.getBoundingRect(true, true);
+      minX = Math.min(minX, r.left); minY = Math.min(minY, r.top);
+      maxX = Math.max(maxX, r.left + r.width); maxY = Math.max(maxY, r.top + r.height);
+    });
+    var dx = Math.round(LOGW / 2 - (minX + maxX) / 2), dy = Math.round(LOGH / 2 - (minY + maxY) / 2);
+    if (!dx && !dy) { stat('已經在正中央'); return; }
+    objs.forEach(function (o) {
+      if (o.egRole === 'conn') setConnPts(o, connPts(o).map(function (q) { return { x: q.x + dx, y: q.y + dy }; }));
+      else if (o.egRole !== 'head') { o.set({ left: o.left + dx, top: o.top + dy }); o.setCoords(); }
+    });
+    objs.forEach(function (o) { if (o.egRole === 'shape') syncLabel(o); });
+    objs.forEach(function (o) { if (o.egRole === 'conn') syncConn(o); });
+    cv.requestRenderAll();
+    snapshot();
+    stat('已把整張圖移到畫布正中央');
+  }
+
+  /** 這種線要在哪幾端放箭頭 */
+  function connHeadKinds(kind) {
+    if (kind === 'darrow') return ['a', 'b'];
+    if (kind === 'rarrow') return ['a'];
     if (kind === 'arrow')  return ['b'];
     return [];
   }
@@ -2290,6 +2320,9 @@
       if (wr) wr.classList.remove('egf-drop');
     });
     /* Ctrl＋滾輪縮放（跟一般繪圖軟體一樣）。
+        case 'egfScaleDn': scaleAll(0.85); break;
+        case 'egfScaleUp': scaleAll(1 / 0.85); break;
+        case 'egfCenterAll': centerAll(); break;
        刻意要按著 Ctrl：不按的話滾輪要留給畫布捲動，圖一大就只能用捲軸找東西。 */
     var ck = el('egfConnKind');
     if (ck) ck.addEventListener('change', function () {
