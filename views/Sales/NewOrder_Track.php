@@ -2571,7 +2571,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
             'can_target_cfg' => $can_design_qa_target,
             // 作廢（2026-10-12）：can_void_any＝可以作廢任何人的；逐條的 can_void 見上面，
             // 本人作廢自己寫的不需要角色。frozen 對具 can_void_any 的人不生效（見 ate_q_void）。
-            'can_void_any' => $can_design_qa_void,
+            'can_void_any' => $can_design_qa_void, 'is_super' => (bool)$OT_IS_ADMIN_ANY,
             'can_reply' => ($kind === 'process') ? (bool)$proc_reply : true,
             'can_ask' => ($kind === 'process') ? (bool)$proc_ask : true, 'can_ps' => ($kind === 'process') ? (bool)$proc_ps : true,
             'can_resolve' => ($kind === 'process') ? (bool)($can_design_qa_resolve && $proc_reply) : $can_design_qa_resolve, 'can_oda_confirm' => (bool)($can_oda_confirm && ($OT_IS_ADMIN_ANY || ot_own_design_order($ord['ate'] ?? 0))),
@@ -2875,6 +2875,31 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply_edit') {
         if (empty($rr['created_by']) || (int)$rr['created_by'] !== (int)$id) throw new Exception('只能修改自己建立的回覆');
         $pdo->prepare("UPDATE eng_log_reply SET content=? WHERE id=?")->execute([$c, $rid]);
         ptl_rebuild_steps($pdo, (int)$rr['item_id']);   // 連結的個人工作紀錄進度文字同步
+        echo json_encode(['success' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 刪除「MM/DD ○○ 已處理完成」這種按「已處理」時自動補的紀錄訊息（2026-10-27）。
+// 只限超級管理員；只允許刪格式符合的自動訊息（不是任意回覆）、無附件；刪除不改變問題本身的狀態。
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply_autodel') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$OT_IS_ADMIN_ANY) throw new Exception('只有超級管理員可以刪除');
+        $rid = (int)($_POST['reply_id'] ?? 0);
+        $st = $pdo->prepare("SELECT id, item_id, content FROM eng_log_reply WHERE id=?");
+        $st->execute([$rid]);
+        $rr = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$rr) throw new Exception('查無此回覆，請重新整理');
+        if (!preg_match('~^\d{1,2}/\d{1,2} .*已處理完成$~u', trim((string)$rr['content']))) throw new Exception('只能刪除「已處理完成」的自動紀錄訊息');
+        $fc = $pdo->prepare("SELECT COUNT(*) FROM eng_log_file WHERE owner_type='reply' AND owner_id=?");
+        $fc->execute([$rid]);
+        if ((int)$fc->fetchColumn() > 0) throw new Exception('這則訊息有附件，不可刪除');
+        $pdo->prepare("DELETE FROM eng_log_reply WHERE id=?")->execute([$rid]);
+        ptl_rebuild_steps($pdo, (int)$rr['item_id']);
         echo json_encode(['success' => true]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -9932,6 +9957,7 @@ foreach($dCounts as $c) {
                 ATE_Q.frozen = !!res.frozen;
                 ATE_Q.curUser = res.cur_user || null;
                 ATE_Q.canResolve = !!res.can_resolve;
+                ATE_Q.isSuper = !!res.is_super;
                 ATE_Q.canReply = (res.can_reply !== false);
                 ATE_Q.canAsk = (res.can_ask !== false); ATE_Q.canPs = (res.can_ps !== false);
                 ATE_Q.canOdaConfirm = !!res.can_oda_confirm;
@@ -10206,6 +10232,19 @@ foreach($dCounts as $c) {
             try { $b[0].scrollIntoView({ block: 'nearest' }); } catch (e) {}
             $t.focus();
         }
+        // 超級管理員可刪除按「已處理」自動補的「MM/DD ○○ 已處理完成」訊息（規則同後端 ate_q_reply_autodel）
+        function ateQAutoDelBtn(r) {
+            if (!ATE_Q.isSuper || !/^\d{1,2}\/\d{1,2} .*已處理完成$/.test($.trim(r.content || ''))) return '';
+            if (r.files && r.files.length) return '';
+            return '<div><button type="button" class="ate-q-btn" onclick="ateQAutoDel(' + r.id + ')"><i class="fa fa-trash"></i> 刪除此訊息</button></div>';
+        }
+        function ateQAutoDel(rid) {
+            if (!confirm('確定刪除這則「已處理完成」訊息？\n（問題的已處理狀態不會改變）')) return;
+            $.post('', { action: 'ate_q_reply_autodel', reply_id: rid }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '刪除失敗'); return; }
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
+            }, 'json').fail(function() { showToast('刪除失敗，請重試'); });
+        }
         // 自己寫的回覆（製程中紀錄）在「還沒已處理」之前可修改內容
         function ateQReplyEditHtml(it, r) {
             if (ATE_Q.kind !== 'process' || !r.can_edit || it.voided_at || it.status === 'resolved' || it.status === 'dropped') return '';
@@ -10296,7 +10335,7 @@ foreach($dCounts as $c) {
                 var when = r.replied_on ? (typeof egFmtDate === 'function' ? egFmtDate(r.replied_on) : r.replied_on) : '';
                 var chLabel = (r.channel && ATE_Q.channels && ATE_Q.channels[r.channel]) ? ATE_Q.channels[r.channel] : '';
                 repliesHtml += '<div class="ate-q-reply' + (inExt ? ' ate-q-reply-ext' : '') + '"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
-                    (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + rtTag + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div>' + ateQReplyEditHtml(it, r) + ateQAskReplyBtn(it, r) + (ATE_Q.kind === 'process' && r.can_edit ? ateQReplyFilesEdit(r) : ateQFilesView(r.files)) + '</div>';
+                    (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + rtTag + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div>' + ateQAutoDelBtn(r) + ateQReplyEditHtml(it, r) + ateQAskReplyBtn(it, r) + (ATE_Q.kind === 'process' && r.can_edit ? ateQReplyFilesEdit(r) : ateQFilesView(r.files)) + '</div>';
             });
             // 設計備註已凍結時（kind==='note' && ATE_Q.frozen）唯讀：不給回覆/標記已處理，
             // 也不渲染回覆框（鐵律8，後端已同規則再擋一次，這裡只是避免使用者點了才被打臉）。
