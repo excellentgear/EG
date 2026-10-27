@@ -260,6 +260,22 @@ function doPrint(){
    一頁，列印多兩張）。這裡在列印當下依「這一頁實際放得下多少」把超出的區塊往後搬到新的一頁，
    並重編頁首的「頁次 N / 總頁數」，列印結果就不再依賴存檔當時有沒有分好頁。
    只搬頂層區塊；單一區塊（一張長表格）本身比一頁高就不搬，交給列印引擎依 page-break 規則跨頁。 */
+/* 比頁寬還寬的表格（Word 匯入的組織圖／流程表，欄寬以 px 固定）：
+   只要有一個元素超出頁寬，Chrome 列印就會把「整份文件」等比縮小去遷就它——結果每一頁都縮水，
+   公版大框線停在離紙底很遠的地方、頁數也變多（2026-10-27 實測：頁高只剩 223mm，應為 263mm）。
+   所以列印前把超寬的表格個別縮進頁寬（只縮那張表，其他頁面不動）。 */
+function adtFitWide(){
+    var pages = document.querySelectorAll('.adt-page > .adt-body');
+    Array.prototype.forEach.call(pages, function(b){
+        var bw = b.clientWidth; if (!(bw > 0)) return;
+        Array.prototype.forEach.call(b.querySelectorAll('table'), function(t){
+            if (t.parentElement && t.parentElement.closest('table')) return;      // 巢狀表格跟著外層一起縮
+            t.style.zoom = '';
+            var w = t.getBoundingClientRect().width;
+            if (w > bw + 1) t.style.zoom = String(Math.max(0.3, bw / w));
+        });
+    });
+}
 var ADT_PAGE_H_MM = <?= (float)($printContentH ?? 0) ?>;
 function adtReflow(){
     var mmPx = 96 / 25.4, safe = 2 * mmPx;
@@ -309,14 +325,14 @@ function adtReflow(){
 // 簽章要**先畫**再等圖片：掃描實體章本身也是圖，先畫才會被下面那一輪等到。
 function startAutoPrint(){
     // 頁首太長的字先縮到放得下再印（縮放要在量得到版面之後、print() 之前）
-    try { adtReflow(); } catch (e) {}
+    try { adtFitWide(); adtReflow(); } catch (e) {}
     if (window.EGDocFit) EGDocFit.run(document);
     var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
     function go(){
         if (__printed) return;
         __printed = true;
-        setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250);
+        setTimeout(function(){ try { adtFitWide(); adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); doPrint(); }, 250);
     }
     if (!left) { go(); return; }
     imgs.forEach(function(i){
@@ -332,10 +348,10 @@ function startAutoPrint(){
 /* 排版檢查：量每一張 .adt-page 排完之後有沒有比一張紙高（＝印出來會被切到下一張，框線沒到底），
    結果用 postMessage 交給編輯器（編輯器用隱藏 iframe 載這一頁）。表格比頁寬寬也一併回報（那是最常見的原因）。 */
 function startCheck(){
-    try { adtReflow(); } catch (e) {}
+    try { adtFitWide(); adtReflow(); } catch (e) {}
     if (window.EGDocFit) EGDocFit.run(document);
     setTimeout(function(){
-        try { adtReflow(); } catch (e) {}
+        try { adtFitWide(); adtReflow(); } catch (e) {}
         var limit = <?= (float)$paperWH[1] ?> * 96 / 25.4 + 4, out = [];
         var pages = document.querySelectorAll('.adt-page');
         Array.prototype.forEach.call(pages, function(p, i){
@@ -348,7 +364,11 @@ function startCheck(){
             var b = p.querySelector(':scope > .adt-body'), bw = b ? b.clientWidth : 0, wide = 0;
             if (b) Array.prototype.forEach.call(b.querySelectorAll('table'), function(t){ if (t.getBoundingClientRect().width > bw + 2) wide++; });
             var txt = ((b || p).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 30);
-            out.push({ idx: i + 1, page: no, mm: Math.round(h / 3.7795), wide: wide, text: txt });
+            // 編輯器用這個去找到那個表格／區塊（點頁次自動跳過去）：取最高的那張表格（沒有表格就取內文開頭）的文字前 40 字
+            var big = null, bh = 0;
+            if (b) Array.prototype.forEach.call(b.querySelectorAll('table'), function(t){ var th = t.getBoundingClientRect().height; if (!(t.parentElement && t.parentElement.closest('table')) && th > bh) { bh = th; big = t; } });
+            var key = ((big || b || p).textContent || '').replace(/\s+/g, '').slice(0, 40);
+            out.push({ idx: i + 1, page: no, mm: Math.round(h / 3.7795), wide: wide, text: txt, key: key });
         });
         try { parent.postMessage({ egDocCheck: true, total: pages.length, bad: out }, location.origin); } catch (e) {}
     }, 1200);
@@ -365,7 +385,7 @@ function fitSpread(){
 }
 window.addEventListener('resize', fitSpread);
 function startPreview(){
-    try { adtReflow(); } catch (e) {}
+    try { adtFitWide(); adtReflow(); } catch (e) {}
     if (window.EGDocFit) EGDocFit.run(document);
     fitSpread();
     setTimeout(function(){ try { adtReflow(); } catch (e) {} if (window.EGDocFit) EGDocFit.run(document); fitSpread(); }, 400);
