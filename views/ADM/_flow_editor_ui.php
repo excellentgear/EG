@@ -129,6 +129,14 @@
         <select class="egf-sel" id="egfFontSize" data-eg-skip>
           <option>10</option><option>11</option><option selected>12</option><option>14</option><option>16</option><option>18</option>
         </select>
+        <span class="egf-lab">中文</span>
+        <select class="egf-sel" id="egfFontZh" data-eg-skip title="選著圖形或文字時改這裡＝改它的中文字體（沒選東西＝之後新加的字用這個）；漢字會用這個字體，英數字用右邊的英文字體">
+          <option value="微軟正黑體" selected>微軟正黑體</option><option value="標楷體">標楷體</option><option value="新細明體">新細明體</option><option value="細明體">細明體</option><option value="微軟雅黑">微軟雅黑</option><option value="黑體">黑體</option>
+        </select>
+        <span class="egf-lab">英文</span>
+        <select class="egf-sel" id="egfFontEn" data-eg-skip title="英文、數字的字體（中文字體不含這些字時才會用到中文字體的英數）">
+          <option value="Arial" selected>Arial</option><option value="Times New Roman">Times New Roman</option><option value="Calibri">Calibri</option><option value="Verdana">Verdana</option><option value="Courier New">Courier New</option>
+        </select>
         <span class="egf-sep"></span>
         <button type="button" class="egf-btn" id="egfUndo" title="復原 (Ctrl+Z)"><i class="fa fa-undo"></i></button>
         <button type="button" class="egf-btn" id="egfRedo" title="重做 (Ctrl+Y)"><i class="fa fa-repeat"></i></button>
@@ -280,6 +288,8 @@
   var GRID = 10;
   // 用既有圖片當底圖時，畫布上限（等比例縮）：太大打開就要一直捲才看得到全貌
   var EGF_BG_MAX_W = 1400, EGF_BG_MAX_H = 1000;
+  var fontZh = '微軟正黑體', fontEn = 'Arial';
+  function fontStack() { return '"' + fontEn + '","' + fontZh + '",sans-serif'; }
 
   function el(id) { return d.getElementById(id); }
   function stat(msg) { var s = el('egfStat'); if (s) s.textContent = msg || '　'; }
@@ -351,7 +361,7 @@
       left: shape.left + shape.width / 2, top: shape.top + shape.height / 2,
       originX: 'center', originY: 'center', textAlign: 'center',
       width: Math.max(24, shape.width - 12),
-      fontSize: fontSize, fill: '#333333', fontFamily: '"微軟正黑體","Microsoft JhengHei",sans-serif',
+      fontSize: fontSize, fill: '#333333', fontFamily: fontStack(),
       selectable: false, evented: false, splitByGrapheme: true
     });
     lb.egRole = 'label'; lb.egId = shape.egId;
@@ -387,7 +397,7 @@
   function addFreeText(x, y) {
     var t = new fabric.Textbox('文字', {
       left: snapv(x), top: snapv(y), width: 150, fontSize: fontSize, fill: '#333333',
-      fontFamily: '"微軟正黑體","Microsoft JhengHei",sans-serif', objectCaching: false
+      fontFamily: fontStack(), objectCaching: false
     });
     t.egRole = 'text';
     cv.add(t); cv.setActiveObject(t); cv.requestRenderAll();
@@ -2480,6 +2490,20 @@
     onSaveCb = opt.onSave || null;
     onPickAsRefCb = opt.onPickAsRef || null;
     onAsRefCheckCb = opt.onAsRefCheck || null;
+    // 字體：中文／英文各一個下拉，組成 font-family 堆疊（英文字體在前：英數字用英文字體，漢字找不到字形時退到中文字體）
+    function applyFontPick() {
+      fontZh = el('egfFontZh').value; fontEn = el('egfFontEn').value;
+      var fam = fontStack();
+      cv.getActiveObjects().forEach(function (o) {
+        if (o.egRole === 'label' || o.egRole === 'text') o.set('fontFamily', fam);
+        if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) lb.set('fontFamily', fam); }
+      });
+      cv.getActiveObjects().forEach(function (o) { if (o.egRole === 'shape') syncLabel(o); });
+      cv.requestRenderAll();
+      snapshot();
+    }
+    el('egfFontZh').addEventListener('change', applyFontPick);
+    el('egfFontEn').addEventListener('change', applyFontPick);
     window.__egfAsCur = null;
     el('egfMask').classList.add('open');
     if (!cv) { build(); bind(); }
