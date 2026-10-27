@@ -3187,7 +3187,7 @@ function lstTarget(level, n) { return level === 1 ? String.fromCharCode(96 + n) 
 var LST_CHAPTER = new RegExp('^' + LST_WS + '*\\d{1,2}\\.' + LST_WS + '+\\S');
 function lstDepth(t) { var m = LST_CLAUSE.exec(t); return m ? m[0].trim().split('.').length : 0; }
 function lstPx(el) { return parseFloat(getComputedStyle(el).fontSize) || 16; }
-function lstR2(v) { return Math.round(v * 100) / 100; }
+function lstR2(v) { return Math.round(v * 10) / 10; }      // 一位小數：清洗白名單只收一位小數，多了存檔會被整個濾掉
 /** 標題的「標題文字起點」＝左縮 ＋ 內縮（em，以標題自己的字級為準）；章標題（1. 2. 3.）固定 1.1em */
 function lstTitleStart(el, depth) {
     if (depth === 1) return 1.1;
@@ -3213,7 +3213,7 @@ function lstScan() {
             ts = lstTitleStart(b.el, depth); hPx = lstPx(b.el);
             // 章標題（1. 2. 3.）是最上層，靠最左；底下的條文（3.1）才往內縮
             // 條文標題上殘留的大塊右邊界（Word 匯入）會讓標題擠成窄窄一欄、莫名折行（例：6.2.2 在「組／織」之間斷開）
-            if (!isChap && parseFloat(b.el.style.marginRight) > 0) layout.push({ el: b.el, page: b.page, onlyRight: true, kind: '標題右邊界', ctx: tt.slice(0, 16) });
+            if (!isChap && b.el.style.marginRight) layout.push({ el: b.el, page: b.page, onlyRight: true, kind: '標題右邊界', ctx: tt.slice(0, 16) });
             if (isChap) layout.push({ el: b.el, page: b.page, ml: 0, pl: 1.1, ti: -1.1, kind: '章標題', ctx: tt.slice(0, 16) });
             return;
         }
@@ -3273,7 +3273,8 @@ function lstApplyLayout(x) {
     var st = x.el.style;
     if (x.onlyRight) { st.marginRight = ''; return; }
     st.marginLeft = x.ml ? x.ml + 'em' : ''; st.marginRight = '';
-    if (x.pl) { st.paddingLeft = x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.paddingLeft = ''; st.textIndent = ''; }
+    // padding-left 單獨寫不在白名單，要用 padding 簡寫
+    if (x.pl) { st.padding = '0em 0em 0em ' + x.pl + 'em'; st.textIndent = x.ti + 'em'; } else { st.padding = ''; st.textIndent = ''; }
 }
 function lstShow(rows) {
     var old = document.getElementById('lstDlg'); if (old) old.remove();
