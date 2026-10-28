@@ -907,6 +907,7 @@ switch ($action) {
         try {
             $st = $db->prepare("
                 SELECT bi.bom_sn, pn.ProcessName, bi.outsource_date, bi.qc_completed,
+                       bi.processing_state, bi.return_date, bi.QC_check_date, bi.qc_completed_at,
                        (bi.bom_sn = (
                            SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = bi.bom AND bi2.processing_state != 'skip'
                              AND (bi2.outsource_date IS NOT NULL OR bi2.QC_check_date IS NOT NULL)
@@ -924,6 +925,16 @@ switch ($action) {
                 elseif (!empty($r['outsource_date'])) $r['step_status'] = 'active';
                 else $r['step_status'] = 'pending';
                 $r['is_current'] = !empty($r['is_current']);
+                // 狀態文字與轉狀態日期：判定與BOM總覽一致(Q且qc_completed=1視為待移轉P)
+                $ps = (string)$r['processing_state'];
+                $eff = ($ps === 'Q' && !empty($r['qc_completed'])) ? 'P' : $ps;
+                $stLabel = ['N' => '待發包', 'ing' => '加工中', 'Q' => 'QC待驗', 'P' => '待移轉', 'E' => '已移轉'][$eff] ?? '';
+                $stDate = '';
+                if ($eff === 'P') $stDate = $r['QC_check_date'] ?: $r['qc_completed_at'];
+                elseif ($eff === 'Q' || $eff === 'E') $stDate = $r['return_date'];
+                elseif ($eff === 'ing') $stDate = $r['outsource_date'];
+                $r['state_label'] = $stLabel;
+                $r['state_date'] = $stDate ? date('n/j', strtotime(str_replace('/', '-', (string)$stDate))) : '';
                 $r['process_name'] = $r['ProcessName'] ?: '（未知製程）';
             }
             unset($r);

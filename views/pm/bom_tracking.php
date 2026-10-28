@@ -580,11 +580,17 @@ function renderProcessChip(step) {
     var cls = step.step_status === 'done' ? 'done' : (step.step_status === 'active' ? 'active' : 'pending');
     var icon = step.step_status === 'done' ? 'fa-check-circle' : (step.step_status === 'active' ? 'fa-caret-right' : 'fa-circle-o');
     var label = step.process_name + (step.is_current ? '（目前）' : '');
+    // 已進入流程的製程標註狀態與轉狀態日期(例：QC待驗 10/19)，與BOM總覽一致
+    if (step.state_label && step.step_status !== 'pending') label += ' ' + step.state_label + (step.state_date ? ' ' + step.state_date : '');
     var $chip = $('<span class="process-chip ' + cls + (step.is_current ? ' is-current' : '') + '">').append($('<i class="fa ' + icon + '">')).append(document.createTextNode(' ' + label));
     return $chip;
 }
-function loadProcessChain(bom, $cell) {
+function loadProcessChain(bom, $cell, $procTd) {
     apiGet('get_bom_process_chain', { bom: bom }).done(function (res) {
+        if ($procTd && res.success) {
+            var cur = (res.data || []).filter(function (s) { return s.is_current && s.state_label; })[0];
+            if (cur) $procTd.append($('<div style="font-size:11px;color:#b45f06;font-weight:700;">').text(cur.state_label + (cur.state_date ? ' ' + cur.state_date : '')));
+        }
         $cell.empty();
         if (!res.success || !res.data.length) { $cell.append($('<span class="text-muted" style="font-size:12px;">').text('尚無製程資料')); return; }
         res.data.forEach(function (s, i) {
@@ -624,7 +630,8 @@ function renderRows(rows) {
         var $dueTd = $('<td>').text(r.Delivery_date || '無交期');
         if (r.order_no) $dueTd.append($('<div style="font-size:11px;color:#888;">').text('單號：' + r.order_no));
         tr.append($dueTd);
-        tr.append($('<td>').text(fmtProcess(r, '—')));
+        var $procTd = $('<td>').text(fmtProcess(r, '—'));
+        tr.append($procTd);
         tr.append($('<td>').text(progress));
         tr.append($('<td>').text(statusText));
         var opTd = $('<td>');
@@ -643,7 +650,7 @@ function renderRows(rows) {
             var $cell = $('<td>').attr('colspan', visibleCols).append($('<span class="text-muted" style="font-size:12px;">').append($('<i class="fa fa-spinner fa-spin">')).append(' 載入製程中...'));
             $sub.append($cell);
             $tb.append($sub);
-            loadProcessChain(r.bom, $cell);
+            loadProcessChain(r.bom, $cell, r.processing_state == 1 ? null : $procTd);
         }
     });
 }
