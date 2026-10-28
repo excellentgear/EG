@@ -3558,6 +3558,80 @@ function get_state_badge($state)
             white-space: pre-line;
         }
 
+        /* ===== V2 新版面 ===== */
+        #v2LegacyBoard { display: none !important; }
+        #v2App { clear: both; display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; }
+        #v2Side { flex: 0 0 250px; background: #fff; border: 1px solid #e6dccf; border-radius: 6px; padding: 6px 0;
+                  position: sticky; top: 8px; max-height: calc(100vh - 110px); overflow-y: auto; }
+        #v2Main { flex: 1 1 auto; min-width: 0; }
+        .v2-side-type { padding: 10px 14px 4px; font-size: 12px; font-weight: bold; color: #9a7b5a; letter-spacing: 1px; border-top: 1px solid #f1ebe3; }
+        .v2-side-item { display: flex; align-items: center; gap: 8px; padding: 9px 14px; cursor: pointer; font-size: 14px; color: #3b2f25; line-height: 18px; }
+        .v2-side-item:hover { background: #fdf3e6; }
+        .v2-side-item.on { background: #f0a24b; color: #fff; }
+        .v2-side-item.on .v2-sbom { color: #fff3e3; }
+        .v2-side-item.v2-u { font-weight: bold; }
+        .v2-sn { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .v2-sbom { display: block; font-size: 11px; color: #2e9e5b; white-space: nowrap; line-height: 14px; }
+        #quickReportModal input[name="is_finished"] { position: static; margin: 0 6px 0 0 !important; }
+        #quickReportModal .checkbox label { padding-left: 0; display: inline-flex; align-items: center; font-size: 15px; }
+        .v2-cnt { min-width: 26px; text-align: center; background: #efe6da; color: #6b4f33; border-radius: 10px; padding: 1px 7px; font-size: 12px; line-height: 18px; }
+        .v2-cnt.hot { background: #dd5138; color: #fff; }
+        .v2-side-item.on .v2-cnt { background: #fff; color: #c0651a; }
+        .v2-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: 0 0 10px; }
+        .v2-dot.run { background: #2e9e5b; } .v2-dot.wait { background: #f0a24b; } .v2-dot.idle { background: #c8bfb4; } .v2-dot.abn { background: #dd5138; }
+        .v2-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fff; border: 1px solid #e6dccf;
+                   border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
+        .v2-head h3 { margin: 0; font-size: 20px; color: #3b2f25; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .v2-head h3 small { font-size: 13px; color: #8a7764; }
+        .v2-head .btn { padding: 8px 14px; font-size: 14px; }
+        .v2-st { font-size: 12px; padding: 2px 8px; border-radius: 10px; line-height: 16px; }
+        .v2-st.run { background: #dff2e6; color: #1f7a45; } .v2-st.wait { background: #fbe7cf; color: #8a4f12; }
+        .v2-st.idle { background: #eee8e0; color: #6b5a49; } .v2-st.abn { background: #f6d5ce; color: #a2321f; }
+        .v2-empty { background: #fff; border: 1px dashed #ddd0bf; border-radius: 6px; padding: 50px; text-align: center; color: #a08a74; font-size: 16px; }
+        .v2-empty .fa { font-size: 36px; }
+        .v2-card { display: flex; align-items: stretch; gap: 10px; background: #fff; border: 1px solid #e6dccf; border-left: 6px solid #e6dccf;
+                   border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+        .v2-card:hover { box-shadow: 0 2px 8px rgba(120, 80, 30, .15); }
+        .v2-card.urg-U { border-left-color: #f0a24b; } .v2-card.urg-E { border-left-color: #dd5138; }
+        .v2-card.now { background: #f4fbf6; border-color: #9fd3b2; border-left-color: #2e9e5b; }
+        .v2-c-left { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 30px; }
+        .v2-grip { color: #b9a58f; cursor: grab; font-size: 16px; padding: 2px; }
+        .v2-grip.off { visibility: hidden; }
+        .v2-no { font-weight: bold; color: #9a7b5a; font-size: 15px; }
+        .v2-card.now .v2-no { color: #2e9e5b; }
+        .v2-c-body { flex: 1 1 auto; min-width: 0; }
+        .v2-c-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .v2-bom { font-size: 17px; font-weight: bold; color: #3b2f25; }
+        .v2-bom:hover { text-decoration: underline; }
+        .v2-proc { font-size: 14px; color: #6b4f33; background: #f6efe6; padding: 1px 8px; border-radius: 4px; line-height: 20px; }
+        .v2-tag { font-size: 12px; padding: 1px 7px; border-radius: 10px; line-height: 18px; background: #efe6da; color: #6b4f33; }
+        .v2-tag.e { background: #dd5138; color: #fff; } .v2-tag.u { background: #f0a24b; color: #fff; }
+        .v2-tag.run { background: #2e9e5b; color: #fff; } .v2-tag.ok { background: #dff2e6; color: #1f7a45; }
+        .v2-tag.sp { background: #e8dcf0; color: #5b3a76; } .v2-tag.mc { background: #3b2f25; color: #fff; }
+        .v2-tag.mod { background: #fbe7cf; color: #8a4f12; }
+        .v2-c-mid { margin-top: 4px; font-size: 14px; color: #3b2f25; }
+        .v2-c-mid .muted { color: #8a7764; font-size: 13px; }
+        .v2-c-note { margin-top: 4px; font-size: 12px; color: #8a4f12; background: #fdf6ec; border-radius: 4px; padding: 3px 8px; }
+        .v2-prog { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #6b5a49; }
+        .v2-bar { flex: 0 0 160px; height: 8px; background: #eee5da; border-radius: 4px; overflow: hidden; }
+        .v2-bar i { display: block; height: 100%; background: #2e9e5b; }
+        .v2-c-act { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 6px; flex: 0 0 auto; }
+        .v2-c-act .v2-rep { padding: 10px 22px; font-size: 16px; font-weight: bold; }
+        .v2-mini { display: flex; gap: 4px; }
+        .v2-mini .btn { padding: 4px 9px; }
+        .v2-assign { display: flex; gap: 4px; }
+        .v2-assign select { width: 150px; height: 34px; }
+        /* 報工視窗 */
+        .v2-who { background: #fdf6ec; border: 1px solid #f0d9b8; border-radius: 6px; padding: 10px 10px 0; margin-bottom: 6px; }
+        .v2-who label { font-size: 13px; margin-bottom: 3px; color: #3b2f25; }
+        .v2-hint { font-size: 11px; color: #8a7764; margin-top: 3px; line-height: 15px; }
+        .v2-chips { margin-top: 4px; }
+        .v2-chip { display: inline-block; padding: 2px 9px; margin-right: 4px; border: 1px solid #e0c9a8; border-radius: 10px; font-size: 12px;
+                   cursor: pointer; color: #8a4f12; line-height: 18px; background: #fff; }
+        .v2-chip.on { background: #f0a24b; color: #fff; border-color: #f0a24b; }
+        #v2SetupFields .row { background: #f7f3ee; border-radius: 6px; margin: 0 0 6px; padding-top: 8px; }
+        @media (max-width: 991px) { #v2App { flex-direction: column; } #v2Side { position: static; flex: none; width: 100%; max-height: 260px; } }
+
         /* ===== V2 簡化操作：工具列 / 報工視窗 ===== */
         .v2-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; }
         .v2-toolbar .btn { padding:8px 14px; font-size:14px; margin:0; }
@@ -3669,7 +3743,13 @@ function get_state_badge($state)
                     <?php endif; ?>
 
                     <div id="dashboard-view" style="display:none;"></div>
-                    <div class="row">
+                    <!-- ===== V2 新介面：左側機台、右側工作清單（資料取自下方隱藏的原看板） ===== -->
+                    <div id="v2App">
+                        <aside id="v2Side"></aside>
+                        <section id="v2Main"><div class="v2-empty"><i class="fa fa-spinner fa-spin"></i> 載入中…</div></section>
+                    </div>
+                    <!-- 原看板：保留在頁面上當資料來源與既有功能使用，畫面不顯示 -->
+                    <div class="row" id="v2LegacyBoard">
 
                         <div class="col-md-12 col-sm-12 col-xs-12">
                             <div class="x_panel">
@@ -4253,58 +4333,62 @@ function get_state_badge($state)
                                             </div>
                                         </div>
 
-                                        <!-- Row 2: 日期、機台、人員 (緊湊排列) -->
-                                        <div class="row" style="background-color: #f7f7f7; padding-top: 5px; margin-bottom: 5px; border-radius: 4px;">
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" style="margin-bottom: 5px;">
-                                                <label class="control-label" style="margin-bottom: 2px; font-size: 12px;">回報日期 <span class="text-danger">*</span></label>
-                                                <input type="date" class="form-control input-sm" name="report_date" value="<?= date('Y-m-d') ?>" readonly>
-                                            </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" style="margin-bottom: 5px;">
-                                                <label class="control-label" style="margin-bottom: 2px; font-size: 12px;">機台 <span class="text-danger">*</span></label>
-                                                <select class="form-control input-sm" id="modal_machine_id" name="machine_id" required></select>
-                                            </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group user-select-group" id="div_setup_user" style="margin-bottom: 5px;">
-                                                <label class="control-label" style="margin-bottom: 2px; font-size: 12px;">架機人員</label>
-                                                <select class="form-control input-sm" name="setup_user_id" id="modal_setup_user_id">
+                                        <!-- V2：誰報工、哪一天、幾點到幾點 -->
+                                        <div class="v2-who">
+                                            <div class="row">
+                                                <div class="col-sm-5 form-group user-select-group" id="div_production_user">
+                                                    <label class="control-label">報工人員（生產人員） <span class="text-danger">*</span></label>
+                                                    <select class="form-control input-sm" name="production_user_id" id="modal_production_user_id">
                                                     <option value="">-- 選擇 --</option>
                                                     <?php foreach ($user_list as $u): ?>
                                                         <option value="<?= $u['id'] ?>"><?= htmlspecialchars($u['dept_name'] . ' ' . $u['pos_name'] . ' ' . $u['user_cname']) ?></option>
                                                     <?php endforeach; ?>
                                                 </select>
+                                                    <div class="v2-hint">共用帳號請選「實際做的人」，下次會自動帶入上次選的人</div>
+                                                </div>
+                                                <div class="col-sm-3 form-group">
+                                                    <label class="control-label">機台 <span class="text-danger">*</span></label>
+                                                    <select class="form-control input-sm" id="modal_machine_id" name="machine_id" required></select>
+                                                </div>
+                                                <div class="col-sm-4 form-group">
+                                                    <label class="control-label">報工日期 <span class="text-danger">*</span></label>
+                                                    <input type="date" class="form-control input-sm" name="report_date" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>">
+                                                    <div class="v2-chips"><span class="v2-chip" data-off="0">今天</span><span class="v2-chip" data-off="1">昨天</span><span class="v2-chip" data-off="2">前天</span><span class="v2-chip" data-off="3">3天前</span></div>
+                                                </div>
                                             </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group user-select-group" id="div_production_user" style="margin-bottom: 5px;">
-                                                <label class="control-label" style="margin-bottom: 2px; font-size: 12px;">生產人員</label>
-                                                <select class="form-control input-sm" name="production_user_id" id="modal_production_user_id">
+                                            <div class="row time-input-group">
+                                                <div class="col-sm-4 form-group">
+                                                    <label class="control-label">生產開始</label>
+                                                    <input type="text" class="form-control input-sm datetime-picker" name="production_start_time" id="modal_production_start_time" autocomplete="off" disabled>
+                                                </div>
+                                                <div class="col-sm-4 form-group">
+                                                    <label class="control-label">生產結束 <small class="text-muted">（還沒做完可空白）</small></label>
+                                                    <input type="text" class="form-control input-sm datetime-picker" name="production_end_time" id="modal_production_end_time" autocomplete="off" disabled>
+                                                </div>
+                                                <div class="col-sm-4"><div class="v2-hint" style="margin-top:22px;">選好人員會自動帶入該日 08:00～17:00，後補報工直接改日期與時間即可</div></div>
+                                            </div>
+                                        </div>
+                                        <div class="v2-more-toggle"><a href="#v2SetupFields" data-toggle="collapse" aria-expanded="false"><i class="fa fa-wrench"></i> 有架機？點這裡填架機人員與時間</a></div>
+                                        <div id="v2SetupFields" class="collapse">
+                                            <div class="row time-input-group">
+                                                <div class="col-sm-4 form-group user-select-group" id="div_setup_user">
+                                                    <label class="control-label">架機人員</label>
+                                                    <select class="form-control input-sm" name="setup_user_id" id="modal_setup_user_id">
                                                     <option value="">-- 選擇 --</option>
                                                     <?php foreach ($user_list as $u): ?>
                                                         <option value="<?= $u['id'] ?>"><?= htmlspecialchars($u['dept_name'] . ' ' . $u['pos_name'] . ' ' . $u['user_cname']) ?></option>
                                                     <?php endforeach; ?>
                                                 </select>
+                                                </div>
+                                                <div class="col-sm-4 form-group" id="div_setup_start">
+                                                    <label class="control-label">架機開始</label>
+                                                    <input type="text" class="form-control input-sm datetime-picker" name="setup_start_time" id="modal_setup_start_time" autocomplete="off" disabled>
+                                                </div>
+                                                <div class="col-sm-4 form-group" id="div_setup_end">
+                                                    <label class="control-label">架機結束</label>
+                                                    <input type="text" class="form-control input-sm datetime-picker" name="setup_end_time" id="modal_setup_end_time" autocomplete="off" disabled>
+                                                </div>
                                             </div>
-                                        </div>
-
-                                        <div class="v2-more-toggle"><a href="#v2TimeFields" data-toggle="collapse" aria-expanded="false"><i class="fa fa-clock-o"></i> 架機／生產時間（需要時再展開）</a></div>
-                                        <div id="v2TimeFields" class="collapse">
-                                        <!-- Row 3: 時間 (緊湊) -->
-                                        <div class="row time-input-group">
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" id="div_setup_start" style="margin-bottom: 5px;">
-                                                <label style="font-size: 11px; margin-bottom: 0;">架機開始</label>
-                                                <input type="text" class="form-control input-sm datetime-picker" name="setup_start_time" id="modal_setup_start_time" style="font-size: 11px;" autocomplete="off" disabled>
-                                            </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" id="div_setup_end" style="margin-bottom: 5px;">
-                                                <label style="font-size: 11px; margin-bottom: 0;">架機結束</label>
-                                                <input type="text" class="form-control input-sm datetime-picker" name="setup_end_time" id="modal_setup_end_time" style="font-size: 11px;" autocomplete="off" disabled>
-                                            </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" style="margin-bottom: 5px;">
-                                                <label style="font-size: 11px; margin-bottom: 0;">生產開始</label>
-                                                <input type="text" class="form-control input-sm datetime-picker" name="production_start_time" id="modal_production_start_time" style="font-size: 11px;" autocomplete="off" disabled>
-                                            </div>
-                                            <div class="col-md-3 col-sm-3 col-xs-6 form-group" style="margin-bottom: 5px;">
-                                                <label style="font-size: 11px; margin-bottom: 0;">生產結束</label>
-                                                <input type="text" class="form-control input-sm datetime-picker" name="production_end_time" id="modal_production_end_time" style="font-size: 11px;" autocomplete="off" disabled>
-                                            </div>
-                                        </div>
-
                                         </div>
                                         <!-- 齒輪資訊 (Type=G 專用) -->
                                         <div class="row" id="div_gear_info" style="display:none; background-color: #dff0d8; padding: 10px; margin: 0 0 10px 0; border: 2px solid #3c763d; border-radius: 5px;">
@@ -8950,6 +9034,370 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         }
     });
 });
+            </script>
+            <script>
+            window.V2PERMS = {
+                canDrag: <?= $can_drag ? 'true' : 'false' ?>,
+                canReport: <?= $can_report ? 'true' : 'false' ?>,
+                hasA: <?= $has_A ? 'true' : 'false' ?>,
+                hasD: <?= $has_D ? 'true' : 'false' ?>
+            };
+            </script>
+            <script>
+(function () {
+    'use strict';
+    var SELF = 'process_schedule_V2.php';
+    var LS_SEL = 'v2SelMachine', LS_USER = 'v2LastReporter';
+    var P = window.V2PERMS || {};
+    var SEL = '';
+    try { SEL = localStorage.getItem(LS_SEL) || ''; } catch (e) {}
+    var sortable = null;
+
+    function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
+    function num(n) { return (parseInt(n, 10) || 0).toLocaleString(); }
+    function toast(t, m, ok) { if (typeof showToast === 'function') showToast(t, m, ok); else alert(m); }
+
+    /* ---------- 從（隱藏的）原看板 DOM 收集資料：機台、卡片 ---------- */
+    function collect() {
+        var groups = [], unassigned = [];
+        $('#machineTypeTabContent .tab-pane').each(function () {
+            var pid = this.id;
+            var $a = $('#machineTypeTabs a[href="#' + pid + '"]').first().clone();
+            $a.children().remove();
+            var g = { id: pid, typeId: pid.replace('tab_type_', ''), name: $.trim($a.text()) || pid, machines: [] };
+            $(this).find('.kanban-column').each(function () {
+                var $h = $(this).find('.kanban-column-header').first();
+                var $c = $(this).find('.kanban-cards').first();
+                g.machines.push({
+                    id: String($c.attr('data-machine-id')),
+                    name: $h.attr('data-machine-name') || $.trim($h.text()),
+                    abn: $h.hasClass('abnormal-header'),
+                    $c: $c, $h: $h, typeId: g.typeId
+                });
+            });
+            groups.push(g);
+        });
+        $('.unassigned-wrapper .kanban-cards').each(function () {
+            unassigned.push($(this));
+        });
+        return { groups: groups, unassigned: unassigned };
+    }
+
+    function cardInfo($k, machineName) {
+        var d = $k.data();
+        var sq = parseInt($k.attr('data-sqty'), 10) || 0;
+        var ok = parseInt($k.attr('data-ok-qty'), 10) || 0;
+        var ng = parseInt($k.attr('data-ng-qty'), 10) || 0;
+        var cls = $k.attr('class') || '';
+        return {
+            $k: $k, fid: String($k.attr('data-id')), bom: $k.attr('data-bom') || '',
+            part: $k.attr('data-part-no') || '', client: $k.attr('data-client') || '',
+            process: $.trim($k.find('.card-process-name').first().text()),
+            ptype: String($k.attr('data-process-type-id') || ''),
+            sq: sq, ok: ok, ng: ng, remain: Math.max(0, sq - ok),
+            pct: sq > 0 ? Math.min(100, Math.round(ok / sq * 100)) : 0,
+            ship: $k.attr('data-shipping-date') || '',
+            ps: $k.attr('data-ps') || '', single: $k.attr('data-single-bet-ps') || '',
+            pti: $k.attr('data-pti01-ps') || '', ps2: $k.attr('data-ps2') || '',
+            side: $k.attr('data-1-side') || '',
+            arrived: String($k.attr('data-order-id')) === '1',
+            urgent: /card-priority-U/.test(cls) ? 'U' : (/card-priority-E/.test(cls) ? 'E' : ''),
+            now: /now-processing/.test(cls),
+            split: ($k.attr('data-ps') || '').indexOf('(拆分工單)') >= 0,
+            module: $.trim($k.find('.module-filter-btn').first().text()),
+            gear: $k.attr('data-gear-info') || '',
+            machine: machineName || ''
+        };
+    }
+
+    function machineStatus(m, cards) {
+        if (m.abn) return { cls: 'abn', txt: '異常' };
+        if (cards.some(function (c) { return c.now; })) return { cls: 'run', txt: '加工中' };
+        if (cards.length) return { cls: 'wait', txt: '待加工' };
+        return { cls: 'idle', txt: '空閒' };
+    }
+
+    /* ---------- 畫面 ---------- */
+    function render() {
+        var D = collect();
+        var q = $.trim($('#card-search-input').val() || '').toLowerCase();
+        var allMachines = [], uCards = [];
+        D.groups.forEach(function (g) { g.machines.forEach(function (m) { allMachines.push(m); }); });
+        D.unassigned.forEach(function ($c) {
+            $c.children('.kanban-card').each(function () { uCards.push(cardInfo($(this), '')); });
+        });
+
+        // 左側
+        var side = '';
+        side += '<div class="v2-side-item v2-u' + (SEL === 'U' && !q ? ' on' : '') + '" data-sel="U"><span class="v2-dot idle"></span><span class="v2-sn">未指派工單</span><span class="v2-cnt hot">' + uCards.length + '</span></div>';
+        D.groups.forEach(function (g) {
+            if (!g.machines.length) return;
+            side += '<div class="v2-side-type">' + esc(g.name) + '</div>';
+            g.machines.forEach(function (m) {
+                var cards = m.$c.children('.kanban-card').map(function () { return cardInfo($(this), m.name); }).get();
+                m._cards = cards;
+                var st = machineStatus(m, cards);
+                var cur = cards.filter(function (c) { return c.now; })[0];
+                side += '<div class="v2-side-item' + (SEL === m.id && !q ? ' on' : '') + '" data-sel="' + esc(m.id) + '">' +
+                    '<span class="v2-dot ' + st.cls + '"></span><span class="v2-sn">' + esc(m.name) +
+                    (cur ? '<span class="v2-sbom">加工中 ' + esc(cur.bom) + '</span>' : '') + '</span>' +
+                    '<span class="v2-cnt">' + cards.length + '</span></div>';
+            });
+        });
+        $('#v2Side').html(side);
+
+        // 預設選取
+        var known = allMachines.some(function (m) { return m.id === SEL; });
+        if (SEL !== 'U' && !known) {
+            // 第一次進來：優先選「有工單」的機台，都沒有就看未指派
+            var busy = allMachines.filter(function (m) { return (m._cards || []).length; })[0];
+            SEL = busy ? busy.id : 'U';
+        }
+
+        // 右側
+        var html = '', list = [], title = '', machine = null;
+        if (q) {
+            allMachines.forEach(function (m) { (m._cards || []).forEach(function (c) { list.push(c); }); });
+            list = list.concat(uCards.map(function (c) { c.machine = '未指派'; return c; }));
+            list = list.filter(function (c) {
+                return (c.bom + ' ' + c.part + ' ' + c.client + ' ' + c.process + ' ' + c.ps + ' ' + c.single + ' ' + c.pti + ' ' + c.ps2 + ' ' + c.machine).toLowerCase().indexOf(q) >= 0;
+            });
+            html += '<div class="v2-head"><h3><i class="fa fa-search"></i> 搜尋「' + esc($('#card-search-input').val()) + '」<small>共 ' + list.length + ' 筆（跨所有機台）</small></h3></div>';
+        } else if (SEL === 'U') {
+            list = uCards; title = '未指派工單';
+            html += '<div class="v2-head"><h3><i class="fa fa-inbox"></i> 未指派工單 <small>共 ' + list.length + ' 筆　請在每張工單上選擇機台後按「指派」</small></h3>' +
+                (P.canDrag ? '<button class="btn btn-default" id="v2UnSort"><i class="fa fa-sort"></i> 調整未指派順序</button>' : '') + '</div>';
+        } else {
+            machine = allMachines.filter(function (m) { return m.id === SEL; })[0];
+            list = machine._cards || [];
+            var st = machineStatus(machine, list);
+            html += '<div class="v2-head"><h3><span class="v2-dot ' + st.cls + '"></span> ' + esc(machine.name) + ' <span class="v2-st ' + st.cls + '">' + st.txt + '</span>' +
+                '<small>共 ' + list.length + ' 筆' + (P.canDrag ? '　可按住 ☰ 拖曳調整順序，或用右側箭頭' : '') + '</small></h3>' +
+                '<button class="btn btn-warning" id="v2Abn"><i class="fa fa-exclamation-triangle"></i> 機台異常通報</button></div>';
+        }
+
+        if (!list.length) {
+            html += '<div class="v2-empty"><i class="fa fa-smile-o"></i><br>' + (q ? '找不到符合的工單' : '目前沒有工單') + '</div>';
+        } else {
+            html += '<div id="v2List">';
+            list.forEach(function (c, i) { html += cardHtml(c, i, machine, allMachines, !!q); });
+            html += '</div>';
+        }
+        $('#v2Main').html(html);
+
+        // 拖曳
+        if (sortable) { try { sortable.destroy(); } catch (e) {} sortable = null; }
+        if (machine && P.canDrag && !q && document.getElementById('v2List')) {
+            sortable = new Sortable(document.getElementById('v2List'), {
+                handle: '.v2-grip', animation: 150, filter: '.v2-pinned',
+                onEnd: function () { commitOrder(machine); }
+            });
+        }
+        try { localStorage.setItem(LS_SEL, SEL); } catch (e) {}
+    }
+
+    function cardHtml(c, i, machine, allMachines, isSearch) {
+        var h = '<div class="v2-card' + (c.now ? ' now v2-pinned' : '') + (c.urgent ? ' urg-' + c.urgent : '') + '" data-fid="' + esc(c.fid) + '">';
+        h += '<div class="v2-c-left">' + (machine && P.canDrag && !c.now ? '<span class="v2-grip" title="按住拖曳"><i class="fa fa-bars"></i></span>' : '<span class="v2-grip off"></span>') +
+            '<span class="v2-no">' + (c.now ? '▶' : (machine ? (i + 1) : '')) + '</span></div>';
+        h += '<div class="v2-c-body">';
+        h += '<div class="v2-c-top"><span class="v2-bom" data-copy="' + esc(c.bom) + '" title="點一下複製">' + esc(c.bom) + '</span>' +
+            '<span class="v2-proc">' + esc(c.process) + '</span>' +
+            (c.urgent === 'E' ? '<span class="v2-tag e">特急件</span>' : '') + (c.urgent === 'U' ? '<span class="v2-tag u">急件</span>' : '') +
+            (c.now ? '<span class="v2-tag run">加工中</span>' : '') + (c.arrived ? '<span class="v2-tag ok">已到料</span>' : '') +
+            (c.split ? '<span class="v2-tag sp">拆分</span>' : '') +
+            (isSearch ? '<span class="v2-tag mc">' + esc(c.machine || '未指派') + '</span>' : '') + '</div>';
+        h += '<div class="v2-c-mid"><b>' + esc(c.part) + '</b>' + (c.client ? '　<span class="muted">' + esc(c.client) + '</span>' : '') +
+            (c.module ? '　<span class="v2-tag mod">' + esc(c.module) + '</span>' : '') + (c.ship ? '　<span class="muted"><i class="fa fa-calendar"></i> 交期 ' + esc(c.ship) + '</span>' : '') + '</div>';
+        var notes = [];
+        if (c.ps) notes.push('BOM備註：' + c.ps);
+        if (c.single) notes.push('單關備註：' + c.single);
+        if (c.pti) notes.push('生管：' + c.pti);
+        if (c.side) notes.push('加工面：' + c.side);
+        if (c.ps2) notes.push('現場：' + c.ps2);
+        if (notes.length) h += '<div class="v2-c-note">' + notes.map(esc).join('　｜　') + '</div>';
+        h += '<div class="v2-prog"><div class="v2-bar"><i style="width:' + c.pct + '%"></i></div><span>良品 <b>' + num(c.ok) + '</b> / ' + num(c.sq) + '　NG ' + num(c.ng) + '　剩 ' + num(c.remain) + '　(' + c.pct + '%)</span></div>';
+        h += '</div><div class="v2-c-act">';
+        if (P.canReport) h += '<button class="btn btn-primary v2-rep" data-fid="' + esc(c.fid) + '"><i class="fa fa-pencil-square-o"></i> 報工</button>';
+        var isU = !machine && (!c.machine || c.machine === '未指派');
+        if (isU && P.canDrag) {
+            h += '<div class="v2-assign"><select class="v2-asel form-control">' + '<option value="">選擇機台…</option>' +
+                allMachines.filter(function (m) { return m.typeId === c.ptype; }).map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('') +
+                '</select><button class="btn btn-success v2-doassign" data-fid="' + esc(c.fid) + '">指派</button></div>';
+        } else if (machine && P.canDrag) {
+            h += '<div class="v2-mini">' +
+                (!c.now ? '<button class="btn btn-default v2-up" title="上移"><i class="fa fa-arrow-up"></i></button><button class="btn btn-default v2-down" title="下移"><i class="fa fa-arrow-down"></i></button><button class="btn btn-default v2-top" title="移到最前（加工中那張之後）"><i class="fa fa-angle-double-up"></i></button>' : '') +
+                '<div class="btn-group"><button class="btn btn-default dropdown-toggle" data-toggle="dropdown"><i class="fa fa-ellipsis-v"></i></button><ul class="dropdown-menu dropdown-menu-right">' +
+                '<li><a href="#" class="v2-split" data-fid="' + esc(c.fid) + '"><i class="fa fa-code-fork"></i> 拆分工單</a></li>' +
+                (c.split && (P.hasA || P.hasD) ? '<li><a href="#" class="v2-delsplit" data-fid="' + esc(c.fid) + '"><i class="fa fa-trash"></i> 刪除拆分工單</a></li>' : '') +
+                '<li><a href="#" class="v2-unassign" data-fid="' + esc(c.fid) + '"><i class="fa fa-undo"></i> 退回未指派</a></li></ul></div></div>';
+        }
+        h += '</div></div>';
+        return h;
+    }
+
+    /* ---------- 操作：排序 / 指派（沿用原後端） ---------- */
+    function findCard(fid) { return $('.kanban-card[data-id="' + fid + '"]').first(); }
+
+    function commitOrder(machine) {
+        var fids = $('#v2List .v2-card').map(function () { return $(this).attr('data-fid'); }).get();
+        var $c = machine.$c;
+        fids.forEach(function (f) { $c.append(findCard(f)); });
+        fids.forEach(function (f, i) { findCard(f).attr('data-processing-sequence', i + 1); });
+        $.post(SELF, { machine_id: machine.id, order: fids }, function (res) {
+            if (res && res.success) { toast('成功', '順序已更新', true); } else { toast('錯誤', (res && res.message) || '更新失敗', false); }
+            render();
+        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); render(); });
+    }
+
+    function moveIn(machine, fid, mode) {
+        var $list = $('#v2List .v2-card'), idx = -1;
+        var arr = $list.map(function () { return $(this).attr('data-fid'); }).get();
+        idx = arr.indexOf(String(fid));
+        if (idx < 0) return;
+        var minIdx = $list.first().hasClass('now') ? 1 : 0;
+        var to = idx;
+        if (mode === 'up') to = idx - 1; else if (mode === 'down') to = idx + 1; else to = minIdx;
+        if (to < minIdx || to >= arr.length || to === idx) return;
+        arr.splice(to, 0, arr.splice(idx, 1)[0]);
+        var $c = machine.$c;
+        arr.forEach(function (f) { $c.append(findCard(f)); });
+        arr.forEach(function (f, i) { findCard(f).attr('data-processing-sequence', i + 1); });
+        $.post(SELF, { machine_id: machine.id, order: arr }, function (res) {
+            if (!(res && res.success)) toast('錯誤', (res && res.message) || '更新失敗', false);
+            render();
+        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); render(); });
+    }
+
+    function assign(fid, machineId) {
+        $.post(SELF, { action: 'update_assignment_only', machine_id: machineId, bom_ing_fid: fid }, function (res) {
+            if (res && res.success) {
+                var D = collect(), $target = null;
+                if (/^unassigned/.test(machineId)) {
+                    D.unassigned.forEach(function ($c) { if (String($c.attr('data-type-id')) === String(findCard(fid).attr('data-process-type-id'))) $target = $c; });
+                    if (!$target && D.unassigned.length) $target = D.unassigned[0];
+                } else {
+                    D.groups.forEach(function (g) { g.machines.forEach(function (m) { if (m.id === String(machineId)) $target = m.$c; }); });
+                }
+                if ($target) { findCard(fid).attr('data-processing-sequence', '').appendTo($target); }
+                toast('成功', /^unassigned/.test(machineId) ? '已退回未指派' : '已指派到機台', true);
+                render();
+            } else { toast('錯誤', (res && res.message) || '指派失敗', false); }
+        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); });
+    }
+
+    /* ---------- 事件 ---------- */
+    $(document).on('click', '#v2Side .v2-side-item', function () {
+        SEL = String($(this).attr('data-sel'));
+        $('#card-search-input').val('');
+        render();
+    });
+    $(document).on('input', '#card-search-input', function () { render(); });
+    $(document).on('click', '.v2-rep', function (e) { e.stopPropagation(); if (window.openTaskReport) window.openTaskReport($(this).data('fid')); });
+    $(document).on('click', '.v2-bom', function (e) { e.stopPropagation(); if (typeof copyToClipboard === 'function') copyToClipboard($(this).attr('data-copy'), this); });
+    $(document).on('click', '.v2-card', function (e) {
+        if ($(e.target).closest('button,a,select,.v2-grip,.v2-bom,.dropdown-menu').length) return;
+        if (P.canReport && window.openTaskReport) window.openTaskReport($(this).attr('data-fid'));
+    });
+    $(document).on('click', '.v2-doassign', function (e) {
+        e.stopPropagation();
+        var mid = $(this).siblings('.v2-asel').val();
+        if (!mid) { toast('提醒', '請先選擇要指派的機台', false); return; }
+        assign($(this).data('fid'), mid);
+    });
+    $(document).on('click', '.v2-up,.v2-down,.v2-top', function (e) {
+        e.stopPropagation();
+        var machine = curMachine(); if (!machine) return;
+        var fid = $(this).closest('.v2-card').attr('data-fid');
+        moveIn(machine, fid, $(this).hasClass('v2-up') ? 'up' : ($(this).hasClass('v2-down') ? 'down' : 'top'));
+    });
+    $(document).on('click', '.v2-split', function (e) { e.preventDefault(); if (window.splitTask) window.splitTask(String($(this).data('fid'))); });
+    $(document).on('click', '.v2-delsplit', function (e) { e.preventDefault(); if (window.deleteSplitTask) window.deleteSplitTask(String($(this).data('fid'))); });
+    $(document).on('click', '.v2-unassign', function (e) {
+        e.preventDefault();
+        if (confirm('確定要把這張工單退回「未指派」嗎？')) assign($(this).data('fid'), 'unassigned');
+    });
+    $(document).on('click', '#v2Abn', function () {
+        var m = curMachine(); if (m) m.$h.find('.btn-abnormal-report').first().trigger('click');
+    });
+    $(document).on('click', '#v2UnSort', function () { $('#unassigned-header').trigger('click'); });
+    function curMachine() {
+        var r = null;
+        collect().groups.forEach(function (g) { g.machines.forEach(function (m) { if (m.id === SEL) r = m; }); });
+        return r;
+    }
+
+    // 全廠看板切換：看板模式時隱藏新介面
+    $(document).on('click', '#btn-dashboard-mode', function () {
+        setTimeout(function () { $('#v2App').toggle(!$('#dashboard-view').is(':visible')); }, 30);
+    });
+
+    /* ---------- 報工視窗：後補報工輔助 ---------- */
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    function fillTimes() {
+        var date = $('input[name="report_date"]').val(); if (!date) return;
+        var now = new Date(), today = ymd(now);
+        [['#modal_production_user_id', '#modal_production_start_time', '#modal_production_end_time'],
+         ['#modal_setup_user_id', '#modal_setup_start_time', '#modal_setup_end_time']].forEach(function (t) {
+            if (!$(t[0]).val()) return;
+            var $s = $(t[1]), $e = $(t[2]);
+            if (!$s.val()) { $s.val(date + ' 08:00'); $s.data('v2auto', $s.val()); }
+            if (!$e.val() && $(t[0]).attr('id') === 'modal_production_user_id') {
+                var endv = date + ' 17:00';
+                if (date === today) { var cap = pad(now.getHours()) + ':' + pad(now.getMinutes()); endv = date + ' ' + (cap < '17:00' ? cap : '17:00'); }
+                if (endv > $s.val()) { $e.val(endv); $e.data('v2auto', endv); }
+            }
+        });
+        $('#modal_production_end_time').trigger('change');
+    }
+    $(document).on('change', '#modal_production_user_id', function () {
+        var v = $(this).val();
+        if (v) { try { localStorage.setItem(LS_USER, v); } catch (e) {} }
+        setTimeout(fillTimes, 30);
+    });
+    $(document).on('change', '#modal_setup_user_id', function () { setTimeout(fillTimes, 30); });
+    $(document).on('change', 'input[name="report_date"]', function () {
+        var date = $(this).val(); if (!date) return;
+        // 系統自動帶的時間（使用者沒改過）→ 清掉依新日期重帶；使用者自己改過的 → 只換日期保留時刻
+        $('#modal_production_start_time,#modal_production_end_time,#modal_setup_start_time,#modal_setup_end_time').each(function () {
+            var v = $(this).val();
+            if (v && v === $(this).data('v2auto')) { $(this).val(''); }
+            else if (v && v.length >= 16) { $(this).val(date + v.substring(10)); }
+            $(this).removeData('v2auto');
+        });
+        setTimeout(fillTimes, 0);
+        $('.v2-chip').each(function () { $(this).toggleClass('on', $(this).data('d') === date); });
+    });
+    $(document).on('click', '.v2-chip', function () {
+        var d = new Date(); d.setDate(d.getDate() - parseInt($(this).data('off'), 10));
+        $('input[name="report_date"]').val(ymd(d)).trigger('change');
+    });
+    $('#quickReportModal').on('show.bs.modal', function () {
+        // 新增報工（非編輯舊紀錄）：日期回到今天、帶入上次報工人員
+        if (!$('#modal_report_id').val()) {
+            $('input[name="report_date"]').val(ymd(new Date())).trigger('change');
+            var last = ''; try { last = localStorage.getItem(LS_USER) || ''; } catch (e) {}
+            if (last && $('#modal_production_user_id option[value="' + last + '"]').length && !$('#modal_production_user_id').val()) {
+                $('#modal_production_user_id').val(last).trigger('change');
+            }
+        }
+        $('.v2-chip').each(function () {
+            var d = new Date(); d.setDate(d.getDate() - parseInt($(this).data('off'), 10));
+            $(this).data('d', ymd(d)).toggleClass('on', ymd(d) === $('input[name="report_date"]').val());
+        });
+    });
+
+    $(function () {
+        // 隱藏用不到的舊工具鈕（功能仍在，只是不佔畫面）
+        $('#toggle-view-btn').hide();
+        render();
+        // 其他腳本（機台下拉等）載完後再重畫一次
+        setTimeout(render, 600);
+    });
+    window.v2Render = render;
+})();
+
             </script>
 </body>
 
