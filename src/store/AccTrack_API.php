@@ -77,6 +77,16 @@ switch ($action) {
         ]);
     }
 
+    /* ── 雙擊列表列：該結帳月份此客戶／廠商的明細（唯讀，直接呼叫對帳作業同一支 acc_ar_detail／acc_ap_detail）── */
+    case 'detail': {
+        $side = actSide($_GET['side'] ?? 'ar');
+        $bm   = (string)($_GET['bm'] ?? '');
+        $key  = trim((string)($_GET['party'] ?? ''));
+        if ($key === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('缺少對象或結帳月份');
+        $d = ($side === 'ar') ? acc_ar_detail($db, $key, $bm) : acc_ap_detail($db, $key, $bm);
+        actOut(['detail' => $d]);
+    }
+
     /* ── 進度清單（單一結帳月份）────────────────────────────────── */
     case 'list': {
         $side = actSide($_GET['side'] ?? 'ar');

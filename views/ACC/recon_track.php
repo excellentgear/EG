@@ -437,6 +437,17 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
   </div>
 </div>
 
+<!-- ══════════ 雙擊列表列：此結帳月份的明細（唯讀）══════════ -->
+<div class="m-mask" id="dtlMask">
+  <div class="m-win" style="width:1000px;max-width:96%;">
+    <div class="m-head"><span id="dtlTitle">明細</span> <span class="x" data-close="dtlMask">✕</span></div>
+    <div class="m-body">
+      <p class="hint" id="dtlSub"></p>
+      <div class="tbl-wrap" style="max-height:60vh;overflow:auto;"><table class="art-t" id="dtlTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════ 臨時結帳調整（應收）══════════ -->
 <div class="m-mask" id="exMask">
   <div class="m-win">
@@ -716,19 +727,20 @@ function manualDel(side, key){
     if (!confirm('確定刪除這筆人工新增的對象？（僅移出此結帳月份的清單）')) return;
     var bm = document.getElementById('fBm').value || defaultBm();
     api({action:'manual_delete', side:side, bm:bm, party_key:key}).done(function(r){
-        if (r && r.ok) { showToast('已刪除'); loadList(); }
+        if (r && r.ok) { showToast('已刪除'); loadList(true); }
     });
 }
 function manualSave(){
     if (!MANUAL_KEY) { document.getElementById('manualErr').textContent = '請先搜尋並從清單點選一筆' + (SIDE==='ar' ? '客戶' : '廠商'); return; }
     var bm = document.getElementById('fBm').value || defaultBm();
     api({action:'manual_add', side:SIDE, bm:bm, party_key:MANUAL_KEY}).done(function(r){
-        if (r && r.ok) { closeMask('manualMask'); showToast('已新增'); loadList(); }
+        if (r && r.ok) { closeMask('manualMask'); showToast('已新增'); loadList(true); }
     });
 }
 
-function loadList(){
+function loadList(keepPage){
     var bm = document.getElementById('fBm').value || defaultBm();
+    var keepY = window.pageYOffset;
     document.getElementById('fBm').value = bm;
     // 篩選一律即時在前端做（不需要查詢按鈕）：這裡只在換結帳月份／側別時才打後端拿整個月的資料
     apiGet('list', {side:SIDE, bm:bm, zero:(SIDE==='ap' && document.getElementById('fZero').checked)?1:0, _:Date.now()}).done(function(r){
@@ -736,12 +748,13 @@ function loadList(){
         ALL_ROWS = r.rows;
         renderStCards(r.counts);
         rebuildOwnerFilterOptions();
-        applyFilters();
+        applyFilters(keepPage === true);
+        if (keepPage === true) window.scrollTo(0, keepY);
     });
 }
 
 /* 依狀態卡片／搜尋框／負責人下拉，即時過濾 ALL_ROWS（全部在前端做，不打後端） */
-function applyFilters(){
+function applyFilters(keepPage){
     var rows = ALL_ROWS;
     if (ST_FILTER) rows = rows.filter(function(r){ return r.card_status === ST_FILTER; });
     var kw = document.getElementById('fKw').value.trim();
@@ -752,7 +765,7 @@ function applyFilters(){
         rows = rows.filter(function(r){ return ownerNum === 0 ? !r.owner_id : (r.owner_id === ownerNum); });
     }
     FILTERED_ROWS = rows;
-    LIST_PAGE = 1;
+    if (keepPage !== true) LIST_PAGE = 1;
     renderListTbl();
 }
 function rowMatchesKw(r, kw){
@@ -882,14 +895,14 @@ function renderListTbl(){
             var exBtn = (targetId && (PERMS.canAdmin||PERMS.isSales)) ? '<button class="icon-btn" title="臨時結帳調整" onclick="openExMaskFor(\''+esc(targetId)+'\',\''+esc(r.party_name)+'\')"><i class="fa fa-calendar-plus-o"></i></button>' : '';
             tds.push('<td class="c">' + exBtn + '</td>');
         }
-        html += '<tr>' + tds.join('') + '</tr>';
+        html += '<tr class="dtl-row" data-party="' + esc(r.party_id || '') + '" data-name="' + esc(r.party_name) + '" title="雙擊查看本結帳月份明細">' + tds.join('') + '</tr>';
     });
     document.getElementById('listTbl').querySelector('tbody').innerHTML = html;
     updateBatchBar();
 }
 function doSetStatus(trackId, to){
     api({action:'set_status', track_id:trackId, to_status:to}).done(function(r){
-        if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(); }
+        if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(true); }
     });
 }
 
@@ -920,7 +933,7 @@ function saveOwnerAssign(){
     var opt = sel.options[sel.selectedIndex];
     var ownerId = sel.value, ownerName = ownerId ? opt.dataset.name : '';
     api({action:'owner_set_batch', track_ids: JSON.stringify(Object.keys(SELECTED).map(Number)), owner_id:ownerId, owner_name:ownerName}).done(function(r){
-        if (r && r.ok) { showToast('已指派 ' + r.updated + ' 筆','success'); closeMask('ownerMask'); clearSelection(); loadList(); }
+        if (r && r.ok) { showToast('已指派 ' + r.updated + ' 筆','success'); closeMask('ownerMask'); clearSelection(); loadList(true); }
         else if (r) document.getElementById('ownerErr').textContent = r.error||'';
     });
 }
@@ -953,7 +966,7 @@ function saveSettle(){
     var day = document.getElementById('seDay').value;
     if (mode==='FIXED' && (!day || day<1 || day>31)) { document.getElementById('settleErr').textContent = '固定結帳日請輸入 1~31'; return; }
     api({action:'settle_quick_edit', target_type:SETTLE_TARGET.type, target_id:SETTLE_TARGET.id, settlement_mode:mode, settlement_day:(mode==='FIXED'?day:'')}).done(function(r){
-        if (r && r.ok) { showToast(r.message,'success'); closeMask('settleMask'); loadList(); }
+        if (r && r.ok) { showToast(r.message,'success'); closeMask('settleMask'); loadList(true); }
         else if (r) document.getElementById('settleErr').textContent = r.error||'';
     });
 }
@@ -982,7 +995,7 @@ function loadLog(){
 function doRevert(logId){
     if (!confirm('確定要復原這筆修改嗎？')) return;
     api({action:'settle_revert', log_id:logId}).done(function(r){
-        if (r && r.ok) { showToast('已復原','success'); loadLog(); loadList(); }
+        if (r && r.ok) { showToast('已復原','success'); loadLog(); loadList(true); }
     });
 }
 
@@ -1011,13 +1024,13 @@ function exAdd(){
     var ym = document.getElementById('exYm').value, d = document.getElementById('exDate').value, reason = document.getElementById('exReason').value.trim();
     if (!ym || !d) { document.getElementById('exErr').textContent = '請填適用年月與調整後結帳日'; return; }
     api({action:'settle_ex_save', customer_id:EX_TARGET, ym:ym, adjusted:d, reason:reason}).done(function(r){
-        if (r && r.ok) { showToast('已儲存','success'); loadExList(); loadList(); document.getElementById('exReason').value=''; }
+        if (r && r.ok) { showToast('已儲存','success'); loadExList(); loadList(true); document.getElementById('exReason').value=''; }
         else if (r) document.getElementById('exErr').textContent = r.error||'';
     });
 }
 function exDel(id){
     if (!confirm('確定刪除這筆臨時結帳調整？')) return;
-    api({action:'settle_ex_delete', exception_id:id}).done(function(r){ if (r && r.ok) { loadExList(); loadList(); } });
+    api({action:'settle_ex_delete', exception_id:id}).done(function(r){ if (r && r.ok) { loadExList(); loadList(true); } });
 }
 
 /* ── 統計分析 ─────────────────────────────────────────────── */
@@ -1241,7 +1254,7 @@ function saveSetting(){
         if (r5[0] && r5[0].ok) { DEFAULT_PER_PAGE = r5[0].default_per_page; rebuildPerPageOptions(); }
         showToast('已儲存','success');
         closeMask('setMask');
-        loadList(); if (document.getElementById('paneStat').classList.contains('on')) loadStat();
+        loadList(true); if (document.getElementById('paneStat').classList.contains('on')) loadStat();
     });
 }
 
@@ -1253,6 +1266,31 @@ $(function(){
     if (PERMS.canAdmin || PERMS.isPm || PERMS.isSales || PERMS.isAcc) { try { zc.checked = (localStorage.getItem('act_ap_zero') === '1'); } catch(e) {} }
     else { zc.disabled = true; zc.parentNode.title = '唯讀權限不能變更此選項'; }
     $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+    // 雙擊列表列 → 跳窗顯示本結帳月份此客戶／廠商明細（資料同對帳作業 reconcile.php）
+    $('#listTbl tbody').on('dblclick', 'tr.dtl-row', function(e){
+        if ($(e.target).closest('button,select,input,a,.icon-btn').length) return;
+        var $tr = $(this), isAr = (SIDE==='ar'), bm = document.getElementById('fBm').value || defaultBm();
+        var key = isAr ? $tr.attr('data-name') : $tr.attr('data-party');
+        var nm = $tr.attr('data-name');
+        if (!key) { showToast('此對象未建立主檔編號，無法查詢明細'); return; }
+        document.getElementById('dtlTitle').textContent = nm + ' — ' + bm + ' ' + (isAr?'應收':'應付') + '明細';
+        document.getElementById('dtlSub').textContent = '載入中…';
+        document.getElementById('dtlTbl').querySelector('thead').innerHTML = '';
+        document.getElementById('dtlTbl').querySelector('tbody').innerHTML = '';
+        openMask('dtlMask');
+        apiGet('detail', {side:SIDE, bm:bm, party:key}).done(function(r){
+            var d = (r && r.detail) || {}, items = d.items || [], h = '', n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; };
+            var cols = isAr ? ['類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
+            document.getElementById('dtlTbl').querySelector('thead').innerHTML = '<tr>' + cols.map(function(c){ return '<th>'+c+'</th>'; }).join('') + '</tr>';
+            items.forEach(function(it){
+                if (isAr) h += '<tr><td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
+                else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
+            });
+            document.getElementById('dtlTbl').querySelector('tbody').innerHTML = h || '<tr><td colspan="' + cols.length + '" class="c">沒有明細</td></tr>';
+            var tot = isAr ? d.total_amt : d.total_amount;
+            document.getElementById('dtlSub').textContent = '共 ' + items.length + ' 筆' + (tot != null ? '，合計(含稅) ' + fmtMoney(tot) : '') + '（資料與對帳作業相同；雙擊列表任一列開啟）';
+        }).fail(function(){ document.getElementById('dtlSub').textContent = '載入失敗'; });
+    });
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;
