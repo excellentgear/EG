@@ -105,6 +105,13 @@ try {
         'event' => [
             'id' => (int)$event['id'], 'event_no' => $event['event_no'], 'title' => $event['title'],
             'content' => $event['content'], 'source' => $event['source'], 'creator' => $event['creator_name'],
+            // 圖文公告（含表格）：content_html 已在存檔時清洗，這裡只補圖片 src；沒有就維持純文字
+            'content_html' => (function () use ($event) {
+                $h = trim((string)($event['content_html'] ?? ''));
+                if ($h === '') return '';
+                try { require_once __DIR__ . '/../common/notice_doc_lib.php'; return ndoc_hydrate($h); }
+                catch (Throwable $e) { return ''; }
+            })(),
             'eventdate' => $event['eventdate'], 'enddate' => $event['enddate'], 'reply_deadline' => $event['reply_deadline'],
             'ref_type' => $event['ref_type'] ?? '', 'ref_id' => isset($event['ref_id']) ? (int)$event['ref_id'] : 0,
         ],

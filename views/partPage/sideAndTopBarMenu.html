@@ -798,7 +798,8 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             $('#nm-meta').text(meta.join('　'));
 
             // 內容
-            $('#nm-content').html('<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>');
+            if (e.content_html) $('#nm-content').html('<div class="eg-nm-ctext eg-nm-rich">' + e.content_html + '</div>');
+            else $('#nm-content').html('<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>');
 
             // 公告附件
             if (res.attachments && res.attachments.length) {
@@ -1148,6 +1149,10 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .eg-nm-left { padding: 16px 18px; border-right: 1px solid #e6ecf1; max-height: 68vh; overflow-y: auto; }
     .eg-nm-right { padding: 16px 18px; background: #fafcfd; max-height: 68vh; overflow-y: auto; }
     .eg-nm-ctext { font-size: 14px; line-height: 1.75; color: #34495e; white-space: normal; }
+    .eg-nm-rich table { border-collapse: collapse; max-width: 100%; margin: 6px 0; }
+    .eg-nm-rich th, .eg-nm-rich td { border: 1px solid #b9c5d0; padding: 4px 8px; vertical-align: top; }
+    .eg-nm-rich img { max-width: 100%; height: auto; }
+    .eg-nm-rich p { margin: 0 0 6px; }
     .eg-nm-attwrap { margin-top: 14px; border-top: 1px dashed #e6ecf1; padding-top: 12px; }
     .eg-att-label { font-size: 12.5px; font-weight: 700; color: #2A3F54; margin-bottom: 7px; }
     .eg-nm-atttabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
