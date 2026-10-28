@@ -620,6 +620,32 @@ case 'asref_meta': {
     ]);
 }
 
+/**
+ * 流程圖（烏龜圖）綁定用的挑選資料：部門樹、KPI 區塊（含指標名稱）、這份文件自己的負責部門。
+ * 程序書／表單的清單沿用 asref_meta 的文件清單（含 doc_type），不在這裡重複撈。
+ */
+case 'bind_meta': {
+    require_once __DIR__ . '/../common/as_flow_bind_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    $v   = needVersion($db, $P, $vid);
+    $own = [];
+    $st = $db->prepare("SELECT department_id FROM as_doc_owner_dept WHERE doc_id=?");
+    $st->execute([(int)$v['doc_id']]);
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $own[] = (int)$x;
+    if (!$own && !empty($v['department_id'])) $own[] = (int)$v['department_id'];
+    jout(true, ['depts' => afb_depts($db), 'kpi' => afb_kpi_blocks($db),
+                'own_depts' => $own, 'doc_name' => (string)$v['doc_name']]);
+}
+
+/** 綁定對象現在該顯示的文字（流程圖打開時比對／重組用）。kind=proc|form|dept|kpi */
+case 'bind_resolve': {
+    require_once __DIR__ . '/../common/as_flow_bind_lib.php';
+    $kind = (string)($_GET['kind'] ?? $_POST['kind'] ?? '');
+    if (!in_array($kind, ['proc', 'form', 'dept', 'kpi'], true)) jerr('不支援的綁定種類');
+    $ids = explode(',', (string)($_GET['ids'] ?? $_POST['ids'] ?? ''));
+    jout(true, ['lines' => afb_resolve($db, $kind, $ids)]);
+}
+
 /** 樣式設定（只有管理員可改；一般使用者只是照設定好的樣式插入） */
 case 'asref_styles_save': {
     needAdmin($P);

@@ -335,6 +335,12 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         .ar-dp { color:#8A5A2B; font-size:12px; }
         .ar-obs { color:#DD5138; font-size:12px; }
         .ar-empty { padding:14px; text-align:center; color:#8A5A2B; font-size:13px; }
+        /* 烏龜圖綁定挑選（刻意不用 .ar-item：那個 class 有全域點擊處理，會干擾文件挑選器） */
+        .fb-it { display:flex; gap:10px; align-items:baseline; padding:5px 10px; cursor:pointer;
+                 border-bottom:1px solid #f3ece1; font-size:13px; font-weight:normal; margin:0; }
+        .fb-it:hover { background:#fbf6ee; }
+        .fb-it.on { background:#f0dfc4; }
+        .fb-it input { margin:0; flex:none; }
         .ar-pick { display:flex; gap:14px; margin-top:10px; }
         .ar-pick-l { width:250px; font-size:13px; color:#6B471A; }
         .ar-sel { margin-top:5px; padding:7px 9px; border:1px dashed #e4d3ba; border-radius:4px;
@@ -661,6 +667,23 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
   <div class="m-foot">
     <button class="btn btn-default btn-sm" data-close="mAsRef">取消</button>
     <button class="btn btn-warning btn-sm" id="btnArInsert" disabled><i class="fa fa-plus"></i> 插入到游標位置</button>
+  </div>
+</div></div>
+
+<!-- 烏龜圖綁定：程序書／表單／部門／KPI 區塊的挑選（可複選） -->
+<div class="m-mask" id="mFlowBind"><div class="m-win" style="width:640px;max-width:96vw;">
+  <div class="m-head"><span id="fbTitle">綁定</span> <span class="m-x" data-close="mFlowBind">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note" id="fbNote"></div>
+    <div class="ar-filters">
+      <input type="text" id="fbKw" class="form-control input-sm" style="width:260px" placeholder="打關鍵字篩選" data-eg-skip>
+      <span id="fbCount" style="font-size:12px;color:#8A5A2B;margin-left:auto"></span>
+    </div>
+    <div class="ar-list" id="fbList" style="height:320px"></div>
+  </div>
+  <div class="m-foot">
+    <button class="btn btn-default btn-sm" data-close="mFlowBind">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnFbOk"><i class="fa fa-check"></i> 確定綁定</button>
   </div>
 </div></div>
 
@@ -2780,9 +2803,140 @@ function flowAsFill(done) {
     });
 }
 
+/* ── 烏龜圖綁定（程序書／表單／部門／KPI 區塊）──────────────────────────────
+   顯示的文字一律由後端 bind_resolve 依資料庫現況組出；這裡只負責「挑」與「自動算要綁哪些」。 */
+var FB = { meta: null, items: [], sel: {}, seq: 0, kind: '', done: null };
+
+function fbLoadMeta(cb) {
+    if (FB.meta) { cb(); return; }
+    $.getJSON(API, { action: 'bind_meta', version_id: VID }, function (r) {
+        if (!r || !r.success) { alert((r && r.message) || '讀不到綁定清單'); return; }
+        FB.meta = r; cb();
+    });
+}
+/** 這個種類可挑的項目：[{id,label,sub,indent}] */
+function fbItems(kind) {
+    var out = [];
+    if (kind === 'proc' || kind === 'form') {
+        var ty = kind === 'proc' ? '程序' : '表單';
+        AR.docs.forEach(function (d) {
+            if (d.doc_type !== ty || d.is_obsolete) return;
+            out.push({ id: String(d.id), label: d.doc_name, sub: d.doc_no, indent: 0 });
+        });
+    } else if (kind === 'dept') {
+        var ds = FB.meta.depts, by = {};
+        ds.forEach(function (d) { by[d.id] = d; });
+        (function walk(pid, lv) {
+            ds.filter(function (d) { return (d.parent_id || null) === pid; }).forEach(function (d) {
+                out.push({ id: String(d.id), label: d.name, sub: '', indent: lv });
+                walk(d.id, lv + 1);
+            });
+        })(null, 0);
+    } else if (kind === 'kpi') {
+        FB.meta.kpi.forEach(function (b) {
+            out.push({ id: b.code, label: b.name, sub: b.items.length ? ('指標：' + b.items.join('、')) : '（尚無啟用中的指標）', indent: 0 });
+        });
+    }
+    return out;
+}
+function fbRender() {
+    var kw = String($('#fbKw').val() || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var rows = FB.items.filter(function (it) {
+        var hay = (it.label + ' ' + it.sub).toLowerCase();
+        for (var i = 0; i < kw.length; i++) if (hay.indexOf(kw[i]) < 0) return false;
+        return true;
+    });
+    var n = Object.keys(FB.sel).length;
+    $('#fbCount').text('已選 ' + n + ' 項／符合 ' + rows.length + ' 項');
+    if (!rows.length) { $('#fbList').html('<div class="ar-empty">沒有符合的項目</div>'); return; }
+    var h = '';
+    rows.forEach(function (it) {
+        h += '<label class="fb-it' + (FB.sel[it.id] ? ' on' : '') + '" style="padding-left:' + (10 + it.indent * 18) + 'px">'
+           + '<input type="checkbox" data-id="' + esc(it.id) + '"' + (FB.sel[it.id] ? ' checked' : '') + ' data-eg-skip>'
+           + '<span class="ar-nm">' + esc(it.label) + '</span>'
+           + (it.sub ? '<span class="ar-dp">' + esc(it.sub) + '</span>' : '') + '</label>';
+    });
+    $('#fbList').html(h);
+}
+$('#fbKw').on('input', fbRender);
+$(document).on('change', '#fbList input[type=checkbox]', function () {
+    var id = String($(this).data('id'));
+    if (this.checked) FB.sel[id] = ++FB.seq; else delete FB.sel[id];
+    $(this).closest('.fb-it').toggleClass('on', this.checked);
+    $('#fbCount').text($('#fbCount').text().replace(/已選 \d+ 項/, '已選 ' + Object.keys(FB.sel).length + ' 項'));
+});
+$('#btnFbOk').on('click', function () {
+    // 依「挑選的先後順序」排（點的順序＝框裡的順序）
+    var ids = Object.keys(FB.sel).sort(function (a, b) { return FB.sel[a] - FB.sel[b]; });
+    closeMask('mFlowBind');
+    if (FB.done) FB.done(ids);
+});
+var FB_TXT = {
+    proc: ['綁定 AS 程序書', '框裡會列出所選程序書的<b>名稱（不顯示編號）</b>；程序書日後改名，下次打開這張流程圖會自動更新。清空全部＝取消綁定。'],
+    form: ['綁定 AS 表單', '框裡會列出所選表單的<b>名稱（不顯示編號）</b>；表單日後改名，下次打開這張流程圖會自動更新。清空全部＝取消綁定。'],
+    dept: ['綁定部門／子部門', '選<b>下層部門</b>時，上面的課也會一起寫出（例如「資材課 生管組」）；總經理室、董事長室不會多寫。清空全部＝取消綁定。'],
+    kpi:  ['綁定 KPI 區塊', '依 KPI 方案（<a href="../news/KPI_new.php" target="_blank">KPI_new.php</a>）的區塊綁定，框裡會列出該區塊底下<b>啟用中的指標名稱</b>。「客戶需求管理＋客戶滿意管理」在 KPI 頁是同一個區塊，會一起列出。清空全部＝取消綁定。']
+};
+function fbPick(kind, cur, done) {
+    arLoad(function () { fbLoadMeta(function () {
+        FB.kind = kind; FB.done = done; FB.items = fbItems(kind); FB.sel = {};
+        FB.seq = 0;
+        cur.forEach(function (id) { FB.sel[String(id)] = ++FB.seq; });
+        $('#fbTitle').text(FB_TXT[kind][0]); $('#fbNote').html(FB_TXT[kind][1]);
+        $('#fbKw').val('');
+        fbRender(); openMask('mFlowBind');
+        setTimeout(function () { var k = document.getElementById('fbKw'); if (k) k.focus(); }, 60);
+    }); });
+}
+/** KPI 區塊自動對應：中心文字去掉「程序／流程／管理」後，與區塊名稱（＋分隔的每一段）互相包含就算 */
+function fbNorm(s) { return String(s || '').replace(/[\s　]+/g, '').replace(/(程序|流程|管理|辦法)/g, ''); }
+function fbKpiMatch(center) {
+    var c = fbNorm(center), out = [];
+    if (c.length < 2) return out;
+    FB.meta.kpi.forEach(function (b) {
+        var hit = String(b.name).split(/[＋+]/).some(function (p) {
+            var n = fbNorm(p);
+            return n.length >= 2 && (c.indexOf(n) >= 0 || n.indexOf(c) >= 0);
+        });
+        if (hit && b.items.length) out.push(b.code);
+    });
+    return out;
+}
+function flowBindOpts() {
+    return {
+        pick: fbPick,
+        resolve: function (kind, ids, cb) {
+            $.getJSON(API, { action: 'bind_resolve', kind: kind, ids: ids.join(',') }, function (r) {
+                cb(r && r.success ? (r.lines || {}) : {});
+            });
+        },
+        auto: function (ctx, cb) {
+            arLoad(function () { fbLoadMeta(function () {
+                flowAsFill(function (f) {
+                    var typeOf = {};
+                    AR.docs.forEach(function (d) { typeOf[String(d.id)] = d.doc_type; });
+                    var pick = function (list, ty) {
+                        return (list || []).filter(function (x) { return typeOf[String(x.doc_id)] === ty; })
+                                           .map(function (x) { return String(x.doc_id); });
+                    };
+                    // 程序書＝「相關文件」節；表單＝「使用表單」節。兩節都沒列就退回另一節裡同類型的
+                    var all = (f.related || []).concat(f.forms || []);
+                    var proc = pick(f.related, '程序'), form = pick(f.forms, '表單');
+                    if (!proc.length) proc = pick(all, '程序');
+                    if (!form.length) form = pick(all, '表單');
+                    var kpi = fbKpiMatch(ctx.center);
+                    if (!kpi.length) kpi = fbKpiMatch(FB.meta.doc_name);
+                    cb({ proc: proc, form: form, dept: (FB.meta.own_depts || []).map(String), kpi: kpi });
+                });
+            }); });
+        }
+    };
+}
+
 /** 給流程圖編輯器用的兩個回呼（挑文件、比對引用的文件改了沒） */
 function flowAsRefOpts() {
     return {
+        bind: flowBindOpts(),
         onAsAuto: flowAsAuto,
         onAsFill: flowAsFill,
         onPickAsRef: function (done) {
@@ -2869,7 +3023,7 @@ function mkEditor() {
         },
         onAutoAsRef: arAutoDetect,
         onInsertFlow: function(insert){
-            EGFlow.open({ json:null, onPickAsRef: flowAsRefOpts().onPickAsRef,
+            EGFlow.open({ json:null, bind: flowBindOpts(), onPickAsRef: flowAsRefOpts().onPickAsRef,
               onAsRefCheck: flowAsRefOpts().onAsRefCheck, onAsAuto: flowAsAuto, onAsFill: flowAsFill,
               onSave: function(png, json){
                 saveFlow(0, png, json, function(id){
@@ -2882,7 +3036,7 @@ function mkEditor() {
         onEditFlow: function(assetId, done){
             $.getJSON(API, { action:'get_flow', id:assetId, version_id:VID }, function(r){
                 if (!r.success) { alert(r.message || '讀不到這張流程圖的編輯資料'); return; }
-                EGFlow.open({ json:r.flow_json,
+                EGFlow.open({ json:r.flow_json, bind: flowBindOpts(),
                     onPickAsRef: flowAsRefOpts().onPickAsRef,
                     onAsRefCheck: flowAsRefOpts().onAsRefCheck, onAsAuto: flowAsAuto, onAsFill: flowAsFill,
                     onSave: function(png, json){
