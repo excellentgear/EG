@@ -219,7 +219,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         .m-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10300; display:none; }
         .m-mask.open { display:block; }
         /* 流程圖編輯器的遮罩是 10500；從流程圖按 +AS／偵測 開出的跳窗一定要疊在它上面，否則被遮在後面看不到 */
-        #mAsRef, #mRef { z-index:10600; }
+        #mAsRef, #mRef, #mFlowBind { z-index:10600; }
         #mArStyle { z-index:10650; }
         .m-win { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); background:#fff;
             border-radius:6px; box-shadow:0 8px 30px rgba(0,0,0,.35); width:560px; max-width:96%; max-height:92%;
@@ -531,6 +531,13 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
 
         <!-- 別份文件改了編號或被廢止，而這份線上版的內文還寫著舊編號（2026-09-22 使用者交辦）。
              預設就展開，不給收起來——收起來等於沒做，印出去的還是指向不存在的編號。 -->
+        <div class="ad-ref" id="adBindBar" style="display:none;border-color:#DD5138">
+          <div class="ad-ref-t" style="color:#DD5138"><i class="fa fa-exclamation-triangle"></i>
+            <b>流程圖綁定的來源已經修改，需要更新並重新發行文件</b>
+            <span id="adBindSum"></span>
+          </div>
+          <div class="ad-ref-b">到該流程圖按「編輯流程圖」打開，綁定的框會<b style="color:#DD5138">自動更新並標成紅字</b>，再按「插入到文件」存回；存檔後請重新發行這份文件。</div>
+        </div>
         <div class="ad-ref" id="adRefBar" style="display:none">
           <div class="ad-ref-t"><i class="fa fa-exclamation-triangle"></i>
             <b>內文引用的文件編號需要確認</b>
@@ -555,7 +562,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         <?php if ($__viewOnly): ?>
         <?php /* 唯讀檢視＝直接嵌入正式列印預覽（as_doc_print.php?preview=1），版面與發行後看到的完全一致；
                  編輯器畫面（#adEditorHost 等）藏起來，只在背景載入供「簽核進度」等功能使用。 */ ?>
-        <style>#adEditorHost,#adReadonly,#adReport,#adRefBar{display:none !important}
+        <style>#adEditorHost,#adReadonly,#adReport,#adRefBar,#adBindBar{display:none !important}
                #adViewFrame{width:100%;border:0;background:#efe9e0;min-height:600px;display:block}</style>
         <iframe id="adViewFrame" src="as_doc_print.php?version_id=<?= (int)$versionId ?>&preview=1&embed=1"
                 onload="try{var d=this.contentDocument;this.style.height=(d.documentElement.scrollHeight+20)+'px';setTimeout(function(f){try{f.style.height=(f.contentDocument.documentElement.scrollHeight+20)+'px'}catch(e){}},1500,this);}catch(e){}"></iframe>
@@ -1571,6 +1578,7 @@ function load() {
             }
         }
         loadRef();                 // 內文引用的文件編號有沒有待確認的
+        loadBindStale();
     });
 }
 
@@ -1580,6 +1588,14 @@ function load() {
 var REF = [];            // 待確認清單
 var REF_PICK = {};       // id → 勾了沒
 var REF_NEXT = '';       // 套用之後的版別
+
+function loadBindStale() {
+    $.getJSON(API, { action:'bind_stale', version_id: VID }, function(r){
+        if (!r || !r.success || !r.flows) { $('#adBindBar').hide(); return; }
+        $('#adBindSum').text('：' + r.flows + ' 張流程圖、共 ' + r.boxes + ' 個綁定框');
+        $('#adBindBar').show();
+    });
+}
 
 function loadRef() {
     $.getJSON(API, { action:'ref_pending', version_id: VID }, function(r){

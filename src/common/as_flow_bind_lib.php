@@ -75,3 +75,33 @@ function afb_resolve(PDO $db, string $kind, array $ids): array {
     }
     return $out;
 }
+
+/** 與前端 bindText() 同一套：標題＋編號清單 */
+function afb_text(string $head, array $ids, array $map): string {
+    $lines = [];
+    foreach ($ids as $id) foreach (($map[(string)$id] ?? []) as $l) $lines[] = $l;
+    $t = $head;
+    foreach ($lines as $i => $l) $t .= "\n" . ($i + 1) . '. ' . $l;
+    return $t;
+}
+
+/**
+ * 一張流程圖工作檔(fabric JSON)裡，有幾個綁定框的來源已經改了（且框內文字沒被手動改過）。
+ * 流程圖輸出的是 PNG，後端沒有瀏覽器重畫不出來，所以這裡只「偵測」，更新要開流程圖。
+ */
+function afb_stale_count(PDO $db, string $json): int {
+    $j = json_decode($json, true);
+    if (!is_array($j) || empty($j['objects'])) return 0;
+    $n = 0;
+    $cache = [];
+    foreach ($j['objects'] as $o) {
+        $b = $o['egBind'] ?? null;
+        if (!is_array($b) || empty($b['ids']) || empty($b['kind'])) continue;
+        if ((string)($o['text'] ?? '') !== (string)($b['txt'] ?? '')) continue;
+        $k = $b['kind'] . '|' . implode(',', $b['ids']);
+        if (!isset($cache[$k])) $cache[$k] = afb_resolve($db, (string)$b['kind'], $b['ids']);
+        $live = array_values(array_filter($b['ids'], fn($id) => isset($cache[$k][(string)$id])));
+        if (afb_text((string)$b['head'], $live, $cache[$k]) !== (string)$b['txt']) $n++;
+    }
+    return $n;
+}

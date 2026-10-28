@@ -637,6 +637,23 @@ case 'bind_meta': {
                 'own_depts' => $own, 'doc_name' => (string)$v['doc_name']]);
 }
 
+/** 這個版次有幾張流程圖的綁定來源（程序書／表單／部門／KPI）已經改了——編輯器一開就問，有才跳紅色提醒 */
+case 'bind_stale': {
+    require_once __DIR__ . '/../common/as_flow_bind_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $c = adc_content_by_version($db, $vid);
+    $flows = 0; $boxes = 0;
+    if ($c) foreach (adc_assets($db, (int)$c['id']) as $a) {
+        if (($a['kind'] ?? '') !== 'flow') continue;
+        $p = adc_flow_path($db, $a);
+        if (!$p || !is_file($p)) continue;
+        $n = afb_stale_count($db, (string)file_get_contents($p));
+        if ($n) { $flows++; $boxes += $n; }
+    }
+    jout(true, ['flows' => $flows, 'boxes' => $boxes]);
+}
+
 /** 綁定對象現在該顯示的文字（流程圖打開時比對／重組用）。kind=proc|form|dept|kpi */
 case 'bind_resolve': {
     require_once __DIR__ . '/../common/as_flow_bind_lib.php';
