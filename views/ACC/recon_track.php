@@ -529,7 +529,23 @@ document.addEventListener('click', function(e){
 });
 function showToast(msg, type){
     if (window.toastr) { type==='error' ? toastr.error(msg) : toastr.success(msg); return; }
-    alert(msg);
+    // 本頁沒有載入 toastr：改用自動消失的提示，不再跳出要按確認的 alert
+    var box = document.getElementById('rtToastBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'rtToastBox';
+        box.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:20000;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none;';
+        document.body.appendChild(box);
+    }
+    var isErr = (type === 'error');
+    var t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'pointer-events:auto;cursor:pointer;max-width:360px;padding:10px 16px;border-radius:6px;font-size:14px;line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.18);transition:opacity .3s;opacity:1;white-space:pre-line;'
+        + (isErr ? 'background:#DD5138;color:#fff;' : 'background:#8B5A2B;color:#fff;');
+    t.title = '點一下關閉';
+    t.onclick = function(){ if (t.parentNode) t.parentNode.removeChild(t); };
+    box.appendChild(t);
+    setTimeout(function(){ t.style.opacity = '0'; setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 300); }, isErr ? 5000 : 2500);
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximumFractionDigits:0}); }
