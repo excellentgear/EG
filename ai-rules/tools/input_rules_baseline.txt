@@ -29,7 +29,7 @@ views/QC/tool_calibration.php
 views/Sales/IR_Track.php
 views/Sales/NewOrder_List.php
 views/Sales/NewOrder_Track.php
-views/Sales/NewOrder_Track222.php
+views/Sales/不使用NewOrder_Track222.php
 views/Sales/Order_Profit_Analysis.php
 views/Sales/Order_Track.php
 views/Sales/Quick_Shipping.php
