@@ -3558,9 +3558,65 @@ function get_state_badge($state)
             white-space: pre-line;
         }
 
+        /* ===== V2 標題列：寬度不夠時整列往下排，按鈕不超出頁面 ===== */
+        .page-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; height: auto; }
+        .page-title .title_left, .page-title .title_right { float: none; width: auto; padding: 0; }
+        .page-title .title_right { flex: 1 1 520px; min-width: 0; }
+        .page-title .title_left h3 { margin: 0; }
+        .v2-toolbar .btn { padding: 6px 11px; font-size: 13px; white-space: nowrap; }
+        .v2-search { flex: 0 1 240px; width: auto; min-width: 160px; }
+        .v2-more.dropdown-menu { left: auto !important; right: 0 !important; }
+        .right_col { overflow-x: hidden; }
+        /* ===== V2 看板（製程大類 × 機台） ===== */
+        #v2App { display: block !important; clear: both; margin-top: 6px; }
+        .v2-tag { white-space: nowrap; }
+        .v2-r1 .v2-bom { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        #v2Tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .v2-tab { border: 1px solid #e0cfb8; background: #fff; color: #3b2f25; border-radius: 6px; padding: 6px 12px; font-size: 15px; font-weight: bold;
+                  display: inline-flex; flex-direction: column; align-items: flex-start; line-height: 18px; position: relative; }
+        .v2-tab:hover { background: #fdf3e6; }
+        .v2-tab.on { background: #f0a24b; border-color: #f0a24b; color: #fff; }
+        .v2-tab-sub { font-size: 11px; font-weight: normal; color: #8a7764; }
+        .v2-tab.on .v2-tab-sub { color: #fff3e3; }
+        .v2-tab-sub b { color: #dd5138; }
+        .v2-tab.on .v2-tab-sub b { color: #fff; }
+        .v2-tab-hit { position: absolute; top: -7px; right: -7px; background: #dd5138; color: #fff; border-radius: 9px; font-size: 11px; padding: 0 6px; line-height: 17px; }
+        #v2Board { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 10px; align-items: start; }
+        .v2-col { background: #fff; border: 1px solid #e6dccf; border-top: 4px solid #c8bfb4; border-radius: 6px; display: flex; flex-direction: column; min-width: 0; }
+        .v2-col.st-run { border-top-color: #2e9e5b; } .v2-col.st-wait { border-top-color: #f0a24b; } .v2-col.st-abn { border-top-color: #dd5138; background: #fff8f6; }
+        .v2-col-u { border-top-color: #9a7b5a; background: #fbf7f1; }
+        .v2-col-h { padding: 8px 10px 6px; border-bottom: 1px solid #f1ebe3; }
+        .v2-col-t { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: bold; color: #3b2f25; }
+        .v2-col-t .btn { margin: 0 0 0 auto; padding: 1px 6px; }
+        .v2-mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .v2-load { display: flex; gap: 10px; font-size: 12px; color: #6b5a49; margin-top: 4px; }
+        .v2-load b { font-size: 15px; color: #3b2f25; }
+        .v2-loadbar { height: 6px; background: #efe6da; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+        .v2-loadbar i { display: block; height: 100%; background: #f0a24b; }
+        .v2-col-tip { font-size: 11px; color: #8a7764; margin-top: 3px; line-height: 14px; }
+        .v2-list { padding: 6px; min-height: 60px; max-height: 62vh; overflow-y: auto; }
+        .v2-row { border: 1px solid #ece3d7; border-left: 4px solid #e0d4c4; border-radius: 4px; padding: 5px 7px; margin-bottom: 5px; background: #fff; cursor: pointer; }
+        .v2-row:hover { box-shadow: 0 1px 5px rgba(120, 80, 30, .18); }
+        .v2-row.urg-U { border-left-color: #f0a24b; } .v2-row.urg-E { border-left-color: #dd5138; }
+        .v2-row.now { background: #f1faf4; border-color: #b7e0c6; border-left-color: #2e9e5b; cursor: default; }
+        .v2-ghost { opacity: .4; background: #fdf0e0; }
+        .v2-r1 { display: flex; align-items: center; gap: 4px; line-height: 20px; }
+        .v2-no { color: #9a7b5a; font-weight: bold; font-size: 12px; min-width: 14px; }
+        .v2-row.now .v2-no { color: #2e9e5b; }
+        .v2-row .v2-bom { font-size: 14px; font-weight: bold; color: #3b2f25; white-space: nowrap; }
+        .v2-row .v2-tag { font-size: 11px; padding: 0 5px; line-height: 16px; }
+        .v2-note { color: #c0651a; cursor: help; }
+        .v2-r-act { margin-left: auto; display: inline-flex; gap: 3px; align-items: center; }
+        .v2-r-act .btn { margin: 0; padding: 1px 7px; }
+        .v2-r2 { font-size: 12px; color: #3b2f25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 17px; }
+        .v2-r3 { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6b5a49; line-height: 16px; margin-top: 2px; }
+        .v2-mbar { flex: 0 0 50px; height: 5px; background: #eee5da; border-radius: 3px; overflow: hidden; }
+        .v2-mbar i { display: block; height: 100%; background: #2e9e5b; }
+        .v2-ship { margin-left: auto; color: #8a4f12; }
+        .v2-none { text-align: center; color: #b9a58f; font-size: 12px; padding: 14px 0; }
         /* ===== V2 新版面 ===== */
         #v2LegacyBoard { display: none !important; }
-        #v2App { clear: both; display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; }
+
         #v2Side { flex: 0 0 250px; background: #fff; border: 1px solid #e6dccf; border-radius: 6px; padding: 6px 0;
                   position: sticky; top: 8px; max-height: calc(100vh - 110px); overflow-y: auto; }
         #v2Main { flex: 1 1 auto; min-width: 0; }
@@ -3630,7 +3686,7 @@ function get_state_badge($state)
                    cursor: pointer; color: #8a4f12; line-height: 18px; background: #fff; }
         .v2-chip.on { background: #f0a24b; color: #fff; border-color: #f0a24b; }
         #v2SetupFields .row { background: #f7f3ee; border-radius: 6px; margin: 0 0 6px; padding-top: 8px; }
-        @media (max-width: 991px) { #v2App { flex-direction: column; } #v2Side { position: static; flex: none; width: 100%; max-height: 260px; } }
+        
 
         /* ===== V2 簡化操作：工具列 / 報工視窗 ===== */
         .v2-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; }
@@ -3707,6 +3763,7 @@ function get_state_badge($state)
                                 <button id="btnMachineSchedule" class="btn btn-warning"><i class="fa fa-calendar"></i> 機台時程表</button>
                                 <button id="btnTempReport" class="btn btn-danger"><i class="fa fa-bolt"></i> 臨時加工</button>
                                 <button id="toggle-all-waiting-btn" class="btn btn-info" style="display: none;"><i class="fa fa-list-ul"></i> 顯示所有待辦</button>
+                                <button type="button" class="btn btn-default" data-toggle="modal" data-target="#v2HelpModal"><i class="fa fa-question-circle"></i> 使用說明</button>
                                 <div class="btn-group">
                                     <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                                         <i class="fa fa-ellipsis-h"></i> 更多 <span class="caret"></span>
@@ -3745,8 +3802,8 @@ function get_state_badge($state)
                     <div id="dashboard-view" style="display:none;"></div>
                     <!-- ===== V2 新介面：左側機台、右側工作清單（資料取自下方隱藏的原看板） ===== -->
                     <div id="v2App">
-                        <aside id="v2Side"></aside>
-                        <section id="v2Main"><div class="v2-empty"><i class="fa fa-spinner fa-spin"></i> 載入中…</div></section>
+                        <div id="v2Tabs"></div>
+                        <div id="v2Board"><div class="v2-empty"><i class="fa fa-spinner fa-spin"></i> 載入中…</div></div>
                     </div>
                     <!-- 原看板：保留在頁面上當資料來源與既有功能使用，畫面不顯示 -->
                     <div class="row" id="v2LegacyBoard">
@@ -9035,6 +9092,39 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     });
 });
             </script>
+            <div class="modal fade" id="v2HelpModal" tabindex="-1" role="dialog">
+                <div class="modal-dialog modal-lg" role="document"><div class="modal-content">
+                    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-question-circle"></i> 加工排程管理（測試版）使用說明</h4></div>
+                    <div class="modal-body" style="font-size:14px; line-height:1.8;">
+                        <h5><b>畫面怎麼看</b></h5>
+                        <ul>
+                            <li>上方每個按鈕是一個<b>製程大類</b>，顯示機台數、工單數、未指派數（紅字）。點一下切換。</li>
+                            <li>下方第一欄是該大類的<b>未指派</b>工單，其餘每一欄是一台機台。</li>
+                            <li>機台欄頂端顏色＝狀態：綠＝加工中、橘＝待加工、灰＝空閒、紅＝異常。欄頭顯示工單張數、剩餘件數、加工中進度；橘色長條是<b>負荷</b>（以本類剩餘件數最多的機台為 100%）。</li>
+                            <li>工單左側色條：紅＝特急件、橘＝急件；綠底 ▶ 是正在加工的那張（固定在第一張）。滑鼠移到 <i class="fa fa-commenting"></i> 可看備註。</li>
+                        </ul>
+                        <h5><b>排加工順序／指派機台</b></h5>
+                        <ul>
+                            <li>直接<b>拖曳</b>工單：同一欄內上下拖＝調整順序；拖到別台機台＝改派；從未指派拖到機台＝指派；拖回未指派＝取消指派。</li>
+                            <li>清單很長時用工單右邊的 <i class="fa fa-ellipsis-v"></i>：移到最前／上移／下移／移到最後、拆分工單、退回未指派。</li>
+                        </ul>
+                        <h5><b>報工</b></h5>
+                        <ul>
+                            <li>按工單上的「報工」或點工單本身開啟報工視窗。</li>
+                            <li>共用帳號請先選<b>報工人員</b>（實際做的人），下次會自動帶入上次選的人。</li>
+                            <li>後補報工：改「報工日期」或按今天／昨天／前天，時間會自動帶 08:00～17:00，可再自行修改；有架機再展開架機欄位。</li>
+                        </ul>
+                        <h5><b>其他功能</b></h5>
+                        <ul>
+                            <li>全廠看板、排程列表、機台時程表、臨時加工在上方；查詢已報工、報工紀錄、顯示設定、製程分類設定、設定生產部門、設定機台在「更多」。</li>
+                            <li>搜尋框可跨所有製程大類搜尋 BOM／料號／客戶／備註，分頁上紅色數字是各類命中筆數。</li>
+                        </ul>
+                        <h5><b>權限</b></h5>
+                        <p>沿用「待加工排程」頁的權限：有修改權限者可拖曳排序與指派、可報工；唯讀者只能看。本頁與原頁使用同一份資料。</p>
+                    </div>
+                    <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+                </div></div>
+            </div>
             <script>
             window.V2PERMS = {
                 canDrag: <?= $can_drag ? 'true' : 'false' ?>,
@@ -9047,287 +9137,249 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
 (function () {
     'use strict';
     var SELF = 'process_schedule_V2.php';
-    var LS_SEL = 'v2SelMachine', LS_USER = 'v2LastReporter';
+    var LS_TAB = 'v2SelType', LS_USER = 'v2LastReporter';
     var P = window.V2PERMS || {};
-    var SEL = '';
-    try { SEL = localStorage.getItem(LS_SEL) || ''; } catch (e) {}
-    var sortable = null;
+    var TAB = '';
+    try { TAB = localStorage.getItem(LS_TAB) || ''; } catch (e) {}
+    var sortables = [];
 
     function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
     function num(n) { return (parseInt(n, 10) || 0).toLocaleString(); }
     function toast(t, m, ok) { if (typeof showToast === 'function') showToast(t, m, ok); else alert(m); }
 
-    /* ---------- 從（隱藏的）原看板 DOM 收集資料：機台、卡片 ---------- */
+    /* ---------- 從（隱藏的）原看板 DOM 收集資料 ---------- */
     function collect() {
-        var groups = [], unassigned = [];
+        var groups = [], unByType = {};
+        $('.unassigned-wrapper .kanban-cards').each(function () { unByType[String($(this).attr('data-type-id'))] = $(this); });
         $('#machineTypeTabContent .tab-pane').each(function () {
-            var pid = this.id;
+            var pid = this.id, typeId = pid.replace('tab_type_', '');
             var $a = $('#machineTypeTabs a[href="#' + pid + '"]').first().clone();
             $a.children().remove();
-            var g = { id: pid, typeId: pid.replace('tab_type_', ''), name: $.trim($a.text()) || pid, machines: [] };
+            var g = { id: pid, typeId: typeId, name: $.trim($a.text()) || pid, machines: [], $u: unByType[typeId] || $() };
             $(this).find('.kanban-column').each(function () {
                 var $h = $(this).find('.kanban-column-header').first();
                 var $c = $(this).find('.kanban-cards').first();
-                g.machines.push({
-                    id: String($c.attr('data-machine-id')),
-                    name: $h.attr('data-machine-name') || $.trim($h.text()),
-                    abn: $h.hasClass('abnormal-header'),
-                    $c: $c, $h: $h, typeId: g.typeId
-                });
+                g.machines.push({ id: String($c.attr('data-machine-id')), name: $h.attr('data-machine-name') || $.trim($h.text()),
+                    abn: $h.hasClass('abnormal-header'), $c: $c, $h: $h });
             });
             groups.push(g);
         });
-        $('.unassigned-wrapper .kanban-cards').each(function () {
-            unassigned.push($(this));
-        });
-        return { groups: groups, unassigned: unassigned };
+        return groups;
     }
 
-    function cardInfo($k, machineName) {
-        var d = $k.data();
-        var sq = parseInt($k.attr('data-sqty'), 10) || 0;
-        var ok = parseInt($k.attr('data-ok-qty'), 10) || 0;
-        var ng = parseInt($k.attr('data-ng-qty'), 10) || 0;
+    function cardInfo($k) {
+        var sq = parseInt($k.attr('data-sqty'), 10) || 0, ok = parseInt($k.attr('data-ok-qty'), 10) || 0, ng = parseInt($k.attr('data-ng-qty'), 10) || 0;
         var cls = $k.attr('class') || '';
+        var notes = [];
+        if ($k.attr('data-ps')) notes.push('BOM備註：' + $k.attr('data-ps'));
+        if ($k.attr('data-single-bet-ps')) notes.push('單關備註：' + $k.attr('data-single-bet-ps'));
+        if ($k.attr('data-pti01-ps')) notes.push('生管：' + $k.attr('data-pti01-ps'));
+        if ($k.attr('data-1-side')) notes.push('加工面：' + $k.attr('data-1-side'));
+        if ($k.attr('data-ps2')) notes.push('現場：' + $k.attr('data-ps2'));
         return {
-            $k: $k, fid: String($k.attr('data-id')), bom: $k.attr('data-bom') || '',
-            part: $k.attr('data-part-no') || '', client: $k.attr('data-client') || '',
-            process: $.trim($k.find('.card-process-name').first().text()),
-            ptype: String($k.attr('data-process-type-id') || ''),
-            sq: sq, ok: ok, ng: ng, remain: Math.max(0, sq - ok),
-            pct: sq > 0 ? Math.min(100, Math.round(ok / sq * 100)) : 0,
-            ship: $k.attr('data-shipping-date') || '',
-            ps: $k.attr('data-ps') || '', single: $k.attr('data-single-bet-ps') || '',
-            pti: $k.attr('data-pti01-ps') || '', ps2: $k.attr('data-ps2') || '',
-            side: $k.attr('data-1-side') || '',
-            arrived: String($k.attr('data-order-id')) === '1',
-            urgent: /card-priority-U/.test(cls) ? 'U' : (/card-priority-E/.test(cls) ? 'E' : ''),
-            now: /now-processing/.test(cls),
-            split: ($k.attr('data-ps') || '').indexOf('(拆分工單)') >= 0,
+            fid: String($k.attr('data-id')), bom: $k.attr('data-bom') || '', part: $k.attr('data-part-no') || '',
+            client: $k.attr('data-client') || '', process: $.trim($k.find('.card-process-name').first().text()),
+            sq: sq, ok: ok, ng: ng, remain: Math.max(0, sq - ok), pct: sq > 0 ? Math.min(100, Math.round(ok / sq * 100)) : 0,
+            ship: $k.attr('data-shipping-date') || '', notes: notes, arrived: String($k.attr('data-order-id')) === '1',
+            urgent: /card-priority-E/.test(cls) ? 'E' : (/card-priority-U/.test(cls) ? 'U' : ''),
+            now: /now-processing/.test(cls), split: ($k.attr('data-ps') || '').indexOf('(拆分工單)') >= 0,
             module: $.trim($k.find('.module-filter-btn').first().text()),
-            gear: $k.attr('data-gear-info') || '',
-            machine: machineName || ''
+            est: $.trim($k.find('.card-est-completion').first().text()).replace(/^.*預計完工[:：]\s*/, '')
         };
     }
-
-    function machineStatus(m, cards) {
+    function cardsOf($c) { return $c.children('.kanban-card').map(function () { return cardInfo($(this)); }).get(); }
+    function hit(c, q) { return !q || (c.bom + ' ' + c.part + ' ' + c.client + ' ' + c.process + ' ' + c.notes.join(' ')).toLowerCase().indexOf(q) >= 0; }
+    function sumRemain(cs) { return cs.reduce(function (s, c) { return s + c.remain; }, 0); }
+    function status(m, cs) {
         if (m.abn) return { cls: 'abn', txt: '異常' };
-        if (cards.some(function (c) { return c.now; })) return { cls: 'run', txt: '加工中' };
-        if (cards.length) return { cls: 'wait', txt: '待加工' };
+        if (cs.some(function (c) { return c.now; })) return { cls: 'run', txt: '加工中' };
+        if (cs.length) return { cls: 'wait', txt: '待加工' };
         return { cls: 'idle', txt: '空閒' };
     }
 
     /* ---------- 畫面 ---------- */
     function render() {
-        var D = collect();
+        var groups = collect();
         var q = $.trim($('#card-search-input').val() || '').toLowerCase();
-        var allMachines = [], uCards = [];
-        D.groups.forEach(function (g) { g.machines.forEach(function (m) { allMachines.push(m); }); });
-        D.unassigned.forEach(function ($c) {
-            $c.children('.kanban-card').each(function () { uCards.push(cardInfo($(this), '')); });
+
+        // 製程大類分頁
+        groups.forEach(function (g) {
+            g.ucards = cardsOf(g.$u);
+            g.machines.forEach(function (m) { m.cards = cardsOf(m.$c); });
+            g.jobs = g.ucards.length + g.machines.reduce(function (s, m) { return s + m.cards.length; }, 0);
+            g.hits = q ? g.ucards.filter(function (c) { return hit(c, q); }).length +
+                g.machines.reduce(function (s, m) { return s + m.cards.filter(function (c) { return hit(c, q); }).length; }, 0) : 0;
         });
+        var cur = groups.filter(function (g) { return g.typeId === TAB; })[0];
+        if (q && cur && !cur.hits) cur = groups.filter(function (g) { return g.hits; })[0] || cur;
+        if (!cur) cur = groups.filter(function (g) { return g.jobs; })[0] || groups[0];
+        if (!cur) { $('#v2Board').html('<div class="v2-empty">沒有可顯示的製程分類</div>'); return; }
+        if (TAB !== cur.typeId) {
+            TAB = cur.typeId;
+            // 同步原頁的分頁，讓「調整未指派順序」「排程列表」等舊視窗作用在同一個製程大類
+            $('#machineTypeTabs a[href="#' + cur.id + '"]').tab('show');
+        }
 
-        // 左側
-        var side = '';
-        side += '<div class="v2-side-item v2-u' + (SEL === 'U' && !q ? ' on' : '') + '" data-sel="U"><span class="v2-dot idle"></span><span class="v2-sn">未指派工單</span><span class="v2-cnt hot">' + uCards.length + '</span></div>';
-        D.groups.forEach(function (g) {
-            if (!g.machines.length) return;
-            side += '<div class="v2-side-type">' + esc(g.name) + '</div>';
-            g.machines.forEach(function (m) {
-                var cards = m.$c.children('.kanban-card').map(function () { return cardInfo($(this), m.name); }).get();
-                m._cards = cards;
-                var st = machineStatus(m, cards);
-                var cur = cards.filter(function (c) { return c.now; })[0];
-                side += '<div class="v2-side-item' + (SEL === m.id && !q ? ' on' : '') + '" data-sel="' + esc(m.id) + '">' +
-                    '<span class="v2-dot ' + st.cls + '"></span><span class="v2-sn">' + esc(m.name) +
-                    (cur ? '<span class="v2-sbom">加工中 ' + esc(cur.bom) + '</span>' : '') + '</span>' +
-                    '<span class="v2-cnt">' + cards.length + '</span></div>';
-            });
+        var th = '';
+        groups.forEach(function (g) {
+            if (!g.machines.length && !g.ucards.length) return;
+            th += '<button type="button" class="v2-tab' + (g === cur ? ' on' : '') + '" data-t="' + esc(g.typeId) + '">' + esc(g.name) +
+                '<span class="v2-tab-sub">' + g.machines.length + ' 台｜' + g.jobs + ' 張' + (g.ucards.length ? '｜<b>未指派 ' + g.ucards.length + '</b>' : '') + '</span>' +
+                (q ? '<span class="v2-tab-hit">' + g.hits + '</span>' : '') + '</button>';
         });
-        $('#v2Side').html(side);
+        $('#v2Tabs').html(th);
 
-        // 預設選取
-        var known = allMachines.some(function (m) { return m.id === SEL; });
-        if (SEL !== 'U' && !known) {
-            // 第一次進來：優先選「有工單」的機台，都沒有就看未指派
-            var busy = allMachines.filter(function (m) { return (m._cards || []).length; })[0];
-            SEL = busy ? busy.id : 'U';
-        }
+        // 負荷比例尺：同一類裡剩餘數量最多的那台＝100%
+        var maxR = 1;
+        cur.machines.forEach(function (m) { maxR = Math.max(maxR, sumRemain(m.cards)); });
 
-        // 右側
-        var html = '', list = [], title = '', machine = null;
-        if (q) {
-            allMachines.forEach(function (m) { (m._cards || []).forEach(function (c) { list.push(c); }); });
-            list = list.concat(uCards.map(function (c) { c.machine = '未指派'; return c; }));
-            list = list.filter(function (c) {
-                return (c.bom + ' ' + c.part + ' ' + c.client + ' ' + c.process + ' ' + c.ps + ' ' + c.single + ' ' + c.pti + ' ' + c.ps2 + ' ' + c.machine).toLowerCase().indexOf(q) >= 0;
-            });
-            html += '<div class="v2-head"><h3><i class="fa fa-search"></i> 搜尋「' + esc($('#card-search-input').val()) + '」<small>共 ' + list.length + ' 筆（跨所有機台）</small></h3></div>';
-        } else if (SEL === 'U') {
-            list = uCards; title = '未指派工單';
-            html += '<div class="v2-head"><h3><i class="fa fa-inbox"></i> 未指派工單 <small>共 ' + list.length + ' 筆　請在每張工單上選擇機台後按「指派」</small></h3>' +
-                (P.canDrag ? '<button class="btn btn-default" id="v2UnSort"><i class="fa fa-sort"></i> 調整未指派順序</button>' : '') + '</div>';
-        } else {
-            machine = allMachines.filter(function (m) { return m.id === SEL; })[0];
-            list = machine._cards || [];
-            var st = machineStatus(machine, list);
-            html += '<div class="v2-head"><h3><span class="v2-dot ' + st.cls + '"></span> ' + esc(machine.name) + ' <span class="v2-st ' + st.cls + '">' + st.txt + '</span>' +
-                '<small>共 ' + list.length + ' 筆' + (P.canDrag ? '　可按住 ☰ 拖曳調整順序，或用右側箭頭' : '') + '</small></h3>' +
-                '<button class="btn btn-warning" id="v2Abn"><i class="fa fa-exclamation-triangle"></i> 機台異常通報</button></div>';
-        }
+        var bh = '';
+        // 未指派
+        var uR = sumRemain(cur.ucards);
+        bh += '<div class="v2-col v2-col-u"><div class="v2-col-h"><div class="v2-col-t"><i class="fa fa-inbox"></i> 未指派' +
+            (P.canDrag ? '<button type="button" class="btn btn-xs btn-default v2-usort" title="調整未指派順序"><i class="fa fa-sort"></i></button>' : '') + '</div>' +
+            '<div class="v2-load"><span><b>' + cur.ucards.length + '</b> 張</span><span>剩餘 <b>' + num(uR) + '</b> 件</span></div>' +
+            '<div class="v2-col-tip">' + (P.canDrag ? '拖到右邊機台即指派；⋮ 可移到最前／最後' : '') + '</div></div>' +
+            listHtml('unassigned-' + cur.typeId, cur.ucards, q, true) + '</div>';
+        cur.machines.forEach(function (m) {
+            var st = status(m, m.cards), r = sumRemain(m.cards);
+            var now = m.cards.filter(function (c) { return c.now; })[0];
+            var lastEst = m.cards.length ? m.cards[m.cards.length - 1].est : '';
+            bh += '<div class="v2-col st-' + st.cls + '" data-mid="' + esc(m.id) + '"><div class="v2-col-h">' +
+                '<div class="v2-col-t"><span class="v2-dot ' + st.cls + '"></span><span class="v2-mname" title="' + esc(m.name) + '">' + esc(m.name) + '</span>' +
+                '<span class="v2-st ' + st.cls + '">' + st.txt + '</span>' +
+                '<button type="button" class="btn btn-xs btn-default v2-abn" title="機台異常通報"><i class="fa fa-exclamation-triangle"></i></button></div>' +
+                '<div class="v2-load"><span><b>' + m.cards.length + '</b> 張</span><span>剩餘 <b>' + num(r) + '</b> 件</span>' +
+                (now ? '<span>加工中進度 <b>' + now.pct + '%</b></span>' : '') + '</div>' +
+                '<div class="v2-loadbar" title="負荷（剩餘數量，以本類最多的機台為 100%）"><i style="width:' + Math.round(r / maxR * 100) + '%"></i></div>' +
+                (lastEst && lastEst !== '-' ? '<div class="v2-col-tip">預計全部完工：' + esc(lastEst) + '</div>' : '<div class="v2-col-tip">&nbsp;</div>') +
+                '</div>' + listHtml(m.id, m.cards, q, false) + '</div>';
+        });
+        $('#v2Board').html(bh);
 
-        if (!list.length) {
-            html += '<div class="v2-empty"><i class="fa fa-smile-o"></i><br>' + (q ? '找不到符合的工單' : '目前沒有工單') + '</div>';
-        } else {
-            html += '<div id="v2List">';
-            list.forEach(function (c, i) { html += cardHtml(c, i, machine, allMachines, !!q); });
-            html += '</div>';
-        }
-        $('#v2Main').html(html);
-
-        // 拖曳
-        if (sortable) { try { sortable.destroy(); } catch (e) {} sortable = null; }
-        if (machine && P.canDrag && !q && document.getElementById('v2List')) {
-            sortable = new Sortable(document.getElementById('v2List'), {
-                handle: '.v2-grip', animation: 150, filter: '.v2-pinned',
-                onEnd: function () { commitOrder(machine); }
+        // 跨機台拖曳
+        sortables.forEach(function (s) { try { s.destroy(); } catch (e) {} });
+        sortables = [];
+        if (P.canDrag && !q && window.Sortable) {
+            $('#v2Board .v2-list').each(function () {
+                sortables.push(new Sortable(this, {
+                    group: 'v2board', animation: 150, draggable: '.v2-row:not(.now)',
+                    filter: 'button,.dropdown-menu,a', preventOnFilter: false,
+                    ghostClass: 'v2-ghost', onEnd: onDrop
+                }));
             });
         }
-        try { localStorage.setItem(LS_SEL, SEL); } catch (e) {}
+        try { localStorage.setItem(LS_TAB, TAB); } catch (e) {}
     }
 
-    function cardHtml(c, i, machine, allMachines, isSearch) {
-        var h = '<div class="v2-card' + (c.now ? ' now v2-pinned' : '') + (c.urgent ? ' urg-' + c.urgent : '') + '" data-fid="' + esc(c.fid) + '">';
-        h += '<div class="v2-c-left">' + (machine && P.canDrag && !c.now ? '<span class="v2-grip" title="按住拖曳"><i class="fa fa-bars"></i></span>' : '<span class="v2-grip off"></span>') +
-            '<span class="v2-no">' + (c.now ? '▶' : (machine ? (i + 1) : '')) + '</span></div>';
-        h += '<div class="v2-c-body">';
-        h += '<div class="v2-c-top"><span class="v2-bom" data-copy="' + esc(c.bom) + '" title="點一下複製">' + esc(c.bom) + '</span>' +
-            '<span class="v2-proc">' + esc(c.process) + '</span>' +
-            (c.urgent === 'E' ? '<span class="v2-tag e">特急件</span>' : '') + (c.urgent === 'U' ? '<span class="v2-tag u">急件</span>' : '') +
-            (c.now ? '<span class="v2-tag run">加工中</span>' : '') + (c.arrived ? '<span class="v2-tag ok">已到料</span>' : '') +
-            (c.split ? '<span class="v2-tag sp">拆分</span>' : '') +
-            (isSearch ? '<span class="v2-tag mc">' + esc(c.machine || '未指派') + '</span>' : '') + '</div>';
-        h += '<div class="v2-c-mid"><b>' + esc(c.part) + '</b>' + (c.client ? '　<span class="muted">' + esc(c.client) + '</span>' : '') +
-            (c.module ? '　<span class="v2-tag mod">' + esc(c.module) + '</span>' : '') + (c.ship ? '　<span class="muted"><i class="fa fa-calendar"></i> 交期 ' + esc(c.ship) + '</span>' : '') + '</div>';
-        var notes = [];
-        if (c.ps) notes.push('BOM備註：' + c.ps);
-        if (c.single) notes.push('單關備註：' + c.single);
-        if (c.pti) notes.push('生管：' + c.pti);
-        if (c.side) notes.push('加工面：' + c.side);
-        if (c.ps2) notes.push('現場：' + c.ps2);
-        if (notes.length) h += '<div class="v2-c-note">' + notes.map(esc).join('　｜　') + '</div>';
-        h += '<div class="v2-prog"><div class="v2-bar"><i style="width:' + c.pct + '%"></i></div><span>良品 <b>' + num(c.ok) + '</b> / ' + num(c.sq) + '　NG ' + num(c.ng) + '　剩 ' + num(c.remain) + '　(' + c.pct + '%)</span></div>';
-        h += '</div><div class="v2-c-act">';
-        if (P.canReport) h += '<button class="btn btn-primary v2-rep" data-fid="' + esc(c.fid) + '"><i class="fa fa-pencil-square-o"></i> 報工</button>';
-        var isU = !machine && (!c.machine || c.machine === '未指派');
-        if (isU && P.canDrag) {
-            h += '<div class="v2-assign"><select class="v2-asel form-control">' + '<option value="">選擇機台…</option>' +
-                allMachines.filter(function (m) { return m.typeId === c.ptype; }).map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('') +
-                '</select><button class="btn btn-success v2-doassign" data-fid="' + esc(c.fid) + '">指派</button></div>';
-        } else if (machine && P.canDrag) {
-            h += '<div class="v2-mini">' +
-                (!c.now ? '<button class="btn btn-default v2-up" title="上移"><i class="fa fa-arrow-up"></i></button><button class="btn btn-default v2-down" title="下移"><i class="fa fa-arrow-down"></i></button><button class="btn btn-default v2-top" title="移到最前（加工中那張之後）"><i class="fa fa-angle-double-up"></i></button>' : '') +
-                '<div class="btn-group"><button class="btn btn-default dropdown-toggle" data-toggle="dropdown"><i class="fa fa-ellipsis-v"></i></button><ul class="dropdown-menu dropdown-menu-right">' +
-                '<li><a href="#" class="v2-split" data-fid="' + esc(c.fid) + '"><i class="fa fa-code-fork"></i> 拆分工單</a></li>' +
-                (c.split && (P.hasA || P.hasD) ? '<li><a href="#" class="v2-delsplit" data-fid="' + esc(c.fid) + '"><i class="fa fa-trash"></i> 刪除拆分工單</a></li>' : '') +
-                '<li><a href="#" class="v2-unassign" data-fid="' + esc(c.fid) + '"><i class="fa fa-undo"></i> 退回未指派</a></li></ul></div></div>';
-        }
-        h += '</div></div>';
-        return h;
+    function listHtml(mid, cards, q, isU) {
+        var h = '<div class="v2-list" data-mid="' + esc(mid) + '">', shown = 0;
+        cards.forEach(function (c, i) {
+            if (!hit(c, q)) return;
+            shown++;
+            h += '<div class="v2-row' + (c.now ? ' now' : '') + (c.urgent ? ' urg-' + c.urgent : '') + '" data-fid="' + esc(c.fid) + '">' +
+                '<div class="v2-r1"><span class="v2-no">' + (c.now ? '▶' : (isU ? '' : (i + 1))) + '</span>' +
+                '<span class="v2-bom" data-copy="' + esc(c.bom) + '" title="點一下複製">' + esc(c.bom) + '</span>' +
+                (c.urgent === 'E' ? '<span class="v2-tag e">特急</span>' : '') + (c.urgent === 'U' ? '<span class="v2-tag u">急件</span>' : '') +
+                (c.arrived ? '<span class="v2-tag ok">到料</span>' : '') + (c.split ? '<span class="v2-tag sp">拆分</span>' : '') +
+                (c.notes.length ? '<i class="fa fa-commenting v2-note" title="' + esc(c.notes.join('\n')) + '"></i>' : '') +
+                '<span class="v2-r-act">' + (P.canReport ? '<button type="button" class="btn btn-xs btn-primary v2-rep">報工</button>' : '') +
+                (P.canDrag ? menuHtml(c, isU) : '') + '</span></div>' +
+                '<div class="v2-r2"><b>' + esc(c.part) + '</b>' + (c.client ? ' · ' + esc(c.client) : '') + (c.module ? ' · ' + esc(c.module) : '') + '</div>' +
+                '<div class="v2-r3"><span class="v2-mbar"><i style="width:' + c.pct + '%"></i></span>' +
+                '<span>剩 <b>' + num(c.remain) + '</b> / ' + num(c.sq) + '</span>' + (c.ship ? '<span class="v2-ship">交 ' + esc(c.ship) + '</span>' : '') + '</div></div>';
+        });
+        if (!shown) h += '<div class="v2-none">' + (q ? '無符合項目' : '無工單') + '</div>';
+        return h + '</div>';
+    }
+    function menuHtml(c, isU) {
+        var li = '';
+        if (!c.now) li += '<li><a href="#" class="v2-mv" data-m="top"><i class="fa fa-angle-double-up"></i> 移到最前</a></li>' +
+            '<li><a href="#" class="v2-mv" data-m="up"><i class="fa fa-arrow-up"></i> 上移</a></li><li><a href="#" class="v2-mv" data-m="down"><i class="fa fa-arrow-down"></i> 下移</a></li>' +
+            '<li><a href="#" class="v2-mv" data-m="bottom"><i class="fa fa-angle-double-down"></i> 移到最後</a></li><li class="divider"></li>';
+        li += '<li><a href="#" class="v2-split"><i class="fa fa-code-fork"></i> 拆分工單</a></li>';
+        if (c.split && (P.hasA || P.hasD)) li += '<li><a href="#" class="v2-delsplit"><i class="fa fa-trash"></i> 刪除拆分工單</a></li>';
+        if (!isU) li += '<li><a href="#" class="v2-unassign"><i class="fa fa-undo"></i> 退回未指派</a></li>';
+        return '<span class="dropdown"><button type="button" class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown"><i class="fa fa-ellipsis-v"></i></button>' +
+            '<ul class="dropdown-menu dropdown-menu-right">' + li + '</ul></span>';
     }
 
-    /* ---------- 操作：排序 / 指派（沿用原後端） ---------- */
+    /* ---------- 寫入：一律走原頁的後端 ---------- */
     function findCard(fid) { return $('.kanban-card[data-id="' + fid + '"]').first(); }
-
-    function commitOrder(machine) {
-        var fids = $('#v2List .v2-card').map(function () { return $(this).attr('data-fid'); }).get();
-        var $c = machine.$c;
-        fids.forEach(function (f) { $c.append(findCard(f)); });
-        fids.forEach(function (f, i) { findCard(f).attr('data-processing-sequence', i + 1); });
-        $.post(SELF, { machine_id: machine.id, order: fids }, function (res) {
-            if (res && res.success) { toast('成功', '順序已更新', true); } else { toast('錯誤', (res && res.message) || '更新失敗', false); }
-            render();
-        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); render(); });
+    function colOf(mid) {
+        if (/^unassigned/.test(mid)) return $('.unassigned-wrapper .kanban-cards[data-machine-id="' + mid + '"]').first();
+        return $('#machineTypeTabContent .kanban-cards[data-machine-id="' + mid + '"]').first();
     }
-
-    function moveIn(machine, fid, mode) {
-        var $list = $('#v2List .v2-card'), idx = -1;
-        var arr = $list.map(function () { return $(this).attr('data-fid'); }).get();
-        idx = arr.indexOf(String(fid));
-        if (idx < 0) return;
-        var minIdx = $list.first().hasClass('now') ? 1 : 0;
-        var to = idx;
-        if (mode === 'up') to = idx - 1; else if (mode === 'down') to = idx + 1; else to = minIdx;
-        if (to < minIdx || to >= arr.length || to === idx) return;
-        arr.splice(to, 0, arr.splice(idx, 1)[0]);
-        var $c = machine.$c;
-        arr.forEach(function (f) { $c.append(findCard(f)); });
-        arr.forEach(function (f, i) { findCard(f).attr('data-processing-sequence', i + 1); });
-        $.post(SELF, { machine_id: machine.id, order: arr }, function (res) {
-            if (!(res && res.success)) toast('錯誤', (res && res.message) || '更新失敗', false);
-            render();
-        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); render(); });
+    function nowFirst(fids) {   // 加工中那張永遠在最前面
+        return fids.filter(function (f) { return findCard(f).hasClass('now-processing'); })
+            .concat(fids.filter(function (f) { return !findCard(f).hasClass('now-processing'); }));
     }
-
-    function assign(fid, machineId) {
-        $.post(SELF, { action: 'update_assignment_only', machine_id: machineId, bom_ing_fid: fid }, function (res) {
-            if (res && res.success) {
-                var D = collect(), $target = null;
-                if (/^unassigned/.test(machineId)) {
-                    D.unassigned.forEach(function ($c) { if (String($c.attr('data-type-id')) === String(findCard(fid).attr('data-process-type-id'))) $target = $c; });
-                    if (!$target && D.unassigned.length) $target = D.unassigned[0];
-                } else {
-                    D.groups.forEach(function (g) { g.machines.forEach(function (m) { if (m.id === String(machineId)) $target = m.$c; }); });
-                }
-                if ($target) { findCard(fid).attr('data-processing-sequence', '').appendTo($target); }
-                toast('成功', /^unassigned/.test(machineId) ? '已退回未指派' : '已指派到機台', true);
-                render();
-            } else { toast('錯誤', (res && res.message) || '指派失敗', false); }
-        }, 'json').fail(function () { toast('錯誤', '連線失敗', false); });
+    function saveOrder(mid, fids) {
+        var $c = colOf(mid);
+        fids.forEach(function (f, i) { findCard(f).attr('data-processing-sequence', i + 1).appendTo($c); });
+        return $.post(SELF, { machine_id: mid, order: fids }, null, 'json');
+    }
+    function done(reqs, okMsg) {
+        $.when.apply($, reqs).done(function () {
+            var rs = reqs.length === 1 ? [arguments[0]] : Array.prototype.map.call(arguments, function (a) { return a[0]; });
+            var bad = rs.filter(function (r) { return !(r && r.success); })[0];
+            if (bad) toast('錯誤', bad.message || '更新失敗，請重新整理頁面', false); else if (okMsg) toast('成功', okMsg, true);
+            render();
+        }).fail(function () { toast('錯誤', '連線失敗，請重新整理頁面', false); render(); });
+    }
+    function onDrop(evt) {
+        var fid = evt.item.getAttribute('data-fid');
+        var toMid = evt.to.getAttribute('data-mid'), fromMid = evt.from.getAttribute('data-mid');
+        if (toMid === fromMid && evt.oldIndex === evt.newIndex) return;
+        var listFids = function (el) { return $(el).children('.v2-row').map(function () { return this.getAttribute('data-fid'); }).get(); };
+        var reqs = [];
+        if (/^unassigned/.test(toMid)) {
+            if (/^unassigned/.test(fromMid)) { done([saveOrder(toMid, listFids(evt.to))], '未指派順序已更新'); return; }
+            findCard(fid).attr('data-processing-sequence', '').appendTo(colOf(toMid));
+            reqs.push($.post(SELF, { action: 'update_assignment_only', machine_id: 'unassigned', bom_ing_fid: fid }, null, 'json'));
+            reqs.push(saveOrder(fromMid, nowFirst(listFids(evt.from))));
+            done(reqs, '已退回未指派');
+            return;
+        }
+        reqs.push(saveOrder(toMid, nowFirst(listFids(evt.to))));
+        if (fromMid !== toMid && !/^unassigned/.test(fromMid)) reqs.push(saveOrder(fromMid, nowFirst(listFids(evt.from))));
+        done(reqs, fromMid === toMid ? '順序已更新' : '已排到機台');
     }
 
     /* ---------- 事件 ---------- */
-    $(document).on('click', '#v2Side .v2-side-item', function () {
-        SEL = String($(this).attr('data-sel'));
-        $('#card-search-input').val('');
-        render();
-    });
+    $(document).on('click', '.v2-tab', function () { TAB = String($(this).attr('data-t')); render(); });
     $(document).on('input', '#card-search-input', function () { render(); });
-    $(document).on('click', '.v2-rep', function (e) { e.stopPropagation(); if (window.openTaskReport) window.openTaskReport($(this).data('fid')); });
+    $(document).on('click', '.v2-rep', function (e) { e.stopPropagation(); if (window.openTaskReport) window.openTaskReport($(this).closest('.v2-row').attr('data-fid')); });
     $(document).on('click', '.v2-bom', function (e) { e.stopPropagation(); if (typeof copyToClipboard === 'function') copyToClipboard($(this).attr('data-copy'), this); });
-    $(document).on('click', '.v2-card', function (e) {
-        if ($(e.target).closest('button,a,select,.v2-grip,.v2-bom,.dropdown-menu').length) return;
+    $(document).on('click', '.v2-row', function (e) {
+        if ($(e.target).closest('button,a,.dropdown-menu').length) return;
         if (P.canReport && window.openTaskReport) window.openTaskReport($(this).attr('data-fid'));
     });
-    $(document).on('click', '.v2-doassign', function (e) {
-        e.stopPropagation();
-        var mid = $(this).siblings('.v2-asel').val();
-        if (!mid) { toast('提醒', '請先選擇要指派的機台', false); return; }
-        assign($(this).data('fid'), mid);
+    $(document).on('click', '.v2-mv', function (e) {
+        e.preventDefault();
+        var $row = $(this).closest('.v2-row'), mid = $row.closest('.v2-list').attr('data-mid'), fid = $row.attr('data-fid');
+        var fids = colOf(mid).children('.kanban-card').map(function () { return String($(this).attr('data-id')); }).get();
+        var idx = fids.indexOf(fid), min = findCard(fids[0]).hasClass('now-processing') ? 1 : 0, m = $(this).data('m');
+        var to = m === 'up' ? idx - 1 : (m === 'down' ? idx + 1 : (m === 'bottom' ? fids.length - 1 : min));
+        if (idx < 0 || to < min || to >= fids.length || to === idx) return;
+        fids.splice(to, 0, fids.splice(idx, 1)[0]);
+        done([saveOrder(mid, fids)], '順序已更新');
     });
-    $(document).on('click', '.v2-up,.v2-down,.v2-top', function (e) {
-        e.stopPropagation();
-        var machine = curMachine(); if (!machine) return;
-        var fid = $(this).closest('.v2-card').attr('data-fid');
-        moveIn(machine, fid, $(this).hasClass('v2-up') ? 'up' : ($(this).hasClass('v2-down') ? 'down' : 'top'));
-    });
-    $(document).on('click', '.v2-split', function (e) { e.preventDefault(); if (window.splitTask) window.splitTask(String($(this).data('fid'))); });
-    $(document).on('click', '.v2-delsplit', function (e) { e.preventDefault(); if (window.deleteSplitTask) window.deleteSplitTask(String($(this).data('fid'))); });
+    $(document).on('click', '.v2-split', function (e) { e.preventDefault(); if (window.splitTask) window.splitTask($(this).closest('.v2-row').attr('data-fid')); });
+    $(document).on('click', '.v2-delsplit', function (e) { e.preventDefault(); if (window.deleteSplitTask) window.deleteSplitTask($(this).closest('.v2-row').attr('data-fid')); });
     $(document).on('click', '.v2-unassign', function (e) {
         e.preventDefault();
-        if (confirm('確定要把這張工單退回「未指派」嗎？')) assign($(this).data('fid'), 'unassigned');
+        if (!confirm('確定要把這張工單退回「未指派」嗎？')) return;
+        var $row = $(this).closest('.v2-row'), fid = $row.attr('data-fid'), mid = $row.closest('.v2-list').attr('data-mid');
+        findCard(fid).attr('data-processing-sequence', '').appendTo(colOf('unassigned-' + TAB));
+        var rest = colOf(mid).children('.kanban-card').map(function () { return String($(this).attr('data-id')); }).get();
+        done([$.post(SELF, { action: 'update_assignment_only', machine_id: 'unassigned', bom_ing_fid: fid }, null, 'json'), saveOrder(mid, rest)], '已退回未指派');
     });
-    $(document).on('click', '#v2Abn', function () {
-        var m = curMachine(); if (m) m.$h.find('.btn-abnormal-report').first().trigger('click');
+    $(document).on('click', '.v2-abn', function () {
+        var mid = $(this).closest('.v2-col').attr('data-mid');
+        $('#machineTypeTabContent .kanban-column-header[data-machine-id="' + mid + '"] .btn-abnormal-report').first().trigger('click');
     });
-    $(document).on('click', '#v2UnSort', function () { $('#unassigned-header').trigger('click'); });
-    function curMachine() {
-        var r = null;
-        collect().groups.forEach(function (g) { g.machines.forEach(function (m) { if (m.id === SEL) r = m; }); });
-        return r;
-    }
-
-    // 全廠看板切換：看板模式時隱藏新介面
+    $(document).on('click', '.v2-usort', function () { $('#unassigned-header').trigger('click'); });
     $(document).on('click', '#btn-dashboard-mode', function () {
         setTimeout(function () { $('#v2App').toggle(!$('#dashboard-view').is(':visible')); }, 30);
     });
@@ -9389,10 +9441,8 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     });
 
     $(function () {
-        // 隱藏用不到的舊工具鈕（功能仍在，只是不佔畫面）
         $('#toggle-view-btn').hide();
         render();
-        // 其他腳本（機台下拉等）載完後再重畫一次
         setTimeout(render, 600);
     });
     window.v2Render = render;
