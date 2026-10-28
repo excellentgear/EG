@@ -1759,8 +1759,9 @@ function acc_ar_unbound(PDO $db, array $f = []): array
         [$from, $to] = acc_scan_range($bm, $bm);
     } else {
         $months = (int)($f['months'] ?? 12);
-        if ($months <= 0 || $months > 60) $months = 12;
-        $from = date('Y-m-d', strtotime("-{$months} months"));
+        if ($months < 0 || $months > 600) $months = 12;
+        // months=0＝不限期間（出貨分析的「未綁定客戶」要能補任何年份的舊資料）
+        $from = $months === 0 ? '1990-01-01' : date('Y-m-d', strtotime("-{$months} months"));
         $to   = date('Y-m-d');
     }
 

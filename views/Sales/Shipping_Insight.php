@@ -858,7 +858,7 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
       <div class="oa-bar" style="margin-bottom:8px;">
         <label style="font-weight:normal;">統計最近
           <select id="ubMonths" class="form-control input-sm" style="display:inline-block;width:auto;" data-eg-skip>
-            <option value="3">3 個月</option><option value="6">6 個月</option><option value="12" selected>12 個月</option><option value="24">24 個月</option><option value="60">5 年</option>
+            <option value="3">3 個月</option><option value="6">6 個月</option><option value="12" selected>12 個月</option><option value="24">24 個月</option><option value="60">5 年</option><option value="0">全部期間</option>
           </select></label>
         <span id="ubTotal" style="font-size:12px;color:var(--muted);margin-left:auto;"></span>
       </div>
