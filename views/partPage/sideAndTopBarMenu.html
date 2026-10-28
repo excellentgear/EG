@@ -786,6 +786,23 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             }
         }
 
+        // 圖章共用檔只在第一次開「有圖章的公告」時才載入（不影響其他通知與頁面載入速度）
+        var nmStampLoading = null;
+        function nmLoadStamp(cb) {
+            var done = function () {
+                try { if (window.EGStamp && EGStamp.whenReady) { EGStamp.whenReady(function () { cb(true); }); return; } } catch (x) {}
+                cb(!!window.EGStamp);
+            };
+            if (window.EGStamp) { done(); return; }
+            if (!nmStampLoading) {
+                nmStampLoading = $.Deferred();
+                $.getScript('../../resource/js/eg_stamp.js').always(function () {
+                    $.getScript('../../resource/js/eg_stamp_tpl.js').always(function () { nmStampLoading.resolve(); });
+                });
+            }
+            nmStampLoading.always(done);
+        }
+
         function nmRender(res) {
             if (!res || !res.ok) { $('#nm-loading').html(res && res.msg ? res.msg : '載入失敗'); return; }
             var e = res.event;
@@ -798,8 +815,36 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             $('#nm-meta').text(meta.join('　'));
 
             // 內容
-            if (e.content_html) $('#nm-content').html('<div class="eg-nm-ctext eg-nm-rich">' + e.content_html + '</div>');
-            else $('#nm-content').html('<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>');
+            var bodyHtml = e.content_html ? '<div class="eg-nm-ctext eg-nm-rich">' + e.content_html + '</div>'
+                         : '<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>';
+            if (e.paper) {
+                // 有簽核圖章的公告：版面比照列印預覽（表頭／標題／內文／製表人與核准章）
+                var P = e.paper, co = P.company || {};
+                var paperHtml = function (stampOk) {
+                    var st = function (p) {
+                        if (!p || !p.name) return '';
+                        if (!stampOk) return nmEsc(p.name);
+                        try { return EGStamp.stamp(p.name, window.egFmtDate ? egFmtDate(p.date) : (p.date || ''), false, P.stamp_tpl ? P.stamp_tpl.schema : null, p.dept || '', p.position || ''); }
+                        catch (x) { return nmEsc(p.name); }
+                    };
+                    var h = '<div class="nm-paper"><div class="pp-co">' + nmEsc(co.name) + '</div>'
+                          + '<div class="pp-ad">' + nmEsc(co.addr || '') + (co.tel ? '　TEL:' + nmEsc(co.tel) : '') + (co.fax ? '　FAX:' + nmEsc(co.fax) : '') + '</div>'
+                          + '<div class="pp-no"><span>編號：' + nmEsc(P.event_no) + '</span><span>DATE：' + nmEsc(P.date_disp) + '</span></div>'
+                          + '<div class="pp-tt">' + nmEsc(P.doc_name) + '</div>'
+                          + '<div class="pp-fr">發文者：<u>' + nmEsc(P.from_text) + '</u></div>'
+                          + '<div class="pp-to">受文者：<u>' + nmEsc(P.to_text) + '</u></div>'
+                          + '<table class="pp-box"><tr><td class="pp-title">標題：' + nmEsc(e.title) + '</td></tr>'
+                          + '<tr><td class="pp-body">' + bodyHtml + '</td></tr>'
+                          + '<tr><td class="pp-foot"><span class="pp-sg"><span class="lb">製表人：</span>' + st(P.maker) + '</span>'
+                          + '<span class="pp-sg"><span class="lb">核准：</span>' + st(P.approver) + '</span></td></tr></table>';
+                    if (P.post_until) { var pu = String(P.post_until).split('-'); h += '<div class="pp-post">此公告張貼至　' + pu[0] + ' 年 ' + pu[1] + ' 月 ' + pu[2] + ' 日</div>'; }
+                    return h + '</div>';
+                };
+                $('#nm-content').html(paperHtml(false));
+                nmLoadStamp(function (ok) { if (ok && $('#nm-title').text() === e.title) $('#nm-content').html(paperHtml(true)); });
+            } else {
+                $('#nm-content').html(bodyHtml);
+            }
 
             // 公告附件
             if (res.attachments && res.attachments.length) {
@@ -1149,6 +1194,22 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .eg-nm-left { padding: 16px 18px; border-right: 1px solid #e6ecf1; max-height: 68vh; overflow-y: auto; }
     .eg-nm-right { padding: 16px 18px; background: #fafcfd; max-height: 68vh; overflow-y: auto; }
     .eg-nm-ctext { font-size: 14px; line-height: 1.75; color: #34495e; white-space: normal; }
+    .nm-paper { background: #fff; border: 1px solid #cfd8e0; padding: 14px 16px; color: #000; }
+    .nm-paper .pp-co { text-align: center; font-size: 22px; font-weight: bold; letter-spacing: 2px; }
+    .nm-paper .pp-ad { text-align: center; font-size: 11px; margin-top: 2px; }
+    .nm-paper .pp-no { display: flex; justify-content: space-between; font-size: 13px; margin: 8px 0 2px; }
+    .nm-paper .pp-tt { text-align: center; font-size: 20px; font-weight: bold; letter-spacing: 10px; margin: 2px 0 4px; }
+    .nm-paper .pp-fr { text-align: right; font-size: 13px; }
+    .nm-paper .pp-to { font-size: 14px; margin: 3px 0 5px; }
+    .nm-paper table.pp-box { width: 100%; border-collapse: collapse; table-layout: fixed; border: 2px double #000; }
+    .nm-paper table.pp-box td { border: 1px solid #000; padding: 6px 10px; word-wrap: break-word; overflow-wrap: break-word; }
+    .nm-paper .pp-title { text-align: center; font-size: 17px; font-weight: bold; }
+    .nm-paper .pp-body { vertical-align: top; }
+    .nm-paper .pp-foot { white-space: nowrap; }
+    .nm-paper .pp-sg { display: inline-block; vertical-align: bottom; margin-right: 40px; min-height: 60px; }
+    .nm-paper .pp-sg .lb { font-size: 14px; vertical-align: bottom; }
+    .nm-paper .pp-sg svg.car-stamp { width: 91px; height: 91px; }
+    .nm-paper .pp-post { text-align: right; font-size: 12px; margin-top: 8px; }
     .eg-nm-rich table { border-collapse: collapse; max-width: 100%; margin: 6px 0; }
     .eg-nm-rich th, .eg-nm-rich td { border: 1px solid #b9c5d0; padding: 4px 8px; vertical-align: top; }
     .eg-nm-rich img { max-width: 100%; height: auto; }

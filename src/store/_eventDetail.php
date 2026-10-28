@@ -106,6 +106,21 @@ try {
             'id' => (int)$event['id'], 'event_no' => $event['event_no'], 'title' => $event['title'],
             'content' => $event['content'], 'source' => $event['source'], 'creator' => $event['creator_name'],
             // 圖文公告（含表格）：content_html 已在存檔時清洗，這裡只補圖片 src；沒有就維持純文字
+            // 公告（有簽核圖章）：給跳窗做「列印預覽」版面用。只放表頭與製表／核准章，不帶任何人的回覆或已閱資料
+            'paper' => (function () use ($db, $eid, $event) {
+                if (($event['kind'] ?? '') !== 'announce') return null;
+                try {
+                    require_once __DIR__ . '/../common/notice_contact_lib.php';
+                    $d = nc_print_data($db, $eid, false);
+                    if (empty($d['ok']) || ($d['kind'] ?? '') !== 'announce') return null;
+                    return [
+                        'company' => $d['company'], 'event_no' => $d['event_no'], 'date_disp' => $d['date_disp'],
+                        'doc_name' => $d['doc_name'], 'from_text' => $d['from_text'], 'to_text' => $d['to_text'],
+                        'post_until' => $d['post_until'], 'maker' => $d['maker'], 'approver' => $d['approver'],
+                        'stamp_tpl' => $d['stamp_tpl'],
+                    ];
+                } catch (Throwable $e) { error_log('[eventDetail paper] ' . $e->getMessage()); return null; }
+            })(),
             'content_html' => (function () use ($event) {
                 $h = trim((string)($event['content_html'] ?? ''));
                 if ($h === '') return '';
