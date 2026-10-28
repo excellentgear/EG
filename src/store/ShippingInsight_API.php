@@ -19,6 +19,7 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/shipping_lib.php';
 include_once $document_root . '/EGsystem/src/common/shipping_insight_lib.php';
 include_once $document_root . '/EGsystem/src/common/client_quarter_lib.php';
+include_once $document_root . '/EGsystem/src/common/acc_lib.php';   // 客戶別名綁定（acc_customer_alias_bind）：與會計對帳頁同一套
 
 set_exception_handler(function ($e) {
     header('Content-Type: application/json; charset=utf-8');
@@ -50,7 +51,7 @@ $canAdmin = (bool)$perms['canAdmin'];
 if (empty($_SESSION['si_csrf'])) $_SESSION['si_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['settings_save', 'cutoff_save', 'anomaly_confirm', 'urgent_settings_save'];
+$WRITE = ['settings_save', 'cutoff_save', 'anomaly_confirm', 'urgent_settings_save', 'unbound_bind'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['si_csrf'], $tok)) {
@@ -241,6 +242,35 @@ switch ($action) {
         if ($day < 0 || $day > 31) siErr('截止日必須介於 0~31');
         si_cutoff_save($db, $day, (string)($_SESSION['userName'] ?? ''));
         siOut(['cutoff_day' => si_cutoff_get($db), 'message' => $day > 0 ? "已設為每月 {$day} 日截止" : '已取消截止日設定']);
+    }
+
+    /* ── 未綁定客戶主檔的出貨對象：清單（依客戶名稱彙總）與快速綁定 ──────────
+       出貨單上的客戶簡稱對不到客戶主檔（含別名）就會自成一組。同一個客戶名稱只要綁一次，
+       往後同名稱的所有出貨／退貨一起歸到那家客戶，並回填 is_list.Client_id（只補空白，不動金額）。 */
+    case 'unbound_list': {
+        $months = (int)($_REQUEST['months'] ?? 12);
+        $r = acc_ar_unbound($db, ['months' => $months]);
+        siOut($r + ['customers' => acc_customer_options($db), 'can_bind' => $canAdmin]);
+    }
+
+    case 'unbound_bind': {   // 已在上方過 CSRF 與 shipping_admin 權限
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') siErr('必須用 POST', 405);
+        $items = json_decode((string)($_POST['items'] ?? ''), true);
+        if (!is_array($items) || !$items) siErr('沒有要綁定的項目');
+        if (count($items) > 100) siErr('一次最多綁定 100 個客戶名稱');
+        $done = 0; $filled = 0; $errs = [];
+        foreach ($items as $it) {
+            $alias = trim((string)($it['alias'] ?? ''));
+            $cid   = strtoupper(trim((string)($it['customer_id'] ?? '')));
+            if ($alias === '' || $cid === '') continue;
+            $r = acc_customer_alias_bind($db, $alias, $cid, $sqUser);
+            if ($r['success']) { $done++; $filled += (int)$r['filled']; }
+            else $errs[] = $alias . '：' . $r['message'];
+        }
+        if (!$done && !$errs) siErr('沒有選到要綁定的客戶');
+        siOut(['bound' => $done, 'filled' => $filled, 'errors' => $errs,
+               'message' => "已綁定 {$done} 個客戶名稱" . ($filled ? "，回填 {$filled} 列出貨的客戶編號" : '')
+                            . ($errs ? '；' . count($errs) . ' 筆未完成' : '')]);
     }
 
     /* ── 異常偵測：清單（分頁）與確認 ─────────────────────────── */

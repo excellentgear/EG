@@ -286,6 +286,7 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
         <button class="btn btn-xs btn-warm-o" id="btnCutoff"><i class="fa fa-calendar-check-o"></i> 月份截止日</button>
         <button class="btn btn-xs btn-warm-o" id="btnSaleTypeSetting"><i class="fa fa-tags"></i> 出貨性質設定</button>
         <button class="btn btn-xs btn-warm-o" id="btnAnomaly"><i class="fa fa-exclamation-triangle"></i> 異常偵測</button>
+        <button class="btn btn-xs btn-warm-o" id="btnUnbound"><i class="fa fa-chain-broken"></i> 未綁定客戶</button>
         <?php if ($canAdmin): ?>
         <button class="btn btn-xs btn-warm-o" id="btnSetting"><i class="fa fa-cog"></i> 監控設定</button>
         <?php endif; ?>
@@ -850,6 +851,35 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
 </div>
 
 <!-- ── 異常偵測 ─────────────────────────────────────── -->
+<div class="m-mask" id="unboundMask">
+  <div class="m-win" style="width:980px;max-width:96%;">
+    <div class="m-head">未綁定客戶主檔的出貨對象 <span class="x" data-close="unboundMask">✕</span></div>
+    <div class="m-body" style="max-height:74vh;">
+      <div class="oa-bar" style="margin-bottom:8px;">
+        <label style="font-weight:normal;">統計最近
+          <select id="ubMonths" class="form-control input-sm" style="display:inline-block;width:auto;" data-eg-skip>
+            <option value="3">3 個月</option><option value="6">6 個月</option><option value="12" selected>12 個月</option><option value="24">24 個月</option><option value="60">5 年</option>
+          </select></label>
+        <span id="ubTotal" style="font-size:12px;color:var(--muted);margin-left:auto;"></span>
+      </div>
+      <p class="hint" style="font-size:12px;">出貨單上的客戶簡稱在客戶主檔（含別名）找不到時，就會自成一組、標「未建主檔」。
+        <b>同一個客戶名稱只要綁定一次</b>，該名稱底下所有出貨與退貨（含往後匯入的）一起歸到那家客戶；系統只給建議，不會自動綁定。
+        輸入客戶編號或名稱可搜尋；找不到對應的主檔請先到主檔管理新增客戶。</p>
+      <div class="tbl-wrap" style="max-height:46vh;">
+        <table class="oa-t" id="tblUnbound">
+          <thead><tr><?php if ($canAdmin): ?><th style="width:30px;"><input type="checkbox" id="ubAll" data-eg-skip></th><?php endif; ?><th>出貨上的客戶名稱</th><th>筆數</th><th>金額</th><th>期間</th><th style="width:300px;">綁定到客戶主檔</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <datalist id="ubCustList"></datalist>
+    </div>
+    <div class="m-foot">
+      <?php if ($canAdmin): ?><button class="btn btn-warm" id="btnUbBind"><i class="fa fa-link"></i> 綁定勾選的（已選 <span id="ubSel">0</span>）</button><?php endif; ?>
+      <button class="btn btn-default" data-close="unboundMask">關閉</button>
+    </div>
+  </div>
+</div>
+
 <div class="m-mask" id="anomalyMask">
   <div class="m-win" style="width:900px;">
     <div class="m-head">異常偵測報告（本期） <span class="x" data-close="anomalyMask">✕</span></div>
@@ -1495,7 +1525,7 @@ function renderNote(){
                                            : '（'+dispDate(m.cmp_period_eff.start)+'～'+dispDate(m.cmp_period_eff.end)+'）'));
   h.push('<b>訂單金額只算得出「有填單價」的訂單</b>：本期 '+m.ord_px_cov_cur+'%、基期 '+m.ord_px_cov_cmp+'% 有填單價，其餘以 0 計。');
   h.push('<b>出貨性質</b>：'+esc($('#stFilterLabel').text())+'。'
-       + (m.warn.no_client ? '　本期有 <b>'+nf(m.warn.no_client)+'</b> 筆出貨的客戶對不到客戶主檔（已自成一組並標「未建主檔」）。' : ''));
+       + (m.warn.no_client ? '　本期有 <b>'+nf(m.warn.no_client)+'</b> 筆出貨的客戶對不到客戶主檔（已自成一組並標「未建主檔」）。<a href="javascript:void(0)" onclick="$(\'#btnUnbound\').click()">查看並綁定</a>' : ''));
   $('#noteBar').html('<div class="oa-note">'+h.join('<br>')+'</div>');
   $('.cmpLab').text(m.cmp_label);
 }
@@ -2139,6 +2169,56 @@ $('#btnStSave').on('click', function(){
     if(!res || !res.success){ alert((res&&res.message)||'儲存失敗'); return; }
     showToast('已儲存'); $('#btnStReset').click(); stAdminLoad();
   }, 'json');
+});
+
+/* ── 未綁定客戶：清單＋快速綁定（同一客戶名稱一次綁定）── */
+var UB_CUST = {};
+function ubLabel(c){ return c.customer_id + ' ' + c.customer; }
+function ubLoad(){
+  $('#tblUnbound tbody').html('<tr><td colspan="6" class="n">載入中…</td></tr>');
+  $.get(SI_API, {action:'unbound_list', months:$('#ubMonths').val()}, function(r){
+    if(!r || !r.ok){ $('#tblUnbound tbody').html('<tr><td colspan="6">'+esc((r&&r.error)||'載入失敗')+'</td></tr>'); return; }
+    UB_CUST = {}; var dl = '';
+    (r.customers||[]).forEach(function(c){ UB_CUST[ubLabel(c)] = c.customer_id; dl += '<option value="'+esc(ubLabel(c))+'">'+esc(c.customer_full||'')+'</option>'; });
+    $('#ubCustList').html(dl);
+    var h = '', cols = CAN_ADMIN ? 6 : 5;
+    (r.rows||[]).forEach(function(x, i){
+      var sg = (x.suggest||[])[0], pre = sg ? ubLabel(sg) : '';
+      h += '<tr data-name="'+esc(x.name)+'">'
+         + (CAN_ADMIN ? '<td class="c"><input type="checkbox" class="ub-chk" data-eg-skip></td>' : '')
+         + '<td>'+esc(x.name)+'</td><td class="n">'+nf(x.cnt)+'</td><td class="n">'+nf(Math.round(x.amount))+'</td>'
+         + '<td>'+dispDate(x.first_date)+' ~ '+dispDate(x.last_date)+'</td><td>'
+         + (CAN_ADMIN ? '<input type="text" class="form-control input-sm ub-in" list="ubCustList" data-eg-skip placeholder="輸入客戶編號或名稱" value="'+esc(pre)+'" style="width:100%;">'
+              + (sg ? '<div style="font-size:11px;color:var(--muted);">建議：'+esc(sg.why||'')+'</div>' : '') : (pre ? '建議：'+esc(pre) : '—'))
+         + '</td></tr>';
+    });
+    $('#tblUnbound tbody').html(h || '<tr><td colspan="'+cols+'" class="c">這段期間沒有未綁定的客戶名稱</td></tr>');
+    $('#ubTotal').text('共 ' + (r.total||0) + ' 個客戶名稱未綁定（' + dispDate(r.range[0]) + ' ~ ' + dispDate(r.range[1]) + '）');
+    ubSel();
+  }, 'json').fail(function(){ $('#tblUnbound tbody').html('<tr><td colspan="6">載入失敗</td></tr>'); });
+}
+function ubSel(){ $('#ubSel').text($('.ub-chk:checked').length); }
+$('#btnUnbound').on('click', function(){ openMask('unboundMask'); ubLoad(); });
+$('#ubMonths').on('change', ubLoad);
+$(document).on('change', '#ubAll', function(){ $('.ub-chk').prop('checked', this.checked); ubSel(); });
+$(document).on('change', '.ub-chk', ubSel);
+$(document).on('input change', '.ub-in', function(){ if(this.value.trim()) $(this).closest('tr').find('.ub-chk').prop('checked', true); ubSel(); });
+$('#btnUbBind').on('click', function(){
+  var items = [], bad = [];
+  $('#tblUnbound tbody tr').each(function(){
+    var $tr = $(this); if(!$tr.find('.ub-chk').is(':checked')) return;
+    var v = $tr.find('.ub-in').val().trim(), cid = UB_CUST[v];
+    if(!cid){ bad.push($tr.data('name')); return; }
+    items.push({alias:String($tr.data('name')), customer_id:cid});
+  });
+  if(bad.length){ alert('以下客戶名稱還沒從清單中選定客戶（請從下拉選項挑選主檔客戶）：\n' + bad.slice(0,10).join('、')); return; }
+  if(!items.length){ alert('請勾選並指定要綁定的客戶名稱'); return; }
+  if(!confirm('確定綁定 ' + items.length + ' 個客戶名稱？\n同名稱的所有出貨與退貨都會歸到所選客戶（可在會計對帳頁解除）。')) return;
+  $.post(SI_API, {action:'unbound_bind', items:JSON.stringify(items), csrf:SI_CSRF}, function(r){
+    if(!r || !r.ok){ alert((r&&r.error)||'綁定失敗'); return; }
+    showToast(r.message); if(r.errors && r.errors.length) alert(r.errors.join('\n'));
+    ubLoad(); if(typeof load==='function') load();
+  }, 'json').fail(function(x){ alert((x.responseJSON&&x.responseJSON.error)||'綁定失敗'); });
 });
 
 var ANOM_PAGE = 1;
