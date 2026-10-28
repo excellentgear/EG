@@ -1135,16 +1135,27 @@ try {
             if (!BM_CAN_VIEW) return;   // 以下都要有明細表格才跑得動
 
             // 填充廠商篩選下拉選單
-            var uniqueMakers = [...new Set(transferData.map(item => item.maker_from_name || item.maker_from || ''))].filter(x => x).sort();
+            // value＝篩選比對用的鍵（名稱，無名稱時為ID）；顯示文字＝「廠商ID 廠商名稱」，select2 預設比對顯示文字，故ID／名稱都能模糊搜尋
+            var makerIdByKey = {};
+            transferData.forEach(function(item) {
+                var key = item.maker_from_name || item.maker_from || '';
+                if (key && !makerIdByKey[key]) makerIdByKey[key] = item.maker_from || '';
+            });
+            var uniqueMakers = Object.keys(makerIdByKey).sort(function(a, b) {
+                return (makerIdByKey[a] || a).localeCompare(makerIdByKey[b] || b);
+            });
             var makerSelect = $('#filter-maker');
             uniqueMakers.forEach(function(m) {
-                makerSelect.append(new Option(m, m));
+                var mid = makerIdByKey[m];
+                var label = (mid && mid !== m) ? (mid + ' ' + m) : m;
+                makerSelect.append(new Option(label, m));
             });
             
             $('#filter-maker').select2({
-                placeholder: "廠商 (多選)",
+                placeholder: "廠商ID／名稱 (多選)",
                 allowClear: true,
-                width: '150px'
+                width: '220px',
+                dropdownAutoWidth: true
             }).on('change', function() {
                 table.draw();
             });
