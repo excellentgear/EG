@@ -11437,7 +11437,9 @@ foreach($dCounts as $c) {
         // 兩步驟都要能用：回覆內容留白就只建立這筆紀錄，填了就連同第一筆回覆一起建立。
         function ateQRecRowHtml(r, idx) {
             var ns = 'new' + idx, rns = 'newReply' + idx;
-            ateQTpRegister(ns, r, ateQRedrawComposer);          // 回報來源：不開放「本人」快選（誰提出不一定是自己）
+            // 回報來源：不開放「本人」快選（誰提出不一定是自己）；2026-10-28 開放「備註(PS)」切換鈕，
+            // 可直接建立純備註（只留說明、不需對象、不列入待處理計數；後端 el_item_upsert 本來就支援 is_note）
+            ateQTpRegister(ns, r, ateQRedrawComposer, false, true);
             ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer, true, false,
                 function() { return (ATE_Q.rows[idx] && ATE_Q.rows[idx].reply_date) || ATE_Q.today || ''; });  // 回覆者：開放「本人」快選
             var delBtn = ATE_Q.rows.length > 1
@@ -11452,6 +11454,9 @@ foreach($dCounts as $c) {
                 +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></div>'
                 + '<div class="ate-rec-field ate-rec-wide"><label>回報來源（選填，誰提出/回報這件事）</label>' + ateQTpHtml(ns, r) + '</div>'
                 + '</div>';
+            if (r.is_note) {   // PS 備註本身就是已完成的紀錄，不需要回覆區塊
+                return html + '</td></tr>';
+            }
             html += '<div class="ate-rec-reply">'
                 + '<div class="ate-rec-reply-head"><i class="fa fa-reply"></i> 回覆（若已經有結果可以一併填寫；留白則先只建立這筆紀錄，之後再用「回覆」補）</div>'
                 + '<div class="ate-rec-reply-grid">'
@@ -11523,7 +11528,7 @@ foreach($dCounts as $c) {
                             target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at,
                             is_note: r.is_note ? 1 : 0 };
                 // 製程中紀錄：回覆內容有填才一併建立第一筆回覆，留白只建立這筆紀錄本身
-                if (ATE_Q.kind === 'process') {
+                if (ATE_Q.kind === 'process' && !r.is_note) {
                     var rc = $.trim(r.reply_content || '');
                     if (rc) {
                         var rt = r.replyTarget || {};
