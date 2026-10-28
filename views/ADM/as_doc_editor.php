@@ -341,6 +341,10 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         .fb-it:hover { background:#fbf6ee; }
         .fb-it.on { background:#f0dfc4; }
         .fb-it input { margin:0; flex:none; }
+        .fb-it .ar-nm { flex:1; min-width:0; }
+        .fb-it .ar-dp { max-width:52%; text-align:right; }
+        .fb-head { background:#f6ecda; position:sticky; top:0; z-index:1; }
+        .fb-used .ar-dp { color:#B8651B; }
         .ar-pick { display:flex; gap:14px; margin-top:10px; }
         .ar-pick-l { width:250px; font-size:13px; color:#6B471A; }
         .ar-sel { margin-top:5px; padding:7px 9px; border:1px dashed #e4d3ba; border-radius:4px;
@@ -2849,25 +2853,44 @@ function fbItems(kind) {
             });
         })(null, 0);
     } else if (kind === 'kpi') {
+        // 依區塊（客戶需求管理＋客戶滿意管理、生產管理流程…）分組，每個指標可單獨勾選；
+        // 右側註記「哪幾份文件的流程圖已經用了這個指標」（可以重複用，只是提醒）
         FB.meta.kpi.forEach(function (b) {
-            out.push({ id: b.code, label: b.name, sub: b.items.length ? ('指標：' + b.items.join('、')) : '（尚無啟用中的指標）', indent: 0 });
+            if (!b.items.length) return;
+            out.push({ head: true, id: 'g:' + b.code, label: b.name, members: b.items.map(function (x) { return x.id; }), indent: 0 });
+            b.items.forEach(function (x) {
+                var u = (FB.meta.kpi_use || {})[x.id] || [];
+                var who = u.map(function (d) { return (d.doc_id === FB.meta.doc_id ? '本文件' : d.doc_no + ' ' + d.doc_name); });
+                out.push({ id: x.id, label: x.name, sub: who.length ? ('已用於：' + who.join('、')) : '', used: who.length > 0, indent: 1 });
+            });
         });
     }
     return out;
 }
 function fbRender() {
     var kw = String($('#fbKw').val() || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-    var rows = FB.items.filter(function (it) {
+    var hit = function (it) {
         var hay = (it.label + ' ' + it.sub).toLowerCase();
         for (var i = 0; i < kw.length; i++) if (hay.indexOf(kw[i]) < 0) return false;
         return true;
+    };
+    var rows = FB.items.filter(function (it) {
+        if (!it.head) return hit(it);
+        // 分類標題：標題自己符合，或底下任何一項符合就留著
+        return hit(it) || FB.items.some(function (x) { return !x.head && it.members.indexOf(x.id) >= 0 && hit(x); });
     });
     var n = Object.keys(FB.sel).length;
     $('#fbCount').text('已選 ' + n + ' 項／符合 ' + rows.length + ' 項');
     if (!rows.length) { $('#fbList').html('<div class="ar-empty">沒有符合的項目</div>'); return; }
     var h = '';
     rows.forEach(function (it) {
-        h += '<label class="fb-it' + (FB.sel[it.id] ? ' on' : '') + '" style="padding-left:' + (10 + it.indent * 18) + 'px">'
+        if (it.head) {
+            var all = it.members.every(function (m) { return FB.sel[m]; });
+            h += '<label class="fb-it fb-head"><input type="checkbox" data-group="' + esc(it.id) + '"' + (all ? ' checked' : '') + ' data-eg-skip>'
+               + '<span class="ar-nm"><b>' + esc(it.label) + '</b></span><span class="ar-dp">全選這一區</span></label>';
+            return;
+        }
+        h += '<label class="fb-it' + (FB.sel[it.id] ? ' on' : '') + (it.used ? ' fb-used' : '') + '" style="padding-left:' + (10 + it.indent * 18) + 'px">'
            + '<input type="checkbox" data-id="' + esc(it.id) + '"' + (FB.sel[it.id] ? ' checked' : '') + ' data-eg-skip>'
            + '<span class="ar-nm">' + esc(it.label) + '</span>'
            + (it.sub ? '<span class="ar-dp">' + esc(it.sub) + '</span>' : '') + '</label>';
@@ -2875,7 +2898,14 @@ function fbRender() {
     $('#fbList').html(h);
 }
 $('#fbKw').on('input', fbRender);
-$(document).on('change', '#fbList input[type=checkbox]', function () {
+$(document).on('change', '#fbList input[data-group]', function () {
+    var g = String($(this).data('group')), on = this.checked;
+    FB.items.forEach(function (it) { if (it.head && it.id === g) it.members.forEach(function (m) {
+        if (on) { if (!FB.sel[m]) FB.sel[m] = ++FB.seq; } else delete FB.sel[m];
+    }); });
+    fbRender();
+});
+$(document).on('change', '#fbList input[data-id]', function () {
     var id = String($(this).data('id'));
     if (this.checked) FB.sel[id] = ++FB.seq; else delete FB.sel[id];
     $(this).closest('.fb-it').toggleClass('on', this.checked);
@@ -2891,13 +2921,19 @@ var FB_TXT = {
     proc: ['綁定 AS 程序書', '框裡會列出所選程序書的<b>名稱（不顯示編號）</b>；程序書日後改名，下次打開這張流程圖會自動更新。清空全部＝取消綁定。'],
     form: ['綁定 AS 表單', '框裡會列出所選表單的<b>名稱（不顯示編號）</b>；表單日後改名，下次打開這張流程圖會自動更新。清空全部＝取消綁定。'],
     dept: ['綁定部門／子部門', '選<b>下層部門</b>時，上面的課也會一起寫出（例如「資材課 生管組」）；總經理室、董事長室不會多寫。清空全部＝取消綁定。'],
-    kpi:  ['綁定 KPI 區塊', '依 KPI 方案（<a href="../news/KPI_new.php" target="_blank">KPI_new.php</a>）的區塊綁定，框裡會列出該區塊底下<b>啟用中的指標名稱</b>。「客戶需求管理＋客戶滿意管理」在 KPI 頁是同一個區塊，會一起列出。清空全部＝取消綁定。']
+    kpi:  ['綁定 KPI 區塊', '依 KPI 方案（<a href="../news/KPI_new.php" target="_blank">KPI_new.php</a>）分區塊列出，<b>每個指標可單獨勾選</b>（區塊標題可一次全選）。右側灰字是「已被哪幾份文件的流程圖用了」，可以重複用，只是提醒。清空全部＝取消綁定。']
 };
 function fbPick(kind, cur, done) {
     arLoad(function () { fbLoadMeta(function () {
         FB.kind = kind; FB.done = done; FB.items = fbItems(kind); FB.sel = {};
         FB.seq = 0;
-        cur.forEach(function (id) { FB.sel[String(id)] = ++FB.seq; });
+        cur.forEach(function (id) {
+            id = String(id);
+            // 舊版綁的是整個 KPI 區塊（COP01…）→ 展開成區塊底下的每個指標
+            var blk = (kind === 'kpi') ? FB.meta.kpi.filter(function (b) { return b.code === id; })[0] : null;
+            if (blk) blk.items.forEach(function (x) { FB.sel[x.id] = ++FB.seq; });
+            else FB.sel[id] = ++FB.seq;
+        });
         $('#fbTitle').text(FB_TXT[kind][0]); $('#fbNote').html(FB_TXT[kind][1]);
         $('#fbKw').val('');
         fbRender(); openMask('mFlowBind');
@@ -2914,7 +2950,7 @@ function fbKpiMatch(center) {
             var n = fbNorm(p);
             return n.length >= 2 && (c.indexOf(n) >= 0 || n.indexOf(c) >= 0);
         });
-        if (hit && b.items.length) out.push(b.code);
+        if (hit) b.items.forEach(function (x) { out.push(x.id); });      // 對到區塊＝先預選底下全部指標
     });
     return out;
 }

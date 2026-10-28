@@ -34,9 +34,9 @@ function afb_dept_line(array $d, array $byId): string {
 function afb_kpi_blocks(PDO $db): array {
     require_once __DIR__ . '/kpi_scheme_lib.php';
     $items = [];
-    foreach ($db->query("SELECT block, name FROM kpi_scheme_indicator WHERE is_active=1
+    foreach ($db->query("SELECT indicator_id, block, name FROM kpi_scheme_indicator WHERE is_active=1
                          ORDER BY sort_order, indicator_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $items[(string)$r['block']][] = (string)$r['name'];
+        $items[(string)$r['block']][] = ['id' => 'k' . $r['indicator_id'], 'name' => (string)$r['name']];
     }
     $out = [];
     foreach (kpi_scheme_blocks() as $code => $b) {
@@ -69,8 +69,15 @@ function afb_resolve(PDO $db, string $kind, array $ids): array {
             if (isset($by[(int)$id])) $out[$id] = [afb_dept_line($by[(int)$id], $by)];
         }
     } elseif ($kind === 'kpi') {
+        // id 有兩種：'k123'＝單一指標；'COP01'＝整個區塊（舊版綁定，等於區塊底下全部指標）
+        $byCode = []; $byItem = [];
         foreach (afb_kpi_blocks($db) as $b) {
-            if (in_array($b['code'], $ids, true)) $out[$b['code']] = $b['items'];
+            $byCode[$b['code']] = $b;
+            foreach ($b['items'] as $it) $byItem[$it['id']] = $it['name'];
+        }
+        foreach ($ids as $id) {
+            if (isset($byItem[$id])) $out[$id] = [$byItem[$id]];
+            elseif (isset($byCode[$id])) $out[$id] = array_column($byCode[$id]['items'], 'name');
         }
     }
     return $out;
@@ -105,4 +112,43 @@ function afb_stale_count(PDO $db, string $json): int {
         if (afb_text((string)$b['head'], $live, $cache[$k]) !== (string)$b['txt']) $n++;
     }
     return $n;
+}
+
+
+/**
+ * KPI 指標被哪些文件的流程圖用了：['k123' => [{doc_id,doc_no,doc_name}…]]
+ * 只看每份文件「最新版次」的流程圖工作檔（舊版次不算）；舊版綁整個區塊的，視為用了區塊底下全部指標。
+ */
+function afb_kpi_use(PDO $db): array {
+    require_once __DIR__ . '/as_doc_content_lib.php';
+    $blocks = [];
+    foreach (afb_kpi_blocks($db) as $b) $blocks[$b['code']] = array_column($b['items'], 'id');
+    $use = [];
+    try {
+        $rows = $db->query("SELECT a.*, c.doc_id, d.doc_no, d.doc_name
+                            FROM as_doc_asset a
+                            JOIN as_doc_content c ON c.id = a.content_id
+                            JOIN as_document d ON d.id = c.doc_id AND d.is_deleted=0
+                            WHERE a.kind='flow'
+                              AND c.version_id = (SELECT MAX(c2.version_id) FROM as_doc_content c2 WHERE c2.doc_id = c.doc_id)")
+                    ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as $a) {
+        $path = adc_flow_path($db, $a);
+        if (!$path || !is_file($path)) continue;
+        $j = json_decode((string)file_get_contents($path), true);
+        foreach (($j['objects'] ?? []) as $o) {
+            $b = $o['egBind'] ?? null;
+            if (!is_array($b) || ($b['kind'] ?? '') !== 'kpi') continue;
+            foreach (($b['ids'] ?? []) as $id) {
+                $id = (string)$id;
+                foreach (($blocks[$id] ?? [$id]) as $kid) {
+                    $use[$kid][(int)$a['doc_id']] = ['doc_id' => (int)$a['doc_id'],
+                        'doc_no' => (string)$a['doc_no'], 'doc_name' => (string)$a['doc_name']];
+                }
+            }
+        }
+    }
+    foreach ($use as $k => $v) $use[$k] = array_values($v);
+    return $use;
 }

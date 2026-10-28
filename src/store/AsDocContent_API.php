@@ -633,8 +633,8 @@ case 'bind_meta': {
     $st->execute([(int)$v['doc_id']]);
     foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $own[] = (int)$x;
     if (!$own && !empty($v['department_id'])) $own[] = (int)$v['department_id'];
-    jout(true, ['depts' => afb_depts($db), 'kpi' => afb_kpi_blocks($db),
-                'own_depts' => $own, 'doc_name' => (string)$v['doc_name']]);
+    jout(true, ['depts' => afb_depts($db), 'kpi' => afb_kpi_blocks($db), 'kpi_use' => afb_kpi_use($db),
+                'own_depts' => $own, 'doc_id' => (int)$v['doc_id'], 'doc_name' => (string)$v['doc_name']]);
 }
 
 /** 這個版次有幾張流程圖的綁定來源（程序書／表單／部門／KPI）已經改了——編輯器一開就問，有才跳紅色提醒 */
