@@ -787,6 +787,12 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         }
 
         // 圖章共用檔只在第一次開「有圖章的公告」時才載入（不影響其他通知與頁面載入速度）
+        // 日期顯示一律 YYYY.MM.DD（ai-rules/20）；共用函式沒載入時用同一規則自己轉
+        function nmFmtD(s) {
+            if (window.egFmtDate) return egFmtDate(s);
+            var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+            return m ? m[1] + '.' + m[2] + '.' + m[3] : (s || '');
+        }
         var nmStampLoading = null;
         function nmLoadStamp(cb) {
             var done = function () {
@@ -828,7 +834,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             var meta = [];
             if (e.source) meta.push('來源：' + e.source);
             if (e.creator) meta.push('公告者：' + e.creator);
-            meta.push('發布：' + e.eventdate + (e.enddate ? ' ~ ' + e.enddate : ''));
+            meta.push('發布：' + nmFmtD(e.eventdate) + (e.enddate ? ' ~ ' + nmFmtD(e.enddate) : ''));
             if (e.reply_deadline) meta.push('回覆期限：' + e.reply_deadline);
             $('#nm-meta').text(meta.join('　'));
 
@@ -837,12 +843,12 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                          : '<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>';
             if (e.paper) {
                 // 有簽核圖章的公告：版面比照列印預覽（表頭／標題／內文／製表人與核准章）
-                var P = e.paper, co = P.company || {};
+                var P = e.paper, co = P.company || {}; if (!window.__ownCompany && co.name) window.__ownCompany = co.name;  // 圖章上的公司名
                 var paperHtml = function (stampOk) {
                     var st = function (p) {
                         if (!p || !p.name) return '';
                         if (!stampOk) return nmEsc(p.name);
-                        try { return EGStamp.stamp(p.name, window.egFmtDate ? egFmtDate(p.date) : (p.date || ''), false, P.stamp_tpl ? P.stamp_tpl.schema : null, p.dept || '', p.position || ''); }
+                        try { return EGStamp.stamp(p.name, nmFmtD(p.date), false, P.stamp_tpl ? P.stamp_tpl.schema : null, p.dept || '', p.position || ''); }
                         catch (x) { return nmEsc(p.name); }
                     };
                     var h = '<div class="nm-paper"><div class="pp-co">' + nmEsc(co.name) + '</div>'
