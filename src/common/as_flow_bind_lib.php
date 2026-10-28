@@ -80,9 +80,10 @@ function afb_resolve(PDO $db, string $kind, array $ids): array {
 function afb_text(string $head, array $ids, array $map): string {
     $lines = [];
     foreach ($ids as $id) foreach (($map[(string)$id] ?? []) as $l) $lines[] = $l;
-    $t = $head;
-    foreach ($lines as $i => $l) $t .= "\n" . ($i + 1) . '. ' . $l;
-    return $t;
+    $rows = [];
+    foreach ($lines as $i => $l) $rows[] = ($i + 1) . '. ' . $l;
+    $body = implode("\n", $rows);
+    return $head !== '' ? ($body !== '' ? $head . "\n" . $body : $head) : $body;
 }
 
 /**
