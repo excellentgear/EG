@@ -251,6 +251,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
           </label>
           <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="applyFilters()"><option value="">— 全部負責人 —</option></select>
           <button class="btn btn-sm btn-warm-o" onclick="clearFilters()"><i class="fa fa-times"></i> 取消篩選</button>
+          <button class="btn btn-sm btn-warm-o" id="btnPrintList" onclick="printList()"><i class="fa fa-print"></i> 列印清單</button>
           <button class="btn btn-sm btn-warm" id="btnManualAdd" onclick="openManualAdd()"><i class="fa fa-plus"></i> <span id="btnManualAddTxt">人工新增應收</span></button>
         </div>
       </h4>
@@ -481,6 +482,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <ul>
         <li>應收：選定結帳月份後，自動抓出該月有出貨紀錄的客戶（與出貨單、對帳作業同一套結帳日口徑）。</li>
         <li>應付：自動抓出該結帳月份有加工移轉憑單的廠商（與「製程移轉一覽表」同一套廠商結帳日口徑）。</li>
+        <li><b>列印清單</b>：依目前所在的「應收／應付」與目前篩選結果（全部，不只這一頁）列印 A4 清單，欄位只有編號、名稱、結帳日、狀態；應收與應付各自分開列印。</li>
         <li>狀態預設留空（尚未開始），要有人實際按過狀態按鈕才會改變，不會自動顯示「處理中」。</li>
       </ul>
       <h4>搜尋與篩選</h4>
@@ -522,6 +524,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../code/highcharts.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 var API = '../../src/store/AccTrack_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
@@ -577,6 +580,49 @@ function rebuildPerPageOptions(){
     document.getElementById('logPerPage').innerHTML = optsHtml;
     LIST_PER_PAGE = DEFAULT_PER_PAGE;
     LOG_PER_PAGE = DEFAULT_PER_PAGE;
+}
+/* 列印清單：目前這一邊（應收／應付）、目前篩選後的全部資料（不只這一頁）。
+   欄位只有：客戶／廠商ID、名稱、結帳日、狀態。版面依 ai-rules/16（公司全名、頁碼左下、A4 直式）。 */
+var RT_COMPANY = <?= json_encode(function_exists('eg_company_full_name') ? eg_company_full_name($db) : '', JSON_UNESCAPED_UNICODE) ?>;
+function printList(){
+    var rows = FILTERED_ROWS || [];
+    if (!rows.length) { showToast('目前沒有可列印的資料', 'err'); return; }
+    var isAr = (SIDE === 'ar'), bm = document.getElementById('fBm').value || defaultBm();
+    var title = (isAr ? '應收' : '應付') + '對帳進度清單';
+    var pd = function(d){ return d ? String(d).replace(/-/g, '.') : '—'; };
+    var now = new Date(), p2 = function(n){ return n < 10 ? '0' + n : '' + n; };
+    var printTime = now.getFullYear() + '.' + p2(now.getMonth() + 1) + '.' + p2(now.getDate()) + ' ' + p2(now.getHours()) + ':' + p2(now.getMinutes());
+    var body = rows.map(function(r, i){
+        return '<tr><td class="c">' + (i + 1) + '</td><td class="c">' + esc(r.party_id || '—') + '</td><td>' + esc(r.party_name) + '</td>'
+             + '<td class="c">' + pd(r.cutoff_date) + '</td><td class="c">' + esc(statusLabel(r.card_status)) + '</td></tr>';
+    }).join('');
+    var css = '@page{size:A4 portrait;margin:14mm 12mm 16mm 12mm;}'
+        + 'body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#222;font-size:10pt;margin:0;}'
+        + '.co{text-align:center;font-size:15pt;font-weight:700;}.tt{text-align:center;font-size:13pt;font-weight:700;margin:2mm 0;}'
+        + '.sub{text-align:center;font-size:9pt;color:#555;margin-bottom:4mm;}'
+        + 'table{width:100%;border-collapse:collapse;table-layout:fixed;}thead{display:table-header-group;}tr{page-break-inside:avoid;}'
+        + 'th,td{border:0.3mm solid #666;padding:1.6mm 2mm;word-break:break-all;}th{background:#F7E0BD;}.c{text-align:center;}';
+    var html = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css + '</style></head><body>'
+        + '<div class="co">' + esc(RT_COMPANY) + '</div><div class="tt">' + esc(title) + '</div>'
+        + '<div class="sub">結帳月份：' + esc(bm) + '　共 ' + rows.length + ' 筆　列印時間：' + printTime + '</div>'
+        + '<table><colgroup><col style="width:8%"><col style="width:18%"><col><col style="width:20%"><col style="width:20%"></colgroup>'
+        + '<thead><tr><th>序</th><th>' + (isAr ? '客戶編號' : '廠商編號') + '</th><th>' + (isAr ? '客戶名稱' : '廠商名稱') + '</th><th>結帳日</th><th>狀態</th></tr></thead>'
+        + '<tbody>' + body + '</tbody></table></body></html>';
+    var w = window.open('', '_blank', 'width=1000,height=900,scrollbars=yes,resizable=yes');
+    if (!w) { showToast('瀏覽器擋掉了彈出視窗，請允許本站彈出後再試', 'err'); return; }
+    w.document.write(html); w.document.close(); w.focus();
+    try { if (window.EGPrintLog) EGPrintLog.record({ source:'acc_recon_track', doc_name: title + ' ' + bm, doc_kind:'form' }); } catch(e){}
+    setTimeout(function(){
+        try {   // 頁碼（左下）：超過一頁才加，量寬度要用列印實際寬度
+            var d = w.document;
+            if (d.body.scrollHeight > 1000) {
+                var st = d.createElement('style');
+                st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#555; } }";
+                d.head.appendChild(st);
+            }
+        } catch(e){}
+        w.print();
+    }, 500);
 }
 function statusBadge(k){ return '<span class="badge-st badge-' + (k===''?'need_recon':k) + '">' + esc(statusLabel(k)) + '</span>'; }
 
