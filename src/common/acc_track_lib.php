@@ -196,6 +196,7 @@ function act_ensure_schema(PDO $db): void
 if (!defined('ACT_ROLES')) {
     define('ACT_ROLES', [
         'art_admin'    => '對帳追蹤-本頁管理員（可修改）',
+        'art_settle'   => '對帳追蹤-可更改結帳日（非管理員，可疊加其他角色）',
         'art_view_all' => '對帳追蹤-管理檢閱（唯讀，可看全部不可修改）',
         'art_pm'       => '對帳追蹤-生管',
         'art_sales'    => '對帳追蹤-業務',
@@ -235,9 +236,10 @@ function act_perms(PDO $db, int $uid): array
     $isPm      = in_array('art_pm', $feat, true);
     $isSales   = in_array('art_sales', $feat, true);
     $isAcc     = in_array('art_acc', $feat, true);
-    $canView   = $viewAll || $isPm || $isSales || $isAcc;
+    $canSettle = $canAdmin || in_array('art_settle', $feat, true);   // 可更改結帳日（客戶/廠商主檔結帳日）
+    $canView   = $viewAll || $isPm || $isSales || $isAcc || $canSettle;
     return [
-        'uid' => $uid, 'isAll' => $isAll, 'canAdmin' => $canAdmin, 'viewAll' => $viewAll,
+        'uid' => $uid, 'isAll' => $isAll, 'canAdmin' => $canAdmin, 'canSettle' => $canSettle, 'viewAll' => $viewAll,
         'isPm' => $isPm, 'isSales' => $isSales, 'isAcc' => $isAcc, 'canView' => $canView,
     ];
 }}
@@ -818,6 +820,23 @@ function act_settle_quick_edit(PDO $db, string $targetType, string $targetId, ar
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
     return ['success' => true, 'message' => '已更新', 'changed' => $logs];
+}}
+
+if (!function_exists('act_settle_last_edit_map')) {
+/** 結帳日最後一次修改（含復原）：target_type|target_id => ['by'=>姓名,'at'=>'Y-m-d']；只看 settlement_mode/day 兩欄 */
+function act_settle_last_edit_map(PDO $db, string $targetType): array
+{
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT l.target_id, COALESCE(NULLIF(u.user_cname,''), l.changed_by_name) AS nm, DATE_FORMAT(l.changed_at,'%Y-%m-%d') AS d
+                            FROM acc_recon_track_change_log l
+                            JOIN (SELECT target_id, MAX(id) AS mid FROM acc_recon_track_change_log
+                                  WHERE target_type=? AND field IN ('settlement_mode','settlement_day') GROUP BY target_id) x ON x.mid = l.id
+                            LEFT JOIN user u ON u.id = l.changed_by");
+        $st->execute([$targetType]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['target_id']] = ['by' => (string)$r['nm'], 'at' => (string)$r['d']];
+    } catch (Throwable $e) {}
+    return $out;
 }}
 
 if (!function_exists('act_settle_revert')) {

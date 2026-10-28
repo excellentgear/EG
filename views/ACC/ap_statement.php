@@ -7,8 +7,8 @@
  * tax_amount / paid_qty（99.99%），廠商發票資訊本來就在維護，
  * 因此會計端只做彙總對帳，不重新登錄廠商發票。
  *
- * 月份歸屬：優先用資料本身的 invoice_ym（廠商發票年月）；
- * 沒有 invoice_ym 的少數紀錄才退回用 transfer_date 所在月份。
+ * 月份歸屬（2026-10-28 起）：一律用 bom_ing_transfer_log.bill_ym（帳款月份＝J- 單號日期＋廠商主檔結帳日，
+ * 可人工指定），與「對帳進度追蹤」recon_track.php 同一口徑；不再用 invoice_ym。
  *
  * 尚未涵蓋（待 purchase_request 有實際資料後接入）：材料／其他採購的應付。
  * 加工費與採購會共用同一層付款沖帳，屆時在此頁增加來源切換。
@@ -270,7 +270,7 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
       </table>
     </div>
     <div class="a-hint">
-      <b>加工費</b>月份歸屬以資料本身的<b>廠商發票年月（invoice_ym）</b>為準；少數沒填的紀錄才退回用加工日期所在月份。
+      <b>加工費</b>月份歸屬以<b>帳款月份（J- 單號日期＋廠商主檔結帳日計算，可人工指定）</b>為準，與「對帳進度追蹤」同一口徑；不再使用 ERP 的發票年月。
       加工費與稅額直接取自製程移轉紀錄，未做二次計算，因此可與 ERP 對得起來。
       廠商簡稱在廠商主檔找不到對應者會標示 <span class="pill p-bad">未對應主檔</span>。<br>
       <b>採購</b>來源為「申請採購」的採購單，<b>已下單之後</b>才算應付（還在詢價／簽核／待下單的不算），

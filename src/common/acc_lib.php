@@ -2144,10 +2144,23 @@ function acc_ar_summary(PDO $db, array $f): array
 }
 
 /** 單一客戶單一帳款月份的明細（對帳單內容） */
+/** 同一個客戶主檔底下的所有名稱（簡稱＋別名）。查不到主檔就只回原名稱。 */
+function acc_client_name_variants(PDO $db, string $name): array
+{
+    $map = acc_customer_by_name($db);
+    $c = $map[$name] ?? null;
+    if (!$c) return [$name];
+    $out = [];
+    foreach ($map as $n => $row) if ((string)$row['customer_id'] === (string)$c['customer_id']) $out[] = (string)$n;
+    return $out ?: [$name];
+}
+
 function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
 {
     if (!preg_match('/^\d{4}-\d{2}$/', $billingMonth)) return ['items' => [], 'head' => null];
     [$scanFrom, $scanTo] = acc_scan_range($billingMonth, $billingMonth);
+    $nmList = acc_client_name_variants($db, $clientName);   // 簡稱＋別名（與應收彙總以客戶主檔歸戶一致）
+    $nmPh   = implode(',', array_fill(0, count($nmList), '?'));
     $global = acc_global_cutoff($db);
     $rate   = acc_tax_rate($db);
 
@@ -2165,10 +2178,10 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         FROM is_list il
         LEFT JOIN order_track  ot  ON ot.Order_id = il.Order_id
         LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
-        WHERE il.Client_name = ?
+        WHERE il.Client_name IN ($nmPh)
           AND (il.Order_date BETWEEN ? AND ? OR il.billing_month_override = ?)
         ORDER BY il.Order_date, il.IS_number, il.IS_id");
-    $st->execute([$clientName, $scanFrom, $scanTo, $billingMonth]);
+    $st->execute(array_merge($nmList, [$scanFrom, $scanTo, $billingMonth]));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
@@ -2189,10 +2202,10 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
                COALESCE(rt.is_note,0) AS is_note
         FROM ir_track it
         LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
-        WHERE it.Client_name = ?
+        WHERE it.Client_name IN ($nmPh)
           AND (it.IR_date BETWEEN ? AND ? OR it.billing_month_override = ?)
         ORDER BY it.IR_date, it.IR_no");
-    $st2->execute([$clientName, $scanFrom, $scanTo, $billingMonth]);
+    $st2->execute(array_merge($nmList, [$scanFrom, $scanTo, $billingMonth]));
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
@@ -3090,8 +3103,26 @@ function acc_receipt_delete(PDO $db, int $receiptId, string $userId): array
  *
  * @param array $f ym_from, ym_to (YYYY-MM), src, kw, only_gap, sort, dir, page, per_page
  */
+/**
+ * 應付（加工費）帳款月份的唯一口徑＝bom_ing_transfer_log.bill_ym（對帳進度追蹤 recon_track 同一欄）。
+ * 算法：J- 單號日期＋該廠商主檔結帳日（沒設用全域預設），人工指定者 bill_ym_manual=1（billing_month_lib.php）。
+ * 2026-10-28 起取代原本的 invoice_ym（ERP 發票年月）／transfer_date 日曆月，避免與進度追蹤兩邊月份對不起來。
+ * 這裡只負責把還沒算過（bill_ym 空）的列補齊，每個請求最多一次。
+ */
+function acc_ap_bm_ready(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        require_once __DIR__ . '/billing_month_lib.php';
+        eg_bm_fill($db, ['only_empty' => true]);
+    } catch (Throwable $e) {}
+}
+
 function acc_ap_summary(PDO $db, array $f): array
 {
+    acc_ap_bm_ready($db);
     $src = strtoupper(trim((string)($f['src'] ?? 'all')));
     if (!in_array($src, ['TLOG', 'PURC', 'ALL'], true)) $src = 'ALL';
     $ymFrom = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_from'] ?? '')) ? $f['ym_from'] : date('Y-m');
@@ -3103,8 +3134,7 @@ function acc_ap_summary(PDO $db, array $f): array
 
     $st = $db->prepare("
         SELECT t.maker_from,
-               COALESCE(NULLIF(t.invoice_ym,''),
-                        DATE_FORMAT(t.transfer_date,'%Y%m'))       AS ym,
+               COALESCE(NULLIF(t.bill_ym,''), DATE_FORMAT(t.transfer_date,'%Y%m')) AS ym,
                COUNT(*)                                            AS cnt,
                SUM(COALESCE(t.process_amount,0))                   AS amt,
                SUM(COALESCE(t.tax_amount,0))                       AS tax,
@@ -3115,8 +3145,8 @@ function acc_ap_summary(PDO $db, array $f): array
         FROM bom_ing_transfer_log t
         WHERE COALESCE(t.process_amount,0) <> 0
           AND (
-                (t.invoice_ym IS NOT NULL AND t.invoice_ym <> '' AND t.invoice_ym BETWEEN ? AND ?)
-             OR ((t.invoice_ym IS NULL OR t.invoice_ym = '') AND t.transfer_date BETWEEN ? AND ?)
+                (t.bill_ym IS NOT NULL AND t.bill_ym <> '' AND t.bill_ym BETWEEN ? AND ?)
+             OR ((t.bill_ym IS NULL OR t.bill_ym = '') AND t.transfer_date BETWEEN ? AND ?)
               )
         GROUP BY t.maker_from, ym
         ORDER BY amt DESC");
@@ -3278,6 +3308,7 @@ function acc_ap_summary(PDO $db, array $f): array
  */
 function acc_ap_detail(PDO $db, string $makerIdNo, string $ym, string $src = 'all'): array
 {
+    acc_ap_bm_ready($db);
     $src = strtoupper(trim($src));
     if (!in_array($src, ['TLOG', 'PURC', 'ALL'], true)) $src = 'ALL';
     if (!preg_match('/^\d{4}-\d{2}$/', $ym)) return ['items' => [], 'head' => null];
@@ -3303,8 +3334,8 @@ function acc_ap_detail(PDO $db, string $makerIdNo, string $ym, string $src = 'al
         LEFT JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         WHERE t.maker_from = ? AND COALESCE(t.process_amount,0) <> 0
-          AND ( (t.invoice_ym IS NOT NULL AND t.invoice_ym <> '' AND t.invoice_ym = ?)
-             OR ((t.invoice_ym IS NULL OR t.invoice_ym = '') AND t.transfer_date BETWEEN ? AND ?) )
+          AND ( (t.bill_ym IS NOT NULL AND t.bill_ym <> '' AND t.bill_ym = ?)
+             OR ((t.bill_ym IS NULL OR t.bill_ym = '') AND t.transfer_date BETWEEN ? AND ?) )
         GROUP BY t.transfer_id
         ORDER BY t.transfer_date, t.transfer_no, t.transfer_id");
     $st->execute([$makerIdNo, $c, $dFrom, $dTo]);
@@ -4054,7 +4085,7 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
                    t.maker_from, t.bom, t.product_id, t.transfer_qty,
                    COALESCE(t.modified_unit_price, t.price) AS up,
                    t.process_amount, t.tax_amount,
-                   DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date, t.invoice_ym,
+                   DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date, t.invoice_ym, t.bill_ym, t.bill_ym_manual,
                    t.note, t.order_no, m.maker_id, m.maker_id_all
             FROM bom_ing_transfer_log t
             LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
@@ -4068,7 +4099,7 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
     if ($isNum) { $p[] = $num; $p[] = $tol; $p[] = (int)$num; }
     $st = $db->prepare($sql); $st->execute($p);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $ym  = trim((string)$r['invoice_ym']);
+        $ym  = trim((string)$r['bill_ym']);
         $ymF = (strlen($ym) === 6) ? substr($ym, 0, 4) . '-' . substr($ym, 4, 2) : '';
         $groups['process'][] = [
             'kind' => 'process', 'id' => (int)$r['transfer_id'], 'no' => $r['transfer_no'],
@@ -4079,7 +4110,7 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
             'amount' => (float)$r['process_amount'], 'tax' => (float)$r['tax_amount'],
             'billing_month' => ($ymF !== '' ? $ymF : substr((string)$r['d'], 0, 7)),
             'auto_month' => substr((string)$r['d'], 0, 7),
-            'overridden' => ($ymF !== '' && $ymF !== substr((string)$r['d'], 0, 7)),
+            'overridden' => ((int)$r['bill_ym_manual'] === 1),
             'inv_date' => $r['inv_date'], 'note' => $r['note'], 'order_no' => $r['order_no'],
             'can_edit_month' => true,
         ];
@@ -4199,7 +4230,7 @@ function acc_billing_search(PDO $db, array $f): array
         }
         if ($from !== '') { $w[] = "t.transfer_date >= ?"; $p[] = $from; }
         if ($to   !== '') { $w[] = "t.transfer_date <= ?"; $p[] = $to; }
-        if ($bm   !== '') { $w[] = "COALESCE(NULLIF(t.invoice_ym,''), DATE_FORMAT(t.transfer_date,'%Y%m')) = ?";
+        if ($bm   !== '') { $w[] = "COALESCE(NULLIF(t.bill_ym,''), DATE_FORMAT(t.transfer_date,'%Y%m')) = ?";
                             $p[] = str_replace('-', '', $bm); }
         $st = $db->prepare("
             SELECT t.transfer_id AS id, t.transfer_no AS no,
@@ -4207,7 +4238,8 @@ function acc_billing_search(PDO $db, array $f): array
                    t.maker_from, m.maker_id, t.bom, t.product_id AS pid,
                    t.transfer_qty AS qty, COALESCE(t.modified_unit_price,t.price) AS up,
                    t.process_amount AS amt, t.tax_amount AS tax,
-                   t.invoice_ym, DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date
+                   t.bill_ym AS invoice_ym, t.bill_ym_manual, t.transfer_no AS tno, t.transfer_date AS tdate,
+                   DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date
             FROM bom_ing_transfer_log t
             LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
             WHERE " . implode(' AND ', $w) . "
@@ -4216,9 +4248,13 @@ function acc_billing_search(PDO $db, array $f): array
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $ym   = trim((string)$r['invoice_ym']);
             $ymF  = (strlen($ym) === 6) ? substr($ym, 0, 4) . '-' . substr($ym, 4, 2) : '';
-            $auto = substr((string)$r['d'], 0, 7);
+            // 自動值＝J- 單號日期＋廠商結帳日（billing_month_lib 同一支算法）；人工指定才算「已調整」
+            require_once __DIR__ . '/billing_month_lib.php';
+            $autoYm = eg_bm_calc_row($db, ['transfer_no' => $r['tno'], 'transfer_date' => $r['tdate'], 'maker_from' => $r['maker_from']]);
+            $auto = $autoYm ? substr($autoYm, 0, 4) . '-' . substr($autoYm, 4, 2) : substr((string)$r['d'], 0, 7);
             $cur  = ($ymF !== '' ? $ymF : $auto);
-            if ($onlyOvr && ($ymF === '' || $ymF === $auto)) continue;
+            $isMan = ((int)$r['bill_ym_manual'] === 1);
+            if ($onlyOvr && !$isMan) continue;
             $rows[] = [
                 'src_type' => 'TLOG', 'id' => (int)$r['id'], 'no' => $r['no'], 'kind' => 'process',
                 'date' => $r['d'], 'party' => $r['maker_id'] ?: $r['maker_from'],
@@ -4226,7 +4262,7 @@ function acc_billing_search(PDO $db, array $f): array
                 'product_id' => $r['pid'], 'qty' => (int)$r['qty'],
                 'amount' => (float)$r['amt'], 'tax' => (float)$r['tax'],
                 'auto_month' => $auto, 'override' => $ymF, 'billing_month' => $cur,
-                'overridden' => ($ymF !== '' && $ymF !== $auto),
+                'overridden' => $isMan,
                 'inv_date' => $r['inv_date'], 'locked' => false,
             ];
         }
@@ -4279,10 +4315,14 @@ function acc_set_billing_month(PDO $db, string $srcType, int $id, string $ym, st
                                 Modified_At = NOW() WHERE IR_id = ?");
             $st->execute([$ym !== '' ? $ym : null, $userId, $id]);
         } else {
-            // 應付：invoice_ym 是 char(6) YYYYMM；清空＝退回用加工日期所在月份
-            $st = $db->prepare("UPDATE bom_ing_transfer_log SET invoice_ym = ?, modified_at = NOW(),
-                                changed_by = ? WHERE transfer_id = ?");
-            $st->execute([$ym !== '' ? str_replace('-', '', $ym) : null, $userId, $id]);
+            // 應付：寫 bill_ym（與對帳進度追蹤同一欄）；指定＝bill_ym_manual=1，清空＝還原自動計算
+            require_once __DIR__ . '/billing_month_lib.php';
+            $db->commit();   // eg_bm_* 內含 DDL 檢查，不可在交易中呼叫（隱式 commit 會害外層 commit 失敗）
+            if ($ym !== '') $r = eg_bm_set_manual($db, [$id], 'set', str_replace('-', '', $ym), 0, (int)$userId);
+            else            $r = eg_bm_reset_auto($db, [$id]);
+            $n = (int)$r['updated'];
+            return ['success' => true, 'updated' => $n,
+                    'message' => $n ? ($ym !== '' ? "已指定帳款月份為 {$ym}" : '已恢復為自動計算') : '資料未變更'];
         }
         $n = $st->rowCount();
         $db->commit();
@@ -4561,7 +4601,7 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
         }
         $st = $db->prepare("SELECT t.transfer_id, t.transfer_no, DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
                                    t.bom, t.product_id, t.transfer_qty, t.price, t.modified_unit_price,
-                                   t.process_amount, t.invoice_ym, t.note
+                                   t.process_amount, t.bill_ym AS invoice_ym, t.bill_ym_manual, t.note
                             FROM bom_ing_transfer_log t
                             WHERE " . implode(' AND ', $w) . "
                             ORDER BY t.transfer_date DESC, t.transfer_id DESC LIMIT 400");
@@ -4576,7 +4616,7 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
                        'qty' => (int)$r['transfer_qty'],
                        'unit_price' => (float)($r['modified_unit_price'] ?: $r['price']),
                        'amount' => (float)$r['process_amount'], 'cur_month' => $cur,
-                       'is_override' => $ovr !== '', 'kind' => 'process',
+                       'is_override' => ((int)$r['bill_ym_manual'] === 1), 'kind' => 'process',
                        'locked' => null, 'note' => $r['note']];
         }
         return ['rows' => $rows, 'range' => [$from, $to], 'billing_month' => $bm];

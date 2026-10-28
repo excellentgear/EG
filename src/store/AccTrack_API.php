@@ -93,6 +93,13 @@ switch ($action) {
         $bm   = (string)($_GET['bm'] ?? date('Y-m'));
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
         $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm, !empty($_GET['zero']) && ($perms['canAdmin'] || $perms['isPm'] || $perms['isSales'] || $perms['isAcc']));
+        // 結帳日最後修改人／日期（顯示在結帳日下方）
+        $lastEdit = act_settle_last_edit_map($db, $side === 'ar' ? 'customer' : 'maker');
+        foreach ($allRows as &$_r) {
+            $le = $lastEdit[(string)($_r['party_id'] ?? '')] ?? null;
+            $_r['settle_by'] = $le['by'] ?? null; $_r['settle_at'] = $le['at'] ?? null;
+        }
+        unset($_r);
 
         // 依結帳日由先到後排序（使用者要求）；沒有結帳日的排最後，同一天再依名稱排序求穩定
         usort($allRows, function ($a, $b) {
@@ -140,7 +147,7 @@ switch ($action) {
 
     /* ── 結帳日快速修改（連動 customer_list/maker_list）────────────── */
     case 'settle_quick_edit': {
-        if (!$perms['canAdmin']) actErr('沒有修改結帳日的權限（僅本頁管理員）', 403);
+        if (!$perms['canSettle']) actErr('沒有修改結帳日的權限（需本頁管理員或「可更改結帳日」角色）', 403);
         $type = (string)($_POST['target_type'] ?? '');
         $id   = trim((string)($_POST['target_id'] ?? ''));
         if ($id === '') actErr('缺少對象');

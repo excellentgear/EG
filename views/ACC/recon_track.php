@@ -45,6 +45,7 @@ $perms = act_perms($db, $uid);
 $roleBits = [];
 if ($perms['canAdmin']) $roleBits[] = '本頁管理員（可修改）';
 elseif ($perms['viewAll']) $roleBits[] = '本頁管理員（唯讀）';
+if (!$perms['canAdmin'] && $perms['canSettle']) $roleBits[] = '可更改結帳日';
 if ($perms['isPm'])    $roleBits[] = '生管';
 if ($perms['isSales']) $roleBits[] = '業務';
 if ($perms['isAcc'])   $roleBits[] = '會計';
@@ -874,13 +875,13 @@ function renderListTbl(){
                     '</select>';
             }
         }
-        var settleBtn = (PERMS.canAdmin && targetId) ? '<button class="icon-btn" title="修改結帳日" onclick="openSettleMask(\''+targetType+'\',\''+esc(targetId)+'\',\''+esc(r.party_name)+'\',\''+(r.settlement_mode||'FIXED')+'\','+(r.settlement_day||'')+')"><i class="fa fa-pencil"></i></button>' : '';
+        var settleBtn = (PERMS.canSettle && targetId) ? '<button class="icon-btn" title="修改結帳日" onclick="openSettleMask(\''+targetType+'\',\''+esc(targetId)+'\',\''+esc(r.party_name)+'\',\''+(r.settlement_mode||'FIXED')+'\','+(r.settlement_day||'')+')"><i class="fa fa-pencil"></i></button>' : '';
 
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
         tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
-        tds.push('<td class="c">' + (r.cutoff_date||'—') + '</td>');
+        tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
         if (isAr) {
