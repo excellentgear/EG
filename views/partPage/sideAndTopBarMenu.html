@@ -793,14 +793,32 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 try { if (window.EGStamp && EGStamp.whenReady) { EGStamp.whenReady(function () { cb(true); }); return; } } catch (x) {}
                 cb(!!window.EGStamp);
             };
-            if (window.EGStamp) { done(); return; }
+            if (window.EGStamp && window.EGStampTpl) { done(); return; }
             if (!nmStampLoading) {
                 nmStampLoading = $.Deferred();
-                $.getScript('../../resource/js/eg_stamp.js').always(function () {
-                    $.getScript('../../resource/js/eg_stamp_tpl.js').always(function () { nmStampLoading.resolve(); });
+                var need = function (ok, u, next) { if (ok) next(); else $.getScript(u).always(next); };
+                need(!!window.EGStamp, '../../resource/js/eg_stamp.js', function () {
+                    need(!!window.EGStampTpl, '../../resource/js/eg_stamp_tpl.js', function () { nmStampLoading.resolve(); });
                 });
             }
             nmStampLoading.always(done);
+        }
+
+        // 表格寬度原本是編輯區的 px，跳窗較窄：換算成佔內文寬的百分比，欄寬比例才會與編輯／列印一致
+        function nmScaleRich(html) {
+            if (!/<table/i.test(html || '')) return html;
+            var W = 680, box = document.createElement('div'); box.innerHTML = html;
+            var rx = /(?:^|;)\s*width:\s*([\d.]+)px/;
+            Array.prototype.forEach.call(box.querySelectorAll('table'), function (t) {
+                var m = rx.exec(t.getAttribute('style') || ''); if (!m) return;
+                var T = parseFloat(m[1]);
+                t.style.width = Math.min(100, T / W * 100).toFixed(1) + '%';
+                Array.prototype.forEach.call(t.querySelectorAll('td,th'), function (c) {
+                    var mm = rx.exec(c.getAttribute('style') || '');
+                    if (mm) c.style.width = Math.min(100, parseFloat(mm[1]) / T * 100).toFixed(1) + '%';
+                });
+            });
+            return box.innerHTML;
         }
 
         function nmRender(res) {
@@ -815,7 +833,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             $('#nm-meta').text(meta.join('　'));
 
             // 內容
-            var bodyHtml = e.content_html ? '<div class="eg-nm-ctext eg-nm-rich">' + e.content_html + '</div>'
+            var bodyHtml = e.content_html ? '<div class="eg-nm-ctext eg-nm-rich">' + (e.paper ? nmScaleRich(e.content_html) : e.content_html) + '</div>'
                          : '<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>';
             if (e.paper) {
                 // 有簽核圖章的公告：版面比照列印預覽（表頭／標題／內文／製表人與核准章）
@@ -1194,7 +1212,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .eg-nm-left { padding: 16px 18px; border-right: 1px solid #e6ecf1; max-height: 68vh; overflow-y: auto; }
     .eg-nm-right { padding: 16px 18px; background: #fafcfd; max-height: 68vh; overflow-y: auto; }
     .eg-nm-ctext { font-size: 14px; line-height: 1.75; color: #34495e; white-space: normal; }
-    .nm-paper { background: #fff; border: 1px solid #cfd8e0; padding: 14px 16px; color: #000; }
+    .nm-paper { font-family: "Microsoft JhengHei","微軟正黑體",sans-serif; background: #fff; border: 1px solid #cfd8e0; padding: 14px 16px; color: #000; }
     .nm-paper .pp-co { text-align: center; font-size: 22px; font-weight: bold; letter-spacing: 2px; }
     .nm-paper .pp-ad { text-align: center; font-size: 11px; margin-top: 2px; }
     .nm-paper .pp-no { display: flex; justify-content: space-between; font-size: 13px; margin: 8px 0 2px; }
@@ -1205,6 +1223,8 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .nm-paper table.pp-box td { border: 1px solid #000; padding: 6px 10px; word-wrap: break-word; overflow-wrap: break-word; }
     .nm-paper .pp-title { text-align: center; font-size: 17px; font-weight: bold; }
     .nm-paper .pp-body { vertical-align: top; }
+    .nm-paper .eg-nm-rich { font-size: 14px; line-height: 1.7; font-family: inherit; }
+    .nm-paper .eg-nm-rich *{ font-family: inherit !important; }
     .nm-paper .pp-foot { white-space: nowrap; }
     .nm-paper .pp-sg { display: inline-block; vertical-align: bottom; margin-right: 40px; min-height: 60px; }
     .nm-paper .pp-sg .lb { font-size: 14px; vertical-align: bottom; }
