@@ -1297,9 +1297,9 @@ function refreshRow(tr, relist){
     tr.toggleClass('noact', noact);
     var $m = tr.find('[data-f=measure]');
     if (noact){
-        if ($.trim($m.val()) === '' || isNoActText($m.val())) $m.val(noActText(ro, lv0.name));
+        $m.val(noActText(ro, lv0.name)).prop('readonly', true);      // 不需因應的列：因應措施一律是自動說明
         $a.val(''); tr.find('[data-f=effect_check],[data-f=effect_status],[data-f=effect_date],[data-f=effect_ruling],[data-f=effect_evidence]').val('');
-    } else if (lv0 && isNoActText($m.val())) $m.val('');      // 等級升到需要因應：清掉自動說明，請填真正的因應措施
+    } else { $m.prop('readonly', false); if (lv0 && isNoActText($m.val())) $m.val(''); }      // 等級升到需要因應：清掉自動說明，請填真正的因應措施
     if (!noact && sv !== '' && fq !== '' && ($a.val() === '' || tr.attr('data-auto-after') === '1')){ $a.val(afterSuggest(ro, sv, fq)); tr.attr('data-auto-after', '1'); }
     if (sv === '' || fq === '') { if (tr.attr('data-auto-after') === '1') $a.val(''); }
     tr.find('.sev2').text(scaleLabel(sevListFor(ro), sv) || '—');

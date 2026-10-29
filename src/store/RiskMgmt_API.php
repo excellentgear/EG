@@ -558,8 +558,7 @@ if ($action === 'doc_save') {
                 if ($preLv && empty($preLv['action'])) {
                     $noAct = true;
                     foreach (['effect_status', 'effect_date', 'effect_ruling', 'effect_evidence', 'effect_check', 'frequency_after'] as $k0) $it[$k0] = '';
-                    $m0 = trim((string)($it['measure'] ?? ''));
-                    if ($m0 === '' || rm_is_noaction_text($m0)) $it['measure'] = rm_noaction_text($set, (string)$it['ro_kind'], $preLv['name']);
+                    $it['measure'] = rm_noaction_text($set, (string)$it['ro_kind'], $preLv['name']);
                 }
             }
             $row['ro_kind'] = in_array(($it['ro_kind'] ?? ''), array_keys(RM_RO_KINDS), true) ? $it['ro_kind'] : null;

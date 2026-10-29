@@ -656,7 +656,7 @@ function rm_is_noaction_text(string $t): bool
 
 /**
  * 一份表單裡「等級低於因應門檻」的列一律整理成：因應措施＝自動說明、不需要採取措施後評估與成效確認（相關欄位清空）。
- * 使用者自己寫了措施文字的列保留其文字。回傳整理了幾列。
+ * 回傳整理了幾列。
  */
 function rm_noaction_normalize(PDO $db, array $set, int $docId): int
 {
@@ -666,8 +666,7 @@ function rm_noaction_normalize(PDO $db, array $set, int $docId): int
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
         if (!$lv || !empty($lv['action'])) continue;
-        $m = trim((string)$r['measure']);
-        $txt = ($m === '' || rm_is_noaction_text($m)) ? rm_noaction_text($set, (string)$r['ro_kind'], $lv['name']) : $m;
+        $txt = rm_noaction_text($set, (string)$r['ro_kind'], $lv['name']);      // 不需因應的列一律是自動說明（不保留舊的措施文字）
         $db->prepare("UPDATE rm_item SET measure=?, frequency_after=NULL, effect_check=NULL, effect_status=NULL, effect_date=NULL, effect_ruling=NULL, effect_evidence=NULL WHERE item_id=?")
            ->execute([$txt, $r['item_id']]);
         $n++;
