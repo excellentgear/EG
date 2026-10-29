@@ -74,6 +74,7 @@ switch ($action) {
             'perms'     => $P,
             'settings'  => $s,
             'stamps'    => $P['canSetting'] ? nc_stamp_template_list($db) : [],
+            'depts'     => $P['canSetting'] ? $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [],
             'as_docs'   => $P['canSetting'] ? eg_asdoc_list($db) : [],
             'as_doc'    => eg_asdoc_get($db, NC_ASDOC_MODULE),
             'stamp_tpl' => nc_stamp_template($db),
@@ -86,6 +87,10 @@ switch ($action) {
         $eid = (int)($_GET['eventid'] ?? $_POST['eventid'] ?? 0);
         ncEvent($db, $eid);
         $alloc = !empty($_GET['alloc']) || !empty($_POST['alloc']);
+        $evRow = ncEvent($db, $eid);
+        $canPrint = nc_can_print_event($db, $uid, (int)$evRow['created_by']);
+        // 真的要印（alloc）才擋；預覽（不配號）所有看得到的人都可以
+        if ($alloc && !$canPrint) ncErr('僅公告者與管理公告／通知的部門人員可以列印，您可以使用「預覽」');
         // 製表人必填（使用者要求）：先不配號算一次，沒有製表人就擋下——
         // 不可以先配了聯絡單號再擋，那會白白佔掉一個號碼
         if ($alloc) {
@@ -95,7 +100,7 @@ switch ($action) {
         }
         $d = nc_print_data($db, $eid, $alloc);
         if (empty($d['ok'])) ncErr($d['msg'] ?? '讀取失敗');
-        ncOut(['data' => $d, 'perms' => $P, 'csrf' => $_SESSION['nc_csrf']]);
+        ncOut(['data' => $d, 'perms' => $P, 'csrf' => $_SESSION['nc_csrf'], 'can_print' => $canPrint]);
     }
 
     /* 逐則列印設定（受文者 / 製表 / 核准 / 要印誰 / 要不要印回覆內容） */

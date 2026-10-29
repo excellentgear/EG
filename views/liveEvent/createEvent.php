@@ -1637,6 +1637,13 @@ if (isset($_POST['btn_go_events'])) {
                     </div>
                 </div>
                 <div class="nc-row">
+                    <div class="nc-fld" style="min-width:100%;">
+                        <label>管理公告／通知的部門（可複選）</label>
+                        <div id="ncPrintDepts" style="max-height:130px;overflow:auto;border:1px solid #d8c7b0;border-radius:4px;padding:6px 10px;display:flex;flex-wrap:wrap;gap:4px 16px;"></div>
+                        <span style="font-size:12px;color:#7b8a99;">只有「公告者本人」與這些部門（含下轄）的人員可以列印公告／通知；其他人只能預覽（預覽不留列印紀錄）。系統管理員一律可列印。</span>
+                    </div>
+                </div>
+                <div class="nc-row">
                     <div class="nc-fld" style="min-width:250px;">
                         <label>製表人</label>
                         <select id="ncMakerSrc">
@@ -3232,7 +3239,7 @@ if (isset($_POST['btn_go_events'])) {
             if (lang === 'vi') return buildBody(dv, people);
             return '<div>' + buildBody(d, people) + '</div><div style="page-break-before:always;"></div><div>' + buildBody(dv, people) + '</div>';
         }
-        function printWindow(title, bodyHtml, docNo) {
+        function printWindow(title, bodyHtml, docNo, previewOnly) {
             var asCss = String(docNo || '').replace(/['\\]/g, '');
             var MG = 14, PAD = 5;
             var css = '@page{size:A4 portrait;margin:' + MG + 'mm;'
@@ -3304,9 +3311,11 @@ if (isset($_POST['btn_go_events'])) {
                    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
                    + 'document.head.appendChild(st);}';
             // <!DOCTYPE html> 不可省略：少了它會落入 Quirks Mode，scrollHeight 量不準、單頁也會印出「第1頁／共1頁」
-            w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css
-                + '</style></head><body>' + bodyHtml
-                + '<scr' + 'ipt>window.onload=function(){' + js + 'setTimeout(function(){window.print();},300);};</scr' + 'ipt></body></html>');
+            // 預覽（無列印權限者）：不呼叫 print()，且列印時整頁隱藏、加浮水印提示，避免從瀏覽器選單繞過
+            var pvCss = previewOnly ? '@media print{body *{display:none !important;}} .pv-bar{position:sticky;top:0;background:#F7E0BD;color:#6B471A;padding:6px 12px;font-size:14px;text-align:center;margin:-5mm -5mm 6px;} @media print{.pv-bar{display:none !important;}}' : '';
+            w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + (previewOnly ? '（預覽）' : '') + '</title><style>' + css + pvCss
+                + '</style></head><body>' + (previewOnly ? '<div class="pv-bar">預覽畫面：僅公告者與管理公告／通知的部門人員可以列印</div>' : '') + bodyHtml
+                + '<scr' + 'ipt>window.onload=function(){' + js + (previewOnly ? '' : 'setTimeout(function(){window.print();},300);') + '};</scr' + 'ipt></body></html>');
             w.document.close();
             return w;
         }
@@ -3415,6 +3424,8 @@ if (isset($_POST['btn_go_events'])) {
             get({ action: 'print_data', eventid: eid, alloc: alloc ? 1 : 0 }, function (r) {
                 NC.csrf = r.csrf || NC.csrf;
                 NC.perms = r.perms || NC.perms;
+                if (r.can_print !== undefined) NC.canPrint = !!r.can_print;
+                $('#ncDoPrint').html(NC.canPrint === false ? '<i class="fa fa-eye"></i> 預覽' : '<i class="fa fa-print"></i> 列印');
                 renderPrintBody(r.data);
                 if (after) after(r.data);
             });
@@ -3496,6 +3507,13 @@ if (isset($_POST['btn_go_events'])) {
                 try { $('#ncMk').focus(); } catch (e) {}
                 return;
             }
+            if (NC.canPrint === false) {   // 沒有列印權限：只預覽（不配號、不留列印紀錄）
+                var pl = $('#ncPrintLang').val() || 'zh', dd = NC.d;
+                whenStampReady(function () {
+                    printWindow((dd.kind_name || '') + ' ' + dd.title, langBodies(dd, printablePeople(dd), pl), dd.doc_no, true);
+                });
+                return;
+            }
             var go = function () {
                 // 按下列印才配聯絡單號（使用者要求：有列印才產生）
                 loadPrint(NC.eid, true, function (d) {
@@ -3504,7 +3522,8 @@ if (isset($_POST['btn_go_events'])) {
                         try {
                             if (window.EGPrintLog) EGPrintLog.record({
                                 source: 'notice_contact', doc_kind: 'form',
-                                doc_name: (d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + '　' + d.title,
+                                doc_name: (d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + '　' + d.title
+                                    + (d.i18n && d.i18n.vi ? '（' + ({zh: '中文版', vi: '越南文版', both: '中文＋越南文'})[$('#ncPrintLang').val() || 'zh'] + '）' : ''),
                                 ref_table: 'live_event', ref_id: d.event_id
                             });
                         } catch (e) {}
@@ -3537,6 +3556,11 @@ if (isset($_POST['btn_go_events'])) {
                 $('#ncMakerSrc').val(s.maker_src || 'creator');
                 $('#ncApprSrc').val(s.approver_src || 'top');
                 $('#ncShowReplyDef').prop('checked', String(s.show_reply) === '1');
+                var pd = String(s.print_dept_ids || '').split(',').filter(String), ph = '';
+                (r.depts || []).forEach(function (t) {
+                    ph += '<label style="font-weight:400;margin:0;"><input type="checkbox" class="nc-pd" value="' + t.id + '"' + (pd.indexOf(String(t.id)) >= 0 ? ' checked' : '') + '> ' + esc(t.name) + '</label>';
+                });
+                $('#ncPrintDepts').html(ph || '<span style="color:#999;">（沒有部門資料）</span>');
                 get({ action: 'people' }, function (p) {
                     $('#ncMakerUser').html(peopleOptions(p.people, s.maker_user_id, '（請選擇）'));
                     $('#ncApprUser').html(peopleOptions(p.people, s.approver_user_id, '（請選擇）'));
@@ -3576,7 +3600,8 @@ if (isset($_POST['btn_go_events'])) {
                 stamp_tpl_read_id: $('#ncStampReadTpl').val() || '',
                 maker_src: $('#ncMakerSrc').val(), maker_user_id: $('#ncMakerUser').val() || '',
                 approver_src: $('#ncApprSrc').val(), approver_user_id: $('#ncApprUser').val() || '',
-                show_reply: $('#ncShowReplyDef').is(':checked') ? '1' : '0'
+                show_reply: $('#ncShowReplyDef').is(':checked') ? '1' : '0',
+                print_dept_ids: $('#ncPrintDepts .nc-pd:checked').map(function () { return this.value; }).get().join(',')
             }, function () { $('#ncSetModal').modal('hide'); });
         });
 

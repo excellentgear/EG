@@ -116,6 +116,7 @@ function nc_setting_defaults(): array
         'approver_src'     => 'top',     // 核准來源：none＝留白手簽／top＝組織角色綁定的最高核准人員／user＝指定人員
         'approver_user_id' => '',
         'show_reply'       => '0',       // 預設要不要印回覆內容
+        'print_dept_ids'   => '',        // 公告／通知管理部門（逗號分隔的部門 id，含下轄）：這些部門的人與公告者才可列印，其他人只能預覽
     ];
 }
 
@@ -230,6 +231,33 @@ function nc_perms(PDO $db, int $uid): array
         'canSetting'  => $admin || rbac_has($f, 'notice_contact_setting'),
         'canBackfill' => $admin || rbac_has($f, 'notice_contact_backfill'),
     ];
+}
+
+/** 設定的管理部門 id 清單（含下轄） */
+function nc_print_dept_ids(PDO $db): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    $raw = nc_settings($db)['print_dept_ids'] ?? '';
+    $out = [];
+    foreach (preg_split('/[,\s]+/', (string)$raw, -1, PREG_SPLIT_NO_EMPTY) as $d) {
+        foreach (eg_dept_subtree_ids($db, (int)$d) as $x) $out[(int)$x] = true;
+        $out[(int)$d] = true;
+    }
+    return array_keys($out);
+}
+
+/** 能不能「列印」這則公告：系統管理員、公告者本人、設定的管理部門人員；其他人只能預覽（唯一判定，前端與後端共用） */
+function nc_can_print_event(PDO $db, int $uid, int $createdBy): bool
+{
+    require_once __DIR__ . '/rbac.php';
+    if (rbac_has(rbac_user_features($db, $uid), 'all')) return true;
+    if ($createdBy > 0 && $createdBy === $uid) return true;
+    $ids = nc_print_dept_ids($db);
+    if (!$ids) return false;
+    $in = implode(',', array_map('intval', $ids));
+    $st = $db->prepare("SELECT COUNT(*) FROM user_department_position_map WHERE user_id=? AND department_id IN ($in)");
+    $st->execute([$uid]);
+    return (int)$st->fetchColumn() > 0;
 }
 
 /* ===================== 聯絡單號（OI） ===================== */
