@@ -86,6 +86,11 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         .fld textarea.qc-editable:not(:disabled) { border-color:var(--amber-d); background:#FFFDF5; box-shadow:0 0 0 1px var(--amber-d) inset; }
         .ro-note { font-size:12px; color:#8a7560; }
         .qk-ro { padding:3px 0; min-height:20px; color:var(--ink); font-size:13px; white-space:pre-wrap; word-break:break-all; }
+        .qk-hide { display:none !important; }
+        body.qk-concise #secHead .muted-help, body.qk-concise #secHead .ro-note, body.qk-concise #secHead h4 .sub,
+        body.qk-concise #secCause .muted-help, body.qk-concise #secCause h4 .sub, body.qk-concise #secDisp h4 .sub,
+        body.qk-concise #secDisp .muted-help:not(#quickWhy), body.qk-concise #secDisp .ro-note,
+        body.qk-concise #secGm .muted-help, body.qk-concise #secGm h4 .sub { display:none !important; }
         .muted-help { font-size:12px; color:#8a7560; }
         .note-box { font-size:12px; color:var(--ink2); background:var(--cream); border:1px solid var(--line);
                     border-radius:6px; padding:7px 10px; margin-bottom:8px; line-height:1.7; }
@@ -907,6 +912,20 @@ function renderQuickBox(){
     $('#quickWhy').text(h || done ? '' : (q.why || ''));
     $('#quickQc').toggle(!!q.qc_url); if (q.qc_url) $('#quickQcLink').attr('href', q.qc_url);
 }
+/* 雙層快速決策的單只留重點：說明文字、用不到的欄位與區塊收掉；
+   扣款確認只有技術課主管勾了「扣款」才出現；相關單位意見只有真的有徵詢紀錄才出現。 */
+function applyConcise(){
+    $('.qk-hide').removeClass('qk-hide');
+    var q = !!(D.order && Number(D.order.quick_mode) === 1);
+    $('body').toggleClass('qk-concise', q);
+    if (!q) return;
+    var o = D.order;
+    if (!o.ir_id) $('#f_ir').closest('.fld').addClass('qk-hide');
+    $('#bomMoreBox, #respPeopleBox, #qcReviewBox').addClass('qk-hide');
+    $('#f_decider').closest('.fgrid').addClass('qk-hide');
+    if (!(o.rounds || []).length) $('#secRound').addClass('qk-hide');
+    if (Number(o.gm_deduct) !== 1) $('#secDeduct').addClass('qk-hide');
+}
 /* 雙層快速決策的單：不可更改的欄位直接顯示文字，不要灰掉的輸入框（畫面精簡）。
    只加一個純顯示元素＋把原控制項藏起來（值仍在，存檔照舊讀得到）；每次 render 後重做。 */
 function textifyLocked(){
@@ -1155,7 +1174,7 @@ function render(){
     var escalating = Number(o.escalate_gm) === 1;
     $('#dispOptsWrap').toggle(!escalating);
     renderQuickBox();
-    setTimeout(textifyLocked, 0);
+    setTimeout(function(){ applyConcise(); textifyLocked(); }, 0);
     $('#dispNoPerm').toggle(!p.canDecide && !(D.quick && D.quick.on)).text('您不在可決策的名單內（由管理員在清單頁「設定 → 決策者」指定部門與職稱）。');
     $('#dispWho').text(o.decided_name ? ('決策：' + o.decided_name + '　' + dispDate(o.disp_decided_at)) : '');
     refreshDecQty('disp');

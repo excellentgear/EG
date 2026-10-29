@@ -6193,12 +6193,38 @@ $(function(){
     var ngCtx=null;
     function openNgAsk(qcFormId, s, items, done){
         // 管理員開啟「NG儲存後自動開立」時走自動流程（跳品管備註視窗）；沒開或查詢失敗一律走下面原流程
-        var ngItems = (items||[]).filter(function(it){ return it.verdict==='NG'; });
-        if(!ngItems.length){ openNgAskLegacy(qcFormId, s, items, done); return; }
+        // 沒有任何尺寸可帶（理論上不會）才退回舊的按鈕流程，避免建立出沒有尺寸的異常單
+        if(!qcAbBuildMeasures(items).measures.length){ openNgAskLegacy(qcFormId, s, items, done); return; }
         $.get('../../src/store/QaAbnormal_API.php', { action:'quick_state' }, function(r){
             if(r && r.success && Number(r.auto)) openQcNote(qcFormId, s, items, done);
             else openNgAskLegacy(qcFormId, s, items, done);
         }, 'json').fail(function(){ openNgAskLegacy(qcFormId, s, items, done); });
+    }
+    /* 自動帶入異常單「量測尺寸與實測值」：判定 NG 的尺寸（含「加量測」另一次的量測，各一列）；
+       OK/NG 類型的尺寸，OK 的那幾件也標 OK，才看得出是第幾件不良。
+       若這次是手動把某件判不良、尺寸本身都判 OK（沒有任何 NG 尺寸）→ 改帶「有填值的尺寸」，不讓尺寸表空著。 */
+    function qcAbBuildMeasures(items){
+        items = items || [];
+        var ng = items.filter(function(it){ return it.verdict==='NG'; });
+        if(!ng.length) ng = items.filter(function(it){
+            return (it.samples||[]).some(function(sv){ return sv && sv.v!=null && String(sv.v)!==''; });
+        });
+        var rows=[], sel=[];
+        ng.forEach(function(it){
+            sel.push(items.indexOf(it));
+            var nm=(it.name||'')+qcAbStdPart(it);
+            var vals=function(samples){
+                return (samples||[]).map(function(sv){
+                    if(!sv) return '';
+                    var v=(sv.v!=null) ? String(sv.v) : '';
+                    if(it.type==='OKNG' && v==='') v='OK';
+                    return v;
+                }).slice(0,12);
+            };
+            rows.push({ dim_name:nm, vals:vals(it.samples) });
+            (it.extra||[]).forEach(function(ex,k){ rows.push({ dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }); });
+        });
+        return { measures:rows, sel:sel };
     }
     var qcNoteCtx=null;
     function openQcNote(qcFormId, s, items, done){
@@ -6211,13 +6237,7 @@ $(function(){
     $('#btnQcNoteGo').on('click', function(){
         if(!qcNoteCtx) return;
         var c=qcNoteCtx, $b=$(this).prop('disabled',true);
-        var sel=[], measures=[];
-        (c.items||[]).forEach(function(it,idx){
-            if(it.verdict!=='NG') return;
-            sel.push(idx);
-            measures.push({ dim_name:(it.name||'')+qcAbStdPart(it),
-                vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) });
-        });
+        var built=qcAbBuildMeasures(c.items), sel=built.sel, measures=built.measures;
         $.post('../../src/store/QaAbnormal_API.php', {
             action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId,
             measures:JSON.stringify(measures), selected:JSON.stringify(sel), qc_note:$('#qcNoteText').val()

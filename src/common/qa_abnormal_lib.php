@@ -3957,7 +3957,8 @@ function qab_status(array $o): array
     // 不然畫面會錯誤顯示「待決策」而不是「待總經理裁示」。
     if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待' . ((string)($o['gm_label'] ?? '總經理')) . '裁示'];
     if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
-    if (!empty($o['gm_deduct']) || (!empty($o['final']['is_scrap']))) {
+    // 雙層快速決策的單：報廢不必走扣款確認，只有技術課主管勾了「扣款」才要（2026-10-29 使用者要求）
+    if (!empty($o['gm_deduct']) || (empty($o['quick_mode']) && !empty($o['final']['is_scrap']))) {
         if (empty($o['deduct_appr_at'])) return ['code' => 'deduct', 'label' => '扣款確認中'];
     }
     return ['code' => 'ready', 'label' => '可結案'];
@@ -4062,7 +4063,7 @@ function qab_list(PDO $db, array $f = []): array
         elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
         elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待' . $gmLabel . '裁示'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
-        elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
+        elseif (($r['gm_deduct'] || (empty($r['quick_mode']) && $r['final']['is_scrap']))) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
         // 「待決策」在清單上也附上決策者部門與姓名（不併進 label，理由同 qab_order()）
         if ($r['status']['code'] === 'decide') {
