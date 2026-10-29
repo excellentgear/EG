@@ -1122,6 +1122,7 @@ function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmi
     $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_approved_date=?,gm_is_deputy=?,
                   gm_approved_is_proxy=?,gm_approved_proxy_uid=?,gm_approved_proxy_name=?,closed_at=NOW() WHERE id=?")
        ->execute([$signerId, $signerName, $doc['business_date'], $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
+    if ($isProxy) return;   // 管理員代簽不發通知（使用者要求）
     cnrv_cc_notify($db, $docId, 'closed', '合約訂單審查已結案',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已經總經理核准，審查結案。", $uid);
 }
