@@ -1223,6 +1223,7 @@ $(document).ready(function() {
         var modal = $(this);
         var form = modal.find('form');
         form[0].reset();
+        $('#user_status option[value="99"]').prop('disabled', true); $('#user_status').css('pointer-events','').attr('tabindex',0);
         modal.find('#user_id').val('');
 
         // 重置兼任職務：一律先收成 0 個，載入資料時有幾筆才長出幾個
