@@ -2266,6 +2266,7 @@ function qab_quick_cfg(PDO $db): array
     return [
         'enabled'   => !empty($raw['enabled']) ? 1 : 0,
         'l1_users'  => $ints($raw['l1_users'] ?? []),
+        'l2_user'   => (int)($raw['l2_user'] ?? 0),
         'l1_ptypes' => $ints($raw['l1_ptypes'] ?? []),
         'actions'   => $acts,
     ];
@@ -2284,6 +2285,14 @@ function qab_quick_cfg_save(PDO $db, array $in): array
         if (!isset($cand[$u])) throw new Exception('第一層裁決者只能從「品管部門」的在職人員挑選');
         $l1[$u] = $u;
     }
+    // 第二層決策者：只能從「決策者」分頁已設定範圍內的在職人員挑一位，且不可同時是第一層
+    $l2 = (int)($in['l2_user'] ?? $cur['l2_user']);
+    if ($l2 > 0) {
+        $okL2 = false;
+        foreach (qab_quick_l2_people($db) as $p) if ((int)$p['id'] === $l2) { $okL2 = true; break; }
+        if (!$okL2) throw new Exception('第二層決策者只能從「決策者」分頁已設定的人員中挑選');
+        if (isset($l1[$l2])) throw new Exception('同一個人不能同時是第一層與第二層');
+    } else { $l2 = 0; }
     $okDept = array_flip(array_map('intval', $db->query("SELECT id FROM department")->fetchAll(PDO::FETCH_COLUMN)));
     $okUser = array_flip(array_map('intval', $db->query("SELECT id FROM `user` WHERE state=1")->fetchAll(PDO::FETCH_COLUMN)));
     $okPt   = array_flip(array_map('intval', $db->query("SELECT process_type_id FROM process_type")->fetchAll(PDO::FETCH_COLUMN)));
@@ -2311,11 +2320,25 @@ function qab_quick_cfg_save(PDO $db, array $in): array
     $enabled = array_key_exists('enabled', $in) ? (!empty($in['enabled']) ? 1 : 0) : $cur['enabled'];
     if ($enabled) {
         if (!$l1) throw new Exception('尚未設定第一層裁決者，不能開啟「NG儲存後自動開立」');
+        if ($l2 <= 0) throw new Exception('尚未選定第二層決策者，不能開啟「NG儲存後自動開立」');
         if (!array_filter($acts, function ($a) { return $a['active']; })) throw new Exception('至少要有一個啟用的裁決項目才能開啟自動開立');
     }
-    $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l1_ptypes' => array_values($pt), 'actions' => $acts];
+    $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l2_user' => $l2, 'l1_ptypes' => array_values($pt), 'actions' => $acts];
     qab_setting_set($db, 'quick_cfg', $new);
     return qab_quick_cfg($db);
+}
+
+/** 「決策者」分頁已設定範圍內的在職人員（去重；第二層決策者只能從這裡挑） */
+function qab_quick_l2_people(PDO $db): array
+{
+    $out = [];
+    foreach (qab_decider_cfgs($db, 'decider') as $c) {
+        foreach (qab_decider_people($db, $c) as $p) {
+            $id = (int)$p['id'];
+            if (!isset($out[$id])) $out[$id] = ['id' => $id, 'name' => $p['user_cname'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
+        }
+    }
+    return array_values($out);
 }
 
 /** 設定頁用：候選人（品管部門）、第二層決策者（唯讀）、次要決策者（唯讀）、製程大類、部門、人員 */
@@ -2336,7 +2359,7 @@ function qab_quick_meta(PDO $db): array
     foreach (eg_people_list($db, ['all_posts' => true]) as $p) {
         $ppl[] = ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_id' => (int)$p['dept_id'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
     }
-    return ['cfg' => qab_quick_cfg($db), 'candidates' => $cand, 'l2' => $l2,
+    return ['cfg' => qab_quick_cfg($db), 'candidates' => $cand, 'l2' => $l2, 'l2_people' => qab_quick_l2_people($db),
             'ptypes' => $pts, 'depts' => $depts, 'people' => $ppl];
 }
 

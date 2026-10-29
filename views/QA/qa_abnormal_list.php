@@ -142,6 +142,26 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
 #cfgSaved{color:#7a8f5a;font-size:12px;margin-right:auto;}
 .ask-pos{display:flex;flex-wrap:wrap;gap:4px 10px;}
 .ask-pos label{font-weight:normal;margin:0;font-size:12px;}
+.qk-sec{margin:10px 0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;}
+.qk-h{font-size:13px;font-weight:bold;color:var(--ink);margin-bottom:6px;}
+.qk-h .muted-help{font-weight:normal;}
+.qk-sw{display:flex;align-items:center;gap:8px;margin:0;font-weight:normal;}
+.qk-sw input{width:auto;margin:0;}
+.qk-chips{display:flex;flex-wrap:wrap;gap:6px;}
+.qk-chip{display:inline-block;padding:3px 10px;border:1px solid var(--line);border-radius:14px;background:#fff;color:var(--ink2);font-size:12px;cursor:pointer;user-select:none;line-height:18px;}
+.qk-chip:hover{background:var(--sand);}
+.qk-chip.on{background:var(--amber-d);border-color:var(--amber-d);color:#fff;}
+.qk-chip.x{cursor:default;background:var(--cream);}
+.qk-chip.x b{cursor:pointer;margin-left:6px;color:#DD5138;}
+.qk-act{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;background:var(--cream);}
+.qk-act.off{opacity:.6;}
+.qk-act-top{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px;}
+.qk-act-top input[type=text]{width:140px;border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-size:13px;}
+.qk-act-top label{margin:0;font-weight:normal;font-size:12px;display:flex;align-items:center;gap:4px;}
+.qk-act-top input[type=checkbox]{width:auto;margin:0;}
+.qk-sub{font-size:12px;color:#8a7560;margin:6px 0 3px;}
+.qk-pick{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px;}
+.qk-pick select{border:1px solid var(--line);border-radius:4px;padding:3px 6px;font-size:12px;max-width:230px;}
         table.cfg th, table.cfg td { border:1px solid var(--line); padding:3px 6px; }
         table.cfg th { background:var(--cream); color:var(--ink2); font-weight:normal; text-align:center; }
         table.cfg input[type=text], table.cfg input[type=number], table.cfg select { width:100%; border:1px solid var(--line);
@@ -419,17 +439,18 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     <b>第二層</b>＝「決策者」分頁已設定的決策主管（不另設名單）；第二層請假或整天外出時，由品管檢驗表 2.0「異常單處置決策設定」的<b>次要決策者</b>代理。
                     同一張單的第一層與第二層<b>必須是不同人</b>。<br>
                     <b>目前這一頁只是設定</b>，總開關「NG儲存後自動開立」<b>預設關閉</b>；關閉時品管檢驗表 2.0 維持現有的「開立異常單」按鈕流程，完全不受影響。</div>
-                <div class="fld" style="margin:8px 0;"><label><input type="checkbox" id="qkEnabled"> <b>品管檢驗 NG 儲存後自動開立異常單</b>（需先設定第一層裁決者與至少一個裁決項目）</label></div>
-                <div class="fld"><label>第一層裁決者（只能選品管部門在職人員，可複選）</label><div id="qkL1" class="ask-pos"></div></div>
-                <div class="fld" style="margin-top:8px;"><label>第二層決策者（唯讀，來自「決策者」分頁）</label><div id="qkL2" class="muted-help"></div></div>
-                <div class="fld" style="margin-top:8px;"><label>開放第一層直接決策的製程大類（沒勾的大類被驗出異常時，第二層先收到通知，可自己決策或轉回第一層）</label><div id="qkPt" class="ask-pos"></div></div>
-                <div class="fld" style="margin-top:8px;"><label>第一層裁決項目與通知對象</label>
-                    <table class="cfg"><thead><tr><th style="width:18%">名稱</th><th style="width:8%">是報廢</th><th style="width:8%">啟用</th><th>通知對象（固定另通知檢驗人員；部門＝整個部門，人員可跨部門）</th><th style="width:8%">操作</th></tr></thead>
-                    <tbody id="qkActs"></tbody></table>
-                    <div class="muted-help">「轉呈決策」是固定項目：一律通知第二層，不在這裡設定。</div></div>
-                <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
-                    <button class="btn btn-warm-o btn-sm" id="qkAdd"><i class="fa fa-plus"></i> 新增裁決項目</button>
-                    <span style="margin-left:auto;"></span><span id="qkSaved" class="muted-help"></span>
+                <div class="qk-sec"><label class="qk-sw"><input type="checkbox" id="qkEnabled"> <b>品管檢驗 NG 儲存後自動開立異常單</b>
+                    <span class="muted-help">（需先設定第一層裁決者與至少一個裁決項目）</span></label></div>
+                <div class="qk-sec"><div class="qk-h">① 第一層裁決者<span class="muted-help">　只能選品管部門在職人員，可複選（點選切換）</span></div><div id="qkL1" class="qk-chips"></div></div>
+                <div class="qk-sec"><div class="qk-h">② 第二層決策者<span class="muted-help">　從「決策者」分頁已設定的人員中選<b>一位</b>；必須與第一層不同人</span></div>
+                    <div id="qkL2" class="qk-chips"></div>
+                    <div class="muted-help" style="margin-top:4px;">請假或整天外出時，由品管檢驗表 2.0「異常單處置決策設定」的次要決策者代理。</div></div>
+                <div class="qk-sec"><div class="qk-h">③ 開放第一層直接決策的製程大類<span class="muted-help">　沒選的大類被驗出異常時，第二層先收到通知，可自己決策或轉回第一層</span></div><div id="qkPt" class="qk-chips"></div></div>
+                <div class="qk-sec"><div class="qk-h">④ 第一層裁決項目與通知對象<span class="muted-help">　固定另通知檢驗人員；「轉呈決策」是固定項目，一律通知第二層</span></div>
+                    <div id="qkActs"></div>
+                    <button class="btn btn-warm-o btn-sm" id="qkAdd" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增裁決項目</button></div>
+                <div style="margin-top:10px;display:flex;gap:6px;align-items:center;border-top:1px dashed var(--line);padding-top:10px;">
+                    <span id="qkSaved" class="muted-help"></span><span style="margin-left:auto;"></span>
                     <button class="btn btn-warm btn-sm" id="qkSave"><i class="fa fa-save"></i> 儲存雙層快速決策設定</button>
                 </div>
             </div>
@@ -1164,38 +1185,52 @@ $('#btnQcNotifySave').on('click', function(){
         $('#qcNotifySaved').text('已儲存（' + ids.length + ' 人）');
     });
 });
-/* ───────── 雙層快速決策設定（2026-10-29） ───────── */
+/* ───────── 雙層快速決策設定（2026-10-29）：所有狀態放 QK.cfg，點選即改、整區重繪 ───────── */
 var QK = null;
-function qkChecks(cls, rows, sel, labelFn){
-    var s = {}; (sel || []).forEach(function(v){ s[Number(v)] = 1; });
-    return rows.map(function(r){
-        return '<label><input type="checkbox" class="' + cls + '" value="' + r.id + '"' + (s[Number(r.id)] ? ' checked' : '') + '> ' + esc(labelFn(r)) + '</label>';
-    }).join('');
+function qkHas(arr, v){ return (arr || []).indexOf(Number(v)) >= 0; }
+function qkToggle(arr, v){
+    v = Number(v); var i = arr.indexOf(v);
+    if (i >= 0) arr.splice(i, 1); else arr.push(v);
 }
-function qkActRow(a){
-    var depts = (QK.depts || []).map(function(d){
-        return '<option value="' + d.id + '"' + ((a.notify_depts || []).indexOf(Number(d.id)) >= 0 ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('');
-    var users = (QK.people || []).map(function(p){
-        return '<option value="' + p.id + '"' + ((a.notify_users || []).indexOf(Number(p.id)) >= 0 ? ' selected' : '') + '>' + esc(p.dept_name + ' ' + (p.position_name || '') + ' ' + p.name) + '</option>'; }).join('');
-    return '<tr data-key="' + esc(a.key || '') + '">'
-        + '<td><input type="text" class="qk-name" maxlength="20" value="' + esc(a.name || '') + '"></td>'
-        + '<td><input type="checkbox" class="qk-scrap"' + (Number(a.is_scrap) ? ' checked' : '') + '></td>'
-        + '<td><input type="checkbox" class="qk-act"' + (a.active == null || Number(a.active) ? ' checked' : '') + '></td>'
-        + '<td><div class="muted-help">部門（可多選，按住 Ctrl）</div><select multiple size="4" class="qk-depts" data-eg-skip style="width:100%">' + depts + '</select>'
-        + '<div class="muted-help" style="margin-top:4px;">指定人員（可多選）</div><select multiple size="5" class="qk-users" data-eg-skip style="width:100%">' + users + '</select></td>'
-        + '<td><button class="btn btn-default btn-xs qk-del" type="button">刪</button></td></tr>';
+function qkPersonLabel(p){ return p.name + '（' + p.dept_name + (p.position_name ? ' ' + p.position_name : '') + '）'; }
+function qkPerson(id){ var r = null; (QK.people || []).forEach(function(p){ if (Number(p.id) === Number(id)) r = p; }); return r; }
+function qkActHtml(a, i){
+    var cfg = QK.cfg;
+    var deptChips = (QK.depts || []).map(function(d){
+        return '<span class="qk-chip' + (qkHas(a.notify_depts, d.id) ? ' on' : '') + '" data-i="' + i + '" data-dept="' + d.id + '">' + esc(d.name) + '</span>'; }).join('');
+    var userChips = (a.notify_users || []).map(function(u){
+        var p = qkPerson(u);
+        return '<span class="qk-chip x">' + esc(p ? qkPersonLabel(p) : ('人員#' + u)) + '<b class="qk-udel" data-i="' + i + '" data-u="' + u + '" title="移除">×</b></span>'; }).join('')
+        || '<span class="muted-help">尚未指定人員</span>';
+    var deptOpts = '<option value="">先選部門…</option>' + (QK.depts || []).map(function(d){
+        return '<option value="' + d.id + '"' + (Number(a._pickDept) === Number(d.id) ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('');
+    var pplOpts = '<option value="">再選人員…</option>' + (QK.people || []).filter(function(p){ return Number(p.dept_id) === Number(a._pickDept); }).map(function(p){
+        return '<option value="' + p.id + '">' + esc((p.position_name ? p.position_name + ' ' : '') + p.name) + '</option>'; }).join('');
+    return '<div class="qk-act' + (Number(a.active) ? '' : ' off') + '">'
+        + '<div class="qk-act-top"><input type="text" class="qk-name" data-i="' + i + '" maxlength="20" placeholder="裁決項目名稱" value="' + esc(a.name || '') + '">'
+        + '<label><input type="checkbox" class="qk-scrap" data-i="' + i + '"' + (Number(a.is_scrap) ? ' checked' : '') + '> 是報廢</label>'
+        + '<label><input type="checkbox" class="qk-active" data-i="' + i + '"' + (Number(a.active) ? ' checked' : '') + '> 啟用</label>'
+        + '<span style="margin-left:auto;"></span><button class="btn btn-default btn-xs qk-del" type="button" data-i="' + i + '">刪除此項目</button></div>'
+        + '<div class="qk-sub">通知部門（點選切換，整個部門都會收到）</div><div class="qk-chips">' + deptChips + '</div>'
+        + '<div class="qk-sub">通知指定人員（先選該人所屬部門，再選人員）</div><div class="qk-chips">' + userChips + '</div>'
+        + '<div class="qk-pick"><select class="qk-pdept" data-i="' + i + '" data-eg-skip>' + deptOpts + '</select>'
+        + '<select class="qk-pperson" data-i="' + i + '" data-eg-skip>' + pplOpts + '</select></div></div>';
 }
 function renderQuick(){
     if (!QK) return;
-    $('#qkEnabled').prop('checked', !!Number(QK.cfg.enabled));
+    var c = QK.cfg;
+    $('#qkEnabled').prop('checked', !!Number(c.enabled));
     $('#qkL1').html(QK.candidates.length
-        ? qkChecks('qk-l1', QK.candidates, QK.cfg.l1_users, function(p){ return p.name + '（' + p.dept_name + (p.position_name ? ' ' + p.position_name : '') + '）'; })
+        ? QK.candidates.map(function(p){
+            return '<span class="qk-chip' + (qkHas(c.l1_users, p.id) ? ' on' : '') + '" data-l1="' + p.id + '">' + esc(qkPersonLabel(p)) + '</span>'; }).join('')
         : '<span class="muted-help">目前品管部門沒有在職人員（先到「組織角色綁定」確認品管部門設定）</span>');
-    $('#qkL2').html(QK.l2.length ? QK.l2.map(function(c){
-        return '<div>' + esc(c.show_name) + '：' + (c.names.length ? esc(c.names.join('、')) : '（目前查無在職人員）') + '</div>'; }).join('')
-        : '尚未在「決策者」分頁設定決策主管');
-    $('#qkPt').html(qkChecks('qk-pt', QK.ptypes, QK.cfg.l1_ptypes, function(t){ return t.name; }));
-    $('#qkActs').html((QK.cfg.actions || []).map(qkActRow).join(''));
+    $('#qkL2').html((QK.l2_people || []).length
+        ? QK.l2_people.map(function(p){
+            return '<span class="qk-chip' + (Number(c.l2_user) === Number(p.id) ? ' on' : '') + '" data-l2="' + p.id + '">' + esc(qkPersonLabel(p)) + '</span>'; }).join('')
+        : '<span class="muted-help">「決策者」分頁尚未設定決策主管，或範圍內沒有在職人員</span>');
+    $('#qkPt').html((QK.ptypes || []).map(function(t){
+        return '<span class="qk-chip' + (qkHas(c.l1_ptypes, t.id) ? ' on' : '') + '" data-pt="' + t.id + '">' + esc(t.name) + '</span>'; }).join(''));
+    $('#qkActs').html((c.actions || []).map(qkActHtml).join('') || '<div class="muted-help">尚無裁決項目</div>');
 }
 function loadQuick(){
     $.get(API, { action:'quick_meta' }, function(res){
@@ -1203,26 +1238,45 @@ function loadQuick(){
         QK = res; renderQuick();
     }, 'json');
 }
-function qkCollect(){
-    var acts = [];
-    $('#qkActs tr').each(function(){
-        var $t = $(this);
-        acts.push({ key:$t.attr('data-key') || '', name:$.trim($t.find('.qk-name').val()),
-            is_scrap:$t.find('.qk-scrap').is(':checked') ? 1 : 0, active:$t.find('.qk-act').is(':checked') ? 1 : 0,
-            notify_depts:($t.find('.qk-depts').val() || []).map(Number), notify_users:($t.find('.qk-users').val() || []).map(Number) });
-    });
-    return { enabled:$('#qkEnabled').is(':checked') ? 1 : 0,
-             l1_users:$('.qk-l1:checked').map(function(){ return Number(this.value); }).get(),
-             l1_ptypes:$('.qk-pt:checked').map(function(){ return Number(this.value); }).get(), actions:acts };
-}
-$('#qkAdd').on('click', function(){ if (QK) $('#qkActs').append(qkActRow({ name:'', active:1 })); });
-$(document).on('click', '.qk-del', function(){ $(this).closest('tr').remove(); });
+$(document).on('click', '#qkL1 .qk-chip', function(){ qkToggle(QK.cfg.l1_users, $(this).data('l1')); renderQuick(); });
+$(document).on('click', '#qkL2 .qk-chip', function(){
+    var v = Number($(this).data('l2'));
+    QK.cfg.l2_user = Number(QK.cfg.l2_user) === v ? 0 : v; renderQuick();
+});
+$(document).on('click', '#qkPt .qk-chip', function(){ qkToggle(QK.cfg.l1_ptypes, $(this).data('pt')); renderQuick(); });
+$(document).on('click', '#qkActs .qk-chip[data-dept]', function(){
+    qkToggle(QK.cfg.actions[$(this).data('i')].notify_depts, $(this).data('dept')); renderQuick();
+});
+$(document).on('click', '#qkActs .qk-udel', function(){
+    qkToggle(QK.cfg.actions[$(this).data('i')].notify_users, $(this).data('u')); renderQuick();
+});
+$(document).on('change', '#qkActs .qk-pdept', function(){ QK.cfg.actions[$(this).data('i')]._pickDept = Number($(this).val()) || 0; renderQuick(); });
+$(document).on('change', '#qkActs .qk-pperson', function(){
+    var a = QK.cfg.actions[$(this).data('i')], v = Number($(this).val());
+    if (v && !qkHas(a.notify_users, v)) a.notify_users.push(v);
+    renderQuick();
+});
+$(document).on('input', '#qkActs .qk-name', function(){ QK.cfg.actions[$(this).data('i')].name = $(this).val(); });
+$(document).on('change', '#qkActs .qk-scrap', function(){ QK.cfg.actions[$(this).data('i')].is_scrap = $(this).is(':checked') ? 1 : 0; });
+$(document).on('change', '#qkActs .qk-active', function(){ QK.cfg.actions[$(this).data('i')].active = $(this).is(':checked') ? 1 : 0; renderQuick(); });
+$(document).on('click', '#qkActs .qk-del', function(){
+    if (confirm('刪除這個裁決項目？（按「儲存」後才生效）')) { QK.cfg.actions.splice($(this).data('i'), 1); renderQuick(); }
+});
+$('#qkAdd').on('click', function(){
+    if (QK) { QK.cfg.actions.push({ key:'', name:'', is_scrap:0, active:1, notify_depts:[], notify_users:[] }); renderQuick(); }
+});
+$('#qkEnabled').on('change', function(){ if (QK) QK.cfg.enabled = $(this).is(':checked') ? 1 : 0; });
 $('#qkSave').on('click', function(){
-    var c = qkCollect(), bad = '';
-    if (c.enabled && !c.l1_users.length) bad = '要開啟自動開立，請先勾選至少一位第一層裁決者';
-    c.actions.forEach(function(a, i){ if (!a.name) bad = bad || ('第 ' + (i + 1) + ' 列的裁決項目名稱不可空白'); });
+    var c = QK.cfg, bad = '';
+    if (c.enabled && !c.l1_users.length) bad = '要開啟自動開立，請先選至少一位第一層裁決者';
+    if (c.enabled && !Number(c.l2_user)) bad = bad || '要開啟自動開立，請先選定第二層決策者';
+    if (Number(c.l2_user) && qkHas(c.l1_users, c.l2_user)) bad = bad || '第二層決策者不可同時是第一層裁決者，請取消其中一邊';
+    c.actions.forEach(function(a, i){ if (!$.trim(a.name)) bad = bad || ('第 ' + (i + 1) + ' 個裁決項目名稱不可空白'); });
     if (bad) { alert(bad); return; }
-    post('quick_save', { cfg:JSON.stringify(c) }, function(res){
+    var out = { enabled:c.enabled, l1_users:c.l1_users, l2_user:c.l2_user || 0, l1_ptypes:c.l1_ptypes,
+        actions:c.actions.map(function(a){ return { key:a.key, name:$.trim(a.name), is_scrap:a.is_scrap, active:a.active,
+            notify_depts:a.notify_depts, notify_users:a.notify_users }; }) };
+    post('quick_save', { cfg:JSON.stringify(out) }, function(res){
         QK.cfg = res.cfg; renderQuick(); $('#qkSaved').text('已儲存 ' + new Date().toLocaleTimeString());
     });
 });
