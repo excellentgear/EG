@@ -530,6 +530,12 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            if (refType === 'QAB_L1' || refType === 'QAB_VENDOR') {
+                // 雙層快速決策／補登廠商通知：直接開異常單處理頁
+                window.open('../QA/qa_abnormal_form.php?id=' + $(this).data('refid'));
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'QA_DECIDE' || refType === 'QA_DECIDE_F') {
                 // 處置判定/最終裁決：開決策畫面；判定完成前不移除未讀（任一決策者判定後全員自動消失）
                 window.open('../QC/inspection_combined_prototype.php?decide_abnormal=' + $(this).data('refid'));

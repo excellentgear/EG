@@ -2102,6 +2102,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- NG 儲存後自動開立異常單：品管備註（2026-10-29 雙層快速決策；備註會自動寫入異常單的「品管備註」）。
+     只有管理員在品質異常處理單設定開啟「NG儲存後自動開立」時才會出現，沒開時完全走上面的原流程。 -->
+<div class="modal fade" id="qcNoteModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#DD5138;color:#fff;border-radius:6px 6px 0 0;">
+            <h4 class="modal-title"><i class="fa fa-exclamation-triangle"></i> 檢驗判定不良 — 自動開立異常單</h4>
+        </div>
+        <div class="modal-body">
+            <p id="qcNoteInfo" style="font-size:14px;"></p>
+            <label for="qcNoteText" style="font-weight:bold;">品管備註（選填）</label>
+            <textarea id="qcNoteText" class="form-control" rows="4" maxlength="2000" placeholder="想補充給裁決者看的說明，會自動寫入異常單的「品管備註」"></textarea>
+            <div class="muted-help" style="margin-top:6px;">按下確定後，系統會自動開立異常單並通知第一層裁決者；判定不良的量測項目會自動列入。</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-coral" id="btnQcNoteGo"><i class="fa fa-check"></i> 確定，自動開立異常單</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- 開立品質異常單 — 選擇列入「量測尺寸與實測值」的項目（2026-10-06 使用者要求：NG判定後不再開
      逐欄填寫的跳窗，改成品管勾選要帶入異常單的量測項目，確認後直接自動建立草稿並另開分頁進
      qa_abnormal_form.php 讓品管接著填寫，草稿＋品管確認的模式比照報工NG自動開立。 -->
@@ -6157,6 +6176,49 @@ $(function(){
     // =====================================================================
     var ngCtx=null;
     function openNgAsk(qcFormId, s, items, done){
+        // 管理員開啟「NG儲存後自動開立」時走自動流程（跳品管備註視窗）；沒開或查詢失敗一律走下面原流程
+        var ngItems = (items||[]).filter(function(it){ return it.verdict==='NG'; });
+        if(!ngItems.length){ openNgAskLegacy(qcFormId, s, items, done); return; }
+        $.get('../../src/store/QaAbnormal_API.php', { action:'quick_state' }, function(r){
+            if(r && r.success && Number(r.auto)) openQcNote(qcFormId, s, items, done);
+            else openNgAskLegacy(qcFormId, s, items, done);
+        }, 'json').fail(function(){ openNgAskLegacy(qcFormId, s, items, done); });
+    }
+    var qcNoteCtx=null;
+    function openQcNote(qcFormId, s, items, done){
+        qcNoteCtx={ qcFormId:qcFormId, items:items, done:done };
+        $('#qcNoteInfo').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。系統將<b>自動開立品質異常單</b>並通知第一層裁決者。');
+        $('#qcNoteText').val('');
+        $('#btnQcNoteGo').prop('disabled', false);
+        $('#qcNoteModal').modal('show');
+    }
+    $('#btnQcNoteGo').on('click', function(){
+        if(!qcNoteCtx) return;
+        var c=qcNoteCtx, $b=$(this).prop('disabled',true);
+        var sel=[], measures=[];
+        (c.items||[]).forEach(function(it,idx){
+            if(it.verdict!=='NG') return;
+            sel.push(idx);
+            measures.push({ dim_name:(it.name||'')+qcAbStdPart(it),
+                vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) });
+        });
+        $.post('../../src/store/QaAbnormal_API.php', {
+            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId,
+            measures:JSON.stringify(measures), selected:JSON.stringify(sel), qc_note:$('#qcNoteText').val()
+        }, function(res){
+            if(!res.success){ $b.prop('disabled',false); alert((res.message||'自動開立失敗')+'\n檢驗結果已存檔，可稍後從「批次與檢驗歷程」的「開異常單」補開。');
+                $('#qcNoteModal').modal('hide'); qcNoteCtx=null; if(c.done) c.done(); return; }
+            $.post(API,{ action:'set_ncr_decision', qc_form_id:c.qcFormId, decision:'OPEN', abnormal_order_id:res.id }, function(){
+                $('#qcNoteModal').modal('hide'); qcNoteCtx=null;
+                if(Number(res.vendor_pending)){
+                    alert('異常單 '+res.no+' 已自動開立。\n\n⚠ 這一站尚未登記加工廠商：系統已通知生管補登。\n請向生管確認廠商，並在異常單的「責任單位」填入廠商（補填後系統會依廠內／外包自動調整類別）。\n補填之前這張單不會被自動核准或結案。');
+                }
+                try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
+                if(c.done) c.done();
+            }, 'json');
+        }, 'json').fail(function(x){ $b.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
+    });
+    function openNgAskLegacy(qcFormId, s, items, done){
         ngCtx={ qcFormId:qcFormId, summary:s, items:items, done:done, decided:false };
         $('#ng-ask-info').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。是否開立品質異常單？<br><small class="text-muted">開立後將自動通知回覆部門與相關人員，並要求回覆回簽。</small>');
         $('#ngAskModal').modal('show');

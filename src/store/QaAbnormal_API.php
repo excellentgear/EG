@@ -139,11 +139,18 @@ case 'auto_open_from_qc': {
     if (!is_array($measures)) $measures = [];
     $selected = json_decode((string)($_POST['selected'] ?? '[]'), true);
     if (!is_array($selected)) $selected = [];
+    $qcNote = isset($_POST['qc_note']) ? (string)$_POST['qc_note'] : null;
     try {
-        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected);
+        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $qcNote);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     $log($r['id'], 'create', '', $r['no'] . '（線上檢驗NG自動開立）');
-    jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed'])]);
+    jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed']),
+                'vendor_pending' => (int)($r['vendor_pending'] ?? 0), 'quick' => (int)($r['quick'] ?? 0)]);
+}
+
+/* 品管檢驗 2.0 判定 NG 儲存後，問「要不要走自動開單（跳品管備註視窗）」——只回開關狀態，不暴露設定內容 */
+case 'quick_state': {
+    jout(true, ['auto' => (qab_quick_ready($db) && !empty($perms['canCreate'])) ? 1 : 0]);
 }
 
 /* ═══════════ 讀一張單（表單頁與列印共用） ═══════════ */
@@ -182,7 +189,7 @@ case 'save_head': {
        前端已依這些規則把欄位停用，這裡是最後一道防線（鐵律8）。 */
     $isAutoOpened = !empty($o['auto_opened']);
     $isAdmin = !empty($perms['canAdmin']);
-    $respLocked = $isAutoOpened && !$isAdmin;
+    $respLocked = $isAutoOpened && !$isAdmin && empty($o['vendor_pending']);   // 廠商待補的單要讓品管能補填廠商
     // 品管通知名單成員（管理員設定「自動開立異常單要通知哪幾位品管部門人員」）：即使不在一般編輯權限
     // 範圍內，對「未結案的自動開立單」也可以進來補充異常現象說明（其餘鎖定欄位仍受上面 $respLocked 等規則保護）。
     $qcNoteEdit = $isAutoOpened && empty($o['is_closed']) && !empty($perms['canQcNotify']);
@@ -411,6 +418,13 @@ case 'save_head': {
     if ($catChanged) {
         $newNo = qab_order_no_sync_suffix($db, $id, $newCatId);
         if ($newNo !== null) $log($id, 'order_no', (string)$o['abnormal_order_no'], $newNo, '分類變更，單號後綴同步');
+    }
+    // 線上檢驗NG自動開立時沒登記廠商的單：補了責任廠商後，依廠內/外包自動改類別（選項A）
+    if ($respTouched && $vendorId !== null) {
+        try {
+            $vr = qab_vendor_pending_resolve($db, $id);
+            if ($vr && $vr['no']) $log($id, 'order_no', (string)$o['abnormal_order_no'], $vr['no'], '補登廠商，依廠內/外包重新歸類');
+        } catch (Throwable $e) {}
     }
     // 客退單綁定換人或被解除時，兩邊的「已開立異常單」旗標都要更新
     if ((int)($o['ir_id'] ?? 0) !== (int)$irAfter) qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));

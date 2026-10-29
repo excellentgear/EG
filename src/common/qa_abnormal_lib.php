@@ -225,6 +225,8 @@ function qab_ensure_schema(PDO $db): void
         'resp_process_manual' => "ADD COLUMN resp_process_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任製程是人工改的（不是從製令製程挑的）'",
         'auto_opened'      => "ADD COLUMN auto_opened TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=系統自動開立（報工NG觸發），非人工手動建立'",
         'auto_open_note'   => "ADD COLUMN auto_open_note VARCHAR(255) NULL COMMENT '自動開立的現場主管解析軌跡（誰不在職、最後選到誰），供追溯'",
+        'vendor_pending'   => "ADD COLUMN vendor_pending TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立時該製程站沒登記廠商（暫歸廠內製程類別，補廠商後依廠內/外包自動改類別；補之前不可自動核准結案）'",
+        'quick_mode'       => "ADD COLUMN quick_mode TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=開單當下走雙層快速決策（略過品管確認閘門，由第一層裁決者決策）'",
         'pm_report_id'     => "ADD COLUMN pm_report_id INT NULL COMMENT '來源報工紀錄 pm_process_daily_report.report_id（報廢扣減下游數量要靠它回推是哪一站發現的）'",
     ];
     foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
@@ -1397,7 +1399,7 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, 
  * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
  * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
  */
-function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys): array
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, ?string $qcNote = null): array
 {
     qab_ensure_schema($db);
     if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
@@ -1423,6 +1425,7 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     $qc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$qc) throw new Exception('找不到這筆檢驗紀錄');
     $isShip = (string)($qc['insp_kind'] ?? '') === 'SHIP';
+    $vendorMissing = false;
     $bomNo = $isShip ? (string)($qc['ship_bom'] ?? '') : (string)($qc['bom'] ?? '');
     if ($bomNo === '') throw new Exception('這筆檢驗紀錄沒有連結到製令，無法自動開立異常單（請改用人工開單）');
 
@@ -1445,6 +1448,9 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
             $vrow = $stv->fetch(PDO::FETCH_ASSOC);
         }
         $hasVendor = $vrow && $vrow['maker_id_no'] !== null && $vrow['maker_id_no'] !== '';
+        /* 2026-10-29 使用者定案：沒登記廠商仍照常自動開單，但先暫歸「廠內製程」類別（選項A），
+           並標 vendor_pending、通知生管補廠商；補了廠商之後由 qab_vendor_pending_resolve() 依廠內/外包改類別。 */
+        $vendorMissing = !$hasVendor;
         $isInternal = !$hasVendor || (int)($vrow['internal'] ?? 0) === 1;
         $scope = $isInternal ? 'internal' : 'external';
     }
@@ -1494,14 +1500,35 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
         $insM->execute([$id, $seq++, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE)]);
     }
 
-    // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策，
-    // 與報工路徑同一套「品管確認」閘門（qc_review_by／qc_review_at），只是這裡觸發來源不同。
-    try {
-        $desc = '線上檢驗（檢驗單號 ' . (string)$qc['insp_no'] . '）判定製令 ' . (string)$qc['bom'] . ' 不良 ' . (int)$qc['ng_qty'] . ' 件';
-        qab_notify_qc_review($db, $id, (string)$qc['bom'], (int)$qc['ng_qty'], $desc);
-    } catch (Throwable $e) {}
+    // 品管在 2.0 跳窗填的備註 → 異常單「品管備註」(qa_ps)
+    $qcNote = trim((string)$qcNote);
+    if ($qcNote !== '') {
+        $db->prepare("UPDATE qa_abnormal_order SET qa_ps=? WHERE id=?")->execute([mb_substr($qcNote, 0, 2000), $id]);
+    }
+    if ($vendorMissing) {
+        $db->prepare("UPDATE qa_abnormal_order SET vendor_pending=1 WHERE id=?")->execute([$id]);
+    }
 
-    return ['id' => $id, 'no' => $created['no'], 'existed' => false];
+    $desc = '線上檢驗（檢驗單號 ' . (string)$qc['insp_no'] . '）判定製令 ' . (string)$qc['bom'] . ' 不良 ' . (int)$qc['ng_qty'] . ' 件';
+    $quick = qab_quick_ready($db);
+    if ($quick) {
+        /* 雙層快速決策：略過「品管確認」閘門（品管備註已在開單當下填過），直接通知第一層裁決者。
+           以開單人當作已確認人（qc_review_by），單的狀態直接進入待決策。 */
+        $db->prepare("UPDATE qa_abnormal_order SET quick_mode=1, qc_review_by=?, qc_review_at=NOW() WHERE id=?")->execute([$createdBy, $id]);
+        try { qab_notify_quick_l1($db, $id, $desc); } catch (Throwable $e) {}
+    } else {
+        // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策，
+        // 與報工路徑同一套「品管確認」閘門（qc_review_by／qc_review_at），只是這裡觸發來源不同。
+        try { qab_notify_qc_review($db, $id, (string)$qc['bom'], (int)$qc['ng_qty'], $desc); } catch (Throwable $e) {}
+    }
+    if ($vendorMissing) {
+        try {
+            $pn = $qc['process_no'] !== null ? (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$qc['process_no'])->fetchColumn() : null;
+            qab_notify_vendor_missing($db, $id, (string)$qc['bom'], $pn);
+        } catch (Throwable $e) {}
+    }
+
+    return ['id' => $id, 'no' => $created['no'], 'existed' => false, 'vendor_pending' => $vendorMissing ? 1 : 0, 'quick' => $quick ? 1 : 0];
 }
 
 /**
@@ -2326,6 +2353,89 @@ function qab_quick_cfg_save(PDO $db, array $in): array
     $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l2_user' => $l2, 'l1_ptypes' => array_values($pt), 'actions' => $acts];
     qab_setting_set($db, 'quick_cfg', $new);
     return qab_quick_cfg($db);
+}
+
+/** 雙層快速決策是否「現在就能用」：總開關開、有第一層、有第二層、至少一個啟用的裁決項目 */
+function qab_quick_ready(PDO $db): bool
+{
+    $c = qab_quick_cfg($db);
+    if (!$c['enabled'] || !$c['l1_users'] || (int)$c['l2_user'] <= 0) return false;
+    foreach ($c['actions'] as $a) if ($a['active']) return true;
+    return false;
+}
+
+/**
+ * 自動核准／自動結案之前一定要過這一關（2026-10-29 使用者定案）：責任廠商沒填的單，
+ * 不可以被系統自動核准或自動結案（要先請生管補廠商）。人工操作不受這條限制。
+ * $o 可以是 qab_order() 的結果或 qa_abnormal_order 的一列。
+ */
+function qab_auto_close_allowed(array $o): bool
+{
+    return trim((string)($o['responsible_vendor_id'] ?? '')) !== '';
+}
+
+/**
+ * 補了責任廠商之後，依該廠商是否為廠內加工廠商重新判定類別（使用者選 A，2026-10-29）：
+ * 只處理 vendor_pending=1 的單；廠內→維持「廠內製程」類別，外包→改歸「外包廠商」類別，
+ * 單號只換後綴（本體與流水號不動，已結案不改號——沿用 qab_order_no_sync_suffix）。
+ * 回傳 null＝沒有動作；有動作回 ['cat_id'=>…,'no'=>新單號或null]。
+ */
+function qab_vendor_pending_resolve(PDO $db, int $orderId): ?array
+{
+    $st = $db->prepare("SELECT o.vendor_pending, o.responsible_vendor_id, o.cat_id, o.is_closed, ml.internal
+                          FROM qa_abnormal_order o LEFT JOIN maker_list ml ON ml.maker_id_no = o.responsible_vendor_id
+                         WHERE o.id=?");
+    $st->execute([$orderId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r || !(int)$r['vendor_pending'] || trim((string)$r['responsible_vendor_id']) === '') return null;
+    $scope = ((int)($r['internal'] ?? 0) === 1) ? 'internal' : 'external';
+    $catId = qab_cat_auto_qc_resolve($db, $scope);
+    $newNo = null;
+    if ($catId && (int)$r['is_closed'] !== 1 && (int)$catId !== (int)$r['cat_id']) {
+        $db->prepare("UPDATE qa_abnormal_order SET cat_id=? WHERE id=?")->execute([$catId, $orderId]);
+        $newNo = qab_order_no_sync_suffix($db, $orderId, $catId);
+    }
+    $db->prepare("UPDATE qa_abnormal_order SET vendor_pending=0 WHERE id=?")->execute([$orderId]);
+    return ['cat_id' => $catId, 'no' => $newNo];
+}
+
+/** 通知第一層裁決者：有一張新的 NG 異常單等待裁決（走唯一通知入口 eg_qa_insert_event） */
+function qab_notify_quick_l1(PDO $db, int $orderId, string $desc): void
+{
+    $c = qab_quick_cfg($db);
+    if (!$c['l1_users']) return;
+    require_once __DIR__ . '/qa_notify.php';
+    $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+    $st->execute([$orderId]);
+    $no = (string)$st->fetchColumn();
+    $targets = array_map(function ($id) { return ['type' => 'user', 'id' => (int)$id, 'mode' => 'read']; }, $c['l1_users']);
+    eg_qa_insert_event($db, $orderId, '品質異常單待裁決：' . $no, $desc . '，異常單 ' . $no . ' 已自動開立，請前往裁決。', $targets, null, 0, [
+        'ref_type' => 'QAB_L1',
+        'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
+    ]);
+}
+
+/** 通知生管部門：這張自動開立的單，該製程站沒有登記廠商，請補登 */
+function qab_notify_vendor_missing(PDO $db, int $orderId, string $bomNo, ?string $procName): void
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/qa_notify.php';
+    $deptIds = array_map('intval', eg_org_dept_ids($db, 'pm_dept'));
+    if (!$deptIds) return;
+    $ids = [];
+    foreach (eg_people_list($db, ['dept_ids' => $deptIds]) as $p) $ids[(int)$p['id']] = 1;
+    if (!$ids) return;
+    $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+    $st->execute([$orderId]);
+    $no = (string)$st->fetchColumn();
+    $targets = array_map(function ($id) { return ['type' => 'user', 'id' => (int)$id, 'mode' => 'read']; }, array_keys($ids));
+    eg_qa_insert_event($db, $orderId, '請補登加工廠商：' . $no,
+        '製令 ' . $bomNo . ($procName ? '「' . $procName . '」' : '') . ' 品管檢驗判定不良，但這一站沒有登記加工廠商（異常單 ' . $no
+        . '）。請到 BOM 補登該製程的廠商；補登前這張單不會被自動核准或結案。', $targets, null, 0, [
+        'ref_type' => 'QAB_VENDOR',
+        'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
+    ]);
 }
 
 /** 「決策者」分頁已設定範圍內的在職人員（去重；第二層決策者只能從這裡挑） */

@@ -866,7 +866,7 @@ function render(){
     // 自動開立（報工NG累積）的單，責任單位只有異常單管理員可以改——RESP_LOCKED 要在 renderRespChips()
     // 之前就設好，drawResp() 才會照這個值決定要不要出現「×」移除鈕。
     var isAuto = !!Number(o.auto_opened);
-    RESP_LOCKED = isAuto && !p.canAdmin;
+    RESP_LOCKED = isAuto && !p.canAdmin && !Number(o.vendor_pending);   // 廠商待補的單要讓品管能補填
     $('#noTag').text(o.abnormal_order_no || '');
     document.title = '品質異常處理單 ' + (o.abnormal_order_no || '');
 
