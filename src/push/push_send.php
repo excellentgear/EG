@@ -73,9 +73,10 @@ if (!function_exists('eg_push_active_user_filter')) {
         $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
         if (empty($userIds)) return [];
         $in = implode(',', $userIds);
-        $cond = "state IN (1,99)";
+        // 全站超級管理員（state 99）是 IT 用帳號，不收任何推播
+        $cond = "state = 1";
         require_once __DIR__ . '/../common/shared_account_lib.php';
-        if (eg_shared_ready($db)) $cond = "(state IN (1,99) OR is_shared_account = 1)";
+        if (eg_shared_ready($db)) $cond = "(state = 1 OR is_shared_account = 1)";
         return array_map('intval', $db->query("SELECT id FROM user WHERE id IN ($in) AND $cond")->fetchAll(PDO::FETCH_COLUMN));
     }
 }

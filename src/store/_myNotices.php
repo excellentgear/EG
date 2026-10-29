@@ -9,6 +9,8 @@ require_once __DIR__ . '/../common/_config.php'; // session_start + $db
 
 if (!isset($_SESSION['id'])) { echo json_encode(['ok' => false, 'msg' => '尚未登入']); exit(); }
 $uid = (int)$_SESSION['id'];
+// 全站超級管理員（id=1）不收任何通知／待辦（見 sideAndTopBarMenu.html）
+if ($uid === 1) { echo json_encode(['ok' => true, 'sources' => [], 'total' => 0, 'page' => 1, 'size' => 20, 'pages' => 1, 'rows' => []]); exit(); }
 
 $page = max(1, (int)($_GET['page'] ?? 1));
 $size = (int)($_GET['size'] ?? 20);

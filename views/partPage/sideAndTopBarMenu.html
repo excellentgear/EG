@@ -96,7 +96,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         // autoread 的義務等級與 read 相同（need_mode=1），差別只在「點開就自動標已閱」——那是在點開後
         // 由 _eventDetail.php 回的 my_mode 決定的，這裡刻意不預先算，否則開著這一頁的期間通知方式被改過
         // （例如管理員用「批次改對象」調整），算好的值就是舊的。
-        $event = $conn->getAll(
+        // 全站超級管理員（id=1，IT 用帳號）獨立於員工之外：不收任何公告／通知／簽核／回簽，
+        // 只使用「設定好自動核准」的功能；所以鈴鐺與我的待辦一律是空的。
+        $event = ((int)$id === 1) ? [] : $conn->getAll(
             "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN t.target_id END) AS for_uid,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN fu.user_cname END) AS for_name
