@@ -52,12 +52,13 @@ if (!function_exists('ps_plan_candidates')) {
         }
         $tag = trim((string)($f['tag'] ?? ''));   // BOM篩選標籤：下拉選一個（與 BOM總覽同一個標示），完全相同才符合
 
-        $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.process_no, pn.ProcessName, bi.sqty,
-                       b.Client_Name AS client, (SELECT cl2.customer_id FROM customer_list cl2 WHERE cl2.customer = b.Client_Name LIMIT 1) AS client_id, b.d_id AS part_no, $tagSql
+        $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName, bi.sqty,
+                       COALESCE(b.Delivery_date, (SELECT MIN(otm.Delivery_date) FROM bom_order_process_map bm JOIN order_track otm ON otm.Order_id = bm.order_id WHERE bm.bom = b.bom), otd.Delivery_date) AS ship_date, b.Client_Name AS client, (SELECT cl2.customer_id FROM customer_list cl2 WHERE cl2.customer = b.Client_Name LIMIT 1) AS client_id, b.d_id AS part_no, $tagSql
                   FROM bom_ing bi
                   JOIN process_no pn ON pn.ProcessNo = bi.process_no AND pn.process_type_id = ?
                   LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
                   JOIN bom b ON b.bom = bi.bom
+                  LEFT JOIN order_track otd ON otd.Order_id = b.o_order_id
                  WHERE (b.processing_state <> 1 OR b.processing_state IS NULL)
                    AND (ml.internal IS NULL OR ml.internal = 1)   -- 外包廠商的不列（沒指定廠商的後面關卡照列）
                    AND (bi.processing_state IS NULL OR bi.processing_state IN ('N','','ing'))   -- Q(QC待驗)／P(生管待移轉)／E(已移轉)＝這道製程已經做完，不列
@@ -76,7 +77,6 @@ if (!function_exists('ps_plan_candidates')) {
         foreach ($rows as $r) { $t = (string)($r['bom_filter_tag'] ?? ''); if ($t !== '') $tags[$t] = 1; }
         $tags = array_keys($tags); sort($tags);
         if ($tag !== '') $rows = array_values(array_filter($rows, function ($r) use ($tag) { return (string)($r['bom_filter_tag'] ?? '') === $tag; }));
-        $rows = array_slice($rows, 0, (int)$limit);
 
         // 這張 BOM 目前走到哪一關（沿用快速出貨的「目前製程」唯一實作）
         $prog = [];
@@ -84,13 +84,36 @@ if (!function_exists('ps_plan_candidates')) {
             if (!function_exists('sq_bom_progress_map')) @include_once __DIR__ . '/shipping_lib.php';
             if (function_exists('sq_bom_progress_map')) $prog = sq_bom_progress_map($db, array_column($rows, 'bom'));
         } catch (Throwable $e) { error_log('[ps_plan_candidates] ' . $e->getMessage()); }
+        // 每張 BOM 的關卡 bom_sn 清單（排除 skip），算「目前所在關卡到這道製程之間還有幾關」
+        $snList = [];
+        $bomsAll = array_values(array_unique(array_column($rows, 'bom')));
+        if ($bomsAll) {
+            $ph = implode(',', array_fill(0, count($bomsAll), '?'));
+            $q = $db->prepare("SELECT bom, bom_sn FROM bom_ing WHERE bom IN ($ph) AND (processing_state IS NULL OR processing_state <> 'skip')");
+            $q->execute($bomsAll);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $snList[$x['bom']][(int)$x['bom_sn']] = 1;
+        }
         foreach ($rows as &$r) {
             $pg = $prog[$r['bom']] ?? null;
+            $cur = (int)($pg['cur_sn'] ?? 0); $cs = (int)$r['bom_sn'];
+            $n = 0;
+            foreach (array_keys($snList[$r['bom']] ?? []) as $sn) if ($sn > $cur && $sn <= $cs) $n++;
+            $r['steps_to'] = $n;   // 0＝已在這一關或已經過了；1＝下一關就是這道製程
+            // 距離＝這道製程的 bom_sn（越後面的製程數字越大）減去這張 BOM 目前所在關卡的 bom_sn。
+            // 離得越近（差距越小的正數）越上面；已經過了的（差距 ≤0，例如同一關或更早的關卡）排最後。
+            $gap = (int)$r['bom_sn'] - (int)($pg['cur_sn'] ?? 0);
+            $r['gap'] = $gap;
             $r['cur_process'] = $pg ? ($pg['started'] ? $pg['process'] : '尚未開工') : '';
             $r['cur_state']   = $pg ? ($pg['started'] ? $pg['state_txt'] : '') : '';
             $r['stage']       = ps_plan_stage_text($pg);
         }
         unset($r);
+        usort($rows, function ($a, $b) {
+            $ga = $a['gap'] > 0 ? $a['gap'] : 100000 - $a['gap'];
+            $gb = $b['gap'] > 0 ? $b['gap'] : 100000 - $b['gap'];
+            return $ga <=> $gb ?: strcmp($b['bom'], $a['bom']) ?: ((int)$a['bom_sn'] <=> (int)$b['bom_sn']);
+        });
+        $rows = array_slice($rows, 0, (int)$limit);
         return ['rows' => $rows, 'tags' => $tags];
     }
 }

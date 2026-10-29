@@ -277,7 +277,7 @@ function sq_bom_progress_map(PDO $db, array $boms): array
                 'process' => $first['pname'], 'state' => (string)$first['processing_state'],
                 'state_txt' => sq_proc_state_text($first['processing_state']),
                 'maker' => $first['maker'], 'date' => '', 'out_date' => '', 'qc_date' => '',
-                'next' => $first['pname'], 'started' => false,
+                'next' => $first['pname'], 'started' => false, 'cur_sn' => 0,
             ];
             continue;
         }
@@ -302,7 +302,7 @@ function sq_bom_progress_map(PDO $db, array $boms): array
             'maker' => $cur['maker'],
             'date' => max((string)$cur['out_date'], (string)$cur['qc_date']),
             'out_date' => (string)$cur['out_date'], 'qc_date' => (string)$cur['qc_date'],
-            'next' => $next, 'started' => true,
+            'next' => $next, 'started' => true, 'cur_sn' => (int)$curSn,
         ];
     }
     return $map;

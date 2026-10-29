@@ -2569,6 +2569,7 @@ SELECT
     bi.ProcessName,
     bi.process_type_id,
     bi.machine_id,
+    bi.bom_sn,
     origin_bi.processing_sequence,
     origin_bi.plan_seq,
     origin_bi.plan_urgent,
@@ -4116,7 +4117,7 @@ function get_state_badge($state)
                                                             $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                         }
                                                     ?>
-                                                        <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
+                                                        <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-bom-sn="<?= (int)($task['bom_sn'] ?? 0) ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
                                                             <!-- 標題列：BOM (左) ... 製程 + 狀態 + 順序 (右) -->
                                                             <div class="card-header-flex">
                                                                 <h6 class="card-title" style="display:flex; align-items:center;">
@@ -4380,7 +4381,7 @@ function get_state_badge($state)
                                                                                 $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                                             }
                                                                         ?>
-                                                                            <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
+                                                                            <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-bom-sn="<?= (int)($task['bom_sn'] ?? 0) ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
                                                                                 <!-- 標題列：BOM (左) ... 製程 + 狀態 + 順序 (右) -->
                                                                                 <div class="card-header-flex">
                                                                                     <h6 class="card-title" style="display:flex; align-items:center;">
@@ -5235,7 +5236,7 @@ function get_state_badge($state)
                                     </div>
                                     <div style="flex:1;overflow:auto;max-height:52vh;">
                                         <table class="table table-condensed table-hover" style="margin:0;font-size:12px;">
-                                            <thead style="position:sticky;top:0;background:#f7f1e8;"><tr><th style="width:28px;"><input type="checkbox" id="sp-pre-all"></th><th>BOM</th><th>客戶</th><th>料號</th><th>篩選標籤</th><th>要預排的製程</th><th>目前製程・狀態</th><th class="text-right">數量</th></tr></thead>
+                                            <thead style="position:sticky;top:0;background:#f7f1e8;"><tr><th style="width:28px;"><input type="checkbox" id="sp-pre-all"></th><th>交期</th><th>BOM</th><th>客戶</th><th>料號</th><th>篩選標籤</th><th>要預排的製程</th><th title="從目前所在關卡往後數，還要幾關才輪到這道製程">還有幾關</th><th>目前製程・狀態</th><th class="text-right">數量</th></tr></thead>
                                             <tbody id="sp-pre-body"></tbody>
                                         </table>
                                     </div>
@@ -5894,9 +5895,9 @@ function get_state_badge($state)
                                 preRows = (res.rows || []).filter(function(r) { return !onList[r.bom_ing_fid]; });
                                 var h = '';
                                 preRows.forEach(function(r, i) {
-                                    h += '<tr data-i="' + i + '" style="cursor:pointer;"><td><input type="checkbox" class="sp-pre-chk"></td><td><b>' + esc(r.bom) + '</b></td><td>' + esc(r.client) + (r.client_id ? ' <span class="text-muted">(' + esc(r.client_id) + ')</span>' : '') + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.bom_filter_tag) + '</td><td>' + esc(r.ProcessName || r.process_no) + '</td><td>' + esc(r.stage || '—') + '</td><td class="text-right">' + esc(r.sqty) + '</td></tr>';
+                                    h += '<tr data-i="' + i + '" style="cursor:pointer;"><td><input type="checkbox" class="sp-pre-chk"></td><td style="white-space:nowrap;">' + esc(r.ship_date ? String(r.ship_date).replace(/-/g, '.') : '') + '</td><td><b>' + esc(r.bom) + '</b></td><td>' + esc(r.client) + (r.client_id ? ' <span class="text-muted">(' + esc(r.client_id) + ')</span>' : '') + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.bom_filter_tag) + '</td><td>' + esc(r.ProcessName || r.process_no) + '</td><td class="text-center">' + (r.steps_to > 0 ? esc(r.steps_to) + ' 關' : '<span class="text-muted">已到／已過</span>') + '</td><td>' + esc(r.stage || '—') + '</td><td class="text-right">' + esc(r.sqty) + '</td></tr>';
                                 });
-                                $('#sp-pre-body').html(h || '<tr><td colspan="8" class="text-center text-muted" style="padding:20px;">沒有符合的製程</td></tr>');
+                                $('#sp-pre-body').html(h || '<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">沒有符合的製程</td></tr>');
                                 $('#sp-pre-msg').text(preRows.length + ' 筆' + (preRows.length >= 500 ? '（僅顯示前 500 筆，請再縮小條件）' : ''));
                                 preCount();
                             }, 'json');
@@ -9739,7 +9740,7 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
             client: $k.attr('data-client') || '', process: $.trim($k.find('.card-process-name').first().text()),
             sq: sq, ok: ok, ng: ng, remain: Math.max(0, sq - ok), pct: sq > 0 ? Math.min(100, Math.round(ok / sq * 100)) : 0,
             ship: $k.attr('data-shipping-date') || '', notes: notes, arrived: String($k.attr('data-order-id')) === '1',
-            preplan: $k.attr('data-preplan') === '1', stage: $k.attr('data-stage') || '', planUrgent: $k.attr('data-plan-urgent') === '1',
+            bomSn: $k.attr('data-bom-sn') || '', preplan: $k.attr('data-preplan') === '1', stage: $k.attr('data-stage') || '', planUrgent: $k.attr('data-plan-urgent') === '1',
             urgent: /card-priority-E/.test(cls) ? 'E' : (/card-priority-U/.test(cls) ? 'U' : ''),
             operator: $k.attr('data-operator') || '', start: $k.attr('data-start') || '',
             now: /now-processing/.test(cls), split: ($k.attr('data-ps') || '').indexOf('(拆分工單)') >= 0,
@@ -9749,6 +9750,15 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     }
     function cardsOf($c) { return $c.children('.kanban-card').map(function () { return cardInfo($(this)); }).get(); }
     function hit(c, q) { return !q || (c.bom + ' ' + c.part + ' ' + c.client + ' ' + c.process + ' ' + c.notes.join(' ')).toLowerCase().indexOf(q) >= 0; }
+    function uniqueRemain(ucards, machines) {
+        var key = function (c) { return c.bom + '|' + (c.bomSn || c.process); };
+        var all = ucards.slice(); machines.forEach(function (m) { all = all.concat(m.cards); });
+        var g = {};
+        all.forEach(function (c) { var k = key(c); g[k] = g[k] || { sq: 0, ok: 0 }; g[k].sq = Math.max(g[k].sq, c.sq); g[k].ok += c.ok; });
+        var seen = {}, sum = 0;
+        ucards.forEach(function (c) { var k = key(c); if (seen[k]) return; seen[k] = 1; sum += Math.max(0, g[k].sq - g[k].ok); });
+        return sum;
+    }
     function sumRemain(cs) { return cs.reduce(function (s, c) { return s + c.remain; }, 0); }
     function status(m, cs) {
         if (m.abn) return { cls: 'abn', txt: '異常' };
@@ -9821,7 +9831,9 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
 
         var bh = '';
         // 未指派
-        var uR = sumRemain(cur.ucards);
+        // 拆分複本帶著完整的原數量，逐張加總會重複計算：同一張製令、同一道製程（bom＋bom_sn）只算一次＝
+        // 原數量減掉這道製程「所有複本（含已在機台上的）」已報工的良品數
+        var uR = uniqueRemain(cur.ucards, cur.machines);
         // 未指派固定在左側整欄；機台放進右邊自己的格狀區，換列時不會跑到未指派下方
         bh += '<div class="v2-ucol"><div class="v2-col v2-col-u"><div class="v2-col-h"><div class="v2-col-t"><i class="fa fa-inbox"></i> 未指派' +
             (P.canDrag ? '<button type="button" class="btn btn-xs btn-default v2-usort" title="調整未指派順序"><i class="fa fa-sort"></i></button>' : '') + '</div>' +
