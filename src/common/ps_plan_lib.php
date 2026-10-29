@@ -53,7 +53,7 @@ if (!function_exists('ps_plan_candidates')) {
         $tag = trim((string)($f['tag'] ?? ''));   // BOM篩選標籤：下拉選一個（與 BOM總覽同一個標示），完全相同才符合
 
         $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName, bi.sqty,
-                       COALESCE(b.Delivery_date, (SELECT MIN(otm.Delivery_date) FROM bom_order_process_map bm JOIN order_track otm ON otm.Order_id = bm.order_id WHERE bm.bom = b.bom), otd.Delivery_date) AS ship_date, b.Client_Name AS client, (SELECT cl2.customer_id FROM customer_list cl2 WHERE cl2.customer = b.Client_Name LIMIT 1) AS client_id, b.d_id AS part_no, $tagSql
+                       COALESCE(b.Delivery_date, (SELECT MIN(otm.Delivery_date) FROM bom_order_process_map bm JOIN order_track otm ON otm.Order_id = bm.order_id WHERE bm.bom = b.bom), otd.Delivery_date) AS ship_date, b.priority_type AS pri, " . ot_bom_order_urgent_sql('b') . ", b.Client_Name AS client, (SELECT cl2.customer_id FROM customer_list cl2 WHERE cl2.customer = b.Client_Name LIMIT 1) AS client_id, b.d_id AS part_no, $tagSql
                   FROM bom_ing bi
                   JOIN process_no pn ON pn.ProcessNo = bi.process_no AND pn.process_type_id = ?
                   LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
@@ -103,6 +103,7 @@ if (!function_exists('ps_plan_candidates')) {
             // 離得越近（差距越小的正數）越上面；已經過了的（差距 ≤0，例如同一關或更早的關卡）排最後。
             $gap = (int)$r['bom_sn'] - (int)($pg['cur_sn'] ?? 0);
             $r['gap'] = $gap;
+            $r['urg_base'] = ($r['pri'] ?? '') === 'E' ? 'E' : ((($r['pri'] ?? '') === 'U' || !empty($r['bom_order_urgent'])) ? 'U' : '');
             $r['cur_process'] = $pg ? ($pg['started'] ? $pg['process'] : '尚未開工') : '';
             $r['cur_state']   = $pg ? ($pg['started'] ? $pg['state_txt'] : '') : '';
             $r['stage']       = ps_plan_stage_text($pg);

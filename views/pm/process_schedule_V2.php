@@ -2,6 +2,7 @@
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
 require_once __DIR__ . '/../../src/common/gear_spec_lib.php';   // 模數要印 M 還是 DP/CP＝eg_gear_module_text()，唯一實作
+require_once __DIR__ . '/../../src/common/order_bom_filter_tag_lib.php';   // ot_bom_order_urgent_sql＝BOM總覽「訂單是急件」的唯一判定
 require_once __DIR__ . '/../../src/common/ps_plan_lib.php';     // 生管預排／排序紀錄／是否依序加工（唯一實作）
 require_once __DIR__ . '/../../src/common/gear_save_lib.php';   // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
@@ -2585,6 +2586,7 @@ SELECT
     b.Client_Name,
     bi.sqty,
     b.priority_type,
+    " . ot_bom_order_urgent_sql('b') . ",
     b.bom_ps,
     COALESCE(b.Delivery_date, ol.Delivery_date) AS shipping_date,
     ds.Type as part_type,
@@ -2661,7 +2663,8 @@ try {
     foreach ($tasks as &$t) {
         $t['is_preplan'] = isset($preSet[(int)$t['bom_ing_fid']]) ? 1 : 0;
         $t['pre_stage'] = $t['is_preplan'] ? ($stageMap[$t['bom']] ?? '') : '';
-        if (!empty($t['plan_urgent']) && !in_array($t['priority_type'] ?? '', ['E', 'U'], true)) $t['priority_type'] = 'U';
+        // 急件來源：BOM本身(priority_type U/E)、BOM總覽的「訂單是急件」、生管手動設定；特急(E)只來自 priority_type
+        if ((!empty($t['plan_urgent']) || !empty($t['bom_order_urgent'])) && !in_array($t['priority_type'] ?? '', ['E', 'U'], true)) $t['priority_type'] = 'U';
     }
     unset($t);
 
@@ -5709,6 +5712,7 @@ function get_state_badge($state)
                             if (isPre && isUnassignedList) {
                                 html += ' <span class="label label-info" style="font-size: 10px;">待指派</span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + $('<i>').text($card.attr('data-stage') || '—').html() + '</span>';
                             }
+                            var uBase = $card.hasClass('card-priority-E') ? 'E' : ($card.hasClass('card-priority-U') && !isPurg ? 'U' : '');
                             if (state === 'ing') {
                                 if (isUnassignedList) {
                                     html += ' <span class="label label-info" style="font-size: 10px;">待指派</span>';
@@ -5721,6 +5725,8 @@ function get_state_badge($state)
                                 }
                             } else if (state === 'Q') html += ' <span class="label label-warning" style="font-size: 10px;">QC</span>';
 
+                            // 急件／特急標示放在「待指派」右側（顏色與底色由 spApplyUrg 依來源與生管手動設定決定）
+                            html = html.replace('>待指派</span>', '>待指派</span><span class="sp-ulab"></span>');
                             html += '<div style="font-size: 11px; color: #666; margin-top: 2px;">';
                             html += '<span style="margin-right: 10px;"><i class="fa fa-user"></i> ' + (client || '-') + '</span>';
                             html += '<span style="margin-right: 10px;"><i class="fa fa-cubes"></i> ' + sqty + '</span>';
@@ -5753,7 +5759,8 @@ function get_state_badge($state)
                                 '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button>' +
                                 '</div></div>';
 
-                            $modalList.append('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="' + index + '" data-purg="' + (isPurg ? 1 : 0) + '" data-pre="' + (isPre ? 1 : 0) + '" data-id="' + id + '" data-bom="' + $('<i>').text(bom).html() + '" data-client="' + $('<i>').text(client).html() + '" data-ship="' + $('<i>').text(shippingDate).html() + '">' + html + '</li>');
+                            $modalList.append('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="' + index + '" data-purg="' + (isPurg ? 1 : 0) + '" data-ubase="' + uBase + '" data-pre="' + (isPre ? 1 : 0) + '" data-id="' + id + '" data-bom="' + $('<i>').text(bom).html() + '" data-client="' + $('<i>').text(client).html() + '" data-ship="' + $('<i>').text(shippingDate).html() + '">' + html + '</li>');
+                            if (window.spApplyUrg) window.spApplyUrg($modalList.children('li').last());
                         });
                         $('#sp-filter').val('');
                         // 🌟🌟🌟 修正點結束 🌟🌟🌟
@@ -5800,7 +5807,7 @@ function get_state_badge($state)
                             var el = $li[0]; if (!el) return;
                             var body = document.getElementById('sp-body');
                             body.scrollTop = el.offsetTop - body.clientHeight / 2;
-                            $li.css('background', '#FFE7B8'); setTimeout(function() { $li.css('background', ''); }, 1200);
+                            $li.css('background-color', '#FFE7B8'); setTimeout(function() { window.spApplyUrg($li); }, 1200);
                         }
                         // 把 sel（保持原相對順序）放到左側 before 元素之前；before 為空＝放最後
                         function insertGroup(sel, before) {
@@ -5867,11 +5874,20 @@ function get_state_badge($state)
                         var esc = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
                         function curTypeId() { var id = $L.data('target-list-id') || ''; return $('#' + id).attr('data-type-id') || ''; }   // 以排序視窗實際開的那個未指派清單為準
                         window.spSig = function() { return items($L).add(items($S)).map(function() { return $(this).attr('data-id') + ':' + ($(this).attr('data-purg') || 0); }).get().join(','); };
+                        // 急件／特急：特急(E)只來自 BOM 本身；急件(U)＝BOM 本身、BOM總覽「訂單是急件」、或生管手動按「急」。
+                        // 標示顯示在「待指派」右側，列底色用暖色（特急＝珊瑚紅系、急件＝琥珀系，與看板固定三色一致）。
+                        window.spApplyUrg = function($li) {
+                            var base = $li.attr('data-ubase') || '', lv = base === 'E' ? 'E' : ((base === 'U' || $li.attr('data-purg') === '1') ? 'U' : '');
+                            $li.find('.sp-ulab').html(lv === 'E' ? ' <span class="label" style="font-size:10px;background:#DD5138;color:#fff;">特急</span>'
+                                : lv === 'U' ? ' <span class="label" style="font-size:10px;background:#F0A24B;color:#fff;">急件</span>' : '');
+                            $li.css({ 'background-color': lv === 'E' ? '#FBE0D8' : lv === 'U' ? '#FDEFD6' : '', 'border-left': lv === 'E' ? '5px solid #DD5138' : lv === 'U' ? '5px solid #F0A24B' : '' });
+                        };
                         $('#unassignedSortModal').on('click', '.sp-urg', function(e) {
                             e.stopPropagation();
                             var $li = $(this).closest('li'), on = $li.attr('data-purg') !== '1';
                             $li.attr('data-purg', on ? 1 : 0);
                             $(this).toggleClass('btn-danger', on).toggleClass('btn-default', !on);
+                            window.spApplyUrg($li);
                         });
                         $('#unassignedSortModal').on('click', '.sp-unpre', function(e) {
                             e.stopPropagation();
@@ -5924,7 +5940,7 @@ function get_state_badge($state)
                             $.post(location.pathname, { action: 'ps_plan_add', type_id: curTypeId(), fids: JSON.stringify(pick.map(function(r) { return r.bom_ing_fid; })) }, function(res) {
                                 if (!res || !res.success) { alert((res && res.message) || '加入失敗'); $b.prop('disabled', false); return; }
                                 var added = {}; (res.added || []).forEach(function(f) { added[f] = 1; });
-                                pick.filter(function(r) { return added[r.bom_ing_fid]; }).forEach(function(r) { $L.append(buildPreLi(r)); });
+                                pick.filter(function(r) { return added[r.bom_ing_fid]; }).forEach(function(r) { var $n = buildPreLi(r); $L.append($n); window.spApplyUrg($n); });
                                 renum(); $('#sp-pre-panel').hide();
                                 var li = items($L).last(); if (li.length) flash(li);
                                 if (typeof showToast === 'function') showToast('成功', res.message, true);
@@ -5934,7 +5950,7 @@ function get_state_badge($state)
                             var html = '<div class="row" style="margin:0;"><div class="col-xs-10" style="padding:0;">' +
                                 '<i class="fa fa-bars sp-handle text-muted" style="margin-right:6px;"></i><label class="sp-chk" style="margin:0 6px 0 0;font-weight:normal;"><input type="checkbox" class="sp-sel"></label>' +
                                 '<strong><span class="sp-no"></span>. ' + esc(r.bom) + '</strong> <span class="text-muted">| ' + esc(r.part_no) + '</span> ' +
-                                '<span class="label label-info" style="font-size:10px;">待指派</span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + esc(r.stage || '—') + '</span>' +
+                                '<span class="label label-info" style="font-size:10px;">待指派</span><span class="sp-ulab"></span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + esc(r.stage || '—') + '</span>' +
                                 '<div style="font-size:11px;color:#666;margin-top:2px;"><span style="margin-right:10px;"><i class="fa fa-user"></i> ' + esc(r.client || '-') + '</span><span><i class="fa fa-cubes"></i> ' + esc(r.sqty) + '</span> <span style="color:#8a4f12;">（' + esc(r.ProcessName || r.process_no) + '）</span></div>' +
                                 '</div><div class="col-xs-2 text-right sp-ctl" style="padding:0;padding-top:4px;white-space:nowrap;">' +
                                 '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
@@ -5943,7 +5959,7 @@ function get_state_badge($state)
                                 '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' +
                                 '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
                                 '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button></div></div>';
-                            return $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="9999" data-purg="0" data-pre="1" data-id="' + r.bom_ing_fid + '" data-bom="' + esc(r.bom) + '" data-client="' + esc(r.client) + '" data-ship="">' + html + '</li>');
+                            return $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="9999" data-purg="0" data-ubase="' + esc(r.urg_base || '') + '" data-pre="1" data-id="' + r.bom_ing_fid + '" data-bom="' + esc(r.bom) + '" data-client="' + esc(r.client) + '" data-ship="">' + html + '</li>');
                         }
                         $('#unassignedSortModal').on('shown.bs.modal', function() { $S.empty(); $('#sp-pre-panel').hide(); renum(); initSortables(); $('#sp-body').scrollTop(0); window.spSig0 = window.spSig(); });
                         $('#unassignedSortModal').on('hidden.bs.modal', function() { destroySortables(); });
