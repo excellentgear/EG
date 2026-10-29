@@ -113,7 +113,6 @@ $companyName = eg_company_full_name($db);
         <button type="button" class="cr-btn b-plain" id="btnSuggest"><i class="fa fa-magic"></i> 建議建立清單</button><?php endif; ?>
         <select id="filterStatus"><option value="">全部狀態</option><option value="draft">草稿</option><option value="submitted">審查中</option><option value="closed">已結案</option></select>
         <input type="text" id="filterKw" placeholder="訂單編號／客戶／料號／編號 搜尋" style="width:220px;">
-        <button type="button" class="cr-btn b-plain" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
         <?php if ($perms['canAdmin']): ?>
         <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#8a6d45;cursor:pointer;margin-left:6px;">
             <input type="checkbox" id="chkAdminSignCol"> 顯示管理員代簽標記
@@ -366,9 +365,11 @@ $('#chkAdminSignCol').on('change', function(){
     SHOW_ADMIN_SIGN_COL = this.checked;
     $('.cr-admin-col').toggle(SHOW_ADMIN_SIGN_COL);
 });
-$('#btnSearch').on('click', loadList);
+var _kwTimer=null;
 $('#filterStatus').on('change', loadList);
-$('#filterKw').on('keydown', function(e){ if (e.key==='Enter') loadList(); });
+// 輸入即時篩選（350ms 防抖）；雙擊清空由共用檔觸發 input/change，同樣會重新查詢
+$('#filterKw').on('input change', function(){ clearTimeout(_kwTimer); _kwTimer=setTimeout(loadList, 350); });
+$('#filterKw').on('keydown', function(e){ if (e.key==='Enter'){ clearTimeout(_kwTimer); loadList(); } });
 
 /* ───────────────── 新增（挑訂單） ───────────────── */
 var ADD_ORD = null, ADD_T = null, ADD_SEQ = 0;

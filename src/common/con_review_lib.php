@@ -1137,9 +1137,25 @@ function cnrv_delete(PDO $db, int $docId, int $uid, string $uname): void {
     if (!$doc) throw new Exception('找不到此表單');
     $db->prepare("UPDATE con_review_doc SET is_deleted=1,deleted_by=?,deleted_by_name=?,deleted_at=NOW() WHERE id=?")
        ->execute([$uid, $uname, $docId]);
+    cnrv_purge_notices($db, $docId);
 }
 
-/* ============================================================ 清單 ============================================================ */
+/** 表單刪除時，一併清掉這張表單發出的所有通知（待填寫／待決行／待核准／副知）。 */
+function cnrv_purge_notices(PDO $db, int $docId): void {
+    try {
+        $ids = $db->prepare("SELECT id FROM live_event WHERE ref_type='CON_REVIEW' AND ref_id=?");
+        $ids->execute([$docId]);
+        $ids = array_map('intval', $ids->fetchAll(PDO::FETCH_COLUMN));
+        if (!$ids) return;
+        $in = implode(',', $ids);
+        foreach (['live_event_target', 'live_event_response', 'live_event_for_user', 'live_event_history'] as $t) {
+            try { $db->exec("DELETE FROM $t WHERE live_event_id IN ($in)"); } catch (Throwable $e) {}
+        }
+        $db->exec("DELETE FROM live_event WHERE id IN ($in)");
+    } catch (Throwable $e) { error_log('[cnrv] purge notices: ' . $e->getMessage()); }
+}
+
+/* ============================================================ 清單============================================================ */
 
 /** @param array $f 篩選：status,keyword,limit,offset */
 function cnrv_list(PDO $db, array $f = []): array {
