@@ -761,6 +761,9 @@ $_quotDepts = array_keys($_deptSet);
                       box-shadow:0 6px 20px rgba(0,0,0,.22); padding:10px; display:flex; flex-direction:column; gap:3px;
                       opacity:0; pointer-events:none; transform:translateX(6px); transition:opacity .15s,transform .15s; }
         .qnav:hover .qnav-panel, .qnav-panel:hover { opacity:1; pointer-events:auto; transform:translateX(0); }
+        /* 透明「橋」：圖示與面板之間有 8px 空隙，滑鼠經過時 .qnav 不再被 hover，面板會在到達前就收起來（點不到選項）。
+           橋與面板同高、緊貼圖示左側，讓滑鼠斜向移動也不會離開 hover 範圍。 */
+        .qnav::before { content:""; position:absolute; right:46px; bottom:0; width:14px; height:50px; }
         .qnav-panel .qnp-search { width:100%; font-size:12px; padding:5px 8px; border:1px solid #E4D3BC;
                       border-radius:6px; margin-bottom:4px; box-sizing:border-box; flex:0 0 auto; }
         /* 搜尋框釘在面板頂端不隨內容捲動，只有下方清單本身捲動 */
