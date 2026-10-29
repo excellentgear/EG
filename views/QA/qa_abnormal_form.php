@@ -921,6 +921,8 @@ function applyConcise(){
     if (!q) return;
     var o = D.order;
     if (!o.ir_id) $('#f_ir').closest('.fld').addClass('qk-hide');
+    // 類別、填寫日期、異常發生日期：反灰不可修改（保留灰色輸入框外觀，不轉成純文字）
+    $('#f_cat, #f_fill_date, #f_occ_date').prop('disabled', true).attr('data-qk-keep', 1).attr('title', '雙層快速決策的單由系統開立，不可修改');
     $('#bomMoreBox, #respPeopleBox, #qcReviewBox').addClass('qk-hide');
     $('#f_decider').closest('.fgrid').addClass('qk-hide');
     if (!(o.rounds || []).length) $('#secRound').addClass('qk-hide');
@@ -936,6 +938,7 @@ function textifyLocked(){
         $(this).find('input, select, textarea').each(function(){
             var $c = $(this), t = ($c.attr('type') || '').toLowerCase();
             if (t === 'checkbox' || t === 'radio' || t === 'hidden' || t === 'button' || t === 'file') return;
+            if ($c.attr('data-qk-keep')) return;   // 要維持反灰輸入框外觀的欄位
             if (!($c.prop('disabled') || $c.prop('readonly'))) return;
             if ($c.css('display') === 'none' || !$c.closest('.fld').is(':visible')) return;
             var v = $c.is('select') ? $.trim($c.find('option:selected').text()) : $.trim($c.val());

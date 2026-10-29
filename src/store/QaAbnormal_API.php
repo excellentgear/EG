@@ -244,15 +244,17 @@ case 'save_head': {
        不這樣分的話，只想改責任單位的呼叫會把製令編號、客戶、現象一起清掉，而且完全不報錯。 */
     $set = []; $par = [];
     $put = function ($col, $val) use (&$set, &$par) { $set[] = "$col=?"; $par[] = $val; };
-    if ($fill !== '') $put('fill_date', $fill);
-    if ($occ !== '')  $put('occurrence_date', $occ);
+    // 雙層快速決策的單：類別、填寫日期、異常發生日期一律不可修改（系統開單時帶入；前端反灰，這裡同規則再擋一次）
+    $qkFixed = !empty($o['quick_mode']);
+    if ($fill !== '' && !$qkFixed) $put('fill_date', $fill);
+    if ($occ !== '' && !$qkFixed)  $put('occurrence_date', $occ);
 
     /* 異常單分類（必填）——決定清單分組、單號後綴詞，以及**這一類一定要綁什麼**（製令／客退單／客戶）。
        沒送這個欄位＝呼叫端不打算動它（既有慣例），有送就一定要是存在而且啟用中的分類；
        **改分類時單號的後綴要跟著換**（本體不變，見 qab_order_no_sync_suffix()）。
        這一段刻意放在製令／客退單／客戶之前——底下的必填檢查要靠它算出來的綁定規則。 */
     $catChanged = false; $newCatId = $o['cat_id'] !== null ? (int)$o['cat_id'] : null;
-    if (array_key_exists('cat_id', $_POST)) {
+    if (array_key_exists('cat_id', $_POST) && !$qkFixed) {
         $newCatId = $intOrNull($_POST['cat_id']);
         if (!$newCatId) jerr('請選擇異常單分類（必填）', 'CAT_REQUIRED');
         $catMapX = qab_cat_map($db);
