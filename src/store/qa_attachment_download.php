@@ -54,8 +54,19 @@ if (!$allowed) {
         $allowed = (bool)$q->fetchColumn();
     } catch (Throwable $e) {}
 }
+// 新版異常單：看得到這張單的人（含第一／二層、被徵詢單位）都可以看附件
+if (!$allowed && $f['abnormal_order_id']) {
+    try {
+        require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+        $pq = qab_perms($db, $uid);
+        $allowed = qab_can_view_order($db, $pq, (int)$f['abnormal_order_id']);
+    } catch (Throwable $e) {}
+}
 if (!$allowed) { http_response_code(403); exit('無權下載此附件（僅開單人、追蹤人員與通知對象）'); }
 
+// 舊附件存的是完整路徑（Z: 開頭），新附件存相對路徑（單號/檔名）——由統一附件根目錄組出實體位置
+require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+$f['file_path'] = qab_att_abs($db, (string)$f['file_path']);
 if (!is_file($f['file_path'])) { http_response_code(404); exit('找不到附件（附件存於內網，外網需連 VPN）'); }
 
 $ext = strtolower(pathinfo($f['file_name'], PATHINFO_EXTENSION));

@@ -264,6 +264,12 @@ function qab_ensure_schema(PDO $db): void
         $db->exec("ALTER TABLE qa_abnormal_deduct ADD COLUMN bom_no VARCHAR(30) NULL COMMENT '這一列來自哪一張製令' AFTER transfer_id");
     }
 
+    // 量測尺寸的「編號」：由線上檢驗帶入時存「當下檢驗表上那個尺寸的編號」（A,B,C 或 1,2,3），不是另外編的
+    $mcols = $db->query("SHOW COLUMNS FROM qa_abnormal_measure")->fetchAll(PDO::FETCH_COLUMN);
+    if (!in_array('dim_code', $mcols, true)) {
+        $db->exec("ALTER TABLE qa_abnormal_measure ADD COLUMN dim_code VARCHAR(12) NULL COMMENT '尺寸編號（帶入當下檢驗表2.0上的 A,B,C 或 1,2,3；人工列為使用者自填）' AFTER seq");
+    }
+
     // ── 相關單位意見（逐輪徵詢）：沿用既有 flow 表，補上輪次與指定職稱 ──
     $fcols = $db->query("SHOW COLUMNS FROM qa_abnormal_order_flow")->fetchAll(PDO::FETCH_COLUMN);
     $fadd = [];
@@ -1508,12 +1514,13 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
 
     // 量測尺寸與實測值——寫法與 QaAbnormal_API.php 的 save_head 處理 measures 完全同一套
     // （先清空重建，seq 從 1 起算），不另外重寫一次 INSERT 邏輯。
-    $insM = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_name,vals) VALUES (?,?,?,?)");
+    $insM = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals) VALUES (?,?,?,?,?)");
     $seq = 1;
     foreach ($measures as $m) {
         $dimName = mb_substr(trim((string)($m['dim_name'] ?? '')), 0, 60);
+        $dimCode = mb_substr(trim((string)($m['code'] ?? '')), 0, 12);
         $vals = array_values(array_map('strval', (array)($m['vals'] ?? [])));
-        $insM->execute([$id, $seq++, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+        $insM->execute([$id, $seq++, $dimCode !== '' ? $dimCode : null, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE)]);
     }
 
     // 品管在 2.0 跳窗填的備註 → 異常單「品管備註」(qa_ps)
@@ -3771,11 +3778,11 @@ function qab_order(PDO $db, int $id): ?array
     }
     $o['bom_processes'] = qab_bom_processes($db, $o['bom_list']);
 
-    $st = $db->prepare("SELECT seq, dim_name, vals FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
+    $st = $db->prepare("SELECT seq, dim_code, dim_name, vals FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
     $st->execute([$id]);
     $o['measures'] = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $m) {
-        $o['measures'][] = ['seq' => (int)$m['seq'], 'dim_name' => (string)$m['dim_name'],
+        $o['measures'][] = ['seq' => (int)$m['seq'], 'dim_code' => (string)($m['dim_code'] ?? ''), 'dim_name' => (string)$m['dim_name'],
                             'vals' => json_decode((string)$m['vals'], true) ?: []];
     }
 
@@ -4032,6 +4039,24 @@ function qab_need_gm(PDO $db, array $o, ?array $optMap = null): bool
 /* ─────────────────────────────────────────────────────────────
    清單
    ───────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   異常單附件（2026-10-29）：實體檔放全站統一附件根目錄底下的「品質異常處理單」資料夾（eg_attach_dir，
+   管理員要搬家改 system_settings 的 qab_attach_dir 或全站根目錄即可）；DB 的 file_path 只存「單號/檔名」
+   相對路徑，讀取當下才組完整路徑（鐵律5）。舊附件（file_path 是 Z: 開頭的完整路徑）仍照原路徑讀取。
+   ───────────────────────────────────────────────────────────── */
+function qab_att_root(PDO $db): string
+{
+    require_once __DIR__ . '/attach_lib.php';
+    return eg_attach_dir($db, 'qab_attach_dir', '品質異常處理單');
+}
+/** 附件實體路徑：絕對路徑（舊資料）原樣用；相對路徑接在統一根目錄後面。擋路徑跳脫。 */
+function qab_att_abs(PDO $db, string $path): string
+{
+    if (preg_match('#^([A-Za-z]:[\\/]|\\\\)#', $path)) return $path;
+    $path = str_replace(['..', "\0"], '', $path);
+    return qab_att_root($db) . str_replace('/', DIRECTORY_SEPARATOR, ltrim($path, '/\\'));
+}
+
 /**
  * AS 認證（稽核）製程：以「訂單追蹤 → 設定」裡的稽核製程為準（唯一判定 ot_astag_audit_process_nos()），
  * 異常單的責任製程（報工／檢驗的那一站）落在這些製程就標 AS。回傳 [process_no => 稽核製程名稱,…]；查不到回空陣列。

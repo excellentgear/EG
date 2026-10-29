@@ -420,13 +420,14 @@ case 'save_head': {
         if (isset($_POST['measures'])) {
             $ms = json_decode((string)$_POST['measures'], true) ?: [];
             $db->prepare("DELETE FROM qa_abnormal_measure WHERE order_id=?")->execute([$id]);
-            $ins = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_name,vals) VALUES (?,?,?,?)");
+            $ins = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals) VALUES (?,?,?,?,?)");
             $seq = 1;
             foreach ($ms as $m) {
                 $dim = trim((string)($m['dim_name'] ?? ''));
+                $dcode = mb_substr(trim((string)($m['dim_code'] ?? '')), 0, 12);
                 $vals = array_slice(array_map(function ($v) { return mb_substr(trim((string)$v), 0, 20); }, (array)($m['vals'] ?? [])), 0, 12);
                 if ($dim === '' && !array_filter($vals, function ($v) { return $v !== ''; })) continue;
-                $ins->execute([$id, $seq++, mb_substr($dim, 0, 60), json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+                $ins->execute([$id, $seq++, $dcode !== '' ? $dcode : null, mb_substr($dim, 0, 60), json_encode($vals, JSON_UNESCAPED_UNICODE)]);
             }
         }
         // 「由檢驗紀錄帶入」目前勾選狀態——純供下次重開 picker 時還原勾選，沒送就不動
@@ -1258,6 +1259,63 @@ case 'qc_notify_save': {
     $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['user_ids'] ?? '[]'), true) ?: [])));
     $rows = qab_auto_qc_notify_save($db, $ids);
     jout(true, ['selected' => $rows]);
+}
+
+/* ═══════════ 異常單附件（貼圖／拖曳／選檔都走這裡；2026-10-29） ═══════════
+   誰能傳：看得到這張單的人（含被徵詢單位、第一／二層）；結案後不可再傳。實體檔存統一附件根目錄，DB 只存相對路徑。 */
+case 'att_list': {
+    $oid = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+    if ($oid <= 0 || !qab_can_view_order($db, $perms, $oid)) jerr('沒有檢視附件的權限');
+    $st = $db->prepare("SELECT a.id, a.file_name, a.original_filename, a.file_size, a.created_by, a.created_at, u.user_cname
+                          FROM qa_abnormal_attachments a LEFT JOIN `user` u ON u.id=a.created_by
+                         WHERE a.abnormal_order_id=? ORDER BY a.id");
+    $st->execute([$oid]);
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $nm = (string)($r['original_filename'] ?: $r['file_name']);
+        $ext = strtolower(pathinfo($nm, PATHINFO_EXTENSION));
+        $rows[] = ['id' => (int)$r['id'], 'name' => $nm, 'ext' => $ext, 'is_image' => in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true) ? 1 : 0,
+                   'size' => (int)$r['file_size'], 'by' => (string)$r['user_cname'], 'at' => (string)$r['created_at'],
+                   'can_del' => ((int)$r['created_by'] === $uid || $perms['canAdmin']) ? 1 : 0];
+    }
+    jout(true, ['rows' => $rows]);
+}
+case 'att_upload': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!qab_can_view_order($db, $perms, (int)$o['id'])) jerr('沒有上傳附件的權限');
+    require_once __DIR__ . '/../common/attachment_lib.php';
+    $f = $_FILES['file'] ?? [];
+    $v = eg_att_validate_upload($f);
+    if (!$v['ok']) jerr($v['msg']);
+    $orderNo = preg_replace('/[^\w\-]/u', '_', (string)$o['abnormal_order_no']);
+    $dir = qab_att_root($db) . $orderNo;
+    require_once __DIR__ . '/../common/attach_lib.php';
+    if (!eg_attach_ensure_dir($dir)) jerr('無法建立附件資料夾，請聯絡管理員確認 NAS 路徑');
+    $orig = mb_substr(basename((string)$f['name']), 0, 200);
+    $base = mb_substr(preg_replace('/[^\w\x{4e00}-\x{9fff}]/u', '_', pathinfo($orig, PATHINFO_FILENAME)), 0, 60) ?: 'file';
+    $newName = $base . '_' . date('His') . substr((string)mt_rand(100, 999), 0, 3) . '.' . $v['ext'];
+    $dest = rtrim($dir, '\\/') . DIRECTORY_SEPARATOR . $newName;
+    if (!move_uploaded_file($f['tmp_name'], $dest)) jerr('檔案儲存失敗');
+    $rel = $orderNo . '/' . $newName;
+    $db->prepare("INSERT INTO qa_abnormal_attachments (abnormal_order_id, field_type, file_name, file_path, original_filename, file_size, created_by)
+                  VALUES (?,?,?,?,?,?,?)")->execute([(int)$o['id'], 'phenomenon', $newName, $rel, $orig, (int)$f['size'], $uid]);
+    $aid = (int)$db->lastInsertId();
+    $log((int)$o['id'], 'attach', '', '上傳附件：' . $orig);
+    jout(true, ['id' => $aid]);
+}
+case 'att_delete': {
+    $aid = (int)($_POST['att_id'] ?? 0);
+    $st = $db->prepare("SELECT abnormal_order_id, file_path, created_by, original_filename FROM qa_abnormal_attachments WHERE id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到這個附件');
+    $o = $mustOrder((int)$a['abnormal_order_id']);
+    if ((int)$a['created_by'] !== $uid && !$perms['canAdmin']) jerr('只有上傳者或管理員可以刪除附件');
+    $abs = qab_att_abs($db, (string)$a['file_path']);
+    $db->prepare("DELETE FROM qa_abnormal_attachments WHERE id=?")->execute([$aid]);
+    if (is_file($abs)) @unlink($abs);
+    $log((int)$o['id'], 'attach', '刪除附件：' . (string)$a['original_filename'], '');
+    jout(true, []);
 }
 
 /* ═══════════ 雙層快速決策設定（管理員；2026-10-29） ═══════════ */

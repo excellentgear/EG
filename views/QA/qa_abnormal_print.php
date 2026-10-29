@@ -284,10 +284,10 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="lb" colspan="12">實 測 值</td>
     </tr>
     <tr><?php for ($i = 1; $i <= 12; $i++) echo '<td class="c lb">' . $i . '</td>'; ?></tr>
-    <?php for ($r = 0; $r < 3; $r++):
+    <?php for ($r = 0, $rn = max(3, count($o['measures'] ?? [])); $r < $rn; $r++):
         $m = $o['measures'][$r] ?? null; ?>
     <tr>
-        <td class="c"><?= h($m['dim_name'] ?? '') ?></td>
+        <td class="c"><?= h(trim((($m['dim_code'] ?? '') !== '' ? $m['dim_code'] . '　' : '') . ($m['dim_name'] ?? ''))) ?></td>
         <?php for ($i = 0; $i < 12; $i++): ?>
         <td class="c"><?= h($m['vals'][$i] ?? '') ?></td>
         <?php endfor; ?>

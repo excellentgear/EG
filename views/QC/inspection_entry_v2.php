@@ -6221,8 +6221,10 @@ $(function(){
                     return v;
                 }).slice(0,12);
             };
-            rows.push({ dim_name:nm, vals:vals(it.samples) });
-            (it.extra||[]).forEach(function(ex,k){ rows.push({ dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }); });
+            // 編號＝這個尺寸在檢驗表上目前顯示的編號（A,B,C 或 1,2,3，依儲存當下的顯示模式），不是另外編的
+            var code=codeLabel(items.indexOf(it));
+            rows.push({ code:code, dim_name:nm, vals:vals(it.samples) });
+            (it.extra||[]).forEach(function(ex,k){ rows.push({ code:code, dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }); });
         });
         return { measures:rows, sel:sel };
     }
@@ -6318,7 +6320,7 @@ $(function(){
         if(!sel.length){ alert('請至少勾選一個量測項目列入異常單。'); return; }
         var measures = sel.map(function(idx){
             var it=qcAbPickItems[idx]||{};
-            return { dim_name:(it.name||'')+qcAbStdPart(it),
+            return { code:codeLabel(idx), dim_name:(it.name||'')+qcAbStdPart(it),
                      vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) };
         });
         var $btn=$(this).prop('disabled',true);

@@ -207,6 +207,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         <div id="loadBox" class="note-box">載入中…</div>
         <div id="bfBox" class="note-box" style="display:none;border-color:var(--amber-d);background:#FFF6E8;"></div>
         <div id="formBox" style="display:none;">
+            <!-- 附件區（2026-10-29）：選檔、拖曳到這一頁、或在任何輸入框按 Ctrl+V 貼圖都會直接上傳到這張單 -->
+            <div id="attPanel" style="margin-bottom:10px;padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:#fff;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <b><i class="fa fa-paperclip"></i> 附件</b><span id="attCount" class="muted-help"></span>
+                    <button type="button" class="btn btn-warm-o btn-xs" id="btnAttPick"><i class="fa fa-upload"></i> 上傳檔案</button>
+                    <input type="file" id="attFiles2" multiple style="display:none;" accept="image/*,.pdf,.xls,.xlsx,.doc,.docx">
+                    <span class="muted-help" id="attHint">在任何輸入框按 Ctrl+V 可直接貼上圖片，也可以把檔案拖進這一頁（圖片／PDF／Excel／Word，單檔 20MB 內）</span>
+                </div>
+                <div id="attThumbs" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;"></div>
+            </div>
 
             <!-- 補登簽章（只有補資料的單、且只有異常單管理員看得到） -->
             <div class="sec" id="secSign" style="display:none;">
@@ -321,7 +331,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <button type="button" class="btn btn-warm-o btn-xs" id="btnQcMeasurePick" style="display:none;"><i class="fa fa-download"></i> 由檢驗紀錄帶入</button>
                         </div>
                         <table class="mtb" id="mtb">
-                            <thead><tr><th style="width:16%">量測尺寸</th>
+                            <thead><tr><th style="width:5%" title="帶入時是檢驗表2.0上該尺寸的編號；人工新增的列會建議下一個沒用過的編號">編號</th><th style="width:14%">量測尺寸</th>
                                 <?php for ($i = 1; $i <= 12; $i++) echo '<th>' . $i . '</th>'; ?></tr></thead>
                             <tbody data-eg-row-add="mtAddRow" data-eg-row-del="mtDelRow"></tbody>
                         </table>
@@ -703,6 +713,7 @@ function load(){
         $('#loadBox').hide(); $('#formBox').show();
         buildStaticOpts();
         render();
+        qattLoad();
     }, 'json').fail(function(){ $('#loadBox').text('連線失敗'); });
 }
 
@@ -742,7 +753,7 @@ function mtCollectRows(){
     var out = [];
     $('#mtb tbody tr').each(function(){
         var $tr = $(this);
-        out.push({ dim: $tr.find('.m-dim').val() || '',
+        out.push({ code: $tr.find('.m-code').val() || '', dim: $tr.find('.m-dim').val() || '',
                    vals: $tr.find('.m-val').map(function(){ return $(this).val() || ''; }).get() });
     });
     return out;
@@ -752,18 +763,36 @@ function mtRenderRows(n){
     n = Math.max(1, n || 1);
     var mt = '';
     for (var r = 0; r < n; r++){
-        mt += '<tr><td><input type="text" class="m-dim" data-r="' + r + '"></td>';
+        mt += '<tr><td><input type="text" class="m-code" data-r="' + r + '" maxlength="12"></td><td><input type="text" class="m-dim" data-r="' + r + '"></td>';
         for (var i = 0; i < 12; i++) mt += '<td><input type="text" class="m-val" data-r="' + r + '" data-i="' + i + '"></td>';
         mt += '</tr>';
     }
     $('#mtb tbody').html(mt);
     keep.forEach(function(row, r){
         if (r >= n) return;
+        $('.m-code[data-r="' + r + '"]').val(row.code);
         $('.m-dim[data-r="' + r + '"]').val(row.dim);
         row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
 }
-function mtAddRow(){ mtRenderRows($('#mtb tbody tr').length + 1); }
+/* 建議編號：人工新增、還沒有編號的列，顯示「下一個沒用過的編號」當提示（placeholder，不會自動寫入）；
+   已有的編號若是數字就接著 1,2,3…，否則接著 A,B,C…。帶入的列一律保留檢驗表上的原編號。 */
+function mtLetter(i){ var s = '', n = i; while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; }
+function mtSuggestCodes(){
+    var used = {}, numeric = false;
+    $('#mtb .m-code').each(function(){ var v = $.trim($(this).val()); if (v) { used[v.toUpperCase()] = 1; if (/^\d+$/.test(v)) numeric = true; } });
+    var n = 0;
+    $('#mtb tbody tr').each(function(){
+        var $c = $(this).find('.m-code');
+        if ($.trim($c.val())) { $c.attr('placeholder', ''); return; }
+        do { n++; } while (used[numeric ? String(n) : mtLetter(n)]);
+        var sug = numeric ? String(n) : mtLetter(n);
+        used[sug] = 1;
+        $c.attr('placeholder', sug).attr('title', '建議編號 ' + sug + '（點進去按 Tab 不會自動填入，要用請自己輸入）');
+    });
+}
+$(document).on('input change', '#mtb .m-code', mtSuggestCodes);
+function mtAddRow(){ mtRenderRows($('#mtb tbody tr').length + 1); mtSuggestCodes(); }
 function mtDelRow(){
     var n = $('#mtb tbody tr').length;
     if (n <= 1) return;   // 至少留一列
@@ -827,11 +856,12 @@ $('#btnQcMeasureApply').on('click', function(){
     if (!sel.length) { alert('請至少勾選一個量測項目。'); return; }
     var rows = sel.map(function(idx){
         var it = QCM_ITEMS[idx] || {};
-        return { dim: (it.name || '') + qcMeasureStdPart(it),
+        return { code: mtLetter(idx + 1), dim: (it.name || '') + qcMeasureStdPart(it),
                  vals: (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; }).slice(0, 12) };
     });
     mtRenderRows(rows.length);
     rows.forEach(function(row, r){
+        $('.m-code[data-r="' + r + '"]').val(row.code);
         $('.m-dim[data-r="' + r + '"]').val(row.dim);
         row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
@@ -857,7 +887,7 @@ function attLoad(){
     }, 'json');
 }
 function openAttachMask(){ openMask('attachMask'); attLoad(); }
-$('#btnAttach').on('click', openAttachMask);
+$('#btnAttach').on('click', function(){ var p = document.getElementById('attPanel'); if (p) p.scrollIntoView({ block:'center' }); });
 $('#attFile').on('change', function(){
     var f = this.files && this.files[0];
     if (!f) return;
@@ -876,6 +906,80 @@ $(document).on('click', '.att-del', function(){
         if (!res || !res.success) { alert((res && res.message) || '刪除失敗'); return; }
         attLoad();
     }, 'json');
+});
+
+/* ───────── 附件區：貼圖（Ctrl+V）／拖曳／選檔，一律即時上傳到這張單（新 API att_upload） ───────── */
+var QATT_BUSY = false;
+function qattLoad(){
+    $.get(API, { action:'att_list', id:OID }, function(res){
+        var rows = (res && res.success) ? (res.rows || []) : [];
+        var closed = !!(D.order && Number(D.order.is_closed));
+        $('#attCount').text(rows.length ? '（' + rows.length + '）' : '（尚無）');
+        $('#btnAttPick, #attHint').toggle(!closed);
+        $('#attThumbs').html(rows.map(function(a){
+            var href = '../../src/store/qa_attachment_download.php?id=' + a.id;
+            var thumb = Number(a.is_image)
+                ? '<a href="' + href + '" target="_blank"><img src="' + href + '" style="height:64px;max-width:120px;object-fit:cover;border:1px solid var(--line);border-radius:4px;display:block;"></a>'
+                : '<a href="' + href + '" target="_blank" style="display:flex;align-items:center;justify-content:center;height:64px;width:64px;border:1px solid var(--line);border-radius:4px;background:var(--cream);color:var(--ink2);font-size:11px;">' + esc((a.ext || 'file').toUpperCase()) + '</a>';
+            return '<div style="position:relative;font-size:11px;max-width:120px;" title="' + esc(a.name + '　' + (a.by || '') + '　' + (a.at || '')) + '">' + thumb
+                + '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(a.name) + '</div>'
+                + (Number(a.can_del) && !closed ? '<button type="button" class="btn btn-default btn-xs qatt-del" data-id="' + a.id + '" style="position:absolute;top:0;right:0;padding:0 4px;line-height:16px;" title="刪除">×</button>' : '')
+                + '</div>';
+        }).join(''));
+    }, 'json');
+}
+function qattUpload(files){
+    if (!files || !files.length || QATT_BUSY) return;
+    if (D.order && Number(D.order.is_closed)) { alert('這張單已結案，不可再上傳附件。'); return; }
+    QATT_BUSY = true;
+    var list = Array.prototype.slice.call(files), i = 0, fail = '';
+    $('#attHint').text('上傳中…');
+    (function next(){
+        if (i >= list.length) {
+            QATT_BUSY = false;
+            $('#attHint').text('在任何輸入框按 Ctrl+V 可直接貼上圖片，也可以把檔案拖進這一頁（圖片／PDF／Excel／Word，單檔 20MB 內）');
+            if (fail) alert(fail);
+            qattLoad();
+            return;
+        }
+        var fd = new FormData();
+        fd.append('action', 'att_upload'); fd.append('csrf', CSRF); fd.append('id', OID);
+        fd.append('file', list[i], list[i].name);
+        $.ajax({ url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json' })
+            .done(function(res){ if (!res || !res.success) fail += (list[i].name + '：' + ((res && res.message) || '上傳失敗') + '\n'); })
+            .fail(function(){ fail += list[i].name + '：上傳失敗，請稍後再試\n'; })
+            .always(function(){ i++; next(); });
+    })();
+}
+$('#btnAttPick').on('click', function(){ $('#attFiles2').click(); });
+$('#attFiles2').on('change', function(){ qattUpload(this.files); $(this).val(''); });
+$(document).on('click', '.qatt-del', function(){
+    if (!confirm('確定刪除這個附件？')) return;
+    $.post(API, { action:'att_delete', csrf:CSRF, att_id:$(this).data('id') }, function(res){
+        if (!res || !res.success) { alert((res && res.message) || '刪除失敗'); return; }
+        qattLoad();
+    }, 'json');
+});
+// 在這一頁任何文字輸入框按 Ctrl+V：剪貼簿裡有檔案／圖片就直接上傳（純文字貼上不攔截）
+$(document).on('paste', function(e){
+    var t = e.target;
+    if (!$(t).closest('#formBox').length || !$(t).is('textarea, input[type=text], input[type=number], input:not([type])')) return;
+    var cd = e.originalEvent && e.originalEvent.clipboardData;
+    if (!cd || !cd.files || !cd.files.length) return;
+    e.preventDefault();
+    var d = new Date(), pad = function(n){ return (n < 10 ? '0' : '') + n; }, out = [];
+    Array.prototype.forEach.call(cd.files, function(f, i){
+        var ext = ((f.type || 'image/png').split('/')[1] || 'png').replace('jpeg', 'jpg');
+        out.push(new File([f], '貼上圖片_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + (i ? '_' + i : '') + '.' + ext, { type: f.type }));
+    });
+    qattUpload(out);
+});
+$(document).on('dragover', '#formBox', function(e){ if (e.originalEvent.dataTransfer && e.originalEvent.dataTransfer.types.indexOf('Files') >= 0) e.preventDefault(); });
+$(document).on('drop', '#formBox', function(e){
+    var dt = e.originalEvent && e.originalEvent.dataTransfer;
+    if (!dt || !dt.files || !dt.files.length) return;
+    e.preventDefault();
+    qattUpload(dt.files);
 });
 
 /* ───────── 畫面 ───────── */
@@ -1083,9 +1187,11 @@ function render(){
     mtRenderRows(Math.max(3, (o.measures || []).length));
     (o.measures || []).forEach(function(m){
         var r = m.seq - 1;
+        $('.m-code[data-r="' + r + '"]').val(m.dim_code || '');
         $('.m-dim[data-r="' + r + '"]').val(m.dim_name || '');
         (m.vals || []).forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
+    mtSuggestCodes();
     // 「由檢驗紀錄帶入」只給線上檢驗NG自動開立的單（src_qc_form_id 有值）使用
     $('#btnQcMeasurePick').toggle(!!Number(o.src_qc_form_id) && canEdit);
     // 補資料模式（業務日期在 N 天以前）
@@ -1880,7 +1986,7 @@ function saveHead(silent){
     }
     $('#catErr').hide();
     // 列數改成動態讀（不再寫死 3，見 mtRenderRows()/mtCollectRows()，2026-10-06）
-    var ms = mtCollectRows().map(function(row){ return { dim_name: row.dim, vals: row.vals }; });
+    var ms = mtCollectRows().map(function(row){ return { dim_code: row.code, dim_name: row.dim, vals: row.vals }; });
     var payload = {
         id:OID, cat_id: $('#f_cat').val(),
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
