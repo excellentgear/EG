@@ -588,8 +588,9 @@ function rm_opp_level_calc(array $set, int $b, int $f): ?array
 }
 
 /**
- * 採取措施後的「發生率(O) / 可行性(F)」建議值（嚴重度／預期效益與措施前相同）：
- * 風險＝把發生率降到「不需要因應措施」的最高一級（降不到就降到最低級）；機會＝可行性提高到最高級。
+ * 採取措施後的「發生率(O)／可行性(F)」建議值（嚴重度／預期效益與措施前相同）：
+ * 風險＝發生率降到「風險等級要降低」的最高一級：措施前需要因應者降到「不需要因應措施」為止，措施前就不需因應者降到「低一個等級」為止，
+ *       怎麼降都降不了等級時取最低級；機會＝可行性提高到最高級。目的是讓措施後的等級一定比措施前改善（風險降低、機會提高）。
  * @return int|null  建議的等級數字；措施前評分沒填回 null
  */
 function rm_after_suggest(array $set, $sev, $freq, string $roKind)
@@ -602,13 +603,36 @@ function rm_after_suggest(array $set, $sev, $freq, string $roKind)
     }
     $vs = array_map(function ($r) { return (int)$r['v']; }, (array)$set['rm_likelihood']);
     sort($vs);
+    $b = rm_level_calc($set, $sev, $freq, 'risk');
+    if (!$b) return $freq;
     $best = null;
     foreach ($vs as $v) {
         if ($v > $freq) break;
         $lv = rm_level_calc($set, $sev, $v, 'risk');
-        if ($lv && !$lv['action']) $best = $v;
+        if (!$lv) continue;
+        $ok = !empty($b['action']) ? !$lv['action'] : ($lv['rank'] < $b['rank']);
+        if ($ok) $best = $v;
     }
     return $best ?? ($vs ? min($vs) : $freq);
+}
+
+/**
+ * 採取措施後的評估是否「真的有改善」：風險等級要降低、機會等級要提高，與改善前相同就沒有改善的意義。
+ * 怎麼調整都不可能改善的（例：風險已是最低可能的等級、機會可行性已是最高）不要求。
+ * @return string  空字串＝通過；否則是要顯示給使用者的原因
+ */
+function rm_after_check(array $set, $sev, $freq, $after, string $roKind): string
+{
+    $b = rm_level_calc($set, $sev, $freq, $roKind);
+    $a = rm_level_calc($set, $sev, $after, $roKind);
+    if (!$b || !$a) return '';
+    $opp = $roKind === 'opportunity';
+    $bestF = rm_after_suggest($set, $sev, $freq, $roKind);
+    $best = rm_level_calc($set, $sev, $bestF, $roKind);
+    $canImprove = $best && ($opp ? $best['rank'] > $b['rank'] : $best['rank'] < $b['rank']);
+    if ($canImprove && ($opp ? $a['rank'] <= $b['rank'] : $a['rank'] >= $b['rank']))
+        return '採取措施後的' . ($opp ? '機會等級(' . $a['name'] . ')仍與措施前相同，機會要提高才有改善的意義，請調整可行性(F)' : '風險等級(' . $a['name'] . ')仍不低於措施前，風險要降低才有改善的意義，請調整發生率(O)或修改因應措施');
+    return '';
 }
 
 /** 機會的評估等級／準則（畫面用的顏色一併附上） */

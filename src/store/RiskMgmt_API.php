@@ -588,6 +588,12 @@ if ($action === 'doc_save') {
                 if ($isOppRow && $fa < $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的可行性(F)不可低於措施前（採取措施後可行性應提高）');
                 if (!$isOppRow && $fa > $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的發生率(O)不可高於措施前（採取措施後發生率應降低）');
             }
+            if ($fa === null && $fq !== null && trim((string)($it['measure'] ?? '')) !== '' && $row['ro_kind'] !== null)
+                jerr('第 ' . ($n + 1) . ' 列已填因應措施，請填寫「採取措施後 風險/機會評估」（可按「依規則帶入建議值」）');
+            if ($fa !== null && $sv !== null) {
+                $chk = rm_after_check($set, $sv, $fq, $fa, (string)$row['ro_kind']);
+                if ($chk !== '') jerr('第 ' . ($n + 1) . ' 列' . $chk);
+            }
             $row['frequency_after'] = $fa;
             $cx = (int)($it['ctx_item_id'] ?? 0);
             if ($cx > 0) {
