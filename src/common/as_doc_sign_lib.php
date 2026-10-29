@@ -809,6 +809,7 @@ function ads_notify_result(PDO $db, array $case, int $fromUid): void
 {
     $to = (int)($case['submitted_by'] ?? 0);
     if (!$to) return;
+    if (!empty($case['is_auto'])) return;   // 全部關卡自動簽核＝沒有人工動作，不發結果通知（使用者一再要求）
     $v = adc_version_info($db, (int)$case['version_id']);
     $okTxt = $case['status'] === 'approved' ? '簽核完成' : ($case['status'] === 'rejected' ? '被退回' : '已結束');
     $title = 'AS 文件線上版' . $okTxt . '：' . ($v['doc_no'] ?? '') . '　' . ($v['doc_name'] ?? '');
