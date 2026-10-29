@@ -119,6 +119,26 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
         $('#content_html').val(html);
         $('#content').val(txt || (html ? '（圖文內容）' : '')).trigger('input');
     }
+    /* ---------- 越南文翻譯編輯器（選填；第一次展開才建立） ---------- */
+    var viEd = null, viInit = <?= json_encode($ND_VI_HTML, JSON_UNESCAPED_UNICODE) ?>;
+    function ensureVi() {
+        if (viEd || !window.EGRichText || !$('#viEditor').length) return;
+        viEd = EGRichText.attach('#viEditor', {
+            profile: 'doc', pageSize: 'A4', orientation: 'portrait', height: 420,
+            assetUrl: function (id) { return API + '?action=asset&id=' + id; }, onChange: function () { syncVi(); }
+        });
+        if (viInit) viEd.set(viInit);
+    }
+    function syncVi() {
+        if (viEd) $('#vi_html').val(viEd.get());
+        else $('#vi_html').val(viInit);   // 沒展開過＝維持原本載入的翻譯，不被洗掉
+    }
+    $(document).on('click', '#viToggle', function () { $('#viBox').toggle(); if ($('#viBox').is(':visible')) ensureVi(); });
+    $(document).on('click', '#viCopy', function () {
+        ensureVi(); sync();
+        if (viEd && (!viEd.text().trim() || confirm('譯文區已有內容，要用中文內容覆蓋嗎？'))) { viEd.set($('#content_html').val() || ''); syncVi(); }
+    });
+    $(function () { setTimeout(syncVi, 300); });
     function upload(file, done) {
         var fd = new FormData();
         fd.append('action', 'asset_upload'); fd.append('csrf', ND.csrf); fd.append('file', file);
@@ -160,7 +180,7 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             e.preventDefault(); e.stopPropagation();
             upload(f, function (id) { ed.insertAsset(id, { width: '60%' }); sync(); });
         }, true);
-        $('form').has('#contentEditor').on('submit', sync);
+        $('form').has('#contentEditor').on('submit', function () { sync(); syncVi(); });
         // 列印用：編輯區內文寬（CSS px，不含 zoom），列印時把表格 px 寬度換算成佔內文寬的比例
         window.ndEditorContentWidth = function () {
             var m = document.querySelector('#contentEditor .egrt-main'); if (!m) return 0;
@@ -261,6 +281,7 @@ $__ndApprName = $ND_APPR_UID ? ndoc_user_name($NC_PDO, (int)$ND_APPR_UID) : '';
             draft_id: $('#draft_id').val() || 0, kind: $('#kind').val(),
             eventdate: $('#eventdate').val(), enddate: $('#enddate').val(), reply_deadline: $('#reply_deadline').val(),
             post_until: $('#post_until').val(), title: ($('#title').val() || '').trim(), content_html: $('#content_html').val(),
+            vi_title: $('#vi_title').val() || '', vi_html: (syncVi(), $('#vi_html').val() || ''),
             show_status_to_others: $('input[name="show_status_to_others"]').is(':checked') ? 1 : 0,
             targets: $('#targets').val() || [], target_modes: $('#target_modes').val() || '{}',
             co_editors: (function () { try { return window.egCoEditorsJson(); } catch (e) { return ''; } })()

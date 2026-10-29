@@ -261,6 +261,12 @@ function ndoc_draft_save(PDO $db, int $uid, int $draftId, array $in): array
         'target_modes' => (object)(json_decode((string)($in['target_modes'] ?? '{}'), true) ?: []),
         'co_editors' => (string)($in['co_editors'] ?? ''),
     ];
+    // 越南文翻譯（選填）：跟著草稿／送審一起存，核准發布時一併寫入
+    if (array_key_exists('vi_html', $in) || array_key_exists('vi_title', $in)) {
+        [$viH] = ndoc_clean_content((string)($in['vi_html'] ?? ''));
+        $data['vi_title'] = mb_substr(trim((string)($in['vi_title'] ?? '')), 0, 255, 'UTF-8');
+        $data['vi_html'] = $viH;
+    }
     $now = $db->query("SELECT NOW()")->fetchColumn();
     if ($draftId > 0) {
         if (!ndoc_draft_get($db, $uid, $draftId)) return ['error' => '找不到這份草稿'];
@@ -288,6 +294,13 @@ function ndoc_apply_post(PDO $db, int $eventId, int $uid, array $in, bool $isNew
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $pu) || $kind !== 'announce') $pu = '';
     $set = "kind=?, content_html=?, post_until=?";
     $db->prepare("UPDATE live_event SET $set WHERE id=?")->execute([$kind, $html === '' ? null : $html, $pu === '' ? null : $pu, $eventId]);
+    // 越南文翻譯：表單有送這兩個欄位才處理（沒送＝不動既有翻譯）
+    if (array_key_exists('vi_html', $in) || array_key_exists('vi_title', $in)) {
+        try {
+            require_once __DIR__ . '/notice_i18n_lib.php';
+            ni_save($db, $eventId, 'vi', (string)($in['vi_title'] ?? ''), (string)($in['vi_html'] ?? ''), $uid);
+        } catch (Throwable $e) { error_log('[notice] save translation failed: ' . $e->getMessage()); }
+    }
     if ($isNew && !empty($in['draft_id'])) ndoc_draft_delete($db, $uid, (int)$in['draft_id']);
 }
 
@@ -627,6 +640,9 @@ function ndoc_draft_print_data(PDO $db, array $d): array
         'eventdate' => $asof, 'date_disp' => eg_fmt_date($asof),
         'title' => (string)($x['title'] ?? ''), 'content' => trim(eg_richtext_to_text($html)),
         'content_html' => $html === '' ? '' : ndoc_hydrate($html),
+        'i18n' => (trim((string)($x['vi_title'] ?? '')) !== '') ? ['vi' => [
+            'title' => (string)$x['vi_title'], 'content' => trim(eg_richtext_to_text((string)($x['vi_html'] ?? ''))),
+            'content_html' => ($x['vi_html'] ?? '') === '' ? '' : ndoc_hydrate((string)$x['vi_html'])]] : (object)[],
         'kind' => $kind, 'kind_name' => ndoc_kinds()[$kind],
         'post_until' => ($kind === 'announce' && !empty($x['post_until'])) ? $x['post_until'] : '',
         'files' => [],

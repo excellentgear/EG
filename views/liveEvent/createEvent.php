@@ -233,6 +233,12 @@ $ND_UNTIL    = $is_edit ? substr((string)($ev['post_until'] ?? ''), 0, 10) : '';
 $ND_HTML     = $is_edit ? (string)($ev['content_html'] ?? '') : '';
 $ND_DRAFT_ID = 0;
 $ND_REJECT   = '';
+$ND_VI_TITLE = ''; $ND_VI_HTML = '';
+if ($is_edit) {
+    require_once __DIR__ . '/../../src/common/notice_i18n_lib.php';
+    $__vi = ni_get_all($NC_PDO, (int)($ev['id'] ?? 0))['vi'] ?? null;
+    if ($__vi) { $ND_VI_TITLE = $__vi['title']; $ND_VI_HTML = $__vi['content_html']; }
+}
 if (!$is_edit && !empty($_GET['draft'])) {
     // 載入草稿（或被退回的送審單）到表單，之後照一般新增流程送出／再存草稿
     $__d = ndoc_draft_get($NC_PDO, (int)$id, (int)$_GET['draft']);
@@ -243,6 +249,7 @@ if (!$is_edit && !empty($_GET['draft'])) {
         $ND_KIND     = ndoc_kind_norm($__x['kind'] ?? 'notice');
         $ND_UNTIL    = (string)($__x['post_until'] ?? '');
         $ND_HTML     = (string)($__x['content_html'] ?? '');
+        $ND_VI_TITLE = (string)($__x['vi_title'] ?? ''); $ND_VI_HTML = (string)($__x['vi_html'] ?? '');
         $title       = (string)($__x['title'] ?? '');
         $eventdate   = (string)($__x['eventdate'] ?? '');
         $enddate     = (string)($__x['enddate'] ?? '');
@@ -775,6 +782,15 @@ if (isset($_POST['btn_go_events'])) {
                                                 <div id="contentEditor"></div>
                                                 <textarea id="content" name="content" style="display:none;" maxlength="2000"><?= htmlspecialchars($content) ?></textarea>
                                                 <input type="hidden" id="content_html" name="content_html" value="">
+                                            </div>
+                                            <div class="eg-field">
+                                                <label><a href="javascript:;" id="viToggle" style="text-decoration:none;"><i class="fa fa-language"></i> 越南文翻譯版本（選填，可一起送簽核，也可核准後再補）<?= ($ND_VI_TITLE !== '' || $ND_VI_HTML !== '') ? '　<span style="color:#a15c00;">（已有翻譯）</span>' : '' ?> <i class="fa fa-caret-down"></i></a></label>
+                                                <div id="viBox" style="display:none;">
+                                                    <input type="text" id="vi_title" name="vi_title" class="eg-input" maxlength="255" value="<?= htmlspecialchars($ND_VI_TITLE) ?>" placeholder="Tiêu đề（譯文標題）" style="margin-bottom:6px;">
+                                                    <div style="margin-bottom:4px;"><button type="button" class="eg-tool-btn" id="viCopy"><i class="fa fa-files-o"></i> 帶入中文內容（含表格）再改字</button></div>
+                                                    <div id="viEditor"></div>
+                                                    <input type="hidden" id="vi_html" name="vi_html" value="">
+                                                </div>
                                             </div>
                                             <div class="eg-field">
                                                 <label for="notice_files">公告附件
@@ -1572,6 +1588,7 @@ if (isset($_POST['btn_go_events'])) {
             </div>
             <div class="modal-footer">
                 <span id="ncPrintMsg" style="float:left;font-size:12.5px;color:#7b8a99;"></span>
+                <select id="ncPrintLang" style="display:none;margin-right:6px;height:30px;" title="列印語言"><option value="zh">中文版</option><option value="vi">越南文版</option><option value="both">中文＋越南文（兩頁）</option></select>
                 <button type="button" class="nc-btn" data-dismiss="modal">關閉</button>
                 <button type="button" class="nc-btn" id="ncCfgSave" style="display:none;">儲存設定</button>
                 <button type="button" class="nc-btn nc-btn-main" id="ncDoPrint"><i class="fa fa-print"></i> 列印</button>
@@ -3207,6 +3224,14 @@ if (isset($_POST['btn_go_events'])) {
         }
         /* 列印視窗：四邊留白用 ai-rules/16 四之二之二的兩段式（@page 14mm ＋ body 5mm 保險），
            頁碼左下、AS 編號右下；圖章一律 91px 且**沒有任何整頁縮放邏輯**（ai-rules/18 第6、8條）。 */
+        /* 依語言組出要列印的本文：zh 中文／vi 越南文（同樣有表頭、圖章）／both 兩頁 */
+        function langBodies(d, people, lang) {
+            var vi = d.i18n && d.i18n.vi;
+            if (!vi || lang === 'zh' || !lang) return buildBody(d, people);
+            var dv = $.extend({}, d, { title: vi.title, content: vi.content, content_html: vi.content_html || '' });
+            if (lang === 'vi') return buildBody(dv, people);
+            return '<div>' + buildBody(d, people) + '</div><div style="page-break-before:always;"></div><div>' + buildBody(dv, people) + '</div>';
+        }
         function printWindow(title, bodyHtml, docNo) {
             var asCss = String(docNo || '').replace(/['\\]/g, '');
             var MG = 14, PAD = 5;
@@ -3293,6 +3318,8 @@ if (isset($_POST['btn_go_events'])) {
         }
         function renderPrintBody(d) {
             NC.d = d;
+            var hasVi = !!(d.i18n && d.i18n.vi);
+            $('#ncPrintLang').toggle(hasVi); if (!hasVi) $('#ncPrintLang').val('zh');
             var canSign = !!NC.perms.canSign, ro = canSign ? '' : ' readonly', dis = canSign ? '' : ' disabled';
             var h = '';
             if (d.is_backfill) {
@@ -3412,7 +3439,9 @@ if (isset($_POST['btn_go_events'])) {
         /* 草稿／送審單的預覽列印（_notice_doc_ui.php 呼叫）：不配號、不留列印紀錄 */
         window.ncPreviewPrint = function (d) {
             NC.d = d;
-            whenStampReady(function () { printWindow('預覽 ' + (d.kind_name || '') + ' ' + d.title, buildBody(d, []), d.doc_no); });
+            var pl = 'zh';
+            if (d.i18n && d.i18n.vi) pl = confirm('此單有越南文版本。\n\n按「確定」＝中文＋越南文（兩頁）一起預覽；按「取消」＝只預覽中文版。') ? 'both' : 'zh';
+            whenStampReady(function () { printWindow('預覽 ' + (d.kind_name || '') + ' ' + d.title, langBodies(d, [], pl), d.doc_no); });
         };
 
         $(document).on('click', '.nc-print-btn', function () {
@@ -3471,7 +3500,7 @@ if (isset($_POST['btn_go_events'])) {
                 // 按下列印才配聯絡單號（使用者要求：有列印才產生）
                 loadPrint(NC.eid, true, function (d) {
                     whenStampReady(function () {
-                        printWindow((d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + ' ' + d.title, buildBody(d, printablePeople(d)), d.doc_no);
+                        printWindow((d.kind_name || '聯絡單') + ' ' + (d.contact_no || d.event_no || '') + ' ' + d.title, langBodies(d, printablePeople(d), $('#ncPrintLang').val() || 'zh'), d.doc_no);
                         try {
                             if (window.EGPrintLog) EGPrintLog.record({
                                 source: 'notice_contact', doc_kind: 'form',

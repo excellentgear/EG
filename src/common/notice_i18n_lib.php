@@ -58,3 +58,24 @@ function ni_get_all(PDO $db, int $eventId): array
         return $out;
     } catch (Throwable $e) { return []; }
 }
+
+/** 儲存（或清除）翻譯。$rawHtml 為前端送來的圖文，這裡清洗；回傳 [ok(bool), msg] */
+function ni_save(PDO $db, int $eid, string $lang, string $title, string $rawHtml, int $uid): array
+{
+    require_once __DIR__ . '/notice_doc_lib.php';
+    ni_ensure_schema($db);
+    $title = trim($title);
+    [$chtml, $content] = ndoc_clean_content($rawHtml);
+    if ($chtml !== '') $chtml = ndoc_bind_assets($db, $chtml, $uid, $eid, null);
+    if ($chtml === '') $content = '';
+    if (mb_strlen($title) > 255) return [false, '標題過長（上限 255 字）'];
+    if ($title === '' && $content !== '') return [false, '請填寫翻譯標題'];
+    if ($title === '' && $content === '') {
+        $db->prepare("DELETE FROM live_event_i18n WHERE live_event_id=? AND lang=?")->execute([$eid, $lang]);
+        return [true, '已清除翻譯版本'];
+    }
+    $db->prepare("INSERT INTO live_event_i18n (live_event_id, lang, title, content, content_html, updated_by, updated_at)
+                  VALUES (?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE title=VALUES(title), content=VALUES(content), content_html=VALUES(content_html), updated_by=VALUES(updated_by), updated_at=NOW()")
+       ->execute([$eid, $lang, $title, $content, $chtml === '' ? null : $chtml, $uid]);
+    return [true, '翻譯已儲存'];
+}

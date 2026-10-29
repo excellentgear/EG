@@ -29,20 +29,8 @@ try {
         if (empty($_SESSION['ndoc_csrf']) || !hash_equals((string)$_SESSION['ndoc_csrf'], (string)($in['csrf'] ?? ''))) {
             echo json_encode(['ok' => false, 'msg' => '連線憑證失效，請重新整理頁面']); exit();
         }
-        $title = trim((string)($in['title'] ?? ''));
-        [$chtml, $content] = ndoc_clean_content((string)($in['content_html'] ?? ''));
-        if ($chtml !== '') $chtml = ndoc_bind_assets($db, $chtml, $uid, $eid, null);
-        if ($chtml === '') $content = '';
-        if (mb_strlen($title) > 255) { echo json_encode(['ok' => false, 'msg' => '標題過長（上限 255 字）']); exit(); }
-        if ($title === '' && $content !== '') { echo json_encode(['ok' => false, 'msg' => '請填寫翻譯標題']); exit(); }
-        if ($title === '' && $content === '') {
-            $db->prepare("DELETE FROM live_event_i18n WHERE live_event_id=? AND lang=?")->execute([$eid, $lang]);
-            echo json_encode(['ok' => true, 'msg' => '已清除翻譯版本']); exit();
-        }
-        $db->prepare("INSERT INTO live_event_i18n (live_event_id, lang, title, content, content_html, updated_by, updated_at)
-                      VALUES (?,?,?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE title=VALUES(title), content=VALUES(content), content_html=VALUES(content_html), updated_by=VALUES(updated_by), updated_at=NOW()")
-           ->execute([$eid, $lang, $title, $content, $chtml === '' ? null : $chtml, $uid]);
-        echo json_encode(['ok' => true, 'msg' => '翻譯已儲存']); exit();
+        [$okS, $msgS] = ni_save($db, $eid, $lang, (string)($in['title'] ?? ''), (string)($in['content_html'] ?? ''), $uid);
+        echo json_encode(['ok' => $okS, 'msg' => $msgS]); exit();
     }
 
     $all = ni_get_all($db, $eid);

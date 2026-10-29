@@ -878,6 +878,12 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         'title'      => (string)$ev['title'],
         'content'    => (string)$ev['content'],
         'content_html' => trim((string)($ev['content_html'] ?? '')) !== '' ? ndoc_hydrate((string)$ev['content_html']) : '',
+        'i18n'       => (function () use ($db, $eventId) {
+            require_once __DIR__ . '/notice_i18n_lib.php';
+            $a = ni_get_all($db, $eventId);
+            foreach ($a as $k => $v) $a[$k]['content_html'] = $v['content_html'] !== '' ? ndoc_hydrate($v['content_html']) : '';
+            return (object)$a;
+        })(),
         'kind'       => $kind,
         'kind_name'  => ndoc_kinds()[$kind],
         'post_until' => ($kind === 'announce' && !empty($ev['post_until'])) ? substr((string)$ev['post_until'], 0, 10) : '',
