@@ -488,7 +488,10 @@ case 'save_cause': {
 /* ═══════════ 相關單位意見：逐輪徵詢 ═══════════ */
 case 'round_add': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
-    if (!qab_can_edit_form($db, $perms, $o) && !$perms['canDecide']) jerr('沒有送出徵詢的權限');
+    // 雙層快速決策：第二層（含第二層不在時的代理）可以勾選送相關單位意見
+    $qvR = qab_quick_view($db, $o, $uid);
+    $quickL2R = ($qvR['on'] && !$qvR['done'] && $qvR['layer'] === 'l2' && !empty($qvR['can']['decide']));
+    if (!qab_can_edit_form($db, $perms, $o) && !$perms['canDecide'] && !$quickL2R) jerr('沒有送出徵詢的權限');
     $id = (int)$o['id'];
 
     /* 使用者定調：可以一次勾好幾個部門同時送出（原本是一次一個、回覆後才能送下一個）。

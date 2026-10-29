@@ -3948,6 +3948,9 @@ function qab_status(array $o): array
     if (!empty($o['auto_opened']) && empty($o['qc_review_by'])) return ['code' => 'qcreview', 'label' => '待品管確認說明'];
     foreach ($o['rounds'] ?? [] as $r) {
         if (($r['status'] ?? '') !== 'Returned') {
+            // 雙層快速決策的單：相關單位意見決策前後都能填，所以「還沒決策」時徵詢不擋決策（繼續往下判斷）；
+            // 決策完成後還有單位沒回覆，才顯示等待回覆（結案前要回完）
+            if (!empty($o['quick_mode']) && empty($o['disp_ids']) && empty($o['gm_ids']) && empty($o['need_gm']) && empty($o['escalate_gm'])) break;
             $who = trim((string)($r['user_cname'] ?: $r['department_name']));
             return ['code' => 'reply', 'label' => '等待回覆' . ($who !== '' ? '（' . $who . '）' : '')];
         }
@@ -4060,7 +4063,7 @@ function qab_list(PDO $db, array $f = []): array
         if ($r['split_children_count'] > 0) $r['status'] = ['code' => 'split', 'label' => '已拆分為 ' . $r['split_children_count'] . ' 張'];
         elseif (!empty($r['is_closed']))  $r['status'] = ['code' => 'closed', 'label' => '已結案'];
         elseif (!empty($r['auto_opened']) && empty($r['qc_review_by'])) $r['status'] = ['code' => 'qcreview', 'label' => '待品管確認說明'];
-        elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
+        elseif ($r['pending'] > 0 && !(!empty($r['quick_mode']) && !$r['disp_ids'] && !$r['gm_ids'] && empty($r['need_gm']) && empty($r['escalate_gm']))) $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
         elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待' . $gmLabel . '裁示'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
         elseif (($r['gm_deduct'] || (empty($r['quick_mode']) && $r['final']['is_scrap']))) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];

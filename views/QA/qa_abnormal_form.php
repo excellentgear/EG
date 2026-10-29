@@ -419,6 +419,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <textarea id="quickNote" rows="1" placeholder="裁決說明（選填）" style="width:100%;border:1px solid var(--line);border-radius:4px;padding:3px 6px;"></textarea>
                             <div id="quickBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
                         </div>
+                        <label id="quickAsk" style="display:none;margin:6px 0 0;font-weight:normal;"><input type="checkbox" id="qkAskChk" style="width:auto;margin-right:4px;"> 送相關單位填寫意見<span class="muted-help"> （決策前、決策後都可以填，結案前要回完）</span></label>
                         <div class="muted-help" id="quickWhy" style="margin-top:4px;"></div>
                         <div id="quickQc" style="display:none;margin-top:4px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看相關檢驗紀錄</a></div>
                     </div>
@@ -911,7 +912,19 @@ function renderQuickBox(){
     $('#quickNote').toggle(l1Acting);
     $('#quickWhy').text(h || done ? '' : (q.why || ''));
     $('#quickQc').toggle(!!q.qc_url); if (q.qc_url) $('#quickQcLink').attr('href', q.qc_url);
+    // 第二層（有決策權者）可以勾選是否送相關單位填寫意見；已經有徵詢紀錄就固定勾起（區塊一定看得到）
+    var hasRounds = (o.rounds || []).length > 0;
+    var canAsk = !o.is_closed && (D.perms.canDecide || D.perms.canAdmin);
+    var askKey = 'qkAsk_' + OID, saved = false;
+    try { saved = sessionStorage.getItem(askKey) === '1'; } catch (e) {}
+    $('#quickAsk').toggle(canAsk || hasRounds);
+    $('#qkAskChk').prop('checked', hasRounds || saved).prop('disabled', hasRounds || !canAsk);
 }
+$(document).on('change', '#qkAskChk', function(){
+    try { sessionStorage.setItem('qkAsk_' + OID, this.checked ? '1' : '0'); } catch (e) {}
+    applyConcise();
+    if (this.checked) { var s = document.getElementById('secRound'); if (s) s.scrollIntoView({ block:'center' }); }
+});
 /* 雙層快速決策的單只留重點：說明文字、用不到的欄位與區塊收掉；
    扣款確認只有技術課主管勾了「扣款」才出現；相關單位意見只有真的有徵詢紀錄才出現。 */
 function applyConcise(){
@@ -925,7 +938,7 @@ function applyConcise(){
     $('#f_cat, #f_fill_date, #f_occ_date').prop('disabled', true).attr('data-qk-keep', 1).attr('title', '雙層快速決策的單由系統開立，不可修改');
     $('#bomMoreBox, #respPeopleBox, #qcReviewBox').addClass('qk-hide');
     $('#f_decider').closest('.fgrid').addClass('qk-hide');
-    if (!(o.rounds || []).length) $('#secRound').addClass('qk-hide');
+    if (!(o.rounds || []).length && !$('#qkAskChk').is(':checked')) $('#secRound').addClass('qk-hide');   // 勾了「送相關單位填寫意見」才出現
     if (Number(o.gm_deduct) !== 1) $('#secDeduct').addClass('qk-hide');
 }
 /* 雙層快速決策的單：不可更改的欄位直接顯示文字，不要灰掉的輸入框（畫面精簡）。
