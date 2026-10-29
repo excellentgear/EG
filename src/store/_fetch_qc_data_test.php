@@ -32,7 +32,16 @@ if (($_GET['mode'] ?? '') === 'completed') {
     $search  = trim($_GET['search'] ?? '');
 
     try {
-        $whereStr = "WHERE bi.qc_completed = 1";
+        // 2026-10-29：除了「已按QC完工」的，也列入「QC補報檢驗」＝用「新增報工（未在列表上）」補報的檢驗紀錄：
+        // 這道製程有 qc_check 紀錄、還沒按完工，而且現在不在待驗清單上（狀態不是 Q／P／E，即未發包／加工中）。
+        // 這兩種來源在 qc_check 裡長得一樣（沒有來源欄位），所以只能用「製程狀態」判定；
+        // 狀態是 Q／P 的是待驗清單上的「簡易檢驗」（允收／異常），不在這裡。
+        $whereStr = "WHERE (bi.qc_completed = 1 OR (
+                         (bi.qc_completed = 0 OR bi.qc_completed IS NULL)
+                         AND bi.is_schedule_split = 0 AND bi.is_consumed = 0
+                         AND (bi.processing_state IS NULL OR bi.processing_state IN ('N','ing',''))
+                         AND EXISTS (SELECT 1 FROM qc_check qx WHERE qx.bom_ing_fid_ref = CAST(bi.bom_ing_fid AS CHAR) COLLATE utf8mb4_unicode_ci)   -- bom_ing_fid_ref 是 VARCHAR，不轉字串會用不到索引
+                     ))";
         $binds    = [];
         if ($search !== '') {
             $like = '%' . $search . '%';
@@ -52,8 +61,9 @@ if (($_GET['mode'] ?? '') === 'completed') {
             SELECT
                 bi.bom_ing_fid, bi.bom, b.d_id, b.Client_Name,
                 pn.ProcessName, bi.maker_id, bi.sqty,
-                DATE_FORMAT(bi.qc_completed_at,'%Y-%m-%d %H:%i') AS qc_completed_at,
-                u.user_cname AS qc_completed_by_name,
+                DATE_FORMAT(COALESCE(bi.qc_completed_at, bi.QC_check_date),'%Y-%m-%d %H:%i') AS qc_completed_at,
+                COALESCE(u.user_cname, (SELECT u3.user_cname FROM qc_check qy JOIN user u3 ON u3.id = qy.created_by WHERE qy.qc_check_id = qc.max_qc_check_id)) AS qc_completed_by_name,
+                CASE WHEN bi.qc_completed = 1 THEN '' ELSE 'report' END AS rec_kind,
                 bi.QC_ps AS biqc_ps,
                 -- QC 檢驗結果彙總
                 COALESCE(qc.QC_QQ_sqty,0) AS QC_QQ_sqty,
@@ -80,7 +90,7 @@ if (($_GET['mode'] ?? '') === 'completed') {
             LEFT JOIN qa_abnormal_order qao
                 ON qao.source_type='QC' AND qao.source_id=qc.max_qc_check_id
             $whereStr
-            ORDER BY bi.qc_completed_at DESC
+            ORDER BY COALESCE(bi.qc_completed_at, bi.QC_check_date) DESC
             LIMIT $lim OFFSET $off
         ");
         $dataStmt->execute($binds);

@@ -1537,6 +1537,10 @@ try {
     $_bv_row = $conn->getOne("SELECT param_value FROM system_parameters WHERE param_group='BOM_SETTING' AND param_key='batch_view_default' LIMIT 1");
     $_bv_raw = is_array($_bv_row) ? ($_bv_row['param_value'] ?? '') : (string)$_bv_row;
     // param_value 是 JSON 欄位，同群組慣例是存物件（{"mode":"both"}）
+try {   // 有線上檢驗資料的製程（區分「線上檢驗」與「簡易／補報檢驗」用；頁面開著時由 JS 定期更新）
+    $__qcOnline = $conn->getPDO()->query("SELECT DISTINCT bom_ing_fid FROM qc_check_form WHERE bom_ing_fid IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Throwable $__eQo) { $__qcOnline = []; }
+echo "    window.qcOnlineFids = " . json_encode(array_map('intval', $__qcOnline)) . ";\n";
     $_bv_j = json_decode((string)$_bv_raw, true);
     $_bv_val = is_array($_bv_j) ? (string)($_bv_j['mode'] ?? '') : (string)$_bv_j;
     if (in_array($_bv_val, ['none','lane','flow','both'], true)) $_bv_default = $_bv_val;
@@ -3316,6 +3320,32 @@ echo "</script>\n";
         window.bomPSList.forEach(function(p) {
             if (!p || String(p.bom || '').trim() !== bomStr) return;
             if (parseInt(p.is_consumed || 0, 10) === 1) return;
+    // ── 「有檢驗紀錄」說明：分清楚是哪一種檢驗紀錄（2026-10-29）──────────────
+    //  有線上檢驗紀錄    ＝ views/QC/inspection_entry_v2.php 內有這道製程的檢驗資料（qc_check_form）
+    //  有QC補報檢驗紀錄  ＝ QC待驗清單的「新增報工（未在列表上）」補報的檢驗紀錄
+    //  有簡易檢驗紀錄    ＝ QC待驗清單上直接按「允收／異常」回報的檢驗結果
+    //  補報與簡易兩種在 qc_check 裡長得一樣（沒有來源欄位），只能用製程狀態判定：
+    //  這道製程已經在待驗清單（Q／P）或已移轉（E）或已按QC完工 → 簡易；還在未發包／加工中 → 補報。
+    function qcRecordReasons(p) {
+        var out = [];
+        var fid = parseInt(p && p.bom_ing_fid, 10);
+        if (Array.isArray(window.qcOnlineFids) && window.qcOnlineFids.indexOf(fid) >= 0) out.push('有線上檢驗紀錄');
+        var qcDate = String((p && p.QC_check_date) || '').trim();
+        var hasQcCheck = (p && p.QC_check && String(p.QC_check).trim() !== '') || (qcDate !== '' && qcDate.indexOf('0000') !== 0);
+        if (hasQcCheck) {
+            var st = String(p.processing_state || '').trim();
+            var onList = (st === 'Q' || st === 'P' || st === 'E' || p.qc_completed == 1);
+            out.push(onList ? '有簡易檢驗紀錄' : '有QC補報檢驗紀錄');
+        }
+        if (!out.length) out.push('有檢驗紀錄');   // 只有「已按QC完工」旗標、查不到檢驗內容
+        return out;
+    }
+    // 頁面開著時，每分鐘更新一次「有線上檢驗資料的製程」清單（只更新資料，不重畫）
+    setInterval(function () {
+        fetch('../../src/store/_qc_online_fids.php', { cache: 'no-store' }).then(function (r) { return r.json(); })
+            .then(function (d) { if (d && d.success && Array.isArray(d.fids)) window.qcOnlineFids = d.fids; }).catch(function () {});
+    }, 60000);
+
             var qcDate = String(p.QC_check_date || '').trim();
             var hasQc = (p.QC_check && String(p.QC_check).trim() !== '') ||
                         (qcDate !== '' && qcDate.indexOf('0000') !== 0) ||
@@ -6446,7 +6476,13 @@ echo "</script>\n";
                     matchingProcesses.sort((a, b) => (parseInt(a.bom_sn) || 0) - (parseInt(b.bom_sn) || 0));
 
                     // QC/生管製程不同步：算出快速移轉的目標關（QC已檢驗/完工、序號>目前製程的最遠關）
-                    var _qcSyncTarget = getQcSyncInfo(row).target;
+                    var _qcSyncInfo = getQcSyncInfo(row);
+                    var _qcSyncReasons = {}; // bom_ing_fid → 說明文字陣列
+                    if (_qcSyncInfo.target) _qcSyncReasons[String(_qcSyncInfo.target.bom_ing_fid)] = qcRecordReasons(_qcSyncInfo.target);
+                    if (_qcSyncInfo.reportTarget) {
+                        var _rk = String(_qcSyncInfo.reportTarget.bom_ing_fid);
+                        (_qcSyncReasons[_rk] = _qcSyncReasons[_rk] || []).push('有報工紀錄');
+                    }
 
                     for (var i = 0; i < window.maxCount; i++) {
                         var tdDynamicProcess = document.createElement('td');

@@ -5013,7 +5013,8 @@ if ($reply_id != "") {
                     html += '<div class="qc-completed-card">' +
                         '<div class="cc-head">' +
                             '<div style="flex:1;min-width:0;">' +
-                                '<div class="cc-bom">' + _esc(r.bom) + '</div>' +
+                                '<div class="cc-bom">' + _esc(r.bom) +
+                                    (r.rec_kind === 'report' ? ' <span title="用「新增報工（未在列表上）」補報的檢驗紀錄；這道製程還沒按QC完工" style="background:#8A5A2B;color:#fff;border-radius:3px;padding:1px 7px;font-size:11px;font-weight:600;vertical-align:middle;">QC補報檢驗</span>' : '') + '</div>' +
                                 '<div class="cc-meta">' +
                                     _esc(r.Client_Name) + '　' + _esc(r.d_id) +
                                     (r.ProcessName ? '　' + _esc(r.ProcessName) : '') +
