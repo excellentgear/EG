@@ -64,6 +64,7 @@ if (!function_exists('ps_plan_candidates')) {
                    AND (bi.processing_state IS NULL OR bi.processing_state IN ('N','','ing'))   -- Q(QC待驗)／P(生管待移轉)／E(已移轉)＝這道製程已經做完，不列
                    AND (bi.qc_completed IS NULL OR bi.qc_completed = 0)
                    AND bi.pre_plan = 0
+                   AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r0 WHERE r0.bom_ing_fid = bi.bom_ing_fid)   -- 已有報工（含補加工）的就是正在做，已經在看板上
                    AND bi.is_schedule_split = 0
                    AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid AND r.is_finished = 1)
                    AND bi.bom_ing_fid NOT IN (SELECT bom_ing_fid FROM vw_bom_ing WHERE processing_state = 'ing')"
