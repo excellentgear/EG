@@ -88,6 +88,7 @@ case 'list': {
         'month'  => $_GET['month'] ?? '',
         'closed' => $_GET['closed'] ?? '',
         'source' => $_GET['source'] ?? '',
+        'as'     => !empty($_GET['as']) ? 1 : 0,
         'cat'    => (string)($_GET['cat'] ?? ''),
         'kw'     => trim((string)($_GET['kw'] ?? '')),
         'deleted'=> (!empty($_GET['deleted']) && $perms['canAdmin']) ? 1 : 0,
@@ -171,6 +172,9 @@ case 'get': {
     if (!$o) jerr('找不到這張異常單');
     // 雙層快速決策：第二層（或第二層不在時的代理）這張單可以用原本的決策選項，所以把 canDecide 視為成立
     $quickV = qab_quick_view($db, $o, $uid);
+    $asMapG = qab_as_process_nos($db);
+    $o['is_as'] = (!empty($o['resp_process_no']) && isset($asMapG[(int)$o['resp_process_no']])) ? 1 : 0;
+    $o['as_name'] = $o['is_as'] ? $asMapG[(int)$o['resp_process_no']] : '';
     $permsOut = $perms;
     if ($quickV['on'] && !$quickV['done'] && $quickV['layer'] === 'l2' && !empty($quickV['can']['decide'])) $permsOut['canDecide'] = true;
     jout(true, [

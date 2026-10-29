@@ -977,6 +977,8 @@ function render(){
     var isAuto = !!Number(o.auto_opened);
     RESP_LOCKED = isAuto && !p.canAdmin && !Number(o.vendor_pending);   // 廠商待補的單要讓品管能補填
     $('#noTag').text(o.abnormal_order_no || '');
+    $('#asTag').remove();
+    if (Number(o.is_as) === 1) $('#noTag').after(' <span id="asTag" class="st" style="background:#F0A24B;color:#3b2203;font-weight:bold;" title="AS 認證製程：' + esc(o.as_name || '') + '">AS</span>');
     document.title = '品質異常處理單 ' + (o.abnormal_order_no || '');
 
     var st = o.status || { code:'', label:'' };

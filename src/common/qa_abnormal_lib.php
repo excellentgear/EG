@@ -1333,6 +1333,7 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         'abnormal_phenomenon' => '報工發現不良',
         'created_by' => (int)$opener['id'],
         'resp_process_no' => (int)$bi['process_no'],
+        'resp_bom_ing_fid' => $bomIngFid,
         'auto_opened' => 1,
         'auto_open_note' => $autoNote,
         'pm_report_id' => (int)$trigger['report_id'],
@@ -1354,8 +1355,19 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
     $db->prepare("DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid=?")->execute([$bomIngFid]);
     // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策
     // （2026-09-24 使用者拍板）；沒設定名單時這一步就先略過，單子仍停在「待品管確認說明」等管理員處理。
-    try { qab_notify_qc_review($db, $created['id'], (string)$bi['bom'], $totalNg); } catch (Throwable $e) {}
-    return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'],
+    // 雙層快速決策已啟用：報工自動開立的單也走快速決策（略過品管確認、直接通知第一層／第二層）；
+    // 沒啟用才維持原本的「品管確認說明」閘門
+    $quickOn = false;
+    try {
+        $fresh = qab_order($db, $created['id']);
+        $vendorMissing = $fresh && !qab_auto_close_allowed($fresh);
+        $quickOn = qab_quick_after_auto_open($db, (int)$created['id'], (int)$opener['id'],
+            '製令 ' . (string)$bi['bom'] . ' 報工累積發現 ' . $totalNg . ' 件NG', (string)$bi['bom'], (int)$bi['process_no'], $vendorMissing);
+    } catch (Throwable $e) { $quickOn = false; }
+    if (!$quickOn) {
+        try { qab_notify_qc_review($db, $created['id'], (string)$bi['bom'], $totalNg); } catch (Throwable $e) {}
+    }
+    return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'], 'quick' => $quickOn ? 1 : 0,
             'qty' => $totalNg, 'period_from' => $periodFrom, 'period_to' => $periodTo, 'report_ids' => $reportIds];
 }
 
@@ -2693,6 +2705,36 @@ function qab_quick_auto_scrap(PDO $db, int $id, int $scrapQty, int $createdBy, s
     return ['auto_closed' => 1, 'vendor_pending' => 0, 'scrap_no' => $cl['scrap_no']];
 }
 
+/**
+ * 自動開立的異常單（報工NG累積）開單後套用雙層快速決策：標 quick_mode、略過品管確認、依製程大類是否
+ * 開放給第一層決定通知誰（開放→第一層；沒開放→第二層，可自己決策或轉回第一層）；
+ * 責任廠商沒登記則標 vendor_pending 並通知生管補登。雙層快速決策沒啟用時回傳 false（呼叫端走原流程）。
+ */
+function qab_quick_after_auto_open(PDO $db, int $id, int $createdBy, string $desc, string $bomNo, int $processNo, bool $vendorMissing): bool
+{
+    if (!qab_quick_ready($db)) return false;
+    $db->prepare("UPDATE qa_abnormal_order SET quick_mode=1, qc_review_by=?, qc_review_at=NOW()" . ($vendorMissing ? ", vendor_pending=1" : "") . " WHERE id=?")
+       ->execute([$createdBy, $id]);
+    $fresh = qab_order($db, $id);
+    $v = $fresh ? qab_quick_view($db, $fresh, 0) : ['open_for_l1' => 1];
+    try {
+        if (!empty($v['open_for_l1'])) {
+            qab_notify_quick_l1($db, $id, $desc);
+        } else {
+            $pool = qab_quick_l2_pool($db);
+            qab_quick_notify($db, $id, $pool['ids'], '品質異常單待決策（未開放第一層）：' . (string)($fresh['abnormal_order_no'] ?? ''),
+                $desc . '。此製程大類未開放第一層直接決策，請決策或轉回第一層。');
+        }
+    } catch (Throwable $e) {}
+    if ($vendorMissing) {
+        try {
+            $pn = $processNo > 0 ? (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$processNo)->fetchColumn() : null;
+            qab_notify_vendor_missing($db, $id, $bomNo, $pn);
+        } catch (Throwable $e) {}
+    }
+    return true;
+}
+
 /** 雙層快速決策是否「現在就能用」：總開關開、有第一層、有第二層、至少一個啟用的裁決項目 */
 function qab_quick_ready(PDO $db): bool
 {
@@ -3986,6 +4028,24 @@ function qab_need_gm(PDO $db, array $o, ?array $optMap = null): bool
 /* ─────────────────────────────────────────────────────────────
    清單
    ───────────────────────────────────────────────────────────── */
+/**
+ * AS 認證（稽核）製程：以「訂單追蹤 → 設定」裡的稽核製程為準（唯一判定 ot_astag_audit_process_nos()），
+ * 異常單的責任製程（報工／檢驗的那一站）落在這些製程就標 AS。回傳 [process_no => 稽核製程名稱,…]；查不到回空陣列。
+ */
+function qab_as_process_nos(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    try {
+        require_once __DIR__ . '/order_as_tag_lib.php';
+        foreach (ot_astag_audit_process_nos($db) as $no => $info) {
+            $out[(int)$no] = implode('、', array_values((array)($info['tags'] ?? [])));
+        }
+    } catch (Throwable $e) { $out = []; }
+    return $cache = $out;
+}
+
 function qab_list(PDO $db, array $f = []): array
 {
     // 軟刪除的單一律不出現在清單（要看已刪除的請用 deleted=1，只有異常單管理員叫得動）
@@ -3995,6 +4055,11 @@ function qab_list(PDO $db, array $f = []): array
     if (!empty($f['month']))  { $w[] = "MONTH(COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)))=?"; $p[] = (int)$f['month']; }
     if (isset($f['closed']) && $f['closed'] !== '') { $w[] = "o.is_closed=?"; $p[] = (int)$f['closed']; }
     if (!empty($f['source'])) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
+    // 快速篩選：只看 AS 認證製程的單
+    if (!empty($f['as'])) {
+        $asNos = array_keys(qab_as_process_nos($db));
+        $w[] = $asNos ? ("o.resp_process_no IN (" . implode(',', array_map('intval', $asNos)) . ")") : "1=0";
+    }
     // 分類篩選：cat=數字＝該分類；cat='none'＝還沒指定分類的舊單（清單上獨立一區）
     if (isset($f['cat']) && $f['cat'] !== '') {
         if ($f['cat'] === 'none') { $w[] = "o.cat_id IS NULL"; }
@@ -4014,7 +4079,7 @@ function qab_list(PDO $db, array $f = []): array
                    o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
                    o.cat_id, ct.name AS cat_name, ct.is_active AS cat_active,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name,
-                   o.src_qc_form_id, o.quick_mode, o.vendor_pending, qf.bom_ing_fid AS qc_bom_ing_fid
+                   o.src_qc_form_id, o.quick_mode, o.vendor_pending, o.resp_process_no, qf.bom_ing_fid AS qc_bom_ing_fid
             FROM qa_abnormal_order o
             LEFT JOIN qc_check_form qf ON qf.qc_form_id=o.src_qc_form_id
             LEFT JOIN qa_abnormal_cat ct ON ct.cat_id=o.cat_id
@@ -4027,6 +4092,9 @@ function qab_list(PDO $db, array $f = []): array
     $st = $db->prepare($sql);
     $st->execute($p);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $asMap = qab_as_process_nos($db);
+    foreach ($rows as &$rAs) { $rn = (int)($rAs['resp_process_no'] ?? 0); $rAs['is_as'] = ($rn > 0 && isset($asMap[$rn])) ? 1 : 0; $rAs['as_name'] = $rAs['is_as'] ? $asMap[$rn] : ''; }
+    unset($rAs);
     if (!$rows) return [];
 
     // 狀態要看「有沒有還沒回覆的輪次／有沒有處置／有沒有裁示／有沒有被拆分」，一次撈完再組（避免逐筆查）

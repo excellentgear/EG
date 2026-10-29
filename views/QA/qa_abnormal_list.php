@@ -92,6 +92,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         .st-deduct { background:#F0A24B; color:#3b2a18; }
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
         .st-auto   { background:var(--sand); color:var(--ink2); }
+        .st-as     { background:#F0A24B; color:#3b2203; font-weight:bold; letter-spacing:.5px; }
         .st-split  { background:#EFD9BF; color:#7a4a1e; }
         /* 清單依類別分區顯示：每一區一條標題列（使用者交辦「清單也要依照不同類別分開顯示」） */
         table.lst tr.grp td { background:var(--sand); color:var(--ink2); font-weight:bold; padding:5px 8px;
@@ -239,6 +240,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     </select></div>
                 <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號／開單人員）</label>
                     <input type="text" id="fKw" style="width:100%;"></div>
+                <button class="btn btn-warm-o btn-sm" id="btnAsFilter" title="只看 AS 認證（稽核）製程的異常單；認證製程在「訂單追蹤 → 設定」維護"><b>AS</b> 認證製程</button>
                 <button class="btn btn-warm btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button class="btn btn-warm-o btn-sm" id="btnMonthPrint"><i class="fa fa-print"></i> 批次月報列印</button>
                 <?php if ($perms['canCreate']): ?>
@@ -727,11 +729,17 @@ function post(action, data, cb, errCb){
 }
 
 /* ───────── 清單 ───────── */
+var AS_ONLY = false;
+$(document).on('click', '#btnAsFilter', function(){
+    AS_ONLY = !AS_ONLY;
+    $(this).toggleClass('btn-warm', AS_ONLY).toggleClass('btn-warm-o', !AS_ONLY);
+    load();
+});
 function load(){
     $('#lstBody').html('<tr><td colspan="11" class="c">載入中…</td></tr>');
     $.get(API, { action:'list', year:$('#fYear').val(), month:$('#fMonth').val(),
                  closed:$('#fClosed').val(), source:$('#fSource').val(), cat:$('#fCat').val(),
-                 kw:$('#fKw').val(),
+                 kw:$('#fKw').val(), as:AS_ONLY ? 1 : '',
                  deleted:$('#fDeleted').prop('checked') ? 1 : '' }, function(res){
         if (!res || !res.success) { $('#lstBody').html('<tr><td colspan="11" class="c">' + esc((res && res.message) || '載入失敗') + '</td></tr>'); return; }
         var rows = res.rows || [];
@@ -750,6 +758,7 @@ function load(){
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + srcLabel(r.source_type) + '</span>'
                     + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '')
+                    + (Number(r.is_as) === 1 ? ' <span class="st st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
                     + (Number(r.quick_mode) === 1 ? '<br><span class="st st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
                     + (Number(r.vendor_pending) === 1 ? ' <span class="st st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
                     + (r.src_qc_form_id && r.qc_bom_ing_fid ? '<br><a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '')
