@@ -24,7 +24,7 @@ $CAN_VIEW   = rbac_has($_features, 'notice_view');
 $CAN_CREATE = rbac_has($_features, 'notice_create');
 $CAN_EDIT   = rbac_has($_features, 'notice_edit');
 $CAN_DELETE = rbac_has($_features, 'notice_delete');
-$IS_ADMIN   = rbac_has($_features, 'all');
+$IS_ADMIN   = rbac_notice_admin($_features);   // 全站管理員或本頁管理員
 $can_manage = $CAN_EDIT || $CAN_DELETE; // 列表「已讀/操作」欄是否顯示
 $can_batch  = $CAN_EDIT || $IS_ADMIN;   // 列表是否顯示勾選欄與「批次改對象」（逐則權限後端再擋一次）
 
@@ -50,6 +50,7 @@ $PAGE_FEATURES = [
     ['code' => 'notice_create',     'label' => '新增公告/通知'],
     ['code' => 'notice_edit',       'label' => '編輯公告/通知'],
     ['code' => 'notice_delete',     'label' => '刪除公告/通知'],
+    ['code' => 'notice_admin',      'label' => '本頁管理員（同全站管理員在本頁的權力：快速已閱、改未閱、批次改對象、核准設定等；已簽核的公告仍不可編修）'],
     ['code' => 'notice_tag_manage', 'label' => '附件標籤管理（主管：新增/停用標籤、4G/Telegram/浮水印開關、預設標籤）'],
     ['code' => 'notice_contact_sign',     'label' => '聯絡單：列印補簽、指定製表 / 核准人員與日期、改受文者'],
     ['code' => 'notice_contact_setting',  'label' => '聯絡單：模組設定（AS 文件綁定、圖章型式、預設簽章人）'],
@@ -2418,6 +2419,7 @@ if (isset($_POST['btn_go_events'])) {
                             showEdit = true;
                         }
                         // 刪除改走 AJAX（原本是整頁轉址，刪完畫面會捲回最上面）
+                        if (r.locked && !r.can_edit) html += '<span class="eg-mini" style="background:#eceff1;color:#78909c;cursor:help;" title="已通過簽核，不可編輯或刪除（僅全站管理員）"><i class="fa fa-lock"></i> 已簽核</span>';
                         if (r.can_delete) html += '<a href="javascript:;" class="eg-row-del" data-eid="' + r.id + '"><span class="eg-mini eg-mini-del"><i class="fa fa-trash"></i> 刪除</span></a>';
                     }
                     if (r.can_translate) html += '<a href="javascript:;" class="eg-row-tr" data-eid="' + r.id + '" title="設定越南文翻譯版本（已簽核的公告也可補）"><span class="eg-mini" style="background:#fff3e0;color:#a15c00;"><i class="fa fa-language"></i> 翻譯</span></a>';

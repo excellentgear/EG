@@ -127,6 +127,8 @@ if (!function_exists('eg_notice_event_editable')) {
         if (($ev['ref_type'] ?? '') === 'QA' && (int)($ev['ref_id'] ?? 0) > 0) {
             return [false, '來源「品質異常單」的通知請至異常單修改'];
         }
+        require_once __DIR__ . '/notice_doc_lib.php';
+        if (!in_array('all', $features, true) && ndoc_is_locked($db, (int)$ev['id'])) return [false, NDOC_LOCK_MSG];
         if ($isAdmin) return [true, ''];
         if ((int)($ev['created_by'] ?? 0) === $uid && rbac_has($features, 'notice_edit')) return [true, ''];
         if (eg_user_is_event_editor($db, (int)$ev['id'], $uid)) return [true, ''];

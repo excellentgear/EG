@@ -416,6 +416,30 @@ function ndoc_appr_get(PDO $db, int $eventId): ?array
     return $r ?: null;
 }
 
+/**
+ * 已通過簽核（有核准紀錄＝自動簽核或核准人核准）的公告／通知／聯絡單不可再編輯與刪除，
+ * 只有全站管理員（features 含 'all'）例外；本頁管理員也不例外。翻譯版本不受此限（另有權限）。
+ */
+function ndoc_is_locked(PDO $db, int $eventId): bool
+{
+    try { ndoc_ensure_schema($db); } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT 1 FROM live_event_approval WHERE event_id=? LIMIT 1");
+        $st->execute([$eventId]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+function ndoc_locked_ids(PDO $db, array $ids): array
+{
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if (!$ids) return [];
+    try {
+        $in = implode(',', $ids);
+        return array_map('intval', $db->query("SELECT event_id FROM live_event_approval WHERE event_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+}
+if (!defined('NDOC_LOCK_MSG')) define('NDOC_LOCK_MSG', '此公告／通知已通過簽核，不可編輯或刪除（僅全站管理員可處理）；如需補越南文請使用「翻譯」。');
+
 /* ===================== 正式發布（唯一實作） ===================== */
 
 /**

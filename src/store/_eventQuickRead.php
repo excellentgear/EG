@@ -20,7 +20,7 @@ require_once __DIR__ . '/../push/push_send.php'; // eg_push_event_recipients()�
 
 if (!isset($_SESSION['id'])) { echo json_encode(['ok' => false, 'msg' => '尚未登入']); exit(); }
 $uid = (int)$_SESSION['id'];
-if (!rbac_has(rbac_user_features($db, $uid), 'all')) {
+if (!rbac_notice_admin(rbac_user_features($db, $uid))) {
     echo json_encode(['ok' => false, 'msg' => '僅系統管理員可代為標記已閱']);
     exit();
 }

@@ -24,7 +24,12 @@ if (($row['source'] ?? '') === '訂單變更') {
 // 其他人僅能編輯「本人建立」或「本人為共同編輯者(含本人部門)」的公告
 $__uid = (int)($_SESSION['id'] ?? 0);
 $__features = rbac_user_features($db, $__uid);
-$__isAdmin  = rbac_has($__features, 'all');
+$__isAdmin  = rbac_notice_admin($__features);
+require_once __DIR__ . '/../common/notice_doc_lib.php';
+if (!in_array('all', $__features, true) && ndoc_is_locked($db, (int)$row['id'])) {
+    header("location:../../views/liveEvent/createEvent.php?denied=1");
+    exit();
+}
 $__isCreator = ((int)($row['created_by'] ?? 0) === $__uid);
 $__isCoEditor = false;
 try {

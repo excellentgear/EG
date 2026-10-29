@@ -9,7 +9,8 @@ $uid = (int)$_SESSION['id'];
 $features = rbac_user_features($db, $uid);
 if (!rbac_has($features, 'notice_view')) { header('Content-Type: application/json'); echo json_encode(['ok' => false, 'msg' => '無權限']); exit(); }
 $can_manage = rbac_has($features, 'notice_edit') || rbac_has($features, 'notice_delete');
-$is_admin   = rbac_has($features, 'all'); // 系統角色（管理員）
+$is_admin   = rbac_notice_admin($features); // 系統管理員或本頁管理員
+$is_super   = rbac_has($features, 'all');   // 全站管理員（已簽核公告的編修只有他可以）
 
 $export = $_GET['export'] ?? '';
 $page   = max(1, (int)($_GET['page'] ?? 1));
@@ -314,6 +315,8 @@ try {
     $rd = eg_reads_for($db, $ids);
     $ed = eg_editors_for($db, $ids, $deptMap, $userMap);
     $rc = eg_recipient_counts($db, $ids);
+    require_once __DIR__ . '/../common/notice_doc_lib.php';
+    $lockedIds = ndoc_locked_ids($db, $ids);   // 已通過簽核＝不可編輯／刪除（僅全站管理員）
 
     $myDeptIds = array_map('intval', explode(',', $myDeptIn));
     $data = [];
@@ -328,6 +331,8 @@ try {
         // 逐列權限：只有系統管理員可改/刪任何公告；其他人僅能改本人建立或本人為共同編輯者的公告
         $rowCanEdit   = $is_admin || ($isCreator && rbac_has($features, 'notice_edit')) || $isCoEditor;
         $rowCanDelete = $is_admin || ($isCreator && rbac_has($features, 'notice_delete'));
+        $rowLocked = in_array((int)$r['id'], $lockedIds, true);
+        if ($rowLocked && !$is_super) { $rowCanEdit = false; $rowCanDelete = false; }
         // 公告者與共同編輯者分開回傳（前端分行顯示，避免與對象欄重疊）
         $edLabels = array_map(function ($x) { return $x['label']; }, $ed[$r['id']] ?? []);
 
@@ -351,6 +356,7 @@ try {
             'can_edit'   => $rowCanEdit,
             'can_delete' => $rowCanDelete,
             'can_translate' => ($is_admin || $isCreator || $isCoEditor),
+            'locked'     => $rowLocked,
         ];
     }
 

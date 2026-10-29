@@ -338,7 +338,9 @@ if (isset($_POST["newEvent"]) && rbac_has($__notice_features, 'notice_create') &
     && (function () use ($db) {
         $__uid = (int)($_SESSION['id'] ?? 0);
         $__f = rbac_user_features($db, $__uid);
-        if (rbac_has($__f, 'all')) return true;
+        require_once __DIR__ . '/../common/notice_doc_lib.php';
+        if (!in_array('all', $__f, true) && ndoc_is_locked($db, (int)$_POST['eventid'])) return false;   // 已簽核：僅全站管理員可改
+        if (rbac_notice_admin($__f)) return true;
         $__cb = $db->prepare("SELECT created_by FROM live_event WHERE id = ?");
         $__cb->execute([(int)$_POST['eventid']]);
         if ((int)$__cb->fetchColumn() === $__uid && rbac_has($__f, 'notice_edit')) return true;

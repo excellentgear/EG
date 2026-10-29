@@ -33,7 +33,11 @@ $eventId = (int)$_GET['eventid'];
 $pdo = $conn->getPDO();
 
 // 只有系統角色（管理員）可刪除任何公告；其他人僅能刪除本人建立的公告
-if (!rbac_has($__nf, 'all')) {
+require_once __DIR__ . '/../common/notice_doc_lib.php';
+if (!in_array('all', $__nf, true) && ndoc_is_locked($pdo, $eventId)) {
+    eg_del_exit($__ajax, false, NDOC_LOCK_MSG, '../../views/liveEvent/createEvent.php?denied=1');
+}
+if (!rbac_notice_admin($__nf)) {
     $__cb = $pdo->prepare("SELECT created_by FROM live_event WHERE id = ?");
     $__cb->execute([$eventId]);
     if ((int)$__cb->fetchColumn() !== $__uid) {

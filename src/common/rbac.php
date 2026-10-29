@@ -47,6 +47,12 @@ if (!function_exists('rbac_user_features')) {
     }
 }
 
+/** 公告/通知頁的「管理員」＝全站管理員，或持有本頁管理員功能碼 notice_admin（ai-rules/26）。已簽核公告的編修鎖定另外只認全站管理員 */
+if (!function_exists('rbac_notice_admin')) {
+    function rbac_notice_admin(array $features): bool {
+        return in_array('all', $features, true) || in_array('notice_admin', $features, true);
+    }
+}
 if (!function_exists('rbac_has')) {
     function rbac_has(array $features, string $feature): bool {
         return in_array('all', $features, true) || in_array($feature, $features, true);

@@ -17,6 +17,8 @@ try {
     $q->execute([$id]);
     $f = $q->fetch(PDO::FETCH_ASSOC);
     if (!$f) { echo json_encode(['ok' => false, 'msg' => '找不到附件']); exit(); }
+    require_once __DIR__ . '/../common/notice_doc_lib.php';
+    if (!in_array('all', $features, true) && ndoc_is_locked($db, (int)$f['live_event_id'])) { echo json_encode(['ok' => false, 'msg' => NDOC_LOCK_MSG]); exit(); }
     $abs = eg_notice_abs_path($f['file_path']);
     if ($abs && is_file($abs)) @unlink($abs);
     // 一併刪除角落標註檢視快取版（欄位不存在的舊資料自動略過）

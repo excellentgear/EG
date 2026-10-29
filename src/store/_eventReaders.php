@@ -13,7 +13,7 @@ if (!isset($_SESSION['id'])) {
     exit();
 }
 $sessUid = (int)$_SESSION['id'];
-$isAdmin = in_array('all', rbac_user_features($db, $sessUid), true); // 最高管理者（系統預設）
+$isAdmin = rbac_notice_admin(rbac_user_features($db, $sessUid)); // 最高管理者（系統預設）
 
 $event_id = isset($_GET['eventid']) ? (int)$_GET['eventid'] : 0;
 if ($event_id <= 0) {

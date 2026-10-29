@@ -223,7 +223,7 @@ function nc_perms(PDO $db, int $uid): array
 {
     require_once __DIR__ . '/rbac.php';
     $f = rbac_user_features($db, $uid);
-    $admin = rbac_has($f, 'all');
+    $admin = rbac_notice_admin($f);
     return [
         'isAdmin'     => $admin,
         'canPrint'    => $admin || rbac_has($f, 'notice_view'),

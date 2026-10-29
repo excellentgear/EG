@@ -10,7 +10,7 @@ if (!isset($_SESSION['id'])) {
     echo json_encode(['ok' => false, 'msg' => '尚未登入']);
     exit();
 }
-$isAdmin = in_array('all', rbac_user_features($db, (int)$_SESSION['id']), true); // 最高管理者（系統預設）
+$isAdmin = rbac_notice_admin(rbac_user_features($db, (int)$_SESSION['id'])); // 最高管理者（系統預設）
 if (!$isAdmin) {
     echo json_encode(['ok' => false, 'msg' => '僅系統管理員可執行']);
     exit();

@@ -27,7 +27,7 @@ require_once __DIR__ . '/../push/push_send.php';              // eg_push_event_r
 if (!isset($_SESSION['id'])) { echo json_encode(['ok' => false, 'msg' => '尚未登入']); exit(); }
 $uid      = (int)$_SESSION['id'];
 $features = rbac_user_features($db, $uid);
-$isAdmin  = rbac_has($features, 'all');
+$isAdmin  = rbac_notice_admin($features);
 $opName   = (string)($_SESSION['user_cname'] ?? $_SESSION['userName'] ?? ('user#' . $uid));
 $action   = $_POST['action'] ?? $_GET['action'] ?? 'check';
 
