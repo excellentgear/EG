@@ -535,6 +535,15 @@ try {
     $permission_code = null; // 出錯時一律視為無權限
 }
 
+// 1b. 角色模式（2026-10-29）：只有被指派「待加工排程V2」模組角色者才走功能碼；沒有角色的人維持上面算出的原權限不變。
+require_once __DIR__ . '/../../src/common/ps_v2_perm_lib.php';
+$ps2_role = null;   // null＝沿用原本權限；陣列＝本模組功能碼
+try { $ps2_role = ps2_role_features($pdo, $id); } catch (Throwable $e) { $ps2_role = null; }
+if ($ps2_role !== null) {
+    // 角色模式下是否能進頁面只看「開啟本頁」；'ROLE' 不含 A/C/U/D 字元，也不會觸發唯讀導向
+    $permission_code = in_array('psv_view', $ps2_role, true) ? 'ROLE' : null;
+}
+
 // 2. 判斷權限並導向
 if (is_null($permission_code)) {
     if ($is_ajax) {
@@ -651,6 +660,75 @@ try {
 if ($display_permission_code === 'C+R') {
     $can_manage_material = true;
 }
+
+// ── 功能碼對照表 $P（2026-10-29）──────────────────────────────────────────────
+//   沒有本模組角色的人：每一項＝「原本 A/C/R/U/D 推導出來的同一個條件」，行為與改版前逐項相同。
+//   有本模組角色的人：每一項＝角色功能碼（psv_*）。全站所有權限判斷都讀 $P，不再各處直接比 $has_X。
+$_legacy_pc_btn  = ($has_A || $is_prod_control);                 // 製程分類設定「按鈕」原條件
+$_legacy_pc_save = ($has_A || $display_permission_code === 'C+R+U'); // 製程分類設定「儲存」原條件
+$P = [
+    'psv_view'              => true,
+    'psv_ui_prodctrl'       => $is_prod_control,
+    'psv_ui_production'     => $is_production,
+    'psv_drag'              => $can_drag,
+    'psv_assign'            => ($has_U || $has_A || $has_C),
+    'psv_reorder'           => $can_reorder,
+    'psv_unassigned_order'  => $can_reorder,
+    'psv_preplan'           => $can_reorder,
+    'psv_split'             => ($has_A || $has_C || $has_U),
+    'psv_split_delete'      => ($has_A || $has_D),
+    'psv_report'            => $can_report,
+    'psv_report_delete'     => ($has_A || $has_D),
+    'psv_report_change_bom' => $can_change_partial_bom,
+    'psv_gear_info'         => ($can_report || $can_settings),
+    'psv_note_prodctrl'     => ($can_drag || $has_C),
+    'psv_note_lathe'        => $can_edit_pti01,
+    'psv_note_field'        => $can_edit_ps2,
+    'psv_material'          => $can_manage_material,
+    'psv_abnormal_report'   => $can_report,
+    'psv_abnormal_delete'   => ($has_A || $has_D),
+    'psv_abnormal_type'     => $can_settings,
+    'psv_machine_manage'    => $can_manage_machine,
+    'psv_machine_add'       => $can_add_machine,
+    'psv_machine_edit'      => $can_edit_machine,
+    'psv_machine_delete'    => $can_delete_machine,
+    'psv_settings'          => $can_settings,
+    'psv_dept_setting'      => $can_settings,
+    'psv_process_category'  => $_legacy_pc_btn,
+];
+$P_ui_openreport = $has_A;          // 排序視窗內雙擊開報工（原條件：只有 A）
+$P_ui_adminfields = $has_A;         // 報工視窗強制顯示車床備註／到料（原條件：只有 A）
+$P_pc_btn  = $_legacy_pc_btn;
+$P_pc_save = $_legacy_pc_save;
+$P_js_display_code = $display_permission_code;
+if ($ps2_role !== null) {
+    foreach ($P as $k => $_v) $P[$k] = in_array($k, $ps2_role, true);
+    // 以下舊變數全部由功能碼重新推導（舊的 A/C/U/D 在角色模式下不再有意義，一律關閉避免漏網）
+    $has_A = $has_C = $has_U = $has_D = false;
+    $can_drag = $P['psv_drag'];
+    $can_reorder = $P['psv_reorder'];
+    $can_report = $P['psv_report'];
+    $can_settings = $P['psv_settings'];
+    $can_edit_pti01 = $P['psv_note_lathe'];
+    $can_edit_ps2 = $P['psv_note_field'];
+    $can_manage_material = $P['psv_material'];
+    $can_change_partial_bom = $P['psv_report_change_bom'];
+    $can_manage_machine = $P['psv_machine_manage'];
+    $can_add_machine = ($P['psv_machine_manage'] && $P['psv_machine_add']);
+    $can_edit_machine = ($P['psv_machine_manage'] && $P['psv_machine_edit']);
+    $can_delete_machine = ($P['psv_machine_manage'] && $P['psv_machine_delete']);
+    $is_prod_control = $P['psv_ui_prodctrl'];
+    $is_production = $P['psv_ui_production'];
+    $P_ui_openreport = $P['psv_report'];
+    $P_ui_adminfields = $P['psv_note_lathe'];
+    $P_pc_btn = $P_pc_save = $P['psv_process_category'];
+    $display_permission_code = 'ROLE';
+    $P_js_display_code = $is_production ? 'R+U' : 'ROLE';   // 前端用來決定要不要顯示客戶欄
+    $permission_display_text = '角色：' . (implode('、', ps2_role_names($pdo, $id)) ?: '待加工排程V2');
+}
+// 只有全站管理員（系統角色 all）才看得到「角色權限設定」入口；可勾功能清單＝ps2_features()
+$ps2_is_admin = false;
+try { $ps2_is_admin = in_array('all', rf_resolve_features($pdo, $id, PS2_MODULE), true); } catch (Throwable $e) {}
 // --- 獲取齒輪顯示設定 (PHP Context) ---
 $gear_display_types = [];
 try {
@@ -833,7 +911,7 @@ function calculate_completion_time($hours_needed, $calendar_map)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_assignment_only') {
     header('Content-Type: application/json');
     try {
-        if (!$has_U && !$has_A && !$has_C) {
+        if (!$P['psv_assign']) {
             throw new Exception("無權限執行此操作");
         }
         $machine_id = $_POST['machine_id'];
@@ -931,7 +1009,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_daily_report') {
     header('Content-Type: application/json');
     try {
-        if (!$has_A && !$has_D) {
+        if (!$P['psv_report_delete']) {
             throw new Exception("無權限執行此操作 (需 A 或 D 權限)");
         }
         $report_id = $_POST['report_id'];
@@ -993,7 +1071,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'change_report_bom') {
     header('Content-Type: application/json');
     try {
-        if (!$has_A && !($has_U && $has_D)) {
+        if (!$P['psv_report_change_bom']) {
             throw new Exception("無權限執行此操作 (需 A 或 U+D 權限)");
         }
         $report_id    = intval($_POST['report_id'] ?? 0);
@@ -1028,7 +1106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_machine_abnormal') {
     header('Content-Type: application/json');
     try {
-        if (!$has_A && !$has_D) {
+        if (!$P['psv_abnormal_delete']) {
             throw new Exception("無權限執行此操作 (需 A 或 D 權限)");
         }
         $abnormal_id = $_POST['abnormal_id'];
@@ -1070,7 +1148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     header('Content-Type: application/json');
     try {
         // 權限檢查
-        if (!$has_A && $display_permission_code !== 'C+R+U') {
+        if (!$P_pc_save) {
             throw new Exception("無權限執行此操作");
         }
 
@@ -1567,7 +1645,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'manage_abnormal_type') {
     header('Content-Type: application/json');
     try {
-        if (!$can_settings) {
+        if (!$P['psv_abnormal_type']) {
             throw new Exception("無權限執行此操作 (需 A 權限)");
         }
 
@@ -1617,7 +1695,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'submit_machine_abnormal') {
     header('Content-Type: application/json');
     try {
-        if (!$can_report) {
+        if (!$P['psv_abnormal_report']) {
             throw new Exception("無權限執行此操作 (需 C, U 或 A 權限)");
         }
 
@@ -2143,7 +2221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_split_task') {
     header('Content-Type: application/json');
     try {
-        if (!$has_A && !$has_D) { // 需有 A 或 D 權限
+        if (!$P['psv_split_delete']) { // 需有 A 或 D 權限
             throw new Exception("無權限執行此操作");
         }
 
@@ -2174,7 +2252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && strpos($_POST['action'], 'ps_plan_') === 0) {
     header('Content-Type: application/json');
     try {
-        if (!$can_reorder) throw new Exception('無權限（需生管或管理者權限）');
+        if (!(($_POST['action'] ?? '') === 'ps_plan_save' ? $P['psv_unassigned_order'] : $P['psv_preplan'])) throw new Exception('無權限（需生管或管理者權限）');
         $act = $_POST['action'];
         $typeId = (int)($_POST['type_id'] ?? 0);
         if ($act === 'ps_plan_candidates') {
@@ -2212,7 +2290,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     header('Content-Type: application/json');
     try {
         // 權限檢查：C, U, A 皆可執行此動作 (視欄位而定，前端會控制顯示)
-        if (!$can_drag && !$has_C) { // can_drag 包含 A, C, U
+        if (!$P['psv_note_prodctrl']) { // can_drag 包含 A, C, U
             throw new Exception("無權限執行此操作");
         }
 
@@ -2253,7 +2331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_department_setting') {
     header('Content-Type: application/json');
     try {
-        if (!$can_settings) {
+        if (!$P['psv_dept_setting']) {
             throw new Exception("無權限執行此操作 (需 A 權限)");
         }
 
@@ -2290,7 +2368,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     header('Content-Type: application/json');
     try {
         // 權限檢查：C, U, A 皆可
-        if (!$can_report && !$can_settings) {
+        if (!$P['psv_gear_info']) {
             throw new Exception("無權限執行此操作");
         }
 
@@ -2458,7 +2536,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'split_task') {
     header('Content-Type: application/json');
     try {
-        if (!$has_A && !$has_C && !$has_U) { // 需有 A, C 或 U 權限
+        if (!$P['psv_split']) { // 需有 A, C 或 U 權限
             throw new Exception("無權限執行此操作 (需要新增或更新權限)");
         }
 
@@ -4025,14 +4103,17 @@ function get_state_badge($state)
                                         <a class="btn btn-link" href="process_report_query.php" target="_blank"><i class="fa fa-list-alt"></i> 報工紀錄查詢列印</a>
                                         <div class="v2-more-title">設定</div>
                                         <button class="btn btn-link" data-toggle="modal" data-target="#personalSettingModal"><i class="fa fa-eye"></i> 顯示設定</button>
-                                        <?php if ($has_A || $is_prod_control): ?>
+                                        <?php if ($P_pc_btn): ?>
                                         <button class="btn btn-link" id="btn-process-setting" onclick="openSharedModal('製程設定', '../popup/modal_process_setting.php')"><i class="fa fa-cogs"></i> 製程分類設定</button>
                                         <?php endif; ?>
-                                        <?php if ($can_settings): ?>
+                                        <?php if ($P['psv_dept_setting']): ?>
                                         <button class="btn btn-link" data-toggle="modal" data-target="#deptSettingModal"><i class="fa fa-cog"></i> 設定生產部門</button>
                                         <?php endif; ?>
                                         <?php if ($can_manage_machine): ?>
                                         <button class="btn btn-link" id="btnOpenMachineSettings"><i class="fa fa-cogs"></i> 設定機台</button>
+                                        <?php endif; ?>
+                                        <?php if ($ps2_is_admin): ?>
+                                        <button class="btn btn-link" id="btnPs2RoleSetting"><i class="fa fa-user-secret"></i> 角色權限設定</button>
                                         <?php endif; ?>
                                     </div>
                                 </div>
@@ -4130,12 +4211,12 @@ function get_state_badge($state)
                                                                 <div class="card-header-right card-badges">
                                                                     <span class="card-process-name"><?= htmlspecialchars($task['ProcessName'] ?? $task['process_no']) ?></span>
                                                                     <span class="card-state-badge"><span class="label label-info">待指派</span></span>
-                                                                    <?php if ($can_reorder || $has_U): ?>
+                                                                    <?php if ($P['psv_split']): ?>
                                                                         <button type="button" class="btn btn-xs btn-default" style="margin-left: 5px; padding: 0 4px;" onclick="event.stopPropagation(); splitTask('<?= $task['bom_ing_fid'] ?>')" title="拆分製程 (多機台加工)">
                                                                             <i class="fa fa-code-fork"></i>
                                                                         </button>
                                                                     <?php endif; ?>
-                                                                    <?php if (($has_A || $has_D) && strpos($task['ps'], '(拆分工單)') !== false): ?>
+                                                                    <?php if ($P['psv_split_delete'] && strpos($task['ps'], '(拆分工單)') !== false): ?>
                                                                         <button type="button" class="btn btn-xs btn-danger" style="margin-left: 5px; padding: 0 4px;" onclick="event.stopPropagation(); deleteSplitTask('<?= $task['bom_ing_fid'] ?>')" title="刪除拆分工單">
                                                                             <i class="fa fa-trash"></i>
                                                                         </button>
@@ -4394,12 +4475,12 @@ function get_state_badge($state)
                                                                                     <div class="card-header-right card-badges">
                                                                                         <span class="card-process-name"><?= htmlspecialchars($task['ProcessName'] ?? $task['process_no']) ?></span>
                                                                                         <span class="card-state-badge"><?= $state_badge ?></span>
-                                                                                        <?php if ($can_reorder || $has_U): ?>
+                                                                                        <?php if ($P['psv_split']): ?>
                                                                                             <button type="button" class="btn btn-xs btn-default" style="margin-left: 5px; padding: 0 4px;" onclick="event.stopPropagation(); splitTask('<?= $task['bom_ing_fid'] ?>')" title="拆分製程 (多機台加工)">
                                                                                                 <i class="fa fa-code-fork"></i>
                                                                                             </button>
                                                                                         <?php endif; ?>
-                                                                                        <?php if (($has_A || $has_D) && strpos($task['ps'], '(拆分工單)') !== false): ?>
+                                                                                        <?php if ($P['psv_split_delete'] && strpos($task['ps'], '(拆分工單)') !== false): ?>
                                                                                             <button type="button" class="btn btn-xs btn-danger" style="margin-left: 5px; padding: 0 4px;" onclick="event.stopPropagation(); deleteSplitTask('<?= $task['bom_ing_fid'] ?>')" title="刪除拆分工單">
                                                                                                 <i class="fa fa-trash"></i>
                                                                                             </button>
@@ -4874,7 +4955,7 @@ function get_state_badge($state)
                                                                 <option value="<?= $at['abnormal_type_id'] ?>"><?= htmlspecialchars($at['abnormal_name']) ?></option>
                                                             <?php endforeach; ?>
                                                         </select>
-                                                        <?php if ($can_settings): ?>
+                                                        <?php if ($P['psv_abnormal_type']): ?>
                                                             <span class="input-group-btn">
                                                                 <button class="btn btn-default" type="button" id="manageAbnormalTypeBtn" title="管理異常類型"><i class="fa fa-plus"></i></button>
                                                             </span>
@@ -5196,7 +5277,7 @@ function get_state_badge($state)
                                 <div class="sp-bar" style="padding:8px 15px;border-bottom:1px solid #e5e5e5;background:#fff;">
                                     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                                         <input type="text" id="sp-filter" class="form-control input-sm" placeholder="搜尋製令／客戶／料號" style="width:200px;">
-                                        <?php if ($can_reorder): ?><button type="button" class="btn btn-sm btn-warning" id="sp-preplan-btn" title="把還沒移轉到此製程大類的 BOM 先排進來（可報工）"><i class="fa fa-plus"></i> 預排</button><?php endif; ?>
+                                        <?php if ($P['psv_preplan']): ?><button type="button" class="btn btn-sm btn-warning" id="sp-preplan-btn" title="把還沒移轉到此製程大類的 BOM 先排進來（可報工）"><i class="fa fa-plus"></i> 預排</button><?php endif; ?>
                                         <span style="margin-left:auto;">整批排序：
                                             <select id="sp-sortby" class="input-sm" style="height:26px;">
                                                 <option value="">選擇…</option>
@@ -5414,7 +5495,7 @@ function get_state_badge($state)
 
                 // 權限設定
                 var canReorder = <?= json_encode($can_reorder) ?>;
-                var displayPermissionCode = '<?= $display_permission_code ?>';
+                var displayPermissionCode = '<?= $P_js_display_code ?>';
                 var userPerms = {
                     hasA: <?= $has_A ? 'true' : 'false' ?>,
                     hasD: <?= $has_D ? 'true' : 'false' ?>,
@@ -5430,7 +5511,12 @@ function get_state_badge($state)
                     canDeleteMachine: <?= $can_delete_machine ? 'true' : 'false' ?>,
                     isProdControl: <?= $is_prod_control ? 'true' : 'false' ?>,
                     isProduction: <?= $is_production ? 'true' : 'false' ?>,
-                    canChangePartialBom: <?= $can_change_partial_bom ? 'true' : 'false' ?>
+                    canChangePartialBom: <?= $can_change_partial_bom ? 'true' : 'false' ?>,
+                    canUnassignedOrder: <?= $P['psv_unassigned_order'] ? 'true' : 'false' ?>,
+                    canOpenReportDbl: <?= $P_ui_openreport ? 'true' : 'false' ?>,
+                    canAdminFields: <?= $P_ui_adminfields ? 'true' : 'false' ?>,
+                    canReportDelete: <?= $P['psv_report_delete'] ? 'true' : 'false' ?>,
+                    canAbnormalDelete: <?= $P['psv_abnormal_delete'] ? 'true' : 'false' ?>
                 };
 
                 // 全域 AJAX 處理：攔截 Session Timeout (針對 jQuery)
@@ -6001,7 +6087,7 @@ function get_state_badge($state)
 
                         // 生管排好的順序（plan_seq）＋手動急件＋預排名單：另存一份、實際有變動才留排序紀錄。
                         // 與上面 updateSchedule（機台上的 processing_sequence）分開，現場拖卡片不會動到這份。
-                        if ($targetList.hasClass('unassigned-list') && userPerms.canReorder) {
+                        if ($targetList.hasClass('unassigned-list') && userPerms.canUnassignedOrder) {
                             var planOrder = [], planUrg = {};
                             $modalList.find('li[data-id]').each(function() {
                                 var fid = $(this).attr('data-id'); planOrder.push(fid); planUrg[fid] = parseInt($(this).attr('data-purg')) || 0;
@@ -6196,7 +6282,7 @@ function get_state_badge($state)
                             var $li = $('<li class="list-group-item" data-id="' + item.id + '">' + html + '</li>');
 
                             // 雙擊開啟報工 (權限 A 或 C)
-                            if (userPerms.hasA || userPerms.hasC) {
+                            if (userPerms.canOpenReportDbl) {
                                 $li.on('dblclick', function() {
                                     // 關閉排序視窗 (可選)
                                     // $('#scheduleListModal').modal('hide');
@@ -6539,7 +6625,7 @@ function get_state_badge($state)
                         }
 
                         // 若為管理者 (A)，確保 pti01_ps 可見且可編輯
-                        if (userPerms.hasA) {
+                        if (userPerms.canAdminFields) {
                             $('#div_pti01_fields').show();
                             $('textarea[name="pti01_ps"]').prop('disabled', false);
                             $('input[name="material_arrived"]').prop('disabled', false);
@@ -6933,7 +7019,7 @@ function get_state_badge($state)
                                         }
 
                                         var deleteBtn = '';
-                                        if (userPerms.hasA || userPerms.hasD) {
+                                        if (userPerms.canReportDelete) {
                                             deleteBtn = '<button type="button" class="btn btn-xs btn-danger btn-delete-report" data-id="' + r.report_id + '" title="刪除紀錄"><i class="fa fa-trash"></i></button>';
                                         }
                                         var changeBomBtn = '';
@@ -8280,7 +8366,7 @@ function get_state_badge($state)
                                 `;
                                         }
 
-                                        if (userPerms.hasA || userPerms.hasD) {
+                                        if (userPerms.canAbnormalDelete) {
                                             actionBtns += ` <button type="button" class="btn btn-xs btn-danger btn-delete-abnormal" data-id="${c.abnormal_id}"><i class="fa fa-trash"></i></button>`;
                                         }
 
@@ -8300,7 +8386,7 @@ function get_state_badge($state)
                                 res.history.forEach(function(h) {
                                     var statusLabel = (h.handle_status === 'CLOSED') ? '<span class="label label-success">已結案</span>' : '<span class="label label-danger">未結案</span>';
                                     var delBtn = '';
-                                    if (userPerms.hasA || userPerms.hasD) {
+                                    if (userPerms.canAbnormalDelete) {
                                         delBtn = `<button type="button" class="btn btn-xs btn-danger btn-delete-abnormal" data-id="${h.abnormal_id}"><i class="fa fa-trash"></i></button>`;
                                     }
                                     histRows += `<tr>
@@ -9700,12 +9786,94 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                     <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
                 </div></div>
             </div>
+<?php if ($ps2_is_admin): ?>
+            <div class="modal fade" id="ps2RoleModal" tabindex="-1" role="dialog"><div class="modal-dialog" style="width:900px;max-width:96%;" role="document"><div class="modal-content">
+                <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-user-secret"></i> 待加工排程 V2.0 角色權限設定</h4></div>
+                <div class="modal-body" style="padding:0;">
+                    <div style="display:flex;min-height:420px;max-height:70vh;">
+                        <div style="width:230px;border-right:1px solid #ddd;overflow-y:auto;">
+                            <div id="ps2RoleList" class="list-group" style="margin:0;"></div>
+                            <div style="padding:8px;border-top:1px solid #eee;"><button type="button" class="btn btn-default btn-sm btn-block" id="ps2RoleNew"><i class="fa fa-plus"></i> 新增角色</button></div>
+                        </div>
+                        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+                            <div id="ps2RoleHead" style="padding:8px 14px;background:#f8f9fa;border-bottom:1px solid #ddd;font-weight:600;font-size:12px;color:#555;">← 請選擇角色</div>
+                            <div id="ps2RoleBody" style="flex:1;overflow-y:auto;padding:10px 14px;">
+                                <?php $_g = []; foreach (ps2_features() as $_f) $_g[$_f['group']][] = $_f;
+                                foreach ($_g as $_gn => $_items): ?>
+                                <div style="margin-bottom:12px;">
+                                    <div style="font-weight:600;color:#8a5a2b;margin-bottom:6px;font-size:12px;border-bottom:1px dashed #e0d5c5;padding-bottom:3px;"><i class="fa fa-folder-o"></i> <?= htmlspecialchars($_gn) ?></div>
+                                    <?php foreach ($_items as $_f): ?>
+                                    <label style="font-weight:normal;cursor:pointer;display:block;margin:0 0 4px;"><input type="checkbox" class="ps2-feat" value="<?= htmlspecialchars($_f['code']) ?>"> <?= htmlspecialchars($_f['label']) ?></label>
+                                    <?php endforeach; ?>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="padding:8px 14px;border-top:1px solid #ddd;background:#f8f9fa;">
+                                <small class="text-muted" style="float:left;line-height:28px;">人員指派請到「人員權限設定」頁的本模組角色區塊；沒被指派角色的人維持原本 A/C/R/U/D 權限。</small>
+                                <div style="text-align:right;"><button type="button" class="btn btn-default btn-sm" id="ps2AllOn">全選</button> <button type="button" class="btn btn-default btn-sm" id="ps2AllOff">取消全選</button> <button type="button" class="btn btn-primary btn-sm" id="ps2RoleSave"><i class="fa fa-save"></i> 儲存角色設定</button></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div></div></div>
+            <script>
+            (function () {
+                var API = '../../src/store/Roles_API.php', MOD = 'ps_v2', sel = 0;
+                function esc(t) { return $('<div>').text(t == null ? '' : t).html(); }
+                function loadRoles(keep) {
+                    $.get(API, { action: 'get_roles', module: MOD }, function (res) {
+                        var h = '';
+                        (res.data || []).forEach(function (r) {
+                            if (parseInt(r.is_system) === 1) return;
+                            h += '<a href="#" class="list-group-item ps2-role" data-id="' + r.role_id + '" data-name="' + esc(r.role_name) + '">' + esc(r.role_name) + '</a>';
+                        });
+                        $('#ps2RoleList').html(h || '<div class="list-group-item text-muted">尚無角色</div>');
+                        if (keep) $('#ps2RoleList .ps2-role[data-id="' + keep + '"]').trigger('click');
+                    }, 'json');
+                }
+                $('#btnPs2RoleSetting').on('click', function () { sel = 0; $('.ps2-feat').prop('checked', false); $('#ps2RoleHead').text('← 請選擇角色'); $('#ps2RoleModal').modal('show'); loadRoles(); });
+                $(document).on('click', '#ps2RoleList .ps2-role', function (e) {
+                    e.preventDefault();
+                    sel = parseInt($(this).attr('data-id'));
+                    $('#ps2RoleList .ps2-role').removeClass('active'); $(this).addClass('active');
+                    $('#ps2RoleHead').html('角色：' + esc($(this).attr('data-name')) + ' <a href="#" id="ps2Rename" style="margin-left:10px;font-weight:normal;">改名</a>');
+                    $('.ps2-feat').prop('checked', false);
+                    $.get(API, { action: 'get_role_features', role_id: sel }, function (res) {
+                        (res.data || []).forEach(function (c) { $('.ps2-feat[value="' + c + '"]').prop('checked', true); });
+                    }, 'json');
+                });
+                $(document).on('click', '#ps2Rename', function (e) {
+                    e.preventDefault();
+                    var nm = prompt('新的角色名稱', $('#ps2RoleList .ps2-role.active').attr('data-name') || '');
+                    if (!nm) return;
+                    $.post(API, { action: 'save_role', role_id: sel, role_name: nm }, function (res) { if (res.success) loadRoles(sel); else alert(res.message || '改名失敗'); }, 'json');
+                });
+                $('#ps2RoleNew').on('click', function () {
+                    var nm = prompt('新角色名稱'); if (!nm) return;
+                    $.post(API, { action: 'save_role', role_name: nm, module: MOD }, function (res) { if (res.success) loadRoles(res.role_id); else alert(res.message || '新增失敗'); }, 'json');
+                });
+                $('#ps2AllOn').on('click', function () { $('.ps2-feat').prop('checked', true); });
+                $('#ps2AllOff').on('click', function () { $('.ps2-feat').prop('checked', false); });
+                $('#ps2RoleSave').on('click', function () {
+                    if (!sel) { alert('請先選擇角色'); return; }
+                    var codes = []; $('.ps2-feat:checked').each(function () { codes.push($(this).val()); });
+                    if (codes.indexOf('psv_view') < 0 && codes.length && !confirm('沒有勾「開啟本頁」，持有此角色的人將進不了本頁，確定儲存？')) return;
+                    $.post(API, { action: 'save_role_features', role_id: sel, features: JSON.stringify(codes) }, function (res) {
+                        if (res.success) { if (window.showToast) showToast('角色設定已儲存'); else alert('角色設定已儲存'); } else alert(res.message || '儲存失敗');
+                    }, 'json');
+                });
+            })();
+            </script>
+            <?php endif; ?>
             <script>
             window.V2PERMS = {
                 canDrag: <?= $can_drag ? 'true' : 'false' ?>,
                 canReport: <?= $can_report ? 'true' : 'false' ?>,
                 hasA: <?= $has_A ? 'true' : 'false' ?>,
-                hasD: <?= $has_D ? 'true' : 'false' ?>
+                hasD: <?= $has_D ? 'true' : 'false' ?>,
+                canUsort: <?= ($ps2_role !== null ? $P['psv_unassigned_order'] : $can_drag) ? 'true' : 'false' ?>,
+                canSplit: <?= ($ps2_role !== null ? $P['psv_split'] : true) ? 'true' : 'false' ?>,
+                canSplitDelete: <?= $P['psv_split_delete'] ? 'true' : 'false' ?>
             };
             </script>
             <script>
@@ -9852,7 +10020,7 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         var uR = uniqueRemain(cur.ucards, cur.machines);
         // 未指派固定在左側整欄；機台放進右邊自己的格狀區，換列時不會跑到未指派下方
         bh += '<div class="v2-ucol"><div class="v2-col v2-col-u"><div class="v2-col-h"><div class="v2-col-t"><i class="fa fa-inbox"></i> 未指派' +
-            (P.canDrag ? '<button type="button" class="btn btn-xs btn-default v2-usort" title="調整未指派順序"><i class="fa fa-sort"></i></button>' : '') + '</div>' +
+            (P.canUsort ? '<button type="button" class="btn btn-xs btn-default v2-usort" title="調整未指派順序"><i class="fa fa-sort"></i></button>' : '') + '</div>' +
             '<div class="v2-load"><span><b>' + cur.ucards.length + '</b> 張</span><span title="未指派工單還要加工的總數量（各張工單數量減已報工良品數）">共 <b>' + num(uR) + '</b> pcs</span></div>' +
             '<div class="v2-col-tip">' + (P.canDrag ? '拖到右邊機台即指派；⋮ 可移到最前／最後' : '') + '</div></div>' +
             listHtml('unassigned-' + cur.typeId, cur.ucards, q, true) + '</div></div><div class="v2-mgrid">';
@@ -9929,8 +10097,8 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         if (!c.now) li += '<li><a href="#" class="v2-mv" data-m="top"><i class="fa fa-angle-double-up"></i> 移到最前</a></li>' +
             '<li><a href="#" class="v2-mv" data-m="up"><i class="fa fa-arrow-up"></i> 上移</a></li><li><a href="#" class="v2-mv" data-m="down"><i class="fa fa-arrow-down"></i> 下移</a></li>' +
             '<li><a href="#" class="v2-mv" data-m="bottom"><i class="fa fa-angle-double-down"></i> 移到最後</a></li><li class="divider"></li>';
-        li += '<li><a href="#" class="v2-split"><i class="fa fa-code-fork"></i> 拆分工單</a></li>';
-        if (c.split && (P.hasA || P.hasD)) li += '<li><a href="#" class="v2-delsplit"><i class="fa fa-trash"></i> 刪除拆分工單</a></li>';
+        if (P.canSplit) li += '<li><a href="#" class="v2-split"><i class="fa fa-code-fork"></i> 拆分工單</a></li>';
+        if (c.split && P.canSplitDelete) li += '<li><a href="#" class="v2-delsplit"><i class="fa fa-trash"></i> 刪除拆分工單</a></li>';
         if (!isU) li += '<li><a href="#" class="v2-unassign"><i class="fa fa-undo"></i> 退回未指派</a></li>';
         return '<span class="dropdown"><button type="button" class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown"><i class="fa fa-ellipsis-v"></i></button>' +
             '<ul class="dropdown-menu dropdown-menu-right">' + li + '</ul></span>';

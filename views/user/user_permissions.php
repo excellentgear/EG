@@ -427,6 +427,7 @@ $EG_ROLE_MODULES = [
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
     'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝製程排程',        'page'=>'packing_schedule.php'],
     'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
+    'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
     'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
 ];
 
@@ -2409,6 +2410,16 @@ $_quotDepts = array_keys($_deptSet);
             if (permsData.group) $.each(permsData.group, function(k, v) { applyScope('group', k, v); });
             if (permsData.page)  $.each(permsData.page,  function(k, v) { applyScope('page',  k, v); });
         }
+
+        // 同一個頁面可能在表單內出現兩次（例如掛在主項目底下、又掛在模組列底下），兩組同名核取方塊
+        // 一起送出時，取消其中一組另一組仍勾著就會被存回去。這裡讓同名同值的核取方塊連動。
+        $(document).on('change', '.permission-update-form input[type="checkbox"]', function () {
+            var self = this, nm = this.name, val = this.value, on = this.checked;
+            if (!nm) return;
+            $(this).closest('form').find('input[type="checkbox"]').filter(function () {
+                return this !== self && this.name === nm && this.value === val;
+            }).prop('checked', on);
+        });
 
         // 點「更新」才把這個人的資料帶進共用 modal（原本是每個人各印一份 modal＝19MB HTML）
         function openPermModal(uid) {

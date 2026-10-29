@@ -40,6 +40,7 @@ if (isset($_POST['updatePermissions']) && isset($_POST['userid'])) {
         if (isset($permissions_from_post['group']) && is_array($permissions_from_post['group'])) {
             foreach ($permissions_from_post['group'] as $module_code => $perms) {
                 if (is_array($perms) && !empty($perms)) {
+                    $perms = array_values(array_unique($perms));
                     usort($perms, function($a, $b) use ($sortOrder) {
                         return ($sortOrder[$a] ?? 99) - ($sortOrder[$b] ?? 99);
                     });
@@ -58,6 +59,7 @@ if (isset($_POST['updatePermissions']) && isset($_POST['userid'])) {
         if (isset($permissions_from_post['page']) && is_array($permissions_from_post['page'])) {
             foreach ($permissions_from_post['page'] as $page_id => $perms) {
                 if (is_array($perms) && !empty($perms)) {
+                    $perms = array_values(array_unique($perms));
                     usort($perms, function($a, $b) use ($sortOrder) {
                         return ($sortOrder[$a] ?? 99) - ($sortOrder[$b] ?? 99);
                     });
