@@ -1811,7 +1811,8 @@ $_quotDepts = array_keys($_deptSet);
                     foreach ($GLOBALS['_eg_rendered_role_modules'] ?? [] as $_m) $_renderedModules[$_m] = true;
                     foreach (array_keys($RS) as $_m) {
                         if (isset($_renderedModules[$_m])) continue;
-                        $_prefix = 'auto' . preg_replace('/[^a-z0-9]/', '', $_m);
+                        // 已登記在 $EG_ROLE_MODULES 的模組沿用登記的前綴，快速導覽連結（用同一個前綴）才對得上區塊 id
+                        $_prefix = ($EG_ROLE_MODULES[$_m]['prefix'] ?? null) ?: ('auto' . preg_replace('/[^a-z0-9]/', '', $_m));
                         eg_render_role_section($_prefix, $_m, $_m, 'fa-cube', '#8A5A2B',
                             '此模組尚未在本頁設定專屬的標題與說明，內容由系統依 <code>roles.module = ' . htmlspecialchars($_m) . '</code> 自動列出。'
                             . '角色與功能定義請至該模組頁面的「權限設定 / 角色設定」。',
@@ -2640,6 +2641,14 @@ $_quotDepts = array_keys($_deptSet);
                     have[id] = 1;
                 });
             })();
+
+            // 快速導覽：目標區塊不存在的連結（該模組還沒建立任何角色＝本頁沒有它的區塊）直接拿掉，免得點了沒反應
+            $('#qnpList .quick-nav-link').each(function() {
+                if (!document.getElementById($(this).data('target'))) $(this).remove();
+            });
+            $('#qnpList .qnp-group').each(function() {
+                if (!$(this).nextUntil('.qnp-group').filter('.quick-nav-link').length) $(this).remove();
+            });
 
             // 快速導覽面板：打字即時篩選（區塊有 60 幾個，用眼睛找不如直接打關鍵字）
             $('#qnpSearch').on('input', function() {
