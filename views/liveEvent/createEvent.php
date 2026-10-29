@@ -2443,24 +2443,30 @@ if (isset($_POST['btn_go_events'])) {
 
 
             // 翻譯版本（越南文）：已簽核／已發布的公告也能補；權限由後端 _eventTranslate.php 判定
-            var TR = { eid: 0 };
+            var TR = { eid: 0, ed: null };
             function trClose() { $('#egTrMask').hide(); }
             $('#eg-list-tbody').on('click', '.eg-row-tr', function() {
                 TR.eid = $(this).data('eid');
-                $('#egTrMsg').text('載入中…'); $('#egTrTitle,#egTrContent').val('');
+                $('#egTrMsg').css('color', '#8a6d3b').text('載入中…'); $('#egTrTitle').val(''); $('#egTrOrigBody').empty();
                 $('#egTrMask').css('display', 'flex');
+                if (!TR.ed && window.EGRichText) {
+                    TR.ed = EGRichText.attach('#egTrEditor', { profile: 'doc', pageSize: 'A4', orientation: 'portrait', height: 520,
+                        assetUrl: function (id) { return '../../src/store/NoticeDoc_API.php?action=asset&id=' + id; } });
+                }
                 $.get('../../src/store/_eventTranslate.php', { action: 'get', eventid: TR.eid, lang: 'vi' }, function(res) {
                     if (!res || !res.ok) { $('#egTrMsg').text(res && res.msg ? res.msg : '載入失敗'); return; }
                     $('#egTrMsg').text('');
-                    $('#egTrOrigTitle').text(res.orig_title || ''); $('#egTrOrigContent').text(res.orig_content || '');
-                    $('#egTrTitle').val(res.title); $('#egTrContent').val(res.content);
+                    var origHtml = res.orig_html || ('<p>' + $('<div>').text(res.orig_content || '').html().replace(/\r?\n/g, '</p><p>') + '</p>');
+                    $('#egTrOrigTitle').text(res.orig_title || ''); $('#egTrOrigBody').html(origHtml);
+                    $('#egTrTitle').val(res.title);
+                    if (TR.ed) TR.ed.set(res.html || origHtml);   // 尚無譯文時帶入原文格式，直接改字
                 }, 'json').fail(function() { $('#egTrMsg').text('連線失敗'); });
             });
             $('#egTrCancel').on('click', trClose);
             $('#egTrSave').on('click', function() {
                 var $b = $(this).prop('disabled', true);
                 $.post('../../src/store/_eventTranslate.php', { action: 'save', eventid: TR.eid, lang: 'vi', csrf: '<?= $ND_CSRF ?>',
-                    title: $('#egTrTitle').val(), content: $('#egTrContent').val() }, function(res) {
+                    title: $('#egTrTitle').val(), content_html: TR.ed ? TR.ed.get() : '' }, function(res) {
                     $b.prop('disabled', false);
                     if (!res || !res.ok) { $('#egTrMsg').css('color', '#c0392b').text(res && res.msg ? res.msg : '儲存失敗'); return; }
                     trClose(); alert(res.msg);
@@ -3599,20 +3605,26 @@ if (isset($_POST['btn_go_events'])) {
     })();
     </script>
 
-    <!-- 翻譯版本（越南文）跳窗 -->
+    <!-- 翻譯版本（越南文）跳窗：左原文、右譯文（保留原文表格格式，直接在表格內改字） -->
     <div id="egTrMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
-        <div style="background:#fff;width:760px;max-width:96vw;max-height:92vh;overflow:auto;border-radius:8px;padding:18px 20px;">
-            <h4 style="margin:0 0 6px;"><i class="fa fa-language"></i> 越南文翻譯版本 (Tiếng Việt)</h4>
-            <div style="font-size:12px;color:#8a6d3b;margin-bottom:10px;">原文不會被更動；已簽核的公告也可補翻譯，儲存後對象在檢視時可切換「中文／Tiếng Việt」。標題與內容都清空再儲存＝刪除翻譯。</div>
-            <div style="background:#faf5ec;border:1px solid #ecdcc0;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:13px;">
-                <b>原文標題：</b><span id="egTrOrigTitle"></span>
-                <div id="egTrOrigContent" style="white-space:pre-wrap;max-height:140px;overflow:auto;margin-top:6px;color:#555;"></div>
+        <div style="background:#fff;width:1500px;max-width:98vw;height:94vh;display:flex;flex-direction:column;border-radius:8px;padding:14px 18px;">
+            <h4 style="margin:0 0 4px;"><i class="fa fa-language"></i> 越南文翻譯版本 (Tiếng Việt)</h4>
+            <div style="font-size:12px;color:#8a6d3b;margin-bottom:8px;">左：原文（不會被更動）／右：譯文，已帶入原文的表格與格式，直接在右邊把文字改成越南文即可。已簽核的公告也可補；標題與內容都清空再儲存＝刪除翻譯。</div>
+            <div style="flex:1;min-height:0;display:flex;gap:12px;">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+                    <div style="font-weight:600;margin-bottom:4px;">原文標題</div>
+                    <div id="egTrOrigTitle" style="background:#faf5ec;border:1px solid #ecdcc0;border-radius:4px;padding:7px 10px;margin-bottom:8px;"></div>
+                    <div style="font-weight:600;margin-bottom:4px;">原文內容</div>
+                    <div id="egTrOrigBody" style="flex:1;overflow:auto;background:#faf5ec;border:1px solid #ecdcc0;border-radius:4px;padding:10px;white-space:normal;"></div>
+                </div>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+                    <div style="font-weight:600;margin-bottom:4px;">譯文標題 (Tiêu đề)</div>
+                    <input type="text" id="egTrTitle" class="form-control" maxlength="255" style="margin-bottom:8px;">
+                    <div style="font-weight:600;margin-bottom:4px;">譯文內容 (Nội dung)</div>
+                    <div style="flex:1;overflow:auto;"><div id="egTrEditor"></div></div>
+                </div>
             </div>
-            <label style="font-weight:600;">標題 (Tiêu đề)</label>
-            <input type="text" id="egTrTitle" class="form-control" maxlength="255" style="margin-bottom:8px;">
-            <label style="font-weight:600;">內容 (Nội dung)</label>
-            <textarea id="egTrContent" class="form-control" rows="9"></textarea>
-            <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
                 <span id="egTrMsg" style="flex:1;font-size:12px;color:#8a6d3b;"></span>
                 <button type="button" id="egTrCancel" class="eg-tool-btn">取消</button>
                 <button type="button" id="egTrSave" class="eg-tool-btn" style="background:#e08a1e;color:#fff;"><i class="fa fa-save"></i> 儲存翻譯</button>

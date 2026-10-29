@@ -242,7 +242,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
 
             // 內容
             var viT = e.i18n && e.i18n.vi;
-            if (viT) h += '<div class="d-sec"><h3><i class="fa fa-language"></i> Tiếng Việt</h3><div class="d-content"><b>' + esc(viT.title) + '</b>\n' + esc(viT.content) + '</div></div>';
+            if (viT) h += '<div class="d-sec"><h3><i class="fa fa-language"></i> Tiếng Việt</h3><div class="d-content"><b>' + esc(viT.title) + '</b>' + (viT.content_html ? '<div style="white-space:normal;overflow-x:auto;">' + viT.content_html + '</div>' : '\n' + esc(viT.content)) + '</div></div>';
             h += '<div class="d-sec"><h3><i class="fa fa-file-text-o"></i> 內容</h3><div class="d-content">' + esc(e.content) + '</div></div>';
 
             // 附件：檢視一律用「角落標註快取版」(t=p，標籤與備注已印在檔上；無快取版時後端自動退回原檔)

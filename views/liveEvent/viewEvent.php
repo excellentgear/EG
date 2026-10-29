@@ -149,10 +149,10 @@ $h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
                 <?php if (!empty($ev['enddate'])) : ?><span><b>結束</b>　<?= $h($ev['enddate']) ?></span><?php endif; ?>
                 <?php if (!empty($ev['reply_deadline'])) : ?><span><b>回覆/回簽期限</b>　<?= $h($ev['reply_deadline']) ?></span><?php endif; ?>
             </div>
-            <?php require_once '../../src/common/notice_i18n_lib.php'; $viTr = ni_get_all($db, $eventId)['vi'] ?? null; ?>
+            <?php require_once '../../src/common/notice_i18n_lib.php'; require_once '../../src/common/notice_doc_lib.php'; $viTr = ni_get_all($db, $eventId)['vi'] ?? null; ?>
             <?php if ($viTr) : ?>
                 <div style="margin:6px 0;"><button type="button" class="ve-btn" id="veLangZh">中文</button> <button type="button" class="ve-btn" id="veLangVi">Tiếng Việt</button></div>
-                <div id="veViBox" style="display:none;"><div class="ve-title"><?= $h($viTr['title']) ?></div><div class="ve-content"><?= $h($viTr['content']) ?></div></div>
+                <div id="veViBox" style="display:none;"><div class="ve-title"><?= $h($viTr['title']) ?></div><?php if ($viTr['content_html'] !== '') : ?><div class="ve-content ve-rich" style="white-space:normal;"><?= ndoc_hydrate($viTr['content_html']) ?></div><?php else : ?><div class="ve-content"><?= $h($viTr['content']) ?></div><?php endif; ?></div>
                 <script>document.addEventListener('DOMContentLoaded',function(){var o=document.getElementById('veOrigBox'),v=document.getElementById('veViBox');
                 document.getElementById('veLangVi').onclick=function(){o.style.display='none';v.style.display='block';};
                 document.getElementById('veLangZh').onclick=function(){v.style.display='none';o.style.display='block';};});</script>

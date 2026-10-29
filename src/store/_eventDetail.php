@@ -127,7 +127,7 @@ try {
                 try { require_once __DIR__ . '/../common/notice_doc_lib.php'; return ndoc_hydrate($h); }
                 catch (Throwable $e) { return ''; }
             })(),
-            'i18n' => (function () use ($db, $eid) { require_once __DIR__ . '/../common/notice_i18n_lib.php'; return (object)ni_get_all($db, $eid); })(),
+            'i18n' => (function () use ($db, $eid) { require_once __DIR__ . '/../common/notice_i18n_lib.php'; require_once __DIR__ . '/../common/notice_doc_lib.php'; $a = ni_get_all($db, $eid); foreach ($a as $k => $v) $a[$k]['content_html'] = $v['content_html'] !== '' ? ndoc_hydrate($v['content_html']) : ''; return (object)$a; })(),
             'eventdate' => $event['eventdate'], 'enddate' => $event['enddate'], 'reply_deadline' => $event['reply_deadline'],
             'ref_type' => $event['ref_type'] ?? '', 'ref_id' => isset($event['ref_id']) ? (int)$event['ref_id'] : 0,
         ],

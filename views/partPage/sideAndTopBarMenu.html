@@ -844,7 +844,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             // 翻譯版本（越南文）：有設定才顯示語言切換；原文不動
             var nmVi = e.i18n && e.i18n.vi;
             if (nmVi && !e.paper) {
-                var viBody = '<div class="eg-nm-ctext">' + nmEsc(nmVi.content).replace(/\n/g, '<br>') + '</div>';
+                var viBody = nmVi.content_html ? '<div class="eg-nm-ctext eg-nm-rich">' + nmVi.content_html + '</div>' : '<div class="eg-nm-ctext">' + nmEsc(nmVi.content).replace(/\n/g, '<br>') + '</div>';
                 var origBody = bodyHtml, origTitle = e.title;
                 bodyHtml = '<div style="margin-bottom:8px;"><button type="button" class="nm-lang" data-l="zh" style="padding:2px 10px;border:1px solid #e08a1e;background:#e08a1e;color:#fff;border-radius:4px;">中文</button> '
                          + '<button type="button" class="nm-lang" data-l="vi" style="padding:2px 10px;border:1px solid #e08a1e;background:#fff;color:#a15c00;border-radius:4px;">Tiếng Việt</button></div><div id="nm-lang-body">' + origBody + '</div>';

@@ -10,12 +10,17 @@ function ni_ensure_schema(PDO $db): void
     if ($done) return;
     $done = true;
     $has = $db->query("SHOW TABLES LIKE 'live_event_i18n'")->fetchColumn();
-    if ($has) return;
+    if ($has) {
+        if (!$db->query("SHOW COLUMNS FROM live_event_i18n LIKE 'content_html'")->fetchColumn())
+            $db->exec("ALTER TABLE live_event_i18n ADD COLUMN content_html MEDIUMTEXT NULL AFTER content");
+        return;
+    }
     $db->exec("CREATE TABLE live_event_i18n (
         live_event_id INT NOT NULL,
         lang VARCHAR(5) NOT NULL,
         title VARCHAR(255) NOT NULL DEFAULT '',
         content MEDIUMTEXT NULL,
+        content_html MEDIUMTEXT NULL,
         updated_by INT NULL,
         updated_at DATETIME NULL,
         PRIMARY KEY (live_event_id, lang)
@@ -43,12 +48,12 @@ function ni_get_all(PDO $db, int $eventId): array
 {
     try {
         ni_ensure_schema($db);
-        $st = $db->prepare("SELECT lang, title, content FROM live_event_i18n WHERE live_event_id = ?");
+        $st = $db->prepare("SELECT lang, title, content, content_html FROM live_event_i18n WHERE live_event_id = ?");
         $st->execute([$eventId]);
         $out = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             if (trim($r['title']) === '' && trim((string)$r['content']) === '') continue;
-            $out[$r['lang']] = ['title' => $r['title'], 'content' => (string)$r['content']];
+            $out[$r['lang']] = ['title' => $r['title'], 'content' => (string)$r['content'], 'content_html' => (string)($r['content_html'] ?? '')];
         }
         return $out;
     } catch (Throwable $e) { return []; }
