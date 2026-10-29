@@ -632,6 +632,20 @@ if (!function_exists('eg_render_role_section')) {
                                 <button class="btn btn-default btn-sm" onclick="roleClearSearch('<?= $prefix ?>')"><i class="fa fa-times"></i> 清除</button>
                                 <span id="<?= $prefix ?>-filter-count" class="text-muted" style="line-height:30px;font-size:12px;"></span>
                             </div>
+                            <?php if ($canEdit): ?>
+                            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;background:#FFF7EC;border:1px solid #E4D3BC;border-radius:4px;padding:6px 10px;">
+                                <span style="font-size:12px;color:#8a5a2b;font-weight:600;"><i class="fa fa-users"></i> 批次設定（套用到上方「目前篩選出來」的所有人）：</span>
+                                <select id="<?= $prefix ?>-bulk-role" class="form-control input-sm" style="width:230px;">
+                                    <option value="">— 選擇角色 —</option>
+                                    <?php foreach ($roles as $_br): if (!empty($_br['is_system'])) continue; ?>
+                                    <option value="<?= (int)$_br['role_id'] ?>"><?= htmlspecialchars($_br['role_name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="roleBulk('<?= $prefix ?>','<?= htmlspecialchars($module, ENT_QUOTES) ?>','assign')"><i class="fa fa-plus"></i> 全部指派</button>
+                                <button type="button" class="btn btn-default btn-sm" onclick="roleBulk('<?= $prefix ?>','<?= htmlspecialchars($module, ENT_QUOTES) ?>','remove')"><i class="fa fa-minus"></i> 全部移除此角色</button>
+                                <span class="text-muted" style="font-size:12px;">先用上方「部門」或搜尋框篩出人員；全站系統角色（管理員）不開放批次指派。</span>
+                            </div>
+                            <?php endif; ?>
                             <table class="table table-striped table-bordered table-condensed" id="<?= $prefix ?>-role-table" style="font-size:13px;">
                                 <thead style="background:#f8f9fa;">
                                     <tr>
@@ -1813,7 +1827,7 @@ $_quotDepts = array_keys($_deptSet);
                         if (isset($_renderedModules[$_m])) continue;
                         // 已登記在 $EG_ROLE_MODULES 的模組沿用登記的前綴，快速導覽連結（用同一個前綴）才對得上區塊 id
                         $_prefix = ($EG_ROLE_MODULES[$_m]['prefix'] ?? null) ?: ('auto' . preg_replace('/[^a-z0-9]/', '', $_m));
-                        eg_render_role_section($_prefix, $_m, $_m, 'fa-cube', '#8A5A2B',
+                        eg_render_role_section($_prefix, $_m, ($EG_ROLE_MODULES[$_m]['label'] ?? $_m), 'fa-cube', '#8A5A2B',
                             '此模組尚未在本頁設定專屬的標題與說明，內容由系統依 <code>roles.module = ' . htmlspecialchars($_m) . '</code> 自動列出。'
                             . '角色與功能定義請至該模組頁面的「權限設定 / 角色設定」。',
                             rs_of($_m), rsu_of($_m), $admins, $_quotDepts, $canEdit);
@@ -3088,6 +3102,42 @@ $_quotDepts = array_keys($_deptSet);
             })
             .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
             .always(function() { $btn.prop('disabled', false).html('<i class="fa fa-plus"></i> 指派'); });
+        }
+
+        // 批次指派／移除：對「目前篩選出來（可見）」的每一位逐一呼叫既有的單人 API（規則與單人指派完全相同）
+        function roleBulk(p, module, mode) {
+            egBuildRoleTable(p);
+            var roleId = $('#' + p + '-bulk-role').val();
+            if (!roleId) { alert('請先選擇要批次設定的角色'); return; }
+            var roleName = $('#' + p + '-bulk-role option:selected').text();
+            var $rows = $('#' + p + '-role-tbody tr:visible');
+            var targets = [];
+            $rows.each(function() {
+                var $tags = $(this).find('td[id^="' + p + '-tags-"]');
+                var uid = parseInt(($tags.attr('id') || '').replace(p + '-tags-', ''));
+                if (!uid) return;
+                var has = false;
+                $tags.find('span.label').each(function() { if ($(this).text().indexOf(roleName) === 0) has = true; });
+                if (mode === 'assign' ? !has : has) targets.push({ id: uid, name: $.trim($(this).find('td').first().text()) });
+            });
+            var verb = mode === 'assign' ? '指派' : '移除';
+            if (!targets.length) { alert('目前篩選出來的人員中，沒有需要' + verb + '的對象（' + (mode === 'assign' ? '全部都已有此角色' : '沒有人有此角色') + '）'); return; }
+            var names = targets.slice(0, 8).map(function(t) { return t.name; }).join('、') + (targets.length > 8 ? ' …等' : '');
+            if (!confirm('確定對以下 ' + targets.length + ' 位' + verb + '角色「' + roleName + '」？\n\n' + names)) return;
+            var done = 0, fail = [];
+            (function next(i) {
+                if (i >= targets.length) {
+                    alert(verb + '完成：成功 ' + done + ' 位' + (fail.length ? '，失敗 ' + fail.length + ' 位（' + fail.join('、') + '）' : ''));
+                    return;
+                }
+                var t = targets[i];
+                $.post(ROLES_API, mode === 'assign'
+                    ? { action: 'assign_user_role', user_id: t.id, role_id: roleId, confirm_system: 0 }
+                    : { action: 'remove_user_role', user_id: t.id, role_id: roleId })
+                .done(function(res) { if (res && res.success) { done++; roleReloadRow(p, module, t.id); } else fail.push(t.name); })
+                .fail(function() { fail.push(t.name); })
+                .always(function() { next(i + 1); });
+            })(0);
         }
 
         function roleRemove(p, module, userId, roleId, isAdm) {
