@@ -149,7 +149,7 @@ function eg_org_user(PDO $db, string $key): ?array {
     try {
         $st = $db->prepare("SELECT u.id, u.user_cname, u.user_uname, u.state
                             FROM org_role_binding b JOIN user u ON u.id=b.user_id
-                            WHERE b.role_key=? AND COALESCE(u.state,1) NOT IN (0,90)");
+                            WHERE b.role_key=? AND COALESCE(u.state,1) NOT IN (0,90,99)");
         $st->execute([$key]);
         return $st->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Throwable $e) { return null; }
@@ -174,7 +174,7 @@ function eg_org_dept_manager(PDO $db, $dept): ?array {
                             JOIN user u ON u.id=m.user_id
                             LEFT JOIN position p ON p.id=m.position_id
                             LEFT JOIN position_level pl ON pl.position_id=m.position_id
-                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90,99)
                               AND pl.level IS NOT NULL
                             ORDER BY pl.level ASC, (primary_uid = u.id) DESC, u.id
                             LIMIT 1");
@@ -207,7 +207,7 @@ function eg_org_dept_managers(PDO $db, $dept): array {
                             JOIN user u ON u.id=m.user_id
                             LEFT JOIN position p ON p.id=m.position_id
                             JOIN position_level pl ON pl.position_id=m.position_id AND pl.level IS NOT NULL
-                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90,99)
                             GROUP BY u.id, u.user_cname
                             ORDER BY level ASC, pos_sort ASC, u.id");
         $st->execute($ids);
@@ -225,6 +225,8 @@ function eg_org_save(PDO $db, string $key, ?int $deptId, ?int $userId, string $b
     $roles = EG_ORG_ROLES;
     if (!isset($roles[$key])) return;
     $type = $roles[$key]['type'];
+    // 全站超級管理員（id=1，IT 用帳號）不收任何簽核／通知，禁止被綁成核准人
+    if ($userId === 1) throw new RuntimeException('超級管理員（id=1）為 IT 專用帳號，不可被指定為簽核／核准人員');
     if ($type === 'dept') $userId = null;
     elseif ($type === 'user') $deptId = null;
     elseif ($type === 'dept_or_user' && $deptId) $userId = null; // 兩者都填時部門優先，人員視為未設定
