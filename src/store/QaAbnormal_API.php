@@ -1505,7 +1505,9 @@ case 'order_delete': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
-    $log($id, 'delete', $o['abnormal_order_no'], '已刪除', $reason);
+    $attN = 0;
+    try { $attN = qab_att_purge($db, $id); } catch (Throwable $e) { error_log('qab_att_purge: ' . $e->getMessage()); }
+    $log($id, 'delete', $o['abnormal_order_no'], '已刪除' . ($attN ? "（附件 {$attN} 個一併刪除）" : ''), $reason);
     jout(true, ['deleted' => 1]);
 }
 

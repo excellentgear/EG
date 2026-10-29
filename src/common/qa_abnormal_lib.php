@@ -4050,6 +4050,22 @@ function qab_att_root(PDO $db): string
     return eg_attach_dir($db, 'qab_attach_dir', '品質異常處理單');
 }
 /** 附件實體路徑：絕對路徑（舊資料）原樣用；相對路徑接在統一根目錄後面。擋路徑跳脫。 */
+/** 刪除一張異常單的全部附件（實體檔＋資料列）；回傳刪掉幾個。刪單時呼叫，附件不留孤兒。 */
+function qab_att_purge(PDO $db, int $orderId): int
+{
+    $st = $db->prepare("SELECT id, file_path, preview_path FROM qa_abnormal_attachments WHERE abnormal_order_id=?");
+    $st->execute([$orderId]);
+    $n = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
+        foreach (['file_path', 'preview_path'] as $k) {
+            if (!empty($a[$k])) { $abs = qab_att_abs($db, (string)$a[$k]); if (is_file($abs)) @unlink($abs); }
+        }
+        $n++;
+    }
+    $db->prepare("DELETE FROM qa_abnormal_attachments WHERE abnormal_order_id=?")->execute([$orderId]);
+    return $n;
+}
+
 function qab_att_abs(PDO $db, string $path): string
 {
     if (preg_match('#^([A-Za-z]:[\\/]|\\\\)#', $path)) return $path;
