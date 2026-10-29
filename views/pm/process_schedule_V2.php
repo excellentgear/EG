@@ -2,6 +2,7 @@
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
 require_once __DIR__ . '/../../src/common/gear_spec_lib.php';   // 模數要印 M 還是 DP/CP＝eg_gear_module_text()，唯一實作
+require_once __DIR__ . '/../../src/common/ps_plan_lib.php';     // 生管預排／排序紀錄／是否依序加工（唯一實作）
 require_once __DIR__ . '/../../src/common/gear_save_lib.php';   // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 // 檢查是否已登入 (處理 Session Timeout)
@@ -119,6 +120,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // =================================================================================
 // 後端邏輯：獲取全廠看板資料 (Dashboard Data)
 // =================================================================================
+/**
+ * 「補加工」已報工、尚未完工的製程 fid 清單（與 process_schedule_NOW.php 同一份邏輯）。
+ * 看板／排程清單原本讀 vw_bom_ing，該檢視只留「每張製令目前這一批」的製程；
+ * 生管還沒移轉到的關卡就算已經報工並掛上機台也不會出現。這份清單供查詢「額外補進」這些製程。
+ */
+if (!function_exists('ps_partial_ing_fids')) {
+function ps_partial_ing_fids(PDO $pdo) {
+    try {
+        // 兩段分開查再 UNION：把「補加工報工」與「拆分複本」寫成同一個 OR 條件時，MySQL 會放棄索引，
+        // 整頁載入要多花 11 秒以上（2026-10-28 實測 11.5s → 拆開後 30ms）
+        $common = "o.processing_state = 'ing'
+              AND (b.processing_state <> 1 OR b.processing_state IS NULL)
+              AND b.closed_at IS NULL  -- 已結案（有結案日期）的 BOM 一律不補進來
+              AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = o.bom_ing_fid AND r.is_finished = 1)";
+        return array_map('intval', $pdo->query("
+            SELECT o.bom_ing_fid FROM bom_ing o LEFT JOIN bom b ON b.bom = o.bom
+            WHERE $common
+              AND EXISTS (SELECT 1 FROM pm_process_daily_report p WHERE p.bom_ing_fid = o.bom_ing_fid AND p.report_source = 'PARTIAL')
+            UNION
+            SELECT o.bom_ing_fid FROM bom_ing o LEFT JOIN bom b ON b.bom = o.bom
+            WHERE $common
+              AND o.is_schedule_split = 1  -- 拆分出來的複本沒有報工紀錄，但原製程若是尚未移轉的關卡，複本也不在 vw_bom_ing
+        ")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {
+        error_log('[ps_partial_ing_fids] ' . $e->getMessage());
+        return [];
+    }
+}
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_dashboard_data') {
     header('Content-Type: application/json');
     try {
@@ -135,6 +166,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ORDER BY m.position, m.machine_type_id, m.machine_id ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
         
+        // 與前端分頁共用同一份「顯示設定」(PROCESS_SCHEDULE/visible_tabs)：沒勾選顯示的製程大類，
+        // 全廠看板也不顯示其機台與未指派清單（設定為空＝全部顯示，與前端分頁邏輯一致）
+        $dash_visible_types = null;
+        try {
+            $vt_json = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group = 'PROCESS_SCHEDULE' AND param_key = 'visible_tabs'")->fetchColumn();
+            $vt = $vt_json ? json_decode($vt_json, true) : null;
+            if (is_array($vt) && !empty($vt)) $dash_visible_types = array_flip(array_map('strval', $vt));
+        } catch (Throwable $e) {}
+        if ($dash_visible_types !== null) {
+            $machines = array_values(array_filter($machines, function ($m) use ($dash_visible_types) {
+                return isset($dash_visible_types[strval($m['machine_type_id'])]);
+            }));
+        }
+
         $machines_map = [];
         foreach ($machines as $m) {
             $machines_map[$m['machine_id']] = $m;
@@ -165,7 +210,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ORDER BY bi.machine_id ASC, CASE WHEN origin_bi.processing_sequence IS NULL OR origin_bi.processing_sequence = 0 THEN 999999 ELSE origin_bi.processing_sequence END ASC
         ";
         $all_tasks = $pdo->query($sql_tasks)->fetchAll(PDO::FETCH_ASSOC);
-        
+
+        // 補加工已報工未完工、但不在 vw_bom_ing 的製程：額外補進（以 fid 去重，不影響原結果）
+        try {
+            $have = array_flip(array_map('intval', array_column($all_tasks, 'bom_ing_fid')));
+            $extra = array_values(array_filter(ps_partial_ing_fids($pdo), function ($f) use ($have) { return !isset($have[$f]); }));
+            $cut = strpos($sql_tasks, "WHERE bi.processing_state = 'ing'");
+            if ($extra && $cut !== false) {
+                $sql_extra = str_replace('FROM vw_bom_ing bi',
+                    'FROM (SELECT o.*, pn0.ProcessName, pn0.process_type_id FROM bom_ing o LEFT JOIN process_no pn0 ON o.process_no = pn0.ProcessNo WHERE o.bom_ing_fid IN (' . implode(',', $extra) . ')) bi',
+                    substr($sql_tasks, 0, $cut));
+                $all_tasks = array_merge($all_tasks, $pdo->query($sql_extra)->fetchAll(PDO::FETCH_ASSOC));
+            }
+        } catch (Throwable $e) { error_log('[dashboard partial extra] ' . $e->getMessage()); }
+
         // Optimization: Fetch stats in batch
         $fids = array_column($all_tasks, 'bom_ing_fid');
         $task_stats = [];
@@ -263,6 +321,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $machine_types = $pdo->query("SELECT process_type_id as machine_type_id, process_type as machine_type FROM process_type")->fetchAll(PDO::FETCH_KEY_PAIR);
         
         foreach ($waiting_tasks_by_type as $tid => $tasks) {
+            if ($dash_visible_types !== null && !isset($dash_visible_types[strval($tid)])) continue;
             $typeName = $machine_types[$tid] ?? '其他';
             $list = [];
             foreach ($tasks as $task) {
@@ -1311,11 +1370,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                          FROM bom_ing bi
                          JOIN bom b ON bi.bom = b.bom
                          LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
-                         LEFT JOIN (SELECT D_Setting_Id, MAX(d_id) as max_did FROM d_setting GROUP BY D_Setting_Id) ds_max ON b.d_id = ds_max.D_Setting_Id
+                         LEFT JOIN (SELECT D_Setting_Id, MAX(d_id) as max_did FROM d_setting
+                                    WHERE D_Setting_Id IN (SELECT b2.d_id FROM bom b2 JOIN bom_ing x ON x.bom = b2.bom WHERE x.bom_ing_fid = ?)
+                                    GROUP BY D_Setting_Id) ds_max ON b.d_id = ds_max.D_Setting_Id
                          LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id = ds_max.max_did
                          WHERE bi.bom_ing_fid = ?";
+            // 效能：原本每一筆都把整張 d_setting 分組成衍生表（約 30ms/筆），現在只算這一筆的料號，結果相同。
             $stmt_info = $pdo->prepare($sql_info);
-            $stmt_info->execute([$fid]);
+            $stmt_info->execute([$fid, $fid]);
             $info = $stmt_info->fetch(PDO::FETCH_ASSOC);
 
             if (!$info) continue;
@@ -1403,6 +1465,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $display_machine = !empty($logs) ? $logs[0]['machine'] : '-';
             $display_date = !empty($logs) ? $logs[0]['report_date'] : '-';
 
+            // 這一站是否有「補加工」報工（供清單在日期下方標示小標籤）
+            $has_partial = 0;
+            try {
+                $stmt_hp = $pdo->prepare("SELECT 1 FROM pm_process_daily_report WHERE bom_ing_fid = ? AND report_source = 'PARTIAL' LIMIT 1");
+                $stmt_hp->execute([$fid]);
+                $has_partial = $stmt_hp->fetchColumn() ? 1 : 0;
+            } catch (Throwable $e) {}
+
             // 優先顯示本站完工(1)，否則顯示最大狀態(可能為2)
             $display_is_finished = ($agg['has_task_finished'] == 1) ? 1 : ($agg['max_is_finished'] ?? 0);
 
@@ -1424,6 +1494,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 'face_info' => $face_info_str,
                 'machine' => $display_machine,
                 'report_date' => $display_date,
+                'has_partial' => $has_partial,
                 'logs' => $logs,
                 'pti01_ps' => $info['pti01_ps'],
                 '1_side' => $info['1_side'],
@@ -2012,6 +2083,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // 後端邏輯：持續性生產兩週提醒跳窗按下「先開立」——把這一站目前累積的NG一次開單
 // （與完工自動觸發共用同一支 qab_auto_open_from_bom_ing()，鐵律4）
 // =================================================================================
+// =================================================================================
+// 後端邏輯：這台機台報工過的人員（人員下拉置頂用）＋當天最後一筆報工的結束時間（開始時間接續用）
+// =================================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_machine_reporters') {
+    header('Content-Type: application/json');
+    try {
+        $mid = (int)($_POST['machine_id'] ?? 0);
+        $day = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_POST['date'] ?? '') ? $_POST['date'] : date('Y-m-d');
+        if ($mid <= 0) throw new Exception('缺少機台');
+        // 近一年內在這台機台報過工的人（生產／架機分開統計），次數多的在前
+        $stmt = $pdo->prepare("
+            SELECT role, uid, COUNT(*) AS c FROM (
+                SELECT 'prod' AS role, production_user_id AS uid FROM pm_process_daily_report
+                 WHERE machine_id = ? AND production_user_id IS NOT NULL AND report_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                UNION ALL
+                SELECT 'setup' AS role, setup_user_id AS uid FROM pm_process_daily_report
+                 WHERE machine_id = ? AND setup_user_id IS NOT NULL AND report_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+            ) t GROUP BY role, uid ORDER BY c DESC");
+        $stmt->execute([$mid, $mid]);
+        $prod = []; $setup = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($r['role'] === 'prod') $prod[] = (int)$r['uid']; else $setup[] = (int)$r['uid'];
+        }
+        // 當天這台機台最後一筆報工的結束時間（架機或生產取較晚者）
+        $stmt2 = $pdo->prepare("
+            SELECT MAX(GREATEST(COALESCE(production_end_time, '1000-01-01'), COALESCE(setup_end_time, '1000-01-01')))
+            FROM pm_process_daily_report WHERE machine_id = ? AND report_date = ?");
+        $stmt2->execute([$mid, $day]);
+        $le = $stmt2->fetchColumn();
+        $lastEnd = ($le && substr($le, 0, 4) > '2000') ? substr($le, 0, 16) : '';
+        echo json_encode(['success' => true, 'prod' => $prod, 'setup' => $setup, 'last_end' => $lastEnd]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'qab_suggest_accept') {
     header('Content-Type: application/json');
     try {
@@ -2041,10 +2149,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $fid = $_POST['bom_ing_fid'];
         // 刪除 bom_ing (僅限拆分工單，前端已做初步判斷，後端可再檢查 ps 確保安全，這裡直接刪除)
         // 若要嚴謹，可檢查 ps 是否包含 '(拆分工單)'
-        $pdo->prepare("DELETE FROM bom_ing WHERE bom_ing_fid = ? AND ps LIKE '%(拆分工單)%'")->execute([$fid]);
+        $del = $pdo->prepare("DELETE FROM bom_ing WHERE bom_ing_fid = ? AND ps LIKE '%(拆分工單)%'");
+        $del->execute([$fid]);
+        if ($del->rowCount() < 1) {
+            // 刪不到＝這筆不是「拆分工單」（備註沒有標記）或已被刪掉；不可回報成功
+            throw new Exception("刪除失敗：這筆不是拆分工單，或已經被刪除。請重新整理畫面確認。");
+        }
 
         echo json_encode(['success' => true, 'message' => '拆分工單已刪除']);
     } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// =================================================================================
+// 後端邏輯：生管預排／排序紀錄（唯一實作在 src/common/ps_plan_lib.php）
+//   ps_plan_candidates 可加入預排的製程（依客戶／BOM篩選標籤／料號／BOM號碼篩選，附目前製程與狀態）
+//   ps_plan_add        加入預排　　ps_plan_remove 取消預排
+//   ps_plan_save       存生管排好的順序＋手動急件；實際有變動才留一筆排序紀錄
+// 只有 A／C 權限（生管、管理者）能動；現場人員（U）看得到結果但改不了生管的順序
+// =================================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && strpos($_POST['action'], 'ps_plan_') === 0) {
+    header('Content-Type: application/json');
+    try {
+        if (!$can_reorder) throw new Exception('無權限（需生管或管理者權限）');
+        $act = $_POST['action'];
+        $typeId = (int)($_POST['type_id'] ?? 0);
+        if ($act === 'ps_plan_candidates') {
+            if ($typeId <= 0) throw new Exception('缺少製程大類');
+            $rows = ps_plan_candidates($pdo, $typeId, [
+                'client' => $_POST['client'] ?? '', 'tag' => $_POST['tag'] ?? '',
+                'part' => $_POST['part'] ?? '', 'bom' => $_POST['bom'] ?? '',
+            ]);
+            echo json_encode(['success' => true, 'rows' => $rows['rows'], 'tags' => $rows['tags']], JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'ps_plan_add') {
+            if ($typeId <= 0) throw new Exception('缺少製程大類');
+            $ok = ps_plan_add($pdo, $typeId, (array)json_decode($_POST['fids'] ?? '[]', true));
+            echo json_encode(['success' => true, 'added' => $ok, 'message' => '已加入預排 ' . count($ok) . ' 筆']);
+        } elseif ($act === 'ps_plan_remove') {
+            $okk = ps_plan_remove($pdo, (int)($_POST['fid'] ?? 0));
+            echo json_encode(['success' => $okk, 'message' => $okk ? '已取消預排' : '這筆已有報工紀錄，不能取消預排']);
+        } elseif ($act === 'ps_plan_save') {
+            if ($typeId <= 0) throw new Exception('缺少製程大類');
+            $r = ps_plan_save($pdo, $typeId, (array)json_decode($_POST['order'] ?? '[]', true),
+                (array)json_decode($_POST['urgent'] ?? '{}', true), ($_POST['changed'] ?? '0') === '1');
+            echo json_encode(['success' => true] + $r);
+        } else {
+            throw new Exception('未知的動作');
+        }
+    } catch (Throwable $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit;
@@ -2272,7 +2426,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $sql = "
             SELECT r.report_id, r.machine_id,
                    r.setup_start_time, r.setup_end_time, r.production_start_time, r.production_end_time,
-                   r.produced_qty,
+                   r.produced_qty, r.report_source,
                    (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id = r.report_id) as total_ng,
                    b.bom, b.d_id, pn.ProcessName, r.bom_ing_fid
             FROM pm_process_daily_report r
@@ -2322,6 +2476,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         // 移除主鍵 (讓 DB 自動產生)
         unset($row['bom_ing_fid']);
+        $row['plan_seq'] = null; $row['pre_plan'] = 0;   // 複本沒有生管排定的順序，也不是預排（排到未指派最後面）
 
         $row['bom_ing_id'] = $new_bom_ing_id;
         $row['machine_id'] = null; // 重置為未指派
@@ -2415,6 +2570,9 @@ SELECT
     bi.process_type_id,
     bi.machine_id,
     origin_bi.processing_sequence,
+    origin_bi.plan_seq,
+    origin_bi.plan_urgent,
+    origin_bi.pre_plan,
     bi.processing_state,
     bi.ps,
     origin_bi.single_bet_ps,
@@ -2471,6 +2629,40 @@ try {
         throw new Exception("SQL Error: " . implode(" ", $pdo->errorInfo()));
     }
     $tasks = $stmt->fetchAll();
+
+    // 補加工已報工未完工、但不在 vw_bom_ing（生管尚未移轉到此關卡）的製程：額外補進，以 fid 去重
+    try {
+        $have = array_flip(array_map('intval', array_column($tasks, 'bom_ing_fid')));
+        // 預排：已經被生管移轉到這一關（出現在正常清單）就不再是預排，旗標清掉；其餘預排的製程一併補進來
+        $preFids = ps_plan_preplan_fids($pdo);
+        $preDone = array_values(array_filter($preFids, function ($f) use ($have) { return isset($have[$f]); }));
+        if ($preDone) $pdo->exec("UPDATE bom_ing SET pre_plan = 0 WHERE bom_ing_fid IN (" . implode(',', $preDone) . ")");
+        $preOnly = array_values(array_diff($preFids, $preDone));
+        $extra = array_values(array_filter(array_merge(ps_partial_ing_fids($pdo), $preOnly), function ($f) use ($have) { return !isset($have[$f]); }));
+        $cut = strpos($sql_extended, "\nWHERE\n");
+        if ($extra && $cut !== false) {
+            $sql_extra = str_replace('FROM vw_bom_ing AS bi',
+                'FROM (SELECT o.*, pn0.ProcessName, pn0.process_type_id FROM bom_ing o LEFT JOIN process_no pn0 ON o.process_no = pn0.ProcessNo WHERE o.bom_ing_fid IN (' . implode(',', $extra) . ')) AS bi',
+                substr($sql_extended, 0, $cut));
+            $tasks = array_merge($tasks, $pdo->query($sql_extra)->fetchAll());
+        }
+    } catch (Throwable $e) { error_log('[schedule partial extra] ' . $e->getMessage()); }
+
+    // 同一個料號在 d_setting_gear 有 2~3 筆齒輪規格時，LEFT JOIN 會把同一個製程重複成多列
+    // → 看板出現重複卡片、剩餘件數被重複計算。以 bom_ing_fid 去重（保留第一列）。
+    $tasks = array_values(array_reduce($tasks, function ($c, $t) { if (!isset($c[$t['bom_ing_fid']])) $c[$t['bom_ing_fid']] = $t; return $c; }, []));
+
+    // 預排卡片：標記並帶出「這張 BOM 目前走到哪一關」；生管手動急件視同急件（卡片變急件色，並可辨識是生管設定的）
+    $preSet = array_flip(isset($preOnly) ? $preOnly : []);
+    $preBoms = [];
+    foreach ($tasks as $t) if (isset($preSet[(int)$t['bom_ing_fid']])) $preBoms[$t['bom']] = 1;
+    $stageMap = $preBoms ? ps_plan_stage_map($pdo, array_keys($preBoms)) : [];
+    foreach ($tasks as &$t) {
+        $t['is_preplan'] = isset($preSet[(int)$t['bom_ing_fid']]) ? 1 : 0;
+        $t['pre_stage'] = $t['is_preplan'] ? ($stageMap[$t['bom']] ?? '') : '';
+        if (!empty($t['plan_urgent']) && !in_array($t['priority_type'] ?? '', ['E', 'U'], true)) $t['priority_type'] = 'U';
+    }
+    unset($t);
 
     // Optimization: Fetch stats and operators separately to avoid slow subqueries
     $fids = array_column($tasks, 'bom_ing_fid');
@@ -2740,8 +2932,9 @@ foreach ($unassigned_tasks_by_type as $type_id => &$unassigned_list) {
     usort($unassigned_list, function ($a, $b) {
         // 0. 人工排序 (processing_sequence)
         // 有序號的排前面，沒序號 (0或null) 的排後面
-        $seqA = (int)($a['processing_sequence'] ?? 0);
-        $seqB = (int)($b['processing_sequence'] ?? 0);
+        // 未指派清單的順序＝生管排定的 plan_seq（與機台上的 processing_sequence 分開，現場拖卡片不會動到它）
+        $seqA = (int)($a['plan_seq'] ?? 0);
+        $seqB = (int)($b['plan_seq'] ?? 0);
 
         if ($seqA > 0 && $seqB > 0) return $seqA <=> $seqB; // 都有序號，比大小
         if ($seqA > 0) return -1; // A 有序號，排前
@@ -3390,6 +3583,41 @@ function get_state_badge($state)
         }
 
         /* 機台時程表樣式 */
+        /* ===== 機台 24H 時程表（重做）===== */
+        .tl2-chk { margin: 0 0 0 12px; font-weight: normal; cursor: pointer; }
+        .tl2-chk input { margin-right: 4px; vertical-align: -2px; }
+        .tl2-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; color: #5b4a3a; margin-bottom: 8px; }
+        .tl2-lg i { display: inline-block; width: 18px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+        .tl2-lg .tl2-setup { background: #4E8FD1; } .tl2-lg .tl2-prod { background: #2E9E5B; }
+        .tl2-lg .tl2-over-sample { background: #fff; border: 2px solid #DD5138; box-sizing: border-box; }
+        .tl2-sum { margin-left: auto; }
+        .tl2-detail { background: #FFF8EC; border: 1px solid #F0D9B5; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; line-height: 22px; color: #3b2f25; }
+        .tl2-kind { display: inline-block; line-height: 16px; padding: 0 6px; border-radius: 3px; font-size: 11px; color: #fff; }
+        .tl2-kind.setup { background: #4E8FD1; } .tl2-kind.prod { background: #2E9E5B; }
+        .tl2-overtxt { color: #DD5138; font-weight: bold; }
+        .tl2-hint { color: #8a7764; font-size: 11px; }
+        .tl2-pt { display: inline-block; line-height: 14px; padding: 0 4px; margin-left: 4px; font-size: 10px; border-radius: 3px; background: #DCEDC8; color: #33691E; border: 1px solid #AED581; font-weight: normal; }
+        .tl2-empty { padding: 40px 10px; text-align: center; color: #8a7764; }
+        #schedule-container { border: 1px solid #e6dccf; border-radius: 6px; background: #fff; }
+        .tl2-head, .tl2-row { display: flex; }
+        .tl2-head { position: sticky; top: 0; z-index: 5; background: #F7EFE3; border-bottom: 1px solid #e6dccf; }
+        .tl2-row { border-bottom: 1px solid #f0e8dc; }
+        .tl2-row:hover { background: #fffaf3; }
+        .tl2-name { flex: 0 0 150px; width: 150px; box-sizing: border-box; padding: 6px 8px; border-right: 1px solid #e6dccf; font-size: 13px; font-weight: bold; color: #3b2f25; display: flex; align-items: center; gap: 6px; line-height: 18px; }
+        .tl2-head .tl2-name { font-weight: bold; color: #6b4f33; }
+        .tl2-mn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .tl2-warn { flex: 0 0 auto; background: #DD5138; color: #fff; font-size: 11px; line-height: 16px; padding: 0 5px; border-radius: 3px; font-weight: normal; }
+        .tl2-axis { flex: 1 1 auto; display: flex; min-width: 0; }
+        .tl2-hour { flex: 1 1 0; text-align: left; padding: 6px 0 6px 4px; font-size: 12px; color: #6b4f33; border-left: 1px solid #e6dccf; box-sizing: border-box; min-width: 0; }
+        .tl2-line { flex: 1 1 auto; position: relative; min-width: 0; }
+        .tl2-grid { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #efe6da; }
+        .tl2-blk { position: absolute; box-sizing: border-box; border-radius: 4px; padding: 2px 5px; color: #fff; overflow: hidden; cursor: pointer; line-height: 13px; font-size: 11px; box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+        .tl2-blk > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tl2-blk .tl2-l1 { font-size: 12px; line-height: 14px; }
+        .tl2-setup { background: #4E8FD1; } .tl2-prod { background: #2E9E5B; }
+        .tl2-blk.tl2-over { border: 2px solid #DD5138; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.18) 0 6px, rgba(255,255,255,0) 6px 12px); z-index: 2; }
+        .tl2-blk:hover, .tl2-blk.tl2-sel { z-index: 4; outline: 2px solid #F0A24B; outline-offset: 1px; }
+
         .schedule-container {
             display: flex;
             flex-direction: column;
@@ -3581,20 +3809,35 @@ function get_state_badge($state)
         .v2-tab-sub b { color: #dd5138; }
         .v2-tab.on .v2-tab-sub b { color: #fff; }
         .v2-tab-hit { position: absolute; top: -7px; right: -7px; background: #dd5138; color: #fff; border-radius: 9px; font-size: 11px; padding: 0 6px; line-height: 17px; }
-        #v2Board { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 10px; align-items: start; }
+        #v2Board { display: flex; gap: 10px; align-items: flex-start; }
+        #v2Board > .v2-empty { flex: 1 1 auto; }
+        .v2-ucol { flex: 0 0 270px; min-width: 0; }
+        .v2-mgrid { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 10px; align-items: start; }
+        @media (max-width: 700px) { #v2Board { flex-wrap: wrap; } .v2-ucol { flex: 1 1 100%; } .v2-mgrid { flex: 1 1 100%; } }
         .v2-col { background: #fff; border: 1px solid #e6dccf; border-top: 4px solid #c8bfb4; border-radius: 6px; display: flex; flex-direction: column; min-width: 0; }
         .v2-col.st-run { border-top-color: #2e9e5b; } .v2-col.st-wait { border-top-color: #f0a24b; } .v2-col.st-abn { border-top-color: #dd5138; background: #fff8f6; }
-        .v2-col-u { border-top-color: #9a7b5a; background: #fbf7f1; }
+        /* 未指派：用明顯不同的暖黃底＋粗橘框，一眼和右邊（白底）的機台欄分開 */
+        .v2-col-u { border: 2px solid #E8A33D; border-top: 6px solid #D9822B; background: #FFF0CC; box-shadow: 0 2px 8px rgba(217, 130, 43, .25); }
+        .v2-col-u .v2-col-h { background: #FBD98A; border-bottom: 1px solid #E8C177; border-radius: 3px 3px 0 0; }
+        .v2-col-u .v2-col-t { color: #6B3A08; font-size: 16px; }
+        .v2-col-u .v2-load, .v2-col-u .v2-col-tip { color: #7A5A2B; }
+        .v2-col-u .v2-row { background: #fff; }
         .v2-col-h { padding: 8px 10px 6px; border-bottom: 1px solid #f1ebe3; }
         .v2-col-t { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: bold; color: #3b2f25; }
         .v2-col-t .btn { margin: 0 0 0 auto; padding: 1px 6px; }
-        .v2-mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        /* 機台名稱：太長自動換行；第一行主名稱，第二行小字（型號／廠別） */
+        .v2-mname { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 18px; overflow-wrap: anywhere; }
+        .v2-mn1 { font-size: 15px; font-weight: bold; }
+        .v2-mn2 { font-size: 11px; font-weight: normal; color: #8a7764; line-height: 14px; }
         .v2-load { display: flex; gap: 10px; font-size: 12px; color: #6b5a49; margin-top: 4px; }
         .v2-load b { font-size: 15px; color: #3b2f25; }
         .v2-loadbar { height: 6px; background: #efe6da; border-radius: 3px; overflow: hidden; margin-top: 4px; }
         .v2-loadbar i { display: block; height: 100%; background: #f0a24b; }
+        .v2-loadbar.prog i { background: #2e9e5b; }
         .v2-col-tip { font-size: 11px; color: #8a7764; margin-top: 3px; line-height: 14px; }
-        .v2-list { padding: 6px; min-height: 60px; max-height: 62vh; overflow-y: auto; }
+        .v2-list { padding: 6px; min-height: 60px; max-height: 62vh; overflow-y: auto; overflow-x: hidden; }
+        /* ⋮ 選單改成 fixed 定位（位置由 JS 依按鈕算），不會被清單的捲動容器裁掉或撐出左右捲軸 */
+        .v2-row .dropdown-menu { position: fixed; z-index: 3000; left: auto; min-width: 150px; width: auto; }
         .v2-row { border: 1px solid #ece3d7; border-left: 4px solid #e0d4c4; border-radius: 4px; padding: 5px 7px; margin-bottom: 5px; background: #fff; cursor: pointer; }
         .v2-row:hover { box-shadow: 0 1px 5px rgba(120, 80, 30, .18); }
         .v2-row.urg-U { border-left-color: #f0a24b; } .v2-row.urg-E { border-left-color: #dd5138; }
@@ -3602,6 +3845,7 @@ function get_state_badge($state)
         .v2-ghost { opacity: .4; background: #fdf0e0; }
         .v2-r1 { display: flex; align-items: center; gap: 4px; line-height: 20px; }
         .v2-no { color: #9a7b5a; font-weight: bold; font-size: 12px; min-width: 14px; }
+        .v2-no:empty { display: none; } /* 未指派沒有序號：不留空白，製令與料號才會靠左對齊 */
         .v2-row.now .v2-no { color: #2e9e5b; }
         .v2-row .v2-bom { font-size: 14px; font-weight: bold; color: #3b2f25; white-space: nowrap; }
         .v2-row .v2-tag { font-size: 11px; padding: 0 5px; line-height: 16px; }
@@ -3610,6 +3854,8 @@ function get_state_badge($state)
         .v2-r-act .btn { margin: 0; padding: 1px 7px; }
         .v2-r2 { font-size: 12px; color: #3b2f25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 17px; }
         .v2-r3 { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6b5a49; line-height: 16px; margin-top: 2px; }
+        .v2-r4 { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: #6b5a49; line-height: 16px; margin-top: 2px; }
+        .v2-r4 .fa-clock-o { color: #2e9e5b; }
         .v2-mbar { flex: 0 0 50px; height: 5px; background: #eee5da; border-radius: 3px; overflow: hidden; }
         .v2-mbar i { display: block; height: 100%; background: #2e9e5b; }
         .v2-ship { margin-left: auto; color: #8a4f12; }
@@ -3665,6 +3911,7 @@ function get_state_badge($state)
         .v2-tag.run { background: #2e9e5b; color: #fff; } .v2-tag.ok { background: #dff2e6; color: #1f7a45; }
         .v2-tag.sp { background: #e8dcf0; color: #5b3a76; } .v2-tag.mc { background: #3b2f25; color: #fff; }
         .v2-tag.mod { background: #fbe7cf; color: #8a4f12; }
+        .v2-tag.pre { background: #8a4f12; color: #fff; } .v2-pre { color: #8a4f12; font-size: 11px; }
         .v2-c-mid { margin-top: 4px; font-size: 14px; color: #3b2f25; }
         .v2-c-mid .muted { color: #8a7764; font-size: 13px; }
         .v2-c-note { margin-top: 4px; font-size: 12px; color: #8a4f12; background: #fdf6ec; border-radius: 4px; padding: 3px 8px; }
@@ -3831,8 +4078,8 @@ function get_state_badge($state)
                                                 // ⚠️ 這裡覆蓋了上方可能存在的「已到料優先」邏輯，確保拖曳排序生效
                                                 usort($unassigned_tasks, function ($a, $b) {
                                                     // 抓取順序，如果沒有設定(null或0)就當作無限大(999999)排到最後面
-                                                    $seqA = (is_numeric($a['processing_sequence']) && $a['processing_sequence'] > 0) ? (int)$a['processing_sequence'] : 999999;
-                                                    $seqB = (is_numeric($b['processing_sequence']) && $b['processing_sequence'] > 0) ? (int)$b['processing_sequence'] : 999999;
+                                                    $seqA = (is_numeric($a['plan_seq'] ?? null) && $a['plan_seq'] > 0) ? (int)$a['plan_seq'] : 999999;
+                                                    $seqB = (is_numeric($b['plan_seq'] ?? null) && $b['plan_seq'] > 0) ? (int)$b['plan_seq'] : 999999;
 
                                                     // 如果兩者順序不同，就依照順序排
                                                     if ($seqA !== $seqB) {
@@ -3846,7 +4093,7 @@ function get_state_badge($state)
                                                 <div class="kanban-cards list-group unassigned-list" id="machine-unassigned-<?= $type_id ?>" data-machine-id="unassigned-<?= $type_id ?>" data-type-id="<?= $type_id ?>" style="<?= $display_style ?>">
                                                     <?php foreach ($unassigned_tasks as $task):
                                                         $card_classes = 'kanban-card list-group-item ' . get_priority_class($task['priority_type']);
-                                                        $seq_num_unassigned = !empty($task['processing_sequence']) && $task['processing_sequence'] > 0 ? htmlspecialchars($task['processing_sequence']) : '';
+                                                        $seq_num_unassigned = !empty($task['plan_seq']) && $task['plan_seq'] > 0 ? htmlspecialchars($task['plan_seq']) : '';
                                                         $seq_display_html = '';
                                                         if ($seq_num_unassigned) {
                                                             $seq_display_html = '<div style="margin-right:10px;"><span style="display:inline-block; width:24px; height:24px; line-height:24px; text-align:center; background-color:#9B59B6; color:white; font-weight:bold; border-radius:3px;">' . $seq_num_unassigned . '</span></div>';
@@ -3869,7 +4116,7 @@ function get_state_badge($state)
                                                             $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                         }
                                                     ?>
-                                                        <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>">
+                                                        <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
                                                             <!-- 標題列：BOM (左) ... 製程 + 狀態 + 順序 (右) -->
                                                             <div class="card-header-flex">
                                                                 <h6 class="card-title" style="display:flex; align-items:center;">
@@ -4133,7 +4380,7 @@ function get_state_badge($state)
                                                                                 $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                                             }
                                                                         ?>
-                                                                            <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>">
+                                                                            <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-preplan="<?= (int)($task['is_preplan'] ?? 0) ?>" data-stage="<?= htmlspecialchars($task['pre_stage'] ?? '', ENT_QUOTES) ?>" data-plan-urgent="<?= (int)($task['plan_urgent'] ?? 0) ?>" data-plan-seq="<?= htmlspecialchars($task['plan_seq'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>" data-operator="<?= htmlspecialchars($task['current_operator_name'] ?? '', ENT_QUOTES) ?>" data-start="<?= !empty($task['start_process_date']) ? date('m/d H:i', strtotime($task['start_process_date'])) : '' ?>">
                                                                                 <!-- 標題列：BOM (左) ... 製程 + 狀態 + 順序 (右) -->
                                                                                 <div class="card-header-flex">
                                                                                     <h6 class="card-title" style="display:flex; align-items:center;">
@@ -4409,8 +4656,7 @@ function get_state_badge($state)
                                                 </div>
                                                 <div class="col-sm-4 form-group">
                                                     <label class="control-label">報工日期 <span class="text-danger">*</span></label>
-                                                    <input type="date" class="form-control input-sm" name="report_date" value="<?= date('Y-m-d') ?>" max="<?= date('Y-m-d') ?>">
-                                                    <div class="v2-chips"><span class="v2-chip" data-off="0">今天</span><span class="v2-chip" data-off="1">昨天</span><span class="v2-chip" data-off="2">前天</span><span class="v2-chip" data-off="3">3天前</span></div>
+                                                    <input type="date" class="form-control input-sm" name="report_date" value="<?= date('Y-m-d') ?>" readonly>
                                                 </div>
                                             </div>
                                             <div class="row time-input-group">
@@ -4541,6 +4787,8 @@ function get_state_badge($state)
                                             </div>
 
                                             <!-- NG Table -->
+                                            <div class="v2-more-toggle" style="margin-top:5px;"><a href="#v2NgBox" data-toggle="collapse" aria-expanded="false"><i class="fa fa-times-circle"></i> 有不良品（NG）？點這裡填寫</a> <span id="v2NgCnt" class="badge" style="display:none;background:#DD5138;"></span></div>
+                                            <div id="v2NgBox" class="collapse">
                                             <div id="ng-table-container" style="margin-top: 5px;">
                                                 <label style="font-size: 12px;">NG 紀錄 <button type="button" class="btn btn-xs btn-danger" id="addNgRowBtn" style="margin-left: 5px;"><i class="fa fa-plus"></i></button></label>
                                                 <div style="max-height: 100px; overflow-y: auto;">
@@ -4557,10 +4805,11 @@ function get_state_badge($state)
                                                     </table>
                                                 </div>
                                             </div>
+                                            </div>
 
                                             <!-- 一般報工歷史紀錄 -->
-                                            <div class="v2-more-toggle" style="margin-top:10px;"><a href="#v2HistoryBox" data-toggle="collapse" aria-expanded="false"><i class="fa fa-history"></i> 最近 10 筆生產報工紀錄（點開查看／修改）</a></div>
-                                            <div id="v2HistoryBox" class="collapse">
+                                            <div class="v2-more-toggle" style="margin-top:10px;"><a href="#v2HistoryBox" data-toggle="collapse" aria-expanded="true"><i class="fa fa-history"></i> 最近 10 筆生產報工紀錄（點開查看／修改）</a></div>
+                                            <div id="v2HistoryBox" class="collapse in">
                                                 <div style="max-height: 120px; overflow-y: auto;">
                                                     <table class="table table-bordered table-condensed table-hover" id="historyTable" style="margin-bottom: 0; font-size: 11px; background-color: #fff;">
                                                         <thead>
@@ -4934,15 +5183,66 @@ function get_state_badge($state)
 
                     <!-- 未指派排序 Modal -->
                     <div class="modal fade" id="unassignedSortModal" tabindex="-1" role="dialog">
-                        <div class="modal-dialog" role="document">
+                        <div class="modal-dialog" role="document" style="width: 1180px; max-width: 96%;">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
-                                    <h4 class="modal-title"><i class="fa fa-sort"></i> 調整未指派順序 (拖曳調整)</h4>
+                                    <h4 class="modal-title"><i class="fa fa-sort"></i> 調整未指派順序</h4>
                                 </div>
-                                <div class="modal-body" style="max-height: 70vh; overflow-y: auto; background-color: #f7f7f7;">
-                                    <ul class="list-group" id="unassigned-sort-list"></ul>
-                                    <p class="text-muted text-center" style="margin-top: 10px;"><i class="fa fa-info-circle"></i> 拖曳項目調整順序，關閉視窗後自動儲存。</p>
+                                <div class="sp-bar" style="padding:8px 15px;border-bottom:1px solid #e5e5e5;background:#fff;">
+                                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                        <input type="text" id="sp-filter" class="form-control input-sm" placeholder="搜尋製令／客戶／料號" style="width:200px;">
+                                        <?php if ($can_reorder): ?><button type="button" class="btn btn-sm btn-warning" id="sp-preplan-btn" title="把還沒移轉到此製程大類的 BOM 先排進來（可報工）"><i class="fa fa-plus"></i> 預排</button><?php endif; ?>
+                                        <span style="margin-left:auto;">整批排序：
+                                            <select id="sp-sortby" class="input-sm" style="height:26px;">
+                                                <option value="">選擇…</option>
+                                                <option value="bom">製令編號（舊→新）</option>
+                                                <option value="bomdesc">製令編號（新→舊）</option>
+                                                <option value="client">客戶</option>
+                                            </select></span>
+                                    </div>
+                                    <div class="text-muted" style="font-size:12px;margin-top:4px;"><i class="fa fa-info-circle"></i> 用法：把要移動的項目拖到右側「暫放區」（可勾選多筆，拖其中一筆就一起帶走）→ 看左側想放的位置，點該位置的「＋ 放這裡」，暫放區全部一次插進去。也可直接在左側拖曳，或用 ⇈ ⇊ 置頂／置底。關閉視窗後自動儲存。</div>
+                                </div>
+                                <div style="display:flex;gap:0;background:#f7f7f7;">
+                                    <div id="sp-body" style="flex:1 1 60%;max-height:62vh;overflow-y:auto;padding:12px 15px;">
+                                        <ul class="list-group" id="unassigned-sort-list" style="min-height:60px;"></ul>
+                                    </div>
+                                    <div style="flex:0 0 40%;max-width:40%;border-left:2px dashed #f39c12;background:#FFF8EA;display:flex;flex-direction:column;">
+                                        <div style="padding:8px 12px;font-weight:bold;color:#8a5a00;">暫放區 <span class="badge" id="sp-stagecnt" style="background:#f39c12;">0</span>
+                                            <span style="float:right;">
+                                                <button type="button" class="btn btn-xs btn-default" id="sp-stage-top" title="全部放到最前面"><i class="fa fa-angle-double-up"></i> 全放最前</button>
+                                                <button type="button" class="btn btn-xs btn-default" id="sp-stage-bot" title="全部放到最後面"><i class="fa fa-angle-double-down"></i> 全放最後</button>
+                                            </span></div>
+                                        <div id="sp-stage-body" style="flex:1;max-height:56vh;overflow-y:auto;padding:0 12px 12px;">
+                                            <ul class="list-group" id="sp-stage-list" style="min-height:120px;border:2px dashed #f3c67a;border-radius:4px;padding:4px;"></ul>
+                                            <div class="text-muted text-center" id="sp-stage-hint" style="font-size:12px;">把項目拖到這裡暫放</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 預排面板：蓋在排序畫面上（不疊第二層跳窗） -->
+                                <div id="sp-pre-panel" style="display:none;position:absolute;left:0;top:0;right:0;bottom:0;background:#fff;z-index:5;border-radius:6px;flex-direction:column;">
+                                    <div style="padding:10px 15px;border-bottom:1px solid #e5e5e5;">
+                                        <b><i class="fa fa-plus"></i> 新增預排</b> <span class="text-muted" id="sp-pre-type" style="font-size:12px;"></span>
+                                        <button type="button" class="btn btn-xs btn-default pull-right" id="sp-pre-close">返回排序</button>
+                                        <div class="text-muted" style="font-size:12px;margin-top:2px;">只列：BOM 未結案、含此製程大類的製程、這道製程還沒做完（QC待驗、待移轉、已移轉的不列）、目前不在看板上的（外包廠商的製程不列）。可單選或多選，加入後可報工。</div>
+                                    </div>
+                                    <div style="padding:8px 15px;display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid #eee;">
+                                        <input type="text" id="sp-pre-client" class="form-control input-sm" placeholder="客戶" style="width:150px;">
+                                        <select id="sp-pre-tag" class="form-control input-sm" style="width:170px;" title="BOM篩選標籤（與 BOM總覽同一個標示）"><option value="">BOM篩選標籤：全部</option></select>
+                                        <input type="text" id="sp-pre-part" class="form-control input-sm" placeholder="料號" style="width:170px;">
+                                        <input type="text" id="sp-pre-bom" class="form-control input-sm" placeholder="BOM號碼" style="width:150px;">
+                                        <span class="text-muted" id="sp-pre-msg" style="font-size:12px;align-self:center;"></span>
+                                    </div>
+                                    <div style="flex:1;overflow:auto;max-height:52vh;">
+                                        <table class="table table-condensed table-hover" style="margin:0;font-size:12px;">
+                                            <thead style="position:sticky;top:0;background:#f7f1e8;"><tr><th style="width:28px;"><input type="checkbox" id="sp-pre-all"></th><th>BOM</th><th>客戶</th><th>料號</th><th>篩選標籤</th><th>要預排的製程</th><th>目前製程・狀態</th><th class="text-right">數量</th></tr></thead>
+                                            <tbody id="sp-pre-body"></tbody>
+                                        </table>
+                                    </div>
+                                    <div style="padding:8px 15px;border-top:1px solid #e5e5e5;background:#fafafa;">
+                                        已選 <b id="sp-pre-cnt">0</b> 筆
+                                        <button type="button" class="btn btn-sm btn-warning pull-right" id="sp-pre-add" disabled><i class="fa fa-plus"></i> 加入預排</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -5017,8 +5317,16 @@ function get_state_badge($state)
                                         </div>
                                         <button type="button" class="btn btn-primary btn-sm" id="btnRefreshSchedule">查詢</button>
                                         <span id="schedule_day_info" style="margin-left: 8px; font-weight: bold;"></span>
-                                        <span class="text-muted" style="margin-left: 10px;">* 藍色: 架機 / 綠色: 生產 (高度代表時間長度)</span>
+                                        <label class="tl2-chk"><input type="checkbox" id="schedule_show_empty"> 顯示沒有報工的機台</label>
+                                        <label class="tl2-chk"><input type="checkbox" id="schedule_full24"> 時間軸固定 24 小時</label>
                                     </div>
+                                    <div class="tl2-legend">
+                                        <span class="tl2-lg"><i class="tl2-setup"></i> 架機</span>
+                                        <span class="tl2-lg"><i class="tl2-prod"></i> 生產</span>
+                                        <span class="tl2-lg"><i class="tl2-over-sample"></i> 同機台時間重疊（會分成上下兩排）</span>
+                                        <span class="tl2-lg tl2-sum" id="schedule_summary"></span>
+                                    </div>
+                                    <div id="schedule_detail" class="tl2-detail" style="display:none;"></div>
                                     <div id="schedule-container" class="schedule-container">
                                         <!-- JS Rendered Content -->
                                     </div>
@@ -5107,6 +5415,7 @@ function get_state_badge($state)
                     hasA: <?= $has_A ? 'true' : 'false' ?>,
                     hasD: <?= $has_D ? 'true' : 'false' ?>,
                     canDrag: <?= $can_drag ? 'true' : 'false' ?>,
+                    canReorder: <?= $can_reorder ? 'true' : 'false' ?>,
                     canManageMaterial: <?= $can_manage_material ? 'true' : 'false' ?>,
                     canReport: <?= $can_report ? 'true' : 'false' ?>,
                     canSettings: <?= $can_settings ? 'true' : 'false' ?>,
@@ -5322,6 +5631,13 @@ function get_state_badge($state)
                         // 判斷是未指派還是機台
                         if ($header.attr('id') === 'unassigned-header') {
                             $targetList = $('.unassigned-list:visible');
+                            if (!$targetList.length) {
+                                // V2：原看板整個隱藏（:visible 一律找不到），改依目前選中的製程大類找對應的未指派清單
+                                // 以 V2 看板目前選中的製程大類為準（原看板的分頁不一定同步）
+                                var v2T = $('#v2Tabs .v2-tab.on').attr('data-t');
+                                if (!v2T) v2T = ($('#machineTypeTabs li.active a').attr('href') || '').replace('#tab_type_', '');
+                                $targetList = $('#machine-unassigned-' + v2T);
+                            }
                             titleText = '未指派';
                         } else {
                             var machineId = $header.data('machine-id');
@@ -5351,8 +5667,9 @@ function get_state_badge($state)
 
                         // 執行強制排序 (依據 processing-sequence 或紫色的數字標籤)
                         cardsArray.sort(function(a, b) {
-                            var seqA = parseInt(a.data('processing-sequence')) || parseInt(a.find('.bg-purple').text()) || 999999;
-                            var seqB = parseInt(b.data('processing-sequence')) || parseInt(b.find('.bg-purple').text()) || 999999;
+                            // 未指派＝生管排定的順序（plan-seq，現場拖卡片不會動到）；機台清單維持原本的機台排序
+                            var seqA = isUnassignedList ? (parseInt(a.attr('data-plan-seq')) || 999999) : (parseInt(a.data('processing-sequence')) || parseInt(a.find('.bg-purple').text()) || 999999);
+                            var seqB = isUnassignedList ? (parseInt(b.attr('data-plan-seq')) || 999999) : (parseInt(b.data('processing-sequence')) || parseInt(b.find('.bg-purple').text()) || 999999);
                             return seqA - seqB;
                         });
 
@@ -5384,9 +5701,13 @@ function get_state_badge($state)
 
                             var html = '<div class="row" style="margin:0;">';
                             html += '<div class="col-xs-10" style="padding:0;">';
-                            html += '<strong>' + seq + '. ' + bom + '</strong>';
-                            if (partNo) html += ' <span class="text-muted">| ' + partNo + '</span>';
+                            html += '<i class="fa fa-bars sp-handle text-muted" title="整列都可以按住拖曳" style="margin-right:6px;"></i><label class="sp-chk" style="margin:0 6px 0 0;font-weight:normal;"><input type="checkbox" class="sp-sel" title="勾選後拖曳其中一筆，會一起帶走"></label><strong><span class="sp-no">' + (index + 1) + '</span>. ' + bom + '</strong>';                            if (partNo) html += ' <span class="text-muted">| ' + partNo + '</span>';
 
+                            var isPre = $card.attr('data-preplan') === '1';
+                            var isPurg = $card.attr('data-plan-urgent') === '1';
+                            if (isPre && isUnassignedList) {
+                                html += ' <span class="label label-info" style="font-size: 10px;">待指派</span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + $('<i>').text($card.attr('data-stage') || '—').html() + '</span>';
+                            }
                             if (state === 'ing') {
                                 if (isUnassignedList) {
                                     html += ' <span class="label label-info" style="font-size: 10px;">待指派</span>';
@@ -5422,10 +5743,18 @@ function get_state_badge($state)
                             if (remarks.length > 0) {
                                 html += '<div style="font-size: 11px; color: #8a6d3b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa fa-info-circle"></i> ' + remarks.join(' | ') + '</div>';
                             }
-                            html += '</div><div class="col-xs-2 text-right" style="padding:0; padding-top: 8px;"><i class="fa fa-bars text-muted" style="cursor:move;"></i></div></div>';
+                            html += '</div><div class="col-xs-2 text-right sp-ctl" style="padding:0; padding-top: 4px; white-space:nowrap;">' +
+                                '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
+                                '<button type="button" class="btn btn-xs sp-urg ' + (isPurg ? 'btn-danger' : 'btn-default') + '" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
+                                (isPre ? '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' : '') +
+                                '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button>' +
+                                '</div></div>';
 
-                            $modalList.append('<li class="list-group-item" data-id="' + id + '">' + html + '</li>');
+                            $modalList.append('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="' + index + '" data-purg="' + (isPurg ? 1 : 0) + '" data-pre="' + (isPre ? 1 : 0) + '" data-id="' + id + '" data-bom="' + $('<i>').text(bom).html() + '" data-client="' + $('<i>').text(client).html() + '" data-ship="' + $('<i>').text(shippingDate).html() + '">' + html + '</li>');
                         });
+                        $('#sp-filter').val('');
                         // 🌟🌟🌟 修正點結束 🌟🌟🌟
 
                         // 初始化 Sortable
@@ -5444,15 +5773,191 @@ function get_state_badge($state)
                         $('#unassignedSortModal').modal('show');
                     });
 
+                    // --- 排序視窗：暫放區（拖出去、選位置、一次放回）／置頂置底／整批排序／搜尋 ---
+                    (function() {
+                        var $L = $('#unassigned-sort-list'), $S = $('#sp-stage-list'), sortL = null, sortS = null;
+                        function items($ul) { return $ul.children('li[data-id]'); }
+                        function renum() {
+                            items($L).each(function(i) { $(this).find('.sp-no').first().text(i + 1); });
+                            items($S).each(function() { $(this).find('.sp-no').first().text('–'); });
+                            var n = items($S).length;
+                            $('#sp-stagecnt').text(n); $('#sp-stage-hint').toggle(n === 0);
+                            $S.find('.sp-top,.sp-bot,.sp-pick').hide(); $S.find('.sp-back').show();
+                            $L.find('.sp-top,.sp-bot,.sp-pick').show(); $L.find('.sp-back').hide();
+                            rebuildSlots();
+                        }
+                        // 暫放區有東西時，左側每個位置（含最後）顯示「＋ 放這裡」
+                        function rebuildSlots() {
+                            $L.children('.sp-slotli').remove();
+                            var n = items($S).length;
+                            if (!n) return;
+                            var mk = function() { return $('<li class="sp-slotli" style="list-style:none;"><div class="sp-slot" style="margin:-3px 0;padding:1px 0;text-align:center;font-size:11px;color:#b36b00;border:1px dashed #f3a73c;border-radius:3px;background:#FFF1D6;cursor:pointer;">＋ 放這裡（' + n + ' 筆）</div></li>'); };
+                            items($L).each(function() { mk().insertBefore(this); });
+                            $L.append(mk());
+                        }
+                        function flash($li) {
+                            var el = $li[0]; if (!el) return;
+                            var body = document.getElementById('sp-body');
+                            body.scrollTop = el.offsetTop - body.clientHeight / 2;
+                            $li.css('background', '#FFE7B8'); setTimeout(function() { $li.css('background', ''); }, 1200);
+                        }
+                        // 把 sel（保持原相對順序）放到左側 before 元素之前；before 為空＝放最後
+                        function insertGroup(sel, before) {
+                            sel = $(sel);
+                            sel.find('.sp-sel').prop('checked', false);
+                            if (before && before.length) sel.insertBefore(before); else $L.append(sel);
+                            renum(); flash(sel.first());
+                        }
+                        $L.on('click', '.sp-slot', function() {
+                            var $slot = $(this).closest('li'), $next = $slot.nextAll('li[data-id]').first();
+                            insertGroup(items($S), $next);
+                        });
+                        $L.on('click', '.sp-top', function() { insertGroup($(this).closest('li'), items($L).first()); });
+                        $L.on('click', '.sp-bot', function() { insertGroup($(this).closest('li'), null); });
+                        $L.on('click', '.sp-pick', function() { $S.append($(this).closest('li')); renum(); });
+                        $S.on('click', '.sp-back', function() {
+                            var $li = $(this).closest('li'), o = +$li.attr('data-o');
+                            var $b = items($L).filter(function() { return +$(this).attr('data-o') > o; }).first();
+                            insertGroup($li, $b);
+                        });
+                        $('#sp-stage-top').on('click', function() { insertGroup(items($S), items($L).first()); });
+                        $('#sp-stage-bot').on('click', function() { insertGroup(items($S), null); });
+                        $('#sp-filter').on('input', function() {
+                            var q = $.trim(this.value).toLowerCase();
+                            items($L).each(function() { $(this).toggle(!q || $(this).text().toLowerCase().indexOf(q) >= 0); });
+                        });
+                        $('#sp-sortby').on('change', function() {
+                            var k = this.value; if (!k) return;
+                            var arr = items($L).toArray();
+                            var key = function(e) { var d = e.dataset; return k === 'client' ? (d.client || '') : (d.bom || ''); };
+                            arr.sort(function(a, b) { var x = key(a), y = key(b), c = x < y ? -1 : x > y ? 1 : 0; return k === 'bomdesc' ? -c : c; });
+                            $L.append(arr); renum(); this.value = ''; $('#sp-body').scrollTop(0);
+                        });
+                        function destroySortables() { if (sortL) { sortL.destroy(); sortL = null; } if (sortS) { sortS.destroy(); sortS = null; } }
+                        function initSortables() {
+                            destroySortables();
+                            var common = { group: 'sp', draggable: 'li[data-id]', filter: 'input,button,label,.sp-slotli', preventOnFilter: false, animation: 120, forceFallback: true, scroll: true, scrollSensitivity: 60, scrollSpeed: 18, ghostClass: 'sortable-ghost' };
+                            // 勾選的項目：拖其中一筆跨清單時，其餘勾選的一起帶走
+                            var carry = [];
+                            var onStart = function(evt) {
+                                carry = [];
+                                var $it = $(evt.item);
+                                if ($it.find('.sp-sel').prop('checked')) {
+                                    carry = $it.parent().children('li[data-id]').filter(function() { return this !== evt.item && $(this).find('.sp-sel').prop('checked'); }).toArray();
+                                }
+                            };
+                            var onAdd = function(evt) {
+                                if (carry.length) $(carry).insertAfter($(evt.item));
+                                carry = []; renum();
+                            };
+                            sortL = new Sortable($L[0], $.extend({}, common, { onStart: onStart, onAdd: onAdd, onEnd: function() { renum(); } }));
+                            sortS = new Sortable($S[0], $.extend({}, common, { onStart: onStart, onAdd: onAdd, onEnd: function() { renum(); } }));
+                        }
+                        // 關閉前：暫放區沒放回的，依原位置放回左側，避免遺失
+                        window.spReturnStaged = function() {
+                            items($S).each(function() {
+                                var o = +$(this).attr('data-o');
+                                var $b = items($L).filter(function() { return +$(this).attr('data-o') > o; }).first();
+                                if ($b.length) $(this).insertBefore($b); else $L.append(this);
+                            });
+                            $L.children('.sp-slotli').remove();
+                        };
+                        // ===== 生管急件、預排 =====
+                        var esc = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
+                        function curTypeId() { var id = $L.data('target-list-id') || ''; return $('#' + id).attr('data-type-id') || ''; }   // 以排序視窗實際開的那個未指派清單為準
+                        window.spSig = function() { return items($L).add(items($S)).map(function() { return $(this).attr('data-id') + ':' + ($(this).attr('data-purg') || 0); }).get().join(','); };
+                        $('#unassignedSortModal').on('click', '.sp-urg', function(e) {
+                            e.stopPropagation();
+                            var $li = $(this).closest('li'), on = $li.attr('data-purg') !== '1';
+                            $li.attr('data-purg', on ? 1 : 0);
+                            $(this).toggleClass('btn-danger', on).toggleClass('btn-default', !on);
+                        });
+                        $('#unassignedSortModal').on('click', '.sp-unpre', function(e) {
+                            e.stopPropagation();
+                            var $li = $(this).closest('li');
+                            if (!confirm('取消這筆預排？（它會從未指派清單移除）')) return;
+                            $.post(location.pathname, { action: 'ps_plan_remove', fid: $li.attr('data-id') }, function(res) {
+                                if (res && res.success) { $li.remove(); renum(); } else alert((res && res.message) || '取消失敗');
+                            }, 'json');
+                        });
+                        // 預排面板
+                        var preTimer = null, preRows = [];
+                        function preLoad() {
+                            var tid = curTypeId();
+                            $('#sp-pre-msg').text('查詢中…');
+                            $.post(location.pathname, { action: 'ps_plan_candidates', type_id: tid, client: $('#sp-pre-client').val(), tag: $('#sp-pre-tag').val(), part: $('#sp-pre-part').val(), bom: $('#sp-pre-bom').val() }, function(res) {
+                                if (!res || !res.success) { $('#sp-pre-msg').text((res && res.message) || '查詢失敗'); return; }
+                                var onList = {}; items($L).add(items($S)).each(function() { onList[$(this).attr('data-id')] = 1; });
+                                var curTag = $('#sp-pre-tag').val() || '', th = '<option value="">BOM篩選標籤：全部</option>';
+                                (res.tags || []).forEach(function(t) { th += '<option value="' + esc(t) + '"' + (t === curTag ? ' selected' : '') + '>' + esc(t) + '</option>'; });
+                                $('#sp-pre-tag').html(th);
+                                preRows = (res.rows || []).filter(function(r) { return !onList[r.bom_ing_fid]; });
+                                var h = '';
+                                preRows.forEach(function(r, i) {
+                                    h += '<tr data-i="' + i + '" style="cursor:pointer;"><td><input type="checkbox" class="sp-pre-chk"></td><td><b>' + esc(r.bom) + '</b></td><td>' + esc(r.client) + (r.client_id ? ' <span class="text-muted">(' + esc(r.client_id) + ')</span>' : '') + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.bom_filter_tag) + '</td><td>' + esc(r.ProcessName || r.process_no) + '</td><td>' + esc(r.stage || '—') + '</td><td class="text-right">' + esc(r.sqty) + '</td></tr>';
+                                });
+                                $('#sp-pre-body').html(h || '<tr><td colspan="8" class="text-center text-muted" style="padding:20px;">沒有符合的製程</td></tr>');
+                                $('#sp-pre-msg').text(preRows.length + ' 筆' + (preRows.length >= 500 ? '（僅顯示前 500 筆，請再縮小條件）' : ''));
+                                preCount();
+                            }, 'json');
+                        }
+                        function preCount() { var n = $('#sp-pre-body .sp-pre-chk:checked').length; $('#sp-pre-cnt').text(n); $('#sp-pre-add').prop('disabled', n === 0); }
+                        $('#sp-preplan-btn').on('click', function() {
+                            $('#sp-pre-client,#sp-pre-part,#sp-pre-bom').val(''); $('#sp-pre-tag').html('<option value="">BOM篩選標籤：全部</option>');
+                            $('#sp-pre-type').text('（' + ($('#v2Tabs .v2-tab.on').clone().children().remove().end().text().trim() || '') + '）');
+                            $('#sp-pre-panel').css('display', 'flex'); preLoad();
+                        });
+                        // 篩選框有內容時滑鼠左鍵雙擊＝清空並重新篩選（本頁沒載共用的 eg_input_rules.js，這幾個框自己做同一個行為）
+                        $('#unassignedSortModal').on('dblclick', '#sp-filter, #sp-pre-client, #sp-pre-part, #sp-pre-bom', function() {
+                            if (this.value !== '') { this.value = ''; $(this).trigger('input'); }
+                        });
+                        $('#sp-pre-close').on('click', function() { $('#sp-pre-panel').hide(); });
+                        $('#sp-pre-tag').on('change', preLoad);
+                        $('#sp-pre-client,#sp-pre-part,#sp-pre-bom').on('input', function() { clearTimeout(preTimer); preTimer = setTimeout(preLoad, 350); });
+                        $('#sp-pre-body').on('click', 'tr[data-i]', function(e) { if (e.target.type !== 'checkbox') { var $c = $(this).find('.sp-pre-chk'); $c.prop('checked', !$c.prop('checked')); } preCount(); });
+                        $('#sp-pre-all').on('change', function() { $('#sp-pre-body .sp-pre-chk').prop('checked', this.checked); preCount(); });
+                        $('#sp-pre-add').on('click', function() {
+                            var pick = []; $('#sp-pre-body tr[data-i]').each(function() { if ($(this).find('.sp-pre-chk').prop('checked')) pick.push(preRows[+$(this).attr('data-i')]); });
+                            if (!pick.length) return;
+                            var $b = $(this).prop('disabled', true);
+                            $.post(location.pathname, { action: 'ps_plan_add', type_id: curTypeId(), fids: JSON.stringify(pick.map(function(r) { return r.bom_ing_fid; })) }, function(res) {
+                                if (!res || !res.success) { alert((res && res.message) || '加入失敗'); $b.prop('disabled', false); return; }
+                                var added = {}; (res.added || []).forEach(function(f) { added[f] = 1; });
+                                pick.filter(function(r) { return added[r.bom_ing_fid]; }).forEach(function(r) { $L.append(buildPreLi(r)); });
+                                renum(); $('#sp-pre-panel').hide();
+                                var li = items($L).last(); if (li.length) flash(li);
+                                if (typeof showToast === 'function') showToast('成功', res.message, true);
+                            }, 'json');
+                        });
+                        function buildPreLi(r) {
+                            var html = '<div class="row" style="margin:0;"><div class="col-xs-10" style="padding:0;">' +
+                                '<i class="fa fa-bars sp-handle text-muted" style="margin-right:6px;"></i><label class="sp-chk" style="margin:0 6px 0 0;font-weight:normal;"><input type="checkbox" class="sp-sel"></label>' +
+                                '<strong><span class="sp-no"></span>. ' + esc(r.bom) + '</strong> <span class="text-muted">| ' + esc(r.part_no) + '</span> ' +
+                                '<span class="label label-info" style="font-size:10px;">待指派</span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + esc(r.stage || '—') + '</span>' +
+                                '<div style="font-size:11px;color:#666;margin-top:2px;"><span style="margin-right:10px;"><i class="fa fa-user"></i> ' + esc(r.client || '-') + '</span><span><i class="fa fa-cubes"></i> ' + esc(r.sqty) + '</span> <span style="color:#8a4f12;">（' + esc(r.ProcessName || r.process_no) + '）</span></div>' +
+                                '</div><div class="col-xs-2 text-right sp-ctl" style="padding:0;padding-top:4px;white-space:nowrap;">' +
+                                '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-urg" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
+                                '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button></div></div>';
+                            return $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="9999" data-purg="0" data-pre="1" data-id="' + r.bom_ing_fid + '" data-bom="' + esc(r.bom) + '" data-client="' + esc(r.client) + '" data-ship="">' + html + '</li>');
+                        }
+                        $('#unassignedSortModal').on('shown.bs.modal', function() { $S.empty(); $('#sp-pre-panel').hide(); renum(); initSortables(); $('#sp-body').scrollTop(0); window.spSig0 = window.spSig(); });
+                        $('#unassignedSortModal').on('hidden.bs.modal', function() { destroySortables(); });
+                    })();
+
                     // --- Modal 關閉時儲存排序 ---
                     $('#unassignedSortModal').on('hide.bs.modal', function() {
                         var $modalList = $('#unassigned-sort-list');
                         var targetListId = $modalList.data('target-list-id');
                         if (!targetListId) return;
+                        if (window.spReturnStaged) window.spReturnStaged();   // 暫放區沒放回的項目，依原位置放回，避免遺失
 
                         var $targetList = $('#' + targetListId);
                         var newOrderIds = [];
-                        $modalList.find('li').each(function() {
+                        $modalList.find('li[data-id]').each(function() {
                             newOrderIds.push($(this).data('id'));
                         });
 
@@ -5476,6 +5981,22 @@ function get_state_badge($state)
                         updateSchedule($targetList[0]);
                         updateCardSequenceBadges($targetList[0]);
                         updateColumnVisuals($targetList[0]); // 修正：排序後立即更新卡片視覺狀態 (加工中/待加工)
+
+                        // 生管排好的順序（plan_seq）＋手動急件＋預排名單：另存一份、實際有變動才留排序紀錄。
+                        // 與上面 updateSchedule（機台上的 processing_sequence）分開，現場拖卡片不會動到這份。
+                        if ($targetList.hasClass('unassigned-list') && userPerms.canReorder) {
+                            var planOrder = [], planUrg = {};
+                            $modalList.find('li[data-id]').each(function() {
+                                var fid = $(this).attr('data-id'); planOrder.push(fid); planUrg[fid] = parseInt($(this).attr('data-purg')) || 0;
+                            });
+                            var planChanged = !!window.spSig && window.spSig() !== window.spSig0;
+                            $.post(location.pathname, {
+                                action: 'ps_plan_save', type_id: $targetList.attr('data-type-id'),
+                                order: JSON.stringify(planOrder), urgent: JSON.stringify(planUrg), changed: planChanged ? '1' : '0'
+                            }, function(res) {
+                                if (res && res.success && planChanged && window.v2Refresh) setTimeout(function() { window.v2Refresh(); }, 500);   // 預排新增的卡片、急件色要重畫
+                            }, 'json');
+                        }
                     });
 
                     // --- 新增：排程列表 Modal 功能 ---
@@ -5982,12 +6503,8 @@ function get_state_badge($state)
                             // 1. 如果卡片已排定 (columnMachineId 存在)，則顯示所有機台 (或至少包含該機台)，並選中它。
                             // 2. 如果卡片未排定 (columnMachineId 空)，則只顯示 process_type_id 相符的機台。
 
-                            var showOption = false;
-                            if (columnMachineId) {
-                                showOption = true; // 已排定時顯示全部，方便換機台 (或者您希望只顯示同類型的也可以，這裡先顯示全部)
-                            } else {
-                                if (m.machine_type_id == processTypeId) showOption = true;
-                            }
+                            // 一律只列「此製程大類」底下的機台；已排定的那台就算不同類也保留（避免預選值消失）
+                            var showOption = (m.machine_type_id == processTypeId) || (columnMachineId && m.machine_id == columnMachineId);
 
                             if (showOption) {
                                 var selected = (columnMachineId && m.machine_id == columnMachineId) ? 'selected' : '';
@@ -6443,16 +6960,13 @@ function get_state_badge($state)
                             if (res.success) {
                                 showToast('成功', res.message, true);
 
-                                if (res.moved_to_unassigned) {
-                                    // 若已無報工紀錄，重新整理頁面以移回未指派
-                                    setTimeout(function() {
-                                        location.reload();
-                                    }, 1000);
-                                } else {
+                                // 刪除後看板的進度／機台歸屬可能改變（已無報工紀錄會移回未指派），一律就地更新
+                                if (!res.moved_to_unassigned) {
                                     var fid = $('#modal_bom_ing_fid').val();
                                     var pno = $('#modal_process_no').val();
                                     loadReportHistory(fid, pno); // 重新載入列表
                                 }
+                                window.v2Reload();
                             } else {
                                 alert(res.message);
                             }
@@ -6934,9 +7448,7 @@ function get_state_badge($state)
                                 $.when.apply($, promises).done(function() {
                                     showToast('成功', '資料已更新', true);
                                     $('#quickReportModal').modal('hide');
-                                    setTimeout(function() {
-                                        location.reload();
-                                    }, 1000);
+                                    window.v2Reload();
                                 }).fail(function() {
                                     showToast('錯誤', '更新時發生錯誤', false);
                                 });
@@ -7219,15 +7731,10 @@ function get_state_badge($state)
                                         showToast('已自動開立異常單', '單號 ' + pd.no + '（累積 ' + periodTxt + ' 共 ' + pd.qty + ' 件NG，開單人：' + pd.opener + '），已轉品管判定', true);
                                     }
                                     // 持續性生產（未完工）每兩週提醒一次：累積NG尚未開單時，跳出詢問是否先開一張累積單
+                                    // 報工完立刻就地更新看板（AJAX，不整頁重載；提示訊息是浮動通知，不必等它消失）
+                                    window.v2Reload();
                                     if (response.suggest_open) {
-                                        qabHandleSuggestOpen(response.suggest_open, function () {
-                                            setTimeout(function () { location.reload(); }, 800);
-                                        });
-                                    } else {
-                                        // 延遲 3 秒後重新整理，讓使用者看清楚提示
-                                        setTimeout(function() {
-                                            location.reload();
-                                        }, 3000);
+                                        qabHandleSuggestOpen(response.suggest_open, function () { window.v2Reload(); });
                                     }
                                 } else {
                                     showToast('錯誤', response.message, false);
@@ -7362,7 +7869,7 @@ function get_state_badge($state)
 `;
 
                                             tableHtml += `<tr class="finished-task-item" data-json='${jsonStr}' data-process-type-id="${item.process_type_id}" style="cursor:pointer;">
-                                <td>${item.report_date}</td>
+                                <td>${item.report_date}${item.has_partial ? `<div><span style="display:inline-block;line-height:16px;padding:0 6px;font-size:11px;border-radius:3px;background:#DCEDC8;color:#33691E;border:1px solid #AED581;"><i class="fa fa-wrench"></i> 補加工</span></div>` : ``}</td>
                                     <td>${item.Client_Name}</td>
                                 <td>${bomPartCell}</td> 
                                     <td>${item.ProcessName || item.process_no || ''}</td>
@@ -7591,9 +8098,7 @@ function get_state_badge($state)
                             if (response.success) {
                                 $('#machineAbnormalModal').modal('hide');
                                 showToast('成功', response.message, true);
-                                setTimeout(function() {
-                                    location.reload();
-                                }, 1000);
+                                window.v2Reload();
                             } else {
                                 alert(response.message);
                             }
@@ -8369,9 +8874,8 @@ function get_state_badge($state)
                         }, function(res) {
                             if (res.success) {
                                 showToast('成功', res.message, true);
-                                setTimeout(function() {
-                                    location.reload();
-                                }, 1000);
+                                // V2：不整頁重載，重新抓看板資料後就地更新（新拆出的工單直接出現在未指派）
+                                if (window.v2Refresh) window.v2Refresh(); else setTimeout(function() { location.reload(); }, 1000);
                             } else {
                                 alert(res.message);
                             }
@@ -8388,9 +8892,8 @@ function get_state_badge($state)
                         }, function(res) {
                             if (res.success) {
                                 showToast('成功', res.message, true);
-                                setTimeout(function() {
-                                    location.reload();
-                                }, 1000);
+                                // V2：不整頁重載，重新抓看板資料後就地更新（新拆出的工單直接出現在未指派）
+                                if (window.v2Refresh) window.v2Refresh(); else setTimeout(function() { location.reload(); }, 1000);
                             } else {
                                 alert(res.message);
                             }
@@ -8763,8 +9266,13 @@ function get_state_badge($state)
                                 var $machineSelect = $('#modal_machine_id');
                                 $machineSelect.empty().append('<option value="">請選擇機台</option>');
                                 $('#hidden_machine_id').remove();
+                                // 編輯既有報工：只列該報工那台機台所屬製程大類的機台
+                                var rMach = allMachines.filter(function(m) { return m.machine_id == r.machine_id; })[0];
+                                var rTypeId = r.process_type_id || (rMach ? rMach.machine_type_id : null);
                                 allMachines.forEach(function(m) {
-                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
+                                    if (!rTypeId || m.machine_type_id == rTypeId || m.machine_id == r.machine_id) {
+                                        $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
+                                    }
                                 });
                                 if ($('#modal_machine_id option[value="' + r.machine_id + '"]').length > 0) {
                                     $machineSelect.val(r.machine_id);
@@ -8896,94 +9404,144 @@ function get_state_badge($state)
                         }, 'json');
                     }
 
+                    // ===== 機台 24H 時程表（2026-10-28 重做）=====
+                    // 重點：①預設只列「這天有報工」的機台 ②時間軸自動縮到有資料的時段（可切回全天24H）
+                    // ③同機台時間重疊的工單會分成上下兩排並用紅框標出 ④點一下方塊在上方看完整資料，雙擊才編輯
+                    var SCH_LAST = null;
+                    function escH(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+                    function hhmm(min) { return ('0' + Math.floor(min / 60)).slice(-2) + ':' + ('0' + (min % 60)).slice(-2); }
+
                     function renderSchedule(machines, reports, dateStr) {
-                        var $container = $('#schedule-container');
-                        $container.empty();
+                        SCH_LAST = { machines: machines, reports: reports, dateStr: dateStr };
+                        drawSchedule();
+                    }
 
-                        // 1. Time Labels Column
-                        // 1. Header
-                        var headerHtml = '<div class="schedule-header">';
-                        headerHtml += '<div class="header-machine-name">機台</div>';
-                        headerHtml += '<div class="header-timeline">';
-                        for (var h = 0; h < 24; h++) {
-                            headerHtml += `<div class="header-hour">${('0'+h).slice(-2)}</div>`;
-                        }
-                        headerHtml += '</div></div>';
-                        $container.append(headerHtml);
+                    function drawSchedule() {
+                        if (!SCH_LAST) return;
+                        var machines = SCH_LAST.machines, reports = SCH_LAST.reports, dateStr = SCH_LAST.dateStr;
+                        var $container = $('#schedule-container').empty();
+                        $('#schedule_detail').hide().empty();
+                        var parse = function (s) { return new Date(String(s).replace(' ', 'T')); };
+                        var dayStart = parse(dateStr + ' 00:00:00'), dayEnd = parse(dateStr + ' 23:59:59');
 
-                        // 2. Machine Rows
-                        machines.forEach(function(mach) {
-                            var rowHtml = `<div class="machine-row">`;
-                            var machDisp = machineOptionLabel(mach);
-                            rowHtml += `<div class="machine-name" title="${machDisp}">${machDisp}</div>`;
-                            rowHtml += `<div class="machine-timeline">`;
-
-                            // Background Grid
-                            rowHtml += `<div class="timeline-bg-grid">`;
-                            for (var h = 0; h < 24; h++) {
-                                rowHtml += `<div class="bg-hour"></div>`;
-                            }
-                            rowHtml += `</div>`; // End bg-grid
-
-                            // Tasks
-                            var machReports = reports.filter(r => r.machine_id == mach.machine_id);
-                            var tasksHtml = '';
-
-                            machReports.forEach(function(r) {
-                                // Calculate position
-                                var drawBlock = function(start, end, type) {
-                                    if (!start || !end) return;
-                                    var s = new Date(start);
-                                    var e = new Date(end);
-
-                                    var dayStart = new Date(dateStr + ' 00:00:00');
-                                    var dayEnd = new Date(dateStr + ' 23:59:59');
-
-                                    if (e < dayStart || s > dayEnd) return;
-                                    if (s < dayStart) s = dayStart;
-                                    if (e > dayEnd) e = dayEnd;
-
-                                    var totalMinutes = 24 * 60;
-                                    var startMinutes = (s.getHours() * 60) + s.getMinutes();
-                                    var durationMinutes = (e - s) / 1000 / 60;
-
-                                    var leftPct = (startMinutes / totalMinutes) * 100;
-                                    var widthPct = (durationMinutes / totalMinutes) * 100;
-
-                                    var title = `${r.bom} ${r.ProcessName || ''}`;
-                                    var timeRange = `${start.substr(11,5)}~${end.substr(11,5)}`;
-                                    var cls = type === 'setup' ? 'task-setup' : 'task-prod';
-
-                                    // Tooltip content
-                                    var tooltip = `${title}\n${timeRange}\nID:${r.report_id}`;
-
-
-                                    // Block content
-                                    var qty_info = '';
-                                    if (type === 'prod') {
-                                        var ok_qty = parseInt(r.produced_qty) || 0;
-                                        var ng_qty = parseInt(r.total_ng) || 0;
-                                        qty_info = ` | ${ok_qty}` + (ng_qty > 0 ? ` / <span style="color: #ffdddd;">${ng_qty}</span>` : '');
-                                    }
-                                    var block_content = `${r.bom}<br><small>${r.d_id}</small><br><small>${timeRange}${qty_info}</small>`;
-
-                                    tasksHtml += `<div class="task-block ${cls}" style="left:${leftPct}%; width:${widthPct}%;" title="${tooltip}" ondblclick="openReportForEditing(${r.report_id})">
-                            ${block_content}
-                        </div>`;
-                                };
-
-                                drawBlock(r.setup_start_time, r.setup_end_time, 'setup');
-                                drawBlock(r.production_start_time, r.production_end_time, 'prod');
+                        // 1. 每台機台的時間片段（架機／生產各一段，裁到當天範圍內，單位：自 00:00 起算的分鐘）
+                        var segsBy = {};
+                        reports.forEach(function (r) {
+                            [['setup', r.setup_start_time, r.setup_end_time], ['prod', r.production_start_time, r.production_end_time]].forEach(function (t) {
+                                if (!t[1] || !t[2]) return;
+                                var s = parse(t[1]), e = parse(t[2]);
+                                if (isNaN(s) || isNaN(e) || e < dayStart || s > dayEnd) return;
+                                if (s < dayStart) s = dayStart;
+                                if (e > dayEnd) e = dayEnd;
+                                var sm = s.getHours() * 60 + s.getMinutes();
+                                var em = Math.min(1440, Math.max(sm + 1, Math.round((e - dayStart) / 60000)));
+                                (segsBy[r.machine_id] = segsBy[r.machine_id] || []).push({ r: r, type: t[0], s: sm, e: em, rs: t[1], re: t[2] });
                             });
-
-                            rowHtml += tasksHtml;
-                            rowHtml += `</div>`; // End machine-timeline
-                            rowHtml += `</div>`; // End machine-row
-                            $container.append(rowHtml);
                         });
 
+                        // 2. 排上下層（lane）並標記重疊
+                        var overMachines = 0, withJobs = 0, minS = 1440, maxE = 0;
+                        var list = [];
+                        machines.forEach(function (mach) {
+                            var segs = (segsBy[mach.machine_id] || []).slice().sort(function (a, b) { return a.s - b.s || a.e - b.e; });
+                            var laneEnd = [];
+                            segs.forEach(function (sg) {
+                                var ln = 0;
+                                while (ln < laneEnd.length && laneEnd[ln] > sg.s) ln++;
+                                laneEnd[ln] = sg.e; sg.lane = ln;
+                                minS = Math.min(minS, sg.s); maxE = Math.max(maxE, sg.e);
+                            });
+                            segs.forEach(function (a, i) {
+                                a.over = [];
+                                segs.forEach(function (b, j) { if (i !== j && a.s < b.e && b.s < a.e) a.over.push(b); });
+                            });
+                            var hasOver = segs.some(function (x) { return x.over.length; });
+                            if (segs.length) withJobs++;
+                            if (hasOver) overMachines++;
+                            list.push({ mach: mach, segs: segs, lanes: Math.max(1, laneEnd.length), hasOver: hasOver });
+                        });
+                        var showEmpty = $('#schedule_show_empty').is(':checked');
+                        var rows = list.filter(function (x) { return x.segs.length || showEmpty; });
 
+                        // 3. 時間軸範圍：預設縮到有資料的時段（前後各留 1 小時、至少 8 小時）
+                        var lo = 0, hi = 24;
+                        if (!$('#schedule_full24').is(':checked')) {
+                            if (maxE > 0) { lo = Math.max(0, Math.floor(minS / 60) - 1); hi = Math.min(24, Math.ceil(maxE / 60) + 1); }
+                            else { lo = 8; hi = 18; }
+                            while (hi - lo < 8) { if (lo > 0) lo--; if (hi - lo < 8 && hi < 24) hi++; if (lo === 0 && hi === 24) break; }
+                        }
+                        var span = (hi - lo) * 60;
+
+                        $('#schedule_summary').html('<b>' + withJobs + '</b> 台有報工' +
+                            (overMachines ? '；<span style="color:#DD5138;font-weight:bold;">' + overMachines + ' 台時間重疊（紅框）</span>' : '；沒有時間重疊') +
+                            '　｜　時間軸 ' + hhmm(lo * 60) + '～' + hhmm(hi * 60));
+
+                        if (!rows.length) {
+                            $container.html('<div class="tl2-empty">這一天沒有報工紀錄（可勾選「顯示沒有報工的機台」或換日期）</div>');
+                            return;
+                        }
+
+                        // 4. 表頭
+                        var hh = '<div class="tl2-head"><div class="tl2-name">機台</div><div class="tl2-axis">';
+                        for (var h = lo; h < hi; h++) hh += '<div class="tl2-hour">' + ('0' + h).slice(-2) + '</div>';
+                        $container.append(hh + '</div></div>');
+
+                        // 5. 機台列
+                        var LANE_H = 46;
+                        rows.forEach(function (x) {
+                            var disp = machineOptionLabel(x.mach);
+                            var html = '<div class="tl2-row"><div class="tl2-name" title="' + escH(disp) + '"><span class="tl2-mn">' + escH(disp) + '</span>' +
+                                (x.hasOver ? '<span class="tl2-warn">重疊</span>' : '') + '</div>' +
+                                '<div class="tl2-line" style="height:' + (x.lanes * LANE_H + 6) + 'px;">';
+                            for (var g = 0; g < hi - lo; g++) html += '<i class="tl2-grid" style="left:' + (g / (hi - lo) * 100) + '%"></i>';
+                            x.segs.forEach(function (sg, idx) {
+                                var r = sg.r;
+                                var left = (sg.s - lo * 60) / span * 100, width = Math.max(0.4, (sg.e - sg.s) / span * 100);
+                                var qty = '';
+                                if (sg.type === 'prod') {
+                                    var ok = parseInt(r.produced_qty) || 0, ng = parseInt(r.total_ng) || 0;
+                                    qty = ' ｜ 良 ' + ok + (ng > 0 ? ' / NG ' + ng : '');
+                                }
+                                var cls = 'tl2-blk ' + (sg.type === 'setup' ? 'tl2-setup' : 'tl2-prod') + (sg.over.length ? ' tl2-over' : '');
+                                html += '<div class="' + cls + '" data-mid="' + escH(x.mach.machine_id) + '" data-i="' + idx + '" data-rid="' + escH(r.report_id) + '" style="left:' + left + '%;width:' + width + '%;top:' + (3 + sg.lane * LANE_H) + 'px;height:' + (LANE_H - 4) + 'px;">' +
+                                    '<div class="tl2-l1"><b>' + escH(r.bom || '臨時加工') + '</b>' + (r.report_source === 'PARTIAL' ? '<span class="tl2-pt">補加工</span>' : '') + '</div>' +
+                                    '<div class="tl2-l2">' + (sg.type === 'setup' ? '架機 ' : '') + escH(r.ProcessName || '') + ' ' + escH(r.d_id || '') + '</div>' +
+                                    '<div class="tl2-l3">' + escH(sg.rs.substr(11, 5)) + '~' + escH(sg.re.substr(11, 5)) + escH(qty) + '</div></div>';
+                            });
+                            $container.append(html + '</div></div>');
+                        });
+                        SCH_LAST.rows = rows;
                     }
+
+                    // 點一下方塊：在上方顯示完整資料與重疊對象；雙擊才開報工編輯
+                    $(document).on('click', '#schedule-container .tl2-blk', function () {
+                        if (!SCH_LAST || !SCH_LAST.rows) return;
+                        var mid = String($(this).attr('data-mid')), i = parseInt($(this).attr('data-i'), 10);
+                        var row = SCH_LAST.rows.filter(function (x) { return String(x.mach.machine_id) === mid; })[0];
+                        if (!row || !row.segs[i]) return;
+                        var sg = row.segs[i], r = sg.r;
+                        $('#schedule-container .tl2-blk').removeClass('tl2-sel'); $(this).addClass('tl2-sel');
+                        var ok = parseInt(r.produced_qty) || 0, ng = parseInt(r.total_ng) || 0;
+                        var h = '<b>' + escH(machineOptionLabel(row.mach)) + '</b>　製令 <b>' + escH(r.bom || '臨時加工') + '</b>' +
+                            (r.d_id ? '（' + escH(r.d_id) + '）' : '') + '　' + escH(r.ProcessName || '') +
+                            '　<span class="tl2-kind ' + sg.type + '">' + (sg.type === 'setup' ? '架機' : '生產') + '</span> ' +
+                            escH(sg.rs.substr(11, 5)) + '～' + escH(sg.re.substr(11, 5)) + '（' + (sg.e - sg.s) + ' 分鐘）' +
+                            (sg.type === 'prod' ? '　良品 ' + ok + (ng > 0 ? ' / NG ' + ng : '') : '') +
+                            (r.report_source === 'PARTIAL' ? '　<span class="tl2-pt">補加工</span>' : '');
+                        if (sg.over.length) {
+                            h += '<div class="tl2-overtxt"><i class="fa fa-exclamation-triangle"></i> 與下列時間重疊：' + sg.over.map(function (o) {
+                                return escH(o.r.bom || '臨時加工') + ' ' + (o.type === 'setup' ? '架機' : '生產') + ' ' + escH(o.rs.substr(11, 5)) + '～' + escH(o.re.substr(11, 5));
+                            }).join('、') + '</div>';
+                        }
+                        h += '<div class="tl2-hint">雙擊方塊可開啟該筆報工編輯</div>';
+                        $('#schedule_detail').html(h).show();
+                    });
+                    $(document).on('dblclick', '#schedule-container .tl2-blk', function () {
+                        var rid = $(this).attr('data-rid');
+                        if (rid && typeof openReportForEditing === 'function') openReportForEditing(rid);
+                    });
+                    $(document).on('change', '#schedule_full24, #schedule_show_empty', drawSchedule);
+
                 });
 
                 // --- Clipboard Functions ---
@@ -9100,7 +9658,7 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                         <ul>
                             <li>上方每個按鈕是一個<b>製程大類</b>，顯示機台數、工單數、未指派數（紅字）。點一下切換。</li>
                             <li>下方第一欄是該大類的<b>未指派</b>工單，其餘每一欄是一台機台。</li>
-                            <li>機台欄頂端顏色＝狀態：綠＝加工中、橘＝待加工、灰＝空閒、紅＝異常。欄頭顯示工單張數、剩餘件數、加工中進度；橘色長條是<b>負荷</b>（以本類剩餘件數最多的機台為 100%）。</li>
+                            <li>機台欄頂端顏色＝狀態：綠＝加工中、橘＝待加工、灰＝空閒、紅＝異常。欄頭顯示工單張數、剩餘件數、加工中進度；下方綠色長條是<b>加工中那張工單的進度</b>（與工單卡片上的綠色條同一個數字）。</li>
                             <li>工單左側色條：紅＝特急件、橘＝急件；綠底 ▶ 是正在加工的那張（固定在第一張）。滑鼠移到 <i class="fa fa-commenting"></i> 可看備註。</li>
                         </ul>
                         <h5><b>排加工順序／指派機台</b></h5>
@@ -9110,9 +9668,9 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                         </ul>
                         <h5><b>報工</b></h5>
                         <ul>
-                            <li>按工單上的「報工」或點工單本身開啟報工視窗。</li>
+                            <li>點工單卡片就會開啟報工視窗。</li>
                             <li>共用帳號請先選<b>報工人員</b>（實際做的人），下次會自動帶入上次選的人。</li>
-                            <li>後補報工：改「報工日期」或按今天／昨天／前天，時間會自動帶 08:00～17:00，可再自行修改；有架機再展開架機欄位。</li>
+                            <li>報工日期固定為當天（與原頁相同）；要補報前幾天，直接改「生產開始／結束」時間，系統會依時間算出報工日期。選好報工人員會自動帶入 08:00～17:00，可再修改；有架機再展開架機欄位。最近 10 筆報工紀錄預設展開，可按標題收合。</li>
                         </ul>
                         <h5><b>其他功能</b></h5>
                         <ul>
@@ -9181,7 +9739,9 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
             client: $k.attr('data-client') || '', process: $.trim($k.find('.card-process-name').first().text()),
             sq: sq, ok: ok, ng: ng, remain: Math.max(0, sq - ok), pct: sq > 0 ? Math.min(100, Math.round(ok / sq * 100)) : 0,
             ship: $k.attr('data-shipping-date') || '', notes: notes, arrived: String($k.attr('data-order-id')) === '1',
+            preplan: $k.attr('data-preplan') === '1', stage: $k.attr('data-stage') || '', planUrgent: $k.attr('data-plan-urgent') === '1',
             urgent: /card-priority-E/.test(cls) ? 'E' : (/card-priority-U/.test(cls) ? 'U' : ''),
+            operator: $k.attr('data-operator') || '', start: $k.attr('data-start') || '',
             now: /now-processing/.test(cls), split: ($k.attr('data-ps') || '').indexOf('(拆分工單)') >= 0,
             module: $.trim($k.find('.module-filter-btn').first().text()),
             est: $.trim($k.find('.card-est-completion').first().text()).replace(/^.*預計完工[:：]\s*/, '')
@@ -9198,6 +9758,32 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     }
 
     /* ---------- 畫面 ---------- */
+    // 重新抓目前頁面，只換掉看板資料區（舊版隱藏看板的 DOM），再重畫新看板；失敗才整頁重載。
+    // 拆分／刪除拆分工單後用它，不必整頁重新整理就能在未指派看到結果。
+    var refreshing = false, refreshAgain = false, refreshStart = 0;
+    window.v2Refresh = function (cb) {
+        if (refreshing && Date.now() - refreshStart < 15000) { refreshAgain = true; return; }   // 更新中又被要求更新：等這次完成後再補一次，避免互相覆蓋（超過 15 秒視為卡住，直接重來）
+        refreshing = true; refreshStart = Date.now();
+        $.get(location.pathname + location.search, { _: Date.now() }, function (html) {
+            var $new = $('<div></div>').append($.parseHTML(html, document, false)).find('#machineTypeTabContent').first();
+            if (!$new.length) { location.reload(); return; }
+            // 記住各清單與整頁的捲動位置，更新後還原，畫面才不會「跳一下」
+            var sc = {}, wy = window.pageYOffset;
+            $('#v2Board .v2-list').each(function () { sc[$(this).attr('data-mid')] = this.scrollTop; });
+            $('#machineTypeTabContent').html($new.html());
+            // 未指派欄位在 #machineTypeTabContent 外面（原看板左側），也要一起換，否則新拆出／已刪除的工單不會變
+            var $newUn = $('<div></div>').append($.parseHTML(html, document, false)).find('.unassigned-wrapper').first();
+            if ($newUn.length) $('.unassigned-wrapper').first().replaceWith($newUn);
+            render();
+            $('#v2Board .v2-list').each(function () { var y = sc[$(this).attr('data-mid')]; if (y) this.scrollTop = y; });
+            window.scrollTo(0, wy);
+            if (cb) cb();
+        }, 'html').fail(function () { location.reload(); }).always(function () {
+            refreshing = false;
+            if (refreshAgain) { refreshAgain = false; window.v2Refresh(); }
+        });
+    };
+    window.v2Reload = function () { if (window.v2Refresh) window.v2Refresh(); else location.reload(); };
     function render() {
         var groups = collect();
         var q = $.trim($('#card-search-input').val() || '').toLowerCase();
@@ -9236,25 +9822,29 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         var bh = '';
         // 未指派
         var uR = sumRemain(cur.ucards);
-        bh += '<div class="v2-col v2-col-u"><div class="v2-col-h"><div class="v2-col-t"><i class="fa fa-inbox"></i> 未指派' +
+        // 未指派固定在左側整欄；機台放進右邊自己的格狀區，換列時不會跑到未指派下方
+        bh += '<div class="v2-ucol"><div class="v2-col v2-col-u"><div class="v2-col-h"><div class="v2-col-t"><i class="fa fa-inbox"></i> 未指派' +
             (P.canDrag ? '<button type="button" class="btn btn-xs btn-default v2-usort" title="調整未指派順序"><i class="fa fa-sort"></i></button>' : '') + '</div>' +
-            '<div class="v2-load"><span><b>' + cur.ucards.length + '</b> 張</span><span>剩餘 <b>' + num(uR) + '</b> 件</span></div>' +
+            '<div class="v2-load"><span><b>' + cur.ucards.length + '</b> 張</span><span title="未指派工單還要加工的總數量（各張工單數量減已報工良品數）">共 <b>' + num(uR) + '</b> pcs</span></div>' +
             '<div class="v2-col-tip">' + (P.canDrag ? '拖到右邊機台即指派；⋮ 可移到最前／最後' : '') + '</div></div>' +
-            listHtml('unassigned-' + cur.typeId, cur.ucards, q, true) + '</div>';
+            listHtml('unassigned-' + cur.typeId, cur.ucards, q, true) + '</div></div><div class="v2-mgrid">';
         cur.machines.forEach(function (m) {
             var st = status(m, m.cards), r = sumRemain(m.cards);
             var now = m.cards.filter(function (c) { return c.now; })[0];
             var lastEst = m.cards.length ? m.cards[m.cards.length - 1].est : '';
             bh += '<div class="v2-col st-' + st.cls + '" data-mid="' + esc(m.id) + '"><div class="v2-col-h">' +
-                '<div class="v2-col-t"><span class="v2-dot ' + st.cls + '"></span><span class="v2-mname" title="' + esc(m.name) + '">' + esc(m.name) + '</span>' +
+                '<div class="v2-col-t"><span class="v2-dot ' + st.cls + '"></span><span class="v2-mname" title="' + esc(m.name) + '">' + mnameHtml(m.name) + '</span>' +
                 '<span class="v2-st ' + st.cls + '">' + st.txt + '</span>' +
                 '<button type="button" class="btn btn-xs btn-default v2-abn" title="機台異常通報"><i class="fa fa-exclamation-triangle"></i></button></div>' +
                 '<div class="v2-load"><span><b>' + m.cards.length + '</b> 張</span><span>剩餘 <b>' + num(r) + '</b> 件</span>' +
                 (now ? '<span>加工中進度 <b>' + now.pct + '%</b></span>' : '') + '</div>' +
-                '<div class="v2-loadbar" title="負荷（剩餘數量，以本類最多的機台為 100%）"><i style="width:' + Math.round(r / maxR * 100) + '%"></i></div>' +
+                // 進度條只表示「加工中那張工單」的完成進度（與下方卡片的綠色進度條同一個數字、同一種顏色）；
+                // 沒有加工中的工單就留空，不再用「相對負荷」這種另一種意義的橘色條，避免兩條互相矛盾
+                '<div class="v2-loadbar prog" title="' + (now ? '加工中工單進度 ' + now.pct + '%' : '目前沒有加工中的工單') + '"><i style="width:' + (now ? now.pct : 0) + '%"></i></div>' +
                 (lastEst && lastEst !== '-' ? '<div class="v2-col-tip">預計全部完工：' + esc(lastEst) + '</div>' : '<div class="v2-col-tip">&nbsp;</div>') +
                 '</div>' + listHtml(m.id, m.cards, q, false) + '</div>';
         });
+        bh += '</div>';
         $('#v2Board').html(bh);
 
         // 跨機台拖曳
@@ -9282,15 +9872,29 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                 '<span class="v2-bom" data-copy="' + esc(c.bom) + '" title="點一下複製">' + esc(c.bom) + '</span>' +
                 (c.urgent === 'E' ? '<span class="v2-tag e">特急</span>' : '') + (c.urgent === 'U' ? '<span class="v2-tag u">急件</span>' : '') +
                 (c.arrived ? '<span class="v2-tag ok">到料</span>' : '') + (c.split ? '<span class="v2-tag sp">拆分</span>' : '') +
+                (c.preplan ? '<span class="v2-tag pre" title="預排：生管尚未移轉到這一關，先排進來；可報工">預排</span>' : '') +
                 (c.notes.length ? '<i class="fa fa-commenting v2-note" title="' + esc(c.notes.join('\n')) + '"></i>' : '') +
-                '<span class="v2-r-act">' + (P.canReport ? '<button type="button" class="btn btn-xs btn-primary v2-rep">報工</button>' : '') +
-                (P.canDrag ? menuHtml(c, isU) : '') + '</span></div>' +
+                // 點整張卡片就會開報工視窗，所以不另放「報工」按鈕
+                '<span class="v2-r-act">' + (P.canDrag ? menuHtml(c, isU) : '') + '</span></div>' +
+                (c.preplan ? '<div class="v2-r4 v2-pre">目前在：' + esc(c.stage || '—') + '</div>' : '') +
                 '<div class="v2-r2"><b>' + esc(c.part) + '</b>' + (c.client ? ' · ' + esc(c.client) : '') + (c.module ? ' · ' + esc(c.module) : '') + '</div>' +
                 '<div class="v2-r3"><span class="v2-mbar"><i style="width:' + c.pct + '%"></i></span>' +
-                '<span>剩 <b>' + num(c.remain) + '</b> / ' + num(c.sq) + '</span>' + (c.ship ? '<span class="v2-ship">交 ' + esc(c.ship) + '</span>' : '') + '</div></div>';
+                '<span>剩 <b>' + num(c.remain) + '</b> / ' + num(c.sq) + '</span>' + (c.ship ? '<span class="v2-ship">交 ' + esc(c.ship) + '</span>' : '') + '</div>' +
+                ((c.operator || c.start) ? '<div class="v2-r4">' + (c.operator ? '<span title="目前操作人員"><i class="fa fa-user"></i> ' + esc(c.operator) + '</span>' : '') +
+                    (c.start ? '<span title="開始加工時間"><i class="fa fa-clock-o"></i> 開始 ' + esc(c.start) + '</span>' : '') + '</div>' : '') + '</div>';
         });
         if (!shown) h += '<div class="v2-none">' + (q ? '無符合項目' : '無工單') + '</div>';
         return h + '</div>';
+    }
+    // 機台名稱拆兩行：前兩段（例：EG-033 車床C）當主名稱，其餘（型號）加上「(N廠)」放第二行小字
+    function mnameHtml(name) {
+        var s = String(name == null ? '' : name).trim(), fac = '';
+        var fm = s.match(/\s*(\([^)]*廠\))\s*$/);
+        if (fm) { fac = fm[1]; s = s.slice(0, fm.index).trim(); }
+        var t = s.split(/\s+/), main = s, sub = '';
+        if (t.length > 2) { main = t.slice(0, 2).join(' '); sub = t.slice(2).join(' '); }
+        sub = (sub + ' ' + fac).trim();
+        return '<span class="v2-mn1">' + esc(main) + '</span>' + (sub ? '<span class="v2-mn2">' + esc(sub) + '</span>' : '');
     }
     function menuHtml(c, isU) {
         var li = '';
@@ -9347,6 +9951,18 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     }
 
     /* ---------- 事件 ---------- */
+    // ⋮ 選單：依按鈕位置定位（空間不夠就往上開），捲動時自動關閉
+    $(document).on('shown.bs.dropdown', '.v2-row .dropdown', function () {
+        var $b = $(this).find('.dropdown-toggle'), $m = $(this).find('.dropdown-menu');
+        if (!$b.length || !$m.length) return;
+        var r = $b[0].getBoundingClientRect(), mh = $m.outerHeight(), top = r.bottom + 2;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 2);
+        $m.css({ top: top + 'px', left: 'auto', right: Math.max(8, window.innerWidth - r.right) + 'px' });
+    });
+    window.addEventListener('scroll', function (e) {
+        if (e.target && e.target.closest && e.target.closest('.dropdown-menu')) return;
+        $('.v2-row .dropdown.open').removeClass('open');
+    }, true);
     $(document).on('click', '.v2-tab', function () { TAB = String($(this).attr('data-t')); render(); });
     $(document).on('input', '#card-search-input', function () { render(); });
     $(document).on('click', '.v2-rep', function (e) { e.stopPropagation(); if (window.openTaskReport) window.openTaskReport($(this).closest('.v2-row').attr('data-fid')); });
@@ -9387,6 +10003,61 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
     /* ---------- 報工視窗：後補報工輔助 ---------- */
     function pad(n) { return (n < 10 ? '0' : '') + n; }
     function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    // ===== 報工人員：此機台報工過的人置頂，分隔後才是其他人員；並取得當天最後結束時間供接續 =====
+    var MR_CACHE = {}, USER_ORIG = {};   // MR_CACHE['機台|日期'] = {prod:[],setup:[],last_end:''}
+    function userOrig(sel) {
+        if (!USER_ORIG[sel]) USER_ORIG[sel] = $(sel + ' option').not('[value=""]').map(function () { return { v: this.value, t: $(this).text() }; }).get();
+        return USER_ORIG[sel];
+    }
+    function reorderUsers(sel, ids) {
+        var $s = $(sel); if (!$s.length) return;
+        var cur = $s.val(), all = userOrig(sel), top = [], rest = [], map = {};
+        all.forEach(function (o) { map[o.v] = o; });
+        (ids || []).forEach(function (id) { if (map[String(id)]) top.push(map[String(id)]); });   // 只取仍在名單內（在職、屬可報工部門）的人
+        var inTop = {}; top.forEach(function (o) { inTop[o.v] = 1; });
+        all.forEach(function (o) { if (!inTop[o.v]) rest.push(o); });
+        var h = '<option value="">-- 選擇 --</option>';
+        var opt = function (o) { return '<option value="' + esc(o.v) + '">' + esc(o.t) + '</option>'; };
+        if (top.length) h += '<optgroup label="★ 此機台報工過的人員">' + top.map(opt).join('') + '</optgroup><optgroup label="────── 其他人員 ──────">' + rest.map(opt).join('') + '</optgroup>';
+        else h += rest.map(opt).join('');
+        $s.html(h).val(cur);
+    }
+    function applyReporters(d) {
+        reorderUsers('#modal_production_user_id', d.prod);
+        reorderUsers('#modal_setup_user_id', d.setup);
+        // 開始時間：沒被使用者改過的自動值 → 改成這台機台當天最後結束時間（接續上一筆，仍可自行修改）
+        var $s = $('#modal_production_start_time'), $e = $('#modal_production_end_time');
+        if (d.last_end && $s.val() && $s.val() === $s.data('v2auto') && d.last_end > $s.val()) {
+            $s.val(d.last_end).data('v2auto', d.last_end);
+            if ($e.val() && $e.val() === $e.data('v2auto') && $e.val() <= d.last_end) { $e.val('').removeData('v2auto'); }
+            $s.trigger('change');
+        }
+    }
+    function loadReporters() {
+        var mid = $('#modal_machine_id').val(), date = $('input[name="report_date"]').val();
+        if (!mid) { reorderUsers('#modal_production_user_id', []); reorderUsers('#modal_setup_user_id', []); return; }
+        var key = mid + '|' + date;
+        if (MR_CACHE[key]) { applyReporters(MR_CACHE[key]); return; }
+        $.post(SELF, { action: 'get_machine_reporters', machine_id: mid, date: date }, function (d) {
+            if (!d || !d.success) return;
+            MR_CACHE[key] = d;
+            if ($('#modal_machine_id').val() === mid) applyReporters(d);
+        }, 'json');
+    }
+    $(document).on('change', '#modal_machine_id', loadReporters);
+    $(document).on('shown.bs.modal', '#quickReportModal', function () { MR_CACHE = {}; setTimeout(loadReporters, 50); });
+
+    // NG 紀錄預設收合：有 NG 資料列（編輯舊報工、或按 + 新增）時自動展開，並在標題旁顯示筆數
+    (function () {
+        var tb = document.querySelector('#ngTable tbody'); if (!tb || !window.MutationObserver) return;
+        new MutationObserver(function () {
+            var n = tb.children.length;
+            $('#v2NgCnt').text(n).toggle(n > 0);
+            if (n > 0) $('#v2NgBox').collapse('show');
+        }).observe(tb, { childList: true });
+        $('#quickReportModal').on('hidden.bs.modal', function () { $('#v2NgBox').collapse('hide'); });
+    })();
+
     function fillTimes() {
         var date = $('input[name="report_date"]').val(); if (!date) return;
         var now = new Date(), today = ymd(now);
@@ -9394,7 +10065,10 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
          ['#modal_setup_user_id', '#modal_setup_start_time', '#modal_setup_end_time']].forEach(function (t) {
             if (!$(t[0]).val()) return;
             var $s = $(t[1]), $e = $(t[2]);
-            if (!$s.val()) { $s.val(date + ' 08:00'); $s.data('v2auto', $s.val()); }
+            if (!$s.val()) {
+                var lastEnd = (MR_CACHE[$('#modal_machine_id').val() + '|' + date] || {}).last_end;
+                $s.val(t[0] === '#modal_production_user_id' && lastEnd && lastEnd > date + ' 08:00' ? lastEnd : date + ' 08:00'); $s.data('v2auto', $s.val());
+            }
             if (!$e.val() && $(t[0]).attr('id') === 'modal_production_user_id') {
                 var endv = date + ' 17:00';
                 if (date === today) { var cap = pad(now.getHours()) + ':' + pad(now.getMinutes()); endv = date + ' ' + (cap < '17:00' ? cap : '17:00'); }

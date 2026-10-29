@@ -67,7 +67,7 @@ views/pm/drawing_rename.php
 views/pm/kpi_main.php
 views/pm/kpi_shift_setting.php
 views/pm/packing_schedule.php
-views/pm/process_schedule.php
+views/pm/不使用process_schedule.php
 views/pm/process_schedule_NOW.php
 views/pm/schedule_T5 copy.php
 views/pm/schedule_T5.php

@@ -294,7 +294,7 @@ $ui_settings = ($row_ui && !empty($row_ui['param_value'])) ? json_decode($row_ui
 $(function() {
     function submitSetting(data) {
         data.action = 'save_process_settings';
-        $.post('process_schedule.php', data, function(res) {
+        $.post(location.pathname, data, function(res) {
             alert(res.message);
             if (res.success) {
                 openSharedModal('製程設定', '../popup/modal_process_setting.php');
@@ -408,7 +408,7 @@ $(function() {
             var settingName = $(this).data('setting');
             newSettings[settingName].push($(this).val());
         });
-        $.post('process_schedule.php', {
+        $.post(location.pathname, {
             action: 'save_process_category_settings',
             settings: JSON.stringify(newSettings)
         }, function(res) {

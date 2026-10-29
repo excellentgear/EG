@@ -200,6 +200,30 @@ $PRQ_MLBL = eg_machine_label_cfg($pdo);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
 
+    // 生管排序紀錄＋現場是否依序加工（唯一實作 src/common/ps_plan_lib.php；資料由待加工排程「調整順序-未指派」存檔時留下）
+    if ($action === 'plan_analysis') {
+        header('Content-Type: application/json');
+        try {
+            require_once __DIR__ . '/../../src/common/ps_plan_lib.php';
+            $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_POST['from'] ?? '') ? $_POST['from'] : date('Y-m-d', strtotime('-30 days'));
+            $to   = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_POST['to'] ?? '') ? $_POST['to'] : date('Y-m-d');
+            $tid  = (int)($_POST['type_id'] ?? 0);
+            $an   = ps_plan_analyze($pdo, $from, $to, $tid);
+            $logs = ps_plan_log_list($pdo, $from, $to, $tid);
+            $pn = [];
+            foreach ($pdo->query("SELECT ProcessNo, ProcessName FROM process_no")->fetchAll(PDO::FETCH_ASSOC) as $r) $pn[$r['ProcessNo']] = $r['ProcessName'];
+            foreach ($an['rows'] as &$r) $r['process_name'] = $pn[$r['process_no']] ?? (string)$r['process_no'];
+            unset($r);
+            foreach ($logs as &$l) foreach ($l['items'] as &$it) $it[] = $pn[$it[2]] ?? (string)$it[2];
+            unset($l, $it);
+            $types = $pdo->query("SELECT l.process_type_id, MAX(pt.process_type) AS name, MIN(pt.sort_order) AS so FROM ps_plan_log l LEFT JOIN process_type pt ON pt.process_type_id = l.process_type_id GROUP BY l.process_type_id ORDER BY so, l.process_type_id")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'from' => $from, 'to' => $to, 'summary' => $an['summary'], 'rows' => $an['rows'], 'logs' => $logs, 'types' => $types], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
     if ($action === 'export_csv') {
         try {
             list($whereSql, $params) = prq_build_filter($_POST);
@@ -282,7 +306,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 每個維度各自排除「自己」的篩選條件，只套用其餘條件，才能算出「若改選這個，還會有資料」的清單（雙向連動）
             // 製程按鈕比照 process_schedule.php「查詢已報工工單」：以製程大類(process_type)為單位，不是逐一製程
             list($whereP, $paramsP) = prq_build_filter($_POST, ['process_type_id']);
-            $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(*) cnt
+            // 補加工統計：同一批條件（日期等）下，每個製程大類的「補加工筆數／總報工筆數」與良品數
+            $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(*) cnt,
+                SUM(pdr.report_source = 'PARTIAL') AS partial_cnt,
+                COALESCE(SUM(pdr.produced_qty), 0) AS ok_qty,
+                COALESCE(SUM(CASE WHEN pdr.report_source = 'PARTIAL' THEN pdr.produced_qty END), 0) AS partial_ok_qty
                 $PRQ_FROM LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
                 $whereP GROUP BY pn.process_type_id, pt.process_type ORDER BY pn.process_type_id");
             $stmtP->execute($paramsP);
@@ -446,6 +474,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .prq-toolbar button:hover { background: #F7E0BD; }
         .prq-toolbar .btn-warm { background: #F0A24B; color: #fff; border-color: #d98a33; }
         .prq-toolbar .btn-warm:hover { background: #d98a33; }
+        .prq-partial-stat { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 8px; padding: 6px 10px; background: #F1F8E9; border: 1px solid #C5E1A5; border-radius: 6px; font-size: 13px; color: #33691E; line-height: 20px; }
+        .prq-partial-stat b { font-size: 16px; }
+        .prq-partial-stat .ps-main { font-weight: bold; }
+        .prq-partial-stat .ps-sub { color: #5b7a3a; font-size: 12px; }
+        .prq-partial-stat .ps-bar { flex: 0 0 120px; height: 8px; background: #DCEDC8; border-radius: 4px; overflow: hidden; }
+        .prq-partial-stat .ps-bar i { display: block; height: 100%; background: #7CB342; }
+        /* 補加工小標籤（淺草綠）；自己指定 line-height，否則會吃到 td span 的 28px 行高把列撐高 */
+        .prq-partial-tag { display:inline-block; line-height:16px; padding:0 6px; font-size:11px; border-radius:3px; background:#DCEDC8; color:#33691E; border:1px solid #AED581; white-space:nowrap; }
         .prq-stat { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; font-size: 13px; color: #5b3a1e; }
         .prq-stat b { color: #8A5A2B; font-size: 16px; }
         .prq-table-wrap { overflow-x: auto; border: 1px solid #E8D5B5; border-radius: 6px; background: #fff; }
@@ -487,10 +523,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
         <div class="clearfix"></div>
 
+        <div class="prq-viewbar" style="display:flex;gap:6px;margin:6px 0;">
+            <button type="button" class="prq-tab active" id="vwRec">報工紀錄</button>
+            <button type="button" class="prq-tab" id="vwPlan" title="生管每次調整「未指派順序」的紀錄，以及現場有沒有依序加工的判定">生管排序紀錄與依序分析</button>
+        </div>
+
         <!-- 製程：比照 process_schedule.php 上方頁籤按鈕，只列目前其餘篩選條件下「有資料」的製程（雙向連動） -->
         <div class="prq-tabs" id="processTabs">
             <button class="prq-tab active" data-pn="">全部</button>
         </div>
+
+        <!-- 補加工比例：依目前篩選條件（含日期區間）計算，選了製程大類就看該大類，沒選看全部 -->
+        <div class="prq-partial-stat" id="partialStat" title="補加工比例＝補加工報工筆數 ÷ 總報工筆數（依目前的日期區間與其他篩選條件計算）"></div>
 
         <div class="prq-toolbar">
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;">
@@ -557,6 +601,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </table>
         </div>
         <div class="prq-pager" id="prqPager"></div>
+
+        <!-- ══ 生管排序紀錄與依序分析 ══ -->
+        <div id="planView" style="display:none;">
+            <div class="prq-toolbar"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;">
+                <label>日期</label>
+                <input type="date" id="pvFrom" max="9999-12-31" style="width:132px;"><span>～</span><input type="date" id="pvTo" max="9999-12-31" style="width:132px;">
+                <label>製程大類</label><select id="pvType" style="min-width:110px;"><option value="0">全部</option></select>
+                <button type="button" id="pvGo"><i class="fa fa-search"></i> 查詢</button>
+                <span id="pvMsg" style="color:#8a6d45;font-size:12px;"></span>
+            </div></div>
+            <div id="pvSummary" style="display:flex;flex-wrap:wrap;gap:10px;margin:8px 0;"></div>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">判定方式：每一道製程的「開工」（第一筆報工的架機開始時間）對照<b>開工當下生效的生管排序</b>。排在它前面的製程到它開工時還沒開工、也沒完工＝<b>跳過</b>，只要跳過 ≥1 筆就算未依序。生管排在前面的製程可能缺料或缺機台，所以「未依序」是請你去了解原因的提示，不等於現場違規。</div>
+            <h4 style="margin:10px 0 4px;">現場是否依照順序加工</h4>
+            <div class="prq-table-wrap"><table class="prq-table" id="pvTable">
+                <thead><tr><th>開工時間</th><th>製程大類</th><th class="t-left">製令</th><th>製程</th><th>當時排定</th><th class="t-left">跳過了哪些（排在前面卻還沒開工）</th><th>判定</th></tr></thead>
+                <tbody id="pvBody"><tr><td colspan="7" class="prq-empty">請按查詢</td></tr></tbody>
+            </table></div>
+            <h4 style="margin:14px 0 4px;">生管排序紀錄（每次實際有變動才記一筆）</h4>
+            <div class="prq-table-wrap"><table class="prq-table" id="pvLogTable">
+                <thead><tr><th>修改時間</th><th>修改人</th><th>製程大類</th><th>筆數</th><th class="t-left">順序（BOM／製程；急＝生管急件、預＝預排）</th></tr></thead>
+                <tbody id="pvLogBody"><tr><td colspan="5" class="prq-empty">請按查詢</td></tr></tbody>
+            </table></div>
+        </div>
     </div>
 </div>
 </div>
@@ -753,7 +820,7 @@ function rowToTr(r){
         + '<td>' + (okQty + ngQty) + '</td>'
         + '<td>' + (r.is_finished ? '是' : '否') + '</td>'
         + '<td>' + esc(r.process_face || '-') + '</td>'
-        + '<td class="t-left">' + esc(r.remark || '') + '</td>'
+        + '<td class="t-left">' + (r.report_source === 'PARTIAL' ? '<span class="prq-partial-tag"><i class="fa fa-wrench"></i> 補加工</span> ' : '') + esc(r.remark || '') + '</td>'
         + '<td>' + abnHtml + '</td>'
         + '</tr>';
 }
@@ -823,6 +890,32 @@ function renderProcessTabs(list){
             .on('click', function(){ curProcess=tid; applyFilters(); }).appendTo($t);
     });
     if (curProcess !== '' && !stillValid) curProcess = ''; // 跟其他篩選兜不出資料，自動改回全部
+    renderPartialStat(list);
+}
+// 補加工比例：選了製程大類就看該大類，沒選看全部（依目前日期區間與其他篩選條件）
+function renderPartialStat(list){
+    var rows = curProcess === '' ? list : list.filter(function(p){ return String(p.process_type_id) === curProcess; });
+    var total = 0, partial = 0, okQty = 0, pOk = 0;
+    rows.forEach(function(p){
+        total += parseInt(p.cnt, 10) || 0; partial += parseInt(p.partial_cnt, 10) || 0;
+        okQty += parseFloat(p.ok_qty) || 0; pOk += parseFloat(p.partial_ok_qty) || 0;
+    });
+    var name = '全部製程大類';
+    if (curProcess !== '' && rows.length) name = rows[0].category_name || '（未分類）';
+    var pct = total ? (partial / total * 100) : 0;
+    var h = '<span class="ps-main"><i class="fa fa-wrench"></i> 補加工比例（' + esc(name) + '）：<b>' + pct.toFixed(1) + '%</b></span>'
+          + '<span class="ps-bar"><i style="width:' + Math.min(100, pct).toFixed(1) + '%"></i></span>'
+          + '<span>補加工 <b>' + partial + '</b> 筆 ／ 總報工 <b>' + total + '</b> 筆</span>'
+          + '<span class="ps-sub">補加工良品 ' + Math.round(pOk) + ' ／ 總良品 ' + Math.round(okQty)
+          + (okQty > 0 ? '（' + (pOk / okQty * 100).toFixed(1) + '%）' : '') + '</span>';
+    if (curProcess === '' && list.length > 1) {
+        var parts = list.filter(function(p){ return (parseInt(p.partial_cnt, 10) || 0) > 0; }).map(function(p){
+            var c = parseInt(p.cnt, 10) || 0, pc = parseInt(p.partial_cnt, 10) || 0;
+            return esc(p.category_name || '（未分類）') + ' ' + pc + '/' + c + '（' + (c ? (pc / c * 100).toFixed(1) : '0.0') + '%）';
+        });
+        if (parts.length) h += '<span class="ps-sub">各大類：' + parts.join('　') + '</span>';
+    }
+    $('#partialStat').html(h);
 }
 function renderMachineOptions(list){
     var $sel = $('#fMachine');
@@ -1196,6 +1289,58 @@ loadAsDoc();
     if (bom)  $('#fBomNo').val(bom);
 })();
 applyFilters();
+
+// ===== 生管排序紀錄與依序分析 =====
+(function(){
+    var REC_SEL = '#processTabs,#partialStat,.prq-toolbar:not(#planView .prq-toolbar),.prq-stat,.prq-table-wrap:not(#planView .prq-table-wrap),#prqPager';
+    function ft(t){ return t ? String(t).replace(/-/g,'.').slice(0,16) : ''; }
+    function showView(v){
+        var plan = (v === 'plan');
+        $('#vwRec').toggleClass('active', !plan); $('#vwPlan').toggleClass('active', plan);
+        $(REC_SEL).each(function(){ if ($(this).closest('#planView').length) return; $(this).toggle(!plan); });
+        $('#planView').toggle(plan);
+        if (plan && !$('#pvFrom').val()) {
+            var d = new Date(), f = new Date(Date.now() - 30*86400000);
+            var iso = function(x){ return x.getFullYear() + '-' + ('0'+(x.getMonth()+1)).slice(-2) + '-' + ('0'+x.getDate()).slice(-2); };
+            $('#pvFrom').val(iso(f)); $('#pvTo').val(iso(d)); pvLoad();
+        }
+    }
+    $('#vwRec').on('click', function(){ showView('rec'); });
+    $('#vwPlan').on('click', function(){ showView('plan'); });
+    var RES = { ok: ['依序', '#1f7a45', '#dff2e6'], skip: ['未依序（插單／跳單）', '#fff', '#DD5138'], unlisted: ['未納入排序', '#6b4f33', '#efe6da'], nolog: ['當時無排序紀錄', '#6b4f33', '#efe6da'] };
+    function pvLoad(){
+        $('#pvMsg').text('查詢中…');
+        $.post('', { action: 'plan_analysis', from: $('#pvFrom').val(), to: $('#pvTo').val(), type_id: $('#pvType').val() }, function(res){
+            if (!res || !res.success) { $('#pvMsg').text((res && res.message) || '查詢失敗'); return; }
+            $('#pvMsg').text('');
+            var cur = $('#pvType').val(), h = '<option value="0">全部</option>';
+            (res.types || []).forEach(function(t){ h += '<option value="' + t.process_type_id + '"' + (String(t.process_type_id) === cur ? ' selected' : '') + '>' + esc(t.name || t.process_type_id) + '</option>'; });
+            $('#pvType').html(h);
+            var s = res.summary, judged = s.ordered + s.skipped;
+            var card = function(t, v, c){ return '<div style="border:1px solid #E8D5B5;border-radius:6px;background:#FDF8EF;padding:8px 14px;min-width:120px;"><div style="font-size:12px;color:#8a6d45;">' + t + '</div><div style="font-size:22px;font-weight:bold;color:' + c + ';">' + v + '</div></div>'; };
+            $('#pvSummary').html(card('開工製程數', s.total, '#5b3a1e') + card('依序', s.ordered, '#1f7a45') + card('未依序（插單／跳單）', s.skipped, '#DD5138') +
+                card('未納入排序／無紀錄', s.unlisted, '#8a6d45') + card('依序率（已判定者）', judged ? Math.round(s.ordered / judged * 100) + '%' : '—', '#8A5A2B'));
+            var b = '';
+            (res.rows || []).slice().reverse().forEach(function(r){
+                var x = RES[r.result] || RES.nolog;
+                b += '<tr><td>' + ft(r.start) + '</td><td>' + esc(r.type_name) + '</td><td class="t-left">' + esc(r.bom) + '</td><td>' + esc(r.process_name) + '</td>' +
+                    '<td>' + (r.rank ? '第 ' + r.rank + ' 位<div style="font-size:11px;color:#8a6d45;">' + esc(r.plan_by || '') + ' ' + ft(r.plan_at) + ' 設定</div>' : '—') + '</td>' +
+                    '<td class="t-left">' + esc((r.skipped_list || []).join('、')) + '</td>' +
+                    '<td><span style="padding:1px 8px;border-radius:10px;font-size:12px;color:' + x[1] + ';background:' + x[2] + ';">' + x[0] + (r.result === 'skip' ? '（' + r.skipped + ' 筆）' : '') + '</span></td></tr>';
+            });
+            $('#pvBody').html(b || '<tr><td colspan="7" class="prq-empty">這段期間沒有開工紀錄</td></tr>');
+            var lb = '';
+            (res.logs || []).forEach(function(l){
+                var items = l.items.map(function(it, i){ return (i + 1) + '. ' + esc(it[1]) + '（' + esc(it[5] || it[2]) + '）' + (it[3] ? '<b style="color:#DD5138;">急</b>' : '') + (it[4] ? '<b style="color:#8a4f12;">預</b>' : ''); });
+                lb += '<tr><td>' + ft(l.saved_at) + '</td><td>' + esc(l.saved_by_name) + '</td><td>' + esc(l.type_name) + '</td><td>' + l.n_items + '</td>' +
+                    '<td class="t-left" style="white-space:normal;font-size:12px;line-height:1.6;">' + items.join('　') + '</td></tr>';
+            });
+            $('#pvLogBody').html(lb || '<tr><td colspan="5" class="prq-empty">這段期間沒有排序紀錄</td></tr>');
+        }, 'json');
+    }
+    $('#pvGo').on('click', pvLoad);
+    $('#pvType').on('change', pvLoad);
+})();
 </script>
 </body>
 </html>

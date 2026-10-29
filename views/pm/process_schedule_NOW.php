@@ -119,6 +119,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // =================================================================================
 // 後端邏輯：獲取全廠看板資料 (Dashboard Data)
 // =================================================================================
+/**
+ * 「補加工」已報工、尚未完工的製程 fid 清單（2026-10-28）。
+ * 看板／排程清單原本讀 vw_bom_ing，該檢視只留「每張製令目前這一批」的製程；
+ * 生管還沒移轉到的關卡（outsource_date 為空或不是最新批）就算已經報工並掛上機台也不會出現。
+ * 這份清單供兩處查詢「額外補進」這些製程（只新增、不改原查詢結果，呼叫端自行以 fid 去重）。
+ */
+function ps_partial_ing_fids(PDO $pdo) {
+    try {
+        // 兩段分開查再 UNION：把「補加工報工」與「拆分複本」寫成同一個 OR 條件時，MySQL 會放棄索引，
+        // 整頁載入要多花 11 秒以上（2026-10-28 實測 11.5s → 拆開後 30ms）
+        $common = "o.processing_state = 'ing'
+              AND (b.processing_state <> 1 OR b.processing_state IS NULL)
+              AND b.closed_at IS NULL  -- 已結案（有結案日期）的 BOM 一律不補進來
+              AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = o.bom_ing_fid AND r.is_finished = 1)";
+        return array_map('intval', $pdo->query("
+            SELECT o.bom_ing_fid FROM bom_ing o LEFT JOIN bom b ON b.bom = o.bom
+            WHERE $common
+              AND EXISTS (SELECT 1 FROM pm_process_daily_report p WHERE p.bom_ing_fid = o.bom_ing_fid AND p.report_source = 'PARTIAL')
+            UNION
+            SELECT o.bom_ing_fid FROM bom_ing o LEFT JOIN bom b ON b.bom = o.bom
+            WHERE $common
+              AND o.is_schedule_split = 1  -- 拆分出來的複本沒有報工紀錄，但原製程若是尚未移轉的關卡，複本也不在 vw_bom_ing
+        ")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {
+        error_log('[ps_partial_ing_fids] ' . $e->getMessage());
+        return [];
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_dashboard_data') {
     header('Content-Type: application/json');
     try {
@@ -135,6 +164,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ORDER BY m.position, m.machine_type_id, m.machine_id ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
         
+        // 與前端分頁共用同一份「顯示設定」(PROCESS_SCHEDULE/visible_tabs)：沒勾選顯示的製程大類，
+        // 全廠看板也不顯示其機台與未指派清單（設定為空＝全部顯示，與前端分頁邏輯一致）
+        $dash_visible_types = null;
+        try {
+            $vt_json = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group = 'PROCESS_SCHEDULE' AND param_key = 'visible_tabs'")->fetchColumn();
+            $vt = $vt_json ? json_decode($vt_json, true) : null;
+            if (is_array($vt) && !empty($vt)) $dash_visible_types = array_flip(array_map('strval', $vt));
+        } catch (Throwable $e) {}
+        if ($dash_visible_types !== null) {
+            $machines = array_values(array_filter($machines, function ($m) use ($dash_visible_types) {
+                return isset($dash_visible_types[strval($m['machine_type_id'])]);
+            }));
+        }
+
         $machines_map = [];
         foreach ($machines as $m) {
             $machines_map[$m['machine_id']] = $m;
@@ -165,7 +208,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ORDER BY bi.machine_id ASC, CASE WHEN origin_bi.processing_sequence IS NULL OR origin_bi.processing_sequence = 0 THEN 999999 ELSE origin_bi.processing_sequence END ASC
         ";
         $all_tasks = $pdo->query($sql_tasks)->fetchAll(PDO::FETCH_ASSOC);
-        
+
+        // 補加工已報工未完工、但不在 vw_bom_ing 的製程：額外補進（以 fid 去重，不影響原結果）
+        try {
+            $have = array_flip(array_map('intval', array_column($all_tasks, 'bom_ing_fid')));
+            $extra = array_values(array_filter(ps_partial_ing_fids($pdo), function ($f) use ($have) { return !isset($have[$f]); }));
+            $cut = strpos($sql_tasks, "WHERE bi.processing_state = 'ing'");
+            if ($extra && $cut !== false) {
+                // 直接讀 bom_ing：vw_bom_ing_filtered 會濾掉「發包日為空且非第一關」的製程（正是尚未移轉的關卡）
+                $sql_extra = str_replace('FROM vw_bom_ing bi',
+                    'FROM (SELECT o.*, pn0.ProcessName, pn0.process_type_id FROM bom_ing o LEFT JOIN process_no pn0 ON o.process_no = pn0.ProcessNo WHERE o.bom_ing_fid IN (' . implode(',', $extra) . ')) bi',
+                    substr($sql_tasks, 0, $cut));
+                $all_tasks = array_merge($all_tasks, $pdo->query($sql_extra)->fetchAll(PDO::FETCH_ASSOC));
+            }
+        } catch (Throwable $e) { error_log('[dashboard partial extra] ' . $e->getMessage()); }
+
         // Optimization: Fetch stats in batch
         $fids = array_column($all_tasks, 'bom_ing_fid');
         $task_stats = [];
@@ -263,6 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $machine_types = $pdo->query("SELECT process_type_id as machine_type_id, process_type as machine_type FROM process_type")->fetchAll(PDO::FETCH_KEY_PAIR);
         
         foreach ($waiting_tasks_by_type as $tid => $tasks) {
+            if ($dash_visible_types !== null && !isset($dash_visible_types[strval($tid)])) continue;
             $typeName = $machine_types[$tid] ?? '其他';
             $list = [];
             foreach ($tasks as $task) {
@@ -1310,11 +1368,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                          FROM bom_ing bi
                          JOIN bom b ON bi.bom = b.bom
                          LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
-                         LEFT JOIN (SELECT D_Setting_Id, MAX(d_id) as max_did FROM d_setting GROUP BY D_Setting_Id) ds_max ON b.d_id = ds_max.D_Setting_Id
+                         LEFT JOIN (SELECT D_Setting_Id, MAX(d_id) as max_did FROM d_setting
+                                    WHERE D_Setting_Id IN (SELECT b2.d_id FROM bom b2 JOIN bom_ing x ON x.bom = b2.bom WHERE x.bom_ing_fid = ?)
+                                    GROUP BY D_Setting_Id) ds_max ON b.d_id = ds_max.D_Setting_Id
                          LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id = ds_max.max_did
                          WHERE bi.bom_ing_fid = ?";
+            // 效能：原本每一筆都把整張 d_setting 分組成衍生表（約 30ms/筆，100 筆 3 秒以上），
+            // 現在只算這一筆製令的料號；結果與舊寫法逐欄相同。
             $stmt_info = $pdo->prepare($sql_info);
-            $stmt_info->execute([$fid]);
+            $stmt_info->execute([$fid, $fid]);
             $info = $stmt_info->fetch(PDO::FETCH_ASSOC);
 
             if (!$info) continue;
@@ -1402,6 +1464,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $display_machine = !empty($logs) ? $logs[0]['machine'] : '-';
             $display_date = !empty($logs) ? $logs[0]['report_date'] : '-';
 
+            // 這一站是否有「補加工」報工（供清單在日期下方標示小標籤）
+            $has_partial = 0;
+            try {
+                $stmt_hp = $pdo->prepare("SELECT 1 FROM pm_process_daily_report WHERE bom_ing_fid = ? AND report_source = 'PARTIAL' LIMIT 1");
+                $stmt_hp->execute([$fid]);
+                $has_partial = $stmt_hp->fetchColumn() ? 1 : 0;
+            } catch (Throwable $e) {}
+
             // 優先顯示本站完工(1)，否則顯示最大狀態(可能為2)
             $display_is_finished = ($agg['has_task_finished'] == 1) ? 1 : ($agg['max_is_finished'] ?? 0);
 
@@ -1423,6 +1493,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 'face_info' => $face_info_str,
                 'machine' => $display_machine,
                 'report_date' => $display_date,
+                'has_partial' => $has_partial,
                 'logs' => $logs,
                 'pti01_ps' => $info['pti01_ps'],
                 '1_side' => $info['1_side'],
@@ -2217,6 +2288,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
+// 機台時程表：查某日是否放假/補班（比照行事曆 evenement + event_category.day_type，唯讀）
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_schedule_day_info') {
+    header('Content-Type: application/json');
+    try {
+        require_once __DIR__ . '/../../src/common/leave_lib.php';
+        $d = substr((string)($_POST['date'] ?? ''), 0, 10);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) { echo json_encode(['success' => false]); exit; }
+        $sets = eg_leave_holiday_sets($pdo);
+        $names = [];
+        $st = $pdo->prepare("SELECT e.title, ec.day_type FROM evenement e JOIN event_category ec ON e.category_id = ec.id
+                             WHERE ec.day_type IN ('s','m') AND DATE(e.start) <= ? AND DATE(COALESCE(e.end, e.start)) >= ?");
+        $st->execute([$d, $d]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { if (trim((string)$r['title']) !== '') $names[] = $r['title']; }
+        echo json_encode([
+            'success' => true,
+            'dow' => (int)date('w', strtotime($d)),
+            'workday' => eg_leave_is_workday($pdo, $d),
+            'makeup' => isset($sets['makeups'][$d]),
+            'names' => array_values(array_unique($names)),
+        ]);
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false]);
+    }
+    exit;
+}
+
 // =================================================================================
 // 後端邏輯：獲取機台每日時程表 (Timeline)
 // =================================================================================
@@ -2245,7 +2342,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $sql = "
             SELECT r.report_id, r.machine_id,
                    r.setup_start_time, r.setup_end_time, r.production_start_time, r.production_end_time,
-                   r.produced_qty,
+                   r.produced_qty, r.report_source,
                    (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id = r.report_id) as total_ng,
                    b.bom, b.d_id, pn.ProcessName, r.bom_ing_fid
             FROM pm_process_daily_report r
@@ -2444,6 +2541,24 @@ try {
         throw new Exception("SQL Error: " . implode(" ", $pdo->errorInfo()));
     }
     $tasks = $stmt->fetchAll();
+
+    // 補加工已報工未完工、但不在 vw_bom_ing（生管尚未移轉到此關卡）的製程：額外補進，以 fid 去重
+    try {
+        $have = array_flip(array_map('intval', array_column($tasks, 'bom_ing_fid')));
+        $extra = array_values(array_filter(ps_partial_ing_fids($pdo), function ($f) use ($have) { return !isset($have[$f]); }));
+        $cut = strpos($sql_extended, "\nWHERE\n");
+        if ($extra && $cut !== false) {
+            // 直接讀 bom_ing：vw_bom_ing_filtered 會濾掉「發包日為空且非第一關」的製程（正是尚未移轉的關卡）
+            $sql_extra = str_replace('FROM vw_bom_ing AS bi',
+                'FROM (SELECT o.*, pn0.ProcessName, pn0.process_type_id FROM bom_ing o LEFT JOIN process_no pn0 ON o.process_no = pn0.ProcessNo WHERE o.bom_ing_fid IN (' . implode(',', $extra) . ')) AS bi',
+                substr($sql_extended, 0, $cut));
+            $tasks = array_merge($tasks, $pdo->query($sql_extra)->fetchAll());
+        }
+    } catch (Throwable $e) { error_log('[schedule partial extra] ' . $e->getMessage()); }
+
+    // 同一個料號在 d_setting_gear 有 2~3 筆齒輪規格時，LEFT JOIN 會把同一個製程重複成多列
+    // → 看板出現重複卡片、剩餘件數被重複計算。以 bom_ing_fid 去重（保留第一列）。
+    $tasks = array_values(array_reduce($tasks, function ($c, $t) { if (!isset($c[$t['bom_ing_fid']])) $c[$t['bom_ing_fid']] = $t; return $c; }, []));
 
     // Optimization: Fetch stats and operators separately to avoid slow subqueries
     $fids = array_column($tasks, 'bom_ing_fid');
@@ -3363,6 +3478,41 @@ function get_state_badge($state)
         }
 
         /* 機台時程表樣式 */
+        /* ===== 機台 24H 時程表（重做）===== */
+        .tl2-chk { margin: 0 0 0 12px; font-weight: normal; cursor: pointer; }
+        .tl2-chk input { margin-right: 4px; vertical-align: -2px; }
+        .tl2-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; color: #5b4a3a; margin-bottom: 8px; }
+        .tl2-lg i { display: inline-block; width: 18px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+        .tl2-lg .tl2-setup { background: #4E8FD1; } .tl2-lg .tl2-prod { background: #2E9E5B; }
+        .tl2-lg .tl2-over-sample { background: #fff; border: 2px solid #DD5138; box-sizing: border-box; }
+        .tl2-sum { margin-left: auto; }
+        .tl2-detail { background: #FFF8EC; border: 1px solid #F0D9B5; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; line-height: 22px; color: #3b2f25; }
+        .tl2-kind { display: inline-block; line-height: 16px; padding: 0 6px; border-radius: 3px; font-size: 11px; color: #fff; }
+        .tl2-kind.setup { background: #4E8FD1; } .tl2-kind.prod { background: #2E9E5B; }
+        .tl2-overtxt { color: #DD5138; font-weight: bold; }
+        .tl2-hint { color: #8a7764; font-size: 11px; }
+        .tl2-pt { display: inline-block; line-height: 14px; padding: 0 4px; margin-left: 4px; font-size: 10px; border-radius: 3px; background: #DCEDC8; color: #33691E; border: 1px solid #AED581; font-weight: normal; }
+        .tl2-empty { padding: 40px 10px; text-align: center; color: #8a7764; }
+        #schedule-container { border: 1px solid #e6dccf; border-radius: 6px; background: #fff; }
+        .tl2-head, .tl2-row { display: flex; }
+        .tl2-head { position: sticky; top: 0; z-index: 5; background: #F7EFE3; border-bottom: 1px solid #e6dccf; }
+        .tl2-row { border-bottom: 1px solid #f0e8dc; }
+        .tl2-row:hover { background: #fffaf3; }
+        .tl2-name { flex: 0 0 150px; width: 150px; box-sizing: border-box; padding: 6px 8px; border-right: 1px solid #e6dccf; font-size: 13px; font-weight: bold; color: #3b2f25; display: flex; align-items: center; gap: 6px; line-height: 18px; }
+        .tl2-head .tl2-name { font-weight: bold; color: #6b4f33; }
+        .tl2-mn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .tl2-warn { flex: 0 0 auto; background: #DD5138; color: #fff; font-size: 11px; line-height: 16px; padding: 0 5px; border-radius: 3px; font-weight: normal; }
+        .tl2-axis { flex: 1 1 auto; display: flex; min-width: 0; }
+        .tl2-hour { flex: 1 1 0; text-align: left; padding: 6px 0 6px 4px; font-size: 12px; color: #6b4f33; border-left: 1px solid #e6dccf; box-sizing: border-box; min-width: 0; }
+        .tl2-line { flex: 1 1 auto; position: relative; min-width: 0; }
+        .tl2-grid { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #efe6da; }
+        .tl2-blk { position: absolute; box-sizing: border-box; border-radius: 4px; padding: 2px 5px; color: #fff; overflow: hidden; cursor: pointer; line-height: 13px; font-size: 11px; box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+        .tl2-blk > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tl2-blk .tl2-l1 { font-size: 12px; line-height: 14px; }
+        .tl2-setup { background: #4E8FD1; } .tl2-prod { background: #2E9E5B; }
+        .tl2-blk.tl2-over { border: 2px solid #DD5138; background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.18) 0 6px, rgba(255,255,255,0) 6px 12px); z-index: 2; }
+        .tl2-blk:hover, .tl2-blk.tl2-sel { z-index: 4; outline: 2px solid #F0A24B; outline-offset: 1px; }
+
         .schedule-container {
             display: flex;
             flex-direction: column;
@@ -4841,8 +4991,17 @@ function get_state_badge($state)
                                             <button type="button" class="btn btn-default btn-sm" id="btnNextDay"><i class="fa fa-chevron-right"></i></button>
                                         </div>
                                         <button type="button" class="btn btn-primary btn-sm" id="btnRefreshSchedule">查詢</button>
-                                        <span class="text-muted" style="margin-left: 10px;">* 藍色: 架機 / 綠色: 生產 (高度代表時間長度)</span>
+                                        <span id="schedule_day_info" style="margin-left: 8px; font-weight: bold;"></span>
+                                        <label class="tl2-chk"><input type="checkbox" id="schedule_show_empty"> 顯示沒有報工的機台</label>
+                                        <label class="tl2-chk"><input type="checkbox" id="schedule_full24"> 時間軸固定 24 小時</label>
                                     </div>
+                                    <div class="tl2-legend">
+                                        <span class="tl2-lg"><i class="tl2-setup"></i> 架機</span>
+                                        <span class="tl2-lg"><i class="tl2-prod"></i> 生產</span>
+                                        <span class="tl2-lg"><i class="tl2-over-sample"></i> 同機台時間重疊（會分成上下兩排）</span>
+                                        <span class="tl2-lg tl2-sum" id="schedule_summary"></span>
+                                    </div>
+                                    <div id="schedule_detail" class="tl2-detail" style="display:none;"></div>
                                     <div id="schedule-container" class="schedule-container">
                                         <!-- JS Rendered Content -->
                                     </div>
@@ -5806,12 +5965,8 @@ function get_state_badge($state)
                             // 1. 如果卡片已排定 (columnMachineId 存在)，則顯示所有機台 (或至少包含該機台)，並選中它。
                             // 2. 如果卡片未排定 (columnMachineId 空)，則只顯示 process_type_id 相符的機台。
 
-                            var showOption = false;
-                            if (columnMachineId) {
-                                showOption = true; // 已排定時顯示全部，方便換機台 (或者您希望只顯示同類型的也可以，這裡先顯示全部)
-                            } else {
-                                if (m.machine_type_id == processTypeId) showOption = true;
-                            }
+                            // 一律只列「此製程大類」底下的機台；已排定的那台就算不同類也保留（避免預選值消失）
+                            var showOption = (m.machine_type_id == processTypeId) || (columnMachineId && m.machine_id == columnMachineId);
 
                             if (showOption) {
                                 var selected = (columnMachineId && m.machine_id == columnMachineId) ? 'selected' : '';
@@ -7186,7 +7341,7 @@ function get_state_badge($state)
 `;
 
                                             tableHtml += `<tr class="finished-task-item" data-json='${jsonStr}' data-process-type-id="${item.process_type_id}" style="cursor:pointer;">
-                                <td>${item.report_date}</td>
+                                <td>${item.report_date}${item.has_partial ? `<div><span style="display:inline-block;line-height:16px;padding:0 6px;font-size:11px;border-radius:3px;background:#DCEDC8;color:#33691E;border:1px solid #AED581;"><i class="fa fa-wrench"></i> 補加工</span></div>` : ``}</td>
                                     <td>${item.Client_Name}</td>
                                 <td>${bomPartCell}</td> 
                                     <td>${item.ProcessName || item.process_no || ''}</td>
@@ -8587,8 +8742,13 @@ function get_state_badge($state)
                                 var $machineSelect = $('#modal_machine_id');
                                 $machineSelect.empty().append('<option value="">請選擇機台</option>');
                                 $('#hidden_machine_id').remove();
+                                // 編輯既有報工：只列該報工那台機台所屬製程大類的機台
+                                var rMach = allMachines.filter(function(m) { return m.machine_id == r.machine_id; })[0];
+                                var rTypeId = r.process_type_id || (rMach ? rMach.machine_type_id : null);
                                 allMachines.forEach(function(m) {
-                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
+                                    if (!rTypeId || m.machine_type_id == rTypeId || m.machine_id == r.machine_id) {
+                                        $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
+                                    }
                                 });
                                 if ($('#modal_machine_id option[value="' + r.machine_id + '"]').length > 0) {
                                     $machineSelect.val(r.machine_id);
@@ -8691,6 +8851,22 @@ function get_state_badge($state)
                         var $container = $('#schedule-container');
                         $container.html('<div class="text-center" style="padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中...</div>');
 
+                        // 星期與假日標示（失敗不影響時程表）
+                        var $di = $('#schedule_day_info').text('');
+                        $.post('process_schedule_NOW.php', { action: 'get_schedule_day_info', date: date }, function(di) {
+                            if (!di || !di.success || $('#schedule_date').val() !== date) return;
+                            var wk = ['日', '一', '二', '三', '四', '五', '六'][di.dow];
+                            var txt = '星期' + wk, color = '#5a3e2b', bg = '#F7E0BD';
+                            if (!di.workday) {
+                                txt += '（休假' + (di.names.length ? '：' + di.names.join('、') : '') + '）';
+                                color = '#fff'; bg = '#DD5138';
+                            } else if (di.makeup) {
+                                txt += '（補班' + (di.names.length ? '：' + di.names.join('、') : '') + '）';
+                                color = '#5a3e2b'; bg = '#F0A24B';
+                            }
+                            $di.text(txt).css({color: color, background: bg, padding: '3px 8px', borderRadius: '3px'});
+                        }, 'json');
+
                         $.post('process_schedule_NOW.php', {
                             action: 'get_machine_daily_schedule',
                             date: date,
@@ -8704,94 +8880,144 @@ function get_state_badge($state)
                         }, 'json');
                     }
 
+                    // ===== 機台 24H 時程表（2026-10-28 重做）=====
+                    // 重點：①預設只列「這天有報工」的機台 ②時間軸自動縮到有資料的時段（可切回全天24H）
+                    // ③同機台時間重疊的工單會分成上下兩排並用紅框標出 ④點一下方塊在上方看完整資料，雙擊才編輯
+                    var SCH_LAST = null;
+                    function escH(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+                    function hhmm(min) { return ('0' + Math.floor(min / 60)).slice(-2) + ':' + ('0' + (min % 60)).slice(-2); }
+
                     function renderSchedule(machines, reports, dateStr) {
-                        var $container = $('#schedule-container');
-                        $container.empty();
+                        SCH_LAST = { machines: machines, reports: reports, dateStr: dateStr };
+                        drawSchedule();
+                    }
 
-                        // 1. Time Labels Column
-                        // 1. Header
-                        var headerHtml = '<div class="schedule-header">';
-                        headerHtml += '<div class="header-machine-name">機台</div>';
-                        headerHtml += '<div class="header-timeline">';
-                        for (var h = 0; h < 24; h++) {
-                            headerHtml += `<div class="header-hour">${('0'+h).slice(-2)}</div>`;
-                        }
-                        headerHtml += '</div></div>';
-                        $container.append(headerHtml);
+                    function drawSchedule() {
+                        if (!SCH_LAST) return;
+                        var machines = SCH_LAST.machines, reports = SCH_LAST.reports, dateStr = SCH_LAST.dateStr;
+                        var $container = $('#schedule-container').empty();
+                        $('#schedule_detail').hide().empty();
+                        var parse = function (s) { return new Date(String(s).replace(' ', 'T')); };
+                        var dayStart = parse(dateStr + ' 00:00:00'), dayEnd = parse(dateStr + ' 23:59:59');
 
-                        // 2. Machine Rows
-                        machines.forEach(function(mach) {
-                            var rowHtml = `<div class="machine-row">`;
-                            var machDisp = machineOptionLabel(mach);
-                            rowHtml += `<div class="machine-name" title="${machDisp}">${machDisp}</div>`;
-                            rowHtml += `<div class="machine-timeline">`;
-
-                            // Background Grid
-                            rowHtml += `<div class="timeline-bg-grid">`;
-                            for (var h = 0; h < 24; h++) {
-                                rowHtml += `<div class="bg-hour"></div>`;
-                            }
-                            rowHtml += `</div>`; // End bg-grid
-
-                            // Tasks
-                            var machReports = reports.filter(r => r.machine_id == mach.machine_id);
-                            var tasksHtml = '';
-
-                            machReports.forEach(function(r) {
-                                // Calculate position
-                                var drawBlock = function(start, end, type) {
-                                    if (!start || !end) return;
-                                    var s = new Date(start);
-                                    var e = new Date(end);
-
-                                    var dayStart = new Date(dateStr + ' 00:00:00');
-                                    var dayEnd = new Date(dateStr + ' 23:59:59');
-
-                                    if (e < dayStart || s > dayEnd) return;
-                                    if (s < dayStart) s = dayStart;
-                                    if (e > dayEnd) e = dayEnd;
-
-                                    var totalMinutes = 24 * 60;
-                                    var startMinutes = (s.getHours() * 60) + s.getMinutes();
-                                    var durationMinutes = (e - s) / 1000 / 60;
-
-                                    var leftPct = (startMinutes / totalMinutes) * 100;
-                                    var widthPct = (durationMinutes / totalMinutes) * 100;
-
-                                    var title = `${r.bom} ${r.ProcessName || ''}`;
-                                    var timeRange = `${start.substr(11,5)}~${end.substr(11,5)}`;
-                                    var cls = type === 'setup' ? 'task-setup' : 'task-prod';
-
-                                    // Tooltip content
-                                    var tooltip = `${title}\n${timeRange}\nID:${r.report_id}`;
-
-
-                                    // Block content
-                                    var qty_info = '';
-                                    if (type === 'prod') {
-                                        var ok_qty = parseInt(r.produced_qty) || 0;
-                                        var ng_qty = parseInt(r.total_ng) || 0;
-                                        qty_info = ` | ${ok_qty}` + (ng_qty > 0 ? ` / <span style="color: #ffdddd;">${ng_qty}</span>` : '');
-                                    }
-                                    var block_content = `${r.bom}<br><small>${r.d_id}</small><br><small>${timeRange}${qty_info}</small>`;
-
-                                    tasksHtml += `<div class="task-block ${cls}" style="left:${leftPct}%; width:${widthPct}%;" title="${tooltip}" ondblclick="openReportForEditing(${r.report_id})">
-                            ${block_content}
-                        </div>`;
-                                };
-
-                                drawBlock(r.setup_start_time, r.setup_end_time, 'setup');
-                                drawBlock(r.production_start_time, r.production_end_time, 'prod');
+                        // 1. 每台機台的時間片段（架機／生產各一段，裁到當天範圍內，單位：自 00:00 起算的分鐘）
+                        var segsBy = {};
+                        reports.forEach(function (r) {
+                            [['setup', r.setup_start_time, r.setup_end_time], ['prod', r.production_start_time, r.production_end_time]].forEach(function (t) {
+                                if (!t[1] || !t[2]) return;
+                                var s = parse(t[1]), e = parse(t[2]);
+                                if (isNaN(s) || isNaN(e) || e < dayStart || s > dayEnd) return;
+                                if (s < dayStart) s = dayStart;
+                                if (e > dayEnd) e = dayEnd;
+                                var sm = s.getHours() * 60 + s.getMinutes();
+                                var em = Math.min(1440, Math.max(sm + 1, Math.round((e - dayStart) / 60000)));
+                                (segsBy[r.machine_id] = segsBy[r.machine_id] || []).push({ r: r, type: t[0], s: sm, e: em, rs: t[1], re: t[2] });
                             });
-
-                            rowHtml += tasksHtml;
-                            rowHtml += `</div>`; // End machine-timeline
-                            rowHtml += `</div>`; // End machine-row
-                            $container.append(rowHtml);
                         });
 
+                        // 2. 排上下層（lane）並標記重疊
+                        var overMachines = 0, withJobs = 0, minS = 1440, maxE = 0;
+                        var list = [];
+                        machines.forEach(function (mach) {
+                            var segs = (segsBy[mach.machine_id] || []).slice().sort(function (a, b) { return a.s - b.s || a.e - b.e; });
+                            var laneEnd = [];
+                            segs.forEach(function (sg) {
+                                var ln = 0;
+                                while (ln < laneEnd.length && laneEnd[ln] > sg.s) ln++;
+                                laneEnd[ln] = sg.e; sg.lane = ln;
+                                minS = Math.min(minS, sg.s); maxE = Math.max(maxE, sg.e);
+                            });
+                            segs.forEach(function (a, i) {
+                                a.over = [];
+                                segs.forEach(function (b, j) { if (i !== j && a.s < b.e && b.s < a.e) a.over.push(b); });
+                            });
+                            var hasOver = segs.some(function (x) { return x.over.length; });
+                            if (segs.length) withJobs++;
+                            if (hasOver) overMachines++;
+                            list.push({ mach: mach, segs: segs, lanes: Math.max(1, laneEnd.length), hasOver: hasOver });
+                        });
+                        var showEmpty = $('#schedule_show_empty').is(':checked');
+                        var rows = list.filter(function (x) { return x.segs.length || showEmpty; });
 
+                        // 3. 時間軸範圍：預設縮到有資料的時段（前後各留 1 小時、至少 8 小時）
+                        var lo = 0, hi = 24;
+                        if (!$('#schedule_full24').is(':checked')) {
+                            if (maxE > 0) { lo = Math.max(0, Math.floor(minS / 60) - 1); hi = Math.min(24, Math.ceil(maxE / 60) + 1); }
+                            else { lo = 8; hi = 18; }
+                            while (hi - lo < 8) { if (lo > 0) lo--; if (hi - lo < 8 && hi < 24) hi++; if (lo === 0 && hi === 24) break; }
+                        }
+                        var span = (hi - lo) * 60;
+
+                        $('#schedule_summary').html('<b>' + withJobs + '</b> 台有報工' +
+                            (overMachines ? '；<span style="color:#DD5138;font-weight:bold;">' + overMachines + ' 台時間重疊（紅框）</span>' : '；沒有時間重疊') +
+                            '　｜　時間軸 ' + hhmm(lo * 60) + '～' + hhmm(hi * 60));
+
+                        if (!rows.length) {
+                            $container.html('<div class="tl2-empty">這一天沒有報工紀錄（可勾選「顯示沒有報工的機台」或換日期）</div>');
+                            return;
+                        }
+
+                        // 4. 表頭
+                        var hh = '<div class="tl2-head"><div class="tl2-name">機台</div><div class="tl2-axis">';
+                        for (var h = lo; h < hi; h++) hh += '<div class="tl2-hour">' + ('0' + h).slice(-2) + '</div>';
+                        $container.append(hh + '</div></div>');
+
+                        // 5. 機台列
+                        var LANE_H = 46;
+                        rows.forEach(function (x) {
+                            var disp = machineOptionLabel(x.mach);
+                            var html = '<div class="tl2-row"><div class="tl2-name" title="' + escH(disp) + '"><span class="tl2-mn">' + escH(disp) + '</span>' +
+                                (x.hasOver ? '<span class="tl2-warn">重疊</span>' : '') + '</div>' +
+                                '<div class="tl2-line" style="height:' + (x.lanes * LANE_H + 6) + 'px;">';
+                            for (var g = 0; g < hi - lo; g++) html += '<i class="tl2-grid" style="left:' + (g / (hi - lo) * 100) + '%"></i>';
+                            x.segs.forEach(function (sg, idx) {
+                                var r = sg.r;
+                                var left = (sg.s - lo * 60) / span * 100, width = Math.max(0.4, (sg.e - sg.s) / span * 100);
+                                var qty = '';
+                                if (sg.type === 'prod') {
+                                    var ok = parseInt(r.produced_qty) || 0, ng = parseInt(r.total_ng) || 0;
+                                    qty = ' ｜ 良 ' + ok + (ng > 0 ? ' / NG ' + ng : '');
+                                }
+                                var cls = 'tl2-blk ' + (sg.type === 'setup' ? 'tl2-setup' : 'tl2-prod') + (sg.over.length ? ' tl2-over' : '');
+                                html += '<div class="' + cls + '" data-mid="' + escH(x.mach.machine_id) + '" data-i="' + idx + '" data-rid="' + escH(r.report_id) + '" style="left:' + left + '%;width:' + width + '%;top:' + (3 + sg.lane * LANE_H) + 'px;height:' + (LANE_H - 4) + 'px;">' +
+                                    '<div class="tl2-l1"><b>' + escH(r.bom || '臨時加工') + '</b>' + (r.report_source === 'PARTIAL' ? '<span class="tl2-pt">補加工</span>' : '') + '</div>' +
+                                    '<div class="tl2-l2">' + (sg.type === 'setup' ? '架機 ' : '') + escH(r.ProcessName || '') + ' ' + escH(r.d_id || '') + '</div>' +
+                                    '<div class="tl2-l3">' + escH(sg.rs.substr(11, 5)) + '~' + escH(sg.re.substr(11, 5)) + escH(qty) + '</div></div>';
+                            });
+                            $container.append(html + '</div></div>');
+                        });
+                        SCH_LAST.rows = rows;
                     }
+
+                    // 點一下方塊：在上方顯示完整資料與重疊對象；雙擊才開報工編輯
+                    $(document).on('click', '#schedule-container .tl2-blk', function () {
+                        if (!SCH_LAST || !SCH_LAST.rows) return;
+                        var mid = String($(this).attr('data-mid')), i = parseInt($(this).attr('data-i'), 10);
+                        var row = SCH_LAST.rows.filter(function (x) { return String(x.mach.machine_id) === mid; })[0];
+                        if (!row || !row.segs[i]) return;
+                        var sg = row.segs[i], r = sg.r;
+                        $('#schedule-container .tl2-blk').removeClass('tl2-sel'); $(this).addClass('tl2-sel');
+                        var ok = parseInt(r.produced_qty) || 0, ng = parseInt(r.total_ng) || 0;
+                        var h = '<b>' + escH(machineOptionLabel(row.mach)) + '</b>　製令 <b>' + escH(r.bom || '臨時加工') + '</b>' +
+                            (r.d_id ? '（' + escH(r.d_id) + '）' : '') + '　' + escH(r.ProcessName || '') +
+                            '　<span class="tl2-kind ' + sg.type + '">' + (sg.type === 'setup' ? '架機' : '生產') + '</span> ' +
+                            escH(sg.rs.substr(11, 5)) + '～' + escH(sg.re.substr(11, 5)) + '（' + (sg.e - sg.s) + ' 分鐘）' +
+                            (sg.type === 'prod' ? '　良品 ' + ok + (ng > 0 ? ' / NG ' + ng : '') : '') +
+                            (r.report_source === 'PARTIAL' ? '　<span class="tl2-pt">補加工</span>' : '');
+                        if (sg.over.length) {
+                            h += '<div class="tl2-overtxt"><i class="fa fa-exclamation-triangle"></i> 與下列時間重疊：' + sg.over.map(function (o) {
+                                return escH(o.r.bom || '臨時加工') + ' ' + (o.type === 'setup' ? '架機' : '生產') + ' ' + escH(o.rs.substr(11, 5)) + '～' + escH(o.re.substr(11, 5));
+                            }).join('、') + '</div>';
+                        }
+                        h += '<div class="tl2-hint">雙擊方塊可開啟該筆報工編輯</div>';
+                        $('#schedule_detail').html(h).show();
+                    });
+                    $(document).on('dblclick', '#schedule-container .tl2-blk', function () {
+                        var rid = $(this).attr('data-rid');
+                        if (rid && typeof openReportForEditing === 'function') openReportForEditing(rid);
+                    });
+                    $(document).on('change', '#schedule_full24, #schedule_show_empty', drawSchedule);
+
                 });
 
                 // --- Clipboard Functions ---
