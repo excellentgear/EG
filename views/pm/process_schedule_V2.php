@@ -2139,7 +2139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ((int)$is_finished === 1) {
                     $r = qab_auto_open_from_bom_ing($pdo, (int)$fid, (int)$report_id);
                     if ($r) $auto_abnormal = ['no' => $r['no'], 'opener' => $r['opener'], 'qty' => $r['qty'],
-                                               'period_from' => $r['period_from'], 'period_to' => $r['period_to']];
+                                               'period_from' => $r['period_from'], 'period_to' => $r['period_to'], 'quick' => (int)($r['quick'] ?? 0)];
                 } else {
                     $s = qab_pm_suggest_check($pdo, (int)$fid);
                     if ($s) $suggest_open = $s + ['bom_ing_fid' => (int)$fid];
@@ -7831,7 +7831,7 @@ function get_state_badge($state)
                                     if (response.auto_abnormal && response.auto_abnormal.no) {
                                         var pd = response.auto_abnormal;
                                         var periodTxt = pd.period_from === pd.period_to ? pd.period_from : (pd.period_from + '～' + pd.period_to);
-                                        showToast('已自動開立異常單', '單號 ' + pd.no + '（累積 ' + periodTxt + ' 共 ' + pd.qty + ' 件NG，開單人：' + pd.opener + '），已轉品管判定', true);
+                                        showToast('已自動開立異常單', '單號 ' + pd.no + '（累積 ' + periodTxt + ' 共 ' + pd.qty + ' 件NG，開單人：' + pd.opener + '），' + (Number(pd.quick) === 1 ? '已通知第一層裁決' : '已轉品管判定'), true);
                                     }
                                     // 持續性生產（未完工）每兩週提醒一次：累積NG尚未開單時，跳出詢問是否先開一張累積單
                                     // 報工完立刻就地更新看板（AJAX，不整頁重載；提示訊息是浮動通知，不必等它消失）
