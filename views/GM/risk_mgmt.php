@@ -140,8 +140,8 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards td.c-needs { grid-column:span 5; }
         #itTbl.cards td.c-issue, #itTbl.cards td.c-ro { grid-column:span 6; }
         #itTbl.cards td.c-kind { grid-column:span 2; }
-        #itTbl.cards td.c-sev, #itTbl.cards td.c-frq { grid-column:span 3; }
-        #itTbl.cards td.c-lv { grid-column:span 2; }
+        #itTbl.cards td.c-sev, #itTbl.cards td.c-frq, #itTbl.cards td.c-sev2, #itTbl.cards td.c-frq2 { grid-column:span 3; }
+        #itTbl.cards td.c-lv, #itTbl.cards td.c-lv2 { grid-column:span 2; }
         #itTbl.cards td.c-cn { grid-column:span 2; }
         #itTbl.cards td.c-measure, #itTbl.cards td.c-eff, #itTbl.cards td.c-res { grid-column:span 6; }
         #itTbl.cards td.c-rc { grid-column:span 12; border-top:1px dashed #E0BE86; padding-top:6px; }
@@ -166,7 +166,7 @@ $perms  = rm_perms($db, $rmUser);
         #itTbl.cards textarea { min-height:60px; }
         @media (max-width:980px) { #itTbl.cards td.c-er, #itTbl.cards td.c-ev { grid-column:span 12; } #itTbl.cards td.c-es, #itTbl.cards td.c-ed { grid-column:span 6; } #itTbl.cards td.c-scope, #itTbl.cards td.c-sh, #itTbl.cards td.c-needs, #itTbl.cards td.c-issue, #itTbl.cards td.c-ro,
             #itTbl.cards td.c-measure, #itTbl.cards td.c-eff, #itTbl.cards td.c-res { grid-column:span 12; } #itTbl.cards td.c-kind, #itTbl.cards td.c-sev, #itTbl.cards td.c-frq,
-            #itTbl.cards td.c-lv, #itTbl.cards td.c-cn { grid-column:span 6; } }
+            #itTbl.cards td.c-lv, #itTbl.cards td.c-cn, #itTbl.cards td.c-sev2, #itTbl.cards td.c-frq2, #itTbl.cards td.c-lv2 { grid-column:span 6; } }
         table.it-tbl { border-collapse:collapse; font-size:12.5px; table-layout:fixed; }
         table.it-tbl th, table.it-tbl td { border:1px solid #EADFC8; padding:3px 4px; vertical-align:top; }
         table.it-tbl thead th { background:#F7E0BD; color:#5b3a1e; text-align:center; vertical-align:middle; }
@@ -415,14 +415,18 @@ $perms  = rm_perms($db, $rmUser);
                 <div class="fld"><label>T（外部）</label><input type="text" id="setSwot3" maxlength="20"></div>
             </div>
             <div class="hint">四象限固定為優勢(S)、劣勢(W)、機會(O)、威脅(T)，S、W 屬內部、O、T 屬外部；這裡只改顯示名稱，不影響既有資料。</div></div>
-        <div class="set-sec"><h5>機會的欄位名稱</h5>
+        <div class="set-sec"><h5>機會的評估準則（與風險分開設定）</h5>
             <div class="fld" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                <label>嚴重度(S) 在機會列顯示為</label><input type="text" id="setOppSev" maxlength="12" style="width:140px;">
-                <label>發生率(O) 顯示為</label><input type="text" id="setOppFrq" maxlength="12" style="width:140px;">
-                <label>風險等級 顯示為</label><input type="text" id="setOppLv" maxlength="12" style="width:140px;">
+                <label>機會的第一項評估（縮寫 B）</label><input type="text" id="setOppSev" maxlength="12" style="width:140px;">
+                <label>第二項評估（縮寫 F）</label><input type="text" id="setOppFrq" maxlength="12" style="width:140px;">
+                <label>等級（縮寫 OL）</label><input type="text" id="setOppLv" maxlength="12" style="width:140px;">
             </div>
-            <div class="hint">風險與機會共用同一組評分（分數算法相同），但問的問題不同：風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。
-                這裡只改機會列顯示的欄位名稱與上面風險準則的「機會等級名稱」，不會另外產生一套分數；<b>機會不列入風險分布（表D）與清單的「最高風險等級」</b>。</div></div>
+            <div class="hint" style="margin:4px 0;">機會不與風險共用評分：風險評估「<b>嚴重度(S)×發生率(O)</b>」，機會評估「<b>預期效益(B)×可行性(F)</b>」＝機會等級(OL)。
+                預期效益(B)問「做成了好處有多大」、可行性(F)問「我們的資源與能力做不做得到」。<b>機會不列入風險分布（表D）</b>，清單的「最高風險等級」也只看風險。</div>
+            <h6 style="margin:8px 0 3px;color:#8A5A2B;">預期效益(B)分析（表B-2）</h6><div id="setOppBen"></div>
+            <h6 style="margin:8px 0 3px;color:#8A5A2B;">可行性(F)分析（表C-2）</h6><div id="setOppFeas"></div>
+            <h6 style="margin:8px 0 3px;color:#8A5A2B;">機會等級準則（表A-2）：評分＝預期效益(B)等級 × 可行性(F)等級</h6><div id="setOppLvl"></div>
+            <div class="hint">預期效益(B)與可行性(F)固定各 3 級（只可改名稱與說明）；機會等級固定 4 級，<b>第一級從 1 分起算、最後一級固定到最高分，每一級的下限＝上一級上限＋1</b>，勾選「需要因應措施」的等級，儲存時若沒有風險與機會編號會自動配發（O 開頭）。</div></div>
         <div class="set-sec"><h5>填表人可選擇的部門</h5>
             <div class="fld" id="setMakerDepts" style="display:flex;flex-wrap:wrap;gap:4px 16px;"></div>
             <div class="hint">勾選後，兩張表的「填表人」下拉只列這些部門（含下轄）在填表日期當天任職的人，避免選錯；<b>一個都不勾＝不限部門</b>。兼任者的每一個職務都會各列一列。</div></div>
@@ -483,8 +487,9 @@ $perms  = rm_perms($db, $rmUser);
             <li><b>定期／年底的「成效確認」</b>：在每條風險的「成效確認」區按「<b>依資料產生佐證</b>」，系統蒐集 KPI 逐月數字、相關措施追蹤與溝通記錄的結案狀況並建議結果，主管填「裁示」後存檔；存檔當下的佐證是快照，之後資料再變也不會改寫。有結果就一定要有確認日期、裁示與佐證。</li>
             <li>按「判斷規則」可以看到系統用的所有規則（分類、嚴重度(S)、發生率(O)、措施、成效），都不依賴外部 AI。</li></ul>
         <h4>機會與風險怎麼分開看</h4>
-        <ul><li>風險與機會<b>共用同一組評分</b>（分數算法相同），但顯示的用詞不同：風險是「嚴重度(S)／發生率(O)／風險等級（低度～極度危險）」，機會是「預期效益／實現可能性／機會等級（低度～最優先機會）」。把某列的「風險與機會」改成「機會」，欄位名稱與等級名稱會當場切換。</li>
-            <li>機會等級名稱、機會的處理措施與欄位名稱都在「模組設定」維護。<b>機會不列入風險分布（表D）</b>，清單的「最高風險等級」也只看風險。</li></ul>
+        <ul><li>風險與機會<b>各有自己的評估項目</b>：風險評估「嚴重度(S)×發生率(O)＝風險等級」，機會評估「預期效益(B)×可行性(F)＝機會等級(OL)」，準則表（表A-2、表B-2、表C-2）與風險的表A～C分開，在「模組設定」維護。把某列的「風險與機會」改成「機會」，欄位名稱、選單與等級會當場切換。</li>
+            <li>機會的預期效益(B)／可行性(F)分析、機會等級準則與欄位名稱都在「模組設定」維護。<b>機會不列入風險分布（表D）</b>，另有「表D-2 機會分布」；清單的「最高風險等級」也只看風險。</li>
+            <li>每一列在「成效確認」左側有<b>「採取因應措施後」的評估</b>：嚴重度(S)／預期效益(B)與措施前相同，風險的發生率(O)應降低（建議降到不需要因應措施）、機會的可行性(F)應提高；系統會自動帶入建議值，也可自行修改，並即時顯示措施後的等級。</li></ul>
         <h4>因應措施的負責人與追蹤、重新評估、矯正單</h4>
         <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次。<b>由溝通管理依本表措施自動產生的追蹤會自動連結（標「自動」，不可移除）</b>；點編號可跳窗查看追蹤內容。想自己引用別的追蹤，可按「引用措施追蹤」或在因應措施文字裡寫「措施追蹤 編號」。</li>
             <li><b>重新評估</b>：年度中途因重大變化（例如某項指標已實際發生）重新評估時，填「重新評估」日期與原因。按「依資料產生佐證」時，若依當年資料算出的發生率比表上高，畫面會用紅字提示建議重新評估，但<b>不會自動改你的評分</b>。</li>
@@ -626,10 +631,43 @@ function likeList(S){
     return $.map(S.rm_likelihood, function(r){ return {v:r.v, label:r.label, desc:(r.prob ? r.prob + ' ' : '') + (r.desc || '')}; });
 }
 /* S／LV 不給＝用目前生效的設定；設定跳窗預覽時傳入草稿 */
-function oppTerm(k){ var t = (META.settings.rm_opp_terms || {}); return t[k] || {sev:'預期效益', freq:'實現可能性', level:'機會等級'}[k]; }
+function oppTerm(k){ var t = (META.settings.rm_opp_terms || {}); return t[k] || {sev:'預期效益(B)', freq:'可行性(F)', level:'機會等級(OL)'}[k]; }
 function isOpp(ro){ return ro === 'opportunity'; }
+/* 機會有自己的評估項目：預期效益(B)、可行性(F)（與風險的嚴重度(S)、發生率(O)分開設定） */
+function oppBenList(S){
+    S = S || META.settings;
+    return $.map(S.rm_opp_benefit.rows, function(r){ return {v:r.v, label:r.label, desc:$.map(S.rm_opp_benefit.columns, function(c, i){ return c + '：' + (r.cells[i] || ''); }).join('；')}; });
+}
+function oppFeasList(S){
+    S = S || META.settings;
+    return $.map(S.rm_opp_feas.rows, function(r){ return {v:r.v, label:r.label, desc:$.map(S.rm_opp_feas.columns, function(c, i){ return c + '：' + (r.cells[i] || ''); }).join('；')}; });
+}
+function sevListFor(ro, S){ return isOpp(ro) ? oppBenList(S) : impactList(S); }
+function frqListFor(ro, S){ return isOpp(ro) ? oppFeasList(S) : likeList(S); }
+function termSev(ro){ return isOpp(ro) ? oppTerm('sev') : '嚴重度(S)'; }
+function termFrq(ro){ return isOpp(ro) ? oppTerm('freq') : '發生率(O)'; }
+function termLv(ro){ return isOpp(ro) ? oppTerm('level') : '風險等級'; }
+function calcOppLevel(sev, frq, S, OL){
+    S = S || META.settings; OL = OL || META.opp_levels || [];
+    var okB = false, okF = false; sev = +sev; frq = +frq;
+    $.each(S.rm_opp_benefit.rows, function(_, r){ if (+r.v === sev) okB = true; });
+    $.each(S.rm_opp_feas.rows, function(_, r){ if (+r.v === frq) okF = true; });
+    if (!okB || !okF || !OL.length) return null;
+    var score = sev * frq, hit = OL[0];
+    $.each(OL, function(_, lv){ if (score >= +lv.lo) hit = lv; });
+    return {score:score, action:!!hit.action, bg:hit.bg, fg:hit.fg, is_opp:true, name:hit.name, measure:hit.measure || ''};
+}
+/* 採取因應措施後的發生率(O)／可行性(F)建議值（與後端 rm_after_suggest 同一套規則）：風險降到「不需要因應措施」的最高一級、機會提高到最高級 */
+function afterSuggest(ro, sev, frq){
+    if (sev === '' || sev == null || frq === '' || frq == null) return '';
+    if (isOpp(ro)){ var m = 0; $.each(oppFeasList(), function(_, r){ if (+r.v > m) m = +r.v; }); return m || ''; }
+    var vs = $.map(likeList(), function(r){ return +r.v; }).sort(function(a, b){ return a - b; }), best = null;
+    $.each(vs, function(_, v){ if (v > +frq) return false; var lv = calcLevel(sev, v, null, null, 'risk'); if (lv && !lv.action) best = v; });
+    return best !== null ? best : (vs.length ? vs[0] : '');
+}
 function calcLevel(sev, frq, S, LV, roKind){
     if (sev === '' || sev == null || frq === '' || frq == null) return null;
+    if (isOpp(roKind)) return calcOppLevel(sev, frq, S);
     S = S || META.settings; LV = LV || META.levels;
     if (!LV || !LV.length) return null;
     sev = +sev; frq = +frq;
@@ -987,11 +1025,11 @@ var OPEN_ROW = null;
 function renderRiskInline(doc){
     var box = $('#riskInline').empty(); if (!doc) return;
     get({action:'doc_get', doc_id:doc.doc_id}, function(res){
-        var S = META.settings, draft = +res.doc.is_draft, CS = 8;
+        var S = META.settings, draft = +res.doc.is_draft, CS = 9;
         var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
             + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張；每一項上面一列是重點，下面幾列是相關資料（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）。</span></h4>'
-            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:9%;"><col style="width:21%;"><col style="width:6%;"><col style="width:10%;"><col style="width:10%;"><col style="width:28%;"><col style="width:8%;"><col style="width:8%;"></colgroup>'
-            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S)／<br>發生率(O)</th><th>等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
+            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:8%;"><col style="width:17%;"><col style="width:6%;"><col style="width:10%;"><col style="width:9%;"><col style="width:12%;"><col style="width:21%;"><col style="width:8%;"><col style="width:9%;"></colgroup>'
+            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S)／預期效益(B)<br>發生率(O)／可行性(F)</th><th>風險／機會<br>等級</th><th>採取因應措施後<br>發生率(O)／可行性(F)與等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
         // 下面幾列不對齊上面的欄位：整列一格、標題接在內容前面，不留空白
         var sub = function(lb, html){ return '<tr class="sub"><td colspan="' + CS + '"><b class="sl">' + lb + '</b>' + html + '</td></tr>'; };
         $.each(res.items, function(i, it){
@@ -1002,8 +1040,9 @@ function renderRiskInline(doc){
               + '<br><button class="b-mini" data-editrow="' + i + '" data-doc="' + doc.doc_id + '" style="margin-top:4px;"><i class="fa fa-pencil"></i> ' + (res.can_edit ? '編輯' : '檢視') + '</button></td>'
               + '<td>' + esc(it.issue || '—') + '</td>'
               + '<td><span class="rk-kind ' + cls + '">' + (opp ? '機會' : '風險') + '</span></td>'
-              + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '<br>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
+              + '<td>' + esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) + '<br>' + esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency)) + '</td>'
               + '<td>' + lvBadge(it.level, true) + '</td>'
+              + '<td>' + (it.level_after ? esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency_after)) + '<br>' + lvBadge(it.level_after, true) : '<span class="hint">—</span>') + '</td>'
               + '<td style="white-space:pre-wrap;">' + esc(it.measure || '—') + '</td><td>' + fuTxt + '</td><td>' + eff + '</td></tr>';
             h += sub('利害關係者／需求與期望：', esc((it.stakeholder || '—') + '　／　' + (it.needs || '—')) + '　<span class="hint">（' + esc(META.scopes[it.scope] || '') + '議題）</span>');
             if (it.ro_text) h += sub('對組織的影響說明：', esc(it.ro_text));
@@ -1046,7 +1085,7 @@ function colsOf(kind){
     if (kind === 'context') return [['seq','編號',52],['scope','內/外部議題',100],['dimension','構面',130],['stakeholder','利害關係者',150],
         ['needs','需求與期望',230],['issue','議題描述',300],['op','',44]];
     return [['seq','編號',52],['scope','內/外部議題',96],['stakeholder','利害關係者',130],['needs','需求與期望',170],['issue','議題描述',210],
-        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險與機會編號',104],
+        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['sev2','',112],['frequency_after','',112],['level2','',92],['confirm_no','風險與機會編號',104],
         ['measure','因應措施',200],['recheck','重新評估',150],['effect','成效確認',170],['op','',44]];
 }
 function scaleOptions(list, val){
@@ -1154,6 +1193,7 @@ function rowHtml(kind, it, n){
         var roSel = '<select data-f="ro_kind"><option value="">—</option>'
             + $.map(META.ro_kinds, function(t, k){ return '<option value="' + k + '"' + (it.ro_kind === k ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select>';
         var lv = calcLevel(it.severity, it.frequency, null, null, it.ro_kind);
+        var lvA = calcLevel(it.severity, it.frequency_after, null, null, it.ro_kind);
         var opp = isOpp(it.ro_kind);
         var fd = function(label, inner, cls){ return '<td class="' + cls + '"><label class="fl">' + label + '</label>' + inner + '</td>'; };
         // 議題描述：連動組織處境分析表的議題。連動中時，內外部／利害關係者／需求與期望／議題描述都跟著來源（唯讀）
@@ -1163,12 +1203,16 @@ function rowHtml(kind, it, n){
         h += fd('內/外部議題', scopeSel, 'c-scope') + fd('利害關係者', ta('stakeholder', it.stakeholder), 'c-sh') + fd('需求與期望', ta('needs', it.needs), 'c-needs')
           + fd('議題描述', issueCell, 'c-issue') + fd('對組織的影響說明', ta('ro_text', it.ro_text), 'c-ro')
           + fd('風險與機會', roSel, 'c-kind')
-          + fd('<span class="lb-sev">' + (opp ? esc(oppTerm('sev')) : '嚴重度(S)') + '</span>', '<select data-f="severity">' + scaleOptions(impactList(), it.severity) + '</select>', 'c-sev')
-          + fd('<span class="lb-frq">' + (opp ? esc(oppTerm('freq')) : '發生率(O)') + '</span>', '<select data-f="frequency">' + scaleOptions(likeList(), it.frequency) + '</select>', 'c-frq')
-          + fd('<span class="lb-lv">' + (opp ? esc(oppTerm('level')) : '風險等級') + '</span>', lvBadge(lv, true), 'c-lv lvc')
+          + fd('<span class="lb-sev">' + esc(termSev(it.ro_kind)) + '</span>', '<select data-f="severity">' + scaleOptions(sevListFor(it.ro_kind), it.severity) + '</select>', 'c-sev')
+          + fd('<span class="lb-frq">' + esc(termFrq(it.ro_kind)) + '</span>', '<select data-f="frequency">' + scaleOptions(frqListFor(it.ro_kind), it.frequency) + '</select>', 'c-frq')
+          + fd('<span class="lb-lv">' + esc(termLv(it.ro_kind)) + '</span>', lvBadge(lv, true), 'c-lv lvc')
           + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
           + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackPickHtml() + trackHtml(it) + followHtml(it), 'c-measure')
           + fd('所需資源（人員、設施、工作環境、方法）', resHtml(it.resources), 'c-res') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
+          + fd('採取因應措施後 <span class="lb-sev2">' + esc(termSev(it.ro_kind)) + '</span>', '<span class="sev2">' + (esc(scaleLabel(sevListFor(it.ro_kind), it.severity)) || '—') + '</span><div class="hint">與措施前相同</div>', 'c-sev2')
+          + fd('採取因應措施後 <span class="lb-frq2">' + esc(termFrq(it.ro_kind)) + '</span>', '<select data-f="frequency_after">' + scaleOptions(frqListFor(it.ro_kind), it.frequency_after) + '</select>'
+               + '<div class="hint"><a href="#" data-afterauto>依規則帶入建議值</a>（' + (opp ? '可行性應提高' : '發生率應降低，降到不需要因應措施') + '）</div>', 'c-frq2')
+          + fd('採取因應措施後 <span class="lb-lv2">' + esc(termLv(it.ro_kind)) + '</span>', lvBadge(lvA, true), 'c-lv2 lvc2')
           + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
@@ -1185,8 +1229,8 @@ function buildTable(kind, items){
     var h = '<colgroup>' + cols.map(function(c){ return '<col style="width:' + c[2] + 'px;">'; }).join('') + '</colgroup><thead>';
     if (kind === 'risk'){
         h += '<tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
-          + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr>';
+          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取因應措施後的 風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
+          + '<tr><th>嚴重度(S)／預期效益(B)</th><th>發生率(O)／可行性(F)</th><th>風險／機會等級</th><th>嚴重度(S)／預期效益(B)</th><th>發生率(O)／可行性(F)</th><th>風險／機會等級</th></tr>';
     } else {
         h += '<tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
     }
@@ -1212,14 +1256,32 @@ $(document).on('click', '[data-delrow]', function(){
     if ($('#itBody tr').length <= 1){ $(this).closest('tr').find('textarea,input[type=text]').val(''); $(this).closest('tr').find('select').val(''); return; }
     $(this).closest('tr').remove(); renumber();
 });
-/* 嚴重度(S)／發生率(O)一改就即時更新該列的風險等級預覽 */
-$(document).on('change', '#itBody select[data-f=severity], #itBody select[data-f=frequency]', function(){
-    var tr = $(this).closest('tr');
-    var ro = tr.find('[data-f=ro_kind]').val(), op = isOpp(ro);
-    tr.find('.lb-sev').text(op ? oppTerm('sev') : '嚴重度(S)');
-    tr.find('.lb-frq').text(op ? oppTerm('freq') : '發生率(O)');
-    tr.find('.lb-lv').text(op ? oppTerm('level') : '風險等級');
-    tr.find('td.lvc').html(lvBadge(calcLevel(tr.find('[data-f=severity]').val(), tr.find('[data-f=frequency]').val(), null, null, ro), true));
+/* 一列的評估區：改「風險/機會」就換成對應的評估項目與選單（風險＝嚴重度(S)×發生率(O)、機會＝預期效益(B)×可行性(F)），
+   評分一改即時更新措施前／措施後的等級預覽；措施後的發生率(O)／可行性(F)沒有人工改過時，自動帶入建議值 */
+function refreshRow(tr, relist){
+    var ro = tr.find('[data-f=ro_kind]').val();
+    var $s = tr.find('[data-f=severity]'), $f = tr.find('[data-f=frequency]'), $a = tr.find('[data-f=frequency_after]');
+    if (relist){
+        var keep = function($el, list){ var v = String($el.val() || ''), ok = false; $.each(list, function(_, r){ if (String(r.v) === v) ok = true; }); $el.html(scaleOptions(list, ok ? v : '')); };
+        keep($s, sevListFor(ro)); keep($f, frqListFor(ro)); keep($a, frqListFor(ro));
+    }
+    tr.find('.lb-sev, .lb-sev2').text(termSev(ro)); tr.find('.lb-frq, .lb-frq2').text(termFrq(ro)); tr.find('.lb-lv, .lb-lv2').text(termLv(ro));
+    var sv = $s.val(), fq = $f.val();
+    if (sv !== '' && fq !== '' && ($a.val() === '' || tr.attr('data-auto-after') === '1')){ $a.val(afterSuggest(ro, sv, fq)); tr.attr('data-auto-after', '1'); }
+    if (sv === '' || fq === '') { if (tr.attr('data-auto-after') === '1') $a.val(''); }
+    tr.find('.sev2').text(scaleLabel(sevListFor(ro), sv) || '—');
+    tr.find('td.lvc').html(lvBadge(calcLevel(sv, fq, null, null, ro), true));
+    tr.find('td.lvc2').html(lvBadge(calcLevel(sv, $a.val(), null, null, ro), true));
+}
+$(document).on('change', '#itBody select[data-f=severity], #itBody select[data-f=frequency]', function(){ refreshRow($(this).closest('tr'), false); });
+$(document).on('change', '#itBody select[data-f=ro_kind]', function(){ refreshRow($(this).closest('tr'), true); });
+$(document).on('change', '#itBody select[data-f=frequency_after]', function(){ var tr = $(this).closest('tr'); tr.attr('data-auto-after', '0'); refreshRow(tr, false); });
+$(document).on('click', '#itBody [data-afterauto]', function(e){
+    e.preventDefault();
+    var tr = $(this).closest('tr'); tr.attr('data-auto-after', '1');
+    var sv = tr.find('[data-f=severity]').val(), fq = tr.find('[data-f=frequency]').val();
+    if (sv === '' || fq === ''){ alert('請先選措施前的評估（嚴重度(S)／預期效益(B)與發生率(O)／可行性(F)），才能帶入建議值'); return; }
+    tr.find('[data-f=frequency_after]').val(afterSuggest(tr.find('[data-f=ro_kind]').val(), sv, fq)); refreshRow(tr, false);
 });
 
 function renderDeptChips(){
@@ -1341,7 +1403,13 @@ $('#btnDocSave').on('click', function(){
     var items = collectItems(), bad = '';
     if (CUR.kind === 'risk'){
         $.each(items, function(i, it){
-            if (!bad && ((it.severity === '') !== (it.frequency === ''))) bad = '第 ' + (i + 1) + ' 列的嚴重度(S)與發生率(O)要一起填（缺一個算不出風險等級）';
+            var op = it.ro_kind === 'opportunity';
+            if (!bad && ((it.severity === '') !== (it.frequency === ''))) bad = '第 ' + (i + 1) + ' 列的' + termSev(it.ro_kind) + '與' + termFrq(it.ro_kind) + '要一起填（缺一個算不出' + termLv(it.ro_kind) + '）';
+            if (!bad && it.frequency_after !== '' && it.frequency === '') bad = '第 ' + (i + 1) + ' 列要先填措施前的' + termFrq(it.ro_kind) + '，才能填採取措施後的評估';
+            if (!bad && it.frequency_after !== '' && it.frequency !== ''){
+                if (op && +it.frequency_after < +it.frequency) bad = '第 ' + (i + 1) + ' 列採取措施後的可行性(F)不可低於措施前（採取措施後可行性應提高）';
+                if (!op && +it.frequency_after > +it.frequency) bad = '第 ' + (i + 1) + ' 列採取措施後的發生率(O)不可高於措施前（採取措施後發生率應降低）';
+            }
         });
     }
     if (bad){ $('#eItems').text(bad); return; }
@@ -1390,7 +1458,7 @@ function suggestRow(tr, ctxId){
     get({action:'risk_suggest_row', ctx_item_id:ctxId, year:y}, function(res){
         var s = res.suggest || {}, filled = [];
         var setIf = function(f, v, label){ var el = tr.find('[data-f=' + f + ']'); if (el.length && (el.val() === '' || el.val() === null) && v !== '' && v !== null && v !== undefined){ el.val(v).trigger('change'); filled.push(label); } };
-        if (!(+tr.data('item-id')) && s.ro_kind && tr.find('[data-f=ro_kind]').val() !== s.ro_kind){ tr.find('[data-f=ro_kind]').val(s.ro_kind).trigger('change'); filled.push('風險與機會'); } else setIf('ro_kind', s.ro_kind, '風險與機會'); setIf('severity', s.severity, '嚴重度(S)'); setIf('frequency', s.frequency, '發生率(O)');
+        if (!(+tr.data('item-id')) && s.ro_kind && tr.find('[data-f=ro_kind]').val() !== s.ro_kind){ tr.find('[data-f=ro_kind]').val(s.ro_kind).trigger('change'); filled.push('風險與機會'); } else setIf('ro_kind', s.ro_kind, '風險與機會'); setIf('severity', s.severity, '嚴重度(S)／預期效益(B)'); setIf('frequency', s.frequency, '發生率(O)／可行性(F)'); setIf('frequency_after', s.frequency_after, '採取措施後評估');
         setIf('ro_text', s.ro_text, '對組織的影響說明'); setIf('measure', s.measure, '因應措施'); setIf('effect_check', s.effect_check, '成效確認方式');
         if (s.resources && !$.trim(tr.find('[data-f=res_p]').val() + tr.find('[data-f=res_f]').val() + tr.find('[data-f=res_e]').val() + tr.find('[data-f=res_m]').val())){
             var o = parseRes(s.resources); $.each(RESLB, function(_, r){ tr.find('[data-f=' + r[1] + ']').val(o[r[1]]); }); filled.push('所需資源');
@@ -1445,14 +1513,11 @@ $(document).on('click', '[data-unlinkctx]', function(e){
 /* ---------- 評級對照表（完全由設定產生） ---------- */
 function renderRating(){
     var S = META.settings, H = '<h4 style="color:#8A5A2B;margin:12px 0 4px;">', h = '';
-    h += H + '表A、風險準則</h4><table class="mx"><thead><tr><th>風險等級</th><th>評分</th><th>處理措施</th><th>需要因應措施</th>'
-       + '<th>' + esc(oppTerm('level')) + '</th><th>機會的處理措施</th></tr></thead><tbody>';
+    h += H + '表A、風險準則</h4><table class="mx"><thead><tr><th>風險等級</th><th>評分</th><th>處理措施</th><th>需要因應措施</th></tr></thead><tbody>';
     $.each(META.levels.slice().reverse(), function(_, lv){
-        h += '<tr><td>' + lvBadge(lv, false) + '</td><td>' + esc(lv.range) + '</td><td style="text-align:left;">' + esc(lv.measure) + '</td><td>' + (lv.action ? '是' : '否') + '</td>'
-           + '<td>' + esc(lv.name_opp || lv.name) + '</td><td style="text-align:left;">' + esc(lv.measure_opp || lv.measure) + '</td></tr>';
+        h += '<tr><td>' + lvBadge(lv, false) + '</td><td>' + esc(lv.range) + '</td><td style="text-align:left;">' + esc(lv.measure) + '</td><td>' + (lv.action ? '是' : '否') + '</td></tr>';
     });
-    h += '</tbody></table><div class="hint" style="margin:-4px 0 8px;">同一組評分同時給風險與機會用，只是顯示的名稱與處理措施不同：風險問「後果多嚴重、多常發生」，機會問「'
-       + esc(oppTerm('sev')) + '多大、' + esc(oppTerm('freq')) + '多高」。</div>';
+    h += '</tbody></table>';
     h += H + '表B、嚴重度(S)分析</h4><table class="mx"><thead><tr><th>等級</th><th>嚴重度(S)</th>';
     $.each(S.rm_impact.columns, function(_, c){ h += '<th>' + esc(c) + '</th>'; });
     h += '</tr></thead><tbody>';
@@ -1478,7 +1543,43 @@ function renderRating(){
         });
         h += '</tr>';
     });
-    $('#ratingBody').html(h + '</tbody></table>');
+    h += '</tbody></table>';
+    // ---- 機會：有自己的評估項目（預期效益(B)×可行性(F)＝機會等級(OL)），不與風險共用
+    h += '<h3 style="color:#1E6B47;margin:18px 0 4px;">機會的評估準則</h3>';
+    h += H + '表A-2、機會等級準則（評分＝' + esc(oppTerm('sev')) + '等級 × ' + esc(oppTerm('freq')) + '等級）</h4><table class="mx"><thead><tr><th>' + esc(oppTerm('level')) + '</th><th>評分</th><th>處理措施</th><th>需要因應措施</th></tr></thead><tbody>';
+    $.each((META.opp_levels || []).slice().reverse(), function(_, lv){
+        h += '<tr><td>' + lvBadge(lv, false) + '</td><td>' + esc(lv.range) + '</td><td style="text-align:left;">' + esc(lv.measure) + '</td><td>' + (lv.action ? '是' : '否') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    var oppTbl = function(title, tbl, nm){
+        var t = H + title + '</h4><table class="mx"><thead><tr><th>等級</th><th>' + esc(nm) + '</th>';
+        $.each(tbl.columns, function(_, c){ t += '<th>' + esc(c) + '</th>'; });
+        t += '</tr></thead><tbody>';
+        $.each(tbl.rows.slice().reverse(), function(_, r){
+            t += '<tr><td>' + r.v + '</td><td>' + esc(r.label) + '</td>';
+            $.each(tbl.columns, function(i){ t += '<td style="text-align:left;">' + esc(r.cells[i] || '') + '</td>'; });
+            t += '</tr>';
+        });
+        return t + '</tbody></table>';
+    };
+    h += oppTbl('表B-2、' + esc(oppTerm('sev')) + '分析', S.rm_opp_benefit, oppTerm('sev'));
+    h += oppTbl('表C-2、' + esc(oppTerm('freq')) + '分析', S.rm_opp_feas, oppTerm('freq'));
+    h += H + '表D-2、機會分布（' + esc(oppTerm('sev')) + '等級 × ' + esc(oppTerm('freq')) + '等級）</h4><table class="mx"><thead><tr><th>' + esc(oppTerm('sev')) + '＼' + esc(oppTerm('freq')) + '</th>';
+    $.each(S.rm_opp_feas.rows, function(_, f){ h += '<th>' + esc(f.label) + '（' + f.v + '）</th>'; });
+    h += '</tr></thead><tbody>';
+    $.each(S.rm_opp_benefit.rows.slice().reverse(), function(_, b){
+        h += '<tr><th>' + esc(b.label) + '（' + b.v + '）</th>';
+        $.each(S.rm_opp_feas.rows, function(_, f){ h += '<td data-ocell="' + b.v + '-' + f.v + '">' + lvBadge(calcOppLevel(b.v, f.v), true) + '<div class="cnt" style="font-size:11px;color:#8a6d45;"></div></td>'; });
+        h += '</tr>';
+    });
+    h += '</tbody></table><div class="hint" style="margin:-2px 0 8px;">表D-2 說明：機會分數＝' + esc(oppTerm('sev')) + '等級 × ' + esc(oppTerm('freq')) + '等級，依表A-2 判定機會等級；格內小字＝目前實際落在此格的機會筆數（只計機會、不含風險）。'
+       + '機會分布與風險分布（表D）分開統計，等級較高者（需要因應措施）優先推動，並於管理審查會議報告。</div>';
+    $('#ratingBody').html(h);
+    get({action:'dist', kind:'opp'}, function(res){
+        $.each(res.cells, function(_, c){
+            $('#ratingBody [data-ocell="' + c.severity + '-' + c.frequency + '"] .cnt').text(c.c + ' 筆');
+        });
+    });
     get({action:'dist'}, function(res){
         $.each(res.cells, function(_, c){
             $('#ratingBody [data-cell="' + c.severity + '-' + c.frequency + '"] .cnt').text(c.c + ' 筆');
@@ -1564,8 +1665,6 @@ function lvlRowHtml(r){
         + '<td><input type="number" class="lv-hi" data-l="hi" value="' + esc(r.hi) + '" min="1" step="1" style="width:64px;"></td>'
         + '<td><input type="text" data-l="measure" value="' + esc(r.measure || '') + '" maxlength="200"></td>'
         + '<td style="text-align:center;"><input type="checkbox" data-l="action"' + (r.action ? ' checked' : '') + '></td>'
-        + '<td><input type="text" data-l="name_opp" value="' + esc(r.name_opp || '') + '" maxlength="10" style="width:100px;" placeholder="（同風險名稱）"></td>'
-        + '<td><input type="text" data-l="measure_opp" value="' + esc(r.measure_opp || '') + '" maxlength="200" placeholder="（同風險處理措施）"></td>'
         + '<td><button type="button" class="b-mini danger" data-rmrow="lvl"><i class="fa fa-times"></i></button></td></tr>';
 }
 /* ---- 嚴重度(S)分析（表B）：等級數字自動 ---- */
@@ -1622,8 +1721,7 @@ function readLvl(){
     var lv = [];
     $('#setLvl tbody tr').each(function(){
         lv.push({name:$(this).find('[data-l=name]').val(), orig_name:$(this).attr('data-orig') || '', hi:$(this).find('.lv-hi').val(),
-                 measure:$(this).find('[data-l=measure]').val(), action:$(this).find('[data-l=action]').is(':checked'),
-                 name_opp:$(this).find('[data-l=name_opp]').val(), measure_opp:$(this).find('[data-l=measure_opp]').val()});
+                 measure:$(this).find('[data-l=measure]').val(), action:$(this).find('[data-l=action]').is(':checked')});
     });
     return lv;
 }
@@ -1707,11 +1805,60 @@ function previewDist(){
     });
     $('#setDist').html(h + '</tbody></table>');
 }
+/* ---- 機會的評估準則：預期效益(B)／可行性(F)（固定 3 級，只改名稱與說明）、機會等級（固定 4 級，評分區間） ---- */
+function oppTblHtml(key, tbl){
+    var t = '<table class="rm-table fld" data-opptbl="' + key + '"><thead><tr><th style="width:64px;">等級</th><th style="width:110px;">名稱</th>';
+    $.each(tbl.columns, function(_, c){ t += '<th>' + esc(c) + '</th>'; });
+    t += '</tr></thead><tbody>';
+    $.each(tbl.rows, function(_, r){
+        t += '<tr><td style="text-align:center;font-weight:bold;">' + r.v + '</td><td><input type="text" data-o="label" value="' + esc(r.label) + '" maxlength="20" style="width:100px;"></td>';
+        $.each(tbl.columns, function(i){ t += '<td><input type="text" data-oc="' + i + '" value="' + esc((r.cells || [])[i] || '') + '" maxlength="100"></td>'; });
+        t += '</tr>';
+    });
+    return t + '</tbody></table>';
+}
+function readOppTbl(key){
+    var cols = META.settings[key].columns, rows = [];
+    $('#setOppBen,#setOppFeas').find('[data-opptbl=' + key + '] tbody tr').each(function(){
+        rows.push({label:$(this).find('[data-o=label]').val(), cells:$(this).find('[data-oc]').map(function(){ return $(this).val(); }).get()});
+    });
+    return {columns:cols, rows:rows};
+}
+function oppMaxScore(){ return $('#setOppBen tbody tr').length * $('#setOppFeas tbody tr').length; }
+function oppLvlHtml(levels){
+    var t = '<table class="rm-table fld"><thead><tr><th style="width:110px;">機會等級</th><th style="width:76px;">評分下限</th><th style="width:76px;">評分上限</th><th>處理措施</th><th style="width:90px;">需要因應措施</th></tr></thead><tbody>';
+    var n = levels.length;
+    $.each(levels, function(i, r){
+        t += '<tr><td><input type="text" data-q="name" value="' + esc(r.name) + '" maxlength="10" style="width:100px;"></td>'
+          + '<td><input type="number" class="ol-lo" value="' + esc(r.lo) + '" readonly tabindex="-1" style="width:64px;background:#F5EEE2;"></td>'
+          + '<td><input type="number" class="ol-hi" value="' + esc(i === n - 1 ? oppMaxScore() : r.hi) + '" min="1" step="1" style="width:64px;"' + (i === n - 1 ? ' readonly tabindex="-1" title="最後一級固定＝最高分"' : '') + '></td>'
+          + '<td><input type="text" data-q="measure" value="' + esc(r.measure || '') + '" maxlength="200"></td>'
+          + '<td style="text-align:center;"><input type="checkbox" data-q="action"' + (r.action ? ' checked' : '') + '></td></tr>';
+    });
+    return t + '</tbody></table>';
+}
+function relinkOppLvl(){
+    var prev = 0, n = $('#setOppLvl tbody tr').length;
+    $('#setOppLvl tbody tr').each(function(i){
+        var lo = i === 0 ? 1 : prev + 1, $hi = $(this).find('.ol-hi');
+        if (i === n - 1) $hi.val(oppMaxScore());
+        else if (+$hi.val() < lo) $hi.val(lo);
+        $(this).find('.ol-lo').val(lo); prev = +$hi.val();
+    });
+}
+$(document).on('change input', '#setOppLvl .ol-hi', relinkOppLvl);
+function readOppLvl(){
+    return $('#setOppLvl tbody tr').map(function(){
+        return {name:$(this).find('[data-q=name]').val(), hi:$(this).find('.ol-hi').val(), measure:$(this).find('[data-q=measure]').val(), action:$(this).find('[data-q=action]').is(':checked')};
+    }).get();
+}
 function renderSet(){
     var S = META.settings;
-    var t = '<table class="rm-table fld"><thead><tr><th style="width:110px;">風險等級</th><th style="width:76px;">評分下限</th><th style="width:76px;">評分上限</th><th>處理措施</th><th style="width:90px;">需要因應措施</th><th style="width:110px;">機會等級名稱</th><th>機會的處理措施</th><th style="width:44px;"></th></tr></thead><tbody>';
-    $.each(S.rm_levels, function(_, r){ t += lvlRowHtml({name:r.name, lo:r.lo, hi:r.hi, measure:r.measure, action:r.action, saved:true,
-        name_opp:r.name_opp, measure_opp:r.measure_opp}); });
+    $('#setOppBen').html(oppTblHtml('rm_opp_benefit', S.rm_opp_benefit));
+    $('#setOppFeas').html(oppTblHtml('rm_opp_feas', S.rm_opp_feas));
+    $('#setOppLvl').html(oppLvlHtml(S.rm_opp_levels));
+    var t = '<table class="rm-table fld"><thead><tr><th style="width:110px;">風險等級</th><th style="width:76px;">評分下限</th><th style="width:76px;">評分上限</th><th>處理措施</th><th style="width:90px;">需要因應措施</th><th style="width:44px;"></th></tr></thead><tbody>';
+    $.each(S.rm_levels, function(_, r){ t += lvlRowHtml({name:r.name, lo:r.lo, hi:r.hi, measure:r.measure, action:r.action, saved:true}); });
     $('#setOppSev').val((S.rm_opp_terms || {}).sev || ''); $('#setOppFrq').val((S.rm_opp_terms || {}).freq || ''); $('#setOppLv').val((S.rm_opp_terms || {}).level || '');
     $('#setLvl').html(t + '</tbody></table>');
     $('#setImpCols').val(S.rm_impact.columns.join('\n'));
@@ -1745,7 +1892,7 @@ $('#btnAddLvl').on('click', function(){
     var last = rows.last(), lo = +last.find('.lv-lo').val() || 1;
     if (lo > max - 1){ alert('最高那一級已經只剩 ' + max + ' 分，沒有空間再分出新的一級（請先把前面等級的評分上限調小）。'); return; }
     last.find('.lv-hi').val(Math.max(lo, max - 1));            // 原本最後一級的上限讓出最高分，新的一級取最高分那一格
-    $('#setLvl tbody').append(lvlRowHtml({name:'', lo:max, hi:max, measure:'', action:false, saved:false, name_opp:'', measure_opp:''}));
+    $('#setLvl tbody').append(lvlRowHtml({name:'', lo:max, hi:max, measure:'', action:false, saved:false}));
     showSetErrs(true); previewDist();
 });
 $('#btnAddImp').on('click', function(){
@@ -1861,6 +2008,7 @@ $('#btnSetSave').on('click', function(){
     var s = {rm_impact:{columns:IMPCOLS, rows:impRows}, rm_likelihood:readLik(), rm_method:$('#setMethod').val(), rm_levels:readLvl(),
              rm_dimensions:[0, 1, 2, 3].map(function(i){ return $('#setSwot' + i).val(); }), rm_confirm_prefix:$('#setPrefix').val(), rm_opp_prefix:$('#setOppPrefix').val(),
              rm_opp_terms:{sev:$('#setOppSev').val(), freq:$('#setOppFrq').val(), level:$('#setOppLv').val()},
+             rm_opp_benefit:readOppTbl('rm_opp_benefit'), rm_opp_feas:readOppTbl('rm_opp_feas'), rm_opp_levels:readOppLvl(),
              rm_maker_depts:$('.setMkDept:checked').map(function(){ return +this.value; }).get()};
     var send = function(force){
         $('#eSet').text('');
@@ -1869,7 +2017,7 @@ $('#btnSetSave').on('click', function(){
         $.ajax({url:API, method:'POST', dataType:'json', global:false, data:{action:'setting_save', csrf:CSRF, settings:JSON.stringify(s), force:force ? 1 : 0}})
          .done(function(res){
             NProgress.done();
-            META.settings = res.settings; META.levels = res.levels; META.swot = res.swot;
+            META.settings = res.settings; META.levels = res.levels; META.opp_levels = res.opp_levels; META.swot = res.swot;
             alert('設定已儲存'); closeMask('setMask');
             LISTKINDS.forEach(function(k){ loadList(k); }); loadBoard(BOARD.year);
          })
@@ -1884,11 +2032,12 @@ $('#btnSetSave').on('click', function(){
 });
 
 /* ================= 列印（ai-rules/16；比照紙本版面） ================= */
-function egPrintWindow(title, bodyHtml, docNo, extraCss){
+function egPrintWindow(title, bodyHtml, docNo, extraCss, paper){
+    paper = paper === 'A3' ? 'A3' : 'A4';
     var asHtml = esc(String(docNo || ''));
     // 邊界一律交給 @page（多頁時每一頁都有上下留白，不會貼齊紙邊被裁掉；頁碼與表單編號也才有地方印）
     var docNoCss = String(docNo || '').replace(/[\\"\r\n]/g, '');
-    var css = '@page{size:A4 landscape;margin:10mm 8mm 14mm;' + (docNoCss ? '@bottom-right{content:"' + docNoCss + '";font-size:9pt;color:#333;}' : '') + '}html,body{margin:0;padding:0;}'
+    var css = '@page{size:' + paper + ' landscape;margin:10mm 8mm 14mm;' + (docNoCss ? '@bottom-right{content:"' + docNoCss + '";font-size:9pt;color:#333;}' : '') + '}html,body{margin:0;padding:0;}'
         + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
         + '.pt-head .tt{font-size:18px;font-weight:bold;margin-top:3px;letter-spacing:1px;text-decoration:underline;}'
@@ -1901,7 +2050,7 @@ function egPrintWindow(title, bodyHtml, docNo, extraCss){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     // 超過一頁才加左下角頁碼；量高度要在「列印寬度」下量（視窗寬度不同高度就不同）
-    var onloadJs = 'var onePageA4=(210-24)*96/25.4;if(document.body.scrollHeight>onePageA4*0.92){var st=document.createElement(\'style\');'
+    var onloadJs = 'var onePageA4=(' + (paper === 'A3' ? 297 : 210) + '-24)*96/25.4;if(document.body.scrollHeight>onePageA4*0.92){var st=document.createElement(\'style\');'
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";document.head.appendChild(st);}';
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css + '</style></head><body>'
         + bodyHtml
@@ -1968,6 +2117,8 @@ function measurePrint(it){
     if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
 }
+var RISK_COLG = '<colgroup><col style="width:38px;"><col style="width:56px;"><col style="width:92px;"><col style="width:122px;"><col style="width:142px;"><col style="width:132px;"><col style="width:54px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:78px;"><col><col></colgroup>';
+var RISK_THEAD = '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th><th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取因應措施後的<br>風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr><tr><th>嚴重度(S)<br>預期效益(B)</th><th>發生率(O)<br>可行性(F)</th><th>風險/機會<br>等級</th><th>嚴重度(S)<br>預期效益(B)</th><th>發生率(O)<br>可行性(F)</th><th>風險/機會<br>等級</th></tr></thead>';
 function scaleLabel(list, v){
     if (v === '' || v == null) return '';
     var t = String(v); $.each(list, function(_, r){ if (+r.v === +v) t = r.v + ' ' + r.label; }); return t;
@@ -1980,12 +2131,14 @@ function printDoc(docId){
                 tr += '<tr><td>' + (i + 1) + '</td><td>' + esc(META.scopes[it.scope] || '') + '</td><td>' + esc(it.dimension) + '</td>'
                     + '<td class="l">' + pSmall(it.stakeholder) + '</td><td class="l">' + pSmall(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td></tr>';
             } else {
-                var lv = it.level ? it.level.name : '';     // 機會列印出來的是機會等級名稱（後端依 ro_kind 給）
+                var lv = it.level ? it.level.name : '', lvA = it.level_after ? it.level_after.name : '';     // 機會列印出來的是機會等級名稱（後端依 ro_kind 給）
                 tr += '<tr><td>' + (i + 1) + '</td><td>' + esc(META.scopes[it.scope] || '') + '</td><td class="l">' + pSmall(it.stakeholder) + '</td>'
                     + '<td class="l">' + pSmall(it.needs) + '</td><td class="l">' + esc(it.issue) + '</td>'
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
-                    + '<td>' + esc(scaleLabel(impactList(S), it.severity)) + '</td><td>' + esc(scaleLabel(likeList(S), it.frequency)) + '</td>'
-                    + '<td>' + lvWrap(lv) + '</td><td>' + esc(it.confirm_no) + '</td>'
+                    + '<td>' + esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) + '</td><td>' + esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency)) + '</td>'
+                    + '<td>' + lvWrap(lv) + '</td>'
+                    + '<td>' + (it.level_after ? esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) : '') + '</td><td>' + (it.level_after ? esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency_after)) : '') + '</td>'
+                    + '<td>' + lvWrap(lvA) + '</td><td>' + esc(it.confirm_no) + '</td>'
                     + '<td class="l">' + measurePrint(it) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
             }
         });
@@ -1997,19 +2150,15 @@ function printDoc(docId){
             table = '<table class="pt"><colgroup><col style="width:40px;"><col style="width:70px;"><col style="width:100px;"><col style="width:140px;"><col><col></colgroup>'
                 + '<thead><tr><th>編號</th><th>內/外部議題</th><th>構面</th><th>利害關係者</th><th>需求與期望</th><th>議題描述</th></tr></thead><tbody>' + tr + '</tbody></table>';
         } else {
-            table = '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
-                + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
-                + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
-                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險<br>等級</th></tr></thead><tbody>' + tr + '</tbody></table>';
+            table = '<table class="pt">' + RISK_COLG + RISK_THEAD + '<tbody>' + tr + '</tbody></table>';
         }
-        // 風險與機會共用 1～n 級評分尺度，但評估的意義不同，所以在表尾逐點說明（稽核員看到表頭「嚴重度／發生率」時才不會把機會也當成危險）
-        var foot = kind === 'risk' ? '<div style="margin-top:6px;font-size:11px;color:#333;line-height:1.6;">註：'
-            + '<br>1. 風險與機會採用相同的評分尺度（分數＝嚴重度(S)等級 × 發生率(O)等級，算法以模組設定為準），惟各自依不同的評估意義判定。'
-            + '<br>2. 風險：嚴重度(S)評估可能造成的負面影響，發生率(O)評估其發生可能性；依風險準則判定風險等級。'
-            + '<br>3. 機會（「風險與機會」欄為機會者）：嚴重度(S)欄為' + esc(oppTerm('sev')) + '，評估機會實現後的效益；發生率(O)欄為' + esc(oppTerm('freq')) + '，評估其實現的可能性；風險等級欄為' + esc(oppTerm('level')) + '。'
+        // 風險與機會各有自己的評估項目，所以在表尾逐點說明（稽核員看到表頭時才分得清楚）
+        var foot = kind === 'risk' ? '<div style="margin-top:6px;font-size:12px;color:#333;line-height:1.6;">註：'
+            + '<br>1. 風險評估項目：嚴重度(S)評估可能造成的負面影響，發生率(O)評估其發生可能性；風險等級＝嚴重度(S)等級 × 發生率(O)等級（算法以模組設定為準），依風險準則（表A）判定。'
+            + '<br>2. 機會評估項目（「風險與機會」欄為機會者）：預期效益(B)評估機會實現後的好處，可行性(F)評估組織以現有資源與能力做成的程度；機會等級(OL)＝預期效益(B)等級 × 可行性(F)等級，依機會等級準則（表A-2）判定。'
+            + '<br>3. 「採取因應措施後」的嚴重度(S)／預期效益(B)與措施前相同；風險因措施使發生率(O)降低、機會因措施使可行性(F)提高，據以重新判定風險／機會等級。'
             + '<br>4. 風險與機會分別編號（風險以 ' + esc(META.settings.rm_confirm_prefix) + ' 開頭、機會以 ' + esc(META.settings.rm_opp_prefix || 'O') + ' 開頭），以利因應措施及成效確認之追蹤。</div>' : '';
-        egPrintWindow(meta.doc_name || kindName(kind), head + table + foot, meta.doc_no);
+        egPrintWindow(meta.doc_name || kindName(kind), head + table + foot, meta.doc_no, kind === 'risk' ? 'table.pt{font-size:13px;}' : '', kind === 'risk' ? 'A3' : 'A4');
         EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + ' ' + d.doc_no,
             doc_kind:'form', ref_table:'rm_doc', ref_id:d.doc_id});
     });
@@ -2035,14 +2184,11 @@ function printBlank(kind){
                 + 'table.grid>tbody>tr{page-break-inside:avoid;}';
         } else {
             head += '<div class="pt-meta"><span>表單建立日期：＿＿＿＿＿＿＿＿＿＿</span><span></span></div>';
-            var rows = ''; for (var i = 1; i <= 10; i++) rows += '<tr><td>' + i + '</td>' + blankTd(12, 46).replace('<tr>', '').replace('</tr>', '') + '</tr>';
-            body = head + '<table class="pt"><colgroup><col style="width:34px;"><col style="width:52px;"><col style="width:84px;"><col style="width:100px;"><col style="width:120px;">'
-                + '<col style="width:120px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:56px;"><col style="width:70px;"><col><col></colgroup>'
-                + '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-                + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr>'
-                + '<tr><th>嚴重度(S)</th><th>發生率(O)</th><th>風險等級</th></tr></thead><tbody>' + rows + '</tbody></table>';
+            var rows = ''; for (var i = 1; i <= 10; i++) rows += '<tr><td>' + i + '</td>' + blankTd(15, 46).replace('<tr>', '').replace('</tr>', '') + '</tr>';
+            body = head + '<table class="pt">' + RISK_COLG + RISK_THEAD + '<tbody>' + rows + '</tbody></table>';
+            css = 'table.pt{font-size:13px;}';
         }
-        egPrintWindow(meta.doc_name || kindName(kind), body, meta.doc_no, css);
+        egPrintWindow(meta.doc_name || kindName(kind), body, meta.doc_no, css, kind === 'risk' ? 'A3' : 'A4');
         EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + '（空白表單）', doc_kind:'form', ref_table:'rm_doc', ref_id:0});
     });
 }

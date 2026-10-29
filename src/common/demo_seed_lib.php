@@ -621,10 +621,10 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         if (!in_array($cx['dimension'], ['W', 'O', 'T'], true)) continue;
         $seq++;
         $r = rm_rule_make_row($db, $set, ['stakeholder' => $cx['stakeholder'], 'needs' => $cx['needs'], 'issue' => $cx['issue'], 'dimension' => $cx['dimension']], $dataYear, $Y);
-        $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+        $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
         $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, rm_prefix_for($set, (string)$r['ro_kind']), $riskDate) : null;
-        $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], $cx['id'], $r['rule_ids'], $r['resources']]);
+        $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources, frequency_after) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], $cx['id'], $r['rule_ids'], $r['resources'], rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind'])]);
     }
     // 成效確認：與因應措施一併自動建立（rm_effect_autofill：結果、日期、裁示建議、佐證快照）。
     // 假資料維持「無效／未確認的留空」（不產生要開矯正單的示範資料）；草稿則全部建立，無法判定的只寫佐證與原因，待使用者確認
@@ -915,10 +915,10 @@ function eg_draft_risk_generate(PDO $db, int $Y, array $user): array
             if (!in_array($cx['dimension'], ['W', 'O', 'T'], true)) continue;
             $seq++;
             $r = rm_rule_make_row($db, $set, ['stakeholder' => $cx['stakeholder'], 'needs' => $cx['needs'], 'issue' => $cx['issue'], 'dimension' => $cx['dimension']], $dataYear, $Y);
-            $lv = rm_level_calc($set, $r['severity'], $r['frequency']);
+            $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
             $confirm = ($lv && $lv['action']) ? rm_next_confirm_no($db, rm_prefix_for($set, (string)$r['ro_kind']), $DT['risk']) : null;
-            $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-               ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], (int)$cx['item_id'], $r['rule_ids'], $r['resources']]);
+            $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, effect_check, ctx_item_id, rule_ids, resources, frequency_after) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+               ->execute([$riskId, $seq, RM_SWOT[$cx['dimension']]['scope'], $cx['stakeholder'], $cx['needs'], $cx['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm, $r['measure'], $r['effect_check'], (int)$cx['item_id'], $r['rule_ids'], $r['resources'], rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind'])]);
         }
         foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskId]) as $row) {
             $fa = rm_effect_autofill($db, $set, $row, $Y, $DT['effect']);

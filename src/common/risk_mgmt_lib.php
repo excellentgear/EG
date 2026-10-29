@@ -91,7 +91,31 @@ function rm_settings_default(): array
         'rm_opp_prefix'     => 'O',      // 機會用這個（O2026-001）；兩者各自流水，已配發的編號不因設定變動而改變
         // 機會與風險共用同一張評分矩陣（分數算法一樣），但顯示的用詞不同：
         // 風險問「後果多嚴重、多常發生」，機會問「效益多大、多有把握做到」。只有用詞不同，不另做一套分數。
-        'rm_opp_terms' => ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'],
+        'rm_opp_terms' => ['sev'=>'預期效益(B)', 'freq'=>'可行性(F)', 'level'=>'機會等級(OL)'],
+        // 機會有自己的評估項目（稽核老師建議：不與風險的嚴重度(S)、發生率(O)共用）：預期效益(B)×可行性(F)＝機會等級(OL)。
+        // 等級固定 3 級（資料存 1～3，只可改名稱與說明），機會等級的評分區間與處理措施另設，不套用風險準則（表A）。
+        'rm_opp_benefit' => [
+            'columns' => ['公司形象', '財務效益', '新增或擴大客戶數'],
+            'rows' => [
+                ['v'=>1, 'label'=>'輕微',     'cells'=>['單一部門正面形象提升', '年增益10萬以下', '1家客戶']],
+                ['v'=>2, 'label'=>'顯著',     'cells'=>['跨部門正面形象提升', '年增益10萬(含)以上，20萬以下', '2家(含)客戶']],
+                ['v'=>3, 'label'=>'非常顯著', 'cells'=>['公司整體正面形象提升', '年增益20萬(含)以上', '3家(含)客戶以上']],
+            ],
+        ],
+        'rm_opp_feas' => [
+            'columns' => ['資源投入', '技術與人力', '執行期間'],
+            'rows' => [
+                ['v'=>1, 'label'=>'困難', 'cells'=>['需大額投資', '需新增技術或人力', '1年以上']],
+                ['v'=>2, 'label'=>'可行', 'cells'=>['需部分投入', '現有人員可執行，需補強訓練', '6個月～1年']],
+                ['v'=>3, 'label'=>'容易', 'cells'=>['現有資源即可', '現有人員與技術即可', '3個月內']],
+            ],
+        ],
+        'rm_opp_levels' => [
+            ['name'=>'暫不推動', 'lo'=>1, 'hi'=>1, 'action'=>false, 'measure'=>'記錄原因，每年檢討時重新評估'],
+            ['name'=>'持續觀察', 'lo'=>2, 'hi'=>3, 'action'=>false, 'measure'=>'每半年重新評估，條件成熟再推動'],
+            ['name'=>'規劃推動', 'lo'=>4, 'hi'=>6, 'action'=>true,  'measure'=>'編入預算與人力計畫，指派負責單位'],
+            ['name'=>'優先推動', 'lo'=>7, 'hi'=>9, 'action'=>true,  'measure'=>'納入年度目標，建立措施追蹤並優先投入資源'],
+        ],
         'rm_maker_depts'    => [],      // 填表人可以選的部門（department.id 清單，含下轄）；空＝不限，由管理員設定以免選錯
         'rm_outsource_tags' => [],      // 對外宣稱有外包的稽核製程（ot_as_proc_tag.tag_id 清單）；沒勾＝沒有外包，不產生任何委外分析
     ];
@@ -153,6 +177,7 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
         "ALTER TABLE rm_item ADD COLUMN resources TEXT NULL COMMENT '所需資源（人員、設施、工作環境、方法；2-GM-05 6.1.5.3 管理審查要對資源需求做決議）'",
+        "ALTER TABLE rm_item ADD COLUMN frequency_after TINYINT NULL COMMENT '採取因應措施後的發生率(O)／可行性(F)等級（嚴重度(S)／預期效益(B)與措施前相同，故不另存）'",
         "ALTER TABLE rm_doc ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
         "ALTER TABLE rm_doc ADD COLUMN draft_at DATETIME NULL COMMENT '草稿產生時間'",
     ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }
@@ -283,7 +308,10 @@ function rm_settings_fix(array $set): array
     }
     $set['rm_levels'] = $lv;
     if (!isset($set['rm_opp_terms']) || !is_array($set['rm_opp_terms'])) $set['rm_opp_terms'] = [];
-    $set['rm_opp_terms'] += ['sev'=>'預期效益', 'freq'=>'實現可能性', 'level'=>'機會等級'];
+    $set['rm_opp_terms'] += ['sev'=>'預期效益(B)', 'freq'=>'可行性(F)', 'level'=>'機會等級(OL)'];
+    // 舊版預設名稱（機會與風險共用評分時期）就地換成新的評估項目名稱
+    foreach (['sev'=>['預期效益','預期效益(B)'], 'freq'=>['實現可能性','可行性(F)'], 'level'=>['機會等級','機會等級(OL)']] as $k => $m)
+        if ((string)$set['rm_opp_terms'][$k] === $m[0]) $set['rm_opp_terms'][$k] = $m[1];
     return $set;
 }
 
@@ -516,6 +544,7 @@ function rm_swot_guide(): array
 function rm_level_calc(array $set, $sev, $freq, string $roKind = 'risk'): ?array
 {
     if ($sev === null || $sev === '' || $freq === null || $freq === '') return null;
+    if ($roKind === 'opportunity') return rm_opp_level_calc($set, (int)$sev, (int)$freq);
     $sev = (int)$sev; $freq = (int)$freq;
     $okS = false; $okF = false;
     foreach ((array)$set['rm_impact']['rows'] as $r) if ((int)$r['v'] === $sev)  $okS = true;
@@ -533,6 +562,109 @@ function rm_level_calc(array $set, $sev, $freq, string $roKind = 'risk'): ?array
     return ['score'=>$score, 'rank'=>$rank, 'action'=>!empty($hit['action']), 'is_opp'=>$opp,
             'name'=>(string)(($opp && !empty($hit['name_opp'])) ? $hit['name_opp'] : $hit['name']),
             'measure'=>(string)(($opp && !empty($hit['measure_opp'])) ? $hit['measure_opp'] : ($hit['measure'] ?? ''))];
+}
+
+/** 機會等級(OL)：預期效益(B)×可行性(F)，用機會自己的準則（rm_opp_levels）；回傳格式與 rm_level_calc 相同 */
+function rm_opp_level_calc(array $set, int $b, int $f): ?array
+{
+    $okB = false; $okF = false;
+    foreach ((array)$set['rm_opp_benefit']['rows'] as $r) if ((int)$r['v'] === $b) $okB = true;
+    foreach ((array)$set['rm_opp_feas']['rows'] as $r)    if ((int)$r['v'] === $f) $okF = true;
+    if (!$okB || !$okF) return null;
+    $score = $b * $f;
+    $lvls = array_values((array)$set['rm_opp_levels']);
+    if (!$lvls) return null;
+    $hit = $lvls[0]; $rank = 0;
+    foreach ($lvls as $i => $lv) {
+        if ($score >= (int)$lv['lo']) { $hit = $lv; $rank = $i; }
+        if ($score >= (int)$lv['lo'] && $score <= (int)$lv['hi']) { $hit = $lv; $rank = $i; break; }
+    }
+    return ['score'=>$score, 'rank'=>$rank, 'action'=>!empty($hit['action']), 'is_opp'=>true,
+            'name'=>(string)$hit['name'], 'measure'=>(string)($hit['measure'] ?? '')];
+}
+
+/**
+ * 採取因應措施後的「發生率(O)／可行性(F)」建議值（嚴重度／預期效益與措施前相同）：
+ * 風險＝把發生率降到「不需要因應措施」的最高一級（降不到就降到最低級）；機會＝可行性提高到最高級。
+ * @return int|null  建議的等級數字；措施前評分沒填回 null
+ */
+function rm_after_suggest(array $set, $sev, $freq, string $roKind)
+{
+    if ($sev === null || $sev === '' || $freq === null || $freq === '') return null;
+    $sev = (int)$sev; $freq = (int)$freq;
+    if ($roKind === 'opportunity') {
+        $vs = array_map(function ($r) { return (int)$r['v']; }, (array)$set['rm_opp_feas']['rows']);
+        return $vs ? max($vs) : $freq;
+    }
+    $vs = array_map(function ($r) { return (int)$r['v']; }, (array)$set['rm_likelihood']);
+    sort($vs);
+    $best = null;
+    foreach ($vs as $v) {
+        if ($v > $freq) break;
+        $lv = rm_level_calc($set, $sev, $v, 'risk');
+        if ($lv && !$lv['action']) $best = $v;
+    }
+    return $best ?? ($vs ? min($vs) : $freq);
+}
+
+/** 機會的評估等級／準則（畫面用的顏色一併附上） */
+function rm_opp_levels_view(array $set): array
+{
+    $out = [];
+    foreach (array_values((array)$set['rm_opp_levels']) as $k => $lv) {
+        $c = rm_level_color($k, true);
+        $out[] = array_merge($lv, ['bg'=>$c['bg'], 'fg'=>$c['fg'], 'range'=>(int)$lv['lo'] === (int)$lv['hi'] ? (string)$lv['lo'] : $lv['lo'] . '～' . $lv['hi']]);
+    }
+    return $out;
+}
+
+/** 機會的預期效益(B)／可行性(F)準則：固定 3 級，只可改名稱與說明欄 */
+function rm_normalize_opp_table($raw, string $title, int $n = 3): array
+{
+    if (!is_array($raw) || !isset($raw['rows']) || !is_array($raw['rows'])) return [[], $title . '內容不正確'];
+    $cols = [];
+    foreach ((array)($raw['columns'] ?? []) as $c) { $c = mb_substr(trim((string)$c), 0, 20); if ($c !== '' && !in_array($c, $cols, true)) $cols[] = $c; }
+    if (!$cols || count($cols) > 6) return [[], $title . '的說明欄要 1～6 個'];
+    $rows = array_values($raw['rows']);
+    if (count($rows) !== $n) return [[], $title . '固定為 ' . $n . ' 級'];
+    $out = [];
+    foreach ($rows as $i => $r) {
+        $label = mb_substr(trim((string)($r['label'] ?? '')), 0, 20);
+        if ($label === '') return [[], $title . '的第 ' . ($i + 1) . ' 級沒有填名稱'];
+        $src = isset($r['cells']) && is_array($r['cells']) ? array_values($r['cells']) : [];
+        $cells = [];
+        for ($k = 0; $k < count($cols); $k++) $cells[] = mb_substr(trim((string)($src[$k] ?? '')), 0, 100);
+        $out[] = ['v'=>$i + 1, 'label'=>$label, 'cells'=>$cells];
+    }
+    return [['columns'=>$cols, 'rows'=>$out], ''];
+}
+
+/** 機會等級準則：固定 4 級，評分＝B×F；第一級下限 1、最後一級上限＝最高分 */
+function rm_normalize_opp_levels($raw, int $maxScore): array
+{
+    if (!is_array($raw)) return [[], '機會等級準則內容不正確'];
+    $rows = array_values($raw); $n = count($rows);
+    if ($n !== 4) return [[], '機會等級準則固定為 4 級'];
+    $out = []; $seen = []; $prev = 0;
+    foreach ($rows as $i => $r) {
+        $name = mb_substr(trim((string)($r['name'] ?? '')), 0, 10);
+        if ($name === '') return [[], '機會等級準則有一列沒有填等級名稱'];
+        if (isset($seen[$name])) return [[], '機會等級「' . $name . '」重複了'];
+        $seen[$name] = 1;
+        $lo = $i === 0 ? 1 : $prev + 1;
+        if ($i === $n - 1) $hi = $maxScore;
+        else {
+            $h = $r['hi'] ?? '';
+            if (!is_numeric($h) || floor((float)$h) != (float)$h) return [[], '「' . $name . '」的評分上限要填整數'];
+            $hi = (int)$h;
+            if ($hi < $lo) return [[], '「' . $name . '」的評分上限（' . $hi . '）不可小於下限（' . $lo . '）'];
+            $cap = $maxScore - ($n - 1 - $i);
+            if ($hi > $cap) return [[], '「' . $name . '」的評分上限最多只能到 ' . $cap . '（機會等級最高分是 ' . $maxScore . '，後面每一級至少各留 1 分）'];
+        }
+        $prev = $hi;
+        $out[] = ['name'=>$name, 'lo'=>$lo, 'hi'=>$hi, 'action'=>!empty($r['action']), 'measure'=>mb_substr(trim((string)($r['measure'] ?? '')), 0, 200)];
+    }
+    return [$out, ''];
 }
 
 /** 表D：嚴重度(S)等級 × 發生率(O)等級 的分數（算法由設定決定） */

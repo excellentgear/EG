@@ -75,6 +75,10 @@ function rmItems(PDO $db, int $docId, array $set): array {
     foreach ($rows as &$r) {
         $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)($r['ro_kind'] ?? 'risk'));
         $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'], !empty($lv['is_opp']))) : null;
+        // 採取因應措施後的評估：嚴重度(S)／預期效益(B)與措施前相同，只有發生率(O)／可行性(F)不同
+        $lva = ($r['frequency_after'] ?? '') !== '' && $r['frequency_after'] !== null
+             ? rm_level_calc($set, $r['severity'], $r['frequency_after'], (string)($r['ro_kind'] ?? 'risk')) : null;
+        $r['level_after'] = $lva ? array_merge($lva, rm_level_color($lva['rank'], !empty($lva['is_opp']))) : null;
         $r['follow_up'] = ($lv && !empty($r['ro_kind'])) ? rm_follow_up($set, $lv, $r, $fillDate) : null;
         // 連動組織處境分析表的議題：內外部／利害關係者／需求與期望／議題描述一律讀來源的「現在」內容
         $r['ctx_linked'] = false; $r['ctx_doc_no'] = null;
@@ -102,6 +106,7 @@ if ($action === 'meta') {
         'today'    => rmToday($db),
         'settings' => $set,
         'levels'   => rm_levels_view($set),
+        'opp_levels' => rm_opp_levels_view($set),
         'asdoc'    => rm_asdoc_all($db),
         'asdoc_list' => $P['canAdmin'] ? eg_asdoc_list($db) : [],
         'scopes'   => RM_SCOPES, 'ro_kinds' => RM_RO_KINDS,
@@ -180,8 +185,9 @@ if ($action === 'doc_get') {
 
 /* ---------------------------------------------------------------- 風險分布（表D）：各格實際有幾筆風險 */
 if ($action === 'dist') {
+    $isOppDist = (string)($_GET['kind'] ?? '') === 'opp';      // 表D-2 機會分布；表D 風險分布不含機會
     $where = ["d.kind='risk'", "d.is_deleted=0", "i.severity IS NOT NULL",
-              "(i.ro_kind IS NULL OR i.ro_kind <> 'opportunity')"]; $a = [];
+              $isOppDist ? "i.ro_kind = 'opportunity'" : "(i.ro_kind IS NULL OR i.ro_kind <> 'opportunity')"]; $a = [];
     $year = (int)($_GET['year'] ?? 0);
     if ($year > 0) { $where[] = "YEAR(d.fill_date)=?"; $a[] = $year; }
     $st = $db->prepare("SELECT i.severity, i.frequency, COUNT(*) c FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id
@@ -248,7 +254,7 @@ if ($action === 'risk_suggest_row') {
     $set = rm_settings($db);
     $r = rm_rule_make_row($db, $set, $c, rm_data_year($db, $year), $year);
     $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
-    jout(['suggest'=>['ro_kind'=>$r['ro_kind'], 'ro_text'=>$r['ro_text'], 'severity'=>$r['severity'], 'frequency'=>$r['frequency'], 'measure'=>$r['measure'], 'resources'=>$r['resources'],
+    jout(['suggest'=>['ro_kind'=>$r['ro_kind'], 'ro_text'=>$r['ro_text'], 'severity'=>$r['severity'], 'frequency'=>$r['frequency'], 'frequency_after'=>rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']), 'measure'=>$r['measure'], 'resources'=>$r['resources'],
                       'effect_check'=>$r['effect_check'], 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why'], 'rule_ids'=>$r['rule_ids']]]);
 }
 /* 人工填寫因應措施時要引用的措施追蹤（溝通管理）：選了就在措施欄寫上「措施追蹤 編號」，系統即可連結 */
@@ -456,11 +462,12 @@ if ($action === 'risk_generate') {
                                                      'measure'=>$r['measure'], 'effect_check'=>$r['effect_check'], 'rule_ids'=>$r['rule_ids']], (int)substr($fill, 0, 4), rmToday($db));
             } catch (Throwable $e) { rm_sg_err($e); }
             $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, stakeholder, needs, issue, ro_kind, ro_text, severity, frequency, confirm_no, measure, resources, effect_check, ctx_item_id, rule_ids,
-                                               effect_status, effect_date, effect_ruling, effect_evidence)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                               effect_status, effect_date, effect_ruling, effect_evidence, frequency_after)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                ->execute([$docId, $seq, $c['scope'], $c['stakeholder'], $c['needs'], $c['issue'], $r['ro_kind'], $r['ro_text'], $r['severity'], $r['frequency'], $confirm,
                           $r['measure'], $r['resources'], $r['effect_check'], (int)$c['item_id'], $r['rule_ids'],
-                          $fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'] ?: null, $fa['effect_evidence'] ?: null]);
+                          $fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'] ?: null, $fa['effect_evidence'] ?: null,
+                          rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind'])]);
             $summary[] = ['issue'=>mb_substr((string)$c['issue'], 0, 40), 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why']];
         }
         $db->prepare("UPDATE rm_doc SET updated_at=? WHERE doc_id=?")->execute([$now, $docId]);
@@ -521,6 +528,8 @@ if ($action === 'doc_save') {
     $clean = []; $seq = 0;
     $sevOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_impact']['rows']);
     $frqOk = array_map(function ($r) { return (int)$r['v']; }, $set['rm_likelihood']);
+    $sevOkOpp = array_map(function ($r) { return (int)$r['v']; }, $set['rm_opp_benefit']['rows']);
+    $frqOkOpp = array_map(function ($r) { return (int)$r['v']; }, $set['rm_opp_feas']['rows']);
     foreach ($items as $n => $it) {
         $row = [
             'scope'       => in_array(($it['scope'] ?? ''), array_keys(RM_SCOPES), true) ? $it['scope'] : null,
@@ -528,7 +537,7 @@ if ($action === 'doc_save') {
             'stakeholder' => rmS($it['stakeholder'] ?? '', 200),
             'needs'       => rmS($it['needs'] ?? '', 4000),
             'issue'       => rmS($it['issue'] ?? '', 4000),
-            'ro_kind'     => null, 'ro_text' => '', 'severity' => null, 'frequency' => null,
+            'ro_kind'     => null, 'ro_text' => '', 'severity' => null, 'frequency' => null, 'frequency_after' => null,
             'confirm_no'  => rmS($it['confirm_no'] ?? '', 30),
             'measure'     => '', 'effect_check' => '', 'ctx_item_id' => null,
             'effect_status' => null, 'effect_date' => null, 'effect_ruling' => '', 'effect_evidence' => '', 'rule_ids' => null,
@@ -565,10 +574,21 @@ if ($action === 'doc_save') {
             }
             $sv = ($it['severity'] ?? '') === '' ? null : (int)$it['severity'];
             $fq = ($it['frequency'] ?? '') === '' ? null : (int)$it['frequency'];
-            if ($sv !== null && !in_array($sv, $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的嚴重度(S)不在設定的級距內');
-            if ($fq !== null && !in_array($fq, $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的發生率(O)不在設定的級距內');
-            if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的嚴重度(S)與發生率(O)要一起填（缺一個算不出風險等級）');
+            $isOppRow = $row['ro_kind'] === 'opportunity';
+            $tS = $isOppRow ? '預期效益(B)' : '嚴重度(S)'; $tF = $isOppRow ? '可行性(F)' : '發生率(O)';
+            if ($sv !== null && !in_array($sv, $isOppRow ? $sevOkOpp : $sevOk, true)) jerr('第 ' . ($n + 1) . ' 列的' . $tS . '不在設定的級距內');
+            if ($fq !== null && !in_array($fq, $isOppRow ? $frqOkOpp : $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的' . $tF . '不在設定的級距內');
+            if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的' . $tS . '與' . $tF . '要一起填（缺一個算不出' . ($isOppRow ? '機會等級' : '風險等級') . '）');
             $row['severity'] = $sv; $row['frequency'] = $fq;
+            // 採取因應措施後的發生率(O)／可行性(F)：風險只能比措施前低或相同、機會只能比措施前高或相同（嚴重度／預期效益與措施前相同，不另存）
+            $fa = ($it['frequency_after'] ?? '') === '' ? null : (int)$it['frequency_after'];
+            if ($fa !== null) {
+                if ($fq === null) jerr('第 ' . ($n + 1) . ' 列要先填措施前的' . $tF . '，才能填採取措施後的' . $tF);
+                if (!in_array($fa, $isOppRow ? $frqOkOpp : $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列採取措施後的' . $tF . '不在設定的級距內');
+                if ($isOppRow && $fa < $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的可行性(F)不可低於措施前（採取措施後可行性應提高）');
+                if (!$isOppRow && $fa > $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的發生率(O)不可高於措施前（採取措施後發生率應降低）');
+            }
+            $row['frequency_after'] = $fa;
             $cx = (int)($it['ctx_item_id'] ?? 0);
             if ($cx > 0) {
                 $q = $db->prepare("SELECT 1 FROM rm_item i JOIN rm_doc d ON d.doc_id=i.doc_id WHERE i.item_id=? AND d.kind='context' AND d.is_deleted=0");
@@ -655,19 +675,19 @@ if ($action === 'doc_save') {
                      $row['ro_kind'], $row['ro_text'] ?: null, $row['severity'], $row['frequency'], $confirm ?: null,
                      $row['measure'] ?: null, $row['effect_check'] ?: null, $row['ctx_item_id'],
                      $row['effect_status'], $row['effect_date'], $row['effect_ruling'] ?: null, $row['effect_evidence'] ?: null, $row['rule_ids'],
-                     $row['recheck_note'] ?: null, $row['recheck_date'], $row['resources'] ?: null];
+                     $row['recheck_note'] ?: null, $row['recheck_date'], $row['resources'] ?: null, $row['frequency_after'] ?? null];
             if ($isOld) {
                 $db->prepare("UPDATE rm_item SET seq=?, scope=?, dimension=?, stakeholder=?, needs=?, issue=?, ro_kind=?, ro_text=?,
                                 severity=?, frequency=?, confirm_no=?, measure=?, effect_check=?, ctx_item_id=?,
                                 effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=?, rule_ids=?,
-                                recheck_note=?, recheck_date=?, resources=? WHERE item_id=? AND doc_id=?")
+                                recheck_note=?, recheck_date=?, resources=?, frequency_after=? WHERE item_id=? AND doc_id=?")
                    ->execute(array_merge($vals, [$oid, $id]));
                 $keepIds[] = $oid;
             } else {
                 $db->prepare("INSERT INTO rm_item (doc_id, seq, scope, dimension, stakeholder, needs, issue, ro_kind, ro_text,
                                 severity, frequency, confirm_no, measure, effect_check, ctx_item_id,
                                 effect_status, effect_date, effect_ruling, effect_evidence, rule_ids,
-                                recheck_note, recheck_date, resources) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                recheck_note, recheck_date, resources, frequency_after) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge([$id], $vals));
                 $keepIds[] = (int)$db->lastInsertId();
             }
@@ -742,6 +762,18 @@ if ($action === 'setting_save') {
         }
         $toWrite['rm_opp_terms'] = $o;
     }
+    // 機會自己的評估項目：預期效益(B)／可行性(F)（固定 3 級，只改名稱與說明）、機會等級準則（固定 4 級，評分＝B×F）
+    if (array_key_exists('rm_opp_benefit', $arr)) {
+        [$v, $e] = rm_normalize_opp_table($arr['rm_opp_benefit'], '預期效益(B)分析'); if ($e) jerr($e); $toWrite['rm_opp_benefit'] = $v;
+    }
+    if (array_key_exists('rm_opp_feas', $arr)) {
+        [$v, $e] = rm_normalize_opp_table($arr['rm_opp_feas'], '可行性(F)分析'); if ($e) jerr($e); $toWrite['rm_opp_feas'] = $v;
+    }
+    if (array_key_exists('rm_opp_levels', $arr)) {
+        $mx = 0;
+        foreach (($toWrite['rm_opp_benefit'] ?? $cur['rm_opp_benefit'])['rows'] as $bR) foreach (($toWrite['rm_opp_feas'] ?? $cur['rm_opp_feas'])['rows'] as $fR) $mx = max($mx, (int)$bR['v'] * (int)$fR['v']);
+        [$v, $e] = rm_normalize_opp_levels($arr['rm_opp_levels'], $mx); if ($e) jerr($e); $toWrite['rm_opp_levels'] = $v;
+    }
     if (array_key_exists('rm_maker_depts', $arr)) {
         $valid = array_map(function ($d) { return (int)$d['id']; }, cm_dept_list($db));
         $toWrite['rm_maker_depts'] = array_values(array_unique(array_filter(array_map('intval', (array)$arr['rm_maker_depts']), function ($d) use ($valid) { return in_array($d, $valid, true); })));
@@ -790,7 +822,7 @@ if ($action === 'setting_save') {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存設定失敗：' . $e->getMessage(), 500); }
     $set = rm_settings($db);
-    jout(['settings'=>$set, 'levels'=>rm_levels_view($set), 'swot'=>rm_swot_view($set)]);
+    jout(['settings'=>$set, 'levels'=>rm_levels_view($set), 'opp_levels'=>rm_opp_levels_view($set), 'swot'=>rm_swot_view($set)]);
 }
 
 if ($action === 'asdoc_save') {
