@@ -4050,7 +4050,24 @@ function qab_att_root(PDO $db): string
     return eg_attach_dir($db, 'qab_attach_dir', '品質異常處理單');
 }
 /** 附件實體路徑：絕對路徑（舊資料）原樣用；相對路徑接在統一根目錄後面。擋路徑跳脫。 */
-/** 刪除一張異常單的全部附件（實體檔＋資料列）；回傳刪掉幾個。刪單時呼叫，附件不留孤兒。 */
+/** 已刪除超過 7 天的異常單，其附件（實體檔＋資料列）才真正刪除；刪單後 7 天內還原，附件完整保留。順路觸發。 */
+function qab_att_purge_expired(PDO $db, int $days = 7): int
+{
+    static $done = false;
+    if ($done) return 0;
+    $done = true;
+    $n = 0;
+    try {
+        $st = $db->prepare("SELECT DISTINCT a.abnormal_order_id FROM qa_abnormal_attachments a
+                            JOIN qa_abnormal_order o ON o.id=a.abnormal_order_id
+                            WHERE o.deleted_at IS NOT NULL AND o.deleted_at < DATE_SUB(NOW(), INTERVAL ? DAY)");
+        $st->execute([$days]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $oid) $n += qab_att_purge($db, (int)$oid);
+    } catch (Throwable $e) { error_log('qab_att_purge_expired: ' . $e->getMessage()); }
+    return $n;
+}
+
+/** 刪除一張異常單的全部附件（實體檔＋資料列）；回傳刪掉幾個。 */
 function qab_att_purge(PDO $db, int $orderId): int
 {
     $st = $db->prepare("SELECT id, file_path, preview_path FROM qa_abnormal_attachments WHERE abnormal_order_id=?");

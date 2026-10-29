@@ -83,6 +83,7 @@ switch ($action) {
 
 /* ═══════════ 清單 ═══════════ */
 case 'list': {
+    qab_att_purge_expired($db);   // 已刪除滿 7 天的單，附件此時才真正刪掉
     $rows = qab_list($db, [
         'year'   => $_GET['year'] ?? '',
         'month'  => $_GET['month'] ?? '',
@@ -1505,9 +1506,7 @@ case 'order_delete': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
-    $attN = 0;
-    try { $attN = qab_att_purge($db, $id); } catch (Throwable $e) { error_log('qab_att_purge: ' . $e->getMessage()); }
-    $log($id, 'delete', $o['abnormal_order_no'], '已刪除' . ($attN ? "（附件 {$attN} 個一併刪除）" : ''), $reason);
+    $log($id, 'delete', $o['abnormal_order_no'], '已刪除（附件保留 7 天，期滿自動刪除）', $reason);
     jout(true, ['deleted' => 1]);
 }
 
