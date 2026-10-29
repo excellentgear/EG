@@ -314,6 +314,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <button data-tab="gm"><?= htmlspecialchars($gmLabel) ?>裁示</button>
                 <button data-tab="dec">決策者</button>
                 <button data-tab="qc">品管通知名單</button>
+                <button data-tab="quick">雙層快速決策</button>
                 <button data-tab="ask">相關單位意見</button>
                 <button data-tab="etc">其他設定</button>
             </div>
@@ -411,6 +412,26 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <div id="qcNotifyList" class="muted-help">載入中…</div>
                 <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnQcNotifySave"><i class="fa fa-save"></i> 儲存通知名單</button>
                     <span id="qcNotifySaved" class="muted-help" style="margin-left:8px;"></span></div>
+            </div>
+
+            <div class="tabp" id="tab-quick" style="display:none;">
+                <div class="note-box">品管檢驗 NG 後的<b>雙層快速決策</b>：<b>第一層裁決者</b>（品管部門人員）可直接裁決特採／重工／報廢，或<b>轉呈決策</b>給第二層。
+                    <b>第二層</b>＝「決策者」分頁已設定的決策主管（不另設名單）；第二層請假或整天外出時，由品管檢驗表 2.0「異常單處置決策設定」的<b>次要決策者</b>代理。
+                    同一張單的第一層與第二層<b>必須是不同人</b>。<br>
+                    <b>目前這一頁只是設定</b>，總開關「NG儲存後自動開立」<b>預設關閉</b>；關閉時品管檢驗表 2.0 維持現有的「開立異常單」按鈕流程，完全不受影響。</div>
+                <div class="fld" style="margin:8px 0;"><label><input type="checkbox" id="qkEnabled"> <b>品管檢驗 NG 儲存後自動開立異常單</b>（需先設定第一層裁決者與至少一個裁決項目）</label></div>
+                <div class="fld"><label>第一層裁決者（只能選品管部門在職人員，可複選）</label><div id="qkL1" class="ask-pos"></div></div>
+                <div class="fld" style="margin-top:8px;"><label>第二層決策者（唯讀，來自「決策者」分頁）</label><div id="qkL2" class="muted-help"></div></div>
+                <div class="fld" style="margin-top:8px;"><label>開放第一層直接決策的製程大類（沒勾的大類被驗出異常時，第二層先收到通知，可自己決策或轉回第一層）</label><div id="qkPt" class="ask-pos"></div></div>
+                <div class="fld" style="margin-top:8px;"><label>第一層裁決項目與通知對象</label>
+                    <table class="cfg"><thead><tr><th style="width:18%">名稱</th><th style="width:8%">是報廢</th><th style="width:8%">啟用</th><th>通知對象（固定另通知檢驗人員；部門＝整個部門，人員可跨部門）</th><th style="width:8%">操作</th></tr></thead>
+                    <tbody id="qkActs"></tbody></table>
+                    <div class="muted-help">「轉呈決策」是固定項目：一律通知第二層，不在這裡設定。</div></div>
+                <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+                    <button class="btn btn-warm-o btn-sm" id="qkAdd"><i class="fa fa-plus"></i> 新增裁決項目</button>
+                    <span style="margin-left:auto;"></span><span id="qkSaved" class="muted-help"></span>
+                    <button class="btn btn-warm btn-sm" id="qkSave"><i class="fa fa-save"></i> 儲存雙層快速決策設定</button>
+                </div>
             </div>
 
             <div class="tabp" id="tab-ask" style="display:none;">
@@ -1119,6 +1140,7 @@ function loadCfg(){
     // 職稱清單要先載好，否則已存的那幾列會顯示成「不限職稱」（看起來像設定不見了）
     if (!POSITIONS.length) $.get(API, { action:'positions' }, function(res){ if (res && res.success) { POSITIONS = res.rows; renderDec(); } }, 'json');
     loadQcNotify();
+    loadQuick();
 }
 
 /* ───────── 品管通知名單（自動開立異常單要通知哪幾位品管部門人員） ───────── */
@@ -1140,6 +1162,68 @@ $('#btnQcNotifySave').on('click', function(){
     var ids = $('.qc-notify-ck:checked').map(function(){ return Number(this.value); }).get();
     post('qc_notify_save', { user_ids:JSON.stringify(ids) }, function(){
         $('#qcNotifySaved').text('已儲存（' + ids.length + ' 人）');
+    });
+});
+/* ───────── 雙層快速決策設定（2026-10-29） ───────── */
+var QK = null;
+function qkChecks(cls, rows, sel, labelFn){
+    var s = {}; (sel || []).forEach(function(v){ s[Number(v)] = 1; });
+    return rows.map(function(r){
+        return '<label><input type="checkbox" class="' + cls + '" value="' + r.id + '"' + (s[Number(r.id)] ? ' checked' : '') + '> ' + esc(labelFn(r)) + '</label>';
+    }).join('');
+}
+function qkActRow(a){
+    var depts = (QK.depts || []).map(function(d){
+        return '<option value="' + d.id + '"' + ((a.notify_depts || []).indexOf(Number(d.id)) >= 0 ? ' selected' : '') + '>' + esc(d.name) + '</option>'; }).join('');
+    var users = (QK.people || []).map(function(p){
+        return '<option value="' + p.id + '"' + ((a.notify_users || []).indexOf(Number(p.id)) >= 0 ? ' selected' : '') + '>' + esc(p.dept_name + ' ' + (p.position_name || '') + ' ' + p.name) + '</option>'; }).join('');
+    return '<tr data-key="' + esc(a.key || '') + '">'
+        + '<td><input type="text" class="qk-name" maxlength="20" value="' + esc(a.name || '') + '"></td>'
+        + '<td><input type="checkbox" class="qk-scrap"' + (Number(a.is_scrap) ? ' checked' : '') + '></td>'
+        + '<td><input type="checkbox" class="qk-act"' + (a.active == null || Number(a.active) ? ' checked' : '') + '></td>'
+        + '<td><div class="muted-help">部門（可多選，按住 Ctrl）</div><select multiple size="4" class="qk-depts" data-eg-skip style="width:100%">' + depts + '</select>'
+        + '<div class="muted-help" style="margin-top:4px;">指定人員（可多選）</div><select multiple size="5" class="qk-users" data-eg-skip style="width:100%">' + users + '</select></td>'
+        + '<td><button class="btn btn-default btn-xs qk-del" type="button">刪</button></td></tr>';
+}
+function renderQuick(){
+    if (!QK) return;
+    $('#qkEnabled').prop('checked', !!Number(QK.cfg.enabled));
+    $('#qkL1').html(QK.candidates.length
+        ? qkChecks('qk-l1', QK.candidates, QK.cfg.l1_users, function(p){ return p.name + '（' + p.dept_name + (p.position_name ? ' ' + p.position_name : '') + '）'; })
+        : '<span class="muted-help">目前品管部門沒有在職人員（先到「組織角色綁定」確認品管部門設定）</span>');
+    $('#qkL2').html(QK.l2.length ? QK.l2.map(function(c){
+        return '<div>' + esc(c.show_name) + '：' + (c.names.length ? esc(c.names.join('、')) : '（目前查無在職人員）') + '</div>'; }).join('')
+        : '尚未在「決策者」分頁設定決策主管');
+    $('#qkPt').html(qkChecks('qk-pt', QK.ptypes, QK.cfg.l1_ptypes, function(t){ return t.name; }));
+    $('#qkActs').html((QK.cfg.actions || []).map(qkActRow).join(''));
+}
+function loadQuick(){
+    $.get(API, { action:'quick_meta' }, function(res){
+        if (!res || !res.success) { $('#qkL1').text('載入失敗'); return; }
+        QK = res; renderQuick();
+    }, 'json');
+}
+function qkCollect(){
+    var acts = [];
+    $('#qkActs tr').each(function(){
+        var $t = $(this);
+        acts.push({ key:$t.attr('data-key') || '', name:$.trim($t.find('.qk-name').val()),
+            is_scrap:$t.find('.qk-scrap').is(':checked') ? 1 : 0, active:$t.find('.qk-act').is(':checked') ? 1 : 0,
+            notify_depts:($t.find('.qk-depts').val() || []).map(Number), notify_users:($t.find('.qk-users').val() || []).map(Number) });
+    });
+    return { enabled:$('#qkEnabled').is(':checked') ? 1 : 0,
+             l1_users:$('.qk-l1:checked').map(function(){ return Number(this.value); }).get(),
+             l1_ptypes:$('.qk-pt:checked').map(function(){ return Number(this.value); }).get(), actions:acts };
+}
+$('#qkAdd').on('click', function(){ if (QK) $('#qkActs').append(qkActRow({ name:'', active:1 })); });
+$(document).on('click', '.qk-del', function(){ $(this).closest('tr').remove(); });
+$('#qkSave').on('click', function(){
+    var c = qkCollect(), bad = '';
+    if (c.enabled && !c.l1_users.length) bad = '要開啟自動開立，請先勾選至少一位第一層裁決者';
+    c.actions.forEach(function(a, i){ if (!a.name) bad = bad || ('第 ' + (i + 1) + ' 列的裁決項目名稱不可空白'); });
+    if (bad) { alert(bad); return; }
+    post('quick_save', { cfg:JSON.stringify(c) }, function(res){
+        QK.cfg = res.cfg; renderQuick(); $('#qkSaved').text('已儲存 ' + new Date().toLocaleTimeString());
     });
 });
 /* ───────── 最終裁示者：部門＋職級門檻（該範圍內的主管任一位皆可裁示） ───────── */

@@ -2223,6 +2223,123 @@ function qab_auto_qc_notify_save(PDO $db, array $userIds): array
     return qab_auto_qc_notify_list($db);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   雙層快速決策設定（2026-10-29 使用者交辦；先只做設定與資料層，決策流程另期實作）
+   整份存 system_parameters（qab_setting_*，鍵 quick_cfg），不新增資料表：
+     enabled        0/1  總開關「品管檢驗NG儲存後自動開立異常單」（預設 0，使用者設定完才開）
+     l1_users       [uid…] 第一層裁決者（只能是品管部門在職人員，沿用 qab_auto_qc_notify_candidates）
+     l1_ptypes      [process_type_id…] 第二層開放讓第一層直接決策的製程大類（沒列＝第二層先收到通知）
+     actions        [{key,name,is_scrap,active,notify_depts[],notify_users[]}] 第一層可裁決項目
+     escalate_*     轉呈決策固定交給第二層（qa_decider_cfg 的決策者），不在 actions 內
+   第二層決策者不另設名單（讀 qa_decider_cfg）；第二層的代理＝品管檢驗表 2.0「異常單處置決策設定」的次要決策者。
+   ───────────────────────────────────────────────────────────── */
+function qab_quick_default_actions(): array
+{
+    return [
+        ['key' => 'accept', 'name' => '特採', 'is_scrap' => 0, 'active' => 1, 'notify_depts' => [], 'notify_users' => []],
+        ['key' => 'scrap',  'name' => '報廢', 'is_scrap' => 1, 'active' => 1, 'notify_depts' => [], 'notify_users' => []],
+        ['key' => 'rework', 'name' => '重工', 'is_scrap' => 0, 'active' => 1, 'notify_depts' => [], 'notify_users' => []],
+    ];
+}
+
+/** 正規化後的快速決策設定（缺欄位補預設；舊資料／空設定一律安全） */
+function qab_quick_cfg(PDO $db): array
+{
+    $raw = qab_setting_get($db, 'quick_cfg', []);
+    if (!is_array($raw)) $raw = [];
+    $ints = function ($a) { return array_values(array_unique(array_filter(array_map('intval', (array)$a), function ($v) { return $v > 0; }))); };
+    $acts = [];
+    foreach ((array)($raw['actions'] ?? qab_quick_default_actions()) as $a) {
+        if (!is_array($a)) continue;
+        $name = trim((string)($a['name'] ?? ''));
+        if ($name === '') continue;
+        $acts[] = [
+            'key'          => preg_match('/^[a-z0-9_]{1,20}$/', (string)($a['key'] ?? '')) ? (string)$a['key'] : 'k' . substr(md5($name), 0, 8),
+            'name'         => mb_substr($name, 0, 20),
+            'is_scrap'     => !empty($a['is_scrap']) ? 1 : 0,
+            'active'       => array_key_exists('active', $a) ? (!empty($a['active']) ? 1 : 0) : 1,
+            'notify_depts' => $ints($a['notify_depts'] ?? []),
+            'notify_users' => $ints($a['notify_users'] ?? []),
+        ];
+    }
+    if (!$acts && !array_key_exists('actions', $raw)) $acts = qab_quick_default_actions();
+    return [
+        'enabled'   => !empty($raw['enabled']) ? 1 : 0,
+        'l1_users'  => $ints($raw['l1_users'] ?? []),
+        'l1_ptypes' => $ints($raw['l1_ptypes'] ?? []),
+        'actions'   => $acts,
+    ];
+}
+
+/** 儲存設定；驗證不過丟 Exception（前端已即時擋一次，這裡是同規則的最後一道，鐵律8） */
+function qab_quick_cfg_save(PDO $db, array $in): array
+{
+    $cur = qab_quick_cfg($db);
+    $cand = [];
+    foreach (qab_auto_qc_notify_candidates($db) as $p) $cand[(int)$p['id']] = 1;
+    $l1 = [];
+    foreach ((array)($in['l1_users'] ?? $cur['l1_users']) as $u) {
+        $u = (int)$u;
+        if ($u <= 0) continue;
+        if (!isset($cand[$u])) throw new Exception('第一層裁決者只能從「品管部門」的在職人員挑選');
+        $l1[$u] = $u;
+    }
+    $okDept = array_flip(array_map('intval', $db->query("SELECT id FROM department")->fetchAll(PDO::FETCH_COLUMN)));
+    $okUser = array_flip(array_map('intval', $db->query("SELECT id FROM `user` WHERE state=1")->fetchAll(PDO::FETCH_COLUMN)));
+    $okPt   = array_flip(array_map('intval', $db->query("SELECT process_type_id FROM process_type")->fetchAll(PDO::FETCH_COLUMN)));
+    $pt = [];
+    foreach ((array)($in['l1_ptypes'] ?? $cur['l1_ptypes']) as $v) { $v = (int)$v; if (isset($okPt[$v])) $pt[$v] = $v; }
+    $acts = [];
+    $names = [];
+    foreach ((array)($in['actions'] ?? $cur['actions']) as $i => $a) {
+        $name = trim((string)($a['name'] ?? ''));
+        if ($name === '') throw new Exception('第 ' . ($i + 1) . ' 列的裁決項目名稱不可空白');
+        if (mb_strlen($name) > 20) throw new Exception('裁決項目名稱最多 20 字：' . $name);
+        if (isset($names[$name])) throw new Exception('裁決項目名稱重複：' . $name);
+        $names[$name] = 1;
+        $nd = []; foreach ((array)($a['notify_depts'] ?? []) as $d) { $d = (int)$d; if (isset($okDept[$d])) $nd[$d] = $d; }
+        $nu = []; foreach ((array)($a['notify_users'] ?? []) as $u) { $u = (int)$u; if (isset($okUser[$u])) $nu[$u] = $u; }
+        $acts[] = [
+            'key'          => preg_match('/^[a-z0-9_]{1,20}$/', (string)($a['key'] ?? '')) ? (string)$a['key'] : 'k' . substr(md5($name . microtime(true)), 0, 8),
+            'name'         => $name,
+            'is_scrap'     => !empty($a['is_scrap']) ? 1 : 0,
+            'active'       => !empty($a['active']) ? 1 : 0,
+            'notify_depts' => array_values($nd),
+            'notify_users' => array_values($nu),
+        ];
+    }
+    $enabled = array_key_exists('enabled', $in) ? (!empty($in['enabled']) ? 1 : 0) : $cur['enabled'];
+    if ($enabled) {
+        if (!$l1) throw new Exception('尚未設定第一層裁決者，不能開啟「NG儲存後自動開立」');
+        if (!array_filter($acts, function ($a) { return $a['active']; })) throw new Exception('至少要有一個啟用的裁決項目才能開啟自動開立');
+    }
+    $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l1_ptypes' => array_values($pt), 'actions' => $acts];
+    qab_setting_set($db, 'quick_cfg', $new);
+    return qab_quick_cfg($db);
+}
+
+/** 設定頁用：候選人（品管部門）、第二層決策者（唯讀）、次要決策者（唯讀）、製程大類、部門、人員 */
+function qab_quick_meta(PDO $db): array
+{
+    require_once __DIR__ . '/people_lib.php';
+    $cand = array_map(function ($p) {
+        return ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
+    }, qab_auto_qc_notify_candidates($db));
+    $l2 = [];
+    foreach (qab_decider_cfgs($db, 'decider') as $c) {
+        $names = array_map(function ($p) { return (string)$p['user_cname']; }, qab_decider_people($db, $c));
+        $l2[] = ['show_name' => $c['show_name'], 'names' => array_values(array_unique($names))];
+    }
+    $pts = $db->query("SELECT process_type_id AS id, process_type AS name FROM process_type WHERE is_active=1 ORDER BY sort_order, process_type_id")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $ppl = [];
+    foreach (eg_people_list($db, ['all_posts' => true]) as $p) {
+        $ppl[] = ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_id' => (int)$p['dept_id'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
+    }
+    return ['cfg' => qab_quick_cfg($db), 'candidates' => $cand, 'l2' => $l2,
+            'ptypes' => $pts, 'depts' => $depts, 'people' => $ppl];
+}
+
 /**
  * 異常現象文字的「不可移除底稿」規則（2026-09-24 使用者交辦）：自動開立時寫入的那句話
  * （如「報工發現不良」）只能在後面補充說明，不可以被整段換掉或刪掉。

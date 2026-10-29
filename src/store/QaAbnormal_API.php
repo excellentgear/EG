@@ -1202,6 +1202,20 @@ case 'qc_notify_save': {
     jout(true, ['selected' => $rows]);
 }
 
+/* ═══════════ 雙層快速決策設定（管理員；2026-10-29） ═══════════ */
+case 'quick_meta': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以檢視雙層快速決策設定');
+    jout(true, qab_quick_meta($db));
+}
+case 'quick_save': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以設定雙層快速決策');
+    $in = json_decode((string)($_POST['cfg'] ?? '[]'), true);
+    if (!is_array($in)) jerr('設定內容格式錯誤');
+    try { $cfg = qab_quick_cfg_save($db, $in); } catch (Throwable $e) { jerr($e->getMessage()); }
+    $log(0, 'quick_cfg', '', '雙層快速決策設定已更新（自動開立：' . ($cfg['enabled'] ? '開' : '關') . '）');
+    jout(true, ['cfg' => $cfg]);
+}
+
 /* ═══════════ 品管確認說明（自動開立單的關卡；名單成員或管理員皆可） ═══════════ */
 case 'qc_review_complete': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
