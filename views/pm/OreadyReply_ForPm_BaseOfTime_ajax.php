@@ -2386,7 +2386,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
             }
             if ($batch) {
                 $nc = qab_auto_open_from_outsource_return($db, (int)$batch['batch_id'], $uid);
-                if ($nc) $resp['abnormal_order'] = ['id' => $nc['id'], 'no' => $nc['no'], 'existed' => !empty($nc['existed'])];
+                if ($nc) $resp['abnormal_order'] = ['id' => $nc['id'], 'no' => $nc['no'], 'existed' => !empty($nc['existed']),
+                    'auto_closed' => (int)($nc['auto_closed'] ?? 0), 'vendor_pending' => (int)($nc['vendor_pending'] ?? 0), 'scrap_no' => (string)($nc['scrap_no'] ?? '')];
             }
         } catch (Throwable $e) { /* 自動開單失敗不影響回廠記錄本身已經成功 */ }
         echo json_encode($resp);

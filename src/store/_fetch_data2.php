@@ -207,8 +207,10 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
     // 整張 BOM 口徑（不分站，本頁是總覽性質）；唯一計算 qab_bom_scrap_rows()/qab_bom_scrap_sum_rows()。
     require_once __DIR__ . '/../common/qa_abnormal_lib.php';
     $oready_scrap_map = qab_bom_scrap_rows($db, array_values(array_unique(array_filter(array_column($OreadyReply_list_base, 'bom')))));
+    $oready_qab_tags = qab_bom_decision_tags($db, array_values(array_unique(array_filter(array_column($OreadyReply_list_base, 'bom')))));   // 決策標籤（第6期）
     foreach ($OreadyReply_list_base as &$oready_row_ref) {
         $oready_row_ref['scrap_qty'] = qab_bom_scrap_sum_rows($oready_scrap_map[(string)$oready_row_ref['bom']] ?? [], null);
+        $oready_row_ref['qab_tags'] = $oready_qab_tags[(string)$oready_row_ref['bom']] ?? [];
     }
     unset($oready_row_ref);
 

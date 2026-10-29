@@ -1579,11 +1579,15 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
 
     // 同一批加工單流水帳不可重複自動開立——已經開過單的，若尚未被品管確認/結案，更新成最新
     // 累積報廢數量（分批累加時數字才不會停在第一次）；已確認或已結案一律不再覆蓋。
-    $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
+    $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed, quick_mode FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
     $exist->execute([$batchId]);
     if ($row = $exist->fetch(PDO::FETCH_ASSOC)) {
         if (empty($row['qc_review_at']) && empty($row['is_closed'])) {
             $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=? WHERE id=?")
+               ->execute([$scrapQty, $scrapQty, $scrapQty, (int)$row['id']]);
+        } elseif (!empty($row['is_closed']) && (int)$row['quick_mode'] === 1) {
+            // 系統自動核准結案的廠商報廢單：同一批之後又累加報廢，同步更新數量（一批只留一張單，報廢量才不會漏扣）
+            $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=?, updated_at=NOW() WHERE id=?")
                ->execute([$scrapQty, $scrapQty, $scrapQty, (int)$row['id']]);
         }
         return ['id' => (int)$row['id'], 'no' => (string)$row['abnormal_order_no'], 'existed' => true];
@@ -1609,7 +1613,9 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
 
     $vendorTxt = ($ob['maker_id'] !== null && $ob['maker_id'] !== '') ? (string)$ob['maker_id'] : '（未登記廠商）';
     $autoNote = mb_substr('外包廠商回廠回報報廢（' . $vendorTxt . '，累積報廢 ' . $scrapQty . ' 件）', 0, 255);
-    $phenomenon = $vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件，請確認不良原因並填寫異常原因分類。';
+    $quick = qab_quick_ready($db);
+    $phenomenon = $quick ? '廠商提報報廢'
+        : ($vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件，請確認不良原因並填寫異常原因分類。');
 
     $data = [
         'kind' => 'bom',
@@ -1631,6 +1637,12 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     $id = $created['id'];
 
     $db->prepare("UPDATE qa_abnormal_order SET src_outsource_batch_id=? WHERE id=?")->execute([$batchId, $id]);
+
+    // 雙層快速決策已啟用：廠商提報報廢不必再走品管確認，由第一層（請假／整天外出則第二層）自動核准並結案
+    if ($quick) {
+        $res = qab_quick_auto_scrap($db, $id, $scrapQty, $createdBy, (string)$created['no'], $vendorTxt, (string)$ob['bom']);
+        return ['id' => $id, 'no' => $created['no'], 'existed' => false] + $res;
+    }
 
     try {
         $desc = $vendorTxt . '（製令 ' . (string)$ob['bom'] . '）回廠回報報廢 ' . $scrapQty . ' 件';
@@ -2579,6 +2591,71 @@ function qab_quick_decide(PDO $db, int $orderId, int $uid, string $act, string $
     return qab_order($db, $orderId);
 }
 
+/** 廠商提報報廢自動核准時的「異常原因分類」：人 → 技能與設定 → 參數/資料輸入錯誤（使用者指定；依階層名稱找，找不到回 0 不阻擋結案） */
+function qab_quick_scrap_cause(PDO $db): int
+{
+    $path = ['人', '技能與設定', '參數/資料輸入錯誤'];
+    $parent = null; $id = 0;
+    foreach ($path as $name) {
+        $st = $db->prepare("SELECT cat_id FROM qa_cause_cat WHERE name=? AND " . ($parent === null ? "parent_id IS NULL" : "parent_id=" . (int)$parent) . " ORDER BY is_active DESC, cat_id LIMIT 1");
+        $st->execute([$name]);
+        $id = (int)$st->fetchColumn();
+        if ($id <= 0) return 0;
+        $parent = $id;
+    }
+    return $id;
+}
+
+/**
+ * 廠商提報報廢（BOM總覽回廠跳窗的本次報廢數量）建單後的自動核准結案（2026-10-29 使用者定案）：
+ * 異常現象「廠商提報報廢」、原因分類固定、處置＝報廢、決策者＝第一層（請假／整天外出自動換第二層或其代理）、
+ * 自動核准並結案；**責任廠商沒填的單不可自動核准結案**（qab_auto_close_allowed），只留單並通知補廠商。
+ * 報廢單號在結案當下配發，BOM總覽／包裝／出貨的良品數於是自然扣掉這批報廢。
+ */
+function qab_quick_auto_scrap(PDO $db, int $id, int $scrapQty, int $createdBy, string $no, string $vendorTxt, string $bomNo): array
+{
+    $c = qab_quick_cfg($db);
+    $actor = 0; $layer = 'l1';
+    foreach ($c['l1_users'] as $u) if (!qab_quick_absent($db, (int)$u)) { $actor = (int)$u; break; }
+    if (!$actor) { $pool = qab_quick_l2_pool($db); $actor = (int)($pool['ids'][0] ?? 0); $layer = 'l2'; }
+    if (!$actor) { $actor = (int)($c['l1_users'][0] ?? 0); }
+    $db->prepare("UPDATE qa_abnormal_order SET quick_mode=1, decider_user_id=?, qc_review_by=?, qc_review_at=NOW() WHERE id=?")
+       ->execute([$actor ?: null, $createdBy, $id]);
+    $o = qab_order($db, $id);
+    if (!qab_auto_close_allowed($o)) {
+        $db->prepare("UPDATE qa_abnormal_order SET vendor_pending=1 WHERE id=?")->execute([$id]);
+        try {
+            qab_quick_notify($db, $id, $c['l1_users'], '廠商提報報廢（廠商未登記，未自動結案）：' . $no,
+                '製令 ' . $bomNo . ' 回報報廢 ' . $scrapQty . ' 件，但這一站沒有登記加工廠商，系統不會自動核准結案。請補登廠商後再處理。', $createdBy);
+        } catch (Throwable $e) {}
+        return ['auto_closed' => 0, 'vendor_pending' => 1];
+    }
+    $cause = qab_quick_scrap_cause($db);
+    if ($cause > 0) $db->prepare("INSERT IGNORE INTO qa_abnormal_cause (order_id, cat_id) VALUES (?,?)")->execute([$id, $cause]);
+    // 處置選項：優先用設定裡「是報廢」的裁決項目，沒有就找任何啟用中的報廢處置
+    $scrapAct = null;
+    foreach ($c['actions'] as $a) if ($a['active'] && $a['is_scrap']) { $scrapAct = $a; break; }
+    if ($scrapAct) $opt = qab_quick_action_opt($db, $scrapAct['key']);
+    else $opt = (int)$db->query("SELECT opt_id FROM qa_option WHERE kind='disp' AND is_scrap=1 AND is_active=1 ORDER BY opt_id LIMIT 1")->fetchColumn();
+    if ($opt <= 0) {
+        return ['auto_closed' => 0, 'vendor_pending' => 0];   // 沒有任何報廢處置可用，留給人工處理
+    }
+    qab_save_decision($db, $id, 'disp', [['opt_id' => $opt]], '廠商提報報廢，系統依雙層快速決策自動核准', 0, '', $actor);
+    $dep = qab_user_in_decider($db, $actor, 'decider') ? 0 : 1;
+    $set = "disp_by_deputy=?"; $par = [$dep];
+    if ($layer === 'l1') { $set .= ", quick_l1_by=?, quick_l1_at=NOW()"; $par[] = $actor; }
+    $par[] = $id;
+    $db->prepare("UPDATE qa_abnormal_order SET $set WHERE id=?")->execute($par);
+    $cl = qab_close_order($db, $id, $actor, true);
+    try {
+        $tg = $scrapAct ?: ['notify_users' => [], 'notify_depts' => []];
+        qab_quick_notify($db, $id, qab_quick_result_targets($db, $o, $tg),
+            '廠商提報報廢已自動核准結案：' . $no,
+            $vendorTxt . '（製令 ' . $bomNo . '）提報報廢 ' . $scrapQty . ' 件，已自動核准結案，報廢單號 ' . ($cl['scrap_no'] ?: '—') . '。', $actor);
+    } catch (Throwable $e) {}
+    return ['auto_closed' => 1, 'vendor_pending' => 0, 'scrap_no' => $cl['scrap_no']];
+}
+
 /** 雙層快速決策是否「現在就能用」：總開關開、有第一層、有第二層、至少一個啟用的裁決項目 */
 function qab_quick_ready(PDO $db): bool
 {
@@ -3333,6 +3410,117 @@ function qab_bom_scrap_rows(PDO $db, array $bomNos): array
         if ($originSn === null && $r['resp_process_no']) $originSn = $r['resp_bom_sn'] !== null ? (int)$r['resp_bom_sn'] : null;
         $out[(string)$r['bom_no']][] = ['qty' => (int)($r['ng_qty'] ?? 0), 'origin_sn' => $originSn];
     }
+    return $out;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   決策／報廢標籤（2026-10-29 第 6 期）：BOM總覽的 BOM/製程備註欄、QC待驗清單與完工紀錄的備註欄共用
+   格式：[決策] M/D 製程 x數量（決策者）；不同決策底色不同（固定暖色盤，報廢一律紅）；
+   製程越新（bom_sn 越大）排越上面，方便對照剩餘數量。廠商提報報廢另標淺紅「報廢 M/D 製程 x數量（廠商提報）」。
+   ───────────────────────────────────────────────────────────── */
+function qab_tag_palette(PDO $db): array
+{
+    $pal = [['#F0A24B', '#3b2203'], ['#B5651D', '#ffffff'], ['#D8B07A', '#3b2203'], ['#8C5A2B', '#ffffff']];
+    $map = [];
+    $i = 0;
+    foreach (qab_option_map($db) as $oid => $o) {
+        if ($o['kind'] !== 'disp') continue;
+        if (!empty($o['is_scrap'])) { $map[(int)$oid] = ['#DD5138', '#ffffff']; continue; }
+        $map[(int)$oid] = $pal[$i % count($pal)]; $i++;
+    }
+    return $map;
+}
+
+/**
+ * 已決策的異常單 → 標籤。$by='bom'：以製令彙總（BOM總覽，只算類別為製程不良／報工NG／線上檢驗自動開立的單）；
+ * $by='fid'：以製程站(bom_ing_fid)分（QC清單，同製令＋同製程號的單，不限類別）。
+ * @return array [key => [tag,…]]；tag=['name','md','process','qty','who','bg','fg','no','sn','ts','kind'=>'decision']
+ */
+function qab_decision_tags(PDO $db, string $by, array $keys): array
+{
+    $keys = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $keys)), function ($v) { return $v !== ''; })));
+    if (!$keys) return [];
+    $in = implode(',', array_fill(0, count($keys), '?'));
+    if ($by === 'fid') {
+        $sql = "SELECT bi.bom_ing_fid AS k, o.id, o.abnormal_order_no, o.ng_qty, o.disp_decided_at, o.disp_decided_by, bi.bom_sn,
+                       pn.ProcessName, u.user_cname, o.disp_by_deputy
+                  FROM bom_ing bi
+                  JOIN qa_abnormal_order o ON o.bom_no = bi.bom AND o.resp_process_no = bi.process_no AND o.deleted_at IS NULL
+                  LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                  LEFT JOIN `user` u ON u.id = o.disp_decided_by
+                 WHERE bi.bom_ing_fid IN ($in)
+                   AND o.src_outsource_batch_id IS NULL";   // 廠商提報報廢單改由「報廢…(廠商提報)」標籤顯示，避免重複
+    } else {
+        $catIds = [];
+        foreach (qab_cats($db, false) as $r) if (!empty($r['is_pm_auto']) || !empty($r['qc_auto_internal'])) $catIds[] = (int)$r['cat_id'];
+        if (!$catIds) return [];
+        $sql = "SELECT o.bom_no AS k, o.id, o.abnormal_order_no, o.ng_qty, o.disp_decided_at, o.disp_decided_by,
+                       (SELECT MIN(b2.bom_sn) FROM bom_ing b2 WHERE b2.bom=o.bom_no AND b2.process_no=o.resp_process_no) AS bom_sn,
+                       pn.ProcessName, u.user_cname, o.disp_by_deputy
+                  FROM qa_abnormal_order o
+                  LEFT JOIN process_no pn ON pn.ProcessNo = o.resp_process_no
+                  LEFT JOIN `user` u ON u.id = o.disp_decided_by
+                 WHERE o.bom_no IN ($in) AND o.deleted_at IS NULL AND o.cat_id IN (" . implode(',', $catIds) . ")";
+    }
+    $sql .= " AND EXISTS (SELECT 1 FROM qa_abnormal_opt p WHERE p.order_id=o.id AND p.kind='disp')";
+    $st = $db->prepare($sql);
+    $st->execute($keys);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+    $oids = array_map(function ($r) { return (int)$r['id']; }, $rows);
+    $optRows = $db->query("SELECT order_id, opt_id FROM qa_abnormal_opt WHERE kind='disp' AND order_id IN (" . implode(',', $oids) . ")")->fetchAll(PDO::FETCH_ASSOC);
+    $byOrder = [];
+    foreach ($optRows as $r) $byOrder[(int)$r['order_id']][] = (int)$r['opt_id'];
+    $optMap = qab_option_map($db);
+    $pal = qab_tag_palette($db);
+    $out = [];
+    foreach ($rows as $r) {
+        $first = (int)(($byOrder[(int)$r['id']] ?? [0])[0]);
+        $names = [];
+        foreach ($byOrder[(int)$r['id']] ?? [] as $oi) if (isset($optMap[$oi])) $names[] = $optMap[$oi]['name'];
+        $col = $pal[$first] ?? ['#8a6a45', '#ffffff'];
+        $ts = (string)$r['disp_decided_at'];
+        $out[(string)$r['k']][] = [
+            'kind' => 'decision', 'name' => implode('、', $names), 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '',
+            'process' => (string)($r['ProcessName'] ?? ''), 'qty' => (int)$r['ng_qty'],
+            'who' => (string)($r['user_cname'] ?? '') . (!empty($r['disp_by_deputy']) ? '' : ''),
+            'bg' => $col[0], 'fg' => $col[1], 'no' => (string)$r['abnormal_order_no'], 'id' => (int)$r['id'],
+            'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
+        ];
+    }
+    foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
+    unset($list);
+    return $out;
+}
+
+/** BOM總覽：每張製令的決策標籤 */
+function qab_bom_decision_tags(PDO $db, array $bomNos): array
+{
+    return qab_decision_tags($db, 'bom', $bomNos);
+}
+
+/** QC待驗清單／完工紀錄：每個製程站(bom_ing_fid)的決策標籤＋廠商提報報廢標籤（新→舊） */
+function qab_qc_row_tags(PDO $db, array $fids): array
+{
+    $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
+    if (!$fids) return [];
+    $out = qab_decision_tags($db, 'fid', $fids);
+    $in = implode(',', $fids);
+    $st = $db->query("SELECT b.bom_ing_fid AS k, b.scrap_qty, b.updated_at, bi.bom_sn, pn.ProcessName
+                        FROM bom_ing_outsource_batch b
+                        JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
+                        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                       WHERE b.bom_ing_fid IN ($in) AND b.scrap_qty > 0");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ts = (string)$r['updated_at'];
+        $out[(string)$r['k']][] = [
+            'kind' => 'vendor_scrap', 'name' => '報廢', 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '',
+            'process' => (string)($r['ProcessName'] ?? ''), 'qty' => (int)round((float)$r['scrap_qty']), 'who' => '廠商提報',
+            'bg' => '#F8D7D0', 'fg' => '#8a2a16', 'no' => '', 'id' => 0, 'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
+        ];
+    }
+    foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
+    unset($list);
     return $out;
 }
 

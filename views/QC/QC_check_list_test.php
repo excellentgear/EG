@@ -1303,6 +1303,17 @@ if ($reply_id != "") {
             return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
         }
 
+        // 決策／廠商提報報廢標籤（第6期）：[決策] M/D 製程 x數量（決策者）；後端已依製程新→舊排序
+        function qabTagsHtml(tags) {
+            if (!Array.isArray(tags) || !tags.length) return '';
+            return tags.map(function (t) {
+                return '<div class="qab-tag-line" style="margin:2px 0;font-size:12px;white-space:nowrap;" title="' + he(t.no ? ('異常單 ' + t.no) : '外包廠商回廠時提報的報廢') + '">' +
+                    '<span style="display:inline-block;background:' + he(t.bg) + ';color:' + he(t.fg) + ';padding:1px 8px;border-radius:3px;font-weight:bold;">' + he(t.name) + '</span> ' +
+                    '<span style="color:#999;">' + he(t.md) + '</span> ' + he(t.process) + ' x' + he(t.qty) +
+                    (t.who ? ' (' + he(t.who) + ')' : '') + '</div>';
+            }).join('');
+        }
+
         function generatePsHtml(item) {
             // --- GEMINI CODE ASSIST: Modify generatePsHtml for remark order ---
             let psHtml = '';
@@ -1398,6 +1409,9 @@ if ($reply_id != "") {
 
             }
             // --- END GEMINI CODE ASSIST: Modify generatePsHtml for remark order ---
+
+            // 決策／廠商提報報廢標籤（第6期）
+            psHtml += qabTagsHtml(item.qab_tags);
 
             // 異常單資訊（顯示在備註欄最下方）
             if (item.qa_abnormal_orders && item.qa_abnormal_orders.length > 0) {
@@ -5024,6 +5038,7 @@ if ($reply_id != "") {
                                 '</div>' +
                                 '<div style="margin-top:4px;">' + qcResult + '</div>' +
                                 psHtml +
+                                qabTagsHtml(r.qab_tags) +
                                 ncrHtml +
                             '</div>' +
                             '<div class="cc-time" style="text-align:right;flex-shrink:0;margin-left:8px;">' +

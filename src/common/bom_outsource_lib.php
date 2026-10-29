@@ -202,7 +202,10 @@ if (!function_exists('eg_bom_outsource_scrap_rows')) {
         $st = $db->prepare("SELECT bi.bom AS bom_no, bi.bom_sn, b.scrap_qty, b.maker_id, b.maker_id_no
                              FROM bom_ing_outsource_batch b
                              JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
-                             WHERE bi.bom IN ($in) AND b.scrap_qty > 0");
+                             WHERE bi.bom IN ($in) AND b.scrap_qty > 0
+                               AND NOT EXISTS (SELECT 1 FROM qa_abnormal_order qo
+                                                WHERE qo.src_outsource_batch_id = b.batch_id AND qo.is_closed = 1
+                                                  AND qo.scrap_no IS NOT NULL AND qo.deleted_at IS NULL)");
         $st->execute($bomNos);
         $out = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {

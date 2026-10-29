@@ -622,8 +622,10 @@ $all_boms = array_filter(array_unique($all_boms));
 // 整張 BOM 口徑（不分站）：本頁是總覽性質，報廐扣減不必細分到是哪一站發現的。
 require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
 $oready_scrap_map = qab_bom_scrap_rows($conn->getPDO(), $all_boms);
+$oready_qab_tags = qab_bom_decision_tags($conn->getPDO(), $all_boms);   // 決策標籤（第6期）：BOM/製程備註欄顯示
 foreach ($OreadyReply_list_base as &$oready_row_ref) {
     $oready_row_ref['scrap_qty'] = qab_bom_scrap_sum_rows($oready_scrap_map[(string)$oready_row_ref['bom']] ?? [], null);
+    $oready_row_ref['qab_tags'] = $oready_qab_tags[(string)$oready_row_ref['bom']] ?? [];
 }
 unset($oready_row_ref);
 
@@ -6352,6 +6354,26 @@ echo "</script>\n";
             }
             // --- END QC 檢驗備註 ---
 
+            // --- 異常單決策標籤（第6期）：[決策] M/D 製程 x數量（決策者）；製程越新越上面，持續顯示方便對照剩餘數量 ---
+            try {
+                var _qt = row.qab_tags;
+                if (Array.isArray(_qt) && _qt.length) {
+                    var _qtBox = document.createElement('div');
+                    _qtBox.className = 'qab-tags';
+                    _qtBox.style.cssText = 'margin-top:4px;font-size:11px;line-height:1.5;';
+                    _qt.forEach(function (t) {
+                        var d = document.createElement('div');
+                        d.style.cssText = 'margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+                        d.title = '異常單 ' + (t.no || '');
+                        d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.name || '') + '</span> '
+                            + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + escapeHtml(t.process || '') + ' x' + (t.qty || 0)
+                            + (t.who ? ' (' + escapeHtml(t.who) + ')' : '');
+                        _qtBox.appendChild(d);
+                    });
+                    tdBomPs.appendChild(_qtBox);
+                }
+            } catch (_qtErr) {}
+
             // Add a line break if both remarks have content
             var bomIngPsText = row.ps || ""; // Corrected: Use row.ps (from bom_ing.ps)
             if ((bomPsText.trim() !== "" || otherProcessesWithRemarks.length > 0) && bomIngPsText.trim() !== "") {
@@ -10906,6 +10928,26 @@ echo "</script>\n";
             { bom: bom, bom_sn: bomSn }
         );
     }
+    // 廠商提報報廢建單後的提示：雙層快速決策下已自動核准結案；沒廠商則提醒要補廠商（不會自動結案）
+    function ormNcHtml(ao) {
+        if (ao && Number(ao.auto_closed) === 1) {
+            return '<div class="alert alert-success" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-check-circle"></i> 已自動開立並<b>核准結案</b>品質異常單 <b>' + escapeHtml(ao.no) + '</b>'
+                + (ao.scrap_no ? '（報廢單號 <b>' + escapeHtml(ao.scrap_no) + '</b>）' : '') + '，報廢數量已扣減。</div>';
+        }
+        if (ao && Number(ao.vendor_pending) === 1) {
+            return '<div class="alert alert-danger" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已開立品質異常單 <b>' + escapeHtml(ao.no) + '</b>，但這一站<b>尚未登記廠商</b>，不會自動核准結案；請先補登廠商。</div>';
+        }
+        return '<div class="alert alert-warning" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已自動開立品質異常單 <b>' + escapeHtml(ao.no) + '</b> 提醒品管確認報廢原因。</div>';
+    }
+    function _ormToday() {
+        var d = new Date();
+        return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    }
+    // 回廠／報廢記錄成功後，連背後的 BOM 總覽主列表一起即時重抓（與 cancel_transfer 同一做法）。
+    // 失敗只吞掉，不影響已成功的記錄。
+    function _ormRefreshMain() {
+        try { if (typeof fetchDataAndFilter === 'function') fetchDataAndFilter(); } catch (e) {}
+    }
     function openOutsourceReturnModal(proc, rowData) {
         // 開關關閉時不跳窗，改成簡化的一句話確認（可回廠但不能自訂報廢數量——要報廢請管理員開啟設定）
         if (!window.EG_OR_QTY_SETTABLE) {
@@ -10952,7 +10994,8 @@ echo "</script>\n";
           + '  <div style="flex:1;"><label style="font-size:12px;">本次回廠數量</label><input type="number" min="0" id="orm-return-qty" class="form-control" value="0"></div>'
           + '  <div style="flex:1;"><label style="font-size:12px;">本次報廢數量</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
           + '</div>'
-          + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單提醒品管確認原因。</div>'
+          + '<div style="margin-bottom:10px;"><label style="font-size:12px;">回廠日</label><input type="date" id="orm-return-date" class="form-control" style="max-width:200px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
+          + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
           + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
           + '<div id="orm-nc-result" style="margin-top:8px;"></div>'
           + fixSectionHtml;
@@ -10997,13 +11040,14 @@ echo "</script>\n";
                     var ncEl = document.getElementById('orm-nc-result');
                     if (ncEl) {
                         if (r.abnormal_order && r.abnormal_order.no) {
-                            ncEl.innerHTML = '<div class="alert alert-warning" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已自動開立品質異常單 <b>' + escapeHtml(r.abnormal_order.no) + '</b> 提醒品管確認報廢原因。</div>';
+                            ncEl.innerHTML = ormNcHtml(r.abnormal_order);
                         } else { ncEl.innerHTML = ''; }
                     }
                     _refreshStatus();
                     if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) {
                         refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
                     }
+                    _ormRefreshMain();
                 }
             }, 'json');
         };
@@ -11020,10 +11064,11 @@ echo "</script>\n";
                         var ncEl = document.getElementById('orm-nc-result');
                         if (ncEl) {
                             if (r.abnormal_order && r.abnormal_order.no) {
-                                ncEl.innerHTML = '<div class="alert alert-warning" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已自動開立品質異常單 <b>' + escapeHtml(r.abnormal_order.no) + '</b> 提醒品管確認報廢原因。</div>';
+                                ncEl.innerHTML = ormNcHtml(r.abnormal_order);
                             } else { ncEl.innerHTML = ''; }
                         }
                         _refreshStatus();
+                        _ormRefreshMain();
                     }
                 }, 'json');
             };

@@ -95,6 +95,13 @@ if (($_GET['mode'] ?? '') === 'completed') {
         ");
         $dataStmt->execute($binds);
         $rows = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
+        // 完工紀錄也要顯示決策／廠商提報報廢標籤（第6期）
+        try {
+            require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+            $qabTagsC = qab_qc_row_tags($db, array_column($rows, 'bom_ing_fid'));
+            foreach ($rows as &$rowC) { $rowC['qab_tags'] = $qabTagsC[(string)($rowC['bom_ing_fid'] ?? '')] ?? []; }
+            unset($rowC);
+        } catch (Throwable $e) {}
 
         echo json_encode([
             'success'      => true,
@@ -379,8 +386,13 @@ try {
         }
     }
 
+    // 決策／廠商提報報廢標籤（第6期）：[決策] M/D 製程 x數量（決策者）、報廢 M/D 製程 x數量（廠商提報）
+    require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+    $qabTags = [];
+    try { $qabTags = qab_qc_row_tags($db, array_column($rows, 'bom_ing_fid')); } catch (Throwable $e) { $qabTags = []; }
     foreach ($rows as &$row) {
         $row['individual_qc_entries'] = $qcMap[$row['bom_ing_fid']] ?? [];
+        $row['qab_tags'] = $qabTags[(string)$row['bom_ing_fid']] ?? [];
     }
     unset($row);
 
