@@ -295,6 +295,13 @@ function addOrUpdateEmployee($mode) {
         return;
     }
 
+    // 最高權限帳號(state=99)固定鎖定在員工編號 1，不可更改；其他帳號也不得被設成最高權限帳號
+    if ((int)$id === 1) { $state = 99; }
+    elseif ((int)$state === 99) {
+        echo json_encode(['status' => 'error', 'message' => '「最高權限帳號」固定為員工編號 1，其他帳號不得設定為最高權限帳號。']);
+        return;
+    }
+
     try {
         $db->beginTransaction();
 
@@ -1076,6 +1083,7 @@ function deleteStatusHistory() {
  * @return array ['can'=>bool,'reason'=>string,'lines'=>[]]
  */
 function empDeleteGuard(PDO $db, int $id): array {
+    if ($id === 1) return ['can'=>false,'reason'=>'最高權限帳號（員工編號 1）固定保留，不可刪除。','lines'=>[]];
     if ($id <= 0) return ['can' => false, 'reason' => '未提供員工 ID。', 'lines' => []];
     if ($id === 1) return ['can' => false, 'reason' => '無法刪除系統管理員。', 'lines' => []];
 
@@ -1141,6 +1149,8 @@ function addOrUpdateEmployee_original($mode) {
     $user_uname = $_POST['user_uname'] ?? '';
     $user_cname = $_POST['user_cname'] ?? '';
     $user_status = $_POST['user_status'] ?? 1;
+
+    if ((int)$id === 1) { echo json_encode(['status' => 'error', 'message' => '最高權限帳號（員工編號 1）不可由此修改。']); return; }
 
     if ($mode === 'update' && empty($id)) {
         echo json_encode(['status' => 'error', 'message' => '更新時需要提供員工 ID。']);

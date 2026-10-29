@@ -394,7 +394,7 @@ if ($hrUserPerm === 'R') {
                                         <option value="3">育嬰留停</option>
                                         <option value="0">離職</option>
                                         <option value="90">特殊帳號(不列入員工)</option>
-                                        <option value="99">最高權限帳號</option>
+                                        <option value="99" disabled>最高權限帳號（固定為員工編號 1）</option>
                                     </select>
                                 </div>
                                 <div class="col-md-4 form-group">
@@ -1285,6 +1285,9 @@ $(document).ready(function() {
                     // **修正**: 改用 state 欄位來設定下拉選單的值，確保與列表顯示一致
                     // 如果 API 回傳了 state，就用 state，否則沿用舊的 user_status (向下相容)
                     $('#user_status').val(emp.state !== undefined ? emp.state : emp.user_status);
+                    // 最高權限帳號固定鎖定在員工編號 1：id=1 狀態不可改；其他帳號不得選「最高權限帳號」（後端同規則再擋）
+                    $('#user_status option[value="99"]').prop('disabled', String(emp.id) !== '1');
+                    $('#user_status').css('pointer-events', String(emp.id) === '1' ? 'none' : '').attr('tabindex', String(emp.id) === '1' ? -1 : 0);
 
                     // 設定主職務
                     if (emp.main_department_id) {
