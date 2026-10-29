@@ -1008,6 +1008,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $packingExcl1 = $packingNos1 ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos1)) . ')') : '';
             $sw = $pdo->prepare("
                 SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName,
+                       (SELECT ml.maker_id FROM maker_list ml WHERE ml.maker_id_no = bi.maker_id_no LIMIT 1) AS maker_name,
                        (SELECT f.check_result FROM qc_check_form f WHERE f.bom_ing_fid = bi.bom_ing_fid AND f.status <> 'DRAFT'
                         ORDER BY f.batch_no DESC, f.round_no DESC LIMIT 1) AS last_result
                 FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
@@ -4417,6 +4418,9 @@ $(function(){
             $('#btn-save,#btn-redo').prop('disabled', noPart || !state.can_fill);
             maybeOfferDraft(res.draft_form_id || 0);
             checkDrawingChange();          // 圖面變更提醒（受影響製程才跳）
+            // 從異常單連過來看相關檢驗紀錄：?view_form=檢驗單 id（只開一次，之後換製程不再重複跳）
+            var vf = new URLSearchParams(location.search).get('view_form');
+            if(vf && !window.__vfOpened){ window.__vfOpened = true; setTimeout(function(){ openViewModal(vf); }, 400); }
         }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
     }
     function reloadContext(){ if(ctx) loadContext(ctx.bom_ing_fid); }
@@ -4610,7 +4614,9 @@ $(function(){
             '<div><b>製令 / BOM</b><span class="cv">'+esc(ctx.bom||'—')+'</span></div>'+
             '<div><b>'+(ctx.adhoc?'檢驗類型（無製程）':'製程')+'</b><span class="cv">'+
                 (ctx.adhoc ? esc(ctx.process||'—')
-                    : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>')
+                    : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>'+
+                      // 製程右側顯示這一站登記的廠商；換製程時 loadSiblingProcesses 的資料會立刻更新這格（不必等整頁重載）
+                      '<span id="ctx-maker" class="ctx-maker" style="margin-left:8px;font-weight:bold;'+(ctx.maker?'':'color:var(--coral);')+'" title="這一站登記的加工廠商">廠商：'+esc(ctx.maker||'尚未登記')+'</span>')
             +'</span></div>'+
             (ctx.adhoc
                 ? '<div><b>送驗數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'
@@ -4633,6 +4639,7 @@ $(function(){
             // 不用再把底部「數量/處置備註」面板拉開才看得到本次填的是多少件。
             // 雙擊可直接修改（同一天使用者追加要求），顯示跟編輯共用同一個元素。
             '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val" title="雙擊可直接修改">0</span></div>');
+        if(LOCK_PROC && !ctx.adhoc){ $('#sel-switch-process').prop('disabled',true).attr('title','由待驗清單開啟，製程已鎖定，不可更動'); }
         applyInspKindUI();
         refreshSaveDraftBtn();
         refreshBackfillBtn();
@@ -4698,11 +4705,15 @@ $(function(){
     });
     // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
     // 防呆：切換前若目前這筆有還沒存檔的填寫內容，先跳確認，避免誤點跑錯製程（2026-08 使用者需求）
+    var LOCK_PROC = new URLSearchParams(location.search).get('lock_proc')==='1';   // 從待驗清單開啟＝製程鎖定
+    var sibMaker = {};   // bom_ing_fid → 廠商名稱（換製程時立刻更新「廠商」欄）
     function loadSiblingProcesses(){
         if(!ctx || !ctx.bom) return;
         $.post(V2API, { v2action:'sibling_processes', bom:ctx.bom }, function(res){
             var $sel=$('#sel-switch-process');
             if(!res || !res.success || !$sel.length) return;
+            sibMaker = {};
+            (res.rows||[]).forEach(function(r){ sibMaker[r.bom_ing_fid] = r.maker_name || ''; });
             $sel.html((res.rows||[]).map(function(r){
                 var tag = r.last_result==='NG' ? '✘' : (r.last_result==='OK' ? '✔' : '·');
                 return '<option value="'+r.bom_ing_fid+'">'+tag+' ['+esc(r.bom_sn)+'] '+esc(r.ProcessName||('製程'+r.process_no))+'</option>';
@@ -4713,9 +4724,14 @@ $(function(){
     $(document).on('change', '#sel-switch-process', function(){
         var $sel=$(this), newFid=$sel.val();
         if(!newFid || String(newFid)===String(ctx.bom_ing_fid)) return;
+        if(LOCK_PROC){ $sel.val(ctx.bom_ing_fid); return; }   // 防呆：鎖定時任何方式都不可換製程
+        var mk = sibMaker[newFid] || '';
+        $('#ctx-maker').text('廠商：'+(mk||'尚未登記')).css('color', mk?'':'var(--coral)');
         var hasProgress = MODEL.items && MODEL.items.some(function(it){ return itemFilledCount(it)>0; });
         if(hasProgress && !confirm('目前這筆檢驗尚有還沒存檔的填寫內容，切換製程會離開此頁面。\n（內容已自動存成草稿，之後回來這個製程仍可繼續）\n確定要切換嗎？')){
             $sel.val(ctx.bom_ing_fid);
+            var mk0 = sibMaker[ctx.bom_ing_fid] || ctx.maker || '';
+            $('#ctx-maker').text('廠商：'+(mk0||'尚未登記')).css('color', mk0?'':'var(--coral)');
             return;
         }
         loadContext(newFid);

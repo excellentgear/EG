@@ -415,6 +415,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <div id="quickBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
                         </div>
                         <div class="ro-note" id="quickWhy" style="margin-top:6px;"></div>
+                        <div id="quickQc" style="display:none;margin-top:6px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看品管檢驗表 2.0 的相關檢驗紀錄</a></div>
                     </div>
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;">
@@ -882,7 +883,14 @@ function renderQuickBox(){
         + (Number(q.l2_deputy) ? '（代理）' : '');
     if (q.escalated_by) who += '　已由 ' + q.escalated_by + ' 轉呈決策';
     if (!Number(q.open_for_l1) && !Number(q.done)) who += '　此製程大類未開放第一層直接決策';
+    if (Number(q.done) && D.order && (D.order.disp_names || []).length) {
+        who += '　裁決結果：' + D.order.disp_names.join('、') + (D.order.decided_name ? '（' + D.order.decided_name + (Number(D.order.disp_by_deputy) ? ' 代' : '') + '）' : '');
+    }
     $('#quickWho').text(who);
+    // 沒有舊流程決策權的人（第一層）只看新的快速決策區塊，不顯示底下那組灰掉的舊處置選項，免得混淆
+    var hideOld = !D.perms.canDecide && !D.perms.canAdmin;
+    $('#dispOptsWrap').toggle(!hideOld);
+    $('#f_escalate_gm').closest('label').toggle(!hideOld);
     var can = q.can || {};
     var show = !Number(q.done) && (can.decide || can.escalate || can.grant);
     $('#quickAct').toggle(!!show);
@@ -892,6 +900,7 @@ function renderQuickBox(){
     if (can.grant) h += '<button class="btn btn-warm-o btn-sm" data-qact="grant">轉回第一層決策</button>';
     $('#quickBtns').html(h);
     $('#quickWhy').text(show ? '' : (q.why || ''));
+    $('#quickQc').toggle(!!q.qc_url); if (q.qc_url) $('#quickQcLink').attr('href', q.qc_url);
 }
 $(document).on('click', '#quickBtns [data-qact]', function(){
     var act = $(this).attr('data-qact'), name = $.trim($(this).text());

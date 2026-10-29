@@ -2366,7 +2366,8 @@ if ($reply_id != "") {
                 // 2026-07-29 改開新版填寫介面 inspection_entry_v2.php（逐項/逐件/總表三模式）。
                 // 後端 API 仍是 inspection_combined_prototype.php，回傳彙總格式完全相同。
                 // 若新版有狀況要退回舊版：把下一行檔名改回 inspection_combined_prototype.php 即可。
-                window.open('inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(bomIngFid),
+                // lock_proc=1：從待驗清單點「檢驗」開啟時製程已經由那一列決定，檢驗頁不可再切換製程（2026-10-29 使用者要求）
+                window.open('inspection_entry_v2.php?popup=1&lock_proc=1&bom_ing_fid=' + encodeURIComponent(bomIngFid),
                     'qc_inspect_' + bomIngFid,
                     'width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
             };

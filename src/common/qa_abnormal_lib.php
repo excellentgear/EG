@@ -2444,6 +2444,14 @@ function qab_quick_view(PDO $db, array $o, int $uid): array
     $v['l2_names'] = array_values(array_map(function ($u) use ($names) { return $names[$u] ?? ''; }, $pool['ids']));
     $v['l2_deputy'] = $pool['deputy'] ? 1 : 0;
     $v['escalated_by'] = ($escBy > 0 && !$decided) ? ($names[$escBy] ?? '') : '';   // 只有「轉呈後還沒裁決」才顯示
+    // 品管檢驗2.0 的相關檢驗紀錄連結（第一層決策時要對照檢驗內容）
+    $v['qc_url'] = '';
+    if ((int)($o['src_qc_form_id'] ?? 0) > 0) {
+        $qs = $db->prepare("SELECT bom_ing_fid FROM qc_check_form WHERE qc_form_id=?");
+        $qs->execute([(int)$o['src_qc_form_id']]);
+        $bf = (int)$qs->fetchColumn();
+        if ($bf > 0) $v['qc_url'] = '../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' . $bf . '&view_form=' . (int)$o['src_qc_form_id'];
+    }
     $v['actions'] = array_values(array_map(function ($a) { return ['key' => $a['key'], 'name' => $a['name']]; },
                         array_filter($c['actions'], function ($a) { return $a['active']; })));
     $v['can'] = ['decide' => 0, 'escalate' => 0, 'grant' => 0];
@@ -3776,8 +3784,10 @@ function qab_list(PDO $db, array $f = []): array
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
                    o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
                    o.cat_id, ct.name AS cat_name, ct.is_active AS cat_active,
-                   pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
+                   pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name,
+                   o.src_qc_form_id, o.quick_mode, o.vendor_pending, qf.bom_ing_fid AS qc_bom_ing_fid
             FROM qa_abnormal_order o
+            LEFT JOIN qc_check_form qf ON qf.qc_form_id=o.src_qc_form_id
             LEFT JOIN qa_abnormal_cat ct ON ct.cat_id=o.cat_id
             LEFT JOIN `user` cu ON cu.id=o.created_by
             LEFT JOIN `user` dl ON dl.id=o.deleted_by

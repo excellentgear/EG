@@ -749,7 +749,11 @@ function load(){
             return '<tr>'
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + srcLabel(r.source_type) + '</span>'
-                    + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '') + '</td>'
+                    + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '')
+                    + (Number(r.quick_mode) === 1 ? '<br><span class="st st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
+                    + (Number(r.vendor_pending) === 1 ? ' <span class="st st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
+                    + (r.src_qc_form_id && r.qc_bom_ing_fid ? '<br><a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '')
+                    + '</td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
                 + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
                 + '<td>' + esc(r.client_name) + '</td>'
