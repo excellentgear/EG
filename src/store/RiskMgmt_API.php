@@ -254,6 +254,7 @@ if ($action === 'risk_suggest_row') {
     $set = rm_settings($db);
     $r = rm_rule_make_row($db, $set, $c, rm_data_year($db, $year), $year);
     $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
+    if ($lv && empty($lv['action'])) { $r['measure'] = rm_noaction_text($set, (string)$r['ro_kind'], $lv['name']); $r['effect_check'] = ''; }      // 低於因應門檻：不需要措施與成效確認
     jout(['suggest'=>['ro_kind'=>$r['ro_kind'], 'ro_text'=>$r['ro_text'], 'severity'=>$r['severity'], 'frequency'=>$r['frequency'], 'frequency_after'=>rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']), 'measure'=>$r['measure'], 'resources'=>$r['resources'],
                       'effect_check'=>$r['effect_check'], 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why'], 'rule_ids'=>$r['rule_ids']]]);
 }
@@ -470,6 +471,7 @@ if ($action === 'risk_generate') {
                           rm_after_suggest($set, $r['severity'], $r['frequency'], (string)$r['ro_kind'])]);
             $summary[] = ['issue'=>mb_substr((string)$c['issue'], 0, 40), 'category'=>RM_RULE_CATS[$r['category']]['label'], 'level'=>$lv['name'] ?? '', 'why'=>$r['why']];
         }
+        rm_noaction_normalize($db, $set, $docId);      // 不需要因應措施的列：自動帶入說明，不要措施後評估與成效確認
         $db->prepare("UPDATE rm_doc SET updated_at=? WHERE doc_id=?")->execute([$now, $docId]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('產生失敗：' . $e->getMessage(), 500); }
@@ -549,6 +551,17 @@ if ($action === 'doc_save') {
             $row['dimension'] = $dim;
             $row['scope'] = RM_SWOT[$dim]['scope'];            // 內部／外部由象限決定，不採信前端
         } else {
+            // 等級低於「需要因應措施」門檻的列：因應措施自動帶入說明，不需要採取措施後評估與成效確認（相關欄位一律清空，不採信前端送來的值）
+            $noAct = false;
+            if (in_array(($it['ro_kind'] ?? ''), array_keys(RM_RO_KINDS), true) && ($it['severity'] ?? '') !== '' && ($it['frequency'] ?? '') !== '') {
+                $preLv = rm_level_calc($set, (int)$it['severity'], (int)$it['frequency'], (string)$it['ro_kind']);
+                if ($preLv && empty($preLv['action'])) {
+                    $noAct = true;
+                    foreach (['effect_status', 'effect_date', 'effect_ruling', 'effect_evidence', 'effect_check', 'frequency_after'] as $k0) $it[$k0] = '';
+                    $m0 = trim((string)($it['measure'] ?? ''));
+                    if ($m0 === '' || rm_is_noaction_text($m0)) $it['measure'] = rm_noaction_text($set, (string)$it['ro_kind'], $preLv['name']);
+                }
+            }
             $row['ro_kind'] = in_array(($it['ro_kind'] ?? ''), array_keys(RM_RO_KINDS), true) ? $it['ro_kind'] : null;
             $row['ro_text'] = rmS($it['ro_text'] ?? '', 4000);
             $row['measure'] = rmS($it['measure'] ?? '', 4000);
@@ -588,7 +601,7 @@ if ($action === 'doc_save') {
                 if ($isOppRow && $fa < $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的可行性(F)不可低於措施前（採取措施後可行性應提高）');
                 if (!$isOppRow && $fa > $fq) jerr('第 ' . ($n + 1) . ' 列採取措施後的發生率(O)不可高於措施前（採取措施後發生率應降低）');
             }
-            if ($fa === null && $fq !== null && trim((string)($it['measure'] ?? '')) !== '' && $row['ro_kind'] !== null)
+            if ($fa === null && $fq !== null && !$noAct && trim((string)($it['measure'] ?? '')) !== '' && $row['ro_kind'] !== null)
                 jerr('第 ' . ($n + 1) . ' 列已填因應措施，請填寫「採取措施後 風險/機會評估」（可按「依規則帶入建議值」）');
             if ($fa !== null && $sv !== null) {
                 $chk = rm_after_check($set, $sv, $fq, $fa, (string)$row['ro_kind']);

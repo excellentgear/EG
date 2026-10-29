@@ -618,7 +618,7 @@ function rm_after_suggest(array $set, $sev, $freq, string $roKind)
 
 /**
  * 採取措施後的評估是否「真的有改善」：風險等級要降低、機會等級要提高，與改善前相同就沒有改善的意義。
- * 怎麼調整都不可能改善的（例：風險已是最低可能的等級、機會可行性已是最高）不要求。
+ * 沒有改善就一律要求使用者修改（包含已經到頂、怎麼調都無法改善的列：要改因應措施或評估內容，不能以相同等級完成）。
  * @return string  空字串＝通過；否則是要顯示給使用者的原因
  */
 function rm_after_check(array $set, $sev, $freq, $after, string $roKind): string
@@ -627,12 +627,52 @@ function rm_after_check(array $set, $sev, $freq, $after, string $roKind): string
     $a = rm_level_calc($set, $sev, $after, $roKind);
     if (!$b || !$a) return '';
     $opp = $roKind === 'opportunity';
-    $bestF = rm_after_suggest($set, $sev, $freq, $roKind);
-    $best = rm_level_calc($set, $sev, $bestF, $roKind);
-    $canImprove = $best && ($opp ? $best['rank'] > $b['rank'] : $best['rank'] < $b['rank']);
-    if ($canImprove && ($opp ? $a['rank'] <= $b['rank'] : $a['rank'] >= $b['rank']))
-        return '採取措施後的' . ($opp ? '機會等級(' . $a['name'] . ')仍與措施前相同，機會要提高才有改善的意義，請調整可行性(F)' : '風險等級(' . $a['name'] . ')仍不低於措施前，風險要降低才有改善的意義，請調整發生率(O)或修改因應措施');
+    if ($opp ? $a['rank'] <= $b['rank'] : $a['rank'] >= $b['rank'])
+        return '採取措施後的' . ($opp ? '機會等級(' . $a['name'] . ')仍與措施前相同，機會要提高才有改善的意義，請調整可行性(F)或修改把握方案' : '風險等級(' . $a['name'] . ')仍不低於措施前，風險要降低才有改善的意義，請調整發生率(O)或修改因應措施');
     return '';
+}
+
+/** 「需要因應措施」的門檻等級名稱（第一個勾選「需要因應措施」的等級）；沒有任何一級需要時回空字串 */
+function rm_action_threshold(array $set, string $roKind): string
+{
+    foreach (array_values((array)($roKind === 'opportunity' ? $set['rm_opp_levels'] : $set['rm_levels'])) as $lv) if (!empty($lv['action'])) return (string)$lv['name'];
+    return '';
+}
+
+/** 等級低於「需要因應措施」門檻時，因應措施欄自動帶入的說明（這種列不需要採取措施後評估與成效確認） */
+function rm_noaction_text(array $set, string $roKind, string $lvName): string
+{
+    $th = rm_action_threshold($set, $roKind);
+    if ($roKind === 'opportunity')
+        return '機會等級為「' . $lvName . '」，低於需提出把握方案的門檻（' . ($th !== '' ? '「' . $th . '」以上' : '設定的等級') . '），故不另提出把握方案，由權責單位依現有作業掌握。';
+    return '風險等級為「' . $lvName . '」，低於需採取因應措施的門檻（' . ($th !== '' ? '「' . $th . '」以上' : '設定的等級') . '），風險較低，故目前不採取因應措施，依現有作業持續監控；情境有重大變化時再重新評估。';
+}
+
+/** 因應措施欄是不是「系統自動帶入的不需因應說明」（使用者自己寫的不覆蓋） */
+function rm_is_noaction_text(string $t): bool
+{
+    return (bool)preg_match('/^(風險等級為「[^」]*」，低於需採取因應措施的門檻|機會等級為「[^」]*」，低於需提出把握方案的門檻)/u', trim($t));
+}
+
+/**
+ * 一份表單裡「等級低於因應門檻」的列一律整理成：因應措施＝自動說明、不需要採取措施後評估與成效確認（相關欄位清空）。
+ * 使用者自己寫了措施文字的列保留其文字。回傳整理了幾列。
+ */
+function rm_noaction_normalize(PDO $db, array $set, int $docId): int
+{
+    $n = 0;
+    $st = $db->prepare("SELECT item_id, severity, frequency, ro_kind, measure FROM rm_item WHERE doc_id=? AND severity IS NOT NULL AND frequency IS NOT NULL AND ro_kind IS NOT NULL AND ro_kind<>''");
+    $st->execute([$docId]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)$r['ro_kind']);
+        if (!$lv || !empty($lv['action'])) continue;
+        $m = trim((string)$r['measure']);
+        $txt = ($m === '' || rm_is_noaction_text($m)) ? rm_noaction_text($set, (string)$r['ro_kind'], $lv['name']) : $m;
+        $db->prepare("UPDATE rm_item SET measure=?, frequency_after=NULL, effect_check=NULL, effect_status=NULL, effect_date=NULL, effect_ruling=NULL, effect_evidence=NULL WHERE item_id=?")
+           ->execute([$txt, $r['item_id']]);
+        $n++;
+    }
+    return $n;
 }
 
 /** 機會的評估等級／準則（畫面用的顏色一併附上） */

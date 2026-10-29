@@ -639,6 +639,7 @@ function eg_demo_seed(PDO $db, array $opt = []): array
         $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'], $fa['effect_evidence'], (int)$row['item_id']]);
         $effN++;
     }
+    rm_noaction_normalize($db, $set, $riskId);       // 等級低於因應門檻的列：自動說明、不要措施後評估與成效確認
     if ($skipped) $warn[] = $skipped . ($draft ? ' 列的成效目前規則無法判定（資料不足或找不到措施追蹤），只寫入佐證與原因，請確認時人工判斷' : ' 列的成效規則判定為「無效」或「未確認」，沒有寫入確認結果（請人工確認）');
 
     /* ---------- 4. 會議紀錄：內部稽核（事前／結束）與管理審查 ---------- */
@@ -926,6 +927,7 @@ function eg_draft_risk_generate(PDO $db, int $Y, array $user): array
             $db->prepare("UPDATE rm_item SET effect_status=?, effect_date=?, effect_ruling=?, effect_evidence=? WHERE item_id=?")->execute([$fa['effect_status'], $fa['effect_date'], $fa['effect_ruling'], $fa['effect_evidence'], (int)$row['item_id']]);
             $effN++;
         }
+        rm_noaction_normalize($db, $set, $riskId);
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
     return ['year' => $Y, 'doc_id' => $riskId, 'risk_items' => $seq, 'effect_filled' => $effN, 'warn' => $warn];
