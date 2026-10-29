@@ -226,6 +226,10 @@ function qab_ensure_schema(PDO $db): void
         'auto_opened'      => "ADD COLUMN auto_opened TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=系統自動開立（報工NG觸發），非人工手動建立'",
         'auto_open_note'   => "ADD COLUMN auto_open_note VARCHAR(255) NULL COMMENT '自動開立的現場主管解析軌跡（誰不在職、最後選到誰），供追溯'",
         'vendor_pending'   => "ADD COLUMN vendor_pending TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立時該製程站沒登記廠商（暫歸廠內製程類別，補廠商後依廠內/外包自動改類別；補之前不可自動核准結案）'",
+        'disp_by_deputy'   => "ADD COLUMN disp_by_deputy TINYINT(1) NOT NULL DEFAULT 0 COMMENT '處置判定是由不在決策者範圍內的人（第一層／代理）簽的，列印圖章右下角加「代」字'",
+        'quick_l1_by'      => "ADD COLUMN quick_l1_by INT NULL COMMENT '雙層快速決策：第一層動手的人（轉呈或直接裁決）；同一張單這個人不可再簽第二層'",
+        'quick_l1_at'      => "ADD COLUMN quick_l1_at DATETIME NULL",
+        'quick_l1_granted' => "ADD COLUMN quick_l1_granted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=第二層把未開放製程大類的單轉回第一層裁決'",
         'quick_mode'       => "ADD COLUMN quick_mode TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=開單當下走雙層快速決策（略過品管確認閘門，由第一層裁決者決策）'",
         'pm_report_id'     => "ADD COLUMN pm_report_id INT NULL COMMENT '來源報工紀錄 pm_process_daily_report.report_id（報廢扣減下游數量要靠它回推是哪一站發現的）'",
     ];
@@ -1515,7 +1519,18 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
         /* 雙層快速決策：略過「品管確認」閘門（品管備註已在開單當下填過），直接通知第一層裁決者。
            以開單人當作已確認人（qc_review_by），單的狀態直接進入待決策。 */
         $db->prepare("UPDATE qa_abnormal_order SET quick_mode=1, qc_review_by=?, qc_review_at=NOW() WHERE id=?")->execute([$createdBy, $id]);
-        try { qab_notify_quick_l1($db, $id, $desc); } catch (Throwable $e) {}
+        try {
+            // 製程大類有開放給第一層 → 通知第一層；沒開放 → 通知第二層（可自己決策或轉回第一層）
+            $fresh = qab_order($db, $id);
+            $v = $fresh ? qab_quick_view($db, $fresh, 0) : ['open_for_l1' => 1];
+            if (!empty($v['open_for_l1'])) {
+                qab_notify_quick_l1($db, $id, $desc);
+            } else {
+                $pool = qab_quick_l2_pool($db);
+                qab_quick_notify($db, $id, $pool['ids'], '品質異常單待決策（未開放第一層）：' . $created['no'],
+                    $desc . '。此製程大類未開放第一層直接決策，請決策或轉回第一層。');
+            }
+        } catch (Throwable $e) {}
     } else {
         // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策，
         // 與報工路徑同一套「品管確認」閘門（qc_review_by／qc_review_at），只是這裡觸發來源不同。
@@ -2353,6 +2368,207 @@ function qab_quick_cfg_save(PDO $db, array $in): array
     $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l2_user' => $l2, 'l1_ptypes' => array_values($pt), 'actions' => $acts];
     qab_setting_set($db, 'quick_cfg', $new);
     return qab_quick_cfg($db);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   雙層快速決策：裁決流程（2026-10-29 第 3 期）
+   - 第一層（品管部門裁決者）：特採／重工／報廢／轉呈決策；第二層＝決策者分頁選定的一位。
+   - 開放的製程大類：第一層可直接決策；沒開放的，第二層先收到通知，可自己決策或「轉回第一層」。
+   - 第二層請假／整天外出 → 品管檢驗 2.0「異常單處置決策設定」的次要決策者代理。
+   - 同一張單同一個人不可以簽兩層（第一層動過手就不能再當第二層）。
+   - 決策寫入一律走 qab_save_decision(disp)（與既有流程同一條路，報廢單號／扣款／結案全部沿用）；
+     不在「決策者」範圍內的人（第一層）簽，disp_by_deputy=1，列印圖章右下角加「代」。
+   ───────────────────────────────────────────────────────────── */
+function qab_quick_ptype(PDO $db, array $o): int
+{
+    $pn = (int)($o['resp_process_no'] ?? 0);
+    if ($pn <= 0) return 0;
+    $st = $db->prepare("SELECT process_type_id FROM process_no WHERE ProcessNo=?");
+    $st->execute([$pn]);
+    return (int)$st->fetchColumn();
+}
+
+/** 今天整天請假或整天公出在外（沿用會議通知單同一套判定，半天不算不在） */
+function qab_quick_absent(PDO $db, int $uid): bool
+{
+    try {
+        require_once __DIR__ . '/people_lib.php';
+        require_once __DIR__ . '/meeting_lib.php';
+        return meeting_notice_absent_reason($db, $uid, date('Y-m-d')) !== '';
+    } catch (Throwable $e) { return false; }   // 查不到就當有在，寧可讓人能簽也不要卡死
+}
+
+/** 第二層目前可簽的人：本人在就是本人；不在改次要決策者（當天有在的）；全部不在就全部列入以便通知 */
+function qab_quick_l2_pool(PDO $db): array
+{
+    $c = qab_quick_cfg($db);
+    $l2 = (int)$c['l2_user'];
+    if ($l2 > 0 && !qab_quick_absent($db, $l2)) return ['ids' => [$l2], 'deputy' => false, 'none_present' => false];
+    require_once __DIR__ . '/qa_notify.php';
+    $sec = array_values(array_diff(array_map('intval', (array)(eg_qa_decision_setting($db)['secondary'] ?? [])), [$l2]));
+    $present = array_values(array_filter($sec, function ($u) use ($db) { return !qab_quick_absent($db, $u); }));
+    if ($present) return ['ids' => $present, 'deputy' => true, 'none_present' => false];
+    return ['ids' => array_values(array_filter(array_merge([$l2], $sec))), 'deputy' => true, 'none_present' => true];
+}
+
+function qab_quick_names(PDO $db, array $ids): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    $m = [];
+    foreach ($db->query("SELECT id, user_cname FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['id']] = (string)$r['user_cname'];
+    return $m;
+}
+
+/** 這張單的雙層快速決策狀態＋目前登入者能做什麼（畫面與 API 共用同一份判定，鐵律8） */
+function qab_quick_view(PDO $db, array $o, int $uid): array
+{
+    $v = ['on' => 0];
+    if (empty($o['quick_mode'])) return $v;
+    $c = qab_quick_cfg($db);
+    $v['on'] = 1;
+    $decided = !empty($o['disp_ids']) || !empty($o['gm_ids']) || !empty($o['is_closed']) || !empty($o['escalate_gm']) || !empty($o['split_children']);
+    $v['done'] = $decided ? 1 : 0;
+    $ptype = qab_quick_ptype($db, $o);
+    $granted = !empty($o['quick_l1_granted']);
+    $escBy = (int)($o['quick_l1_by'] ?? 0);
+    $open = $granted || ($ptype > 0 && in_array($ptype, $c['l1_ptypes'], true));
+    $wait = ($open && !$escBy) ? 'l1' : 'l2';
+    $pool = qab_quick_l2_pool($db);
+    $names = qab_quick_names($db, array_merge($c['l1_users'], $pool['ids'], [$escBy]));
+    $v['wait'] = $wait;
+    $v['open_for_l1'] = $open ? 1 : 0;
+    $v['ptype'] = $ptype;
+    $v['l1_names'] = array_values(array_map(function ($u) use ($names) { return $names[$u] ?? ''; }, $c['l1_users']));
+    $v['l2_names'] = array_values(array_map(function ($u) use ($names) { return $names[$u] ?? ''; }, $pool['ids']));
+    $v['l2_deputy'] = $pool['deputy'] ? 1 : 0;
+    $v['escalated_by'] = ($escBy > 0 && !$decided) ? ($names[$escBy] ?? '') : '';   // 只有「轉呈後還沒裁決」才顯示
+    $v['actions'] = array_values(array_map(function ($a) { return ['key' => $a['key'], 'name' => $a['name']]; },
+                        array_filter($c['actions'], function ($a) { return $a['active']; })));
+    $v['can'] = ['decide' => 0, 'escalate' => 0, 'grant' => 0];
+    $v['layer'] = ''; $v['why'] = '';
+    if ($decided) return $v;
+    $isL1 = in_array($uid, $c['l1_users'], true);
+    $isL2 = in_array($uid, $pool['ids'], true) || $uid === (int)$c['l2_user'];
+    if ($uid === $escBy && $uid > 0) { $v['why'] = '您已經做過第一層的轉呈，同一張單不可以再簽第二層'; return $v; }
+    if ($wait === 'l1') {
+        if ($isL1) { $v['layer'] = 'l1'; $v['can'] = ['decide' => 1, 'escalate' => 1, 'grant' => 0]; }
+        elseif ($isL2) {   // 第一層全部不在時，第二層可代為決策（互相代理）
+            $allAbsent = true;
+            foreach ($c['l1_users'] as $u) if (!qab_quick_absent($db, $u)) { $allAbsent = false; break; }
+            if ($allAbsent) { $v['layer'] = 'l2'; $v['can'] = ['decide' => 1, 'escalate' => 0, 'grant' => 0]; }
+            else $v['why'] = '這張單現在由第一層裁決（第一層有人在，暫不需要第二層介入）';
+        }
+    } else {
+        if ($isL2) {
+            $v['layer'] = 'l2';
+            $v['can'] = ['decide' => 1, 'escalate' => 0, 'grant' => ($open || $escBy) ? 0 : 1];
+        } elseif ($isL1 && $pool['none_present']) {   // 第二層與次要決策者都不在，第一層代為決策
+            $v['layer'] = 'l2'; $v['can'] = ['decide' => 1, 'escalate' => 0, 'grant' => 0];
+        }
+    }
+    if (!$v['can']['decide'] && $v['why'] === '' && ($isL1 || $isL2)) {
+        $v['why'] = $wait === 'l2' ? '這張單現在由第二層決策' : '';
+    }
+    return $v;
+}
+
+/** 裁決項目 → qa_option(disp) 的 opt_id；沒連結過就依名稱連結／建立一次並存回設定（只在這裡比對名稱，連結後一律用 id） */
+function qab_quick_action_opt(PDO $db, string $key): int
+{
+    $raw = qab_setting_get($db, 'quick_cfg', []);
+    $cfg = qab_quick_cfg($db);
+    $act = null;
+    foreach ($cfg['actions'] as $a) if ($a['key'] === $key) { $act = $a; break; }
+    if (!$act) throw new Exception('找不到這個裁決項目');
+    $optMap = qab_option_map($db);
+    $stored = [];
+    foreach ((array)($raw['actions'] ?? []) as $ra) if (($ra['key'] ?? '') === $key) $stored = $ra;
+    $oid = (int)($stored['opt_id'] ?? 0);
+    if ($oid > 0 && isset($optMap[$oid]) && $optMap[$oid]['kind'] === 'disp') return $oid;
+    $st = $db->prepare("SELECT opt_id FROM qa_option WHERE kind='disp' AND name=? AND is_scrap=? ORDER BY is_active DESC, opt_id LIMIT 1");
+    $st->execute([$act['name'], $act['is_scrap']]);
+    $oid = (int)$st->fetchColumn();
+    if ($oid <= 0) {
+        $db->prepare("INSERT INTO qa_option (kind, name, is_scrap, is_escalate, need_capa, sort_order, is_active)
+                      VALUES ('disp', ?, ?, 0, 0, 90, 1)")->execute([$act['name'], $act['is_scrap']]);
+        $oid = (int)$db->lastInsertId();
+    }
+    $acts = [];
+    foreach ($cfg['actions'] as $a) { if ($a['key'] === $key) $a['opt_id'] = $oid; else { foreach ((array)($raw['actions'] ?? []) as $ra) if (($ra['key'] ?? '') === $a['key']) $a['opt_id'] = (int)($ra['opt_id'] ?? 0); } $acts[] = $a; }
+    $raw = $cfg; $raw['actions'] = $acts;
+    qab_setting_set($db, 'quick_cfg', $raw);
+    return $oid;
+}
+
+/** 通知：$userIds 用 QAB_L1 類型（點擊直接開異常單處理頁） */
+function qab_quick_notify(PDO $db, int $orderId, array $userIds, string $title, string $content, int $exceptUid = 0): void
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $userIds), function ($u) use ($exceptUid) { return $u > 0 && $u !== $exceptUid; })));
+    if (!$ids) return;
+    require_once __DIR__ . '/qa_notify.php';
+    $targets = array_map(function ($u) { return ['type' => 'user', 'id' => $u, 'mode' => 'read']; }, $ids);
+    eg_qa_insert_event($db, $orderId, $title, $content, $targets, null, $exceptUid, [
+        'ref_type' => 'QAB_L1', 'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
+    ]);
+}
+
+/** 裁決後要通知誰：檢驗人員（開單人）＋這個裁決項目設定的部門與人員，扣掉按下的人自己 */
+function qab_quick_result_targets(PDO $db, array $o, array $action): array
+{
+    require_once __DIR__ . '/people_lib.php';
+    $ids = [(int)($o['created_by'] ?? 0)];
+    foreach ($action['notify_users'] as $u) $ids[] = (int)$u;
+    foreach ($action['notify_depts'] as $d) foreach (eg_people_list($db, ['dept_ids' => [(int)$d]]) as $p) $ids[] = (int)$p['id'];
+    return array_values(array_unique(array_filter($ids)));
+}
+
+/**
+ * 第一層／第二層裁決的唯一入口。$act：裁決項目 key／'escalate'（轉呈決策）／'grant'（第二層把單轉回第一層）。
+ * @return array 更新後的 qab_order()
+ */
+function qab_quick_decide(PDO $db, int $orderId, int $uid, string $act, string $note): array
+{
+    $o = qab_order($db, $orderId);
+    if (!$o) throw new Exception('找不到這張異常單');
+    $v = qab_quick_view($db, $o, $uid);
+    if (!$v['on']) throw new Exception('這張單不是雙層快速決策的單');
+    if ($v['done']) throw new Exception('這張單已經有決策了，請重新整理頁面');
+    $no = (string)$o['abnormal_order_no'];
+    $c = qab_quick_cfg($db);
+    if ($act === 'escalate') {
+        if (!$v['can']['escalate']) throw new Exception($v['why'] ?: '您目前不能轉呈決策');
+        $db->prepare("UPDATE qa_abnormal_order SET quick_l1_by=?, quick_l1_at=NOW(), disposition_note=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$uid, trim($note) !== '' ? mb_substr($note, 0, 2000) : null, $uid, $orderId]);
+        $pool = qab_quick_l2_pool($db);
+        qab_quick_notify($db, $orderId, $pool['ids'], '品質異常單轉呈決策：' . $no,
+            '第一層裁決者轉呈，請第二層決策。異常單 ' . $no . ($pool['deputy'] ? '（第二層不在，由代理決策者處理）' : '') . '。', $uid);
+        return qab_order($db, $orderId);
+    }
+    if ($act === 'grant') {
+        if (!$v['can']['grant']) throw new Exception($v['why'] ?: '您目前不能轉回第一層');
+        $db->prepare("UPDATE qa_abnormal_order SET quick_l1_granted=1, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$uid, $orderId]);
+        qab_quick_notify($db, $orderId, $c['l1_users'], '品質異常單轉回第一層：' . $no,
+            '第二層決定由第一層裁決，異常單 ' . $no . ' 請前往裁決。', $uid);
+        return qab_order($db, $orderId);
+    }
+    if (!$v['can']['decide']) throw new Exception($v['why'] ?: '您目前不能裁決這張單');
+    $action = null;
+    foreach ($c['actions'] as $a) if ($a['key'] === $act && $a['active']) { $action = $a; break; }
+    if (!$action) throw new Exception('這個裁決項目不存在或已停用，請重新整理頁面');
+    $oid = qab_quick_action_opt($db, $act);
+    qab_save_decision($db, $orderId, 'disp', [['opt_id' => $oid]], $note, 0, '', $uid);
+    $deputy = qab_user_in_decider($db, $uid, 'decider') ? 0 : 1;   // 不在「決策者」範圍內的人簽＝代，列印圖章右下角加「代」
+    $set = "disp_by_deputy=?"; $par = [$deputy];
+    if ($v['layer'] === 'l1') { $set .= ", quick_l1_by=?, quick_l1_at=NOW()"; $par[] = $uid; }
+    $par[] = $orderId;
+    $db->prepare("UPDATE qa_abnormal_order SET $set WHERE id=?")->execute($par);
+    $who = qab_quick_names($db, [$uid])[$uid] ?? '';
+    qab_quick_notify($db, $orderId, qab_quick_result_targets($db, $o, $action),
+        '品質異常單裁決：' . $no . '（' . $action['name'] . '）',
+        '異常單 ' . $no . ' 已由' . ($v['layer'] === 'l1' ? '第一層' : '第二層') . ($who !== '' ? '（' . $who . '）' : '') . '裁決為「' . $action['name'] . '」。', $uid);
+    return qab_order($db, $orderId);
 }
 
 /** 雙層快速決策是否「現在就能用」：總開關開、有第一層、有第二層、至少一個啟用的裁決項目 */

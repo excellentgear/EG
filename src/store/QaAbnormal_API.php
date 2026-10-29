@@ -148,6 +148,17 @@ case 'auto_open_from_qc': {
                 'vendor_pending' => (int)($r['vendor_pending'] ?? 0), 'quick' => (int)($r['quick'] ?? 0)]);
 }
 
+/* 雙層快速決策：第一層／第二層裁決、轉呈決策、第二層把單轉回第一層（權限判定全在 qab_quick_view） */
+case 'quick_decide': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    $act = trim((string)($_POST['act'] ?? ''));
+    if ($act === '') jerr('缺少裁決項目');
+    try { $fresh = qab_quick_decide($db, (int)$o['id'], $uid, $act, (string)($_POST['note'] ?? '')); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    $log((int)$o['id'], 'quick_decide', '', $act . '（雙層快速決策）');
+    jout(true, ['order' => $fresh, 'quick' => qab_quick_view($db, $fresh, $uid)]);
+}
+
 /* 品管檢驗 2.0 判定 NG 儲存後，問「要不要走自動開單（跳品管備註視窗）」——只回開關狀態，不暴露設定內容 */
 case 'quick_state': {
     jout(true, ['auto' => (qab_quick_ready($db) && !empty($perms['canCreate'])) ? 1 : 0]);
@@ -173,6 +184,7 @@ case 'get': {
         // 「這一輪是不是我可以回覆」前端要用：本人掛在哪些部門
         'my_dept_ids'  => qab_user_dept_ids($db, $uid),
         // 相關單位意見：各部門的預設回覆職稱（勾部門時自動帶入）＋部門清單
+        'quick'        => qab_quick_view($db, $o, $uid),   // 雙層快速決策：這張單的狀態與我能做什麼
         'ask_cfg'      => qab_ask_cfg($db),
         'ask_slots'    => qab_ask_slots(),
         'depts'        => $db->query("SELECT id, name AS department_name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),

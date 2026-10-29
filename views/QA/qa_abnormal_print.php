@@ -343,7 +343,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         } ?></td>
         <td class="sig" rowspan="2">
             <div class="cap"><b>(業務/品管)</b><b>主管：</b></div>
-            <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
+            <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>" data-deputy="<?= !empty($o['disp_by_deputy']) ? 1 : '' ?>"></div>
         </td>
     </tr>
     <tr>
