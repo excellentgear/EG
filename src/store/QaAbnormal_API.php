@@ -169,9 +169,13 @@ case 'get': {
     $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
     $o = qab_order($db, $id);
     if (!$o) jerr('找不到這張異常單');
+    // 雙層快速決策：第二層（或第二層不在時的代理）這張單可以用原本的決策選項，所以把 canDecide 視為成立
+    $quickV = qab_quick_view($db, $o, $uid);
+    $permsOut = $perms;
+    if ($quickV['on'] && !$quickV['done'] && $quickV['layer'] === 'l2' && !empty($quickV['can']['decide'])) $permsOut['canDecide'] = true;
     jout(true, [
         'order'     => $o,
-        'perms'     => $perms,
+        'perms'     => $permsOut,
         'can_edit'  => qab_can_edit_form($db, $perms, $o),
         'causes'    => qab_cause_tree($db, true),
         'cats'      => qab_cats($db, false),        // 含停用：舊單指到停用分類時下拉要選得出來
@@ -184,7 +188,7 @@ case 'get': {
         // 「這一輪是不是我可以回覆」前端要用：本人掛在哪些部門
         'my_dept_ids'  => qab_user_dept_ids($db, $uid),
         // 相關單位意見：各部門的預設回覆職稱（勾部門時自動帶入）＋部門清單
-        'quick'        => qab_quick_view($db, $o, $uid),   // 雙層快速決策：這張單的狀態與我能做什麼
+        'quick'        => $quickV,   // 雙層快速決策：這張單的狀態與我能做什麼
         'ask_cfg'      => qab_ask_cfg($db),
         'ask_slots'    => qab_ask_slots(),
         'depts'        => $db->query("SELECT id, name AS department_name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
@@ -651,7 +655,10 @@ case 'save_disposition': {
     /* 補資料的單（填寫日期在今日往前 N 天以前）由「異常單管理員」在補登簽章區一次補完結果與簽章，
        不必再跑一次正常的決策流程——使用者要求「補登簽章內就可以直接補結果跟內容」。 */
     $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
-    if (!$perms['canDecide'] && !$bfMode) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
+    // 雙層快速決策的第二層（含第二層不在時的代理）用這個入口做決策，權限看 qab_quick_view（唯一判定）
+    $qv = qab_quick_view($db, $o, $uid);
+    $quickL2 = ($qv['on'] && !$qv['done'] && $qv['layer'] === 'l2' && !empty($qv['can']['decide']));
+    if (!$perms['canDecide'] && !$quickL2 && !$bfMode) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
     $id = (int)$o['id'];
     [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST, $uid);
     $dispNote = $strOrNull($_POST['disposition_note'] ?? '', 2000);
@@ -679,6 +686,7 @@ case 'save_disposition': {
                     $targets, null, $uid, ['url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
             }
         } catch (Throwable $e) {}
+        if (!empty($o['quick_mode']) && !$bfMode) $db->prepare("UPDATE qa_abnormal_order SET disp_by_deputy=? WHERE id=?")->execute([qab_user_in_decider($db, $uid, 'decider') ? 0 : 1, $id]);
         $log($id, 'disposition', implode('、', $o['disp_names']), '（轉' . qab_gm_label($db) . '裁示）');
         jout(true, ['order' => qab_order($db, $id)]);
     }
@@ -689,6 +697,11 @@ case 'save_disposition': {
     try {
         $res = qab_save_decision($db, $id, 'disp', $itemsIn, (string)$dispNote, $signBy, $signAt, $uid);
     } catch (Throwable $e) { jerr($e->getMessage()); }
+    if (!empty($o['quick_mode']) && !$bfMode) {
+        $db->prepare("UPDATE qa_abnormal_order SET disp_by_deputy=? WHERE id=?")->execute([qab_user_in_decider($db, $uid, 'decider') ? 0 : 1, $id]);
+        $res['order'] = qab_order($db, $id);
+        try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, $quickL2 ? '第二層' : '決策者'); } catch (Throwable $e) {}
+    }
     if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（處置方式改為非報廢，收回暫時保留的報廢單號）');
     $optMap = qab_option_map($db);
     $itemNames = array_map(function ($it) use ($optMap) { return $optMap[(int)$it['opt_id']]['name'] ?? ''; }, $itemsIn);
@@ -714,6 +727,9 @@ case 'save_gm': {
             'gm_deduct' => !empty($_POST['gm_deduct']), 'capa_order_no' => (string)($_POST['capa_order_no'] ?? ''), 'gm_by_deputy' => $byDeputy,
         ]);
     } catch (Throwable $e) { jerr($e->getMessage()); }
+    if (!empty($o['quick_mode']) && !$bfMode) {
+        try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, qab_gm_label($db)); } catch (Throwable $e) {}
+    }
     if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（最終裁示改為非報廢，收回暫時保留的報廢單號）');
     $optMap = qab_option_map($db);
     $itemNames = array_map(function ($it) use ($optMap) { return $optMap[(int)$it['opt_id']]['name'] ?? ''; }, $itemsIn);

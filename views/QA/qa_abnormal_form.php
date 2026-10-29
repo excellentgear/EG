@@ -85,6 +85,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         .fld input:disabled, .fld select:disabled, .fld textarea:disabled { background:#EFE9DC; color:#a89a86; cursor:not-allowed; }
         .fld textarea.qc-editable:not(:disabled) { border-color:var(--amber-d); background:#FFFDF5; box-shadow:0 0 0 1px var(--amber-d) inset; }
         .ro-note { font-size:12px; color:#8a7560; }
+        .qk-ro { padding:3px 0; min-height:20px; color:var(--ink); font-size:13px; white-space:pre-wrap; word-break:break-all; }
         .muted-help { font-size:12px; color:#8a7560; }
         .note-box { font-size:12px; color:var(--ink2); background:var(--cream); border:1px solid var(--line);
                     border-radius:6px; padding:7px 10px; margin-bottom:8px; line-height:1.7; }
@@ -406,16 +407,15 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <span class="saved" id="savedDisp"></span>
                 </h4>
                 <div class="sec-body">
-                    <!-- 雙層快速決策（2026-10-29）：只有品管檢驗2.0自動開立、且走快速決策的單才會出現 -->
-                    <div id="quickBox" style="display:none;margin-bottom:10px;padding:10px 12px;border:1px solid var(--amber-d);border-radius:6px;background:#FFF6E8;">
-                        <div style="font-weight:bold;margin-bottom:4px;"><i class="fa fa-bolt"></i> 雙層快速決策 <span class="muted-help" id="quickWait" style="font-weight:normal;"></span></div>
-                        <div class="muted-help" id="quickWho"></div>
-                        <div id="quickAct" style="display:none;margin-top:8px;">
-                            <div class="fld"><label>裁決說明（選填）</label><textarea id="quickNote" rows="2"></textarea></div>
+                    <!-- 雙層快速決策（2026-10-29）：精簡成一行文字；第一層才有裁決按鈕，第二層用下方原本的決策選項 -->
+                    <div id="quickBox" style="display:none;margin-bottom:8px;font-size:13px;color:var(--ink2);">
+                        <div id="quickLine"></div>
+                        <div id="quickAct" style="display:none;margin-top:6px;">
+                            <textarea id="quickNote" rows="1" placeholder="裁決說明（選填）" style="width:100%;border:1px solid var(--line);border-radius:4px;padding:3px 6px;"></textarea>
                             <div id="quickBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
                         </div>
-                        <div class="ro-note" id="quickWhy" style="margin-top:6px;"></div>
-                        <div id="quickQc" style="display:none;margin-top:6px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看品管檢驗表 2.0 的相關檢驗紀錄</a></div>
+                        <div class="muted-help" id="quickWhy" style="margin-top:4px;"></div>
+                        <div id="quickQc" style="display:none;margin-top:4px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看相關檢驗紀錄</a></div>
                     </div>
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;">
@@ -872,35 +872,58 @@ $(document).on('click', '.att-del', function(){
 });
 
 /* ───────── 畫面 ───────── */
-/* 雙層快速決策區塊：狀態一律由後端 D.quick 決定（權限判定在 qab_quick_view，這裡只負責畫） */
+/* 雙層快速決策區塊：狀態一律由後端 D.quick 決定（權限判定在 qab_quick_view，這裡只負責畫）。
+   第一層：特採／報廢／重工／轉呈決策按鈕；第二層：用下方原本的決策選項（含轉技術課主管裁示），這裡只留「轉回第一層」。 */
 function renderQuickBox(){
     var q = D.quick || {};
     if (!q.on) { $('#quickBox').hide(); return; }
     $('#quickBox').show();
-    var waitTxt = Number(q.done) ? '（已裁決）' : (q.wait === 'l1' ? '（目前由第一層裁決）' : '（目前由第二層決策）');
-    $('#quickWait').text(waitTxt);
-    var who = '第一層：' + (q.l1_names || []).filter(Boolean).join('、') + '　第二層：' + (q.l2_names || []).filter(Boolean).join('、')
-        + (Number(q.l2_deputy) ? '（代理）' : '');
-    if (q.escalated_by) who += '　已由 ' + q.escalated_by + ' 轉呈決策';
-    if (!Number(q.open_for_l1) && !Number(q.done)) who += '　此製程大類未開放第一層直接決策';
-    if (Number(q.done) && D.order && (D.order.disp_names || []).length) {
-        who += '　裁決結果：' + D.order.disp_names.join('、') + (D.order.decided_name ? '（' + D.order.decided_name + (Number(D.order.disp_by_deputy) ? ' 代' : '') + '）' : '');
+    var done = Number(q.done) === 1, o = D.order || {};
+    var state;
+    if (done) {
+        state = (o.disp_names || []).length
+            ? ('裁決：' + o.disp_names.join('、') + (o.decided_name ? '（' + o.decided_name + (Number(o.disp_by_deputy) ? ' 代' : '') + '）' : ''))
+            : (Number(o.escalate_gm) ? '已轉呈技術課主管裁示' : '已裁決');
+    } else {
+        state = (q.wait === 'l1' ? '目前由第一層裁決' : '目前由第二層決策');
+        if (!Number(q.open_for_l1)) state += '（此製程大類未開放第一層）';
+        if (q.escalated_by) state += '，' + q.escalated_by + ' 已轉呈';
     }
-    $('#quickWho').text(who);
-    // 沒有舊流程決策權的人（第一層）只看新的快速決策區塊，不顯示底下那組灰掉的舊處置選項，免得混淆
-    var hideOld = !D.perms.canDecide && !D.perms.canAdmin;
+    $('#quickLine').html('<b>雙層快速決策</b>　第一層：' + esc((q.l1_names || []).filter(Boolean).join('、'))
+        + '　第二層：' + esc((q.l2_names || []).filter(Boolean).join('、')) + (Number(q.l2_deputy) ? '（代理）' : '')
+        + '　｜　' + esc(state));
+    var can = q.can || {}, l1Acting = q.layer === 'l1';
+    // 第一層只看快速決策按鈕；第二層／管理員／其他有決策權的人看原本的決策選項
+    var hideOld = l1Acting || (!D.perms.canDecide && !D.perms.canAdmin);
     $('#dispOptsWrap').toggle(!hideOld);
     $('#f_escalate_gm').closest('label').toggle(!hideOld);
-    var can = q.can || {};
-    var show = !Number(q.done) && (can.decide || can.escalate || can.grant);
-    $('#quickAct').toggle(!!show);
     var h = '';
-    if (can.decide) (q.actions || []).forEach(function(a){ h += '<button class="btn btn-warm btn-sm" data-qact="' + esc(a.key) + '">' + esc(a.name) + '</button>'; });
-    if (can.escalate) h += '<button class="btn btn-warm-o btn-sm" data-qact="escalate">轉呈決策（交第二層）</button>';
-    if (can.grant) h += '<button class="btn btn-warm-o btn-sm" data-qact="grant">轉回第一層決策</button>';
+    if (!done && l1Acting && can.decide) (q.actions || []).forEach(function(a){ h += '<button class="btn btn-warm btn-sm" data-qact="' + esc(a.key) + '">' + esc(a.name) + '</button>'; });
+    if (!done && l1Acting && can.escalate) h += '<button class="btn btn-warm-o btn-sm" data-qact="escalate">轉呈決策</button>';
+    if (!done && can.grant) h += '<button class="btn btn-warm-o btn-sm" data-qact="grant">轉回第一層決策</button>';
     $('#quickBtns').html(h);
-    $('#quickWhy').text(show ? '' : (q.why || ''));
+    $('#quickAct').toggle(!!h);
+    $('#quickNote').toggle(l1Acting);
+    $('#quickWhy').text(h || done ? '' : (q.why || ''));
     $('#quickQc').toggle(!!q.qc_url); if (q.qc_url) $('#quickQcLink').attr('href', q.qc_url);
+}
+/* 雙層快速決策的單：不可更改的欄位直接顯示文字，不要灰掉的輸入框（畫面精簡）。
+   只加一個純顯示元素＋把原控制項藏起來（值仍在，存檔照舊讀得到）；每次 render 後重做。 */
+function textifyLocked(){
+    $('.qk-ro').remove();
+    $('[data-qk-hid]').show().removeAttr('data-qk-hid');
+    if (!(D.order && Number(D.order.quick_mode))) return;
+    $('#formBox .fld').each(function(){
+        $(this).find('input, select, textarea').each(function(){
+            var $c = $(this), t = ($c.attr('type') || '').toLowerCase();
+            if (t === 'checkbox' || t === 'radio' || t === 'hidden' || t === 'button' || t === 'file') return;
+            if (!($c.prop('disabled') || $c.prop('readonly'))) return;
+            if ($c.css('display') === 'none' || !$c.closest('.fld').is(':visible')) return;
+            var v = $c.is('select') ? $.trim($c.find('option:selected').text()) : $.trim($c.val());
+            if ($c.is('select') && $c.val() === '') v = '';
+            $c.attr('data-qk-hid', 1).hide().after('<div class="qk-ro">' + (v !== '' ? esc(v) : '—') + '</div>');
+        });
+    });
 }
 $(document).on('click', '#quickBtns [data-qact]', function(){
     var act = $(this).attr('data-qact'), name = $.trim($(this).text());
@@ -1132,6 +1155,7 @@ function render(){
     var escalating = Number(o.escalate_gm) === 1;
     $('#dispOptsWrap').toggle(!escalating);
     renderQuickBox();
+    setTimeout(textifyLocked, 0);
     $('#dispNoPerm').toggle(!p.canDecide && !(D.quick && D.quick.on)).text('您不在可決策的名單內（由管理員在清單頁「設定 → 決策者」指定部門與職稱）。');
     $('#dispWho').text(o.decided_name ? ('決策：' + o.decided_name + '　' + dispDate(o.disp_decided_at)) : '');
     refreshDecQty('disp');

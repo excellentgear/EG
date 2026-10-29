@@ -2545,6 +2545,43 @@ function qab_quick_result_targets(PDO $db, array $o, array $action): array
 }
 
 /**
+ * 雙層快速決策的單，用「原本的決策選項」（異常處置方式／技術課主管裁示）做完決策後，照設定通知：
+ * 檢驗人員（開單人）＋各裁決項目設定的部門與人員。選項與裁決項目的對應：先看設定裡已連結的 opt_id，
+ * 沒連結就看名稱＋是否報廢（唯讀比對，不會新增選項）。對應不到任何裁決項目時，仍通知檢驗人員。
+ */
+function qab_quick_notify_decision(PDO $db, int $orderId, array $optIds, int $actorUid, string $whoText): void
+{
+    $o = qab_order($db, $orderId);
+    if (!$o || empty($o['quick_mode'])) return;
+    $optMap = qab_option_map($db);
+    $c = qab_quick_cfg($db);
+    $raw = qab_setting_get($db, 'quick_cfg', []);
+    $stored = [];
+    foreach ((array)($raw['actions'] ?? []) as $ra) $stored[(string)($ra['key'] ?? '')] = (int)($ra['opt_id'] ?? 0);
+    $targets = []; $names = [];
+    foreach ($c['actions'] as $a) {
+        if (!$a['active']) continue;
+        foreach ($optIds as $oi) {
+            $oi = (int)$oi;
+            if (!isset($optMap[$oi])) continue;
+            if (($stored[$a['key']] ?? 0) === $oi || ($optMap[$oi]['name'] === $a['name'] && (int)$optMap[$oi]['is_scrap'] === (int)$a['is_scrap'])) {
+                $targets = array_merge($targets, qab_quick_result_targets($db, $o, $a));
+                $names[] = $a['name'];
+                break;
+            }
+        }
+    }
+    if (!$names) {
+        $targets = [(int)$o['created_by']];
+        foreach ($optIds as $oi) if (isset($optMap[(int)$oi])) $names[] = $optMap[(int)$oi]['name'];
+    }
+    $no = (string)$o['abnormal_order_no'];
+    $nm = implode('、', array_unique($names));
+    qab_quick_notify($db, $orderId, $targets, '品質異常單裁決：' . $no . '（' . $nm . '）',
+        '異常單 ' . $no . ' 已由' . $whoText . '裁決為「' . $nm . '」。', $actorUid);
+}
+
+/**
  * 第一層／第二層裁決的唯一入口。$act：裁決項目 key／'escalate'（轉呈決策）／'grant'（第二層把單轉回第一層）。
  * @return array 更新後的 qab_order()
  */
@@ -2640,7 +2677,7 @@ function qab_quick_auto_scrap(PDO $db, int $id, int $scrapQty, int $createdBy, s
     if ($opt <= 0) {
         return ['auto_closed' => 0, 'vendor_pending' => 0];   // 沒有任何報廢處置可用，留給人工處理
     }
-    qab_save_decision($db, $id, 'disp', [['opt_id' => $opt]], '廠商提報報廢，系統依雙層快速決策自動核准', 0, '', $actor);
+    qab_save_decision($db, $id, 'disp', [['opt_id' => $opt]], '廠商提報報廢', 0, '', $actor);
     $dep = qab_user_in_decider($db, $actor, 'decider') ? 0 : 1;
     $set = "disp_by_deputy=?"; $par = [$dep];
     if ($layer === 'l1') { $set .= ", quick_l1_by=?, quick_l1_at=NOW()"; $par[] = $actor; }
