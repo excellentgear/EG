@@ -426,7 +426,7 @@ $perms  = rm_perms($db, $rmUser);
             <h6 style="margin:8px 0 3px;color:#8A5A2B;">預期效益(B)分析（表B-2）</h6><div id="setOppBen"></div>
             <h6 style="margin:8px 0 3px;color:#8A5A2B;">可行性(F)分析（表C-2）</h6><div id="setOppFeas"></div>
             <h6 style="margin:8px 0 3px;color:#8A5A2B;">機會等級準則（表A-2）：評分＝預期效益(B)等級 × 可行性(F)等級</h6><div id="setOppLvl"></div>
-            <div class="hint">預期效益(B)與可行性(F)固定各 3 級（只可改名稱與說明）；機會等級固定 4 級，<b>第一級從 1 分起算、最後一級固定到最高分，每一級的下限＝上一級上限＋1</b>，勾選「需要因應措施」的等級，儲存時若沒有風險與機會編號會自動配發（O 開頭）。</div></div>
+            <div class="hint">預期效益(B)與可行性(F)固定各 4 級（只可改名稱與說明）；機會等級固定 4 級，<b>第一級從 1 分起算、最後一級固定到最高分，每一級的下限＝上一級上限＋1</b>，勾選「需要因應措施」的等級，儲存時若沒有風險與機會編號會自動配發（O 開頭）。</div></div>
         <div class="set-sec"><h5>填表人可選擇的部門</h5>
             <div class="fld" id="setMakerDepts" style="display:flex;flex-wrap:wrap;gap:4px 16px;"></div>
             <div class="hint">勾選後，兩張表的「填表人」下拉只列這些部門（含下轄）在填表日期當天任職的人，避免選錯；<b>一個都不勾＝不限部門</b>。兼任者的每一個職務都會各列一列。</div></div>
@@ -1028,8 +1028,8 @@ function renderRiskInline(doc){
         var S = META.settings, draft = +res.doc.is_draft, CS = 9;
         var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
             + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張；每一項上面一列是重點，下面幾列是相關資料（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）。</span></h4>'
-            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:8%;"><col style="width:17%;"><col style="width:6%;"><col style="width:10%;"><col style="width:9%;"><col style="width:12%;"><col style="width:21%;"><col style="width:8%;"><col style="width:9%;"></colgroup>'
-            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S) / 預期效益(B)<br>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th><th>採取措施後<br>發生率(O) / 可行性(F)與等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
+            + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:8%;"><col style="width:17%;"><col style="width:6%;"><col style="width:10%;"><col style="width:9%;"><col style="width:21%;"><col style="width:12%;"><col style="width:8%;"><col style="width:9%;"></colgroup>'
+            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S) / 預期效益(B)<br>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th><th>因應措施</th><th>採取措施後<br>發生率(O) / 可行性(F)與等級</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
         // 下面幾列不對齊上面的欄位：整列一格、標題接在內容前面，不留空白
         var sub = function(lb, html){ return '<tr class="sub"><td colspan="' + CS + '"><b class="sl">' + lb + '</b>' + html + '</td></tr>'; };
         $.each(res.items, function(i, it){
@@ -1042,8 +1042,9 @@ function renderRiskInline(doc){
               + '<td><span class="rk-kind ' + cls + '">' + (opp ? '機會' : '風險') + '</span></td>'
               + '<td>' + esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) + '<br>' + esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency)) + '</td>'
               + '<td>' + lvBadge(it.level, true) + '</td>'
+              + '<td style="white-space:pre-wrap;">' + esc(it.measure || '—') + '</td>'
               + '<td>' + (it.level_after ? esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency_after)) + '<br>' + lvBadge(it.level_after, true) : '<span class="hint">—</span>') + '</td>'
-              + '<td style="white-space:pre-wrap;">' + esc(it.measure || '—') + '</td><td>' + fuTxt + '</td><td>' + eff + '</td></tr>';
+              + '<td>' + fuTxt + '</td><td>' + eff + '</td></tr>';
             h += sub('利害關係者／需求與期望：', esc((it.stakeholder || '—') + '　／　' + (it.needs || '—')) + '　<span class="hint">（' + esc(META.scopes[it.scope] || '') + '議題）</span>');
             if (it.ro_text) h += sub('對組織的影響說明：', esc(it.ro_text));
             if (it.tracks && it.tracks.length) h += sub('相關措施追蹤：', trackHtml(it));
@@ -1085,8 +1086,8 @@ function colsOf(kind){
     if (kind === 'context') return [['seq','編號',52],['scope','內/外部議題',100],['dimension','構面',130],['stakeholder','利害關係者',150],
         ['needs','需求與期望',230],['issue','議題描述',300],['op','',44]];
     return [['seq','編號',52],['scope','內/外部議題',96],['stakeholder','利害關係者',130],['needs','需求與期望',170],['issue','議題描述',210],
-        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['sev2','',112],['frequency_after','',112],['level2','',92],['confirm_no','風險與機會編號',104],
-        ['measure','因應措施',200],['recheck','重新評估',150],['effect','成效確認',170],['op','',44]];
+        ['ro_text','對組織的影響說明',210],['ro_kind','風險與機會',92],['severity','嚴重度(S)',112],['frequency','發生率(O)',112],['level','風險等級',92],['confirm_no','風險與機會編號',104],
+        ['measure','因應措施',200],['sev2','',112],['frequency_after','',112],['level2','',92],['recheck','重新評估',150],['effect','成效確認',170],['op','',44]];
 }
 function scaleOptions(list, val){
     var h = '<option value="">—</option>';
@@ -1229,7 +1230,7 @@ function buildTable(kind, items){
     var h = '<colgroup>' + cols.map(function(c){ return '<col style="width:' + c[2] + 'px;">'; }).join('') + '</colgroup><thead>';
     if (kind === 'risk'){
         h += '<tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取措施後 風險/機會評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
+          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th colspan="3">採取措施後 風險/機會評估</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
           + '<tr><th>嚴重度(S) / 預期效益(B)</th><th>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th><th>嚴重度(S) / 預期效益(B)</th><th>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th></tr>';
     } else {
         h += '<tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
@@ -1805,7 +1806,7 @@ function previewDist(){
     });
     $('#setDist').html(h + '</tbody></table>');
 }
-/* ---- 機會的評估準則：預期效益(B)／可行性(F)（固定 3 級，只改名稱與說明）、機會等級（固定 4 級，評分區間） ---- */
+/* ---- 機會的評估準則：預期效益(B)／可行性(F)（固定 4 級，只改名稱與說明）、機會等級（固定 4 級，評分區間） ---- */
 function oppTblHtml(key, tbl){
     var t = '<table class="rm-table fld" data-opptbl="' + key + '"><thead><tr><th style="width:64px;">等級</th><th style="width:110px;">名稱</th>';
     $.each(tbl.columns, function(_, c){ t += '<th>' + esc(c) + '</th>'; });
@@ -2117,8 +2118,8 @@ function measurePrint(it){
     if (it.recheck_note) h += '<br><span style="color:#444;">【重新評估 ' + esc(dispDate(it.recheck_date)) + '】' + esc(it.recheck_note).replace(/\n/g, '<br>') + '</span>';
     return h;
 }
-var RISK_COLG = '<colgroup><col style="width:38px;"><col style="width:56px;"><col style="width:92px;"><col style="width:122px;"><col style="width:142px;"><col style="width:132px;"><col style="width:54px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:78px;"><col><col></colgroup>';
-var RISK_THEAD = '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th><th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取措施後<br>風險/機會評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr><tr><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th></tr></thead>';
+var RISK_COLG = '<colgroup><col style="width:38px;"><col style="width:56px;"><col style="width:92px;"><col style="width:122px;"><col style="width:142px;"><col style="width:132px;"><col style="width:54px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:78px;"><col><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col></colgroup>';
+var RISK_THEAD = '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th><th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th colspan="3">採取措施後<br>風險/機會評估</th><th rowspan="2">成效確認</th></tr><tr><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th></tr></thead>';
 function scaleLabel(list, v){
     if (v === '' || v == null) return '';
     var t = String(v); $.each(list, function(_, r){ if (+r.v === +v) t = r.v + ' ' + r.label; }); return t;
@@ -2137,9 +2138,11 @@ function printDoc(docId){
                     + '<td class="l">' + esc(it.ro_text) + '</td><td>' + esc(META.ro_kinds[it.ro_kind] || '') + '</td>'
                     + '<td>' + esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) + '</td><td>' + esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency)) + '</td>'
                     + '<td>' + lvWrap(lv) + '</td>'
+                    + '<td>' + esc(it.confirm_no) + '</td>'
+                    + '<td class="l">' + measurePrint(it) + '</td>'
                     + '<td>' + (it.level_after ? esc(scaleLabel(sevListFor(it.ro_kind, S), it.severity)) : '') + '</td><td>' + (it.level_after ? esc(scaleLabel(frqListFor(it.ro_kind, S), it.frequency_after)) : '') + '</td>'
-                    + '<td>' + lvWrap(lvA) + '</td><td>' + esc(it.confirm_no) + '</td>'
-                    + '<td class="l">' + measurePrint(it) + '</td><td class="l">' + effectPrint(it) + '</td></tr>';
+                    + '<td>' + lvWrap(lvA) + '</td>'
+                    + '<td class="l">' + effectPrint(it) + '</td></tr>';
             }
         });
         var head = '<div class="pt-head"><div class="co">' + esc(meta.company) + '</div><div class="tt">' + esc(meta.doc_name || kindName(kind)) + '</div></div>'

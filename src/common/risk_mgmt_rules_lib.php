@@ -480,6 +480,10 @@ function rm_rule_make_row(PDO $db, array $set, array $ctx, int $dataYear, ?int $
         $metric = str_replace('回升並維持達標', '逐月回升並朝年度目標邁進', $metric);
     }
     $ro = ((string)($ctx['dimension'] ?? '') === 'O' || $c['ro'] === 'opportunity') ? 'opportunity' : 'risk';
+    if ($ro === 'opportunity') {      // 機會用自己的評估項目：預期效益(B)／可行性(F)
+        $sev = rm_rule_frac_to_v(array_values($set['rm_opp_benefit']['rows']), $sevF); $occ = rm_rule_frac_to_v(array_values($set['rm_opp_feas']['rows']), $occF);
+        $why[count($why) - 1] = '預期效益(B)比例 ' . rm_sg_f($sevF * 100, 0) . '% → 第 ' . $sev . ' 級；可行性(F)比例 ' . rm_sg_f($occF * 100, 0) . '% → 第 ' . $occ . ' 級';
+    }
     return ['category'=>$cat, 'ro_kind'=>$ro, 'ro_text'=>$c['impact'], 'severity'=>$sev, 'frequency'=>$occ, 'measure'=>$measure, 'resources'=>str_replace('；', "\n", RM_RULE_RESOURCES[$cat] ?? RM_RULE_RESOURCES['generic']),
             'effect_check'=>trim($metric), 'rule_ids'=>implode(',', array_values(array_unique($ids))), 'why'=>$why];
 }
