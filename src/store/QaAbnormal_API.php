@@ -464,7 +464,10 @@ case 'save_head': {
 /* ═══════════ 異常原因分類（結案前可改；填表人或有權限者） ═══════════ */
 case 'save_cause': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
-    if (!qab_can_edit_form($db, $perms, $o) && !$perms['canDecide']) jerr('沒有修改異常原因分類的權限');
+    // 雙層快速決策：第一層／第二層（含代理）決策前要能填異常原因分類（報工開立的單由決策者填）
+    $qvC = qab_quick_view($db, $o, $uid);
+    $quickCause = ($qvC['on'] && !$qvC['done'] && !empty($qvC['can']['decide']));
+    if (!qab_can_edit_form($db, $perms, $o) && !$perms['canDecide'] && !$quickCause) jerr('沒有修改異常原因分類的權限');
     $id = (int)$o['id'];
     $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['cause_ids'] ?? '[]'), true) ?: [])));
     $map = qab_cause_map($db);
@@ -668,6 +671,10 @@ case 'save_disposition': {
     $qv = qab_quick_view($db, $o, $uid);
     $quickL2 = ($qv['on'] && !$qv['done'] && $qv['layer'] === 'l2' && !empty($qv['can']['decide']));
     if (!$perms['canDecide'] && !$quickL2 && !$bfMode) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
+    // 廠內報工開立的快速決策單：決策者要先填異常原因分類才能決策（補資料模式不受限）
+    if (!$bfMode && !empty($o['quick_mode']) && (int)($o['pm_report_id'] ?? 0) > 0 && empty($o['cause_ids'])) {
+        jerr('報工開立的單，請先在下方「異常原因分類」選擇分類，再做決策', 'CAUSE_REQUIRED');
+    }
     $id = (int)$o['id'];
     [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST, $uid);
     $dispNote = $strOrNull($_POST['disposition_note'] ?? '', 2000);

@@ -2462,6 +2462,9 @@ function qab_quick_view(PDO $db, array $o, int $uid): array
     $pool = qab_quick_l2_pool($db);
     $names = qab_quick_names($db, array_merge($c['l1_users'], $pool['ids'], [$escBy]));
     $v['wait'] = $wait;
+    // 廠內報工自動開立的單：異常原因分類要由決策者（第一層或第二層）填寫，填好才能裁決
+    $v['cause_required'] = ((int)($o['pm_report_id'] ?? 0) > 0) ? 1 : 0;
+    $v['has_cause'] = !empty($o['cause_ids']) ? 1 : 0;
     $v['open_for_l1'] = $open ? 1 : 0;
     $v['ptype'] = $ptype;
     $v['l1_names'] = array_values(array_map(function ($u) use ($names) { return $names[$u] ?? ''; }, $c['l1_users']));
@@ -2623,6 +2626,7 @@ function qab_quick_decide(PDO $db, int $orderId, int $uid, string $act, string $
         return qab_order($db, $orderId);
     }
     if (!$v['can']['decide']) throw new Exception($v['why'] ?: '您目前不能裁決這張單');
+    if (!empty($v['cause_required']) && empty($v['has_cause'])) throw new Exception('報工開立的單，請先由決策者在下方填寫「異常原因分類」，再做裁決');
     $action = null;
     foreach ($c['actions'] as $a) if ($a['key'] === $act && $a['active']) { $action = $a; break; }
     if (!$action) throw new Exception('這個裁決項目不存在或已停用，請重新整理頁面');

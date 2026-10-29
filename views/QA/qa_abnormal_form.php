@@ -420,6 +420,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <div id="quickBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
                         </div>
                         <label id="quickAsk" style="display:none;margin:6px 0 0;font-weight:normal;"><input type="checkbox" id="qkAskChk" style="width:auto;margin-right:4px;"> 送相關單位填寫意見<span class="muted-help"> （決策前、決策後都可以填，結案前要回完）</span></label>
+                        <div id="quickCause" style="display:none;margin-top:4px;color:var(--coral);font-weight:bold;"><i class="fa fa-exclamation-circle"></i> 報工開立的單：請先在下方「異常原因分類」選擇分類（由決策者填寫），再做決策。</div>
                         <div class="muted-help" id="quickWhy" style="margin-top:4px;"></div>
                         <div id="quickQc" style="display:none;margin-top:4px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看相關檢驗紀錄</a></div>
                     </div>
@@ -911,6 +912,9 @@ function renderQuickBox(){
     $('#quickAct').toggle(!!h);
     $('#quickNote').toggle(l1Acting);
     $('#quickWhy').text(h || done ? '' : (q.why || ''));
+    // 報工開立的單：原因分類沒填之前，提醒決策者先填（後端也擋）
+    var needCause = !done && Number(q.cause_required) === 1 && Number(q.has_cause) !== 1 && (can.decide || D.perms.canDecide);
+    $('#quickCause').toggle(!!needCause);
     $('#quickQc').toggle(!!q.qc_url); if (q.qc_url) $('#quickQcLink').attr('href', q.qc_url);
     // 第二層（有決策權者）可以勾選是否送相關單位填寫意見；已經有徵詢紀錄就固定勾起（區塊一定看得到）
     var hasRounds = (o.rounds || []).length > 0;
@@ -962,6 +966,12 @@ function textifyLocked(){
 }
 $(document).on('click', '#quickBtns [data-qact]', function(){
     var act = $(this).attr('data-qact'), name = $.trim($(this).text());
+    var qq = D.quick || {};
+    if ((act !== 'grant') && Number(qq.cause_required) === 1 && Number(qq.has_cause) !== 1) {
+        alert('報工開立的單，請先在下方「異常原因分類」選擇分類，再做決策。');
+        var sc = document.getElementById('secCause'); if (sc) sc.scrollIntoView({ block:'center' });
+        return;
+    }
     if (!confirm('確定要「' + name + '」？送出後會通知相關人員，且無法由您自行撤回。')) return;
     var $b = $('#quickBtns button').prop('disabled', true);
     $.post(API, { action:'quick_decide', csrf:CSRF, id:OID, act:act, note:$('#quickNote').val() }, function(res){
@@ -1148,7 +1158,8 @@ function render(){
 
     // ② 原因分類
     CAUSE_SEL = (o.cause_ids || []).slice();
-    CAUSE_CAN_EDIT = (canEdit || (p.canDecide && !o.is_closed));
+    CAUSE_CAN_EDIT = (canEdit || (p.canDecide && !o.is_closed)
+        || !!(D.quick && D.quick.on && !Number(D.quick.done) && D.quick.can && D.quick.can.decide));   // 第一層／第二層決策前要能填原因分類
     $('#btnPickCause').toggle(CAUSE_CAN_EDIT && (D.causes || []).length > 0);
     $('#f_cause_note').val(o.cause_note || '').prop('readonly', !CAUSE_CAN_EDIT);
     causeNoteCnt();
