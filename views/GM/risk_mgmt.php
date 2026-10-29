@@ -684,11 +684,10 @@ function actionThreshold(ro){
     return t;
 }
 function noActText(ro, lvName){
-    var th = actionThreshold(ro), thx = th ? '「' + th + '」以上' : '設定的等級';
-    return isOpp(ro) ? '機會等級為「' + lvName + '」，低於需提出把握方案的門檻（' + thx + '），故不另提出把握方案，由權責單位依現有作業掌握。'
-                     : '風險等級為「' + lvName + '」，低於需採取因應措施的門檻（' + thx + '），風險較低，故目前不採取因應措施，依現有作業持續監控；情境有重大變化時再重新評估。';
+    return isOpp(ro) ? '低於需提出把握方案的門檻，故不另提出把握方案，由權責單位依現有作業掌握。'
+                     : '低於需採取因應措施的門檻，故不另採取因應措施，由權責單位依現有作業掌握。';
 }
-function isNoActText(t){ return /^(風險等級為「[^」]*」，低於需採取因應措施的門檻|機會等級為「[^」]*」，低於需提出把握方案的門檻)/.test($.trim(t || '')); }
+function isNoActText(t){ return /^((風險等級為「[^」]*」，)?低於需採取因應措施的門檻|(機會等級為「[^」]*」，)?低於需提出把握方案的門檻)/.test($.trim(t || '')); }
 function calcLevel(sev, frq, S, LV, roKind){
     if (sev === '' || sev == null || frq === '' || frq == null) return null;
     if (isOpp(roKind)) return calcOppLevel(sev, frq, S);

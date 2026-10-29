@@ -965,6 +965,7 @@ function eg_draft_comm_from_risk(PDO $db, int $riskDocId, array $user): array
     $ids = array_column(eg_demo_qa($db, "SELECT rec_id FROM comm_record WHERE is_draft=1 AND YEAR(comm_date)=?", [$Y]), 'rec_id');
     if ($ids) { $in = implode(',', array_map('intval', $ids)); $db->exec("DELETE FROM comm_track WHERE src_rec_id IN ($in)"); $db->exec("DELETE FROM comm_record_item WHERE rec_id IN ($in)"); $db->exec("DELETE FROM comm_record WHERE rec_id IN ($in)"); }
     foreach (eg_demo_qa($db, "SELECT * FROM rm_item WHERE doc_id=? ORDER BY seq", [$riskDocId]) as $row) {
+        if (rm_is_noaction_text((string)$row['measure'])) continue;      // 不需因應措施的列：不建溝通記錄與措施追蹤
         // 拆句：分號／句號、以及「，由○○」（同一句裡交代給不同部門的事）；「以…」開頭的是目的說明，併回前一句
         $clauses = [];
         foreach (array_map('trim', preg_split('/(?:[；;。]+|[，,](?=\s*由))/u', (string)$row['measure'])) as $cl) {

@@ -642,16 +642,14 @@ function rm_action_threshold(array $set, string $roKind): string
 /** 等級低於「需要因應措施」門檻時，因應措施欄自動帶入的說明（這種列不需要採取措施後評估與成效確認） */
 function rm_noaction_text(array $set, string $roKind, string $lvName): string
 {
-    $th = rm_action_threshold($set, $roKind);
-    if ($roKind === 'opportunity')
-        return '機會等級為「' . $lvName . '」，低於需提出把握方案的門檻（' . ($th !== '' ? '「' . $th . '」以上' : '設定的等級') . '），故不另提出把握方案，由權責單位依現有作業掌握。';
-    return '風險等級為「' . $lvName . '」，低於需採取因應措施的門檻（' . ($th !== '' ? '「' . $th . '」以上' : '設定的等級') . '），風險較低，故目前不採取因應措施，依現有作業持續監控；情境有重大變化時再重新評估。';
+    if ($roKind === 'opportunity') return '低於需提出把握方案的門檻，故不另提出把握方案，由權責單位依現有作業掌握。';
+    return '低於需採取因應措施的門檻，故不另採取因應措施，由權責單位依現有作業掌握。';
 }
 
 /** 因應措施欄是不是「系統自動帶入的不需因應說明」（使用者自己寫的不覆蓋） */
 function rm_is_noaction_text(string $t): bool
 {
-    return (bool)preg_match('/^(風險等級為「[^」]*」，低於需採取因應措施的門檻|機會等級為「[^」]*」，低於需提出把握方案的門檻)/u', trim($t));
+    return (bool)preg_match('/^((風險等級為「[^」]*」，)?低於需採取因應措施的門檻|(機會等級為「[^」]*」，)?低於需提出把握方案的門檻)/u', trim($t));
 }
 
 /**

@@ -621,6 +621,7 @@ function rm_trk_risk_col(PDO $db): bool
 if (!function_exists('rm_item_tracks')) {
 function rm_item_tracks(PDO $db, int $year, array $row): array
 {
+    if (rm_is_noaction_text((string)($row['measure'] ?? ''))) return [];      // 不需因應措施的列：不需要措施追蹤
     $cx = (int)($row['ctx_item_id'] ?? 0);
     $r = $row;
     if ($cx > 0) {
