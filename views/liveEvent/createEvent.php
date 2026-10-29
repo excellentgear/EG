@@ -2396,6 +2396,7 @@ if (isset($_POST['btn_go_events'])) {
                         // 刪除改走 AJAX（原本是整頁轉址，刪完畫面會捲回最上面）
                         if (r.can_delete) html += '<a href="javascript:;" class="eg-row-del" data-eid="' + r.id + '"><span class="eg-mini eg-mini-del"><i class="fa fa-trash"></i> 刪除</span></a>';
                     }
+                    if (r.can_translate) html += '<a href="javascript:;" class="eg-row-tr" data-eid="' + r.id + '" title="設定越南文翻譯版本（已簽核的公告也可補）"><span class="eg-mini" style="background:#fff3e0;color:#a15c00;"><i class="fa fa-language"></i> 翻譯</span></a>';
                     html += '</td>';
                     html += '</tr>';
                 });
@@ -2439,6 +2440,32 @@ if (isset($_POST['btn_go_events'])) {
                     if (done) done();
                 }, 'json').fail(function() { $('#eg-list-tbody').empty(); $('#eg-list-msg').html('連線失敗').show(); if (done) done(); });
             }
+
+
+            // 翻譯版本（越南文）：已簽核／已發布的公告也能補；權限由後端 _eventTranslate.php 判定
+            var TR = { eid: 0 };
+            function trClose() { $('#egTrMask').hide(); }
+            $('#eg-list-tbody').on('click', '.eg-row-tr', function() {
+                TR.eid = $(this).data('eid');
+                $('#egTrMsg').text('載入中…'); $('#egTrTitle,#egTrContent').val('');
+                $('#egTrMask').css('display', 'flex');
+                $.get('../../src/store/_eventTranslate.php', { action: 'get', eventid: TR.eid, lang: 'vi' }, function(res) {
+                    if (!res || !res.ok) { $('#egTrMsg').text(res && res.msg ? res.msg : '載入失敗'); return; }
+                    $('#egTrMsg').text('');
+                    $('#egTrOrigTitle').text(res.orig_title || ''); $('#egTrOrigContent').text(res.orig_content || '');
+                    $('#egTrTitle').val(res.title); $('#egTrContent').val(res.content);
+                }, 'json').fail(function() { $('#egTrMsg').text('連線失敗'); });
+            });
+            $('#egTrCancel').on('click', trClose);
+            $('#egTrSave').on('click', function() {
+                var $b = $(this).prop('disabled', true);
+                $.post('../../src/store/_eventTranslate.php', { action: 'save', eventid: TR.eid, lang: 'vi', csrf: '<?= $ND_CSRF ?>',
+                    title: $('#egTrTitle').val(), content: $('#egTrContent').val() }, function(res) {
+                    $b.prop('disabled', false);
+                    if (!res || !res.ok) { $('#egTrMsg').css('color', '#c0392b').text(res && res.msg ? res.msg : '儲存失敗'); return; }
+                    trClose(); alert(res.msg);
+                }, 'json').fail(function() { $b.prop('disabled', false); $('#egTrMsg').css('color', '#c0392b').text('連線失敗'); });
+            });
 
             // 刪除公告／通知：AJAX 刪除後只重載目前這一頁列表，並還原捲動位置（不整頁跳轉、畫面不跳回最上面）
             $('#eg-list-tbody').on('click', '.eg-row-del', function() {
@@ -3571,6 +3598,27 @@ if (isset($_POST['btn_go_events'])) {
         $(function () { get({ action: 'meta' }, function (r) { NC.csrf = r.csrf; NC.perms = r.perms || NC.perms; NC.meta = r; }); });
     })();
     </script>
+
+    <!-- 翻譯版本（越南文）跳窗 -->
+    <div id="egTrMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
+        <div style="background:#fff;width:760px;max-width:96vw;max-height:92vh;overflow:auto;border-radius:8px;padding:18px 20px;">
+            <h4 style="margin:0 0 6px;"><i class="fa fa-language"></i> 越南文翻譯版本 (Tiếng Việt)</h4>
+            <div style="font-size:12px;color:#8a6d3b;margin-bottom:10px;">原文不會被更動；已簽核的公告也可補翻譯，儲存後對象在檢視時可切換「中文／Tiếng Việt」。標題與內容都清空再儲存＝刪除翻譯。</div>
+            <div style="background:#faf5ec;border:1px solid #ecdcc0;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:13px;">
+                <b>原文標題：</b><span id="egTrOrigTitle"></span>
+                <div id="egTrOrigContent" style="white-space:pre-wrap;max-height:140px;overflow:auto;margin-top:6px;color:#555;"></div>
+            </div>
+            <label style="font-weight:600;">標題 (Tiêu đề)</label>
+            <input type="text" id="egTrTitle" class="form-control" maxlength="255" style="margin-bottom:8px;">
+            <label style="font-weight:600;">內容 (Nội dung)</label>
+            <textarea id="egTrContent" class="form-control" rows="9"></textarea>
+            <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+                <span id="egTrMsg" style="flex:1;font-size:12px;color:#8a6d3b;"></span>
+                <button type="button" id="egTrCancel" class="eg-tool-btn">取消</button>
+                <button type="button" id="egTrSave" class="eg-tool-btn" style="background:#e08a1e;color:#fff;"><i class="fa fa-save"></i> 儲存翻譯</button>
+            </div>
+        </div>
+    </div>
 </body>
 <?php if ($IS_ADMIN) : /* iPhone 推播測試按鈕：僅管理者顯示（原程式有 JS 語法錯誤導致整段失效並在所有人的 console 報錯，2026-07-07 修正） */ ?>
 <script>

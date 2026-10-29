@@ -350,6 +350,7 @@ try {
             'ref_id'    => (int)($r['ref_id'] ?? 0),
             'can_edit'   => $rowCanEdit,
             'can_delete' => $rowCanDelete,
+            'can_translate' => ($is_admin || $isCreator || $isCoEditor),
         ];
     }
 
