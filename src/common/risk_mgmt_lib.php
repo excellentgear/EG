@@ -111,10 +111,10 @@ function rm_settings_default(): array
             ],
         ],
         'rm_opp_levels' => [
-            ['name'=>'暫不推動', 'lo'=>1, 'hi'=>1, 'action'=>false, 'measure'=>'記錄原因，每年檢討時重新評估'],
-            ['name'=>'持續觀察', 'lo'=>2, 'hi'=>3, 'action'=>false, 'measure'=>'每半年重新評估，條件成熟再推動'],
-            ['name'=>'規劃推動', 'lo'=>4, 'hi'=>6, 'action'=>true,  'measure'=>'編入預算與人力計畫，指派負責單位'],
-            ['name'=>'優先推動', 'lo'=>7, 'hi'=>9, 'action'=>true,  'measure'=>'納入年度目標，建立措施追蹤並優先投入資源'],
+            ['name'=>'低度機會', 'lo'=>1, 'hi'=>1, 'action'=>false, 'measure'=>'記錄原因，每年檢討時重新評估'],
+            ['name'=>'中度機會', 'lo'=>2, 'hi'=>3, 'action'=>false, 'measure'=>'每半年重新評估，條件成熟再推動'],
+            ['name'=>'高度機會', 'lo'=>4, 'hi'=>6, 'action'=>true,  'measure'=>'編入預算與人力計畫，指派負責單位'],
+            ['name'=>'極度機會', 'lo'=>7, 'hi'=>9, 'action'=>true,  'measure'=>'納入年度目標，建立措施追蹤並優先投入資源'],
         ],
         'rm_maker_depts'    => [],      // 填表人可以選的部門（department.id 清單，含下轄）；空＝不限，由管理員設定以免選錯
         'rm_outsource_tags' => [],      // 對外宣稱有外包的稽核製程（ot_as_proc_tag.tag_id 清單）；沒勾＝沒有外包，不產生任何委外分析
@@ -177,7 +177,7 @@ function rm_ensure_schema(PDO $db): void
         "ALTER TABLE rm_item ADD COLUMN recheck_date DATE NULL COMMENT '重新評估日期（業務日期）'",
         "ALTER TABLE rm_item ADD COLUMN rule_ids VARCHAR(200) NULL COMMENT '產生這一列時用到的規則編號'",
         "ALTER TABLE rm_item ADD COLUMN resources TEXT NULL COMMENT '所需資源（人員、設施、工作環境、方法；2-GM-05 6.1.5.3 管理審查要對資源需求做決議）'",
-        "ALTER TABLE rm_item ADD COLUMN frequency_after TINYINT NULL COMMENT '採取因應措施後的發生率(O)／可行性(F)等級（嚴重度(S)／預期效益(B)與措施前相同，故不另存）'",
+        "ALTER TABLE rm_item ADD COLUMN frequency_after TINYINT NULL COMMENT '採取措施後的發生率(O) / 可行性(F)等級（嚴重度(S) / 預期效益(B)與措施前相同，故不另存）'",
         "ALTER TABLE rm_doc ADD COLUMN is_draft TINYINT NOT NULL DEFAULT 0 COMMENT '1＝系統依處境分析表產生的草稿，使用者確認後才算正式資料（畫面標示、列印不顯示）'",
         "ALTER TABLE rm_doc ADD COLUMN draft_at DATETIME NULL COMMENT '草稿產生時間'",
     ] as $alt) { try { $db->exec($alt); } catch (Throwable $e) {} }
@@ -584,7 +584,7 @@ function rm_opp_level_calc(array $set, int $b, int $f): ?array
 }
 
 /**
- * 採取因應措施後的「發生率(O)／可行性(F)」建議值（嚴重度／預期效益與措施前相同）：
+ * 採取措施後的「發生率(O) / 可行性(F)」建議值（嚴重度／預期效益與措施前相同）：
  * 風險＝把發生率降到「不需要因應措施」的最高一級（降不到就降到最低級）；機會＝可行性提高到最高級。
  * @return int|null  建議的等級數字；措施前評分沒填回 null
  */

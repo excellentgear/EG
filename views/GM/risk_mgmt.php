@@ -489,7 +489,7 @@ $perms  = rm_perms($db, $rmUser);
         <h4>機會與風險怎麼分開看</h4>
         <ul><li>風險與機會<b>各有自己的評估項目</b>：風險評估「嚴重度(S)×發生率(O)＝風險等級」，機會評估「預期效益(B)×可行性(F)＝機會等級(OL)」，準則表（表A-2、表B-2、表C-2）與風險的表A～C分開，在「模組設定」維護。把某列的「風險與機會」改成「機會」，欄位名稱、選單與等級會當場切換。</li>
             <li>機會的預期效益(B)／可行性(F)分析、機會等級準則與欄位名稱都在「模組設定」維護。<b>機會不列入風險分布（表D）</b>，另有「表D-2 機會分布」；清單的「最高風險等級」也只看風險。</li>
-            <li>每一列在「成效確認」左側有<b>「採取因應措施後」的評估</b>：嚴重度(S)／預期效益(B)與措施前相同，風險的發生率(O)應降低（建議降到不需要因應措施）、機會的可行性(F)應提高；系統會自動帶入建議值，也可自行修改，並即時顯示措施後的等級。</li></ul>
+            <li>每一列在「成效確認」左側有<b>「採取措施後」的評估</b>：嚴重度(S) / 預期效益(B)與措施前相同，風險的發生率(O)應降低（建議降到不需要因應措施）、機會的可行性(F)應提高；系統會自動帶入建議值，也可自行修改，並即時顯示措施後的等級。</li></ul>
         <h4>因應措施的負責人與追蹤、重新評估、矯正單</h4>
         <ul><li>每條因應措施底下會<b>自動列出相關的措施追蹤</b>（負責人、預計完成日、執行中／逾期／已結案）。資料取自「溝通管理」的措施追蹤，這裡不用再填一次。<b>由溝通管理依本表措施自動產生的追蹤會自動連結（標「自動」，不可移除）</b>；點編號可跳窗查看追蹤內容。想自己引用別的追蹤，可按「引用措施追蹤」或在因應措施文字裡寫「措施追蹤 編號」。</li>
             <li><b>重新評估</b>：年度中途因重大變化（例如某項指標已實際發生）重新評估時，填「重新評估」日期與原因。按「依資料產生佐證」時，若依當年資料算出的發生率比表上高，畫面會用紅字提示建議重新評估，但<b>不會自動改你的評分</b>。</li>
@@ -657,7 +657,7 @@ function calcOppLevel(sev, frq, S, OL){
     $.each(OL, function(_, lv){ if (score >= +lv.lo) hit = lv; });
     return {score:score, action:!!hit.action, bg:hit.bg, fg:hit.fg, is_opp:true, name:hit.name, measure:hit.measure || ''};
 }
-/* 採取因應措施後的發生率(O)／可行性(F)建議值（與後端 rm_after_suggest 同一套規則）：風險降到「不需要因應措施」的最高一級、機會提高到最高級 */
+/* 採取措施後的發生率(O) / 可行性(F)建議值（與後端 rm_after_suggest 同一套規則）：風險降到「不需要因應措施」的最高一級、機會提高到最高級 */
 function afterSuggest(ro, sev, frq){
     if (sev === '' || sev == null || frq === '' || frq == null) return '';
     if (isOpp(ro)){ var m = 0; $.each(oppFeasList(), function(_, r){ if (+r.v > m) m = +r.v; }); return m || ''; }
@@ -1029,7 +1029,7 @@ function renderRiskInline(doc){
         var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">' + esc(String(doc.fill_date).slice(0, 4)) + ' 年度內容（單號 ' + esc(doc.doc_no) + '）'
             + (draft ? ' <span class="draft-tag">草稿・待確認</span>' : '') + '<span class="hint" style="font-weight:normal;margin-left:8px;">一個年度只有一張；每一項上面一列是重點，下面幾列是相關資料（<span style="color:#DD5138;">■ 風險</span>　<span style="color:#2E8B57;">■ 機會</span>）。</span></h4>'
             + '<div class="rm-table-wrap"><table class="rkt"><colgroup><col style="width:8%;"><col style="width:17%;"><col style="width:6%;"><col style="width:10%;"><col style="width:9%;"><col style="width:12%;"><col style="width:21%;"><col style="width:8%;"><col style="width:9%;"></colgroup>'
-            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S)／預期效益(B)<br>發生率(O)／可行性(F)</th><th>風險／機會<br>等級</th><th>採取因應措施後<br>發生率(O)／可行性(F)與等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
+            + '<thead><tr><th>編號</th><th>議題</th><th>風險／<br>機會</th><th>嚴重度(S) / 預期效益(B)<br>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th><th>採取措施後<br>發生率(O) / 可行性(F)與等級</th><th>因應措施</th><th>建議追蹤</th><th>成效確認</th></tr></thead>';
         // 下面幾列不對齊上面的欄位：整列一格、標題接在內容前面，不留空白
         var sub = function(lb, html){ return '<tr class="sub"><td colspan="' + CS + '"><b class="sl">' + lb + '</b>' + html + '</td></tr>'; };
         $.each(res.items, function(i, it){
@@ -1209,10 +1209,10 @@ function rowHtml(kind, it, n){
           + fd('風險與機會編號 <i class="fa fa-question-circle" style="cursor:help;color:#b5762a;" title="需要因應措施的風險由系統自動配發的流水號（例 R2026-001），讓這條風險在措施追蹤、管理審查、矯正單被引用時有唯一編號可對照；已配發的不會因設定變動而改變。"></i>', '<input type="text" data-f="confirm_no" value="' + esc(it.confirm_no) + '" maxlength="30" placeholder="自動配發" data-eg-skip>', 'c-cn')
           + fd('因應措施' + EGAiDraft.btnHtml('risk_measure'), ta('measure', it.measure) + trackPickHtml() + trackHtml(it) + followHtml(it), 'c-measure')
           + fd('所需資源（人員、設施、工作環境、方法）', resHtml(it.resources), 'c-res') + fd('重新評估（年度中途因重大變化時填寫）', '<input type="date" data-f="recheck_date" value="' + esc(it.recheck_date || '') + '">' + ta('recheck_note', it.recheck_note), 'c-rc')
-          + fd('採取因應措施後 <span class="lb-sev2">' + esc(termSev(it.ro_kind)) + '</span>', '<span class="sev2">' + (esc(scaleLabel(sevListFor(it.ro_kind), it.severity)) || '—') + '</span><div class="hint">與措施前相同</div>', 'c-sev2')
-          + fd('採取因應措施後 <span class="lb-frq2">' + esc(termFrq(it.ro_kind)) + '</span>', '<select data-f="frequency_after">' + scaleOptions(frqListFor(it.ro_kind), it.frequency_after) + '</select>'
+          + fd('採取措施後 <span class="lb-sev2">' + esc(termSev(it.ro_kind)) + '</span>', '<span class="sev2">' + (esc(scaleLabel(sevListFor(it.ro_kind), it.severity)) || '—') + '</span><div class="hint">與措施前相同</div>', 'c-sev2')
+          + fd('採取措施後 <span class="lb-frq2">' + esc(termFrq(it.ro_kind)) + '</span>', '<select data-f="frequency_after">' + scaleOptions(frqListFor(it.ro_kind), it.frequency_after) + '</select>'
                + '<div class="hint"><a href="#" data-afterauto>依規則帶入建議值</a>（' + (opp ? '可行性應提高' : '發生率應降低，降到不需要因應措施') + '）</div>', 'c-frq2')
-          + fd('採取因應措施後 <span class="lb-lv2">' + esc(termLv(it.ro_kind)) + '</span>', lvBadge(lvA, true), 'c-lv2 lvc2')
+          + fd('採取措施後 <span class="lb-lv2">' + esc(termLv(it.ro_kind)) + '</span>', lvBadge(lvA, true), 'c-lv2 lvc2')
           + fd('成效確認方式（指標與目標，年初設定）' + EGAiDraft.btnHtml('risk_effect_check'), ta('effect_check', it.effect_check), 'c-eff')
           + fd('成效確認結果', '<select data-f="effect_status">' + effOpts(it.effect_status) + '</select>' + carHtml(it), 'c-es')
           + fd('確認日期', '<input type="date" data-f="effect_date" value="' + esc(it.effect_date || '') + '">', 'c-ed')
@@ -1229,8 +1229,8 @@ function buildTable(kind, items){
     var h = '<colgroup>' + cols.map(function(c){ return '<col style="width:' + c[2] + 'px;">'; }).join('') + '</colgroup><thead>';
     if (kind === 'risk'){
         h += '<tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th>'
-          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取因應措施後的 風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
-          + '<tr><th>嚴重度(S)／預期效益(B)</th><th>發生率(O)／可行性(F)</th><th>風險／機會等級</th><th>嚴重度(S)／預期效益(B)</th><th>發生率(O)／可行性(F)</th><th>風險／機會等級</th></tr>';
+          + '<th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取措施後 風險/機會評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th><th rowspan="2"></th></tr>'
+          + '<tr><th>嚴重度(S) / 預期效益(B)</th><th>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th><th>嚴重度(S) / 預期效益(B)</th><th>發生率(O) / 可行性(F)</th><th>風險/<br>機會<br>等級</th></tr>';
     } else {
         h += '<tr>' + cols.map(function(c){ return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
     }
@@ -1257,7 +1257,7 @@ $(document).on('click', '[data-delrow]', function(){
     $(this).closest('tr').remove(); renumber();
 });
 /* 一列的評估區：改「風險/機會」就換成對應的評估項目與選單（風險＝嚴重度(S)×發生率(O)、機會＝預期效益(B)×可行性(F)），
-   評分一改即時更新措施前／措施後的等級預覽；措施後的發生率(O)／可行性(F)沒有人工改過時，自動帶入建議值 */
+   評分一改即時更新措施前／措施後的等級預覽；措施後的發生率(O) / 可行性(F)沒有人工改過時，自動帶入建議值 */
 function refreshRow(tr, relist){
     var ro = tr.find('[data-f=ro_kind]').val();
     var $s = tr.find('[data-f=severity]'), $f = tr.find('[data-f=frequency]'), $a = tr.find('[data-f=frequency_after]');
@@ -1280,7 +1280,7 @@ $(document).on('click', '#itBody [data-afterauto]', function(e){
     e.preventDefault();
     var tr = $(this).closest('tr'); tr.attr('data-auto-after', '1');
     var sv = tr.find('[data-f=severity]').val(), fq = tr.find('[data-f=frequency]').val();
-    if (sv === '' || fq === ''){ alert('請先選措施前的評估（嚴重度(S)／預期效益(B)與發生率(O)／可行性(F)），才能帶入建議值'); return; }
+    if (sv === '' || fq === ''){ alert('請先選措施前的評估（嚴重度(S) / 預期效益(B)與發生率(O) / 可行性(F)），才能帶入建議值'); return; }
     tr.find('[data-f=frequency_after]').val(afterSuggest(tr.find('[data-f=ro_kind]').val(), sv, fq)); refreshRow(tr, false);
 });
 
@@ -1458,7 +1458,7 @@ function suggestRow(tr, ctxId){
     get({action:'risk_suggest_row', ctx_item_id:ctxId, year:y}, function(res){
         var s = res.suggest || {}, filled = [];
         var setIf = function(f, v, label){ var el = tr.find('[data-f=' + f + ']'); if (el.length && (el.val() === '' || el.val() === null) && v !== '' && v !== null && v !== undefined){ el.val(v).trigger('change'); filled.push(label); } };
-        if (!(+tr.data('item-id')) && s.ro_kind && tr.find('[data-f=ro_kind]').val() !== s.ro_kind){ tr.find('[data-f=ro_kind]').val(s.ro_kind).trigger('change'); filled.push('風險與機會'); } else setIf('ro_kind', s.ro_kind, '風險與機會'); setIf('severity', s.severity, '嚴重度(S)／預期效益(B)'); setIf('frequency', s.frequency, '發生率(O)／可行性(F)'); setIf('frequency_after', s.frequency_after, '採取措施後評估');
+        if (!(+tr.data('item-id')) && s.ro_kind && tr.find('[data-f=ro_kind]').val() !== s.ro_kind){ tr.find('[data-f=ro_kind]').val(s.ro_kind).trigger('change'); filled.push('風險與機會'); } else setIf('ro_kind', s.ro_kind, '風險與機會'); setIf('severity', s.severity, '嚴重度(S) / 預期效益(B)'); setIf('frequency', s.frequency, '發生率(O) / 可行性(F)'); setIf('frequency_after', s.frequency_after, '採取措施後評估');
         setIf('ro_text', s.ro_text, '對組織的影響說明'); setIf('measure', s.measure, '因應措施'); setIf('effect_check', s.effect_check, '成效確認方式');
         if (s.resources && !$.trim(tr.find('[data-f=res_p]').val() + tr.find('[data-f=res_f]').val() + tr.find('[data-f=res_e]').val() + tr.find('[data-f=res_m]').val())){
             var o = parseRes(s.resources); $.each(RESLB, function(_, r){ tr.find('[data-f=' + r[1] + ']').val(o[r[1]]); }); filled.push('所需資源');
@@ -2118,7 +2118,7 @@ function measurePrint(it){
     return h;
 }
 var RISK_COLG = '<colgroup><col style="width:38px;"><col style="width:56px;"><col style="width:92px;"><col style="width:122px;"><col style="width:142px;"><col style="width:132px;"><col style="width:54px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:74px;"><col style="width:74px;"><col style="width:68px;"><col style="width:78px;"><col><col></colgroup>';
-var RISK_THEAD = '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th><th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取因應措施後的<br>風險/機會 評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr><tr><th>嚴重度(S)<br>預期效益(B)</th><th>發生率(O)<br>可行性(F)</th><th>風險/機會<br>等級</th><th>嚴重度(S)<br>預期效益(B)</th><th>發生率(O)<br>可行性(F)</th><th>風險/機會<br>等級</th></tr></thead>';
+var RISK_THEAD = '<thead><tr><th rowspan="2">編號</th><th rowspan="2">內/外部議題</th><th rowspan="2">利害關係者</th><th rowspan="2">需求與期望</th><th rowspan="2">議題描述</th><th rowspan="2">對組織的影響說明</th><th rowspan="2">風險與機會</th><th colspan="3">風險/機會 評估</th><th colspan="3">採取措施後<br>風險/機會評估</th><th rowspan="2">風險與機會編號</th><th rowspan="2">因應措施</th><th rowspan="2">成效確認</th></tr><tr><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th><th>嚴重度(S) /<br>預期效益(B)</th><th>發生率(O) /<br>可行性(F)</th><th>風險/<br>機會<br>等級</th></tr></thead>';
 function scaleLabel(list, v){
     if (v === '' || v == null) return '';
     var t = String(v); $.each(list, function(_, r){ if (+r.v === +v) t = r.v + ' ' + r.label; }); return t;
@@ -2156,7 +2156,7 @@ function printDoc(docId){
         var foot = kind === 'risk' ? '<div style="margin-top:6px;font-size:12px;color:#333;line-height:1.6;">註：'
             + '<br>1. 風險評估項目：嚴重度(S)評估可能造成的負面影響，發生率(O)評估其發生可能性；風險等級＝嚴重度(S)等級 × 發生率(O)等級（算法以模組設定為準），依風險準則（表A）判定。'
             + '<br>2. 機會評估項目（「風險與機會」欄為機會者）：預期效益(B)評估機會實現後的好處，可行性(F)評估組織以現有資源與能力做成的程度；機會等級(OL)＝預期效益(B)等級 × 可行性(F)等級，依機會等級準則（表A-2）判定。'
-            + '<br>3. 「採取因應措施後」的嚴重度(S)／預期效益(B)與措施前相同；風險因措施使發生率(O)降低、機會因措施使可行性(F)提高，據以重新判定風險／機會等級。'
+            + '<br>3. 「採取措施後」的嚴重度(S) / 預期效益(B)與措施前相同；風險因措施使發生率(O)降低、機會因措施使可行性(F)提高，據以重新判定風險／機會等級。'
             + '<br>4. 風險與機會分別編號（風險以 ' + esc(META.settings.rm_confirm_prefix) + ' 開頭、機會以 ' + esc(META.settings.rm_opp_prefix || 'O') + ' 開頭），以利因應措施及成效確認之追蹤。</div>' : '';
         egPrintWindow(meta.doc_name || kindName(kind), head + table + foot, meta.doc_no, kind === 'risk' ? 'table.pt{font-size:13px;}' : '', kind === 'risk' ? 'A3' : 'A4');
         EGPrintLog.record({source:'risk_mgmt', doc_name:(meta.doc_name || kindName(kind)) + ' ' + d.doc_no,

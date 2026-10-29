@@ -75,7 +75,7 @@ function rmItems(PDO $db, int $docId, array $set): array {
     foreach ($rows as &$r) {
         $lv = rm_level_calc($set, $r['severity'], $r['frequency'], (string)($r['ro_kind'] ?? 'risk'));
         $r['level'] = $lv ? array_merge($lv, rm_level_color($lv['rank'], !empty($lv['is_opp']))) : null;
-        // 採取因應措施後的評估：嚴重度(S)／預期效益(B)與措施前相同，只有發生率(O)／可行性(F)不同
+        // 採取措施後的評估：嚴重度(S) / 預期效益(B)與措施前相同，只有發生率(O) / 可行性(F)不同
         $lva = ($r['frequency_after'] ?? '') !== '' && $r['frequency_after'] !== null
              ? rm_level_calc($set, $r['severity'], $r['frequency_after'], (string)($r['ro_kind'] ?? 'risk')) : null;
         $r['level_after'] = $lva ? array_merge($lva, rm_level_color($lva['rank'], !empty($lva['is_opp']))) : null;
@@ -580,7 +580,7 @@ if ($action === 'doc_save') {
             if ($fq !== null && !in_array($fq, $isOppRow ? $frqOkOpp : $frqOk, true)) jerr('第 ' . ($n + 1) . ' 列的' . $tF . '不在設定的級距內');
             if (($sv === null) !== ($fq === null)) jerr('第 ' . ($n + 1) . ' 列的' . $tS . '與' . $tF . '要一起填（缺一個算不出' . ($isOppRow ? '機會等級' : '風險等級') . '）');
             $row['severity'] = $sv; $row['frequency'] = $fq;
-            // 採取因應措施後的發生率(O)／可行性(F)：風險只能比措施前低或相同、機會只能比措施前高或相同（嚴重度／預期效益與措施前相同，不另存）
+            // 採取措施後的發生率(O) / 可行性(F)：風險只能比措施前低或相同、機會只能比措施前高或相同（嚴重度／預期效益與措施前相同，不另存）
             $fa = ($it['frequency_after'] ?? '') === '' ? null : (int)$it['frequency_after'];
             if ($fa !== null) {
                 if ($fq === null) jerr('第 ' . ($n + 1) . ' 列要先填措施前的' . $tF . '，才能填採取措施後的' . $tF);
