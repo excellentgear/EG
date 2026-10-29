@@ -24,6 +24,10 @@ if (!in_array($field, ['all', 'creator', 'target', 'title'], true)) $field = 'al
 $readState = $_GET['read_state'] ?? '';
 if (!in_array($readState, ['', 'unread_any', 'read_all', 'unread_me'], true)) $readState = '';
 
+// 種類篩選：''=全部 / notice通知 / announce公告 / contact聯絡單（live_event.kind，欄位由 ndoc_ensure_schema 建立）
+$kindF = $_GET['kind'] ?? '';
+if (!in_array($kindF, ['', 'notice', 'announce', 'contact'], true)) $kindF = '';
+
 // live_event.created_at（建立時間，供列表區分同日多筆公告先後）：首次使用自動補欄並以修改歷史回填
 try {
     $cols = $db->query("SHOW COLUMNS FROM live_event LIKE 'created_at'")->fetchAll(PDO::FETCH_COLUMN);
@@ -100,6 +104,13 @@ if ($readState !== '') {
         $where .= " AND NOT EXISTS (SELECT 1 FROM live_event_for_user f4 WHERE f4.live_event_id=le.id AND f4.user_id=$uid AND f4.oready_read=1)
                     AND NOT EXISTS (SELECT 1 FROM live_event_response  r4 WHERE r4.live_event_id=le.id AND r4.user_id=$uid AND r4.read_at IS NOT NULL)";
     }
+}
+
+if ($kindF !== '') {
+    try {
+        $hasKind = (bool)$db->query("SHOW COLUMNS FROM live_event LIKE 'kind'")->fetchColumn();
+    } catch (Throwable $e) { $hasKind = false; }
+    if ($hasKind) { $where .= " AND le.kind = :kindf"; $bind[':kindf'] = $kindF; }
 }
 
 if ($source !== '') {
@@ -265,6 +276,7 @@ if ($export === 'print') {
     $readLabel  = ['unread_any' => '尚有人未閱', 'read_all' => '全部人都已閱', 'unread_me' => '我尚未已閱'];
     echo '<h2>公告 / 通知列表</h2><div class="sub">匯出時間：' . date('Y-m-d H:i') . '　共 ' . count($rows) . ' 筆'
         . ($kw !== '' ? '　搜尋：' . $h($kw) . '（範圍：' . $h($fieldLabel[$field]) . '）' : '')
+        . ($kindF !== '' ? '　種類：' . $h(['notice' => '通知', 'announce' => '公告', 'contact' => '聯絡單'][$kindF]) : '')
         . ($source !== '' ? '　來源：' . $h($source) : '')
         . ($readState !== '' ? '　已讀狀態：' . $h($readLabel[$readState] ?? $readState) : '') . '</div>';
     echo '<table><thead><tr><th>發布 / 結束</th><th>來源</th><th>公告者</th><th>對象</th><th>標題</th><th>內容</th><th>已讀</th></tr></thead><tbody>';

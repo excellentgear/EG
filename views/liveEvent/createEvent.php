@@ -902,6 +902,12 @@ if (isset($_POST['btn_go_events'])) {
                         <div class="eg-card-head eg-list-head">
                             <span class="eg-list-title-wrap"><i class="fa fa-list-ul"></i> <h2 id="eg-list-title">公告 / 通知列表</h2></span>
                             <div class="eg-list-tools">
+                                <select id="eg-filter-kind" class="eg-tool-select" title="種類篩選">
+                                    <option value="">所有種類</option>
+                                    <?php foreach (ndoc_kinds() as $__k => $__n) : ?>
+                                        <option value="<?= $__k ?>"><?= htmlspecialchars($__n) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
                                 <select id="eg-filter-source" class="eg-tool-select" title="來源篩選">
                                     <option value="">所有來源</option>
                                 </select>
@@ -2305,7 +2311,7 @@ if (isset($_POST['btn_go_events'])) {
             // 表格欄數（展開面板的 colspan 要跟著勾選欄一起變，少算一欄整列會位移）
             EG.listCols = <?= $can_batch ? 8 : 7 ?>;
             var LIST_API = '../../src/store/_eventList.php';
-            var egState = { page: 1, size: 10, kw: '', source: '', field: 'all', readState: '', pages: 1, total: 0 };
+            var egState = { page: 1, size: 10, kw: '', source: '', kind: '', field: 'all', readState: '', pages: 1, total: 0 };
             var $searchInput = $('#eg-search-input');
             var $searchField = $('#eg-search-field');
 
@@ -2314,7 +2320,7 @@ if (isset($_POST['btn_go_events'])) {
             function egRenderRows(rows) {
                 if (!rows.length) {
                     $('#eg-list-tbody').empty();
-                    var filtering = egState.kw || egState.source || egState.readState;
+                    var filtering = egState.kw || egState.source || egState.readState || egState.kind;
                     $('#eg-list-msg').html('<i class="fa ' + (filtering ? 'fa-search-minus' : 'fa-inbox') + '"></i> ' + (filtering ? '找不到符合的公告 / 通知' : '目前沒有任何公告 / 通知')).show();
                     return;
                 }
@@ -2414,12 +2420,12 @@ if (isset($_POST['btn_go_events'])) {
                 $('#eg-list-msg').html('<i class="fa fa-spinner fa-spin"></i>').show();
                 // 來源下拉還沒填過（例：編輯往返直接還原到第 N 頁）就順便跟後端要一次
                 var needSources = $('#eg-filter-source option').length <= 1 ? 1 : 0;
-                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source, field: egState.field, read_state: egState.readState, need_sources: needSources }, function(res) {
+                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source, kind: egState.kind, field: egState.field, read_state: egState.readState, need_sources: needSources }, function(res) {
                     if (!res || !res.ok) { $('#eg-list-tbody').empty(); $('#eg-list-msg').html(res && res.msg ? res.msg : '載入失敗').show(); if (done) done(); return; }
                     egState.pages = res.pages; egState.total = res.total;
                     egRenderRows(res.rows);
                     egRenderPager();
-                    $('#eg-list-title').text(((egState.kw || egState.source || egState.readState) ? '搜尋結果' : '公告 / 通知列表') + '（' + res.total + '）');
+                    $('#eg-list-title').text(((egState.kw || egState.source || egState.readState || egState.kind) ? '搜尋結果' : '公告 / 通知列表') + '（' + res.total + '）');
                     if (res.sources && res.sources.length) {
                         // 來源下拉：隱藏中的來源標註（隱藏中）——「所有來源」不含它們，指定選取仍可查看
                         var opt = '<option value="">所有來源</option>';
@@ -2746,6 +2752,7 @@ if (isset($_POST['btn_go_events'])) {
             $('#eg-pager').on('click', '.pg:not(.disabled):not(.active)', function() { var pg = parseInt($(this).data('pg'), 10); if (pg >= 1 && pg <= egState.pages) egLoadList(pg); });
             $('#eg-page-size').on('change', function() { egState.size = parseInt(this.value, 10) || 10; egLoadList(1); });
             $('#eg-filter-source').on('change', function() { egState.source = this.value; egLoadList(1); });
+            $('#eg-filter-kind').on('change', function() { egState.kind = this.value; egLoadList(1); });
             $('#eg-filter-read').on('change', function() { egState.readState = this.value; egLoadList(1); });
 
             // 來源顯示設定（管理權限者）：勾選＝隱藏於「所有來源」列表；不影響推播
@@ -2801,7 +2808,8 @@ if (isset($_POST['btn_go_events'])) {
             function egExportQs(kind) {
                 return LIST_API + '?export=' + kind + '&kw=' + encodeURIComponent(egState.kw)
                      + '&source=' + encodeURIComponent(egState.source) + '&field=' + encodeURIComponent(egState.field)
-                     + '&read_state=' + encodeURIComponent(egState.readState);
+                     + '&read_state=' + encodeURIComponent(egState.readState)
+                     + '&kind=' + encodeURIComponent(egState.kind);
             }
             $('#eg-export-csv').on('click', function() { window.location = egExportQs('csv'); });
             $('#eg-export-pdf').on('click', function() { window.open(egExportQs('print'), '_blank'); });
@@ -2816,7 +2824,7 @@ if (isset($_POST['btn_go_events'])) {
                 try {
                     sessionStorage.setItem(EG_LIST_STATE_KEY, JSON.stringify({
                         page: egState.page, size: egState.size, kw: egState.kw,
-                        source: egState.source, field: egState.field, readState: egState.readState,
+                        source: egState.source, kind: egState.kind, field: egState.field, readState: egState.readState,
                         scrollY: window.pageYOffset || document.documentElement.scrollTop || 0
                     }));
                 } catch (e) {}
@@ -2841,6 +2849,8 @@ if (isset($_POST['btn_go_events'])) {
                 egState.source = egRestore.source || '';
                 egState.field  = egRestore.field || 'all';
                 egState.readState = egRestore.readState || '';
+                egState.kind = egRestore.kind || '';
+                $('#eg-filter-kind').val(egState.kind);
                 $('#eg-page-size').val(String(egState.size));
                 $searchField.val(egState.field);
                 $('#eg-filter-read').val(egState.readState);
