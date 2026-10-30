@@ -11590,8 +11590,15 @@ echo "</script>\n";
             pdrop.style.cssText='border:1px solid #ccc;border-radius:3px;max-height:150px;overflow-y:auto;display:none;position:absolute;top:100%;left:0;background:#fff;z-index:9999;min-width:220px;box-shadow:0 2px 6px rgba(0,0,0,.15);font-size:12px;';
             var pWrap=document.createElement('div'); pWrap.style.cssText='position:relative;';
             pWrap.appendChild(pIn); pWrap.appendChild(pdrop); r.appendChild(pWrap);
-            var _pi=-1,_pt=null;
+            var _pi=-1,_pt=null,_plist=[];
             function _pHL(i){ var it=Array.from(pdrop.querySelectorAll('.pd-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _pi=i; }
+            // 確定採用某個製程：填入「代號 名稱」、記下代號；move=true 時跳到廠商欄，否則留在原欄並全選（接著打字會整個取代）
+            function _commitP(p, move){
+                pIn.value=p.ProcessNo+' '+(p.ProcessName||''); pIn.dataset.pno=String(p.ProcessNo);
+                pdrop.style.display='none'; _pi=-1; pIn.style.borderColor='';
+                var w=pWrap.querySelector('.p-invalid-warn'); if(w) w.remove();
+                if(move){ makerIn.focus(); } else { try{ pIn.setSelectionRange(0,pIn.value.length); }catch(e){} }
+            }
             pIn.addEventListener('keydown',function(e){
                 var it=Array.from(pdrop.querySelectorAll('.pd-opt'));
                 if(pdrop.style.display!=='none'&&it.length){
@@ -11600,7 +11607,11 @@ echo "</script>\n";
                     if(e.key==='Enter'){ e.preventDefault(); if(_pi>=0) it[_pi].click(); return; }
                     if(e.key==='Escape'){ pdrop.style.display='none'; _pi=-1; return; }
                 }
-                if(e.key==='Tab'&&!e.shiftKey){ e.preventDefault(); makerIn.focus(); return; }
+                if(e.key==='Tab'&&!e.shiftKey){
+                    e.preventDefault();
+                    if(pdrop.style.display!=='none'&&_pi>=0&&_plist[_pi]){ _commitP(_plist[_pi],true); return; }
+                    makerIn.focus(); return;
+                }
                 if(e.key==='ArrowDown'&&pdrop.style.display==='none'){
                     e.preventDefault();
                     var rows=Array.from(procRows.children),ci=rows.indexOf(r);
@@ -11624,7 +11635,8 @@ echo "</script>\n";
                 var t=pIn.value.trim(); if(!t){ pdrop.style.display='none'; return; }
                 _pt=setTimeout(function(){
                     $.post(_selfUrl,{action:'search_process',term:t},function(resp){
-                        pdrop.innerHTML=''; _pi=-1;
+                        if(pIn.value.trim()!==t) return;   // 回應回來時使用者已經又改了字，這份結果作廢
+                        pdrop.innerHTML=''; _pi=-1; _plist=[];
                         if(!resp.success||!resp.processes||!resp.processes.length){
                             var n=document.createElement('div'); n.style.cssText='padding:7px 10px;color:#999;font-size:12px;'; n.textContent='查無製程'; pdrop.appendChild(n); pdrop.style.display='block'; return;
                         }
@@ -11633,14 +11645,21 @@ echo "</script>\n";
                             o.style.cssText='padding:5px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;';
                             o.innerHTML='<span style="font-weight:bold;color:#337ab7;">'+p.ProcessNo+'</span> - '+(p.ProcessName||'');
                             o.onmouseover=function(){ _pHL(Array.from(pdrop.querySelectorAll('.pd-opt')).indexOf(o)); };
-                            o.onclick=function(){ pIn.value=p.ProcessNo+' '+(p.ProcessName||''); pIn.dataset.pno=String(p.ProcessNo); pdrop.style.display='none'; _pi=-1; makerIn.focus(); };
+                            o.onclick=function(){ _commitP(p,true); };
                             pdrop.appendChild(o);
-                        }); pdrop.style.display='block';
+                        });
+                        _plist=resp.processes.slice();
+                        // 加快輸入：只有一個符合 → 直接帶入（不必再選）；有多個 → 先高亮第一筆並暫記代號，
+                        // Tab／Enter／離開欄位就採用它，也可用 ↑↓ 改選別的
+                        if(_plist.length===1){ _commitP(_plist[0],false); return; }
+                        pdrop.style.display='block'; _pHL(0); pIn.dataset.pno=String(_plist[0].ProcessNo);
                     },'json');
                 },250);
             });
             pIn.addEventListener('blur',function(){
                 setTimeout(function(){
+                    // 離開欄位時下拉還開著、使用者沒有點選 → 採用目前高亮那一筆（預設第一筆）
+                    if(pdrop.style.display!=='none'&&_pi>=0&&_plist[_pi]){ _commitP(_plist[_pi],false); try{ pIn.setSelectionRange(0,0); }catch(e){} }
                     pdrop.style.display='none'; _pi=-1;
                     // 再等 500ms，讓 AJAX 有機會回來設定 pno，再判斷是否顯示警告
                     setTimeout(function(){
