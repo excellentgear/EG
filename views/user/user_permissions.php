@@ -370,7 +370,7 @@ $EG_ROLE_MODULES = [
     'quotation'           => ['prefix'=>'quot',    'label'=>'報價單',              'page'=>'quotation_list_NEW.php'],
     'notice'              => ['prefix'=>'notice',  'label'=>'公告/通知',           'page'=>'createEvent.php'],
     'homepage'            => ['prefix'=>'home',    'label'=>'首頁設定',            'page'=>'home_page_setting.php'],
-    'qc'                  => ['prefix'=>'qc',      'label'=>'QC檢驗',              'page'=>'inspection_entry_v2.php'],
+    'qc'                  => ['prefix'=>'qc',      'label'=>'品管檢驗表 2.0',      'page'=>'inspection_entry_v2.php'],
     'car'                 => ['prefix'=>'car',     'label'=>'異常矯正單',          'page'=>'correction_order.php'],
     'master_data'         => ['prefix'=>'mdata',   'label'=>'主檔管理',            'page'=>'master_data_management.php'],
     'attach_dl'           => ['prefix'=>'adl',     'label'=>'附件下載權限',        'page'=>'master_data_management.php'],
@@ -1482,7 +1482,7 @@ $_quotDepts = array_keys($_deptSet);
                         '為每位使用者指派首頁設定頁面的操作角色。角色與功能定義請至 <strong>首頁設定 → 權限設定</strong>。',
                         rs_of('homepage'), rsu_of('homepage'), $admins, $_quotDepts, $canEdit);
 
-                    eg_render_role_section('qc', 'qc', '品管檢驗（QC）', 'fa-check-square-o', '#9b59b6',
+                    eg_render_role_section('qc', 'qc', '品管檢驗表 2.0', 'fa-check-square-o', '#9b59b6',
                         '為每位使用者指派品管檢驗頁面的操作角色（填寫檢驗表單、修改/開放檢驗歷程、回覆異常處置）。角色與功能定義請至 <strong>品管檢驗 → 設定（齒輪圖示）→ 權限設定</strong>。',
                         rs_of('qc'), rsu_of('qc'), $admins, $_quotDepts, $canEdit);
 
