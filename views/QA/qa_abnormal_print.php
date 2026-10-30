@@ -175,10 +175,10 @@ table.f td.lb { text-align:center; font-weight:bold; background:#F3F3F3; }
 table.f td.c { text-align:center; }
 table.mem td.mdim { text-align:left; padding:1px 3px; }
 table.mem .mdim-name { font-weight:bold; word-break:break-all; }
-table.mem .mdim-spec { display:flex; align-items:center; gap:4px; font-size:10pt; }
+table.mem .mdim-line { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 table.mem .mtol { display:inline-flex; flex-direction:column; font-size:8pt; line-height:1.15; border-left:1px solid #000; padding-left:3px; }
 table.mem .mdim-rng { font-size:8.5pt; color:#333; }
-table.mem td.mng { border:2px solid #000; outline:1px solid #000; outline-offset:-4px; font-weight:bold; background:#ddd; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+table.mem td.mng { background:#d9d9d9; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 .mark-print { margin:4px 0; page-break-inside:avoid; }
 .mark-print img { max-width:100%; max-height:85mm; border:1px solid #000; }
 /* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
@@ -286,7 +286,7 @@ svg.eg-stamp-tpl { height:auto !important; }
 
 <!-- 量測尺寸與實測值 -->
 <table class="f mem">
-    <colgroup><col style="width:28%"><?php for ($i = 0; $i < 12; $i++) echo '<col style="width:6%">'; ?></colgroup>
+    <colgroup><col style="width:16%"><?php for ($i = 0; $i < 12; $i++) echo '<col style="width:7%">'; ?></colgroup>
     <tr>
         <td class="lb" rowspan="2">量測尺寸</td>
         <td class="lb" colspan="12">實 測 值</td>
@@ -303,20 +303,23 @@ svg.eg-stamp-tpl { height:auto !important; }
     ?>
     <tr>
         <td class="mdim">
-            <div class="mdim-name"><?= h(trim((($m['dim_code'] ?? '') !== '' ? $m['dim_code'] . '　' : '') . ($m['dim_name'] ?? ''))) ?></div>
-            <?php if ($sp && !$isOkng): ?>
-            <div class="mdim-spec">
-                <?php if (($sp['mode'] ?? '') === 'RANGE'): ?>
-                    <span class="mstd"><?= h($sp['min']) ?> ~ <?= h($sp['max']) ?></span>
-                <?php elseif (($sp['std'] ?? '') !== ''): ?>
-                    <span class="mstd"><?= h($sp['std']) ?></span>
-                    <?php if (($sp['up'] ?? '') !== '' || ($sp['lo'] ?? '') !== ''): ?>
-                    <span class="mtol"><span><?= h(($sp['up'] ?? '') !== '' ? $sp['up'] : '0') ?></span><span><?= h(($sp['lo'] ?? '') !== '' ? $sp['lo'] : '0') ?></span></span>
-                    <?php endif; ?>
-                <?php endif; ?>
-            </div>
-            <?php if ($lo !== null && $hi !== null): ?><div class="mdim-rng">[<?= h($fmtN($lo)) ?> ~ <?= h($fmtN($hi)) ?>]</div><?php endif; ?>
-            <?php endif; ?>
+            <?php
+                $nmTxt = trim((($m['dim_code'] ?? '') !== '' ? $m['dim_code'] . '　' : '') . ($m['dim_name'] ?? ''));
+                $stdTxt = ''; $tolUp = ''; $tolLo = '';
+                if ($sp && !$isOkng) {
+                    if (($sp['mode'] ?? '') === 'RANGE') $stdTxt = ($sp['min'] ?? '') . ' ~ ' . ($sp['max'] ?? '');
+                    else {
+                        $stdTxt = (string)($sp['std'] ?? '');
+                        if (($sp['up'] ?? '') !== '' || ($sp['lo'] ?? '') !== '') { $tolUp = ($sp['up'] ?? '') !== '' ? $sp['up'] : '0'; $tolLo = ($sp['lo'] ?? '') !== '' ? $sp['lo'] : '0'; }
+                    }
+                }
+                // 項目名稱本身就是標準值時（例：24.8）不重複印第二次
+                if ($stdTxt !== '' && trim((string)($m['dim_name'] ?? '')) === $stdTxt) $stdTxt = '';
+            ?>
+            <div class="mdim-line"><span class="mdim-name"><?= h($nmTxt) ?></span>
+                <?php if ($stdTxt !== ''): ?><span class="mstd"><?= h($stdTxt) ?></span><?php endif; ?>
+                <?php if ($tolUp !== ''): ?><span class="mtol"><span><?= h($tolUp) ?></span><span><?= h($tolLo) ?></span></span><?php endif; ?></div>
+            <?php if ($sp && !$isOkng && $lo !== null && $hi !== null): ?><div class="mdim-rng">[<?= h($fmtN($lo)) ?> ~ <?= h($fmtN($hi)) ?>]</div><?php endif; ?>
         </td>
         <?php for ($i = 0; $i < 12; $i++):
             $v = trim((string)($m['vals'][$i] ?? ''));
