@@ -4,6 +4,9 @@
  * 彙整：發單（發去哪一間）／轉發／回廠／取回（撤回）／廠商報廢／品管檢驗／品管開異常單／
  *       移轉憑單／狀態事件／人工結案等，依時間由舊到新排列。純讀取，不寫任何資料。
  */
+// 在函式外載入（該檔頂層程式碼若在函式內執行會污染區域變數）
+try { require_once __DIR__ . '/qa_abnormal_lib.php'; } catch (Throwable $e0) { }
+
 if (!function_exists('eg_bom_timeline')) {
     function eg_bom_timeline(PDO $db, string $bom): array {
         $bom = trim($bom);
@@ -87,7 +90,6 @@ if (!function_exists('eg_bom_timeline')) {
             $arows = $aq->fetchAll(PDO::FETCH_ASSOC);
             $smap = [];
             try {
-                require_once __DIR__ . '/qa_abnormal_lib.php';
                 if (function_exists('qab_status_map')) $smap = qab_status_map($db, array_column($arows, 'id'));
             } catch (Throwable $e2) { $smap = []; }
             foreach ($arows as $a) {
@@ -110,7 +112,7 @@ if (!function_exists('eg_bom_timeline')) {
                     . '｜' . ($verdict !== '' ? ltrim($verdict, '，') : '待判定'), (string)($a['created_by'] ?? ''), $isScrap ? 'red' : 'yellow');
                 if (!empty($a['is_closed']) && !empty($a['closed_at'])) $add($a['closed_at'], $snOf($fid0), 'abnormal', '異常單結案', '異常單 ' . $a['abnormal_order_no'] . ' 結案' . ($fin !== '' ? '，判定：' . $fin : '') . (!empty($a['scrap_no']) ? '，報廢單號 ' . $a['scrap_no'] : ''), '', $isScrap ? 'red' : 'yellow');
             }
-        } catch (Throwable $e) { /* 異常單表缺欄時略過，不影響其他紀錄 */ }
+        } catch (Throwable $e) { error_log("bom_timeline abnormal: " . $e->getMessage()); }
         // 移轉憑單
         $tq = $db->prepare("SELECT tl.*, a.maker_id AS m_from, c.maker_id AS m_to FROM bom_ing_transfer_log tl
                               LEFT JOIN maker_list a ON a.maker_id_no = tl.maker_from LEFT JOIN maker_list c ON c.maker_id_no = tl.maker_to
