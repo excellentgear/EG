@@ -3586,7 +3586,38 @@ function qab_decision_tags(PDO $db, string $by, array $keys): array
 /** BOM總覽：每張製令的決策標籤 */
 function qab_bom_decision_tags(PDO $db, array $bomNos): array
 {
-    return qab_decision_tags($db, 'bom', $bomNos);
+    $out = qab_decision_tags($db, 'bom', $bomNos);
+    // 廠商回廠提報的報廢（bom_ing_outsource_batch.scrap_qty>0）也要在 BOM總覽顯示（QC待驗清單早就有，這裡補齊）；
+    // 有對應自動開立的異常單就帶單號，滑過標籤可看到
+    $bomNos = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $bomNos)), function ($v) { return $v !== ''; })));
+    if (!$bomNos) return $out;
+    try {
+        $in = implode(',', array_fill(0, count($bomNos), '?'));
+        $st = $db->prepare("SELECT bi.bom AS k, b.scrap_qty, b.updated_at, bi.bom_sn, pn.ProcessName,
+                                   (SELECT o.abnormal_order_no FROM qa_abnormal_order o WHERE o.src_outsource_batch_id = b.batch_id AND o.deleted_at IS NULL ORDER BY o.id DESC LIMIT 1) AS ab_no,
+                                   (SELECT o.id FROM qa_abnormal_order o WHERE o.src_outsource_batch_id = b.batch_id AND o.deleted_at IS NULL ORDER BY o.id DESC LIMIT 1) AS ab_id
+                              FROM bom_ing_outsource_batch b
+                              JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
+                              LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                             WHERE bi.bom IN ($in) AND b.scrap_qty > 0");
+        $st->execute($bomNos);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ts = (string)$r['updated_at'];
+            // 該異常單已做出決策、決策標籤已顯示的就不再重複顯示廠商提報標籤
+            $dup = false;
+            if ((int)($r['ab_id'] ?? 0) > 0) foreach ($out[(string)$r['k']] ?? [] as $t) if ((int)($t['id'] ?? 0) === (int)$r['ab_id']) { $dup = true; break; }
+            if ($dup) continue;
+            $out[(string)$r['k']][] = [
+                'kind' => 'vendor_scrap', 'name' => '報廢', 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '',
+                'process' => (string)($r['ProcessName'] ?? ''), 'qty' => (int)round((float)$r['scrap_qty']), 'who' => '廠商提報',
+                'bg' => '#F8D7D0', 'fg' => '#8a2a16', 'no' => (string)($r['ab_no'] ?? ''), 'id' => (int)($r['ab_id'] ?? 0),
+                'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
+            ];
+        }
+        foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
+        unset($list);
+    } catch (Throwable $e) {}
+    return $out;
 }
 
 /** QC待驗清單／完工紀錄：每個製程站(bom_ing_fid)的決策標籤＋廠商提報報廢標籤（新→舊） */
