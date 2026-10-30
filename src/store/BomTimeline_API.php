@@ -10,7 +10,9 @@ $bom = trim((string)($_REQUEST['bom'] ?? ''));
 if ($bom === '') { echo json_encode(['success' => false, 'message' => '缺少 BOM']); exit; }
 try {
     if (!isset($db)) { $c = new DBConnection(); $db = $c->getPDO(); }
-    echo json_encode(['success' => true, 'bom' => $bom, 'events' => eg_bom_timeline($db, $bom)], JSON_UNESCAPED_UNICODE);
+    $co = '';
+    try { $co = (string)$db->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetchColumn(); } catch (Throwable $e2) {}
+    echo json_encode(['success' => true, 'bom' => $bom, 'company' => $co, 'events' => eg_bom_timeline($db, $bom)], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {
     echo json_encode(['success' => false, 'message' => $e->getMessage()]);
 }
