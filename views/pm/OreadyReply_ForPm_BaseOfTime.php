@@ -10369,11 +10369,14 @@ echo "</script>\n";
         const _fwdBtnHtml = _canFwd ? `<button id="qtr-fwd-${fid}" class="btn" style="background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="把還在外面的一部分改發給另一家廠商（製程列不拆，各批可分次回廠）">轉發別間廠商</button>` : '';
         const _fwdPanelHtml = _canFwd ? `
   <div id="qtr-fwd-panel-${fid}" style="display:none;margin-top:12px;padding:10px;border:1px solid #d9861f;background:#FDF3E3;border-radius:4px;">
-    <div style="font-size:12px;color:#7a4a10;line-height:1.6;margin-bottom:8px;">把還在外面的 <b>一部分</b> 改發給另一家廠商：這一站仍是同一列，底下分成兩批，兩批合計不變；各批可分次回廠，全部回齊才轉 QC 待驗。（整批改發就把數量填滿在外數量）</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;">
+    <div style="font-size:12px;color:#7a4a10;line-height:1.6;margin-bottom:6px;">把還在外面的 <b>一部分</b> 改發給另一家廠商：這一站仍是同一列，底下分成兩批，兩批合計不變；各批可分次回廠，全部回齊才轉 QC 待驗。（整批改發就把數量填滿在外數量）</div>
+    <div id="qtr-fwd-info-${fid}" style="font-size:12px;color:#5b3a12;background:#fff;border:1px solid #E4D3BC;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.55;">載入中…</div>
+    <div id="qtr-fwd-batch-row-${fid}" style="display:none;margin-bottom:8px;"><label style="font-size:12px;">從哪一批轉發？</label><select id="qtr-fwd-batch-${fid}" class="form-control"></select></div>
+    <div style="display:flex;gap:8px;margin-bottom:4px;">
       <div style="width:110px;"><label style="font-size:12px;">轉發數量</label><input type="number" min="0" id="qtr-fwd-qty-${fid}" class="form-control" value=""></div>
       <div style="flex:1;"><label style="font-size:12px;">轉發給（輸入編號或名稱後點選）</label><input type="text" id="qtr-fwd-mk-${fid}" class="form-control" list="qtr-fwd-dl-${fid}" autocomplete="off" placeholder="輸入廠商…"><datalist id="qtr-fwd-dl-${fid}"></datalist></div>
     </div>
+    <div id="qtr-fwd-hint-${fid}" style="font-size:12px;min-height:18px;margin-bottom:6px;line-height:1.5;"></div>
     <div style="display:flex;gap:8px;align-items:flex-end;">
       <div><label style="font-size:12px;">轉發日</label><input type="date" id="qtr-fwd-date-${fid}" class="form-control" style="max-width:170px;" value="${escapeHtml(todayStr)}" max="${escapeHtml(todayStr)}"></div>
       <button type="button" class="btn btn-sm btn-warning" id="qtr-fwd-go-${fid}">確認轉發</button>
@@ -10463,7 +10466,43 @@ echo "</script>\n";
             var _mk = document.getElementById('qtr-fwd-mk-' + fid), _dl = document.getElementById('qtr-fwd-dl-' + fid), _msg = document.getElementById('qtr-fwd-msg-' + fid);
             var _self = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
             var _pick = null;
-            _fb.onclick = function(){ _panel.style.display = (_panel.style.display === 'none') ? '' : 'none'; };
+            var _info = null, _infoEl = document.getElementById('qtr-fwd-info-' + fid), _hint = document.getElementById('qtr-fwd-hint-' + fid);
+            var _bsel = document.getElementById('qtr-fwd-batch-' + fid), _brow = document.getElementById('qtr-fwd-batch-row-' + fid);
+            function _n(v){ v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
+            function _curBatch(){ if (!_info) return null; var id = _bsel.value ? parseInt(_bsel.value, 10) : 0; var l = _info.batches.filter(function(b){ return b.status === 'open' && (!id || b.batch_id === id); }); return l[0] || null; }
+            function _check(){
+                _hint.innerHTML = ''; if (!_info) return;
+                var qty = parseFloat(document.getElementById('qtr-fwd-qty-' + fid).value) || 0, b = _curBatch();
+                if (!b) { _hint.innerHTML = '<span style="color:#b8431f;">這一站目前沒有還在外面的批次，無法轉發。</span>'; return; }
+                var msgs = [];
+                if (qty > 0 && qty > b.outside + 1e-9) msgs.push('<span style="color:#b8431f;font-weight:bold;">⚠ 超過「' + escapeHtml(b.maker || '這批') + '」還在外面的 ' + _n(b.outside) + ' 件（已回廠 ' + _n(b.ret) + '、報廢 ' + _n(b.scrap) + '、取回 ' + _n(b.wd) + ' 的不能轉發），送出時系統會擋下。</span>');
+                else if (qty > 0) msgs.push('轉發 ' + _n(qty) + ' 件後：「' + escapeHtml(b.maker || '這批') + '」剩 ' + _n(b.outside - qty) + ' 件在外，新批次 ' + _n(qty) + ' 件。');
+                if (_info.inspected > 0) msgs.push('<span style="color:#8a5a12;">提醒：這一站已驗 ' + _n(_info.inspected) + ' 件；轉發只動還在外面的量，不影響已驗的。</span>');
+                if (_info.next && _info.next.sent > 0) msgs.push('<span style="color:#8a5a12;">提醒：下一關「' + escapeHtml(_info.next.name) + '」已經發出 ' + _n(_info.next.sent) + ' 件，請確認轉發的量不與已過關的重複。</span>');
+                _hint.innerHTML = msgs.join('<br>');
+            }
+            function _loadInfo(){
+                _infoEl.textContent = '載入中…';
+                $.post(_self, { action: 'get_forward_info', bom_ing_fid: fid }, function(r){
+                    if (!r || !r.success) { _infoEl.textContent = '讀取失敗：' + ((r && r.message) || ''); return; }
+                    _info = r;
+                    var rows = r.batches.map(function(b){
+                        return '<tr><td style="padding:1px 8px 1px 0;">' + escapeHtml(b.maker || b.maker_no || '未指定') + (b.status === 'closed' ? ' ✔' : '') + '</td><td>送 ' + _n(b.send) + '</td><td style="padding-left:8px;">回 ' + _n(b.ret) + '</td><td style="padding-left:8px;">取回 ' + _n(b.wd) + '</td><td style="padding-left:8px;">報廢 ' + _n(b.scrap) + '</td><td style="padding-left:8px;font-weight:bold;">還在外 ' + _n(b.outside) + '</td></tr>';
+                    }).join('');
+                    _infoEl.innerHTML = '本站總數 <b>' + _n(r.stage_qty) + '</b>　已驗 <b>' + _n(r.inspected) + '</b>'
+                        + (r.next ? '　下一關「' + escapeHtml(r.next.name) + '」已發 <b>' + _n(r.next.sent) + '</b>' : '')
+                        + '<table style="margin-top:3px;font-size:12px;">' + rows + '</table>';
+                    var openB = r.batches.filter(function(b){ return b.status === 'open'; });
+                    if (openB.length > 1) {
+                        _bsel.innerHTML = openB.map(function(b){ return '<option value="' + b.batch_id + '">' + escapeHtml((b.maker || b.maker_no || '未指定') + '　還在外 ' + _n(b.outside)) + '</option>'; }).join('');
+                        _brow.style.display = '';
+                    } else { _bsel.innerHTML = ''; _brow.style.display = 'none'; }
+                    _check();
+                }, 'json').fail(function(){ _infoEl.textContent = '讀取失敗'; });
+            }
+            _bsel.onchange = _check;
+            document.getElementById('qtr-fwd-qty-' + fid).addEventListener('input', _check);
+            _fb.onclick = function(){ var open = (_panel.style.display === 'none'); _panel.style.display = open ? '' : 'none'; if (open) _loadInfo(); };
             function _find(v){ var h = null; Array.prototype.forEach.call(_dl.options, function(o){ if (o.value === v) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
             _mk.addEventListener('input', function(){
                 var v = _mk.value.trim(); _pick = _find(v);
@@ -10484,8 +10523,13 @@ echo "</script>\n";
                 if (!pk || !pk.no) { _msg.textContent = '請從清單挑選廠商（輸入編號或名稱後點選）'; return; }
                 var sd = document.getElementById('qtr-fwd-date-' + fid).value;
                 if (sd && sd > todayStr) { _msg.textContent = '轉發日不可晚於今天'; return; }
-                if (!confirm('確定把還在外面的 ' + qty + ' 件改發給「' + pk.name + '」？\n（製程仍是同一列，兩批合計不變，各批可分次回廠）')) return;
-                $.post(_qtrSelfFwd(), { action: 'outsource_batch_split', bom_ing_fid: fid, qty: qty, maker_no: pk.no, maker_name: pk.name, send_date: sd }, function(res){
+                var cb = _curBatch();
+                if (cb && qty > cb.outside + 1e-9) { _msg.textContent = '數量 ' + _n(qty) + ' 超過「' + (cb.maker || '這批') + '」還在外面的 ' + _n(cb.outside) + ' 件，請修正'; return; }
+                var warn = '';
+                if (_info && _info.inspected > 0) warn += '\n・這一站已驗 ' + _n(_info.inspected) + ' 件（轉發只動還在外面的量）';
+                if (_info && _info.next && _info.next.sent > 0) warn += '\n・下一關「' + _info.next.name + '」已發出 ' + _n(_info.next.sent) + ' 件';
+                if (!confirm('確定把還在外面的 ' + qty + ' 件改發給「' + pk.name + '」？\n（製程仍是同一列，兩批合計不變，各批可分次回廠）' + (warn ? '\n\n請注意：' + warn : ''))) return;
+                $.post(_qtrSelfFwd(), { action: 'outsource_batch_split', bom_ing_fid: fid, from_batch_id: (cb && cb.batch_id) ? cb.batch_id : '', qty: qty, maker_no: pk.no, maker_name: pk.name, send_date: sd }, function(res){
                     showTemporaryMessage(res.message || (res.success ? '已轉發' : '失敗'), !!res.success);
                     if (res.success) {
                         var m = document.getElementById(modalId); if (m) m.remove();

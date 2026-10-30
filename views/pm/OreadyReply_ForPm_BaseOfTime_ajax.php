@@ -2522,6 +2522,58 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
     exit;
 }
 
+// ── 轉發別間廠商面板用：本站總數、每個批次（廠商）的送／回／取回／報廢／還在外、已驗數、下一關已發量——純讀取 ──
+else if (isset($_POST['action']) && $_POST['action'] === 'get_forward_info') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    try {
+        eg_bom_outsource_ensure_schema($db);
+        $st = $db->prepare("SELECT bom, bom_sn, sqty, processing_state, maker_id, maker_id_no FROM bom_ing WHERE bom_ing_fid=?");
+        $st->execute([$fid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) { echo json_encode(['success'=>false,'message'=>'找不到製程']); exit; }
+        $batches = [];
+        foreach (eg_bom_outsource_list($db, $fid) as $b) {
+            $wd = (float)($b['withdrawn_qty'] ?? 0);
+            $batches[] = ['batch_id'=>(int)$b['batch_id'], 'maker_no'=>(string)$b['maker_id_no'], 'maker'=>(string)$b['maker_id'],
+                'send'=>(float)$b['send_qty'], 'ret'=>(float)$b['return_qty'], 'scrap'=>(float)$b['scrap_qty'], 'wd'=>$wd,
+                'outside'=>max(0, (float)$b['send_qty'] - (float)$b['return_qty'] - (float)$b['scrap_qty'] - $wd), 'status'=>$b['status'],
+                'send_date'=>!empty($b['send_date']) ? date('Y/m/d', strtotime($b['send_date'])) : ''];
+        }
+        // 還沒有任何批次（舊資料）：整站視為一批在外，數字取製程列本身
+        if (!$batches) {
+            $batches[] = ['batch_id'=>0, 'maker_no'=>(string)$r['maker_id_no'], 'maker'=>(string)$r['maker_id'], 'send'=>(float)$r['sqty'], 'ret'=>0, 'scrap'=>0, 'wd'=>0,
+                'outside'=>(float)$r['sqty'], 'status'=>'open', 'send_date'=>''];
+        }
+        $qc = $db->prepare("SELECT COALESCE(SUM(CASE WHEN QC_check='ok' THEN QC_ok_sqty END),0) ok, COALESCE(SUM(CASE WHEN QC_check='QQ' THEN QC_QQ_sqty END),0) qq,
+                                    COALESCE(SUM(CASE WHEN QC_check='ng' THEN QC_ng_sqty END),0) ng, COALESCE(SUM(CASE WHEN QC_check='AOD' THEN QC_aod_sqty END),0) aod FROM qc_check WHERE bom_ing_fid_ref=?");
+        $qc->execute([$fid]);
+        $q = $qc->fetch(PDO::FETCH_ASSOC);
+        $inspected = (float)$q['ok'] + (float)$q['qq'] + (float)$q['ng'] + (float)$q['aod'];
+        // 下一關（bom_sn 較大的最近一關）已經發出多少：有批次用批次（扣取回），沒有就視為整站（已開工才算）
+        $nx = $db->prepare("SELECT bi.bom_ing_fid, bi.sqty, bi.processing_state, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                             WHERE bi.bom=? AND bi.bom_sn>? AND bi.is_consumed=0 AND bi.processing_state<>'skip' ORDER BY bi.bom_sn ASC LIMIT 1");
+        $nx->execute([$r['bom'], $r['bom_sn']]);
+        $n = $nx->fetch(PDO::FETCH_ASSOC);
+        $next = null;
+        if ($n) {
+            $ns = $db->prepare("SELECT COUNT(*) c, COALESCE(SUM(send_qty - withdrawn_qty),0) s FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+            $ns->execute([$n['bom_ing_fid']]);
+            $x = $ns->fetch(PDO::FETCH_ASSOC);
+            $sent = ((int)$x['c'] > 0) ? (float)$x['s'] : (in_array($n['processing_state'], ['ing','Q','P','E'], true) ? (float)$n['sqty'] : 0.0);
+            $next = ['name'=>(string)($n['ProcessName'] ?? ''), 'state'=>$n['processing_state'], 'sent'=>$sent];
+        }
+        echo json_encode(['success'=>true, 'stage_qty'=>(float)$r['sqty'], 'state'=>$r['processing_state'], 'batches'=>$batches, 'inspected'=>$inspected, 'next'=>$next]);
+    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 // ── 發單視窗用：這一站可發多少（上一關可領量、本站已發量、本站總量）——純讀取 ──
 else if (isset($_POST['action']) && $_POST['action'] === 'get_send_avail') {
     session_write_close();
