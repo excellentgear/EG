@@ -1234,7 +1234,14 @@ if ($reply_id != "") {
          * 載入指定頁資料（初始載入、翻頁、篩選時呼叫）
          */
         function fetchAndUpdateData(page, opts) {
-            if (qcPagination.loading) return;
+            if (qcPagination.loading) {
+                // 使用者操作的篩選／搜尋（含輸入搜尋字）遇到上一次載入還沒完成：先記下，載完立刻補查，
+                // 不能直接丟掉（否則要再按一次 Enter 才會搜）。5 秒自動更新不帶 opts，仍直接略過。
+                if (opts && (opts.search !== undefined || opts.qc !== undefined || opts.pti !== undefined)) {
+                    qcPagination.pending = { page: page, opts: opts };
+                }
+                return;
+            }
             // DataTable 尚未初始化時不執行（由 ready 結尾再呼叫）
             if (!dataTableInstance) return;
 
@@ -1282,6 +1289,12 @@ if ($reply_id != "") {
                 error: function(jqXHR, textStatus) {
                     qcPagination.loading = false;
                     console.error('[QC] AJAX 失敗:', textStatus);
+                },
+                complete: function() {
+                    if (qcPagination.pending) {
+                        var _p = qcPagination.pending; qcPagination.pending = null;
+                        setTimeout(function() { fetchAndUpdateData(_p.page, _p.opts); }, 0);
+                    }
                 }
             });
         }
@@ -2546,13 +2559,13 @@ if ($reply_id != "") {
             }
             // 全域搜尋欄連動後端篩選（debounce 400ms）
             var qcSearchTimer = null;
-            $(document).on('keyup', '#qc-search-input', function() {
+            $(document).on('input keyup', '#qc-search-input', function() {
                 var val = $(this).val();
                 $('#qc-search-clear').toggle(val.length > 0);
                 clearTimeout(qcSearchTimer);
                 qcSearchTimer = setTimeout(function() {
                     fetchAndUpdateData(1, { search: val });
-                }, 400);
+                }, 250);
             });
             // 清除搜尋
             $(document).on('click', '#qc-search-clear', function() {

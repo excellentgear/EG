@@ -144,6 +144,8 @@ if ($filterSearch !== '') {
 // 已檢驗數量＝允收＋異常＋驗退＋特採（與正式版 _fetch_qc_data.php 同一算法）；有效量扣外包回廠報廢
 const QC_DONE_SUM = "(COALESCE(qc.QC_ok_sqty,0)+COALESCE(qc.QC_QQ_sqty,0)+COALESCE(qc.QC_ng_sqty,0)+COALESCE(qc.QC_aod_sqty,0))";
 const QC_EFFECTIVE_SQTY = "(bi.sqty - COALESCE(ob.scrap_qty,0))";
+// 2026-10-30 分批回廠：製程還在加工中(ing)，但已有一部分回廠且回廠量還沒驗完 → 可先驗（與正式版 _fetch_qc_data.php 同規則）
+const QC_PARTIAL_SQL = "(bi.processing_state = 'ing' AND COALESCE(ob.ret_sum,0) > " . QC_DONE_SUM . ")";
 // 後站已開工：同 BOM 更後面的站別已發單且進行中／已回廠
 const QC_NEXT_STARTED_SQL = "EXISTS (
         SELECT 1 FROM bom_ing nb
@@ -194,6 +196,9 @@ SELECT SQL_CALC_FOUND_ROWS
     bi.sqty,
     COALESCE(ob.scrap_qty,0) AS outsource_scrap_qty,
     ob.scrap_vendors AS outsource_scrap_vendors,
+    COALESCE(ob.ret_sum,0)  AS ob_ret_sum,
+    COALESCE(ob.send_sum,0) AS ob_send_sum,
+    COALESCE(ob.open_n,0)   AS ob_open_n,
     pn.ProcessNo,
     pn.ProcessName,
     pn.process_type_id,
@@ -224,7 +229,8 @@ FROM bom_ing bi
 JOIN (
     SELECT bom, COALESCE(bom_sn, -1) AS sn, COALESCE(batch_label, '') AS bl, MAX(outsource_date) AS max_date
     FROM bom_ing
-    WHERE processing_state IN ('Q','P')
+    WHERE (processing_state IN ('Q','P')
+           OR (processing_state = 'ing' AND bom_ing_fid IN (SELECT bom_ing_fid FROM bom_ing_outsource_batch WHERE return_qty > 0)))
       AND is_consumed = 0
     GROUP BY bom, COALESCE(bom_sn, -1), COALESCE(batch_label, '')
 ) latest ON bi.bom = latest.bom
@@ -242,9 +248,9 @@ JOIN bom b ON bi.bom = b.bom
 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
 LEFT JOIN (
     SELECT bom_ing_fid, SUM(scrap_qty) AS scrap_qty,
-           GROUP_CONCAT(DISTINCT NULLIF(maker_id,'') SEPARATOR '、') AS scrap_vendors
+           GROUP_CONCAT(DISTINCT CASE WHEN scrap_qty > 0 THEN NULLIF(maker_id,'') END SEPARATOR '、') AS scrap_vendors,
+           SUM(return_qty) AS ret_sum, SUM(send_qty) AS send_sum, SUM(status = 'open') AS open_n
     FROM bom_ing_outsource_batch
-    WHERE scrap_qty > 0
     GROUP BY bom_ing_fid
 ) ob ON ob.bom_ing_fid = bi.bom_ing_fid
 LEFT JOIN (
@@ -280,7 +286,7 @@ LEFT JOIN qa_abnormal_order qao
 WHERE
     b.processing_state IS NULL
     AND NOT b.processing_state <=> 1
-    AND bi.processing_state IN ('Q','P')
+    AND (bi.processing_state IN ('Q','P') OR " . QC_PARTIAL_SQL . ")
     AND bi.qc_completed = 0
     AND bi.is_consumed = 0
     AND newer.bom_ing_fid IS NULL
@@ -297,7 +303,8 @@ WHERE
     --   outsource_date 可能不同（分次發給不同廠商），舊寫法只認「日期剛好等於全 bom 最大值」
     --   那一批，導致同一 bom_sn 其他已回廠(Q)的批次被排除、QC待驗清單看不到。
     --   改為先找出「目前製程」是哪一個 bom_sn，該 bom_sn 底下所有符合狀態的批次都列入。
-    AND COALESCE(bi.bom_sn, -1) = (
+    AND (" . QC_PARTIAL_SQL . "   -- 部分回廠待驗：不受「目前製程」限制（下一站可能已先開工）
+         OR COALESCE(bi.bom_sn, -1) = (
         SELECT COALESCE(cur.bom_sn, -1)
         FROM bom_ing cur
         WHERE cur.bom = bi.bom
@@ -307,7 +314,7 @@ WHERE
           AND cur.is_consumed = 0
         ORDER BY cur.outsource_date DESC, COALESCE(cur.bom_sn, -1) DESC
         LIMIT 1
-    )
+    ))
     $extraWhere
 ORDER BY bi.outsource_date
 LIMIT $perPage OFFSET $offset
