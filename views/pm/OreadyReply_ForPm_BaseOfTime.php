@@ -1541,8 +1541,7 @@ echo "    window.initialMaxCount = " . json_encode((int)($bom_ps_list_max ?: 0))
 echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) . "; // [bom][bom_sn] 最新單價\n";
 echo "    window.ingActiveMap = " . json_encode($bom_ing_active_map ?: (object)[]) . "; // [bom] => [{per-process active data}] 供發單日欄位使用\n";
 echo "    window.transferHistoryMap = " . json_encode($transfer_history_map ?: []) . "; // [product_id][bom_sn] 同料號歷史\n";
-echo "    window.obBatchMap = " . json_encode($ob_batch_map ?: (object)[]) . "; // [bom_ing_fid] => 分批回廠各批次明細（2026-10-30）
-";
+echo "    window.obBatchMap = " . json_encode($ob_batch_map ?: (object)[]) . "; // [bom_ing_fid] => 分批回廠各批次明細（2026-10-30）\n";
 echo "    window.makerInfoMap = " . json_encode($maker_info_map ?: (object)[]) . "; // [maker_id_no] => {tel,tel2,fax,addr} 供廠商名稱浮動視窗使用\n";
 echo "    window.allProcessTypes = " . json_encode($all_process_types_init ?: []) . "; // 製程主檔（process_no）：新增BOM／新增製程的代號只能用這裡面的，AJAX 回來會再覆蓋\n";
 // 批次檢視的「公司預設」（none/lane/flow/both）：管理員設定，個人沒自己設定過就套用這個
