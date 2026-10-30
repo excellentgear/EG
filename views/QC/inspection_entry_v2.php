@@ -1377,7 +1377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     /* ---------- 量測格（三種檢視同一尺寸；2026-07-30 依現場要求逐項/逐件改成與總表一致） ---------- */
     .cells { display:flex; flex-wrap:wrap; gap:6px; }
     .mcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
-    .mcell .mno { position:absolute; top:1px; left:3px; font-size:9px; color:#8a6a45; }
+    .mcell .mno { position:absolute; top:-2px; left:3px; font-size:9px; color:#8a6a45; }
     .mcell .mval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold;
                    color:var(--ink); padding:0; height:22px; outline:none; }
     .mcell .mdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
@@ -1386,7 +1386,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .mcell.c-ng { border-color:var(--coral); background:var(--coral); }
     .mcell.c-ng .mval { color:#fff; background:var(--coral); }
     .mcell.c-ng .mno { color:#FBE3DC; }
-    .mcell.c-ng .mdev { color:#fff; font-weight:bold; }
+    .mcell.c-ng .mdev { color:#fff; font-weight:bold; background:var(--coral); }
     .mcell.c-ng .mdev:before { content:'✘ '; }
     .mcell.c-empty { border-style:dashed; border-color:#D9C8B0; }
     /* 疑似誤填（與標準值差異過大，例如漏打小數點／看錯量具）：底色比一般 NG 更深，並加 ⚠ */
@@ -1404,12 +1404,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .mcell.okng.c-empty .mtxt { color:#b9a68d; }
     /* NG加驗格（每列固定10格；獨立 class，不走 .mcell 的委派事件，才不會影響原本的判定/導航） */
     .rcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
-    .rcell .mno { position:absolute; top:1px; left:3px; font-size:9px; color:#8a6a45; }
+    .rcell .mno { position:absolute; top:-2px; left:3px; font-size:9px; color:#8a6a45; }
     .rcell .rcval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold; color:var(--ink); padding:0; height:22px; outline:none; }
     .rcell .rcdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
     .rcell.c-ok { border-color:var(--amber); background:#FDF6EA; }
     .rcell.c-ng { border-color:var(--coral); background:var(--coral); }
     .rcell.c-ng .rcval, .rcell.c-ng .rcdev, .rcell.c-ng .mno { color:#fff; }
+    .rcell.c-ng .rcval, .rcell.c-ng .rcdev { background:var(--coral); }
     .rcell.c-empty { border-style:dashed; border-color:#D9C8B0; }
     .rcell.rc-okng { cursor:pointer; user-select:none; padding-bottom:4px; }
     .rcell.rc-okng .mtxt { display:block; font-size:13px; font-weight:bold; color:var(--ink); height:22px; line-height:22px; }
