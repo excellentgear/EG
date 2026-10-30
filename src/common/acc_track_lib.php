@@ -444,6 +444,40 @@ function act_today(PDO $db): string
     return $d;
 }}
 
+if (!function_exists('act_early_days')) {
+/** 結帳日前幾個工作天就可以開始對帳（預設 5；0＝結帳日當天才開始） */
+function act_early_days(PDO $db): int
+{
+    static $v = null;
+    if ($v !== null) return $v;
+    $n = (int)act_param_get($db, 'early_days', 5);
+    return $v = ($n >= 0 && $n <= 30) ? $n : 5;
+}}
+if (!function_exists('act_early_days_save')) {
+function act_early_days_save(PDO $db, int $v, string $by = ''): void
+{
+    act_param_save($db, 'early_days', ($v >= 0 && $v <= 30) ? $v : 5, $by);
+}}
+if (!function_exists('act_ready_date')) {
+/** 可開始對帳的日期＝結帳日往前推 N 個工作天（依行事曆假日與補班日）；沒有結帳日回 null */
+function act_ready_date(PDO $db, ?string $cutoffDate): ?string
+{
+    if (!$cutoffDate) return null;
+    static $cache = [];
+    $n = act_early_days($db);
+    $k = $cutoffDate . '|' . $n;
+    if (isset($cache[$k])) return $cache[$k];
+    if (!function_exists('eg_leave_is_workday')) require_once __DIR__ . '/leave_lib.php';
+    $cur = strtotime(substr($cutoffDate, 0, 10));
+    if ($cur === false) return $cache[$k] = $cutoffDate;
+    $cnt = 0; $guard = 0;
+    while ($cnt < $n && $guard++ < 400) {
+        $cur = strtotime('-1 day', $cur);
+        if (eg_leave_is_workday($db, date('Y-m-d', $cur))) $cnt++;
+    }
+    return $cache[$k] = date('Y-m-d', $cur);
+}}
+
 if (!function_exists('act_card_status')) {
 /**
  * 顯示用的狀態鍵（使用者明確要求：結帳開始後才顯示為「需對帳」，這之前不給操作）。
@@ -454,7 +488,8 @@ function act_card_status(PDO $db, string $status, ?string $cutoffDate): string
 {
     if ($status !== '') return $status;
     $today = act_today($db);
-    return ($cutoffDate && $cutoffDate <= $today) ? 'need_recon' : 'not_due';
+    $ready = act_ready_date($db, $cutoffDate);
+    return ($ready && $ready <= $today) ? 'need_recon' : 'not_due';
 }}
 
 if (!function_exists('act_is_actionable')) {
@@ -464,7 +499,8 @@ function act_is_actionable(PDO $db, array $row, array $perms): bool
     if (!empty($perms['canAdmin'])) return true;
     if ((string)($row['status'] ?? '') !== '') return true;
     $today = act_today($db);
-    return !empty($row['cutoff_date']) && $row['cutoff_date'] <= $today;
+    $ready = act_ready_date($db, $row['cutoff_date'] ?? null);
+    return $ready !== null && $ready <= $today;
 }}
 
 if (!function_exists('act_set_status')) {
@@ -996,7 +1032,7 @@ function act_period_status_counts(PDO $db, string $side, array $period): array
         $st = $db->prepare("SELECT status, cutoff_date FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ?");
         $st->execute([$side, $bmFrom, $bmTo]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $key = ($r['status'] !== '') ? $r['status'] : (($r['cutoff_date'] && $r['cutoff_date'] <= $today) ? 'need_recon' : 'not_due');
+            $key = ($r['status'] !== '') ? $r['status'] : ((($rd = act_ready_date($db, $r['cutoff_date'])) && $rd <= $today) ? 'need_recon' : 'not_due');
             $out[$key] = ($out[$key] ?? 0) + 1;
         }
     } catch (Throwable $e) {}

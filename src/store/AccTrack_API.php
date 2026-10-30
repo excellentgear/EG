@@ -50,7 +50,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
-          'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete'];
+          'early_days_save', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['act_csrf'], $tok)) {
@@ -74,6 +74,7 @@ switch ($action) {
             'allow_skip'       => act_allow_skip_map($db),
             'show_amount'      => act_show_amount($db),
             'default_per_page' => act_default_per_page($db),
+            'early_days'       => act_early_days($db),
         ]);
     }
 
@@ -280,6 +281,13 @@ switch ($action) {
         if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
         act_default_per_page_save($db, (int)($_POST['v'] ?? 6), $uname);
         actOut(['default_per_page' => act_default_per_page($db)]);
+    }
+    case 'early_days_save': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        $v = (int)($_POST['v'] ?? 5);
+        if ($v < 0 || $v > 30) actErr('提前工作天數需在 0～30 之間');
+        act_early_days_save($db, $v, $uname);
+        actOut(['early_days' => $v]);
     }
     case 'show_amount_save': {
         if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);

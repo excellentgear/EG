@@ -349,6 +349,12 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <input type="number" id="optDefaultPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" min="1" max="200">
       </div>
 
+      <div style="margin-top:6px;">
+        <label class="opt-chk" style="margin-right:6px;">提前對帳工作天數：</label>
+        <input type="number" id="optEarlyDays" class="form-control input-sm" style="width:70px;display:inline-block;" min="0" max="30">
+        <span class="hint" style="font-size:11px;color:#888;">結帳日前 N 個工作天（依行事曆假日）起，狀態按鈕就會出現；0＝結帳日當天才開始</span>
+      </div>
+
       <h4 style="font-size:14px;margin-top:16px;">角色權限矩陣 <span class="hint" style="font-size:11px;color:#888;">勾選的角色可以把狀態按鈕按成該列狀態；本頁管理員(art_admin)不受此限，永遠可以任意設定/回復</span></h4>
       <div id="matrixWrap"></div>
 
@@ -530,7 +536,7 @@ var API = '../../src/store/AccTrack_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
 var PERMS = <?= json_encode($perms) ?>;
 var STATUSES = {}, ANCHORS = {}, MATRIX = {}, GROUPS = [];
-var ALLOW_SKIP = {ar:true, ap:true}, SHOW_AMOUNT = true, DEFAULT_PER_PAGE = 6;
+var ALLOW_SKIP = {ar:true, ap:true}, SHOW_AMOUNT = true, DEFAULT_PER_PAGE = 6, EARLY_DAYS = 5;
 var SIDE = 'ar';
 var SELECTED = {};   // track_id => true（跨換頁保留）
 var OWNER_POOL = [];
@@ -1162,6 +1168,7 @@ function openSettingMask(){
     document.getElementById('optAllowSkipAp').checked = !!ALLOW_SKIP.ap;
     document.getElementById('optShowAmount').checked = !!SHOW_AMOUNT;
     document.getElementById('optDefaultPerPage').value = DEFAULT_PER_PAGE;
+    document.getElementById('optEarlyDays').value = EARLY_DAYS;
     document.getElementById('matrixWrap').innerHTML = '';
     renderMatrix();
     renderGroups();
@@ -1287,13 +1294,17 @@ function saveSetting(){
     var skipAp = document.getElementById('optAllowSkipAp').checked ? '1' : '0';
     var showAmountV = document.getElementById('optShowAmount').checked ? '1' : '0';
     var perPage = parseInt(document.getElementById('optDefaultPerPage').value, 10) || 6;
+    var earlyDays = parseInt(document.getElementById('optEarlyDays').value, 10);
+    if (isNaN(earlyDays) || earlyDays < 0 || earlyDays > 30) { showToast('提前對帳工作天數需在 0～30 之間','error'); return; }
     $.when(
         api({action:'role_matrix_save', rows: JSON.stringify(rows)}),
         api({action:'workday_groups_save', groups: JSON.stringify(groups)}),
         api({action:'allow_skip_save', ar: skipAr, ap: skipAp}),
         api({action:'show_amount_save', v: showAmountV}),
-        api({action:'default_per_page_save', v: perPage})
-    ).done(function(r1, r2, r3, r4, r5){
+        api({action:'default_per_page_save', v: perPage}),
+        api({action:'early_days_save', v: earlyDays})
+    ).done(function(r1, r2, r3, r4, r5, r6){
+        if (r6[0] && r6[0].ok) EARLY_DAYS = r6[0].early_days;
         if (r1[0] && r1[0].ok) MATRIX = r1[0].matrix;
         if (r2[0] && r2[0].ok) GROUPS = r2[0].groups;
         if (r3[0] && r3[0].ok) ALLOW_SKIP = r3[0].allow_skip;
@@ -1343,6 +1354,7 @@ $(function(){
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;
         ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
         DEFAULT_PER_PAGE = r.default_per_page || 6;
+        EARLY_DAYS = (r.early_days === undefined) ? 5 : r.early_days;
         CARD_ORDER = ['not_due', 'need_recon'].concat(Object.keys(STATUSES));
         LIST_CARD_ORDER = ['all'].concat(CARD_ORDER);
         rebuildPerPageOptions();
