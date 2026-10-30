@@ -1497,7 +1497,7 @@ function ul_pm_summary(PDO $db, string $from, string $to, array $pmIds): array
         try {
             foreach (act_ap_rows($db, $m) as $r) {
                 $cs = (string)($r['card_status'] ?? '');
-                if (!in_array($cs, ['need_recon', 'processing'], true)) continue;
+                if (!in_array($cs, ['need_recon', 'early_recon', 'processing'], true)) continue;
                 $parties[$r['party_key']] = true;
                 $lines += (int)($r['cnt'] ?? 0);
             }

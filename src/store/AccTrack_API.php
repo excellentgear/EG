@@ -111,7 +111,7 @@ switch ($action) {
 
         // 卡片／篩選一律依「顯示用狀態」(card_status) 分類：結帳日未到(not_due)／需對帳(need_recon)
         // 才是空白狀態真正的兩種意思，不是籠統的一個「未開始」桶。
-        $counts = array_merge(['not_due' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
+        $counts = array_merge(['not_due' => 0, 'early_recon' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
         foreach ($allRows as $r) $counts[$r['card_status']]++;
 
         $rows = $allRows;

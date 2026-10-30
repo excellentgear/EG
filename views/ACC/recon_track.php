@@ -123,6 +123,7 @@ body { background:#F6F1EA; }
 .st-card .val { font-size:22px; font-weight:700; color:var(--ink); }
 .st-card[data-st="all"]          { border-top-color:var(--ink); }
 .st-card[data-st="not_due"]      { border-top-color:#C9BBA3; }
+.st-card[data-st="early_recon"]  { border-top-color:var(--amber); }
 .st-card[data-st="need_recon"]   { border-top-color:var(--coral); }
 .st-card[data-st="processing"]   { border-top-color:#a08a6f; }
 .st-card[data-st="reconciled"]   { border-top-color:var(--amber); }
@@ -131,6 +132,7 @@ body { background:#F6F1EA; }
 .st-card[data-st="acc_done"]     { border-top-color:#2E7D32; }
 .badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; line-height:16px; }
 .badge-not_due       { background:#D8CBB4; color:#5A4328; }
+.badge-early_recon   { background:var(--amber); color:#4E2C0B; }
 .badge-need_recon    { background:var(--coral); color:#fff; }
 .badge-processing    { background:#a08a6f; }
 .badge-reconciled    { background:var(--amber); color:#4E2C0B; }
@@ -573,6 +575,7 @@ function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximu
 function statusLabel(k){
     if (k === 'all') return '顯示全部';
     if (k === 'not_due') return '未到結帳日';
+    if (k === 'early_recon') return '可提早對帳';
     if (k === 'need_recon') return '需對帳';
     return (k==='' || k==null) ? '需對帳' : (STATUSES[k] || k);
 }
@@ -1355,7 +1358,7 @@ $(function(){
         ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
         DEFAULT_PER_PAGE = r.default_per_page || 6;
         EARLY_DAYS = (r.early_days === undefined) ? 5 : r.early_days;
-        CARD_ORDER = ['not_due', 'need_recon'].concat(Object.keys(STATUSES));
+        CARD_ORDER = ['not_due', 'early_recon', 'need_recon'].concat(Object.keys(STATUSES));
         LIST_CARD_ORDER = ['all'].concat(CARD_ORDER);
         rebuildPerPageOptions();
         fillGranYear(r.years);

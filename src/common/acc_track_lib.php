@@ -488,8 +488,9 @@ function act_card_status(PDO $db, string $status, ?string $cutoffDate): string
 {
     if ($status !== '') return $status;
     $today = act_today($db);
+    if ($cutoffDate && $cutoffDate <= $today) return 'need_recon';
     $ready = act_ready_date($db, $cutoffDate);
-    return ($ready && $ready <= $today) ? 'need_recon' : 'not_due';
+    return ($ready && $ready <= $today) ? 'early_recon' : 'not_due';
 }}
 
 if (!function_exists('act_is_actionable')) {
@@ -1026,13 +1027,13 @@ function act_period_status_counts(PDO $db, string $side, array $period): array
 {
     $bmFrom = substr($period['start'], 0, 7);
     $bmTo   = substr($period['end'], 0, 7);
-    $out = array_merge(['not_due' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
+    $out = array_merge(['not_due' => 0, 'early_recon' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
     try {
         $today = act_today($db);
         $st = $db->prepare("SELECT status, cutoff_date FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ?");
         $st->execute([$side, $bmFrom, $bmTo]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $key = ($r['status'] !== '') ? $r['status'] : ((($rd = act_ready_date($db, $r['cutoff_date'])) && $rd <= $today) ? 'need_recon' : 'not_due');
+            $key = ($r['status'] !== '') ? $r['status'] : act_card_status($db, '', $r['cutoff_date']);
             $out[$key] = ($out[$key] ?? 0) + 1;
         }
     } catch (Throwable $e) {}
