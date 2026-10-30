@@ -3204,7 +3204,7 @@ echo "</script>\n";
         box.appendChild(bar);
         var head = document.createElement('div');
         head.style.cssText = 'margin-top:1px;white-space:nowrap;';
-        head.textContent = (Number(m.unsent) > 0 ? '未發 ' + _obNum(m.unsent) + '・' : '') + '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
+        head.textContent = (Number(m.unsent) > 0 ? '未發 ' + _obNum(m.unsent) + '・' : '') + '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (Number(m.wd) > 0 ? '・取回 ' + _obNum(m.wd) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
         head.title = '分批回廠：已回廠 ' + _obNum(ret) + '，送出 ' + _obNum(send) + '，尚在外 ' + _obNum(out) + '，報廢 ' + _obNum(scrap) + '（點一下展開各批次）';
         box.appendChild(head);
         var list = m.batches || [];
@@ -3213,14 +3213,14 @@ echo "</script>\n";
             d.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
             var done = (b.status === 'closed');
             var t = (b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
-                + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
+                + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.wd > 0 ? '・取回 ' + _obNum(b.wd) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
             d.textContent = t;
             d.title = t + (b.send_date ? '（發單 ' + b.send_date + '）' : '');
             if (withDetail && b.returns && b.returns.length) {
                 var det = document.createElement('div');
                 det.style.cssText = 'padding-left:10px;color:#8a6a45;white-space:normal;';
                 det.textContent = (b.send_date ? '發單 ' + b.send_date + '；' : '') + b.returns.map(function (r) {
-                    return (r.date ? r.date.slice(5) : '') + ' 回 ' + _obNum(r.qty) + (r.scrap > 0 ? ' 廢 ' + _obNum(r.scrap) : '');
+                    return (r.date ? r.date.slice(5) : '') + ((r.qty > 0 || !(r.wd > 0)) ? ' 回 ' + _obNum(r.qty) : '') + (r.wd > 0 ? ' 取回 ' + _obNum(r.wd) : '') + (r.scrap > 0 ? ' 廢 ' + _obNum(r.scrap) : '');
                 }).join('、');
                 var wrap = document.createElement('div'); wrap.appendChild(d); wrap.appendChild(det); return wrap;
             }
@@ -5900,7 +5900,7 @@ echo "</script>\n";
                         _ingBtn.style.marginBottom = '0';
                         if (window.featMarkReturned) {
                             // 有獨立功能碼授權，覆蓋下方 D+R / 業務受限的舊排除規則
-                            (function(_id, _excQc, _f) { _ingBtn.onclick = function() { markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
+                            (function(_id, _excQc, _f, _p, _r) { _ingBtn.onclick = function() { if (window.EG_OR_QTY_SETTABLE) { openOutsourceReturnModal(_p, _r); return; } markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid, _proc, { bom: row.bom, bom_sn: _proc.bom_sn, d_id: row.d_id });
                         } else if (window.displayPermissionCode === 'D+R') {
                             _ingBtn.title = '無權限 (R+D 受限業務)';
                             _ingBtn.style.cursor = 'not-allowed'; _ingBtn.style.opacity = '0.6';
@@ -5910,7 +5910,7 @@ echo "</script>\n";
                             _ingBtn.style.cursor = 'not-allowed'; _ingBtn.style.opacity = '0.6';
                             _ingBtn.onclick = function(e) { e.preventDefault(); return false; };
                         } else {
-                            (function(_id, _excQc, _f) { _ingBtn.onclick = function() { if (window.userStatus == 1) markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
+                            (function(_id, _excQc, _f, _p, _r) { _ingBtn.onclick = function() { if (window.userStatus != 1) return; if (window.EG_OR_QTY_SETTABLE) { openOutsourceReturnModal(_p, _r); return; } markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid, _proc, { bom: row.bom, bom_sn: _proc.bom_sn, d_id: row.d_id });
                         }
                         var _ingBtnRow = document.createElement('div');
                         _ingBtnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
@@ -10364,6 +10364,22 @@ echo "</script>\n";
         const _curState = String(target.processing_state || '');
         const _snText   = (target.bom_sn !== undefined && target.bom_sn !== null && target.bom_sn !== '') ? ('第 ' + target.bom_sn + ' 關') : '本關';
         const _canMarkE = ((!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer) && _curState !== 'E';
+        // 轉發別間廠商：這一站目前在外面加工（ing）才有意義；把還在外面的一部分改發給另一家，兩批合計不變
+        const _canFwd = (((!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer)) && _curState === 'ing';
+        const _fwdBtnHtml = _canFwd ? `<button id="qtr-fwd-${fid}" class="btn" style="background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="把還在外面的一部分改發給另一家廠商（製程列不拆，各批可分次回廠）">轉發別間廠商</button>` : '';
+        const _fwdPanelHtml = _canFwd ? `
+  <div id="qtr-fwd-panel-${fid}" style="display:none;margin-top:12px;padding:10px;border:1px solid #d9861f;background:#FDF3E3;border-radius:4px;">
+    <div style="font-size:12px;color:#7a4a10;line-height:1.6;margin-bottom:8px;">把還在外面的 <b>一部分</b> 改發給另一家廠商：這一站仍是同一列，底下分成兩批，兩批合計不變；各批可分次回廠，全部回齊才轉 QC 待驗。（整批改發就把數量填滿在外數量）</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <div style="width:110px;"><label style="font-size:12px;">轉發數量</label><input type="number" min="0" id="qtr-fwd-qty-${fid}" class="form-control" value=""></div>
+      <div style="flex:1;"><label style="font-size:12px;">轉發給（輸入編號或名稱後點選）</label><input type="text" id="qtr-fwd-mk-${fid}" class="form-control" list="qtr-fwd-dl-${fid}" autocomplete="off" placeholder="輸入廠商…"><datalist id="qtr-fwd-dl-${fid}"></datalist></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;">
+      <div><label style="font-size:12px;">轉發日</label><input type="date" id="qtr-fwd-date-${fid}" class="form-control" style="max-width:170px;" value="${escapeHtml(todayStr)}" max="${escapeHtml(todayStr)}"></div>
+      <button type="button" class="btn btn-sm btn-warning" id="qtr-fwd-go-${fid}">確認轉發</button>
+      <span id="qtr-fwd-msg-${fid}" style="font-size:12px;color:#b8431f;"></span>
+    </div>
+  </div>` : '';
         const _etrBtnHtml = _canMarkE
             ? `<button id="qtr-etr-${fid}" class="btn" style="margin-right:auto;background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="不經發單流程，直接把這一關標記為生管已移轉(E)">本關已移轉</button>`
             : '';
@@ -10403,7 +10419,7 @@ echo "</script>\n";
         overlay.id=modalId;
         overlay.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10500;display:flex;align-items:center;justify-content:center;';
         var _initDisplay = defaultMakerNo ? defaultMakerNo + (defaultMakerName ? ' — ' + defaultMakerName : '') : '';
-        overlay.innerHTML=`<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,0.22);width:460px;max-width:95vw;">
+        overlay.innerHTML=`<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,0.22);width:600px;max-width:95vw;">
 <div style="padding:12px 16px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;">
   <strong style="font-size:13px;">${escapeHtml(bom)} / ${escapeHtml(did)} 移轉至 ${escapeHtml(procNo)} ${escapeHtml(procName)}${batchTitle}</strong>
   <button id="qtr-close-${fid}" style="border:none;background:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 4px;">×</button>
@@ -10425,17 +10441,61 @@ echo "</script>\n";
     </div>
   </div>
   ${_qtrNoteHtml}
+  ${_fwdPanelHtml}
   ${_etrPanelHtml}
   ${_codPanelHtml}
 </div>
 <div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:8px;">
   ${_codBtnHtml}
   ${_etrBtnHtml}
+  ${_fwdBtnHtml}
   <button id="qtr-cancel-${fid}" class="btn btn-default">取消</button>
   <button id="qtr-confirm-${fid}" class="btn btn-primary">確認移轉</button>
 </div></div>`;
         document.body.appendChild(overlay);
         try{$('#qtr-date-'+fid).datepicker({format:'yyyy-mm-dd',autoclose:true,language:'zh-TW',todayHighlight:true});}catch(e){}
+
+        // ── 轉發別間廠商 ──
+        (function(){
+            var _fb = document.getElementById('qtr-fwd-' + fid);
+            if (!_fb) return;
+            var _panel = document.getElementById('qtr-fwd-panel-' + fid);
+            var _mk = document.getElementById('qtr-fwd-mk-' + fid), _dl = document.getElementById('qtr-fwd-dl-' + fid), _msg = document.getElementById('qtr-fwd-msg-' + fid);
+            var _self = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
+            var _pick = null;
+            _fb.onclick = function(){ _panel.style.display = (_panel.style.display === 'none') ? '' : 'none'; };
+            function _find(v){ var h = null; Array.prototype.forEach.call(_dl.options, function(o){ if (o.value === v) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
+            _mk.addEventListener('input', function(){
+                var v = _mk.value.trim(); _pick = _find(v);
+                if (_pick) { _mk.value = _pick.no + ' ' + _pick.name; return; }
+                if (v.length < 1) { _dl.innerHTML = ''; return; }
+                $.post(_self, { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function(res){
+                    _dl.innerHTML = '';
+                    if (res && res.success && Array.isArray(res.data)) res.data.forEach(function(m){
+                        var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); _dl.appendChild(o);
+                    });
+                }, 'json');
+            });
+            document.getElementById('qtr-fwd-go-' + fid).onclick = function(){
+                _msg.textContent = '';
+                var qty = parseFloat(document.getElementById('qtr-fwd-qty-' + fid).value) || 0;
+                if (qty <= 0) { _msg.textContent = '請輸入轉發數量'; return; }
+                var pk = _find(_mk.value.trim()) || _pick;
+                if (!pk || !pk.no) { _msg.textContent = '請從清單挑選廠商（輸入編號或名稱後點選）'; return; }
+                var sd = document.getElementById('qtr-fwd-date-' + fid).value;
+                if (sd && sd > todayStr) { _msg.textContent = '轉發日不可晚於今天'; return; }
+                if (!confirm('確定把還在外面的 ' + qty + ' 件改發給「' + pk.name + '」？\n（製程仍是同一列，兩批合計不變，各批可分次回廠）')) return;
+                $.post(_qtrSelfFwd(), { action: 'outsource_batch_split', bom_ing_fid: fid, qty: qty, maker_no: pk.no, maker_name: pk.name, send_date: sd }, function(res){
+                    showTemporaryMessage(res.message || (res.success ? '已轉發' : '失敗'), !!res.success);
+                    if (res.success) {
+                        var m = document.getElementById(modalId); if (m) m.remove();
+                        if (typeof fetchDataAndFilter === 'function') fetchDataAndFilter();
+                        if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                    } else { _msg.textContent = res.message || '轉發失敗'; }
+                }, 'json');
+            };
+            function _qtrSelfFwd(){ return _self; }
+        })();
 
         // ── 廠商模糊搜尋（datalist 機制，同 vendor-filter）──────────────────
         var _qtrTimer  = null;
@@ -11066,25 +11126,13 @@ echo "</script>\n";
           + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">本次回廠／報廢（累加）</div>'
           + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
           + '  <div style="flex:1;"><label style="font-size:12px;">本次回廠數量</label><input type="number" min="0" id="orm-return-qty" class="form-control" value="0"></div>'
-          + '  <div style="flex:1;"><label style="font-size:12px;">本次報廢數量</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
+          + '  <div style="flex:1;"><label style="font-size:12px;">廠商提報報廢</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
+          + '  <div style="flex:1;"><label style="font-size:12px;" title="貨從廠商拿回來、沒有加工。上一關會退回「待移轉」，原發包日保留">取回不加工</label><input type="number" min="0" id="orm-withdraw-qty" class="form-control" value="0"></div>'
           + '</div>'
           + '<div style="margin-bottom:10px;"><label style="font-size:12px;">回廠日</label><input type="date" id="orm-return-date" class="form-control" style="max-width:200px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
           + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
           + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
           + '<div id="orm-nc-result" style="margin-top:8px;"></div>'
-          + '<hr style="margin:14px 0;">'
-          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:4px;">分批發單 <small style="font-weight:normal;color:#aaa;">（把還在外面的一部分發給另一家，不拆製程列；各批可分次回廠，之後一起送下一站）</small></div>'
-          + '<div id="orm-split-wrap">'
-          + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
-          + '  <div style="flex:1;"><label style="font-size:12px;">分出數量</label><input type="number" min="0" id="orm-split-qty" class="form-control" value=""></div>'
-          + '  <div style="flex:2;"><label style="font-size:12px;">發給廠商（輸入編號或名稱）</label><input type="text" id="orm-split-maker" class="form-control" list="orm-split-maker-list" autocomplete="off" placeholder="輸入廠商…"><datalist id="orm-split-maker-list"></datalist></div>'
-          + '</div>'
-          + '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px;">'
-          + '  <div><label style="font-size:12px;">發單日</label><input type="date" id="orm-split-date" class="form-control" style="max-width:180px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
-          + '  <button type="button" class="btn btn-default btn-sm" id="orm-split-submit">分出新批次</button>'
-          + '</div>'
-          + '<div id="orm-split-msg" style="font-size:12px;color:#b8431f;"></div>'
-          + '</div>'
           + fixSectionHtml;
         overlay.appendChild(box);
         document.body.appendChild(overlay);
@@ -11125,7 +11173,7 @@ echo "</script>\n";
                         _usEl.innerHTML = '本站總量 <b>' + _obNum(r.stage_qty) + '</b>，已發 <b>' + _obNum(r.sent_total) + '</b>，尚有 <b>' + _obNum(_unsent) + '</b> 件未發單。'
                             + ((Array.isArray(r.open_batches) ? r.open_batches.length : (ob ? 1 : 0)) === 0
                                 ? ' 已發出的批次都已回廠結清；其餘不再發單的話可 <button type="button" class="btn btn-warning btn-xs" id="orm-finish-stage">發單完成（其餘不再發）</button>'
-                                : ' 要發給其他廠商請用「移轉」按鈕填發單數量。');
+                                : ' 要發給其他廠商請點該製程的「移」按鈕（發單數量／轉發別間廠商）。');
                         var _fb = document.getElementById('orm-finish-stage');
                         if (_fb) _fb.onclick = function () {
                             if (!confirm('確定這一站其餘 ' + _obNum(_unsent) + ' 件不再發單？\n按下後視為整站回廠完成（轉 QC 待驗）。')) return;
@@ -11141,7 +11189,7 @@ echo "</script>\n";
                 _ormFillBatchSelect(_keepSel);
                 if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? '本站已發出的批次都已回廠結清。' : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
-                    el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty
+                    el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty + '</b>　已取回 <b>' + (ob.withdrawn_qty || 0)
                                   + '</b>　狀態 <b>' + (ob.status === 'closed' ? '已結清' : '未結清') + '</b>　剩餘良品數量預估 <b>' + r.remaining_good_qty + '</b>';
                     var fixInp = document.getElementById('orm-scrap-fix');
                     if (fixInp && fixInp.value === '') fixInp.placeholder = '目前 ' + ob.scrap_qty;
@@ -11158,56 +11206,18 @@ echo "</script>\n";
         }
         _refreshStatus();
 
-        // ── 分批發單：廠商搜尋（沿用既有 search_maker）＋送出 ──
-        var _splitMk = document.getElementById('orm-split-maker'), _splitDl = document.getElementById('orm-split-maker-list');
-        var _splitMakerPick = null;   // {no,name}：必須是從清單挑到的廠商，打字沒對上的不接受
-        _splitMk.addEventListener('input', function () {
-            var v = _splitMk.value.trim();
-            var hit = null;
-            Array.prototype.forEach.call(_splitDl.options, function (o) { if (o.value === v) hit = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; });
-            _splitMakerPick = hit;
-            if (hit) { _splitMk.value = hit.no + ' ' + hit.name; return; }
-            if (v.length < 1) { _splitDl.innerHTML = ''; return; }
-            $.post('', { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function (res) {
-                _splitDl.innerHTML = '';
-                if (res && res.success && Array.isArray(res.data)) res.data.forEach(function (m) {
-                    var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); _splitDl.appendChild(o);
-                });
-            }, 'json');
-        });
-        document.getElementById('orm-split-submit').onclick = function () {
-            var msg = document.getElementById('orm-split-msg'); msg.textContent = '';
-            var qty = parseFloat(document.getElementById('orm-split-qty').value) || 0;
-            if (qty <= 0) { msg.textContent = '請輸入要分出的數量'; return; }
-            var mkTxt = _splitMk.value.trim(), pick = null;
-            Array.prototype.forEach.call(_splitDl.options, function (o) { if (o.value === mkTxt) pick = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; });
-            pick = pick || _splitMakerPick;
-            if (!pick || !pick.no) { msg.textContent = '請從清單中挑選廠商（輸入編號或名稱後點選）'; return; }
-            var sd = document.getElementById('orm-split-date').value;
-            if (sd && sd > _ormToday()) { msg.textContent = '發單日不可晚於今天'; return; }
-            var src = _ormOpenBatch;   // 從目前選定（或唯一）的那一批分出去
-            if (src && qty > (Number(src.outside) || 0) + 1e-9) { msg.textContent = '分出數量 ' + qty + ' 超過這一批還在外面的數量 ' + _obNum(src.outside); return; }
-            if (!confirm('確定從「' + (src ? (src.maker_id || '未指定廠商') : '目前這批') + '」分出 ' + qty + ' 件，改發給「' + pick.name + '」？\n（兩批合計送出量不變；之後可各自回廠）')) return;
-            $.post('', { action: 'outsource_batch_split', bom_ing_fid: proc.bom_ing_fid, from_batch_id: src ? src.batch_id : '', qty: qty, maker_no: pick.no, maker_name: pick.name, send_date: sd }, function (res) {
-                showTemporaryMessage(res.message || (res.success ? '已分批' : '失敗'), !!res.success);
-                if (res.success) {
-                    document.getElementById('orm-split-qty').value = ''; _splitMk.value = ''; _splitMakerPick = null;
-                    _refreshStatus();
-                    if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
-                    _ormRefreshMain();
-                } else { msg.textContent = res.message || '分批失敗'; }
-            }, 'json');
-        };
-
         document.getElementById('orm-submit-add').onclick = function(){
             var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
             var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
-            if (rq <= 0 && sq <= 0) { showTemporaryMessage('回廠數量與報廢數量至少要填一個', false); return; }
+            var wq = parseFloat(document.getElementById('orm-withdraw-qty').value) || 0;
+            if (rq < 0 || sq < 0 || wq < 0) { showTemporaryMessage('數量不可為負數', false); return; }
+            if (rq <= 0 && sq <= 0 && wq <= 0) { showTemporaryMessage('回廠、廠商提報報廢、取回不加工數量至少要填一個', false); return; }
+            if (wq > 0 && !confirm('取回不加工 ' + wq + ' 件？\n這些貨視為拿回來沒加工：上一關會退回「待移轉」，這一站的發包日期保留，取回日期另外記錄。')) return;
             if (_ormOpenBatch) {
-                var _left = (parseFloat(_ormOpenBatch.send_qty) || 0) - (parseFloat(_ormOpenBatch.return_qty) || 0) - (parseFloat(_ormOpenBatch.scrap_qty) || 0);
-                if (rq + sq > _left + 1e-9) {
-                    alert('本次回廠 ' + rq + ' ＋ 報廢 ' + sq + ' ＝ ' + (rq + sq) + '，超過這批尚未回廠的數量 ' + _left
-                        + '（送出 ' + _ormOpenBatch.send_qty + '，已回廠 ' + _ormOpenBatch.return_qty + '，已報廢 ' + _ormOpenBatch.scrap_qty + '）。請修正數量。');
+                var _left = (parseFloat(_ormOpenBatch.send_qty) || 0) - (parseFloat(_ormOpenBatch.return_qty) || 0) - (parseFloat(_ormOpenBatch.scrap_qty) || 0) - (parseFloat(_ormOpenBatch.withdrawn_qty) || 0);
+                if (rq + sq + wq > _left + 1e-9) {
+                    alert('本次回廠 ' + rq + ' ＋ 報廢 ' + sq + ' ＋ 取回 ' + wq + ' ＝ ' + (rq + sq + wq) + '，超過這批尚未回廠的數量 ' + _left
+                        + '（送出 ' + _ormOpenBatch.send_qty + '，已回廠 ' + _ormOpenBatch.return_qty + '，已報廢 ' + _ormOpenBatch.scrap_qty + '，已取回 ' + (_ormOpenBatch.withdrawn_qty || 0) + '）。請修正數量。');
                     return;
                 }
             }
@@ -11216,11 +11226,12 @@ echo "</script>\n";
             if (rd && rd > _ormToday()) { showTemporaryMessage('回廠日不可晚於今天', false); return; }
             var _selB = document.getElementById('orm-batch');
             var _bidSend = (_ormBatches.length > 1 && _selB && _selB.value) ? _selB.value : '';
-            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, return_date: rd, batch_id: _bidSend }, function(r) {
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, return_date: rd, batch_id: _bidSend }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
                     document.getElementById('orm-return-qty').value = 0;
                     document.getElementById('orm-scrap-qty').value = 0;
+                    document.getElementById('orm-withdraw-qty').value = 0;
                     var ncEl = document.getElementById('orm-nc-result');
                     if (ncEl) {
                         if (r.abnormal_order && r.abnormal_order.no) {

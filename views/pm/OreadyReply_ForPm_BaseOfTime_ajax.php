@@ -2357,7 +2357,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
         }
         $openList = [];
         foreach (eg_bom_outsource_open_batches($db, $fid) as $b) {
-            $b['outside'] = max(0, (float)$b['send_qty'] - (float)$b['return_qty'] - (float)$b['scrap_qty']);
+            $b['outside'] = max(0, (float)$b['send_qty'] - (float)$b['return_qty'] - (float)$b['scrap_qty'] - (float)($b['withdrawn_qty'] ?? 0));
             $openList[] = $b;
         }
         $sentTot = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
@@ -2415,7 +2415,9 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
         } else {
             $returnQty = (float)($_POST['return_qty'] ?? 0);
             $scrapQty  = (float)($_POST['scrap_qty'] ?? 0);
-            if ($returnQty <= 0 && $scrapQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠數量與報廢數量至少要填一個']); exit; }
+            $withdrawQty = (float)($_POST['withdraw_qty'] ?? 0);   // 取回不加工
+            if ($returnQty < 0 || $scrapQty < 0 || $withdrawQty < 0) { echo json_encode(['success'=>false,'message'=>'數量不可為負數']); exit; }
+            if ($returnQty <= 0 && $scrapQty <= 0 && $withdrawQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠、報廢、取回不加工數量至少要填一個']); exit; }
             $retDate = trim((string)($_POST['return_date'] ?? ''));
             if ($retDate !== '') {
                 $dt = DateTime::createFromFormat('Y-m-d', $retDate);
@@ -2433,9 +2435,9 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                 $chkB = eg_bom_outsource_latest_open_batch($db, $fid);
             }
             if ($chkB) {
-                $leftQ = (float)$chkB['send_qty'] - (float)$chkB['return_qty'] - (float)$chkB['scrap_qty'];
-                if ($returnQty + $scrapQty > $leftQ + 1e-9) {
-                    echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢 '.($returnQty+$scrapQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'）']); exit;
+                $leftQ = (float)$chkB['send_qty'] - (float)$chkB['return_qty'] - (float)$chkB['scrap_qty'] - (float)($chkB['withdrawn_qty'] ?? 0);
+                if ($returnQty + $scrapQty + $withdrawQty > $leftQ + 1e-9) {
+                    echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢＋取回 '.($returnQty+$scrapQty+$withdrawQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'，已取回 '.($chkB['withdrawn_qty'] ?? 0).'）']); exit;
                 }
             }
             if (!$chkB) {
@@ -2445,10 +2447,39 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     echo json_encode(['success'=>false,'message'=>'這一站已發出的批次都已回廠結清，但還有量未發單：請先到下一次「移轉」追加批次，或按「發單完成（其餘不再發）」']); exit;
                 }
             }
-            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null);
-            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null, $withdrawQty);
+            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.($withdrawQty > 0 ? '、取回不加工 '.$withdrawQty : '').'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
             if ($r['closed']) $msg .= !empty($r['all_closed']) ? '，此批已結清。' : '，此批已結清（這一站還有其他批次在外）。';
             $resp = ['success'=>true, 'message'=>$msg, 'result'=>$r];
+            // ── 取回不加工的狀態處理（使用者定案 2026-10-30）：取回的貨回到上一關「待移轉」；
+            //    這一站如果已經沒有任何貨在外面、也沒有回廠量，退回「待發單(N)」，原發包日期保留（歷史在批次與逐次紀錄裡）。
+            if ($withdrawQty > 0) {
+                try {
+                    $db->beginTransaction();
+                    $cs = $db->prepare("SELECT bom, bom_sn, processing_state FROM bom_ing WHERE bom_ing_fid = ? FOR UPDATE");
+                    $cs->execute([$fid]);
+                    $cur = $cs->fetch(PDO::FETCH_ASSOC);
+                    $agg = $db->prepare("SELECT COALESCE(SUM(send_qty - return_qty - scrap_qty - withdrawn_qty),0) o, COALESCE(SUM(return_qty),0) r FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?");
+                    $agg->execute([$fid]);
+                    $ag = $agg->fetch(PDO::FETCH_ASSOC);
+                    if ($cur && $cur['processing_state'] === 'ing' && (float)$ag['o'] <= 1e-9 && (float)$ag['r'] <= 1e-9) {
+                        $db->prepare("UPDATE bom_ing SET processing_state='N', Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=? AND processing_state='ing'")->execute([$uid, $fid]);
+                        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")->execute([$fid, 'withdraw', '取回不加工 ' . $withdrawQty . '，這一站已無貨在外，退回待發單（發包日保留）', (string)$uid]);
+                        $resp['new_status'] = 'N';
+                    }
+                    if ($cur) {
+                        $pv = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom = ? AND bom_sn < ? AND is_consumed = 0 AND processing_state = 'E' ORDER BY bom_sn DESC LIMIT 1 FOR UPDATE");
+                        $pv->execute([$cur['bom'], $cur['bom_sn']]);
+                        $prevFid = (int)$pv->fetchColumn();
+                        if ($prevFid) {
+                            $db->prepare("UPDATE bom_ing SET processing_state='P', Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=? AND processing_state='E'")->execute([$uid, $prevFid]);
+                            $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")->execute([$prevFid, 'withdraw_back', '下一關取回不加工 ' . $withdrawQty . '，退回待移轉', (string)$uid]);
+                            $resp['prev_back_fid'] = $prevFid;
+                        }
+                    }
+                    $db->commit();
+                } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); $resp['withdraw_state_warn'] = $e->getMessage(); }
+            }
             // 結清＝這一關回廠完成：比照「加工中」按鈕（_update_bom_ing_status.php）把狀態轉成 QC待驗(Q)／免驗製程直接 P。
             // 只動目前還在「加工中(ing)」的；已是 Q／P 的不重複改。回廠日已由 eg_bom_outsource_record_return 寫入。
             if (!empty($r['all_closed'])) {   // 所有批次都結清才算整站回廠完成
