@@ -34,6 +34,12 @@ catch (PDOException $e) {
     } catch (PDOException $e2) {}
 }
 
+// 議價項目旗標 quotation_item.is_nego（議價單內逐項勾選；預設 1＝沿用舊行為：議價單的項目全部視為議價）
+try { $pdo->query("SELECT is_nego FROM quotation_item LIMIT 1"); }
+catch (PDOException $e) {
+    try { $pdo->exec("ALTER TABLE quotation_item ADD COLUMN is_nego TINYINT NOT NULL DEFAULT 1 COMMENT '議價單內此項是否為議價項目(1=是)'"); } catch (PDOException $e2) {}
+}
+
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
 // ──────────────────────────────────────────────────────────────
@@ -1289,14 +1295,16 @@ try {
                     // 階層式規則：未勾「顯示」時「列印」一律歸零
                     'print_bom'          => (!empty($item['show_bom']) && !empty($item['print_bom'])) ? 1 : 0,
                     'sort_order'         => $sort_pos,
+                    // 沒送 is_nego（舊前端）＝預設 1，與舊行為一致
+                    'is_nego'            => (array_key_exists('is_nego', $item) && !$item['is_nego']) ? 0 : 1,
                 ];
 
                 if ($item_id && in_array($item_id, $existing_ids)) {
                     $submitted_ids[] = $item_id;
                     $if['item_id'] = $item_id;
-                    $pdo->prepare("UPDATE quotation_item SET quote_id=:quote_id,product_id=:product_id,d_setting_d_id=:d_setting_d_id,specification=:specification,quantity=:quantity,unit=:unit,unit_price=:unit_price,amount=:amount,process_group_type=:process_group_type,process_notes=:process_notes,is_tiered=:is_tiered,show_bom=:show_bom,print_bom=:print_bom,sort_order=:sort_order,updated_at=NOW() WHERE item_id=:item_id")->execute($if);
+                    $pdo->prepare("UPDATE quotation_item SET quote_id=:quote_id,product_id=:product_id,d_setting_d_id=:d_setting_d_id,specification=:specification,quantity=:quantity,unit=:unit,unit_price=:unit_price,amount=:amount,process_group_type=:process_group_type,process_notes=:process_notes,is_tiered=:is_tiered,show_bom=:show_bom,print_bom=:print_bom,sort_order=:sort_order,is_nego=:is_nego,updated_at=NOW() WHERE item_id=:item_id")->execute($if);
                 } else {
-                    $pdo->prepare("INSERT INTO quotation_item (quote_id,product_id,d_setting_d_id,specification,quantity,unit,unit_price,amount,process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order) VALUES (:quote_id,:product_id,:d_setting_d_id,:specification,:quantity,:unit,:unit_price,:amount,:process_group_type,:process_notes,:is_tiered,:show_bom,:print_bom,:sort_order)")->execute($if);
+                    $pdo->prepare("INSERT INTO quotation_item (quote_id,product_id,d_setting_d_id,specification,quantity,unit,unit_price,amount,process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order,is_nego) VALUES (:quote_id,:product_id,:d_setting_d_id,:specification,:quantity,:unit,:unit_price,:amount,:process_group_type,:process_notes,:is_tiered,:show_bom,:print_bom,:sort_order,:is_nego)")->execute($if);
                     $item_id = (int)$pdo->lastInsertId();
                 }
                 $submitted_ids[] = $item_id;
@@ -1489,8 +1497,8 @@ try {
             $ins_item  = $pdo->prepare("
                 INSERT INTO quotation_item
                     (quote_id,product_id,specification,quantity,unit_price,amount,
-                     process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order,is_nego)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ");
             $ins_map  = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
             $ins_tier = $pdo->prepare("
@@ -1514,6 +1522,7 @@ try {
                     $item['show_bom'] ?? 0,
                     $item['print_bom'] ?? 0,
                     $item['sort_order'] ?? 0,
+                    $item['is_nego'] ?? 1,
                 ]);
                 $new_item_id = (int)$pdo->lastInsertId();
 

@@ -517,6 +517,19 @@ body { background:var(--bg); }
     border-radius:10px; margin-left:5px; vertical-align:middle;
     font-weight:600; white-space:nowrap;
 }
+/* ── 議價單內逐項勾選議價（2026-10-30）：僅「議價單」勾選時才顯示勾選框／色底／議價按鈕 ── */
+#quoteItemsTable:not(.nego-on) .nego-item-chk,
+#quoteItemsTable:not(.nego-on) #nego-all-chk,
+#quoteItemsTable:not(.nego-on) .nego-item-btn,
+#quoteItemsTable > tbody > tr.item-row:not(.nego-row) .nego-item-btn { display:none; }
+.nego-item-chk, #nego-all-chk { width:16px; height:16px; cursor:pointer; margin:0; }
+#quoteItemsTable.nego-on > tbody > tr.item-row.nego-row > td { background:#FFF3E0; }
+#quoteItemsTable.nego-on > tbody > tr.item-row.nego-row.dup-row > td { background:#F8DCD5 !important; }
+.nego-item-btn {
+    margin-top:3px; padding:0 8px; font-size:10px; line-height:16px;
+    background:#F0A24B; color:#fff; border:1px solid #D98A30; border-radius:3px;
+}
+.nego-item-btn:hover { background:#DD8E33; color:#fff; }
 /* ── 草稿 badge（必備附件缺漏仍執意儲存）── */
 .draft-badge {
     display:inline-block; font-size:10px; padding:1px 7px;
@@ -932,14 +945,14 @@ body { background:var(--bg); }
                                          總和維持 100%，table-layout:fixed 不會出現左右捲軸 -->
                                     <col style="width:4%">   <!-- 刪除 -->
                                     <col style="width:20%">  <!-- 料號 -->
-                                    <col style="width:28%">  <!-- 製程+製程分類 -->
+                                    <col style="width:27%">  <!-- 製程+製程分類 -->
                                     <col style="width:11%">  <!-- 料號備註 -->
                                     <col style="width:6%">   <!-- 數量 -->
                                     <col style="width:7%">   <!-- 單位 -->
                                     <col style="width:9%">   <!-- 單價 -->
                                     <col style="width:9%">   <!-- 金額 -->
                                     <col style="width:4%">   <!-- 階梯 -->
-                                    <col style="width:2%">   <!-- 佔位 -->
+                                    <col style="width:3%">   <!-- 議價勾選 -->
                                 </colgroup>
                                 <thead>
                                     <tr>
@@ -952,7 +965,7 @@ body { background:var(--bg); }
                                         <th>單價</th>
                                         <th>金額</th>
                                         <th title="切換階梯報價模式"><i class="fa fa-list-ol"></i></th>
-                                        <th></th>
+                                        <th style="text-align:center;padding:4px 2px;"><input type="checkbox" id="nego-all-chk" title="議價項目：全選／全取消" checked></th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
@@ -5739,6 +5752,7 @@ function _doSaveQuote(onSuccess) {
             is_tiered:          isTiered ? 1 : 0,
             show_bom:           $row.find('.show-bom-hidden').val() === '1' ? 1 : 0,
             print_bom:          $row.find('.print-bom-hidden').val() === '1' ? 1 : 0,
+            is_nego:            $row.find('.nego-item-chk').is(':checked') ? 1 : 0,
             tiers: []
         };
         if (isTiered) {
@@ -5947,6 +5961,7 @@ function tempSaveQuote() {
             is_tiered:          isTiered ? 1 : 0,
             show_bom:           $row.find('.show-bom-hidden').val() === '1' ? 1 : 0,
             print_bom:          $row.find('.print-bom-hidden').val() === '1' ? 1 : 0,
+            is_nego:            $row.find('.nego-item-chk').is(':checked') ? 1 : 0,
             tiers: []
         };
         if (isTiered) {
@@ -6543,7 +6558,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         const amt    = parseFloat(it.amount || (qty * price));
         if (!isTieredIt) totalAmt += amt;   // 階梯項目金額依訂購量另計，不列入合計
         const unit = it.unit || 'PCS';
-        const negoTag = q.is_negotiation == 1
+        // 只有「議價單」且此項被勾為議價項目才印「議價」；未勾選者不印
+        const negoTag = (q.is_negotiation == 1 && it.is_nego != 0)
             ? `<span style="font-size:8.5pt;color:#c0392b;font-weight:bold;margin-right:2px;">議價</span>` : '';
         const priceCell = negoTag + fmtNum(price);
         // 組合件子件清單（勾選「列印時包含」才印；併入品名規格儲存格，與母件同格顯示，全數列出、不收合）
@@ -6981,6 +6997,7 @@ function addItemRow(item = {}) {
                 <input type="hidden" class="d_setting_d_id_hidden" value="${escapeHtml(String(item.d_setting_d_id || ''))}">
                 <div class="gear-spec-display" style="font-size:10px;color:#888;margin-top:3px;line-height:1.4;"></div>
                 <div class="part-attach-badges" style="margin-top:2px;line-height:1.7;"></div>
+                <button type="button" class="nego-item-btn" title="此項為議價項目（點擊取消議價）">議價</button>
                 <input type="hidden" class="show-bom-hidden" value="${item.show_bom == 1 ? 1 : 0}">
                 <input type="hidden" class="print-bom-hidden" value="${item.print_bom == 1 ? 1 : 0}">
                 <div class="bom-info-area" style="margin-top:3px;"></div>
@@ -7021,7 +7038,9 @@ function addItemRow(item = {}) {
                 <i class="fa fa-list-ol"></i>
             </button>
         </td>
-        <td></td>
+        <td style="text-align:center;padding:7px 2px 0;">
+            <input type="checkbox" class="nego-item-chk" title="議價項目" ${(item.is_nego === 0 || item.is_nego === '0') ? '' : 'checked'}>
+        </td>
     </tr>`;
 
     $tbody.append(rowHtml);
@@ -7072,7 +7091,32 @@ function renumberItemRows() {
     $('#quoteItemsTable > tbody > tr.item-row').each(function (i) {
         $(this).children('td').first().find('.item-row-no').text(i + 1);
     });
+    syncNegoUI();
 }
+
+// ── 議價單：逐項議價勾選（2026-10-30）──
+// 議價單勾選時才顯示勾選框；被勾選的整列暖色底並在料號下方顯示「議價」按鈕；列印只有被勾選者才印「議價」
+function syncNegoUI() {
+    const $tbl = $('#quoteItemsTable');
+    const on = $('#is_negotiation').is(':checked');
+    $tbl.toggleClass('nego-on', on);
+    const $chks = $tbl.find('> tbody > tr.item-row .nego-item-chk');
+    $chks.each(function () { $(this).closest('tr.item-row').toggleClass('nego-row', this.checked); });
+    const total = $chks.length, n = $chks.filter(':checked').length;
+    const all = document.getElementById('nego-all-chk');
+    if (all) { all.checked = total > 0 && n === total; all.indeterminate = n > 0 && n < total; }
+}
+$(document).on('change', '#is_negotiation', syncNegoUI);
+$(document).on('change', '.nego-item-chk', syncNegoUI);
+$(document).on('change', '#nego-all-chk', function () {
+    const v = this.checked;
+    $('#quoteItemsTable > tbody > tr.item-row .nego-item-chk').prop('checked', v);
+    syncNegoUI();
+});
+$(document).on('click', '.nego-item-btn', function () {
+    $(this).closest('tr.item-row').find('.nego-item-chk').prop('checked', false);
+    syncNegoUI();
+});
 
 // 這一列的比對指紋：料號綁定編號＋製程＋數量＋單位＋金額＋料號備註
 // 回傳 null＝還沒綁料號，不參與比對（避免打字打到一半就一直跳提示）
