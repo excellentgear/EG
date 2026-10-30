@@ -392,7 +392,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         }
         if ($act === 'bom_recent_list') {
             $s = $pdo->query(
-                "SELECT f.qc_form_id, f.insp_no, f.bom_ing_fid, bi.maker_id AS maker, f.process_name, f.check_result, f.ng_qty, f.created_at,
+                "SELECT f.qc_form_id, f.insp_no, f.insp_kind, f.bom_ing_fid, bi.maker_id AS maker, f.process_name, f.check_result, f.ng_qty, f.created_at,
                         COALESCE(NULLIF(u.user_cname,''), u.user_uname, f.created_by) AS created_by, d.D_Setting_Id AS part_no, bi.bom,
                         f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name
                  FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
@@ -408,7 +408,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             // 出貨檢驗(SHIP)雖然也是 bom_ing_fid=0，但概念上不是「無製令/無製程」的臨時檢驗單，
             // 排除在外避免混進這份清單造成混淆（bom_ing_fid=0 只是兩者共用的技術實作，不是同一件事）
             $s = $pdo->query(
-                "SELECT f.qc_form_id, f.d_id, f.process_name, f.incoming_qty, f.sample_qty, f.ng_qty,
+                "SELECT f.qc_form_id, f.d_id, f.insp_kind, f.process_name, f.incoming_qty, f.sample_qty, f.ng_qty,
                         f.check_result, f.created_at, COALESCE(NULLIF(u.user_cname,''), u.user_uname, f.created_by) AS created_by, d.D_Setting_Id AS part_no,
                         f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name
                  FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
@@ -5509,6 +5509,8 @@ $(function(){
             (IS_SUPER ? '<button class="btn btn-xs act-del-rec pull-right" data-id="'+r.qc_form_id+'" title="完全刪除此筆（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>' : '')+
             '<span class="'+o.cls+'" style="cursor:pointer;display:block;" data-id="'+r.qc_form_id+'" data-fid="'+(r.bom_ing_fid||0)+'">'+
             '<b>'+esc(o.type)+'</b> ／ '+(o.bom?esc(o.bom)+' ／ ':'')+esc(r.part_no||'—')+
+            (r.insp_kind==='FIRST' ? ' <span class="insp-kind-badge ikb-first" style="margin-top:0;">首件</span>' :
+             r.insp_kind==='LAST'  ? ' <span class="insp-kind-badge ikb-last" style="margin-top:0;">末件</span>' : '')+
             '　'+res+' <span class="muted-help">　建立：'+dotDT(r.created_at,16)+' '+esc(r.created_by||'')+
             (editedText(r)?'　<span style="color:var(--amber-d);">'+esc(editedText(r))+'</span>':'')+'</span>'+
             '<br><span class="muted-help">製程：'+esc(o.procs||'—')+'　廠商：'+esc(o.maker||'—')+'</span></span></div>';
@@ -7053,6 +7055,30 @@ $(function(){
             else openNgAskLegacy(qcFormId, s, items, done);
         }, 'json').fail(function(){ openNgAskLegacy(qcFormId, s, items, done); });
     }
+    // 2026-10-30：異常單量測尺寸顯示「63.5 (0.03/0) [63.5 ~ 63.53]」——與歷史簡化檢視同一套說法；
+    // lim_lo／lim_hi 一併帶過去，異常單畫面才能把超出範圍的實測值標紅。OK/NG 項目沒有數值範圍。
+    function qcAbDimLabel(it){
+        var nm=String(it.name||'').trim();
+        if(it.type==='OKNG') return nm;
+        var isRange = it.mode==='RANGE';
+        var st = isRange ? specDisplayText(it) : ((it.std||'')+((it.up||it.lo)?(' ('+(it.up||0)+'/'+(it.lo||0)+')'):''));
+        st=String(st||'').trim();
+        var same = !nm || nm===st || (st && st.indexOf(nm)===0);
+        var out = !st ? nm : (same ? st : nm+'　'+st);
+        var L=limits(it);
+        if(!isRange && L) out+=' ['+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+']';
+        return out;
+    }
+    // 結構化規格（異常單量測表可編輯、可判定 NG 標紅）
+    function qcAbSpec(it){
+        return { spec:{ mode:(it.mode==='RANGE'?'RANGE':'TOL'), type:(it.type==='OKNG'?'OKNG':'NUM'),
+                        std:it.std||'', up:it.up||'', lo:it.lo||'', min:it.min||'', max:it.max||'' } };
+    }
+    function qcAbLim(it){
+        if(it.type==='OKNG') return {};
+        var L=limits(it);
+        return L ? { lim_lo:+L.low.toFixed(5), lim_hi:+L.hi.toFixed(5) } : {};
+    }
     /* 自動帶入異常單「量測尺寸與實測值」：判定 NG 的尺寸（含「加量測」另一次的量測，各一列）；
        OK/NG 類型的尺寸，OK 的那幾件也標 OK，才看得出是第幾件不良。
        若這次是手動把某件判不良、尺寸本身都判 OK（沒有任何 NG 尺寸）→ 改帶「有填值的尺寸」，不讓尺寸表空著。 */
@@ -7067,7 +7093,7 @@ $(function(){
         var rows=[], sel=[];
         ng.forEach(function(it){
             sel.push(items.indexOf(it));
-            var nm=facePre+(it.name||'')+qcAbStdPart(it);
+            var nm=facePre+(it.name||''), lim=qcAbSpec(it);
             var vals=function(samples){
                 return (samples||[]).map(function(sv){
                     if(!sv) return '';
@@ -7078,8 +7104,8 @@ $(function(){
             };
             // 編號＝這個尺寸在檢驗表上目前顯示的編號（A,B,C 或 1,2,3，依儲存當下的顯示模式），不是另外編的
             var code = FO ? (it.balloon||'') : codeLabel(items.indexOf(it));
-            rows.push({ code:code, dim_name:nm, vals:vals(it.samples) });
-            (it.extra||[]).forEach(function(ex,k){ rows.push({ code:code, dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }); });
+            rows.push($.extend({ code:code, dim_name:nm, vals:vals(it.samples) }, lim));
+            (it.extra||[]).forEach(function(ex,k){ rows.push($.extend({ code:code, dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }, lim)); });
         });
         return { measures:rows, sel:sel };
     }
@@ -7177,8 +7203,8 @@ $(function(){
         if(!sel.length){ alert('請至少勾選一個量測項目列入異常單。'); return; }
         var measures = sel.map(function(idx){
             var it=qcAbPickItems[idx]||{};
-            return { code:codeLabel(idx), dim_name:(it.name||'')+qcAbStdPart(it),
-                     vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) };
+            return $.extend({ code:codeLabel(idx), dim_name:(it.name||''),
+                     vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) }, qcAbSpec(it));
         });
         var $btn=$(this).prop('disabled',true);
         $.post('../../src/store/QaAbnormal_API.php', {
@@ -8041,6 +8067,11 @@ $(function(){
             // 項目名稱與標準內容相同（只差在公差）就只顯示標準；不同才上下兩行都顯示
             var same = !nm || nm===st || (st && st.indexOf(nm)===0);
             var itemCell = !st ? esc(nm) : (same ? esc(st) : esc(nm)+'　'+esc(st));
+            // 2026-10-30：TOL 模式另附換算後的範圍 [下限 ~ 上限]（RANGE 模式標準本身已是範圍，不重複）
+            if(!isRange && it.type!=='OKNG'){
+                var Lh=limits(it);
+                if(Lh) itemCell+='　<span class="text-muted">['+esc(trimNum(Lh.low.toFixed(4)))+' ~ '+esc(trimNum(Lh.hi.toFixed(4)))+']</span>';
+            }
             readings.forEach(function(rd,ri){
                 var tds='';
                 for(var k=0;k<n;k++){
