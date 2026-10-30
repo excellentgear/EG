@@ -2543,6 +2543,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-header"><button class="close" data-dismiss="modal">&times;</button>
             <h4 class="modal-title"><i class="fa fa-wrench"></i> 量具設定</h4></div>
         <div class="modal-body">
+            <style>
+            /* 量具種類／編號已統一由「量測儀器校驗管理」維護，這裡只供查看（資料同一份、自動連動） */
+            #toolManageModal #tool-cat-form, #toolManageModal #tool-inst-form,
+            #toolManageModal .btn-edit-tc, #toolManageModal .btn-replace-tc, #toolManageModal .btn-del-tc,
+            #toolManageModal .btn-edit-ti, #toolManageModal .btn-del-ti,
+            #toolManageModal #tool-inst-list tr > :nth-child(2):not([colspan]), #toolManageModal #tool-instance-area thead tr > :nth-child(2) { display:none !important; }
+            </style>
+            <div class="alert alert-warning" style="padding:8px 12px;margin-bottom:12px;">
+                <i class="fa fa-info-circle"></i> 量具種類與編號與「量測儀器校驗管理」是同一份資料，這裡僅供查看。
+                要新增、修改或刪除，請到 <a href="tool_calibration.php" target="_blank"><b>量測儀器校驗管理</b></a> 操作（類別設定／新增儀器）。
+            </div>
             <div class="row">
                 <div class="col-md-5" style="border-right:1px solid #eee;">
                     <h4>1. 量具種類</h4>
