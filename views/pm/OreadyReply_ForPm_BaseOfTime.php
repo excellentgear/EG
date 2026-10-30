@@ -11199,16 +11199,20 @@ echo "</script>\n";
                     + '<div style="font-size:20px;font-weight:bold;color:#6B4423;line-height:1.25;">' + val + '</div></div>';
             }
             el.style.cssText = 'margin-bottom:10px;';
-            el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(b.maker_id) + '</b></div>' : '')
+            el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(b.maker_id) + '</b>' + (b.status === 'closed' ? '　<span style="color:#2a7a2a;">✔ 已結清</span>' : '') + '</div>' : '')
                 + '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;">'
                 + chip('送出', _obNum(send)) + chip('已回廠', _obNum(ret)) + chip('已報廢', _obNum(scr)) + chip('已取回', _obNum(wd))
-                + chip('還在外', _obNum(out), true) + chip('狀態', '<span style="font-size:14px;line-height:1.7;">' + (b.status === 'closed' ? '已結清' : '未結清') + '</span>') + '</div>';
+                + chip('還在外', _obNum(out), true) + '</div>';
             var allBtn = document.getElementById('orm-all-return');
             if (allBtn) { allBtn.style.display = out > 0 ? '' : 'none'; allBtn.textContent = '全數回廠（' + _obNum(out) + '）'; }
         }
         // 「直接修正報廢總數」與「本次回廠／報廢（累加）」是兩種互斥的操作：累加欄有改動或填寫時，修正區反灰不可用，
         // 避免同一次操作又累加又覆蓋；欄位回到原本的預設值（回廠量＝自動帶入值、其餘為 0）才恢復。
         var _ormInitRq = '0';
+        function _ormOutsideOf(b) { return b ? Math.max(0, (Number(b.send_qty) || 0) - (Number(b.return_qty) || 0) - (Number(b.scrap_qty) || 0) - (Number(b.withdrawn_qty) || 0)) : null; }
+        function _ormDefaultHint(b, d) {
+            return '<i class="fa fa-info-circle"></i> 已帶入還在外面的 <b>' + _obNum(d) + '</b> 件（送出 ' + _obNum(b.send_qty) + ' − 已回廠 ' + _obNum(b.return_qty) + ' − 已報廢 ' + _obNum(b.scrap_qty) + ' − 已取回 ' + _obNum(b.withdrawn_qty || 0) + '），可自行修改。';
+        }
         function _ormSyncFix() {
             var fixInp = document.getElementById('orm-scrap-fix'), fixBtn = document.getElementById('orm-submit-fix');
             if (!fixInp) return;
@@ -11233,7 +11237,14 @@ echo "</script>\n";
             }).join('');
             if (prefer) sel.value = String(prefer);
             row.style.display = '';
-            sel.onchange = function () { _ormPickBatch(); _ormRenderStatus(); };
+            sel.onchange = function () {
+                _ormPickBatch(); _ormRenderStatus();
+                var q = document.getElementById('orm-return-qty'), d = _ormOutsideOf(_ormOpenBatch), h = document.getElementById('orm-prev-hint');
+                if (q && d !== null && String(q.value) === String(_ormInitRq)) {
+                    q.value = _obNum(d); _ormInitRq = String(q.value); _ormSyncFix();
+                    if (h) { h.style.display = ''; h.innerHTML = _ormDefaultHint(_ormOpenBatch, d); }
+                }
+            };
             _ormPickBatch();
         }
         function _refreshStatus() {
@@ -11275,10 +11286,13 @@ echo "</script>\n";
                 // （2026-10-07 使用者交辦），操作人員仍可自行修改，不是鎖死的值。
                 var qtyInp = document.getElementById('orm-return-qty');
                 var hintEl = document.getElementById('orm-prev-hint');
-                if (qtyInp && qtyInp.value === '0' && r.prev_qty != null) {
-                    qtyInp.value = r.prev_qty;
+                // 2026-10-30 使用者更正：有批次時預設＝這一批還在外面的量（送出 − 已回廠 − 已報廢 − 已取回，轉發出去的已從送出量扣掉）；
+                // 還沒有批次（舊資料）才退回原本「依上一關結果帶入」。
+                var _dq = _ormOutsideOf(_ormOpenBatch);
+                if (qtyInp && qtyInp.value === '0' && (_dq !== null ? _dq > 0 : r.prev_qty != null)) {
+                    qtyInp.value = (_dq !== null) ? _obNum(_dq) : r.prev_qty;
                     _ormInitRq = String(qtyInp.value); _ormSyncFix();
-                    if (hintEl) { hintEl.style.display = ''; hintEl.innerHTML = '<i class="fa fa-info-circle"></i> 已自動帶入 ' + r.prev_qty + ' 件（' + escapeHtml(r.prev_label||'') + '），可自行修改。'; }
+                    if (hintEl) { hintEl.style.display = ''; hintEl.innerHTML = _dq !== null ? _ormDefaultHint(_ormOpenBatch, _dq) : ('<i class="fa fa-info-circle"></i> 已自動帶入 ' + r.prev_qty + ' 件（' + escapeHtml(r.prev_label||'') + '），可自行修改。'); }
                 }
             }, 'json');
         }
