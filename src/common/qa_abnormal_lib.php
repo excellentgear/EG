@@ -1847,7 +1847,7 @@ function qab_bom_processes(PDO $db, array $bomNos): array
         $out[] = ['bom' => $r['bom'], 'bom_sn' => (int)$r['bom_sn'],
                   'process_no' => $r['process_no'] === null ? null : (int)$r['process_no'],
                   'process_name' => (string)$r['ProcessName'],
-                  'vendor_id' => $r['maker_id_no'] === null ? null : (int)$r['maker_id_no'],
+                  'vendor_id' => $r['maker_id_no'] === null || $r['maker_id_no'] === '' ? null : (string)$r['maker_id_no'],   // 廠商代號是文字（5U004、T5009），不可轉整數
                   'vendor_name' => (string)$r['vendor_name'],
                   'vendor_internal' => (int)$r['vendor_internal'],
                   'state' => (string)$r['processing_state']];
