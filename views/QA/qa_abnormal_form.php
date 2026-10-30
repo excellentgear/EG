@@ -115,7 +115,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         table.mtb .m-l2 input { width:54px; padding:1px 2px; }
         table.mtb .m-l2 select { font-size:11px; padding:0 1px; height:22px; }
         table.mtb .m-tol, table.mtb .m-rng { display:inline-flex; gap:2px; align-items:center; }
-        table.mtb button.m-sym, table.mtb button.m-mode { font-size:11px; padding:1px 6px; border:1px solid var(--amber); background:#FFF6E8; color:#7A4A12; border-radius:4px; cursor:pointer; }
+        table.mtb button.m-sym, table.mtb button.m-mode, table.mtb button.m-type { font-size:11px; padding:1px 6px; border:1px solid var(--amber); background:#FFF6E8; color:#7A4A12; border-radius:4px; cursor:pointer; }
         table.mtb .m-rangetxt { font-size:11px; color:#7A5A35; }
         table.mtb input:focus { background:#FFF8EC; outline:1px solid var(--amber); }
         /* 原因分類樹 */
@@ -826,13 +826,13 @@ function mtGetSpec($tr){
     return sp;
 }
 function mtReadSpecUI($tr){
-    return { mode: $tr.find('.m-mode').attr('data-mode') === 'RANGE' ? 'RANGE' : 'TOL', type: $tr.find('.m-type').val() === 'OKNG' ? 'OKNG' : 'NUM',
+    return { mode: $tr.find('.m-mode').attr('data-mode') === 'RANGE' ? 'RANGE' : 'TOL', type: $tr.find('.m-type').attr('data-type') === 'OKNG' ? 'OKNG' : 'NUM',
              std: $.trim($tr.find('.m-std').val()), up: $.trim($tr.find('.m-up').val()), lo: $.trim($tr.find('.m-lo').val()),
              min: $.trim($tr.find('.m-min').val()), max: $.trim($tr.find('.m-max').val()) };
 }
 function mtApplySpecUI($tr, sp){
     sp = $.extend(mtDefaultSpec(), sp || {});
-    $tr.find('.m-type').val(sp.type);
+    $tr.find('.m-type').attr('data-type', sp.type).text(sp.type === 'OKNG' ? 'OK/NG' : '數值');
     $tr.find('.m-mode').attr('data-mode', sp.mode).text(sp.mode === 'RANGE' ? '範圍' : '標準值');
     $tr.find('.m-std').val(sp.std); $tr.find('.m-up').val(sp.up); $tr.find('.m-lo').val(sp.lo);
     $tr.find('.m-min').val(sp.min); $tr.find('.m-max').val(sp.max);
@@ -869,7 +869,7 @@ function mtRowHtml(r){
     var h = '<tr data-lo="" data-hi="" data-spec=""><td><input type="text" class="m-code" data-r="' + r + '" maxlength="12"></td>'
         + '<td class="m-dimtd"><div class="m-l1"><input type="text" class="m-dim" data-r="' + r + '" placeholder="檢驗項目">'
         + '<button type="button" class="m-sym" tabindex="-1" title="插入工程符號（Ø ± ▽ …）到游標處">Ø±</button></div>'
-        + '<div class="m-l2"><select class="m-type" data-eg-skip><option value="NUM">數值</option><option value="OKNG">OK/NG</option></select>'
+        + '<div class="m-l2"><button type="button" class="m-type" data-type="NUM" tabindex="-1" title="按一下切換：數值／OK-NG">數值</button>'
         + '<button type="button" class="m-mode" data-mode="TOL" tabindex="-1" title="切換：標準值＋公差／上下限範圍">標準值</button>'
         + '<span class="m-tol"><input type="text" class="m-std" placeholder="標準值"><input type="text" class="m-up" placeholder="上公差"><input type="text" class="m-lo" placeholder="下公差"></span>'
         + '<span class="m-rng" style="display:none;"><input type="text" class="m-min" placeholder="下限"><span>~</span><input type="text" class="m-max" placeholder="上限"></span>'
@@ -912,7 +912,12 @@ function mtMarkNg(){
     });
 }
 $(document).on('input change', '#mtb .m-val', mtMarkNg);
-$(document).on('input change', '#mtb .m-type, #mtb .m-std, #mtb .m-up, #mtb .m-lo, #mtb .m-min, #mtb .m-max', function(){ mtSpecLayout($(this).closest('tr')); mtMarkNg(); });
+$(document).on('click', '#mtb .m-type', function(){
+    var $b = $(this), t = $b.attr('data-type') === 'OKNG' ? 'NUM' : 'OKNG';
+    $b.attr('data-type', t).text(t === 'OKNG' ? 'OK/NG' : '數值');
+    var $tr = $b.closest('tr'); mtSpecLayout($tr); mtMarkNg();
+});
+$(document).on('input change', '#mtb .m-std, #mtb .m-up, #mtb .m-lo, #mtb .m-min, #mtb .m-max', function(){ mtSpecLayout($(this).closest('tr')); mtMarkNg(); });
 $(document).on('click', '#mtb .m-mode', function(){
     var $b = $(this), m = $b.attr('data-mode') === 'RANGE' ? 'TOL' : 'RANGE', $tr = $b.closest('tr');
     $b.attr('data-mode', m).text(m === 'RANGE' ? '範圍' : '標準值');

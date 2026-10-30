@@ -173,6 +173,14 @@ table.f th, table.f td { border:1px solid #000; padding:1px 4px; vertical-align:
                          word-wrap:break-word; overflow-wrap:break-word; line-height:1.45; }
 table.f td.lb { text-align:center; font-weight:bold; background:#F3F3F3; }
 table.f td.c { text-align:center; }
+table.mem td.mdim { text-align:left; padding:1px 3px; }
+table.mem .mdim-name { font-weight:bold; word-break:break-all; }
+table.mem .mdim-spec { display:flex; align-items:center; gap:4px; font-size:10pt; }
+table.mem .mtol { display:inline-flex; flex-direction:column; font-size:8pt; line-height:1.15; border-left:1px solid #000; padding-left:3px; }
+table.mem .mdim-rng { font-size:8.5pt; color:#333; }
+table.mem td.mng { border:2px solid #000; outline:1px solid #000; outline-offset:-4px; font-weight:bold; background:#ddd; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+.mark-print { margin:4px 0; page-break-inside:avoid; }
+.mark-print img { max-width:100%; max-height:85mm; border:1px solid #000; }
 /* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
 table.f td.optrow { height:8mm; }
 table.f td.t { vertical-align:top; }
@@ -278,7 +286,7 @@ svg.eg-stamp-tpl { height:auto !important; }
 
 <!-- 量測尺寸與實測值 -->
 <table class="f mem">
-    <colgroup><col style="width:16%"><?php for ($i = 0; $i < 12; $i++) echo '<col style="width:7%">'; ?></colgroup>
+    <colgroup><col style="width:28%"><?php for ($i = 0; $i < 12; $i++) echo '<col style="width:6%">'; ?></colgroup>
     <tr>
         <td class="lb" rowspan="2">量測尺寸</td>
         <td class="lb" colspan="12">實 測 值</td>
@@ -286,14 +294,59 @@ svg.eg-stamp-tpl { height:auto !important; }
     <tr><?php for ($i = 1; $i <= 12; $i++) echo '<td class="c lb">' . $i . '</td>'; ?></tr>
     <?php for ($r = 0, $rn = max(3, count($o['measures'] ?? [])); $r < $rn; $r++):
         $m = $o['measures'][$r] ?? null; ?>
+    <?php
+        $sp = is_array($m['spec'] ?? null) ? $m['spec'] : null;
+        $lo = isset($m['lim_lo']) && $m['lim_lo'] !== null ? (float)$m['lim_lo'] : null;
+        $hi = isset($m['lim_hi']) && $m['lim_hi'] !== null ? (float)$m['lim_hi'] : null;
+        $isOkng = $sp && (($sp['type'] ?? '') === 'OKNG');
+        $fmtN = function ($v) { return rtrim(rtrim(number_format((float)$v, 5, '.', ''), '0'), '.'); };
+    ?>
     <tr>
-        <td class="c"><?= h(trim((($m['dim_code'] ?? '') !== '' ? $m['dim_code'] . '　' : '') . ($m['dim_name'] ?? ''))) ?></td>
-        <?php for ($i = 0; $i < 12; $i++): ?>
-        <td class="c"><?= h($m['vals'][$i] ?? '') ?></td>
+        <td class="mdim">
+            <div class="mdim-name"><?= h(trim((($m['dim_code'] ?? '') !== '' ? $m['dim_code'] . '　' : '') . ($m['dim_name'] ?? ''))) ?></div>
+            <?php if ($sp && !$isOkng): ?>
+            <div class="mdim-spec">
+                <?php if (($sp['mode'] ?? '') === 'RANGE'): ?>
+                    <span class="mstd"><?= h($sp['min']) ?> ~ <?= h($sp['max']) ?></span>
+                <?php elseif (($sp['std'] ?? '') !== ''): ?>
+                    <span class="mstd"><?= h($sp['std']) ?></span>
+                    <?php if (($sp['up'] ?? '') !== '' || ($sp['lo'] ?? '') !== ''): ?>
+                    <span class="mtol"><span><?= h(($sp['up'] ?? '') !== '' ? $sp['up'] : '0') ?></span><span><?= h(($sp['lo'] ?? '') !== '' ? $sp['lo'] : '0') ?></span></span>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+            <?php if ($lo !== null && $hi !== null): ?><div class="mdim-rng">[<?= h($fmtN($lo)) ?> ~ <?= h($fmtN($hi)) ?>]</div><?php endif; ?>
+            <?php endif; ?>
+        </td>
+        <?php for ($i = 0; $i < 12; $i++):
+            $v = trim((string)($m['vals'][$i] ?? ''));
+            $ng = false;
+            if ($v !== '') {
+                if (strtoupper($v) === 'NG') $ng = true;
+                elseif (!$isOkng && is_numeric($v) && $lo !== null && $hi !== null) $ng = ((float)$v < $lo || (float)$v > $hi);
+            } ?>
+        <td class="c<?= $ng ? ' mng' : '' ?>"><?= h($v) ?></td>
         <?php endfor; ?>
     </tr>
     <?php endfor; ?>
 </table>
+<?php
+// 線上檢驗自動開立的單：品管在圖面上標示問題尺寸的那張附件（檔名以「圖面標註」開頭）要一併印出
+$markImgs = [];
+if (!empty($o['src_qc_form_id'])) {
+    $ms = $db->prepare("SELECT id, original_filename, file_name FROM qa_abnormal_attachments WHERE abnormal_order_id=? ORDER BY id");
+    $ms->execute([$id]);
+    foreach ($ms->fetchAll(PDO::FETCH_ASSOC) as $ma) {
+        $nm = (string)($ma['original_filename'] ?: $ma['file_name']);
+        if (mb_strpos($nm, '圖面標註') === 0 && preg_match('/\.(png|jpe?g|gif|webp)$/i', $nm)) $markImgs[] = (int)$ma['id'];
+    }
+}
+if ($markImgs): ?>
+<div class="mark-print">
+    <div class="small" style="font-weight:bold;margin:2px 0;">圖面標註（品管標示問題尺寸）</div>
+    <?php foreach ($markImgs as $mid): ?><img src="../../src/store/qa_attachment_download.php?id=<?= $mid ?>" alt="圖面標註"><?php endforeach; ?>
+</div>
+<?php endif; ?>
 
 <!-- 異常現象＋異常原因分類，右邊一個合併的承辦簽章欄（比照紙本 M17:O21）
      2026-09-29 使用者交辦：原因分類移到「異 常 現 象」的下方（原本在上方），
