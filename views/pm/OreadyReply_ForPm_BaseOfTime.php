@@ -18770,6 +18770,104 @@ echo "</script>\n";
 <?php /* 批次檢視（Phase 1，只做顯示）：開關預設關閉且只存在使用者自己的瀏覽器，
          沒開的時候上面那個 decorateRow 掛勾等同不存在，畫面與未加入前完全相同 */ ?>
 <?php include __DIR__ . '/_bom_batch_view.php'; ?>
+<script>
+// ── 跳窗輸入防呆（2026-10-30 使用者交辦）──────────────────────────────────────────────
+// ①跳窗裡的輸入欄有資料時，點進去／Tab 進去自動全選，方便直接修改
+// ②跳窗裡的內容有被使用者修改（真實輸入，不含程式自動帶入）→ 點到跳窗外面不會關閉；
+//   畫面右下角出現「已修改內容」提示，只能按跳窗的關閉按鈕，或點這個提示來關閉
+// 這支是通用的：只要是「蓋滿畫面的固定定位跳窗」（自刻的 overlay 與 Bootstrap 的 .modal 都算）就生效，不必逐個跳窗改。
+(function () {
+    var TXT = 'input:not([type]),input[type=text],input[type=number],input[type=search],input[type=tel],input[type=email],input[type=url],input[type=password],textarea';
+    var CTRL = 'input,select,textarea';
+    function isBackdrop(el) {
+        if (!el || el.nodeType !== 1 || el === document.body || el === document.documentElement) return false;
+        var cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' || cs.display === 'none') return false;
+        var r = el.getBoundingClientRect();
+        return r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9;
+    }
+    function backdropOf(el) {
+        for (var p = el; p && p !== document.body; p = p.parentElement) { if (isBackdrop(p)) return p; }
+        return null;
+    }
+    // ── 右下角提示 ──
+    var badge = null;
+    function ensureBadge() {
+        if (badge) return badge;
+        badge = document.createElement('div');
+        badge.id = 'eg-dirty-badge';
+        badge.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:20000;display:none;background:#FDE6C8;border:2px solid #F0A24B;color:#6B4423;'
+            + 'font-weight:bold;font-size:14px;line-height:1.4;padding:9px 16px;border-radius:8px;box-shadow:0 3px 12px rgba(0,0,0,.25);cursor:pointer;user-select:none;';
+        badge.innerHTML = '<i class="fa fa-pencil"></i> 已修改內容<span style="font-weight:normal;font-size:12px;margin-left:6px;">（點此關閉視窗；或按視窗上的關閉按鈕）</span>';
+        badge.title = '這個視窗的內容已被修改，點到視窗外面不會自動關閉';
+        badge.addEventListener('click', function () {
+            var list = dirtyList();
+            if (!list.length) { badge.style.display = 'none'; return; }
+            closeBackdrop(list[list.length - 1]);   // 關最上面（最後開的）那一個
+            setTimeout(refresh, 50);
+        });
+        document.body.appendChild(badge);
+        return badge;
+    }
+    function dirtyList() {
+        var out = [];
+        [].slice.call(document.querySelectorAll('[data-eg-dirty="1"]')).forEach(function (el) {
+            if (!document.body.contains(el) || getComputedStyle(el).display === 'none') { el.removeAttribute('data-eg-dirty'); return; }
+            out.push(el);
+        });
+        return out;
+    }
+    function closeBackdrop(el) {
+        el.removeAttribute('data-eg-dirty');
+        if (el.classList.contains('modal') && window.jQuery) { window.jQuery(el).modal('hide'); }
+        else { el.remove(); }
+    }
+    function refresh() { var b = ensureBadge(); b.style.display = dirtyList().length ? 'block' : 'none'; }
+    setInterval(refresh, 400);
+    function flash() {
+        var b = ensureBadge(); b.style.display = 'block';
+        b.style.transition = 'transform .12s'; b.style.transform = 'scale(1.12)';
+        setTimeout(function () { b.style.transform = ''; }, 180);
+    }
+
+    // ── 標記「有修改」：只認使用者真實操作（isTrusted），程式自動帶入或 dispatchEvent 不算 ──
+    function markDirty(e) {
+        if (!e.isTrusted) return;
+        var el = e.target;
+        if (!el || !el.matches || !el.matches(CTRL) || el.readOnly || el.disabled) return;
+        if (/^(button|submit|reset|hidden|file)$/i.test(el.type || '')) return;
+        var bd = backdropOf(el);
+        if (bd) { bd.setAttribute('data-eg-dirty', '1'); refresh(); }
+    }
+    document.addEventListener('input', markDirty, true);
+    document.addEventListener('change', markDirty, true);
+
+    // ── 點到跳窗外面：有修改就擋下不關閉（在捕捉階段攔，原本各跳窗的「點背景關閉」就不會執行）──
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.getAttribute && t.getAttribute('data-eg-dirty') === '1' && isBackdrop(t)) {
+            e.stopImmediatePropagation(); e.preventDefault(); flash();
+        }
+    }, true);
+    if (window.jQuery) window.jQuery(document).on('hidden.bs.modal', function (e) { if (e.target && e.target.removeAttribute) e.target.removeAttribute('data-eg-dirty'); setTimeout(refresh, 30); });
+
+    // ── 輸入欄有資料時點選／Tab 進入自動全選 ──
+    document.addEventListener('mousedown', function (e) {
+        var el = e.target;
+        if (el && el.matches && el.matches(TXT) && !el.readOnly && !el.disabled && document.activeElement !== el && String(el.value || '').length && backdropOf(el)) el._egSelByMouse = 1;
+    }, true);
+    document.addEventListener('focusin', function (e) {
+        var el = e.target;
+        if (!el || !el.matches || !el.matches(TXT) || el.readOnly || el.disabled || !String(el.value || '').length || !backdropOf(el)) return;
+        setTimeout(function () { if (document.activeElement === el) { try { el.select(); } catch (x) {} } }, 0);
+    }, true);
+    // 滑鼠點進去時，放開滑鼠會把全選取消（游標落點），所以這一次的 mouseup 擋掉
+    document.addEventListener('mouseup', function (e) {
+        var el = e.target;
+        if (el && el._egSelByMouse) { el._egSelByMouse = 0; e.preventDefault(); }
+    }, true);
+})();
+</script>
 </body>
 
 </html>
