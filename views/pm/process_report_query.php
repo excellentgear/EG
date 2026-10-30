@@ -513,6 +513,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .prq-pager button:hover:not(:disabled) { background: #F7E0BD; }
         .prq-pager button.cur { background: #F0A24B; color: #fff; border-color: #F0A24B; font-weight: bold; }
         .prq-pager button:disabled { opacity: .4; cursor: default; }
+        a.prq-detail { display: inline-block; line-height: 18px; padding: 1px 9px; border: 1px solid #d98a33; border-radius: 12px;
+            background: #FFF1DA; color: #8A5A2B; font-weight: bold; text-decoration: none; white-space: nowrap; }
+        a.prq-detail:hover { background: #F0A24B; color: #fff; text-decoration: none; }
+        a.prq-detail:before { content: "\f06e"; font-family: FontAwesome; font-weight: normal; margin-right: 4px; }
         .prq-empty { padding: 30px; text-align: center; color: #8a6d45; }
         .prq-mask { display: none; position: fixed; inset: 0; background: rgba(60,40,20,.45); z-index: 1050; }
         .prq-modal { background: #fff; border-radius: 8px; max-width: 560px; margin: 60px auto; box-shadow: 0 5px 25px rgba(0,0,0,.3);
@@ -593,6 +597,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         <div class="prq-stat">
             <span>共 <b id="statTotal">0</b> 筆</span>
+    <span style="color:#b5762a;font-size:12px;"><i class="fa fa-hand-pointer-o"></i> 點選日期按鈕可查看該筆報工詳細內容</span>
             <label style="margin-left:auto;">每頁</label>
             <select id="pageSizeSel" style="height:28px;">
                 <option value="5">5</option>
