@@ -526,6 +526,17 @@ function addOrUpdateEmployee($mode) {
                 'warnings'      => eg_user_permission_warnings($db, (int)$id),
                 'stamp_revoked' => $stampRevokedCount,   // 因本次離職一併作廢的圖章筆數（2026-09-24）
             ];
+            // 人員指派總覽（2026-10-30）：此人仍被指名於各處設定 → 回報供人事跳到總覽換人，並通知管理員與主管
+            try {
+                require_once __DIR__ . '/../common/org_role_lib.php';
+                require_once __DIR__ . '/../common/user_assign_lib.php';
+                $asg = uas_scan($db, (int)$id, false);
+                if ($asg) {
+                    $resp['assignment_notice'] = ['user_id' => (int)$id, 'name' => $user_cname, 'count' => count($asg),
+                        'modules' => array_values(array_unique(array_column($asg, 'module')))];
+                    uas_notify($db);
+                }
+            } catch (Throwable $e) { error_log('[user_assign] employee hook: ' . $e->getMessage()); }
         }
 
         // === 圖章連動（2026-09-24 使用者要求）===

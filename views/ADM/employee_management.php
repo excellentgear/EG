@@ -1543,6 +1543,15 @@ $(document).ready(function() {
                 $('#employeeModal').modal('hide');
                 loadEmployees();
                 // 改成離職/留停：權限已自動失效，順便問要不要把殘留設定也清掉（離職圖章已自動作廢，訊息內含筆數）
+                if (response.assignment_notice) {
+                    var an = response.assignment_notice;
+                    if (confirm('「' + an.name + '」仍被指派於 ' + an.count + ' 項系統設定（' + an.modules.join('、')
+                        + '）。
+系統已通知管理員與主管。
+
+要現在開啟「人員指派總覽」更換替代人員嗎？'))
+                        window.open('../admin/user_assignments.php?inactive=1&user_id=' + an.user_id, '_blank');
+                }
                 if (response.permission_notice) askRevokePermissions(response.permission_notice);
                 // 部門/職位異動影響到既有圖章：提示是否要去處理
                 if (response.stamp_dept_notice) notifyStampDeptChange(response.stamp_dept_notice);
