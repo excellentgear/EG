@@ -323,7 +323,7 @@ svg.eg-stamp-tpl { height:auto !important; }
             <div class="mdim-line"><span class="mdim-name"><?= h($nmTxt) ?></span>
                 <?php if ($stdTxt !== ''): ?><span class="mstd"><?= h($stdTxt) ?></span><?php endif; ?>
                 <?php if ($tolUp !== ''): ?><span class="mtol"><span><?= h($tolUp) ?></span><span><?= h($tolLo) ?></span></span><?php endif; ?></div>
-            <?php if ($sp && !$isOkng && $lo !== null && $hi !== null): ?><div class="mdim-rng"><?= $isExtra ? '<span class="mextra">追加檢驗</span> ' : '' ?>[<?= h($fmtN($lo)) ?> ~ <?= h($fmtN($hi)) ?>]</div><?php endif; ?>
+            <?php if ($sp && !$isOkng && $lo !== null && $hi !== null): ?><div class="mdim-rng" style="white-space:nowrap;">[<?= h($fmtN($lo)) ?> ~ <?= h($fmtN($hi)) ?>]</div><?php if ($isExtra): ?><div class="mextra">追加檢驗</div><?php endif; ?><?php endif; ?>
         </td>
         <?php for ($i = 0; $i < 12; $i++):
             $v = trim((string)($m['vals'][$i] ?? ''));
