@@ -11607,7 +11607,7 @@ echo "</script>\n";
                     if(e.key==='Enter'){ e.preventDefault(); if(_pi>=0) it[_pi].click(); return; }
                     if(e.key==='Escape'){ pdrop.style.display='none'; _pi=-1; return; }
                 }
-                if(e.key==='Tab'&&!e.shiftKey){
+                if((e.key==='Tab'&&!e.shiftKey)||e.key==='Enter'){
                     e.preventDefault();
                     if(pdrop.style.display!=='none'&&_pi>=0&&_plist[_pi]){ _commitP(_plist[_pi],true); return; }
                     makerIn.focus(); return;
@@ -11634,8 +11634,10 @@ echo "</script>\n";
                 pIn.dataset.pno=''; _pi=-1; clearTimeout(_pt);
                 var t=pIn.value.trim(); if(!t){ pdrop.style.display='none'; return; }
                 _pt=setTimeout(function(){
-                    $.post(_selfUrl,{action:'search_process',term:t},function(resp){
+                    var _zeroExact=/^0+[0-9]+$/.test(t)?String(parseInt(t,10)):null;   // 前面補 0：認定是指定該號碼
+                    $.post(_selfUrl,{action:'search_process',term:(_zeroExact!==null?_zeroExact:t)},function(resp){
                         if(pIn.value.trim()!==t) return;   // 回應回來時使用者已經又改了字，這份結果作廢
+                        if(_zeroExact!==null&&resp&&resp.processes) resp.processes=resp.processes.filter(function(x){ return String(x.ProcessNo)===_zeroExact; });
                         pdrop.innerHTML=''; _pi=-1; _plist=[];
                         if(!resp.success||!resp.processes||!resp.processes.length){
                             var n=document.createElement('div'); n.style.cssText='padding:7px 10px;color:#999;font-size:12px;'; n.textContent='查無製程'; pdrop.appendChild(n); pdrop.style.display='block'; return;
@@ -11697,7 +11699,7 @@ echo "</script>\n";
                     if(e.key==='Enter'){ e.preventDefault(); if(_mi>=0) it[_mi].click(); return; }
                     if(e.key==='Escape'){ mdrop.style.display='none'; _mi=-1; return; }
                 }
-                if(e.key==='Tab'&&!e.shiftKey){ e.preventDefault(); psIn.focus(); return; }
+                if((e.key==='Tab'&&!e.shiftKey)||(e.key==='Enter'&&mdrop.style.display==='none')){ e.preventDefault(); psIn.focus(); return; }
                 // ArrowDown（下拉關閉）→ 跳至下一列製程
                 if(e.key==='ArrowDown'&&mdrop.style.display==='none'){
                     e.preventDefault();
@@ -11744,7 +11746,7 @@ echo "</script>\n";
             var psIn=document.createElement('input'); psIn.type='text'; psIn.className='form-control input-sm pcPs';
             psIn.style.cssText='width:320px;font-size:12px;'; psIn.placeholder='備註(選填)'; psIn.value=prefill.ps||'';
             psIn.addEventListener('keydown',function(e){
-                if(e.key==='Tab'&&!e.shiftKey){
+                if((e.key==='Tab'&&!e.shiftKey)||e.key==='Enter'){
                     e.preventDefault();
                     var rows=Array.from(procRows.children),ci=rows.indexOf(r);
                     if(ci<rows.length-1){ rows[ci+1].querySelector('.pcInput').focus(); }
@@ -11851,9 +11853,18 @@ echo "</script>\n";
             if(didDrop.style.display!=='none'&&it.length){
                 if(e.key==='ArrowDown'){ e.preventDefault(); _didHL(Math.min(_didIdx+1,it.length-1)); return; }
                 if(e.key==='ArrowUp'){ e.preventDefault(); _didHL(Math.max(_didIdx-1,0)); return; }
-                if(e.key==='Enter'){ e.preventDefault(); if(_didIdx>=0) it[_didIdx].click(); return; }
+                if(e.key==='Enter'){ e.preventDefault(); it[_didIdx>=0?_didIdx:0].click(); return; }
                 if(e.key==='Escape'){ didDrop.style.display='none'; _didIdx=-1; return; }
             }
+        });
+        // 表頭欄位按 Enter 自動跳到下一個輸入框（有開著的下拉選單時由上面的處理先接手，這裡不重複）
+        box.addEventListener('keydown',function(e){
+            if(e.key!=='Enter'||e.defaultPrevented||e.isComposing) return;
+            var order=[inBom,inDid,inQty,inBomPs], i=order.indexOf(e.target);
+            if(i<0) return;
+            e.preventDefault();
+            var nxt=(i<order.length-1)?order[i+1]:(procRows.querySelector('.pcInput')||null);
+            if(nxt) nxt.focus();
         });
         inDid.addEventListener('input', function(){
             _selectedDidId=''; _didIdx=-1;
@@ -11887,6 +11898,7 @@ echo "</script>\n";
                                 '\n  customer_name:', d.customer_name
                             );
                             didDrop.style.display='none'; _didIdx=-1;
+                            setTimeout(function(){ inQty.focus(); },0);   // 選好料號直接跳到數量
                             if(d.d_id) _loadOrdersForDid(d.d_id);
                             else orderArea.style.display='none';
                         };
