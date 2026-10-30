@@ -2404,6 +2404,14 @@ else if (isset($_POST['action']) && $_POST['action'] === 'oready_or_save_toggle'
     include_once '../../src/common/role_features_helper.php';
     header('Content-Type: application/json; charset=utf-8');
     if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+            // 後端同規則再擋：本次回廠＋報廢不可超過這批尚未回廠的數量
+            $chkB = eg_bom_outsource_latest_open_batch($db, $fid);
+            if ($chkB) {
+                $leftQ = (float)$chkB['send_qty'] - (float)$chkB['return_qty'] - (float)$chkB['scrap_qty'];
+                if ($returnQty + $scrapQty > $leftQ + 1e-9) {
+                    echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢 '.($returnQty+$scrapQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'）']); exit;
+                }
+            }
     if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
     if (!oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF'])) {
         echo json_encode(['success'=>false,'message'=>'只有系統管理員可以變更這個設定']); exit;

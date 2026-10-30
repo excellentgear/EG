@@ -11032,7 +11032,18 @@ echo "</script>\n";
             var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
             var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
             if (rq <= 0 && sq <= 0) { showTemporaryMessage('回廠數量與報廢數量至少要填一個', false); return; }
-            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq }, function(r) {
+            if (_ormOpenBatch) {
+                var _left = (parseFloat(_ormOpenBatch.send_qty) || 0) - (parseFloat(_ormOpenBatch.return_qty) || 0) - (parseFloat(_ormOpenBatch.scrap_qty) || 0);
+                if (rq + sq > _left + 1e-9) {
+                    alert('本次回廠 ' + rq + ' ＋ 報廢 ' + sq + ' ＝ ' + (rq + sq) + '，超過這批尚未回廠的數量 ' + _left
+                        + '（送出 ' + _ormOpenBatch.send_qty + '，已回廠 ' + _ormOpenBatch.return_qty + '，已報廢 ' + _ormOpenBatch.scrap_qty + '）。請修正數量。');
+                    return;
+                }
+            }
+            var rdEl = document.getElementById('orm-return-date');
+            var rd = rdEl ? rdEl.value : '';
+            if (rd && rd > _ormToday()) { showTemporaryMessage('回廠日不可晚於今天', false); return; }
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, return_date: rd }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
                     document.getElementById('orm-return-qty').value = 0;
@@ -11099,12 +11110,14 @@ echo "</script>\n";
         // Header
         var hdr = document.createElement('div');
         hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:10px;border-bottom:2px solid #337ab7;';
+        var _ormOpenBatch = null;   // 目前未結清批次（送出前檢查數量上限用）
         var ttl = document.createElement('h4');
         ttl.textContent = '新增 BOM'; ttl.style.cssText = 'margin:0;color:#337ab7;';
         var xBtn = document.createElement('button');
         xBtn.innerHTML = '&times;'; xBtn.style.cssText = 'background:none;border:none;font-size:1.6rem;cursor:pointer;color:#aaa;line-height:1;';
         xBtn.onclick = function(){ overlay.remove(); };
         hdr.appendChild(ttl); hdr.appendChild(xBtn);
+                _ormOpenBatch = ob || null;
         box.appendChild(hdr);
 
         function _row(label, el, required) {
