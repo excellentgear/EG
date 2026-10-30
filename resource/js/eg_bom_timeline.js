@@ -6,6 +6,7 @@
     var API = null, drawer = null, seq = 0;
     var COLORS = { send: '#F0A24B', forward: '#E08A2E', return: '#2E8B57', withdraw: '#B8431F', scrap: '#DD5138',
                    qc: '#8A6A45', abnormal: '#DD5138', transfer: '#C0561F', event: '#A07C55', op: '#6B4423' };
+    var TONES = { green: ['#2E8B57', '#fff', '#1f6b41'], red: ['#DD5138', '#fff', '#b8381f'], yellow: ['#F5C542', '#5a3d00', '#8a5a00'] };
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     function fmtDate(d) { return (w.egFmtDate ? w.egFmtDate(d) : String(d).replace(/-/g, '.')); }
     function ensure() {
@@ -54,8 +55,9 @@
             var html = '', last = '';
             r.events.forEach(function (e) {
                 if (e.date !== last) { last = e.date; html += '<div class="egbt-d">' + esc(fmtDate(e.date)) + '</div>'; }
-                html += '<div class="egbt-i"><span class="egbt-t">' + esc(e.time) + '</span><span class="egbt-k" style="background:' + (COLORS[e.kind] || '#A07C55') + ';">' + esc(e.label) + '</span>'
-                    + '<span>' + esc(e.text) + (e.who ? ' <span class="egbt-w">・' + esc(e.who) + '</span>' : '') + '</span></div>';
+                var tc = TONES[e.tone] || null;
+                html += '<div class="egbt-i"><span class="egbt-t">' + esc(e.time) + '</span><span class="egbt-k" style="background:' + (tc ? tc[0] : (COLORS[e.kind] || '#A07C55')) + ';color:' + (tc ? tc[1] : '#fff') + ';">' + esc(e.label) + '</span>'
+                    + '<span' + (tc ? ' style="color:' + tc[2] + ';"' : '') + '>' + esc(e.text) + (e.who ? ' <span class="egbt-w">・' + esc(e.who) + '</span>' : '') + '</span></div>';
             });
             body.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:4px;">依日期由舊到新，共 ' + r.events.length + ' 筆</div>' + html;
         };

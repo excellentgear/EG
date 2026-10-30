@@ -8,25 +8,30 @@ if (!function_exists('eg_bom_timeline')) {
     function eg_bom_timeline(PDO $db, string $bom): array {
         $bom = trim($bom);
         $ev = [];
-        $add = function ($ts, $sn, $kind, $label, $text, $who = '') use (&$ev) {
+        $add = function ($ts, $sn, $kind, $label, $text, $who = '', $tone = '') use (&$ev) {
             if (!$ts) return;
-            $ev[] = ['ts' => (string)$ts, 'sn' => (int)$sn, 'kind' => $kind, 'label' => $label, 'text' => $text, 'who' => $who];
+            $ev[] = ['ts' => (string)$ts, 'sn' => (int)$sn, 'kind' => $kind, 'label' => $label, 'text' => $text, 'who' => $who, 'tone' => $tone];
         };
         $n = function ($v) { $v = (float)$v; return rtrim(rtrim(number_format($v, 3, '.', ''), '0'), '.'); };
 
         // 製程對照
-        $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, bi.processing_state
-                              FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no WHERE bi.bom = ?");
+        $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, bi.processing_state, ml.maker_id AS mk_name
+                              FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                              LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no WHERE bi.bom = ? ORDER BY bi.bom_sn");
         $st->execute([$bom]);
         $proc = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $proc[(int)$r['bom_ing_fid']] = $r;
         if (!$proc) return [];
         $in = implode(',', array_keys($proc));
-        $pname = function ($fid) use ($proc) {
+        // 關卡＝依製程順序數第幾關（不是 bom_sn 的 10/20/30…）
+        $ordOf = []; $o = 0;
+        foreach ($proc as $p) { $sn0 = (int)$p['bom_sn']; if (!isset($ordOf[$sn0])) $ordOf[$sn0] = ++$o; }
+        $pname = function ($fid) use ($proc, $ordOf) {
             if (!isset($proc[$fid])) return '';
             $p = $proc[$fid];
-            return '第' . (int)$p['bom_sn'] . '關 ' . trim(($p['process_no'] ?? '') . ' ' . ($p['ProcessName'] ?? ''));
+            return '第' . $ordOf[(int)$p['bom_sn']] . '關 ' . (trim((string)($p['ProcessName'] ?? '')) !== '' ? $p['ProcessName'] : ($p['process_no'] ?? ''));
         };
+        $mkOf = function ($fid) use ($proc) { return isset($proc[$fid]) ? trim((string)($proc[$fid]['mk_name'] ?? '')) : ''; };
         $snOf = function ($fid) use ($proc) { return isset($proc[$fid]) ? (int)$proc[$fid]['bom_sn'] : 0; };
 
         // 發單批次（含轉發）
@@ -52,7 +57,7 @@ if (!function_exists('eg_bom_timeline')) {
             $mk = (string)($r['maker_id'] ?? '');
             $note = trim((string)($r['note'] ?? ''));
             if ((float)$r['return_qty'] > 0) $add($ts, $snOf($fid), 'return', '回廠', $pname($fid) . '：「' . $mk . '」回廠 ' . $n($r['return_qty']) . ' 件', (string)($r['created_by'] ?? ''));
-            if ((float)$r['scrap_qty'] > 0) $add($ts, $snOf($fid), 'scrap', '廠商報廢', $pname($fid) . '：「' . $mk . '」提報報廢 ' . $n($r['scrap_qty']) . ' 件' . ($note !== '' ? '（' . $note . '）' : ''), (string)($r['created_by'] ?? ''));
+            if ((float)$r['scrap_qty'] > 0) $add($ts, $snOf($fid), 'scrap', '廠商報廢', $pname($fid) . '：「' . $mk . '」提報報廢 ' . $n($r['scrap_qty']) . ' 件' . ($note !== '' ? '（' . $note . '）' : ''), (string)($r['created_by'] ?? ''), 'red');
             if ((float)$r['withdraw_qty'] > 0) $add($ts, $snOf($fid), 'withdraw', '撤回', $pname($fid) . '：從「' . $mk . '」撤回 ' . $n($r['withdraw_qty']) . ' 件' . ($note !== '' ? '（' . $note . '）' : ''), (string)($r['created_by'] ?? ''));
         }
         // 狀態事件
@@ -72,19 +77,38 @@ if (!function_exists('eg_bom_timeline')) {
             $res = $qcL[$q['QC_check']] ?? (string)$q['QC_check'];
             $qty = $q['QC_check'] === 'ok' ? $q['QC_ok_sqty'] : ($q['QC_check'] === 'ng' ? $q['QC_ng_sqty'] : ($q['QC_check'] === 'AOD' ? $q['QC_aod_sqty'] : $q['QC_QQ_sqty']));
             $ts = !empty($q['QC_check_date']) ? $q['QC_check_date'] : $q['created_at'];
-            $add($ts, $snOf($fid), 'qc', '品管檢驗', $pname($fid) . '：品管檢驗' . $res . ($qty ? ' ' . $n($qty) . ' 件' : ''), (string)($q['created_by'] ?? ''));
+            $mkq = $mkOf($fid);
+            $add($ts, $snOf($fid), 'qc', '檢驗' . $res, $pname($fid) . ($mkq !== '' ? '（廠商：' . $mkq . '）' : '') . '：品管檢驗' . $res . ($qty ? ' ' . $n($qty) . ' 件' : ''), (string)($q['created_by'] ?? ''), $q['QC_check'] === 'ok' ? 'green' : 'yellow');
         }
         // 品管異常單
         try {
             $aq = $db->prepare("SELECT * FROM qa_abnormal_order WHERE bom_no = ? AND deleted_at IS NULL ORDER BY id");
             $aq->execute([$bom]);
-            foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $a) {
+            $arows = $aq->fetchAll(PDO::FETCH_ASSOC);
+            $smap = [];
+            try {
+                require_once __DIR__ . '/qa_abnormal_lib.php';
+                if (function_exists('qab_status_map')) $smap = qab_status_map($db, array_column($arows, 'id'));
+            } catch (Throwable $e2) { $smap = []; }
+            foreach ($arows as $a) {
                 $fids = array_filter(array_map('intval', preg_split('/[,\s]+/', (string)($a['bom_process_fids'] ?? ''))));
                 $fid0 = $fids ? reset($fids) : 0;
                 $where = isset($proc[$fid0]) ? $pname($fid0) : (!empty($a['resp_process_no']) ? '製程 ' . $a['resp_process_no'] : '');
                 $ph = trim((string)($a['abnormal_phenomenon'] ?? ''));
-                $add($a['created_at'], $snOf($fid0), 'abnormal', '品管異常單', ($where ? $where . '：' : '') . '開立異常單 ' . $a['abnormal_order_no'] . ($ph !== '' ? '（' . mb_substr($ph, 0, 40) . '）' : '') . (!empty($a['ng_qty']) ? ' 不良 ' . $n($a['ng_qty']) : ''), (string)($a['created_by'] ?? ''));
-                if (!empty($a['is_closed']) && !empty($a['closed_at'])) $add($a['closed_at'], $snOf($fid0), 'abnormal', '異常單結案', '異常單 ' . $a['abnormal_order_no'] . ' 結案' . (!empty($a['scrap_no']) ? '，報廢單號 ' . $a['scrap_no'] : ''));
+                $mka = $mkOf($fid0);
+                if ($mka === '' && !empty($a['responsible_vendor_id'])) {
+                    $vq = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no = ?"); $vq->execute([$a['responsible_vendor_id']]);
+                    $mka = (string)$vq->fetchColumn();
+                }
+                $sm = $smap[(int)$a['id']] ?? null;
+                $fin = $sm ? implode('、', $sm['final']['names'] ?? []) : '';
+                $isScrap = $sm ? !empty($sm['final']['is_scrap']) : !empty($a['scrap_no']);
+                $verdict = ($sm ? ($sm['status'] ?? '') : '') . ($fin !== '' ? '，判定：' . $fin : '') . (!empty($a['scrap_no']) ? '，報廢單號 ' . $a['scrap_no'] : '');
+                $add($a['created_at'], $snOf($fid0), 'abnormal', $isScrap ? '異常單・報廢' : '品管異常單',
+                    $where . ($mka !== '' ? '（廠商：' . $mka . '）' : '') . ($where !== '' || $mka !== '' ? '：' : '') . '開立異常單 ' . $a['abnormal_order_no']
+                    . ($ph !== '' ? '（' . mb_substr($ph, 0, 40) . '）' : '') . (!empty($a['ng_qty']) ? ' 不良 ' . $n($a['ng_qty']) : '')
+                    . '｜' . ($verdict !== '' ? ltrim($verdict, '，') : '待判定'), (string)($a['created_by'] ?? ''), $isScrap ? 'red' : 'yellow');
+                if (!empty($a['is_closed']) && !empty($a['closed_at'])) $add($a['closed_at'], $snOf($fid0), 'abnormal', '異常單結案', '異常單 ' . $a['abnormal_order_no'] . ' 結案' . ($fin !== '' ? '，判定：' . $fin : '') . (!empty($a['scrap_no']) ? '，報廢單號 ' . $a['scrap_no'] : ''), '', $isScrap ? 'red' : 'yellow');
             }
         } catch (Throwable $e) { /* 異常單表缺欄時略過，不影響其他紀錄 */ }
         // 移轉憑單
@@ -95,7 +119,7 @@ if (!function_exists('eg_bom_timeline')) {
         foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $sn = (int)$t['bom_sn'];
             $add(!empty($t['transfer_date']) ? substr((string)$t['transfer_date'], 0, 10) . ' 12:00:00' : $t['created_at'], $sn, 'transfer', '移轉憑單',
-                '第' . $sn . '關：移轉憑單 ' . ($t['transfer_no'] ?? '') . '，由「' . ($t['m_from'] ?: $t['maker_from']) . '」移轉' . ($t['m_to'] || $t['maker_to'] ? '至「' . ($t['m_to'] ?: $t['maker_to']) . '」' : '') . ' ' . $n($t['transfer_qty'] ?: $t['sqty']) . ' 件');
+                '第' . ($ordOf[$sn] ?? $sn) . '關：移轉憑單 ' . ($t['transfer_no'] ?? '') . '，由「' . ($t['m_from'] ?: $t['maker_from']) . '」移轉' . ($t['m_to'] || $t['maker_to'] ? '至「' . ($t['m_to'] ?: $t['maker_to']) . '」' : '') . ' ' . $n($t['transfer_qty'] ?: $t['sqty']) . ' 件');
         }
         // BOM 操作紀錄
         $opL = ['manual_close' => '人工結案', 'cancel_close' => '取消結案', 'transfer' => '移轉', 'create_bom' => '新增BOM', 'clear_outsource_date' => '清除發包日'];
