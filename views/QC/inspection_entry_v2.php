@@ -1661,8 +1661,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-face-setting"><i class="fa fa-columns"></i> 多面分段檢驗設定（首件）</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-inspno-setting"><i class="fa fa-barcode"></i> 檢驗單號編碼設定</a></li>
                                 <li><a href="#" id="btn-qadecide-setting"><i class="fa fa-gavel"></i> 異常單處置決策設定</a></li>
-                                <li class="divider"></li>
-                                <li><a href="#" id="btn-perm-setting"><i class="fa fa-key"></i> 權限設定（角色）</a></li>
+                                <li class="divider perm-menu-item" style="display:none;"></li>
+                                <li class="perm-menu-item" style="display:none;"><a href="#" id="btn-perm-setting"><i class="fa fa-key"></i> 權限設定（角色）</a></li>
                             </ul>
                         </div>
                     </div>
@@ -5000,6 +5000,7 @@ $(function(){
     function applyMenuPerms(){
         $('.setting-menu-item').toggle(!!state.canManageSettings);
         $('.sampling-menu-item').toggle(!!state.canManageSampling);
+        $('.perm-menu-item').toggle(!!state.canPermSetting); // 角色權限設定僅全站管理員（後端 Roles_API 本來就擋，這裡不讓其他人看到入口）
     }
     $.post(API, { action:'get_my_perms' }, function(res){
         if(!res || !res.success) return;
@@ -5009,6 +5010,7 @@ $(function(){
         state.canManageSampling = !!res.can_manage_sampling;
         state.canView = !!res.can_view;
         state.canBackfill = !!res.can_backfill;
+        state.canPermSetting = !!res.is_admin;
         state.currentUserId = res.current_user || '';
         applyMenuPerms();
         refreshBackfillBtn();
@@ -7352,7 +7354,7 @@ $(function(){
     ];
     var QC_CODES = QC_FEATURES.map(function(f){ return f.code; });
     var _permRole = null, _permRoleCur = [], _permRolesData = [], _permRoleName = '', _permRoleSys = false;
-    $('#btn-perm-setting').on('click', function(e){ e.preventDefault(); _permRole=null; loadPermRoles(); $('#permModal').modal('show'); });
+    $('#btn-perm-setting').on('click', function(e){ e.preventDefault(); if(!state.canPermSetting){ alert('權限設定（角色）僅限管理員使用'); return; } _permRole=null; loadPermRoles(); $('#permModal').modal('show'); });
     function loadPermRoles(){
         // 僅載入 QC 模組角色＋系統管理員（各頁面角色分開設定，唯管理員全頁共用）
         $.get(ROLES_API, { action:'get_roles', module:'qc' }, function(res){
