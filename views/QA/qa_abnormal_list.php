@@ -92,6 +92,8 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         .st-deduct { background:#F0A24B; color:#3b2a18; }
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
         .st-auto   { background:var(--sand); color:var(--ink2); }
+        .st.st-s   { font-size:10.5px; padding:0 6px; line-height:17px; border-radius:8px; }
+        .st-qcreview { background:#F0A24B; color:#3b2a18; white-space:normal; }
         .st-as     { background:#F0A24B; color:#3b2203; font-weight:bold; letter-spacing:.5px; }
         .st-split  { background:#EFD9BF; color:#7a4a1e; }
         /* 清單依類別分區顯示：每一區一條標題列（使用者交辦「清單也要依照不同類別分開顯示」） */
@@ -258,13 +260,13 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         <div class="lst-wrap">
             <table class="lst">
                 <colgroup>
-                    <col style="width:108px"><col style="width:76px"><col style="width:92px"><col style="width:96px"><col style="width:120px">
-                    <col style="width:118px"><col><col style="width:130px"><col style="width:120px">
+                    <col style="width:150px"><col style="width:76px"><col style="width:92px"><col style="width:96px"><col style="width:118px">
+                    <col style="width:120px"><col><col style="width:130px"><col style="width:120px">
                     <col style="width:150px"><col style="width:96px">
                 </colgroup>
                 <thead><tr>
-                    <th>異常單號</th><th>日期</th><th>開單人員</th><th>客戶</th><th>料號</th>
-                    <th>製令／客退單</th><th>異常現象</th><th>責任單位</th><th>最終處置</th>
+                    <th>異常單號</th><th>日期</th><th>開單人員</th><th>客戶</th><th>製令／客退單</th>
+                    <th>料號</th><th>異常現象</th><th>製程/責任單位</th><th>最終處置</th>
                     <th>狀態</th><th>操作</th>
                 </tr></thead>
                 <tbody id="lstBody"><tr><td colspan="11" class="c">載入中…</td></tr></tbody>
@@ -446,6 +448,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <div class="qk-sec"><div class="qk-h">① 第一層裁決者<span class="muted-help">　只能選品管部門在職人員，可複選（點選切換）</span></div><div id="qkL1" class="qk-chips"></div></div>
                 <div class="qk-sec"><div class="qk-h">② 第二層決策者<span class="muted-help">　從「決策者」分頁已設定的人員中選<b>一位</b>；必須與第一層不同人</span></div>
                     <div id="qkL2" class="qk-chips"></div>
+                    <label class="qk-sw" style="margin-top:6px;display:block;"><input type="checkbox" id="qkL2Notify"> 第二層決策後，同步通知第一層裁決者 <span class="muted-help">（預設開啟）</span></label>
                     <div class="muted-help" style="margin-top:4px;">請假或整天外出時，由品管檢驗表 2.0「異常單處置決策設定」的次要決策者代理。</div></div>
                 <div class="qk-sec"><div class="qk-h">③ 開放第一層直接決策的製程大類<span class="muted-help">　沒選的大類被驗出異常時，第二層先收到通知，可自己決策或轉回第一層</span></div><div id="qkPt" class="qk-chips"></div></div>
                 <div class="qk-sec"><div class="qk-h">④ 第一層裁決項目與通知對象<span class="muted-help">　固定另通知檢驗人員；「轉呈決策」是固定項目，一律通知第二層</span></div>
@@ -755,19 +758,18 @@ function load(){
         $('#lstBody').html(groupByCat(rows, function(r){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
-                + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
+                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + srcLabel(r.source_type) + '</span>'
-                    + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '')
-                    + (Number(r.is_as) === 1 ? ' <span class="st st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
-                    + (Number(r.quick_mode) === 1 ? '<br><span class="st st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
-                    + (Number(r.vendor_pending) === 1 ? ' <span class="st st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
+                    + (Number(r.is_as) === 1 ? ' <span class="st st-s st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
+                    + (Number(r.quick_mode) === 1 ? '<br><span class="st st-s st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
+                    + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
                     + (r.src_qc_form_id && r.qc_bom_ing_fid ? '<br><a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '')
                     + '</td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
                 + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
                 + '<td>' + esc(r.client_name) + '</td>'
-                + '<td>' + esc(r.part_no) + '</td>'
                 + '<td>' + bomIr + '</td>'
+                + '<td>' + (r.part_no ? '<a href="#" class="pv-open" data-pk="' + esc(r.part_d_id || '') + '" data-no="' + esc(r.part_no) + '" title="開啟圖面">' + esc(r.part_no) + '</a>' : '') + '</td>'
                 + '<td>' + esc((r.abnormal_phenomenon || '').substring(0, 60)) + '</td>'
                 + '<td>' + esc(r.responsible_unit) + '</td>'
                 + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
@@ -1233,6 +1235,7 @@ function renderQuick(){
     if (!QK) return;
     var c = QK.cfg;
     $('#qkEnabled').prop('checked', !!Number(c.enabled));
+    $('#qkL2Notify').prop('checked', Number(c.l2_notify_l1) !== 0);
     $('#qkL1').html(QK.candidates.length
         ? QK.candidates.map(function(p){
             return '<span class="qk-chip' + (qkHas(c.l1_users, p.id) ? ' on' : '') + '" data-l1="' + p.id + '">' + esc(qkPersonLabel(p)) + '</span>'; }).join('')
@@ -1286,7 +1289,7 @@ $('#qkSave').on('click', function(){
     if (Number(c.l2_user) && qkHas(c.l1_users, c.l2_user)) bad = bad || '第二層決策者不可同時是第一層裁決者，請取消其中一邊';
     c.actions.forEach(function(a, i){ if (!$.trim(a.name)) bad = bad || ('第 ' + (i + 1) + ' 個裁決項目名稱不可空白'); });
     if (bad) { alert(bad); return; }
-    var out = { enabled:c.enabled, l1_users:c.l1_users, l2_user:c.l2_user || 0, l1_ptypes:c.l1_ptypes,
+    var out = { enabled:c.enabled, l1_users:c.l1_users, l2_user:c.l2_user || 0, l1_ptypes:c.l1_ptypes, l2_notify_l1:$('#qkL2Notify').is(':checked') ? 1 : 0,
         actions:c.actions.map(function(a){ return { key:a.key, name:$.trim(a.name), is_scrap:a.is_scrap, active:a.active,
             notify_depts:a.notify_depts, notify_users:a.notify_users }; }) };
     post('quick_save', { cfg:JSON.stringify(out) }, function(res){
@@ -1752,6 +1755,26 @@ $(function(){
     nApplyCatBinds();
     <?php if ($perms['canView']): ?>load();<?php endif; ?>
 });
+</script>
+<div id="pvWin" style="display:none;position:fixed;right:40px;top:80px;width:760px;height:560px;z-index:10050;background:#fff;border:2px solid #C0762B;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);resize:both;overflow:hidden;">
+    <div id="pvHd" style="cursor:move;background:#C0762B;color:#fff;padding:5px 10px;display:flex;align-items:center;user-select:none;">
+        <b><i class="fa fa-picture-o"></i> 圖面檢視</b><span id="pvTitle" style="margin-left:8px;font-size:12px;"></span>
+        <span style="margin-left:auto;cursor:pointer;font-size:18px;" id="pvX">&times;</span></div>
+    <iframe id="pvFrame" style="width:100%;height:calc(100% - 32px);border:0;"></iframe>
+</div>
+<script>
+$(document).on('click', '.pv-open', function(e){
+    e.preventDefault(); e.stopPropagation();
+    var pk = $(this).data('pk'), no = $(this).data('no');
+    $('#pvTitle').text(no); $('#pvFrame').attr('src', '../pm/part_viewer.php?' + (pk ? 'pk=' + encodeURIComponent(pk) : 'd_id=' + encodeURIComponent(no))); $('#pvWin').show();
+});
+$('#pvX').on('click', function(){ $('#pvWin').hide(); $('#pvFrame').attr('src', 'about:blank'); });
+(function(){
+    var dr = null;
+    $('#pvHd').on('mousedown', function(e){ var r = $('#pvWin')[0].getBoundingClientRect(); dr = { x:e.clientX - r.left, y:e.clientY - r.top }; $('#pvFrame').css('pointer-events', 'none'); e.preventDefault(); });
+    $(document).on('mousemove', function(e){ if (dr) $('#pvWin').css({ left:(e.clientX - dr.x) + 'px', top:(e.clientY - dr.y) + 'px', right:'auto' }); })
+               .on('mouseup', function(){ if (dr) { dr = null; $('#pvFrame').css('pointer-events', ''); } });
+})();
 </script>
 </body>
 </html>

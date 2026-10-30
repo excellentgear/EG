@@ -445,14 +445,15 @@ case 'save_head': {
         if (isset($_POST['measures'])) {
             $ms = json_decode((string)$_POST['measures'], true) ?: [];
             $db->prepare("DELETE FROM qa_abnormal_measure WHERE order_id=?")->execute([$id]);
-            $ins = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals) VALUES (?,?,?,?,?)");
+            $ins = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals,lim_lo,lim_hi,spec) VALUES (?,?,?,?,?,?,?,?)");
             $seq = 1;
             foreach ($ms as $m) {
                 $dim = trim((string)($m['dim_name'] ?? ''));
                 $dcode = mb_substr(trim((string)($m['dim_code'] ?? '')), 0, 12);
                 $vals = array_slice(array_map(function ($v) { return mb_substr(trim((string)$v), 0, 20); }, (array)($m['vals'] ?? [])), 0, 12);
                 if ($dim === '' && !array_filter($vals, function ($v) { return $v !== ''; })) continue;
-                $ins->execute([$id, $seq++, $dcode !== '' ? $dcode : null, mb_substr($dim, 0, 60), json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+                [$specJson, $limLo, $limHi] = qab_measure_spec((array)$m);
+                $ins->execute([$id, $seq++, $dcode !== '' ? $dcode : null, mb_substr($dim, 0, 160), json_encode($vals, JSON_UNESCAPED_UNICODE), $limLo, $limHi, $specJson]);
             }
         }
         // 「由檢驗紀錄帶入」目前勾選狀態——純供下次重開 picker 時還原勾選，沒送就不動
@@ -913,9 +914,37 @@ case 'close': {
            ->execute([$uid, $uid, $id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_close_notify_send($db, $id, $uid);   // 結案後通知（開單人／裁決通知對象／決策者加入的人）
     $n = qab_order($db, $id);
     $log($id, 'close', '', '結案' . ($n['scrap_no'] ? ('（報廢單號 ' . $n['scrap_no'] . '）') : ''));
     jout(true, ['order' => $n, 'scrap_no' => (string)$n['scrap_no']]);
+}
+
+/* 結案確認畫面：列出結案後會通知哪些人，決策者可加人再結案（2026-10-30） */
+case 'close_preview': {
+    $o = $mustOrder((int)($_POST['id'] ?? $_GET['id'] ?? 0));
+    if (!$perms['canDecide'] && !$perms['canAdmin'] && (int)$o['created_by'] !== $uid) jerr('沒有結案的權限');
+    require_once __DIR__ . '/../common/people_lib.php';
+    $ppl = [];
+    foreach (eg_people_list($db, ['all_posts' => true]) as $p) {
+        $ppl[] = ['id' => (int)$p['id'], 'label' => trim(($p['dept_name'] ?? $p['department'] ?? '') . ' ' . ($p['position_name'] ?? $p['position'] ?? '') . ' ' . ($p['name'] ?? ''))];
+    }
+    jout(true, ['list' => qab_close_notify_list($db, $o, $uid), 'people' => $ppl]);
+}
+
+case 'close_notify_save': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!$perms['canDecide'] && !$perms['canAdmin'] && (int)$o['created_by'] !== $uid) jerr('沒有權限');
+    $ids = json_decode((string)($_POST['uids'] ?? '[]'), true);
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)$ids), function ($v) { return $v > 0; })));
+    if ($ids) {
+        $in = implode(',', $ids);
+        $ok = array_map('intval', $db->query("SELECT id FROM `user` WHERE state=1 AND id IN ($in)")->fetchAll(PDO::FETCH_COLUMN));
+        $ids = array_values(array_intersect($ids, $ok));
+    }
+    $db->prepare("UPDATE qa_abnormal_order SET close_notify_extra=? WHERE id=?")->execute([$ids ? json_encode($ids) : null, (int)$o['id']]);
+    $n = qab_order($db, (int)$o['id']);
+    jout(true, ['list' => qab_close_notify_list($db, $n, $uid)]);
 }
 
 case 'reopen': {

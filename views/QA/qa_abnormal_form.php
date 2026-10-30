@@ -107,6 +107,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         table.mtb th, table.mtb td { border:1px solid var(--line); padding:1px 2px; text-align:center; }
         table.mtb th { background:var(--cream); color:var(--ink2); font-weight:normal; }
         table.mtb input { width:100%; border:0; text-align:center; font-size:12px; padding:2px 1px; background:transparent; }
+        table.mtb input.m-ng { background:#FBD9D2; color:#8F3016; font-weight:bold; border-radius:3px; }
+        table.mtb input.m-dim { text-align:left; font-size:12px; flex:1; min-width:0; }
+        table.mtb td.m-dimtd { text-align:left; padding:2px 3px; }
+        table.mtb .m-l1, table.mtb .m-l2 { display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-bottom:2px; }
+        table.mtb .m-l1 input, table.mtb .m-l2 input { border:1px solid var(--line); background:#fff; }
+        table.mtb .m-l2 input { width:54px; padding:1px 2px; }
+        table.mtb .m-l2 select { font-size:11px; padding:0 1px; height:22px; }
+        table.mtb .m-tol, table.mtb .m-rng { display:inline-flex; gap:2px; align-items:center; }
+        table.mtb button.m-sym, table.mtb button.m-mode { font-size:11px; padding:1px 6px; border:1px solid var(--amber); background:#FFF6E8; color:#7A4A12; border-radius:4px; cursor:pointer; }
+        table.mtb .m-rangetxt { font-size:11px; color:#7A5A35; }
         table.mtb input:focus { background:#FFF8EC; outline:1px solid var(--amber); }
         /* 原因分類樹 */
         .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
@@ -266,7 +276,9 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <div class="ac-wrap"><input type="text" id="f_client" autocomplete="off"></div>
                             <input type="hidden" id="f_client_id">
                             <div class="err" id="clientErr" style="display:none;"></div></div>
-                        <div class="fld"><label>料號 <span class="muted-help" id="partSrc"></span></label><input type="text" id="f_part"></div>
+                        <div class="fld"><label>料號 <span class="muted-help" id="partSrc"></span></label><input type="text" id="f_part">
+                            <a href="#" id="partLink" style="display:none;font-size:12px;"><i class="fa fa-picture-o"></i> 開啟圖面</a></div>
+                        <div class="fld"><label>開單人員 <span class="muted-help" id="openerSrc"></span></label><div id="openerName" style="padding:5px 2px;font-weight:bold;"></div></div>
                         <div class="fld"><label>製令編號 <span id="bomReq" style="color:var(--coral);display:none;">*</span>
                                 <span class="muted-help">（主製令；綁了才能自動帶客戶、料號與扣款金額）</span></label>
                             <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
@@ -331,10 +343,14 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <button type="button" class="btn btn-warm-o btn-xs" id="btnQcMeasurePick" style="display:none;"><i class="fa fa-download"></i> 由檢驗紀錄帶入</button>
                         </div>
                         <table class="mtb" id="mtb">
-                            <thead><tr><th style="width:5%" title="帶入時是檢驗表2.0上該尺寸的編號；人工新增的列會建議下一個沒用過的編號">編號</th><th style="width:14%">量測尺寸</th>
+                            <thead><tr><th style="width:5%" title="帶入時是檢驗表2.0上該尺寸的編號；人工新增的列會建議下一個沒用過的編號">編號</th><th style="width:36%">量測尺寸（檢驗項目／標準值／公差／型態）</th>
                                 <?php for ($i = 1; $i <= 12; $i++) echo '<th>' . $i . '</th>'; ?></tr></thead>
                             <tbody data-eg-row-add="mtAddRow" data-eg-row-del="mtDelRow"></tbody>
                         </table>
+                        <div id="markThumbs" style="display:none;margin-top:6px;">
+                            <div class="muted-help" style="margin-bottom:3px;"><i class="fa fa-picture-o"></i> 圖面標註（品管在線上檢驗時標出的問題尺寸，點圖可放大、拖曳移動）</div>
+                            <div id="markThumbList" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+                        </div>
                     </div>
 
                     <div class="fgrid" style="margin-top:10px;grid-template-columns:1fr;">
@@ -561,6 +577,49 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
     </div>
 </div>
 
+<!-- 標註圖放大檢視：滾輪縮放、拖曳移動 -->
+<div class="m-mask" id="markViewMask">
+    <div class="m-box" style="width:1100px;max-width:96%;">
+        <div class="m-hd"><i class="fa fa-search-plus"></i> 圖面標註<span class="x" data-close="markViewMask">&times;</span></div>
+        <div class="m-bd" style="padding:6px;">
+            <div style="margin-bottom:4px;display:flex;gap:6px;align-items:center;">
+                <button class="btn btn-default btn-xs" id="mvIn"><i class="fa fa-plus"></i></button>
+                <button class="btn btn-default btn-xs" id="mvOut"><i class="fa fa-minus"></i></button>
+                <button class="btn btn-default btn-xs" id="mvFit">符合視窗</button>
+                <span class="muted-help">滾輪縮放、按住拖曳移動</span>
+            </div>
+            <div id="mvBox" style="position:relative;height:600px;overflow:hidden;background:#eee;border:1px solid var(--line);cursor:grab;">
+                <img id="mvImg" src="" draggable="false" style="position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;user-select:none;">
+            </div>
+        </div>
+    </div>
+</div>
+<!-- 結案確認：列出結案後會通知的人員，決策者可加人（2026-10-30） -->
+<div class="m-mask" id="closeMask">
+    <div class="m-box" style="width:640px;">
+        <div class="m-hd"><i class="fa fa-archive"></i> 結案確認<span class="x" data-close="closeMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box">結案後這張單就不能再修改（要改須由管理員取消結案）；最終決策含「報廢」時會在此刻配發報廢單號。<br>結案後<b>會通知下列人員</b>（依已選好的決策帶出），可補加通知人員。</div>
+            <div id="closeNotifyList" style="margin:8px 0;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <select id="closeAddSel" data-eg-filter="輸入姓名／部門篩選…" style="flex:1;"><option value="">加入通知人員…</option></select>
+                <button class="btn btn-warm-o btn-sm" id="btnCloseAdd"><i class="fa fa-plus"></i> 加入</button>
+            </div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" data-close="closeMask">返回修改</button>
+            <button class="btn btn-warm btn-sm" id="btnCloseGo"><i class="fa fa-check"></i> 確認結案</button>
+        </div>
+    </div>
+</div>
+<!-- 可移動的圖面檢視視窗（料號圖面，part_viewer.php） -->
+<div id="pvWin" style="display:none;position:fixed;right:40px;top:80px;width:760px;height:560px;z-index:10050;background:#fff;border:2px solid #C0762B;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);resize:both;overflow:hidden;">
+    <div id="pvHd" style="cursor:move;background:#C0762B;color:#fff;padding:5px 10px;display:flex;align-items:center;user-select:none;">
+        <b><i class="fa fa-picture-o"></i> 圖面檢視</b><span id="pvTitle" style="margin-left:8px;font-size:12px;"></span>
+        <span style="margin-left:auto;cursor:pointer;font-size:18px;" id="pvX">&times;</span></div>
+    <iframe id="pvFrame" style="width:100%;height:calc(100% - 32px);border:0;"></iframe>
+</div>
+
 <!-- 由檢驗紀錄帶入「量測尺寸與實測值」（2026-10-06，只有線上檢驗NG自動開立的單看得到這顆按鈕） -->
 <div class="m-mask" id="qcMeasurePickMask">
     <div class="m-box" style="width:720px;">
@@ -758,32 +817,177 @@ function buildStaticOpts(){
    「由檢驗紀錄帶入」可能帶進任意筆數，手動增刪列則走共用鍵盤規則(eg_input_rules.js
    的 data-eg-row-add/del，↓在最後一列加一列、↑在空白的最後一列移除)，不自己刻一套。
    重畫時盡量保留使用者已經打的值，不要整欄清空重建。 */
+/* 量測規格（與線上檢驗2.0 新增檢驗項目同款）：檢驗項目、標準值＋上下公差（或切換成上下限範圍）、型態（數值／OK-NG）；
+   實測值依規格自動判定，超出範圍標紅。規格存在列的 data-spec（JSON），重畫列時一併保留。 */
+function mtDefaultSpec(){ return { mode:'TOL', type:'NUM', std:'', up:'', lo:'', min:'', max:'' }; }
+function mtGetSpec($tr){
+    var sp = mtDefaultSpec();
+    try { sp = $.extend(sp, JSON.parse($tr.attr('data-spec') || '{}')); } catch (e) {}
+    return sp;
+}
+function mtReadSpecUI($tr){
+    return { mode: $tr.find('.m-mode').attr('data-mode') === 'RANGE' ? 'RANGE' : 'TOL', type: $tr.find('.m-type').val() === 'OKNG' ? 'OKNG' : 'NUM',
+             std: $.trim($tr.find('.m-std').val()), up: $.trim($tr.find('.m-up').val()), lo: $.trim($tr.find('.m-lo').val()),
+             min: $.trim($tr.find('.m-min').val()), max: $.trim($tr.find('.m-max').val()) };
+}
+function mtApplySpecUI($tr, sp){
+    sp = $.extend(mtDefaultSpec(), sp || {});
+    $tr.find('.m-type').val(sp.type);
+    $tr.find('.m-mode').attr('data-mode', sp.mode).text(sp.mode === 'RANGE' ? '範圍' : '標準值');
+    $tr.find('.m-std').val(sp.std); $tr.find('.m-up').val(sp.up); $tr.find('.m-lo').val(sp.lo);
+    $tr.find('.m-min').val(sp.min); $tr.find('.m-max').val(sp.max);
+    mtSpecLayout($tr);
+}
+function mtLimits(sp){
+    if (sp.type === 'OKNG') return null;
+    var lo, hi;
+    if (sp.mode === 'RANGE') { lo = parseFloat(sp.min); hi = parseFloat(sp.max); }
+    else { var b = parseFloat(sp.std); if (isNaN(b)) return null; lo = b + (parseFloat(sp.lo) || 0); hi = b + (parseFloat(sp.up) || 0); }
+    return (isNaN(lo) || isNaN(hi)) ? null : { lo: +lo.toFixed(5), hi: +hi.toFixed(5) };
+}
+function mtSpecLayout($tr){
+    var sp = mtReadSpecUI($tr), isNum = sp.type === 'NUM';
+    $tr.find('.m-mode').toggle(isNum);
+    $tr.find('.m-tol').toggle(isNum && sp.mode === 'TOL');
+    $tr.find('.m-rng').toggle(isNum && sp.mode === 'RANGE');
+    var L = mtLimits(sp);
+    $tr.find('.m-rangetxt').text(L ? ('[' + L.lo + ' ~ ' + L.hi + ']') : '');
+    $tr.attr('data-spec', JSON.stringify(sp)).attr({ 'data-lo': L ? L.lo : '', 'data-hi': L ? L.hi : '' });
+}
 function mtCollectRows(){
     var out = [];
     $('#mtb tbody tr').each(function(){
         var $tr = $(this);
         out.push({ code: $tr.find('.m-code').val() || '', dim: $tr.find('.m-dim').val() || '',
+                   spec: mtGetSpec($tr), lo: $tr.attr('data-lo') || '', hi: $tr.attr('data-hi') || '',
+                   hasSpec: !!$tr.attr('data-spec'),
                    vals: $tr.find('.m-val').map(function(){ return $(this).val() || ''; }).get() });
     });
     return out;
+}
+function mtRowHtml(r){
+    var h = '<tr data-lo="" data-hi="" data-spec=""><td><input type="text" class="m-code" data-r="' + r + '" maxlength="12"></td>'
+        + '<td class="m-dimtd"><div class="m-l1"><input type="text" class="m-dim" data-r="' + r + '" placeholder="檢驗項目">'
+        + '<button type="button" class="m-sym" tabindex="-1" title="插入工程符號（Ø ± ▽ …）到游標處">Ø±</button></div>'
+        + '<div class="m-l2"><select class="m-type" data-eg-skip><option value="NUM">數值</option><option value="OKNG">OK/NG</option></select>'
+        + '<button type="button" class="m-mode" data-mode="TOL" tabindex="-1" title="切換：標準值＋公差／上下限範圍">標準值</button>'
+        + '<span class="m-tol"><input type="text" class="m-std" placeholder="標準值"><input type="text" class="m-up" placeholder="上公差"><input type="text" class="m-lo" placeholder="下公差"></span>'
+        + '<span class="m-rng" style="display:none;"><input type="text" class="m-min" placeholder="下限"><span>~</span><input type="text" class="m-max" placeholder="上限"></span>'
+        + '<span class="m-rangetxt"></span></div></td>';
+    for (var i = 0; i < 12; i++) h += '<td><input type="text" class="m-val" data-r="' + r + '" data-i="' + i + '"></td>';
+    return h + '</tr>';
 }
 function mtRenderRows(n){
     var keep = mtCollectRows();
     n = Math.max(1, n || 1);
     var mt = '';
-    for (var r = 0; r < n; r++){
-        mt += '<tr><td><input type="text" class="m-code" data-r="' + r + '" maxlength="12"></td><td><input type="text" class="m-dim" data-r="' + r + '"></td>';
-        for (var i = 0; i < 12; i++) mt += '<td><input type="text" class="m-val" data-r="' + r + '" data-i="' + i + '"></td>';
-        mt += '</tr>';
-    }
+    for (var r = 0; r < n; r++) mt += mtRowHtml(r);
     $('#mtb tbody').html(mt);
     keep.forEach(function(row, r){
         if (r >= n) return;
+        var $tr = $('#mtb tbody tr').eq(r);
         $('.m-code[data-r="' + r + '"]').val(row.code);
         $('.m-dim[data-r="' + r + '"]').val(row.dim);
+        mtApplySpecUI($tr, row.spec);
+        if (row.lo !== '' || row.hi !== '') $tr.attr({ 'data-lo': row.lo, 'data-hi': row.hi });   // 舊資料（無規格、只有上下限）保留
         row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
+    $('#mtb tbody tr').each(function(){ if (!$(this).attr('data-spec')) mtApplySpecUI($(this), null); });
+    mtMarkNg();
 }
+/* 實測值依規格自動判定：超出範圍（或填 NG）標紅，與線上檢驗2.0 同一個紅底 */
+function mtMarkNg(){
+    $('#mtb tbody tr').each(function(){
+        var $tr = $(this), lo = parseFloat($tr.attr('data-lo')), hi = parseFloat($tr.attr('data-hi'));
+        var $dm = $tr.find('.m-dim'); $dm.attr('title', $dm.val());
+        var okng = mtGetSpec($tr).type === 'OKNG';
+        $tr.find('.m-val').each(function(){
+            var raw = $.trim($(this).val()), v = parseFloat(raw), ng = false;
+            if (raw !== '') {
+                if (raw.toUpperCase() === 'NG') ng = true;
+                else if (!okng && !isNaN(v) && !isNaN(lo) && !isNaN(hi)) ng = (v < lo || v > hi);
+            }
+            $(this).toggleClass('m-ng', ng);
+        });
+    });
+}
+$(document).on('input change', '#mtb .m-val', mtMarkNg);
+$(document).on('input change', '#mtb .m-type, #mtb .m-std, #mtb .m-up, #mtb .m-lo, #mtb .m-min, #mtb .m-max', function(){ mtSpecLayout($(this).closest('tr')); mtMarkNg(); });
+$(document).on('click', '#mtb .m-mode', function(){
+    var $b = $(this), m = $b.attr('data-mode') === 'RANGE' ? 'TOL' : 'RANGE', $tr = $b.closest('tr');
+    $b.attr('data-mode', m).text(m === 'RANGE' ? '範圍' : '標準值');
+    mtSpecLayout($tr); mtMarkNg();
+});
+/* 工程符號：沿用線上檢驗2.0 的符號主檔（sym_list），抓不到時用內建常用符號 */
+var MT_SYMS = null, MT_LASTIN = null;
+$(document).on('focusin', '#mtb input[type=text]', function(){ MT_LASTIN = this; });
+function mtSymPad(anchor){
+    var $pad = $('#mtSymPad');
+    if (!$pad.length) {
+        $pad = $('<div id="mtSymPad" style="display:none;position:fixed;z-index:10060;background:#fff;border:1px solid #E4D3BC;border-radius:8px;padding:8px;box-shadow:0 4px 14px rgba(120,90,50,.3);width:260px;max-height:300px;overflow:auto;"><div class="muted-help" style="margin-bottom:6px;">點一下插入到剛才的輸入欄游標處</div><div id="mtSymList" style="display:flex;flex-wrap:wrap;gap:4px;"></div></div>').appendTo('body');
+        $pad.on('mousedown', function(e){ e.preventDefault(); });
+    }
+    function draw(list){
+        $('#mtSymList').html(list.map(function(x){ return '<button type="button" class="btn btn-default btn-sm mt-sym-ins" style="min-width:34px;font-size:16px;" title="' + esc(x.label || '') + '" data-s="' + esc(x.symbol) + '">' + esc(x.symbol) + '</button>'; }).join(''));
+    }
+    var r = anchor.getBoundingClientRect();
+    $pad.css({ left: Math.min(r.left, window.innerWidth - 280) + 'px', top: (r.bottom + 4) + 'px' }).show();
+    if (MT_SYMS) { draw(MT_SYMS); return; }
+    draw(['Ø', '⌀', '±', '°', '▽', '⊥', '∥', '⌭', '○', '≤', '≥', 'μ', 'Φ', 'R', 'M'].map(function(c){ return { symbol: c, label: '' }; }));
+    $.post('../QC/inspection_entry_v2.php', { action:'sym_list' }, function(res){
+        if (res && res.success && res.rows && res.rows.length) { MT_SYMS = res.rows; draw(MT_SYMS); }
+    }, 'json');
+}
+$(document).on('click', '#mtb .m-sym', function(e){ e.stopPropagation(); mtSymPad(this); });
+$(document).on('click', '.mt-sym-ins', function(){
+    var el = MT_LASTIN; if (!el) { toast('請先點一下要插入符號的欄位'); return; }
+    var sym = $(this).attr('data-s'), a = el.selectionStart, b = el.selectionEnd, v = el.value;
+    el.value = v.slice(0, a) + sym + v.slice(b); el.focus(); el.setSelectionRange(a + sym.length, a + sym.length);
+    $(el).trigger('input');
+});
+$(document).on('click', function(e){ if (!$(e.target).closest('#mtSymPad,.m-sym').length) $('#mtSymPad').hide(); });
+/* ───────── 圖面標註縮圖（線上檢驗開單時品管標註的圖，附件檔名以「圖面標註」開頭） ───────── */
+function markThumbsLoad(){
+    if (!Number((D.order || {}).src_qc_form_id)) { $('#markThumbs').hide(); return; }
+    $.get(API, { action:'att_list', id:OID }, function(res){
+        var rows = ((res && res.success) ? (res.rows || []) : []).filter(function(a){ return a.is_image && String(a.name).indexOf('圖面標註') === 0; });
+        $('#markThumbs').toggle(rows.length > 0);
+        $('#markThumbList').html(rows.map(function(a){
+            var u = '../../src/store/qa_attachment_download.php?id=' + a.id;
+            return '<img class="mark-thumb" src="' + u + '" data-u="' + u + '" title="點擊放大" style="height:110px;border:1px solid var(--line);border-radius:4px;cursor:zoom-in;background:#fff;">';
+        }).join(''));
+    }, 'json');
+}
+var MV = { s:1, x:0, y:0, nw:0, nh:0 };
+function mvApply(){ $('#mvImg').css('transform', 'translate(' + MV.x + 'px,' + MV.y + 'px) scale(' + MV.s + ')'); }
+function mvFit(){
+    var bw = $('#mvBox').width(), bh = $('#mvBox').height();
+    MV.s = Math.min(bw / MV.nw, bh / MV.nh, 1); MV.x = (bw - MV.nw * MV.s) / 2; MV.y = (bh - MV.nh * MV.s) / 2; mvApply();
+}
+function mvZoom(f, cx, cy){
+    var ns = Math.max(0.05, Math.min(12, MV.s * f)), k = ns / MV.s;
+    MV.x = cx - (cx - MV.x) * k; MV.y = cy - (cy - MV.y) * k; MV.s = ns; mvApply();
+}
+$(document).on('click', '.mark-thumb', function(){
+    openMask('markViewMask');
+    var img = $('#mvImg')[0];
+    img.onload = function(){ MV.nw = img.naturalWidth; MV.nh = img.naturalHeight; mvFit(); };
+    img.src = $(this).data('u');
+});
+$('#mvIn').on('click', function(){ mvZoom(1.25, $('#mvBox').width() / 2, $('#mvBox').height() / 2); });
+$('#mvOut').on('click', function(){ mvZoom(0.8, $('#mvBox').width() / 2, $('#mvBox').height() / 2); });
+$('#mvFit').on('click', mvFit);
+$('#mvBox').on('wheel', function(e){
+    e.preventDefault();
+    var r = this.getBoundingClientRect(), oe = e.originalEvent;
+    mvZoom(oe.deltaY < 0 ? 1.15 : 1 / 1.15, oe.clientX - r.left, oe.clientY - r.top);
+});
+(function(){
+    var d = null;
+    $('#mvBox').on('mousedown', function(e){ d = { x:e.clientX - MV.x, y:e.clientY - MV.y }; $(this).css('cursor', 'grabbing'); e.preventDefault(); });
+    $(document).on('mousemove', function(e){ if (d) { MV.x = e.clientX - d.x; MV.y = e.clientY - d.y; mvApply(); } })
+               .on('mouseup', function(){ d = null; $('#mvBox').css('cursor', 'grab'); });
+})();
 /* 建議編號：人工新增、還沒有編號的列，顯示「下一個沒用過的編號」當提示（placeholder，不會自動寫入）；
    已有的編號若是數字就接著 1,2,3…，否則接著 A,B,C…。帶入的列一律保留檢驗表上的原編號。 */
 function mtLetter(i){ var s = '', n = i; while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; }
@@ -844,6 +1048,26 @@ function qcMeasureStdPart(it){
     var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
     return '　標準 ' + (it.std || '-') + tol;
 }
+function qcMeasureLim(it){
+    if (it.type === 'OKNG') return { lo: '', hi: '' };
+    var lo, hi;
+    if (it.mode === 'RANGE') { lo = parseFloat(it.min); hi = parseFloat(it.max); }
+    else { var b = parseFloat(it.std); if (isNaN(b)) return { lo: '', hi: '' };
+           lo = b + (parseFloat(it.lo) || 0); hi = b + (parseFloat(it.up) || 0); }
+    return (isNaN(lo) || isNaN(hi)) ? { lo: '', hi: '' } : { lo: +lo.toFixed(5), hi: +hi.toFixed(5) };
+}
+// 「63.5 (0.03/0) [63.5 ~ 63.53]」——與線上檢驗歷史簡化檢視同一套說法
+function qcMeasureDimLabel(it){
+    var nm = $.trim(it.name || '');
+    if (it.type === 'OKNG') return nm;
+    var lim = qcMeasureLim(it), isRange = it.mode === 'RANGE';
+    var st = isRange ? (lim.lo !== '' ? (lim.lo + ' ~ ' + lim.hi) : '') : ((it.std || '') + ((it.up || it.lo) ? (' (' + (it.up || 0) + '/' + (it.lo || 0) + ')') : ''));
+    st = $.trim(st);
+    var same = !nm || nm === st || (st && st.indexOf(nm) === 0);
+    var out = !st ? nm : (same ? st : nm + '　' + st);
+    if (!isRange && lim.lo !== '') out += ' [' + lim.lo + ' ~ ' + lim.hi + ']';
+    return out;
+}
 function qcMeasureRenderPicker(){
     var rows = QCM_ITEMS.map(function(it, idx){
         var vals = qcMeasureValsText(it);
@@ -865,15 +1089,19 @@ $('#btnQcMeasureApply').on('click', function(){
     if (!sel.length) { alert('請至少勾選一個量測項目。'); return; }
     var rows = sel.map(function(idx){
         var it = QCM_ITEMS[idx] || {};
-        return { code: mtLetter(idx + 1), dim: (it.name || '') + qcMeasureStdPart(it),
+        return { code: mtLetter(idx + 1), dim: (it.name || ''),
+                 spec: { mode: it.mode === 'RANGE' ? 'RANGE' : 'TOL', type: it.type === 'OKNG' ? 'OKNG' : 'NUM',
+                         std: it.std || '', up: it.up || '', lo: it.lo || '', min: it.min || '', max: it.max || '' },
                  vals: (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; }).slice(0, 12) };
     });
     mtRenderRows(rows.length);
     rows.forEach(function(row, r){
         $('.m-code[data-r="' + r + '"]').val(row.code);
         $('.m-dim[data-r="' + r + '"]').val(row.dim);
+        mtApplySpecUI($('#mtb tbody tr').eq(r), row.spec);
         row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
+    mtMarkNg();
     QCM_LAST_SEL = sel;
     closeMask('qcMeasurePickMask');
     saveHead(true);
@@ -1184,6 +1412,10 @@ function render(){
     $('#f_client').val(o.client_name || '');
     $('#f_part').val(o.part_no || '');
     $('#f_bom').val(o.bom_no || '');
+    // 開單人員（編輯與結案後都顯示）；線上檢驗自動開立的單＝那張檢驗單的檢驗人員
+    $('#openerName').text(o.created_name || ('#' + (o.created_by || '')));
+    $('#openerSrc').text(Number(o.src_qc_form_id) ? '（線上檢驗自動開立・檢驗人員）' : (Number(o.auto_opened) ? '（系統自動開立）' : ''));
+    $('#partLink').toggle(!!(o.part_d_id || o.part_no)).data({ pk: o.part_d_id || '', no: o.part_no || '' });
     // 客戶由來源綁定：綁了製令或客退單就唯讀（同一個料號文字在料號主檔常分屬不同客戶，手打一定會歪）
     var bound = Number(o.client_bound) === 1;
     // 料號跟客戶一樣：綁了來源就由來源決定並鎖起來（使用者要求）
@@ -1243,14 +1475,20 @@ function render(){
     $('#f_qaps').val(o.qa_ps || '');
     // 量測尺寸與實測值：列數不再寫死 3（2026-10-06，使用者要求「由檢驗紀錄帶入」不限筆數）——
     // 紙本預設仍是 3 列可手填，筆數多於 3 時（多半是帶入自線上檢驗）就照實際筆數畫出來。
-    mtRenderRows(Math.max(3, (o.measures || []).length));
+    // 線上檢驗自動開立的單只列實際帶入的尺寸（不再補預設空白列 A、B 造成編號混亂）；人工單維持至少 3 列
+    mtRenderRows(Number(o.src_qc_form_id) && (o.measures || []).length ? (o.measures || []).length : Math.max(3, (o.measures || []).length));
     (o.measures || []).forEach(function(m){
         var r = m.seq - 1;
+        var $mtr = $('#mtb tbody tr').eq(r);
+        $mtr.attr({ 'data-lo': m.lim_lo != null ? m.lim_lo : '', 'data-hi': m.lim_hi != null ? m.lim_hi : '' });
+        if (m.spec) mtApplySpecUI($mtr, m.spec);
         $('.m-code[data-r="' + r + '"]').val(m.dim_code || '');
         $('.m-dim[data-r="' + r + '"]').val(m.dim_name || '');
         (m.vals || []).forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
     mtSuggestCodes();
+    mtMarkNg();
+    markThumbsLoad();
     // 「由檢驗紀錄帶入」只給線上檢驗NG自動開立的單（src_qc_form_id 有值）使用
     $('#btnQcMeasurePick').toggle(!!Number(o.src_qc_form_id) && canEdit);
     // 補資料模式（業務日期在 N 天以前）
@@ -2045,7 +2283,7 @@ function saveHead(silent){
     }
     $('#catErr').hide();
     // 列數改成動態讀（不再寫死 3，見 mtRenderRows()/mtCollectRows()，2026-10-06）
-    var ms = mtCollectRows().map(function(row){ return { dim_code: row.code, dim_name: row.dim, vals: row.vals }; });
+    var ms = mtCollectRows().map(function(row){ return { dim_code: row.code, dim_name: row.dim, vals: row.vals, lim_lo: row.lo, lim_hi: row.hi, spec: row.spec }; });
     var payload = {
         id:OID, cat_id: $('#f_cat').val(),
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
@@ -2393,13 +2631,58 @@ $('#btnApprove').on('click', function(){
                              deduct_unit_amt:$('#f_dunit').val(), deduct_qty:$('#f_dqty').val() });
 });
 
-/* ⑦ 結案 */
+/* ⑦ 結案：先顯示結案後會通知誰，決策者可加人，再確認結案 */
+var CLOSE_PEOPLE = [];
+function renderCloseList(list){
+    $('#closeNotifyList').html((list || []).length ? list.map(function(r){
+        return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border:1px solid var(--line);border-radius:12px;background:#FFF6E8;">'
+            + esc(r.name || ('#' + r.id)) + ' <span class="muted-help">' + esc(r.why) + '</span>'
+            + (r.fixed ? '' : ' <b class="cn-del" data-u="' + r.id + '" style="cursor:pointer;color:var(--coral);" title="移除">×</b>') + '</span>';
+    }).join('') : '<span class="muted-help">依目前的決策，沒有需要通知的人員（可在下方加入）。</span>');
+    window.CLOSE_LIST = list || [];
+}
+function closeSaveExtra(ids){
+    post('close_notify_save', { id:OID, uids:JSON.stringify(ids) }, function(res){ renderCloseList(res.list); }, true);
+}
+function closeExtraIds(){ return (window.CLOSE_LIST || []).filter(function(r){ return !r.fixed; }).map(function(r){ return r.id; }); }
 $('#btnClose2').on('click', function(){
-    if (!confirm('結案後這張單就不能再修改（要改須由管理員取消結案）。\n最終決策含「報廢」時會在此刻配發報廢單號。確定結案？')) return;
+    post('close_preview', { id:OID }, function(res){
+        CLOSE_PEOPLE = res.people || [];
+        $('#closeAddSel').html('<option value="">加入通知人員…</option>' + CLOSE_PEOPLE.map(function(p){ return '<option value="' + p.id + '">' + esc(p.label) + '</option>'; }).join(''));
+        renderCloseList(res.list);
+        openMask('closeMask');
+    }, true);
+});
+$('#btnCloseAdd').on('click', function(){
+    var u = Number($('#closeAddSel').val()); if (!u) return;
+    if ((window.CLOSE_LIST || []).some(function(r){ return r.id === u; })) { toast('已在通知名單內'); return; }
+    var ids = closeExtraIds(); ids.push(u); closeSaveExtra(ids);
+});
+$(document).on('click', '.cn-del', function(){
+    var u = Number($(this).data('u'));
+    closeSaveExtra(closeExtraIds().filter(function(x){ return x !== u; }));
+});
+$('#btnCloseGo').on('click', function(){
+    var $b = $(this).prop('disabled', true);
     post('close', { id:OID }, function(res){
+        $b.prop('disabled', false); closeMask('closeMask');
         toast(res.scrap_no ? ('已結案，報廢單號 ' + res.scrap_no) : '已結案');
     });
+    setTimeout(function(){ $b.prop('disabled', false); }, 4000);
 });
+/* 可移動圖面檢視 */
+function openPartViewer(pk, partNo){
+    var url = '../pm/part_viewer.php?' + (pk ? 'pk=' + encodeURIComponent(pk) : 'd_id=' + encodeURIComponent(partNo));
+    $('#pvTitle').text(partNo || ''); $('#pvFrame').attr('src', url); $('#pvWin').show();
+}
+$('#partLink').on('click', function(e){ e.preventDefault(); openPartViewer($(this).data('pk'), $(this).data('no')); });
+$('#pvX').on('click', function(){ $('#pvWin').hide(); $('#pvFrame').attr('src', 'about:blank'); });
+(function(){
+    var dr = null;
+    $('#pvHd').on('mousedown', function(e){ var r = $('#pvWin')[0].getBoundingClientRect(); dr = { x:e.clientX - r.left, y:e.clientY - r.top }; $('#pvFrame').css('pointer-events', 'none'); e.preventDefault(); });
+    $(document).on('mousemove', function(e){ if (dr) $('#pvWin').css({ left:(e.clientX - dr.x) + 'px', top:(e.clientY - dr.y) + 'px', right:'auto' }); })
+               .on('mouseup', function(){ if (dr) { dr = null; $('#pvFrame').css('pointer-events', ''); } });
+})();
 $('#btnReopen').on('click', function(){
     if (!confirm('取消結案？（已配發的報廢單號不會收回）')) return;
     post('reopen', { id:OID }, function(){ toast('已取消結案'); });

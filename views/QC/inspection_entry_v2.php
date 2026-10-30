@@ -2340,6 +2340,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- NG 自動開立異常單前：選擇圖面並在圖面上標註問題尺寸（螢光筆框＋紅字說明；2026-10-30）。
+     標註圖存檔後會自動成為該異常單的附件，顯示在異常單「量測尺寸與實測值」下方。 -->
+<div class="modal fade" id="qcMarkModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+    <div class="modal-dialog" style="width:1240px;max-width:96%;"><div class="modal-content">
+        <div class="modal-header" style="background:#C0762B;color:#fff;border-radius:6px 6px 0 0;">
+            <h4 class="modal-title"><i class="fa fa-pencil-square-o"></i> 標註問題尺寸 — 選擇圖面並圈出不良處</h4>
+        </div>
+        <div class="modal-body" style="padding:10px;">
+            <div id="qcMarkPick">
+                <div class="muted-help" style="margin-bottom:6px;">請選擇這個料號要標註的圖面（點一下圖面）。圖面上看不到問題處也可以按「略過標註」直接開單。</div>
+                <div id="qcMarkPickList" style="display:flex;flex-wrap:wrap;gap:8px;max-height:430px;overflow:auto;"></div>
+            </div>
+            <div id="qcMarkEdit" style="display:none;">
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+                    <button type="button" class="btn btn-warm-o btn-sm" id="qmRect"><i class="fa fa-square-o"></i> 螢光筆框</button>
+                    <button type="button" class="btn btn-default btn-sm" id="qmText"><i class="fa fa-font"></i> 紅字說明</button>
+                    <button type="button" class="btn btn-default btn-sm" id="qmSel"><i class="fa fa-mouse-pointer"></i> 選取移動</button>
+                    <label style="margin:0 0 0 6px;">字體大小 <input type="number" id="qmSize" value="28" min="8" max="200" style="width:64px;"></label>
+                    <button type="button" class="btn btn-default btn-sm" id="qmDel"><i class="fa fa-trash"></i> 刪除選取</button>
+                    <button type="button" class="btn btn-default btn-sm" id="qmBack">← 換一張圖面</button>
+                    <span class="muted-help" id="qmHint">螢光筆框：在圖面上拖曳畫出方框（半透明不遮住尺寸）；紅字說明：點圖面要放字的位置。</span>
+                </div>
+                <div style="border:1px solid #E4D3BC;background:#f5f5f5;overflow:auto;max-height:560px;text-align:center;"><canvas id="qmCanvas"></canvas></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" id="qmSkip">略過標註，直接開單</button>
+            <button type="button" class="btn btn-coral" id="qmDone" style="display:none;"><i class="fa fa-check"></i> 完成標註，下一步</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- NG 儲存後自動開立異常單：品管備註（2026-10-29 雙層快速決策；備註會自動寫入異常單的「品管備註」）。
      只有管理員在品質異常處理單設定開啟「NG儲存後自動開立」時才會出現，沒開時完全走上面的原流程。 -->
 <div class="modal fade" id="qcNoteModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
@@ -7109,13 +7141,133 @@ $(function(){
         });
         return { measures:rows, sel:sel };
     }
+    // ---------------------------------------------------------------
+    // 圖面標註（2026-10-30）：自動開立異常單前，先挑此料號圖面、用螢光筆框與紅字標出問題尺寸，
+    // 匯出成 PNG 後於異常單建立成功時上傳成該單附件（檔名以「圖面標註」開頭，異常單頁據此顯示縮圖）。
+    // fabric 與圖面清單都在第一次用到時才載入，不影響頁面平常的載入速度。
+    // ---------------------------------------------------------------
+    var qmCanvas=null, qmMode='sel', qmDoneCb=null, qmBlob=null, qmNatural=1, qmDrawing=null, qmLoadingFab=false;
+    function qmLoadFabric(cb){
+        if(window.fabric){ cb(); return; }
+        if(qmLoadingFab) return; qmLoadingFab=true;
+        var sc=document.createElement('script'); sc.src='../../resource/js/fabric.min.js';
+        sc.onload=function(){ qmLoadingFab=false; cb(); };
+        sc.onerror=function(){ qmLoadingFab=false; alert('標註元件載入失敗，改為直接開單'); qmFinish(null); };
+        document.head.appendChild(sc);
+    }
+    function qmFinish(blob){
+        $('#qcMarkModal').modal('hide');
+        var cb=qmDoneCb; qmDoneCb=null; qmBlob=blob||null;
+        if(qmCanvas){ try{ qmCanvas.dispose(); }catch(e){} qmCanvas=null; }
+        if(cb) cb(qmBlob);
+    }
+    function qcMarkStart(done){
+        qmDoneCb=done; qmBlob=null;
+        var partNo=(ctx&&ctx.part_no)||'', bom=(ctx&&ctx.bom)||'';
+        if(!partNo || !bom){ done(null); return; }
+        $.post('../pm/part_viewer.php?only_drawing=1', { action:'get_files_by_did', d_id:partNo, bom:bom }, function(res){
+            var imgs=((res&&res.success&&res.files)||[]).filter(function(f){ return f.type!=='pdf'; });
+            if(!imgs.length){ done(null); return; }   // 沒有可標註的圖面：不打擾，直接進下一步
+            $('#qcMarkPick').show(); $('#qcMarkEdit').hide(); $('#qmDone').hide(); $('#qmSkip').show();
+            $('#qcMarkPickList').html(imgs.map(function(f){
+                var u='../pm/bom_download.php?inline=1&path='+encodeURIComponent(f.path)+'&filename='+encodeURIComponent(f.name);
+                return '<div class="qm-pick" data-u="'+esc(u)+'" style="width:230px;border:2px solid #E4D3BC;border-radius:6px;padding:4px;cursor:pointer;background:#fff;">'+
+                       '<img src="'+esc(u)+'" style="width:100%;height:150px;object-fit:contain;"><div style="font-size:11px;word-break:break-all;">'+esc(f.name)+'</div></div>';
+            }).join(''));
+            $('#qcMarkModal').modal('show');
+        },'json').fail(function(){ done(null); });
+    }
+    $(document).on('click','.qm-pick', function(){
+        var u=$(this).data('u');
+        qmLoadFabric(function(){ qmOpenEditor(u); });
+    });
+    function qmSetMode(m){
+        qmMode=m;
+        $('#qmRect,#qmText,#qmSel').removeClass('btn-warm').addClass('btn-default');
+        $({rect:'#qmRect',text:'#qmText',sel:'#qmSel'}[m]).removeClass('btn-default').addClass('btn-warm');
+        if(qmCanvas){ qmCanvas.selection=(m==='sel'); qmCanvas.defaultCursor=(m==='sel'?'default':'crosshair'); qmCanvas.forEachObject(function(o){ o.selectable=(m==='sel'); o.evented=(m==='sel'); }); qmCanvas.discardActiveObject(); qmCanvas.requestRenderAll(); }
+    }
+    function qmOpenEditor(url){
+        $('#qcMarkPick').hide(); $('#qcMarkEdit').show(); $('#qmDone').show();
+        fabric.Image.fromURL(url, function(img){
+            if(!img || !img.width){ alert('圖面載入失敗'); $('#qmBack').click(); return; }
+            var maxW=1180, maxH=540, sc=Math.min(maxW/img.width, maxH/img.height, 1);
+            qmNatural=1/sc;
+            if(qmCanvas){ try{ qmCanvas.dispose(); }catch(e){} }
+            qmCanvas=new fabric.Canvas('qmCanvas',{ width:Math.round(img.width*sc), height:Math.round(img.height*sc), selection:false, preserveObjectStacking:true });
+            img.set({ scaleX:sc, scaleY:sc, selectable:false, evented:false });
+            qmCanvas.setBackgroundImage(img, qmCanvas.renderAll.bind(qmCanvas));
+            qmCanvas.on('mouse:down', function(o){
+                if(qmMode==='rect'){
+                    var p=qmCanvas.getPointer(o.e);
+                    qmDrawing=new fabric.Rect({ left:p.x, top:p.y, width:1, height:1, fill:'rgba(255,225,0,0.35)', stroke:'rgba(230,110,0,0.95)', strokeWidth:2, strokeUniform:true, selectable:false, evented:false });
+                    qmDrawing._sx=p.x; qmDrawing._sy=p.y; qmCanvas.add(qmDrawing);
+                } else if(qmMode==='text' && !o.target){
+                    var p2=qmCanvas.getPointer(o.e);
+                    var t=new fabric.IText('說明', { left:p2.x, top:p2.y, fill:'#D00000', fontSize:parseInt($('#qmSize').val(),10)||28, fontWeight:'bold', selectable:false, evented:false });
+                    qmCanvas.add(t); qmSetMode('sel'); qmCanvas.setActiveObject(t); t.enterEditing(); t.selectAll();
+                }
+            });
+            qmCanvas.on('mouse:move', function(o){
+                if(!qmDrawing) return; var p=qmCanvas.getPointer(o.e);
+                qmDrawing.set({ left:Math.min(p.x,qmDrawing._sx), top:Math.min(p.y,qmDrawing._sy), width:Math.abs(p.x-qmDrawing._sx), height:Math.abs(p.y-qmDrawing._sy) });
+                qmCanvas.requestRenderAll();
+            });
+            qmCanvas.on('mouse:up', function(){
+                if(!qmDrawing) return;
+                if(qmDrawing.width<4 || qmDrawing.height<4) qmCanvas.remove(qmDrawing);
+                else { qmDrawing.setCoords(); }
+                qmDrawing=null;
+            });
+            qmSetMode('rect');
+        }, { crossOrigin:'anonymous' });
+    }
+    $('#qmRect').on('click', function(){ qmSetMode('rect'); });
+    $('#qmText').on('click', function(){ qmSetMode('text'); });
+    $('#qmSel').on('click', function(){ qmSetMode('sel'); });
+    $('#qmSize').on('input change', function(){
+        var o=qmCanvas&&qmCanvas.getActiveObject(); var v=parseInt($(this).val(),10)||28;
+        if(o && o.type==='i-text'){ o.set('fontSize',v); qmCanvas.requestRenderAll(); }
+    });
+    $('#qmDel').on('click', function(){
+        if(!qmCanvas) return; var o=qmCanvas.getActiveObject();
+        if(o && !(o.isEditing)){ qmCanvas.remove(o); qmCanvas.discardActiveObject(); qmCanvas.requestRenderAll(); }
+    });
+    $(document).on('keydown', function(e){
+        if(e.key==='Delete' && qmCanvas && $('#qcMarkModal').is(':visible')){ var o=qmCanvas.getActiveObject(); if(o && !o.isEditing){ qmCanvas.remove(o); qmCanvas.discardActiveObject(); qmCanvas.requestRenderAll(); } }
+    });
+    $('#qmBack').on('click', function(){
+        if(qmCanvas){ try{ qmCanvas.dispose(); }catch(e){} qmCanvas=null; }
+        $('#qcMarkEdit').hide(); $('#qmDone').hide(); $('#qcMarkPick').show();
+    });
+    $('#qmSkip').on('click', function(){ qmFinish(null); });
+    $('#qmDone').on('click', function(){
+        if(!qmCanvas){ qmFinish(null); return; }
+        qmCanvas.discardActiveObject(); qmCanvas.requestRenderAll();
+        var mult=Math.min(Math.max(qmNatural,1),2.5);
+
+        var data=qmCanvas.toDataURL({ format:'png', multiplier:mult });
+        var bin=atob(data.split(',')[1]), arr=new Uint8Array(bin.length);
+        for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+        qmFinish(new Blob([arr],{type:'image/png'}));
+    });
+    function qcMarkUpload(orderId, blob, cb){
+        if(!blob){ if(cb) cb(); return; }
+        var fd=new FormData();
+        fd.append('action','att_upload'); fd.append('csrf',QAB_CSRF); fd.append('id',orderId);
+        fd.append('file', blob, '圖面標註.png');
+        $.ajax({ url:'../../src/store/QaAbnormal_API.php', type:'POST', data:fd, processData:false, contentType:false, dataType:'json' })
+            .always(function(){ if(cb) cb(); });
+    }
     var qcNoteCtx=null;
     function openQcNote(qcFormId, s, items, done){
-        qcNoteCtx={ qcFormId:qcFormId, items:items, done:done };
+        qcNoteCtx={ qcFormId:qcFormId, items:items, done:done, mark:null };
         $('#qcNoteInfo').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。系統將<b>自動開立品質異常單</b>並通知第一層裁決者。');
         $('#qcNoteText').val('');
         $('#btnQcNoteGo').prop('disabled', false);
-        $('#qcNoteModal').modal('show');
+        // 先挑圖面標註問題尺寸（沒有圖面或略過都直接進品管備註）
+        var ctxNow=qcNoteCtx;
+        qcMarkStart(function(blob){ if(qcNoteCtx===ctxNow){ ctxNow.mark=blob; $('#qcNoteModal').modal('show'); } });
     }
     $('#btnQcNoteGo').on('click', function(){
         if(!qcNoteCtx) return;
@@ -7134,8 +7286,10 @@ $(function(){
                 if(Number(res.vendor_pending)){
                     alert('異常單 '+res.no+' 已自動開立。\n\n⚠ 這一站尚未登記加工廠商：系統已通知生管補登。\n請向生管確認廠商，並在異常單的「責任單位」填入廠商（補填後系統會依廠內／外包自動調整類別）。\n補填之前這張單不會被自動核准或結案。');
                 }
-                try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
-                if(c.done) c.done();
+                qcMarkUpload(res.id, c.mark, function(){
+                    try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
+                    if(c.done) c.done();
+                });
             }, 'json');
         }, 'json').fail(function(x){ $b.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
     });

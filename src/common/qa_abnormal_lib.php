@@ -224,6 +224,8 @@ function qab_ensure_schema(PDO $db): void
         'resp_vendor_manual'  => "ADD COLUMN resp_vendor_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任廠商是人工改的（不是由製令製程自動帶），畫面與列印要標示'",
         'resp_process_manual' => "ADD COLUMN resp_process_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任製程是人工改的（不是從製令製程挑的）'",
         'auto_opened'      => "ADD COLUMN auto_opened TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=系統自動開立（報工NG觸發），非人工手動建立'",
+        'close_notify_extra' => "ADD COLUMN close_notify_extra VARCHAR(500) NULL COMMENT '結案時額外通知的人員（JSON user id 陣列，決策者在結案確認畫面加的）'",
+        'qc_mark_attach_id'  => "ADD COLUMN qc_mark_attach_id INT NULL COMMENT '線上檢驗開單時品管在圖面上標註的圖（附件 id）'",
         'auto_open_note'   => "ADD COLUMN auto_open_note VARCHAR(255) NULL COMMENT '自動開立的現場主管解析軌跡（誰不在職、最後選到誰），供追溯'",
         'vendor_pending'   => "ADD COLUMN vendor_pending TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立時該製程站沒登記廠商（暫歸廠內製程類別，補廠商後依廠內/外包自動改類別；補之前不可自動核准結案）'",
         'disp_by_deputy'   => "ADD COLUMN disp_by_deputy TINYINT(1) NOT NULL DEFAULT 0 COMMENT '處置判定是由不在決策者範圍內的人（第一層／代理）簽的，列印圖章右下角加「代」字'",
@@ -268,6 +270,15 @@ function qab_ensure_schema(PDO $db): void
     $mcols = $db->query("SHOW COLUMNS FROM qa_abnormal_measure")->fetchAll(PDO::FETCH_COLUMN);
     if (!in_array('dim_code', $mcols, true)) {
         $db->exec("ALTER TABLE qa_abnormal_measure ADD COLUMN dim_code VARCHAR(12) NULL COMMENT '尺寸編號（帶入當下檢驗表2.0上的 A,B,C 或 1,2,3；人工列為使用者自填）' AFTER seq");
+    }
+    // 2026-10-30：公差上下限（絕對值）供畫面把超出範圍的實測值標紅；量測尺寸名稱放寬到 160 字（含標準／公差／範圍）
+    if (!in_array('spec', $mcols, true)) {
+        $db->exec("ALTER TABLE qa_abnormal_measure ADD COLUMN spec TEXT NULL COMMENT '量測規格 JSON：mode(TOL/RANGE)、std、up、lo、min、max、type(NUM/OKNG)'");
+    }
+    if (!in_array('lim_lo', $mcols, true)) {
+        $db->exec("ALTER TABLE qa_abnormal_measure ADD COLUMN lim_lo DECIMAL(14,5) NULL COMMENT '合格下限（絕對值，線上檢驗帶入）'");
+        $db->exec("ALTER TABLE qa_abnormal_measure ADD COLUMN lim_hi DECIMAL(14,5) NULL COMMENT '合格上限（絕對值，線上檢驗帶入）'");
+        $db->exec("ALTER TABLE qa_abnormal_measure MODIFY dim_name VARCHAR(160) NULL COMMENT '量測尺寸'");
     }
 
     // ── 相關單位意見（逐輪徵詢）：沿用既有 flow 表，補上輪次與指定職稱 ──
@@ -1549,13 +1560,14 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
 
     // 量測尺寸與實測值——寫法與 QaAbnormal_API.php 的 save_head 處理 measures 完全同一套
     // （先清空重建，seq 從 1 起算），不另外重寫一次 INSERT 邏輯。
-    $insM = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals) VALUES (?,?,?,?,?)");
+    $insM = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_code,dim_name,vals,lim_lo,lim_hi,spec) VALUES (?,?,?,?,?,?,?,?)");
     $seq = 1;
     foreach ($measures as $m) {
-        $dimName = mb_substr(trim((string)($m['dim_name'] ?? '')), 0, 60);
+        $dimName = mb_substr(trim((string)($m['dim_name'] ?? '')), 0, 160);
+        [$specJson, $limLo, $limHi] = qab_measure_spec($m);
         $dimCode = mb_substr(trim((string)($m['code'] ?? '')), 0, 12);
         $vals = array_values(array_map('strval', (array)($m['vals'] ?? [])));
-        $insM->execute([$id, $seq++, $dimCode !== '' ? $dimCode : null, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+        $insM->execute([$id, $seq++, $dimCode !== '' ? $dimCode : null, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE), $limLo, $limHi, $specJson]);
     }
 
     // 品管在 2.0 跳窗填的備註 → 異常單「品管備註」(qa_ps)
@@ -2376,6 +2388,8 @@ function qab_quick_cfg(PDO $db): array
         'l1_users'  => $ints($raw['l1_users'] ?? []),
         'l2_user'   => (int)($raw['l2_user'] ?? 0),
         'l1_ptypes' => $ints($raw['l1_ptypes'] ?? []),
+        // 2026-10-30：第二層決策後是否也通知第一層裁決者（預設開）
+        'l2_notify_l1' => array_key_exists('l2_notify_l1', $raw) ? (!empty($raw['l2_notify_l1']) ? 1 : 0) : 1,
         'actions'   => $acts,
     ];
 }
@@ -2431,7 +2445,8 @@ function qab_quick_cfg_save(PDO $db, array $in): array
         if ($l2 <= 0) throw new Exception('尚未選定第二層決策者，不能開啟「NG儲存後自動開立」');
         if (!array_filter($acts, function ($a) { return $a['active']; })) throw new Exception('至少要有一個啟用的裁決項目才能開啟自動開立');
     }
-    $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l2_user' => $l2, 'l1_ptypes' => array_values($pt), 'actions' => $acts];
+    $l2n = array_key_exists('l2_notify_l1', $in) ? (!empty($in['l2_notify_l1']) ? 1 : 0) : $cur['l2_notify_l1'];
+    $new = ['enabled' => $enabled, 'l1_users' => array_values($l1), 'l2_user' => $l2, 'l1_ptypes' => array_values($pt), 'l2_notify_l1' => $l2n, 'actions' => $acts];
     qab_setting_set($db, 'quick_cfg', $new);
     return qab_quick_cfg($db);
 }
@@ -2679,7 +2694,9 @@ function qab_quick_decide(PDO $db, int $orderId, int $uid, string $act, string $
     $db->prepare("UPDATE qa_abnormal_order SET $set WHERE id=?")->execute($par);
     qab_quick_retire_notices($db, $orderId);   // 任一層決策即完成：收掉另一層還掛著的待裁決通知
     $who = qab_quick_names($db, [$uid])[$uid] ?? '';
-    qab_quick_notify($db, $orderId, qab_quick_result_targets($db, $o, $action),
+    $resTargets = qab_quick_result_targets($db, $o, $action);
+    if ($v['layer'] === 'l2' && !empty($c['l2_notify_l1'])) $resTargets = array_merge($resTargets, $c['l1_users']);   // 第二層決策後也通知第一層
+    qab_quick_notify($db, $orderId, $resTargets,
         '品質異常單裁決：' . $no . '（' . $action['name'] . '）',
         '異常單 ' . $no . ' 已由' . ($v['layer'] === 'l1' ? '第一層' : '第二層') . ($who !== '' ? '（' . $who . '）' : '') . '裁決為「' . $action['name'] . '」。', $uid);
     return qab_order($db, $orderId);
@@ -3413,6 +3430,90 @@ function qab_scrap_no_sync(PDO $db, int $id): string
  * 已經結案的單直接回傳現況，不重複動作（拆分時母單與子單都可能各自被呼叫到，需要是幂等的）。
  * @return ['scrap_no'=>string] 失敗一律丟例外，呼叫端自行決定要不要 catch
  */
+/** 量測規格正規化＋算出合格上下限（前端送來的 lim 一律不採信，以規格重算） @return [specJson|null, lo|null, hi|null] */
+function qab_measure_spec(array $m): array
+{
+    $sp = $m['spec'] ?? null;
+    if (is_string($sp)) $sp = json_decode($sp, true);
+    if (!is_array($sp)) return [null, (isset($m['lim_lo']) && is_numeric($m['lim_lo'])) ? (float)$m['lim_lo'] : null, (isset($m['lim_hi']) && is_numeric($m['lim_hi'])) ? (float)$m['lim_hi'] : null];
+    $n = function ($v) { $v = trim((string)$v); return $v !== '' && is_numeric($v) ? (float)$v : null; };
+    $type = (($sp['type'] ?? '') === 'OKNG') ? 'OKNG' : 'NUM';
+    $mode = (($sp['mode'] ?? '') === 'RANGE') ? 'RANGE' : 'TOL';
+    $out = ['mode' => $mode, 'type' => $type,
+            'std' => mb_substr(trim((string)($sp['std'] ?? '')), 0, 20), 'up' => mb_substr(trim((string)($sp['up'] ?? '')), 0, 20), 'lo' => mb_substr(trim((string)($sp['lo'] ?? '')), 0, 20),
+            'min' => mb_substr(trim((string)($sp['min'] ?? '')), 0, 20), 'max' => mb_substr(trim((string)($sp['max'] ?? '')), 0, 20)];
+    $lo = $hi = null;
+    if ($type === 'NUM') {
+        if ($mode === 'RANGE') { $lo = $n($out['min']); $hi = $n($out['max']); }
+        else { $b = $n($out['std']); if ($b !== null) { $lo = $b + ($n($out['lo']) ?? 0); $hi = $b + ($n($out['up']) ?? 0); } }
+        if ($lo === null || $hi === null) { $lo = $hi = null; }
+    }
+    return [json_encode($out, JSON_UNESCAPED_UNICODE), $lo, $hi];
+}
+
+/**
+ * 結案後會通知誰（結案確認畫面與實際發送共用同一支，兩邊不會對不起來）：
+ *  ①開單人——只限線上檢驗2.0 自動開立的單（開單人＝那張檢驗單的檢驗人員）
+ *  ②雙層快速決策單：已選裁決項目設定的通知部門／人員
+ *  ③決策者在結案確認畫面額外加的人員（close_notify_extra）
+ * @return array [['id'=>int,'name'=>string,'why'=>string,'fixed'=>bool], ...]
+ */
+function qab_close_notify_list(PDO $db, array $o, int $exceptUid = 0): array
+{
+    require_once __DIR__ . '/people_lib.php';
+    $out = [];
+    $add = function ($uid, $why, $fixed) use (&$out) {
+        $uid = (int)$uid;
+        if ($uid <= 0) return;
+        if (isset($out[$uid])) { if (strpos($out[$uid]['why'], $why) === false) $out[$uid]['why'] .= '、' . $why; if ($fixed) $out[$uid]['fixed'] = true; return; }
+        $out[$uid] = ['id' => $uid, 'name' => '', 'why' => $why, 'fixed' => $fixed];
+    };
+    if (!empty($o['auto_opened']) && (int)($o['src_qc_form_id'] ?? 0) > 0) $add($o['created_by'], '開單人（檢驗人員）', true);
+    if (!empty($o['quick_mode'])) {
+        $c = qab_quick_cfg($db);
+        $optMap = qab_option_map($db);
+        $raw = qab_setting_get($db, 'quick_cfg', []);
+        $stored = [];
+        foreach ((array)($raw['actions'] ?? []) as $ra) $stored[(string)($ra['key'] ?? '')] = (int)($ra['opt_id'] ?? 0);
+        $chosen = array_merge((array)($o['disp_ids'] ?? []), (array)($o['gm_ids'] ?? []));
+        foreach ($c['actions'] as $a) {
+            if (!$a['active']) continue;
+            foreach ($chosen as $oi) {
+                $oi = (int)$oi;
+                if (!isset($optMap[$oi])) continue;
+                if (($stored[$a['key']] ?? 0) === $oi || ($optMap[$oi]['name'] === $a['name'] && (int)$optMap[$oi]['is_scrap'] === (int)$a['is_scrap'])) {
+                    foreach ($a['notify_users'] as $u) $add($u, '裁決「' . $a['name'] . '」通知對象', true);
+                    foreach ($a['notify_depts'] as $d) foreach (eg_people_list($db, ['dept_ids' => [(int)$d]]) as $p) $add($p['id'], '裁決「' . $a['name'] . '」通知部門', true);
+                    break;
+                }
+            }
+        }
+    }
+    $extra = json_decode((string)($o['close_notify_extra'] ?? '[]'), true);
+    foreach ((array)$extra as $u) $add($u, '決策者加入', false);
+    if ($exceptUid > 0) unset($out[$exceptUid]);
+    if ($out) {
+        $in = implode(',', array_map('intval', array_keys($out)));
+        foreach ($db->query("SELECT id, user_cname FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['id']]['name'] = (string)$r['user_cname'];
+    }
+    return array_values($out);
+}
+
+/** 結案後實際發送通知（失敗不影響結案） */
+function qab_close_notify_send(PDO $db, int $id, int $actorUid): void
+{
+    try {
+        $o = qab_order($db, $id);
+        if (!$o) return;
+        $list = qab_close_notify_list($db, $o, $actorUid);
+        if (!$list) return;
+        $no = (string)$o['abnormal_order_no'];
+        $fin = implode('、', (array)($o['final']['names'] ?? []));
+        qab_quick_notify($db, $id, array_column($list, 'id'), '品質異常單已結案：' . $no,
+            '異常單 ' . $no . ' 已結案' . ($fin !== '' ? '（最終處置：' . $fin . '）' : '') . '。', $actorUid);
+    } catch (Throwable $e) { error_log('qab_close_notify_send: ' . $e->getMessage()); }
+}
+
 function qab_close_order(PDO $db, int $id, int $uid, bool $skipChecks = false): array
 {
     $o = qab_order($db, $id);
@@ -3939,11 +4040,13 @@ function qab_order(PDO $db, int $id): ?array
     }
     $o['bom_processes'] = qab_bom_processes($db, $o['bom_list']);
 
-    $st = $db->prepare("SELECT seq, dim_code, dim_name, vals FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
+    $st = $db->prepare("SELECT seq, dim_code, dim_name, vals, lim_lo, lim_hi, spec FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
     $st->execute([$id]);
     $o['measures'] = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $m) {
         $o['measures'][] = ['seq' => (int)$m['seq'], 'dim_code' => (string)($m['dim_code'] ?? ''), 'dim_name' => (string)$m['dim_name'],
+                            'lim_lo' => $m['lim_lo'] !== null ? (float)$m['lim_lo'] : null, 'lim_hi' => $m['lim_hi'] !== null ? (float)$m['lim_hi'] : null,
+                            'spec' => $m['spec'] ? (json_decode((string)$m['spec'], true) ?: null) : null,
                             'vals' => json_decode((string)$m['vals'], true) ?: []];
     }
 
@@ -4297,7 +4400,7 @@ function qab_list(PDO $db, array $f = []): array
     }
     $sql = "SELECT o.id, o.abnormal_order_no, o.source_type, o.fill_date, o.occurrence_date, o.client_name,
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
-                   o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
+                   o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.part_d_id, o.created_by, cu.user_cname AS created_name,
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
                    o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
                    o.cat_id, ct.name AS cat_name, ct.is_active AS cat_active,
