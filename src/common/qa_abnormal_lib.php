@@ -2531,11 +2531,8 @@ function qab_quick_view(PDO $db, array $o, int $uid): array
     if ($uid === $escBy && $uid > 0) { $v['why'] = '您已經做過第一層的轉呈，同一張單不可以再簽第二層'; return $v; }
     if ($wait === 'l1') {
         if ($isL1) { $v['layer'] = 'l1'; $v['can'] = ['decide' => 1, 'escalate' => 1, 'grant' => 0]; }
-        elseif ($isL2) {   // 第一層全部不在時，第二層可代為決策（互相代理）
-            $allAbsent = true;
-            foreach ($c['l1_users'] as $u) if (!qab_quick_absent($db, $u)) { $allAbsent = false; break; }
-            if ($allAbsent) { $v['layer'] = 'l2'; $v['can'] = ['decide' => 1, 'escalate' => 0, 'grant' => 0]; }
-            else $v['why'] = '這張單現在由第一層裁決（第一層有人在，暫不需要第二層介入）';
+        elseif ($isL2) {   // 雙層同步：第二層本來就能直接決策（開單當下已一併通知），第一層或第二層任一人決策即完成
+            $v['layer'] = 'l2'; $v['can'] = ['decide' => 1, 'escalate' => 0, 'grant' => 0];
         }
     } else {
         if ($isL2) {
@@ -2610,6 +2607,7 @@ function qab_quick_notify_decision(PDO $db, int $orderId, array $optIds, int $ac
 {
     $o = qab_order($db, $orderId);
     if (!$o || empty($o['quick_mode'])) return;
+    qab_quick_retire_notices($db, $orderId);
     $optMap = qab_option_map($db);
     $c = qab_quick_cfg($db);
     $raw = qab_setting_get($db, 'quick_cfg', []);
@@ -2679,6 +2677,7 @@ function qab_quick_decide(PDO $db, int $orderId, int $uid, string $act, string $
     if ($v['layer'] === 'l1') { $set .= ", quick_l1_by=?, quick_l1_at=NOW()"; $par[] = $uid; }
     $par[] = $orderId;
     $db->prepare("UPDATE qa_abnormal_order SET $set WHERE id=?")->execute($par);
+    qab_quick_retire_notices($db, $orderId);   // 任一層決策即完成：收掉另一層還掛著的待裁決通知
     $who = qab_quick_names($db, [$uid])[$uid] ?? '';
     qab_quick_notify($db, $orderId, qab_quick_result_targets($db, $o, $action),
         '品質異常單裁決：' . $no . '（' . $action['name'] . '）',
@@ -2834,11 +2833,107 @@ function qab_notify_quick_l1(PDO $db, int $orderId, string $desc): void
     $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
     $st->execute([$orderId]);
     $no = (string)$st->fetchColumn();
-    $targets = array_map(function ($id) { return ['type' => 'user', 'id' => (int)$id, 'mode' => 'read']; }, $c['l1_users']);
+    // 雙層同步通知：第二層本來就能直接決策，開單當下一起通知；第一層或第二層任一人決策即完成
+    $notifyIds = $c['l1_users'];
+    try { $notifyIds = array_merge($notifyIds, qab_quick_l2_pool($db)['ids']); } catch (Throwable $e) {}
+    $notifyIds = array_values(array_unique(array_filter(array_map('intval', $notifyIds))));
+    $targets = array_map(function ($id) { return ['type' => 'user', 'id' => (int)$id, 'mode' => 'read']; }, $notifyIds);
     eg_qa_insert_event($db, $orderId, '品質異常單待裁決：' . $no, $desc . '，異常單 ' . $no . ' 已自動開立，請前往裁決。', $targets, null, 0, [
         'ref_type' => 'QAB_L1',
         'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
     ]);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   雙層快速決策：待裁決通知的管理（列出／移除／追加／收回）
+   只處理「待裁決類」通知（標題含 待裁決／待決策／轉呈決策／轉回第一層）；
+   裁決結果通知與其他模組的通知一律不碰。收回＝刪掉該收件人的 live_event_target 列
+   （對方鈴鐺／手機通知立即消失），已讀紀錄留著供稽核。
+   ───────────────────────────────────────────────────────────── */
+function qab_quick_pending_events(PDO $db, int $orderId): array
+{
+    $st = $db->prepare("SELECT id FROM live_event WHERE ref_type='QAB_L1' AND ref_id=?
+                          AND title REGEXP '待裁決|待決策|轉呈決策|轉回第一層'
+                          AND (enddate IS NULL OR enddate >= CURDATE())");
+    $st->execute([$orderId]);
+    return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+}
+
+function qab_quick_notice_list(PDO $db, array $o): array
+{
+    $orderId = (int)$o['id'];
+    $evs = qab_quick_pending_events($db, $orderId);
+    $c = qab_quick_cfg($db);
+    $l2 = [];
+    try { $l2 = array_map('intval', qab_quick_l2_pool($db)['ids']); } catch (Throwable $e) {}
+    $users = [];
+    if ($evs) {
+        $in = implode(',', $evs);
+        foreach ($db->query("SELECT DISTINCT target_id FROM live_event_target WHERE live_event_id IN ($in) AND target_type='user'")->fetchAll(PDO::FETCH_COLUMN) as $u) {
+            $users[(int)$u] = ['read' => 0];
+        }
+        if ($users) {
+            $ui = implode(',', array_keys($users));
+            foreach ($db->query("SELECT DISTINCT user_id FROM live_event_response WHERE live_event_id IN ($in) AND user_id IN ($ui) AND read_at IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $u) {
+                $users[(int)$u]['read'] = 1;
+            }
+        }
+    }
+    $decidedBy = [];
+    $isDone = !empty($o['disp_ids']) || !empty($o['gm_ids']) || !empty($o['is_closed']);
+    if ($isDone) foreach (['disp_decided_by', 'gm_decided_by'] as $f) { $v = (int)($o[$f] ?? 0); if ($v > 0) $decidedBy[$v] = 1; }
+    $names = qab_quick_names($db, array_unique(array_merge(array_keys($users), array_keys($decidedBy))));
+    $out = [];
+    foreach ($users as $u => $info) {
+        $out[] = ['id' => $u, 'name' => $names[$u] ?? ('#' . $u), 'read' => $info['read'],
+                  'layer' => in_array($u, $c['l1_users'], true) ? 'l1' : (in_array($u, $l2, true) ? 'l2' : ''),
+                  'decided' => ($isDone && isset($decidedBy[$u])) ? 1 : 0];
+    }
+    // 已決策的人如果不在通知名單（例如被收回後仍代為決策），也要顯示出來
+    if ($isDone) foreach (array_keys($decidedBy) as $u) {
+        if (!isset($users[$u])) $out[] = ['id' => $u, 'name' => $names[$u] ?? ('#' . $u), 'read' => 1, 'layer' => '', 'decided' => 1, 'removed' => 1];
+    }
+    return ['users' => $out, 'events' => count($evs)];
+}
+
+/** 收回通知：$uids 為空＝全部收回（並把整則待裁決通知結束）。回傳被收回的人數 */
+function qab_quick_notice_recall(PDO $db, int $orderId, array $uids = []): int
+{
+    $evs = qab_quick_pending_events($db, $orderId);
+    if (!$evs) return 0;
+    $in = implode(',', $evs);
+    $uids = array_values(array_unique(array_filter(array_map('intval', $uids))));
+    if ($uids) {
+        $ui = implode(',', $uids);
+        $st = $db->prepare("DELETE FROM live_event_target WHERE live_event_id IN ($in) AND target_type='user' AND target_id IN ($ui)");
+        $st->execute();
+        return $st->rowCount();
+    }
+    $n = (int)$db->query("SELECT COUNT(DISTINCT target_id) FROM live_event_target WHERE live_event_id IN ($in) AND target_type='user'")->fetchColumn();
+    $db->exec("DELETE FROM live_event_target WHERE live_event_id IN ($in) AND target_type='user'");
+    $db->exec("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id IN ($in)");
+    return $n;
+}
+
+/** 追加通知：對選定的人另發一則待裁決通知（已在名單內的略過）。回傳實際追加人數 */
+function qab_quick_notice_add(PDO $db, array $o, array $uids, int $byUid): int
+{
+    $orderId = (int)$o['id'];
+    $cur = array_column(qab_quick_notice_list($db, $o)['users'], 'id');
+    $okUser = array_flip(array_map('intval', $db->query("SELECT id FROM `user` WHERE state=1")->fetchAll(PDO::FETCH_COLUMN)));
+    $add = [];
+    foreach ($uids as $u) { $u = (int)$u; if ($u > 0 && isset($okUser[$u]) && !in_array($u, $cur, true)) $add[$u] = $u; }
+    if (!$add) return 0;
+    $no = (string)$o['abnormal_order_no'];
+    qab_quick_notify($db, $orderId, array_values($add), '品質異常單待裁決：' . $no,
+        '異常單 ' . $no . ' 請前往查看並決策（由管理者追加通知）。');
+    return count($add);
+}
+
+/** 決策完成後把還沒處理的待裁決通知收掉（避免另一層的人鈴鐺還掛著已完成的單）；失敗不影響決策 */
+function qab_quick_retire_notices(PDO $db, int $orderId): void
+{
+    try { qab_quick_notice_recall($db, $orderId, []); } catch (Throwable $e) {}
 }
 
 /** 通知生管部門：這張自動開立的單，該製程站沒有登記廠商，請補登 */

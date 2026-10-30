@@ -433,6 +433,15 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div id="quickCause" style="display:none;margin-top:4px;color:var(--coral);font-weight:bold;"><i class="fa fa-exclamation-circle"></i> 報工開立的單：請先在下方「異常原因分類」選擇分類（由決策者填寫），再做決策。</div>
                         <div class="muted-help" id="quickWhy" style="margin-top:4px;"></div>
                         <div id="quickQc" style="display:none;margin-top:4px;"><a id="quickQcLink" target="_blank" href="#"><i class="fa fa-external-link"></i> 查看相關檢驗紀錄</a></div>
+                        <div id="qkNotice" style="display:none;margin-top:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;">
+                            <div style="font-weight:bold;margin-bottom:4px;">待裁決通知對象 <span class="muted-help" style="font-weight:normal;">（第一層或第二層任一人決策後即完成，其餘通知自動收回）</span></div>
+                            <div id="qkNoticeList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                            <div id="qkNoticeAct" style="display:none;margin-top:6px;gap:6px;align-items:center;flex-wrap:wrap;">
+                                <select id="qkNoticeAdd" data-eg-filter="輸入姓名篩選…" style="min-width:200px;"></select>
+                                <button type="button" class="btn btn-warm-o btn-sm" id="qkNoticeAddBtn">追加通知</button>
+                                <button type="button" class="btn btn-warm-o btn-sm" id="qkNoticeRecallBtn">收回全部通知</button>
+                            </div>
+                        </div>
                     </div>
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;">
@@ -990,6 +999,7 @@ function renderQuickBox(){
     if (!q.on) { $('#quickBox').hide(); return; }
     $('#quickBox').show();
     var done = Number(q.done) === 1, o = D.order || {};
+    loadQuickNotice();
     var state;
     if (done) {
         state = (o.disp_names || []).length
@@ -1068,6 +1078,55 @@ function textifyLocked(){
         });
     });
 }
+/* 待裁決通知管理：看誰收到、誰已讀、誰已決策；可移除個別對象、追加對象、收回全部（權限由後端 quick_notice 判定） */
+function loadQuickNotice(){
+    var q = D.quick || {};
+    $('#qkNotice').hide();
+    if (!q.on) return;
+    $.post(API, { action:'quick_notice', sub:'get', csrf:CSRF, id:OID }, function(res){
+        if (!res || !res.success) return;   // 沒有管理權限就不顯示
+        drawQuickNotice(res, true);
+    }, 'json');
+}
+function drawQuickNotice(res, withPeople){
+    var us = (res.notice && res.notice.users) || [], done = Number((D.quick || {}).done) === 1, closed = Number(res.done) === 1;
+    var h = '';
+    us.forEach(function(u){
+        var st = u.decided ? '已決策' : (u.removed ? '已收回' : (Number(u.read) ? '已讀' : '未讀'));
+        var col = u.decided ? '#DDEBD6' : (u.removed ? '#eee' : (Number(u.read) ? '#F7E0BD' : '#F0A24B'));
+        var ly = u.layer === 'l1' ? '第一層' : (u.layer === 'l2' ? '第二層' : '');
+        h += '<span style="background:' + col + ';color:#3b2a18;border-radius:12px;padding:2px 10px;font-size:12px;">'
+          + esc(u.name) + (ly ? '（' + ly + '）' : '') + '　' + st
+          + (!u.decided && !u.removed && !closed ? ' <a href="#" data-qkrm="' + Number(u.id) + '" title="移除這位的通知" style="color:#DD5138;font-weight:bold;">×</a>' : '') + '</span>';
+    });
+    if (!us.length) h = '<span class="muted-help">目前沒有有效的待裁決通知' + (done ? '（已決策，通知已自動收回）' : '') + '</span>';
+    $('#qkNoticeList').html(h);
+    if (withPeople) {
+        var o = '<option value="">選擇要追加通知的人…</option>';
+        (res.people || []).forEach(function(p){ o += '<option value="' + Number(p.id) + '">' + esc(p.label) + '</option>'; });
+        $('#qkNoticeAdd').html(o);
+    }
+    $('#qkNoticeAct').css('display', closed || done ? 'none' : 'flex');
+    $('#qkNotice').show();
+}
+function qkNoticeCall(sub, uids){
+    $.post(API, { action:'quick_notice', sub:sub, csrf:CSRF, id:OID, uids:uids }, function(res){
+        if (!res || !res.success) { alert((res && res.message) || '操作失敗'); load(); return; }
+        drawQuickNotice(res, false);
+    }, 'json').fail(function(){ alert('連線失敗，請稍後再試'); });
+}
+$(document).on('click', '#qkNoticeList [data-qkrm]', function(e){
+    e.preventDefault();
+    if (confirm('確定移除這位的待裁決通知？對方的通知會立即消失。')) qkNoticeCall('remove', [$(this).attr('data-qkrm')]);
+});
+$(document).on('click', '#qkNoticeAddBtn', function(){
+    var v = $('#qkNoticeAdd').val();
+    if (!v) { alert('請先選擇要追加通知的人'); return; }
+    qkNoticeCall('add', [v]); $('#qkNoticeAdd').val('');
+});
+$(document).on('click', '#qkNoticeRecallBtn', function(){
+    if (confirm('確定收回全部待裁決通知？所有人的通知會立即消失（可再用「追加通知」補發）。')) qkNoticeCall('recall', []);
+});
 $(document).on('click', '#quickBtns [data-qact]', function(){
     var act = $(this).attr('data-qact'), name = $.trim($(this).text());
     var qq = D.quick || {};

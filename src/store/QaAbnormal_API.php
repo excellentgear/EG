@@ -161,6 +161,30 @@ case 'quick_decide': {
     jout(true, ['order' => $fresh, 'quick' => qab_quick_view($db, $fresh, $uid)]);
 }
 
+/* 雙層快速決策：待裁決通知管理（看誰收到／誰已決策、移除、追加、收回）。
+   可管理者＝異常單管理員、有決策權者、這張單的第一層／第二層（權限一律在後端判定，鐵律8） */
+case 'quick_notice': {
+    $o = qab_order($db, (int)($_POST['id'] ?? $_GET['id'] ?? 0));
+    if (!$o || empty($o['quick_mode'])) jerr('這張單不是雙層快速決策的單');
+    $qvN = qab_quick_view($db, $o, $uid);
+    $cfgN = qab_quick_cfg($db);
+    $canMng = !empty($perms['canAdmin']) || !empty($perms['canDecide']) || in_array($uid, $cfgN['l1_users'], true)
+              || !empty($qvN['can']['decide']);
+    if (!$canMng) jerr('沒有管理通知的權限');
+    $sub = (string)($_POST['sub'] ?? $_GET['sub'] ?? 'get');
+    if ($sub !== 'get') {
+        if (!empty($o['is_closed'])) jerr('這張單已結案，不能再異動通知', 'CLOSED');
+        $uidsN = array_map('intval', (array)($_POST['uids'] ?? []));
+        if ($sub === 'remove') { if (!$uidsN) jerr('請先選擇要移除的人員'); $n = qab_quick_notice_recall($db, (int)$o['id'], $uidsN); $log((int)$o['id'], 'quick_notice', '', '移除通知 ' . $n . ' 人'); }
+        elseif ($sub === 'recall') { $n = qab_quick_notice_recall($db, (int)$o['id'], []); $log((int)$o['id'], 'quick_notice', '', '收回全部待裁決通知（' . $n . ' 人）'); }
+        elseif ($sub === 'add') { if (!$uidsN) jerr('請先選擇要追加通知的人員'); $n = qab_quick_notice_add($db, $o, $uidsN, $uid); $log((int)$o['id'], 'quick_notice', '', '追加通知 ' . $n . ' 人'); }
+        else jerr('不支援的操作');
+    }
+    $people = [];
+    if ($sub === 'get') foreach (eg_people_list($db, ['all_posts' => true]) as $p) $people[] = ['id' => (int)$p['id'], 'label' => trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '') . ' ' . $p['user_cname']), 'post_key' => $p['post_key'] ?? ''];
+    jout(true, ['notice' => qab_quick_notice_list($db, $o), 'people' => $people, 'done' => !empty($o['is_closed']) ? 1 : 0]);
+}
+
 /* 品管檢驗 2.0 判定 NG 儲存後，問「要不要走自動開單（跳品管備註視窗）」——只回開關狀態，不暴露設定內容 */
 case 'quick_state': {
     jout(true, ['auto' => (qab_quick_ready($db) && !empty($perms['canCreate'])) ? 1 : 0]);
