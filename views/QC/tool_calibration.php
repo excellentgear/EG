@@ -1303,6 +1303,7 @@ function openSet(tid){
         $('#setManufacturer,#setSpecDesc,#setPurchaseDate,#setEquipNote').val('');
         loadSpecPick(0);
         $('#setMachine,#setMachineModel,#setPosition,#setDisabledDate').val('');
+        machineAuto = true; syncMachineFromCat();   // 新增時機台名稱預設＝類別，手動改過就不再覆蓋
         $('#setDisabled').prop('checked', false); $('#setDisabledDateBox').hide();
     }
     openMask('setMask');
@@ -1407,8 +1408,15 @@ $('#setSpecPick').on('change', function(){
         $('#setManufacturer').val($.trim(o.brand));
 });
 /** 類別改了＝可挑的採購品項也跟著換，要重載並清掉舊的對應 */
+var machineAuto = false;
+function syncMachineFromCat(){
+    if (setTool || !machineAuto) return;
+    $('#setMachine').val($.trim($('#setCat option:selected').text()));
+}
+$('#setMachine').on('input', function(){ machineAuto = false; });
 $('#setCat').on('change', function(){
     if (!$('#setMask').is(':visible')) return;
+    syncMachineFromCat();
     loadSpecPick(setTool ? setTool.Tool_id : 0);
 });
 /* ---------- 類別設定（管理員；校驗屬性旗標＋自訂合併分頁） ---------- */
