@@ -1097,6 +1097,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .ctx-qty-live input.ctx-qty-live-edit { width:70px; font-size:28px; font-weight:bold; text-align:center;
         color:var(--ink); border:0; border-radius:4px; padding:0 2px; vertical-align:middle; }
     .ctx-bar a.cv { color:var(--ink); text-decoration:underline; }
+    /* 尚未檢驗／良品上限／BOM總數：三個標題一列、三個數字一列，數字對齊各自的標題（使用者回報原本擠成「16 / 16 / 100pcs」對不到標題） */
+    .pgrid { display:inline-grid; grid-template-columns:repeat(3,auto); column-gap:18px; row-gap:1px; vertical-align:top; }
+    .pgrid b { white-space:nowrap; }
+    .pgrid .pgv { font-weight:bold; font-size:15px; white-space:nowrap; line-height:1.2; }
     /* 檢驗性質：一般／首件／末件，三選一直接點選（首件/末件＝全數檢驗，抽驗數鎖定＝送驗數） */
     .ctx-bar .ki-btns { display:inline-flex; gap:4px; }
     .ctx-bar .ki-btn { border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); border-radius:12px;
@@ -4625,7 +4629,7 @@ $(function(){
                 // 不是已確認合格的數量；tooltip 不再省略「已扣報廐」那句，沒報廐時也講清楚口徑）
                 // 2026-10-07：良品上限也會扣外包廠商回廠回報的報廢量，tooltip 額外標出是哪家廠商
                 // 回報的（使用者交辦：扣了數量品管卻不知道原因/找不到人問，一定要連廠商一起顯示）。
-                : '<div><b>尚未檢驗 / 良品上限 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good-(ctx.outsource_scrap_qty||0))+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件'+((ctx.outsource_scrap_qty||0)>0?('；已扣外包回廠報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）'):'')+'">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span>'+
+                : '<div><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good-(ctx.outsource_scrap_qty||0))+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件'+((ctx.outsource_scrap_qty||0)>0?('；已扣外包回廠報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）'):'')+'">'+pendingGridHtml(ps)+'</span>'+
                   ((ctx.outsource_scrap_qty||0)>0 ? '<span style="margin-left:6px;font-size:11px;color:var(--amber-d);"><i class="fa fa-truck"></i> 已扣外包報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）</span>' : '')+
                   '<span id="ctx-pending-warn" style="'+(ps.left<=0?'':'display:none;')+'color:var(--coral);font-weight:bold;font-size:12px;margin-left:6px;"><i class="fa fa-exclamation-triangle"></i> 無待驗數量</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv" id="ctx-sample-live">'+(ctx.sample_qty||0)+' 件</span></div>'+
@@ -4940,12 +4944,16 @@ $(function(){
         updatePendingBar();   // 批次/送驗數異動了，「尚未檢驗/訂單數」要跟著重算，不必整包重新載入
         applyPendingQtyDefault();
     }
+    function pendingGridHtml(ps){
+        return '<span class="pgrid"><b>尚未檢驗</b><b>良品上限</b><b>BOM總數</b>'
+            + '<span class="pgv">'+ps.left+'</span><span class="pgv">'+ps.good+'</span><span class="pgv">'+ps.order+'pcs</span></span>';
+    }
     function updatePendingBar(){
         var $el=$('#ctx-pending');
         if(!$el.length || ctx.adhoc) return;
         var ps=pendingSummary();
         $el.attr('title','BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件')
-           .text(ps.left+' / '+ps.good+' / '+ps.order+'pcs');
+           .html(pendingGridHtml(ps));
         $('#ctx-pending-warn').toggle(ps.left<=0);
     }
     // 準備填寫「下一次」檢驗時，「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算

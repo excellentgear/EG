@@ -198,7 +198,7 @@ SELECT SQL_CALC_FOUND_ROWS
     b.processing_state          AS b_processing_state,
     bi.processing_state,
     DATE_FORMAT(bi.outsource_date,'%m/%d') AS outsource_date,
-    DATE_FORMAT(bi.return_date,'%m/%d')    AS return_date,
+    COALESCE(DATE_FORMAT(bi.return_date,'%m/%d'), ob.last_ret) AS return_date,   -- 分批回廠：還沒整站回齊時顯示最近一次回廠日
     bi.QC_check,
     IF(YEAR(bi.QC_check_date) > 0, DATE_FORMAT(bi.QC_check_date,'%m/%d'), NULL) AS QC_check_date,
     bi.QC_ps    AS BIQC_ps,
@@ -267,7 +267,9 @@ LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
 LEFT JOIN (
     SELECT bom_ing_fid, SUM(scrap_qty) AS scrap_qty,
            GROUP_CONCAT(DISTINCT CASE WHEN scrap_qty > 0 THEN NULLIF(maker_id,'') END SEPARATOR '、') AS scrap_vendors,
-           SUM(return_qty) AS ret_sum, SUM(send_qty) AS send_sum, SUM(status = 'open') AS open_n
+           SUM(return_qty) AS ret_sum, SUM(send_qty) AS send_sum, SUM(status = 'open') AS open_n,
+           COALESCE((SELECT DATE_FORMAT(MAX(r.return_date),'%m/%d') FROM bom_ing_outsource_return r WHERE r.bom_ing_fid = bom_ing_outsource_batch.bom_ing_fid),
+                    CASE WHEN SUM(return_qty) > 0 THEN DATE_FORMAT(MAX(updated_at),'%m/%d') END) AS last_ret   -- 逐次回廠紀錄上線前記的回廠沒有日期，退回批次最後更新日
     FROM bom_ing_outsource_batch
     GROUP BY bom_ing_fid
 ) ob ON ob.bom_ing_fid = bi.bom_ing_fid

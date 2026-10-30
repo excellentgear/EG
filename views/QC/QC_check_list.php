@@ -192,6 +192,9 @@ if ($reply_id != "") {
         cursor: pointer;
         transition: background .15s;
         white-space: nowrap;
+        /* <button> 與 <a> 共用：一律 inline-flex 置中，兩顆並排時上下才會對齊（使用者回報「新增」與「無BOM檢驗」高度不一） */
+        display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+        vertical-align: middle; box-sizing: border-box; line-height: 1.2; height: 28px; margin: 0;
     }
     .btn-qc-add:hover { background: var(--qc-primary-h); }
 
@@ -1198,6 +1201,15 @@ if ($reply_id != "") {
                  + (parseFloat(item.QC_ng_sqty)  || 0)
                  + (parseFloat(item.QC_aod_sqty) || 0);
         };
+        // 分批回廠（2026-10-30）：這一站還在加工中、但已有一部分回廠 → 本次可驗量 = 已回廠 − 已驗；不是部分回廠回傳 null
+        window.qcPartialQty = function(item) {
+            if (!item || String(item.processing_state) !== 'ing') return null;
+            var ret = parseFloat(item.ob_ret_sum) || 0;
+            if (ret <= 0) return null;
+            var done = (parseFloat(item.QC_ok_sqty)||0) + (parseFloat(item.QC_QQ_sqty)||0) + (parseFloat(item.QC_ng_sqty)||0) + (parseFloat(item.QC_aod_sqty)||0);
+            return Math.max(0, ret - done);
+        };
+
         window.qcProgress = function(item) {
             // 2026-10-07 使用者交辦：外包廠商回廠回報的報廢量要扣掉才算「這一站真正要驗的量」，
             // 不用等異常單結案配發報廐單號——否則報廢掉的量永遠驗不滿，「已驗滿」永遠不會出現。
@@ -2050,7 +2062,8 @@ if ($reply_id != "") {
                 const processNoEsc = he(item.ProcessNo);
                 const processNameEsc = he(item.ProcessName);
                 const makerIdEsc = he(item.maker_id);
-                const sqtyEsc = he(item.sqty);
+                const _pq = window.qcPartialQty(item);   // 部分回廠：自動帶入的數量一律以「本次回廠可驗量」為準
+                const sqtyEsc = he(_pq !== null ? _pq : item.sqty);
                 const itemPsEsc = he(item.ps); // bom_ing.ps (general remark)
 
                 // Modal for QR Code
@@ -2062,7 +2075,7 @@ if ($reply_id != "") {
                 <button type="button" class="close" data-dismiss="modal">&times;</button>
                 <h4 class="modal-title">
                     ${bomEsc} / ${dIdEsc}<br>
-                    <small style="font-weight:normal;">製令總數：${sqtyEsc}</small>
+                    <small style="font-weight:normal;">${_pq !== null ? '本次回廠 ' + sqtyEsc + ' ／ 製令總數 ' + he(item.sqty) : '製令總數：' + sqtyEsc}</small>
                 </h4>
             </div>
             <div class="modal-body" data-total-qty="${sqtyEsc}" data-bom="${bomEsc}" data-d-id="${dIdEsc}" style="min-height: 180px;"> <!-- Added data-bom, data-d-id and min-height -->
@@ -2073,8 +2086,8 @@ if ($reply_id != "") {
                             <input type="number" class="form-control print-total-qty" id="print-total-qty-${bomIngFidEsc}" min="0" step="any" value="${sqtyEsc}">
                         </div>
                         <div class="col-xs-6" style="padding-top:7px; font-size:12px; color:#8a6d3b;">
-                            <span class="print-total-hint">預設製令總數 ${sqtyEsc}，可改成實際要列印的總數</span>
-                            <span class="print-total-warn" style="display:none; color:#DD5138; font-weight:bold;">⚠ 已超過製令總數 ${sqtyEsc}</span>
+                            <span class="print-total-hint">預設${_pq !== null ? '本次回廠數' : '製令總數'} ${sqtyEsc}，可改成實際要列印的總數</span>
+                            <span class="print-total-warn" style="display:none; color:#DD5138; font-weight:bold;">⚠ 已超過${_pq !== null ? '本次回廠數' : '製令總數'} ${sqtyEsc}</span>
                         </div>
                     </div>
                     <div class="row qr-modal-controls-row" style="margin-bottom: 10px;"> <!-- ADDED qr-modal-controls-row -->
@@ -2125,7 +2138,7 @@ if ($reply_id != "") {
                 //         <div class="modal-content">
                 //             <div class="modal-header">
                 //                 <button type="button" class="close" data-dismiss="modal">&times;</button>
-                //                 <h4 class="modal-title">${bomEsc} / ${dIdEsc} 允收紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;總數：${sqtyEsc}<br>備註：${itemPsEsc}&emsp;檢驗日</small></h4>
+                //                 <h4 class="modal-title">${bomEsc} / ${dIdEsc} 允收紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;${_pq !== null ? '本次回廠：' : '總數：'}${sqtyEsc}<br>備註：${itemPsEsc}&emsp;檢驗日</small></h4>
                 //             </div>
                 //             <div class="modal-body">
                 //                 <form action="../../src/store/_updateQC_check_list_reply.php?bi=${bomIngFidEsc}&id=${currentUserId}" method="POST" class="form-horizontal form-label-center" novalidate>
@@ -2152,7 +2165,7 @@ if ($reply_id != "") {
                     <div class="modal-dialog"><div class="modal-content">
                         <div class="modal-header">
                             <button type="button" class="close" data-dismiss="modal">&times;</button>
-                            <h4 class="modal-title">${bomEsc} / ${dIdEsc} 異常紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;總數：${sqtyEsc}<br>備註：${itemPsEsc}</small></h4>
+                            <h4 class="modal-title">${bomEsc} / ${dIdEsc} 異常紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;${_pq !== null ? '本次回廠：' : '總數：'}${sqtyEsc}<br>備註：${itemPsEsc}</small></h4>
                         </div>
                         <div class="modal-body">
                             <form method="POST" action="../../src/store/_updateQC_check_list_QQ.php?bi=${bomIngFidEsc}&id=${currentUserId}" data-sqty="${sqtyEsc}" data-initial-abnormal-qty="${he(item.QC_QQ_sqty || 0)}">
@@ -2213,7 +2226,7 @@ if ($reply_id != "") {
                     <div class="modal-dialog"><div class="modal-content">
                         <div class="modal-header">
                             <button type="button" class="close" data-dismiss="modal">&times;</button>
-                            <h4 class="modal-title">${bomEsc} / ${dIdEsc} 允收紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;總數：${sqtyEsc}<br>備註：${itemPsEsc}</small></h4>
+                            <h4 class="modal-title">${bomEsc} / ${dIdEsc} 允收紀錄<br><small>製程：${processNameEsc}&emsp;廠商：${makerIdEsc}&emsp;${_pq !== null ? '本次回廠：' : '總數：'}${sqtyEsc}<br>備註：${itemPsEsc}</small></h4>
                         </div>
                         <div class="modal-body">
                             <form method="POST" action="../../src/store/_updateQC_check_list_ok.php?bi=${bomIngFidEsc}&id=${currentUserId}" data-sqty="${sqtyEsc}">
@@ -2376,7 +2389,7 @@ if ($reply_id != "") {
                         // 分批回廠：這一站還在加工中，但已經有一部分回廠可以先驗
                         var _pr = parseFloat(item.ob_ret_sum) || 0, _ps = parseFloat(item.ob_send_sum) || 0;
                         var _pd = window.qcInspectedQty(item);
-                        _badges += `<span class="qc-prog-badge" style="background:#FDE6C8;border:1px solid #F0A24B;color:#6B4423;font-weight:bold;" title="這一站分批回廠：已回廠 ${he(String(_pr))}，送出 ${he(String(_ps))}，已驗 ${he(String(_pd))}；可以先驗已回廠的部分，全部回齊後才會變成完整待驗">部分回廠 ${he(String(_pr))}/${he(String(_ps))}·可驗 ${he(String(Math.max(0, _pr - _pd)))}</span>`;
+                        _badges += `<span class="qc-prog-badge" style="background:#FDE6C8;border:1px solid #F0A24B;color:#6B4423;font-weight:bold;" title="這一站分批回廠：已回廠 ${he(String(_pr))}，送出 ${he(String(_ps))}，已驗 ${he(String(_pd))}；可以先驗已回廠的部分，全部回齊後才會變成完整待驗">部分回廠 ${he(String(_pr))}/${he(String(_ps))}</span>`;
                     }
                     if (_prog.scrapQty > 0) {
                         _badges += `<span class="qc-prog-badge" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="${_scrapNote}"><i class="fa fa-truck"></i> 已扣外包報廢 ${he(String(_prog.scrapQty))}</span>`;
@@ -2408,7 +2421,11 @@ if ($reply_id != "") {
                     var returnDateHtml = he(item.return_date);
                     var processHtml = item.ProcessNo ? `[${he(item.ProcessNo)}] ${he(item.ProcessName)}` : '[未設定 BOM]';
                     var makerIdHtml = he(item.maker_id);
-                    var sqtyHtml = he(item.sqty);
+                    var _pqL = window.qcPartialQty(item);
+                    // 部分回廠：總數欄顯示「本次回廠 / 製令總數」；兩者相同時直接顯示總數
+                    var sqtyHtml = (_pqL !== null && _pqL < (parseFloat(item.sqty) || 0))
+                        ? '<span style="font-weight:bold;color:#b8431f;line-height:1.2;" title="本次回廠可驗 ' + he(_pqL) + '，製令總數 ' + he(item.sqty) + '">' + he(_pqL) + '</span> / ' + he(item.sqty)
+                        : he(item.sqty);
 
                     var containerHtml = qcContainerCellHtml(item);
 
