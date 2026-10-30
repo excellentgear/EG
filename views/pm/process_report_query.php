@@ -1014,6 +1014,8 @@ $('#prqTbody').on('dblclick', 'td.part-cell', function(){
     applyFilters();
 });
 
+// 點跳窗外的空白處自動關閉詳情
+$('#rdMask').on('mousedown', function(e){ if (e.target === this) $(this).hide(); });
 // 點日期開啟單筆報工詳細內容（唯讀）
 $('#prqTbody').on('click', 'a.prq-detail', function(e){
     e.preventDefault();
