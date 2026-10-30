@@ -5000,9 +5000,11 @@ function renderViewPanel(q, contact, detail) {
     }
     const esc = s => escapeHtml(String(s||''));
     const fmtNum = n => (parseFloat(n||0)).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
-    const negLabel = q.is_negotiation == 1 ? '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>' : '';
+    const negLabelHtml = '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>';
     let itemsHtml = '';
     (q.items || []).forEach((it, i) => {
+        // 議價單內只有被勾為議價項目者才顯示「議價」
+        const negLabel = (q.is_negotiation == 1 && it.is_nego != 0) ? negLabelHtml : '';
         const isTiered = it.is_tiered == 1;
         // 品名規格欄：Spec_No+齒輪規格 / 製程 / 料號備註
         const leftSpec = [it.spec_no, it.gear_spec].filter(Boolean).join(' ');
