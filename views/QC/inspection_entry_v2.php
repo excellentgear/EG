@@ -1378,13 +1378,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .cells { display:flex; flex-wrap:wrap; gap:6px; }
     .mcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
     .mcell .mno { position:absolute; z-index:2; pointer-events:none; line-height:9px; top:1px; left:3px; font-size:9px; color:#8a6a45; }
-    .mcell .mval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold;
+    .mcell .mval { width:100%; border:0; background:transparent !important; box-shadow:none !important; text-align:center; font-size:15px; font-weight:bold;
                    color:var(--ink); padding:0; height:22px; outline:none; }
     .mcell .mdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
-    .mcell.c-ok { border-color:var(--amber); background:#fff; }
+    .mcell.c-ok { border-color:var(--amber); background:#FDF6EA; }
     .mcell.c-ok .mdev:before { content:'✔ '; }
     .mcell.c-ng { border-color:var(--coral); background:var(--coral); }
-    .mcell.c-ng .mval { color:#fff; background:var(--coral); }
+    .mcell.c-ng .mval { color:#fff; background:transparent !important; }
     .mcell.c-ng .mno { color:#FBE3DC; }
     .mcell.c-ng .mdev { color:#fff; font-weight:bold; background:var(--coral); }
     .mcell.c-ng .mdev:before { content:'✘ '; }
@@ -1405,9 +1405,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     /* NG加驗格（每列固定10格；獨立 class，不走 .mcell 的委派事件，才不會影響原本的判定/導航） */
     .rcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
     .rcell .mno { position:absolute; z-index:2; pointer-events:none; line-height:9px; top:1px; left:3px; font-size:9px; color:#8a6a45; }
-    .rcell .rcval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold; color:var(--ink); padding:0; height:22px; outline:none; }
+    .rcell .rcval { width:100%; border:0; background:transparent !important; box-shadow:none !important; text-align:center; font-size:15px; font-weight:bold; color:var(--ink); padding:0; height:22px; outline:none; }
     .rcell .rcdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
-    .rcell.c-ok { border-color:var(--amber); background:#fff; }
+    .rcell.c-ok { border-color:var(--amber); background:#FDF6EA; }
     .rcell.c-ng { border-color:var(--coral); background:var(--coral); }
     .rcell.c-ng .rcval, .rcell.c-ng .rcdev, .rcell.c-ng .mno { color:#fff; }
     .rcell.c-ng .rcval, .rcell.c-ng .rcdev { background:var(--coral); }
