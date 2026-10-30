@@ -2359,6 +2359,12 @@ if ($reply_id != "") {
                     } else if (_prog.part) {
                         _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}${_scrapNote}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
                     }
+                    if (String(item.processing_state) === 'ing' && (parseFloat(item.ob_ret_sum) || 0) > 0) {
+                        // 分批回廠：這一站還在加工中，但已經有一部分回廠可以先驗
+                        var _pr = parseFloat(item.ob_ret_sum) || 0, _ps = parseFloat(item.ob_send_sum) || 0;
+                        var _pd = window.qcInspectedQty(item);
+                        _badges += `<span class="qc-prog-badge" style="background:#FDE6C8;border:1px solid #F0A24B;color:#6B4423;font-weight:bold;" title="這一站分批回廠：已回廠 ${he(String(_pr))}，送出 ${he(String(_ps))}，已驗 ${he(String(_pd))}；可以先驗已回廠的部分，全部回齊後才會變成完整待驗">部分回廠 ${he(String(_pr))}/${he(String(_ps))}·可驗 ${he(String(Math.max(0, _pr - _pd)))}</span>`;
+                    }
                     if (_prog.scrapQty > 0) {
                         _badges += `<span class="qc-prog-badge" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="${_scrapNote}"><i class="fa fa-truck"></i> 已扣外包報廢 ${he(String(_prog.scrapQty))}</span>`;
                     }

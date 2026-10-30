@@ -155,6 +155,10 @@ const QC_DONE_SUM = "(COALESCE(qc.QC_ok_sqty,0)+COALESCE(qc.QC_QQ_sqty,0)+COALES
 // 等於發包量扣掉已回報報廢（不用等異常單結案配發報廐單號），否則報廢掉的量永遠驗不滿、「已驗滿」
 // 永遠不會出現。唯一資料來源 bom_ing_outsource_batch（下方 LEFT JOIN ob），不在這裡另算一次。
 const QC_EFFECTIVE_SQTY = "(bi.sqty - COALESCE(ob.scrap_qty,0))";
+// 2026-10-30 分批回廠：製程還在加工中(ing)，但已經有一部分回廠且回廠量還沒驗完 → 這一部分可以先驗，
+// 不必等整站回齊。回廠量以流水帳 return_qty 為準（唯一來源 bom_ing_outsource_batch，下方 LEFT JOIN ob）；
+// 整站全部回齊時狀態會自動轉成 Q，走原本的待驗路徑，這裡只補「還沒回齊」的那段空窗。
+const QC_PARTIAL_SQL = "(bi.processing_state = 'ing' AND COALESCE(ob.ret_sum,0) > " . QC_DONE_SUM . ")";
 // 後站已開工：同一個 BOM 裡 bom_sn 更後面的站已經發過單且在進行中／已回廠。
 // 用來標出「其實早就跑到下一關、只是前站補按回廠」的那些列。
 const QC_NEXT_STARTED_SQL = "EXISTS (
@@ -208,6 +212,9 @@ SELECT SQL_CALC_FOUND_ROWS
     bi.sqty,
     COALESCE(ob.scrap_qty,0) AS outsource_scrap_qty,
     ob.scrap_vendors AS outsource_scrap_vendors,
+    COALESCE(ob.ret_sum,0)  AS ob_ret_sum,
+    COALESCE(ob.send_sum,0) AS ob_send_sum,
+    COALESCE(ob.open_n,0)   AS ob_open_n,
     pn.ProcessNo,
     pn.ProcessName,
     pn.process_type_id,
@@ -239,7 +246,8 @@ FROM bom_ing bi
 JOIN (
     SELECT bom, COALESCE(bom_sn, -1) AS sn, COALESCE(batch_label, '') AS bl, MAX(outsource_date) AS max_date
     FROM bom_ing
-    WHERE processing_state IN ('Q','P')
+    WHERE (processing_state IN ('Q','P')
+           OR (processing_state = 'ing' AND bom_ing_fid IN (SELECT bom_ing_fid FROM bom_ing_outsource_batch WHERE return_qty > 0)))
       AND is_consumed = 0
     GROUP BY bom, COALESCE(bom_sn, -1), COALESCE(batch_label, '')
 ) latest ON bi.bom = latest.bom
@@ -258,9 +266,9 @@ JOIN bom b ON bi.bom = b.bom
 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
 LEFT JOIN (
     SELECT bom_ing_fid, SUM(scrap_qty) AS scrap_qty,
-           GROUP_CONCAT(DISTINCT NULLIF(maker_id,'') SEPARATOR '、') AS scrap_vendors
+           GROUP_CONCAT(DISTINCT CASE WHEN scrap_qty > 0 THEN NULLIF(maker_id,'') END SEPARATOR '、') AS scrap_vendors,
+           SUM(return_qty) AS ret_sum, SUM(send_qty) AS send_sum, SUM(status = 'open') AS open_n
     FROM bom_ing_outsource_batch
-    WHERE scrap_qty > 0
     GROUP BY bom_ing_fid
 ) ob ON ob.bom_ing_fid = bi.bom_ing_fid
 LEFT JOIN (
@@ -296,7 +304,7 @@ LEFT JOIN qa_abnormal_order qao
 WHERE
     b.processing_state IS NULL
     AND NOT b.processing_state <=> 1
-    AND bi.processing_state IN ('Q','P')
+    AND (bi.processing_state IN ('Q','P') OR " . QC_PARTIAL_SQL . ")
     AND bi.qc_completed = 0
     AND bi.is_consumed = 0
     AND newer.bom_ing_fid IS NULL
@@ -311,6 +319,7 @@ WHERE
     --   永遠沒人能補按完工（完工紀錄又只列 qc_completed=1，兩邊都看不到）。
     AND (
         (bi.processing_state = 'P' AND bi.QC_check IS NOT NULL)
+        OR " . QC_PARTIAL_SQL . "   -- 部分回廠待驗：不受「目前製程」限制（下一站可能已先開工）
         OR DATE(bi.outsource_date) = (
             SELECT MAX(DATE(cur.outsource_date))
             FROM bom_ing cur

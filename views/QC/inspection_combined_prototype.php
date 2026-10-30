@@ -264,6 +264,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             } catch (Throwable $e) { /* 算不出來就先當作沒有報廢，不擋畫面 */ }
 
+            // 分批回廠（2026-10-30）：這一站還有批次在外（尚未全部回廠）時，可驗上限 = 已回廠良品量，
+            // 還在外面的不能驗（東西還沒回來）；全部回齊或沒有批次（舊資料）則維持原本的算法。
+            $partial_ret = null; $partial_send = null;
+            try {
+                $pbSt = $pdo->prepare("SELECT COALESCE(SUM(return_qty),0) r, COALESCE(SUM(send_qty),0) s, COALESCE(SUM(status='open'),0) o, COUNT(*) n FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?");
+                $pbSt->execute([$fid]);
+                $pb = $pbSt->fetch(PDO::FETCH_ASSOC);
+                if ($pb && (int)$pb['n'] > 0 && (int)$pb['o'] > 0 && (float)$pb['r'] < (float)$pb['s']) {
+                    $partial_ret = (int)round((float)$pb['r']); $partial_send = (int)round((float)$pb['s']);
+                    $good_qty = min($good_qty, $partial_ret);
+                }
+            } catch (Throwable $e) { /* 查不到就當作沒有分批，不擋畫面 */ }
+
             // 既有檢驗歷程（批次/複驗，含異常單決定）
             // 使用者 2026-09-24 回報：「批次與檢驗歷程」看不到檢驗數、也看不到是誰驗的/誰審的——
             // 一併帶回檢驗人員（inspector_by，沒填才退回 created_by）、審核人員與審核日期（approved_by/approved_at），
@@ -314,6 +327,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'client'      => $ctx['Client_Name'],
                     'order_qty'   => (int)$ctx['sqty'],
                     'good_qty'    => $good_qty,
+                    'partial_return' => $partial_ret !== null ? ['returned' => $partial_ret, 'sent' => $partial_send] : null,
                     // 外包回廠報廢扣減明細（2026-10-07）：良品上限已經扣掉這個數字，這裡另外帶出來
                     // 給畫面提示用，讓品管知道「是被誰扣的」，不用在良品數對不上時去翻資料庫找廠商
                     'outsource_scrap_qty'     => $outsource_scrap_qty,
