@@ -1588,6 +1588,8 @@ echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_retu
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
 echo "    window.featSeePrice = " . json_encode((bool)$oready_feat_view_price) . "; // 功能碼 oready_view_price\n";
+echo "    window.egVpReveal = false; // 廠商／單價預設隱藏（所有人），按「顯示廠商／單價」輸入本人密碼後顯示 5 分鐘\n";
+echo "    window.egVP = function (s) { return (window.egVpReveal || s === '' || s == null) ? s : '＊＊＊'; };\n";
 echo "    window.EG_QC_CONTAINERS = " . json_encode(eg_qc_container_options(), JSON_UNESCAPED_UNICODE) . "; // 容器選項（唯一來源 qc_container_lib.php）
 ";
 echo "    window.canEditContainer = " . json_encode(eg_qc_container_can_edit($db, $id)) . "; // 可否回報容器
@@ -3212,7 +3214,7 @@ echo "</script>\n";
             var d = document.createElement('div');
             d.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
             var done = (b.status === 'closed');
-            var t = (b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
+            var t = egVP(b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
                 + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.wd > 0 ? '・取回 ' + _obNum(b.wd) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
             d.textContent = t;
             d.title = t + (b.send_date ? '（發單 ' + b.send_date + '）' : '');
@@ -5634,7 +5636,7 @@ echo "</script>\n";
             }
             tdDid.appendChild(urgencyBarDiv);
 
-            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) {
+            if ((window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) && window.egVpReveal) {
                 const _tpm2 = window.transferPriceMap || {};
                 let _totalPrice = 0, _noPriceCount = 0, _processCount = 0;
                 if (window.bomPSList && Array.isArray(window.bomPSList)) {
@@ -5729,7 +5731,7 @@ echo "</script>\n";
                 var _fbDiv = document.createElement('div');
                 _fbDiv.style.cssText = 'margin:0;padding:0;line-height:1.2;';
                 var _fbDate = formatOutsourceDateForDisplay(row.outsource_date);
-                var _fbMaker = escapeHtml(row.maker_id || '');
+                var _fbMaker = escapeHtml(egVP(row.maker_id || ''));
                 var _fbStateVal = String(row.processing_state || '').trim();
                 // 有有效狀態（Q/P/ing/E）且 ingActiveMap 資料暫缺時，顯示狀態文字作為安全備援
                 // 其餘情況（未發包、僅 N 狀態）統一顯示「未發包」
@@ -5742,8 +5744,8 @@ echo "</script>\n";
                             if (s === '' || s.toLowerCase() === 'null') return;
                             _fbTip += (_fbTip ? '<br>' : '') + label + '：' + escapeHtml(s);
                         };
-                        _p('TEL', row.m_tel); _p('TEL2', row.m_tel2);
-                        _p('FAX', row.m_fax); _p('地址', row.factory_address);
+                        if (window.egVpReveal) { _p('TEL', row.m_tel); _p('TEL2', row.m_tel2);
+                        _p('FAX', row.m_fax); _p('地址', row.factory_address); }
                     })();
                     var _fbMakerHtml = _fbMaker
                         ? ' <span class="maker-info-pop"' + (_fbTip
@@ -5861,7 +5863,7 @@ echo "</script>\n";
                         : '') + (_proc.ProcessName || '');
                     _pDiv.appendChild(_nameDiv);
                     var _od = formatOutsourceDateForDisplay(_proc.outsource_date);
-                    var _mk = _proc.maker_id || '';
+                    var _mk = egVP(_proc.maker_id || '');
                     if (_od || _mk) {
                         var _dmDiv = document.createElement('div');
                         _dmDiv.style.cssText = 'color:#555;font-size:11px;';
@@ -5875,7 +5877,7 @@ echo "</script>\n";
                             // 這一行會被廠商名稱撐成 28px（量測實證），行距看起來完全沒縮小
                             _mkSpan.style.lineHeight = '1.2';
                             _mkSpan.textContent = _mk;
-                            applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
+                            if (window.egVpReveal) applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
                             _dmDiv.appendChild(_mkSpan);
                         }
                         _pDiv.appendChild(_dmDiv);
@@ -6137,7 +6139,7 @@ echo "</script>\n";
             var contentParts = []; // Array to hold parts of the cell content
 
             // Vendor name text node with Bootstrap Popover
-            var vendorName = row.maker_id || '';
+            var vendorName = egVP(row.maker_id || '');
             if (vendorName) {
                 var vendorSpan = document.createElement('span');
                 vendorSpan.textContent = vendorName; // Vendor name text
@@ -6145,8 +6147,8 @@ echo "</script>\n";
 
                 // Popover Content
                 let popoverContent = '';
-                const tel = String(row.m_tel || '').trim();
-                const fax = String(row.m_fax || '').trim();
+                const tel = window.egVpReveal ? String(row.m_tel || '').trim() : '';
+                const fax = window.egVpReveal ? String(row.m_fax || '').trim() : '';
 
                 if (tel !== '' && tel.toLowerCase() !== 'null') {
                     popoverContent += `TEL：${escapeHtml(tel)}`;
@@ -6625,7 +6627,7 @@ echo "</script>\n";
                                     _sHtml += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                            +  '<strong style="color:#337ab7;">' + escapeHtml(_lbl) + '</strong>'
                                            +  ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs'
-                                           +  (_sb.maker_id ? '<br><span style="color:#555;">' + escapeHtml(_sb.maker_id) + '</span>' : '')
+                                           +  (_sb.maker_id ? '<br><span style="color:#555;">' + escapeHtml(egVP(_sb.maker_id)) + '</span>' : '')
                                            +  (_od ? '<span style="color:#aaa;"> '+_od+'</span>' : '')
                                            +  (_rd ? '<span style="color:#2a7ae2;"> 回:'+_rd+'</span>' : '')
                                            +  (_st ? ' <span style="color:'+_sc+';font-size:9px;">['+_st+']</span>' : '')
@@ -6642,7 +6644,7 @@ echo "</script>\n";
                                 tdDynamicProcess.innerHTML = `<div>${processDisplayText}</div>`;
 
                                 var formattedOutsourceDate = formatDynamicProcessDate(processInfo.outsource_date);
-                                var makerName = processInfo.maker_id || '';
+                                var makerName = egVP(processInfo.maker_id || '');
                                 var makerInfoHtml = '';
                                 if (formattedOutsourceDate) makerInfoHtml += escapeHtml(formattedOutsourceDate);
                                 if (makerName) {
@@ -6685,7 +6687,7 @@ echo "</script>\n";
                             }
 
                             // ── 加工單價顯示（動態製程欄，A 或 C+D+R 才可見）──────────────
-                            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) {
+                            if ((window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) && window.egVpReveal) {
                                 var _tpm = window.transferPriceMap || {};
                                 var _thm = window.transferHistoryMap || {};
                                 var _bsn = String(processInfo.bom_sn || '');
@@ -10458,6 +10460,13 @@ echo "</script>\n";
       <input type="hidden" id="qtr-maker-name-${fid}" value="${escapeHtml(defaultMakerName)}">
     </div>
   </div>
+  <div id="qtr-qty-row-${fid}" style="display:none;margin-top:10px;">
+    <div style="display:flex;align-items:center;">
+      <label style="width:72px;flex-shrink:0;font-size:13px;margin:0;">發單數量：</label>
+      <input type="number" min="0" id="qtr-qty-${fid}" class="form-control" style="flex:1;" placeholder="預設＝全部尚未發單的數量">
+    </div>
+    <div id="qtr-qty-hint-${fid}" style="margin-left:72px;font-size:12px;line-height:1.5;margin-top:4px;"></div>
+  </div>
   ${_qtrNoteHtml}
   ${_fwdPanelHtml}
   ${_etrPanelHtml}
@@ -10472,6 +10481,36 @@ echo "</script>\n";
 </div></div>`;
         document.body.appendChild(overlay);
         try{$('#qtr-date-'+fid).datepicker({format:'yyyy-mm-dd',autoclose:true,language:'zh-TW',todayHighlight:true});}catch(e){}
+
+        // ── 發單數量（分批發單）：預設帶入「本站尚未發單的總數」；超過本站未發量會擋下、超過上一關可領量只提示（確認後可送出）──
+        var _qtyAvail = null;
+        (function(){
+            if (_qtrAction !== 'transfer_process') return;
+            var qIn = document.getElementById('qtr-qty-' + fid), qRow = document.getElementById('qtr-qty-row-' + fid), qHint = document.getElementById('qtr-qty-hint-' + fid);
+            function nn(v){ v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
+            function check(){
+                if (!_qtyAvail) return;
+                var qty = parseFloat(qIn.value) || 0, a = _qtyAvail, unsent = Math.max(0, a.stage_qty - a.sent), msg = [];
+                if (qty <= 0) { qHint.innerHTML = '<span style="color:#b8431f;">請輸入大於 0 的發單數量</span>'; return; }
+                if (qty > unsent + 1e-9) msg.push('<span style="color:#b8431f;font-weight:bold;">⚠ 超過本站尚未發單的 ' + nn(unsent) + ' 件，送出時系統會擋下。</span>');
+                else {
+                    msg.push('本站總量 ' + nn(a.stage_qty) + '，已發 ' + nn(a.sent) + '，這次發 ' + nn(qty) + (unsent - qty > 1e-9 ? '，發完尚餘 ' + nn(unsent - qty) + ' 件未發（之後可再發給其他廠商）。' : '，這次發完。'));
+                    if (a.prev_source !== 'fallback' && a.sent + qty > a.prev_qty + 1e-9)
+                        msg.push('<span style="color:#8a5a12;font-weight:bold;">⚠ 上一關目前只有 ' + nn(a.prev_qty) + ' 件良品可領（' + escapeHtml(a.prev_label || '') + '），這次會超出 ' + nn(a.sent + qty - a.prev_qty) + ' 件；仍可送出，送出前會再確認。</span>');
+                }
+                qHint.innerHTML = msg.join('<br>');
+            }
+            $.post(_phpSelf, { action: 'get_send_avail', bom_ing_fid: fid }, function(r){
+                if (!r || !r.success || (r.state !== 'N' && r.state !== 'ing')) return;
+                var unsent = Math.max(0, Number(r.stage_qty) - Number(r.sent));
+                if (unsent <= 0) return;
+                _qtyAvail = { stage_qty: Number(r.stage_qty), sent: Number(r.sent), prev_qty: Number(r.prev_qty), prev_source: r.prev_source, prev_label: r.prev_label };
+                qIn.value = nn(unsent);
+                qRow.style.display = '';
+                check();
+            }, 'json');
+            qIn.addEventListener('input', check);
+        })();
 
         // ── 轉發別間廠商 ──
         (function(){
@@ -10502,14 +10541,14 @@ echo "</script>\n";
                     if (!r || !r.success) { _infoEl.textContent = '讀取失敗：' + ((r && r.message) || ''); return; }
                     _info = r;
                     var rows = r.batches.map(function(b){
-                        return '<tr><td style="padding:1px 8px 1px 0;">' + escapeHtml(b.maker || b.maker_no || '未指定') + (b.status === 'closed' ? ' ✔' : '') + '</td><td>送 ' + _n(b.send) + '</td><td style="padding-left:8px;">回 ' + _n(b.ret) + '</td><td style="padding-left:8px;">取回 ' + _n(b.wd) + '</td><td style="padding-left:8px;">報廢 ' + _n(b.scrap) + '</td><td style="padding-left:8px;font-weight:bold;">還在外 ' + _n(b.outside) + '</td></tr>';
+                        return '<tr><td style="padding:1px 8px 1px 0;">' + escapeHtml(egVP(b.maker || b.maker_no || '未指定')) + (b.status === 'closed' ? ' ✔' : '') + '</td><td>送 ' + _n(b.send) + '</td><td style="padding-left:8px;">回 ' + _n(b.ret) + '</td><td style="padding-left:8px;">取回 ' + _n(b.wd) + '</td><td style="padding-left:8px;">報廢 ' + _n(b.scrap) + '</td><td style="padding-left:8px;font-weight:bold;">還在外 ' + _n(b.outside) + '</td></tr>';
                     }).join('');
                     _infoEl.innerHTML = '本站總數 <b>' + _n(r.stage_qty) + '</b>　已驗 <b>' + _n(r.inspected) + '</b>'
                         + (r.next ? '　下一關「' + escapeHtml(r.next.name) + '」已發 <b>' + _n(r.next.sent) + '</b>' : '')
                         + '<table style="margin-top:3px;font-size:12px;">' + rows + '</table>';
                     var openB = r.batches.filter(function(b){ return b.status === 'open'; });
                     if (openB.length > 1) {
-                        _bsel.innerHTML = openB.map(function(b){ return '<option value="' + b.batch_id + '">' + escapeHtml((b.maker || b.maker_no || '未指定') + '　還在外 ' + _n(b.outside)) + '</option>'; }).join('');
+                        _bsel.innerHTML = openB.map(function(b){ return '<option value="' + b.batch_id + '">' + escapeHtml(egVP(b.maker || b.maker_no || '未指定') + '　還在外 ' + _n(b.outside)) + '</option>'; }).join('');
                         _brow.style.display = '';
                     } else { _bsel.innerHTML = ''; _brow.style.display = 'none'; }
                     _check();
@@ -10792,11 +10831,28 @@ echo "</script>\n";
             const $btn=$(this), transDate=$('#qtr-date-'+fid).val().trim(), makerNo=$('#qtr-maker-no-'+fid).val().trim(), makerName=$('#qtr-maker-name-'+fid).val().trim();
             if(!transDate){alert('請選擇移轉日期。');return;}
             if(!makerNo||!makerName){alert('請輸入並選擇有效的廠商。');return;}
+            // 發單數量：沒顯示（舊流程／快速同步）就不帶；整站第一次全發＝照舊（不帶數量）；其餘帶數量
+            var _sendQtyParam = '', _overOk = '';
+            if (_qtyAvail && document.getElementById('qtr-qty-row-'+fid).style.display !== 'none') {
+                var _q = parseFloat($('#qtr-qty-'+fid).val()) || 0, _un = Math.max(0, _qtyAvail.stage_qty - _qtyAvail.sent);
+                if (_q <= 0) { alert('發單數量必須大於 0。'); return; }
+                if (_q > _un + 1e-9) { alert('發單數量 ' + _q + ' 超過本站尚未發單的 ' + _un + ' 件，請修正。'); return; }
+                if (_qtyAvail.prev_source !== 'fallback' && _qtyAvail.sent + _q > _qtyAvail.prev_qty + 1e-9) {
+                    if (!confirm('上一關目前只有 ' + _qtyAvail.prev_qty + ' 件良品可領（本站已發 ' + _qtyAvail.sent + '），這次發 ' + _q + ' 件會超出 ' + (_qtyAvail.sent + _q - _qtyAvail.prev_qty) + ' 件。\n\n仍要發單嗎？')) return;
+                    _overOk = '1';
+                }
+                _sendQtyParam = (_qtyAvail.sent <= 0 && _q >= _un - 1e-9) ? '' : String(_q);
+            }
             $btn.prop('disabled',true).text('處理中...');
-            $.ajax({url:_phpSelf,type:'POST',data:{action:_qtrAction,bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName},dataType:'json',
+            $.ajax({url:_phpSelf,type:'POST',data:{action:_qtrAction,bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName,send_qty:_sendQtyParam,over_ok:_overOk},dataType:'json',
                 success:function(response){
                     if(response.success){
                         showTemporaryMessage(response.message,true); _closeQtr();
+                        if (_sendQtyParam !== '') {   // 只發一部分：不能用「整站換成這家廠商」的樂觀更新，直接重抓
+                            isSelectFocused = false; isTextareaFocused = false; isUpdatingOrderId = false; isPriorityUpdating = false;
+                            fetchDataAndFilter();
+                            return;
+                        }
                         var _newDate = transDate.replace(/-/g,'/');
                         if(_qtrAction==='quick_sync_transfer'){
                             // 快速同步移轉：目標關直接進 Q/P（伺服器回傳 new_state），更新 bomPSList 讓按鈕即刻消失、目前製程前進
@@ -11215,7 +11271,7 @@ echo "</script>\n";
                     + '<div style="font-size:20px;font-weight:bold;color:#6B4423;line-height:1.25;">' + val + '</div></div>';
             }
             el.style.cssText = 'margin-bottom:10px;';
-            el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(b.maker_id) + '</b>' + (b.status === 'closed' ? '　<span style="color:#2a7a2a;">✔ 已結清</span>' : '') + '</div>' : '')
+            el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(egVP(b.maker_id)) + '</b>' + (b.status === 'closed' ? '　<span style="color:#2a7a2a;">✔ 已結清</span>' : '') + '</div>' : '')
                 + '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;">'
                 + chip('送出', _obNum(send)) + chip('已回廠', _obNum(ret)) + chip('已報廢', _obNum(scr)) + chip('已取回', _obNum(wd))
                 + chip('還在外', _obNum(out), true) + '</div>';
@@ -11251,7 +11307,7 @@ echo "</script>\n";
             if (!row || !sel) return;
             if (_ormBatches.length < 2) { row.style.display = 'none'; sel.innerHTML = ''; _ormPickBatch(); return; }
             sel.innerHTML = _ormBatches.map(function (b) {
-                return '<option value="' + b.batch_id + '">' + escapeHtml((b.maker_id || b.maker_id_no || '未指定廠商') + '　送 ' + _obNum(b.send_qty) + '，還在外 ' + _obNum(b.outside)) + '</option>';
+                return '<option value="' + b.batch_id + '">' + escapeHtml(egVP(b.maker_id || b.maker_id_no || '未指定廠商') + '　送 ' + _obNum(b.send_qty) + '，還在外 ' + _obNum(b.outside)) + '</option>';
             }).join('');
             if (prefer) sel.value = String(prefer);
             row.style.display = '';
@@ -14443,7 +14499,7 @@ echo "</script>\n";
         if (!processListDiv) { console.warn("Process list container not found:", processListContainerId); return; }
 
         // 權限判斷：A 或 C+R 才能看到加工單價；業務類(isCRU)或D+R不可看到移轉按鈕
-        var canSeePrice = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') || window.featSeePrice;
+        var canSeePrice = ((window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') || window.featSeePrice) && window.egVpReveal;
         var canTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
         var canSkip = (window.canUpdate && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R+U' && window.displayPermissionCode !== 'R') || window.featMarkReturned;
 
@@ -16411,6 +16467,9 @@ echo "</script>\n";
                                     <i class="fa fa-gear"></i> 角色功能設定
                                 </button>
                             <?php endif; ?>
+                            <button type="button" class="btn btn-xs btn-default" id="btn-vp-reveal" style="margin-left:8px;" title="廠商與單價預設隱藏；按下後輸入您自己的登入密碼才會顯示，5 分鐘後自動恢復隱藏（再按一次也可立即隱藏）">
+                                <i class="fa fa-eye-slash"></i> 顯示廠商／單價
+                            </button>
                             <span id="current-customer-display" style="font-size: 14px; color: #555;"></span>
                             <?php if (!empty($users_on_leave_names)): ?>
                                 <small style="color: red; font-size: 12px; margin-left: 10px;">(今日休假: <?php echo htmlspecialchars(implode(', ', $users_on_leave_names)); ?>)</small>
@@ -18895,6 +18954,65 @@ echo "</script>\n";
         var el = e.target;
         if (el && el._egSelByMouse) { el._egSelByMouse = 0; e.preventDefault(); }
     }, true);
+})();
+</script>
+<style>
+/* 廠商／單價預設隱藏時，連廠商篩選欄一起藏起來（按「顯示廠商／單價」輸入本人密碼後才出現） */
+body.eg-vp-hidden #vendor-filter, body.eg-vp-hidden #btn-prev-vendor, body.eg-vp-hidden #btn-next-vendor { display: none !important; }
+</style>
+<script>
+// ── 廠商／單價預設隱藏（所有人，包含唯讀）：按鈕 → 輸入「自己的」登入密碼 → 顯示 5 分鐘 → 自動恢復；再按一次按鈕可立即隱藏 ──
+// ⚠ 這是畫面層的遮蔽：資料仍在頁面記憶體中，用開發者工具可以看到；要擋到伺服器端是另一件事。
+(function () {
+    var TTL = 300000, timer = null, tick = null, until = 0;
+    document.body.classList.add('eg-vp-hidden');
+    var btn = document.getElementById('btn-vp-reveal');
+    function paint() {
+        if (!btn) return;
+        if (window.egVpReveal) {
+            var left = Math.max(0, Math.round((until - Date.now()) / 1000));
+            btn.innerHTML = '<i class="fa fa-eye"></i> 隱藏廠商／單價（剩 ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) + '）';
+            btn.className = 'btn btn-xs btn-warning';
+        } else {
+            btn.innerHTML = '<i class="fa fa-eye-slash"></i> 顯示廠商／單價';
+            btn.className = 'btn btn-xs btn-default';
+        }
+    }
+    window.egVpSet = function (on) {
+        window.egVpReveal = !!on;
+        document.body.classList.toggle('eg-vp-hidden', !on);
+        clearTimeout(timer); clearInterval(tick);
+        if (on) { until = Date.now() + TTL; timer = setTimeout(function () { window.egVpSet(false); }, TTL); tick = setInterval(paint, 1000); }
+        paint();
+        try { if (typeof processAndRenderData === 'function') processAndRenderData(); } catch (e) {}
+    };
+    function prompt() {
+        var ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10600;display:flex;align-items:center;justify-content:center;';
+        ov.innerHTML = '<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,.3);width:420px;max-width:95vw;padding:18px 20px;">'
+            + '<h4 style="margin:0 0 10px;color:#6B4423;"><i class="fa fa-lock"></i> 顯示廠商／單價</h4>'
+            + '<div style="font-size:13px;color:#555;line-height:1.6;margin-bottom:10px;">廠商與單價屬於敏感資料，預設隱藏。<b style="color:#b8431f;">請輸入您自己的登入密碼</b>後顯示，5 分鐘後會自動恢復隱藏。</div>'
+            + '<input type="password" id="vp-pw" class="form-control" autocomplete="current-password" placeholder="請輸入您自己的登入密碼">'
+            + '<div id="vp-err" style="color:#b8431f;font-size:12px;min-height:18px;margin-top:6px;"></div>'
+            + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;"><button type="button" class="btn btn-default" id="vp-cancel">取消</button><button type="button" class="btn btn-warning" id="vp-ok">確定</button></div></div>';
+        document.body.appendChild(ov);
+        var pw = ov.querySelector('#vp-pw'), err = ov.querySelector('#vp-err'), ok = ov.querySelector('#vp-ok');
+        pw.focus();
+        function go() {
+            if (!pw.value) { err.textContent = '請輸入密碼'; return; }
+            ok.disabled = true; err.textContent = '';
+            $.post(window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php', { action: 'eg_vp_verify', password: pw.value }, function (r) {
+                ok.disabled = false;
+                if (r && r.success) { ov.remove(); window.egVpSet(true); }
+                else { err.textContent = (r && r.message) || '驗證失敗'; pw.select(); }
+            }, 'json').fail(function () { ok.disabled = false; err.textContent = '與伺服器通訊失敗'; });
+        }
+        ov.querySelector('#vp-cancel').onclick = function () { ov.remove(); };
+        ok.onclick = go;
+        pw.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); go(); } });
+    }
+    if (btn) btn.addEventListener('click', function () { if (window.egVpReveal) window.egVpSet(false); else prompt(); });
+    paint();
 })();
 </script>
 </body>

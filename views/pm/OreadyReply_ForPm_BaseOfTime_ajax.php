@@ -431,7 +431,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
             $stageQty = (float)$trow['sqty'];
             if ($sent + $sendQty > $stageQty + 1e-9) throw new Exception('本站總量 ' . $stageQty . '，已發 ' . $sent . '，這次最多只能再發 ' . max(0, $stageQty - $sent));
             $prev = eg_bom_outsource_prev_station_qty($db, (string)$trow['bom'], (int)$trow['bom_sn']);
-            if (($prev['source'] ?? 'fallback') !== 'fallback' && $sent + $sendQty > (float)$prev['qty'] + 1e-9) {
+            if (empty($_POST['over_ok']) && ($prev['source'] ?? 'fallback') !== 'fallback' && $sent + $sendQty > (float)$prev['qty'] + 1e-9) {
                 throw new Exception('上一關目前只有 ' . $prev['qty'] . ' 件良品可領（' . $prev['label'] . '），本站已發 ' . $sent . '，這次最多只能再發 ' . max(0, (float)$prev['qty'] - $sent));
             }
             $appending = ($trow['processing_state'] === 'ing' && $sent > 0);
@@ -2519,6 +2519,26 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
         } catch (Throwable $e) { /* 自動開單失敗不影響回廠記錄本身已經成功 */ }
         echo json_encode($resp);
     } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 顯示廠商／單價：驗證使用者「自己」的登入密碼（連錯會暫停一段時間），成功留稽核紀錄；前端再自行計時 5 分鐘後恢復隱藏 ──
+else if (isset($_POST['action']) && $_POST['action'] === 'eg_vp_verify') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/confirm_password_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入，請重新整理頁面後再試']); exit; }
+    $g = eg_own_password_gate($db, $uid, (string)($_POST['password'] ?? ''), 'oready_vendor_price');
+    if (!$g['ok']) { echo json_encode(['success'=>false,'message'=>$g['msg']]); exit; }
+    try {
+        $name = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$uid);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('reveal','oready_vendor_price','0','BOM總覽 顯示廠商／單價（5分鐘）',NULL,?,?,NOW())")->execute([$uid, $name]);
+    } catch (Throwable $e) { /* 稽核寫入失敗不擋顯示 */ }
+    echo json_encode(['success'=>true, 'ttl_seconds'=>300]);
     exit;
 }
 
