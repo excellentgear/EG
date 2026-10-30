@@ -22,7 +22,7 @@ if (!function_exists('rbac_expand_page_admin')) {
             $f = array_values(array_unique(array_merge($f, [
                 'qc_fill_inspection','qc_edit_history','qc_manage_settings','qc_manage_sampling',
                 'qc_view_readonly','qa_disposition_reply','qc_supervisor',
-                'qc_print_approve_setting','qc_backfill_data'
+                'qc_print_approve_setting','qc_backfill_data','qc_settings_button'
             ])));
         }
         return $f;

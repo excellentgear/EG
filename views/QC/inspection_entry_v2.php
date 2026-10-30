@@ -1646,7 +1646,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
                         <button class="btn btn-default btn-sm" id="btn-print-multi" title="本張製令(BOM)所有製程合併列印，自動帶入圖面"><i class="fa fa-files-o"></i> 全製程合併列印</button>
                         <button class="btn btn-default btn-sm" id="btn-ship-gen" title="檢查這張 BOM 的製程檢驗關卡是否齊全，齊全後可自動挑選各製程檢驗數據生成出貨檢驗"><i class="fa fa-truck"></i> 出貨檢驗</button>
-                        <div class="btn-group">
+                        <div class="btn-group" id="settings-btn-group">
                             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
                             <ul class="dropdown-menu dropdown-menu-right">
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-tool-setting"><i class="fa fa-wrench"></i> 量具設定</a></li>
@@ -5022,6 +5022,8 @@ $(function(){
         state.canView = !!res.can_view;
         state.canBackfill = !!res.can_backfill;
         state.canPermSetting = !!res.is_admin;
+        // 「設定」按鈕：角色勾選「顯示設定按鈕」(qc_settings_button) 才看得到；後端明確回 false 才隱藏，載入失敗時維持顯示
+        if(res.can_settings_button === false) $('#settings-btn-group').hide();
         state.currentUserId = res.current_user || '';
         applyMenuPerms();
         refreshBackfillBtn();
@@ -7361,6 +7363,7 @@ $(function(){
         { code:'qc_supervisor',        label:'認定為主管（收到並核准異常單修改請求、可直接修改異常單；與管理員不同）' },
         { code:'qc_print_approve_setting', label:'列印：主管審核自動核可設定（可指定核可主管）' },
         { code:'qc_backfill_data',     label:'補資料：設定檢驗日期／檢驗人員／主管審核人員與日期（補歷史紙本用）' },
+        { code:'qc_settings_button',   label:'顯示「設定」按鈕（沒勾＝畫面上看不到設定按鈕；設定裡能改什麼資料，由下方各項功能決定）' },
         { code:'qc_page_admin',        label:'本頁管理員（品管檢驗表 2.0 內等同全站管理員：含以上全部功能、符號主檔維護、刪除標準版本）' }
     ];
     var QC_CODES = QC_FEATURES.map(function(f){ return f.code; });

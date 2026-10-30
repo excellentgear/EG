@@ -156,6 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'can_manage_sampling' => canManageSampling($feats),
                 'is_admin'            => hasFeature($feats, 'all'),
                 'can_backfill'        => hasFeature($feats, 'all') || hasFeature($feats, 'qc_backfill_data'),
+                'can_settings_button' => hasFeature($feats, 'qc_settings_button'),
                 'current_user'        => $user_id,
             ], JSON_UNESCAPED_UNICODE);
             exit;
@@ -285,7 +286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             try {
                 $hq = "SELECT f.qc_form_id, f.insp_no, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
                               f.check_date, f.created_at, f.created_by, f.main_remark, f.insp_kind,
-                              f.container_1, f.container_2,
+                              f.container_1, f.container_2, f.face_code, f.piece_no,
                               f.edit_unlocked, f.last_edited_by, f.last_edited_at,
                               f.inspector_by, f.approved_by, f.approved_at,
                               f.ncr_decision, f.ncr_skip_reason, f.abnormal_order_id, qa.abnormal_order_no,
@@ -345,6 +346,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'items'   => $items,
                 'tools'   => $tools,
                 'history' => $history,
+                // 多面分段檢驗（首件）：該製程大類有啟用才帶；pieces＝各顆已驗球標狀態（含重工待複驗的項目內容）
+                'face'    => (function() use ($pdo, $fid) {
+                    $en = qc_face_enabled($pdo, $fid);
+                    return ['enabled'=>$en, 'pieces'=>$en ? (object)qc_face_state($pdo, $fid, 0) : (object)[]];
+                })(),
                 'draft_form_id' => $draftFid,
                 'has_std' => count($items) > 0,
                 'is_supervisor' => $is_sup,
@@ -445,6 +451,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
             $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
+            // 多面分段檢驗（首件＋該製程大類有勾）：由後端自己判斷，不採信前端；
+            // 這種檢驗單一律不同步標準（只是某一面的片段，同步會把其他面的標準項目停用）
+            $faceMode = ($insp_kind === 'FIRST') && qc_face_enabled($pdo, $fid);
+            $faceCode = $faceMode ? strtoupper(trim((string)($_POST['face_code'] ?? ''))) : '';
+            $facePiece = $faceMode ? (int)($_POST['piece_no'] ?? 0) : 0;
+            if ($faceMode) $update_std = false;
             // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核，不必存檔後再開一次修改
             // 「今天」一律問 DB 的 CURDATE()，不用 PHP date()——PHP 是 UTC、MySQL 是本地，混用會讓
             // 邊界日期的「不可為未來」判定差到 8 小時（本專案已踩過同一個坑好幾次）。
@@ -473,6 +485,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $version_id   = getDefaultVersionId($pdo, $d_id);
             $form_type_id = getDefaultFormTypeId($pdo);
+            if ($faceMode) qc_face_validate($pdo, $fid, $faceCode, $facePiece, $items, 0);
+            if ($faceMode) $items = qc_face_sort_items($items);   // 依編號順序儲存
 
             $pdo->beginTransaction();
 
@@ -536,6 +550,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($name === '') { $itemIds[$idx] = null; continue; }
                 [$type, $stdTxt, $minV, $maxV, $plus, $minus] = qc_item_tolerance_params($it);
                 $code  = (string)($idx + 1);
+                if ($faceMode) {
+                    // 多面檢驗：每個項目各自新建（停用、不污染標準），球標編號存 item_code；
+                    // 不能依名稱沿用——不同球標常是同名尺寸，沿用會讓兩個球標共用同一個 item_id 而讀值混在一起
+                    $insItem->execute([$version_id, $form_type_id, $process, mb_substr(trim((string)($it['balloon'] ?? '')), 0, 10),
+                                       $name, $stdTxt, $minV, $maxV, $plus, $minus, $type, $idx + 1, 0]);
+                    $itemIds[$idx] = (int)$pdo->lastInsertId();
+                    continue;
+                }
 
                 $iid = null;
                 if ($update_std) {
@@ -606,6 +628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // --- 2d. 寫入實測明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測）---
             $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $user_id);
+            if ($faceMode) qc_face_save($pdo, $qc_form_id, $faceCode, $facePiece, $items, $itemIds);
             $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
             $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
                 ->execute([$ng_qty, $check_result, $qc_form_id]);
@@ -668,6 +691,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'pcs'          => (json_decode($_POST['pcs_verdicts'] ?? '[]', true) ?: []),
                 // 本單使用量具（整張單綁一次）：草稿階段先放 JSON，正式存檔才寫 qc_form_tool
                 'tool_ids'     => qc_form_tools_parse($_POST['tool_ids'] ?? '[]'),
+                // 多面分段檢驗（首件）：面／顆也要跟著草稿保存
+                'face_code'    => strtoupper(substr(trim((string)($_POST['face_code'] ?? '')), 0, 1)),
+                'piece_no'     => (int)($_POST['piece_no'] ?? 0),
                 'incoming_qty' => $incoming_qty, 'sample_qty' => $sample_qty, 'main_remark' => $main_remark,
             ], JSON_UNESCAPED_UNICODE);
 
@@ -736,7 +762,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // #10：帶回 measure_method/tool_id/Tool_No，依 (方法,量具) 分組還原「主讀值 + 加量測」
             $mq = "SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict, m.remark,
                           m.measure_method, m.tool_id, m.reading_seq, t.Tool_No,
-                          i.item_name, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.min_value, i.max_value, i.result_type,
+                          i.item_name, i.item_code, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.min_value, i.max_value, i.result_type,
+                          (SELECT g.ng_action FROM qc_form_item_ng g WHERE g.qc_form_id=m.qc_form_id AND g.item_id=m.item_id LIMIT 1) AS ng_action,
                           (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
                    FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
                    LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
@@ -755,6 +782,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         'mode'=>$hasRange?'RANGE':'TOL', 'min'=>$hasRange?$fmt($r['min_value']):'', 'max'=>$hasRange?$fmt($r['max_value']):'',
                         'tool'=>$r['tool_name'] ?: '', 'type'=>$r['result_type']==='OKNG'?'OKNG':'NUM',
                         'verdict'=>$r['item_verdict'] ?: 'OK', 'remark'=>($r['remark'] ?? ''),
+                        // 多面分段檢驗：球標編號(item_code)與 NG 處置；非多面檢驗單前端不使用這兩個欄位
+                        'balloon'=>(string)($r['item_code'] ?? ''), 'ng_action'=>(string)($r['ng_action'] ?? ''),
                         '_groups'=>[],
                     ];
                 }
@@ -795,6 +824,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             unset($row);
+            // NG加驗（獨立表 qc_measurement_recheck，每列固定10格）→ 各項目的 recheck[]
+            try {
+                $rq = $pdo->prepare("SELECT item_id, recheck_seq, cell_no, measured_value, result FROM qc_measurement_recheck WHERE qc_form_id=? ORDER BY item_id, recheck_seq, cell_no");
+                $rq->execute([$qid]);
+                $rcTmp = [];
+                foreach ($rq->fetchAll(PDO::FETCH_ASSOC) as $rr) {
+                    $ri = (int)$rr['item_id']; $rs = (int)$rr['recheck_seq'];
+                    if (!isset($rcTmp[$ri][$rs])) { $a = []; for ($k = 0; $k < 10; $k++) $a[] = ['v'=>'','r'=>'OK']; $rcTmp[$ri][$rs] = $a; }
+                    $cp = (int)$rr['cell_no'] - 1;
+                    if ($cp >= 0 && $cp < 10) $rcTmp[$ri][$rs][$cp] = ['v'=>$rr['measured_value'], 'r'=>$rr['result']];
+                }
+                foreach ($byItem as $iid2 => &$row2) {
+                    $row2['recheck'] = [];
+                    foreach (($rcTmp[$iid2] ?? []) as $samples) $row2['recheck'][] = ['samples'=>$samples];
+                }
+                unset($row2);
+            } catch (Exception $e) { /* 表不存在或查詢失敗：視為沒有加驗資料 */ }
             $featsH = loadUserFeatures($pdo, $user_id);
             $is_sup = hasFeature($featsH, 'qc_edit_history');
             $can_fill_h = hasFeature($featsH, 'qc_fill_inspection');
@@ -812,6 +858,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'container_2'=>$form['container_2'] ?? '', 'container_2_disp'=>eg_qc_container_disp_text($form['container_2'] ?? '', $pdo),
                     'pcs_verdicts'=>(is_array($pv = json_decode($form['pcs_verdicts'] ?? '[]', true)) ? $pv : []),
                     'edit_unlocked'=>(int)$form['edit_unlocked'],
+                    'face_code'=>(string)($form['face_code'] ?? ''), 'piece_no'=>(int)($form['piece_no'] ?? 0),
                     // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日，簽章人＝檢驗人員
                     // （補資料(inspector_by)優先，沒補過就是存檔者(created_by)，行為不變）
                     'check_date'=>$form['check_date'] ?? ($form['created_at'] ?? ''),
@@ -937,6 +984,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $findItem = $pdo->prepare("SELECT item_id FROM qc_inspection_item WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
             $insItem  = $pdo->prepare("INSERT INTO qc_inspection_item (version_id, form_type_id, process_name, item_code, item_name, standard_text, min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
 
+            // 多面分段檢驗：這張單原本就是多面單（face_code 有值）才走這條；面可改、顆維持原本（沒送才沿用）
+            $faceMode = ($form['face_code'] ?? null) !== null && ($form['face_code'] ?? '') !== '';
+            $faceCode = $faceMode ? strtoupper(trim((string)($_POST['face_code'] ?? $form['face_code']))) : '';
+            $facePiece = $faceMode ? (int)($_POST['piece_no'] ?? $form['piece_no']) : 0;
+            if ($faceMode) qc_face_validate($pdo, (int)$form['bom_ing_fid'], $faceCode, $facePiece, $items, $qid);
+            if ($faceMode) $items = qc_face_sort_items($items);   // 依編號順序儲存
+
             $pdo->beginTransaction();
             // 解析 item_id
             $itemIds = [];
@@ -944,6 +998,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $name = trim($it['name'] ?? '');
                 if ($name === '') { $itemIds[$idx] = null; continue; }
                 $iid = !empty($it['item_id']) ? (int)$it['item_id'] : null;
+                if ($faceMode && !$iid) {
+                    // 多面檢驗新增的列：各自新建（不依名稱沿用，理由同新增存檔）
+                    [$fType, $fStd, $fMin, $fMax, $fPlus, $fMinus] = qc_item_tolerance_params($it);
+                    $insItem->execute([$version_id, $form_type_id, $process, mb_substr(trim((string)($it['balloon'] ?? '')), 0, 10), $name, $fStd, $fMin, $fMax, $fPlus, $fMinus, $fType, $idx+1]);
+                    $itemIds[$idx] = (int)$pdo->lastInsertId();
+                    continue;
+                }
+                // 修改紀錄時若改了項目名稱／標準值／公差／範圍／型態，必須讓這張單看到修改後的內容：
+                //   ‧該項目只有這張單在用、且不是正式標準（is_active=0）→ 原地更新
+                //   ‧否則（正式標準，或別張單也在用）→ 另建一筆只屬於這張單的項目，不動正式標準與其他單據
+                if ($iid) {
+                    $cs = $pdo->prepare("SELECT item_name, standard_text, min_value, max_value, plus_tolerance, minus_tolerance, result_type, is_active
+                                         FROM qc_inspection_item WHERE item_id=? AND version_id=?");
+                    $cs->execute([$iid, $version_id]);
+                    $curIt = $cs->fetch(PDO::FETCH_ASSOC);
+                    if ($curIt) {
+                        [$nType, $nStd, $nMin, $nMax, $nPlus, $nMinus] = qc_item_tolerance_params($it);
+                        $nf = function ($v) { return ($v === null || $v === '') ? null : round((float)$v, 6); };
+                        $changed = trim((string)$curIt['item_name']) !== $name
+                            || (string)$curIt['standard_text'] !== (string)$nStd
+                            || $nf($curIt['min_value']) !== $nf($nMin) || $nf($curIt['max_value']) !== $nf($nMax)
+                            || $nf($curIt['plus_tolerance']) !== $nf($nPlus) || $nf($curIt['minus_tolerance']) !== $nf($nMinus)
+                            || (string)$curIt['result_type'] !== (string)$nType;
+                        if ($changed) {
+                            $uc = $pdo->prepare("SELECT COUNT(DISTINCT qc_form_id) FROM qc_measurement WHERE item_id=? AND qc_form_id<>?");
+                            $uc->execute([$iid, $qid]);
+                            if ((int)$curIt['is_active'] === 0 && (int)$uc->fetchColumn() === 0) {
+                                $pdo->prepare("UPDATE qc_inspection_item SET item_name=?, standard_text=?, min_value=?, max_value=?, plus_tolerance=?, minus_tolerance=?, result_type=? WHERE item_id=?")
+                                    ->execute([$name, $nStd, $nMin, $nMax, $nPlus, $nMinus, $nType, $iid]);
+                            } else {
+                                $insItem->execute([$version_id, $form_type_id, $process, (string)($idx+1), $name, $nStd, $nMin, $nMax, $nPlus, $nMinus, $nType, $idx+1]);
+                                $iid = (int)$pdo->lastInsertId();
+                            }
+                        }
+                    }
+                }
                 if (!$iid) {
                     $findItem->execute([$version_id, $form_type_id, $process, $name]);
                     $iid = $findItem->fetchColumn();
@@ -959,6 +1049,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (array_key_exists('tool_ids', $_POST)) qc_form_tools_save($pdo, $qid, $_POST['tool_ids']);
             // 重寫明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測；#12 與存檔共用同一函式）
             $tot = qc_persist_readings($pdo, $qid, $items, $itemIds, $pcs, $user_id);
+            if ($faceMode) qc_face_save($pdo, $qid, $faceCode, $facePiece, $items, $itemIds);
             $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
 
             // 更新表頭 + 自動回鎖
@@ -1274,11 +1365,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $q = $pdo->prepare(
                 "SELECT f.qc_form_id, f.bom_ing_fid, f.batch_no, f.round_no, f.process_name, f.insp_kind,
                         f.check_date, f.created_at, f.check_result, f.ng_qty, f.incoming_qty, f.sample_qty,
-                        f.created_by, f.inspector_by, u.user_cname, bi.bom,
+                        f.created_by, f.inspector_by, u.user_cname, bi.bom, bi.maker_id AS bom_maker,
+                        f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name,
                         f.abnormal_order_id, qa.abnormal_order_no
                  FROM qc_check_form f
                  LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
                  LEFT JOIN user u ON TRIM(COALESCE(f.inspector_by, f.created_by)) = u.id
+                 LEFT JOIN user le ON TRIM(f.last_edited_by) = le.id
                  LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
                  WHERE f.d_id = ? AND f.status <> 'DRAFT'
                  ORDER BY f.qc_form_id DESC LIMIT 300");
@@ -1311,6 +1404,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                      LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
                      LEFT JOIN d_setting ds ON ds.d_id = f.d_id
                      LEFT JOIN user u ON TRIM(COALESCE(f.inspector_by, f.created_by)) = u.id
+                 LEFT JOIN user le ON TRIM(f.last_edited_by) = le.id
                      LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
                      WHERE " . implode(' AND ', $where);
             $cq = $pdo->prepare("SELECT COUNT(*) $from"); $cq->execute($par);
@@ -1318,8 +1412,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $off = ($page - 1) * $per;
             $q = $pdo->prepare(
                 "SELECT f.qc_form_id, f.insp_no, f.batch_no, f.round_no, f.process_name, f.insp_kind,
-                        f.check_date, f.created_at, f.check_result, f.ng_qty, f.d_id, ds.D_Setting_Id AS part_no,
-                        u.user_cname, f.created_by, bi.bom, f.abnormal_order_id, qa.abnormal_order_no
+                        f.check_date, f.created_at, f.check_result, f.ng_qty, f.d_id, f.bom_ing_fid, f.incoming_qty, f.sample_qty, bi.maker_id AS bom_maker, ds.D_Setting_Id AS part_no,
+                        u.user_cname, f.created_by, bi.bom, f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name, f.abnormal_order_id, qa.abnormal_order_no
                  $from ORDER BY COALESCE(f.check_date, DATE(f.created_at)) DESC, f.qc_form_id DESC LIMIT $per OFFSET $off");
             $q->execute($par);
             echo json_encode(['success'=>true, 'total'=>$total, 'page'=>$page, 'per'=>$per,
