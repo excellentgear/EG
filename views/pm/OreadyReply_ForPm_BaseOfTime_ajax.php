@@ -2408,6 +2408,26 @@ else if (isset($_POST['action']) && $_POST['action'] === 'oready_or_save_toggle'
     if (!oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF'])) {
         echo json_encode(['success'=>false,'message'=>'只有系統管理員可以變更這個設定']); exit;
     }
+            // 結清＝這一關回廠完成：比照「加工中」按鈕（_update_bom_ing_status.php）把狀態轉成 QC待驗(Q)／免驗製程直接 P。
+            // 只動目前還在「加工中(ing)」的；已是 Q／P 的不重複改。回廠日已由 eg_bom_outsource_record_return 寫入。
+            if (!empty($r['closed'])) {
+                try {
+                    $stS = $db->prepare("SELECT bi.processing_state, bi.sqty, bi.maker_id_no, pn.is_exclude_qc
+                                           FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                                          WHERE bi.bom_ing_fid = ?");
+                    $stS->execute([$fid]);
+                    $sRow = $stS->fetch(PDO::FETCH_ASSOC);
+                    if ($sRow && $sRow['processing_state'] === 'ing') {
+                        $newSt = !empty($sRow['is_exclude_qc']) ? 'P' : 'Q';
+                        $db->prepare("UPDATE bom_ing SET processing_state=?, Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=? AND processing_state='ing'")
+                           ->execute([$newSt, $uid, $fid]);
+                        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, related_bom_ing_fid, event_type, affected_qty, target_maker_id, event_note, Created_By)
+                                      VALUES (?, NULL, 'return', ?, ?, ?, ?)")
+                           ->execute([$fid, $sRow['sqty'], $sRow['maker_id_no'], '回廠／報廢記錄結清，狀態 → ' . $newSt, (string)$uid]);
+                        $resp['new_status'] = $newSt;
+                    }
+                } catch (Throwable $e) { /* 狀態轉換失敗不影響回廠記錄本身已成功 */ }
+            }
     $settable = !empty($_POST['settable']) ? 1 : 0;
     $adjustable = !empty($_POST['adjustable']) ? 1 : 0;
     try {
