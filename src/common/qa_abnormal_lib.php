@@ -1214,6 +1214,41 @@ function qab_pm_uncovered_reports(PDO $db, int $bomIngFid): array
 }
 
 /**
+ * 報工NG自動開單的「異常現象」文字：第一行固定「報工發現不良」（auto_phenomenon_base 底稿，之後只准補充），
+ * 後面逐行帶入報工填的NG原因、數量與備註（2026-10-30 使用者交辦）。同原因合併數量、備註去重；
+ * 查詢失敗或沒有明細時退回只有底稿，絕不影響開單。
+ */
+function qab_pm_ng_phenomenon(PDO $db, array $reportIds): string
+{
+    $base = '報工發現不良';
+    $reportIds = array_values(array_filter(array_map('intval', $reportIds)));
+    if (!$reportIds) return $base;
+    try {
+        $ph = implode(',', array_fill(0, count($reportIds), '?'));
+        $st = $db->prepare("SELECT d.ng_id, COALESCE(t.ng_txt, '') AS ng_txt, d.ng_qty, d.ng_remark
+                            FROM pm_process_daily_ng d LEFT JOIN ng_txt t ON t.ng_id = d.ng_id
+                            WHERE d.report_id IN ($ph) AND d.ng_qty > 0
+                            ORDER BY d.report_id, d.daily_ng_id");
+        $st->execute($reportIds);
+        $by = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = (int)$r['ng_id'];
+            if (!isset($by[$k])) $by[$k] = ['txt' => trim((string)$r['ng_txt']) ?: ('NG原因#' . $k), 'qty' => 0, 'rem' => []];
+            $by[$k]['qty'] += (int)$r['ng_qty'];
+            $rm = trim((string)$r['ng_remark']);
+            if ($rm !== '' && !in_array($rm, $by[$k]['rem'], true)) $by[$k]['rem'][] = $rm;
+        }
+        $lines = [$base];
+        foreach ($by as $g) {
+            $lines[] = '・' . $g['txt'] . ' ' . $g['qty'] . ' 件' . ($g['rem'] ? '：' . implode('；', $g['rem']) : '');
+        }
+        return mb_substr(implode("\n", $lines), 0, 2000);
+    } catch (Throwable $e) {
+        return $base;
+    }
+}
+
+/**
  * 補開品質異常單前的「預覽」——給 `process_report_query.php` 的單筆／批次補開跳窗用，讓管理員
  * 在真的送出前先看到：這幾個站各自累積了多少NG、期間到哪一天，以及這次可以選的開立日期範圍。
  * 2026-09-24 使用者交辦：開立日期不可早於（批次跨多站時，取各站中較晚的）最後一次NG報工日期。
@@ -1336,7 +1371,7 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         'ng_qty' => $totalNg,
         // 累積期間、筆數等細節已經寫在 $autoNote（auto_open_note，管理員可追溯），畫面上的異常現象
         // 只要一句話講清楚是怎麼發現的就好（2026-09-24 使用者交辦：拿掉一大串期間統計文字）
-        'abnormal_phenomenon' => '報工發現不良',
+        'abnormal_phenomenon' => qab_pm_ng_phenomenon($db, $reportIds),
         'created_by' => (int)$opener['id'],
         'resp_process_no' => (int)$bi['process_no'],
         'resp_bom_ing_fid' => $bomIngFid,

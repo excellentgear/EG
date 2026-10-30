@@ -349,6 +349,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines,
                 'parts' => $parts, 'people' => $people, 'boms' => $boms]);
+        } elseif ($action === 'report_detail') {
+            // 單筆報工詳細內容（唯讀，與排程頁「最近 10 筆生產報工紀錄」點開看到的內容一致）
+            $rid = intval($_POST['report_id'] ?? 0);
+            $stmt = $pdo->prepare("SELECT $PRQ_COLS, pdr.setup_user_id, pdr.production_user_id, pdr.machine_id
+                $PRQ_FROM WHERE pdr.report_id = ?");
+            $stmt->execute([$rid]);
+            $rows = eg_machine_label_apply($stmt->fetchAll(PDO::FETCH_ASSOC), $PRQ_MLBL);
+            if (!$rows) { echo json_encode(['success' => false, 'message' => '找不到該筆報工資料']); exit; }
+            $rows = prq_apply_qab_status($pdo, $rows);
+            $stNg = $pdo->prepare("SELECT COALESCE(t.ng_txt, '') AS ng_txt, d.ng_qty, d.ng_remark
+                FROM pm_process_daily_ng d LEFT JOIN ng_txt t ON t.ng_id = d.ng_id
+                WHERE d.report_id = ? ORDER BY d.daily_ng_id");
+            $stNg->execute([$rid]);
+            echo json_encode(['success' => true, 'report' => $rows[0], 'ng_list' => $stNg->fetchAll(PDO::FETCH_ASSOC)]);
         } elseif ($action === 'machine_fmt_meta') {
             // 顯示格式設定：欄位白名單、目前設定、以及一筆「填得最完整」的機台當即時預覽樣本
             $fields = [];
@@ -628,6 +642,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 </div>
 </div>
 
+<!-- ══ 單筆報工詳細內容 Modal（唯讀） ══ -->
+<div class="prq-mask" id="rdMask"><div class="prq-modal" style="max-width:640px;">
+    <div class="m-head"><span><i class="fa fa-file-text-o"></i> 報工紀錄詳細內容</span><span class="m-close" onclick="document.getElementById('rdMask').style.display='none'">✕</span></div>
+    <div class="m-body" id="rdBody"></div>
+</div></div>
+
 <!-- ══ 機台顯示設定 Modal ══ -->
 <div class="prq-mask" id="mfMask"><div class="prq-modal">
     <div class="m-head"><span><i class="fa fa-sliders"></i> 機台顯示設定</span><span class="m-close" onclick="document.getElementById('mfMask').style.display='none'">✕</span></div>
@@ -805,7 +825,7 @@ function rowToTr(r){
 
     return '<tr>'
         + '<td class="prq-ck-col"' + (PRQ_CAN_QAB ? '' : ' style="display:none"') + '>' + ckHtml + '</td>'
-        + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
+        + '<td><a href="#" class="prq-detail" data-rid="' + rid + '" title="點開查看這筆報工的詳細內容">' + esc(egFmtDate(r.report_date)) + '</a></td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
         + '<td class="t-left">' + esc(r.machine_label || r.machine) + '</td>'
         + '<td class="t-left bom-cell"' + (isTemp ? '' : ' data-bom="' + esc(r.bom || '') + '"') + '>' + bomTxt + '</td>'
@@ -987,6 +1007,43 @@ $('#prqTbody').on('dblclick', 'td.part-cell', function(){
     clearTimeout(applyFiltersTimer);
     $('#fPartNo').val(v);
     applyFilters();
+});
+
+// 點日期開啟單筆報工詳細內容（唯讀）
+$('#prqTbody').on('click', 'a.prq-detail', function(e){
+    e.preventDefault();
+    var rid = $(this).attr('data-rid');
+    $('#rdBody').html('<div class="prq-empty">載入中…</div>');
+    $('#rdMask').show();
+    $.post('', { action: 'report_detail', report_id: rid }, function(res){
+        if (!res || !res.success) { $('#rdBody').html('<div class="prq-empty">' + esc((res && res.message) || '載入失敗') + '</div>'); return; }
+        var r = res.report, isTemp = r.report_source === 'TEMP';
+        var ok = parseInt(r.produced_qty, 10) || 0, ng = parseInt(r.ng_qty, 10) || 0;
+        function row(k, v){ return '<tr><th style="width:110px;text-align:left;background:#FBF6EC;">' + k + '</th><td class="t-left">' + v + '</td></tr>'; }
+        var h = '<table class="prq-table" style="white-space:normal;">'
+            + row('報工日期', esc(egFmtDate(r.report_date)))
+            + row('製程', esc(r.ProcessName || ''))
+            + row('機台', esc(r.machine_label || r.machine || ''))
+            + row('製令／料號', isTemp ? '臨時加工' : (esc(r.bom || '') + '　' + esc(r.d_id || '')))
+            + row('客戶', isTemp ? esc(r.source_reason || '') : esc(r.Client_Name || ''))
+            + row('架機', esc(r.setup_user || '-') + '　' + esc(timeRange(r.setup_start_time, r.setup_end_time)))
+            + row('生產', esc(r.prod_user || '-') + '　' + esc(timeRange(r.production_start_time, r.production_end_time)))
+            + row('良品／NG／總數', ok + ' ／ <span style="color:' + (ng > 0 ? '#DD5138' : 'inherit') + ';font-weight:bold;">' + ng + '</span> ／ ' + (ok + ng))
+            + row('本站完工', r.is_finished ? '是' : '否')
+            + row('加工面', esc(r.process_face || '-'))
+            + row('備註', esc(r.remark || ''))
+            + '</table>';
+        if (res.ng_list && res.ng_list.length) {
+            h += '<div style="margin:10px 0 4px;font-weight:bold;color:#8A5A2B;">NG 紀錄</div><table class="prq-table"><thead><tr><th>原因</th><th>數量</th><th class="t-left">備註</th></tr></thead><tbody>';
+            res.ng_list.forEach(function(n){ h += '<tr><td>' + esc(n.ng_txt) + '</td><td>' + esc(n.ng_qty) + '</td><td class="t-left">' + esc(n.ng_remark || '') + '</td></tr>'; });
+            h += '</tbody></table>';
+        }
+        if (r.abnormal_order_id) {
+            h += '<div style="margin-top:10px;">異常單：<a href="../QA/qa_abnormal_form.php?id=' + r.abnormal_order_id + '" target="_blank">' + esc(r.abnormal_order_no || ('#' + r.abnormal_order_id)) + '</a>'
+               + ' <span style="font-size:12px;color:#b5762a;">' + (r.abn_closed ? '已結案' + (r.abn_final_label ? '(' + esc(r.abn_final_label) + ')' : '') : '處理中') + '</span></div>';
+        }
+        $('#rdBody').html(h);
+    }, 'json').fail(function(){ $('#rdBody').html('<div class="prq-empty">載入失敗</div>'); });
 });
 
 $('#btnClear').on('click', function(){
