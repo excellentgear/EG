@@ -806,6 +806,16 @@ if (!empty($_mkinfo_nos)) {
     } catch (PDOException $e) { error_log('maker_info_map query error: ' . $e->getMessage()); }
 }
 
+// ob_batch_map（2026-10-30 分批回廠）：[bom_ing_fid => 各批次明細]，只含「多批或部分回廠」的製程；
+// 獨立於 ing_active_map 之外（那份 map 三處各建一次容易漏欄位），畫面 render 當下即時查。
+$ob_batch_map = [];
+try {
+    require_once __DIR__ . '/../../src/common/bom_outsource_lib.php';
+    $_ob_fids = [];
+    foreach ($bom_ing_active_map as $_ob_procs) foreach ($_ob_procs as $_ob_p) { if (!empty($_ob_p['bom_ing_fid'])) $_ob_fids[] = (int)$_ob_p['bom_ing_fid']; }
+    $ob_batch_map = eg_bom_outsource_batch_map($db, $_ob_fids);
+} catch (Throwable $e) { error_log('ob_batch_map error: ' . $e->getMessage()); $ob_batch_map = []; }
+
 // ── 製程主檔（process_no）：新增BOM／新增製程的製程代號只能用這裡面有的 ──
 // 原本只有 AJAX 自動更新回來時才會有（window.allProcessTypes），
 // 所以剛開頁面的那幾秒「製程中文」下拉是空的、也無從驗證代號；
@@ -1531,6 +1541,8 @@ echo "    window.initialMaxCount = " . json_encode((int)($bom_ps_list_max ?: 0))
 echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) . "; // [bom][bom_sn] 最新單價\n";
 echo "    window.ingActiveMap = " . json_encode($bom_ing_active_map ?: (object)[]) . "; // [bom] => [{per-process active data}] 供發單日欄位使用\n";
 echo "    window.transferHistoryMap = " . json_encode($transfer_history_map ?: []) . "; // [product_id][bom_sn] 同料號歷史\n";
+echo "    window.obBatchMap = " . json_encode($ob_batch_map ?: (object)[]) . "; // [bom_ing_fid] => 分批回廠各批次明細（2026-10-30）
+";
 echo "    window.makerInfoMap = " . json_encode($maker_info_map ?: (object)[]) . "; // [maker_id_no] => {tel,tel2,fax,addr} 供廠商名稱浮動視窗使用\n";
 echo "    window.allProcessTypes = " . json_encode($all_process_types_init ?: []) . "; // 製程主檔（process_no）：新增BOM／新增製程的代號只能用這裡面的，AJAX 回來會再覆蓋\n";
 // 批次檢視的「公司預設」（none/lane/flow/both）：管理員設定，個人沒自己設定過就套用這個
@@ -3176,6 +3188,61 @@ echo "</script>\n";
         return lines.join('<br>');
     }
     // 把 popover 掛到指定元素上（沿用本頁既有的 hover popover 初始化，見 updateTable 結尾）
+    // ── 分批回廠摘要（2026-10-30）：製程格內顯示「回／送／外／廢」進度條與各批次；
+    //    只有多批或部分回廠的製程才有資料（window.obBatchMap，後端 eg_bom_outsource_batch_map），
+    //    單批整批送整批回的製程完全不顯示，畫面與過去一樣。
+    //    ⚠ 表格內的 span 一律自己指定 line-height（Gentelella 全站 td span{line-height:28px}）。
+    function _obNum(v) { v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
+    function obBatchSummaryEl(m) {
+        var box = document.createElement('div');
+        box.className = 'ob-batch-sum';
+        box.style.cssText = 'margin-top:3px;font-size:11px;line-height:1.25;color:#6B4423;cursor:pointer;';
+        var send = Number(m.send) || 0, ret = Number(m.ret) || 0, scrap = Number(m.scrap) || 0, out = Number(m.outside) || 0;
+        var pctR = send > 0 ? Math.min(100, ret / send * 100) : 0, pctS = send > 0 ? Math.min(100 - pctR, scrap / send * 100) : 0;
+        var bar = document.createElement('div');
+        bar.style.cssText = 'height:6px;border-radius:3px;background:#F7E0BD;overflow:hidden;display:flex;';
+        bar.innerHTML = '<div style="width:' + pctR + '%;background:#F0A24B;"></div><div style="width:' + pctS + '%;background:#DD5138;"></div>';
+        box.appendChild(bar);
+        var head = document.createElement('div');
+        head.style.cssText = 'margin-top:1px;white-space:nowrap;';
+        head.textContent = '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
+        head.title = '分批回廠：已回廠 ' + _obNum(ret) + '，送出 ' + _obNum(send) + '，尚在外 ' + _obNum(out) + '，報廢 ' + _obNum(scrap) + '（點一下展開各批次）';
+        box.appendChild(head);
+        var list = m.batches || [];
+        function batchLine(b, withDetail) {
+            var d = document.createElement('div');
+            d.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            var done = (b.status === 'closed');
+            var t = (b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
+                + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
+            d.textContent = t;
+            d.title = t + (b.send_date ? '（發單 ' + b.send_date + '）' : '');
+            if (withDetail && b.returns && b.returns.length) {
+                var det = document.createElement('div');
+                det.style.cssText = 'padding-left:10px;color:#8a6a45;white-space:normal;';
+                det.textContent = (b.send_date ? '發單 ' + b.send_date + '；' : '') + b.returns.map(function (r) {
+                    return (r.date ? r.date.slice(5) : '') + ' 回 ' + _obNum(r.qty) + (r.scrap > 0 ? ' 廢 ' + _obNum(r.scrap) : '');
+                }).join('、');
+                var wrap = document.createElement('div'); wrap.appendChild(d); wrap.appendChild(det); return wrap;
+            }
+            return d;
+        }
+        var listBox = document.createElement('div');
+        function render(expanded) {
+            listBox.innerHTML = '';
+            var show = expanded ? list : (list.length === 1 ? [] : list.slice(0, 2));   // 單批：摘要列已含全部數字，不重複列
+            show.forEach(function (b) { listBox.appendChild(batchLine(b, expanded)); });
+            if (!expanded && list.length > 2) {
+                var more = document.createElement('div'); more.style.cssText = 'color:#2a7ae2;'; more.textContent = '＋' + (list.length - 2) + ' 批（點開）';
+                listBox.appendChild(more);
+            }
+        }
+        var open = false; render(false);
+        box.appendChild(listBox);
+        box.onclick = function (ev) { ev.stopPropagation(); open = !open; render(open); };
+        return box;
+    }
+
     function applyMakerPopover(el, makerNo, makerName) {
         if (!el) return false;
         var content = buildMakerInfoTip(makerNo);
@@ -4944,6 +5011,8 @@ echo "</script>\n";
                         if (response.ing_active_map) window.ingActiveMap = response.ing_active_map;
                         else window.ingActiveMap = buildIngActiveMap(newBomPSList);
                         // 廠商聯絡資訊：合併而非取代，後端沒回傳時仍沿用初載那份（浮動視窗不會消失）
+                        // 分批回廠明細：整份取代（回廠結清後該製程就不該再顯示批次，不能用合併）
+                        if (response.ob_batch_map && typeof response.ob_batch_map === 'object') { window.obBatchMap = response.ob_batch_map; }
                         if (response.maker_info_map && typeof response.maker_info_map === 'object') {
                             window.makerInfoMap = Object.assign(window.makerInfoMap || {}, response.maker_info_map);
                         }
@@ -5812,6 +5881,9 @@ echo "</script>\n";
                         }
                         _pDiv.appendChild(_dmDiv);
                     }
+                    // 分批回廠摘要（多批或部分回廠才有）
+                    var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
+                    if (_obm && _obm.batches && _obm.batches.length) { _pDiv.appendChild(obBatchSummaryEl(_obm)); }
                     var _st  = String(_proc.processing_state || '');
                     var _fid = String(_proc.bom_ing_fid || '');
                     var _iid = String(_proc.bom_ing_id  || '');
@@ -10960,6 +11032,7 @@ echo "</script>\n";
                     if (rr.success && typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) {
                         refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
                     }
+                    if (rr.success) _ormRefreshMain();
                 }, 'json');
             }, 'json');
             return;
@@ -10989,6 +11062,7 @@ echo "</script>\n";
           + '</div>'
           + '<div id="orm-status" style="font-size:12px;color:#888;margin-bottom:10px;">載入中…</div>'
           + '<div id="orm-prev-hint" style="font-size:12px;color:#6B4423;margin-bottom:10px;display:none;"></div>'
+          + '<div id="orm-batch-row" style="display:none;margin-bottom:10px;"><label style="font-size:12px;">這次是哪一批回廠？</label><select id="orm-batch" class="form-control"></select></div>'
           + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">本次回廠／報廢（累加）</div>'
           + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
           + '  <div style="flex:1;"><label style="font-size:12px;">本次回廠數量</label><input type="number" min="0" id="orm-return-qty" class="form-control" value="0"></div>'
@@ -10998,17 +11072,53 @@ echo "</script>\n";
           + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
           + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
           + '<div id="orm-nc-result" style="margin-top:8px;"></div>'
+          + '<hr style="margin:14px 0;">'
+          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:4px;">分批發單 <small style="font-weight:normal;color:#aaa;">（把還在外面的一部分發給另一家，不拆製程列；各批可分次回廠，之後一起送下一站）</small></div>'
+          + '<div id="orm-split-wrap">'
+          + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+          + '  <div style="flex:1;"><label style="font-size:12px;">分出數量</label><input type="number" min="0" id="orm-split-qty" class="form-control" value=""></div>'
+          + '  <div style="flex:2;"><label style="font-size:12px;">發給廠商（輸入編號或名稱）</label><input type="text" id="orm-split-maker" class="form-control" list="orm-split-maker-list" autocomplete="off" placeholder="輸入廠商…"><datalist id="orm-split-maker-list"></datalist></div>'
+          + '</div>'
+          + '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:6px;">'
+          + '  <div><label style="font-size:12px;">發單日</label><input type="date" id="orm-split-date" class="form-control" style="max-width:180px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
+          + '  <button type="button" class="btn btn-default btn-sm" id="orm-split-submit">分出新批次</button>'
+          + '</div>'
+          + '<div id="orm-split-msg" style="font-size:12px;color:#b8431f;"></div>'
+          + '</div>'
           + fixSectionHtml;
         overlay.appendChild(box);
         document.body.appendChild(overlay);
         document.getElementById('orm-close').onclick = function(){ overlay.remove(); };
 
+        var _ormOpenBatch = null;   // 目前選定的未結清批次（送出前檢查數量上限用）
+        var _ormBatches = [];       // 這一站全部未結清批次（分批回廠）
+        function _ormPickBatch() {
+            var sel = document.getElementById('orm-batch');
+            var id = sel && sel.value ? parseInt(sel.value, 10) : 0;
+            _ormOpenBatch = null;
+            for (var i = 0; i < _ormBatches.length; i++) if (!id || parseInt(_ormBatches[i].batch_id, 10) === id) { _ormOpenBatch = _ormBatches[i]; if (id) break; }
+        }
+        function _ormFillBatchSelect(prefer) {
+            var row = document.getElementById('orm-batch-row'), sel = document.getElementById('orm-batch');
+            if (!row || !sel) return;
+            if (_ormBatches.length < 2) { row.style.display = 'none'; sel.innerHTML = ''; _ormPickBatch(); return; }
+            sel.innerHTML = _ormBatches.map(function (b) {
+                return '<option value="' + b.batch_id + '">' + escapeHtml((b.maker_id || b.maker_id_no || '未指定廠商') + '　送 ' + _obNum(b.send_qty) + '，還在外 ' + _obNum(b.outside)) + '</option>';
+            }).join('');
+            if (prefer) sel.value = String(prefer);
+            row.style.display = '';
+            sel.onchange = function () { _ormPickBatch(); };
+            _ormPickBatch();
+        }
         function _refreshStatus() {
             $.post('', { action: 'get_outsource_batch', bom_ing_fid: proc.bom_ing_fid }, function(r) {
                 var el = document.getElementById('orm-status');
                 if (!el) return;
                 if (!r.success) { el.textContent = '讀取失敗：' + (r.message||''); return; }
                 var ob = r.open_batch;
+                _ormBatches = Array.isArray(r.open_batches) ? r.open_batches : (ob ? [ob] : []);
+                var _keepSel = (document.getElementById('orm-batch') || {}).value;
+                _ormFillBatchSelect(_keepSel);
                 if (!ob) { el.textContent = '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
                     el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty
@@ -11028,6 +11138,47 @@ echo "</script>\n";
         }
         _refreshStatus();
 
+        // ── 分批發單：廠商搜尋（沿用既有 search_maker）＋送出 ──
+        var _splitMk = document.getElementById('orm-split-maker'), _splitDl = document.getElementById('orm-split-maker-list');
+        var _splitMakerPick = null;   // {no,name}：必須是從清單挑到的廠商，打字沒對上的不接受
+        _splitMk.addEventListener('input', function () {
+            var v = _splitMk.value.trim();
+            var hit = null;
+            Array.prototype.forEach.call(_splitDl.options, function (o) { if (o.value === v) hit = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; });
+            _splitMakerPick = hit;
+            if (hit) { _splitMk.value = hit.no + ' ' + hit.name; return; }
+            if (v.length < 1) { _splitDl.innerHTML = ''; return; }
+            $.post('', { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function (res) {
+                _splitDl.innerHTML = '';
+                if (res && res.success && Array.isArray(res.data)) res.data.forEach(function (m) {
+                    var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); _splitDl.appendChild(o);
+                });
+            }, 'json');
+        });
+        document.getElementById('orm-split-submit').onclick = function () {
+            var msg = document.getElementById('orm-split-msg'); msg.textContent = '';
+            var qty = parseFloat(document.getElementById('orm-split-qty').value) || 0;
+            if (qty <= 0) { msg.textContent = '請輸入要分出的數量'; return; }
+            var mkTxt = _splitMk.value.trim(), pick = null;
+            Array.prototype.forEach.call(_splitDl.options, function (o) { if (o.value === mkTxt) pick = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; });
+            pick = pick || _splitMakerPick;
+            if (!pick || !pick.no) { msg.textContent = '請從清單中挑選廠商（輸入編號或名稱後點選）'; return; }
+            var sd = document.getElementById('orm-split-date').value;
+            if (sd && sd > _ormToday()) { msg.textContent = '發單日不可晚於今天'; return; }
+            var src = _ormOpenBatch;   // 從目前選定（或唯一）的那一批分出去
+            if (src && qty > (Number(src.outside) || 0) + 1e-9) { msg.textContent = '分出數量 ' + qty + ' 超過這一批還在外面的數量 ' + _obNum(src.outside); return; }
+            if (!confirm('確定從「' + (src ? (src.maker_id || '未指定廠商') : '目前這批') + '」分出 ' + qty + ' 件，改發給「' + pick.name + '」？\n（兩批合計送出量不變；之後可各自回廠）')) return;
+            $.post('', { action: 'outsource_batch_split', bom_ing_fid: proc.bom_ing_fid, from_batch_id: src ? src.batch_id : '', qty: qty, maker_no: pick.no, maker_name: pick.name, send_date: sd }, function (res) {
+                showTemporaryMessage(res.message || (res.success ? '已分批' : '失敗'), !!res.success);
+                if (res.success) {
+                    document.getElementById('orm-split-qty').value = ''; _splitMk.value = ''; _splitMakerPick = null;
+                    _refreshStatus();
+                    if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                    _ormRefreshMain();
+                } else { msg.textContent = res.message || '分批失敗'; }
+            }, 'json');
+        };
+
         document.getElementById('orm-submit-add').onclick = function(){
             var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
             var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
@@ -11043,7 +11194,9 @@ echo "</script>\n";
             var rdEl = document.getElementById('orm-return-date');
             var rd = rdEl ? rdEl.value : '';
             if (rd && rd > _ormToday()) { showTemporaryMessage('回廠日不可晚於今天', false); return; }
-            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, return_date: rd }, function(r) {
+            var _selB = document.getElementById('orm-batch');
+            var _bidSend = (_ormBatches.length > 1 && _selB && _selB.value) ? _selB.value : '';
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, return_date: rd, batch_id: _bidSend }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
                     document.getElementById('orm-return-qty').value = 0;
@@ -11110,14 +11263,12 @@ echo "</script>\n";
         // Header
         var hdr = document.createElement('div');
         hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:10px;border-bottom:2px solid #337ab7;';
-        var _ormOpenBatch = null;   // 目前未結清批次（送出前檢查數量上限用）
         var ttl = document.createElement('h4');
         ttl.textContent = '新增 BOM'; ttl.style.cssText = 'margin:0;color:#337ab7;';
         var xBtn = document.createElement('button');
         xBtn.innerHTML = '&times;'; xBtn.style.cssText = 'background:none;border:none;font-size:1.6rem;cursor:pointer;color:#aaa;line-height:1;';
         xBtn.onclick = function(){ overlay.remove(); };
         hdr.appendChild(ttl); hdr.appendChild(xBtn);
-                _ormOpenBatch = ob || null;
         box.appendChild(hdr);
 
         function _row(label, el, required) {

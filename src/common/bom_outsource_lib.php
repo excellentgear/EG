@@ -40,6 +40,21 @@ if (!function_exists('eg_bom_outsource_ensure_schema')) {
             ) COMMENT='加工單流水帳：每次送出去記一列，累積回廠/報廢數量，供對帳與供應商KPI彙總'");
         } catch (Exception $e) { /* 已存在或無權限，交由呼叫端自行處理 */ }
         try {
+            // 逐次回廠紀錄（2026-10-30 分批回廠）：每按一次「確認記錄」記一列，才有每批的回廠日與回廠明細可顯示
+            $db->exec("CREATE TABLE IF NOT EXISTS bom_ing_outsource_return (
+                return_id   INT AUTO_INCREMENT PRIMARY KEY,
+                batch_id    INT NOT NULL COMMENT 'FK -> bom_ing_outsource_batch.batch_id',
+                bom_ing_fid INT NOT NULL,
+                return_qty  DECIMAL(14,3) NOT NULL DEFAULT 0 COMMENT '本次回廠良品數量',
+                scrap_qty   DECIMAL(14,3) NOT NULL DEFAULT 0 COMMENT '本次報廢數量',
+                return_date DATE NULL COMMENT '回廠日（業務日期）',
+                created_by  INT NULL,
+                created_at  DATETIME NULL,
+                INDEX idx_batch (batch_id),
+                INDEX idx_fid (bom_ing_fid)
+            ) COMMENT='加工單逐次回廠紀錄（分批回廠顯示用，彙總數量仍以流水帳為準）'");
+        } catch (Exception $e) {}
+        try {
             // 人工異動保護：手動改過順序/狀態的列，內網ERP重新匯入時不可覆蓋（見 Transfer_ERP_Commit 的 guard）
             $db->exec("ALTER TABLE bom_ing ADD COLUMN manual_seq_override_at DATETIME NULL COMMENT '人工異動戳記：ERP匯入比對用，比這個時間舊的匯入一律略過' AFTER transfer_changed_at");
         } catch (Exception $e) {}
@@ -97,9 +112,18 @@ if (!function_exists('eg_bom_outsource_record_return')) {
      * 找不到未結清流水帳時（例如舊資料在這支庫上線前就已經在跑），自動用 bom_ing.sqty 現場補開一筆，
      * 不會因為「補資料」擋住使用者操作。
      */
-    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid): array {
+    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid, ?string $return_date = null, ?int $batch_id = null): array {
         eg_bom_outsource_ensure_schema($db);
-        $batch = eg_bom_outsource_latest_open_batch($db, $bom_ing_fid);
+        $batch = null;
+        if ($batch_id) {
+            // 分批回廠：明確指定是哪一批（同時有好幾批在外時，不能用「最新一批」猜）
+            $stB = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE batch_id=? AND bom_ing_fid=? AND status='open'");
+            $stB->execute([$batch_id, $bom_ing_fid]);
+            $batch = $stB->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$batch) throw new Exception('找不到指定的未結清批次（可能已被他人結清，請重新整理）');
+        } else {
+            $batch = eg_bom_outsource_latest_open_batch($db, $bom_ing_fid);
+        }
         if (!$batch) {
             $bi = $db->prepare("SELECT sqty, maker_id_no, maker_id, outsource_date FROM bom_ing WHERE bom_ing_fid=?");
             $bi->execute([$bom_ing_fid]);
@@ -114,14 +138,142 @@ if (!function_exists('eg_bom_outsource_record_return')) {
         $closed = ($newReturn + $newScrap) >= (float)$batch['send_qty'];
         $upd = $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, status=?, updated_at=NOW() WHERE batch_id=?");
         $upd->execute([$newReturn, $newScrap, $closed ? 'closed' : 'open', $batch['batch_id']]);
-        if ($closed) {
+        try {
+            $rd = ($return_date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $return_date)) ? $return_date : date('Y-m-d');
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, return_date, created_by, created_at) VALUES (?,?,?,?,?,?,NOW())")
+               ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $rd, is_numeric($uid) ? (int)$uid : null]);
+        } catch (Exception $e) {}
+        // 這一站所有批次都結清才算整站回廠完成（只有一批時等同原本行為）
+        $allClosed = $closed && eg_bom_outsource_all_closed($db, $bom_ing_fid);
+        if ($allClosed) {
             // 結清時鏡射回 bom_ing.return_date，既有甘特圖/KPI 讀 bom_ing 照舊能用
-            try { $db->prepare("UPDATE bom_ing SET return_date=IFNULL(return_date,NOW()) WHERE bom_ing_fid=?")->execute([$bom_ing_fid]); }
-            catch (Exception $e) {}
+            // 使用者可自選回廠日（業務日期）；沒給就用現在。時分秒取當下，只供同日排序。
+            try {
+                if ($return_date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $return_date)) {
+                    $db->prepare("UPDATE bom_ing SET return_date=IFNULL(return_date,CONCAT(?, ' ', CURTIME())) WHERE bom_ing_fid=?")->execute([$return_date, $bom_ing_fid]);
+                } else {
+                    $db->prepare("UPDATE bom_ing SET return_date=IFNULL(return_date,NOW()) WHERE bom_ing_fid=?")->execute([$bom_ing_fid]);
+                }
+            } catch (Exception $e) {}
         }
         return ['batch_id'=>$batch['batch_id'], 'return_qty'=>$newReturn, 'scrap_qty'=>$newScrap,
-                'send_qty'=>(float)$batch['send_qty'], 'closed'=>$closed,
+                'send_qty'=>(float)$batch['send_qty'], 'closed'=>$closed, 'all_closed'=>$allClosed,
                 'remaining_good_qty'=>max(0, (float)$batch['send_qty'] - $newScrap - $newReturn)];
+    }
+}
+
+if (!function_exists('eg_bom_outsource_all_closed')) {
+    /** 這一站是否所有批次都已結清（至少要有一批）。 */
+    function eg_bom_outsource_all_closed(PDO $db, int $bom_ing_fid): bool {
+        $st = $db->prepare("SELECT COUNT(*) total, SUM(status='open') opened FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $st->execute([$bom_ing_fid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC) ?: ['total'=>0,'opened'=>0];
+        return (int)$r['total'] > 0 && (int)$r['opened'] === 0;
+    }
+}
+
+if (!function_exists('eg_bom_outsource_open_batches')) {
+    /** 這一站目前所有未結清批次（分批回廠：回廠時要挑是哪一批）。 */
+    function eg_bom_outsource_open_batches(PDO $db, int $bom_ing_fid): array {
+        eg_bom_outsource_ensure_schema($db);
+        $st = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND status='open' ORDER BY batch_id");
+        $st->execute([$bom_ing_fid]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+}
+
+if (!function_exists('eg_bom_outsource_batch_split')) {
+    /**
+     * 自動拆分：把某一批「還在外面」的數量分一部分給另一家廠商（或同廠商另開一批），
+     * 製程列本身不拆（bom_ing 一列不動），之後可以各自回廠、也可以一起送到下一站。
+     * 還在外面 = send_qty - return_qty - scrap_qty；來源批次的 send_qty 同步扣掉分出去的量，
+     * 兩批合計送出量不變（資料守恆）。沒有任何批次時（舊資料）先用 bom_ing.sqty 補開第一批。
+     */
+    function eg_bom_outsource_batch_split(PDO $db, int $bom_ing_fid, ?int $from_batch_id, float $qty, ?string $maker_no, ?string $maker_name, ?string $send_date, $uid): array {
+        eg_bom_outsource_ensure_schema($db);
+        if ($qty <= 0) throw new Exception('分批數量必須大於 0');
+        $maker_no = trim((string)$maker_no); $maker_name = trim((string)$maker_name);
+        if ($maker_no === '' || $maker_name === '') throw new Exception('請選擇要發給的廠商');
+        if ($send_date !== null && $send_date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $send_date)) throw new Exception('發單日格式不正確');
+        $db->beginTransaction();
+        try {
+            $cnt = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? FOR UPDATE");
+            $cnt->execute([$bom_ing_fid]);
+            if ((int)$cnt->fetchColumn() === 0) {
+                $bi = $db->prepare("SELECT sqty, maker_id_no, maker_id, outsource_date FROM bom_ing WHERE bom_ing_fid=? FOR UPDATE");
+                $bi->execute([$bom_ing_fid]);
+                $row = $bi->fetch(PDO::FETCH_ASSOC);
+                if (!$row) throw new Exception('找不到這個製程');
+                $sd = !empty($row['outsource_date']) ? substr($row['outsource_date'], 0, 10) : date('Y-m-d');
+                eg_bom_outsource_open_batch($db, $bom_ing_fid, $row['maker_id_no'] ?? null, $row['maker_id'] ?? null, (float)$row['sqty'], $sd, null, '（既有資料現場補開）', $uid);
+            }
+            $q = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND status='open' " . ($from_batch_id ? "AND batch_id=?" : "") . " ORDER BY batch_id DESC LIMIT 1 FOR UPDATE");
+            $q->execute($from_batch_id ? [$bom_ing_fid, $from_batch_id] : [$bom_ing_fid]);
+            $src = $q->fetch(PDO::FETCH_ASSOC);
+            if (!$src) throw new Exception('找不到可分批的未結清批次（可能已被他人結清，請重新整理）');
+            $outside = (float)$src['send_qty'] - (float)$src['return_qty'] - (float)$src['scrap_qty'];
+            if ($qty > $outside + 1e-9) throw new Exception('分批數量 ' . $qty . ' 超過這一批還在外面的數量 ' . $outside);
+            $newSend = (float)$src['send_qty'] - $qty;
+            if ($newSend <= 1e-9 && (float)$src['return_qty'] + (float)$src['scrap_qty'] <= 1e-9) {
+                // 整批都分出去、原批次沒有任何回廠紀錄：原批次不留空殼
+                $db->prepare("DELETE FROM bom_ing_outsource_batch WHERE batch_id=?")->execute([$src['batch_id']]);
+            } else {
+                $srcClosed = ((float)$src['return_qty'] + (float)$src['scrap_qty']) >= $newSend - 1e-9;
+                $db->prepare("UPDATE bom_ing_outsource_batch SET send_qty=?, status=?, updated_at=NOW() WHERE batch_id=?")
+                   ->execute([$newSend, $srcClosed ? 'closed' : 'open', $src['batch_id']]);
+            }
+            $sd2 = ($send_date !== null && $send_date !== '') ? $send_date : date('Y-m-d');
+            $newId = eg_bom_outsource_open_batch($db, $bom_ing_fid, $maker_no, $maker_name, $qty, $sd2, null,
+                '分批自批次#' . $src['batch_id'] . '（' . ($src['maker_id'] ?? '') . '）', $uid);
+            $db->commit();
+            return ['new_batch_id'=>$newId, 'from_batch_id'=>(int)$src['batch_id'], 'moved'=>$qty, 'from_remaining_send'=>max(0, $newSend)];
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+    }
+}
+
+if (!function_exists('eg_bom_outsource_batch_map')) {
+    /**
+     * BOM總覽分批顯示用：只回傳「需要顯示批次」的製程（多於一批，或單批但已部分回廠／有報廢未結清）；
+     * 單批整批送、整批回的製程不回傳，畫面維持跟過去完全一樣（不增加雜訊）。
+     * 回傳 [bom_ing_fid => ['send','ret','scrap','outside','batches'=>[…每批含 returns 逐次紀錄…]]]
+     */
+    function eg_bom_outsource_batch_map(PDO $db, array $fids): array {
+        $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
+        if (!$fids) return [];
+        eg_bom_outsource_ensure_schema($db);
+        $in = implode(',', $fids);
+        $rows = $db->query("SELECT * FROM bom_ing_outsource_batch WHERE bom_ing_fid IN ($in) ORDER BY bom_ing_fid, batch_id")->fetchAll(PDO::FETCH_ASSOC);
+        $by = [];
+        foreach ($rows as $r) $by[(int)$r['bom_ing_fid']][] = $r;
+        $need = [];
+        foreach ($by as $fid => $list) {
+            $partial = false;
+            foreach ($list as $b) if ($b['status'] === 'open' && ((float)$b['return_qty'] > 0 || (float)$b['scrap_qty'] > 0)) $partial = true;
+            if (count($list) > 1 || $partial) $need[] = $fid;
+        }
+        if (!$need) return [];
+        $bids = [];
+        foreach ($need as $fid) foreach ($by[$fid] as $b) $bids[] = (int)$b['batch_id'];
+        $logs = [];
+        $lr = $db->query("SELECT batch_id, return_qty, scrap_qty, DATE_FORMAT(return_date,'%Y/%m/%d') d FROM bom_ing_outsource_return WHERE batch_id IN (" . implode(',', $bids) . ") ORDER BY return_id");
+        foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'date'=>$l['d']];
+        $out = [];
+        foreach ($need as $fid) {
+            $send = $ret = $scrap = 0.0; $bl = [];
+            foreach ($by[$fid] as $b) {
+                $s = (float)$b['send_qty']; $rq = (float)$b['return_qty']; $sc = (float)$b['scrap_qty'];
+                $send += $s; $ret += $rq; $scrap += $sc;
+                $bl[] = ['id'=>(int)$b['batch_id'], 'no'=>(string)($b['maker_id_no'] ?? ''), 'maker'=>(string)($b['maker_id'] ?? ''),
+                         'send'=>$s, 'ret'=>$rq, 'scrap'=>$sc, 'outside'=>max(0, $s - $rq - $sc), 'status'=>$b['status'],
+                         'send_date'=>!empty($b['send_date']) ? date('Y/m/d', strtotime($b['send_date'])) : '',
+                         'returns'=>$logs[(int)$b['batch_id']] ?? []];
+            }
+            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'outside'=>max(0, $send - $ret - $scrap), 'batches'=>$bl];
+        }
+        return $out;
     }
 }
 

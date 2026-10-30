@@ -933,6 +933,16 @@ if (!empty($_mkinfo_nos)) {
     } catch (PDOException $e) { error_log('_fetch_data maker_info_map error: ' . $e->getMessage()); }
 }
 
+// ob_batch_map（2026-10-30 分批回廠）：[bom_ing_fid => 各批次明細]，只含「多批或部分回廠」的製程；
+// 獨立於 ing_active_map 之外（那份 map 三處各建一次容易漏欄位），畫面 render 當下即時查。
+$ob_batch_map = [];
+try {
+    require_once __DIR__ . '/../common/bom_outsource_lib.php';
+    $_ob_fids = [];
+    foreach ($ing_active_map as $_ob_procs) foreach ($_ob_procs as $_ob_p) { if (!empty($_ob_p['bom_ing_fid'])) $_ob_fids[] = (int)$_ob_p['bom_ing_fid']; }
+    $ob_batch_map = eg_bom_outsource_batch_map($db, $_ob_fids);
+} catch (Throwable $e) { error_log('ob_batch_map error: ' . $e->getMessage()); $ob_batch_map = []; }
+
 // 類似料號（2026-10-16）：本批製令料號中有 A/B 級類似料號者；失敗就當沒有，不影響其他欄位
 $sim_map = [];
 try {
@@ -951,6 +961,7 @@ echo json_encode([
     'all_process_types' => $all_process_types,
     'transfer_price_map' => $transfer_price_map,
     'ing_active_map' => $ing_active_map ?: (object)[],
+    'ob_batch_map' => $ob_batch_map ?: (object)[],
     'maker_info_map' => $maker_info_map ?: (object)[],
 ]);
 
