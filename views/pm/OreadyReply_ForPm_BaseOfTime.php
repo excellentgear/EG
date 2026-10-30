@@ -11591,7 +11591,7 @@ echo "</script>\n";
             var pWrap=document.createElement('div'); pWrap.style.cssText='position:relative;';
             pWrap.appendChild(pIn); pWrap.appendChild(pdrop); r.appendChild(pWrap);
             var _pi=-1,_pt=null,_plist=[];
-            function _pHL(i){ var it=Array.from(pdrop.querySelectorAll('.pd-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _pi=i; }
+            function _pHL(i){ var it=Array.from(pdrop.querySelectorAll('.pd-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _pi=i; if(it[i]&&it[i].scrollIntoView) it[i].scrollIntoView({block:'nearest'}); }
             // 確定採用某個製程：填入「代號 名稱」、記下代號；move=true 時跳到廠商欄，否則留在原欄並全選（接著打字會整個取代）
             function _commitP(p, move){
                 pIn.value=p.ProcessNo+' '+(p.ProcessName||''); pIn.dataset.pno=String(p.ProcessNo);
@@ -11690,7 +11690,7 @@ echo "</script>\n";
             var mWrap=document.createElement('div'); mWrap.style.cssText='position:relative;';
             mWrap.appendChild(makerIn); mWrap.appendChild(mdrop); r.appendChild(mWrap);
             var _mi=-1,_mt=null;
-            function _mHL(i){ var it=Array.from(mdrop.querySelectorAll('.md-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _mi=i; }
+            function _mHL(i){ var it=Array.from(mdrop.querySelectorAll('.md-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _mi=i; if(it[i]&&it[i].scrollIntoView) it[i].scrollIntoView({block:'nearest'}); }
             makerIn.addEventListener('keydown',function(e){
                 var it=Array.from(mdrop.querySelectorAll('.md-opt'));
                 if(mdrop.style.display!=='none'&&it.length){
@@ -11847,7 +11847,13 @@ echo "</script>\n";
 
         // ── 料號搜尋（含鍵盤上下選擇）────────────────────────────────────────
         var _didTimer=null, _didIdx=-1;
-        function _didHL(i){ var it=Array.from(didDrop.querySelectorAll('.did-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _didIdx=i; }
+        // 完全等於輸入內容（料號／顯示料號／Spec_No，不分大小寫）的排最前面，其餘保持原本順序
+        function _didSorted(list, term){
+            var t=String(term||'').trim().toLowerCase();
+            function exact(d){ return [d.display_id, d.d_id, d.spec_no].some(function(v){ return v!=null && String(v).trim().toLowerCase()===t; }); }
+            return list.map(function(d,i){ return {d:d,i:i,x:exact(d)?0:1}; }).sort(function(a,b){ return (a.x-b.x)||(a.i-b.i); }).map(function(o){ return o.d; });
+        }
+        function _didHL(i){ var it=Array.from(didDrop.querySelectorAll('.did-opt')); it.forEach(function(e,j){ e.style.background=(j===i)?'#d0e4ff':''; }); _didIdx=i; if(it[i]&&it[i].scrollIntoView) it[i].scrollIntoView({block:'nearest'}); }
         inDid.addEventListener('keydown',function(e){
             var it=Array.from(didDrop.querySelectorAll('.did-opt'));
             if(didDrop.style.display!=='none'&&it.length){
@@ -11879,7 +11885,7 @@ echo "</script>\n";
                     if(!resp.success||!resp.d_ids||!resp.d_ids.length){
                         var n=document.createElement('div'); n.style.cssText='padding:8px 10px;color:#999;font-size:12px;'; n.textContent='查無符合料號'; didDrop.appendChild(n); didDrop.style.display='block'; return;
                     }
-                    resp.d_ids.forEach(function(d){
+                    _didSorted(resp.d_ids, term).forEach(function(d){
                         var opt=document.createElement('div'); opt.className='did-opt';
                         opt.style.cssText='padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;';
                         // 顯示: D_Setting_Id（顯示料號）[Spec_No]（客戶名稱）+ 代：Drawing_No（別名）
