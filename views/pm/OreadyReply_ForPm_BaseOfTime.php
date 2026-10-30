@@ -3204,7 +3204,7 @@ echo "</script>\n";
         box.appendChild(bar);
         var head = document.createElement('div');
         head.style.cssText = 'margin-top:1px;white-space:nowrap;';
-        head.textContent = '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
+        head.textContent = (Number(m.unsent) > 0 ? '未發 ' + _obNum(m.unsent) + '・' : '') + '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
         head.title = '分批回廠：已回廠 ' + _obNum(ret) + '，送出 ' + _obNum(send) + '，尚在外 ' + _obNum(out) + '，報廢 ' + _obNum(scrap) + '（點一下展開各批次）';
         box.appendChild(head);
         var list = m.batches || [];
@@ -11060,6 +11060,7 @@ echo "</script>\n";
           + '  <button type="button" id="orm-close" style="background:none;border:none;font-size:1.6rem;cursor:pointer;color:#aaa;line-height:1;">&times;</button>'
           + '</div>'
           + '<div id="orm-status" style="font-size:12px;color:#888;margin-bottom:10px;">載入中…</div>'
+          + '<div id="orm-unsent" style="font-size:12px;color:#b8431f;margin-bottom:10px;display:none;"></div>'
           + '<div id="orm-prev-hint" style="font-size:12px;color:#6B4423;margin-bottom:10px;display:none;"></div>'
           + '<div id="orm-batch-row" style="display:none;margin-bottom:10px;"><label style="font-size:12px;">這次是哪一批回廠？</label><select id="orm-batch" class="form-control"></select></div>'
           + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">本次回廠／報廢（累加）</div>'
@@ -11115,10 +11116,30 @@ echo "</script>\n";
                 if (!el) return;
                 if (!r.success) { el.textContent = '讀取失敗：' + (r.message||''); return; }
                 var ob = r.open_batch;
+                // 分批發單：本站還有量沒發出去
+                var _unsent = (parseFloat(r.stage_qty) || 0) - (parseFloat(r.sent_total) || 0);
+                var _usEl = document.getElementById('orm-unsent');
+                if (_usEl) {
+                    if ((parseFloat(r.sent_total) || 0) > 0 && _unsent > 1e-9) {
+                        _usEl.style.display = '';
+                        _usEl.innerHTML = '本站總量 <b>' + _obNum(r.stage_qty) + '</b>，已發 <b>' + _obNum(r.sent_total) + '</b>，尚有 <b>' + _obNum(_unsent) + '</b> 件未發單。'
+                            + ((Array.isArray(r.open_batches) ? r.open_batches.length : (ob ? 1 : 0)) === 0
+                                ? ' 已發出的批次都已回廠結清；其餘不再發單的話可 <button type="button" class="btn btn-warning btn-xs" id="orm-finish-stage">發單完成（其餘不再發）</button>'
+                                : ' 要發給其他廠商請用「移轉」按鈕填發單數量。');
+                        var _fb = document.getElementById('orm-finish-stage');
+                        if (_fb) _fb.onclick = function () {
+                            if (!confirm('確定這一站其餘 ' + _obNum(_unsent) + ' 件不再發單？\n按下後視為整站回廠完成（轉 QC 待驗）。')) return;
+                            $.post('', { action: 'outsource_finish_stage', bom_ing_fid: proc.bom_ing_fid }, function (rr) {
+                                showTemporaryMessage(rr.message || (rr.success ? '已完成' : '失敗'), !!rr.success);
+                                if (rr.success) { overlay.remove(); if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn); _ormRefreshMain(); }
+                            }, 'json');
+                        };
+                    } else { _usEl.style.display = 'none'; _usEl.innerHTML = ''; }
+                }
                 _ormBatches = Array.isArray(r.open_batches) ? r.open_batches : (ob ? [ob] : []);
                 var _keepSel = (document.getElementById('orm-batch') || {}).value;
                 _ormFillBatchSelect(_keepSel);
-                if (!ob) { el.textContent = '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
+                if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? '本站已發出的批次都已回廠結清。' : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
                     el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty
                                   + '</b>　狀態 <b>' + (ob.status === 'closed' ? '已結清' : '未結清') + '</b>　剩餘良品數量預估 <b>' + r.remaining_good_qty + '</b>';
@@ -12377,6 +12398,13 @@ echo "</script>\n";
                                 <datalist id="maker-name-list-${proc.bom_ing_fid}"></datalist>
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label class="control-label col-sm-3">發單數量：</label>
+                            <div class="col-sm-5">
+                                <input type="number" min="0" class="form-control" id="transfer-qty-${proc.bom_ing_fid}" placeholder="留空＝整站一起發">
+                                <div id="transfer-qty-hint-${proc.bom_ing_fid}" style="font-size:11px;color:#8a6a45;margin-top:3px;line-height:1.35;"></div>
+                            </div>
+                        </div>
                     </form>
                   </div>
                   <div class="modal-footer">
@@ -12638,6 +12666,20 @@ echo "</script>\n";
             });
         });
 
+        // 分批發單：視窗開啟時顯示「本站總量／已發／上一關可領」，讓使用者知道這次最多能發多少
+        $(formContainer).on('show.bs.modal', '[id^="transferProcessModal_"]', function () {
+            var fid = String(this.id).replace('transferProcessModal_', '');
+            var $hint = $('#transfer-qty-hint-' + fid);
+            $hint.text('載入可領量…');
+            $.post(_phpSelf, { action: 'get_send_avail', bom_ing_fid: fid }, function (r) {
+                if (!r || !r.success) { $hint.text(''); return; }
+                var txt = '本站總量 ' + _obNum(r.stage_qty) + '，已發 ' + _obNum(r.sent);
+                if (r.prev_source !== 'fallback') txt += '；上一關目前可領 ' + _obNum(r.prev_qty) + ' 件（' + r.prev_label + '）';
+                txt += '。留空＝整站一起發；填數量＝只發這一批，其餘之後再發給其他廠商。';
+                $hint.text(txt);
+            }, 'json').fail(function () { $hint.text(''); });
+        });
+
         // Event delegation for the "Confirm Transfer" button
         $(formContainer).on('click', '[id^="confirm-transfer-"]', function() {
             const $button = $(this);
@@ -12646,6 +12688,7 @@ echo "</script>\n";
             const transferDate = $('#transfer-date-' + fid).val();
             const makerNo = $('#transfer-maker-no-' + fid).val().trim();
             const makerName = $('#transfer-maker-name-' + fid).val().trim();
+            const sendQtyVal = ($('#transfer-qty-' + fid).val() || '').trim();
 
             // Validation
             if (!transferDate) {
@@ -12667,13 +12710,23 @@ echo "</script>\n";
                     bom_ing_fid: fid,
                     transfer_date: transferDate,
                     maker_no: makerNo,
-                    maker_name: makerName
+                    maker_name: makerName,
+                    send_qty: sendQtyVal
                 },
                 dataType: 'json',
                 success: function(response) {
                     if (response.success) {
                         showTemporaryMessage(response.message, true);
                         $('#transferProcessModal_' + fid).modal('hide');
+                        if (sendQtyVal !== '') {
+                            // 分批發單：只發一部分，不能用「整站換成這家廠商」的樂觀更新，直接重抓
+                            $('#transfer-qty-' + fid).val('');
+                            isSelectFocused = false; isTextareaFocused = false;
+                            isUpdatingOrderId = false; isPriorityUpdating = false;
+                            fetchDataAndFilter();
+                            if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                            return;
+                        }
                         var _newDateFmt = transferDate.replace(/-/g, '/');
                         if (Array.isArray(fullDataset)) {
                             fullDataset.forEach(function(item) {

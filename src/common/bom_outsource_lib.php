@@ -144,7 +144,10 @@ if (!function_exists('eg_bom_outsource_record_return')) {
                ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $rd, is_numeric($uid) ? (int)$uid : null]);
         } catch (Exception $e) {}
         // 這一站所有批次都結清才算整站回廠完成（只有一批時等同原本行為）
-        $allClosed = $closed && eg_bom_outsource_all_closed($db, $bom_ing_fid);
+        $allBatchesClosed = $closed && eg_bom_outsource_all_closed($db, $bom_ing_fid);
+        $fullySent = eg_bom_outsource_fully_sent($db, $bom_ing_fid);
+        // 整站回廠完成 = 全部批次結清 且 已全部發出；分批發單還有量沒發出去時不自動轉狀態（要使用者按「發單完成」）
+        $allClosed = $allBatchesClosed && $fullySent;
         if ($allClosed) {
             // 結清時鏡射回 bom_ing.return_date，既有甘特圖/KPI 讀 bom_ing 照舊能用
             // 使用者可自選回廠日（業務日期）；沒給就用現在。時分秒取當下，只供同日排序。
@@ -157,7 +160,7 @@ if (!function_exists('eg_bom_outsource_record_return')) {
             } catch (Exception $e) {}
         }
         return ['batch_id'=>$batch['batch_id'], 'return_qty'=>$newReturn, 'scrap_qty'=>$newScrap,
-                'send_qty'=>(float)$batch['send_qty'], 'closed'=>$closed, 'all_closed'=>$allClosed,
+                'send_qty'=>(float)$batch['send_qty'], 'closed'=>$closed, 'all_closed'=>$allClosed, 'batches_closed'=>$allBatchesClosed, 'fully_sent'=>$fullySent,
                 'remaining_good_qty'=>max(0, (float)$batch['send_qty'] - $newScrap - $newReturn)];
     }
 }
@@ -169,6 +172,17 @@ if (!function_exists('eg_bom_outsource_all_closed')) {
         $st->execute([$bom_ing_fid]);
         $r = $st->fetch(PDO::FETCH_ASSOC) ?: ['total'=>0,'opened'=>0];
         return (int)$r['total'] > 0 && (int)$r['opened'] === 0;
+    }
+}
+
+if (!function_exists('eg_bom_outsource_fully_sent')) {
+    /** 這一站是否已把 sqty 全部發出去（分批發單時，還有沒發的量就不能算整站回廠完成）。沒有批次視為已全發（舊資料）。 */
+    function eg_bom_outsource_fully_sent(PDO $db, int $bom_ing_fid): bool {
+        $st = $db->prepare("SELECT (SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f) s, (SELECT sqty FROM bom_ing WHERE bom_ing_fid=:f2) q, (SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f3) n");
+        $st->execute([':f' => $bom_ing_fid, ':f2' => $bom_ing_fid, ':f3' => $bom_ing_fid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r || (int)$r['n'] === 0) return true;
+        return (float)$r['s'] >= (float)$r['q'] - 1e-9;
     }
 }
 
@@ -254,6 +268,14 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
             foreach ($list as $b) if ($b['status'] === 'open' && ((float)$b['return_qty'] > 0 || (float)$b['scrap_qty'] > 0)) $partial = true;
             if (count($list) > 1 || $partial) $need[] = $fid;
         }
+        $sq = [];
+        foreach ($db->query("SELECT bom_ing_fid, sqty FROM bom_ing WHERE bom_ing_fid IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $x) $sq[(int)$x['bom_ing_fid']] = (float)$x['sqty'];
+        // 單批、整批在外、但這批只發了一部分（分批發單的第一批）也要顯示「已發 N／共 M」
+        foreach ($by as $fid => $list) {
+            if (in_array($fid, $need, true)) continue;
+            $sumSend = 0.0; foreach ($list as $b) $sumSend += (float)$b['send_qty'];
+            if (isset($sq[$fid]) && $sumSend < $sq[$fid] - 1e-9) $need[] = $fid;
+        }
         if (!$need) return [];
         $bids = [];
         foreach ($need as $fid) foreach ($by[$fid] as $b) $bids[] = (int)$b['batch_id'];
@@ -271,7 +293,8 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                          'send_date'=>!empty($b['send_date']) ? date('Y/m/d', strtotime($b['send_date'])) : '',
                          'returns'=>$logs[(int)$b['batch_id']] ?? []];
             }
-            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'outside'=>max(0, $send - $ret - $scrap), 'batches'=>$bl];
+            $total = $sq[$fid] ?? $send;
+            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'outside'=>max(0, $send - $ret - $scrap), 'total'=>$total, 'unsent'=>max(0, $total - $send), 'batches'=>$bl];
         }
         return $out;
     }

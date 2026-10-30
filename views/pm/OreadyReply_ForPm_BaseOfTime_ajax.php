@@ -410,6 +410,49 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
     $user_id = $_SESSION['id'] ?? 'system_transfer';
     session_write_close();
 
+    // ── 分批發單（2026-10-30）：可選的「發單數量」。留空＝照舊（整站一起發，完全不動流水帳）；
+    //    有填：不可超過「上一關可領量」與「本站尚未發出的量」，記成流水帳的一批（第二批起不重設製程列的廠商／日期）。
+    $sendQtyRaw = isset($_POST['send_qty']) ? trim((string)$_POST['send_qty']) : '';
+    if ($sendQtyRaw !== '') {
+        try {
+            require_once '../../src/common/bom_outsource_lib.php';
+            $sendQty = (float)$sendQtyRaw;
+            if ($sendQty <= 0) { $response['message'] = '發單數量必須大於 0（要整站一起發請留空）'; echo json_encode($response); exit; }
+            eg_bom_outsource_ensure_schema($db);   // 建表（DDL）一定要在交易之前，交易中呼叫會隱式 commit 導致後面 commit 丟 no active transaction
+            $db->beginTransaction();
+            $tr = $db->prepare("SELECT bi.bom, bi.bom_sn, bi.sqty, bi.processing_state FROM bom_ing bi WHERE bi.bom_ing_fid = ? FOR UPDATE");
+            $tr->execute([(int)$bom_ing_fid]);
+            $trow = $tr->fetch(PDO::FETCH_ASSOC);
+            if (!$trow) throw new Exception('找不到這個製程');
+            if (!in_array($trow['processing_state'], ['N', 'ing'], true)) throw new Exception('這一站目前不是「待發單／加工中」（狀態 ' . $trow['processing_state'] . '），無法分批發單，請重新整理');
+            $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?");
+            $sentSt->execute([(int)$bom_ing_fid]);
+            $sent = (float)$sentSt->fetchColumn();
+            $stageQty = (float)$trow['sqty'];
+            if ($sent + $sendQty > $stageQty + 1e-9) throw new Exception('本站總量 ' . $stageQty . '，已發 ' . $sent . '，這次最多只能再發 ' . max(0, $stageQty - $sent));
+            $prev = eg_bom_outsource_prev_station_qty($db, (string)$trow['bom'], (int)$trow['bom_sn']);
+            if (($prev['source'] ?? 'fallback') !== 'fallback' && $sent + $sendQty > (float)$prev['qty'] + 1e-9) {
+                throw new Exception('上一關目前只有 ' . $prev['qty'] . ' 件良品可領（' . $prev['label'] . '），本站已發 ' . $sent . '，這次最多只能再發 ' . max(0, (float)$prev['qty'] - $sent));
+            }
+            $appending = ($trow['processing_state'] === 'ing' && $sent > 0);
+            if (!$appending) {
+                $db->prepare("UPDATE bom_ing SET processing_state = IF(qc_completed = 1 OR EXISTS(SELECT 1 FROM qc_check WHERE bom_ing_fid_ref = bom_ing.bom_ing_fid LIMIT 1), processing_state, 'ing'),
+                                 outsource_date = ?, maker_id_no = ?, maker_id = ?, Modified_At = NOW(), Modified_By = ? WHERE bom_ing_fid = ?")
+                   ->execute([$transfer_datetime, $maker_no, $maker_name, $user_id, (int)$bom_ing_fid]);
+            }
+            eg_bom_outsource_open_batch($db, (int)$bom_ing_fid, $maker_no, $maker_name, $sendQty, $_POST['transfer_date'], null,
+                $appending ? '分批發單（追加批次）' : '分批發單（第一批）', is_numeric($user_id) ? (int)$user_id : null);
+            $db->commit();
+            $response['success'] = true;
+            $response['message'] = $appending ? ('已追加一批：' . $sendQty . ' 件發給 ' . $maker_name) : ('製程已移轉，第一批 ' . $sendQty . ' 件發給 ' . $maker_name . '（尚有 ' . max(0, $stageQty - $sendQty) . ' 件未發）');
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $response['message'] = $e->getMessage();
+        }
+        echo json_encode($response);
+        exit;
+    }
+
     try {
         $sql = "UPDATE bom_ing
                 SET processing_state = IF(
@@ -2317,7 +2360,12 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
             $b['outside'] = max(0, (float)$b['send_qty'] - (float)$b['return_qty'] - (float)$b['scrap_qty']);
             $openList[] = $b;
         }
+        $sentTot = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $sentTot->execute([$fid]);
+        $stQty = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=?");
+        $stQty->execute([$fid]);
         echo json_encode(['success'=>true, 'open_batch'=>$open, 'open_batches'=>$openList,
+                          'sent_total'=>(float)$sentTot->fetchColumn(), 'stage_qty'=>(float)$stQty->fetchColumn(),
                           'remaining_good_qty'=>eg_bom_outsource_remaining_good_qty($db, $fid),
                           'prev_qty'=>$prev['qty'], 'prev_source'=>$prev['source'], 'prev_label'=>$prev['label']]);
     } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -2390,6 +2438,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢 '.($returnQty+$scrapQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'）']); exit;
                 }
             }
+            if (!$chkB) {
+                $nB = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+                $nB->execute([$fid]);
+                if ((int)$nB->fetchColumn() > 0 && !eg_bom_outsource_fully_sent($db, $fid)) {
+                    echo json_encode(['success'=>false,'message'=>'這一站已發出的批次都已回廠結清，但還有量未發單：請先到下一次「移轉」追加批次，或按「發單完成（其餘不再發）」']); exit;
+                }
+            }
             $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null);
             $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
             if ($r['closed']) $msg .= !empty($r['all_closed']) ? '，此批已結清。' : '，此批已結清（這一站還有其他批次在外）。';
@@ -2433,6 +2488,65 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
         } catch (Throwable $e) { /* 自動開單失敗不影響回廠記錄本身已經成功 */ }
         echo json_encode($resp);
     } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 發單視窗用：這一站可發多少（上一關可領量、本站已發量、本站總量）——純讀取 ──
+else if (isset($_POST['action']) && $_POST['action'] === 'get_send_avail') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    try {
+        $st = $db->prepare("SELECT bom, bom_sn, sqty, processing_state FROM bom_ing WHERE bom_ing_fid=?");
+        $st->execute([$fid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) { echo json_encode(['success'=>false,'message'=>'找不到製程']); exit; }
+        $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $sentSt->execute([$fid]);
+        $prev = eg_bom_outsource_prev_station_qty($db, (string)$r['bom'], (int)$r['bom_sn']);
+        echo json_encode(['success'=>true, 'stage_qty'=>(float)$r['sqty'], 'sent'=>(float)$sentSt->fetchColumn(), 'state'=>$r['processing_state'],
+                          'prev_qty'=>(float)$prev['qty'], 'prev_source'=>$prev['source'], 'prev_label'=>$prev['label']]);
+    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 分批發單「發單完成」：這一站全部批次都已回廠結清、但沒有把 sqty 全部發完（其餘不再發單）時，
+//    由使用者明確按下，才視為整站回廠完成（轉 QC待驗／免驗直接待移轉）。不自動判斷，避免誤轉。──
+else if (isset($_POST['action']) && $_POST['action'] === 'outsource_finish_stage') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    try {
+        $feats = rf_load_user_features($db, $uid);
+        if (!rf_has_feature($feats, 'oready_mark_returned') && !rf_has_feature($feats, 'oready_transfer')) { echo json_encode(['success'=>false,'message'=>'沒有操作權限']); exit; }
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>'權限檢查失敗']); exit; }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    try {
+        $db->beginTransaction();
+        $st = $db->prepare("SELECT bi.processing_state, bi.sqty, bi.maker_id_no, pn.is_exclude_qc FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom_ing_fid=? FOR UPDATE");
+        $st->execute([$fid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) throw new Exception('找不到製程');
+        if ($row['processing_state'] !== 'ing') throw new Exception('這一站目前不是加工中，無需操作（請重新整理）');
+        if (!eg_bom_outsource_all_closed($db, $fid)) throw new Exception('還有批次尚未回廠結清，無法視為完成');
+        $newSt = !empty($row['is_exclude_qc']) ? 'P' : 'Q';
+        $db->prepare("UPDATE bom_ing SET processing_state=?, return_date=IFNULL(return_date,NOW()), Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=? AND processing_state='ing'")->execute([$newSt, $uid, $fid]);
+        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, related_bom_ing_fid, event_type, affected_qty, target_maker_id, event_note, Created_By) VALUES (?, NULL, 'return', ?, ?, ?, ?)")
+           ->execute([$fid, $row['sqty'], $row['maker_id_no'], '分批發單：已發出的批次全部回廠結清，使用者確認其餘不再發單，狀態 → ' . $newSt, (string)$uid]);
+        $db->commit();
+        echo json_encode(['success'=>true, 'message'=>'已視為這一站回廠完成（狀態 ' . $newSt . '）', 'new_status'=>$newSt]);
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
 }
 
