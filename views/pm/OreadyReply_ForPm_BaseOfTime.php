@@ -11175,7 +11175,10 @@ echo "</script>\n";
           + '</div>'
           + '<div style="margin-bottom:10px;"><label style="font-size:12px;">回廠日</label><input type="date" id="orm-return-date" class="form-control" style="max-width:200px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
           + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
+          + '<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">'
+          + '<button type="button" class="btn btn-success btn-sm" id="orm-all-return" style="display:none;" title="把這一批還在外面的數量全部記為回廠">全數回廠</button>'
           + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
+          + '</div>'
           + '<div id="orm-nc-result" style="margin-top:8px;"></div>'
           + fixSectionHtml;
         overlay.appendChild(box);
@@ -11184,6 +11187,37 @@ echo "</script>\n";
 
         var _ormOpenBatch = null;   // 目前選定的未結清批次（送出前檢查數量上限用）
         var _ormBatches = [];       // 這一站全部未結清批次（分批回廠）
+        // 回廠視窗頂端的數量卡片：左對齊、數字放大、不顯示多餘的小數點後 0；多批時顯示目前選定那一批
+        function _ormRenderStatus() {
+            var el = document.getElementById('orm-status'), b = _ormOpenBatch;
+            if (!el || !b) return;
+            var send = Number(b.send_qty) || 0, ret = Number(b.return_qty) || 0, scr = Number(b.scrap_qty) || 0, wd = Number(b.withdrawn_qty) || 0;
+            var out = Math.max(0, send - ret - scr - wd);
+            function chip(label, val, hot) {
+                return '<div style="background:' + (hot ? '#FDE6C8' : '#FFF8EE') + ';border:1px solid ' + (hot ? '#F0A24B' : '#E4D3BC') + ';border-radius:6px;padding:3px 9px;text-align:left;min-width:0;">'
+                    + '<div style="font-size:11px;color:#8a6a45;line-height:1.2;">' + label + '</div>'
+                    + '<div style="font-size:20px;font-weight:bold;color:#6B4423;line-height:1.25;">' + val + '</div></div>';
+            }
+            el.style.cssText = 'margin-bottom:10px;';
+            el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(b.maker_id) + '</b></div>' : '')
+                + '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;">'
+                + chip('送出', _obNum(send)) + chip('已回廠', _obNum(ret)) + chip('已報廢', _obNum(scr)) + chip('已取回', _obNum(wd))
+                + chip('還在外', _obNum(out), true) + chip('狀態', '<span style="font-size:14px;line-height:1.7;">' + (b.status === 'closed' ? '已結清' : '未結清') + '</span>') + '</div>';
+            var allBtn = document.getElementById('orm-all-return');
+            if (allBtn) { allBtn.style.display = out > 0 ? '' : 'none'; allBtn.textContent = '全數回廠（' + _obNum(out) + '）'; }
+        }
+        // 「直接修正報廢總數」與「本次回廠／報廢（累加）」是兩種互斥的操作：累加欄有改動或填寫時，修正區反灰不可用，
+        // 避免同一次操作又累加又覆蓋；欄位回到原本的預設值（回廠量＝自動帶入值、其餘為 0）才恢復。
+        var _ormInitRq = '0';
+        function _ormSyncFix() {
+            var fixInp = document.getElementById('orm-scrap-fix'), fixBtn = document.getElementById('orm-submit-fix');
+            if (!fixInp) return;
+            var rq = document.getElementById('orm-return-qty').value, sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0, wq = parseFloat(document.getElementById('orm-withdraw-qty').value) || 0;
+            var dirty = (sq > 0) || (wq > 0) || (String(rq) !== String(_ormInitRq));
+            fixInp.disabled = dirty; if (fixBtn) fixBtn.disabled = dirty;
+            var row = fixInp.parentNode && fixInp.parentNode.parentNode, ttl = row && row.previousElementSibling;
+            [row, ttl].forEach(function (e) { if (e) { e.style.opacity = dirty ? '0.45' : ''; e.title = dirty ? '上方「本次回廠／報廢（累加）」已有填寫，需先還原才能直接修正報廢總數' : ''; } });
+        }
         function _ormPickBatch() {
             var sel = document.getElementById('orm-batch');
             var id = sel && sel.value ? parseInt(sel.value, 10) : 0;
@@ -11199,7 +11233,7 @@ echo "</script>\n";
             }).join('');
             if (prefer) sel.value = String(prefer);
             row.style.display = '';
-            sel.onchange = function () { _ormPickBatch(); };
+            sel.onchange = function () { _ormPickBatch(); _ormRenderStatus(); };
             _ormPickBatch();
         }
         function _refreshStatus() {
@@ -11233,8 +11267,7 @@ echo "</script>\n";
                 _ormFillBatchSelect(_keepSel);
                 if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? '本站已發出的批次都已回廠結清。' : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
-                    el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty + '</b>　已取回 <b>' + (ob.withdrawn_qty || 0)
-                                  + '</b>　狀態 <b>' + (ob.status === 'closed' ? '已結清' : '未結清') + '</b>　剩餘良品數量預估 <b>' + r.remaining_good_qty + '</b>';
+                    _ormRenderStatus();
                     var fixInp = document.getElementById('orm-scrap-fix');
                     if (fixInp && fixInp.value === '') fixInp.placeholder = '目前 ' + ob.scrap_qty;
                 }
@@ -11244,11 +11277,26 @@ echo "</script>\n";
                 var hintEl = document.getElementById('orm-prev-hint');
                 if (qtyInp && qtyInp.value === '0' && r.prev_qty != null) {
                     qtyInp.value = r.prev_qty;
+                    _ormInitRq = String(qtyInp.value); _ormSyncFix();
                     if (hintEl) { hintEl.style.display = ''; hintEl.innerHTML = '<i class="fa fa-info-circle"></i> 已自動帶入 ' + r.prev_qty + ' 件（' + escapeHtml(r.prev_label||'') + '），可自行修改。'; }
                 }
             }, 'json');
         }
         _refreshStatus();
+
+        ['orm-return-qty', 'orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormSyncFix); });
+        document.getElementById('orm-all-return').onclick = function () {
+            var b = _ormOpenBatch;
+            if (!b) { showTemporaryMessage('目前沒有還在外面的批次', false); return; }
+            var out = Math.max(0, (Number(b.send_qty) || 0) - (Number(b.return_qty) || 0) - (Number(b.scrap_qty) || 0) - (Number(b.withdrawn_qty) || 0));
+            if (out <= 0) { showTemporaryMessage('這一批已沒有還在外面的數量', false); return; }
+            if (!confirm('把「' + (b.maker_id || '這批') + '」還在外面的 ' + _obNum(out) + ' 件全部記為回廠？\n（回廠日：' + (document.getElementById('orm-return-date').value || _ormToday()) + '）')) return;
+            document.getElementById('orm-return-qty').value = out;
+            document.getElementById('orm-scrap-qty').value = 0;
+            document.getElementById('orm-withdraw-qty').value = 0;
+            _ormSyncFix();
+            document.getElementById('orm-submit-add').click();
+        };
 
         document.getElementById('orm-submit-add').onclick = function(){
             var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
