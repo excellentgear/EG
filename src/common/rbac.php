@@ -15,6 +15,20 @@
 //     讓最初的管理者能進入頁面設定角色。一旦有人被指派管理員，未指派者即無權限。
 //   - 資料表不存在/查詢失敗時，回傳全權，避免鎖死。
 
+/** 本頁管理員（ai-rules/26）：持有 qc_page_admin 者視同擁有品管檢驗全部 QC 功能碼，但不等於全站 'all' */
+if (!function_exists('rbac_expand_page_admin')) {
+    function rbac_expand_page_admin(array $f): array {
+        if (in_array('qc_page_admin', $f, true)) {
+            $f = array_values(array_unique(array_merge($f, [
+                'qc_fill_inspection','qc_edit_history','qc_manage_settings','qc_manage_sampling',
+                'qc_view_readonly','qa_disposition_reply','qc_supervisor',
+                'qc_print_approve_setting','qc_backfill_data'
+            ])));
+        }
+        return $f;
+    }
+}
+
 if (!function_exists('rbac_user_features')) {
     function rbac_user_features(PDO $pdo, int $uid): array {
         try {
@@ -31,7 +45,7 @@ if (!function_exists('rbac_user_features')) {
                     JOIN role_features rf ON rf.role_id = ur.role_id
                     WHERE ur.user_id = ?");
                 $stmt->execute([$uid]);
-                return $stmt->fetchAll(PDO::FETCH_COLUMN);
+                return rbac_expand_page_admin($stmt->fetchAll(PDO::FETCH_COLUMN));
             }
 
             // 未指派任何角色 → bootstrap：系統尚無管理員則暫時全權，否則無權限

@@ -80,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     $uid   = trim($_SESSION['id'] ?? $_SESSION['user_id'] ?? '');
     $feats = rbac_user_features($pdo, (int)$uid);
     $hasF  = function ($c) use ($feats) { return in_array('all', $feats, true) || in_array($c, $feats, true); };
-    $isAdmin = in_array('all', $feats, true);
+    $isAdmin = in_array('all', $feats, true) || in_array('qc_page_admin', $feats, true); // 本頁管理員（ai-rules/26）
     $act = $_POST['v2action'];
 
     // 版本／表單型態：與舊頁同邏輯（此處為 v2 專用副本，避免 include 舊頁觸發它的 API 分支）
@@ -104,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
                   'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
                   'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship', 'backfill_save',
-                  'insp_no_cfg_save'];
+                  'insp_no_cfg_save', 'face_cfg_save'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -219,6 +219,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             exit;
         }
 
+        // ---- 多面分段檢驗（首件）：哪些製程大類可以分 A/B/C/D 面多次檢驗 ----
+        if ($act === 'face_cfg_get') {
+            $rows = $pdo->query("SELECT process_type_id, process_type, COALESCE(multi_face_inspect,0) AS on_flag
+                                   FROM process_type WHERE COALESCE(is_active,1)=1 ORDER BY sort_order ASC, process_type_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'face_cfg_save') {
+            if (!$isAdmin && !$hasF('qc_manage_settings')) throw new Exception('您沒有「管理檢驗設定」權限，請洽管理員於 設定 → 權限設定開通');
+            $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+            if (!is_array($ids)) $ids = [];
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            $pdo->beginTransaction();
+            $pdo->exec("UPDATE process_type SET multi_face_inspect=0");
+            if ($ids) {
+                $ph = implode(',', array_fill(0, count($ids), '?'));
+                $pdo->prepare("UPDATE process_type SET multi_face_inspect=1 WHERE process_type_id IN ($ph)")->execute($ids);
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => count($ids)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         // ---- ① 工程符號主檔 ----
         if ($act === 'sym_list') {
             $rows = $pdo->query("SELECT sym_id, symbol, label, sort_order FROM qc_symbol WHERE is_active=1 ORDER BY sort_order ASC, sym_id ASC")->fetchAll(PDO::FETCH_ASSOC);
@@ -266,10 +289,118 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         }
 
         // ---- ③ 無 BOM／無製程的臨時檢驗單 ----
+        // 臨時檢驗單專用：料號即時搜尋（客戶簡稱／料號／規格／版別，多關鍵字皆須命中）
+        if ($act === 'part_search_rich') {
+            $words = preg_split('/\s+/u', trim($_POST['keyword'] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+            if (!$words) { echo json_encode(['success' => true, 'rows' => []]); exit; }
+            $w = []; $p = [];
+            foreach (array_slice($words, 0, 5) as $k) {
+                $w[] = "CONCAT_WS(' ', d.D_Setting_Id, d.Spec_No, d.Revision, c.customer) LIKE ?";
+                $p[] = '%' . $k . '%';
+            }
+            $s = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Revision, c.customer AS client
+                 FROM d_setting d LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                 WHERE " . implode(' AND ', $w) . " ORDER BY d.D_Setting_Id ASC LIMIT 30");
+            $s->execute($p);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 製程代號搜尋（中文名稱或 ID）
+        if ($act === 'proc_search') {
+            $kw = trim($_POST['keyword'] ?? '');
+            if ($kw === '') { echo json_encode(['success' => true, 'rows' => []]); exit; }
+            $s = $pdo->prepare("SELECT ProcessNo, ProcessName FROM process_no
+                 WHERE ProcessName LIKE ? OR CAST(ProcessNo AS CHAR) LIKE ? ORDER BY ProcessNo ASC LIMIT 30");
+            $s->execute(['%' . $kw . '%', $kw . '%']);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 廠商搜尋（ID 或名稱）
+        if ($act === 'maker_search') {
+            $kw = trim($_POST['keyword'] ?? '');
+            if ($kw === '') { echo json_encode(['success' => true, 'rows' => []]); exit; }
+            $s = $pdo->prepare("SELECT maker_id_no, maker_id, maker_id_all FROM maker_list
+                 WHERE (status IS NULL OR status <> 'X')
+                   AND (maker_id LIKE ? OR maker_id_all LIKE ? OR maker_id_no LIKE ?) ORDER BY maker_id ASC LIMIT 30");
+            $like = '%' . $kw . '%';
+            $s->execute([$like, $like, $like]);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
         if ($act === 'part_search') {
             $kw = trim($_POST['keyword'] ?? '');
             $s  = $pdo->prepare("SELECT d_id, D_Setting_Id, Revision FROM d_setting WHERE D_Setting_Id LIKE ? ORDER BY D_Setting_Id ASC LIMIT 30");
             $s->execute(['%' . $kw . '%']);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 臨時檢驗單開啟時取料號／客戶／製程／廠商（get_history_record 不含這些）
+        if ($act === 'adhoc_info') {
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $s = $pdo->prepare("SELECT f.d_id, f.adhoc_proc_nos, f.adhoc_maker_id, d.D_Setting_Id, d.Revision, d.Spec_No, c.customer,
+                        m.maker_id, m.maker_id_all
+                 FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id=f.d_id
+                 LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                 LEFT JOIN maker_list m ON m.maker_id_no=f.adhoc_maker_id
+                 WHERE f.qc_form_id=? AND f.bom_ing_fid=0");
+            $s->execute([$qid]);
+            $r = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new Exception('查無此臨時檢驗單');
+            $procs = [];
+            $ids = array_values(array_filter(array_map('intval', explode(',', (string)$r['adhoc_proc_nos']))));
+            if ($ids) {
+                $q = $pdo->prepare("SELECT ProcessNo, ProcessName FROM process_no WHERE ProcessNo IN (" . implode(',', array_fill(0, count($ids), '?')) . ") ORDER BY ProcessNo");
+                $q->execute($ids);
+                $procs = $q->fetchAll(PDO::FETCH_ASSOC);
+            }
+            echo json_encode(['success' => true, 'info' => [
+                'd_id' => (int)$r['d_id'], 'part_no' => $r['D_Setting_Id'], 'revision' => $r['Revision'], 'spec' => $r['Spec_No'],
+                'client' => $r['customer'], 'procs' => $procs, 'maker' => $r['maker_id'] ?: $r['maker_id_all'],
+            ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 臨時檢驗單的製程／廠商顯示字串（一次查多張）：[qid => ['procs'=>'齒研(12)、…','maker'=>'名稱']]
+        $v2AdhocMeta = function ($pdo, array $qids) {
+            $out = [];
+            $qids = array_values(array_unique(array_filter(array_map('intval', $qids))));
+            if (!$qids) return $out;
+            $in = implode(',', array_fill(0, count($qids), '?'));
+            $q = $pdo->prepare("SELECT f.qc_form_id, f.adhoc_proc_nos, COALESCE(NULLIF(m.maker_id,''), m.maker_id_all) AS maker
+                 FROM qc_check_form f LEFT JOIN maker_list m ON m.maker_id_no = f.adhoc_maker_id
+                 WHERE f.qc_form_id IN ($in)");
+            $q->execute($qids);
+            $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+            $pn = [];
+            foreach ($rows as $r) foreach (explode(',', (string)$r['adhoc_proc_nos']) as $x) if ((int)$x) $pn[(int)$x] = '';
+            if ($pn) {
+                $k = array_keys($pn);
+                $q = $pdo->prepare("SELECT ProcessNo, ProcessName FROM process_no WHERE ProcessNo IN (" . implode(',', array_fill(0, count($k), '?')) . ")");
+                $q->execute($k);
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $pn[(int)$r['ProcessNo']] = $r['ProcessName'];
+            }
+            foreach ($rows as $r) {
+                $names = [];
+                foreach (explode(',', (string)$r['adhoc_proc_nos']) as $x) if ((int)$x) $names[] = ($pn[(int)$x] ?? '') !== '' ? $pn[(int)$x] : (string)(int)$x;
+                $out[(int)$r['qc_form_id']] = ['procs' => implode('、', $names), 'maker' => (string)$r['maker']];
+            }
+            return $out;
+        };
+        if ($act === 'hist_adhoc_meta') {
+            $ids = json_decode($_POST['ids'] ?? '[]', true);
+            echo json_encode(['success' => true, 'meta' => $v2AdhocMeta($pdo, is_array($ids) ? $ids : [])], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'bom_recent_list') {
+            $s = $pdo->query(
+                "SELECT f.qc_form_id, f.insp_no, f.bom_ing_fid, bi.maker_id AS maker, f.process_name, f.check_result, f.ng_qty, f.created_at,
+                        COALESCE(NULLIF(u.user_cname,''), u.user_uname, f.created_by) AS created_by, d.D_Setting_Id AS part_no, bi.bom,
+                        f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name
+                 FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
+                 LEFT JOIN user le ON le.id = f.last_edited_by
+                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
+                 LEFT JOIN user u ON u.id = COALESCE(f.inspector_by, f.created_by)
+                 WHERE f.bom_ing_fid > 0 AND f.status <> 'DRAFT'
+                 ORDER BY f.qc_form_id DESC LIMIT 10");
             echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -278,11 +409,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             // 排除在外避免混進這份清單造成混淆（bom_ing_fid=0 只是兩者共用的技術實作，不是同一件事）
             $s = $pdo->query(
                 "SELECT f.qc_form_id, f.d_id, f.process_name, f.incoming_qty, f.sample_qty, f.ng_qty,
-                        f.check_result, f.created_at, f.created_by, d.D_Setting_Id AS part_no
+                        f.check_result, f.created_at, COALESCE(NULLIF(u.user_cname,''), u.user_uname, f.created_by) AS created_by, d.D_Setting_Id AS part_no,
+                        f.last_edited_at AS edited_at, COALESCE(NULLIF(le.user_cname,''), le.user_uname) AS edited_name
                  FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
+                 LEFT JOIN user le ON le.id = f.last_edited_by
+                 LEFT JOIN user u ON u.id = COALESCE(f.inspector_by, f.created_by)
                  WHERE f.bom_ing_fid = 0 AND f.status <> 'DRAFT' AND f.insp_kind <> 'SHIP'
-                 ORDER BY f.qc_form_id DESC LIMIT 50");
-            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+                 ORDER BY f.qc_form_id DESC LIMIT 10");
+            $rows = $s->fetchAll(PDO::FETCH_ASSOC);
+            $meta = $v2AdhocMeta($pdo, array_column($rows, 'qc_form_id'));
+            foreach ($rows as &$r) { $m = $meta[(int)$r['qc_form_id']] ?? []; $r['procs'] = $m['procs'] ?? ''; $r['maker'] = $m['maker'] ?? ''; }
+            unset($r);
+            echo json_encode(['success' => true, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
             exit;
         }
         if ($act === 'save_adhoc') {
@@ -297,6 +435,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $items    = json_decode($_POST['items'] ?? '[]', true); if (!is_array($items)) $items = [];
             $pcs      = json_decode($_POST['pcs_verdicts'] ?? '[]', true); if (!is_array($pcs)) $pcs = [];
             if (!$items) throw new Exception('請至少輸入一個檢驗項目');
+
+            // 來料檢驗／重工後檢驗：製程代號（可多個）與廠商（單一）。DDL 一律在 transaction 之外。
+            $adhocProcs = ''; $adhocMaker = null;
+            $nonProcNeed = in_array($process, ['來料檢驗', '重工後檢驗'], true);
+            if ($nonProcNeed) {
+                $pl = json_decode($_POST['proc_nos'] ?? '[]', true);
+                $pl = is_array($pl) ? array_values(array_unique(array_filter(array_map('intval', $pl)))) : [];
+                if ($pl) {
+                    $in = implode(',', array_fill(0, count($pl), '?'));
+                    $chk = $pdo->prepare("SELECT ProcessNo FROM process_no WHERE ProcessNo IN ($in)");
+                    $chk->execute($pl);
+                    $pl = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+                    $adhocProcs = implode(',', $pl);
+                }
+                $mk = trim($_POST['maker_id_no'] ?? '');
+                if ($mk !== '') {
+                    $chk = $pdo->prepare("SELECT maker_id_no FROM maker_list WHERE maker_id_no=?");
+                    $chk->execute([$mk]);
+                    $adhocMaker = $chk->fetchColumn() ?: null;
+                }
+            }
+            foreach (['adhoc_proc_nos' => "VARCHAR(255) NULL COMMENT '臨時檢驗：製程代號(逗號分隔)'",
+                      'adhoc_maker_id' => "VARCHAR(11) NULL COMMENT '臨時檢驗：廠商 maker_id_no'"] as $col => $def) {
+                if (!$pdo->query("SHOW COLUMNS FROM qc_check_form LIKE '$col'")->fetch()) {
+                    try { $pdo->exec("ALTER TABLE qc_check_form ADD COLUMN $col $def"); } catch (Throwable $e) {}
+                }
+            }
 
             $version_id = $v2Version($pdo, $d_id);
             $form_type_id = $v2FormType($pdo);
@@ -344,6 +509,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 ->execute([$d_id, $version_id, (string)$form_type_id, $inspNoA, $inspKind, $process, $incoming, $sample, $remark,
                            json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
+            if ($adhocProcs !== '' || $adhocMaker) {
+                $pdo->prepare("UPDATE qc_check_form SET adhoc_proc_nos=?, adhoc_maker_id=? WHERE qc_form_id=?")
+                    ->execute([$adhocProcs !== '' ? $adhocProcs : null, $adhocMaker, $qc_form_id]);
+            }
 
             // 本張檢驗單使用的量具（整張單綁一次，不綁到個別檢驗項目）
             qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
@@ -1052,6 +1221,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
     input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 
+    /* 歷史檢驗清單表格：與本頁其他表格同風格（暖色表頭、細框線、滑過淡底） */
+    .ah-tbl { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); font-size:13px; }
+    .ah-tbl th { background:var(--sand); color:var(--ink); border:1px solid var(--line); padding:6px 8px; text-align:center; white-space:nowrap; }
+    .ah-tbl td { border:1px solid var(--line); padding:6px 8px; text-align:center; vertical-align:middle; color:var(--ink); }
+    .ah-tbl tbody tr:hover { background:var(--cream); }
+    .ah-tbl td:nth-child(4), .ah-tbl th:nth-child(4) { text-align:left; }   /* 料號欄靠左 */
+    /* 簡化紀錄（歷史清單下方的逐項實測）：與歷史清單表格同風格 */
+    #allHistDetail .well, #partHistDetail .well { background:var(--cream); border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:none; }
+    #allHistDetail table, #partHistDetail table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); font-size:13px; }
+    #allHistDetail table th, #partHistDetail table th { background:var(--sand); color:var(--ink); border:1px solid var(--line); padding:6px 8px; text-align:center; white-space:nowrap; }
+    #allHistDetail table td, #partHistDetail table td { border:1px solid var(--line); padding:6px 8px; text-align:center; vertical-align:middle; color:var(--ink); }
+    #allHistDetail table td:nth-child(2), #partHistDetail table td:nth-child(2) { text-align:left; }
+    #allHistDetail div[style*="max-height"], #partHistDetail div[style*="max-height"] { max-height:none !important; overflow:visible !important; }
+    .ah-tbl tr.ah-row { cursor:pointer; }
+    #allHistDetail .hd-ng-val, #partHistDetail .hd-ng-val { display:inline-block; background:#FBD9D2; color:#8F3016; font-weight:bold; padding:1px 8px; border-radius:4px; line-height:1.4; }
+    #allHistDetail .hd-ng-badge, #partHistDetail .hd-ng-badge { display:inline-block; background:#DD5138; color:#fff; font-weight:bold; padding:2px 10px; border-radius:4px; line-height:1.4; }
+    .ah-tbl tbody tr.ah-active td { background:#FFE3B8 !important; }   /* 已開啟簡化紀錄的那一列 */
+    /* 頁首按鈕列（含檢驗單號徽章）不要折到第二列：title_right 加寬、按鈕列不換行 */
+    .page-title .title_left { width:30%; }
+    .page-title .title_right { width:70%; }
+    .page-title .title_right .pull-right { white-space:nowrap; }
     .warm-panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
     .btn-warm { background:var(--amber); border:1px solid var(--amber-d); color:#4A3524; font-weight:bold; }
     .btn-warm:hover,.btn-warm:focus { background:var(--amber-d); color:#fff; }
@@ -1212,6 +1402,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .mcell.okng .mtxt { display:block; font-size:13px; font-weight:bold; color:var(--ink); height:22px; line-height:22px; }
     .mcell.okng.c-ng .mtxt { color:#fff; }
     .mcell.okng.c-empty .mtxt { color:#b9a68d; }
+    /* NG加驗格（每列固定10格；獨立 class，不走 .mcell 的委派事件，才不會影響原本的判定/導航） */
+    .rcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
+    .rcell .mno { position:absolute; top:1px; left:3px; font-size:9px; color:#8a6a45; }
+    .rcell .rcval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold; color:var(--ink); padding:0; height:22px; outline:none; }
+    .rcell .rcdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
+    .rcell.c-ok { border-color:var(--amber); background:#FDF6EA; }
+    .rcell.c-ng { border-color:var(--coral); background:var(--coral); }
+    .rcell.c-ng .rcval, .rcell.c-ng .rcdev, .rcell.c-ng .mno { color:#fff; }
+    .rcell.c-empty { border-style:dashed; border-color:#D9C8B0; }
+    .rcell.rc-okng { cursor:pointer; user-select:none; padding-bottom:4px; }
+    .rcell.rc-okng .mtxt { display:block; font-size:13px; font-weight:bold; color:var(--ink); height:22px; line-height:22px; }
+    .rcell.rc-okng.c-ng .mtxt { color:#fff; }
+    .rcell.rc-okng.c-empty .mtxt { color:#b9a68d; }
+    /* 多面分段檢驗（首件） */
+    #face-panel { background:#FFF6E8; border:1px solid var(--amber-d); border-radius:6px; padding:8px 12px; margin:6px 0; }
+    #face-panel .face-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+    .face-btn { border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); border-radius:4px; padding:3px 14px; font-weight:bold; cursor:pointer; }
+    .face-btn.on { background:var(--amber-d); color:#fff; }
+    .face-btn[disabled] { opacity:.6; cursor:default; }
+    .face-chip { display:inline-block; font-size:12px; line-height:16px; padding:1px 8px; border-radius:10px; border:1px solid; }
+    .face-chip.fc-done { background:#FDF6EA; border-color:var(--amber); color:#6B4423; }
+    .face-chip.fc-rework { background:#F0A24B; border-color:var(--amber-d); color:#4A3524; font-weight:bold; }
+    .face-chip.fc-abn { background:var(--coral); border-color:var(--coral); color:#fff; font-weight:bold; }
+    select.sel-ngact.fmt-invalid { border-color:var(--coral); background:#F9C9C0; }
+    .btn-recheck { display:inline-block; margin-top:3px; font-size:11px; font-weight:bold; line-height:16px; padding:1px 8px;
+                   border:1px solid var(--coral); border-radius:3px; background:#fff; color:var(--coral); text-decoration:none; }
+    .btn-recheck:hover { background:var(--coral); color:#fff; text-decoration:none; }
     /* 逐件模式：一列一個檢驗項目 */
     /* 逐件模式：項目名稱與輸入格靠在一起（max-width 讓兩者不會被拉到左右兩端） */
     .prow { display:flex; align-items:center; gap:16px; padding:8px 0; border-bottom:1px dashed var(--line); max-width:660px; }
@@ -1253,6 +1470,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-type-toggle.type-okng:hover { background:var(--ink); }
     /* RANGE 模式下限≥上限：即時紅框提示（表單三總則③錯誤即時偵測並顯示原因） */
     #items-table .table-input.tol-invalid { border-color:var(--coral); background:#FDEDEA; }
+    #items-table .table-input.fmt-invalid { border-color:var(--coral) !important; background:#F9C9C0 !important; color:#8F3016; }
     /* 容器未選擇／已選容器卻未填箱數，紅框框出未填區塊（2026-10-06 使用者要求，方便快速確認）；
        同一個 class 共用在容器下拉與箱數輸入框，具體框哪一個由 doSave() 判斷哪裡沒填就框哪裡。 */
     #insp-container-1.ctn-invalid, #insp-container-2.ctn-invalid,
@@ -1421,6 +1639,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     <div class="pull-right">
                         <span id="insp-no-chip" class="label" style="display:none;background:#F0A24B;color:#4A3524;font-size:13px;padding:6px 10px;margin-right:8px;vertical-align:middle;" title="檢驗單號：存檔時自動產生，字首可於「設定→檢驗單號編碼設定」調整（不影響既有單號）"><i class="fa fa-barcode"></i> <span id="insp-no-chip-text"></span></span>
                         <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+                        <a class="btn btn-default btn-sm" href="inspection_entry_v2.php<?php echo $isPopup ? '?popup=1' : ''; ?>" title="回到品管檢驗表 2.0 的挑選畫面（BOM待驗清單／最近紀錄）"><i class="fa fa-home"></i> 2.0 首頁</a>
+                        <a class="btn btn-default btn-sm" href="QC_check_list_test.php" title="回到 QC 待驗清單"><i class="fa fa-list"></i> QC 待驗清單</a>
                         <button class="btn btn-default btn-sm" id="btn-print"><i class="fa fa-print"></i> 列印</button>
                         <button class="btn btn-default btn-sm" id="btn-csv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
@@ -1438,6 +1658,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <li class="sampling-menu-item" style="display:none;"><a href="#" id="btn-sampling-setting"><i class="fa fa-list-ol"></i> 抽樣規則設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-qadept-setting"><i class="fa fa-sitemap"></i> 異常單回覆部門設定</a></li>
                                 <li class="approve-menu-item" style="display:none;"><a href="#" id="btn-approve-setting"><i class="fa fa-check-square-o"></i> 主管審核自動核可設定</a></li>
+                                <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-face-setting"><i class="fa fa-columns"></i> 多面分段檢驗設定（首件）</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-inspno-setting"><i class="fa fa-barcode"></i> 檢驗單號編碼設定</a></li>
                                 <li><a href="#" id="btn-qadecide-setting"><i class="fa fa-gavel"></i> 異常單處置決策設定</a></li>
                                 <li class="divider"></li>
@@ -1457,7 +1678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div class="row">
                     <div class="col-md-6">
                         <div class="warm-panel">
-                            <b>① 從製令待驗清單挑</b>
+                            <b>① 從BOM待驗清單挑</b>
                             <div class="muted-help" style="margin-bottom:6px;">正常生產的檢驗：有 BOM、有製程</div>
                             <div class="input-group">
                                 <input type="text" id="search-kw" class="form-control" placeholder="輸入部分料號 / BOM / 客戶後按搜尋">
@@ -1467,15 +1688,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <input type="checkbox" id="chk-include-closed"> 包含已結案 BOM（補建檢驗表用）
                             </label>
                             <div id="search-results" style="border:1px solid #E4D3BC; margin-top:4px; max-height:220px; overflow:auto;"></div>
+                            <div style="margin-top:8px;"><b class="muted-help">最近 10 筆 製令檢驗紀錄</b>
+                                <div id="bom-recent-list" style="margin-top:4px;"></div>
+                            </div>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="warm-panel">
-                            <b>② 臨時檢驗單（退貨／客訴／來料，無製程）</b>
-                            <div class="muted-help" style="margin-bottom:6px;">不是從製令來的檢驗，這裡自己開一張</div>
+                            <b>② 臨時檢驗單（退貨／客訴／來料）</b>
+                            <div class="muted-help" style="margin-bottom:6px;">不是從BOM來的檢驗，這裡自己開一張</div>
                             <button class="btn btn-warm btn-sm" id="btn-new-adhoc"><i class="fa fa-plus"></i> 建立臨時檢驗單</button>
-                            <div style="margin-top:8px;"><b class="muted-help">最近的臨時檢驗單</b>
-                                <div id="adhoc-list" style="max-height:200px;overflow:auto;margin-top:4px;"></div>
+                            <div style="margin-top:8px;"><b class="muted-help">最近 10 筆 臨時檢驗單</b>
+                                <div id="adhoc-list" style="margin-top:4px;"></div>
                             </div>
                         </div>
                     </div>
@@ -1497,8 +1721,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-edit">取消修改，回到新檢驗</button>
                 </div>
                 <div id="view-mode-banner" class="alert alert-warning" style="display:none;">
-                    <i class="fa fa-eye"></i> <b>檢視模式（唯讀）</b>：正在檢視歷程 qc_form_id=<span id="view-form-id"></span>，欄位已反灰不可修改；如需修改請洽主管「開放修改」，或於本人修改寬限期內回來修改。
-                    <button class="btn btn-xs btn-default pull-right" id="btn-exit-view">關閉檢視，回到新檢驗</button>
+                    <i class="fa fa-eye"></i> <b>檢視模式（唯讀）</b>：正在檢視歷程 qc_form_id=<span id="view-form-id"></span>，<span id="view-mode-hint"></span>
+                    <button class="btn btn-xs btn-default pull-right" id="btn-exit-view" style="margin-left:6px;">關閉檢視，回到新檢驗</button>
+                    <button class="btn btn-xs btn-warm pull-right" id="btn-enter-edit" style="display:none;"><i class="fa fa-pencil"></i> 修改</button>
                 </div>
                 <div id="bf-stage-banner" class="alert alert-warning" style="display:none;">
                     <i class="fa fa-calendar"></i> <b>補資料</b>已設定：<span id="bf-stage-text"></span>（存檔時會一併套用）
@@ -1540,6 +1765,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
                 <!-- 本單使用量具：整張檢驗單挑一次就好，不必逐個檢驗項目綁（2026-09-16 使用者定案）
                      追溯口徑＝由量具查得到「用在哪幾張檢驗單」，不需要查到是哪一個檢驗項目 -->
+                <div id="face-panel" style="display:none;"></div>
                 <div class="toolbar-row" id="form-tool-row">
                     <b style="color:var(--ink2);"><i class="fa fa-wrench"></i> 本單使用量具</b>
                     <span class="ft-chips" id="form-tool-chips"></span>
@@ -1734,14 +1960,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <div class="form-group">
                 <label>檢驗類型</label>
                 <div id="ah-type-btns" style="margin-bottom:6px;"></div>
-                <input type="text" class="form-control input-sm" id="ah-type" placeholder="也可自行輸入，例如：客戶退貨複驗">
+                <input type="hidden" id="ah-type">
+            </div>
+            <div class="form-group" id="ah-proc-box" style="display:none;">
+                <label>製程代號（可多選）</label>
+                <div id="ah-proc-picked" style="margin-bottom:4px;"></div>
+                <input type="text" class="form-control input-sm" id="ah-proc-kw" placeholder="輸入製程中文名稱或製程ID即時搜尋" autocomplete="off">
+                <div id="ah-proc-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:140px;overflow:auto;display:none;"></div>
+                <label style="margin-top:8px;">廠商（單選）</label>
+                <div id="ah-maker-picked" style="margin-bottom:4px;"></div>
+                <input type="text" class="form-control input-sm" id="ah-maker-kw" placeholder="輸入廠商ID或名稱即時搜尋" autocomplete="off">
+                <div id="ah-maker-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:140px;overflow:auto;display:none;"></div>
             </div>
             <div class="form-group">
                 <label>料號（必填）</label>
-                <div class="input-group">
-                    <input type="text" class="form-control input-sm" id="ah-part-kw" placeholder="輸入部分料號後按搜尋">
-                    <span class="input-group-btn"><button class="btn btn-default btn-sm" id="btn-ah-search">搜尋</button></span>
-                </div>
+                <input type="text" class="form-control input-sm" id="ah-part-kw" placeholder="輸入客戶簡稱／料號／規格／版別即時搜尋" autocomplete="off">
                 <div id="ah-part-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:160px;overflow:auto;display:none;"></div>
                 <div id="ah-part-picked" class="muted-help" style="margin-top:4px;"></div>
             </div>
@@ -2284,6 +2517,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- 多面分段檢驗設定 Modal（權限：qc_manage_settings） -->
+<div class="modal fade" id="faceCfgModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#F0A24B;color:#4A3524;border-radius:6px 6px 0 0;">
+            <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-columns"></i> 多面分段檢驗設定（首件）</h4></div>
+        <div class="modal-body">
+            <p class="muted-help">勾選的製程大類，<b>首件檢驗</b>時改為「選擇本次檢驗的面（A／B／C／D 面）」：
+               編號一律填圖面編號；同一顆已驗過（合格）的編號不能重複檢驗；NG 的項目要選<b>重工</b>或<b>開立異常單</b>，
+               重工的之後可以只複驗該尺寸。一般檢驗、末件檢驗不受影響。</p>
+            <div id="face-cfg-list" style="max-height:320px;overflow:auto;"></div>
+            <p class="text-danger" id="face-cfg-hint" style="display:none;"></p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warning" id="face-cfg-save"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- 量具設定 Modal（種類 + 編號；與 inspection_standard_setting.php 共用資料表） -->
 <div class="modal fade" id="toolManageModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg"><div class="modal-content">
@@ -2415,6 +2668,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_print_log.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <?php include '../QA/qa_abnormal_modal.php'; // 共用「開立品質異常單」跳窗元件（QAAbnormalModal） ?>
 
@@ -2915,6 +3169,10 @@ $(function(){
                   canView:true, editFormId:null, viewFormId:null, viewOnly:false, draftFormId:0, inspKind:'NORMAL', canBackfill:false,
                   currentUserId:'', bfStage:null, curInspNo:'' };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
+    // 多面分段檢驗（首件，製程大類在「設定」勾選）：FACE.pieces＝各顆已驗編號狀態（後端 qc_face_state）；
+    // state.face＝這張檢驗單選的面／顆；state.faceRec＝正在看／改的既有紀錄本來就是多面單
+    var FACE = { enabled:false, pieces:{} };
+    state.face = { code:'', piece:1, start:'A' }; state.faceRec = false;
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
     var TOOL_CATS_ORDER = [];   // 量具類型在選單上的順序＝qc_tool_list.sort_order（量測儀器校驗管理「類別設定」可拖曳），
@@ -2925,8 +3183,14 @@ $(function(){
     var focusItem = 0, focusPcs = 0;
     var lastFocused = null;                                   // 給數字鍵盤用
 
+    // 日期顯示一律 YYYY.MM.DD（ai-rules/20）；n＝要保留的字數（10＝只日期、16＝含時分）
+    function dotDT(v,n){ return String(v||'').substring(0,n||10).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3'); }
+    // 有被修改過：「2026.10.30 10:08 超級管理員 修改」
+    function editedText(r){ return (r && r.edited_at) ? ('修改：'+dotDT(r.edited_at,16)+' '+(r.edited_name||'')) : ''; }
     function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
     function codeLabel(i){
+        // 多面分段檢驗：編號是檢驗員照圖面填的編號，不是依列順序自動編
+        if (faceOn() && MODEL.items[i]) return String(MODEL.items[i].balloon||'').trim() || '？';
         if (codeMode !== 'ALPHA') return String(i+1);
         var s='', n=i+1;
         while(n>0){ var r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
@@ -3101,14 +3365,28 @@ $(function(){
                    up:(r.up==null?'':String(r.up)), lo:(r.lo==null?'':String(r.lo)),
                    mode:(r.mode==='RANGE'?'RANGE':'TOL'),
                    min:(r.min==null?'':String(r.min)), max:(r.max==null?'':String(r.max)),
-                   type:(r.type==='OKNG'?'OKNG':'NUM'), remark:(r.remark||''), readings:[] };
+                   type:(r.type==='OKNG'?'OKNG':'NUM'), remark:(r.remark||''), readings:[],
+                   balloon:(r.balloon||''), ng_action:(r.ng_action||'') };
         // 量具已改綁在整張檢驗單（MODEL.tools），這裡不再逐項保留 tool_id
         it.readings.push({ vals:valsFrom(r.samples, it.type) });
         (r.extra||[]).forEach(function(ex){
             it.readings.push({ vals:valsFrom(ex.samples, it.type) });
         });
+        // NG加驗：另放 it.rechecks（每列固定 RC_N 格），不混進 readings，原本的判定/進度/不良數完全不受影響
+        it.rechecks = (r.recheck||[]).map(function(rc){ return { vals:rcValsFrom(rc.samples) }; });
         return it;
     }
+    var RC_N = 10;   // NG加驗每列固定格數
+    function rcValsFrom(samples){
+        var a = blankVals(RC_N, '');
+        (samples||[]).forEach(function(s,i){
+            if(i>=RC_N) return;
+            var v = (s && typeof s==='object') ? s.v : s;
+            a[i] = (v==null) ? '' : String(v);
+        });
+        return a;
+    }
+    function rcRowHasValue(rc){ return (rc.vals||[]).some(function(v){ return v!=='' && v!=null; }); }
     function valsFrom(samples, type){
         // OK/NG 型沿用舊行為：未特別標示者視為 OK（現場只在不良時才標記）
         var a = blankVals(state.sampleN, type==='OKNG' ? 'OK' : '');
@@ -3121,7 +3399,7 @@ $(function(){
     }
     function newItem(){
         return { item_id:'', name:'', std:'', up:'', lo:'', mode:'TOL', min:'', max:'', type:'NUM', remark:'',
-                 readings:[{ vals:blankVals(state.sampleN) }] };
+                 readings:[{ vals:blankVals(state.sampleN) }], rechecks:[], balloon:'', ng_action:'' };
     }
     function setSampleN(n){
         n = Math.max(1, parseInt(n)||1);
@@ -3154,7 +3432,8 @@ $(function(){
     // 送出用：完全維持舊頁 payload 格式（後端不用改）
     // 差異：數值型不再丟掉空格（改送完整長度陣列），空值後端會略過，
     //       修正舊版「第1件沒量、第2件的值被存成 sample_no=1」的錯位問題。
-    function collectItems(){
+    // keepEmptyRecheck＝存草稿時保留「還沒填的 NG加驗列」（正式存檔／列印／匯出一律略過全空的列）
+    function collectItems(keepEmptyRecheck){
         var out=[];
         MODEL.items.forEach(function(it){
             var name=(it.name||'').trim();
@@ -3174,13 +3453,34 @@ $(function(){
                 var rd=it.readings[r], s2=mk(rd);
                 if(s2.some(function(x){ return x.v!==''; })) extra.push({ samples:s2 });
             }
+            // NG加驗：只有該項判定 NG 才帶；每列固定 10 格，全空的列正式存檔時自動移除
+            var recheck=[];
+            if(itemVerdict(it)==='NG'){
+                (it.rechecks||[]).forEach(function(rc){
+                    if(!keepEmptyRecheck && !rcRowHasValue(rc)) return;
+                    var arr=[];
+                    for(var c=0;c<RC_N;c++){
+                        var raw=rc.vals[c];
+                        if(raw===''||raw==null){ arr.push({v:'', r:'OK'}); continue; }
+                        arr.push({ v:String(raw), r:(judge(it,raw)==='NG'?'NG':'OK') });
+                    }
+                    recheck.push({ samples:arr });
+                });
+            }
             out.push({
                 item_id:it.item_id||'', name:name, std:it.std, up:it.up, lo:it.lo,
                 mode:it.mode, min:it.min, max:it.max,
                 type:it.type, verdict:(itemVerdict(it)==='NG'?'NG':'OK'),
-                samples:mk(it.readings[0]), extra:extra, remark:it.remark||''
+                samples:mk(it.readings[0]), extra:extra, recheck:recheck, remark:it.remark||'',
+                balloon:(it.balloon||''), ng_action:(it.ng_action||'')
             });
         });
+        // 多面分段檢驗：一律依編號順序儲存（臨時改成 E、C、F 也存成 C、E、F，後續列印順序才不會亂）；後端同規則再排一次
+        if(faceOn()){
+            var keyed=out.map(function(o,ix){ var n=faceNum(o.balloon); return { o:o, n:(n==null?1e9:n), k:faceKey(o.balloon), ix:ix }; });
+            keyed.sort(function(a,b){ return a.n-b.n || (a.k<b.k?-1:a.k>b.k?1:0) || a.ix-b.ix; });
+            out=keyed.map(function(x){ return x.o; });
+        }
         return out;
     }
     function collectPcsVerdicts(){ ensurePcs(); return MODEL.pcs.map(function(p){ return { v:p.v, m:p.m?1:0 }; }); }
@@ -3190,6 +3490,7 @@ $(function(){
     // =====================================================================
     function render(){
         ensurePcs();
+        renderFacePanel();
         $('.view-switch button').removeClass('on').filter('[data-view="'+view+'"]').addClass('on');
         $('#view-item').toggle(view==='ITEM');
         $('#view-pcs').toggle(view==='PCS');
@@ -3248,13 +3549,28 @@ $(function(){
         });
         updateItemVerdictCell(i);
     }
+    // 總表「判定」欄內容：NG 字樣下方多一顆「加驗」鈕（唯讀檢視不給）
+    function verdictCellHtml(v, i){
+        var h = v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—');
+        // 多面分段檢驗：NG 的項目要選處置（重工／開立異常單），這個選擇會一起存檔
+        if(v==='NG' && faceOn() && MODEL.items[i]){
+            var na=MODEL.items[i].ng_action||'';
+            h += '<br><select class="sel-ngact'+(na?'':' fmt-invalid')+'" data-i="'+i+'" title="NG 的處置（必選）"'+(state.viewOnly?' disabled':'')+
+                 ' style="font-size:11px;width:100%;margin-top:2px;padding:1px;">'+
+                 '<option value="">請選處置</option><option value="REWORK"'+(na==='REWORK'?' selected':'')+'>重工</option>'+
+                 '<option value="ABNORMAL"'+(na==='ABNORMAL'?' selected':'')+'>開立異常單</option></select>';
+        }
+        if(v==='NG' && !state.viewOnly)
+            h += '<br><a href="#" class="btn-recheck btn-add-recheck" data-i="'+i+'" title="此項判定 NG：加驗一列（每列固定10格，可只填其中幾格）">加驗</a>';
+        return h;
+    }
     // 總表「判定」欄：輸入後要立刻跟著變（原本只在整頁重繪時才更新，會停在「—」）
     function updateItemVerdictCell(i){
         var it=MODEL.items[i]; if(!it) return;
         var v=itemVerdict(it);
         $('#items-body td.g-verdict[data-i="'+i+'"]')
             .css('color', v==='NG'?'var(--coral)':'var(--ink)')
-            .text(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'));
+            .html(verdictCellHtml(v, i));
     }
 
     // ---------- 規格帶（標準/上限/下限；量具已改成整張單綁一次，不在這裡顯示） ----------
@@ -3365,14 +3681,15 @@ $(function(){
     function renderGrid(){
         var stdEdit = $('#chk-std-edit').is(':checked');
         // 量具欄已移除（2026-09-16：量具改成整張檢驗單綁一次，顯示在上方「本單使用量具」）
-        var head = '<th width="46">編號</th>';
+        var FO = faceOn();
+        var head = FO ? '<th width="64" title="照圖面編號填入（英文或數字皆可）">編號</th>' : '<th width="46">編號</th>';
         if(stdEdit){
             head += '<th width="190">檢驗項目</th><th width="90">標準值</th><th width="76">上公差</th><th width="76">下公差</th>'+
                     '<th width="80">型態</th>';
         } else {
             head += '<th width="240">檢驗項目</th><th width="200">標準（上/下限）</th>';
         }
-        head += '<th>實測值（每件一格）</th><th width="70">判定</th>';
+        head += '<th>實測值（每件一格）</th><th width="'+(FO?112:70)+'">判定</th>';
         $('#grid-head').html(head);
         var colsBefore = stdEdit ? 7 : 4;
         $('#verdict-label').attr('colspan', colsBefore-1);
@@ -3388,7 +3705,11 @@ $(function(){
         var body='';
         MODEL.items.forEach(function(it,i){
             var L=limits(it), v=itemVerdict(it);
-            body += '<tr data-i="'+i+'"><td class="text-center">'+codeLabel(i)+'</td>';
+            if(FO){
+                var bIssue=faceBalloonIssue(i);
+                body += '<tr data-i="'+i+'"><td><input class="table-input f-balloon'+(bIssue?' fmt-invalid':'')+'" data-i="'+i+'" maxlength="2" value="'+esc(it.balloon||'')+'" '+
+                        'style="text-align:center;font-weight:bold;" title="'+esc(bIssue||'圖面編號')+'"'+(state.viewOnly?' readonly':'')+'></td>';
+            } else body += '<tr data-i="'+i+'"><td class="text-center">'+codeLabel(i)+'</td>';
             if(stdEdit){
                 var isOkng=it.type==='OKNG', isRange=it.mode==='RANGE';
                 // 範圍模式：標準值不需要、也不自動帶入任何值（使用者明確要求）
@@ -3426,13 +3747,22 @@ $(function(){
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
             body += '<td><div class="gcells">'+cells+'</div></td>'+
-                    '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td></tr>';
+                    '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+verdictCellHtml(v, i)+'</td></tr>';
             for(var r=1;r<it.readings.length;r++){
                 var sub=''; for(var s3=0;s3<state.sampleN;s3++) sub+=cellHtml(it,i,r,s3,false);
                 // 對齊主列欄位：空(編號) + 併格(項目…型態) + 實測 + 判定
                 body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(colsBefore-2)+'" class="text-right muted-help">↳ 加量測 '+r+
                         ' <a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i></a></td>'+
                         '<td><div class="gcells">'+sub+'</div></td><td></td></tr>';
+            }
+            // NG加驗列（只有該項判定 NG 才顯示；每列固定 RC_N 格）
+            if(v==='NG'){
+                (it.rechecks||[]).forEach(function(rc,k){
+                    var rsub=''; for(var c=0;c<RC_N;c++) rsub+=rcellHtml(it,i,k,c);
+                    body += '<tr style="background:#FDF1EE;" class="rc-row"><td></td><td colspan="'+(colsBefore-2)+'" class="text-right" style="font-size:12px;color:var(--coral);font-weight:bold;">↳ NG加驗 '+(k+1)+
+                            ' <a href="#" class="btn-del-recheck" data-i="'+i+'" data-k="'+k+'" style="color:var(--coral);"><i class="fa fa-trash"></i></a></td>'+
+                            '<td><div class="gcells">'+rsub+'</div></td><td></td></tr>';
+                });
             }
         });
         // 表格最後永遠有一列「＋ 新增檢驗項目」，不必捲到表格外面找按鈕
@@ -3501,6 +3831,7 @@ $(function(){
         MODEL.items[i].readings[r].vals[s] = $(this).val();
         paintCell($(this).closest('.mcell'));
         recalc(); scheduleDraftSave();
+        if(faceAutoNext()) faceRerenderKeepFocus();
     });
     // UI 規範：聚焦自動全選、有值雙擊清空
     // （插入工程符號後會把 symSkipSelect 拉起來，此時不可全選，否則接著打的字會蓋掉剛插的符號）
@@ -3523,11 +3854,12 @@ $(function(){
         var cur=it.readings[r].vals[s];
         it.readings[r].vals[s] = (cur==='NG') ? 'OK' : 'NG';
         paintCell($(this)); recalc(); scheduleDraftSave();
+        if(faceAutoNext()) render();
     });
     // ============ 鍵盤導航（全頁統一，符合專案 UI 規範：Enter 跳下一欄） ============
     // 涵蓋範圍：量測格、OK/NG 格、總表「編輯標準」的項目名稱/標準值/上下公差、逐項的本項備註。
     // （原本只有量測格有導航，填標準欄按 Enter 沒反應 → 2026-07-29 現場回饋修正）
-    var NAV_SEL = 'input.mval, input.table-input, input.f-remark, .mcell.okng';
+    var NAV_SEL = 'input.mval, input.rcval, input.table-input, input.f-remark, .mcell.okng, .rcell.rc-okng';
     function navPane(el){
         var $p = $(el).closest('.view-pane');
         return $p.length ? $p : $('.view-pane').filter(':visible').first();
@@ -3553,7 +3885,7 @@ $(function(){
             isLeft =(k==='ArrowLeft'||code===37), isDown=(k==='ArrowDown'||code===40),
             isUp   =(k==='ArrowUp'||code===38);
         if(!isEnter && !isRight && !isLeft && !isDown && !isUp){
-            if((k===' '||code===32) && $self.hasClass('okng')){ e.preventDefault(); $self.trigger('click'); }
+            if((k===' '||code===32) && ($self.hasClass('okng') || $self.hasClass('rc-okng'))){ e.preventDefault(); $self.trigger('click'); }
             return;
         }
         var $list=navList(this), idx=$list.index(this);
@@ -3671,7 +4003,13 @@ $(function(){
     $(document).on('click', '#btn-code-mode2', function(e){
         e.preventDefault();
         codeMode = (codeMode==='ALPHA') ? 'NUM' : 'ALPHA';
-        localStorage.setItem('qc_item_code_mode', codeMode); render();
+        localStorage.setItem('qc_item_code_mode', codeMode);
+        // 多面檢驗：編號是檢驗員填的，切換 ABC／123 要連已填的編號與起始編號一起轉換
+        if(faceOn()){
+            MODEL.items.forEach(function(it){ var n=faceNum(it.balloon); if(n) it.balloon=faceFmt(n); });
+            var sn=faceNum(state.face.start); if(sn) state.face.start=faceFmt(sn);
+        }
+        render();
     });
 
     // ---------- 標準/型態/備註 編修 ----------
@@ -3863,6 +4201,65 @@ $(function(){
     // 「下公差≥0時上公差須>0且>下公差」其實是同一條規則的兩個觸發方向，合起來才涵蓋得到
     // 「上下公差填成同號」這種最常見的誤填（標準值0.03、上公差0、下公差誤填成0.03，
     // 會變成上限0.03<下限0.06）；留空視為0（與既有 limits() 的規則一致），兩邊都空則先不檢查。
+    // ---- 上公差／下公差「數字格式」即時防呆（使用者 2026-10-30 要求）----
+    //   只能是數字，僅可出現「-」；「+」自動忽略；最多一個小數點。有錯當下紅底並跳出繁體中文說明。
+    //   用 capture 階段的原生 input 監聽：一定比下方 jQuery 的 .f-up/.f-lo 更新資料模型的處理先跑，
+    //   所以被忽略的「+」不會進到資料裡。
+    function tolFmtIssue(v){
+        v=String(v==null?'':v);
+        if(v==='' ) return '';
+        var bad=v.replace(/[0-9\-.]/g,'');
+        if(bad) return '輸入了「'+bad.charAt(0)+'」，上下公差只能輸入數字，可有負號「-」與一個小數點「.」（「+」會自動忽略）';
+        var neg=(v.match(/-/g)||[]).length;
+        if(neg>1) return '輸入了 '+v+'，多了 '+(neg-1)+' 個負號「-」，負號只能有一個';
+        if(neg===1 && v.charAt(0)!=='-') return '輸入了 '+v+'，負號「-」只能放在最前面';
+        var dots=(v.match(/\./g)||[]).length;
+        if(dots>1){
+            if(/\.\./.test(v) && dots===2) return '輸入了 '+v+'，連續出現兩個小數點「..」，多了 1 個小數點';
+            return '輸入了 '+v+'，共有 '+dots+' 個小數點，多了 '+(dots-1)+' 個；一個數字最多只能有一個小數點';
+        }
+        return '';
+    }
+    function tolFmtTip(el, msg){
+        var $t=$('#tol-fmt-tip');
+        if(!msg){ $t.hide(); return; }
+        if(!$t.length) $t=$('<div id="tol-fmt-tip" style="position:fixed;z-index:20000;background:#DD5138;color:#fff;font-size:13px;line-height:1.4;padding:6px 10px;border-radius:6px;max-width:340px;box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;"></div>').appendTo('body');
+        var r=el.getBoundingClientRect();
+        $t.text(msg).css({ left:Math.max(8,Math.min(r.left, window.innerWidth-350))+'px', top:(r.bottom+4)+'px' }).show();
+    }
+    document.addEventListener('input', function(e){
+        var el=e.target;
+        if(!el || !el.classList || !(el.classList.contains('f-up')||el.classList.contains('f-lo'))) return;
+        if(el.value.indexOf('+')>=0){            // 「+」自動忽略，並保留游標位置
+            var pos=el.selectionStart-(el.value.slice(0,el.selectionStart).split('+').length-1);
+            el.value=el.value.replace(/\+/g,'');
+            try{ el.setSelectionRange(pos,pos); }catch(x){}
+        }
+        var msg=tolFmtIssue(el.value);
+        el.classList.toggle('fmt-invalid', !!msg);
+        el.title = msg || '';
+        tolFmtTip(el, msg);
+    }, true);
+    document.addEventListener('blur', function(e){
+        var el=e.target;
+        if(el && el.classList && (el.classList.contains('f-up')||el.classList.contains('f-lo'))){
+            var v=el.value, msg=tolFmtIssue(v);
+            if(!msg && (v==='-'||v==='.'||v==='-.')) msg='輸入了「'+v+'」，只有符號、缺少數字';
+            el.classList.toggle('fmt-invalid', !!msg);
+            tolFmtTip(el, '');
+        }
+    }, true);
+    function tolFmtBlock(){
+        var bad=null;
+        $('#items-body .f-up, #items-body .f-lo').each(function(){
+            if(tolFmtIssue(this.value) || this.value==='-' || this.value==='.' || this.value==='-.'){ bad=this; return false; }
+        });
+        if(!bad) return false;
+        var m=tolFmtIssue(bad.value) || ('輸入了「'+bad.value+'」，只有符號、缺少數字');
+        alert('上公差／下公差格式不正確：'+m);
+        bad.classList.add('fmt-invalid'); bad.focus();
+        return true;
+    }
     function tolPairIssue(upStr, loStr){
         var upBlank=(upStr==null||String(upStr).trim()===''), loBlank=(loStr==null||String(loStr).trim()==='');
         if(upBlank && loBlank) return '';
@@ -3886,6 +4283,7 @@ $(function(){
         var t = it.type==='OKNG' ? 'NUM' : 'OKNG';
         it.type=t;
         it.readings.forEach(function(rd){ rd.vals=blankVals(state.sampleN, t==='OKNG'?'OK':''); });
+        it.rechecks=[];   // 型態換了，原本的加驗讀值已無意義
         render(); scheduleDraftSave();
     });
     // 公差輸入模式切換：標準值±公差(TOL，預設) ⇄ 直接填絕對上下限(RANGE)。
@@ -3924,6 +4322,272 @@ $(function(){
         it.readings.push({ vals:blankVals(state.sampleN, it.type==='OKNG'?'OK':'') });
         render(); scheduleDraftSave();
     });
+    // ---------- 多面分段檢驗（首件）：選面／顆、編號防重複、NG 處置、待複驗帶入 ----------
+    function faceOn(){
+        if(state.editFormId || state.viewFormId) return !!state.faceRec;
+        return !!(FACE.enabled && state.inspKind==='FIRST' && ctx && !ctx.adhoc && !ctx.ship);
+    }
+    // 英文(A=1…Z=26,AA=27)與數字視為同一個編號，切換 ABC／123 顯示不會讓「已驗過」的判斷失效（同後端 qc_face_key）
+    function faceKey(c){
+        var s=String(c==null?'':c).trim().toUpperCase();
+        if(/^[0-9]+$/.test(s)) return 'N'+parseInt(s,10);
+        if(/^[A-Z]+$/.test(s)){ var n=0; for(var i=0;i<s.length;i++) n=n*26+(s.charCodeAt(i)-64); return 'N'+n; }
+        return 'S'+s;
+    }
+    function faceNum(c){ var k=faceKey(c); return k.charAt(0)==='N' ? parseInt(k.substr(1),10) : null; }
+    function faceFmt(n){   // 依目前 ABC／123 顯示模式把數字轉成編號文字
+        if(codeMode!=='ALPHA' || n>26) return String(n);   // 英文只有單一字母 A～Z，超過 26 一律用數字
+        return String.fromCharCode(64+n);
+    }
+    function faceDisp(code){ var n=faceNum(code); return n ? faceFmt(n) : String(code||''); }
+    // 編號格式：單一英文字母(A～Z)，或 1～99 的純數字（不可0開頭、不可小數點、不可英數混合）
+    function faceCodeValid(c){ return /^[A-Za-z]$/.test(String(c==null?'':c).trim()) || /^[1-9][0-9]?$/.test(String(c==null?'':c).trim()); }
+    function faceNew(){ return !(state.editFormId || state.viewFormId); }
+    function faceDoneKey(k){ var u=faceUsed()[k]; return !!(u && (u.state==='DONE' || u.state==='ABNORMAL')); }
+    function faceTakenNum(n){
+        var k='N'+n;
+        if(MODEL.items.some(function(it){ return faceKey(it.balloon)===k; })) return true;
+        return faceDoneKey(k);
+    }
+    function faceNextNum(after){ var n=after+1, g=0; while(faceTakenNum(n) && g++<2000) n++; return n; }
+    function faceRowHasVal(it){
+        return it.readings.some(function(rd){ return rd.vals.some(function(v){ return v!=='' && v!=null && !(it.type==='OKNG' && v==='OK'); }); });
+    }
+    // 這顆還沒驗完的編號：1～已驗最大號之間「沒驗合格、也沒開異常單」的洞（含重工待複驗的）
+    function facePendingList(){
+        var bs=faceUsed(), max=0;
+        Object.keys(bs).forEach(function(k){ var n=parseInt(k.substr(1),10); if(k.charAt(0)==='N' && n>max) max=n; });
+        var gaps=[];
+        for(var n=1;n<=max;n++){ var k='N'+n; if(faceDoneKey(k)) continue; gaps.push({ num:n, b:bs[k]||null }); }
+        return { gaps:gaps, max:max };
+    }
+    function faceFillFromRework(it, b){
+        var s=(b&&b.item)||{};
+        it.name=s.name||''; it.std=s.std||''; it.mode=s.mode||'TOL'; it.min=s.min||''; it.max=s.max||'';
+        it.up=s.up||''; it.lo=s.lo||''; it.type=s.type||'NUM';
+        it.readings=[{ vals:blankVals(state.sampleN, it.type==='OKNG'?'OK':'') }];
+    }
+    // 新檢驗單自動帶入編號：第一次從 A 開始；第二次起先帶「上一次還沒驗的編號」（例 A、B、D、F 驗過 → 帶 C、E），
+    // 起始編號欄也顯示第一個還沒驗的編號；之後每填完最後一列，faceAutoNext() 會再接出下一個編號（G…）
+    function faceSeed(){
+        if(!faceOn() || !faceNew()) return;
+        var P=facePendingList(), queue=[];
+        P.gaps.forEach(function(g){ if(!MODEL.items.some(function(it){ return faceKey(it.balloon)==='N'+g.num; })) queue.push(g); });
+        var startNum = queue.length ? queue[0].num : faceNextNum(P.max);
+        state.face.start = faceFmt(startNum);
+        var nextAfter = P.max, assignedBlank=false;
+        var takeCode=function(){
+            if(queue.length){ return queue.shift(); }
+            var n=faceNextNum(nextAfter); nextAfter=n; return { num:n, b:null };
+        };
+        MODEL.items.forEach(function(it){
+            if(String(it.balloon||'').trim()!=='') return;
+            var named=(it.name||'').trim()!=='';
+            if(!named){ if(assignedBlank) return; assignedBlank=true; }
+            var g=takeCode(); it.balloon=faceFmt(g.num); it._balloonAuto=true;
+            if(!named && g.b && g.b.state==='REWORK'){ faceFillFromRework(it, g.b); }
+        });
+        // 還沒分配到列的洞（含重工待複驗）各建一列
+        queue.forEach(function(g){
+            var it=newItem(); it.balloon=faceFmt(g.num); it._auto=true;
+            if(g.b && g.b.state==='REWORK') faceFillFromRework(it, g.b);
+            MODEL.items.push(it);
+        });
+        if(!MODEL.items.length){ var f=newItem(); f.balloon=faceFmt(startNum); f._auto=true; MODEL.items.push(f); }
+    }
+    // 換顆／換檢驗性質時重新帶入：只動「自動帶入而且還沒填值」的列，手動填過的不碰
+    function faceReseed(){
+        if(!faceNew()) return;
+        MODEL.items = MODEL.items.filter(function(it){ return !(it._auto && !faceRowHasVal(it)); });
+        MODEL.items.forEach(function(it){ if(it._balloonAuto && !faceRowHasVal(it)){ it.balloon=''; it._balloonAuto=false; } });
+        faceSeed();
+    }
+    // 最後一列的實測值填滿了 → 自動接出下一列（編號＝比這列大、而且還沒驗過的下一個，例如 E 之後是 G）
+    function faceAutoNext(){
+        if(!faceOn() || !faceNew()) return false;
+        var last=MODEL.items[MODEL.items.length-1]; if(!last) return false;
+        var n=faceNum(last.balloon); if(n==null) return false;
+        if(itemFilledCount(last)<state.sampleN) return false;
+        if(faceNextNum(n)>99) return false;   // 編號最大 99
+        var it=newItem(); it.balloon=faceFmt(faceNextNum(n)); it._auto=true; MODEL.items.push(it);
+        return true;
+    }
+    // 重畫後把焦點還給剛剛輸入的那一格（自動接出新列要重畫，不能讓使用者打到一半游標消失）
+    function faceRerenderKeepFocus(){
+        var el=document.activeElement, i=$(el).attr('data-i'), r=$(el).attr('data-r'), sIdx=$(el).attr('data-s');
+        var pos = (el && typeof el.selectionStart==='number') ? el.selectionStart : null;
+        render();
+        if(i==null) return;
+        var $t=$('#items-body .mval[data-i="'+i+'"][data-r="'+r+'"][data-s="'+sIdx+'"]');
+        if($t.length){ $t.focus(); try{ if(pos!=null) $t[0].setSelectionRange(pos,pos); }catch(e){} }
+    }
+    function facePieceNos(){ return Object.keys(FACE.pieces||{}).map(Number).sort(function(a,b){ return a-b; }); }
+    function faceUsed(){ var pc=(FACE.pieces||{})[state.face.piece]; return (pc && pc.balloons) || {}; }
+    function faceFields(){ return faceOn() ? { face_code:state.face.code, piece_no:state.face.piece } : {}; }
+    // 這一列編號的問題（空字串＝沒問題）：與後端 qc_face_validate 同一套規則
+    function faceBalloonIssue(i){
+        var it=MODEL.items[i]; if(!it) return '';
+        var c=faceKey(it.balloon);
+        if((it.name||'').trim()==='' && c==='') return '';
+        if(c==='') return '未填編號';
+        if(!faceCodeValid(it.balloon)) return '編號只能是單一英文字母（A～Z），或 1～99 的純數字（不可 0 開頭、不可小數點、不可英數混合）';
+        for(var j=0;j<MODEL.items.length;j++){ if(j!==i && faceKey(MODEL.items[j].balloon)===c) return '編號重複'; }
+        var u=faceUsed()[c];
+        if(u && !(state.editFormId && u.form_id===state.editFormId)){
+            if(u.state==='DONE') return '第'+state.face.piece+'顆已於 '+u.face+' 面驗過（合格），不可重複檢驗';
+            if(u.state==='ABNORMAL') return '第'+state.face.piece+'顆在 '+u.face+' 面已開異常單，不可再驗';
+        }
+        return '';
+    }
+    function faceInit(res){
+        FACE.enabled = !!(res && res.enabled);
+        FACE.pieces = (res && res.pieces) || {};
+        var ps=facePieceNos();
+        state.face = { code:'', piece: ps.length ? ps[ps.length-1] : 1, start:'A' };   // 預設接續最近一顆；起始編號預設 A
+    }
+    function renderFacePanel(){
+        var $p=$('#face-panel');
+        if(!faceOn()){ $p.hide().empty(); return; }
+        var rec=!!(state.editFormId||state.viewFormId), ro=!!state.viewOnly;
+        var ps=facePieceNos(), maxP=ps.length?ps[ps.length-1]:0;
+        var pcOpts=ps.map(function(p){
+            return '<option value="'+p+'"'+(p===state.face.piece?' selected':'')+'>接續第'+p+'顆（已驗：'+esc((FACE.pieces[p].faces||[]).join('、'))+' 面）</option>';
+        }).join('');
+        if(!rec) pcOpts+='<option value="'+(maxP+1)+'"'+(state.face.piece===maxP+1?' selected':'')+'>新的一顆（第'+(maxP+1)+'顆）</option>';
+        else if(ps.indexOf(state.face.piece)<0) pcOpts+='<option value="'+state.face.piece+'" selected>第'+state.face.piece+'顆</option>';
+        var faceBtns=['A','B','C','D'].map(function(f){
+            return '<button type="button" class="face-btn'+(state.face.code===f?' on':'')+'" data-f="'+f+'"'+(ro?' disabled':'')+'>'+f+' 面</button>';
+        }).join('');
+        var pc=(FACE.pieces||{})[state.face.piece], chips='', nRework=0;
+        if(pc){
+            chips=Object.keys(pc.balloons).map(function(k){
+                var b=pc.balloons[k], cls=b.state==='DONE'?'fc-done':(b.state==='REWORK'?'fc-rework':'fc-abn');
+                var txt=b.state==='DONE'?'已驗':(b.state==='REWORK'?'待複驗(重工)':'已開異常單');
+                if(b.state==='REWORK') nRework++;
+                return '<span class="face-chip '+cls+'" title="'+esc(b.item.name||'')+'">'+esc(faceDisp(b.code))+'・'+esc(b.face)+'面・'+txt+'</span>';
+            }).join('');
+        }
+        $p.html('<div class="face-row"><b>本次檢驗的面</b> '+faceBtns+
+                '<span style="margin-left:14px;"><b>這是</b> <select id="face-piece" class="input-sm"'+((rec||ro)?' disabled':'')+'>'+pcOpts+'</select></span>'+
+                '<span class="muted-help" style="margin-left:10px;">首件多面分段：編號照圖面填；同一顆已驗合格的編號不能重複驗。</span></div>'+
+                '<div class="face-row" style="margin-top:6px;">'+(chips ? ('<b>第'+state.face.piece+'顆狀態</b> '+chips) : '<span class="muted-help">第'+state.face.piece+'顆尚無已驗項目。</span>')+'</div>'+
+                (ro ? '' : '<div class="face-row" style="margin-top:6px;">'+
+                    '<input type="text" id="face-start" class="input-sm" style="width:90px;" maxlength="2" placeholder="起始編號" title="例：A、E 或 5；只幫還沒填編號的列依序填，已驗過的編號會自動略過；非連續的直接在列上手動改">'+
+                    ' <button type="button" class="btn btn-xs btn-default" id="btn-face-fill"><i class="fa fa-sort-alpha-asc"></i> 依序填入編號</button>'+
+                    (nRework ? ' <button type="button" class="btn btn-xs btn-warm" id="btn-face-rework"><i class="fa fa-wrench"></i> 帶入待複驗項目（'+nRework+'）</button>' : '')+
+                    '</div>'));
+        $('#face-start').val(state.face.start||'A');
+        $p.show();
+    }
+    $(document).on('click', '.face-btn', function(){
+        state.face.code=$(this).data('f'); renderFacePanel(); scheduleDraftSave();
+    });
+    $(document).on('change', '#face-piece', function(){
+        state.face.piece=+$(this).val(); faceReseed(); render(); scheduleDraftSave();
+    });
+    $(document).on('input', '#face-start', function(){ state.face.start=$(this).val(); });
+    $(document).on('input', '.f-balloon', function(){
+        var i=+$(this).data('i'); if(!MODEL.items[i]) return;
+        MODEL.items[i].balloon=$(this).val();
+        // 只更新這一列與同表其他列的紅框（編號重複會互相影響），不重畫整張表以免打斷輸入
+        $('#items-body .f-balloon').each(function(){
+            var ix=+$(this).data('i'), is=faceBalloonIssue(ix);
+            $(this).toggleClass('fmt-invalid', !!is).attr('title', is||'圖面編號');
+        });
+        scheduleDraftSave();
+    });
+    $(document).on('change', '.sel-ngact', function(){
+        var i=+$(this).data('i'); if(!MODEL.items[i]) return;
+        MODEL.items[i].ng_action=$(this).val(); $(this).toggleClass('fmt-invalid', !$(this).val()); scheduleDraftSave();
+    });
+    $(document).on('click', '#btn-face-fill', function(){
+        var start=($('#face-start').val()||'').trim();
+        if(!start){ alert('請先輸入起始編號（單一英文字母或 1～99 的數字，例如 A 或 5）'); return; }
+        if(!faceCodeValid(start)){ alert('起始編號只能是單一英文字母（A～Z），或 1～99 的純數字（不可 0 開頭、不可小數點、不可英數混合）'); return; }
+        var cur=faceNum(start), over=false;
+        MODEL.items.forEach(function(it){
+            if((it.name||'').trim()==='' || String(it.balloon||'').trim()!=='') return;
+            while(cur<=99 && faceTakenNum(cur)) cur++;
+            if(cur>99){ over=true; return; }
+            it.balloon=faceFmt(cur); cur++;
+        });
+        if(over) alert('編號最大到 99，部分項目沒有可用的編號，請手動填寫。');
+        render(); scheduleDraftSave();
+    });
+    // 帶入「重工待複驗」：把這顆上次判 NG 選重工的編號項目（名稱／標準／公差）原樣帶進來，只要重新填實測值
+    $(document).on('click', '#btn-face-rework', function(){
+        var pc=(FACE.pieces||{})[state.face.piece]; if(!pc) return;
+        MODEL.items = MODEL.items.filter(function(it){ return !isItemEmpty(it); });   // 先清掉空白列
+        var added=0;
+        Object.keys(pc.balloons).forEach(function(k){
+            var b=pc.balloons[k]; if(b.state!=='REWORK') return;
+            if(MODEL.items.some(function(it){ return faceKey(it.balloon)===k; })) return;
+            var it=newItem(), s=b.item||{};
+            it.name=s.name||''; it.std=s.std||''; it.mode=s.mode||'TOL'; it.min=s.min||''; it.max=s.max||'';
+            it.up=s.up||''; it.lo=s.lo||''; it.type=s.type||'NUM'; it.balloon=b.code;
+            it.readings=[{ vals:blankVals(state.sampleN, it.type==='OKNG'?'OK':'') }];
+            MODEL.items.push(it); added++;
+        });
+        if(!added) flashMsg('待複驗的項目都已經在這張單上了。');
+        render(); scheduleDraftSave();
+    });
+
+    // ---------- NG加驗（判定NG的項目可加驗多列，每列固定 RC_N 格；不影響原本的判定/進度/不良數） ----------
+    function rcellHtml(it, i, k, c){
+        var raw = it.rechecks[k].vals[c];
+        var attr = ' data-ri="'+i+'" data-k="'+k+'" data-c="'+c+'"';
+        if(it.type==='OKNG'){
+            var v = (raw==='NG') ? 'NG' : (raw===''||raw==null ? '' : 'OK');
+            var cls = v==='NG' ? 'c-ng' : (v==='OK' ? 'c-ok' : 'c-empty');
+            return '<div class="rcell rc-okng '+cls+'"'+attr+' tabindex="0" title="點擊切換：空白 → OK → NG">'+
+                   '<span class="mno">#'+(c+1)+'</span><span class="mtxt">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</span></div>';
+        }
+        var j = judge(it, raw);
+        var cls2 = j==='NG' ? 'c-ng' : (j==='OK' ? 'c-ok' : 'c-empty');
+        return '<div class="rcell '+cls2+'"'+attr+' title="'+esc(cellTitle(it,raw))+'">'+
+               '<span class="mno">#'+(c+1)+'</span>'+
+               '<input type="text" inputmode="decimal" class="rcval" value="'+esc(raw)+'"'+attr+'>'+
+               '<span class="rcdev">'+esc(devText(it,raw,true))+'</span></div>';
+    }
+    function rcRepaint($cell){
+        var i=+$cell.attr('data-ri'), k=+$cell.attr('data-k'), c=+$cell.attr('data-c');
+        var it=MODEL.items[i]; if(!it || !it.rechecks[k]) return;
+        var raw=it.rechecks[k].vals[c];
+        var j = (it.type==='OKNG') ? ((raw==='NG')?'NG':(raw===''||raw==null?'':'OK')) : judge(it, raw);
+        $cell.removeClass('c-ok c-ng c-empty').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
+        if(it.type==='OKNG') $cell.find('.mtxt').text(j==='NG'?'✘ NG':(j==='OK'?'✔ OK':'—'));
+        else { $cell.attr('title', cellTitle(it,raw)); $cell.find('.rcdev').text(devText(it,raw,true)); }
+    }
+    $(document).on('input', '.rcval', function(){
+        var i=+$(this).attr('data-ri'), k=+$(this).attr('data-k'), c=+$(this).attr('data-c');
+        if(!MODEL.items[i] || !MODEL.items[i].rechecks[k]) return;
+        MODEL.items[i].rechecks[k].vals[c] = $(this).val();
+        rcRepaint($(this).closest('.rcell')); scheduleDraftSave();
+    });
+    $(document).on('focus', '.rcval', function(){ lastFocused=this; autoSelectOnFocus(this); });
+    $(document).on('dblclick', '.rcval', function(){ if($(this).val()===''){ return; } $(this).val('').trigger('input'); });
+    $(document).on('click', '.rcell.rc-okng', function(){
+        var i=+$(this).attr('data-ri'), k=+$(this).attr('data-k'), c=+$(this).attr('data-c');
+        var it=MODEL.items[i]; if(!it || !it.rechecks[k]) return;
+        var cur=it.rechecks[k].vals[c];
+        it.rechecks[k].vals[c] = (cur==='' || cur==null) ? 'OK' : (cur==='OK' ? 'NG' : '');
+        rcRepaint($(this)); scheduleDraftSave();
+    });
+    $(document).on('click', '.btn-add-recheck', function(e){
+        e.preventDefault();
+        var i=+$(this).data('i'), it=MODEL.items[i]; if(!it) return;
+        if(!it.rechecks) it.rechecks=[];
+        it.rechecks.push({ vals:blankVals(RC_N, '') });
+        var k=it.rechecks.length-1;
+        render(); scheduleDraftSave();
+        setTimeout(function(){ $('.rcell[data-ri="'+i+'"][data-k="'+k+'"][data-c="0"]').find('.rcval').focus(); }, 30);
+    });
+    $(document).on('click', '.btn-del-recheck', function(e){
+        e.preventDefault();
+        var i=+$(this).data('i'), k=+$(this).data('k');
+        if(MODEL.items[i] && MODEL.items[i].rechecks) MODEL.items[i].rechecks.splice(k,1);
+        render(); scheduleDraftSave();
+    });
     $(document).on('click', '.btn-del-reading', function(e){
         e.preventDefault();
         var i=+$(this).data('i'), r=+$(this).data('r');
@@ -3946,7 +4610,12 @@ $(function(){
     });
     // 新增檢驗項目：工具列、表格最後一列、原本表格下方三個入口都走這裡
     function addItemRow(focusName){
-        MODEL.items.push(newItem());
+        var ni=newItem();
+        if(faceOn() && faceNew()){   // 多面檢驗：新列自動帶下一個還沒驗的編號
+            var ln=0; MODEL.items.forEach(function(x){ var n=faceNum(x.balloon); if(n && n>ln) ln=n; });
+            ni.balloon=faceFmt(faceNextNum(ln)); ni._auto=true;
+        }
+        MODEL.items.push(ni);
         focusItem=MODEL.items.length-1;
         view='GRID'; localStorage.setItem('qc2_view',view);
         $('#chk-std-edit').prop('checked', true);
@@ -4035,8 +4704,19 @@ $(function(){
     }
     // 檢驗性質三選一：直接點選一般／首件／末件，不是切換式（一般本身就是明確的選項之一）
     $(document).on('click', '#kind-box .ki-btn', function(){
+        var prevKind = state.inspKind;
         state.inspKind = $(this).data('kind');
-        applyInspKindUI(); scheduleDraftSave();
+        // 點選「首件」或「末件」自動把本批送驗數設成 1（仍可人工修改）；從首件／末件改回一般則還原成「尚未檢驗」剩餘量。
+        // 只對新建的檢驗單生效（修改／檢視既有紀錄、臨時檢驗單不動數量）。
+        if(ctx && !ctx.adhoc && !state.editFormId && !state.viewFormId && prevKind!==state.inspKind){
+            if(state.inspKind==='FIRST' || state.inspKind==='LAST'){ $('#inp-qty').val(1); }
+            else if(prevKind==='FIRST' || prevKind==='LAST'){ $('#inp-qty').val(pendingSummary().left); }
+            updateQtyLive(); updateSuggestSampleLive();
+        }
+        applyInspKindUI();
+        if(faceOn()) faceReseed();
+        else if(faceNew()) MODEL.items = MODEL.items.filter(function(it){ return !(it._auto && !faceRowHasVal(it)); });
+        render(); scheduleDraftSave();   // render：多面分段檢驗的面板／編號欄隨檢驗性質出現或消失
     });
     // 首件/末件模式下，送驗數一改，全檢件數要跟著變
     $('#inp-qty').on('input', function(){
@@ -4349,9 +5029,11 @@ $(function(){
     } else {
         state.demo = true;
         $('#mode-banner').html('<i class="fa fa-info-circle"></i> 請先選擇要檢驗的對象：'+
-            '左邊是<b>製令待驗項目</b>（有 BOM、有製程）；右邊是<b>臨時檢驗單</b>（退貨／客訴／來料，沒有製令與製程）。');
+            '左邊是<b>BOM待驗項目</b>（有 BOM、有製程）；右邊是<b>臨時檢驗單</b>（退貨／客訴／來料，沒有BOM）。');
         $('#step-search').show();
-        loadAdhocList();
+        loadAdhocList(); loadBomRecent();
+        // 由 QC 待驗清單「無BOM檢驗」帶 ?adhoc=1 進來：直接開啟建立臨時檢驗單
+        if(new URLSearchParams(location.search).get('adhoc')==='1'){ setTimeout(function(){ $('#btn-new-adhoc').trigger('click'); }, 0); }
     }
 
     function loadContext(fid){
@@ -4374,10 +5056,11 @@ $(function(){
             }
             // 每次載入新的情境（含由「批次與檢驗歷程」開啟舊紀錄後、再切換到其他製程）都要先
             // 清掉修改／檢視模式殘留的狀態，否則切到別的製程時畫面會繼續鎖著、存檔鈕繼續藏著。
-            state.editFormId=null; state.viewFormId=null; state.editMeta=null;
+            state.editFormId=null; state.viewFormId=null; state.editMeta=null; state.faceRec=false;
             $('#edit-mode-banner,#view-mode-banner').hide();
             setViewOnlyMode(false);
             ctx = res.context;
+            faceInit(res.face);   // 多面分段檢驗（首件）：各顆已驗編號狀態
             // 每次載入都重新組出完整訊息，不可以拿「目前 #mode-banner 現有內容」疊加——
             // reloadContext() 存檔/退回重做/開放修改…都會再叫一次 loadContext()，若用疊加寫法，
             // 同一句「這筆 BOM 已結案…」會一次比一次多印一行（2026-09-24 使用者回報畫面洗版）。
@@ -4425,6 +5108,11 @@ $(function(){
             // 從異常單連過來看相關檢驗紀錄：?view_form=檢驗單 id（只開一次，之後換製程不再重複跳）
             var vf = new URLSearchParams(location.search).get('view_form');
             if(vf && !window.__vfOpened){ window.__vfOpened = true; setTimeout(function(){ openViewModal(vf); }, 400); }
+            // 由「最近的製令檢驗紀錄／歷史檢驗清單」點進來：?open_rec=檢驗單 id（只開一次）進入該筆的檢視／修改畫面
+            var orc = new URLSearchParams(location.search).get('open_rec');
+            if(orc && !window.__orOpened){ window.__orOpened = true; setTimeout(function(){ openEditRecord(orc); }, 400); }
+            // 修改存檔後重新載入完畢：回到那一筆的檢視畫面（重新向後端讀取，才看得到剛存的內容）
+            if(state.reopenRec){ var rq=state.reopenRec; state.reopenRec=0; setTimeout(function(){ openEditRecord(rq); }, 200); }
         }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
     }
     function reloadContext(){ if(ctx) loadContext(ctx.bom_ing_fid); }
@@ -4590,8 +5278,10 @@ $(function(){
         var order=ctx.order_qty||0, good=(ctx.good_qty!=null ? ctx.good_qty : order), used=0;
         (state.batches||[]).forEach(function(b){
             if(!b.rounds || !b.rounds.length) return;
-            var lastNormal=null;
+            var lastNormal=null, seenPiece={};
             b.rounds.forEach(function(r){
+                // 多面分段檢驗：同一顆分好幾面送驗，送驗數只算一次（不然每多驗一面就多扣一次「尚未檢驗」）
+                if(r.face_code && r.piece_no){ if(seenPiece[r.piece_no]) return; seenPiece[r.piece_no]=1; }
                 if(r.insp_kind==='FIRST' || r.insp_kind==='LAST') used += (r.incoming_qty||0);
                 else lastNormal=r;
             });
@@ -4614,14 +5304,18 @@ $(function(){
         var ps=pendingSummary();
         $('#ctx-bar').show().html(
             '<div><b>料號</b>'+partCell+'</div>'+
-            (ctx.adhoc ? '' : '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>')+
+            '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>'+
             '<div><b>製令 / BOM</b><span class="cv">'+esc(ctx.bom||'—')+'</span></div>'+
-            '<div><b>'+(ctx.adhoc?'檢驗類型（無製程）':'製程')+'</b><span class="cv">'+
-                (ctx.adhoc ? esc(ctx.process||'—')
-                    : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>'+
-                      // 製程右側顯示這一站登記的廠商；換製程時 loadSiblingProcesses 的資料會立刻更新這格（不必等整頁重載）
-                      '<span id="ctx-maker" class="ctx-maker" style="margin-left:8px;font-weight:bold;'+(ctx.maker?'':'color:var(--coral);')+'" title="這一站登記的加工廠商">廠商：'+esc(ctx.maker||'尚未登記')+'</span>')
+            // 臨時檢驗單與一般檢驗同一種版面，只多一格「檢驗類型」
+            (ctx.adhoc ? '<div><b>檢驗類型</b><span class="cv">'+esc(ctx.process||'—')+'</span></div>' : '')+
+            '<div><b>製程</b><span class="cv">'+
+                (ctx.adhoc ? esc((ctx.adhoc_procs||[]).map(function(p){return p.ProcessName;}).join('、')||'—')
+                    : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>')
             +'</span></div>'+
+            // 廠商：與「客戶」同一種上下兩行顯示；換製程時 loadSiblingProcesses 會更新 #ctx-maker
+            '<div><b>廠商</b><span class="cv" id="ctx-maker" title="這一站登記的加工廠商"'+
+                (ctx.adhoc ? (ctx.adhoc_maker?'':' style="color:var(--coral);"')+'>'+esc(ctx.adhoc_maker||'—')
+                           : (ctx.maker?'':' style="color:var(--coral);"')+'>'+esc(ctx.maker||'尚未登記'))+'</span></div>'+
             (ctx.adhoc
                 ? '<div><b>送驗數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'
                 // 「良品數」正名為「良品上限」（2026-10-06 使用者回報：還沒驗過任何一件時這欄跟
@@ -4638,11 +5332,11 @@ $(function(){
                     var lbl = k==='NORMAL'?'一般':(k==='FIRST'?'首件':'末件');
                     return '<button type="button" class="ki-btn" data-kind="'+k+'">'+lbl+'</button>';
                 }).join('')+'</span></span></div>')+
-            // 本次檢驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
+            // 本批送驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
             // 這裡就跟著更新（updateQtyLive，不必整列重畫）——2026-10-06 使用者要求，
             // 不用再把底部「數量/處置備註」面板拉開才看得到本次填的是多少件。
             // 雙擊可直接修改（同一天使用者追加要求），顯示跟編輯共用同一個元素。
-            '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val" title="雙擊可直接修改">0</span></div>');
+            '<div style="margin-left:auto;"><b>本批送驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val" title="雙擊可直接修改">0</span></div>');
         if(LOCK_PROC && !ctx.adhoc){ $('#sel-switch-process').prop('disabled',true).attr('title','由待驗清單開啟，製程已鎖定，不可更動'); }
         applyInspKindUI();
         refreshSaveDraftBtn();
@@ -4650,13 +5344,13 @@ $(function(){
         if(!ctx.adhoc) loadSiblingProcesses();
         updateQtyLive();
     }
-    // 「本次檢驗數」即時顯示（情境列最右）：純讀 #inp-qty 現值，供人一眼看到不用展開底部面板。
+    // 「本批送驗數」即時顯示（情境列最右）：純讀 #inp-qty 現值，供人一眼看到不用展開底部面板。
     // 編輯中（.ctx-qty-live-edit 存在）時不要被重畫蓋掉，否則正在打字的輸入框會被整個換掉。
     function updateQtyLive(){
         if($('#ctx-qty-live-val input').length) return;
         $('#ctx-qty-live-val').text(parseInt($('#inp-qty').val())||0);
     }
-    // 「建議抽驗」依「本次檢驗數」(#inp-qty) 即時重算（2026-10-07 使用者回報：改了檢驗數，
+    // 「建議抽驗」依「本批送驗數」(#inp-qty) 即時重算（2026-10-07 使用者回報：改了檢驗數，
     // 建議抽驗數沒有跟著變——load_context 當下只算過一次存進 ctx.sample_qty，不會自動跟著變）。
     // 只更新畫面上的建議值顯示，**不動 #inp-sample 本身**——那是使用者真正要送出的抽驗數，
     // 改它會觸發既有的「抽驗數變更要填理由」跳窗（qc_sample_change_log），系統自動重算不該
@@ -4674,7 +5368,7 @@ $(function(){
             }, 'json');
         }, 400);
     }
-    // 「本次檢驗數」雙擊直接修改（2026-10-06 使用者要求）：編輯的就是 #inp-qty 本身，改完
+    // 「本批送驗數」雙擊直接修改（2026-10-06 使用者要求）：編輯的就是 #inp-qty 本身，改完
     // 直接寫回並觸發既有的 input 事件（草稿自動存檔／首件末件全檢同步件數都沿用原邏輯，
     // 不另外重寫一套）。必須是正整數；超過「尚未檢驗」剩餘量只提示不擋（可能是合理的覆蓋修正）。
     $(document).on('dblclick', '#ctx-qty-live-val', function(){
@@ -4690,13 +5384,13 @@ $(function(){
         function commit(){
             var v=parseInt($inp.val());
             if(isNaN(v) || v<=0){
-                alert('本次檢驗數必須是正整數。');
+                alert('本批送驗數必須是正整數。');
                 $inp.trigger('focus'); try{ $inp[0].select(); }catch(e){}
                 return;
             }
             var left = (ctx && !ctx.adhoc) ? pendingSummary().left : null;
             if(left!=null && v>left){
-                alert('本次檢驗數 '+v+' 件，已超過「尚未檢驗」剩餘數量 '+left+' 件，請確認是否正確。');
+                alert('本批送驗數 '+v+' 件，已超過「尚未檢驗」剩餘數量 '+left+' 件，請確認是否正確。');
             }
             $('#inp-qty').val(v).trigger('input');
             updateQtyLive();
@@ -4730,12 +5424,12 @@ $(function(){
         if(!newFid || String(newFid)===String(ctx.bom_ing_fid)) return;
         if(LOCK_PROC){ $sel.val(ctx.bom_ing_fid); return; }   // 防呆：鎖定時任何方式都不可換製程
         var mk = sibMaker[newFid] || '';
-        $('#ctx-maker').text('廠商：'+(mk||'尚未登記')).css('color', mk?'':'var(--coral)');
+        $('#ctx-maker').text(mk||'尚未登記').css('color', mk?'':'var(--coral)');
         var hasProgress = MODEL.items && MODEL.items.some(function(it){ return itemFilledCount(it)>0; });
         if(hasProgress && !confirm('目前這筆檢驗尚有還沒存檔的填寫內容，切換製程會離開此頁面。\n（內容已自動存成草稿，之後回來這個製程仍可繼續）\n確定要切換嗎？')){
             $sel.val(ctx.bom_ing_fid);
             var mk0 = sibMaker[ctx.bom_ing_fid] || ctx.maker || '';
-            $('#ctx-maker').text('廠商：'+(mk0||'尚未登記')).css('color', mk0?'':'var(--coral)');
+            $('#ctx-maker').text(mk0||'尚未登記').css('color', mk0?'':'var(--coral)');
             return;
         }
         loadContext(newFid);
@@ -4791,64 +5485,139 @@ $(function(){
     // =====================================================================
     var AH_TYPES = ['退貨檢驗','客訴複驗','來料檢驗','重工後檢驗','庫存抽驗'];
     var ahPart = null;   // {d_id, part_no}
+    // 「最近 10 筆」兩個清單共用同一種顯示：
+    //   第一行：檢驗類型 ／ BOM ／ 料號　時間　判定　檢驗人
+    //   第二行：製程：…　廠商：…
+    function recentItemHtml(r, o){
+        var res = r.check_result==='NG' ? '<span class="st-ng">✘不良 '+(r.ng_qty||0)+'</span>' : '<span class="st-ok">✔合格</span>';
+        return '<div class="search-result-item">'+
+            (IS_SUPER ? '<button class="btn btn-xs act-del-rec pull-right" data-id="'+r.qc_form_id+'" title="完全刪除此筆（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>' : '')+
+            '<span class="'+o.cls+'" style="cursor:pointer;display:block;" data-id="'+r.qc_form_id+'" data-fid="'+(r.bom_ing_fid||0)+'">'+
+            '<b>'+esc(o.type)+'</b> ／ '+(o.bom?esc(o.bom)+' ／ ':'')+esc(r.part_no||'—')+
+            '　'+res+' <span class="muted-help">　建立：'+dotDT(r.created_at,16)+' '+esc(r.created_by||'')+
+            (editedText(r)?'　<span style="color:var(--amber-d);">'+esc(editedText(r))+'</span>':'')+'</span>'+
+            '<br><span class="muted-help">製程：'+esc(o.procs||'—')+'　廠商：'+esc(o.maker||'—')+'</span></span></div>';
+    }
+    function loadBomRecent(){
+        $.post(V2API, { v2action:'bom_recent_list' }, function(res){
+            if(!res || !res.success){ $('#bom-recent-list').html('<div class="muted-help">查詢失敗</div>'); return; }
+            var rows=res.rows||[];
+            $('#bom-recent-list').html(rows.length ? rows.map(function(r){
+                return recentItemHtml(r, { cls:'bom-open', type:'製令檢驗', bom:r.bom, procs:r.process_name, maker:r.maker });
+            }).join('') : '<div class="muted-help">目前沒有製令檢驗紀錄</div>');
+        }, 'json');
+    }
+    $(document).on('click','.bom-open', function(){
+        location.href='inspection_entry_v2.php?bom_ing_fid='+encodeURIComponent($(this).attr('data-fid'))+'&open_rec='+encodeURIComponent($(this).attr('data-id'));
+    });
     function loadAdhocList(){
         $.post(V2API, { v2action:'adhoc_list' }, function(res){
             if(!res || !res.success){ $('#adhoc-list').html('<div class="muted-help">查詢失敗</div>'); return; }
             var rows=res.rows||[];
             $('#adhoc-list').html(rows.length ? rows.map(function(r){
-                return '<div class="search-result-item">'+
-                    (IS_SUPER ? '<button class="btn btn-xs act-del-rec pull-right" data-id="'+r.qc_form_id+'" title="完全刪除此筆（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>' : '')+
-                    '<span class="ah-open" style="cursor:pointer;" data-id="'+r.qc_form_id+'">'+
-                    '<b>'+esc(r.process_name||'臨時檢驗')+'</b> ／ 料號 '+esc(r.part_no||('d_id '+r.d_id))+
-                    ' <span class="muted-help">'+String(r.created_at||'').substring(0,16)+
-                    '　'+(r.check_result==='NG'?'<span class="st-ng">✘不良 '+(r.ng_qty||0)+'</span>':'<span class="st-ok">✔合格</span>')+
-                    '　'+esc(r.created_by||'')+'</span></span></div>';
+                return recentItemHtml(r, { cls:'ah-open', type:(r.process_name||'臨時檢驗'), bom:'', procs:r.procs, maker:r.maker });
             }).join('') : '<div class="muted-help">目前沒有臨時檢驗單</div>');
         }, 'json');
     }
+    var ahProcs = [];    // [{no,name}] 來料檢驗／重工後檢驗用
+    var ahMaker = null;  // {id,name}
+    function ahTypeNeedsProc(t){ return t==='來料檢驗' || t==='重工後檢驗'; }
+    function ahSetType(t){
+        $('#ah-type').val(t);
+        $('.ah-type-pick').each(function(){
+            var on = $(this).attr('data-t')===t;
+            $(this).toggleClass('btn-warm', on).toggleClass('btn-default', !on);
+        });
+        var need = ahTypeNeedsProc(t);
+        $('#ah-proc-box').toggle(need);
+        if(!need){ ahProcs=[]; ahMaker=null; ahRenderPicked(); }
+    }
+    function ahRenderPicked(){
+        $('#ah-proc-picked').html(ahProcs.map(function(p,i){
+            return '<span class="label label-warning" style="display:inline-block;margin:0 4px 4px 0;padding:4px 7px;font-size:12px;">'+esc(p.name)+' ('+p.no+') <a href="#" class="ah-proc-del" data-i="'+i+'" style="color:#fff;margin-left:4px;">×</a></span>';
+        }).join(''));
+        $('#ah-maker-picked').html(ahMaker ? '<span class="label label-warning" style="display:inline-block;margin:0 4px 4px 0;padding:4px 7px;font-size:12px;">'+esc(ahMaker.name)+' ('+esc(ahMaker.id)+') <a href="#" class="ah-maker-del" style="color:#fff;margin-left:4px;">×</a></span>' : '');
+    }
     $('#btn-new-adhoc').on('click', function(){
-        ahPart=null;
+        ahPart=null; ahProcs=[]; ahMaker=null;
         $('#ah-type-btns').html(AH_TYPES.map(function(t){
             return '<button type="button" class="btn btn-default btn-xs ah-type-pick" data-t="'+esc(t)+'" style="margin:0 4px 4px 0;">'+esc(t)+'</button>';
         }).join(''));
-        $('#ah-type').val(AH_TYPES[0]);
+        ahSetType(AH_TYPES[0]);
+        ahRenderPicked();
         $('#ah-part-kw').val(''); $('#ah-part-results').hide().empty(); $('#ah-part-picked').empty();
+        $('#ah-proc-kw,#ah-maker-kw').val(''); $('#ah-proc-results,#ah-maker-results').hide().empty();
         $('#ah-qty').val(0); $('#ah-sample').val(3); $('#ah-remark').val('');
         $('#adhocModal').modal('show');
     });
-    $(document).on('click','.ah-type-pick', function(){ $('#ah-type').val($(this).attr('data-t')); });
-    function ahSearch(){
-        var kw=$('#ah-part-kw').val().trim();
-        $('#ah-part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
-        $.post(V2API, { v2action:'part_search', keyword:kw }, function(res){
-            if(!res.success){ $('#ah-part-results').html('<div class="search-result-item text-danger">'+esc(res.message||'搜尋失敗')+'</div>'); return; }
-            var rows=res.rows||[];
-            $('#ah-part-results').html(rows.length ? rows.map(function(r){
-                return '<div class="search-result-item ah-part-pick" data-id="'+r.d_id+'" data-no="'+esc(r.D_Setting_Id)+'">'+
-                       esc(r.D_Setting_Id)+(r.Revision?' <span class="muted-help">Rev '+esc(r.Revision)+'</span>':'')+'</div>';
-            }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
-        }, 'json');
+    $(document).on('click','.ah-type-pick', function(){ ahSetType($(this).attr('data-t')); });
+    // 即時搜尋（防抖；只採用最後一次查詢的結果）
+    function ahLiveSearch(inputSel, resSel, action, render, pick){
+        var timer=null, seq=0;
+        $(inputSel).on('input', function(){
+            clearTimeout(timer);
+            var kw=$(this).val().trim();
+            if(!kw){ $(resSel).hide().empty(); return; }
+            timer=setTimeout(function(){
+                var my=++seq;
+                $(resSel).show().html('<div class="search-result-item muted-help">搜尋中…</div>');
+                $.post(V2API, { v2action:action, keyword:kw }, function(res){
+                    if(my!==seq) return;
+                    if(!res || !res.success){ $(resSel).html('<div class="search-result-item text-danger">'+esc((res&&res.message)||'搜尋失敗')+'</div>'); return; }
+                    var rows=res.rows||[];
+                    $(resSel).html(rows.length ? rows.map(render).join('') : '<div class="search-result-item muted-help">查無資料</div>');
+                }, 'json');
+            }, 250);
+        });
     }
-    $('#btn-ah-search').on('click', function(e){ e.preventDefault(); ahSearch(); });
-    $('#ah-part-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); ahSearch(); } });
+    ahLiveSearch('#ah-part-kw','#ah-part-results','part_search_rich', function(r){
+        return '<div class="search-result-item ah-part-pick" data-id="'+r.d_id+'" data-no="'+esc(r.D_Setting_Id)+'" data-client="'+esc(r.client||'')+'">'+
+            (r.client?'<b>'+esc(r.client)+'</b>　':'')+esc(r.D_Setting_Id)+
+            (r.Spec_No?'　<span class="muted-help">'+esc(r.Spec_No)+'</span>':'')+
+            '　<span class="muted-help">版別：'+esc(r.Revision||'—')+'</span></div>';
+    });
+    ahLiveSearch('#ah-proc-kw','#ah-proc-results','proc_search', function(r){
+        return '<div class="search-result-item ah-proc-pick" data-no="'+r.ProcessNo+'" data-name="'+esc(r.ProcessName)+'">'+esc(r.ProcessName)+' <span class="muted-help">('+r.ProcessNo+')</span></div>';
+    });
+    ahLiveSearch('#ah-maker-kw','#ah-maker-results','maker_search', function(r){
+        var nm=r.maker_id||r.maker_id_all;
+        return '<div class="search-result-item ah-maker-pick" data-id="'+esc(r.maker_id_no)+'" data-name="'+esc(nm)+'">'+esc(nm)+' <span class="muted-help">('+esc(r.maker_id_no)+')</span></div>';
+    });
+    $(document).on('click','.ah-proc-pick', function(){
+        var no=parseInt($(this).attr('data-no'));
+        if(!ahProcs.some(function(p){return p.no===no;})) ahProcs.push({no:no, name:String($(this).attr('data-name'))});
+        $('#ah-proc-kw').val(''); $('#ah-proc-results').hide().empty(); ahRenderPicked();
+    });
+    $(document).on('click','.ah-proc-del', function(e){ e.preventDefault(); ahProcs.splice(parseInt($(this).attr('data-i')),1); ahRenderPicked(); });
+    $(document).on('click','.ah-maker-pick', function(){
+        ahMaker={ id:String($(this).attr('data-id')), name:String($(this).attr('data-name')) };
+        $('#ah-maker-kw').val(''); $('#ah-maker-results').hide().empty(); ahRenderPicked();
+    });
+    $(document).on('click','.ah-maker-del', function(e){ e.preventDefault(); ahMaker=null; ahRenderPicked(); });
     $(document).on('click','.ah-part-pick', function(){
-        ahPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')) };
-        $('#ah-part-picked').html('已選料號：<b>'+esc(ahPart.part_no)+'</b>');
+        ahPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')), client:String($(this).attr('data-client')||'') };
+        $('#ah-part-picked').html('已選料號：<b>'+esc($(this).text())+'</b>');
+        $('#ah-part-kw').val(ahPart.part_no);
         $('#ah-part-results').hide();
     });
+    // 輸入框改字＝取消已選，避免畫面寫 A、實際綁 B
+    $('#ah-part-kw').on('input', function(){ if(ahPart && $(this).val()!==ahPart.part_no){ ahPart=null; $('#ah-part-picked').empty(); } });
     $('#btn-ah-create').on('click', function(){
         var type=$('#ah-type').val().trim();
         if(!type){ alert('請選擇或輸入檢驗類型'); return; }
         if(!ahPart){ alert('請先搜尋並選擇料號'); $('#ah-part-kw').focus(); return; }
         var sample=Math.max(1, parseInt($('#ah-sample').val())||1);
         // 自行組出 ctx（不打 load_context，因為沒有 bom_ing_fid）
-        ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:ahPart.part_no, client:'', order_qty:parseInt($('#ah-qty').val())||0,
-                process:type, d_id:ahPart.d_id, sample_qty:sample, adhoc:true };
+        ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:ahPart.part_no, client:ahPart.client||'', order_qty:parseInt($('#ah-qty').val())||0,
+                process:type, d_id:ahPart.d_id, sample_qty:sample, adhoc:true,
+                proc_nos:ahTypeNeedsProc(type)?ahProcs.map(function(p){return p.no;}):[], maker_id_no:(ahTypeNeedsProc(type)&&ahMaker)?ahMaker.id:'',
+                adhoc_procs:ahTypeNeedsProc(type)?ahProcs.map(function(p){return {ProcessNo:p.no,ProcessName:p.name};}):[], adhoc_maker:(ahTypeNeedsProc(type)&&ahMaker)?ahMaker.name:'' };
         state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[]; state.inspKind='NORMAL'; state.bfStage=null;
         state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
         $('#adhocModal').modal('hide');
         $('#step-search').hide();
-        $('#mode-banner').html('<i class="fa fa-plus-square-o"></i> <b>臨時檢驗單</b>（'+esc(type)+'）：此檢驗<b>沒有製令與製程</b>，存檔後一樣寫入正式檢驗表、可列印與查歷史。');
+        $('#mode-banner').html('<i class="fa fa-plus-square-o"></i> <b>臨時檢驗單</b>（'+esc(type)+'）：此檢驗<b>沒有BOM</b>，存檔後一樣寫入正式檢驗表、可列印與查歷史。'+
+            (ahTypeNeedsProc(type)&&(ahProcs.length||ahMaker) ? '<br>製程：'+esc(ahProcs.map(function(p){return p.name;}).join('、')||'—')+'　廠商：'+esc(ahMaker?ahMaker.name:'—') : ''));
         renderCtxBar();
         $('#main-area').show(); $('#dock').show(); syncDockPad();
         $('#inp-qty').val(ctx.order_qty); updateQtyLive(); $('#inp-sample').val(sample).data('prev', sample);
@@ -4865,13 +5634,16 @@ $(function(){
         addItemRow();               // 直接給一列可填
     });
     // 點最近的臨時檢驗單 → 用既有的歷程檢視/修改流程開啟
-    $(document).on('click','.ah-open', function(){
-        var qid=$(this).data('id');
+    $(document).on('click','.ah-open', function(){ openAdhocRecord($(this).data('id')); });
+    function openAdhocRecord(qid){
         $.post(API, { action:'get_history_record', qc_form_id:qid }, function(res){
-            if(!res.success){ alert('載入失敗：'+res.message); return; }
+          if(!res.success){ alert('載入失敗：'+res.message); return; }
+          $.post(V2API, { v2action:'adhoc_info', qc_form_id:qid }, function(ir){
+            var inf=(ir&&ir.success)?ir.info:{};
             var h=res.header;
-            ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:'', client:'', order_qty:h.incoming_qty||0,
-                    process:h.process_name||'臨時檢驗', d_id:0, sample_qty:h.sample_qty||3, adhoc:true, readonly:!res.can_edit };
+            ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:inf.part_no||'', client:inf.client||'', order_qty:h.incoming_qty||0,
+                    process:h.process_name||'臨時檢驗', d_id:inf.d_id||0, sample_qty:h.sample_qty||3, adhoc:true, readonly:!res.can_edit,
+                    rev:inf.revision||'', adhoc_procs:inf.procs||[], adhoc_maker:inf.maker||'' };
             state.demo=false; state.sampleN=h.sample_qty||3;
             state.batches=[{ no:1, status:(h.check_result==='NG'?'NG':'OK'), rounds:[{
                 date:String(h.check_date||'').substring(0,16), status:(h.check_result==='NG'?'NG':'OK'),
@@ -4887,8 +5659,9 @@ $(function(){
             $('#chk-save-std').closest('label').hide();
             renderBatches();
             openEditRecord(qid);
+          }, 'json');
         }, 'json');
-    });
+    }
 
     // =====================================================================
     // 批次 / 檢驗歷程
@@ -4915,6 +5688,7 @@ $(function(){
                 qc_form_id:h.qc_form_id, insp_no:(h.insp_no||''), round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
                 incoming_qty:(parseInt(h.incoming_qty)||0), sample_qty:(parseInt(h.sample_qty)||0),
                 insp_kind:(h.insp_kind||'NORMAL'),
+                face_code:(h.face_code||''), piece_no:(parseInt(h.piece_no)||0),
                 inspector_name:h.inspector_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
                 edit_unlocked:(parseInt(h.edit_unlocked)||0), self_grace:(parseInt(h.self_grace)||0),
                 edit_log_count:(parseInt(h.edit_log_count)||0),
@@ -5003,7 +5777,7 @@ $(function(){
             }
             // 使用者 2026-09-24 回報：看不到檢驗數、也看不到誰驗的/誰審的——都補進日期欄下方
             var insp='<br><small class="muted-help">檢驗：'+esc(r.inspector_name||'—')+'</small>';
-            var appr=r.approved_name ? ('<br><small class="muted-help">審核：'+esc(r.approved_name)+' '+esc(String(r.approved_at||'').substring(0,10))+'</small>') : '';
+            var appr=r.approved_name ? ('<br><small class="muted-help">審核：'+esc(r.approved_name)+' '+esc(dotDT(r.approved_at,10))+'</small>') : '';
             var edited=r.last_edited_at ? ('<br><small class="muted-help">最後修改：'+esc(r.last_edited_by||'')+' '+esc(r.last_edited_at)+'</small>') : '';
             // 容器（2026-10-06 使用者要求）：舊資料（本欄位上線前）兩個都是空字串就不印這一行
             var ctnTxt=[r.container_1_disp,r.container_2_disp].filter(function(s){ return s; }).join('、');
@@ -5019,6 +5793,7 @@ $(function(){
             // 中間刪掉一筆之後舊資料的 round_no 可能還沒補齊(2026-09-24 前建立的)，
             // 用位置編號永遠是連續的 1,2,3…，不會出現看起來像漏資料的缺口。
             var noLine = r.insp_no ? ('<br><small class="muted-help">'+esc(r.insp_no)+'</small>') : '';
+            if(r.face_code) noLine += '<br><small style="color:var(--amber-d);font-weight:bold;">第'+(r.piece_no||'?')+'顆・'+esc(r.face_code)+'面</small>';
             return '<tr class="history-row"><td>第'+(i+1)+'次'+inspKindBadge(r.insp_kind)+noLine+'</td><td>'+esc(r.date)+insp+appr+edited+ctnLine+'</td><td>'+statusLabel(r.status)+
                    '</td><td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
         }).join('');
@@ -5036,7 +5811,7 @@ $(function(){
             alert('已開放此筆修改。'); reloadContext();
         },'json');
     });
-    $('#batch-history').on('click','.act-edit', function(){ openEditRecord($(this).data('id')); });
+    $('#batch-history').on('click','.act-edit', function(){ openEditRecord($(this).data('id'), null, true); });
     $('#batch-history').on('click','.act-view', function(){ openViewModal($(this).data('id')); });
     $('#batch-history').on('click','.act-print-hist', function(){ printHistoryRecord($(this).data('id')); });
 
@@ -5062,7 +5837,7 @@ $(function(){
                 '<tr><th>料號 / 製程</th><td>'+esc(d.part_no||'—')+'　/　'+esc(d.process_name||'—')+'</td></tr>'+
                 '<tr><th>批次 / 複驗</th><td>批次 '+d.batch_no+'　第 '+d.round_no+' 次</td></tr>'+
                 '<tr><th>判定</th><td>'+(d.check_result==='NG'?'<span class="st-ng">✘ 不良</span>':'<span class="st-ok">✔ 合格</span>')+'　不良 '+d.ng_qty+' 件</td></tr>'+
-                '<tr><th>建立</th><td>'+esc(d.created_by||'')+'　'+String(d.created_at||'').substring(0,16)+'</td></tr>'+
+                '<tr><th>建立</th><td>'+esc(d.created_by||'')+'　'+dotDT(d.created_at,16)+'</td></tr>'+
                 '<tr><th>連帶刪除</th><td>實測明細 <b>'+d.n_measurement+'</b> 筆　／　修改稽核 <b>'+d.n_edit_log+'</b> 筆　／　抽驗數變更 <b>'+d.n_sample_change+'</b> 筆</td></tr>'+
                 '</table>'+warn+
                 '<div class="muted-help">註：此料號的<b>檢驗標準（項目/公差）不會被刪除</b>，只刪這一張檢驗紀錄與其明細。</div>');
@@ -5085,7 +5860,9 @@ $(function(){
             if(state.editFormId && String(state.editFormId)===String(res.deleted.qc_form_id)) state.editFormId=null;
             if(state.viewFormId && String(state.viewFormId)===String(res.deleted.qc_form_id)){ state.viewFormId=null; setViewOnlyMode(false); }
             if(ctx && ctx.adhoc){ location.href = 'inspection_entry_v2.php' + (new URLSearchParams(location.search).get('popup')?'?popup=1':''); }
+            else if(!ctx || state.demo){ loadAdhocList(); loadBomRecent(); }   // 在選擇畫面刪「最近的臨時檢驗單」：只更新該清單
             else reloadContext();
+            if($('#step-search').is(':visible')) loadAdhocList();
         }, 'json').fail(function(x){ $b.prop('disabled',false); alert('刪除錯誤：'+x.responseText); });
     });
     $('#batch-history').on('click','.act-log',  function(){ viewEditLog($(this).data('id')); });
@@ -5122,7 +5899,7 @@ $(function(){
             '<tr><th>送驗數 / 抽驗數</th><td>'+(h.incoming_qty||0)+' / '+(h.sample_qty||0)+'</td>'+
                 '<th>判定</th><td>'+(h.check_result==='NG'?'<span class="st-ng">✘不良</span>':'<span class="st-ok">✔合格</span>')+'　不良 '+(h.ng_qty||0)+' 件</td></tr>'+
             '<tr><th>檢驗員</th><td>'+esc(h.creator_name||'—')+'</td>'+
-                '<th>主管審核</th><td>'+(h.approved_name?(esc(h.approved_name)+' '+esc(String(h.approved_at||'').substring(0,10))):'—')+'</td></tr>'+
+                '<th>主管審核</th><td>'+(h.approved_name?(esc(h.approved_name)+' '+esc(dotDT(h.approved_at,10))):'—')+'</td></tr>'+
             '<tr><th>使用量具</th><td colspan="3">'+esc(toolsTxt||'—')+'</td></tr>'+
             '<tr><th>容器</th><td colspan="3">'+esc(ctnTxt||'—')+'</td></tr>'+
             '<tr><th>異常單</th><td colspan="3">'+ncr+'</td></tr>'+
@@ -5135,6 +5912,8 @@ $(function(){
         (items||[]).forEach(function(it,idx){
             var readings=[{samples:it.samples||[]}];
             (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples||[]}); });
+            var rcRows=(it.recheck||[]).filter(function(rc){ return (rc.samples||[]).some(function(s){ return s && s.v!=null && s.v!==''; }); });
+            var spanN=readings.length+rcRows.length+((rcRows.length&&it.remark)?1:0);
             readings.forEach(function(rd,ri){
                 var cells='';
                 for(var i2=0;i2<n;i2++){
@@ -5149,8 +5928,17 @@ $(function(){
                     (ri===0 ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td>'+stdTd)
                             : ('<td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ 加量測 '+ri+'</td><td></td><td></td>'))+
                     cells+
-                    (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="st-ng">✘不良</span>':'<span class="st-ok">✔合格</span>')+'</td>'):'')+'</tr>';
+                    (ri===0?('<td rowspan="'+spanN+'">'+(it.verdict==='NG'?'<span class="st-ng">✘不良</span>':'<span class="st-ok">✔合格</span>')+'</td>'):'')+'</tr>';
                 if(ri===0 && it.remark) body+='<tr><td colspan="'+(4+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';
+            });
+            rcRows.forEach(function(rc,k){   // NG加驗：每列固定10格，整列併成一格逐格列出
+                var parts=[];
+                (rc.samples||[]).forEach(function(sv,c){
+                    if(!sv || sv.v==null || sv.v==='') return;
+                    parts.push('<span'+(sv.r==='NG'?' style="color:var(--coral);font-weight:bold;"':'')+'>#'+(c+1)+'：'+esc(sv.v)+'</span>');
+                });
+                body+='<tr><td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ NG加驗 '+(k+1)+'</td><td></td><td></td>'+
+                      '<td colspan="'+n+'" style="text-align:left;font-size:11px">'+parts.join('　')+'</td></tr>';
             });
         });
         return '<table class="table table-condensed table-bordered" style="background:#fff;margin-top:10px;">'+
@@ -5197,13 +5985,18 @@ $(function(){
     // 不行就走「檢視模式」：畫面照常渲染，只是欄位反灰唯讀（setViewOnlyMode），
     // 只有開放修改、或本人在修改寬限期內，才會落到可修改分支。
     // afterFn：載入渲染完成後的回呼（列印該筆歷程時使用，見 printHistoryRecord）。
-    function openEditRecord(qcFormId, afterFn){
+    // forceEdit=true 才進修改模式；否則一律先進檢視模式（有修改權限者右側有「修改」鈕）
+    function openEditRecord(qcFormId, afterFn, forceEdit){
         $.post(API,{action:'get_history_record',qc_form_id:qcFormId},function(res){
             if(!res.success){ alert('載入失敗：'+res.message); return; }
             var h=res.header;
-            var editable=!!res.can_edit;
+            var editable=!!res.can_edit && !!forceEdit;
+            state.canEditViewed = !!res.can_edit;
             state.editFormId = editable ? qcFormId : null;
             state.viewFormId = editable ? null : qcFormId;
+            // 多面分段檢驗單：面／顆照這筆紀錄帶回（faceOn 在 render 之前就要成立，編號欄才會畫出來）
+            state.faceRec = !!h.face_code;
+            state.face = { code:(h.face_code||''), piece:(parseInt(h.piece_no)||1) };
             setInspNoChip(h.insp_no||'');
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'',
@@ -5226,6 +6019,8 @@ $(function(){
             recalc();
             $('#no-std-hint').hide();
             setViewOnlyMode(!editable);
+            // 修改模式：自動勾選「編輯標準」，項目名稱／標準值／公差／型態都變回可直接輸入的欄位；檢視模式則維持唯讀顯示
+            $('#chk-std-edit').prop('checked', editable).trigger('change');
             if(editable){
                 $('#view-mode-banner').hide();
                 $('#edit-form-id').text(qcFormId);
@@ -5236,6 +6031,10 @@ $(function(){
             } else {
                 $('#edit-mode-banner').hide();
                 $('#view-form-id').text(qcFormId);
+                $('#btn-enter-edit').toggle(!!res.can_edit);
+                $('#view-mode-hint').text(res.can_edit
+                    ? '欄位已反灰；要修改請按右側「修改」。'
+                    : '欄位已反灰不可修改；如需修改請洽主管「開放修改」，或於本人修改寬限期內回來修改。');
                 $('#view-mode-banner').show();
             }
             refreshBackfillBtn();
@@ -5250,15 +6049,23 @@ $(function(){
         $('body').toggleClass('qc-view-only', !!on);
         $('#inp-qty,#inp-sample,#inp-remark').prop('readonly', !!on);
         $('#chk-save-std').closest('label').toggle(!on);
-        $('#btn-cancel,#btn-redo,#btn-save,#btn-save-draft,#btn-backfill').toggle(!on);
+        $('#btn-cancel,#btn-redo,#btn-save,#btn-backfill').toggle(!on);
+        renderFacePanel();
+        // 儲存草稿：修改既有紀錄時不適用（草稿是「尚未送出的新檢驗單」），不可因離開檢視模式就被重新顯示
+        if(on) $('#btn-save-draft').hide(); else refreshSaveDraftBtn();
+    }
+    function adhocBackToList(){
+        location.href='inspection_entry_v2.php'+(new URLSearchParams(location.search).get('popup')?'?popup=1':'');
     }
     function exitViewMode(){
-        state.viewFormId=null; state.editMeta=null;
+        state.viewFormId=null; state.editMeta=null; state.faceRec=false;
         $('#view-mode-banner').hide();
         setViewOnlyMode(false);
+        if(ctx && ctx.adhoc){ adhocBackToList(); return; }
         reloadContext();
     }
     $('#btn-exit-view').on('click', exitViewMode);
+    $('#btn-enter-edit').on('click', function(){ if(state.viewFormId) openEditRecord(state.viewFormId, null, true); });
     // 列印「批次與檢驗歷程」裡的某一筆：先把該筆載入畫面（檢視或修改模式皆可），
     // 再沿用現有的 #btn-print 同一套 buildPrintHtml()，確保跟即時列印版面完全一致。
     function printHistoryRecord(qcFormId){
@@ -5269,12 +6076,15 @@ $(function(){
             }, printSignDate());
         });
     }
-    function exitEditMode(){
-        state.editFormId=null; state.editMeta=null;
+    function exitEditMode(reopenQid){
+        state.editFormId=null; state.editMeta=null; state.faceRec=false;
+        // 修改存檔後：回到「這一筆」的檢視畫面並重新讀取最新資料（含 NG加驗），不是回到空白新單
+        if(reopenQid && typeof reopenQid!=='object') state.reopenRec = reopenQid;   // .fail(exitEditMode) 會塞進 jqXHR 物件，要排除
         $('#edit-mode-banner').hide();
         $('#chk-save-std').prop('checked',true).closest('label').show();
         $('#btn-save').html('<i class="fa fa-save"></i> 儲存檢驗結果');
         $('#btn-redo').show();
+        if(ctx && ctx.adhoc){ adhocBackToList(); return; }
         reloadContext();
     }
     $('#btn-exit-edit').on('click', function(){
@@ -5421,14 +6231,15 @@ $(function(){
     function saveDraftNow(manual){
         if(!draftEligible()) return;
         if(!manual && !draftDirty) return;   // 手動按鈕一律真的存一次，不管有沒有偵測到變更
-        var items=collectItems();
+        var items=collectItems(true);   // 草稿保留還沒填的 NG加驗列
         if(!items.length){ draftDirty=false; if(manual) alert('尚無檢驗項目可存草稿'); return; }
         var b=state.batches[state.curBatch]||{no:1,rounds:[]};
         $.post(API,{ action:'save_draft', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, process_name:ctx.process,
             batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
-            tool_ids:JSON.stringify(MODEL.tools||[])
+            tool_ids:JSON.stringify(MODEL.tools||[]),
+            face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||'')
         }, function(res){
             if(res && res.success){
                 draftDirty=false; state.draftFormId=res.draft_form_id;
@@ -5464,6 +6275,8 @@ $(function(){
             state.sampleN=parseInt(d.sample_qty)||state.sampleN;
             $('#inp-qty').val(d.incoming_qty||0); updateQtyLive(); $('#inp-sample').val(state.sampleN); $('#inp-remark').val(d.main_remark||'');
             MODEL.tools=(d.tool_ids||[]).map(String);
+            // 多面分段檢驗（首件）草稿：面／顆一併還原（草稿本身不存檢驗性質，有面就一定是首件）
+            if(d.face_code){ state.inspKind='FIRST'; state.face={ code:d.face_code, piece:(parseInt(d.piece_no)||state.face.piece) }; applyInspKindUI(); }
             renderItems(d.items||[]);
             (d.pcs||[]).forEach(function(pv,i){ if(pv && pv.m && MODEL.pcs[i]){ MODEL.pcs[i].m=1; MODEL.pcs[i].v=(pv.v==='NG'?'NG':'OK'); } });
             recalc();
@@ -5878,6 +6691,17 @@ $(function(){
                 }
             });
         });
+        // 多面分段檢驗（首件）：選面、每項編號不重複且不是這顆已驗過的、NG 項目要選處置
+        if(faceOn()){
+            if(!state.face.code) out.push({ i:-1, r:0, field:'face', text:'<b>請選擇本次檢驗的面</b>（A～D 面）' });
+            MODEL.items.forEach(function(it,i){
+                if((it.name||'').trim()==='') return;
+                var bi=faceBalloonIssue(i);
+                if(bi) out.push({ i:i, r:0, field:'balloon', text:'編號「'+esc(it.balloon||'？')+'」'+esc(it.name)+'：<b>'+esc(bi)+'</b>' });
+                if(itemVerdict(it)==='NG' && !it.ng_action)
+                    out.push({ i:i, r:0, field:'ngact', text:'編號「'+esc(it.balloon||'？')+'」'+esc(it.name)+'：<b>判定 NG，請選擇處置（重工／開立異常單）</b>' });
+            });
+        }
         // 量具：整張檢驗單一律必填（2026-10-06 使用者更正：連目視／功能檢查的單子也要強制——
         // 「目視」本身就是量具清單裡的一個選項，OKNG 型項目一樣要選它，才記得下是用什麼方式判定的；
         // anyNum 不再是觸發條件）
@@ -5921,12 +6745,13 @@ $(function(){
         // 補資料設定也不屬於任何一列 → 直接打開補資料設定跳窗（沒有補資料權限的人這顆鈕本來就不會顯示，
         // 觸發後彈出的就是「無此權限」，等於指出要找誰才有辦法補建這張已結案 BOM 的檢驗表）
         if(f==='backfill'){ $('#btn-backfill').trigger('click'); return; }
+        if(f==='face'){ $('html,body').animate({ scrollTop:Math.max(0,$('#face-panel').offset().top-120) }, 200); return; }
         view='GRID'; localStorage.setItem('qc2_view', view);
         if(f==='name' || f==='std' || f==='min' || f==='up') $('#chk-std-edit').prop('checked', true);
         render();
         setTimeout(function(){
             var $tr=$('#items-body tr[data-i="'+i+'"]');
-            var sel = f==='name' ? 'input.f-name' : f==='min' ? 'input.f-min' : f==='up' ? 'input.f-up' : 'input.f-std';
+            var sel = f==='name' ? 'input.f-name' : f==='min' ? 'input.f-min' : f==='up' ? 'input.f-up' : f==='balloon' ? 'input.f-balloon' : f==='ngact' ? 'select.sel-ngact' : 'input.f-std';
             var $t=$tr.find(sel);
             if($t.length){ $t.focus(); $('html,body').animate({ scrollTop:$t.offset().top-160 }, 200); checkTolRow(i); }
         }, 120);
@@ -5986,6 +6811,7 @@ $(function(){
     // =====================================================================
     function doSave(asRedo){
         if(state.demo){ alert('示範模式不寫入資料庫，請由待驗清單開啟實際待驗項目。'); return; }
+        if(tolFmtBlock()) return;
         var items=collectItems();
         if(!items.length){ alert('請至少輸入一個檢驗項目'); return; }
         // 尚未檢驗（待驗剩餘量）＝0 時再次提醒：只在「新建一輪」時才有意義，修改既有
@@ -6054,7 +6880,8 @@ $(function(){
             $.post(API,{ action:'update_inspection', qc_form_id:state.editFormId, reason:reason,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items), insp_kind:state.inspKind,
-                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[]),
+                face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||'')
             }, function(res){
                 $eb.prop('disabled',false);
                 if(!res.success){ alert('修改失敗：'+res.message); return; }
@@ -6064,7 +6891,7 @@ $(function(){
                     try{ window.opener.postMessage({type:'qc_inspection_done',bom_ing_fid:s.bom_ing_fid,summary:s,qc_form_id:s.qc_form_id,edited:true},'*'); }catch(e){}
                 }
                 alert('已儲存修改（qc_form_id='+s.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'\n此筆已自動回鎖。');
-                exitEditMode();
+                exitEditMode(s.qc_form_id);
             },'json').fail(function(x){ $eb.prop('disabled',false); alert('修改錯誤：'+x.responseText); });
             return;
         }
@@ -6099,6 +6926,7 @@ $(function(){
         if(ctx.adhoc){
             var $ab=$('#btn-save').prop('disabled',true);
             $.post(V2API, $.extend({ v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
+                proc_nos:JSON.stringify(ctx.proc_nos||[]), maker_id_no:ctx.maker_id_no||'',
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items), insp_kind:state.inspKind,
                 pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[]) }, bfPayloadFields())
@@ -6129,8 +6957,8 @@ $(function(){
         var payload=$.extend({ action:'save_inspection', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, part_no:ctx.part_no,
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
-            main_remark:$('#inp-remark').val(), update_std:$('#chk-save-std').is(':checked')?'1':'0',
-            insp_kind:state.inspKind,
+            main_remark:$('#inp-remark').val(), update_std:($('#chk-save-std').is(':checked') && !faceOn())?'1':'0',
+            insp_kind:state.inspKind, face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||''),
             container_1:ctnFields.containers[0], qty_1:ctnFields.quantities[0],
             container_2:ctnFields.containers[1], qty_2:ctnFields.quantities[1],
             items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
@@ -6200,6 +7028,8 @@ $(function(){
     // =====================================================================
     var ngCtx=null;
     function openNgAsk(qcFormId, s, items, done){
+        // 多面分段檢驗：NG 項目都選「重工」就不開異常單（等同檢驗員直接判定重工），有選「開立異常單」才往下走
+        if(faceOn() && !items.some(function(it){ return it.verdict==='NG' && it.ng_action==='ABNORMAL'; })){ if(done) done(); return; }
         // 管理員開啟「NG儲存後自動開立」時走自動流程（跳品管備註視窗）；沒開或查詢失敗一律走下面原流程
         // 沒有任何尺寸可帶（理論上不會）才退回舊的按鈕流程，避免建立出沒有尺寸的異常單
         if(!qcAbBuildMeasures(items).measures.length){ openNgAskLegacy(qcFormId, s, items, done); return; }
@@ -6213,14 +7043,16 @@ $(function(){
        若這次是手動把某件判不良、尺寸本身都判 OK（沒有任何 NG 尺寸）→ 改帶「有填值的尺寸」，不讓尺寸表空著。 */
     function qcAbBuildMeasures(items){
         items = items || [];
-        var ng = items.filter(function(it){ return it.verdict==='NG'; });
-        if(!ng.length) ng = items.filter(function(it){
+        var FO = faceOn(), facePre = FO ? (state.face.code+'面 ') : '';
+        // 多面分段檢驗：只帶選了「開立異常單」的 NG 項目，編號用編號、尺寸名稱前加上是哪一面
+        var ng = items.filter(function(it){ return it.verdict==='NG' && (!FO || it.ng_action==='ABNORMAL'); });
+        if(!ng.length && !FO) ng = items.filter(function(it){
             return (it.samples||[]).some(function(sv){ return sv && sv.v!=null && String(sv.v)!==''; });
         });
         var rows=[], sel=[];
         ng.forEach(function(it){
             sel.push(items.indexOf(it));
-            var nm=(it.name||'')+qcAbStdPart(it);
+            var nm=facePre+(it.name||'')+qcAbStdPart(it);
             var vals=function(samples){
                 return (samples||[]).map(function(sv){
                     if(!sv) return '';
@@ -6230,7 +7062,7 @@ $(function(){
                 }).slice(0,12);
             };
             // 編號＝這個尺寸在檢驗表上目前顯示的編號（A,B,C 或 1,2,3，依儲存當下的顯示模式），不是另外編的
-            var code=codeLabel(items.indexOf(it));
+            var code = FO ? (it.balloon||'') : codeLabel(items.indexOf(it));
             rows.push({ code:code, dim_name:nm, vals:vals(it.samples) });
             (it.extra||[]).forEach(function(ex,k){ rows.push({ code:code, dim_name:nm+'（加量測'+(k+1)+'）', vals:vals(ex.samples) }); });
         });
@@ -6250,7 +7082,9 @@ $(function(){
         var built=qcAbBuildMeasures(c.items), sel=built.sel, measures=built.measures;
         $.post('../../src/store/QaAbnormal_API.php', {
             action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId,
-            measures:JSON.stringify(measures), selected:JSON.stringify(sel), qc_note:$('#qcNoteText').val()
+            measures:JSON.stringify(measures), selected:JSON.stringify(sel),
+            // 多面分段檢驗：把「首件・第N顆・A面」帶進異常說明（品管備註最前面）
+            qc_note:(faceOn() ? ('【首件 第'+state.face.piece+'顆 '+state.face.code+'面】') : '')+$('#qcNoteText').val()
         }, function(res){
             if(!res.success){ $b.prop('disabled',false); alert((res.message||'自動開立失敗')+'\n檢驗結果已存檔，可稍後從「批次與檢驗歷程」的「開異常單」補開。');
                 $('#qcNoteModal').modal('hide'); qcNoteCtx=null; if(c.done) c.done(); return; }
@@ -6291,7 +7125,7 @@ $(function(){
         qcAbPickItems = items || [];
         qcAbPickSel = {};
         // 預設勾選判定不良的項目；OK 項目使用者仍可自行加選（例如要對照正常值一起留存）
-        qcAbPickItems.forEach(function(it,idx){ if(it.verdict==='NG') qcAbPickSel[idx]=true; });
+        qcAbPickItems.forEach(function(it,idx){ if(it.verdict==='NG' && (!faceOn() || it.ng_action==='ABNORMAL')) qcAbPickSel[idx]=true; });
         qcAbPickDone = doneCb;
         renderQcAbPick();
         $('#qcAbPickModal').modal('show');
@@ -6390,12 +7224,17 @@ $(function(){
             '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程/廠商</td><td>'+esc(m.process+(m.maker?(' / '+m.maker):''))+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
             '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr>'+
             // 使用量具：整張檢驗單一列印出全部（種類＋編號(規格)），不再逐項印量具欄
-            '<tr><td class="k">使用量具</td><td colspan="5">'+esc(formToolsLabel()||'—')+'</td></tr></table>';
+            '<tr><td class="k">使用量具</td><td colspan="5">'+esc(formToolsLabel()||'—')+'</td></tr>'+
+            // 多面分段檢驗（首件）：標出這張檢驗單是第幾顆的哪一面（編號欄＝圖面編號）
+            (faceOn() ? ('<tr><td class="k">檢驗面</td><td colspan="5">首件　第 '+state.face.piece+' 顆　'+esc(state.face.code||'—')+' 面（編號為圖面編號）</td></tr>') : '')+
+            '</table>';
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
         var body='';
         items.forEach(function(it,idx){
             var readings=[{samples:it.samples}];
             (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
+            var rcRows=(it.recheck||[]);   // NG加驗列（collectItems 已濾掉全空的列）
+            var spanN=readings.length+rcRows.length+((rcRows.length&&it.remark)?1:0);
             readings.forEach(function(rd,ri){
                 var cells='';
                 for(var i2=0;i2<n;i2++){
@@ -6417,8 +7256,18 @@ $(function(){
                       ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td>'+stdTd+tolTd)
                       : ('<td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ 加量測 '+ri+'</td><td></td><td class="c-tol"></td>'))+
                     cells+
-                    (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':'OK')+'</td>'):'')+'</tr>';
+                    (ri===0?('<td rowspan="'+spanN+'">'+(it.verdict==='NG'?('NG'+(faceOn()&&it.ng_action?('<br><span style="font-size:9px;">'+(it.ng_action==='ABNORMAL'?'開異常單':'重工')+'</span>'):'')):'OK')+'</td>'):'')+'</tr>';
                 if(ri===0 && it.remark) body+='<tr><td colspan="'+(4+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';   // 表頭4欄＋n件（判定欄留給上一列併格）
+            });
+            // NG加驗：每列固定10格、可能只填幾格，所以不照件數欄對齊，整列併成一格逐格印「#格號 值」（NG 的標紅）
+            rcRows.forEach(function(rc,k){
+                var parts=[];
+                (rc.samples||[]).forEach(function(sv,c){
+                    if(!sv || sv.v==null || sv.v==='') return;
+                    parts.push('<span'+(sv.r==='NG'?' class="pr-ng"':'')+'>#'+(c+1)+'：'+esc(sv.v)+'</span>');
+                });
+                body+='<tr><td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ NG加驗 '+(k+1)+'</td><td></td><td class="c-tol"></td>'+
+                      '<td colspan="'+n+'" style="text-align:left;font-size:11px">'+parts.join('　')+'</td></tr>';
             });
         });
         var tbl='<table class="pr-items"><thead><tr><th class="c-no">編號</th><th>檢驗項目</th><th class="c-std">標準</th>'+
@@ -6474,6 +7323,11 @@ $(function(){
                 row.push(ri===0?(it.verdict||''):'', ri===0?(it.remark||''):'');
                 lines.push(row.map(q).join(','));
             });
+            (it.recheck||[]).forEach(function(rc,k){   // NG加驗列：固定10格，接在該項後面
+                var rrow=['', '↳ NG加驗 '+(k+1), '', '', ''];
+                for(var c=0;c<RC_N;c++){ var sv=(rc.samples||[])[c]; rrow.push((sv&&sv.v!=null)?sv.v:''); }
+                lines.push(rrow.map(q).join(','));
+            });
         });
         var csv='﻿'+lines.join('\r\n');
         var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
@@ -6493,7 +7347,8 @@ $(function(){
         { code:'qa_disposition_reply', label:'勾選 / 回覆異常單「異常處置方式、處置說明」' },
         { code:'qc_supervisor',        label:'認定為主管（收到並核准異常單修改請求、可直接修改異常單；與管理員不同）' },
         { code:'qc_print_approve_setting', label:'列印：主管審核自動核可設定（可指定核可主管）' },
-        { code:'qc_backfill_data',     label:'補資料：設定檢驗日期／檢驗人員／主管審核人員與日期（補歷史紙本用）' }
+        { code:'qc_backfill_data',     label:'補資料：設定檢驗日期／檢驗人員／主管審核人員與日期（補歷史紙本用）' },
+        { code:'qc_page_admin',        label:'本頁管理員（品管檢驗表 2.0 內等同全站管理員：含以上全部功能、符號主檔維護、刪除標準版本）' }
     ];
     var QC_CODES = QC_FEATURES.map(function(f){ return f.code; });
     var _permRole = null, _permRoleCur = [], _permRolesData = [], _permRoleName = '', _permRoleSys = false;
@@ -6633,6 +7488,27 @@ $(function(){
             $('#inspNoCfgModal').modal('hide');
             flashMsg('已更新檢驗單號字首為「'+esc(res.prefix)+'」，往後新建立的檢驗單將套用新字首。');
         },'json').fail(function(x){ $('#insp-no-hint').show().text('儲存錯誤：'+x.responseText); });
+    });
+
+    // ============ 設定：多面分段檢驗（首件）可用的製程大類 ============
+    $('#btn-face-setting').on('click', function(e){
+        e.preventDefault();
+        $.post(V2API,{ v2action:'face_cfg_get' },function(res){
+            if(!res.success){ alert(res.message||'載入失敗'); return; }
+            $('#face-cfg-hint').hide();
+            $('#face-cfg-list').html((res.rows||[]).map(function(r){
+                return '<label style="display:block;padding:4px 6px;font-weight:normal;"><input type="checkbox" class="face-cfg-chk" value="'+r.process_type_id+'"'+(Number(r.on_flag)?' checked':'')+'> '+esc(r.process_type)+'</label>';
+            }).join('') || '<div class="muted-help">尚無製程大類</div>');
+            $('#faceCfgModal').modal('show');
+        },'json');
+    });
+    $('#face-cfg-save').on('click', function(){
+        var ids=$('.face-cfg-chk:checked').map(function(){ return +this.value; }).get();
+        $.post(V2API,{ v2action:'face_cfg_save', csrf:CSRF, ids:JSON.stringify(ids) }, function(res){
+            if(!res.success){ $('#face-cfg-hint').show().text(res.message||'儲存失敗'); return; }
+            $('#faceCfgModal').modal('hide');
+            flashMsg('已更新多面分段檢驗的製程大類（共 '+res.count+' 個）；重新開啟檢驗畫面後生效。');
+        },'json').fail(function(x){ $('#face-cfg-hint').show().text('儲存錯誤：'+x.responseText); });
     });
 
     // ============ 設定：量具設定（種類/編號 CRUD、取代刪除） ============
@@ -6902,73 +7778,169 @@ $(function(){
     });
 
     // ============ 全部歷史檢驗清單（不限料號，可篩選、分頁） ============
-    var AH = {page:1, per:20};
+    var AH = {page:1, per:10};
+    // 頁內顯示（不用跳窗）：與品管檢驗表 2.0 同風格的 warm-panel，上方有返回鈕
+    var AH_PREV = {search:false, main:false, dock:false, banner:false};
     function ensureAllHistModal(){
-        if($('#allHistModal').length) return;
-        $('body').append(
-          '<div class="modal fade" id="allHistModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg" style="width:1000px;max-width:96%;"><div class="modal-content">'+
-          '<div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>'+
-          '<h4 class="modal-title"><i class="fa fa-history"></i> 歷史檢驗清單</h4></div>'+
-          '<div class="modal-body">'+
-            '<div class="form-inline" style="margin-bottom:8px;">'+
-              '<input type="text" id="ah-kw" class="form-control input-sm" style="width:240px;" placeholder="檢驗單號／料號／製令／製程／檢驗人" data-eg-hint="多個關鍵字用空白分隔">　'+
-              '<input type="date" id="ah-from" class="form-control input-sm"> ~ <input type="date" id="ah-to" class="form-control input-sm">　'+
-              '<select id="ah-res" class="form-control input-sm"><option value="">全部判定</option><option value="OK">合格</option><option value="NG">不良</option></select>　'+
-              '<select id="ah-per" class="form-control input-sm"><option>20</option><option>50</option><option>100</option></select> 筆/頁'+
+        if($('#allHistPage').length) return;
+        $('#step-search').before(
+          '<div id="allHistPage" style="display:none;">'+
+            '<div class="warm-panel">'+
+              '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">'+
+                '<button type="button" class="btn btn-warm-o btn-sm" id="ah-back"><i class="fa fa-arrow-left"></i> 返回品管檢驗表 2.0</button>'+
+                '<b style="font-size:16px;color:#4A3524;"><i class="fa fa-history"></i> 歷史檢驗清單</b>'+
+              '</div>'+
+              '<div class="form-inline" style="margin-bottom:8px;">'+
+                '<input type="text" id="ah-kw" class="form-control input-sm" style="width:260px;" placeholder="檢驗單號／料號／製令／製程／檢驗人" data-eg-hint="多個關鍵字用空白分隔">　'+
+                '<input type="date" id="ah-from" class="form-control input-sm"> ~ <input type="date" id="ah-to" class="form-control input-sm">　'+
+                '<select id="ah-res" class="form-control input-sm"><option value="">全部判定</option><option value="OK">合格</option><option value="NG">不良</option></select>　'+
+                '<select id="ah-per" class="form-control input-sm"><option>10</option><option>20</option><option>50</option><option>100</option></select> 筆/頁　'+
+                '<button type="button" class="btn btn-default btn-sm" id="ah-print"><i class="fa fa-print"></i> 列印</button>'+
+              '</div>'+
+              '<div id="allHistList">載入中…</div><div id="allHistDetail" style="margin-top:12px;"></div>'+
             '</div>'+
-            '<div id="allHistList">載入中…</div><div id="allHistDetail" style="margin-top:12px;"></div>'+
-          '</div>'+
-          '<div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>'+
-          '</div></div></div>');
+          '</div>');
         var tm=null;
-        $('#allHistModal').on('input change','#ah-kw,#ah-from,#ah-to,#ah-res,#ah-per',function(){
+        $('#allHistPage').on('input change','#ah-kw,#ah-from,#ah-to,#ah-res,#ah-per',function(){
             clearTimeout(tm); tm=setTimeout(function(){ AH.page=1; loadAllHistory(); },350);
         });
-        $('#allHistModal').on('click','.ah-pg',function(){ AH.page=parseInt($(this).data('p'),10)||1; loadAllHistory(); });
-        $('#allHistModal').on('click','.ah-view',function(){
+        $('#allHistPage').on('click','.ah-pg',function(){ AH.page=parseInt($(this).data('p'),10)||1; loadAllHistory(); });
+        $('#allHistPage').on('click','#ah-back',function(){ closeAllHistory(); });
+        $('#allHistPage').on('click','#ah-print',function(){ printAllHistory(); });
+        $('#allHistPage').on('click','.ah-view',function(){
             var id=$(this).data('id'); $('#allHistDetail').html('載入中…');
+            $('#allHistList tr.ah-active').removeClass('ah-active'); $(this).closest('tr').addClass('ah-active');
             $.post(API,{action:'get_history_record',qc_form_id:id},function(res){
                 if(!res.success){ $('#allHistDetail').html('載入失敗：'+esc(res.message||'')); return; }
-                $('#allHistDetail').html(renderHistDetail(res));
+                $('#allHistDetail').html(renderHistDetail2(res, AHROWS[id], AHMETA[id]));
                 var el=document.getElementById('allHistDetail'); if(el&&el.scrollIntoView) el.scrollIntoView({block:'nearest'});
             },'json');
         });
     }
     function openAllHistory(){
         ensureAllHistModal();
+        if(!$('#allHistPage').is(':visible')){
+            AH_PREV={ search:$('#step-search').is(':visible'), main:$('#main-area').is(':visible'), dock:$('#dock').is(':visible'), banner:$('#mode-banner').is(':visible') };
+        }
+        $('#step-search,#main-area,#dock,#mode-banner').hide();
         $('#allHistDetail').empty(); AH.page=1;
-        $('#allHistModal').modal('show');
+        $('#allHistPage').show();
+        window.scrollTo(0,0);
         loadAllHistory();
     }
+    function closeAllHistory(){
+        $('#allHistPage').hide();
+        $('#step-search').toggle(AH_PREV.search); $('#main-area').toggle(AH_PREV.main);
+        $('#dock').toggle(AH_PREV.dock); $('#mode-banner').toggle(AH_PREV.banner);
+        if(AH_PREV.dock) syncDockPad();
+    }
+    // 臨時檢驗單（無製令）：與「最近的臨時檢驗單」同一個開啟畫面
+    $(document).on('click','#allHistList .ah-row', function(e){
+        if($(e.target).closest('button,a').length) return;
+        var qid=$(this).attr('data-id');
+        if($(this).attr('data-adhoc')==='1'){ $('#allHistPage').hide(); $('#mode-banner').show(); openAdhocRecord(qid); }
+        else location.href='inspection_entry_v2.php?bom_ing_fid='+encodeURIComponent($(this).attr('data-fid'))+'&open_rec='+encodeURIComponent(qid);
+    });
+    function ahIsAdhoc(r){ return (!r.bom && r.insp_kind!=='SHIP'); }
+    function ahFilters(){
+        return { kw:$('#ah-kw').val(), date_from:$('#ah-from').val(), date_to:$('#ah-to').val(), result:$('#ah-res').val() };
+    }
+    // 批次／複驗次數的白話說明：第 N 批（同一製令分批檢驗的第幾批）、第 N 次（同一批不合格重驗的第幾次）
+    function ahBatchText(r){ return '第 '+(r.batch_no||1)+' 批　第 '+(r.round_no||1)+' 次'; }
+    function ahVendorText(r, meta){
+        if(ahIsAdhoc(r)){ var x=(meta&&meta[r.qc_form_id])||{}; return x.maker||''; }
+        return r.bom_maker||'';
+    }
+    function ahProcText(r, meta){
+        if(ahIsAdhoc(r)){ var x=(meta&&meta[r.qc_form_id])||{}; return x.procs||''; }
+        return r.process_name||'';
+    }
+    function ahFetchMeta(rows, cb){
+        var aIds=rows.filter(ahIsAdhoc).map(function(r){ return r.qc_form_id; });
+        if(!aIds.length){ cb({}); return; }
+        $.post(V2API,{ v2action:'hist_adhoc_meta', ids:JSON.stringify(aIds) },function(mr){ cb((mr&&mr.meta)||{}); },'json').fail(function(){ cb({}); });
+    }
     function loadAllHistory(){
-        AH.per=parseInt($('#ah-per').val(),10)||20;
+        AH.per=parseInt($('#ah-per').val(),10)||10;
         $('#allHistList').html('載入中…');
-        $.post(API,{action:'history_search', kw:$('#ah-kw').val(), date_from:$('#ah-from').val(), date_to:$('#ah-to').val(),
-                    result:$('#ah-res').val(), page:AH.page, per:AH.per}, function(res){
+        $.post(API,$.extend({action:'history_search', page:AH.page, per:AH.per}, ahFilters()), function(res){
             if(!res.success){ $('#allHistList').html('<span class="text-danger">查詢失敗：'+esc(res.message||'')+'</span>'); return; }
             var rows=res.rows||[];
             if(!rows.length){ $('#allHistList').html('<div class="text-muted">沒有符合條件的歷史檢驗紀錄。</div>'); return; }
-            var h='<div class="text-muted" style="margin-bottom:6px;">共 '+res.total+' 筆（點「檢視」看逐項實測）</div>'+
-              '<div style="max-height:320px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
-              '<th>日期</th><th>檢驗單號</th><th>料號</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
+            var h='<table class="ah-tbl"><thead><tr>'+
+              '<th>檢驗日期時間</th><th>檢驗單號</th><th>BOM</th><th>料號</th><th>製程</th><th>廠商</th>'+
+              '<th title="第幾批：同一製令分批檢驗的批次；第幾次：同一批不合格重驗的次數">批次／複驗次數</th>'+
+              '<th>總檢驗數（送驗）</th><th>抽驗數</th><th>判定</th><th>不良數</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
             rows.forEach(function(r){
-                var d=String(r.check_date||r.created_at||'').substring(0,10);
+                var d=dotDT(r.check_date||r.created_at,10)+' '+String(r.created_at||'').substring(11,16);
                 var ncr=r.abnormal_order_no?'<a href="../QA/qa_abnormal_view.php?id='+r.abnormal_order_id+'" target="_blank">'+esc(r.abnormal_order_no)+'</a>':'';
-                h+='<tr><td>'+esc(d)+'</td><td>'+esc(r.insp_no||'')+'</td><td>'+esc(r.part_no||'')+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
-                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+inspKindBadge(r.insp_kind)+'</td><td>'+statusLabel(r.check_result)+'</td><td>'+(r.ng_qty||0)+'</td>'+
-                   '<td>'+esc(r.user_cname||r.created_by||'')+'</td><td>'+ncr+'</td>'+
-                   '<td><button class="btn btn-xs btn-primary ah-view" data-id="'+r.qc_form_id+'">檢視</button></td></tr>';
+                var isA=ahIsAdhoc(r), clickable=(isA||r.bom_ing_fid>0);
+                h+='<tr class="'+(clickable?'ah-row':'')+'" data-id="'+r.qc_form_id+'" data-fid="'+(r.bom_ing_fid||0)+'" data-adhoc="'+(isA?1:0)+'">'+
+                   '<td>'+esc(d)+'</td>'+
+                   '<td>'+esc(r.insp_no||'')+(isA?'<br><span class="label label-warning" style="font-size:11px;font-weight:normal;">'+esc(r.process_name||'臨時檢驗')+'</span>':'')+'</td>'+
+                   '<td>'+esc(r.bom||'')+'</td><td>'+esc(r.part_no||'')+'</td>'+
+                   '<td>'+(isA?'<span class="ah-pm" data-id="'+r.qc_form_id+'">…</span>':esc(r.process_name||''))+'</td>'+
+                   '<td>'+(isA?'<span class="ah-vm" data-id="'+r.qc_form_id+'">…</span>':esc(r.bom_maker||''))+'</td>'+
+                   '<td>'+ahBatchText(r)+inspKindBadge(r.insp_kind)+'</td>'+
+                   '<td>'+(r.incoming_qty||0)+'</td><td>'+(r.sample_qty||0)+'</td>'+
+                   '<td>'+statusLabel(r.check_result)+'</td><td>'+(r.ng_qty||0)+'</td>'+
+                   '<td>'+esc(r.user_cname||r.created_by||'')+(editedText(r)?'<br><small style="color:var(--amber-d);">'+esc(editedText(r))+'</small>':'')+'</td><td>'+ncr+'</td>'+
+                   '<td><button class="btn btn-xs btn-warm-o ah-view" data-id="'+r.qc_form_id+'">檢視簡化紀錄</button></td></tr>';
             });
-            h+='</tbody></table></div>';
+            h+='</tbody></table>';
             var pages=Math.max(1,Math.ceil(res.total/res.per));
-            if(pages>1){
-                h+='<div style="margin-top:6px;text-align:right;">'+
+            var pager='<div style="text-align:right;margin:6px 0;">'+
                    '<button class="btn btn-xs btn-default ah-pg" data-p="'+(res.page-1)+'"'+(res.page<=1?' disabled':'')+'>上一頁</button> '+
                    '第 '+res.page+' / '+pages+' 頁 '+
                    '<button class="btn btn-xs btn-default ah-pg" data-p="'+(res.page+1)+'"'+(res.page>=pages?' disabled':'')+'>下一頁</button></div>';
-            }
+            h='<div class="muted-help" style="margin-bottom:2px;">共 '+res.total+' 筆（點整列開啟完整畫面；「檢視簡化紀錄」看逐項實測）</div>'+pager+h+pager;
             $('#allHistList').html(h);
+            rows.forEach(function(r){ AHROWS[r.qc_form_id]=r; });
+            ahFetchMeta(rows, function(m){
+                $.extend(AHMETA, m);
+                $('#allHistList .ah-pm').each(function(){ $(this).text((m[$(this).attr('data-id')]||{}).procs||'—'); });
+                $('#allHistList .ah-vm').each(function(){ $(this).text((m[$(this).attr('data-id')]||{}).maker||'—'); });
+            });
         },'json').fail(function(x){ $('#allHistList').html('<span class="text-danger">'+(x.status===403?'您沒有檢閱檢驗表的權限':'查詢失敗')+'</span>'); });
+    }
+    // 列印：依目前篩選條件列印「全部符合的紀錄」（不是只有目前這一頁），A4 橫式、公司全名、頁碼、表頭跨頁重複
+    function printAllHistory(){
+        var w=window.open('','_blank');
+        if(!w){ alert('瀏覽器擋住了列印視窗，請允許本站彈出視窗後再按一次'); return; }
+        w.document.write('<html><body style="font-family:sans-serif;">產生列印內容中…</body></html>');
+        $.post(API,$.extend({action:'history_search', page:1, per:1000}, ahFilters()), function(res){
+            if(!res.success){ w.close(); alert('查詢失敗：'+(res.message||'')); return; }
+            var rows=res.rows||[];
+            ahFetchMeta(rows, function(m){
+                loadPrintCfg(function(){
+                    var f=ahFilters(), cond=[];
+                    if(f.kw) cond.push('關鍵字：'+f.kw);
+                    if(f.date_from||f.date_to) cond.push('日期：'+(f.date_from||'')+' ~ '+(f.date_to||''));
+                    if(f.result) cond.push('判定：'+(f.result==='NG'?'不良':'合格'));
+                    var body=rows.map(function(r){
+                        var d=dotDT(r.check_date||r.created_at,10)+' '+String(r.created_at||'').substring(11,16);
+                        return '<tr><td>'+esc(d)+'</td><td>'+esc(r.insp_no||'')+(ahIsAdhoc(r)?'<br>('+esc(r.process_name||'臨時檢驗')+')':'')+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.part_no||'')+'</td>'+
+                               '<td>'+esc(ahProcText(r,m))+'</td><td>'+esc(ahVendorText(r,m))+'</td><td>'+ahBatchText(r)+'</td>'+
+                               '<td>'+(r.incoming_qty||0)+'</td><td>'+(r.sample_qty||0)+'</td><td>'+(r.check_result==='NG'?'不良':'合格')+'</td><td>'+(r.ng_qty||0)+'</td>'+
+                               '<td>'+esc(r.user_cname||r.created_by||'')+(editedText(r)?'<br>'+esc(editedText(r)):'')+'</td><td>'+esc(r.abnormal_order_no||'')+'</td></tr>';
+                    }).join('');
+                    var d0=new Date(), p2=function(n){return ('0'+n).slice(-2);};
+                    var now=d0.getFullYear()+'.'+p2(d0.getMonth()+1)+'.'+p2(d0.getDate())+' '+p2(d0.getHours())+':'+p2(d0.getMinutes());
+                    w.document.open();
+                    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>歷史檢驗清單</title><style>'+
+                        '@page{size:A4 landscape;margin:0}body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:10mm 8mm 12mm;color:#000;font-size:11px}'+
+                        '.co{text-align:center;font-size:20px;font-weight:bold}.tt{text-align:center;font-size:15px;font-weight:bold;margin:2px 0 4px}'+
+                        '.meta{font-size:11px;margin-bottom:6px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #000;padding:3px 4px;text-align:center;line-height:1.2}'+
+                        'thead{display:table-header-group}tr{page-break-inside:avoid}th{background:#eee}</style></head><body>'+
+                        '<div class="co">'+esc(PRINTCFG.company||'')+'</div><div class="tt">歷史檢驗清單</div>'+
+                        '<div class="meta">共 '+rows.length+' 筆'+(res.total>rows.length?'（符合條件共 '+res.total+' 筆，僅列印前 '+rows.length+' 筆）':'')+(cond.length?'　｜　'+esc(cond.join('　')):'')+'　｜　列印時間：'+now+'</div>'+
+                        '<table><thead><tr><th>檢驗日期時間</th><th>檢驗單號</th><th>BOM</th><th>料號</th><th>製程</th><th>廠商</th><th>批次／複驗次數</th><th>總檢驗數</th><th>抽驗數</th><th>判定</th><th>不良數</th><th>檢驗人</th><th>異常單</th></tr></thead><tbody>'+body+'</tbody></table>'+
+                        '<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script></body></html>');
+                    w.document.close();
+                    if(window.EGPrintLog) EGPrintLog.record({ source:'qc_insp_list', doc_name:'歷史檢驗清單（'+rows.length+' 筆）', doc_kind:'form' });
+                });
+            });
+        },'json').fail(function(){ w.close(); alert('查詢失敗'); });
     }
     function ensureHistoryModal(){
         if($('#partHistModal').length) return;
@@ -6980,6 +7952,7 @@ $(function(){
           '<div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>'+
           '</div></div></div>');
     }
+    var PHROWS = {};
     function openPartHistory(){
         ensureHistoryModal();
         $('#partHistDetail').empty(); $('#partHistList').html('載入中…');
@@ -6988,21 +7961,22 @@ $(function(){
             if(!res.success){ $('#partHistList').html('查詢失敗：'+esc(res.message||'')); return; }
             var rows=res.rows||[];
             if(!rows.length){ $('#partHistList').html('<div class="text-muted">此料號尚無歷史檢驗紀錄。</div>'); return; }
-            var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視」看逐項實測與同尺寸落點）　<a href="#" id="ph-to-all">查看全部歷史檢驗（不限料號）</a></div>'+
-              '<div style="max-height:230px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
-              '<th>日期</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
+            var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視簡化紀錄」看逐項實測）　<a href="#" id="ph-to-all">查看全部歷史檢驗（不限料號）</a></div>'+
+              '<table class="ah-tbl"><thead><tr>'+
+              '<th>檢驗日期時間</th><th>BOM</th><th>製程</th><th>批次／複驗次數</th><th>總檢驗數（送驗）</th><th>抽驗數</th><th>判定</th><th>不良數</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
+            PHROWS={};
             rows.forEach(function(r){
-                var d=String(r.check_date||r.created_at||'').substring(0,16);
+                PHROWS[r.qc_form_id]=r;
+                var d=dotDT(r.check_date||r.created_at,10)+' '+String(r.created_at||'').substring(11,16);
                 var ncrCell = r.abnormal_order_no
                     ? '<a href="../QA/qa_abnormal_view.php?id='+r.abnormal_order_id+'" target="_blank">'+esc(r.abnormal_order_no)+'</a>'
                     : '';
-                // 是否為首件/末件比照批次歷程同一顆 inspKindBadge()，跟在批/複次數後面
-                h+='<tr><td>'+esc(d)+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
-                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+inspKindBadge(r.insp_kind)+'</td><td>'+statusLabel(r.check_result)+'</td>'+
-                   '<td>'+(r.ng_qty||0)+'</td><td>'+esc(r.user_cname||r.created_by||'')+'</td><td>'+ncrCell+'</td>'+
-                   '<td><button class="btn btn-xs btn-primary ph-view" data-id="'+r.qc_form_id+'">檢視</button></td></tr>';
+                h+='<tr data-id="'+r.qc_form_id+'"><td>'+esc(d)+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
+                   '<td>'+ahBatchText(r)+inspKindBadge(r.insp_kind)+'</td><td>'+(r.incoming_qty||0)+'</td><td>'+(r.sample_qty||0)+'</td><td>'+statusLabel(r.check_result)+'</td>'+
+                   '<td>'+(r.ng_qty||0)+'</td><td>'+esc(r.user_cname||r.created_by||'')+(editedText(r)?'<br><small style="color:var(--amber-d);">'+esc(editedText(r))+'</small>':'')+'</td><td>'+ncrCell+'</td>'+
+                   '<td><button class="btn btn-xs btn-warm-o ph-view" data-id="'+r.qc_form_id+'">檢視簡化紀錄</button></td></tr>';
             });
-            h+='</tbody></table></div>';
+            h+='</tbody></table>';
             $('#partHistList').html(h);
         }, 'json');
     }
@@ -7012,11 +7986,60 @@ $(function(){
     $(document).on('click','.ph-view', function(){
         var id=$(this).data('id');
         $('#partHistDetail').html('載入中…');
+        $('#partHistList tr.ah-active').removeClass('ah-active'); $(this).closest('tr').addClass('ah-active');
         $.post(API,{action:'get_history_record',qc_form_id:id}, function(res){
             if(!res.success){ $('#partHistDetail').html('載入失敗：'+esc(res.message||'')); return; }
-            $('#partHistDetail').html(renderHistDetail(res));
+            var row=$.extend({}, PHROWS[id]||{}, { part_no:(ctx&&ctx.part_no)||'' });
+            ahFetchMeta([row], function(m){
+                var mm={}; mm[row.qc_form_id]=m[row.qc_form_id]||{};
+                $('#partHistDetail').html(renderHistDetail2(res, row, mm[row.qc_form_id]));
+            });
         }, 'json');
     });
+    // 歷史檢驗清單的簡化紀錄：項目＋標準合併一欄、實測值逐 PCS 分欄、下方列 BOM／料號／製程／廠商／數量
+    var AHROWS = {}, AHMETA = {};
+    function renderHistDetail2(res, row, meta){
+        var h=res.header, its=res.items||[];
+        row=row||{}; meta=meta||{};
+        var tls=(res.tools||[]).map(function(t){ return ((t.cat?t.cat+' ':'')+t.no+(t.spec && String(t.no).indexOf(t.spec)<0 ? '('+t.spec+')' : '')); }).join('、');
+        var isA = ahIsAdhoc(row);
+        var proc = isA ? (meta.procs||'') : (row.process_name||h.process_name||'');
+        var vendor = isA ? (meta.maker||'') : (row.bom_maker||'');
+        var ncr = h.abnormal_order_no ? '　<b>異常單：</b><a href="../QA/qa_abnormal_view.php?id='+h.abnormal_order_id+'" target="_blank">'+esc(h.abnormal_order_no)+'</a>' : '';
+        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>'+inspKindBadge(h.insp_kind)+'　整體：'+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+
+            '<div style="margin-top:4px;"><b>BOM：</b>'+esc(row.bom||'—')+'　<b>料號：</b>'+esc(row.part_no||'—')+'　<b>製程：</b>'+esc(proc||'—')+'　<b>廠商：</b>'+esc(vendor||'—')+'</div>'+
+            '<div style="margin-top:4px;"><b>送驗數：</b>'+(h.incoming_qty||0)+'　<b>抽驗數：</b>'+(h.sample_qty||0)+'　<b>不良數：</b>'+(h.ng_qty||0)+ncr+'</div>'+
+            '<div style="margin-top:4px;"><b>使用量具：</b>'+esc(tls||'—')+'</div></div>';
+        var n=0;
+        its.forEach(function(it){ [{samples:it.samples}].concat(it.extra||[]).forEach(function(rd){ n=Math.max(n,(rd.samples||[]).length); }); });
+        if(n<1) n=Math.max(1,parseInt(h.sample_qty,10)||1);
+        var head='<th>項次</th><th>項目／標準</th>';
+        for(var i=1;i<=n;i++) head+='<th>#'+i+'</th>';
+        head+='<th>判定</th>';
+        out+='<table><thead><tr>'+head+'</tr></thead><tbody>';
+        its.forEach(function(it,idx){
+            var readings=[{samples:it.samples}].concat(it.extra||[]);
+            var isRange = it.mode==='RANGE' && it.type!=='OKNG';
+            var stdTxt = isRange ? specDisplayText(it) : ((it.std||'')+((it.up||it.lo)?(' ('+(it.up||'')+'/'+(it.lo||'')+')'):''));
+            var nm=String(it.name||'').trim(), st=String(stdTxt||'').trim();
+            // 項目名稱與標準內容相同（只差在公差）就只顯示標準；不同才上下兩行都顯示
+            var same = !nm || nm===st || (st && st.indexOf(nm)===0);
+            var itemCell = !st ? esc(nm) : (same ? esc(st) : esc(nm)+'　'+esc(st));
+            readings.forEach(function(rd,ri){
+                var tds='';
+                for(var k=0;k<n;k++){
+                    var sm=(rd.samples||[])[k];
+                    tds+='<td>'+((sm&&sm.v!==''&&sm.v!=null)?('<span class="'+((sm.r==='NG')?'hd-ng-val':'')+'">'+esc(sm.v)+'</span>'):'·')+'</td>';
+                }
+                out+='<tr>'+(ri===0
+                        ? ('<td>'+esc(codeLabel(idx))+'</td><td>'+itemCell+'</td>')
+                        : ('<td></td><td class="text-muted" style="font-size:12px">↳ 加量測 '+ri+'</td>'))+
+                    tds+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="hd-ng-badge">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
+            });
+            if(it.remark) out+='<tr><td colspan="'+(n+3)+'" class="text-muted" style="font-size:12px;text-align:left;">備註：'+esc(it.remark)+'</td></tr>';
+        });
+        return out+'</tbody></table>';
+    }
     function renderHistDetail(res){
         var h=res.header, its=res.items||[];
         // 使用量具是整張檢驗單的資訊 → 印在最上面一行，表格內不再有量具欄（2026-09-16）
