@@ -8898,6 +8898,21 @@ echo "</script>\n";
         // console.log(`Filtered data count: ${filtered.length}`); // Debug
         // 篩選完成後再套用排序（排全部符合條件的資料，之後才由呼叫端切頁）
         filtered = applyListSort(filtered);
+        // 訂單追蹤設為急件的訂單所綁的 BOM 置頂（穩定分組：置頂者與其他列各自保持原本的排序）
+        var _urgTop = [], _urgRest = [];
+        filtered.forEach(function (r) { (Number(r && r.bom_order_urgent) === 1 ? _urgTop : _urgRest).push(r); });
+        if (_urgTop.length && _urgRest.length) filtered = _urgTop.concat(_urgRest);
+        // 搜尋「BOM／料號」或「搜尋所有欄位」時，BOM 或料號與輸入內容完全相同（不分大小寫）的列排在最上面；
+        // 穩定分組：完全相同者與其餘列各自保持原本的排序（含急件置頂、使用者選的排序）
+        var _exTerm = String(filters.bom || filters.globalSearch || '').trim().toLowerCase();
+        if (_exTerm && filtered.length > 1) {
+            var _exTop = [], _exRest = [];
+            filtered.forEach(function (r) {
+                var hit = r && [r.d_id, r.d_display, r.bom, r.spec_no].some(function (v) { return v != null && String(v).trim().toLowerCase() === _exTerm; });
+                (hit ? _exTop : _exRest).push(r);
+            });
+            if (_exTop.length && _exRest.length) filtered = _exTop.concat(_exRest);
+        }
         return filtered;
     }
 
