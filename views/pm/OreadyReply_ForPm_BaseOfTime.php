@@ -3220,7 +3220,7 @@ echo "</script>\n";
                 var det = document.createElement('div');
                 det.style.cssText = 'padding-left:10px;color:#8a6a45;white-space:normal;';
                 det.textContent = (b.send_date ? '發單 ' + b.send_date + '；' : '') + b.returns.map(function (r) {
-                    return (r.date ? r.date.slice(5) : '') + ((r.qty > 0 || !(r.wd > 0)) ? ' 回 ' + _obNum(r.qty) : '') + (r.wd > 0 ? ' 取回 ' + _obNum(r.wd) : '') + (r.scrap > 0 ? ' 廢 ' + _obNum(r.scrap) : '');
+                    return (r.date ? r.date.slice(5) : '') + ((r.qty > 0 || !(r.wd > 0)) ? ' 回 ' + _obNum(r.qty) : '') + (r.wd > 0 ? ' 取回 ' + _obNum(r.wd) + (r.note ? '（' + r.note + '）' : '') : '') + (r.scrap > 0 ? ' 廢 ' + _obNum(r.scrap) : '');
                 }).join('、');
                 var wrap = document.createElement('div'); wrap.appendChild(d); wrap.appendChild(det); return wrap;
             }
@@ -11191,6 +11191,7 @@ echo "</script>\n";
           + '<div style="margin-bottom:10px;"><label style="font-size:12px;">回廠日</label><input type="date" id="orm-return-date" class="form-control" style="max-width:200px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
           + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
           + '<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">'
+          + '<button type="button" class="btn btn-warning btn-sm" id="orm-all-withdraw" style="display:none;margin-right:auto;" title="把這一批還在外面的數量全部取回、不加工（可填說明）">全部退回不加工</button>'
           + '<button type="button" class="btn btn-success btn-sm" id="orm-all-return" style="display:none;" title="把這一批還在外面的數量全部記為回廠">全數回廠</button>'
           + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
           + '</div>'
@@ -11220,6 +11221,8 @@ echo "</script>\n";
                 + chip('還在外', _obNum(out), true) + '</div>';
             var allBtn = document.getElementById('orm-all-return');
             if (allBtn) { allBtn.style.display = out > 0 ? '' : 'none'; allBtn.textContent = '全數回廠（' + _obNum(out) + '）'; }
+            var wdBtn = document.getElementById('orm-all-withdraw');
+            if (wdBtn) { wdBtn.style.display = out > 0 ? '' : 'none'; wdBtn.textContent = '全部退回不加工（' + _obNum(out) + '）'; }
         }
         // 「直接修正報廢總數」與「本次回廠／報廢（累加）」是兩種互斥的操作：累加欄有改動或填寫時，修正區反灰不可用，
         // 避免同一次操作又累加又覆蓋；欄位回到原本的預設值（回廠量＝自動帶入值、其餘為 0）才恢復。
@@ -11314,6 +11317,31 @@ echo "</script>\n";
         _refreshStatus();
 
         ['orm-return-qty', 'orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormSyncFix); });
+        var _ormNote = null;   // 全部退回不加工時使用者填的說明（null＝不是從這個按鈕送出）
+        document.getElementById('orm-all-withdraw').onclick = function () {
+            var b = _ormOpenBatch, out = _ormOutsideOf(b);
+            if (!b || !out || out <= 0) { showTemporaryMessage('這一批已沒有還在外面的數量', false); return; }
+            var ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10600;display:flex;align-items:center;justify-content:center;';
+            ov.innerHTML = '<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,.3);width:440px;max-width:95vw;padding:18px 20px;">'
+                + '<h4 style="margin:0 0 10px;color:#6B4423;">全部退回不加工</h4>'
+                + '<div style="font-size:13px;color:#555;line-height:1.6;margin-bottom:10px;">把「<b>' + escapeHtml(b.maker_id || '這批') + '</b>」還在外面的 <b style="color:#b8431f;font-size:16px;">' + _obNum(out) + '</b> 件全部取回、不加工。<br>發包日保留，取回日期另外記錄；上一關會退回「待移轉」。</div>'
+                + '<label style="font-size:12px;">說明（選填，可不輸入直接按確定）</label>'
+                + '<textarea id="orm-wd-note" class="form-control" rows="3" maxlength="200" placeholder="例如：廠商設備故障、改由別間加工…"></textarea>'
+                + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;"><button type="button" class="btn btn-default" id="orm-wd-cancel">取消</button><button type="button" class="btn btn-warning" id="orm-wd-ok">確定</button></div></div>';
+            document.body.appendChild(ov);
+            var ta = ov.querySelector('#orm-wd-note'); ta.focus();
+            ov.querySelector('#orm-wd-cancel').onclick = function () { ov.remove(); };
+            ov.querySelector('#orm-wd-ok').onclick = function () {
+                _ormNote = ta.value.trim();
+                ov.remove();
+                document.getElementById('orm-return-qty').value = 0;
+                document.getElementById('orm-scrap-qty').value = 0;
+                document.getElementById('orm-withdraw-qty').value = out;
+                _ormSyncFix();
+                document.getElementById('orm-submit-add').click();
+            };
+        };
         document.getElementById('orm-all-return').onclick = function () {
             var b = _ormOpenBatch;
             if (!b) { showTemporaryMessage('目前沒有還在外面的批次', false); return; }
@@ -11333,7 +11361,7 @@ echo "</script>\n";
             var wq = parseFloat(document.getElementById('orm-withdraw-qty').value) || 0;
             if (rq < 0 || sq < 0 || wq < 0) { showTemporaryMessage('數量不可為負數', false); return; }
             if (rq <= 0 && sq <= 0 && wq <= 0) { showTemporaryMessage('回廠、廠商提報報廢、取回不加工數量至少要填一個', false); return; }
-            if (wq > 0 && !confirm('取回不加工 ' + wq + ' 件？\n這些貨視為拿回來沒加工：上一關會退回「待移轉」，這一站的發包日期保留，取回日期另外記錄。')) return;
+            if (wq > 0 && _ormNote === null && !confirm('取回不加工 ' + wq + ' 件？\n這些貨視為拿回來沒加工：上一關會退回「待移轉」，這一站的發包日期保留，取回日期另外記錄。')) return;
             if (_ormOpenBatch) {
                 var _left = (parseFloat(_ormOpenBatch.send_qty) || 0) - (parseFloat(_ormOpenBatch.return_qty) || 0) - (parseFloat(_ormOpenBatch.scrap_qty) || 0) - (parseFloat(_ormOpenBatch.withdrawn_qty) || 0);
                 if (rq + sq + wq > _left + 1e-9) {
@@ -11345,9 +11373,10 @@ echo "</script>\n";
             var rdEl = document.getElementById('orm-return-date');
             var rd = rdEl ? rdEl.value : '';
             if (rd && rd > _ormToday()) { showTemporaryMessage('回廠日不可晚於今天', false); return; }
+            var _noteSend = _ormNote; _ormNote = null;   // 只用一次
             var _selB = document.getElementById('orm-batch');
             var _bidSend = (_ormBatches.length > 1 && _selB && _selB.value) ? _selB.value : '';
-            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, return_date: rd, batch_id: _bidSend }, function(r) {
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, return_date: rd, batch_id: _bidSend, note: _noteSend || '' }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
                     document.getElementById('orm-return-qty').value = 0;

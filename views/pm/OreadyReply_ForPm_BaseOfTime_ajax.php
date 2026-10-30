@@ -2447,7 +2447,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     echo json_encode(['success'=>false,'message'=>'這一站已發出的批次都已回廠結清，但還有量未發單：請先到下一次「移轉」追加批次，或按「發單完成（其餘不再發）」']); exit;
                 }
             }
-            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null, $withdrawQty);
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null, $withdrawQty, (string)($_POST['note'] ?? ''));
             $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.($withdrawQty > 0 ? '、取回不加工 '.$withdrawQty : '').'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
             if ($r['closed']) $msg .= !empty($r['all_closed']) ? '，此批已結清。' : '，此批已結清（這一站還有其他批次在外）。';
             $resp = ['success'=>true, 'message'=>$msg, 'result'=>$r];
@@ -2464,7 +2464,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     $ag = $agg->fetch(PDO::FETCH_ASSOC);
                     if ($cur && $cur['processing_state'] === 'ing' && (float)$ag['o'] <= 1e-9 && (float)$ag['r'] <= 1e-9) {
                         $db->prepare("UPDATE bom_ing SET processing_state='N', Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=? AND processing_state='ing'")->execute([$uid, $fid]);
-                        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")->execute([$fid, 'withdraw', '取回不加工 ' . $withdrawQty . '，這一站已無貨在外，退回待發單（發包日保留）', (string)$uid]);
+                        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")->execute([$fid, 'withdraw', '取回不加工 ' . $withdrawQty . '，這一站已無貨在外，退回待發單（發包日保留）' . (trim((string)($_POST['note'] ?? '')) !== '' ? '；說明：' . mb_substr(trim((string)$_POST['note']), 0, 200) : ''), (string)$uid]);
                         $resp['new_status'] = 'N';
                     }
                     if ($cur) {

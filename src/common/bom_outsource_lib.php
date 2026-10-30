@@ -63,6 +63,9 @@ if (!function_exists('eg_bom_outsource_ensure_schema')) {
             if (!$db->query("SHOW COLUMNS FROM bom_ing_outsource_return LIKE 'withdraw_qty'")->fetch()) {
                 $db->exec("ALTER TABLE bom_ing_outsource_return ADD COLUMN withdraw_qty DECIMAL(14,3) NOT NULL DEFAULT 0 COMMENT '本次取回不加工數量' AFTER scrap_qty");
             }
+            if (!$db->query("SHOW COLUMNS FROM bom_ing_outsource_return LIKE 'note'")->fetch()) {
+                $db->exec("ALTER TABLE bom_ing_outsource_return ADD COLUMN note VARCHAR(200) NULL COMMENT '說明（例如取回不加工的原因，選填）' AFTER return_date");
+            }
         } catch (Exception $e) {}
         try {
             // 人工異動保護：手動改過順序/狀態的列，內網ERP重新匯入時不可覆蓋（見 Transfer_ERP_Commit 的 guard）
@@ -122,7 +125,7 @@ if (!function_exists('eg_bom_outsource_record_return')) {
      * 找不到未結清流水帳時（例如舊資料在這支庫上線前就已經在跑），自動用 bom_ing.sqty 現場補開一筆，
      * 不會因為「補資料」擋住使用者操作。
      */
-    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid, ?string $return_date = null, ?int $batch_id = null, float $withdraw_qty_delta = 0): array {
+    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid, ?string $return_date = null, ?int $batch_id = null, float $withdraw_qty_delta = 0, ?string $note = null): array {
         eg_bom_outsource_ensure_schema($db);
         $batch = null;
         if ($batch_id) {
@@ -151,8 +154,9 @@ if (!function_exists('eg_bom_outsource_record_return')) {
         $upd->execute([$newReturn, $newScrap, $newWd, $closed ? 'closed' : 'open', $batch['batch_id']]);
         try {
             $rd = ($return_date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $return_date)) ? $return_date : date('Y-m-d');
-            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, return_date, created_by, created_at) VALUES (?,?,?,?,?,?,?,NOW())")
-               ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $withdraw_qty_delta, $rd, is_numeric($uid) ? (int)$uid : null]);
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $withdraw_qty_delta, $rd,
+                          ($note !== null && trim($note) !== '') ? mb_substr(trim($note), 0, 200) : null, is_numeric($uid) ? (int)$uid : null]);
         } catch (Exception $e) {}
         // 這一站所有批次都結清才算整站回廠完成（只有一批時等同原本行為）
         $allBatchesClosed = $closed && eg_bom_outsource_all_closed($db, $bom_ing_fid);
@@ -291,8 +295,8 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
         $bids = [];
         foreach ($need as $fid) foreach ($by[$fid] as $b) $bids[] = (int)$b['batch_id'];
         $logs = [];
-        $lr = $db->query("SELECT batch_id, return_qty, scrap_qty, withdraw_qty, DATE_FORMAT(return_date,'%Y/%m/%d') d FROM bom_ing_outsource_return WHERE batch_id IN (" . implode(',', $bids) . ") ORDER BY return_id");
-        foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'wd'=>(float)$l['withdraw_qty'], 'date'=>$l['d']];
+        $lr = $db->query("SELECT batch_id, return_qty, scrap_qty, withdraw_qty, note, DATE_FORMAT(return_date,'%Y/%m/%d') d FROM bom_ing_outsource_return WHERE batch_id IN (" . implode(',', $bids) . ") ORDER BY return_id");
+        foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'wd'=>(float)$l['withdraw_qty'], 'note'=>(string)($l['note'] ?? ''), 'date'=>$l['d']];
         $out = [];
         foreach ($need as $fid) {
             $send = $ret = $scrap = $wdTot = 0.0; $bl = [];
