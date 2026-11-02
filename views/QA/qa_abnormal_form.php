@@ -161,6 +161,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                       border-radius:3px; padding:1px 4px; font-size:12.5px; }
         table.dtb tr.off { background:#F7F3EC; color:#9b8a75; }
         table.dtb td.chg { background:#FFE3A8 !important; }
+        input.chg-in { background:#FFE3A8 !important; border:2px solid #F0A24B !important; font-weight:bold; }
+        .chgv { background:#FFE3A8; border-radius:3px; padding:0 4px; }
         table.dtb input.neg, input.neg { background:#F8B4A8 !important; border:2px solid #DD5138 !important; color:#7a1d0e !important; font-weight:bold; }
         .sumline { display:flex; gap:16px; flex-wrap:wrap; align-items:center; justify-content:flex-end;
                    font-size:13px; margin-top:6px; color:var(--ink2); }
@@ -2630,9 +2632,13 @@ function calcSum(){
     var pr = Math.round(proc * rate * 100) / 100;
     calcUnit(proc, other, rate);
     calcTotalDeduct();
-    $('#dSum').html('製程小計 ' + proc.toLocaleString() + '　× 加成 ' + rate + ' ＝ <b>' + pr.toLocaleString() + '</b>'
-        + '　｜　其他 <b>' + other.toLocaleString() + '</b>'
-        + '　｜　合計 <b>' + (Math.round((pr + other) * 100) / 100).toLocaleString() + '</b>');
+    var tot = Math.round((pr + other) * 100) / 100;
+    $('#dSum').html('製程小計 <span class="sv" data-k="proc">' + proc.toLocaleString() + '</span>　× 加成 ' + rate + ' ＝ <b class="sv" data-k="pr">' + pr.toLocaleString() + '</b>'
+        + '　｜　其他 <b class="sv" data-k="other">' + other.toLocaleString() + '</b>'
+        + '　｜　合計 <b class="sv" data-k="sum">' + tot.toLocaleString() + '</b>');
+    DSUM_CUR = { proc: proc, pr: pr, other: other, sum: tot, unit: parseFloat($('#f_dunit').val()), tot: DTOTAL_NUM };
+    if (!DSUM_BASE) DSUM_BASE = $.extend({}, DSUM_CUR);   // 開啟頁面後第一次算出的值當基準
+    markDerived();
 }
 /* 核准扣款金額(元/PCS)＝合計(製程×加成＋其他)÷數量(PCS)：加成與數量都有值就自動帶出。
    已核准的單、或核准人手動填過與自動值不同的數字，就不再自動覆蓋（尊重人工決定）。 */
@@ -2658,7 +2664,22 @@ function calcTotalDeduct(){
     var u = parseFloat($('#f_dunit').val()), q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
     if (!(r > 0)) r = 1;
     $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0);
-    $('#f_dtotal').val((u > 0 && q > 0) ? (Math.round(u * q * r * 100) / 100).toLocaleString(undefined, {maximumFractionDigits: 2}) : '');
+    DTOTAL_NUM = (u > 0 && q > 0) ? Math.round(u * q * r * 100) / 100 : null;
+    $('#f_dtotal').val(DTOTAL_NUM === null ? '' : DTOTAL_NUM.toLocaleString(undefined, {maximumFractionDigits: 2}));
+    markDerived();
+}
+/* 跟開啟頁面時不同的「相對應金額」（單價、總扣款、製程小計、其他、合計）標橘黃底色，方便確認 */
+var DTOTAL_NUM = null, DSUM_BASE = null, DSUM_CUR = null;
+function markDerived(){
+    if (!DSUM_BASE || !DSUM_CUR) return;
+    var diff = function(a, b){ return !(Math.abs((a == null || isNaN(a) ? 0 : a) - (b == null || isNaN(b) ? 0 : b)) < 0.005); };
+    var u = parseFloat($('#f_dunit').val());
+    $('#f_dunit').toggleClass('chg-in', diff(u, DSUM_BASE.unit));
+    $('#f_dtotal').toggleClass('chg-in', diff(DTOTAL_NUM, DSUM_BASE.tot));
+    $('#dSum .sv').each(function(){
+        var k = $(this).data('k');
+        $(this).toggleClass('chgv', diff(DSUM_CUR[k], DSUM_BASE[k]));
+    });
 }
 $(document).on('input', '#f_rate, #f_dqty', calcSum);
 /* 預設加成（生管可設）：前後端都限 1~3 倍，最多 4 位小數 */
