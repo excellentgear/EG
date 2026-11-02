@@ -5028,7 +5028,7 @@ function renderViewPanel(q, contact, detail) {
                 return (t.qty_max === null || t.qty_max === undefined || t.qty_max === '')
                     ? `${mn}以上` : `${mn}~${fmtNum(Math.round(Number(t.qty_max)))}`;
             };
-            const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '')
+            const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '' || !(parseFloat(t.tolerance_value) > 0))
                 ? '' : `<div style="font-size:10px;color:#a06a1f;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${t.tolerance_note ? '｜' + esc(t.tolerance_note) : ''}</div>`;
             it.tiers.forEach((t, ti) => {
                 itemsHtml += `<tr>
@@ -6590,7 +6590,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     let hasTiered = tieredItems.length > 0; // 有階梯報價項目時，合計加註「階梯項目依訂購量另計」
     // 整筆訂單所有階梯區間的容差完全相同 → 各階不重複印小字，改在底下備註統一註明（含對應項次）
     const _tolKey = t => {
-        const v = (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '') ? '' : String(parseFloat(t.tolerance_value));
+        const v = (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '' || !(parseFloat(t.tolerance_value) > 0)) ? '' : String(parseFloat(t.tolerance_value));
         return v === '' ? '' : v + '|' + (t.tolerance_unit || '') + '|' + (t.tolerance_note || '');
     };
     const _tolKeys   = [...new Set(tieredItems.flatMap(it => it.tiers.map(_tolKey)))];
@@ -6641,7 +6641,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                     ? `${mn}以上` : `${mn}~${fmtNum(Math.round(Number(t.qty_max)))}`;
             };
             const tolTxt = t => {
-                if (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '') return '';
+                if (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '' || !(parseFloat(t.tolerance_value) > 0)) return '';
                 const note = t.tolerance_note ? `<br>${esc(t.tolerance_note)}` : '';
                 return `<div style="font-size:8pt;color:#333;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${note}</div>`;
             };
