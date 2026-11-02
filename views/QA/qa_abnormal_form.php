@@ -2701,9 +2701,17 @@ function saveDeduct(silent){
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
                           deduct_notify_no:$('#f_dnotify').val() },
-        function(){ savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
+        function(){ DEDUCT_DIRTY = false; $('#deductDirty').hide(); savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
 }
+/* 扣款確認有改動、還沒存成功時，右下角明顯標示「未儲存」（自動存檔成功後消失；離開頁面前會提醒） */
+var DEDUCT_DIRTY = false;
+$(document).on('input change', '#secDeduct input, #secDeduct select, #secDeduct textarea', function(e){
+    if ($(this).prop('readonly') || $(this).prop('disabled')) return;
+    DEDUCT_DIRTY = true; $('#deductDirty').show();
+});
+$(window).on('beforeunload', function(){ if (DEDUCT_DIRTY) return '扣款確認還有未儲存的內容'; });
 $('#btnSaveDeduct').on('click', function(){ saveDeduct(false); });
+$(document).on('click', '#deductDirty', function(){ saveDeduct(false); });
 $(document).on('change', '#secDeduct input, #secDeduct select', function(){
     autoSave('deduct', function(){ saveDeduct(true); });
 });
@@ -2868,5 +2876,6 @@ function toast(msg){
     $t.data('t', setTimeout(function(){ $t.fadeOut(200); }, 1800));
 }
 </script>
+<div id="deductDirty" style="display:none;position:fixed;right:20px;bottom:24px;z-index:99999;background:#DD5138;color:#fff;font-weight:bold;font-size:15px;padding:10px 18px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.35);cursor:pointer;" title="扣款確認尚未儲存（會自動存檔；點一下立即儲存）">● 未儲存</div>
 </body>
 </html>
