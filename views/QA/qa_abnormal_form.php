@@ -543,6 +543,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
+                    <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
                         <button class="btn btn-warm-o btn-xs" id="btnSignPm"><i class="fa fa-pencil"></i> (生管) 簽章</button>
                         <span class="ro-note" id="pmWho"></span>
@@ -2630,8 +2631,11 @@ function calcSum(){
         if ((r.kind || 'process') === 'other') other += a; else proc += a;
     });
     var pr = Math.round(proc * rate * 100) / 100;
-    var uNow = calcUnit(proc, other, rate);
-    calcTotalDeduct(uNow);
+    // 每一步各自 try/catch：任何一步出錯都不會讓後面的金額停止更新，並把錯誤顯示在畫面上（方便回報）
+    var uNow = NaN, errs = [];
+    try { uNow = calcUnit(proc, other, rate); } catch (e) { errs.push('單價：' + e.message); uNow = parseFloat($('#f_dunit').val()); }
+    try { calcTotalDeduct(uNow); } catch (e) { errs.push('總扣款：' + e.message); }
+    $('#dCalcErr').text(errs.length ? ('⚠ 計算錯誤（請截圖回報）：' + errs.join('；')) : '');
     // 保險：下一個 tick 再用畫面上最新的單價、數量、加成算一次，確保「總扣款金額」一定跟單價同步
     setTimeout(function(){ calcTotalDeduct(); }, 0);
     var tot = Math.round((pr + other) * 100) / 100;
@@ -2663,13 +2667,17 @@ function calcUnit(proc, other, rate){
     return auto === '' ? NaN : auto;
 }
 $(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDeduct(); });
+function fmtMoney(n){
+    var p = String(n).split('.');
+    p[0] = p[0].replace(/\B(?=(\d{3})+$)/g, ',');
+    return p.join('.');
+}
 function calcTotalDeduct(uIn){
     var u = (uIn === undefined) ? parseFloat($('#f_dunit').val()) : uIn, q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
     if (!(r > 0)) r = 1;
-    $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0);
     DTOTAL_NUM = (u > 0 && q > 0) ? Math.round(u * q * r * 100) / 100 : null;
-    $('#f_dtotal').val(DTOTAL_NUM === null ? '' : DTOTAL_NUM.toLocaleString(undefined, {maximumFractionDigits: 2}));
-    markDerived();
+    $('#f_dtotal').val(DTOTAL_NUM === null ? '' : fmtMoney(DTOTAL_NUM));   // 先把數字寫進欄位，不依賴其他函式
+    try { $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0); markDerived(); } catch (e) { console.error(e); }
 }
 /* 跟開啟頁面時不同的「相對應金額」（單價、總扣款、製程小計、其他、合計）標橘黃底色，方便確認 */
 var DTOTAL_NUM = null, DSUM_BASE = null, DSUM_CUR = null;
