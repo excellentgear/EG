@@ -1684,6 +1684,7 @@ case 'order_delete': {
            ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $snap, $uid, $perms['name']]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_retire_pending_notices($db, $id, 'gm', $uid);   // 單已刪除：別人鈴鐺上的待處理通知一併收回
     qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
     $log($id, 'delete', $o['abnormal_order_no'], '已刪除（附件保留 7 天，期滿自動刪除）', $reason);
     jout(true, ['deleted' => 1]);

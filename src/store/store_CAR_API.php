@@ -778,6 +778,7 @@ try {
             jerr('核准失敗：' . $e->getMessage(), 500);
         }
 
+        foreach ($rows as $rr) car_notify_retire($pdo, (int)$rr['id'], '開立申請待您核准', (int)$me['id']);
         // 通知：申請人 + 各單（指定人員→回覆人；否則責任單位主管待指派）
         try {
             foreach ($rows as $i => $r) {
@@ -915,6 +916,7 @@ try {
         } else {
             car_log($pdo, $id, 'assign', (int)$me['id'], $me['name'], "指派「{$aname}」為回覆人");
         }
+        car_notify_retire($pdo, $id, '待指派回覆人', (int)$me['id']);
         // 通知被指派者
         try {
             $ro = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $ro->execute([$id]);
@@ -1146,6 +1148,7 @@ try {
             if ($pdo->inTransaction()) $pdo->rollBack();
             jerr('簽核失敗：' . $e->getMessage(), 500);
         }
+        car_notify_retire($pdo, $id, '待您簽核', (int)$me['id']);
         // 通知最終決策者（總經理）裁決
         try {
             $fd = array_map(function ($d) { return (int)$d['id']; }, car_final_deciders($pdo));
@@ -1221,6 +1224,7 @@ try {
                 $amtTxt = $amt > 0 ? ('扣款 ' . number_format($amt, 2)) : '不扣款';
                 car_log($pdo, $id, 'deduct', (int)$me['id'], $me['name'], "總經理判定：{$amtTxt}" . ($note ? "（{$note}）" : ''));
                 $pdo->commit();
+                car_notify_retire($pdo, $id, '待您最終裁決|待您簽核', (int)$me['id']);
                 // 通知：主管+回覆人+填表人（結案結果，不含扣款）、管理課（扣款結果，機密收件人）
                 try {
                     $who = car_primary_recipients($pdo, $o);
@@ -1241,6 +1245,7 @@ try {
             $pdo->prepare("UPDATE car_order SET status='rejected', result='not_close', not_close_reason=?,
                              final_by=?, final_at=NOW(), stage_since=NOW() WHERE id=?")->execute([$reason, $me['id'], $id]);
 
+            car_notify_retire($pdo, $id, '待您最終裁決|待您簽核', (int)$me['id']);
             list($rNo, $rSeq) = car_next_reissue_no($pdo, (string)$o['car_no']);
             $newStatus = !empty($o['resp_person_id']) ? 'assigned' : 'open';
             $pdo->prepare(
