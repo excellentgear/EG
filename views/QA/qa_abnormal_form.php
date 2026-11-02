@@ -2720,7 +2720,12 @@ function renderSelList(){
     var sum = 0; items.forEach(function(it){ if (it.kind === 0 && it.v != null) sum += it.v; });
     $('#dSelTtl').text('計入扣款的製程（' + items.length + ' 項）　製程單價合計 ' + fmtMoney(Math.round(sum * 100) / 100) + ' 元/PCS');
     // 排序同扣款表格：先填滿左欄再右欄（5 項以內 2 欄，超過 5 項才用 3 欄）
-    var cols = items.length > 5 ? 3 : 2, per = Math.ceil(items.length / cols);
+    var nI = items.length, sizes = [];
+    if (nI <= 15) { for (var ci = 0; ci * 5 < nI; ci++) sizes.push(Math.min(5, nI - ci * 5)); }
+    else { var bs = Math.floor(nI / 3); sizes = [bs + nI % 3, bs, bs]; }
+    var cols = sizes.length, per = Math.max.apply(null, sizes), ordered = [], gp = 0;
+    sizes.forEach(function(sz){ var col = items.slice(gp, gp + sz); gp += sz; while (col.length < per) col.push(null); ordered = ordered.concat(col); });
+    items = ordered;
     $('#dSelGrid').css({ 'grid-template-columns': 'repeat(' + cols + ', minmax(0,1fr))', 'grid-template-rows': 'repeat(' + per + ', auto)', 'grid-auto-flow': 'column' });
     $('#dSelGrid').html(items.map(function(it){
         return '<div class="it" title=""' + esc(it.nm) + '"><span class="sn">' + esc(it.tag) + '</span>' + esc(it.nm)

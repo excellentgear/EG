@@ -193,10 +193,12 @@ html,body{height:auto;}
 .dedlist .g { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:0 10px; }
 .dedlist .it { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dedlist .it b { float:right; margin-left:6px; font-weight:normal; }
+.att-page:last-of-type, .att-page:last-child { break-after:avoid !important; page-break-after:avoid !important; margin-bottom:0 !important; }
+.att-page { height:auto; }
 .att-cap { font-weight:bold; font-size:10pt; height:6mm; line-height:6mm; }
-.att-page img { display:block; width:100%; object-fit:contain; border:1px solid #000; box-sizing:border-box; }
-.att-page.att-p img { height:248mm; }
-.att-page.att-l img { height:164mm; }
+.att-page img { display:block; margin:0; vertical-align:top; width:100%; object-fit:contain; border:1px solid #000; box-sizing:border-box; }
+.att-page.att-p img { height:236mm; }
+.att-page.att-l img { height:150mm; }
 /* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
 table.f td.optrow { height:8mm; }
 table.f td.t { vertical-align:top; }
@@ -523,12 +525,17 @@ foreach ($procRows as $pr) {
 usort($dedItems, function ($x, $y) { return $x['sn'] <=> $y['sn']; });
 if ($dedItems): ?>
 <?php
-$nD = count($dedItems); $cols = $nD > 5 ? 3 : 2; $per = (int)ceil($nD / $cols);
+/* 每欄最多 5 項，超過才換下一欄；超過 15 項（3 欄）時改成 項數÷3，多出來的放第一欄、其餘均分 */
+$nD = count($dedItems);
+if ($nD <= 15) { $cols = max(1, (int)ceil($nD / 5)); $sizes = []; for ($i = 0; $i < $cols; $i++) $sizes[] = min(5, $nD - 5 * $i); }
+else { $cols = 3; $base = intdiv($nD, 3); $rem = $nD % 3; $sizes = [$base + $rem, $base, $base]; }
+$colItems = []; $pos = 0; foreach ($sizes as $sz) { $colItems[] = array_slice($dedItems, $pos, $sz); $pos += $sz; }
+$per = max($sizes);
 $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number_format(abs($u), 2, '.', ','); };
 ?>
-<table class="f dedlist"><tr><td colspan="<?= $cols * 3 ?>" class="lb" style="text-align:left;padding-left:6px;">計入扣款的製程（<?= $nD ?> 項，扣款單價 元/PCS）</td></tr>
-<?php for ($rw = 0; $rw < $per; $rw++): ?><tr><?php for ($cl = 0; $cl < $cols; $cl++): $di = $dedItems[$cl * $per + $rw] ?? null; ?>
-<td class="c" style="width:5%;"><?= $di ? (int)$di['sn'] : '' ?></td><td><?= $di ? h($di['nm']) : '' ?></td><td class="r" style="width:10%;text-align:right;"><?= $di ? h($fmtU($di['u'])) : '' ?></td>
+<table class="f dedlist"><tr><td colspan="<?= $cols * 2 ?>" class="lb" style="text-align:left;padding-left:6px;">計入扣款的製程（<?= $nD ?> 項，扣款單價 元/PCS）</td></tr>
+<?php for ($rw = 0; $rw < $per; $rw++): ?><tr><?php for ($cl = 0; $cl < $cols; $cl++): $di = $colItems[$cl][$rw] ?? null; ?>
+<td class="c" style="width:3.5%;padding:1px 2px;"><?= $di ? (int)$di['sn'] : '' ?></td><td style="padding:1px 4px;"><?php if ($di): ?><?= h($di['nm']) ?><span style="float:right;margin-left:6px;"><?= h($fmtU($di['u'])) ?></span><?php endif; ?></td>
 <?php endfor; ?></tr><?php endfor; ?>
 </table>
 <?php endif; ?>
