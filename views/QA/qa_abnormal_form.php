@@ -534,6 +534,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                             <div class="muted-help" id="rateHint"></div></div>
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
                         <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit"></div>
+                        <div class="fld"><label>總扣款金額（單價×數量×加成）</label><input type="text" id="f_dtotal" readonly style="font-weight:bold;background:#faf7f1;" title="核准扣款金額(元/PCS) × 數量(PCS) × 加成，自動計算"></div>
                         <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
                         <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
                     </div>
@@ -2615,6 +2616,7 @@ function calcSum(){
     });
     var pr = Math.round(proc * rate * 100) / 100;
     calcUnit(proc, other, rate);
+    calcTotalDeduct();
     $('#dSum').html('製程小計 ' + proc.toLocaleString() + '　× 加成 ' + rate + ' ＝ <b>' + pr.toLocaleString() + '</b>'
         + '　｜　其他 <b>' + other.toLocaleString() + '</b>'
         + '　｜　合計 <b>' + (Math.round((pr + other) * 100) / 100).toLocaleString() + '</b>');
@@ -2624,7 +2626,8 @@ function calcSum(){
 var UNIT_MANUAL = false, UNIT_INIT = false;
 function calcUnit(proc, other, rate){
     var o = D.order || {}, q = parseFloat($('#f_dqty').val());
-    var total = Math.round((proc * rate + other) * 100) / 100;
+    // 單價＝（製程小計＋其他）÷ 數量，不含加成；總扣款金額再由「單價 × 數量 × 加成」算出（避免加成被算兩次）
+    var total = Math.round((proc + other) * 100) / 100;
     var auto = (q > 0 && total > 0) ? Math.round(total / q * 100) / 100 : '';
     if (!UNIT_INIT) {   // 載入後第一次：已存的值跟自動值不同＝人工填過
         UNIT_INIT = true;
@@ -2634,7 +2637,12 @@ function calcUnit(proc, other, rate){
     if (o.deduct_appr_at || UNIT_MANUAL) return;
     $('#f_dunit').val(auto === '' ? '' : String(auto));
 }
-$(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; });
+$(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDeduct(); });
+function calcTotalDeduct(){
+    var u = parseFloat($('#f_dunit').val()), q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
+    if (!(r > 0)) r = 1;
+    $('#f_dtotal').val((u > 0 && q > 0) ? (Math.round(u * q * r * 100) / 100).toLocaleString(undefined, {maximumFractionDigits: 2}) : '');
+}
 $(document).on('input', '#f_rate, #f_dqty', calcSum);
 /* 預設加成（生管可設）：前後端都限 1~3 倍，最多 4 位小數 */
 $(document).on('click', '#btnRateDefault', function(){
