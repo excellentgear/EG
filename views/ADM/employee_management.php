@@ -1546,10 +1546,7 @@ $(document).ready(function() {
                 if (response.assignment_notice) {
                     var an = response.assignment_notice;
                     if (confirm('「' + an.name + '」仍被指派於 ' + an.count + ' 項系統設定（' + an.modules.join('、')
-                        + '）。
-系統已通知管理員與主管。
-
-要現在開啟「人員指派總覽」更換替代人員嗎？'))
+                        + '）。\n系統已通知管理員與主管。\n\n要現在開啟「人員指派總覽」更換替代人員嗎？'))
                         window.open('../admin/user_assignments.php?inactive=1&user_id=' + an.user_id, '_blank');
                 }
                 if (response.permission_notice) askRevokePermissions(response.permission_notice);
