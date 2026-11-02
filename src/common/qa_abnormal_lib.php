@@ -405,6 +405,7 @@ function qab_ensure_schema(PDO $db): void
         'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
         // 2026-10-07：外包廠商回廠回報報廢數量自動開立——回指來源加工單流水帳，同一批流水帳
         // 累加報廢好幾次也只開一張單（存在就更新數量，不重複開單，見 qab_auto_open_from_outsource_return()）
+        'abn_total_qty' => "ADD COLUMN abn_total_qty INT NULL COMMENT '品管填的異常總數(PCS)，≥檢驗NG數、≤本批送驗數；報廢決策後自動帶入扣款數量'",
         'rework_of_id' => "ADD COLUMN rework_of_id INT NULL COMMENT '重工後檢驗又NG自動開立：指回造成重工的那張原異常單，非此來源則為NULL'",
         'src_outsource_batch_id' => "ADD COLUMN src_outsource_batch_id INT NULL COMMENT '由哪一筆加工單流水帳(bom_ing_outsource_batch.batch_id)回廠報廐自動開立，非此來源則為NULL'",
     ];
@@ -1469,7 +1470,7 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, 
  * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
  * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
  */
-function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, ?string $qcNote = null): array
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, ?string $qcNote = null, ?int $abnTotal = null): array
 {
     qab_ensure_schema($db);
     if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
@@ -1545,6 +1546,11 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
         $phenomenon = '【重工後異常】原異常單 ' . $rwNo . ' 決策重工，第' . ((int)(qab_rework_round_of($db, $reworkOf))) . '次重工回廠檢驗仍不良。' . $phenomenon;
     }
 
+    // 2026-11-02：異常總數（品管填）≥ 本次檢驗NG數、≤ 本批送驗數；沒送（舊呼叫端）就不處理
+    if ($abnTotal !== null) {
+        if ($abnTotal < (int)$qc['ng_qty']) throw new Exception('異常總數不可小於本次檢驗的不良數（' . (int)$qc['ng_qty'] . '）');
+        if ($abnTotal > (int)$qc['incoming_qty']) throw new Exception('異常總數不可大於本批送驗數（' . (int)$qc['incoming_qty'] . '）');
+    }
     $data = [
         'kind' => 'bom',
         'bom_no' => $bomNo,
@@ -1586,6 +1592,12 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
 
     // 品管在 2.0 跳窗填的備註 → 異常單「品管備註」(qa_ps)
     $qcNote = trim((string)$qcNote);
+    if ($abnTotal !== null) {
+        // 異常總數記成欄位（決策報廢時自動帶入扣款數量），並寫在品管備註第一列，下一列起才是品管填的備註
+        $db->prepare("UPDATE qa_abnormal_order SET abn_total_qty=? WHERE id=?")->execute([$abnTotal, $id]);
+        $qcNote = '異常總數：' . $abnTotal . ' PCS' . ($qcNote !== '' ? "
+" . $qcNote : '');
+    }
     if ($qcNote !== '') {
         $db->prepare("UPDATE qa_abnormal_order SET qa_ps=? WHERE id=?")->execute([mb_substr($qcNote, 0, 2000), $id]);
     }
@@ -3430,6 +3442,10 @@ function qab_scrap_no_sync(PDO $db, int $id): string
     $o = qab_order($db, $id);
     if (!$o) return '';
     $scrapNo = (string)($o['scrap_no'] ?? '');
+    // 2026-11-02：決策含報廢且扣款數量還沒填 → 自動帶入品管填的異常總數（已填過的不覆蓋）
+    if (!empty($o['final']['is_scrap']) && ($o['deduct_qty'] === null || $o['deduct_qty'] === '') && (int)($o['abn_total_qty'] ?? 0) > 0) {
+        $db->prepare("UPDATE qa_abnormal_order SET deduct_qty=? WHERE id=? AND deduct_qty IS NULL")->execute([(int)$o['abn_total_qty'], $id]);
+    }
     if ($scrapNo === '' || !empty($o['final']['is_scrap'])) return '';
     $db->prepare("UPDATE qa_abnormal_order SET scrap_no=NULL, scrap_no_at=NULL WHERE id=?")->execute([$id]);
     return $scrapNo;

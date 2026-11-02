@@ -2393,6 +2393,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         </div>
         <div class="modal-body">
             <p id="qcNoteInfo" style="font-size:14px;"></p>
+            <label for="qcAbnTotal" style="font-weight:bold;">異常總數（PCS，必填）</label>
+            <div id="qcAbnTotalHint" class="muted-help" style="margin-bottom:3px;"></div>
+            <input type="number" id="qcAbnTotal" class="form-control" min="0" step="1" style="width:160px;margin-bottom:4px;">
+            <div id="qcAbnTotalErr" style="display:none;color:#DD5138;font-size:12px;margin-bottom:6px;"></div>
             <label for="qcNoteText" style="font-weight:bold;">品管備註（必填）</label>
             <div id="qcNoteErr" style="display:none;color:#DD5138;font-size:12px;margin-bottom:3px;">請填寫品管備註，說明不良狀況或判斷，才能自動開立異常單。</div>
             <textarea id="qcNoteText" class="form-control" rows="4" maxlength="2000" placeholder="想補充給裁決者看的說明，會自動寫入異常單的「品管備註」"></textarea>
@@ -7409,6 +7413,11 @@ $(function(){
         qcNoteCtx={ qcFormId:qcFormId, items:items, done:done, mark:null };
         $('#qcNoteInfo').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。系統將<b>自動開立品質異常單</b>並通知第一層裁決者。');
         $('#qcNoteText').val('').css('border-color',''); $('#qcNoteErr').hide();
+        var qcNg=parseInt(s.ng_qty)||0, qcMax=parseInt($('#inp-qty').val())||0;
+        qcNoteCtx.ng=qcNg; qcNoteCtx.max=qcMax;
+        $('#qcAbnTotal').val(qcNg).css('border-color','').attr({min:qcNg, max:(qcMax||'')});
+        $('#qcAbnTotalErr').hide();
+        $('#qcAbnTotalHint').text('不可小於本次不良數 '+qcNg+(qcMax?('、不可大於本批送驗數 '+qcMax):'')+'；會寫在品管備註第一列，報廢決策後自動帶入扣款數量。');
         $('#btnQcNoteGo').prop('disabled', false);
         // 先挑圖面標註問題尺寸（沒有圖面或略過都直接進品管備註）
         var ctxNow=qcNoteCtx;
@@ -7416,6 +7425,12 @@ $(function(){
     }
     $('#btnQcNoteGo').on('click', function(){
         if(!qcNoteCtx) return;
+        var abn=parseInt($('#qcAbnTotal').val(),10), cx=qcNoteCtx, abnMsg='';
+        if(isNaN(abn)) abnMsg='請填寫異常總數';
+        else if(abn<cx.ng) abnMsg='異常總數不可小於本次不良數 '+cx.ng;
+        else if(cx.max && abn>cx.max) abnMsg='異常總數不可大於本批送驗數 '+cx.max;
+        if(abnMsg){ $('#qcAbnTotal').css('border-color','#DD5138').focus(); $('#qcAbnTotalErr').text(abnMsg).show(); return; }
+        $('#qcAbnTotal').css('border-color',''); $('#qcAbnTotalErr').hide();
         if(!$.trim($('#qcNoteText').val())){
             $('#qcNoteText').css('border-color','#DD5138').focus();
             $('#qcNoteErr').show();
@@ -7424,7 +7439,7 @@ $(function(){
         var c=qcNoteCtx, $b=$(this).prop('disabled',true);
         var built=qcAbBuildMeasures(c.items), sel=built.sel, measures=built.measures;
         $.post('../../src/store/QaAbnormal_API.php', {
-            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId, qc_note_req:1,
+            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId, qc_note_req:1, abn_total:$('#qcAbnTotal').val(),
             measures:JSON.stringify(measures), selected:JSON.stringify(sel),
             // 多面分段檢驗：把「首件・第N顆・A面」帶進異常說明（品管備註最前面）
             qc_note:(faceOn() ? ('【首件 第'+state.face.piece+'顆 '+state.face.code+'面】') : '')+$('#qcNoteText').val()

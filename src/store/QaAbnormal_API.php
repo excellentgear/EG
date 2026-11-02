@@ -148,7 +148,9 @@ case 'auto_open_from_qc': {
         if ($chk === '') jerr('請填寫品管備註');
     }
     try {
-        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $qcNote);
+        $abnTotal = (isset($_POST['abn_total']) && $_POST['abn_total'] !== '') ? (int)$_POST['abn_total'] : null;
+        if (!empty($_POST['qc_note_req']) && $abnTotal === null) jerr('請填寫異常總數');
+        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $qcNote, $abnTotal);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     $log($r['id'], 'create', '', $r['no'] . '（線上檢驗NG自動開立）');
     jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed']),
