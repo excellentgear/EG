@@ -963,6 +963,17 @@ function markThumbsLoad(){
         }).join(''));
     }, 'json');
 }
+/* 圖面標註視窗：拖曳標題列可移動 */
+(function(){
+    var d = null;
+    $('#markViewMask .m-hd').css({ cursor:'move', userSelect:'none' }).on('mousedown', function(e){
+        if ($(e.target).closest('.x').length) return;
+        var m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec($('#markViewMask .m-box').css('transform') === 'none' ? '' : ($('#markViewMask .m-box')[0].style.transform || '')) || [0, 0, 0];
+        d = { x:e.clientX, y:e.clientY, ox:parseFloat(m[1]) || 0, oy:parseFloat(m[2]) || 0 }; e.preventDefault();
+    });
+    $(document).on('mousemove', function(e){ if (d) $('#markViewMask .m-box').css('transform', 'translate(' + (d.ox + e.clientX - d.x) + 'px,' + (d.oy + e.clientY - d.y) + 'px)'); })
+               .on('mouseup', function(){ d = null; });
+})();
 var MV = { s:1, x:0, y:0, nw:0, nh:0 };
 function mvApply(){ $('#mvImg').css('transform', 'translate(' + MV.x + 'px,' + MV.y + 'px) scale(' + MV.s + ')'); }
 function mvFit(){
@@ -974,6 +985,7 @@ function mvZoom(f, cx, cy){
     MV.x = cx - (cx - MV.x) * k; MV.y = cy - (cy - MV.y) * k; MV.s = ns; mvApply();
 }
 $(document).on('click', '.mark-thumb', function(){
+    $('#markViewMask .m-box').css('transform', '');   // 每次開啟回到置中
     openMask('markViewMask');
     var img = $('#mvImg')[0];
     img.onload = function(){ MV.nw = img.naturalWidth; MV.nh = img.naturalHeight; mvFit(); };
