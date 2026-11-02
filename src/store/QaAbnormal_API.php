@@ -932,6 +932,16 @@ case 'deduct_sign': {      // 生管／品管簽章
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
 }
 
+case 'rate_default_save': {   // 生管（可填扣款者）設定「預設加成」：之後新開的單帶入這個值，已存的單不受影響
+    if (!$perms['canDeductFill'] && !$perms['canAdmin']) jerr('沒有設定預設加成的權限（生管或管理員）');
+    $rv = trim((string)($_POST['rate'] ?? ''));
+    if ($rv === '' || !is_numeric($rv)) jerr('請填寫加成倍數（數字，例 1.1）');
+    $rn = round((float)$rv, 4);
+    if ($rn < 1 || $rn > 3) jerr('預設加成要在 1 ~ 3 倍之間（例 1.1 表示 ×110%）');
+    qab_setting_set($db, 'surcharge_rate', $rn);
+    jout(true, ['rate' => $rn]);
+}
+
 case 'deduct_approve': {   // 核准（管理課 會計／主管）
     $o = $mustOrder((int)($_POST['id'] ?? 0));
     if (!$perms['canDeductApprove']) jerr('沒有核准扣款金額的權限（紙本：核准扣款金額由管理課 會計／主管填寫）');

@@ -528,7 +528,10 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <span class="muted-help">　「其他」由生管或業務直接填金額與說明；製程列請用上方「自動帶入製程金額」。</span>
                     </div>
                     <div class="fgrid" style="margin-top:10px;">
-                        <div class="fld"><label>加成（1.1＝總金額×110%）</label><input type="number" step="0.01" id="f_rate"></div>
+                        <div class="fld"><label>加成（1.1＝總金額×110%）</label>
+                            <div style="display:flex;gap:6px;"><input type="number" step="0.01" min="1" max="3" id="f_rate" style="flex:1;">
+                                <button type="button" class="btn btn-warm-o btn-xs" id="btnRateDefault" title="把目前的加成倍數存成「預設值」，之後新開的單自動帶入（已存的單不變）">設為預設</button></div>
+                            <div class="muted-help" id="rateHint"></div></div>
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
                         <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit"></div>
                         <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
@@ -1668,6 +1671,8 @@ function render(){
     // ⑥ 扣款
     DEDUCT_ROWS = (o.deducts || []).map(function(r){ return $.extend({}, r); });
     $('#f_rate').val(o.surcharge_rate == null ? (D.rate_default || 1) : o.surcharge_rate);
+    $('#rateHint').text('目前預設：' + (D.rate_default || 1));
+    UNIT_INIT = false; UNIT_MANUAL = false;
     $('#f_dqty').val(o.deduct_qty == null || o.deduct_qty === '' ? '' : String(Number(o.deduct_qty)));   // 21.000 → 21（小數點後全是 0 就不顯示）
     $('#f_dunit').val(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
     $('#f_dexec').val(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : (o.deduct_exec || ''));
@@ -2589,6 +2594,7 @@ function renderDeduct(){
     if (!DEDUCT_ROWS.length) h = '<tr><td colspan="10" class="c muted-help">尚未有扣款明細</td></tr>';
     $('#dtb tbody').html(h);
     $('#dtb input, #f_rate, #f_dqty, #f_dexec, #f_dnotify').prop('disabled', !canFill);
+    $('#btnRateDefault').toggle(canFill);
     $('#f_dunit').prop('disabled', !(p.canDeductApprove && !o.is_closed));
     $('#btnAddOther,#btnSaveDeduct,#btnAutoFill').toggle(canFill);
     $('#btnSignPm').toggle(p.canDeductFill && !o.is_closed);
@@ -2608,11 +2614,38 @@ function calcSum(){
         if ((r.kind || 'process') === 'other') other += a; else proc += a;
     });
     var pr = Math.round(proc * rate * 100) / 100;
+    calcUnit(proc, other, rate);
     $('#dSum').html('製程小計 ' + proc.toLocaleString() + '　× 加成 ' + rate + ' ＝ <b>' + pr.toLocaleString() + '</b>'
         + '　｜　其他 <b>' + other.toLocaleString() + '</b>'
         + '　｜　合計 <b>' + (Math.round((pr + other) * 100) / 100).toLocaleString() + '</b>');
 }
-$(document).on('input', '#f_rate', calcSum);
+/* 核准扣款金額(元/PCS)＝合計(製程×加成＋其他)÷數量(PCS)：加成與數量都有值就自動帶出。
+   已核准的單、或核准人手動填過與自動值不同的數字，就不再自動覆蓋（尊重人工決定）。 */
+var UNIT_MANUAL = false, UNIT_INIT = false;
+function calcUnit(proc, other, rate){
+    var o = D.order || {}, q = parseFloat($('#f_dqty').val());
+    var total = Math.round((proc * rate + other) * 100) / 100;
+    var auto = (q > 0 && total > 0) ? Math.round(total / q * 100) / 100 : '';
+    if (!UNIT_INIT) {   // 載入後第一次：已存的值跟自動值不同＝人工填過
+        UNIT_INIT = true;
+        var st = o.deduct_unit_amt;
+        UNIT_MANUAL = (st != null && st !== '' && (auto === '' || Math.abs(parseFloat(st) - auto) > 0.01));
+    }
+    if (o.deduct_appr_at || UNIT_MANUAL) return;
+    $('#f_dunit').val(auto === '' ? '' : String(auto));
+}
+$(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; });
+$(document).on('input', '#f_rate, #f_dqty', calcSum);
+/* 預設加成（生管可設）：前後端都限 1~3 倍，最多 4 位小數 */
+$(document).on('click', '#btnRateDefault', function(){
+    var v = $.trim($('#f_rate').val()), n = parseFloat(v);
+    if (v === '' || isNaN(n)) { alert('請先填寫加成倍數（數字，例 1.1）'); return; }
+    if (n < 1 || n > 3) { alert('預設加成要在 1 ~ 3 倍之間（例 1.1 表示 ×110%）'); return; }
+    if (!confirm('要把「' + n + '」設成預設加成嗎？\n之後新開的異常單會帶入這個值，已存的單不受影響。')) return;
+    post('rate_default_save', { rate: n }, function(res){
+        D.rate_default = res.rate; $('#rateHint').text('目前預設：' + res.rate); toast('已設定預設加成 ' + res.rate);
+    });
+});
 $(document).on('change', '.d-inc', function(){ DEDUCT_ROWS[$(this).data('i')].included = $(this).prop('checked') ? 1 : 0; renderDeduct(); });
 $(document).on('input', '.d-amt', function(){ DEDUCT_ROWS[$(this).data('i')].amount = this.value; calcSum(); });
 // 製程列以「單價」輸入：金額＝單價×數量（四捨五入到分），跟下方 PCS 數量對得起來
