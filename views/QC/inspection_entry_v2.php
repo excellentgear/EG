@@ -5413,6 +5413,21 @@ $(function(){
                 if(!res || !res.success) return;
                 ctx.sample_qty = res.sample_qty;
                 $('#ctx-sample-live').text((res.sample_qty||0)+' 件');
+                // 實測值格子數跟著送驗數走：新建單據、使用者沒手動改過抽驗數（沒有變更理由紀錄）、
+                // 非首件/末件（那兩種已由送驗數同步）時，抽驗數自動採用建議值（不超過送驗數）。
+                // 縮小時若被截掉的格子已填值就不動，避免洗掉已輸入的資料。
+                if(state.inspKind==='FIRST' || state.inspKind==='LAST') return;
+                if(state.editFormId || state.viewFormId || state.viewOnly) return;
+                if((state.sampleChanges||[]).length) return;
+                var n = Math.max(1, Math.min(parseInt(res.sample_qty)||1, qty>0?qty:1));
+                if(n===state.sampleN) return;
+                var lostData = n<state.sampleN && MODEL.items.some(function(it){
+                    return it.readings.some(function(rd){
+                        return rd.vals.slice(n).some(function(v){ return v!=='' && v!=null && v!=='OK'; });
+                    });
+                });
+                if(lostData) return;
+                setSampleN(n); $('#inp-sample').val(n).data('prev', n); scheduleDraftSave();
             }, 'json');
         }, 400);
     }
