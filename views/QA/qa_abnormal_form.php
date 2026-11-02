@@ -518,8 +518,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <div id="deductHint" class="note-box"></div>
                     <table class="dtb" id="dtb">
                         <thead><tr>
-                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">金額(未稅)</th><th>說明（單號／數量／備註）</th>
-                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">金額(未稅)</th><th>說明（單號／數量／備註）</th>
+                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">單價(未稅)</th><th>說明（單號／數量／金額／備註）</th>
+                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">單價(未稅)</th><th>說明（單號／數量／金額／備註）</th>
                         </tr></thead>
                         <tbody></tbody>
                     </table>
@@ -2562,18 +2562,20 @@ function renderDeduct(){
         var qtyTxt = (isProc && r.qty != null && r.qty !== '') ? ('　數量 ' + Number(r.qty).toLocaleString()) : '';
         var snTxt = (isProc && r.bom_sn) ? ('第' + r.bom_sn + '站') : '';
         var qn = parseFloat(r.qty), an = parseFloat(r.amount);
-        var unitTxt = (isProc && qn > 0 && !isNaN(an)) ? ('單價 ' + (Math.round(an / qn * 100) / 100).toLocaleString()) : '';
+        var byUnit = (isProc && qn > 0);
+        var unitVal = (byUnit && !isNaN(an)) ? (Math.round(an / qn * 100) / 100) : '';
         return '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
-             + '<td class="c"><b>' + seq + '</b></td>'
+             + '<td class="c" title="' + (isProc ? '製程順序 BOM_SN（相同代表同一關）' : '其他') + '"><b>' + (isProc ? (r.bom_sn == null ? '' : r.bom_sn) : '其他') + '</b></td>'
              + '<td>' + (isProc
                   ? (esc(r.process_name || '') + (r.vendor_name ? ('<br><span class="muted-help">' + esc(r.vendor_name) + '</span>') : '')
-                     + (r.bom_no || snTxt ? ('<br><span class="muted-help">' + esc((r.bom_no || '') + (snTxt ? ' ' + snTxt : '')) + '</span>') : ''))
+                     )
                   : ('<input type="text" class="d-nm" data-i="' + i + '" value="' + esc(r.process_name || '') + '" placeholder="其他項目名稱">'
                      + '<span class="x" style="color:var(--coral);cursor:pointer;" data-drm="' + i + '">× 移除這列</span>')) + '</td>'
-             + '<td class="r"><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '">'
-             + (unitTxt ? '<div class="muted-help" style="margin-top:2px;">' + unitTxt + '</div>' : '') + '</td>'
+             + (byUnit
+                  ? '<td class="r"><div class="muted-help" style="text-align:left;">單價</div><input type="number" step="0.01" class="d-unit" data-i="' + i + '" value="' + unitVal + '"></td>'
+                  : '<td class="r"><div class="muted-help" style="text-align:left;">金額</div><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>')
              + '<td>' + (isProc
-                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + (r.amount_auto != null ? ('　自動帶入 ' + Number(r.amount_auto).toLocaleString()) : '') + '</span>' : '')
+                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (r.amount_auto != null ? ('（自動帶入 ' + Number(r.amount_auto).toLocaleString() + '）') : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
     var h = '', half = Math.ceil(order.length / 2);
@@ -2612,6 +2614,13 @@ function calcSum(){
 $(document).on('input', '#f_rate', calcSum);
 $(document).on('change', '.d-inc', function(){ DEDUCT_ROWS[$(this).data('i')].included = $(this).prop('checked') ? 1 : 0; renderDeduct(); });
 $(document).on('input', '.d-amt', function(){ DEDUCT_ROWS[$(this).data('i')].amount = this.value; calcSum(); });
+// 製程列以「單價」輸入：金額＝單價×數量（四捨五入到分），跟下方 PCS 數量對得起來
+$(document).on('input', '.d-unit', function(){
+    var i = $(this).data('i'), r = DEDUCT_ROWS[i], u = parseFloat(this.value), q = parseFloat(r.qty);
+    r.amount = isNaN(u) ? '' : (Math.round(u * q * 100) / 100);
+    $('.d-amtshow[data-i="' + i + '"]').text(r.amount === '' ? '' : Number(r.amount).toLocaleString());
+    calcSum();
+});
 $(document).on('input', '.d-note', function(){ DEDUCT_ROWS[$(this).data('i')].note = this.value; });
 $(document).on('input', '.d-nm', function(){ DEDUCT_ROWS[$(this).data('i')].process_name = this.value; });
 $(document).on('click', '[data-drm]', function(){ DEDUCT_ROWS.splice(parseInt($(this).data('drm'), 10), 1); renderDeduct(); });
