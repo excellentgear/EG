@@ -532,7 +532,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
                         <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit"></div>
                         <div class="fld"><label>執行</label><input type="text" id="f_dexec"></div>
-                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1130101001"></div>
+                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
@@ -1668,7 +1668,7 @@ function render(){
     // ⑥ 扣款
     DEDUCT_ROWS = (o.deducts || []).map(function(r){ return $.extend({}, r); });
     $('#f_rate').val(o.surcharge_rate == null ? (D.rate_default || 1) : o.surcharge_rate);
-    $('#f_dqty').val(o.deduct_qty == null ? '' : o.deduct_qty);
+    $('#f_dqty').val(o.deduct_qty == null || o.deduct_qty === '' ? '' : String(Number(o.deduct_qty)));   // 21.000 → 21（小數點後全是 0 就不顯示）
     $('#f_dunit').val(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
     $('#f_dexec').val(o.deduct_exec || '');
     $('#f_dnotify').val(o.deduct_notify_no || '');
@@ -2561,6 +2561,8 @@ function renderDeduct(){
         var r = DEDUCT_ROWS[i], isProc = (r.kind || 'process') !== 'other';
         var qtyTxt = (isProc && r.qty != null && r.qty !== '') ? ('　數量 ' + Number(r.qty).toLocaleString()) : '';
         var snTxt = (isProc && r.bom_sn) ? ('第' + r.bom_sn + '站') : '';
+        var qn = parseFloat(r.qty), an = parseFloat(r.amount);
+        var unitTxt = (isProc && qn > 0 && !isNaN(an)) ? ('單價 ' + (Math.round(an / qn * 100) / 100).toLocaleString()) : '';
         return '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
              + '<td class="c"><b>' + seq + '</b></td>'
              + '<td>' + (isProc
@@ -2568,16 +2570,17 @@ function renderDeduct(){
                      + (r.bom_no || snTxt ? ('<br><span class="muted-help">' + esc((r.bom_no || '') + (snTxt ? ' ' + snTxt : '')) + '</span>') : ''))
                   : ('<input type="text" class="d-nm" data-i="' + i + '" value="' + esc(r.process_name || '') + '" placeholder="其他項目名稱">'
                      + '<span class="x" style="color:var(--coral);cursor:pointer;" data-drm="' + i + '">× 移除這列</span>')) + '</td>'
-             + '<td class="r"><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>'
+             + '<td class="r"><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '">'
+             + (unitTxt ? '<div class="muted-help" style="margin-top:2px;">' + unitTxt + '</div>' : '') + '</td>'
              + '<td>' + (isProc
                   ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + (r.amount_auto != null ? ('　自動帶入 ' + Number(r.amount_auto).toLocaleString()) : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
-    var h = '';
-    for (var k = 0; k < order.length; k += 2) {
-        var i1 = order[k], i2 = order[k + 1];
+    var h = '', half = Math.ceil(order.length / 2);
+    for (var k = 0; k < half; k++) {
+        var i1 = order[k], i2 = order[k + half];
         h += '<tr class="' + (Number(DEDUCT_ROWS[i1].included) ? '' : 'off') + '">' + cell(i1, k + 1)
-           + (i2 !== undefined ? cell(i2, k + 2).replace(/^<td class="c">/, '<td class="c' + (Number(DEDUCT_ROWS[i2].included) ? '' : ' off') + '">') : '<td colspan="5" style="background:#faf7f1;"></td>')
+           + (i2 !== undefined ? cell(i2, k + 1 + half).replace(/^<td class="c">/, '<td class="c' + (Number(DEDUCT_ROWS[i2].included) ? '' : ' off') + '">') : '<td colspan="5" style="background:#faf7f1;"></td>')
            + '</tr>';
     }
     if (!DEDUCT_ROWS.length) h = '<tr><td colspan="10" class="c muted-help">尚未有扣款明細</td></tr>';
@@ -2638,7 +2641,20 @@ $('#btnAutoFill').on('click', function(){
     if (!confirm('會用這張製令的製程移轉金額重建「製程」明細（手動加的「其他」列不受影響）。要繼續嗎？')) return;
     post('deduct_autofill', { id:OID }, function(res){ toast('已帶入 ' + res.count + ' 站'); });
 });
+function dnotifyCheck(){
+    var v = $.trim($('#f_dnotify').val()), msg = '';
+    if (v !== '') {
+        var m = v.match(/^J-(\d{3})(\d{2})(\d{2})(\d{3})(?:\s.*)?$/);
+        if (!m) msg = '通知扣款單號格式要是 J-民國年3碼＋月日4碼＋流水3碼，例如 J-1151030044';
+        else { var mm = +m[2], dd = +m[3]; if (mm < 1 || mm > 12 || dd < 1 || dd > 31) msg = '單號裡的月日不正確（第 5~8 碼要是 MMDD）'; }
+    }
+    $('#f_dnotify').css('border-color', msg ? '#DD5138' : '');
+    $('#dnotifyErr').text(msg).toggle(!!msg);
+    return msg === '';
+}
+$(document).on('input blur', '#f_dnotify', dnotifyCheck);
 function saveDeduct(silent){
+    if (!dnotifyCheck()) { if (!silent) alert('通知扣款單號格式不正確，請修正後再儲存'); return; }
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
                           deduct_exec:$('#f_dexec').val(), deduct_notify_no:$('#f_dnotify').val() },

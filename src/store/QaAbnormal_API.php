@@ -861,6 +861,12 @@ case 'deduct_save': {
     if (!$perms['canDeductFill']) jerr('沒有填寫扣款金額的權限（紙本：扣款確認表金額由生管填寫）');
     $id = (int)$o['id'];
     $rows = json_decode((string)($_POST['rows'] ?? '[]'), true) ?: [];
+    // 通知扣款單號：J-＋民國年3碼＋MMDD＋流水3碼（2026-11-02 使用者指定），後面可空一格加註備註
+    $dnoChk = trim((string)($_POST['deduct_notify_no'] ?? ''));
+    if ($dnoChk !== '') {
+        if (!preg_match('/^J-(\d{3})(\d{2})(\d{2})(\d{3})(?:\s.*)?$/su', $dnoChk, $dm) || (int)$dm[2] < 1 || (int)$dm[2] > 12 || (int)$dm[3] < 1 || (int)$dm[3] > 31)
+            jerr('通知扣款單號格式要是 J-民國年3碼＋月日4碼＋流水3碼，例如 J-1151030044');
+    }
     $rate = $numOrNull($_POST['surcharge_rate'] ?? '');
     if ($rate !== null && ($rate <= 0 || $rate > 10)) jerr('加成請填大於 0 的倍數（例 1.1 表示 ×110%）');
 
