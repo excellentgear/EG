@@ -2562,7 +2562,7 @@ function renderDeduct(){
         var qtyTxt = (isProc && r.qty != null && r.qty !== '') ? ('　數量 ' + Number(r.qty).toLocaleString()) : '';
         var snTxt = (isProc && r.bom_sn) ? ('第' + r.bom_sn + '站') : '';
         var qn = parseFloat(r.qty), an = parseFloat(r.amount);
-        var remarkTxt = isProc ? $.trim(String(r.tl_note || '') + ' ' + String(r.tl_note2 || '')) : '';
+        var remarkTxt = isProc ? $.trim(String(r.tl_note || '')) : '';   // 只顯示移轉單的「備註」，不含備註二
         var byUnit = (isProc && qn > 0);
         var unitVal = (byUnit && !isNaN(an)) ? (Math.round(an / qn * 100) / 100) : '';
         return '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
@@ -2576,8 +2576,7 @@ function renderDeduct(){
                   ? '<td class="r"><div class="muted-help" style="text-align:left;">單價</div><input type="number" step="0.01" class="d-unit" data-i="' + i + '" value="' + unitVal + '"></td>'
                   : '<td class="r"><div class="muted-help" style="text-align:left;">金額</div><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>')
              + '<td>' + (isProc
-                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (r.amount_auto != null ? ('（自動帶入 ' + Number(r.amount_auto).toLocaleString() + '）') : '')
-                     + (remarkTxt ? ('<br>備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
+                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
     var h = '', half = Math.ceil(order.length / 2);
