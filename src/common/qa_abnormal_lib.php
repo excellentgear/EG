@@ -4136,7 +4136,7 @@ function qab_order(PDO $db, int $id): ?array
     }
 
     // tl_note／tl_note2：該移轉單（製程移轉一覽表）目前的備註與備註二，即時讀取，在製程移轉一覽表改了這裡就跟著變
-    $st = $db->prepare("SELECT d.*, u.user_cname AS created_name, tl.note AS tl_note, tl.note2 AS tl_note2 FROM qa_abnormal_deduct d
+    $st = $db->prepare("SELECT d.*, u.user_cname AS created_name, tl.note AS tl_note, tl.note2 AS tl_note2, tl.price AS tl_price FROM qa_abnormal_deduct d
                         LEFT JOIN `user` u ON u.id=d.created_by
                         LEFT JOIN bom_ing_transfer_log tl ON tl.transfer_id=d.transfer_id
                         WHERE d.order_id=? ORDER BY d.kind DESC, d.sort_order, d.id");

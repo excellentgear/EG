@@ -2585,6 +2585,9 @@ function renderDeduct(){
         var snTxt = (isProc && r.bom_sn) ? ('第' + r.bom_sn + '站') : '';
         var qn = parseFloat(r.qty), an = parseFloat(r.amount);
         var remarkTxt = isProc ? $.trim(String(r.tl_note || '')) : '';   // 只顯示移轉單的「備註」，不含備註二
+        // 移轉單價：取自移轉單的單價；移轉單沒有單價就用「金額÷數量」（不顯示此製程總金額）
+        var tp = parseFloat(r.tl_price);
+        var transferPrice = (tp > 0) ? String(Math.round(tp * 100) / 100) : ((qn > 0 && !isNaN(an)) ? String(Math.round(an / qn * 100) / 100) : '');
         var byUnit = (isProc && qn > 0);
         var unitVal = (byUnit && !isNaN(an)) ? (Math.round(an / qn * 100) / 100) : '';
         return '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
@@ -2598,7 +2601,7 @@ function renderDeduct(){
                   ? '<td class="r"><div class="muted-help" style="text-align:left;">單價</div><input type="number" step="0.01" class="d-unit' + (unitVal !== '' && unitVal < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + unitVal + '"></td>'
                   : '<td class="r"><div class="muted-help" style="text-align:left;">金額</div><input type="number" step="0.01" class="d-amt' + (parseFloat(r.amount) < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>')
              + '<td>' + (isProc
-                  ? '<span class="muted-help">' + (r.transfer_no ? esc(r.transfer_no) : '<i>無移轉單（請填單價並勾選）</i>') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
+                  ? '<span class="muted-help">' + (r.transfer_no ? esc(r.transfer_no) : '<i>無移轉單（請填單價並勾選）</i>') + qtyTxt + (r.transfer_no && transferPrice !== '' ? ('　移轉單價 <b>' + transferPrice + '</b>') : '') + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
     var h = '', half = Math.ceil(order.length / 2);
