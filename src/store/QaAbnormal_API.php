@@ -850,19 +850,8 @@ case 'deduct_autofill': {  // 套用自動帶入（只重建 process 列，手�
     $id = (int)$o['id'];
     $boms = $o['bom_list'];
     if (!$boms) jerr('這張單沒有綁定製令，無法自動帶入製程金額');
-    $rows = qab_deduct_autofill($db, $boms);
-    $db->beginTransaction();
-    try {
-        $db->prepare("DELETE FROM qa_abnormal_deduct WHERE order_id=? AND kind='process'")->execute([$id]);
-        $ins = $db->prepare("INSERT INTO qa_abnormal_deduct
-            (order_id,kind,transfer_id,bom_no,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,included,sort_order,created_by)
-            VALUES (?,'process',?,?,?,?,?,?,?,?,?,1,?,?)");
-        foreach ($rows as $i => $r) {
-            $ins->execute([$id, $r['transfer_id'], $r['bom_no'], $r['bom_sn'], $r['process_name'], $r['vendor_name'],
-                           $r['transfer_no'], $r['qty'], $r['amount'], $r['amount'], $i, $uid]);
-        }
-        $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $cnt = qab_deduct_autofill_apply($db, $id, $uid);
+    $rows = array_fill(0, $cnt, 1);
     $log($id, 'deduct_autofill', '', '帶入 ' . count($rows) . ' 站製程金額');
     jout(true, ['order' => qab_order($db, $id), 'count' => count($rows)]);
 }

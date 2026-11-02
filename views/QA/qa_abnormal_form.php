@@ -518,8 +518,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <div id="deductHint" class="note-box"></div>
                     <table class="dtb" id="dtb">
                         <thead><tr>
-                            <th style="width:34px;">計入</th><th style="width:110px;">項目</th><th style="width:130px;">製程／名稱</th>
-                            <th style="width:110px;">金額(未稅)</th><th>說明</th><th style="width:34px;"></th>
+                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">金額(未稅)</th><th>說明（單號／數量／備註）</th>
+                            <th style="width:30px;">計入</th><th style="width:34px;">順序</th><th style="width:15%;">製程／名稱</th><th style="width:90px;">金額(未稅)</th><th>說明（單號／數量／備註）</th>
                         </tr></thead>
                         <tbody></tbody>
                     </table>
@@ -2553,24 +2553,34 @@ function renderDeduct(){
           + (o.bom_no ? '' : '<br><span style="color:var(--coral);">這張單沒有綁製令，製程金額無法自動帶入，請在上方基本資料補上製令編號。</span>')
         : ('目前不需要扣款確認（' + GM_LABEL + '裁示沒有勾「扣款」，最終決策也不是報廢）。仍可先填，結案不會被擋。'));
 
+    // 兩欄並列：一列放兩筆，先左後右，標上順序（製程列在前、「其他」列在後）
+    var order = [];
+    DEDUCT_ROWS.forEach(function(r, i){ if ((r.kind || 'process') !== 'other') order.push(i); });
+    DEDUCT_ROWS.forEach(function(r, i){ if ((r.kind || 'process') === 'other') order.push(i); });
+    var cell = function(i, seq){
+        var r = DEDUCT_ROWS[i], isProc = (r.kind || 'process') !== 'other';
+        var qtyTxt = (isProc && r.qty != null && r.qty !== '') ? ('　數量 ' + Number(r.qty).toLocaleString()) : '';
+        var snTxt = (isProc && r.bom_sn) ? ('第' + r.bom_sn + '站') : '';
+        return '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
+             + '<td class="c"><b>' + seq + '</b></td>'
+             + '<td>' + (isProc
+                  ? (esc(r.process_name || '') + (r.vendor_name ? ('<br><span class="muted-help">' + esc(r.vendor_name) + '</span>') : '')
+                     + (r.bom_no || snTxt ? ('<br><span class="muted-help">' + esc((r.bom_no || '') + (snTxt ? ' ' + snTxt : '')) + '</span>') : ''))
+                  : ('<input type="text" class="d-nm" data-i="' + i + '" value="' + esc(r.process_name || '') + '" placeholder="其他項目名稱">'
+                     + '<span class="x" style="color:var(--coral);cursor:pointer;" data-drm="' + i + '">× 移除這列</span>')) + '</td>'
+             + '<td class="r"><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>'
+             + '<td>' + (isProc
+                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + (r.amount_auto != null ? ('　自動帶入 ' + Number(r.amount_auto).toLocaleString()) : '') + '</span>' : '')
+                  + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
+    };
     var h = '';
-    DEDUCT_ROWS.forEach(function(r, i){
-        var isProc = (r.kind || 'process') !== 'other';
-        h += '<tr class="' + (Number(r.included) ? '' : 'off') + '">'
-           + '<td class="c"><input type="checkbox" class="d-inc" data-i="' + i + '" ' + (Number(r.included) ? 'checked' : '') + '></td>'
-           + '<td class="c">' + (isProc ? '製程' : '其他') + '</td>'
-           + '<td>' + (isProc
-                ? esc((r.process_name || '') + (r.vendor_name ? ('／' + r.vendor_name) : ''))
-                : '<input type="text" class="d-nm" data-i="' + i + '" value="' + esc(r.process_name || '') + '">') + '</td>'
-           + '<td class="r"><input type="number" step="0.01" class="d-amt" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>'
-           + '<td>' + (isProc
-                ? '<span class="muted-help">' + esc(r.transfer_no || '') + (r.amount_auto != null ? ('　自動帶入 ' + Number(r.amount_auto).toLocaleString()) : '') + '</span>'
-                  + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;">'
-                : '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '">') + '</td>'
-           + '<td class="c">' + (isProc ? '' : '<span class="x" style="color:var(--coral);cursor:pointer;" data-drm="' + i + '">×</span>') + '</td>'
+    for (var k = 0; k < order.length; k += 2) {
+        var i1 = order[k], i2 = order[k + 1];
+        h += '<tr class="' + (Number(DEDUCT_ROWS[i1].included) ? '' : 'off') + '">' + cell(i1, k + 1)
+           + (i2 !== undefined ? cell(i2, k + 2).replace(/^<td class="c">/, '<td class="c' + (Number(DEDUCT_ROWS[i2].included) ? '' : ' off') + '">') : '<td colspan="5" style="background:#faf7f1;"></td>')
            + '</tr>';
-    });
-    if (!DEDUCT_ROWS.length) h = '<tr><td colspan="6" class="c muted-help">尚未有扣款明細</td></tr>';
+    }
+    if (!DEDUCT_ROWS.length) h = '<tr><td colspan="10" class="c muted-help">尚未有扣款明細</td></tr>';
     $('#dtb tbody').html(h);
     $('#dtb input, #f_rate, #f_dqty, #f_dexec, #f_dnotify').prop('disabled', !canFill);
     $('#f_dunit').prop('disabled', !(p.canDeductApprove && !o.is_closed));
@@ -2612,13 +2622,13 @@ $('#btnAutoPreview').on('click', function(){
     $.get(API, { action:'deduct_preview', id:OID }, function(res){
         if (!res || !res.success) { $('#pvBody').text('查詢失敗'); return; }
         if (!res.rows.length) { $('#pvBody').html('<div class="muted-help">這張製令目前沒有任何製程移轉憑單。</div>'); return; }
-        var t = '<table class="dtb"><thead><tr><th>製令</th><th>站別</th><th>製程</th><th>廠商</th><th>移轉單號</th><th>數量</th><th>金額</th></tr></thead><tbody>';
+        var t = '<table class="dtb"><thead><tr><th>製令</th><th>站別</th><th>製程</th><th>廠商</th><th>移轉單號</th><th>數量</th><th>金額</th><th>備註</th></tr></thead><tbody>';
         var sum = 0;
         res.rows.forEach(function(r){
             sum += Number(r.amount) || 0;
             t += '<tr><td class="c">' + esc(r.bom_no || '') + '</td><td class="c">' + r.bom_sn + '</td><td>' + esc(r.process_name) + '</td><td>' + esc(r.vendor_name) + '</td>'
                + '<td class="c">' + esc(r.transfer_no) + '</td><td class="r">' + Number(r.qty).toLocaleString() + '</td>'
-               + '<td class="r">' + Number(r.amount).toLocaleString() + '</td></tr>';
+               + '<td class="r">' + Number(r.amount).toLocaleString() + '</td><td>' + esc(r.remark || '') + '</td></tr>';
         });
         t += '</tbody></table><div class="sumline">合計 <b>' + sum.toLocaleString() + '</b></div>';
         $('#pvBody').html(t);

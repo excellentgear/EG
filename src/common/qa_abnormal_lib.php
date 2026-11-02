@@ -3450,7 +3450,14 @@ function qab_scrap_no_sync(PDO $db, int $id): string
     if (!empty($o['final']['is_scrap']) && ($o['deduct_qty'] === null || $o['deduct_qty'] === '') && (int)($o['abn_total_qty'] ?? 0) > 0) {
         $db->prepare("UPDATE qa_abnormal_order SET deduct_qty=? WHERE id=? AND deduct_qty IS NULL")->execute([(int)$o['abn_total_qty'], $id]);
     }
-    if (!empty($o['final']['is_scrap'])) qab_notify_deduct_fill($db, $o);
+    if (!empty($o['final']['is_scrap'])) {
+        // 2026-11-02：決策報廢時自動帶入製程扣款金額（已經有製程列的單不覆蓋，生管改過的勾選與金額不會被洗掉）
+        try {
+            $hasProc = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_deduct WHERE order_id=" . (int)$id . " AND kind='process'")->fetchColumn();
+            if (!$hasProc && !empty($o['bom_list'])) qab_deduct_autofill_apply($db, $id, (int)($o['disp_decided_by'] ?: $o['gm_decided_by'] ?: 0));
+        } catch (Throwable $e) { error_log('qab deduct autofill: ' . $e->getMessage()); }
+        qab_notify_deduct_fill($db, $o);
+    }
     if ($scrapNo === '' || !empty($o['final']['is_scrap'])) return '';
     $db->prepare("UPDATE qa_abnormal_order SET scrap_no=NULL, scrap_no_at=NULL WHERE id=?")->execute([$id]);
     return $scrapNo;
@@ -3953,6 +3960,7 @@ function qab_deduct_autofill(PDO $db, $bomNos): array
     if (!$list) return [];
     $in  = implode(',', array_fill(0, count($list), '?'));
     $sql = "SELECT t.bom, t.transfer_id, t.transfer_no, t.bom_sn, t.transfer_qty, t.price, t.process_amount,
+                   t.note, t.note2, t.transfer_date,
                    t.maker_from, m.maker_id AS vendor_name, pn.ProcessName
             FROM bom_ing_transfer_log t
             LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
@@ -3976,9 +3984,38 @@ function qab_deduct_autofill(PDO $db, $bomNos): array
             'vendor_name'  => (string)($r['vendor_name'] ?? $r['maker_from']),
             'qty'          => $qty,
             'amount'       => round($amt, 2),
+            // 移轉單上的備註一起帶（扣款明細「說明」欄可看到，也可再改）
+            'remark'       => trim(trim((string)($r['note'] ?? '')) . ' ' . trim((string)($r['note2'] ?? ''))),
+            'transfer_date'=> (string)($r['transfer_date'] ?? ''),
         ];
     }
     return $out;
+}
+
+/**
+ * 重建這張異常單的「製程」扣款明細（手動加的「其他」列不動）。API 的「自動帶入製程金額」與
+ * 「決策報廢時自動帶入」共用這一支；回傳帶入的站數。
+ */
+function qab_deduct_autofill_apply(PDO $db, int $id, int $uid): int
+{
+    $o = qab_order($db, $id);
+    if (!$o || empty($o['bom_list'])) return 0;
+    $rows = qab_deduct_autofill($db, $o['bom_list']);
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM qa_abnormal_deduct WHERE order_id=? AND kind='process'")->execute([$id]);
+        $ins = $db->prepare("INSERT INTO qa_abnormal_deduct
+            (order_id,kind,transfer_id,bom_no,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,note,included,sort_order,created_by)
+            VALUES (?,'process',?,?,?,?,?,?,?,?,?,?,1,?,?)");
+        foreach ($rows as $i => $r) {
+            $ins->execute([$id, $r['transfer_id'], $r['bom_no'], $r['bom_sn'], $r['process_name'], $r['vendor_name'],
+                           $r['transfer_no'], $r['qty'], $r['amount'], $r['amount'],
+                           $r['remark'] !== '' ? mb_substr($r['remark'], 0, 255) : null, $i, $uid]);
+        }
+        if ($own) $db->commit();
+    } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
+    return count($rows);
 }
 
 /** 扣款合計：製程小計×加成 ＋ 其他小計 */
