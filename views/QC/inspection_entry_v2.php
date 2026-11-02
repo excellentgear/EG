@@ -2359,11 +2359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #E4D3BC;">
                     也可以從電腦選擇圖片或 PDF：<input type="file" id="qmLocalFile" accept="image/*,application/pdf" style="display:inline-block;">
                 </div>
-                <div id="qmCfgBox" style="display:none;margin-top:8px;padding:8px;border:1px dashed #E4D3BC;border-radius:6px;">
-                    <b>設定：圖面標註可選哪些類別的料號附件</b>（勾選後儲存，全站共用）
-                    <div id="qmCfgCats" style="margin:6px 0;display:flex;flex-wrap:wrap;gap:10px;"></div>
-                    <button type="button" class="btn btn-warm btn-sm" id="qmCfgSave">儲存設定</button>
-                </div>
                 <div id="qcMarkPdf" style="display:none;margin-top:8px;padding:8px;border:1px solid #E4D3BC;border-radius:6px;background:#FFFBF4;">
                     <b>PDF：</b><span id="qmPdfName"></span>　選擇要標註的頁面
                     <select id="qmPdfPage" style="width:90px;display:inline-block;"></select>
@@ -7204,7 +7199,7 @@ $(function(){
                    (isPdf ? '<div style="height:150px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#C0762B;"><i class="fa fa-file-pdf-o"></i>&nbsp;PDF</div>'
                           : '<img src="'+esc(u)+'" style="width:100%;height:150px;object-fit:contain;">')+
                    '<div style="font-size:11px;word-break:break-all;">'+esc(f.name)+'</div></div>';
-        }).join('') : '<div class="muted-help">此料號／製令在系統中找不到圖面，可從下方選擇電腦上的圖片或 PDF，或直接略過。</div>');
+        }).join('') : '<div class="muted-help">此料號／製令找不到可選的圖面。可從下方選擇電腦上的圖片或 PDF，或直接略過（料號附件要出現在這裡，請管理員到「品質異常單清單 → 設定 → 雙層快速決策 ⑤」勾選可選類別）。</div>');
         $('#qcMarkModal').modal('show');
     }
     function qcMarkStart(done){
@@ -7213,7 +7208,7 @@ $(function(){
         var QA_URL='../../src/store/QaAbnormal_API.php';
         // 兩個來源合併：①BOM 圖面（NAS）②管理員設定的類別所對應的料號附件
         var pBom=(partNo && bom) ? $.post('../pm/part_viewer.php?only_drawing=1', { action:'get_files_by_did', d_id:partNo, bom:bom }, null, 'json') : $.Deferred().resolve(null).promise();
-        var pAtt=(ctx&&ctx.d_id>0) ? $.post(QA_URL, { action:'mark_attach_list', csrf:QAB_CSRF, d_id:ctx.d_id }, null, 'json') : $.Deferred().resolve(null).promise();
+        var pAtt=(ctx&&(ctx.d_id>0||partNo)) ? $.post(QA_URL, { action:'mark_attach_list', csrf:QAB_CSRF, d_id:(ctx.d_id||0), part_no:partNo }, null, 'json') : $.Deferred().resolve(null).promise();
         var pCfg=$.post(QA_URL, { action:'mark_cfg_get', csrf:QAB_CSRF }, null, 'json');
         $.when(pBom.then(null,function(){return $.Deferred().resolve(null);}), pAtt.then(null,function(){return $.Deferred().resolve(null);}), pCfg.then(null,function(){return $.Deferred().resolve(null);}))
          .done(function(rb, ra, rc){

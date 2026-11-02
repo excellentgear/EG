@@ -454,6 +454,9 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <div class="qk-sec"><div class="qk-h">④ 第一層裁決項目與通知對象<span class="muted-help">　固定另通知檢驗人員；「轉呈決策」是固定項目，一律通知第二層</span></div>
                     <div id="qkActs"></div>
                     <button class="btn btn-warm-o btn-sm" id="qkAdd" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增裁決項目</button></div>
+                <div class="qk-sec"><div class="qk-h">⑤ 圖面標註可選的料號附件類別<span class="muted-help">　品管在線上檢驗開立異常單、標註問題尺寸時，除了 BOM 圖面，也可從這些類別的料號附件挑圖（圖片／PDF）；點選切換</span></div>
+                    <div id="qkMarkCats" class="qk-chips"></div>
+                    <button class="btn btn-warm-o btn-sm" id="qkMarkSave" style="margin-top:6px;"><i class="fa fa-save"></i> 儲存可選類別</button> <span id="qkMarkSaved" class="muted-help"></span></div>
                 <div style="margin-top:10px;display:flex;gap:6px;align-items:center;border-top:1px dashed var(--line);padding-top:10px;">
                     <span id="qkSaved" class="muted-help"></span><span style="margin-left:auto;"></span>
                     <button class="btn btn-warm btn-sm" id="qkSave"><i class="fa fa-save"></i> 儲存雙層快速決策設定</button>
@@ -1248,7 +1251,23 @@ function renderQuick(){
         return '<span class="qk-chip' + (qkHas(c.l1_ptypes, t.id) ? ' on' : '') + '" data-pt="' + t.id + '">' + esc(t.name) + '</span>'; }).join(''));
     $('#qkActs').html((c.actions || []).map(qkActHtml).join('') || '<div class="muted-help">尚無裁決項目</div>');
 }
+var QMARK = { cats: [], selected: [] };
+function renderMarkCats(){
+    $('#qkMarkCats').html(QMARK.cats.map(function(c){
+        return '<span class="qk-chip' + (QMARK.selected.indexOf(Number(c.id)) >= 0 ? ' on' : '') + '" data-mc="' + c.id + '">' + esc(c.category_name) + '</span>'; }).join('') || '<span class="muted-help">尚無附件類別</span>');
+}
+$(document).on('click', '#qkMarkCats .qk-chip', function(){
+    var v = Number($(this).data('mc')), i = QMARK.selected.indexOf(v);
+    if (i >= 0) QMARK.selected.splice(i, 1); else QMARK.selected.push(v);
+    renderMarkCats();
+});
+$('#qkMarkSave').on('click', function(){
+    post('mark_cfg_save', { cats: JSON.stringify(QMARK.selected) }, function(res){
+        QMARK.selected = res.selected || []; renderMarkCats(); $('#qkMarkSaved').text('已儲存 ' + new Date().toLocaleTimeString());
+    });
+});
 function loadQuick(){
+    post('mark_cfg_get', {}, function(res){ QMARK.cats = res.cats || []; QMARK.selected = (res.selected || []).map(Number); renderMarkCats(); });
     $.get(API, { action:'quick_meta' }, function(res){
         if (!res || !res.success) { $('#qkL1').text('載入失敗'); return; }
         QK = res; renderQuick();

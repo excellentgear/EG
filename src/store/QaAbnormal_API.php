@@ -200,10 +200,18 @@ case 'mark_cfg_save': {
 }
 case 'mark_attach_list': {
     $dId = (int)($_POST['d_id'] ?? 0);
+    $partNo = trim((string)($_POST['part_no'] ?? ''));
     $sel = array_map('intval', (array)qab_setting_get($db, 'mark_attach_cats', []));
-    if ($dId <= 0 || !$sel) jout(true, ['rows' => [], 'configured' => $sel ? 1 : 0]);
-    $st = $db->prepare("SELECT id, filename, original_name, category_ids FROM part_attachments WHERE d_id=? AND deleted_at IS NULL ORDER BY uploaded_at DESC");
-    $st->execute([$dId]);
+    if (($dId <= 0 && $partNo === '') || !$sel) jout(true, ['rows' => [], 'configured' => $sel ? 1 : 0]);
+    // 與圖面查閱同一套歸戶（part_scope_lib）：d_id 不準或沒有時，用料號文字回找
+    require_once __DIR__ . '/../common/part_scope_lib.php';
+    $dids = [];
+    try { $scope = eg_part_scope_resolve($db, $dId, $partNo); $dids = array_map('intval', (array)($scope['dids'] ?? [])); } catch (Throwable $e) {}
+    if (!$dids && $dId > 0) $dids = [$dId];
+    if (!$dids) jout(true, ['rows' => [], 'configured' => 1]);
+    $ph = implode(',', array_fill(0, count($dids), '?'));
+    $st = $db->prepare("SELECT id, d_id, filename, original_name, category_ids FROM part_attachments WHERE d_id IN ($ph) AND deleted_at IS NULL ORDER BY uploaded_at DESC");
+    $st->execute($dids);
     require_once __DIR__ . '/../common/imgedit_visibility.php';
     $all = imgedit_strip_workfiles(imgedit_filter_attachment_rows($db, $st->fetchAll(PDO::FETCH_ASSOC), (int)$uid), $db);
     $rows = [];
