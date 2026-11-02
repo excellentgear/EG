@@ -544,7 +544,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
-                    <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v4</div>
+                    <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v5</div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
                         <button class="btn btn-warm-o btn-xs" id="btnSignPm"><i class="fa fa-pencil"></i> (生管) 簽章</button>
                         <span class="ro-note" id="pmWho"></span>
@@ -2673,6 +2673,26 @@ $(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDed
 setInterval(function(){
     try { if (D && D.order && $('#f_dtotal').length) calcTotalDeduct(); } catch (e) {}
 }, 300);
+/* 總扣款金額以「伺服器 AJAX 重新計算」的結果為準：核准單價、數量、加成任一個變動就送出，回來後覆寫欄位 */
+var DCALC_LAST = '', DCALC_TIMER = null, DCALC_VER = 'v5';
+function ajaxTotal(){
+    var u = $('#f_dunit').val(), q = $('#f_dqty').val(), r = $('#f_rate').val();
+    var key = u + '|' + q + '|' + r;
+    if (key === DCALC_LAST) return;
+    DCALC_LAST = key;
+    clearTimeout(DCALC_TIMER);
+    DCALC_TIMER = setTimeout(function(){
+        $.post(API, { action: 'deduct_calc', csrf: CSRF, id: OID, unit: u, qty: q, rate: r, ver: DCALC_VER,
+                      shown: $('#f_dtotal').val(), ua: navigator.userAgent }, function(res){
+            if (!res || !res.success) return;
+            // 回來時單價、數量、加成又變了就丟掉這筆（會有下一筆）
+            if ($('#f_dunit').val() + '|' + $('#f_dqty').val() + '|' + $('#f_rate').val() !== key) return;
+            DTOTAL_NUM = res.total;
+            $('#f_dtotal').val(res.total === null ? '' : fmtMoney(res.total));
+            try { markDerived(); } catch (e) {}
+        }, 'json');
+    }, 120);
+}
 function fmtMoney(n){
     var p = String(n).split('.');
     p[0] = p[0].replace(/\B(?=(\d{3})+$)/g, ',');
@@ -2684,6 +2704,7 @@ function calcTotalDeduct(uIn){
     DTOTAL_NUM = (u > 0 && q > 0) ? Math.round(u * q * r * 100) / 100 : null;
     $('#f_dtotal').val(DTOTAL_NUM === null ? '' : fmtMoney(DTOTAL_NUM));   // 先把數字寫進欄位，不依賴其他函式
     try { $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0); markDerived(); } catch (e) { console.error(e); }
+    ajaxTotal();
 }
 /* 跟開啟頁面時不同的「相對應金額」（單價、總扣款、製程小計、其他、合計）標橘黃底色，方便確認 */
 var DTOTAL_NUM = null, DSUM_BASE = null, DSUM_CUR = null;

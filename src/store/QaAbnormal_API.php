@@ -933,6 +933,17 @@ case 'deduct_sign': {      // 生管／品管簽章
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
 }
 
+case 'deduct_calc': {   // 總扣款金額＝核准單價 × 數量 × 加成（伺服器端算一次，前端以此為準；診斷資訊寫入 php_error.log 供查前端問題）
+    $cu = $numOrNull($_POST['unit'] ?? ''); $cq = $numOrNull($_POST['qty'] ?? ''); $cr = $numOrNull($_POST['rate'] ?? '');
+    if ($cr === null || $cr <= 0) $cr = 1.0;
+    $ctot = ($cu !== null && $cu > 0 && $cq !== null && $cq > 0) ? round($cu * $cq * $cr, 2) : null;
+    $shown = trim((string)($_POST['shown'] ?? ''));
+    error_log('DEDUCT_CALC uid=' . $uid . ' order=' . (int)($_POST['id'] ?? 0) . ' ver=' . substr((string)($_POST['ver'] ?? ''), 0, 20)
+        . ' unit=' . trim((string)($_POST['unit'] ?? '')) . ' qty=' . trim((string)($_POST['qty'] ?? '')) . ' rate=' . $cr
+        . ' server_total=' . ($ctot === null ? 'null' : $ctot) . ' shown_before=' . $shown . ' ua=' . substr((string)($_POST['ua'] ?? ''), 0, 90));
+    jout(true, ['total' => $ctot]);
+}
+
 case 'rate_default_save': {   // 生管（可填扣款者）設定「預設加成」：之後新開的單帶入這個值，已存的單不受影響
     if (!$perms['canDeductFill'] && !$perms['canAdmin']) jerr('沒有設定預設加成的權限（生管或管理員）');
     $rv = trim((string)($_POST['rate'] ?? ''));
