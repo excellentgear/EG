@@ -137,7 +137,7 @@ foreach ($o['deducts'] as $dd) {
     if (($dd['kind'] ?? 'process') === 'other') $otherRows[] = $dd; else $procRows[] = $dd;
 }
 $procDesc = $o['deduct_desc'];
-if ($rate != 1 && $tot['process'] > 0) $procDesc .= '（金額 ' . money($tot['process']) . ' × 加成 ' . rtrim(rtrim(number_format($rate, 3, '.', ''), '0'), '.') . '）';
+if ($procRows) $procDesc = '見下方計入扣款的製程';   // 站名與金額明細已列在下方「計入扣款的製程」表格
 /* 製程說明會把每一站都列出來，站數一多就會撐高整列（紙本只有一列的高度）。
    文字一長就自動降字級，配合儲存格本來就有的 word-wrap 自動換行。 */
 $descLen   = mb_strlen($procDesc, 'UTF-8');
@@ -510,7 +510,7 @@ if (!empty($o['src_qc_form_id'])) {
     <tr>
         <td class="c lb">合計</td>
         <td class="c"><b><?= h(money($tot['total'])) ?></b></td>
-        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS<?php if ((float)($o['deduct_unit_amt'] ?? 0) != 0): ?>　扣款單價 <?= ((float)$o['deduct_unit_amt'] < 0 ? '-$' : '$') . number_format(abs((float)$o['deduct_unit_amt']), 2) ?> /PCS<?php endif; ?></td>
+        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS<?php if ((float)($o['deduct_unit_amt'] ?? 0) != 0): ?><br>扣款單價 <?= ((float)$o['deduct_unit_amt'] < 0 ? '-$' : '$') . number_format(abs(round((float)$o['deduct_unit_amt'])), 0) ?> /PCS<?php endif; ?></td>
     </tr>
 </table>
 <?php
