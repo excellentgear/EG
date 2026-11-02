@@ -2595,6 +2595,7 @@ function renderDeduct(){
         var remarkTxt = isProc ? $.trim(String(r.tl_note || '')) : '';   // 只顯示移轉單的「備註」，不含備註二
         // 移轉單價：取自移轉單的單價；移轉單沒有單價就用「金額÷數量」（不顯示此製程總金額）
         var tp = parseFloat(r.tl_price);
+        if (tp > 0 && an < 0) tp = -tp;   // 退回／負數的移轉單：移轉單價也顯示負數，才跟扣款單價（負數）對得起來
         var transferPrice = (tp > 0) ? String(Math.round(tp * 100) / 100) : ((qn > 0 && !isNaN(an)) ? String(Math.round(an / qn * 100) / 100) : '');
         var byUnit = (isProc && qn > 0);
         var unitVal = (byUnit && !isNaN(an)) ? (Math.round(an / qn * 100) / 100) : '';
