@@ -4011,7 +4011,7 @@ function qab_deduct_autofill_apply(PDO $db, int $id, int $uid): int
         foreach ($rows as $i => $r) {
             $ins->execute([$id, $r['transfer_id'], $r['bom_no'], $r['bom_sn'], $r['process_name'], $r['vendor_name'],
                            $r['transfer_no'], $r['qty'], $r['amount'], $r['amount'],
-                           $r['remark'] !== '' ? mb_substr($r['remark'], 0, 255) : null, $i, $uid]);
+                           null, $i, $uid]);   // 移轉單的備註不再複製進這一欄，改由說明欄即時顯示（tl_note）
         }
         if ($own) $db->commit();
     } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
@@ -4133,8 +4133,10 @@ function qab_order(PDO $db, int $id): ?array
                             'vals' => json_decode((string)$m['vals'], true) ?: []];
     }
 
-    $st = $db->prepare("SELECT d.*, u.user_cname AS created_name FROM qa_abnormal_deduct d
+    // tl_note／tl_note2：該移轉單（製程移轉一覽表）目前的備註與備註二，即時讀取，在製程移轉一覽表改了這裡就跟著變
+    $st = $db->prepare("SELECT d.*, u.user_cname AS created_name, tl.note AS tl_note, tl.note2 AS tl_note2 FROM qa_abnormal_deduct d
                         LEFT JOIN `user` u ON u.id=d.created_by
+                        LEFT JOIN bom_ing_transfer_log tl ON tl.transfer_id=d.transfer_id
                         WHERE d.order_id=? ORDER BY d.kind DESC, d.sort_order, d.id");
     $st->execute([$id]);
     $o['deducts'] = $st->fetchAll(PDO::FETCH_ASSOC);
