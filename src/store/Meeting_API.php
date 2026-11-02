@@ -1541,6 +1541,12 @@ case 'admin_backfill': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('補登失敗：'.$e->getMessage(), 500); }
 
+    // 管理員補簽後，舊的「待簽核」通知不可再掛著（簽核已完成卻仍顯示需回簽）
+    $stNow = (string)$db->query("SELECT status FROM meeting_record WHERE meeting_id=".(int)$id)->fetchColumn();
+    $pendNow = $db->prepare("SELECT COUNT(*) FROM approval_record WHERE module='meeting' AND entity_id=? AND status='pending'");
+    $pendNow->execute([$id]);
+    if ($stNow === 'done' || (int)$pendNow->fetchColumn() === 0) meeting_close_notice($db, $id);
+
     try {
         $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
                       VALUES ('views/ADM/meeting_record.php', '超級管理員補齊簽章日期', ?, NOW(), ?)")
