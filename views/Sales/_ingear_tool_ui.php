@@ -82,6 +82,7 @@ if (!isset($can_ingear_calc)) {
             <div class="ig-f"><label>模數 m</label><input class="ig-in" id="ig-m" type="text" inputmode="decimal"></div>
             <div class="ig-f"><label>齒數 z</label><input class="ig-in" id="ig-z" type="text" inputmode="numeric"></div>
             <div class="ig-f"><label>壓力角 α（度）</label><input class="ig-in" id="ig-al" type="text" inputmode="decimal" value="20"></div>
+            <div class="ig-f"><label title="斜齒內齒輪才填；直齒填 0 或留空（結果與原本完全相同）。填了之後 m、α 視為法向（法向模數、法向壓力角）">螺旋角 β（度）</label><input class="ig-in" id="ig-beta" type="text" inputmode="decimal" value="0"></div>
             <div class="ig-f"><label title="內齒的齒頂圓（內徑，較小的那一圈）。空白＝自動：分度圓徑 − 2m">齒頂圓徑 Di（空白自動）</label><input class="ig-in" id="ig-dtip" type="text" inputmode="decimal"></div>
             <div class="ig-f"><label title="內齒的齒根圓（較大的那一圈）。空白＝自動：分度圓徑 + 2.5m">齒根圓徑 Df（空白自動）</label><input class="ig-in" id="ig-droot" type="text" inputmode="decimal"></div>
         </div>
@@ -157,10 +158,11 @@ if (!isset($can_ingear_calc)) {
         return (lo + hi) / 2;
     }
     function pinAt(g, e, D){
-        var ap = invInv(e / g.d + inv(g.al) - D / g.db);
+        var Dt = D * g.kD; // 斜齒：銷（球）換算成端面等效直徑；直齒 kD=1，與原算法相同
+        var ap = invInv(e / g.d + inv(g.al) - Dt / g.db);
         if (ap === null) return null;
         var rp = g.db / 2 / Math.cos(ap);
-        var ak = Math.atan(Math.tan(ap) + D / g.db);
+        var ak = Math.atan(Math.tan(ap) + Dt / g.db);
         var rk = g.db / 2 / Math.cos(ak);
         var psik = e / g.d + inv(g.al) - inv(ak);
         var M = (g.z % 2 === 0) ? 2 * rp - D : 2 * rp * Math.cos(Math.PI / (2 * g.z)) - D;
@@ -173,9 +175,10 @@ if (!isset($can_ingear_calc)) {
         for (i = 0; i < 100; i++) { mid = (lo + hi) / 2; r = f(mid); if (r < Mt) lo = mid; else hi = mid; }
         return (lo + hi) / 2;
     }
-    function eOf(g, x){ return Math.PI * g.m / 2 + 2 * x * g.m * Math.tan(g.al); }
-    function xOf(g, e){ return (e - Math.PI * g.m / 2) / (2 * g.m * Math.tan(g.al)); }
-    function stdPin(g, e){ var ap = g.al - e / g.d; return ap <= 0 ? null : g.db * (Math.tan(g.al) - Math.tan(ap)); }
+    // g.mn／g.alN＝法向模數／法向壓力角（直齒時就是 m／α）；e 為端面分度圓齒槽寬（直齒時 cosβ=1，與原式相同）
+    function eOf(g, x){ return (Math.PI * g.mn / 2 + 2 * x * g.mn * Math.tan(g.alN)) / g.cb; }
+    function xOf(g, e){ return (e * g.cb - Math.PI * g.mn / 2) / (2 * g.mn * Math.tan(g.alN)); }
+    function stdPin(g, e){ var ap = g.al - e / g.d; return ap <= 0 ? null : g.db * (Math.tan(g.al) - Math.tan(ap)) / g.kD; }
     function psiAt(g, e, r){ var c = Math.min(1, g.db / 2 / r); return e / g.d + inv(g.al) - inv(Math.acos(c)); }
 
     function judge(g, r){
@@ -220,15 +223,25 @@ if (!isset($can_ingear_calc)) {
     function badge(j){ return '<span class="ig-badge ' + (j.lv === 0 ? 'ig-ok' : (j.lv === 1 ? 'ig-warn' : 'ig-ng')) + '">' + j.txt + '</span>'; }
 
     function readGear(){
-        var m = pv('ig-m'), z = pv('ig-z'), al = pv('ig-al'), dt = pv('ig-dtip'), dr = pv('ig-droot'), msg = '';
-        bad('ig-m', false); bad('ig-z', false); bad('ig-al', false); bad('ig-dtip', false); bad('ig-droot', false);
+        var m = pv('ig-m'), z = pv('ig-z'), al = pv('ig-al'), dt = pv('ig-dtip'), dr = pv('ig-droot'), be = pv('ig-beta'), msg = '';
+        bad('ig-m', false); bad('ig-z', false); bad('ig-al', false); bad('ig-dtip', false); bad('ig-droot', false); bad('ig-beta', false);
+        if (be === null) be = 0;
         if (m === null && z === null) { $('ig-gerr').textContent = ''; return null; } // 剛開啟／清除後：先不報錯，等使用者輸入
         if (m === null || m <= 0) { bad('ig-m', true); msg = '請輸入大於 0 的模數'; }
         else if (z === null || z < 6 || Math.floor(z) !== z) { bad('ig-z', true); msg = '齒數需為 6 以上的整數'; }
         else if (al === null || al <= 0 || al >= 45) { bad('ig-al', true); msg = '壓力角需介於 0～45 度之間'; }
+        else if (Math.abs(be) >= 60) { bad('ig-beta', true); msg = '螺旋角需介於 -60～60 度之間（直齒填 0）'; }
         if (msg) { $('ig-gerr').textContent = msg; return null; }
-        var a = al * Math.PI / 180, d = m * z;
-        var g = { m: m, z: z, al: a, alDeg: al, d: d, db: d * Math.cos(a) };
+        var a = al * Math.PI / 180, bt = Math.abs(be) * Math.PI / 180, d, g, cb = Math.cos(bt);
+        if (bt === 0) {
+            d = m * z;
+            g = { m: m, mn: m, z: z, al: a, alN: a, alDeg: al, d: d, db: d * Math.cos(a), cb: 1, kD: 1, beta: 0 };
+        } else {
+            // 斜齒：m、α 為法向值 → 換成端面值，其餘計算沿用同一套端面算法
+            var mt = m / cb, at = Math.atan(Math.tan(a) / cb), bb = Math.asin(Math.sin(bt) * Math.cos(at));
+            d = mt * z;
+            g = { m: mt, mn: m, z: z, al: at, alN: a, alDeg: al, d: d, db: d * Math.cos(at), cb: cb, kD: 1 / Math.cos(bb), beta: bt, bb: bb };
+        }
         g.dTip = (dt !== null && dt > 0) ? dt : d - 2 * m;
         g.dRoot = (dr !== null && dr > 0) ? dr : d + 2.5 * m;
         if (g.dTip <= g.db) { bad('ig-dtip', true); msg = '齒頂圓徑不可小於或等於基圓徑 Ø' + f(g.db, 3); }
@@ -323,13 +336,20 @@ if (!isset($can_ingear_calc)) {
     function keyBox(rows, j){ $('ig-key').innerHTML = '<div class="ig-card" style="margin-bottom:6px"><div class="ig-cb"><table class="ig-t">' + rows + '</table>' + badge(j) + '</div></div>'; }
     function colOf(j){ return j.lv === 0 ? '#F0A24B' : (j.lv === 1 ? '#E67E22' : '#DD5138'); }
 
+    // 斜齒才多出的換算資料（直齒回傳空字串，畫面與原本完全相同）
+    function helixRows(g){
+        if (!g.beta) return '';
+        return row('端面模數 mt / 端面壓力角 αt', f(g.m, 5) + ' / ' + f(g.al * 180 / Math.PI, 4) + ' °') +
+               row('基圓螺旋角 βb', f(g.bb * 180 / Math.PI, 4) + ' °');
+    }
+
     /* ───── 兩個分頁的計算 ───── */
     function calcA(g){
         var x = pv('ig-x'), D = pv('ig-d'), res = $('ig-res');
         bad('ig-x', x === null); bad('ig-d', false);
         if (x === null) { res.innerHTML = '<span class="ig-err">請輸入轉位係數 x（沒有轉位填 0）</span>'; clearGraphics(); return; }
         var e = eOf(g, x), Ds = stdPin(g, e), h = '';
-        h += '<table class="ig-t">' + row('分度圓齒槽寬 e', f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + rangeRows(g, e) + '</table>';
+        h += '<table class="ig-t">' + helixRows(g) + row('分度圓齒槽寬 e' + (g.beta ? '（端面）' : ''), f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + rangeRows(g, e) + '</table>';
         if (D === null || D <= 0) {
             res.innerHTML = h + '<div class="ig-err">請輸入銷徑，或按「帶入標準跨銷徑」</div>';
             if (Ds) { var qs = pinAt(g, e, Ds); drawZoom(g, e, [{ r: qs, col: '#F0A24B', lbl: '標準銷 Ø' + f(Ds, 3) }]); drawOverview(g, e, qs, '#F0A24B'); } else clearGraphics();
@@ -356,7 +376,7 @@ if (!isset($can_ingear_calc)) {
         if (D1 === null || D1 <= 0 || M1 === null) { res.innerHTML = '<span class="ig-err">請輸入客戶銷徑與客戶跨銷距</span>'; clearGraphics(); return; }
         var e = solveE(g, M1, D1);
         if (e === null) { bad('ig-m1', true); res.innerHTML = '<span class="ig-err">用這組齒輪資料與客戶銷徑，反推不出合理的齒槽寬，請確認模數、齒數、壓力角與客戶跨銷距</span>'; clearGraphics(); return; }
-        var h = '<table class="ig-t">' + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
+        var h = '<table class="ig-t">' + helixRows(g) + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
                 row('此齒輪標準跨銷徑 <span style="color:#DD5138;font-size:10px">待確認</span>', f(stdPin(g, e), 4) + ' mm') + '</table>';
         $('ig-rng-b').innerHTML = '<table class="ig-t">' + rangeRows(g, e) + '</table>';
         var r1 = pinAt(g, e, D1), j1 = r1 ? judge(g, r1) : null;
@@ -421,7 +441,7 @@ if (!isset($can_ingear_calc)) {
     };
     window.clearInGearTool = function(){
         ['ig-m', 'ig-z', 'ig-d', 'ig-d1', 'ig-m1', 'ig-d2', 'ig-dtip', 'ig-droot'].forEach(function(id){ var el = $(id); if (el) el.value = ''; });
-        $('ig-al').value = '20'; $('ig-x').value = '0'; $('ig-ut').value = '0'; $('ig-lt').value = '0';
+        $('ig-al').value = '20'; $('ig-beta').value = '0'; $('ig-x').value = '0'; $('ig-ut').value = '0'; $('ig-lt').value = '0';
         calc();
         var mEl = $('ig-m'); if (mEl) mEl.focus();
     };
