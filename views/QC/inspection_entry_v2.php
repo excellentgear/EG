@@ -2346,6 +2346,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 <div class="modal fade" id="qcMarkModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
     <div class="modal-dialog" style="width:1240px;max-width:96%;"><div class="modal-content">
         <div class="modal-header" style="background:#C0762B;color:#fff;border-radius:6px 6px 0 0;">
+            <div class="pull-right" style="margin-top:-2px;">
+                <button type="button" class="btn btn-default btn-sm" id="qmSkip">略過標註，直接開單</button>
+                <button type="button" class="btn btn-coral btn-sm" id="qmDone" style="display:none;"><i class="fa fa-check"></i> 完成標註，下一步</button>
+            </div>
             <h4 class="modal-title"><i class="fa fa-pencil-square-o"></i> 標註問題尺寸 — 選擇圖面並圈出不良處</h4>
         </div>
         <div class="modal-body" style="padding:10px;">
@@ -2368,6 +2372,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     <button type="button" class="btn btn-default btn-sm" id="qmText"><i class="fa fa-font"></i> 紅字說明</button>
                     <button type="button" class="btn btn-default btn-sm" id="qmSel"><i class="fa fa-mouse-pointer"></i> 選取移動</button>
                     <label style="margin:0 0 0 6px;">字體大小 <input type="number" id="qmSize" value="28" min="8" max="200" style="width:64px;"></label>
+                    <button type="button" class="btn btn-default btn-sm" id="qmEditTxt"><i class="fa fa-pencil"></i> 修改文字</button>
                     <button type="button" class="btn btn-default btn-sm" id="qmDel"><i class="fa fa-trash"></i> 刪除選取</button>
                     <button type="button" class="btn btn-default btn-sm" id="qmBack">← 換一張圖面</button>
                     <span class="muted-help" id="qmHint">螢光筆框：在圖面上拖曳畫出方框（半透明不遮住尺寸）；紅字說明：點圖面要放字的位置。</span>
@@ -2375,10 +2380,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div style="border:1px solid #E4D3BC;background:#f5f5f5;overflow:auto;max-height:560px;text-align:center;"><canvas id="qmCanvas"></canvas></div>
             </div>
         </div>
-        <div class="modal-footer">
-            <button type="button" class="btn btn-default" id="qmSkip">略過標註，直接開單</button>
-            <button type="button" class="btn btn-coral" id="qmDone" style="display:none;"><i class="fa fa-check"></i> 完成標註，下一步</button>
-        </div>
+
     </div></div>
 </div>
 
@@ -7284,7 +7286,7 @@ $(function(){
                 } else if(qmMode==='text' && !o.target){
                     var p2=qmCanvas.getPointer(o.e);
                     var t=new fabric.IText('說明', { left:p2.x, top:p2.y, fill:'#D00000', fontSize:parseInt($('#qmSize').val(),10)||28, fontWeight:'bold', selectable:false, evented:false });
-                    qmCanvas.add(t); qmSetMode('sel'); qmCanvas.setActiveObject(t); t.enterEditing(); t.selectAll();
+                    qmCanvas.add(t); qmSetMode('sel'); qmCanvas.setActiveObject(t); setTimeout(function(){ t.enterEditing(); t.selectAll(); if(t.hiddenTextarea) t.hiddenTextarea.focus(); }, 50);
                 }
             });
             qmCanvas.on('mouse:move', function(o){
@@ -7292,6 +7294,7 @@ $(function(){
                 qmDrawing.set({ left:Math.min(p.x,qmDrawing._sx), top:Math.min(p.y,qmDrawing._sy), width:Math.abs(p.x-qmDrawing._sx), height:Math.abs(p.y-qmDrawing._sy) });
                 qmCanvas.requestRenderAll();
             });
+            qmCanvas.on('mouse:dblclick', function(o){ if(o.target && o.target.type==='i-text'){ qmEditText(o.target); } });
             qmCanvas.on('mouse:up', function(){
                 if(!qmDrawing) return;
                 if(qmDrawing.width<4 || qmDrawing.height<4) qmCanvas.remove(qmDrawing);
@@ -7308,6 +7311,13 @@ $(function(){
         var o=qmCanvas&&qmCanvas.getActiveObject(); var v=parseInt($(this).val(),10)||28;
         if(o && o.type==='i-text'){ o.set('fontSize',v); qmCanvas.requestRenderAll(); }
     });
+    // 修改文字：選取文字後按鈕（或在文字上連點兩下）；以輸入視窗修改，最穩定
+    function qmEditText(o){
+        if(!o || o.type!=='i-text') { alert('請先選取要修改的紅字說明'); return; }
+        var v=window.prompt('說明文字', o.text||'');
+        if(v!==null){ o.set('text', v); qmCanvas.requestRenderAll(); }
+    }
+    $('#qmEditTxt').on('click', function(){ qmEditText(qmCanvas && qmCanvas.getActiveObject()); });
     $('#qmDel').on('click', function(){
         if(!qmCanvas) return; var o=qmCanvas.getActiveObject();
         if(o && !(o.isEditing)){ qmCanvas.remove(o); qmCanvas.discardActiveObject(); qmCanvas.requestRenderAll(); }
