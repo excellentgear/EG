@@ -122,6 +122,7 @@ $sql = "SELECT
         t.bill_ym,
         t.bill_ym_manual,
         t.bill_ym_at,
+        t.edit_manual, t.edit_at, eu.user_cname AS edit_by_name,
         bu.user_cname AS bill_ym_by_name,
         t.changed_by,
         t.created_at,
@@ -139,6 +140,7 @@ $sql = "SELECT
     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
     LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
     LEFT JOIN `user` bu ON bu.id = t.bill_ym_by
+    LEFT JOIN `user` eu ON eu.id = t.edit_by
     WHERE t.transfer_date BETWEEN :start_date AND :end_date";
 $sql_params = [':start_date' => $start_date, ':end_date' => $end_date];
 if ($pt_ids) {
@@ -704,6 +706,8 @@ try {
                                                     <th>發票年月</th>
                                                     <th>帳款月份</th>
                                                     <th>備註</th>
+                                                    <th>備註二</th>
+                                                    <th>編輯</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -862,6 +866,23 @@ try {
 
 <?php if ($bm_perms['canEdit']): ?>
     <!-- 批次修改帳款月份 Modal -->
+    <div class="modal fade" id="tlaEditModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" style="width:560px;"><div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-pencil"></i> 修改移轉資料　<small id="tlaEditNo"></small></h4></div>
+            <div class="modal-body">
+                <div class="form-group"><label>日期</label><input type="date" id="tlaEditDate" class="form-control"></div>
+                <div class="form-group"><label>備註</label><input type="text" id="tlaEditNote" class="form-control" maxlength="255"></div>
+                <div class="form-group"><label>備註二</label><input type="text" id="tlaEditNote2" class="form-control" maxlength="255"></div>
+                <div id="tlaEditLast" class="text-muted" style="font-size:12px;"></div>
+                <div id="tlaEditErr" style="color:#DD5138;font-size:12px;min-height:16px;"></div>
+                <div class="text-muted" style="font-size:12px;">修改後會記錄修改人員與時間；ERP 重新匯入時，人工改過的日期與備註不會被蓋掉。</div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button>
+                <button class="btn btn-warning" id="tlaEditSave"><i class="fa fa-save"></i> 儲存</button></div>
+        </div></div>
+    </div>
+
     <div class="modal fade" id="bmBatchModal" tabindex="-1" role="dialog">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
@@ -1119,6 +1140,7 @@ try {
         var BM_CAN_PRINT = <?= $bm_perms['canPrint'] ? 'true' : 'false' ?>;
         var BM_CAN_EDIT  = <?= $bm_perms['canEdit']  ? 'true' : 'false' ?>;
         var BM_CAN_ADMIN = <?= $bm_perms['canAdmin'] ? 'true' : 'false' ?>;
+        var BM_CAN_EDITDATA = <?= !empty($bm_perms['canEditData']) ? 'true' : 'false' ?>;
         var BM_CSRF      = <?= json_encode($bm_csrf) ?>;
         var BM_API       = '../../src/store/TransferBilling_API.php';
         var BM_DEF_DAY   = <?= (int)$bm_set['day'] ?>;
@@ -1253,6 +1275,16 @@ try {
                             note = note.replace(/O-([A-Z0-9]+)(-\d+)?/g, '$1');
                             return note;
                         }
+                    },
+                    { data: 'note2', render: $.fn.dataTable.render.text() },
+                    {   // 編輯（備註／備註二／日期）：有「修改移轉資料」功能才顯示；改過的標示最後修改人與時間
+                        data: 'transfer_id', orderable: false, searchable: false, visible: BM_CAN_EDITDATA,
+                        render: function(data, type, row) {
+                            var tip = parseInt(row.edit_manual, 10) === 1
+                                ? ('已人工修改：' + (row.edit_by_name || '') + ' ' + (row.edit_at || '')) : '修改備註／日期';
+                            return '<button type="button" class="btn btn-xs btn-default tla-edit" data-id="' + data + '" title="' + tip + '"><i class="fa fa-pencil"></i></button>'
+                                 + (parseInt(row.edit_manual, 10) === 1 ? '<span class="bm-manual" title="' + tip + '">已改</span>' : '');
+                        }
                     }
                 ],
                 // 列印／匯出四顆鈕要有 ptl_print 功能才出現（後端已算好 BM_CAN_PRINT）
@@ -1375,6 +1407,34 @@ try {
                 } else if (target === '#tab-detail') {
                     table.columns.adjust();
                 }
+            });
+
+            /* ── 修改備註／備註二／日期（單筆） ───────────────────── */
+            var tlaEditId = 0;
+            $('#transferTable tbody').on('click', '.tla-edit', function() {
+                var row = table.row($(this).closest('tr')).data();
+                if (!row) return;
+                tlaEditId = row.transfer_id;
+                $('#tlaEditNo').text(row.transfer_no || '');
+                $('#tlaEditDate').val(row.transfer_date || '');
+                $('#tlaEditNote').val(row.note || '');
+                $('#tlaEditNote2').val(row.note2 || '');
+                $('#tlaEditErr').text('');
+                $('#tlaEditLast').text(parseInt(row.edit_manual, 10) === 1 ? ('上次修改：' + (row.edit_by_name || '') + ' ' + (row.edit_at || '')) : '');
+                $('#tlaEditModal').modal('show');
+            });
+            $('#tlaEditSave').on('click', function() {
+                var d = $('#tlaEditDate').val();
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { $('#tlaEditErr').text('請填寫正確的日期'); return; }
+                var $b = $(this).prop('disabled', true);
+                $.post(BM_API, { action: 'edit_fields', csrf: BM_CSRF, transfer_id: tlaEditId, transfer_date: d,
+                                 note: $('#tlaEditNote').val(), note2: $('#tlaEditNote2').val() }, null, 'json')
+                    .done(function(res) {
+                        if (!res || !res.ok) { $('#tlaEditErr').text((res && res.error) || '儲存失敗'); return; }
+                        alert(res.msg || '已儲存'); location.reload();
+                    })
+                    .fail(function(xhr) { var m = '儲存失敗'; try { m = JSON.parse(xhr.responseText).error || m; } catch (e) {} $('#tlaEditErr').text(m); })
+                    .always(function() { $b.prop('disabled', false); });
             });
 
             /* ── 帳款月份：勾選與批次動作 ───────────────────────── */

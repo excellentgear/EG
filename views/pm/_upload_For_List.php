@@ -1787,9 +1787,9 @@ if ($_GET['but'] == 'transfer_log') {
 
         // 更新語法（transfer_no 為條件，依需求更新指定欄位）
         $updateStmt = $db->prepare("UPDATE `bom_ing_transfer_log` SET
-            `sqty` = ?, `transfer_date` = ?, `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
+            `sqty` = ?, `transfer_date` = IF(`edit_manual` = 1, `transfer_date`, ?), `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
             `process_amount` = ?, `tax_amount` = ?, `paid_qty` = ?, `invoice_date` = ?,
-            `invoice_ym` = ?, `note` = ?, `note2` = ?, `changed_by` = ?, `modified_at` = ?
+            `invoice_ym` = ?, `note` = IF(`edit_manual` = 1, `note`, ?), `note2` = IF(`edit_manual` = 1, `note2`, ?), `changed_by` = ?, `modified_at` = ?
             WHERE `transfer_no` = ?");
 
         // 準備一個語句來根據 user_cname 查找 user.id
@@ -2326,9 +2326,9 @@ if ($_GET['but'] == 'transfer_log_raw') {
             (`bom`, `bom_sn`, `maker_from`, `maker_to`, `sqty`, `transfer_date`, `transfer_no`, `product_id`, `transfer_qty`, `loss_qty`, `price`, `process_amount`, `tax_amount`, `paid_qty`, `invoice_date`, `invoice_ym`, `note`, `note2`, `changed_by`, `created_at`, `modified_at`)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $updateStmt = $db->prepare("UPDATE `bom_ing_transfer_log` SET
-            `sqty` = ?, `transfer_date` = ?, `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
+            `sqty` = ?, `transfer_date` = IF(`edit_manual` = 1, `transfer_date`, ?), `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
             `process_amount` = ?, `tax_amount` = ?, `paid_qty` = ?, `invoice_date` = ?,
-            `invoice_ym` = ?, `note` = ?, `note2` = ?, `changed_by` = ?, `modified_at` = ?
+            `invoice_ym` = ?, `note` = IF(`edit_manual` = 1, `note`, ?), `note2` = IF(`edit_manual` = 1, `note2`, ?), `changed_by` = ?, `modified_at` = ?
             WHERE `transfer_no` = ?");
         $userStmt = $db->prepare("SELECT id FROM user WHERE user_cname = ?");
 

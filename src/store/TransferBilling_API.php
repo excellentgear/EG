@@ -47,6 +47,7 @@ if ($action === 'perms') {
         'isAdmin'  => $pm['isAdmin'],
         'canAdmin' => $pm['canAdmin'],
         'canEdit'  => $pm['canEdit'],
+        'canEditData' => $pm['canEditData'],
         'canPrint' => $pm['canPrint'],
         'canView'  => $pm['canView'],
         'name'     => $pm['name'],
@@ -56,7 +57,7 @@ if ($action === 'perms') {
 
 /* ── 以下都會改資料：CSRF ＋ 權限 ───────────────────────── */
 if (!eg_bm_csrf_ok($_POST['csrf'] ?? null)) bmErr('連線憑證失效，請重新整理頁面後再試 (CSRF)');
-if (!$pm['canEdit']) bmErr('沒有「帳款月份維護」功能權限，請洽管理者在角色設定勾選後指派', 403);
+if ($action !== 'edit_fields' && !$pm['canEdit']) bmErr('沒有「帳款月份維護」功能權限，請洽管理者在角色設定勾選後指派', 403);
 
 /** POST 進來的 ids：可能是陣列，也可能是逗號字串 */
 function bmIds(): array {
@@ -71,6 +72,36 @@ function bmIds(): array {
 }
 
 try {
+    // 修改單筆的備註／備註二／日期（2026-11-02）：要有「修改移轉資料」功能（管理員與製程移轉管理員固定有）
+    if ($action === 'edit_fields') {
+        if (!$pm['canEditData']) bmErr('沒有「修改移轉資料」功能權限，請洽管理者在角色設定勾選後指派', 403);
+        $tid = (int)($_POST['transfer_id'] ?? 0);
+        if ($tid <= 0) bmErr('缺少移轉資料 id');
+        $cur = $db->prepare("SELECT transfer_id, transfer_date, note, note2 FROM bom_ing_transfer_log WHERE transfer_id=?");
+        $cur->execute([$tid]);
+        $old = $cur->fetch(PDO::FETCH_ASSOC);
+        if (!$old) bmErr('找不到這筆移轉資料');
+        $newNote  = trim((string)($_POST['note'] ?? ''));
+        $newNote2 = trim((string)($_POST['note2'] ?? ''));
+        $newDate  = trim((string)($_POST['transfer_date'] ?? ''));
+        if (mb_strlen($newNote) > 255 || mb_strlen($newNote2) > 255) bmErr('備註最多 255 字');
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $newDate, $dm) || !checkdate((int)$dm[2], (int)$dm[3], (int)$dm[1]) || (int)$dm[1] < 2000 || (int)$dm[1] > 2100)
+            bmErr('日期格式不正確（要是有效的 YYYY-MM-DD）');
+        $chg = [];
+        foreach (['note' => $newNote, 'note2' => $newNote2, 'transfer_date' => $newDate] as $f => $nv) {
+            $ov = (string)($old[$f] ?? '');
+            if ($ov !== $nv) $chg[$f] = [$ov, $nv];
+        }
+        if (!$chg) bmOut(['ok' => true, 'msg' => '沒有任何變更。']);
+        $db->beginTransaction();
+        $db->prepare("UPDATE bom_ing_transfer_log SET note=?, note2=?, transfer_date=?, edit_manual=1, edit_by=?, edit_at=NOW() WHERE transfer_id=?")
+           ->execute([$newNote !== '' ? $newNote : null, $newNote2 !== '' ? $newNote2 : null, $newDate, (int)$pm['uid'], $tid]);
+        $lg = $db->prepare("INSERT INTO bom_ing_transfer_edit_log (transfer_id, field, old_value, new_value, edited_by) VALUES (?,?,?,?,?)");
+        foreach ($chg as $f => $pair) $lg->execute([$tid, $f, $pair[0] !== '' ? $pair[0] : null, $pair[1] !== '' ? $pair[1] : null, (int)$pm['uid']]);
+        $db->commit();
+        bmOut(['ok' => true, 'msg' => '已修改（' . implode('、', array_map(function ($f) { return ['note' => '備註', 'note2' => '備註二', 'transfer_date' => '日期'][$f]; }, array_keys($chg))) . '），已記錄修改人員與時間。']);
+    }
+
     if ($action === 'set_month') {
         $ids  = bmIds();
         if (!$ids)              bmErr('沒有選取任何資料列');

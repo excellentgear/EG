@@ -37,6 +37,7 @@ const PROC_TRANSFER_FEATURES = [
     ['code'=>'ptl_view',      'group'=>'view', 'label'=>'檢視（唯讀）：移轉明細列表與統計分析（含加工單價與金額）'],
     ['code'=>'ptl_print',     'group'=>'op',   'label'=>'列印／匯出：複製、CSV、Excel、列印'],
     ['code'=>'ptl_bill_edit', 'group'=>'op',   'label'=>'帳款月份維護：批次修改帳款月份、還原為自動'],
+    ['code'=>'ptl_edit',      'group'=>'op',   'label'=>'修改移轉資料：修改備註、備註二與日期（會記錄修改人員與時間）'],
     ['code'=>'ptl_admin',     'group'=>'op',   'label'=>'模組管理：以上全部＋整批重算＋角色設定'],
 ];
 /* 預設角色一開始勾哪些功能（只在角色「第一次建立」時寫入，之後管理員怎麼改都不會被蓋回來） */
@@ -44,7 +45,7 @@ const PROC_TRANSFER_DEFAULT_ROLE_FEATURES = [
     'ptl_view'      => ['ptl_view'],
     'ptl_print'     => ['ptl_view', 'ptl_print'],
     'ptl_bill_edit' => ['ptl_view', 'ptl_print', 'ptl_bill_edit'],
-    'ptl_admin'     => ['ptl_view', 'ptl_print', 'ptl_bill_edit', 'ptl_admin'],
+    'ptl_admin'     => ['ptl_view', 'ptl_print', 'ptl_bill_edit', 'ptl_edit', 'ptl_admin'],
 ];
 
 if (!function_exists('eg_bm_ensure_schema')) {
@@ -60,9 +61,25 @@ function eg_bm_ensure_schema(PDO $db): void
         "ALTER TABLE bom_ing_transfer_log ADD COLUMN bill_ym_by INT NULL COMMENT '最後修改帳款月份的 user.id'",
         "ALTER TABLE bom_ing_transfer_log ADD COLUMN bill_ym_at DATETIME NULL COMMENT '最後修改帳款月份的時間'",
         "ALTER TABLE bom_ing_transfer_log ADD INDEX idx_bill_ym (bill_ym)",
+        // 2026-11-02：人工修改備註／備註二／日期（記錄修改人與時間；edit_manual=1 的列，ERP 重新匯入時這三欄不會被蓋掉）
+        "ALTER TABLE bom_ing_transfer_log ADD COLUMN edit_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '備註/日期是否人工修改過（重新匯入不覆蓋）'",
+        "ALTER TABLE bom_ing_transfer_log ADD COLUMN edit_by INT NULL COMMENT '最後人工修改備註/日期的 user.id'",
+        "ALTER TABLE bom_ing_transfer_log ADD COLUMN edit_at DATETIME NULL COMMENT '最後人工修改備註/日期的時間'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS bom_ing_transfer_edit_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            transfer_id INT NOT NULL,
+            field VARCHAR(20) NOT NULL COMMENT 'note / note2 / transfer_date',
+            old_value VARCHAR(255) NULL,
+            new_value VARCHAR(255) NULL,
+            edited_by INT NULL,
+            edited_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_t (transfer_id)
+        ) DEFAULT CHARSET=utf8mb4 COMMENT='製程移轉憑單 備註／日期 人工修改紀錄'");
+    } catch (Throwable $e) {}
     eg_bm_ensure_roles($db);
 }}
 
@@ -383,7 +400,7 @@ if (!function_exists('eg_bm_perms')) {
  */
 function eg_bm_perms(PDO $db, ?array $u): array
 {
-    $none = ['isAdmin'=>false, 'canAdmin'=>false, 'canEdit'=>false, 'canPrint'=>false,
+    $none = ['isAdmin'=>false, 'canAdmin'=>false, 'canEdit'=>false, 'canEditData'=>false, 'canPrint'=>false,
              'canView'=>false, 'uid'=>0, 'name'=>''];
     if (!$u) return $none;
     $uid   = (int)$u['id'];
@@ -410,9 +427,10 @@ function eg_bm_perms(PDO $db, ?array $u): array
 
     $canAdmin = $has('ptl_admin');
     $canEdit  = $canAdmin || $has('ptl_bill_edit');
+    $canEditData = $canAdmin || $has('ptl_edit');   // 修改備註／日期（管理員與製程移轉管理員固定可用，其他角色勾功能碼）
     $canPrint = $canEdit  || $has('ptl_print');
-    $canView  = $canPrint || $has('ptl_view');
-    return ['isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canEdit'=>$canEdit,
+    $canView  = $canPrint || $canEditData || $has('ptl_view');
+    return ['isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canEdit'=>$canEdit, 'canEditData'=>$canEditData,
             'canPrint'=>$canPrint, 'canView'=>$canView,
             'uid'=>$uid, 'name'=>(string)($u['user_cname'] ?? '')];
 }}
