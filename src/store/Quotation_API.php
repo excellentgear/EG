@@ -1421,6 +1421,53 @@ try {
             break;
         }
 
+        // ── 主管簽核：批次核准（只做「核准」；駁回需逐張填原因，不開放批次）──
+        // 每張各自一個交易、各自走與單張核准完全相同的檢查與寫入，失敗的不影響其他張，結果逐張回報。
+        case 'quotation_approval_batch': {
+            $ids = json_decode((string)($_POST['quote_ids'] ?? '[]'), true);
+            $note = trim($_POST['note'] ?? '');
+            if (!is_array($ids)) throw new Exception('參數錯誤');
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            if (!$ids) throw new Exception('請先勾選要核准的報價單');
+            if (count($ids) > 100) throw new Exception('一次最多批次核准 100 張');
+            if (!eg_quotation_user_can_sign($pdo, $user_id)) throw new Exception('您沒有簽核報價單的權限');
+
+            $signerName = eg_quotation_current_user_name($pdo, $user_id);
+            $okList = []; $failList = [];
+            foreach ($ids as $qid) {
+                $quoteNo = '';
+                try {
+                    $qs = $pdo->prepare("SELECT quote_no FROM quotation_list WHERE quote_id=?");
+                    $qs->execute([$qid]);
+                    $quoteNo = (string)$qs->fetchColumn();
+                    $rec = eg_approval_latest($pdo, 'quotation', $qid);
+                    if (!$rec || $rec['status'] !== 'pending') {
+                        throw new Exception('目前狀態非待審核，已略過');
+                    }
+                    $pdo->beginTransaction();
+                    $result = eg_approval_decide($pdo, (int)$rec['id'], $user_id, $signerName, 'approved', $note ?: null);
+                    if (!$result['success']) {
+                        $pdo->rollBack();
+                        throw new Exception($result['message'] ?: '核准失敗');
+                    }
+                    $pdo->prepare("UPDATE quotation_list SET approval_status='approved', approved_by=?, approved_by_name=?, approved_at=NOW() WHERE quote_id=?")
+                        ->execute([$user_id, $signerName, $qid]);
+                    $pdo->commit();
+                    try {
+                        eg_quotation_close_approval_notice($pdo, $qid, $user_id);
+                        eg_quotation_notify_result($pdo, $qid, $quoteNo, (int)$rec['submitted_by'], $signerName, 'approved', $note ?: null);
+                    } catch (Throwable $ne) { /* 通知失敗不影響核准結果 */ }
+                    $okList[] = ['quote_id' => $qid, 'quote_no' => $quoteNo];
+                } catch (Throwable $e) {
+                    if ($pdo->inTransaction()) $pdo->rollBack();
+                    $failList[] = ['quote_id' => $qid, 'quote_no' => $quoteNo, 'message' => $e->getMessage()];
+                }
+            }
+            $response = ['success' => true, 'ok' => $okList, 'fail' => $failList,
+                         'message' => '已核准 ' . count($okList) . ' 張' . ($failList ? '，' . count($failList) . ' 張未處理' : '')];
+            break;
+        }
+
         // ── 主管簽核：駁回後手動重新送出審核 ──
         case 'quotation_resubmit_approval': {
             $quote_id = intval($_POST['quote_id'] ?? 0);

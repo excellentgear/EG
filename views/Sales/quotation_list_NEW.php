@@ -694,6 +694,12 @@ body { background:var(--bg); }
                         placeholder="搜尋單號、備註...">
                 </div>
                 <!-- 列表 -->
+                <!-- 批次核准列：只在「待處理單據」篩選且有簽核權限時由 JS 顯示 -->
+                <div id="batchApproveBar" style="display:none;padding:6px 8px;margin-bottom:6px;background:#fffbea;border:1px solid #ffe08a;border-radius:5px;font-size:12px;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <label style="margin:0;cursor:pointer;font-weight:600;"><input type="checkbox" id="batchAllChk" onchange="batchToggleAll(this.checked)"> 全選待審核</label>
+                    <span>已選 <b id="batchSelCnt">0</b> 張</span>
+                    <button type="button" class="btn btn-success btn-xs" id="batchApproveBtn" onclick="batchApproveQuotes()" disabled><i class="fa fa-check"></i> 批次核准</button>
+                </div>
                 <div id="quoteListBody">
                     <div class="text-center text-muted" style="padding:30px;">
                         <i class="fa fa-spinner fa-spin fa-lg"></i><br><small>載入中...</small>
@@ -4781,6 +4787,8 @@ function renderQuoteList(quotes, filter) {
     const clientF = $('#clientFilterSel').val();
     refreshClearFilterBtn();
 
+    $('#batchApproveBar').css('display', (pendingFilterMode && CAN_SIGN) ? 'flex' : 'none');
+    setTimeout(batchUpdateCount, 0);   // 列表重繪後同步已選張數（批次核准列）
     let filtered = quotes;
     // 待處理單據＝報價單「本身」簽核狀態為待審核(pending)或被駁回(rejected)；已核准者不列入（補件待審另有專屬入口）
     if (pendingFilterMode) filtered = filtered.filter(q => q.approval_status === 'pending' || q.approval_status === 'rejected');
@@ -4849,8 +4857,11 @@ function buildQuoteCard(q) {
     const clientF = $('#clientFilterSel').val();
     // 有客戶篩選時不重複顯示客戶名稱
     const clientRow = clientF ? '' : `<div class="qli-client">${escapeHtml(q.client_name || '（無客戶）')}</div>`;
+    const batchChk = (pendingFilterMode && CAN_SIGN && q.approval_status === 'pending')
+        ? `<input type="checkbox" class="batch-chk" value="${q.quote_id}" title="勾選後可批次核准" onclick="event.stopPropagation();batchUpdateCount()" style="margin:0 6px 0 0;vertical-align:middle;"${_batchSel.has(Number(q.quote_id)) ? ' checked' : ''}>`
+        : '';
     return `<div class="qli-card ${isActive ? 'active' : ''}" onclick="openEditor(${q.quote_id})">
-        <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${tempBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
+        <div class="qli-no">${batchChk}${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${tempBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
         ${clientRow}
         <div class="qli-foot">
             <span class="qli-date">${escapeHtml(String(q.quote_date||'').replace(/-/g,'.'))}</span>
@@ -5219,6 +5230,48 @@ function decideQuoteApproval(decision) {
             preConfirm: () => document.getElementById('swal-approve-note').value.trim()
         }).then(r => { if (r.isConfirmed) doSubmit(r.value); });
     }
+}
+
+// ── 批次核准（待處理單據篩選畫面；只核准、不批次駁回）──
+let _batchSel = new Set();
+function batchUpdateCount() {
+    $('.batch-chk').each(function () {
+        const id = Number(this.value);
+        if (this.checked) _batchSel.add(id); else _batchSel.delete(id);
+    });
+    const n = $('.batch-chk:checked').length;
+    $('#batchSelCnt').text(n);
+    $('#batchApproveBtn').prop('disabled', n === 0);
+    const all = $('.batch-chk').length;
+    $('#batchAllChk').prop('checked', all > 0 && n === all);
+}
+function batchToggleAll(on) {
+    $('.batch-chk').prop('checked', on);
+    batchUpdateCount();
+}
+function batchApproveQuotes() {
+    const ids = $('.batch-chk:checked').map(function () { return Number(this.value); }).get();
+    if (!ids.length) return;
+    Swal.fire({
+        title: `批次核准 ${ids.length} 張報價單？`, icon: 'question',
+        html: `<textarea id="swal-batch-note" class="swal2-textarea" placeholder="審核意見（選填，套用到全部）" style="height:70px;"></textarea>`,
+        showCancelButton: true, confirmButtonText: '確認核准', confirmButtonColor: '#27ae60', cancelButtonText: '取消',
+        preConfirm: () => document.getElementById('swal-batch-note').value.trim()
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $('#batchApproveBtn').prop('disabled', true);
+        $.post(API_URL, { action: 'quotation_approval_batch', quote_ids: JSON.stringify(ids), note: r.value || '' }, res => {
+            if (!res.success) { Swal.fire('無法處理', res.message || '請稍後再試', 'error'); batchUpdateCount(); return; }
+            _batchSel = new Set();
+            let msg = res.message;
+            if (res.fail && res.fail.length) {
+                msg += '<div style="text-align:left;font-size:12px;margin-top:8px;max-height:200px;overflow:auto;">' +
+                    res.fail.map(f => `<div>• ${escapeHtml(f.quote_no || ('#' + f.quote_id))}：${escapeHtml(f.message)}</div>`).join('') + '</div>';
+            }
+            Swal.fire({ title: '批次核准完成', html: msg, icon: (res.fail && res.fail.length) ? 'warning' : 'success' });
+            if (isAllYearsMode) { allYearsData = null; loadAllYears(); } else loadQuoteList(<?= $selectedYear ?>);
+        }, 'json').fail(() => { Swal.fire('錯誤', '與伺服器通訊失敗', 'error'); batchUpdateCount(); });
+    });
 }
 
 // 駁回後手動重新送出審核
