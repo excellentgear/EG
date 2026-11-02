@@ -161,7 +161,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                       border-radius:3px; padding:1px 4px; font-size:12.5px; }
         table.dtb tr.off { background:#F7F3EC; color:#9b8a75; }
         table.dtb td.chg { background:#FFE3A8 !important; }
-        input.chg-in { background:#FFE3A8 !important; border:2px solid #F0A24B !important; font-weight:bold; }
+        .fakein { border:1px solid var(--line); border-radius:3px; padding:6px 8px; min-height:32px; background:#faf7f1; font-weight:bold; font-size:13px; }
+        input.chg-in, .fakein.chg-in { background:#FFE3A8 !important; border:2px solid #F0A24B !important; font-weight:bold; }
         .chgv { background:#FFE3A8; border-radius:3px; padding:0 4px; }
         table.dtb input.neg, input.neg { background:#F8B4A8 !important; border:2px solid #DD5138 !important; color:#7a1d0e !important; font-weight:bold; }
         .sumline { display:flex; gap:16px; flex-wrap:wrap; align-items:center; justify-content:flex-end;
@@ -537,14 +538,14 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                                 <button type="button" class="btn btn-warm-o btn-xs" id="btnRateDefault" title="把目前的加成倍數存成「預設值」，之後新開的單自動帶入（已存的單不變）">設為預設</button></div>
                             <div class="muted-help" id="rateHint"></div></div>
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
-                        <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit"></div>
-                        <div class="fld"><label>總扣款金額（單價×數量×加成）</label><input type="text" id="f_dtotal" readonly style="font-weight:bold;background:#faf7f1;" title="核准扣款金額(元/PCS) × 數量(PCS) × 加成，自動計算"></div>
+                        <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit" autocomplete="off"><div id="f_dunit_view" class="fakein" style="display:none;"></div></div>
+                        <div class="fld"><label>總扣款金額（單價×數量×加成）</label><div id="f_dtotal" class="fakein" title="核准扣款金額(元/PCS) × 數量(PCS) × 加成，自動計算"></div></div>
                         <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
-                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
+                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" name="qab_transfer_ref" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
-                    <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v5</div>
+                    <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v6</div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
                         <button class="btn btn-warm-o btn-xs" id="btnSignPm"><i class="fa fa-pencil"></i> (生管) 簽章</button>
                         <span class="ro-note" id="pmWho"></span>
@@ -665,7 +666,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         <div class="m-bd">
             <div class="note-box">解鎖後 30 分鐘內可以連續代填代簽這張單的多個項目（簽章者、日期、內容皆可指定）。</div>
             <div class="fld"><label>操作確認密碼 <span style="color:var(--coral)">*</span></label>
-                <input type="password" id="qabUnlockPw" autocomplete="off" data-eg-skip></div>
+                <span id="qabUnlockPwHost"></span></div>
             <div class="err" id="qabUnlockErr"></div>
         </div>
         <div class="m-ft">
@@ -769,7 +770,7 @@ var BOM_OK = false;                    // 製令欄位現在的值是不是「�
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); } catch(e){ return s || ''; } }
 function openMask(id){ $('#' + id).show(); }
-function closeMask(id){ $('#' + id).hide(); }
+function closeMask(id){ $('#' + id).hide(); if (id === 'qabUnlockMask') $('#qabUnlockPwHost').empty(); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 
 /* quiet=true：自動存檔用——存好只更新資料、**不重畫畫面**。
@@ -1683,7 +1684,7 @@ function render(){
     $('#rateHint').text('目前預設：' + (D.rate_default || 1));
     UNIT_MANUAL = Number(o.deduct_unit_manual) === 1;   // 只認「人工填過」的記號，不再比對數值（儲存後重畫不會把自動值誤判成人工）
     $('#f_dqty').val(o.deduct_qty == null || o.deduct_qty === '' ? '' : String(Number(o.deduct_qty)));   // 21.000 → 21（小數點後全是 0 就不顯示）
-    $('#f_dunit').val(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
+    setUnitVal(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
     $('#f_dexec').val(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : (o.deduct_exec || ''));
     $('#f_dnotify').val(o.deduct_notify_no || '');
     renderDeduct();
@@ -1908,7 +1909,12 @@ function renderSignTable(){
     $('#secRound').toggle(!QAB_SIGN_MERGE_ASK);
 }
 $(document).on('change', '#sgAll', function(){ renderSignTable(); });
-$('#btnQabSignUnlock').on('click', function(){ $('#qabUnlockPw').val(''); $('#qabUnlockErr').text(''); openMask('qabUnlockMask'); });
+/* 密碼欄只在解鎖視窗開啟時才建立、關閉就移除：頁面上平常不能有 type=password 的欄位，
+   否則 Chrome 會把旁邊的文字欄（例如通知扣款單號）當成「帳號欄」，跳出已儲存的帳號密碼選單 */
+$('#btnQabSignUnlock').on('click', function(){
+    $('#qabUnlockPwHost').html('<input type="password" id="qabUnlockPw" autocomplete="new-password" data-eg-skip>');
+    $('#qabUnlockErr').text(''); openMask('qabUnlockMask');
+});
 $(document).on('keydown', '#qabUnlockPw', function(e){
     if (e.which === 13 || e.keyCode === 13) { e.preventDefault(); $('#btnQabUnlockGo').click(); }
 });
@@ -2613,7 +2619,11 @@ function renderDeduct(){
     });
     $('#dtb input, #f_rate, #f_dqty, #f_dexec, #f_dnotify').prop('disabled', !canFill);
     $('#btnRateDefault').toggle(canFill);
-    $('#f_dunit').prop('disabled', !(p.canDeductApprove && !o.is_closed));
+    var unitEditable = !!(p.canDeductApprove && !o.is_closed);
+    $('#f_dunit').prop('disabled', !unitEditable);
+    // 不能改單價的人（例如生管）：改用文字顯示（文字節點一定會即時重繪，也不會被瀏覽器的自動填入蓋掉）
+    $('#f_dunit').toggle(unitEditable); $('#f_dunit_view').toggle(!unitEditable);
+    $('#secDeduct input').attr('autocomplete', 'off');
     $('#btnAddOther,#btnSaveDeduct,#btnAutoFill').toggle(canFill);
     $('#btnSignPm').toggle(p.canDeductFill && !o.is_closed);
     $('#btnSignQc').toggle(p.canQcSign && !o.is_closed);
@@ -2664,7 +2674,7 @@ function calcUnit(proc, other, rate){
     });
     var auto = (any && sumUnit > 0) ? Math.round(sumUnit * 100) / 100 : '';
     if (o.deduct_appr_at || UNIT_MANUAL) return parseFloat($('#f_dunit').val());
-    $('#f_dunit').val(auto === '' ? '' : String(auto));
+    setUnitVal(auto === '' ? '' : String(auto));
     return auto === '' ? NaN : auto;
 }
 $(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDeduct(); });
@@ -2674,7 +2684,11 @@ setInterval(function(){
     try { if (D && D.order && $('#f_dtotal').length) calcTotalDeduct(); } catch (e) {}
 }, 300);
 /* 總扣款金額以「伺服器 AJAX 重新計算」的結果為準：核准單價、數量、加成任一個變動就送出，回來後覆寫欄位 */
-var DCALC_LAST = '', DCALC_TIMER = null, DCALC_VER = 'v5';
+function setUnitVal(v){
+    $('#f_dunit').val(v);
+    $('#f_dunit_view').text(v === '' || v == null ? '' : fmtMoney(v));
+}
+var DCALC_LAST = '', DCALC_TIMER = null, DCALC_VER = 'v6';
 function ajaxTotal(){
     var u = $('#f_dunit').val(), q = $('#f_dqty').val(), r = $('#f_rate').val();
     var key = u + '|' + q + '|' + r;
@@ -2683,12 +2697,12 @@ function ajaxTotal(){
     clearTimeout(DCALC_TIMER);
     DCALC_TIMER = setTimeout(function(){
         $.post(API, { action: 'deduct_calc', csrf: CSRF, id: OID, unit: u, qty: q, rate: r, ver: DCALC_VER,
-                      shown: $('#f_dtotal').val(), ua: navigator.userAgent }, function(res){
+                      shown: $('#f_dtotal').text(), ua: navigator.userAgent }, function(res){
             if (!res || !res.success) return;
             // 回來時單價、數量、加成又變了就丟掉這筆（會有下一筆）
             if ($('#f_dunit').val() + '|' + $('#f_dqty').val() + '|' + $('#f_rate').val() !== key) return;
             DTOTAL_NUM = res.total;
-            $('#f_dtotal').val(res.total === null ? '' : fmtMoney(res.total));
+            $('#f_dtotal').text(res.total === null ? '' : fmtMoney(res.total));
             try { markDerived(); } catch (e) {}
         }, 'json');
     }, 120);
@@ -2702,8 +2716,8 @@ function calcTotalDeduct(uIn){
     var u = (uIn === undefined) ? parseFloat($('#f_dunit').val()) : uIn, q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
     if (!(r > 0)) r = 1;
     DTOTAL_NUM = (u > 0 && q > 0) ? Math.round(u * q * r * 100) / 100 : null;
-    $('#f_dtotal').val(DTOTAL_NUM === null ? '' : fmtMoney(DTOTAL_NUM));   // 先把數字寫進欄位，不依賴其他函式
-    try { $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0); markDerived(); } catch (e) { console.error(e); }
+    $('#f_dtotal').text(DTOTAL_NUM === null ? '' : fmtMoney(DTOTAL_NUM));   // 先把數字寫進欄位，不依賴其他函式
+    try { $('#f_dtotal, #f_dunit, #f_dunit_view').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0); markDerived(); } catch (e) { console.error(e); }
     ajaxTotal();
 }
 /* 跟開啟頁面時不同的「相對應金額」（單價、總扣款、製程小計、其他、合計）標橘黃底色，方便確認 */
@@ -2712,7 +2726,7 @@ function markDerived(){
     if (!DSUM_BASE || !DSUM_CUR) return;
     var diff = function(a, b){ return !(Math.abs((a == null || isNaN(a) ? 0 : a) - (b == null || isNaN(b) ? 0 : b)) < 0.005); };
     var u = parseFloat($('#f_dunit').val());
-    $('#f_dunit').toggleClass('chg-in', diff(u, DSUM_BASE.unit));
+    $('#f_dunit, #f_dunit_view').toggleClass('chg-in', diff(u, DSUM_BASE.unit));
     $('#f_dtotal').toggleClass('chg-in', diff(DTOTAL_NUM, DSUM_BASE.tot));
     $('#dSum .sv').each(function(){
         var k = $(this).data('k');
