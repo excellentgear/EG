@@ -1542,7 +1542,7 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     } catch (Throwable $e) {}
     if ($reworkOf > 0) {
         $rwNo = (string)$db->query("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=" . $reworkOf)->fetchColumn();
-        $phenomenon = '【重工後異常】原異常單 ' . $rwNo . ' 決策重工，重工回廠檢驗仍不良。' . $phenomenon;
+        $phenomenon = '【重工後異常】原異常單 ' . $rwNo . ' 決策重工，第' . ((int)(qab_rework_round_of($db, $reworkOf))) . '次重工回廠檢驗仍不良。' . $phenomenon;
     }
 
     $data = [
@@ -3891,7 +3891,7 @@ function qab_qc_row_tags(PDO $db, array $fids): array
             $rw = qab_rework_open_for_fid($db, (int)$fid);
             if (!$rw) continue;
             array_unshift($out[(string)$fid], [
-                'kind' => 'rework_back', 'name' => '重工回廠(待重工檢驗)', 'md' => $rw['md'], 'process' => $rw['process'], 'qty' => $rw['qty'],
+                'kind' => 'rework_back', 'name' => '第' . $rw['round'] . '次重工回廠(待檢驗)', 'md' => $rw['md'], 'process' => $rw['process'], 'qty' => $rw['qty'],
                 'who' => '', 'bg' => '#DD5138', 'fg' => '#ffffff', 'no' => $rw['no'], 'id' => $rw['id'], 'sn' => 9999, 'ts' => $rw['ts'],
             ]);
         }
@@ -4637,6 +4637,25 @@ function qab_rework_open_for_fid(PDO $db, int $fid): ?array
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return null;
     $ts = (string)$r['ts'];
-    return ['id' => (int)$r['id'], 'no' => (string)$r['abnormal_order_no'], 'qty' => (int)$r['ng_qty'], 'ts' => $ts,
+    // 第幾次重工：沿著「重工後異常」的來源鏈往回數（第一次重工＝1，重工後又異常再重工＝2…）
+    $round = 1; $cur = (int)$r['id'];
+    for ($i = 0; $i < 20; $i++) {
+        $prev = (int)$db->query("SELECT COALESCE(rework_of_id,0) FROM qa_abnormal_order WHERE id=" . $cur)->fetchColumn();
+        if ($prev <= 0) break;
+        $round++; $cur = $prev;
+    }
+    return ['id' => (int)$r['id'], 'round' => $round, 'no' => (string)$r['abnormal_order_no'], 'qty' => (int)$r['ng_qty'], 'ts' => $ts,
             'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '', 'process' => (string)($r['ProcessName'] ?? '')];
+}
+
+/** 這張異常單造成的是第幾次重工（沿 rework_of_id 往回數，第一次＝1） */
+function qab_rework_round_of(PDO $db, int $orderId): int
+{
+    $round = 1; $cur = $orderId;
+    for ($i = 0; $i < 20; $i++) {
+        $prev = (int)$db->query("SELECT COALESCE(rework_of_id,0) FROM qa_abnormal_order WHERE id=" . $cur)->fetchColumn();
+        if ($prev <= 0) break;
+        $round++; $cur = $prev;
+    }
+    return $round;
 }

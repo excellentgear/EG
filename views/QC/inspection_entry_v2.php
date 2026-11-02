@@ -1722,7 +1722,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-edit">取消修改，回到新檢驗</button>
                 </div>
                 <div id="view-mode-banner" class="alert alert-warning" style="display:none;">
-                    <i class="fa fa-eye"></i> <b>檢視模式（唯讀）</b>：正在檢視歷程 qc_form_id=<span id="view-form-id"></span>，<span id="view-mode-hint"></span>
+                    <i class="fa fa-eye"></i> <b>檢視模式（唯讀）</b>：正在檢視歷程 qc_form_id=<span id="view-form-id"></span>，<span id="view-mode-hint"></span><span id="view-abn-link"></span>
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-view" style="margin-left:6px;">關閉檢視，回到新檢驗</button>
                     <button class="btn btn-xs btn-warm pull-right" id="btn-enter-edit" style="display:none;"><i class="fa fa-pencil"></i> 修改</button>
                 </div>
@@ -3489,9 +3489,27 @@ $(function(){
     // 差異：數值型不再丟掉空格（改送完整長度陣列），空值後端會略過，
     //       修正舊版「第1件沒量、第2件的值被存成 sample_no=1」的錯位問題。
     // keepEmptyRecheck＝存草稿時保留「還沒填的 NG加驗列」（正式存檔／列印／匯出一律略過全空的列）
+    // 檢驗項目名稱留空時，自動帶入標準值（範圍型帶「下限 ~ 上限」）；已有實測值才補，空白列不動
+    function autoItemName(it){
+        if(!it) return '';
+        if(it.mode==='RANGE'){
+            var a=String(it.min==null?'':it.min).trim(), b=String(it.max==null?'':it.max).trim();
+            return (a!==''&&b!=='') ? (a+' ~ '+b) : '';
+        }
+        return String(it.std==null?'':it.std).trim();
+    }
+    function itemHasReading(it){
+        return (it.readings||[]).some(function(rd){ return (rd.vals||[]).some(function(v){ return v!=='' && v!=null && !(it.type==='OKNG' && v==='OK'); }); });
+    }
+    function fillBlankNameFromStd(it,i){
+        if((it.name||'').trim()!=='' || it.type==='OKNG' || !itemHasReading(it)) return;
+        var n=autoItemName(it);
+        if(n){ it.name=n; $('input.f-name[data-i="'+i+'"]').val(n); }
+    }
     function collectItems(keepEmptyRecheck){
         var out=[];
-        MODEL.items.forEach(function(it){
+        MODEL.items.forEach(function(it,ii){
+            fillBlankNameFromStd(it,ii);
             var name=(it.name||'').trim();
             if(!name) return;
             var mk=function(rd){
@@ -5135,7 +5153,7 @@ $(function(){
                 modeMsg += '<br><i class="fa fa-archive"></i> 這筆 BOM 已結案'+(ctx.bom_closed_at?'（結案日 '+esc(ctx.bom_closed_at)+'）':'')+'，正在補建這一站的檢驗表。';
             }
             if(ctx.rework){
-                modeMsg += '<br><span style="display:inline-block;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;">重工檢驗</span> 原異常單 <b>'+esc(ctx.rework.no)+'</b> 決策重工（數量 '+esc(ctx.rework.qty)+'），這次是重工回廠後的檢驗；若又判 NG，開出的異常單會標「重工後異常」。';
+                modeMsg += '<br><span style="display:inline-block;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;">第'+esc(ctx.rework.round||1)+'次重工檢驗</span> 原異常單 <b>'+esc(ctx.rework.no)+'</b> 決策重工（數量 '+esc(ctx.rework.qty)+'），這次是重工回廠後的檢驗；若又判 NG，開出的異常單會標「重工後異常」。';
             }
             $('#mode-banner').html(modeMsg);
             if(res.tools && res.tools.length) TOOLS = res.tools;
@@ -5394,7 +5412,9 @@ $(function(){
                 ['NORMAL','FIRST','LAST'].map(function(k){
                     var lbl = k==='NORMAL'?'一般':(k==='FIRST'?'首件':'末件');
                     return '<button type="button" class="ki-btn" data-kind="'+k+'">'+lbl+'</button>';
-                }).join('')+'</span></span></div>')+
+                }).join('')+'</span>'+
+                (ctx.rework ? '<span style="margin-left:8px;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;">第'+esc(ctx.rework.round||1)+'次重工</span>' : '')+
+                '</span></div>')+
             // 本批送驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
             // 這裡就跟著更新（updateQtyLive，不必整列重畫）——2026-10-06 使用者要求，
             // 不用再把底部「數量/處置備註」面板拉開才看得到本次填的是多少件。
@@ -6115,6 +6135,10 @@ $(function(){
                 $('#view-mode-hint').text(res.can_edit
                     ? '欄位已反灰；要修改請按右側「修改」。'
                     : '欄位已反灰不可修改；如需修改請洽主管「開放修改」，或於本人修改寬限期內回來修改。');
+                var vh=res.header||{};
+                $('#view-abn-link').html(vh.abnormal_order_no && vh.abnormal_order_id
+                    ? '　<i class="fa fa-exclamation-triangle"></i> 對應異常單：<a href="../QA/qa_abnormal_form.php?id='+esc(vh.abnormal_order_id)+'" target="_blank" rel="noopener" style="font-weight:bold;text-decoration:underline;">'+esc(vh.abnormal_order_no)+'</a>'
+                    : '');
                 $('#view-mode-banner').show();
             }
             refreshBackfillBtn();
@@ -6742,6 +6766,7 @@ $(function(){
     function validateBeforeSave(){
         var out=[], anyNum=false;
         MODEL.items.forEach(function(it,i){
+            fillBlankNameFromStd(it,i);
             var code=codeLabel(i), nm=(it.name||'').trim();
             it.readings.forEach(function(rd,r){
                 var hasVal=false;
