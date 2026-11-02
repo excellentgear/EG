@@ -405,6 +405,7 @@ function qab_ensure_schema(PDO $db): void
         'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
         // 2026-10-07：外包廠商回廠回報報廢數量自動開立——回指來源加工單流水帳，同一批流水帳
         // 累加報廢好幾次也只開一張單（存在就更新數量，不重複開單，見 qab_auto_open_from_outsource_return()）
+        'deduct_unit_manual' => "ADD COLUMN deduct_unit_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '核准扣款單價是否人工填過（1＝不再自動帶入）'",
         'deduct_notified_sig' => "ADD COLUMN deduct_notified_sig VARCHAR(20) NULL COMMENT '上次通知扣款填寫時的決策簽名，決策有變才再通知'",
         'deduct_notified_at' => "ADD COLUMN deduct_notified_at DATETIME NULL COMMENT '決策報廢後已通知生管填扣款的時間（只通知一次）'",
         'abn_total_qty' => "ADD COLUMN abn_total_qty INT NULL COMMENT '品管填的異常總數(PCS)，≥檢驗NG數、≤本批送驗數；報廢決策後自動帶入扣款數量'",

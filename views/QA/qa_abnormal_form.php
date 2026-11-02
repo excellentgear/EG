@@ -512,7 +512,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <button class="btn btn-warm-o btn-xs" id="btnAutoPreview"><i class="fa fa-search"></i> 看自動帶入哪些金額</button>
                     <button class="btn btn-warm-o btn-xs" id="btnAutoFill"><i class="fa fa-download"></i> 自動帶入製程金額</button>
                     <span class="saved" id="savedDeduct"></span>
-                    <button class="btn btn-warm-o btn-xs" id="btnSaveDeduct" title="欄位改完就會自動存，這顆只是要立刻存的時候用"><i class="fa fa-save"></i> 立即儲存</button>
+                    <button class="btn btn-warm-o btn-xs" id="btnSaveDeduct" title="扣款確認不會自動存檔，改完請按這裡儲存（右下角「未儲存」標示可點）"><i class="fa fa-save"></i> 立即儲存</button>
                 </h4>
                 <div class="sec-body">
                     <div id="deductHint" class="note-box"></div>
@@ -1673,7 +1673,7 @@ function render(){
     DEDUCT_ROWS = (o.deducts || []).map(function(r){ return $.extend({}, r); });
     $('#f_rate').val(o.surcharge_rate == null ? (D.rate_default || 1) : o.surcharge_rate);
     $('#rateHint').text('目前預設：' + (D.rate_default || 1));
-    UNIT_INIT = false; UNIT_MANUAL = false;
+    UNIT_MANUAL = Number(o.deduct_unit_manual) === 1;   // 只認「人工填過」的記號，不再比對數值（儲存後重畫不會把自動值誤判成人工）
     $('#f_dqty').val(o.deduct_qty == null || o.deduct_qty === '' ? '' : String(Number(o.deduct_qty)));   // 21.000 → 21（小數點後全是 0 就不顯示）
     $('#f_dunit').val(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
     $('#f_dexec').val(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : (o.deduct_exec || ''));
@@ -2637,11 +2637,6 @@ function calcUnit(proc, other, rate){
         if (rq > 0) { sumUnit += Math.round(a / rq * 100) / 100; any = true; }
     });
     var auto = (any && sumUnit > 0) ? Math.round(sumUnit * 100) / 100 : '';
-    if (!UNIT_INIT) {   // 載入後第一次：已存的值跟自動值不同＝人工填過
-        UNIT_INIT = true;
-        var st = o.deduct_unit_amt;
-        UNIT_MANUAL = (st != null && st !== '' && (auto === '' || Math.abs(parseFloat(st) - auto) > 0.01));
-    }
     if (o.deduct_appr_at || UNIT_MANUAL) return;
     $('#f_dunit').val(auto === '' ? '' : String(auto));
 }
@@ -2673,10 +2668,10 @@ $(document).on('input', '.d-unit', function(){
 });
 $(document).on('input', '.d-note', function(){ DEDUCT_ROWS[$(this).data('i')].note = this.value; });
 $(document).on('input', '.d-nm', function(){ DEDUCT_ROWS[$(this).data('i')].process_name = this.value; });
-$(document).on('click', '[data-drm]', function(){ DEDUCT_ROWS.splice(parseInt($(this).data('drm'), 10), 1); renderDeduct(); });
+$(document).on('click', '[data-drm]', function(){ DEDUCT_ROWS.splice(parseInt($(this).data('drm'), 10), 1); renderDeduct(); DEDUCT_DIRTY = true; $('#deductDirty').show(); });
 $('#btnAddOther').on('click', function(){
     DEDUCT_ROWS.push({ id:0, kind:'other', process_name:'', amount:'', note:'', included:1 });
-    renderDeduct();
+    renderDeduct(); DEDUCT_DIRTY = true; $('#deductDirty').show();
 });
 $('#btnAutoPreview').on('click', function(){
     if (!(D.order.bom_list || []).length) { alert('這張單沒有綁製令'); return; }
@@ -2716,7 +2711,7 @@ function saveDeduct(silent){
     if (!dnotifyCheck()) { if (!silent) alert('通知扣款單號格式不正確，請修正後再儲存'); return; }
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
-                          deduct_notify_no:$('#f_dnotify').val() },
+                          deduct_notify_no:$('#f_dnotify').val(), unit_manual: UNIT_MANUAL ? 1 : 0 },
         function(){ DEDUCT_DIRTY = false; $('#deductDirty').hide(); savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
 }
 /* 扣款確認有改動、還沒存成功時，右下角明顯標示「未儲存」（自動存檔成功後消失；離開頁面前會提醒） */
@@ -2728,10 +2723,7 @@ $(document).on('input change', '#secDeduct input, #secDeduct select, #secDeduct 
 $(window).on('beforeunload', function(){ if (DEDUCT_DIRTY) return '扣款確認還有未儲存的內容'; });
 $('#btnSaveDeduct').on('click', function(){ saveDeduct(false); });
 $(document).on('click', '#deductDirty', function(){ saveDeduct(false); });
-$(document).on('change', '#secDeduct input, #secDeduct select', function(){
-    autoSave('deduct', function(){ saveDeduct(true); });
-});
-$(document).on('input', '#secDeduct textarea', function(){ autoSave('deduct', function(){ saveDeduct(true); }, 1500); });
+// 扣款確認不自動存檔（2026-11-02 使用者要求）：改完要按「立即儲存」或右下角「未儲存」標示；金額都是畫面即時重算
 $('#btnSignPm').on('click', function(){ post('deduct_sign', { id:OID, who:'pm', clear: D.order.deduct_pm_at ? 1 : '' }); });
 $('#btnSignQc').on('click', function(){ post('deduct_sign', { id:OID, who:'qc', clear: D.order.deduct_qc_at ? 1 : '' }); });
 $('#btnApprove').on('click', function(){
@@ -2892,6 +2884,6 @@ function toast(msg){
     $t.data('t', setTimeout(function(){ $t.fadeOut(200); }, 1800));
 }
 </script>
-<div id="deductDirty" style="display:none;position:fixed;right:20px;bottom:24px;z-index:99999;background:#DD5138;color:#fff;font-weight:bold;font-size:15px;padding:10px 18px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.35);cursor:pointer;" title="扣款確認尚未儲存（會自動存檔；點一下立即儲存）">● 未儲存</div>
+<div id="deductDirty" style="display:none;position:fixed;right:20px;bottom:24px;z-index:99999;background:#DD5138;color:#fff;font-weight:bold;font-size:15px;padding:10px 18px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.35);cursor:pointer;" title="扣款確認尚未儲存，請按「立即儲存」（或點這個標示）">● 未儲存</div>
 </body>
 </html>

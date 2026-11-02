@@ -899,6 +899,7 @@ case 'deduct_save': {
         foreach ($cur->fetchAll(PDO::FETCH_COLUMN) as $cid) {
             if (!in_array((int)$cid, $keep, true)) $db->prepare("DELETE FROM qa_abnormal_deduct WHERE id=?")->execute([(int)$cid]);
         }
+        if (array_key_exists('unit_manual', $_POST)) $db->prepare("UPDATE qa_abnormal_order SET deduct_unit_manual=? WHERE id=?")->execute([!empty($_POST['unit_manual']) ? 1 : 0, $id]);
         $db->prepare("UPDATE qa_abnormal_order SET surcharge_rate=?, deduct_qty=?, deduct_unit_amt=?, deduct_exec=?, deduct_notify_no=?, updated_by=?, updated_at=NOW() WHERE id=?")
            ->execute([$rate ?? $o['surcharge_rate'], $numOrNull($_POST['deduct_qty'] ?? ''), $numOrNull($_POST['deduct_unit_amt'] ?? ''),
                       (array_key_exists('deduct_exec', $_POST) ? $strOrNull($_POST['deduct_exec'], 60) : ($o['deduct_exec'] ?? null)), $strOrNull($_POST['deduct_notify_no'] ?? '', 120), $uid, $id]);
