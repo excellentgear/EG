@@ -544,6 +544,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
+                    <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v4</div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
                         <button class="btn btn-warm-o btn-xs" id="btnSignPm"><i class="fa fa-pencil"></i> (生管) 簽章</button>
                         <span class="ro-note" id="pmWho"></span>
@@ -2667,6 +2668,11 @@ function calcUnit(proc, other, rate){
     return auto === '' ? NaN : auto;
 }
 $(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDeduct(); });
+/* 保險機制：每 0.3 秒用畫面上目前的單價、數量、加成重算一次「總扣款金額」。
+   不論單價是被哪個動作改掉的（勾選、取消勾選、手動、自動帶入），總扣款金額最慢 0.3 秒內一定跟上。 */
+setInterval(function(){
+    try { if (D && D.order && $('#f_dtotal').length) calcTotalDeduct(); } catch (e) {}
+}, 300);
 function fmtMoney(n){
     var p = String(n).split('.');
     p[0] = p[0].replace(/\B(?=(\d{3})+$)/g, ',');
