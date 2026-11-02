@@ -533,9 +533,9 @@ $colItems = []; $pos = 0; foreach ($sizes as $sz) { $colItems[] = array_slice($d
 $per = max($sizes);
 $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number_format(abs($u), 2, '.', ','); };
 ?>
-<table class="f dedlist"><tr><td colspan="<?= $cols * 2 ?>" class="lb" style="text-align:left;padding-left:6px;">計入扣款的製程（<?= $nD ?> 項，扣款單價 元/PCS）</td></tr>
+<table class="f dedlist"><colgroup><?php for ($cl = 0; $cl < $cols; $cl++): ?><col style="width:2.5%"><col style="width:<?= round((100 - 2.5 * $cols) / $cols, 2) ?>%"><?php endfor; ?></colgroup><tr><td colspan="<?= $cols * 2 ?>" class="lb" style="text-align:left;padding-left:6px;">計入扣款的製程（<?= $nD ?> 項，扣款單價 元/PCS）</td></tr>
 <?php for ($rw = 0; $rw < $per; $rw++): ?><tr><?php for ($cl = 0; $cl < $cols; $cl++): $di = $colItems[$cl][$rw] ?? null; ?>
-<td class="c" style="width:3.5%;padding:1px 2px;"><?= $di ? (int)$di['sn'] : '' ?></td><td style="padding:1px 4px;"><?php if ($di): ?><?= h($di['nm']) ?><span style="float:right;margin-left:6px;"><?= h($fmtU($di['u'])) ?></span><?php endif; ?></td>
+<td class="c" style="padding:1px 0;font-size:7pt;"><?= $di ? (int)$di['sn'] : '' ?></td><td style="padding:1px 4px;"><?php if ($di): ?><?= h($di['nm']) ?><span style="float:right;margin-left:6px;"><?= h($fmtU($di['u'])) ?></span><?php endif; ?></td>
 <?php endfor; ?></tr><?php endfor; ?>
 </table>
 <?php endif; ?>
