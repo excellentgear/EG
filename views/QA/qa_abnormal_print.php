@@ -510,7 +510,7 @@ if (!empty($o['src_qc_form_id'])) {
     <tr>
         <td class="c lb">合計</td>
         <td class="c"><b><?= h(money($tot['total'])) ?></b></td>
-        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS<?php if ((float)($o['deduct_unit_amt'] ?? 0) != 0): ?><br>扣款單價 <?= ((float)$o['deduct_unit_amt'] < 0 ? '-$' : '$') . number_format(abs(round((float)$o['deduct_unit_amt'])), 0) ?> /PCS<?php endif; ?></td>
+        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS<?php if ((float)($o['deduct_unit_amt'] ?? 0) != 0): ?><br>扣款單價 <?= ((float)$o['deduct_unit_amt'] < 0 ? '-$' : '$') . rtrim(rtrim(number_format(abs((float)$o['deduct_unit_amt']), 2, '.', ','), '0'), '.') ?> /PCS<?php endif; ?></td>
     </tr>
 </table>
 <?php
@@ -550,7 +550,7 @@ $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number
     </tr>
     <tr>
         <td class="lb">扣款單價 (元/PCS)</td>
-        <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : money($o['deduct_unit_amt'])) ?></td>
+        <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_unit_amt'], 2, '.', ','), '0'), '.')) ?></td>
     </tr>
     <tr>
         <td class="small" colspan="4">★此單號需登記至不合格品管制記錄表
