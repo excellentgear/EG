@@ -161,6 +161,13 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                       border-radius:3px; padding:1px 4px; font-size:12.5px; }
         table.dtb tr.off { background:#F7F3EC; color:#9b8a75; }
         table.dtb td.chg { background:#FFE3A8 !important; }
+        .tp-diff { background:#DD5138; color:#fff !important; padding:0 6px; border-radius:3px; }
+        .sel-wrap { margin-top:10px; border:1px solid var(--line); border-radius:4px; background:#fffaf1; padding:8px 10px; }
+        .sel-wrap .sel-ttl { font-weight:bold; margin-bottom:5px; color:var(--ink); }
+        .sel-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:3px 16px; font-size:12.5px; }
+        .sel-grid .it { border-bottom:1px dotted #e4d3bc; padding:2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sel-grid .it .sn { display:inline-block; min-width:30px; font-weight:bold; color:#8a5a2b; }
+        .sel-grid .it b { float:right; margin-left:8px; }
         .fakein { border:1px solid var(--line); border-radius:3px; padding:6px 8px; min-height:32px; background:#faf7f1; font-weight:bold; font-size:13px; }
         input.chg-in, .fakein.chg-in { background:#FFE3A8 !important; border:2px solid #F0A24B !important; font-weight:bold; }
         .chgv { background:#FFE3A8; border-radius:3px; padding:0 4px; }
@@ -532,6 +539,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <button class="btn btn-warm-o btn-xs" id="btnAddOther"><i class="fa fa-plus"></i> 新增「其他」一列</button>
                         <span class="muted-help">　「其他」由生管或業務直接填金額與說明；製程列請用上方「自動帶入製程金額」。</span>
                     </div>
+                    <div class="sel-wrap" id="dSelWrap" style="display:none;"><div class="sel-ttl" id="dSelTtl"></div><div class="sel-grid" id="dSelGrid"></div></div>
                     <div class="fgrid" style="margin-top:10px;">
                         <div class="fld"><label>加成（1.1＝總金額×110%）</label>
                             <div style="display:flex;gap:6px;"><input type="number" step="0.01" min="1" max="3" id="f_rate" style="flex:1;">
@@ -2601,7 +2609,7 @@ function renderDeduct(){
                   ? '<td class="r"><div class="muted-help" style="text-align:left;">單價</div><input type="number" step="0.01" class="d-unit' + (unitVal !== '' && unitVal < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + unitVal + '"></td>'
                   : '<td class="r"><div class="muted-help" style="text-align:left;">金額</div><input type="number" step="0.01" class="d-amt' + (parseFloat(r.amount) < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>')
              + '<td>' + (isProc
-                  ? '<span class="muted-help">' + (r.transfer_no ? esc(r.transfer_no) : '<i>無移轉單（請填單價並勾選）</i>') + qtyTxt + (r.transfer_no && transferPrice !== '' ? ('　移轉單價 <b>' + transferPrice + '</b>') : '') + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
+                  ? '<span class="muted-help">' + (r.transfer_no ? esc(r.transfer_no) : '<i>無移轉單（請填單價並勾選）</i>') + qtyTxt + (r.transfer_no && transferPrice !== '' ? ('　移轉單價 <b class="d-tp' + ((unitVal !== '' && Math.abs(parseFloat(unitVal) - parseFloat(transferPrice)) >= 0.005) ? ' tp-diff' : '') + '" data-i="' + i + '" data-tp="' + transferPrice + '" title="' + (unitVal !== '' && Math.abs(parseFloat(unitVal) - parseFloat(transferPrice)) >= 0.005 ? '扣款單價已人工改成與移轉單價不同' : '') + '">' + transferPrice + '</b>') : '') + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
     var h = '', half = Math.ceil(order.length / 2);
@@ -2658,6 +2666,7 @@ function calcSum(){
     $('#dSum').html('製程小計 <span class="sv" data-k="proc">' + proc.toLocaleString() + '</span>　× 加成 ' + rate + ' ＝ <b class="sv" data-k="pr">' + pr.toLocaleString() + '</b>'
         + '　｜　其他 <b class="sv" data-k="other">' + other.toLocaleString() + '</b>'
         + '　｜　合計 <b class="sv" data-k="sum">' + tot.toLocaleString() + '</b>');
+    try { renderSelList(); } catch (e) {}
     DSUM_CUR = { proc: proc, pr: pr, other: other, sum: tot, unit: parseFloat($('#f_dunit').val()), tot: DTOTAL_NUM };
     if (!DSUM_BASE) DSUM_BASE = $.extend({}, DSUM_CUR);   // 開啟頁面後第一次算出的值當基準
     markDerived();
@@ -2689,6 +2698,32 @@ setInterval(function(){
     try { if (D && D.order && $('#f_dtotal').length) calcTotalDeduct(); } catch (e) {}
 }, 300);
 /* 總扣款金額以「伺服器 AJAX 重新計算」的結果為準：核准單價、數量、加成任一個變動就送出，回來後覆寫欄位 */
+/* 已勾選計入的製程／其他，列在扣款表格下方（三欄），方便一眼確認扣哪些 */
+function renderSelList(){
+    var items = [];
+    (DEDUCT_ROWS || []).forEach(function(r){
+        if (!Number(r.included)) return;
+        var isProc = (r.kind || 'process') !== 'other';
+        var a = parseFloat(r.amount), q = parseFloat(r.qty);
+        if (isProc) {
+            var u = (q > 0 && !isNaN(a)) ? Math.round(a / q * 100) / 100 : null;
+            items.push({ sn: parseInt(r.bom_sn, 10) || 0, tag: String(r.bom_sn == null ? '' : r.bom_sn),
+                         nm: (r.process_name || '') + (r.vendor_name ? '／' + r.vendor_name : ''), v: u, kind: 0 });
+        } else {
+            items.push({ sn: 99999, tag: '其他', nm: r.process_name || '', v: isNaN(a) ? null : a, kind: 1 });
+        }
+    });
+    items.sort(function(x, y){ return (x.kind - y.kind) || (x.sn - y.sn); });
+    var $w = $('#dSelWrap');
+    if (!items.length) { $w.hide(); return; }
+    var sum = 0; items.forEach(function(it){ if (it.kind === 0 && it.v != null) sum += it.v; });
+    $('#dSelTtl').text('計入扣款的製程（' + items.length + ' 項）　製程單價合計 ' + fmtMoney(Math.round(sum * 100) / 100) + ' 元/PCS');
+    $('#dSelGrid').html(items.map(function(it){
+        return '<div class="it" title="' + esc(it.nm) + '"><span class="sn">' + esc(it.tag) + '</span>' + esc(it.nm)
+             + '<b>' + (it.v == null ? '' : fmtMoney(it.v)) + '</b></div>';
+    }).join(''));
+    $w.show();
+}
 function setUnitVal(v){
     $('#f_dunit').val(v);
     $('#f_dunit_view').text(v === '' || v == null ? '' : fmtMoney(v));
@@ -2755,6 +2790,8 @@ $(document).on('input', '.d-amt', function(){ DEDUCT_ROWS[$(this).data('i')].amo
 $(document).on('input', '.d-unit', function(){
     var i = $(this).data('i'), r = DEDUCT_ROWS[i], u = parseFloat(this.value), q = parseFloat(r.qty);
     $(this).toggleClass('neg', u < 0);
+    var $tp = $('.d-tp[data-i="' + i + '"]');
+    if ($tp.length) { var tpv = parseFloat($tp.data('tp')); var diff = !isNaN(u) && !isNaN(tpv) && Math.abs(u - tpv) >= 0.005; $tp.toggleClass('tp-diff', diff).attr('title', diff ? '扣款單價已人工改成與移轉單價不同' : ''); }
     r.amount = isNaN(u) ? '' : (Math.round(u * q * 100) / 100);
     if (!isNaN(u) && u > 0 && !Number(r.included)) {   // 填了單價就自動勾選計入（沒移轉單的工序預設不計入）
         r.included = 1;

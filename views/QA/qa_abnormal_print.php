@@ -188,6 +188,10 @@ table.mem td.mng { background:#d9d9d9; -webkit-print-color-adjust:exact; print-c
 .att-page { break-before:page; page-break-before:always; break-inside:avoid; margin:0; }
 .att-page.att-p { page:att-p; }
 .att-page.att-l { page:att-l; }
+.dedlist { border:1px solid #000; border-top:0; padding:2px 5px; font-size:7.5pt; line-height:1.35; }
+.dedlist .g { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:0 10px; }
+.dedlist .it { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dedlist .it b { float:right; margin-left:6px; font-weight:normal; }
 .att-cap { font-weight:bold; font-size:10pt; height:6mm; line-height:6mm; }
 .att-page img { display:block; width:100%; object-fit:contain; border:1px solid #000; box-sizing:border-box; }
 .att-page.att-p img { height:262mm; }
@@ -504,6 +508,21 @@ if (!empty($o['src_qc_form_id'])) {
         <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS</td>
     </tr>
 </table>
+<?php
+// 計入扣款的製程（SN／名稱／扣款單價），三欄小字列在扣款表格下方
+$dedItems = [];
+foreach ($procRows as $pr) {
+    if (empty($pr['included'])) continue;
+    $q = (float)($pr['qty'] ?? 0); $a = $pr['amount'] === null ? null : (float)$pr['amount'];
+    $u = ($q > 0 && $a !== null) ? round($a / $q, 2) : null;
+    $dedItems[] = ['sn' => (int)($pr['bom_sn'] ?? 0), 'nm' => trim((string)($pr['process_name'] ?? '') . ((string)($pr['vendor_name'] ?? '') !== '' ? '／' . $pr['vendor_name'] : '')), 'u' => $u];
+}
+usort($dedItems, function ($x, $y) { return $x['sn'] <=> $y['sn']; });
+if ($dedItems): ?>
+<div class="dedlist"><b>計入製程（<?= count($dedItems) ?> 項，單價元/PCS）</b>
+    <div class="g"><?php foreach ($dedItems as $di): ?><div class="it"><?= (int)$di['sn'] ?> <?= h($di['nm']) ?><b><?= $di['u'] === null ? '' : h(rtrim(rtrim(number_format($di['u'], 2, '.', ','), '0'), '.')) ?></b></div><?php endforeach; ?></div>
+</div>
+<?php endif; ?>
 <table class="f">
     <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:20%"><col style="width:34%"></colgroup>
     <tr>
