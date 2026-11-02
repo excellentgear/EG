@@ -99,7 +99,9 @@ try {
         $lg = $db->prepare("INSERT INTO bom_ing_transfer_edit_log (transfer_id, field, old_value, new_value, edited_by) VALUES (?,?,?,?,?)");
         foreach ($chg as $f => $pair) $lg->execute([$tid, $f, $pair[0] !== '' ? $pair[0] : null, $pair[1] !== '' ? $pair[1] : null, (int)$pm['uid']]);
         $db->commit();
-        bmOut(['ok' => true, 'msg' => '已修改（' . implode('、', array_map(function ($f) { return ['note' => '備註', 'note2' => '備註二', 'transfer_date' => '日期'][$f]; }, array_keys($chg))) . '），已記錄修改人員與時間。']);
+        $row = ['note' => $newNote, 'note2' => $newNote2, 'transfer_date' => $newDate, 'edit_manual' => 1,
+                'edit_by_name' => (string)$pm['name'], 'edit_at' => (string)$db->query("SELECT DATE_FORMAT(NOW(),'%Y-%m-%d %H:%i:%s')")->fetchColumn()];
+        bmOut(['ok' => true, 'row' => $row, 'msg' => '已修改（' . implode('、', array_map(function ($f) { return ['note' => '備註', 'note2' => '備註二', 'transfer_date' => '日期'][$f]; }, array_keys($chg))) . '），已記錄修改人員與時間。']);
     }
 
     if ($action === 'set_month') {

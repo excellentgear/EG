@@ -1153,6 +1153,9 @@ try {
 
             // 製程大項篩選（GET 表單多選，select2 只是加強外觀，送出的仍是原生 select 的值）
             $('#fPType').select2({ placeholder: '製程大項（不選＝全部）', allowClear: true, width: '240px' });
+            // 製程大項、比較基準：選了就即時套用（稍等一下，多選連續點選不會每點一次就重新載入）
+            var fTimer = null;
+            $('#fPType, #fCmp').on('change', function() { clearTimeout(fTimer); fTimer = setTimeout(function() { $('#filterForm').trigger('submit'); }, 700); });
 
             if (!BM_CAN_VIEW) return;   // 以下都要有明細表格才跑得動
 
@@ -1410,9 +1413,10 @@ try {
             });
 
             /* ── 修改備註／備註二／日期（單筆） ───────────────────── */
-            var tlaEditId = 0;
+            var tlaEditId = 0, tlaEditRow = null;
             $('#transferTable tbody').on('click', '.tla-edit', function() {
-                var row = table.row($(this).closest('tr')).data();
+                tlaEditRow = table.row($(this).closest('tr'));
+                var row = tlaEditRow.data();
                 if (!row) return;
                 tlaEditId = row.transfer_id;
                 $('#tlaEditNo').text(row.transfer_no || '');
@@ -1431,7 +1435,12 @@ try {
                                  note: $('#tlaEditNote').val(), note2: $('#tlaEditNote2').val() }, null, 'json')
                     .done(function(res) {
                         if (!res || !res.ok) { $('#tlaEditErr').text((res && res.error) || '儲存失敗'); return; }
-                        alert(res.msg || '已儲存'); location.reload();
+                        // 不重新載入整頁：就地更新這一列，篩選條件與頁數都保留
+                        var d = $.extend({}, tlaEditRow.data(), res.row || {});
+                        tlaEditRow.data(d);
+                        table.draw(false);
+                        $('#tlaEditModal').modal('hide');
+                        var $tt = $('<div>').text(res.msg || '已儲存').css({position:'fixed',right:'20px',bottom:'24px',zIndex:99999,background:'#6B4423',color:'#fff',padding:'8px 14px',borderRadius:'4px',fontSize:'13px'}).appendTo('body'); setTimeout(function(){ $tt.fadeOut(300, function(){ $tt.remove(); }); }, 2500);
                     })
                     .fail(function(xhr) { var m = '儲存失敗'; try { m = JSON.parse(xhr.responseText).error || m; } catch (e) {} $('#tlaEditErr').text(m); })
                     .always(function() { $b.prop('disabled', false); });
