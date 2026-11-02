@@ -510,7 +510,7 @@ if (!empty($o['src_qc_form_id'])) {
     <tr>
         <td class="c lb">合計</td>
         <td class="c"><b><?= h(money($tot['total'])) ?></b></td>
-        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS</td>
+        <td class="c">數量　<?= h($o['deduct_qty'] === null ? '' : rtrim(rtrim(number_format((float)$o['deduct_qty'], 3, '.', ''), '0'), '.')) ?>　PCS<?php if ((float)($o['deduct_unit_amt'] ?? 0) != 0): ?>　扣款單價 <?= ((float)$o['deduct_unit_amt'] < 0 ? '-$' : '$') . number_format(abs((float)$o['deduct_unit_amt']), 2) ?> /PCS<?php endif; ?></td>
     </tr>
 </table>
 <?php
