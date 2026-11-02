@@ -2719,9 +2719,12 @@ function renderSelList(){
     if (!items.length) { $w.hide(); return; }
     var sum = 0; items.forEach(function(it){ if (it.kind === 0 && it.v != null) sum += it.v; });
     $('#dSelTtl').text('計入扣款的製程（' + items.length + ' 項）　製程單價合計 ' + fmtMoney(Math.round(sum * 100) / 100) + ' 元/PCS');
+    // 排序同扣款表格：先填滿左欄再右欄（5 項以內 2 欄，超過 5 項才用 3 欄）
+    var cols = items.length > 5 ? 3 : 2, per = Math.ceil(items.length / cols);
+    $('#dSelGrid').css({ 'grid-template-columns': 'repeat(' + cols + ', minmax(0,1fr))', 'grid-template-rows': 'repeat(' + per + ', auto)', 'grid-auto-flow': 'column' });
     $('#dSelGrid').html(items.map(function(it){
-        return '<div class="it" title="' + esc(it.nm) + '"><span class="sn">' + esc(it.tag) + '</span>' + esc(it.nm)
-             + '<b>' + (it.v == null ? '' : fmtMoney(it.v)) + '</b></div>';
+        return '<div class="it" title=""' + esc(it.nm) + '"><span class="sn">' + esc(it.tag) + '</span>' + esc(it.nm)
+             + '<b>' + (it.v == null ? '' : (it.v < 0 ? '-$' : '$') + fmtMoney(Math.abs(it.v))) + '</b></div>';
     }).join(''));
     $w.show();
 }

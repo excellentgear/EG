@@ -185,7 +185,8 @@ table.mem td.mng { background:#d9d9d9; -webkit-print-color-adjust:exact; print-c
 .mark-print img { max-width:100%; max-height:85mm; border:1px solid #000; }
 @page att-p { size:A4 portrait; margin:8mm 8mm 12mm; }
 @page att-l { size:A4 landscape; margin:8mm 8mm 12mm; }
-.att-page { break-before:page; page-break-before:always; break-inside:avoid; margin:0; }
+.att-page { break-before:page; page-break-before:always; break-inside:avoid; margin:0; overflow:hidden; }
+html,body{height:auto;}
 .att-page.att-p { page:att-p; }
 .att-page.att-l { page:att-l; }
 .dedlist { border:1px solid #000; border-top:0; padding:2px 5px; font-size:7.5pt; line-height:1.35; }
@@ -194,8 +195,8 @@ table.mem td.mng { background:#d9d9d9; -webkit-print-color-adjust:exact; print-c
 .dedlist .it b { float:right; margin-left:6px; font-weight:normal; }
 .att-cap { font-weight:bold; font-size:10pt; height:6mm; line-height:6mm; }
 .att-page img { display:block; width:100%; object-fit:contain; border:1px solid #000; box-sizing:border-box; }
-.att-page.att-p img { height:262mm; }
-.att-page.att-l img { height:178mm; }
+.att-page.att-p img { height:248mm; }
+.att-page.att-l img { height:164mm; }
 /* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
 table.f td.optrow { height:8mm; }
 table.f td.t { vertical-align:top; }
@@ -424,6 +425,7 @@ if (!empty($o['src_qc_form_id'])) {
     </tr>
 </table>
 
+<?php if (!empty($o['rounds']) || $slotData): /* 沒有勾選任何相關單位就整段不印 */ ?>
 <!-- 相關單位意見（紙本固定五格） -->
 <table class="f">
     <tr><td class="lb">相 關 單 位 意 見　<span class="small" style="font-weight:normal;">(僅勾選者 需回覆)</span></td></tr>
@@ -454,6 +456,7 @@ if (!empty($o['src_qc_form_id'])) {
                  data-dept="<?= h($sdept) ?>" data-pos="<?= h($spos) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
     </tr>
 </table>
+<?php endif; ?>
 
 <!-- 最終裁示（總經理／管理員指定的○○主管，見 qab_gm_label()） -->
 <table class="f">
@@ -519,9 +522,15 @@ foreach ($procRows as $pr) {
 }
 usort($dedItems, function ($x, $y) { return $x['sn'] <=> $y['sn']; });
 if ($dedItems): ?>
-<div class="dedlist"><b>計入製程（<?= count($dedItems) ?> 項，單價元/PCS）</b>
-    <div class="g"><?php foreach ($dedItems as $di): ?><div class="it"><?= (int)$di['sn'] ?> <?= h($di['nm']) ?><b><?= $di['u'] === null ? '' : h(rtrim(rtrim(number_format($di['u'], 2, '.', ','), '0'), '.')) ?></b></div><?php endforeach; ?></div>
-</div>
+<?php
+$nD = count($dedItems); $cols = $nD > 5 ? 3 : 2; $per = (int)ceil($nD / $cols);
+$fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number_format(abs($u), 2, '.', ','); };
+?>
+<table class="f dedlist"><tr><td colspan="<?= $cols * 3 ?>" class="lb" style="text-align:left;padding-left:6px;">計入扣款的製程（<?= $nD ?> 項，扣款單價 元/PCS）</td></tr>
+<?php for ($rw = 0; $rw < $per; $rw++): ?><tr><?php for ($cl = 0; $cl < $cols; $cl++): $di = $dedItems[$cl * $per + $rw] ?? null; ?>
+<td class="c" style="width:5%;"><?= $di ? (int)$di['sn'] : '' ?></td><td><?= $di ? h($di['nm']) : '' ?></td><td class="r" style="width:10%;text-align:right;"><?= $di ? h($fmtU($di['u'])) : '' ?></td>
+<?php endfor; ?></tr><?php endfor; ?>
+</table>
 <?php endif; ?>
 <table class="f">
     <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:20%"><col style="width:34%"></colgroup>
