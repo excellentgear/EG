@@ -186,6 +186,39 @@ case 'quick_notice': {
 }
 
 /* 品管檢驗 2.0 判定 NG 儲存後，問「要不要走自動開單（跳品管備註視窗）」——只回開關狀態，不暴露設定內容 */
+/* 圖面標註可選的「料號附件類別」設定與清單（2026-11-02） */
+case 'mark_cfg_get': {
+    $cats = $db->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1 ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    $sel = array_map('intval', (array)qab_setting_get($db, 'mark_attach_cats', []));
+    jout(true, ['cats' => $cats, 'selected' => $sel, 'is_admin' => !empty($perms['canAdmin']) ? 1 : 0]);
+}
+case 'mark_cfg_save': {
+    if (empty($perms['canAdmin'])) jerr('只有管理員可以設定');
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)json_decode((string)($_POST['cats'] ?? '[]'), true)))));
+    qab_setting_set($db, 'mark_attach_cats', $ids);
+    jout(true, ['selected' => $ids]);
+}
+case 'mark_attach_list': {
+    $dId = (int)($_POST['d_id'] ?? 0);
+    $sel = array_map('intval', (array)qab_setting_get($db, 'mark_attach_cats', []));
+    if ($dId <= 0 || !$sel) jout(true, ['rows' => [], 'configured' => $sel ? 1 : 0]);
+    $st = $db->prepare("SELECT id, filename, original_name, category_ids FROM part_attachments WHERE d_id=? AND deleted_at IS NULL ORDER BY uploaded_at DESC");
+    $st->execute([$dId]);
+    require_once __DIR__ . '/../common/imgedit_visibility.php';
+    $all = imgedit_strip_workfiles(imgedit_filter_attachment_rows($db, $st->fetchAll(PDO::FETCH_ASSOC), (int)$uid), $db);
+    $rows = [];
+    foreach ($all as $r) {
+        $cids = array_map('intval', array_filter(explode(',', (string)$r['category_ids'])));
+        if (!array_intersect($cids, $sel)) continue;
+        $nm = (string)($r['original_name'] ?: $r['filename']);
+        $ext = strtolower(pathinfo($nm, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'pdf'], true)) continue;
+        $rows[] = ['id' => (int)$r['id'], 'name' => $nm, 'type' => $ext === 'pdf' ? 'pdf' : 'image',
+                   'url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$r['id']];
+    }
+    jout(true, ['rows' => $rows, 'configured' => 1]);
+}
+
 case 'quick_state': {
     jout(true, ['auto' => (qab_quick_ready($db) && !empty($perms['canCreate'])) ? 1 : 0]);
 }
