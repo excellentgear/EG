@@ -912,7 +912,8 @@ case 'deduct_save': {
         $hasAmt = false;
         foreach (($fresh['deducts'] ?? []) as $dr) if (!empty($dr['included']) && $dr['amount'] !== null && (float)$dr['amount'] != 0.0) { $hasAmt = true; break; }
         $dno = trim((string)($fresh['deduct_notify_no'] ?? ''));
-        if ($hasAmt && $dno !== '' && empty($fresh['deduct_pm_at']) && empty($fresh['is_closed'])) {
+        $hasTotal = (float)($fresh['deduct_unit_amt'] ?? 0) > 0 && (float)($fresh['deduct_qty'] ?? 0) > 0;   // 總扣款金額＝單價×數量×加成，單價與數量都要有值
+        if ($hasAmt && $hasTotal && $dno !== '' && empty($fresh['deduct_pm_at']) && empty($fresh['is_closed'])) {
             $db->prepare("UPDATE qa_abnormal_order SET deduct_pm_by=?, deduct_pm_at=NOW() WHERE id=? AND deduct_pm_at IS NULL")->execute([$uid, $id]);
             $log($id, 'deduct_pm', '', '填妥金額與通知扣款單號，自動簽章（生管）');
         }
@@ -927,6 +928,11 @@ case 'deduct_sign': {      // 生管／品管簽章
     if ($who === 'qc' && !$perms['canQcSign'])   jerr('沒有品管簽章的權限');
     $col = $who === 'qc' ? 'deduct_qc' : 'deduct_pm';
     $clear = !empty($_POST['clear']);
+    if ($who === 'pm' && !$clear) {   // 生管簽章的條件與自動簽章相同：通知扣款單號格式正確、且已有總扣款金額（單價×數量）
+        $dn = trim((string)($o['deduct_notify_no'] ?? ''));
+        if (!preg_match('/^J-\d{3}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}(?:\s.*)?$/su', $dn)) jerr('通知扣款單號格式不正確（J-民國年3碼＋月日4碼＋流水3碼），不能簽章');
+        if (!((float)($o['deduct_unit_amt'] ?? 0) > 0 && (float)($o['deduct_qty'] ?? 0) > 0)) jerr('還沒有總扣款金額（扣款單價與數量都要有值），不能簽章');
+    }
     $db->prepare("UPDATE qa_abnormal_order SET {$col}_by=?, {$col}_at=" . ($clear ? 'NULL' : 'NOW()') . " WHERE id=?")
        ->execute([$clear ? null : $uid, (int)$o['id']]);
     $log((int)$o['id'], $col, '', $clear ? '取消簽章' : '簽章');

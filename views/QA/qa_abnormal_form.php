@@ -538,16 +538,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                                 <button type="button" class="btn btn-warm-o btn-xs" id="btnRateDefault" title="把目前的加成倍數存成「預設值」，之後新開的單自動帶入（已存的單不變）">設為預設</button></div>
                             <div class="muted-help" id="rateHint"></div></div>
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
-                        <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit" autocomplete="off"><div id="f_dunit_view" class="fakein" style="display:none;"></div></div>
-                        <div class="fld"><label>總扣款金額（單價×數量×加成）</label><div id="f_dtotal" class="fakein" title="核准扣款金額(元/PCS) × 數量(PCS) × 加成，自動計算"></div></div>
+                        <div class="fld"><label>扣款單價 (元/PCS)</label><input type="number" step="0.01" id="f_dunit" autocomplete="off"><div id="f_dunit_view" class="fakein" style="display:none;"></div></div>
+                        <div class="fld"><label>總扣款金額（單價×數量×加成）</label><div id="f_dtotal" class="fakein" title="扣款單價(元/PCS) × 數量(PCS) × 加成，自動計算"></div></div>
                         <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
-                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" name="qab_transfer_ref" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
+                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;"><div style="width:33%;min-width:260px;"><input type="text" id="f_dnotify" name="qab_transfer_ref" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div><div id="autoSignNote" class="muted-help" style="padding-top:6px;flex:1;min-width:240px;"><i class="fa fa-pencil"></i> 填妥正確格式的通知扣款單號，且已有<b>總扣款金額</b>（扣款單價、數量都有值）後，<b>自動簽章（生管）</b>，不需另外按簽章。</div></div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
                     <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v6</div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                        <button class="btn btn-warm-o btn-xs" id="btnSignPm"><i class="fa fa-pencil"></i> (生管) 簽章</button>
+                        <span class="ro-note"><b>(生管) 簽章</b>：填妥通知扣款後自動簽章</span>
                         <span class="ro-note" id="pmWho"></span>
                         <button class="btn btn-warm-o btn-xs" id="btnSignQc"><i class="fa fa-pencil"></i> (品管) 簽章</button>
                         <span class="ro-note" id="qcWho"></span>

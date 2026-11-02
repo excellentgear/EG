@@ -514,7 +514,7 @@ if (!empty($o['src_qc_form_id'])) {
         <td class="sig" rowspan="2" style="height:24mm;"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
     </tr>
     <tr>
-        <td class="lb">核准 扣款 金額 (元/PCS)</td>
+        <td class="lb">扣款單價 (元/PCS)</td>
         <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : money($o['deduct_unit_amt'])) ?></td>
     </tr>
     <tr>
