@@ -541,18 +541,14 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>扣款單價 (元/PCS)</label><input type="number" step="0.01" id="f_dunit" autocomplete="off"><div id="f_dunit_view" class="fakein" style="display:none;"></div></div>
                         <div class="fld"><label>總扣款金額（單價×數量×加成）</label><div id="f_dtotal" class="fakein" title="扣款單價(元/PCS) × 數量(PCS) × 加成，自動計算"></div></div>
                         <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
-                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;"><div style="width:33%;min-width:260px;"><input type="text" id="f_dnotify" name="qab_transfer_ref" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div><div id="autoSignNote" class="muted-help" style="padding-top:6px;flex:1;min-width:240px;"><i class="fa fa-pencil"></i> 填妥正確格式的通知扣款單號，且已有<b>總扣款金額</b>（扣款單價、數量都有值）後，<b>自動簽章（生管）</b>，不需另外按簽章。</div></div></div>
+                        <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;"><div style="width:33%;min-width:260px;"><div style="display:flex;gap:6px;"><input type="text" id="f_dnotify" name="qab_transfer_ref" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" data-eg-hint="J-1151030044" style="flex:1;"><button type="button" class="btn btn-warm btn-sm" id="btnDnotifyConfirm" title="確認後自動簽章（生管）並通知核准人員">確認</button></div><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div><div id="autoSignNote" class="muted-help" style="padding-top:6px;flex:1;min-width:240px;"><i class="fa fa-pencil"></i> 填妥正確格式的通知扣款單號，且已有<b>總扣款金額</b>（扣款單價、數量都有值）後，按「<b>確認</b>」→ <b>自動簽章（生管）</b>並<b>通知核准人員</b>（管理課 會計／主管）。</div></div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
                     <div id="dCalcErr" style="color:#DD5138;font-size:12px;text-align:right;"></div>
                     <div style="color:#bbb;font-size:11px;text-align:right;">金額計算版本 2026-11-02 v6</div>
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                        <span class="ro-note"><b>(生管) 簽章</b>：填妥通知扣款後自動簽章</span>
-                        <span class="ro-note" id="pmWho"></span>
                         <button class="btn btn-warm-o btn-xs" id="btnSignQc"><i class="fa fa-pencil"></i> (品管) 簽章</button>
-                        <span class="ro-note" id="qcWho"></span>
                         <button class="btn btn-warm btn-xs" id="btnApprove"><i class="fa fa-check"></i> 核准扣款金額（管理課 會計／主管）</button>
-                        <span class="ro-note" id="apprWho"></span>
                     </div>
                 </div>
             </div>
@@ -2625,7 +2621,7 @@ function renderDeduct(){
     $('#f_dunit').toggle(unitEditable); $('#f_dunit_view').toggle(!unitEditable);
     $('#secDeduct input').attr('autocomplete', 'off');
     $('#btnAddOther,#btnSaveDeduct,#btnAutoFill').toggle(canFill);
-    $('#btnSignPm').toggle(p.canDeductFill && !o.is_closed);
+    $('#btnDnotifyConfirm').toggle(!!(p.canDeductFill && !o.is_closed && !o.deduct_pm_at));
     $('#btnSignQc').toggle(p.canQcSign && !o.is_closed);
     $('#btnApprove').toggle(p.canDeductApprove && !o.is_closed);
     $('#pmWho').text(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : '（未簽）');
@@ -2795,12 +2791,12 @@ function dnotifyCheck(){
     return msg === '';
 }
 $(document).on('input blur', '#f_dnotify', dnotifyCheck);
-function saveDeduct(silent){
+function saveDeduct(silent, after){
     if (!dnotifyCheck()) { if (!silent) alert('通知扣款單號格式不正確，請修正後再儲存'); return; }
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
                           deduct_notify_no:$('#f_dnotify').val(), unit_manual: UNIT_MANUAL ? 1 : 0 },
-        function(){ DEDUCT_DIRTY = false; deductBadge('saved', silent); savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
+        function(){ DEDUCT_DIRTY = false; deductBadge('saved', silent); savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); if (after) after(); }, !!silent);
 }
 /* 扣款確認有改動、還沒存成功時，右下角明顯標示「未儲存」（自動存檔成功後消失；離開頁面前會提醒） */
 var DEDUCT_DIRTY = false;
@@ -2820,6 +2816,19 @@ function deductBadge(state, silent){
 }
 $(window).on('beforeunload', function(){ if (DEDUCT_DIRTY) return '扣款確認還有未儲存的內容'; });
 $('#btnSaveDeduct').on('click', function(){ saveDeduct(false); });
+/* 「確認」：先存檔 → 後端檢查（單號格式、總扣款金額）→ 自動簽章（生管）並通知核准人員 → 畫面 AJAX 更新（不重新載入頁面） */
+$(document).on('click', '#btnDnotifyConfirm', function(){
+    var $b = $(this);
+    if (!dnotifyCheck() || $.trim($('#f_dnotify').val()) === '') { alert('請先填寫格式正確的通知扣款單號'); return; }
+    $b.prop('disabled', true);
+    saveDeduct(true, function(){
+        post('deduct_confirm', { id: OID }, function(res){
+            $b.prop('disabled', false);
+            toast('已確認，已自動簽章（生管）並通知核准人員');
+        });
+    });
+    setTimeout(function(){ $b.prop('disabled', false); }, 8000);
+});
 $(document).on('click', '#deductDirty', function(){ saveDeduct(false); });
 // 扣款確認自動存檔（約 0.7 秒），存好後右下角顯示「已於 hh:mm:ss 自動存檔」；金額都是畫面即時重算
 $(document).on('change', '#secDeduct input, #secDeduct select', function(){

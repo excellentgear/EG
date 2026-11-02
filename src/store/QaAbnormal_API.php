@@ -906,18 +906,41 @@ case 'deduct_save': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     $log($id, 'deduct', '', '更新扣款明細');
-    // 2026-11-02：生管填妥金額與（格式正確的）通知扣款單號後自動簽章（「執行(生管簽章)」）；已簽過的不動
-    try {
-        $fresh = qab_order($db, $id);
-        $hasAmt = false;
-        foreach (($fresh['deducts'] ?? []) as $dr) if (!empty($dr['included']) && $dr['amount'] !== null && (float)$dr['amount'] != 0.0) { $hasAmt = true; break; }
-        $dno = trim((string)($fresh['deduct_notify_no'] ?? ''));
-        $hasTotal = (float)($fresh['deduct_unit_amt'] ?? 0) > 0 && (float)($fresh['deduct_qty'] ?? 0) > 0;   // 總扣款金額＝單價×數量×加成，單價與數量都要有值
-        if ($hasAmt && $hasTotal && $dno !== '' && empty($fresh['deduct_pm_at']) && empty($fresh['is_closed'])) {
-            $db->prepare("UPDATE qa_abnormal_order SET deduct_pm_by=?, deduct_pm_at=NOW() WHERE id=? AND deduct_pm_at IS NULL")->execute([$uid, $id]);
-            $log($id, 'deduct_pm', '', '填妥金額與通知扣款單號，自動簽章（生管）');
-        }
-    } catch (Throwable $e) {}
+    // 生管簽章不再於存檔時自動觸發，改按「通知扣款」旁的「確認」鈕（deduct_confirm）
+    jout(true, ['order' => qab_order($db, $id)]);
+}
+
+case 'deduct_confirm': {   // 生管按「確認」：檢查後自動簽章（生管），並通知核准人員（管理課 會計／主管）
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!$perms['canDeductFill']) jerr('沒有生管確認扣款的權限');
+    if (!empty($o['is_closed'])) jerr('這張單已結案');
+    $id = (int)$o['id'];
+    if (!empty($o['deduct_pm_at'])) jout(true, ['order' => qab_order($db, $id)]);   // 已確認過：不重複簽章、不重複通知
+    $dn = trim((string)($o['deduct_notify_no'] ?? ''));
+    if (!preg_match('/^J-\d{3}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}(?:\s.*)?$/su', $dn)) jerr('通知扣款單號格式不正確（J-民國年3碼＋月日4碼＋流水3碼），不能確認');
+    $cu = (float)($o['deduct_unit_amt'] ?? 0); $cq = (float)($o['deduct_qty'] ?? 0);
+    if (!($cu > 0 && $cq > 0)) jerr('還沒有總扣款金額（扣款單價與數量都要有值），不能確認');
+    $hasAmt = false;
+    foreach (($o['deducts'] ?? []) as $dr) if (!empty($dr['included']) && $dr['amount'] !== null && (float)$dr['amount'] != 0.0) { $hasAmt = true; break; }
+    if (!$hasAmt) jerr('扣款明細沒有計入的金額，不能確認');
+    $claim = $db->prepare("UPDATE qa_abnormal_order SET deduct_pm_by=?, deduct_pm_at=NOW() WHERE id=? AND deduct_pm_at IS NULL");
+    $claim->execute([$uid, $id]);
+    if ($claim->rowCount() > 0) {
+        $log($id, 'deduct_pm', '', '生管確認通知扣款 ' . $dn . '，自動簽章');
+        try {
+            $rate = (float)($o['surcharge_rate'] ?: 1);
+            $total = round($cu * $cq * ($rate > 0 ? $rate : 1), 2);
+            $targets = array_map(function ($u) { return ['type' => 'user', 'id' => (int)$u, 'mode' => 'read']; }, qab_deduct_approver_ids($db));
+            if ($targets) {
+                require_once __DIR__ . '/../common/qa_notify.php';
+                $no = (string)($o['abnormal_order_no'] ?? '');
+                eg_qa_insert_event($db, $id, '請核准扣款金額：' . $no,
+                    '異常單 ' . $no . ' 生管已確認扣款：總扣款金額 ' . number_format($total, 2) . ' 元（扣款單價 ' . rtrim(rtrim(number_format($cu, 2, '.', ''), '0'), '.')
+                    . ' × 數量 ' . rtrim(rtrim(number_format($cq, 3, '.', ''), '0'), '.') . ' × 加成 ' . $rate . '），通知扣款單號 ' . $dn . '。請到異常單核准。',
+                    $targets, null, $uid, ['ref_type' => 'QAB_L1', 'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
+            }
+        } catch (Throwable $e) { error_log('deduct_confirm notify: ' . $e->getMessage()); }
+    }
     jout(true, ['order' => qab_order($db, $id)]);
 }
 

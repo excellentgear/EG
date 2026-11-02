@@ -4771,3 +4771,20 @@ function qab_notify_deduct_fill(PDO $db, array $o, bool $force = false): void
             $targets, null, 0, ['ref_type' => 'QAB_L1', 'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
     } catch (Throwable $e) { error_log('qab_notify_deduct_fill: ' . $e->getMessage()); }
 }
+
+/** 扣款核准人員（管理課 會計／主管）：會計部門在職人員＋被指派「扣款核准」角色的在職人員 */
+function qab_deduct_approver_ids(PDO $db): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    $ids = [];
+    $d = array_map('intval', eg_org_dept_ids($db, 'acc_dept'));
+    if ($d) foreach (eg_people_list($db, ['dept_ids' => $d]) as $p) $ids[(int)$p['id']] = 1;
+    try {
+        $st = $db->query("SELECT DISTINCT ur.user_id FROM user_roles ur
+                          JOIN role_features rf ON rf.role_id = ur.role_id AND rf.feature_code = 'qab_deduct_approve'
+                          JOIN `user` u ON u.id = ur.user_id AND u.state = 1");
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $u) $ids[(int)$u] = 1;
+    } catch (Throwable $e) {}
+    return array_keys($ids);
+}
