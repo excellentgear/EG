@@ -405,6 +405,7 @@ function qab_ensure_schema(PDO $db): void
         'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
         // 2026-10-07：外包廠商回廠回報報廢數量自動開立——回指來源加工單流水帳，同一批流水帳
         // 累加報廢好幾次也只開一張單（存在就更新數量，不重複開單，見 qab_auto_open_from_outsource_return()）
+        'deduct_notified_sig' => "ADD COLUMN deduct_notified_sig VARCHAR(20) NULL COMMENT '上次通知扣款填寫時的決策簽名，決策有變才再通知'",
         'deduct_notified_at' => "ADD COLUMN deduct_notified_at DATETIME NULL COMMENT '決策報廢後已通知生管填扣款的時間（只通知一次）'",
         'abn_total_qty' => "ADD COLUMN abn_total_qty INT NULL COMMENT '品管填的異常總數(PCS)，≥檢驗NG數、≤本批送驗數；報廢決策後自動帶入扣款數量'",
         'rework_of_id' => "ADD COLUMN rework_of_id INT NULL COMMENT '重工後檢驗又NG自動開立：指回造成重工的那張原異常單，非此來源則為NULL'",
@@ -1404,6 +1405,8 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         throw new Exception('尚未設定「報工NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選一個類別');
     }
     $created = qab_create_order($db, $data);
+    // 2026-11-02：報工自動開立的單，異常總數＝報工NG累計數（報廢決策後自動帶入扣款數量；扣款數量欄品管可改）
+    $db->prepare("UPDATE qa_abnormal_order SET abn_total_qty=ng_qty WHERE id=? AND abn_total_qty IS NULL")->execute([$created['id']]);
     $ph = implode(',', array_fill(0, count($reportIds), '?'));
     $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph)")
        ->execute(array_merge([$created['id']], $reportIds));
@@ -4678,28 +4681,52 @@ function qab_rework_round_of(PDO $db, int $orderId): int
     return $round;
 }
 
+/** 扣款填寫通知的候選人：生管部門＋業務部門在職人員（與可填扣款的部門綁定一致） */
+function qab_deduct_notify_candidates(PDO $db): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    $d = array_merge(array_map('intval', eg_org_dept_ids($db, 'pm_dept')), array_map('intval', eg_org_dept_ids($db, 'sales_dept')));
+    if (!$d) return [];
+    return eg_people_list($db, ['dept_ids' => array_values(array_unique($d)), 'all_posts' => true]);
+}
+
+/** 管理員指定的扣款通知人員(id)；沒指定（或指定的人都已不在候選）時退回整個生管部門 */
+function qab_deduct_notify_ids(PDO $db): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    $cand = [];
+    foreach (qab_deduct_notify_candidates($db) as $p) $cand[(int)$p['id']] = 1;
+    $sel = array_values(array_filter(array_map('intval', (array)qab_setting_get($db, 'deduct_notify_users', [])), function ($u) use ($cand) { return isset($cand[$u]); }));
+    if ($sel) return $sel;
+    $ids = [];
+    $pm = array_map('intval', eg_org_dept_ids($db, 'pm_dept'));
+    if ($pm) foreach (eg_people_list($db, ['dept_ids' => $pm]) as $p) $ids[(int)$p['id']] = 1;
+    return array_keys($ids);
+}
+
 /**
- * 決策含報廢 → 立刻通知生管部門去填扣款確認（不必等結案才知道）。每張單只通知一次
- * （deduct_notified_at 搶佔）；失敗不影響決策存檔。2026-11-02 使用者交辦。
+ * 決策含報廢 → 立刻通知去填扣款確認；決策內容每次有變（簽名不同）就再通知一次，同一個決策重存不重複發。
+ * 失敗不影響決策存檔。2026-11-02 使用者交辦。
  */
-function qab_notify_deduct_fill(PDO $db, array $o): void
+function qab_notify_deduct_fill(PDO $db, array $o, bool $force = false): void
 {
     try {
         $id = (int)$o['id'];
-        if (!empty($o['deduct_notified_at']) || !empty($o['is_closed'])) return;
-        $claim = $db->prepare("UPDATE qa_abnormal_order SET deduct_notified_at=NOW() WHERE id=? AND deduct_notified_at IS NULL");
-        $claim->execute([$id]);
+        if (!empty($o['is_closed'])) return;
+        $sig = substr(md5(implode(',', array_map('intval', (array)($o['final']['ids'] ?? []))) . '|' . (string)($o['final']['from'] ?? '')), 0, 20);
+        $prev = (string)($o['deduct_notified_sig'] ?? '');
+        if (!$force && $prev === $sig) return;
+        $claim = $db->prepare("UPDATE qa_abnormal_order SET deduct_notified_at=NOW(), deduct_notified_sig=? WHERE id=? AND (deduct_notified_sig IS NULL OR deduct_notified_sig<>?)");
+        $claim->execute([$sig, $id, $sig]);
         if ($claim->rowCount() < 1) return;
-        require_once __DIR__ . '/org_role_lib.php';
-        require_once __DIR__ . '/people_lib.php';
         require_once __DIR__ . '/qa_notify.php';
-        $deptIds = array_map('intval', eg_org_dept_ids($db, 'pm_dept'));
-        $ids = [];
-        if ($deptIds) foreach (eg_people_list($db, ['dept_ids' => $deptIds]) as $p) $ids[(int)$p['id']] = 1;
-        if (!$ids) { $db->prepare("UPDATE qa_abnormal_order SET deduct_notified_at=NULL WHERE id=?")->execute([$id]); return; }
+        $ids = qab_deduct_notify_ids($db);
+        if (!$ids) { $db->prepare("UPDATE qa_abnormal_order SET deduct_notified_sig=? WHERE id=?")->execute([$prev !== '' ? $prev : null, $id]); return; }
         $no = (string)($o['abnormal_order_no'] ?? '');
-        $targets = array_map(function ($u) { return ['type' => 'user', 'id' => (int)$u, 'mode' => 'read']; }, array_keys($ids));
-        eg_qa_insert_event($db, $id, '請填寫扣款確認：' . $no,
+        $targets = array_map(function ($u) { return ['type' => 'user', 'id' => (int)$u, 'mode' => 'read']; }, $ids);
+        eg_qa_insert_event($db, $id, ($prev !== '' ? '決策已更新，請填寫扣款確認：' : '請填寫扣款確認：') . $no,
             '異常單 ' . $no . ' 已決策報廢，請到異常單的「扣款確認」填寫扣款金額與通知扣款單號' . ((int)($o['abn_total_qty'] ?? 0) > 0 ? '（異常總數 ' . (int)$o['abn_total_qty'] . ' PCS 已帶入數量）' : '') . '。',
             $targets, null, 0, ['ref_type' => 'QAB_L1', 'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
     } catch (Throwable $e) { error_log('qab_notify_deduct_fill: ' . $e->getMessage()); }

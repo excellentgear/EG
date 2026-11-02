@@ -436,6 +436,12 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <div id="qcNotifyList" class="muted-help">載入中…</div>
                 <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnQcNotifySave"><i class="fa fa-save"></i> 儲存通知名單</button>
                     <span id="qcNotifySaved" class="muted-help" style="margin-left:8px;"></span></div>
+                <hr>
+                <div class="note-box"><b>報廢後通知誰填扣款確認</b>：異常單決策含報廢（決策有更動也會再通知）時，系統會通知這裡勾選的人去填扣款確認。
+                    <b>沒有勾選任何人時，通知整個生管部門</b>。候選＝生管部門與業務部門的在職人員。</div>
+                <div id="deductNotifyList" class="muted-help">載入中…</div>
+                <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnDeductNotifySave"><i class="fa fa-save"></i> 儲存扣款通知對象</button>
+                    <span id="deductNotifySaved" class="muted-help" style="margin-left:8px;"></span></div>
             </div>
 
             <div class="tabp" id="tab-quick" style="display:none;">
@@ -1178,7 +1184,7 @@ function loadCfg(){
     if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); renderGmCfg(); } }, 'json');
     // 職稱清單要先載好，否則已存的那幾列會顯示成「不限職稱」（看起來像設定不見了）
     if (!POSITIONS.length) $.get(API, { action:'positions' }, function(res){ if (res && res.success) { POSITIONS = res.rows; renderDec(); } }, 'json');
-    loadQcNotify();
+    loadQcNotify(); loadDeductNotify();
     loadQuick();
 }
 
@@ -1197,6 +1203,24 @@ function loadQcNotify(){
             : '<span class="muted-help">目前品管部門沒有在職人員（先到「組織角色綁定」確認品管部門設定）</span>');
     }, 'json');
 }
+function loadDeductNotify(){
+    $.get(API, { action:'deduct_notify_meta' }, function(res){
+        if (!res || !res.success) { $('#deductNotifyList').text('載入失敗'); return; }
+        var sel = {}; (res.selected || []).forEach(function(i){ sel[i] = 1; });
+        var rows = res.candidates || [];
+        $('#deductNotifyList').html(rows.length
+            ? ('<div class="ask-pos">' + rows.map(function(p){
+                return '<label><input type="checkbox" class="dn-ck" value="' + p.id + '"' + (sel[p.id] ? ' checked' : '') + '> '
+                     + esc(p.name + '（' + p.dept_name + (p.position_name ? ' ' + p.position_name : '') + '）') + '</label>'; }).join('') + '</div>')
+            : '<span class="muted-help">目前生管／業務部門沒有在職人員</span>');
+    }, 'json');
+}
+$('#btnDeductNotifySave').on('click', function(){
+    var ids = $('.dn-ck:checked').map(function(){ return Number(this.value); }).get();
+    post('deduct_notify_save', { user_ids:JSON.stringify(ids) }, function(){
+        $('#deductNotifySaved').text(ids.length ? ('已儲存（' + ids.length + ' 人）') : '已儲存（未指定＝通知整個生管部門）');
+    });
+});
 $('#btnQcNotifySave').on('click', function(){
     var ids = $('.qc-notify-ck:checked').map(function(){ return Number(this.value); }).get();
     post('qc_notify_save', { user_ids:JSON.stringify(ids) }, function(){

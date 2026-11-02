@@ -1363,6 +1363,19 @@ case 'qc_notify_meta': {   // 讀取用：候選人（品管部門在職成員�
         return ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
     }, qab_auto_qc_notify_candidates($db)), 'selected' => qab_auto_qc_notify_list($db)]);
 }
+case 'deduct_notify_meta': {   // 扣款填寫通知對象：候選（生管＋業務部門在職人員）與目前已選；沒選＝整個生管部門
+    jout(true, ['candidates' => array_map(function ($p) {
+        return ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
+    }, qab_deduct_notify_candidates($db)), 'selected' => array_values(array_map('intval', (array)qab_setting_get($db, 'deduct_notify_users', [])))]);
+}
+case 'deduct_notify_save': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以設定扣款填寫的通知對象');
+    $valid = [];
+    foreach (qab_deduct_notify_candidates($db) as $p) $valid[(int)$p['id']] = 1;
+    $ids = array_values(array_unique(array_filter(array_map('intval', json_decode((string)($_POST['user_ids'] ?? '[]'), true) ?: []), function ($u) use ($valid) { return isset($valid[$u]); })));
+    qab_setting_set($db, 'deduct_notify_users', $ids);
+    jout(true, ['selected' => $ids]);
+}
 case 'qc_notify_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以設定自動開立異常單的品管通知名單');
     $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['user_ids'] ?? '[]'), true) ?: [])));
