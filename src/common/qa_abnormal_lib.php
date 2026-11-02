@@ -3581,6 +3581,7 @@ function qab_close_order(PDO $db, int $id, int $uid, bool $skipChecks = false): 
            ->execute([$uid, $uid, $id]);
         if ($own) $db->commit();
     } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
+    qab_retire_pending_notices($db, $id, 'gm', $uid);   // 結案＝所有待決策／待裁示通知都已無意義
     return ['scrap_no' => $scrapNo];
 }
 
@@ -3670,6 +3671,7 @@ function qab_save_decision(PDO $db, int $id, string $which, array $items, string
             $db->commit();
         } catch (Throwable $e) { $db->rollBack(); throw $e; }
         $released = qab_scrap_no_sync($db, $id);
+        qab_retire_pending_notices($db, $id, $which, $actorUid);
         return ['order' => qab_order($db, $id), 'children' => [], 'released_scrap_no' => $released];
     }
 
@@ -3726,8 +3728,43 @@ function qab_save_decision(PDO $db, int $id, string $which, array $items, string
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     qab_close_order($db, $id, $actorUid, true);   // 母單也一起結案（自己已無決策可待，不會配到報廐單號）
+    qab_retire_pending_notices($db, $id, $which, $actorUid);
     return ['order' => qab_order($db, $id), 'children' => $children, 'released_scrap_no' => ''];
 }
+
+/**
+ * 任一人完成某階段決策（含管理員補簽／代簽）後，把該階段仍掛著的「待處理」通知全部收掉，
+ * 避免同一件事其他收件人（另一位決策者、代理人、第二層…）鈴鐺／我的待辦還掛著已處理完的要求。
+ * 只動「這張單、這個階段」的待處理類通知（enddate 設為昨天）並幫處理者補上已閱回簽；
+ * 裁決結果、結案、徵詢等其他通知一律不碰。失敗不影響決策本身。
+ */
+function qab_retire_pending_notices(PDO $db, int $orderId, string $which, int $actorUid): void
+{
+    try {
+        $conds = ["(ref_type IN ('QA_DECIDE','QA_QC_REVIEW'))",
+                  "(ref_type='QAB_L1' AND title REGEXP '待裁決|待決策|轉呈決策|轉回第一層')"];
+        if ($which === 'gm') {
+            $conds[] = "(ref_type='QA_DECIDE_F')";
+            $conds[] = "(ref_type='QA' AND title REGEXP '待.*裁示')";
+        }
+        $st = $db->prepare("SELECT id FROM live_event WHERE ref_id=? AND (enddate IS NULL OR enddate >= CURDATE()) AND (" . implode(' OR ', $conds) . ")");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $eid) {
+            $eid = (int)$eid;
+            $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([$eid]);
+            if ($actorUid > 0) {
+                $rs = $db->prepare("SELECT id FROM live_event_response WHERE live_event_id=? AND user_id=?");
+                $rs->execute([$eid, $actorUid]);
+                if ($rid = $rs->fetchColumn()) {
+                    $db->prepare("UPDATE live_event_response SET read_at=COALESCE(read_at,NOW()), signed_at=COALESCE(signed_at,NOW()) WHERE id=?")->execute([$rid]);
+                } else {
+                    $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at) VALUES (?,?,NOW(),NOW())")->execute([$eid, $actorUid]);
+                }
+            }
+        }
+    } catch (Throwable $e) { error_log('[qab] retire pending notices failed: ' . $e->getMessage()); }
+}
+
 
 /**
  * 這張 BOM 已經「結案配發報廐單號」的確認報廐數量——待包裝／BOM總覽／檢驗表的「良品數」、
