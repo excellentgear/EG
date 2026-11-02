@@ -83,8 +83,8 @@ if (!isset($can_ingear_calc)) {
             <div class="ig-f"><label>齒數 z</label><input class="ig-in" id="ig-z" type="text" inputmode="numeric"></div>
             <div class="ig-f"><label>壓力角 α（度）</label><input class="ig-in" id="ig-al" type="text" inputmode="decimal" value="20"></div>
             <div class="ig-f"><label title="斜齒內齒輪才填；直齒填 0 或留空（結果與原本完全相同）。填了之後 m、α 視為法向（法向模數、法向壓力角）">螺旋角 β（度）</label><input class="ig-in" id="ig-beta" type="text" inputmode="decimal" value="0"></div>
-            <div class="ig-f"><label title="內齒的齒頂圓（內徑，較小的那一圈）。空白＝自動：分度圓徑 − 2m">齒頂圓徑 Di（空白自動）</label><input class="ig-in" id="ig-dtip" type="text" inputmode="decimal"></div>
-            <div class="ig-f"><label title="內齒的齒根圓（較大的那一圈）。空白＝自動：分度圓徑 + 2.5m">齒根圓徑 Df（空白自動）</label><input class="ig-in" id="ig-droot" type="text" inputmode="decimal"></div>
+            <div class="ig-f"><label title="內齒的齒頂圓（內徑，較小的那一圈）。空白＝自動：分度圓徑 − 2(1−x)m（x＝轉位係數）">齒頂圓徑 Di（空白自動）</label><input class="ig-in" id="ig-dtip" type="text" inputmode="decimal"></div>
+            <div class="ig-f"><label title="內齒的齒根圓（較大的那一圈）。空白＝自動：分度圓徑 + 2(1.25+x)m（x＝轉位係數）">齒根圓徑 Df（空白自動）</label><input class="ig-in" id="ig-droot" type="text" inputmode="decimal"></div>
         </div>
         <div id="ig-gerr" class="ig-err"></div>
         <div id="ig-tabs">
@@ -244,6 +244,7 @@ if (!isset($can_ingear_calc)) {
         }
         g.dTip = (dt !== null && dt > 0) ? dt : d - 2 * m;
         g.dRoot = (dr !== null && dr > 0) ? dr : d + 2.5 * m;
+        g.autoTip = !(dt !== null && dt > 0); g.autoRoot = !(dr !== null && dr > 0);
         if (g.dTip <= g.db) { bad('ig-dtip', true); msg = '齒頂圓徑不可小於或等於基圓徑 Ø' + f(g.db, 3); }
         else if (g.dRoot <= g.dTip) { bad('ig-droot', true); msg = '齒根圓徑必須大於齒頂圓徑'; }
         $('ig-gerr').textContent = msg;
@@ -336,6 +337,13 @@ if (!isset($can_ingear_calc)) {
     function keyBox(rows, j){ $('ig-key').innerHTML = '<div class="ig-card" style="margin-bottom:6px"><div class="ig-cb"><table class="ig-t">' + rows + '</table>' + badge(j) + '</div></div>'; }
     function colOf(j){ return j.lv === 0 ? '#F0A24B' : (j.lv === 1 ? '#E67E22' : '#DD5138'); }
 
+    // 留空的齒頂／齒根圓徑依轉位係數 x 自動算（x=0 時與原本 d−2m、d+2.5m 相同）：
+    //   齒頂圓徑 Di = d − 2(1−x)·m ；齒根圓徑 Df = d + 2(1.25+x)·m　（m 為法向模數）
+    function applyAutoDia(g, x){
+        if (x === null || !isFinite(x)) return;
+        if (g.autoTip) g.dTip = g.d - 2 * (1 - x) * g.mn;
+        if (g.autoRoot) g.dRoot = g.d + 2 * (1.25 + x) * g.mn;
+    }
     // 斜齒才多出的換算資料（直齒回傳空字串，畫面與原本完全相同）
     function helixRows(g){
         if (!g.beta) return '';
@@ -348,6 +356,7 @@ if (!isset($can_ingear_calc)) {
         var x = pv('ig-x'), D = pv('ig-d'), res = $('ig-res');
         bad('ig-x', x === null); bad('ig-d', false);
         if (x === null) { res.innerHTML = '<span class="ig-err">請輸入轉位係數 x（沒有轉位填 0）</span>'; clearGraphics(); return; }
+        applyAutoDia(g, x);
         var e = eOf(g, x), Ds = stdPin(g, e), h = '';
         h += '<table class="ig-t">' + helixRows(g) + row('分度圓齒槽寬 e' + (g.beta ? '（端面）' : ''), f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + rangeRows(g, e) + '</table>';
         if (D === null || D <= 0) {
@@ -376,6 +385,7 @@ if (!isset($can_ingear_calc)) {
         if (D1 === null || D1 <= 0 || M1 === null) { res.innerHTML = '<span class="ig-err">請輸入客戶銷徑與客戶跨銷距</span>'; clearGraphics(); return; }
         var e = solveE(g, M1, D1);
         if (e === null) { bad('ig-m1', true); res.innerHTML = '<span class="ig-err">用這組齒輪資料與客戶銷徑，反推不出合理的齒槽寬，請確認模數、齒數、壓力角與客戶跨銷距</span>'; clearGraphics(); return; }
+        applyAutoDia(g, xOf(g, e));
         var h = '<table class="ig-t">' + helixRows(g) + row('反推轉位係數 x', f(xOf(g, e), 6)) + row('反推分度圓齒槽寬 e', f(e, 5) + ' mm') +
                 row('此齒輪標準跨銷徑 <span style="color:#DD5138;font-size:10px">待確認</span>', f(stdPin(g, e), 4) + ' mm') + '</table>';
         $('ig-rng-b').innerHTML = '<table class="ig-t">' + rangeRows(g, e) + '</table>';
