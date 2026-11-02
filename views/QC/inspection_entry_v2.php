@@ -2351,7 +2351,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-body" style="padding:10px;">
             <div id="qcMarkPick">
                 <div class="muted-help" style="margin-bottom:6px;">請選擇這個料號要標註的圖面（點一下圖面）。圖面上看不到問題處也可以按「略過標註」直接開單。</div>
-                <div id="qcMarkPickList" style="display:flex;flex-wrap:wrap;gap:8px;max-height:430px;overflow:auto;"></div>
+                <div id="qcMarkPickList" style="display:flex;flex-wrap:wrap;gap:8px;max-height:360px;overflow:auto;"></div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #E4D3BC;">
+                    也可以從電腦選擇圖片或 PDF：<input type="file" id="qmLocalFile" accept="image/*,application/pdf" style="display:inline-block;">
+                </div>
+                <div id="qcMarkPdf" style="display:none;margin-top:8px;padding:8px;border:1px solid #E4D3BC;border-radius:6px;background:#FFFBF4;">
+                    <b>PDF：</b><span id="qmPdfName"></span>　選擇要標註的頁面
+                    <select id="qmPdfPage" style="width:90px;display:inline-block;"></select>
+                    <button type="button" class="btn btn-warm btn-sm" id="qmPdfUse"><i class="fa fa-check"></i> 使用此頁標註</button>
+                    <div style="margin-top:6px;"><canvas id="qmPdfPrev" style="border:1px solid #ccc;max-width:100%;max-height:300px;"></canvas></div>
+                </div>
             </div>
             <div id="qcMarkEdit" style="display:none;">
                 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
@@ -7177,24 +7186,78 @@ $(function(){
         if(qmCanvas){ try{ qmCanvas.dispose(); }catch(e){} qmCanvas=null; }
         if(cb) cb(qmBlob);
     }
+    function qcMarkShow(files){
+        $('#qcMarkPick').show(); $('#qcMarkEdit').hide(); $('#qmDone').hide(); $('#qmSkip').show(); $('#qcMarkPdf').hide();
+        $('#qmLocalFile').val('');
+        $('#qcMarkPickList').html((files||[]).length ? files.map(function(f){
+            var u='../pm/bom_download.php?inline=1&path='+encodeURIComponent(f.path)+'&filename='+encodeURIComponent(f.name);
+            var isPdf=(f.type==='pdf');
+            return '<div class="qm-pick" data-u="'+esc(u)+'" data-pdf="'+(isPdf?1:0)+'" data-name="'+esc(f.name)+'" style="width:230px;border:2px solid #E4D3BC;border-radius:6px;padding:4px;cursor:pointer;background:#fff;">'+
+                   (isPdf ? '<div style="height:150px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#C0762B;"><i class="fa fa-file-pdf-o"></i>&nbsp;PDF</div>'
+                          : '<img src="'+esc(u)+'" style="width:100%;height:150px;object-fit:contain;">')+
+                   '<div style="font-size:11px;word-break:break-all;">'+esc(f.name)+'</div></div>';
+        }).join('') : '<div class="muted-help">此料號／製令在系統中找不到圖面，可從下方選擇電腦上的圖片或 PDF，或直接略過。</div>');
+        $('#qcMarkModal').modal('show');
+    }
     function qcMarkStart(done){
         qmDoneCb=done; qmBlob=null;
         var partNo=(ctx&&ctx.part_no)||'', bom=(ctx&&ctx.bom)||'';
-        if(!partNo || !bom){ done(null); return; }
+        if(!partNo || !bom){ qcMarkShow([]); return; }
         $.post('../pm/part_viewer.php?only_drawing=1', { action:'get_files_by_did', d_id:partNo, bom:bom }, function(res){
-            var imgs=((res&&res.success&&res.files)||[]).filter(function(f){ return f.type!=='pdf'; });
-            if(!imgs.length){ done(null); return; }   // 沒有可標註的圖面：不打擾，直接進下一步
-            $('#qcMarkPick').show(); $('#qcMarkEdit').hide(); $('#qmDone').hide(); $('#qmSkip').show();
-            $('#qcMarkPickList').html(imgs.map(function(f){
-                var u='../pm/bom_download.php?inline=1&path='+encodeURIComponent(f.path)+'&filename='+encodeURIComponent(f.name);
-                return '<div class="qm-pick" data-u="'+esc(u)+'" style="width:230px;border:2px solid #E4D3BC;border-radius:6px;padding:4px;cursor:pointer;background:#fff;">'+
-                       '<img src="'+esc(u)+'" style="width:100%;height:150px;object-fit:contain;"><div style="font-size:11px;word-break:break-all;">'+esc(f.name)+'</div></div>';
-            }).join(''));
-            $('#qcMarkModal').modal('show');
-        },'json').fail(function(){ done(null); });
+            qcMarkShow((res&&res.success&&res.files)||[]);
+        },'json').fail(function(){ qcMarkShow([]); });
     }
+    // ---- PDF：載入 pdf.js、選頁、轉成圖後進標註 ----
+    var qmPdfDoc=null;
+    function qmLoadPdfJs(cb){
+        if(window.pdfjsLib){ cb(); return; }
+        var sc=document.createElement('script'); sc.src='../../resource/js/pdfjs/pdf.min.js';
+        sc.onload=function(){ window.pdfjsLib.GlobalWorkerOptions.workerSrc='../../resource/js/pdfjs/pdf.worker.min.js'; cb(); };
+        sc.onerror=function(){ alert('PDF 元件載入失敗'); };
+        document.head.appendChild(sc);
+    }
+    function qmPdfRender(pageNo, canvas, maxEdge){
+        return qmPdfDoc.getPage(pageNo).then(function(pg){
+            var v1=pg.getViewport({scale:1}), sc=Math.min(maxEdge/Math.max(v1.width,v1.height), 4);
+            var vp=pg.getViewport({scale:sc});
+            canvas.width=Math.round(vp.width); canvas.height=Math.round(vp.height);
+            return pg.render({ canvasContext:canvas.getContext('2d'), viewport:vp }).promise;
+        });
+    }
+    function qmOpenPdf(source, name){
+        qmLoadPdfJs(function(){
+            window.pdfjsLib.getDocument(source).promise.then(function(doc){
+                qmPdfDoc=doc;
+                var h=''; for(var i=1;i<=doc.numPages;i++) h+='<option value="'+i+'">第 '+i+' 頁</option>';
+                $('#qmPdfPage').html(h); $('#qmPdfName').text(name||''); $('#qcMarkPdf').show();
+                qmPdfRender(1, $('#qmPdfPrev')[0], 700);
+            }).catch(function(){ alert('PDF 無法開啟（可能有加密或檔案損毀）'); });
+        });
+    }
+    $('#qmPdfPage').on('change', function(){ if(qmPdfDoc) qmPdfRender(parseInt($(this).val(),10)||1, $('#qmPdfPrev')[0], 700); });
+    $('#qmPdfUse').on('click', function(){
+        if(!qmPdfDoc) return;
+        var cv=document.createElement('canvas');
+        qmPdfRender(parseInt($('#qmPdfPage').val(),10)||1, cv, 2600).then(function(){
+            var url=cv.toDataURL('image/png');
+            qmLoadFabric(function(){ qmOpenEditor(url); });
+        });
+    });
+    $('#qmLocalFile').on('change', function(){
+        var f=this.files&&this.files[0]; if(!f) return;
+        if(/\.pdf$/i.test(f.name) || f.type==='application/pdf'){
+            var fr=new FileReader();
+            fr.onload=function(){ qmOpenPdf({ data:new Uint8Array(fr.result) }, f.name); };
+            fr.readAsArrayBuffer(f);
+        } else if(/^image\//.test(f.type)){
+            var fr2=new FileReader();
+            fr2.onload=function(){ qmLoadFabric(function(){ qmOpenEditor(fr2.result); }); };
+            fr2.readAsDataURL(f);
+        } else alert('請選擇圖片或 PDF');
+    });
     $(document).on('click','.qm-pick', function(){
         var u=$(this).data('u');
+        if(Number($(this).data('pdf'))===1){ qmOpenPdf(u, $(this).data('name')); return; }
         qmLoadFabric(function(){ qmOpenEditor(u); });
     });
     function qmSetMode(m){
@@ -7377,18 +7440,23 @@ $(function(){
                      vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) }, qcAbSpec(it));
         });
         var $btn=$(this).prop('disabled',true);
+        $('#qcAbPickModal').modal('hide');
+        // 先挑圖面標註問題尺寸（可略過），再建立異常單並把標註圖附上
+        setTimeout(function(){ qcMarkStart(function(markBlob){
         $.post('../../src/store/QaAbnormal_API.php', {
             action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:qcAbPickFormId,
             measures: JSON.stringify(measures), selected: JSON.stringify(sel)
         }, function(res){
             $btn.prop('disabled',false);
             if(!res.success){ alert(res.message||'開立失敗'); return; }
-            $('#qcAbPickModal').modal('hide');
             $.post(API,{ action:'set_ncr_decision', qc_form_id:qcAbPickFormId, decision:'OPEN', abnormal_order_id:res.id }, function(){
-                try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
-                var d=qcAbPickDone; qcAbPickDone=null; if(d) d();
+                qcMarkUpload(res.id, markBlob, function(){
+                    try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
+                    var d=qcAbPickDone; qcAbPickDone=null; if(d) d();
+                });
             }, 'json');
         }, 'json').fail(function(x){ $btn.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
+        }); }, 350);
     });
     // 取消：不現在決定要不要開異常單（檢驗結果已存檔），之後可從歷程「開異常單」補開
     $('#btn-ng-later').on('click', function(){
