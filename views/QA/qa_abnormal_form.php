@@ -2626,9 +2626,17 @@ function calcSum(){
 var UNIT_MANUAL = false, UNIT_INIT = false;
 function calcUnit(proc, other, rate){
     var o = D.order || {}, q = parseFloat($('#f_dqty').val());
-    // 單價＝（製程小計＋其他）÷ 數量，不含加成；總扣款金額再由「單價 × 數量 × 加成」算出（避免加成被算兩次）
-    var total = Math.round((proc + other) * 100) / 100;
-    var auto = (q > 0 && total > 0) ? Math.round(total / q * 100) / 100 : '';
+    // 核准單價(元/PCS)＝「有勾選計入」的各製程單價相加（各列單價＝該列金額÷該列數量，與表格顯示的單價相同），
+    // 「其他」列沒有數量，用 金額÷扣款數量 換成每 PCS；不含加成，總扣款金額再由「單價 × 數量 × 加成」算出
+    var sumUnit = 0, any = false;
+    (DEDUCT_ROWS || []).forEach(function(r){
+        if (!Number(r.included)) return;
+        var a = parseFloat(r.amount); if (isNaN(a)) return;
+        if ((r.kind || 'process') === 'other') { if (q > 0) { sumUnit += Math.round(a / q * 100) / 100; any = true; } return; }
+        var rq = parseFloat(r.qty);
+        if (rq > 0) { sumUnit += Math.round(a / rq * 100) / 100; any = true; }
+    });
+    var auto = (any && sumUnit > 0) ? Math.round(sumUnit * 100) / 100 : '';
     if (!UNIT_INIT) {   // 載入後第一次：已存的值跟自動值不同＝人工填過
         UNIT_INIT = true;
         var st = o.deduct_unit_amt;
