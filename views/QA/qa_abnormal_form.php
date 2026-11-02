@@ -2630,8 +2630,10 @@ function calcSum(){
         if ((r.kind || 'process') === 'other') other += a; else proc += a;
     });
     var pr = Math.round(proc * rate * 100) / 100;
-    calcUnit(proc, other, rate);
-    calcTotalDeduct();
+    var uNow = calcUnit(proc, other, rate);
+    calcTotalDeduct(uNow);
+    // 保險：下一個 tick 再用畫面上最新的單價、數量、加成算一次，確保「總扣款金額」一定跟單價同步
+    setTimeout(function(){ calcTotalDeduct(); }, 0);
     var tot = Math.round((pr + other) * 100) / 100;
     $('#dSum').html('製程小計 <span class="sv" data-k="proc">' + proc.toLocaleString() + '</span>　× 加成 ' + rate + ' ＝ <b class="sv" data-k="pr">' + pr.toLocaleString() + '</b>'
         + '　｜　其他 <b class="sv" data-k="other">' + other.toLocaleString() + '</b>'
@@ -2656,12 +2658,13 @@ function calcUnit(proc, other, rate){
         if (rq > 0) { sumUnit += Math.round(a / rq * 100) / 100; any = true; }
     });
     var auto = (any && sumUnit > 0) ? Math.round(sumUnit * 100) / 100 : '';
-    if (o.deduct_appr_at || UNIT_MANUAL) return;
+    if (o.deduct_appr_at || UNIT_MANUAL) return parseFloat($('#f_dunit').val());
     $('#f_dunit').val(auto === '' ? '' : String(auto));
+    return auto === '' ? NaN : auto;
 }
 $(document).on('input', '#f_dunit', function(){ UNIT_MANUAL = true; calcTotalDeduct(); });
-function calcTotalDeduct(){
-    var u = parseFloat($('#f_dunit').val()), q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
+function calcTotalDeduct(uIn){
+    var u = (uIn === undefined) ? parseFloat($('#f_dunit').val()) : uIn, q = parseFloat($('#f_dqty').val()), r = parseFloat($('#f_rate').val());
     if (!(r > 0)) r = 1;
     $('#f_dtotal, #f_dunit').toggleClass('neg', parseFloat($('#f_dunit').val()) < 0);
     DTOTAL_NUM = (u > 0 && q > 0) ? Math.round(u * q * r * 100) / 100 : null;
