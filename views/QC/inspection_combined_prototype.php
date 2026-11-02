@@ -319,9 +319,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $draftFid = (int)$dq->fetchColumn();
             } catch (Exception $e) {}
 
+            // 2026-11-02：這一站有「決策重工、等重工檢驗」的異常單 → 前端標示重工檢驗（沒有就是 null，其餘行為不變）
+            $reworkCtx = null;
+            try { $reworkCtx = qab_rework_open_for_fid($pdo, $fid); } catch (Throwable $e) {}
             echo json_encode([
                 'success' => true,
                 'context' => [
+                    'rework'      => $reworkCtx,
                     'bom_ing_fid' => (int)$ctx['bom_ing_fid'],
                     'bom'         => $ctx['bom'],
                     'part_no'     => $ctx['part_no'],
@@ -622,6 +626,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $user_id,
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
+            // 重工檢驗：後端自己確認這一站真的有待重工檢驗的異常單才記，不採信前端送來的id
+            if ((int)($_POST['rework_order_id'] ?? 0) > 0) {
+                try {
+                    $rwOpen = qab_rework_open_for_fid($pdo, $fid);
+                    if ($rwOpen && $rwOpen['id'] === (int)$_POST['rework_order_id']) {
+                        $pdo->prepare("UPDATE qc_check_form SET rework_of_order_id=? WHERE qc_form_id=?")->execute([$rwOpen['id'], $qc_form_id]);
+                    }
+                } catch (Throwable $e) {}
+            }
 
             // --- 2c-2. 本張檢驗單使用的量具（2026-09-16：綁在整張單，不綁到個別檢驗項目）---
             qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');

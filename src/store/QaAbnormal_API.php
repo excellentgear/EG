@@ -142,6 +142,11 @@ case 'auto_open_from_qc': {
     $selected = json_decode((string)($_POST['selected'] ?? '[]'), true);
     if (!is_array($selected)) $selected = [];
     $qcNote = isset($_POST['qc_note']) ? (string)$_POST['qc_note'] : null;
+    // 2026-11-02：線上檢驗 v2 自動開單時品管備註必填（只有 v2 會送 qc_note_req，其他呼叫端行為不變）
+    if (!empty($_POST['qc_note_req'])) {
+        $chk = trim(preg_replace('/^【首件[^】]*】/u', '', (string)$qcNote));
+        if ($chk === '') jerr('請填寫品管備註');
+    }
     try {
         $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $qcNote);
     } catch (Throwable $e) { jerr($e->getMessage()); }
@@ -808,16 +813,23 @@ case 'save_gm': {
     if ($signBy) $byDeputy = 0;   // 補登的是「當時那個人自己簽的」，不是代簽
     try {
         $res = qab_save_decision($db, $id, 'gm', $itemsIn, (string)($_POST['gm_note'] ?? ''), $signBy, $signAt, $uid, [
-            'gm_deduct' => !empty($_POST['gm_deduct']), 'capa_order_no' => (string)($_POST['capa_order_no'] ?? ''), 'gm_by_deputy' => $byDeputy,
+            'gm_deduct' => array_key_exists('gm_deduct', $_POST) ? !empty($_POST['gm_deduct']) : !empty($o['gm_deduct']), 'capa_order_no' => (string)($_POST['capa_order_no'] ?? ''), 'gm_by_deputy' => $byDeputy,
         ]);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     if (!empty($o['quick_mode']) && !$bfMode) {
         try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, qab_gm_label($db)); } catch (Throwable $e) {}
     }
+    // 2026-11-02：裁示含「需矯正」且還沒有矯正單 → 自動開立並連結（本張與拆出的子單）
+    try {
+        $uName = (string)($db->query("SELECT user_cname FROM user WHERE id=" . (int)$uid)->fetchColumn() ?: '');
+        $carNo = qab_car_auto_create($db, $id, $uid, $uName);
+        if ($carNo !== '') { $log($id, 'capa_auto', '', '自動開立矯正單 ' . $carNo); $res['order'] = qab_order($db, $id); }
+        foreach (($res['children'] ?? []) as $ch) { $cid = (int)(is_array($ch) ? ($ch['id'] ?? 0) : $ch); if ($cid) qab_car_auto_create($db, $cid, $uid, $uName); }
+    } catch (Throwable $e) {}
     if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（最終裁示改為非報廢，收回暫時保留的報廢單號）');
     $optMap = qab_option_map($db);
     $itemNames = array_map(function ($it) use ($optMap) { return $optMap[(int)$it['opt_id']]['name'] ?? ''; }, $itemsIn);
-    $log($id, 'gm', implode('、', $o['gm_names']), implode('、', $itemNames) . ($res['children'] ? '（拆分為 ' . count($res['children']) . ' 張子單）' : '') . (!empty($_POST['gm_deduct']) ? '（扣款）' : ''));
+    $log($id, 'gm', implode('、', $o['gm_names']), implode('、', $itemNames) . ($res['children'] ? '（拆分為 ' . count($res['children']) . ' 張子單）' : '') . '');
     jout(true, ['order' => $res['order']]);
 }
 

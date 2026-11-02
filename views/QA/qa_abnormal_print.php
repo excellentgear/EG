@@ -181,6 +181,7 @@ table.mem .mextra { font-size:7.5pt; }
 table.mem .mdim-rng { font-size:8.5pt; color:#333; }
 table.mem td.mng { background:#d9d9d9; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 .mark-print { margin:4px 0; page-break-inside:avoid; }
+.mark-attach { page-break-before:always; break-before:page; }
 .mark-print img { max-width:100%; max-height:85mm; border:1px solid #000; }
 /* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
 table.f td.optrow { height:8mm; }
@@ -319,6 +320,8 @@ svg.eg-stamp-tpl { height:auto !important; }
                 }
                 // 項目名稱本身就是標準值時（例：24.8）不重複印第二次
                 if ($stdTxt !== '' && $baseName === $stdTxt) $stdTxt = '';
+                // 範圍型標準（79.98 ~ 79.992）下方已印 [範圍]，右側不重複
+                if ($sp && ($sp['mode'] ?? '') === 'RANGE' && $lo !== null && $hi !== null) $stdTxt = '';
             ?>
             <div class="mdim-line"><span class="mdim-name"><?= h($nmTxt) ?></span>
                 <?php if ($stdTxt !== ''): ?><span class="mstd"><?= h($stdTxt) ?></span><?php endif; ?>
@@ -348,12 +351,8 @@ if (!empty($o['src_qc_form_id'])) {
         if (mb_strpos($nm, '圖面標註') === 0 && preg_match('/\.(png|jpe?g|gif|webp)$/i', $nm)) $markImgs[] = (int)$ma['id'];
     }
 }
-if ($markImgs): ?>
-<div class="mark-print">
-    <div class="small" style="font-weight:bold;margin:2px 0;">圖面標註（品管標示問題尺寸）</div>
-    <?php foreach ($markImgs as $mid): ?><img src="../../src/store/qa_attachment_download.php?id=<?= $mid ?>" alt="圖面標註"><?php endforeach; ?>
-</div>
-<?php endif; ?>
+// 圖面標註改以附件頁印在最後（見檔尾），不夾在表單中間
+?>
 
 <!-- 異常現象＋異常原因分類，右邊一個合併的承辦簽章欄（比照紙本 M17:O21）
      2026-09-29 使用者交辦：原因分類移到「異 常 現 象」的下方（原本在上方），
@@ -537,6 +536,12 @@ var SPLIT_CHILDREN = <?= json_encode($o['split_children'], JSON_UNESCAPED_UNICOD
 </script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?>"></script>
 <!-- 有指定圖章模板時這一支一定要一起載，漏載會靜默退回預設章（ai-rules/18 第11條） -->
+<?php if ($markImgs): ?>
+<div class="mark-print mark-attach">
+    <div class="small" style="font-weight:bold;margin:2px 0;">附件：圖面標註（品管標示問題尺寸）　<?= h($o['abnormal_order_no'] ?? '') ?></div>
+    <?php foreach ($markImgs as $mid): ?><img src="../../src/store/qa_attachment_download.php?id=<?= $mid ?>" alt="圖面標註"><?php endforeach; ?>
+</div>
+<?php endif; ?>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script>
 (function () {
@@ -561,7 +566,7 @@ var SPLIT_CHILDREN = <?= json_encode($o['split_children'], JSON_UNESCAPED_UNICOD
            把它們算進去會變成每張單都說會印兩頁（自己踩過） */
         var printH = 0;
         [].forEach.call(document.body.children, function (t) {
-            if (t.classList.contains('noprint') || t.tagName === 'SCRIPT') return;
+            if (t.classList.contains('noprint') || t.classList.contains('mark-attach') || t.tagName === 'SCRIPT') return;
             printH += t.getBoundingClientRect().height;
         });
         if (printH > onePage + 2) {

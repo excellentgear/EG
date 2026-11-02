@@ -799,7 +799,7 @@ function buildStaticOpts(){
     }).join(''));
     $('#gmOpts').html((D.gm_opts || []).map(function(o){
         return '<label data-opt="' + o.opt_id + '"><input type="checkbox" class="gchk" value="' + o.opt_id + '"> ' + esc(o.name) + '</label>';
-    }).join('') + '<label data-opt="deduct" style="border-color:var(--coral);"><input type="checkbox" id="g_deduct"> 扣款</label>');
+    }).join(''));   // 2026-11-02：技術課主管裁示不再有「扣款」（扣款屬矯正單，異常單報廢才走扣款確認）
     // 量測列：預設先給 3 列（比照紙本），之後 render() 依實際筆數改用 mtRenderRows()
     mtRenderRows(3);
     // 部門下拉（徵詢用）
@@ -1302,7 +1302,7 @@ function applyConcise(){
     $('#bomMoreBox, #respPeopleBox, #qcReviewBox').addClass('qk-hide');
     $('#f_decider').closest('.fgrid').addClass('qk-hide');
     if (!(o.rounds || []).length && !$('#qkAskChk').is(':checked')) $('#secRound').addClass('qk-hide');   // 勾了「送相關單位填寫意見」才出現
-    if (Number(o.gm_deduct) !== 1) $('#secDeduct').addClass('qk-hide');
+    if (Number(o.gm_deduct) !== 1 && !(o.final && o.final.is_scrap)) $('#secDeduct').addClass('qk-hide');
 }
 /* 雙層快速決策的單：不可更改的欄位直接顯示文字，不要灰掉的輸入框（畫面精簡）。
    只加一個純顯示元素＋把原控制項藏起來（值仍在，存檔照舊讀得到）；每次 render 後重做。 */
@@ -1823,7 +1823,6 @@ function slotResultHtml(k){
         return '<div class="sg-res">' + (D.gm_opts || []).map(function(op){
                 return '<label><input type="checkbox" class="sg-gm" value="' + op.opt_id + '"'
                      + ((o.gm_ids || []).indexOf(Number(op.opt_id)) >= 0 ? ' checked' : '') + '> ' + esc(op.name) + '</label>'; }).join('')
-             + '<label style="margin-left:6px;"><input type="checkbox" class="sg-gmded"' + (Number(o.gm_deduct) ? ' checked' : '') + '> 需扣款</label>'
              + '</div><div class="sg-qtybox" style="display:none;margin:4px 0;"></div>'
              + '<textarea class="sg-gmnote" rows="2" placeholder="裁示說明">' + esc(o.gm_note || '') + '</textarea>'
              + '<div class="muted-help" style="font-size:11px;">勾選超過一項＝依數量拆成好幾張子單，跟上面⑤區同一套規則</div>';
@@ -1992,7 +1991,6 @@ function saveSignRow($tr){
         if (!gitems.length) return;
         if (!sgItemsValid(gitems)) return;
         post('save_gm', { id:OID, items:JSON.stringify(gitems), gm_note:$tr.find('.sg-gmnote').val(),
-                          gm_deduct:$tr.find('.sg-gmded').prop('checked') ? 1 : '',
                           sign_date:date, sign_by:who || '' },
             function(res){
                 savedAt('#savedSign');
@@ -2516,7 +2514,7 @@ function saveGm(){
     if (!items.length) return;
     if (items.length > 1) { recalcDecSum('gm'); if ($('#btnGmSplitSave').prop('disabled')) return; }
     post('save_gm', { id:OID, items: JSON.stringify(items), gm_note: $('#f_gm_note').val(),
-                      capa_order_no: $('#f_capa').val(), gm_deduct: $('#g_deduct').prop('checked') ? 1 : '' },
+                      capa_order_no: $('#f_capa').val() },
         function(res){
             savedAt('#savedGm'); renderDeduct();
             if (res.order && res.order.split_children && res.order.split_children.length) {

@@ -2393,7 +2393,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         </div>
         <div class="modal-body">
             <p id="qcNoteInfo" style="font-size:14px;"></p>
-            <label for="qcNoteText" style="font-weight:bold;">品管備註（選填）</label>
+            <label for="qcNoteText" style="font-weight:bold;">品管備註（必填）</label>
+            <div id="qcNoteErr" style="display:none;color:#DD5138;font-size:12px;margin-bottom:3px;">請填寫品管備註，說明不良狀況或判斷，才能自動開立異常單。</div>
             <textarea id="qcNoteText" class="form-control" rows="4" maxlength="2000" placeholder="想補充給裁決者看的說明，會自動寫入異常單的「品管備註」"></textarea>
             <div class="muted-help" style="margin-top:6px;">按下確定後，系統會自動開立異常單並通知第一層裁決者；判定不良的量測項目會自動列入。</div>
         </div>
@@ -5133,6 +5134,9 @@ $(function(){
             if(ctx.bom_closed){
                 modeMsg += '<br><i class="fa fa-archive"></i> 這筆 BOM 已結案'+(ctx.bom_closed_at?'（結案日 '+esc(ctx.bom_closed_at)+'）':'')+'，正在補建這一站的檢驗表。';
             }
+            if(ctx.rework){
+                modeMsg += '<br><span style="display:inline-block;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;">重工檢驗</span> 原異常單 <b>'+esc(ctx.rework.no)+'</b> 決策重工（數量 '+esc(ctx.rework.qty)+'），這次是重工回廠後的檢驗；若又判 NG，開出的異常單會標「重工後異常」。';
+            }
             $('#mode-banner').html(modeMsg);
             if(res.tools && res.tools.length) TOOLS = res.tools;
             state.is_supervisor = !!res.is_supervisor;
@@ -7034,7 +7038,7 @@ $(function(){
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), update_std:($('#chk-save-std').is(':checked') && !faceOn())?'1':'0',
-            insp_kind:state.inspKind, face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||''),
+            insp_kind:state.inspKind, rework_order_id:((ctx&&ctx.rework&&ctx.rework.id)||''), face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||''),
             container_1:ctnFields.containers[0], qty_1:ctnFields.quantities[0],
             container_2:ctnFields.containers[1], qty_2:ctnFields.quantities[1],
             items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
@@ -7379,7 +7383,7 @@ $(function(){
     function openQcNote(qcFormId, s, items, done){
         qcNoteCtx={ qcFormId:qcFormId, items:items, done:done, mark:null };
         $('#qcNoteInfo').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。系統將<b>自動開立品質異常單</b>並通知第一層裁決者。');
-        $('#qcNoteText').val('');
+        $('#qcNoteText').val('').css('border-color',''); $('#qcNoteErr').hide();
         $('#btnQcNoteGo').prop('disabled', false);
         // 先挑圖面標註問題尺寸（沒有圖面或略過都直接進品管備註）
         var ctxNow=qcNoteCtx;
@@ -7387,10 +7391,15 @@ $(function(){
     }
     $('#btnQcNoteGo').on('click', function(){
         if(!qcNoteCtx) return;
+        if(!$.trim($('#qcNoteText').val())){
+            $('#qcNoteText').css('border-color','#DD5138').focus();
+            $('#qcNoteErr').show();
+            return;
+        }
         var c=qcNoteCtx, $b=$(this).prop('disabled',true);
         var built=qcAbBuildMeasures(c.items), sel=built.sel, measures=built.measures;
         $.post('../../src/store/QaAbnormal_API.php', {
-            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId,
+            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:c.qcFormId, qc_note_req:1,
             measures:JSON.stringify(measures), selected:JSON.stringify(sel),
             // 多面分段檢驗：把「首件・第N顆・A面」帶進異常說明（品管備註最前面）
             qc_note:(faceOn() ? ('【首件 第'+state.face.piece+'顆 '+state.face.code+'面】') : '')+$('#qcNoteText').val()

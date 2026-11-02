@@ -405,6 +405,7 @@ function qab_ensure_schema(PDO $db): void
         'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
         // 2026-10-07：外包廠商回廠回報報廢數量自動開立——回指來源加工單流水帳，同一批流水帳
         // 累加報廢好幾次也只開一張單（存在就更新數量，不重複開單，見 qab_auto_open_from_outsource_return()）
+        'rework_of_id' => "ADD COLUMN rework_of_id INT NULL COMMENT '重工後檢驗又NG自動開立：指回造成重工的那張原異常單，非此來源則為NULL'",
         'src_outsource_batch_id' => "ADD COLUMN src_outsource_batch_id INT NULL COMMENT '由哪一筆加工單流水帳(bom_ing_outsource_batch.batch_id)回廠報廐自動開立，非此來源則為NULL'",
     ];
     foreach ($need4 as $c => $sql) if (!in_array($c, $cols4, true)) $add4[] = $sql;
@@ -435,6 +436,7 @@ function qab_ensure_schema(PDO $db): void
         }
     } catch (Throwable $e) {}
 
+    try { qab_rework_schema($db); } catch (Throwable $e) {}
     qab_seed_defaults($db);
 }
 
@@ -1531,6 +1533,17 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
 
     $autoNote = mb_substr('品管於線上檢驗判定NG時自動開立（檢驗單號 ' . (string)$qc['insp_no'] . '）', 0, 255);
     $phenomenon = '線上檢驗判定不良（檢驗單號 ' . (string)$qc['insp_no'] . '），詳細量測數據見上方「量測尺寸與實測值」。';
+    // 2026-11-02：這張檢驗單是「重工後檢驗」→ 異常現象開頭標明是重工後異常，並記下原異常單
+    $reworkOf = 0;
+    try {
+        $rwq = $db->prepare("SELECT rework_of_order_id FROM qc_check_form WHERE qc_form_id=?");
+        $rwq->execute([$qcFormId]);
+        $reworkOf = (int)$rwq->fetchColumn();
+    } catch (Throwable $e) {}
+    if ($reworkOf > 0) {
+        $rwNo = (string)$db->query("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=" . $reworkOf)->fetchColumn();
+        $phenomenon = '【重工後異常】原異常單 ' . $rwNo . ' 決策重工，重工回廠檢驗仍不良。' . $phenomenon;
+    }
 
     $data = [
         'kind' => 'bom',
@@ -1557,6 +1570,7 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
 
     $db->prepare("UPDATE qa_abnormal_order SET src_qc_form_id=?, src_qc_item_sel=? WHERE id=?")
        ->execute([$qcFormId, json_encode(array_values($selectedKeys), JSON_UNESCAPED_UNICODE), $id]);
+    if ($reworkOf > 0) $db->prepare("UPDATE qa_abnormal_order SET rework_of_id=? WHERE id=?")->execute([$reworkOf, $id]);
 
     // 量測尺寸與實測值——寫法與 QaAbnormal_API.php 的 save_head 處理 measures 完全同一套
     // （先清空重建，seq 從 1 起算），不另外重寫一次 INSERT 邏輯。
@@ -3871,6 +3885,17 @@ function qab_qc_row_tags(PDO $db, array $fids): array
             'bg' => '#F8D7D0', 'fg' => '#8a2a16', 'no' => '', 'id' => 0, 'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
         ];
     }
+    // 2026-11-02：決策＝重工、貨已退回廠商重工，等重工回廠後做「重工檢驗」——在待驗清單標出來
+    try {
+        foreach ($fids as $fid) {
+            $rw = qab_rework_open_for_fid($db, (int)$fid);
+            if (!$rw) continue;
+            array_unshift($out[(string)$fid], [
+                'kind' => 'rework_back', 'name' => '重工回廠(待重工檢驗)', 'md' => $rw['md'], 'process' => $rw['process'], 'qty' => $rw['qty'],
+                'who' => '', 'bg' => '#DD5138', 'fg' => '#ffffff', 'no' => $rw['no'], 'id' => $rw['id'], 'sn' => 9999, 'ts' => $rw['ts'],
+            ]);
+        }
+    } catch (Throwable $e) {}
     foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
     unset($list);
     return $out;
@@ -4278,7 +4303,7 @@ function qab_status(array $o): array
     if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待' . ((string)($o['gm_label'] ?? '總經理')) . '裁示'];
     if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
     // 雙層快速決策的單：報廢不必走扣款確認，只有技術課主管勾了「扣款」才要（2026-10-29 使用者要求）
-    if (!empty($o['gm_deduct']) || (empty($o['quick_mode']) && !empty($o['final']['is_scrap']))) {
+    if (!empty($o['gm_deduct']) || !empty($o['final']['is_scrap'])) {
         if (empty($o['deduct_appr_at'])) return ['code' => 'deduct', 'label' => '扣款確認中'];
     }
     return ['code' => 'ready', 'label' => '可結案'];
@@ -4460,7 +4485,7 @@ function qab_list(PDO $db, array $f = []): array
         elseif ($r['pending'] > 0 && !(!empty($r['quick_mode']) && !$r['disp_ids'] && !$r['gm_ids'] && empty($r['need_gm']) && empty($r['escalate_gm']))) $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
         elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待' . $gmLabel . '裁示'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
-        elseif (($r['gm_deduct'] || (empty($r['quick_mode']) && $r['final']['is_scrap']))) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
+        elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
         // 「待決策」在清單上也附上決策者部門與姓名（不併進 label，理由同 qab_order()）
         if ($r['status']['code'] === 'decide') {
@@ -4524,4 +4549,94 @@ function qab_status_map(PDO $db, array $orderIds): array
     return $out;
 }
 
+}
+
+/**
+ * 最終處置含「需矯正」(need_capa) 且還沒有矯正單號時，自動開立異常矯正處理單並把單號連回這張異常單。
+ * 2026-11-02 使用者交辦。已有 capa_order_no 的一律不重開；失敗只回空字串，不影響裁示存檔。
+ * 開單走 CAR 模組自己的配號／簽章／紀錄／通知函式，不另寫一份。
+ */
+function qab_car_auto_create(PDO $db, int $orderId, int $uid, string $uname): string
+{
+    try {
+        $o = qab_order($db, $orderId);
+        if (!$o || trim((string)($o['capa_order_no'] ?? '')) !== '' || empty($o['final']['need_capa'])) return '';
+        require_once __DIR__ . '/car_lib.php';
+        require_once __DIR__ . '/car_notify.php';
+        $biz = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+        $no0 = (string)($o['abnormal_order_no'] ?? '');
+        $desc = '【品質異常處理單 ' . $no0 . '】需矯正（' . implode('、', $o['final']['names']) . "）
+"
+              . ((string)($o['part_no'] ?? '') !== '' ? '料號：' . $o['part_no'] . "
+" : '')
+              . ((string)($o['bom_no'] ?? '') !== '' ? '製令：' . $o['bom_no'] . "
+" : '')
+              . '異常現象：' . trim((string)($o['abnormal_phenomenon'] ?? ''));
+        $own = !$db->inTransaction();
+        if ($own) $db->beginTransaction();
+        try {
+            $no = car_alloc_numbers($db, 1, date('Ymd', strtotime($biz)))[0];
+            $db->prepare("INSERT INTO car_order (car_no, group_no, source_type, source_ref_id, source_no, source_desc, fill_date, found_date,
+                     created_by, created_by_name, abnormal_desc, status, stage_since, created_at, updated_at)
+                 VALUES (?,?, 'QA', ?,?,?, ?,?, ?,?, ?, 'open', NOW(), NOW(), NOW())")
+               ->execute([$no, $no, $orderId, mb_substr($no0, 0, 50), mb_substr(trim((string)($o['abnormal_phenomenon'] ?? '')), 0, 255),
+                          $biz, $biz, $uid, $uname, $desc]);
+            $carId = (int)$db->lastInsertId();
+            $db->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label) VALUES (?, 'desc', ?, ?, NOW(), ?)")
+               ->execute([$carId, $uid, $uname, eg_fmt_date($biz)]);
+            car_log($db, $carId, 'create', $uid, $uname, '由品質異常處理單 ' . $no0 . ' 裁示「需矯正」自動開立');
+            $db->prepare("UPDATE qa_abnormal_order SET capa_order_no=? WHERE id=? AND (capa_order_no IS NULL OR capa_order_no='')")->execute([$no, $orderId]);
+            if ($own) $db->commit();
+        } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
+        try {
+            $ro = $db->prepare("SELECT * FROM car_order WHERE id=?"); $ro->execute([$carId]);
+            $co = $ro->fetch(PDO::FETCH_ASSOC) ?: [];
+            if ($co) car_notify($db, $carId, car_notify_title('🔧', $co, '待指派回覆人'),
+                car_notify_body($db, $co, '由品質異常處理單 ' . $no0 . ' 裁示「需矯正」自動開立，請指派回覆人說明原因並提出矯正措施。'),
+                car_pm_supervisors($db) ?: car_final_deciders($db), $uid);
+        } catch (Throwable $e) {}
+        return $no;
+    } catch (Throwable $e) { error_log('qab_car_auto_create: ' . $e->getMessage()); return ''; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   重工流程（2026-11-02 使用者交辦）：決策＝重工 → 貨退廠商重工 → 回廠後在線上檢驗做「重工檢驗」；
+   重工檢驗又 NG 自動開的異常單標「重工後異常」。
+   只新增欄位與判斷：沒有重工決策的製程站，一切行為與改版前完全相同。
+   ───────────────────────────────────────────────────────────── */
+function qab_rework_schema(PDO $db): void
+{
+    $has = function ($t, $c) use ($db) { return (bool)$db->query("SHOW COLUMNS FROM `$t` LIKE '$c'")->fetch(); };
+    if (!$has('qa_option', 'is_rework')) {
+        $db->exec("ALTER TABLE qa_option ADD COLUMN is_rework TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此選項代表重工（重工流程依旗標判定，不比對文字）'");
+        $db->exec("UPDATE qa_option SET is_rework=1 WHERE name='重工'");   // 只在欄位第一次建立時依現有「重工」選項預設一次
+    }
+    if ($db->query("SHOW TABLES LIKE 'qc_check_form'")->fetch() && !$has('qc_check_form', 'rework_of_order_id')) {
+        $db->exec("ALTER TABLE qc_check_form ADD COLUMN rework_of_order_id INT NULL COMMENT '重工檢驗：對應造成重工的異常單id，一般檢驗為NULL'");
+    }
+    if (qab_setting_get($db, 'rework_flow_since', null) === null) qab_setting_set($db, 'rework_flow_since', date('Y-m-d'));   // 只認上線日之後做的重工決策，舊單不受影響
+}
+
+/** 這個製程站(bom_ing_fid)目前有沒有「決策重工、尚未做重工檢驗」的異常單；沒有回 null */
+function qab_rework_open_for_fid(PDO $db, int $fid): ?array
+{
+    if ($fid <= 0) return null;
+    try { if (!$db->query("SHOW COLUMNS FROM qa_option LIKE 'is_rework'")->fetch()) return null; } catch (Throwable $e) { return null; }
+    $since = (string)qab_setting_get($db, 'rework_flow_since', date('Y-m-d'));
+    $st = $db->prepare("SELECT o.id, o.abnormal_order_no, o.ng_qty, COALESCE(o.gm_decided_at, o.disp_decided_at) AS ts, pn.ProcessName
+        FROM bom_ing bi
+        JOIN qa_abnormal_order o ON o.bom_no=bi.bom AND o.resp_process_no=bi.process_no AND o.deleted_at IS NULL
+        LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+        WHERE bi.bom_ing_fid=? AND COALESCE(o.gm_decided_at, o.disp_decided_at) >= ?
+          AND ( EXISTS (SELECT 1 FROM qa_abnormal_opt p JOIN qa_option q ON q.opt_id=p.opt_id WHERE p.order_id=o.id AND p.kind='gm' AND q.is_rework=1)
+                OR (NOT EXISTS (SELECT 1 FROM qa_abnormal_opt p WHERE p.order_id=o.id AND p.kind='gm')
+                    AND EXISTS (SELECT 1 FROM qa_abnormal_opt p JOIN qa_option q ON q.opt_id=p.opt_id WHERE p.order_id=o.id AND p.kind='disp' AND q.is_rework=1)) )
+          AND NOT EXISTS (SELECT 1 FROM qc_check_form f WHERE f.rework_of_order_id=o.id)
+        ORDER BY o.id DESC LIMIT 1");
+    $st->execute([$fid, $since]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return null;
+    $ts = (string)$r['ts'];
+    return ['id' => (int)$r['id'], 'no' => (string)$r['abnormal_order_no'], 'qty' => (int)$r['ng_qty'], 'ts' => $ts,
+            'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '', 'process' => (string)($r['ProcessName'] ?? '')];
 }
