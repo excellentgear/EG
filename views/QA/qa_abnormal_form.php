@@ -2572,6 +2572,12 @@ function renderDeduct(){
     // 兩欄並列：一列放兩筆，先左後右，標上順序（製程列在前、「其他」列在後）
     var order = [];
     DEDUCT_ROWS.forEach(function(r, i){ if ((r.kind || 'process') !== 'other') order.push(i); });
+    // 製程列依 BOM_SN 由小到大（沒有移轉單的工序也在裡面，同一個 SN 的列靠在一起）
+    order.sort(function(a, b){
+        var ra = DEDUCT_ROWS[a], rb = DEDUCT_ROWS[b];
+        return (String(ra.bom_no || '').localeCompare(String(rb.bom_no || '')))
+            || ((parseInt(ra.bom_sn, 10) || 0) - (parseInt(rb.bom_sn, 10) || 0)) || (a - b);
+    });
     DEDUCT_ROWS.forEach(function(r, i){ if ((r.kind || 'process') === 'other') order.push(i); });
     var cell = function(i, seq){
         var r = DEDUCT_ROWS[i], isProc = (r.kind || 'process') !== 'other';
@@ -2592,7 +2598,7 @@ function renderDeduct(){
                   ? '<td class="r"><div class="muted-help" style="text-align:left;">單價</div><input type="number" step="0.01" class="d-unit' + (unitVal !== '' && unitVal < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + unitVal + '"></td>'
                   : '<td class="r"><div class="muted-help" style="text-align:left;">金額</div><input type="number" step="0.01" class="d-amt' + (parseFloat(r.amount) < 0 ? ' neg' : '') + '" data-i="' + i + '" value="' + (r.amount == null ? '' : r.amount) + '"></td>')
              + '<td>' + (isProc
-                  ? '<span class="muted-help">' + esc(r.transfer_no || '') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
+                  ? '<span class="muted-help">' + (r.transfer_no ? esc(r.transfer_no) : '<i>無移轉單（請填單價並勾選）</i>') + qtyTxt + '　金額 <b class="d-amtshow" data-i="' + i + '">' + (isNaN(an) ? '' : an.toLocaleString()) + '</b>' + (remarkTxt ? ('　備註：<span style="color:var(--ink);">' + esc(remarkTxt) + '</span>') : '') + '</span>' : '')
                   + '<input type="text" class="d-note" data-i="' + i + '" value="' + esc(r.note || '') + '" style="margin-top:2px;"></td>';
     };
     var h = '', half = Math.ceil(order.length / 2);
@@ -2747,6 +2753,10 @@ $(document).on('input', '.d-unit', function(){
     var i = $(this).data('i'), r = DEDUCT_ROWS[i], u = parseFloat(this.value), q = parseFloat(r.qty);
     $(this).toggleClass('neg', u < 0);
     r.amount = isNaN(u) ? '' : (Math.round(u * q * 100) / 100);
+    if (!isNaN(u) && u > 0 && !Number(r.included)) {   // 填了單價就自動勾選計入（沒移轉單的工序預設不計入）
+        r.included = 1;
+        $('.d-inc[data-i="' + i + '"]').prop('checked', true).closest('tr').removeClass('off');   // 不重畫整張表，避免打字到一半失去游標
+    }
     $('.d-amtshow[data-i="' + i + '"]').text(r.amount === '' ? '' : Number(r.amount).toLocaleString());
     calcSum();
 });

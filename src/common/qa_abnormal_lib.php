@@ -4014,6 +4014,7 @@ function qab_deduct_autofill_apply(PDO $db, int $id, int $uid): int
                            $r['transfer_no'], $r['qty'], $r['amount'], $r['amount'],
                            null, $i, $uid]);   // 移轉單的備註不再複製進這一欄，改由說明欄即時顯示（tl_note）
         }
+        qab_deduct_fill_missing($db, $id, $uid, true);   // 沒有移轉單的工序（廠內加工、尚未移轉）也列出來，供生管填單價與勾選
         if ($own) $db->commit();
     } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
     return count($rows);
@@ -4787,4 +4788,58 @@ function qab_deduct_approver_ids(PDO $db): array
         foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $u) $ids[(int)$u] = 1;
     } catch (Throwable $e) {}
     return array_keys($ids);
+}
+
+/**
+ * 把「這張單製令的每一道工序(SN)」都列進扣款明細：廠內加工、還沒開移轉單的工序沒有單價，
+ * 以前不會出現，生管就沒辦法填價格與勾選。只補「明細裡還沒有這個 SN」的工序，已有的列（含生管改過的）完全不動。
+ * 補進來的列預設不計入、金額空白；數量＝扣款數量（沒有才用異常總數、不良數），讓畫面以「單價」輸入。
+ * @return int 新增列數
+ */
+function qab_deduct_fill_missing(PDO $db, int $id, int $uid, bool $inTx = false): int
+{
+    $o = qab_order($db, $id);
+    if (!$o || empty($o['bom_list'])) return 0;
+    $defQty = (float)($o['deduct_qty'] ?? 0);
+    if ($defQty <= 0) $defQty = (float)($o['abn_total_qty'] ?? 0);
+    if ($defQty <= 0) $defQty = (float)($o['ng_qty'] ?? 0);
+    $have = [];
+    foreach ($db->query("SELECT bom_no, bom_sn FROM qa_abnormal_deduct WHERE order_id=" . (int)$id . " AND kind='process'")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $have[trim((string)$r['bom_no']) . '|' . (int)$r['bom_sn']] = 1;
+    }
+    $boms = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $o['bom_list'])))));
+    if (!$boms) return 0;
+    $in = implode(',', array_fill(0, count($boms), '?'));
+    $st = $db->prepare("SELECT bi.bom, bi.bom_sn, MIN(bi.bom_ing_fid) AS fid, pn.ProcessName, ml.maker_id AS mk, ml.internal
+                        FROM bom_ing bi
+                        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                        LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
+                        WHERE bi.bom IN ($in) AND bi.bom_sn IS NOT NULL
+                        GROUP BY bi.bom, bi.bom_sn, pn.ProcessName, ml.maker_id, ml.internal
+                        ORDER BY bi.bom, bi.bom_sn");
+    $st->execute($boms);
+    $ins = $db->prepare("INSERT INTO qa_abnormal_deduct
+        (order_id,kind,transfer_id,bom_no,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,note,included,sort_order,created_by)
+        VALUES (?,'process',NULL,?,?,?,?,NULL,?,NULL,NULL,NULL,0,?,?)");
+    $n = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $k = trim((string)$r['bom']) . '|' . (int)$r['bom_sn'];
+        if (isset($have[$k])) continue;
+        $have[$k] = 1;
+        $vn = trim((string)($r['mk'] ?? ''));
+        if ($vn !== '' && (int)($r['internal'] ?? 0) === 1) $vn .= '（廠內）';
+        $ins->execute([$id, $r['bom'], (int)$r['bom_sn'], (string)($r['ProcessName'] ?? ''), $vn, $defQty > 0 ? $defQty : null, (int)$r['bom_sn'], $uid]);
+        $n++;
+    }
+    return $n;
+}
+
+/** 開啟異常單時確保扣款明細有完整工序（只在需要扣款、未結案、未核准時；冪等） */
+function qab_deduct_ensure_rows(PDO $db, int $id, int $uid): void
+{
+    $o = qab_order($db, $id);
+    if (!$o || !empty($o['is_closed']) || !empty($o['deduct_appr_at']) || empty($o['bom_list'])) return;
+    if (empty($o['final']['is_scrap']) && empty($o['gm_deduct'])) return;
+    $has = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_deduct WHERE order_id=" . (int)$id . " AND kind='process'")->fetchColumn();
+    if ($has === 0) qab_deduct_autofill_apply($db, $id, $uid); else qab_deduct_fill_missing($db, $id, $uid);
 }

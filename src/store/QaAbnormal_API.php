@@ -241,6 +241,7 @@ case 'quick_state': {
 /* ═══════════ 讀一張單（表單頁與列印共用） ═══════════ */
 case 'get': {
     $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
+    try { if ($id > 0) qab_deduct_ensure_rows($db, $id, $uid); } catch (Throwable $e) { error_log('deduct ensure rows: ' . $e->getMessage()); }
     $o = qab_order($db, $id);
     if (!$o) jerr('找不到這張異常單');
     // 雙層快速決策：第二層（或第二層不在時的代理）這張單可以用原本的決策選項，所以把 canDecide 視為成立
