@@ -590,7 +590,7 @@ var SPLIT_CHILDREN = <?= json_encode($o['split_children'], JSON_UNESCAPED_UNICOD
 })();
 </script>
 <?php endif; ?>
-<?php if (!empty($_GET['rot'])): ?>
+<?php if (!isset($_GET['rot']) || $_GET['rot'] !== '0'): /* 預設：不切換頁面方向（切換會多出空白頁），橫式附件轉90度印；?rot=0 可還原 */ ?>
 <style>
 /* 診斷模式 ?rot=1：不切換頁面方向（沒有命名頁面），橫式附件在直式頁上轉 90 度印 */
 .att-page.att-p, .att-page.att-l { page:auto !important; }
