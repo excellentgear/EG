@@ -477,7 +477,7 @@ if (!empty($o['src_qc_form_id'])) {
     <tr>
         <td class="lb" rowspan="<?= 3 + max(1, count($otherRows)) ?>"><div class="vert">扣款確認</div></td>
         <td class="lb">扣款項目</td><td class="lb">金額 (未稅)</td><td class="lb">說明</td>
-        <td class="lb">執 行</td>
+        <td class="lb">執 行<div class="small" style="font-weight:normal;">(生管簽章)</div></td>
         <td class="lb">通知扣款<div class="small" style="font-weight:normal;">(填移轉單號 Exp:J-1130101001)</div></td>
     </tr>
     <tr>
@@ -485,7 +485,7 @@ if (!empty($o['src_qc_form_id'])) {
         <td class="c"><?= h(money($tot['process_rated'])) ?></td>
         <td class="t small" style="<?= $descStyle ?>"><?= h($procDesc) ?></td>
         <?php $dRows = 2 + max(1, count($otherRows)); /* 製程 + 其他(至少一列) + 合計 */ ?>
-        <td class="c" rowspan="<?= $dRows ?>"><?= h($o['deduct_exec']) ?></td>
+        <td class="sig" rowspan="<?= $dRows ?>"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
         <td class="t" rowspan="<?= $dRows ?>"><?= nl2br(h($o['deduct_notify_no'])) ?></td>
     </tr>
     <?php foreach ($otherRows as $orow): ?>
@@ -505,32 +505,21 @@ if (!empty($o['src_qc_form_id'])) {
     </tr>
 </table>
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:18%"><col style="width:14%"><col style="width:16%"><col style="width:18%"><col style="width:28%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:20%"><col style="width:34%"></colgroup>
     <tr>
-        <td class="lb" rowspan="2"><div class="vert">核准</div></td>
+        <td class="lb" rowspan="3"><div class="vert">核准</div></td>
+        <td class="lb">報廢單號</td>
+        <td class="c"><b><?= h($o['scrap_no']) ?></b></td>
+        <td class="lb" rowspan="2">核准 (管理課 會計/主管)</td>
+        <td class="sig" rowspan="2" style="height:24mm;"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
+    </tr>
+    <tr>
         <td class="lb">核准 扣款 金額 (元/PCS)</td>
         <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : money($o['deduct_unit_amt'])) ?></td>
-        <td class="lb">報廢單號</td>
-        <td class="c" colspan="2"><b><?= h($o['scrap_no']) ?></b></td>
     </tr>
     <tr>
-        <td class="small" colspan="5">★此單號需登記至不合格品管制記錄表　
+        <td class="small" colspan="4">★此單號需登記至不合格品管制記錄表
             ★扣款確認表金額由生管填寫　★核准扣款金額由管理課 會計/主管 填寫</td>
-    </tr>
-</table>
-<!-- 三個簽章並排：各佔一列的話，三個 91px 圖章就吃掉三分之一頁、整張表會變兩頁。
-     沒有人簽時也要留出框線與書寫高度（使用者要求：下方要有圖章框框） -->
-<table class="f">
-    <colgroup><col style="width:33.4%"><col style="width:33.3%"><col style="width:33.3%"></colgroup>
-    <tr>
-        <td class="lb">核准 (管理課 會計/主管)</td>
-        <td class="lb">(生管) 簽章</td>
-        <td class="lb">(品管) 簽章</td>
-    </tr>
-    <tr class="signrow">
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-dept="<?= h($o['signs']['qc']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['qc']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div></td>
     </tr>
 </table>
 <?php endif; ?>

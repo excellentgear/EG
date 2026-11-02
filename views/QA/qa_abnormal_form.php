@@ -531,7 +531,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>加成（1.1＝總金額×110%）</label><input type="number" step="0.01" id="f_rate"></div>
                         <div class="fld"><label>數量 (PCS)</label><input type="number" step="0.001" id="f_dqty"></div>
                         <div class="fld"><label>核准扣款金額 (元/PCS)</label><input type="number" step="0.01" id="f_dunit"></div>
-                        <div class="fld"><label>執行</label><input type="text" id="f_dexec"></div>
+                        <div class="fld"><label>執行(生管簽章)</label><input type="text" id="f_dexec" readonly placeholder="填妥金額與通知扣款單號後自動簽章" title="生管填完金額與通知扣款單號後，系統自動簽章"></div>
                         <div class="fld" style="grid-column:1/-1;"><label>通知扣款（移轉單號，可加註備註）</label><input type="text" id="f_dnotify" data-eg-hint="J-1151030044"><div id="dnotifyErr" style="display:none;color:#DD5138;font-size:12px;margin-top:2px;"></div><div class="muted-help">格式：J-＋民國年3碼＋月日4碼＋流水3碼（例 J-1151030044），後面可空一格加註備註</div></div>
                     </div>
                     <div class="sumline" id="dSum"></div>
@@ -1670,7 +1670,7 @@ function render(){
     $('#f_rate').val(o.surcharge_rate == null ? (D.rate_default || 1) : o.surcharge_rate);
     $('#f_dqty').val(o.deduct_qty == null || o.deduct_qty === '' ? '' : String(Number(o.deduct_qty)));   // 21.000 → 21（小數點後全是 0 就不顯示）
     $('#f_dunit').val(o.deduct_unit_amt == null ? '' : o.deduct_unit_amt);
-    $('#f_dexec').val(o.deduct_exec || '');
+    $('#f_dexec').val(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : (o.deduct_exec || ''));
     $('#f_dnotify').val(o.deduct_notify_no || '');
     renderDeduct();
 }
@@ -2657,7 +2657,7 @@ function saveDeduct(silent){
     if (!dnotifyCheck()) { if (!silent) alert('通知扣款單號格式不正確，請修正後再儲存'); return; }
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
-                          deduct_exec:$('#f_dexec').val(), deduct_notify_no:$('#f_dnotify').val() },
+                          deduct_notify_no:$('#f_dnotify').val() },
         function(){ savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
 }
 $('#btnSaveDeduct').on('click', function(){ saveDeduct(false); });

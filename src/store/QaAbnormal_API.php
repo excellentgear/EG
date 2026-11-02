@@ -901,10 +901,21 @@ case 'deduct_save': {
         }
         $db->prepare("UPDATE qa_abnormal_order SET surcharge_rate=?, deduct_qty=?, deduct_unit_amt=?, deduct_exec=?, deduct_notify_no=?, updated_by=?, updated_at=NOW() WHERE id=?")
            ->execute([$rate ?? $o['surcharge_rate'], $numOrNull($_POST['deduct_qty'] ?? ''), $numOrNull($_POST['deduct_unit_amt'] ?? ''),
-                      $strOrNull($_POST['deduct_exec'] ?? '', 60), $strOrNull($_POST['deduct_notify_no'] ?? '', 120), $uid, $id]);
+                      (array_key_exists('deduct_exec', $_POST) ? $strOrNull($_POST['deduct_exec'], 60) : ($o['deduct_exec'] ?? null)), $strOrNull($_POST['deduct_notify_no'] ?? '', 120), $uid, $id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     $log($id, 'deduct', '', '更新扣款明細');
+    // 2026-11-02：生管填妥金額與（格式正確的）通知扣款單號後自動簽章（「執行(生管簽章)」）；已簽過的不動
+    try {
+        $fresh = qab_order($db, $id);
+        $hasAmt = false;
+        foreach (($fresh['deducts'] ?? []) as $dr) if (!empty($dr['included']) && $dr['amount'] !== null && (float)$dr['amount'] != 0.0) { $hasAmt = true; break; }
+        $dno = trim((string)($fresh['deduct_notify_no'] ?? ''));
+        if ($hasAmt && $dno !== '' && empty($fresh['deduct_pm_at']) && empty($fresh['is_closed'])) {
+            $db->prepare("UPDATE qa_abnormal_order SET deduct_pm_by=?, deduct_pm_at=NOW() WHERE id=? AND deduct_pm_at IS NULL")->execute([$uid, $id]);
+            $log($id, 'deduct_pm', '', '填妥金額與通知扣款單號，自動簽章（生管）');
+        }
+    } catch (Throwable $e) {}
     jout(true, ['order' => qab_order($db, $id)]);
 }
 
