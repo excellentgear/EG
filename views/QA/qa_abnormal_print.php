@@ -590,6 +590,15 @@ var SPLIT_CHILDREN = <?= json_encode($o['split_children'], JSON_UNESCAPED_UNICOD
 })();
 </script>
 <?php endif; ?>
+<?php if (!empty($_GET['rot'])): ?>
+<style>
+/* 診斷模式 ?rot=1：不切換頁面方向（沒有命名頁面），橫式附件在直式頁上轉 90 度印 */
+.att-page.att-p, .att-page.att-l { page:auto !important; }
+.att-page.att-l { height:262mm; position:relative; overflow:hidden; }
+.att-page.att-l .att-cap { display:none; }
+.att-page.att-l img { position:absolute; top:0; left:0; width:262mm !important; height:190mm !important; transform-origin:top left; transform:translate(190mm,0) rotate(90deg); }
+</style>
+<?php endif; ?>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script>
 (function () {
