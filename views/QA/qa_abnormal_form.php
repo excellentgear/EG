@@ -579,16 +579,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
 
 <!-- 標註圖放大檢視：滾輪縮放、拖曳移動 -->
 <div class="m-mask" id="markViewMask">
-    <div class="m-box" style="width:1100px;max-width:96%;">
+    <div class="m-box" style="width:1100px;height:720px;max-width:98%;max-height:96%;min-width:480px;min-height:340px;resize:both;overflow:hidden;display:flex;flex-direction:column;">
         <div class="m-hd"><i class="fa fa-search-plus"></i> 圖面標註<span class="x" data-close="markViewMask">&times;</span></div>
-        <div class="m-bd" style="padding:6px;">
+        <div class="m-bd" style="padding:6px;flex:1;min-height:0;display:flex;flex-direction:column;">
             <div style="margin-bottom:4px;display:flex;gap:6px;align-items:center;">
                 <button class="btn btn-default btn-xs" id="mvIn"><i class="fa fa-plus"></i></button>
                 <button class="btn btn-default btn-xs" id="mvOut"><i class="fa fa-minus"></i></button>
                 <button class="btn btn-default btn-xs" id="mvFit">符合視窗</button>
                 <span class="muted-help">滾輪縮放、按住拖曳移動</span>
             </div>
-            <div id="mvBox" style="position:relative;height:600px;overflow:hidden;background:#eee;border:1px solid var(--line);cursor:grab;">
+            <div id="mvBox" style="position:relative;flex:1;min-height:0;overflow:hidden;background:#eee;border:1px solid var(--line);cursor:grab;">
                 <img id="mvImg" src="" draggable="false" style="position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;user-select:none;">
             </div>
         </div>
