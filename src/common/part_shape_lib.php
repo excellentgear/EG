@@ -43,6 +43,12 @@ function eg_shape_ensure_table(PDO $pdo): void {
     if ($done) return;
     $done = true;
     try {
+        // 哪些工件種類有「外形／內孔」功能：由管理員在「類別字典設定→工件種類」勾選（dict_workpiece_type.has_shape）。
+        // 第一次建欄位時，先把原本就在用的 G（齒輪）、J（治具）、N（一般）設為開啟，維持現況；之後完全由管理員決定。
+        if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM dict_workpiece_type LIKE 'has_shape'")->fetchColumn()) {
+            $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN has_shape TINYINT(1) NOT NULL DEFAULT 0 COMMENT '料號表單是否有外形／內孔設定功能（管理員勾選）'");
+            $pdo->exec("UPDATE dict_workpiece_type SET has_shape=1 WHERE type_code IN ('G','J','N')");
+        }
         $has = $pdo->query("SHOW TABLES LIKE 'd_setting_shape'")->fetchColumn();
         if ($has) {
             // 補欄：最大凸出外徑（2026-10-21）。DDL 會隱式 commit，交易中不做；先查再 ALTER（本機 MySQL 沒有 ADD COLUMN IF NOT EXISTS）
@@ -87,6 +93,17 @@ function eg_shape_ensure_table(PDO $pdo): void {
             KEY idx_bore (bore_type)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='齒輪外形/內孔分類'");
     } catch (Throwable $e) { /* 建表失敗不可讓頁面掛掉 */ }
+}
+
+/** 這個工件種類有沒有「外形／內孔」功能（管理員在類別字典設定勾選）。查不到字典時，退回原本的 G／J／N。 */
+function eg_shape_type_enabled(PDO $pdo, string $type): bool {
+    try {
+        $st = $pdo->prepare("SELECT has_shape FROM dict_workpiece_type WHERE type_code=?");
+        $st->execute([$type]);
+        $v = $st->fetchColumn();
+        if ($v !== false && $v !== null) return (int)$v === 1;
+    } catch (Throwable $e) {}
+    return in_array($type, ['G', 'J', 'N'], true);
 }
 
 /** 數字清洗：空白＝null，非正數或非數字＝false */

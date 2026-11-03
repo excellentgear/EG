@@ -3242,9 +3242,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
             eg_gear_rows_save($pdo, (int)$d_id, ($Type === 'G') ? $gears : [], $uid);
 
-            // ── 外形／內孔分類（齒輪 G、治具 J、一般 N 共用；沒送 shape_spec＝舊呼叫端，不動；其他種類一律清除）──
-            if ($Type !== 'G' && $Type !== 'J' && $Type !== 'N') {
-                eg_shape_save($pdo, (int)$d_id, null);
+            // ── 外形／內孔分類（管理員在「類別字典設定→工件種類」勾選哪些種類有此功能；沒勾的種類不處理、也不動既有資料；沒送 shape_spec＝舊呼叫端，不動）──
+            if (!eg_shape_type_enabled($pdo, (string)$Type)) {
+                // 這個工件種類沒有外形／內孔功能
             } elseif (array_key_exists('shape_spec', $_POST)) {
                 [$__shapeRow, $__shapeErr] = eg_shape_normalize(json_decode((string)$_POST['shape_spec'], true), (string)$Type);
                 if ($__shapeErr) throw new Exception($__shapeErr);   // 後端同規則再擋一次（鐵律8）
@@ -5708,7 +5708,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $code = trim($_POST['type_code'] ?? '');
                 $name = trim($_POST['type_name'] ?? '');
                 if (empty($code) || empty($name)) throw new Exception('代碼與名稱不可為空');
-                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, allow_assembly FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
+                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, allow_assembly, has_shape FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
                 if (!_mdPerm('workpiece_type', $old_wt_row ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($old_wt_row?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 // 料號表單欄位顯示開關（依工件種類）
                 $sv = !empty($_POST['show_vendor'])  ? 1 : 0;
@@ -5717,11 +5717,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $spr= !empty($_POST['show_price'])   ? 1 : 0;
                 $sjt= !empty($_POST['is_jig_type'])  ? 1 : 0;   // 此種類的料號可被認定為治具（可被挑選，見 d_setting_jig_set）
                 $sj = !empty($_POST['show_jig'])     ? 1 : 0;   // 料號表單顯示專用/通用治具欄位（可挑治具）
+                $hs = !empty($_POST['has_shape'])    ? 1 : 0;   // 此種類的料號表單有「外形／內孔」設定功能（含清單篩選）
                 $aa = !empty($_POST['allow_assembly'])? 1 : 0;  // 是否可設定為組合件；前端新增類型時checkbox預設打勾，不影響既有類型(欄位本身DEFAULT 1)
-                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, allow_assembly) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig), allow_assembly=VALUES(allow_assembly)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj, $aa]);
+                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, allow_assembly, has_shape) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig), allow_assembly=VALUES(allow_assembly), has_shape=VALUES(has_shape)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj, $aa, $hs]);
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
-                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj,'allow_assembly'=>$aa];
-                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig','allow_assembly']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
+                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj,'allow_assembly'=>$aa,'has_shape'=>$hs];
+                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig','allow_assembly','has_shape']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
                 else _log_audit($pdo,'insert','dict','workpiece:'.$code,$name,null,$uid,$op_name);
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'check_delete') {
@@ -10055,7 +10056,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
   if (fb) EGPartShape.filter.mount(fb, function(){ if (typeof updatePartsClearBtn==='function') updatePartsClearBtn(); if (typeof loadParts==='function') loadParts(1); });
   var gs = document.getElementById('gear-section'), ss = document.getElementById('shape-section'), curType = '';
   // 齒輪（G）：跟著齒輪規格區塊顯示；治具（J）：沒有齒輪規格區塊，依工件種類直接顯示（外形／內孔設定與齒輪相同）
-  function sync(){ ss.style.display = ((curType === 'J' || curType === 'N') || (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none')) ? '' : 'none'; }
+  function sync(){ ss.style.display = ((typeof partShapeEnabled === 'function' ? partShapeEnabled(curType) : (curType === 'G' || curType === 'J' || curType === 'N')) || (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none')) ? '' : 'none'; }
   window.EGShapeTypeSync = function(val){ curType = val || ''; sync(); if (EGPartShape.form.setType) EGPartShape.form.setType(curType); };
   if (gs) { new MutationObserver(sync).observe(gs, {attributes:true, attributeFilter:['style','class']}); sync(); }
 })();
@@ -13252,8 +13253,8 @@ function setPartFilter(dim, val, el) {
         var rangeRow = document.getElementById('parts-gear-range-filter');
         if (specRow)  specRow.classList.toggle('visible', showGear);
         if (rangeRow) rangeRow.classList.toggle('visible', showGear);
-        // 外形／內孔篩選：只選一種工件種類且是 G（齒輪）、J（治具）或 N（一般）時顯示；離開這兩種就一併清掉，免得看不到卻還在篩
-        var showShape = _partsFilter.types.length === 1 && (_partsFilter.types[0] === 'G' || _partsFilter.types[0] === 'J' || _partsFilter.types[0] === 'N');
+        // 外形／內孔篩選：只選一種工件種類且該種類有外形／內孔功能（類別字典設定勾選）時顯示；離開這兩種就一併清掉，免得看不到卻還在篩
+        var showShape = _partsFilter.types.length === 1 && partShapeEnabled(_partsFilter.types[0]);
         var shapeRow = document.getElementById('parts-gear-shape-filter'); if (shapeRow) shapeRow.classList.toggle('visible', showShape);
         if (!showShape && window.EGPartShape && EGPartShape.filter.active()) EGPartShape.filter.reset();
         if (showGear) {
@@ -14989,12 +14990,15 @@ var typeLabel = {G:'齒輪', H:'滾刀', N:'一般'};  // will be extended from 
 var _typeLabelLoaded = false;
 // 各工件種類的料號表單欄位顯示設定（由 manage_workpiece_types 帶出 show_vendor/show_part_no/show_machine/show_price）
 var partTypeMeta = {};
+// 外形／內孔功能：由管理員在「類別字典設定→工件種類」勾選（dict_workpiece_type.has_shape）；字典還沒載入前先照原本的 G／J／N
+var _shapeTypes = {};
+function partShapeEnabled(t) { return Object.prototype.hasOwnProperty.call(_shapeTypes, t) ? !!_shapeTypes[t] : (t === 'G' || t === 'J' || t === 'N'); }
 
 function ensureTypeLabel(callback) {
     if (_typeLabelLoaded) { callback(); return; }
     api({ action:'manage_workpiece_types', op:'list' }).done(function(r) {
         if (r.success && r.data) {
-            r.data.forEach(function(t){ typeLabel[t.type_code] = t.type_name; });
+            r.data.forEach(function(t){ typeLabel[t.type_code] = t.type_name; _shapeTypes[t.type_code] = Number(t.has_shape) === 1; });
         }
         _typeLabelLoaded = true;
         callback();
@@ -15073,7 +15077,7 @@ function renderPartsTable(rows, total, pg, pages) {
             // 齒輪規格小字（僅 G 種類）
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
                 ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:220px;overflow:hidden;white-space:pre-line;line-height:1.25;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
-            if ((r.Type==='G' || r.Type==='J' || r.Type==='N') && r.shape_txt) gearSpec += '<span style="font-size:10px;color:#8A5A2B;display:block;max-width:220px;line-height:1.25;margin-top:1px;" title="外形｜內孔">◧ '+escHtml(r.shape_txt)+'</span>';
+            if (partShapeEnabled(r.Type) && r.shape_txt) gearSpec += '<span style="font-size:10px;color:#8A5A2B;display:block;max-width:220px;line-height:1.25;margin-top:1px;" title="外形｜內孔">◧ '+escHtml(r.shape_txt)+'</span>';
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = '';
             // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
@@ -17952,6 +17956,7 @@ function _loadPartTypeOptions(currentVal, callback) {
             r.data.forEach(function(t){
                 sel.appendChild(new Option(t.type_code + ' — ' + t.type_name, t.type_code));
                 typeLabel[t.type_code] = t.type_name;
+                _shapeTypes[t.type_code] = Number(t.has_shape) === 1;
                 partTypeMeta[t.type_code] = {
                     show_vendor:  Number(t.show_vendor)===1,
                     show_part_no: Number(t.show_part_no)===1,
@@ -18205,13 +18210,13 @@ function submitPartForm() {
         }
     }
     // 齒輪外形／內孔：有輸入錯誤就在送出前擋下（後端同規則再擋一次）
-    if ((type === 'G' || type === 'J' || type === 'N') && window.EGPartShape) {
+    if (partShapeEnabled(type) && window.EGPartShape) {
         var _shErr = EGPartShape.form.validate();
         if (_shErr) { showToast('外形與內孔：' + _shErr, 'error'); return; }
     }
     var data = {
         action:       'save_part',
-        shape_spec:   ((type === 'G' || type === 'J' || type === 'N') && window.EGPartShape) ? JSON.stringify(EGPartShape.form.get()) : undefined,
+        shape_spec:   (partShapeEnabled(type) && window.EGPartShape) ? JSON.stringify(EGPartShape.form.get()) : undefined,
         d_id:         document.getElementById('pf-d_id').value,
         D_Setting_Id: document.getElementById('pf-D_Setting_Id').value.trim(),
         Spec_No:      document.getElementById('pf-Spec_No').value,
@@ -20635,6 +20640,7 @@ var dictConfig = {
             if (Number(d.show_machine)) f.push('專用機台');
             if (Number(d.show_price))   f.push('價格');
             if (Number(d.show_jig))     f.push('專用/通用治具');
+            if (Number(d.has_shape))    f.push('外形／內孔');
             if (f.length) badges = ' <span style="font-size:10px;color:#3949ab;background:#e8eaf6;border-radius:3px;padding:1px 5px;margin-left:4px;">'+f.join('、')+'</span>';
             var jigBadge = Number(d.is_jig_type) ? ' <span style="font-size:10px;color:#a0522d;background:#fdf0e3;border-radius:3px;padding:1px 5px;margin-left:4px;">可被認定為治具</span>' : '';
             // 預設可設定為組合件(allow_assembly=1)是常態，只在被管理員取消時才標出來提醒
@@ -20658,6 +20664,7 @@ var dictConfig = {
             html += '<label style="font-weight:normal;cursor:pointer;"><input type="checkbox" id="dict-f-show_price" style="vertical-align:-1px;margin-right:4px;">價格<span style="color:#aaa;">（每廠商一價）</span></label>';
             html += '<label style="font-weight:normal;cursor:pointer;"><input type="checkbox" id="dict-f-show_jig" style="vertical-align:-1px;margin-right:4px;">專用治具／通用治具<span style="color:#aaa;">（可多選，挑選範圍＝下面已勾「可被認定為治具」的工件種類）</span></label>';
             html += '<label style="font-weight:normal;cursor:pointer;"><input type="checkbox" id="dict-f-allow_assembly" checked style="vertical-align:-1px;margin-right:4px;">可設定為組合件<span style="color:#aaa;">（新增料號時顯示「組合件」勾選區；取消後既有的組合件料號仍會照常顯示，只是新增/非組合件料號不再看到這個入口）</span></label>';
+            html += '<label style="font-weight:normal;cursor:pointer;"><input type="checkbox" id="dict-f-has_shape" style="vertical-align:-1px;margin-right:4px;">外形／內孔設定<span style="color:#aaa;">（料號表單出現「外形」「內孔」區塊，清單也可依外形、內孔篩選；預設只有 G 齒輪、J 治具、N 一般）</span></label>';
             html += '</div></div>';
             // 可被認定為治具：與上面「顯示欄位」是兩件不同的事——這裡決定的是「這個種類的料號，
             // 夠不夠格被別的料號挑去當治具」，不是「這個種類自己要不要挑治具」（那是上面 show_jig）。
@@ -20678,6 +20685,7 @@ var dictConfig = {
             $('#dict-f-show_jig').prop('checked', Number(d.show_jig)===1);
             $('#dict-f-is_jig_type').prop('checked', Number(d.is_jig_type)===1);
             $('#dict-f-allow_assembly').prop('checked', Number(d.allow_assembly)===1);
+            $('#dict-f-has_shape').prop('checked', Number(d.has_shape)===1);
         },
         getData: function() {
             var code = $('#dict-f-code').val().trim();
@@ -20692,7 +20700,8 @@ var dictConfig = {
                 show_price:   $('#dict-f-show_price').prop('checked')   ? 1 : 0,
                 show_jig:     $('#dict-f-show_jig').prop('checked')     ? 1 : 0,
                 is_jig_type:  $('#dict-f-is_jig_type').prop('checked')  ? 1 : 0,
-                allow_assembly: $('#dict-f-allow_assembly').prop('checked') ? 1 : 0
+                allow_assembly: $('#dict-f-allow_assembly').prop('checked') ? 1 : 0,
+                has_shape:    $('#dict-f-has_shape').prop('checked')    ? 1 : 0
             };
         },
         getDeleteId: function(d){ return d.type_code; }
@@ -27022,7 +27031,7 @@ function clearDictForm() {
     }
     if (currentDictType==='workpiece') {
         $('#dict-f-code').val('').prop('readonly',false).css('background','');
-        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type').prop('checked',false);
+        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type,#dict-f-has_shape').prop('checked',false);
         $('#dict-f-allow_assembly').prop('checked', true); // 新增類型預設可設定為組合件（既有功能，不可預設關閉）
     }
     if (currentDictType==='gear') {
