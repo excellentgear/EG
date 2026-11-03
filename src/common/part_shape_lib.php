@@ -100,15 +100,18 @@ function eg_shape_taper_part($raw, $d, string $lab): array {
     $r  = eg_shape_num($raw['r'] ?? '');
     if ($d2 === false) return [null, $lab . '小徑必須是大於 0 的數字'];
     if ($r === false)  return [null, $lab . '錐度必須是大於 0 的數字'];
+    $ha = eg_shape_num($raw['ha'] ?? '');
+    if ($ha === false || ($ha !== null && $ha >= 90)) return [null, $lab . '半錐角必須大於 0 且小於 90 度'];
     $tl = eg_shape_num($raw['tl'] ?? '');
     if ($tl === false) return [null, $lab . '錐長必須是大於 0 的數字'];
-    if ($d2 === null && $r === null) return [null, $lab . '是錐孔，請填小徑或錐度（至少一個）'];
+    if ($d2 === null && $r === null && $ha === null) return [null, $lab . '是錐孔，請填小徑、錐度或半錐角（至少一個）'];
     if ($d2 !== null && $d !== null && $d2 == $d) return [null, $lab . '大徑與小徑相同，不是錐孔'];
     if ($d2 !== null && $d !== null && $d2 > $d) return [null, $lab . '小徑必須小於大徑（請把較大的填在大徑）'];
     $x = ['tp' => 1];
     if ($d2 !== null) $x['d2'] = $d2;
     if ($r !== null)  $x['r']  = $r;
     if ($tl !== null) $x['tl'] = $tl;
+    if ($ha !== null) $x['ha'] = $ha;
     return [$x, null];
 }
 
