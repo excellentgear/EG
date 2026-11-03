@@ -20,6 +20,8 @@
  *      純篩選用的下拉再加 data-eg-filter-reset：雙擊篩選框或雙擊下拉＝把這一欄的篩選整個解除（關鍵字＋選取一起清）
  *   8. 點擊欄位後才浮出提示：<input data-eg-hint="提示文字">（取代 placeholder；
  *      placeholder 印在欄位裡，像「09:00」這種會被誤會成「已經填好的值」）
+ *   9. 長度欄可輸入算式（opt-in）：<input type="text" inputmode="decimal" data-eg-calc>，
+ *      輸入 48-18 按 Enter 或離開欄位＝自動換成 30（只認 + - * / ( )；算不出來原樣保留）
  *
  * 個別欄位要排除：加 data-eg-skip
  * 整個區塊要排除：在祖先元素加 data-eg-skip
@@ -191,6 +193,50 @@
         }
         return null;
     }
+
+    /* ── 規則 9：長度欄可輸入算式（opt-in：<input type="text" data-eg-calc>）──────
+       輸入 48-18 後按 Enter（或離開欄位）自動換成 30。只認數字與 + - * / ( )，
+       自己寫的小型解析器，不用 eval；算不出來（格式錯、除以 0、結果 ≤0）就原樣保留，交給各頁原本的驗證報錯。
+       本規則在 Enter 跳欄之前執行，所以按 Enter 會「先算好、再跳到下一欄」。 */
+    function calcExpr(s) {
+        if (!/^[0-9+\-*\/().\s]+$/.test(s)) return null;
+        var t = s.replace(/\s+/g, ''), p = 0;
+        function num() {
+            var m = /^\d*\.?\d+/.exec(t.slice(p)); if (!m) return NaN;
+            p += m[0].length; return parseFloat(m[0]);
+        }
+        function atom() {
+            if (t[p] === '-') { p++; return -atom(); }
+            if (t[p] === '+') { p++; return atom(); }
+            if (t[p] === '(') { p++; var v = expr(); if (t[p] !== ')') return NaN; p++; return v; }
+            return num();
+        }
+        function term() {
+            var v = atom();
+            while (t[p] === '*' || t[p] === '/') { var o = t[p++], r = atom(); v = o === '*' ? v * r : v / r; }
+            return v;
+        }
+        function expr() {
+            var v = term();
+            while (t[p] === '+' || t[p] === '-') { var o = t[p++], r = term(); v = o === '+' ? v + r : v - r; }
+            return v;
+        }
+        var res = expr();
+        if (p !== t.length || !isFinite(res) || res <= 0) return null;
+        return res;
+    }
+    function applyCalc(el) {
+        if (!el || !el.hasAttribute || !el.hasAttribute('data-eg-calc') || skipped(el)) return;
+        var v = (el.value || '').trim();
+        if (v === '' || /^\d*\.?\d+$/.test(v)) return;           // 空白或已是單純數字：不動
+        var r = calcExpr(v); if (r === null) return;
+        el.value = String(Math.round(r * 1000) / 1000);
+        fire(el, 'input'); fire(el, 'change');
+    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') applyCalc(e.target);
+    }, true);
+    document.addEventListener('focusout', function (e) { applyCalc(e.target); }, true);
 
     /* ── 規則 6：可增列表格的自動增／刪列 ─────────────────────────────── */
     /* 剛用 ↓ 自動加出來、還沒被使用者動過的那一列（動過就不再自動收回） */

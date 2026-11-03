@@ -237,7 +237,8 @@
           self.st.bore[i].tp = t.checked ? 1 : 0;
           if (!t.checked) { self.st.bore[i].d2 = ''; self.st.bore[i].r = ''; self.st.bore[i].tl = ''; }
           self.render();
-          var f = self.el.querySelector('input[data-i="' + i + '"][data-f="d2"]'); if (f) f.focus();
+          // 勾選後游標回到「大徑」（先填大徑，再填小徑）
+          var f = self.el.querySelector('input[data-i="' + i + '"][data-f="d"]'); if (f) { f.focus(); if (f.select) f.select(); }
         }
       });
     },
@@ -337,7 +338,8 @@
     _in: function (i, label, f) {
       var b = this.st.bore[i] || {}, v = b[f] || '', tp = !!b.tp;
       var one = function (ff, lab, w) {
-        return '<label class="eg-shape-in">' + lab + ' <input type="number" step="any" min="0" class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + ff + '"' + (w ? ' style="width:' + w + 'px"' : '') + ' value="' + esc(b[ff] || '') + '"></label>';
+        var calc = ff === 'tl';   // 錐長可輸入算式（48-18 按 Enter＝30，由共用檔 eg_input_rules.js 規則 9 處理）
+        return '<label class="eg-shape-in">' + lab + ' <input ' + (calc ? 'type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" data-eg-hint="可輸入算式，例：48-18" ' : 'type="number" step="any" min="0" ') + 'class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + ff + '"' + (w ? ' style="width:' + w + 'px"' : '') + ' value="' + esc(b[ff] || '') + '"></label>';
       };
       var h = '<label class="eg-shape-in">' + esc(tp ? label.replace(/孔徑$/, '大徑') : label) + ' <input type="number" step="any" min="0" class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + f + '" value="' + esc(v) + '"></label>';
       h += '<label class="eg-shape-in" title="此孔為錐孔：輸入大徑，再填小徑或錐度（1:N）其中一個"><input type="checkbox" data-tp="' + i + '"' + (tp ? ' checked' : '') + ' style="width:auto;height:auto"> 錐孔</label>';
