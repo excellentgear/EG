@@ -59,6 +59,10 @@ function eg_shape_ensure_table(PDO $pdo): void {
                     $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN $hc DECIMAL(10,3) NULL COMMENT '{$hcm}（左側／兩側相同時為空）'");
                 }
             }
+            // 補欄：多階凸出（2026-11-03，JSON：{m:1,a:[{d,l}],b:[{d,l}]}；a＝凸出／左側各階，b＝右側各階，依輸入順序不排序）
+            if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_json'")->fetchColumn()) {
+                $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_json TEXT NULL COMMENT '多階凸出各階 {m,a,b}（有值＝多階凸出；階數可為 0）'");
+            }
             // 補欄：外錐／重點外徑段（2026-11-03，JSON）
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'outer_json'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN outer_json TEXT NULL COMMENT '{otp:[外錐],seg:[重點外徑段]}' AFTER hub_dia");
@@ -200,7 +204,7 @@ function eg_shape_normalize($in): array {
     $outer = trim((string)($in['outer'] ?? ''));
     if ($outer !== '' && !isset($defs['outer'][$outer])) return [null, '外形代碼不正確'];
     // 最大凸出外徑：只有單邊／雙邊凸出才有意義，其他外形一律清除
-    $hub = null; $hubLen = null; $hub2 = null; $hub2Len = null;
+    $hub = null; $hubLen = null; $hub2 = null; $hub2Len = null; $hubJson = null;
     if ($outer === 'one_side' || $outer === 'both_sides') {
         $hub = eg_shape_num($in['hub_dia'] ?? '');
         if ($hub === false) return [null, '最大凸出外徑必須是大於 0 的數字'];
@@ -211,6 +215,30 @@ function eg_shape_normalize($in): array {
             $hub2Len = eg_shape_num($in['hub2_len'] ?? '');
             if ($hub2 === false) return [null, '右側凸出外徑必須是大於 0 的數字'];
             if ($hub2Len === false) return [null, '右側凸出長度必須是大於 0 的數字'];
+        }
+        // 多階凸出：可只設定為多階而不輸入；各階依輸入順序保存（不排序）；外徑、長度各自選填，兩者都空的階略過
+        if (!empty($in['hub_multi'])) {
+            $hasB = $outer === 'both_sides' && is_array($in['hub_b'] ?? null) && count($in['hub_b']) > 0;
+            $sides = ['a' => $in['hub_a'] ?? [], 'b' => $outer === 'both_sides' ? ($in['hub_b'] ?? []) : []];
+            $outS = ['a' => [], 'b' => []];
+            foreach ($sides as $sk => $arr) {
+                $arr = is_array($arr) ? array_values($arr) : [];
+                if (count($arr) > 12) return [null, '凸出最多 12 階'];
+                $sn = $sk === 'b' ? '右側' : ($hasB ? '左側' : '');
+                foreach ($arr as $i => $g) {
+                    if (!is_array($g)) continue;
+                    $gd = eg_shape_num($g['d'] ?? ''); $gl = eg_shape_num($g['l'] ?? '');
+                    if ($gd === false) return [null, $sn . '第 ' . ($i + 1) . ' 階凸出外徑必須是大於 0 的數字'];
+                    if ($gl === false) return [null, $sn . '第 ' . ($i + 1) . ' 階凸出長度必須是大於 0 的數字'];
+                    if ($gd === null && $gl === null) continue;
+                    $x = []; if ($gd !== null) $x['d'] = $gd; if ($gl !== null) $x['l'] = $gl;
+                    $outS[$sk][] = $x;
+                }
+            }
+            $mxd = function ($a) { $m = null; foreach ($a as $g) if (isset($g['d']) && ($m === null || $g['d'] > $m)) $m = $g['d']; return $m; };
+            $hubJson = json_encode(['m' => 1, 'a' => $outS['a'], 'b' => $outS['b']], JSON_UNESCAPED_UNICODE);
+            // 單一欄位只留各側最大外徑（舊程式與外徑篩選仍可用）；長度與各階明細在 hub_json
+            $hub = $mxd($outS['a']); $hubLen = null; $hub2 = $mxd($outS['b']); $hub2Len = null;
         }
     }
     $mode  = trim((string)($in['mode'] ?? ''));
@@ -276,6 +304,7 @@ function eg_shape_normalize($in): array {
     if ($exErr) return [null, $exErr];
     if ($outer === '' && $btype === null && $exJson === null) return [null, null];
     $extra = $exSent ? ['outer_json' => $exJson] : [];
+    if (array_key_exists('hub_multi', $in)) $extra['hub_json'] = $hubJson;   // 沒送＝舊分頁，不動
     if (array_key_exists('hub_len', $in)) $extra['hub_len'] = $hubLen;   // 沒送這個欄位＝舊分頁，不動原值
     if (array_key_exists('hub2_dia', $in) || array_key_exists('hub2_len', $in)) { $extra['hub2_dia'] = $hub2; $extra['hub2_len'] = $hub2Len; }
     return [$extra + [
@@ -296,7 +325,7 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
     }
     // outer_json 只有前端有送才寫（舊分頁沒送＝不動，免得把外錐／外徑段洗掉）
     $cols = ['outer_shape' => $row['outer_shape'], 'hub_dia' => $row['hub_dia']];
-    foreach (['hub_len', 'hub2_dia', 'hub2_len', 'outer_json'] as $k) if (array_key_exists($k, $row)) $cols[$k] = $row[$k];
+    foreach (['hub_len', 'hub2_dia', 'hub2_len', 'hub_json', 'outer_json'] as $k) if (array_key_exists($k, $row)) $cols[$k] = $row[$k];
     $cols += ['bore_type' => $row['bore_type'], 'bore_steps' => $row['bore_steps'], 'bore_json' => $row['bore_json'],
               'bore_max' => $row['bore_max'], 'bore_min' => $row['bore_min'], 'modified_by' => $by !== '' ? $by : null];
     $names = array_keys($cols);
@@ -308,15 +337,19 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
 /** 讀單一料號（給編輯畫面）。沒有資料回 null。 */
 function eg_shape_get(PDO $pdo, int $dId): ?array {
     try {
-        $st = $pdo->prepare("SELECT outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
+        $st = $pdo->prepare("SELECT outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
         $st->execute([$dId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         $r['bore'] = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
         $ex = $r['outer_json'] ? (json_decode($r['outer_json'], true) ?: []) : [];
+        $hj = $r['hub_json'] ? (json_decode($r['hub_json'], true) ?: null) : null;
+        $r['hub_multi'] = $hj ? 1 : 0;
+        $r['hub_a'] = $hj['a'] ?? [];
+        $r['hub_b'] = $hj['b'] ?? [];
         $r['otp'] = $ex['otp'] ?? [];
         $r['seg'] = $ex['seg'] ?? [];
-        unset($r['bore_json'], $r['outer_json']);
+        unset($r['bore_json'], $r['outer_json'], $r['hub_json']);
         return $r;
     } catch (Throwable $e) { return null; }
 }
@@ -328,7 +361,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
     $out = [];
     try {
         $ph = implode(',', array_fill(0, count($dIds), '?'));
-        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
+        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
         $st->execute($dIds);
         $defs = eg_shape_defs();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -338,6 +371,14 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
                 $f = function ($v) { return rtrim(rtrim(number_format((float)$v, 3, '.', ''), '0'), '.'); };
                 return ($dia !== null ? $f($dia) : '–') . ($len !== null ? ' 長' . $f($len) : '');
             };
+            $hj = !empty($r['hub_json']) ? (json_decode($r['hub_json'], true) ?: null) : null;
+            if ($hj) {   // 多階凸出：各階依輸入順序以「→」串接
+                $sideTxt = function ($arr) use ($hubTxt) { return implode('→Ø', array_map(function ($g) use ($hubTxt) { return $hubTxt($g['d'] ?? null, $g['l'] ?? null); }, $arr)); };
+                $hubStr = $sideTxt($hj['a'] ?? []) . (!empty($hj['b']) ? '／Ø' . $sideTxt($hj['b']) : '');
+            } else {
+                $hubStr = $hubTxt($r['hub_dia'], $r['hub_len'])
+                        . (($r['hub2_dia'] !== null || $r['hub2_len'] !== null) ? '／Ø' . $hubTxt($r['hub2_dia'], $r['hub2_len']) : '');
+            }
             $bore = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
             $ds = array_map(function ($b) { return rtrim(rtrim(number_format((float)$b['d'], 3, '.', ''), '0'), '.') . (!empty($b['tp']) ? '(錐)' : ''); }, $bore);
             $nf = function ($v) { return rtrim(rtrim(number_format((float)$v, 3, '.', ''), '0'), '.'); };
@@ -353,8 +394,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
             $out[(int)$r['d_id']] = [
                 'outer'     => $r['outer_shape'],
                 'outer_nm'  => $r['outer_shape'] ? ($defs['outer'][$r['outer_shape']] ?? '') : '',
-                'hub'       => $hubTxt($r['hub_dia'], $r['hub_len'])
-                                 . (($r['hub2_dia'] !== null || $r['hub2_len'] !== null) ? '／Ø' . $hubTxt($r['hub2_dia'], $r['hub2_len']) : ''),
+                'hub'       => $hubStr,
                 'bore_type' => $r['bore_type'],
                 'bore_nm'   => $r['bore_type'] ? ($defs['bore'][$r['bore_type']]['name'] ?? '') : '',
                 'dias'      => $ds,
@@ -418,6 +458,12 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
                 if (isset($hlr[1]) && is_numeric($hlr[1])) { $cc .= " AND s_hl.$hc <= :fshl1$sfx"; $prm[":fshl1$sfx"] = $hlr[1]; }
                 $hlc[] = "($cc)";
             }
+            foreach (['a', 'b'] as $sk) {   // 多階凸出：任一階長度落在範圍內
+                $cj = 'jt.l IS NOT NULL';
+                if (isset($hlr[0]) && is_numeric($hlr[0])) { $cj .= " AND jt.l >= :fshlj0$sk"; $prm[":fshlj0$sk"] = $hlr[0]; }
+                if (isset($hlr[1]) && is_numeric($hlr[1])) { $cj .= " AND jt.l <= :fshlj1$sk"; $prm[":fshlj1$sk"] = $hlr[1]; }
+                $hlc[] = "EXISTS (SELECT 1 FROM JSON_TABLE(s_hl.hub_json, '\$." . $sk . "[*]' COLUMNS(l DECIMAL(10,3) PATH '\$.l' NULL ON EMPTY NULL ON ERROR)) jt WHERE $cj)";
+            }
             if (count($hlc) && (isset($hlr[0]) && is_numeric($hlr[0]) || isset($hlr[1]) && is_numeric($hlr[1])))
                 $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_hl WHERE s_hl.d_id={$alias}.d_id AND (" . implode(' OR ', $hlc) . "))";
         }
@@ -454,6 +500,12 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
             if (is_numeric($hmn)) { $cc .= " AND s_hb.$hc >= :fshmin$sfx"; $prm[":fshmin$sfx"] = $hmn; }
             if (is_numeric($hmx)) { $cc .= " AND s_hb.$hc <= :fshmax$sfx"; $prm[":fshmax$sfx"] = $hmx; }
             $hcs[] = "($cc)";
+        }
+        foreach (['a', 'b'] as $sk) {   // 多階凸出：任一階外徑落在範圍內
+            $cj = 'jt.d IS NOT NULL';
+            if (is_numeric($hmn)) { $cj .= " AND jt.d >= :fshminj$sk"; $prm[":fshminj$sk"] = $hmn; }
+            if (is_numeric($hmx)) { $cj .= " AND jt.d <= :fshmaxj$sk"; $prm[":fshmaxj$sk"] = $hmx; }
+            $hcs[] = "EXISTS (SELECT 1 FROM JSON_TABLE(s_hb.hub_json, '\$." . $sk . "[*]' COLUMNS(d DECIMAL(10,3) PATH '\$.d' NULL ON EMPTY NULL ON ERROR)) jt WHERE $cj)";
         }
         $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_hb WHERE s_hb.d_id={$alias}.d_id AND (" . implode(' OR ', $hcs) . "))";
     }
