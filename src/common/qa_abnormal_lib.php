@@ -1153,6 +1153,16 @@ function qab_create_order(PDO $db, array $data): array
             $respIsInternal = (int)($vrow['internal'] ?? 0) === 1 ? 1 : 0;
             $vendorNameForUnit = (string)$vrow['vendor_name'];
         }
+        // 報工自動開立、該站生管沒移轉廠商 → 依主檔管理「廠內廠商對應的製程大類／小類」自動帶入廠內廠商
+        if ($respVendorId === null && $pmReportId) {
+            require_once __DIR__ . '/internal_maker_bind_lib.php';
+            $ivm = imb_resolve($db, (int)$respProcessNo);
+            if ($ivm) {
+                $respVendorId = mb_substr((string)$ivm['maker_id_no'], 0, 11);
+                $respIsInternal = 1;
+                $vendorNameForUnit = (string)$ivm['maker_id'];
+            }
+        }
         $procName = (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$respProcessNo)->fetchColumn();
         $respUnit = trim(implode(' / ', array_filter([$procName, $vendorNameForUnit])));
         $respUnit = $respUnit !== '' ? mb_substr($respUnit, 0, 50) : null;

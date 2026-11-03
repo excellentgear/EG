@@ -10640,6 +10640,16 @@ echo "</script>\n";
             }, 250);
         }
 
+        // 這一站目前沒有廠商（生管沒移轉）→ 依主檔管理「廠內廠商對應的製程大類／小類」自動預帶廠內廠商（可再改）
+        if (!defaultMakerNo && procNo) {
+            $.post(_qtrSelf, { action:'internal_maker_for_process', process_no: procNo }, function(res){
+                if (res && res.success && res.maker && !_qtrHidNo.value) {
+                    _qtrFill({ maker_id_no: res.maker.maker_id_no, maker_id: res.maker.maker_id });
+                    _qtrInfo.insertAdjacentHTML('beforeend', '<div style="font-size:11px;color:#8a6a45;margin-top:3px;"><i class="fa fa-home"></i> 依「廠內廠商對應的製程」自動帶入，可自行更改</div>');
+                }
+            }, 'json');
+        }
+
         _qtrInp.addEventListener('input', function(){
             _qtrHidNo.value=''; _qtrHidName.value=''; _qtrInfo.innerHTML='';
             _qtrSearch(this.value.trim());

@@ -295,6 +295,20 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_completed_bom')
 }
 
 // AJAX VENDOR/MAKER SEARCH HANDLER (MODIFIED)
+// 該製程站沒有廠商時，依主檔管理「廠內廠商對應的製程大類／小類」回傳要預帶的廠內廠商（唯讀）
+else if (isset($_POST['action']) && $_POST['action'] === 'internal_maker_for_process') {
+    include_once '../../src/common/DBConnection.php';
+    header('Content-Type: application/json');
+    try {
+        if (!isset($db)) { $_imb_conn = new DBConnection(); $db = $_imb_conn->getPDO(); }
+        require_once '../../src/common/internal_maker_bind_lib.php';
+        $_imb = imb_resolve($db, (int)($_POST['process_no'] ?? 0));
+        echo json_encode(['success' => true, 'maker' => $_imb], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'maker' => null]);
+    }
+    exit;
+}
 else if (isset($_POST['action']) && $_POST['action'] === 'search_maker') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';

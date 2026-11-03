@@ -17,6 +17,7 @@
 require_once __DIR__ . '/qa_abnormal_lib.php';
 require_once __DIR__ . '/unit_supervisor_lib.php';
 require_once __DIR__ . '/ng_reason_lib.php';
+require_once __DIR__ . '/internal_maker_bind_lib.php';
 
 if (!function_exists('qab_pm_resync_orders')) {
     /** @return array ['checked'=>int,'changes'=>[['order_no','what','from','to'],...]] */
@@ -71,6 +72,20 @@ if (!function_exists('qab_pm_resync_orders')) {
                         $log->execute([$oid, $editor, '開單人', $nameOf((int)$o['created_by']), $nameOf($newBy), $why]);
                         $out['changes'][] = ['order_no' => $o['abnormal_order_no'], 'what' => '開單人',
                                              'from' => $nameOf((int)$o['created_by']), 'to' => $nameOf($newBy)];
+                    }
+                }
+                // 該站沒登記廠商 → 依「廠內廠商對應的製程大類／小類」（主檔管理）補上廠內廠商
+                if (($o['responsible_vendor_id'] === null || $o['responsible_vendor_id'] === '') && (int)$o['resp_process_no'] > 0) {
+                    $iv = imb_resolve($db, (int)$o['resp_process_no']);
+                    if ($iv) {
+                        $pn = $db->prepare("SELECT ProcessName FROM process_no WHERE ProcessNo=?");
+                        $pn->execute([(int)$o['resp_process_no']]);
+                        $unit = mb_substr(trim((string)$pn->fetchColumn() . ' / ' . $iv['maker_id']), 0, 50);
+                        $db->prepare("UPDATE qa_abnormal_order SET responsible_vendor_id=?, responsible_unit=?, resp_is_internal=1 WHERE id=?")
+                           ->execute([mb_substr((string)$iv['maker_id_no'], 0, 11), $unit, $oid]);
+                        $o['responsible_vendor_id'] = $iv['maker_id_no']; $o['is_int'] = 1;
+                        $log->execute([$oid, $editor, '責任廠商', '（未登記）', $iv['maker_id'], '依主檔管理「廠內廠商對應的製程」自動帶入廠內廠商']);
+                        $out['changes'][] = ['order_no' => $o['abnormal_order_no'], 'what' => '責任廠商（補上）', 'from' => '（未登記）', 'to' => $iv['maker_id']];
                     }
                 }
                 // 該製程站沒登記廠商＝廠內自製：視為廠內，才有責任部門／人員可帶（與建單當下同一條規則）

@@ -4628,6 +4628,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // ─── 廠商 ─────────────────────────────────────────────────────────────
+    // ── 廠內廠商對應製程大類／小類（唯一實作 src/common/internal_maker_bind_lib.php）──
+    if ($_POST['action'] === 'maker_internal_bind_get') {
+        try {
+            require_once __DIR__ . '/../../src/common/internal_maker_bind_lib.php';
+            $ibMk = strtoupper(trim($_POST['maker_id_no'] ?? ''));
+            echo json_encode(['success'=>true, 'types'=>imb_options($pdo, $ibMk)], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
+    if ($_POST['action'] === 'maker_internal_bind_save') {
+        try {
+            if (!($canMakerAdd || $canMakerEdit)) throw new Exception('無修改權限');
+            require_once __DIR__ . '/../../src/common/internal_maker_bind_lib.php';
+            $ibMk = strtoupper(trim($_POST['maker_id_no'] ?? ''));
+            $ibInternal = intval($_POST['internal'] ?? 0);
+            $ibLoaded = intval($_POST['loaded'] ?? 0);
+            $ibUid = isset($_SESSION['id']) ? (int)$_SESSION['id'] : null;
+            if (!$ibInternal) {
+                imb_save($pdo, $ibMk, [], [], $ibUid);          // 不再是廠內廠商 → 清除它的對應
+            } elseif ($ibLoaded) {                                  // 畫面沒載入成功就不動，免得誤清既有設定
+                imb_save($pdo, $ibMk, json_decode($_POST['type_ids'] ?? '[]', true) ?: [], json_decode($_POST['process_nos'] ?? '[]', true) ?: [], $ibUid);
+            }
+            // 對應改了：既有的報工自動開立異常單（結案與否都處理）同步補上廠商
+            $ibMsg = '';
+            try {
+                require_once __DIR__ . '/../../src/common/qab_pm_resync_lib.php';
+                $ibR = qab_pm_resync_orders($pdo, $ibUid);
+                if (count($ibR['changes'])) $ibMsg = '，並同步更新 ' . count($ibR['changes']) . ' 項既有異常單';
+            } catch (Throwable $e) { error_log('internal bind resync: ' . $e->getMessage()); }
+            echo json_encode(['success'=>true, 'message'=>'已儲存廠內廠商對應的製程' . $ibMsg], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        exit;
+    }
+
     if ($_POST['action'] === 'list_makers') {
         try {
             $fsub_cats_raw = trim($_POST['filter_sub_cats_p'] ?? trim($_POST['filter_sub_cat'] ?? ''));
@@ -4684,6 +4718,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where .= " AND m.maker_id_no IN ($phs_pm)";
                 foreach ($fpinned_m as $i => $mid) { $params[":fpm$i"] = $mid; }
             }
+            // 狀態篩選（與列表徽章同一套：停用＝status X；廠內＝未停用且 internal=1；正常＝未停用且非廠內）
+            $fst = trim($_POST['filter_status'] ?? '');
+            if ($fst === 'internal')      $where .= " AND (m.status IS NULL OR m.status <> 'X') AND m.internal = 1";
+            elseif ($fst === 'inactive')  $where .= " AND m.status = 'X'";
+            elseif ($fst === 'normal')    $where .= " AND (m.status IS NULL OR m.status <> 'X') AND (m.internal IS NULL OR m.internal <> 1)";
             // 付款方式篩選
             $fpm = trim($_POST['filter_payment_method'] ?? '');
             if ($fpm !== '') { $where .= " AND m.payment_method = :fpm"; $params[':fpm'] = $fpm; }
@@ -9546,6 +9585,11 @@ body { background:#F6F1EA; }
                     <span id="maker-settle-day-wrap" style="display:none;align-items:center;gap:3px;"><input type="number" id="maker-settle-day-input" class="settle-day-input form-control input-sm" placeholder="日" min="1" max="31" style="width:48px;height:24px;font-size:12px;padding:2px 6px;border-radius:10px;text-align:center;" oninput="onMakerSettleDayInput(this.value)"><span style="font-size:11px;color:#888;">日</span></span>
                     <span class="fc" data-msettle="EOM" onclick="setMakerSettleFilter('EOM',this)">月底</span>
                     <span class="fc" data-msettle="VARIABLE" onclick="setMakerSettleFilter('VARIABLE',this)">不固定</span>
+                    <span style="margin-left:12px;font-size:11px;color:#aaa;">狀態</span>
+                    <span class="fc active" data-mstat="" onclick="setMakerStatusFilter('',this)" style="margin-left:4px;">全部</span>
+                    <span class="fc" data-mstat="normal" onclick="setMakerStatusFilter('normal',this)">正常</span>
+                    <span class="fc" data-mstat="internal" onclick="setMakerStatusFilter('internal',this)">廠內</span>
+                    <span class="fc" data-mstat="inactive" onclick="setMakerStatusFilter('inactive',this)">停用</span>
                 </div>
             </div>
             <div class="data-card">
@@ -10810,8 +10854,19 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 
 <div class="form-group" style="margin-top:4px;">
     <label style="cursor:pointer;font-weight:normal;">
-        <input type="checkbox" id="mf-internal" name="internal" value="1" style="margin-right:6px;">廠內加工廠商
+        <input type="checkbox" id="mf-internal" name="internal" value="1" style="margin-right:6px;" onchange="mfIbToggle()">廠內加工廠商
     </label>
+</div>
+<!-- 廠內廠商負責的製程（大類／小類，可多選）：報工自動開立異常單、BOM 總覽快速移轉時，該站生管沒移轉廠商就自動帶入此廠商 -->
+<div id="mf-ib-wrap" style="display:none;margin:2px 0 10px;padding:8px 10px;border:1px solid #E4D3BC;background:#FFFBF4;border-radius:4px;">
+    <div style="font-weight:bold;font-size:12px;">負責的製程（大類／小類，可多選）</div>
+    <div style="font-size:11px;color:#8a7560;margin:2px 0 6px;line-height:1.5;">
+        報工自動開立品質異常單、BOM 總覽「快速移轉」時，該製程站若生管沒有移轉廠商，會自動帶入這個廠內廠商。
+        <b>每個大類、每個小類只能設定給一個廠內廠商</b>，已被其他廠內廠商設定的會反灰並標示是誰；判定先看小類再看大類。
+    </div>
+    <input type="text" id="mf-ib-filter" class="form-control input-sm" placeholder="輸入製程名稱篩選…" oninput="mfIbRender()" style="margin-bottom:6px;">
+    <div id="mf-ib-list" style="max-height:230px;overflow:auto;border:1px solid #eee;background:#fff;padding:6px;"><span style="color:#aaa;font-size:12px;">載入中…</span></div>
+    <div id="mf-ib-sel" style="font-size:11px;color:#5b3a12;margin-top:5px;"></div>
 </div>
 
 <?php
@@ -12978,7 +13033,7 @@ function deleteGearRow(gearId, dSettingDbId) {
 var _toolFilterInit = function(){ return { kind:'', module:'', type:'', material:'', coating:'', pa:'', boreMin:'', boreMax:'' }; };
 var _partsFilter  = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
 var _custFilter   = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null };
-var _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[] };
+var _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[], status:'' };
 
 // Palette for workpiece type chips (same logic as maker cat palette, no red)
 var _wpPalette = [
@@ -14584,7 +14639,7 @@ function setMakerFilter(val, el) {
 }
 
 function updateMakersClearBtn() {
-    var has = _makersFilter.main_cats.length || _makersFilter.sub_cats.length || _makersFilter.keywords.length || _makersFilter.pinnedMakerIds.length || (_makersFilter.quickKws && _makersFilter.quickKws.length) || _makersFilter.payment_method || _makersFilter.settlement_mode || _makersFilter.settlement_day || _makersFilter.proc_labels.length;
+    var has = _makersFilter.main_cats.length || _makersFilter.sub_cats.length || _makersFilter.keywords.length || _makersFilter.pinnedMakerIds.length || (_makersFilter.quickKws && _makersFilter.quickKws.length) || _makersFilter.payment_method || _makersFilter.status || _makersFilter.settlement_mode || _makersFilter.settlement_day || _makersFilter.proc_labels.length;
     var btn = document.getElementById('makers-clear-filter-btn');
     if (btn) btn.style.display = has ? '' : 'none';
 }
@@ -14606,7 +14661,7 @@ function onMakerSettleDayInput(val) {
     _makerSettleDayTimer = setTimeout(function(){ loadMakers(1); }, 400);
 }
 function clearMakersFilter() {
-    _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[] };
+    _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[], status:'' };
     var makerDayWrap = document.getElementById('maker-settle-day-wrap');
     if (makerDayWrap) { makerDayWrap.style.display = 'none'; var di = document.getElementById('maker-settle-day-input'); if(di) di.value = ''; }
     document.querySelectorAll('#makers-proc-label-filter .fc[data-plid]').forEach(function(c){ c.classList.remove('active'); });
@@ -14616,6 +14671,7 @@ function clearMakersFilter() {
     });
     document.querySelectorAll('[data-mpay]').forEach(function(c){ c.classList.toggle('active', c.dataset.mpay === ''); });
     document.querySelectorAll('[data-msettle]').forEach(function(c){ c.classList.toggle('active', c.dataset.msettle === ''); });
+    document.querySelectorAll('[data-mstat]').forEach(function(c){ c.classList.toggle('active', c.dataset.mstat === ''); });
     var mmc=document.getElementById('makers-main-chips'); if(mmc) mmc.innerHTML='';
     document.querySelectorAll('#makers-filter-bar .filter-group .fc').forEach(function(c){
         c.classList.remove('active'); var mid=parseInt(c.dataset.main||'0');
@@ -14653,6 +14709,11 @@ function setMakerSubFilter(val, el) {
 function setMakerPayFilter(val, el) {
     _makersFilter.payment_method = val;
     document.querySelectorAll('[data-mpay]').forEach(function(c){ c.classList.toggle('active', c.dataset.mpay === val); });
+    updateMakersClearBtn(); loadMakers(1);
+}
+function setMakerStatusFilter(val, el) {
+    _makersFilter.status = val;
+    document.querySelectorAll('[data-mstat]').forEach(function(c){ c.classList.toggle('active', c.dataset.mstat === val); });
     updateMakersClearBtn(); loadMakers(1);
 }
 function setMakerSettleFilter(val, el) {
@@ -19395,6 +19456,7 @@ function loadMakers(pg) {
           filter_sub_cats_p:      _makersFilter.sub_cats.join(','),
           filter_pinned_maker_ids: _makersFilter.pinnedMakerIds.join(','),
           filter_payment_method:   _makersFilter.payment_method,
+          filter_status:           _makersFilter.status,
           filter_settlement_mode:  _makersFilter.settlement_mode,
           filter_settlement_day:   _makersFilter.settlement_day !== null ? _makersFilter.settlement_day : '',
           filter_proc_labels:      JSON.stringify(_makersFilter.proc_labels)
@@ -19834,6 +19896,7 @@ function openMakerModal(maker_id_no) {
             fields.forEach(function(f){ var el=document.getElementById('mf-'+f); if(el) el.value=(d[f]!==null&&d[f]!==undefined)?d[f]:''; });
             document.getElementById('mf-status').value          = d.status||'';
             document.getElementById('mf-internal').checked      = (d.internal==1);
+            mfIbLoad(d.maker_id_no);
             document.getElementById('mf-quality_rating').value  = d.quality_rating||'';
             document.getElementById('mf-is_qualified').checked  = (d.is_qualified==1);
             document.getElementById('mf-est_date').value = d.est_date || _mdmTodayStr();
@@ -19883,6 +19946,7 @@ function openMakerModal(maker_id_no) {
         document.getElementById('mf-main_category_id').value = '';
         document.getElementById('mf-sub_cats').value = '[]';
         document.getElementById('mf-est_date').value = _mdmTodayStr();
+        mfIbLoad('');
         loadMakerCatUI([], []);
         // 新增：預填預設付款條件
         document.getElementById('mf-settlement_mode').value  = SYS_VENDOR_DEFAULT_SETTLEMENT_MODE || 'FIXED';
@@ -20307,11 +20371,79 @@ function submitMakerForm() {
     apiOnce('save_maker', data,
         function(r) {
             restore();
-            if (r.success) { showToast(r.message,'success'); $('#makerModal').modal('hide'); loadMakers(makersCurrent); }
+            if (r.success) {
+                // 廠內廠商對應的製程另外存（每個大類／小類只能設定給一個廠內廠商，衝突會在這裡擋下並說明）
+                mfIbSave(String(data.maker_id_no).trim().toUpperCase(), data.internal ? 1 : 0, function(ok, msg) {
+                    if (ok) { showToast(r.message + (msg ? '（' + msg + '）' : ''), 'success'); $('#makerModal').modal('hide'); loadMakers(makersCurrent); }
+                    else { showToast('廠商資料已儲存，但廠內對應的製程未儲存：' + msg, 'error'); loadMakers(makersCurrent); }
+                });
+            }
             else showToast(r.message,'error');
         },
         function(){ restore(); showToast('網路錯誤','error'); }
     );
+}
+
+// ── 廠內廠商對應製程（大類／小類）──
+var _ibTypes = [], _ibSel = { type:{}, process:{} }, _ibLoaded = false;
+function mfIbToggle() {
+    var w = document.getElementById('mf-ib-wrap'), on = document.getElementById('mf-internal').checked;
+    if (w) w.style.display = on ? 'block' : 'none';
+}
+function mfIbLoad(makerNo) {
+    _ibLoaded = false; _ibTypes = []; _ibSel = { type:{}, process:{} };
+    var l = document.getElementById('mf-ib-list'); if (l) l.innerHTML = '<span style="color:#aaa;font-size:12px;">載入中…</span>';
+    mfIbToggle();
+    api({ action:'maker_internal_bind_get', maker_id_no:makerNo }).done(function(r) {
+        if (!r.success) { if (l) l.innerHTML = '<span style="color:#DD5138;">' + escHtml(r.message || '載入失敗') + '</span>'; return; }
+        _ibTypes = r.types || [];
+        _ibTypes.forEach(function(t) {
+            if (t.mine) _ibSel.type[t.id] = 1;
+            (t.processes || []).forEach(function(p) { if (p.mine) _ibSel.process[p.no] = 1; });
+        });
+        _ibLoaded = true;
+        mfIbRender();
+    });
+}
+function mfIbRender() {
+    var l = document.getElementById('mf-ib-list'); if (!l) return;
+    var q = (document.getElementById('mf-ib-filter').value || '').trim().toLowerCase();
+    var h = '';
+    _ibTypes.forEach(function(t) {
+        var tHit = !q || String(t.name).toLowerCase().indexOf(q) >= 0;
+        var procs = (t.processes || []).filter(function(p) { return tHit || String(p.name).toLowerCase().indexOf(q) >= 0 || String(p.no).indexOf(q) >= 0; });
+        if (!tHit && !procs.length) return;
+        var tOwn = t.owner, tChk = !!_ibSel.type[t.id];
+        h += '<div style="margin-bottom:4px;"><label style="font-weight:bold;font-size:12px;margin:0;cursor:' + (tOwn ? 'not-allowed' : 'pointer') + ';' + (tOwn ? 'color:#aaa;' : '') + '">'
+           + '<input type="checkbox" class="mf-ib-t" data-id="' + t.id + '"' + (tChk ? ' checked' : '') + (tOwn ? ' disabled' : '') + '> 大類：' + escHtml(t.name)
+           + (tOwn ? ' <span style="font-weight:normal;font-size:11px;">（已由「' + escHtml(tOwn.name) + '」設定）</span>' : '') + '</label>'
+           + '<div style="display:flex;flex-wrap:wrap;gap:2px 12px;margin:2px 0 0 18px;">';
+        procs.forEach(function(p) {
+            var o = p.owner, c = !!_ibSel.process[p.no];
+            h += '<label style="font-weight:normal;font-size:12px;margin:0;cursor:' + (o ? 'not-allowed' : 'pointer') + ';' + (o ? 'color:#aaa;' : '') + '">'
+               + '<input type="checkbox" class="mf-ib-p" data-no="' + p.no + '"' + (c ? ' checked' : '') + (o ? ' disabled' : '') + '> '
+               + escHtml(p.name) + (o ? '（' + escHtml(o.name) + '）' : '') + '</label>';
+        });
+        h += '</div></div>';
+    });
+    l.innerHTML = h || '<span style="color:#aaa;font-size:12px;">沒有符合的製程</span>';
+    var s = document.getElementById('mf-ib-sel');
+    if (s) {
+        var tn = Object.keys(_ibSel.type).length, pn = Object.keys(_ibSel.process).length;
+        s.textContent = '已選：大類 ' + tn + ' 個、小類 ' + pn + ' 個';
+    }
+}
+document.addEventListener('change', function(e) {
+    var el = e.target;
+    if (!el || !el.classList) return;
+    if (el.classList.contains('mf-ib-t')) { if (el.checked) _ibSel.type[el.dataset.id] = 1; else delete _ibSel.type[el.dataset.id]; mfIbRender(); }
+    else if (el.classList.contains('mf-ib-p')) { if (el.checked) _ibSel.process[el.dataset.no] = 1; else delete _ibSel.process[el.dataset.no]; mfIbRender(); }
+});
+function mfIbSave(makerNo, isInternal, cb) {
+    api({ action:'maker_internal_bind_save', maker_id_no:makerNo, internal:isInternal, loaded:_ibLoaded ? 1 : 0,
+          type_ids:JSON.stringify(Object.keys(_ibSel.type).map(Number)), process_nos:JSON.stringify(Object.keys(_ibSel.process).map(Number)) })
+    .done(function(r) { cb(!!r.success, r.success ? (isInternal ? r.message : '') : (r.message || '失敗')); })
+    .fail(function() { cb(false, '網路錯誤'); });
 }
 
 // deleteMaker() 已定義在客戶區塊後，此為舊版佔位，不再使用
