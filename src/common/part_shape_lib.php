@@ -49,6 +49,10 @@ function eg_shape_ensure_table(PDO $pdo): void {
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_dia'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_dia DECIMAL(10,3) NULL COMMENT '最大凸出外徑（單邊/雙邊凸出才填）' AFTER outer_shape");
             }
+            // 補欄：凸出長度（2026-11-03）
+            if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_len'")->fetchColumn()) {
+                $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_len DECIMAL(10,3) NULL COMMENT '凸出長度（單邊/雙邊凸出才填；雙邊填單側長度）' AFTER hub_dia");
+            }
             // 補欄：外錐／重點外徑段（2026-11-03，JSON）
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'outer_json'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN outer_json TEXT NULL COMMENT '{otp:[外錐],seg:[重點外徑段]}' AFTER hub_dia");
@@ -190,10 +194,12 @@ function eg_shape_normalize($in): array {
     $outer = trim((string)($in['outer'] ?? ''));
     if ($outer !== '' && !isset($defs['outer'][$outer])) return [null, '外形代碼不正確'];
     // 最大凸出外徑：只有單邊／雙邊凸出才有意義，其他外形一律清除
-    $hub = null;
+    $hub = null; $hubLen = null;
     if ($outer === 'one_side' || $outer === 'both_sides') {
         $hub = eg_shape_num($in['hub_dia'] ?? '');
         if ($hub === false) return [null, '最大凸出外徑必須是大於 0 的數字'];
+        $hubLen = eg_shape_num($in['hub_len'] ?? '');
+        if ($hubLen === false) return [null, '凸出長度必須是大於 0 的數字'];
     }
     $mode  = trim((string)($in['mode'] ?? ''));
     if ($mode !== '' && !in_array($mode, ['single', 'steps', 'ends'], true)) return [null, '內孔型態不正確'];
@@ -262,6 +268,7 @@ function eg_shape_normalize($in): array {
     if ($exErr) return [null, $exErr];
     if ($outer === '' && $btype === null && $exJson === null) return [null, null];
     $extra = $exSent ? ['outer_json' => $exJson] : [];
+    if (array_key_exists('hub_len', $in)) $extra['hub_len'] = $hubLen;   // 沒送這個欄位＝舊分頁，不動原值
     return [$extra + [
         'outer_shape' => $outer !== '' ? $outer : null,
         'hub_dia'     => $hub,
@@ -279,18 +286,20 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
         return;
     }
     // outer_json 只有前端有送才寫（舊分頁沒送＝不動，免得把外錐／外徑段洗掉）
-    $hasEx = array_key_exists('outer_json', $row);
-    $pdo->prepare("INSERT INTO d_setting_shape (d_id,outer_shape,hub_dia," . ($hasEx ? "outer_json," : "") . "bore_type,bore_steps,bore_json,bore_max,bore_min,modified_by,modified_at)
-                   VALUES (?,?,?," . ($hasEx ? "?," : "") . "?,?,?,?,?,?,NOW())
-                   ON DUPLICATE KEY UPDATE outer_shape=VALUES(outer_shape),hub_dia=VALUES(hub_dia)," . ($hasEx ? "outer_json=VALUES(outer_json)," : "") . "bore_type=VALUES(bore_type),bore_steps=VALUES(bore_steps),
-                   bore_json=VALUES(bore_json),bore_max=VALUES(bore_max),bore_min=VALUES(bore_min),modified_by=VALUES(modified_by),modified_at=NOW()")
-        ->execute(array_merge([$dId, $row['outer_shape'], $row['hub_dia']], $hasEx ? [$row['outer_json']] : [], [$row['bore_type'], $row['bore_steps'], $row['bore_json'], $row['bore_max'], $row['bore_min'], $by !== '' ? $by : null]));
+    $cols = ['outer_shape' => $row['outer_shape'], 'hub_dia' => $row['hub_dia']];
+    foreach (['hub_len', 'outer_json'] as $k) if (array_key_exists($k, $row)) $cols[$k] = $row[$k];
+    $cols += ['bore_type' => $row['bore_type'], 'bore_steps' => $row['bore_steps'], 'bore_json' => $row['bore_json'],
+              'bore_max' => $row['bore_max'], 'bore_min' => $row['bore_min'], 'modified_by' => $by !== '' ? $by : null];
+    $names = array_keys($cols);
+    $pdo->prepare("INSERT INTO d_setting_shape (d_id," . implode(',', $names) . ",modified_at) VALUES (?," . implode(',', array_fill(0, count($names), '?')) . ",NOW())
+                   ON DUPLICATE KEY UPDATE " . implode(',', array_map(function ($n) { return "$n=VALUES($n)"; }, $names)) . ",modified_at=NOW()")
+        ->execute(array_merge([$dId], array_values($cols)));
 }
 
 /** 讀單一料號（給編輯畫面）。沒有資料回 null。 */
 function eg_shape_get(PDO $pdo, int $dId): ?array {
     try {
-        $st = $pdo->prepare("SELECT outer_shape,hub_dia,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
+        $st = $pdo->prepare("SELECT outer_shape,hub_dia,hub_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
         $st->execute([$dId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
@@ -310,7 +319,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
     $out = [];
     try {
         $ph = implode(',', array_fill(0, count($dIds), '?'));
-        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
+        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,hub_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
         $st->execute($dIds);
         $defs = eg_shape_defs();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -329,7 +338,8 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
             $out[(int)$r['d_id']] = [
                 'outer'     => $r['outer_shape'],
                 'outer_nm'  => $r['outer_shape'] ? ($defs['outer'][$r['outer_shape']] ?? '') : '',
-                'hub'       => $r['hub_dia'] !== null ? rtrim(rtrim(number_format((float)$r['hub_dia'], 3, '.', ''), '0'), '.') : '',
+                'hub'       => $r['hub_dia'] !== null ? rtrim(rtrim(number_format((float)$r['hub_dia'], 3, '.', ''), '0'), '.')
+                                 . ($r['hub_len'] !== null ? ' 長' . rtrim(rtrim(number_format((float)$r['hub_len'], 3, '.', ''), '0'), '.') : '') : '',
                 'bore_type' => $r['bore_type'],
                 'bore_nm'   => $r['bore_type'] ? ($defs['bore'][$r['bore_type']]['name'] ?? '') : '',
                 'dias'      => $ds,
