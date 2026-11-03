@@ -9784,7 +9784,7 @@ body { background:#F6F1EA; }
             <label>工件總長 <span class="required-star" id="pf-wl-star" style="display:none;">*</span>
                 <span style="font-weight:normal;color:#999;font-size:11px;">(mm)</span></label>
             <div class="input-group">
-                <input type="text" class="form-control" id="pf-workpiece_length" name="workpiece_length" placeholder="—" autocomplete="off" maxlength="30" inputmode="decimal" data-eg-hint="例：120 或 85.5">
+                <input type="text" class="form-control" id="pf-workpiece_length" name="workpiece_length" placeholder="—" autocomplete="off" maxlength="30" inputmode="decimal" data-eg-calc="1" data-eg-hint="例：120、85.5，或算式 150-30 按 Enter">
                 <span class="input-group-addon">mm</span>
             </div>
             <div class="id-hint" id="pf-wl-err" style="color:#DD5138;"></div>
