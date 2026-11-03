@@ -97,7 +97,7 @@ try { $pdo->exec("CREATE TABLE IF NOT EXISTS `system_settings` (
     `updated_by`    VARCHAR(100) NULL,
     `updated_at`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) COMMENT='系統全域設定'"); } catch(Exception $e){}
-try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('sales_nas_dir','Z:/BOM/ERP/業務/'),('sales_url_dir','/nas/ERP/業務/')"); } catch(Exception $e){}
+try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('sales_nas_dir','//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/'),('sales_url_dir','/nas/ERP/業務/')"); } catch(Exception $e){}
 
 // ── 通知表 ─────────────────────────────────────────────────────────────────
 try { $pdo->exec("CREATE TABLE IF NOT EXISTS `sales_track_notifications` (
@@ -738,10 +738,10 @@ try {
             if (!in_array($ext, $allowed_ext)) throw new Exception('不支援的圖片格式');
             try {
                 $nasRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_nas_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                $nas_dir = $nasRow ? $nasRow['setting_value'] : 'Z:/BOM/ERP/業務/';
+                $nas_dir = $nasRow ? $nasRow['setting_value'] : '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/';
                 // 圖片改走讀檔 API（不再直連 /nas 別名）：位置只由 sales_nas_dir 決定
                 $url_dir = '../../src/store/SalesImage_API.php?f=';
-            } catch(Exception $e) { $nas_dir='Z:/BOM/ERP/業務/'; $url_dir='../../src/store/SalesImage_API.php?f='; }
+            } catch(Exception $e) { $nas_dir='//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/'; $url_dir='../../src/store/SalesImage_API.php?f='; }
             if (!is_dir($nas_dir)) { if (!mkdir($nas_dir, 0777, true)) throw new Exception('無法建立目錄'); }
             $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
             if (!move_uploaded_file($_FILES['image']['tmp_name'], $nas_dir . $fname)) throw new Exception('檔案移動失敗');
@@ -761,8 +761,8 @@ try {
             if ($fn) {
                 try {
                     $nasRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_nas_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                    $nas_dir = $nasRow ? $nasRow['setting_value'] : 'Z:/BOM/ERP/業務/';
-                } catch(Exception $e) { $nas_dir='Z:/BOM/ERP/業務/'; }
+                    $nas_dir = $nasRow ? $nasRow['setting_value'] : '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/';
+                } catch(Exception $e) { $nas_dir='//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/'; }
                 $fp = $nas_dir . $fn;
                 if (file_exists($fp)) @unlink($fp);
             }

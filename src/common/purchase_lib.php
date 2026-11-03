@@ -979,7 +979,7 @@ function purchase_write_txn(PDO $db, int $stockItemId, string $type, float $qty,
  * ============================================================ */
 function purchase_attach_dirs(PDO $db): array
 {
-    $nas = purchase_setting($db, 'purchase_attach_nas_dir', 'Z:/BOM/ERP/採購/');
+    $nas = purchase_setting($db, 'purchase_attach_nas_dir', '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/採購/');
     // 結尾補分隔符時要跟著路徑本身的風格：UNC（\\server\share\...）補反斜線，
     // 否則會組出 \\excellentnas\x\採購/PR001 這種混用路徑
     if (!preg_match('#[/\\\\]$#', $nas)) $nas .= (strpos($nas, '\\') !== false ? '\\' : '/');

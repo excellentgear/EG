@@ -1006,7 +1006,7 @@ if (isset($_POST['btn_go_events'])) {
                     <label style="font-size:13px;font-weight:600;color:var(--eg-dark);">附件儲存基礎路徑</label>
                     <input type="text" id="set-base" class="eg-input" placeholder="\\主機\分享\...  或留空使用預設" style="font-family:monospace;">
                     <p style="font-size:12px;color:var(--eg-muted);margin:8px 0 0;">
-                        <i class="fa fa-info-circle"></i> 網路磁碟請用 <b>UNC 路徑</b>（如 <code>\\excellentnas\生產課\BOM\ERP\公告通知\公告通知附件</code>）；
+                        <i class="fa fa-info-circle"></i> 網路磁碟請用 <b>UNC 路徑</b>（如 <code>\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\公告通知\公告通知附件</code>）；
                         <b>不可用磁碟機代號（Z:）</b>，Apache 服務看不到對應磁碟。留空則存於專案 <code>uploads/notice</code>。<br>
                         公告附件會依 <b>公告編號</b> 建立子資料夾；回覆附件存於該公告的「回覆附件」子資料夾。
                     </p>

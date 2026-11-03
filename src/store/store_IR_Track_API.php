@@ -1186,7 +1186,8 @@ function ensureIrSchema(PDO $pdo): void {
 }
 
 function getIrFolder(string $irNo): string {
-    return 'Z:\\BOM\\ERP\\業務\\退貨資料' . DIRECTORY_SEPARATOR . $irNo;
+    require_once __DIR__ . '/../common/erp_nas_lib.php';   // 搬家前走舊位置、搬家後走 AS9100 根資料夾
+    return eg_erp_dir('業務\\退貨資料') . DIRECTORY_SEPARATOR . $irNo;
 }
 
 function saveOneIrFile(PDO $pdo, array $f, int $irId, string $folder, ?int $noteId, int $userId): array {

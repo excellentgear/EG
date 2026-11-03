@@ -394,7 +394,7 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                     <div class="form-group">
                         <label><strong>異常單附件儲存根目錄</strong></label>
                         <input type="text" class="form-control" id="attach_root_path_input"
-                               placeholder="例: Z:\BOM\ERP\品管\異常單附件">
+                               placeholder="例: \\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\品管\異常單附件">
                         <small class="text-muted">附件將自動存入「此路徑\<strong>異常單號</strong>\」資料夾中，請確認路徑對應網站伺服器可存取的磁碟位置。</small>
                     </div>
                     <button type="button" class="btn btn-primary" onclick="saveAttachRootPath()">
@@ -2883,7 +2883,7 @@ function escHtml(str) {
 // ── 附件路徑設定 ─────────────────────────────────────────────
 function loadAttachRootPath() {
     $.post(QA_API, { action: 'get_setting', key: 'attach_root_path' }, function(res) {
-        if (res.success) $('#attach_root_path_input').val(res.value || 'Z:\\BOM\\ERP\\品管\\異常單附件');
+        if (res.success) $('#attach_root_path_input').val(res.value || '\\\\excellentnas\\AS9100維護\\ERP AS9100文件(勿刪)\\品管\\異常單附件');
     }, 'json');
 }
 

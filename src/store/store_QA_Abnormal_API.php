@@ -15,6 +15,7 @@ header('Cache-Control: no-store');
 include_once '../common/DBConnection.php';
 include_once '../common/_config.php';
 require_once '../common/qa_notify.php'; // 異常單 ↔ 通知系統共用模組
+require_once '../common/erp_nas_lib.php';  // 舊 ERP 資料夾搬家後的路徑（寫死預設值改走這裡）
 require_once '../common/attachment_lib.php'; // 附件標籤/轉檔/加註 共用函式庫
 
 $conn = new DBConnection();
@@ -577,7 +578,7 @@ try {
             $tempKey  = trim($_POST['temp_key'] ?? '');
             $orderId  = (int)($_POST['abnormal_order_id'] ?? 0);
             $orderNo  = trim($_POST['abnormal_order_no'] ?? '');
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
 
             if ($orderId > 0 && $orderNo) {
                 $folder       = rtrim($rootPath, '\\/') . DIRECTORY_SEPARATOR . $orderNo;
@@ -624,7 +625,7 @@ try {
         case 'att_upload':
             $v = eg_att_validate_upload($_FILES['file'] ?? []);
             if (!$v['ok']) { echo json_encode(['success'=>false,'message'=>$v['msg']]); break; }
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
             eg_att_pending_sweep($rootPath);
             if (in_array($v['ext'], eg_att_office_ext(), true)) {
                 $p = eg_att_pending_create($rootPath, $_FILES['file'], $v['ext']);
@@ -672,7 +673,7 @@ try {
             break;
 
         case 'att_convert':
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
             $sheets = json_decode($_POST['sheets'] ?? '', true);
             $pdf = eg_att_pending_convert($rootPath, trim($_POST['upload_id'] ?? ''), is_array($sheets) && $sheets ? $sheets : null);
             if (!$pdf) { echo json_encode(['success'=>false,'message'=>'轉換失敗，該附件視同未完成上傳（詳見伺服器記錄）']); break; }
@@ -680,7 +681,7 @@ try {
             break;
 
         case 'att_preview': // GET；串流轉好的 PDF 給預覽 iframe
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
             $meta = eg_att_pending_get($rootPath, trim($_GET['upload_id'] ?? ''));
             if (!$meta || empty($meta['pdf']) || !is_file($meta['pdf'])) { http_response_code(404); exit('not found'); }
             header('Content-Type: application/pdf');
@@ -693,7 +694,7 @@ try {
             if (!in_array($fieldType, ['qa_ps','phenomenon','defect_detail'])) {
                 echo json_encode(['success'=>false,'message'=>'無效欄位']); break;
             }
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
             $uploadId = trim($_POST['upload_id'] ?? '');
             $meta = eg_att_pending_get($rootPath, $uploadId);
             if (!$meta || empty($meta['pdf']) || !is_file($meta['pdf'])) {
@@ -726,7 +727,7 @@ try {
             break;
 
         case 'att_discard':
-            $rootPath = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+            $rootPath = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
             eg_att_pending_discard($rootPath, trim($_POST['upload_id'] ?? ''));
             echo json_encode(['success'=>true]);
             break;
@@ -1497,7 +1498,7 @@ function qaAddWorkdays(PDO $db, DateTime $base, int $days): DateTime {
 }
 
 function linkTempAttachments(PDO $db, string $tempKey, int $orderId, string $orderNo): void {
-    $rootPath    = getQASetting($db, 'attach_root_path') ?: 'Z:\\BOM\\ERP\\品管\\異常單附件';
+    $rootPath    = getQASetting($db, 'attach_root_path') ?: eg_erp_dir('品管\\異常單附件', $db);
     $orderFolder = rtrim($rootPath, '\\/') . DIRECTORY_SEPARATOR . $orderNo;
 
     $stmt = $db->prepare("SELECT id, file_path, file_name FROM qa_abnormal_attachments WHERE temp_key=? AND abnormal_order_id IS NULL");

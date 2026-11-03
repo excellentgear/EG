@@ -191,7 +191,7 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
             <div class="p-head"><i class="fa fa-paperclip"></i> 佐證附件設定</div>
             <div class="p-body" style="max-width:760px;">
                 <label style="font-size:13px;color:#5b3a1e;">NAS 存放根路徑（DB 只存檔名，路徑讀取當下即時組；子資料夾=年度自動建立）</label>
-                <input type="text" id="setBase" placeholder="例：\\\\NAS\\share\\KPI佐證  或  Z:\\BOM\\ERP\\KPI佐證（留空=系統內 uploads/kpi_attach）"
+                <input type="text" id="setBase" placeholder="例：\\\\NAS\\share\\KPI佐證  或  \\\\excellentnas\\AS9100維護\\ERP AS9100文件(勿刪)\\KPI佐證（留空=系統內 uploads/kpi_attach）"
                     style="width:100%;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;box-sizing:border-box;">
                 <div class="param-hint" id="baseStatus"></div>
                 <label style="font-size:13px;color:#5b3a1e;margin-top:8px;display:block;">每月每項 KPI 附件上限（件）</label>

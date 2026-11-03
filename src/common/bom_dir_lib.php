@@ -15,7 +15,7 @@
  *
  * 設定鍵（管理員可在頁面上自行設定，預設值＝維持現行行為，不改設定就跟以前一模一樣）：
  *   bom_scan_dir      BOM 圖檔資料夾      預設 Z:/BOM/
- *   bom_erp_scan_dir  ERP 圖檔資料夾      預設 Z:/BOM/ERP/資材(生管and業務)/BOM/
+ *   bom_erp_scan_dir  ERP 圖檔資料夾      預設 //excellentnas/AS9100維護/ERP AS9100文件(勿刪)/資材(生管and業務)/BOM/
  */
 
 if (!function_exists('eg_bom_dir_get')) {
@@ -34,7 +34,7 @@ function eg_bom_dir_get(PDO $db, string $key, string $default): string {
 }
 
 function eg_bom_scan_dir(PDO $db): string     { return eg_bom_dir_get($db, 'bom_scan_dir', 'Z:/BOM/'); }
-function eg_bom_erp_scan_dir(PDO $db): string { return eg_bom_dir_get($db, 'bom_erp_scan_dir', 'Z:/BOM/ERP/資材(生管and業務)/BOM/'); }
+function eg_bom_erp_scan_dir(PDO $db): string { return eg_bom_dir_get($db, 'bom_erp_scan_dir', '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/資材(生管and業務)/BOM/'); }
 
 /**
  * ── 免傳 PDO 的版本（2026-08-25 新增）─────────────────────────────────────
@@ -70,7 +70,7 @@ function eg_bom_erp_scan_dir_auto(): string {
     static $v = null;
     if ($v !== null) return $v;
     $db = eg_bom_dir_pdo();
-    return $v = eg_bom_fs_path($db ? eg_bom_erp_scan_dir($db) : 'Z:/BOM/ERP/資材(生管and業務)/BOM/');
+    return $v = eg_bom_fs_path($db ? eg_bom_erp_scan_dir($db) : '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/資材(生管and業務)/BOM/');
 }
 
 /**

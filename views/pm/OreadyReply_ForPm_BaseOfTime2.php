@@ -15370,7 +15370,7 @@ echo "</script>\n";
                         <label style="font-size:13px;">ERP／資材報告資料夾</label>
                         <div style="display:flex;gap:6px;">
                             <input type="text" class="form-control input-sm" id="bomDirErp" style="font-family:monospace;"
-                                   placeholder="例：\\excellentnas\生產課\BOM\ERP\資材(生管and業務)\BOM\">
+                                   placeholder="例：\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\資材(生管and業務)\BOM\">
                             <button type="button" class="btn btn-default btn-sm" style="white-space:nowrap;"
                                     onclick="probeBomDir('bomDirErp','bomDirErpMsg')"><i class="fa fa-plug"></i> 測試讀取</button>
                         </div>

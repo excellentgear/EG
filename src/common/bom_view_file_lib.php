@@ -197,6 +197,19 @@ function eg_bvf_resolve_nas(PDO $db, string $path): ?array {
     if (preg_match('#^[a-zA-Z]:|^[/\\\\]#', $rel)) return null;   // 不接受絕對路徑
     $name = basename(str_replace(chr(92), '/', $rel));
     $rel  = str_replace('/', DIRECTORY_SEPARATOR, $rel);
+    // 2026-11-03：舊 ERP 資料夾（<BOM>\ERP\…）已搬到 AS9100 根資料夾，/nas/ERP/xxx 的網址不變，
+    // 實體位置改看新根；新位置找不到才退回舊位置（搬家切換前後都讀得到）。
+    if (preg_match('#^ERP[\\\\/]#', $rel)) {
+        require_once __DIR__ . '/erp_nas_lib.php';
+        if (eg_erp_moved($db)) {
+            $nf = EG_ERP_NEW_ROOT . substr($rel, 3);
+            if (is_file($nf)) return [$nf, $name];
+            if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                $nb = @mb_convert_encoding($nf, 'Big5', 'UTF-8');
+                if ($nb !== false && $nb !== '' && is_file($nb)) return [$nb, $name];
+            }
+        }
+    }
     $dir  = eg_bom_fs_path(eg_bom_scan_dir($db));
     $fs   = rtrim($dir, eg_bvf_seps()) . DIRECTORY_SEPARATOR . $rel;
     if (!is_file($fs) && strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {

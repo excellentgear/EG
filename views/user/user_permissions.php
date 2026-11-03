@@ -1917,7 +1917,7 @@ $_quotDepts = array_keys($_deptSet);
                                     </p>
                                     <form method="post" style="display:flex;gap:8px;align-items:center;max-width:760px;">
                                         <input type="text" name="imgedit_label_dir" class="form-control input-sm" style="flex:1;font-family:Consolas,monospace;"
-                                               value="<?= htmlspecialchars($imgeditLabelDir, ENT_QUOTES, 'UTF-8') ?>" placeholder="\\excellentnas\生產課\BOM\ERP\共用資料\標籤" <?= $canEdit ? '' : 'disabled' ?>>
+                                               value="<?= htmlspecialchars($imgeditLabelDir, ENT_QUOTES, 'UTF-8') ?>" placeholder="\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\共用資料\標籤" <?= $canEdit ? '' : 'disabled' ?>>
                                         <?php if ($canEdit): ?>
                                         <button type="submit" name="save_imgedit_label_dir" value="1" class="btn btn-primary btn-sm"
                                                 onclick="return confirm('確定更新標籤儲存路徑？\n既有檔案不會自動搬移，請確認新位置已放妥檔案。');">

@@ -692,7 +692,7 @@ function tool_calib_year_plan(PDO $db, int $year): array {
  * ============================================================ */
 /** 附件設定：dir(以/結尾)、ext(允許副檔名陣列)、maxmb、types(文件類別陣列) */
 function tool_calib_attach_cfg(PDO $db): array {
-    $dir   = 'Z:/BOM/ERP/量測儀器校驗/';
+    $dir   = '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/量測儀器校驗/';
     $ext   = 'pdf,jpg,jpeg,png,gif,webp,xlsx,xls,doc,docx,zip';
     $maxmb = 20;
     $types = '校驗報告,校驗證書,原始記錄,其他';

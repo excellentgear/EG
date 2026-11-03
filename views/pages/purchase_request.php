@@ -301,7 +301,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <h5>附件儲存路徑（DB 只存檔名，完整路徑由此設定即時組出）</h5>
                 <div class="pq-fld">
                     <label>實體存放路徑（磁碟或網路資料夾）</label>
-                    <input type="text" id="cfgNas" placeholder="例：Z:\BOM\ERP\採購　或　\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購">
+                    <input type="text" id="cfgNas" placeholder="例：\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購　或　\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購">
                 </div>
                 <div id="cfgNasState" class="hint" style="margin-top:6px;"></div>
                 <p class="hint" style="margin-top:6px;">

@@ -110,7 +110,7 @@ case 'save_settings': {
     $nasIn = pv('nas_dir');
     if ($nasIn !== '') {
         // 擋掉把網址填進實體路徑欄的情況——存進去要等到有人上傳附件才會發現壞了
-        if (preg_match('#^https?://#i', $nasIn)) jerr('「實體存放路徑」要填磁碟或網路資料夾路徑（例 Z:\BOM\ERP\採購 或 \\\\server\\share\\採購），不是網址');
+        if (preg_match('#^https?://#i', $nasIn)) jerr('「實體存放路徑」要填磁碟或網路資料夾路徑（例 \\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購 或 \\\\server\\share\\採購），不是網址');
         purchase_set_setting($db, 'purchase_attach_nas_dir', $nasIn);
     }
     if (isset($_POST['print_header'])) purchase_set_setting($db, 'purchase_print_header', pv('print_header'));

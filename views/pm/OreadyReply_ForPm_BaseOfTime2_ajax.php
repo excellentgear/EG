@@ -1306,7 +1306,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
     // 路徑編碼（此路徑含中文，Windows 下需 Big5）與檔名轉回 UTF-8 都由 bom_dir_lib 處理。
     // 這裡不取 mtime（資料夾約 6 千個檔），只對真正命中的檔案取，維持原本的效能。
     $erp_files = [];
-    $erp_dir_utf8 = isset($db) ? eg_bom_erp_scan_dir($db) : 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+    $erp_dir_utf8 = isset($db) ? eg_bom_erp_scan_dir($db) : '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/資材(生管and業務)/BOM/';
     $erp_entries  = eg_bom_scan($erp_dir_utf8, [], '', false);
 
     if ($erp_entries) {

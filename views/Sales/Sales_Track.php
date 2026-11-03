@@ -1321,7 +1321,7 @@ function loadSettingsTab(tab, btn) {
             var dname = r.dept_name || '（未設定）';
             var did   = r.dept_id   || '—';
             $.post(API, {action:'get_settings'}, function(s) {
-                var nasDir = (s.data && s.data.sales_nas_dir) || 'Z:/BOM/ERP/業務/';
+                var nasDir = (s.data && s.data.sales_nas_dir) || '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/業務/';
                 var isA = (PERM === 'A');
                 var nasInput = isA ?
                     '<div style="display:flex;gap:6px;margin-top:4px;"><input type="text" class="form-control input-sm" id="cfg-nas-dir" value="'+esc(nasDir)+'" style="flex:1;font-family:monospace;"><button class="btn btn-xs btn-primary" onclick="saveSettingKey(\'sales_nas_dir\',\'cfg-nas-dir\')"><i class="fa fa-save"></i> 儲存</button></div>' :
