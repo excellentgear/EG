@@ -462,6 +462,7 @@
         var list = chip.getAttribute('data-kind') === 'outer' ? self.outer : self.bore, c = chip.getAttribute('data-code'), ix = list.indexOf(c);
         if (ix >= 0) list.splice(ix, 1); else list.push(c);
         chip.classList.toggle('on', ix < 0);
+        if (c === 'has_taper' || c === 'has_otp') self._panels(true);
         self._fire();
       });
       el.addEventListener('input', function (ev) { if (ev.target.matches('input')) self._fire(); });
@@ -469,48 +470,66 @@
     _fire: function () { var self = this; clearTimeout(this._t); this._t = setTimeout(function () { if (self.onChange) self.onChange(); }, 350); },
     render: function () {
       var defs = D(), h = '', self = this;
-      h += '<span class="filter-group-label">外形</span><span class="eg-shape-row" style="display:inline-flex;margin:0">';
+      var line = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:3px 0;width:100%">';
+      var ins = 'class="form-control input-sm no-spin-input" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px"';
+      var sepx = '<span style="color:#888;margin:0 2px;">~</span>';
+      var st = 'stroke="' + LINE + '" stroke-width="1.2"';
+      // 第 1 行：外形
+      h += line + '<span class="filter-group-label">外形</span>';
       Object.keys(defs.outer).forEach(function (c) { h += chipHtml('outer', c, defs.outer[c], self.outer.indexOf(c) >= 0); });
-      h += chipHtml('outer', 'other', '其他', self.outer.indexOf('other') >= 0);
-      h += '<span class="eg-shape-sep">│</span>' +
-        flagChip('outer', 'has_otp', '有外錐', self.outer.indexOf('has_otp') >= 0, '<polygon points="8,16 48,10 48,30 8,24" fill="' + BODY + '" ' + 'stroke="' + LINE + '" stroke-width="1.2"/>') +
-        flagChip('outer', 'has_seg', '有外徑段', self.outer.indexOf('has_seg') >= 0, rect(6, 14, 14, 12, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + rect(20, 8, 18, 24, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + rect(38, 14, 12, 12, BODY, 'stroke="' + LINE + '" stroke-width="1.2"')) + '</span>';
-      h += '<br><span class="filter-group-label">內孔</span><span class="eg-shape-row" style="display:inline-flex;margin:0">';
+      h += chipHtml('outer', 'other', '其他', self.outer.indexOf('other') >= 0) +
+        '<span class="eg-shape-sep">│</span>' +
+        flagChip('outer', 'has_otp', '有外錐', self.outer.indexOf('has_otp') >= 0, '<polygon points="8,16 48,10 48,30 8,24" fill="' + BODY + '" ' + st + '/>') +
+        flagChip('outer', 'has_seg', '有外徑段', self.outer.indexOf('has_seg') >= 0, rect(6, 14, 14, 12, BODY, st) + rect(20, 8, 18, 24, BODY, st) + rect(38, 14, 12, 12, BODY, st)) + '</div>';
+      // 第 2 行：內孔（獨立一行）
+      h += line + '<span class="filter-group-label">內孔</span>';
       Object.keys(defs.bore).forEach(function (c) { h += chipHtml('bore', c, defs.bore[c].name, self.bore.indexOf(c) >= 0); });
       h += chipHtml('bore', 'none', '無孔', self.bore.indexOf('none') >= 0) +
         '<span class="eg-shape-sep">│</span>' +
-        flagChip('bore', 'has_taper', '含錐孔', self.bore.indexOf('has_taper') >= 0, rect(6, 4, 44, 32, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + '<polygon points="6,11 50,16 50,24 6,29" fill="#fff" stroke="' + LINE + '" stroke-width="1.2"/>') + '</span>';
-      h += '<br><span class="filter-group-label" title="單邊／雙邊凸出的最大凸出外徑">凸出外徑</span>' +
-        '<input type="number" step="any" data-sh="min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-        '<span style="color:#888;margin:0 2px;">~</span>' +
-        '<input type="number" step="any" data-sh="max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-        '<span style="font-size:11px;color:#888;margin:0 12px 0 3px;">mm</span>' +
-        '<span class="filter-group-label" title="只要這個料號有任何一階孔徑落在範圍內就會出現">孔徑</span>' +
-        '<input type="number" step="any" data-sb="min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-        '<span style="color:#888;margin:0 2px;">~</span>' +
-        '<input type="number" step="any" data-sb="max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-        '<span style="font-size:11px;color:#888;margin-left:3px;">mm（多階層：任一階落在範圍內即符合）</span>';
-      // 錐度數值篩選（錐孔／外錐各一列）：錐度 1:N、半錐角、大徑、小徑，皆為範圍；系統自動算出的值也能篩
+        flagChip('bore', 'has_taper', '含錐孔', self.bore.indexOf('has_taper') >= 0, rect(6, 4, 44, 32, BODY, st) + '<polygon points="6,11 50,16 50,24 6,29" fill="#fff" ' + st + '/>') + '</div>';
+      // 錐度數值篩選：點選「含錐孔」／「有外錐」才展開；同類（大徑、小徑）排同一行，不同類（錐度、半錐角）自動換行
       var rg = function (g, k, lab, unit, tip) {
-        return '<span class="filter-group-label" style="margin-left:8px" title="' + esc(tip || '') + '">' + lab + '</span>' +
-          '<input type="number" step="any" data-tp="' + g + '.' + k + '.0" class="form-control input-sm no-spin-input" data-eg-hint="最小" style="width:60px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-          '<span style="color:#888;margin:0 2px;">~</span>' +
-          '<input type="number" step="any" data-tp="' + g + '.' + k + '.1" class="form-control input-sm no-spin-input" data-eg-hint="最大" style="width:60px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
-          (unit ? '<span style="font-size:11px;color:#888;margin-left:2px;">' + unit + '</span>' : '');
+        return '<span class="filter-group-label" title="' + esc(tip || '') + '">' + lab + '</span>' +
+          '<input type="number" step="any" data-tp="' + g + '.' + k + '.0" ' + ins + ' data-eg-hint="最小">' + sepx +
+          '<input type="number" step="any" data-tp="' + g + '.' + k + '.1" ' + ins + ' data-eg-hint="最大">' +
+          (unit ? '<span style="font-size:11px;color:#888;margin:0 10px 0 2px;">' + unit + '</span>' : '');
       };
       [['b', '錐孔'], ['o', '外錐']].forEach(function (g) {
-        h += '<br><span class="filter-group-label" style="font-weight:bold">' + g[1] + '</span>' +
-          rg(g[0], 'n', '錐度 1：', '', '例：填 10~10 即篩出 1:10 的錐度（含系統由小徑＋錐長自動算出的）') +
-          rg(g[0], 'h', '半錐角', '°', '含系統自動算出的半錐角') + rg(g[0], 'd', '大徑', 'mm') + rg(g[0], 's', '小徑', 'mm');
+        h += '<div data-tpanel="' + g[0] + '" style="display:none;border-left:3px solid #F0A24B;padding-left:8px;margin:3px 0 3px 6px">' +
+          line + '<span class="filter-group-label" style="font-weight:bold">' + g[1] + '尺寸</span>' + rg(g[0], 'd', '大徑', 'mm') + rg(g[0], 's', '小徑', 'mm') + '</div>' +
+          line + '<span class="filter-group-label" style="font-weight:bold">' + g[1] + '角度</span>' +
+          rg(g[0], 'n', '錐度 1：', '', '例：填 10~10 即篩出 1:10（含系統由小徑＋錐長自動算出的）') + rg(g[0], 'h', '半錐角', '°', '含系統自動算出的半錐角') + '</div></div>';
       });
+      // 第 3 行：凸出外徑／孔徑範圍
+      h += line + '<span class="filter-group-label" title="單邊／雙邊凸出的最大凸出外徑">凸出外徑</span>' +
+        '<input type="number" step="any" data-sh="min" placeholder="最小" ' + ins + '>' + sepx +
+        '<input type="number" step="any" data-sh="max" placeholder="最大" ' + ins + '>' +
+        '<span style="font-size:11px;color:#888;margin:0 12px 0 3px;">mm</span>' +
+        '<span class="filter-group-label" title="只要這個料號有任何一階孔徑落在範圍內就會出現">孔徑</span>' +
+        '<input type="number" step="any" data-sb="min" placeholder="最小" ' + ins + '>' + sepx +
+        '<input type="number" step="any" data-sb="max" placeholder="最大" ' + ins + '>' +
+        '<span style="font-size:11px;color:#888;margin-left:3px;">mm（多階層：任一階落在範圍內即符合）</span></div>';
       this.el.innerHTML = h;
+      this._panels(false);
+    },
+    // 依「含錐孔／有外錐」是否選取顯示或收起錐度面板；收起時清掉裡面填的值（免得看不到卻還在篩）
+    _panels: function (clear) {
+      var self = this;
+      [['b', this.bore, 'has_taper'], ['o', this.outer, 'has_otp']].forEach(function (g) {
+        var pn = self.el && self.el.querySelector('[data-tpanel="' + g[0] + '"]'); if (!pn) return;
+        var on = g[1].indexOf(g[2]) >= 0;
+        pn.style.display = on ? 'block' : 'none';
+        if (!on && clear) pn.querySelectorAll('input').forEach(function (i) { i.value = ''; });
+      });
     },
     _tp: function () {
-      var o = {}, any = false;
+      var o = {}, any = false, self = this;
       if (!this.el) return '';
       this.el.querySelectorAll('input[data-tp]').forEach(function (inp) {
         var v = inp.value.trim(); if (v === '') return;
         var p = inp.getAttribute('data-tp').split('.');
+        if (p[0] === 'b' && self.bore.indexOf('has_taper') < 0) return;
+        if (p[0] === 'o' && self.outer.indexOf('has_otp') < 0) return;
         o[p[0]] = o[p[0]] || {}; o[p[0]][p[1]] = o[p[0]][p[1]] || [null, null]; o[p[0]][p[1]][parseInt(p[2], 10)] = v; any = true;
       });
       return any ? JSON.stringify(o) : '';
