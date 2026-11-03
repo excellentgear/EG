@@ -2309,6 +2309,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gha WHERE gha.d_setting_id=d.d_id $ha_cond)";
             }
+            // 壓力角範圍（Pressure_Angle 是文字欄；沒填視為預設 20°，與列表顯示的「PA20」一致）
+            $fgear_pa_min = trim($_POST['filter_gear_pa_min'] ?? '');
+            $fgear_pa_max = trim($_POST['filter_gear_pa_max'] ?? '');
+            if (is_numeric($fgear_pa_min) || is_numeric($fgear_pa_max)) {
+                $paExpr = "CAST(COALESCE(NULLIF(TRIM(TRAILING '°' FROM TRIM(COALESCE(gpr.Pressure_Angle,''))),''),'20') AS DECIMAL(10,3))";
+                $pa_cond = '';
+                if (is_numeric($fgear_pa_min)) { $pa_cond .= " AND $paExpr >= :fgpamin"; $params[':fgpamin'] = $fgear_pa_min; }
+                if (is_numeric($fgear_pa_max)) { $pa_cond .= " AND $paExpr <= :fgpamax"; $params[':fgpamax'] = $fgear_pa_max; }
+                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gpr WHERE gpr.d_setting_id=d.d_id $pa_cond)";
+            }
             // ── 刀具規格篩選（d_setting_tool）2026-08-24 ────────────────────────
             $ftKind = trim($_POST['filter_tool_kind'] ?? '');
             $ftMod  = trim($_POST['filter_tool_module'] ?? '');
@@ -2378,16 +2388,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     $where .= " AND EXISTS (SELECT 1 FROM item_label_map ilm{$fi}"
                                             . "  JOIN item_sub_label_map islm{$fi} ON islm{$fi}.parent_map_id=ilm{$fi}.map_id"
                                             . "  WHERE ilm{$fi}.d_id=d.d_id AND ilm{$fi}.label_id=:{$op_key}lid AND islm{$fi}.sub_id=:{$op_key}sid"
-            // 壓力角範圍（Pressure_Angle 是文字欄；沒填視為預設 20°，與列表顯示的「PA20」一致）
-            $fgear_pa_min = trim($_POST['filter_gear_pa_min'] ?? '');
-            $fgear_pa_max = trim($_POST['filter_gear_pa_max'] ?? '');
-            if (is_numeric($fgear_pa_min) || is_numeric($fgear_pa_max)) {
-                $paExpr = "CAST(COALESCE(NULLIF(TRIM(TRAILING '°' FROM TRIM(COALESCE(gpr.Pressure_Angle,''))),''),'20') AS DECIMAL(10,3))";
-                $pa_cond = '';
-                if (is_numeric($fgear_pa_min)) { $pa_cond .= " AND $paExpr >= :fgpamin"; $params[':fgpamin'] = $fgear_pa_min; }
-                if (is_numeric($fgear_pa_max)) { $pa_cond .= " AND $paExpr <= :fgpamax"; $params[':fgpamax'] = $fgear_pa_max; }
-                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gpr WHERE gpr.d_setting_id=d.d_id $pa_cond)";
-            }
                                             . "  AND islm{$fi}.value_min <= :{$op_key}max)";
                                     $params[":{$op_key}max"] = $vmax;
                                 } else {
@@ -13378,6 +13378,9 @@ function onGearRangeInput() {
         _partsFilter.gearFwMax    = (fMax&&fMax.value!=='') ? parseFloat(fMax.value) : null;
         _partsFilter.gearHaMin    = (hMin&&hMin.value!=='') ? parseFloat(hMin.value) : null;
         _partsFilter.gearHaMax    = (hMax&&hMax.value!=='') ? parseFloat(hMax.value) : null;
+        var paMin=document.getElementById('fg-pa-min'), paMax=document.getElementById('fg-pa-max');
+        _partsFilter.gearPaMin    = (paMin&&paMin.value!=='') ? parseFloat(paMin.value) : null;
+        _partsFilter.gearPaMax    = (paMax&&paMax.value!=='') ? parseFloat(paMax.value) : null;
         // 齒部外徑（計算值 da，後端以齒輪規格即時算出後比對）
         _partsFilter.gearDaMin    = (dMin&&dMin.value!=='') ? parseFloat(dMin.value) : null;
         _partsFilter.gearDaMax    = (dMax&&dMax.value!=='') ? parseFloat(dMax.value) : null;
@@ -13552,9 +13555,6 @@ function selectPartsCust(cid, cname) {
     if (chips) {
         var chip = document.createElement('span');
         chip.className = 'part-cust-chip';
-        var paMin=document.getElementById('fg-pa-min'), paMax=document.getElementById('fg-pa-max');
-        _partsFilter.gearPaMin    = (paMin&&paMin.value!=='') ? parseFloat(paMin.value) : null;
-        _partsFilter.gearPaMax    = (paMax&&paMax.value!=='') ? parseFloat(paMax.value) : null;
         chip.dataset.cid = cid;
         chip.innerHTML = escHtml(cid) + ' ' + escHtml(cname)
             + ' <span class="rm" onclick="removePartsCust(\''+escHtml(cid)+'\',this)">×</span>';
@@ -13597,6 +13597,7 @@ function partsHasFilter() {
         || _partsFilter.gearTeethMin !== null || _partsFilter.gearTeethMax !== null
         || _partsFilter.gearFwMin !== null || _partsFilter.gearFwMax !== null
         || _partsFilter.gearHaMin !== null || _partsFilter.gearHaMax !== null
+        || _partsFilter.gearPaMin !== null || _partsFilter.gearPaMax !== null
         || _partsFilter.wlMin != null || _partsFilter.wlMax != null
         || ((document.getElementById('fg-mod-min')||{value:''}).value !== '' || (document.getElementById('fg-mod-max')||{value:''}).value !== '')
         || (window.EGPartShape && EGPartShape.filter.active())
@@ -13771,7 +13772,6 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); e.stopPropagation();
         return;
     }
-        || _partsFilter.gearPaMin !== null || _partsFilter.gearPaMax !== null
     if (key === 'ArrowDown' || key === 'ArrowUp') {
         if (_acMove(dd, key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); e.stopPropagation(); }
         return;
@@ -14890,11 +14890,14 @@ function partsFilterPayload() {
           filter_gear_teeth_max:   _partsFilter.gearTeethMax !== null ? _partsFilter.gearTeethMax : '',
           filter_gear_fw_min:      _partsFilter.gearFwMin !== null ? _partsFilter.gearFwMin : '',
           filter_gear_fw_max:      _partsFilter.gearFwMax !== null ? _partsFilter.gearFwMax : '',
+          filter_gear_pa_min:      _partsFilter.gearPaMin !== null ? _partsFilter.gearPaMin : '',
+          filter_gear_pa_max:      _partsFilter.gearPaMax !== null ? _partsFilter.gearPaMax : '',
           filter_gear_ha_min:      _partsFilter.gearHaMin !== null ? _partsFilter.gearHaMin : '',
           filter_gear_ha_max:      _partsFilter.gearHaMax !== null ? _partsFilter.gearHaMax : '',
           filter_gear_mod_sys:     (document.getElementById('fg-mod-sys')||{value:'all'}).value,
           filter_gear_mod_min:     (document.getElementById('fg-mod-min')||{value:''}).value,
           filter_gear_mod_max:     (document.getElementById('fg-mod-max')||{value:''}).value,
+          filter_shape_tp:         window.EGPartShape ? EGPartShape.filter.params().filter_shape_tp : '',
           filter_shape_hub_min:    window.EGPartShape ? EGPartShape.filter.params().filter_shape_hub_min : '',
           filter_shape_hub_max:    window.EGPartShape ? EGPartShape.filter.params().filter_shape_hub_max : '',
           filter_shape_outer:      window.EGPartShape ? EGPartShape.filter.params().filter_shape_outer : '',
@@ -14924,6 +14927,49 @@ function loadParts(pg) {
             renderPartsTable(r.data, r.total, pg, r.pages);
         });
     }).fail(function(){ showToast('網路錯誤','error'); });
+}
+
+// 儲存料號後的安靜更新（2026-11-03）：不出現「載入中」、不整張重畫、不跳捲動位置，看得出是哪一筆
+//  ‧ 這筆儲存後仍在目前清單：原位更新那張表，捲動位置不動，並把那一列短暫標色
+//  ‧ 這筆儲存後不再符合目前篩選：只把那一列淡出移除，其他列不動（更新「共 N 筆」與序號）
+//  ‧ 新增／複製（這一頁本來沒有這一列）或查詢失敗：照舊整頁重載
+function refreshPartAfterSave(dId) {
+    var wrap = document.getElementById('parts-table-wrap');
+    var oldRow = wrap && wrap.querySelector('tr[data-did="' + dId + '"]');
+    if (!oldRow) { loadParts(partsCurrent); return; }
+    var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+    api($.extend({ action:'list_parts', page:partsCurrent }, partsFilterPayload())).done(function(r) {
+        if (!r.success) { loadParts(partsCurrent); return; }
+        partsTotal = r.pages;
+        var still = (r.data || []).some(function(x){ return String(x.d_id) === String(dId); });
+        if (!still) {
+            oldRow.style.transition = 'opacity .35s';
+            oldRow.style.opacity = '0';
+            setTimeout(function() {
+                var tb = oldRow.parentNode; if (!tb) return;
+                tb.removeChild(oldRow);
+                var trs = tb.querySelectorAll('tr[data-did]');
+                trs.forEach(function(tr, i) { var c = tr.firstElementChild; if (c) c.textContent = ((partsCurrent - 1) * 10) + i + 1; });
+                var info = wrap.querySelector('.pagination-info');
+                if (info) info.innerHTML = '共 <strong>' + r.total + '</strong> 筆，顯示 ' + (trs.length ? ((partsCurrent - 1) * 10 + 1) + '–' + ((partsCurrent - 1) * 10 + trs.length) : '0');
+                if (!trs.length) loadParts(Math.max(1, Math.min(partsCurrent, r.pages || 1)));   // 這一頁空了才換頁
+                else showToast('已儲存；這筆不符合目前篩選，已從清單移除', 'success');
+            }, 360);
+            return;
+        }
+        ensureTypeLabel(function() {
+            wrap.style.minHeight = wrap.offsetHeight + 'px';          // 重畫期間先撐住高度，捲動位置才不會跳
+            renderPartsTable(r.data, r.total, partsCurrent, r.pages);
+            window.scrollTo(0, y);
+            wrap.style.minHeight = '';
+            var nr = wrap.querySelector('tr[data-did="' + dId + '"]');
+            if (nr) {
+                var tds = nr.querySelectorAll('td');
+                tds.forEach(function(td){ td.style.transition = 'background-color 1.2s'; td.style.backgroundColor = '#FFF3D1'; });
+                setTimeout(function(){ tds.forEach(function(td){ td.style.backgroundColor = ''; }); }, 1500);
+            }
+        });
+    }).fail(function(){ loadParts(partsCurrent); });
 }
 
 var typeLabel = {G:'齒輪', H:'滾刀', N:'一般'};  // will be extended from DB
@@ -15009,7 +15055,7 @@ function renderPartsTable(rows, total, pg, pages) {
                 simBadge = '<span onclick="psMasterSimilar('+(parseInt(r.d_id,10)||0)+')" title="有類似料號，點一下查看" '
                          + 'style="cursor:pointer;display:inline-block;margin-top:2px;font-size:10px;line-height:1.4;border-radius:3px;padding:0 5px;background:'+_sc[0]+';color:'+_sc[1]+';"><i class="fa fa-clone"></i> 類似 '+_st.trim()+'</span>';
             }
-            html += '<tr>';
+            html += '<tr data-did="'+(parseInt(r.d_id,10)||0)+'">';
             html += '<td style="color:#aaa;font-size:11px;">'+(((pg-1)*10)+i+1)+'</td>';
             // 齒輪規格小字（僅 G 種類）
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
@@ -15064,14 +15110,11 @@ function renderPartsTable(rows, total, pg, pages) {
                     var subNames = parts[7]||'';
                     var isRng    = (parts[8]==='1');
                     var vmin     = parts[9]||'';
-          filter_gear_pa_min:      _partsFilter.gearPaMin !== null ? _partsFilter.gearPaMin : '',
-          filter_gear_pa_max:      _partsFilter.gearPaMax !== null ? _partsFilter.gearPaMax : '',
                     var vmax     = parts[10]||'';
                     var hasTolF  = (parts[11]==='1');
                     var tolU     = parts[12]||'';
                     var tolL     = parts[13]||'';
                     var isCalcF  = (parts[14]==='1');
-          filter_shape_tp:         window.EGPartShape ? EGPartShape.filter.params().filter_shape_tp : '',
                     var calcVal  = parts[17]||'';
                     var calcVMin = parts[18]||'';
                     var calcVMax = parts[19]||'';
@@ -18190,7 +18233,7 @@ function submitPartForm() {
             restore();
             if (r.success) {
                 showToast(r.message,'success');
-                $('#partModal').one('hidden.bs.modal', function(){ loadParts(partsCurrent); });
+                $('#partModal').one('hidden.bs.modal', function(){ if (r.d_id) refreshPartAfterSave(r.d_id); else loadParts(partsCurrent); });
                 $('#partModal').modal('hide');
                 // 儲存（含標籤與齒輪規格）後自動確認有沒有類似料號（2026-10-16）；純輔助，失敗安靜略過
                 try { if (window.EGPartSimilar && r.d_id) EGPartSimilar.prompt({ dId: r.d_id, ctx: 'master', once: false }); } catch (e) {}
