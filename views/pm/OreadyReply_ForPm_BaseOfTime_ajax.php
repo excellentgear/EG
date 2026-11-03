@@ -136,6 +136,93 @@ if (isset($_POST['action']) && $_POST['action'] === 'update_bom_info') {
     exit;
 }
 
+// ── 修改發單數（bom.sqty）：資訊／本人密碼解鎖／儲存。規則與實作見 src/common/bom_qty_edit_lib.php ──
+else if (isset($_POST['action']) && in_array($_POST['action'], ['bom_qty_info', 'bom_qty_unlock', 'bom_qty_save'], true)) {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_qty_edit_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    $bomNo = trim((string)($_POST['bom'] ?? ''));
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if ($bomNo === '') { echo json_encode(['success'=>false,'message'=>'缺少 BOM']); exit; }
+    $qAct = $_POST['action'];
+    try {
+        $canEdit = bqe_can_edit($db, $uid);
+        $isAdm = $canEdit && bqe_is_admin($db, $uid);
+
+        if ($qAct === 'bom_qty_info') {
+            // 任何人都看得到修改紀錄；能不能改另外回報
+            $st = $db->prepare("SELECT sqty FROM bom WHERE bom=?"); $st->execute([$bomNo]);
+            $cur = $st->fetchColumn();
+            if ($cur === false) { echo json_encode(['success'=>false,'message'=>'找不到這張 BOM']); exit; }
+            $out = ['success'=>true, 'qty'=>(int)$cur, 'history'=>bqe_history($db, $bomNo), 'can_edit'=>$canEdit, 'is_admin'=>$isAdm];
+            if ($canEdit) {
+                $u = bqe_usage($db, $bomNo);
+                $out['usage'] = $u; $out['usage_text'] = bqe_usage_text($u);
+                $out['unlocked'] = bqe_unlock_valid($uid, $bomNo);
+            }
+            echo json_encode($out, JSON_UNESCAPED_UNICODE); exit;
+        }
+
+        if (!$canEdit) { echo json_encode(['success'=>false,'message'=>'沒有修改發單數的權限，請聯絡管理員在角色功能設定勾選「修改發單數」']); exit; }
+
+        if ($qAct === 'bom_qty_unlock') {
+            $g = eg_own_password_gate($db, $uid, (string)($_POST['password'] ?? ''), 'bom_qty_edit');
+            if (!$g['ok']) { echo json_encode(['success'=>false,'message'=>$g['msg']]); exit; }
+            bqe_unlock_mark($uid, $bomNo);
+            echo json_encode(['success'=>true]); exit;
+        }
+
+        // bom_qty_save
+        if (!bqe_unlock_valid($uid, $bomNo)) { echo json_encode(['success'=>false,'code'=>'LOCKED','message'=>'請先按鎖頭並輸入本人密碼解鎖（解鎖已逾時請重新解鎖）']); exit; }
+        $newRaw = trim((string)($_POST['new_qty'] ?? ''));
+        if (!preg_match('/^[0-9]+$/', $newRaw) || (int)$newRaw < 1 || (int)$newRaw > 99999999) {
+            echo json_encode(['success'=>false,'message'=>'發單數必須是 1 以上的整數']); exit;
+        }
+        $newQty = (int)$newRaw;
+        $st = $db->prepare("SELECT sqty FROM bom WHERE bom=?"); $st->execute([$bomNo]);
+        $oldQ = $st->fetchColumn();
+        if ($oldQ === false) { echo json_encode(['success'=>false,'message'=>'找不到這張 BOM']); exit; }
+        $oldQty = (int)$oldQ;
+        if ($newQty === $oldQty) { echo json_encode(['success'=>false,'message'=>'數量沒有變動']); exit; }
+        $u = bqe_usage($db, $bomNo);
+        $utext = bqe_usage_text($u);
+        if ($newQty < $oldQty && $u['total'] > 0) {
+            if (!$isAdm) {
+                echo json_encode(['success'=>false,'code'=>'DECREASE_BLOCKED',
+                    'message'=>"這張 BOM 已有 {$utext}，改少會影響既有資料，暫時不允許。\n要改少請由管理員操作（改多不受限制）。"], JSON_UNESCAPED_UNICODE); exit;
+            }
+            if (empty($_POST['confirm_decrease'])) {
+                echo json_encode(['success'=>false,'code'=>'NEED_CONFIRM',
+                    'message'=>"這張 BOM 已有 {$utext}。\n把發單數由 {$oldQty} 改少為 {$newQty} 會影響這些既有資料，確定要改嗎？"], JSON_UNESCAPED_UNICODE); exit;
+            }
+        }
+        bqe_ensure_schema($db);   // DDL 一定在交易之前
+        $nm = (string)($_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? $uid));
+        $db->beginTransaction();
+        $db->prepare("UPDATE bom SET sqty=?, Modified_At=NOW(), Modified_By=? WHERE bom=?")->execute([$newQty, $uid, $bomNo]);
+        // 各製程的投入量若原本等於整張 BOM 發單數（整批發單）就一起改；拆批／分批發單的製程數量不動
+        $sy = $db->prepare("UPDATE bom_ing SET sqty=? WHERE bom=? AND sqty=?");
+        $sy->execute([$newQty, $bomNo, $oldQty]);
+        $synced = $sy->rowCount();
+        $db->prepare("INSERT INTO bom_qty_change_log (bom,old_qty,new_qty,synced_ing_rows,usage_json,changed_by,changed_by_name,changed_at)
+                      VALUES (?,?,?,?,?,?,?,NOW())")
+           ->execute([$bomNo, $oldQty, $newQty, $synced, json_encode($u), $uid, $nm]);
+        $chg = json_encode([['field'=>'sqty','old'=>$oldQty,'new'=>$newQty]], JSON_UNESCAPED_UNICODE);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('update','bom_sqty',?,?,?,?,?,NOW())")->execute([$bomNo, $bomNo, $chg, $uid, $nm]);
+        $db->commit();
+        bqe_unlock_clear($uid, $bomNo);
+        echo json_encode(['success'=>true,'qty'=>$newQty,'synced'=>$synced,'history'=>bqe_history($db, $bomNo)], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        if (isset($db) && $db->inTransaction()) $db->rollBack();
+        echo json_encode(['success'=>false,'message'=>'處理失敗：' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // AJAX COMPLETED BOM SEARCH HANDLER
 else if (isset($_POST['action']) && $_POST['action'] === 'search_completed_bom') {
     session_write_close();
@@ -795,6 +882,30 @@ else if (isset($_POST['action']) && $_POST['action'] === 'update_sales_unit_sett
     exit;
 }
 
+// AJAX UPDATE「負責業務」篩選欄位顯示開關（僅系統管理員；預設隱藏）
+else if (isset($_POST['action']) && $_POST['action'] === 'update_sales_filter_visibility') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success' => false, 'message' => '未登入，請重新整理頁面後再試。']); exit; }
+    // 前端只是不顯示開關，這裡才是真正的守門（鐵律8）
+    if (!oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success' => false, 'message' => '只有系統管理員可以變更此設定']); exit;
+    }
+    $show = !empty($_POST['show']) && $_POST['show'] !== '0' && $_POST['show'] !== 'false';
+    $val = json_encode(['show' => $show]);
+    try {
+        $stmt = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description) VALUES ('SALES_SETTING', 'show_sales_filter', :val, 'BOM總覽「負責業務」篩選欄位是否顯示') ON DUPLICATE KEY UPDATE param_value = :val2");
+        $stmt->execute([':val' => $val, ':val2' => $val]);
+        echo json_encode(['success' => true, 'show' => $show]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => '更新失敗: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 // AJAX GET SALES SETTINGS DATA HANDLER
 else if (isset($_POST['action']) && $_POST['action'] === 'get_sales_settings_data') {
     include_once '../../src/common/DBConnection.php';
@@ -839,6 +950,15 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_sales_settings_dat
             $salesUnitSetting = json_decode($settingRow['param_value'], true);
         }
 
+        // 「負責業務」篩選欄位是否顯示（預設隱藏；只有系統管理員看得到開關，後端另有同規則把關）
+        include_once '../../src/common/role_features_helper.php';
+        $showSalesFilter = false;
+        $stmtSf = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group = 'SALES_SETTING' AND param_key = 'show_sales_filter'");
+        $stmtSf->execute();
+        $sfRow = $stmtSf->fetch(PDO::FETCH_ASSOC);
+        if ($sfRow) { $sfv = json_decode($sfRow['param_value'], true); $showSalesFilter = !empty($sfv['show']); }
+        $canManageSalesFilter = isset($_SESSION['id']) && oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF']);
+
         $response['success'] = true;
         $response['data'] = [
             'customers' => $customers,
@@ -846,6 +966,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_sales_settings_dat
             'users' => $users,
             'mappings' => $mappings,
             'sales_unit_setting' => $salesUnitSetting,
+            'show_sales_filter' => $showSalesFilter,
+            'can_manage_sales_filter' => $canManageSalesFilter,
         ];
     } catch (Exception $e) {
         $response['message'] = '資料讀取失敗：' . $e->getMessage();
@@ -2591,7 +2713,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_forward_info') {
         $q = $qc->fetch(PDO::FETCH_ASSOC);
         $inspected = (float)$q['ok'] + (float)$q['qq'] + (float)$q['ng'] + (float)$q['aod'];
         // 下一關（bom_sn 較大的最近一關）已經發出多少：有批次用批次（扣取回），沒有就視為整站（已開工才算）
-        $nx = $db->prepare("SELECT bi.bom_ing_fid, bi.sqty, bi.processing_state, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+        $nx = $db->prepare("SELECT bi.bom_ing_fid, bi.sqty, bi.processing_state, bi.outsource_date, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
                              WHERE bi.bom=? AND bi.bom_sn>? AND bi.is_consumed=0 AND bi.processing_state<>'skip' ORDER BY bi.bom_sn ASC LIMIT 1");
         $nx->execute([$r['bom'], $r['bom_sn']]);
         $n = $nx->fetch(PDO::FETCH_ASSOC);
@@ -2600,7 +2722,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_forward_info') {
             $ns = $db->prepare("SELECT COUNT(*) c, COALESCE(SUM(send_qty - withdrawn_qty),0) s FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
             $ns->execute([$n['bom_ing_fid']]);
             $x = $ns->fetch(PDO::FETCH_ASSOC);
-            $sent = ((int)$x['c'] > 0) ? (float)$x['s'] : (in_array($n['processing_state'], ['ing','Q','P','E'], true) ? (float)$n['sqty'] : 0.0);
+            $sent = ((int)$x['c'] > 0) ? (float)$x['s'] : ((in_array($n['processing_state'], ['ing','Q','E'], true) || ($n['processing_state']==='P' && !empty($n['outsource_date']) && strpos((string)$n['outsource_date'],'0000-00-00')!==0)) ? (float)$n['sqty'] : 0.0);
             $next = ['name'=>(string)($n['ProcessName'] ?? ''), 'state'=>$n['processing_state'], 'sent'=>$sent];
         }
         echo json_encode(['success'=>true, 'stage_qty'=>(float)$r['sqty'], 'state'=>$r['processing_state'], 'batches'=>$batches, 'inspected'=>$inspected, 'next'=>$next]);
@@ -3157,7 +3279,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'save_process_type_map'
     exit;
 }
 
-else if (isset($_POST['action']) && $_POST['action'] === 'delete_bom') {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['delete_bom','delete_bom_check'], true)) {
     session_write_close();
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
@@ -3166,8 +3288,63 @@ else if (isset($_POST['action']) && $_POST['action'] === 'delete_bom') {
     $bom = trim($_POST['bom'] ?? '');
     $uid = $_SESSION['id'] ?? 'system';
     if (empty($bom)) { echo json_encode(['success'=>false,'message'=>'缺少BOM']); exit; }
+    // ── 刪除前盤點相關資料 ──
+    // block：已有業務紀錄指向這張 BOM（出貨／異常單／矯正單／對帳／詢價／庫存／包裝檢驗／檢驗單／專案），
+    //        直接刪會留下指向不存在 BOM 的孤兒資料 → 一律擋下，請先處理。
+    // clean：只依附在這張 BOM 製程上的衍生資料（排程、包裝順序、事件、拆批…）→ 隨 BOM 一併清除。
+    // keep ：移轉憑單、操作紀錄、修改發單數紀錄屬於歷史／會計憑證，保留不刪。
+    $fidSub = "(SELECT bom_ing_fid FROM bom_ing WHERE bom = ?)";
+    $blockDefs = [
+        '出貨分配（出貨單綁定此 BOM）' => ["SELECT COUNT(*) FROM is_bom_map WHERE bom = ?", 'bom'],
+        '品質異常處理單'               => ["SELECT COUNT(*) FROM qa_abnormal_bom WHERE bom_no = ?", 'bom'],
+        '異常矯正處理單'               => ["SELECT COUNT(*) FROM car_order WHERE bom_no = ?", 'bom'],
+        '對帳底稿'                     => ["SELECT COUNT(*) FROM acc_recon_line WHERE bom = ?", 'bom'],
+        '詢價單／詢價群組項目'         => ["SELECT (SELECT COUNT(*) FROM inq_doc_item WHERE bom = ?) + (SELECT COUNT(*) FROM inq_group_item WHERE bom = ?)", 'bom2'],
+        '庫存異動／庫存品參照'         => ["SELECT (SELECT COUNT(*) FROM stock_transactions WHERE bom_ref = ?) + (SELECT COUNT(*) FROM stock_items WHERE bom_ref = ?)", 'bom2'],
+        '包裝檢驗紀錄'                 => ["SELECT COUNT(*) FROM qc_packing_inspection WHERE bom = ?", 'bom'],
+        '線上檢驗單'                   => ["SELECT COUNT(*) FROM qc_check_form WHERE bom_ing_fid IN $fidSub", 'bom'],
+        '進料檢驗批'                   => ["SELECT COUNT(*) FROM qc_incoming_batch WHERE bom_ing_fid IN $fidSub", 'bom'],
+        '專案管理排程'                 => ["SELECT COUNT(*) FROM project_process WHERE bom = ?", 'bom'],
+    ];
+    $cleanDefs = [
+        '生管排程'         => ["SELECT COUNT(*) FROM pm_process_schedule WHERE bom_ing_fid IN $fidSub", "DELETE FROM pm_process_schedule WHERE bom_ing_fid IN $fidSub"],
+        '包裝優先順序'     => ["SELECT COUNT(*) FROM pm_packing_priority WHERE bom_ing_fid IN $fidSub", "DELETE FROM pm_packing_priority WHERE bom_ing_fid IN $fidSub"],
+        '機台異常紀錄'     => ["SELECT COUNT(*) FROM pm_machine_abnormal WHERE bom_ing_fid IN $fidSub", "DELETE FROM pm_machine_abnormal WHERE bom_ing_fid IN $fidSub"],
+        '製程事件'         => ["SELECT COUNT(*) FROM bom_ing_event WHERE bom_ing_fid IN $fidSub", "DELETE FROM bom_ing_event WHERE bom_ing_fid IN $fidSub"],
+        '外包發單批次'     => ["SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid IN $fidSub", "DELETE FROM bom_ing_outsource_batch WHERE bom_ing_fid IN $fidSub"],
+        '外包回廠紀錄'     => ["SELECT COUNT(*) FROM bom_ing_outsource_return WHERE bom_ing_fid IN $fidSub", "DELETE FROM bom_ing_outsource_return WHERE bom_ing_fid IN $fidSub"],
+        '製程拆批'         => ["SELECT COUNT(*) FROM bom_ing_split WHERE bom_ing_fid IN $fidSub", "DELETE FROM bom_ing_split WHERE bom_ing_fid IN $fidSub"],
+        '製程狀態'         => ["SELECT COUNT(*) FROM bom_ing_state WHERE bom_ing_fid IN $fidSub", "DELETE FROM bom_ing_state WHERE bom_ing_fid IN $fidSub"],
+        '成本快取'         => ["SELECT COUNT(*) FROM bom_cost_cache WHERE bom = ?", "DELETE FROM bom_cost_cache WHERE bom = ?"],
+        '提醒狀態'         => ["SELECT COUNT(*) FROM qab_pm_suggest_state WHERE bom_ing_fid IN $fidSub", "DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid IN $fidSub"],
+    ];
+    $argsOf = function($kind, $sql) use ($bom) {
+        return array_fill(0, substr_count($sql, '?'), $bom);
+    };
+    $block = []; $clean = []; $cleanRun = [];
+    foreach ($blockDefs as $label => $d) {
+        try { $st = $db->prepare($d[0]); $st->execute($argsOf($d[1], $d[0])); $n = (int)$st->fetchColumn(); if ($n > 0) $block[$label] = $n; } catch (Throwable $e) { error_log('delete_bom block '.$label.': '.$e->getMessage()); }
+    }
+    foreach ($cleanDefs as $label => $d) {
+        try { $st = $db->prepare($d[0]); $st->execute($argsOf('', $d[0])); $n = (int)$st->fetchColumn(); $cleanRun[] = $label; if ($n > 0) $clean[$label] = $n; } catch (Throwable $e) { error_log('delete_bom clean '.$label.': '.$e->getMessage()); }
+    }
+    if ($_POST['action'] === 'delete_bom_check') {
+        echo json_encode(['success'=>true,'block'=>$block,'clean'=>$clean]);
+        exit;
+    }
+    if ($block) {
+        $parts = [];
+        foreach ($block as $k => $n) $parts[] = $k . ' ' . $n . ' 筆';
+        echo json_encode(['success'=>false,'block'=>$block,'message'=>'此 BOM 仍有相關資料，無法刪除：' . implode('、', $parts) . '。請先處理或解除後再刪除。']);
+        exit;
+    }
     try {
         $db->beginTransaction();
+        // 0. 衍生資料（必須在 bom_ing 刪除之前，才查得到 bom_ing_fid）
+        foreach ($cleanRun as $label) {
+            $d = $cleanDefs[$label];
+            $db->prepare($d[1])->execute($argsOf('', $d[1]));
+        }
         // 1. 刪除 pm_process_daily_ng（若有）
         $db->prepare("DELETE pdn FROM pm_process_daily_ng pdn
             JOIN pm_process_daily_report pdr ON pdn.report_id = pdr.report_id

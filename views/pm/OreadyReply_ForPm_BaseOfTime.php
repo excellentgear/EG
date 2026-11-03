@@ -379,6 +379,7 @@ $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || s
 // --- 角色功能碼（新機制，與上方舊 CRUD 規則並存：舊規則 OR 新功能碼，任一成立即可）---
 require_once '../../src/common/role_features_helper.php';
 require_once '../../src/common/qc_container_lib.php'; // 容器選項與權限判定唯一實作
+require_once '../../src/common/order_bom_filter_tag_lib.php'; // BOM篩選標示（訂單輸入、BOM總覽即時帶入）
 eg_qc_container_ensure_schema($db); // bom_ing.pm_ps / pm_ps2（生管回報容器）
 $_oready_features = rf_load_user_features($db, $id);
 $can_manual_close = $can_manual_close || rf_has_feature($_oready_features, 'oready_manual_close');
@@ -466,7 +467,9 @@ $OreadyReply_list_base = $conn->getAll("SELECT
     bi.QC_check,
     bi.QC_ps,
     bi.bom_bom_ps,
-    
+    " . ot_bom_filter_tag_sql('b') . ",
+    " . ot_bom_order_urgent_sql('b') . ",
+
     CONCAT(DATE_FORMAT(vw.Created_At_end, '%y'), 'y/', DATE_FORMAT(vw.Created_At_end, '%c/%e')) AS Created_At_s,
     CONCAT(DATE_FORMAT(bi.Created_At, '%y'), 'y/', DATE_FORMAT(bi.Created_At, '%c/%e')) AS Created_At_bi,
     DATE_FORMAT(bi.outsource_date, '%Y/%m/%d')     AS outsource_date,
@@ -479,6 +482,8 @@ $OreadyReply_list_base = $conn->getAll("SELECT
     ml.contact_person,
     ml.contact_title,
     u_sales_primary.id AS PrimarySalesId,
+    u_sales_primary.state AS PrimarySalesState,
+    u_sales_deputy.state AS DeputySalesState,
     u_sales_primary.user_cname AS PrimarySalesName,
     u_sales_deputy.id AS DeputySalesId,
     u_sales_deputy.user_cname AS DeputySalesName,
@@ -637,10 +642,14 @@ if (!empty($all_boms)) {
                   bi.*,
                   pn.ProcessName,
                   pn.is_exclude_qc,
-                  ml.maker_id
+                  ml.maker_id,
+                  pfr.finish_report_date
                 FROM bom_ing AS bi
                 LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                 LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
+                LEFT JOIN (SELECT bom_ing_fid, MAX(report_date) AS finish_report_date
+                           FROM pm_process_daily_report WHERE is_finished = 1 GROUP BY bom_ing_fid) pfr
+                       ON pfr.bom_ing_fid = bi.bom_ing_fid
                 WHERE bi.bom IN ($placeholders_ps)
                   AND bi.is_schedule_split = 0
                 ORDER BY bi.bom, bi.bom_sn";
@@ -757,6 +766,7 @@ foreach ($raw_ps_list as $_iam_item) {
         'processing_state' => $_iam_state,
         'outsource_date'   => $_iam_fmt($_iam_item['outsource_date'] ?? null),
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
+        'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,
@@ -1339,10 +1349,13 @@ if (is_array($OreadyReply_list_base)) {
         $max_sn = $max_reported_sn_map[$item_ref['bom']] ?? 0;
         $item_ref['has_new_process_report'] = ($max_sn > $current_sn);
         $item_ref['has_any_pm_report'] = isset($max_reported_sn_map[$item_ref['bom']]);
+        $item_ref['max_reported_sn'] = $max_sn; // 快速移轉目標關：報工過的最遠製程
 
         // Add leave status
         $item_ref['IsPrimaryOnLeave'] = !empty($item_ref['PrimarySalesId']) && in_array(intval($item_ref['PrimarySalesId']), $users_on_leave_ids, true);
         $item_ref['IsDeputyOnLeave'] = !empty($item_ref['DeputySalesId']) && in_array(intval($item_ref['DeputySalesId']), $users_on_leave_ids, true);
+        $item_ref['PrimaryGone'] = !empty($item_ref['PrimarySalesId']) && in_array((string)($item_ref['PrimarySalesState'] ?? ''), ['0','90'], true);
+        $item_ref['DeputyGone'] = !empty($item_ref['DeputySalesId']) && in_array((string)($item_ref['DeputySalesState'] ?? ''), ['0','90'], true);
 
         $latest_info = $latest_report_data_map[$item_ref['bom']] ?? null;
         $item_ref['latest_report_process'] = $latest_info['process'] ?? '';
@@ -1536,6 +1549,10 @@ try {
     $__simMap = ps_sim_map_for_ids($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
 } catch (Throwable $__eSim) { $__simMap = []; }
 echo "    window.simMap = " . json_encode($__simMap ?: new stdClass()) . ";\n";
+try {   // 有線上檢驗資料的製程（區分「線上檢驗」與「簡易／補報檢驗」用；頁面開著時由 JS 定期更新）
+    $__qcOnline = $conn->getPDO()->query("SELECT DISTINCT bom_ing_fid FROM qc_check_form WHERE bom_ing_fid IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+} catch (Throwable $__eQo) { $__qcOnline = []; }
+echo "    window.qcOnlineFids = " . json_encode(array_map('intval', $__qcOnline)) . ";\n";
 echo "    window.initialBomPSList = " . json_encode($bom_ps_list ?: []) . ";\n";
 echo "    window.initialMaxCount = " . json_encode((int)($bom_ps_list_max ?: 0)) . ";\n";
 echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) . "; // [bom][bom_sn] 最新單價\n";
@@ -1550,10 +1567,6 @@ try {
     $_bv_row = $conn->getOne("SELECT param_value FROM system_parameters WHERE param_group='BOM_SETTING' AND param_key='batch_view_default' LIMIT 1");
     $_bv_raw = is_array($_bv_row) ? ($_bv_row['param_value'] ?? '') : (string)$_bv_row;
     // param_value 是 JSON 欄位，同群組慣例是存物件（{"mode":"both"}）
-try {   // 有線上檢驗資料的製程（區分「線上檢驗」與「簡易／補報檢驗」用；頁面開著時由 JS 定期更新）
-    $__qcOnline = $conn->getPDO()->query("SELECT DISTINCT bom_ing_fid FROM qc_check_form WHERE bom_ing_fid IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
-} catch (Throwable $__eQo) { $__qcOnline = []; }
-echo "    window.qcOnlineFids = " . json_encode(array_map('intval', $__qcOnline)) . ";\n";
     $_bv_j = json_decode((string)$_bv_raw, true);
     $_bv_val = is_array($_bv_j) ? (string)($_bv_j['mode'] ?? '') : (string)$_bv_j;
     if (in_array($_bv_val, ['none','lane','flow','both'], true)) $_bv_default = $_bv_val;
@@ -1588,8 +1601,12 @@ echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_retu
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
 echo "    window.featSeePrice = " . json_encode((bool)$oready_feat_view_price) . "; // 功能碼 oready_view_price\n";
+// 功能碼 oready_edit_qty（修改發單數）：管理員或持有該碼者；唯讀角色一律 false。後端 bom_qty_* 動作會再驗一次
+$_oready_can_edit_qty = false;
+try { require_once '../../src/common/bom_qty_edit_lib.php'; $_oready_can_edit_qty = bqe_can_edit($db, (int)$id); } catch (Throwable $e) { $_oready_can_edit_qty = false; }
+echo "    window.featEditQty = " . json_encode((bool)$_oready_can_edit_qty) . "; // 功能碼 oready_edit_qty\n";
 echo "    window.egVpReveal = false; // 廠商／單價預設隱藏（所有人），按「顯示廠商／單價」輸入本人密碼後顯示 5 分鐘\n";
-echo "    window.egVP = function (s) { return (window.egVpReveal || s === '' || s == null) ? s : '＊＊＊'; };\n";
+echo "    window.egVP = function (s) { return s; }; // 廠商名稱不再遮蔽，只有單價受密碼保護\n";
 echo "    window.EG_QC_CONTAINERS = " . json_encode(eg_qc_container_options(), JSON_UNESCAPED_UNICODE) . "; // 容器選項（唯一來源 qc_container_lib.php）
 ";
 echo "    window.canEditContainer = " . json_encode(eg_qc_container_can_edit($db, $id)) . "; // 可否回報容器
@@ -2417,6 +2434,10 @@ echo "</script>\n";
     }
 
     /* 設定新的 Hover 顏色 */
+    /* 訂單追蹤設為急件 → 整列淺紅底（與 NewOrder_Track.php 的 tr.order-urgent 同色 #FBE3DD / hover #F7D5CC） */
+    #table-DOWN tbody tr.bom-order-urgent > td { background-color: #FBE3DD !important; }
+    #table-DOWN tbody tr.bom-order-urgent:hover > td { background-color: #F7D5CC !important; }
+
     #table-DOWN tbody tr:hover {
         background-color: #F0F5D6;
         /*  更淡的懸停顏色 */
@@ -3110,6 +3131,7 @@ echo "</script>\n";
                 processing_state: st,
                 outsource_date:   _nd(item.outsource_date),
                 return_date:      _nd(item.return_date),
+                finish_report_date: _nd(item.finish_report_date),
                 QC_check:         item.QC_check || null,
                 QC_check_date:    _nd(item.QC_check_date),
                 // 容器四欄（QC 品管填 QC_ps/QC_ps2、生管填 pm_ps/pm_ps2）：
@@ -3372,24 +3394,6 @@ echo "</script>\n";
         }
     }
 
-    // ── QC/生管製程同步判斷 ─────────────────────────────────────────────
-    // 從 window.bomPSList 找出該BOM「QC有檢驗紀錄(QC_check/QC_check_date)或已按QC完工(qc_completed)」的製程，
-    // 與目前製程序號(row.bom_sn，可能為逗號字串)比對：
-    //   hasQcAtOrBeyond：存在序號 ≧ 目前製程 的QC紀錄（「QC檢驗」篩選用）
-    //   target：序號 > 目前製程、狀態尚可操作(N/ing/Q/P)的最遠QC製程（快速移轉按鈕的目標關）
-    function getQcSyncInfo(row) {
-        var result = { hasQcAtOrBeyond: false, target: null };
-        if (!row || !row.bom || !Array.isArray(window.bomPSList)) return result;
-        var curSn = -1;
-        String(row.bom_sn || '').split(',').forEach(function(s) {
-            var n = parseInt(s, 10);
-            if (!isNaN(n) && n > curSn) curSn = n;
-        });
-        if (curSn < 0) return result;
-        var bomStr = String(row.bom).trim();
-        window.bomPSList.forEach(function(p) {
-            if (!p || String(p.bom || '').trim() !== bomStr) return;
-            if (parseInt(p.is_consumed || 0, 10) === 1) return;
     // ── 「有檢驗紀錄」說明：分清楚是哪一種檢驗紀錄（2026-10-29）──────────────
     //  有線上檢驗紀錄    ＝ views/QC/inspection_entry_v2.php 內有這道製程的檢驗資料（qc_check_form）
     //  有QC補報檢驗紀錄  ＝ QC待驗清單的「新增報工（未在列表上）」補報的檢驗紀錄
@@ -3416,6 +3420,24 @@ echo "</script>\n";
             .then(function (d) { if (d && d.success && Array.isArray(d.fids)) window.qcOnlineFids = d.fids; }).catch(function () {});
     }, 60000);
 
+    // ── QC/生管製程同步判斷 ─────────────────────────────────────────────
+    // 從 window.bomPSList 找出該BOM「QC有檢驗紀錄(QC_check/QC_check_date)或已按QC完工(qc_completed)」的製程，
+    // 與目前製程序號(row.bom_sn，可能為逗號字串)比對：
+    //   hasQcAtOrBeyond：存在序號 ≧ 目前製程 的QC紀錄（「QC檢驗」篩選用）
+    //   target：序號 > 目前製程、狀態尚可操作(N/ing/Q/P)的最遠QC製程（快速移轉按鈕的目標關）
+    function getQcSyncInfo(row) {
+        var result = { hasQcAtOrBeyond: false, target: null };
+        if (!row || !row.bom || !Array.isArray(window.bomPSList)) return result;
+        var curSn = -1;
+        String(row.bom_sn || '').split(',').forEach(function(s) {
+            var n = parseInt(s, 10);
+            if (!isNaN(n) && n > curSn) curSn = n;
+        });
+        if (curSn < 0) return result;
+        var bomStr = String(row.bom).trim();
+        window.bomPSList.forEach(function(p) {
+            if (!p || String(p.bom || '').trim() !== bomStr) return;
+            if (parseInt(p.is_consumed || 0, 10) === 1) return;
             var qcDate = String(p.QC_check_date || '').trim();
             var hasQc = (p.QC_check && String(p.QC_check).trim() !== '') ||
                         (qcDate !== '' && qcDate.indexOf('0000') !== 0) ||
@@ -3429,6 +3451,20 @@ echo "</script>\n";
                 if (!result.target || sn > (parseInt(result.target.bom_sn, 10) || 0)) result.target = p;
             }
         });
+        // 已有「新製程報工」：報工的最遠製程比QC檢驗關更遠時，快速移轉目標改指向報工那一關
+        // （僅在 has_new_process_report 且後端有帶 max_reported_sn 時生效，其餘情況行為不變）
+        var _rsn = parseInt(row.max_reported_sn, 10);
+        if (row.has_new_process_report && !isNaN(_rsn) && _rsn > curSn) {
+            window.bomPSList.forEach(function(p) {
+                if (!p || String(p.bom || '').trim() !== bomStr) return;
+                if (parseInt(p.is_consumed || 0, 10) === 1) return;
+                if (parseInt(p.bom_sn, 10) !== _rsn) return;
+                var st2 = String(p.processing_state || '').trim();
+                if (st2 === 'N' || st2 === 'ing' || st2 === 'Q' || st2 === 'P') {
+                    result.reportTarget = p;   // 報工那一關（與 QC 檢驗關可各自顯示快速移轉）
+                }
+            });
+        }
         return result;
     }
 
@@ -3728,7 +3764,11 @@ echo "</script>\n";
         }
         if (urlParams.has("sales_filter")) {
             const salesFilterEl = document.getElementById("sales-filter");
-            if (salesFilterEl) salesFilterEl.value = urlParams.get("sales_filter");
+            if (salesFilterEl) {
+                salesFilterEl.value = urlParams.get("sales_filter");
+                // 網址指定了業務篩選就一定要看得到欄位，否則會變成「看不見的篩選條件」
+                if (salesFilterEl.value) salesFilterEl.style.display = '';
+            }
         }
         if (urlParams.has("order_filter")) {
             document.getElementById("order-filter").value = urlParams.get("order_filter");
@@ -5093,6 +5133,8 @@ echo "</script>\n";
             var bomFid = String(row.bom_ing_fid || '').trim(); // 確保 bom_ing_fid 存在
             var tr = document.createElement("tr");
             tr.setAttribute('data-bom', row.bom || ''); // ── 方案一/急單：讓 querySelector 找得到 ──
+            // 訂單追蹤設為急件的訂單所綁的 BOM：整列淺紅底（與訂單追蹤的急件列同色）
+            if (Number(row.bom_order_urgent) === 1) tr.classList.add('bom-order-urgent');
 
             // --- 1. 客戶 ---
             var tdClient = document.createElement('td');
@@ -5124,7 +5166,10 @@ echo "</script>\n";
             tdClient.appendChild(clientNameSpan);
 
             // --- NEW: Salesperson Display Logic (Refined for strict height/spacing consistency) ---
-            if (row.PrimarySalesName) {
+            {
+                const primaryGone = !!row.PrimaryGone, deputyGone = !!row.DeputyGone;
+                const hasPrimary = !!row.PrimarySalesName && !primaryGone;
+                const hasDeputy = !!row.DeputySalesName && !deputyGone;
                 const getShortName = (fullName) => {
                     if (!fullName) return '';
                     const name = String(fullName);
@@ -5172,7 +5217,15 @@ echo "</script>\n";
                     return div;
                 };
 
-                if (row.IsPrimaryOnLeave && row.DeputySalesName) {
+                if (!hasPrimary && hasDeputy) {
+                    // 主要業務已離職/特殊帳號或未設定：直接顯示代理業務
+                    let dHtml = escapeHtml(deputyShortName);
+                    if (row.IsDeputyOnLeave) dHtml += ' <span style="color: red;">(休)</span>';
+                    dHtml += ' <span style="color: blue;">(代)</span>';
+                    textContainer.appendChild(createLine(dHtml));
+                } else if (!hasPrimary) {
+                    textContainer.appendChild(createLine('未設定', '#999'));
+                } else if (row.IsPrimaryOnLeave && hasDeputy) {
                     // Case 1: Primary on leave, deputy exists. Display in two compact lines.
                     let deputyHtml = escapeHtml(deputyShortName);
                     if (row.IsDeputyOnLeave) {
@@ -5687,6 +5740,20 @@ echo "</script>\n";
                 tdDid.appendChild(_ctnWrap);
             }
 
+            // --- 點一下料號欄（連結／按鈕以外）＝右側滑出此 BOM 相關紀錄；雙擊仍是帶入篩選（延遲區分）---
+            tdDid.setAttribute('title', '點一下看此BOM相關紀錄；雙擊帶入篩選');
+            tdDid.style.cursor = 'pointer';
+            (function(_bomForTl){
+                var _tlTimer = null;
+                tdDid.addEventListener('click', function(e) {
+                    var _hit = e.target.closest('a,button,input,select,.maker-info-pop,[onclick],.fa');
+                    if (_hit && _hit !== tdDid && tdDid.contains(_hit)) return;
+                    clearTimeout(_tlTimer);
+                    _tlTimer = setTimeout(function(){ if (window.EGBomTimeline) EGBomTimeline.open(_bomForTl); }, 260);
+                });
+                tdDid.addEventListener('dblclick', function(){ clearTimeout(_tlTimer); });
+            })(String(row.bom || ''));
+
             // --- 新增：料號欄位雙擊事件監聽器 ---
             tdDid.addEventListener('dblclick', function() {
                 const partNumberFromCell = String(row.d_id || '').trim(); // Get d_id from row data for accuracy
@@ -5744,8 +5811,8 @@ echo "</script>\n";
                             if (s === '' || s.toLowerCase() === 'null') return;
                             _fbTip += (_fbTip ? '<br>' : '') + label + '：' + escapeHtml(s);
                         };
-                        if (window.egVpReveal) { _p('TEL', row.m_tel); _p('TEL2', row.m_tel2);
-                        _p('FAX', row.m_fax); _p('地址', row.factory_address); }
+                        _p('TEL', row.m_tel); _p('TEL2', row.m_tel2);
+                        _p('FAX', row.m_fax); _p('地址', row.factory_address);
                     })();
                     var _fbMakerHtml = _fbMaker
                         ? ' <span class="maker-info-pop"' + (_fbTip
@@ -5877,7 +5944,7 @@ echo "</script>\n";
                             // 這一行會被廠商名稱撐成 28px（量測實證），行距看起來完全沒縮小
                             _mkSpan.style.lineHeight = '1.2';
                             _mkSpan.textContent = _mk;
-                            if (window.egVpReveal) applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
+                            applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
                             _dmDiv.appendChild(_mkSpan);
                         }
                         _pDiv.appendChild(_dmDiv);
@@ -5956,7 +6023,9 @@ echo "</script>\n";
                         //    QC待驗(Q)／待移轉(P)／已移轉(E) 三種狀態都顯示在狀態按鈕左側。
                         //    Q 的日期前綴已在上面移除，所以這裡不會重複印同一天。
                         if (_effectiveSt === 'Q' || _effectiveSt === 'P' || _effectiveSt === 'E') {
-                            var _rdMd = formatDateAsMd(_proc.return_date);
+                            // 廠內製程報工勾「本站完工」即自動轉QC待驗、不寫return_date，改以完工報工日顯示
+                            var _rdSrc = _proc.return_date || _proc.finish_report_date;
+                            var _rdMd = formatDateAsMd(_rdSrc);
                             if (_rdMd) {
                                 var _rdSpan = document.createElement('span');
                                 _rdSpan.className = 'bv-rdate';   // 批次檢視搬按鈕時會把這顆拿掉（流程圖節點自己印一份在廠商下方）
@@ -5964,8 +6033,9 @@ echo "</script>\n";
                                 //   有一條全站規則 `td span{line-height:28px}`，不蓋掉的話這顆 span 會是
                                 //   28px 高，整條狀態列被它撐成 28px，看起來就是「間距沒縮小」。
                                 _rdSpan.style.cssText = 'color:#2a7ae2;font-weight:bold;margin-right:3px;white-space:nowrap;line-height:1.2;';
-                                _rdSpan.textContent = _rdMd + ' 回';
-                                _rdSpan.title = '已回廠日期：' + _proc.return_date;
+                                // QC待驗：日期是「轉成待驗的那天」，寫「回」會被誤解成已檢驗完，這裡只放日期（按鈕本身就是QC待驗）
+                                _rdSpan.textContent = _rdMd + (_effectiveSt === 'Q' ? '' : ' 回');
+                                _rdSpan.title = (_proc.return_date ? '已回廠日期：' : '本站完工報工日：') + _rdSrc;
                                 _btnRow.appendChild(_rdSpan);
                             }
                         }
@@ -6147,8 +6217,8 @@ echo "</script>\n";
 
                 // Popover Content
                 let popoverContent = '';
-                const tel = window.egVpReveal ? String(row.m_tel || '').trim() : '';
-                const fax = window.egVpReveal ? String(row.m_fax || '').trim() : '';
+                const tel = String(row.m_tel || '').trim();
+                const fax = String(row.m_fax || '').trim();
 
                 if (tel !== '' && tel.toLowerCase() !== 'null') {
                     popoverContent += `TEL：${escapeHtml(tel)}`;
@@ -6660,9 +6730,10 @@ echo "</script>\n";
                                 //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
                                 if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
-                                    var _dynRdMd = formatDateAsMd(processInfo.return_date);
+                                    var _dynRdSrc = processInfo.return_date || processInfo.finish_report_date;
+                                    var _dynRdMd = formatDateAsMd(_dynRdSrc);
                                     if (_dynRdMd) {
-                                        tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="已回廠日期：${escapeHtml(String(processInfo.return_date))}">${escapeHtml(_dynRdMd)} 回</div>`;
+                                        tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="${processInfo.return_date ? '已回廠日期' : '本站完工報工日'}：${escapeHtml(String(_dynRdSrc))}">${escapeHtml(_dynRdMd)}${_dynRawSt === 'Q' ? ' QC待驗' : ' 回'}</div>`;
                                     }
                                 }
 
@@ -6804,8 +6875,7 @@ echo "</script>\n";
                             })(processInfo, row));
                         }
                         // QC/生管製程不同步：此關是QC已檢驗/完工但目前製程還在前面的目標關 → 顯示快速移轉按鈕
-                        if (processInfo && _qcSyncTarget && _canTransferRole &&
-                            String(_qcSyncTarget.bom_ing_fid) === String(processInfo.bom_ing_fid)) {
+                        if (processInfo && _canTransferRole && _qcSyncReasons[String(processInfo.bom_ing_fid)]) {
                             var _qsBtnRow = document.createElement('div');
                             _qsBtnRow.style.cssText = 'margin-top:3px;display:flex;justify-content:flex-end;';
                             var _qsBtn = document.createElement('button');
@@ -6831,7 +6901,13 @@ echo "</script>\n";
                                     });
                                 };
                             })(processInfo, row));
+                            _qsBtnRow.style.flexDirection = 'column';
+                            _qsBtnRow.style.alignItems = 'flex-end';
                             _qsBtnRow.appendChild(_qsBtn);
+                            var _qsNote = document.createElement('div');
+                            _qsNote.style.cssText = 'font-size:10px;line-height:1.3;color:#a0522d;margin-top:1px;';
+                            _qsNote.textContent = _qcSyncReasons[String(processInfo.bom_ing_fid)].join('、');
+                            _qsBtnRow.appendChild(_qsNote);
                             tdDynamicProcess.appendChild(_qsBtnRow);
                         }
                         tr.appendChild(tdDynamicProcess);
@@ -7170,7 +7246,30 @@ echo "</script>\n";
                 '';
         }
         updateDropdowns(dropdownDataSource); // 5. 更新篩選下拉選單，傳入決定的數據源
+        // 6. BOM篩選標示下拉：列出「套用其他所有篩選之後」還看得到的標示。
+        //    已選了某個標示時，要暫時拿掉標示條件重算一次，否則清單只剩自己、換不了別的標示。
+        bomTagRefreshOptions(filteredDataset);
     }
+    // （本頁有兩份 processAndRenderData，後面那份才是實際生效的；兩份都呼叫這個共用函式）
+    function bomTagRefreshOptions(filteredDataset) {
+        try {
+            if (window.EGBatchView && window.EGBatchView.setTagOptions) {
+                var _tagBase = filteredDataset;
+                if (window.bomTagFilter) {
+                    var _tagSaved = window.bomTagFilter;
+                    window.bomTagFilter = '';
+                    try { _tagBase = filterData(fullDataset); } finally { window.bomTagFilter = _tagSaved; }
+                }
+                window.EGBatchView.setTagOptions(_tagBase);
+            }
+        } catch (_tagErr) { console.warn('[BOM篩選標示] 更新選項失敗，已略過：', _tagErr); }
+    }
+    // 批次檢視右側的「BOM篩選標示」下拉選好後呼叫（currentPage 在本區塊內，外部檔案碰不到）
+    window.bomTagFilterApply = function (v) {
+        window.bomTagFilter = String(v || '');
+        currentPage = 1;
+        processAndRenderData();
+    };
 
     // ── 子資料按需載入 ────────────────────────────────────────────────────────
     var _loadRowDetailsInFlight = _loadRowDetailsInFlight || 0;
@@ -7287,12 +7386,13 @@ echo "</script>\n";
 
             // NEW Sales Logic for filter dropdown and case count
             let effectiveSalesName = null;
-            if (row.PrimarySalesName) {
+            if ((row.PrimaryGone || !row.PrimarySalesName) && row.DeputySalesName && !row.DeputyGone) effectiveSalesName = row.DeputySalesName;
+            if (row.PrimarySalesName && !row.PrimaryGone) {
                 if (!row.IsPrimaryOnLeave) {
                     // Primary is working, case belongs to them.
                     effectiveSalesName = row.PrimarySalesName;
                 } else { // Primary is on leave
-                    if (row.DeputySalesName && !row.IsDeputyOnLeave) {
+                    if (row.DeputySalesName && !row.DeputyGone && !row.IsDeputyOnLeave) {
                         // Deputy is working, case belongs to them.
                         effectiveSalesName = row.DeputySalesName;
                     } else {
@@ -7709,6 +7809,11 @@ echo "</script>\n";
             }
         }
 
+        // --- 訂單追蹤設為急件的訂單綁到此 BOM → 自動紅燈（2026-10-28；由訂單的急件旗標即時決定，不存進 BOM）---
+        if (Number(row.bom_order_urgent) === 1) {
+            return { color: 'red', title: '訂單追蹤已設為急件（自動紅燈、置頂）\n要取消請到訂單追蹤取消該訂單的急件' };
+        }
+
         // --- Apply Priority Logic ---
         const priority = row.priority_type; // 'U', 'E', or null/empty
 
@@ -8004,6 +8109,7 @@ echo "</script>\n";
     if (!window._impactCache) window._impactCache = {};
 
     function buildUrgencyBarHtml(bom, impactData, bufferData, urgentData) {
+        return ''; // 衝擊評分已隱藏（2026-10-30，改為點料號欄看BOM相關紀錄）
         if (!impactData || !impactData.success) return '';
         var op = impactData.outsource_pct || 0;
         var mq = impactData.max_queue || 0;
@@ -8065,6 +8171,7 @@ echo "</script>\n";
     }
 
     function loadImpactScoreForVisible() {
+        return; // 衝擊評分已隱藏，不再向後端計算
         if (!window._impactCache) window._impactCache = {};
         var rows = Array.from(document.querySelectorAll('tr[data-bom]'));
         var toLoad = rows.filter(function(tr) {
@@ -8579,6 +8686,8 @@ echo "</script>\n";
             if (!row || typeof row !== 'object') return false;
             const orderList = Array.isArray(row.OrderList) ? row.OrderList : [];
             let show = true; // 預設顯示
+            // BOM篩選標示（批次檢視右側下拉）：沒選＝完全不影響原有篩選
+            if (window.bomTagFilter && String(row.bom_filter_tag || '') !== window.bomTagFilter) return false;
 
             // --- Status Filter (is_stock, no_order_data, unselected_order_in_dropdown, regular processing_state) ---
             // "no_vendor" and "no_client_name" are handled by their respective filters below.
@@ -8653,13 +8762,14 @@ echo "</script>\n";
             if (filters.sales) {
                 const salesNameOnly = filters.sales.split(' (')[0];
                 let effectiveSalesName = null;
+                if ((row.PrimaryGone || !row.PrimarySalesName) && row.DeputySalesName && !row.DeputyGone) effectiveSalesName = row.DeputySalesName;
 
-                if (row.PrimarySalesName) {
+                if (row.PrimarySalesName && !row.PrimaryGone) {
                     if (!row.IsPrimaryOnLeave) {
                         // Primary is working
                         effectiveSalesName = row.PrimarySalesName;
                     } else { // Primary is on leave
-                        if (row.DeputySalesName && !row.IsDeputyOnLeave) {
+                        if (row.DeputySalesName && !row.DeputyGone && !row.IsDeputyOnLeave) {
                             // Deputy is working
                             effectiveSalesName = row.DeputySalesName;
                         } else {
@@ -9485,6 +9595,7 @@ echo "</script>\n";
         const dropdownDataSource = (ptiSearch === "") ? fullDataset : filteredDataset;
         // console.log(`Dropdown source determined: ${ptiSearch === "" ? 'fullDataset' : 'filteredDataset'} (length: ${dropdownDataSource.length})`); // Debug
         updateDropdowns(dropdownDataSource); // 5. 更新篩選下拉選單，傳入決定的數據源
+        bomTagRefreshOptions(filteredDataset); // 6. BOM篩選標示下拉選項（見上方說明）
 
         // ── 急單歷史標記：分批載入 ──
         clearTimeout(window._urgentLoadTimer);
@@ -10556,7 +10667,16 @@ echo "</script>\n";
             }
             _bsel.onchange = _check;
             document.getElementById('qtr-fwd-qty-' + fid).addEventListener('input', _check);
-            _fb.onclick = function(){ var open = (_panel.style.display === 'none'); _panel.style.display = open ? '' : 'none'; if (open) _loadInfo(); };
+            // 展開「轉發別間廠商」時，先把容易按錯的鈕（確認移轉／本關已移轉／清除發包日）藏起來，收合再還原
+            var _guardIds = ['qtr-confirm-', 'qtr-etr-', 'qtr-cod-'];
+            function _setGuard(hide){
+                _guardIds.forEach(function(p){
+                    var b = document.getElementById(p + fid); if (b) b.style.display = hide ? 'none' : '';
+                    var pn = document.getElementById(p.replace(/-$/, '') + '-panel-' + fid); if (hide && pn) pn.style.display = 'none';
+                });
+            }
+            // 展開後「轉發別間廠商」鈕本身也隱藏（要放棄請按下方「取消」關閉視窗）
+            _fb.onclick = function(){ var open = (_panel.style.display === 'none'); _panel.style.display = open ? '' : 'none'; _setGuard(open); if (open) { _fb.style.display = 'none'; _loadInfo(); } };
             function _find(v){ var h = null; Array.prototype.forEach.call(_dl.options, function(o){ if (o.value === v) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
             _mk.addEventListener('input', function(){
                 var v = _mk.value.trim(); _pick = _find(v);
@@ -10661,6 +10781,33 @@ echo "</script>\n";
                      || _qtrCache.filter(function(m){ return m.maker_id_no===val||m.maker_id===val; })[0];
             if(found){ _qtrFill(found); }
         });
+        // Enter 跳下一個輸入框：移轉日 → 廠商 → 發單數量 → 確認移轉鈕（不自動送出）
+        (function(){
+            var dEl = document.getElementById('qtr-date-'+fid), qEl = document.getElementById('qtr-qty-'+fid), cBtn = document.getElementById('qtr-confirm-'+fid);
+            function nextFrom(el){
+                if (el === dEl) { _qtrInp.focus(); _qtrInp.select(); return; }
+                if (el === _qtrInp) {
+                    var qRow = document.getElementById('qtr-qty-row-'+fid);
+                    if (qRow && qRow.style.display !== 'none') { qEl.focus(); qEl.select(); } else { cBtn.focus(); }
+                    return;
+                }
+                cBtn.focus();
+            }
+            [dEl, _qtrInp, qEl].forEach(function(el){
+                if (!el) return;
+                el.addEventListener('keydown', function(e){
+                    if (e.key !== 'Enter' || e.isComposing) return;
+                    e.preventDefault();
+                    if (el === _qtrInp) {   // 先把輸入的廠商編號／名稱對應成選定廠商
+                        var v = el.value.trim();
+                        var f = _qtrCache.filter(function(m){ return (m.maker_id_no+' — '+m.maker_id)===v || m.maker_id_no===v || m.maker_id===v; })[0];
+                        if (f && !_qtrHidNo.value) _qtrFill(f);
+                    }
+                    if (el === dEl) { try{$(dEl).datepicker('hide');}catch(x){} }
+                    nextFrom(el);
+                });
+            });
+        })();
 
         // 如有既有廠商，直接顯示資訊
         if(defaultMakerNo && defaultMakerName) _qtrShowInfo({maker_id_no:defaultMakerNo, maker_id:defaultMakerName, m_process_items:''});
@@ -12343,9 +12490,13 @@ echo "</script>\n";
         leftCol.innerHTML += `
             <div class="form-group">
                 <label class="control-label col-md-3 col-sm-3 col-xs-12">發單數</label>
-                <div class="col-md-9 col-sm-9 col-xs-12" style="padding-top: 7px;">${escapeHtml(rowData.Qty)}</div>
+                <div class="col-md-9 col-sm-9 col-xs-12" style="padding-top: 7px;">
+                    <span id="bqe-qty">${escapeHtml(rowData.Qty)}</span>${window.featEditQty ? '<button type="button" id="bqe-lock" class="btn btn-xs btn-default" title="修改發單數（需輸入本人密碼）" style="margin-left:8px;padding:0 6px;"><i class="fa fa-lock"></i></button>' : ''}
+                    <div id="bqe-panel" style="margin-top:6px;font-size:12px;"></div>
+                </div>
             </div>`;
         leftAndCenterPaneWrapper.appendChild(leftCol);
+        try { if (window.bqeInit) window.bqeInit(leftCol, rowData); } catch (e) { console.error('bqeInit', e); }
 
         // 中間欄 (原右欄部分內容)
         const centerCol = document.createElement('div');
@@ -12499,6 +12650,21 @@ echo "</script>\n";
           </div>
         `;
         centerCol.appendChild(bomPsGroupDiv);
+
+        // 篩選標示（唯讀）：來自綁定訂單的「BOM篩選標示」，要修改請到訂單追蹤修改訂單
+        const bomTagGroupDiv = document.createElement('div');
+        bomTagGroupDiv.className = 'form-group';
+        bomTagGroupDiv.innerHTML = `
+          <label class="control-label col-md-3 col-sm-3 col-xs-12">篩選標示</label>
+          <div class="col-md-5 col-sm-5 col-xs-12">
+            <input type="text" class="form-control" readonly disabled
+                   style="background:#eee;color:#666;cursor:not-allowed;"
+                   value="${escapeHtml(rowData.bom_filter_tag || '')}"
+                   placeholder="（綁定訂單後自動帶入）">
+            <div style="color:#999;font-size:0.85em;margin-top:2px;">由綁定訂單帶入；要修改請修改訂單內的「BOM篩選標示」</div>
+          </div>
+        `;
+        centerCol.appendChild(bomTagGroupDiv);
 
         // 燈號設定 (移至備註下方)
         const lightGroupDiv = document.createElement('div');
@@ -14010,6 +14176,14 @@ echo "</script>\n";
                             <small style="color: #777; margin-top: 5px; display: block;">* 下方列表將僅顯示隸屬於此部門及其子部門的人員</small>
                         </div>
 
+                        <!-- 「負責業務」篩選欄位顯示開關（只有系統管理員看得到；勾選當下即存檔） -->
+                        <div id="sales-filter-toggle-box" style="display:none;background-color:#eef2f7;padding:10px 15px;border-radius:6px;margin-bottom:20px;border:1px solid #dce4ec;">
+                            <label style="font-weight:bold;margin:0;color:#555;cursor:pointer;">
+                                <input type="checkbox" id="chk-show-sales-filter" style="margin-right:6px;">在 BOM 總覽顯示「負責業務」篩選欄位
+                            </label>
+                            <small style="color:#777;margin-top:4px;display:block;">* 預設隱藏；勾選後立即套用並存檔，所有使用者都會看到該欄位</small>
+                        </div>
+
                         <!-- Customer Search -->
                         <div style="margin-bottom: 10px; display: flex; gap: 10px;">
                             <input type="text" id="sales-setting-search" class="form-control input-sm" placeholder="搜尋客戶名稱或主要業務..." style="flex: 1;">
@@ -14068,6 +14242,36 @@ echo "</script>\n";
                     const departments = res.data.departments;
                     const salesUnitSetting = res.data.sales_unit_setting;
                     let currentSalesUnitId = salesUnitSetting ? salesUnitSetting.id : '';
+
+                    // 「負責業務」篩選欄位顯示開關：只有系統管理員看得到；勾選當下存檔並即時顯示／隱藏欄位
+                    if (res.data.can_manage_sales_filter) {
+                        const sfBox = document.getElementById('sales-filter-toggle-box');
+                        const sfChk = document.getElementById('chk-show-sales-filter');
+                        sfBox.style.display = '';
+                        sfChk.checked = !!res.data.show_sales_filter;
+                        sfChk.addEventListener('change', function () {
+                            const want = this.checked;
+                            const self = this;
+                            $.ajax({
+                                url: '', type: 'POST', dataType: 'json',
+                                data: { action: 'update_sales_filter_visibility', show: want ? 1 : 0 },
+                                success: function (r) {
+                                    if (r && r.success) {
+                                        const sf = document.getElementById('sales-filter');
+                                        if (sf) {
+                                            sf.style.display = want ? '' : 'none';
+                                            if (!want && sf.value) { sf.value = ''; if (typeof processAndRenderData === 'function') processAndRenderData(); }   // 隱藏時一併清掉條件，免得變成看不見的篩選
+                                        }
+                                        showTemporaryMessage(want ? '已顯示「負責業務」篩選欄位' : '已隱藏「負責業務」篩選欄位', true);
+                                    } else {
+                                        self.checked = !want;
+                                        alert((r && r.message) || '儲存失敗');
+                                    }
+                                },
+                                error: function () { self.checked = !want; alert('儲存失敗，請稍後再試'); }
+                            });
+                        });
+                    }
 
                     // Populate Department Dropdown
                     const unitSelect = document.getElementById('sales-unit-select');
@@ -15505,7 +15709,28 @@ echo "</script>\n";
 
         confirmBtn.onclick = function() {
             if (!currentBom) return;
-            if (!confirm('⚠️ 最終確認：永久刪除 BOM「' + currentBom + '」？\n此操作無法復原！')) return;
+            var _delBom = currentBom;
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = '檢查相關資料...';
+            $.ajax({ url: '', type: 'POST', data: { action: 'delete_bom_check', bom: _delBom }, dataType: 'json' })
+            .done(function(chk) {
+                confirmBtn.disabled = false; confirmBtn.textContent = '確認刪除';
+                if (!chk || !chk.success) { alert('無法確認相關資料，已取消刪除：' + ((chk && chk.message) || '未知錯誤')); return; }
+                var _fmt = function(o){ return Object.keys(o || {}).map(function(k){ return '．' + k + '：' + o[k] + ' 筆'; }).join('\n'); };
+                if (chk.block && Object.keys(chk.block).length) {
+                    alert('此 BOM 仍有相關資料，無法刪除：\n' + _fmt(chk.block) + '\n\n請先處理或解除這些資料後再刪除。');
+                    return;
+                }
+                var _cl = _fmt(chk.clean);
+                var _msg = '⚠️ 最終確認：永久刪除 BOM「' + _delBom + '」？\n'
+                    + (_cl ? '\n將一併移除的衍生資料：\n' + _cl + '\n' : '')
+                    + '\n（移轉憑單、操作紀錄、修改發單數紀錄會保留）\n此操作無法復原！';
+                if (!confirm(_msg)) return;
+                _doDeleteBom(_delBom);
+            })
+            .fail(function(){ confirmBtn.disabled = false; confirmBtn.textContent = '確認刪除'; alert('與伺服器通訊失敗'); });
+        };
+        function _doDeleteBom(currentBom) {
             confirmBtn.disabled = true;
             confirmBtn.textContent = '刪除中...';
             $.ajax({
@@ -15531,7 +15756,7 @@ echo "</script>\n";
                     confirmBtn.textContent = '確認刪除';
                 }
             });
-        };
+        }
 
         setTimeout(function(){ inp.focus(); }, 100);
     }
@@ -16477,8 +16702,8 @@ echo "</script>\n";
                                     <i class="fa fa-gear"></i> 角色功能設定
                                 </button>
                             <?php endif; ?>
-                            <button type="button" class="btn btn-xs btn-default" id="btn-vp-reveal" style="margin-left:8px;" title="廠商與單價預設隱藏；按下後輸入您自己的登入密碼才會顯示，5 分鐘後自動恢復隱藏（再按一次也可立即隱藏）">
-                                <i class="fa fa-eye-slash"></i> 顯示廠商／單價
+                            <button type="button" class="btn btn-xs btn-default" id="btn-vp-reveal" style="margin-left:8px;" title="單價預設隱藏；按下後輸入您自己的登入密碼才會顯示，5 分鐘後自動恢復隱藏（再按一次也可立即隱藏）">
+                                <i class="fa fa-eye-slash"></i> 顯示單價
                             </button>
                             <span id="current-customer-display" style="font-size: 14px; color: #555;"></span>
                             <?php if (!empty($users_on_leave_names)): ?>
@@ -16628,7 +16853,16 @@ echo "</script>\n";
                                             <button type="button" id="btn-next-customer" title="下一個客戶" style="padding: 0 6px; height: 26px; font-size: 10px;">&gt;</button>
                                             <datalist id="customerList"></datalist>
                                             <!-- 業務篩選 -->
-                                            <input type="text" id="sales-filter" list="salesList" placeholder="負責業務">
+                                            <?php
+                                            // 「負責業務」篩選欄位預設隱藏（2026-10-28）；系統管理員在「設定業務→業務配置設定」可開啟。
+                                            // 只是不顯示欄位，元素與資料仍在（其他程式讀它的值＝空字串，不影響任何篩選）。
+                                            $_oready_show_sales_filter = false;
+                                            try {
+                                                $_sfr = $conn->getAll("SELECT param_value FROM system_parameters WHERE param_group = 'SALES_SETTING' AND param_key = 'show_sales_filter'");
+                                                if (!empty($_sfr[0]['param_value'])) { $_sfv = json_decode($_sfr[0]['param_value'], true); $_oready_show_sales_filter = !empty($_sfv['show']); }
+                                            } catch (Throwable $e) { $_oready_show_sales_filter = false; }
+                                            ?>
+                                            <input type="text" id="sales-filter" list="salesList" placeholder="負責業務"<?= $_oready_show_sales_filter ? '' : ' style="display:none;"' ?>>
                                             <datalist id="salesList"></datalist>
                                             <!-- 新增：交期搜索格 -->
                                             <input type="text" id="delivery-date-filter" placeholder="搜索 交期 (例：2/8、>2/8)">
@@ -17068,6 +17302,8 @@ echo "</script>\n";
     <script src="../../resource/js/vfs_fonts.js?v=<?=$_av?>"></script>
     <!-- Custom Theme Scripts -->
     <script src="../../resource/js/custom.min.js?v=<?=$_av?>"></script>
+    <script src="../../resource/js/eg_bom_timeline.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_timeline.js') ?>"></script>
+    <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script>
 
 
     <!-- jQuery UI JS (用於 Datepicker, 確保在 jQuery 之後載入) -->
@@ -17426,6 +17662,113 @@ echo "</script>\n";
     </script>
 
     <script>
+    // ══ 修改發單數（鎖頭＋本人密碼）：後端規則見 src/common/bom_qty_edit_lib.php ══
+    window.bqeInit = function (root, row) {
+        var panel = root.querySelector('#bqe-panel');
+        var qtyEl = root.querySelector('#bqe-qty');
+        var lockBtn = root.querySelector('#bqe-lock');
+        if (!panel || !qtyEl) return;
+        var info = null, busy = false;
+        function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+        function post(data, cb) {
+            data.bom = row.bom;
+            $.ajax({ url: '', type: 'POST', data: data, dataType: 'json' })
+             .done(function (r) { cb(r || {success:false, message:'回應格式錯誤'}); })
+             .fail(function () { cb({success:false, message:'與伺服器通訊失敗，請稍後再試'}); });
+        }
+        function histHtml(h) {
+            if (!h || !h.length) return '';
+            var s = '<div style="color:#8a6d3b;margin-top:4px;">';
+            h.slice(0, 5).forEach(function (x) {
+                s += '<div>原數量 ' + esc(x.old_qty) + ' → 修改後 ' + esc(x.new_qty) + '　' + esc(x.changed_by_name) + '　' + esc(x.at) + '</div>';
+            });
+            return s + '</div>';
+        }
+        var histBox = document.createElement('div');
+        var formBox = document.createElement('div');
+        panel.appendChild(formBox); panel.appendChild(histBox);
+        function setMsg(el, txt, ok) { el.textContent = txt; el.style.color = ok ? '#2e7d32' : '#b8431f'; }
+        function closeForm() { formBox.innerHTML = ''; }
+        function showPw() {
+            formBox.innerHTML = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+                '<span>請輸入本人登入密碼：</span><input type="text" class="form-control input-sm" id="bqe-pw" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" style="width:150px;display:inline-block;-webkit-text-security:disc;">' +
+                '<button type="button" class="btn btn-xs btn-warning" id="bqe-pw-ok">解鎖</button>' +
+                '<button type="button" class="btn btn-xs btn-default" id="bqe-pw-cancel">取消</button></div><div id="bqe-pw-msg" style="margin-top:3px;"></div>';
+            var pw = formBox.querySelector('#bqe-pw'), msg = formBox.querySelector('#bqe-pw-msg');
+            function go() {
+                if (busy) return;
+                if (!pw.value) { setMsg(msg, '請輸入本人登入密碼', false); return; }
+                busy = true;
+                post({ action: 'bom_qty_unlock', password: pw.value }, function (r) {
+                    busy = false;
+                    if (!r.success) { setMsg(msg, r.message || '解鎖失敗', false); pw.select(); return; }
+                    showEdit();
+                });
+            }
+            formBox.querySelector('#bqe-pw-ok').onclick = go;
+            formBox.querySelector('#bqe-pw-cancel').onclick = closeForm;
+            pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); go(); } });
+            pw.focus();
+        }
+        function showEdit() {
+            var cur = parseInt(qtyEl.textContent, 10) || 0;
+            var u = (info && info.usage) || null;
+            var utext = (info && info.usage_text) || '';
+            var hint = utext
+                ? '<div style="color:#b8431f;margin-top:3px;">此 BOM 已有 ' + esc(utext) + '。改多可以；改少' + (info.is_admin ? '會影響這些資料，需再確認。' : '暫時阻擋，只能由管理員改少。') + '</div>'
+                : '<div style="color:#888;margin-top:3px;">目前沒有報工／移轉單紀錄，改多改少都不會影響其他資料。</div>';
+            formBox.innerHTML = '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+                '<span>原數量 <b>' + cur + '</b> → 修改後：</span><input type="number" min="1" step="1" class="form-control input-sm" id="bqe-new" value="' + cur + '" style="width:110px;display:inline-block;">' +
+                '<button type="button" class="btn btn-xs btn-success" id="bqe-save">儲存</button>' +
+                '<button type="button" class="btn btn-xs btn-default" id="bqe-cancel">取消</button></div>' + hint + '<div id="bqe-msg" style="margin-top:3px;"></div>';
+            var inp = formBox.querySelector('#bqe-new'), msg = formBox.querySelector('#bqe-msg');
+            function send(confirmDec) {
+                var nv = parseInt(inp.value, 10);
+                if (!(nv >= 1) || String(nv) !== String(inp.value).trim()) { setMsg(msg, '發單數必須是 1 以上的整數', false); return; }
+                if (nv === cur) { setMsg(msg, '數量沒有變動', false); return; }
+                if (nv < cur && u && u.total > 0 && !(info && info.is_admin)) {
+                    setMsg(msg, '已有 ' + utext + '，改少會影響既有資料，暫時不允許；請由管理員改少。', false); return;
+                }
+                if (busy) return; busy = true;
+                var d = { action: 'bom_qty_save', new_qty: nv };
+                if (confirmDec) d.confirm_decrease = 1;
+                post(d, function (r) {
+                    busy = false;
+                    if (r.success) {
+                        qtyEl.textContent = r.qty;
+                        row.Qty = r.qty;
+                        try { if (typeof fullDataset !== 'undefined') { fullDataset.forEach(function (it) { if (it.bom === row.bom) it.Qty = r.qty; }); if (typeof processAndRenderData === 'function') processAndRenderData(); } } catch (e) {}
+                        histBox.innerHTML = histHtml(r.history);
+                        closeForm();
+                        if (typeof showTemporaryMessage === 'function') showTemporaryMessage('發單數已更新為 ' + r.qty, true);
+                        return;
+                    }
+                    if (r.code === 'NEED_CONFIRM') { if (confirm(r.message)) send(true); return; }
+                    if (r.code === 'LOCKED') { showPw(); return; }
+                    setMsg(msg, r.message || '儲存失敗', false);
+                    if (r.code === 'DECREASE_BLOCKED') alert(r.message);
+                });
+            }
+            formBox.querySelector('#bqe-save').onclick = function () { send(false); };
+            formBox.querySelector('#bqe-cancel').onclick = closeForm;
+            inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); send(false); } });
+            inp.focus(); inp.select();
+        }
+        // 先取修改紀錄與使用量（失敗只是不顯示，不影響視窗其他功能）
+        post({ action: 'bom_qty_info' }, function (r) {
+            if (!r.success) return;
+            info = r;
+            histBox.innerHTML = histHtml(r.history);
+        });
+        if (lockBtn) lockBtn.onclick = function (e) {
+            e.preventDefault();
+            if (formBox.innerHTML) { closeForm(); return; }
+            if (info && info.unlocked) showEdit(); else showPw();
+        };
+    };
+    </script>
+
+    <script>
         <?php if ($permission_code === 'A'): ?>
         // ══ 角色功能設定（僅權限=A者可見的按鈕會呼叫）══
         var OREADY_FEATURES = [
@@ -17439,7 +17782,8 @@ echo "</script>\n";
             // 2026-07-16 拆批/合併功能停用（操作按鈕已註解），角色設定清單一併隱藏此功能碼；恢復時解除註解
             // {code:'oready_batch_split_merge',  label:'拆批 / 合併'},
             {code:'oready_view_price',         label:'查看加工單價'},
-            {code:'oready_process_settings',   label:'製程設定 / 內製製程例外設定'}
+            {code:'oready_process_settings',   label:'製程設定 / 內製製程例外設定'},
+            {code:'oready_edit_qty',           label:'修改發單數（更新視窗內鎖頭＋本人密碼；已有報工／移轉單時改少僅管理員可）'}
         ];
         var OREADY_CODES = OREADY_FEATURES.map(function(f){ return f.code; });
         var _oreadyRoleCur = [];
@@ -18968,7 +19312,6 @@ echo "</script>\n";
 </script>
 <style>
 /* 廠商／單價預設隱藏時，連廠商篩選欄一起藏起來（按「顯示廠商／單價」輸入本人密碼後才出現） */
-body.eg-vp-hidden #vendor-filter, body.eg-vp-hidden #btn-prev-vendor, body.eg-vp-hidden #btn-next-vendor { display: none !important; }
 </style>
 <script>
 // ── 廠商／單價預設隱藏（所有人，包含唯讀）：按鈕 → 輸入「自己的」登入密碼 → 顯示 5 分鐘 → 自動恢復；再按一次按鈕可立即隱藏 ──
@@ -18981,10 +19324,10 @@ body.eg-vp-hidden #vendor-filter, body.eg-vp-hidden #btn-prev-vendor, body.eg-vp
         if (!btn) return;
         if (window.egVpReveal) {
             var left = Math.max(0, Math.round((until - Date.now()) / 1000));
-            btn.innerHTML = '<i class="fa fa-eye"></i> 隱藏廠商／單價（剩 ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) + '）';
+            btn.innerHTML = '<i class="fa fa-eye"></i> 隱藏單價（剩 ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) + '）';
             btn.className = 'btn btn-xs btn-warning';
         } else {
-            btn.innerHTML = '<i class="fa fa-eye-slash"></i> 顯示廠商／單價';
+            btn.innerHTML = '<i class="fa fa-eye-slash"></i> 顯示單價';
             btn.className = 'btn btn-xs btn-default';
         }
     }
@@ -19000,9 +19343,9 @@ body.eg-vp-hidden #vendor-filter, body.eg-vp-hidden #btn-prev-vendor, body.eg-vp
         var ov = document.createElement('div');
         ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10600;display:flex;align-items:center;justify-content:center;';
         ov.innerHTML = '<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,.3);width:420px;max-width:95vw;padding:18px 20px;">'
-            + '<h4 style="margin:0 0 10px;color:#6B4423;"><i class="fa fa-lock"></i> 顯示廠商／單價</h4>'
-            + '<div style="font-size:13px;color:#555;line-height:1.6;margin-bottom:10px;">廠商與單價屬於敏感資料，預設隱藏。<b style="color:#b8431f;">請輸入您自己的登入密碼</b>後顯示，5 分鐘後會自動恢復隱藏。</div>'
-            + '<input type="password" id="vp-pw" class="form-control" autocomplete="current-password" placeholder="請輸入您自己的登入密碼">'
+            + '<h4 style="margin:0 0 10px;color:#6B4423;"><i class="fa fa-lock"></i> 顯示單價</h4>'
+            + '<div style="font-size:13px;color:#555;line-height:1.6;margin-bottom:10px;">單價屬於敏感資料，預設隱藏。<b style="color:#b8431f;">請輸入您自己的登入密碼</b>後顯示，5 分鐘後會自動恢復隱藏。</div>'
+            + '<input type="text" id="vp-pw" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore style="-webkit-text-security:disc;" placeholder="請輸入您自己的登入密碼">'
             + '<div id="vp-err" style="color:#b8431f;font-size:12px;min-height:18px;margin-top:6px;"></div>'
             + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;"><button type="button" class="btn btn-default" id="vp-cancel">取消</button><button type="button" class="btn btn-warning" id="vp-ok">確定</button></div></div>';
         document.body.appendChild(ov);
