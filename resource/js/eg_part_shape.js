@@ -133,9 +133,13 @@
   function judge(st) {
     var defs = D(), bad = {}, i, d, l, r = { msg: '', bad: bad, info: '', type: '' };
     if (st.outer === 'one_side' || st.outer === 'both_sides') {
-      var hv = num(st.hub);
-      if (hv === false) { bad['hub'] = 1; r.msg = '最大凸出外徑必須是大於 0 的數字'; return r; }
-      if (num(st.hub_len) === false) { bad['hublen'] = 1; r.msg = '凸出長度必須是大於 0 的數字'; return r; }
+      var hv = num(st.hub), pf = (st.outer === 'both_sides' && !st.hub_same) ? '左側' : '';
+      if (hv === false) { bad['hub'] = 1; r.msg = pf + '凸出外徑必須是大於 0 的數字'; return r; }
+      if (num(st.hub_len) === false) { bad['hublen'] = 1; r.msg = pf + '凸出長度必須是大於 0 的數字'; return r; }
+      if (st.outer === 'both_sides' && !st.hub_same) {
+        if (num(st.hub2) === false) { bad['hub2'] = 1; r.msg = '右側凸出外徑必須是大於 0 的數字'; return r; }
+        if (num(st.hub2_len) === false) { bad['hub2len'] = 1; r.msg = '右側凸出長度必須是大於 0 的數字'; return r; }
+      }
     }
     if (!st.mode) return r;
     if (st.mode === 'single') {
@@ -192,10 +196,10 @@
   // 流程：內孔 無孔(預設/軸狀)｜通孔｜盲孔 → 點了就直接出現輸入框並取得焦點（預設單一孔徑）
   //       → 需要時改選 多階孔徑（先輸入孔數，Enter 後自動開始輸入）或 兩端同徑中間不同 → 系統自動判定孔型
   var form = {
-    el: null, st: { outer: '', hub: '', hub_len: '', hole: '', mode: '', bore_steps: 0, bore: [], otp: [], seg: [] },
+    el: null, st: { outer: '', hub: '', hub_len: '', hub2: '', hub2_len: '', hub_same: true, hole: '', mode: '', bore_steps: 0, bore: [], otp: [], seg: [] },
     mount: function (el) { injectCss(); this.el = el; this.render(); this._bind(); },
     set: function (data) {
-      var s = { outer: '', hub: '', hub_len: '', hole: '', mode: '', bore_steps: 0, bore: [], otp: [], seg: [] };
+      var s = { outer: '', hub: '', hub_len: '', hub2: '', hub2_len: '', hub_same: true, hole: '', mode: '', bore_steps: 0, bore: [], otp: [], seg: [] };
       if (data) {
         var sv = function (x) { return x == null ? '' : String(x); };
         s.otp = (data.otp || []).map(function (o) { return { d: sv(o.d), d2: sv(o.d2), tl: sv(o.tl), r: sv(o.r), ha: sv(o.ha) }; });
@@ -203,6 +207,9 @@
         s.outer = data.outer_shape || '';
         s.hub = (data.hub_dia == null || data.hub_dia === '') ? '' : String(parseFloat(data.hub_dia));
         s.hub_len = (data.hub_len == null || data.hub_len === '') ? '' : String(parseFloat(data.hub_len));
+        s.hub2 = (data.hub2_dia == null || data.hub2_dia === '') ? '' : String(parseFloat(data.hub2_dia));
+        s.hub2_len = (data.hub2_len == null || data.hub2_len === '') ? '' : String(parseFloat(data.hub2_len));
+        s.hub_same = (s.hub2 === '' && s.hub2_len === '');   // 右側沒資料＝兩側相同
         var bt = data.bore_type || '';
         if (bt === 'through' || bt === 'blind') s.mode = 'single';
         else if (bt === 'step_through' || bt === 'step_blind') s.mode = 'steps';
@@ -213,14 +220,14 @@
       }
       this.st = s; if (this.el) this.render();
     },
-    _j: function () { var s = this.st; return { outer: s.outer, hub: s.hub, hub_len: s.hub_len, blind: s.hole === 'blind', mode: s.hole ? s.mode : '', bore_steps: s.bore_steps, bore: s.bore }; },
+    _j: function () { var s = this.st; return { outer: s.outer, hub: s.hub, hub_len: s.hub_len, hub2: s.hub2, hub2_len: s.hub2_len, hub_same: s.hub_same, blind: s.hole === 'blind', mode: s.hole ? s.mode : '', bore_steps: s.bore_steps, bore: s.bore }; },
     get: function () {
       var j = this._j(), st = this.st;
       var any = function (o) { return Object.keys(o).some(function (k) { return String(o[k] || '').trim() !== ''; }); };
       return { otp: st.otp.filter(any).map(function (o) {
         if (String(o.d || '').trim() === '') { var tc = taperCalc(Object.assign({ tp: 1 }, o)); if (tc && tc.dd) o = Object.assign({}, o, { d: String(Math.round(tc.D * 1000) / 1000) }); }
         return o;
-      }), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', hub_len: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub_len : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
+      }), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', hub_len: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub_len : '', hub2_dia: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2 : '', hub2_len: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2_len : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
     },
     validate: function () { return judge(this._j()).msg || outerExtra(this.st).msg; },
     _bind: function () {
@@ -244,12 +251,10 @@
         var t = ev.target;
         if (ev.key === 'Enter') {
           if (t.hasAttribute && t.hasAttribute('data-cnt')) { ev.preventDefault(); ev.stopPropagation(); self._applyCount(true); return; }
-          if (t.matches && t.matches('input[data-hub]')) {
+          if (t.matches && t.matches('input[data-hubf]')) {
             ev.preventDefault(); ev.stopPropagation();
-            var hl = el.querySelector('input[data-hublen]'); if (hl) { hl.focus(); hl.select(); return; }
-          }
-          if (t.matches && (t.matches('input[data-hub]') || t.matches('input[data-hublen]'))) {
-            ev.preventDefault(); ev.stopPropagation();
+            var hfs = [].slice.call(el.querySelectorAll('input[data-hubf]')), hx = hfs.indexOf(t);
+            if (hx >= 0 && hx < hfs.length - 1) { hfs[hx + 1].focus(); hfs[hx + 1].select(); return; }
             var nx = el.querySelector('input[data-cnt]') || el.querySelector('input[data-i]'); if (nx) { nx.focus(); nx.select(); } else { t.blur(); }
             return;
           }
@@ -269,10 +274,11 @@
         if ((ev.key === 'Enter' || ev.key === ' ') && t.classList && t.classList.contains('eg-shape-chip')) { ev.preventDefault(); self._pick(t); }
       }, true);
       el.addEventListener('input', function (ev) {
-        var hb = ev.target.closest('input[data-hub]');
-        if (hb) { self.st.hub = hb.value; self._showJudge(); return; }
-        var hlb = ev.target.closest('input[data-hublen]');
-        if (hlb) { self.st.hub_len = hlb.value; self._showJudge(); return; }
+        var hf = ev.target.closest('input[data-hubf]');
+        if (hf) {
+          var hk = hf.hasAttribute('data-hub') ? 'hub' : hf.hasAttribute('data-hublen') ? 'hub_len' : hf.hasAttribute('data-hub2') ? 'hub2' : 'hub2_len';
+          self.st[hk] = hf.value; self._showJudge(); return;
+        }
         var oin = ev.target.closest('input[data-oi]');
         if (oin) {
           var lst = self.st[oin.getAttribute('data-o')], oi = parseInt(oin.getAttribute('data-oi'), 10);
@@ -288,6 +294,13 @@
       el.addEventListener('change', function (ev) {
         var t = ev.target;
         if (t.hasAttribute && t.hasAttribute('data-cnt')) { self._applyCount(false); return; }
+        if (t.hasAttribute && t.hasAttribute('data-hubsame')) {   // 雙邊凸出：兩側相同／分左右側
+          self.st.hub_same = !!t.checked;
+          if (t.checked) { self.st.hub2 = ''; self.st.hub2_len = ''; }
+          self.render();
+          var nf = self.el.querySelector(t.checked ? 'input[data-hubsame]' : 'input[data-hub2]'); if (nf) nf.focus();
+          return;
+        }
         if (t.hasAttribute && t.hasAttribute('data-oi') && t.getAttribute('data-o') === 'otp' && (t.getAttribute('data-of') === 'd' || t.getAttribute('data-of') === 'd2')) {
           var oq = parseInt(t.getAttribute('data-oi'), 10), ob = self.st.otp[oq];
           if (ob) {
@@ -345,7 +358,8 @@
       var kind = chip.getAttribute('data-kind'), code = chip.getAttribute('data-code'), s = this.st, focus = false, focusHub = false;
       if (kind === 'outer') {
         s.outer = (code === 'other' || s.outer === code) ? '' : code;
-        if (s.outer !== 'one_side' && s.outer !== 'both_sides') { s.hub = ''; s.hub_len = ''; }
+        if (s.outer !== 'one_side' && s.outer !== 'both_sides') { s.hub = ''; s.hub_len = ''; s.hub2 = ''; s.hub2_len = ''; s.hub_same = true; }
+        else if (s.outer === 'one_side') { s.hub2 = ''; s.hub2_len = ''; s.hub_same = true; }
         else focusHub = true;
       }
       else if (kind === 'hole') {
@@ -381,18 +395,31 @@
       this.el.querySelectorAll('[data-tinfo]').forEach(function (sp) { sp.textContent = taperInfo(self.st.bore[parseInt(sp.getAttribute('data-tinfo'), 10)]); });
       var hb = this.el.querySelector('input[data-hub]'); if (hb) hb.classList.toggle('bad', !!v.bad['hub']);
       var hlq = this.el.querySelector('input[data-hublen]'); if (hlq) hlq.classList.toggle('bad', !!v.bad['hublen']);
+      var h2q = this.el.querySelector('input[data-hub2]'); if (h2q) h2q.classList.toggle('bad', !!v.bad['hub2']);
+      var h2l = this.el.querySelector('input[data-hub2len]'); if (h2l) h2l.classList.toggle('bad', !!v.bad['hub2len']);
     },
     render: function () {
       var defs = D(), s = this.st, h = '', blind = s.hole === 'blind';
       h += '<div class="eg-shape-line"><span class="eg-shape-lab" title="齒寬幾乎＝工件總長選「平板型」；一側有輪轂選「單邊凸出」；兩側都有選「雙邊凸出」；沒選＝其他。只要有凸出（凸出多少都算）就選單邊／雙邊凸出；完全沒有凸出才是平板型。再點一次已選的可取消。">外形</span>';
       Object.keys(defs.outer).forEach(function (c) { h += chipHtml('outer', c, defs.outer[c], s.outer === c); });
       h += chipHtml('outer', 'other', '其他', s.outer === '');
-      if (s.outer === 'one_side' || s.outer === 'both_sides') {
-        h += '<span class="eg-shape-sep">│</span><label class="eg-shape-in">最大凸出外徑 <input type="number" step="any" min="0" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label>' +
-          '<label class="eg-shape-in" title="凸出部分的長度（軸向）。雙邊凸出請填單側長度；兩側不同時，用下方「重點外徑段」分別記">凸出長度 <input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" data-hublen="1" data-eg-hint="可輸入算式，例：48-18" value="' + esc(s.hub_len) + '" class="form-control input-sm no-spin-input"> mm</label>' +
-          '<span class="eg-shape-hint">只要有凸出就算（不論多少）；外徑填凸出部分的最大直徑</span>';
-      }
       h += '</div>';
+      // 凸出（單邊／雙邊）：外徑、長度各自選填；雙邊凸出預設「兩側相同」，取消勾選後分左側、右側各填一組
+      if (s.outer === 'one_side' || s.outer === 'both_sides') {
+        var both = s.outer === 'both_sides', two = both && !s.hub_same;
+        var hin = function (attr, val, lab, tip, calc) {
+          return '<label class="eg-shape-in"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + lab + ' <input ' +
+            (calc ? 'type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" data-eg-hint="可輸入算式，例：48-18"' : 'type="number" step="any" min="0"') +
+            ' data-hubf="1" ' + attr + '="1" value="' + esc(val) + '" class="form-control input-sm no-spin-input"> mm</label>';
+        };
+        var sideLab = function (t) { return '<span class="eg-shape-hint" style="font-weight:bold;color:#5a3d1c;min-width:30px">' + t + '</span>'; };
+        h += '<div class="eg-shape-line" style="margin-left:40px">' + sideLab(two ? '左側' : '凸出') +
+          hin('data-hub', s.hub, '外徑', '凸出部分的最大直徑') + hin('data-hublen', s.hub_len, '長度', '凸出部分的長度（軸向）', true) +
+          (both ? '<label class="eg-shape-in" title="左右兩側的外徑與長度都相同時打勾；不同時取消勾選，分別填左側、右側"><input type="checkbox" data-hubsame="1"' + (s.hub_same ? ' checked' : '') + ' style="width:auto;height:auto"> 兩側相同</label>' : '') + '</div>';
+        if (two) h += '<div class="eg-shape-line" style="margin-left:40px">' + sideLab('右側') +
+          hin('data-hub2', s.hub2, '外徑', '右側凸出部分的最大直徑') + hin('data-hub2len', s.hub2_len, '長度', '右側凸出部分的長度（軸向）', true) + '</div>';
+        h += '<div class="eg-shape-hint" style="margin-left:40px">只要有凸出就算（不論多少）；外徑與長度各自選填，只填長度也可以</div>';
+      }
 
       // 外錐（可多筆）／重點外徑段（可多筆，只記想記的幾段）—— 皆選填
       var oin = function (o, i, f, lab, w, calc) {
@@ -515,6 +542,10 @@
       h += line + '<span class="filter-group-label" title="單邊／雙邊凸出的最大凸出外徑">凸出外徑</span>' +
         '<input type="number" step="any" data-sh="min" placeholder="最小" ' + ins + '>' + sepx +
         '<input type="number" step="any" data-sh="max" placeholder="最大" ' + ins + '>' +
+        '<span style="font-size:11px;color:#888;margin:0 12px 0 3px;">mm</span>' +
+        '<span class="filter-group-label" title="凸出部分的長度；雙邊凸出任一側符合即命中（只填長度沒填外徑的料號也找得到）">凸出長度</span>' +
+        '<input type="number" step="any" data-tp="hl.l.0" placeholder="最小" ' + ins + '>' + sepx +
+        '<input type="number" step="any" data-tp="hl.l.1" placeholder="最大" ' + ins + '>' +
         '<span style="font-size:11px;color:#888;margin:0 12px 0 3px;">mm</span>' +
         '<span class="filter-group-label" title="只要這個料號有任何一階孔徑落在範圍內就會出現">孔徑</span>' +
         '<input type="number" step="any" data-sb="min" placeholder="最小" ' + ins + '>' + sepx +
