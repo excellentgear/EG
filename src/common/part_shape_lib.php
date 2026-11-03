@@ -143,7 +143,7 @@ function eg_shape_taper_part($raw, $d, string $lab): array {
     if ($ha === false || ($ha !== null && $ha >= 90)) return [null, $lab . '半錐角必須大於 0 且小於 90 度'];
     $tl = eg_shape_num($raw['tl'] ?? '');
     if ($tl === false) return [null, $lab . '錐長必須是大於 0 的數字'];
-    if ($d2 === null && $r === null && $ha === null) return [null, $lab . '是錐孔，請填小徑、錐度或半錐角（至少一個）'];
+    if ($d2 === null && $r === null && $ha === null) return [null, $lab . '勾選了錐，請填小徑、錐度或半錐角（至少一個）'];
     if ($d2 !== null && $d !== null && $d2 == $d) return [null, $lab . '大徑與小徑相同，不是錐孔'];
     if ($d2 !== null && $d !== null && $d2 > $d) return [null, $lab . '小徑必須小於大徑（請把較大的填在大徑）'];
     $x = ['tp' => 1];
@@ -159,6 +159,24 @@ function eg_shape_taper_part($raw, $d, string $lab): array {
  * 外錐（可多筆）與重點外徑段（可多筆，軸件只記想記的幾段）。兩者皆選填；沒送這兩個欄位＝舊呼叫端，不動原值。
  * @return array [ 已送欄位?, json字串|null, 錯誤|null ]
  */
+/**
+ * 一個「錐」的整理：外徑＝大徑（可由 小徑＋長度＋錐度/半錐角 算出），長度＝錐長，另填小徑／錐度／半錐角至少一個。
+ * 外錐、單階凸出勾「錐」、多階凸出的錐階共用。回傳 [整理後欄位|null, 錯誤|null]
+ */
+function eg_shape_taper_item(array $o, string $lab): array {
+    $d = eg_shape_num($o['d'] ?? '');
+    if ($d === null) {
+        $d2x = eg_shape_num($o['d2'] ?? ''); $tlx = eg_shape_num($o['tl'] ?? '');
+        $rx = eg_shape_num($o['r'] ?? ''); $hax = eg_shape_num($o['ha'] ?? '');
+        $Cx = $rx ? 1 / $rx : (($hax && $hax < 90) ? 2 * tan(deg2rad($hax)) : null);
+        if ($d2x && $tlx && $Cx) $d = round($d2x + $tlx * $Cx, 3);
+    }
+    if ($d === false || $d === null) return [null, $lab . '請填大徑，或填「小徑＋長度＋錐度（或半錐角）」讓系統算出大徑'];
+    [$tx, $te] = eg_shape_taper_part(['tp' => 1] + $o, $d, $lab);
+    if ($te) return [null, $te];
+    return [['d' => $d] + $tx, null];
+}
+
 function eg_shape_outer_extra($in): array {
     if (!array_key_exists('otp', $in) && !array_key_exists('seg', $in)) return [false, null, null];
     $otp = []; $seg = [];
@@ -198,7 +216,7 @@ function eg_shape_outer_extra($in): array {
     return [true, $j, null];
 }
 
-function eg_shape_normalize($in): array {
+function eg_shape_normalize($in, string $ptype = ''): array {
     if (!is_array($in)) return [null, null];
     $defs  = eg_shape_defs();
     $outer = trim((string)($in['outer'] ?? ''));
@@ -230,6 +248,12 @@ function eg_shape_normalize($in): array {
                     $gd = eg_shape_num($g['d'] ?? ''); $gl = eg_shape_num($g['l'] ?? '');
                     if ($gd === false) return [null, $sn . '第 ' . ($i + 1) . ' 階凸出外徑必須是大於 0 的數字'];
                     if ($gl === false) return [null, $sn . '第 ' . ($i + 1) . ' 階凸出長度必須是大於 0 的數字'];
+                    if (!empty($g['tp'])) {   // 這一階是錐：外徑＝大徑、長度＝錐長，另填小徑／錐度／半錐角（至少一個）
+                        [$te, $er] = eg_shape_taper_item(['d' => $gd, 'd2' => $g['d2'] ?? '', 'tl' => $gl, 'r' => $g['r'] ?? '', 'ha' => $g['ha'] ?? ''], $sn . '第 ' . ($i + 1) . ' 階（錐）');
+                        if ($er) return [null, $er];
+                        if ($gl !== null) $te['l'] = $gl;
+                        $outS[$sk][] = $te; continue;
+                    }
                     if ($gd === null && $gl === null) continue;
                     $x = []; if ($gd !== null) $x['d'] = $gd; if ($gl !== null) $x['l'] = $gl;
                     $outS[$sk][] = $x;
@@ -239,7 +263,31 @@ function eg_shape_normalize($in): array {
             $hubJson = json_encode(['m' => 1, 'a' => $outS['a'], 'b' => $outS['b']], JSON_UNESCAPED_UNICODE);
             // 單一欄位只留各側最大外徑（舊程式與外徑篩選仍可用）；長度與各階明細在 hub_json
             $hub = $mxd($outS['a']); $hubLen = null; $hub2 = $mxd($outS['b']); $hub2Len = null;
+        } else {
+            // 單階凸出也可勾「錐」：外徑＝大徑、長度＝錐長；ta＝凸出／左側，tb＝右側（兩側不同才有）
+            $mkT = function ($raw, $dia, $len, $lab) {
+                if (!is_array($raw) || empty($raw['tp'])) return [null, null];
+                [$e, $er] = eg_shape_taper_item(['d' => $dia, 'd2' => $raw['d2'] ?? '', 'tl' => $len, 'r' => $raw['r'] ?? '', 'ha' => $raw['ha'] ?? ''], $lab);
+                return $er ? [null, $er] : [$e, null];
+            };
+            $twoSides = $outer === 'both_sides' && ($hub2 !== null || $hub2Len !== null || !empty($in['hub_tb']['tp']));
+            [$tA, $eA] = $mkT($in['hub_ta'] ?? null, $hub, $hubLen, $twoSides ? '左側凸出' : '凸出');
+            if ($eA) return [null, $eA];
+            $tB = null;
+            if ($outer === 'both_sides') {
+                [$tB, $eB] = $mkT($in['hub_tb'] ?? null, $hub2, $hub2Len, '右側凸出');
+                if ($eB) return [null, $eB];
+            }
+            if ($tA && isset($tA['d'])) $hub = $tA['d'];
+            if ($tB && isset($tB['d'])) $hub2 = $tB['d'];
+            if ($tA || $tB) $hubJson = json_encode(['m' => 0, 'a' => [], 'b' => [], 'ta' => $tA, 'tb' => $tB], JSON_UNESCAPED_UNICODE);
         }
+    }
+    // 平板型：外徑可輸入。齒輪可省略（省略＝最大外徑與齒部外徑相同）；治具（J）必填
+    if ($outer === 'flush') {
+        $hub = eg_shape_num($in['hub_dia'] ?? '');
+        if ($hub === false) return [null, '外徑必須是大於 0 的數字'];
+        if ($hub === null && $ptype === 'J') return [null, '治具請填外徑'];
     }
     $mode  = trim((string)($in['mode'] ?? ''));
     if ($mode !== '' && !in_array($mode, ['single', 'steps', 'ends'], true)) return [null, '內孔型態不正確'];
@@ -344,7 +392,9 @@ function eg_shape_get(PDO $pdo, int $dId): ?array {
         $r['bore'] = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
         $ex = $r['outer_json'] ? (json_decode($r['outer_json'], true) ?: []) : [];
         $hj = $r['hub_json'] ? (json_decode($r['hub_json'], true) ?: null) : null;
-        $r['hub_multi'] = $hj ? 1 : 0;
+        $r['hub_multi'] = ($hj && !empty($hj['m'])) ? 1 : 0;
+        $r['hub_ta'] = $hj['ta'] ?? null;
+        $r['hub_tb'] = $hj['tb'] ?? null;
         $r['hub_a'] = $hj['a'] ?? [];
         $r['hub_b'] = $hj['b'] ?? [];
         $r['otp'] = $ex['otp'] ?? [];
@@ -372,12 +422,12 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
                 return ($dia !== null ? $f($dia) : '–') . ($len !== null ? ' 長' . $f($len) : '');
             };
             $hj = !empty($r['hub_json']) ? (json_decode($r['hub_json'], true) ?: null) : null;
-            if ($hj) {   // 多階凸出：各階依輸入順序以「→」串接
-                $sideTxt = function ($arr) use ($hubTxt) { return implode('→Ø', array_map(function ($g) use ($hubTxt) { return $hubTxt($g['d'] ?? null, $g['l'] ?? null); }, $arr)); };
+            if ($hj && !empty($hj['m'])) {   // 多階凸出：各階依輸入順序以「→」串接（錐階標「(錐)」）
+                $sideTxt = function ($arr) use ($hubTxt) { return implode('→Ø', array_map(function ($g) use ($hubTxt) { return $hubTxt($g['d'] ?? null, $g['l'] ?? null) . (!empty($g['tp']) ? '(錐)' : ''); }, $arr)); };
                 $hubStr = $sideTxt($hj['a'] ?? []) . (!empty($hj['b']) ? '／Ø' . $sideTxt($hj['b']) : '');
             } else {
-                $hubStr = $hubTxt($r['hub_dia'], $r['hub_len'])
-                        . (($r['hub2_dia'] !== null || $r['hub2_len'] !== null) ? '／Ø' . $hubTxt($r['hub2_dia'], $r['hub2_len']) : '');
+                $hubStr = $hubTxt($r['hub_dia'], $r['hub_len']) . (!empty($hj['ta']) ? '(錐)' : '')
+                        . (($r['hub2_dia'] !== null || $r['hub2_len'] !== null) ? '／Ø' . $hubTxt($r['hub2_dia'], $r['hub2_len']) . (!empty($hj['tb']) ? '(錐)' : '') : '');
             }
             $bore = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
             $ds = array_map(function ($b) { return rtrim(rtrim(number_format((float)$b['d'], 3, '.', ''), '0'), '.') . (!empty($b['tp']) ? '(錐)' : ''); }, $bore);
@@ -471,23 +521,29 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
         $ti = 0;
         foreach (['b', 'o'] as $g) {
             if (empty($tpj[$g]) || !is_array($tpj[$g])) continue;
-            $cc = [];
-            foreach ($col as $k => $expr) {
-                $rg = $tpj[$g][$k] ?? null;
-                if (!is_array($rg)) continue;
-                foreach ([0 => '>=', 1 => '<='] as $ix => $op) {
-                    if (isset($rg[$ix]) && is_numeric($rg[$ix])) { $p = ':fstp' . ($ti++); $cc[] = "$expr $op $p"; $prm[$p] = $rg[$ix]; }
+            // 錐孔：bore_json 內 tp=1 的孔；外錐：外錐列(outer_json)＋凸出勾「錐」的單階(ta/tb)＋多階凸出裡的錐階，任一處符合即命中
+            $variants = $g === 'b' ? [['bore_json', '$[*]', 1]]
+                : [['outer_json', '$.otp[*]', 0], ['hub_json', '$.ta', 0], ['hub_json', '$.tb', 0], ['hub_json', '$.a[*]', 1], ['hub_json', '$.b[*]', 1]];
+            $alts = [];
+            foreach ($variants as $vi => $vv) {
+                [$src, $path, $needTp] = $vv;
+                $cc = [];
+                foreach ($col as $k => $expr) {
+                    $rg = $tpj[$g][$k] ?? null;
+                    if (!is_array($rg)) continue;
+                    foreach ([0 => '>=', 1 => '<='] as $ix => $op) {
+                        if (isset($rg[$ix]) && is_numeric($rg[$ix])) { $p = ':fstp' . ($ti++); $cc[] = "$expr $op $p"; $prm[$p] = $rg[$ix]; }
+                    }
                 }
+                if (!$cc) break;
+                $alts[] = "EXISTS (SELECT 1 FROM JSON_TABLE(s_tp$g.$src, '$path' COLUMNS("
+                        . "tp INT PATH '\$.tp' DEFAULT '0' ON EMPTY, d DECIMAL(10,3) PATH '\$.d' NULL ON EMPTY NULL ON ERROR, "
+                        . "cd DECIMAL(10,3) PATH '\$.cd' NULL ON EMPTY NULL ON ERROR, cs DECIMAL(10,3) PATH '\$.cs' NULL ON EMPTY NULL ON ERROR, "
+                        . "cn DECIMAL(10,3) PATH '\$.cn' NULL ON EMPTY NULL ON ERROR, ch DECIMAL(10,3) PATH '\$.ch' NULL ON EMPTY NULL ON ERROR)) jt "
+                        . "WHERE " . ($needTp ? 'jt.tp = 1 AND ' : '') . implode(' AND ', $cc) . ")";
             }
-            if (!$cc) continue;
-            $src = $g === 'b' ? 'bore_json' : 'outer_json';
-            $path = $g === 'b' ? '$[*]' : '$.otp[*]';
-            $tpc = $g === 'b' ? ' AND jt.tp = 1' : '';
-            $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_tp$g, JSON_TABLE(s_tp$g.$src, '$path' COLUMNS("
-                  . "tp INT PATH '\$.tp' DEFAULT '0' ON EMPTY, d DECIMAL(10,3) PATH '\$.d' NULL ON EMPTY NULL ON ERROR, "
-                  . "cd DECIMAL(10,3) PATH '\$.cd' NULL ON EMPTY NULL ON ERROR, cs DECIMAL(10,3) PATH '\$.cs' NULL ON EMPTY NULL ON ERROR, "
-                  . "cn DECIMAL(10,3) PATH '\$.cn' NULL ON EMPTY NULL ON ERROR, ch DECIMAL(10,3) PATH '\$.ch' NULL ON EMPTY NULL ON ERROR)) jt "
-                  . "WHERE s_tp$g.d_id={$alias}.d_id$tpc AND " . implode(' AND ', $cc) . ")";
+            if (!$alts) continue;
+            $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_tp$g WHERE s_tp$g.d_id={$alias}.d_id AND (" . implode(' OR ', $alts) . "))";
         }
     }
     $hmn = trim((string)($_POST['filter_shape_hub_min'] ?? ''));

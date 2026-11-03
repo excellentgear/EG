@@ -3241,7 +3241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($Type !== 'G' && $Type !== 'J') {
                 eg_shape_save($pdo, (int)$d_id, null);
             } elseif (array_key_exists('shape_spec', $_POST)) {
-                [$__shapeRow, $__shapeErr] = eg_shape_normalize(json_decode((string)$_POST['shape_spec'], true));
+                [$__shapeRow, $__shapeErr] = eg_shape_normalize(json_decode((string)$_POST['shape_spec'], true), (string)$Type);
                 if ($__shapeErr) throw new Exception($__shapeErr);   // 後端同規則再擋一次（鐵律8）
                 eg_shape_save($pdo, (int)$d_id, $__shapeRow, (string)($_SESSION['userName'] ?? ''));
             }
@@ -10048,7 +10048,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
   var gs = document.getElementById('gear-section'), ss = document.getElementById('shape-section'), curType = '';
   // 齒輪（G）：跟著齒輪規格區塊顯示；治具（J）：沒有齒輪規格區塊，依工件種類直接顯示（外形／內孔設定與齒輪相同）
   function sync(){ ss.style.display = (curType === 'J' || (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none')) ? '' : 'none'; }
-  window.EGShapeTypeSync = function(val){ curType = val || ''; sync(); };
+  window.EGShapeTypeSync = function(val){ curType = val || ''; sync(); if (EGPartShape.form.setType) EGPartShape.form.setType(curType); };
   if (gs) { new MutationObserver(sync).observe(gs, {attributes:true, attributeFilter:['style','class']}); sync(); }
 })();
 </script>
