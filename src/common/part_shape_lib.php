@@ -69,6 +69,13 @@ function eg_shape_ensure_table(PDO $pdo): void {
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_json'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_json TEXT NULL COMMENT '多階凸出各階 {m,a,b}（有值＝多階凸出；階數可為 0）'");
             }
+            // 補欄：工件最大外徑／長度（2026-11-03）。與「凸出外徑／凸出長度」不同：這是整個工件的最大外徑與長度；
+            // 齒輪沒填＝依齒輪規格的齒部外徑與齒寬（清單篩選時一併比對）
+            foreach (['max_od' => '工件最大外徑', 'max_len' => '工件長度'] as $mc => $mcm) {
+                if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE '$mc'")->fetchColumn()) {
+                    $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN $mc DECIMAL(10,3) NULL COMMENT '{$mcm}（齒輪未填＝依齒輪規格）'");
+                }
+            }
             // 補欄：外錐／重點外徑段（2026-11-03，JSON）
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'outer_json'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN outer_json TEXT NULL COMMENT '{otp:[外錐],seg:[重點外徑段]}' AFTER hub_dia");
@@ -300,12 +307,11 @@ function eg_shape_normalize($in, string $ptype = ''): array {
             if ($tA || $tB) $hubJson = json_encode(['m' => 0, 'a' => [], 'b' => [], 'ta' => $tA, 'tb' => $tB], JSON_UNESCAPED_UNICODE);
         }
     }
-    // 平板型：外徑可輸入。齒輪可省略（省略＝最大外徑與齒部外徑相同）；治具（J）必填
-    if ($outer === 'flush') {
-        $hub = eg_shape_num($in['hub_dia'] ?? '');
-        if ($hub === false) return [null, '外徑必須是大於 0 的數字'];
-        if ($hub === null && $ptype === 'J') return [null, '治具請填外徑'];
-    }
+    // 工件最大外徑／長度（選填）：不論外形都可填；齒輪沒填＝依齒輪規格的齒部外徑與齒寬
+    $maxOd = eg_shape_num($in['max_od'] ?? '');
+    if ($maxOd === false) return [null, '最大外徑必須是大於 0 的數字'];
+    $maxLen = eg_shape_num($in['max_len'] ?? '');
+    if ($maxLen === false) return [null, '長度必須是大於 0 的數字'];
     $mode  = trim((string)($in['mode'] ?? ''));
     if ($mode !== '' && !in_array($mode, ['single', 'steps', 'ends'], true)) return [null, '內孔型態不正確'];
     $blind = !empty($in['blind']);
@@ -367,9 +373,10 @@ function eg_shape_normalize($in, string $ptype = ''): array {
     }
     [$exSent, $exJson, $exErr] = eg_shape_outer_extra($in);
     if ($exErr) return [null, $exErr];
-    if ($outer === '' && $btype === null && $exJson === null) return [null, null];
+    if ($outer === '' && $btype === null && $exJson === null && $maxOd === null && $maxLen === null) return [null, null];
     $extra = $exSent ? ['outer_json' => $exJson] : [];
     if (array_key_exists('hub_multi', $in)) $extra['hub_json'] = $hubJson;   // 沒送＝舊分頁，不動
+    if (array_key_exists('max_od', $in) || array_key_exists('max_len', $in)) { $extra['max_od'] = $maxOd; $extra['max_len'] = $maxLen; }
     if (array_key_exists('hub_len', $in)) $extra['hub_len'] = $hubLen;   // 沒送這個欄位＝舊分頁，不動原值
     if (array_key_exists('hub2_dia', $in) || array_key_exists('hub2_len', $in)) { $extra['hub2_dia'] = $hub2; $extra['hub2_len'] = $hub2Len; }
     return [$extra + [
@@ -390,7 +397,7 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
     }
     // outer_json 只有前端有送才寫（舊分頁沒送＝不動，免得把外錐／外徑段洗掉）
     $cols = ['outer_shape' => $row['outer_shape'], 'hub_dia' => $row['hub_dia']];
-    foreach (['hub_len', 'hub2_dia', 'hub2_len', 'hub_json', 'outer_json'] as $k) if (array_key_exists($k, $row)) $cols[$k] = $row[$k];
+    foreach (['hub_len', 'hub2_dia', 'hub2_len', 'hub_json', 'max_od', 'max_len', 'outer_json'] as $k) if (array_key_exists($k, $row)) $cols[$k] = $row[$k];
     $cols += ['bore_type' => $row['bore_type'], 'bore_steps' => $row['bore_steps'], 'bore_json' => $row['bore_json'],
               'bore_max' => $row['bore_max'], 'bore_min' => $row['bore_min'], 'modified_by' => $by !== '' ? $by : null];
     $names = array_keys($cols);
@@ -402,7 +409,7 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
 /** 讀單一料號（給編輯畫面）。沒有資料回 null。 */
 function eg_shape_get(PDO $pdo, int $dId): ?array {
     try {
-        $st = $pdo->prepare("SELECT outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
+        $st = $pdo->prepare("SELECT outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,max_od,max_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
         $st->execute([$dId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
@@ -428,7 +435,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
     $out = [];
     try {
         $ph = implode(',', array_fill(0, count($dIds), '?'));
-        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
+        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,hub_len,hub2_dia,hub2_len,hub_json,max_od,max_len,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
         $st->execute($dIds);
         $defs = eg_shape_defs();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -451,6 +458,8 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
             $nf = function ($v) { return rtrim(rtrim(number_format((float)$v, 3, '.', ''), '0'), '.'); };
             $ex = $r['outer_json'] ? (json_decode($r['outer_json'], true) ?: []) : [];
             $tail = [];
+            if ($r['max_od'] !== null || $r['max_len'] !== null)
+                $tail[] = '最大' . ($r['max_od'] !== null ? 'Ø' . $nf($r['max_od']) : '') . ($r['max_len'] !== null ? ' 長' . $nf($r['max_len']) : '');
             foreach (($ex['otp'] ?? []) as $o) {
                 $tail[] = '外錐Ø' . $nf($o['d']) . (isset($o['d2']) ? '→Ø' . $nf($o['d2']) : '')
                         . (isset($o['ch']) ? ' 半錐' . $nf($o['ch']) . '°' : (isset($o['ha']) ? ' 半錐' . $nf($o['ha']) . '°' : (isset($o['r']) ? ' 1:' . $nf($o['r']) : '')));
@@ -533,6 +542,36 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
             }
             if (count($hlc) && (isset($hlr[0]) && is_numeric($hlr[0]) || isset($hlr[1]) && is_numeric($hlr[1])))
                 $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_hl WHERE s_hl.d_id={$alias}.d_id AND (" . implode(' OR ', $hlc) . "))";
+        }
+        // 工件最大外徑／長度：{"mx":{"d":[最小,最大],"l":[最小,最大]}}。
+        // 有填 → 比對填的值；沒填的齒輪 → 比對齒輪規格的齒部外徑（與清單「齒部外徑」籤同一個算式）與齒寬
+        $mxr = $tpj['mx'] ?? null;
+        if (is_array($mxr)) {
+            $mxn = 0;
+            foreach (['d' => ['max_od', 'da'], 'l' => ['max_len', 'fw']] as $mk => $mm) {
+                $rg = $mxr[$mk] ?? null;
+                if (!is_array($rg)) continue;
+                $hasMin = isset($rg[0]) && is_numeric($rg[0]); $hasMax = isset($rg[1]) && is_numeric($rg[1]);
+                if (!$hasMin && !$hasMax) continue;
+                $mkCond = function ($expr) use (&$prm, &$mxn, $rg, $hasMin, $hasMax) {
+                    $c = [];
+                    if ($hasMin) { $p = ':fsmx' . ($mxn++); $c[] = "$expr >= $p"; $prm[$p] = $rg[0]; }
+                    if ($hasMax) { $p = ':fsmx' . ($mxn++); $c[] = "$expr <= $p"; $prm[$p] = $rg[1]; }
+                    return implode(' AND ', $c);
+                };
+                $colm = $mm[0];
+                $a = "EXISTS (SELECT 1 FROM d_setting_shape s_mx$mk WHERE s_mx$mk.d_id={$alias}.d_id AND s_mx$mk.$colm IS NOT NULL AND " . $mkCond("s_mx$mk.$colm") . ")";
+                $b = '';
+                $none = "NOT EXISTS (SELECT 1 FROM d_setting_shape s_mn$mk WHERE s_mn$mk.d_id={$alias}.d_id AND s_mn$mk.$colm IS NOT NULL)";
+                if ($mk === 'd' && function_exists('_gear_da_expr')) {
+                    $daE = 'ROUND(' . _gear_da_expr('gdx', 'gdxt') . ', 2)';
+                    $b = "($none AND EXISTS (SELECT 1 FROM d_setting_gear gdx LEFT JOIN dict_gear_type gdxt ON gdxt.gear_type_id=gdx.Gear_Type"
+                       . " WHERE gdx.d_setting_id={$alias}.d_id AND CAST(REPLACE(gdx.Module,'M','') AS DECIMAL(20,8))>0 AND gdx.Teeth>0 AND " . $mkCond($daE) . "))";
+                } elseif ($mk === 'l') {
+                    $b = "($none AND EXISTS (SELECT 1 FROM d_setting_gear gfx WHERE gfx.d_setting_id={$alias}.d_id AND gfx.Face_Width IS NOT NULL AND " . $mkCond('gfx.Face_Width') . "))";
+                }
+                $sql .= ' AND (' . $a . ($b !== '' ? ' OR ' . $b : '') . ')';
+            }
         }
         $col = ['n' => 'jt.cn', 'h' => 'jt.ch', 'd' => 'COALESCE(jt.cd, jt.d)', 's' => 'jt.cs'];
         $ti = 0;
