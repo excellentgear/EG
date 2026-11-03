@@ -340,6 +340,8 @@ case 'save_head': {
         $isInternal = (int)($v['internal'] ?? 0) === 1 ? 1 : 0;
         $vendorName = (string)$v['maker_id'];
     }
+    // 報工自動開立的單：沒選廠商（製程站沒登記廠商＝廠內自製）仍視為廠內，保留部門／人員（與開單當下同一條規則）
+    if (!$respLocked && $vendorId === null && $procNo !== null && (int)($o['pm_report_id'] ?? 0) > 0) $isInternal = 1;
     // 責任單位顯示字串：製程＋廠商（清單、不合格品記錄表都讀這一欄）
     $respUnit = $respLocked ? '' : trim(implode(' / ', array_filter([
         $procNo !== null ? (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$procNo)->fetchColumn() : '',

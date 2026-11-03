@@ -1156,6 +1156,9 @@ function qab_create_order(PDO $db, array $data): array
         $procName = (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$respProcessNo)->fetchColumn();
         $respUnit = trim(implode(' / ', array_filter([$procName, $vendorNameForUnit])));
         $respUnit = $respUnit !== '' ? mb_substr($respUnit, 0, 50) : null;
+        // 報工發現的不良：該製程站沒登記任何廠商＝廠內自己的機台加工（外包一定會登記廠商），
+        // 責任單位視為「廠內」，可帶入報工人員與其部門（2026-11-03 使用者回報 Q1151008001-BO）
+        if ($respVendorId === null && $pmReportId) $respIsInternal = 1;
     }
 
     /* 來源代碼與「發現單位」一律看**實際綁到什麼**，不要看 $kind——分類驅動之後

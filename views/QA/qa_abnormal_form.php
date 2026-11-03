@@ -1475,7 +1475,8 @@ function render(){
     $('#f_vendor_id').val(o.responsible_vendor_id || '');
     $('#f_vendor').val(o.resp_vendor_name || '');
     $('#vendorNote').html(Number(o.resp_is_internal) === 1
-        ? '<span style="color:var(--amber-d);"><i class="fa fa-home"></i> 廠內加工廠商 — 可再指定部門與人員</span>' : '');
+        ? '<span style="color:var(--amber-d);"><i class="fa fa-home"></i> '
+          + (o.responsible_vendor_id ? '廠內加工廠商' : '廠內自製（該製程站未登記廠商）') + ' — 可再指定部門與人員</span>' : '');
     $('#respPeopleBox').toggle(Number(o.resp_is_internal) === 1);
     renderRespChips();
     $('#f_decider').val(o.decider_cfg_id || '');

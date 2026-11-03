@@ -23,7 +23,8 @@ if (!function_exists('qab_pm_resync_orders')) {
     function qab_pm_resync_orders(PDO $db, ?int $opId = null): array
     {
         $out = ['checked' => 0, 'changes' => []];
-        $orders = $db->query("SELECT id, abnormal_order_no, created_by, pm_report_id, COALESCE(resp_is_internal,0) AS is_int
+        $orders = $db->query("SELECT id, abnormal_order_no, created_by, pm_report_id, COALESCE(resp_is_internal,0) AS is_int,
+                                     responsible_vendor_id, resp_process_no
                               FROM qa_abnormal_order
                               WHERE auto_opened=1 AND pm_report_id IS NOT NULL AND pm_report_id>0 AND deleted_at IS NULL")
                        ->fetchAll(PDO::FETCH_ASSOC);
@@ -72,7 +73,14 @@ if (!function_exists('qab_pm_resync_orders')) {
                                              'from' => $nameOf((int)$o['created_by']), 'to' => $nameOf($newBy)];
                     }
                 }
-                // ② 責任單位的部門／人員（廠內加工廠商才有）
+                // 該製程站沒登記廠商＝廠內自製：視為廠內，才有責任部門／人員可帶（與建單當下同一條規則）
+                if ((int)$o['is_int'] === 0 && ($o['responsible_vendor_id'] === null || $o['responsible_vendor_id'] === '') && (int)$o['resp_process_no'] > 0) {
+                    $db->prepare("UPDATE qa_abnormal_order SET resp_is_internal=1 WHERE id=?")->execute([$oid]);
+                    $o['is_int'] = 1;
+                    $log->execute([$oid, $editor, '責任單位', '（非廠內）', '廠內自製（製程站未登記廠商）', '報工自動開立單：製程站沒登記廠商視為廠內自製']);
+                    $out['changes'][] = ['order_no' => $o['abnormal_order_no'], 'what' => '責任單位視為廠內自製', 'from' => '（無部門／人員欄）', 'to' => '可帶入報工人員與部門'];
+                }
+                // ② 責任單位的部門／人員（廠內才有）
                 if ((int)$o['is_int'] === 1) {
                     $reps->execute([$oid]);
                     $cur = $db->prepare("SELECT id, dept_id, user_id FROM qa_abnormal_resp WHERE order_id=?");
