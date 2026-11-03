@@ -520,6 +520,35 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 }
             }
         } catch (Exception $_e) {}
+        /* 組合圖（.iam）：與料號主檔的附件清單同一套呈現（唯一關聯實作 part_assembly_lib）——
+           組合那一列底下掛零件清單，「同一個料號底下」的零件不再平鋪一列（別的料號的零件在
+           它自己的料號仍是獨立附件，這裡只標示引用）。 */
+        try {
+            require_once __DIR__ . '/../../src/common/part_assembly_lib.php';
+            $hideIds = [];
+            foreach ($result as &$ar) {
+                if (($ar['source'] ?? '') !== 'other' || ($ar['ext'] ?? '') !== 'iam') continue;
+                $asmId = (int)$ar['id'];
+                $st = $pdo2->prepare("SELECT d_id FROM part_attachments WHERE id=?");
+                $st->execute([$asmId]);
+                $asmD = (int)$st->fetchColumn();
+                $ar['asm_comps'] = [];
+                foreach (eg_pasm_components($pdo2, $asmId) as $c) {
+                    $ar['asm_comps'][] = [
+                        'name'    => (string)($c['original_name'] ?: $c['filename']),
+                        'part_no' => (string)($c['part_no'] ?? ''),
+                        'ref'     => ((int)$c['d_id'] !== $asmD) ? 1 : 0,
+                    ];
+                    if ((int)$c['d_id'] === $asmD) $hideIds[(int)$c['id']] = true;
+                }
+            }
+            unset($ar);
+            if ($hideIds) {
+                $result = array_values(array_filter($result, function ($r) use ($hideIds) {
+                    return !(($r['source'] ?? '') === 'other' && isset($hideIds[(int)$r['id']]));
+                }));
+            }
+        } catch (Throwable $_e) {}
         echo json_encode(['success' => true, 'attachments' => $result]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2152,6 +2181,8 @@ function makeAttItem(att, showSource, hideName) {
         srcBadge = '<span style="font-size:9px;font-weight:700;color:#fff;background:'+(_bomSourceColor[src]||'#999')+';border-radius:3px;padding:0 4px;margin-right:4px;">'+(_bomSourceLabel[src]||src)+'</span>';
     }
     var info = [dispDate(att.uploaded_at, true), att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
+    if (att.asm_comps) catBadges += '<span style="font-size:10px;font-weight:600;background:#FBEEDC;color:#7A4A12;border-radius:3px;padding:0 5px;margin-right:4px;">組合圖'
+        + (att.asm_comps.length ? ' · ' + att.asm_comps.length + ' 零件' : '') + '</span>';
     // 版次／發行章日期（只有料號附件有這兩欄；報價/訂單附件不顯示）
     // 版次 0 也要顯示：不可用 if(att.revision) 判斷（0 / "0" 會被當成沒填）
     var revBadge = '';
@@ -2268,6 +2299,26 @@ function renderDrawingList() {
     if (first) showFile(first.path, first.type, first.name, first.can_dl);
 }
 
+// 組合圖底下的零件清單（可展開；零件屬於別的料號時標「引用料號」）
+function asmCompsHtml(att) {
+    if (!att.asm_comps) return '';
+    var h = '<div class="asm-comps" style="background:#FEFAF4;border-bottom:1px solid #f0e4d4;padding:3px 10px 5px 14px;font-size:11px;">'
+        + '<a href="javascript:void(0)" class="asm-comps-toggle" style="color:#8A5A2B;"><i class="fa fa-caret-right"></i> 零件 ' + att.asm_comps.length + ' 個</a>'
+        + '<div class="asm-comps-body" style="display:none;">';
+    if (!att.asm_comps.length) h += '<div style="color:#999;padding:3px 0 0 14px;">尚未指定零件（到料號主檔附件的「管理零件」加入）。</div>';
+    att.asm_comps.forEach(function(c) {
+        h += '<div style="padding:3px 0 0 14px;line-height:1.5;"><i class="fa fa-cube" style="color:#bbb;margin-right:4px;"></i><span style="word-break:break-word;">' + escapeHtml(c.name) + '</span>'
+          + (c.ref ? '<div style="margin:1px 0 0 18px;"><span style="background:#eef4fb;color:#1a5276;border-radius:3px;padding:0 5px;" title="這個零件屬於別的料號，這裡只是引用">引用料號 ' + escapeHtml(c.part_no) + '</span></div>' : '')
+          + '</div>';
+    });
+    return h + '</div></div>';
+}
+$(document).on('click', '.asm-comps-toggle', function(e) {
+    e.preventDefault(); e.stopPropagation();
+    var b = $(this).siblings('.asm-comps-body').toggle();
+    $(this).find('i').attr('class', 'fa fa-caret-' + (b.is(':visible') ? 'down' : 'right'));
+});
+
 function renderAttList(tab) {
     var arr = _tabData[tab] || [];
     if (arr.length === 0) {
@@ -2278,7 +2329,7 @@ function renderAttList(tab) {
     // 相簿標籤（產品照片等）的照片收成相簿列排在最上面，其餘附件照舊逐列顯示
     var html = buildAlbumRows(arr);
     var plain = arr.filter(function(att){ return !att.is_album; });
-    plain.forEach(function(att) { html += makeAttItem(att); });
+    plain.forEach(function(att) { html += makeAttItem(att) + asmCompsHtml(att); });
     $('#bom-file-list').html(html);
     if (plain.length) {
         var f0 = plain[0];

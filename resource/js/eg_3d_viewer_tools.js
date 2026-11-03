@@ -1364,7 +1364,7 @@ var EG3DTools = (function () {
         return { a: pts[0], b: pts[1] };
     }
     // 整個模型與一個剖切平面求交，把所有三角形各自算出的小線段接成一條條封閉迴圈（世界座標）
-    function _buildCapLoops3d(mm, plane) {
+    function _buildCapLoops3d(mm, plane, onlyMesh) {
         var segs = [];
         // 「頂點剛好落在平面上」的判定容差，依模型尺度換算（見 _triPlaneIntersectSeg 註解）
         var mbb = mm.GetBoundingBox(function () { return true; });
@@ -1384,6 +1384,7 @@ var EG3DTools = (function () {
         // 還是在真正的剖切面上，不會偏移。
         var cutPlane = { normal: plane.normal, constant: plane.constant - planeEps * 17.3 };
         mm.EnumerateMeshes(function (mesh) {
+            if (onlyMesh && mesh !== onlyMesh) return;   // 只取單一零件的截面（剖面線依零件分角度用）
             var geo = mesh.geometry;
             var posAttr = geo.attributes.position;
             var posArr = posAttr.array;
@@ -1966,6 +1967,8 @@ var EG3DTools = (function () {
         if (!sampleMesh) return [];
         var MeshCtor = sampleMesh.constructor;
         var caps = [];
+        var allMeshes = [];
+        mm.EnumerateMeshes(function (m) { allMeshes.push(m); });
 
         // 斜線間距／線寬依整個模型的包圍盒尺度換算（跟透視模式虛線間距 dashSize 同一種
         // 做法），模型大小不同時斜線密度維持視覺上接近的比例，不會一個模型線條擠成一團、
@@ -2021,7 +2024,23 @@ var EG3DTools = (function () {
             if (!(hatchSpacing > 0)) hatchSpacing = capDiag / 20;
             hatchSpacing = Math.min(Math.max(hatchSpacing, capDiag / 400), capDiag / 6);
             var hatchWidth = Math.max(hatchSpacing * 0.12, capDiag * 0.0006);
-            var hatchGeo = _buildCapHatchGeometry(built.loops2d, built.basis, angleDeg, hatchSpacing, hatchWidth, PosAttrCtor, GeoCtor);
+            // 組合件（多個零件）：剖面線依「零件」分角度——每個零件各自的截面輪廓各畫一組，
+            // 相鄰零件 45／135 度交錯（工程圖慣例：不同零件的剖面線方向要錯開，才分得出
+            // 零件的交界）。單一零件維持原本一組斜線。
+            var hatchGroups = [];
+            if (allMeshes.length > 1) {
+                var k = 0;
+                allMeshes.forEach(function (pm) {
+                    var l3 = _buildCapLoops3d(mm, plane, pm);
+                    if (!l3.length) return;
+                    hatchGroups.push({ loops2d: l3.map(function (l) { return _loop3dTo2d(l, built.basis); }),
+                                       angle: ((k + i) % 2 === 0) ? 45 : 135 });
+                    k++;
+                });
+            }
+            if (!hatchGroups.length) hatchGroups.push({ loops2d: built.loops2d, angle: angleDeg });
+            hatchGroups.forEach(function (hg) {
+            var hatchGeo = _buildCapHatchGeometry(hg.loops2d, built.basis, hg.angle, hatchSpacing, hatchWidth, PosAttrCtor, GeoCtor);
             if (hatchGeo) {
                 // 斜線本身也是三角面（見 _buildCapHatchQuads2d 註解：改用三角面才吃得到
                 // polygonOffset），材質沿用跟封頂同一套 _buildCapMaterial 再覆寫顏色與
@@ -2037,6 +2056,7 @@ var EG3DTools = (function () {
                 viewer.AddExtraObject(hatchObj);
                 caps.push(hatchObj);
             }
+            });
         });
         return caps;
     }
