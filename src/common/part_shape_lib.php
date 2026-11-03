@@ -99,7 +99,7 @@ function eg_shape_num($v) {
  *       bore_steps（多階的孔數）、bore:[{d:孔徑,l:深度}]
  *   single：一個孔徑 → through / blind
  *   steps ：孔數 2~6，孔徑「由大到小或由小到大」皆可輸入，系統自動排成由大到小；
- *           孔徑必須單向變化（不可相等、不可忽大忽小）→ step_through / step_blind
+ *           孔徑順序不拘，只要彼此不相等（兩階相同請合併成一階）→ step_through / step_blind
  *   ends  ：[兩端孔徑, 中間孔徑]，只限通孔；兩端大於中間＝ends_big、小於＝ends_small，相等視為輸入錯誤
  * @return array [ $row|null, $error|null ]  $row=null 表示「全部都沒選」（會刪除這一列）
  */
@@ -243,14 +243,10 @@ function eg_shape_normalize($in): array {
             }
             if ($any) {
                 foreach ($tmp as $i => $r) if ($r['d'] === null) return [null, '第 ' . ($i + 1) . ' 個孔徑還沒填'];
-                $up = true; $down = true;
-                for ($i = 1; $i < $steps; $i++) {
-                    if ($tmp[$i]['d'] == $tmp[$i - 1]['d'])
-                        return [null, '第 ' . $i . '、' . ($i + 1) . ' 個孔徑相同（' . $tmp[$i]['d'] . '），不是不同的階；相同請合併成一階'];
-                    if ($tmp[$i]['d'] < $tmp[$i - 1]['d']) $up = false; else $down = false;
-                }
-                if (!$up && !$down)
-                    return [null, '孔徑順序忽大忽小，無法判定為多階；若是「兩端孔徑相同、中間不同」請改選該型態'];
+                // 孔徑輸入順序不拘（已存的由大到小之後再加一階也可以），一律自動排成由大到小；只擋「兩階孔徑相同」
+                for ($i = 0; $i < $steps; $i++) for ($k = $i + 1; $k < $steps; $k++)
+                    if ($tmp[$i]['d'] == $tmp[$k]['d'])
+                        return [null, '第 ' . ($i + 1) . '、' . ($k + 1) . ' 個孔徑相同（' . $tmp[$i]['d'] . '），不是不同的階；相同請合併成一階'];
                 usort($tmp, function ($x, $y) { return $y['d'] <=> $x['d']; });   // 自動排成由大到小（深度跟著各自的孔徑）
                 $list = $tmp;
             }

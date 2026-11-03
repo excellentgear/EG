@@ -166,14 +166,13 @@
       }
       if (!any) return r;
       for (i = 0; i < n; i++) if (vals[i] === null) { bad[i + 'd'] = 1; r.partial = true; r.msg = '第 ' + (i + 1) + ' 個孔徑還沒填'; return r; }
-      var up = true, down = true;
-      for (i = 1; i < n; i++) {
-        if (vals[i] === vals[i - 1]) { bad[(i - 1) + 'd'] = bad[i + 'd'] = 1; r.msg = '第 ' + i + '、' + (i + 1) + ' 個孔徑相同（' + fmt(vals[i]) + '），不是不同的階；相同請合併成一階'; return r; }
-        if (vals[i] < vals[i - 1]) up = false; else down = false;
+      // 孔徑輸入順序不拘，一律自動排成由大到小；只擋「兩階孔徑相同」
+      for (i = 0; i < n; i++) for (var k2 = i + 1; k2 < n; k2++) {
+        if (vals[i] === vals[k2]) { bad[i + 'd'] = bad[k2 + 'd'] = 1; r.msg = '第 ' + (i + 1) + '、' + (k2 + 1) + ' 個孔徑相同（' + fmt(vals[i]) + '），不是不同的階；相同請合併成一階'; return r; }
       }
-      if (!up && !down) { for (i = 0; i < n; i++) bad[i + 'd'] = 1; r.msg = '孔徑順序忽大忽小，無法判定為多階；若是「兩端孔徑相同、中間不同」請改選該型態'; return r; }
+      var inOrder = vals.every(function (v, j) { return j === 0 || v < vals[j - 1]; });
       var sorted = vals.slice().sort(function (x, y) { return y - x; });
-      r.info = defs.bore[r.type].name + '（' + n + ' 階）　' + sorted.map(function (v) { return 'Ø' + fmt(v); }).join(' → ') + (up ? '　（已自動排成由大到小）' : '');
+      r.info = defs.bore[r.type].name + '（' + n + ' 階）　' + sorted.map(function (v) { return 'Ø' + fmt(v); }).join(' → ') + (inOrder ? '' : '　（已自動排成由大到小）');
       return r;
     }
     // ends：兩端同孔、中間不同
@@ -227,7 +226,7 @@
       return { otp: st.otp.filter(any).map(function (o) {
         if (String(o.d || '').trim() === '') { var tc = taperCalc(Object.assign({ tp: 1 }, o)); if (tc && tc.dd) o = Object.assign({}, o, { d: String(Math.round(tc.D * 1000) / 1000) }); }
         return o;
-      }), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', hub_len: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub_len : '', hub2_dia: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2 : '', hub2_len: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2_len : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
+      }), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', hub_len: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub_len : '', hub2_dia: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2 : '', hub2_len: (j.outer === 'both_sides' && !st.hub_same) ? st.hub2_len : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: (j.mode === 'steps' ? j.bore.slice().sort(function (a, b) { var x = num(a.d), y = num(b.d); return (x && y) ? y - x : 0; }) : j.bore).map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
     },
     validate: function () { return judge(this._j()).msg || outerExtra(this.st).msg; },
     _bind: function () {
@@ -456,7 +455,7 @@
         h += '<span class="eg-shape-sep">│</span>';
         if (s.mode === 'steps') {
           h += '<label class="eg-shape-in">孔數 <input type="number" min="' + defs.steps_min + '" max="' + defs.steps_max + '" step="1" data-cnt="1" value="' + (s.bore_steps || '') + '" class="form-control input-sm no-spin-input" style="width:56px" placeholder="' + defs.steps_min + '～' + defs.steps_max + '"></label>' +
-            '<span class="eg-shape-hint">輸入後按 Enter，自動開始輸入孔徑；大到小或小到大都可以，系統自動排列</span>';
+            '<span class="eg-shape-hint">輸入後按 Enter，自動開始輸入孔徑；順序不拘，系統自動由大到小排列</span>';
           if (s.bore_steps) {
             h += '</div><div class="eg-shape-line">';
             for (var i = 0; i < s.bore_steps; i++) h += this._in(i, '第' + (i + 1) + '孔徑', 'd');
