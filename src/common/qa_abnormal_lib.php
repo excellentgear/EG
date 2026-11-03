@@ -1418,12 +1418,15 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         $isInt = (int)$db->query("SELECT COALESCE(resp_is_internal,0) FROM qa_abnormal_order WHERE id=" . (int)$created['id'])->fetchColumn();
         if ($isInt === 1) {
             require_once __DIR__ . '/unit_supervisor_lib.php';
-            $rp = $db->prepare("SELECT production_user_id, report_date FROM pm_process_daily_report WHERE report_id IN ($ph)");
+            require_once __DIR__ . '/ng_reason_lib.php';
+            $rp = $db->prepare("SELECT report_id, production_user_id, report_date FROM pm_process_daily_report WHERE report_id IN ($ph)");
             $rp->execute($reportIds);
             $insR = $db->prepare("INSERT IGNORE INTO qa_abnormal_resp (order_id, dept_id, user_id) VALUES (?,?,?)");
             foreach ($rp->fetchAll(PDO::FETCH_ASSOC) as $rr) {
                 $ru = (int)$rr['production_user_id'];
                 if ($ru <= 0) continue;
+                // NG 原因設為「不帶入部門／人員」（例如來料不良、機台異常）的報工不帶（報工排程管理→NG原因設定）
+                if (!ng_reason_report_needs_resp($db, (int)$rr['report_id'])) continue;
                 $rd = (int)eg_unit_user_dept($db, $ru, (string)$rr['report_date']);
                 if ($rd > 0) $insR->execute([(int)$created['id'], $rd, $ru]);
             }

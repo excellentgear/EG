@@ -16,6 +16,7 @@
  */
 require_once __DIR__ . '/qa_abnormal_lib.php';
 require_once __DIR__ . '/unit_supervisor_lib.php';
+require_once __DIR__ . '/ng_reason_lib.php';
 
 if (!function_exists('qab_pm_resync_orders')) {
     /** @return array ['checked'=>int,'changes'=>[['order_no','what','from','to'],...]] */
@@ -28,7 +29,7 @@ if (!function_exists('qab_pm_resync_orders')) {
                        ->fetchAll(PDO::FETCH_ASSOC);
         if (!$orders) return $out;
         $trig = $db->prepare("SELECT production_user_id, Created_By, report_date FROM pm_process_daily_report WHERE report_id=?");
-        $reps = $db->prepare("SELECT production_user_id, report_date FROM pm_process_daily_report WHERE abnormal_order_id=?");
+        $reps = $db->prepare("SELECT report_id, production_user_id, report_date FROM pm_process_daily_report WHERE abnormal_order_id=?");
         $setBy = $db->prepare("UPDATE qa_abnormal_order SET created_by=? WHERE id=?");
         $logIns = $db->prepare("INSERT INTO qa_abnormal_edit_log (abnormal_order_id, action, reason, before_json, after_json, changed_by, changed_at)
                                 VALUES (?,?,?,?,?,?,NOW())");
@@ -80,6 +81,7 @@ if (!function_exists('qab_pm_resync_orders')) {
                     foreach ($reps->fetchAll(PDO::FETCH_ASSOC) as $rr) {
                         $u = (int)$rr['production_user_id'];
                         if ($u <= 0) continue;
+                        if (!ng_reason_report_needs_resp($db, (int)$rr['report_id'])) continue;   // NG原因設為不帶入
                         $d = (int)eg_unit_user_dept($db, $u, (string)$rr['report_date']);
                         if ($d <= 0) continue;
                         $mine = null;

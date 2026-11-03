@@ -1640,6 +1640,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =================================================================================
+// 後端邏輯：NG 原因管理（增減／改名／停用／排序／是否帶入報工人員／刪除前使用檢查與移轉）
+// 唯一實作 src/common/ng_reason_lib.php；僅 A 權限（$P['psv_settings']）
+// =================================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'ng_reason_manage') {
+    header('Content-Type: application/json');
+    try {
+        if (!$P['psv_settings']) throw new Exception("無權限執行此操作 (需 A 權限)");
+        require_once __DIR__ . '/../../src/common/ng_reason_lib.php';
+        $sub = (string)($_POST['sub'] ?? 'list');
+        $uidNg = isset($_SESSION['id']) ? (int)$_SESSION['id'] : null;
+        $msgNg = '';
+        if ($sub === 'save') {
+            ng_reason_save($pdo, (int)($_POST['ng_id'] ?? 0), (string)($_POST['name'] ?? ''), (int)($_POST['is_active'] ?? 1), (int)($_POST['auto_resp'] ?? 1), $uidNg);
+            $msgNg = '已儲存';
+        } elseif ($sub === 'move') {
+            ng_reason_move($pdo, (int)($_POST['ng_id'] ?? 0), ($_POST['dir'] ?? '') === 'up' ? 'up' : 'down');
+        } elseif ($sub === 'delete') {
+            $r = ng_reason_delete($pdo, (int)($_POST['ng_id'] ?? 0), (int)($_POST['move_to'] ?? 0) ?: null);
+            $msgNg = '已刪除「' . $r['name'] . '」' . ($r['moved'] > 0 ? '，並把 ' . $r['moved'] . ' 筆使用紀錄移轉到新的原因' : '');
+        } elseif ($sub !== 'list') {
+            throw new Exception('不支援的操作');
+        }
+        echo json_encode(['success' => true, 'message' => $msgNg, 'rows' => ng_reason_list($pdo, false, true)], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// =================================================================================
 // 後端邏輯：管理異常類型 (新增/刪除)
 // =================================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'manage_abnormal_type') {
@@ -2920,10 +2950,12 @@ try {
     // 發生錯誤時保持空陣列
 }
 
-$sql_ng = "SELECT ng_id, ng_txt FROM ng_txt ORDER BY ng_id";
+// NG 原因（2026-11-03 起可由管理員增減／停用／排序，見 ng_reason_lib.php）：這裡含停用者，
+// 新增報工下拉只列啟用中的，編輯舊報工時若原本選的是已停用的原因仍會顯示（標「停用」）
+require_once __DIR__ . '/../../src/common/ng_reason_lib.php';
 $ng_list = [];
 try {
-    $ng_list = $pdo->query($sql_ng)->fetchAll(PDO::FETCH_ASSOC);
+    $ng_list = ng_reason_list($pdo, false);
 } catch (Exception $e) {
 }
 
@@ -4109,6 +4141,9 @@ function get_state_badge($state)
                                         <?php if ($P['psv_dept_setting']): ?>
                                         <button class="btn btn-link" data-toggle="modal" data-target="#deptSettingModal"><i class="fa fa-cog"></i> 設定生產部門</button>
                                         <?php endif; ?>
+                                        <?php if ($P['psv_settings']): ?>
+                                        <button class="btn btn-link" id="btnNgReasonSetting"><i class="fa fa-exclamation-circle"></i> NG原因設定</button>
+                                        <?php endif; ?>
                                         <?php if ($can_manage_machine): ?>
                                         <button class="btn btn-link" id="btnOpenMachineSettings"><i class="fa fa-cogs"></i> 設定機台</button>
                                         <?php endif; ?>
@@ -5236,6 +5271,35 @@ function get_state_badge($state)
                         </div>
                     </div>
 
+
+                    <?php if ($P['psv_settings']): ?>
+                    <!-- NG原因設定 Modal（增減／改名／停用／排序／是否帶入報工人員／刪除前檢查並移轉） -->
+                    <div class="modal fade" id="ngReasonModal" tabindex="-1" role="dialog" style="z-index: 1060;">
+                        <div class="modal-dialog" role="document" style="width:820px;max-width:96%;">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                                    <h4 class="modal-title"><i class="fa fa-exclamation-circle"></i> NG原因設定</h4>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="text-muted" style="margin-bottom:8px;font-size:13px;">
+                                        報工填 NG 時下拉選單的原因。<b>「帶入部門／人員」</b>＝報工 NG 自動開立品質異常單時，責任單位是否自動帶入報工人員與其部門——
+                                        跟人員無關的原因（例如來料不良、機台異常）可以取消勾選。<b>停用</b>＝新報工不再能選，舊紀錄仍正常顯示。
+                                        <b>刪除</b>前會先檢查是否用過；用過的必須指定移轉到另一個現有原因，所有使用紀錄會自動改成新的原因。
+                                        改了這裡立即生效，每一列按「儲存」才會存。
+                                    </div>
+                                    <table class="table table-condensed table-bordered" style="background:#fff;">
+                                        <thead><tr><th width="60">順序</th><th>原因名稱</th><th width="95">帶入部門／人員</th><th width="60">啟用</th><th width="70">使用次數</th><th width="150">操作</th></tr></thead>
+                                        <tbody id="ngReasonBody"><tr><td colspan="6" class="text-center text-muted">載入中…</td></tr></tbody>
+                                    </table>
+                                    <div id="ngReasonDelBox" style="display:none;margin-top:8px;padding:10px;border:1px solid #DD5138;border-radius:4px;background:#FFF5F2;"></div>
+                                    <div id="ngReasonMsg" style="margin-top:6px;"></div>
+                                </div>
+                                <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
 
                     <!-- 異常類型管理 Modal -->
                     <div class="modal fade" id="abnormalTypeModal" tabindex="-1" role="dialog" style="z-index: 1060;">
@@ -7238,8 +7302,9 @@ function get_state_badge($state)
                                         originalNgTotal += (parseInt(ngItem.ng_qty) || 0);
                                         var optionsHtml = '<option value="">-- 選擇原因 --</option>';
                                         ngOptionsList.forEach(function(opt) {
+                                            if (String(opt.is_active) === '0' && opt.ng_id != ngItem.ng_id) return;   // 已停用的原因不給新選
                                             var selected = (opt.ng_id == ngItem.ng_id) ? 'selected' : '';
-                                            optionsHtml += `<option value="${opt.ng_id}" ${selected}>${opt.ng_txt}</option>`;
+                                            optionsHtml += `<option value="${opt.ng_id}" ${selected}>${opt.ng_txt}${String(opt.is_active) === '0' ? '（已停用）' : ''}</option>`;
                                         });
 
                                         var rowHtml = `
@@ -7850,6 +7915,80 @@ function get_state_badge($state)
                             alert("發生錯誤: " + e.message);
                         }
                     }
+
+                    // --- NG 原因設定（唯一實作在後端 ng_reason_lib.php；這裡只負責顯示與送出）---
+                    var NG_ROWS = [];
+                    function ngEsc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function(c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+                    function ngReasonPost(data, cb) {
+                        data.action = 'ng_reason_manage';
+                        $.post(window.location.pathname + window.location.search, data, function(res) {
+                            if (!res || !res.success) { $('#ngReasonMsg').html('<div class="text-danger"><i class="fa fa-times"></i> ' + ngEsc((res && res.message) || '操作失敗') + '</div>'); return; }
+                            NG_ROWS = res.rows || [];
+                            ngReasonRender();
+                            $('#ngReasonMsg').html(res.message ? '<div class="text-success"><i class="fa fa-check"></i> ' + ngEsc(res.message) + '</div>' : '');
+                            // 報工頁自己的下拉（ngOptionsList）一併更新，不必重整頁面
+                            ngOptionsList = NG_ROWS.map(function(r) { return { ng_id: r.ng_id, ng_txt: r.ng_txt, is_active: r.is_active, auto_resp: r.auto_resp }; });
+                            if (cb) cb(res);
+                        }, 'json').fail(function() { $('#ngReasonMsg').html('<div class="text-danger">連線失敗</div>'); });
+                    }
+                    function ngReasonRender() {
+                        var h = NG_ROWS.map(function(r, i) {
+                            return '<tr data-id="' + r.ng_id + '">'
+                                + '<td class="text-center"><button class="btn btn-xs btn-default ng-mv" data-dir="up"' + (i === 0 ? ' disabled' : '') + '><i class="fa fa-arrow-up"></i></button> '
+                                + '<button class="btn btn-xs btn-default ng-mv" data-dir="down"' + (i === NG_ROWS.length - 1 ? ' disabled' : '') + '><i class="fa fa-arrow-down"></i></button></td>'
+                                + '<td><input type="text" class="form-control input-sm ng-name" maxlength="30" value="' + ngEsc(r.ng_txt) + '"></td>'
+                                + '<td class="text-center"><input type="checkbox" class="ng-resp"' + (Number(r.auto_resp) ? ' checked' : '') + '></td>'
+                                + '<td class="text-center"><input type="checkbox" class="ng-act"' + (Number(r.is_active) ? ' checked' : '') + '></td>'
+                                + '<td class="text-center">' + (r.used || 0) + '</td>'
+                                + '<td><button class="btn btn-xs btn-primary ng-save"><i class="fa fa-save"></i> 儲存</button> '
+                                + '<button class="btn btn-xs btn-danger ng-del"><i class="fa fa-trash"></i> 刪除</button></td></tr>';
+                        }).join('');
+                        h += '<tr class="info" data-id="0"><td class="text-center">新增</td>'
+                           + '<td><input type="text" class="form-control input-sm ng-name" maxlength="30" placeholder="輸入新原因名稱"></td>'
+                           + '<td class="text-center"><input type="checkbox" class="ng-resp" checked></td>'
+                           + '<td class="text-center"><input type="checkbox" class="ng-act" checked></td><td></td>'
+                           + '<td><button class="btn btn-xs btn-success ng-save"><i class="fa fa-plus"></i> 新增</button></td></tr>';
+                        $('#ngReasonBody').html(h);
+                    }
+                    $('#btnNgReasonSetting').on('click', function() {
+                        $('#ngReasonMsg').empty(); $('#ngReasonDelBox').hide().empty();
+                        $('#ngReasonBody').html('<tr><td colspan="6" class="text-center text-muted">載入中…</td></tr>');
+                        $('#ngReasonModal').modal('show');
+                        ngReasonPost({ sub: 'list' });
+                    });
+                    $(document).on('click', '#ngReasonBody .ng-save', function() {
+                        var $tr = $(this).closest('tr');
+                        ngReasonPost({ sub: 'save', ng_id: $tr.data('id'), name: $tr.find('.ng-name').val(),
+                                       is_active: $tr.find('.ng-act').prop('checked') ? 1 : 0, auto_resp: $tr.find('.ng-resp').prop('checked') ? 1 : 0 });
+                    });
+                    $(document).on('click', '#ngReasonBody .ng-mv', function() {
+                        ngReasonPost({ sub: 'move', ng_id: $(this).closest('tr').data('id'), dir: $(this).data('dir') });
+                    });
+                    // 刪除：先看有沒有被用過。沒用過直接刪；用過的必須挑一個現有原因接手（所有使用紀錄自動改掉）
+                    $(document).on('click', '#ngReasonBody .ng-del', function() {
+                        var id = Number($(this).closest('tr').data('id'));
+                        var row = NG_ROWS.filter(function(r) { return Number(r.ng_id) === id; })[0];
+                        if (!row) return;
+                        var used = Number(row.used || 0), $box = $('#ngReasonDelBox');
+                        if (used === 0) {
+                            if (!confirm('「' + row.ng_txt + '」目前沒有任何使用紀錄，確定刪除？')) return;
+                            ngReasonPost({ sub: 'delete', ng_id: id });
+                            return;
+                        }
+                        var opts = NG_ROWS.filter(function(r) { return Number(r.ng_id) !== id; }).map(function(r) {
+                            return '<option value="' + r.ng_id + '">' + ngEsc(r.ng_txt) + (Number(r.is_active) ? '' : '（已停用）') + '</option>'; }).join('');
+                        $box.html('<b>「' + ngEsc(row.ng_txt) + '」已被使用 ' + used + ' 筆</b>，不能直接刪除。請選擇要<b>移轉到</b>哪一個現有原因——'
+                            + '所有使用紀錄會自動改成新的原因，不會有資料缺漏：<br>'
+                            + '<select id="ngMoveTo" class="form-control input-sm" style="width:auto;display:inline-block;margin:6px 6px 0 0;">' + opts + '</select>'
+                            + '<button class="btn btn-sm btn-danger" id="ngMoveGo" data-id="' + id + '">移轉並刪除</button> '
+                            + '<button class="btn btn-sm btn-default" id="ngMoveCancel">取消</button>').show();
+                    });
+                    $(document).on('click', '#ngMoveCancel', function() { $('#ngReasonDelBox').hide().empty(); });
+                    $(document).on('click', '#ngMoveGo', function() {
+                        var id = Number($(this).data('id')), to = Number($('#ngMoveTo').val());
+                        if (!to) return;
+                        ngReasonPost({ sub: 'delete', ng_id: id, move_to: to }, function() { $('#ngReasonDelBox').hide().empty(); });
+                    });
 
                     // --- 異常類型管理 ---
                     $('#manageAbnormalTypeBtn').click(function() {
@@ -8726,7 +8865,7 @@ function get_state_badge($state)
                     <td>
                         <select class="form-control input-sm" name="ng_id[]">
                             <option value="">-- 選擇原因 --</option>
-                            <?php foreach ($ng_list as $ng): ?>
+                            <?php foreach ($ng_list as $ng): if (empty($ng['is_active'])) continue; ?>
                                 <option value="<?= $ng['ng_id'] ?>"><?= htmlspecialchars($ng['ng_txt']) ?></option>
                             <?php endforeach; ?>
                         </select>
@@ -9418,8 +9557,9 @@ function get_state_badge($state)
                                         originalNgTotal += (parseInt(ngItem.ng_qty) || 0);
                                         var optionsHtml = '<option value="">-- 選擇原因 --</option>';
                                         ngOptionsList.forEach(function(opt) {
+                                            if (String(opt.is_active) === '0' && opt.ng_id != ngItem.ng_id) return;   // 已停用的原因不給新選
                                             var selected = (opt.ng_id == ngItem.ng_id) ? 'selected' : '';
-                                            optionsHtml += `<option value="${opt.ng_id}" ${selected}>${opt.ng_txt}</option>`;
+                                            optionsHtml += `<option value="${opt.ng_id}" ${selected}>${opt.ng_txt}${String(opt.is_active) === '0' ? '（已停用）' : ''}</option>`;
                                         });
 
                                         var rowHtml = `<tr><td><select class="form-control input-sm" name="ng_id[]">${optionsHtml}</select></td><td><input type="number" class="form-control input-sm" name="ng_qty[]" value="${ngItem.ng_qty}"></td><td><input type="text" class="form-control input-sm" name="ng_remark[]" value="${ngItem.ng_remark || ''}"></td><td>${userPerms.canReport ? '<button type="button" class="btn btn-xs btn-default" onclick="$(this).closest(\'tr\').remove()"><i class="fa fa-trash"></i></button>' : ''}</td></tr>`;
@@ -9777,7 +9917,7 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                         </ul>
                         <h5><b>其他功能</b></h5>
                         <ul>
-                            <li>全廠看板、排程列表、機台時程表、臨時加工在上方；查詢已報工、報工紀錄、顯示設定、製程分類設定、設定生產部門、設定機台在「更多」。</li>
+                            <li>全廠看板、排程列表、機台時程表、臨時加工在上方；查詢已報工、報工紀錄、顯示設定、製程分類設定、設定生產部門、NG原因設定（增減／停用／排序、是否帶入報工人員、刪除前檢查並移轉）、設定機台在「更多」。</li>
                             <li>搜尋框可跨所有製程大類搜尋 BOM／料號／客戶／備註，分頁上紅色數字是各類命中筆數。</li>
                         </ul>
                         <h5><b>權限</b></h5>
