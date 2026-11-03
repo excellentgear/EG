@@ -70,6 +70,16 @@
     return Math.round(Number(v) * 1000) / 1000;
   }
   function fmt(n) { return String(Math.round(n * 1000) / 1000); }
+  // 錐孔檢查（與後端 eg_shape_taper_part 同規則）：d 為大徑；回傳 null＝沒問題，否則 {msg, partial}
+  function taperMsg(b, i, bad, d, lab) {
+    if (!b || !b.tp) return null;
+    var d2 = num(b.d2), rr = num(b.r);
+    if (d2 === false) { bad[i + 'd2'] = 1; return { msg: lab + '小徑必須是大於 0 的數字' }; }
+    if (rr === false) { bad[i + 'r'] = 1; return { msg: lab + '錐度必須是大於 0 的數字' }; }
+    if (d2 === null && rr === null) { bad[i + 'd2'] = bad[i + 'r'] = 1; return { msg: lab + '是錐孔，請填小徑或錐度（至少一個）', partial: true }; }
+    if (d2 !== null && d !== null && d2 >= d) { bad[i + 'd2'] = 1; return { msg: lab + '小徑必須小於大徑' }; }
+    return null;
+  }
   // 回傳 { msg:錯誤原因, bad:{欄位:1}, info:判定結果文字, type:孔型代碼 }
   function judge(st) {
     var defs = D(), bad = {}, i, d, l, r = { msg: '', bad: bad, info: '', type: '' };
@@ -83,6 +93,7 @@
       d = num((st.bore[0] || {}).d); l = num((st.bore[0] || {}).l);
       if (d === false) { bad['0d'] = 1; r.msg = '孔徑必須是大於 0 的數字'; return r; }
       if (l === false) { bad['0l'] = 1; r.msg = '深度必須是大於 0 的數字'; return r; }
+      var tm0 = taperMsg(st.bore[0], 0, bad, d, ''); if (tm0) { r.msg = tm0.msg; r.partial = !!tm0.partial; return r; }
       if (d !== null) r.info = defs.bore[r.type].name + '　Ø' + fmt(d);
       return r;
     }
@@ -95,6 +106,7 @@
         d = num((st.bore[i] || {}).d); l = num((st.bore[i] || {}).l);
         if (d === false) { bad[i + 'd'] = 1; r.msg = '第 ' + (i + 1) + ' 個孔徑必須是大於 0 的數字'; return r; }
         if (l === false) { bad[i + 'l'] = 1; r.msg = '第 ' + (i + 1) + ' 個深度必須是大於 0 的數字'; return r; }
+        var tmi = taperMsg(st.bore[i], i, bad, d, '第 ' + (i + 1) + ' 孔'); if (tmi) { r.msg = tmi.msg; r.partial = !!tmi.partial; return r; }
         if (d !== null) any = true;
         vals.push(d);
       }
@@ -115,6 +127,8 @@
     var e = num((st.bore[0] || {}).d), m = num((st.bore[1] || {}).d);
     if (e === false) { bad['0d'] = 1; r.msg = '孔徑必須是大於 0 的數字'; return r; }
     if (m === false) { bad['1d'] = 1; r.msg = '孔徑必須是大於 0 的數字'; return r; }
+    var te0 = taperMsg(st.bore[0], 0, bad, e, '兩端'); if (te0) { r.msg = te0.msg; r.partial = !!te0.partial; return r; }
+    var te1 = taperMsg(st.bore[1], 1, bad, m, '中間'); if (te1) { r.msg = te1.msg; r.partial = !!te1.partial; return r; }
     if (e === null && m === null) return r;
     if (e === null) { bad['0d'] = 1; r.partial = true; r.msg = '請輸入兩端孔徑'; return r; }
     if (m === null) { bad['1d'] = 1; r.partial = true; r.msg = '請輸入中間孔徑'; return r; }
@@ -141,14 +155,14 @@
         else if (bt === 'ends_big' || bt === 'ends_small') s.mode = 'ends';
         if (s.mode) s.hole = (bt === 'blind' || bt === 'step_blind') ? 'blind' : 'through';
         s.bore_steps = parseInt(data.bore_steps || 0, 10) || 0;
-        s.bore = (data.bore || []).map(function (b) { return { d: b.d == null ? '' : String(b.d), l: b.l == null ? '' : String(b.l) }; });
+        s.bore = (data.bore || []).map(function (b) { return { d: b.d == null ? '' : String(b.d), l: b.l == null ? '' : String(b.l), tp: b.tp ? 1 : 0, d2: b.d2 == null ? '' : String(b.d2), r: b.r == null ? '' : String(b.r) }; });
       }
       this.st = s; if (this.el) this.render();
     },
     _j: function () { var s = this.st; return { outer: s.outer, hub: s.hub, blind: s.hole === 'blind', mode: s.hole ? s.mode : '', bore_steps: s.bore_steps, bore: s.bore }; },
     get: function () {
       var j = this._j();
-      return { outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return { d: b.d, l: b.l }; }) };
+      return { outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r } : { d: b.d, l: b.l }; }) };
     },
     validate: function () { return judge(this._j()).msg; },
     _bind: function () {
@@ -183,7 +197,18 @@
         self.st.bore[i][f] = inp.value;
         self._showJudge();
       });
-      el.addEventListener('change', function (ev) { if (ev.target.hasAttribute && ev.target.hasAttribute('data-cnt')) self._applyCount(false); });
+      el.addEventListener('change', function (ev) {
+        var t = ev.target;
+        if (t.hasAttribute && t.hasAttribute('data-cnt')) { self._applyCount(false); return; }
+        if (t.hasAttribute && t.hasAttribute('data-tp')) {
+          var i = parseInt(t.getAttribute('data-tp'), 10);
+          while (self.st.bore.length <= i) self.st.bore.push({ d: '', l: '' });
+          self.st.bore[i].tp = t.checked ? 1 : 0;
+          if (!t.checked) { self.st.bore[i].d2 = ''; self.st.bore[i].r = ''; }
+          self.render();
+          var f = self.el.querySelector('input[data-i="' + i + '"][data-f="d2"]'); if (f) f.focus();
+        }
+      });
     },
     _focusFirst: function () {
       var f = this.el.querySelector('input[data-cnt]') || this.el.querySelector('input[data-i="0"][data-f="d"]');
@@ -277,8 +302,14 @@
       this._showJudge();
     },
     _in: function (i, label, f) {
-      var v = (this.st.bore[i] || {})[f] || '';
-      return '<label class="eg-shape-in">' + esc(label) + ' <input type="number" step="any" min="0" class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + f + '" value="' + esc(v) + '"></label>';
+      var b = this.st.bore[i] || {}, v = b[f] || '', tp = !!b.tp;
+      var one = function (ff, lab, w) {
+        return '<label class="eg-shape-in">' + lab + ' <input type="number" step="any" min="0" class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + ff + '"' + (w ? ' style="width:' + w + 'px"' : '') + ' value="' + esc(b[ff] || '') + '"></label>';
+      };
+      var h = '<label class="eg-shape-in">' + esc(tp ? label.replace(/孔徑$/, '大徑') : label) + ' <input type="number" step="any" min="0" class="form-control input-sm no-spin-input" data-i="' + i + '" data-f="' + f + '" value="' + esc(v) + '"></label>';
+      h += '<label class="eg-shape-in" title="此孔為錐孔：輸入大徑，再填小徑或錐度（1:N）其中一個"><input type="checkbox" data-tp="' + i + '"' + (tp ? ' checked' : '') + ' style="width:auto;height:auto"> 錐孔</label>';
+      if (tp) h += one('d2', '小徑') + '<span class="eg-shape-hint">或</span>' + one('r', '錐度 1：', 56);
+      return h;
     }
   };
 

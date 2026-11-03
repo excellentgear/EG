@@ -89,6 +89,25 @@ function eg_shape_num($v) {
  *   ends  ：[兩端孔徑, 中間孔徑]，只限通孔；兩端大於中間＝ends_big、小於＝ends_small，相等視為輸入錯誤
  * @return array [ $row|null, $error|null ]  $row=null 表示「全部都沒選」（會刪除這一列）
  */
+/**
+ * 錐孔（選填，每一孔各自可標）：raw 有 tp=1 才處理；d 為大徑（沿用原本的 d，排序／判定／篩選都不變），
+ * 另記小徑 d2 或錐度 r（1:r 的 r），至少填一個。沒標錐孔＝直孔，與舊資料完全相同。
+ * @return array [ 額外欄位陣列, 錯誤訊息|null ]
+ */
+function eg_shape_taper_part($raw, $d, string $lab): array {
+    if (!is_array($raw) || empty($raw['tp'])) return [[], null];
+    $d2 = eg_shape_num($raw['d2'] ?? '');
+    $r  = eg_shape_num($raw['r'] ?? '');
+    if ($d2 === false) return [null, $lab . '小徑必須是大於 0 的數字'];
+    if ($r === false)  return [null, $lab . '錐度必須是大於 0 的數字'];
+    if ($d2 === null && $r === null) return [null, $lab . '是錐孔，請填小徑或錐度（至少一個）'];
+    if ($d2 !== null && $d !== null && $d2 >= $d) return [null, $lab . '小徑必須小於大徑'];
+    $x = ['tp' => 1];
+    if ($d2 !== null) $x['d2'] = $d2;
+    if ($r !== null)  $x['r']  = $r;
+    return [$x, null];
+}
+
 function eg_shape_normalize($in): array {
     if (!is_array($in)) return [null, null];
     $defs  = eg_shape_defs();
@@ -111,7 +130,9 @@ function eg_shape_normalize($in): array {
             $btype = $blind ? 'blind' : 'through';
             $d = eg_shape_num($raw[0]['d'] ?? '');
             if ($d === false) return [null, '孔徑必須是大於 0 的數字'];
-            if ($d !== null) $list[] = ['d' => $d, 'l' => null];   // 深度先不記錄
+            [$tx, $te] = eg_shape_taper_part($raw[0] ?? null, $d, '');
+            if ($te) return [null, $te];
+            if ($d !== null) $list[] = ['d' => $d, 'l' => null] + $tx;   // 深度先不記錄
         } elseif ($mode === 'steps') {
             $btype = $blind ? 'step_blind' : 'step_through';
             $steps = (int)($in['bore_steps'] ?? 0);
@@ -122,7 +143,9 @@ function eg_shape_normalize($in): array {
                 $d = eg_shape_num($raw[$i]['d'] ?? '');
                 if ($d === false) return [null, '第 ' . ($i + 1) . ' 個孔徑必須是大於 0 的數字'];
                 if ($d !== null) $any = true;
-                $tmp[] = ['d' => $d, 'l' => null];
+                [$tx, $te] = eg_shape_taper_part($raw[$i] ?? null, $d, '第 ' . ($i + 1) . ' 孔');
+                if ($te) return [null, $te];
+                $tmp[] = ['d' => $d, 'l' => null] + $tx;
             }
             if ($any) {
                 foreach ($tmp as $i => $r) if ($r['d'] === null) return [null, '第 ' . ($i + 1) . ' 個孔徑還沒填'];
@@ -146,7 +169,11 @@ function eg_shape_normalize($in): array {
                 if ($e === null) return [null, '請輸入兩端孔徑'];
                 if ($m === null) return [null, '請輸入中間孔徑'];
                 if ($e == $m) return [null, '兩端與中間孔徑相同，這是單一通孔，請改選「單一孔」'];
-                $list = [['d' => $e, 'l' => null], ['d' => $m, 'l' => null]];
+                [$tx0, $te0] = eg_shape_taper_part($raw[0] ?? null, $e, '兩端');
+                if ($te0) return [null, $te0];
+                [$tx1, $te1] = eg_shape_taper_part($raw[1] ?? null, $m, '中間');
+                if ($te1) return [null, $te1];
+                $list = [['d' => $e, 'l' => null] + $tx0, ['d' => $m, 'l' => null] + $tx1];
                 $btype = $e > $m ? 'ends_big' : 'ends_small';
             }   // 還沒輸入數據＝無法判定大小，孔型維持空白（不會被當成特定孔型）
         }
