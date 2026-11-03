@@ -2787,7 +2787,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $__x = $__sm[(int)($__r['d_id'] ?? 0)] ?? null;
                     if (!$__x) { $__r['shape_txt'] = ''; continue; }
                     $__bt = $__x['bore_nm'] . ($__x['dias'] ? ' Ø' . implode('→Ø', $__x['dias']) : '');
-                    $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'] . ($__x['hub'] !== '' ? ' 凸出Ø' . $__x['hub'] : ''), $__bt]));
+                    $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'] . ($__x['hub'] !== '' ? ' 凸出Ø' . $__x['hub'] : ''), $__bt, $__x['tail'] ?? '']));
                 }
                 unset($__r);
             } catch (Throwable $__e) {}

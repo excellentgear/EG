@@ -134,7 +134,13 @@ function eg_shape_outer_extra($in): array {
         if (!$any) continue;
         $lab = '第 ' . ($i + 1) . ' 個外錐';
         $d = eg_shape_num($o['d'] ?? '');
-        if ($d === false || $d === null) return [true, null, $lab . '請填大徑（大於 0 的數字）'];
+        if ($d === null) {   // 大徑沒填：由 小徑＋錐長＋錐度（或半錐角）算出
+            $d2x = eg_shape_num($o['d2'] ?? ''); $tlx = eg_shape_num($o['tl'] ?? '');
+            $rx = eg_shape_num($o['r'] ?? ''); $hax = eg_shape_num($o['ha'] ?? '');
+            $Cx = $rx ? 1 / $rx : (($hax && $hax < 90) ? 2 * tan(deg2rad($hax)) : null);
+            if ($d2x && $tlx && $Cx) $d = round($d2x + $tlx * $Cx, 3);
+        }
+        if ($d === false || $d === null) return [true, null, $lab . '請填大徑，或填「小徑＋錐長＋錐度（或半錐角）」讓系統算出大徑'];
         [$tx, $te] = eg_shape_taper_part(['tp' => 1] + $o, $d, $lab);
         if ($te) return [true, null, $te];
         $otp[] = ['d' => $d] + $tx;
@@ -282,12 +288,22 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
     $out = [];
     try {
         $ph = implode(',', array_fill(0, count($dIds), '?'));
-        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
+        $st = $pdo->prepare("SELECT d_id,outer_shape,hub_dia,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id IN ($ph)");
         $st->execute($dIds);
         $defs = eg_shape_defs();
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $bore = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
-            $ds = array_map(function ($b) { return rtrim(rtrim(number_format((float)$b['d'], 3, '.', ''), '0'), '.'); }, $bore);
+            $ds = array_map(function ($b) { return rtrim(rtrim(number_format((float)$b['d'], 3, '.', ''), '0'), '.') . (!empty($b['tp']) ? '(錐)' : ''); }, $bore);
+            $nf = function ($v) { return rtrim(rtrim(number_format((float)$v, 3, '.', ''), '0'), '.'); };
+            $ex = $r['outer_json'] ? (json_decode($r['outer_json'], true) ?: []) : [];
+            $tail = [];
+            foreach (($ex['otp'] ?? []) as $o) {
+                $tail[] = '外錐Ø' . $nf($o['d']) . (isset($o['d2']) ? '→Ø' . $nf($o['d2']) : '')
+                        . (isset($o['ha']) ? ' 半錐' . $nf($o['ha']) . '°' : (isset($o['r']) ? ' 1:' . $nf($o['r']) : ''));
+            }
+            foreach (($ex['seg'] ?? []) as $g) {
+                $tail[] = '段Ø' . $nf($g['d']) . (isset($g['l']) ? '×' . $nf($g['l']) : '') . (!empty($g['n']) ? '(' . $g['n'] . ')' : '');
+            }
             $out[(int)$r['d_id']] = [
                 'outer'     => $r['outer_shape'],
                 'outer_nm'  => $r['outer_shape'] ? ($defs['outer'][$r['outer_shape']] ?? '') : '',
@@ -295,6 +311,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
                 'bore_type' => $r['bore_type'],
                 'bore_nm'   => $r['bore_type'] ? ($defs['bore'][$r['bore_type']]['name'] ?? '') : '',
                 'dias'      => $ds,
+                'tail'      => implode('、', $tail),
             ];
         }
     } catch (Throwable $e) {}
@@ -314,7 +331,17 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
         $a = array_filter(array_map('trim', explode(',', $raw)), function ($v) use ($valid) { return $v === 'other' || $v === 'none' || isset($valid[$v]); });
         return array_values(array_unique($a));
     };
+    // 旗標條件（有外錐／有外徑段／含錐孔）：與同列的其他選項是「且」，不是「或」
+    $flagSql = ['has_otp' => ['outer_json', '%"otp":[{%'], 'has_seg' => ['outer_json', '%"seg":[{%'], 'has_taper' => ['bore_json', '%"tp":1%']];
+    $fi = 0;
     foreach ([['filter_shape_outer', 'outer_shape', $defs['outer'], 'fso'], ['filter_shape_bore', 'bore_type', $defs['bore'], 'fsb']] as [$key, $col, $valid, $pre]) {
+        $raw0 = trim((string)($_POST[$key] ?? ''));
+        foreach (array_filter(array_map('trim', explode(',', $raw0))) as $fl) {
+            if (!isset($flagSql[$fl])) continue;
+            $ph = ':fsflag' . ($fi++);
+            $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_fl$fi WHERE s_fl$fi.d_id={$alias}.d_id AND s_fl$fi.{$flagSql[$fl][0]} LIKE $ph)";
+            $prm[$ph] = $flagSql[$fl][1];
+        }
         $vals = $pick($key, $valid);
         if (!$vals) continue;
         $conds = []; $i = 0;

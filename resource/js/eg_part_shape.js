@@ -41,6 +41,11 @@
     return '<span class="eg-shape-chip' + (on ? ' on' : '') + '" data-kind="' + kind + '" data-code="' + esc(code) + '" role="button" tabindex="0" title="' + esc(name) + '">' +
       icon(ik, ic) + '<span class="eg-shape-nm">' + esc(name) + '</span></span>';
   }
+  // 篩選用的旗標籤（有外錐／有外徑段／含錐孔）：與其他籤同樣外觀，但後端用「且」條件處理
+  function flagChip(kind, code, name, on, inner) {
+    return '<span class="eg-shape-chip' + (on ? ' on' : '') + '" data-kind="' + kind + '" data-code="' + esc(code) + '" role="button" tabindex="0" title="' + esc(name) + '">' +
+      svg(inner) + '<span class="eg-shape-nm">' + esc(name) + '</span></span>';
+  }
   function injectCss() {
     if (document.getElementById('eg-shape-css')) return;
     var st = document.createElement('style'); st.id = 'eg-shape-css';
@@ -86,9 +91,9 @@
   // 由大徑／小徑／錐長（或錐度 1:N）算出錐度資訊；資料不足回 null
   function taperCalc(b) {
     if (!b || !b.tp) return null;
-    var D = num(b.d), s = num(b.d2), L = num(b.tl), r = num(b.r), ha = num(b.ha), C;
-    if (!D) return null;
+    var D = num(b.d), s = num(b.d2), L = num(b.tl), r = num(b.r), ha = num(b.ha), C, dd = false;
     if (!r && ha && ha < 90) r = 1 / (2 * Math.tan(ha * Math.PI / 180));   // 半錐角 θ：錐度 1:N，N＝1/(2·tanθ)
+    if (!D) { if (s && L && r) { D = s + L / r; dd = true; } else return null; }   // 大徑沒填：由 小徑＋錐長＋錐度（或半錐角）算出
     if (s && L) C = (D - s) / L;
     else if (s && r) { C = 1 / r; L = (D - s) * r; }
     else if (r && L) { C = 1 / r; s = D - L * C; if (s <= 0) return null; }
@@ -96,12 +101,12 @@
     else return null;
     if (!(C > 0)) return null;
     var half = Math.atan(C / 2) * 180 / Math.PI;
-    return { s: s, L: L, n: 1 / C, half: half };
+    return { D: D, dd: dd, s: s, L: L, n: 1 / C, half: half };
   }
   function taperInfo(b) {
     var t = taperCalc(b); if (!t) return '';
     var r3 = function (v) { return String(Math.round(v * 1000) / 1000); };
-    return '錐度 1:' + r3(t.n) + '　半錐角 ' + r3(t.half) + '°（全錐角 ' + r3(t.half * 2) + '°）' + (t.s ? '　小徑 Ø' + r3(t.s) : '') + (t.L ? '　錐長 ' + r3(t.L) : '');
+    return '錐度 1:' + r3(t.n) + '　半錐角 ' + r3(t.half) + '°（全錐角 ' + r3(t.half * 2) + '°）' + (t.dd ? '　大徑 Ø' + r3(t.D) : '') + (t.s ? '　小徑 Ø' + r3(t.s) : '') + (t.L ? '　錐長 ' + r3(t.L) : '');
   }
   // 外錐／重點外徑段的檢查（與後端 eg_shape_outer_extra 同規則）；回傳 {msg, partial, bad}
   function outerExtra(st) {
@@ -110,7 +115,8 @@
       o = st.otp[i];
       if (!['d', 'd2', 'tl', 'r', 'ha'].some(function (k) { return String(o[k] || '').trim() !== ''; })) continue;
       var lab = '第 ' + (i + 1) + ' 個外錐', d = num(o.d);
-      if (d === false || d === null) { bad['otp' + i + 'd'] = 1; r.msg = lab + '請填大徑（大於 0 的數字）'; r.partial = d === null; return r; }
+      if (d === null) { var tcx = taperCalc(Object.assign({ tp: 1 }, o)); if (tcx && tcx.dd) d = tcx.D; }   // 大徑可由 小徑＋錐長＋錐度/半錐角 算出
+      if (d === false || d === null) { bad['otp' + i + 'd'] = 1; r.msg = lab + '請填大徑，或填「小徑＋錐長＋錐度（或半錐角）」讓系統算出大徑'; r.partial = d === null; return r; }
       var tb = {}, tm = taperMsg(Object.assign({ tp: 1 }, o), 0, tb, d, lab);
       if (tm) { Object.keys(tb).forEach(function (k) { bad['otp' + i + k.replace(/^0/, '')] = 1; }); r.msg = tm.msg; r.partial = !!tm.partial; return r; }
     }
@@ -209,7 +215,10 @@
     get: function () {
       var j = this._j(), st = this.st;
       var any = function (o) { return Object.keys(o).some(function (k) { return String(o[k] || '').trim() !== ''; }); };
-      return { otp: st.otp.filter(any), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
+      return { otp: st.otp.filter(any).map(function (o) {
+        if (String(o.d || '').trim() === '') { var tc = taperCalc(Object.assign({ tp: 1 }, o)); if (tc && tc.dd) o = Object.assign({}, o, { d: String(Math.round(tc.D * 1000) / 1000) }); }
+        return o;
+      }), seg: st.seg.filter(any), outer: j.outer, hub_dia: (j.outer === 'one_side' || j.outer === 'both_sides') ? j.hub : '', blind: j.blind ? 1 : 0, mode: j.mode, bore_steps: j.bore_steps, bore: j.bore.map(function (b) { return b.tp ? { d: b.d, l: b.l, tp: 1, d2: b.d2, r: b.r, tl: b.tl, ha: b.ha } : { d: b.d, l: b.l }; }) };
     },
     validate: function () { return judge(this._j()).msg || outerExtra(this.st).msg; },
     _bind: function () {
@@ -462,10 +471,15 @@
       var defs = D(), h = '', self = this;
       h += '<span class="filter-group-label">外形</span><span class="eg-shape-row" style="display:inline-flex;margin:0">';
       Object.keys(defs.outer).forEach(function (c) { h += chipHtml('outer', c, defs.outer[c], self.outer.indexOf(c) >= 0); });
-      h += chipHtml('outer', 'other', '其他', self.outer.indexOf('other') >= 0) + '</span>';
+      h += chipHtml('outer', 'other', '其他', self.outer.indexOf('other') >= 0);
+      h += '<span class="eg-shape-sep">│</span>' +
+        flagChip('outer', 'has_otp', '有外錐', self.outer.indexOf('has_otp') >= 0, '<polygon points="8,16 48,10 48,30 8,24" fill="' + BODY + '" ' + 'stroke="' + LINE + '" stroke-width="1.2"/>') +
+        flagChip('outer', 'has_seg', '有外徑段', self.outer.indexOf('has_seg') >= 0, rect(6, 14, 14, 12, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + rect(20, 8, 18, 24, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + rect(38, 14, 12, 12, BODY, 'stroke="' + LINE + '" stroke-width="1.2"')) + '</span>';
       h += '<br><span class="filter-group-label">內孔</span><span class="eg-shape-row" style="display:inline-flex;margin:0">';
       Object.keys(defs.bore).forEach(function (c) { h += chipHtml('bore', c, defs.bore[c].name, self.bore.indexOf(c) >= 0); });
-      h += chipHtml('bore', 'none', '無孔', self.bore.indexOf('none') >= 0) + '</span>';
+      h += chipHtml('bore', 'none', '無孔', self.bore.indexOf('none') >= 0) +
+        '<span class="eg-shape-sep">│</span>' +
+        flagChip('bore', 'has_taper', '含錐孔', self.bore.indexOf('has_taper') >= 0, rect(6, 4, 44, 32, BODY, 'stroke="' + LINE + '" stroke-width="1.2"') + '<polygon points="6,11 50,16 50,24 6,29" fill="#fff" stroke="' + LINE + '" stroke-width="1.2"/>') + '</span>';
       h += '<br><span class="filter-group-label" title="單邊／雙邊凸出的最大凸出外徑">凸出外徑</span>' +
         '<input type="number" step="any" data-sh="min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
         '<span style="color:#888;margin:0 2px;">~</span>' +
