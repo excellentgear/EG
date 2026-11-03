@@ -1252,6 +1252,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
        輸入/下拉/文字框一律反灰；純瀏覽（切換逐項/逐件/總表、切換製程）不受影響。 */
     body.qc-view-only #view-item, body.qc-view-only #view-pcs, body.qc-view-only #view-grid,
     body.qc-view-only #form-tool-row, body.qc-view-only #kind-box { pointer-events:none; }
+    /* 檢視模式：捲動容器本身要能用滑鼠拖捲軸／滾輪（否則上面整區 pointer-events:none 連捲軸一起擋掉），
+       但容器內的欄位／按鈕仍維持不可操作 */
+    body.qc-view-only #view-item .table-responsive,
+    body.qc-view-only #view-pcs .table-responsive,
+    body.qc-view-only #view-grid .table-responsive { pointer-events:auto; }
+    body.qc-view-only #view-item .table-responsive *,
+    body.qc-view-only #view-pcs .table-responsive *,
+    body.qc-view-only #view-grid .table-responsive * { pointer-events:none; }
     body.qc-view-only #view-item input, body.qc-view-only #view-pcs input, body.qc-view-only #view-grid input,
     body.qc-view-only #view-item select, body.qc-view-only #view-grid select,
     body.qc-view-only #view-item textarea, body.qc-view-only #view-grid textarea,
@@ -3281,12 +3289,13 @@ $(function(){
         if(it.mode==='RANGE'){
             var mn=parseFloat(it.min), mx=parseFloat(it.max);
             if(isNaN(mn)||isNaN(mx)) return '';
-            return (v>mx||v<mn) ? 'NG' : 'OK';
+            return (v>mx+1e-9||v<mn-1e-9) ? 'NG' : 'OK';
         }
         var base=parseFloat(it.std), up=parseFloat(it.up), lo=parseFloat(it.lo);
         if(isNaN(base)) return '';
         var hi=base+(isNaN(up)?0:up), low=base+(isNaN(lo)?0:lo);
-        return (v>hi||v<low) ? 'NG' : 'OK';
+        // 浮點誤差容差：21.8+0.01＝21.810000000000002，邊界值 21.81 不可誤判 NG
+        return (v>hi+1e-9||v<low-1e-9) ? 'NG' : 'OK';
     }
     function limits(it){
         if(it.mode==='RANGE'){
@@ -3307,8 +3316,8 @@ $(function(){
         var L=limits(it), v=parseFloat(raw);
         if(!L||isNaN(v)) return '';
         var d=v-L.base, sign=(d>0?'+':'');
-        if(v>L.hi) return (compact?'▲':'超上限 ')+trimNum((v-L.hi).toFixed(4));
-        if(v<L.low) return (compact?'▼':'超下限 ')+trimNum((L.low-v).toFixed(4));
+        if(v>L.hi+1e-9) return (compact?'▲':'超上限 ')+trimNum((v-L.hi).toFixed(4));
+        if(v<L.low-1e-9) return (compact?'▼':'超下限 ')+trimNum((L.low-v).toFixed(4));
         return sign+trimNum(d.toFixed(4));
     }
     // 疑似誤填：與標準值差異「大到不像量測誤差」（漏打小數點、多打一位、看錯量具、抄錯列）。

@@ -3017,7 +3017,7 @@ $(function(){
         var up=parseFloat($ref.find('.f-up').val()), lo=parseFloat($ref.find('.f-lo').val());
         var v=parseFloat($(this).val());
         if(isNaN(v)||isNaN(base)){ $(this).removeClass('ng-value ok-value'); }
-        else { var hi=base+(isNaN(up)?0:up), low=base+(isNaN(lo)?0:lo); var ng=(v>hi||v<low); $(this).toggleClass('ng-value',ng).toggleClass('ok-value',!ng); }
+        else { var hi=base+(isNaN(up)?0:up), low=base+(isNaN(lo)?0:lo); var ng=(v>hi+1e-9||v<low-1e-9); $(this).toggleClass('ng-value',ng).toggleClass('ok-value',!ng); }
         updateAutoVerdicts();
     });
     // #10：＋加量測 → 於該項目下方插入一筆加量測子列；移除子列

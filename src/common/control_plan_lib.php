@@ -808,8 +808,9 @@ function cp_qcv2_row_to_sip_item(array $r): array
     $up = ''; $lo = ''; $qChar = '';
     if ((string)($r['result_type'] ?? '') === 'NUMERIC' && $std !== '' && is_numeric($std)) {
         $base = (float)$std;
-        $up = $plus !== null ? (string)($base + (float)$plus) : $std;
-        $lo = $minus !== null ? (string)($base - (float)$minus) : $std;
+        // round：避免浮點誤差產生 21.810000000000002 這種顯示值
+        $up = $plus !== null ? (string)round($base + (float)$plus, 6) : $std;
+        $lo = $minus !== null ? (string)round($base - (float)$minus, 6) : $std;
     } else {
         $qChar = $std;
     }

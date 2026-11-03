@@ -139,14 +139,16 @@ if (!function_exists('qc_recompute_result')) {
         $v = (float)$val;
         $min = $spec['min'] ?? null; $max = $spec['max'] ?? null;
         if ($min !== null && $max !== null && is_numeric($min) && is_numeric($max)) {
-            return ($v < (float)$min || $v > (float)$max) ? 'NG' : 'OK';
+            return ($v < (float)$min - 1e-9 || $v > (float)$max + 1e-9) ? 'NG' : 'OK';
         }
         $base = $spec['std'] ?? '';
         if (!is_numeric($base)) return null;
         $up = (isset($spec['up']) && $spec['up'] !== '' && $spec['up'] !== null) ? (float)$spec['up'] : 0.0;
         $lo = (isset($spec['lo']) && $spec['lo'] !== '' && $spec['lo'] !== null) ? (float)$spec['lo'] : 0.0;
         $b = (float)$base;
-        return ($v > $b + $up || $v < $b + $lo) ? 'NG' : 'OK';
+        // 浮點誤差容差：21.8+0.01 會得到 21.810000000000002，邊界值 21.81 不可被誤判 NG
+        $eps = 1e-9;
+        return ($v > $b + $up + $eps || $v < $b + $lo - $eps) ? 'NG' : 'OK';
     }
 }
 
