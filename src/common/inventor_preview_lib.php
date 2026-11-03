@@ -181,8 +181,32 @@ function eg_inventor_preview_step(PDO $db, string $srcFsPath, array $companions 
     }
 }
 
-/** 真正呼叫 PowerShell + Inventor COM 轉檔（含行程安全防護） */
+/**
+ * 呼叫 Inventor 轉檔——**全站同一時間只讓一個 Inventor 在跑**，失敗（COM 啟動／RPC 中斷）自動重試。
+ *
+ * 一次上傳一整組檔案（例：組合檔＋10 個零件）時，每個檔案上傳完都會各自背景啟動一次轉檔，
+ * 10 個 Inventor 同時起來互相搶 COM（實測 RPC 失敗 0x800706BE、CO_E_SERVER_EXEC_FAILURE），
+ * 而且下面收尾的「殺掉新長出來的 Inventor.exe」會把別支轉檔剛啟動的 Inventor 一起殺掉
+ * ——全部互相打死，組合檔當下的轉檔也跟著失敗（畫面「3D 檢視載入失敗」）。
+ * 用全域鎖排隊後，行程快照與收尾比對才只會看到自己這一次的 Inventor。
+ */
 function eg_inventor_preview_run(string $pwsh, string $interop, string $srcFsPath, string $outStep): bool {
+    @set_time_limit(600);   // 前面可能還有別的檔案在排隊轉檔
+    $gl = @fopen(eg_inventor_preview_cache_dir() . DIRECTORY_SEPARATOR . 'inventor_global.lock', 'c');
+    if ($gl && !flock($gl, LOCK_EX)) { fclose($gl); $gl = null; }
+    try {
+        for ($try = 1; $try <= 3; $try++) {
+            if (eg_inventor_preview_run_once($pwsh, $interop, $srcFsPath, $outStep)) return true;
+            sleep(3);   // 讓上一個 Inventor 完全退出再重試
+        }
+        return false;
+    } finally {
+        if ($gl) { flock($gl, LOCK_UN); fclose($gl); }
+    }
+}
+
+/** 真正呼叫 PowerShell + Inventor COM 轉檔（含行程安全防護；單次，外層負責排隊與重試） */
+function eg_inventor_preview_run_once(string $pwsh, string $interop, string $srcFsPath, string $outStep): bool {
     $dir    = eg_inventor_preview_cache_dir();
     $script = __DIR__ . DIRECTORY_SEPARATOR . 'inventor_preview_convert.ps1';
     $outLog = $dir . DIRECTORY_SEPARATOR . 'p_' . bin2hex(random_bytes(4)) . '.out.log';
