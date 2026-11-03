@@ -541,8 +541,8 @@
       if (s.outer === 'flush') {
         var jigF = this.ptype === 'J';
         h += '<div class="eg-shape-line" style="margin-left:40px"><span class="eg-shape-hint" style="font-weight:bold;color:#5a3d1c;min-width:30px">平板</span>' +
-          '<label class="eg-shape-in" title="' + (jigF ? '治具的外徑（必填）' : '最大外徑；省略時，最大外徑＝齒部外徑') + '">外徑 <input type="number" step="any" min="0" data-hubf="1" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label>' +
-          '<span class="eg-shape-hint">' + (jigF ? '治具請填外徑' : '可省略：省略表示最大外徑＝齒部外徑') + '</span></div>';
+          '<label class="eg-shape-in" title="' + (jigF ? '治具的外徑（必填）' : this.ptype === 'G' ? '最大外徑；省略時，最大外徑＝齒部外徑' : '外徑（選填）') + '">外徑 <input type="number" step="any" min="0" data-hubf="1" data-hub="1" value="' + esc(s.hub) + '" class="form-control input-sm no-spin-input"> mm</label>' +
+          '<span class="eg-shape-hint">' + (jigF ? '治具請填外徑' : this.ptype === 'G' ? '可省略：省略表示最大外徑＝齒部外徑' : '外徑（選填）') + '</span></div>';
       }
       // 凸出（單邊／雙邊）：外徑、長度各自選填；雙邊凸出預設「兩側相同」，取消勾選後分左側、右側各填一組
       // 「多階凸出」：可只設定為多階而不輸入；連續輸入各階，最後一階有資料會自動多一格；各階依輸入順序（不自動排序）

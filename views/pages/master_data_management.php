@@ -3242,8 +3242,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
             eg_gear_rows_save($pdo, (int)$d_id, ($Type === 'G') ? $gears : [], $uid);
 
-            // ── 外形／內孔分類（齒輪 G、治具 J 共用；沒送 shape_spec＝舊呼叫端，不動；其他種類一律清除）──
-            if ($Type !== 'G' && $Type !== 'J') {
+            // ── 外形／內孔分類（齒輪 G、治具 J、一般 N 共用；沒送 shape_spec＝舊呼叫端，不動；其他種類一律清除）──
+            if ($Type !== 'G' && $Type !== 'J' && $Type !== 'N') {
                 eg_shape_save($pdo, (int)$d_id, null);
             } elseif (array_key_exists('shape_spec', $_POST)) {
                 [$__shapeRow, $__shapeErr] = eg_shape_normalize(json_decode((string)$_POST['shape_spec'], true), (string)$Type);
@@ -10015,7 +10015,7 @@ body { background:#F6F1EA; }
 <?php endif; ?>
 
 <!-- ─ 標籤（依 Type 動態顯示）─ -->
-<!-- 外形／內孔分類（2026-10-21）：工件種類=G（齒輪）或 J（治具）時顯示；放在「標籤」區塊上方，緊湊排列，點選後輸入框直接出現並取得焦點 -->
+<!-- 外形／內孔分類（2026-10-21）：工件種類=G（齒輪）、J（治具）或 N（一般）時顯示；放在「標籤」區塊上方，緊湊排列，點選後輸入框直接出現並取得焦點 -->
 <div id="shape-section" style="display:none;margin:0 0 8px;padding:4px 8px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
     <div id="shape-form-box"></div>
 </div>
@@ -10055,7 +10055,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
   if (fb) EGPartShape.filter.mount(fb, function(){ if (typeof updatePartsClearBtn==='function') updatePartsClearBtn(); if (typeof loadParts==='function') loadParts(1); });
   var gs = document.getElementById('gear-section'), ss = document.getElementById('shape-section'), curType = '';
   // 齒輪（G）：跟著齒輪規格區塊顯示；治具（J）：沒有齒輪規格區塊，依工件種類直接顯示（外形／內孔設定與齒輪相同）
-  function sync(){ ss.style.display = (curType === 'J' || (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none')) ? '' : 'none'; }
+  function sync(){ ss.style.display = ((curType === 'J' || curType === 'N') || (gs && gs.style.display !== 'none' && getComputedStyle(gs).display !== 'none')) ? '' : 'none'; }
   window.EGShapeTypeSync = function(val){ curType = val || ''; sync(); if (EGPartShape.form.setType) EGPartShape.form.setType(curType); };
   if (gs) { new MutationObserver(sync).observe(gs, {attributes:true, attributeFilter:['style','class']}); sync(); }
 })();
@@ -13252,8 +13252,8 @@ function setPartFilter(dim, val, el) {
         var rangeRow = document.getElementById('parts-gear-range-filter');
         if (specRow)  specRow.classList.toggle('visible', showGear);
         if (rangeRow) rangeRow.classList.toggle('visible', showGear);
-        // 外形／內孔篩選：只選一種工件種類且是 G（齒輪）或 J（治具）時顯示；離開這兩種就一併清掉，免得看不到卻還在篩
-        var showShape = _partsFilter.types.length === 1 && (_partsFilter.types[0] === 'G' || _partsFilter.types[0] === 'J');
+        // 外形／內孔篩選：只選一種工件種類且是 G（齒輪）、J（治具）或 N（一般）時顯示；離開這兩種就一併清掉，免得看不到卻還在篩
+        var showShape = _partsFilter.types.length === 1 && (_partsFilter.types[0] === 'G' || _partsFilter.types[0] === 'J' || _partsFilter.types[0] === 'N');
         var shapeRow = document.getElementById('parts-gear-shape-filter'); if (shapeRow) shapeRow.classList.toggle('visible', showShape);
         if (!showShape && window.EGPartShape && EGPartShape.filter.active()) EGPartShape.filter.reset();
         if (showGear) {
@@ -15073,7 +15073,7 @@ function renderPartsTable(rows, total, pg, pages) {
             // 齒輪規格小字（僅 G 種類）
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
                 ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:220px;overflow:hidden;white-space:pre-line;line-height:1.25;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
-            if ((r.Type==='G' || r.Type==='J') && r.shape_txt) gearSpec += '<span style="font-size:10px;color:#8A5A2B;display:block;max-width:220px;line-height:1.25;margin-top:1px;" title="外形｜內孔">◧ '+escHtml(r.shape_txt)+'</span>';
+            if ((r.Type==='G' || r.Type==='J' || r.Type==='N') && r.shape_txt) gearSpec += '<span style="font-size:10px;color:#8A5A2B;display:block;max-width:220px;line-height:1.25;margin-top:1px;" title="外形｜內孔">◧ '+escHtml(r.shape_txt)+'</span>';
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = '';
             // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
@@ -18205,13 +18205,13 @@ function submitPartForm() {
         }
     }
     // 齒輪外形／內孔：有輸入錯誤就在送出前擋下（後端同規則再擋一次）
-    if ((type === 'G' || type === 'J') && window.EGPartShape) {
+    if ((type === 'G' || type === 'J' || type === 'N') && window.EGPartShape) {
         var _shErr = EGPartShape.form.validate();
         if (_shErr) { showToast('外形與內孔：' + _shErr, 'error'); return; }
     }
     var data = {
         action:       'save_part',
-        shape_spec:   ((type === 'G' || type === 'J') && window.EGPartShape) ? JSON.stringify(EGPartShape.form.get()) : undefined,
+        shape_spec:   ((type === 'G' || type === 'J' || type === 'N') && window.EGPartShape) ? JSON.stringify(EGPartShape.form.get()) : undefined,
         d_id:         document.getElementById('pf-d_id').value,
         D_Setting_Id: document.getElementById('pf-D_Setting_Id').value.trim(),
         Spec_No:      document.getElementById('pf-Spec_No').value,
