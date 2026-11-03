@@ -7639,7 +7639,8 @@ $(function(){
         }, 'json').fail(function(x){ $b.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
     });
     // 載入後背景查一次有幾筆待補開（沒有開單權限者 API 回 403＝按鈕維持隱藏）
-    setTimeout(function(){ if(!state.viewOnly) qcSuggestLoad(false); }, 1800);
+    // 檢視模式（開啟舊紀錄）也要看得到：建議清單與目前開的這張單無關，是全站待補開的檢驗紀錄
+    setTimeout(function(){ qcSuggestLoad(false); }, 1200);
 
     // =====================================================================
     // 列印 / 匯出 CSV（版面沿用舊頁 2-QA-01-06，交瀏覽器原生分頁）
