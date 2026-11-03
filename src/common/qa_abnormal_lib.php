@@ -1411,6 +1411,24 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
     $ph = implode(',', array_fill(0, count($reportIds), '?'));
     $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph)")
        ->execute(array_merge([$created['id']], $reportIds));
+    // 責任單位的部門／人員自動帶入「報工人員與其部門」（2026-11-03 使用者交辦）：只有責任廠商是廠內加工
+    // 廠商時才有這兩欄（與 save_head 同一條規則）；部門依各筆報工的報工日回推當時所屬部門（ai-rules/22），
+    // 多筆報工有多位人員就全帶入（qa_abnormal_resp 本來就可複選）。失敗只記 log，不影響開單。
+    try {
+        $isInt = (int)$db->query("SELECT COALESCE(resp_is_internal,0) FROM qa_abnormal_order WHERE id=" . (int)$created['id'])->fetchColumn();
+        if ($isInt === 1) {
+            require_once __DIR__ . '/unit_supervisor_lib.php';
+            $rp = $db->prepare("SELECT production_user_id, report_date FROM pm_process_daily_report WHERE report_id IN ($ph)");
+            $rp->execute($reportIds);
+            $insR = $db->prepare("INSERT IGNORE INTO qa_abnormal_resp (order_id, dept_id, user_id) VALUES (?,?,?)");
+            foreach ($rp->fetchAll(PDO::FETCH_ASSOC) as $rr) {
+                $ru = (int)$rr['production_user_id'];
+                if ($ru <= 0) continue;
+                $rd = (int)eg_unit_user_dept($db, $ru, (string)$rr['report_date']);
+                if ($rd > 0) $insR->execute([(int)$created['id'], $rd, $ru]);
+            }
+        }
+    } catch (Throwable $e) { error_log('qab auto resp fill: ' . $e->getMessage()); }
     // 這一站的累積已經清空，兩週提醒的計時器一併歸零，下一批NG從頭起算
     $db->prepare("DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid=?")->execute([$bomIngFid]);
     // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策
