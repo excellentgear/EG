@@ -573,7 +573,7 @@
             tpChk('ta', ta.tp) + (ta.tp ? tpFlds('ta', ta) : '') + chkMulti + chkSame + '</div>';
           if (two) h += '<div class="eg-shape-line" style="margin-left:40px">' + sideLab('右側') +
             hin('data-hub2', s.hub2, tb.tp ? '大徑' : '外徑', '右側凸出部分的最大直徑') + hin('data-hub2len', s.hub2_len, '長度', '右側凸出部分的長度（軸向）', true) +
-            tpChk('tb', tb.tp) + (tb.tp ? tpFlds('tb', tb) : '') + '</div>';
+            tpChk('tb', tb.tp) + (tb.tp ? tpFlds('tb', tb) : '') + chkMulti + '</div>';
           h += '<div class="eg-shape-hint" style="margin-left:40px">只要有凸出就算（不論多少）；外徑與長度各自選填，只填長度也可以</div>';
         } else {
           fm._hubTail();
@@ -581,6 +581,7 @@
           h += '<div class="eg-shape-line" style="margin-left:40px">' + sideLab('凸出') + chkMulti + chkSame + '</div>';
           h += '<div class="eg-shape-line" data-hubrows="a" style="margin-left:40px">' + (two ? sideLab('左側') : '') + rowsHtml('a') + '</div>';
           if (two) h += '<div class="eg-shape-line" data-hubrows="b" style="margin-left:40px">' + sideLab('右側') + rowsHtml('b') + '</div>';
+          if (two) h += '<div class="eg-shape-hint" style="margin-left:40px">左、右側都可多階；某一側只有一階就只填第 1 階、其餘留空</div>';
           h += '<div class="eg-shape-hint" style="margin-left:40px">連續輸入各階，最後一階有資料會自動多出一格；可以不輸入；各階依輸入順序，不自動排序</div>';
         }
       }
