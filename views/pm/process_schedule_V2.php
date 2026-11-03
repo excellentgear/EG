@@ -1654,6 +1654,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($sub === 'save') {
             ng_reason_save($pdo, (int)($_POST['ng_id'] ?? 0), (string)($_POST['name'] ?? ''), (int)($_POST['is_active'] ?? 1), (int)($_POST['auto_resp'] ?? 1), $uidNg);
             $msgNg = '已儲存';
+            // 「帶入部門／人員」設定改了，既有的報工自動開立單（結案與否都處理）同步套用
+            try {
+                require_once __DIR__ . '/../../src/common/qab_pm_resync_lib.php';
+                $rsNg = qab_pm_resync_orders($pdo, $uidNg);
+                if (count($rsNg['changes'])) $msgNg .= '，並同步修正 ' . count($rsNg['changes']) . ' 項既有異常單的責任部門／人員';
+            } catch (Throwable $e) { error_log('ng reason resync: ' . $e->getMessage()); }
         } elseif ($sub === 'move') {
             ng_reason_move($pdo, (int)($_POST['ng_id'] ?? 0), ($_POST['dir'] ?? '') === 'up' ? 'up' : 'down');
         } elseif ($sub === 'delete') {

@@ -78,11 +78,16 @@ if (!function_exists('qab_pm_resync_orders')) {
                     $cur = $db->prepare("SELECT id, dept_id, user_id FROM qa_abnormal_resp WHERE order_id=?");
                     $cur->execute([$oid]);
                     $have = $cur->fetchAll(PDO::FETCH_ASSOC);
+                    $needU = []; $skipU = [];   // 報工人員 => 該人是否有任何一筆報工的NG原因要帶入／不帶入時當時的部門
                     foreach ($reps->fetchAll(PDO::FETCH_ASSOC) as $rr) {
                         $u = (int)$rr['production_user_id'];
                         if ($u <= 0) continue;
-                        if (!ng_reason_report_needs_resp($db, (int)$rr['report_id'])) continue;   // NG原因設為不帶入
                         $d = (int)eg_unit_user_dept($db, $u, (string)$rr['report_date']);
+                        if (!ng_reason_report_needs_resp($db, (int)$rr['report_id'])) {   // NG原因設為不帶入
+                            if ($d > 0) $skipU[$u] = $d;
+                            continue;
+                        }
+                        $needU[$u] = true;
                         if ($d <= 0) continue;
                         $mine = null;
                         foreach ($have as $h) if ((int)$h['user_id'] === $u) { $mine = $h; break; }
@@ -99,6 +104,19 @@ if (!function_exists('qab_pm_resync_orders')) {
                             $log->execute([$oid, $editor, '責任部門', '', $deptName($d) . '／' . $nameOf($u), '報工NG自動開立單，責任單位帶入報工人員與其部門']);
                             $out['changes'][] = ['order_no' => $o['abnormal_order_no'], 'what' => '責任部門／人員（補上）',
                                                  'from' => '（空）', 'to' => $deptName($d) . '／' . $nameOf($u)];
+                        }
+                    }
+                    // 設定改成「不帶入」之後：移除當初自動帶入的那一列（只動「報工人員＋當時部門」完全吻合的列，
+                    // 人工另外加的其他人／部門不碰）
+                    foreach ($skipU as $u => $d) {
+                        if (!empty($needU[$u])) continue;
+                        foreach ($have as $h) {
+                            if ((int)$h['user_id'] === $u && (int)$h['dept_id'] === $d) {
+                                $db->prepare("DELETE FROM qa_abnormal_resp WHERE id=?")->execute([(int)$h['id']]);
+                                $log->execute([$oid, $editor, '責任部門', $deptName($d) . '／' . $nameOf($u), '', 'NG原因設為不帶入部門／人員，移除自動帶入的列']);
+                                $out['changes'][] = ['order_no' => $o['abnormal_order_no'], 'what' => '責任部門／人員（移除）',
+                                                     'from' => $deptName($d) . '／' . $nameOf($u), 'to' => '（不帶入）'];
+                            }
                         }
                     }
                 }
