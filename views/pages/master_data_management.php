@@ -2155,11 +2155,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                      . " OR EXISTS (SELECT 1 FROM d_setting_alias aks$ki WHERE aks$ki.d_id=d.d_id AND aks$ki.alias_code LIKE :kws$ki))";
                     $params_sel[":kws$ki"] = "%$kw_i%";
                     $params_kwd[":kws$ki"] = "%$kw_i%";
+                    // 完全吻合（料號／圖號／規格／等同料號整串相同）：僅供第一段排序置頂，不影響篩選結果
+                    $kw_exact_ors[] = "(d.D_Setting_Id=:kwe$ki OR d.Drawing_No=:kwe$ki OR d.Spec_No=:kwe$ki"
+                                    . " OR EXISTS (SELECT 1 FROM d_setting_alias ake$ki WHERE ake$ki.d_id=d.d_id AND ake$ki.alias_code=:kwe$ki))";
+                    $params_kwd[":kwe$ki"] = $kw_i;
                     $kw_parent_ors[] = "(pks.D_Setting_Id LIKE :kwm$ki OR pks.Drawing_No LIKE :kwm$ki OR pks.Spec_No LIKE :kwm$ki OR pks.Remark LIKE :kwm$ki)";
                     $params_sel[":kwm$ki"] = "%$kw_i%";
                 }
                 $where .= " AND (" . implode(" OR ", $kw_ors) . ")";
                 $kw_direct_sql     = "IF(" . implode(" OR ", $kw_direct_ors) . ", 1, 0)";
+                $kw_exact_sql      = "IF(" . implode(" OR ", $kw_exact_ors) . ", 1, 0)";
                 $kw_parent_src_sql = "(SELECT GROUP_CONCAT(DISTINCT pks.D_Setting_Id ORDER BY pks.D_Setting_Id SEPARATOR ',')"
                                    . " FROM d_setting_bom bks JOIN d_setting pks ON pks.d_id=bks.parent_d_id"
                                    . " WHERE bks.child_d_id=d.d_id AND pks.Is_Assembly=1 AND (" . implode(" OR ", $kw_parent_ors) . "))";
@@ -4233,9 +4238,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql = "SELECT d.d_id, d.D_Setting_Id AS part_id, COALESCE(d.Spec_No,'') AS spec_no, COALESCE(c.customer,'') AS client_name
                     FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
                     WHERE (d.D_Setting_Id LIKE :kw OR d.Spec_No LIKE :kw OR d.Drawing_No LIKE :kw OR c.customer LIKE :kw)";
-            $params = [':kw'=>"%$kw%"];
+            $params = [':kw'=>"%$kw%", ':kwe'=>$kw, ':kwp'=>"$kw%"];
             if ($exclude > 0) { $sql .= " AND d.d_id <> :exid"; $params[':exid'] = $exclude; }
-            $sql .= " ORDER BY d.D_Setting_Id LIMIT 15";
+            // 完全符合（料號／規格／圖號等於關鍵字）排最前，其次是開頭符合，再來才是包含；同一級依料號排序
+            $sql .= " ORDER BY (CASE WHEN d.D_Setting_Id = :kwe OR d.Spec_No = :kwe OR d.Drawing_No = :kwe THEN 0
+                                     WHEN d.D_Setting_Id LIKE :kwp OR d.Spec_No LIKE :kwp OR d.Drawing_No LIKE :kwp THEN 1
+                                     ELSE 2 END), d.D_Setting_Id LIMIT 15";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
