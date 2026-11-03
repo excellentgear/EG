@@ -509,6 +509,7 @@ function addOrUpdateEmployee($mode) {
 
 
         $db->commit();
+        if ($mode === 'update') _qabResyncAfterPositionChange($db);   // 職務若有異動，報工NG自動開立的異常單同步修正
         $message = $mode === 'add' ? '員工新增成功。' : '員工更新成功。';
         $resp = ['status' => 'success', 'message' => $message];
 
@@ -891,6 +892,54 @@ function getPositionSnapshotAt() {
  * （無紀錄時 eg_position_snapshot_at 會回現況，若現況剛好已有/已無這筆，會被誤判成「重複/找不到」）；
  * 一律強制寫成使用者指定的「異動前/異動後」狀態即可，不論基準快照原本是什麼。
  */
+/**
+ * 補登後把「補登後職務」套用到現況（user_department_position_map）：
+ *  - 只在「沒有生效日更晚的紀錄」且「生效日 ≤ 今天」時套用（補的是過去的中間紀錄就只留歷史，不動現況）；
+ *  - 現況已經相同就不動；
+ *  - 會讓既有代理設定／指定負責人失效的移除（ai-rules/14 P4，需人工確認）一律不自動套用，回傳說明請人事改走員工資料表單。
+ * @return array [bool 是否已套用, string 說明]
+ */
+function _backfillApplyToCurrent(PDO $db, int $userId, string $eff, array $after): array {
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    if ($eff > $today) return [false, '生效日在未來，尚未自動調整現況職務。'];
+    $st = $db->prepare("SELECT COUNT(*) FROM user_position_history WHERE user_id = ? AND effective_date > ?");
+    $st->execute([$userId, $eff]);
+    if ((int)$st->fetchColumn() > 0) return [false, '此人另有生效日更晚的異動紀錄，現況職務維持不變。'];
+    $cur = eg_position_snapshot_now($db, $userId);
+    if (!eg_position_snapshot_changed($cur, $after)) return [false, ''];
+
+    $key = function ($r) { return $r['department_id'] . ':' . $r['position_id']; };
+    $curSet = []; foreach ($cur as $r) $curSet[$key($r)] = $r;
+    $newSet = []; foreach ($after as $r) $newSet[$key($r)] = $r;
+    foreach (array_keys(array_diff_key($curSet, $newSet)) as $k) {
+        [$dep, $pos] = explode(':', $k);
+        $a = $db->prepare("SELECT COUNT(*) FROM user_delegate WHERE user_id = ? AND scope_department_id = ? AND scope_position_id = ? AND active = 1");
+        $a->execute([$userId, $dep, $pos]);
+        $b = $db->prepare("SELECT COUNT(*) FROM department_position WHERE primary_user_id = ? AND department_id = ? AND position_id = ?");
+        $b->execute([$userId, $dep, $pos]);
+        if ((int)$a->fetchColumn() > 0 || (int)$b->fetchColumn() > 0) {
+            return [false, '原職務有綁定代理設定或指定負責人，需人工確認，現況職務未自動調整，請到員工資料表單調整。'];
+        }
+    }
+    $db->prepare("DELETE FROM user_department_position_map WHERE user_id = ?")->execute([$userId]);
+    $ins = $db->prepare("INSERT INTO user_department_position_map (user_id, department_id, position_id, is_main) VALUES (?,?,?,?)");
+    foreach ($after as $r) $ins->execute([$userId, (int)$r['department_id'], (int)$r['position_id'], (int)$r['is_main']]);
+    return [true, ''];
+}
+
+/**
+ * 職務異動（含補登、刪補登、員工資料存檔）後，報工NG自動開立的品質異常單（結案與否都要）自動重算
+ * 開單人與責任單位部門／人員（唯一實作 qab_pm_resync_lib.php）。失敗不影響員工資料存檔。
+ * @return string 附在回應訊息後面的說明（沒有異動回空字串）
+ */
+function _qabResyncAfterPositionChange(PDO $db): string {
+    try {
+        require_once __DIR__ . '/../common/qab_pm_resync_lib.php';
+        $r = qab_pm_resync_orders($db, isset($_SESSION['id']) ? (int)$_SESSION['id'] : null);
+        return count($r['changes']) ? ('　已同步修正 ' . count($r['changes']) . ' 項品質異常單（開單人／責任部門）。') : '';
+    } catch (Throwable $e) { error_log('qab resync after position change: ' . $e->getMessage()); return ''; }
+}
+
 function backfillPositionHistory() {
     global $db;
     $id = (int)($_POST['id'] ?? 0);
@@ -980,8 +1029,14 @@ function backfillPositionHistory() {
         $hid = eg_position_history_write($db, $id, $changeType, $before, $after, $eff,
             $reason !== '' ? $reason : '人事補登', 'manual',
             isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '');
+        // 補登若是這個人「最新」的一筆（沒有生效日更晚的紀錄）且生效日已到，現況職務要自動跟著調，
+        // 不必人事再手改一次（手改會多寫一筆「今天生效」的紀錄，生效日就錯了）。
+        [$applied, $applyNote] = _backfillApplyToCurrent($db, $id, $eff, $after);
         $db->commit();
-        echo json_encode(['status' => 'success', 'message' => '已補登職務異動。', 'id' => $hid], JSON_UNESCAPED_UNICODE);
+        $resyncMsg = _qabResyncAfterPositionChange($db);
+        $msg = '已補登職務異動。' . ($applied ? '現況職務已自動調整為補登後的職務。' : ($applyNote !== '' ? $applyNote : ''))
+             . $resyncMsg;
+        echo json_encode(['status' => 'success', 'message' => $msg, 'id' => $hid, 'applied_to_current' => $applied], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         $db->rollBack();
         echo json_encode(['status' => 'error', 'message' => '補登失敗: ' . $e->getMessage()]);
@@ -1013,6 +1068,7 @@ function deletePositionHistory() {
                       isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '']);
         $db->prepare("DELETE FROM user_position_history WHERE id = ?")->execute([$hid]);
         $db->commit();
+        _qabResyncAfterPositionChange($db);
         echo json_encode(['status' => 'success', 'message' => '已刪除補登紀錄。'], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         $db->rollBack();
