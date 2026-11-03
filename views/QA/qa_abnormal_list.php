@@ -83,6 +83,13 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         table.lst thead th { background:var(--sand); color:var(--ink2); text-align:center; position:sticky; top:0; z-index:2; }
         table.lst td.c { text-align:center; }
         table.lst tbody tr:hover { background:#FFFDF8; }
+        .cat-tabs { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 0; border-bottom:2px solid var(--line); }
+        .cat-tab { border:1px solid var(--line); border-bottom:0; border-radius:6px 6px 0 0; background:var(--sand); color:var(--ink2);
+                   padding:5px 12px; font-size:13px; cursor:pointer; line-height:18px; }
+        .cat-tab .n { font-size:11px; margin-left:4px; opacity:.85; }
+        .cat-tab.on { background:#fff; color:var(--ink); font-weight:bold; position:relative; top:2px; border-bottom:2px solid #fff; }
+        .cat-tab.todo.on { background:var(--amber); color:#3b2a18; border-bottom-color:var(--amber); }
+        .st-cat { background:#EFD9BF; color:#7a4a1e; }
         .lst-wrap { max-height:64vh; overflow:auto; border:1px solid var(--line); border-radius:6px; }
         .st { border-radius:11px; padding:1px 9px; font-size:11.5px; display:inline-block; line-height:18px; white-space:nowrap; }
         .st-closed { background:#EFE3CF; color:var(--ink2); }
@@ -257,6 +264,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         </div>
 
         <div id="sumBox" class="note-box"></div>
+        <div id="catTabs" class="cat-tabs"></div>
         <div class="lst-wrap">
             <table class="lst">
                 <colgroup>
@@ -747,6 +755,7 @@ $(document).on('click', '#btnAsFilter', function(){
     $(this).toggleClass('btn-warm', AS_ONLY).toggleClass('btn-warm-o', !AS_ONLY);
     load();
 });
+var ROW_HTML = null, LIST_ROWS = [], CUR_TAB = 'todo';
 function load(){
     $('#lstBody').html('<tr><td colspan="11" class="c">載入中…</td></tr>');
     $.get(API, { action:'list', year:$('#fYear').val(), month:$('#fMonth').val(),
@@ -762,13 +771,13 @@ function load(){
         $('#sumBox').html(del
             ? ('已刪除 <b>' + rows.length + '</b> 張（資料仍留著，可還原）')
             : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
-        if (!rows.length) { $('#lstBody').html('<tr><td colspan="11" class="c">沒有符合條件的異常單</td></tr>'); return; }
         CATS = res.cats || CATS;
-        $('#lstBody').html(groupByCat(rows, function(r){
+        ROW_HTML = (function(r){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
                 + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + srcLabel(r.source_type) + '</span>'
+                    + ' <span class="st st-s st-cat" title="異常單類別">' + esc(catNameOf(r)) + '</span>'
                     + (Number(r.is_as) === 1 ? ' <span class="st st-s st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
                     + (Number(r.quick_mode) === 1 ? '<br><span class="st st-s st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
                     + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
@@ -793,9 +802,53 @@ function load(){
                        + '<a href="qa_abnormal_print.php?id=' + r.id + '&auto=1" target="_blank" class="btn btn-warm-o btn-xs" title="開啟列印預覽"><i class="fa fa-print"></i></a>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '" data-auto="' + Number(r.auto_opened) + '"><i class="fa fa-trash-o"></i></button>' : '')))
                 + '</td></tr>';
-        }));
+        });
+        LIST_ROWS = rows;
+        renderTabs();
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
 }
+/* 類別名稱（列上標示用）：沒有類別的舊單一律標「未指定類別」，不混進某一類 */
+function catNameOf(r){
+    var k = Number(r.cat_id) || 0;
+    if (!k) return '未指定類別';
+    var cr = (CATS || []).filter(function(c){ return Number(c.cat_id) === k; })[0];
+    return cr ? cr.name : (r.cat_name || ('類別 #' + k));
+}
+/* 頁內分頁：第一頁＝尚未處理（未結案、未拆分）的單，依類別分區並在每列標類別；
+   其餘每個類別一頁（依管理員設定的類別排序），沒有資料的類別不顯示；沒有類別的舊單排最後。
+   顯示已刪除時沒有「處理狀態」可言，第一頁改成「全部已刪除」。 */
+function renderTabs(){
+    var del = $('#fDeleted').prop('checked');
+    var todo = del ? LIST_ROWS : LIST_ROWS.filter(function(r){
+        var c = r.status && r.status.code; return !Number(r.is_closed) && c !== 'closed' && c !== 'split'; });
+    var order = (CATS || []).map(function(c){ return Number(c.cat_id); });
+    var by = {}, keys = [];
+    LIST_ROWS.forEach(function(r){ var k = Number(r.cat_id) || 0; if (!by[k]) { by[k] = []; keys.push(k); } by[k].push(r); });
+    keys.sort(function(a, b){
+        if (a === 0) return 1; if (b === 0) return -1;
+        var ia = order.indexOf(a), ib = order.indexOf(b); return (ia < 0 ? 9999 : ia) - (ib < 0 ? 9999 : ib);
+    });
+    var tabs = [{ id:'todo', label:(del ? '全部已刪除' : '尚未處理'), n:todo.length, cls:'todo' }];
+    keys.forEach(function(k){
+        tabs.push({ id:'c' + k, label:catNameOf(by[k][0]), n:by[k].length, cls:'' });
+    });
+    if (!tabs.some(function(t){ return t.id === CUR_TAB; })) CUR_TAB = 'todo';
+    $('#catTabs').html(tabs.map(function(t){
+        return '<div class="cat-tab ' + t.cls + (t.id === CUR_TAB ? ' on' : '') + '" data-tab="' + t.id + '">' + esc(t.label)
+             + '<span class="n">(' + t.n + ')</span></div>';
+    }).join(''));
+    var h;
+    if (CUR_TAB === 'todo') {
+        h = todo.length ? groupByCat(todo, ROW_HTML)
+                        : '<tr><td colspan="11" class="c">' + (LIST_ROWS.length ? '沒有尚未處理的異常單' : '沒有符合條件的異常單') + '</td></tr>';
+    } else {
+        var k = Number(CUR_TAB.substring(1));
+        h = (by[k] || []).map(ROW_HTML).join('');
+    }
+    $('#lstBody').html(h);
+    $('.lst-wrap').scrollTop(0);
+}
+$(document).on('click', '.cat-tab', function(){ CUR_TAB = String($(this).data('tab')); renderTabs(); });
 /* 依類別分區：每一區一條標題列（類別名稱＋張數＋未結案數＋單號後綴詞）。
    分區順序照管理員設定的排序，沒有類別的舊單一律排在最後獨立一區——
    **不要把它們混進某一類**，那會讓使用者以為它們已經分好類了。 */

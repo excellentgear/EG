@@ -1475,8 +1475,10 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, 
  * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
  * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
  */
-function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, ?string $qcNote = null, ?int $abnTotal = null): array
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, ?string $qcNote = null, ?int $abnTotal = null, ?string $fillDate = null): array
 {
+    // $fillDate：開單日期（業務日期）。不給＝照舊（qab_create_order 預設今天）；
+    // 「建議開立」補開時由呼叫端明確傳「補開當天」，不是檢驗日。
     qab_ensure_schema($db);
     if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
     if ($createdBy <= 0) throw new Exception('缺少開單人');
@@ -1576,6 +1578,7 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
         'auto_phenomenon_base' => $phenomenon,
         'cat_id' => $catId,
     ];
+    if ($fillDate !== null && $fillDate !== '') $data['fill_date'] = $fillDate;
     $created = qab_create_order($db, $data);
     $id = $created['id'];
 

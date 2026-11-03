@@ -157,6 +157,35 @@ case 'auto_open_from_qc': {
                 'vendor_pending' => (int)($r['vendor_pending'] ?? 0), 'quick' => (int)($r['quick'] ?? 0)]);
 }
 
+/* 線上檢驗「建議開立異常單」：NG 需要開單、卻沒有有效異常單連著的檢驗紀錄（例如異常單被刪除）。
+   規則全在 qab_qc_suggest_lib.php；補開日期＝補開當天（不是檢驗日）。 */
+case 'qc_suggest_list': {
+    if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');
+    require_once __DIR__ . '/../common/qab_qc_suggest_lib.php';
+    $days = (int)($_POST['days'] ?? 90);
+    $rows = qab_qc_suggest_list($db, $days > 0 ? $days : 90);
+    jout(true, ['rows' => $rows, 'days' => $days > 0 ? $days : 90, 'today' => (string)$db->query("SELECT CURDATE()")->fetchColumn()]);
+}
+case 'qc_suggest_open': {
+    if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');
+    require_once __DIR__ . '/../common/qab_qc_suggest_lib.php';
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ids'] ?? [])))));
+    if (!$ids) jerr('請先勾選要開立的檢驗紀錄');
+    if (count($ids) > 50) jerr('一次最多開立 50 筆');
+    // 只接受「目前真的符合建議條件」的檢驗單（直打 API 不能替任意檢驗單開單，鐵律8）
+    $allowed = [];
+    foreach (qab_qc_suggest_list($db, 730, 500) as $r) $allowed[(int)$r['qc_form_id']] = true;
+    $out = [];
+    foreach ($ids as $qid) {
+        if (empty($allowed[$qid])) { $out[] = ['qc_form_id' => $qid, 'ok' => false, 'message' => '這筆已不需要開立（已有連動的異常單或條件已改變）']; continue; }
+        $r = qab_qc_suggest_open($db, $qid, $uid);
+        $r['qc_form_id'] = $qid;
+        if (!empty($r['ok'])) $log((int)$r['id'], 'create', '', $r['no'] . '（線上檢驗NG建議開立，補開）');
+        $out[] = $r;
+    }
+    jout(true, ['results' => $out]);
+}
+
 /* 雙層快速決策：第一層／第二層裁決、轉呈決策、第二層把單轉回第一層（權限判定全在 qab_quick_view） */
 case 'quick_decide': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));

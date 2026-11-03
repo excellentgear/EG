@@ -47,8 +47,12 @@ $company = eg_company_full_name($db);
 $title   = qab_list_print_title($db);
 $ymLabel = $year . '.' . str_pad((string)$month, 2, '0', STR_PAD_LEFT);
 
-$totalInsp = 0; $totalNg = 0;
-foreach ($rows as $r) { $totalInsp += (int)($r['insp_qty'] ?? 0); $totalNg += (int)($r['ng_qty'] ?? 0); }
+// 已拆分成子單的原單：數量已分散在各子單，合計不重複計入（否則檢驗數／不良數會算兩次）
+$totalInsp = 0; $totalNg = 0; $nSplit = 0;
+foreach ($rows as $r) {
+    if (($r['status']['code'] ?? '') === 'split') { $nSplit++; continue; }
+    $totalInsp += (int)($r['insp_qty'] ?? 0); $totalNg += (int)($r['ng_qty'] ?? 0);
+}
 $overallRate = $totalInsp > 0 ? number_format($totalNg / $totalInsp * 100, 2) . '%' : '－';
 
 // 列印紀錄（ai-rules/23）——沿用既有來源代碼，doc_name 標明是哪個年月的彙總清單
@@ -138,7 +142,7 @@ table.f tfoot td { font-weight:bold; background:#FAFAFA; }
     <?php if ($rows): ?>
     <tfoot>
         <tr>
-            <td colspan="8">合計　總筆數 <?= count($rows) ?> 筆</td>
+            <td colspan="8">合計　總筆數 <?= count($rows) - $nSplit ?> 筆<?= $nSplit ? '（另有 ' . $nSplit . ' 張已拆分原單，數量已在子單，不重複計入）' : '' ?></td>
             <td><?= $totalInsp ?: '' ?></td>
             <td><?= $totalNg ?: '' ?></td>
             <td><?= h($overallRate) ?></td>

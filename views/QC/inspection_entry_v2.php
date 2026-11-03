@@ -1655,6 +1655,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
                         <button class="btn btn-default btn-sm" id="btn-print-multi" title="本張製令(BOM)所有製程合併列印，自動帶入圖面"><i class="fa fa-files-o"></i> 全製程合併列印</button>
                         <button class="btn btn-default btn-sm" id="btn-ship-gen" title="檢查這張 BOM 的製程檢驗關卡是否齊全，齊全後可自動挑選各製程檢驗數據生成出貨檢驗"><i class="fa fa-truck"></i> 出貨檢驗</button>
+                        <button class="btn btn-coral btn-sm" id="btn-qc-suggest" style="display:none;" title="檢驗判定 NG 需要開異常單、卻沒有連動的異常單（例如異常單被刪除）時，可勾選後補開"><i class="fa fa-exclamation-triangle"></i> 建議開立異常單 <span class="badge" id="qc-suggest-n" style="background:#fff;color:#DD5138;">0</span></button>
                         <div class="btn-group" id="settings-btn-group">
                             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
                             <ul class="dropdown-menu dropdown-menu-right">
@@ -2330,6 +2331,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
 <!-- NG 後詢問是否開立異常單 Modal（開立異常單 或 稍後再決定；2026-10-06 依使用者要求隱藏「不開立」選項，
      不再提供填原因不開立的路徑——舊紀錄中既有的 ncr_decision=SKIP 仍照常顯示，只是不能再新產生） -->
+<!-- 建議開立異常單：NG 需要開單、卻沒有連動異常單的檢驗紀錄（異常單被刪除等），勾選後補開 -->
+<div class="modal fade" id="qcSuggestModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:860px;max-width:96%;" role="document">
+        <div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-exclamation-triangle" style="color:#DD5138;"></i> 建議開立品質異常單</h4></div>
+            <div class="modal-body">
+                <div class="muted-help" style="margin-bottom:8px;">下列檢驗紀錄判定為<b>不良(NG)</b>，但目前<b>沒有連動的異常單</b>（可能是異常單被刪除）。勾選後按「開立」會自動建立異常單草稿——
+                    <b>開單日期是開立當天（<span id="qcSuggestToday"></span>），不是檢驗日</b>；異常單類別、決策者依既有自動開單規則判定。<br>
+                    近 <select id="qcSuggestDays" style="width:auto;display:inline-block;" class="form-control input-sm"><option value="30">30</option><option value="90" selected>90</option><option value="180">180</option><option value="365">365</option></select> 天內的檢驗紀錄。</div>
+                <div id="qcSuggestBody" style="max-height:52vh;overflow:auto;"></div>
+                <div id="qcSuggestMsg" style="margin-top:8px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                <button type="button" class="btn btn-coral" id="btn-qc-suggest-go" disabled><i class="fa fa-file-text-o"></i> 開立勾選的異常單</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="modal fade" id="ngAskModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header" style="background:#d9534f;color:#fff;border-radius:6px 6px 0 0;">
@@ -7563,6 +7585,61 @@ $(function(){
     $('#qamModal').on('hidden.bs.modal', function(){
         if(ngCtx && !ngCtx.decided) setTimeout(function(){ $('#ngAskModal').modal('show'); }, 300);
     });
+
+    // ---------------------------------------------------------------
+    // 建議開立異常單（2026-11-03）：NG 需要開單、卻沒有連動異常單（例如異常單被刪除）的檢驗紀錄，
+    // 勾選後補開。判定與開單全在後端（qab_qc_suggest_lib.php）；開單日期＝補開當天，不是檢驗日。
+    // ---------------------------------------------------------------
+    var QAB_API = '../../src/store/QaAbnormal_API.php', qcSuggestRows = [];
+    function qcSuggestLoad(showErr, cb){
+        var days = parseInt($('#qcSuggestDays').val(),10) || 90;
+        $.post(QAB_API, { action:'qc_suggest_list', csrf:QAB_CSRF, days:days }, function(res){
+            if(!res || !res.success){ if(showErr) $('#qcSuggestBody').html('<div class="text-danger">'+esc((res&&res.message)||'載入失敗')+'</div>'); return; }
+            qcSuggestRows = res.rows || [];
+            $('#qc-suggest-n').text(qcSuggestRows.length);
+            $('#btn-qc-suggest').toggle(qcSuggestRows.length > 0 || $('#qcSuggestModal').hasClass('in'));
+            $('#qcSuggestToday').text(dotDT(res.today,10));
+            if(cb) cb();
+        }, 'json').fail(function(){ if(showErr) $('#qcSuggestBody').html('<div class="text-danger">連線失敗</div>'); });
+    }
+    function qcSuggestRender(){
+        if(!qcSuggestRows.length){ $('#qcSuggestBody').html('<div class="muted-help" style="padding:12px;">目前沒有需要補開的檢驗紀錄。</div>'); $('#btn-qc-suggest-go').prop('disabled',true); return; }
+        var h='<table class="table table-condensed table-bordered" style="background:#fff;"><thead><tr><th width="30"><input type="checkbox" id="qcSuggestAll"></th><th>檢驗單號</th><th>檢驗日</th><th>製令</th><th>料號</th><th>製程</th><th>不良/送驗</th><th>檢驗人員</th></tr></thead><tbody>';
+        h += qcSuggestRows.map(function(r){
+            return '<tr><td><input type="checkbox" class="qcs-chk" data-id="'+r.qc_form_id+'"></td><td>'+esc(r.insp_no||('#'+r.qc_form_id))
+              +(r.face_code?'<br><small class="muted-help">首件 第'+esc(r.piece_no||'?')+'顆・'+esc(r.face_code)+'面</small>':'')+'</td><td>'+esc(dotDT(r.check_date,10))
+              +'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.part_no||'')+'</td><td>'+esc(r.process_name||'')
+              +'</td><td>'+(r.ng_qty||0)+' / '+(r.incoming_qty||0)+'</td><td>'+esc(r.inspector||'')+'</td></tr>';
+        }).join('') + '</tbody></table>';
+        $('#qcSuggestBody').html(h);
+        $('#btn-qc-suggest-go').prop('disabled',true);
+    }
+    $(document).on('change','#qcSuggestAll', function(){ $('.qcs-chk').prop('checked', this.checked).first().trigger('change'); });
+    $(document).on('change','.qcs-chk', function(){ $('#btn-qc-suggest-go').prop('disabled', !$('.qcs-chk:checked').length); });
+    $(document).on('click','#btn-qc-suggest', function(){
+        $('#qcSuggestMsg').empty(); $('#qcSuggestBody').html('<div class="muted-help">載入中…</div>');
+        $('#qcSuggestModal').modal('show');
+        qcSuggestLoad(true, qcSuggestRender);
+    });
+    $(document).on('change','#qcSuggestDays', function(){ qcSuggestLoad(true, qcSuggestRender); });
+    $(document).on('click','#btn-qc-suggest-go', function(){
+        var ids=$('.qcs-chk:checked').map(function(){ return $(this).data('id'); }).get();
+        if(!ids.length) return;
+        if(!confirm('將為勾選的 '+ids.length+' 筆檢驗紀錄自動開立異常單（開單日期為今天）。確定開立？')) return;
+        var $b=$(this).prop('disabled',true);
+        $.post(QAB_API, { action:'qc_suggest_open', csrf:QAB_CSRF, ids:ids }, function(res){
+            if(!res || !res.success){ $b.prop('disabled',false); alert((res&&res.message)||'開立失敗'); return; }
+            var okN=0, msg=[];
+            (res.results||[]).forEach(function(r){
+                if(r.ok){ okN++; msg.push('<div><i class="fa fa-check text-success"></i> 檢驗單 #'+r.qc_form_id+' → <a href="../QA/qa_abnormal_form.php?id='+r.id+'" target="_blank">'+esc(r.no)+'</a>'+(r.existed?'（已有連動的單）':'')+'</div>'); }
+                else msg.push('<div class="text-danger"><i class="fa fa-times"></i> 檢驗單 #'+r.qc_form_id+'：'+esc(r.message||'失敗')+'</div>');
+            });
+            $('#qcSuggestMsg').html('<div class="alert alert-info" style="margin:0;"><b>已開立 '+okN+' / '+ids.length+' 筆</b>（草稿，請到異常單接著填寫）'+msg.join('')+'</div>');
+            qcSuggestLoad(true, qcSuggestRender);
+        }, 'json').fail(function(x){ $b.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
+    });
+    // 載入後背景查一次有幾筆待補開（沒有開單權限者 API 回 403＝按鈕維持隱藏）
+    setTimeout(function(){ if(!state.viewOnly) qcSuggestLoad(false); }, 1800);
 
     // =====================================================================
     // 列印 / 匯出 CSV（版面沿用舊頁 2-QA-01-06，交瀏覽器原生分頁）
