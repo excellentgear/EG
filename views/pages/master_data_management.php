@@ -2378,6 +2378,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     $where .= " AND EXISTS (SELECT 1 FROM item_label_map ilm{$fi}"
                                             . "  JOIN item_sub_label_map islm{$fi} ON islm{$fi}.parent_map_id=ilm{$fi}.map_id"
                                             . "  WHERE ilm{$fi}.d_id=d.d_id AND ilm{$fi}.label_id=:{$op_key}lid AND islm{$fi}.sub_id=:{$op_key}sid"
+            // 壓力角範圍（Pressure_Angle 是文字欄；沒填視為預設 20°，與列表顯示的「PA20」一致）
+            $fgear_pa_min = trim($_POST['filter_gear_pa_min'] ?? '');
+            $fgear_pa_max = trim($_POST['filter_gear_pa_max'] ?? '');
+            if (is_numeric($fgear_pa_min) || is_numeric($fgear_pa_max)) {
+                $paExpr = "CAST(COALESCE(NULLIF(TRIM(TRAILING '°' FROM TRIM(COALESCE(gpr.Pressure_Angle,''))),''),'20') AS DECIMAL(10,3))";
+                $pa_cond = '';
+                if (is_numeric($fgear_pa_min)) { $pa_cond .= " AND $paExpr >= :fgpamin"; $params[':fgpamin'] = $fgear_pa_min; }
+                if (is_numeric($fgear_pa_max)) { $pa_cond .= " AND $paExpr <= :fgpamax"; $params[':fgpamax'] = $fgear_pa_max; }
+                $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gpr WHERE gpr.d_setting_id=d.d_id $pa_cond)";
+            }
                                             . "  AND islm{$fi}.value_min <= :{$op_key}max)";
                                     $params[":{$op_key}max"] = $vmax;
                                 } else {
@@ -9346,8 +9356,11 @@ body { background:#F6F1EA; }
                     <span style="font-size:11px;color:#888;margin-left:2px;">°</span>
                     <span style="margin:0 6px;color:#ddd;align-self:center;">│</span>
                     <span class="filter-group-label">壓力角</span>
-                    <span class="fc fc-sub active" data-gpa="" onclick="setGearSpecFilter('pressureAngle','',this)">全部</span>
-                    <span id="fg-pa-chips" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
+                    <input type="number" id="fg-pa-min" class="form-control input-sm no-spin-input" placeholder="最小" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
+                    <span style="color:#888;margin:0 2px;">~</span>
+                    <input type="number" id="fg-pa-max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px;" oninput="onGearRangeInput()">
+                    <span style="font-size:11px;color:#888;margin-left:2px;" title="未填壓力角的齒輪，依系統預設視為 20°">°</span>
+                    <span id="fg-pa-chips" style="display:none;"></span>
                 </div>
                 <!-- 齒數/齒寬/齒部外徑範圍篩選（類型=G時出現） -->
                 <div class="filter-sub-row" id="parts-gear-range-filter" style="flex-wrap:wrap;gap:4px;align-items:center;">
@@ -13031,7 +13044,7 @@ function deleteGearRow(gearId, dSettingDbId) {
 // ═══════════════════════════════════════════════════
 // ── Filter state ──────────────────────────────────────────
 var _toolFilterInit = function(){ return { kind:'', module:'', type:'', material:'', coating:'', pa:'', boreMin:'', boreMax:'' }; };
-var _partsFilter  = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
+var _partsFilter  = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null, gearPaMin:null, gearPaMax:null };
 var _custFilter   = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null };
 var _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[], status:'' };
 
@@ -13242,7 +13255,7 @@ function setPartFilter(dim, val, el) {
             _partsFilter.gearPressureAngles = []; _partsFilter.gearTeethMin = null;
             _partsFilter.gearTeethMax = null; _partsFilter.gearFwMin = null; _partsFilter.gearFwMax = null;
             _partsFilter.gearDaMin = null; _partsFilter.gearDaMax = null;
-            ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+            ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-pa-min','fg-pa-max','fg-da-min','fg-da-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
         }
 
         var selEl = _partsFilter.types.length === 1
@@ -13539,6 +13552,9 @@ function selectPartsCust(cid, cname) {
     if (chips) {
         var chip = document.createElement('span');
         chip.className = 'part-cust-chip';
+        var paMin=document.getElementById('fg-pa-min'), paMax=document.getElementById('fg-pa-max');
+        _partsFilter.gearPaMin    = (paMin&&paMin.value!=='') ? parseFloat(paMin.value) : null;
+        _partsFilter.gearPaMax    = (paMax&&paMax.value!=='') ? parseFloat(paMax.value) : null;
         chip.dataset.cid = cid;
         chip.innerHTML = escHtml(cid) + ' ' + escHtml(cname)
             + ' <span class="rm" onclick="removePartsCust(\''+escHtml(cid)+'\',this)">×</span>';
@@ -13604,8 +13620,8 @@ document.addEventListener('DOMContentLoaded', function() {
 function clearPartsFilter() {
     if (window.EGPartShape) EGPartShape.filter.reset();
     _attProcFilter = []; var _apEl = document.getElementById('parts-attproc-box'); if (_apEl && window.EGProcPick) EGProcPick.set(_apEl, []);
-    _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
-    ['fg-mod-min','fg-mod-max','fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null, gearPaMin:null, gearPaMax:null };
+    ['fg-mod-min','fg-mod-max','fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max','fg-pa-min','fg-pa-max','fg-da-min','fg-da-max','fw-wl-min','fw-wl-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
         var isDefault = c.dataset.shipsort === '';
         c.classList.toggle('active', isDefault);
@@ -13755,6 +13771,7 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault(); e.stopPropagation();
         return;
     }
+        || _partsFilter.gearPaMin !== null || _partsFilter.gearPaMax !== null
     if (key === 'ArrowDown' || key === 'ArrowUp') {
         if (_acMove(dd, key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); e.stopPropagation(); }
         return;
@@ -15047,11 +15064,14 @@ function renderPartsTable(rows, total, pg, pages) {
                     var subNames = parts[7]||'';
                     var isRng    = (parts[8]==='1');
                     var vmin     = parts[9]||'';
+          filter_gear_pa_min:      _partsFilter.gearPaMin !== null ? _partsFilter.gearPaMin : '',
+          filter_gear_pa_max:      _partsFilter.gearPaMax !== null ? _partsFilter.gearPaMax : '',
                     var vmax     = parts[10]||'';
                     var hasTolF  = (parts[11]==='1');
                     var tolU     = parts[12]||'';
                     var tolL     = parts[13]||'';
                     var isCalcF  = (parts[14]==='1');
+          filter_shape_tp:         window.EGPartShape ? EGPartShape.filter.params().filter_shape_tp : '',
                     var calcVal  = parts[17]||'';
                     var calcVMin = parts[18]||'';
                     var calcVMax = parts[19]||'';

@@ -490,14 +490,37 @@
         '<span style="color:#888;margin:0 2px;">~</span>' +
         '<input type="number" step="any" data-sb="max" class="form-control input-sm no-spin-input" placeholder="最大" style="width:64px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
         '<span style="font-size:11px;color:#888;margin-left:3px;">mm（多階層：任一階落在範圍內即符合）</span>';
+      // 錐度數值篩選（錐孔／外錐各一列）：錐度 1:N、半錐角、大徑、小徑，皆為範圍；系統自動算出的值也能篩
+      var rg = function (g, k, lab, unit, tip) {
+        return '<span class="filter-group-label" style="margin-left:8px" title="' + esc(tip || '') + '">' + lab + '</span>' +
+          '<input type="number" step="any" data-tp="' + g + '.' + k + '.0" class="form-control input-sm no-spin-input" data-eg-hint="最小" style="width:60px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
+          '<span style="color:#888;margin:0 2px;">~</span>' +
+          '<input type="number" step="any" data-tp="' + g + '.' + k + '.1" class="form-control input-sm no-spin-input" data-eg-hint="最大" style="width:60px;display:inline-block;height:24px;padding:2px 6px;font-size:12px">' +
+          (unit ? '<span style="font-size:11px;color:#888;margin-left:2px;">' + unit + '</span>' : '');
+      };
+      [['b', '錐孔'], ['o', '外錐']].forEach(function (g) {
+        h += '<br><span class="filter-group-label" style="font-weight:bold">' + g[1] + '</span>' +
+          rg(g[0], 'n', '錐度 1：', '', '例：填 10~10 即篩出 1:10 的錐度（含系統由小徑＋錐長自動算出的）') +
+          rg(g[0], 'h', '半錐角', '°', '含系統自動算出的半錐角') + rg(g[0], 'd', '大徑', 'mm') + rg(g[0], 's', '小徑', 'mm');
+      });
       this.el.innerHTML = h;
+    },
+    _tp: function () {
+      var o = {}, any = false;
+      if (!this.el) return '';
+      this.el.querySelectorAll('input[data-tp]').forEach(function (inp) {
+        var v = inp.value.trim(); if (v === '') return;
+        var p = inp.getAttribute('data-tp').split('.');
+        o[p[0]] = o[p[0]] || {}; o[p[0]][p[1]] = o[p[0]][p[1]] || [null, null]; o[p[0]][p[1]][parseInt(p[2], 10)] = v; any = true;
+      });
+      return any ? JSON.stringify(o) : '';
     },
     _v: function (k) { var i = this.el && this.el.querySelector('input[data-sb="' + k + '"]'); return i ? i.value.trim() : ''; },
     _h: function (k) { var i = this.el && this.el.querySelector('input[data-sh="' + k + '"]'); return i ? i.value.trim() : ''; },
     params: function () {
-      return { filter_shape_outer: this.outer.join(','), filter_shape_bore: this.bore.join(','), filter_shape_bore_min: this._v('min'), filter_shape_bore_max: this._v('max'), filter_shape_hub_min: this._h('min'), filter_shape_hub_max: this._h('max') };
+      return { filter_shape_outer: this.outer.join(','), filter_shape_bore: this.bore.join(','), filter_shape_bore_min: this._v('min'), filter_shape_bore_max: this._v('max'), filter_shape_hub_min: this._h('min'), filter_shape_hub_max: this._h('max'), filter_shape_tp: this._tp() };
     },
-    active: function () { return !!(this.outer.length || this.bore.length || this._v('min') !== '' || this._v('max') !== '' || this._h('min') !== '' || this._h('max') !== ''); },
+    active: function () { return !!(this.outer.length || this.bore.length || this._v('min') !== '' || this._v('max') !== '' || this._h('min') !== '' || this._h('max') !== '' || this._tp() !== ''); },
     reset: function () { this.outer = []; this.bore = []; if (this.el) this.render(); }
   };
 

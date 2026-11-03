@@ -98,6 +98,27 @@ function eg_shape_num($v) {
  * 另記小徑 d2 或錐度 r（1:r 的 r），至少填一個。沒標錐孔＝直孔，與舊資料完全相同。
  * @return array [ 額外欄位陣列, 錯誤訊息|null ]
  */
+/**
+ * 由已知的大徑 d／小徑 d2／錐長 tl／錐度 1:r／半錐角 ha 算出「有效」大小徑、錐度 1:N、半錐角，供清單篩選用。
+ * 優先序：錐度 r → 半錐角 ha → 大小徑＋錐長。算不出錐度時只回大小徑。
+ * 回傳鍵：cd 大徑、cs 小徑、cn 錐度 1:N 的 N、ch 半錐角(度)。這些是每次存檔重新算的派生值，前端不送也不讀。
+ */
+function eg_shape_taper_derive($d, $d2, $tl, $r, $ha): array {
+    $C = null;
+    if ($r) $C = 1 / $r;
+    elseif ($ha && $ha < 90) $C = 2 * tan(deg2rad($ha));
+    elseif ($d && $d2 && $tl && $d > $d2) $C = ($d - $d2) / $tl;
+    if ($C !== null && $C > 0) {
+        if (!$d && $d2 && $tl) $d = $d2 + $tl * $C;
+        if (!$d2 && $d && $tl && $d - $tl * $C > 0) $d2 = $d - $tl * $C;
+    } else { $C = null; }
+    $out = [];
+    if ($d)  $out['cd'] = round((float)$d, 3);
+    if ($d2) $out['cs'] = round((float)$d2, 3);
+    if ($C !== null) { $out['cn'] = round(1 / $C, 3); $out['ch'] = round(rad2deg(atan($C / 2)), 3); }
+    return $out;
+}
+
 function eg_shape_taper_part($raw, $d, string $lab): array {
     if (!is_array($raw) || empty($raw['tp'])) return [[], null];
     $d2 = eg_shape_num($raw['d2'] ?? '');
@@ -116,6 +137,7 @@ function eg_shape_taper_part($raw, $d, string $lab): array {
     if ($r !== null)  $x['r']  = $r;
     if ($tl !== null) $x['tl'] = $tl;
     if ($ha !== null) $x['ha'] = $ha;
+    $x += eg_shape_taper_derive($d, $d2, $tl, $r, $ha);
     return [$x, null];
 }
 
@@ -299,7 +321,7 @@ function eg_shape_summary_map(PDO $pdo, array $dIds): array {
             $tail = [];
             foreach (($ex['otp'] ?? []) as $o) {
                 $tail[] = '外錐Ø' . $nf($o['d']) . (isset($o['d2']) ? '→Ø' . $nf($o['d2']) : '')
-                        . (isset($o['ha']) ? ' 半錐' . $nf($o['ha']) . '°' : (isset($o['r']) ? ' 1:' . $nf($o['r']) : ''));
+                        . (isset($o['ch']) ? ' 半錐' . $nf($o['ch']) . '°' : (isset($o['ha']) ? ' 半錐' . $nf($o['ha']) . '°' : (isset($o['r']) ? ' 1:' . $nf($o['r']) : '')));
             }
             foreach (($ex['seg'] ?? []) as $g) {
                 $tail[] = '段Ø' . $nf($g['d']) . (isset($g['l']) ? '×' . $nf($g['l']) : '') . (!empty($g['n']) ? '(' . $g['n'] . ')' : '');
@@ -356,6 +378,33 @@ function eg_shape_filter_sql(array $post, string $alias = 'd'): array {
             $conds[] = "NOT EXISTS (SELECT 1 FROM d_setting_shape s_{$pre}o WHERE s_{$pre}o.d_id={$alias}.d_id AND s_{$pre}o.$col IS NOT NULL)";
         }
         $sql .= ' AND (' . implode(' OR ', $conds) . ')';
+    }
+    // 錐度數值範圍：{"b":{"n":[最小,最大],"h":[..],"d":[..],"s":[..]},"o":{...}}（b＝錐孔、o＝外錐；n 錐度 1:N、h 半錐角、d 大徑、s 小徑）
+    // 同一料號任一個錐孔（外錐）同時符合所填的全部範圍即命中
+    $tpj = json_decode((string)($_POST['filter_shape_tp'] ?? ''), true);
+    if (is_array($tpj)) {
+        $col = ['n' => 'jt.cn', 'h' => 'jt.ch', 'd' => 'COALESCE(jt.cd, jt.d)', 's' => 'jt.cs'];
+        $ti = 0;
+        foreach (['b', 'o'] as $g) {
+            if (empty($tpj[$g]) || !is_array($tpj[$g])) continue;
+            $cc = [];
+            foreach ($col as $k => $expr) {
+                $rg = $tpj[$g][$k] ?? null;
+                if (!is_array($rg)) continue;
+                foreach ([0 => '>=', 1 => '<='] as $ix => $op) {
+                    if (isset($rg[$ix]) && is_numeric($rg[$ix])) { $p = ':fstp' . ($ti++); $cc[] = "$expr $op $p"; $prm[$p] = $rg[$ix]; }
+                }
+            }
+            if (!$cc) continue;
+            $src = $g === 'b' ? 'bore_json' : 'outer_json';
+            $path = $g === 'b' ? '$[*]' : '$.otp[*]';
+            $tpc = $g === 'b' ? ' AND jt.tp = 1' : '';
+            $sql .= " AND EXISTS (SELECT 1 FROM d_setting_shape s_tp$g, JSON_TABLE(s_tp$g.$src, '$path' COLUMNS("
+                  . "tp INT PATH '\$.tp' DEFAULT '0' ON EMPTY, d DECIMAL(10,3) PATH '\$.d' NULL ON EMPTY NULL ON ERROR, "
+                  . "cd DECIMAL(10,3) PATH '\$.cd' NULL ON EMPTY NULL ON ERROR, cs DECIMAL(10,3) PATH '\$.cs' NULL ON EMPTY NULL ON ERROR, "
+                  . "cn DECIMAL(10,3) PATH '\$.cn' NULL ON EMPTY NULL ON ERROR, ch DECIMAL(10,3) PATH '\$.ch' NULL ON EMPTY NULL ON ERROR)) jt "
+                  . "WHERE s_tp$g.d_id={$alias}.d_id$tpc AND " . implode(' AND ', $cc) . ")";
+        }
     }
     $hmn = trim((string)($_POST['filter_shape_hub_min'] ?? ''));
     $hmx = trim((string)($_POST['filter_shape_hub_max'] ?? ''));
