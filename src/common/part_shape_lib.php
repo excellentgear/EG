@@ -49,6 +49,10 @@ function eg_shape_ensure_table(PDO $pdo): void {
             if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'hub_dia'")->fetchColumn()) {
                 $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN hub_dia DECIMAL(10,3) NULL COMMENT '最大凸出外徑（單邊/雙邊凸出才填）' AFTER outer_shape");
             }
+            // 補欄：外錐／重點外徑段（2026-11-03，JSON）
+            if (!$pdo->inTransaction() && !$pdo->query("SHOW COLUMNS FROM d_setting_shape LIKE 'outer_json'")->fetchColumn()) {
+                $pdo->exec("ALTER TABLE d_setting_shape ADD COLUMN outer_json TEXT NULL COMMENT '{otp:[外錐],seg:[重點外徑段]}' AFTER hub_dia");
+            }
             return;
         }
         // DDL 會造成隱式 commit：交易中不可建表（建表放在頁面載入的 migration 區，這裡只是保險）
@@ -113,6 +117,43 @@ function eg_shape_taper_part($raw, $d, string $lab): array {
     if ($tl !== null) $x['tl'] = $tl;
     if ($ha !== null) $x['ha'] = $ha;
     return [$x, null];
+}
+
+/**
+ * 外錐（可多筆）與重點外徑段（可多筆，軸件只記想記的幾段）。兩者皆選填；沒送這兩個欄位＝舊呼叫端，不動原值。
+ * @return array [ 已送欄位?, json字串|null, 錯誤|null ]
+ */
+function eg_shape_outer_extra($in): array {
+    if (!array_key_exists('otp', $in) && !array_key_exists('seg', $in)) return [false, null, null];
+    $otp = []; $seg = [];
+    $rawO = is_array($in['otp'] ?? null) ? array_values($in['otp']) : [];
+    if (count($rawO) > 6) return [true, null, '外錐最多 6 筆'];
+    foreach ($rawO as $i => $o) {
+        if (!is_array($o)) continue;
+        $any = false; foreach (['d', 'd2', 'tl', 'r', 'ha'] as $k) if (trim((string)($o[$k] ?? '')) !== '') $any = true;
+        if (!$any) continue;
+        $lab = '第 ' . ($i + 1) . ' 個外錐';
+        $d = eg_shape_num($o['d'] ?? '');
+        if ($d === false || $d === null) return [true, null, $lab . '請填大徑（大於 0 的數字）'];
+        [$tx, $te] = eg_shape_taper_part(['tp' => 1] + $o, $d, $lab);
+        if ($te) return [true, null, $te];
+        $otp[] = ['d' => $d] + $tx;
+    }
+    $rawS = is_array($in['seg'] ?? null) ? array_values($in['seg']) : [];
+    if (count($rawS) > 12) return [true, null, '重點外徑段最多 12 筆'];
+    foreach ($rawS as $i => $s) {
+        if (!is_array($s)) continue;
+        $nm = mb_substr(trim((string)($s['n'] ?? '')), 0, 30);
+        if (trim((string)($s['d'] ?? '')) === '' && trim((string)($s['l'] ?? '')) === '' && $nm === '') continue;
+        $lab = '第 ' . ($i + 1) . ' 段外徑';
+        $d = eg_shape_num($s['d'] ?? ''); $l = eg_shape_num($s['l'] ?? '');
+        if ($d === false || $d === null) return [true, null, $lab . '請填外徑（大於 0 的數字）'];
+        if ($l === false) return [true, null, $lab . '長度必須是大於 0 的數字'];
+        $x = ['d' => $d]; if ($l !== null) $x['l'] = $l; if ($nm !== '') $x['n'] = $nm;
+        $seg[] = $x;
+    }
+    $j = ($otp || $seg) ? json_encode(['otp' => $otp, 'seg' => $seg], JSON_UNESCAPED_UNICODE) : null;
+    return [true, $j, null];
 }
 
 function eg_shape_normalize($in): array {
@@ -189,8 +230,11 @@ function eg_shape_normalize($in): array {
             $min = $min === null ? $r['d'] : min($min, $r['d']);
         }
     }
-    if ($outer === '' && $btype === null) return [null, null];
-    return [[
+    [$exSent, $exJson, $exErr] = eg_shape_outer_extra($in);
+    if ($exErr) return [null, $exErr];
+    if ($outer === '' && $btype === null && $exJson === null) return [null, null];
+    $extra = $exSent ? ['outer_json' => $exJson] : [];
+    return [$extra + [
         'outer_shape' => $outer !== '' ? $outer : null,
         'hub_dia'     => $hub,
         'bore_type'   => $btype,
@@ -206,22 +250,27 @@ function eg_shape_save(PDO $pdo, int $dId, ?array $row, string $by = ''): void {
         $pdo->prepare("DELETE FROM d_setting_shape WHERE d_id=?")->execute([$dId]);
         return;
     }
-    $pdo->prepare("INSERT INTO d_setting_shape (d_id,outer_shape,hub_dia,bore_type,bore_steps,bore_json,bore_max,bore_min,modified_by,modified_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,NOW())
-                   ON DUPLICATE KEY UPDATE outer_shape=VALUES(outer_shape),hub_dia=VALUES(hub_dia),bore_type=VALUES(bore_type),bore_steps=VALUES(bore_steps),
+    // outer_json 只有前端有送才寫（舊分頁沒送＝不動，免得把外錐／外徑段洗掉）
+    $hasEx = array_key_exists('outer_json', $row);
+    $pdo->prepare("INSERT INTO d_setting_shape (d_id,outer_shape,hub_dia," . ($hasEx ? "outer_json," : "") . "bore_type,bore_steps,bore_json,bore_max,bore_min,modified_by,modified_at)
+                   VALUES (?,?,?," . ($hasEx ? "?," : "") . "?,?,?,?,?,?,NOW())
+                   ON DUPLICATE KEY UPDATE outer_shape=VALUES(outer_shape),hub_dia=VALUES(hub_dia)," . ($hasEx ? "outer_json=VALUES(outer_json)," : "") . "bore_type=VALUES(bore_type),bore_steps=VALUES(bore_steps),
                    bore_json=VALUES(bore_json),bore_max=VALUES(bore_max),bore_min=VALUES(bore_min),modified_by=VALUES(modified_by),modified_at=NOW()")
-        ->execute([$dId, $row['outer_shape'], $row['hub_dia'], $row['bore_type'], $row['bore_steps'], $row['bore_json'], $row['bore_max'], $row['bore_min'], $by !== '' ? $by : null]);
+        ->execute(array_merge([$dId, $row['outer_shape'], $row['hub_dia']], $hasEx ? [$row['outer_json']] : [], [$row['bore_type'], $row['bore_steps'], $row['bore_json'], $row['bore_max'], $row['bore_min'], $by !== '' ? $by : null]));
 }
 
 /** 讀單一料號（給編輯畫面）。沒有資料回 null。 */
 function eg_shape_get(PDO $pdo, int $dId): ?array {
     try {
-        $st = $pdo->prepare("SELECT outer_shape,hub_dia,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
+        $st = $pdo->prepare("SELECT outer_shape,hub_dia,outer_json,bore_type,bore_steps,bore_json FROM d_setting_shape WHERE d_id=?");
         $st->execute([$dId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         $r['bore'] = $r['bore_json'] ? (json_decode($r['bore_json'], true) ?: []) : [];
-        unset($r['bore_json']);
+        $ex = $r['outer_json'] ? (json_decode($r['outer_json'], true) ?: []) : [];
+        $r['otp'] = $ex['otp'] ?? [];
+        $r['seg'] = $ex['seg'] ?? [];
+        unset($r['bore_json'], $r['outer_json']);
         return $r;
     } catch (Throwable $e) { return null; }
 }
