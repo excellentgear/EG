@@ -6456,6 +6456,9 @@ echo "</script>\n";
 
             // --- QC 檢驗備註顯示 ---
             combinedRemarks.sort((a, b) => b.date - a.date);
+            var _qcLines = 0;   // QC備註佔了幾列（決策標籤的列數預算要扣掉）
+            // NG/OK/報廢等標籤按鈕統一高度＝「容器設定」小按鈕（btn-xs 22px）
+            var QT_BTN = 'display:inline-block;box-sizing:border-box;height:22px;line-height:20px;padding:0 7px;border-radius:3px;font-size:11px;font-weight:bold;vertical-align:middle;';
             if (combinedRemarks.length > 0) {
                 const currentMaxBomSn = Math.max(...String(row.bom_sn||'0').split(',').map(s=>parseInt(s.trim())||0));
                 // ── 規則：所有 NG 永遠顯示；OK 只顯示最近兩關（bom_sn >= currentMaxBomSn - 1）
@@ -6472,14 +6475,15 @@ echo "</script>\n";
                     const sep = document.createElement('hr');
                     sep.style.cssText = 'border:none; border-top:1px dashed #ddd; margin:3px 0;';
                     qcC.appendChild(sep);
+                    _qcLines = visibleRemarks.length + (okHiddenList.length > 0 ? 1 : 0);
                     visibleRemarks.forEach(remark => {
                         const rd = document.createElement('div');
                         rd.style.cssText = 'margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
                         // ── 按鈕樣式徽章（暖色系）──
                         const isNG = remark.qc_check_type === 'NG';
                         const badge = isNG
-                            ? `<span style="display:inline-block;background:#c0392b;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:bold;letter-spacing:0.5px;">NG</span>`
-                            : `<span style="display:inline-block;background:#27ae60;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:bold;letter-spacing:0.5px;">OK</span>`;
+                            ? `<span style="${QT_BTN}background:#c0392b;color:#fff;">NG</span>`
+                            : `<span style="${QT_BTN}background:#27ae60;color:#fff;">OK</span>`;
                         rd.innerHTML = `${badge} <span style="color:#999;">${remark.formatted_date}</span> ${escapeHtml(remark.ProcessName||'')} x${remark.qty}：${escapeHtml(remark.text).replace(/\n/g,' ')}`;
                         qcC.appendChild(rd);
                     });
@@ -6511,7 +6515,12 @@ echo "</script>\n";
                     var _qtBox = document.createElement('div');
                     _qtBox.className = 'qab-tags';
                     _qtBox.style.cssText = 'margin-top:4px;font-size:11px;line-height:1.5;';
-                    var QT_FOLD = 3;   // 超過這個數量就收合成「還有 N 筆」
+                    // 備註欄總列數不得超過 6 列：扣掉 QC 備註佔的列數，剩下的預算給決策標籤（報廢標籤含子行算 2 列），至少顯示 1 筆
+                    var _qtBudget = Math.max(2, 6 - _qcLines - 1), _qtUsed = 0, QT_FOLD = _qt.length;
+                    for (var _i = 0; _i < _qt.length; _i++) {
+                        _qtUsed += (_qt[_i].kind === 'remake' && _qt[_i].sub) ? 2 : 1;
+                        if (_qtUsed > _qtBudget) { QT_FOLD = Math.max(1, _i); break; }
+                    }
                     _qt.forEach(function (t, _qtIdx) {
                         var d = document.createElement('div');
                         d.style.cssText = 'margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
@@ -6519,14 +6528,14 @@ echo "</script>\n";
                         if (t.kind === 'remake' && t.sub) {
                             // 報廢後業務回填：主行自動換行；下一行縮排並以 └ 表示屬於上面那筆報廢
                             d.style.cssText = 'margin-bottom:3px;white-space:normal;word-break:break-all;';
-                            d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.main_name || '報廢') + '</span> '
-                                + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> x' + (t.main_qty || 0)
+                            d.innerHTML = '<span style="' + QT_BTN + 'background:' + t.bg + ';color:' + t.fg + ';">' + escapeHtml(t.main_name || '報廢') + '</span> '
+                                + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + (t.proc_name ? escapeHtml(t.proc_name) + ' ' : '') + 'x' + (t.main_qty || 0)
                                 + '<div style="margin:2px 0 0 12px;color:#6B4423;">└ ' + escapeHtml(t.sub) + '</div>';
                             if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
                             _qtBox.appendChild(d);
                             return;
                         }
-                        d.innerHTML ='<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.name || '') + '</span> '
+                        d.innerHTML ='<span style="' + QT_BTN + 'background:' + t.bg + ';color:' + t.fg + ';">' + escapeHtml(t.name || '') + '</span> '
                             + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + escapeHtml(t.process || '') + ' x' + (t.qty || 0)
                             + (t.who ? ' (' + escapeHtml(t.who) + ')' : '');
                         if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }

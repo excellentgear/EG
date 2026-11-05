@@ -401,8 +401,12 @@ function qab_remake_tags_for_boms(PDO $db, array $bomNos): array
     if (!$bomNos) return [];
     qab_remake_schema($db);
     $in = implode(',', array_fill(0, count($bomNos), '?'));
-    $st = $db->prepare("SELECT r.*, o.abnormal_order_no, o.resp_process_no, o.src_outsource_batch_id, u.user_cname FROM qab_remake r
+    $st = $db->prepare("SELECT r.*, o.abnormal_order_no, o.resp_process_no, o.src_outsource_batch_id, u.user_cname,
+                               pn.ProcessName AS proc_name, ml.maker_id AS vendor_name
+                        FROM qab_remake r
                         JOIN qa_abnormal_order o ON o.id=r.order_id AND o.deleted_at IS NULL
+                        LEFT JOIN process_no pn ON pn.ProcessNo = o.resp_process_no
+                        LEFT JOIN maker_list ml ON ml.maker_id_no = o.responsible_vendor_id
                         LEFT JOIN `user` u ON u.id=r.answered_by
                         WHERE r.bom_no IN ($in) AND r.status IN ('pending','remake','skip')");
     $st->execute($bomNos);
@@ -412,6 +416,7 @@ function qab_remake_tags_for_boms(PDO $db, array $bomNos): array
         // BOM總覽發單日欄的「廢」合計用：這筆報廢屬於哪一站、是否已由廠商分批回廠的報廢數計入（避免重複加）
         $t['proc_no'] = (string)($r['resp_process_no'] ?? '');
         $t['from_batch'] = !empty($r['src_outsource_batch_id']) ? 1 : 0;
+        $t['proc_name'] = trim((string)($r['proc_name'] ?? '')) . (trim((string)($r['vendor_name'] ?? '')) !== '' ? '(' . trim((string)$r['vendor_name']) . ')' : '');
         $out[(string)$r['bom_no']][] = $t;
     }
     return $out;
