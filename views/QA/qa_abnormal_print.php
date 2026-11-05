@@ -404,7 +404,7 @@ if (!empty($o['src_qc_form_id'])) {
 
 <!-- 異常處置方式＋處置說明，右邊一個合併的主管簽章欄（比照紙本 M22:O26） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:36%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
         <td class="optrow"><?php foreach ($dispOpts as $op) {
@@ -479,10 +479,31 @@ if (!empty($o['src_qc_form_id'])) {
     <tr><td class="nobt">矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
 </table>
 
+<?php
+/* 報廢後業務回填「補做／不補」（2026-11-05）：判定報廢的單才有；放在扣款確認上方 */
+$rmk = null;
+try { $rmk = qab_remake_view($db, $o, 0, false); } catch (Throwable $e) { $rmk = null; }
+if ($rmk):
+    $rmkAt = $rmk['at'] ? (d(substr($rmk['at'], 0, 10)) . ' ' . substr($rmk['at'], 11, 5)) : '';
+    $rmkRes = $rmk['status'] === 'remake' ? ('補做 ' . (int)$rmk['remake_qty'] . ' PCS（訂單編號 ' . ($rmk['new_oo'] ?: 'NA') . '）')
+            : ($rmk['status'] === 'skip' ? '不補' : '尚待業務回覆');
+?>
+<!-- 報廢後業務回填：補做／不補 -->
+<table class="f">
+    <colgroup><col style="width:16%"><col><col style="width:36%"></colgroup>
+    <tr>
+        <td class="lb" rowspan="2">報廢後補做／不補<div class="small" style="font-weight:normal;">(業務確認)</div></td>
+        <td class="c"><b>報廢 <?= (int)$rmk['scrap_qty'] ?> PCS　→　<?= h($rmkRes) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
+        <td class="c"><?= $rmk['who'] ? h($rmk['who']) . '　' . h($rmkAt) : '' ?></td>
+    </tr>
+    <tr><td class="t nobt small" colspan="2" style="height:8mm;">備註：<?= nl2br(h($rmk['note'])) ?></td></tr>
+</table>
+<?php endif; ?>
+
 <?php if ($showDeduct): ?>
 <!-- 扣款確認 -->
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:30%"><col style="width:12%"><col style="width:28%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:34%"><col style="width:16%"><col style="width:20%"></colgroup>
     <tr>
         <td class="lb" rowspan="<?= 3 + max(1, count($otherRows)) ?>"><div class="vert">扣款確認</div></td>
         <td class="lb">扣款項目</td><td class="lb">金額 (未稅)</td><td class="lb">說明</td>
@@ -540,7 +561,7 @@ $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number
 </table>
 <?php endif; ?>
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:20%"><col style="width:34%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:34%"><col style="width:20%"></colgroup>
     <tr>
         <td class="lb" rowspan="3"><div class="vert">核准</div></td>
         <td class="lb">報廢單號</td>

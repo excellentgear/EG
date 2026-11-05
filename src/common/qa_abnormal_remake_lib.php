@@ -341,12 +341,15 @@ function qab_remake_build_order_fields(PDO $db, array $o, array $row, array $in,
         ];
     }
     // 時間一律取資料庫的（PHP 的 date() 是 UTC，混用會差 8 小時甚至差一天）
-    $nowRow = $db->query("SELECT CURDATE() AS d, DATE_FORMAT(NOW(), '%Y/%m/%d %H:%i') AS t")->fetch(PDO::FETCH_ASSOC);
-    $srcTxt = !empty($o['bom_no']) ? '製令 ' . $o['bom_no'] : '';
-    if (!empty($o['ir_no'])) $srcTxt .= ($srcTxt !== '' ? '、' : '') . '退貨單 ' . $o['ir_no'];
-    $ps = '【報廢補做】異常單 ' . $o['abnormal_order_no'] . ($srcTxt !== '' ? '（' . $srcTxt . '）' : '')
-        . ' 判定報廢 ' . (int)$row['scrap_qty'] . ' PCS，補做 ' . $qty . ' PCS'
-        . '｜業務 ' . $uname . ' ' . $nowRow['t'] . ($note !== '' ? '｜備註：' . $note : '');
+    $nowRow = $db->query("SELECT CURDATE() AS d, DATE_FORMAT(NOW(), '%Y.%m.%d') AS dot")->fetch(PDO::FETCH_ASSOC);
+    // 業務備註（多行，欄位內自動換列）：製令／補做數量／異常單號／業務與日期／備註
+    $srcLine = !empty($o['bom_no']) ? (string)$o['bom_no'] : (!empty($o['ir_no']) ? '退貨單 ' . $o['ir_no'] : '');
+    $ps = $srcLine . "
+報廢補做 " . $qty . " PCS
+" . $o['abnormal_order_no'] . "
+" . $uname . ' ' . $nowRow['dot']
+        . ($note !== '' ? "
+PS：" . $note : '');
     $f += ['Order_ps' => $ps, 'Qty' => $qty, 'Order_date' => $nowRow['d'], 'unit_price' => 0,
            'split_seq' => 1, 'Created_By' => $uid];
     return $f;
