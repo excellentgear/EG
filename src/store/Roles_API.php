@@ -5,7 +5,8 @@ session_start();
 require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json');
 
-require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
+require_once __DIR__ . '/../common/DBConnection.php';
+require_once __DIR__ . '/../common/role_page_r_lib.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -447,7 +448,13 @@ switch ($action) {
                 rbacAudit($pdo, $user_id, 'assign', 'rbac_user', $uid, rbacUserName($pdo, $uid),
                           [['field'=>'role','old'=>null,'new'=>rbacRoleName($pdo, $rid)]]);
             }
-            $response = ['success'=>true];
+            // 指派模組角色時，替「只勾 R」慣例的頁面補上頁面 R（只新增，見 role_page_r_lib.php）
+            $autoR = false;
+            if ((int)$rInfo['is_system'] === 0) {
+                $mq = $pdo->prepare("SELECT module FROM roles WHERE role_id=?"); $mq->execute([$rid]);
+                $autoR = eg_role_page_r_ensure($pdo, $uid, (string)$mq->fetchColumn());
+            }
+            $response = ['success'=>true,'auto_r'=>$autoR];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
     }
@@ -478,6 +485,59 @@ switch ($action) {
     // GET  ?action=get_user_features&user_id=N
     // 回傳 { success, data: ['feature_code', ...] }
     // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
+    // 多人一次指派／移除單一角色（角色指派「人員為主」畫面用）
+    // POST action=bulk_user_role  user_ids=JSON[...]  role_id=N  mode=assign|remove
+    // 回傳 { success, done:[uid], skipped:[uid], auto_r:[uid] }
+    // 系統角色（管理員）一律不開放批次，比照既有 roleBulk 規則（鐵律8：前端不列、後端也擋）
+    // ──────────────────────────────────────────────────────────────────────
+    case 'bulk_user_role': {
+        if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
+        $ids  = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+        $rid  = intval($_POST['role_id'] ?? 0);
+        $mode = (string)($_POST['mode'] ?? '');
+        if (!is_array($ids) || !$ids || !$rid || !in_array($mode, ['assign','remove'], true)) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
+        if (count($ids) > 300) { $response = ['success'=>false,'message'=>'一次最多 300 人']; break; }
+        try {
+            $ri = $pdo->prepare("SELECT is_system, module FROM roles WHERE role_id=? LIMIT 1");
+            $ri->execute([$rid]);
+            $r0 = $ri->fetch(PDO::FETCH_ASSOC);
+            if (!$r0) { $response = ['success'=>false,'message'=>'角色不存在']; break; }
+            if ((int)$r0['is_system'] === 1) { $response = ['success'=>false,'message'=>'全站系統角色不開放批次指派']; break; }
+            $roleName = rbacRoleName($pdo, $rid);
+            $done = []; $skipped = []; $autoR = [];
+            $pdo->beginTransaction();
+            foreach ($ids as $u) {
+                $uid = intval($u);
+                if ($uid <= 0) continue;
+                if ($mode === 'assign') {
+                    $st = $pdo->prepare("INSERT IGNORE INTO user_roles (user_id,role_id) VALUES (?,?)");
+                    $st->execute([$uid,$rid]);
+                    if ($st->rowCount() > 0) {
+                        $done[] = $uid;
+                        rbacAudit($pdo, $user_id, 'assign', 'rbac_user', $uid, rbacUserName($pdo, $uid),
+                                  [['field'=>'role','old'=>null,'new'=>$roleName]]);
+                    } else { $skipped[] = $uid; }
+                    if (eg_role_page_r_ensure($pdo, $uid, (string)$r0['module'])) $autoR[] = $uid;
+                } else {
+                    $st = $pdo->prepare("DELETE FROM user_roles WHERE user_id=? AND role_id=?");
+                    $st->execute([$uid,$rid]);
+                    if ($st->rowCount() > 0) {
+                        $done[] = $uid;
+                        rbacAudit($pdo, $user_id, 'remove', 'rbac_user', $uid, rbacUserName($pdo, $uid),
+                                  [['field'=>'role','old'=>$roleName,'new'=>null]]);
+                    } else { $skipped[] = $uid; }
+                }
+            }
+            $pdo->commit();
+            $response = ['success'=>true,'done'=>$done,'skipped'=>$skipped,'auto_r'=>$autoR];
+        } catch(Exception $_e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $response = ['success'=>false,'message'=>$_e->getMessage()];
+        }
+        break;
+    }
+
     case 'get_user_features': {
         $uid = intval($_GET['user_id'] ?? $user_id);
         try {

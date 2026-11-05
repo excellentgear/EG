@@ -1468,7 +1468,64 @@ $_quotDepts = array_keys($_deptSet);
                     </div>
                     <?php endif; ?>
                     <!-- ══ ／部門 × 職稱 角色設定 ══ -->
-                    <!-- ══ 角色指派（依模組分開）══ -->
+                    <!-- ══ 角色指派（人員為主）：勾選多人，一次套用到每個模組 ══ -->
+                    <style>
+                        #rp-wrap .rp-split{display:grid;grid-template-columns:290px minmax(0,1fr);gap:14px;align-items:start}
+                        @media(max-width:900px){#rp-wrap .rp-split{grid-template-columns:1fr}}
+                        #rp-wrap .rp-box{border:1px solid #E4D3BC;border-radius:6px;background:#fff}
+                        #rp-wrap .rp-filters{padding:10px;display:grid;gap:8px;border-bottom:1px solid #E4D3BC}
+                        #rp-wrap .rp-selall{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid #E4D3BC;font-size:12px;color:#8a7561}
+                        #rp-wrap .rp-selall label{margin:0;font-weight:400;cursor:pointer;color:#3B2A1A}
+                        #rp-wrap .rp-plist{max-height:560px;overflow:auto}
+                        #rp-wrap .rp-p{display:flex;gap:9px;align-items:center;padding:7px 12px;border-bottom:1px solid #F0E6D6;font-size:13px;cursor:pointer}
+                        #rp-wrap .rp-p.on{background:#F7E0BD}
+                        #rp-wrap .rp-p small{display:block;color:#8a7561;font-size:11px;line-height:1.3}
+                        #rp-wrap .rp-p .rp-c{margin-left:auto;font-size:11px;color:#8a7561;white-space:nowrap}
+                        #rp-wrap .rp-p .rp-c.z{color:#DD5138}
+                        #rp-wrap .rp-head{padding:10px 14px;border-bottom:1px solid #E4D3BC}
+                        #rp-wrap .rp-tag{display:inline-block;font-size:12px;background:#F7E0BD;border-radius:10px;padding:2px 9px;margin:0 4px 4px 0;line-height:1.5}
+                        #rp-wrap .rp-tag a{color:#8a7561;margin-left:4px;cursor:pointer;text-decoration:none}
+                        #rp-wrap .rp-grp{padding:8px 14px 3px;font-size:12px;color:#8a7561;letter-spacing:.06em;background:#FBF6EE;border-top:1px solid #E4D3BC}
+                        #rp-wrap .rp-m{display:grid;grid-template-columns:190px minmax(0,1fr);gap:10px;padding:8px 14px;border-top:1px solid #F0E6D6;align-items:start}
+                        @media(max-width:900px){#rp-wrap .rp-m{grid-template-columns:1fr}}
+                        #rp-wrap .rp-mn{font-size:13.5px;line-height:1.4}
+                        #rp-wrap .rp-chip{font-size:12px;padding:3px 11px;border:1px solid #E4D3BC;background:#fff;color:#8a7561;border-radius:14px;cursor:pointer;line-height:1.4;margin:0 6px 5px 0}
+                        #rp-wrap .rp-chip.part{border:1px dashed #C8742B;color:#C8742B}
+                        #rp-wrap .rp-chip.all{background:#C8742B;border-color:#C8742B;color:#fff}
+                        #rp-wrap .rp-chip:disabled{opacity:.5;cursor:not-allowed}
+                        #rp-wrap .rp-diff{font-size:11px;color:#8a7561;line-height:1.6}
+                        #rp-wrap .rp-msg{font-size:12px;margin:8px 14px 0;min-height:18px;color:#8a5a2b}
+                    </style>
+                    <div class="row" style="margin-top:20px;" id="rp-wrap">
+                        <div class="col-md-12"><div class="x_panel">
+                            <div class="x_title">
+                                <h2><i class="fa fa-users" style="color:#C8742B;margin-right:7px;"></i>角色指派 <small>人員為主（可一次設定多人）</small></h2>
+                                <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <p style="font-size:12px;color:#888;margin-bottom:10px;"><i class="fa fa-info-circle"></i>
+                                    左邊勾選人員（可先選部門再按「全選目前篩選」），右邊每個模組點一下角色，就套用到所有已勾選的人；全部人都已有該角色時再點一次＝移除。權限不同的人，取消勾選後單獨設定即可。
+                                    指派「只勾 R」慣例的模組（報價單、公告、品管檢驗、異常矯正單、AS 文件管理…）時，系統會同時補上該頁的開啟權限（R），不必再到上方人員權限表另外勾；移除角色時不會自動收回 R。
+                                    全站系統角色「管理員」不在這裡指派。</p>
+                                <div class="rp-split">
+                                    <div class="rp-box">
+                                        <div class="rp-filters">
+                                            <select id="rp-dept" class="form-control input-sm"></select>
+                                            <input id="rp-q" type="text" class="form-control input-sm" placeholder="搜尋姓名或帳號">
+                                            <select id="rp-mf" class="form-control input-sm" data-eg-filter="輸入模組名稱篩選…"></select>
+                                        </div>
+                                        <div class="rp-selall"><label><input type="checkbox" id="rp-all"> 全選目前篩選</label><span id="rp-cnt"></span></div>
+                                        <div class="rp-plist" id="rp-plist"></div>
+                                    </div>
+                                    <div class="rp-box" id="rp-main"></div>
+                                </div>
+                                <div class="rp-msg" id="rp-msg"></div>
+                            </div>
+                        </div></div>
+                    </div>
+                    <!-- ══ ／角色指派（人員為主）══ -->
+                    <!-- ══ 角色指派（依模組分開，舊版保留）══ -->
                     <?php
                     eg_render_role_section('quot', 'quotation', '報價單管理', 'fa-file-text-o', '#3498db',
                         '為每位使用者指派報價單管理頁面的操作角色。角色與功能定義請至 <strong>報價單管理 → 報價單設定（齒輪圖示）→ 權限設定</strong>。',
@@ -2527,6 +2584,118 @@ $_quotDepts = array_keys($_deptSet);
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
+
+        <?php
+        // ══ 角色指派（人員為主）用的資料：全部取自上方已載入的 $RS／$RSU，不另查一次 ══
+        $_rpMods = []; $_rpAssign = [];
+        foreach ($RS as $_mk => $_roles) {
+            $_rl = [];
+            foreach ($_roles as $_r) { if (empty($_r['is_system'])) $_rl[] = ['id'=>(int)$_r['role_id'], 'name'=>(string)$_r['role_name']]; }
+            if (!$_rl) continue;
+            $_g = $EG_MODULE_GROUP[$_mk] ?? '其他';
+            $_rpMods[] = ['k'=>$_mk, 'label'=>eg_module_label($_mk), 'g'=>$_g, 'gs'=>($_grpSort[$_g] ?? 9999), 'roles'=>$_rl];
+            foreach (($RSU[$_mk] ?? []) as $_uid => $_es) {
+                foreach ($_es as $_e) { if (empty($_e['is_system'])) $_rpAssign[$_mk][(int)$_uid][] = (int)$_e['role_id']; }
+            }
+        }
+        usort($_rpMods, function($a, $b) { return [$a['gs'], $a['g'], $a['label']] <=> [$b['gs'], $b['g'], $b['label']]; });
+        ?>
+        var RP_MODS   = <?= json_encode($_rpMods, JSON_UNESCAPED_UNICODE) ?>;
+        var RP_ASSIGN = <?= json_encode((object)$_rpAssign, JSON_UNESCAPED_UNICODE) ?>;   // {module:{uid:[role_id]}}
+        var RP_CAN    = <?= $canEdit ? 'true' : 'false' ?>;
+        var RP_DEPTS  = <?= json_encode(array_values($_quotDepts), JSON_UNESCAPED_UNICODE) ?>;
+        (function () {
+            var sel = {}, esc = egRoleEsc;
+            function ids(m, uid) { return (RP_ASSIGN[m] && RP_ASSIGN[m][uid]) || []; }
+            function visible() {
+                var d = $('#rp-dept').val(), q = $.trim($('#rp-q').val()).toLowerCase(), mf = $('#rp-mf').val();
+                return EG_ROLE_ADMINS.filter(function (p) {
+                    if (d && p.dk.indexOf(d) < 0) return false;
+                    if (q && p.key.indexOf(q) < 0) return false;
+                    if (mf && ids(mf, p.id).length) return false;
+                    return true;
+                });
+            }
+            function chosen() { return EG_ROLE_ADMINS.filter(function (p) { return sel[p.id]; }); }
+            function nMods(uid) { return RP_MODS.filter(function (m) { return ids(m.k, uid).length; }).length; }
+            function drawList() {
+                var v = visible();
+                $('#rp-plist').html(v.map(function (p) {
+                    var c = nMods(p.id);
+                    return '<div class="rp-p' + (sel[p.id] ? ' on' : '') + '" data-id="' + p.id + '"><input type="checkbox" tabindex="-1"' + (sel[p.id] ? ' checked' : '') + '>'
+                        + '<div>' + esc(p.name) + '<small>' + p.dh + '　' + esc(p.un) + '</small></div>'
+                        + '<span class="rp-c' + (c ? '' : ' z') + '">' + (c ? c + ' 個模組' : '未設定') + '</span></div>';
+                }).join('') || '<div style="padding:20px;color:#8a7561;font-size:13px;">沒有符合的人員</div>');
+                var n = v.filter(function (p) { return sel[p.id]; }).length;
+                $('#rp-all').prop('checked', v.length > 0 && n === v.length).prop('indeterminate', n > 0 && n < v.length);
+                $('#rp-cnt').text(v.length + ' 人');
+            }
+            function drawMain() {
+                var ps = chosen();
+                if (!ps.length) { $('#rp-main').html('<div style="padding:30px 16px;color:#8a7561;font-size:13px;">請先在左邊勾選一位或多位人員。</div>'); return; }
+                var h = '<div class="rp-head"><b style="font-size:14px;">已選 ' + ps.length + ' 人</b><div style="margin-top:6px;">'
+                    + ps.map(function (p) { return '<span class="rp-tag">' + esc(p.name) + '<a data-rm="' + p.id + '" title="取消選取">×</a></span>'; }).join('') + '</div></div>';
+                var cur = null;
+                RP_MODS.forEach(function (m) {
+                    if (m.g !== cur) { cur = m.g; h += '<div class="rp-grp">' + esc(cur) + '</div>'; }
+                    var has = 0, none = [];
+                    ps.forEach(function (p) { if (ids(m.k, p.id).length) has++; else none.push(p.name); });
+                    h += '<div class="rp-m"><div class="rp-mn">' + esc(m.label) + '</div><div><div>';
+                    var anyPart = false, diff = [];
+                    m.roles.forEach(function (r) {
+                        var c = ps.filter(function (p) { return ids(m.k, p.id).indexOf(r.id) >= 0; });
+                        var cls = c.length === ps.length ? 'all' : (c.length ? 'part' : '');
+                        if (cls === 'part') { anyPart = true; diff.push('<b>' + esc(r.name) + '</b>：' + esc(c.map(function (p) { return p.name; }).join('、'))); }
+                        h += '<button type="button" class="rp-chip ' + cls + '" data-m="' + esc(m.k) + '" data-r="' + r.id + '"' + (RP_CAN ? '' : ' disabled') + '>'
+                            + esc(r.name) + (cls === 'part' ? '　' + c.length + '/' + ps.length + ' 人' : '') + '</button>';
+                    });
+                    h += '</div>';
+                    if (ps.length > 1 && anyPart) h += '<div class="rp-diff">目前不一致　' + diff.join('　／　') + (none.length && none.length < ps.length ? '　／　<b>未指派</b>：' + esc(none.join('、')) : '') + '</div>';
+                    h += '</div></div>';
+                });
+                $('#rp-main').html(h);
+            }
+            function redraw() { drawList(); drawMain(); }
+            function msg(t, bad) { $('#rp-msg').css('color', bad ? '#DD5138' : '#8a5a2b').text(t); }
+
+            $('#rp-dept').html('<option value="">所有部門</option>' + RP_DEPTS.map(function (d) { return '<option>' + esc(d) + '</option>'; }).join(''));
+            $('#rp-mf').html('<option value="">不依模組篩選</option>' + RP_MODS.map(function (m) { return '<option value="' + esc(m.k) + '">尚未指派「' + esc(m.label) + '」的人</option>'; }).join(''));
+
+            $(document).on('click', '#rp-plist .rp-p', function () { var id = $(this).data('id'); sel[id] = !sel[id]; redraw(); });
+            $(document).on('click', '#rp-main [data-rm]', function () { delete sel[$(this).data('rm')]; redraw(); });
+            $('#rp-all').on('change', function () { var on = this.checked; visible().forEach(function (p) { sel[p.id] = on; }); redraw(); });
+            $('#rp-dept,#rp-mf').on('change', drawList);
+            $('#rp-q').on('input', drawList);
+
+            var busy = false;
+            $(document).on('click', '#rp-main .rp-chip', function () {
+                if (!RP_CAN || busy) return;
+                var m = $(this).data('m'), rid = +$(this).data('r'), ps = chosen();
+                var mod = RP_MODS.filter(function (x) { return x.k === m; })[0];
+                var role = mod.roles.filter(function (r) { return r.id === rid; })[0];
+                var every = ps.every(function (p) { return ids(m, p.id).indexOf(rid) >= 0; });
+                var mode = every ? 'remove' : 'assign';
+                var targets = ps.filter(function (p) { return (ids(m, p.id).indexOf(rid) >= 0) === every; });
+                if (!targets.length) return;
+                if (mode === 'remove' && !confirm('確定移除 ' + targets.length + ' 位的「' + role.name + '」角色？\n\n' + targets.map(function (p) { return p.name; }).slice(0, 8).join('、'))) return;
+                busy = true; msg('處理中…');
+                $.post(ROLES_API, { action: 'bulk_user_role', user_ids: JSON.stringify(targets.map(function (p) { return p.id; })), role_id: rid, mode: mode })
+                .done(function (res) {
+                    if (!res || !res.success) { msg('失敗：' + ((res && res.message) || '未知錯誤'), true); return; }
+                    targets.forEach(function (p) {
+                        RP_ASSIGN[m] = RP_ASSIGN[m] || {};
+                        var a = RP_ASSIGN[m][p.id] || [];
+                        RP_ASSIGN[m][p.id] = mode === 'assign' ? a.concat(rid) : a.filter(function (x) { return x !== rid; });
+                    });
+                    msg((mode === 'assign' ? '已指派' : '已移除') + '「' + mod.label + '／' + role.name + '」：' + res.done.length + ' 人'
+                        + (res.auto_r && res.auto_r.length ? '；其中 ' + res.auto_r.length + ' 人已同時補上頁面開啟權限（R）' : ''));
+                    redraw();
+                })
+                .fail(function (xhr) { msg('連線失敗（' + xhr.status + '）', true); })
+                .always(function () { busy = false; });
+            });
+            redraw();
+        })();
 
         // 建出某個角色指派區塊的 45 列（已建過就直接跳出）。
         // 標籤 HTML 與 roleReloadRow() 產生的完全一致，改一邊要記得兩邊一起改。
