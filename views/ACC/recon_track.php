@@ -254,6 +254,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
           <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="applyFilters()"><option value="">— 全部負責人 —</option></select>
           <button class="btn btn-sm btn-warm-o" onclick="clearFilters()"><i class="fa fa-times"></i> 取消篩選</button>
           <button class="btn btn-sm btn-warm-o" id="btnPrintList" onclick="printList()"><i class="fa fa-print"></i> 列印清單</button>
+          <button class="btn btn-sm btn-warm-o" id="btnFixed" style="display:none;" onclick="openFixed()"><i class="fa fa-thumb-tack"></i> 設定固定對帳廠商</button>
           <button class="btn btn-sm btn-warm" id="btnManualAdd" onclick="openManualAdd()"><i class="fa fa-plus"></i> <span id="btnManualAddTxt">人工新增應收</span></button>
         </div>
       </h4>
@@ -406,6 +407,26 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <button class="btn btn-default" data-close="settleMask">關閉</button>
       <button class="btn btn-warm" onclick="saveSettle()">儲存</button>
     </div>
+  </div>
+</div>
+
+<!-- ══════════ 固定對帳廠商（應付）══════════ -->
+<div class="m-mask" id="fixedMask">
+  <div class="m-win" style="width:560px;">
+    <div class="m-head">設定固定對帳廠商（應付） <span class="x" data-close="fixedMask">✕</span></div>
+    <div class="m-body">
+      <p style="color:var(--brown);font-size:12px;">加入後，從「開始年月」起每個結帳月份都固定出現在應付清單（即使沒有移轉單據）。按「停用」後，從當月起不再出現，之前的月份不受影響。</p>
+      <div class="form-group"><label>廠商（ID 或名稱，可連續加入多間）</label>
+        <input type="text" id="fixedKw" class="form-control" autocomplete="off" placeholder="輸入 ID 或名稱即時搜尋…" oninput="fixedSearch()">
+      </div>
+      <div id="fixedSug" style="max-height:200px;overflow:auto;border:1px solid var(--sand);border-radius:4px;display:none;"></div>
+      <div style="margin-top:8px;"><label>開始年月</label> <input type="month" id="fixedStart" class="form-control" style="width:170px;display:inline-block;">
+        <button class="btn btn-warm" onclick="fixedAdd()">加入</button></div>
+      <div id="fixedPick" style="margin-top:6px;font-weight:700;color:var(--ink);"></div>
+      <div class="err-txt" id="fixedErr"></div>
+      <table class="table table-condensed" style="margin-top:12px;font-size:13px;"><thead><tr><th>廠商</th><th>開始</th><th>狀態</th><th></th></tr></thead><tbody id="fixedTbody"></tbody></table>
+    </div>
+    <div class="m-foot"><button class="btn btn-default" data-close="fixedMask">關閉</button></div>
   </div>
 </div>
 
@@ -661,6 +682,7 @@ function setSide(s){
     document.getElementById('btnManualAddTxt').textContent = '人工新增' + (s==='ar' ? '應收' : '應付');
     document.getElementById('fOwner').style.display = (s==='ar') ? '' : 'none';
     document.getElementById('zeroWrap').style.display = (s==='ap') ? '' : 'none';
+    document.getElementById('btnFixed').style.display = (s==='ap' && PERMS.canFixed) ? '' : 'none';
     document.getElementById('fOwner').value = '';
     hideKwSuggest();
     clearSelection();
@@ -733,6 +755,57 @@ function allowedTargets(row){
 var ALL_ROWS = [];        // 這個月份／側別撈回來的全部資料（不受篩選影響）
 var FILTERED_ROWS = [];   // 套用狀態卡片／搜尋／負責人篩選後的結果，renderListTbl() 只讀這個
 
+var FIXED_KEY = '', FIXED_TMR = null;
+function openFixed(){
+    document.getElementById('fixedKw').value=''; document.getElementById('fixedSug').style.display='none';
+    document.getElementById('fixedPick').textContent=''; document.getElementById('fixedErr').textContent=''; FIXED_KEY='';
+    document.getElementById('fixedStart').value = document.getElementById('fBm').value || defaultBm();
+    openMask('fixedMask'); fixedLoad();
+}
+function fixedLoad(){
+    apiGet('fixed_list', {}).done(function(r){
+        if (!r || !r.ok) return;
+        document.getElementById('fixedTbody').innerHTML = r.rows.length ? r.rows.map(function(x){
+            var on = !x.stop_month;
+            return '<tr><td>'+esc(x.party_key)+'　'+esc(x.party_name)+'</td><td>'+esc(x.start_month)+'</td><td>'+(on?'啟用中':'已停用（'+esc(x.stop_month)+' 起不出現）')+'</td><td>'+(on?'<button class="btn btn-xs btn-default" onclick="fixedStop('+x.id+')">停用</button>':'')+'</td></tr>';
+        }).join('') : '<tr><td colspan="4" class="c">尚未設定</td></tr>';
+    });
+}
+function fixedSearch(){
+    FIXED_KEY=''; document.getElementById('fixedPick').textContent='';
+    clearTimeout(FIXED_TMR);
+    FIXED_TMR = setTimeout(function(){
+        var kw=document.getElementById('fixedKw').value.trim(), box=document.getElementById('fixedSug');
+        if(!kw){box.style.display='none';return;}
+        apiGet('party_search',{side:'ap',kw:kw}).done(function(r){
+            if(!r||!r.ok)return;
+            box.innerHTML = r.rows.length ? r.rows.map(function(p){var nm=p.short_name||p.full_name||'';
+                return '<div class="fx-it" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--sand);" data-id="'+esc(p.id)+'" data-nm="'+esc(nm)+'"><b>'+esc(p.id)+'</b>　'+esc(nm)+'</div>';}).join('')
+                : '<div style="padding:8px;color:var(--brown);">查無符合的資料</div>';
+            box.style.display='block';
+        });
+    },250);
+}
+document.addEventListener('click', function(e){
+    var it = e.target.closest ? e.target.closest('.fx-it') : null;
+    if(!it) return;
+    FIXED_KEY = it.dataset.id;
+    document.getElementById('fixedPick').textContent='已選擇：'+it.dataset.id+'　'+it.dataset.nm;
+    document.getElementById('fixedSug').style.display='none';
+});
+function fixedAdd(){
+    var sm=document.getElementById('fixedStart').value;
+    if(!FIXED_KEY){document.getElementById('fixedErr').textContent='請先搜尋並從清單點選廠商';return;}
+    if(!sm){document.getElementById('fixedErr').textContent='請選擇開始年月';return;}
+    document.getElementById('fixedErr').textContent='';
+    api({action:'fixed_add', party_key:FIXED_KEY, start_month:sm}).done(function(r){
+        if(r&&r.ok){showToast('已加入');FIXED_KEY='';document.getElementById('fixedKw').value='';document.getElementById('fixedPick').textContent='';fixedLoad();loadList(true);}
+    });
+}
+function fixedStop(id){
+    if(!confirm('確定停用？從本月起將不再出現在應付清單（之前的月份不受影響）。'))return;
+    api({action:'fixed_stop', id:id}).done(function(r){ if(r&&r.ok){showToast(r.message||'已停用');fixedLoad();loadList(true);} });
+}
 var MANUAL_KEY = '', MANUAL_TMR = null;
 function manualAllowed(){
     return PERMS.canAdmin || PERMS.isAcc || PERMS.isSales || PERMS.isPm;
@@ -935,7 +1008,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');

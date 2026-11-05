@@ -82,6 +82,20 @@ function act_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='對帳進度追蹤：每側(AR/AP)每個對象每個結帳月份一列，列表時自動補建（lazy create）'");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_fixed_party (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            side            ENUM('ar','ap') NOT NULL DEFAULT 'ap',
+            party_key       VARCHAR(30) NOT NULL COMMENT 'ap: maker_id_no',
+            start_month     CHAR(7) NOT NULL COMMENT '開始出現的結帳月份 YYYY-MM',
+            stop_month      CHAR(7) NULL COMMENT '停用月份：該月起不再出現；NULL=啟用中',
+            created_at      DATETIME NULL,
+            created_by      INT NULL,
+            created_by_name VARCHAR(50) NULL,
+            stopped_at      DATETIME NULL,
+            stopped_by_name VARCHAR(50) NULL,
+            KEY idx_fixed (side, party_key)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='對帳進度追蹤：固定對帳對象（即使當月沒有移轉單據也固定出現）'");
+
         $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_manual (
             id              INT AUTO_INCREMENT PRIMARY KEY,
             side            ENUM('ar','ap') NOT NULL,
@@ -201,6 +215,7 @@ if (!defined('ACT_ROLES')) {
         'art_pm'       => '對帳追蹤-生管',
         'art_sales'    => '對帳追蹤-業務',
         'art_acc'      => '對帳追蹤-會計',
+        'art_fixed_party' => '對帳追蹤-可設定固定對帳廠商（應付，非管理員，可疊加其他角色）',
     ]);
 }
 
@@ -237,9 +252,10 @@ function act_perms(PDO $db, int $uid): array
     $isSales   = in_array('art_sales', $feat, true);
     $isAcc     = in_array('art_acc', $feat, true);
     $canSettle = $canAdmin || in_array('art_settle', $feat, true);   // 可更改結帳日（客戶/廠商主檔結帳日）
+    $canFixed  = $canAdmin || in_array('art_fixed_party', $feat, true);   // 可設定應付固定對帳廠商
     $canView   = $viewAll || $isPm || $isSales || $isAcc || $canSettle;
     return [
-        'uid' => $uid, 'isAll' => $isAll, 'canAdmin' => $canAdmin, 'canSettle' => $canSettle, 'viewAll' => $viewAll,
+        'uid' => $uid, 'isAll' => $isAll, 'canAdmin' => $canAdmin, 'canSettle' => $canSettle, 'canFixed' => $canFixed, 'viewAll' => $viewAll,
         'isPm' => $isPm, 'isSales' => $isSales, 'isAcc' => $isAcc, 'canView' => $canView,
     ];
 }}
@@ -809,7 +825,75 @@ function act_ap_rows(PDO $db, string $billingMonth, bool $includeZero = false): 
             'payment_method' => $m['payment_method'] ?? null, 'net_days' => $m['net_days'] ?? null,
         ];
     }
+    // 固定對帳廠商：該結帳月份在有效期間內者，沒有移轉單據也固定列出（已出現的不重複）
+    $have = array_column($out, 'party_key');
+    foreach (act_fixed_keys($db, 'ap', $billingMonth) as $id) {
+        if (in_array($id, $have, true) || empty($mk[$id])) continue;
+        $m = $mk[$id];
+        $partyName = $m['maker_id'] ?? ($m['maker_id_all'] ?? $id);
+        $track = act_track_get_or_create($db, 'ap', $id, $partyName, $billingMonth, act_cutoff_date_ap($db, $id, $billingMonth));
+        $out[] = [
+            'track_id' => (int)$track['id'], 'side' => 'ap', 'party_key' => $id, 'party_id' => $id,
+            'party_short' => $m['maker_id'] ?? $id, 'party_name' => $partyName, 'in_master' => true, 'fixed' => true,
+            'billing_month' => $billingMonth, 'cutoff_date' => $track['cutoff_date'], 'status' => $track['status'],
+            'card_status' => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
+            'cnt' => 0, 'amount' => 0, 'tax_amount' => 0, 'total_amt' => 0,
+            'settlement_mode' => $m['settlement_mode'] ?? null, 'settlement_day' => $m['settlement_day'] ?? null,
+            'payment_method' => $m['payment_method'] ?? null, 'net_days' => $m['net_days'] ?? null,
+        ];
+    }
     return $out;
+}}
+
+if (!function_exists('act_fixed_keys')) {
+/** 某結帳月份有效的固定對帳對象：start_month <= 月份 且（未停用 或 月份 < 停用月份） */
+function act_fixed_keys(PDO $db, string $side, string $bm): array
+{
+    try {
+        $st = $db->prepare("SELECT DISTINCT party_key FROM acc_recon_fixed_party
+                            WHERE side=? AND start_month<=? AND (stop_month IS NULL OR ?<stop_month)");
+        $st->execute([$side, $bm, $bm]);
+        return array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+}}
+
+if (!function_exists('act_fixed_list')) {
+function act_fixed_list(PDO $db, string $side): array
+{
+    $mk = act_maker_map($db);
+    $st = $db->prepare("SELECT id, party_key, start_month, stop_month, created_by_name, stopped_by_name FROM acc_recon_fixed_party WHERE side=? ORDER BY (stop_month IS NOT NULL), id DESC");
+    $st->execute([$side]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $m = $mk[$r['party_key']] ?? null; $r['party_name'] = $m['maker_id'] ?? ($m['maker_id_all'] ?? $r['party_key']); }
+    return $rows;
+}}
+
+if (!function_exists('act_fixed_add')) {
+function act_fixed_add(PDO $db, string $partyKey, string $startMonth, int $uid, string $uname): array
+{
+    if (!preg_match('/^\d{4}-\d{2}$/', $startMonth)) return ['success' => false, 'message' => '開始年月格式不正確'];
+    $mk = act_maker_map($db);
+    if (empty($mk[$partyKey])) return ['success' => false, 'message' => '主檔查無此廠商'];
+    $st = $db->prepare("SELECT COUNT(*) FROM acc_recon_fixed_party WHERE side='ap' AND party_key=? AND stop_month IS NULL");
+    $st->execute([$partyKey]);
+    if ((int)$st->fetchColumn() > 0) return ['success' => false, 'message' => '此廠商已在固定對帳名單中（啟用中）'];
+    $db->prepare("INSERT INTO acc_recon_fixed_party (side,party_key,start_month,created_at,created_by,created_by_name) VALUES ('ap',?,?,NOW(),?,?)")
+       ->execute([$partyKey, $startMonth, $uid, $uname]);
+    return ['success' => true, 'message' => '已加入固定對帳廠商'];
+}}
+
+if (!function_exists('act_fixed_stop')) {
+/** 停用：從按下停用的當月起不再出現（之前的月份不受影響） */
+function act_fixed_stop(PDO $db, int $id, string $uname): array
+{
+    $ym = substr(act_today($db), 0, 7);
+    $st = $db->prepare("SELECT start_month FROM acc_recon_fixed_party WHERE id=? AND stop_month IS NULL");
+    $st->execute([$id]);
+    $sm = $st->fetchColumn();
+    if ($sm === false) return ['success' => false, 'message' => '找不到啟用中的設定'];
+    if ($ym < (string)$sm) $ym = (string)$sm;   // 尚未開始就停用＝等同不出現
+    $db->prepare("UPDATE acc_recon_fixed_party SET stop_month=?, stopped_at=NOW(), stopped_by_name=? WHERE id=?")->execute([$ym, $uname, $id]);
+    return ['success' => true, 'message' => '已停用，' . $ym . ' 起不再出現'];
 }}
 
 /* ══════════════════════════════════════════════════════════════════

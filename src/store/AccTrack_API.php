@@ -50,7 +50,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
-          'early_days_save', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete'];
+          'early_days_save', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete', 'fixed_add', 'fixed_stop'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['act_csrf'], $tok)) {
@@ -373,6 +373,24 @@ switch ($action) {
         if ((string)$stc->fetchColumn() !== '') actErr('此對象已有對帳進度紀錄，不可刪除（進度與日期須保留）');
         $db->prepare("DELETE FROM acc_recon_track_manual WHERE side=? AND party_key=? AND billing_month=?")->execute([$side, $key, $bm]);
         actOut(['message' => '已刪除']);
+    }
+
+    /* ── 應付固定對帳廠商（角色 art_fixed_party 或本頁管理員）── */
+    case 'fixed_list': {
+        if (!$perms['canFixed']) actErr('沒有設定固定對帳廠商的權限', 403);
+        actOut(['rows' => act_fixed_list($db, 'ap')]);
+    }
+    case 'fixed_add': {
+        if (!$perms['canFixed']) actErr('沒有設定固定對帳廠商的權限', 403);
+        $r = act_fixed_add($db, trim((string)($_POST['party_key'] ?? '')), (string)($_POST['start_month'] ?? ''), $uid, $uname);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
+    }
+    case 'fixed_stop': {
+        if (!$perms['canFixed']) actErr('沒有設定固定對帳廠商的權限', 403);
+        $r = act_fixed_stop($db, (int)($_POST['id'] ?? 0), $uname);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
     }
 
     default:
