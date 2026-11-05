@@ -387,6 +387,10 @@ function qab_remake_tag(array $r, string $no, string $uname): array
         'qty' => $st === 'remake' ? (int)$r['remake_qty'] : (int)$r['scrap_qty'], 'who' => $uname,
         'bg' => $pal[0], 'fg' => $pal[1], 'no' => $no . (trim((string)$r['note']) !== '' ? '｜業務備註：' . $r['note'] : ''), 'id' => (int)$r['order_id'], 'sn' => 9000, 'ts' => $ts,
         'note' => (string)$r['note'],
+        // BOM總覽用：主行「報廢 M/D x數量」＋縮排子行「└ 業務回覆補件／補做／不補 異常單號」（舊欄位照舊，其他頁不受影響）
+        'main_name' => '報廢', 'main_qty' => (int)$r['scrap_qty'],
+        'sub' => ($st === 'remake' ? '補做 ' . (int)$r['remake_qty'] . ' PCS' : ($st === 'skip' ? '不補' . ($r['cancel_reason'] ? '（補做訂單已刪除）' : '') : '業務回覆補件'))
+                 . ($uname !== '' && $st !== 'pending' ? ' (' . $uname . ')' : '') . ' ' . $no,
     ];
 }
 

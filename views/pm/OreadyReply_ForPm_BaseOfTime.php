@@ -6509,7 +6509,17 @@ echo "</script>\n";
                         var d = document.createElement('div');
                         d.style.cssText = 'margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
                         d.title = '異常單 ' + (t.no || '');
-                        d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.name || '') + '</span> '
+                        if (t.kind === 'remake' && t.sub) {
+                            // 報廢後業務回填：主行自動換行；下一行縮排並以 └ 表示屬於上面那筆報廢
+                            d.style.cssText = 'margin-bottom:3px;white-space:normal;word-break:break-all;';
+                            d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.main_name || '報廢') + '</span> '
+                                + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> x' + (t.main_qty || 0)
+                                + '<div style="margin:2px 0 0 12px;padding-left:6px;border-left:2px solid ' + t.bg + ';color:#6B4423;">└ ' + escapeHtml(t.sub) + '</div>';
+                            if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
+                            _qtBox.appendChild(d);
+                            return;
+                        }
+                        d.innerHTML ='<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.name || '') + '</span> '
                             + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + escapeHtml(t.process || '') + ' x' + (t.qty || 0)
                             + (t.who ? ' (' + escapeHtml(t.who) + ')' : '');
                         if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
