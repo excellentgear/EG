@@ -250,6 +250,7 @@ $rbacManagedPageIds = [
     141, 142, // 人資職務表單 / 人資職務表單設定 (hr_position_forms / hr_position_forms_template)；共用 module='hr_form' 角色
     143, // 表單簽核設計器 (form_signer)；module='form_signer' 角色
     172, 173, // 表格模板管理 / 表格模板填寫 (sheet_form_template / sheet_form)；共用 module='sheet_form' 角色
+    30,  // 退貨追蹤 (IR_Track)；module='ir_track' 角色（2026-11-05 起進入頁面要檢查角色）
 ];
 $rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
 
@@ -429,6 +430,7 @@ $EG_ROLE_MODULES = [
     'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
     'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
     'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
+    'ir_track'            => ['prefix'=>'irt',     'label'=>'退貨追蹤',            'page'=>'IR_Track.php'],
 ];
 
 /** 模組代碼 → 中文名（查不到就回代碼本身，至少不會顯示空白） */

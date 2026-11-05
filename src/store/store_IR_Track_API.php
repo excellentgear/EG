@@ -53,6 +53,15 @@ $action = $_POST['action'] ?? '';
 try {
     ensureIrSchema($pdo);
 
+    // 角色與功能（2026-11-05）：每個動作所需的權限登記在 irActionNeed()，頁面與 API 共用
+    $IR_PERMS = irPerms($pdo, (int)$user_id);
+    $IR_NEED  = irActionNeed((string)$action, (string)($_POST['sub_action'] ?? ''));
+    if (!irCan($IR_PERMS, $IR_NEED)) {
+        $needLabel = ['view'=>'檢閱','edit'=>'新增與修改退貨單','ncr'=>'開立與處理異常單','settings'=>'設定','admin'=>'管理（期間自動結案）'][$IR_NEED] ?? $IR_NEED;
+        echo json_encode(['success'=>false,'code'=>'NO_PERM','message'=>'沒有操作權限：需要退貨追蹤的「'.$needLabel.'」功能，請聯絡管理員在角色設定指派。'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     switch ($action) {
         case 'get_part_data':
             $keyword = $_POST['keyword'] ?? '';

@@ -28,6 +28,7 @@ if (!function_exists('eg_role_page_r_modules')) {
             'hr_form'        => 'hr_position_forms.php',
             'form_signer'    => 'form_signer.php',
             'sheet_form'     => 'sheet_form.php',
+            'ir_track'       => 'IR_Track.php',
         ];
     }
 }

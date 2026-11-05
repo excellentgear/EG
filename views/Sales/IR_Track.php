@@ -12,6 +12,12 @@ include_once '../../src/common/qa_abnormal_lib.php';  // 品質異常處理單�
 
 $IR_UID      = (int)($_SESSION['id'] ?? 0);
 $IR_IS_ADMIN = irIsAdmin($db, $IR_UID);        // 期間自動結案限系統管理者
+/* 角色與功能（2026-11-05）：進入頁面先檢查角色；尚未有人被指派本模組角色時為過渡期，維持人人可進 */
+$IR_PERMS = irPerms($db, $IR_UID);
+if (empty($IR_PERMS['canView'])) {
+    header("Location:../admin/dashboard.php?msg=" . urlencode("無權限檢視退貨追蹤頁面：需要「退貨追蹤」角色，請聯絡管理員指派"));
+    exit;
+}
 $IR_YEARS    = irYears($db);                   // 年度下拉：只列真的有資料的年度
 
 /* 開立異常單一律走新版模組（qa_abnormal_list.php 同一支 API、同一套權限與編號規則），
@@ -178,9 +184,11 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                             <div class="stat-value" id="count-all">0</div>
                             <div class="stat-label">全部退貨</div>
                         </div>
+                        <?php if ($IR_PERMS['canEdit']): ?>
                         <div class="stat-card action-btn" style="background:#26B99A;color:white;" onclick="openNewIRModal()">
                             <div style="text-align:center;"><i class="fa fa-plus-circle" style="font-size:28px;margin-bottom:5px;display:block;"></i><div style="font-weight:600;font-size:14px;">新增退貨單</div></div>
                         </div>
+                        <?php endif; ?>
                         <?php /* 「品質異常單—可用部門設定」已移至 品管合併檢驗頁（views/QC/inspection_combined_prototype.php 設定選單）2026-07-06 */ ?>
                     </div>
                 </div>
@@ -322,6 +330,9 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                 <?php if ($IR_IS_ADMIN): ?>
                 <li><a href="#tab-auto-close" data-toggle="tab" onclick="resetAutoClose()"><i class="fa fa-check-square-o"></i> 期間自動結案</a></li>
                 <?php endif; ?>
+                <?php if ($IR_PERMS['isAdmin']): ?>
+                <li><a href="#tab-ir-roles" data-toggle="tab" onclick="irRoleOpen()"><i class="fa fa-key"></i> 角色與功能</a></li>
+                <?php endif; ?>
             </ul>
             <div class="tab-content">
                 <!-- Tab 1: 退貨性質設定 -->
@@ -436,6 +447,49 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                         </div>
                         <button class="btn btn-danger btn-sm" style="margin-top:10px;" id="ac_apply_btn" onclick="autoCloseApply()">
                             <i class="fa fa-check"></i> 確認結案</button>
+                    </div>
+                </div>
+                <?php endif; ?>
+                <?php if ($IR_PERMS['isAdmin']): ?>
+                <!-- Tab 4: 角色與功能（沿用全站 Roles_API；只有能管角色的全站管理員看得到） -->
+                <div class="tab-pane" id="tab-ir-roles">
+                    <div id="irRoleLegacy" class="note-box" style="display:none;">
+                        <b>目前是過渡期：</b>還沒有任何人被指派退貨追蹤的角色，所以<b>所有人都能進入並操作</b>（維持原本行為）。
+                        指派第一位之後就會開始檢查角色，<b>沒有被指派的人將無法進入本頁</b>——建議先到
+                        <a href="../user/user_permissions.php" target="_blank">權限設定 → 角色指派</a>，用「依部門」一次把現場人員都指派好，再回來調整。
+                    </div>
+                    <div class="note-box">
+                        本頁的角色與功能獨立設定，不影響其他頁面。進入頁面需要<b>檢閱</b>（或更高）；其他功能依下方勾選。
+                        「期間自動結案」仍限全站管理員或持有「管理」功能者。要一次指派多人，請用
+                        <a href="../user/user_permissions.php" target="_blank">權限設定 → 角色指派</a>。
+                    </div>
+                    <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                        <div style="flex:0 0 230px;border:1px solid #e6e9ed;border-radius:6px;">
+                            <div style="padding:6px 10px;background:#f7f7f7;font-size:12px;display:flex;justify-content:space-between;align-items:center;">
+                                角色 <button type="button" class="btn btn-xs btn-primary" onclick="irRoleAdd()">+ 新增</button></div>
+                            <div id="irRolesList" style="max-height:340px;overflow:auto;"></div>
+                        </div>
+                        <div style="flex:1;min-width:300px;">
+                            <div id="irRoleEdit" style="display:none;">
+                                <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+                                    <label style="margin:0;">角色名稱</label>
+                                    <input type="text" id="irRoleName" class="form-control input-sm" style="flex:1;">
+                                    <button type="button" class="btn btn-sm btn-default" onclick="irRoleRename()">改名</button>
+                                    <button type="button" class="btn btn-sm btn-danger" onclick="irRoleDelete()">刪除</button>
+                                </div>
+                                <div style="border:1px solid #e6e9ed;border-radius:6px;padding:10px;">
+                                    <div style="font-size:12px;color:#888;margin-bottom:6px;">功能勾選</div>
+                                    <div id="irFeatBox"></div>
+                                    <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="irRoleSaveFeats()">儲存功能</button>
+                                </div>
+                                <div style="border:1px solid #e6e9ed;border-radius:6px;padding:10px;margin-top:8px;">
+                                    <div style="font-size:12px;color:#888;margin-bottom:6px;">指派使用者（勾選＝擁有此角色）</div>
+                                    <input type="text" id="irUserQ" class="form-control input-sm" style="margin-bottom:6px;" placeholder="搜尋姓名或帳號">
+                                    <div id="irUserBox" style="max-height:200px;overflow:auto;font-size:13px;"></div>
+                                </div>
+                            </div>
+                            <div id="irRoleHint" style="padding:30px;text-align:center;color:#999;">請於左側選一個角色，或新增角色</div>
+                        </div>
                     </div>
                 </div>
                 <?php endif; ?>
@@ -596,7 +650,12 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
             </ul>
             <h5>權限</h5>
             <ul>
-                <li>看得到這一頁的人都可以填業務進度、改退貨性質與負責業務、結案。</li>
+                <li><b>進入本頁需要「退貨追蹤」角色</b>（2026-11-05 起）。功能分五種：<b>檢閱</b>（進入、唯讀）、<b>新增與修改退貨單</b>（含業務進度、附件、改性質／業務、結案）、
+                    <b>開立與處理異常單</b>（舊流程）、<b>設定</b>、<b>管理</b>（期間自動結案）。預設角色：退貨追蹤檢閱／編輯／管理員，可自行增修。</li>
+                <li><b>過渡期</b>：還沒有任何人被指派退貨追蹤角色前，所有人維持原本的使用方式；指派第一位之後就開始檢查，沒被指派的人會被導回首頁。
+                    建議先到「權限設定 → 角色指派」用部門一次指派好。</li>
+                <li><b>角色與功能設定</b>：上方「設定」→「角色與功能」分頁（只有全站管理員看得到，可新增角色、勾功能、指派人員）。
+                    沒有權限的按鈕不會出現；直接打 API 也會被擋下。</li>
                 <li><b>開立異常單</b>依品質異常處理單模組的權限（品管／業務部門、或 <code>qab_fill</code>、<code>qab_admin</code> 等角色）。</li>
                 <li><b>期間自動結案</b>限系統管理者（或被授予 <code>ir_track_admin</code> 功能碼者）。</li>
                 <li><b>退貨統計與原因分類</b>（頁面上方分頁）：統計期間內的退貨件數／數量（含去年同期）、逐月、客戶別、退貨性質與<b>退貨原因分類</b>。退貨性質標成「備註」的不計。原因請在下方「原因分類作業」逐張挑選（與品質異常處理單共用同一棵分類樹、可複選）；沒自己分類的會退回參考已開異常單的分類，都沒有則為「尚未分類」。管理審查會議的客戶抱怨統計直接讀這裡的數字。</li>
@@ -1011,6 +1070,14 @@ var irLoadSeq = 0, irTotal = 0, irYearFilter = '', irServerStats = null, irLoadi
 var QAB_CSRF = <?= json_encode($QAB_CSRF) ?>;
 var QAB_CAN_CREATE = <?= $QAB_CAN_CREATE ? 'true' : 'false' ?>;
 var IR_IS_ADMIN = <?= $IR_IS_ADMIN ? 'true' : 'false' ?>;
+var IR_CAN_EDIT     = <?= $IR_PERMS['canEdit'] ? 'true' : 'false' ?>;
+var IR_CAN_SETTINGS = <?= $IR_PERMS['canSettings'] ? 'true' : 'false' ?>;
+var IR_CAN_NCR      = <?= $IR_PERMS['canNcr'] ? 'true' : 'false' ?>;
+var IR_LEGACY       = <?= irRolesInUse($db) ? 'false' : 'true' ?>;   // 過渡期＝還沒有人被指派本模組角色（與登入者身分無關）
+var IR_FEATURES     = <?= json_encode(array_map(function ($c, $v) { return ['code' => $c, 'label' => $v[0], 'desc' => $v[1]]; }, array_keys(irFeatures()), array_values(irFeatures())), JSON_UNESCAPED_UNICODE) ?>;
+var IR_ROLE_API     = '../../src/store/Roles_API.php';
+var IR_ROLE_MODULE  = <?= json_encode(IR_ROLE_MODULE) ?>;
+function irNoPerm(what) { alert('沒有「' + what + '」的權限，請聯絡管理員在角色設定指派。'); }
 
 $(document).ready(function() {
     loadIRList();
@@ -1102,12 +1169,12 @@ function updateStats() {
             <i class="fa fa-check-circle stat-icon"></i>
             <div class="stat-value">${countDone}</div><div class="stat-label">已完成</div>
         </div>
-        <div class="stat-card action-btn" style="background:#26B99A;color:white;" onclick="openNewIRModal()">
+        ${IR_CAN_EDIT ? `<div class="stat-card action-btn" style="background:#26B99A;color:white;" onclick="openNewIRModal()">
             <div style="text-align:center;"><i class="fa fa-plus-circle" style="font-size:28px;margin-bottom:5px;display:block;"></i><div style="font-weight:600;font-size:14px;">新增退貨單</div></div>
-        </div>
-        <div class="stat-card action-btn" style="background:#8E44AD;color:white;width:120px;" onclick="openReturnTypeModal()">
+        </div>` : ''}
+        ${IR_CAN_SETTINGS ? `<div class="stat-card action-btn" style="background:#8E44AD;color:white;width:120px;" onclick="openReturnTypeModal()">
             <div style="text-align:center;"><i class="fa fa-cog" style="font-size:22px;margin-bottom:5px;display:block;"></i><div style="font-weight:600;font-size:13px;">設定</div></div>
-        </div>`;
+        </div>` : ''}`;
     /* 「品質異常單—可用部門設定」已移至 品管合併檢驗頁（inspection_combined_prototype.php 設定選單）2026-07-06 */
     $('.stats-container').html(html);
 }
@@ -1947,7 +2014,89 @@ function loadAllDepts() {
 /* openDeptConfigModal / saveDeptConfig 已移至 品管合併檢驗頁（inspection_combined_prototype.php 設定選單→異常單回覆部門設定）2026-07-06 */
 
 // ── 新增退貨單 ───────────────────────────────────────────────
+
+/* ── 角色與功能（設定視窗的分頁；沿用全站 Roles_API，只有全站管理員能改） ── */
+var irCurRole = 0, irRolesCache = [], irUsersCache = [];
+function irEsc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function irRoleOpen() {
+    $('#irRoleLegacy').toggle(IR_LEGACY);
+    irRoleLoad();
+}
+function irRoleLoad(keepId) {
+    $.getJSON(IR_ROLE_API, { action: 'get_roles', module: IR_ROLE_MODULE }, function (res) {
+        irRolesCache = (res.data || []).filter(function (r) { return r.is_system != 1; });
+        $('#irRolesList').html(irRolesCache.map(function (r) {
+            return '<div class="ir-r-item" data-id="' + r.role_id + '" style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;' + (r.role_id == keepId ? 'background:#F7E0BD;' : '') + '" onclick="irRoleSelect(' + r.role_id + ')">' + irEsc(r.role_name) + '</div>';
+        }).join('') || '<div style="padding:10px;color:#999;">尚無角色</div>');
+        if (keepId) irRoleSelect(keepId);
+    });
+}
+function irRoleSelect(id) {
+    irCurRole = id;
+    var r = irRolesCache.filter(function (x) { return x.role_id == id; })[0]; if (!r) return;
+    $('#irRolesList .ir-r-item').css('background', '').filter('[data-id="' + id + '"]').css('background', '#F7E0BD');
+    $('#irRoleHint').hide(); $('#irRoleEdit').show();
+    $('#irRoleName').val(r.role_name);
+    $('#irFeatBox').html(IR_FEATURES.map(function (f) {
+        return '<label style="display:block;font-weight:normal;font-size:13px;margin-bottom:4px;"><input type="checkbox" class="ir-featcb" value="' + f.code + '"> <b>' + irEsc(f.label) + '</b><br><span style="color:#888;font-size:12px;margin-left:19px;">' + irEsc(f.desc) + '</span></label>';
+    }).join(''));
+    $.getJSON(IR_ROLE_API, { action: 'get_role_features', role_id: id }, function (res) {
+        var has = res.data || [];
+        $('.ir-featcb').each(function () { $(this).prop('checked', has.indexOf(this.value) >= 0); });
+    });
+    irRoleUsers(id);
+}
+function irRoleUsers(rid) {
+    $.getJSON(IR_ROLE_API, { action: 'get_users', module: IR_ROLE_MODULE }, function (res) {
+        irUsersCache = res.data || [];
+        irRoleUsersDraw(rid);
+    });
+}
+function irRoleUsersDraw(rid) {
+    var q = $.trim($('#irUserQ').val()).toLowerCase();
+    $('#irUserBox').html(irUsersCache.filter(function (u) {
+        return !q || (String(u.user_cname) + String(u.user_uname)).toLowerCase().indexOf(q) >= 0;
+    }).map(function (u) {
+        var owned = (u.roles || []).some(function (x) { return x.role_id == rid; });
+        return '<label style="display:block;font-weight:normal;"><input type="checkbox" class="ir-ucb" data-uid="' + u.id + '"' + (owned ? ' checked' : '') + '> ' + irEsc(u.user_cname) + ' <span style="color:#999;">(' + irEsc(u.user_uname) + ')</span></label>';
+    }).join(''));
+}
+$(document).on('input', '#irUserQ', function () { irRoleUsersDraw(irCurRole); });
+$(document).on('change', '.ir-ucb', function () {
+    var cb = this, uid = $(cb).data('uid'), on = cb.checked;
+    if (on && IR_LEGACY && !confirm('目前還沒有人被指派退貨追蹤角色（所有人都能進入）。\n\n指派第一位之後就開始檢查角色，沒有被指派的人將無法進入本頁。\n建議先到「權限設定 → 角色指派」用部門一次指派好現場人員。\n\n仍要指派嗎？')) { cb.checked = false; return; }
+    $.post(IR_ROLE_API, { action: on ? 'assign_user_role' : 'remove_user_role', user_id: uid, role_id: irCurRole }, function (r) {
+        if (!r.success) { alert(r.message || '失敗'); cb.checked = !on; return; }
+        if (on && IR_LEGACY) { IR_LEGACY = false; $('#irRoleLegacy').hide(); }
+    }, 'json').fail(function () { alert('連線失敗'); cb.checked = !on; });
+});
+function irRoleAdd() {
+    var n = prompt('新角色名稱：'); if (!n) return;
+    $.post(IR_ROLE_API, { action: 'save_role', role_name: n, module: IR_ROLE_MODULE }, function (r) { if (r.success) irRoleLoad(r.role_id); else alert(r.message); }, 'json');
+}
+function irRoleRename() {
+    var n = $.trim($('#irRoleName').val()); if (!irCurRole || !n) return;
+    $.post(IR_ROLE_API, { action: 'save_role', role_id: irCurRole, role_name: n }, function (r) { if (r.success) irRoleLoad(irCurRole); else alert(r.message); }, 'json');
+}
+function irRoleDelete() {
+    if (!irCurRole) return;
+    $.getJSON(IR_ROLE_API, { action: 'role_usage', role_id: irCurRole }, function (u) {
+        var n = ((u && u.user_count) || 0) + ((u && u.position_count) || 0);
+        if (n > 0) { alert('這個角色目前使用中（' + (u.user_count || 0) + ' 人、' + (u.position_count || 0) + ' 組部門職稱），請先取消指派（或到「角色指派」轉換成別的角色）再刪除。'); return; }
+        if (!confirm('確定刪除此角色？')) return;
+        $.post(IR_ROLE_API, { action: 'delete_role', role_id: irCurRole }, function (r) {
+            if (r.success) { $('#irRoleEdit').hide(); $('#irRoleHint').show(); irCurRole = 0; irRoleLoad(); } else alert(r.message);
+        }, 'json');
+    });
+}
+function irRoleSaveFeats() {
+    if (!irCurRole) return;
+    var feats = $('.ir-featcb:checked').map(function () { return this.value; }).get();
+    $.post(IR_ROLE_API, { action: 'save_role_features', role_id: irCurRole, features: JSON.stringify(feats) }, function (r) { alert(r.success ? '已儲存功能' : (r.message || '失敗')); }, 'json');
+}
+
 function openNewIRModal() {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     $('#newIRForm')[0].reset();
     $('#client_container').html('<input type="text" class="form-control" name="client" id="client_input" placeholder="自動帶入或選擇">');
     $('#d_id').val('');
@@ -1966,6 +2115,7 @@ function generateIRPrefix() {
 }
 
 function saveIR() {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     var ir_no  = $('#ir_no').val();
     var d_id   = $('#d_id').val();
     var qty    = $('[name="qty"]').val();
@@ -2135,6 +2285,7 @@ function loadReturnTypes(callback) {
 }
 
 function openReturnTypeModal() {
+    if (!IR_CAN_SETTINGS) { irNoPerm('設定'); return; }
     loadReturnTypes();
     resetReturnTypeForm();
     $('#returnTypeModal').modal('show');
@@ -2209,6 +2360,7 @@ function clearIRBatchSelection() {
 }
 
 function toggleIRStatus(irId, newStatus) {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     var msg = newStatus == 9 ? '確定將此退貨單設為結案？' : '確定重新開啟此退貨單？';
     if (!confirm(msg)) return;
     $.post(IR_API, { action: 'update_ir_status', ir_ids: JSON.stringify([irId]), status: newStatus }, function(res) {
@@ -2251,6 +2403,7 @@ function clearFilters() {
 }
 
 function submitIRBatchTypeUpdate() {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     var ids = [];
     $('.ir-batch-check:checked').each(function(){ ids.push($(this).val()); });
     if (!ids.length) return;
@@ -2264,6 +2417,7 @@ function submitIRBatchTypeUpdate() {
 }
 
 function submitIRBatchAssigneeUpdate() {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     var ids = [];
     $('.ir-batch-check:checked').each(function(){ ids.push($(this).val()); });
     if (!ids.length) return;
@@ -2781,6 +2935,7 @@ function ipmRemoveNewFile(idx) {
 }
 
 function ipmAddNote() {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     var text = $('#ipm-new-note').val().trim();
     var irId = $('#ipm-ir-id').val();
     var irNo = $('#ipm-ir-no').val();
@@ -2830,6 +2985,7 @@ function ipmSaveNoteEdit(noteId) {
 }
 
 function ipmDeleteNote(noteId) {
+    if (!IR_CAN_EDIT) { irNoPerm('新增與修改退貨單'); return; }
     if (!confirm('確定刪除此回覆記錄（含所有附件）？')) return;
     var irId = $('#ipm-ir-id').val();
     $.post(IR_API, { action: 'delete_progress_note', note_id: noteId }, function(r) {

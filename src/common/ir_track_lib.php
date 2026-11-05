@@ -142,3 +142,146 @@ function irPickOrphanQa(array $cands, array $row): ?array {
     if (count($loose) === 1) { $loose[0]['_exact'] = 0; return $loose[0]; }
     return null;
 }
+
+
+/* ─────────────────────────────────────────────────────────────
+   角色與功能（2026-11-05）：module = 'ir_track'
+   頁面進入檢查、API 動作守門、角色設定畫面共用同一份（鐵律4／8）。
+   ───────────────────────────────────────────────────────────── */
+
+/** 模組代碼（roles.module） */
+const IR_ROLE_MODULE = 'ir_track';
+
+/** 本頁功能碼（唯一登記處）：code => [名稱, 說明] */
+function irFeatures(): array {
+    return [
+        'ir_track_view'     => ['檢閱', '進入頁面、看退貨清單／明細／統計／進度回覆與附件（唯讀）'],
+        'ir_track_edit'     => ['新增與修改退貨單', '新增退貨單、改狀態／負責業務／退貨性質、進度回覆、上傳與刪除附件'],
+        'ir_track_ncr'      => ['開立與處理異常單', '舊版異常單流程（開立、編輯、送交、重送）；新版品質異常處理單的開單權限仍看該模組自己的角色'],
+        'ir_track_settings' => ['設定', '退貨性質、異常種類、異常原因分類、流程與附件路徑設定'],
+        'ir_track_admin'    => ['管理（期間自動結案）', '一次結案某一段期間的退貨單，每次套用都留稽核紀錄'],
+    ];
+}
+
+/**
+ * 預設角色（第一次載入頁面時建立；之後管理員可在「設定→角色與功能」自行增修，不會被覆蓋）。
+ * 只在「這個模組完全沒有任何角色」時才建；管理員自己建立或改過的角色一律不動。
+ */
+function irEnsureRoles(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $n = (int)$pdo->query("SELECT COUNT(*) FROM roles WHERE module = '" . IR_ROLE_MODULE . "'")->fetchColumn();
+        if ($n > 0) return;
+        $defs = [
+            ['ir_track_role_view',  '退貨追蹤檢閱',   ['ir_track_view']],
+            ['ir_track_role_edit',  '退貨追蹤編輯',   ['ir_track_view', 'ir_track_edit', 'ir_track_ncr']],
+            ['ir_track_role_admin', '退貨追蹤管理員', array_keys(irFeatures())],
+        ];
+        $insR = $pdo->prepare("INSERT INTO roles (role_code, role_name, is_system, module) VALUES (?,?,0,?)");
+        $insF = $pdo->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+        foreach ($defs as [$code, $name, $feats]) {
+            $insR->execute([$code, $name, IR_ROLE_MODULE]);
+            $rid = (int)$pdo->lastInsertId();
+            foreach ($feats as $f) $insF->execute([$rid, $f]);
+        }
+    } catch (Throwable $e) { /* roles 表不在等情況：靜默，perms 會走過渡期放行 */ }
+}
+
+/**
+ * 過渡期判定：還沒有任何人（個人指派或部門職稱指派）被指派本模組的角色 → 維持原本「人人可用」，
+ * 避免一上線就把現場鎖在門外。第一個角色被指派之後就改以角色為準。
+ */
+function irRolesInUse(PDO $pdo): bool {
+    try {
+        $st = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE r.module = ? LIMIT 1");
+        $st->execute([IR_ROLE_MODULE]);
+        if ($st->fetchColumn()) return true;
+        $st = $pdo->prepare("SELECT 1 FROM position_roles pr JOIN roles r ON r.role_id = pr.role_id WHERE r.module = ? LIMIT 1");
+        $st->execute([IR_ROLE_MODULE]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/**
+ * 這個人在退貨追蹤能做什麼。
+ *   isAdmin    ＝全站管理員（id=1／系統管理員角色）
+ *   canAdmin   ＝本頁管理員（有 ir_track_admin 功能碼，或全站管理員）
+ *   legacy     ＝過渡期（尚未有人被指派本模組角色）
+ */
+function irPerms(PDO $pdo, int $uid): array {
+    irEnsureRoles($pdo);
+    $none = ['isAdmin'=>false,'canAdmin'=>false,'canView'=>false,'canEdit'=>false,'canNcr'=>false,'canSettings'=>false,'legacy'=>false,'features'=>[]];
+    if ($uid <= 0) return $none;
+    // 全站管理員（id=1／系統管理員角色）：連「角色與功能」設定都能改；
+    // 本頁管理員（有 ir_track_admin 功能碼）：本頁全部功能，但不能改角色（Roles_API 只認全站管理員）
+    $isSuper = ($uid === 1);
+    if (!$isSuper) {
+        try {
+            $st = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = ? AND r.role_code IN ('admin','superadmin') LIMIT 1");
+            $st->execute([$uid]);
+            $isSuper = (bool)$st->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+    if ($isSuper) {
+        return ['isAdmin'=>true,'canAdmin'=>true,'canView'=>true,'canEdit'=>true,'canNcr'=>true,'canSettings'=>true,'legacy'=>false,'features'=>['all']];
+    }
+    if (irIsAdmin($pdo, $uid)) {
+        return ['isAdmin'=>false,'canAdmin'=>true,'canView'=>true,'canEdit'=>true,'canNcr'=>true,'canSettings'=>true,'legacy'=>false,'features'=>['ir_track_admin']];
+    }
+    if (!irRolesInUse($pdo)) {
+        // 過渡期：維持上線前的行為（人人可進、可操作；期間自動結案本來就限管理員）
+        return ['isAdmin'=>false,'canAdmin'=>false,'canView'=>true,'canEdit'=>true,'canNcr'=>true,'canSettings'=>true,'legacy'=>true,'features'=>[]];
+    }
+    $feats = [];
+    try {
+        require_once __DIR__ . '/role_features_helper.php';
+        $feats = rf_load_user_features($pdo, $uid);
+    } catch (Throwable $e) {}
+    $has = function (string $c) use ($feats) { return in_array('all', $feats, true) || in_array($c, $feats, true); };
+    $admin = $has('ir_track_admin');
+    return [
+        'isAdmin'     => false,
+        'canAdmin'    => $admin,
+        'canView'     => $admin || $has('ir_track_view')     || $has('ir_track_edit') || $has('ir_track_ncr') || $has('ir_track_settings'),
+        'canEdit'     => $admin || $has('ir_track_edit'),
+        'canNcr'      => $admin || $has('ir_track_ncr'),
+        'canSettings' => $admin || $has('ir_track_settings'),
+        'legacy'      => false,
+        'features'    => $feats,
+    ];
+}
+
+/**
+ * API 動作所需的權限（唯一登記處；沒登記的動作一律要求「檢閱」，寧可嚴不要漏）。
+ * 回傳 view／edit／ncr／settings／admin。
+ */
+function irActionNeed(string $action, string $sub = ''): string {
+    static $map = [
+        // 新增、修改退貨單與業務進度
+        'save_ir'=>'edit','update_ir_status'=>'edit','update_ir_assignee'=>'edit','update_progress'=>'edit',
+        'update_ir_return_type'=>'edit','save_progress_note'=>'edit','delete_progress_note'=>'edit',
+        'upload_ir_attachment'=>'edit','upload_note_attachment'=>'edit','delete_ir_attachment'=>'edit',
+        // 異常單（舊流程）
+        'create_ncr'=>'ncr','update_ncr_full'=>'ncr','update_ncr_flow'=>'ncr','resend_ncr_flow'=>'ncr',
+        // 設定
+        'save_flow_config'=>'settings','save_config'=>'settings','ir_cause_save'=>'settings',
+        'save_ir_return_type'=>'settings','delete_ir_return_type'=>'settings',
+        // 期間自動結案
+        'auto_close_preview'=>'admin','auto_close_apply'=>'admin',
+    ];
+    if ($action === 'manage_abnormal_type') return ($sub === 'get_all') ? 'view' : 'settings';
+    return $map[$action] ?? 'view';
+}
+
+/** 依 irActionNeed 的結果判斷這個人行不行 */
+function irCan(array $perms, string $need): bool {
+    switch ($need) {
+        case 'admin':    return !empty($perms['canAdmin']);
+        case 'settings': return !empty($perms['canSettings']);
+        case 'ncr':      return !empty($perms['canNcr']);
+        case 'edit':     return !empty($perms['canEdit']);
+        default:         return !empty($perms['canView']);
+    }
+}
