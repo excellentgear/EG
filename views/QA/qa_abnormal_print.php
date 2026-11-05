@@ -488,15 +488,25 @@ if ($rmk):
     $rmkRes = $rmk['status'] === 'remake' ? ('補做 ' . (int)$rmk['remake_qty'] . ' PCS（訂單編號 ' . ($rmk['new_oo'] ?: 'NA') . '）')
             : ($rmk['status'] === 'skip' ? '不補' : '尚待業務回覆');
 ?>
-<!-- 報廢後業務回填：補做／不補 -->
+<!-- 報廢後業務回填：是否補做 -->
+<?php
+    $rmkRow = qab_remake_row($db, (int)$o['id']);
+    $rmkWho = (int)($rmkRow['answered_by'] ?? 0);
+    $rmkDay = $rmk['at'] ? substr($rmk['at'], 0, 10) : '';
+    $rmkPi = ($rmkWho && $rmkDay) ? qab_person_asof($db, $rmkWho, $rmkDay) : ['dept' => '', 'position' => ''];
+    $rmkShort = $rmk['status'] === 'remake' ? ('補 ' . (int)$rmk['remake_qty'] . ' PCS') : ($rmk['status'] === 'skip' ? '不補' : '尚待業務回覆');
+?>
 <table class="f">
     <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
-        <td class="lb" rowspan="2">報廢後補做／不補<div class="small" style="font-weight:normal;">(業務確認)</div></td>
-        <td class="c"><b>報廢 <?= (int)$rmk['scrap_qty'] ?> PCS　→　<?= h($rmkRes) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
-        <td class="c"><?= $rmk['who'] ? h($rmk['who']) . '　' . h($rmkAt) : '' ?></td>
+        <td class="lb" rowspan="2">是否補做</td>
+        <td class="c"><b><?= h($rmkShort) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
+        <td class="sig" rowspan="2">
+            <div class="cap"><b>業務簽章：</b></div>
+            <div class="sigbox" data-stamp="<?= h($rmk['who']) ?>" data-dept="<?= h($rmkPi['dept']) ?>" data-pos="<?= h($rmkPi['position']) ?>" data-date="<?= h(d($rmkDay)) ?>"></div>
+        </td>
     </tr>
-    <tr><td class="t nobt small" colspan="2" style="height:8mm;">備註：<?= nl2br(h($rmk['note'])) ?></td></tr>
+    <tr><td class="t nobt small" style="height:8mm;border-top:none;"><?= $rmk['note'] !== '' ? '備註：' . nl2br(h($rmk['note'])) : '' ?></td></tr>
 </table>
 <?php endif; ?>
 
@@ -561,7 +571,7 @@ $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number
 </table>
 <?php endif; ?>
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:32%"><col style="width:22%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:34%"><col style="width:16%"><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="3"><div class="vert">核准</div></td>
         <td class="lb">報廢單號</td>
