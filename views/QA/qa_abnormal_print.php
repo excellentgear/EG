@@ -209,7 +209,8 @@ table.f td.t { vertical-align:top; }
 .cb i { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
         width:11px; height:11px; box-sizing:border-box; border:1px solid #000;
         font-style:normal; font-size:9px; line-height:1; }
-.vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:4px; }
+.vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:4px; margin:0 auto; }
+table.f td.lb { vertical-align:middle; }
 .sig { text-align:center; }
 /* 標題貼著圖章放在左邊（原本自己佔一整列，圖章被擠到下面去、整張表就變高）：
    「(業務/品管) 主管：」會自動折成兩行，字級縮小，跟圖章維持在同一個高度。 */
@@ -513,20 +514,20 @@ if ($rmk):
 <?php if ($showDeduct): ?>
 <!-- 扣款確認 -->
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:32%"><col style="width:16%"><col style="width:22%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:10%"><col style="width:12%"><col style="width:34%"><col style="width:16%"><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="<?= 3 + max(1, count($otherRows)) ?>"><div class="vert">扣款確認</div></td>
         <td class="lb">扣款項目</td><td class="lb">金額 (未稅)</td><td class="lb">說明</td>
+        <td class="lb">通知扣款</td>
         <td class="lb">執 行<div class="small" style="font-weight:normal;">(生管簽章)</div></td>
-        <td class="lb">通知扣款<div class="small" style="font-weight:normal;">(填移轉單號 Exp:J-1130101001)</div></td>
     </tr>
     <tr>
         <td class="c">製程</td>
         <td class="c"><?= h(money($tot['process_rated'])) ?></td>
         <td class="t small" style="<?= $descStyle ?>"><?= h($procDesc) ?></td>
         <?php $dRows = 2 + max(1, count($otherRows)); /* 製程 + 其他(至少一列) + 合計 */ ?>
-        <td class="sig" rowspan="<?= $dRows ?>"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
         <td class="t" rowspan="<?= $dRows ?>"><?= nl2br(h($o['deduct_notify_no'])) ?></td>
+        <td class="sig" rowspan="<?= $dRows ?>"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
     </tr>
     <?php foreach ($otherRows as $orow): ?>
     <tr>
