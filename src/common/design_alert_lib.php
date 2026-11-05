@@ -206,6 +206,7 @@ function oda_rule_set_active(PDO $db, int $id, bool $active, string $reason, int
         if ((int)$r['is_active']) throw new InvalidArgumentException('這則規則已經是啟用狀態，請重新整理看最新狀態');
         $db->prepare("UPDATE order_design_alert_rule SET is_active=1, updated_by=?, updated_by_name=?, updated_at=NOW() WHERE id=?")
            ->execute([($uid ?: null), $uname, $id]);
+        oda_rule_items_toggle($db, $id, true, $uid, $uname);   // 當初因停用而免確認的提醒，回到待確認
         return;
     }
     $reason = trim($reason);
@@ -215,6 +216,45 @@ function oda_rule_set_active(PDO $db, int $id, bool $active, string $reason, int
     $db->prepare("UPDATE order_design_alert_rule SET is_active=0, disabled_reason=?, disabled_by=?, disabled_by_name=?, disabled_at=NOW(),
                   updated_by=?, updated_by_name=?, updated_at=NOW() WHERE id=?")
        ->execute([$reason, ($uid ?: null), $uname, ($uid ?: null), $uname, $id]);
+    oda_rule_items_toggle($db, $id, false, $uid, $uname);   // 已產生但還沒確認的提醒，一併改成免確認
+}
+
+/**
+ * 規則停用／重新啟用時，連動處理它已產生的系統提醒：
+ *  停用＝尚未確認的改成 dropped（不需確認；審圖／轉生管擋關與「設計待處理」統計本來就排除 dropped），已確認的不動；
+ *  啟用＝只把「當初因停用而被改成 dropped」的還原（以最近一筆紀錄是 rule_off 為準），人工標的不處理不碰。
+ */
+function oda_rule_items_toggle(PDO $db, int $ruleId, bool $active, int $uid, string $uname): void
+{
+    $now = (string)$db->query("SELECT NOW()")->fetchColumn();
+    $logIds = [];
+    if (!$active) {
+        $st = $db->prepare("SELECT id FROM eng_log_item WHERE src_rule_id=? AND voided_at IS NULL AND status NOT IN ('resolved','dropped')");
+        $st->execute([$ruleId]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($ids as $iid) {
+            $db->prepare("UPDATE eng_log_item SET status='dropped', updated_at=? WHERE id=?")->execute([$now, $iid]);
+        }
+    } else {
+        $st = $db->prepare("SELECT i.id FROM eng_log_item i WHERE i.src_rule_id=? AND i.voided_at IS NULL AND i.status='dropped'
+            AND (SELECT l.action FROM order_design_alert_log l WHERE l.item_id=i.id ORDER BY l.id DESC LIMIT 1) = 'rule_off'");
+        $st->execute([$ruleId]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($ids as $iid) {
+            $new = el_item_auto_status($db, $iid, 'waiting');
+            $db->prepare("UPDATE eng_log_item SET status=?, updated_at=? WHERE id=?")->execute([$new, $now, $iid]);
+        }
+    }
+    foreach ($ids as $iid) {
+        $row = $db->prepare("SELECT log_id FROM eng_log_item WHERE id=?");
+        $row->execute([$iid]);
+        $logId = (int)$row->fetchColumn();
+        $oid = el_case_order_id($db, $logId);
+        $db->prepare("INSERT INTO order_design_alert_log (item_id, rule_id, order_id, action, by_id, by_name, at) VALUES (?,?,?,?,?,?,?)")
+           ->execute([$iid, $ruleId, $oid ?: null, $active ? 'rule_on' : 'rule_off', ($uid ?: null), $uname, $now]);
+        $logIds[$logId] = true;
+    }
+    foreach (array_keys($logIds) as $lid) el_order_case_sync_status($db, (int)$lid, $now);
 }
 
 /** 刪除規則本體（呼叫端限全站管理員）。已產生的提醒保留，顯示改用建立當下的文字快照。 */
