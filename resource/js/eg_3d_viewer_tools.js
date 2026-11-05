@@ -257,6 +257,141 @@ var EG3DTools = (function () {
         return result;   // Map<mesh, Set<triIndex>>
     }
 
+
+    // ── 目前實際掛在各 mesh 上的材質（唯一清單，剖面／透視還原都走這裡）────────────
+    // ★ 上色（ColorState）會把 mesh.material 換成 clone，clone 當下複製了舊的 clippingPlanes／
+    //   colorWrite，之後剖面移動、關閉剖面、關閉透視時只更新「當初記下來的」原始材質，被上過色
+    //   的零件那份 clone 永遠停在舊狀態——症狀是剖面關掉後該零件仍被切掉一塊、或離開透視後
+    //   整個零件消失（colorWrite 還是 false）。一律重新列舉目前材質才不會漏。
+    function _curMats(mm) {
+        var out = [];
+        if (!mm) return out;
+        mm.EnumerateMeshes(function (m) {
+            (Array.isArray(m.material) ? m.material : [m.material]).forEach(function (mt) {
+                if (mt && out.indexOf(mt) < 0) out.push(mt);
+            });
+        });
+        return out;
+    }
+    // ── 剖面（斷面）上色：斷面是另外畫的封頂物件，不是模型三角面，所以點擊時算不到；
+    //   改成「螢幕射線 ∩ 剖切平面 → 落在哪個零件的斷面輪廓內」，再對那個零件的斷面疊一層有色封頂。
+    //   顏色記在 _capPaint（零件→色碼），剖面重建（拖曳／換軸／爆炸圖）時 _rebuildCaps 會自動重疊。
+    var _capPaint = new Map();
+    var _capPaintViewer = null;
+    function _capPaintRemoveObjs(viewer, onlyMesh) {
+        if (!viewer || !viewer.extraModel) return;
+        var rt = viewer.extraModel.GetRootObject();
+        if (!rt) return;   // 沒有任何疊加物件時 o3dv 回 null
+        rt.children.slice().forEach(function (o) {
+            if (o.userData && o.userData.__egCapPaint && (!onlyMesh || o.userData.__egCapMesh === onlyMesh)) rt.remove(o);
+        });
+    }
+    function _capPaintReset() {
+        _capPaint.clear();
+        if (_capPaintViewer) { _capPaintRemoveObjs(_capPaintViewer); try { _capPaintViewer.Render(); } catch (e) {} }
+    }
+    function _capPaintObj(viewer, mm, plane, i, others, pm, hex, sampleMesh) {
+        var b2 = _buildCapGeometry(mm, plane, pm);
+        if (!b2) return null;
+        var pmat = _buildCapMaterial(sampleMesh, i);
+        pmat.color.set(hex);
+        if (others.length) pmat.clippingPlanes = others;
+        pmat.polygonOffsetFactor = -6;
+        pmat.polygonOffsetUnits = -6;
+        pmat.needsUpdate = true;
+        var po = new sampleMesh.constructor(b2.geo, pmat);
+        po.renderOrder = 6.5;
+        po.userData.__egCapPaint = true;
+        po.userData.__egCapMesh = pm;
+        viewer.AddExtraObject(po);
+        return po;
+    }
+    function _screenRay(viewer, canvasEl, cx, cy) {
+        var cam = viewer.camera;
+        if (!cam || !cam.projectionMatrixInverse) return null;
+        cam.updateMatrixWorld(true);
+        var rect = canvasEl.getBoundingClientRect();
+        var size = viewer.GetCanvasSize();
+        var nx = (cx - rect.left) / size.width * 2 - 1, ny = -((cy - rect.top) / size.height) * 2 + 1;
+        var pi = cam.projectionMatrixInverse.elements, mw = cam.matrixWorld.elements;
+        function un(z) {
+            var x = pi[0]*nx + pi[4]*ny + pi[8]*z + pi[12], y = pi[1]*nx + pi[5]*ny + pi[9]*z + pi[13],
+                zz = pi[2]*nx + pi[6]*ny + pi[10]*z + pi[14], w = pi[3]*nx + pi[7]*ny + pi[11]*z + pi[15];
+            x /= w; y /= w; zz /= w;
+            return [mw[0]*x + mw[4]*y + mw[8]*zz + mw[12], mw[1]*x + mw[5]*y + mw[9]*zz + mw[13], mw[2]*x + mw[6]*y + mw[10]*zz + mw[14]];
+        }
+        var p0 = un(-1), p1 = un(1);
+        var d = [p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2]], dl = Math.sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]) || 1;
+        return { o: p0, d: [d[0]/dl, d[1]/dl, d[2]/dl] };
+    }
+    function _pointInLoops2d(pt, loops2d) {
+        var inside = false;
+        loops2d.forEach(function (lp) {
+            for (var a = 0, b = lp.length - 1; a < lp.length; b = a++) {
+                var xa = lp[a][0], ya = lp[a][1], xb = lp[b][0], yb = lp[b][1];
+                if (((ya > pt[1]) !== (yb > pt[1])) && (pt[0] < (xb - xa) * (pt[1] - ya) / (yb - ya) + xa)) inside = !inside;
+            }
+        });
+        return inside;
+    }
+    // 回傳 true＝點到某零件的斷面並已上色
+    function paintCapAt(embeddedViewer, canvasEl, cx, cy, hex) {
+        var viewer = embeddedViewer.GetViewer(), mm = viewer.mainModel;
+        var cur = null;
+        mm.EnumerateMeshes(function (m) {
+            if (cur || m.visible === false) return;
+            var mt = Array.isArray(m.material) ? m.material[0] : m.material;
+            if (mt && mt.clippingPlanes && mt.clippingPlanes.length) cur = mt;
+        });
+        if (!cur) return false;
+        var planes = cur.clippingPlanes;
+        var ray = _screenRay(viewer, canvasEl, cx, cy);
+        if (!ray) return false;
+        var cands = [];
+        planes.forEach(function (pl, i) {
+            var n = pl.normal, den = n.x*ray.d[0] + n.y*ray.d[1] + n.z*ray.d[2];
+            if (Math.abs(den) < 1e-9) return;
+            var t = -(n.x*ray.o[0] + n.y*ray.o[1] + n.z*ray.o[2] + pl.constant) / den;
+            if (t < 0) return;
+            var P = [ray.o[0]+ray.d[0]*t, ray.o[1]+ray.d[1]*t, ray.o[2]+ray.d[2]*t];
+            // 雙平面：斷面只存在於「另一個平面也判定要切除」那一側
+            for (var j = 0; j < planes.length; j++) {
+                if (j === i) continue;
+                var q = planes[j];
+                if (q.normal.x*P[0] + q.normal.y*P[1] + q.normal.z*P[2] + q.constant > 0) return;
+            }
+            cands.push({ i: i, t: t, P: P });
+        });
+        cands.sort(function (a, b) { return a.t - b.t; });
+        var sampleMesh = null;
+        mm.EnumerateMeshes(function (m) { if (!sampleMesh) sampleMesh = m; });
+        for (var c = 0; c < cands.length; c++) {
+            var plane = planes[cands[c].i], basis = _planeBasis3d(plane), P = cands[c].P;
+            var rel = [P[0]-basis.origin[0], P[1]-basis.origin[1], P[2]-basis.origin[2]];
+            var pt = [rel[0]*basis.u[0]+rel[1]*basis.u[1]+rel[2]*basis.u[2], rel[0]*basis.v[0]+rel[1]*basis.v[1]+rel[2]*basis.v[2]];
+            var hitMesh = null;
+            mm.EnumerateMeshes(function (pm) {
+                if (hitMesh || pm.visible === false) return;
+                var l3 = _buildCapLoops3d(mm, plane, pm);
+                if (!l3.length) return;
+                if (_pointInLoops2d(pt, l3.map(function (l) { return _loop3dTo2d(l, basis); }))) hitMesh = pm;
+            });
+            if (!hitMesh) continue;
+            _capPaint.set(hitMesh, hex);
+            _capPaintViewer = viewer;
+            _capPaintRemoveObjs(viewer, hitMesh);
+            planes.forEach(function (pl, i) {
+                var others = planes.filter(function (_, j) { return j !== i; }).map(function (p) {
+                    return { normal: { x: -p.normal.x, y: -p.normal.y, z: -p.normal.z }, constant: -p.constant };
+                });
+                _capPaintObj(viewer, mm, pl, i, others, hitMesh, hex, sampleMesh);
+            });
+            viewer.Render();
+            return true;
+        }
+        return false;
+    }
+
     // ── 上色：記住每個 mesh 的頂點色資料＋原始材質，才能「恢復預設色」────────────
     function ColorState() {
         this.meshStates = new Map();   // mesh → {origMaterial, colorAttr, baseColor, paintedKeys}
@@ -280,7 +415,14 @@ var EG3DTools = (function () {
         var origMaterial = mesh.material;
         var mats = Array.isArray(origMaterial) ? origMaterial : [origMaterial];
         var newMats = mats.map(function (m) {
+            // ★ 剖面開啟時 clippingPlanes 是純物件 {normal,constant}（不是 THREE.Plane），
+            //   Material.clone() 會對每個平面呼叫 .clone() 而丟 TypeError——這就是「剖面時無法上色」
+            //   的真因。clone 前先暫時拿掉，clone 後把同一組平面（與 clipIntersection）掛回去。
+            var _pl = m.clippingPlanes, _ci = m.clipIntersection;
+            m.clippingPlanes = null;
             var clone = m.clone();
+            m.clippingPlanes = _pl;
+            clone.clippingPlanes = _pl; clone.clipIntersection = _ci;
             clone.vertexColors = true;
             clone.color.set(0xffffff);   // 材質色固定白色，顏色完全交給頂點色決定
             clone.needsUpdate = true;    // 切換 vertexColors 要重新編譯 shader
@@ -314,6 +456,14 @@ var EG3DTools = (function () {
     ColorState.prototype.resetMesh = function (mesh) {
         var state = this.meshStates.get(mesh);
         if (!state) return;
+        // 上色期間剖面／透視可能已經變過，原始材質要承接「目前」的裁切與繪製狀態
+        var _curM = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        (Array.isArray(state.origMaterial) ? state.origMaterial : [state.origMaterial]).forEach(function (om, k) {
+            var cm = _curM[Math.min(k, _curM.length - 1)];
+            if (!cm || !om) return;
+            om.clippingPlanes = cm.clippingPlanes; om.clipIntersection = cm.clipIntersection;
+            om.colorWrite = cm.colorWrite; om.needsUpdate = true;
+        });
         mesh.material = state.origMaterial;
         var arr = state.colorAttr.array, bc = state.baseColor;
         for (var i = 0; i < arr.length; i += 3) { arr[i] = bc.r; arr[i + 1] = bc.g; arr[i + 2] = bc.b; }
@@ -323,6 +473,7 @@ var EG3DTools = (function () {
     ColorState.prototype.resetAll = function () {
         var self = this;
         Array.from(this.meshStates.keys()).forEach(function (mesh) { self.resetMesh(mesh); });
+        _capPaintReset();   // 斷面上的顏色一併清掉
     };
     ColorState.prototype.hasAny = function () { return this.meshStates.size > 0; };
 
@@ -403,6 +554,9 @@ var EG3DTools = (function () {
                 if (g && g.triIndices.length) {
                     ctx.colorState.paintTriangleIndices(g.mesh, g.triIndices, ctx.hexColor);
                     ctx.embeddedViewer.GetViewer().Render();
+                } else if (!g) {
+                    // 沒點到模型面：剖面開啟時可能點的是「斷面」（封頂物件，不在模型三角面裡）
+                    paintCapAt(ctx.embeddedViewer, canvasEl, startX, startY, ctx.hexColor);
                 }
             } else {
                 var prevCursor = document.body.style.cursor;
@@ -1230,7 +1384,7 @@ var EG3DTools = (function () {
         (state.frontObjs || []).forEach(function (o) { root.remove(o); });
         (state.backObjs || []).forEach(function (o) { root.remove(o); });
         (state.silhouetteObjs || []).forEach(function (o) { root.remove(o); });
-        (state.touchedMats || []).forEach(function (mt) { mt.colorWrite = true; mt.needsUpdate = true; });
+        _curMats(viewer.mainModel).concat(state.touchedMats || []).forEach(function (mt) { mt.colorWrite = true; mt.needsUpdate = true; });
         if (viewer.navigation && viewer.navigation.callbacks && state._origOnUpdate) {
             viewer.navigation.callbacks.onUpdate = state._origOnUpdate;
         }
@@ -1732,8 +1886,8 @@ var EG3DTools = (function () {
     // 封頂的 2D 三角化結果／平面基底（供呼叫端另外疊 45 度剖面斜線用，見
     // _buildCapHatchGeometry，三角化只算一次兩邊共用，不要各自重算一次）。沒有交線（平面
     // 完全沒切到模型）或三角化不出結果時回傳 null，呼叫端就不加這個封頂物件。
-    function _buildCapGeometry(mm, plane) {
-        var loops3d = _buildCapLoops3d(mm, plane);
+    function _buildCapGeometry(mm, plane, onlyMesh) {
+        var loops3d = _buildCapLoops3d(mm, plane, onlyMesh);
         if (!loops3d.length) return null;
         var basis = _planeBasis3d(plane);
         var loops2d = loops3d.map(function (l) { return _loop3dTo2d(l, basis); });
@@ -1970,6 +2124,7 @@ var EG3DTools = (function () {
         if (!sampleMesh) return [];
         var MeshCtor = sampleMesh.constructor;
         var caps = [];
+        _capPaintRemoveObjs(viewer);
         var allMeshes = [];
         mm.EnumerateMeshes(function (m) { if (m.visible !== false) allMeshes.push(m); });
 
@@ -1999,6 +2154,13 @@ var EG3DTools = (function () {
             capObj.renderOrder = 6;   // 比透視模式的可見邊(10)低、比背面虛線邊(5)高，封頂面本身不需要跟邊線搶深度排序
             viewer.AddExtraObject(capObj);
             caps.push(capObj);
+            // 使用者在斷面上塗的顏色：每次重建封頂都要疊回去
+            allMeshes.forEach(function (pm) {
+                var hx = _capPaint.get(pm);
+                if (!hx) return;
+                var po = _capPaintObj(viewer, mm, plane, i, others, pm, hx, sampleMesh);
+                if (po) caps.push(po);
+            });
 
             // 相鄰封頂（雙平面楔形/象限剖面時）斜線角度刻意錯開 90 度（45／135），對應紙本
             // 工程圖「不同零件（或此處=不同剖切面）的剖面線角度要互相區分」慣例，同時也
@@ -2171,6 +2333,7 @@ var EG3DTools = (function () {
         var pc = _computeSectionPlanes(state.bbox, opts);
         var planes = pc.planes, dual = pc.dual;
         state.plane = planes[0]; state.plane2 = planes[1] || null; state.dual = dual;
+        state.touchedMats = _curMats(embeddedViewer.GetViewer().mainModel);
         state.touchedMats.forEach(function (mt) {
             mt.clippingPlanes = planes;
             mt.clipIntersection = dual;
@@ -2184,8 +2347,9 @@ var EG3DTools = (function () {
     }
     function clearSectionMode(embeddedViewer, state) {
         if (!embeddedViewer || !state) return;
-        (state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.clipIntersection = false; mt.needsUpdate = true; });
         var viewer = embeddedViewer.GetViewer();
+        _curMats(viewer.mainModel).concat(state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.clipIntersection = false; mt.needsUpdate = true; });
+        _capPaintRemoveObjs(viewer);
         var root = viewer.extraModel.GetRootObject();
         (state.capObjs || []).forEach(function (o) { root.remove(o); });
         viewer.Render();
@@ -2353,6 +2517,7 @@ var EG3DTools = (function () {
         attachMeasureInteraction: attachMeasureInteraction,
         setHiddenLineMode: setHiddenLineMode,
         clearHiddenLineMode: clearHiddenLineMode,
+        paintCapAt: paintCapAt,
         applySectionClipToHiddenLine: applySectionClipToHiddenLine,
         setSectionMode: setSectionMode,
         updateSectionMode: updateSectionMode,
