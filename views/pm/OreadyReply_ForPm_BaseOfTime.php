@@ -6504,15 +6504,30 @@ echo "</script>\n";
                     var _qtBox = document.createElement('div');
                     _qtBox.className = 'qab-tags';
                     _qtBox.style.cssText = 'margin-top:4px;font-size:11px;line-height:1.5;';
-                    _qt.forEach(function (t) {
+                    var QT_FOLD = 3;   // 超過這個數量就收合成「還有 N 筆」
+                    _qt.forEach(function (t, _qtIdx) {
                         var d = document.createElement('div');
                         d.style.cssText = 'margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
                         d.title = '異常單 ' + (t.no || '');
                         d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.name || '') + '</span> '
                             + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + escapeHtml(t.process || '') + ' x' + (t.qty || 0)
                             + (t.who ? ' (' + escapeHtml(t.who) + ')' : '');
+                        if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
                         _qtBox.appendChild(d);
                     });
+                    if (_qt.length > QT_FOLD) {
+                        var _qtMore = document.createElement('div');
+                        _qtMore.style.cssText = 'color:#337ab7;font-size:11px;cursor:pointer;text-decoration:underline;';
+                        _qtMore.textContent = '… 還有 ' + (_qt.length - QT_FOLD) + ' 筆，點此展開';
+                        _qtMore.onclick = function (e) {
+                            e.stopPropagation();
+                            var open = _qtMore.getAttribute('data-open') === '1';
+                            _qtBox.querySelectorAll('.qab-tag-extra').forEach(function (x) { x.style.display = open ? 'none' : ''; });
+                            _qtMore.setAttribute('data-open', open ? '0' : '1');
+                            _qtMore.textContent = open ? '… 還有 ' + (_qt.length - QT_FOLD) + ' 筆，點此展開' : '收合';
+                        };
+                        _qtBox.appendChild(_qtMore);
+                    }
                     tdBomPs.appendChild(_qtBox);
                 }
             } catch (_qtErr) {}
