@@ -455,13 +455,13 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                 <div class="tab-pane" id="tab-ir-roles">
                     <div id="irRoleLegacy" class="note-box" style="display:none;">
                         <b>目前是過渡期：</b>還沒有任何人被指派退貨追蹤的角色，所以<b>所有人都能進入並操作</b>（維持原本行為）。
-                        指派第一位之後就會開始檢查角色，<b>沒有被指派的人將無法進入本頁</b>——建議先到
+                        在權限設定指派第一位之後就會開始檢查角色，<b>沒有被指派的人將無法進入本頁</b>——請先到
                         <a href="../user/user_permissions.php" target="_blank">權限設定 → 角色指派</a>，用「依部門」一次把現場人員都指派好，再回來調整。
                     </div>
                     <div class="note-box">
                         本頁的角色與功能獨立設定，不影響其他頁面。進入頁面需要<b>檢閱</b>（或更高）；其他功能依下方勾選。
-                        「期間自動結案」仍限全站管理員或持有「管理」功能者。要一次指派多人，請用
-                        <a href="../user/user_permissions.php" target="_blank">權限設定 → 角色指派</a>。
+                        「期間自動結案」仍限全站管理員或持有「管理」功能者。角色指派一律在
+                        <a href="../user/user_permissions.php#rp-wrap" target="_blank">權限設定 → 角色指派</a> 進行。
                     </div>
                     <div style="display:flex;gap:14px;flex-wrap:wrap;">
                         <div style="flex:0 0 230px;border:1px solid #e6e9ed;border-radius:6px;">
@@ -482,10 +482,10 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                                     <div id="irFeatBox"></div>
                                     <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="irRoleSaveFeats()">儲存功能</button>
                                 </div>
-                                <div style="border:1px solid #e6e9ed;border-radius:6px;padding:10px;margin-top:8px;">
-                                    <div style="font-size:12px;color:#888;margin-bottom:6px;">指派使用者（勾選＝擁有此角色）</div>
-                                    <input type="text" id="irUserQ" class="form-control input-sm" style="margin-bottom:6px;" placeholder="搜尋姓名或帳號">
-                                    <div id="irUserBox" style="max-height:200px;overflow:auto;font-size:13px;"></div>
+                                <div style="border:1px solid #e6e9ed;border-radius:6px;padding:10px;margin-top:8px;font-size:13px;">
+                                    <i class="fa fa-users"></i> 要把角色指派給人，請到
+                                    <a href="../user/user_permissions.php#rp-wrap" target="_blank"><b>權限設定 → 角色指派</b></a>
+                                    （可勾選多人或整個部門一次設定，模組名稱「退貨追蹤」）。
                                 </div>
                             </div>
                             <div id="irRoleHint" style="padding:30px;text-align:center;color:#999;">請於左側選一個角色，或新增角色</div>
@@ -654,7 +654,7 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                     <b>開立與處理異常單</b>（舊流程）、<b>設定</b>、<b>管理</b>（期間自動結案）。預設角色：退貨追蹤檢閱／編輯／管理員，可自行增修。</li>
                 <li><b>過渡期</b>：還沒有任何人被指派退貨追蹤角色前，所有人維持原本的使用方式；指派第一位之後就開始檢查，沒被指派的人會被導回首頁。
                     建議先到「權限設定 → 角色指派」用部門一次指派好。</li>
-                <li><b>角色與功能設定</b>：上方「設定」→「角色與功能」分頁（只有全站管理員看得到，可新增角色、勾功能、指派人員）。
+                <li><b>角色與功能設定</b>：上方「設定」→「角色與功能」分頁（只有全站管理員看得到，可新增角色、勾功能；<b>把角色指派給人一律在「權限設定 → 角色指派」</b>）。
                     沒有權限的按鈕不會出現；直接打 API 也會被擋下。</li>
                 <li><b>開立異常單</b>依品質異常處理單模組的權限（品管／業務部門、或 <code>qab_fill</code>、<code>qab_admin</code> 等角色）。</li>
                 <li><b>期間自動結案</b>限系統管理者（或被授予 <code>ir_track_admin</code> 功能碼者）。</li>
@@ -2016,7 +2016,7 @@ function loadAllDepts() {
 // ── 新增退貨單 ───────────────────────────────────────────────
 
 /* ── 角色與功能（設定視窗的分頁；沿用全站 Roles_API，只有全站管理員能改） ── */
-var irCurRole = 0, irRolesCache = [], irUsersCache = [];
+var irCurRole = 0, irRolesCache = [];
 function irEsc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function irRoleOpen() {
     $('#irRoleLegacy').toggle(IR_LEGACY);
@@ -2044,32 +2044,7 @@ function irRoleSelect(id) {
         var has = res.data || [];
         $('.ir-featcb').each(function () { $(this).prop('checked', has.indexOf(this.value) >= 0); });
     });
-    irRoleUsers(id);
 }
-function irRoleUsers(rid) {
-    $.getJSON(IR_ROLE_API, { action: 'get_users', module: IR_ROLE_MODULE }, function (res) {
-        irUsersCache = res.data || [];
-        irRoleUsersDraw(rid);
-    });
-}
-function irRoleUsersDraw(rid) {
-    var q = $.trim($('#irUserQ').val()).toLowerCase();
-    $('#irUserBox').html(irUsersCache.filter(function (u) {
-        return !q || (String(u.user_cname) + String(u.user_uname)).toLowerCase().indexOf(q) >= 0;
-    }).map(function (u) {
-        var owned = (u.roles || []).some(function (x) { return x.role_id == rid; });
-        return '<label style="display:block;font-weight:normal;"><input type="checkbox" class="ir-ucb" data-uid="' + u.id + '"' + (owned ? ' checked' : '') + '> ' + irEsc(u.user_cname) + ' <span style="color:#999;">(' + irEsc(u.user_uname) + ')</span></label>';
-    }).join(''));
-}
-$(document).on('input', '#irUserQ', function () { irRoleUsersDraw(irCurRole); });
-$(document).on('change', '.ir-ucb', function () {
-    var cb = this, uid = $(cb).data('uid'), on = cb.checked;
-    if (on && IR_LEGACY && !confirm('目前還沒有人被指派退貨追蹤角色（所有人都能進入）。\n\n指派第一位之後就開始檢查角色，沒有被指派的人將無法進入本頁。\n建議先到「權限設定 → 角色指派」用部門一次指派好現場人員。\n\n仍要指派嗎？')) { cb.checked = false; return; }
-    $.post(IR_ROLE_API, { action: on ? 'assign_user_role' : 'remove_user_role', user_id: uid, role_id: irCurRole }, function (r) {
-        if (!r.success) { alert(r.message || '失敗'); cb.checked = !on; return; }
-        if (on && IR_LEGACY) { IR_LEGACY = false; $('#irRoleLegacy').hide(); }
-    }, 'json').fail(function () { alert('連線失敗'); cb.checked = !on; });
-});
 function irRoleAdd() {
     var n = prompt('新角色名稱：'); if (!n) return;
     $.post(IR_ROLE_API, { action: 'save_role', role_name: n, module: IR_ROLE_MODULE }, function (r) { if (r.success) irRoleLoad(r.role_id); else alert(r.message); }, 'json');
