@@ -96,9 +96,21 @@ switch ($action) {
         $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm, !empty($_GET['zero']) && ($perms['canAdmin'] || $perms['isPm'] || $perms['isSales'] || $perms['isAcc']));
         // 結帳日最後修改人／日期（顯示在結帳日下方）
         $lastEdit = act_settle_last_edit_map($db, $side === 'ar' ? 'customer' : 'maker');
+        // 轉到「目前狀態」的日期：該追蹤列最後一次轉入目前狀態的紀錄
+        $stAt = [];
+        try {
+            $ids = array_values(array_unique(array_map('intval', array_column($allRows, 'track_id'))));
+            if ($ids) {
+                $q = $db->query("SELECT track_id, to_status, DATE_FORMAT(MAX(changed_at),'%Y-%m-%d') d
+                                 FROM acc_recon_track_status_log WHERE track_id IN (" . implode(',', $ids) . ")
+                                 GROUP BY track_id, to_status");
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $stAt[$x['track_id'] . '|' . $x['to_status']] = $x['d'];
+            }
+        } catch (Throwable $e) {}
         foreach ($allRows as &$_r) {
             $le = $lastEdit[(string)($_r['party_id'] ?? '')] ?? null;
             $_r['settle_by'] = $le['by'] ?? null; $_r['settle_at'] = $le['at'] ?? null;
+            $_r['status_at'] = ((string)$_r['status'] !== '') ? ($stAt[$_r['track_id'] . '|' . $_r['status']] ?? null) : null;
         }
         unset($_r);
 

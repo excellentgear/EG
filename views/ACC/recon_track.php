@@ -128,7 +128,7 @@ body { background:#F6F1EA; }
 .st-card[data-st="processing"]   { border-top-color:#a08a6f; }
 .st-card[data-st="reconciled"]   { border-top-color:var(--amber); }
 .st-card[data-st="sent_to_acc"]  { border-top-color:#C77C1A; }
-.st-card[data-st="acc_received"] { border-top-color:#5B8A72; }
+.st-card[data-st="acc_received"] { border-top-color:#8B5A2B; }
 .st-card[data-st="acc_done"]     { border-top-color:#2E7D32; }
 .badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; line-height:16px; }
 .badge-not_due       { background:#D8CBB4; color:#5A4328; }
@@ -137,7 +137,7 @@ body { background:#F6F1EA; }
 .badge-processing    { background:#a08a6f; }
 .badge-reconciled    { background:var(--amber); color:#4E2C0B; }
 .badge-sent_to_acc   { background:#C77C1A; }
-.badge-acc_received  { background:#5B8A72; }
+.badge-acc_received  { background:#8B5A2B; }
 .badge-acc_done       { background:#2E7D32; }
 .badge-need  { background:var(--coral); color:#fff; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
 .badge-nneed { background:#E4D3BC; color:#6B4423; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
@@ -280,7 +280,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <div class="art-tabpane" id="paneStat">
     <div class="sec">
       <h4>
-        統計分析
+        <span id="statSideLabel">統計分析</span>
         <span class="hint">工作天數＝含起訖日的工作日數（遇假日不計），分組可在「設定」調整</span>
         <div class="sec-tools">
           <label>年度</label>
@@ -944,7 +944,7 @@ function renderListTbl(){
             tds.push('<td class="c">' + needBadge + '</td>');
             tds.push('<td class="c">' + esc(r.owner_name || '—') + '</td>');
         }
-        tds.push('<td class="c">' + statusBadge(r.card_status) + '</td>');
+        tds.push('<td class="c">' + statusBadge(r.card_status) + (r.status_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(String(r.status_at).replace(/-/g,'.')) + '</div>' : '') + '</td>');
         tds.push('<td class="c">' + btns + '</td>');
         tds.push('<td class="c">' + settleBtn + '</td>');
         if (isAr) {
@@ -1111,6 +1111,7 @@ function fillIdx(){
 }
 function loadStat(){
     var year = document.getElementById('sYear').value, gran = document.getElementById('sGran').value, idx = document.getElementById('sIdx').value;
+    document.getElementById('statSideLabel').textContent = (SIDE==='ar' ? '應收' : '應付') + ' 統計分析';
     apiGet('stats', {side:SIDE, year:year, gran:gran, idx:idx}).done(function(r){
         if (!r || !r.ok) return;
         renderStatKpi(r.counts, r.period);
