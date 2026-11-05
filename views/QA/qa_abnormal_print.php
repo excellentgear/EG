@@ -500,7 +500,7 @@ if ($rmk):
     <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="2">是否補做</td>
-        <td class="c"><b><?= h($rmkShort) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
+        <td class="t" style="text-align:left;padding-left:6px;"><b><?= h($rmkShort) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
         <td class="sig" rowspan="2">
             <div class="cap"><b>業務簽章：</b></div>
             <div class="sigbox" data-stamp="<?= h($rmk['who']) ?>" data-dept="<?= h($rmkPi['dept']) ?>" data-pos="<?= h($rmkPi['position']) ?>" data-date="<?= h(d($rmkDay)) ?>"></div>
@@ -576,7 +576,7 @@ $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number
         <td class="lb" rowspan="3"><div class="vert">核准</div></td>
         <td class="lb">報廢單號</td>
         <td class="c"><b><?= h($o['scrap_no']) ?></b></td>
-        <td class="lb" rowspan="2">核准 (管理課 會計/主管)</td>
+        <td class="lb" rowspan="2">核准<br>(管理課 會計/主管)</td>
         <td class="sig" rowspan="2" style="height:24mm;"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
     </tr>
     <tr>
