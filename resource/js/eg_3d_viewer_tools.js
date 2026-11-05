@@ -1114,6 +1114,7 @@ var EG3DTools = (function () {
         var meshFrontMat = new Map();   // mesh → 可見邊材質，輪廓邊重用同一份材質（視覺風格要一致）
         var meshBackMat = new Map();    // mesh → 被遮蔽邊材質（虛線＋反轉深度測試），輪廓邊的被遮蔽部分重用同一份
         mm.EnumerateMeshes(function (mesh) {
+            if (mesh.visible === false) return;   // 已被「零件清單」隱藏的零件不畫邊線
             // 角度門檻用 20 度——這裡只是要畫「視覺輪廓」不是要精準選出單一 CAD 面，跟
             // 上色功能（也是 20 度，見 sameFaceTriangles 開頭註解，2026-10-12 已從舊的
             // 12 度調整過）用途不同，純屬巧合用了同一個數字，改動其中一處不必連動另一處。
@@ -1177,6 +1178,7 @@ var EG3DTools = (function () {
             if (!camera || !camera.eye) return;
             var eyeWorld = [camera.eye.x, camera.eye.y, camera.eye.z];
             mm.EnumerateMeshes(function (mesh) {
+                if (mesh.visible === false) return;
                 var fmat = meshFrontMat.get(mesh);
                 var bmat = meshBackMat.get(mesh);
                 if (!fmat || !bmat) return;   // 完全沒有特徵邊的 mesh（如整顆平滑球）不處理輪廓邊
@@ -1384,6 +1386,7 @@ var EG3DTools = (function () {
         // 還是在真正的剖切面上，不會偏移。
         var cutPlane = { normal: plane.normal, constant: plane.constant - planeEps * 17.3 };
         mm.EnumerateMeshes(function (mesh) {
+            if (mesh.visible === false) return;   // 被隱藏的零件不參與剖面斷面
             if (onlyMesh && mesh !== onlyMesh) return;   // 只取單一零件的截面（剖面線依零件分角度用）
             var geo = mesh.geometry;
             var posAttr = geo.attributes.position;
@@ -1968,7 +1971,7 @@ var EG3DTools = (function () {
         var MeshCtor = sampleMesh.constructor;
         var caps = [];
         var allMeshes = [];
-        mm.EnumerateMeshes(function (m) { allMeshes.push(m); });
+        mm.EnumerateMeshes(function (m) { if (m.visible !== false) allMeshes.push(m); });
 
         // 斜線間距／線寬依整個模型的包圍盒尺度換算（跟透視模式虛線間距 dashSize 同一種
         // 做法），模型大小不同時斜線密度維持視覺上接近的比例，不會一個模型線條擠成一團、

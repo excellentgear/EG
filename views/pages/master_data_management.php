@@ -23981,14 +23981,30 @@ $(document).on('click', '#pav-btn-3d-asm', function () {
     p.css('display', 'flex');
 });
 $(document).on('click', '#pav-3d-asm-close', function () { $('#pav-3d-asm-panel').hide(); });
+// 零件顯示／隱藏後：透視的邊線與剖面封頂都是另外畫的物件，要重建才會跟著少掉那個零件
+var _pav3dVisT = null;
+function _pav3dRefreshAfterVis() {
+    clearTimeout(_pav3dVisT);
+    _pav3dVisT = setTimeout(function () {
+        if (!_pav3dViewer) return;
+        if (_pav3dHLState) {
+            EG3DTools.clearHiddenLineMode(_pav3dViewer, _pav3dHLState);
+            _pav3dHLState = EG3DTools.setHiddenLineMode(_pav3dViewer);
+        }
+        if (_pav3dSectionState) EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts);
+        _pav3dSyncHLClip();
+    }, 60);
+}
 $(document).on('change', '.pav-3d-asm-chk', function () {
     EG3DTools.setComponentVisible(_pav3dViewer, $(this).attr('data-key'), this.checked);
+    _pav3dRefreshAfterVis();
 });
 $(document).on('click', '#pav-3d-asm-all, #pav-3d-asm-none', function () {
     var on = (this.id === 'pav-3d-asm-all');
     $('.pav-3d-asm-chk').prop('checked', on).each(function () {
         EG3DTools.setComponentVisible(_pav3dViewer, $(this).attr('data-key'), on);
     });
+    _pav3dRefreshAfterVis();
 });
 $(document).on('input change', '#pav-3d-explode', function () {
     if (!_pav3dViewer) return;
