@@ -1236,9 +1236,26 @@ function renderTable() {
 
 function esc(s) { return s == null ? '' : $('<div>').text(s).html(); }
 
+// 報廢後業務回填「補做／不補」（品質異常單，2026-11-05）：標在部門處理狀況欄，異常單號可直接點開
+function remakeHtml(row) {
+    var a = row.qab_remake;
+    if (!a || !a.length) return '';
+    return a.map(function(t) {
+        return '<div style="margin-bottom:3px;line-height:1.5;"><span style="display:inline-block;background:' + t.bg + ';color:' + t.fg
+            + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + esc(t.name) + '</span> '
+            + '<a href="../QA/qa_abnormal_form.php?id=' + t.id + '" target="_blank" rel="noopener" style="font-size:11px;">' + esc(t.process) + '</a>'
+            + ' <small style="color:#999;">' + esc(t.md || '') + (t.who ? ' ' + esc(t.who) : '') + '</small>'
+            + (t.note ? '<div style="font-size:11px;color:#8C5A2B;">備註：' + esc(t.note) + '</div>' : '') + '</div>';
+    }).join('');
+}
+function remakeText(row) {
+    return (row.qab_remake || []).map(function(t) { return t.name + ' ' + t.process + (t.note ? ' ' + t.note : ''); }).join(' ');
+}
+
 // 部門處理狀態（品質異常單的舊流程 qa_ir_ncr_flow）
 function deptStatusHtml(row) {
-    if (row.has_ncr != 1 || !row.ncr_dept_status || !row.ncr_dept_status.length) return '';
+    var rk = remakeHtml(row);
+    if (row.has_ncr != 1 || !row.ncr_dept_status || !row.ncr_dept_status.length) return rk;
     var list = row.ncr_dept_status.slice().sort(function(a, b) {
         var da = (a.recv && a.recv !== '-') ? new Date(a.recv).getTime() : 8640000000000000;
         var db_ = (b.recv && b.recv !== '-') ? new Date(b.recv).getTime() : 8640000000000000;
@@ -1252,11 +1269,12 @@ function deptStatusHtml(row) {
             : (ds.recv && ds.recv !== '-' ? '<br><small>' + esc(ds.recv) + '~</small>' : '');
         html += '<div class="dept-tag ' + cls + '"><strong>' + esc(ds.dept) + '</strong>: ' + esc(ds.user) + dateHtml + '</div>';
     });
-    return html;
+    return rk + html;
 }
 function deptStatusText(row) {
-    if (row.has_ncr != 1 || !row.ncr_dept_status) return '';
-    return row.ncr_dept_status.map(function(d){ return d.dept + ' ' + d.user; }).join(' ');
+    var rt = remakeText(row);
+    if (row.has_ncr != 1 || !row.ncr_dept_status) return rt;
+    return (rt ? rt + ' ' : '') + row.ncr_dept_status.map(function(d){ return d.dept + ' ' + d.user; }).join(' ');
 }
 
 // 業務進度（含還沒存檔的草稿）
@@ -1298,7 +1316,7 @@ function qaCellHtml(row) {
     } else if (row.has_ncr == 1) {
         qaHtml = '<button class="btn btn-xs btn-info" onclick="openQADetailModal(' + row.IR_id + ')">' + esc(row.qa_abnormal_order_no || '查看') + '</button>';
     } else if (QAB_CAN_CREATE) {
-        qaHtml = '<button class="btn btn-xs btn-default" onclick="openNewQaOrder(' + row.IR_id + ')">開立</button>';
+        qaHtml = '<button class="btn btn-xs btn-default" onclick="openQaFromList(' + row.IR_id + ')" title="開啟品質異常處理單的開單畫面，並自動帶入這張客退單的資料">開立</button>';
     } else {
         qaHtml = '<span class="text-muted" style="font-size:11px;" title="開立品質異常處理單需要該模組的權限">—</span>';
     }
@@ -2334,6 +2352,13 @@ $(document).on('change', '#qn_cat', function(){ $('#qn_err').text(''); qnApplyCa
     $(document).on('blur', '#qn_bom', function(){ setTimeout(function(){ $('#qn_bom_list').hide(); }, 180); });
     $(window).on('scroll resize', function(){ if ($('#qn_bom_list').is(':visible')) place(); });
 })();
+
+/* 開立異常單：直接用品質異常處理單清單的開單畫面（qa_abnormal_list.php），並把這張客退單的資料帶進去（2026-11-05） */
+function openQaFromList(irId) {
+    var row = allIRData.find(function(r){ return r.IR_id == irId; });
+    if (!row) return;
+    window.open('../QA/qa_abnormal_list.php?new_ir=' + encodeURIComponent(irId) + '&new_ir_no=' + encodeURIComponent(row.IR_no || ''), '_blank');
+}
 
 function openNewQaOrder(irId) {
     var row = allIRData.find(function(r){ return r.IR_id == irId; });

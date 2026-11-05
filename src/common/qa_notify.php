@@ -123,6 +123,7 @@ if (!function_exists('eg_qa_insert_event')) {
      */
     function eg_qa_insert_event(PDO $db, int $orderId, string $title, string $content, array $targets, ?string $replyDeadline, int $createdBy, array $opts = []): int {
         if (empty($targets)) return 0;
+        if (defined('QAB_SILENT')) return 0;   // 測試用：整個不發任何通知（CLI 測試腳本才會 define，正式環境不會有）
         $refType = $opts['ref_type'] ?? 'QA';
         $refId   = (int)($opts['ref_id'] ?? $orderId);
         $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, reply_deadline, show_status_to_others, ref_type, ref_id)

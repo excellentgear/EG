@@ -441,6 +441,7 @@ function qab_ensure_schema(PDO $db): void
     } catch (Throwable $e) {}
 
     try { qab_rework_schema($db); } catch (Throwable $e) {}
+    try { qab_remake_schema($db); } catch (Throwable $e) {}   // 報廢後業務回填補做／不補（2026-11-05）
     qab_seed_defaults($db);
 }
 
@@ -3241,6 +3242,13 @@ function qab_can_view_order(PDO $db, array $perms, int $orderId): bool
         $st->execute([$orderId, $uid]);
         if ($st->fetchColumn()) return true;
     } catch (Throwable $e) {}
+    // 被通知回填「報廢補做／不補」的業務人員（多半沒有本模組角色，不放行就點不進通知）
+    try {
+        $st = $db->prepare("SELECT notify_uids FROM qab_remake WHERE order_id=?");
+        $st->execute([$orderId]);
+        $u = json_decode((string)$st->fetchColumn(), true);
+        if (is_array($u) && in_array($uid, array_map('intval', $u), true)) return true;
+    } catch (Throwable $e) {}
     return false;
 }
 
@@ -3496,6 +3504,8 @@ function qab_scrap_no_sync(PDO $db, int $id): string
         } catch (Throwable $e) { error_log('qab deduct autofill: ' . $e->getMessage()); }
         qab_notify_deduct_fill($db, $o);
     }
+    // 判定報廢 → 請業務回填補做／不補；改回非報廢 → 尚未回覆的作廢（冪等，失敗不影響決策存檔）
+    qab_remake_ensure($db, $id, (int)($o['disp_decided_by'] ?: $o['gm_decided_by'] ?: 0));
     if ($scrapNo === '' || !empty($o['final']['is_scrap'])) return '';
     $db->prepare("UPDATE qa_abnormal_order SET scrap_no=NULL, scrap_no_at=NULL WHERE id=?")->execute([$id]);
     return $scrapNo;
@@ -3619,6 +3629,7 @@ function qab_close_order(PDO $db, int $id, int $uid, bool $skipChecks = false): 
         if ($own) $db->commit();
     } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
     qab_retire_pending_notices($db, $id, 'gm', $uid);   // 結案＝所有待決策／待裁示通知都已無意義
+    if ($scrapNo !== '') qab_remake_ensure($db, $id, $uid);   // 拆分出來的報廢子單在這裡才第一次被判定（冪等）
     return ['scrap_no' => $scrapNo];
 }
 
@@ -3939,6 +3950,8 @@ function qab_bom_decision_tags(PDO $db, array $bomNos): array
     // 有對應自動開立的異常單就帶單號，滑過標籤可看到
     $bomNos = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $bomNos)), function ($v) { return $v !== ''; })));
     if (!$bomNos) return $out;
+    // 報廢後業務回填的「補做／不補／待回覆」標籤（2026-11-05）
+    try { foreach (qab_remake_tags_for_boms($db, $bomNos) as $k => $list) foreach ($list as $t) $out[(string)$k][] = $t; } catch (Throwable $e) {}
     try {
         $in = implode(',', array_fill(0, count($bomNos), '?'));
         $st = $db->prepare("SELECT bi.bom AS k, b.scrap_qty, b.updated_at, bi.bom_sn, pn.ProcessName,
@@ -4917,3 +4930,6 @@ function qab_deduct_ensure_rows(PDO $db, int $id, int $uid): void
     $has = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_deduct WHERE order_id=" . (int)$id . " AND kind='process'")->fetchColumn();
     if ($has === 0) qab_deduct_autofill_apply($db, $id, $uid); else qab_deduct_fill_missing($db, $id, $uid);
 }
+
+/* 報廢後業務回填補做／不補（2026-11-05）：與本檔互相呼叫，放在檔尾載入 */
+require_once __DIR__ . '/qa_abnormal_remake_lib.php';

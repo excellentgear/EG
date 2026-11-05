@@ -481,6 +481,13 @@ ORDER BY t.IR_date DESC, t.IR_id DESC";
             $stmt = $pdo->query($sql);
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            /* 報廢後業務回填「補做／不補」標籤（2026-11-05）：依異常單綁的客退單顯示在「部門處理狀況」欄；失敗不影響清單 */
+            $qabRemakeTags = [];
+            try {
+                require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+                $qabRemakeTags = qab_remake_tags_for_irs($pdo, array_column($data, 'IR_id'));
+            } catch (Throwable $e) { $qabRemakeTags = []; }
+
             /* 異常單綁定的備援：ERP 重新匯入客退單會換一組 IR_id，原本綁好的異常單就對不回任何一列，
                退貨追蹤這邊看起來像「從來沒開過單」（使用者回報）。以單號回頭對得到的就顯示出來，
                並標明是用單號對的——同一個 IR 單號常常有好幾筆明細，料號也對得上才算得準。 */
@@ -526,6 +533,7 @@ ORDER BY t.IR_date DESC, t.IR_id DESC";
                     }
                 }
                 $row['ncr_dept_status'] = $ncr_statuses;
+                $row['qab_remake'] = $qabRemakeTags[(int)$row['IR_id']] ?? [];
                 unset($row['ncr_dept_status_raw']);
 
                 $row['qa_bind_by'] = $row['qa_order_id'] ? 'id' : '';

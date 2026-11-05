@@ -613,6 +613,9 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     客戶只打名稱沒選主檔的話統計與對帳也會對不到這一張）；綁了來源之後<b>客戶與料號會自動帶、不給手打</b>，
                     <b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。
                     要綁什麼是管理員可以逐類調整的（設定 → 異常單類別）。</li>
+                <li><b>報廢後業務回填「補做／不補」</b>：最終決策判定報廢時，系統會通知業務人員（報廢通知名單內的業務，沒設定就是整個業務部門＋原訂單的打單人員）；處理頁會出現「報廢後補做／不補」區塊，業務回填<b>補做幾 PCS（可加備註）</b>或<b>不補</b>。<b>被通知的人只要有一人回覆，其他人的通知就自動收回</b>。選「不補」→ BOM總覽（BOM／製程備註）、退貨追蹤（部門處理狀況）、訂單追蹤（業務備註）都會標出異常單號與「報廢不補」；選「補做」→ 自動在訂單追蹤建立一張訂單（<b>單價 0</b>，其餘沿用原訂單；原訂單以製令綁定的訂單判定，沒綁或綁多張無法判定時訂單編號顯示 <b>NA</b>，並要求業務填妥料號、製程、交貨日期才會建立）。補做訂單<b>不能直接刪除</b>：要刪除必須填寫原因，刪除後該異常單改顯示「報廢不補」。只對新判定報廢的單生效，不會回頭動既有已結案的單。</li>
+                <li><b>右下角提醒</b>：清單頁右下角會列出<b>尚未決策</b>與<b>已處理但尚未結案</b>的張數（避免勾完處理忘了結案），以及等您回填補做的單；可按 × 先收起來。<b>結案前</b>：相關單位意見若有勾選卻還沒送出，或已送出但還有單位沒回覆，一律不能結案。</li>
+                <li><b>從退貨追蹤開單</b>：退貨追蹤按「開立」會直接開啟本頁的開單畫面並自動帶入該客退單的資料。</li>
                 <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、<?= htmlspecialchars($gmLabel) ?>裁示、扣款確認、結案都在那一頁。</li>
                 <li><b>清單依類別分區顯示</b>（IQC／FQC／製程不良／客訴／退貨）：每一區上方有一條標題列，寫著這一類幾張、未結案幾張、單號後綴詞是什麼。
                     分區順序照管理員在「設定 → 異常單類別」排的順序；<b>類別功能上線前建立的舊單</b>會集中在最後的「未指定類別」區，請進單張處理頁補選。
@@ -1829,6 +1832,43 @@ $('#btnAsPick').on('click', function(){
 <?php endif; ?>
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+/* 從退貨追蹤按「開立」進來（?new_ir=IR_id）：自動打開開單畫面並帶入這張客退單的資料（2026-11-05） */
+function irPrefillFromUrl(){
+    var m = /[?&]new_ir=(\d+)/.exec(location.search);
+    if (!m || !$('#btnNew').length) return;
+    var irId = m[1], noM = /[?&]new_ir_no=([^&]*)/.exec(location.search), no = noM ? decodeURIComponent(noM[1]) : '';
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}   // 重新整理不會再重複彈出
+    $.get(API, { action:'search_ir', kw:no || irId }, function(res){
+        var r = ((res && res.rows) || []).filter(function(x){ return String(x.IR_id) === String(irId); })[0];
+        if (!r) { alert('找不到這張客退單（' + (no || irId) + '），請改用「開立異常單」手動選擇'); return; }
+        $('#btnNew').trigger('click');
+        var c = (CATS || []).filter(function(x){ return Number(x.is_active) && Number(x.need_ir); })[0];
+        if (c) { $('#n_cat').val(String(c.cat_id)); nApplyCatBinds(); }
+        $('#n_ir').val(r.IR_no); $('#n_ir_id').val(r.IR_id);
+        $('#n_client').val(r.Client_name || ''); $('#n_part').val(r.d_id || ''); $('#n_batch').val(r.Qty || '');
+        $('#newErr').text(c && Number(c.need_bom) ? '已帶入客退單資料；這一類還要綁製令，請在下方選擇製令後再按「建立並開始填寫」' : '已帶入客退單資料，確認後按「建立並開始填寫」');
+        nSuggestSample();
+    }, 'json');
+}
+/* 右下角提醒（2026-11-05）：勾完處理忘記結案、或還沒決策的單，不要等人想到才去翻清單 */
+function loadPending(){
+    $.get(API, { action:'pending_summary' }, function(res){
+        if (!res || !res.success) return;
+        var c = res.count || {}, rm = res.remake || [], h = '';
+        if (Number(c.decide)) h += '<div><i class="fa fa-exclamation-circle" style="color:#DD5138;"></i> <b>' + c.decide + '</b> 張<b style="color:#DD5138;">尚未決策</b>' + ((res.sample.decide || []).length ? '<div class="muted-help" style="font-size:11px;">' + esc(res.sample.decide.join('、')) + (c.decide > res.sample.decide.length ? '…' : '') + '</div>' : '') + '</div>';
+        if (Number(c.unclosed)) h += '<div><i class="fa fa-flag" style="color:#C0762B;"></i> <b>' + c.unclosed + '</b> 張<b style="color:#C0762B;">已處理但尚未結案</b>' + ((res.sample.unclosed || []).length ? '<div class="muted-help" style="font-size:11px;">' + esc(res.sample.unclosed.join('、')) + (c.unclosed > res.sample.unclosed.length ? '…' : '') + '</div>' : '') + '</div>';
+        if (Number(c.reply)) h += '<div><i class="fa fa-clock-o"></i> <b>' + c.reply + '</b> 張等待單位回覆</div>';
+        if (rm.length) h += '<div><i class="fa fa-repeat" style="color:#DD5138;"></i> <b>' + rm.length + '</b> 張等您回填<b style="color:#DD5138;">報廢補做／不補</b>：'
+            + rm.slice(0, 5).map(function(x){ return '<a href="qa_abnormal_form.php?id=' + x.id + '" target="_blank" rel="noopener">' + esc(x.no) + '</a>'; }).join('、') + '</div>';
+        if (!h) { $('#pendBadge').hide(); return; }
+        $('#pendBody').html(h + ((Number(c.decide) || Number(c.unclosed)) ? '<div style="margin-top:3px;"><a href="#" id="pendShow">只看未結案的單</a></div>' : ''));
+        if (!window.__pendClosed) $('#pendBadge').show();
+    }, 'json');
+}
+$(document).on('click', '#pendX', function(){ window.__pendClosed = true; $('#pendBadge').hide(); });
+$(document).on('click', '#pendShow', function(e){ e.preventDefault(); $('#fClosed').val('0'); $('#fKw').val(''); load(); window.scrollTo(0, 0); });
+setInterval(loadPending, 180000);
+
 $(function(){
     $('#sidebar-menu').css('visibility', 'visible');
     acSetup('#n_ir', 'search_ir',
@@ -1849,9 +1889,14 @@ $(function(){
         function(r){ $('#n_client').val(r.customer || ''); $('#n_client_id').val(r.customer_id || ''); $('#newErr').text(''); });
     nCatRulesHtml();
     nApplyCatBinds();
-    <?php if ($perms['canView']): ?>load();<?php endif; ?>
+    <?php if ($perms['canView']): ?>load(); loadPending(); irPrefillFromUrl();<?php endif; ?>
 });
 </script>
+<!-- 右下角提醒：還沒決策／處理完忘了結案／等我回填補做（2026-11-05） -->
+<div id="pendBadge" style="display:none;position:fixed;right:16px;bottom:16px;z-index:10200;max-width:300px;background:#FFF6E8;border:2px solid #C0762B;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:8px 12px 8px 10px;font-size:12.5px;line-height:1.6;color:#4a3524;">
+    <span id="pendX" style="position:absolute;right:6px;top:2px;cursor:pointer;color:#8C5A2B;font-size:16px;" title="先收起來（重新整理頁面會再出現）">&times;</span>
+    <div id="pendBody"></div>
+</div>
 <div id="pvWin" style="display:none;position:fixed;right:40px;top:80px;width:760px;height:560px;z-index:10050;background:#fff;border:2px solid #C0762B;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);resize:both;overflow:hidden;">
     <div id="pvHd" style="cursor:move;background:#C0762B;color:#fff;padding:5px 10px;display:flex;align-items:center;user-select:none;">
         <b><i class="fa fa-picture-o"></i> 圖面檢視</b><span id="pvTitle" style="margin-left:8px;font-size:12px;"></span>

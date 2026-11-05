@@ -41,7 +41,7 @@ $action = $_POST['action'] ?? $_GET['action'] ?? '';
 $ORDER_SCOPED = ['get', 'save_head', 'save_cause', 'round_add', 'round_reply', 'round_cancel',
                  'save_disposition', 'save_gm', 'deduct_preview', 'deduct_autofill', 'deduct_save',
                  'deduct_sign', 'deduct_approve', 'owner_sign', 'close', 'reopen', 'sign_set',
-                 'bom_bind', 'bom_processes', 'bom_candidates', 'sign_candidates'];
+                 'bom_bind', 'bom_processes', 'bom_candidates', 'sign_candidates', 'remake_respond'];
 if (!$perms['canView']) {
     $oidGuard = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
     $ok = in_array($action, $ORDER_SCOPED, true) && $oidGuard > 0 && qab_can_view_order($db, $perms, $oidGuard);
@@ -282,6 +282,7 @@ case 'get': {
     if ($quickV['on'] && !$quickV['done'] && $quickV['layer'] === 'l2' && !empty($quickV['can']['decide'])) $permsOut['canDecide'] = true;
     jout(true, [
         'order'     => $o,
+        'remake'    => (function() use ($db, $o, $uid, $perms) { try { return qab_remake_view($db, $o, $uid, (bool)$perms['canAdmin']); } catch (Throwable $e) { return null; } })(),
         'perms'     => $permsOut,
         'can_edit'  => qab_can_edit_form($db, $perms, $o),
         'causes'    => qab_cause_tree($db, true),
@@ -1101,6 +1102,47 @@ case 'reopen': {
        ->execute([$uid, $id]);
     $log($id, 'reopen', '', '取消結案（報廢單號保留）');
     jout(true, ['order' => qab_order($db, $id)]);
+}
+
+/* ═══════════ 報廢後業務回填：補做／不補（2026-11-05）═══════════ */
+case 'remake_respond': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0), false);   // 結案後業務仍要能回覆
+    $mode = (string)($_POST['mode'] ?? '');
+    try {
+        $res = qab_remake_respond($db, (int)$o['id'], $uid, $mode, [
+            'qty' => $_POST['qty'] ?? '', 'note' => $_POST['note'] ?? '', 'part_d_id' => $_POST['part_d_id'] ?? 0,
+            'process' => $_POST['process'] ?? '', 'delivery' => $_POST['delivery'] ?? '',
+        ], (bool)$perms['canAdmin']);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    $r = $res['row'];
+    $log((int)$o['id'], 'remake', '', qab_remake_label($r) . ($res['new_order_id'] ? '（建立訂單 #' . $res['new_order_id'] . '）' : '') . (trim((string)$r['note']) !== '' ? '｜備註：' . $r['note'] : ''));
+    $n = qab_order($db, (int)$o['id']);
+    jout(true, ['order' => $n, 'new_order_id' => $res['new_order_id']]);
+}
+
+/* 無法判定原訂單時，業務自己挑料號（含客戶，同名料號分屬不同客戶很常見，所以一定要把客戶列出來） */
+case 'remake_part_search': {
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    if ($kw === '') jout(true, ['rows' => []]);
+    $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id AS part_no, cl.customer AS client
+                        FROM d_setting d LEFT JOIN customer_list cl ON cl.customer_id = d.Customer_Id
+                        WHERE d.D_Setting_Id LIKE ? ORDER BY d.d_id DESC LIMIT 20");
+    $st->execute(['%' . $kw . '%']);
+    jout(true, ['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* 右下角提醒：還沒決策／已處理卻忘了結案的單，以及等我回覆補做的單 */
+case 'pending_summary': {
+    $cnt = ['decide' => 0, 'reply' => 0, 'unclosed' => 0];
+    $sample = ['decide' => [], 'unclosed' => []];
+    foreach (qab_list($db, ['closed' => 0]) as $r) {
+        if (!empty($r['parent_order_id']) && false) continue;
+        $c = $r['status']['code'] ?? '';
+        if (in_array($c, ['decide', 'gm', 'qcreview'], true)) { $cnt['decide']++; if (count($sample['decide']) < 5) $sample['decide'][] = $r['abnormal_order_no']; }
+        elseif ($c === 'reply') $cnt['reply']++;
+        elseif (in_array($c, ['deduct', 'ready'], true)) { $cnt['unclosed']++; if (count($sample['unclosed']) < 5) $sample['unclosed'][] = $r['abnormal_order_no']; }
+    }
+    jout(true, ['count' => $cnt, 'sample' => $sample, 'remake' => qab_remake_pending_for_user($db, $uid)]);
 }
 
 /* ═══════════ 搜尋工具 ═══════════ */

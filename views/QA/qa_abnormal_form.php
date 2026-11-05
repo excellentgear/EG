@@ -516,6 +516,12 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </div>
             </div>
 
+            <!-- 5.5 報廢後業務回填：補做／不補（2026-11-05；只有判定報廢的單才會出現） -->
+            <div class="sec" id="secRemake" style="display:none;border-color:var(--coral);">
+                <h4><i class="fa fa-repeat"></i> 報廢後補做／不補（業務回填）<span class="sub" id="rmSub"></span></h4>
+                <div class="sec-body" id="rmBody"></div>
+            </div>
+
             <!-- ⑥ 扣款確認 -->
             <div class="sec" id="secDeduct">
                 <h4><i class="fa fa-calculator"></i> 扣款確認
@@ -1693,7 +1699,97 @@ function render(){
     $('#f_dexec').val(o.deduct_pm_name ? (o.deduct_pm_name + '　' + dispDate(o.deduct_pm_at)) : (o.deduct_exec || ''));
     $('#f_dnotify').val(o.deduct_notify_no || '');
     renderDeduct();
+    renderRemake();
 }
+
+/* ───────── 報廢後業務回填：補做／不補（2026-11-05）───────── */
+function renderRemake(){
+    var r = D.remake, $s = $('#secRemake');
+    if (!r) { $s.hide(); return; }
+    $s.show();
+    var h = '', atTxt = r.at ? (dispDate(String(r.at).substr(0, 10)) + ' ' + String(r.at).substr(11, 5)) : '';
+    $('#rmSub').text(r.status === 'pending' ? '尚待業務回覆' : r.label);
+    if (r.status === 'pending') {
+        h += '<div class="note-box">本單已判定報廢 <b>' + r.scrap_qty + ' PCS</b>。請被通知的業務人員回填<b>需要補做幾 PCS，或不補</b>。'
+           + '被通知：' + esc((r.notify_names || []).join('、') || '—') + '（其中一人回覆即可，其他人的通知會自動取消）。</div>';
+        if (!r.can_respond) { h += '<div class="muted-help">您不在被通知的業務人員名單內，這一段由業務人員回填。</div>'; $('#rmBody').html(h); return; }
+        h += '<div class="fgrid">'
+           + '<div class="fld"><label>回填</label><div><label style="margin-right:14px;"><input type="radio" name="rmMode" value="remake"> 補做</label>'
+           + '<label><input type="radio" name="rmMode" value="skip"> 不補</label></div></div>'
+           + '<div class="fld rm-q"><label>補做數量 (PCS)</label><input type="number" min="1" step="1" id="rmQty" value="' + r.scrap_qty + '"></div>'
+           + '<div class="fld" style="grid-column:1/-1;"><label>備註（選填）</label><textarea id="rmNote" rows="2" maxlength="1000" placeholder="例如：客戶同意不補／數量改由下一批一併補足"></textarea></div>';
+        if (r.src_order_id) {
+            h += '<div class="fld rm-q" style="grid-column:1/-1;"><div class="muted-help">會沿用原訂單 <b>' + esc(r.src_oo) + '</b> 的訂單編號與所有資料（製程、客戶單號…），<b>單價自動 0</b>。交貨日期預設同原訂單，需要改再填：</div>'
+               + '<input type="date" id="rmDelivery" style="max-width:170px;"></div>';
+        } else {
+            var pf = r.prefill || {};
+            h += '<div class="fld rm-q" style="grid-column:1/-1;border:1px dashed var(--coral);border-radius:4px;padding:8px;">'
+               + '<div class="muted-help" style="color:var(--coral);margin-bottom:6px;"><b>無法判定原訂單</b>（' + esc(r.src_why || '') + '）→ 訂單編號將顯示 <b>NA</b>，單價自動 0。請填寫完整才能建立訂單：</div>'
+               + '<div class="fgrid"><div class="fld"><label>料號 <span style="color:var(--coral);">*</span>（打字搜尋後點選）</label>'
+               + '<input type="text" id="rmPart" autocomplete="off" value="' + esc(pf.part_no ? (pf.part_no + '　' + (pf.client || '')) : '') + '"><input type="hidden" id="rmPartId" value="' + (pf.d_id || '') + '">'
+               + '<div id="rmPartList" style="max-height:140px;overflow:auto;"></div></div>'
+               + '<div class="fld"><label>製程 <span style="color:var(--coral);">*</span></label><input type="text" id="rmProc" maxlength="255" placeholder="例如：全製 / 齒研"></div>'
+               + '<div class="fld"><label>交貨日期 <span style="color:var(--coral);">*</span></label><input type="date" id="rmDelivery"></div></div></div>';
+        }
+        h += '</div><div id="rmErr" style="color:var(--coral);font-size:12px;min-height:16px;"></div>'
+           + '<button class="btn btn-warm btn-sm" id="btnRemakeGo"><i class="fa fa-check"></i> 送出回覆</button>';
+        $('#rmBody').html(h);
+        $('input[name=rmMode][value=remake]').prop('checked', true);
+        return;
+    }
+    // 已回覆
+    h += '<div><span class="st" style="background:' + (r.status === 'remake' ? '#F0A24B' : '#8C5A2B') + ';color:' + (r.status === 'remake' ? '#3b2203' : '#fff') + ';">' + esc(r.label) + '</span>'
+       + '　業務：' + esc(r.who || '') + '　' + esc(atTxt) + '</div>';
+    if (r.note) h += '<div style="margin-top:4px;">備註：' + esc(r.note) + '</div>';
+    if (r.status === 'remake') h += '<div class="muted-help" style="margin-top:4px;">已在訂單追蹤建立補做訂單（訂單編號 <b>' + esc(r.new_oo || 'NA') + '</b>，單價 0）。</div>';
+    if (r.cancel_reason) h += '<div style="margin-top:4px;color:var(--coral);">補做訂單已被刪除（' + esc(r.cancel_who || '') + '　' + esc(r.cancel_at || '') + '）：' + esc(r.cancel_reason) + ' → 改為「報廢不補」</div>';
+    $('#rmBody').html(h);
+}
+$(document).on('change', 'input[name=rmMode]', function(){ $('#rmBody .rm-q').toggle($('input[name=rmMode]:checked').val() === 'remake'); });
+(function(){
+    var tmr = null;
+    $(document).on('input', '#rmPart', function(){
+        $('#rmPartId').val('');
+        var kw = $.trim($(this).val());
+        clearTimeout(tmr);
+        if (!kw) { $('#rmPartList').empty(); return; }
+        tmr = setTimeout(function(){
+            $.get(API, { action:'remake_part_search', kw:kw }, function(res){
+                $('#rmPartList').html(((res && res.rows) || []).map(function(p){
+                    return '<div class="rm-pick" data-id="' + p.d_id + '" data-t="' + esc(p.part_no + '　' + (p.client || '')) + '" style="padding:3px 6px;cursor:pointer;border-bottom:1px solid var(--line);">'
+                         + esc(p.part_no) + '　<span class="muted-help">' + esc(p.client || '（未綁客戶）') + '</span></div>';
+                }).join('') || '<div class="muted-help">查無料號</div>');
+            }, 'json');
+        }, 250);
+    });
+    $(document).on('click', '.rm-pick', function(){ $('#rmPart').val($(this).data('t')); $('#rmPartId').val($(this).data('id')); $('#rmPartList').empty(); });
+})();
+$(document).on('click', '#btnRemakeGo', function(){
+    var mode = $('input[name=rmMode]:checked').val(), r = D.remake || {};
+    var data = { action:'remake_respond', csrf:CSRF, id:OID, mode:mode, note:$('#rmNote').val() };
+    var msg = '';
+    if (mode === 'remake') {
+        data.qty = $.trim($('#rmQty').val());
+        if (!/^[1-9]\d*$/.test(data.qty)) msg = '補做數量請填大於 0 的整數';
+        data.delivery = $('#rmDelivery').val() || '';
+        if (!r.src_order_id) {
+            data.part_d_id = $('#rmPartId').val(); data.process = $.trim($('#rmProc').val());
+            if (!msg && !data.part_d_id) msg = '請從清單點選料號（無法判定原訂單，必填）';
+            if (!msg && !data.process) msg = '請填寫製程（無法判定原訂單，必填）';
+            if (!msg && !data.delivery) msg = '請填寫交貨日期（無法判定原訂單，必填）';
+        }
+    }
+    $('#rmErr').text(msg);
+    if (msg) return;
+    if (!confirm(mode === 'remake' ? ('確定要補做 ' + data.qty + ' PCS？按下後會自動在訂單追蹤建立一張訂單（單價 0），且無法修改。') : '確定不補？')) return;
+    var $b = $(this).prop('disabled', true);
+    $.post(API, data, function(res){
+        $b.prop('disabled', false);
+        if (!res || !res.success) { $('#rmErr').text((res && res.message) || '送出失敗'); return; }
+        toast(mode === 'remake' ? '已回覆並建立補做訂單' : '已回覆：不補');
+        load();
+    }, 'json').fail(function(){ $b.prop('disabled', false); $('#rmErr').text('連線失敗，請稍後再試'); });
+});
 
 /* ───────── 自動存檔（使用者要求：輸入完就存，不要存檔鈕，免得忘記按） ─────────
    同一個區塊連續改很多欄時只送最後一次；存好在該區塊標題右邊標「已自動儲存 hh:mm:ss」。 */
@@ -2918,6 +3014,16 @@ function closeSaveExtra(ids){
 }
 function closeExtraIds(){ return (window.CLOSE_LIST || []).filter(function(r){ return !r.fixed; }).map(function(r){ return r.id; }); }
 $('#btnClose2').on('click', function(){
+    /* 相關單位意見：勾了部門卻還沒按「送出勾選的徵詢」＝這些單位根本沒收到通知，不能就這樣結案；
+       已送出但還沒回覆的，後端 close 也會擋（要收到所有回覆才能結案） */
+    var unsent = [], waiting = [];
+    $('#askTb tbody tr[data-dept]').each(function(){
+        var $tr = $(this);
+        if ($tr.find('.ak-on').prop('checked') && !$tr.attr('data-flow')) unsent.push($.trim($tr.children('td').eq(1).text()));
+    });
+    ((D.order && D.order.rounds) || []).forEach(function(x){ if (x.status !== 'Returned') waiting.push(x.department_name || ''); });
+    if (unsent.length) { alert('相關單位意見：「' + unsent.join('、') + '」已勾選但還沒送出徵詢。\n請先按「送出勾選的徵詢」，等所有單位回覆後再結案（或取消勾選）。'); return; }
+    if (waiting.length) { alert('還有單位尚未回覆相關單位意見：' + waiting.join('、') + '。\n收到所有回覆後才能結案（也可先取消該輪徵詢）。'); return; }
     post('close_preview', { id:OID }, function(res){
         CLOSE_PEOPLE = res.people || [];
         $('#closeAddSel').html('<option value="">加入通知人員…</option>' + CLOSE_PEOPLE.map(function(p){ return '<option value="' + p.id + '">' + esc(p.label) + '</option>'; }).join(''));
