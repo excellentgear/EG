@@ -358,6 +358,35 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                這一段壞掉時畫面只會少東西、完全不報錯，沒有 log 就查不出為什麼少檔案。 */
             error_log('bom_viewer get_attachments_by_did 併入報價/訂單附件失敗: ' . $_e->getMessage());
         }
+        /* 組合圖（.iam）：與料號主檔的附件清單同一套呈現（唯一關聯實作 part_assembly_lib）——
+           組合那一列底下掛零件清單，「同一個料號底下」的零件不再平鋪一列（別的料號的零件在
+           它自己的料號仍是獨立附件，這裡只標示引用）。 */
+        try {
+            require_once __DIR__ . '/../../src/common/part_assembly_lib.php';
+            $hideIds = [];
+            foreach ($result as &$ar) {
+                if (($ar['source'] ?? '') !== 'other' || ($ar['ext'] ?? '') !== 'iam') continue;
+                $asmId = (int)$ar['id'];
+                $st = $pdo2->prepare("SELECT d_id FROM part_attachments WHERE id=?");
+                $st->execute([$asmId]);
+                $asmD = (int)$st->fetchColumn();
+                $ar['asm_comps'] = [];
+                foreach (eg_pasm_components($pdo2, $asmId) as $c) {
+                    $ar['asm_comps'][] = [
+                        'name'    => (string)($c['original_name'] ?: $c['filename']),
+                        'part_no' => (string)($c['part_no'] ?? ''),
+                        'ref'     => ((int)$c['d_id'] !== $asmD) ? 1 : 0,
+                    ];
+                    if ((int)$c['d_id'] === $asmD) $hideIds[(int)$c['id']] = true;
+                }
+            }
+            unset($ar);
+            if ($hideIds) {
+                $result = array_values(array_filter($result, function ($r) use ($hideIds) {
+                    return !(($r['source'] ?? '') === 'other' && isset($hideIds[(int)$r['id']]));
+                }));
+            }
+        } catch (Throwable $_e) {}
         echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -520,35 +549,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 }
             }
         } catch (Exception $_e) {}
-        /* 組合圖（.iam）：與料號主檔的附件清單同一套呈現（唯一關聯實作 part_assembly_lib）——
-           組合那一列底下掛零件清單，「同一個料號底下」的零件不再平鋪一列（別的料號的零件在
-           它自己的料號仍是獨立附件，這裡只標示引用）。 */
-        try {
-            require_once __DIR__ . '/../../src/common/part_assembly_lib.php';
-            $hideIds = [];
-            foreach ($result as &$ar) {
-                if (($ar['source'] ?? '') !== 'other' || ($ar['ext'] ?? '') !== 'iam') continue;
-                $asmId = (int)$ar['id'];
-                $st = $pdo2->prepare("SELECT d_id FROM part_attachments WHERE id=?");
-                $st->execute([$asmId]);
-                $asmD = (int)$st->fetchColumn();
-                $ar['asm_comps'] = [];
-                foreach (eg_pasm_components($pdo2, $asmId) as $c) {
-                    $ar['asm_comps'][] = [
-                        'name'    => (string)($c['original_name'] ?: $c['filename']),
-                        'part_no' => (string)($c['part_no'] ?? ''),
-                        'ref'     => ((int)$c['d_id'] !== $asmD) ? 1 : 0,
-                    ];
-                    if ((int)$c['d_id'] === $asmD) $hideIds[(int)$c['id']] = true;
-                }
-            }
-            unset($ar);
-            if ($hideIds) {
-                $result = array_values(array_filter($result, function ($r) use ($hideIds) {
-                    return !(($r['source'] ?? '') === 'other' && isset($hideIds[(int)$r['id']]));
-                }));
-            }
-        } catch (Throwable $_e) {}
         echo json_encode(['success' => true, 'attachments' => $result]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
