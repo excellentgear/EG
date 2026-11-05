@@ -3216,11 +3216,11 @@ echo "</script>\n";
     //    單批整批送整批回的製程完全不顯示，畫面與過去一樣。
     //    ⚠ 表格內的 span 一律自己指定 line-height（Gentelella 全站 td span{line-height:28px}）。
     function _obNum(v) { v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
-    function obBatchSummaryEl(m) {
+    function obBatchSummaryEl(m, extraScrap) {
         var box = document.createElement('div');
         box.className = 'ob-batch-sum';
         box.style.cssText = 'margin-top:3px;font-size:11px;line-height:1.25;color:#6B4423;cursor:pointer;';
-        var send = Number(m.send) || 0, ret = Number(m.ret) || 0, scrap = Number(m.scrap) || 0, out = Number(m.outside) || 0;
+        var send = Number(m.send) || 0, ret = Number(m.ret) || 0, scrap = (Number(m.scrap) || 0) + (Number(extraScrap) || 0), out = Number(m.outside) || 0;
         var pctR = send > 0 ? Math.min(100, ret / send * 100) : 0, pctS = send > 0 ? Math.min(100 - pctR, scrap / send * 100) : 0;
         var bar = document.createElement('div');
         bar.style.cssText = 'height:6px;border-radius:3px;background:#F7E0BD;overflow:hidden;display:flex;';
@@ -5951,7 +5951,14 @@ echo "</script>\n";
                     }
                     // 分批回廠摘要（多批或部分回廠才有）
                     var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
-                    if (_obm && _obm.batches && _obm.batches.length) { _pDiv.appendChild(obBatchSummaryEl(_obm)); }
+                    if (_obm && _obm.batches && _obm.batches.length) {
+                        // 廢＝廠商分批回廠報廢＋這一站由異常單回填的報廢（非廠商提報者，避免重複計算）
+                        var _exScrap = 0;
+                        (Array.isArray(row.qab_tags) ? row.qab_tags : []).forEach(function (t) {
+                            if (t.kind === 'remake' && !t.from_batch && String(t.proc_no || '') === String(_proc.process_no || '')) _exScrap += Number(t.main_qty) || 0;
+                        });
+                        _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap));
+                    }
                     var _st  = String(_proc.processing_state || '');
                     var _fid = String(_proc.bom_ing_fid || '');
                     var _iid = String(_proc.bom_ing_id  || '');
@@ -6514,7 +6521,7 @@ echo "</script>\n";
                             d.style.cssText = 'margin-bottom:3px;white-space:normal;word-break:break-all;';
                             d.innerHTML = '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';padding:1px 7px;border-radius:3px;font-size:11px;font-weight:bold;">' + escapeHtml(t.main_name || '報廢') + '</span> '
                                 + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> x' + (t.main_qty || 0)
-                                + '<div style="margin:2px 0 0 12px;padding-left:6px;border-left:2px solid ' + t.bg + ';color:#6B4423;">└ ' + escapeHtml(t.sub) + '</div>';
+                                + '<div style="margin:2px 0 0 12px;color:#6B4423;">└ ' + escapeHtml(t.sub) + '</div>';
                             if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
                             _qtBox.appendChild(d);
                             return;
