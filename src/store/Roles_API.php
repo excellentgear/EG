@@ -983,6 +983,21 @@ switch ($action) {
                 'role_ids' => $roleIds, 'added' => $added, 'removed' => $removed,
                 'before' => $before,
             ]);
+            // 指派（含複製）給編制時，替該編制目前的在職人員補頁面 R（只新增；規則見 role_page_r_lib.php）
+            $autoRn = 0;
+            if ($op !== 'remove' && $roleIds) {
+                $mods = [];
+                $mq = $pdo->prepare("SELECT module FROM roles WHERE role_id=? AND is_system=0");
+                foreach ($roleIds as $rid0) { $mq->execute([$rid0]); $mm = (string)$mq->fetchColumn(); if ($mm !== '') $mods[$mm] = 1; }
+                $memQ = $pdo->prepare("SELECT DISTINCT m.user_id FROM user_department_position_map m JOIN `user` u ON u.id=m.user_id AND u.state=1
+                                       WHERE m.position_id=? AND (?=0 OR m.department_id=?)");
+                foreach ($targets as [$did, $pid]) {
+                    $memQ->execute([$pid, $did, $did]);
+                    foreach ($memQ->fetchAll(PDO::FETCH_COLUMN) as $mu) {
+                        foreach (array_keys($mods) as $mm) { if (eg_role_page_r_ensure($pdo, (int)$mu, $mm)) $autoRn++; }
+                    }
+                }
+            }
             $pdo->commit();
 
             $msg = ($op === 'remove')
@@ -991,7 +1006,7 @@ switch ($action) {
                     ? "已指派「{$srcLabel}」給 " . count($targets) . " 組編制（新增 {$added} 筆，原本已有的不重複）"
                     : "已把{$srcLabel}複製到 " . count($targets) . " 組編制（新增 {$added} 筆"
                       . ($mode === 'overwrite' ? "、清除原有 {$removed} 筆" : "，保留原有設定") . "）");
-            $response = ['success'=>true, 'message'=>$msg, 'added'=>$added, 'removed'=>$removed];
+            $response = ['success'=>true, 'message'=>$msg, 'added'=>$added, 'removed'=>$removed, 'auto_r'=>$autoRn];
         } catch(Exception $_e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             $response = ['success'=>false,'message'=>$_e->getMessage()];
