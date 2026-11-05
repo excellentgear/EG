@@ -404,7 +404,7 @@ if (!empty($o['src_qc_form_id'])) {
 
 <!-- 異常處置方式＋處置說明，右邊一個合併的主管簽章欄（比照紙本 M22:O26） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:36%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
         <td class="optrow"><?php foreach ($dispOpts as $op) {
@@ -462,7 +462,7 @@ if (!empty($o['src_qc_form_id'])) {
 
 <!-- 最終裁示（總經理／管理員指定的○○主管，見 qab_gm_label()） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="3"><?= h($gmLabel) ?> 裁示</td>
         <td><?php
@@ -490,7 +490,7 @@ if ($rmk):
 ?>
 <!-- 報廢後業務回填：補做／不補 -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:36%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="2">報廢後補做／不補<div class="small" style="font-weight:normal;">(業務確認)</div></td>
         <td class="c"><b>報廢 <?= (int)$rmk['scrap_qty'] ?> PCS　→　<?= h($rmkRes) ?></b><?= $rmk['cancel_reason'] ? '<div class="small">補做訂單已刪除：' . h($rmk['cancel_reason']) . '</div>' : '' ?></td>
@@ -503,7 +503,7 @@ if ($rmk):
 <?php if ($showDeduct): ?>
 <!-- 扣款確認 -->
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:34%"><col style="width:16%"><col style="width:20%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:32%"><col style="width:16%"><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="<?= 3 + max(1, count($otherRows)) ?>"><div class="vert">扣款確認</div></td>
         <td class="lb">扣款項目</td><td class="lb">金額 (未稅)</td><td class="lb">說明</td>
@@ -561,7 +561,7 @@ $fmtU = function ($u) { return $u === null ? '' : ($u < 0 ? '-$' : '$') . number
 </table>
 <?php endif; ?>
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:34%"><col style="width:20%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:22%"><col style="width:18%"><col style="width:32%"><col style="width:22%"></colgroup>
     <tr>
         <td class="lb" rowspan="3"><div class="vert">核准</div></td>
         <td class="lb">報廢單號</td>
