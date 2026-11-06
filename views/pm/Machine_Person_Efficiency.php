@@ -47,6 +47,7 @@ $filter_machine_type = (string)($_GET['machine_type_id'] ?? '');
 $filter_machine      = (string)($_GET['machine_id'] ?? '');
 $filter_user         = (string)($_GET['user_id'] ?? '');
 $hours_per_day       = (int)($_GET['hpd'] ?? 24);
+$unit = in_array(($_GET['unit'] ?? ''), ['month', 'quarter', 'half', 'year'], true) ? $_GET['unit'] : '';
 if (!in_array($hours_per_day, [8, 16, 24], true)) $hours_per_day = 24;
 
 $days_diff = (int)round((strtotime($end_date) - strtotime($start_date)) / 86400) + 1;
@@ -267,14 +268,19 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
         table.dataTable th, table.dataTable td { font-size:13px; vertical-align:middle; }
         table.dataTable thead th { background:var(--sand); color:var(--brown); }
         .num { text-align:right; white-space:nowrap; }
+        table.dataTable td, table.dataTable th { white-space:nowrap; }
+        .tbl-wrap { overflow-x:auto; }
+        td.wrapok { white-space:normal !important; min-width:220px; max-width:320px; }
+        .period-bar { display:inline-flex; align-items:center; gap:4px; vertical-align:middle; }
+        .period-bar .btn.on { background:var(--amber); border-color:var(--amber); color:#fff; }
         .bar-wrap { background:#F3EBDD; border-radius:4px; height:14px; min-width:80px; position:relative; }
         .bar-fill { background:var(--amber); height:14px; border-radius:4px; }
         .bar-txt { position:absolute; left:6px; top:-2px; font-size:11px; line-height:18px; color:var(--brown); font-weight:600; }
         .bad-txt { color:var(--coral); font-weight:700; }
         .chip { display:inline-block; padding:2px 10px; margin:2px 4px 2px 0; border-radius:12px; border:1px solid var(--amber); background:#fff; color:var(--amber-d); cursor:pointer; font-size:12px; }
         .chip.on, .chip:hover { background:var(--amber); color:#fff; }
-        .tag { display:inline-block; padding:0 7px; border-radius:9px; font-size:11px; line-height:18px; background:var(--sand); color:var(--brown); }
-        .tag.s { background:#FDE6DF; color:var(--coral); }
+        .pill { display:inline-block; padding:0 8px; border-radius:9px; font-size:11px; line-height:18px; white-space:nowrap; background:var(--sand); color:var(--brown); }
+        .pill.s { background:#FDE6DF; color:var(--coral); font-weight:700; }
         .help-doc { font-size:13px; line-height:1.75; color:var(--brown); }
         .help-doc h4 { color:var(--amber-d); border-bottom:2px solid var(--sand); padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
         .help-doc h4:first-child { margin-top:0; }
@@ -304,8 +310,14 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                 <input type="date" class="form-control" style="width:140px;display:inline-block" name="end_date" id="end_date" value="<?= $e($end_date) ?>">
             </span>
             <span class="fi">
-                <button type="button" class="btn btn-default btn-sm" onclick="quick('prev')">上月</button>
-                <button type="button" class="btn btn-default btn-sm" onclick="quick('this')">本月</button>
+                <input type="hidden" name="unit" id="unit" value="<?= $e($unit) ?>">
+                <span class="period-bar">
+                    <button type="button" class="btn btn-default btn-sm" onclick="shift(-1)" title="往前一期"><i class="fa fa-chevron-left"></i></button>
+                    <?php foreach (['month' => '月', 'quarter' => '季', 'half' => '半年', 'year' => '年'] as $uk => $ul): ?>
+                        <button type="button" class="btn btn-default btn-sm <?= $unit === $uk ? 'on' : '' ?>" onclick="setUnit('<?= $uk ?>')"><?= $ul ?></button>
+                    <?php endforeach; ?>
+                    <button type="button" class="btn btn-default btn-sm" onclick="shift(1)" title="往後一期"><i class="fa fa-chevron-right"></i></button>
+                </span>
                 <button type="button" class="btn btn-default btn-sm" onclick="quick('d7')">近7天</button>
                 <button type="button" class="btn btn-default btn-sm" onclick="quick('d30')">近30天</button>
             </span>
@@ -369,9 +381,9 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
     <ul class="nav nav-tabs" role="tablist" id="mainTabs">
         <li class="active"><a href="#tab_mach" data-toggle="tab">機台</a></li>
         <li><a href="#tab_user" data-toggle="tab">人員</a></li>
-        <li><a href="#tab_miss" data-toggle="tab">廠內加工未報工 <span class="tag <?= count($miss) ? 's' : '' ?>"><?= count($miss) ?></span></a></li>
-        <li><a href="#tab_tchk" data-toggle="tab">移轉缺QC／缺報工 <span class="tag <?= count($tchk) ? 's' : '' ?>"><?= count($tchk) ?></span></a></li>
-        <li><a href="#tab_detail" data-toggle="tab">報工明細 <span class="tag"><?= count($rows) ?></span></a></li>
+        <li><a href="#tab_miss" data-toggle="tab">廠內加工未報工 <span class="pill <?= count($miss) ? 's' : '' ?>"><?= count($miss) ?></span></a></li>
+        <li><a href="#tab_tchk" data-toggle="tab">移轉缺QC／缺報工 <span class="pill <?= count($tchk) ? 's' : '' ?>"><?= count($tchk) ?></span></a></li>
+        <li><a href="#tab_detail" data-toggle="tab">報工明細 <span class="pill"><?= count($rows) ?></span></a></li>
     </ul>
 
     <div class="tab-content">
@@ -380,7 +392,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
             <div class="panel-box">
                 <h4>機台明細</h4>
                 <div class="sub">稼動率＝生產工時 ÷（<?= $days_diff ?> 天 × <?= $hours_per_day ?> 小時）。點表頭可排序。</div>
-                <table id="tblMach" class="table table-bordered table-striped" style="width:100%">
+                <div class="tbl-wrap"><table id="tblMach" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>機台</th><th>報工天數</th><th>報工筆數</th><th>架機(H)</th><th>生產(H)</th><th style="min-width:130px">稼動率</th><th>良品</th><th>NG</th><th>不良率</th><th>時產(PCS/H)</th></tr></thead>
                     <tbody>
                     <?php foreach ($mach as $m): ?>
@@ -398,7 +410,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </div>
 
@@ -422,7 +434,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
             </div>
             <div class="panel-box">
                 <h4>人員明細</h4>
-                <table id="tblUser" class="table table-bordered table-striped" style="width:100%">
+                <div class="tbl-wrap"><table id="tblUser" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>人員</th><th>報工天數</th><th>報工筆數</th><th>架機(H)</th><th>生產(H)</th><th>合計(H)</th><th>良品</th><th>NG</th><th>不良率</th><th>時產(PCS/H)</th></tr></thead>
                     <tbody>
                     <?php foreach ($usr as $u): ?>
@@ -440,7 +452,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </div>
 
@@ -465,7 +477,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                         <?php foreach ($miss_by_maker as $mk => $cnt): ?><span class="chip" data-mk="<?= $e($mk) ?>"><?= $e($mk) ?> <?= $cnt ?></span><?php endforeach; ?>
                     </div>
                 <?php endif; ?>
-                <table id="tblMiss" class="table table-bordered table-striped" style="width:100%">
+                <div class="tbl-wrap"><table id="tblMiss" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>最近檢驗日</th><th>客戶</th><th>BOM</th><th>料號</th><th>製程</th><th>廠商</th><th>檢驗結果</th><th>良品(ok)</th><th>待判(QQ)</th><th>檢驗筆數</th></tr></thead>
                     <tbody>
                     <?php foreach ($miss as $x): ?>
@@ -483,7 +495,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </div>
 
@@ -504,7 +516,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                     <span class="chip tc-chip" data-f="both">兩者都缺 <?= $tc_both ?></span>
                     <label style="margin-left:12px;font-weight:normal;cursor:pointer"><input type="checkbox" id="tcInternal"> 只看廠內加工</label>
                 </div>
-                <table id="tblTchk" class="table table-bordered table-striped" style="width:100%">
+                <div class="tbl-wrap"><table id="tblTchk" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>最近移轉日</th><th>客戶</th><th>BOM</th><th>料號</th><th>站序</th><th>製程</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
                     <tbody>
                     <?php foreach ($tchk as $c):
@@ -518,14 +530,14 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                             <td><?= $e($c['ProcessName']) ?></td>
                             <td><?= $e($c['maker_name'] ?: $c['maker_code']) ?></td>
                             <td><?= (int)$c['is_internal'] === 1 ? '廠內加工' : '外包／其他' ?></td>
-                            <td><small><?= $e($c['tr_nos']) ?></small></td>
+                            <td class="wrapok"><small><?= $e($c['tr_nos']) ?></small></td>
                             <td class="num"><?= number_format((int)$c['tr_qty']) ?></td>
-                            <td><?= $nq ? '<span class="tag s">沒驗</span>' : (int)$c['qc_cnt'] . ' 筆' ?></td>
-                            <td><?= $nr ? '<span class="tag s">沒報工</span>' : (int)$c['rep_cnt'] . ' 筆' ?></td>
+                            <td><?= $nq ? '<span class="pill s">沒驗</span>' : (int)$c['qc_cnt'] . ' 筆' ?></td>
+                            <td><?= $nr ? '<span class="pill s">沒報工</span>' : (int)$c['rep_cnt'] . ' 筆' ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </div>
 
@@ -533,7 +545,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
         <div class="tab-pane" id="tab_detail">
             <div class="panel-box">
                 <h4>報工明細</h4>
-                <table id="tblDetail" class="table table-bordered table-striped" style="width:100%">
+                <div class="tbl-wrap"><table id="tblDetail" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>日期</th><th>機台</th><th>BOM</th><th>客戶</th><th>製程</th><th>架機</th><th>生產</th><th>架機(分)</th><th>生產(分)</th><th>良品</th><th>NG</th><th>時產</th><th>完工</th></tr></thead>
                     <tbody>
                     <?php foreach ($rows as $r):
@@ -558,7 +570,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </div>
     </div>
@@ -640,18 +652,32 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
 <script src="../../code/modules/exporting.js"></script>
 <script>
 function fmt(d) { var m = ('0' + (d.getMonth() + 1)).slice(-2), day = ('0' + d.getDate()).slice(-2); return d.getFullYear() + '-' + m + '-' + day; }
-function quick(k) {
-    var t = new Date(), s, e;
-    if (k === 'this') { s = new Date(t.getFullYear(), t.getMonth(), 1); e = t; }
-    else if (k === 'prev') { s = new Date(t.getFullYear(), t.getMonth() - 1, 1); e = new Date(t.getFullYear(), t.getMonth(), 0); }
-    else { s = new Date(t.getTime() - (k === 'd7' ? 6 : 29) * 86400000); e = t; }
+function pd(v) { var a = v.split('-'); return new Date(+a[0], +a[1] - 1, +a[2]); }
+var UNIT_M = { month: 1, quarter: 3, half: 6, year: 12 };
+function periodOf(base, u) {            // 回傳包含 base 日期的月／季／半年／年區間
+    var m = UNIT_M[u], y = base.getFullYear(), idx = Math.floor(base.getMonth() / m) * m;
+    return [new Date(y, idx, 1), new Date(y, idx + m, 0)];
+}
+function applyRange(s, e, u) {
     document.getElementById('start_date').value = fmt(s);
     document.getElementById('end_date').value = fmt(e);
+    document.getElementById('unit').value = u || '';
     document.getElementById('filterForm').submit();
+}
+function setUnit(u) { var r = periodOf(pd(document.getElementById('start_date').value || fmt(new Date())), u); applyRange(r[0], r[1], u); }
+function shift(dir) {
+    var u = document.getElementById('unit').value, st = pd(document.getElementById('start_date').value || fmt(new Date())), en = pd(document.getElementById('end_date').value || fmt(new Date()));
+    if (u) { var m = UNIT_M[u], base = new Date(st.getFullYear(), st.getMonth() + dir * m, 1), r = periodOf(base, u); applyRange(r[0], r[1], u); }
+    else { var span = Math.round((en - st) / 86400000) + 1; applyRange(new Date(st.getTime() + dir * span * 86400000), new Date(en.getTime() + dir * span * 86400000), ''); }
+}
+function quick(k) {
+    var t = new Date(), days = k === 'd7' ? 6 : 29;
+    applyRange(new Date(t.getTime() - days * 86400000), t, '');
 }
 function goTab(id) { $('#mainTabs a[href="#' + id + '"]').tab('show'); $('html,body').animate({scrollTop: $('#mainTabs').offset().top - 20}, 200); }
 
 $(function () {
+    $('#start_date,#end_date').on('change', function () { $('#unit').val(''); $('.period-bar .btn.on').removeClass('on'); });
     $('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
 
     $('#btnExcl').on('click', function () { $('#exclMsg').text(''); $('#exclMask').modal('show'); });
