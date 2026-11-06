@@ -253,7 +253,7 @@
         // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
         var isDst = {};
-        tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst && fl.src) isDst[fl.dst] = true; });
+        tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst) isDst[fl.dst] = true; });
         bsAll.sort(function (x, y) { return (x.sn - y.sn) || (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id); });
         var seen = {};
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
@@ -281,9 +281,13 @@
         var firstList = roots.filter(function (b) { return b.sn === firstSn; }), otherList = roots.filter(function (b) { return b.sn !== firstSn; });
         html += rootGroup(firstList, (sts[0] ? sts[0].label.replace(/（SN d+）/, '') : '第1關'), false);
         html += rootGroup(otherList, '起點不明（找不到上一關接過來的移轉憑單）', true);
+        // 來源發單不明、但已接到下一關發單的移轉憑單：畫在樹上（連到它接的那批），可再把它拖到來源發單上補齊來源
+        var linkedNoSrc = tfs.filter(function (t) { var fl = flow[t.id]; return fl && !fl.src && fl.dst && sends[fl.dst]; });
+        if (linkedNoSrc.length) html += '<div style="margin:8px 0;padding:6px 0;border-bottom:1px dashed #E4D3BC;"><div class="tn"><div class="fl-b" style="margin:0;padding:3px 12px;font-weight:bold;border-left-color:#b8431f;color:#b8431f;">來源發單不明的移轉憑單（已接到下一關，可拖到來源發單補齊）</div><div class="tk-col">'
+            + linkedNoSrc.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('') + '</div></div></div>';
         bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div style="margin:8px 0;"><div style="color:#b8431f;font-size:11px;">循環連結，請檢查流向</div>' + bnode(b) + '</div>'; });
         html += '</div>';
-        var un = tfs.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
+        var un = tfs.filter(function (t) { var fl = flow[t.id]; return !(fl && (fl.src || (fl.dst && sends[fl.dst]))); });
         html += '<div class="flw-side"><div class="fl-un" data-batch="0" data-fid="' + (un[0] ? un[0].fid : 0) + '" style="margin:0;min-height:60px;"><div style="color:#b8431f;font-size:12px;font-weight:bold;margin-bottom:4px;">⚠ 找不到來源發單的移轉憑單（' + un.length + '）</div><div style="color:#999;font-size:11px;margin-bottom:4px;">拖到左邊對的發單卡片，或用下拉指定</div><div style="display:flex;flex-direction:column;gap:6px;">';
         un.forEach(function (t) { html += chip(t); });
         html += '</div></div></div></div>';
