@@ -1353,10 +1353,10 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
             SELECT order_id, question, status, target_type, target_label, asked_at, is_note, src_rule_id, total_cnt, open_cnt FROM (
                 SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at, i.is_note, i.src_rule_id,
                        COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
-                       SUM(CASE WHEN i.is_note=0 AND i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
+                       SUM(CASE WHEN i.is_note=0 AND i.status NOT IN ('resolved','dropped') AND NOT EXISTS (SELECT 1 FROM order_design_alert_rule rr WHERE rr.id = i.src_rule_id AND rr.is_active = 0) THEN 1 ELSE 0 END)
                            OVER (PARTITION BY b.bind_id) AS open_cnt,
                        ROW_NUMBER() OVER (PARTITION BY b.bind_id
-                           ORDER BY (i.is_note=0 AND i.status NOT IN ('resolved','dropped')) DESC, i.id DESC) AS rn
+                           ORDER BY (i.is_note=0 AND i.status NOT IN ('resolved','dropped') AND NOT EXISTS (SELECT 1 FROM order_design_alert_rule rr WHERE rr.id = i.src_rule_id AND rr.is_active = 0)) DESC, i.id DESC) AS rn
                 FROM eng_log_bind b
                 JOIN eng_log g ON g.id = b.log_id
                 JOIN eng_log_item i ON i.log_id = b.log_id

@@ -10070,7 +10070,7 @@ foreach($dCounts as $c) {
         function ateQRenderItems() {
             // 未確認的設計提醒橫幅：有就一直顯示（審圖／轉生管要全部確認後才按得了）；被擋下開啟時更醒目
             var pend = [];
-            ATE_Q.items.forEach(function(it) { if (it.alert && !it.alert.confirmed && !it.voided_at) pend.push(it); });
+            ATE_Q.items.forEach(function(it) { if (it.alert && !it.alert.confirmed && !it.alert.rule_off && !it.voided_at) pend.push(it); });
             var $bn = $('#ate-q-oda-banner');
             if (ATE_Q.kind === 'note' && pend.length) {
                 var gated = !!ATE_Q.gate;
@@ -11157,6 +11157,22 @@ foreach($dCounts as $c) {
                 $('#ate-tcfg-nname').val('');
                 var mx = 0; (res.rows || []).forEach(function(r) { mx = Math.max(mx, parseInt(r.sort_order, 10) || 0); });
                 $('#ate-tcfg-nsort').val(mx + 10);
+        // 確認完一則提醒、清單重新載入後呼叫：若已沒有待確認的系統提醒，就自動接著執行暫存的動作
+        function odaGateResume() {
+            var g = ATE_Q.gate;
+            if (!g || !g.action || String(g.orderId) !== String(ATE_Q.orderId)) return;
+            var pend = (ATE_Q.items || []).filter(function(it) {
+                return it.alert && !it.alert.confirmed && !it.alert.rule_off && !it.voided_at && it.status !== 'resolved' && it.status !== 'dropped';
+            });
+            if (pend.length) return;
+            var act = g.action, oid = g.orderId;
+            ATE_Q.gate = null;
+            $('#ate-q-modal').modal('hide');
+            setTimeout(function() {
+                if (typeof showToast === 'function') showToast('提醒已全部確認，自動繼續【' + (act === 'review' ? '審圖' : '轉生管') + '】');
+                if (act === 'review') updateInReview(oid); else if (act === 'pm') updatePmGet(oid);
+            }, 350);
+        }
                 ateQTargetCfgApply(res);
                 showToast('已新增「' + name + '」');
             }, 'json').fail(function() { showToast('新增失敗，請重試'); });
