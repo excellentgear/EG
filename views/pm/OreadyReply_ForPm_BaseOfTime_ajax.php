@@ -2658,6 +2658,42 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
     exit;
 }
 
+// ── 修改／刪除移送與回廠紀錄（2026-11-06）：唯一實作 src/common/bom_return_edit_lib.php；
+//    權限＝角色功能碼 oready_edit_return 或管理員（唯讀角色不可）；數量下限依報工／QC 已通報數量 ──
+else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch'], true)) {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_return_edit_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    try {
+        if (!ber_can_edit($db, $uid)) { echo json_encode(['success'=>false,'message'=>'沒有修改回廠紀錄的權限']); exit; }
+        $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+        if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+        $act = $_POST['action'];
+        if ($act === 'ber_list') {
+            echo json_encode(['success'=>true] + ber_list($db, $fid));
+        } elseif ($act === 'ber_save_send') {
+            $r = ber_save_send($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['send_qty'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'已將移送數量由 '.$r['old'].' 改為 '.$r['new']]);
+        } elseif ($act === 'ber_save_return') {
+            ber_save_return($db, $fid, (int)($_POST['return_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0),
+                            (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid);
+            echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改']);
+        } elseif ($act === 'ber_delete_return') {
+            ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'回廠紀錄已刪除']);
+        } else {
+            ber_delete_batch($db, $fid, (int)($_POST['batch_id'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'移送批次已刪除']);
+        }
+    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 // ── 顯示廠商／單價：驗證使用者「自己」的登入密碼（連錯會暫停一段時間），成功留稽核紀錄；前端再自行計時 5 分鐘後恢復隱藏 ──
 else if (isset($_POST['action']) && $_POST['action'] === 'eg_vp_verify') {
     include_once '../../src/common/DBConnection.php';
