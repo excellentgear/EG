@@ -397,3 +397,25 @@ function ocr_pending_exists_sql(string $orderAlias = 'ot'): string {
     return "EXISTS (SELECT 1 FROM order_client_reminder_ack _ocra WHERE _ocra.order_id = {$orderAlias}.Order_id AND _ocra.status='pending')";
 }
 }
+    // 料號提示：把業務備註裡「【料號提示待處理】…」那行換成鎖定的「✔ …（誰 日期 確認）」（與直接按確認的呈現相同、不可刪）
+    try {
+        $rem = ocr_get($db, (int)$a['reminder_id']);
+        $oid = (int)$a['order_id'];
+        if ($rem && !empty($rem['part_d_id']) && $oid > 0) {
+            $head = mb_substr(trim((string)$rem['content']), 0, 8, 'UTF-8');
+            $pfx  = '【料號提示待處理】' . $head;
+            $s = $db->prepare("SELECT Order_ps FROM order_track WHERE Order_id=?");
+            $s->execute([$oid]);
+            $cur = $s->fetchColumn();
+            if ($cur !== false) {
+                $keep = [];
+                foreach (preg_split('/\r\n|\r|\n/', (string)($cur ?: '')) as $ln) {
+                    if (mb_strpos($ln, $pfx, 0, 'UTF-8') === 0) continue;
+                    $keep[] = $ln;
+                }
+                $db->prepare("UPDATE order_track SET Order_ps=? WHERE Order_id=?")
+                   ->execute([trim(implode("\n", $keep), "\n"), $oid]);
+                ocr_hint_ps_append($db, (int)$a['reminder_id'], $oid, $uname);
+            }
+        }
+    } catch (Exception $e) {}
