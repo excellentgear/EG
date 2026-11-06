@@ -6,7 +6,7 @@
  * EGBomAdminFix.renderWarn(bom)：在「修改 BOM 資料」視窗的發單數下方顯示總數異常的紅字提示。
  */
 (function (w) {
-    var drawer = null, bom = '', bomSn = '', DATA = null, unlocked = false;
+    var viewMode = 'time', drawer = null, bom = '', bomSn = '', DATA = null, unlocked = false;
     var KINDS = [['send', '發單'], ['return', '回廠／報廢／取回'], ['qc', 'QC檢驗'], ['transfer', '移轉憑單'], ['abnormal', '異常單'], ['ing', 'ERP匯入/未採用']];
     var COLORS = { send: '#F0A24B', return: '#2E8B57', qc: '#8A6A45', transfer: '#C0561F', abnormal: '#DD5138', ing: '#8B8B8B' };
     var LABELS = { send: '發單', return: '回廠', qc: 'QC檢驗', transfer: '移轉憑單', abnormal: '異常單', ing: 'ERP匯入/未採用' };
@@ -83,6 +83,15 @@
             + '#egaf-drawer .it .row2{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;}'
             + '#egaf-drawer .nw{display:none;border:1px dashed #E4D3BC;border-radius:4px;padding:6px 8px;margin-top:6px;background:#fff;font-size:12px;}'
             + '#egaf-drawer .nw input,#egaf-drawer .nw select{height:24px;font-size:12px;padding:0 3px;}'
+            + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
+            + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
+            + '#egaf-drawer .fl-b{margin:6px 8px 6px 14px;border-left:4px solid #F0A24B;background:#fff;padding:4px 8px;border-radius:0 4px 4px 0;}'
+            + '#egaf-drawer .fl-b.over,#egaf-drawer .fl-un.over{outline:2px dashed #C0561F;background:#FFF1C9;}'
+            + '#egaf-drawer .fl-t{margin:4px 0 4px 16px;border-left:4px solid #C0561F;background:#FDF3E3;padding:3px 8px;border-radius:0 4px 4px 0;cursor:grab;font-size:12px;}'
+            + '#egaf-drawer .fl-t select{height:22px;font-size:11px;max-width:200px;}'
+            + '#egaf-drawer .fl-in{margin:3px 0 3px 16px;color:#2E6B3F;font-size:12px;border-left:4px solid #2E8B57;padding-left:8px;}'
+            + '#egaf-drawer .fl-un{margin:6px 8px;border:1px dashed #C0561F;padding:2px 4px;border-radius:4px;}'
+            + '#egaf-drawer .tg{display:inline-block;border-radius:3px;padding:0 5px;font-size:10px;color:#fff;margin-left:4px;}'
             + '#egaf-drawer .wn{background:#FDECEA;border:1px solid #E9A59C;color:#c0261b;border-radius:4px;padding:6px 10px;margin-bottom:6px;font-size:12px;line-height:1.6;}';
         document.head.appendChild(st);
         drawer = document.createElement('div');
@@ -91,7 +100,7 @@
             + '<button type="button" id="egaf-save" class="btn btn-warning btn-xs">儲存</button> <button type="button" id="egaf-saveend" class="btn btn-danger btn-xs">儲存並結束</button> '
             + '<button type="button" id="egaf-x" style="border:none;background:none;font-size:20px;cursor:pointer;color:#999;line-height:1;" title="關閉（不上鎖）">×</button></span></div>'
             + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
-            + '<button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
+            + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
             + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
             + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
             + '<div id="egaf-msg" style="min-height:16px;font-size:12px;font-weight:bold;margin-top:3px;"></div></div>'
@@ -100,6 +109,8 @@
         drawer.querySelector('#egaf-x').onclick = function () { if (dirtyCount() && !confirm('有 ' + dirtyCount() + ' 筆修改尚未儲存，確定直接關閉？')) return; close(); };
         drawer.querySelector('#egaf-save').onclick = function () { saveAll(false); };
         drawer.querySelector('#egaf-saveend').onclick = function () { saveAll(true); };
+        drawer.querySelector('#egaf-v-time').onclick = function () { viewMode = 'time'; render(); };
+        drawer.querySelector('#egaf-v-flow').onclick = function () { viewMode = 'flow'; render(); };
         drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
         drawer.querySelector('#egaf-new-ret').onclick = function () { toggleNw('egaf-nw-ret'); };
@@ -165,6 +176,9 @@
             return '<option value="' + b.batch_id + '" data-f="' + b.fid + '">' + esc((stn ? stn.label : '') + '／' + (b.maker || '未登記') + ' ' + nz(b.send_qty)) + '</option>';
         }).join('');
         DATA._def = calcDeficit();
+        drawer.querySelector('#egaf-v-time').style.fontWeight = viewMode === 'time' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-time').style.background = viewMode === 'time' ? '#F6D9CC' : '';
+        drawer.querySelector('#egaf-v-flow').style.fontWeight = viewMode === 'flow' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-flow').style.background = viewMode === 'flow' ? '#F6D9CC' : '';
+        if (viewMode === 'flow') { renderFlow(); return; }
         var html = '', last = null, shown = 0;
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         rows.forEach(function (x) {
@@ -178,6 +192,74 @@
         body.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
             + (shown ? '' : '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
+        updDn();
+    }
+    // ── 分支檢視：每關 → 發單批次 → 它的回廠與出去的移轉憑單 → 接到下一關哪個發單。流向是系統依日期＋數量推測的，可用下拉或拖放修正 ──
+    function renderFlow() {
+        var rows = DATA.rows || [], flow = DATA.flow || {}, sts = DATA.stations || [], body = drawer.querySelector('#egaf-body');
+        var sends = {}, stOf = {};
+        sts.forEach(function (s) { stOf[s.fid] = s; });
+        rows.forEach(function (r) { if (r.kind === 'send') sends[r.id] = r; });
+        function bLabel(b) { return (stOf[b.fid] ? stOf[b.fid].label : '') + '／' + (b.maker || '未登記') + ' ' + nz(b.send_qty) + '（' + b.date.slice(5).replace('-', '/') + '）'; }
+        function tag(auto) { return '<span class="tg" style="background:' + (auto ? '#8B8B8B' : '#2E8B57') + ';">' + (auto ? '推測' : '手動') + '</span>'; }
+        function chip(t) {
+            var fl = flow[t.id] || { src: 0, dst: 0, src_auto: true, dst_auto: true };
+            var so = '<option value="a">自動推測</option><option value="0"' + (!fl.src_auto && !fl.src ? ' selected' : '') + '>無（不屬於任何發單）</option>';
+            var dos = '<option value="a">自動推測</option><option value="0"' + (!fl.dst_auto && !fl.dst ? ' selected' : '') + '>無（沒有接續發單）</option>';
+            Object.keys(sends).forEach(function (id) {
+                var b = sends[id];
+                if (b.fid === t.fid) so += '<option value="' + id + '"' + (!fl.src_auto && fl.src === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
+                else if (b.sn > t.sn) dos += '<option value="' + id + '"' + (!fl.dst_auto && fl.dst === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
+            });
+            // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
+            var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
+            return '<div class="fl-t" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '"><b>移轉</b> ' + esc(t.no) + '　' + esc(w.egFmtDate ? w.egFmtDate(t.date) : t.date) + '　<b>' + nz(t.qty) + '</b>　' + esc(t.from) + (t.to ? ' → ' + esc(t.to) : '') + ' ' + tag(fl.src_auto && fl.dst_auto)
+                + '<div style="margin-top:2px;color:#7a4a10;">' + dstTxt + '</div>'
+                + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select> 接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
+        }
+        var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。要改數量／日期請切回「時間軸」。</div>';
+        if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
+        sts.forEach(function (s) {
+            if (stationFilter && String(s.fid) !== String(stationFilter)) return;
+            var mine = rows.filter(function (r) { return r.fid === s.fid; });
+            var bs = mine.filter(function (r) { return r.kind === 'send'; }), ts = mine.filter(function (r) { return r.kind === 'transfer'; }), qc = mine.filter(function (r) { return r.kind === 'qc'; });
+            if (!bs.length && !ts.length && !qc.length) return;
+            html += '<div class="fl-st"><div class="fl-h">' + esc(s.label) + '　<span style="font-weight:normal;font-size:11px;">發單數 ' + nz(s.sqty) + '</span></div>';
+            bs.forEach(function (b) {
+                var rets = mine.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; });
+                var inc = rows.filter(function (r) { return r.kind === 'transfer' && flow[r.id] && flow[r.id].dst === b.id; });
+                html += '<div class="fl-b" data-batch="' + b.id + '" data-fid="' + b.fid + '"><b style="color:#C0561F;">發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b>　' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
+                    + '　<span style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</span>';
+                inc.forEach(function (t) { var fl = flow[t.id]; html += '<div class="fl-in">← 來自 ' + esc(stOf[t.fid] ? stOf[t.fid].label : '') + ' 移轉 ' + esc(t.no) + '　' + nz(t.qty) + '　' + esc(t.from) + ' → ' + esc(t.to) + tag(fl.dst_auto) + '</div>'; });
+                ts.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; }).forEach(function (t) { html += chip(t); });
+                html += '</div>';
+            });
+            var un = ts.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
+            if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + s.fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（可拖到上面的發單卡片）</div>'; un.forEach(function (t) { html += chip(t); }); html += '</div>'; }
+            if (qc.length) html += '<div style="padding:2px 10px 6px;font-size:12px;color:#8A6A45;">QC檢驗：' + qc.map(function (q) { return esc(q.date.slice(5).replace('-', '/')) + ' 允收 ' + q.ok + '／特採 ' + q.aod + '／異常 ' + q.qq + '／驗退 ' + q.ng; }).join('；') + '</div>';
+            html += '</div>';
+        });
+        body.innerHTML = html;
+        function setFlow(tid, field, val) {
+            post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
+        }
+        body.querySelectorAll('.fl-sel').forEach(function (sel) {
+            sel.onchange = function () { setFlow(sel.getAttribute('data-tid'), sel.getAttribute('data-f'), sel.value === 'a' ? -1 : parseInt(sel.value, 10)); };
+        });
+        body.querySelectorAll('.fl-t').forEach(function (c) {
+            c.ondragstart = function (e) { e.dataTransfer.setData('text/plain', c.getAttribute('data-tid') + '|' + c.getAttribute('data-fid')); e.dataTransfer.effectAllowed = 'move'; };
+        });
+        body.querySelectorAll('.fl-b,.fl-un').forEach(function (box) {
+            box.ondragover = function (e) { e.preventDefault(); box.classList.add('over'); };
+            box.ondragleave = function () { box.classList.remove('over'); };
+            box.ondrop = function (e) {
+                e.preventDefault(); e.stopPropagation(); box.classList.remove('over');
+                var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2) return;
+                var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-fid') === p[1];
+                if (sameStation) setFlow(p[0], 'src', batch);
+                else if (batch > 0) setFlow(p[0], 'dst', batch);
+            };
+        });
         updDn();
     }
     function keepDirtyWarn() { /* 篩選只是換顯示，未儲存的修改在重畫時會被丟掉，先提醒 */ if (dirtyCount()) msg('提醒：篩選切換會清掉未儲存的修改，請先按「儲存」', false); }

@@ -59,7 +59,7 @@ if (!function_exists('baf_list')) {
             $d = !empty($t['transfer_date']) ? substr($t['transfer_date'], 0, 10) : substr((string)$t['created_at'], 0, 10);
             $rows[] = ['kind' => 'transfer', 'id' => (int)$t['transfer_id'], 'fid' => $f, 'sn' => $sn, 'raw_sn' => $rawSn, 'aliased' => $rawSn !== $sn, 'orphan' => !$f, 'station' => $f ? $proc[$f]['label'] . ($rawSn !== $sn ? '（SN ' . $rawSn . '）' : '') : ('SN ' . $rawSn . '（未對應關卡）'), 'date' => $d,
                        'ts' => $d . ' 12:00:00', 'no' => (string)($t['transfer_no'] ?? ''), 'from_no' => (string)($t['maker_from'] ?? ''), 'from' => $mk($t['maker_from']) ?: (string)$t['maker_from'],
-                       'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
+                       'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'to_no' => (string)($t['maker_to'] ?? ''), 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
         }
         try {
             $aq = $db->prepare("SELECT id, abnormal_order_no, abnormal_phenomenon, ng_qty, created_at, bom_process_fids FROM qa_abnormal_order WHERE bom_no=? AND deleted_at IS NULL ORDER BY id");
@@ -89,7 +89,7 @@ if (!function_exists('baf_list')) {
         $ord = fn($r) => (float)($r['sn'] ?? 0) + (in_array($r['kind'], ['send', 'ing'], true) ? 0 : 0.5);
         usort($rows, fn($a, $b) => strcmp(substr($a['ts'], 0, 10), substr($b['ts'], 0, 10)) ?: ($ord($a) <=> $ord($b)) ?: strcmp($a['ts'], $b['ts']));
         $chk = baf_check($db, $bom);
-        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty']];
+        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows)];
     }
 }
 
@@ -198,5 +198,94 @@ if (!function_exists('baf_alias_set')) {
         $f->execute([$bom, $targetSn > 0 ? $targetSn : $real[0]]);
         $fid = (int)$f->fetchColumn();
         if ($fid) ber_log($db, $fid, 'sn_alias', '管理員設定 SN ' . $aliasSn . ($targetSn > 0 ? ' 對應到 SN ' . $targetSn . ' 那一關' : ' 取消對應'), $uid);
+    }
+}
+
+if (!function_exists('baf_flow')) {
+    /** 管理員手動指定的流向：[transfer_id => ['src'=>null|0|batch_id,'dst'=>null|0|batch_id]]（null＝沒指定，用推測）。 */
+    function baf_flow_manual(PDO $db, string $bom): array {
+        try {
+            $q = $db->prepare("SELECT transfer_id, src_batch_id, dst_batch_id FROM bom_flow_link WHERE bom=?");
+            $q->execute([$bom]);
+            $m = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['transfer_id']] = ['src' => $r['src_batch_id'] === null ? null : (int)$r['src_batch_id'], 'dst' => $r['dst_batch_id'] === null ? null : (int)$r['dst_batch_id']];
+            return $m;
+        } catch (Throwable $e) { return []; }
+    }
+
+    /**
+     * 推測每張移轉憑單：①src＝它是從本關哪一個發單批次出來的（同關、同轉出廠商，依日期把移轉量依序填進各批次的發單量）
+     * ②dst＝它接到下一個「發給轉入廠商」的哪個發單批次（同樣依日期依序填）。管理員手動指定的優先，且不參與推測的累計。
+     * 回傳 [transfer_id => ['src'=>id|0,'src_auto'=>bool,'dst'=>id|0,'dst_auto'=>bool]]，0＝找不到。
+     */
+    function baf_flow(PDO $db, string $bom, array $rows): array {
+        $man = baf_flow_manual($db, $bom);
+        $sends = []; $tfs = [];
+        foreach ($rows as $r) {
+            if ($r['kind'] === 'send') $sends[] = $r;
+            elseif ($r['kind'] === 'transfer' && $r['fid']) $tfs[] = $r;
+        }
+        usort($sends, fn($a, $b) => strcmp($a['date'], $b['date']) ?: ($a['id'] <=> $b['id']));
+        usort($tfs, fn($a, $b) => strcmp($a['date'], $b['date']) ?: ($a['id'] <=> $b['id']));
+        $out = [];
+        foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true];
+        $fill = function (string $field, callable $groupOf) use (&$out, $man, $tfs) {
+            $cum = [];
+            foreach ($tfs as $t) {
+                $id = $t['id'];
+                if (isset($man[$id]) && $man[$id][$field] !== null) { $out[$id][$field] = $man[$id][$field]; $out[$id][$field . '_auto'] = false; continue; }
+                $g = $groupOf($t);
+                if (!$g) continue;
+                [$key, $pool] = $g;
+                $start = $cum[$key] ?? 0.0;
+                $cum[$key] = $start + (float)$t['qty'];
+                $acc = 0.0; $pick = 0;
+                foreach ($pool as $b) {
+                    $acc += (float)$b['send_qty'];
+                    if ($start < $acc - 1e-9) { $pick = $b['id']; break; }
+                }
+                if (!$pick && $pool) $pick = end($pool)['id']; // 發單量已用完仍有移轉：掛在最後一批（總數異常會另外提示）
+                $out[$id][$field] = $pick;
+            }
+        };
+        $fill('src', function ($t) use ($sends) {
+            if ($t['from_no'] === '') return null;
+            $pool = array_values(array_filter($sends, fn($b) => $b['fid'] === $t['fid'] && (string)$b['maker_no'] === (string)$t['from_no']));
+            return $pool ? [$t['fid'] . '|' . $t['from_no'], $pool] : null;
+        });
+        $fill('dst', function ($t) use ($sends) {
+            if ($t['to_no'] === '') return null;
+            $best = null;
+            foreach ($sends as $b) {
+                if ((string)$b['maker_no'] !== (string)$t['to_no'] || $b['sn'] <= $t['sn']) continue;
+                if ($best === null || $b['sn'] < $best) $best = $b['sn'];
+            }
+            if ($best === null) return null;
+            $pool = array_values(array_filter($sends, fn($b) => $b['sn'] === $best && (string)$b['maker_no'] === (string)$t['to_no']));
+            return [$best . '|' . $t['to_no'], $pool];
+        });
+        return $out;
+    }
+
+    /** 設定某張移轉憑單的流向。$batchId：-1＝改回自動推測、0＝明確指定「無」、>0＝指定批次。 */
+    function baf_flow_set(PDO $db, string $bom, int $transferId, string $field, int $batchId, int $uid): void {
+        if (!in_array($field, ['src', 'dst'], true)) throw new Exception('欄位不正確');
+        $q = $db->prepare("SELECT COUNT(*) FROM bom_ing_transfer_log WHERE transfer_id=? AND bom=?");
+        $q->execute([$transferId, $bom]);
+        if (!(int)$q->fetchColumn()) throw new Exception('這張移轉憑單不屬於這個 BOM');
+        if ($batchId > 0) {
+            $q = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch b JOIN bom_ing bi ON bi.bom_ing_fid=b.bom_ing_fid WHERE b.batch_id=? AND bi.bom=?");
+            $q->execute([$batchId, $bom]);
+            if (!(int)$q->fetchColumn()) throw new Exception('指定的發單批次不屬於這個 BOM');
+        }
+        $db->prepare("CREATE TABLE IF NOT EXISTS bom_flow_link (id INT AUTO_INCREMENT PRIMARY KEY, bom VARCHAR(30) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL, transfer_id INT NOT NULL, src_batch_id INT NULL, dst_batch_id INT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_bom_tf (bom, transfer_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
+        $col = $field === 'src' ? 'src_batch_id' : 'dst_batch_id';
+        $val = $batchId < 0 ? null : $batchId;
+        $db->prepare("INSERT INTO bom_flow_link (bom, transfer_id, $col, created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE $col=VALUES($col), created_by=VALUES(created_by)")->execute([$bom, $transferId, $val, $uid]);
+        $db->prepare("DELETE FROM bom_flow_link WHERE bom=? AND transfer_id=? AND src_batch_id IS NULL AND dst_batch_id IS NULL")->execute([$bom, $transferId]);
+        $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
+        $f->execute([$bom]);
+        $fid = (int)$f->fetchColumn();
+        if ($fid) ber_log($db, $fid, 'flow_link', '管理員調整移轉憑單 #' . $transferId . ' 的' . ($field === 'src' ? '來源發單' : '接續發單') . '：' . ($batchId < 0 ? '改回自動推測' : ($batchId === 0 ? '無' : '批次 ' . $batchId)), $uid);
     }
 }
