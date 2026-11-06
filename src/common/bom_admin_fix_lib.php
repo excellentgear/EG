@@ -320,6 +320,7 @@ if (!function_exists('baf_flow')) {
         $val = $batchId < 0 ? null : $batchId;
         $db->prepare("INSERT INTO bom_flow_link (bom, transfer_id, $col, created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE $col=VALUES($col), created_by=VALUES(created_by)")->execute([$bom, $transferId, $val, $uid]);
         $db->prepare("DELETE FROM bom_flow_link WHERE bom=? AND transfer_id=? AND src_batch_id IS NULL AND dst_batch_id IS NULL")->execute([$bom, $transferId]);
+        if ($field === 'dst' && $batchId > 0) baf_transfer_sync_to($db, $bom, $transferId, $batchId, $uid);
         $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
         $f->execute([$bom]);
         $fid = (int)$f->fetchColumn();
@@ -344,5 +345,25 @@ if (!function_exists('baf_sn_map')) {
         $targets = [];
         foreach ($real as $sn) $targets[] = ['sn' => $sn, 'label' => $labOf[$sn]];
         return ['items' => $items, 'targets' => $targets];
+    }
+}
+
+if (!function_exists('baf_transfer_sync_to')) {
+    /** 移轉憑單接到哪一批發單，「→」後面的廠商（maker_to）就以那批發單的廠商為準（寫進資料庫，標記為手動修改，留紀錄）。 */
+    function baf_transfer_sync_to(PDO $db, string $bom, int $transferId, int $batchId, int $uid): bool {
+        $q = $db->prepare("SELECT maker_id_no FROM bom_ing_outsource_batch WHERE batch_id=?");
+        $q->execute([$batchId]);
+        $mk = trim((string)$q->fetchColumn());
+        if ($mk === '') return false;
+        $c = $db->prepare("SELECT maker_to FROM bom_ing_transfer_log WHERE transfer_id=? AND bom=?");
+        $c->execute([$transferId, $bom]);
+        $cur = $c->fetchColumn();
+        if ($cur === false || (string)$cur === $mk) return false;
+        $db->prepare("UPDATE bom_ing_transfer_log SET maker_to=?, edit_manual=1, edit_by=?, edit_at=NOW() WHERE transfer_id=? AND bom=?")->execute([$mk, $uid, $transferId, $bom]);
+        $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
+        $f->execute([$bom]);
+        $fid = (int)$f->fetchColumn();
+        if ($fid) ber_log($db, $fid, 'transfer_edit', '管理員依流向修正移轉憑單#' . $transferId . '的轉入廠商：' . $cur . '→' . $mk, $uid);
+        return true;
     }
 }
