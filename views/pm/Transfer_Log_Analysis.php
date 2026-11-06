@@ -171,6 +171,45 @@ foreach ($rows as &$__r) {
 }
 unset($__r);
 
+/* ── 資料缺漏檢查（2026-11-06 新增）：有移轉單據的製程站，是否缺 QC 檢驗／缺報工 ──
+ * 站別＝移轉單據的 製令(bom)＋站序(bom_sn) 對到 bom_ing；QC＝qc_check、報工＝pm_process_daily_report。
+ * 期間與製程大項沿用上方篩選。 */
+$chk_rows = [];
+$chk_err = '';
+if ($bm_perms['canView']) {
+    try {
+        $csql = "SELECT bi.bom_ing_fid, t.bom, t.bom_sn, MAX(t.transfer_date) AS last_date, COUNT(*) AS tr_cnt,
+                    SUM(t.transfer_qty) AS tr_qty, GROUP_CONCAT(DISTINCT t.transfer_no ORDER BY t.transfer_no SEPARATOR ', ') AS tr_nos,
+                    MIN(t.maker_from) AS maker_code, MAX(m.maker_id) AS maker_name, MAX(m.internal) AS is_internal,
+                    MAX(pn.ProcessName) AS ProcessName, MAX(b.Client_Name) AS Client_Name, MAX(t.product_id) AS product_id,
+                    (SELECT COUNT(*) FROM qc_check q WHERE q.bom_ing_fid_ref = CAST(bi.bom_ing_fid AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci) AS qc_cnt,
+                    (SELECT COUNT(*) FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid) AS rep_cnt
+                 FROM bom_ing_transfer_log t
+                 JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+                 LEFT JOIN bom b ON b.bom = t.bom
+                 LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+                 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                 WHERE t.transfer_date BETWEEN :s AND :e";
+        $cp = [':s' => $start_date, ':e' => $end_date];
+        if ($pt_ids) {
+            $ph2 = [];
+            foreach ($pt_ids as $i => $id) { $k = ':cp' . $i; $ph2[] = $k; $cp[$k] = $id; }
+            $csql .= " AND pn.process_type_id IN (" . implode(',', $ph2) . ")";
+        }
+        $csql .= " GROUP BY bi.bom_ing_fid, t.bom, t.bom_sn
+                   HAVING qc_cnt = 0 OR rep_cnt = 0
+                   ORDER BY last_date DESC, t.bom, t.bom_sn";
+        $cst = $conn->getPDO()->prepare($csql);
+        $cst->execute($cp);
+        $chk_rows = $cst->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $ex) { $chk_err = '檢查失敗：' . $ex->getMessage(); }
+}
+$chk_noqc = $chk_norep = $chk_both = 0;
+foreach ($chk_rows as $__c) {
+    $a = (int)$__c['qc_cnt'] === 0; $b = (int)$__c['rep_cnt'] === 0;
+    if ($a) $chk_noqc++; if ($b) $chk_norep++; if ($a && $b) $chk_both++;
+}
+
 // 判斷圖表顯示單位 (日/週/月)
 $date_diff = (strtotime($end_date) - strtotime($start_date)) / 86400;
 $chart_group_by = 'day';
@@ -415,6 +454,8 @@ try {
         .kpi-card .k-val { font-size:24px; font-weight:700; color:var(--ink); line-height:1.2; word-break:break-all; }
         .kpi-card .k-sub { font-size:11px; color:var(--muted); margin-top:2px; }
         /* 區塊（統計分析分頁內每個小節） */
+        .chk-chip { display:inline-block; padding:2px 12px; margin:2px 4px 2px 0; border-radius:12px; border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); cursor:pointer; font-size:12px; }
+        .chk-chip.on, .chk-chip:hover { background:var(--amber); color:var(--ink); }
         .sec { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
         .sec h4 { margin:0 0 4px; font-size:16px; color:var(--ink); font-weight:700;
                   display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -600,6 +641,7 @@ try {
                     <ul class="nav nav-tabs tl-tabs" role="tablist">
                         <li role="presentation" class="active"><a href="#tab-detail" data-toggle="tab" role="tab"><i class="fa fa-list"></i> 移轉明細</a></li>
                         <li role="presentation"><a href="#tab-stats" data-toggle="tab" role="tab"><i class="fa fa-bar-chart"></i> 統計分析</a></li>
+                        <li role="presentation"><a href="#tab-chk" data-toggle="tab" role="tab"><i class="fa fa-search"></i> 缺漏檢查 <span class="label label-<?= count($chk_rows) ? 'danger' : 'default' ?>"><?= count($chk_rows) ?></span></a></li>
                     </ul>
                     <div class="tab-content">
                     <div role="tabpanel" class="tab-pane fade in active" id="tab-detail">
@@ -816,6 +858,48 @@ try {
                     </div>
 
                     </div><!-- /#tab-stats -->
+
+                    <div role="tabpanel" class="tab-pane fade" id="tab-chk">
+                    <div class="sec">
+                        <h4><i class="fa fa-search" style="color:var(--amber-d);"></i> 有移轉單據，但缺 QC 檢驗或缺報工的站別
+                            <span class="hint">依上方的移轉日期與製程大項篩選；一站（製令＋站序）一列，多張移轉單合併顯示</span></h4>
+                        <div style="font-size:12px;color:var(--muted);margin:4px 0 8px;">
+                            「缺 QC」＝該站在 QC 檢驗紀錄一筆都沒有；「缺報工」＝該站在報工紀錄一筆都沒有。
+                            外包廠商的站本來就不會有報工，請看「廠商類別」欄（廠內加工／外包）判斷；可用右側按鈕只看廠內加工。
+                        </div>
+                        <?php if ($chk_err): ?><div class="alert alert-danger"><?= htmlspecialchars($chk_err) ?></div><?php endif; ?>
+                        <div style="margin-bottom:8px;">
+                            <span class="chk-chip on" data-f="">全部 <?= count($chk_rows) ?></span>
+                            <span class="chk-chip" data-f="noqc">缺 QC <?= $chk_noqc ?></span>
+                            <span class="chk-chip" data-f="norep">缺報工 <?= $chk_norep ?></span>
+                            <span class="chk-chip" data-f="both">兩者都缺 <?= $chk_both ?></span>
+                            <label style="margin-left:14px;font-weight:normal;cursor:pointer;"><input type="checkbox" id="chkInternalOnly"> 只看廠內加工</label>
+                        </div>
+                        <table id="tblChk" class="table table-bordered table-striped" style="width:100%">
+                            <thead><tr><th>最近移轉日</th><th>製令</th><th>站序</th><th>製程</th><th>客戶</th><th>料號</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($chk_rows as $c):
+                                $noqc = (int)$c['qc_cnt'] === 0; $norep = (int)$c['rep_cnt'] === 0;
+                                $ft = ($noqc && $norep) ? 'both' : ($noqc ? 'noqc' : 'norep'); ?>
+                                <tr data-ft="<?= $ft ?>" data-in="<?= (int)$c['is_internal'] === 1 ? 1 : 0 ?>">
+                                    <td data-order="<?= htmlspecialchars($c['last_date']) ?>"><?= htmlspecialchars(str_replace('-', '.', $c['last_date'])) ?></td>
+                                    <td><b><?= htmlspecialchars($c['bom']) ?></b></td>
+                                    <td><?= (int)$c['bom_sn'] ?></td>
+                                    <td><?= htmlspecialchars((string)$c['ProcessName']) ?></td>
+                                    <td><?= htmlspecialchars((string)$c['Client_Name']) ?></td>
+                                    <td><?= htmlspecialchars((string)$c['product_id']) ?></td>
+                                    <td><?= htmlspecialchars((string)($c['maker_name'] ?: $c['maker_code'])) ?></td>
+                                    <td><?= (int)$c['is_internal'] === 1 ? '廠內加工' : '外包／其他' ?></td>
+                                    <td><small><?= htmlspecialchars((string)$c['tr_nos']) ?></small></td>
+                                    <td class="n"><?= number_format((int)$c['tr_qty']) ?></td>
+                                    <td><?= $noqc ? '<span class="label label-danger">沒驗</span>' : '<span class="text-muted">' . (int)$c['qc_cnt'] . ' 筆</span>' ?></td>
+                                    <td><?= $norep ? '<span class="label label-danger">沒報工</span>' : '<span class="text-muted">' . (int)$c['rep_cnt'] . ' 筆</span>' ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    </div><!-- /#tab-chk -->
                     </div><!-- /.tab-content -->
 <?php endif; /* canView */ ?>
 
@@ -1059,6 +1143,11 @@ try {
                         <li>全表目前共 <?= number_format($total_log_rows) ?> 筆，最早可追溯到 2018 年，一次查太大區間會比較慢。</li>
                     </ul>
 
+                    <h4>缺漏檢查</h4>
+                    <p>「缺漏檢查」分頁列出<b>有移轉單據、但該站（製令＋站序）沒有 QC 檢驗紀錄或沒有報工紀錄</b>的站別，
+                       依上方的移轉日期與製程大項篩選。可用按鈕只看「缺 QC」「缺報工」「兩者都缺」，也可只看廠內加工。
+                       外包廠商的站本來就不會有報工，請看「廠商類別」欄判斷。</p>
+
                     <h4>權限（角色可由管理員自訂）</h4>
                     <p>本頁的角色<b>名稱與內容都由管理員自己設定</b>：頁首「<b>角色設定</b>」可新增角色、改名、刪除，
                        並逐項勾選它能用哪些功能。四個功能可以<b>各別</b>開關：</p>
@@ -1147,6 +1236,24 @@ try {
         var bmSelected   = {};   // transfer_id => true（跨分頁保留勾選）
 
         $(document).ready(function() {
+            // 缺漏檢查：篩選鈕＋表格
+            if ($('#tblChk').length) {
+                var tChk = $('#tblChk').DataTable({ dom: 'lfrtip', pageLength: 20, lengthMenu: [10, 20, 50, 100], order: [[0, 'desc']],
+                    language: { search: '搜尋：', lengthMenu: '每頁 _MENU_ 筆', info: '第 _START_–_END_ 筆，共 _TOTAL_ 筆', infoEmpty: '沒有資料', zeroRecords: '沒有符合的資料', paginate: { previous: '上一頁', next: '下一頁' } } });
+                var chkF = '';
+                $.fn.dataTable.ext.search.push(function (s, d, i) {
+                    if (s.nTable.id !== 'tblChk') return true;
+                    var tr = tChk.row(i).node(), ft = $(tr).data('ft');
+                    if (chkF === 'noqc' && ft !== 'noqc' && ft !== 'both') return false;
+                    if (chkF === 'norep' && ft !== 'norep' && ft !== 'both') return false;
+                    if (chkF === 'both' && ft !== 'both') return false;
+                    if ($('#chkInternalOnly').is(':checked') && String($(tr).data('in')) !== '1') return false;
+                    return true;
+                });
+                $('.chk-chip').on('click', function () { $('.chk-chip').removeClass('on'); $(this).addClass('on'); chkF = $(this).data('f'); tChk.draw(); });
+                $('#chkInternalOnly').on('change', function () { tChk.draw(); });
+            }
+
             // 使用說明與角色設定：沒有檢視權限也要能開（管理員可能就是進來設定權限的）
             $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
             $('#btnRoleSetting').on('click', function() { $('#roleSettingModal').modal('show'); ptlLoadRoles(); });
