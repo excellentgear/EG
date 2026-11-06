@@ -2658,6 +2658,68 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
     exit;
 }
 
+// ── BOM 管理員修正面板（2026-11-06）：列出／就地修改 發單、回廠、報廢、取回、QC檢驗、移轉憑單。
+//    唯一實作 src/common/bom_admin_fix_lib.php（寫入走 bom_return_edit_lib.php 的 force 模式）；
+//    僅本頁管理員，且須先輸入操作確認密碼（$_SESSION['oready_admin_fix']）；每個動作都寫 bom_ing_event 留紀錄 ──
+else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/confirm_password_lib.php';
+    require_once '../../src/common/bom_admin_fix_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!ber_is_admin($db, $uid)) { echo json_encode(['success'=>false,'message'=>'只有管理員可以使用管理員修正']); exit; }
+    $act = $_POST['action'];
+    try {
+        if ($act === 'baf_unlock') {
+            $r = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['password'] ?? ''), 'oready_admin_fix');
+            if (!$r['ok']) { echo json_encode(['success'=>false,'message'=>$r['msg']]); exit; }
+            $_SESSION['oready_admin_fix'] = 1;
+            try { $nm = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$uid);
+                  $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('enable','oready_admin_fix','0','BOM管理員修正面板',NULL,?,?,NOW())")->execute([$uid, $nm]); } catch (Throwable $e) {}
+            echo json_encode(['success'=>true]); exit;
+        }
+        if ($act === 'baf_lock') { unset($_SESSION['oready_admin_fix']); echo json_encode(['success'=>true]); exit; }
+        if (empty($_SESSION['oready_admin_fix'])) { echo json_encode(['success'=>false,'need_unlock'=>true,'message'=>'請先輸入操作確認密碼']); exit; }
+        $bom = trim((string)($_POST['bom'] ?? ''));
+        if ($bom === '') { echo json_encode(['success'=>false,'message'=>'缺少 BOM']); exit; }
+        if ($act === 'baf_list') { echo json_encode(['success'=>true] + baf_list($db, $bom)); exit; }
+        $fid = (int)($_POST['fid'] ?? 0);
+        $kind = (string)($_POST['kind'] ?? '');
+        $id = (int)($_POST['id'] ?? 0);
+        $d = trim((string)($_POST['date'] ?? ''));
+        $fl = fn($k) => (float)($_POST[$k] ?? 0);
+        if ($kind !== 'transfer' && !baf_fid_ok($db, $fid, $bom)) { echo json_encode(['success'=>false,'message'=>'這個製程不屬於這個 BOM']); exit; }
+        if ($act === 'baf_save') {
+            if ($kind === 'send') {
+                ber_save_send($db, $fid, $id, $fl('send_qty'), $uid);
+                ber_save_batch_meta($db, $fid, $id, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker'] ?? '')), $d, $uid);
+            } elseif ($kind === 'return') {
+                ber_save_return($db, $fid, $id, $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid, true);
+            } elseif ($kind === 'qc') {
+                baf_qc_save($db, $fid, $id, (int)($_POST['ok'] ?? 0), (int)($_POST['aod'] ?? 0), (int)($_POST['qq'] ?? 0), (int)($_POST['ng'] ?? 0), $d, $uid);
+            } elseif ($kind === 'transfer') {
+                baf_transfer_save($db, $bom, $id, (int)($_POST['qty'] ?? 0), $d, $uid);
+            } else { throw new Exception('這種紀錄不能在這裡修改'); }
+            echo json_encode(['success'=>true,'message'=>'已儲存']);
+        } elseif ($act === 'baf_delete') {
+            if ($kind === 'send') ber_delete_batch($db, $fid, $id, $uid, true);
+            elseif ($kind === 'return') ber_delete_return($db, $fid, $id, $uid, true);
+            else throw new Exception('這種紀錄不能刪除');
+            echo json_encode(['success'=>true,'message'=>'已刪除']);
+        } elseif ($act === 'baf_add_send') {
+            ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker'] ?? '')), $fl('send_qty'), $d, $uid);
+            echo json_encode(['success'=>true,'message'=>'已新增發單']);
+        } else {
+            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid);
+            echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回']);
+        }
+    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 // ── 修改／刪除移送與回廠紀錄（2026-11-06）：唯一實作 src/common/bom_return_edit_lib.php；
 //    權限＝角色功能碼 oready_edit_return 或管理員（唯讀角色不可）；數量下限依報工／QC 已通報數量 ──
 else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch','ber_add_batch','ber_add_return','ber_admin_batch_meta','ber_qc_save'], true)) {

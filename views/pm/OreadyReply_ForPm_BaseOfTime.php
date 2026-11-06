@@ -13016,11 +13016,13 @@ echo "</script>\n";
         // 2026-10-07 使用者交辦：管理員（permission A）可開啟「測試模式」直接改製程的整體狀態
         // (processing_state) 方便測試，不必真的跑完整個移轉/報工/QC流程；只有管理員看得到這顆鈕。
         const _tmBtnHtml = window.oreadyIsAdmin
-            ? `<button type="button" id="oready-tm-toggle" class="btn btn-xs" style="margin-left:10px;"></button>`
+            ? `<button type="button" id="oready-tm-toggle" class="btn btn-xs" style="margin-left:10px;"></button><button type="button" id="oready-af-btn" class="btn btn-xs btn-warning" style="margin-left:6px;" title="管理員修正：列出這個BOM的發單／回廠／QC檢驗／移轉憑單／異常單，可直接修改數量與日期（需操作確認密碼）">管理員修正</button>`
             : '';
         rightColProcesses.innerHTML += `<h5 style="margin-top:15px; margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;">BOM 製程列表<small style="color: #777;"> (SN 製程編號 製程)</small>${_tmBtnHtml}</h5>`;
         if (window.oreadyIsAdmin) {
-            setTimeout(function(){ oreadyRenderTestModeBtn(rowData.bom, rowData.bom_sn); }, 0);
+            setTimeout(function(){ oreadyRenderTestModeBtn(rowData.bom, rowData.bom_sn);
+                var _afb = document.getElementById('oready-af-btn');
+                if (_afb) _afb.onclick = function(){ if (window.EGBomAdminFix) window.EGBomAdminFix.open(rowData.bom, rowData.bom_sn); }; }, 0);
         }
         const processListDiv = document.createElement('div');
         processListDiv.id = `dynamic-process-list-${rowData.bom}`;
@@ -17543,6 +17545,7 @@ echo "</script>\n";
     <!-- Custom Theme Scripts -->
     <script src="../../resource/js/custom.min.js?v=<?=$_av?>"></script>
     <script src="../../resource/js/eg_bom_timeline.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_timeline.js') ?>"></script>
+    <script src="../../resource/js/eg_bom_admin_fix.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_admin_fix.js') ?>"></script>
     <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script>
 
 
