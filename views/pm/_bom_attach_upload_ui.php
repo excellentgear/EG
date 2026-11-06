@@ -5,17 +5,19 @@
  */
 ?>
 <div id="bauBox" style="background:#FDF0DC;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+  <div class="form-horizontal form-label-left">
   <div class="item form-group" style="margin-bottom:0">
     <label class="control-label col-md-3 col-sm-3 col-xs-12" for="bauFile">
       <b>BOM 附件上傳</b> <small>(PDF／圖片，可一次多檔)</small><br>
       <span class="text-muted" style="font-size:11px;">檔名開頭為 BOM 號碼＋標籤後綴（如 B-1150915010-T.pdf）即自動標籤；<br>解析不出的檔案會請你手動指定 BOM 與標籤</span>
     </label>
-    <div class="col-md-6 col-sm-6 col-xs-12">
+    <div class="col-md-4 col-sm-4 col-xs-8">
       <div class="input-group">
         <input type="file" id="bauFile" multiple accept=".pdf,.jpg,.jpeg,.png" class="form-control short-input">
         <span class="input-group-btn"><button type="button" id="bauAnalyze" class="btn btn-warning">檢查檔名</button></span>
       </div>
     </div>
+  </div>
   </div>
   <div id="bauList" style="display:none;margin-top:10px">
     <table class="table table-condensed" style="background:#fff;margin-bottom:6px">
