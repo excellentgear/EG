@@ -143,7 +143,7 @@ if (!function_exists('ber_save_send')) {
 
 if (!function_exists('ber_save_return')) {
     /** 修改某一次回廠紀錄的回廠／報廢／取回數量與回廠日。 */
-    function ber_save_return(PDO $db, int $fid, int $returnId, float $ret, float $scrap, float $wd, ?string $date, int $uid): array {
+    function ber_save_return(PDO $db, int $fid, int $returnId, float $ret, float $scrap, float $wd, ?string $date, int $uid, bool $force = false): array {
         eg_bom_outsource_ensure_schema($db);
         if ($ret < 0 || $scrap < 0 || $wd < 0) throw new Exception('數量不可為負數');
         if ($ret + $scrap + $wd <= 0) throw new Exception('回廠、報廢、取回至少要填一個（要整筆作廢請用刪除）');
@@ -170,7 +170,7 @@ if (!function_exists('ber_save_return')) {
             }
             $tot = $db->prepare("SELECT COALESCE(SUM(return_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
             $tot->execute([$fid, $b['batch_id']]);
-            ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
+            if (!$force) ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
             $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, updated_at=NOW() WHERE batch_id=?")->execute([$nr, $ns, $nw, $b['batch_id']]);
             $db->prepare("UPDATE bom_ing_outsource_return SET return_qty=?, scrap_qty=?, withdraw_qty=?, return_date=COALESCE(?,return_date) WHERE return_id=?")->execute([$ret, $scrap, $wd, $date, $returnId]);
             ber_after_change($db, $fid, (int)$b['batch_id']);
@@ -183,7 +183,7 @@ if (!function_exists('ber_save_return')) {
 
 if (!function_exists('ber_delete_return')) {
     /** 刪除當天建立的回廠紀錄（誤按回廠）。 */
-    function ber_delete_return(PDO $db, int $fid, int $returnId, int $uid): void {
+    function ber_delete_return(PDO $db, int $fid, int $returnId, int $uid, bool $force = false): void {
         eg_bom_outsource_ensure_schema($db);
         $db->beginTransaction();
         try {
@@ -191,7 +191,7 @@ if (!function_exists('ber_delete_return')) {
             $st->execute([$returnId, $fid]);
             $r = $st->fetch(PDO::FETCH_ASSOC);
             if (!$r) throw new Exception('找不到這筆回廠紀錄（可能已被刪除，請重新整理）');
-            if ((int)$r['is_today'] !== 1) throw new Exception('只有當天建立的回廠紀錄可以刪除');
+            if (!$force && (int)$r['is_today'] !== 1) throw new Exception('只有當天建立的回廠紀錄可以刪除');
             $bs = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE batch_id=? FOR UPDATE");
             $bs->execute([$r['batch_id']]);
             $b = $bs->fetch(PDO::FETCH_ASSOC);
@@ -199,7 +199,7 @@ if (!function_exists('ber_delete_return')) {
             $nr = (float)$b['return_qty'] - (float)$r['return_qty'];
             $tot = $db->prepare("SELECT COALESCE(SUM(return_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
             $tot->execute([$fid, $b['batch_id']]);
-            ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
+            if (!$force) ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
             $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=GREATEST(0,return_qty-?), scrap_qty=GREATEST(0,scrap_qty-?), withdrawn_qty=GREATEST(0,COALESCE(withdrawn_qty,0)-?), updated_at=NOW() WHERE batch_id=?")
                ->execute([(float)$r['return_qty'], (float)$r['scrap_qty'], (float)($r['withdraw_qty'] ?? 0), $b['batch_id']]);
             $db->prepare("DELETE FROM bom_ing_outsource_return WHERE return_id=?")->execute([$returnId]);
@@ -212,7 +212,7 @@ if (!function_exists('ber_delete_return')) {
 
 if (!function_exists('ber_delete_batch')) {
     /** 刪除當天建立、尚無任何回廠紀錄的移送批次（誤送）。 */
-    function ber_delete_batch(PDO $db, int $fid, int $batchId, int $uid): void {
+    function ber_delete_batch(PDO $db, int $fid, int $batchId, int $uid, bool $force = false): void {
         eg_bom_outsource_ensure_schema($db);
         $db->beginTransaction();
         try {
@@ -220,10 +220,12 @@ if (!function_exists('ber_delete_batch')) {
             $st->execute([$batchId, $fid]);
             $b = $st->fetch(PDO::FETCH_ASSOC);
             if (!$b) throw new Exception('找不到這一批（可能已被刪除，請重新整理）');
-            if ((int)$b['is_today'] !== 1) throw new Exception('只有當天建立的移送批次可以刪除');
+            if (!$force && (int)$b['is_today'] !== 1) throw new Exception('只有當天建立的移送批次可以刪除');
             $n = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_return WHERE batch_id=?");
             $n->execute([$batchId]);
-            if ((int)$n->fetchColumn() > 0 || (float)$b['return_qty'] > 0 || (float)$b['scrap_qty'] > 0 || (float)($b['withdrawn_qty'] ?? 0) > 0) {
+            if ($force) {
+                $db->prepare("DELETE FROM bom_ing_outsource_return WHERE batch_id=?")->execute([$batchId]);
+            } elseif ((int)$n->fetchColumn() > 0 || (float)$b['return_qty'] > 0 || (float)$b['scrap_qty'] > 0 || (float)($b['withdrawn_qty'] ?? 0) > 0) {
                 throw new Exception('這批已有回廠／報廢／取回紀錄，請先刪除那些紀錄');
             }
             $c = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
@@ -231,6 +233,110 @@ if (!function_exists('ber_delete_batch')) {
             if ((int)$c->fetchColumn() <= 1) throw new Exception('這是這一站唯一的移送批次，要整站退回請使用「取消移轉」');
             $db->prepare("DELETE FROM bom_ing_outsource_batch WHERE batch_id=?")->execute([$batchId]);
             ber_log($db, $fid, 'send_delete', '刪除當天誤送批次#' . $batchId . '（移送 ' . (float)$b['send_qty'] . '，' . ($b['maker_id'] ?? '') . '）', $uid);
+            $db->commit();
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+}
+
+if (!function_exists('ber_check_past_date')) {
+    function ber_check_past_date(?string $date, string $label): ?string {
+        if ($date === null || $date === '') return null;
+        $dt = DateTime::createFromFormat('Y-m-d', $date);
+        if (!$dt || $dt->format('Y-m-d') !== $date) throw new Exception($label . '格式不正確');
+        if ($date > date('Y-m-d')) throw new Exception($label . '不可晚於今天');
+        return $date;
+    }
+}
+
+if (!function_exists('ber_add_batch')) {
+    /** 補登一個過去的移送批次（可拆給不同廠商）。不動製程狀態／回廠日，回廠量之後用 ber_add_return 補。 */
+    function ber_add_batch(PDO $db, int $fid, string $makerNo, string $makerName, float $send, ?string $date, int $uid): int {
+        eg_bom_outsource_ensure_schema($db);
+        if ($send <= 0) throw new Exception('移送數量必須大於 0');
+        if ($makerNo === '' && $makerName === '') throw new Exception('請選擇廠商');
+        $date = ber_check_past_date($date, '送出日');
+        $db->beginTransaction();
+        try {
+            $sq = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=? FOR UPDATE");
+            $sq->execute([$fid]);
+            $stage = $sq->fetchColumn();
+            if ($stage === false) throw new Exception('找不到這個製程');
+            $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+            $sum->execute([$fid]);
+            $have = (float)$sum->fetchColumn();
+            if ($have + $send > (float)$stage + 1e-9) throw new Exception('各批移送數量合計不可超過這一站的發單數 ' . (float)$stage . '（目前已移送 ' . $have . '）');
+            $id = eg_bom_outsource_open_batch($db, $fid, $makerNo !== '' ? $makerNo : null, $makerName !== '' ? $makerName : null, $send, $date, null, '（補登）', $uid);
+            ber_log($db, $fid, 'send_backfill', '補登移送批次#' . $id . '：' . $makerName . ' ' . $send . '（送出日 ' . ($date ?? '-') . '）', $uid);
+            $db->commit();
+            return $id;
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+}
+
+if (!function_exists('ber_add_return')) {
+    /** 補登一筆過去的回廠／報廢／取回。回廠量會自然計入 QC 待驗可驗量；不動製程狀態。 */
+    function ber_add_return(PDO $db, int $fid, int $batchId, float $ret, float $scrap, float $wd, ?string $date, int $uid): int {
+        eg_bom_outsource_ensure_schema($db);
+        if ($ret < 0 || $scrap < 0 || $wd < 0) throw new Exception('數量不可為負數');
+        if ($ret + $scrap + $wd <= 0) throw new Exception('回廠、報廢、取回至少要填一個');
+        $date = ber_check_past_date($date, '回廠日');
+        $db->beginTransaction();
+        try {
+            $bs = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE batch_id=? AND bom_ing_fid=? FOR UPDATE");
+            $bs->execute([$batchId, $fid]);
+            $b = $bs->fetch(PDO::FETCH_ASSOC);
+            if (!$b) throw new Exception('找不到這一批（請重新整理）');
+            $nr = (float)$b['return_qty'] + $ret; $ns = (float)$b['scrap_qty'] + $scrap; $nw = (float)($b['withdrawn_qty'] ?? 0) + $wd;
+            if ($nr + $ns + $nw > (float)$b['send_qty'] + 1e-9) throw new Exception('回廠＋報廢＋取回合計 ' . ($nr + $ns + $nw) . ' 超過這批移送數量 ' . $b['send_qty']);
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$batchId, $fid, $ret, $scrap, $wd, $date, '補登', $uid ?: null]);
+            $rid = (int)$db->lastInsertId();
+            $closed = ($nr + $ns + $nw) >= (float)$b['send_qty'] - 0.0000001;
+            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, status=?, updated_at=NOW() WHERE batch_id=?")
+               ->execute([$nr, $ns, $nw, $closed ? 'closed' : 'open', $batchId]);
+            ber_log($db, $fid, 'return_backfill', '補登回廠紀錄#' . $rid . ' 批次#' . $batchId . '：回廠 ' . $ret . '、報廢 ' . $scrap . '、取回 ' . $wd . '（回廠日 ' . ($date ?? '-') . '）', $uid);
+            $db->commit();
+            return $rid;
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+}
+
+if (!function_exists('ber_save_batch_meta')) {
+    /** 管理員：修改批次的廠商與送出日。 */
+    function ber_save_batch_meta(PDO $db, int $fid, int $batchId, string $makerNo, string $makerName, ?string $date, int $uid): void {
+        eg_bom_outsource_ensure_schema($db);
+        $date = ber_check_past_date($date, '送出日');
+        if ($makerNo === '' && $makerName === '') throw new Exception('請選擇廠商');
+        $st = $db->prepare("SELECT maker_id_no, maker_id, send_date FROM bom_ing_outsource_batch WHERE batch_id=? AND bom_ing_fid=?");
+        $st->execute([$batchId, $fid]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) throw new Exception('找不到這一批（請重新整理）');
+        $db->prepare("UPDATE bom_ing_outsource_batch SET maker_id_no=?, maker_id=?, send_date=COALESCE(?,send_date), updated_at=NOW() WHERE batch_id=?")
+           ->execute([$makerNo !== '' ? $makerNo : null, $makerName !== '' ? $makerName : null, $date, $batchId]);
+        ber_log($db, $fid, 'batch_meta_edit', '管理員修改批次#' . $batchId . '：廠商 ' . ($o['maker_id'] ?? '') . '→' . $makerName . '、送出日 ' . substr((string)$o['send_date'], 0, 10) . '→' . ($date ?? '不變'), $uid);
+    }
+}
+
+if (!function_exists('ber_qc_list')) {
+    function ber_qc_list(PDO $db, int $fid): array {
+        $st = $db->prepare("SELECT qc_check_id, DATE_FORMAT(QC_check_date,'%Y-%m-%d') d, COALESCE(QC_ok_sqty,0) ok, COALESCE(QC_aod_sqty,0) aod, COALESCE(QC_QQ_sqty,0) qq, COALESCE(QC_ng_sqty,0) ng FROM QC_check WHERE bom_ing_fid_ref=? ORDER BY qc_check_id");
+        $st->execute([(string)$fid]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
+if (!function_exists('ber_qc_save')) {
+    /** 管理員：修正一筆 QC 檢驗紀錄的各項數量（允收／特採／異常／驗退）。 */
+    function ber_qc_save(PDO $db, int $fid, int $qcId, int $ok, int $aod, int $qq, int $ng, int $uid): void {
+        if ($ok < 0 || $aod < 0 || $qq < 0 || $ng < 0) throw new Exception('數量不可為負數');
+        $db->beginTransaction();
+        try {
+            $st = $db->prepare("SELECT COALESCE(QC_ok_sqty,0) ok, COALESCE(QC_aod_sqty,0) aod, COALESCE(QC_QQ_sqty,0) qq, COALESCE(QC_ng_sqty,0) ng FROM QC_check WHERE qc_check_id=? AND bom_ing_fid_ref=? FOR UPDATE");
+            $st->execute([$qcId, (string)$fid]);
+            $o = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$o) throw new Exception('找不到這筆 QC 檢驗紀錄');
+            $db->prepare("UPDATE QC_check SET QC_ok_sqty=?, QC_aod_sqty=?, QC_QQ_sqty=?, QC_ng_sqty=?, updated_by=?, updated_at=NOW() WHERE qc_check_id=?")->execute([$ok, $aod, $qq, $ng, $uid, $qcId]);
+            ber_log($db, $fid, 'qc_edit', '管理員修正QC檢驗#' . $qcId . '：允收 ' . $o['ok'] . '→' . $ok . '、特採 ' . $o['aod'] . '→' . $aod . '、異常 ' . $o['qq'] . '→' . $qq . '、驗退 ' . $o['ng'] . '→' . $ng, $uid);
             $db->commit();
         } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
     }

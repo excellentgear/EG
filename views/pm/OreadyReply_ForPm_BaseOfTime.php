@@ -11398,8 +11398,11 @@ echo "</script>\n";
         document.body.appendChild(mask);
         mask.addEventListener('mousedown', function (e) { if (e.target === mask) mask.remove(); });
         function n(v) { v = parseFloat(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
+        var adminMode = false; // 管理員修正模式（只有後端回 is_admin 才會出現切換）
+        var lastRes = null;
         function post(data, cb) {
             data.bom_ing_fid = fid;
+            if (adminMode) data.force = 1;
             $.post('', data, function (r) { cb(r || { success: false, message: '無回應' }); }, 'json')
              .fail(function () { cb({ success: false, message: '與伺服器通訊失敗' }); });
         }
@@ -11411,6 +11414,7 @@ echo "</script>\n";
             var keep = keepMsg;
             post({ action: 'ber_list' }, function (r) {
                 if (!r.success) { box.innerHTML = '<div style="color:#b8431f;">' + escapeHtml(r.message || '載入失敗') + '</div><div style="text-align:right;margin-top:10px;"><button class="btn btn-default btn-sm" id="bre-close">關閉</button></div>'; box.querySelector('#bre-close').onclick = function () { mask.remove(); }; return; }
+                lastRes = r;
                 render(r);
                 if (keep) msg(keep, keepOk);
             });
@@ -11420,7 +11424,10 @@ echo "</script>\n";
             var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><h4 style="margin:0;color:#6B4423;">修改移送／回廠：' + escapeHtml(r.proc.bom) + ' / ' + escapeHtml(proc.process_no || '') + ' ' + escapeHtml(proc.ProcessName || '') + '</h4><button class="btn btn-default btn-xs" id="bre-close">✕</button></div>';
             h += '<div style="font-size:12px;color:#7a4a10;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:4px;padding:6px 10px;margin-bottom:8px;line-height:1.7;">'
               + '發單數 <b>' + n(r.proc.sqty) + '</b>　已回廠合計 <b>' + n(r.return_total) + '</b>　已通報：QC檢驗 <b>' + n(rep.qc) + '</b>、報工 <b>' + n(rep.pm) + '</b><br>'
-              + '回廠數量合計不可低於已通報數量（' + n(rep.need) + '）；回廠＋報廢＋取回不可超過該批移送數量；<b>只有當天建立的紀錄可刪除</b>。</div>';
+              + (adminMode ? '<b style="color:#b8431f;">管理員修正模式：</b>可刪除任何日期的紀錄、回廠合計可低於已通報數量、可改廠商／送出日、可直接修正QC檢驗量。每個動作都會留操作紀錄。'
+                           : '回廠數量合計不可低於已通報數量（' + n(rep.need) + '）；回廠＋報廢＋取回不可超過該批移送數量；<b>只有當天建立的紀錄可刪除</b>。漏記的歷史進出請用「補登」。')
+              + (r.is_admin ? '<br><label style="font-weight:bold;cursor:pointer;margin:4px 0 0;"><input type="checkbox" id="bre-adm"' + (adminMode ? ' checked' : '') + '> 管理員修正模式（修正整筆錯誤紀錄用）</label>' : '')
+              + '</div>';
             h += '<div id="bre-msg" style="min-height:18px;font-size:12px;font-weight:bold;margin-bottom:6px;"></div>';
             if (!r.batches.length) h += '<div style="color:#999;padding:12px;">這一站尚無移送批次紀錄。</div>';
             r.batches.forEach(function (b) {
@@ -11429,7 +11436,8 @@ echo "</script>\n";
                   + '<b>批次#' + b.batch_id + '</b><span>' + escapeHtml(b.maker || '（未登記廠商）') + '</span><span style="color:#7a4a10;">送出日 ' + escapeHtml(b.send_date || '-') + '</span>'
                   + '<span style="margin-left:auto;">移送 <input type="number" min="0" step="any" class="bre-send" data-b="' + b.batch_id + '" value="' + n(b.send_qty) + '" style="width:80px;"> '
                   + '<button class="btn btn-warning btn-xs bre-send-save" data-b="' + b.batch_id + '">儲存移送數</button> '
-                  + (b.is_today && !b.returns.length ? '<button class="btn btn-danger btn-xs bre-del-batch" data-b="' + b.batch_id + '" title="當天誤送，整批刪除">刪除此批</button>' : '')
+                  + (adminMode ? '<button class="btn btn-default btn-xs bre-meta" data-b="' + b.batch_id + '" data-m="' + escapeHtml(b.maker || '') + '" data-d="' + escapeHtml(b.send_date || '') + '">改廠商／日期</button> ' : '')
+                  + ((adminMode || (b.is_today && !b.returns.length)) ? '<button class="btn btn-danger btn-xs bre-del-batch" data-adm="' + (adminMode ? 1 : 0) + '" data-b="' + b.batch_id + '" title="當天誤送，整批刪除">刪除此批</button>' : '')
                   + '</span></div>';
                 if (!b.returns.length) h += '<div style="padding:8px 10px;color:#999;font-size:12px;">尚無回廠紀錄</div>';
                 else {
@@ -11442,13 +11450,27 @@ echo "</script>\n";
                           + '<td><input type="number" min="0" step="any" class="bre-wq" value="' + n(x.withdraw_qty) + '" style="width:70px;"></td>'
                           + '<td>' + escapeHtml(x.by_name || '') + '</td>'
                           + '<td><button class="btn btn-warning btn-xs bre-ret-save">儲存</button> '
-                          + (x.is_today ? '<button class="btn btn-danger btn-xs bre-ret-del" title="當天誤按回廠，刪除這筆">刪除</button>' : '<span style="color:#aaa;" title="非當天建立，不可刪除">不可刪除</span>')
+                          + ((x.is_today || adminMode) ? '<button class="btn btn-danger btn-xs bre-ret-del" title="當天誤按回廠，刪除這筆">刪除</button>' : '<span style="color:#aaa;" title="非當天建立，不可刪除">不可刪除</span>')
                           + '</td></tr>';
                     });
                     h += '</tbody></table>';
                 }
+                h += '<div class="bre-bf" data-b="' + b.batch_id + '" style="background:#FFFAF2;border-top:1px dashed #E4D3BC;padding:6px 10px;font-size:12px;">補登回廠　'
+                  + '<input type="date" class="bf-d" max="' + _ormToday() + '" style="width:130px;"> 回廠 <input type="number" min="0" step="any" class="bf-r" style="width:65px;"> 報廢 <input type="number" min="0" step="any" class="bf-s" style="width:65px;"> 取回 <input type="number" min="0" step="any" class="bf-w" style="width:65px;"> '
+                  + '<button class="btn btn-success btn-xs bf-go">補登</button></div>';
                 h += '</div>';
             });
+            h += '<div id="bre-newb" style="border:1px dashed #E4D3BC;border-radius:4px;padding:8px 10px;margin-bottom:10px;font-size:12px;background:#FFFAF2;"><b>補登移送批次</b>（同一關拆給不同廠商，每家一批）　'
+              + '廠商 <input list="bre-mk-dl" id="bre-mk" placeholder="輸入編號或名稱後點選" style="width:190px;"><datalist id="bre-mk-dl"></datalist> 數量 <input type="number" min="0" step="any" id="bre-nq" style="width:75px;"> 送出日 <input type="date" id="bre-nd" max="' + _ormToday() + '" style="width:130px;"> <button class="btn btn-success btn-xs" id="bre-nb-go">補登批次</button></div>';
+            if (adminMode && (r.qc || []).length) {
+                h += '<div style="border:1px solid #E4B3A0;border-radius:4px;margin-bottom:10px;"><div style="background:#F6D9CC;padding:6px 10px;font-size:13px;"><b>QC檢驗紀錄</b>（管理員修正：會直接影響這一站「已驗」數量）</div><table class="table table-condensed" style="margin:0;font-size:12px;"><thead><tr><th>檢驗日</th><th>允收</th><th>特採</th><th>異常</th><th>驗退</th><th></th></tr></thead><tbody>';
+                r.qc.forEach(function (q) {
+                    h += '<tr data-q="' + q.qc_check_id + '"><td>' + escapeHtml(q.d || '') + '</td>'
+                      + ['ok','aod','qq','ng'].map(function (k) { return '<td><input type="number" min="0" step="1" class="bq-' + k + '" value="' + parseInt(q[k] || 0, 10) + '" style="width:70px;"></td>'; }).join('')
+                      + '<td><button class="btn btn-warning btn-xs bq-save">儲存</button></td></tr>';
+                });
+                h += '</tbody></table></div>';
+            }
             h += '<div style="text-align:right;"><button class="btn btn-default btn-sm" id="bre-close2">關閉</button></div>';
             box.innerHTML = h;
             var closeIt = function () { mask.remove(); _ormRefreshMain(); };
@@ -11463,7 +11485,7 @@ echo "</script>\n";
             });
             box.querySelectorAll('.bre-del-batch').forEach(function (btn) {
                 btn.onclick = function () {
-                    if (!confirm('確定刪除這個當天誤送的移送批次？')) return;
+                    if (!confirm(adminMode ? '【管理員修正】確定刪除整個移送批次（含它底下所有回廠紀錄）？' : '確定刪除這個當天誤送的移送批次？')) return;
                     post({ action: 'ber_delete_batch', batch_id: btn.getAttribute('data-b') }, function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
                 };
             });
@@ -11477,8 +11499,66 @@ echo "</script>\n";
             });
             box.querySelectorAll('.bre-ret-del').forEach(function (btn) {
                 btn.onclick = function () {
-                    if (!confirm('確定刪除這筆當天建立的回廠紀錄？數量會從該批扣回。')) return;
+                    if (!confirm(adminMode ? '【管理員修正】確定刪除這筆回廠紀錄？數量會從該批扣回，且不受已通報數量限制。' : '確定刪除這筆當天建立的回廠紀錄？數量會從該批扣回。')) return;
                     post({ action: 'ber_delete_return', return_id: btn.closest('tr').getAttribute('data-r') }, function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
+                };
+            });
+            var adm = box.querySelector('#bre-adm');
+            if (adm) adm.onchange = function () { adminMode = adm.checked; render(lastRes); };
+            box.querySelectorAll('.bf-go').forEach(function (btn) {
+                btn.onclick = function () {
+                    var w = btn.closest('.bre-bf');
+                    post({ action: 'ber_add_return', batch_id: w.getAttribute('data-b'), return_date: w.querySelector('.bf-d').value, return_qty: w.querySelector('.bf-r').value, scrap_qty: w.querySelector('.bf-s').value, withdraw_qty: w.querySelector('.bf-w').value },
+                         function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
+                };
+            });
+            // 廠商挑選：沿用本頁既有 search_maker（輸入編號或名稱，點選後帶入）
+            var mk = box.querySelector('#bre-mk'), dl = box.querySelector('#bre-mk-dl'), pickM = null;
+            function findM(v) { var h = null; Array.prototype.forEach.call(dl.options, function (o) { if (o.value === v) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
+            if (mk) mk.addEventListener('input', function () {
+                var v = mk.value.trim(); pickM = findM(v);
+                if (pickM) return;
+                if (v.length < 1) { dl.innerHTML = ''; return; }
+                $.post('', { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function (res) {
+                    dl.innerHTML = '';
+                    if (res && res.success && Array.isArray(res.data)) res.data.forEach(function (m) { var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); dl.appendChild(o); });
+                }, 'json');
+            });
+            var nbGo = box.querySelector('#bre-nb-go');
+            if (nbGo) nbGo.onclick = function () {
+                var pk = findM(mk.value.trim()) || pickM;
+                if (!pk || !pk.no) { msg('請從清單挑選廠商（輸入編號或名稱後點選）', false); return; }
+                post({ action: 'ber_add_batch', maker_no: pk.no, maker_name: pk.name, send_qty: box.querySelector('#bre-nq').value, send_date: box.querySelector('#bre-nd').value }, function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
+            };
+            box.querySelectorAll('.bre-meta').forEach(function (btn) {
+                btn.onclick = function () {
+                    var line = btn.parentNode;
+                    if (line.querySelector('.bre-mk2')) return;
+                    var sp = document.createElement('span');
+                    sp.style.cssText = 'display:block;width:100%;background:#fff;padding:4px 6px;margin-top:4px;border:1px solid #E4D3BC;';
+                    sp.innerHTML = '廠商 <input list="bre-mk2-dl" class="bre-mk2" value="' + btn.getAttribute('data-m') + '" style="width:190px;"><datalist id="bre-mk2-dl"></datalist> 送出日 <input type="date" class="bre-md2" value="' + btn.getAttribute('data-d') + '" max="' + _ormToday() + '" style="width:130px;"> <button class="btn btn-warning btn-xs bre-mgo">儲存</button>';
+                    line.appendChild(sp);
+                    var i2 = sp.querySelector('.bre-mk2'), d2 = sp.querySelector('#bre-mk2-dl'), p2 = null;
+                    function f2(v) { var h = null; Array.prototype.forEach.call(d2.options, function (o) { if (o.value === v) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
+                    i2.addEventListener('input', function () {
+                        var v = i2.value.trim(); p2 = f2(v); if (p2 || v.length < 1) return;
+                        $.post('', { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function (res) {
+                            d2.innerHTML = '';
+                            if (res && res.success && Array.isArray(res.data)) res.data.forEach(function (m) { var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); d2.appendChild(o); });
+                        }, 'json');
+                    });
+                    sp.querySelector('.bre-mgo').onclick = function () {
+                        var pk = f2(i2.value.trim()) || p2;
+                        if (!pk || !pk.no) { msg('請從清單挑選廠商', false); return; }
+                        post({ action: 'ber_admin_batch_meta', batch_id: btn.getAttribute('data-b'), maker_no: pk.no, maker_name: pk.name, send_date: sp.querySelector('.bre-md2').value }, function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
+                    };
+                };
+            });
+            box.querySelectorAll('.bq-save').forEach(function (btn) {
+                btn.onclick = function () {
+                    var tr = btn.closest('tr');
+                    if (!confirm('確定修正這筆QC檢驗數量？這會直接改變這一站的已驗數量。')) return;
+                    post({ action: 'ber_qc_save', qc_check_id: tr.getAttribute('data-q'), ok: tr.querySelector('.bq-ok').value, aod: tr.querySelector('.bq-aod').value, qq: tr.querySelector('.bq-qq').value, ng: tr.querySelector('.bq-ng').value }, function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
                 };
             });
         }

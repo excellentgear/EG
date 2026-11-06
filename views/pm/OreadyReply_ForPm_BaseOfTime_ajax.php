@@ -2660,7 +2660,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
 
 // ── 修改／刪除移送與回廠紀錄（2026-11-06）：唯一實作 src/common/bom_return_edit_lib.php；
 //    權限＝角色功能碼 oready_edit_return 或管理員（唯讀角色不可）；數量下限依報工／QC 已通報數量 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch','ber_add_batch','ber_add_return','ber_admin_batch_meta','ber_qc_save'], true)) {
     session_write_close();
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
@@ -2674,20 +2674,36 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
         $fid = (int)($_POST['bom_ing_fid'] ?? 0);
         if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
         $act = $_POST['action'];
+        // 管理員修正模式：略過「當天才可刪」「不可低於已通報」限制，並可直接修正QC檢驗量；只有管理員、且前端明確帶 force=1 才生效
+        $isAdm = ber_is_admin($db, $uid);
+        $force = $isAdm && (string)($_POST['force'] ?? '') === '1';
+        if (in_array($act, ['ber_admin_batch_meta','ber_qc_save'], true) && !$isAdm) { echo json_encode(['success'=>false,'message'=>'此功能僅管理員可用']); exit; }
         if ($act === 'ber_list') {
-            echo json_encode(['success'=>true] + ber_list($db, $fid));
+            echo json_encode(['success'=>true, 'is_admin'=>$isAdm, 'qc'=>$isAdm ? ber_qc_list($db, $fid) : []] + ber_list($db, $fid));
         } elseif ($act === 'ber_save_send') {
             $r = ber_save_send($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['send_qty'] ?? 0), $uid);
             echo json_encode(['success'=>true,'message'=>'已將移送數量由 '.$r['old'].' 改為 '.$r['new']]);
         } elseif ($act === 'ber_save_return') {
             ber_save_return($db, $fid, (int)($_POST['return_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0),
-                            (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid);
+                            (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, $force);
             echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改']);
         } elseif ($act === 'ber_delete_return') {
-            ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid);
+            ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid, $force);
             echo json_encode(['success'=>true,'message'=>'回廠紀錄已刪除']);
+        } elseif ($act === 'ber_add_batch') {
+            ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), (float)($_POST['send_qty'] ?? 0), trim((string)($_POST['send_date'] ?? '')), $uid);
+            echo json_encode(['success'=>true,'message'=>'已補登移送批次']);
+        } elseif ($act === 'ber_add_return') {
+            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0), (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid);
+            echo json_encode(['success'=>true,'message'=>'已補登回廠紀錄']);
+        } elseif ($act === 'ber_admin_batch_meta') {
+            ber_save_batch_meta($db, $fid, (int)($_POST['batch_id'] ?? 0), trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), trim((string)($_POST['send_date'] ?? '')), $uid);
+            echo json_encode(['success'=>true,'message'=>'已修改廠商／送出日']);
+        } elseif ($act === 'ber_qc_save') {
+            ber_qc_save($db, $fid, (int)($_POST['qc_check_id'] ?? 0), (int)($_POST['ok'] ?? 0), (int)($_POST['aod'] ?? 0), (int)($_POST['qq'] ?? 0), (int)($_POST['ng'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'QC檢驗數量已修正']);
         } else {
-            ber_delete_batch($db, $fid, (int)($_POST['batch_id'] ?? 0), $uid);
+            ber_delete_batch($db, $fid, (int)($_POST['batch_id'] ?? 0), $uid, $force);
             echo json_encode(['success'=>true,'message'=>'移送批次已刪除']);
         }
     } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
