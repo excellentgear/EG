@@ -83,6 +83,16 @@
             + '#egaf-drawer .it .row2{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;}'
             + '#egaf-drawer .nw{display:none;border:1px dashed #E4D3BC;border-radius:4px;padding:6px 8px;margin-top:6px;background:#fff;font-size:12px;}'
             + '#egaf-drawer .nw input,#egaf-drawer .nw select{height:24px;font-size:12px;padding:0 3px;}'
+            + '#egaf-drawer.wide{width:96vw;}'
+            + '#egaf-drawer .tn{display:flex;align-items:center;}'
+            + '#egaf-drawer .tk-col{display:flex;flex-direction:column;}'
+            + '#egaf-drawer .tk{position:relative;padding:5px 0 5px 28px;}'
+            + '#egaf-drawer .tk::before{content:"";position:absolute;left:0;top:50%;width:28px;border-top:2px solid #C0561F;}'
+            + '#egaf-drawer .tk::after{content:"";position:absolute;left:0;top:0;bottom:0;border-left:2px solid #C0561F;}'
+            + '#egaf-drawer .tk:first-child::after{top:50%;}'
+            + '#egaf-drawer .tk:last-child::after{bottom:50%;}'
+            + '#egaf-drawer .tk:only-child::after{display:none;}'
+            + '#egaf-drawer .tcard{width:230px;flex:0 0 auto;box-sizing:border-box;}'
             + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
             + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
             + '#egaf-drawer .fl-b{margin:6px 8px 6px 14px;border-left:4px solid #F0A24B;background:#fff;padding:4px 8px;border-radius:0 4px 4px 0;}'
@@ -178,6 +188,7 @@
         DATA._def = calcDeficit();
         drawer.querySelector('#egaf-v-time').style.fontWeight = viewMode === 'time' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-time').style.background = viewMode === 'time' ? '#F6D9CC' : '';
         drawer.querySelector('#egaf-v-flow').style.fontWeight = viewMode === 'flow' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-flow').style.background = viewMode === 'flow' ? '#F6D9CC' : '';
+        drawer.classList.toggle('wide', viewMode === 'flow');
         if (viewMode === 'flow') { renderFlow(); return; }
         var html = '', last = null, shown = 0;
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
@@ -213,7 +224,7 @@
             });
             // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
-            return '<div class="fl-t" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '"><b>移轉</b> ' + esc(t.no) + '　' + esc(w.egFmtDate ? w.egFmtDate(t.date) : t.date) + '　<b>' + nz(t.qty) + '</b>　' + esc(t.from) + (t.to ? ' → ' + esc(t.to) : '') + ' ' + tag(fl.src_auto && fl.dst_auto)
+            return '<div class="fl-t tcard" style="margin:0;" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '"><b>移轉</b> ' + esc(t.no) + '　<span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span>' + '　' + esc(w.egFmtDate ? w.egFmtDate(t.date) : t.date) + '　<b>' + nz(t.qty) + '</b>　' + esc(t.from) + (t.to ? ' → ' + esc(t.to) : '') + ' ' + tag(fl.src_auto && fl.dst_auto)
                 + '<div style="margin-top:2px;color:#7a4a10;">' + dstTxt + '</div>'
                 + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select> 接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
         }
@@ -225,28 +236,30 @@
         tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst && fl.src) isDst[fl.dst] = true; });
         bsAll.sort(function (x, y) { return (x.sn - y.sn) || (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id); });
         var seen = {};
-        function node(b, depth) {
-            var h = '<div class="fl-b" data-batch="' + b.id + '" data-fid="' + b.fid + '" style="margin-left:' + (depth ? 0 : 0) + 'px;">';
+        // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
+        function bnode(b) {
             seen[b.id] = true;
-            var rets = rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; });
-            h += '<span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b>　' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
-                + '　<span style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</span>';
-            var qc = rows.filter(function (r) { return r.kind === 'qc' && r.fid === b.fid; });
+            var h = '<div class="fl-b tcard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '">'
+                + '<span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span><br><b>發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b><br>' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
+                + '<div style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</div></div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
-            outs.forEach(function (t) {
-                var fl = flow[t.id], d = fl.dst && sends[fl.dst];
-                h += chip(t);
-                if (d) {
-                    if (seen[d.id]) h += '<div class="fl-in" style="margin-left:24px;">↳ 合流到上方已畫過的：' + esc(bLabel(d)) + '</div>';
-                    else h += '<div style="margin-left:14px;border-left:2px dotted #C0561F;padding-left:2px;">' + node(d, depth + 1) + '</div>';
-                }
-            });
-            return h + '</div>';
+            var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
+            return '<div class="tn">' + h + (kids ? '<div class="tk-col">' + kids + '</div>' : '') + '</div>';
         }
-        bsAll.filter(function (b) { return !isDst[b.id]; }).forEach(function (b) { if (!seen[b.id]) html += '<div class="fl-st" style="padding:2px 0;">' + (b.sn !== (sts[0] && sts[0].sn) ? '<div style="color:#b8431f;font-size:11px;padding:2px 8px;">起點不是第一關（找不到上一關接過來的移轉憑單）</div>' : '') + node(b, 0) + '</div>'; });
-        bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div class="fl-st" style="padding:2px 0;"><div style="color:#b8431f;font-size:11px;padding:2px 8px;">循環連結，請檢查流向</div>' + node(b, 0) + '</div>'; });
+        function tnode(t) {
+            var fl = flow[t.id], d = fl.dst && sends[fl.dst], kid = '';
+            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" style="margin:0;">↳ 合流到已畫過的：' + esc(bLabel(d)) + '</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
+            return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
+        }
+        html += '<div style="overflow-x:auto;">';
+        bsAll.filter(function (b) { return !isDst[b.id]; }).forEach(function (b) {
+            if (seen[b.id]) return;
+            html += '<div style="margin:8px 0;padding:6px 0;border-bottom:1px dashed #E4D3BC;">' + (b.sn !== (sts[0] && sts[0].sn) ? '<div style="color:#b8431f;font-size:11px;">起點不是第一關（找不到上一關接過來的移轉憑單）</div>' : '') + bnode(b) + '</div>';
+        });
+        bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div style="margin:8px 0;"><div style="color:#b8431f;font-size:11px;">循環連結，請檢查流向</div>' + bnode(b) + '</div>'; });
+        html += '</div>';
         var un = tfs.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
-        if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + un[0].fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（拖到上面對的發單卡片，或用下拉指定）</div>'; un.forEach(function (t) { html += chip(t); }); html += '</div>'; }
+        if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + un[0].fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（拖到上面對的發單卡片，或用下拉指定）</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'; un.forEach(function (t) { html += chip(t); }); html += '</div></div>'; }
         body.innerHTML = html;
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });

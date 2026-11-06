@@ -52,6 +52,10 @@ if (!function_exists('baf_list')) {
         $fidBySn = [];
         foreach ($proc as $f => $p) if (!isset($fidBySn[$p['sn']])) $fidBySn[$p['sn']] = $f;
         $alias = baf_alias_map($db, $bom); // ERP 拆單多出來的 SN → 管理員指定的對應關卡
+        $pnq = $db->prepare("SELECT bi.bom_sn, MAX(pn.ProcessName) pname FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? GROUP BY bi.bom_sn");
+        $pnq->execute([$bom]);
+        $pnBySn = [];
+        foreach ($pnq->fetchAll(PDO::FETCH_ASSOC) as $x) $pnBySn[(int)$x['bom_sn']] = (string)$x['pname'];
         foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $rawSn = (int)$t['bom_sn'];
             $sn = isset($fidBySn[$rawSn]) ? $rawSn : ($alias[$rawSn] ?? $rawSn);
@@ -59,7 +63,7 @@ if (!function_exists('baf_list')) {
             $d = !empty($t['transfer_date']) ? substr($t['transfer_date'], 0, 10) : substr((string)$t['created_at'], 0, 10);
             $rows[] = ['kind' => 'transfer', 'id' => (int)$t['transfer_id'], 'fid' => $f, 'sn' => $sn, 'raw_sn' => $rawSn, 'aliased' => $rawSn !== $sn, 'orphan' => !$f, 'station' => $f ? $proc[$f]['label'] . ($rawSn !== $sn ? '（SN ' . $rawSn . '）' : '') : ('SN ' . $rawSn . '（未對應關卡）'), 'date' => $d,
                        'ts' => $d . ' 12:00:00', 'no' => (string)($t['transfer_no'] ?? ''), 'from_no' => (string)($t['maker_from'] ?? ''), 'from' => $mk($t['maker_from']) ?: (string)$t['maker_from'],
-                       'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'to_no' => (string)($t['maker_to'] ?? ''), 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
+                       'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'to_no' => (string)($t['maker_to'] ?? ''), 'proc' => (string)($pnBySn[$rawSn] ?? ''), 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
         }
         try {
             $aq = $db->prepare("SELECT id, abnormal_order_no, abnormal_phenomenon, ng_qty, created_at, bom_process_fids FROM qa_abnormal_order WHERE bom_no=? AND deleted_at IS NULL ORDER BY id");
