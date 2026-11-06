@@ -93,11 +93,19 @@
             + '#egaf-drawer .tk:first-child::after{left:50%;}'
             + '#egaf-drawer .tk:last-child::after{right:50%;}'
             + '#egaf-drawer .tk:only-child::after{display:none;}'
-            + '#egaf-drawer .flw{display:flex;align-items:flex-start;gap:10px;}'
-            + '#egaf-drawer .flw-main{flex:1;min-width:0;overflow-x:auto;padding-bottom:8px;}'
-            + '#egaf-drawer .flw-side{width:270px;flex:0 0 270px;position:sticky;top:0;max-height:calc(100vh - 190px);overflow-y:auto;}'
-            + '#egaf-drawer .ecard{width:330px;flex:0 0 auto;box-sizing:border-box;}'
-            + '#egaf-drawer .ecard .it{margin-bottom:3px;}'
+            + '#egaf-drawer .flw{display:flex;align-items:flex-start;gap:10px;height:calc(100vh - 250px);min-height:300px;}'
+            + '#egaf-drawer .flw-main{flex:1;min-width:0;height:100%;overflow:auto;padding-bottom:8px;}'
+            + '#egaf-drawer .flw-side{width:272px;flex:0 0 272px;height:100%;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;}'
+            + '#egaf-drawer .ecard{width:236px;flex:0 0 auto;box-sizing:border-box;font-size:11px;line-height:1.35;padding:3px 6px;}'
+            + '#egaf-drawer .ecard .it{margin:0 0 2px;padding:1px 2px;border:none;background:none;}'
+            + '#egaf-drawer .ecard .it.dirty{background:#FFF1C9;}'
+            + '#egaf-drawer .ecard .it .k,#egaf-drawer .ecard .it>b{display:none;}'
+            + '#egaf-drawer .ecard .it .row2{margin-top:1px;gap:3px;font-size:11px;}'
+            + '#egaf-drawer .ecard input[type=date]{width:106px!important;font-size:11px;}'
+            + '#egaf-drawer .ecard input[type=number]{width:54px!important;font-size:11px;}'
+            + '#egaf-drawer .ecard select{font-size:11px;height:20px;width:100%;max-width:none;}'
+            + '#egaf-drawer .ecard .btn{padding:0 5px;font-size:11px;line-height:18px;}'
+            + '#egaf-drawer .flw-side .ecard{width:100%;}'
             + '#egaf-drawer .tcard{width:230px;flex:0 0 auto;box-sizing:border-box;}'
             + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
             + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
@@ -248,7 +256,7 @@
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
         function bnode(b) {
             seen[b.id] = true;
-            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '">' + rowHtml(b)
+            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
                 + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(rowHtml).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
@@ -302,7 +310,7 @@
             var opts = '<option value="0">— 不對應（獨立一關）—</option>' + (m.targets || []).filter(function (t) { return t.sn !== x.sn && t.sn % 10 === 0 || (t.sn !== x.sn && !m.items.some(function (y) { return y.sn === t.sn; })); }).map(function (t) { return '<option value="' + t.sn + '"' + (x.target === t.sn ? ' selected' : '') + '>' + esc(t.label) + '（SN ' + t.sn + '）</option>'; }).join('');
             return '<div style="margin:2px 0;">SN <b>' + x.sn + '</b>　' + esc(x.label) + (x.target ? ' <span class="tg" style="background:#2E8B57;">已併入</span>' : '') + '　算同一關：<select class="sn-sel" data-sn="' + x.sn + '" style="height:22px;font-size:12px;max-width:230px;">' + opts + '</select> <button class="btn btn-default btn-xs sn-go" data-sn="' + x.sn + '">儲存</button></div>';
         }).join('');
-        return '<details style="margin-bottom:6px;border:1px dashed #E4B98A;border-radius:4px;padding:3px 8px;background:#FFFCF7;font-size:12px;"' + (m.items.some(function (x) { return !x.real && !x.target; }) ? ' open' : '') + '><summary style="cursor:pointer;font-weight:bold;color:#6B4423;">SN 對應（非整十的 SN 可設成跟某一關同一關，' + m.items.length + ' 個）</summary>' + rows + '</details>';
+        return '<details style="margin-bottom:6px;border:1px dashed #E4B98A;border-radius:4px;padding:3px 8px;background:#FFFCF7;font-size:12px;"' + ' open' + '><summary style="cursor:pointer;font-weight:bold;color:#6B4423;">SN 對應（非整十的 SN 可設成跟某一關同一關，' + m.items.length + ' 個）</summary>' + rows + '</details>';
     }
     function bindSnBox(root) {
         root.querySelectorAll('.sn-go').forEach(function (btn) {
