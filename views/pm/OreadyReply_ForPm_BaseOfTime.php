@@ -644,7 +644,7 @@ if (!empty($all_boms)) {
                   pn.is_exclude_qc,
                   ml.maker_id,
                   pfr.finish_report_date,
-                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND t.bom_sn = bi.bom_sn) AS xfer_date
+                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date
                 FROM bom_ing AS bi
                 LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                 LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no

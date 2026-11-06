@@ -250,7 +250,7 @@ if (!function_exists('ber_check_past_date')) {
 
 if (!function_exists('ber_add_batch')) {
     /** 補登一個過去的移送批次（可拆給不同廠商）。不動製程狀態／回廠日，回廠量之後用 ber_add_return 補。 */
-    function ber_add_batch(PDO $db, int $fid, string $makerNo, string $makerName, float $send, ?string $date, int $uid): int {
+    function ber_add_batch(PDO $db, int $fid, string $makerNo, string $makerName, float $send, ?string $date, int $uid, bool $force = false): int {
         eg_bom_outsource_ensure_schema($db);
         if ($send <= 0) throw new Exception('移送數量必須大於 0');
         if ($makerNo === '' && $makerName === '') throw new Exception('請選擇廠商');
@@ -264,7 +264,7 @@ if (!function_exists('ber_add_batch')) {
             $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
             $sum->execute([$fid]);
             $have = (float)$sum->fetchColumn();
-            if ($have + $send > (float)$stage + 1e-9) throw new Exception('各批移送數量合計不可超過這一站的發單數 ' . (float)$stage . '（目前已移送 ' . $have . '）');
+            if (!$force && $have + $send > (float)$stage + 1e-9) throw new Exception('各批移送數量合計不可超過這一站的發單數 ' . (float)$stage . '（目前已移送 ' . $have . '）');
             $id = eg_bom_outsource_open_batch($db, $fid, $makerNo !== '' ? $makerNo : null, $makerName !== '' ? $makerName : null, $send, $date, null, '（補登）', $uid);
             ber_log($db, $fid, 'send_backfill', '補登移送批次#' . $id . '：' . $makerName . ' ' . $send . '（送出日 ' . ($date ?? '-') . '）', $uid);
             $db->commit();

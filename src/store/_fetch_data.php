@@ -770,7 +770,7 @@ if (!empty($current_page_boms)) {
 
     // bom_ps_list：只查本頁 BOM 的製程明細
     $raw_ps = $db->prepare("
-        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND t.bom_sn = bi.bom_sn) AS xfer_date
+        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date
         FROM bom_ing AS bi
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no

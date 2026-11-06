@@ -104,7 +104,7 @@
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
         drawer.querySelector('#egaf-new-ret').onclick = function () { toggleNw('egaf-nw-ret'); };
         drawer.querySelector('#egaf-body').addEventListener('input', function (e) {
-            var it = e.target.closest && e.target.closest('.it'); if (!it || e.target.closest('.qs')) return;
+            var it = e.target.closest && e.target.closest('.it'); if (!it || e.target.closest('.qs') || e.target.closest('.al')) return;
             it.classList.add('dirty'); updDn();
         });
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer.classList.contains('open') && !document.getElementById('egaf-pw')) close(); });
@@ -164,6 +164,7 @@
             var stn = (DATA.stations || []).filter(function (s) { return s.fid === b.fid; })[0];
             return '<option value="' + b.batch_id + '" data-f="' + b.fid + '">' + esc((stn ? stn.label : '') + '／' + (b.maker || '未登記') + ' ' + nz(b.send_qty)) + '</option>';
         }).join('');
+        DATA._def = calcDeficit();
         var html = '', last = null, shown = 0;
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         rows.forEach(function (x) {
@@ -181,8 +182,24 @@
     }
     function keepDirtyWarn() { /* 篩選只是換顯示，未儲存的修改在重畫時會被丟掉，先提醒 */ if (dirtyCount()) msg('提醒：篩選切換會清掉未儲存的修改，請先按「儲存」', false); }
     function inp(cls, v, wd, type) { return '<input class="' + cls + '" type="' + (type || 'number') + '" ' + (type === 'date' ? 'max="' + today() + '"' : 'min="0" step="any"') + ' value="' + esc(v) + '" style="width:' + wd + 'px;">'; }
-    function hasSend(x) {
-        return (DATA.rows || []).some(function (r) { return r.kind === 'send' && r.fid === x.fid && String(r.maker_no) === String(x.from_no); });
+    // 每張移轉憑單是否「發單不夠」：同一關、同一家轉出廠商，依日期累加移轉量，超過該廠商已登記的發單總量的那幾張，缺的量就是要補的發單數
+    function calcDeficit() {
+        var rows = DATA.rows || [], sends = {}, groups = {}, def = {};
+        rows.forEach(function (r) { if (r.kind === 'send') { var k = r.fid + '|' + r.maker_no; sends[k] = (sends[k] || 0) + (parseFloat(r.send_qty) || 0); } });
+        rows.forEach(function (r) { if (r.kind === 'transfer' && r.fid && r.from_no) { var k = r.fid + '|' + r.from_no; (groups[k] = groups[k] || []).push(r); } });
+        Object.keys(groups).forEach(function (k) {
+            var cum = 0, S = sends[k] || 0;
+            groups[k].sort(function (a, b) { return (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id); }).forEach(function (r) {
+                var before = cum; cum += (parseFloat(r.qty) || 0);
+                if (cum > S + 1e-9) def[r.id] = Math.min(parseFloat(r.qty) || 0, cum - Math.max(S, before));
+            });
+        });
+        return def;
+    }
+    function aliasHtml(x) {
+        var seen = {}, opts = '<option value="0">— 不對應 —</option>';
+        (DATA.stations || []).forEach(function (s) { if (seen[s.sn]) return; seen[s.sn] = 1; opts += '<option value="' + s.sn + '"' + (x.aliased && String(s.sn) === String(x.sn) ? ' selected' : '') + '>' + esc(s.label) + '（SN ' + s.sn + '）</option>'; });
+        return '<div class="row2 al" style="background:#F3F3F3;border:1px dashed #bbb;padding:4px 6px;">SN ' + x.raw_sn + (x.orphan ? ' 不是這個 BOM 的製程（ERP 拆單產生）' : ' 已對應') + '，算同一關：<select class="al-sel" style="height:24px;font-size:12px;max-width:230px;">' + opts + '</select> <button class="btn btn-default btn-xs al-go" data-sn="' + x.raw_sn + '">儲存對應</button></div>';
     }
     function rowHtml(x) {
         var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
@@ -198,10 +215,12 @@
         } else if (x.kind === 'qc') {
             h += ' <span style="color:#7a4a10;">' + esc(x.result || '') + '</span><div class="row2">檢驗日 ' + inp('f-d', x.date, 125, 'date') + ' 允收 ' + inp('f-ok', x.ok, 55) + ' 特採 ' + inp('f-aod', x.aod, 55) + ' 異常 ' + inp('f-qq', x.qq, 55) + ' 驗退 ' + inp('f-ng', x.ng, 55) + '</div>';
         } else if (x.kind === 'transfer') {
-            var need = x.from_no && x.fid && !hasSend(x);
+            var defQ = (DATA._def && DATA._def[x.id]) || 0;
+            var need = x.from_no && x.fid && defQ > 0;
             h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2">移轉日 ' + inp('f-d', x.date, 125, 'date') + ' 數量 ' + inp('f-q', x.qty, 70)
-              + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關沒有發給「' + esc(x.from) + '」的發單紀錄，快速補一筆">快速補發單</button></span>' : '') + '</div>'
-              + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', x.qty, 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '');
+              + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關發給「' + esc(x.from) + '」的發單數量不夠（缺 ' + nz(defQ) + '），快速補一筆">快速補發單</button></span>' : '') + '</div>'
+              + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', nz(defQ), 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '')
+              + ((x.orphan || x.aliased) ? aliasHtml(x) : '');
         } else if (x.kind === 'ing') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><span style="margin-left:6px;color:#fff;background:#8B8B8B;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(x.reason) + '</span>'
               + '<div class="row2" style="color:#666;">bom_ing #' + x.id + '　發單數 ' + nz(x.qty) + '　狀態 ' + esc(STATE_TXT[x.state] || x.state) + (x.batch_label ? '　批次 ' + esc(x.batch_label) : '') + '　發包日 ' + esc(x.od || '-') + '　回廠日 ' + esc(x.rd || '-')
@@ -265,12 +284,15 @@
             if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : '確定刪除這筆回廠／報廢／取回紀錄？')) return;
             post({ action: 'baf_delete', kind: k, id: id, fid: f }, function (r) { if (r.success) { toast('已刪除', true); load('已刪除', true); refreshMain(); } else msg(r.message, false); });
         };
+        var ag = it.querySelector('.al-go');
+        if (ag) ag.onclick = function () {
+            post({ action: 'baf_alias_set', alias_sn: ag.getAttribute('data-sn'), target_sn: it.querySelector('.al-sel').value }, function (r) { if (r.success) { toast('已儲存SN對應', true); load('已儲存 SN ' + ag.getAttribute('data-sn') + ' 的對應', true); refreshMain(); } else msg(r.message, false); });
+        };
         var qs = it.querySelector('.f-qs');
         if (qs) {
             qs.onclick = function () {
                 var box = it.querySelector('.qs');
-                // 數量預設帶入這張移轉憑單目前的數量（可手動改）
-                box.querySelector('.q-q').value = it.querySelector('.f-q').value;
+                // 數量預設＝缺的發單數（算好帶在欄位裡，可手動改）；日期預設＝這張移轉憑單的日期
                 box.querySelector('.q-d').value = it.querySelector('.f-d').value;
                 box.style.display = box.style.display === 'none' ? 'flex' : 'none';
             };
