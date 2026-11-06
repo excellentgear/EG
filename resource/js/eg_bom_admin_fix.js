@@ -219,26 +219,34 @@
         }
         var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。要改數量／日期請切回「時間軸」。</div>';
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
-        sts.forEach(function (s) {
-            if (stationFilter && String(s.fid) !== String(stationFilter)) return;
-            var mine = rows.filter(function (r) { return r.fid === s.fid; });
-            var bs = mine.filter(function (r) { return r.kind === 'send'; }), ts = mine.filter(function (r) { return r.kind === 'transfer'; }), qc = mine.filter(function (r) { return r.kind === 'qc'; });
-            if (!bs.length && !ts.length && !qc.length) return;
-            html += '<div class="fl-st"><div class="fl-h">' + esc(s.label) + '　<span style="font-weight:normal;font-size:11px;">發單數 ' + nz(s.sqty) + '</span></div>';
-            bs.forEach(function (b) {
-                var rets = mine.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; });
-                var inc = rows.filter(function (r) { return r.kind === 'transfer' && flow[r.id] && flow[r.id].dst === b.id; });
-                html += '<div class="fl-b" data-batch="' + b.id + '" data-fid="' + b.fid + '"><b style="color:#C0561F;">發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b>　' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
-                    + '　<span style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</span>';
-                inc.forEach(function (t) { var fl = flow[t.id]; html += '<div class="fl-in">← 來自 ' + esc(stOf[t.fid] ? stOf[t.fid].label : '') + ' 移轉 ' + esc(t.no) + '　' + nz(t.qty) + '　' + esc(t.from) + ' → ' + esc(t.to) + tag(fl.dst_auto) + '</div>'; });
-                ts.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; }).forEach(function (t) { html += chip(t); });
-                html += '</div>';
+        // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
+        var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
+        var isDst = {};
+        tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst && fl.src) isDst[fl.dst] = true; });
+        bsAll.sort(function (x, y) { return (x.sn - y.sn) || (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id); });
+        var seen = {};
+        function node(b, depth) {
+            var h = '<div class="fl-b" data-batch="' + b.id + '" data-fid="' + b.fid + '" style="margin-left:' + (depth ? 0 : 0) + 'px;">';
+            seen[b.id] = true;
+            var rets = rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; });
+            h += '<span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b>　' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
+                + '　<span style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</span>';
+            var qc = rows.filter(function (r) { return r.kind === 'qc' && r.fid === b.fid; });
+            var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
+            outs.forEach(function (t) {
+                var fl = flow[t.id], d = fl.dst && sends[fl.dst];
+                h += chip(t);
+                if (d) {
+                    if (seen[d.id]) h += '<div class="fl-in" style="margin-left:24px;">↳ 合流到上方已畫過的：' + esc(bLabel(d)) + '</div>';
+                    else h += '<div style="margin-left:14px;border-left:2px dotted #C0561F;padding-left:2px;">' + node(d, depth + 1) + '</div>';
+                }
             });
-            var un = ts.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
-            if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + s.fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（可拖到上面的發單卡片）</div>'; un.forEach(function (t) { html += chip(t); }); html += '</div>'; }
-            if (qc.length) html += '<div style="padding:2px 10px 6px;font-size:12px;color:#8A6A45;">QC檢驗：' + qc.map(function (q) { return esc(q.date.slice(5).replace('-', '/')) + ' 允收 ' + q.ok + '／特採 ' + q.aod + '／異常 ' + q.qq + '／驗退 ' + q.ng; }).join('；') + '</div>';
-            html += '</div>';
-        });
+            return h + '</div>';
+        }
+        bsAll.filter(function (b) { return !isDst[b.id]; }).forEach(function (b) { if (!seen[b.id]) html += '<div class="fl-st" style="padding:2px 0;">' + (b.sn !== (sts[0] && sts[0].sn) ? '<div style="color:#b8431f;font-size:11px;padding:2px 8px;">起點不是第一關（找不到上一關接過來的移轉憑單）</div>' : '') + node(b, 0) + '</div>'; });
+        bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div class="fl-st" style="padding:2px 0;"><div style="color:#b8431f;font-size:11px;padding:2px 8px;">循環連結，請檢查流向</div>' + node(b, 0) + '</div>'; });
+        var un = tfs.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
+        if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + un[0].fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（拖到上面對的發單卡片，或用下拉指定）</div>'; un.forEach(function (t) { html += chip(t); }); html += '</div>'; }
         body.innerHTML = html;
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
@@ -256,7 +264,8 @@
                 e.preventDefault(); e.stopPropagation(); box.classList.remove('over');
                 var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2) return;
                 var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-fid') === p[1];
-                if (sameStation) setFlow(p[0], 'src', batch);
+                if (batch === 0) setFlow(p[0], 'src', 0);
+                else if (sameStation) setFlow(p[0], 'src', batch);
                 else if (batch > 0) setFlow(p[0], 'dst', batch);
             };
         });
