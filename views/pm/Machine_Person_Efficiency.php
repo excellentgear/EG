@@ -133,7 +133,7 @@ $miss_err = '';
 try {
     $ms = $pdo->prepare("
         SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id AS maker_name, ml.maker_id_no,
-               pn.ProcessName, b.Client_Name, ds.D_Setting_Id AS part_no,
+               pn.ProcessName, b.Client_Name, b.d_id AS part_no,
                MAX(q.QC_check_date) AS last_qc, COUNT(*) AS qc_cnt,
                GROUP_CONCAT(DISTINCT q.QC_check ORDER BY q.QC_check SEPARATOR '/') AS qc_status,
                COALESCE(SUM(q.QC_ok_sqty),0) AS ok_qty, COALESCE(SUM(q.QC_QQ_sqty),0) AS qq_qty
@@ -142,11 +142,10 @@ try {
         JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no AND ml.internal = 1
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         LEFT JOIN bom b ON b.bom = bi.bom
-        LEFT JOIN d_setting ds ON ds.d_id = b.d_id
         WHERE q.QC_check_date >= :s AND q.QC_check_date < DATE_ADD(:e, INTERVAL 1 DAY)
           AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid)
           " . ($excl_makers ? "AND ml.maker_id_no NOT IN (" . implode(',', array_map(function ($v) use ($pdo) { return $pdo->quote($v); }, $excl_makers)) . ")" : "") . "
-        GROUP BY bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id, ml.maker_id_no, pn.ProcessName, b.Client_Name, ds.D_Setting_Id
+        GROUP BY bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id, ml.maker_id_no, pn.ProcessName, b.Client_Name, b.d_id
         ORDER BY last_qc DESC");
     $ms->execute([':s' => $start_date, ':e' => $end_date]);
     $miss = $ms->fetchAll(PDO::FETCH_ASSOC);
@@ -156,6 +155,32 @@ try {
 $miss_by_maker = [];
 foreach ($miss as $x) { $miss_by_maker[$x['maker_name']] = ($miss_by_maker[$x['maker_name']] ?? 0) + 1; }
 arsort($miss_by_maker);
+
+// ===== 5b. 有移轉單據、但該站缺 QC 檢驗或缺報工（資料來源：製程移轉單 bom_ing_transfer_log）=====
+$tchk = [];
+$tchk_err = '';
+try {
+    $ts = $pdo->prepare("
+        SELECT bi.bom_ing_fid, t.bom, t.bom_sn, MAX(t.transfer_date) AS last_date,
+               GROUP_CONCAT(DISTINCT t.transfer_no ORDER BY t.transfer_no SEPARATOR ', ') AS tr_nos, SUM(t.transfer_qty) AS tr_qty,
+               MAX(m.maker_id) AS maker_name, MIN(t.maker_from) AS maker_code, MAX(m.internal) AS is_internal,
+               MAX(pn.ProcessName) AS ProcessName, MAX(b.Client_Name) AS Client_Name, COALESCE(MAX(b.d_id), MAX(t.product_id)) AS part_no,
+               (SELECT COUNT(*) FROM qc_check q WHERE q.bom_ing_fid_ref = CAST(bi.bom_ing_fid AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci) AS qc_cnt,
+               (SELECT COUNT(*) FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid) AS rep_cnt
+        FROM bom_ing_transfer_log t
+        JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+        LEFT JOIN bom b ON b.bom = t.bom
+        LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+        WHERE t.transfer_date BETWEEN :s AND :e
+        GROUP BY bi.bom_ing_fid, t.bom, t.bom_sn
+        HAVING qc_cnt = 0 OR rep_cnt = 0
+        ORDER BY last_date DESC, t.bom, t.bom_sn");
+    $ts->execute([':s' => $start_date, ':e' => $end_date]);
+    $tchk = $ts->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $ex) { $tchk_err = '查詢失敗：' . $ex->getMessage(); }
+$tc_noqc = $tc_norep = $tc_both = 0;
+foreach ($tchk as $__c) { $a = (int)$__c['qc_cnt'] === 0; $b = (int)$__c['rep_cnt'] === 0; if ($a) $tc_noqc++; if ($b) $tc_norep++; if ($a && $b) $tc_both++; }
 
 // ===== 6. 重點發現 =====
 $insights = [];
@@ -345,6 +370,7 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
         <li class="active"><a href="#tab_mach" data-toggle="tab">機台</a></li>
         <li><a href="#tab_user" data-toggle="tab">人員</a></li>
         <li><a href="#tab_miss" data-toggle="tab">廠內加工未報工 <span class="tag <?= count($miss) ? 's' : '' ?>"><?= count($miss) ?></span></a></li>
+        <li><a href="#tab_tchk" data-toggle="tab">移轉缺QC／缺報工 <span class="tag <?= count($tchk) ? 's' : '' ?>"><?= count($tchk) ?></span></a></li>
         <li><a href="#tab_detail" data-toggle="tab">報工明細 <span class="tag"><?= count($rows) ?></span></a></li>
     </ul>
 
@@ -440,20 +466,62 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                     </div>
                 <?php endif; ?>
                 <table id="tblMiss" class="table table-bordered table-striped" style="width:100%">
-                    <thead><tr><th>最近檢驗日</th><th>廠商</th><th>BOM</th><th>製程</th><th>客戶</th><th>料號</th><th>檢驗結果</th><th>良品(ok)</th><th>待判(QQ)</th><th>檢驗筆數</th></tr></thead>
+                    <thead><tr><th>最近檢驗日</th><th>客戶</th><th>BOM</th><th>料號</th><th>製程</th><th>廠商</th><th>檢驗結果</th><th>良品(ok)</th><th>待判(QQ)</th><th>檢驗筆數</th></tr></thead>
                     <tbody>
                     <?php foreach ($miss as $x): ?>
                         <tr>
                             <td data-order="<?= $e($x['last_qc']) ?>"><?= $e(eg_fmt_date(substr($x['last_qc'], 0, 10))) ?></td>
-                            <td><?= $e($x['maker_name']) ?></td>
-                            <td><b><?= $e($x['bom']) ?></b></td>
-                            <td><?= $e($x['ProcessName']) ?></td>
                             <td><?= $e($x['Client_Name']) ?></td>
+                            <td><b><?= $e($x['bom']) ?></b></td>
                             <td><?= $e($x['part_no']) ?></td>
+                            <td><?= $e($x['ProcessName']) ?></td>
+                            <td><?= $e($x['maker_name']) ?></td>
                             <td><?= $e($x['qc_status']) ?></td>
                             <td class="num"><?= number_format($x['ok_qty']) ?></td>
                             <td class="num"><?= number_format($x['qq_qty']) ?></td>
                             <td class="num"><?= (int)$x['qc_cnt'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 有移轉單據但缺 QC／缺報工 -->
+        <div class="tab-pane" id="tab_tchk">
+            <div class="panel-box">
+                <h4>有移轉單據，但該站缺 QC 檢驗或缺報工</h4>
+                <div class="sub">
+                    資料來源：製程移轉單（製程移轉一覽表）。站別＝移轉單的製令＋站序；依移轉日期 <?= $e(eg_fmt_date($start_date)) ?> ～ <?= $e(eg_fmt_date($end_date)) ?> 查詢，<b>不受機台／人員篩選影響</b>。
+                    「沒驗」＝該站在 QC 檢驗紀錄一筆都沒有；「沒報工」＝該站在報工紀錄一筆都沒有。外包廠商的站本來就不會有報工，可勾選「只看廠內加工」。
+                    同樣的檢查也在 <a href="Transfer_Log_Analysis.php">製程移轉一覽表</a> 的「缺漏檢查」分頁。
+                </div>
+                <?php if ($tchk_err): ?><div class="ins warn"><?= $e($tchk_err) ?></div><?php endif; ?>
+                <div style="margin-bottom:8px">
+                    <span class="chip tc-chip on" data-f="">全部 <?= count($tchk) ?></span>
+                    <span class="chip tc-chip" data-f="noqc">缺 QC <?= $tc_noqc ?></span>
+                    <span class="chip tc-chip" data-f="norep">缺報工 <?= $tc_norep ?></span>
+                    <span class="chip tc-chip" data-f="both">兩者都缺 <?= $tc_both ?></span>
+                    <label style="margin-left:12px;font-weight:normal;cursor:pointer"><input type="checkbox" id="tcInternal"> 只看廠內加工</label>
+                </div>
+                <table id="tblTchk" class="table table-bordered table-striped" style="width:100%">
+                    <thead><tr><th>最近移轉日</th><th>客戶</th><th>BOM</th><th>料號</th><th>站序</th><th>製程</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($tchk as $c):
+                        $nq = (int)$c['qc_cnt'] === 0; $nr = (int)$c['rep_cnt'] === 0; $ft = ($nq && $nr) ? 'both' : ($nq ? 'noqc' : 'norep'); ?>
+                        <tr data-ft="<?= $ft ?>" data-in="<?= (int)$c['is_internal'] === 1 ? 1 : 0 ?>">
+                            <td data-order="<?= $e($c['last_date']) ?>"><?= $e(eg_fmt_date($c['last_date'])) ?></td>
+                            <td><?= $e($c['Client_Name']) ?></td>
+                            <td><b><?= $e($c['bom']) ?></b></td>
+                            <td><?= $e($c['part_no']) ?></td>
+                            <td><?= (int)$c['bom_sn'] ?></td>
+                            <td><?= $e($c['ProcessName']) ?></td>
+                            <td><?= $e($c['maker_name'] ?: $c['maker_code']) ?></td>
+                            <td><?= (int)$c['is_internal'] === 1 ? '廠內加工' : '外包／其他' ?></td>
+                            <td><small><?= $e($c['tr_nos']) ?></small></td>
+                            <td class="num"><?= number_format((int)$c['tr_qty']) ?></td>
+                            <td><?= $nq ? '<span class="tag s">沒驗</span>' : (int)$c['qc_cnt'] . ' 筆' ?></td>
+                            <td><?= $nr ? '<span class="tag s">沒報工</span>' : (int)$c['rep_cnt'] . ' 筆' ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -543,6 +611,8 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
         </ul>
         <h4>廠內加工未報工</h4>
         <div class="tip">廠內加工廠商＝廠商主檔（主檔管理→廠商）勾選「廠內加工廠商」者。條件：檢驗日期落在期間內，且該站（BOM 的這道製程）在報工紀錄裡<b>完全沒有</b>任何一筆。這份清單不受機台／人員篩選影響。</div>
+        <h4>移轉缺QC／缺報工</h4>
+        <p>依製程移轉單檢查：有移轉單據的站別（製令＋站序），若在 QC 檢驗紀錄或報工紀錄裡完全沒有紀錄就會列出。可篩選缺 QC、缺報工、兩者都缺，外包廠商的站本來沒有報工，可只看廠內加工。</p>
         <h4>權限</h4>
         <p>登入後即可查看，本頁只讀取資料，不會新增或修改任何紀錄。</p>
       </div>
@@ -613,8 +683,21 @@ $(function () {
     $('.chip').on('click', function () {
         $('.chip').removeClass('on'); $(this).addClass('on');
         var v = $(this).data('mk');
-        tMiss.column(1).search(v ? '^' + $.fn.dataTable.util.escapeRegex(v) + '$' : '', true, false).draw();
+        tMiss.column(5).search(v ? '^' + $.fn.dataTable.util.escapeRegex(v) + '$' : '', true, false).draw();
     });
+
+    var tT = mk('#tblTchk', '移轉缺QC缺報工', [[0, 'desc']], 20), tcF = '';
+    $.fn.dataTable.ext.search.push(function (st, d, i) {
+        if (st.nTable.id !== 'tblTchk') return true;
+        var tr = tT.row(i).node(), ft = $(tr).data('ft');
+        if (tcF === 'noqc' && ft === 'norep') return false;
+        if (tcF === 'norep' && ft === 'noqc') return false;
+        if (tcF === 'both' && ft !== 'both') return false;
+        if ($('#tcInternal').is(':checked') && String($(tr).data('in')) !== '1') return false;
+        return true;
+    });
+    $('.tc-chip').on('click', function () { $('.tc-chip').removeClass('on'); $(this).addClass('on'); tcF = $(this).data('f'); tT.draw(); });
+    $('#tcInternal').on('change', function () { tT.draw(); });
 
     var C = { prod: '#D98A33', setup: '#F0C98A', eff: '#DD5138' };
     function stacked(id, d) {

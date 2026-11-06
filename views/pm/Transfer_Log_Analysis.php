@@ -876,18 +876,18 @@ try {
                             <label style="margin-left:14px;font-weight:normal;cursor:pointer;"><input type="checkbox" id="chkInternalOnly"> 只看廠內加工</label>
                         </div>
                         <table id="tblChk" class="table table-bordered table-striped" style="width:100%">
-                            <thead><tr><th>最近移轉日</th><th>製令</th><th>站序</th><th>製程</th><th>客戶</th><th>料號</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
+                            <thead><tr><th>最近移轉日</th><th>客戶</th><th>BOM</th><th>料號</th><th>站序</th><th>製程</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
                             <tbody>
                             <?php foreach ($chk_rows as $c):
                                 $noqc = (int)$c['qc_cnt'] === 0; $norep = (int)$c['rep_cnt'] === 0;
                                 $ft = ($noqc && $norep) ? 'both' : ($noqc ? 'noqc' : 'norep'); ?>
                                 <tr data-ft="<?= $ft ?>" data-in="<?= (int)$c['is_internal'] === 1 ? 1 : 0 ?>">
                                     <td data-order="<?= htmlspecialchars($c['last_date']) ?>"><?= htmlspecialchars(str_replace('-', '.', $c['last_date'])) ?></td>
+                                    <td><?= htmlspecialchars((string)$c['Client_Name']) ?></td>
                                     <td><b><?= htmlspecialchars($c['bom']) ?></b></td>
+                                    <td><?= htmlspecialchars((string)$c['product_id']) ?></td>
                                     <td><?= (int)$c['bom_sn'] ?></td>
                                     <td><?= htmlspecialchars((string)$c['ProcessName']) ?></td>
-                                    <td><?= htmlspecialchars((string)$c['Client_Name']) ?></td>
-                                    <td><?= htmlspecialchars((string)$c['product_id']) ?></td>
                                     <td><?= htmlspecialchars((string)($c['maker_name'] ?: $c['maker_code'])) ?></td>
                                     <td><?= (int)$c['is_internal'] === 1 ? '廠內加工' : '外包／其他' ?></td>
                                     <td><small><?= htmlspecialchars((string)$c['tr_nos']) ?></small></td>
