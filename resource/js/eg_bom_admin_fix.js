@@ -268,10 +268,16 @@
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
         html += '<div class="flw"><div class="flw-main">';
-        bsAll.filter(function (b) { return !isDst[b.id]; }).forEach(function (b) {
-            if (seen[b.id]) return;
-            html += '<div style="margin:8px 0;padding:6px 0;border-bottom:1px dashed #E4D3BC;">' + (b.sn !== (sts[0] && sts[0].sn) ? '<div style="color:#b8431f;font-size:11px;">起點不是第一關（找不到上一關接過來的移轉憑單）</div>' : '') + bnode(b) + '</div>';
-        });
+        // 第一關的所有發單批次（含併入第一關的 SN）是同一關下的不同分支：共用一個「第1關」根節點，各批往下各自長
+        var roots = bsAll.filter(function (b) { return !isDst[b.id]; }), firstSn = sts[0] && sts[0].sn;
+        function rootGroup(list, title, warn) {
+            if (!list.length) return '';
+            return '<div style="margin:8px 0;padding:6px 0;border-bottom:1px dashed #E4D3BC;"><div class="tn"><div class="fl-b" style="margin:0;padding:3px 12px;font-weight:bold;' + (warn ? 'border-left-color:#b8431f;color:#b8431f;' : '') + '">' + esc(title) + '</div><div class="tk-col">'
+                + list.map(function (b) { return '<div class="tk">' + bnode(b) + '</div>'; }).join('') + '</div></div></div>';
+        }
+        var firstList = roots.filter(function (b) { return b.sn === firstSn; }), otherList = roots.filter(function (b) { return b.sn !== firstSn; });
+        html += rootGroup(firstList, (sts[0] ? sts[0].label.replace(/（SN d+）/, '') : '第1關'), false);
+        html += rootGroup(otherList, '起點不明（找不到上一關接過來的移轉憑單）', true);
         bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div style="margin:8px 0;"><div style="color:#b8431f;font-size:11px;">循環連結，請檢查流向</div>' + bnode(b) + '</div>'; });
         html += '</div>';
         var un = tfs.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
