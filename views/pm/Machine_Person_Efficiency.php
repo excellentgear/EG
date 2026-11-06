@@ -13,6 +13,31 @@ include_once '../../src/common/date_fmt_lib.php';
 $conn = new DBConnection();
 $pdo = $conn->getPDO();
 
+// ===== 0. 排除廠商設定（system_parameters：MACHINE_EFF / miss_excl_makers，存 maker_id_no 陣列）=====
+if (empty($_SESSION['mpe_csrf'])) $_SESSION['mpe_csrf'] = bin2hex(random_bytes(16));
+$excl_makers = [];
+try {
+    $st0 = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='MACHINE_EFF' AND param_key='miss_excl_makers' LIMIT 1");
+    $st0->execute();
+    $d0 = json_decode((string)$st0->fetchColumn(), true);
+    if (is_array($d0)) $excl_makers = array_values(array_map('strval', $d0));
+} catch (Throwable $e) {}
+if (($_POST['action'] ?? '') === 'save_excl') {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!hash_equals((string)$_SESSION['mpe_csrf'], (string)($_POST['csrf'] ?? ''))) { echo json_encode(['ok' => 0, 'msg' => '連線憑證失效，請重新整理頁面']); exit; }
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $valid = $pdo->query("SELECT maker_id_no FROM maker_list WHERE internal = 1")->fetchAll(PDO::FETCH_COLUMN);
+    $ids = array_values(array_unique(array_intersect(array_map('strval', $ids), array_map('strval', $valid))));
+    $json = json_encode($ids, JSON_UNESCAPED_UNICODE);
+    $by = (string)($_SESSION['userName'] ?? '');
+    $ex = $pdo->query("SELECT id FROM system_parameters WHERE param_group='MACHINE_EFF' AND param_key='miss_excl_makers' LIMIT 1")->fetchColumn();
+    if ($ex) $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$json, $by, $ex]);
+    else $pdo->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by,updated_at) VALUES ('MACHINE_EFF','miss_excl_makers',?,?,?,NOW())")->execute([$json, '機台與人員效率分析：廠內加工未報工清單排除的廠商', $by]);
+    echo json_encode(['ok' => 1]); exit;
+}
+$internal_makers = $pdo->query("SELECT maker_id_no, maker_id AS nm FROM maker_list WHERE internal = 1 ORDER BY maker_id")->fetchAll(PDO::FETCH_ASSOC);
+
 // ===== 1. 篩選參數 =====
 $ymd = function ($v, $def) { return (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) ? $v : $def; };
 $start_date = $ymd($_GET['start_date'] ?? '', date('Y-m-01'));
@@ -120,6 +145,7 @@ try {
         LEFT JOIN d_setting ds ON ds.d_id = b.d_id
         WHERE q.QC_check_date >= :s AND q.QC_check_date < DATE_ADD(:e, INTERVAL 1 DAY)
           AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid)
+          " . ($excl_makers ? "AND ml.maker_id_no NOT IN (" . implode(',', array_map(function ($v) use ($pdo) { return $pdo->quote($v); }, $excl_makers)) . ")" : "") . "
         GROUP BY bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id, ml.maker_id_no, pn.ProcessName, b.Client_Name, ds.D_Setting_Id
         ORDER BY last_qc DESC");
     $ms->execute([':s' => $start_date, ':e' => $end_date]);
@@ -404,6 +430,12 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
                     廠內加工廠商＝廠商主檔勾選「廠內加工廠商」者。依檢驗日期 <?= $e(eg_fmt_date($start_date)) ?> ～ <?= $e(eg_fmt_date($end_date)) ?> 查詢，<b>不受上方機台／人員篩選影響</b>（沒報工就沒有機台與人員可比對）。
                     「完全沒有報工」＝該站（BOM 的這一道製程）在報工紀錄裡一筆都沒有。
                 </div>
+                <div style="margin-bottom:8px">
+                    <button type="button" class="btn btn-default btn-sm" id="btnExcl"><i class="fa fa-cog"></i> 排除廠商設定</button>
+                    <?php if ($excl_makers): $nm = []; foreach ($internal_makers as $im) if (in_array((string)$im['maker_id_no'], $excl_makers, true)) $nm[] = $im['nm']; ?>
+                        <span class="sub">目前排除：<b><?= $e(implode('、', $nm)) ?></b>（共 <?= count($nm) ?> 家，不列入下表與上方數字）</span>
+                    <?php else: ?><span class="sub">目前沒有排除任何廠商</span><?php endif; ?>
+                </div>
                 <?php if ($miss_err): ?><div class="ins warn"><?= $e($miss_err) ?></div><?php endif; ?>
                 <?php if ($miss_by_maker): ?>
                     <div style="margin-bottom:8px">
@@ -473,6 +505,25 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
 </div>
 </div>
 
+<!-- 排除廠商設定 -->
+<div class="modal fade" id="exclMask" tabindex="-1">
+  <div class="modal-dialog" style="width:520px;max-width:96%">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> 排除廠商設定</h4></div>
+      <div class="modal-body">
+        <div class="sub" style="font-size:12px;color:#8a7a68;margin-bottom:8px">勾選的廠內加工廠商不會出現在「有檢驗未報工」清單與上方數字。全公司共用同一份設定。</div>
+        <div style="max-height:360px;overflow:auto">
+        <?php foreach ($internal_makers as $im): ?>
+            <label style="display:block;font-weight:normal;margin:4px 0"><input type="checkbox" class="exclChk" value="<?= $e($im['maker_id_no']) ?>" <?= in_array((string)$im['maker_id_no'], $excl_makers, true) ? 'checked' : '' ?>> <?= $e($im['nm']) ?> <small style="color:#8a7a68"><?= $e($im['maker_id_no']) ?></small></label>
+        <?php endforeach; ?>
+        </div>
+        <div id="exclMsg" class="bad-txt" style="margin-top:6px"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button><button type="button" class="btn btn-amber" id="btnExclSave">儲存並重新查詢</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- 使用說明 -->
 <div class="modal fade" id="helpUseMask" tabindex="-1">
   <div class="modal-dialog" style="width:720px;max-width:96%">
@@ -536,6 +587,15 @@ function goTab(id) { $('#mainTabs a[href="#' + id + '"]').tab('show'); $('html,b
 
 $(function () {
     $('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
+
+    $('#btnExcl').on('click', function () { $('#exclMsg').text(''); $('#exclMask').modal('show'); });
+    $('#btnExclSave').on('click', function () {
+        var ids = $('.exclChk:checked').map(function () { return this.value; }).get();
+        $.post(location.pathname, { action: 'save_excl', csrf: <?= json_encode($_SESSION['mpe_csrf']) ?>, ids: JSON.stringify(ids) }, function (r) {
+            if (r && r.ok) { location.hash = 'tab_miss'; location.reload(); } else { $('#exclMsg').text((r && r.msg) || '儲存失敗'); }
+        }, 'json').fail(function () { $('#exclMsg').text('儲存失敗，請重試'); });
+    });
+    if (location.hash === '#tab_miss') goTab('tab_miss');
 
     // 機台種類 → 機台連動
     $('#machine_type_id').on('change', function () {
