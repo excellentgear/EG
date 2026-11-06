@@ -84,14 +84,20 @@
             + '#egaf-drawer .nw{display:none;border:1px dashed #E4D3BC;border-radius:4px;padding:6px 8px;margin-top:6px;background:#fff;font-size:12px;}'
             + '#egaf-drawer .nw input,#egaf-drawer .nw select{height:24px;font-size:12px;padding:0 3px;}'
             + '#egaf-drawer.wide{width:96vw;}'
-            + '#egaf-drawer .tn{display:flex;align-items:center;}'
-            + '#egaf-drawer .tk-col{display:flex;flex-direction:column;}'
-            + '#egaf-drawer .tk{position:relative;padding:5px 0 5px 28px;}'
-            + '#egaf-drawer .tk::before{content:"";position:absolute;left:0;top:50%;width:28px;border-top:2px solid #C0561F;}'
-            + '#egaf-drawer .tk::after{content:"";position:absolute;left:0;top:0;bottom:0;border-left:2px solid #C0561F;}'
-            + '#egaf-drawer .tk:first-child::after{top:50%;}'
-            + '#egaf-drawer .tk:last-child::after{bottom:50%;}'
+            + '#egaf-drawer .tn{display:flex;flex-direction:column;align-items:center;}'
+            + '#egaf-drawer .tk-col{display:flex;flex-direction:row;justify-content:center;position:relative;padding-top:14px;}'
+            + '#egaf-drawer .tk-col::before{content:"";position:absolute;top:0;left:50%;height:14px;border-left:2px solid #C0561F;}'
+            + '#egaf-drawer .tk{position:relative;padding:14px 6px 0;display:flex;flex-direction:column;align-items:center;}'
+            + '#egaf-drawer .tk::before{content:"";position:absolute;top:0;left:50%;height:14px;border-left:2px solid #C0561F;}'
+            + '#egaf-drawer .tk::after{content:"";position:absolute;top:0;left:0;right:0;border-top:2px solid #C0561F;}'
+            + '#egaf-drawer .tk:first-child::after{left:50%;}'
+            + '#egaf-drawer .tk:last-child::after{right:50%;}'
             + '#egaf-drawer .tk:only-child::after{display:none;}'
+            + '#egaf-drawer .flw{display:flex;align-items:flex-start;gap:10px;}'
+            + '#egaf-drawer .flw-main{flex:1;min-width:0;overflow-x:auto;padding-bottom:8px;}'
+            + '#egaf-drawer .flw-side{width:270px;flex:0 0 270px;position:sticky;top:0;max-height:calc(100vh - 190px);overflow-y:auto;}'
+            + '#egaf-drawer .ecard{width:330px;flex:0 0 auto;box-sizing:border-box;}'
+            + '#egaf-drawer .ecard .it{margin-bottom:3px;}'
             + '#egaf-drawer .tcard{width:230px;flex:0 0 auto;box-sizing:border-box;}'
             + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
             + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
@@ -200,9 +206,10 @@
             html += rowHtml(x);
         });
         var body = drawer.querySelector('#egaf-body');
-        body.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
+        body.innerHTML = snBoxHtml() + '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
             + (shown ? '' : '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
+        bindSnBox(body);
         updDn();
     }
     // ── 分支檢視：每關 → 發單批次 → 它的回廠與出去的移轉憑單 → 接到下一關哪個發單。流向是系統依日期＋數量推測的，可用下拉或拖放修正 ──
@@ -224,11 +231,13 @@
             });
             // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
-            return '<div class="fl-t tcard" style="margin:0;" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '"><b>移轉</b> ' + esc(t.no) + '　<span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span>' + '　' + esc(w.egFmtDate ? w.egFmtDate(t.date) : t.date) + '　<b>' + nz(t.qty) + '</b>　' + esc(t.from) + (t.to ? ' → ' + esc(t.to) : '') + ' ' + tag(fl.src_auto && fl.dst_auto)
+            return '<div class="fl-t ecard" style="margin:0;" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '">'
+                + '<div style="margin-bottom:2px;">' + '<span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '　<span style="color:#999;font-size:11px;">⠿ 可拖到發單卡片</span></div>'
+                + rowHtml(t)
                 + '<div style="margin-top:2px;color:#7a4a10;">' + dstTxt + '</div>'
-                + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select> 接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
+                + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select><br>接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
         }
-        var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。要改數量／日期請切回「時間軸」。</div>';
+        var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。</div>';
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
@@ -239,9 +248,8 @@
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
         function bnode(b) {
             seen[b.id] = true;
-            var h = '<div class="fl-b tcard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '">'
-                + '<span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span><br><b>發單</b> ' + esc(b.maker || '未登記廠商') + '　<b>' + nz(b.send_qty) + '</b><br>' + esc(w.egFmtDate ? w.egFmtDate(b.date) : b.date)
-                + '<div style="color:#2E6B3F;font-size:12px;">回廠 ' + nz(b.return_qty) + '／報廢 ' + nz(b.scrap_qty) + '／取回 ' + nz(b.withdraw_qty) + '</div></div>';
+            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '">' + rowHtml(b)
+                + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(rowHtml).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
             return '<div class="tn">' + h + (kids ? '<div class="tk-col">' + kids + '</div>' : '') + '</div>';
@@ -251,7 +259,7 @@
             if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" style="margin:0;">↳ 合流到已畫過的：' + esc(bLabel(d)) + '</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
-        html += '<div style="overflow-x:auto;">';
+        html += '<div class="flw"><div class="flw-main">';
         bsAll.filter(function (b) { return !isDst[b.id]; }).forEach(function (b) {
             if (seen[b.id]) return;
             html += '<div style="margin:8px 0;padding:6px 0;border-bottom:1px dashed #E4D3BC;">' + (b.sn !== (sts[0] && sts[0].sn) ? '<div style="color:#b8431f;font-size:11px;">起點不是第一關（找不到上一關接過來的移轉憑單）</div>' : '') + bnode(b) + '</div>';
@@ -259,8 +267,11 @@
         bsAll.forEach(function (b) { if (!seen[b.id]) html += '<div style="margin:8px 0;"><div style="color:#b8431f;font-size:11px;">循環連結，請檢查流向</div>' + bnode(b) + '</div>'; });
         html += '</div>';
         var un = tfs.filter(function (t) { return !(flow[t.id] && flow[t.id].src); });
-        if (un.length) { html += '<div class="fl-un" data-batch="0" data-fid="' + un[0].fid + '"><div style="color:#b8431f;font-size:12px;">⚠ 找不到來源發單的移轉憑單（拖到上面對的發單卡片，或用下拉指定）</div><div style="display:flex;flex-wrap:wrap;gap:6px;">'; un.forEach(function (t) { html += chip(t); }); html += '</div></div>'; }
-        body.innerHTML = html;
+        html += '<div class="flw-side"><div class="fl-un" data-batch="0" data-fid="' + (un[0] ? un[0].fid : 0) + '" style="margin:0;min-height:60px;"><div style="color:#b8431f;font-size:12px;font-weight:bold;margin-bottom:4px;">⚠ 找不到來源發單的移轉憑單（' + un.length + '）</div><div style="color:#999;font-size:11px;margin-bottom:4px;">拖到左邊對的發單卡片，或用下拉指定</div><div style="display:flex;flex-direction:column;gap:6px;">';
+        un.forEach(function (t) { html += chip(t); });
+        html += '</div></div></div></div>';
+        body.innerHTML = snBoxHtml() + html; bindSnBox(body);
+        body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
         }
@@ -283,6 +294,23 @@
             };
         });
         updDn();
+    }
+    // 非整十的 SN（例如 15、25、31）可設成「算某一關」：列表／分支／總數統計都會併入那一關，資料本身不動
+    function snBoxHtml() {
+        var m = DATA.sn_map; if (!m || !m.items || !m.items.length) return '';
+        var rows = m.items.map(function (x) {
+            var opts = '<option value="0">— 不對應（獨立一關）—</option>' + (m.targets || []).filter(function (t) { return t.sn !== x.sn && t.sn % 10 === 0 || (t.sn !== x.sn && !m.items.some(function (y) { return y.sn === t.sn; })); }).map(function (t) { return '<option value="' + t.sn + '"' + (x.target === t.sn ? ' selected' : '') + '>' + esc(t.label) + '（SN ' + t.sn + '）</option>'; }).join('');
+            return '<div style="margin:2px 0;">SN <b>' + x.sn + '</b>　' + esc(x.label) + (x.target ? ' <span class="tg" style="background:#2E8B57;">已併入</span>' : '') + '　算同一關：<select class="sn-sel" data-sn="' + x.sn + '" style="height:22px;font-size:12px;max-width:230px;">' + opts + '</select> <button class="btn btn-default btn-xs sn-go" data-sn="' + x.sn + '">儲存</button></div>';
+        }).join('');
+        return '<details style="margin-bottom:6px;border:1px dashed #E4B98A;border-radius:4px;padding:3px 8px;background:#FFFCF7;font-size:12px;"' + (m.items.some(function (x) { return !x.real && !x.target; }) ? ' open' : '') + '><summary style="cursor:pointer;font-weight:bold;color:#6B4423;">SN 對應（非整十的 SN 可設成跟某一關同一關，' + m.items.length + ' 個）</summary>' + rows + '</details>';
+    }
+    function bindSnBox(root) {
+        root.querySelectorAll('.sn-go').forEach(function (btn) {
+            btn.onclick = function () {
+                var sn = btn.getAttribute('data-sn'), sel = root.querySelector('.sn-sel[data-sn="' + sn + '"]');
+                post({ action: 'baf_alias_set', alias_sn: sn, target_sn: sel.value }, function (r) { if (r.success) { toast('已儲存SN對應', true); load('已儲存 SN ' + sn + ' 的對應', true); refreshMain(); } else msg(r.message, false); });
+            };
+        });
     }
     function keepDirtyWarn() { /* 篩選只是換顯示，未儲存的修改在重畫時會被丟掉，先提醒 */ if (dirtyCount()) msg('提醒：篩選切換會清掉未儲存的修改，請先按「儲存」', false); }
     function inp(cls, v, wd, type) { return '<input class="' + cls + '" type="' + (type || 'number') + '" ' + (type === 'date' ? 'max="' + today() + '"' : 'min="0" step="any"') + ' value="' + esc(v) + '" style="width:' + wd + 'px;">'; }

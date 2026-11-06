@@ -10,13 +10,18 @@ if (!function_exists('baf_list')) {
         eg_bom_outsource_ensure_schema($db);
         $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, bi.sqty FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? ORDER BY bi.bom_sn, bi.bom_ing_fid");
         $st->execute([$bom]);
-        $proc = []; $ord = []; $o = 0; $stations = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) {
+        $proc = []; $ord = []; $o = 0; $stations = []; $labOf = []; $prows = $st->fetchAll(PDO::FETCH_ASSOC);
+        $alias = baf_alias_map($db, $bom); // 管理員指定「這個 SN 算哪一關」（ERP 拆單、或非整十的額外 SN）
+        foreach ($prows as $p) {
             $sn = (int)$p['bom_sn'];
-            if (!isset($ord[$sn])) $ord[$sn] = ++$o;
-            $lab = '第' . $ord[$sn] . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']);
-            $proc[(int)$p['bom_ing_fid']] = ['sn' => $sn, 'label' => $lab];
-            $stations[] = ['fid' => (int)$p['bom_ing_fid'], 'sn' => $sn, 'label' => $lab, 'sqty' => (float)$p['sqty']];
+            if (!isset($ord[$sn])) { $ord[$sn] = ++$o; $labOf[$sn] = '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']); }
+        }
+        foreach ($prows as $p) {
+            $raw = (int)$p['bom_sn'];
+            $sn = (isset($alias[$raw]) && isset($ord[$alias[$raw]]) && $alias[$raw] !== $raw) ? $alias[$raw] : $raw;
+            $lab = $labOf[$sn] . ($sn !== $raw ? '（SN ' . $raw . '）' : '');
+            $proc[(int)$p['bom_ing_fid']] = ['sn' => $sn, 'raw' => $raw, 'label' => $lab];
+            $stations[] = ['fid' => (int)$p['bom_ing_fid'], 'sn' => $sn, 'raw_sn' => $raw, 'label' => $lab, 'sqty' => (float)$p['sqty']];
         }
         if (!$proc) return ['rows' => [], 'stations' => [], 'batches' => [], 'warn' => [], 'bom_sqty' => 0];
         $in = implode(',', array_keys($proc));
@@ -50,18 +55,18 @@ if (!function_exists('baf_list')) {
         $tq = $db->prepare("SELECT * FROM bom_ing_transfer_log WHERE bom=? ORDER BY transfer_id");
         $tq->execute([$bom]);
         $fidBySn = [];
+        foreach ($proc as $f => $p) if ($p['raw'] === $p['sn'] && !isset($fidBySn[$p['sn']])) $fidBySn[$p['sn']] = $f;
         foreach ($proc as $f => $p) if (!isset($fidBySn[$p['sn']])) $fidBySn[$p['sn']] = $f;
-        $alias = baf_alias_map($db, $bom); // ERP 拆單多出來的 SN → 管理員指定的對應關卡
         $pnq = $db->prepare("SELECT bi.bom_sn, MAX(pn.ProcessName) pname FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? GROUP BY bi.bom_sn");
         $pnq->execute([$bom]);
         $pnBySn = [];
         foreach ($pnq->fetchAll(PDO::FETCH_ASSOC) as $x) $pnBySn[(int)$x['bom_sn']] = (string)$x['pname'];
         foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $t) {
             $rawSn = (int)$t['bom_sn'];
-            $sn = isset($fidBySn[$rawSn]) ? $rawSn : ($alias[$rawSn] ?? $rawSn);
+            $sn = (isset($alias[$rawSn]) && isset($fidBySn[$alias[$rawSn]]) && $alias[$rawSn] !== $rawSn) ? $alias[$rawSn] : $rawSn;
             $f = $fidBySn[$sn] ?? 0;
             $d = !empty($t['transfer_date']) ? substr($t['transfer_date'], 0, 10) : substr((string)$t['created_at'], 0, 10);
-            $rows[] = ['kind' => 'transfer', 'id' => (int)$t['transfer_id'], 'fid' => $f, 'sn' => $sn, 'raw_sn' => $rawSn, 'aliased' => $rawSn !== $sn, 'orphan' => !$f, 'station' => $f ? $proc[$f]['label'] . ($rawSn !== $sn ? '（SN ' . $rawSn . '）' : '') : ('SN ' . $rawSn . '（未對應關卡）'), 'date' => $d,
+            $rows[] = ['kind' => 'transfer', 'id' => (int)$t['transfer_id'], 'fid' => $f, 'sn' => $sn, 'raw_sn' => $rawSn, 'aliased' => $rawSn !== $sn, 'orphan' => !$f, 'station' => $f ? ($labOf[$sn] ?? $proc[$f]['label']) . ($rawSn !== $sn ? '（SN ' . $rawSn . '）' : '') : ('SN ' . $rawSn . '（未對應關卡）'), 'date' => $d,
                        'ts' => $d . ' 12:00:00', 'no' => (string)($t['transfer_no'] ?? ''), 'from_no' => (string)($t['maker_from'] ?? ''), 'from' => $mk($t['maker_from']) ?: (string)$t['maker_from'],
                        'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'to_no' => (string)($t['maker_to'] ?? ''), 'proc' => (string)($pnBySn[$rawSn] ?? ''), 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
         }
@@ -93,7 +98,7 @@ if (!function_exists('baf_list')) {
         $ord = fn($r) => (float)($r['sn'] ?? 0) + (in_array($r['kind'], ['send', 'ing'], true) ? 0 : 0.5);
         usort($rows, fn($a, $b) => strcmp(substr($a['ts'], 0, 10), substr($b['ts'], 0, 10)) ?: ($ord($a) <=> $ord($b)) ?: strcmp($a['ts'], $b['ts']));
         $chk = baf_check($db, $bom);
-        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows)];
+        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows), 'sn_map' => baf_sn_map($db, $bom, $labOf, $alias)];
     }
 }
 
@@ -145,10 +150,16 @@ if (!function_exists('baf_check')) {
         $ref = (float)$q->fetchColumn();
         $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? AND bi.is_consumed=0 ORDER BY bi.bom_sn, bi.bom_ing_fid");
         $st->execute([$bom]);
-        $sn = []; $ord = []; $o = 0; $fidSn = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) {
+        $sn = []; $ord = []; $o = 0; $fidSn = []; $labOf = []; $crow = $st->fetchAll(PDO::FETCH_ASSOC);
+        $alias0 = baf_alias_map($db, $bom);
+        foreach ($crow as $p) {
             $k = (int)$p['bom_sn'];
-            if (!isset($ord[$k])) { $ord[$k] = ++$o; $sn[$k] = ['label' => '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']), 'send' => 0.0, 'transfer' => 0.0, 'qc' => 0.0]; }
+            if (!isset($ord[$k])) { $ord[$k] = ++$o; $labOf[$k] = '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']); }
+        }
+        foreach ($crow as $p) {
+            $k = (int)$p['bom_sn'];
+            if (isset($alias0[$k]) && isset($ord[$alias0[$k]]) && $alias0[$k] !== $k) $k = $alias0[$k];
+            if (!isset($sn[$k])) $sn[$k] = ['label' => $labOf[$k], 'send' => 0.0, 'transfer' => 0.0, 'qc' => 0.0];
             $fidSn[(int)$p['bom_ing_fid']] = $k;
         }
         if (!$fidSn || $ref <= 0) return ['bom_sqty' => $ref, 'items' => []];
@@ -190,8 +201,10 @@ if (!function_exists('baf_alias_set')) {
         $q = $db->prepare("SELECT DISTINCT bom_sn FROM bom_ing WHERE bom=?");
         $q->execute([$bom]);
         $real = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
-        if (in_array($aliasSn, $real, true)) throw new Exception('SN ' . $aliasSn . ' 本身就是這個 BOM 的製程，不需要對應');
+        if (in_array($aliasSn, $real, true) && $aliasSn % 10 === 0) throw new Exception('SN ' . $aliasSn . ' 是整十的正式製程，不能併入其他關卡（只有非整十的 SN 可以設成同一關）');
         if ($targetSn > 0 && !in_array($targetSn, $real, true)) throw new Exception('指定的關卡不屬於這個 BOM');
+        if ($targetSn > 0 && $targetSn === $aliasSn) throw new Exception('不能對應到自己');
+        if ($targetSn > 0) { $am = baf_alias_map($db, $bom); if (isset($am[$targetSn])) throw new Exception('SN ' . $targetSn . ' 本身已設為算別的關卡，請直接選它最後對應的那一關'); }
         $db->prepare("CREATE TABLE IF NOT EXISTS bom_sn_alias (id INT AUTO_INCREMENT PRIMARY KEY, bom VARCHAR(30) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL, alias_sn INT NOT NULL, target_sn INT NOT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_bom_alias (bom, alias_sn), KEY idx_target (bom, target_sn)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
         if ($targetSn <= 0) {
             $db->prepare("DELETE FROM bom_sn_alias WHERE bom=? AND alias_sn=?")->execute([$bom, $aliasSn]);
@@ -291,5 +304,25 @@ if (!function_exists('baf_flow')) {
         $f->execute([$bom]);
         $fid = (int)$f->fetchColumn();
         if ($fid) ber_log($db, $fid, 'flow_link', '管理員調整移轉憑單 #' . $transferId . ' 的' . ($field === 'src' ? '來源發單' : '接續發單') . '：' . ($batchId < 0 ? '改回自動推測' : ($batchId === 0 ? '無' : '批次 ' . $batchId)), $uid);
+    }
+}
+
+if (!function_exists('baf_sn_map')) {
+    /** 面板上「SN 對應」區塊的資料：所有非整十的真實 SN ＋ 移轉憑單裡出現但這個 BOM 沒有的 SN；targets 是可選的關卡（真實 SN）。 */
+    function baf_sn_map(PDO $db, string $bom, array $labOf, array $alias): array {
+        $real = array_keys($labOf);
+        $q = $db->prepare("SELECT DISTINCT bom_sn FROM bom_ing_transfer_log WHERE bom=?");
+        $q->execute([$bom]);
+        $tsn = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        $items = [];
+        foreach (array_unique(array_merge($real, $tsn)) as $sn) {
+            $isReal = in_array($sn, $real, true);
+            if ($isReal && $sn % 10 === 0) continue;
+            $items[] = ['sn' => $sn, 'real' => $isReal, 'label' => $isReal ? $labOf[$sn] : 'SN ' . $sn . '（ERP 拆單，這個 BOM 沒有此製程）', 'target' => (int)($alias[$sn] ?? 0)];
+        }
+        usort($items, fn($a, $b) => $a['sn'] <=> $b['sn']);
+        $targets = [];
+        foreach ($real as $sn) $targets[] = ['sn' => $sn, 'label' => $labOf[$sn]];
+        return ['items' => $items, 'targets' => $targets];
     }
 }
