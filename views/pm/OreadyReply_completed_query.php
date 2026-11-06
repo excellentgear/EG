@@ -624,6 +624,17 @@ function ocq_ob_qty_default($bomQty, $o) {
 // （使用者要求：事後才補建的訂單不可以因為排序被切掉，不然那幾張永遠綁不到）
 const OCQ_OB_LATE_DAYS = 20;
 const OCQ_OB_LATE_KEEP = 4;
+// 訂單日不可晚於製令開立日超過這麼多天（使用者 2026-10-13 定調：訂單就算後補，也不可能比製令晚兩週以上）。
+// 上面那條「事後補建」的 20 天線與此衝突，候選一律先過這條上限，所以事後補建那批實際上不會再出現。
+const OCQ_OB_MAX_LATE_DAYS = 14;
+
+/** 訂單日是否在「製令開立日＋14 天」之內；任一邊沒有日期就不擋（無從判定）。 */
+function ocq_ob_date_ok($orderDate, $bomIssueDate) {
+    $od = substr((string)$orderDate, 0, 10);
+    $bd = substr((string)$bomIssueDate, 0, 10);
+    if ($od === '' || $bd === '') return true;
+    return $od <= date('Y-m-d', strtotime($bd . ' +' . OCQ_OB_MAX_LATE_DAYS . ' day'));
+}
 
 /**
  * 「自動建議綁定對象」的唯一判定（使用者 2026-09-21 定調，需人工判定清單與快速綁定跳窗共用）。
@@ -691,12 +702,17 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
         $bom = $r['bom'];
         $d   = (int)($r['d_setting_id'] ?? 0);
         $n   = $cnt[$d] ?? 0;
+        $issue0 = substr((string)($r['bom_date'] ?? $r['eff_date'] ?? ''), 0, 10);
         if ($n === 0) {
             $out[$bom] = ['level' => 'nomatch', 'reason' => '這個料號主檔底下沒有任何未作廢的訂單', 'candidates' => [], 'pick' => null];
             continue;
         }
         if ($n === 1) {
             $o = $oneRow[$one[$d] ?? 0] ?? null;
+            if ($o && !ocq_ob_date_ok($o['Order_date'] ?? '', $issue0)) {
+                $out[$bom] = ['level' => 'nomatch', 'reason' => '這個料號底下唯一的訂單（' . $o['Order_oo'] . '）訂單日晚於製令開立日超過 ' . OCQ_OB_MAX_LATE_DAYS . ' 天，不可能是這筆製令的訂單', 'candidates' => [], 'pick' => null];
+                continue;
+            }
             if ($o) {
                 $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o);
                 $out[$bom] = ['level' => 'auto', 'reason' => '這個料號底下只有一張訂單（' . $o['Order_oo'] . '）',
@@ -736,7 +752,8 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
         $st->execute([(int)$r['d_setting_id'], $r['eff_date'] ?? date('Y-m-d')]);
         $got = $st->fetchAll(PDO::FETCH_ASSOC);
         $late = [];
-        if ($issue !== '') { $stLate->execute([(int)$r['d_setting_id'], $issue]); $late = $stLate->fetchAll(PDO::FETCH_ASSOC); }
+        // 事後補建（>=製令日+20天）與 14 天上限互斥，不再撈
+        if (false && $issue !== '') { $stLate->execute([(int)$r['d_setting_id'], $issue]); $late = $stLate->fetchAll(PDO::FETCH_ASSOC); }
         // 濾掉已經被其他 BOM 分配滿的
         // **「事後補建」一律用日期判定，不可以用「有沒有落在最近那批裡」**——那批本來就常常
         // 涵蓋得到它們，只是顯示時又被更接近的擠掉，於是一張都標不出來（第一版就是這樣，
@@ -747,6 +764,7 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
             $oid = (int)$o['Order_id'];
             if (isset($seen[$oid])) continue;
             $seen[$oid] = 1;
+            if (!ocq_ob_date_ok($o['Order_date'] ?? '', $issue)) continue;   // 訂單日晚於製令日超過 14 天
             if ((int)$o['Qty'] - (int)$o['already_allocated'] <= 0) { $full++; continue; }
             $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o);
             $od = substr((string)$o['Order_date'], 0, 10);
@@ -782,6 +800,10 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
         $out[$bom]['cand_avail']  = count($avail);
         $out[$bom]['suggest_id']  = $sugId;
         $out[$bom]['bom_issue']   = $issue;
+        if (!$avail && $full === 0) {
+            $out[$bom]['level']  = 'nomatch';
+            $out[$bom]['reason'] = '這個料號底下沒有訂單日在製令開立日＋' . OCQ_OB_MAX_LATE_DAYS . ' 天以內的訂單';
+        }
     }
     return $out;
 }
@@ -2518,6 +2540,8 @@ try {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_bom_timeline.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_timeline.js') ?>"></script>
+    <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -2732,7 +2756,7 @@ function rowToTr(item, maxProc, priceMap){
     var didText = item.d_id
         ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" data-pk="'+(parseInt(item.d_setting_id,10)||0)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
         : '';
-    var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.d_id||'')+'" title="雙擊帶入BOM/料號篩選">'+didText+priceHtml+'</td>';
+    var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-tlbom="'+esc(item.bom)+'" data-val="'+encodeURIComponent(item.d_id||'')+'" title="點一下看此BOM相關紀錄；雙擊帶入BOM/料號篩選">'+didText+priceHtml+'</td>';
     var bindTd = OCQ_CAN_BIND ? '<td class="ocq-bind-td" data-bom="'+esc(item.bom)+'">'+bindCellHtml(item)+'</td>' : '';
     var tds = custTd + bomTd + didTd + bindTd
         + '<td>'+esc(item.Qty||'')+'</td>'
@@ -3026,6 +3050,15 @@ function debouncedApplyFilters(){
 $('#pageSizeSel').on('change', function(){ loadList(1); });
 
 // 雙擊表格中的客戶／BOM／料號 → 帶入對應篩選框並立即查詢
+// 點料號欄（文字連結以外的地方）＝右側滑出此 BOM 相關紀錄；雙擊仍是帶入篩選（用延遲區分，避免雙擊時也開窗）
+var _ocqTlTimer = null;
+$('#ocqTbody').on('click', 'td[data-tlbom]', function(e){
+    if ($(e.target).closest('.ocq-part-link,a,button,input,select').length) return;
+    var bom = $(this).attr('data-tlbom');
+    clearTimeout(_ocqTlTimer);
+    _ocqTlTimer = setTimeout(function(){ if (window.EGBomTimeline) EGBomTimeline.open(bom); }, 260);
+});
+$('#ocqTbody').on('dblclick', 'td[data-tlbom]', function(){ clearTimeout(_ocqTlTimer); });
 $('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
     var field = $(this).data('field');
     var raw = $(this).attr('data-val') || '';
@@ -3039,7 +3072,7 @@ $('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
 // 點料號 → 開啟圖面查閱（bom_viewer.php?d_id=…）
 $('#ocqTbody').on('click', '.ocq-part-link', function(e){
     e.stopPropagation();
-    openPartDrawing(decodeURIComponent($(this).attr('data-part') || ''), $(this).attr('data-pk') || 0);
+    openPartDrawing(decodeURIComponent($(this).attr('data-part') || ''), $(this).attr('data-pk') || 0, $(this).closest('td').attr('data-tlbom') || '');
 });
 // 料號文字上的雙擊不再連帶觸發「帶入篩選」（避免同時開窗又改篩選條件）
 $('#ocqTbody').on('dblclick', '.ocq-part-link', function(e){ e.stopPropagation(); });
@@ -3048,7 +3081,7 @@ $('#ocqTbody').on('dblclick', '.ocq-bom-link', function(e){ e.preventDefault(); 
 
 // 開啟圖面查閱視窗（同一料號重複點沿用同一個視窗，不會開一堆）
 // pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
-function openPartDrawing(pid, pk){
+function openPartDrawing(pid, pk, bom){
     // pk 可能是 data 屬性帶回來的**字串** "0"（bom.d_setting_id 還沒綁料號主檔時就是 0）——
     // 字串 "0" 在 JS 是真值，不轉成數字就會組出 ?pk=0 送過去，bom_viewer 判 pk>0 不成立、
     // d_id 又沒帶，於是死在「缺少 BOM 或 d_id 參數」。沒綁主檔的一律退回用料號文字查。
@@ -3059,9 +3092,12 @@ function openPartDrawing(pid, pk){
     var ph = Math.min(900,  Math.round(h * 0.88));
     var pl = Math.round((w - pw) / 2);
     var pt = Math.round((h - ph) / 2);
-    var q = pk ? ('?pk=' + encodeURIComponent(pk)) : ('?d_id=' + encodeURIComponent(pid));
-    window.open('bom_viewer.php' + q,
-        'bom_dv_' + (pk || pid),
+    // 與 OreadyReply_ForPm_BaseOfTime.php 的 openBomFiles 同一個畫面：料號專用 part_viewer（圖面＋ERP/資材報告＋料號附件，
+    // 圖面與報告只抓這一列的 BOM 名稱）；pk 一併帶上，同名料號才不會看到別家客戶那筆主檔
+    var q = '?d_id=' + encodeURIComponent(pid) + (pk ? '&pk=' + encodeURIComponent(pk) : '') + (bom ? '&bom=' + encodeURIComponent(bom) : '');
+    if (!pid) q = '?pk=' + encodeURIComponent(pk) + (bom ? '&bom=' + encodeURIComponent(bom) : '');
+    window.open('part_viewer.php' + q,
+        'part_dv_' + (pk || pid),
         'width='+pw+',height='+ph+',left='+pl+',top='+pt
             + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
