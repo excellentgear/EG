@@ -85,7 +85,9 @@ if (!function_exists('baf_list')) {
                        'reason' => (int)$b['is_consumed'] === 1 ? '已被拆批／合批併走（is_consumed）' : '標記為跳過（skip）',
                        'od' => !empty($b['outsource_date']) ? substr($b['outsource_date'], 0, 10) : '', 'rd' => !empty($b['return_date']) ? substr($b['return_date'], 0, 10) : ''];
         }
-        usort($rows, fn($a, $b) => strcmp($a['ts'], $b['ts']) ?: ($a['sn'] <=> $b['sn']));
+        // 同一天內：依關卡順序排，且某關的回廠／移轉／檢驗排在該關發單之後、下一關發單之前（sn+0.5）
+        $ord = fn($r) => (float)($r['sn'] ?? 0) + (in_array($r['kind'], ['send', 'ing'], true) ? 0 : 0.5);
+        usort($rows, fn($a, $b) => strcmp(substr($a['ts'], 0, 10), substr($b['ts'], 0, 10)) ?: ($ord($a) <=> $ord($b)) ?: strcmp($a['ts'], $b['ts']));
         $chk = baf_check($db, $bom);
         return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty']];
     }
