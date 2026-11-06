@@ -137,6 +137,19 @@
         drawer.querySelector('#egaf-saveend').onclick = function () { saveAll(true); };
         drawer.querySelector('#egaf-v-time').onclick = function () { viewMode = 'time'; render(); };
         drawer.querySelector('#egaf-lock').onchange = applyLock;
+        // 拖放時滑鼠靠近捲動區的上下左右邊緣就自動捲動（拖曳中滾輪常常無效）
+        drawer.addEventListener('dragover', function (e) {
+            var zone = 60, step = 18;
+            var cs = [drawer.querySelector('.flw-main'), drawer.querySelector('.flw-side'), drawer.querySelector('#egaf-body')];
+            for (var i = 0; i < cs.length; i++) {
+                var c = cs[i]; if (!c) continue;
+                var r = c.getBoundingClientRect();
+                if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue;
+                if (e.clientY - r.top < zone) c.scrollTop -= step; else if (r.bottom - e.clientY < zone) c.scrollTop += step;
+                if (e.clientX - r.left < zone) c.scrollLeft -= step; else if (r.right - e.clientX < zone) c.scrollLeft += step;
+                break;
+            }
+        });
         drawer.querySelector('#egaf-v-flow').onclick = function () { viewMode = 'flow'; render(); };
         drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
