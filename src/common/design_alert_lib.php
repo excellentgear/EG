@@ -563,6 +563,7 @@ function oda_unconfirmed_items(PDO $db, int $orderId): array
         JOIN eng_log g ON g.id = i.log_id AND g.log_type = 'order_note'
         JOIN eng_log_bind b ON b.log_id = i.log_id AND b.bind_type = 'order' AND b.bind_id = ?
         WHERE i.src_rule_id IS NOT NULL AND i.voided_at IS NULL AND i.status NOT IN ('resolved','dropped')
+        AND NOT EXISTS (SELECT 1 FROM order_design_alert_rule rr WHERE rr.id = i.src_rule_id AND rr.is_active = 0)
         ORDER BY i.id");
     $st->execute([(string)$orderId]);
     $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
@@ -605,7 +606,8 @@ function oda_pending_exists_sql(string $orderAlias = 'ot'): string
         WHERE odb.bind_type='order' AND odb.bind_id = CAST({$orderAlias}.Order_id AS CHAR)
         AND odi.src_rule_id IS NOT NULL
         AND odi.voided_at IS NULL
-        AND odi.status NOT IN ('resolved','dropped'))";
+        AND odi.status NOT IN ('resolved','dropped')
+        AND NOT EXISTS (SELECT 1 FROM order_design_alert_rule odr WHERE odr.id = odi.src_rule_id AND odr.is_active = 0))";
 }
 
 /** 「PS」：設計備註裡有純備註，而且沒有任何待處理的人工問題（系統提醒另算，不影響 PS 判定） */
