@@ -12,8 +12,11 @@ if (!function_exists('baf_list')) {
         $st->execute([$bom]);
         $proc = []; $ord = []; $o = 0; $stations = []; $labOf = []; $prows = $st->fetchAll(PDO::FETCH_ASSOC);
         $alias = baf_alias_map($db, $bom); // 管理員指定「這個 SN 算哪一關」（ERP 拆單、或非整十的額外 SN）
+        $realSet = []; foreach ($prows as $p) $realSet[(int)$p['bom_sn']] = true;
+        $isAl = fn(int $k) => isset($alias[$k]) && isset($realSet[$alias[$k]]) && $alias[$k] !== $k;
         foreach ($prows as $p) {
             $sn = (int)$p['bom_sn'];
+            if ($isAl($sn)) continue; // 併入別關的 SN 不單獨佔一個關卡編號
             if (!isset($ord[$sn])) { $ord[$sn] = ++$o; $labOf[$sn] = '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']); }
         }
         foreach ($prows as $p) {
@@ -89,7 +92,7 @@ if (!function_exists('baf_list')) {
             $d = substr((string)($b['outsource_date'] ?: ($b['return_date'] ?: ($b['Modified_At'] ?? ''))), 0, 10);
             if ($d === '') $d = '0000-00-00';
             $sn = (int)$b['bom_sn'];
-            $rows[] = ['kind' => 'ing', 'id' => $f, 'fid' => $f, 'sn' => $sn, 'station' => '第' . ($ord[$sn] ?? '?') . '關 ' . (trim((string)$b['ProcessName']) !== '' ? $b['ProcessName'] : $b['process_no']), 'date' => $d, 'ts' => $d . ' 00:00:01',
+            $rows[] = ['kind' => 'ing', 'id' => $f, 'fid' => $f, 'sn' => $sn, 'station' => '第' . ($ord[$sn] ?? ($ord[$alias[$sn] ?? 0] ?? '?')) . '關 ' . (trim((string)$b['ProcessName']) !== '' ? $b['ProcessName'] : $b['process_no']), 'date' => $d, 'ts' => $d . ' 00:00:01',
                        'maker' => (string)($b['maker_id'] ?? ''), 'qty' => (float)$b['sqty'], 'state' => (string)$b['processing_state'], 'batch_label' => (string)($b['batch_label'] ?? ''),
                        'reason' => (int)$b['is_consumed'] === 1 ? '已被拆批／合批併走（is_consumed）' : '標記為跳過（skip）',
                        'od' => !empty($b['outsource_date']) ? substr($b['outsource_date'], 0, 10) : '', 'rd' => !empty($b['return_date']) ? substr($b['return_date'], 0, 10) : ''];
@@ -152,8 +155,10 @@ if (!function_exists('baf_check')) {
         $st->execute([$bom]);
         $sn = []; $ord = []; $o = 0; $fidSn = []; $labOf = []; $crow = $st->fetchAll(PDO::FETCH_ASSOC);
         $alias0 = baf_alias_map($db, $bom);
+        $realSet0 = []; foreach ($crow as $p) $realSet0[(int)$p['bom_sn']] = true;
         foreach ($crow as $p) {
             $k = (int)$p['bom_sn'];
+            if (isset($alias0[$k]) && isset($realSet0[$alias0[$k]]) && $alias0[$k] !== $k) continue;
             if (!isset($ord[$k])) { $ord[$k] = ++$o; $labOf[$k] = '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']); }
         }
         foreach ($crow as $p) {

@@ -124,7 +124,7 @@
             + '<button type="button" id="egaf-save" class="btn btn-warning btn-xs">儲存</button> <button type="button" id="egaf-saveend" class="btn btn-danger btn-xs">儲存並結束</button> '
             + '<button type="button" id="egaf-x" style="border:none;background:none;font-size:20px;cursor:pointer;color:#999;line-height:1;" title="關閉（不上鎖）">×</button></span></div>'
             + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
-            + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
+            + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <label style="margin:0 8px 0 0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定日期／數量；取消勾選才能改（改了會同步更新移轉憑單）"><input type="checkbox" id="egaf-lock" checked style="height:auto;"> 鎖定ERP移轉憑單</label><button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
             + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
             + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
             + '<div id="egaf-msg" style="min-height:16px;font-size:12px;font-weight:bold;margin-top:3px;"></div></div>'
@@ -134,6 +134,7 @@
         drawer.querySelector('#egaf-save').onclick = function () { saveAll(false); };
         drawer.querySelector('#egaf-saveend').onclick = function () { saveAll(true); };
         drawer.querySelector('#egaf-v-time').onclick = function () { viewMode = 'time'; render(); };
+        drawer.querySelector('#egaf-lock').onchange = applyLock;
         drawer.querySelector('#egaf-v-flow').onclick = function () { viewMode = 'flow'; render(); };
         drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
@@ -218,6 +219,7 @@
             + (shown ? '' : '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
         bindSnBox(body);
+        applyLock();
         updDn();
     }
     // ── 分支檢視：每關 → 發單批次 → 它的回廠與出去的移轉憑單 → 接到下一關哪個發單。流向是系統依日期＋數量推測的，可用下拉或拖放修正 ──
@@ -239,11 +241,10 @@
             });
             // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
-            return '<div class="fl-t ecard" style="margin:0;" draggable="true" data-tid="' + t.id + '" data-fid="' + t.fid + '">'
-                + '<div style="margin-bottom:2px;">' + '<span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '　<span style="color:#999;font-size:11px;">⠿ 可拖到發單卡片</span></div>'
+            return '<div class="fl-t ecard" style="margin:0;" draggable="true" title="可拖到發單卡片改流向" data-tid="' + t.id + '" data-fid="' + t.fid + '">'
+                + '<div><span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '</div>'
                 + rowHtml(t)
-                + '<div style="margin-top:2px;color:#7a4a10;">' + dstTxt + '</div>'
-                + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select><br>接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
+                + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div></div>';
         }
         var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。SN 對應請切到「時間軸」設定。</div>';
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
@@ -286,6 +287,7 @@
         html += '</div></div></div></div>';
         body.innerHTML = html;
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
+        applyLock();
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
         }
@@ -326,6 +328,16 @@
             };
         });
     }
+    // 全域鎖定：勾選時所有移轉憑單的日期／數量唯讀（並還原未儲存的修改）；取消勾選才可改
+    function applyLock() {
+        var lock = drawer.querySelector('#egaf-lock').checked;
+        drawer.querySelectorAll('.it[data-k="transfer"]').forEach(function (it) {
+            var d = it.querySelector('.f-d'), q = it.querySelector('.f-q'); if (!d || !q) return;
+            if (lock) { d.value = d.defaultValue; q.value = q.defaultValue; it.classList.remove('dirty'); }
+            d.disabled = q.disabled = lock;
+        });
+        updDn();
+    }
     function keepDirtyWarn() { /* 篩選只是換顯示，未儲存的修改在重畫時會被丟掉，先提醒 */ if (dirtyCount()) msg('提醒：篩選切換會清掉未儲存的修改，請先按「儲存」', false); }
     function inp(cls, v, wd, type) { return '<input class="' + cls + '" type="' + (type || 'number') + '" ' + (type === 'date' ? 'max="' + today() + '"' : 'min="0" step="any"') + ' value="' + esc(v) + '" style="width:' + wd + 'px;">'; }
     // 每張移轉憑單是否「發單不夠」：同一關、同一家轉出廠商，依日期累加移轉量，超過該廠商已登記的發單總量的那幾張，缺的量就是要補的發單數
@@ -363,7 +375,7 @@
         } else if (x.kind === 'transfer') {
             var defQ = (DATA._def && DATA._def[x.id]) || 0;
             var need = x.from_no && x.fid && defQ > 0;
-            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2"><label style="margin:0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定；取消勾選才能改日期／數量（改了會同步更新移轉憑單）"><input type="checkbox" class="f-lock" checked style="height:auto;"> ERP鎖定</label> 移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + ' 數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled')
+            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2">移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + ' 數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled')
               + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關發給「' + esc(x.from) + '」的發單數量不夠（缺 ' + nz(defQ) + '），快速補一筆">快速補發單</button></span>' : '') + '</div>'
               + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', nz(defQ), 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '')
               + ((x.orphan || x.aliased) ? aliasHtml(x) : '');
@@ -429,12 +441,6 @@
         if (dl) dl.onclick = function () {
             if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : '確定刪除這筆回廠／報廢／取回紀錄？')) return;
             post({ action: 'baf_delete', kind: k, id: id, fid: f }, function (r) { if (r.success) { toast('已刪除', true); load('已刪除', true); refreshMain(); } else msg(r.message, false); });
-        };
-        var lk = it.querySelector('.f-lock');
-        if (lk) lk.onchange = function () {
-            var d = it.querySelector('.f-d'), q = it.querySelector('.f-q');
-            if (lk.checked) { d.value = d.defaultValue; q.value = q.defaultValue; it.classList.remove('dirty'); updDn(); }
-            d.disabled = q.disabled = lk.checked;
         };
         var ag = it.querySelector('.al-go');
         if (ag) ag.onclick = function () {
