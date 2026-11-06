@@ -127,6 +127,7 @@ if (!isset($can_ingear_calc)) {
             <div id="ig-right">
                 <div id="ig-key"></div>
                 <div id="ig-zoom"></div>
+                <div id="ig-prof" style="margin-top:6px"></div>
                 <div style="display:flex;gap:8px;margin-top:6px;align-items:flex-start">
                     <div id="ig-over" style="flex-shrink:0"></div>
                     <div style="font-size:10px;color:#6b4423;line-height:1.35">
@@ -333,7 +334,57 @@ if (!isset($can_ingear_calc)) {
         $('ig-over').innerHTML = '<svg width="' + S + '" height="' + S + '" viewBox="0 0 ' + S + ' ' + S + '">' + out + '</svg>';
     }
 
-    function clearGraphics(){ $('ig-zoom').innerHTML = ''; $('ig-over').innerHTML = ''; $('ig-key').innerHTML = ''; }
+    // 齒形預覽：取 5 個齒槽（4 顆完整齒）的一小段輪廓，依真實極座標畫出，並畫出齒頂圓／分度圓／齒根圓，方便確認齒形有沒有怪異
+    function drawProfile(g, e){
+        var host = $('ig-prof'); if (!host) return;
+        var W = 450, H = 170, pad = 22, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m, step = 2 * Math.PI / g.z, N = 14, i, k;
+        function psRaw(r){ return psiAt(g, e, r); }
+        function ps(r){ return Math.max(0, psRaw(r)); }
+        var K = Math.min(2, Math.floor(g.z / 2) - 1 > 0 ? 2 : 1), half = (K + 0.5) * step, r2 = rr + 0.7 * m, pts = [], ph, r, a;
+        // 輪廓（由左而右，ph 小→大）：每個齒槽 = 左齒面(齒頂→齒根)、槽底弧、右齒面(齒根→齒頂)，之後接齒頂弧到下一槽
+        for (k = -K; k <= K; k++) {
+            ph = k * step;
+            for (i = 0; i <= N; i++) { r = rt + (rr - rt) * i / N; pts.push([r, ph - ps(r)]); }
+            for (i = 1; i < 4; i++) pts.push([rr, ph - ps(rr) + 2 * ps(rr) * i / 4]);
+            for (i = N; i >= 0; i--) { r = rt + (rr - rt) * i / N; pts.push([r, ph + ps(r)]); }
+            if (k < K) { var a1 = ph + ps(rt), a2 = (k + 1) * step - ps(rt); for (i = 1; i < 4; i++) pts.push([rt, a1 + (a2 - a1) * i / 4]); }
+        }
+        var aL = pts[0][1], aR = pts[pts.length - 1][1];
+        var solid = pts.slice(), arc = [];
+        for (i = 0; i <= 12; i++) solid.push([r2, aR + (aL - aR) * i / 12]);
+        function xy(p){ return [p[0] * Math.cos(p[1]), p[0] * Math.sin(p[1])]; }
+        function circ(rad){ var o = [], aa; for (aa = -half; aa <= half + 1e-9; aa += half / 30) o.push([rad, aa]); return o; }
+        var all = solid.concat(circ(rt), circ(rr), circ(g.d / 2));
+        var xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9, q;
+        for (i = 0; i < all.length; i++) { q = xy(all[i]); xmin = Math.min(xmin, q[0]); xmax = Math.max(xmax, q[0]); ymin = Math.min(ymin, q[1]); ymax = Math.max(ymax, q[1]); }
+        var s = Math.min((W - 2 * pad) / (xmax - xmin), (H - 2 * pad) / (ymax - ymin));
+        var ox = (W - (xmax - xmin) * s) / 2 - xmin * s, oy = (H + (ymax - ymin) * s) / 2 + ymin * s;
+        function S(p){ var c = xy(p); return (ox + c[0] * s).toFixed(1) + ',' + (oy - c[1] * s).toFixed(1); }
+        function SP(list){ return list.map(S).join(' '); }
+        var out = '<polygon points="' + SP(solid) + '" fill="#F7E0BD"/>';
+        out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + SP(pts) + '"/>';
+        var cl = [[rt, '#DD5138', '齒頂圓 Ø' + f(g.dTip, 2), '5 3'], [g.d / 2, '#b58b5a', '分度圓 Ø' + f(g.d, 2), '3 3'], [rr, '#2f7d8c', '齒根圓 Ø' + f(g.dRoot, 2), '5 3']];
+        for (i = 0; i < cl.length; i++) {
+            var c0 = circ(cl[i][0]);
+            out += '<polyline fill="none" stroke="' + cl[i][1] + '" stroke-width="1.1" stroke-dasharray="' + cl[i][3] + '" points="' + SP(c0) + '"/>';
+        }
+        // 圖例放左下
+        for (i = 0; i < cl.length; i++) {
+            out += '<line x1="8" x2="26" y1="' + (H - 40 + i * 12) + '" y2="' + (H - 40 + i * 12) + '" stroke="' + cl[i][1] + '" stroke-width="1.4" stroke-dasharray="' + cl[i][3] + '"/>';
+            out += '<text x="30" y="' + (H - 36 + i * 12) + '" font-size="10" fill="#6b4423">' + cl[i][2] + '</text>';
+        }
+        host.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + out + '</svg>';
+        // 齒形檢查：齒頂寬／槽底寬（弧長）。齒面在齒頂圓上交叉＝尖齒
+        var tipW = (step - 2 * psRaw(rt)) * rt, rootW = 2 * psRaw(rr) * rr, msg, col;
+        if (tipW <= 0) { msg = '✗ 齒頂已成尖齒（齒面在齒頂圓內交叉），齒形異常'; col = '#DD5138'; }
+        else if (rootW <= 0) { msg = '✗ 齒槽底寬為負值，齒形異常（齒槽寬或齒根圓徑不合理）'; col = '#DD5138'; }
+        else if (tipW < 0.2 * g.mn) { msg = '⚠ 齒頂很窄（' + f(tipW, 3) + ' mm），接近尖齒'; col = '#E67E22'; }
+        else { msg = '✓ 齒形正常'; col = '#5a3a12'; }
+        host.innerHTML += '<div style="font-size:10.5px;margin-top:3px;color:' + col + ';font-weight:700">齒形預覽（取 ' + (2 * K + 1) + ' 個齒槽）：齒頂寬 ' + f(tipW, 3) + ' mm／槽底寬 ' + f(rootW, 3) + ' mm　' + msg + '</div>' +
+            '<div style="font-size:10px;color:#6b4423">未含齒根圓角與齒頂修緣，僅以漸開線齒面示意。</div>';
+    }
+
+    function clearGraphics(){ $('ig-zoom').innerHTML = ''; $('ig-over').innerHTML = ''; $('ig-key').innerHTML = ''; if ($('ig-prof')) $('ig-prof').innerHTML = ''; }
     function keyBox(rows, j){ $('ig-key').innerHTML = '<div class="ig-card" style="margin-bottom:6px"><div class="ig-cb"><table class="ig-t">' + rows + '</table>' + badge(j) + '</div></div>'; }
     function colOf(j){ return j.lv === 0 ? '#F0A24B' : (j.lv === 1 ? '#E67E22' : '#DD5138'); }
 
@@ -361,7 +412,7 @@ if (!isset($can_ingear_calc)) {
         h += '<table class="ig-t">' + helixRows(g) + row('分度圓齒槽寬 e' + (g.beta ? '（端面）' : ''), f(e, 5) + ' mm') + row('標準跨銷徑（接觸點在分度圓）', f(Ds, 4) + ' mm') + rangeRows(g, e) + '</table>';
         if (D === null || D <= 0) {
             res.innerHTML = h + '<div class="ig-err">請輸入銷徑，或按「帶入標準跨銷徑」</div>';
-            if (Ds) { var qs = pinAt(g, e, Ds); drawZoom(g, e, [{ r: qs, col: '#F0A24B', lbl: '標準銷 Ø' + f(Ds, 3) }]); drawOverview(g, e, qs, '#F0A24B'); } else clearGraphics();
+            if (Ds) { var qs = pinAt(g, e, Ds); drawZoom(g, e, [{ r: qs, col: '#F0A24B', lbl: '標準銷 Ø' + f(Ds, 3) }]); drawOverview(g, e, qs, '#F0A24B'); drawProfile(g, e); } else clearGraphics();
             return;
         }
         var r = pinAt(g, e, D);
@@ -375,7 +426,7 @@ if (!isset($can_ingear_calc)) {
         res.innerHTML = h;
         keyBox(row('跨銷距 M', f(r.M, 4) + ' mm', 'ig-big'), j);
         drawZoom(g, e, [{ r: r, col: col, lbl: '銷 Ø' + f(D, 3) }]);
-        drawOverview(g, e, r, col);
+        drawOverview(g, e, r, col); drawProfile(g, e);
     }
 
     function calcB(g){
@@ -393,7 +444,7 @@ if (!isset($can_ingear_calc)) {
         if (j1) h += '<div style="font-size:11px;color:#6b4423;margin-top:4px">客戶銷 Ø' + f(D1, 4) + '：' + j1.txt + '</div>';
         if (D2 === null || D2 <= 0) {
             res.innerHTML = h + '<div class="ig-err">請輸入我方銷徑 D2</div>';
-            if (r1) { drawZoom(g, e, [{ r: r1, col: colOf(j1), dash: false, lbl: '客戶銷 Ø' + f(D1, 3) }]); drawOverview(g, e, r1, colOf(j1)); } else clearGraphics();
+            if (r1) { drawZoom(g, e, [{ r: r1, col: colOf(j1), dash: false, lbl: '客戶銷 Ø' + f(D1, 3) }]); drawOverview(g, e, r1, colOf(j1)); drawProfile(g, e); } else clearGraphics();
             return;
         }
         var r2 = pinAt(g, e, D2);
@@ -412,7 +463,7 @@ if (!isset($can_ingear_calc)) {
         var pins = [{ r: r2, col: colOf(worst), dash: false, lbl: '我方 Ø' + f(D2, 3) }];
         if (r1) pins.push({ r: r1, col: '#8c8c8c', dash: true, lbl: '客戶 Ø' + f(D1, 3) });
         drawZoom(g, e, pins);
-        drawOverview(g, e, r2, colOf(worst));
+        drawOverview(g, e, r2, colOf(worst)); drawProfile(g, e);
     }
 
     var zoomV = 1;
