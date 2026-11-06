@@ -51,7 +51,7 @@ function bau_match_tag(array $tags, string $bom, string $rest): ?array {
 
 function bau_clean_rest(string $s): string {
     $s = preg_replace('/[\\\\\/:*?"<>|\x00-\x1f]+/u', '', $s);
-    return trim($s);
+    return trim($s ?? '');
 }
 
 $action = $_REQUEST['action'] ?? '';
@@ -118,8 +118,8 @@ if ($action === 'save') {
         $suffix = $manualSuffix;
         // 檔名一律改成「BOM＋後綴＋_原檔名」，part_viewer 才認得到標籤，原檔名保留供辨識
         $restOrig = ($pBom !== null) ? $pRest : ' ' . $base;
-        $restOrig = trim(preg_replace('/^[\s\-_]+/', '', $restOrig));
-        $stored = $bom . $suffix . ($restOrig !== '' ? '_' . bau_clean_rest($restOrig) : '') . '.' . $ext;
+        $restOrig = bau_clean_rest(preg_replace('/^[\s\-_]+/', '', $restOrig) ?? '');
+        $stored = $bom . $suffix . ($restOrig !== '' ? '_' . $restOrig : '') . '.' . $ext;
     }
 
     $dirFs = eg_bom_erp_scan_dir_auto();
