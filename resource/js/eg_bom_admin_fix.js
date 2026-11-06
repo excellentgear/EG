@@ -245,7 +245,7 @@
                 + '<div style="margin-top:2px;color:#7a4a10;">' + dstTxt + '</div>'
                 + '<div style="margin-top:2px;">來源發單 <select class="fl-sel" data-f="src" data-tid="' + t.id + '">' + so + '</select><br>接續發單 <select class="fl-sel" data-f="dst" data-tid="' + t.id + '">' + dos + '</select></div></div>';
         }
-        var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。</div>';
+        var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。SN 對應請切到「時間軸」設定。</div>';
         if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
@@ -278,7 +278,7 @@
         html += '<div class="flw-side"><div class="fl-un" data-batch="0" data-fid="' + (un[0] ? un[0].fid : 0) + '" style="margin:0;min-height:60px;"><div style="color:#b8431f;font-size:12px;font-weight:bold;margin-bottom:4px;">⚠ 找不到來源發單的移轉憑單（' + un.length + '）</div><div style="color:#999;font-size:11px;margin-bottom:4px;">拖到左邊對的發單卡片，或用下拉指定</div><div style="display:flex;flex-direction:column;gap:6px;">';
         un.forEach(function (t) { html += chip(t); });
         html += '</div></div></div></div>';
-        body.innerHTML = snBoxHtml() + html; bindSnBox(body);
+        body.innerHTML = html;
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
