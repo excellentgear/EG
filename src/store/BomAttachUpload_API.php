@@ -38,6 +38,13 @@ function bau_bom_exists(PDO $db, string $bom): bool {
     return (bool)$st->fetchColumn();
 }
 
+/** 製令對應的料號（bom.d_id 存的是料號文字） */
+function bau_part(PDO $db, string $bom): string {
+    $st = $db->prepare('SELECT d_id FROM bom WHERE bom=? LIMIT 1');
+    $st->execute([$bom]);
+    return (string)($st->fetchColumn() ?: '');
+}
+
 /** 依標籤設定（後綴長的優先）找出這個「BOM+其餘」命中的標籤；回 [suffix,label,seq] 或 null */
 function bau_match_tag(array $tags, string $bom, string $rest): ?array {
     usort($tags, static function ($a, $b) { return strlen($b['suffix']) - strlen($a['suffix']); });
@@ -63,6 +70,12 @@ if ($action === 'tags') {
     }, $tags)]);
 }
 
+if ($action === 'bom_info') {   // 手動輸入 BOM 時即時帶出料號
+    $b = strtoupper(preg_replace('/\s+/', '', (string)($_POST['bom'] ?? '')));
+    $exists = preg_match('/^B-\d{10}$/', $b) && bau_bom_exists($db, $b);
+    bau_out(['ok' => true, 'exists' => (bool)$exists, 'part' => $exists ? bau_part($db, $b) : '']);
+}
+
 if ($action === 'analyze') {
     $names = json_decode((string)($_POST['names'] ?? '[]'), true);
     if (!is_array($names)) bau_out(['ok' => false, 'msg' => '參數錯誤']);
@@ -70,7 +83,7 @@ if ($action === 'analyze') {
     foreach ($names as $i => $nm) {
         $nm = (string)$nm;
         $ext = strtolower(pathinfo($nm, PATHINFO_EXTENSION));
-        $r = ['i' => $i, 'name' => $nm, 'ok' => false, 'bom' => '', 'suffix' => '', 'label' => '', 'reason' => ''];
+        $r = ['i' => $i, 'name' => $nm, 'ok' => false, 'bom' => '', 'part' => '', 'suffix' => '', 'label' => '', 'reason' => ''];
         if (!in_array($ext, BAU_EXTS, true)) { $r['reason'] = '只接受 PDF／JPG／PNG'; $res[] = $r; continue; }
         [$bom, $rest] = bau_split_bom($nm);
         if ($bom !== null && !bau_bom_exists($db, $bom)) { $r['reason'] = "系統查無製令 $bom"; $r['bom'] = $bom; $bom = null; }
@@ -78,7 +91,7 @@ if ($action === 'analyze') {
             if ($r['reason'] === '') $r['reason'] = '檔名解析不出 BOM 號碼';
             $res[] = $r; continue;
         }
-        $r['bom'] = $bom;
+        $r['bom'] = $bom; $r['part'] = bau_part($db, $bom);
         $m = bau_match_tag($tags, $bom, $rest);
         if (!$m) { $r['reason'] = '檔名解析不出標籤'; $res[] = $r; continue; }
         $r['ok'] = true; $r['suffix'] = $m['suffix']; $r['label'] = $m['label'];
@@ -145,7 +158,7 @@ if ($action === 'save') {
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('bom_attach_upload','bom',0,?,?,?,?,NOW())")
            ->execute([$bom, json_encode(['file' => $stored, 'orig' => $orig, 'tag' => $label], JSON_UNESCAPED_UNICODE), (int)($_SESSION['id'] ?? 0), (string)($_SESSION['user_cname'] ?? '')]);
     } catch (Throwable $e) { /* 稽核欄位不符時不影響上傳 */ }
-    bau_out(['ok' => true, 'bom' => $bom, 'file' => $stored, 'label' => $label]);
+    bau_out(['ok' => true, 'bom' => $bom, 'part' => bau_part($db, $bom), 'file' => $stored, 'label' => $label]);
 }
 
 bau_out(['ok' => false, 'msg' => '無效的操作']);
