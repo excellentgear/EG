@@ -6780,7 +6780,9 @@ echo "</script>\n";
                                 //    QC待驗(Q)／待移轉(P)／已移轉(E) 都顯示；Q 原本把 return_date
                                 //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
-                                if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
+                                // 加工中(ing)等其他狀態：沒有回廠日期、但已有移轉憑單，也以移轉憑單日期認定並顯示「M/D 回(移轉)」
+                                if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1'
+                                    || (!processInfo.return_date && processInfo.xfer_date && _dynRawSt !== 'skip')) {
                                     var _dynRdSrc = processInfo.return_date, _dynIsX = false;
                                     if (!_dynRdSrc && processInfo.xfer_date) { _dynRdSrc = processInfo.xfer_date; _dynIsX = true; }
                                     if (!_dynRdSrc) _dynRdSrc = processInfo.finish_report_date;
