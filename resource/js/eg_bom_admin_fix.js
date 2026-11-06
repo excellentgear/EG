@@ -217,7 +217,7 @@
         } else if (x.kind === 'transfer') {
             var defQ = (DATA._def && DATA._def[x.id]) || 0;
             var need = x.from_no && x.fid && defQ > 0;
-            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2">移轉日 ' + inp('f-d', x.date, 125, 'date') + ' 數量 ' + inp('f-q', x.qty, 70)
+            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2"><label style="margin:0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定；取消勾選才能改日期／數量（改了會同步更新移轉憑單）"><input type="checkbox" class="f-lock" checked style="height:auto;"> ERP鎖定</label> 移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + ' 數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled')
               + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關發給「' + esc(x.from) + '」的發單數量不夠（缺 ' + nz(defQ) + '），快速補一筆">快速補發單</button></span>' : '') + '</div>'
               + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', nz(defQ), 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '')
               + ((x.orphan || x.aliased) ? aliasHtml(x) : '');
@@ -283,6 +283,12 @@
         if (dl) dl.onclick = function () {
             if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : '確定刪除這筆回廠／報廢／取回紀錄？')) return;
             post({ action: 'baf_delete', kind: k, id: id, fid: f }, function (r) { if (r.success) { toast('已刪除', true); load('已刪除', true); refreshMain(); } else msg(r.message, false); });
+        };
+        var lk = it.querySelector('.f-lock');
+        if (lk) lk.onchange = function () {
+            var d = it.querySelector('.f-d'), q = it.querySelector('.f-q');
+            if (lk.checked) { d.value = d.defaultValue; q.value = q.defaultValue; it.classList.remove('dirty'); updDn(); }
+            d.disabled = q.disabled = lk.checked;
         };
         var ag = it.querySelector('.al-go');
         if (ag) ag.onclick = function () {
