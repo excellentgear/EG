@@ -106,6 +106,8 @@
             + '#egaf-drawer .ecard select{font-size:11px;height:20px;width:100%;max-width:none;}'
             + '#egaf-drawer .ecard .btn{padding:0 5px;font-size:11px;line-height:18px;}'
             + '#egaf-drawer .flw-side .ecard{width:100%;}'
+            + '#egaf-drawer .gp{white-space:nowrap;}'
+            + '#egaf-drawer .ecard .gp.nl{flex-basis:100%;}'
             + '#egaf-drawer .tcard{width:230px;flex:0 0 auto;box-sizing:border-box;}'
             + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
             + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
@@ -236,12 +238,12 @@
             var dos = '<option value="a">自動推測</option><option value="0"' + (!fl.dst_auto && !fl.dst ? ' selected' : '') + '>無（沒有接續發單）</option>';
             Object.keys(sends).forEach(function (id) {
                 var b = sends[id];
-                if (b.fid === t.fid) so += '<option value="' + id + '"' + (!fl.src_auto && fl.src === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
+                if (b.sn === t.sn) so += '<option value="' + id + '"' + (!fl.src_auto && fl.src === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
                 else if (b.sn > t.sn) dos += '<option value="' + id + '"' + (!fl.dst_auto && fl.dst === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
             });
             // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
-            return '<div class="fl-t ecard" style="margin:0;" draggable="true" title="可拖到發單卡片改流向" data-tid="' + t.id + '" data-fid="' + t.fid + '">'
+            return '<div class="fl-t ecard" style="margin:0;" draggable="true" title="可拖到發單卡片改流向" data-tid="' + t.id + '" data-sn="' + t.sn + '" data-fid="' + t.fid + '">'
                 + '<div><span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '</div>'
                 + rowHtml(t)
                 + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div></div>';
@@ -257,7 +259,7 @@
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
         function bnode(b) {
             seen[b.id] = true;
-            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
+            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-sn="' + b.sn + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
                 + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(rowHtml).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
@@ -295,7 +297,7 @@
             sel.onchange = function () { setFlow(sel.getAttribute('data-tid'), sel.getAttribute('data-f'), sel.value === 'a' ? -1 : parseInt(sel.value, 10)); };
         });
         body.querySelectorAll('.fl-t').forEach(function (c) {
-            c.ondragstart = function (e) { e.dataTransfer.setData('text/plain', c.getAttribute('data-tid') + '|' + c.getAttribute('data-fid')); e.dataTransfer.effectAllowed = 'move'; };
+            c.ondragstart = function (e) { e.dataTransfer.setData('text/plain', c.getAttribute('data-tid') + '|' + c.getAttribute('data-sn')); e.dataTransfer.effectAllowed = 'move'; };
         });
         body.querySelectorAll('.fl-b,.fl-un').forEach(function (box) {
             box.ondragover = function (e) { e.preventDefault(); box.classList.add('over'); };
@@ -303,7 +305,7 @@
             box.ondrop = function (e) {
                 e.preventDefault(); e.stopPropagation(); box.classList.remove('over');
                 var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2) return;
-                var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-fid') === p[1];
+                var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-sn') === p[1];
                 if (batch === 0) setFlow(p[0], 'src', 0);
                 else if (sameStation) setFlow(p[0], 'src', batch);
                 else if (batch > 0) setFlow(p[0], 'dst', batch);
@@ -363,9 +365,8 @@
         var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
             + '<span class="k" style="background:' + COLORS[x.kind] + ';">' + LABELS[x.kind] + '</span><b>' + esc(x.station || '') + '</b>';
         if (x.kind === 'send') {
-            h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><div class="row2">送出日 ' + inp('f-d', x.date, 125, 'date') + ' 發單數 ' + inp('f-sq', nz(x.send_qty), 70)
-              + '<span style="color:#888;">已回 ' + nz(x.return_qty) + '／廢 ' + nz(x.scrap_qty) + '／取回 ' + nz(x.withdraw_qty) + '</span>'
-              + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
+            h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><div class="row2"><span class="gp">送出日 ' + inp('f-d', x.date, 125, 'date') + '</span><span class="gp"><button class="btn btn-danger btn-xs f-del">刪除</button></span><span class="gp nl">發單數 ' + inp('f-sq', nz(x.send_qty), 70) + '</span>'
+              + '<span style="color:#888;">已回 ' + nz(x.return_qty) + '／廢 ' + nz(x.scrap_qty) + '／取回 ' + nz(x.withdraw_qty) + '</span></div>';
         } else if (x.kind === 'return') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '') + '</span>' + (x.note ? ' <span style="color:#999;">（' + esc(x.note) + '）</span>' : '')
               + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60)
@@ -375,7 +376,7 @@
         } else if (x.kind === 'transfer') {
             var defQ = (DATA._def && DATA._def[x.id]) || 0;
             var need = x.from_no && x.fid && defQ > 0;
-            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2">移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + ' 數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled')
+            h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2"><span class="gp">移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + '</span><span class="gp nl">數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled') + '</span>'
               + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關發給「' + esc(x.from) + '」的發單數量不夠（缺 ' + nz(defQ) + '），快速補一筆">快速補發單</button></span>' : '') + '</div>'
               + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', nz(defQ), 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '')
               + ((x.orphan || x.aliased) ? aliasHtml(x) : '');

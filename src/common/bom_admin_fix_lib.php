@@ -272,8 +272,8 @@ if (!function_exists('baf_flow')) {
         };
         $fill('src', function ($t) use ($sends) {
             if ($t['from_no'] === '') return null;
-            $pool = array_values(array_filter($sends, fn($b) => $b['fid'] === $t['fid'] && (string)$b['maker_no'] === (string)$t['from_no']));
-            return $pool ? [$t['fid'] . '|' . $t['from_no'], $pool] : null;
+            $pool = array_values(array_filter($sends, fn($b) => $b['sn'] === $t['sn'] && (string)$b['maker_no'] === (string)$t['from_no']));
+            return $pool ? [$t['sn'] . '|' . $t['from_no'], $pool] : null;
         });
         $fill('dst', function ($t) use ($sends) {
             if ($t['to_no'] === '') return null;
