@@ -643,7 +643,8 @@ if (!empty($all_boms)) {
                   pn.ProcessName,
                   pn.is_exclude_qc,
                   ml.maker_id,
-                  pfr.finish_report_date
+                  pfr.finish_report_date,
+                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND t.bom_sn = bi.bom_sn) AS xfer_date
                 FROM bom_ing AS bi
                 LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                 LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
@@ -767,6 +768,7 @@ foreach ($raw_ps_list as $_iam_item) {
         'outsource_date'   => $_iam_fmt($_iam_item['outsource_date'] ?? null),
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
+        'xfer_date'        => $_iam_fmt($_iam_item['xfer_date'] ?? null), // 移轉憑單日期（無回廠日期時前端以此認定回廠日）
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,
@@ -3136,6 +3138,7 @@ echo "</script>\n";
                 outsource_date:   _nd(item.outsource_date),
                 return_date:      _nd(item.return_date),
                 finish_report_date: _nd(item.finish_report_date),
+                xfer_date:        _nd(item.xfer_date),
                 QC_check:         item.QC_check || null,
                 QC_check_date:    _nd(item.QC_check_date),
                 // 容器四欄（QC 品管填 QC_ps/QC_ps2、生管填 pm_ps/pm_ps2）：
@@ -6035,7 +6038,10 @@ echo "</script>\n";
                         //    Q 的日期前綴已在上面移除，所以這裡不會重複印同一天。
                         if (_effectiveSt === 'Q' || _effectiveSt === 'P' || _effectiveSt === 'E') {
                             // 廠內製程報工勾「本站完工」即自動轉QC待驗、不寫return_date，改以完工報工日顯示
-                            var _rdSrc = _proc.return_date || _proc.finish_report_date;
+                            // 無回廠日期時，以移轉憑單日期認定為回廠日（顯示「M/D 回(移轉)」）；再沒有才用完工報工日
+                            var _rdSrc = _proc.return_date, _rdIsX = false;
+                            if (!_rdSrc && _proc.xfer_date) { _rdSrc = _proc.xfer_date; _rdIsX = true; }
+                            if (!_rdSrc) _rdSrc = _proc.finish_report_date;
                             var _rdMd = formatDateAsMd(_rdSrc);
                             if (_rdMd) {
                                 var _rdSpan = document.createElement('span');
@@ -6045,8 +6051,8 @@ echo "</script>\n";
                                 //   28px 高，整條狀態列被它撐成 28px，看起來就是「間距沒縮小」。
                                 _rdSpan.style.cssText = 'color:#2a7ae2;font-weight:bold;margin-right:3px;white-space:nowrap;line-height:1.2;';
                                 // QC待驗：日期是「轉成待驗的那天」，寫「回」會被誤解成已檢驗完，這裡只放日期（按鈕本身就是QC待驗）
-                                _rdSpan.textContent = _rdMd + (_effectiveSt === 'Q' ? '' : ' 回');
-                                _rdSpan.title = (_proc.return_date ? '已回廠日期：' : '本站完工報工日：') + _rdSrc;
+                                _rdSpan.textContent = _rdMd + (_effectiveSt === 'Q' ? '' : (_rdIsX ? ' 回(移轉)' : ' 回'));
+                                _rdSpan.title = (_proc.return_date ? '已回廠日期：' : (_rdIsX ? '移轉憑單日期（無回廠日期，以移轉憑單認定為回廠日）：' : '本站完工報工日：')) + _rdSrc;
                                 _btnRow.appendChild(_rdSpan);
                             }
                         }
@@ -6775,10 +6781,12 @@ echo "</script>\n";
                                 //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
                                 if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
-                                    var _dynRdSrc = processInfo.return_date || processInfo.finish_report_date;
+                                    var _dynRdSrc = processInfo.return_date, _dynIsX = false;
+                                    if (!_dynRdSrc && processInfo.xfer_date) { _dynRdSrc = processInfo.xfer_date; _dynIsX = true; }
+                                    if (!_dynRdSrc) _dynRdSrc = processInfo.finish_report_date;
                                     var _dynRdMd = formatDateAsMd(_dynRdSrc);
                                     if (_dynRdMd) {
-                                        tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="${processInfo.return_date ? '已回廠日期' : '本站完工報工日'}：${escapeHtml(String(_dynRdSrc))}">${escapeHtml(_dynRdMd)}${_dynRawSt === 'Q' ? ' QC待驗' : ' 回'}</div>`;
+                                        tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="${processInfo.return_date ? '已回廠日期' : (_dynIsX ? '移轉憑單日期（無回廠日期，以移轉憑單認定為回廠日）' : '本站完工報工日')}：${escapeHtml(String(_dynRdSrc))}">${escapeHtml(_dynRdMd)}${_dynRawSt === 'Q' ? ' QC待驗' : (_dynIsX ? ' 回(移轉)' : ' 回')}</div>`;
                                     }
                                 }
 
@@ -12733,6 +12741,7 @@ echo "</script>\n";
                 <div class="col-md-9 col-sm-9 col-xs-12" style="padding-top: 7px;">
                     <span id="bqe-qty">${escapeHtml(rowData.Qty)}</span>${window.featEditQty ? '<button type="button" id="bqe-lock" class="btn btn-xs btn-default" title="修改發單數（需輸入本人密碼）" style="margin-left:8px;padding:0 6px;"><i class="fa fa-lock"></i></button>' : ''}
                     <div id="bqe-panel" style="margin-top:6px;font-size:12px;"></div>
+                    <div id="baf-warn" style="margin-top:4px;font-size:12px;color:#c0261b;line-height:1.6;"></div>
                 </div>
             </div>`;
         leftAndCenterPaneWrapper.appendChild(leftCol);
@@ -13022,7 +13031,8 @@ echo "</script>\n";
         if (window.oreadyIsAdmin) {
             setTimeout(function(){ oreadyRenderTestModeBtn(rowData.bom, rowData.bom_sn);
                 var _afb = document.getElementById('oready-af-btn');
-                if (_afb) _afb.onclick = function(){ if (window.EGBomAdminFix) window.EGBomAdminFix.open(rowData.bom, rowData.bom_sn); }; }, 0);
+                if (_afb) _afb.onclick = function(){ if (window.EGBomAdminFix) window.EGBomAdminFix.open(rowData.bom, rowData.bom_sn); };
+                if (window.EGBomAdminFix) window.EGBomAdminFix.renderWarn(rowData.bom); }, 0);
         }
         const processListDiv = document.createElement('div');
         processListDiv.id = `dynamic-process-list-${rowData.bom}`;

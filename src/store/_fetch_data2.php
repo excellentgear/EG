@@ -21,6 +21,8 @@ session_start();
 
 include("../common/_config.php");
 include_once '../common/DBConnection.php';
+// 此請求只讀登入資料、不寫 session：提早釋放 session 鎖，避免自動更新期間擋住同一使用者的其他請求
+session_write_close();
 
 
 
@@ -665,6 +667,7 @@ if (is_array($OreadyReply_list_base)) {
             $max_sn = $max_reported_sn_map[$item['bom']] ?? 0;
             $item['has_new_process_report'] = ($max_sn > $current_sn);
             $item['has_any_pm_report']      = isset($max_reported_sn_map[$item['bom']]);
+            $item['max_reported_sn']        = $max_sn; // 快速移轉目標關（報工最遠製程）
 
             // ✅【業務休假】與主頁面一致
             $item['IsPrimaryOnLeave'] = !empty($item['PrimarySalesId']) && in_array(intval($item['PrimarySalesId']), $users_on_leave_ids, true);
@@ -716,10 +719,13 @@ if (!empty($current_page_boms)) {
 
     // bom_ps_list：只查本頁 BOM 的製程明細
     $raw_ps = $db->prepare("
-        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id
+        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND t.bom_sn = bi.bom_sn) AS xfer_date
         FROM bom_ing AS bi
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
+        LEFT JOIN (SELECT bom_ing_fid, MAX(report_date) AS finish_report_date
+                   FROM pm_process_daily_report WHERE is_finished = 1 GROUP BY bom_ing_fid) pfr
+               ON pfr.bom_ing_fid = bi.bom_ing_fid
         WHERE bi.bom IN ($ph_boms)
           AND bi.is_schedule_split = 0
         ORDER BY bi.bom, bi.bom_sn
@@ -827,6 +833,8 @@ foreach ($raw_ps_rows as $_iam_item) {
         'processing_state' => $_iam_state,
         'outsource_date'   => $_iam_fmt($_iam_item['outsource_date'] ?? null),
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
+        'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
+        'xfer_date'        => $_iam_fmt($_iam_item['xfer_date'] ?? null), // 移轉憑單日期（無回廠日期時前端以此認定回廠日）
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,

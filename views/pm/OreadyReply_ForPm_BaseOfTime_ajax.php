@@ -2661,7 +2661,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
 // ── BOM 管理員修正面板（2026-11-06）：列出／就地修改 發單、回廠、報廢、取回、QC檢驗、移轉憑單。
 //    唯一實作 src/common/bom_admin_fix_lib.php（寫入走 bom_return_edit_lib.php 的 force 模式）；
 //    僅本頁管理員，且須先輸入操作確認密碼（$_SESSION['oready_admin_fix']）；每個動作都寫 bom_ing_event 留紀錄 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
     require_once '../../src/common/confirm_password_lib.php';
@@ -2673,6 +2673,10 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_unlock','ba
     if (!ber_is_admin($db, $uid)) { echo json_encode(['success'=>false,'message'=>'只有管理員可以使用管理員修正']); exit; }
     $act = $_POST['action'];
     try {
+        if ($act === 'baf_check') { // 只讀：管理員在修改視窗的發單數下方看總數異常提示，不需解鎖
+            $bm = trim((string)($_POST['bom'] ?? ''));
+            echo json_encode(['success'=>true] + baf_check($db, $bm)); exit;
+        }
         if ($act === 'baf_unlock') {
             $r = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['password'] ?? ''), 'oready_admin_fix');
             if (!$r['ok']) { echo json_encode(['success'=>false,'message'=>$r['msg']]); exit; }

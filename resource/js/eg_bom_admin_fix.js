@@ -1,63 +1,118 @@
 /**
  * BOM 管理員修正面板（左側滑出，唯一實作）——BOM總覽「BOM 製程列表」旁的「管理員修正」鈕開啟。
  * 後端：views/pm/OreadyReply_ForPm_BaseOfTime_ajax.php 的 baf_* 動作（src/common/bom_admin_fix_lib.php）。
- * 用法：EGBomAdminFix.open('B-1150407008', bomSn)；需先輸入操作確認密碼；每次儲存後局部更新，不整頁重載。
+ * 用法：EGBomAdminFix.open('B-1150407008', bomSn)；需先輸入操作確認密碼。
+ * 修改欄位後按右上角「儲存」（一次存全部已改的列）或「儲存並結束」（存完自動上鎖並關閉）；刪除與新增是當下生效。
+ * EGBomAdminFix.renderWarn(bom)：在「修改 BOM 資料」視窗的發單數下方顯示總數異常的紅字提示。
  */
 (function (w) {
     var drawer = null, bom = '', bomSn = '', DATA = null, unlocked = false;
-    var KINDS = [['send', '發單'], ['return', '回廠／報廢／取回'], ['qc', 'QC檢驗'], ['transfer', '移轉憑單'], ['abnormal', '異常單']];
-    var COLORS = { send: '#F0A24B', return: '#2E8B57', qc: '#8A6A45', transfer: '#C0561F', abnormal: '#DD5138' };
-    var LABELS = { send: '發單', return: '回廠', qc: 'QC檢驗', transfer: '移轉憑單', abnormal: '異常單' };
-    var on = { send: true, return: true, qc: true, transfer: true, abnormal: true };
+    var KINDS = [['send', '發單'], ['return', '回廠／報廢／取回'], ['qc', 'QC檢驗'], ['transfer', '移轉憑單'], ['abnormal', '異常單'], ['ing', 'ERP匯入/未採用']];
+    var COLORS = { send: '#F0A24B', return: '#2E8B57', qc: '#8A6A45', transfer: '#C0561F', abnormal: '#DD5138', ing: '#8B8B8B' };
+    var LABELS = { send: '發單', return: '回廠', qc: 'QC檢驗', transfer: '移轉憑單', abnormal: '異常單', ing: 'ERP匯入/未採用' };
+    var STATE_TXT = { N: '待發包', Q: 'QC待驗', P: '待移轉', ing: '加工中', E: '已移轉', '1': '已結案', skip: '跳過' };
+    var on = { send: true, return: true, qc: true, transfer: true, abnormal: true, ing: true };
     var stationFilter = '';
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     function nz(v) { v = parseFloat(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
     function today() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
-    function toast(t, ok) { if (typeof w.showTemporaryMessage === 'function') w.showTemporaryMessage(t, !!ok); else alert(t); }
-    function post(data, cb) {
-        data.bom = bom;
+    function toast(t, ok) { if (typeof w.showTemporaryMessage === 'function') w.showTemporaryMessage(t, !!ok); }
+    function post(data, cb, bomOverride) {
+        data.bom = bomOverride || bom;
         w.jQuery.post('', data, function (r) {
-            if (r && r.need_unlock) { unlocked = false; promptPw(function () { post(data, cb); }); return; }
+            if (r && r.need_unlock) { unlocked = false; promptPw(function () { post(data, cb, bomOverride); }); return; }
             cb(r || { success: false, message: '無回應' });
         }, 'json').fail(function () { cb({ success: false, message: '與伺服器通訊失敗' }); });
+    }
+    // ── 修改視窗「發單數」下方的總數異常提示（只有管理員看得到；後端也限管理員）──
+    function warnHtml(r) {
+        if (!r || !r.items || !r.items.length) return '';
+        return '<b>總數異常</b>（BOM 發單數 ' + nz(r.bom_sqty) + ' pcs）：<br>' + r.items.map(function (i) {
+            return esc(i.label) + '：最多 ' + esc(i.max_name) + ' = ' + nz(i.max) + ' pcs（發單 ' + nz(i.send) + '／移轉憑單 ' + nz(i.transfer) + '／QC檢驗 ' + nz(i.qc) + '）';
+        }).join('<br>');
+    }
+    function renderWarn(b, tries) {
+        tries = tries || 0;
+        var el = document.getElementById('baf-warn');
+        if (!el) { if (tries < 8) setTimeout(function () { renderWarn(b, tries + 1); }, 200); return; }
+        w.jQuery.post('', { action: 'baf_check', bom: b }, function (r) { var e2 = document.getElementById('baf-warn'); if (e2 && r && r.success) e2.innerHTML = warnHtml(r); }, 'json');
+    }
+    // ── 廠商挑選：輸入時即時在下方列出符合的廠商，點選即帶入（不用自己按按鈕）──
+    function makerPicker(input, onPick) {
+        var box = document.createElement('div'), timer = null, seq = 0;
+        box.style.cssText = 'position:fixed;z-index:10900;background:#fff;border:1px solid #d9b98a;border-radius:3px;box-shadow:0 4px 14px rgba(0,0,0,.2);max-height:220px;overflow-y:auto;display:none;font-size:12px;';
+        document.body.appendChild(box);
+        function hide() { box.style.display = 'none'; }
+        function show(list) {
+            if (!list.length) { box.innerHTML = '<div style="padding:6px 10px;color:#999;">查無符合的廠商</div>'; }
+            else box.innerHTML = list.map(function (m, i) { return '<div class="mk-o" data-i="' + i + '" style="padding:4px 10px;cursor:pointer;border-bottom:1px solid #f3e9d8;"><b>' + esc(m.maker_id_no) + '</b>　' + esc(m.maker_id) + '</div>'; }).join('');
+            var r = input.getBoundingClientRect();
+            box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(220, r.width) + 'px'; box.style.display = 'block';
+            box.querySelectorAll('.mk-o').forEach(function (o) {
+                o.onmousedown = function (e) { e.preventDefault(); var m = list[parseInt(o.getAttribute('data-i'), 10)]; input.value = m.maker_id_no + ' ' + m.maker_id; hide(); onPick({ no: m.maker_id_no, name: m.maker_id }); };
+            });
+        }
+        function q() {
+            var v = input.value.trim(); onPick(null);
+            if (v.length < 1) { hide(); return; }
+            var my = ++seq;
+            w.jQuery.post('', { action: 'search_maker', term: v, search_type: /^[A-Za-z0-9-]+$/.test(v) ? 'no' : 'name' }, function (res) {
+                if (my !== seq) return;
+                show(res && res.success && Array.isArray(res.data) ? res.data.slice(0, 30) : []);
+            }, 'json');
+        }
+        input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(q, 150); });
+        input.addEventListener('focus', function () { if (input.value.trim() && !/^\S+ \S+/.test(input.value)) q(); });
+        input.addEventListener('blur', function () { setTimeout(hide, 150); });
     }
     function ensure() {
         if (drawer) return drawer;
         var st = document.createElement('style');
-        st.textContent = '#egaf-drawer{position:fixed;top:0;left:0;height:100%;width:600px;max-width:96vw;background:#fff;z-index:10700;box-shadow:4px 0 18px rgba(0,0,0,.22);transform:translateX(-105%);transition:transform .22s ease;display:flex;flex-direction:column;font-size:13px;color:#4a3320;}'
+        st.textContent = '#egaf-drawer{position:fixed;top:0;left:0;height:100%;width:620px;max-width:96vw;background:#fff;z-index:10700;box-shadow:4px 0 18px rgba(0,0,0,.22);transform:translateX(-105%);transition:transform .22s ease;display:flex;flex-direction:column;font-size:13px;color:#4a3320;}'
             + '#egaf-drawer.open{transform:translateX(0);}'
-            + '#egaf-drawer .h{padding:10px 14px;border-bottom:1px solid #E4B3A0;background:#F6D9CC;display:flex;justify-content:space-between;align-items:center;}'
+            + '#egaf-drawer .h{padding:10px 14px;border-bottom:1px solid #E4B3A0;background:#F6D9CC;display:flex;justify-content:space-between;align-items:center;gap:8px;}'
             + '#egaf-drawer .f{padding:8px 14px;border-bottom:1px solid #E4D3BC;background:#FDF3E3;}'
             + '#egaf-drawer .b{flex:1;overflow-y:auto;padding:8px 14px 24px;}'
             + '#egaf-drawer .chip{display:inline-block;border:1px solid #E4D3BC;border-radius:12px;padding:1px 10px;margin:0 4px 4px 0;cursor:pointer;background:#fff;font-size:12px;user-select:none;}'
             + '#egaf-drawer .chip.on{color:#fff;border-color:transparent;}'
             + '#egaf-drawer .dd{font-weight:bold;margin:10px 0 4px;color:#7a4a10;border-bottom:1px dotted #E4D3BC;}'
             + '#egaf-drawer .it{border:1px solid #EEE0CC;border-radius:4px;padding:5px 8px;margin-bottom:5px;background:#FFFCF7;}'
+            + '#egaf-drawer .it.dirty{background:#FFF1C9;border-color:#E8B54A;}'
             + '#egaf-drawer .it .k{display:inline-block;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;line-height:18px;margin-right:6px;}'
             + '#egaf-drawer .it input{padding:0 3px;height:24px;font-size:12px;border:1px solid #d8c8b0;border-radius:3px;}'
             + '#egaf-drawer .it .row2{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;}'
             + '#egaf-drawer .nw{display:none;border:1px dashed #E4D3BC;border-radius:4px;padding:6px 8px;margin-top:6px;background:#fff;font-size:12px;}'
-            + '#egaf-drawer .nw input,#egaf-drawer .nw select{height:24px;font-size:12px;padding:0 3px;}';
+            + '#egaf-drawer .nw input,#egaf-drawer .nw select{height:24px;font-size:12px;padding:0 3px;}'
+            + '#egaf-drawer .wn{background:#FDECEA;border:1px solid #E9A59C;color:#c0261b;border-radius:4px;padding:6px 10px;margin-bottom:6px;font-size:12px;line-height:1.6;}';
         document.head.appendChild(st);
         drawer = document.createElement('div');
         drawer.id = 'egaf-drawer';
-        drawer.innerHTML = '<div class="h"><strong id="egaf-title">管理員修正</strong><span><button type="button" id="egaf-lock" class="btn btn-default btn-xs" style="margin-right:8px;">結束並上鎖</button><button type="button" id="egaf-x" style="border:none;background:none;font-size:20px;cursor:pointer;color:#999;line-height:1;">×</button></span></div>'
+        drawer.innerHTML = '<div class="h"><strong id="egaf-title">管理員修正</strong><span style="white-space:nowrap;"><span id="egaf-dn" style="color:#b8431f;font-size:12px;margin-right:6px;"></span>'
+            + '<button type="button" id="egaf-save" class="btn btn-warning btn-xs">儲存</button> <button type="button" id="egaf-saveend" class="btn btn-danger btn-xs">儲存並結束</button> '
+            + '<button type="button" id="egaf-x" style="border:none;background:none;font-size:20px;cursor:pointer;color:#999;line-height:1;" title="關閉（不上鎖）">×</button></span></div>'
             + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
             + '<button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
-            + '<div class="nw" id="egaf-nw-send">廠商 <input list="egaf-mk-dl" id="egaf-mk" style="width:170px;" placeholder="編號或名稱後點選"><datalist id="egaf-mk-dl"></datalist> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
-            + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:190px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
+            + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
+            + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
             + '<div id="egaf-msg" style="min-height:16px;font-size:12px;font-weight:bold;margin-top:3px;"></div></div>'
             + '<div class="b" id="egaf-body"></div>';
         document.body.appendChild(drawer);
-        drawer.querySelector('#egaf-x').onclick = close;
-        drawer.querySelector('#egaf-lock').onclick = function () { w.jQuery.post('', { action: 'baf_lock' }, function () { unlocked = false; close(); toast('已上鎖', true); }, 'json'); };
+        drawer.querySelector('#egaf-x').onclick = function () { if (dirtyCount() && !confirm('有 ' + dirtyCount() + ' 筆修改尚未儲存，確定直接關閉？')) return; close(); };
+        drawer.querySelector('#egaf-save').onclick = function () { saveAll(false); };
+        drawer.querySelector('#egaf-saveend').onclick = function () { saveAll(true); };
         drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
         drawer.querySelector('#egaf-new-ret').onclick = function () { toggleNw('egaf-nw-ret'); };
+        drawer.querySelector('#egaf-body').addEventListener('input', function (e) {
+            var it = e.target.closest && e.target.closest('.it'); if (!it || e.target.closest('.qs')) return;
+            it.classList.add('dirty'); updDn();
+        });
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer.classList.contains('open') && !document.getElementById('egaf-pw')) close(); });
         bindNew();
         return drawer;
     }
+    function dirtyCount() { return drawer ? drawer.querySelectorAll('.it.dirty').length : 0; }
+    function updDn() { var n = dirtyCount(); drawer.querySelector('#egaf-dn').textContent = n ? n + ' 筆未儲存' : ''; }
     function toggleNw(id) { var el = drawer.querySelector('#' + id); el.style.display = el.style.display === 'block' ? 'none' : 'block'; }
     function msg(t, ok) { var m = drawer.querySelector('#egaf-msg'); m.style.color = ok ? '#2a7a2a' : '#b8431f'; m.textContent = t || ''; }
     function promptPw(cb) {
@@ -85,6 +140,7 @@
     function refreshMain() {
         try { if (typeof w.fetchDataAndFilter === 'function') w.fetchDataAndFilter(); } catch (e) {}
         try { if (typeof w.refreshEditModalProcessList === 'function' && bom) w.refreshEditModalProcessList(bom, bomSn); } catch (e) {}
+        renderWarn(bom);
     }
     function load(keepMsg, ok) {
         var body = drawer.querySelector('#egaf-body'), sc = body.scrollTop;
@@ -101,81 +157,137 @@
             var o = on[k[0]];
             return '<span class="chip' + (o ? ' on' : '') + '" data-k="' + k[0] + '" style="' + (o ? 'background:' + COLORS[k[0]] : '') + '">' + k[1] + ' ' + (cnt[k[0]] || 0) + '</span>';
         }).join('');
-        drawer.querySelectorAll('.chip').forEach(function (c) { c.onclick = function () { on[c.getAttribute('data-k')] = !on[c.getAttribute('data-k')]; render(); }; });
+        drawer.querySelectorAll('.chip').forEach(function (c) { c.onclick = function () { keepDirtyWarn(); on[c.getAttribute('data-k')] = !on[c.getAttribute('data-k')]; render(); }; });
         var ss = drawer.querySelector('#egaf-st');
         ss.innerHTML = '<option value="">全部製程</option>' + (DATA.stations || []).map(function (s) { return '<option value="' + s.fid + '"' + (String(s.fid) === String(stationFilter) ? ' selected' : '') + '>' + esc(s.label) + '</option>'; }).join('');
-        // 新增用的製程預設＝目前篩選的製程
         drawer.querySelector('#egaf-nr-b').innerHTML = (DATA.batches || []).filter(function (b) { return !stationFilter || String(b.fid) === String(stationFilter); }).map(function (b) {
             var stn = (DATA.stations || []).filter(function (s) { return s.fid === b.fid; })[0];
             return '<option value="' + b.batch_id + '" data-f="' + b.fid + '">' + esc((stn ? stn.label : '') + '／' + (b.maker || '未登記') + ' ' + nz(b.send_qty)) + '</option>';
         }).join('');
-        var html = '', last = '', shown = 0;
+        var html = '', last = null, shown = 0;
+        if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         rows.forEach(function (x) {
             if (!on[x.kind]) return;
             if (stationFilter && String(x.fid) !== String(stationFilter)) return;
             shown++;
-            if (x.date !== last) { last = x.date; html += '<div class="dd">' + esc(w.egFmtDate ? w.egFmtDate(x.date) : x.date) + '</div>'; }
+            if (x.date !== last) { last = x.date; html += '<div class="dd">' + esc(x.date === '0000-00-00' ? '無日期' : (w.egFmtDate ? w.egFmtDate(x.date) : x.date)) + '</div>'; }
             html += rowHtml(x);
         });
         var body = drawer.querySelector('#egaf-body');
-        body.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；修改後按該列「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + (html || '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
+        body.innerHTML = '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
+            + (shown ? '' : '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
+        updDn();
     }
+    function keepDirtyWarn() { /* 篩選只是換顯示，未儲存的修改在重畫時會被丟掉，先提醒 */ if (dirtyCount()) msg('提醒：篩選切換會清掉未儲存的修改，請先按「儲存」', false); }
     function inp(cls, v, wd, type) { return '<input class="' + cls + '" type="' + (type || 'number') + '" ' + (type === 'date' ? 'max="' + today() + '"' : 'min="0" step="any"') + ' value="' + esc(v) + '" style="width:' + wd + 'px;">'; }
+    function hasSend(x) {
+        return (DATA.rows || []).some(function (r) { return r.kind === 'send' && r.fid === x.fid && String(r.maker_no) === String(x.from_no); });
+    }
     function rowHtml(x) {
-        var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '">'
+        var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
             + '<span class="k" style="background:' + COLORS[x.kind] + ';">' + LABELS[x.kind] + '</span><b>' + esc(x.station || '') + '</b>';
         if (x.kind === 'send') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><div class="row2">送出日 ' + inp('f-d', x.date, 125, 'date') + ' 發單數 ' + inp('f-sq', nz(x.send_qty), 70)
               + '<span style="color:#888;">已回 ' + nz(x.return_qty) + '／廢 ' + nz(x.scrap_qty) + '／取回 ' + nz(x.withdraw_qty) + '</span>'
-              + '<span style="margin-left:auto;"><button class="btn btn-warning btn-xs f-save">儲存</button> <button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
+              + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
         } else if (x.kind === 'return') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '') + '</span>' + (x.note ? ' <span style="color:#999;">（' + esc(x.note) + '）</span>' : '')
               + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60)
-              + '<span style="margin-left:auto;"><button class="btn btn-warning btn-xs f-save">儲存</button> <button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
+              + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
         } else if (x.kind === 'qc') {
-            h += ' <span style="color:#7a4a10;">' + esc(x.result || '') + '</span><div class="row2">檢驗日 ' + inp('f-d', x.date, 125, 'date') + ' 允收 ' + inp('f-ok', x.ok, 55) + ' 特採 ' + inp('f-aod', x.aod, 55) + ' 異常 ' + inp('f-qq', x.qq, 55) + ' 驗退 ' + inp('f-ng', x.ng, 55)
-              + '<span style="margin-left:auto;"><button class="btn btn-warning btn-xs f-save">儲存</button></span></div>';
+            h += ' <span style="color:#7a4a10;">' + esc(x.result || '') + '</span><div class="row2">檢驗日 ' + inp('f-d', x.date, 125, 'date') + ' 允收 ' + inp('f-ok', x.ok, 55) + ' 特採 ' + inp('f-aod', x.aod, 55) + ' 異常 ' + inp('f-qq', x.qq, 55) + ' 驗退 ' + inp('f-ng', x.ng, 55) + '</div>';
         } else if (x.kind === 'transfer') {
+            var need = x.from_no && x.fid && !hasSend(x);
             h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2">移轉日 ' + inp('f-d', x.date, 125, 'date') + ' 數量 ' + inp('f-q', x.qty, 70)
-              + '<span style="margin-left:auto;"><button class="btn btn-warning btn-xs f-save">儲存</button></span></div>';
+              + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關沒有發給「' + esc(x.from) + '」的發單紀錄，快速補一筆">快速補發單</button></span>' : '') + '</div>'
+              + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', x.qty, 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '');
+        } else if (x.kind === 'ing') {
+            h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><span style="margin-left:6px;color:#fff;background:#8B8B8B;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(x.reason) + '</span>'
+              + '<div class="row2" style="color:#666;">bom_ing #' + x.id + '　發單數 ' + nz(x.qty) + '　狀態 ' + esc(STATE_TXT[x.state] || x.state) + (x.batch_label ? '　批次 ' + esc(x.batch_label) : '') + '　發包日 ' + esc(x.od || '-') + '　回廠日 ' + esc(x.rd || '-')
+              + '<span style="margin-left:auto;color:#aaa;">（ERP匯入的原始製程列，製程列表不顯示；僅供對照）</span></div>';
         } else {
             h += '<div class="row2"><span>' + esc(x.no) + '　' + esc(x.text) + (x.ng ? '　不良 ' + nz(x.ng) : '') + '</span><span style="margin-left:auto;"><a href="../QA/qa_abnormal_form.php?id=' + x.id + '" target="_blank" class="btn btn-default btn-xs">開啟異常單</a></span></div>';
         }
         return h + '</div>';
     }
+    function payloadOf(it) {
+        var k = it.getAttribute('data-k'), d = { action: 'baf_save', kind: k, id: it.getAttribute('data-id'), fid: it.getAttribute('data-f') };
+        function v(c) { var e = it.querySelector('.' + c); return e ? e.value : ''; }
+        d.date = v('f-d');
+        if (k === 'send') { d.send_qty = v('f-sq'); d.maker_no = it.getAttribute('data-mn'); d.maker = it.getAttribute('data-m'); }
+        else if (k === 'return') { d.return_qty = v('f-r'); d.scrap_qty = v('f-s'); d.withdraw_qty = v('f-w'); }
+        else if (k === 'qc') { d.ok = v('f-ok'); d.aod = v('f-aod'); d.qq = v('f-qq'); d.ng = v('f-ng'); }
+        else if (k === 'transfer') { d.qty = v('f-q'); }
+        return d;
+    }
+    function saveAll(thenEnd) {
+        var items = Array.prototype.slice.call(drawer.querySelectorAll('.it.dirty'));
+        if (!items.length) { if (thenEnd) finish(); else msg('沒有需要儲存的修改', true); return; }
+        var sens = items.filter(function (it) { var k = it.getAttribute('data-k'); return k === 'qc' || k === 'transfer'; }).length;
+        if (sens && !confirm('這次包含 ' + sens + ' 筆 QC檢驗／移轉憑單 的修改，會直接改變已驗數量與移轉帳款分析。確定儲存？')) return;
+        var btns = drawer.querySelectorAll('#egaf-save,#egaf-saveend'); btns.forEach(function (b) { b.disabled = true; });
+        var pending = items.slice(), fails = [], okN = 0, round = 0;
+        function next() {
+            var it = pending.shift();
+            if (!it) {
+                // 有失敗的（例如發單數要等回廠數先改小）再試一輪
+                if (fails.length && round === 0 && okN > 0) { round = 1; pending = fails.map(function (f) { return f.it; }); fails = []; return next(); }
+                return done();
+            }
+            post(payloadOf(it), function (r) {
+                if (r.success) { okN++; it.classList.remove('dirty'); } else fails.push({ it: it, m: r.message || '失敗' });
+                next();
+            });
+        }
+        function done() {
+            btns.forEach(function (b) { b.disabled = false; });
+            if (okN) refreshMain();
+            load(null);
+            if (fails.length) {
+                var t = '儲存 ' + okN + ' 筆；' + fails.length + ' 筆失敗：' + fails.map(function (f) { return f.m; }).filter(function (m, i, a) { return a.indexOf(m) === i; }).join('；');
+                setTimeout(function () { msg(t, false); }, 400);
+                if (thenEnd) alert('有 ' + fails.length + ' 筆沒存成功，所以不會結束：\n' + t);
+            } else {
+                msg('已儲存 ' + okN + ' 筆', true); toast('已儲存 ' + okN + ' 筆', true);
+                if (thenEnd) finish();
+            }
+        }
+        next();
+    }
+    function finish() {
+        w.jQuery.post('', { action: 'baf_lock' }, function () { unlocked = false; close(); toast('已儲存並上鎖', true); }, 'json');
+    }
     function bindRow(it) {
         var k = it.getAttribute('data-k'), id = it.getAttribute('data-id'), f = it.getAttribute('data-f');
-        function v(c) { var e = it.querySelector('.' + c); return e ? e.value : ''; }
-        var sv = it.querySelector('.f-save'), dl = it.querySelector('.f-del');
-        if (sv) sv.onclick = function () {
-            var d = { action: 'baf_save', kind: k, id: id, fid: f, date: v('f-d') };
-            if (k === 'send') { d.send_qty = v('f-sq'); d.maker_no = it.getAttribute('data-mn'); d.maker = it.getAttribute('data-m'); }
-            else if (k === 'return') { d.return_qty = v('f-r'); d.scrap_qty = v('f-s'); d.withdraw_qty = v('f-w'); }
-            else if (k === 'qc') { d.ok = v('f-ok'); d.aod = v('f-aod'); d.qq = v('f-qq'); d.ng = v('f-ng'); if (!confirm('確定修正這筆QC檢驗？這會直接改變這一站的已驗數量。')) return; }
-            else if (k === 'transfer') { d.qty = v('f-q'); if (!confirm('確定修正這張移轉憑單的數量／日期？（移轉帳款分析會跟著變）')) return; }
-            post(d, function (r) { if (r.success) { toast('已儲存', true); load('已儲存', true); refreshMain(); } else msg(r.message, false); });
-        };
+        var dl = it.querySelector('.f-del');
         if (dl) dl.onclick = function () {
             if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : '確定刪除這筆回廠／報廢／取回紀錄？')) return;
             post({ action: 'baf_delete', kind: k, id: id, fid: f }, function (r) { if (r.success) { toast('已刪除', true); load('已刪除', true); refreshMain(); } else msg(r.message, false); });
         };
+        var qs = it.querySelector('.f-qs');
+        if (qs) {
+            qs.onclick = function () {
+                var box = it.querySelector('.qs');
+                // 數量預設帶入這張移轉憑單目前的數量（可手動改）
+                box.querySelector('.q-q').value = it.querySelector('.f-q').value;
+                box.querySelector('.q-d').value = it.querySelector('.f-d').value;
+                box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+            };
+            it.querySelector('.q-go').onclick = function () {
+                var box = it.querySelector('.qs');
+                post({ action: 'baf_add_send', fid: f, maker_no: it.getAttribute('data-fno'), maker: it.getAttribute('data-fname'), send_qty: box.querySelector('.q-q').value, date: box.querySelector('.q-d').value },
+                    function (r) { if (r.success) { toast('已補發單', true); load('已補發單給「' + it.getAttribute('data-fname') + '」', true); refreshMain(); } else msg(r.message, false); });
+            };
+        }
     }
     function bindNew() {
-        var mk = drawer.querySelector('#egaf-mk'), dl = drawer.querySelector('#egaf-mk-dl'), pick = null;
-        function find(vv) { var h = null; Array.prototype.forEach.call(dl.options, function (o) { if (o.value === vv) h = { no: o.getAttribute('data-no'), name: o.getAttribute('data-name') }; }); return h; }
-        mk.addEventListener('input', function () {
-            var vv = mk.value.trim(); pick = find(vv); if (pick || vv.length < 1) return;
-            w.jQuery.post('', { action: 'search_maker', term: vv, search_type: /^[A-Za-z0-9-]+$/.test(vv) ? 'no' : 'name' }, function (res) {
-                dl.innerHTML = '';
-                if (res && res.success && Array.isArray(res.data)) res.data.forEach(function (m) { var o = document.createElement('option'); o.value = m.maker_id_no + ' ' + m.maker_id; o.setAttribute('data-no', m.maker_id_no); o.setAttribute('data-name', m.maker_id); dl.appendChild(o); });
-            }, 'json');
-        });
+        var pick = null;
+        makerPicker(drawer.querySelector('#egaf-mk'), function (p) { pick = p; });
         drawer.querySelector('#egaf-ns-go').onclick = function () {
-            var pk = find(mk.value.trim()) || pick;
             if (!stationFilter) { msg('請先在「製程」下拉選一個製程，再新增發單', false); return; }
-            if (!pk || !pk.no) { msg('請從清單挑選廠商', false); return; }
-            post({ action: 'baf_add_send', fid: stationFilter, maker_no: pk.no, maker: pk.name, send_qty: drawer.querySelector('#egaf-ns-q').value, date: drawer.querySelector('#egaf-ns-d').value },
+            if (!pick || !pick.no) { msg('請從下方列出的廠商清單點選一家廠商', false); return; }
+            post({ action: 'baf_add_send', fid: stationFilter, maker_no: pick.no, maker: pick.name, send_qty: drawer.querySelector('#egaf-ns-q').value, date: drawer.querySelector('#egaf-ns-d').value },
                 function (r) { if (r.success) { load('已新增發單', true); refreshMain(); } else msg(r.message, false); });
         };
         drawer.querySelector('#egaf-nr-go').onclick = function () {
@@ -201,5 +313,5 @@
         };
         if (unlocked) go(); else promptPw(go);
     }
-    w.EGBomAdminFix = { open: open, close: close };
+    w.EGBomAdminFix = { open: open, close: close, renderWarn: renderWarn };
 })(window);

@@ -18,7 +18,7 @@ if (!function_exists('baf_list')) {
             $proc[(int)$p['bom_ing_fid']] = ['sn' => $sn, 'label' => $lab];
             $stations[] = ['fid' => (int)$p['bom_ing_fid'], 'label' => $lab, 'sqty' => (float)$p['sqty']];
         }
-        if (!$proc) return ['rows' => [], 'stations' => [], 'batches' => []];
+        if (!$proc) return ['rows' => [], 'stations' => [], 'batches' => [], 'warn' => [], 'bom_sqty' => 0];
         $in = implode(',', array_keys($proc));
         $rows = []; $batches = [];
         $mk = function ($no) use ($db) { static $c = []; if ($no === null || $no === '') return ''; if (!isset($c[$no])) { $q = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=?"); $q->execute([$no]); $c[$no] = (string)$q->fetchColumn(); } return $c[$no]; };
@@ -55,7 +55,7 @@ if (!function_exists('baf_list')) {
             $sn = (int)$t['bom_sn']; $f = $fidBySn[$sn] ?? 0;
             $d = !empty($t['transfer_date']) ? substr($t['transfer_date'], 0, 10) : substr((string)$t['created_at'], 0, 10);
             $rows[] = ['kind' => 'transfer', 'id' => (int)$t['transfer_id'], 'fid' => $f, 'sn' => $sn, 'station' => $f ? $proc[$f]['label'] : ('SN ' . $sn), 'date' => $d,
-                       'ts' => $d . ' 12:00:00', 'no' => (string)($t['transfer_no'] ?? ''), 'from' => $mk($t['maker_from']) ?: (string)$t['maker_from'],
+                       'ts' => $d . ' 12:00:00', 'no' => (string)($t['transfer_no'] ?? ''), 'from_no' => (string)($t['maker_from'] ?? ''), 'from' => $mk($t['maker_from']) ?: (string)$t['maker_from'],
                        'to' => $mk($t['maker_to']) ?: (string)$t['maker_to'], 'qty' => (int)($t['transfer_qty'] ?: $t['sqty'])];
         }
         try {
@@ -69,8 +69,22 @@ if (!function_exists('baf_list')) {
                            'ts' => (string)$a['created_at'], 'no' => (string)$a['abnormal_order_no'], 'text' => mb_substr((string)$a['abnormal_phenomenon'], 0, 40), 'ng' => (float)$a['ng_qty']];
             }
         } catch (Throwable $e) { /* 異常單表缺漏不擋其他資料 */ }
+        // ERP匯入／未採用：bom_ing 內「已被拆批併走(is_consumed=1)」或「標記跳過(skip)」的紀錄——製程列表不顯示它們，但資料還在
+        $iq = $db->prepare("SELECT bi.*, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? AND (bi.is_consumed=1 OR bi.processing_state='skip') ORDER BY bi.bom_sn, bi.bom_ing_fid");
+        $iq->execute([$bom]);
+        foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $b) {
+            $f = (int)$b['bom_ing_fid'];
+            $d = substr((string)($b['outsource_date'] ?: ($b['return_date'] ?: ($b['Modified_At'] ?? ''))), 0, 10);
+            if ($d === '') $d = '0000-00-00';
+            $sn = (int)$b['bom_sn'];
+            $rows[] = ['kind' => 'ing', 'id' => $f, 'fid' => $f, 'sn' => $sn, 'station' => '第' . ($ord[$sn] ?? '?') . '關 ' . (trim((string)$b['ProcessName']) !== '' ? $b['ProcessName'] : $b['process_no']), 'date' => $d, 'ts' => $d . ' 00:00:01',
+                       'maker' => (string)($b['maker_id'] ?? ''), 'qty' => (float)$b['sqty'], 'state' => (string)$b['processing_state'], 'batch_label' => (string)($b['batch_label'] ?? ''),
+                       'reason' => (int)$b['is_consumed'] === 1 ? '已被拆批／合批併走（is_consumed）' : '標記為跳過（skip）',
+                       'od' => !empty($b['outsource_date']) ? substr($b['outsource_date'], 0, 10) : '', 'rd' => !empty($b['return_date']) ? substr($b['return_date'], 0, 10) : ''];
+        }
         usort($rows, fn($a, $b) => strcmp($a['ts'], $b['ts']) ?: ($a['sn'] <=> $b['sn']));
-        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches];
+        $chk = baf_check($db, $bom);
+        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty']];
     }
 }
 
@@ -111,5 +125,37 @@ if (!function_exists('baf_transfer_save')) {
             if ($fid) ber_log($db, $fid, 'transfer_edit', '管理員修正移轉憑單#' . $tid . '：數量 ' . $o['transfer_qty'] . '→' . $qty . '、日期 ' . $o['transfer_date'] . '→' . ($date ?? '不變'), $uid);
             $db->commit();
         } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+}
+
+if (!function_exists('baf_check')) {
+    /** 各製程（同 bom_sn 合計）的 發單／移轉憑單／QC檢驗 總數，超過 BOM 發單數的列出來（管理員在修改視窗的發單數下方看到紅字）。 */
+    function baf_check(PDO $db, string $bom): array {
+        $q = $db->prepare("SELECT sqty FROM bom WHERE bom=? LIMIT 1");
+        $q->execute([$bom]);
+        $ref = (float)$q->fetchColumn();
+        $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no WHERE bi.bom=? AND bi.is_consumed=0 ORDER BY bi.bom_sn, bi.bom_ing_fid");
+        $st->execute([$bom]);
+        $sn = []; $ord = []; $o = 0; $fidSn = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) {
+            $k = (int)$p['bom_sn'];
+            if (!isset($ord[$k])) { $ord[$k] = ++$o; $sn[$k] = ['label' => '第' . $o . '關 ' . (trim((string)$p['ProcessName']) !== '' ? $p['ProcessName'] : $p['process_no']), 'send' => 0.0, 'transfer' => 0.0, 'qc' => 0.0]; }
+            $fidSn[(int)$p['bom_ing_fid']] = $k;
+        }
+        if (!$fidSn || $ref <= 0) return ['bom_sqty' => $ref, 'items' => []];
+        $in = implode(',', array_keys($fidSn));
+        foreach ($db->query("SELECT bom_ing_fid, SUM(send_qty - COALESCE(withdrawn_qty,0)) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN ($in) GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $r) $sn[$fidSn[(int)$r['bom_ing_fid']]]['send'] += (float)$r['s'];
+        foreach ($db->query("SELECT bom_ing_fid_ref f, SUM(COALESCE(QC_ok_sqty,0)+COALESCE(QC_aod_sqty,0)+COALESCE(QC_QQ_sqty,0)+COALESCE(QC_ng_sqty,0)) s FROM qc_check WHERE bom_ing_fid_ref IN ($in) GROUP BY bom_ing_fid_ref")->fetchAll(PDO::FETCH_ASSOC) as $r) $sn[$fidSn[(int)$r['f']]]['qc'] += (float)$r['s'];
+        $tq = $db->prepare("SELECT bom_sn, SUM(transfer_qty) s FROM bom_ing_transfer_log WHERE bom=? GROUP BY bom_sn");
+        $tq->execute([$bom]);
+        foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $r) if (isset($sn[(int)$r['bom_sn']])) $sn[(int)$r['bom_sn']]['transfer'] += (float)$r['s'];
+        $names = ['send' => '發單', 'transfer' => '移轉憑單', 'qc' => 'QC檢驗'];
+        $items = [];
+        foreach ($sn as $k => $v) {
+            $mx = 'send';
+            foreach (['transfer', 'qc'] as $kk) if ($v[$kk] > $v[$mx]) $mx = $kk;
+            if ($v[$mx] > $ref + 1e-9) $items[] = ['label' => $v['label'], 'send' => $v['send'], 'transfer' => $v['transfer'], 'qc' => $v['qc'], 'max_name' => $names[$mx], 'max' => $v[$mx]];
+        }
+        return ['bom_sqty' => $ref, 'items' => $items];
     }
 }
