@@ -208,7 +208,6 @@
         drawer.classList.toggle('wide', viewMode === 'flow');
         if (viewMode === 'flow') { renderFlow(); return; }
         var html = '', last = null, shown = 0;
-        if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         rows.forEach(function (x) {
             if (!on[x.kind]) return;
             if (stationFilter && String(x.fid) !== String(stationFilter)) return;
@@ -249,7 +248,6 @@
                 + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div></div>';
         }
         var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。SN 對應請切到「時間軸」設定。</div>';
-        if (DATA.warn && DATA.warn.length) html += '<div class="wn">' + warnHtml({ items: DATA.warn, bom_sqty: DATA.bom_sqty }) + '</div>';
         // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
         var isDst = {};
