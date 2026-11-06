@@ -245,7 +245,7 @@
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
             return '<div class="fl-t ecard" style="margin:0;" draggable="true" title="可拖到發單卡片改流向" data-tid="' + t.id + '" data-sn="' + t.sn + '" data-fid="' + t.fid + '">'
                 + '<div><span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '</div>'
-                + rowHtml(t)
+                + rowHtml(t, true)
                 + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div></div>';
         }
         var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。SN 對應請切到「時間軸」設定。</div>';
@@ -260,7 +260,7 @@
         function bnode(b) {
             seen[b.id] = true;
             var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-sn="' + b.sn + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
-                + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(rowHtml).join('') + '</div>';
+                + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(function (r) { return rowHtml(r); }).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
             return '<div class="tn">' + h + (kids ? '<div class="tk-col">' + kids + '</div>' : '') + '</div>';
@@ -345,8 +345,8 @@
     // 每張移轉憑單是否「發單不夠」：同一關、同一家轉出廠商，依日期累加移轉量，超過該廠商已登記的發單總量的那幾張，缺的量就是要補的發單數
     function calcDeficit() {
         var rows = DATA.rows || [], sends = {}, groups = {}, def = {};
-        rows.forEach(function (r) { if (r.kind === 'send') { var k = r.fid + '|' + r.maker_no; sends[k] = (sends[k] || 0) + (parseFloat(r.send_qty) || 0); } });
-        rows.forEach(function (r) { if (r.kind === 'transfer' && r.fid && r.from_no) { var k = r.fid + '|' + r.from_no; (groups[k] = groups[k] || []).push(r); } });
+        rows.forEach(function (r) { if (r.kind === 'send') { var k = r.sn + '|' + r.maker_no; sends[k] = (sends[k] || 0) + (parseFloat(r.send_qty) || 0); } });
+        rows.forEach(function (r) { if (r.kind === 'transfer' && r.fid && r.from_no) { var k = r.sn + '|' + r.from_no; (groups[k] = groups[k] || []).push(r); } });
         Object.keys(groups).forEach(function (k) {
             var cum = 0, S = sends[k] || 0;
             groups[k].sort(function (a, b) { return (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id); }).forEach(function (r) {
@@ -361,7 +361,7 @@
         (DATA.stations || []).forEach(function (s) { if (seen[s.sn]) return; seen[s.sn] = 1; opts += '<option value="' + s.sn + '"' + (x.aliased && String(s.sn) === String(x.sn) ? ' selected' : '') + '>' + esc(s.label) + '（SN ' + s.sn + '）</option>'; });
         return '<div class="row2 al" style="background:#F3F3F3;border:1px dashed #bbb;padding:4px 6px;">SN ' + x.raw_sn + (x.orphan ? ' 不是這個 BOM 的製程（ERP 拆單產生）' : ' 已對應') + '，算同一關：<select class="al-sel" style="height:24px;font-size:12px;max-width:230px;">' + opts + '</select> <button class="btn btn-default btn-xs al-go" data-sn="' + x.raw_sn + '">儲存對應</button></div>';
     }
-    function rowHtml(x) {
+    function rowHtml(x, noAlias) {
         var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
             + '<span class="k" style="background:' + COLORS[x.kind] + ';">' + LABELS[x.kind] + '</span><b>' + esc(x.station || '') + '</b>';
         if (x.kind === 'send') {
@@ -379,7 +379,7 @@
             h += ' <span style="color:#7a4a10;">' + esc(x.no) + '　' + esc(x.from) + (x.to ? ' → ' + esc(x.to) : '') + '</span><div class="row2"><span class="gp">移轉日 ' + inp('f-d', x.date, 125, 'date').replace('<input', '<input disabled') + '</span><span class="gp nl">數量 ' + inp('f-q', x.qty, 70).replace('<input', '<input disabled') + '</span>'
               + (need ? '<span style="margin-left:auto;"><button class="btn btn-success btn-xs f-qs" title="這一關發給「' + esc(x.from) + '」的發單數量不夠（缺 ' + nz(defQ) + '），快速補一筆">快速補發單</button></span>' : '') + '</div>'
               + (need ? '<div class="qs row2" style="display:none;background:#fff;border:1px dashed #E4D3BC;padding:4px 6px;">補發單給「' + esc(x.from) + '」　數量 ' + inp('q-q', nz(defQ), 70) + ' 送出日 ' + inp('q-d', x.date, 125, 'date') + ' <button class="btn btn-warning btn-xs q-go">確認補發單</button></div>' : '')
-              + ((x.orphan || x.aliased) ? aliasHtml(x) : '');
+              + ((!noAlias && (x.orphan || x.aliased)) ? aliasHtml(x) : '');
         } else if (x.kind === 'ing') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><span style="margin-left:6px;color:#fff;background:#8B8B8B;border-radius:3px;padding:0 6px;font-size:11px;">' + esc(x.reason) + '</span>'
               + '<div class="row2" style="color:#666;">bom_ing #' + x.id + '　發單數 ' + nz(x.qty) + '　狀態 ' + esc(STATE_TXT[x.state] || x.state) + (x.batch_label ? '　批次 ' + esc(x.batch_label) : '') + '　發包日 ' + esc(x.od || '-') + '　回廠日 ' + esc(x.rd || '-')

@@ -249,24 +249,39 @@ if (!function_exists('baf_flow')) {
         }
         usort($sends, fn($a, $b) => strcmp($a['date'], $b['date']) ?: ($a['id'] <=> $b['id']));
         usort($tfs, fn($a, $b) => strcmp($a['date'], $b['date']) ?: ($a['id'] <=> $b['id']));
+        // 修正舊版拖放造成的錯誤指定：「接續發單」指到同一關或更前面的批次是不可能的，改視為「來源發單」
+        $sendById = [];
+        foreach ($sends as $b) $sendById[$b['id']] = $b;
+        foreach ($tfs as $t) {
+            $m = $man[$t['id']] ?? null;
+            if ($m && $m['dst'] && isset($sendById[$m['dst']]) && $sendById[$m['dst']]['sn'] <= $t['sn']) {
+                if (!$m['src']) $man[$t['id']]['src'] = $m['dst'];
+                $man[$t['id']]['dst'] = null;
+            }
+        }
         $out = [];
         foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true];
         $fill = function (string $field, callable $groupOf) use (&$out, $man, $tfs) {
-            $cum = [];
+            $used = []; // 每個發單批次已被分配掉多少：先把管理員手動指定的扣掉，再讓推測的依日期填「還有空」的批次
             foreach ($tfs as $t) {
                 $id = $t['id'];
-                if (isset($man[$id]) && $man[$id][$field] !== null) { $out[$id][$field] = $man[$id][$field]; $out[$id][$field . '_auto'] = false; continue; }
+                if (isset($man[$id]) && $man[$id][$field] !== null) {
+                    $out[$id][$field] = $man[$id][$field]; $out[$id][$field . '_auto'] = false;
+                    if ($man[$id][$field] > 0) $used[$man[$id][$field]] = ($used[$man[$id][$field]] ?? 0.0) + (float)$t['qty'];
+                }
+            }
+            foreach ($tfs as $t) {
+                $id = $t['id'];
+                if (isset($man[$id]) && $man[$id][$field] !== null) continue;
                 $g = $groupOf($t);
                 if (!$g) continue;
                 [$key, $pool] = $g;
-                $start = $cum[$key] ?? 0.0;
-                $cum[$key] = $start + (float)$t['qty'];
-                $acc = 0.0; $pick = 0;
+                $pick = 0;
                 foreach ($pool as $b) {
-                    $acc += (float)$b['send_qty'];
-                    if ($start < $acc - 1e-9) { $pick = $b['id']; break; }
+                    if ((float)$b['send_qty'] - ($used[$b['id']] ?? 0.0) > 1e-9) { $pick = $b['id']; break; }
                 }
                 if (!$pick && $pool) $pick = end($pool)['id']; // 發單量已用完仍有移轉：掛在最後一批（總數異常會另外提示）
+                $used[$pick] = ($used[$pick] ?? 0.0) + (float)$t['qty'];
                 $out[$id][$field] = $pick;
             }
         };
