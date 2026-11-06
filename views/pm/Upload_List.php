@@ -577,6 +577,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /藍紫底 -->
+
+                                    <?php include __DIR__ . '/_bom_attach_upload_ui.php'; ?>
                                     </div><!-- /tabErpImport -->
 <?php if ($isPageAdmin): ?>
                                     <div class="tab-pane" id="tabBackfill">
