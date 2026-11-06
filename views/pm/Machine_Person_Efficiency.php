@@ -352,12 +352,8 @@ $qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_dat
         <!-- 機台 -->
         <div class="tab-pane active" id="tab_mach">
             <div class="panel-box">
-                <h4>機台工時（前 15 台）</h4>
-                <div class="sub">橘色＝生產、淺橘＝架機（小時）。稼動率＝生產工時 ÷ （<?= $days_diff ?> 天 × <?= $hours_per_day ?> 小時）。</div>
-                <?php if ($mach): ?><div id="chMach" class="chart-h"></div><?php else: ?><div class="empty">這段期間沒有報工資料</div><?php endif; ?>
-            </div>
-            <div class="panel-box">
                 <h4>機台明細</h4>
+                <div class="sub">稼動率＝生產工時 ÷（<?= $days_diff ?> 天 × <?= $hours_per_day ?> 小時）。點表頭可排序。</div>
                 <table id="tblMach" class="table table-bordered table-striped" style="width:100%">
                     <thead><tr><th>機台</th><th>報工天數</th><th>報工筆數</th><th>架機(H)</th><th>生產(H)</th><th style="min-width:130px">稼動率</th><th>良品</th><th>NG</th><th>不良率</th><th>時產(PCS/H)</th></tr></thead>
                     <tbody>
@@ -629,7 +625,6 @@ $(function () {
             plotOptions: { series: { stacking: 'normal' }, bar: { dataLabels: { enabled: true, style: { textOutline: 'none', fontSize: '10px' } } } },
             series: [{ name: '生產', data: d.prod, color: C.prod }, { name: '架機', data: d.setup, color: C.setup }] });
     }
-    stacked('chMach', <?= json_encode($c_m) ?>);
     stacked('chUserHours', <?= json_encode($c_u) ?>);
     if (document.getElementById('chUserEff')) {
         var ce = <?= json_encode($c_e) ?>;
