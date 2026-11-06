@@ -27,9 +27,9 @@
     // ── 修改視窗「發單數」下方的總數異常提示（只有管理員看得到；後端也限管理員）──
     function warnHtml(r) {
         if (!r || !r.items || !r.items.length) return '';
-        return '<b>總數異常</b>（BOM 發單數 ' + nz(r.bom_sqty) + ' pcs）：<br>' + r.items.map(function (i) {
-            return esc(i.label) + '：最多 ' + esc(i.max_name) + ' = ' + nz(i.max) + ' pcs（發單 ' + nz(i.send) + '／移轉憑單 ' + nz(i.transfer) + '／QC檢驗 ' + nz(i.qc) + '）';
-        }).join('<br>');
+        // 只列「超過發單數最多」的那一關
+        var top = r.items.reduce(function (a, b) { return (parseFloat(b.max) > parseFloat(a.max)) ? b : a; });
+        return '<b>總數異常：</b><br>' + esc(top.label) + '：最多 ' + esc(top.max_name) + ' = ' + nz(top.max) + ' pcs（發單 ' + nz(top.send) + '／移轉憑單 ' + nz(top.transfer) + '／QC檢驗 ' + nz(top.qc) + '）';
     }
     function renderWarn(b, tries) {
         tries = tries || 0;
