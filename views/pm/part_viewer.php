@@ -614,11 +614,13 @@ function showFile(path, type, name, canDl) {
     var _paintFormats = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff'];
     var _isPaintable   = _paintFormats.indexOf(_currentType) !== -1;
 
+    // /nas/ERP/ 的實體位置已於 2026-11-03 搬到 AS9100 根資料夾，Apache 別名(/nas→Z:\BOM)找不到，改走 bom_download.php 解析新舊位置
+    var _src = (path.indexOf('/nas/ERP/') === 0) ? 'bom_download.php?inline=1&path=' + encodeURIComponent(path) : path;
     if (_currentType === 'pdf') {
-        $('#bom-pdf-frame').attr('src', path).show();
+        $('#bom-pdf-frame').attr('src', _src).show();
         $('#btn-save, #btn-print').show();
     } else if (_isImg) {
-        $('#bom-zoom-img').attr('src', path);
+        $('#bom-zoom-img').attr('src', _src);
         $('#img-zoom-wrap').css('display', 'flex');
         $('#btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-print').show();
     } else {
