@@ -324,7 +324,7 @@ function renderGearRows() {
         // Face Width
         html += '<div class="col-md-2" data-field-col="Face_Width" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
         html += '<label style="font-size:11px;">齒寬 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Face_Width" value="'+_gsEsc(_gsTF(g.Face_Width))+'" placeholder="20" '+ro+'>';
+        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Face_Width" value="'+_gsEsc(_gsTF(g.Face_Width))+'" placeholder="20" inputmode="decimal" data-eg-calc="1" data-eg-hint="可輸入算式，例：100-50 按 Enter" '+ro+'>';
         html += '</div></div>';
         // Pressure Angle
         html += '<div class="col-md-2" data-field-col="Pressure_Angle" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
