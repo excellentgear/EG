@@ -7817,14 +7817,14 @@ foreach($dCounts as $c) {
                     $('#part-drawing-no-badge').hide();
                 }
                 loadQuotesAndHistory(partTxt);
-                loadPartStock(partTxt);
+                if (_partChanged) loadPartStock(partTxt);   // 料號沒變就不重載（避免點欄位時庫存面板一直重畫跳動）
             } else if (partTxt !== '') {
                 $('#part-id-badge').hide();
                 $('#part-id-missing').show();
                 $('#btn-quick-add-part').show();
                 $('#part-drawing-no-badge').hide();
                 loadQuotesAndHistory(partTxt);
-                loadPartStock(partTxt);
+                if (_partChanged) loadPartStock(partTxt);   // 料號沒變就不重載（避免點欄位時庫存面板一直重畫跳動）
             } else {
                 $('#part-id-badge').hide();
                 $('#part-id-missing').hide();
@@ -8302,6 +8302,7 @@ foreach($dCounts as $c) {
         function openQuickAddCustomer() {
             $('#qac_id').val('');
             $('#qac_name').val($('#client_name_input').val()); // 預填已輸入的名稱
+                var _partChanged = (partTxt !== _lastLoadedPart);
             $('#qac_addr').val('');
             $('#qac-error').hide();
             $('#quickAddCustomerModal').modal('show');
@@ -8309,6 +8310,7 @@ foreach($dCounts as $c) {
         function submitQuickAddCustomer() {
             var id   = $('#qac_id').val().trim();
             var name = $('#qac_name').val().trim();
+                var _partChanged = (partTxt !== _lastLoadedPart);
             var addr = $('#qac_addr').val().trim();
             if (!id || !name) { $('#qac-error').text('客戶代碼與名稱均為必填').show(); return; }
             $.post('', { action:'quick_add_customer', customer_id:id, customer_name:name, customer_addr:addr }, function(res) {
