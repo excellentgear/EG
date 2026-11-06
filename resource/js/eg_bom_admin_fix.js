@@ -112,7 +112,7 @@
             + '#egaf-drawer .fl-st{border:1px solid #E4B98A;border-radius:5px;margin:8px 0;background:#FFFCF7;}'
             + '#egaf-drawer .fl-h{background:#F6E2C6;padding:4px 8px;font-weight:bold;color:#6B4423;border-radius:5px 5px 0 0;}'
             + '#egaf-drawer .fl-b{margin:6px 8px 6px 14px;border-left:4px solid #F0A24B;background:#fff;padding:4px 8px;border-radius:0 4px 4px 0;}'
-            + '#egaf-drawer .fl-b.over,#egaf-drawer .fl-un.over{outline:2px dashed #C0561F;background:#FFF1C9;}'
+            + '#egaf-drawer .fl-t.over,#egaf-drawer .fl-b.over,#egaf-drawer .fl-un.over{outline:2px dashed #C0561F;background:#FFF1C9;}'
             + '#egaf-drawer .fl-t{margin:4px 0 4px 16px;border-left:4px solid #C0561F;background:#FDF3E3;padding:3px 8px;border-radius:0 4px 4px 0;cursor:grab;font-size:12px;}'
             + '#egaf-drawer .fl-t select{height:22px;font-size:11px;max-width:200px;}'
             + '#egaf-drawer .fl-in{margin:3px 0 3px 16px;color:#2E6B3F;font-size:12px;border-left:4px solid #2E8B57;padding-left:8px;}'
@@ -259,7 +259,7 @@
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
         function bnode(b) {
             seen[b.id] = true;
-            var h = '<div class="fl-b ecard" style="margin:0;" data-batch="' + b.id + '" data-sn="' + b.sn + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
+            var h = '<div class="fl-b ecard" style="margin:0;" draggable="true" title="可拖到上一關的移轉憑單卡片上，設為它的接續發單" data-batch="' + b.id + '" data-sn="' + b.sn + '" data-fid="' + b.fid + '"><div style="margin-bottom:1px;"><span style="background:#C0561F;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(stOf[b.fid] ? stOf[b.fid].label : '') + '</span> <b>' + esc(b.maker || '未登記廠商') + '</b></div>' + rowHtml(b)
                 + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(function (r) { return rowHtml(r); }).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
@@ -302,17 +302,31 @@
         });
         body.querySelectorAll('.fl-t').forEach(function (c) {
             c.ondragstart = function (e) { e.dataTransfer.setData('text/plain', c.getAttribute('data-tid') + '|' + c.getAttribute('data-sn')); e.dataTransfer.effectAllowed = 'move'; };
+            // 把發單卡片拖到移轉憑單卡片上＝設為這張移轉憑單的接續發單（必須在它的後面關卡）
+            c.ondragover = function (e) { e.preventDefault(); c.classList.add('over'); };
+            c.ondragleave = function () { c.classList.remove('over'); };
+            c.ondrop = function (e) {
+                e.preventDefault(); e.stopPropagation(); c.classList.remove('over');
+                var p = (e.dataTransfer.getData('text/plain') || '').split('|');
+                if (p[0].indexOf('B:') !== 0) return;
+                var bid = p[0].slice(2), bsn = parseInt(p[1], 10), tsn = parseInt(c.getAttribute('data-sn'), 10);
+                if (!(bsn > tsn)) { msg('接續發單必須在這張移轉憑單的後面關卡', false); return; }
+                setFlow(c.getAttribute('data-tid'), 'dst', parseInt(bid, 10));
+            };
+        });
+        body.querySelectorAll('.fl-b[data-batch]').forEach(function (bc) {
+            bc.ondragstart = function (e) { e.dataTransfer.setData('text/plain', 'B:' + bc.getAttribute('data-batch') + '|' + bc.getAttribute('data-sn')); e.dataTransfer.effectAllowed = 'move'; };
         });
         body.querySelectorAll('.fl-b,.fl-un').forEach(function (box) {
             box.ondragover = function (e) { e.preventDefault(); box.classList.add('over'); };
             box.ondragleave = function () { box.classList.remove('over'); };
             box.ondrop = function (e) {
                 e.preventDefault(); e.stopPropagation(); box.classList.remove('over');
-                var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2) return;
+                var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2 || p[0].indexOf('B:') === 0) return;
                 var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-sn') === p[1];
                 if (batch === 0) setFlow(p[0], 'src', 0);
                 else if (sameStation) setFlow(p[0], 'src', batch);
-                else if (batch > 0) setFlow(p[0], 'dst', batch);
+                else if (batch > 0) { if (parseInt(box.getAttribute('data-sn'), 10) > parseInt(p[1], 10)) setFlow(p[0], 'dst', batch); else msg('接續發單必須在移轉憑單的後面關卡', false); }
             };
         });
         updDn();
