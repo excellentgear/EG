@@ -132,8 +132,38 @@ function tla_top_share(array $byX, int $n = 3): array
  * 本期才第一次出現加工紀錄的廠商（比對全表最早一筆移轉日期是否落在本期）。
  * 回傳 [['name'=>廠商名稱,'first_date'=>YYYY-MM-DD], ...]，供自動分析卡片附上日期用。
  */
+/**
+ * 每個廠商代號第一次出現的日期（全表彙總）。bom_ing_transfer_log 的 transfer_date 沒有索引，
+ * 每次都全表掃描約 0.3 秒，而結果幾乎不變，所以快取 10 分鐘（系統暫存檔，所有人共用）。
+ * 回傳 [['maker_from'=>,'first_date'=>,'maker_name'=>], ...]
+ */
+function tla_first_dates_raw(PDO $db): array
+{
+    $f = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'eg_tla_first_dates.json';
+    if (is_file($f) && (time() - filemtime($f)) < 600) {
+        $d = json_decode((string)@file_get_contents($f), true);
+        if (is_array($d)) return $d;
+    }
+    $sql = "SELECT t.maker_from, MIN(t.transfer_date) AS first_date, MAX(m.maker_id) AS maker_name
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no
+            GROUP BY t.maker_from";
+    $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    @file_put_contents($f, json_encode($rows, JSON_UNESCAPED_UNICODE));
+    return $rows;
+}
+
 function tla_new_makers(PDO $db, string $start, string $end, array $ptIds = []): array
 {
+    if (!$ptIds) {   // 沒有製程大項篩選＝全表彙總，直接用快取
+        $rows = array_values(array_filter(tla_first_dates_raw($db), function ($r) use ($start, $end) {
+            return $r['first_date'] >= $start && $r['first_date'] <= $end;
+        }));
+        usort($rows, function ($a, $b) { return strcmp($a['first_date'], $b['first_date']); });
+        $out = [];
+        foreach ($rows as $r) $out[] = ['name' => $r['maker_name'] ?: $r['maker_from'], 'first_date' => $r['first_date']];
+        return $out;
+    }
     $sql = "SELECT t.maker_from, MIN(t.transfer_date) AS first_date, MAX(m.maker_id) AS maker_name
             FROM bom_ing_transfer_log t
             LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no";
@@ -164,12 +194,8 @@ function tla_new_makers(PDO $db, string $start, string $end, array $ptIds = []):
  */
 function tla_maker_first_dates(PDO $db): array
 {
-    $sql = "SELECT t.maker_from, MIN(t.transfer_date) AS first_date, MAX(m.maker_id) AS maker_name
-            FROM bom_ing_transfer_log t
-            LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no
-            GROUP BY t.maker_from";
     $out = [];
-    foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    foreach (tla_first_dates_raw($db) as $r) {
         $name = trim((string)($r['maker_name'] ?: $r['maker_from']));
         if ($name === '') continue;
         if (!isset($out[$name]) || $r['first_date'] < $out[$name]) $out[$name] = $r['first_date'];

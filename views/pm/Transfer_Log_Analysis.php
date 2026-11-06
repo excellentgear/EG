@@ -98,6 +98,50 @@ $pt_ids         = array_values(array_unique(array_filter(array_map('intval', $pt
 $cmp_basis      = in_array(($_GET['cmp'] ?? ''), ['prev', 'yoy'], true) ? $_GET['cmp'] : 'prev';
 $process_type_opts = tla_process_types($conn->getPDO());
 
+/* ── 資料缺漏檢查（2026-11-06 新增）：有移轉單據的製程站，是否缺 QC 檢驗／缺報工 ──
+ * 站別＝移轉單據的 製令(bom)＋站序(bom_sn) 對到 bom_ing；QC＝qc_check、報工＝pm_process_daily_report。
+ * 期間與製程大項沿用上方篩選。資料量大（整年數千列），所以不隨頁面輸出，點開「缺漏檢查」分頁才用 AJAX 取。 */
+if (isset($_GET['chk_list'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!$bm_perms['canView']) { echo json_encode(['ok' => 0, 'msg' => '沒有檢視權限']); exit; }
+    try {
+        $csql = "SELECT t.bom, t.bom_sn, MAX(t.transfer_date) AS last_date,
+                    SUM(t.transfer_qty) AS tr_qty, GROUP_CONCAT(DISTINCT t.transfer_no ORDER BY t.transfer_no SEPARATOR ', ') AS tr_nos,
+                    MIN(t.maker_from) AS maker_code, MAX(m.maker_id) AS maker_name, MAX(m.internal) AS is_internal,
+                    MAX(pn.ProcessName) AS ProcessName, MAX(b.Client_Name) AS Client_Name, COALESCE(MAX(b.d_id), MAX(t.product_id)) AS part_no,
+                    (SELECT COUNT(*) FROM qc_check q WHERE q.bom_ing_fid_ref = CAST(bi.bom_ing_fid AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci) AS qc_cnt,
+                    (SELECT COUNT(*) FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid) AS rep_cnt
+                 FROM bom_ing_transfer_log t
+                 JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+                 LEFT JOIN bom b ON b.bom = t.bom
+                 LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+                 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                 WHERE t.transfer_date BETWEEN :s AND :e";
+        $cp = [':s' => $start_date, ':e' => $end_date];
+        if ($pt_ids) {
+            $ph2 = [];
+            foreach ($pt_ids as $i => $id) { $k = ':cp' . $i; $ph2[] = $k; $cp[$k] = $id; }
+            $csql .= " AND pn.process_type_id IN (" . implode(',', $ph2) . ")";
+        }
+        $csql .= " GROUP BY bi.bom_ing_fid, t.bom, t.bom_sn
+                   HAVING qc_cnt = 0 OR rep_cnt = 0
+                   ORDER BY last_date DESC, t.bom, t.bom_sn";
+        $cst = $conn->getPDO()->prepare($csql);
+        $cst->execute($cp);
+        $out = [];
+        foreach ($cst->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $out[] = [
+                'd' => $c['last_date'], 'cl' => (string)$c['Client_Name'], 'bom' => $c['bom'], 'pn' => (string)$c['part_no'],
+                'sn' => (int)$c['bom_sn'], 'pr' => (string)$c['ProcessName'], 'mk' => (string)($c['maker_name'] ?: $c['maker_code']),
+                'in' => (int)$c['is_internal'] === 1 ? 1 : 0, 'no' => (string)$c['tr_nos'], 'q' => (int)$c['tr_qty'],
+                'qc' => (int)$c['qc_cnt'], 'rp' => (int)$c['rep_cnt'],
+            ];
+        }
+        echo json_encode(['ok' => 1, 'rows' => $out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $ex) { echo json_encode(['ok' => 0, 'msg' => '檢查失敗：' . $ex->getMessage()]); }
+    exit;
+}
+
 // 查詢資料：bom_ing_transfer_log 結合 bom 取得客戶與規格資訊
 $sql = "SELECT
         t.transfer_id,
@@ -170,45 +214,6 @@ foreach ($rows as &$__r) {
     $__r['bill_ym_manual'] = (int)($__r['bill_ym_manual'] ?? 0);
 }
 unset($__r);
-
-/* ── 資料缺漏檢查（2026-11-06 新增）：有移轉單據的製程站，是否缺 QC 檢驗／缺報工 ──
- * 站別＝移轉單據的 製令(bom)＋站序(bom_sn) 對到 bom_ing；QC＝qc_check、報工＝pm_process_daily_report。
- * 期間與製程大項沿用上方篩選。 */
-$chk_rows = [];
-$chk_err = '';
-if ($bm_perms['canView']) {
-    try {
-        $csql = "SELECT bi.bom_ing_fid, t.bom, t.bom_sn, MAX(t.transfer_date) AS last_date, COUNT(*) AS tr_cnt,
-                    SUM(t.transfer_qty) AS tr_qty, GROUP_CONCAT(DISTINCT t.transfer_no ORDER BY t.transfer_no SEPARATOR ', ') AS tr_nos,
-                    MIN(t.maker_from) AS maker_code, MAX(m.maker_id) AS maker_name, MAX(m.internal) AS is_internal,
-                    MAX(pn.ProcessName) AS ProcessName, MAX(b.Client_Name) AS Client_Name, MAX(t.product_id) AS product_id,
-                    (SELECT COUNT(*) FROM qc_check q WHERE q.bom_ing_fid_ref = CAST(bi.bom_ing_fid AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci) AS qc_cnt,
-                    (SELECT COUNT(*) FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid) AS rep_cnt
-                 FROM bom_ing_transfer_log t
-                 JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
-                 LEFT JOIN bom b ON b.bom = t.bom
-                 LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
-                 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                 WHERE t.transfer_date BETWEEN :s AND :e";
-        $cp = [':s' => $start_date, ':e' => $end_date];
-        if ($pt_ids) {
-            $ph2 = [];
-            foreach ($pt_ids as $i => $id) { $k = ':cp' . $i; $ph2[] = $k; $cp[$k] = $id; }
-            $csql .= " AND pn.process_type_id IN (" . implode(',', $ph2) . ")";
-        }
-        $csql .= " GROUP BY bi.bom_ing_fid, t.bom, t.bom_sn
-                   HAVING qc_cnt = 0 OR rep_cnt = 0
-                   ORDER BY last_date DESC, t.bom, t.bom_sn";
-        $cst = $conn->getPDO()->prepare($csql);
-        $cst->execute($cp);
-        $chk_rows = $cst->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $ex) { $chk_err = '檢查失敗：' . $ex->getMessage(); }
-}
-$chk_noqc = $chk_norep = $chk_both = 0;
-foreach ($chk_rows as $__c) {
-    $a = (int)$__c['qc_cnt'] === 0; $b = (int)$__c['rep_cnt'] === 0;
-    if ($a) $chk_noqc++; if ($b) $chk_norep++; if ($a && $b) $chk_both++;
-}
 
 // 判斷圖表顯示單位 (日/週/月)
 $date_diff = (strtotime($end_date) - strtotime($start_date)) / 86400;
@@ -641,7 +646,7 @@ try {
                     <ul class="nav nav-tabs tl-tabs" role="tablist">
                         <li role="presentation" class="active"><a href="#tab-detail" data-toggle="tab" role="tab"><i class="fa fa-list"></i> 移轉明細</a></li>
                         <li role="presentation"><a href="#tab-stats" data-toggle="tab" role="tab"><i class="fa fa-bar-chart"></i> 統計分析</a></li>
-                        <li role="presentation"><a href="#tab-chk" data-toggle="tab" role="tab"><i class="fa fa-search"></i> 缺漏檢查 <span class="label label-<?= count($chk_rows) ? 'danger' : 'default' ?>"><?= count($chk_rows) ?></span></a></li>
+                        <li role="presentation"><a href="#tab-chk" data-toggle="tab" role="tab"><i class="fa fa-search"></i> 缺漏檢查 <span class="label label-default" id="chkBadge">…</span></a></li>
                     </ul>
                     <div class="tab-content">
                     <div role="tabpanel" class="tab-pane fade in active" id="tab-detail">
@@ -867,36 +872,17 @@ try {
                             「缺 QC」＝該站在 QC 檢驗紀錄一筆都沒有；「缺報工」＝該站在報工紀錄一筆都沒有。
                             外包廠商的站本來就不會有報工，請看「廠商類別」欄（廠內加工／外包）判斷；可用右側按鈕只看廠內加工。
                         </div>
-                        <?php if ($chk_err): ?><div class="alert alert-danger"><?= htmlspecialchars($chk_err) ?></div><?php endif; ?>
+                        <div id="chkMsg" class="text-muted" style="margin-bottom:6px;">點開此分頁後載入…</div>
                         <div style="margin-bottom:8px;">
-                            <span class="chk-chip on" data-f="">全部 <?= count($chk_rows) ?></span>
-                            <span class="chk-chip" data-f="noqc">缺 QC <?= $chk_noqc ?></span>
-                            <span class="chk-chip" data-f="norep">缺報工 <?= $chk_norep ?></span>
-                            <span class="chk-chip" data-f="both">兩者都缺 <?= $chk_both ?></span>
+                            <span class="chk-chip on" data-f="">全部 <b id="cn_all">-</b></span>
+                            <span class="chk-chip" data-f="noqc">缺 QC <b id="cn_noqc">-</b></span>
+                            <span class="chk-chip" data-f="norep">缺報工 <b id="cn_norep">-</b></span>
+                            <span class="chk-chip" data-f="both">兩者都缺 <b id="cn_both">-</b></span>
                             <label style="margin-left:14px;font-weight:normal;cursor:pointer;"><input type="checkbox" id="chkInternalOnly"> 只看廠內加工</label>
                         </div>
                         <table id="tblChk" class="table table-bordered table-striped" style="width:100%">
                             <thead><tr><th>最近移轉日</th><th>客戶</th><th>BOM</th><th>料號</th><th>站序</th><th>製程</th><th>廠商（移出）</th><th>廠商類別</th><th>移轉單據</th><th>移轉數量</th><th>QC檢驗</th><th>報工</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($chk_rows as $c):
-                                $noqc = (int)$c['qc_cnt'] === 0; $norep = (int)$c['rep_cnt'] === 0;
-                                $ft = ($noqc && $norep) ? 'both' : ($noqc ? 'noqc' : 'norep'); ?>
-                                <tr data-ft="<?= $ft ?>" data-in="<?= (int)$c['is_internal'] === 1 ? 1 : 0 ?>">
-                                    <td data-order="<?= htmlspecialchars($c['last_date']) ?>"><?= htmlspecialchars(str_replace('-', '.', $c['last_date'])) ?></td>
-                                    <td><?= htmlspecialchars((string)$c['Client_Name']) ?></td>
-                                    <td><b><?= htmlspecialchars($c['bom']) ?></b></td>
-                                    <td><?= htmlspecialchars((string)$c['product_id']) ?></td>
-                                    <td><?= (int)$c['bom_sn'] ?></td>
-                                    <td><?= htmlspecialchars((string)$c['ProcessName']) ?></td>
-                                    <td><?= htmlspecialchars((string)($c['maker_name'] ?: $c['maker_code'])) ?></td>
-                                    <td><?= (int)$c['is_internal'] === 1 ? '廠內加工' : '外包／其他' ?></td>
-                                    <td><small><?= htmlspecialchars((string)$c['tr_nos']) ?></small></td>
-                                    <td class="n"><?= number_format((int)$c['tr_qty']) ?></td>
-                                    <td><?= $noqc ? '<span class="label label-danger">沒驗</span>' : '<span class="text-muted">' . (int)$c['qc_cnt'] . ' 筆</span>' ?></td>
-                                    <td><?= $norep ? '<span class="label label-danger">沒報工</span>' : '<span class="text-muted">' . (int)$c['rep_cnt'] . ' 筆</span>' ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
+                            <tbody></tbody>
                         </table>
                     </div>
                     </div><!-- /#tab-chk -->
@@ -1236,22 +1222,46 @@ try {
         var bmSelected   = {};   // transfer_id => true（跨分頁保留勾選）
 
         $(document).ready(function() {
-            // 缺漏檢查：篩選鈕＋表格
+            // 缺漏檢查：點開分頁才載入（資料量大，不隨頁面輸出）
             if ($('#tblChk').length) {
-                var tChk = $('#tblChk').DataTable({ dom: 'lfrtip', pageLength: 20, lengthMenu: [10, 20, 50, 100], order: [[0, 'desc']],
-                    language: { search: '搜尋：', lengthMenu: '每頁 _MENU_ 筆', info: '第 _START_–_END_ 筆，共 _TOTAL_ 筆', infoEmpty: '沒有資料', zeroRecords: '沒有符合的資料', paginate: { previous: '上一頁', next: '下一頁' } } });
-                var chkF = '';
+                var tChk = null, chkMeta = [], chkF = '', chkLoaded = false;
+                var esc = function (v) { return $('<div>').text(v == null ? '' : v).html(); };
                 $.fn.dataTable.ext.search.push(function (s, d, i) {
                     if (s.nTable.id !== 'tblChk') return true;
-                    var tr = tChk.row(i).node(), ft = $(tr).data('ft');
-                    if (chkF === 'noqc' && ft !== 'noqc' && ft !== 'both') return false;
-                    if (chkF === 'norep' && ft !== 'norep' && ft !== 'both') return false;
-                    if (chkF === 'both' && ft !== 'both') return false;
-                    if ($('#chkInternalOnly').is(':checked') && String($(tr).data('in')) !== '1') return false;
+                    var m = chkMeta[i]; if (!m) return true;
+                    var noqc = m.qc === 0, norep = m.rp === 0;
+                    if (chkF === 'noqc' && !noqc) return false;
+                    if (chkF === 'norep' && !norep) return false;
+                    if (chkF === 'both' && !(noqc && norep)) return false;
+                    if ($('#chkInternalOnly').is(':checked') && m.in !== 1) return false;
                     return true;
                 });
-                $('.chk-chip').on('click', function () { $('.chk-chip').removeClass('on'); $(this).addClass('on'); chkF = $(this).data('f'); tChk.draw(); });
-                $('#chkInternalOnly').on('change', function () { tChk.draw(); });
+                function chkLoad() {
+                    if (chkLoaded) return; chkLoaded = true;
+                    $('#chkMsg').text('載入中…');
+                    $.getJSON(location.pathname + location.search + (location.search ? '&' : '?') + 'chk_list=1', function (res) {
+                        if (!res || !res.ok) { $('#chkMsg').addClass('text-danger').text((res && res.msg) || '載入失敗'); chkLoaded = false; return; }
+                        chkMeta = res.rows; var nq = 0, nr = 0, nb = 0, data = [];
+                        res.rows.forEach(function (r) {
+                            var a = r.qc === 0, b = r.rp === 0; if (a) nq++; if (b) nr++; if (a && b) nb++;
+                            data.push([ { display: esc(r.d.replace(/-/g, '.')), order: r.d }, esc(r.cl), '<b>' + esc(r.bom) + '</b>', esc(r.pn), r.sn, esc(r.pr), esc(r.mk),
+                                r['in'] ? '廠內加工' : '外包／其他', '<small>' + esc(r.no) + '</small>', r.q.toLocaleString(),
+                                a ? '<span class="label label-danger">沒驗</span>' : '<span class="text-muted">' + r.qc + ' 筆</span>',
+                                b ? '<span class="label label-danger">沒報工</span>' : '<span class="text-muted">' + r.rp + ' 筆</span>' ]);
+                        });
+                        $('#cn_all').text(res.rows.length); $('#cn_noqc').text(nq); $('#cn_norep').text(nr); $('#cn_both').text(nb);
+                        $('#chkBadge').text(res.rows.length).toggleClass('label-danger', res.rows.length > 0).toggleClass('label-default', res.rows.length === 0);
+                        $('#chkMsg').text('');
+                        tChk = $('#tblChk').DataTable({ data: data, deferRender: true, dom: 'lfrtip', pageLength: 20, lengthMenu: [10, 20, 50, 100], order: [[0, 'desc']],
+                            columnDefs: [{ targets: 0, render: function (v, t) { return t === 'display' || t === 'filter' ? v.display : v.order; } }, { targets: 9, className: 'n' }],
+                            language: { search: '搜尋：', lengthMenu: '每頁 _MENU_ 筆', info: '第 _START_–_END_ 筆，共 _TOTAL_ 筆', infoEmpty: '沒有資料', zeroRecords: '沒有符合的資料', paginate: { previous: '上一頁', next: '下一頁' } } });
+                    }).fail(function () { $('#chkMsg').addClass('text-danger').text('載入失敗，請重新整理'); chkLoaded = false; });
+                }
+                $('a[href="#tab-chk"]').on('shown.bs.tab', chkLoad);
+                $('.chk-chip').on('click', function () { $('.chk-chip').removeClass('on'); $(this).addClass('on'); chkF = $(this).data('f'); if (tChk) tChk.draw(); });
+                $('#chkInternalOnly').on('change', function () { if (tChk) tChk.draw(); });
+                // 背景預載：頁面畫完之後再載入，讓分頁籤上的數字出來
+                setTimeout(chkLoad, 1500);
             }
 
             // 使用說明與角色設定：沒有檢視權限也要能開（管理員可能就是進來設定權限的）
