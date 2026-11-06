@@ -39,6 +39,11 @@ function bau_bom_exists(PDO $db, string $bom): bool {
 }
 
 /** 製令對應的料號（bom.d_id 存的是料號文字） */
+function bau_pk(PDO $db, string $bom): int {
+    $st = $db->prepare('SELECT d_setting_id FROM bom WHERE bom=? LIMIT 1');
+    $st->execute([$bom]);
+    return (int)$st->fetchColumn();
+}
 function bau_part(PDO $db, string $bom): string {
     $st = $db->prepare('SELECT d_id FROM bom WHERE bom=? LIMIT 1');
     $st->execute([$bom]);
@@ -73,7 +78,7 @@ if ($action === 'tags') {
 if ($action === 'bom_info') {   // 手動輸入 BOM 時即時帶出料號
     $b = strtoupper(preg_replace('/\s+/', '', (string)($_POST['bom'] ?? '')));
     $exists = preg_match('/^B-\d{10}$/', $b) && bau_bom_exists($db, $b);
-    bau_out(['ok' => true, 'exists' => (bool)$exists, 'part' => $exists ? bau_part($db, $b) : '']);
+    bau_out(['ok' => true, 'exists' => (bool)$exists, 'part' => $exists ? bau_part($db, $b) : '', 'pk' => $exists ? bau_pk($db, $b) : 0]);
 }
 
 if ($action === 'analyze') {
@@ -91,7 +96,7 @@ if ($action === 'analyze') {
             if ($r['reason'] === '') $r['reason'] = '檔名解析不出 BOM 號碼';
             $res[] = $r; continue;
         }
-        $r['bom'] = $bom; $r['part'] = bau_part($db, $bom);
+        $r['bom'] = $bom; $r['part'] = bau_part($db, $bom); $r['pk'] = bau_pk($db, $bom);
         $m = bau_match_tag($tags, $bom, $rest);
         if (!$m) { $r['reason'] = '檔名解析不出標籤'; $res[] = $r; continue; }
         $r['ok'] = true; $r['suffix'] = $m['suffix']; $r['label'] = $m['label'];
@@ -158,7 +163,7 @@ if ($action === 'save') {
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('bom_attach_upload','bom',0,?,?,?,?,NOW())")
            ->execute([$bom, json_encode(['file' => $stored, 'orig' => $orig, 'tag' => $label], JSON_UNESCAPED_UNICODE), (int)($_SESSION['id'] ?? 0), (string)($_SESSION['user_cname'] ?? '')]);
     } catch (Throwable $e) { /* 稽核欄位不符時不影響上傳 */ }
-    bau_out(['ok' => true, 'bom' => $bom, 'part' => bau_part($db, $bom), 'file' => $stored, 'label' => $label]);
+    bau_out(['ok' => true, 'bom' => $bom, 'part' => bau_part($db, $bom), 'pk' => bau_pk($db, $bom), 'file' => $stored, 'label' => $label]);
 }
 
 bau_out(['ok' => false, 'msg' => '無效的操作']);

@@ -51,15 +51,34 @@
     tags.forEach(function (t) { h += '<option value="' + esc(t.suffix) + '"' + (t.suffix === cur ? ' selected' : '') + '>' + esc(t.label) + '（' + esc(t.suffix) + '）</option>'; });
     return h + '</select>';
   }
+  // 料號可點：開與 BOM 總表「查詢已完工資料」相同的圖面查閱（part_viewer）；本次上傳的檔名一併帶過去標示「本次上傳」
+  function partLink(r) {
+    if (!r.part) return '';
+    return '<a href="#" class="bau-part-link" data-i="' + (rows.indexOf(r)) + '" title="開啟圖面查閱">' + esc(r.part) + '</a>';
+  }
+  function openPart(r) {
+    var news = rows.filter(function (x) { return x.done && x.bom === r.bom && x.saved; }).map(function (x) { return x.saved; });
+    var w = screen.availWidth, h = screen.availHeight, pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
+    var q = '?d_id=' + encodeURIComponent(r.part) + (r.pk ? '&pk=' + encodeURIComponent(r.pk) : '') + '&bom=' + encodeURIComponent(r.bom)
+          + (news.length ? '&new=' + encodeURIComponent(news.join('|')) : '');
+    window.open('part_viewer.php' + q, 'part_dv_' + (r.pk || r.part),
+      'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2) + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
+  }
+  el('bauBody').addEventListener('click', function (e) {
+    var a = e.target.closest('.bau-part-link');
+    if (!a) return;
+    e.preventDefault();
+    openPart(rows[+a.dataset.i]);
+  });
   function render() {
     var h = '';
     rows.forEach(function (r, i) {
       h += '<tr data-i="' + i + '">';
       if (r.ok) {
-        h += '<td>' + esc(r.bom) + '</td><td>' + esc(r.part) + '</td><td><span class="label label-success">' + esc(r.label) + '</span></td>';
+        h += '<td>' + esc(r.bom) + '</td><td class="bau-part">' + partLink(r) + '</td><td><span class="label label-success">' + esc(r.label) + '</span></td>';
       } else {
         h += '<td><input type="text" class="form-control input-sm bau-bom" data-i="' + i + '" value="' + esc(r.bom) + '" placeholder="B-1xxxxxxxxx"></td>'
-           + '<td class="bau-part">' + esc(r.part) + '</td><td>' + tagSel(i, r.suffix) + '</td>';
+           + '<td class="bau-part">' + partLink(r) + '</td><td>' + tagSel(i, r.suffix) + '</td>';
       }
       h += '<td style="word-break:break-all">' + esc(r.name) + '</td>';
       h += '<td class="bau-st">' + (r.state ? r.state : (r.ok ? '<span class="text-success">可自動上傳</span>' : '<span style="color:#DD5138">' + esc(r.reason) + '，請手動指定</span>')) + '</td></tr>';
@@ -90,8 +109,8 @@
     var i = +e.target.dataset.i, tr = e.target.closest('tr'), fd = new FormData();
     fd.append('bom', e.target.value);
     post('bom_info', fd).then(function (res) {
-      rows[i].part = res.part || '';
-      tr.querySelector('.bau-part').textContent = rows[i].part;
+      rows[i].part = res.part || ''; rows[i].pk = res.pk || 0;
+      tr.querySelector('.bau-part').innerHTML = partLink(rows[i]);
       e.target.style.borderColor = (e.target.value.trim() === '' || res.exists) ? '' : '#DD5138';
       if (e.target.value.trim() !== '' && !res.exists) tr.querySelector('.bau-st').innerHTML = '<span style="color:#DD5138">系統查無此製令</span>';
     });
@@ -121,10 +140,12 @@
       fd.append('file', files[i]);
       if (!r.ok) { fd.append('bom', r.bom); fd.append('suffix', r.suffix); }
       post('save', fd).then(function (res) {
-        if (res.ok) { r.done = true; okN++; r.state = '<b style="color:#2E7D32">✔ 已上傳</b><br><span style="font-size:11px">' + esc(res.file) + '（' + esc(res.label) + '）</span>'; }
+        if (res.ok) { r.done = true; r.saved = res.file; r.part = res.part || r.part; r.pk = res.pk || r.pk; r.bom = res.bom || r.bom; okN++; r.state = '<b style="color:#2E7D32">✔ 已上傳</b><br><span style="font-size:11px">' + esc(res.file) + '（' + esc(res.label) + '）</span>'; }
         else r.state = '<b style="color:#DD5138">✘ ' + esc(res.msg || '失敗') + '</b>';
       }).catch(function () { r.state = '<b style="color:#DD5138">✘ 連線失敗</b>'; }).then(function () {
-        el('bauBody').querySelector('tr[data-i="' + i + '"] .bau-st').innerHTML = r.state; next();
+        el('bauBody').querySelector('tr[data-i="' + i + '"] .bau-st').innerHTML = r.state;
+        if (r.done) el('bauBody').querySelector('tr[data-i="' + i + '"] .bau-part').innerHTML = partLink(r);
+        next();
       });
     })();
   });

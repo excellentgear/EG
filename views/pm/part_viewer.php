@@ -562,6 +562,7 @@ var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
 var _d_id       = <?= json_encode($d_id) ?>;   // 料號文字（僅供顯示）
 var ONLY_DRAWING = <?= $onlyDrawing ? 'true' : 'false' ?>;   // 只看 BOM 圖檔：不查ERP/資材報告、不查料號附件
+var _newFiles   = <?= json_encode(array_values(array_filter(array_map('trim', explode('|', (string)($_GET['new'] ?? '')))))) ?>;   // 「BOM附件上傳」剛上傳的檔名：在 ERP/資材報告標示「本次上傳」並排最上面（沒帶就完全不影響）
 var _openFile   = <?= json_encode($openFile) ?>;   // 深連結指定要開啟的 ERP/資材報告檔名（沒帶或找不到就走原本預設）
 var _tagsSetting = <?= $tagsSetting ? 'true' : 'false' ?>;   // 深連結直接開啟「設定標籤」跳窗
 // 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔
@@ -906,7 +907,9 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
                 label += '<span class="label" style="background:'+escapeHtml(t.color||'#777')+';color:#fff;margin-right:3px;">'+escapeHtml(t.label)+'</span>';
             });
         }
-        return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
+        var isNew = _newFiles.indexOf(f.name) !== -1;
+        if (isNew) label = '<span class="label" style="background:#DD5138;color:#fff;margin-right:3px;"><i class="fa fa-star"></i> 本次上傳</span>' + label;
+        return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'+(isNew ? ' style="background:#FFE9C7;border-left:4px solid #DD5138;"' : '')
             +' data-path="'+escapeHtml(f.path)+'"'
             +' data-type="'+escapeHtml(f.type)+'"'
             +' data-can-dl="'+(f.can_dl === 0 ? '0' : '1')+'"'
@@ -930,6 +933,8 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
         if (res.erp_files && res.erp_files.length > 0) {
             hasFiles = true;
             listHtml += '<li class="list-group-item list-group-item-warning" style="margin-top:6px;"><strong>ERP/資材報告</strong></li>';
+            if (_newFiles.length) res.erp_files = res.erp_files.filter(function(f){ return _newFiles.indexOf(f.name) !== -1; })
+                .concat(res.erp_files.filter(function(f){ return _newFiles.indexOf(f.name) === -1; }));
             res.erp_files.forEach(function(f, i) {
                 var active = openHit ? (f.name === _openFile) : (!res.files.length && i === 0);
                 listHtml += makeItem(f, active);
