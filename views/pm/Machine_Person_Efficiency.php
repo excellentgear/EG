@@ -8,55 +8,42 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+include_once '../../src/common/date_fmt_lib.php';
 
 $conn = new DBConnection();
 $pdo = $conn->getPDO();
 
-// --- 1. 處理篩選參數 ---
-$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01'); // 預設本月一號
-$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d'); // 預設今天
-$filter_machine_type = isset($_GET['machine_type_id']) ? $_GET['machine_type_id'] : '';
-$filter_machine = isset($_GET['machine_id']) ? $_GET['machine_id'] : '';
-$filter_user = isset($_GET['user_id']) ? $_GET['user_id'] : '';
+// ===== 1. 篩選參數 =====
+$ymd = function ($v, $def) { return (is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) ? $v : $def; };
+$start_date = $ymd($_GET['start_date'] ?? '', date('Y-m-01'));
+$end_date   = $ymd($_GET['end_date'] ?? '', date('Y-m-d'));
+if ($end_date < $start_date) { $t = $start_date; $start_date = $end_date; $end_date = $t; }
+$filter_machine_type = (string)($_GET['machine_type_id'] ?? '');
+$filter_machine      = (string)($_GET['machine_id'] ?? '');
+$filter_user         = (string)($_GET['user_id'] ?? '');
+$hours_per_day       = (int)($_GET['hpd'] ?? 24);
+if (!in_array($hours_per_day, [8, 16, 24], true)) $hours_per_day = 24;
 
-// 計算選取天數 (用於稼動率分母)
-$days_diff = (strtotime($end_date) - strtotime($start_date)) / 86400 + 1;
-$capacity_hours_per_machine = $days_diff * 24; // 假設每天 24 小時工作時間
+$days_diff = (int)round((strtotime($end_date) - strtotime($start_date)) / 86400) + 1;
+$capacity_per_machine = $days_diff * $hours_per_day; // 稼動率分母(小時)
 
-// --- 2. 獲取篩選選單資料 ---
-// 機台種類
-$machine_types = $pdo->query("SELECT process_type_id AS machine_type_id, process_type AS machine_type FROM process_type ORDER BY process_type_id")->fetchAll(PDO::FETCH_ASSOC);
-// 機台列表
-$machines = $pdo->query("SELECT machine_id, machine, machine_type_id FROM machine_list WHERE (state IS NULL OR state != '1') ORDER BY machine")->fetchAll(PDO::FETCH_ASSOC);
-// 人員列表 (有報工紀錄的人員)
-$users = $pdo->query("SELECT DISTINCT u.id, u.user_cname FROM user u 
-    JOIN pm_process_daily_report r ON (u.id = r.setup_user_id OR u.id = r.production_user_id) 
-    ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+// ===== 2. 篩選選單 =====
+$machine_types = $pdo->query("SELECT process_type_id AS id, process_type AS nm FROM process_type ORDER BY process_type_id")->fetchAll(PDO::FETCH_ASSOC);
+$machines = $pdo->query("SELECT machine_id, COALESCE(NULLIF(field_no,''),machine) AS nm, machine_type_id FROM machine_list WHERE (state IS NULL OR state != '1') ORDER BY nm")->fetchAll(PDO::FETCH_ASSOC);
+$users = $pdo->query("SELECT DISTINCT u.id, u.user_cname FROM user u JOIN pm_process_daily_report r ON (u.id = r.setup_user_id OR u.id = r.production_user_id) ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
 
-// --- 3. 查詢報工數據 ---
+// ===== 3. 報工資料 =====
 $sql = "
-    SELECT 
-        r.report_id,
-        r.report_date,
-        r.machine_id,
-        m.machine,
-        r.setup_user_id,
-        u_s.user_cname as setup_user_name,
-        r.production_user_id,
-        u_p.user_cname as prod_user_name,
-        r.produced_qty,
-        r.is_finished,
-        (SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id = r.report_id) as ng_qty,
-        r.setup_start_time,
-        r.setup_end_time,
-        r.production_start_time,
-        r.production_end_time,
-        TIMESTAMPDIFF(SECOND, r.setup_start_time, r.setup_end_time) as setup_seconds,
-        TIMESTAMPDIFF(SECOND, r.production_start_time, r.production_end_time) as prod_seconds,
-        bi.bom,
-        b.d_id,
-        b.Client_Name,
-        pn.ProcessName
+    SELECT r.report_id, r.report_date, r.machine_id,
+           COALESCE(NULLIF(m.field_no,''), m.machine) AS machine, m.machine_type_id,
+           r.setup_user_id, u_s.user_cname AS setup_user_name,
+           r.production_user_id, u_p.user_cname AS prod_user_name,
+           r.produced_qty, r.is_finished,
+           (SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id = r.report_id) AS ng_qty,
+           r.setup_start_time, r.setup_end_time, r.production_start_time, r.production_end_time,
+           TIMESTAMPDIFF(SECOND, r.setup_start_time, r.setup_end_time) AS setup_seconds,
+           TIMESTAMPDIFF(SECOND, r.production_start_time, r.production_end_time) AS prod_seconds,
+           bi.bom, b.Client_Name, pn.ProcessName
     FROM pm_process_daily_report r
     LEFT JOIN machine_list m ON r.machine_id = m.machine_id
     LEFT JOIN user u_s ON r.setup_user_id = u_s.id
@@ -64,255 +51,119 @@ $sql = "
     LEFT JOIN bom_ing bi ON r.bom_ing_fid = bi.bom_ing_fid
     LEFT JOIN bom b ON bi.bom = b.bom
     LEFT JOIN process_no pn ON r.process_no = pn.ProcessNo
-    WHERE r.report_date BETWEEN :start AND :end
-";
-
+    WHERE r.report_date BETWEEN :start AND :end";
 $params = [':start' => $start_date, ':end' => $end_date];
-
-if ($filter_machine) {
-    $sql .= " AND r.machine_id = :mid";
-    $params[':mid'] = $filter_machine;
-} elseif ($filter_machine_type) {
-    $sql .= " AND m.machine_type_id = :mtid";
-    $params[':mtid'] = $filter_machine_type;
-}
-if ($filter_user) {
-    $sql .= " AND (r.setup_user_id = :uid OR r.production_user_id = :uid)";
-    $params[':uid'] = $filter_user;
-}
-
+if ($filter_machine !== '') { $sql .= " AND r.machine_id = :mid"; $params[':mid'] = $filter_machine; }
+elseif ($filter_machine_type !== '') { $sql .= " AND m.machine_type_id = :mtid"; $params[':mtid'] = $filter_machine_type; }
+if ($filter_user !== '') { $sql .= " AND (r.setup_user_id = :uid1 OR r.production_user_id = :uid2)"; $params[':uid1'] = $filter_user; $params[':uid2'] = $filter_user; }
 $sql .= " ORDER BY r.report_date DESC, r.report_id DESC";
-
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// --- 4. 數據處理與統計 ---
-$machine_stats = [];
-$user_stats = [];
-$user_detail_map = []; // 詳細人員統計
-$timeline_series_setup = []; // 時間軸-架機
-$timeline_series_prod = []; // 時間軸-生產
-$unique_users_for_timeline = []; // 時間軸-人員清單
+// ===== 4. 彙總 =====
+$mach = [];  // 機台
+$usr = [];   // 人員
+$tot = ['setup' => 0, 'prod' => 0, 'qty' => 0, 'ng' => 0];
+foreach ($rows as $r) {
+    $ss = max(0, (int)$r['setup_seconds']);
+    $ps = max(0, (int)$r['prod_seconds']);
+    $q = (int)$r['produced_qty'];
+    $ng = (int)$r['ng_qty'];
+    $tot['setup'] += $ss; $tot['prod'] += $ps; $tot['qty'] += $q; $tot['ng'] += $ng;
 
-$total_prod_qty = 0;
-$total_ng_qty = 0;
-$total_work_seconds = 0;
+    $mk = (string)$r['machine_id'];
+    if (!isset($mach[$mk])) $mach[$mk] = ['name' => $r['machine'] ?: '未指定機台', 'type' => $r['machine_type_id'], 'n' => 0, 'setup' => 0, 'prod' => 0, 'qty' => 0, 'ng' => 0, 'days' => []];
+    $mach[$mk]['n']++; $mach[$mk]['setup'] += $ss; $mach[$mk]['prod'] += $ps; $mach[$mk]['qty'] += $q; $mach[$mk]['ng'] += $ng;
+    $mach[$mk]['days'][$r['report_date']] = 1;
 
-foreach ($rows as $row) {
-    $m_name = $row['machine'] ?: '未指定機台';
-    $setup_sec = max(0, (int)$row['setup_seconds']);
-    $prod_sec = max(0, (int)$row['prod_seconds']);
-    $total_sec = $setup_sec + $prod_sec;
-    $qty = (int)$row['produced_qty'];
-    $ng = (int)$row['ng_qty'];
-
-    // 全局統計
-    $total_prod_qty += $qty;
-    $total_ng_qty += $ng;
-    $total_work_seconds += $total_sec;
-
-    // 機台統計
-    if (!isset($machine_stats[$m_name])) {
-        $machine_stats[$m_name] = ['setup' => 0, 'prod' => 0, 'total' => 0, 'qty' => 0];
+    if ($r['prod_user_name']) {
+        $k = $r['production_user_id'];
+        if (!isset($usr[$k])) $usr[$k] = ['name' => $r['prod_user_name'], 'n' => 0, 'setup' => 0, 'prod' => 0, 'qty' => 0, 'ng' => 0, 'days' => []];
+        $usr[$k]['n']++; $usr[$k]['prod'] += $ps; $usr[$k]['qty'] += $q; $usr[$k]['ng'] += $ng; $usr[$k]['days'][$r['report_date']] = 1;
     }
-    $machine_stats[$m_name]['setup'] += $setup_sec;
-    $machine_stats[$m_name]['prod'] += $prod_sec;
-    $machine_stats[$m_name]['total'] += $total_sec;
-    $machine_stats[$m_name]['qty'] += $qty;
-
-    // 人員統計 (生產人員)
-    if ($row['prod_user_name']) {
-        $u_name = $row['prod_user_name'];
-        $unique_users_for_timeline[$u_name] = 1;
-        
-        if (!isset($user_stats[$u_name])) {
-            $user_stats[$u_name] = ['hours' => 0, 'qty' => 0, 'ng' => 0];
-        }
-        $user_stats[$u_name]['hours'] += ($prod_sec / 3600); // 轉為小時
-        $user_stats[$u_name]['qty'] += $qty;
-        $user_stats[$u_name]['ng'] += $ng;
-        
-        // 詳細統計
-        if (!isset($user_detail_map[$u_name])) {
-            $user_detail_map[$u_name] = ['name' => $u_name, 'setup_sec' => 0, 'prod_sec' => 0, 'qty' => 0, 'ng' => 0];
-        }
-        $user_detail_map[$u_name]['prod_sec'] += $prod_sec;
-        $user_detail_map[$u_name]['qty'] += $qty;
-        $user_detail_map[$u_name]['ng'] += $ng;
-    }
-    // 人員統計 (架機人員 - 僅計時)
-    if ($row['setup_user_name']) {
-        $u_name = $row['setup_user_name'];
-        $unique_users_for_timeline[$u_name] = 1;
-        
-        if (!isset($user_stats[$u_name])) {
-            $user_stats[$u_name] = ['hours' => 0, 'qty' => 0, 'ng' => 0];
-        }
-        $user_stats[$u_name]['hours'] += ($setup_sec / 3600);
-        
-        // 詳細統計
-        if (!isset($user_detail_map[$u_name])) {
-            $user_detail_map[$u_name] = ['name' => $u_name, 'setup_sec' => 0, 'prod_sec' => 0, 'qty' => 0, 'ng' => 0];
-        }
-        $user_detail_map[$u_name]['setup_sec'] += $setup_sec;
+    if ($r['setup_user_name']) {
+        $k = $r['setup_user_id'];
+        if (!isset($usr[$k])) $usr[$k] = ['name' => $r['setup_user_name'], 'n' => 0, 'setup' => 0, 'prod' => 0, 'qty' => 0, 'ng' => 0, 'days' => []];
+        $usr[$k]['setup'] += $ss; $usr[$k]['days'][$r['report_date']] = 1;
     }
 }
+$h = function ($sec) { return round($sec / 3600, 1); };
+$pct = function ($a, $b) { return $b > 0 ? round($a * 100 / $b, 1) : 0; };
+$rate = function ($qty, $sec) { return $sec > 0 ? round($qty / ($sec / 3600), 1) : null; };
 
-// 準備時間軸圖表數據
-$chart_timeline_users = array_keys($unique_users_for_timeline);
-sort($chart_timeline_users);
-$timeline_height = max(600, count($chart_timeline_users) * 60); // 動態高度：每人至少 60px
+foreach ($mach as &$m) { $m['util'] = $capacity_per_machine > 0 ? round($m['prod'] / 3600 * 100 / $capacity_per_machine, 1) : 0; $m['eff'] = $rate($m['qty'], $m['prod']); $m['ngr'] = $pct($m['ng'], $m['qty'] + $m['ng']); } unset($m);
+foreach ($usr as &$u) { $u['eff'] = $rate($u['qty'], $u['prod']); $u['ngr'] = $pct($u['ng'], $u['qty'] + $u['ng']); } unset($u);
+uasort($mach, function ($a, $b) { return ($b['prod'] + $b['setup']) <=> ($a['prod'] + $a['setup']); });
+uasort($usr, function ($a, $b) { return ($b['prod'] + $b['setup']) <=> ($a['prod'] + $a['setup']); });
 
-foreach ($rows as $row) {
-    // Setup
-    if ($row['setup_user_name'] && $row['setup_start_time'] && $row['setup_end_time']) {
-        $idx = array_search($row['setup_user_name'], $chart_timeline_users);
-        if ($idx !== false) {
-            $timeline_series_setup[] = [
-                'x' => $idx,
-                'low' => strtotime($row['setup_start_time']) * 1000, // JS time (ms)
-                'high' => strtotime($row['setup_end_time']) * 1000,
-                'bom' => $row['bom'],
-                'machine' => $row['machine']
-            ];
-        }
-    }
-    // Prod
-    if ($row['prod_user_name'] && $row['production_start_time'] && $row['production_end_time']) {
-        $idx = array_search($row['prod_user_name'], $chart_timeline_users);
-        if ($idx !== false) {
-            $timeline_series_prod[] = [
-                'x' => $idx,
-                'low' => strtotime($row['production_start_time']) * 1000,
-                'high' => strtotime($row['production_end_time']) * 1000,
-                'bom' => $row['bom'],
-                'machine' => $row['machine']
-            ];
-        }
-    }
+$tot_sec = $tot['setup'] + $tot['prod'];
+$avg_eff = $rate($tot['qty'], $tot['prod']);
+$ng_rate = $pct($tot['ng'], $tot['qty'] + $tot['ng']);
+
+// ===== 5. 廠內加工廠商：有檢驗紀錄但沒有報工 =====
+// 廠內加工廠商 = maker_list.internal = 1；該站(bom_ing)在 qc_check 有檢驗、且 pm_process_daily_report 完全沒有該站報工
+$miss = [];
+$miss_err = '';
+try {
+    $ms = $pdo->prepare("
+        SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id AS maker_name, ml.maker_id_no,
+               pn.ProcessName, b.Client_Name, ds.D_Setting_Id AS part_no,
+               MAX(q.QC_check_date) AS last_qc, COUNT(*) AS qc_cnt,
+               GROUP_CONCAT(DISTINCT q.QC_check ORDER BY q.QC_check SEPARATOR '/') AS qc_status,
+               COALESCE(SUM(q.QC_ok_sqty),0) AS ok_qty, COALESCE(SUM(q.QC_QQ_sqty),0) AS qq_qty
+        FROM qc_check q
+        JOIN bom_ing bi ON bi.bom_ing_fid = CAST(q.bom_ing_fid_ref AS UNSIGNED)
+        JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no AND ml.internal = 1
+        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+        LEFT JOIN bom b ON b.bom = bi.bom
+        LEFT JOIN d_setting ds ON ds.d_id = b.d_id
+        WHERE q.QC_check_date >= :s AND q.QC_check_date < DATE_ADD(:e, INTERVAL 1 DAY)
+          AND NOT EXISTS (SELECT 1 FROM pm_process_daily_report r WHERE r.bom_ing_fid = bi.bom_ing_fid)
+        GROUP BY bi.bom_ing_fid, bi.bom, bi.bom_sn, ml.maker_id, ml.maker_id_no, pn.ProcessName, b.Client_Name, ds.D_Setting_Id
+        ORDER BY last_qc DESC");
+    $ms->execute([':s' => $start_date, ':e' => $end_date]);
+    $miss = $ms->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    $miss_err = '查詢失敗：' . $e->getMessage();
 }
+$miss_by_maker = [];
+foreach ($miss as $x) { $miss_by_maker[$x['maker_name']] = ($miss_by_maker[$x['maker_name']] ?? 0) + 1; }
+arsort($miss_by_maker);
 
-// --- 修正 Highcharts Error #15: Data must be sorted by x ---
-usort($timeline_series_setup, function($a, $b) {
-    if ($a['x'] == $b['x']) return $a['low'] <=> $b['low'];
-    return $a['x'] <=> $b['x'];
-});
-usort($timeline_series_prod, function($a, $b) {
-    if ($a['x'] == $b['x']) return $a['low'] <=> $b['low'];
-    return $a['x'] <=> $b['x'];
-});
-
-// 準備加班時段背景 (PlotBands)
-$plot_bands = [];
-$curr_ts = strtotime($start_date);
-$end_ts = strtotime($end_date . ' 23:59:59');
-
-while ($curr_ts <= $end_ts) {
-    $y = date('Y', $curr_ts);
-    $m = date('m', $curr_ts);
-    $d = date('d', $curr_ts);
-    
-    // 早班 OT: 17:00 - 20:00
-    $plot_bands[] = [
-        'from' => mktime(17, 0, 0, $m, $d, $y) * 1000,
-        'to' => mktime(20, 0, 0, $m, $d, $y) * 1000,
-        'color' => 'rgba(255, 255, 0, 0.1)', // 淡黃色
-        'label' => ['text' => '早班OT', 'style' => ['color'=>'#ccc', 'fontSize'=>'10px'], 'align'=>'center']
-    ];
-    
-    // 晚班 OT: 05:00 - 08:00
-    $plot_bands[] = [
-        'from' => mktime(5, 0, 0, $m, $d, $y) * 1000,
-        'to' => mktime(8, 0, 0, $m, $d, $y) * 1000,
-        'color' => 'rgba(255, 255, 0, 0.1)',
-        'label' => ['text' => '晚班OT', 'style' => ['color'=>'#ccc', 'fontSize'=>'10px'], 'align'=>'center']
-    ];
-    
-    $curr_ts += 86400; // Next day
+// ===== 6. 重點發現 =====
+$insights = [];
+if (count($miss) > 0) {
+    $top = array_key_first($miss_by_maker);
+    $insights[] = ['warn', '廠內加工有 ' . count($miss) . ' 站有檢驗紀錄卻沒有報工，最多的是「' . $top . '」(' . $miss_by_maker[$top] . ' 站)。', 'tab_miss'];
 }
-
-// 準備圖表數據 - 機台
-$chart_machine_cats = [];
-$chart_machine_prod = [];
-$chart_machine_setup = [];
-$chart_machine_util = []; // 稼動率
-
-arsort($machine_stats); // 依總工時排序
-foreach ($machine_stats as $name => $stat) {
-    $chart_machine_cats[] = $name;
-    $prod_h = round($stat['prod'] / 3600, 1);
-    $setup_h = round($stat['setup'] / 3600, 1);
-    $chart_machine_prod[] = $prod_h;
-    $chart_machine_setup[] = $setup_h;
-    // 稼動率 = 生產工時 / (天數 * 20)
-    $util = ($capacity_hours_per_machine > 0) ? round(($prod_h / $capacity_hours_per_machine) * 100, 1) : 0;
-    $chart_machine_util[] = $util;
+if ($tot['qty'] + $tot['ng'] > 0 && $ng_rate >= 3) {
+    $insights[] = ['warn', '整體不良率 ' . $ng_rate . '%（NG ' . number_format($tot['ng']) . ' / 總產出 ' . number_format($tot['qty'] + $tot['ng']) . '）。', 'tab_mach'];
 }
-
-// 準備圖表數據 - 人員效率 (改為長條圖: 生產工時 vs 架機工時)
-$chart_user_cats = [];
-$chart_user_prod = [];
-$chart_user_setup = [];
-$chart_user_eff = []; // 新增：人員效率數據
-
-// --- 修正 User 統計邏輯 (分開 Setup / Prod) ---
-$user_stats_detailed = [];
-foreach ($rows as $row) {
-    $setup_sec = max(0, (int)$row['setup_seconds']);
-    $prod_sec = max(0, (int)$row['prod_seconds']);
-
-    if ($row['prod_user_name']) {
-        $u = $row['prod_user_name'];
-        if (!isset($user_stats_detailed[$u])) $user_stats_detailed[$u] = ['prod' => 0, 'setup' => 0];
-        $user_stats_detailed[$u]['prod'] += $prod_sec;
-    }
-    if ($row['setup_user_name']) {
-        $u = $row['setup_user_name'];
-        if (!isset($user_stats_detailed[$u])) $user_stats_detailed[$u] = ['prod' => 0, 'setup' => 0];
-        $user_stats_detailed[$u]['setup'] += $setup_sec;
-    }
+$mach_eff = array_filter($mach, function ($x) { return $x['eff'] !== null && $x['prod'] >= 3600 * 5; });
+if (count($mach_eff) >= 2) {
+    uasort($mach_eff, function ($a, $b) { return $b['eff'] <=> $a['eff']; });
+    $best = reset($mach_eff); $worst = end($mach_eff);
+    $insights[] = ['info', '時產最高機台：' . $best['name'] . '（' . $best['eff'] . ' PCS/H）；最低：' . $worst['name'] . '（' . $worst['eff'] . ' PCS/H）。（生產工時 5 小時以上才比較）', 'tab_mach'];
 }
+$idle = 0;
+foreach ($machines as $mm) { if ($filter_machine === '' && $filter_machine_type === '' && !isset($mach[(string)$mm['machine_id']])) $idle++; }
+if ($idle > 0) $insights[] = ['info', '期間內沒有任何報工的機台共 ' . $idle . ' 台。', 'tab_mach'];
+if (!$insights) $insights[] = ['ok', '期間內沒有需要特別注意的項目。', ''];
 
-// 依總工時排序
-uasort($user_stats_detailed, function($a, $b) {
-    return ($b['prod'] + $b['setup']) <=> ($a['prod'] + $a['setup']);
-});
+// ===== 7. 圖表資料 =====
+$c_m = ['cats' => [], 'prod' => [], 'setup' => []];
+foreach (array_slice($mach, 0, 15, true) as $m) { $c_m['cats'][] = $m['name']; $c_m['prod'][] = $h($m['prod']); $c_m['setup'][] = $h($m['setup']); }
+$c_u = ['cats' => [], 'prod' => [], 'setup' => []];
+foreach (array_slice($usr, 0, 15, true) as $u) { $c_u['cats'][] = $u['name']; $c_u['prod'][] = $h($u['prod']); $c_u['setup'][] = $h($u['setup']); }
+$c_e = ['cats' => [], 'eff' => []];
+$usr_eff = array_filter($usr, function ($x) { return $x['eff'] !== null; });
+uasort($usr_eff, function ($a, $b) { return $b['eff'] <=> $a['eff']; });
+foreach (array_slice($usr_eff, 0, 15, true) as $u) { $c_e['cats'][] = $u['name']; $c_e['eff'][] = $u['eff']; }
 
-foreach ($user_stats_detailed as $name => $stat) {
-    $chart_user_cats[] = $name;
-    $chart_user_prod[] = round($stat['prod'] / 3600, 1);
-    $chart_user_setup[] = round($stat['setup'] / 3600, 1);
-    
-    $qty = $user_detail_map[$name]['qty'] ?? 0;
-    $total_h = ($stat['prod'] + $stat['setup']) / 3600;
-    $chart_user_eff[] = ($total_h > 0) ? round($qty / $total_h, 1) : 0;
-}
-
-// --- 新增：每日產出趨勢 (Top 5 Users) ---
-$top_users = array_keys(array_slice($user_stats, 0, 5, true)); // 取工時前5名
-$daily_trend_series = [];
-
-foreach ($top_users as $u_name) {
-    $data_points = [];
-    // 篩選該人員的生產紀錄
-    $user_rows = array_filter($rows, function($r) use ($u_name) {
-        return $r['prod_user_name'] === $u_name;
-    });
-    
-    // 按日期加總
-    $daily_qty = [];
-    foreach ($user_rows as $r) {
-        $d = date('Y-m-d', strtotime($r['report_date']));
-        if (!isset($daily_qty[$d])) $daily_qty[$d] = 0;
-        $daily_qty[$d] += (int)$r['produced_qty'];
-    }
-    ksort($daily_qty); // 日期升序
-    foreach ($daily_qty as $d => $q) {
-        $data_points[] = [strtotime($d) * 1000, $q];
-    }
-    $daily_trend_series[] = ['name' => $u_name, 'data' => $data_points];
-}
+$e = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+$tm = function ($s) { return $s ? substr($s, 11, 5) : ''; };
+$qs_keep = http_build_query(['start_date' => $start_date, 'end_date' => $end_date]);
 ?>
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -321,660 +172,414 @@ foreach ($top_users as $u_name) {
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>機台與人員效率分析</title>
-
-    <!-- Bootstrap -->
     <link href="../../resource/css/bootstrap.css" rel="stylesheet">
-    <!-- Font Awesome -->
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
-    <!-- NProgress -->
     <link href="../../resource/css/nprogress.css" rel="stylesheet">
-    <!-- Custom Theme Style -->
     <link href="../../resource/css/custom.css" rel="stylesheet">
-    <!-- Datatables -->
     <link href="../../resource/css/dataTables.bootstrap.css" rel="stylesheet">
     <link href="../../resource/css/buttons.bootstrap.css" rel="stylesheet">
-    
     <style>
-        .tile_count .tile_stats_count {
-            margin-bottom: 10px;
-            border-bottom: 0;
-            padding-bottom: 10px;
-        }
-        .tile_count .tile_stats_count .count {
-            font-size: 30px;
-            font-weight: bold;
-            line-height: 1.6;
-        }
-        .chart-container {
-            height: 400px;
-            margin-bottom: 20px;
-        }
-        .table-responsive {
-            overflow-x: auto;
-        }
-        #reportTable th, #reportTable td {
-            white-space: nowrap;
-            vertical-align: middle;
-            font-size: 13px;
-        }
-        .filter-box {
-            background: #f7f7f7;
-            padding: 15px;
-            border: 1px solid #e5e5e5;
-            margin-bottom: 20px;
-            border-radius: 5px;
-        }
-        .nav-tabs > li.active > a {
-            font-weight: bold;
-            border-top: 3px solid #26B99A;
-        }
+        :root { --amber:#D98A33; --amber-d:#8A5A2B; --sand:#F7E0BD; --cream:#FFF7E8; --coral:#DD5138; --brown:#5b3a1e; }
+        .right_col { color: var(--brown); }
+        .right_col > .wrap { clear: both; }
+        .pg-head { display:flex; align-items:center; gap:10px; margin:6px 0 12px; flex-wrap:wrap; }
+        .pg-head h3 { margin:0; color:var(--amber-d); font-weight:700; }
+        .page-help-btn { margin-left:auto; height:30px; font-size:13px; padding:0 12px; border:1px solid var(--amber); border-radius:15px; background:#fff; color:var(--amber-d); cursor:pointer; }
+        .page-help-btn:hover { background:var(--amber); color:#fff; }
+        @media print { .page-help-btn, .filter-box, .nav-tabs { display:none !important; } }
+        .filter-box { background:var(--cream); border:1px solid var(--sand); border-radius:8px; padding:10px 14px; margin-bottom:14px; }
+        .filter-box .fi { display:inline-block; margin:3px 12px 3px 0; vertical-align:middle; }
+        .filter-box label { font-weight:600; margin:0 4px 0 0; font-size:13px; }
+        .filter-box .form-control { height:30px; padding:2px 8px; font-size:13px; }
+        .btn-amber { background:var(--amber); border-color:var(--amber); color:#fff; }
+        .btn-amber:hover { background:var(--amber-d); border-color:var(--amber-d); color:#fff; }
+        .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:14px; }
+        .kpi { background:#fff; border:1px solid var(--sand); border-left:5px solid var(--amber); border-radius:8px; padding:10px 14px; }
+        .kpi .k-t { font-size:12px; color:var(--amber-d); }
+        .kpi .k-v { font-size:26px; font-weight:700; line-height:1.3; color:var(--brown); }
+        .kpi .k-u { font-size:12px; color:#8a7a68; }
+        .kpi.bad { border-left-color:var(--coral); } .kpi.bad .k-v { color:var(--coral); }
+        .kpi.link { cursor:pointer; } .kpi.link:hover { background:var(--cream); }
+        .insights { background:#fff; border:1px solid var(--sand); border-radius:8px; padding:10px 14px; margin-bottom:14px; }
+        .insights h5 { margin:0 0 6px; color:var(--amber-d); font-weight:700; }
+        .ins { padding:5px 8px; margin:3px 0; border-radius:5px; font-size:13px; }
+        .ins.warn { background:#FDE6DF; border-left:4px solid var(--coral); }
+        .ins.info { background:var(--cream); border-left:4px solid var(--amber); }
+        .ins.ok { background:#F3EBDD; border-left:4px solid #B59A6B; }
+        .ins a { color:var(--amber-d); font-weight:600; margin-left:6px; cursor:pointer; text-decoration:underline; }
+        .nav-tabs > li > a { color:var(--amber-d); }
+        .nav-tabs > li.active > a { font-weight:700; border-top:3px solid var(--amber); color:var(--brown); }
+        .panel-box { background:#fff; border:1px solid var(--sand); border-radius:8px; padding:12px 14px; margin:12px 0; }
+        .panel-box h4 { margin:0 0 4px; font-size:15px; color:var(--amber-d); font-weight:700; }
+        .panel-box .sub { font-size:12px; color:#8a7a68; margin-bottom:8px; }
+        .chart-h { height:360px; }
+        table.dataTable th, table.dataTable td { font-size:13px; vertical-align:middle; }
+        table.dataTable thead th { background:var(--sand); color:var(--brown); }
+        .num { text-align:right; white-space:nowrap; }
+        .bar-wrap { background:#F3EBDD; border-radius:4px; height:14px; min-width:80px; position:relative; }
+        .bar-fill { background:var(--amber); height:14px; border-radius:4px; }
+        .bar-txt { position:absolute; left:6px; top:-2px; font-size:11px; line-height:18px; color:var(--brown); font-weight:600; }
+        .bad-txt { color:var(--coral); font-weight:700; }
+        .chip { display:inline-block; padding:2px 10px; margin:2px 4px 2px 0; border-radius:12px; border:1px solid var(--amber); background:#fff; color:var(--amber-d); cursor:pointer; font-size:12px; }
+        .chip.on, .chip:hover { background:var(--amber); color:#fff; }
+        .tag { display:inline-block; padding:0 7px; border-radius:9px; font-size:11px; line-height:18px; background:var(--sand); color:var(--brown); }
+        .tag.s { background:#FDE6DF; color:var(--coral); }
+        .help-doc { font-size:13px; line-height:1.75; color:var(--brown); }
+        .help-doc h4 { color:var(--amber-d); border-bottom:2px solid var(--sand); padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc .tip { background:var(--cream); border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+        .empty { color:#8a7a68; padding:18px; text-align:center; }
     </style>
 </head>
-
 <body class="nav-sm">
-    <div class="container body">
-        <div class="main_container">
-            <!-- 選單 -->
-            <?php include '../partPage/sideAndTopBarMenu.html' ?>
+<div class="container body">
+<div class="main_container">
+<?php include '../partPage/sideAndTopBarMenu.html' ?>
+<div class="right_col" role="main">
+<div class="wrap" style="clear:both;">
 
-            <!-- 頁面內容 -->
-            <div class="right_col" role="main">
-                <div class="">
-                    <div class="page-title">
-                        <div class="title_left">
-                            <h3>機台與人員效率分析 <small>Machine & Personnel Efficiency</small></h3>
-                        </div>
+    <div class="pg-head">
+        <h3><i class="fa fa-tachometer"></i> 機台與人員效率分析</h3>
+        <button type="button" id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
+    </div>
+
+    <!-- 篩選 -->
+    <div class="filter-box">
+        <form method="GET" id="filterForm">
+            <span class="fi">
+                <label>期間</label>
+                <input type="date" class="form-control" style="width:140px;display:inline-block" name="start_date" id="start_date" value="<?= $e($start_date) ?>">
+                ～
+                <input type="date" class="form-control" style="width:140px;display:inline-block" name="end_date" id="end_date" value="<?= $e($end_date) ?>">
+            </span>
+            <span class="fi">
+                <button type="button" class="btn btn-default btn-sm" onclick="quick('prev')">上月</button>
+                <button type="button" class="btn btn-default btn-sm" onclick="quick('this')">本月</button>
+                <button type="button" class="btn btn-default btn-sm" onclick="quick('d7')">近7天</button>
+                <button type="button" class="btn btn-default btn-sm" onclick="quick('d30')">近30天</button>
+            </span>
+            <span class="fi">
+                <label>機台種類</label>
+                <select class="form-control" style="width:130px;display:inline-block" name="machine_type_id" id="machine_type_id">
+                    <option value="">全部</option>
+                    <?php foreach ($machine_types as $mt): ?>
+                        <option value="<?= $e($mt['id']) ?>" <?= $filter_machine_type === (string)$mt['id'] ? 'selected' : '' ?>><?= $e($mt['nm']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </span>
+            <span class="fi">
+                <label>機台</label>
+                <select class="form-control" style="width:130px;display:inline-block" name="machine_id" id="machine_id" data-eg-filter="輸入機台篩選…">
+                    <option value="">全部</option>
+                    <?php foreach ($machines as $mm): ?>
+                        <option value="<?= $e($mm['machine_id']) ?>" data-type="<?= $e($mm['machine_type_id']) ?>" <?= $filter_machine === (string)$mm['machine_id'] ? 'selected' : '' ?>><?= $e($mm['nm']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </span>
+            <span class="fi">
+                <label>人員</label>
+                <select class="form-control" style="width:120px;display:inline-block" name="user_id" data-eg-filter="輸入姓名篩選…">
+                    <option value="">全部</option>
+                    <?php foreach ($users as $uu): ?>
+                        <option value="<?= $e($uu['id']) ?>" <?= $filter_user === (string)$uu['id'] ? 'selected' : '' ?>><?= $e($uu['user_cname']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </span>
+            <span class="fi">
+                <label title="稼動率 = 生產工時 ÷ (天數 × 每日可用小時)">每日可用</label>
+                <select class="form-control" style="width:90px;display:inline-block" name="hpd">
+                    <?php foreach ([8, 16, 24] as $hh): ?><option value="<?= $hh ?>" <?= $hours_per_day === $hh ? 'selected' : '' ?>><?= $hh ?> 小時</option><?php endforeach; ?>
+                </select>
+            </span>
+            <span class="fi">
+                <button type="submit" class="btn btn-amber btn-sm">查詢</button>
+                <a href="Machine_Person_Efficiency.php" class="btn btn-default btn-sm">重置</a>
+            </span>
+        </form>
+    </div>
+
+    <!-- KPI -->
+    <div class="kpis">
+        <div class="kpi"><div class="k-t"><i class="fa fa-clock-o"></i> 總投入工時</div><div class="k-v"><?= number_format($tot_sec / 3600, 1) ?></div><div class="k-u">小時（生產 <?= number_format($tot['prod'] / 3600, 1) ?>／架機 <?= number_format($tot['setup'] / 3600, 1) ?>）</div></div>
+        <div class="kpi"><div class="k-t"><i class="fa fa-cubes"></i> 良品產出</div><div class="k-v"><?= number_format($tot['qty']) ?></div><div class="k-u">PCS（<?= count($rows) ?> 筆報工）</div></div>
+        <div class="kpi <?= $ng_rate >= 3 ? 'bad' : '' ?>"><div class="k-t"><i class="fa fa-exclamation-triangle"></i> NG 數量</div><div class="k-v"><?= number_format($tot['ng']) ?></div><div class="k-u">PCS（不良率 <?= $ng_rate ?>%）</div></div>
+        <div class="kpi"><div class="k-t"><i class="fa fa-bolt"></i> 平均時產</div><div class="k-v"><?= $avg_eff === null ? '-' : number_format($avg_eff, 1) ?></div><div class="k-u">PCS／生產小時</div></div>
+        <div class="kpi <?= count($miss) ? 'bad link' : 'link' ?>" onclick="goTab('tab_miss')" title="點此查看清單"><div class="k-t"><i class="fa fa-search"></i> 廠內加工 有檢驗未報工</div><div class="k-v"><?= count($miss) ?></div><div class="k-u">站（點此查看）</div></div>
+    </div>
+
+    <!-- 重點發現 -->
+    <div class="insights">
+        <h5><i class="fa fa-lightbulb-o"></i> 重點發現</h5>
+        <?php foreach ($insights as $in): ?>
+            <div class="ins <?= $in[0] ?>"><?= $e($in[1]) ?><?php if ($in[2]): ?><a onclick="goTab('<?= $in[2] ?>')">查看</a><?php endif; ?></div>
+        <?php endforeach; ?>
+    </div>
+
+    <ul class="nav nav-tabs" role="tablist" id="mainTabs">
+        <li class="active"><a href="#tab_mach" data-toggle="tab">機台</a></li>
+        <li><a href="#tab_user" data-toggle="tab">人員</a></li>
+        <li><a href="#tab_miss" data-toggle="tab">廠內加工未報工 <span class="tag <?= count($miss) ? 's' : '' ?>"><?= count($miss) ?></span></a></li>
+        <li><a href="#tab_detail" data-toggle="tab">報工明細 <span class="tag"><?= count($rows) ?></span></a></li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- 機台 -->
+        <div class="tab-pane active" id="tab_mach">
+            <div class="panel-box">
+                <h4>機台工時（前 15 台）</h4>
+                <div class="sub">橘色＝生產、淺橘＝架機（小時）。稼動率＝生產工時 ÷ （<?= $days_diff ?> 天 × <?= $hours_per_day ?> 小時）。</div>
+                <?php if ($mach): ?><div id="chMach" class="chart-h"></div><?php else: ?><div class="empty">這段期間沒有報工資料</div><?php endif; ?>
+            </div>
+            <div class="panel-box">
+                <h4>機台明細</h4>
+                <table id="tblMach" class="table table-bordered table-striped" style="width:100%">
+                    <thead><tr><th>機台</th><th>報工天數</th><th>報工筆數</th><th>架機(H)</th><th>生產(H)</th><th style="min-width:130px">稼動率</th><th>良品</th><th>NG</th><th>不良率</th><th>時產(PCS/H)</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($mach as $m): ?>
+                        <tr>
+                            <td><b><?= $e($m['name']) ?></b></td>
+                            <td class="num"><?= count($m['days']) ?></td>
+                            <td class="num"><?= $m['n'] ?></td>
+                            <td class="num"><?= $h($m['setup']) ?></td>
+                            <td class="num"><?= $h($m['prod']) ?></td>
+                            <td data-order="<?= $m['util'] ?>"><div class="bar-wrap"><div class="bar-fill" style="width:<?= min(100, $m['util']) ?>%"></div><span class="bar-txt"><?= $m['util'] ?>%</span></div></td>
+                            <td class="num"><?= number_format($m['qty']) ?></td>
+                            <td class="num <?= $m['ng'] > 0 ? 'bad-txt' : '' ?>"><?= number_format($m['ng']) ?></td>
+                            <td class="num <?= $m['ngr'] >= 3 ? 'bad-txt' : '' ?>"><?= $m['ngr'] ?>%</td>
+                            <td class="num" data-order="<?= $m['eff'] ?? 0 ?>"><?= $m['eff'] === null ? '-' : $m['eff'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 人員 -->
+        <div class="tab-pane" id="tab_user">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="panel-box">
+                        <h4>人員工時（前 15 位）</h4>
+                        <div class="sub">橘色＝生產、淺橘＝架機（小時）</div>
+                        <?php if ($usr): ?><div id="chUserHours" class="chart-h"></div><?php else: ?><div class="empty">沒有資料</div><?php endif; ?>
                     </div>
-
-                    <div class="clearfix"></div>
-
-                    <!-- 篩選區塊 -->
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="filter-box">
-                                <form method="GET" action="" class="form-inline" id="filterForm">
-                                    <div class="form-group">
-                                        <label for="start_date">日期：</label>
-                                        <div class="btn-group" style="margin-right: 5px;">
-                                            <button type="button" class="btn btn-default btn-sm" onclick="changeMonth(-1)" title="上個月"><i class="fa fa-chevron-left"></i></button>
-                                            <button type="button" class="btn btn-default btn-sm" onclick="setThisMonth()" title="本月">本月</button>
-                                            <button type="button" class="btn btn-default btn-sm" onclick="changeMonth(1)" title="下個月"><i class="fa fa-chevron-right"></i></button>
-                                        </div>
-                                        <input type="date" class="form-control input-sm" name="start_date" id="start_date" value="<?= $start_date ?>">
-                                        <label for="end_date"> 至 </label>
-                                        <input type="date" class="form-control input-sm" name="end_date" id="end_date" value="<?= $end_date ?>">
-                                    </div>
-                                    <div class="form-group" style="margin-left: 10px;">
-                                        <label for="machine_type_id">機台種類：</label>
-                                        <select class="form-control input-sm" name="machine_type_id" id="machine_type_id">
-                                            <option value="">-- 全部 --</option>
-                                            <?php foreach ($machine_types as $mt): ?>
-                                                <option value="<?= $mt['machine_type_id'] ?>" <?= $filter_machine_type == $mt['machine_type_id'] ? 'selected' : '' ?>><?= $mt['machine_type'] ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div class="form-group" style="margin-left: 10px;">
-                                        <label for="machine_id">機台：</label>
-                                        <select class="form-control input-sm" name="machine_id" id="machine_id">
-                                            <option value="">-- 全部 --</option>
-                                            <?php foreach ($machines as $m): ?>
-                                                <option value="<?= $m['machine_id'] ?>" data-type="<?= $m['machine_type_id'] ?>" <?= $filter_machine == $m['machine_id'] ? 'selected' : '' ?>><?= $m['machine'] ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div class="form-group" style="margin-left: 10px;">
-                                        <label for="user_id">人員：</label>
-                                        <select class="form-control input-sm" name="user_id">
-                                            <option value="">-- 全部 --</option>
-                                            <?php foreach ($users as $u): ?>
-                                                <option value="<?= $u['id'] ?>" <?= $filter_user == $u['id'] ? 'selected' : '' ?>><?= $u['user_cname'] ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <button type="submit" class="btn btn-primary btn-sm" style="margin-left: 10px; margin-bottom: 0;">查詢</button>
-                                    <a href="Machine_Person_Efficiency.php" class="btn btn-default btn-sm" style="margin-bottom: 0;">重置</a>
-                                </form>
-                            </div>
-                        </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="panel-box">
+                        <h4>人員時產排名（前 15 位）</h4>
+                        <div class="sub">良品數 ÷ 生產工時（PCS/小時）。不同製程的件單價與節拍不同，比較時請搭配下表的製程。</div>
+                        <?php if ($c_e['cats']): ?><div id="chUserEff" class="chart-h"></div><?php else: ?><div class="empty">沒有資料</div><?php endif; ?>
                     </div>
-
-                    <!-- 統計數據磚 -->
-                    <div class="row tile_count">
-                        <div class="col-md-3 col-sm-4 col-xs-6 tile_stats_count">
-                            <span class="count_top"><i class="fa fa-clock-o"></i> 總投入工時</span>
-                            <div class="count"><?= number_format($total_work_seconds / 3600, 1) ?></div>
-                            <span class="count_bottom">小時</span>
-                        </div>
-                        <div class="col-md-3 col-sm-4 col-xs-6 tile_stats_count">
-                            <span class="count_top"><i class="fa fa-cubes"></i> 總良品產出</span>
-                            <div class="count green"><?= number_format($total_prod_qty) ?></div>
-                            <span class="count_bottom">PCS</span>
-                        </div>
-                        <div class="col-md-3 col-sm-4 col-xs-6 tile_stats_count">
-                            <span class="count_top"><i class="fa fa-exclamation-triangle"></i> 總 NG 數量</span>
-                            <div class="count red"><?= number_format($total_ng_qty) ?></div>
-                            <span class="count_bottom">PCS</span>
-                        </div>
-                        <div class="col-md-3 col-sm-4 col-xs-6 tile_stats_count">
-                            <span class="count_top"><i class="fa fa-bolt"></i> 平均時產</span>
-                            <div class="count blue">
-                                <?= ($total_work_seconds > 0) ? number_format($total_prod_qty / ($total_work_seconds / 3600), 1) : 0 ?>
-                            </div>
-                            <span class="count_bottom">PCS/小時</span>
-                        </div>
-                    </div>
-
-                    <!-- 分頁籤 -->
-                    <div role="tabpanel">
-                        <ul class="nav nav-tabs bar_tabs" role="tablist">
-                            <li role="presentation" class="active"><a href="#tab_machine" role="tab" data-toggle="tab">機台效率分析</a></li>
-                            <li role="presentation"><a href="#tab_person" role="tab" data-toggle="tab">人員效率分析</a></li>
-                        </ul>
-                        
-                        <div class="tab-content">
-                            <!-- Tab 1: 機台效率分析 -->
-                            <div role="tabpanel" class="tab-pane fade active in" id="tab_machine">
-                                <!-- 圖表區塊 -->
-                                <div class="row">
-                                    <!-- 機台稼動率圖表 -->
-                                    <div class="col-md-12 col-sm-12 col-xs-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-bar-chart"></i> 機台稼動工時與稼動率</h2>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div id="machine-chart" class="chart-container"></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Tab 2: 人員效率分析 -->
-                            <div role="tabpanel" class="tab-pane fade" id="tab_person">
-                                <!-- 工時分布 (Timeline) - 移至最上方 -->
-                                <div class="row">
-                                    <div class="col-md-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-calendar"></i> 人員每日工時分布 (Timeline)</h2>
-                                                <small>藍色:架機 / 綠色:生產 / 空白:空閒或未報工 (可拖曳時間軸縮放查看細節)</small>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div id="timeline-chart" style="height: <?= $timeline_height ?>px;"></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- 每日產出趨勢 (Line Chart) -->
-                                <div class="row">
-                                    <div class="col-md-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-line-chart"></i> 人員每日產出趨勢 (Top 5)</h2>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div id="user-trend-chart" class="chart-container"></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- 人員效率圖表 -->
-                                <div class="row">
-                                    <div class="col-md-6 col-sm-12 col-xs-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-users"></i> 人員報工工時分佈</h2>
-                                                <small>生產 vs 架機 (小時)</small>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div id="user-chart" class="chart-container"></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6 col-sm-12 col-xs-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-line-chart"></i> 人員平均效率</h2>
-                                                <small>平均產出 (PCS/小時)</small>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div id="user-efficiency-chart" class="chart-container"></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- 人員詳細統計表格 -->
-                                <div class="row">
-                                    <div class="col-md-12 col-sm-12 col-xs-12">
-                                        <div class="x_panel">
-                                            <div class="x_title">
-                                                <h2><i class="fa fa-table"></i> 人員詳細統計數據</h2>
-                                                <div class="clearfix"></div>
-                                            </div>
-                                            <div class="x_content">
-                                                <div class="table-responsive">
-                                                    <table id="userDetailTable" class="table table-striped table-bordered dt-responsive nowrap" cellspacing="0" width="100%">
-                                                        <thead>
-                                                            <tr>
-                                                                <th>人員姓名</th>
-                                                                <th>總工時 (H)</th>
-                                                                <th>架機工時 (H)</th>
-                                                                <th>生產工時 (H)</th>
-                                                                <th>良品數 (PCS)</th>
-                                                                <th>NG數 (PCS)</th>
-                                                                <th>平均效率 (PCS/H)</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            <?php foreach ($user_detail_map as $u): 
-                                                                $total_h = ($u['setup_sec'] + $u['prod_sec']) / 3600;
-                                                                $setup_h = $u['setup_sec'] / 3600;
-                                                                $prod_h = $u['prod_sec'] / 3600;
-                                                                $eff = ($total_h > 0) ? round($u['qty'] / $total_h, 1) : 0;
-                                                            ?>
-                                                            <tr>
-                                                                <td><?= htmlspecialchars($u['name']) ?></td>
-                                                                <td class="text-right"><?= number_format($total_h, 1) ?></td>
-                                                                <td class="text-right"><?= number_format($setup_h, 1) ?></td>
-                                                                <td class="text-right"><?= number_format($prod_h, 1) ?></td>
-                                                                <td class="text-right"><?= number_format($u['qty']) ?></td>
-                                                                <td class="text-right"><?= number_format($u['ng']) ?></td>
-                                                                <td class="text-right font-bold"><?= $eff ?></td>
-                                                            </tr>
-                                                            <?php endforeach; ?>
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 詳細報工紀錄表格 -->
-                    <div class="row">
-                        <div class="col-md-12 col-sm-12 col-xs-12">
-                            <div class="x_panel">
-                                <div class="x_title">
-                                    <h2><i class="fa fa-list"></i> 詳細報工紀錄</h2>
-                                    <div class="clearfix"></div>
-                                </div>
-                                <div class="x_content">
-                                    <div class="table-responsive">
-                                        <table id="reportTable" class="table table-striped table-bordered dt-responsive nowrap" cellspacing="0" width="100%">
-                                            <thead>
-                                                <tr>
-                                                    <th>狀態</th>
-                                                    <th>日期</th>
-                                                    <th>機台</th>
-                                                    <th>客戶</th>
-                                                    <th>BOM / 料號</th>
-                                                    <th>製程</th>
-                                                    <th>人員 (架/產)</th>
-                                                    <th>時間 (架/產)</th>
-                                                    <th>工時 (分)</th>
-                                                    <th>良品</th>
-                                                    <th>NG</th>
-                                                    <th>效率 (PCS/H)</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php foreach ($rows as $row): 
-                                                    $setup_mins = round((int)$row['setup_seconds'] / 60);
-                                                    $prod_mins = round((int)$row['prod_seconds'] / 60);
-                                                    $total_mins = $setup_mins + $prod_mins;
-                                                    $efficiency = ($total_mins > 0) ? round($row['produced_qty'] / ($total_mins / 60), 1) : 0;
-                                                    
-                                                    $setup_time_str = $row['setup_start_time'] ? substr($row['setup_start_time'], 11, 5) . '~' . substr($row['setup_end_time'], 11, 5) : '-';
-                                                    $prod_time_str = $row['production_start_time'] ? substr($row['production_start_time'], 11, 5) . '~' . substr($row['production_end_time'], 11, 5) : '-';
-                                                ?>
-                                                <tr>
-                                                    <td class="text-center"><?= $row['is_finished'] ? '<i class="fa fa-check-circle text-success" style="font-size:16px;"></i>' : '' ?></td>
-                                                    <td><?= $row['report_date'] ?></td>
-                                                    <td><?= htmlspecialchars($row['machine']) ?></td>
-                                                    <td><?= htmlspecialchars($row['Client_Name'] ?? '') ?></td>
-                                                    <td>
-                                                        <strong><?= htmlspecialchars($row['bom']) ?></strong><br>
-                                                        <small class="text-muted"><?= htmlspecialchars($row['d_id']) ?></small>
-                                                    </td>
-                                                    <td><?= htmlspecialchars($row['ProcessName']) ?></td>
-                                                    <td>
-                                                        <?php if($row['setup_user_name']) echo '<span class="label label-default">架</span> ' . htmlspecialchars($row['setup_user_name']) . '<br>'; ?>
-                                                        <?php if($row['prod_user_name']) echo '<span class="label label-primary">產</span> ' . htmlspecialchars($row['prod_user_name']); ?>
-                                                    </td>
-                                                    <td>
-                                                        <small>架: <?= $setup_time_str ?></small><br>
-                                                        <small>產: <?= $prod_time_str ?></small>
-                                                    </td>
-                                                    <td>
-                                                        架: <?= $setup_mins ?><br>
-                                                        產: <?= $prod_mins ?>
-                                                    </td>
-                                                    <td class="text-right font-bold text-success"><?= number_format($row['produced_qty']) ?></td>
-                                                    <td class="text-right <?= $row['ng_qty'] > 0 ? 'text-danger' : '' ?>"><?= number_format($row['ng_qty']) ?></td>
-                                                    <td class="text-right"><?= $efficiency ?></td>
-                                                </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
                 </div>
             </div>
-            <!-- /page content -->
+            <div class="panel-box">
+                <h4>人員明細</h4>
+                <table id="tblUser" class="table table-bordered table-striped" style="width:100%">
+                    <thead><tr><th>人員</th><th>報工天數</th><th>報工筆數</th><th>架機(H)</th><th>生產(H)</th><th>合計(H)</th><th>良品</th><th>NG</th><th>不良率</th><th>時產(PCS/H)</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($usr as $u): ?>
+                        <tr>
+                            <td><b><?= $e($u['name']) ?></b></td>
+                            <td class="num"><?= count($u['days']) ?></td>
+                            <td class="num"><?= $u['n'] ?></td>
+                            <td class="num"><?= $h($u['setup']) ?></td>
+                            <td class="num"><?= $h($u['prod']) ?></td>
+                            <td class="num"><?= $h($u['setup'] + $u['prod']) ?></td>
+                            <td class="num"><?= number_format($u['qty']) ?></td>
+                            <td class="num <?= $u['ng'] > 0 ? 'bad-txt' : '' ?>"><?= number_format($u['ng']) ?></td>
+                            <td class="num <?= $u['ngr'] >= 3 ? 'bad-txt' : '' ?>"><?= $u['ngr'] ?>%</td>
+                            <td class="num" data-order="<?= $u['eff'] ?? 0 ?>"><?= $u['eff'] === null ? '-' : $u['eff'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
 
-            <!-- footer content -->
-            <?php include '../partPage/footer.html' ?>
-            <!-- /footer content -->
+        <!-- 廠內加工 有檢驗未報工 -->
+        <div class="tab-pane" id="tab_miss">
+            <div class="panel-box">
+                <h4>廠內加工廠商：有檢驗紀錄、但該站完全沒有報工</h4>
+                <div class="sub">
+                    廠內加工廠商＝廠商主檔勾選「廠內加工廠商」者。依檢驗日期 <?= $e(eg_fmt_date($start_date)) ?> ～ <?= $e(eg_fmt_date($end_date)) ?> 查詢，<b>不受上方機台／人員篩選影響</b>（沒報工就沒有機台與人員可比對）。
+                    「完全沒有報工」＝該站（BOM 的這一道製程）在報工紀錄裡一筆都沒有。
+                </div>
+                <?php if ($miss_err): ?><div class="ins warn"><?= $e($miss_err) ?></div><?php endif; ?>
+                <?php if ($miss_by_maker): ?>
+                    <div style="margin-bottom:8px">
+                        <span class="chip on" data-mk="">全部 <?= count($miss) ?></span>
+                        <?php foreach ($miss_by_maker as $mk => $cnt): ?><span class="chip" data-mk="<?= $e($mk) ?>"><?= $e($mk) ?> <?= $cnt ?></span><?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+                <table id="tblMiss" class="table table-bordered table-striped" style="width:100%">
+                    <thead><tr><th>最近檢驗日</th><th>廠商</th><th>BOM</th><th>製程</th><th>客戶</th><th>料號</th><th>檢驗結果</th><th>良品(ok)</th><th>待判(QQ)</th><th>檢驗筆數</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($miss as $x): ?>
+                        <tr>
+                            <td data-order="<?= $e($x['last_qc']) ?>"><?= $e(eg_fmt_date(substr($x['last_qc'], 0, 10))) ?></td>
+                            <td><?= $e($x['maker_name']) ?></td>
+                            <td><b><?= $e($x['bom']) ?></b></td>
+                            <td><?= $e($x['ProcessName']) ?></td>
+                            <td><?= $e($x['Client_Name']) ?></td>
+                            <td><?= $e($x['part_no']) ?></td>
+                            <td><?= $e($x['qc_status']) ?></td>
+                            <td class="num"><?= number_format($x['ok_qty']) ?></td>
+                            <td class="num"><?= number_format($x['qq_qty']) ?></td>
+                            <td class="num"><?= (int)$x['qc_cnt'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 報工明細 -->
+        <div class="tab-pane" id="tab_detail">
+            <div class="panel-box">
+                <h4>報工明細</h4>
+                <table id="tblDetail" class="table table-bordered table-striped" style="width:100%">
+                    <thead><tr><th>日期</th><th>機台</th><th>BOM</th><th>客戶</th><th>製程</th><th>架機</th><th>生產</th><th>架機(分)</th><th>生產(分)</th><th>良品</th><th>NG</th><th>時產</th><th>完工</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($rows as $r):
+                        $sm = (int)round(max(0, (int)$r['setup_seconds']) / 60);
+                        $pm = (int)round(max(0, (int)$r['prod_seconds']) / 60);
+                        $ef = $pm > 0 ? round($r['produced_qty'] / ($pm / 60), 1) : '-';
+                    ?>
+                        <tr>
+                            <td data-order="<?= $e($r['report_date']) ?>"><?= $e(eg_fmt_date($r['report_date'])) ?></td>
+                            <td><?= $e($r['machine']) ?></td>
+                            <td><b><?= $e($r['bom']) ?></b></td>
+                            <td><?= $e($r['Client_Name']) ?></td>
+                            <td><?= $e($r['ProcessName']) ?></td>
+                            <td><?= $e($r['setup_user_name']) ?><?= $r['setup_start_time'] ? '<br><small>' . $tm($r['setup_start_time']) . '~' . $tm($r['setup_end_time']) . '</small>' : '' ?></td>
+                            <td><?= $e($r['prod_user_name']) ?><?= $r['production_start_time'] ? '<br><small>' . $tm($r['production_start_time']) . '~' . $tm($r['production_end_time']) . '</small>' : '' ?></td>
+                            <td class="num"><?= $sm ?></td>
+                            <td class="num"><?= $pm ?></td>
+                            <td class="num"><?= number_format($r['produced_qty']) ?></td>
+                            <td class="num <?= $r['ng_qty'] > 0 ? 'bad-txt' : '' ?>"><?= number_format($r['ng_qty']) ?></td>
+                            <td class="num"><?= $ef ?></td>
+                            <td class="text-center"><?= $r['is_finished'] ? '<i class="fa fa-check-circle" style="color:#D98A33"></i>' : '' ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
-    <!-- Scripts -->
-    <script src="../../resource/js/jquery.min.js"></script>
-    <script src="../../resource/js/bootstrap.min.js"></script>
-    <script src="../../resource/js/custom.min.js"></script>
-    
-    <!-- DataTables -->
-    <script src="../../resource/js/jquery.dataTables.min.js"></script>
-    <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
-    <script src="../../resource/js/dataTables.buttons.min.js"></script>
-    <script src="../../resource/js/buttons.flash.min.js"></script>
-    <script src="../../resource/js/buttons.html5.min.js"></script>
-    <script src="../../resource/js/buttons.print.min.js"></script>
-    <script src="../../resource/js/jszip.min.js"></script>
-    <script src="../../resource/js/pdfmake.min.js"></script>
-    <script src="../../resource/js/vfs_fonts.js"></script>
+</div>
+</div>
+<?php include '../partPage/footer.html' ?>
+</div>
+</div>
 
-    <!-- Highcharts -->
-    <script src="../../code/highcharts.js"></script>
-    <script src="../../code/highcharts-more.js"></script> <!-- For bubble chart -->
-    <script src="../../code/modules/exporting.js"></script>
-    <script src="../../code/modules/accessibility.js"></script>
+<!-- 使用說明 -->
+<div class="modal fade" id="helpUseMask" tabindex="-1">
+  <div class="modal-dialog" style="width:720px;max-width:96%">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-question-circle"></i> 機台與人員效率分析 使用說明</h4></div>
+      <div class="modal-body help-doc">
+        <h4>這一頁做什麼</h4>
+        <p>依「報工」紀錄統計機台與人員的工時、產出、不良與時產，並檢查「廠內加工廠商有檢驗卻沒報工」的站別。</p>
+        <h4>怎麼看</h4>
+        <ul>
+          <li><b>上方五張卡</b>：總工時、良品、NG（含不良率）、平均時產、廠內加工未報工站數；最後一張可點開清單。</li>
+          <li><b>重點發現</b>：系統依目前期間自動挑出需要注意的項目，按「查看」跳到對應分頁。</li>
+          <li><b>機台／人員分頁</b>：先看圖，下方表格可按欄位排序、搜尋、匯出。</li>
+          <li><b>報工明細</b>：每一筆報工的原始資料。</li>
+        </ul>
+        <h4>名詞</h4>
+        <ul>
+          <li><b>時產</b>＝良品數 ÷ 生產工時（不含架機）。</li>
+          <li><b>稼動率</b>＝生產工時 ÷（期間天數 × 每日可用小時）。每日可用小時可在篩選列切換 8／16／24。</li>
+          <li><b>不良率</b>＝NG ÷（良品＋NG）。人員的良品與 NG 歸生產人員；架機人員只計架機工時。</li>
+        </ul>
+        <h4>廠內加工未報工</h4>
+        <div class="tip">廠內加工廠商＝廠商主檔（主檔管理→廠商）勾選「廠內加工廠商」者。條件：檢驗日期落在期間內，且該站（BOM 的這道製程）在報工紀錄裡<b>完全沒有</b>任何一筆。這份清單不受機台／人員篩選影響。</div>
+        <h4>權限</h4>
+        <p>登入後即可查看，本頁只讀取資料，不會新增或修改任何紀錄。</p>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-amber" data-dismiss="modal">我知道了</button></div>
+    </div>
+  </div>
+</div>
 
-    <script>
-        // 日期操作函式
-        function formatDate(date) {
-            var d = new Date(date),
-                month = '' + (d.getMonth() + 1),
-                day = '' + d.getDate(),
-                year = d.getFullYear();
-            if (month.length < 2) month = '0' + month;
-            if (day.length < 2) day = '0' + day;
-            return [year, month, day].join('-');
-        }
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/jquery.dataTables.min.js"></script>
+<script src="../../resource/js/dataTables.bootstrap.min.js"></script>
+<script src="../../resource/js/dataTables.buttons.min.js"></script>
+<script src="../../resource/js/buttons.flash.min.js"></script>
+<script src="../../resource/js/buttons.html5.min.js"></script>
+<script src="../../resource/js/buttons.print.min.js"></script>
+<script src="../../resource/js/jszip.min.js"></script>
+<script src="../../resource/js/pdfmake.min.js"></script>
+<script src="../../resource/js/vfs_fonts.js"></script>
+<script src="../../code/highcharts.js"></script>
+<script src="../../code/modules/exporting.js"></script>
+<script>
+function fmt(d) { var m = ('0' + (d.getMonth() + 1)).slice(-2), day = ('0' + d.getDate()).slice(-2); return d.getFullYear() + '-' + m + '-' + day; }
+function quick(k) {
+    var t = new Date(), s, e;
+    if (k === 'this') { s = new Date(t.getFullYear(), t.getMonth(), 1); e = t; }
+    else if (k === 'prev') { s = new Date(t.getFullYear(), t.getMonth() - 1, 1); e = new Date(t.getFullYear(), t.getMonth(), 0); }
+    else { s = new Date(t.getTime() - (k === 'd7' ? 6 : 29) * 86400000); e = t; }
+    document.getElementById('start_date').value = fmt(s);
+    document.getElementById('end_date').value = fmt(e);
+    document.getElementById('filterForm').submit();
+}
+function goTab(id) { $('#mainTabs a[href="#' + id + '"]').tab('show'); $('html,body').animate({scrollTop: $('#mainTabs').offset().top - 20}, 200); }
 
-        function setThisMonth() {
-            var date = new Date();
-            var firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-            var lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-            document.getElementById('start_date').value = formatDate(firstDay);
-            document.getElementById('end_date').value = formatDate(lastDay);
-            document.getElementById('filterForm').submit();
-        }
+$(function () {
+    $('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
 
-        function changeMonth(offset) {
-            var startVal = document.getElementById('start_date').value;
-            var baseDate = startVal ? new Date(startVal) : new Date();
-            var targetDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + offset, 1);
-            var firstDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
-            var lastDay = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
-            document.getElementById('start_date').value = formatDate(firstDay);
-            document.getElementById('end_date').value = formatDate(lastDay);
-            document.getElementById('filterForm').submit();
-        }
+    // 機台種類 → 機台連動
+    $('#machine_type_id').on('change', function () {
+        var t = $(this).val();
+        $('#machine_id option').each(function () { var ok = !t || !$(this).val() || String($(this).data('type')) === t; $(this).prop('disabled', !ok).toggle(ok); });
+        $('#machine_id').val('');
+    });
 
-        $(document).ready(function() {
-            var machineChart, userChart, userEffChart, timelineChart, userTrendChart;
+    var dtLang = { search: '搜尋：', lengthMenu: '每頁 _MENU_ 筆', info: '第 _START_–_END_ 筆，共 _TOTAL_ 筆', infoEmpty: '沒有資料', zeroRecords: '沒有符合的資料', infoFiltered: '(從 _MAX_ 筆篩選)', paginate: { previous: '上一頁', next: '下一頁' } };
+    function mk(sel, title, order, len) {
+        return $(sel).DataTable({ dom: 'Bflrtip', buttons: [{ extend: 'csv', className: 'btn btn-default btn-sm', text: 'CSV', title: title, bom: true }, { extend: 'print', className: 'btn btn-default btn-sm', text: '列印' }],
+            pageLength: len || 10, lengthMenu: [5, 10, 20, 50], order: order, language: dtLang });
+    }
+    mk('#tblMach', '機台效率', [[4, 'desc']]);
+    mk('#tblUser', '人員效率', [[5, 'desc']]);
+    var tMiss = mk('#tblMiss', '廠內加工有檢驗未報工', [[0, 'desc']], 20);
+    mk('#tblDetail', '報工明細', [[0, 'desc']], 20);
 
-            // 初始化 DataTable
-            $('#reportTable').DataTable({
-                dom: 'Bfrtip',
-                buttons: [
-                    { extend: 'copy', className: 'btn btn-default btn-sm' },
-                    { extend: 'csv', className: 'btn btn-default btn-sm' },
-                    { extend: 'excel', className: 'btn btn-default btn-sm', title: '報工效率分析' },
-                    { extend: 'print', className: 'btn btn-default btn-sm' }
-                ],
-                pageLength: 10,
-                order: [[1, 'desc']], // 預設依日期降序 (index 1)
-                language: {
-                    "url": "//cdn.datatables.net/plug-ins/1.10.20/i18n/Chinese-traditional.json"
-                }
-            });
+    $('.chip').on('click', function () {
+        $('.chip').removeClass('on'); $(this).addClass('on');
+        var v = $(this).data('mk');
+        tMiss.column(1).search(v ? '^' + $.fn.dataTable.util.escapeRegex(v) + '$' : '', true, false).draw();
+    });
 
-            // 初始化 User Detail Table
-            $('#userDetailTable').DataTable({
-                dom: 'Bfrtip',
-                buttons: [
-                    { extend: 'copy', className: 'btn btn-default btn-sm' },
-                    { extend: 'csv', className: 'btn btn-default btn-sm' },
-                    { extend: 'excel', className: 'btn btn-default btn-sm', title: '人員詳細效率統計' },
-                    { extend: 'print', className: 'btn btn-default btn-sm' }
-                ],
-                pageLength: 25,
-                order: [[1, 'desc']] // 依總工時排序
-            });
-
-            // 機台選單連動
-            $('#machine_type_id').change(function() {
-                var typeId = $(this).val();
-                var $machineSelect = $('#machine_id');
-                $machineSelect.find('option').show();
-                if (typeId) {
-                    $machineSelect.find('option').each(function() {
-                        if ($(this).val() && $(this).data('type') != typeId) {
-                            $(this).hide();
-                        }
-                    });
-                }
-                $machineSelect.val('');
-            });
-
-            // 機台稼動率圖表 (堆疊長條圖)
-            machineChart = Highcharts.chart('machine-chart', {
-                chart: { type: 'bar' },
-                title: { text: null },
-                xAxis: {
-                    categories: <?php echo json_encode($chart_machine_cats); ?>,
-                    title: { text: null }
-                },
-                yAxis: {
-                    min: 0,
-                    title: { text: '工時 (小時)', align: 'high' },
-                    labels: { overflow: 'justify' }
-                },
-                tooltip: { 
-                    shared: true,
-                    formatter: function() {
-                        var s = '<b>' + this.x + '</b>';
-                        var util = 0;
-                        $.each(this.points, function(i, point) {
-                            s += '<br/>' + point.series.name + ': ' + point.y + ' 小時';
-                        });
-                        var idx = this.points[0].point.index;
-                        var utils = <?php echo json_encode($chart_machine_util); ?>;
-                        s += '<br/>----------------<br/>稼動率: ' + utils[idx] + '% (以24H/天計算)';
-                        return s;
-                    }
-                },
-                plotOptions: {
-                    bar: { dataLabels: { enabled: true } },
-                    series: { stacking: 'normal' }
-                },
-                legend: { reversed: true },
-                credits: { enabled: false },
-                series: [{
-                    name: '生產',
-                    data: <?php echo json_encode($chart_machine_prod); ?>,
-                    color: '#26B99A'
-                }, {
-                    name: '架機',
-                    data: <?php echo json_encode($chart_machine_setup); ?>,
-                    color: '#3498db'
-                }]
-            });
-
-            // 人員效率圖表 (堆疊長條圖)
-            userChart = Highcharts.chart('user-chart', {
-                chart: { type: 'bar' },
-                title: { text: null },
-                xAxis: {
-                    categories: <?php echo json_encode($chart_user_cats); ?>,
-                    title: { text: null }
-                },
-                yAxis: {
-                    min: 0,
-                    title: { text: '工時 (小時)', align: 'high' },
-                    labels: { overflow: 'justify' }
-                },
-                tooltip: { valueSuffix: ' 小時', shared: true },
-                plotOptions: {
-                    bar: { dataLabels: { enabled: true } },
-                    series: { stacking: 'normal' }
-                },
-                legend: { reversed: true },
-                credits: { enabled: false },
-                series: [{
-                    name: '生產',
-                    data: <?php echo json_encode($chart_user_prod); ?>,
-                    color: '#26B99A'
-                }, {
-                    name: '架機',
-                    data: <?php echo json_encode($chart_user_setup); ?>,
-                    color: '#3498db'
-                }]
-            });
-
-            // 人員效率圖表 (長條圖)
-            userEffChart = Highcharts.chart('user-efficiency-chart', {
-                chart: { type: 'bar' },
-                title: { text: null },
-                xAxis: {
-                    categories: <?php echo json_encode($chart_user_cats); ?>,
-                    title: { text: null }
-                },
-                yAxis: {
-                    min: 0,
-                    title: { text: '效率 (PCS/H)', align: 'high' }
-                },
-                tooltip: { valueSuffix: ' PCS/H', shared: true },
-                legend: { enabled: false },
-                credits: { enabled: false },
-                series: [{
-                    name: '平均效率',
-                    data: <?php echo json_encode($chart_user_eff); ?>,
-                    color: '#e74c3c' // Red
-                }]
-            });
-
-            // 人員產出趨勢圖 (折線圖)
-            userTrendChart = Highcharts.chart('user-trend-chart', {
-                chart: { type: 'line' },
-                title: { text: null },
-                xAxis: { type: 'datetime', title: { text: '日期' } },
-                yAxis: { title: { text: '產出數量 (PCS)' }, min: 0 },
-                tooltip: { shared: true, xDateFormat: '%Y-%m-%d' },
-                plotOptions: {
-                    line: { dataLabels: { enabled: false }, marker: { enabled: false } }
-                },
-                credits: { enabled: false },
-                series: <?php echo json_encode($daily_trend_series); ?>
-            });
-
-            // 人員時間軸圖表 (Timeline / ColumnRange)
-            timelineChart = Highcharts.chart('timeline-chart', {
-                chart: { 
-                    type: 'columnrange', 
-                    inverted: true,
-                    zoomType: 'y', // 允許縮放時間軸
-                    style: { fontFamily: 'Arial, sans-serif' }
-                },
-                title: { text: null },
-                xAxis: {
-                    categories: <?php echo json_encode($chart_timeline_users); ?>,
-                    title: { text: '人員' },
-                    gridLineWidth: 1,
-                    labels: { style: { fontSize: '13px', fontWeight: 'bold' } }
-                },
-                yAxis: {
-                    type: 'datetime',
-                    title: { text: '時間' },
-                    plotBands: <?php echo json_encode($plot_bands); ?>,
-                    gridLineWidth: 1,
-                    dateTimeLabelFormats: { day: '%m/%d', hour: '%H:00' }
-                },
-                tooltip: {
-                    useHTML: true,
-                    headerFormat: '<span style="font-size: 12px; font-weight: bold;">{point.key}</span><br/>',
-                    pointFormatter: function() {
-                        var start = Highcharts.dateFormat('%Y-%m-%d %H:%M', this.low);
-                        var end = Highcharts.dateFormat('%H:%M', this.high);
-                        var dur = ((this.high - this.low) / 1000 / 60).toFixed(0);
-                        var bom = this.options.bom || '-';
-                        var machine = this.options.machine || '-';
-                        var color = this.color;
-                        return '<div style="margin-top: 5px; padding: 5px; border: 1px solid #ccc; background: #fff; border-radius: 3px;">' +
-                               '<span style="color:' + color + '">●</span> <b>' + this.series.name + '</b><br/>' +
-                               '時間: ' + start + ' ~ ' + end + ' (' + dur + '分)<br/>' +
-                               'BOM: <b>' + bom + '</b><br/>' +
-                               '機台: <b>' + machine + '</b>' +
-                               '</div>';
-                    }
-                },
-                plotOptions: {
-                    columnrange: {
-                        grouping: false, // 允許重疊 (同一人多個時段)
-                        borderRadius: 3,
-                        borderWidth: 1,
-                        borderColor: '#ffffff',
-                        pointPadding: 0.1,
-                        groupPadding: 0,
-                        dataLabels: {
-                            enabled: false
-                        }
-                    }
-                },
-                legend: { enabled: true, align: 'right', verticalAlign: 'top', layout: 'vertical' },
-                credits: { enabled: false },
-                series: [{
-                    name: '架機',
-                    data: <?php echo json_encode($timeline_series_setup); ?>,
-                    color: '#3498db' // Solid Blue
-                }, {
-                    name: '生產',
-                    data: <?php echo json_encode($timeline_series_prod); ?>,
-                    color: '#26B99A' // Solid Green
-                }]
-            });
-
-            // 修正 Tab 切換時圖表顯示問題 (Reflow)
-            $('a[data-toggle="tab"]').on('shown.bs.tab', function (e) {
-                var target = $(e.target).attr('href');
-                if (target === '#tab_person') {
-                    if(userChart) userChart.reflow();
-                    if(userEffChart) userEffChart.reflow();
-                    if(timelineChart) timelineChart.reflow();
-                    if(userTrendChart) userTrendChart.reflow();
-                } else if (target === '#tab_machine') {
-                    if(machineChart) machineChart.reflow();
-                }
-            });
-        });
-    </script>
+    var C = { prod: '#D98A33', setup: '#F0C98A', eff: '#DD5138' };
+    function stacked(id, d) {
+        if (!document.getElementById(id)) return;
+        Highcharts.chart(id, { chart: { type: 'bar' }, title: { text: null }, credits: { enabled: false },
+            xAxis: { categories: d.cats }, yAxis: { min: 0, title: { text: '小時' } },
+            legend: { reversed: true }, tooltip: { shared: true, valueSuffix: ' 小時' },
+            plotOptions: { series: { stacking: 'normal' }, bar: { dataLabels: { enabled: true, style: { textOutline: 'none', fontSize: '10px' } } } },
+            series: [{ name: '生產', data: d.prod, color: C.prod }, { name: '架機', data: d.setup, color: C.setup }] });
+    }
+    stacked('chMach', <?= json_encode($c_m) ?>);
+    stacked('chUserHours', <?= json_encode($c_u) ?>);
+    if (document.getElementById('chUserEff')) {
+        var ce = <?= json_encode($c_e) ?>;
+        Highcharts.chart('chUserEff', { chart: { type: 'bar' }, title: { text: null }, credits: { enabled: false }, legend: { enabled: false },
+            xAxis: { categories: ce.cats }, yAxis: { min: 0, title: { text: 'PCS / 小時' } }, tooltip: { valueSuffix: ' PCS/H' },
+            plotOptions: { bar: { dataLabels: { enabled: true, style: { textOutline: 'none', fontSize: '10px' } } } },
+            series: [{ name: '時產', data: ce.eff, color: C.eff }] });
+    }
+    $('a[data-toggle="tab"]').on('shown.bs.tab', function () { $(window).trigger('resize'); Highcharts.charts.forEach(function (c) { if (c) c.reflow(); }); });
+});
+</script>
 </body>
 </html>
