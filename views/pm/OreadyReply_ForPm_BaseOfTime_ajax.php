@@ -2727,6 +2727,8 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
             if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
                 $db->prepare("UPDATE bom_ing SET outsource_date=CONCAT(?, ' 00:00:00') WHERE bom_ing_fid=? AND outsource_date IS NULL")->execute([$d, $fid]);
             }
+            // 製程格依狀態決定顯示什麼：尚未發包(N)的站補了發單就改成加工中，格子才會出現發單日與廠商
+            $db->prepare("UPDATE bom_ing SET processing_state='ing' WHERE bom_ing_fid=? AND processing_state='N'")->execute([$fid]);
             echo json_encode(['success'=>true,'message'=>'已新增發單']);
         } else {
             ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid);
@@ -2735,6 +2737,8 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
                 $op->execute([$fid]);
                 if ((int)$op->fetchColumn() === 0) {
                     $db->prepare("UPDATE bom_ing SET return_date=CONCAT(?, ' 00:00:00') WHERE bom_ing_fid=? AND return_date IS NULL")->execute([$d, $fid]);
+                    // 全部回廠結清、狀態還停在未發包／加工中 → 視為已移轉，格子才會顯示「M/D 回」
+                    $db->prepare("UPDATE bom_ing SET processing_state='E' WHERE bom_ing_fid=? AND processing_state IN ('N','ing')")->execute([$fid]);
                 }
             }
             echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回']);
