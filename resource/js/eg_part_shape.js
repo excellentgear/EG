@@ -194,11 +194,8 @@
       }
       if (!any) return r;
       for (i = 0; i < n; i++) if (vals[i] === null) { bad[i + 'd'] = 1; r.partial = true; r.msg = '第 ' + (i + 1) + ' 個孔徑還沒填'; return r; }
-      // 孔徑輸入順序不拘，一律自動排成由大到小；只擋「兩階孔徑相同」
-      for (i = 0; i < n; i++) for (var k2 = i + 1; k2 < n; k2++) {
-        if (vals[i] === vals[k2]) { bad[i + 'd'] = bad[k2 + 'd'] = 1; r.msg = '第 ' + (i + 1) + '、' + (k2 + 1) + ' 個孔徑相同（' + fmt(vals[i]) + '），不是不同的階；相同請合併成一階'; return r; }
-      }
-      var inOrder = vals.every(function (v, j) { return j === 0 || v < vals[j - 1]; });
+      // 孔徑輸入順序不拘，一律自動排成由大到小；兩階孔徑相同允許（對稱內孔）
+      var inOrder = vals.every(function (v, j) { return j === 0 || v <= vals[j - 1]; });
       var sorted = vals.slice().sort(function (x, y) { return y - x; });
       r.info = defs.bore[r.type].name + '（' + n + ' 階）　' + sorted.map(function (v) { return 'Ø' + fmt(v); }).join(' → ') + (inOrder ? '' : '　（已自動排成由大到小）');
       return r;

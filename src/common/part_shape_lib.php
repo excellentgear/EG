@@ -342,10 +342,7 @@ function eg_shape_normalize($in, string $ptype = ''): array {
             }
             if ($any) {
                 foreach ($tmp as $i => $r) if ($r['d'] === null) return [null, '第 ' . ($i + 1) . ' 個孔徑還沒填'];
-                // 孔徑輸入順序不拘（已存的由大到小之後再加一階也可以），一律自動排成由大到小；只擋「兩階孔徑相同」
-                for ($i = 0; $i < $steps; $i++) for ($k = $i + 1; $k < $steps; $k++)
-                    if ($tmp[$i]['d'] == $tmp[$k]['d'])
-                        return [null, '第 ' . ($i + 1) . '、' . ($k + 1) . ' 個孔徑相同（' . $tmp[$i]['d'] . '），不是不同的階；相同請合併成一階'];
+                // 孔徑輸入順序不拘，一律自動排成由大到小；兩階孔徑相同允許（例：對稱內孔兩側大孔同徑、中間夾不同孔）
                 usort($tmp, function ($x, $y) { return $y['d'] <=> $x['d']; });   // 自動排成由大到小（深度跟著各自的孔徑）
                 $list = $tmp;
             }
