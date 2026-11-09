@@ -50,6 +50,7 @@
   var PI = Math.PI;
 
   function pn(v) { if (v == null) return null; v = String(v).trim(); if (v === '' || isNaN(Number(v)) || Number(v) <= 0) return null; return Number(v); }
+  function tr2(v) { return Math.floor(v * 100 + 1e-9) / 100; }   // 無條件捨去到小數點後兩位
   function r3(v) { return Math.round(v * 1000) / 1000; }
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function nv(v) { return v == null ? '' : String(v); }
@@ -269,10 +270,10 @@
     var ok = !errs.length && net > 0 && rho > 0 && c.vOut > 0;
     if (!errs.length && c.vOut <= 0) errs.push('至少要有一個外型段');
     if (!errs.length && net <= 0) errs.push('內孔體積大於或等於外型體積，請檢查孔徑與深度');
-    var g = ok ? net * rho / 1000 : null;
+    var g = ok ? tr2(net * rho / 1000) : null;
     document.getElementById('wc-v').textContent = ok ? (Math.round(net / 10) / 100).toLocaleString() : '—';
-    document.getElementById('wc-g').textContent = ok ? (Math.round(g * 10) / 10).toLocaleString() : '—';
-    document.getElementById('wc-kg').textContent = ok ? String(Math.round(g) / 1000) : '—';
+    document.getElementById('wc-g').textContent = ok ? g.toFixed(2) : '—';
+    document.getElementById('wc-kg').textContent = ok ? (Math.floor(g * 100 + 1e-9) / 100000).toFixed(5) : '—';
     document.getElementById('wc-err').innerHTML = errs.length ? '尚缺或有誤：<br>' + errs.map(esc).join('<br>') : '';
     document.getElementById('wc-apply').disabled = !ok;
     WC.result = ok ? g : null;
@@ -306,11 +307,14 @@
   };
   window.applyWeightCalc = function () {
     if (WC.result == null) return;
-    var gRound = Math.round(WC.result);   // 重量欄位最小單位 1 g（資料庫存 kg 三位小數）
-    _fillWeightField(gRound / 1000);
-    var el = document.getElementById('pf-Weight_Kg'); if (el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+    var gRound = WC.result;   // 已無條件捨去到 0.01 g
+    // 預設以 kg 帶入；資料庫 Weight_Kg 存 kg 小數 3 位，所以帶入值捨去到 3 位（避免畫面與存檔後不一致）
+    var kgV = Math.floor(gRound / 1000 * 1000 + 1e-9) / 1000;
+    _setWeightUnit('kg');
+    var inp = document.getElementById('pf-Weight_Kg'); if (inp) inp.value = String(kgV);
+    var el = inp; if (el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
     closeWeightCalc();
-    showToast('已帶入重量 ' + gRound.toLocaleString() + ' g（儲存料號後才會寫入）', 'success');
+    showToast('已帶入重量 ' + kgV + ' kg（計算值 ' + gRound.toFixed(2) + ' g）。儲存料號後才會寫入', 'success');
   };
 
   // ── 事件（委派到浮層，重畫後仍有效）──
