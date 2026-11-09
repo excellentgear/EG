@@ -49,7 +49,14 @@
   var WC = { ctx: null, rows: [], tags: [], seq: 0, denSel: '', denCustom: '', denOpen: false, denRows: [] };
   var PI = Math.PI;
 
-  function pn(v) { if (v == null) return null; v = String(v).trim(); if (v === '' || isNaN(Number(v)) || Number(v) <= 0) return null; return Number(v); }
+  // 數字或算式（例：31-28、(120-30)/2）：只允許數字與 + - * / ( ) . × ÷，算出來必須是大於 0 的有限數
+  function pn(v) {
+    if (v == null) return null; v = String(v).trim(); if (v === '') return null;
+    if (!isNaN(Number(v))) return Number(v) > 0 ? Number(v) : null;
+    var e = v.replace(/[×xX＊]/g, '*').replace(/÷/g, '/').replace(/[－−]/g, '-').replace(/＋/g, '+').replace(/[（]/g, '(').replace(/[）]/g, ')').replace(/\s+/g, '');
+    if (!/^[0-9+\-*\/().]+$/.test(e)) return null;
+    try { var r = Function('"use strict";return (' + e + ')')(); return (isFinite(r) && r > 0) ? Math.round(r * 100000) / 100000 : null; } catch (x) { return null; }
+  }
   function tr2(v) { return Math.floor(v * 100 + 1e-9) / 100; }   // 無條件捨去到小數點後兩位
   function r3(v) { return Math.round(v * 1000) / 1000; }
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -177,7 +184,7 @@
     return { v: PI / 4 * D * D * dp * q, miss: [] };
   }
   function tagRowHtml(t) {
-    var inp = function (f, w, ph) { return '<input type="number" step="any" min="0" class="wc-in no-spin-input" data-tf="' + f + '" value="' + esc(t[f]) + '" style="width:' + w + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>'; };
+    var inp = function (f, w, ph) { return '<input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" class="wc-in no-spin-input" data-tf="' + f + '" value="' + esc(t[f]) + '" style="width:' + w + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>'; };
     var key = t.kind === 'key';
     return '<tr data-tid="' + t.id + '"><td><span class="wc-bore">－' + (key ? '鍵槽' : '孔') + '</span></td>'
       + '<td><input class="wc-nm" data-tf="name" value="' + esc(t.name) + '"></td>'
@@ -262,9 +269,9 @@
       + '<td><span class="' + (isOut ? 'wc-out' : 'wc-bore') + '">' + (isOut ? '＋外型' : '－內孔') + '</span></td>'
       + '<td><input class="wc-nm" data-f="name" value="' + esc(r.name) + '"></td>'
       + '<td><select class="wc-sel" data-f="shape"><option value="cyl"' + (cone ? '' : ' selected') + '>圓柱</option><option value="cone"' + (cone ? ' selected' : '') + '>錐（圓台）</option></select></td>'
-      + '<td><input type="number" step="any" min="0" class="wc-in no-spin-input" data-f="D" value="' + esc(r.D) + '"></td>'
-      + '<td><input type="number" step="any" min="0" class="wc-in no-spin-input" data-f="D2" value="' + esc(r.D2) + '"' + (cone ? '' : ' disabled style="visibility:hidden"') + '></td>'
-      + '<td><input type="number" step="any" min="0" class="wc-in no-spin-input' + (r._autoNote ? ' wc-auto' : '') + '" data-f="L" value="' + esc(r.L) + '"' + lph + '>'
+      + '<td><input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" class="wc-in no-spin-input" data-f="D" value="' + esc(r.D) + '"></td>'
+      + '<td><input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" class="wc-in no-spin-input" data-f="D2" value="' + esc(r.D2) + '"' + (cone ? '' : ' disabled style="visibility:hidden"') + '></td>'
+      + '<td><input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" class="wc-in no-spin-input' + (r._autoNote ? ' wc-auto' : '') + '" data-f="L" value="' + esc(r.L) + '"' + lph + '>'
       + '<div style="font-size:10px;color:#8a6a45;" data-note="' + r.id + '">' + esc(r._autoNote || '') + '</div></td>'
       + '<td class="wc-vol" data-vol="' + r.id + '"></td>'
       + '<td><span class="wc-btn" data-del="' + r.id + '" title="刪除這一列" style="padding:1px 7px;">×</span></td></tr>';
@@ -411,6 +418,13 @@
   });
   mask.addEventListener('change', function (ev) {
     var t = ev.target, f = t.getAttribute('data-f');
+    if ((f && f !== 'shape' && f !== 'name') || (t.getAttribute('data-tf') && ['shape', 'name'].indexOf(t.getAttribute('data-tf')) < 0)) {
+      var raw = t.value.trim();
+      if (raw !== '' && isNaN(Number(raw))) {   // 算式 → 換成算出來的數字（算不出來就維持原文，欄位會標紅）
+        var val = pn(raw);
+        if (val != null) { t.value = String(Math.round(val * 1000) / 1000); t.dispatchEvent(new Event('input', { bubbles: true })); }
+      }
+    }
     if (t.getAttribute('data-tf') === 'shape') { var ts = findTag(t); if (ts) { ts.shape = t.value; recalc(); } return; }
     if (f === 'shape') { var r = findRow(t); if (r) { r.shape = t.value; document.getElementById(r.kind === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(r.kind); recalc(); } return; }
     if (t.id === 'wc-den-sel') {
