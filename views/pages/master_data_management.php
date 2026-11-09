@@ -2811,6 +2811,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 重量自動計算：背景資料（密度表／材質子標籤／齒輪預設外徑齒寬）與密度表儲存 ──
+    // 資料與計算規則自成一套（src/common/part_weight_lib.php），與 KPI 生產效率分析脫鉤
+    if ($_POST['action'] === 'weight_calc_ctx') {
+        try {
+            require_once __DIR__ . '/../../src/common/part_weight_lib.php';
+            $ctx = eg_pw_context($pdo, intval($_POST['d_id'] ?? 0), '_gear_da_expr');
+            $ctx['success']  = true;
+            $ctx['can_edit'] = _mdPerm('label_dict', 'edit', $can_dict_part);
+            echo json_encode($ctx, JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+    if ($_POST['action'] === 'weight_density_save') {
+        try {
+            if (!_mdPerm('label_dict', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+            require_once __DIR__ . '/../../src/common/part_weight_lib.php';
+            $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+            if (!is_array($items)) throw new Exception('資料格式錯誤');
+            $by = (string)($_SESSION['userName'] ?? $_SESSION['id'] ?? '');
+            [$ok, $msg] = eg_pw_save_densities($pdo, $items, $by);
+            if ($ok) {
+                try { _log_audit($pdo, 'update', 'part_weight_density', '', '材質密度對照表', ['items' => count($items)], $_SESSION['id'] ?? 0, $by); } catch (Throwable $e2) {}
+            }
+            echo json_encode(['success'=>$ok,'message'=>$msg], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'get_part') {
         try {
             $d_id = intval($_POST['d_id']);
@@ -9993,6 +10021,7 @@ body { background:#F6F1EA; }
         <div class="form-group">
             <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                 重量
+                <button type="button" class="btn btn-xs btn-default" id="pf-weight-calc-btn" onclick="openWeightCalc()" style="border-color:#1ABB9C;color:#1ABB9C;" title="依外形、內孔尺寸與材質密度自動計算重量"><i class="fa fa-calculator"></i> 自動計算</button>
                             </label>
             <div class="input-group">
                 <input type="number" class="form-control no-spin-input" id="pf-Weight_Kg" placeholder="—" step="any" min="0">
@@ -29883,5 +29912,6 @@ window.addEventListener('load', function() {
     }
 });
 </script>
+<?php include __DIR__ . '/_weight_calc_ui.php'; ?>
 </body>
 </html>
