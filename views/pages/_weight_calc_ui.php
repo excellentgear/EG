@@ -140,7 +140,7 @@
   // ── 標籤加工（鍵、孔）：取自畫面上目前勾的標籤（鍵／中心牙孔／孔加工；「零件」不列入）──
   // 這幾個標籤只有數量與規格，沒有深度／長度，深度等尺寸在這裡補填（只供計算，不寫回標籤）
   function tg(kind, name, o) {
-    var t = { id: ++WC.seq, kind: kind, name: name, qty: '1', W: '', L: '', H: '', shape: 'rect', D: '', depth: '' };
+    var t = { id: ++WC.seq, kind: kind, name: name, qty: '1', W: '', L: '', H: '', shape: 'rect', D: '', depth: '', mode: 'manual', oid: '', bid: '', extra: '' };
     for (var k in o) t[k] = o[k];
     return t;
   }
@@ -165,6 +165,9 @@
     });
     return tags;
   }
+  function byId(arr, id) { return arr.filter(function (r) { return String(r.id) === String(id); })[0] || null; }
+  function rowOptLabel(r) { return (r.name || (r.kind === 'out' ? '外型' : '內孔')) + (pn(r.D) ? ' Ø' + pn(r.D) : ' Ø?'); }
+  function rowOpts(kind, sel) { return WC.rows.filter(function (r) { return r.kind === kind; }).map(function (r) { return '<option value="' + r.id + '"' + (String(sel) === String(r.id) ? ' selected' : '') + ' data-rid="' + r.id + '">' + esc(rowOptLabel(r)) + '</option>'; }).join(''); }
   function tagVol(t) {   // 回傳 {v: 體積mm³|null, miss: []}
     var q = pn(t.qty), miss = [];
     if (!q) miss.push('數量');
@@ -179,9 +182,28 @@
       return { v: a * H * q, miss: [] };
     }
     var D = pn(t.D), dp = pn(t.depth);
+    t._depthAuto = null;
+    if (t.mode === 'radial' || t.mode === 'radial2') {   // 徑向：從某段外徑鑽到某階內孔，深度＝壁厚（對鑽＝兩側壁厚）＋加深
+      var oR = byId(WC.rows, t.oid), bR = byId(WC.rows, t.bid), Do = oR ? pn(oR.D) : null, Db = bR ? pn(bR.D) : null;
+      if (!oR) miss.push('要從哪一段外徑鑽'); else if (!Do) miss.push('該外徑段尚未填外徑');
+      if (!bR) miss.push('要鑽到哪一階內孔'); else if (!Db) miss.push('該內孔尚未填孔徑');
+      dp = null;
+      if (Do && Db) {
+        if (Do <= Db) miss.push('外徑必須大於內孔孔徑');
+        else { dp = (Do - Db) / 2 * (t.mode === 'radial2' ? 2 : 1) + (pn(t.extra) || 0); t._depthAuto = Math.round(dp * 1000) / 1000; }
+      }
+      if (!D) miss.push('孔徑');
+      if (miss.length) return { v: null, miss: miss };
+      return { v: PI / 4 * D * D * dp * q, miss: [] };
+    }
     if (!D) miss.push('孔徑'); if (!dp) miss.push('深度');
     if (miss.length) return { v: null, miss: miss };
     return { v: PI / 4 * D * D * dp * q, miss: [] };
+  }
+  function holeDims(t, inp) {
+    var h = '孔徑 Ø ' + inp('D', 56) + ' 鑽法 <select class="wc-sel" data-tf="mode"><option value="manual"' + (t.mode === 'manual' ? ' selected' : '') + '>手動輸入深度</option><option value="radial"' + (t.mode === 'radial' ? ' selected' : '') + '>徑向：外徑鑽到內孔</option><option value="radial2"' + (t.mode === 'radial2' ? ' selected' : '') + '>徑向對鑽（兩側）</option></select>';
+    if (t.mode === 'manual') return h + ' 深 ' + inp('depth', 60);
+    return h + '<br>自 <select class="wc-sel" data-tf="oid" style="max-width:150px">' + rowOpts('out', t.oid) + '</select> 鑽到 <select class="wc-sel" data-tf="bid" style="max-width:150px">' + rowOpts('bore', t.bid) + '</select> 加深 ' + inp('extra', 48) + ' <b data-tdepth="' + t.id + '" style="color:#8a4b00;"></b>';
   }
   function tagRowHtml(t) {
     var inp = function (f, w, ph) { return '<input type="text" inputmode="decimal" autocomplete="off" data-eg-calc="1" class="wc-in no-spin-input" data-tf="' + f + '" value="' + esc(t[f]) + '" style="width:' + w + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>'; };
@@ -189,7 +211,7 @@
     return '<tr data-tid="' + t.id + '"><td><span class="wc-bore">－' + (key ? '鍵槽' : '孔') + '</span></td>'
       + '<td><input class="wc-nm" data-tf="name" value="' + esc(t.name) + '"></td>'
       + '<td>' + (key ? '<select class="wc-sel" data-tf="shape"><option value="rect"' + (t.shape === 'rect' ? ' selected' : '') + '>長方形</option><option value="round1"' + (t.shape === 'round1' ? ' selected' : '') + '>一頭半圓</option><option value="round2"' + (t.shape === 'round2' ? ' selected' : '') + '>雙頭半圓</option></select>' : '圓孔') + '</td>'
-      + '<td>' + (key ? '寬 ' + inp('W', 60) + ' 長 ' + inp('L', 60) + ' 深 ' + inp('H', 60) : '孔徑 Ø ' + inp('D', 60) + ' 深 ' + inp('depth', 60)) + '</td>'
+      + '<td>' + (key ? '寬 ' + inp('W', 60) + ' 長 ' + inp('L', 60) + ' 深 ' + inp('H', 60) : holeDims(t, inp)) + '</td>'
       + '<td>× ' + inp('qty', 48) + '</td>'
       + '<td class="wc-vol" data-tvol="' + t.id + '"></td>'
       + '<td><span class="wc-btn" data-tdel="' + t.id + '" title="刪除這一列（不計入）" style="padding:1px 7px;">×</span></td></tr>';
@@ -343,11 +365,13 @@
       var need = { D: !pn(r.D), D2: r.shape === 'cone' && !pn(r.D2), L: !pn(r.L) && !r._autoNote };
       Object.keys(need).forEach(function (k) { var el = tr.querySelector('[data-f="' + k + '"]'); if (el) el.classList.toggle('wc-miss', need[k]); });
     });
+    [].forEach.call(document.querySelectorAll('#wc-t-tag option[data-rid]'), function (o) { var r = byId(WC.rows, o.getAttribute('data-rid')); if (r) o.textContent = rowOptLabel(r); });
     WC.tags.forEach(function (t) {
+      var dd = document.querySelector('[data-tdepth="' + t.id + '"]'); if (dd) dd.textContent = t._depthAuto ? '＝深 ' + t._depthAuto + ' mm' : '';
       var td = document.querySelector('[data-tvol="' + t.id + '"]'), v = c.tper[t.id];
       if (td) td.textContent = (v == null) ? '—' : '−' + (Math.round(v / 10) / 100).toLocaleString();
       var tr = document.querySelector('tr[data-tid="' + t.id + '"]'); if (!tr) return;
-      var need = t.kind === 'key' ? { W: !pn(t.W), L: !pn(t.L), H: !pn(t.H), qty: !pn(t.qty) } : { D: !pn(t.D), depth: !pn(t.depth), qty: !pn(t.qty) };
+      var need = t.kind === 'key' ? { W: !pn(t.W), L: !pn(t.L), H: !pn(t.H), qty: !pn(t.qty) } : { D: !pn(t.D), depth: t.mode === 'manual' && !pn(t.depth), qty: !pn(t.qty) };
       Object.keys(need).forEach(function (k) { var el = tr.querySelector('[data-tf="' + k + '"]'); if (el) el.classList.toggle('wc-miss', need[k]); });
     });
     var errs = c.miss.slice();
@@ -425,7 +449,21 @@
         if (val != null) { t.value = String(Math.round(val * 1000) / 1000); t.dispatchEvent(new Event('input', { bubbles: true })); }
       }
     }
-    if (t.getAttribute('data-tf') === 'shape') { var ts = findTag(t); if (ts) { ts.shape = t.value; recalc(); } return; }
+    var tfc = t.getAttribute('data-tf');
+    if (tfc === 'shape' || tfc === 'oid' || tfc === 'bid') { var ts = findTag(t); if (ts) { ts[tfc] = t.value; recalc(); } return; }
+    if (tfc === 'mode') {
+      var tm = findTag(t);
+      if (tm) {
+        tm.mode = t.value;
+        if (tm.mode !== 'manual') {
+          var os = WC.rows.filter(function (r) { return r.kind === 'out'; }), bs = WC.rows.filter(function (r) { return r.kind === 'bore'; });
+          if (!byId(os, tm.oid) && os.length) tm.oid = String(os[0].id);
+          if (!byId(bs, tm.bid) && bs.length) tm.bid = String(bs[0].id);
+        }
+        document.getElementById('wc-t-tag').innerHTML = tagTableHtml(); recalc();
+      }
+      return;
+    }
     if (f === 'shape') { var r = findRow(t); if (r) { r.shape = t.value; document.getElementById(r.kind === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(r.kind); recalc(); } return; }
     if (t.id === 'wc-den-sel') {
       WC.denSel = t.value; var ci = document.getElementById('wc-den-custom'); if (ci) ci.style.display = (t.value === 'custom') ? '' : 'none';
@@ -442,12 +480,13 @@
     if (add) {
       var k = add.getAttribute('data-add');
       WC.rows.push(mk(k, k === 'out' ? '外型段' : '內孔', '', '', k === 'bore' ? { auto: 'T' } : null));
-      document.getElementById(k === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(k); recalc(); return;
+      document.getElementById(k === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(k); document.getElementById('wc-t-tag').innerHTML = tagTableHtml(); recalc(); return;
     }
     if (del) {
       var id = +del.getAttribute('data-del'), r = WC.rows.filter(function (x) { return x.id === id; })[0];
       WC.rows = WC.rows.filter(function (x) { return x.id !== id; });
-      if (r) document.getElementById(r.kind === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(r.kind); recalc(); return;
+      if (r) document.getElementById(r.kind === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(r.kind);
+      document.getElementById('wc-t-tag').innerHTML = tagTableHtml(); recalc(); return;
     }
     if (t.closest('#wc-den-toggle')) {
       WC.denOpen = !WC.denOpen;
