@@ -58,7 +58,7 @@ function eg_pw_material_label_id(PDO $pdo): int {
 }
 
 /** 跳窗需要的背景資料：密度表、材質子標籤清單、齒輪預設外徑／齒寬（d_id>0 才查） */
-function eg_pw_context(PDO $pdo, int $dId, callable $daExpr): array {
+function eg_pw_context(PDO $pdo, int $dId, callable $daExpr, ?array $gears = null): array {
     eg_pw_ensure($pdo);
     $lid = eg_pw_material_label_id($pdo);
     $subs = [];
@@ -76,19 +76,35 @@ function eg_pw_context(PDO $pdo, int $dId, callable $daExpr): array {
         }
     } catch (Throwable $e) {}
     $gear = null;
-    if ($dId > 0) {
-        try {
-            $da = $daExpr('g', 'dt');
+    $da = $daExpr('g', 'dt');
+    try {
+        if (is_array($gears)) {
+            // 畫面上目前的齒輪列（未存檔也算得出）：用常數組成衍生表，套同一支齒部外徑算式
+            $sel = []; $prm = [];
+            foreach (array_slice($gears, 0, 20) as $g) {
+                if (!is_array($g)) continue;
+                $n = function ($k) use ($g) { $v = $g[$k] ?? null; return ($v === '' || $v === null || !is_numeric($v)) ? null : (float)$v; };
+                $sel[] = "SELECT ? AS Module, ? AS Teeth, ? AS Face_Width, ? AS Helix_Angle, ? AS Profile_Shift_X, ? AS Gear_Type, ? AS spec_spline_std, ? AS spec_spline_nominal_dia";
+                array_push($prm, (string)($g['Module'] ?? ''), $n('Teeth'), $n('Face_Width'), $n('Helix_Angle'), $n('Profile_Shift_X'),
+                           (int)($g['Gear_Type'] ?? 0) ?: null, ($g['spec_spline_std'] ?? '') !== '' ? (string)$g['spec_spline_std'] : null, $n('spec_spline_nominal_dia'));
+            }
+            if ($sel) {
+                $st = $pdo->prepare("SELECT MAX(ROUND($da, 3)) AS da, MAX(g.Face_Width) AS fw
+                                     FROM (" . implode(' UNION ALL ', $sel) . ") g LEFT JOIN dict_gear_type dt ON dt.gear_type_id=g.Gear_Type
+                                     WHERE CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8))>0 AND g.Teeth>0");
+                $st->execute($prm);
+                $r = $st->fetch(PDO::FETCH_ASSOC);
+                if ($r && ($r['da'] !== null || $r['fw'] !== null)) $gear = ['da' => $r['da'] !== null ? (float)$r['da'] : null, 'fw' => $r['fw'] !== null ? (float)$r['fw'] : null];
+            }
+        } elseif ($dId > 0) {
             $st = $pdo->prepare("SELECT MAX(ROUND($da, 3)) AS da, MAX(g.Face_Width) AS fw
                                  FROM d_setting_gear g LEFT JOIN dict_gear_type dt ON dt.gear_type_id=g.Gear_Type
                                  WHERE g.d_setting_id=? AND CAST(REPLACE(g.Module,'M','') AS DECIMAL(20,8))>0 AND g.Teeth>0");
             $st->execute([$dId]);
             $r = $st->fetch(PDO::FETCH_ASSOC);
-            if ($r && ($r['da'] !== null || $r['fw'] !== null)) {
-                $gear = ['da' => $r['da'] !== null ? (float)$r['da'] : null, 'fw' => $r['fw'] !== null ? (float)$r['fw'] : null];
-            }
-        } catch (Throwable $e) {}
-    }
+            if ($r && ($r['da'] !== null || $r['fw'] !== null)) $gear = ['da' => $r['da'] !== null ? (float)$r['da'] : null, 'fw' => $r['fw'] !== null ? (float)$r['fw'] : null];
+        }
+    } catch (Throwable $e) { error_log('[part_weight] gear: ' . $e->getMessage()); }
     // 標籤加工（鍵／中心牙孔／孔加工）要認的標籤名稱與孔加工子標籤名稱
     $tagLabels = []; $subsHole = [];
     try {

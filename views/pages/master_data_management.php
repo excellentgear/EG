@@ -2816,7 +2816,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'weight_calc_ctx') {
         try {
             require_once __DIR__ . '/../../src/common/part_weight_lib.php';
-            $ctx = eg_pw_context($pdo, intval($_POST['d_id'] ?? 0), '_gear_da_expr');
+            $__gj = isset($_POST['gears']) ? json_decode((string)$_POST['gears'], true) : null;   // 畫面上目前的齒輪列（未存檔也要算得出齒部外徑）
+            $ctx = eg_pw_context($pdo, intval($_POST['d_id'] ?? 0), '_gear_da_expr', is_array($__gj) ? $__gj : null);
             $ctx['success']  = true;
             $ctx['can_edit'] = _mdPerm('label_dict', 'edit', $can_dict_part);
             echo json_encode($ctx, JSON_UNESCAPED_UNICODE);

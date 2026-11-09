@@ -405,7 +405,7 @@
     document.getElementById('wc-apply').disabled = true;
     var pn0 = (document.getElementById('pf-D_Setting_Id') || {}).value || '';
     document.getElementById('wc-title-part').textContent = pn0 ? '— ' + pn0 : '';
-    api({ action: 'weight_calc_ctx', d_id: did }).done(function (r) {
+    api({ action: 'weight_calc_ctx', d_id: did, gears: JSON.stringify(typeof gearRows !== 'undefined' ? gearRows : []) }).done(function (r) {
       if (!r || !r.success) { document.getElementById('wc-body').innerHTML = '<div class="wc-err">' + esc((r && r.message) || '載入失敗') + '</div>'; return; }
       WC.ctx = r; WC.denOpen = false; WC.denCustom = ''; WC.seq = 0;
       WC.rows = buildRows(); WC.tags = buildTags(); pickDefaultDensity(); render();
