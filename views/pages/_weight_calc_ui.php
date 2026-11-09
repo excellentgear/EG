@@ -183,7 +183,7 @@
     }
     var D = pn(t.D), dp = pn(t.depth);
     t._depthAuto = null;
-    if (t.mode === 'radial' || t.mode === 'radial2') {   // 徑向：從某段外徑鑽到某階內孔，深度＝壁厚（對鑽＝兩側壁厚）＋加深
+    if (t.mode === 'radial' || t.mode === 'radial2') {   // 外徑鑽到內徑：深度＝(外徑−內徑)/2；外徑完全貫穿：深度＝外徑−內徑；皆可再加深
       var oR = byId(WC.rows, t.oid), bR = byId(WC.rows, t.bid), Do = oR ? pn(oR.D) : null, Db = bR ? pn(bR.D) : null;
       if (!oR) miss.push('要從哪一段外徑鑽'); else if (!Do) miss.push('該外徑段尚未填外徑');
       if (!bR) miss.push('要鑽到哪一階內孔'); else if (!Db) miss.push('該內孔尚未填孔徑');
@@ -201,7 +201,7 @@
     return { v: PI / 4 * D * D * dp * q, miss: [] };
   }
   function holeDims(t, inp) {
-    var h = '孔徑 Ø ' + inp('D', 56) + ' 鑽法 <select class="wc-sel" data-tf="mode"><option value="manual"' + (t.mode === 'manual' ? ' selected' : '') + '>手動輸入深度</option><option value="radial"' + (t.mode === 'radial' ? ' selected' : '') + '>徑向：外徑鑽到內孔</option><option value="radial2"' + (t.mode === 'radial2' ? ' selected' : '') + '>徑向對鑽（兩側）</option></select>';
+    var h = '孔徑 Ø ' + inp('D', 56) + ' 鑽法 <select class="wc-sel" data-tf="mode"><option value="manual"' + (t.mode === 'manual' ? ' selected' : '') + '>從端面（輸入深度）</option><option value="radial"' + (t.mode === 'radial' ? ' selected' : '') + '>外徑鑽到內徑</option><option value="radial2"' + (t.mode === 'radial2' ? ' selected' : '') + '>外徑完全貫穿（外徑−內徑）</option></select>';
     if (t.mode === 'manual') return h + ' 深 ' + inp('depth', 60);
     return h + '<br>自 <select class="wc-sel" data-tf="oid" style="max-width:150px">' + rowOpts('out', t.oid) + '</select> 鑽到 <select class="wc-sel" data-tf="bid" style="max-width:150px">' + rowOpts('bore', t.bid) + '</select> 加深 ' + inp('extra', 48) + ' <b data-tdepth="' + t.id + '" style="color:#8a4b00;"></b>';
   }
