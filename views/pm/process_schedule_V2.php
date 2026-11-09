@@ -4,6 +4,7 @@ include "../../src/common/DBConnection.php";
 require_once __DIR__ . '/../../src/common/gear_spec_lib.php';   // 模數要印 M 還是 DP/CP＝eg_gear_module_text()，唯一實作
 require_once __DIR__ . '/../../src/common/order_bom_filter_tag_lib.php';   // ot_bom_order_urgent_sql＝BOM總覽「訂單是急件」的唯一判定
 require_once __DIR__ . '/../../src/common/ps_plan_lib.php';     // 生管預排／排序紀錄／是否依序加工（唯一實作）
+require_once __DIR__ . '/../../src/common/ps_machine_cat_lib.php';  // 機台分類（唯一實作）
 require_once __DIR__ . '/../../src/common/gear_save_lib.php';   // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 // 檢查是否已登入 (處理 Session Timeout)
@@ -1203,7 +1204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $row_gear = $stmt_gear->fetch(PDO::FETCH_ASSOC);
             $gear_settings = $row_gear ? json_decode($row_gear['param_value'], true) : [];
 
-            echo json_encode(['success' => true, 'machines' => $machines, 'types' => $types, 'gear_settings' => $gear_settings]);
+            echo json_encode(['success' => true, 'machines' => $machines, 'types' => $types, 'gear_settings' => $gear_settings, 'ps_cat' => psc_data($pdo)]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -2320,6 +2321,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && strpos($
 }
 
 // =================================================================================
+// 後端邏輯：機台分類（唯一實作在 src/common/ps_machine_cat_lib.php）
+//   ps_cat_save        整批儲存分類（名稱／順序／成員機台；一台機台只能屬於一個分類）— 需機台修改權限
+//   ps_cat_assign      未指派工單歸類（分類內順序＝未指派清單順序）— 需未指派排序權限
+// =================================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['ps_cat_save', 'ps_cat_assign'], true)) {
+    header('Content-Type: application/json');
+    try {
+        if ($_POST['action'] === 'ps_cat_save') {
+            if (!$can_edit_machine) throw new Exception('無權限（需機台修改權限）');
+            psc_save_cats($pdo, (array)json_decode($_POST['cats'] ?? '[]', true));
+            echo json_encode(['success' => true, 'message' => '機台分類已儲存', 'ps_cat' => psc_data($pdo)], JSON_UNESCAPED_UNICODE);
+        } else {
+            if (!$P['psv_unassigned_order']) throw new Exception('無權限（需生管或管理者權限）');
+            $n = psc_save_cards($pdo, (array)json_decode($_POST['map'] ?? '{}', true));
+            echo json_encode(['success' => true, 'changed' => $n]);
+        }
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// =================================================================================
 // 後端邏輯：更新備註 (生管專用 / 生產自動儲存用)
 // =================================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_task_remarks') {
@@ -3421,6 +3445,33 @@ function get_state_badge($state)
             padding: 10px;
             font-size: 14px;
         }
+        /* 調整順序視窗：欄位固定寬度對齊（客戶｜BOM｜料號｜數量），並依「一次顯示筆數」自動縮放密度 */
+        #unassignedSortModal .list-group-item { padding: 6px 10px; margin-bottom: 2px; font-size: 13px; }
+        #unassignedSortModal .sp-r { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+        #unassignedSortModal .sp-c-h { flex: 0 0 auto; white-space: nowrap; }
+        #unassignedSortModal .sp-c-no { flex: 0 0 30px; text-align: right; font-weight: bold; }
+        #unassignedSortModal .sp-c-cl { flex: 0 0 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; }
+        #unassignedSortModal .sp-c-bom { flex: 0 0 130px; font-weight: bold; white-space: nowrap; }
+        #unassignedSortModal .sp-c-pt { flex: 0 0 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #444; }
+        #unassignedSortModal .sp-c-q { flex: 0 0 86px; text-align: right; white-space: nowrap; color: #444; }
+        #unassignedSortModal .sp-c-tg { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+        #unassignedSortModal .sp-ctl { flex: 0 0 auto; white-space: nowrap; }
+        #unassignedSortModal .sp-sub { font-size: 11px; color: #666; margin: 1px 0 0 0; padding-left: 62px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #unassignedSortModal li.sp-grp { list-style: none; font-size: 13px; font-weight: bold; color: #7a4510; background: #FBE9CF; border-left: 5px solid #F0A24B; padding: 3px 10px; margin: 6px 0 3px; border-radius: 3px; }
+        #unassignedSortModal li.sp-grp small { font-weight: normal; color: #8a6d3b; }
+        #unassignedSortModal .sp-catsel { height: 22px; font-size: 11px; max-width: 96px; margin-right: 4px; padding: 0 2px; vertical-align: middle; }
+        #sp-stage-list .sp-catsel { display: none; }
+        #sp-stage-list .sp-c-cl { flex-basis: 70px; }
+        #sp-stage-list .sp-c-bom { flex-basis: 112px; }
+        #sp-stage-list .sp-c-pt { flex: 1 1 80px; min-width: 60px; }
+        #sp-stage-list .sp-c-q { flex-basis: 74px; }
+        #sp-stage-list .sp-c-tg { display: none; }
+        #sp-stage-list .sp-sub { padding-left: 0; white-space: normal; }
+        #unassignedSortModal.sp-d2 .list-group-item { padding: 4px 10px; margin-bottom: 1px; }
+        #unassignedSortModal.sp-d2 .sp-sub { display: none; }
+        #unassignedSortModal.sp-d3 .list-group-item { padding: 2px 8px; margin-bottom: 1px; font-size: 12px; }
+        #unassignedSortModal.sp-d3 .sp-sub { display: none; }
+        #unassignedSortModal.sp-d3 .sp-ctl .btn { padding: 0 4px; line-height: 1.4; }
 
         /* 搜尋功能樣式 */
         body.search-mode .waiting-task {
@@ -3932,6 +3983,11 @@ function get_state_badge($state)
         #v2Board { display: flex; gap: 10px; align-items: flex-start; }
         #v2Board > .v2-empty { flex: 1 1 auto; }
         .v2-ucol { flex: 0 0 270px; min-width: 0; }
+        /* 機台分類：看板的分類標題（機台欄分組、未指派分組） */
+        .v2-cat-h { grid-column: 1 / -1; font-size: 14px; font-weight: bold; color: #7a4510; background: #FBE9CF; border-left: 5px solid #F0A24B; padding: 4px 10px; border-radius: 3px; }
+        .v2-cat-h small { font-weight: normal; color: #8a6d3b; margin-left: 6px; }
+        .v2-grp { font-size: 12px; font-weight: bold; color: #7a4510; background: #FBE9CF; border-left: 4px solid #F0A24B; padding: 2px 8px; margin: 6px 0 4px; border-radius: 2px; }
+        .v2-grp small { font-weight: normal; color: #8a6d3b; margin-left: 4px; }
         .v2-mgrid { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 10px; align-items: start; }
         @media (max-width: 700px) { #v2Board { flex-wrap: wrap; } .v2-ucol { flex: 1 1 100%; } .v2-mgrid { flex: 1 1 100%; } }
         .v2-col { background: #fff; border: 1px solid #e6dccf; border-top: 4px solid #c8bfb4; border-radius: 6px; display: flex; flex-direction: column; min-width: 0; }
@@ -4384,6 +4440,7 @@ function get_state_badge($state)
 
                                             <!-- 分頁內容 -->
                                             <div id="machineTypeTabContent" class="tab-content">
+                                                <div id="psCatData" style="display:none;" data-json="<?= htmlspecialchars(json_encode(psc_data($pdo), JSON_UNESCAPED_UNICODE), ENT_QUOTES) ?>"></div>
                                                 <?php
                                                 $is_first = true;
                                                 foreach ($tabs_to_display as $type):
@@ -5165,7 +5222,7 @@ function get_state_badge($state)
 
                     <!-- 機台設定 Modal -->
                     <div class="modal fade" id="machineSettingModal" tabindex="-1" role="dialog">
-                        <div class="modal-dialog modal-lg" role="document">
+                        <div class="modal-dialog" role="document" style="width: 1400px; max-width: 96%;">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
@@ -5196,6 +5253,13 @@ function get_state_badge($state)
                                                 <label>儀表板顯示設定 (勾選要在資料塊顯示齒輪模數的機台類型)</label>
                                                 <div id="gear-settings-checkboxes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;"></div>
                                                 <button type="button" class="btn btn-info btn-sm" id="btnSaveGearSettings">儲存顯示設定</button>
+                                            </div>
+                                            <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;" id="psCatBox">
+                                                <label>機台分類（自訂分類名稱並選定機台；<b>一台機台只能屬於一個分類</b>）</label>
+                                                <div class="text-muted" style="font-size:12px;margin-bottom:6px;">有設定分類時，前端看板的機台會依分類分組顯示；「未指派」工單本身沒有機台，由生管在「調整順序 - 未指派」自行歸類並調整分類內順序。沒建任何分類＝畫面維持原樣。</div>
+                                                <div id="psCatList"></div>
+                                                <button type="button" class="btn btn-default btn-sm" id="btnAddPsCat"><i class="fa fa-plus"></i> 新增分類</button>
+                                                <button type="button" class="btn btn-primary btn-sm" id="btnSavePsCat">儲存分類設定</button>
                                             </div>
                                         </div>
                                         <!-- 右側：編輯表單 -->
@@ -5338,9 +5402,9 @@ function get_state_badge($state)
 
                     <!-- 未指派排序 Modal -->
                     <div class="modal fade" id="unassignedSortModal" tabindex="-1" role="dialog">
-                        <div class="modal-dialog" role="document" style="width: 1180px; max-width: 96%;">
+                        <div class="modal-dialog" role="document" style="width: 1400px; max-width: 96%; margin-top: 12px; margin-bottom: 12px;">
                             <div class="modal-content">
-                                <div class="modal-header">
+                                <div class="modal-header" style="padding:8px 15px;">
                                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
                                     <h4 class="modal-title"><i class="fa fa-sort"></i> 調整未指派順序</h4>
                                 </div>
@@ -5348,7 +5412,13 @@ function get_state_badge($state)
                                     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                                         <input type="text" id="sp-filter" class="form-control input-sm" placeholder="搜尋製令／客戶／料號" style="width:200px;">
                                         <?php if ($P['psv_preplan']): ?><button type="button" class="btn btn-sm btn-warning" id="sp-preplan-btn" title="把還沒移轉到此製程大類的 BOM 先排進來（可報工）"><i class="fa fa-plus"></i> 預排</button><?php endif; ?>
-                                        <span style="margin-left:auto;">整批排序：
+                                        <span style="margin-left:auto;" title="一次畫面要看到幾筆；筆數多時自動縮小內容（字不會小於 12px），仍放不下才出現捲軸">一次顯示：
+                                            <select id="sp-rows" class="input-sm" style="height:26px;margin-right:12px;">
+                                                <option value="10">10 筆</option>
+                                                <option value="12">12 筆</option>
+                                                <option value="15">15 筆</option>
+                                                <option value="20">20 筆</option>
+                                            </select>整批排序：
                                             <select id="sp-sortby" class="input-sm" style="height:26px;">
                                                 <option value="">選擇…</option>
                                                 <option value="bom">製令編號（舊→新）</option>
@@ -5782,6 +5852,46 @@ function get_state_badge($state)
                         }));
                     });
 
+                    // --- 調整順序視窗：一列的版面（客戶｜BOM｜料號｜數量 固定欄寬對齊；第二行小字放進度/交期/備註）---
+                    window.spRowHtml = function(o) {
+                        var e = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
+                        var qty = (o.qty === '' || o.qty == null) ? '' : 'x ' + Number(o.qty).toLocaleString() + ' pcs';
+                        return '<div class="sp-r">' +
+                            '<span class="sp-c-h"><i class="fa fa-bars sp-handle text-muted" title="整列都可以按住拖曳"></i> <label class="sp-chk" style="margin:0;font-weight:normal;"><input type="checkbox" class="sp-sel" title="勾選後拖曳其中一筆，會一起帶走"></label></span>' +
+                            '<span class="sp-c-no"><span class="sp-no">' + (o.no == null ? '' : o.no) + '</span>.</span>' +
+                            '<span class="sp-c-cl" title="' + e(o.client) + '">' + (e(o.client) || '-') + '</span>' +
+                            '<span class="sp-c-bom" title="' + e(o.bom) + '">' + e(o.bom) + '</span>' +
+                            '<span class="sp-c-pt" title="' + e(o.part) + '">' + e(o.part) + '</span>' +
+                            '<span class="sp-c-q">' + e(qty) + '</span>' +
+                            '<span class="sp-c-tg">' + (o.tags || '') + '</span>' +
+                            '<span class="sp-ctl">' + (o.ctl || '') + '</span></div>' +
+                            (o.sub ? '<div class="sp-sub">' + o.sub + '</div>' : '');
+                    };
+                    // 一次顯示筆數：依畫面高度自動選密度（完整→精簡→緊湊），文字最小 12px，仍放不下才捲動
+                    window.spApplyView = function() {
+                        var n = parseInt($('#sp-rows').val(), 10) || 10, $m = $('#unassignedSortModal'), $li = $('#unassigned-sort-list > li[data-id]').first();
+                        var avail = Math.max(260, window.innerHeight - 235), dens = 'sp-d1', h = 52;
+                        $m.removeClass('sp-d1 sp-d2 sp-d3');
+                        var order = ['sp-d1', 'sp-d2', 'sp-d3'], defH = [54, 36, 28];
+                        for (var i = 0; i < order.length; i++) {
+                            $m.addClass(order[i]);
+                            h = $li.length ? ($li[0].offsetHeight + 3) : defH[i];
+                            dens = order[i];
+                            if (n * h <= avail) break;
+                            if (i < order.length - 1) $m.removeClass(order[i]);
+                        }
+                        var bodyH = Math.min(avail, n * h + 14);
+                        $('#sp-body').css({ 'max-height': 'none', height: bodyH + 'px' });
+                        $('#sp-stage-body').css({ 'max-height': 'none', height: Math.max(120, bodyH - 36) + 'px' });
+                    };
+                    (function() {
+                        var saved = null; try { saved = localStorage.getItem('sp_view_rows'); } catch (e) {}
+                        if (saved && $('#sp-rows option[value="' + saved + '"]').length) $('#sp-rows').val(saved);
+                        $('#sp-rows').on('change', function() { try { localStorage.setItem('sp_view_rows', this.value); } catch (e) {} window.spApplyView(); });
+                        $(window).on('resize', function() { if ($('#unassignedSortModal').hasClass('in')) window.spApplyView(); });
+                        $('#unassignedSortModal').on('shown.bs.modal', function() { window.spApplyView(); });
+                    })();
+
                     // --- 標題點擊事件 (開啟排序視窗 - 支援未指派與機台) ---
                     $(document).on('click', '.kanban-column-header', function() {
                         var $header = $(this);
@@ -5833,8 +5943,22 @@ function get_state_badge($state)
                             return seqA - seqB;
                         });
 
+                        // 機台分類（只有「未指派」清單才會分組；沒建分類＝與原本完全相同）
+                        var psCD = {};
+                        try { psCD = JSON.parse($('#psCatData').attr('data-json') || '{}'); } catch (e) {}
+                        var catList = (psCD.cats || []), catOf = (psCD.card && !Array.isArray(psCD.card)) ? psCD.card : {};
+                        var hasCats = isUnassignedList && catList.length > 0;
+                        var catGroups = [{ id: 0, name: '未分類' }].concat(catList);
+                        var catSelHtml = '';
+                        if (hasCats) {
+                            catSelHtml = '<select class="sp-catsel" title="調整歸屬的機台分類（選了會放到該分類的最後面）">' + catGroups.map(function(g) { return '<option value="' + g.id + '">' + $('<i>').text(g.name).html() + '</option>'; }).join('') + '</select>';
+                        }
+                        var builtLis = [];
+
                         // 使用排好序的陣列來產生 Modal 內容
                         $.each(cardsArray, function(index, $card) {
+                            var myCat = hasCats ? (parseInt(catOf[String($card.data('id'))], 10) || 0) : 0;
+                            if (hasCats && !catList.some(function(g) { return g.id === myCat; })) myCat = 0;
                             var id = $card.data('id'); // This is bom_ing_fid
                             var bom = $card.data('bom') || '';
                             var partNo = $card.data('part-no') || '';
@@ -5847,6 +5971,7 @@ function get_state_badge($state)
 
                             // 計算進度
                             var percent = (sqty > 0) ? Math.min(100, Math.round((okQty / sqty) * 100)) : 0;
+                            var escH = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
 
                             // 收集備註資訊
                             var remarks = [];
@@ -5859,9 +5984,7 @@ function get_state_badge($state)
 
                             var gearInfo = $card.data('gear-info');
 
-                            var html = '<div class="row" style="margin:0;">';
-                            html += '<div class="col-xs-10" style="padding:0;">';
-                            html += '<i class="fa fa-bars sp-handle text-muted" title="整列都可以按住拖曳" style="margin-right:6px;"></i><label class="sp-chk" style="margin:0 6px 0 0;font-weight:normal;"><input type="checkbox" class="sp-sel" title="勾選後拖曳其中一筆，會一起帶走"></label><strong><span class="sp-no">' + (index + 1) + '</span>. ' + bom + '</strong>';                            if (partNo) html += ' <span class="text-muted">| ' + partNo + '</span>';
+                            var html = '';   // 只放標籤（待指派／急件／預排…），其餘欄位由 spRowHtml 以固定寬度排列
 
                             var isPre = $card.attr('data-preplan') === '1';
                             var isPurg = $card.attr('data-plan-urgent') === '1';
@@ -5883,41 +6006,40 @@ function get_state_badge($state)
 
                             // 急件／特急標示放在「待指派」右側（顏色與底色由 spApplyUrg 依來源與生管手動設定決定）
                             html = html.replace('>待指派</span>', '>待指派</span><span class="sp-ulab"></span>');
-                            html += '<div style="font-size: 11px; color: #666; margin-top: 2px;">';
-                            html += '<span style="margin-right: 10px;"><i class="fa fa-user"></i> ' + (client || '-') + '</span>';
-                            html += '<span style="margin-right: 10px;"><i class="fa fa-cubes"></i> ' + sqty + '</span>';
+                            // 第二行小字：進度、交期、齒輪資訊、備註（已取消下方進度長條）
+                            var sub = '';
                             if (okQty > 0 || state === 'ing') {
-                                html += '<span style="margin-right: 10px; color: #337ab7;"><i class="fa fa-pie-chart"></i> ' + percent + '% (' + okQty + '/' + sqty + ')</span>';
+                                sub += '<span style="margin-right: 10px; color: #337ab7;"><i class="fa fa-pie-chart"></i> ' + percent + '% (' + okQty + '/' + sqty + ')</span>';
                             }
-                            if (shippingDate) html += '<span><i class="fa fa-calendar"></i> ' + shippingDate + '</span>';
-                            html += '</div>';
+                            if (shippingDate) sub += '<span style="margin-right: 10px;"><i class="fa fa-calendar"></i> ' + shippingDate + '</span>';
+                            if (gearInfo) sub += '<span style="margin-right: 10px; color: #337ab7; font-weight: bold;">' + gearInfo + '</span>';
+                            if (remarks.length > 0) sub += '<span style="color: #8a6d3b;"><i class="fa fa-info-circle"></i> ' + remarks.join(' | ') + '</span>';
+                            html = window.spRowHtml({
+                                no: index + 1, client: client, bom: bom, part: partNo, qty: sqty, tags: html, sub: sub,
+                                ctl: catSelHtml +
+                                    '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
+                                    '<button type="button" class="btn btn-xs sp-urg ' + (isPurg ? 'btn-danger' : 'btn-default') + '" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
+                                    (isPre ? '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' : '') +
+                                    '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button>'
+                            });
 
-                            // 新增：進度條顯示 (若有生產進度)
-                            if (sqty > 0 && (okQty > 0 || state === 'ing')) {
-                                html += '<div class="progress" style="height: 4px; margin-bottom: 0; margin-top: 3px; background-color: #e0e0e0;">';
-                                html += '<div class="progress-bar progress-bar-success" role="progressbar" style="width: ' + percent + '%;"></div>';
-                                html += '</div>';
-                            }
-
-                            if (gearInfo) {
-                                html += '<div style="font-size: 11px; color: #337ab7; margin-top: 2px; font-weight: bold;">' + gearInfo + '</div>';
-                            }
-
-                            if (remarks.length > 0) {
-                                html += '<div style="font-size: 11px; color: #8a6d3b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i class="fa fa-info-circle"></i> ' + remarks.join(' | ') + '</div>';
-                            }
-                            html += '</div><div class="col-xs-2 text-right sp-ctl" style="padding:0; padding-top: 4px; white-space:nowrap;">' +
-                                '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
-                                '<button type="button" class="btn btn-xs sp-urg ' + (isPurg ? 'btn-danger' : 'btn-default') + '" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
-                                (isPre ? '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' : '') +
-                                '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button>' +
-                                '</div></div>';
-
-                            $modalList.append('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="' + index + '" data-purg="' + (isPurg ? 1 : 0) + '" data-ubase="' + uBase + '" data-pre="' + (isPre ? 1 : 0) + '" data-id="' + id + '" data-bom="' + $('<i>').text(bom).html() + '" data-client="' + $('<i>').text(client).html() + '" data-ship="' + $('<i>').text(shippingDate).html() + '">' + html + '</li>');
-                            if (window.spApplyUrg) window.spApplyUrg($modalList.children('li').last());
+                            var $newLi = $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="' + index + '" data-purg="' + (isPurg ? 1 : 0) + '" data-ubase="' + uBase + '" data-pre="' + (isPre ? 1 : 0) + '" data-id="' + id + '" data-cat="' + myCat + '" data-cat0="' + myCat + '" data-bom="' + $('<i>').text(bom).html() + '" data-client="' + $('<i>').text(client).html() + '" data-ship="' + $('<i>').text(shippingDate).html() + '">' + html + '</li>');
+                            if (hasCats) $newLi.find('.sp-catsel').val(String(myCat));
+                            if (window.spApplyUrg) window.spApplyUrg($newLi);
+                            builtLis.push({ cat: myCat, $li: $newLi });
                         });
+                        if (hasCats) {
+                            // 機台分類：未歸類的在最上面「未分類」，其後依分類順序；每組一個標題（空分類也留標題，方便把工單拖進去）
+                            catGroups.forEach(function(g) {
+                                $modalList.append('<li class="sp-grp" data-cat="' + g.id + '" style="list-style:none;"><span class="sp-grp-t">' + $('<i>').text(g.name).html() + '</span> <small class="sp-grp-n"></small></li>');
+                                builtLis.filter(function(b) { return b.cat === g.id; }).forEach(function(b) { $modalList.append(b.$li); });
+                            });
+                            $modalList.children('li[data-id]').each(function(i) { $(this).attr('data-o', i); });
+                        } else {
+                            builtLis.forEach(function(b) { $modalList.append(b.$li); });
+                        }
                         $('#sp-filter').val('');
                         // 🌟🌟🌟 修正點結束 🌟🌟🌟
 
@@ -5941,7 +6063,45 @@ function get_state_badge($state)
                     (function() {
                         var $L = $('#unassigned-sort-list'), $S = $('#sp-stage-list'), sortL = null, sortS = null;
                         function items($ul) { return $ul.children('li[data-id]'); }
+                        // ---- 機台分類分組（沒有分類標題時以下全部不作用）----
+                        function hasGroups() { return $L.children('li.sp-grp').length > 0; }
+                        // 重新算每筆所屬分類（＝它上方最近的分類標題）並更新標題張數、下拉選單
+                        function recat() {
+                            if (!hasGroups()) return;
+                            var cur = 0, cnt = {};
+                            $L.children('li').each(function() {
+                                var $x = $(this);
+                                if ($x.hasClass('sp-grp')) { cur = +$x.attr('data-cat'); cnt[cur] = 0; }
+                                else if ($x.is('li[data-id]')) { $x.attr('data-cat', cur).find('.sp-catsel').val(String(cur)); cnt[cur]++; }
+                            });
+                            $L.children('li.sp-grp').each(function() { $(this).find('.sp-grp-n').text((cnt[+$(this).attr('data-cat')] || 0) + ' 張'); });
+                        }
+                        // 想放到某分類最前／最後時，要「插在誰前面」；回傳空 jQuery＝append 到最後
+                        function groupStartBefore(cat) {
+                            var $h = $L.children('li.sp-grp[data-cat="' + cat + '"]');
+                            return $h.nextAll('li[data-id],li.sp-grp').first();
+                        }
+                        function groupEndBefore(cat) {
+                            return $L.children('li.sp-grp[data-cat="' + cat + '"]').nextAll('li.sp-grp').first();
+                        }
+                        function placeIn($li, cat, atEnd) {
+                            var $b = atEnd ? groupEndBefore(cat) : groupStartBefore(cat);
+                            if ($b.length) $li.insertBefore($b); else $L.append($li);
+                        }
+                        function placeBack($li) {
+                            var o = +$li.attr('data-o');
+                            if (hasGroups()) {
+                                var cat = +$li.attr('data-cat') || 0;
+                                var $same = items($L).filter(function() { return +$(this).attr('data-cat') === cat && +$(this).attr('data-o') > o; }).first();
+                                if ($same.length) $li.insertBefore($same); else placeIn($li, cat, true);
+                            } else {
+                                var $b = items($L).filter(function() { return +$(this).attr('data-o') > o; }).first();
+                                if ($b.length) $li.insertBefore($b); else $L.append($li);
+                            }
+                        }
+                        window.spRecat = function() { recat(); };
                         function renum() {
+                            recat();
                             items($L).each(function(i) { $(this).find('.sp-no').first().text(i + 1); });
                             items($S).each(function() { $(this).find('.sp-no').first().text('–'); });
                             var n = items($S).length;
@@ -5956,7 +6116,8 @@ function get_state_badge($state)
                             var n = items($S).length;
                             if (!n) return;
                             var mk = function() { return $('<li class="sp-slotli" style="list-style:none;"><div class="sp-slot" style="margin:-3px 0;padding:1px 0;text-align:center;font-size:11px;color:#b36b00;border:1px dashed #f3a73c;border-radius:3px;background:#FFF1D6;cursor:pointer;">＋ 放這裡（' + n + ' 筆）</div></li>'); };
-                            items($L).each(function() { mk().insertBefore(this); });
+                            // 有分類標題時，標題前（＝上一個分類的最後）也要有「放這裡」
+                            $L.children('li[data-id],li.sp-grp').each(function() { mk().insertBefore(this); });
                             $L.append(mk());
                         }
                         function flash($li) {
@@ -5973,34 +6134,64 @@ function get_state_badge($state)
                             renum(); flash(sel.first());
                         }
                         $L.on('click', '.sp-slot', function() {
-                            var $slot = $(this).closest('li'), $next = $slot.nextAll('li[data-id]').first();
+                            var $slot = $(this).closest('li'), $next = $slot.nextAll('li[data-id],li.sp-grp').first();   // 下一個可能是工單或下一個分類標題
                             insertGroup(items($S), $next);
                         });
-                        $L.on('click', '.sp-top', function() { insertGroup($(this).closest('li'), items($L).first()); });
-                        $L.on('click', '.sp-bot', function() { insertGroup($(this).closest('li'), null); });
+                        // 最前／最後＝所屬分類內的最前／最後（沒有分類標題時＝整個清單）
+                        $L.on('click', '.sp-top', function() {
+                            var $li = $(this).closest('li');
+                            if (hasGroups()) { $li.find('.sp-sel').prop('checked', false); placeIn($li, +$li.attr('data-cat') || 0, false); renum(); flash($li); }
+                            else insertGroup($li, items($L).first());
+                        });
+                        $L.on('click', '.sp-bot', function() {
+                            var $li = $(this).closest('li');
+                            if (hasGroups()) { $li.find('.sp-sel').prop('checked', false); placeIn($li, +$li.attr('data-cat') || 0, true); renum(); flash($li); }
+                            else insertGroup($li, null);
+                        });
+                        // 下拉改歸屬分類：放到該分類的最後面
+                        $L.on('change', '.sp-catsel', function() {
+                            var $li = $(this).closest('li');
+                            placeIn($li, +this.value || 0, true); renum(); flash($li);
+                        });
                         $L.on('click', '.sp-pick', function() { $S.append($(this).closest('li')); renum(); });
                         $S.on('click', '.sp-back', function() {
-                            var $li = $(this).closest('li'), o = +$li.attr('data-o');
-                            var $b = items($L).filter(function() { return +$(this).attr('data-o') > o; }).first();
-                            insertGroup($li, $b);
+                            var $li = $(this).closest('li');
+                            $li.find('.sp-sel').prop('checked', false);
+                            placeBack($li); renum(); flash($li);
                         });
-                        $('#sp-stage-top').on('click', function() { insertGroup(items($S), items($L).first()); });
-                        $('#sp-stage-bot').on('click', function() { insertGroup(items($S), null); });
+                        $('#sp-stage-top').on('click', function() {
+                            if (hasGroups()) { items($S).toArray().reverse().forEach(function(e) { $(e).find('.sp-sel').prop('checked', false); placeIn($(e), +$(e).attr('data-cat') || 0, false); }); renum(); flash(items($L).first()); }
+                            else insertGroup(items($S), items($L).first());
+                        });
+                        $('#sp-stage-bot').on('click', function() {
+                            if (hasGroups()) { items($S).toArray().forEach(function(e) { $(e).find('.sp-sel').prop('checked', false); placeIn($(e), +$(e).attr('data-cat') || 0, true); }); renum(); flash(items($L).last()); }
+                            else insertGroup(items($S), null);
+                        });
                         $('#sp-filter').on('input', function() {
                             var q = $.trim(this.value).toLowerCase();
                             items($L).each(function() { $(this).toggle(!q || $(this).text().toLowerCase().indexOf(q) >= 0); });
                         });
                         $('#sp-sortby').on('change', function() {
                             var k = this.value; if (!k) return;
-                            var arr = items($L).toArray();
                             var key = function(e) { var d = e.dataset; return k === 'client' ? (d.client || '') : (d.bom || ''); };
-                            arr.sort(function(a, b) { var x = key(a), y = key(b), c = x < y ? -1 : x > y ? 1 : 0; return k === 'bomdesc' ? -c : c; });
-                            $L.append(arr); renum(); this.value = ''; $('#sp-body').scrollTop(0);
+                            var cmp = function(a, b) { var x = key(a), y = key(b), c = x < y ? -1 : x > y ? 1 : 0; return k === 'bomdesc' ? -c : c; };
+                            if (hasGroups()) {
+                                // 有機台分類時：各分類內各自排序，分類標題與分類歸屬不動
+                                $L.children('li.sp-grp').each(function() {
+                                    var cat = +$(this).attr('data-cat');
+                                    var arr = items($L).filter(function() { return +$(this).attr('data-cat') === cat; }).toArray().sort(cmp);
+                                    $(this).after(arr);
+                                });
+                            } else {
+                                var arr = items($L).toArray().sort(cmp);
+                                $L.append(arr);
+                            }
+                            renum(); this.value = ''; $('#sp-body').scrollTop(0);
                         });
                         function destroySortables() { if (sortL) { sortL.destroy(); sortL = null; } if (sortS) { sortS.destroy(); sortS = null; } }
                         function initSortables() {
                             destroySortables();
-                            var common = { group: 'sp', draggable: 'li[data-id]', filter: 'input,button,label,.sp-slotli', preventOnFilter: false, animation: 120, forceFallback: true, scroll: true, scrollSensitivity: 60, scrollSpeed: 18, ghostClass: 'sortable-ghost' };
+                            var common = { group: 'sp', draggable: 'li[data-id]', filter: 'input,button,label,select,.sp-slotli,.sp-grp', preventOnFilter: false, animation: 120, forceFallback: true, scroll: true, scrollSensitivity: 60, scrollSpeed: 18, ghostClass: 'sortable-ghost' };
                             // 勾選的項目：拖其中一筆跨清單時，其餘勾選的一起帶走
                             var carry = [];
                             var onStart = function(evt) {
@@ -6019,12 +6210,9 @@ function get_state_badge($state)
                         }
                         // 關閉前：暫放區沒放回的，依原位置放回左側，避免遺失
                         window.spReturnStaged = function() {
-                            items($S).each(function() {
-                                var o = +$(this).attr('data-o');
-                                var $b = items($L).filter(function() { return +$(this).attr('data-o') > o; }).first();
-                                if ($b.length) $(this).insertBefore($b); else $L.append(this);
-                            });
+                            items($S).each(function() { placeBack($(this)); });
                             $L.children('.sp-slotli').remove();
+                            recat();
                         };
                         // ===== 生管急件、預排 =====
                         var esc = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
@@ -6103,19 +6291,18 @@ function get_state_badge($state)
                             }, 'json');
                         });
                         function buildPreLi(r) {
-                            var html = '<div class="row" style="margin:0;"><div class="col-xs-10" style="padding:0;">' +
-                                '<i class="fa fa-bars sp-handle text-muted" style="margin-right:6px;"></i><label class="sp-chk" style="margin:0 6px 0 0;font-weight:normal;"><input type="checkbox" class="sp-sel"></label>' +
-                                '<strong><span class="sp-no"></span>. ' + esc(r.bom) + '</strong> <span class="text-muted">| ' + esc(r.part_no) + '</span> ' +
-                                '<span class="label label-info" style="font-size:10px;">待指派</span><span class="sp-ulab"></span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + esc(r.stage || '—') + '</span>' +
-                                '<div style="font-size:11px;color:#666;margin-top:2px;"><span style="margin-right:10px;"><i class="fa fa-user"></i> ' + esc(r.client || '-') + '</span><span><i class="fa fa-cubes"></i> ' + esc(r.sqty) + '</span> <span style="color:#8a4f12;">（' + esc(r.ProcessName || r.process_no) + '）</span></div>' +
-                                '</div><div class="col-xs-2 text-right sp-ctl" style="padding:0;padding-top:4px;white-space:nowrap;">' +
-                                '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-urg" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
-                                '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button></div></div>';
-                            return $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="9999" data-purg="0" data-ubase="' + esc(r.urg_base || '') + '" data-pre="1" data-id="' + r.bom_ing_fid + '" data-bom="' + esc(r.bom) + '" data-client="' + esc(r.client) + '" data-ship="">' + html + '</li>');
+                            var html = window.spRowHtml({
+                                no: '', client: r.client, bom: r.bom, part: r.part_no, qty: r.sqty,
+                                tags: '<span class="label label-info" style="font-size:10px;">待指派</span><span class="sp-ulab"></span> <span class="label" style="font-size:10px;background:#8a4f12;color:#fff;">預排</span> <span style="font-size:11px;color:#8a4f12;">目前在：' + esc(r.stage || '—') + '</span>',
+                                sub: '<span style="color:#8a4f12;">（' + esc(r.ProcessName || r.process_no) + '）</span>',
+                                ctl: '<button type="button" class="btn btn-xs btn-default sp-top" title="移到最前面"><i class="fa fa-angle-double-up"></i></button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-bot" title="移到最後面"><i class="fa fa-angle-double-down"></i></button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-urg" title="生管設為急件（再按一次取消）" style="font-weight:bold;">急</button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-unpre" title="取消預排">✕</button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-pick" title="挑出到右側暫放區"><i class="fa fa-arrow-right"></i></button>' +
+                                    '<button type="button" class="btn btn-xs btn-default sp-back" title="放回左側原位" style="display:none;"><i class="fa fa-arrow-left"></i></button>'
+                            });
+                            return $('<li class="list-group-item" style="cursor:grab;user-select:none;" data-o="9999" data-purg="0" data-ubase="' + esc(r.urg_base || '') + '" data-pre="1" data-id="' + r.bom_ing_fid + '" data-cat="0" data-cat0="0" data-bom="' + esc(r.bom) + '" data-client="' + esc(r.client) + '" data-ship="">' + html + '</li>');
                         }
                         $('#unassignedSortModal').on('shown.bs.modal', function() { $S.empty(); $('#sp-pre-panel').hide(); renum(); initSortables(); $('#sp-body').scrollTop(0); window.spSig0 = window.spSig(); });
                         $('#unassignedSortModal').on('hidden.bs.modal', function() { destroySortables(); });
@@ -6163,11 +6350,28 @@ function get_state_badge($state)
                                 var fid = $(this).attr('data-id'); planOrder.push(fid); planUrg[fid] = parseInt($(this).attr('data-purg')) || 0;
                             });
                             var planChanged = !!window.spSig && window.spSig() !== window.spSig0;
+                            var psCatChanged = false;
+                            // 機台分類：歸屬有變的工單一併存檔（分類內順序＝上面存的整體順序）
+                            if ($modalList.children('li.sp-grp').length) {
+                                if (window.spRecat) window.spRecat();
+                                var catMap = {}, catN = 0, catJson = {};
+                                try { catJson = JSON.parse($('#psCatData').attr('data-json') || '{}'); } catch (e) {}
+                                if (!catJson.card || Array.isArray(catJson.card)) catJson.card = {};
+                                $modalList.find('li[data-id]').each(function() {
+                                    var fid = $(this).attr('data-id'), now = parseInt($(this).attr('data-cat'), 10) || 0, was = parseInt($(this).attr('data-cat0'), 10) || 0;
+                                    if (now !== was) { catMap[fid] = now; catN++; if (now) catJson.card[fid] = now; else delete catJson.card[fid]; }
+                                });
+                                if (catN) {
+                                    $('#psCatData').attr('data-json', JSON.stringify(catJson));
+                                    $.post(location.pathname, { action: 'ps_cat_assign', map: JSON.stringify(catMap) }, null, 'json');
+                                }
+                                psCatChanged = catN > 0;
+                            }
                             $.post(location.pathname, {
                                 action: 'ps_plan_save', type_id: $targetList.attr('data-type-id'),
                                 order: JSON.stringify(planOrder), urgent: JSON.stringify(planUrg), changed: planChanged ? '1' : '0'
                             }, function(res) {
-                                if (res && res.success && planChanged && window.v2Refresh) setTimeout(function() { window.v2Refresh(); }, 500);   // 預排新增的卡片、急件色要重畫
+                                if (res && res.success && (planChanged || psCatChanged) && window.v2Refresh) setTimeout(function() { window.v2Refresh(); }, 500);   // 預排新增的卡片、急件色要重畫
                             }, 'json');
                         }
                     });
@@ -8754,6 +8958,9 @@ function get_state_badge($state)
                                     $tbody.html('<tr><td colspan="8" class="text-center text-muted">無機台資料</td></tr>');
                                 }
 
+                                // 4. 機台分類
+                                psCatInit(res.ps_cat || {}, res.machines || []);
+
                                 // 重置表單
                                 resetMachineForm();
                             } else {
@@ -8761,6 +8968,75 @@ function get_state_badge($state)
                             }
                         }, 'json');
                     }
+
+                    // ===== 機台分類設定（一台機台只能屬於一個分類）=====
+                    var psCatState = [], psCatMachines = [];
+                    function psCatInit(data, machines) {
+                        psCatMachines = machines;
+                        var byCat = {};
+                        var mm = data.machine || {};
+                        Object.keys(mm).forEach(function(mid) { (byCat[mm[mid]] = byCat[mm[mid]] || []).push(String(mid)); });
+                        psCatState = (data.cats || []).map(function(c) { return { id: c.id, name: c.name, machines: byCat[c.id] || [] }; });
+                        psCatRender();
+                    }
+                    function psCatRender() {
+                        var owner = {};
+                        psCatState.forEach(function(c, i) { c.machines.forEach(function(m) { owner[m] = i; }); });
+                        var esc = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
+                        var canEdit = !!userPerms.canEditMachine;
+                        var h = '';
+                        if (!psCatState.length) h = '<div class="text-muted" style="font-size:12px;margin-bottom:6px;">尚未建立分類。</div>';
+                        psCatState.forEach(function(c, i) {
+                            h += '<div class="panel panel-default" style="margin-bottom:8px;" data-ci="' + i + '"><div class="panel-heading" style="padding:6px 10px;display:flex;gap:6px;align-items:center;">' +
+                                '<input type="text" class="form-control input-sm psc-name" maxlength="30" style="max-width:260px;" placeholder="分類名稱" value="' + esc(c.name) + '"' + (canEdit ? '' : ' disabled') + '>' +
+                                '<span class="text-muted" style="font-size:12px;">' + c.machines.length + ' 台</span><span style="margin-left:auto;">' +
+                                (canEdit ? '<button type="button" class="btn btn-xs btn-default psc-up" title="上移"' + (i === 0 ? ' disabled' : '') + '><i class="fa fa-arrow-up"></i></button> ' +
+                                '<button type="button" class="btn btn-xs btn-default psc-down" title="下移"' + (i === psCatState.length - 1 ? ' disabled' : '') + '><i class="fa fa-arrow-down"></i></button> ' +
+                                '<button type="button" class="btn btn-xs btn-danger psc-del" title="刪除分類"><i class="fa fa-trash"></i></button>' : '') + '</span></div>' +
+                                '<div class="panel-body" style="padding:8px 10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:2px 12px;max-height:180px;overflow-y:auto;">';
+                            psCatMachines.forEach(function(m) {
+                                var mid = String(m.machine_id), mine = owner[mid] === i, other = owner[mid] !== undefined && !mine;
+                                h += '<label style="font-weight:normal;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' + (other ? 'color:#aaa;' : '') + '" title="' + esc(m.machine) + (other ? '（已屬於「' + esc(psCatState[owner[mid]].name || '未命名') + '」）' : '') + '">' +
+                                    '<input type="checkbox" class="psc-m" value="' + mid + '"' + (mine ? ' checked' : '') + (other || !canEdit ? ' disabled' : '') + '> ' + esc(m.machine) +
+                                    (m.type_name ? ' <span class="text-muted" style="font-size:11px;">' + esc(m.type_name) + '</span>' : '') + (other ? ' <span style="font-size:11px;">→ ' + esc(psCatState[owner[mid]].name || '未命名') + '</span>' : '') + '</label>';
+                            });
+                            h += '</div></div>';
+                        });
+                        $('#psCatList').html(h);
+                        $('#btnAddPsCat,#btnSavePsCat').prop('disabled', !canEdit);
+                    }
+                    $('#psCatList').on('input', '.psc-name', function() { psCatState[$(this).closest('[data-ci]').attr('data-ci')].name = this.value; });
+                    $('#psCatList').on('change', '.psc-m', function() {
+                        var c = psCatState[$(this).closest('[data-ci]').attr('data-ci')], v = this.value;
+                        c.machines = c.machines.filter(function(x) { return x !== v; });
+                        if (this.checked) c.machines.push(v);
+                        psCatRender();
+                    });
+                    $('#psCatList').on('click', '.psc-del', function() {
+                        var i = +$(this).closest('[data-ci]').attr('data-ci');
+                        if (!confirm('刪除分類「' + (psCatState[i].name || '未命名') + '」？\n（其機台回到未分類；已歸到此分類的未指派工單也回到未分類）')) return;
+                        psCatState.splice(i, 1); psCatRender();
+                    });
+                    $('#psCatList').on('click', '.psc-up,.psc-down', function() {
+                        var i = +$(this).closest('[data-ci]').attr('data-ci'), j = $(this).hasClass('psc-up') ? i - 1 : i + 1;
+                        if (j < 0 || j >= psCatState.length) return;
+                        var t = psCatState[i]; psCatState[i] = psCatState[j]; psCatState[j] = t; psCatRender();
+                    });
+                    $('#btnAddPsCat').on('click', function() { psCatState.push({ id: 0, name: '', machines: [] }); psCatRender(); $('#psCatList .psc-name').last().focus(); });
+                    $('#btnSavePsCat').on('click', function() {
+                        for (var i = 0; i < psCatState.length; i++) {
+                            if (!$.trim(psCatState[i].name)) { alert('第 ' + (i + 1) + ' 個分類尚未填名稱'); return; }
+                        }
+                        var $b = $(this).prop('disabled', true);
+                        $.post('process_schedule_V2.php', { action: 'ps_cat_save', cats: JSON.stringify(psCatState) }, function(res) {
+                            $b.prop('disabled', false);
+                            if (res && res.success) {
+                                showToast('成功', res.message, true);
+                                psCatInit(res.ps_cat || {}, psCatMachines);
+                                machineSettingsChanged = true;
+                            } else alert((res && res.message) || '儲存失敗');
+                        }, 'json').fail(function() { $b.prop('disabled', false); alert('連線失敗'); });
+                    });
 
                     function resetMachineForm() {
                         $('#setting_machine_id').val('');
@@ -10124,7 +10400,17 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         });
     };
     window.v2Reload = function () { if (window.v2Refresh) window.v2Refresh(); else location.reload(); };
+    // 機台分類資料（隨 #machineTypeTabContent 一起被 v2Refresh 更新）
+    var CD = { cats: [], machine: {}, card: {} };
+    function loadCatData() {
+        var d = {};
+        try { d = JSON.parse($('#psCatData').attr('data-json') || '{}'); } catch (e) {}
+        CD = { cats: d.cats || [], machine: d.machine || {}, card: d.card || {} };
+        if (Array.isArray(CD.machine)) CD.machine = {};
+        if (Array.isArray(CD.card)) CD.card = {};
+    }
     function render() {
+        loadCatData();
         var groups = collect();
         var q = $.trim($('#card-search-input').val() || '').toLowerCase();
 
@@ -10170,7 +10456,8 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
             '<div class="v2-load"><span><b>' + cur.ucards.length + '</b> 張</span><span title="未指派工單還要加工的總數量（各張工單數量減已報工良品數）">共 <b>' + num(uR) + '</b> pcs</span></div>' +
             '<div class="v2-col-tip">' + (P.canDrag ? '拖到右邊機台即指派；⋮ 可移到最前／最後' : '') + '</div></div>' +
             listHtml('unassigned-' + cur.typeId, cur.ucards, q, true) + '</div></div><div class="v2-mgrid">';
-        cur.machines.forEach(function (m) {
+        var machineCol = function (m) {
+            var bh = '';
             var st = status(m, m.cards), r = sumRemain(m.cards);
             var now = m.cards.filter(function (c) { return c.now; })[0];
             var lastEst = m.cards.length ? m.cards[m.cards.length - 1].est : '';
@@ -10185,7 +10472,25 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                 '<div class="v2-loadbar prog" title="' + (now ? '加工中工單進度 ' + now.pct + '%' : '目前沒有加工中的工單') + '"><i style="width:' + (now ? now.pct : 0) + '%"></i></div>' +
                 (lastEst && lastEst !== '-' ? '<div class="v2-col-tip">預計全部完工：' + esc(lastEst) + '</div>' : '<div class="v2-col-tip">&nbsp;</div>') +
                 '</div>' + listHtml(m.id, m.cards, q, false) + '</div>';
-        });
+            return bh;
+        };
+        // 機台分類：有建立分類時，機台欄依分類分組（未分類的放最後）；沒建分類＝與原本完全相同
+        if (!CD.cats.length) {
+            cur.machines.forEach(function (m) { bh += machineCol(m); });
+        } else {
+            var placed = {};
+            CD.cats.forEach(function (c) {
+                var ms = cur.machines.filter(function (m) { return CD.machine[m.id] === c.id; });
+                if (!ms.length) return;
+                bh += '<div class="v2-cat-h">' + esc(c.name) + '<small>' + ms.length + ' 台</small></div>';
+                ms.forEach(function (m) { placed[m.id] = 1; bh += machineCol(m); });
+            });
+            var rest = cur.machines.filter(function (m) { return !placed[m.id]; });
+            if (rest.length) {
+                if (Object.keys(placed).length) bh += '<div class="v2-cat-h">未分類<small>' + rest.length + ' 台</small></div>';
+                rest.forEach(function (m) { bh += machineCol(m); });
+            }
+        }
         bh += '</div>';
         $('#v2Board').html(bh);
 
@@ -10206,9 +10511,8 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
 
     function listHtml(mid, cards, q, isU) {
         var h = '<div class="v2-list" data-mid="' + esc(mid) + '">', shown = 0;
-        cards.forEach(function (c, i) {
-            if (!hit(c, q)) return;
-            shown++;
+        var rowHtml = function (c, i) {
+            var h = '';
             h += '<div class="v2-row' + (c.now ? ' now' : '') + (c.urgent ? ' urg-' + c.urgent : '') + '" data-fid="' + esc(c.fid) + '">' +
                 '<div class="v2-r1"><span class="v2-no">' + (c.now ? '▶' : (isU ? '' : (i + 1))) + '</span>' +
                 '<span class="v2-bom" data-copy="' + esc(c.bom) + '" title="點一下複製">' + esc(c.bom) + '</span>' +
@@ -10224,7 +10528,24 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
                 '<span>剩 <b>' + num(c.remain) + '</b> / ' + num(c.sq) + '</span>' + (c.ship ? '<span class="v2-ship">交 ' + esc(c.ship) + '</span>' : '') + '</div>' +
                 ((c.operator || c.start) ? '<div class="v2-r4">' + (c.operator ? '<span title="目前操作人員"><i class="fa fa-user"></i> ' + esc(c.operator) + '</span>' : '') +
                     (c.start ? '<span title="開始加工時間"><i class="fa fa-clock-o"></i> 開始 ' + esc(c.start) + '</span>' : '') + '</div>' : '') + '</div>';
-        });
+            return h;
+        };
+        if (isU && CD.cats.length) {
+            // 未指派依分類分組（沒歸類的在「未分類」最上面）；分類內順序＝未指派清單的順序
+            [{ id: 0, name: '未分類' }].concat(CD.cats).forEach(function (g) {
+                var gc = cards.filter(function (c) { return (CD.card[c.fid] || 0) === g.id; });
+                var vis = gc.filter(function (c) { return hit(c, q); });
+                if (q && !vis.length) return;
+                h += '<div class="v2-grp" data-cat="' + g.id + '">' + esc(g.name) + '<small>' + gc.length + ' 張</small></div>';
+                vis.forEach(function (c, i) { shown++; h += rowHtml(c, i); });
+            });
+        } else {
+            cards.forEach(function (c, i) {
+                if (!hit(c, q)) return;
+                shown++;
+                h += rowHtml(c, i);
+            });
+        }
         if (!shown) h += '<div class="v2-none">' + (q ? '無符合項目' : '無工單') + '</div>';
         return h + '</div>';
     }
@@ -10273,6 +10594,14 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
             render();
         }).fail(function () { toast('錯誤', '連線失敗，請重新整理頁面', false); render(); });
     }
+    // 未指派工單歸類：先更新畫面用的資料（畫面立即照新分類排），再背景存檔
+    function setCardCat(fid, cid) {
+        if ((CD.card[fid] || 0) === cid) return;
+        if (cid) CD.card[fid] = cid; else delete CD.card[fid];
+        try { $('#psCatData').attr('data-json', JSON.stringify(CD)); } catch (e) {}
+        var m = {}; m[fid] = cid;
+        $.post(SELF, { action: 'ps_cat_assign', map: JSON.stringify(m) }, null, 'json');
+    }
     function onDrop(evt) {
         var fid = evt.item.getAttribute('data-fid');
         var toMid = evt.to.getAttribute('data-mid'), fromMid = evt.from.getAttribute('data-mid');
@@ -10280,6 +10609,8 @@ $(document).on('submit', '.dynamic-modal-form', function(e) {
         var listFids = function (el) { return $(el).children('.v2-row').map(function () { return this.getAttribute('data-fid'); }).get(); };
         var reqs = [];
         if (/^unassigned/.test(toMid)) {
+            // 有機台分類時，落在哪個分類標題底下就歸到哪個分類（沒有分類＝完全不處理）
+            if (CD.cats.length) setCardCat(fid, parseInt($(evt.item).prevAll('.v2-grp').first().attr('data-cat'), 10) || 0);
             if (/^unassigned/.test(fromMid)) { done([saveOrder(toMid, listFids(evt.to))], '未指派順序已更新'); return; }
             findCard(fid).attr('data-processing-sequence', '').appendTo(colOf(toMid));
             reqs.push($.post(SELF, { action: 'update_assignment_only', machine_id: 'unassigned', bom_ing_fid: fid }, null, 'json'));
