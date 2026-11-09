@@ -962,9 +962,17 @@ try {
     $sim_map = ps_sim_map_for_ids($db, array_column($data_to_return, 'd_setting_id'));
 } catch (Throwable $e) { $sim_map = []; }
 
+// 料號重量（kg）：料號後面的重量按鈕用；失敗就當沒有
+$weight_map = [];
+try {
+    require_once __DIR__ . '/../common/part_weight_lib.php';
+    $weight_map = eg_pw_weight_map($db, array_column($data_to_return, 'd_setting_id'));
+} catch (Throwable $e) { $weight_map = []; }
+
 echo json_encode([
     'success' => true,
     'data' => $data_to_return,
+    'weight_map' => $weight_map ?: (object)[],
     'sim_map' => $sim_map ?: (object)[],
     'totalRecords' => (int)$totalRecords,
     'bom_ps_list' => $bom_ps_list,

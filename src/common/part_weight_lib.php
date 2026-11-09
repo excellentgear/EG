@@ -121,3 +121,16 @@ function eg_pw_save_densities(PDO $pdo, array $items, string $by): array {
     }
     return [true, '已儲存'];
 }
+
+/** 清單用：一次查多個料號的重量 → [d_id => kg(float)]；沒重量（NULL 或 0）的不回傳 */
+function eg_pw_weight_map(PDO $pdo, array $dIds): array {
+    $dIds = array_values(array_unique(array_filter(array_map('intval', $dIds))));
+    if (!$dIds) return [];
+    $out = [];
+    try {
+        $st = $pdo->prepare("SELECT d_id, Weight_Kg FROM d_setting WHERE Weight_Kg IS NOT NULL AND Weight_Kg>0 AND d_id IN (" . implode(',', array_fill(0, count($dIds), '?')) . ")");
+        $st->execute($dIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['d_id']] = (float)$r['Weight_Kg'];
+    } catch (Throwable $e) {}
+    return $out;
+}
