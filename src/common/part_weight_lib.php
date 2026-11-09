@@ -89,7 +89,13 @@ function eg_pw_context(PDO $pdo, int $dId, callable $daExpr): array {
             }
         } catch (Throwable $e) {}
     }
-    return ['material_label_id' => $lid, 'subs' => $subs, 'densities' => $dens, 'gear' => $gear];
+    // 標籤加工（鍵／中心牙孔／孔加工）要認的標籤名稱與孔加工子標籤名稱
+    $tagLabels = []; $subsHole = [];
+    try {
+        foreach ($pdo->query("SELECT label_id, label_name FROM dict_label WHERE label_id IN (3,4,20)")->fetchAll(PDO::FETCH_ASSOC) as $r) $tagLabels[(string)$r['label_id']] = $r['label_name'];
+        foreach ($pdo->query("SELECT sub_id, sub_name FROM dict_label_sub WHERE label_id=20")->fetchAll(PDO::FETCH_ASSOC) as $r) $subsHole[(string)$r['sub_id']] = $r['sub_name'];
+    } catch (Throwable $e) {}
+    return ['material_label_id' => $lid, 'subs' => $subs, 'densities' => $dens, 'gear' => $gear, 'tag_labels' => $tagLabels ?: new stdClass(), 'subs_hole' => $subsHole ?: new stdClass()];
 }
 
 /**

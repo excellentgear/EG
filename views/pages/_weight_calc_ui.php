@@ -46,7 +46,7 @@
 </div>
 <script>
 (function () {
-  var WC = { ctx: null, rows: [], seq: 0, denSel: '', denCustom: '', denOpen: false, denRows: [] };
+  var WC = { ctx: null, rows: [], tags: [], seq: 0, denSel: '', denCustom: '', denOpen: false, denRows: [] };
   var PI = Math.PI;
 
   function pn(v) { if (v == null) return null; v = String(v).trim(); if (v === '' || isNaN(Number(v)) || Number(v) <= 0) return null; return Number(v); }
@@ -130,9 +130,73 @@
     return rows;
   }
 
+  // ── 標籤加工（鍵、孔）：取自畫面上目前勾的標籤（鍵／中心牙孔／孔加工；「零件」不列入）──
+  // 這幾個標籤只有數量與規格，沒有深度／長度，深度等尺寸在這裡補填（只供計算，不寫回標籤）
+  function tg(kind, name, o) {
+    var t = { id: ++WC.seq, kind: kind, name: name, qty: '1', W: '', L: '', H: '', shape: 'rect', D: '', depth: '' };
+    for (var k in o) t[k] = o[k];
+    return t;
+  }
+  function buildTags() {
+    var tags = [], arr = [];
+    try { arr = JSON.parse((document.getElementById('pf-labels-json') || {}).value || '[]'); } catch (e) {}
+    var nameOf = function (id) { var m = (WC.ctx.tag_labels || {})[String(id)]; return m || ''; };
+    arr.forEach(function (it) {
+      var lid = String(it.label_id), lname = nameOf(lid);
+      if (lid === '3') {   // 鍵：標籤的數字帶入為鍵寬（請確認），長度與深度、形狀在這裡補
+        tags.push(tg('key', '鍵', { W: pn(it.input_value) ? String(pn(it.input_value)) : '', qty: it.qty ? String(pn(it.qty) || 1) : '1' }));
+      } else if (lid === '4') {   // 中心牙孔
+        tags.push(tg('hole', '中心牙孔', { D: pn(it.input_value) ? String(pn(it.input_value)) : '', qty: it.qty ? String(pn(it.qty) || 1) : '2' }));
+      } else if (lid === '20') {   // 孔加工：逐個子標籤（PCD 是節圓直徑、不是孔，略過）
+        (it.sub_labels || []).forEach(function (sl) {
+          var sn = ((WC.ctx.subs_hole || {})[String(sl.sub_id)] || '');
+          if (!sn || /PCD/i.test(sn)) return;
+          var d = pn(sl.value_min) || pn(sl.input_value);
+          tags.push(tg('hole', sn, { D: d ? String(d) : '', qty: pn(sl.qty) ? String(pn(sl.qty)) : '1', depth: pn(sl.draw_dim) ? String(pn(sl.draw_dim)) : '' }));
+        });
+      }
+    });
+    return tags;
+  }
+  function tagVol(t) {   // 回傳 {v: 體積mm³|null, miss: []}
+    var q = pn(t.qty), miss = [];
+    if (!q) miss.push('數量');
+    if (t.kind === 'key') {
+      var W = pn(t.W), L = pn(t.L), H = pn(t.H);
+      if (!W) miss.push('鍵寬'); if (!L) miss.push('鍵長'); if (!H) miss.push('深度');
+      if (miss.length) return { v: null, miss: miss };
+      var a;
+      if (t.shape === 'round2') { if (L < W) return { v: null, miss: ['鍵長不可小於鍵寬'] }; a = W * (L - W) + PI * W * W / 4; }
+      else if (t.shape === 'round1') { if (L < W / 2) return { v: null, miss: ['鍵長不可小於鍵寬的一半'] }; a = W * (L - W / 2) + PI * W * W / 8; }
+      else a = W * L;
+      return { v: a * H * q, miss: [] };
+    }
+    var D = pn(t.D), dp = pn(t.depth);
+    if (!D) miss.push('孔徑'); if (!dp) miss.push('深度');
+    if (miss.length) return { v: null, miss: miss };
+    return { v: PI / 4 * D * D * dp * q, miss: [] };
+  }
+  function tagRowHtml(t) {
+    var inp = function (f, w, ph) { return '<input type="number" step="any" min="0" class="wc-in no-spin-input" data-tf="' + f + '" value="' + esc(t[f]) + '" style="width:' + w + 'px"' + (ph ? ' placeholder="' + ph + '"' : '') + '>'; };
+    var key = t.kind === 'key';
+    return '<tr data-tid="' + t.id + '"><td><span class="wc-bore">－' + (key ? '鍵槽' : '孔') + '</span></td>'
+      + '<td><input class="wc-nm" data-tf="name" value="' + esc(t.name) + '"></td>'
+      + '<td>' + (key ? '<select class="wc-sel" data-tf="shape"><option value="rect"' + (t.shape === 'rect' ? ' selected' : '') + '>長方形</option><option value="round1"' + (t.shape === 'round1' ? ' selected' : '') + '>一頭半圓</option><option value="round2"' + (t.shape === 'round2' ? ' selected' : '') + '>雙頭半圓</option></select>' : '圓孔') + '</td>'
+      + '<td>' + (key ? '寬 ' + inp('W', 60) + ' 長 ' + inp('L', 60) + ' 深 ' + inp('H', 60) : '孔徑 Ø ' + inp('D', 60) + ' 深 ' + inp('depth', 60)) + '</td>'
+      + '<td>× ' + inp('qty', 48) + '</td>'
+      + '<td class="wc-vol" data-tvol="' + t.id + '"></td>'
+      + '<td><span class="wc-btn" data-tdel="' + t.id + '" title="刪除這一列（不計入）" style="padding:1px 7px;">×</span></td></tr>';
+  }
+  function tagTableHtml() {
+    var h = '<table class="wc-t"><thead><tr><th></th><th>名稱</th><th>形狀</th><th>尺寸 mm（寬×長×深／孔徑×深）</th><th>數量</th><th style="text-align:right">體積 cm³</th><th></th></tr></thead><tbody>';
+    h += WC.tags.map(tagRowHtml).join('');
+    if (!WC.tags.length) h += '<tr><td colspan="7" class="wc-note">這支料號沒有鍵／孔加工標籤；需要的話按下方新增。</td></tr>';
+    return h + '</tbody></table>';
+  }
+
   // ── 計算 ──
   function calc() {
-    var out = { vOut: 0, vBore: 0, miss: [], T: 0, per: {} };
+    var out = { vOut: 0, vBore: 0, miss: [], T: 0, per: {}, tper: {} };
     var outs = WC.rows.filter(function (r) { return r.kind === 'out'; });
     var T = 0; outs.forEach(function (r) { T += (pn(r.L) || 0); });
     out.T = r3(T);
@@ -155,6 +219,12 @@
       var v = r.shape === 'cone' ? PI / 12 * L * (D * D + D * D2 + D2 * D2) : PI / 4 * D * D * L;
       out.per[r.id] = v;
       if (r.kind === 'out') out.vOut += v; else out.vBore += v;
+    });
+    WC.tags.forEach(function (t) {
+      var r = tagVol(t);
+      out.tper[t.id] = r.v;
+      if (r.v == null) out.miss.push((t.name || (t.kind === 'key' ? '鍵' : '孔')) + '：' + r.miss.join('、'));
+      else out.vBore += r.v;
     });
     return out;
   }
@@ -240,6 +310,8 @@
     h += '<div class="wc-sec">① 外型與內孔尺寸（mm）　<span class="wc-note">總長 <b id="wc-T">0</b> mm（外型長度加總；貫通孔深度沒填時自動用總長）</span></div>';
     h += '<div id="wc-t-out">' + tableHtml('out') + '</div><div style="margin:4px 0 8px;"><span class="wc-btn" data-add="out">＋ 新增外型段</span></div>';
     h += '<div id="wc-t-bore">' + tableHtml('bore') + '</div><div style="margin:4px 0;"><span class="wc-btn" data-add="bore">＋ 新增內孔</span></div>';
+    h += '<div class="wc-sec">① 續　標籤加工（鍵槽、孔；體積從本體扣除）<span class="wc-note">　標籤只有數量與規格，深度／長度請在這裡補填，不會寫回標籤</span></div>';
+    h += '<div id="wc-t-tag">' + tagTableHtml() + '</div><div style="margin:4px 0;"><span class="wc-btn" data-tadd="key">＋ 新增鍵槽</span> <span class="wc-btn" data-tadd="hole">＋ 新增孔</span></div>';
     h += '<div id="wc-den">' + densityHtml() + '</div>';
     h += '<div class="wc-res"><div><small>體積 cm³</small><span id="wc-v">—</span></div><div><small>重量</small><span class="wc-big" id="wc-g">—</span> <span style="font-size:14px;font-weight:700;color:#8a4b00;">g</span></div><div><small>換算</small><span id="wc-kg">—</span> kg</div></div>';
     h += '<div class="wc-err" id="wc-err"></div>';
@@ -263,6 +335,13 @@
       var tr = document.querySelector('tr[data-rid="' + r.id + '"]'); if (!tr) return;
       var need = { D: !pn(r.D), D2: r.shape === 'cone' && !pn(r.D2), L: !pn(r.L) && !r._autoNote };
       Object.keys(need).forEach(function (k) { var el = tr.querySelector('[data-f="' + k + '"]'); if (el) el.classList.toggle('wc-miss', need[k]); });
+    });
+    WC.tags.forEach(function (t) {
+      var td = document.querySelector('[data-tvol="' + t.id + '"]'), v = c.tper[t.id];
+      if (td) td.textContent = (v == null) ? '—' : '−' + (Math.round(v / 10) / 100).toLocaleString();
+      var tr = document.querySelector('tr[data-tid="' + t.id + '"]'); if (!tr) return;
+      var need = t.kind === 'key' ? { W: !pn(t.W), L: !pn(t.L), H: !pn(t.H), qty: !pn(t.qty) } : { D: !pn(t.D), depth: !pn(t.depth), qty: !pn(t.qty) };
+      Object.keys(need).forEach(function (k) { var el = tr.querySelector('[data-tf="' + k + '"]'); if (el) el.classList.toggle('wc-miss', need[k]); });
     });
     var errs = c.miss.slice();
     if (!rho) errs.push('材質密度：請選擇或自訂');
@@ -298,7 +377,7 @@
     api({ action: 'weight_calc_ctx', d_id: did }).done(function (r) {
       if (!r || !r.success) { document.getElementById('wc-body').innerHTML = '<div class="wc-err">' + esc((r && r.message) || '載入失敗') + '</div>'; return; }
       WC.ctx = r; WC.denOpen = false; WC.denCustom = ''; WC.seq = 0;
-      WC.rows = buildRows(); pickDefaultDensity(); render();
+      WC.rows = buildRows(); WC.tags = buildTags(); pickDefaultDensity(); render();
     }).fail(function () { document.getElementById('wc-body').innerHTML = '<div class="wc-err">載入失敗，請重新整理頁面後再試</div>'; });
   };
   window.closeWeightCalc = function () {
@@ -320,8 +399,11 @@
   // ── 事件（委派到浮層，重畫後仍有效）──
   var mask = document.getElementById('wc-mask');
   function findRow(el) { var tr = el.closest('tr[data-rid]'); if (!tr) return null; var id = +tr.getAttribute('data-rid'); return WC.rows.filter(function (r) { return r.id === id; })[0] || null; }
+  function findTag(el) { var tr = el.closest('tr[data-tid]'); if (!tr) return null; var id = +tr.getAttribute('data-tid'); return WC.tags.filter(function (x) { return x.id === id; })[0] || null; }
   mask.addEventListener('input', function (ev) {
     var t = ev.target, f = t.getAttribute('data-f');
+    var tf = t.getAttribute('data-tf');
+    if (tf) { var tt = findTag(t); if (tt) { tt[tf] = t.value; recalc(); } return; }
     if (f) { var r = findRow(t); if (r) { r[f] = t.value; if (f === 'L') { r._autoNote = ''; } recalc(); } return; }
     if (t.id === 'wc-den-custom') { WC.denCustom = t.value; recalc(); return; }
     var df = t.getAttribute('data-df');
@@ -329,6 +411,7 @@
   });
   mask.addEventListener('change', function (ev) {
     var t = ev.target, f = t.getAttribute('data-f');
+    if (t.getAttribute('data-tf') === 'shape') { var ts = findTag(t); if (ts) { ts.shape = t.value; recalc(); } return; }
     if (f === 'shape') { var r = findRow(t); if (r) { r.shape = t.value; document.getElementById(r.kind === 'out' ? 'wc-t-out' : 'wc-t-bore').innerHTML = tableHtml(r.kind); recalc(); } return; }
     if (t.id === 'wc-den-sel') {
       WC.denSel = t.value; var ci = document.getElementById('wc-den-custom'); if (ci) ci.style.display = (t.value === 'custom') ? '' : 'none';
@@ -338,6 +421,9 @@
   });
   mask.addEventListener('click', function (ev) {
     var t = ev.target;
+    var tadd = t.closest('[data-tadd]'), tdel = t.closest('[data-tdel]');
+    if (tadd) { var tk = tadd.getAttribute('data-tadd'); WC.tags.push(tg(tk, tk === 'key' ? '鍵' : '孔', {})); document.getElementById('wc-t-tag').innerHTML = tagTableHtml(); recalc(); return; }
+    if (tdel) { var tid = +tdel.getAttribute('data-tdel'); WC.tags = WC.tags.filter(function (x) { return x.id !== tid; }); document.getElementById('wc-t-tag').innerHTML = tagTableHtml(); recalc(); return; }
     var add = t.closest('[data-add]'), del = t.closest('[data-del]');
     if (add) {
       var k = add.getAttribute('data-add');
