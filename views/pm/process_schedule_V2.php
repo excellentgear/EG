@@ -3446,7 +3446,7 @@ function get_state_badge($state)
             font-size: 14px;
         }
         /* 調整順序視窗：欄位固定寬度對齊（客戶｜BOM｜料號｜數量），並依「一次顯示筆數」自動縮放密度 */
-        #unassignedSortModal .list-group-item { padding: 6px 10px; margin-bottom: 2px; font-size: 13px; }
+        #unassignedSortModal .list-group-item { border-left: 5px solid #fff; padding: 6px 10px; margin-bottom: 2px; font-size: 13px; }
         #unassignedSortModal .sp-r { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
         #unassignedSortModal .sp-c-h { flex: 0 0 auto; white-space: nowrap; }
         #unassignedSortModal .sp-c-no { flex: 0 0 30px; text-align: right; font-weight: bold; }
@@ -3465,7 +3465,11 @@ function get_state_badge($state)
         #sp-stage-list .sp-c-bom { flex-basis: 112px; }
         #sp-stage-list .sp-c-pt { flex: 1 1 80px; min-width: 60px; }
         #sp-stage-list .sp-c-q { flex-basis: 74px; }
-        #sp-stage-list .sp-c-tg { display: none; }
+        #sp-stage-list .sp-r { flex-wrap: wrap; row-gap: 2px; }
+        #sp-stage-list .sp-c-tg { display: block; flex: 1 1 auto; }
+        #sp-stage-list .sp-c-cl, #sp-stage-list .sp-c-bom, #sp-stage-list .sp-c-pt { overflow: visible; white-space: normal; word-break: break-all; }
+        #sp-stage-list .sp-c-pt { flex: 1 1 140px; }
+        #sp-stage-list .sp-ctl { flex: 0 0 100%; text-align: right; }
         #sp-stage-list .sp-sub { padding-left: 0; white-space: normal; }
         #unassignedSortModal.sp-d2 .list-group-item { padding: 4px 10px; margin-bottom: 1px; }
         #unassignedSortModal.sp-d2 .sp-sub { display: none; }
@@ -5870,7 +5874,7 @@ function get_state_badge($state)
                     // 一次顯示筆數：依畫面高度自動選密度（完整→精簡→緊湊），文字最小 12px，仍放不下才捲動
                     window.spApplyView = function() {
                         var n = parseInt($('#sp-rows').val(), 10) || 10, $m = $('#unassignedSortModal'), $li = $('#unassigned-sort-list > li[data-id]').first();
-                        var avail = Math.max(260, window.innerHeight - 235), dens = 'sp-d1', h = 52;
+                        var avail = Math.max(300, window.innerHeight - 190), dens = 'sp-d1', h = 52;
                         $m.removeClass('sp-d1 sp-d2 sp-d3');
                         var order = ['sp-d1', 'sp-d2', 'sp-d3'], defH = [54, 36, 28];
                         for (var i = 0; i < order.length; i++) {
@@ -5880,7 +5884,7 @@ function get_state_badge($state)
                             if (n * h <= avail) break;
                             if (i < order.length - 1) $m.removeClass(order[i]);
                         }
-                        var bodyH = Math.min(avail, n * h + 14);
+                        var bodyH = Math.max(avail, Math.min(avail, n * h + 14));   // 至少顯示 N 筆；畫面有空間就填滿
                         $('#sp-body').css({ 'max-height': 'none', height: bodyH + 'px' });
                         $('#sp-stage-body').css({ 'max-height': 'none', height: Math.max(120, bodyH - 36) + 'px' });
                     };
@@ -6224,7 +6228,7 @@ function get_state_badge($state)
                             var base = $li.attr('data-ubase') || '', lv = base === 'E' ? 'E' : ((base === 'U' || $li.attr('data-purg') === '1') ? 'U' : '');
                             $li.find('.sp-ulab').html(lv === 'E' ? ' <span class="label" style="font-size:10px;background:#DD5138;color:#fff;">特急</span>'
                                 : lv === 'U' ? ' <span class="label" style="font-size:10px;background:#F0A24B;color:#fff;">急件</span>' : '');
-                            $li.css({ 'background-color': lv === 'E' ? '#FBE0D8' : lv === 'U' ? '#FDEFD6' : '', 'border-left': lv === 'E' ? '5px solid #DD5138' : lv === 'U' ? '5px solid #F0A24B' : '' });
+                            $li.css({ 'background-color': lv === 'E' ? '#FBE0D8' : lv === 'U' ? '#FDEFD6' : '', 'border-left': lv === 'E' ? '5px solid #DD5138' : lv === 'U' ? '5px solid #F0A24B' : '5px solid #fff' });
                         };
                         $('#unassignedSortModal').on('click', '.sp-urg', function(e) {
                             e.stopPropagation();
@@ -8980,6 +8984,9 @@ function get_state_badge($state)
                         psCatRender();
                     }
                     function psCatRender() {
+                        // 重畫前記住捲動位置與焦點，重畫後還原（否則一勾選畫面就跳回最上面）
+                        var $mm = $('#machineSettingModal'), mScroll = $mm.scrollTop(), pScroll = [], foc = document.activeElement && $(document.activeElement).hasClass('psc-m') ? document.activeElement.value : null, focCi = foc !== null ? $(document.activeElement).closest('[data-ci]').attr('data-ci') : null;
+                        $('#psCatList .panel-body').each(function() { pScroll.push(this.scrollTop); });
                         var owner = {};
                         psCatState.forEach(function(c, i) { c.machines.forEach(function(m) { owner[m] = i; }); });
                         var esc = function(x) { return $('<i>').text(x == null ? '' : x).html(); };
@@ -8997,13 +9004,16 @@ function get_state_badge($state)
                             psCatMachines.forEach(function(m) {
                                 var mid = String(m.machine_id), mine = owner[mid] === i, other = owner[mid] !== undefined && !mine;
                                 h += '<label style="font-weight:normal;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' + (other ? 'color:#aaa;' : '') + '" title="' + esc(m.machine) + (other ? '（已屬於「' + esc(psCatState[owner[mid]].name || '未命名') + '」）' : '') + '">' +
-                                    '<input type="checkbox" class="psc-m" value="' + mid + '"' + (mine ? ' checked' : '') + (other || !canEdit ? ' disabled' : '') + '> ' + esc(m.machine) +
+                                    '<input type="checkbox" class="psc-m" value="' + mid + '"' + (mine ? ' checked' : '') + (other || !canEdit ? ' disabled' : '') + '> ' + esc(m.field_no ? m.field_no + ' ' + m.machine : m.machine) +
                                     (m.type_name ? ' <span class="text-muted" style="font-size:11px;">' + esc(m.type_name) + '</span>' : '') + (other ? ' <span style="font-size:11px;">→ ' + esc(psCatState[owner[mid]].name || '未命名') + '</span>' : '') + '</label>';
                             });
                             h += '</div></div>';
                         });
                         $('#psCatList').html(h);
                         $('#btnAddPsCat,#btnSavePsCat').prop('disabled', !canEdit);
+                        $mm.scrollTop(mScroll);
+                        $('#psCatList .panel-body').each(function(i) { if (pScroll[i]) this.scrollTop = pScroll[i]; });
+                        if (foc !== null) $('#psCatList [data-ci="' + focCi + '"] .psc-m[value="' + foc + '"]')[0].focus({ preventScroll: true });
                     }
                     $('#psCatList').on('input', '.psc-name', function() { psCatState[$(this).closest('[data-ci]').attr('data-ci')].name = this.value; });
                     $('#psCatList').on('change', '.psc-m', function() {
