@@ -289,6 +289,7 @@
   window.openWeightCalc = function () {
     var did = (document.getElementById('pf-d_id') || {}).value || 0;
     document.getElementById('wc-mask').style.display = 'block';
+    if (window.jQuery) jQuery(document).off('focusin.bs.modal');   // 料號編輯 modal 的焦點鎖會把焦點搶回自己，打開期間先拿掉
     document.getElementById('wc-body').innerHTML = '<div class="wc-note">載入中…</div>';
     document.getElementById('wc-apply').disabled = true;
     var pn0 = (document.getElementById('pf-D_Setting_Id') || {}).value || '';
@@ -299,7 +300,10 @@
       WC.rows = buildRows(); pickDefaultDensity(); render();
     }).fail(function () { document.getElementById('wc-body').innerHTML = '<div class="wc-err">載入失敗，請重新整理頁面後再試</div>'; });
   };
-  window.closeWeightCalc = function () { document.getElementById('wc-mask').style.display = 'none'; };
+  window.closeWeightCalc = function () {
+    document.getElementById('wc-mask').style.display = 'none';
+    try { if (window.jQuery) { var m = jQuery('#partModal').data('bs.modal'); if (m && m.isShown) m.enforceFocus(); } } catch (e) {}   // 還原焦點鎖
+  };
   window.applyWeightCalc = function () {
     if (WC.result == null) return;
     var gRound = Math.round(WC.result);   // 重量欄位最小單位 1 g（資料庫存 kg 三位小數）
