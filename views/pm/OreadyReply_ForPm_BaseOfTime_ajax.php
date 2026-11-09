@@ -2723,9 +2723,20 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
             echo json_encode(['success'=>true,'message'=>'已刪除']);
         } elseif ($act === 'baf_add_send') {
             ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker'] ?? '')), $fl('send_qty'), $d, $uid, true); // 管理員補發單不受發單數上限擋，超過會在「總數異常」紅字提示
+            // 主畫面製程格讀的是 bom_ing.outsource_date／return_date；補登只寫批次表時格子不會顯示 → 只在欄位仍是空的時候補上（不覆蓋既有值、不改狀態）
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
+                $db->prepare("UPDATE bom_ing SET outsource_date=CONCAT(?, ' 00:00:00') WHERE bom_ing_fid=? AND outsource_date IS NULL")->execute([$d, $fid]);
+            }
             echo json_encode(['success'=>true,'message'=>'已新增發單']);
         } else {
             ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid);
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
+                $op = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND status='open'");
+                $op->execute([$fid]);
+                if ((int)$op->fetchColumn() === 0) {
+                    $db->prepare("UPDATE bom_ing SET return_date=CONCAT(?, ' 00:00:00') WHERE bom_ing_fid=? AND return_date IS NULL")->execute([$d, $fid]);
+                }
+            }
             echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回']);
         }
     } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }

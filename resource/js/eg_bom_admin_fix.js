@@ -151,7 +151,7 @@
             }
         });
         drawer.querySelector('#egaf-v-flow').onclick = function () { viewMode = 'flow'; render(); };
-        drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; render(); };
+        drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; delete drawer.querySelector('#egaf-ns-q').dataset.t; delete drawer.querySelector('#egaf-nr-r').dataset.t; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
         drawer.querySelector('#egaf-new-ret').onclick = function () { toggleNw('egaf-nw-ret'); };
         drawer.querySelector('#egaf-body').addEventListener('input', function (e) {
@@ -161,6 +161,38 @@
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer.classList.contains('open') && !document.getElementById('egaf-pw')) close(); });
         bindNew();
         return drawer;
+    }
+    // 新增發單／回廠的數量預設值：發單＝上一關有紀錄的數量（優先回廠量，沒有才用發單量）；回廠＝選定批次尚未回廠的量。使用者手動改過的欄位不覆蓋
+    function prevQty() {
+        var sts = (DATA.stations || []).slice().sort(function (a, b) { return (a.sn || 0) - (b.sn || 0); }), cur = null;
+        sts.forEach(function (s) { if (String(s.fid) === String(stationFilter)) cur = s; });
+        if (!cur) return '';
+        for (var i = sts.length - 1; i >= 0; i--) {
+            if (!((sts[i].sn || 0) < (cur.sn || 0))) continue;
+            var ret = 0, snd = 0;
+            (DATA.rows || []).forEach(function (r) {
+                if (String(r.fid) !== String(sts[i].fid)) return;
+                if (r.kind === 'return') ret += parseFloat(r.return_qty) || 0;
+                else if (r.kind === 'send') snd += parseFloat(r.send_qty) || 0;
+            });
+            if (ret > 0) return nz(ret);
+            if (snd > 0) return nz(snd);
+        }
+        return '';
+    }
+    function leftOfBatch() {
+        var sel = drawer.querySelector('#egaf-nr-b'), id = sel && sel.value, b = null;
+        (DATA.batches || []).forEach(function (x) { if (String(x.batch_id) === String(id)) b = x; });
+        if (!b) return '';
+        var used = 0;
+        (DATA.rows || []).forEach(function (r) { if (r.kind === 'return' && String(r.batch_id) === String(id)) used += (parseFloat(r.return_qty) || 0) + (parseFloat(r.scrap_qty) || 0) + (parseFloat(r.withdraw_qty) || 0); });
+        var left = (parseFloat(b.send_qty) || 0) - used;
+        return left > 0 ? nz(left) : '';
+    }
+    function autoFill() {
+        var q = drawer.querySelector('#egaf-ns-q'), r = drawer.querySelector('#egaf-nr-r');
+        if (q && !q.dataset.t) q.value = prevQty();
+        if (r && !r.dataset.t) r.value = leftOfBatch();
     }
     function dirtyCount() { return drawer ? drawer.querySelectorAll('.it.dirty').length : 0; }
     function updDn() { var n = dirtyCount(); drawer.querySelector('#egaf-dn').textContent = n ? n + ' 筆未儲存' : ''; }
@@ -216,6 +248,7 @@
             return '<option value="' + b.batch_id + '" data-f="' + b.fid + '">' + esc((stn ? stn.label : '') + '／' + (b.maker || '未登記') + ' ' + nz(b.send_qty)) + '</option>';
         }).join('');
         DATA._def = calcDeficit();
+        autoFill();
         drawer.querySelector('#egaf-v-time').style.fontWeight = viewMode === 'time' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-time').style.background = viewMode === 'time' ? '#F6D9CC' : '';
         drawer.querySelector('#egaf-v-flow').style.fontWeight = viewMode === 'flow' ? 'bold' : 'normal'; drawer.querySelector('#egaf-v-flow').style.background = viewMode === 'flow' ? '#F6D9CC' : '';
         drawer.classList.toggle('wide', viewMode === 'flow');
@@ -493,19 +526,21 @@
     }
     function bindNew() {
         var pick = null;
+        ['#egaf-ns-q', '#egaf-nr-r'].forEach(function (id) { drawer.querySelector(id).addEventListener('input', function (e) { if (e.isTrusted) this.dataset.t = '1'; }); });
+        drawer.querySelector('#egaf-nr-b').addEventListener('change', function () { var r = drawer.querySelector('#egaf-nr-r'); delete r.dataset.t; autoFill(); });
         makerPicker(drawer.querySelector('#egaf-mk'), function (p) { pick = p; });
         drawer.querySelector('#egaf-ns-go').onclick = function () {
             if (!stationFilter) { msg('請先在「製程」下拉選一個製程，再新增發單', false); return; }
             if (!pick || !pick.no) { msg('請從下方列出的廠商清單點選一家廠商', false); return; }
             post({ action: 'baf_add_send', fid: stationFilter, maker_no: pick.no, maker: pick.name, send_qty: drawer.querySelector('#egaf-ns-q').value, date: drawer.querySelector('#egaf-ns-d').value },
-                function (r) { if (r.success) { load('已新增發單', true); refreshMain(); } else msg(r.message, false); });
+                function (r) { if (r.success) { delete drawer.querySelector('#egaf-ns-q').dataset.t; load('已新增發單', true); refreshMain(); } else msg(r.message, false); });
         };
         drawer.querySelector('#egaf-nr-go').onclick = function () {
             var sel = drawer.querySelector('#egaf-nr-b'), opt = sel.options[sel.selectedIndex];
             if (!opt) { msg('沒有可選的發單批次，請先新增發單', false); return; }
             post({ action: 'baf_add_return', fid: opt.getAttribute('data-f'), batch_id: sel.value, return_qty: drawer.querySelector('#egaf-nr-r').value, scrap_qty: drawer.querySelector('#egaf-nr-s').value,
                    withdraw_qty: drawer.querySelector('#egaf-nr-w').value, date: drawer.querySelector('#egaf-nr-d').value },
-                function (r) { if (r.success) { load('已新增', true); refreshMain(); } else msg(r.message, false); });
+                function (r) { if (r.success) { delete drawer.querySelector('#egaf-nr-r').dataset.t; load('已新增', true); refreshMain(); } else msg(r.message, false); });
         };
     }
     function close() { if (drawer) drawer.classList.remove('open'); }
