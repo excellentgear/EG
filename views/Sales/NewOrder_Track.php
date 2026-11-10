@@ -3547,6 +3547,28 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     if ((string)($br['processing_state'] ?? '') === '1') $bomBindMap[$oid]['done_boms'][] = $br['bom'];
                     else                                                 $bomBindMap[$oid]['open_boms'][] = $br['bom'];
                 }
+                // 拆批的母單本身沒有綁 BOM，綁定記在拆出來的子單上（B-1150703001 綁在 5 張子單、母單 710 卻沒圖示）。
+                // 母單自己沒有綁定時，把子單的綁定量加總顯示在母單上；母單自己有綁定就維持原樣，避免重複計算。
+                $stmtKid = $pdo->prepare(
+                    "SELECT c.parent_order_id AS pid, m.bom, m.allocated_qty, b.processing_state
+                       FROM order_track c
+                       JOIN bom_order_process_map m ON m.order_id = c.Order_id
+                       LEFT JOIN bom b ON b.bom = m.bom
+                      WHERE c.parent_order_id IN ($phBom)");
+                $stmtKid->execute($orderIds);
+                $kidAdd = [];
+                foreach ($stmtKid->fetchAll(PDO::FETCH_ASSOC) as $kr) {
+                    $pid = (int)$kr['pid'];
+                    if (isset($bomBindMap[$pid])) continue;
+                    if (!isset($kidAdd[$pid])) $kidAdd[$pid] = ['sum' => 0, 'boms' => [], 'open_boms' => [], 'done_boms' => []];
+                    $kidAdd[$pid]['sum'] += (int)$kr['allocated_qty'];
+                    if (!in_array($kr['bom'], $kidAdd[$pid]['boms'], true)) {
+                        $kidAdd[$pid]['boms'][] = $kr['bom'];
+                        if ((string)($kr['processing_state'] ?? '') === '1') $kidAdd[$pid]['done_boms'][] = $kr['bom'];
+                        else                                                 $kidAdd[$pid]['open_boms'][] = $kr['bom'];
+                    }
+                }
+                foreach ($kidAdd as $pid => $v) $bomBindMap[$pid] = $v;
             } catch (Exception $e) {}
         }
     }
