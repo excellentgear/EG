@@ -644,7 +644,7 @@ if (!empty($all_boms)) {
                   pn.is_exclude_qc,
                   ml.maker_id,
                   pfr.finish_report_date,
-                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date
+                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
                 FROM bom_ing AS bi
                 LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                 LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
@@ -802,6 +802,8 @@ foreach ($raw_ps_list as $_iam_item) {
         'outsource_date'   => $_iam_fmt($_iam_item['outsource_date'] ?? null),
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
+        'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）
+        'sn_cnt'           => (int)($_iam_item['sn_cnt'] ?? 1),
         'xfer_date'        => $_iam_fmt($_iam_item['xfer_date'] ?? null), // 移轉憑單日期（無回廠日期時前端以此認定回廠日）
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
@@ -3242,6 +3244,8 @@ echo "</script>\n";
                 return_date:      _nd(item.return_date),
                 finish_report_date: _nd(item.finish_report_date),
                 xfer_date:        _nd(item.xfer_date),
+                xfer_qty:         Number(item.xfer_qty) || 0,
+                sn_cnt:           Number(item.sn_cnt) || 1,
                 QC_check:         item.QC_check || null,
                 QC_check_date:    _nd(item.QC_check_date),
                 // 容器四欄（QC 品管填 QC_ps/QC_ps2、生管填 pm_ps/pm_ps2）：
@@ -6119,6 +6123,16 @@ echo "</script>\n";
                     }
                     // 分批回廠摘要（多批或部分回廠才有）
                     var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
+                    // 移轉憑單已把這一站的貨全部移走（憑單合計 >= 本站發單數，且該序號只有一列）＝已移轉，
+                    // 不再顯示「加工中」、外在廠商那邊的數量清為 0（廠商沒按回廠但憑單已證明貨已移轉）。
+                    var _xferDone = (String(_proc.processing_state || '') === 'ing' && Number(_proc.sn_cnt) === 1
+                        && Number(_proc.xfer_qty) > 0 && Number(_proc.sqty) > 0 && Number(_proc.xfer_qty) >= Number(_proc.sqty));
+                    if (_xferDone && _obm && _obm.batches) {
+                        _obm = JSON.parse(JSON.stringify(_obm));
+                        var _sumRet = 0;
+                        _obm.batches.forEach(function (b) { b.ret = Math.max(0, b.send - (b.scrap || 0) - (b.wd || 0)); b.outside = 0; b.status = 'closed'; _sumRet += b.ret; });
+                        _obm.ret = _sumRet; _obm.outside = 0;
+                    }
                     if (_obm && _obm.batches && _obm.batches.length) {
                         // 廢＝廠商分批回廠報廢＋這一站由異常單回填的報廢（非廠商提報者，避免重複計算）
                         var _exScrap = 0;
@@ -6132,8 +6146,8 @@ echo "</script>\n";
                     var _iid = String(_proc.bom_ing_id  || '');
                     // qc_completed=1 且 processing_state='Q' → 前端認定為生管待移轉(P)
                     var _isQcCompletedQ = (_st === 'Q' && _proc.qc_completed == 1);
-                    var _effectiveSt = _isQcCompletedQ ? 'P' : _st;
-                    if (_st === 'ing' && _iid !== '') {
+                    var _effectiveSt = _isQcCompletedQ ? 'P' : (_xferDone ? 'E' : _st);
+                    if (_st === 'ing' && _iid !== '' && !_xferDone) {
                         var _ingBtn = document.createElement('button');
                         _ingBtn.type = 'button';
                         _ingBtn.className = 'btn btn-xs btn-warning btn-return-style';
