@@ -6158,10 +6158,11 @@ echo "</script>\n";
                 })();
                 // 數量標頭：這一關只發了一部分時，顯示實際已發數量（製令總數放在提示裡），不要讓 715 看起來像已全數發出
                 (function () {
-                    var grps = {}; _displayProcs.forEach(function (p) { grps[ocGrp(p)] = true; });
-                    if (Object.keys(grps).length !== 1) return;
-                    var sent = 0, seen = {}, ok = true;
+                    // 以顯示中「最前面那一關」的實際已發數量為準（前面關卡有 NG／報廢，後面關卡的發單量就會小於製令數）
+                    var g0 = Math.min.apply(null, _displayProcs.map(function (p) { return ocGrp(p); }));
+                    var sent = 0, seen = {}, ok = _displayProcs.length > 0;
                     _displayProcs.forEach(function (p) {
+                        if (ocGrp(p) !== g0) return;
                         var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
                         if (!m || !m.batches || !m.batches.length) { ok = false; return; }
                         if (!seen[p.bom_ing_fid]) { seen[p.bom_ing_fid] = 1; sent += (Number(m.send) || 0) - (Number(m.wd) || 0); }
