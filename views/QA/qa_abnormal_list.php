@@ -796,6 +796,7 @@ function load(){
                 + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
                 + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
                     + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
+                    + (Number(r.is_closed) === 1 && r.closed_at ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.closed_name || '') + ' 結案<br>' + esc(dispDate(r.closed_at)) + ' ' + esc(String(r.closed_at).substring(11, 16)) + '</span>' : '')
                 + '</td>'
                 + '<td class="c">'
                 + (r.deleted_at

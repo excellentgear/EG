@@ -523,8 +523,8 @@ try {
         // ─── 結案 ─────────────────────────────────────────────
         case 'close':
             $orderId = (int)($_POST['id'] ?? 0);
-            $db->prepare("UPDATE qa_abnormal_order SET is_closed=1, closed_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")
-               ->execute([$userId, $orderId]);
+            $db->prepare("UPDATE qa_abnormal_order SET is_closed=1, closed_at=NOW(), closed_by=?, updated_by=?, updated_at=NOW() WHERE id=?")
+               ->execute([$userId, $userId, $orderId]);
             echo json_encode(['success' => true]);
             break;
 
@@ -1133,7 +1133,14 @@ try {
             if (!$perm['can']) { echo json_encode(['success'=>false,'no_perm'=>true,'message'=>'您沒有結案/取消結案此異常單的權限']); break; }
             $closing = ($action === 'close_order');
             if ($closing) {
-                $db->prepare("UPDATE qa_abnormal_order SET is_closed=1, closed_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")->execute([$userId, $orderId]);
+                // 與新版結案同一關：沒選處置方式／總經理裁示、沒勾原因分類，一律不可結案（2026-11-10 Q1151110002-IR 事件）
+                require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+                $oc = qab_order($db, $orderId);
+                if ($oc) {
+                    if (!$oc['cause_ids']) { echo json_encode(['success'=>false,'message'=>'結案前請先勾選「異常原因分類」']); break; }
+                    if (!$oc['disp_ids'] && !$oc['gm_ids']) { echo json_encode(['success'=>false,'message'=>'結案前請先完成「異常處置方式」或總經理裁示']); break; }
+                }
+                $db->prepare("UPDATE qa_abnormal_order SET is_closed=1, closed_at=NOW(), closed_by=?, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$userId, $userId, $orderId]);
             } else {
                 $db->prepare("UPDATE qa_abnormal_order SET is_closed=0, closed_at=NULL, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$userId, $orderId]);
             }

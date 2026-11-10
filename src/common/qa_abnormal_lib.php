@@ -4576,6 +4576,7 @@ function qab_list(PDO $db, array $f = []): array
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
                    o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.part_d_id, o.created_by, cu.user_cname AS created_name,
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
+                   cl.user_cname AS closed_name,
                    o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
                    o.cat_id, ct.name AS cat_name, ct.is_active AS cat_active,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name,
@@ -4585,6 +4586,7 @@ function qab_list(PDO $db, array $f = []): array
             LEFT JOIN qa_abnormal_cat ct ON ct.cat_id=o.cat_id
             LEFT JOIN `user` cu ON cu.id=o.created_by
             LEFT JOIN `user` dl ON dl.id=o.deleted_by
+            LEFT JOIN `user` cl ON cl.id=COALESCE(o.closed_by, IF(o.is_closed=1, o.updated_by, NULL))
             LEFT JOIN process_no pn ON pn.ProcessNo=o.resp_process_no
             LEFT JOIN maker_list ml ON ml.maker_id_no=o.responsible_vendor_id
             WHERE " . implode(' AND ', $w) . "
