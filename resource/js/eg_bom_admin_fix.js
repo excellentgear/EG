@@ -312,7 +312,7 @@
         }
         function tnode(t) {
             var fl = flow[t.id], d = fl.dst && sends[fl.dst], kid = '';
-            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:4px 8px;font-size:12px;"><b style="color:#2E8B57;">⤵ 與另一張移轉憑單合流，進同一個發單批次</b><br>' + esc(bLabel(d)) + '<br><span style="color:#888;font-size:11px;">（該批次的後續流程畫在另一條分支）</span></div></div>' : '<div class="tk">' + bnode(d) + '</div>';
+            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" data-merge="' + d.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
         html += '<div class="flw"><div class="flw-main">';
@@ -339,6 +339,32 @@
         body.innerHTML = html;
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
         applyLock();
+        // 合流：從「合流」小標籤畫一條線連回它進入的發單卡片
+        (function drawMerge() {
+            var main = body.querySelector('.flw-main');
+            if (!main) return;
+            var stubs = main.querySelectorAll('[data-merge]');
+            if (!stubs.length) return;
+            main.style.position = 'relative';
+            var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
+            svg.setAttribute('style', 'position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:3;');
+            svg.setAttribute('width', main.scrollWidth); svg.setAttribute('height', main.scrollHeight);
+            svg.innerHTML = '<defs><marker id="egaf-mg" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2E8B57"/></marker></defs>';
+            var mr = main.getBoundingClientRect();
+            function pt(el, side) { var r = el.getBoundingClientRect(); return { x: r.left - mr.left + main.scrollLeft + r.width / 2, y: (side === 'top' ? r.top : side === 'bottom' ? r.bottom : r.top + r.height / 2) - mr.top + main.scrollTop, l: r.left - mr.left + main.scrollLeft, r: r.right - mr.left + main.scrollLeft }; }
+            stubs.forEach(function (s) {
+                var tg = main.querySelector('.fl-b[data-batch="' + s.getAttribute('data-merge') + '"]');
+                if (!tg) return;
+                var a = pt(s, 'mid'), b = pt(tg, 'mid'), x1, x2;
+                if (b.x >= a.x) { x1 = a.r; x2 = b.l; } else { x1 = a.l; x2 = b.r; }
+                var dx = Math.max(40, Math.abs(x2 - x1) / 2) * (x2 >= x1 ? 1 : -1);
+                var p = document.createElementNS(NS, 'path');
+                p.setAttribute('d', 'M' + x1 + ',' + a.y + ' C' + (x1 + dx) + ',' + a.y + ' ' + (x2 - dx) + ',' + b.y + ' ' + x2 + ',' + b.y);
+                p.setAttribute('fill', 'none'); p.setAttribute('stroke', '#2E8B57'); p.setAttribute('stroke-width', '2'); p.setAttribute('stroke-dasharray', '5 3'); p.setAttribute('marker-end', 'url(#egaf-mg)');
+                svg.appendChild(p);
+            });
+            main.appendChild(svg);
+        })();
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
         }

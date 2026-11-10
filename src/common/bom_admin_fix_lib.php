@@ -306,7 +306,13 @@ if (!function_exists('baf_flow')) {
                 if ((string)$b['maker_no'] !== (string)$t['to_no'] || $b['sn'] <= $t['sn']) continue;
                 if ($best === null || $b['sn'] < $best) $best = $b['sn'];
             }
-            if ($best === null) return null;
+            if ($best === null) {
+                // 轉入廠商的批次就在同一關（例：SN20／SN25 已認定同一關）：貨是進到下一關，改接下一關最近的發單批次
+                foreach ($sends as $b) { if ($b['sn'] > $t['sn'] && ($best === null || $b['sn'] < $best)) $best = $b['sn']; }
+                if ($best === null) return null;
+                $pool = array_values(array_filter($sends, fn($b) => $b['sn'] === $best));
+                return [$best . '|*', $pool];
+            }
             $pool = array_values(array_filter($sends, fn($b) => $b['sn'] === $best && (string)$b['maker_no'] === (string)$t['to_no']));
             return [$best . '|' . $t['to_no'], $pool];
         });
