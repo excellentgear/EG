@@ -1084,6 +1084,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                     </div>
                     <div class="gear-out-grid" style="margin-bottom:6px;">
                         <div class="gear-out-row"><span class="gear-out-label">測棒最大限制 dp_max</span><span class="gear-output-val" id="sp-int-out-dp-max">—</span></div>
+                        <div class="gear-out-row"><span class="gear-out-label">測棒接觸圓 dk</span><span class="gear-output-val" id="sp-int-out-dk">—</span></div>
                     </div>
                     <div style="font-size:11px;font-weight:700;color:#1a6fa0;border-top:1px solid #d0e4f0;padding-top:5px;margin-bottom:4px;">跨珠值 M（內量，dc−dp）</div>
                     <div class="gear-out-grid">
@@ -1167,7 +1168,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         <div class="gear-tab-pane" id="gear-pane-sr">
             <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 9px;font-size:11px;color:#856404;margin-bottom:6px;">⚠ 尚未完整測試，計算結果請自行驗證</div>
             <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:4px;padding:6px 9px;font-size:11px;color:#2e7d32;margin-bottom:10px;">
-                矩形花鍵（栓槽）跨銷值計算。輸入大徑 D、小徑 d、槽寬 B、槽數 N，可附加公差回推 M 值範圍。
+                矩形直邊花鍵（栓槽）跨球值計算。輸入大徑 D、小徑 d、鍵寬／槽寬 B（軸＝齒寬、孔＝槽寬）、槽數 N，可附加公差回推 M 值範圍。
+                與「花鍵 內／外」（漸開線齒形）不同：栓槽的齒側面是平行直邊，用球頂在側面或落在溝底量測，不用模數與壓力角。
             </div>
             <div class="gear-two-col">
                 <div>
@@ -1196,7 +1198,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         </div>
                     </div>
                     <div class="gear-field-group">
-                        <label>槽寬 B (mm)  <small style="color:#888;">可附公差：數值或代號如 e8、H7</small></label>
+                        <label>鍵寬／槽寬 B (mm)  <small style="color:#888;">軸＝齒(鍵)寬、孔＝槽寬；可附公差代號如 e8、H7</small></label>
                         <div style="display:flex;gap:4px;align-items:center;">
                             <input type="number" id="sr-B" class="gear-input" placeholder="公稱" style="flex:1;">
                             <span style="font-size:11px;color:#888;white-space:nowrap;">公差代號</span>
@@ -1222,7 +1224,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         <span class="gear-output-val" id="sr-dp-range">—</span>
                     </div>
                     <div class="gear-field-group">
-                        <label>建議球徑 dp <small style="color:#888;font-weight:400;">（≈ 0.9×B）</small></label>
+                        <label>建議球徑 dp <small style="color:#888;font-weight:400;">（依幾何：軸＝頂齒側面中段；孔＝1.2×B）</small></label>
                         <span class="gear-output-val" id="sr-dp-rec">—</span>
                     </div>
                     <div style="border-top:1px solid #e0e0e0;margin:8px 0 6px;padding-top:6px;font-size:11px;font-weight:700;color:#1a3a50;">跨銷值（放球入槽量外徑）</div>
@@ -1237,7 +1239,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                     <div id="sr-method" style="font-size:11px;color:#555;line-height:1.5;padding:2px 0 4px;display:none;"></div>
                     <div style="border-top:1px solid #e0e0e0;margin:8px 0 6px;padding-top:6px;font-size:11px;font-weight:700;color:#1a3a50;">齒厚（直接量齒面寬）</div>
                     <div class="gear-field-group">
-                        <label>單齒齒厚 b <small style="color:#888;font-weight:400;">（小徑弦長）</small></label>
+                        <label id="sr-tooth-lbl">齒厚 <small style="color:#888;font-weight:400;">（軸＝齒寬 B；孔＝小徑弦長）</small></label>
                         <span class="gear-output-val" id="sr-tooth-nom">—</span>
                     </div>
                     <div class="gear-field-group">
@@ -3215,11 +3217,16 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
 
     // ── 花鍵數學輔助 ─────────────────────────────────────────────────────────
 
-    // 內花鍵 M = calcM(-x_int) - 2*dp
-    function calcMInt(x_int, mn, z, alpha_n, beta, dp) {
-        // 內花鍵跨棒距：inv(αM) = e/d - inv(α) + DR/db
-        // 其中 e/d = π/(2z) - 2x·tan(αn)/z（槽寬/節圓直徑）
-        // M = db/cos(αM) - dp（偶數齒）；db/cos(αM)·cos(90°/z) - dp（奇數齒）
+    // 內花鍵（量測棒放在內齒的槽內，量兩棒之間的「內側」距離）
+    // 修正（2026-11-10）：舊公式把符號寫反（e/d − inv(α) + dp/db），
+    //   與外花鍵的公式一樣的形狀，算出來的 M 偏大（例 mn4 z20 dp6.72：81.6 → 正確 70.58），
+    //   測棒會被算到撐破齒根。已用「漸開線齒面＋測棒相切」暴力幾何模擬逐值驗證。
+    // 內齒的槽是「外齒齒形的反面」（越往外越窄），測棒接觸齒面的半徑比測棒中心大：
+    //   inv(αM) = e/d + inv(αt) − dp/(db·cosβb)        （e/d＝槽半角＝π/(2z) − 2x·tan(αn)/z）
+    //   測棒中心圓 dc = db/cos(αM)；接觸圓 dk：tan(αk) = tan(αM) + dp/(db·cosβb)，dk = db/cos(αk)
+    //   M = dc − dp（偶數齒）；dc·cos(90°/z) − dp（奇數齒）
+    // 回傳 {M, dc, dk} 或 錯誤字串
+    function intPinGeom(x_int, mn, z, alpha_n, beta, dp) {
         var cos_b  = Math.cos(beta);
         var mt     = mn / cos_b;
         var d      = mt * z;
@@ -3229,14 +3236,13 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var cos_bb = Math.sqrt(1 - sin_bb * sin_bb);
 
         var et_d  = (PI / (2 * z)) - (2 * x_int * Math.tan(alpha_n) / z);
-        var inv_p = et_d - inv(alpha_t) + (dp / (db * cos_bb));
-
-        if (inv_p <= 0) return '異常(inv_p≤0)';
+        var kp    = dp / (db * cos_bb);
+        var inv_p = et_d + inv(alpha_t) - kp;
+        if (inv_p <= 0) return '異常(測棒過大，無法放入齒槽)';
 
         var LIMIT = 89 * PI / 180;
         var ap = Math.cbrt(3 * inv_p);
         if (ap >= LIMIT) return '異常(初始角過大)';
-
         for (var i = 0; i < 100; i++) {
             if (ap >= LIMIT || ap <= 0) return '異常(疊代發散)';
             var fp = Math.tan(ap) * Math.tan(ap);
@@ -3249,8 +3255,15 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (ap >= LIMIT || ap <= 0) return '異常(收斂失敗)';
 
         var dc = db / Math.cos(ap);
+        var ak = Math.atan(Math.tan(ap) + kp);
+        var dk = db / Math.cos(ak);
         var M  = (z % 2 === 0) ? dc - dp : dc * Math.cos(PI / (2 * z)) - dp;
-        return gRound(M, 5);
+        return {M: gRound(M, 5), dc: dc, dk: dk};
+    }
+
+    function calcMInt(x_int, mn, z, alpha_n, beta, dp) {
+        var g = intPinGeom(x_int, mn, z, alpha_n, beta, dp);
+        return (typeof g === 'string') ? g : g.M;
     }
 
     // 外花鍵跨齒厚 Wk
@@ -3352,21 +3365,19 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         return {upperDev: gRound(fd, 6), tol: T, isEst: true};
     }
 
-    // 內花鍵 dp 最大值（測棒中心圓 dc ≤ Df - dp）
-    function findDpMaxInt(x_int, mn, z, alpha_n, beta, hf_star) {
-        var cos_b = Math.cos(beta);
-        var mt = mn / cos_b;
-        var Df = mt * z + 2 * mn * (hf_star - x_int);
-        var lo = 0.001, hi = Df / 2;
+    // 內花鍵 dp 最大值：測棒越大，接觸點越往小徑（齒頂）移動；
+    // 接觸圓 dk 掉到小徑 di 以下＝測棒碰到齒頂，量不準。取 dk ≥ di 的最大 dp。
+    function findDpMaxInt(x_int, mn, z, alpha_n, beta, di) {
+        var lo = 0.001, hi = 4 * mn * z; // hi 會被「inv_p ≤ 0」自動擋下
+        var g0 = intPinGeom(x_int, mn, z, alpha_n, beta, lo);
+        if (typeof g0 === 'string' || g0.dk < di) return null;
         for (var i = 0; i < 120; i++) {
             var dp_try = (lo + hi) / 2;
-            var m_try = calcMInt(x_int, mn, z, alpha_n, beta, dp_try);
-            if (typeof m_try === 'string') { hi = dp_try; continue; }
-            var dc_try = m_try + dp_try;  // even-teeth approx: M = dc - dp → dc = M + dp
-            if (dc_try < Df - dp_try) lo = dp_try; else hi = dp_try;
-            if (hi - lo < 1e-6) break;
+            var g = intPinGeom(x_int, mn, z, alpha_n, beta, dp_try);
+            if (typeof g === 'string' || g.dk < di) hi = dp_try; else lo = dp_try;
+            if (hi - lo < 1e-7) break;
         }
-        return gRound((lo + hi) / 2, 4);
+        return gRound(lo, 4);
     }
 
     // ── 外花鍵 ──────────────────────────────────────────────────────────────
@@ -3588,21 +3599,21 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var dp_used = (dp_in && dp_in > 0) ? dp_in : gRound(1.68 * mn, 3);
 
         // M 值（內花鍵）
-        var M_nom = null;
+        var M_nom = null, dk_used = null;
         if (di > db) {
-            var M_raw = calcMInt(x_int, mn, z, alpha_n, beta, dp_used);
-            M_nom = (typeof M_raw === 'string') ? null : M_raw;
-            if (M_nom === null) warns.push('M 值計算異常：' + M_raw);
+            var pg = intPinGeom(x_int, mn, z, alpha_n, beta, dp_used);
+            if (typeof pg === 'string') { warns.push('M 值計算異常：' + pg); }
+            else { M_nom = pg.M; dk_used = pg.dk; }
         }
 
-        // 測棒有效性
-        if (M_nom !== null) {
-            if (M_nom < di) warns.push('測棒過小：M(' + fmtNum(M_nom,4) + ') < 小徑(' + fmtNum(di,4) + ')，請增大 dp');
-            else if (M_nom + dp_used > Df) warns.push('測棒過大：M+dp(' + fmtNum(M_nom+dp_used,4) + ') > 大徑(' + fmtNum(Df,4) + ')，請減小 dp');
+        // 測棒有效性：接觸圓必須落在齒面有效段（小徑 di ～ 大徑 Df）之內
+        if (dk_used !== null) {
+            if (dk_used < di) warns.push('測棒過大：接觸圓 dk(' + fmtNum(dk_used,4) + ') < 小徑(' + fmtNum(di,4) + ')，測棒會碰到齒頂，請減小 dp');
+            else if (dk_used > Df) warns.push('測棒過小：接觸圓 dk(' + fmtNum(dk_used,4) + ') > 大徑(' + fmtNum(Df,4) + ')，測棒會落到齒根，請增大 dp');
         }
 
-        // dp_max
-        var dp_max = (di > db) ? findDpMaxInt(x_int, mn, z, alpha_n, beta, hf_star) : null;
+        // dp_max：接觸圓剛好等於小徑時的測棒直徑
+        var dp_max = (di > db) ? findDpMaxInt(x_int, mn, z, alpha_n, beta, di) : null;
 
         // 公差
         var tol = getSplineTol(mn, d, quality, fit_code, standard, false);
@@ -3612,13 +3623,14 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
 
         _splineIntResult = {standard:standard, mn:mn, z:z, alpha_n:alpha_n, alpha_t:alpha_t,
             beta:beta, x:x_int, root_form:root_form, d:d, di:di, Df:Df, db:db, h:h,
-            dp:dp_used, dp_max:dp_max,
+            dp:dp_used, dp_max:dp_max, dk:dk_used,
             M_nom:M_nom, M_lower:M_lower, M_upper:M_upper, tol:tol};
 
         setOut('sp-int-out-d',  fmtNum(d,4));  setOut('sp-int-out-di', fmtNum(di,4));
         setOut('sp-int-out-Df', fmtNum(Df,4)); setOut('sp-int-out-db', fmtNum(db,4));
         setOut('sp-int-out-h',  fmtNum(h,4));  setOut('sp-int-out-dp-used', fmtNum(dp_used,4));
         setOut('sp-int-out-dp-max', dp_max !== null ? fmtNum(dp_max,4) : '—');
+        setOut('sp-int-out-dk', dk_used !== null ? fmtNum(dk_used,4) : '—');
         setOut('sp-int-out-m-nom', M_nom !== null ? fmtNum(M_nom,4) : '異常', M_nom ? '' : 'val-err');
         setOut('sp-int-out-m-lo', M_lower !== null ? fmtNum(M_lower,4) : '—', M_lower ? 'val-ok' : '');
         setOut('sp-int-out-m-up', M_upper !== null ? fmtNum(M_upper,4) : '—', M_upper ? 'val-ok' : '');
@@ -3652,7 +3664,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     window.clearSplineInt = function() {
         _splineIntResult = null;
         ['sp-int-out-d','sp-int-out-di','sp-int-out-Df','sp-int-out-db','sp-int-out-h',
-         'sp-int-out-dp-used','sp-int-out-dp-max','sp-int-out-m-nom','sp-int-out-m-lo','sp-int-out-m-up',
+         'sp-int-out-dp-used','sp-int-out-dp-max','sp-int-out-dk','sp-int-out-m-nom','sp-int-out-m-lo','sp-int-out-m-up',
          'sp-int-conv-m-lo','sp-int-conv-m-up'].forEach(function(id){setOut(id,'');});
         var wEl = document.getElementById('sp-int-warns');
         if (wEl) wEl.style.display = 'none';
@@ -3937,50 +3949,149 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
 
         var isShaft = (document.querySelector('input[name="sr-type"]:checked').value === 'shaft');
         var isEven  = (N % 2 === 0);
-        var depth   = (D - d) / 2;
+        var phi     = Math.PI / N;
+        var warnMsgs = [];
 
-        // ── 跨銷 ────────────────────────────────────────────────────────────
-        var dp_max_allowed = Math.min(B_min, depth);
-        var dp_min_allowed = Math.max(0.5 * B_min, 0.5);
-        var pinOK = (dp_min_allowed <= dp_max_allowed);
-
-        var dpCustom = parseFloat(gVal('sr-dp-custom'));
-        var dp_rec = pinOK ? gRound(Math.min(0.9 * B_min, dp_max_allowed * 0.95), 3) : 0;
-        if (dp_rec < dp_min_allowed && pinOK) dp_rec = dp_min_allowed;
-        var dp = (!isNaN(dpCustom) && dpCustom > 0) ? dpCustom : dp_rec;
-
-        function calcM(D_v, d_v, dp_v) {
-            if (isShaft) return isEven ? (d_v + 2*dp_v) : ((d_v + D_v)/2 + dp_v);
-            return isEven ? (D_v - 2*dp_v) : ((D_v + d_v)/2 - dp_v);
+        // ══ 量測球幾何（2026-11-10 重寫，已用「實體邊界取樣＋球心掃描」暴力模擬逐值驗證）══
+        // 約定：B＝平行側面的寬度——軸＝齒寬(鍵寬)、孔＝槽寬。D＝大徑、d＝小徑。
+        // ‧軸：球放進兩齒之間的溝，從外往內落下，停在「最先接觸」處：
+        //      溝底(圓 d)／齒側面(平行面)／齒頂邊角(圓 D 與側面的交線)，三者取球心最高者。
+        //      球心離軸心 h；偶數：M=2h+dp（量兩球外緣）；奇數：M=h+dp/2+D/2（量至對面齒頂）。
+        // ‧孔：球放進孔齒的槽，從孔內往外：dp≤B 落到槽底(圓 D)；dp>B 卡在小徑邊角(圓 d 與槽側面的交線)。
+        //      球心離軸心 y；偶數：M=2y−dp（兩球最小內距）；奇數：M=y−dp/2+d/2（球內緣至對面齒頂）。
+        function ballShaft(D_v, d_v, B_v, dp_v) {
+            var rp = dp_v / 2, best = {h: d_v / 2 + rp, c: 'bottom'};
+            var hs = (rp + B_v / 2) / Math.sin(phi);
+            var rad = Math.sqrt(Math.pow(hs * Math.cos(phi), 2) + B_v * B_v / 4);
+            var cand = null;
+            if (rad <= D_v / 2) {                       // 接觸點落在齒側面上
+                if (rad >= d_v / 2) cand = {h: hs, c: 'side'};
+            } else if (B_v < D_v) {                     // 接觸點超出齒頂 → 改接觸齒頂邊角
+                var uu = Math.sqrt(D_v * D_v / 4 - B_v * B_v / 4);
+                var px = uu * Math.cos(phi) + (B_v / 2) * Math.sin(phi);
+                var py = uu * Math.sin(phi) - (B_v / 2) * Math.cos(phi);
+                if (rp >= Math.abs(py)) cand = {h: px + Math.sqrt(rp * rp - py * py), c: 'corner'};
+            }
+            if (cand && cand.h > best.h) best = cand;
+            return best;
+        }
+        function ballBore(D_v, d_v, B_v, dp_v) {
+            var rp = dp_v / 2, bottom = D_v / 2 - rp;
+            if (dp_v <= B_v || B_v >= d_v) return {y: bottom, c: 'bottom'};
+            var px = Math.sqrt(d_v * d_v / 4 - B_v * B_v / 4);
+            var y = px - Math.sqrt(rp * rp - B_v * B_v / 4);
+            return (y < bottom) ? {y: y, c: 'corner'} : {y: bottom, c: 'bottom'};
+        }
+        // 回傳 {M, c} 或 null（無法量測）
+        function calcM(D_v, d_v, B_v, dp_v) {
+            var M, c;
+            if (isShaft) {
+                var bs = ballShaft(D_v, d_v, B_v, dp_v); c = bs.c;
+                M = isEven ? (2 * bs.h + dp_v) : (bs.h + dp_v / 2 + D_v / 2);
+            } else {
+                var bb = ballBore(D_v, d_v, B_v, dp_v); c = bb.c;
+                M = isEven ? (2 * bb.y - dp_v) : (bb.y - dp_v / 2 + d_v / 2);
+            }
+            return (isFinite(M) && M > 0) ? {M: M, c: c} : null;
         }
 
-        var M_nom, M_upper, M_lower, methodStr;
-        if (!pinOK) {
-            M_nom = null;
+        // ── 幾何合理性 ──────────────────────────────────────────────────────
+        if (isShaft && B > d * Math.sin(phi)) {
+            warnMsgs.push('齒寬 B(' + fmtNum(B,3) + ') 超過 d·sin(180°/N)＝' + fmtNum(d * Math.sin(phi),3) + '：相鄰兩齒在小徑處已互相重疊，沒有溝可放球，請檢查 N、d、B');
+        }
+        if (!isShaft && B >= d) {
+            warnMsgs.push('槽寬 B 不可大於等於小徑 d');
+        }
+
+        // ── 可用球徑與建議值 ────────────────────────────────────────────────
+        var dpA = null, dpB = null, dp_rec = 0, dpRangeStr;
+        if (isShaft) {
+            // 掃描球徑：找出「球頂在齒側面（量得到齒寬 B）」的區間；
+            // 齒數少、齒間溝寬時（如 6 齒）球永遠先落到溝底或頂到齒頂邊角，這時沒有側面區間。
+            var step = Math.max(D / 3000, 0.001), sideLo = null, sideHi = null, firstCorner = null;
+            if (B < d * Math.sin(phi)) {
+                for (var t = step; t < D; t += step) {
+                    var cc = ballShaft(D, d, B, t).c;
+                    if (cc === 'side') { if (sideLo === null) sideLo = t; sideHi = t; }
+                    else if (cc === 'corner' && firstCorner === null) firstCorner = t;
+                }
+            }
+            if (sideLo !== null) {
+                dpA = sideLo; dpB = sideHi;
+                dp_rec = gRound((sideLo + sideHi) / 2, 3);
+                dpRangeStr = '齒側面接觸（量齒寬 B）：dp ' + fmtNum(sideLo,3) + ' ~ ' + fmtNum(sideHi,3) + ' mm；較小落到溝底（量 d），較大頂到齒頂邊角（量 D、B）';
+            } else if (firstCorner !== null) {
+                dpB = firstCorner;
+                dp_rec = gRound(firstCorner * 0.9, 3);
+                dpRangeStr = 'dp ≤ ' + fmtNum(firstCorner,3) + ' mm：球落到溝底（量小徑 d）；較大：球頂在齒頂邊角（量 D 與 B）。此規格球頂不到齒側面';
+            } else if (B < d * Math.sin(phi)) {
+                dpB = D;
+                dp_rec = gRound(B, 3);
+                dpRangeStr = '球落到溝底（量小徑 d）；此規格沒有其他接觸型態';
+            } else {
+                dpRangeStr = '無法量測（齒間溝太窄，放不下球）';
+            }
         } else {
-            M_nom   = calcM(D, d, dp);
-            M_upper = calcM(D_max, d_max, dp);
-            M_lower = calcM(D_min, d_min, dp);
-            if (!isShaft && isEven) { var t=M_upper; M_upper=M_lower; M_lower=t; }
+            dp_rec = gRound(1.2 * B, 3);
+            var g0 = calcM(D, d, B, dp_rec);
+            if (!g0) dp_rec = gRound(B, 3);
+            dpRangeStr = 'dp ≤ ' + fmtNum(B,3) + '：落到槽底（量大徑 D）；dp > ' + fmtNum(B,3) + '：卡在小徑邊角（量小徑 d 與槽寬 B）';
+        }
+        var dpCustom = parseFloat(gVal('sr-dp-custom'));
+        var customOn = (!isNaN(dpCustom) && dpCustom > 0);
+        var dp = customOn ? dpCustom : dp_rec;
+        var pinOK = (dp > 0);
+
+        // ── M（含公差：D、d、B 各取上下限共 8 種組合，取最小／最大）──────────
+        var M_nom = null, M_upper = null, M_lower = null, contactC = '', methodStr;
+        if (pinOK) {
+            var g = calcM(D, d, B, dp);
+            if (g) {
+                M_nom = g.M; contactC = g.c;
+                var mins = M_nom, maxs = M_nom;
+                [D_max, D_min].forEach(function(Dv){ [d_max, d_min].forEach(function(dv){ [B_max, B_min].forEach(function(Bv){
+                    var gx = calcM(Dv, dv, Bv, dp);
+                    if (gx) { if (gx.M < mins) mins = gx.M; if (gx.M > maxs) maxs = gx.M; }
+                }); }); });
+                M_lower = mins; M_upper = maxs;
+            } else {
+                warnMsgs.push('這顆球算不出跨銷值（球太大或幾何不成立），請改用較小的 dp 或檢查 D、d、B、N');
+            }
+        }
+        var contactTxt = '';
+        if (contactC) {
+            contactTxt = isShaft
+                ? ({bottom:'球落在溝底，量到的是小徑 d', side:'球頂在兩側齒面，量到的是齒寬 B', corner:'球頂在齒頂邊角，量到的是大徑 D 與齒寬 B'}[contactC])
+                : ({bottom:'球落在槽底，量到的是大徑 D', corner:'球卡在小徑邊角，量到的是小徑 d 與槽寬 B'}[contactC]);
         }
         methodStr = isShaft
-            ? (isEven ? '偶數槽：兩對面槽各放一球，量兩球外緣' : '奇數槽：一球放槽，量至對面齒外緣')
-            : (isEven ? '偶數槽：兩對面槽各放一球，量兩球最小內距' : '奇數槽：一球放槽，量至對面齒根');
-
-        // ── 齒厚 ────────────────────────────────────────────────────────────
-        function calcTooth(D_v, d_v, B_v) {
-            // 齒的圓心角（在小徑圓上）
-            if (B_v >= d_v) return null; // 槽寬超過小徑，無齒
-            var slotHalfAngle = Math.asin(B_v / d_v);
-            var toothAngle = 2*Math.PI/N - 2*slotHalfAngle;
-            if (toothAngle <= 0) return null; // 槽太寬，無齒
-            // 齒厚弦長（在小徑圓）
-            return d_v * Math.sin(toothAngle / 2);
+            ? (isEven ? '偶數槽：兩對面的溝各放一球，量兩球外緣距離' : '奇數槽：一球放溝，量球外緣至對面齒頂')
+            : (isEven ? '偶數槽：兩對面的槽各放一球，量兩球最小內距' : '奇數槽：一球放槽，量球內緣至對面齒頂');
+        if (contactTxt) methodStr += '<br>▸ ' + contactTxt;
+        if (customOn && isShaft && sideLo !== null && (dp > sideHi + 1e-9)) {
+            warnMsgs.push('自訂球徑 dp=' + dp + ' 已超過齒側面接觸範圍（' + fmtNum(sideHi,3) + '），球頂在齒頂邊角，量不到齒寬');
+        } else if (customOn && isShaft && sideLo !== null && (dp < sideLo - 1e-9)) {
+            warnMsgs.push('自訂球徑 dp=' + dp + ' 小於齒側面接觸範圍（' + fmtNum(sideLo,3) + '），球落到溝底，量不到齒寬');
         }
 
-        var tooth_nom   = calcTooth(D, d, B);
-        var tooth_upper = calcTooth(D_max, d_max, B_min); // d大B小→齒最厚
-        var tooth_lower = calcTooth(D_min, d_min, B_max); // d小B大→齒最薄
+        // ── 齒厚 ────────────────────────────────────────────────────────────
+        // 軸：B 本身就是齒寬（平行側面），直接是量測值。
+        // 孔：槽之間的孔齒不是平行側面，取小徑圓上的弦長（齒頂寬）。
+        function calcToothChord(d_v, B_v) {
+            if (B_v >= d_v) return null;
+            var slotHalfAngle = Math.asin(B_v / d_v);
+            var toothAngle = 2*Math.PI/N - 2*slotHalfAngle;
+            if (toothAngle <= 0) return null;
+            return d_v * Math.sin(toothAngle / 2);
+        }
+        var tooth_nom, tooth_upper, tooth_lower;
+        if (isShaft) {
+            tooth_nom = B; tooth_upper = B_max; tooth_lower = B_min;
+        } else {
+            tooth_nom   = calcToothChord(d, B);
+            tooth_upper = calcToothChord(d_max, B_min); // d大B小→齒最寬
+            tooth_lower = calcToothChord(d_min, B_max); // d小B大→齒最窄
+        }
 
         // ── 輸出 ─────────────────────────────────────────────────────────────
         var elOut = function(id,v,cls){
@@ -3988,19 +4099,19 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             el.textContent = v;
             el.className = 'gear-output-val' + (cls?' '+cls:'');
         };
+        var lblT = document.getElementById('sr-tooth-lbl');
+        if (lblT) lblT.innerHTML = isShaft
+            ? '齒寬 B <small style="color:#888;font-weight:400;">（平行側面，直接量）</small>'
+            : '孔齒齒頂寬 b <small style="color:#888;font-weight:400;">（小徑弦長）</small>';
 
-        elOut('sr-dp-range', pinOK
-            ? fmtNum(dp_min_allowed,3)+' ~ '+fmtNum(dp_max_allowed,3)+' mm'
-            : '無法量測（槽深/槽寬不足）', pinOK?'':'val-err');
-        elOut('sr-dp-rec', pinOK
-            ? fmtNum(dp_rec,3)+' mm' + ((!isNaN(dpCustom)&&dpCustom>0)?' ★自訂 '+dp+' mm':'')
-            : '—');
+        elOut('sr-dp-range', dpRangeStr, (isShaft && !(dpB > 0)) ? 'val-err' : '');
+        elOut('sr-dp-rec', (dp_rec > 0 ? fmtNum(dp_rec,3)+' mm' : '—') + (customOn ? ' ★自訂 '+dp+' mm' : ''));
 
         elOut('sr-M-nom', M_nom!==null ? fmtNum(M_nom,4)+' mm' : '無法量測', M_nom!==null?'val-ok':'val-err');
         var hasTol = Dup||Ddn||dup||ddn||btolCode;
         elOut('sr-M-range', M_nom===null ? '無法量測'
             : (!hasTol ? '（未輸入公差）'
-            : fmtNum(Math.min(M_upper,M_lower),4)+' ~ '+fmtNum(Math.max(M_upper,M_lower),4)+' mm'),
+            : fmtNum(M_lower,4)+' ~ '+fmtNum(M_upper,4)+' mm'),
             M_nom!==null&&hasTol?'val-ok':'');
         var mEl = document.getElementById('sr-method');
         if (M_nom !== null) {
@@ -4016,9 +4127,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             : fmtNum(Math.min(tooth_upper||0,tooth_lower||0),4)+' ~ '+fmtNum(Math.max(tooth_upper||0,tooth_lower||0),4)+' mm'),
             tooth_nom!==null&&hasTol?'val-ok':'');
 
-        if (dp > dp_max_allowed && pinOK) {
-            document.getElementById('sr-warn').style.display='block';
-            document.getElementById('sr-warn').textContent='自訂球徑 dp='+dp+' 超出可用範圍 ['+fmtNum(dp_min_allowed,3)+', '+fmtNum(dp_max_allowed,3)+']';
+        if (warnMsgs.length) {
+            var wEl = document.getElementById('sr-warn');
+            wEl.style.display = 'block';
+            wEl.innerHTML = warnMsgs.map(function(w){ return '<div>' + escGear(w) + '</div>'; }).join('');
         }
     };
 
