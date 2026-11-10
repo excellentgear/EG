@@ -7269,6 +7269,27 @@ echo "</script>\n";
                                            +  '</div>';
                                 });
                                 tdDynamicProcess.innerHTML = _sHtml;
+                            } else if (((window.obBatchMap || {})[String(processInfo.bom_ing_fid)] || {}).batches && (window.obBatchMap[String(processInfo.bom_ing_fid)].batches || []).length) {
+                                // ── 分批顯示（分批到／分批發包／分批回廠都算）：與「拆N批」同樣的逐批列示 ──
+                                var _pm = window.obBatchMap[String(processInfo.bom_ing_fid)];
+                                var _pmSend = (Number(_pm.send) || 0) - (Number(_pm.wd) || 0), _pmTot = Number(_pm.total) || Number(processInfo.sqty) || 0;
+                                var _pH = '<div style="font-size:10.5px;font-weight:600;color:#444;margin-bottom:2px;">' + escapeHtml(processInfo.ProcessName || '')
+                                        + ' <span style="color:#337ab7;font-weight:normal;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">分' + _pm.batches.length + '批</span></div>';
+                                _pm.batches.forEach(function (b) {
+                                    var _bMk = egVP(b.maker || b.no || ''), _bOd = formatDynamicProcessDate(b.send_date || '');
+                                    var _bLast = (b.returns && b.returns.length) ? b.returns[b.returns.length - 1].date : '';
+                                    var _bRd = _bLast ? formatDynamicProcessDate(_bLast) : '';
+                                    var _bOut = Number(b.outside) || 0;
+                                    var _bSt = _bOut > 1e-9 ? '<span style="color:#1a7a1a;font-size:9px;">[加工中]</span>' : (b.xfer ? '<span style="color:#888;font-size:9px;">[已移轉]</span>' : '<span style="color:#2a7ae2;font-size:9px;">[已回]</span>');
+                                    _pH += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
+                                        + (_bOut > 1e-9 ? '<span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;" title="送出 ' + _obNum(b.send) + '">未回 ' + _obNum(_bOut) + ' pcs</span>' : _obNum(b.send) + ' pcs')
+                                        + (_bMk ? '<br><span style="color:#555;">' + escapeHtml(_bMk) + '</span>' : '')
+                                        + (_bOd ? '<span style="color:#aaa;"> ' + _bOd + '</span>' : '')
+                                        + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : '')
+                                        + ' ' + _bSt + '</div>';
+                                });
+                                if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pmTot - _pmSend) + ' pcs 未發（共 ' + _obNum(_pmTot) + '）</div>';
+                                tdDynamicProcess.innerHTML = _pH;
                             } else {
                                 // ── 單批次顯示（原有邏輯）────────────────────
                                 let processDisplayText = escapeHtml(processInfo.process_no || '');
@@ -7335,24 +7356,6 @@ echo "</script>\n";
                                     }
                                     tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${stateColor};">${datePrefix}${escapeHtml(translatedState)}</div>`;
                                 }
-                            }
-
-                            // ── 分批資訊（分批到、分批發包、分批回廠都算分批）：送出／回廠合計與總量，一眼看出這一關還差多少 ──
-                            if (!_splitBatches) {
-                                try {
-                                    var _pbm = (window.obBatchMap || {})[String(processInfo.bom_ing_fid)];
-                                    if (_pbm && _pbm.batches && _pbm.batches.length) {
-                                        var _pbSend = (Number(_pbm.send) || 0) - (Number(_pbm.wd) || 0), _pbRet = Number(_pbm.ret) || 0, _pbTot = Number(_pbm.total) || Number(processInfo.sqty) || 0;
-                                        var _pbLess = _pbTot > 0 && _pbSend < _pbTot - 1e-9;
-                                        var _pbEl = document.createElement('div');
-                                        _pbEl.className = 'oc-proc-batch';
-                                        _pbEl.style.cssText = 'margin-top:2px;font-size:10.5px;line-height:1.3;color:#6B4423;';
-                                        _pbEl.innerHTML = '<span style="color:#337ab7;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">分批</span> 送 ' + _obNum(_pbSend) + (_pbTot > 0 ? '／共 ' + _obNum(_pbTot) : '') + '・回 ' + _obNum(_pbRet)
-                                            + (_pbLess ? ' <span style="color:#B8431F;font-weight:bold;">差 ' + _obNum(_pbTot - _pbSend) + '</span>' : '');
-                                        _pbEl.title = '分批：送出 ' + _obNum(_pbSend) + '，回廠 ' + _obNum(_pbRet) + (_pbTot > 0 ? '，這一關總量 ' + _obNum(_pbTot) : '');
-                                        tdDynamicProcess.appendChild(_pbEl);
-                                    }
-                                } catch (_pbE) {}
                             }
 
                             // ── 加工單價顯示（動態製程欄，A 或 C+D+R 才可見）──────────────
