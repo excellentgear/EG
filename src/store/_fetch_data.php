@@ -449,6 +449,8 @@ if (is_array($OreadyReply_list_base)) {
         $max_reported_sn_map = [];
 
         $all_boms_for_pm = array_values(array_filter(array_unique(array_column($OreadyReply_list_base, 'bom'))));
+        require_once __DIR__ . '/../common/pm_face_report_lib.php';
+        $pm_face_map = pm_face_report_map($db, $all_boms_for_pm);
 
         if (!empty($all_boms_for_pm)) {
             $ph_pm = implode(',', array_fill(0, count($all_boms_for_pm), '?'));
@@ -670,6 +672,7 @@ if (is_array($OreadyReply_list_base)) {
             }
             $item['pm_has_report']       = $pm_has_report;
             $item['pm_latest_date']      = $pm_latest_date;
+            $pm_total_good -= (float)($pm_face_map[$item['bom']]['good_adjust'] ?? 0);   // 兩面加工的同一批件只算一次（pm_face_report_lib.php）
             $item['pm_total_processed']  = $pm_total_good + $pm_total_ng;
             $item['pm_total_ng']         = $pm_total_ng;
             $item['pm_schedule_order']   = $pm_first_schedule_order;
@@ -691,6 +694,9 @@ if (is_array($OreadyReply_list_base)) {
             $l_rpt = $latest_report_info_map[$item['bom']] ?? null;
             $item['latest_report_remark']        = $l_rpt['report_remark']        ?? null;
             $item['latest_report_process']       = $l_rpt['report_process_name']  ?? null;
+            $item['latest_report_faces']         = $pm_face_map[$item['bom']]['faces'] ?? '';
+            $item['latest_report_machines']      = $pm_face_map[$item['bom']]['machines'] ?? '';
+            $item['latest_report_finished'] = !empty($pm_face_map[$item['bom']]['finished']);
             $item['latest_report_activity_time'] = $l_rpt['report_activity_time'] ?? null;
             // NG 明細：優先用最新報工的 NG（跨製程），無則用目前製程累計 NG
             $item['latest_ng_info_str'] = ($l_rpt && !empty($l_rpt['ng_info']))
@@ -962,6 +968,14 @@ try {
     $sim_map = ps_sim_map_for_ids($db, array_column($data_to_return, 'd_setting_id'));
 } catch (Throwable $e) { $sim_map = []; }
 
+// 齒輪規格（2026-11-09）：BOM總覽料號下方顯示＋模數／壓力角／螺旋角篩選用
+$gear_map = [];
+try {
+    require_once __DIR__ . '/../common/gear_spec_lib.php';
+    $gear_map = eg_gear_list_map($db, array_column($data_to_return, 'd_setting_id'));
+    $gear_missing = eg_gear_missing_ids($db, array_column($data_to_return, 'd_setting_id'));
+} catch (Throwable $e) { $gear_map = []; $gear_missing = []; }
+
 // 料號重量（kg）：料號後面的重量按鈕用；失敗就當沒有
 $weight_map = [];
 try {
@@ -969,11 +983,16 @@ try {
     $weight_map = eg_pw_weight_map($db, array_column($data_to_return, 'd_setting_id'));
 } catch (Throwable $e) { $weight_map = []; }
 
+// 輸出前才啟用壓縮：前面的 ob_end_clean() 會把 php.ini 的 zlib 壓縮拆掉，導致 fetchAll 的 23MB JSON 原樣傳輸。
+// ob_gzhandler 只在瀏覽器聲明支援 gzip 時才壓，不支援時原樣輸出，傳輸量約降為 1/10。
+if (function_exists('ob_gzhandler') && !headers_sent()) { @ini_set('zlib.output_compression', '0'); ob_start('ob_gzhandler'); }
 echo json_encode([
     'success' => true,
     'data' => $data_to_return,
     'weight_map' => $weight_map ?: (object)[],
     'sim_map' => $sim_map ?: (object)[],
+    'gear_map' => $gear_map ?: (object)[],
+    'gear_missing' => $gear_missing ?? [],
     'totalRecords' => (int)$totalRecords,
     'bom_ps_list' => $bom_ps_list,
     'bom_ps_list_max' => $bom_ps_list_max,
