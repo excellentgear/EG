@@ -1585,9 +1585,9 @@ $(document).ready(function() {
 
                 var html = '<table class="table table-condensed table-bordered" style="font-size:13px">';
                 html += '<tr><td>有效移轉列數</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
-                html += '<tr><td>將新增的製程列</td><td>' + res.insert_count + ' 筆</td></tr>';
-                html += '<tr><td>將覆蓋更新</td><td>' + res.write_count + ' 筆</td></tr>';
-                if (res.skip_dup_count > 0)   html += '<tr><td>重複跳過(同加工單號)</td><td>' + res.skip_dup_count + ' 筆</td></tr>';
+                html += '<tr><td>將新增的批次列</td><td>' + res.insert_count + ' 筆</td></tr>';
+                html += '<tr><td>寫入預設列(第一批)</td><td>' + res.write_count + ' 筆</td></tr>';
+                if (res.skip_dup_count > 0)   html += '<tr><td>重複跳過(同製令/序號/廠商/異動時間)</td><td>' + res.skip_dup_count + ' 筆</td></tr>';
                 if (res.skip_stale_count > 0) html += '<tr class="danger"><td>舊檔保護跳過</td><td>' + res.skip_stale_count + ' 筆</td></tr>';
                 html += '</table>';
 
