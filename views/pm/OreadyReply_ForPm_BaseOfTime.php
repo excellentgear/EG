@@ -6082,6 +6082,7 @@ echo "</script>\n";
                 return dn !== null && Math.max(_xoQty(p), dn) < _remPre - 1e-9;
             }
             var _lastBtnRow = null; // 記錄最後一個狀態按鈕列
+            var _shortList = []; // 前面關卡「只發出一部分」的清單（發單日欄顯示「○○ N pcs未到」、備註欄補輸入框共用）
 
             if (_activeProcs.length === 0) {
                 var _fbDiv = document.createElement('div');
@@ -6263,6 +6264,35 @@ echo "</script>\n";
                     } else {
                         sp.textContent = String(_qtyTotal);
                     }
+                })();
+                // ── 前面關卡只發出（到）一部分：在目前關卡上方顯示「客供料 32pcs未到」（2026-11-10）──
+                (function () {
+                    try {
+                        var _dg = {}, _maxG = 0;
+                        _displayProcs.forEach(function (p) { _dg[ocGrp(p)] = true; if (ocGrp(p) > _maxG) _maxG = ocGrp(p); });
+                        var _groups = {}, _gOrder = [];
+                        _activeProcs.forEach(function (p) {
+                            var g = ocGrp(p); if (!(g > 0) || _dg[g] || g > _maxG || p.batch_label) return;
+                            if (!_groups[g]) { _groups[g] = { main: p, send: 0, has: false }; _gOrder.push(g); }
+                            var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                            if ((m && m.batches && m.batches.length) || _xoQty(p) > 0) _groups[g].has = true;
+                            _groups[g].send += Math.max(_sendQtyOf(p), _xoQty(p));
+                        });
+                        _gOrder.sort(function (a, b) { return a - b; });
+                        var _firstG = _activeProcs.reduce(function (mn, p) { var g = ocGrp(p); return g > 0 && g < mn ? g : mn; }, 1e9);
+                        _gOrder.forEach(function (g) {
+                            var G = _groups[g]; if (!G.has) return;
+                            var sh = Math.round((_remainQty - G.send) * 1000) / 1000;
+                            if (sh <= 1e-9) return;
+                            _shortList.push({ proc: G.main, qty: sh, first: g === _firstG });
+                            var d = document.createElement('div');
+                            d.className = 'oc-short-line';
+                            d.style.cssText = 'margin-top:1px;line-height:1.2;font-size:12px;font-weight:bold;color:#B8431F;';
+                            d.textContent = (G.main.ProcessName || '前一關') + ' ' + sh + 'pcs' + (g === _firstG ? '未到' : '未發');
+                            d.title = (G.main.ProcessName || '') + '：製令剩餘 ' + _remainQty + '，這一關只發出（到）' + G.send + '，還有 ' + sh + ' 沒有進到這一關';
+                            tdOutsourceDate.appendChild(d);
+                        });
+                    } catch (_e) {}
                 })();
                 _displayProcs.forEach(function(_proc, _pi) {
                     // 已全數回廠、只是還有數量沒發到下一關（沒有發單批次的關卡）：只顯示「回廠日（有QC檢驗＝最後一筆檢驗完成日）　未發<下一製程> N」
@@ -6783,6 +6813,26 @@ echo "</script>\n";
             // 單關備註：目前製程有幾個就畫幾個輸入框，各自對應自己的 bom_ing_fid
             // （實作與說明見 buildBomPsRowEl／currentProcsOfRow）
             var _curProcs = currentProcsOfRow(row);
+            // 前面還沒完成的關卡（只發出一部分、或還在廠商／待檢驗）也要有備註輸入框，排在目前製程前面
+            (function () {
+                try {
+                    var have = {}; _curProcs.forEach(function (p) { have[String(p.bom_ing_fid)] = true; });
+                    var cand = [], seen = {};
+                    var act = (window.ingActiveMap || {})[String(row.bom || '').trim()] || [];
+                    var add = function (p) { if (!p || have[String(p.bom_ing_fid)] || seen[String(p.bom_ing_fid)]) return; seen[String(p.bom_ing_fid)] = true; cand.push(p); };
+                    (_shortList || []).forEach(function (x) { add(x.proc); });
+                    act.forEach(function (p) {
+                        if (['ing', 'Q', 'P'].indexOf(String(p.processing_state || '')) < 0 || p.batch_label) return;
+                        if (ocXferDone(p, act) || ocQcMoot(p, act)) return;
+                        add(p);
+                    });
+                    cand.sort(function (a, b) { return (parseInt(a.bom_sn, 10) || 0) - (parseInt(b.bom_sn, 10) || 0); });
+                    cand.forEach(function (p) {
+                        var full = (window.bomPSList || []).filter(function (q) { return q && String(q.bom_ing_fid) === String(p.bom_ing_fid); })[0];
+                        tdBomPs.appendChild(buildBomPsRowEl(full || p));
+                    });
+                } catch (_e2) {}
+            })();
             _curProcs.forEach(function (proc) { tdBomPs.appendChild(buildBomPsRowEl(proc)); });
             // 下方「是否要加分隔線」的既有判斷仍沿用彙總值
             var bomPsText = row.bom_bom_ps || "";
