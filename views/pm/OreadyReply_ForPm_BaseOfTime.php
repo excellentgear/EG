@@ -1688,6 +1688,14 @@ echo "    window.displayPermissionCode = " . json_encode($display_permission_cod
 echo "    window.ptiFilterSaved = " . json_encode($pti_filter_saved) . ";\n";
 echo "    window.processTypeList = " . json_encode($process_type_list) . ";\n";
 echo "    window.ptiProcessMap   = " . json_encode($pti_process_map) . "; // {process_type_id:[ProcessNo,...]}\n";
+// 製程代號 → 製程大類（單製篩選用）：process_no 主檔很小，只在初載輸出
+$__pnTypeMap = [];
+try {
+    foreach ($db->query("SELECT ProcessNo, process_type_id FROM process_no WHERE process_type_id IS NOT NULL")->fetchAll(PDO::FETCH_ASSOC) as $__r) {
+        $__pnTypeMap[(string)$__r['ProcessNo']] = (string)$__r['process_type_id'];
+    }
+} catch (Throwable $__e) { error_log('procNoTypeMap: ' . $__e->getMessage()); }
+echo "    window.procNoTypeMap   = " . json_encode((object)$__pnTypeMap) . "; // {ProcessNo:process_type_id}\n";
 // 讀取例外內製製程
 $internal_pt_saved = [];
 try {
@@ -4713,7 +4721,8 @@ echo "</script>\n";
             }
             ['gear-mod-filter', 'gear-pa-filter', 'gear-helix-filter'].forEach(function (gid) { var ge = document.getElementById(gid); if (ge) ge.value = ""; });
             if (window.gearFilterRefresh) window.gearFilterRefresh();
-            ['proc-reach-mode', 'proc-reach-no'].forEach(function (pid) { var pe = document.getElementById(pid); if (pe) pe.value = ""; });
+            ['proc-reach-mode', 'proc-reach-no', 'proc-reach-q'].forEach(function (pid) { var pe = document.getElementById(pid); if (pe) pe.value = ""; });
+            if (window.singleFilterClear) window.singleFilterClear();   // 單製篩選一併解除
             document.getElementById("global-search").value = "";
             ptiSearch = ""; // 清空全域變數
             currentBomFilter = "all"; // 清空全域變數
@@ -8907,16 +8916,183 @@ echo "</script>\n";
         window.__prIdxRef = list; window.__prIdxLen = list.length; window.__prIdx = idx; window.__prNames = names;
         return idx;
     }
+    // 製程挑選（2026-11-10）：不再列出「ID+名稱」整份下拉，改輸入框模糊篩選。
+    // 排序：完全相符的最上面；輸入「0」開頭的數字（如 01）＝絕對指定該 ID（01＝ID 1），只列這一筆。
+    function egFuzzyRank(items, q) {
+        q = String(q || '').trim().toLowerCase();
+        if (!q) return items.slice(0, 40);
+        if (/^0\d*$/.test(q)) {
+            var n = parseInt(q, 10);
+            return items.filter(function (it) { return parseInt(it.id, 10) === n && /^\d+$/.test(String(it.id)); });
+        }
+        var toks = q.split(/\s+/);
+        var out = [];
+        items.forEach(function (it) {
+            var id = String(it.id).toLowerCase(), nm = String(it.name || '').toLowerCase(), hay = id + ' ' + nm;
+            if (!toks.every(function (t) { return hay.indexOf(t) >= 0; })) return;
+            var s = id === q ? 0 : nm === q ? 1 : id.indexOf(q) === 0 ? 2 : nm.indexOf(q) === 0 ? 3 : id.indexOf(q) >= 0 ? 4 : nm.indexOf(q) >= 0 ? 5 : 6;
+            out.push({ it: it, s: s });
+        });
+        out.sort(function (a, b) { return a.s - b.s || (parseInt(a.it.id, 10) || 0) - (parseInt(b.it.id, 10) || 0) || (String(a.it.id) < String(b.it.id) ? -1 : 1); });
+        return out.map(function (o) { return o.it; }).slice(0, 40);
+    }
+    // 在 inputEl 上掛一個建議清單（position:fixed，不被捲動容器裁切）。onPick(item|null)：選取／清空時呼叫。
+    function egAttachPicker(inputEl, getItems, onPick) {
+        if (!inputEl || inputEl.__egPick) return;
+        inputEl.__egPick = true;
+        var box = document.createElement('div');
+        box.style.cssText = 'position:fixed;z-index:10060;display:none;background:#fff;border:1px solid #D9A066;border-radius:3px;box-shadow:0 3px 10px rgba(0,0,0,.25);max-height:260px;overflow-y:auto;min-width:220px;font-size:13px;color:#5A3A1A;';
+        document.body.appendChild(box);
+        var list = [], hi = -1, picked = null;
+        function label(it) { return it.id + ' ' + (it.name || ''); }
+        function place() { var r = inputEl.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(220, r.width) + 'px'; }
+        function paint() {
+            if (!list.length) { box.innerHTML = '<div style="padding:6px 10px;color:#999;">查無符合的製程</div>'; return; }
+            box.innerHTML = list.map(function (it, i) {
+                return '<div data-i="' + i + '" style="padding:4px 10px;cursor:pointer;white-space:nowrap;' + (i === hi ? 'background:#F7E0BD;' : '') + '">' + escapeHtml(label(it)) + '</div>';
+            }).join('');
+        }
+        function open() { list = egFuzzyRank(getItems() || [], inputEl.value); hi = list.length ? 0 : -1; place(); paint(); box.style.display = 'block'; }
+        function close() { box.style.display = 'none'; }
+        function pick(it) { picked = it; inputEl.value = label(it); close(); onPick(it); }
+        inputEl.addEventListener('focus', function () { try { inputEl.select(); } catch (e) {} open(); });
+        inputEl.addEventListener('input', function () {
+            if (picked && inputEl.value !== label(picked)) { picked = null; onPick(null); }   // 改字＝解除原選取
+            open();
+        });
+        inputEl.addEventListener('keydown', function (e) {
+            if (box.style.display === 'none' && (e.key === 'ArrowDown')) { open(); return; }
+            if (e.key === 'ArrowDown') { hi = Math.min(list.length - 1, hi + 1); paint(); e.preventDefault(); }
+            else if (e.key === 'ArrowUp') { hi = Math.max(0, hi - 1); paint(); e.preventDefault(); }
+            else if (e.key === 'Enter') { if (box.style.display !== 'none' && list[hi]) { pick(list[hi]); e.preventDefault(); e.stopPropagation(); } }
+            else if (e.key === 'Escape') { close(); }
+        });
+        inputEl.addEventListener('blur', function () { setTimeout(close, 150); });
+        box.addEventListener('mousedown', function (e) {
+            var d = e.target.closest('[data-i]'); if (!d) return;
+            e.preventDefault(); pick(list[parseInt(d.getAttribute('data-i'), 10)]);
+        });
+        inputEl.__egPickReset = function () { picked = null; };
+    }
+    window.egAttachPicker = egAttachPicker;
+    function procReachItems() {
+        procReachIndex();
+        var names = window.__prNames || {};
+        return Object.keys(names).map(function (k) { return { id: k, name: names[k] }; });
+    }
     function procReachRefresh() {
+        // 選項改為輸入時即時由目前清單算出，這裡只確認已選的製程仍存在（資料更新後）
         var el = document.getElementById('proc-reach-no');
         if (!el) return;
         procReachIndex();
-        var names = window.__prNames || {}, cur = el.value;
-        var keys = Object.keys(names).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0) || (a < b ? -1 : 1); });
-        el.innerHTML = '<option value="">--選擇製程--</option>' + keys.map(function (k) { return '<option value="' + escapeHtml(k) + '">' + escapeHtml(k + ' ' + names[k]) + '</option>'; }).join('');
-        if (cur && names[cur]) el.value = cur;
+        if (el.value && !(window.__prNames || {})[el.value]) { /* 已選製程目前清單沒有：保留選取，篩選結果自然為空 */ }
     }
     window.procReachRefresh = procReachRefresh;
+
+    // ── 單製篩選（2026-11-10）：第一道製程＝指定ID（預設 138），且後序製程包含指定製程大類，並可限制製程總數 ≤ N ──
+    window.singleFilter = null;   // {first:'138', firstName:'', types:[{id,name}], max:Number|null}
+    function sfBomIndex() {
+        var list = window.bomPSList || [];
+        if (window.__sfIdxRef === list && window.__sfIdxLen === list.length && window.__sfIdx) return window.__sfIdx;
+        var by = {};
+        list.forEach(function (p) {
+            if (!p || !p.bom || !p.process_no) return;
+            if (parseInt(p.is_consumed || 0, 10) === 1) return;
+            if (String(p.processing_state || '').trim() === 'skip') return;
+            var b = String(p.bom).trim(), sn = String(p.bom_sn);
+            (by[b] = by[b] || {})[sn] = String(p.process_no);   // 同一道（bom_sn）分批只算一道
+        });
+        var idx = {};
+        Object.keys(by).forEach(function (b) {
+            idx[b] = Object.keys(by[b]).sort(function (x, y) { return (parseFloat(x) || 0) - (parseFloat(y) || 0); }).map(function (sn) { return by[b][sn]; });
+        });
+        window.__sfIdxRef = list; window.__sfIdxLen = list.length; window.__sfIdx = idx;
+        return idx;
+    }
+    function sfProcInType(pno, typeId) {
+        var map = window.ptiProcessMap || {}, t = String(typeId);
+        if (map[t] && map[t].length > 0) return map[t].some(function (x) { return String(x) === String(pno); });
+        return String((window.procNoTypeMap || {})[String(pno)] || '') === t;
+    }
+    window.singleFilterPass = function (row) {
+        var f = window.singleFilter;
+        if (!f) return true;
+        var seq = sfBomIndex()[String(row.bom || '').trim()];
+        if (!seq || !seq.length) return false;
+        if (String(seq[0]) !== String(f.first)) return false;
+        if (f.max && seq.length > f.max) return false;
+        if (f.types.length) {
+            var rest = seq.slice(1);
+            if (!rest.some(function (pno) { return f.types.some(function (t) { return sfProcInType(pno, t.id); }); })) return false;
+        }
+        return true;
+    };
+    function sfPaintButton() {
+        var b = document.getElementById('btn-single-filter');
+        if (!b) return;
+        var on = !!window.singleFilter;
+        b.classList.toggle('btn-warning', on); b.classList.toggle('btn-default', !on);
+        b.textContent = on ? '單製篩選●' : '單製篩選';
+    }
+    window.singleFilterClear = function () { window.singleFilter = null; sfPaintButton(); };
+    function sfApplyAndRender() { sfPaintButton(); currentPage = 1; processAndRenderData(); }
+    function openSingleFilterModal() {
+        var old = document.getElementById('single-filter-overlay'); if (old) old.remove();
+        var cur = window.singleFilter || { first: '138', firstName: '', types: [], max: null };
+        var types = cur.types.slice();
+        var firstItems = function () { return (window.allProcessTypes || []).map(function (p) { return { id: String(p.ProcessNo), name: p.ProcessName || '' }; }); };
+        var typeItems = function () { return (window.processTypeList || []).map(function (p) { return { id: String(p.process_type_id), name: p.process_type || '' }; }); };
+        var nameOf = function (id) { var f = firstItems().filter(function (x) { return x.id === String(id); })[0]; return f ? f.name : ''; };
+        var ov = document.createElement('div');
+        ov.id = 'single-filter-overlay';
+        ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10050;display:flex;align-items:center;justify-content:center;';
+        ov.innerHTML =
+            '<div style="background:#fff;border-radius:6px;width:520px;max-width:96vw;padding:18px 20px;box-shadow:0 6px 24px rgba(0,0,0,.35);color:#5A3A1A;">' +
+            '<h4 style="margin:0 0 12px;">單製篩選</h4>' +
+            '<div style="font-size:12px;color:#8a6a45;margin-bottom:10px;">條件：第一道製程＝指定ID，且「後序製程」包含所選製程大類；可再限制製程總數（含第一道）不超過指定道數。</div>' +
+            '<div style="margin-bottom:10px;"><label style="font-weight:600;">第一道製程（ID或名稱）</label><br><input type="text" id="sf-first" class="form-control input-sm" autocomplete="off" style="width:100%;" placeholder="輸入ID或名稱，如 138"></div>' +
+            '<div style="margin-bottom:10px;"><label style="font-weight:600;">後序製程需包含的製程大類（可複選，不選＝不限）</label><br>' +
+            '<input type="text" id="sf-type" class="form-control input-sm" autocomplete="off" style="width:100%;" placeholder="輸入製程大類ID或名稱，點選加入">' +
+            '<div id="sf-chips" style="margin-top:6px;"></div></div>' +
+            '<div style="margin-bottom:14px;"><label style="font-weight:600;">製程總數 ≦</label> <input type="number" id="sf-max" class="form-control input-sm" min="1" step="1" style="display:inline-block;width:90px;" placeholder="不限"> 道</div>' +
+            '<div id="sf-err" style="color:#DD5138;font-size:12px;min-height:16px;margin-bottom:6px;"></div>' +
+            '<div style="text-align:right;"><button type="button" class="btn btn-sm btn-default" id="sf-clear">清除篩選</button> <button type="button" class="btn btn-sm btn-default" id="sf-cancel">取消</button> <button type="button" class="btn btn-sm btn-warning" id="sf-ok">套用</button></div></div>';
+        document.body.appendChild(ov);
+        var $f = ov.querySelector('#sf-first'), $t = ov.querySelector('#sf-type'), $c = ov.querySelector('#sf-chips'), $m = ov.querySelector('#sf-max'), $e = ov.querySelector('#sf-err');
+        var firstId = cur.first;
+        $f.value = firstId ? (firstId + ' ' + (cur.firstName || nameOf(firstId))).trim() : '';
+        $m.value = cur.max || '';
+        function chips() {
+            $c.innerHTML = types.map(function (t, i) {
+                return '<span style="display:inline-block;background:#F7E0BD;border-radius:10px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px;">' + escapeHtml(t.id + ' ' + t.name) + ' <a href="javascript:void(0)" data-rm="' + i + '" style="color:#DD5138;text-decoration:none;">×</a></span>';
+            }).join('');
+        }
+        chips();
+        $c.addEventListener('click', function (e) { var r = e.target.getAttribute && e.target.getAttribute('data-rm'); if (r !== null && r !== undefined) { types.splice(parseInt(r, 10), 1); chips(); } });
+        egAttachPicker($f, firstItems, function (it) { firstId = it ? it.id : ''; });
+        egAttachPicker($t, typeItems, function (it) {
+            if (!it) return;
+            if (!types.some(function (x) { return x.id === it.id; })) types.push(it);
+            $t.value = ''; if ($t.__egPickReset) $t.__egPickReset(); chips();
+        });
+        var close = function () { ov.remove(); };
+        ov.querySelector('#sf-cancel').onclick = close;
+        ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+        ov.querySelector('#sf-clear').onclick = function () { window.singleFilterClear(); close(); sfApplyAndRender(); };
+        ov.querySelector('#sf-ok').onclick = function () {
+            var mx = String($m.value || '').trim();
+            if (!firstId) {   // 打了字沒點清單：只有唯一符合（或完全相符）時直接採用
+                var rk = egFuzzyRank(firstItems(), $f.value);
+                if (rk.length === 1 || (rk[0] && String(rk[0].id).toLowerCase() === String($f.value).trim().toLowerCase())) firstId = rk[0].id;
+            }
+            if (!firstId) { $e.textContent = '請先從清單選擇第一道製程（ID或名稱）'; return; }
+            if (mx !== '' && !/^[1-9]\d*$/.test(mx)) { $e.textContent = '製程總數請輸入大於 0 的整數'; return; }
+            window.singleFilter = { first: String(firstId), firstName: nameOf(firstId), types: types.slice(), max: mx === '' ? null : parseInt(mx, 10) };
+            close(); sfApplyAndRender();
+        };
+        $f.focus();
+    }
+    window.openSingleFilterModal = openSingleFilterModal;
     function procReachPass(row) {
         var m = (document.getElementById('proc-reach-mode') || {}).value || '', pn = (document.getElementById('proc-reach-no') || {}).value || '';
         if (!m || !pn) return true;
@@ -8945,7 +9121,12 @@ echo "</script>\n";
             });
             gearFilterRefresh();
             var goP = function () { currentPage = 1; processAndRenderData(); };
-            ['proc-reach-mode', 'proc-reach-no'].forEach(function (id) { var el = document.getElementById(id); if (el) el.addEventListener('change', goP); });
+            var prMode = document.getElementById('proc-reach-mode');
+            if (prMode) prMode.addEventListener('change', goP);
+            var prNo = document.getElementById('proc-reach-no'), prQ = document.getElementById('proc-reach-q');
+            egAttachPicker(prQ, procReachItems, function (it) { if (prNo) prNo.value = it ? it.id : ''; goP(); });
+            var btnSf = document.getElementById('btn-single-filter');
+            if (btnSf) btnSf.addEventListener('click', openSingleFilterModal);
             procReachRefresh();
         };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
@@ -8969,6 +9150,7 @@ echo "</script>\n";
             if (window.bomTagFilter && String(row.bom_filter_tag || '') !== window.bomTagFilter) return false;
             if (window.gearMissingFilter && !(window.gearMissing || {})[String(row.d_setting_id || '')]) return false;   // 未設定齒輪規格（工件種類G）
             if (!procReachPass(row)) return false;   // 製程進度（已經過／尚未到某製程）
+            if (!window.singleFilterPass(row)) return false;   // 單製篩選（第一道製程＋後序製程大類＋製程總數）
             if (!gearFilterPass(row)) return false;   // 齒輪：模數／壓力角／螺旋角（沒選＝完全不影響）
 
             // --- Status Filter (is_stock, no_order_data, unselected_order_in_dropdown, regular processing_state) ---
@@ -17446,7 +17628,9 @@ echo "</script>\n";
                                                 <option value="passed">已經過</option>
                                                 <option value="notyet">尚未到</option>
                                             </select>
-                                            <select id="proc-reach-no" class="form-control input-sm" style="display:inline-block; width:auto;" title="選擇製程（只列目前清單的 BOM 有排到的製程）"><option value="">--選擇製程--</option></select>
+                                            <input type="hidden" id="proc-reach-no" value="">
+                                            <input type="text" id="proc-reach-q" class="form-control input-sm" autocomplete="off" style="display:inline-block; width:150px;" placeholder="製程ID或名稱" title="輸入製程ID或名稱模糊篩選；完全相符排最上面；開頭加 0（如 01）＝只找 ID 1">
+                                            <button type="button" id="btn-single-filter" class="btn btn-xs btn-default" style="margin-left:4px;" title="單製篩選：第一道製程為指定ID，且後序製程包含指定製程大類／製程總數不超過指定道數">單製篩選</button>
                                             <input type="date" id="qc-date-filter" style="display:none;margin-left:4px;vertical-align:middle;" title="指定QC檢驗日期">
                                             <input type="text" id="global-search" placeholder="搜索所有欄位">
 
