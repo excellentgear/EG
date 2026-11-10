@@ -370,6 +370,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                 $qb = implode(',', array_map(fn($b) => $db->quote($b), $boms));
                 $alias = []; foreach ($boms as $bm) $alias[$bm] = baf_alias_map($db, $bm);
                 $eff = fn($bm, $sn) => (isset($alias[$bm][$sn]) && $alias[$bm][$sn] !== $sn) ? $alias[$bm][$sn] : $sn;
+                foreach ($me as $_fid => $_x) if (isset($out[$_fid])) { $out[$_fid]['bom'] = $_x['bom']; $out[$_fid]['grp'] = (int)$eff($_x['bom'], (int)$_x['bom_sn']); } // 前端用來找「同一關、同廠商」的發單批次
                 $grp = []; // [bom][effSn] => ['fids'=>[], 'total'=>max sqty, 'main'=>fid of max]
                 foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn, sqty FROM bom_ing WHERE bom IN ($qb) AND is_consumed=0 AND (processing_state IS NULL OR processing_state<>'skip')")->fetchAll(PDO::FETCH_ASSOC) as $x) {
                     $s = $eff($x['bom'], (int)$x['bom_sn']); $g = &$grp[$x['bom']][$s];

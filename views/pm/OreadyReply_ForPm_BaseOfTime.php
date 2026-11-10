@@ -6156,20 +6156,36 @@ echo "</script>\n";
                     _displayProcs = _displayProcs.concat(extra);
                     _displayProcs.sort(function (a, b) { return (ocGrp(a) - ocGrp(b)) || String(a.batch_label || '').localeCompare(String(b.batch_label || '')); });
                 })();
-                // 數量標頭：這一關只發了一部分時，顯示實際已發數量（製令總數放在提示裡），不要讓 715 看起來像已全數發出
+                // 數量標頭：有報廢才拆開顯示「總數／報廢／剩餘」，沒有報廢維持只顯示總數
+                var _scrapQQ = 0;
+                (Array.isArray(row.qq_details) ? row.qq_details : []).forEach(function (d) { if (d && /報廢/.test(String(d.QC_ps || ''))) _scrapQQ += Number(d.QC_QQ_sqty) || 0; });
+                var _scrapAll = Math.max(_qtyScrap, _scrapQQ), _remainQty = _qtyTotal;
                 (function () {
-                    // 以顯示中「最前面那一關」的實際已發數量為準（前面關卡有 NG／報廢，後面關卡的發單量就會小於製令數）
-                    var g0 = Math.min.apply(null, _displayProcs.map(function (p) { return ocGrp(p); }));
-                    var sent = 0, seen = {}, ok = _displayProcs.length > 0;
-                    _displayProcs.forEach(function (p) {
-                        if (ocGrp(p) !== g0) return;
-                        var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
-                        if (!m || !m.batches || !m.batches.length) { ok = false; return; }
-                        if (!seen[p.bom_ing_fid]) { seen[p.bom_ing_fid] = 1; sent += (Number(m.send) || 0) - (Number(m.wd) || 0); }
-                    });
                     var sp = _qtyHdr.querySelector('span');
-                    if (ok && sp && sent > 0 && sent < _qtyTotal) { sp.textContent = (Math.round(sent * 1000) / 1000) + ''; _qtyHdr.title = '製令總數 ' + _qtyTotal + '，這一關實際已發出 ' + (Math.round(sent * 1000) / 1000); }
+                    if (!sp) return;
+                    if (_scrapAll > 0 && _scrapAll < _qtyTotal) {
+                        _remainQty = _qtyTotal - _scrapAll;
+                        sp.textContent = String(_remainQty);
+                        var _sd = document.createElement('div');
+                        _sd.style.cssText = 'font-size:11px;line-height:1.25;color:#8a4a10;font-weight:normal;';
+                        _sd.textContent = '總 ' + _qtyTotal + '・報廢 ' + _scrapAll + '・剩餘 ' + _remainQty;
+                        _sd.title = '製令總數 ' + _qtyTotal + '，報廢合計 ' + _scrapAll + '（QC檢驗標示報廢＋異常單確認報廢），目前剩餘 ' + _remainQty;
+                        _qtyHdr.appendChild(_sd);
+                    } else {
+                        sp.textContent = String(_qtyTotal);
+                    }
                 })();
+                // 這一關實際發包數：先看這一列自己的批次，沒有就找同一關、同廠商的發單批次（補登的批次常掛在同一關的別列），最後才用 ERP 的 sqty
+                function _sendQtyOf(p) {
+                    var map = window.obBatchMap || {}, m = map[String(p.bom_ing_fid)];
+                    if (m && m.batches && m.batches.length) return (Number(m.send) || 0) - (Number(m.wd) || 0);
+                    var s = 0, found = false, g = ocGrp(p), bm = String(row.bom || '').trim();
+                    Object.keys(map).forEach(function (k) {
+                        var mm = map[k]; if (!mm || String(mm.bom || '') !== bm || Number(mm.grp) !== g) return;
+                        (mm.batches || []).forEach(function (b) { if (String(b.no) === String(p.maker_id_no)) { s += (Number(b.send) || 0) - (Number(b.scrap) || 0) - (Number(b.wd) || 0); found = true; } });
+                    });
+                    return found ? s : (Number(p.sqty) || 0);
+                }
                 _displayProcs.forEach(function(_proc, _pi) {
                     var _pDiv = document.createElement('div');
                     // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
@@ -6227,6 +6243,15 @@ echo "</script>\n";
                             if (t.kind === 'remake' && !t.from_batch && String(t.proc_no || '') === String(_proc.process_no || '')) _exScrap += Number(t.main_qty) || 0;
                         });
                         _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap));
+                    } else {
+                        // 沒有分批摘要的關卡：發包數和上方剩餘數量不同時，一定要顯示發包數
+                        var _sendN = Math.round(_sendQtyOf(_proc) * 1000) / 1000;
+                        if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
+                            var _sdv = document.createElement('div');
+                            _sdv.style.cssText = 'font-size:11px;line-height:1.25;color:#6B4423;';
+                            _sdv.textContent = '發包 ' + _sendN;
+                            _pDiv.appendChild(_sdv);
+                        }
                     }
                     var _st  = String(_proc.processing_state || '');
                     var _fid = String(_proc.bom_ing_fid || '');
