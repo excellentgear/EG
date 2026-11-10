@@ -6065,6 +6065,7 @@ echo "</script>\n";
                 });
                 return best && best.ProcessName ? String(best.ProcessName) : '下關';
             }
+            function _unsentName(p) { return (p && p.ProcessName) ? String(p.ProcessName) : _nextProcName(p); } // 依移轉憑單只認定憑單數量去過本關，其餘是還沒發到「本關」
             function _xoQty(p) { var m = (window.obBatchMap || {})[String(p.bom_ing_fid)]; return Number(m && m.xfer_qty) || Number(p.xfer_qty) || 0; }
             function _xoDown(p) { // 下一關已發出的數量（沒有下一關＝null）
                 var g = ocGrp(p), best = null;
@@ -6273,8 +6274,8 @@ echo "</script>\n";
                             var _dMd = formatDateAsMd(_proc.QC_check_date || _proc.return_date || _proc.xfer_date || _proc.finish_report_date);
                             var _xb = document.createElement('div');
                             _xb.style.cssText = 'margin-top:' + (_pi === 0 ? '1' : '4') + 'px;' + (_pi > 0 ? 'padding-top:3px;border-top:1px dotted #ddd;' : '') + 'line-height:1.2;';
-                            _xb.title = (_proc.ProcessName || '') + '：已全數回廠，已移轉 ' + _xq0 + '，尚未發到下一關的數量';
-                            _xb.innerHTML = (_dMd ? '<span style="color:#2a7ae2;font-weight:bold;line-height:1.2;">' + escapeHtml(_dMd) + '</span> ' : '') + '<span style="color:#B8431F;font-weight:bold;line-height:1.2;">未發' + escapeHtml(_nextProcName(_proc)) + ' ' + _left0 + '</span>';
+                            _xb.title = (_proc.ProcessName || '') + '：移轉憑單只移轉 ' + _xq0 + '，依憑單認定只有這個數量去過本關並已回廠，其餘尚未發到本關';
+                            _xb.innerHTML = (_dMd ? '<span style="color:#2a7ae2;font-weight:bold;line-height:1.2;">' + escapeHtml(_dMd) + '</span> ' : '') + '<span style="color:#B8431F;font-weight:bold;line-height:1.2;">未發' + escapeHtml(_unsentName(_proc)) + ' ' + _left0 + '</span>';
                             tdOutsourceDate.appendChild(_xb);
                             return;
                         }
@@ -6348,7 +6349,7 @@ echo "</script>\n";
                         if (_xoPartial(_proc)) {
                             var _xq = _xoQty(_proc), _xd = document.createElement('div');
                             _xd.style.cssText = 'font-size:11px;line-height:1.25;color:#B8431F;font-weight:bold;';
-                            var _dn = _xoDown(_proc); _xd.textContent = '未發' + _nextProcName(_proc) + ' ' + (Math.round((_remainQty - Math.max(_xq, _dn === null ? 0 : _dn)) * 1000) / 1000); _xd.title = '這一關已全數回廠，還有這個數量尚未發到下一關';
+                            var _dn = _xoDown(_proc); _xd.textContent = '未發' + _unsentName(_proc) + ' ' + (Math.round((_remainQty - Math.max(_xq, _dn === null ? 0 : _dn)) * 1000) / 1000); _xd.title = '依移轉憑單認定只有憑單數量去過本關並已回廠，其餘這個數量尚未發到本關';
                             _pDiv.appendChild(_xd);
                         } else if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
                             var _sdv = document.createElement('div');
