@@ -6087,6 +6087,16 @@ echo "</script>\n";
                     _displayProcs = _activeProcs.filter(function(p) {
                         return (p.batch_label || p.processing_state !== 'E') && (p.outsource_date || p.batch_label);
                     });
+                    // 下一關已經發單：這一關已移轉（含貨已全由移轉憑單移走）的列不再顯示，免得整排「已移轉」佔版面
+                    (function () {
+                        var kept = _displayProcs.filter(function (p) {
+                            var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                            var done = p.processing_state === 'E' || ocXferDone(p, _activeProcs) || !!(m && m.xfer_all && p.processing_state === 'ing');
+                            if (!done) return true;
+                            return !_activeProcs.some(function (q) { return ocGrp(q) > ocGrp(p) && q.outsource_date; });
+                        });
+                        if (kept.length) _displayProcs = kept;
+                    })();
                     _displayProcs.sort(function(a, b) {
                         var snA = parseInt(a.bom_sn || 0, 10), snB = parseInt(b.bom_sn || 0, 10);
                         if (snA !== snB) return snA - snB;
@@ -6107,6 +6117,15 @@ echo "</script>\n";
                         return _dv === _maxDateVal;
                     });
                     _displayProcs = _latestProcs.filter(function(p) { return p.processing_state !== 'E'; });
+                    // 最新發包日的那幾筆都已移轉、而後面的關卡已經發單（QC待驗、加工中…）：顯示後面還沒移轉的那關，不顯示前一關的「已移轉」
+                    if (_displayProcs.length === 0 && _latestProcs.length > 0) {
+                        var _maxGrpE = Math.max.apply(null, _latestProcs.map(function (p) { return ocGrp(p); }));
+                        var _laterOpen = _procsWithDate.filter(function (q) { return q.processing_state !== 'E' && ocGrp(q) > _maxGrpE; });
+                        if (_laterOpen.length) {
+                            var _topG = Math.max.apply(null, _laterOpen.map(function (q) { return ocGrp(q); }));
+                            _displayProcs = _laterOpen.filter(function (q) { return ocGrp(q) === _topG; });
+                        }
+                    }
                     if (_displayProcs.length === 0 && _latestProcs.length > 0) {
                         var _maxSnProc = _latestProcs.reduce(function(best, p) {
                             return parseInt(p.bom_sn || 0, 10) > parseInt(best.bom_sn || 0, 10) ? p : best;
@@ -6969,6 +6988,8 @@ echo "</script>\n";
                                     }
                                     _sb = _sbShow;
                                     if (_sbAdj[_si] != null && _sbAdj[_si] > 0) _sb = Object.assign({}, _sb, { sqty: _sbAdj[_si] });
+                                    // 加工中的批次：顯示還在廠商那邊、尚未回廠的數量
+                                    var _sbOut = (_sbm && _sbm.batches && _sbm.batches.length && _sb.processing_state === 'ing') ? Math.round((Number(_sbm.outside) || 0) * 1000) / 1000 : null;
                                     var _st  = _stMap[_sb.processing_state] || '';
                                     var _sc  = _sb.processing_state==='ing'?'#1a7a1a'
                                              : _sb.processing_state==='Q'?'#0056b3'
@@ -6985,7 +7006,7 @@ echo "</script>\n";
                                     }
                                     _sHtml += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                            +  '<strong style="color:#337ab7;">' + escapeHtml(_lbl) + '</strong>'
-                                           +  ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs'
+                                           +  (_sbOut != null ? ' <span title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
                                            +  (_sb.maker_id ? '<br><span style="color:#555;">' + escapeHtml(egVP(_sb.maker_id)) + '</span>' : '')
                                            +  (_od ? '<span style="color:#aaa;"> '+_od+'</span>' : '')
                                            +  (_rd ? '<span style="color:#2a7ae2;"> 回:'+_rd+'</span>' : '')
