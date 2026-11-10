@@ -277,7 +277,16 @@ if (!function_exists('baf_flow')) {
                 if (!$g) continue;
                 [$key, $pool] = $g;
                 $pick = 0;
-                foreach ($pool as $b) {
+                // 接續發單的日期不可能早於移轉憑單日期：先找「日期不早於移轉日、還有空」的批次，沒有才放寬
+                if ($field === 'dst') {
+                    foreach ($pool as $b) {
+                        if (strcmp($b['date'], $t['date']) >= 0 && (float)$b['send_qty'] - ($used[$b['id']] ?? 0.0) > 1e-9) { $pick = $b['id']; break; }
+                    }
+                    if (!$pick) foreach ($pool as $b) {
+                        if (strcmp($b['date'], $t['date']) >= 0) { $pick = $b['id']; break; }
+                    }
+                }
+                if (!$pick) foreach ($pool as $b) {
                     if ((float)$b['send_qty'] - ($used[$b['id']] ?? 0.0) > 1e-9) { $pick = $b['id']; break; }
                 }
                 if (!$pick && $pool) $pick = end($pool)['id']; // 發單量已用完仍有移轉：掛在最後一批（總數異常會另外提示）

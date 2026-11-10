@@ -95,6 +95,7 @@
             + '#egaf-drawer .tk:only-child::after{display:none;}'
             + '#egaf-drawer .flw{display:flex;align-items:flex-start;gap:10px;height:calc(100vh - 250px);min-height:300px;}'
             + '#egaf-drawer .flw-main{flex:1;min-width:0;height:100%;overflow:auto;padding-bottom:8px;}'
+            + '#egaf-drawer .flw-main > div{width:max-content;min-width:100%;box-sizing:border-box;}'
             + '#egaf-drawer .flw-side{width:272px;flex:0 0 272px;height:100%;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;}'
             + '#egaf-drawer .ecard{width:236px;flex:0 0 auto;box-sizing:border-box;font-size:11px;line-height:1.35;padding:3px 6px;}'
             + '#egaf-drawer .ecard .it{margin:0 0 2px;padding:1px 2px;border:none;background:none;}'
@@ -311,7 +312,7 @@
         }
         function tnode(t) {
             var fl = flow[t.id], d = fl.dst && sends[fl.dst], kid = '';
-            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" style="margin:0;">↳ 合流到已畫過的：' + esc(bLabel(d)) + '</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
+            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:4px 8px;font-size:12px;"><b style="color:#2E8B57;">⤵ 與另一張移轉憑單合流，進同一個發單批次</b><br>' + esc(bLabel(d)) + '<br><span style="color:#888;font-size:11px;">（該批次的後續流程畫在另一條分支）</span></div></div>' : '<div class="tk">' + bnode(d) + '</div>';
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
         html += '<div class="flw"><div class="flw-main">';
