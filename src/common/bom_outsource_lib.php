@@ -317,40 +317,84 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
             $total = $sq[$fid] ?? $send;
             $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot)), 'batches'=>$bl];
         }
-        // 「未發」只顯示上一關已經回廠、卻還沒發到本關的數量；上一關還沒回的那部分本來就發不出去，不算未發。
-        // 上一關沒有發包批次（廠內製程等）查不到回廠量時維持原算法。
+        // 與「管理員修正」分支檢視對齊：①同一關(SN，含管理員設定的併入)的多列 bom_ing 是同一關的不同發單列，
+        // 關卡總量取該關最大的 sqty，不是各列相加；②批次的「回」若沒登錄回廠，改用分支檢視推出的「從這批移轉出去的憑單數量」。
+        // 查不到就維持原算法，不影響其他畫面。
         try {
-            $need2 = array_keys(array_filter($out, fn($o) => $o['unsent'] > 0));
-            if ($need2) {
-                $in2 = implode(',', array_map('intval', $need2));
+            if ($out) {
+                require_once __DIR__ . '/bom_admin_fix_lib.php';
+                $in2 = implode(',', array_map('intval', array_keys($out)));
                 $me = [];
-                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom_ing_fid IN ($in2)")->fetchAll(PDO::FETCH_ASSOC) as $x) $me[(int)$x['bom_ing_fid']] = $x;
+                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn, sqty FROM bom_ing WHERE bom_ing_fid IN ($in2)")->fetchAll(PDO::FETCH_ASSOC) as $x) $me[(int)$x['bom_ing_fid']] = $x;
                 $boms = array_values(array_unique(array_map(fn($x) => $x['bom'], $me)));
+                // ② 分支檢視的來源推測 → 各批次已移轉數量
+                foreach ($boms as $bm) {
+                    $hasT = $db->prepare("SELECT COUNT(*) FROM bom_ing_transfer_log WHERE bom=?"); $hasT->execute([$bm]);
+                    if (!(int)$hasT->fetchColumn()) continue;
+                    $L = baf_list($db, $bm);
+                    $byB = [];
+                    foreach (($L['rows'] ?? []) as $r) {
+                        if ($r['kind'] !== 'transfer') continue;
+                        $fl = $L['flow'][$r['id']] ?? null;
+                        if (!$fl) continue;
+                        if (!empty($fl['alloc'])) continue; // 拆給多批的是接續發單，來源不變
+                        if (!empty($fl['src'])) $byB[(int)$fl['src']] = ($byB[(int)$fl['src']] ?? 0.0) + (float)$r['qty'];
+                    }
+                    foreach ($me as $fid => $x) {
+                        if ($x['bom'] !== $bm || !isset($out[$fid])) continue;
+                        $o = &$out[$fid]; $sumRet = 0.0;
+                        foreach ($o['batches'] as &$b) {
+                            if ($b['ret'] <= 1e-9 && !empty($byB[$b['id']])) {
+                                $cap = max(0, $b['send'] - $b['scrap'] - $b['wd']);
+                                $b['ret'] = min($cap, $byB[$b['id']]);
+                                $b['outside'] = max(0, $b['send'] - $b['ret'] - $b['scrap'] - $b['wd']);
+                                if ($b['outside'] <= 1e-9) $b['status'] = 'closed';
+                            }
+                            $sumRet += $b['ret'];
+                        }
+                        unset($b);
+                        $o['ret'] = $sumRet; $o['outside'] = max(0, $o['send'] - $sumRet - $o['scrap'] - $o['wd']);
+                        unset($o);
+                    }
+                }
+                // ① 關卡層級的「未發」：只算上一關已回廠(或已移轉出來)、卻還沒發到本關的數量
                 $qb = implode(',', array_map(fn($b) => $db->quote($b), $boms));
-                $all = [];
-                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom IN ($qb) AND is_consumed=0 AND (processing_state IS NULL OR processing_state<>'skip')")->fetchAll(PDO::FETCH_ASSOC) as $x) $all[$x['bom']][(int)$x['bom_sn']][] = (int)$x['bom_ing_fid'];
-                $retBy = [];
-                $pf = [];
+                $alias = []; foreach ($boms as $bm) $alias[$bm] = baf_alias_map($db, $bm);
+                $eff = fn($bm, $sn) => (isset($alias[$bm][$sn]) && $alias[$bm][$sn] !== $sn) ? $alias[$bm][$sn] : $sn;
+                $grp = []; // [bom][effSn] => ['fids'=>[], 'total'=>max sqty, 'main'=>fid of max]
+                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn, sqty FROM bom_ing WHERE bom IN ($qb) AND is_consumed=0 AND (processing_state IS NULL OR processing_state<>'skip')")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                    $s = $eff($x['bom'], (int)$x['bom_sn']); $g = &$grp[$x['bom']][$s];
+                    $g['fids'][] = (int)$x['bom_ing_fid'];
+                    if (!isset($g['total']) || (float)$x['sqty'] > $g['total']) { $g['total'] = (float)$x['sqty']; $g['main'] = (int)$x['bom_ing_fid']; }
+                    unset($g);
+                }
+                $allF = []; foreach ($grp as $bg) foreach ($bg as $g) foreach ($g['fids'] as $f) $allF[] = $f;
+                $sent = $ret = [];
+                if ($allF) foreach ($db->query("SELECT bom_ing_fid, SUM(send_qty-COALESCE(withdrawn_qty,0)) s, SUM(return_qty) r FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', $allF) . ") GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $x) { $sent[(int)$x['bom_ing_fid']] = (float)$x['s']; $ret[(int)$x['bom_ing_fid']] = (float)$x['r']; }
+                $xf = []; // 該關往外移轉的憑單合計
+                foreach ($db->query("SELECT bom, bom_sn, SUM(COALESCE(NULLIF(transfer_qty,0),sqty)) q FROM bom_ing_transfer_log WHERE bom IN ($qb) GROUP BY bom, bom_sn")->fetchAll(PDO::FETCH_ASSOC) as $x) { $s = $eff($x['bom'], (int)$x['bom_sn']); $xf[$x['bom']][$s] = ($xf[$x['bom']][$s] ?? 0.0) + (float)$x['q']; }
                 foreach ($me as $fid => $x) {
+                    if (!isset($out[$fid])) continue;
+                    $bm = $x['bom']; $s = $eff($bm, (int)$x['bom_sn']); $g = $grp[$bm][$s] ?? null;
+                    if (!$g) continue;
+                    if ($g['main'] !== $fid) { $out[$fid]['unsent'] = 0; continue; } // 同一關只在主列顯示一次，不重複
+                    $gSent = 0.0; foreach ($g['fids'] as $f) $gSent += $sent[$f] ?? 0.0;
                     $prevSn = null;
-                    foreach (array_keys($all[$x['bom']] ?? []) as $sn) if ($sn < (int)$x['bom_sn'] && ($prevSn === null || $sn > $prevSn)) $prevSn = $sn;
-                    if ($prevSn !== null) { $pf[$fid] = $all[$x['bom']][$prevSn]; foreach ($pf[$fid] as $p) $retBy[$p] = null; }
-                }
-                if ($retBy) {
-                    $ip = implode(',', array_keys($retBy));
-                    foreach ($db->query("SELECT bom_ing_fid, SUM(return_qty) r, COUNT(*) c FROM bom_ing_outsource_batch WHERE bom_ing_fid IN ($ip) GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $x) $retBy[(int)$x['bom_ing_fid']] = (float)$x['r'];
-                }
-                foreach ($pf as $fid => $plist) {
-                    $has = false; $pr = 0.0;
-                    foreach ($plist as $p) if ($retBy[$p] !== null) { $has = true; $pr += $retBy[$p]; }
-                    if (!$has) continue;
-                    $o = &$out[$fid];
-                    $o['unsent'] = max(0, min($o['total'], $pr) - ($o['send'] - $o['wd']));
-                    unset($o);
+                    foreach (array_keys($grp[$bm]) as $k) if ($k < $s && ($prevSn === null || $k > $prevSn)) $prevSn = $k;
+                    $avail = $g['total'];
+                    if ($prevSn !== null) {
+                        $pr = 0.0; $has = false;
+                        foreach ($grp[$bm][$prevSn]['fids'] as $f) if (isset($ret[$f])) { $has = true; $pr += $ret[$f]; }
+                        $pr = max($pr, $xf[$bm][$prevSn] ?? 0.0);
+                        if ($has || $pr > 0) $avail = min($avail, $pr);
+                    }
+                    $out[$fid]['unsent'] = max(0, $avail - $gSent);
+                    $out[$fid]['total'] = $g['total'];
                 }
             }
         } catch (Throwable $e) { /* 查不到就維持原算法 */ }
         return $out;
+
     }
 }
 
