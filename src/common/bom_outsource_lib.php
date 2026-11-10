@@ -342,18 +342,21 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                     }
                     foreach ($me as $fid => $x) {
                         if ($x['bom'] !== $bm || !isset($out[$fid])) continue;
-                        $o = &$out[$fid]; $sumRet = 0.0;
+                        $o = &$out[$fid]; $sumRet = 0.0; $anyX = false;
                         foreach ($o['batches'] as &$b) {
                             if ($b['ret'] <= 1e-9 && !empty($byB[$b['id']])) {
                                 $cap = max(0, $b['send'] - $b['scrap'] - $b['wd']);
                                 $b['ret'] = min($cap, $byB[$b['id']]);
                                 $b['outside'] = max(0, $b['send'] - $b['ret'] - $b['scrap'] - $b['wd']);
                                 if ($b['outside'] <= 1e-9) $b['status'] = 'closed';
+                                $b['xfer'] = true; $anyX = true;
                             }
                             $sumRet += $b['ret'];
                         }
                         unset($b);
                         $o['ret'] = $sumRet; $o['outside'] = max(0, $o['send'] - $sumRet - $o['scrap'] - $o['wd']);
+                        // 這一列的貨全部都有移轉憑單證明已移走（回廠數是由憑單推出來的）：前端不再標「加工中」
+                        $o['xfer_all'] = !empty($anyX) && $o['send'] > 0 && $o['outside'] <= 1e-9;
                         unset($o);
                     }
                 }

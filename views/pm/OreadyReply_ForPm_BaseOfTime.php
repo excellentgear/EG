@@ -6155,7 +6155,8 @@ echo "</script>\n";
                     var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
                     // 移轉憑單已把這一站的貨全部移走（憑單合計 >= 本站發單數，且該序號只有一列）＝已移轉，
                     // 不再顯示「加工中」、外在廠商那邊的數量清為 0（廠商沒按回廠但憑單已證明貨已移轉）。
-                    var _xferDone = ocXferDone(_proc, _activeProcs);
+                    var _xferDone = ocXferDone(_proc, _activeProcs)
+                        || !!(_obm && _obm.xfer_all && String(_proc.processing_state || '') === 'ing'); // 同一關有多列發單、貨已全由移轉憑單移走
                     var _qcMoot = ocQcMoot(_proc, _activeProcs);
                     if (_xferDone && _obm && _obm.batches) {
                         _obm = JSON.parse(JSON.stringify(_obm));
@@ -6945,6 +6946,13 @@ echo "</script>\n";
                                     var _lbl = _sb.batch_label || '─';
                                     var _od  = formatDynamicProcessDate(_sb.outsource_date);
                                     var _rd  = formatDynamicProcessDate(_sb.return_date);
+                                    // 這一批在這一關實際發出去的數量（批次合計），不是 ERP 原始的 sqty；貨已全由移轉憑單移走就不再標加工中
+                                    var _sbm = (window.obBatchMap || {})[String(_sb.bom_ing_fid)], _sbShow = _sb;
+                                    if (_sbm && _sbm.batches && _sbm.batches.length) {
+                                        _sbShow = Object.assign({}, _sb, { sqty: Math.round(((Number(_sbm.send) || 0) - (Number(_sbm.wd) || 0)) * 1000) / 1000 });
+                                        if (_sbm.xfer_all && _sb.processing_state === 'ing') _sbShow.processing_state = 'E';
+                                    }
+                                    _sb = _sbShow;
                                     var _st  = _stMap[_sb.processing_state] || '';
                                     var _sc  = _sb.processing_state==='ing'?'#1a7a1a'
                                              : _sb.processing_state==='Q'?'#0056b3'
