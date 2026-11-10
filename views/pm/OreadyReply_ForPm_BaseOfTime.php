@@ -6942,18 +6942,33 @@ echo "</script>\n";
                                            + escapeHtml(processInfo.ProcessName||'')
                                            + ' <span style="color:#337ab7;font-weight:normal;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">拆'+_splitBatches.length+'批</span>'
                                            + '</div>';
-                                _splitBatches.forEach(function(_sb) {
+                                // 拆批的數量合計不可超過這一關的總量：ERP 原始那一列(sqty＝整關總量)被其他批分走後，只顯示剩下的部分
+                                var _sbAdj = (function () {
+                                    var q = _splitBatches.map(function (x) {
+                                        var m = (window.obBatchMap || {})[String(x.bom_ing_fid)];
+                                        return (m && m.batches && m.batches.length) ? Math.min((Number(m.send) || 0) - (Number(m.wd) || 0), Number(x.sqty) || Infinity) : (Number(x.sqty) || 0);
+                                    });
+                                    var tot = Math.max.apply(null, _splitBatches.map(function (x) { var m = (window.obBatchMap || {})[String(x.bom_ing_fid)]; return Math.max(Number(x.sqty) || 0, m ? Number(m.total) || 0 : 0); }).concat([0])), sum = q.reduce(function (a, b) { return a + b; }, 0);
+                                    var res = {};
+                                    if (tot > 0 && sum > tot + 1e-9) {
+                                        var idx = []; q.forEach(function (v, i) { if (Math.abs(v - tot) < 1e-9) idx.push(i); });
+                                        if (idx.length === 1) res[idx[0]] = Math.round((tot - (sum - q[idx[0]])) * 1000) / 1000;
+                                    }
+                                    return res;
+                                })();
+                                _splitBatches.forEach(function(_sb, _si) {
                                     var _lbl = _sb.batch_label || '─';
                                     var _od  = formatDynamicProcessDate(_sb.outsource_date);
                                     var _rd  = formatDynamicProcessDate(_sb.return_date);
                                     // 這一批在這一關實際發出去的數量（批次合計），不是 ERP 原始的 sqty；貨已全由移轉憑單移走就不再標加工中
                                     var _sbm = (window.obBatchMap || {})[String(_sb.bom_ing_fid)], _sbShow = _sb;
                                     if (_sbm && _sbm.batches && _sbm.batches.length) {
-                                        _sbShow = Object.assign({}, _sb, { sqty: Math.round(((Number(_sbm.send) || 0) - (Number(_sbm.wd) || 0)) * 1000) / 1000 });
+                                        _sbShow = Object.assign({}, _sb, { sqty: Math.round(Math.min((Number(_sbm.send) || 0) - (Number(_sbm.wd) || 0), Number(_sb.sqty) || Infinity) * 1000) / 1000 }); // 同關並入的其他列已分走的批次，ERP 合併後的 sqty 比較小就以它為準
                                         if (_sbm.xfer_all && _sb.processing_state === 'ing') _sbShow.processing_state = 'E';
                                         else if (_sb.processing_state === 'N' && (Number(_sbm.send) || 0) > 0) _sbShow.processing_state = (Number(_sbm.outside) || 0) > 0 ? 'ing' : 'E'; // 補登了發單批次但製程狀態還是待發包
                                     }
                                     _sb = _sbShow;
+                                    if (_sbAdj[_si] != null && _sbAdj[_si] > 0) _sb = Object.assign({}, _sb, { sqty: _sbAdj[_si] });
                                     var _st  = _stMap[_sb.processing_state] || '';
                                     var _sc  = _sb.processing_state==='ing'?'#1a7a1a'
                                              : _sb.processing_state==='Q'?'#0056b3'
