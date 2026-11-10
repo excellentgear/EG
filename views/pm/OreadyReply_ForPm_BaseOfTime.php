@@ -6133,6 +6133,16 @@ echo "</script>\n";
                         _displayProcs = [_maxSnProc];
                     }
                 }
+                // 下一關已經發單：前面已移轉（含 QC 待驗後已被後序關卡接手、貨已由移轉憑單移走）的列不再顯示
+                (function () {
+                    var kept = _displayProcs.filter(function (p) {
+                        var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                        var done = p.processing_state === 'E' || ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || !!(m && m.xfer_all && p.processing_state === 'ing');
+                        if (!done) return true;
+                        return !_activeProcs.some(function (q) { return ocGrp(q) > ocGrp(p) && q.outsource_date; });
+                    });
+                    if (kept.length) _displayProcs = kept;
+                })();
                 _displayProcs.forEach(function(_proc, _pi) {
                     var _pDiv = document.createElement('div');
                     // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
