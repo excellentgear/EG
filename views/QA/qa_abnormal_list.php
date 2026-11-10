@@ -778,15 +778,18 @@ function load(){
         ROW_HTML = (function(r){
             var inCatTab = (CUR_TAB !== 'todo') && !$('#fDeleted').prop('checked');
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
+            /* 類別分頁內：與分頁名稱相同（或已包含在分頁名稱裡）的標籤、以及「製程」來源標籤（製令欄已看得出來）不重複顯示 */
+            var hideSrc = inCatTab && (catNameOf(r).indexOf(srcLabel(r.source_type)) >= 0 || srcLabel(r.source_type) === '製程');
+            var l1 = (hideSrc ? '' : '<span class="src src-' + esc(r.source_type) + '">' + srcLabel(r.source_type) + '</span> ')
+                   + (inCatTab ? '' : '<span class="st st-s st-cat" title="異常單類別">' + esc(catNameOf(r)) + '</span>')
+                   + (Number(r.is_as) === 1 ? ' <span class="st st-s st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '');
+            var l2 = (Number(r.quick_mode) === 1 ? '<span class="st st-s st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
+                   + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '');
+            var l3 = (r.src_qc_form_id && r.qc_bom_ing_fid ? '<a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '');
+            var tagLines = [l1.trim(), l2.trim(), l3].filter(function(x){ return x; });
             return '<tr>'
-                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b><br>'
-                    /* 類別分頁內：與分頁名稱相同（或已包含在分頁名稱裡）的標籤不重複顯示 */
-                    + (inCatTab && catNameOf(r).indexOf(srcLabel(r.source_type)) >= 0 ? '' : '<span class="src src-' + esc(r.source_type) + '">' + srcLabel(r.source_type) + '</span> ')
-                    + (inCatTab ? '' : '<span class="st st-s st-cat" title="異常單類別">' + esc(catNameOf(r)) + '</span>')
-                    + (Number(r.is_as) === 1 ? ' <span class="st st-s st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
-                    + (Number(r.quick_mode) === 1 ? '<br><span class="st st-s st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
-                    + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
-                    + (r.src_qc_form_id && r.qc_bom_ing_fid ? '<br><a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '')
+                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b>'
+                    + (tagLines.length ? '<br>' + tagLines.join('<br>') : '')
                     + '</td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
                 + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
