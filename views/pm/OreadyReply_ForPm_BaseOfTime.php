@@ -6241,6 +6241,21 @@ echo "</script>\n";
                     }
                 })();
                 _displayProcs.forEach(function(_proc, _pi) {
+                    // 已全數回廠、只是還有數量沒發到下一關（沒有發單批次的關卡）：只顯示「回廠日（有QC檢驗＝最後一筆檢驗完成日）　未發<下一製程> N」
+                    if (_xoPartial(_proc)) {
+                        var _pm0 = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
+                        if (!(_pm0 && _pm0.batches && _pm0.batches.length)) {
+                            var _xq0 = _xoQty(_proc), _dn0 = _xoDown(_proc);
+                            var _left0 = Math.round((_remainQty - Math.max(_xq0, _dn0 === null ? 0 : _dn0)) * 1000) / 1000;
+                            var _dMd = formatDateAsMd(_proc.QC_check_date || _proc.return_date || _proc.xfer_date || _proc.finish_report_date);
+                            var _xb = document.createElement('div');
+                            _xb.style.cssText = 'margin-top:' + (_pi === 0 ? '1' : '4') + 'px;' + (_pi > 0 ? 'padding-top:3px;border-top:1px dotted #ddd;' : '') + 'line-height:1.2;';
+                            _xb.title = (_proc.ProcessName || '') + '：已全數回廠，已移轉 ' + _xq0 + '，尚未發到下一關的數量';
+                            _xb.innerHTML = (_dMd ? '<span style="color:#2a7ae2;font-weight:bold;line-height:1.2;">' + escapeHtml(_dMd) + '</span> ' : '') + '<span style="color:#B8431F;font-weight:bold;line-height:1.2;">未發' + escapeHtml(_nextProcName(_proc)) + ' ' + _left0 + '</span>';
+                            tdOutsourceDate.appendChild(_xb);
+                            return;
+                        }
+                    }
                     var _pDiv = document.createElement('div');
                     // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
                     // 沒開批次檢視時完全不影響任何行為（純資料屬性）。
@@ -6347,6 +6362,16 @@ echo "</script>\n";
                         } else {
                             (function(_id, _excQc, _f, _p, _r) { _ingBtn.onclick = function() { if (window.userStatus != 1) return; if (window.EG_OR_QTY_SETTABLE) { openOutsourceReturnModal(_p, _r); return; } markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid, _proc, { bom: row.bom, bom_sn: _proc.bom_sn, d_id: row.d_id });
                         }
+                        // 最後一關：發出去的貨全數回廠＝待出貨，按鈕不可按
+                        (function () {
+                            if (!(_obm && _obm.batches && _obm.batches.length && (Number(_obm.outside) || 0) <= 1e-9 && (Number(_obm.ret) || 0) > 0)) return;
+                            var g = ocGrp(_proc), bm = String(row.bom || '').trim();
+                            var later = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === bm && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > g; });
+                            if (later) return;
+                            _ingBtn.textContent = '待出貨'; _ingBtn.className = 'btn btn-xs btn-success btn-return-style';
+                            _ingBtn.onclick = function (e) { if (e) e.preventDefault(); return false; };
+                            _ingBtn.style.cursor = 'default'; _ingBtn.style.marginTop = '0'; _ingBtn.style.marginBottom = '0'; _ingBtn.title = '最後一關已全數回廠，等待出貨';
+                        })();
                         var _ingBtnRow = document.createElement('div');
                         _ingBtnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
                         // margin-top:0：與 Q/P/E 那條狀態列同樣的間距，否則同一欄裡
