@@ -746,12 +746,27 @@ if (!empty($current_page_boms)) {
             if ((int)$_a['alias_sn'] !== (int)$_a['target_sn'] && isset($_snHave[$_a['bom'] . '_' . (int)$_a['target_sn']])) $_snAlias[$_a['bom'] . '_' . (int)$_a['alias_sn']] = (int)$_a['target_sn'];
         }
     } catch (Throwable $_e) { $_snAlias = []; }
+    $_mergedSendQty = [];
+    if ($_snAlias) {
+        $_mk = [];
+        foreach ($_snAlias as $_ak => $_t) { $_mk[substr($_ak, 0, strrpos($_ak, '_')) . '_' . $_t] = true; }
+        $_fids = [];
+        foreach ($raw_ps_rows as $_r) {
+            $_k = $_r['bom'] . '_' . ($_snAlias[$_r['bom'] . '_' . (int)$_r['bom_sn']] ?? $_r['bom_sn']);
+            if (isset($_mk[$_k])) $_fids[] = (int)$_r['bom_ing_fid'];
+        }
+        if ($_fids) {
+            try {
+                foreach ($db->query("SELECT bom_ing_fid, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', $_fids) . ") GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $_s) $_mergedSendQty[(int)$_s['bom_ing_fid']] = $_s['s'] + 0;
+            } catch (Throwable $_e) {}
+        }
+    }
     foreach ($raw_ps_rows as $r) {
         $isAliasRow = isset($_snAlias[$r['bom'] . '_' . (int)$r['bom_sn']]);
         $key = $r['bom'] . '_' . ($isAliasRow ? $_snAlias[$r['bom'] . '_' . (int)$r['bom_sn']] : $r['bom_sn']);
         $batch_entry = [
             'batch_label'      => $r['batch_label'] ?? null,
-            'sqty'             => $r['sqty'],
+            'sqty'             => $_mergedSendQty[(int)$r['bom_ing_fid']] ?? $r['sqty'],
             'maker_id'         => $r['maker_id'] ?? '',
             'outsource_date'   => $fd($r['outsource_date']),
             'return_date'      => $fd($r['return_date']),

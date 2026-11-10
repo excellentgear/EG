@@ -227,10 +227,11 @@ if (!function_exists('baf_flow')) {
     /** 管理員手動指定的流向：[transfer_id => ['src'=>null|0|batch_id,'dst'=>null|0|batch_id]]（null＝沒指定，用推測）。 */
     function baf_flow_manual(PDO $db, string $bom): array {
         try {
-            $q = $db->prepare("SELECT transfer_id, src_batch_id, dst_batch_id FROM bom_flow_link WHERE bom=?");
+            $hasF = (bool)$db->query("SHOW COLUMNS FROM bom_flow_link LIKE 'dst_fid'")->fetch();
+            $q = $db->prepare("SELECT transfer_id, src_batch_id, dst_batch_id" . ($hasF ? ", dst_fid" : "") . " FROM bom_flow_link WHERE bom=?");
             $q->execute([$bom]);
             $m = [];
-            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['transfer_id']] = ['src' => $r['src_batch_id'] === null ? null : (int)$r['src_batch_id'], 'dst' => $r['dst_batch_id'] === null ? null : (int)$r['dst_batch_id']];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['transfer_id']] = ['src' => $r['src_batch_id'] === null ? null : (int)$r['src_batch_id'], 'dst' => $r['dst_batch_id'] === null ? null : (int)$r['dst_batch_id'], 'dst_fid' => (int)($r['dst_fid'] ?? 0)];
             return $m;
         } catch (Throwable $e) { return []; }
     }
@@ -260,7 +261,7 @@ if (!function_exists('baf_flow')) {
             }
         }
         $out = [];
-        foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true];
+        foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true, 'dst_fid' => (int)(($man[$t['id']]['dst_fid'] ?? 0))];
         $fill = function (string $field, callable $groupOf) use (&$out, $man, $tfs) {
             $used = []; // 每個發單批次已被分配掉多少：先把管理員手動指定的扣掉，再讓推測的依日期填「還有空」的批次
             foreach ($tfs as $t) {
@@ -321,7 +322,7 @@ if (!function_exists('baf_flow')) {
 
     /** 設定某張移轉憑單的流向。$batchId：-1＝改回自動推測、0＝明確指定「無」、>0＝指定批次。 */
     function baf_flow_set(PDO $db, string $bom, int $transferId, string $field, int $batchId, int $uid): void {
-        if (!in_array($field, ['src', 'dst'], true)) throw new Exception('欄位不正確');
+        if (!in_array($field, ['src', 'dst', 'dst_fid'], true)) throw new Exception('欄位不正確');
         $q = $db->prepare("SELECT COUNT(*) FROM bom_ing_transfer_log WHERE transfer_id=? AND bom=?");
         $q->execute([$transferId, $bom]);
         if (!(int)$q->fetchColumn()) throw new Exception('這張移轉憑單不屬於這個 BOM');
@@ -331,15 +332,32 @@ if (!function_exists('baf_flow')) {
             if (!(int)$q->fetchColumn()) throw new Exception('指定的發單批次不屬於這個 BOM');
         }
         $db->prepare("CREATE TABLE IF NOT EXISTS bom_flow_link (id INT AUTO_INCREMENT PRIMARY KEY, bom VARCHAR(30) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL, transfer_id INT NOT NULL, src_batch_id INT NULL, dst_batch_id INT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_bom_tf (bom, transfer_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
-        $col = $field === 'src' ? 'src_batch_id' : 'dst_batch_id';
-        $val = $batchId < 0 ? null : $batchId;
-        $db->prepare("INSERT INTO bom_flow_link (bom, transfer_id, $col, created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE $col=VALUES($col), created_by=VALUES(created_by)")->execute([$bom, $transferId, $val, $uid]);
-        $db->prepare("DELETE FROM bom_flow_link WHERE bom=? AND transfer_id=? AND src_batch_id IS NULL AND dst_batch_id IS NULL")->execute([$bom, $transferId]);
+        if (!$db->query("SHOW COLUMNS FROM bom_flow_link LIKE 'dst_fid'")->fetch()) $db->exec("ALTER TABLE bom_flow_link ADD COLUMN dst_fid INT NULL AFTER dst_batch_id");
+        if ($field === 'dst_fid') {
+            // 接續到「某一關」（該關還沒有發單批次）：batchId 這裡是 bom_ing_fid；不可選同一關或更前面的關卡，也不可選已併入別關的 SN
+            $q = $db->prepare("SELECT bi.bom_sn FROM bom_ing bi WHERE bi.bom_ing_fid=? AND bi.bom=?");
+            $q->execute([$batchId, $bom]);
+            $rawTo = $q->fetchColumn();
+            if ($rawTo === false) throw new Exception('指定的關卡不屬於這個 BOM');
+            $am = baf_alias_map($db, $bom);
+            if (isset($am[(int)$rawTo])) throw new Exception('SN ' . (int)$rawTo . ' 已併入別的關卡，請選它併入的那一關之後的關卡');
+            $q = $db->prepare("SELECT bom_sn FROM bom_ing_transfer_log WHERE transfer_id=? AND bom=?");
+            $q->execute([$transferId, $bom]);
+            $fromSn = (int)$q->fetchColumn(); $fromSn = $am[$fromSn] ?? $fromSn;
+            if ((int)$rawTo <= $fromSn) throw new Exception('接續的關卡必須在這張移轉憑單所屬關卡之後');
+            $db->prepare("INSERT INTO bom_flow_link (bom, transfer_id, dst_batch_id, dst_fid, created_by) VALUES (?,?,0,?,?) ON DUPLICATE KEY UPDATE dst_batch_id=0, dst_fid=VALUES(dst_fid), created_by=VALUES(created_by)")->execute([$bom, $transferId, $batchId, $uid]);
+        } else {
+            $col = $field === 'src' ? 'src_batch_id' : 'dst_batch_id';
+            $val = $batchId < 0 ? null : $batchId;
+            $extra = $field === 'dst' ? ', dst_fid=NULL' : '';
+            $db->prepare("INSERT INTO bom_flow_link (bom, transfer_id, $col, created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE $col=VALUES($col), created_by=VALUES(created_by)$extra")->execute([$bom, $transferId, $val, $uid]);
+        }
+        $db->prepare("DELETE FROM bom_flow_link WHERE bom=? AND transfer_id=? AND src_batch_id IS NULL AND dst_batch_id IS NULL AND dst_fid IS NULL")->execute([$bom, $transferId]);
         if ($field === 'dst' && $batchId > 0) baf_transfer_sync_to($db, $bom, $transferId, $batchId, $uid);
         $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
         $f->execute([$bom]);
         $fid = (int)$f->fetchColumn();
-        if ($fid) ber_log($db, $fid, 'flow_link', '管理員調整移轉憑單 #' . $transferId . ' 的' . ($field === 'src' ? '來源發單' : '接續發單') . '：' . ($batchId < 0 ? '改回自動推測' : ($batchId === 0 ? '無' : '批次 ' . $batchId)), $uid);
+        if ($fid) ber_log($db, $fid, 'flow_link', '管理員調整移轉憑單 #' . $transferId . ' 的' . ($field === 'src' ? '來源發單' : ($field === 'dst_fid' ? '接續關卡(fid)' : '接續發單')) . '：' . ($batchId < 0 ? '改回自動推測' : ($batchId === 0 ? '無' : '批次 ' . $batchId)), $uid);
     }
 }
 

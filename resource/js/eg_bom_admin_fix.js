@@ -281,11 +281,15 @@
         function chip(t) {
             var fl = flow[t.id] || { src: 0, dst: 0, src_auto: true, dst_auto: true };
             var so = '<option value="a">自動推測</option><option value="0"' + (!fl.src_auto && !fl.src ? ' selected' : '') + '>無（不屬於任何發單）</option>';
-            var dos = '<option value="a">自動推測</option><option value="0"' + (!fl.dst_auto && !fl.dst ? ' selected' : '') + '>無（沒有接續發單）</option>';
+            var dos = '<option value="a">自動推測</option><option value="0"' + (!fl.dst_auto && !fl.dst && !fl.dst_fid ? ' selected' : '') + '>無（沒有接續發單）</option>';
             Object.keys(sends).forEach(function (id) {
                 var b = sends[id];
                 if (b.sn === t.sn) so += '<option value="' + id + '"' + (!fl.src_auto && fl.src === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
                 else if (b.sn > t.sn) dos += '<option value="' + id + '"' + (!fl.dst_auto && fl.dst === b.id ? ' selected' : '') + '>' + esc(bLabel(b)) + '</option>';
+            });
+            // 接續到「某一關」（該關還沒有發單批次也能選）：SN 比這張憑單所屬關卡大、且不是已併入別關的 SN
+            sts.forEach(function (s) {
+                if (s.sn > t.sn && s.raw_sn === s.sn) dos += '<option value="f' + s.fid + '"' + (fl.dst_fid === s.fid ? ' selected' : '') + '>→ ' + esc(s.label) + '（' + esc(t.to || '廠商未登記') + '）</option>';
             });
             // 自動推測時，下拉要顯示目前實際推到哪裡（selected 放在 a 之外的實際批次上會讓使用者誤以為是手動，所以改在文字說明）
             var dstTxt = fl.dst && sends[fl.dst] ? '→ 接 ' + esc(bLabel(sends[fl.dst])) : '→ <span style="color:#999;">沒有接續的發單</span>';
@@ -312,7 +316,8 @@
         }
         function tnode(t) {
             var fl = flow[t.id], d = fl.dst && sends[fl.dst], kid = '';
-            if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" data-merge="' + d.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
+            if (!d && fl.dst_fid && stOf[fl.dst_fid]) kid = '<div class="tk"><div class="fl-in tcard" style="margin:0;padding:3px 8px;font-size:12px;border:1px dashed #C0561F;background:#FFF6E8;"><b>' + esc(stOf[fl.dst_fid].label) + '</b> ／ ' + esc(t.to || '廠商未登記') + '<br><span style="color:#888;font-size:11px;">尚未發單</span></div></div>';
+            else if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" data-merge="' + d.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
         html += '<div class="flw"><div class="flw-main">';
@@ -369,7 +374,10 @@
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
         }
         body.querySelectorAll('.fl-sel').forEach(function (sel) {
-            sel.onchange = function () { setFlow(sel.getAttribute('data-tid'), sel.getAttribute('data-f'), sel.value === 'a' ? -1 : parseInt(sel.value, 10)); };
+            sel.onchange = function () {
+                if (sel.value.charAt(0) === 'f') { setFlow(sel.getAttribute('data-tid'), 'dst_fid', parseInt(sel.value.slice(1), 10)); return; }
+                setFlow(sel.getAttribute('data-tid'), sel.getAttribute('data-f'), sel.value === 'a' ? -1 : parseInt(sel.value, 10));
+            };
         });
         body.querySelectorAll('.fl-t').forEach(function (c) {
             c.ondragstart = function (e) { e.dataTransfer.setData('text/plain', c.getAttribute('data-tid') + '|' + c.getAttribute('data-sn')); e.dataTransfer.effectAllowed = 'move'; };

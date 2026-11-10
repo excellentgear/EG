@@ -675,6 +675,22 @@ if (!empty($all_boms)) {
             if ((int)$_a['alias_sn'] !== (int)$_a['target_sn'] && isset($_snHave[$_a['bom'] . '_' . (int)$_a['target_sn']])) $_snAlias[$_a['bom'] . '_' . (int)$_a['alias_sn']] = (int)$_a['target_sn'];
         }
     } catch (Throwable $_e) { $_snAlias = []; }
+    // 併入後同一欄有好幾筆 bom_ing，每筆 sqty 都是整張 BOM 的總數（715），要改顯示各自實際發單量（bom_ing_outsource_batch 加總），否則會變成兩倍
+    $_mergedSendQty = [];
+    if ($_snAlias) {
+        $_mk = [];
+        foreach ($_snAlias as $_ak => $_t) { $_mk[substr($_ak, 0, strrpos($_ak, '_')) . '_' . $_t] = true; }
+        $_fids = [];
+        foreach ($raw_ps_list as $_r) {
+            $_k = $_r['bom'] . '_' . ($_snAlias[$_r['bom'] . '_' . (int)$_r['bom_sn']] ?? $_r['bom_sn']);
+            if (isset($_mk[$_k])) $_fids[] = (int)$_r['bom_ing_fid'];
+        }
+        if ($_fids) {
+            try {
+                foreach ($db->query("SELECT bom_ing_fid, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', $_fids) . ") GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $_s) $_mergedSendQty[(int)$_s['bom_ing_fid']] = $_s['s'] + 0;
+            } catch (Throwable $_e) {}
+        }
+    }
 
     foreach ($raw_ps_list as $row) {
         $b   = $row['bom'];
@@ -690,7 +706,7 @@ if (!empty($all_boms)) {
         $batch_entry = [
             'bom_ing_fid'      => $row['bom_ing_fid'] ?? null,
             'batch_label'      => $row['batch_label'] ?? null,
-            'sqty'             => $row['sqty'],
+            'sqty'             => $_mergedSendQty[(int)$row['bom_ing_fid']] ?? $row['sqty'],
             'maker_id'         => $row['maker_id'] ?? '',
             'maker_id_no'      => $row['maker_id_no'] ?? '',
             'outsource_date'   => $fmt_d($row['outsource_date']),
