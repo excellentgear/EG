@@ -6005,8 +6005,32 @@ echo "</script>\n";
             var _scrapQQ0 = 0;
             (Array.isArray(row.qq_details) ? row.qq_details : []).forEach(function (d) { if (d && /報廢/.test(String(d.QC_ps || ''))) _scrapQQ0 += Number(d.QC_QQ_sqty) || 0; });
             var _remPre = _qtyTotal - (Math.max(_qtyScrap, _scrapQQ0) < _qtyTotal ? Math.max(_qtyScrap, _scrapQQ0) : 0);
+            // 這一關實際發包數：先看這一列自己的批次，沒有就找同一關、同廠商的發單批次（補登的批次常掛在同一關的別列），最後才用 ERP 的 sqty
+            function _sendQtyOf(p) {
+                var map = window.obBatchMap || {}, m = map[String(p.bom_ing_fid)];
+                if (m && m.batches && m.batches.length) return (Number(m.send) || 0) - (Number(m.wd) || 0);
+                var s = 0, found = false, g = ocGrp(p), bm = String(row.bom || '').trim();
+                Object.keys(map).forEach(function (k) {
+                    var mm = map[k]; if (!mm || String(mm.bom || '') !== bm || Number(mm.grp) !== g) return;
+                    (mm.batches || []).forEach(function (b) { if (String(b.no) === String(p.maker_id_no)) { s += (Number(b.send) || 0) - (Number(b.scrap) || 0) - (Number(b.wd) || 0); found = true; } });
+                });
+                return found ? s : (Number(p.sqty) || 0);
+            }
             function _xoQty(p) { var m = (window.obBatchMap || {})[String(p.bom_ing_fid)]; return Number(m && m.xfer_qty) || Number(p.xfer_qty) || 0; }
-            function _xoPartial(p) { return !!(p && Number(p.xfer_only) === 1 && _xoQty(p) < _remPre - 1e-9); }
+            function _xoDown(p) { // 下一關已發出的數量（沒有下一關＝null）
+                var g = ocGrp(p), best = null;
+                _activeProcs.forEach(function (q) { var gq = ocGrp(q); if (gq > g && (best === null || gq < ocGrp(best))) best = q; });
+                return best ? _sendQtyOf(best) : null;
+            }
+            function _xoPartial(p) {
+                if (!p) return false;
+                var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                if (Number(p.xfer_only) === 1) return _xoQty(p) < _remPre - 1e-9;
+                // 已按「移轉」變成已移轉、沒有發單批次，但移轉憑單與下一關發單都還沒把剩餘良品數用完：左邊要留著並顯示未發數量
+                if (String(p.processing_state) !== 'E' || !m || (m.batches && m.batches.length) || !(Number(m.xfer_qty) > 0)) return false;
+                var dn = _xoDown(p);
+                return dn !== null && Math.max(_xoQty(p), dn) < _remPre - 1e-9;
+            }
             var _lastBtnRow = null; // 記錄最後一個狀態按鈕列
 
             if (_activeProcs.length === 0) {
@@ -6162,7 +6186,7 @@ echo "</script>\n";
                 (function () {
                     var have = {}; _displayProcs.forEach(function (p) { have[String(p.bom_ing_fid)] = true; });
                     var extra = _activeProcs.filter(function (p) {
-                        if (have[String(p.bom_ing_fid)] || !p.outsource_date || (String(p.processing_state) === 'Q' && p.QC_check) || (['ing', 'Q', 'P'].indexOf(String(p.processing_state)) < 0 && !_xoPartial(p))) return false;
+                        if (have[String(p.bom_ing_fid)] || (!p.outsource_date && !_xoPartial(p)) || (String(p.processing_state) === 'Q' && p.QC_check) || (['ing', 'Q', 'P'].indexOf(String(p.processing_state)) < 0 && !_xoPartial(p))) return false;
                         var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
                         if (ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || (m && m.xfer_all)) return false;
                         return m && m.batches && m.batches.length ? (Number(m.outside) || 0) > 1e-9 : true;
@@ -6190,17 +6214,6 @@ echo "</script>\n";
                         sp.textContent = String(_qtyTotal);
                     }
                 })();
-                // 這一關實際發包數：先看這一列自己的批次，沒有就找同一關、同廠商的發單批次（補登的批次常掛在同一關的別列），最後才用 ERP 的 sqty
-                function _sendQtyOf(p) {
-                    var map = window.obBatchMap || {}, m = map[String(p.bom_ing_fid)];
-                    if (m && m.batches && m.batches.length) return (Number(m.send) || 0) - (Number(m.wd) || 0);
-                    var s = 0, found = false, g = ocGrp(p), bm = String(row.bom || '').trim();
-                    Object.keys(map).forEach(function (k) {
-                        var mm = map[k]; if (!mm || String(mm.bom || '') !== bm || Number(mm.grp) !== g) return;
-                        (mm.batches || []).forEach(function (b) { if (String(b.no) === String(p.maker_id_no)) { s += (Number(b.send) || 0) - (Number(b.scrap) || 0) - (Number(b.wd) || 0); found = true; } });
-                    });
-                    return found ? s : (Number(p.sqty) || 0);
-                }
                 _displayProcs.forEach(function(_proc, _pi) {
                     var _pDiv = document.createElement('div');
                     // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
@@ -6265,7 +6278,7 @@ echo "</script>\n";
                         if (_xoPartial(_proc)) {
                             var _xq = _xoQty(_proc), _xd = document.createElement('div');
                             _xd.style.cssText = 'font-size:11px;line-height:1.25;color:#B8431F;font-weight:bold;';
-                            _xd.textContent = '未發 ' + (Math.round((_remainQty - _xq) * 1000) / 1000) + '・已移 ' + _xq;
+                            var _dn = _xoDown(_proc); _xd.textContent = '未發 ' + (Math.round((_remainQty - Math.max(_xq, _dn === null ? 0 : _dn)) * 1000) / 1000) + '・已移 ' + _xq;
                             _pDiv.appendChild(_xd);
                         } else if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
                             var _sdv = document.createElement('div');
@@ -7078,7 +7091,7 @@ echo "</script>\n";
                                     var _sbMk = _sb.maker_id ? egVP(_sb.maker_id) : '';
                                     if (!_sbMk && _sbm && _sbm.batches) {
                                         var _mkSeen = {}, _mkList = [];
-                                        _sbm.batches.forEach(function (b) { var nm = egVP(b.maker || b.no || ''); if (nm && (Number(b.outside) || 0) > 0 && !_mkSeen[nm]) { _mkSeen[nm] = 1; _mkList.push(nm + ' ' + (Math.round((Number(b.outside) || 0) * 1000) / 1000)); } });
+                                        _sbm.batches.forEach(function (b) { var nm = egVP(b.maker || b.no || ''); if (nm && (Number(b.outside) || 0) > 0 && !_mkSeen[nm]) { _mkSeen[nm] = 1; var _sd2 = String(b.send_date || '').split('/'); _mkList.push(nm + (_sd2.length >= 3 ? ' ' + parseInt(_sd2[1], 10) + '/' + parseInt(_sd2[2], 10) : '')); } });
                                         _sbMk = _mkList.join('、');
                                     }
                                     // 加工中的批次：顯示還在廠商那邊、尚未回廠的數量
@@ -7099,7 +7112,7 @@ echo "</script>\n";
                                     }
                                     _sHtml += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                            +  '<strong style="color:#337ab7;">' + escapeHtml(_lbl) + '</strong>'
-                                           +  (_sbOut != null ? ' <span title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
+                                           +  (_sbOut != null ? ' <span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;" title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
                                            +  (_sbMk ? '<br><span style="color:#555;">' + escapeHtml(_sbMk) + '</span>' : '')
                                            +  (_od ? '<span style="color:#aaa;"> '+_od+'</span>' : '')
                                            +  (_rd ? '<span style="color:#2a7ae2;"> 回:'+_rd+'</span>' : '')
@@ -7285,7 +7298,8 @@ echo "</script>\n";
                             })(processInfo, row));
                         }
                         // QC/生管製程不同步：此關是QC已檢驗/完工但目前製程還在前面的目標關 → 顯示快速移轉按鈕
-                        if (processInfo && _canTransferRole && _qcSyncReasons[String(processInfo.bom_ing_fid)]) {
+                        // QC待驗／待移轉／已移轉＝已經回廠、前面也有發包資料，不需要再「快速移轉」
+                        if (processInfo && _canTransferRole && _qcSyncReasons[String(processInfo.bom_ing_fid)] && ['Q', 'P', 'E', '1'].indexOf(String(processInfo.processing_state || '')) < 0) {
                             var _qsBtnRow = document.createElement('div');
                             _qsBtnRow.style.cssText = 'margin-top:3px;display:flex;justify-content:flex-end;';
                             var _qsBtn = document.createElement('button');

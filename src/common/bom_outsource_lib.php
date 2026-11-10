@@ -280,7 +280,7 @@ if (!function_exists('eg_bom_xfer_from_map')) {
             $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
             if (!$fids) return [];
             $in = implode(',', $fids);
-            $me = $db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom IN (SELECT bom FROM bom_ing WHERE bom_ing_fid IN ($in)) AND (maker_id_no IS NULL OR maker_id_no='') AND (maker_id IS NULL OR maker_id='') AND is_consumed=0")->fetchAll(PDO::FETCH_ASSOC);
+            $me = $db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom IN (SELECT bom FROM bom_ing WHERE bom_ing_fid IN ($in)) AND is_consumed=0 AND ((maker_id_no IS NULL OR maker_id_no='') AND (maker_id IS NULL OR maker_id='') OR (processing_state='E' AND NOT EXISTS (SELECT 1 FROM bom_ing_outsource_batch bb WHERE bb.bom_ing_fid=bom_ing.bom_ing_fid)))")->fetchAll(PDO::FETCH_ASSOC);
             if (!$me) return [];
             $boms = array_values(array_unique(array_column($me, 'bom')));
             $qb = implode(',', array_map(fn($b) => $db->quote($b), $boms));
