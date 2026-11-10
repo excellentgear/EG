@@ -719,7 +719,7 @@ if (!empty($current_page_boms)) {
 
     // bom_ps_list：只查本頁 BOM 的製程明細
     $raw_ps = $db->prepare("
-        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
+        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND t2.maker_from = bi.maker_id_no AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
         FROM bom_ing AS bi
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
@@ -869,6 +869,7 @@ foreach ($raw_ps_rows as $_iam_item) {
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）
         'sn_cnt'           => (int)($_iam_item['sn_cnt'] ?? 1),
+        'sn_grp'           => (int)(($_snAlias ?? [])[$_iam_item['bom'] . '_' . (int)$_iam_item['bom_sn']] ?? $_iam_item['bom_sn']), // 同一關（bom_sn_alias 併入後的目標序號）
         'xfer_date'        => $_iam_fmt($_iam_item['xfer_date'] ?? null), // 移轉憑單日期（無回廠日期時前端以此認定回廠日）
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,

@@ -644,7 +644,7 @@ if (!empty($all_boms)) {
                   pn.is_exclude_qc,
                   ml.maker_id,
                   pfr.finish_report_date,
-                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
+                  (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND t2.maker_from = bi.maker_id_no AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
                 FROM bom_ing AS bi
                 LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                 LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
@@ -804,6 +804,7 @@ foreach ($raw_ps_list as $_iam_item) {
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）
         'sn_cnt'           => (int)($_iam_item['sn_cnt'] ?? 1),
+        'sn_grp'           => (int)(($_snAlias ?? [])[$_iam_item['bom'] . '_' . (int)$_iam_item['bom_sn']] ?? $_iam_item['bom_sn']), // 同一關（bom_sn_alias 併入後的目標序號）
         'xfer_date'        => $_iam_fmt($_iam_item['xfer_date'] ?? null), // 移轉憑單日期（無回廠日期時前端以此認定回廠日）
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
@@ -3246,6 +3247,7 @@ echo "</script>\n";
                 xfer_date:        _nd(item.xfer_date),
                 xfer_qty:         Number(item.xfer_qty) || 0,
                 sn_cnt:           Number(item.sn_cnt) || 1,
+                sn_grp:           item.sn_grp != null ? Number(item.sn_grp) : Number(item.bom_sn),
                 QC_check:         item.QC_check || null,
                 QC_check_date:    _nd(item.QC_check_date),
                 // 容器四欄（QC 品管填 QC_ps/QC_ps2、生管填 pm_ps/pm_ps2）：
@@ -3329,6 +3331,34 @@ echo "</script>\n";
     //    只有多批或部分回廠的製程才有資料（window.obBatchMap，後端 eg_bom_outsource_batch_map），
     //    單批整批送整批回的製程完全不顯示，畫面與過去一樣。
     //    ⚠ 表格內的 span 一律自己指定 line-height（Gentelella 全站 td span{line-height:28px}）。
+    // ── 生管頁面的關卡認定輔助（2026-11-10）──────────────────────────────────
+    function ocDateVal(s) { var m = String(s || '').match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : 0; }
+    function ocGrp(p) { return Number(p.sn_grp != null ? p.sn_grp : p.bom_sn) || 0; }
+    // 這一站（這個廠商）發出去的貨，移轉憑單已經全部移走（憑單合計 >= 該廠商在這一關的發單量）→ 已移轉，不再算加工中
+    function ocXferDone(p, procs) {
+        if (!p || String(p.processing_state || '') !== 'ing' || Number(p.sn_cnt) !== 1) return false;
+        var xf = Number(p.xfer_qty) || 0; if (xf <= 0) return false;
+        var send = 0, found = false, g = ocGrp(p);
+        (procs || []).forEach(function (q) {
+            if (ocGrp(q) !== g) return;
+            var m = (window.obBatchMap || {})[String(q.bom_ing_fid)];
+            if (m && m.batches) m.batches.forEach(function (b) { if (String(b.no) === String(p.maker_id_no)) { send += (Number(b.send) || 0) - (Number(b.scrap) || 0) - (Number(b.wd) || 0); found = true; } });
+        });
+        if (!found) send = Number(p.sqty) || 0;
+        return send > 0 && xf >= send - 0.0001;
+    }
+    // QC待驗但後序關卡已有發包紀錄、且發包日不早於這站待驗日 → 生管頁面不理會 QC待驗（那是品管自己補紀錄），認定已發包後序關卡；
+    // 例外：同一關還有其他批次在加工中（多批同關送出）仍要顯示，避免 QC 未檢驗卡住。
+    function ocQcMoot(p, procs) {
+        if (!p || String(p.processing_state || '') !== 'Q' || p.qc_completed == 1) return false;
+        var g = ocGrp(p);
+        var busy = (procs || []).some(function (q) { return q !== p && ocGrp(q) === g && String(q.processing_state || '') === 'ing' && !ocXferDone(q, procs); });
+        if (busy) return false;
+        var qd = ocDateVal(p.return_date || p.xfer_date || p.finish_report_date || p.QC_check_date || p.outsource_date);
+        return (procs || []).some(function (q) {
+            return ocGrp(q) > g && q.outsource_date && ['ing', 'Q', 'P', 'E'].indexOf(String(q.processing_state || '')) !== -1 && ocDateVal(q.outsource_date) >= qd;
+        });
+    }
     function _obNum(v) { v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
     function obBatchSummaryEl(m, extraScrap) {
         var box = document.createElement('div');
@@ -6125,8 +6155,8 @@ echo "</script>\n";
                     var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
                     // 移轉憑單已把這一站的貨全部移走（憑單合計 >= 本站發單數，且該序號只有一列）＝已移轉，
                     // 不再顯示「加工中」、外在廠商那邊的數量清為 0（廠商沒按回廠但憑單已證明貨已移轉）。
-                    var _xferDone = (String(_proc.processing_state || '') === 'ing' && Number(_proc.sn_cnt) === 1
-                        && Number(_proc.xfer_qty) > 0 && Number(_proc.sqty) > 0 && Number(_proc.xfer_qty) >= Number(_proc.sqty));
+                    var _xferDone = ocXferDone(_proc, _activeProcs);
+                    var _qcMoot = ocQcMoot(_proc, _activeProcs);
                     if (_xferDone && _obm && _obm.batches) {
                         _obm = JSON.parse(JSON.stringify(_obm));
                         var _sumRet = 0;
@@ -6146,7 +6176,7 @@ echo "</script>\n";
                     var _iid = String(_proc.bom_ing_id  || '');
                     // qc_completed=1 且 processing_state='Q' → 前端認定為生管待移轉(P)
                     var _isQcCompletedQ = (_st === 'Q' && _proc.qc_completed == 1);
-                    var _effectiveSt = _isQcCompletedQ ? 'P' : (_xferDone ? 'E' : _st);
+                    var _effectiveSt = _isQcCompletedQ ? 'P' : ((_xferDone || _qcMoot) ? 'E' : _st);
                     if (_st === 'ing' && _iid !== '' && !_xferDone) {
                         var _ingBtn = document.createElement('button');
                         _ingBtn.type = 'button';
