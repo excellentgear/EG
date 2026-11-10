@@ -777,7 +777,7 @@ if (!empty($current_page_boms)) {
 
     // bom_ps_list：只查本頁 BOM 的製程明細
     $raw_ps = $db->prepare("
-        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(t2.sqty) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND t2.maker_from = bi.maker_id_no AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
+        SELECT bi.*, pn.ProcessName, pn.is_exclude_qc, ml.maker_id, pfr.finish_report_date, (SELECT MIN(t.transfer_date) FROM bom_ing_transfer_log t WHERE t.bom = bi.bom AND (t.bom_sn = bi.bom_sn OR t.bom_sn IN (SELECT a.alias_sn FROM bom_sn_alias a WHERE a.bom = bi.bom AND a.target_sn = bi.bom_sn))) AS xfer_date, (SELECT SUM(COALESCE(NULLIF(t2.transfer_qty,0),t2.sqty)) FROM bom_ing_transfer_log t2 WHERE t2.bom = bi.bom AND t2.maker_from = bi.maker_id_no AND (t2.bom_sn = bi.bom_sn OR t2.bom_sn IN (SELECT a2.alias_sn FROM bom_sn_alias a2 WHERE a2.bom = bi.bom AND a2.target_sn = bi.bom_sn))) AS xfer_qty, (SELECT COUNT(*) FROM bom_ing b2 WHERE b2.bom = bi.bom AND b2.bom_sn = bi.bom_sn AND b2.is_schedule_split = 0) AS sn_cnt
         FROM bom_ing AS bi
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
