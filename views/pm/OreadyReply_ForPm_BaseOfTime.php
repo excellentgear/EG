@@ -7285,8 +7285,8 @@ echo "</script>\n";
                                     _pH += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                         + (_bOut > 1e-9 ? '<span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;" title="送出 ' + _obNum(b.send) + '">未回 ' + _obNum(_bOut) + ' pcs</span>' : _obNum(b.send) + ' pcs')
                                         + (_bMk ? '<br><span style="color:#555;">' + escapeHtml(_bMk) + '</span>' : '')
-                                        + (_bOd ? '<span style="color:#aaa;"> ' + _bOd + '</span>' : '')
-                                        + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : '')
+                                        + (_bOd && _bRd ? '<span style="color:#2a7ae2;"> ' + _bOd + '~' + _bRd + '</span>'
+                                            : (_bOd ? '<span style="color:#aaa;"> ' + _bOd + '</span>' : '') + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : ((Number(b.ret) || 0) > 1e-9 && _bOut <= 1e-9 ? '<span style="color:#2a7ae2;"> 回</span>' : '')))
                                         + ' ' + _bSt + '</div>';
                                 });
                                 if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) {
