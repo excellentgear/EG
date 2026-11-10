@@ -269,6 +269,42 @@ if (!function_exists('eg_bom_outsource_batch_split')) {
     }
 }
 
+if (!function_exists('eg_bom_xfer_from_map')) {
+    /**
+     * 沒有登記廠商（待發包）的關卡，若這一關已有移轉憑單（東西其實已加工完回廠），回傳憑單的「移出廠商」與最早的憑單日期，
+     * 讓 BOM總覽直接顯示該廠商、並以憑單日期認定回廠日。回傳 [bom_ing_fid => ['batches'=>[], 'xfer_from'=>廠商名, 'xfer_date'=>Y/m/d]]
+     */
+    function eg_bom_xfer_from_map(PDO $db, array $fids): array {
+        $out = [];
+        try {
+            $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
+            if (!$fids) return [];
+            $in = implode(',', $fids);
+            $me = $db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom IN (SELECT bom FROM bom_ing WHERE bom_ing_fid IN ($in)) AND (maker_id_no IS NULL OR maker_id_no='') AND (maker_id IS NULL OR maker_id='') AND is_consumed=0")->fetchAll(PDO::FETCH_ASSOC);
+            if (!$me) return [];
+            $boms = array_values(array_unique(array_column($me, 'bom')));
+            $qb = implode(',', array_map(fn($b) => $db->quote($b), $boms));
+            $alias = [];
+            foreach ($db->query("SELECT bom, alias_sn, target_sn FROM bom_sn_alias WHERE bom IN ($qb)")->fetchAll(PDO::FETCH_ASSOC) as $a) $alias[$a['bom']][(int)$a['alias_sn']] = (int)$a['target_sn'];
+            $tf = [];
+            foreach ($db->query("SELECT t.bom, t.bom_sn, t.maker_from, t.transfer_date, COALESCE(ml.maker_id, t.maker_from) AS nm FROM bom_ing_transfer_log t LEFT JOIN maker_list ml ON ml.maker_id_no=t.maker_from WHERE t.bom IN ($qb) ORDER BY t.transfer_date, t.transfer_id")->fetchAll(PDO::FETCH_ASSOC) as $t) {
+                $sn = (int)$t['bom_sn']; $sn = $alias[$t['bom']][$sn] ?? $sn;
+                $tf[$t['bom']][$sn][] = $t;
+            }
+            foreach ($me as $x) {
+                $list = $tf[$x['bom']][(int)$x['bom_sn']] ?? [];
+                if (!$list) continue;
+                $names = [];
+                foreach ($list as $t) { $n = trim((string)$t['nm']); if ($n !== '' && !in_array($n, $names, true)) $names[] = $n; }
+                if (!$names) continue;
+                $d = !empty($list[0]['transfer_date']) ? date('Y/m/d', strtotime($list[0]['transfer_date'])) : '';
+                $out[(int)$x['bom_ing_fid']] = ['batches' => [], 'xfer_from' => implode('、', $names), 'xfer_date' => $d];
+            }
+        } catch (Throwable $e) { return []; }
+        return $out;
+    }
+}
+
 if (!function_exists('eg_bom_outsource_batch_map')) {
     /**
      * BOM總覽分批顯示用：只回傳「需要顯示批次」的製程（多於一批，或單批但已部分回廠／有報廢未結清）；
@@ -303,7 +339,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
             $sumSend = 0.0; foreach ($list as $b) $sumSend += (float)$b['send_qty'] - (float)($b['withdrawn_qty'] ?? 0);
             if (isset($sq[$fid]) && $sumSend < $sq[$fid] - 1e-9) $need[] = $fid;
         }
-        if (!$need) return [];
+        if (!$need) return eg_bom_xfer_from_map($db, $fids);
         $bids = [];
         foreach ($need as $fid) foreach ($by[$fid] as $b) $bids[] = (int)$b['batch_id'];
         $logs = [];
@@ -403,6 +439,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                 }
             }
         } catch (Throwable $e) { /* 查不到就維持原算法 */ }
+        foreach (eg_bom_xfer_from_map($db, $fids) as $_k => $_v) if (!isset($out[$_k])) $out[$_k] = $_v;
         return $out;
 
     }

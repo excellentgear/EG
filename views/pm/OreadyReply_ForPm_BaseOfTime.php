@@ -6207,6 +6207,7 @@ echo "</script>\n";
                     _pDiv.appendChild(_nameDiv);
                     var _od = formatOutsourceDateForDisplay(_proc.outsource_date);
                     var _mk = egVP(_proc.maker_id || '');
+                    if (!_mk) { var _xm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)]; if (_xm && _xm.xfer_from) _mk = egVP(_xm.xfer_from); } // 沒登記廠商但已有移轉憑單：顯示憑單的移出廠商
                     if (_od || _mk) {
                         var _dmDiv = document.createElement('div');
                         _dmDiv.style.cssText = 'color:#555;font-size:11px;';
@@ -7099,6 +7100,7 @@ echo "</script>\n";
 
                                 var formattedOutsourceDate = formatDynamicProcessDate(processInfo.outsource_date);
                                 var makerName = egVP(processInfo.maker_id || '');
+                                if (!makerName) { var _xm2 = (window.obBatchMap || {})[String(processInfo.bom_ing_fid)]; if (_xm2 && _xm2.xfer_from) makerName = egVP(_xm2.xfer_from); } // 沒登記廠商但已有移轉憑單：顯示憑單的移出廠商
                                 var makerInfoHtml = '';
                                 if (formattedOutsourceDate) makerInfoHtml += escapeHtml(formattedOutsourceDate);
                                 if (makerName) {
