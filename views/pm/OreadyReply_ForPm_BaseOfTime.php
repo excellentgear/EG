@@ -7289,7 +7289,26 @@ echo "</script>\n";
                                         + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : '')
                                         + ' ' + _bSt + '</div>';
                                 });
-                                if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pmTot - _pmSend) + ' pcs 未發</div>';
+                                if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) {
+                                    // 缺口分兩種：上一關已經回來、只是還沒發到這一關＝「未發」；上一關的貨還沒回來＝「未到此關」
+                                    var _pg = ocGrp(processInfo), _pgPrev = -1;
+                                    _activeProcs.forEach(function (q) { var gq = ocGrp(q); if (gq < _pg && gq > _pgPrev) _pgPrev = gq; });
+                                    var _pgAvail = _pmSend; // 第一關：前面沒有關卡，缺的就是還沒到
+                                    if (_pgPrev >= 0) {
+                                        var _pgRet = 0;
+                                        _activeProcs.forEach(function (q) {
+                                            if (ocGrp(q) !== _pgPrev) return;
+                                            var mq = (window.obBatchMap || {})[String(q.bom_ing_fid)];
+                                            if (mq && mq.batches && mq.batches.length) _pgRet += Math.max(Number(mq.ret) || 0, Number(mq.xfer_qty) || 0);
+                                            else if (String(q.processing_state || '') !== 'ing') _pgRet += _pmTot;
+                                            else _pgRet += Number(q.xfer_qty) || 0;
+                                        });
+                                        _pgAvail = Math.min(_pmTot, _pgRet);
+                                    }
+                                    var _pgUnsent = Math.max(0, _pgAvail - _pmSend), _pgNotYet = Math.max(0, _pmTot - Math.max(_pgAvail, _pmSend));
+                                    if (_pgUnsent > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgUnsent) + ' pcs 未發</div>';
+                                    if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關</div>';
+                                }
                                 tdDynamicProcess.innerHTML = _pH;
                             } else {
                                 // ── 單批次顯示（原有邏輯）────────────────────
