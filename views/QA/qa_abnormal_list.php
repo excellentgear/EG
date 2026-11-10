@@ -776,11 +776,13 @@ function load(){
             : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
         CATS = res.cats || CATS;
         ROW_HTML = (function(r){
+            var inCatTab = (CUR_TAB !== 'todo') && !$('#fDeleted').prop('checked');
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
-                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
-                    + srcLabel(r.source_type) + '</span>'
-                    + ' <span class="st st-s st-cat" title="異常單類別">' + esc(catNameOf(r)) + '</span>'
+                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b><br>'
+                    /* 類別分頁內：與分頁名稱相同（或已包含在分頁名稱裡）的標籤不重複顯示 */
+                    + (inCatTab && catNameOf(r).indexOf(srcLabel(r.source_type)) >= 0 ? '' : '<span class="src src-' + esc(r.source_type) + '">' + srcLabel(r.source_type) + '</span> ')
+                    + (inCatTab ? '' : '<span class="st st-s st-cat" title="異常單類別">' + esc(catNameOf(r)) + '</span>')
                     + (Number(r.is_as) === 1 ? ' <span class="st st-s st-as" title="AS 認證製程：' + esc(r.as_name || '') + '">AS</span>' : '')
                     + (Number(r.quick_mode) === 1 ? '<br><span class="st st-s st-auto" title="品管檢驗2.0 自動開立，走雙層快速決策">快速決策</span>' : '')
                     + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '')
@@ -796,7 +798,7 @@ function load(){
                 + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
                 + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
                     + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
-                    + (Number(r.is_closed) === 1 && r.closed_at ? '<br><span class="muted-help" style="font-size:10.5px;line-height:1.25;white-space:normal;">' + esc(r.closed_name || '') + ' 結案<br>' + esc(dispDate(r.closed_at)) + ' ' + esc(String(r.closed_at).substring(11, 16)) + '</span>' : '')
+                    + (Number(r.is_closed) === 1 && r.closed_at ? '<div class="muted-help" style="font-size:10.5px;line-height:1.25;margin-top:-7px;white-space:normal;">' + esc(r.closed_name || '') + ' 結案<br>' + esc(dispDate(r.closed_at)) + ' ' + esc(String(r.closed_at).substring(11, 16)) + '</div>' : '')
                 + '</td>'
                 + '<td class="c">'
                 + (r.deleted_at
