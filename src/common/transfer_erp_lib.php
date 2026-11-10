@@ -27,16 +27,16 @@ if (!function_exists('transferErpBatchId')) {
     }
 }
 
-if (!function_exists('transferErpPlan')) {
+if (!function_exists('transferErpPlanBatch')) {
     /**
-     * 逐列判定：回傳與 $rows 同順序（已依發包日、異動時間排序）的陣列，每列多三個欄位
+     * 【新規則】逐列判定：回傳與 $rows 同順序（已依發包日、異動時間排序）的陣列，每列多三個欄位
      *   action  : insert（新增一批）| write（蓋掉預設資料列）| skip_dup（重複，跳過）
      *   target_fid : action=write 時要更新的 bom_ing_fid
      *   state   : 新增／覆蓋後的 processing_state（'ing'；比該 BOM+SN 已有的更早的歷史批次記 'E'）
      * 全程在記憶體模擬同一份檔案內先後列的影響（第一批佔用預設列，第二批就是新增），
      * 所以預覽的筆數與實際匯入完全一致。
      */
-    function transferErpPlan(PDO $db, array $rows) {
+    function transferErpPlanBatch(PDO $db, array $rows) {
         usort($rows, function ($a, $b) {
             return [$a['bom'], $a['bom_sn'], $a['move_date'], $a['changed_ts']]
                <=> [$b['bom'], $b['bom_sn'], $b['move_date'], $b['changed_ts']];
@@ -100,5 +100,79 @@ if (!function_exists('transferErpPlan')) {
         }
         unset($r);
         return $rows;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 新舊規則分流（2026-11-10）：只有「新的 BOM」套用上面的分批規則，舊 BOM 完全維持原本做法
+// （同 BOM+SN 只留一列、後來的移轉覆蓋前一列、前端目前關卡的認定方式不變）。
+// 分界＝BOM 編號的民國年月日（B-1151110002 → 1151110），設定存 system_parameters
+// （param_group='TRANSFER_ERP'、param_key='batch_from_bom'），沒設定時預設 1151110（2026-11-10 起開的 BOM）。
+// 管理員修正本來就是逐列手動，不受這個分界影響。
+// ═══════════════════════════════════════════════════════════════════════════
+if (!function_exists('transferErpBatchFrom')) {
+    function transferErpBatchFrom(PDO $db) {
+        try {
+            $v = $db->query("SELECT param_value FROM system_parameters WHERE param_group='TRANSFER_ERP' AND param_key='batch_from_bom' LIMIT 1")->fetchColumn();
+            if ($v !== false && preg_match('/^\d{7}$/', trim((string)$v))) return (int)trim($v);
+        } catch (Throwable $e) {}
+        return 1151110;
+    }
+}
+if (!function_exists('transferErpIsNewBom')) {
+    function transferErpIsNewBom($bom, $from) {
+        return preg_match('/^B-(\d{7})/', (string)$bom, $m) && (int)$m[1] >= $from;
+    }
+}
+if (!function_exists('transferErpClassifyLegacy')) {
+    /** 舊規則（原 transferErpClassify，一字未改）：insert | write | skip_dup | skip_stale | skip_manual */
+    function transferErpClassifyLegacy($existing, $inTransferNo, $inChangedTs) {
+        if (empty($existing)) return 'insert';
+        $exNo = $existing['transfer_no'] ?? null;
+        if ($inTransferNo !== null && $exNo !== null && $exNo === $inTransferNo) return 'skip_dup';
+        $manualAt = $existing['manual_seq_override_at'] ?? null;
+        if (!empty($manualAt) && $inChangedTs < $manualAt) return 'skip_manual';
+        $exChanged   = $existing['transfer_changed_at'] ?? null;
+        $hasProgress = !empty($existing['QC_check']) || !empty($existing['return_date']) || (int)($existing['qc_completed'] ?? 0) === 1;
+        if ($hasProgress) {
+            return ($exChanged !== null && $inChangedTs >= $exChanged) ? 'write' : 'skip_stale';
+        }
+        if ($exChanged !== null && $inChangedTs < $exChanged) return 'skip_stale';
+        return 'write';
+    }
+}
+if (!function_exists('transferErpPlan')) {
+    /**
+     * 對外唯一入口（預覽與確認匯入共用）。每列多 action／target_fid／state／legacy 四欄。
+     * legacy=true 的列走舊規則：同 BOM+SN 只留異動時間最新一筆、數量用單位數量(sqty_legacy)、
+     * action 可能是 insert|write|skip_dup|skip_stale|skip_manual，write 的目標一律是該 BOM+SN 既有那一列。
+     */
+    function transferErpPlan(PDO $db, array $rows, &$stats = []) {
+        $from = transferErpBatchFrom($db);
+        $new = []; $oldBy = [];
+        $stats['legacy_rows'] = 0; $stats['batch_rows'] = 0; $stats['legacy_dedup'] = 0;
+        foreach ($rows as $r) {
+            if (transferErpIsNewBom($r['bom'], $from)) { $new[] = $r; continue; }
+            $k = $r['bom'] . '|' . (int)$r['bom_sn'];
+            if (isset($oldBy[$k])) {
+                $stats['legacy_dedup']++;
+                if ($r['changed_ts'] <= $oldBy[$k]['changed_ts']) continue;
+            }
+            $oldBy[$k] = $r;
+        }
+        $out = [];
+        $st = $db->prepare("SELECT bom_ing_fid, transfer_no, transfer_changed_at, QC_check, return_date, qc_completed, manual_seq_override_at
+                            FROM bom_ing WHERE bom = ? AND bom_sn = ?");
+        foreach ($oldBy as $r) {
+            $r['sqty'] = $r['sqty_legacy'] ?? $r['sqty'];
+            $st->execute([$r['bom'], $r['bom_sn']]);
+            $ex = $st->fetch(PDO::FETCH_ASSOC);
+            $r['action'] = transferErpClassifyLegacy($ex, $r['transfer_no'], $r['changed_ts']);
+            $r['target_fid'] = $ex ? (int)$ex['bom_ing_fid'] : null;
+            $r['state'] = 'ing'; $r['legacy'] = true;
+            $out[] = $r; $stats['legacy_rows']++;
+        }
+        foreach (transferErpPlanBatch($db, $new) as $r) { $r['legacy'] = false; $out[] = $r; $stats['batch_rows']++; }
+        return $out;
     }
 }

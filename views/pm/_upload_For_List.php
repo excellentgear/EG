@@ -2914,6 +2914,7 @@ if (!function_exists('parseTransferErpRows')) {
                 'process_no'   => (int)$process_no,
                 'maker_id_no'  => $maker_id_no,
                 'sqty'         => $sqtyRow,
+                'sqty_legacy'  => $qUnitN,               // 舊 BOM 沿用原做法：只看單位數量(生產數量)，不看 ModalNO
                 'move_date'    => $inDate,               // 預移入日＝實際移入日（進 outsource_date/Created_At）
                 'ps'           => bomErpCleanPs($g('備註')),
                 'changer_name' => $g('異動人員'),
@@ -2959,19 +2960,22 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
         $missingBoms = [];
         $bomChk = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
         $bomSeen = [];
-        $rows = transferErpPlan($db, $rows);
+        $planStats = [];
+        $rows = transferErpPlan($db, $rows, $planStats);
+        $skipStaleCount = 0; $skipManualCount = 0; $staleSamples = [];
         foreach ($rows as $row) {
             $action = $row['action'];
             if ($action === 'insert')       { $insertCount++; if ($row['state'] === 'E') $histCount++; }
             elseif ($action === 'write')    $writeCount++;
             elseif ($action === 'skip_dup') $skipDupCount++;
+            elseif ($action === 'skip_stale')  { $skipStaleCount++;  if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn']; }
+            elseif ($action === 'skip_manual') { $skipManualCount++; if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn'] . '（人工異動保護）'; }
             if (!isset($bomSeen[$row['bom']])) {
                 $bomChk->execute([$row['bom']]);
                 $bomSeen[$row['bom']] = (bool)$bomChk->fetchColumn();
                 if (!$bomSeen[$row['bom']]) $missingBoms[] = $row['bom'];
             }
         }
-        $skipStaleCount = 0; $skipManualCount = 0;
 
         // 廠商/使用者對照（顯示用）
         $makerNames = [];
@@ -2990,13 +2994,17 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
         if ($stats['skip_date_diff'] > 0)    $warnings[] = "預移入/移出日不同(未完成移轉)跳過 {$stats['skip_date_diff']} 列";
         if ($stats['dedup_dropped'] > 0)   $warnings[] = "檔案內同製令+序號+廠商+異動日期時間完全相同 {$stats['dedup_dropped']} 列，只取一筆";
         if ($skipDupCount > 0)             $warnings[] = "同製令+序號+廠商+異動日期時間、已匯入過 {$skipDupCount} 列 → 跳過（不重複新增）";
+        $fromNo = transferErpBatchFrom($db);
+        $warnings[] = "分批規則只套用在 BOM 編號 B-{$fromNo} 以後的新製令（{$planStats['batch_rows']} 列）；較早的舊製令 {$planStats['legacy_rows']} 列維持原本做法（同序號只留最新一筆、後來的覆蓋前一筆）";
+        if ($skipStaleCount > 0)           $warnings[] = "舊製令偵測到 {$skipStaleCount} 列疑似舊檔/較舊移轉 → 跳過保護" . (!empty($staleSamples) ? '（例：' . implode('、', $staleSamples) . '）' : '');
+        if ($skipManualCount > 0)          $warnings[] = "舊製令 {$skipManualCount} 列系統內已被人工異動過 → 跳過保護，避免蓋掉生管剛做的排序異動";
         if ($histCount > 0)                $warnings[] = "其中 {$histCount} 筆發包日早於該製令序號現有最新一批，視為歷史批次補進來（狀態記為已移轉）";
         if ($stats['qty_from_modal'] > 0)  $warnings[] = "{$stats['qty_from_modal']} 列使用 ModalNO 欄作為本次發包數量，其餘使用單位數量";
         if (!empty($unknownMakers))        $warnings[] = '生產單位查無廠商主檔（' . implode('、', array_keys($unknownMakers)) . '），maker_id 簡稱將留空';
         if (!empty($missingBoms))          $warnings[] = 'BOM 主檔不存在（' . implode('、', $missingBoms) . '），製程列仍會建立，建議先執行 BOM ERP匯入';
 
         $previewRows = [];
-        $actionLabel = ['insert' => '新增一批', 'write' => '寫入預設列', 'skip_dup' => '重複跳過'];
+        $actionLabel = ['insert' => '新增一批', 'write' => '寫入／覆蓋', 'skip_dup' => '重複跳過', 'skip_stale' => '舊檔跳過', 'skip_manual' => '人工異動保護跳過'];
         foreach (array_slice($rows, 0, 10) as $row) {
             $previewRows[] = [
                 'bom'         => $row['bom'],
@@ -3074,6 +3082,14 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                 transfer_no = ?, transfer_changed_at = ?,
                 Created_By = ?, Created_At = ?, Modified_By = NULL, Modified_At = NULL
                 WHERE bom_ing_fid = ? AND processing_state = 'N' AND transfer_no IS NULL AND outsource_date IS NULL");
+        // 舊 BOM（不套分批規則）：維持原本的覆蓋做法
+        $updLegacyStmt = $db->prepare("UPDATE bom_ing SET
+                machine_id = NULL, process_no = ?, maker_id_no = ?, maker_id = ?, sqty = ?,
+                processing_sequence = NULL, processing_state = 'ing', QC_check = NULL, QC_check_date = NULL,
+                ps = ?, outsource_date = ?, return_date = NULL, Delivery_date = NULL, PS2 = NULL, 1_side = NULL,
+                transfer_no = ?, transfer_changed_at = ?,
+                Created_By = ?, Created_At = ?, Modified_By = NULL, Modified_At = NULL
+                WHERE bom_ing_fid = ?");
         $insStmt = $db->prepare("INSERT INTO bom_ing
                 (bom_ing_id, bom, process_no, maker_id_no, maker_id, sqty, bom_sn,
                  processing_state, ps, outsource_date, transfer_no, transfer_changed_at, Created_By, Created_At)
@@ -3089,13 +3105,23 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
             $makerId = $makerNames[$row['maker_id_no']] ?? null;
             $userId  = $lookupUser($row['changer_name']);
             if ($row['action'] === 'insert') {
+                $newId = !empty($row['legacy'])
+                    ? substr($row['bom'], -9) . '-' . $row['process_no'] . '-' . $row['bom_sn'] . '-' . $row['sqty'] . '-' . $row['maker_id_no']
+                    : transferErpBatchId($row['bom'], $row['bom_sn'], $row['move_date'], $row['changed_ts']);
                 $insStmt->execute([
-                    transferErpBatchId($row['bom'], $row['bom_sn'], $row['move_date'], $row['changed_ts']),
+                    $newId,
                     $row['bom'], $row['process_no'], $row['maker_id_no'], $makerId,
                     $row['sqty'], $row['bom_sn'], $row['state'], $row['ps'], $row['move_date'],
                     $row['transfer_no'], $row['changed_ts'], $userId, $row['move_date'],
                 ]);
                 $inserted++; if ($row['state'] === 'E') $histN++;
+            } elseif ($row['action'] === 'write' && !empty($row['legacy'])) {
+                $updLegacyStmt->execute([
+                    $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'],
+                    $row['ps'], $row['move_date'], $row['transfer_no'], $row['changed_ts'],
+                    $userId, $row['move_date'], $row['target_fid'],
+                ]);
+                $written++;
             } elseif ($row['action'] === 'write') {
                 $updStmt->execute([
                     $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'],
@@ -3104,6 +3130,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                 ]);
                 if ($updStmt->rowCount() < 1) throw new Exception("預設資料列 {$row['bom']}-{$row['bom_sn']} 已被其他操作更動，請重新上傳預覽");
                 $written++;
+            } elseif ($row['action'] === 'skip_stale') {
+                $skippedStale++;
+            } elseif ($row['action'] === 'skip_manual') {
+                $skippedManual++;
             } else {
                 $skippedDup++;
             }
@@ -3115,6 +3145,8 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
         $msg = "移轉匯入完成！新增一批 {$inserted} 筆、寫入預設列 {$written} 筆";
         if ($histN > 0)      $msg .= "（含歷史批次 {$histN} 筆）";
         if ($skippedDup > 0) $msg .= "、重複跳過 {$skippedDup} 筆";
+        if ($skippedStale > 0)  $msg .= "、舊檔保護跳過 {$skippedStale} 筆";
+        if ($skippedManual > 0) $msg .= "、人工異動保護跳過 {$skippedManual} 筆";
         if (!empty($unknownChangers)) {
             $msg .= "。⚠ 異動人員 [" . implode('、', array_keys($unknownChangers)) . "] 查無此人，以預設人員(99991)記錄";
         }
