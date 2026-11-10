@@ -3350,7 +3350,9 @@ echo "</script>\n";
     // QC待驗但後序關卡已有發包紀錄、且發包日不早於這站待驗日 → 生管頁面不理會 QC待驗（那是品管自己補紀錄），認定已發包後序關卡；
     // 例外：同一關還有其他批次在加工中（多批同關送出）仍要顯示，避免 QC 未檢驗卡住。
     function ocQcMoot(p, procs) {
-        if (!p || String(p.processing_state || '') !== 'Q' || p.qc_completed == 1) return false;
+        // QC待驗／待移轉（含已按QC完工）：後序關卡已發包（發包日不早於本關回廠日、狀態加工中／QC待驗／待移轉／已移轉）就視為已移轉
+        var _ps0 = p ? String(p.processing_state || '') : '';
+        if (!p || (_ps0 !== 'Q' && _ps0 !== 'P')) return false;
         var g = ocGrp(p);
         var busy = (procs || []).some(function (q) { return q !== p && ocGrp(q) === g && String(q.processing_state || '') === 'ing' && !ocXferDone(q, procs); });
         if (busy) return false;
@@ -7010,7 +7012,7 @@ echo "</script>\n";
 
                             // 已移轉（含貨已由移轉憑單移走、QC待驗但後序關卡已發包）的關卡：不加底色、也不寫「已移轉」
                             var _hlSt = String(processInfo.processing_state || '');
-                            var _hlE = _hlSt === 'E' || _hlSt === '1' || (_hlSt === 'Q' && ocQcMoot(processInfo, _activeProcs)) || ocXferDone(processInfo, _activeProcs);
+                            var _hlE = _hlSt === 'E' || _hlSt === '1' || ((_hlSt === 'Q' || _hlSt === 'P') && ocQcMoot(processInfo, _activeProcs)) || ocXferDone(processInfo, _activeProcs);
                             if (isCurrentProcess && !_hlE) {
                                 tdDynamicProcess.classList.add('highlight-process');
                             }
@@ -7112,7 +7114,7 @@ echo "</script>\n";
                                 //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
                                 // QC待驗但後序關卡已發包：QC待驗清單不會列這筆（與「發單日」欄同一條規則 ocQcMoot），這裡也不再標 QC待驗
-                                if (_dynRawSt === 'Q' && ocQcMoot(processInfo, _activeProcs)) _dynRawSt = 'E';
+                                if ((_dynRawSt === 'Q' || _dynRawSt === 'P') && ocQcMoot(processInfo, _activeProcs)) _dynRawSt = 'E';
                                 // 加工中(ing)等其他狀態：沒有回廠日期、但已有移轉憑單，也以移轉憑單日期認定並顯示「M/D 回(移轉)」
                                 if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1'
                                     || (!processInfo.return_date && processInfo.xfer_date && _dynRawSt !== 'skip')) {
@@ -7127,7 +7129,7 @@ echo "</script>\n";
 
                                 if (isCurrentProcess && !_hlE) {
                                     let datePrefix = '';
-                                    var translatedState = translateProcessingState(_dynRawSt === 'E' && processInfo.processing_state === 'Q' ? 'E' : processInfo.processing_state); // 後序關卡已發包的QC待驗不再標QC待驗
+                                    var translatedState = translateProcessingState(_dynRawSt === 'E' && (processInfo.processing_state === 'Q' || processInfo.processing_state === 'P') ? 'E' : processInfo.processing_state); // 後序關卡已發包的QC待驗不再標QC待驗
                                     var stateColor = '#555';
                                     if (processInfo.processing_state === 'ing') {
                                         stateColor = 'orange';
