@@ -254,6 +254,12 @@ if (!function_exists('eg_bom_outsource_batch_split')) {
             $sd2 = ($send_date !== null && $send_date !== '') ? $send_date : date('Y-m-d');
             $newId = eg_bom_outsource_open_batch($db, $bom_ing_fid, $maker_no, $maker_name, $qty, $sd2, null,
                 '分批自批次#' . $src['batch_id'] . '（' . ($src['maker_id'] ?? '') . '）', $uid);
+            // 製程列上顯示的廠商要跟實際還在外面的批次一致：取「還在外面數量最多」那一批的廠商（同量取最新一批）
+            $ob = $db->prepare("SELECT maker_id_no, maker_id, (send_qty-return_qty-scrap_qty-COALESCE(withdrawn_qty,0)) AS outside FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND status='open' ORDER BY outside DESC, batch_id DESC LIMIT 1");
+            $ob->execute([$bom_ing_fid]);
+            if ($top = $ob->fetch(PDO::FETCH_ASSOC)) {
+                $db->prepare("UPDATE bom_ing SET maker_id_no=?, maker_id=? WHERE bom_ing_fid=?")->execute([$top['maker_id_no'], $top['maker_id'], $bom_ing_fid]);
+            }
             $db->commit();
             return ['new_batch_id'=>$newId, 'from_batch_id'=>(int)$src['batch_id'], 'moved'=>$qty, 'from_remaining_send'=>max(0, $newSend)];
         } catch (Throwable $e) {
@@ -311,6 +317,39 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
             $total = $sq[$fid] ?? $send;
             $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot)), 'batches'=>$bl];
         }
+        // 「未發」只顯示上一關已經回廠、卻還沒發到本關的數量；上一關還沒回的那部分本來就發不出去，不算未發。
+        // 上一關沒有發包批次（廠內製程等）查不到回廠量時維持原算法。
+        try {
+            $need2 = array_keys(array_filter($out, fn($o) => $o['unsent'] > 0));
+            if ($need2) {
+                $in2 = implode(',', array_map('intval', $need2));
+                $me = [];
+                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom_ing_fid IN ($in2)")->fetchAll(PDO::FETCH_ASSOC) as $x) $me[(int)$x['bom_ing_fid']] = $x;
+                $boms = array_values(array_unique(array_map(fn($x) => $x['bom'], $me)));
+                $qb = implode(',', array_map(fn($b) => $db->quote($b), $boms));
+                $all = [];
+                foreach ($db->query("SELECT bom_ing_fid, bom, bom_sn FROM bom_ing WHERE bom IN ($qb) AND is_consumed=0 AND (processing_state IS NULL OR processing_state<>'skip')")->fetchAll(PDO::FETCH_ASSOC) as $x) $all[$x['bom']][(int)$x['bom_sn']][] = (int)$x['bom_ing_fid'];
+                $retBy = [];
+                $pf = [];
+                foreach ($me as $fid => $x) {
+                    $prevSn = null;
+                    foreach (array_keys($all[$x['bom']] ?? []) as $sn) if ($sn < (int)$x['bom_sn'] && ($prevSn === null || $sn > $prevSn)) $prevSn = $sn;
+                    if ($prevSn !== null) { $pf[$fid] = $all[$x['bom']][$prevSn]; foreach ($pf[$fid] as $p) $retBy[$p] = null; }
+                }
+                if ($retBy) {
+                    $ip = implode(',', array_keys($retBy));
+                    foreach ($db->query("SELECT bom_ing_fid, SUM(return_qty) r, COUNT(*) c FROM bom_ing_outsource_batch WHERE bom_ing_fid IN ($ip) GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $x) $retBy[(int)$x['bom_ing_fid']] = (float)$x['r'];
+                }
+                foreach ($pf as $fid => $plist) {
+                    $has = false; $pr = 0.0;
+                    foreach ($plist as $p) if ($retBy[$p] !== null) { $has = true; $pr += $retBy[$p]; }
+                    if (!$has) continue;
+                    $o = &$out[$fid];
+                    $o['unsent'] = max(0, min($o['total'], $pr) - ($o['send'] - $o['wd']));
+                    unset($o);
+                }
+            }
+        } catch (Throwable $e) { /* 查不到就維持原算法 */ }
         return $out;
     }
 }
