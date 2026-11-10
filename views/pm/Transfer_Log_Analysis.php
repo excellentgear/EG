@@ -180,7 +180,8 @@ $sql = "SELECT
     FROM bom_ing_transfer_log t
     LEFT JOIN bom b ON t.bom = b.bom
     LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no
-    LEFT JOIN bom_ing bi ON t.bom = bi.bom AND t.bom_sn = bi.bom_sn
+    -- 同一個 (製令,序號) 可能有多筆 bom_ing（分批發包），只取製程代號，先收成一列再接，否則每張移轉單會跟著重複顯示
+    LEFT JOIN (SELECT bom, bom_sn, MIN(process_no) AS process_no FROM bom_ing GROUP BY bom, bom_sn) bi ON t.bom = bi.bom AND t.bom_sn = bi.bom_sn
     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
     LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
     LEFT JOIN `user` bu ON bu.id = t.bill_ym_by
