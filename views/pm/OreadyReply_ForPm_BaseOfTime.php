@@ -6280,11 +6280,15 @@ echo "</script>\n";
                         });
                         _gOrder.sort(function (a, b) { return a - b; });
                         var _firstG = _activeProcs.reduce(function (mn, p) { var g = ocGrp(p); return g > 0 && g < mn ? g : mn; }, 1e9);
+                        var _shownShort = false;
                         _gOrder.forEach(function (g) {
                             var G = _groups[g]; if (!G.has) return;
                             var sh = Math.round((_remainQty - G.send) * 1000) / 1000;
                             if (sh <= 1e-9) return;
                             _shortList.push({ proc: G.main, qty: sh, first: g === _firstG });
+                            // 上一關還沒到齊時，後面關卡的缺口是因為貨還沒到，不重複顯示；只顯示最前面那個缺口的關卡
+                            if (_shownShort) return;
+                            _shownShort = true;
                             var d = document.createElement('div');
                             d.className = 'oc-short-line';
                             d.style.cssText = 'margin-top:1px;line-height:1.2;font-size:12px;font-weight:bold;color:#B8431F;';
