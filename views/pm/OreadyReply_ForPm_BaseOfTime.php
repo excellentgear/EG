@@ -1200,10 +1200,12 @@ if (is_array($OreadyReply_list_base)) {
     if (!empty($all_boms)) {
         $placeholders_bo = implode(',', array_fill(0, count($all_boms), '?'));
         try {
-            $stmt_bo = $db->prepare("SELECT bom, Order_id FROM bom_order_process_map WHERE bom IN ($placeholders_bo)");
+            // 拆批：綁定記在子單上，母單（訂單追蹤列的 order_id）也要算綁定，否則從母單點「BOM開立」進來是空的
+            $stmt_bo = $db->prepare("SELECT m.bom, m.Order_id, o.parent_order_id FROM bom_order_process_map m LEFT JOIN order_track o ON o.Order_id = m.Order_id WHERE m.bom IN ($placeholders_bo)");
             $stmt_bo->execute(array_values($all_boms));
             foreach ($stmt_bo->fetchAll(PDO::FETCH_ASSOC) as $bo) {
                 $bom_bound_orders_map[$bo['bom']][] = (int)$bo['Order_id'];
+                if (!empty($bo['parent_order_id'])) $bom_bound_orders_map[$bo['bom']][] = (int)$bo['parent_order_id'];
             }
         } catch (Exception $eBo) { $bom_bound_orders_map = []; }
     }
