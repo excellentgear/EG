@@ -6016,6 +6016,15 @@ echo "</script>\n";
                 });
                 return found ? s : (Number(p.sqty) || 0);
             }
+            function _nextProcName(p) { // 下一個製程的名稱（這一關已回廠，未發的是發到下一關）
+                var g = ocGrp(p), bm = String(row.bom || '').trim(), best = null;
+                (Array.isArray(window.bomPSList) ? window.bomPSList : []).forEach(function (q) {
+                    if (!q || String(q.bom || '').trim() !== bm || parseInt(q.is_consumed || 0, 10) === 1) return;
+                    var sn = parseInt(q.bom_sn, 10); if (isNaN(sn) || sn <= g) return;
+                    if (!best || sn < parseInt(best.bom_sn, 10)) best = q;
+                });
+                return best && best.ProcessName ? String(best.ProcessName) : '下關';
+            }
             function _xoQty(p) { var m = (window.obBatchMap || {})[String(p.bom_ing_fid)]; return Number(m && m.xfer_qty) || Number(p.xfer_qty) || 0; }
             function _xoDown(p) { // 下一關已發出的數量（沒有下一關＝null）
                 var g = ocGrp(p), best = null;
@@ -6278,7 +6287,7 @@ echo "</script>\n";
                         if (_xoPartial(_proc)) {
                             var _xq = _xoQty(_proc), _xd = document.createElement('div');
                             _xd.style.cssText = 'font-size:11px;line-height:1.25;color:#B8431F;font-weight:bold;';
-                            var _dn = _xoDown(_proc); _xd.textContent = '未發 ' + (Math.round((_remainQty - Math.max(_xq, _dn === null ? 0 : _dn)) * 1000) / 1000) + '・已移 ' + _xq;
+                            var _dn = _xoDown(_proc); _xd.textContent = '未發' + _nextProcName(_proc) + ' ' + (Math.round((_remainQty - Math.max(_xq, _dn === null ? 0 : _dn)) * 1000) / 1000); _xd.title = '這一關已全數回廠，還有這個數量尚未發到下一關';
                             _pDiv.appendChild(_xd);
                         } else if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
                             var _sdv = document.createElement('div');
@@ -6298,6 +6307,8 @@ echo "</script>\n";
                         _ingBtn.type = 'button';
                         _ingBtn.className = 'btn btn-xs btn-warning btn-return-style';
                         _ingBtn.textContent = '加工中';
+                        // 發出去的貨已經全數回廠（回＝送、外＝0）就不再標「加工中」
+                        if (_obm && _obm.batches && _obm.batches.length && (Number(_obm.outside) || 0) <= 1e-9 && (Number(_obm.ret) || 0) > 0) { _ingBtn.textContent = '已回廠'; _ingBtn.className = 'btn btn-xs btn-info btn-return-style'; }
                         // 與 Q/P/E 那條狀態列同樣的間距：上方不再多留 2px，
                         // 並蓋掉 Gentelella .btn 自帶的 margin-bottom:5px
                         _ingBtn.style.marginTop = '0';
@@ -6382,7 +6393,8 @@ echo "</script>\n";
                         _aBtn.type = 'button';
                         if (_effectiveSt === 'Q') { _aBtn.className = 'btn btn-primary btn-xs btn-return-style'; _aBtn.textContent = 'QC待驗'; }
                         else if (_effectiveSt === 'P') { _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待移轉'; }
-                        else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = _xoPartial(_proc) ? '部分移轉' : '已移轉'; }
+                        else if (_xoPartial(_proc) && _obm && _obm.batches && _obm.batches.length && (Number(_obm.outside) || 0) > 1e-9) { _aBtn.className = 'btn btn-warning btn-xs btn-return-style'; _aBtn.textContent = '加工中'; } // 還有批次沒回廠
+                        else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = '已移轉'; }
                         // Gentelella 的 .btn 自帶 margin-bottom:5px，在這種一行一顆的小按鈕上
                         // 只會讓狀態列平白高 5px（外觀不變，純粹是下方留白）
                         _aBtn.style.marginBottom = '0';
