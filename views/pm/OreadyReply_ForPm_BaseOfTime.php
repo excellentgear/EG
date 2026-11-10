@@ -1273,6 +1273,10 @@ if (is_array($OreadyReply_list_base)) {
 
     // ✅ 修正：在處理 OrderList 之前，先將乾淨的出貨紀錄附加到主資料中
     // 這樣可以徹底避免後續迴圈污染 shipment_history 的日期格式
+    // 加工面／機台資訊與分面數量（同一件拆兩面加工，A面＋B面不重複相加）：唯一實作 src/common/pm_face_report_lib.php
+    require_once __DIR__ . '/../../src/common/pm_face_report_lib.php';
+    $pm_face_map = pm_face_report_map($db, !empty($all_boms) ? array_values($all_boms) : []);
+
     foreach ($OreadyReply_list_base as &$item_ref) { // 使用引用來直接修改
         // --- Existing Merges ---
         $item_ref['qq_details'] = $qq_details_map[$item_ref['bom']] ?? [];
@@ -1317,6 +1321,7 @@ if (is_array($OreadyReply_list_base)) {
         
         $item_ref['pm_has_report'] = $pm_has_report;
         $item_ref['pm_latest_date'] = $pm_latest_date;
+        $pm_total_good -= (float)($pm_face_map[$item_ref['bom']]['good_adjust'] ?? 0);   // 兩面加工的同一批件只算一次
         $item_ref['pm_total_processed'] = $pm_total_good + $pm_total_ng; // Processed = Good + NG
         $item_ref['pm_total_ng'] = $pm_total_ng;
         $item_ref['pm_schedule_order'] = $pm_first_schedule_order;
@@ -1361,6 +1366,9 @@ if (is_array($OreadyReply_list_base)) {
 
         $latest_info = $latest_report_data_map[$item_ref['bom']] ?? null;
         $item_ref['latest_report_process'] = $latest_info['process'] ?? '';
+        $item_ref['latest_report_faces']    = $pm_face_map[$item_ref['bom']]['faces'] ?? '';
+        $item_ref['latest_report_machines'] = $pm_face_map[$item_ref['bom']]['machines'] ?? '';
+        $item_ref['latest_report_finished'] = !empty($pm_face_map[$item_ref['bom']]['finished']);
         $item_ref['latest_report_remark']  = $latest_info['remark'] ?? '';
         $item_ref['latest_ng_info_str']    = $latest_info['ng_info'] ?? '';
     }
@@ -1551,6 +1559,55 @@ try {
     $__simMap = ps_sim_map_for_ids($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
 } catch (Throwable $__eSim) { $__simMap = []; }
 echo "    window.simMap = " . json_encode($__simMap ?: new stdClass()) . ";\n";
+// 齒輪規格顯示＋模數／壓力角／螺旋角篩選（2026-11-09）：失敗就當沒有，頁面照常顯示
+$__gearMap = [];
+try {
+    require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+    $__gearMap = eg_gear_list_map($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
+    $__gearMiss = eg_gear_missing_ids($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
+} catch (Throwable $__eGear) { $__gearMap = []; $__gearMiss = []; }
+echo "    window.gearMissing = " . json_encode(array_fill_keys(array_map('strval', $__gearMiss ?? []), 1) ?: new stdClass()) . "; // 工件種類G且未設定齒輪規格的料號\n";
+echo "    window.gearMap = " . json_encode($__gearMap ?: new stdClass(), JSON_UNESCAPED_UNICODE) . ";\n";
+// 料號重量（kg）：料號後面的重量按鈕用；失敗就當沒有
+$__wMap = [];
+try {
+    require_once __DIR__ . '/../../src/common/part_weight_lib.php';
+    $__wMap = eg_pw_weight_map($conn->getPDO(), array_column($OreadyReply_list_slim, 'd_setting_id'));
+} catch (Throwable $__eW) { $__wMap = []; }
+echo "    window.weightMap = " . json_encode($__wMap ?: new stdClass()) . ";\n";
+// 料號後面的「前往料號主檔編輯」齒輪圖示：要同時 ①進得了主檔管理頁 ②有編輯料號權限（mdata_part_edit，或主檔頁的 A／全權角色），否則完全不顯示
+$__canMdEdit = false;
+try {
+    require_once __DIR__ . '/../../src/common/rbac.php';
+    require_once __DIR__ . '/../../src/common/asdoc_page_lib.php';
+    $__pdoMd = $conn->getPDO();
+    $__mdUrl = '/EGsystem/views/pages/master_data_management.php';
+    if (eg_asdoc_page_can_open($__pdoMd, (int)$id, $__mdUrl)) {
+        $__mdF = rbac_user_features($__pdoMd, (int)$id);
+        $__canMdEdit = in_array('all', $__mdF, true) || in_array('mdata_part_edit', $__mdF, true);
+        if (!$__canMdEdit) {   // 主檔頁的「等效管理員」＝該頁（或所屬群組）權限含 A
+            $__q = $__pdoMd->prepare("SELECT smp.page_id, smp.group_id FROM system_module_pages smp WHERE ? LIKE CONCAT('%', smp.page_url) AND smp.page_url<>'' LIMIT 1");
+            $__q->execute([$__mdUrl]);
+            if ($__pg = $__q->fetch(PDO::FETCH_ASSOC)) {
+                $__q = $__pdoMd->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
+                $__q->execute([(int)$id, $__pg['page_id']]);
+                $__pp = $__q->fetchAll(PDO::FETCH_COLUMN);
+                if (!$__pp && !empty($__pg['group_id'])) {
+                    $__q = $__pdoMd->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+                    $__q->execute([$__pg['group_id']]);
+                    $__gc = (string)$__q->fetchColumn();
+                    if ($__gc !== '') {
+                        $__q = $__pdoMd->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
+                        $__q->execute([(int)$id, $__gc]);
+                        $__pp = $__q->fetchAll(PDO::FETCH_COLUMN);
+                    }
+                }
+                foreach ($__pp as $__p) { if (strpos((string)$__p, 'A') !== false) { $__canMdEdit = true; break; } }
+            }
+        }
+    }
+} catch (Throwable $__eMd) { $__canMdEdit = false; }
+echo "    window.canMdEditPart = " . json_encode((bool)$__canMdEdit) . "; // 可否前往料號主檔編輯（進得了主檔頁＋有編輯料號權限）\n";
 try {   // 有線上檢驗資料的製程（區分「線上檢驗」與「簡易／補報檢驗」用；頁面開著時由 JS 定期更新）
     $__qcOnline = $conn->getPDO()->query("SELECT DISTINCT bom_ing_fid FROM qc_check_form WHERE bom_ing_fid IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
 } catch (Throwable $__eQo) { $__qcOnline = []; }
@@ -3045,10 +3102,12 @@ echo "</script>\n";
 
 <script>
     // $bom_ps_list 與 $max_count 輸出為全域 JavaScript 變數
-    window.bomPSList = <?= json_encode($bom_ps_list ?: []); ?>; // Ensure it's an array
+    // 與上方 window.initialBomPSList 是同一份資料（約 6MB），改為直接沿用不再重複輸出一次，頁面少傳少解析一份
+    window.bomPSList = Array.isArray(window.initialBomPSList) ? window.initialBomPSList : []; // Ensure it's an array
     window.maxCount = <?= json_encode((int)($bom_ps_list_max ?: 0)); ?>; // Ensure it's an integer
     window.transferPriceMap = <?= json_encode($transfer_price_map ?: []); ?>; // [bom][bom_sn] 最新單價
-    window.transferHistoryMap = <?= json_encode($transfer_history_map ?: []); ?>; // [product_id][bom_sn] 同料號歷史
+    // transferHistoryMap 上方已輸出過同一份（約 3MB），這裡不再重複輸出
+    if (typeof window.transferHistoryMap === 'undefined') window.transferHistoryMap = [];
     if (typeof window.ingActiveMap === 'undefined') { window.ingActiveMap = buildIngActiveMap(window.bomPSList); }
 
     // ---------- 輔助函數 (移至全域範圍) ----------
@@ -4407,6 +4466,13 @@ echo "</script>\n";
             window.ptiSearch = val; // 更新全域變數
             currentPage = 1; // 篩選時回到第一頁
             processAndRenderData(); // <--- 必須呼叫
+            // 按「全部製程」：先用現有資料立即顯示首頁，再背景向後端重抓（fetchAll 一次涵蓋所有篩選結果）
+            // 抓回後 fetchDataAndFilter 會重繪目前頁；輸入中／更新中時它自己會略過，不影響操作。
+            if (val === '' && !window._ptiAllRefreshing) {
+                window._ptiAllRefreshing = true;
+                try { fetchDataAndFilter(); } catch (e) { console.warn('全部製程背景更新失敗', e); }
+                setTimeout(function () { window._ptiAllRefreshing = false; }, 3000); // 3 秒內重複點擊不重複請求
+            }
         };
 
         // ── PTI 篩選按鈕動態渲染 ──
@@ -4645,6 +4711,9 @@ echo "</script>\n";
             if (document.getElementById("status-filter")) {
                 document.getElementById("status-filter").value = "";
             }
+            ['gear-mod-filter', 'gear-pa-filter', 'gear-helix-filter'].forEach(function (gid) { var ge = document.getElementById(gid); if (ge) ge.value = ""; });
+            if (window.gearFilterRefresh) window.gearFilterRefresh();
+            ['proc-reach-mode', 'proc-reach-no'].forEach(function (pid) { var pe = document.getElementById(pid); if (pe) pe.value = ""; });
             document.getElementById("global-search").value = "";
             ptiSearch = ""; // 清空全域變數
             currentBomFilter = "all"; // 清空全域變數
@@ -5055,6 +5124,10 @@ echo "</script>\n";
                         }
                         if (response.transfer_price_map) window.transferPriceMap = response.transfer_price_map;
                         if (response.sim_map && typeof response.sim_map === 'object') window.simMap = response.sim_map;   // 類似料號（整批取代，fetchAll 回的是全部）
+                        setTimeout(function () { if (window.procReachRefresh) window.procReachRefresh(); }, 0);   // bomPSList 更新後重建製程選項
+                        if (Array.isArray(response.gear_missing)) { var _gm = {}; response.gear_missing.forEach(function (x) { _gm[String(x)] = 1; }); window.gearMissing = _gm; }
+                        if (response.weight_map && typeof response.weight_map === 'object') window.weightMap = response.weight_map;   // 料號重量（整批取代）
+                        if (response.gear_map && typeof response.gear_map === 'object') { window.gearMap = response.gear_map; if (typeof gearFilterRefresh === 'function') gearFilterRefresh(); }   // 齒輪規格（整批取代）
                         if (response.transfer_history_map) window.transferHistoryMap = response.transfer_history_map;
                         if (response.ing_active_map) window.ingActiveMap = response.ing_active_map;
                         else window.ingActiveMap = buildIngActiveMap(newBomPSList);
@@ -5659,6 +5732,35 @@ echo "</script>\n";
                 tdDid.appendChild(bindIconSpan);
             }
 
+            // --- 前往料號主檔編輯（齒輪圖示）：已綁主檔且進得了主檔頁、有編輯料號權限者才顯示，其餘人完全看不到 ---
+            if (window.canMdEditPart && _hasDsettingBound) {
+                var mdLink = document.createElement('a');
+                mdLink.href = '../../views/pages/master_data_management.php?open_part=' + encodeURIComponent(row.d_setting_id) + '&part_search=' + encodeURIComponent(row.d_display || row.d_id || '');
+                mdLink.target = '_blank';
+                mdLink.rel = 'noopener';
+                mdLink.className = 'btn btn-xs';
+                mdLink.style.cssText = 'margin-left:4px;padding:0 4px;font-size:10px;line-height:16px;background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;';
+                mdLink.title = '前往料號主檔編輯';
+                mdLink.innerHTML = '<i class="fa fa-cog"></i>';
+                mdLink.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                tdDid.appendChild(mdLink);
+            }
+            // --- 料號重量（kg）按鈕式標示：有重量的料號才顯示，放在齒輪圖示右側；點擊只複製數字不跳頁 ---
+            try {
+                var _wKg = (window.weightMap || {})[String(row.d_setting_id || '')];
+                if (_wKg && parseFloat(_wKg) > 0) {
+                    var _wTxt = String(parseFloat(parseFloat(_wKg).toFixed(5)));
+                    var wBtn = document.createElement('button');
+                    wBtn.type = 'button';
+                    wBtn.className = 'btn btn-xs';
+                    wBtn.style.cssText = 'margin-left:4px;padding:0 5px;font-size:10px;line-height:16px;background:#FFF3DF;border:1px solid #C77C1A;color:#8a4b00;font-weight:600;';
+                    wBtn.title = '料號重量 ' + _wTxt + ' kg（點擊複製數字）';
+                    wBtn.textContent = _wTxt + 'kg';
+                    wBtn.addEventListener('click', function (ev) { ev.stopPropagation(); try { navigator.clipboard.writeText(_wTxt); } catch (e) {} });
+                    tdDid.appendChild(wBtn);
+                }
+            } catch (_wErr) {}
+
             // --- 快速綁定料號按鈕：已有綁定料號(d_setting_id有值)時不顯示 ---
             // _hasDsettingBound 已於上方宣告
             if (window.userStatus == 1 && window.displayPermissionCode !== 'D+R' && !_hasDsettingBound) {
@@ -5676,6 +5778,20 @@ echo "</script>\n";
                 })(row);
                 tdDid.appendChild(quickBindBtn);
             }
+            // --- 齒輪規格（與訂單追蹤料號下方同一份顯示字串；放在圖示列之後＝料號下方）---
+            try {
+                var _gE = (window.gearMap || {})[String(row.d_setting_id || '')];
+                if (_gE && _gE.s) {
+                    var gearDiv = document.createElement('div');
+                    gearDiv.style.cssText = 'overflow:hidden;max-width:100%;margin-top:1px;line-height:1.05;';
+                    gearDiv.title = _gE.s;
+                    var gearSp = document.createElement('span');
+                    gearSp.style.cssText = 'display:block;white-space:pre-line;font-size:11px;line-height:1.05;color:#888;font-family:Consolas,monospace;letter-spacing:.5px;';
+                    gearSp.textContent = _gE.s;
+                    gearDiv.appendChild(gearSp);
+                    tdDid.appendChild(gearDiv);
+                }
+            } catch (_gErr) {}
             tr.appendChild(tdDid); // <-- 將包含按鈕和連結的 td 加入 tr
 
             // --- 新增：有新製程報工 提示 ---
@@ -6626,7 +6742,7 @@ echo "</script>\n";
                 let dateDisplay = (dateObj.getFullYear() === now.getFullYear())
                     ? (dateObj.getMonth() + 1).toString().padStart(2, '0') + '.' + dateObj.getDate().toString().padStart(2, '0')
                     : row.pm_latest_date.substring(0, 10).replace(/-/g, '/');
-                const finishedIconHtml = row.pm_is_all_finished ? `<i class="fa fa-check-circle" style="color:#27ae60; margin-left:2px;" title="所有製程已完工"></i>` : '';
+                const finishedIconHtml = row.pm_is_all_finished ? `<i class="fa fa-check-circle" style="color:#27ae60; margin-left:2px;" title="所有製程已完工"></i>` : (row.latest_report_finished ? `<i class="fa fa-check-circle" style="color:#27ae60; margin-left:2px;" title="這道製程已完工（本站完工）"></i>` : '');
                 dateDisplayHtml = `<span style="color: #337ab7; font-weight: bold; font-size: 13px;">${dateDisplay}${finishedIconHtml}</span>`;
             } else if (row.pm_schedule_order) {
                 dateDisplayHtml = `<span style="color: #999; font-size: 13px;"><i class="fa fa-sort-numeric-asc"></i> 順位${row.pm_schedule_order}</span>`;
@@ -6638,6 +6754,15 @@ echo "</script>\n";
             const reportIconBtn = hasReportData ? `<button type="button" class="btn btn-xs btn-default" style="margin-left:2px; padding:0 3px;" title="查看所有報工紀錄" onclick="openAllReportsModal('${escapeHtml(row.bom)}')"><i class="fa fa-file-text-o"></i></button>` : '';
             line1.innerHTML = buttonsHTML + processLabel + dateDisplayHtml + qtyLabel + reportIconBtn;
             tdCombined.appendChild(line1);
+
+            // 加工面／使用機台（最近一次報工那道製程；兩面加工顯示 A+B面，數量已是同一批件只算一次）
+            if ((row.latest_report_faces && String(row.latest_report_faces).trim() !== '') || (row.latest_report_machines && String(row.latest_report_machines).trim() !== '')) {
+                let faceLine = document.createElement('div');
+                faceLine.style.cssText = 'font-size:12px; color:#6B4423; margin-top:2px; line-height:1.3;';
+                faceLine.innerHTML = (row.latest_report_faces ? `<span class="label" style="background:#8a4f12;color:#fff;font-size:11px;margin-right:4px;" title="加工面">${escapeHtml(row.latest_report_faces)}面</span>` : '') +
+                    (row.latest_report_machines ? `<span title="使用機台"><i class="fa fa-server" style="color:#b9895b;"></i> ${escapeHtml(row.latest_report_machines)}</span>` : '');
+                tdCombined.appendChild(faceLine);
+            }
 
             // 第二行：報工備註
             if (row.latest_report_remark && String(row.latest_report_remark).trim() !== "") {
@@ -7320,6 +7445,12 @@ echo "</script>\n";
         } catch (_tagErr) { console.warn('[BOM篩選標示] 更新選項失敗，已略過：', _tagErr); }
     }
     // 批次檢視右側的「BOM篩選標示」下拉選好後呼叫（currentPage 在本區塊內，外部檔案碰不到）
+    // 批次檢視右側「未設定齒輪規格」鈕（只看工件種類G且沒有齒輪規格的料號）
+    window.gearMissingToggle = function () {
+        window.gearMissingFilter = !window.gearMissingFilter;
+        currentPage = 1;
+        processAndRenderData();
+    };
     window.bomTagFilterApply = function (v) {
         window.bomTagFilter = String(v || '');
         currentPage = 1;
@@ -8727,6 +8858,99 @@ echo "</script>\n";
             + ' <button type="button" class="btn btn-xs btn-default" style="margin-left:8px;" onclick="simFilterClear()"><i class="fa fa-times"></i> 取消類似料號篩選</button>';
     }
 
+    // ── 齒輪篩選（模數／壓力角／螺旋角，2026-11-09）：選項取自目前載入的 gearMap，重整後保留原選取 ──
+    function gearFilterRefresh() {
+        // 階段式：每個下拉的選項，只列「符合另外兩個已選條件」的料號所擁有的值（例：先選模數，壓力角／螺旋角就只剩該模數底下有的）
+        var map = window.gearMap || {};
+        var mv = (document.getElementById('gear-mod-filter') || {}).value || '';
+        var pv = (document.getElementById('gear-pa-filter') || {}).value || '';
+        var hv = (document.getElementById('gear-helix-filter') || {}).value || '';
+        var mods = {}, pas = {}, hel = {};
+        Object.keys(map).forEach(function (k) {
+            var e = map[k], okM = !mv || (e.m || []).indexOf(mv) >= 0, okP = !pv || (e.pa || []).indexOf(pv) >= 0, okH = hv === '' || String(e.h ? 1 : 0) === hv;
+            if (okP && okH) (e.m || []).forEach(function (x) { mods[x] = 1; });
+            if (okM && okH) (e.pa || []).forEach(function (x) { pas[x] = 1; });
+            if (okM && okP && (e.m || []).length) hel[e.h ? 1 : 0] = 1;
+        });
+        var hs = document.getElementById('gear-helix-filter');
+        if (hs) {
+            hs.innerHTML = '<option value="">--螺旋角--</option>' + (hel[1] ? '<option value="1">有螺旋角</option>' : '') + (hel[0] ? '<option value="0">無螺旋角</option>' : '');
+            hs.value = (hv !== '' && hel[hv]) ? hv : '';
+        }
+        var num = function (s) { var n = parseFloat(String(s).replace(/[^0-9.]/g, '')); return isNaN(n) ? 1e9 : n; };
+        var fill = function (id, vals, label) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            var cur = el.value;
+            var keys = Object.keys(vals).sort(function (a, b) { return num(a) - num(b) || (a < b ? -1 : 1); });
+            el.innerHTML = '<option value="">' + label + '</option>' + keys.map(function (v) { return '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>'; }).join('');
+            if (cur && vals[cur]) el.value = cur;
+        };
+        fill('gear-mod-filter', mods, '--模數--');
+        fill('gear-pa-filter', pas, '--壓力角--');
+    }
+    window.gearFilterRefresh = gearFilterRefresh;
+    // ── 製程進度篩選（2026-11-09）：已經過某製程（該製程已移轉 E）／尚未到某製程（該製程狀態 N＝尚未開始），可疊加在其他篩選上 ──
+    function procReachIndex() {
+        var list = window.bomPSList || [];
+        if (window.__prIdxRef === list && window.__prIdxLen === list.length && window.__prIdx) return window.__prIdx;
+        var idx = {}, names = {};
+        list.forEach(function (p) {
+            if (!p || !p.bom || !p.process_no) return;
+            if (parseInt(p.is_consumed || 0, 10) === 1) return;
+            var b = String(p.bom).trim(), pn = String(p.process_no), st = String(p.processing_state || '').trim();
+            var o = (idx[b] = idx[b] || {});
+            var s = (o[pn] = o[pn] || { E: 0, N: 0, other: 0 });
+            if (st === 'E') s.E = 1; else if (st === 'N') s.N = 1; else s.other = 1;
+            if (!names[pn]) names[pn] = p.ProcessName || '';
+        });
+        window.__prIdxRef = list; window.__prIdxLen = list.length; window.__prIdx = idx; window.__prNames = names;
+        return idx;
+    }
+    function procReachRefresh() {
+        var el = document.getElementById('proc-reach-no');
+        if (!el) return;
+        procReachIndex();
+        var names = window.__prNames || {}, cur = el.value;
+        var keys = Object.keys(names).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0) || (a < b ? -1 : 1); });
+        el.innerHTML = '<option value="">--選擇製程--</option>' + keys.map(function (k) { return '<option value="' + escapeHtml(k) + '">' + escapeHtml(k + ' ' + names[k]) + '</option>'; }).join('');
+        if (cur && names[cur]) el.value = cur;
+    }
+    window.procReachRefresh = procReachRefresh;
+    function procReachPass(row) {
+        var m = (document.getElementById('proc-reach-mode') || {}).value || '', pn = (document.getElementById('proc-reach-no') || {}).value || '';
+        if (!m || !pn) return true;
+        var s = (procReachIndex()[String(row.bom || '').trim()] || {})[pn];
+        if (!s) return false;                                   // 這張 BOM 沒排這道製程
+        if (m === 'passed') return !!s.E && !s.N && !s.other;   // 該製程所有批次都已移轉
+        return !!s.N && !s.E && !s.other;                       // 該製程還沒開始
+    }
+    function gearFilterPass(row) {
+        var m = document.getElementById('gear-mod-filter'), p = document.getElementById('gear-pa-filter'), h = document.getElementById('gear-helix-filter');
+        var mv = m ? m.value : '', pv = p ? p.value : '', hv = h ? h.value : '';
+        if (!mv && !pv && hv === '') return true;
+        var e = (window.gearMap || {})[String(row.d_setting_id || '')];
+        if (!e) return false;   // 查無齒輪規格的料號，只要有套用任何齒輪篩選就不列出
+        if (mv && (e.m || []).indexOf(mv) < 0) return false;
+        if (pv && (e.pa || []).indexOf(pv) < 0) return false;
+        if (hv !== '' && String(e.h ? 1 : 0) !== hv) return false;
+        return true;
+    }
+    (function () {
+        var init = function () {
+            var go = function () { gearFilterRefresh(); currentPage = 1; processAndRenderData(); };
+            ['gear-mod-filter', 'gear-pa-filter', 'gear-helix-filter'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('change', go);
+            });
+            gearFilterRefresh();
+            var goP = function () { currentPage = 1; processAndRenderData(); };
+            ['proc-reach-mode', 'proc-reach-no'].forEach(function (id) { var el = document.getElementById(id); if (el) el.addEventListener('change', goP); });
+            procReachRefresh();
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+    })();
+
     function filterData(data) {
         var filters = getFilters();
         if (window.simFilter && window.simFilter.ids) {
@@ -8743,6 +8967,9 @@ echo "</script>\n";
             let show = true; // 預設顯示
             // BOM篩選標示（批次檢視右側下拉）：沒選＝完全不影響原有篩選
             if (window.bomTagFilter && String(row.bom_filter_tag || '') !== window.bomTagFilter) return false;
+            if (window.gearMissingFilter && !(window.gearMissing || {})[String(row.d_setting_id || '')]) return false;   // 未設定齒輪規格（工件種類G）
+            if (!procReachPass(row)) return false;   // 製程進度（已經過／尚未到某製程）
+            if (!gearFilterPass(row)) return false;   // 齒輪：模數／壓力角／螺旋角（沒選＝完全不影響）
 
             // --- Status Filter (is_stock, no_order_data, unselected_order_in_dropdown, regular processing_state) ---
             // "no_vendor" and "no_client_name" are handled by their respective filters below.
@@ -15221,6 +15448,23 @@ echo "</script>\n";
         modal.appendChild(footer);
         document.body.appendChild(modal);
 
+        // Enter 自動跳下一個輸入框；最後一個輸入框按 Enter 跳到「確認新增」（再按 Enter 即新增）
+        (function() {
+            var order = ['new-bom-sn', 'new-process-no', 'new-process-name-hint'];
+            form.addEventListener('keydown', function(e) {
+                if (e.key !== 'Enter' || e.isComposing) return;
+                var i = order.indexOf(e.target.id);
+                if (i < 0) return;
+                e.preventDefault();
+                if (i < order.length - 1) {
+                    var nx = document.getElementById(order[i + 1]);
+                    if (nx) { nx.focus(); if (nx.select) nx.select(); }
+                } else {
+                    confirmButton.focus();
+                }
+            });
+        })();
+
         // Populate datalist and handle selection for process name hint
         const processNameHintInput = document.getElementById('new-process-name-hint');
         const processNoInput = document.getElementById('new-process-no');
@@ -16823,7 +17067,7 @@ echo "</script>\n";
                     return;
                 }
 
-                let html = '<table class="table table-bordered table-striped table-condensed" style="font-size:12px;"><thead><tr><th>日期</th><th>製程</th><th>人員</th><th>良品/NG</th><th>備註</th></tr></thead><tbody>';
+                let html = '<table class="table table-bordered table-striped table-condensed" style="font-size:12px;"><thead><tr><th>日期</th><th>製程</th><th>加工面</th><th>機台</th><th>人員</th><th>良品/NG</th><th>備註</th></tr></thead><tbody>';
                 
                 // Grouping Logic for Finished Processes
                 const finishedFids = new Set();
@@ -16848,11 +17092,19 @@ echo "</script>\n";
                             });
 
                             const processName = `${r.process_no} ${r.ProcessName}`;
-                            const dateStr = r.report_date.substring(5, 10).replace('-', '/'); // MM/DD
+                            // 日期欄：這道製程（這一面）第一筆加工～最後一筆加工的日期時間
+                            const _fdt = (t) => { t = String(t || '').trim(); if (!t || t.substring(0, 4) < '2000') return ''; return t.length > 10 ? t.substring(5, 16).replace('-', '/') : t.substring(5, 10).replace('-', '/'); };
+                            const _starts = processReports.map(x => x.setup_start_time || x.production_start_time || x.report_date).filter(Boolean).sort();
+                            const _ends = processReports.map(x => x.production_end_time || x.setup_end_time || x.production_start_time || x.setup_start_time || x.report_date).filter(Boolean).sort();
+                            const _from = _fdt(_starts[0]), _to = _fdt(_ends[_ends.length - 1]);
+                            const dateStr = (_from && _to && _from !== _to) ? `${_from}<br>~ ${_to}` : (_from || _to || r.report_date.substring(5, 10).replace('-', '/'));
+                            const faceSet = [...new Set(processReports.map(x => x.process_face).filter(Boolean))].sort();
                             
                             html += `<tr style="background-color:#dff0d8; cursor:pointer;" title="點擊查看詳細紀錄" onclick="showReportDetails('${fid}')">
                                 <td>${dateStr} <span class="label label-success">完工</span></td>
                                 <td>${escapeHtml(processName)}</td>
+                                <td>${faceSet.map(f => `<span class="label" style="background:#8a4f12;color:#fff;font-size:12px;padding:3px 7px;">${escapeHtml(f)}面</span>`).join(' ')}</td>
+                                <td>${escapeHtml([...new Set(processReports.map(x => x.machine_name).filter(Boolean))].join('、'))}</td>
                                 <td>(匯總)</td>
                                 <td>${totalOk} / <span style="${totalNg>0?'color:red':''}">${totalNg}</span></td>
                                 <td><i class="fa fa-plus-circle"></i> 點擊查看詳情</td>
@@ -16863,7 +17115,9 @@ echo "</script>\n";
                     } else {
                         // 未完工製程，顯示每一筆
                         const processName = `${r.process_no} ${r.ProcessName}`;
-                        const dateStr = r.report_date.substring(5, 16).replace('-', '/');
+                        const _fdt2 = (t) => { t = String(t || '').trim(); if (!t || t.substring(0, 4) < '2000') return ''; return t.length > 10 ? t.substring(5, 16).replace('-', '/') : t.substring(5, 10).replace('-', '/'); };
+                        const _f2 = _fdt2(r.setup_start_time || r.production_start_time || r.report_date), _t2 = _fdt2(r.production_end_time || r.setup_end_time || r.production_start_time);
+                        const dateStr = (_f2 && _t2 && _f2 !== _t2) ? `${_f2}<br>~ ${_t2}` : (_f2 || r.report_date.substring(5, 16).replace('-', '/'));
                         const operator = r.production_user_id ? r.operator : (r.setup_operator + '(架)');
                         const ok = parseFloat(r.produced_qty) || 0;
                         const ng = parseFloat(r.ng_qty) || 0;
@@ -16871,6 +17125,8 @@ echo "</script>\n";
                         html += `<tr>
                             <td>${dateStr}</td>
                             <td>${escapeHtml(processName)}</td>
+                            <td>${r.process_face ? `<span class="label" style="background:#8a4f12;color:#fff;font-size:12px;padding:3px 7px;">${escapeHtml(r.process_face)}面</span>` : ''}</td>
+                            <td>${escapeHtml(r.machine_name || '')}</td>
                             <td>${escapeHtml(operator)}</td>
                             <td>${ok} / <span style="${ng>0?'color:red':''}">${ng}</span></td>
                             <td>${escapeHtml(r.remark)}</td>
@@ -16895,13 +17151,13 @@ echo "</script>\n";
         
         $.post(window.location.pathname.split('/').pop(), { action: 'get_report_details_for_popover', bom_ing_fids: fid }, function(res) {
             if (res.success && res.data.length > 0) {
-                let html = '<table class="table table-bordered table-condensed"><thead><tr><th>時間</th><th>人員</th><th>良/NG</th><th>備註</th></tr></thead><tbody>';
+                let html = '<table class="table table-bordered table-condensed"><thead><tr><th>時間</th><th>加工面</th><th>機台</th><th>人員</th><th>良/NG</th><th>備註</th></tr></thead><tbody>';
                 res.data.forEach(r => {
                     const time = r.production_start_time || r.setup_start_time || r.report_date;
                     const op = r.operator || r.setup_operator;
                     const ok = parseFloat(r.produced_qty) || 0;
                     const ng = parseFloat(r.ng_qty) || 0;
-                    html += `<tr><td>${time}</td><td>${op}</td><td>${ok}/${ng}</td><td>${escapeHtml(r.remark)}</td></tr>`;
+                    html += `<tr><td>${time}</td><td>${escapeHtml(r.process_face || '')}</td><td>${escapeHtml(r.machine_name || '')}</td><td>${op}</td><td>${ok}/${ng}</td><td>${escapeHtml(r.remark)}</td></tr>`;
                 });
                 html += '</tbody></table>';
                 
@@ -17153,7 +17409,7 @@ echo "</script>\n";
                                             <button type="button" id="btn-next-vendor" title="下一個廠商" style="padding: 0 6px; height: 26px; font-size: 10px;">&gt;</button>
                                             <datalist id="vendorList"></datalist>
                                             <input type="text" id="order-filter" placeholder="搜索 發單 (例：50、>50、<50)">
-                                            <input type="text" id="date-filter"
+                                            <input type="text" id="date-filter" style="display:none;"
                                                 placeholder="搜索 報工日 (例：2/8、>2/8、<2024/12/30)">
                                             <select id="status-filter" class="form-control input-sm" style="display:inline-block; width:auto;">
                                                 <option value="">--全部狀態--</option>
@@ -17167,7 +17423,7 @@ echo "</script>\n";
                                                 <option value="has_similar">有類似料號</option> <!-- 類似料號（2026-10-16）：不論類似料號本身有沒有在加工中 -->
                                                 <option value="has_report_data">有報工資料</option> <!-- 新增：有報工資料 -->
                                                 <option value="has_new_process_report">有新製程報工</option>
-                                                <option value="qc_check_any">QC檢驗</option>
+                                                <option value="qc_check_any">不限日期QC檢驗</option>
                                                 <option value="qc_date_pick">指定日期QC檢驗…</option>
                                                 <option value="---sep_process_remark---" disabled>&nbsp;</option> <!-- 新增分隔線 -->
                                                 <option value="is_stock">備庫</option>
@@ -17178,6 +17434,19 @@ echo "</script>\n";
                                                 <option value="no_client_name">無客戶名稱</option>
                                                 <option value="no_vendor">無廠商</option>
                                             </select>
+                                            <select id="gear-mod-filter" class="form-control input-sm" style="display:inline-block; width:auto;" title="依齒輪模數篩選"><option value="">--模數--</option></select>
+                                            <select id="gear-pa-filter" class="form-control input-sm" style="display:inline-block; width:auto;" title="依壓力角篩選"><option value="">--壓力角--</option></select>
+                                            <select id="gear-helix-filter" class="form-control input-sm" style="display:inline-block; width:auto;" title="是否有螺旋角">
+                                                <option value="">--螺旋角--</option>
+                                                <option value="1">有螺旋角</option>
+                                                <option value="0">無螺旋角</option>
+                                            </select>
+                                            <select id="proc-reach-mode" class="form-control input-sm" style="display:inline-block; width:auto;" title="依製程進度篩選：已經過某製程（已移轉）／尚未到某製程（尚未開始）。需同時選擇製程">
+                                                <option value="">--製程進度--</option>
+                                                <option value="passed">已經過</option>
+                                                <option value="notyet">尚未到</option>
+                                            </select>
+                                            <select id="proc-reach-no" class="form-control input-sm" style="display:inline-block; width:auto;" title="選擇製程（只列目前清單的 BOM 有排到的製程）"><option value="">--選擇製程--</option></select>
                                             <input type="date" id="qc-date-filter" style="display:none;margin-left:4px;vertical-align:middle;" title="指定QC檢驗日期">
                                             <input type="text" id="global-search" placeholder="搜索所有欄位">
 
