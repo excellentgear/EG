@@ -304,6 +304,8 @@
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
         var isDst = {};
         tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst) isDst[fl.dst] = true; if (fl && fl.alloc) fl.alloc.forEach(function (a) { isDst[a.batch_id] = true; }); });
+        var bpar = DATA.bparent || {};
+        Object.keys(bpar).forEach(function (k) { if (sends[k] && sends[bpar[k]]) isDst[k] = true; }); // 手動接在前一關批次底下的，不再當起點
         bsAll.sort(function (x, y) { return (x.sn - y.sn) || (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id); });
         var seen = {};
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
@@ -313,6 +315,12 @@
                 + rows.filter(function (r) { return r.kind === 'return' && r.batch_id === b.id; }).map(function (r) { return rowHtml(r); }).join('') + '</div>';
             var outs = tfs.filter(function (t) { return flow[t.id] && flow[t.id].src === b.id; });
             var kids = outs.map(function (t) { return '<div class="tk">' + tnode(t) + '</div>'; }).join('');
+            // 沒有憑單可掛、由管理員直接拖到這一批底下的下一關發單批次
+            Object.keys(bpar).forEach(function (k) {
+                if (String(bpar[k]) !== String(b.id) || !sends[k]) return;
+                var cb = sends[k];
+                kids += '<div class="tk"><div style="font-size:11px;color:#C0561F;text-align:center;margin-bottom:2px;">手動接上（可拖到上方空白處解除）</div>' + (seen[cb.id] ? '<div class="fl-in tcard" data-merge="' + cb.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div>' : bnode(cb)) + '</div>';
+            });
             return '<div class="tn">' + h + (kids ? '<div class="tk-col">' + kids + '</div>' : '') + '</div>';
         }
         function tnode(t) {
@@ -452,7 +460,17 @@
             box.ondragleave = function () { box.classList.remove('over'); };
             box.ondrop = function (e) {
                 e.preventDefault(); e.stopPropagation(); box.classList.remove('over');
-                var p = (e.dataTransfer.getData('text/plain') || '').split('|'); if (p.length < 2 || p[0].indexOf('B:') === 0) return;
+                var p = (e.dataTransfer.getData('text/plain') || '').split('|');
+                if (p.length >= 2 && p[0].indexOf('B:') === 0) {
+                    // 發單批次拖到另一個發單批次上＝接在它底下（上一關）；拖到右邊「找不到來源」區＝解除
+                    var cb = parseInt(p[0].slice(2), 10), tb = parseInt(box.getAttribute('data-batch'), 10), tsn2 = parseInt(box.getAttribute('data-sn'), 10);
+                    if (!tb && box.classList.contains('fl-un')) { post({ action: 'baf_bparent_set', batch_id: cb, parent_id: 0 }, function (r) { if (r.success) load('已解除', true); else msg(r.message, false); }); return; }
+                    if (!(tb > 0) || tb === cb) return;
+                    if (!(tsn2 < parseInt(p[1], 10))) { msg('只能把下一關的發單批次拖到前一關的批次上', false); return; }
+                    post({ action: 'baf_bparent_set', batch_id: cb, parent_id: tb }, function (r) { if (r.success) load('已接上', true); else msg(r.message, false); });
+                    return;
+                }
+                if (p.length < 2) return;
                 var batch = parseInt(box.getAttribute('data-batch'), 10), sameStation = box.getAttribute('data-sn') === p[1];
                 if (batch === 0) setFlow(p[0], 'src', 0);
                 else if (sameStation) setFlow(p[0], 'src', batch);

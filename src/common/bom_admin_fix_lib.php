@@ -101,7 +101,7 @@ if (!function_exists('baf_list')) {
         $ord = fn($r) => (float)($r['sn'] ?? 0) + (in_array($r['kind'], ['send', 'ing'], true) ? 0 : 0.5);
         usort($rows, fn($a, $b) => strcmp(substr($a['ts'], 0, 10), substr($b['ts'], 0, 10)) ?: ($ord($a) <=> $ord($b)) ?: strcmp($a['ts'], $b['ts']));
         $chk = baf_check($db, $bom);
-        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows), 'sn_map' => baf_sn_map($db, $bom, $labOf, $alias)];
+        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows), 'bparent' => baf_bparent_get($db, $bom), 'sn_map' => baf_sn_map($db, $bom, $labOf, $alias)];
     }
 }
 
@@ -325,6 +325,36 @@ if (!function_exists('baf_flow')) {
             return [$best . '|' . $t['to_no'], $pool];
         });
         return $out;
+    }
+
+    /** 發單批次直接接在另一個（前一關）發單批次底下的手動連結：[batch_id => parent_batch_id]。沒有憑單可掛時用。 */
+    function baf_bparent_get(PDO $db, string $bom): array {
+        try {
+            $q = $db->prepare("SELECT batch_id, parent_batch_id FROM bom_flow_bparent WHERE bom=?");
+            $q->execute([$bom]);
+            $m = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['batch_id']] = (int)$r['parent_batch_id'];
+            return $m;
+        } catch (Throwable $e) { return []; }
+    }
+    /** 設定發單批次的上一關批次（parentId＝0 清除）。上一關必須在更前面的關卡。 */
+    function baf_bparent_set(PDO $db, string $bom, int $batchId, int $parentId, int $uid): void {
+        $am = baf_alias_map($db, $bom);
+        $sn = function (int $bid) use ($db, $bom, $am) {
+            $q = $db->prepare("SELECT bi.bom_sn FROM bom_ing_outsource_batch b JOIN bom_ing bi ON bi.bom_ing_fid=b.bom_ing_fid WHERE b.batch_id=? AND bi.bom=?");
+            $q->execute([$bid, $bom]);
+            $v = $q->fetchColumn();
+            if ($v === false) throw new Exception('指定的發單批次不屬於這個 BOM');
+            return $am[(int)$v] ?? (int)$v;
+        };
+        $csn = $sn($batchId);
+        if ($parentId > 0 && $sn($parentId) >= $csn) throw new Exception('上一關的批次必須在更前面的關卡');
+        $db->prepare("CREATE TABLE IF NOT EXISTS bom_flow_bparent (id INT AUTO_INCREMENT PRIMARY KEY, bom VARCHAR(30) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL, batch_id INT NOT NULL, parent_batch_id INT NOT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_bp (bom, batch_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
+        if ($parentId > 0) $db->prepare("INSERT INTO bom_flow_bparent (bom, batch_id, parent_batch_id, created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE parent_batch_id=VALUES(parent_batch_id), created_by=VALUES(created_by)")->execute([$bom, $batchId, $parentId, $uid]);
+        else $db->prepare("DELETE FROM bom_flow_bparent WHERE bom=? AND batch_id=?")->execute([$bom, $batchId]);
+        $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
+        $f->execute([$bom]);
+        if ($fid = (int)$f->fetchColumn()) ber_log($db, $fid, 'flow_bparent', '管理員設定發單批次 ' . $batchId . ' 的上一關批次：' . ($parentId > 0 ? $parentId : '清除'), $uid);
     }
 
     /** 管理員拆分的分配：[transfer_id => [batch_id => qty]]。表不存在視為沒有。 */
