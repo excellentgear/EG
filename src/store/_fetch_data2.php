@@ -851,7 +851,9 @@ $ing_active_map = [];
 foreach ($raw_ps_rows as $_iam_item) {
     $_iam_state = $_iam_item['processing_state'] ?? '';
     $_iam_has_label = !empty($_iam_item['batch_label']);
-    if (!in_array($_iam_state, ['Q', 'P', 'ing', 'E']) && !($_iam_state === 'N' && $_iam_has_label)) continue;
+    // 沒發包（待發包）但這一關已有移轉憑單＝東西已加工完成回廠：當作已移轉，發單日欄才不會停在上一關的 QC待驗
+    $_iam_xo = ($_iam_state === 'N' && !$_iam_has_label && !empty($_iam_item['xfer_date']) && empty($_iam_item['outsource_date']));
+    if (!in_array($_iam_state, ['Q', 'P', 'ing', 'E']) && !($_iam_state === 'N' && $_iam_has_label) && !$_iam_xo) continue;
     if (!empty($_iam_item['is_consumed'])) continue;
     $_iam_bom = $_iam_item['bom'];
     $_iam_fmt = function($v) { return (!empty($v) && $v !== '0000-00-00 00:00:00') ? date('Y/m/d', strtotime($v)) : null; };
@@ -863,8 +865,8 @@ foreach ($raw_ps_rows as $_iam_item) {
         'bom_ing_fid'      => $_iam_item['bom_ing_fid'],
         'process_no'       => $_iam_item['process_no'],
         'ProcessName'      => $_iam_item['ProcessName'] ?? '',
-        'processing_state' => $_iam_state,
-        'outsource_date'   => $_iam_fmt($_iam_item['outsource_date'] ?? null),
+        'processing_state' => $_iam_xo ? 'E' : $_iam_state,
+        'outsource_date'   => $_iam_xo ? $_iam_fmt($_iam_item['xfer_date']) : $_iam_fmt($_iam_item['outsource_date'] ?? null),
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）
