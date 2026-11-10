@@ -18,12 +18,14 @@
 //     系統提醒）與「PS」（只有純備註）兩張卡；三者的 SQL 片段全在這裡，頁面不要自己拼。
 
 require_once __DIR__ . '/eng_log_lib.php';
+require_once __DIR__ . '/design_tag_lib.php';
 
 if (!function_exists('oda_kinds')) {
 
 function oda_kinds(): array
 {
-    return ['customer' => '客戶', 'part' => '料號', 'cust_kw' => '客戶＋關鍵字', 'cust_part' => '客戶＋料號'];
+    return ['customer' => '客戶', 'part' => '料號', 'cust_kw' => '客戶＋關鍵字', 'cust_part' => '客戶＋料號', 'cust_prefix' => '客戶＋料號開頭',
+            'tag' => '設計提示標籤', 'cust_tag' => '客戶＋設計提示標籤'];
 }
 
 function oda_ensure_schema(PDO $db): void
@@ -61,6 +63,14 @@ function oda_ensure_schema(PDO $db): void
         at DATETIME NOT NULL,
         KEY idx_item (item_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='設計提醒 確認／取消確認紀錄'");
+    // 2026-11-10：新增 tag／cust_tag 兩種對象，規則記「料號設計提示標籤」design_tag.id
+    // （本機 MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加）
+    $hasTag = $db->query("SHOW COLUMNS FROM order_design_alert_rule LIKE 'tag_id'")->fetch();
+    if (!$hasTag) {
+        try { $db->exec("ALTER TABLE order_design_alert_rule ADD COLUMN tag_id INT NULL COMMENT 'design_tag.id（tag／cust_tag）' AFTER part_label"); }
+        catch (Throwable $e) { error_log('[design_alert] add tag_id failed: ' . $e->getMessage()); }
+    }
+    dt_ensure_schema($db);
 }
 
 /* ───────────────────────── 規則 CRUD ───────────────────────── */
@@ -87,8 +97,8 @@ function oda_rule_clean(PDO $db, array $in): array
     $kind = (string)($in['kind'] ?? '');
     if (!isset(oda_kinds()[$kind])) throw new InvalidArgumentException('請選擇提示對象類型');
     $r = ['kind' => $kind, 'customer_id' => null, 'customer_name' => null, 'part_d_id' => null, 'part_label' => null,
-          'keywords' => null, 'kw_mode' => 'any'];
-    if ($kind !== 'part') {
+          'keywords' => null, 'kw_mode' => 'any', 'tag_id' => null];
+    if ($kind !== 'part' && $kind !== 'tag') {
         $cid = trim((string)($in['customer_id'] ?? ''));
         if ($cid === '') throw new InvalidArgumentException('請選擇客戶（從客戶主檔挑選）');
         $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id=?");
@@ -111,9 +121,18 @@ function oda_rule_clean(PDO $db, array $in): array
             throw new InvalidArgumentException('這個料號不屬於所選的客戶，請確認客戶與料號');
         }
     }
-    if ($kind === 'cust_kw') {
+    if ($kind === 'tag' || $kind === 'cust_tag') {
+        $tid = (int)($in['tag_id'] ?? 0);
+        if ($tid <= 0) throw new InvalidArgumentException('請選擇設計提示標籤');
+        $st = $db->prepare("SELECT id, is_active FROM design_tag WHERE id=?");
+        $st->execute([$tid]);
+        $t = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$t) throw new InvalidArgumentException('查無這個設計提示標籤，請重新選擇');
+        $r['tag_id'] = (int)$t['id'];
+    }
+    if ($kind === 'cust_kw' || $kind === 'cust_prefix') {
         $kw = oda_parse_keywords($in['keywords'] ?? '');
-        if (!$kw) throw new InvalidArgumentException('請至少輸入一組關鍵字（多組用逗號分隔）');
+        if (!$kw) throw new InvalidArgumentException($kind === 'cust_prefix' ? '請至少輸入一組料號開頭（多組用逗號分隔）' : '請至少輸入一組關鍵字（多組用逗號分隔）');
         $r['keywords'] = json_encode($kw, JSON_UNESCAPED_UNICODE);
         $r['kw_mode'] = (($in['kw_mode'] ?? '') === 'all') ? 'all' : 'any';
     }
@@ -138,6 +157,7 @@ function oda_rule_save(PDO $db, int $id, array $in, int $uid, string $uname): in
                       keywords=?, kw_mode=?, content=?, updated_by=?, updated_by_name=?, updated_at=NOW() WHERE id=?")
            ->execute([$c['kind'], $c['customer_id'], $c['customer_name'], $c['part_d_id'], $c['part_label'],
                       $c['keywords'], $c['kw_mode'], $content, ($uid ?: null), $uname, $id]);
+        $db->prepare("UPDATE order_design_alert_rule SET tag_id=? WHERE id=?")->execute([$c['tag_id'], $id]);
         return $id;
     }
     $db->prepare("INSERT INTO order_design_alert_rule (kind, customer_id, customer_name, part_d_id, part_label, keywords, kw_mode,
@@ -145,6 +165,9 @@ function oda_rule_save(PDO $db, int $id, array $in, int $uid, string $uname): in
                   VALUES (?,?,?,?,?,?,?,?,1,?,?,NOW(),?,?,NOW())")
        ->execute([$c['kind'], $c['customer_id'], $c['customer_name'], $c['part_d_id'], $c['part_label'],
                   $c['keywords'], $c['kw_mode'], $content, ($uid ?: null), $uname, ($uid ?: null), $uname]);
+    $newId = (int)$db->lastInsertId();
+    if ($c['tag_id']) $db->prepare("UPDATE order_design_alert_rule SET tag_id=? WHERE id=?")->execute([$c['tag_id'], $newId]);
+    return $newId;
     return (int)$db->lastInsertId();
 }
 
@@ -288,9 +311,13 @@ function oda_rule_rows(PDO $db): array
                            FROM eng_log_item WHERE src_rule_id IS NOT NULL GROUP BY src_rule_id")->fetchAll(PDO::FETCH_ASSOC) as $c) {
         $cnt[(int)$c['rid']] = $c;
     }
+    $tagName = [];
+    foreach (dt_list($db, false) as $t) $tagName[$t['id']] = $t['name'];
     foreach ($rows as &$r) {
         $r['id'] = (int)$r['id'];
         $r['is_active'] = (int)$r['is_active'];
+        $r['tag_id'] = isset($r['tag_id']) ? (int)$r['tag_id'] : 0;
+        $r['tag_name'] = $r['tag_id'] ? ($tagName[$r['tag_id']] ?? '（標籤已刪除）') : '';
         $r['kind_label'] = oda_kinds()[$r['kind']] ?? $r['kind'];
         $r['keywords_arr'] = $r['keywords'] ? (json_decode((string)$r['keywords'], true) ?: []) : [];
         $r['text'] = oda_rule_text($db, $r);
@@ -349,9 +376,22 @@ function oda_sync(PDO $db, ?array $orderIds = null, ?int $onlyRule = null): int
     $partInfo = [];
     foreach (array_chunk(array_keys($pkSet), 400) as $chunk) {
         $ph = implode(',', array_fill(0, count($chunk), '?'));
-        $st = $db->prepare("SELECT d_id, Customer_Id, Spec_No FROM d_setting WHERE d_id IN ($ph)");
+        $st = $db->prepare("SELECT d_id, Customer_Id, Spec_No, D_Setting_Id FROM d_setting WHERE d_id IN ($ph)");
         $st->execute($chunk);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $d) $partInfo[(int)$d['d_id']] = $d;
+    }
+
+    // 設計提示標籤（tag／cust_tag 規則才需要）：料號 d_id => [tag_id=>true]
+    $partTags = [];
+    $needTag = false;
+    foreach ($rules as $r) if ($r['kind'] === 'tag' || $r['kind'] === 'cust_tag') { $needTag = true; break; }
+    if ($needTag && $pkSet) {
+        foreach (array_chunk(array_keys($pkSet), 400) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT d_id, tag_id FROM d_setting_design_tag WHERE d_id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $partTags[(int)$x['d_id']][(int)$x['tag_id']] = true;
+        }
     }
 
     // 已經產生過的 (規則,訂單)——含被作廢的，作廢過的不會被重新長出來
@@ -374,6 +414,8 @@ function oda_sync(PDO $db, ?array $orderIds = null, ?int $onlyRule = null): int
             if ($t !== '') $pk = (int)($textMap[$t . '|' . $cust] ?? ($cust === '' ? ($textMap[$t . '|'] ?? 0) : 0));
         }
         $spec = $pk > 0 ? (string)($partInfo[$pk]['Spec_No'] ?? '') : '';
+        $ptext = $pk > 0 ? trim((string)($partInfo[$pk]['D_Setting_Id'] ?? '')) : '';
+        if ($ptext === '') $ptext = trim((string)$o['d_id']);   // 沒綁主檔時用訂單上的料號文字
         if ($cust === '' && $pk > 0) $cust = trim((string)($partInfo[$pk]['Customer_Id'] ?? ''));
         foreach ($rules as $r) {
             if (isset($have[(int)$r['id'] . '|' . $oid])) continue;
@@ -384,6 +426,9 @@ function oda_sync(PDO $db, ?array $orderIds = null, ?int $onlyRule = null): int
             if ($k === 'customer') $ok = $custOk;
             elseif ($k === 'part') $ok = $partOk;
             elseif ($k === 'cust_part') $ok = $custOk && $partOk;
+            elseif ($k === 'tag') $ok = $pk > 0 && !empty($partTags[$pk][(int)($r['tag_id'] ?? 0)]);
+            elseif ($k === 'cust_tag') $ok = $custOk && $pk > 0 && !empty($partTags[$pk][(int)($r['tag_id'] ?? 0)]);
+            elseif ($k === 'cust_prefix') $ok = $custOk && $ptext !== '' && oda_prefix_match($ptext, (string)$r['keywords']);
             elseif ($k === 'cust_kw') $ok = $custOk && $spec !== '' && oda_spec_match($spec, (string)$r['keywords'], (string)$r['kw_mode']);
             if ($ok) $todo[] = [$r, $oid];
         }
@@ -419,6 +464,19 @@ function oda_sync(PDO $db, ?array $orderIds = null, ?int $onlyRule = null): int
         return 0;
     }
     return $made;
+}
+
+/** 料號文字是否以任一組開頭字串開頭（不分大小寫） */
+function oda_prefix_match(string $partText, string $keywordsJson): bool
+{
+    $kw = json_decode($keywordsJson, true);
+    if (!is_array($kw) || !$kw) return false;
+    $t = mb_strtolower(trim($partText), 'UTF-8');
+    foreach ($kw as $k) {
+        $k = mb_strtolower(trim((string)$k), 'UTF-8');
+        if ($k !== '' && mb_strpos($t, $k, 0, 'UTF-8') === 0) return true;
+    }
+    return false;
 }
 
 /** 規格（Spec_No）是否符合關鍵字：固定模糊比對、不分大小寫；any=任一組、all=全部 */
