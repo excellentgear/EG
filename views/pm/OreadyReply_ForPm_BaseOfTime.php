@@ -6283,6 +6283,14 @@ echo "</script>\n";
                         var _shownShort = false;
                         _gOrder.forEach(function (g) {
                             var G = _groups[g]; if (!G.has) return;
+                            // 前面的關卡貨還在廠商那邊沒回來（加工中／QC待驗／待移轉），後面關卡的缺口是因為貨還沒到，不顯示
+                            var _upOpen = _activeProcs.some(function (q) {
+                                if (ocGrp(q) >= g) return false;
+                                var mq = (window.obBatchMap || {})[String(q.bom_ing_fid)];
+                                if (mq && mq.batches && mq.batches.length) return (Number(mq.outside) || 0) > 1e-9 && !mq.xfer_all;
+                                return ['ing', 'Q', 'P'].indexOf(String(q.processing_state || '')) >= 0 && !ocXferDone(q, _activeProcs) && !ocQcMoot(q, _activeProcs);
+                            });
+                            if (_upOpen) return;
                             var sh = Math.round((_remainQty - G.send) * 1000) / 1000;
                             if (sh <= 1e-9) return;
                             _shortList.push({ proc: G.main, qty: sh, first: g === _firstG });
