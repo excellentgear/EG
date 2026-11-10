@@ -6983,7 +6983,10 @@ echo "</script>\n";
                             const currentBomSnArray = String(row.bom_sn || '').split(',');
                             const isCurrentProcess = currentBomSnArray.includes(String(processInfo.bom_sn));
 
-                            if (isCurrentProcess) {
+                            // 已移轉（含貨已由移轉憑單移走、QC待驗但後序關卡已發包）的關卡：不加底色、也不寫「已移轉」
+                            var _hlSt = String(processInfo.processing_state || '');
+                            var _hlE = _hlSt === 'E' || _hlSt === '1' || (_hlSt === 'Q' && ocQcMoot(processInfo, _activeProcs)) || ocXferDone(processInfo, _activeProcs);
+                            if (isCurrentProcess && !_hlE) {
                                 tdDynamicProcess.classList.add('highlight-process');
                             }
                             var _splitBatches = (processInfo.split_batches && processInfo.split_batches.length > 1)
@@ -7090,7 +7093,7 @@ echo "</script>\n";
                                     }
                                 }
 
-                                if (isCurrentProcess) {
+                                if (isCurrentProcess && !_hlE) {
                                     let datePrefix = '';
                                     var translatedState = translateProcessingState(_dynRawSt === 'E' && processInfo.processing_state === 'Q' ? 'E' : processInfo.processing_state); // 後序關卡已發包的QC待驗不再標QC待驗
                                     var stateColor = '#555';
