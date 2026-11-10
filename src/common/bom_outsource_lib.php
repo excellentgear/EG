@@ -375,13 +375,15 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                     $hasT = $db->prepare("SELECT COUNT(*) FROM bom_ing_transfer_log WHERE bom=?"); $hasT->execute([$bm]);
                     if (!(int)$hasT->fetchColumn()) continue;
                     $L = baf_list($db, $bm);
-                    $byB = [];
+                    $byB = []; $byA = [];
                     foreach (($L['rows'] ?? []) as $r) {
                         if ($r['kind'] !== 'transfer') continue;
                         $fl = $L['flow'][$r['id']] ?? null;
                         if (!$fl) continue;
-                        if (!empty($fl['alloc'])) continue; // 拆給多批的是接續發單，來源不變
-                        if (!empty($fl['src'])) $byB[(int)$fl['src']] = ($byB[(int)$fl['src']] ?? 0.0) + (float)$r['qty'];
+                        if (!empty($fl['src'])) {
+                            $byB[(int)$fl['src']] = ($byB[(int)$fl['src']] ?? 0.0) + (float)$r['qty'];
+                            if (!empty($fl['alloc'])) $byA[(int)$fl['src']] = ($byA[(int)$fl['src']] ?? 0.0) + (float)$r['qty']; // 拆給多批的憑單：超過來源批次數量的部分算同一關其他批次的回廠
+                        }
                     }
                     foreach ($me as $fid => $x) {
                         if ($x['bom'] !== $bm || !isset($out[$fid])) continue;
@@ -397,6 +399,19 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                             $sumRet += $b['ret'];
                         }
                         unset($b);
+                        // 拆分憑單的數量超過來源批次的發單數：多出來的部分是同一關其他還在外面的批次回廠
+                        $ov = 0.0;
+                        foreach ($o['batches'] as $b0) if (!empty($byA[$b0['id']])) $ov += max(0.0, (float)$byA[$b0['id']] - max(0, $b0['send'] - $b0['scrap'] - $b0['wd']));
+                        if ($ov > 1e-9) {
+                            foreach ($o['batches'] as &$b1) {
+                                if ($ov <= 1e-9) break;
+                                if ($b1['outside'] <= 1e-9) continue;
+                                $take = min($b1['outside'], $ov);
+                                $b1['ret'] += $take; $b1['outside'] -= $take; $ov -= $take; $b1['xfer'] = true; $anyX = true; $sumRet += $take;
+                                if ($b1['outside'] <= 1e-9) $b1['status'] = 'closed';
+                            }
+                            unset($b1);
+                        }
                         $o['ret'] = $sumRet; $o['outside'] = max(0, $o['send'] - $sumRet - $o['scrap'] - $o['wd']);
                         // 這一列的貨全部都有移轉憑單證明已移走（回廠數是由憑單推出來的）：前端不再標「加工中」
                         $o['xfer_all'] = !empty($anyX) && $o['send'] > 0 && $o['outside'] <= 1e-9;
