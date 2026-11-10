@@ -7337,6 +7337,24 @@ echo "</script>\n";
                                 }
                             }
 
+                            // ── 分批資訊（分批到、分批發包、分批回廠都算分批）：送出／回廠合計與總量，一眼看出這一關還差多少 ──
+                            if (!_splitBatches) {
+                                try {
+                                    var _pbm = (window.obBatchMap || {})[String(processInfo.bom_ing_fid)];
+                                    if (_pbm && _pbm.batches && _pbm.batches.length) {
+                                        var _pbSend = (Number(_pbm.send) || 0) - (Number(_pbm.wd) || 0), _pbRet = Number(_pbm.ret) || 0, _pbTot = Number(_pbm.total) || Number(processInfo.sqty) || 0;
+                                        var _pbLess = _pbTot > 0 && _pbSend < _pbTot - 1e-9;
+                                        var _pbEl = document.createElement('div');
+                                        _pbEl.className = 'oc-proc-batch';
+                                        _pbEl.style.cssText = 'margin-top:2px;font-size:10.5px;line-height:1.3;color:#6B4423;';
+                                        _pbEl.innerHTML = '<span style="color:#337ab7;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">分批</span> 送 ' + _obNum(_pbSend) + (_pbTot > 0 ? '／共 ' + _obNum(_pbTot) : '') + '・回 ' + _obNum(_pbRet)
+                                            + (_pbLess ? ' <span style="color:#B8431F;font-weight:bold;">差 ' + _obNum(_pbTot - _pbSend) + '</span>' : '');
+                                        _pbEl.title = '分批：送出 ' + _obNum(_pbSend) + '，回廠 ' + _obNum(_pbRet) + (_pbTot > 0 ? '，這一關總量 ' + _obNum(_pbTot) : '');
+                                        tdDynamicProcess.appendChild(_pbEl);
+                                    }
+                                } catch (_pbE) {}
+                            }
+
                             // ── 加工單價顯示（動態製程欄，A 或 C+D+R 才可見）──────────────
                             if ((window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) && window.egVpReveal) {
                                 var _tpm = window.transferPriceMap || {};
