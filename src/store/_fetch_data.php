@@ -806,18 +806,22 @@ if (!empty($current_page_boms)) {
         }
     } catch (Throwable $_e) { $_snAlias = []; }
     // 併入後同一欄各筆 bom_ing 的 sqty 都是整張 BOM 總數，改顯示各自實際發單量（與頁面初載一致）
-    $_mergedSendQty = [];
+    $_mergedSendQty = []; // 'bom_群組SN|廠商編號' => 該廠商在這一關的實際發單量
     if ($_snAlias) {
         $_mk = [];
         foreach ($_snAlias as $_ak => $_t) { $_mk[substr($_ak, 0, strrpos($_ak, '_')) . '_' . $_t] = true; }
-        $_fids = [];
+        $_fk = []; // fid => 群組 key
         foreach ($raw_ps_rows as $_r) {
             $_k = $_r['bom'] . '_' . ($_snAlias[$_r['bom'] . '_' . (int)$_r['bom_sn']] ?? $_r['bom_sn']);
-            if (isset($_mk[$_k])) $_fids[] = (int)$_r['bom_ing_fid'];
+            if (isset($_mk[$_k])) $_fk[(int)$_r['bom_ing_fid']] = $_k;
         }
-        if ($_fids) {
+        if ($_fk) {
             try {
-                foreach ($db->query("SELECT bom_ing_fid, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', $_fids) . ") GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $_s) $_mergedSendQty[(int)$_s['bom_ing_fid']] = $_s['s'] + 0;
+                // 實際發單批次可能全掛在其中一筆 bom_ing 底下，所以以「群組＋廠商」加總，再分給同廠商的那一筆
+                foreach ($db->query("SELECT bom_ing_fid, maker_id_no, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', array_keys($_fk)) . ") GROUP BY bom_ing_fid, maker_id_no")->fetchAll(PDO::FETCH_ASSOC) as $_s) {
+                    $_kk = $_fk[(int)$_s['bom_ing_fid']] . '|' . $_s['maker_id_no'];
+                    $_mergedSendQty[$_kk] = ($_mergedSendQty[$_kk] ?? 0) + ($_s['s'] + 0);
+                }
             } catch (Throwable $_e) {}
         }
     }
@@ -831,7 +835,7 @@ if (!empty($current_page_boms)) {
         $batch_entry = [
             'bom_ing_fid'      => $r['bom_ing_fid'] ?? null,
             'batch_label'      => $r['batch_label'] ?? null,
-            'sqty'             => $_mergedSendQty[(int)$r['bom_ing_fid']] ?? $r['sqty'],
+            'sqty'             => $_mergedSendQty[$key . '|' . ($r['maker_id_no'] ?? '')] ?? $r['sqty'],
             'maker_id'         => $r['maker_id'] ?? '',
             'maker_id_no'      => $r['maker_id_no'] ?? '',
             'outsource_date'   => $fd($r['outsource_date']),
