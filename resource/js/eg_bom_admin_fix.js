@@ -247,7 +247,16 @@
             if (keepMsg) msg(keepMsg, ok);
         });
     }
+    // 篩選／切換檢視也會重畫：保留面板與分支檢視內層的捲動位置
     function render() {
+        var body = drawer.querySelector('#egaf-body'), fm0 = body.querySelector('.flw-main'), keep = !!DATA && body.querySelector('.flw,.it');
+        var sT = body.scrollTop, sL = body.scrollLeft, fT = fm0 ? fm0.scrollTop : 0, fL = fm0 ? fm0.scrollLeft : 0;
+        renderInner();
+        if (!keep) return;
+        body.scrollTop = sT; body.scrollLeft = sL;
+        var fm1 = body.querySelector('.flw-main'); if (fm1 && fm0) { fm1.scrollTop = fT; fm1.scrollLeft = fL; }
+    }
+    function renderInner() {
         var rows = DATA.rows || [], cnt = {};
         rows.forEach(function (x) { cnt[x.kind] = (cnt[x.kind] || 0) + 1; });
         drawer.querySelector('#egaf-chips').innerHTML = KINDS.map(function (k) {
