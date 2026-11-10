@@ -2198,7 +2198,7 @@ function qab_options(PDO $db, string $kind, bool $activeOnly = true): array
 /** opt_id => 該列（兩種 kind 一起） */
 function qab_option_map(PDO $db): array
 {
-    $rows = $db->query("SELECT opt_id,kind,name,is_scrap,is_escalate,need_capa,is_active FROM qa_option")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT opt_id,kind,name,is_scrap,is_escalate,need_capa,is_active,is_rework FROM qa_option")->fetchAll(PDO::FETCH_ASSOC);
     $map = [];
     foreach ($rows as $r) {
         $r['opt_id'] = (int)$r['opt_id'];
@@ -4418,14 +4418,16 @@ function qab_final(PDO $db, array $o, ?array $optMap = null): array
     $ids = []; $from = 'none';
     if (!empty($o['gm_ids'])) { $ids = $o['gm_ids']; $from = 'gm'; }
     elseif (!empty($o['disp_ids'])) { $ids = $o['disp_ids']; $from = 'disp'; }
-    $names = []; $scrap = false; $capa = false;
+    $names = []; $scrap = false; $capa = false; $items = [];
     foreach ($ids as $i) {
         if (!isset($optMap[$i])) continue;
         $names[] = $optMap[$i]['name'];
+        // 清單依處置結果上色用：旗標判定（不比對名稱，管理員改名也不會失效）
+        $items[] = ['name' => $optMap[$i]['name'], 'kind' => !empty($optMap[$i]['is_scrap']) ? 'scrap' : (!empty($optMap[$i]['is_rework']) ? 'rework' : 'other')];
         if ($optMap[$i]['is_scrap']) $scrap = true;
         if ($optMap[$i]['need_capa']) $capa = true;
     }
-    return ['from' => $from, 'ids' => $ids, 'names' => $names, 'is_scrap' => $scrap, 'need_capa' => $capa];
+    return ['from' => $from, 'ids' => $ids, 'names' => $names, 'items' => $items, 'is_scrap' => $scrap, 'need_capa' => $capa];
 }
 
 /** 這張單現在卡在哪一關（由資料推導，不另存狀態欄，避免兩份狀態對不起來） */

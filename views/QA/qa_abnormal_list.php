@@ -735,6 +735,15 @@ function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); 
 function srcLabel(t){
     return t === 'IR' ? '客退' : (t === 'BOM' ? '製程' : (t === 'CS' ? '客訴' : (t === 'QC' ? '檢驗' : (t || ''))));
 }
+/* 最終處置依結果上色（固定暖色盤：報廢＝特急紅、重工＝急件橙、其他如特採＝淺琥珀）；顏色不是唯一資訊，文字照留 */
+function finalChips(r){
+    var items = (r.final && r.final.items) || [];
+    if (!items.length) return esc(r.final_label || '');
+    var sty = { scrap:'background:#DD5138;color:#fff;', rework:'background:#F0A24B;color:#4a2a08;', other:'background:#F7E0BD;color:#7a4a1e;' };
+    return items.map(function(it){
+        return '<span class="st st-s" style="' + (sty[it.kind] || sty.other) + '">' + esc(it.name) + '</span>';
+    }).join(' ');
+}
 function openMask(id){ $('#' + id).show(); }
 function closeMask(id){ $('#' + id).hide(); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
@@ -798,7 +807,7 @@ function load(){
                 + '<td>' + (r.part_no ? '<a href="#" class="pv-open" data-pk="' + esc(r.part_d_id || '') + '" data-no="' + esc(r.part_no) + '" title="開啟圖面">' + esc(r.part_no) + '</a>' : '') + '</td>'
                 + '<td>' + esc((r.abnormal_phenomenon || '').substring(0, 60)) + '</td>'
                 + '<td>' + esc(r.responsible_unit) + '</td>'
-                + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
+                + '<td>' + finalChips(r) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
                 + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
                     + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
                     + (Number(r.is_closed) === 1 && r.closed_at ? '<div class="muted-help" style="font-size:10.5px;line-height:1.25;margin-top:0;white-space:normal;">' + esc(r.closed_name || '') + ' 結案<br>' + esc(dispDate(r.closed_at)) + ' ' + esc(String(r.closed_at).substring(11, 16)) + '</div>' : '')
