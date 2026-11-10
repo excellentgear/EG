@@ -7289,7 +7289,7 @@ echo "</script>\n";
                                         + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : '')
                                         + ' ' + _bSt + '</div>';
                                 });
-                                if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pmTot - _pmSend) + ' pcs 未發（共 ' + _obNum(_pmTot) + '）</div>';
+                                if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pmTot - _pmSend) + ' pcs 未發</div>';
                                 tdDynamicProcess.innerHTML = _pH;
                             } else {
                                 // ── 單批次顯示（原有邏輯）────────────────────
