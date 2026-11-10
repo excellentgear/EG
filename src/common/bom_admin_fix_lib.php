@@ -243,6 +243,10 @@ if (!function_exists('baf_flow')) {
      */
     function baf_flow(PDO $db, string $bom, array $rows): array {
         $man = baf_flow_manual($db, $bom);
+        $alloc = baf_flow_alloc_get($db, $bom); // 管理員把一張移轉憑單的數量拆給好幾個發單批次：[transfer_id => [batch_id => qty]]
+        foreach ($alloc as $_tid => $_al) { // 有拆分的憑單：接續發單＝數量最大的那批（樹狀圖的主線），其餘批次另外畫
+            arsort($_al); $man[$_tid] = ['src' => $man[$_tid]['src'] ?? null, 'dst' => (int)key($_al), 'dst_fid' => 0];
+        }
         $sends = []; $tfs = [];
         foreach ($rows as $r) {
             if ($r['kind'] === 'send') $sends[] = $r;
@@ -261,14 +265,17 @@ if (!function_exists('baf_flow')) {
             }
         }
         $out = [];
-        foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true, 'dst_fid' => (int)(($man[$t['id']]['dst_fid'] ?? 0))];
-        $fill = function (string $field, callable $groupOf) use (&$out, $man, $tfs) {
+        foreach ($tfs as $t) $out[$t['id']] = ['src' => 0, 'src_auto' => true, 'dst' => 0, 'dst_auto' => true, 'dst_fid' => (int)(($man[$t['id']]['dst_fid'] ?? 0)), 'alloc' => isset($alloc[$t['id']]) ? array_map(fn($b, $q) => ['batch_id' => (int)$b, 'qty' => (float)$q], array_keys($alloc[$t['id']]), array_values($alloc[$t['id']])) : []];
+        $fill = function (string $field, callable $groupOf) use (&$out, $man, $tfs, $alloc) {
             $used = []; // 每個發單批次已被分配掉多少：先把管理員手動指定的扣掉，再讓推測的依日期填「還有空」的批次
             foreach ($tfs as $t) {
                 $id = $t['id'];
                 if (isset($man[$id]) && $man[$id][$field] !== null) {
                     $out[$id][$field] = $man[$id][$field]; $out[$id][$field . '_auto'] = false;
-                    if ($man[$id][$field] > 0) $used[$man[$id][$field]] = ($used[$man[$id][$field]] ?? 0.0) + (float)$t['qty'];
+                    if ($man[$id][$field] > 0) {
+                        if ($field === 'dst' && isset($alloc[$id])) { foreach ($alloc[$id] as $_b => $_q) $used[$_b] = ($used[$_b] ?? 0.0) + (float)$_q; }
+                        else $used[$man[$id][$field]] = ($used[$man[$id][$field]] ?? 0.0) + (float)$t['qty'];
+                    }
                 }
             }
             foreach ($tfs as $t) {
@@ -318,6 +325,66 @@ if (!function_exists('baf_flow')) {
             return [$best . '|' . $t['to_no'], $pool];
         });
         return $out;
+    }
+
+    /** 管理員拆分的分配：[transfer_id => [batch_id => qty]]。表不存在視為沒有。 */
+    function baf_flow_alloc_get(PDO $db, string $bom): array {
+        try {
+            $q = $db->prepare("SELECT transfer_id, dst_batch_id, qty FROM bom_flow_alloc WHERE bom=? ORDER BY id");
+            $q->execute([$bom]);
+            $m = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $m[(int)$r['transfer_id']][(int)$r['dst_batch_id']] = (float)$r['qty'];
+            return $m;
+        } catch (Throwable $e) { return []; }
+    }
+
+    /**
+     * 把一張移轉憑單的數量拆給多個接續發單批次（例：憑單 185＝原一那批 102＋轉發給西河那批 83）。
+     * 不動 ERP 的移轉憑單本身，只另記分配。$items＝[['batch_id'=>,'qty'=>],…]，空陣列＝清除拆分。
+     * 檢查：每批必須屬於這個 BOM 且在憑單所屬關卡之後；分配合計不可超過憑單數量；
+     * 同一批被所有憑單分配的合計不可超過它的發單數（超過就是重複算）。
+     */
+    function baf_flow_alloc_set(PDO $db, string $bom, int $transferId, array $items, int $uid): void {
+        $q = $db->prepare("SELECT bom_sn, COALESCE(NULLIF(transfer_qty,0), sqty) AS q FROM bom_ing_transfer_log WHERE transfer_id=? AND bom=?");
+        $q->execute([$transferId, $bom]);
+        $t = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$t) throw new Exception('這張移轉憑單不屬於這個 BOM');
+        $am = baf_alias_map($db, $bom);
+        $fromSn = (int)$t['bom_sn']; $fromSn = $am[$fromSn] ?? $fromSn;
+        $clean = []; $sum = 0.0;
+        foreach ($items as $it) {
+            $bid = (int)($it['batch_id'] ?? 0); $qty = round((float)($it['qty'] ?? 0), 3);
+            if ($bid <= 0 || $qty <= 0) continue;
+            if (isset($clean[$bid])) throw new Exception('同一個發單批次不能重複分配');
+            $b = $db->prepare("SELECT b.send_qty, bi.bom_sn FROM bom_ing_outsource_batch b JOIN bom_ing bi ON bi.bom_ing_fid=b.bom_ing_fid WHERE b.batch_id=? AND bi.bom=?");
+            $b->execute([$bid, $bom]);
+            $br = $b->fetch(PDO::FETCH_ASSOC);
+            if (!$br) throw new Exception('指定的發單批次不屬於這個 BOM');
+            $bsn = (int)$br['bom_sn']; $bsn = $am[$bsn] ?? $bsn;
+            if ($bsn <= $fromSn) throw new Exception('接續的發單批次必須在這張憑單所屬關卡之後');
+            $clean[$bid] = ['qty' => $qty, 'send' => (float)$br['send_qty']];
+            $sum += $qty;
+        }
+        $tq = (float)$t['q'];
+        if ($sum > $tq + 1e-9) throw new Exception('分配合計 ' . $sum . ' 超過這張憑單的數量 ' . $tq);
+        // 同一批被其他憑單分配的量加上這次，不可超過該批發單數
+        foreach ($clean as $bid => $c) {
+            $o = $db->prepare("SELECT COALESCE(SUM(qty),0) FROM bom_flow_alloc WHERE bom=? AND dst_batch_id=? AND transfer_id<>?");
+            try { $o->execute([$bom, $bid, $transferId]); $other = (float)$o->fetchColumn(); } catch (Throwable $e) { $other = 0.0; }
+            if ($other + $c['qty'] > $c['send'] + 1e-9) throw new Exception('發單批次 #' . $bid . ' 的發單數只有 ' . $c['send'] . '，被其他憑單已分配 ' . $other . '，再加 ' . $c['qty'] . ' 會超過');
+        }
+        $db->prepare("CREATE TABLE IF NOT EXISTS bom_flow_alloc (id INT AUTO_INCREMENT PRIMARY KEY, bom VARCHAR(30) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL, transfer_id INT NOT NULL, dst_batch_id INT NOT NULL, qty DECIMAL(12,3) NOT NULL, created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_alloc (bom, transfer_id, dst_batch_id), KEY idx_dst (bom, dst_batch_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
+        $db->beginTransaction();
+        try {
+            $db->prepare("DELETE FROM bom_flow_alloc WHERE bom=? AND transfer_id=?")->execute([$bom, $transferId]);
+            $ins = $db->prepare("INSERT INTO bom_flow_alloc (bom, transfer_id, dst_batch_id, qty, created_by) VALUES (?,?,?,?,?)");
+            foreach ($clean as $bid => $c) $ins->execute([$bom, $transferId, $bid, $c['qty'], $uid]);
+            $db->commit();
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+        $f = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom=? ORDER BY bom_ing_fid LIMIT 1");
+        $f->execute([$bom]);
+        $fid = (int)$f->fetchColumn();
+        if ($fid) ber_log($db, $fid, 'flow_alloc', '管理員拆分移轉憑單 #' . $transferId . '（' . $tq . '）：' . ($clean ? implode('、', array_map(fn($b, $c) => '批次' . $b . '=' . $c['qty'], array_keys($clean), array_values($clean))) : '清除拆分'), $uid);
     }
 
     /** 設定某張移轉憑單的流向。$batchId：-1＝改回自動推測、0＝明確指定「無」、>0＝指定批次。 */

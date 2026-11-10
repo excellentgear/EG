@@ -1568,10 +1568,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_report_details_for
                 u2.user_cname as setup_operator,
                 r.remark,
                 r.setup_start_time,
-                r.production_start_time
+                r.production_start_time,
+                r.process_face,
+                COALESCE(NULLIF(TRIM(m.field_no),''), m.machine) as machine_name
             FROM pm_process_daily_report r
             LEFT JOIN user u ON r.production_user_id = u.id
             LEFT JOIN user u2 ON r.setup_user_id = u2.id
+            LEFT JOIN machine_list m ON r.machine_id = m.machine_id
             WHERE r.bom_ing_fid IN ($placeholders)
             ORDER BY r.report_date DESC, r.report_id DESC
             LIMIT 5
@@ -1616,9 +1619,11 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_all_reports_for_bo
                 pn.ProcessName,
                 u.user_cname as operator,
                 u2.user_cname as setup_operator,
+                COALESCE(NULLIF(TRIM(m.field_no),''), m.machine) as machine_name,
                 (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id = pdr.report_id) as ng_qty
             FROM pm_process_daily_report pdr
             JOIN bom_ing bi ON pdr.bom_ing_fid = bi.bom_ing_fid
+            LEFT JOIN machine_list m ON pdr.machine_id = m.machine_id
             LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
             LEFT JOIN user u ON pdr.production_user_id = u.id
             LEFT JOIN user u2 ON pdr.setup_user_id = u2.id
@@ -2661,7 +2666,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
 // ── BOM 管理員修正面板（2026-11-06）：列出／就地修改 發單、回廠、報廢、取回、QC檢驗、移轉憑單。
 //    唯一實作 src/common/bom_admin_fix_lib.php（寫入走 bom_return_edit_lib.php 的 force 模式）；
 //    僅本頁管理員，且須先輸入操作確認密碼（$_SESSION['oready_admin_fix']）；每個動作都寫 bom_ing_event 留紀錄 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_flow_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_flow_set','baf_flow_alloc','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
     require_once '../../src/common/confirm_password_lib.php';
@@ -2693,6 +2698,11 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
         if ($act === 'baf_flow_set') {
             baf_flow_set($db, $bom, (int)($_POST['transfer_id'] ?? 0), (string)($_POST['field'] ?? ''), (int)($_POST['batch_id'] ?? -1), $uid);
             echo json_encode(['success'=>true,'message'=>'已儲存']); exit;
+        }
+        if ($act === 'baf_flow_alloc') {
+            $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+            baf_flow_alloc_set($db, $bom, (int)($_POST['transfer_id'] ?? 0), is_array($items) ? $items : [], $uid);
+            echo json_encode(['success'=>true,'message'=>'已儲存拆分']); exit;
         }
         if ($act === 'baf_alias_set') {
             baf_alias_set($db, $bom, (int)($_POST['alias_sn'] ?? 0), (int)($_POST['target_sn'] ?? 0), $uid);

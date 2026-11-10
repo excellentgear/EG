@@ -296,13 +296,14 @@
             return '<div class="fl-t ecard" style="margin:0;" draggable="true" title="可拖到發單卡片改流向" data-tid="' + t.id + '" data-sn="' + t.sn + '" data-fid="' + t.fid + '">'
                 + '<div><span style="color:#fff;background:#C0561F;border-radius:3px;padding:0 5px;font-size:11px;">' + esc(t.proc || '未知製程') + (t.orphan ? '（SN ' + t.raw_sn + '）' : '') + '</span> ' + tag(fl.src_auto && fl.dst_auto) + '</div>'
                 + rowHtml(t, true)
-                + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div></div>';
+                + '<div style="display:flex;gap:3px;margin-top:1px;" title="' + esc(dstTxt.replace(/<[^>]+>/g, '')) + '"><select class="fl-sel" data-f="src" data-tid="' + t.id + '" style="width:50%;" title="來源發單">' + so.replace('自動推測', '來源：自動').replace('無（不屬於任何發單）', '來源：無') + '</select><select class="fl-sel" data-f="dst" data-tid="' + t.id + '" style="width:50%;" title="接續發單">' + dos.replace('自動推測', '接續：自動').replace('無（沒有接續發單）', '接續：無') + '</select></div>'
+                + '<div style="margin-top:2px;"><button type="button" class="fl-split" data-tid="' + t.id + '" style="font-size:11px;padding:0 6px;border:1px solid #C0561F;background:' + (fl.alloc && fl.alloc.length ? '#C0561F;color:#fff' : '#FFF6E8;color:#C0561F') + ';border-radius:3px;cursor:pointer;" title="這張憑單的數量要分給好幾個發單批次時使用（不會改動 ERP 憑單）">' + (fl.alloc && fl.alloc.length ? '已拆分 ' + fl.alloc.length + ' 批（修改）' : '⇉ 拆給多個批次') + '</button></div></div>';
         }
         var html = '<div style="color:#999;font-size:11px;margin-bottom:2px;">分支檢視：移轉憑單掛在它來自的發單批次下；<b>灰色「推測」</b>是系統依日期＋數量排的，不對就拖到正確的發單卡片上，或用下拉改。卡片上可直接改日期／數量、刪除、快速補發單，改完按右上角「儲存」。SN 對應請切到「時間軸」設定。</div>';
         // 樹狀：從第一關的發單批次出發，沿著「移轉憑單 → 接續發單」一路往下長；一批分給好幾家就分岔，合流到同一批時只畫一次
         var tfs = rows.filter(function (r) { return r.kind === 'transfer'; }), bsAll = Object.keys(sends).map(function (k) { return sends[k]; });
         var isDst = {};
-        tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst) isDst[fl.dst] = true; });
+        tfs.forEach(function (t) { var fl = flow[t.id]; if (fl && fl.dst) isDst[fl.dst] = true; if (fl && fl.alloc) fl.alloc.forEach(function (a) { isDst[a.batch_id] = true; }); });
         bsAll.sort(function (x, y) { return (x.sn - y.sn) || (x.date < y.date ? -1 : x.date > y.date ? 1 : x.id - y.id); });
         var seen = {};
         // 橫向樹：左邊是上一關，右邊是它長出去的分支；每個分支一欄、用線接回上一個節點
@@ -316,7 +317,15 @@
         }
         function tnode(t) {
             var fl = flow[t.id], d = fl.dst && sends[fl.dst], kid = '';
-            if (!d && fl.dst_fid && stOf[fl.dst_fid]) kid = '<div class="tk"><div class="fl-in tcard" style="margin:0;padding:3px 8px;font-size:12px;border:1px dashed #C0561F;background:#FFF6E8;"><b>' + esc(stOf[fl.dst_fid].label) + '</b> ／ ' + esc(t.to || '廠商未登記') + '<br><span style="color:#888;font-size:11px;">尚未發單</span></div></div>';
+            if (fl.alloc && fl.alloc.length) {
+                // 管理員把這張憑單的數量拆給多個發單批次：每個批次各一條分支，標出分配的件數
+                kid = fl.alloc.map(function (a) {
+                    var dd = sends[a.batch_id]; if (!dd) return '';
+                    var lab = '<div style="font-size:11px;color:#C0561F;font-weight:bold;text-align:center;margin-bottom:2px;">分配 ' + nz(a.qty) + ' 件</div>';
+                    return '<div class="tk">' + lab + (seen[dd.id] ? '<div class="fl-in tcard" data-merge="' + dd.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div>' : bnode(dd)) + '</div>';
+                }).join('');
+            }
+            else if (!d && fl.dst_fid && stOf[fl.dst_fid]) kid = '<div class="tk"><div class="fl-in tcard" style="margin:0;padding:3px 8px;font-size:12px;border:1px dashed #C0561F;background:#FFF6E8;"><b>' + esc(stOf[fl.dst_fid].label) + '</b> ／ ' + esc(t.to || '廠商未登記') + '<br><span style="color:#888;font-size:11px;">尚未發單</span></div></div>';
             else if (d) kid = seen[d.id] ? '<div class="tk"><div class="fl-in tcard" data-merge="' + d.id + '" style="margin:0;border:2px solid #2E8B57;background:#EAF5EE;padding:2px 8px;font-size:11px;color:#2E8B57;font-weight:bold;">⤵ 合流（見連線）</div></div>' : '<div class="tk">' + bnode(d) + '</div>';
             return '<div class="tn">' + chip(t) + (kid ? '<div class="tk-col">' + kid + '</div>' : '') + '</div>';
         }
@@ -373,6 +382,48 @@
         function setFlow(tid, field, val) {
             post({ action: 'baf_flow_set', transfer_id: tid, field: field, batch_id: val }, function (r) { if (r.success) { load('已調整流向', true); } else msg(r.message, false); });
         }
+        function openSplit(tid) {
+            var t = rows.filter(function (r) { return r.kind === 'transfer' && String(r.id) === String(tid); })[0]; if (!t) return;
+            var fl = flow[t.id] || {}, cur = {};
+            (fl.alloc || []).forEach(function (a) { cur[a.batch_id] = a.qty; });
+            var cands = bsAll.filter(function (b) { return b.sn > t.sn; });
+            var ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100000;display:flex;align-items:center;justify-content:center;';
+            var h = '<div style="background:#fff;border-radius:6px;padding:14px 16px;width:560px;max-width:94vw;max-height:88vh;overflow:auto;font-size:13px;">'
+                + '<div style="font-weight:bold;font-size:14px;margin-bottom:4px;">拆分移轉憑單 ' + esc(t.no || ('#' + t.id)) + '</div>'
+                + '<div style="color:#666;margin-bottom:6px;">' + esc(t.from || '') + ' → ' + esc(t.to || '') + '　憑單數量 <b>' + nz(t.qty) + '</b>。這裡只另記「這張憑單的貨分給哪幾個發單批次、各幾件」，<b>不會改動 ERP 的移轉憑單</b>。</div>'
+                + '<table style="width:100%;border-collapse:collapse;">';
+            cands.forEach(function (b) {
+                h += '<tr><td style="padding:3px 6px 3px 0;">' + esc(bLabel(b)) + '</td><td style="width:110px;"><input type="number" min="0" step="any" class="fl-aq" data-b="' + b.id + '" value="' + (cur[b.id] ? nz(cur[b.id]) : '') + '" placeholder="件數" style="width:100px;"></td></tr>';
+            });
+            if (!cands.length) h += '<tr><td style="color:#b8431f;">這張憑單之後的關卡還沒有任何發單批次，請先在「時間軸」新增發單。</td></tr>';
+            h += '</table><div id="fl-sum" style="margin:8px 0;font-weight:bold;"></div><div id="fl-err" style="color:#b8431f;min-height:16px;"></div>'
+                + '<div style="text-align:right;"><button type="button" id="fl-clr" style="margin-right:6px;">清除拆分</button><button type="button" id="fl-no" style="margin-right:6px;">取消</button><button type="button" id="fl-ok" style="background:#C0561F;color:#fff;border:0;padding:3px 14px;border-radius:3px;">儲存拆分</button></div></div>';
+            ov.innerHTML = h; document.body.appendChild(ov);
+            function items() { var a = []; ov.querySelectorAll('.fl-aq').forEach(function (i) { var q = parseFloat(i.value) || 0; if (q > 0) a.push({ batch_id: parseInt(i.getAttribute('data-b'), 10), qty: q }); }); return a; }
+            function sumChk() {
+                var it = items(), sum = it.reduce(function (x, y) { return x + y.qty; }, 0), left = Math.round((t.qty - sum) * 1000) / 1000;
+                var el = ov.querySelector('#fl-sum');
+                el.innerHTML = '已分配 ' + nz(sum) + ' / 憑單 ' + nz(t.qty) + (left > 0 ? '　<span style="color:#b8431f;">尚有 ' + nz(left) + ' 件沒有分配到任何批次</span>' : left < 0 ? '　<span style="color:#b8431f;">超出 ' + nz(-left) + ' 件</span>' : '　<span style="color:#2a7a2a;">✔ 剛好分完</span>');
+                // 各批已被分配的量（含其他憑單）：超過該批發單數就即時提醒，後端也會擋
+                return left >= 0;
+            }
+            ov.querySelectorAll('.fl-aq').forEach(function (i) { i.addEventListener('input', sumChk); }); sumChk();
+            ov.querySelector('#fl-no').onclick = function () { ov.remove(); };
+            function save(list) {
+                post({ action: 'baf_flow_alloc', transfer_id: t.id, items: JSON.stringify(list) }, function (r) {
+                    if (r.success) { ov.remove(); load('已儲存拆分', true); } else ov.querySelector('#fl-err').textContent = r.message || '儲存失敗';
+                });
+            }
+            ov.querySelector('#fl-clr').onclick = function () { save([]); };
+            ov.querySelector('#fl-ok').onclick = function () {
+                var it = items();
+                if (!it.length) { ov.querySelector('#fl-err').textContent = '請至少填一個批次的件數，或按「清除拆分」'; return; }
+                if (!sumChk()) { ov.querySelector('#fl-err').textContent = '分配合計超過憑單數量'; return; }
+                save(it);
+            };
+        }
+        body.querySelectorAll('.fl-split').forEach(function (b) { b.onclick = function () { openSplit(b.getAttribute('data-tid')); }; });
         body.querySelectorAll('.fl-sel').forEach(function (sel) {
             sel.onchange = function () {
                 if (sel.value.charAt(0) === 'f') { setFlow(sel.getAttribute('data-tid'), 'dst_fid', parseInt(sel.value.slice(1), 10)); return; }
