@@ -2854,6 +2854,7 @@ if (!function_exists('transferErpValidBizDate')) {
 // 分批發包判定（2026-11-10 改版）：唯一實作在 src/common/transfer_erp_lib.php（transferErpPlan／transferErpBatchId）。
 // 同 BOM+SN 可有多筆；重複只看 同BOM/SN/廠商/異動日期時間；只有「預設資料列」會被蓋掉，其餘一律新增。
 require_once __DIR__ . '/../../src/common/transfer_erp_lib.php';
+require_once __DIR__ . '/../../src/common/bom_outsource_lib.php';
 
 // 解析移轉原始檔 → 過濾有效列＋同(bom,bom_sn)去重(留異動時間最新) → 回傳列陣列
 if (!function_exists('parseTransferErpRows')) {
@@ -3115,6 +3116,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                     $row['transfer_no'], $row['changed_ts'], $userId, $row['move_date'],
                 ]);
                 $inserted++; if ($row['state'] === 'E') $histN++;
+                // 分批規則（新 BOM）：每一批同時建一筆「發單批次」，BOM總覽與管理員修正面板才看得到這一批（舊 BOM 維持原樣不建）
+                if (empty($row['legacy'])) {
+                    eg_bom_outsource_open_batch($db, (int)$db->lastInsertId(), $row['maker_id_no'], $makerId, (float)$row['sqty'], substr($row['move_date'], 0, 10), null, 'ERP移轉匯入', $userId);
+                }
             } elseif ($row['action'] === 'write' && !empty($row['legacy'])) {
                 $updLegacyStmt->execute([
                     $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'],
@@ -3130,6 +3135,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                 ]);
                 if ($updStmt->rowCount() < 1) throw new Exception("預設資料列 {$row['bom']}-{$row['bom_sn']} 已被其他操作更動，請重新上傳預覽");
                 $written++;
+                if (!empty($row['target_fid'])) {
+                    $hasB = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?"); $hasB->execute([$row['target_fid']]);
+                    if ((int)$hasB->fetchColumn() === 0) eg_bom_outsource_open_batch($db, (int)$row['target_fid'], $row['maker_id_no'], $makerId, (float)$row['sqty'], substr($row['move_date'], 0, 10), null, 'ERP移轉匯入', $userId);
+                }
             } elseif ($row['action'] === 'skip_stale') {
                 $skippedStale++;
             } elseif ($row['action'] === 'skip_manual') {

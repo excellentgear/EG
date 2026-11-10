@@ -3397,8 +3397,10 @@ echo "</script>\n";
         var listBox = document.createElement('div');
         function render(expanded) {
             listBox.innerHTML = '';
-            var show = expanded ? list : (list.length === 1 ? [] : list.slice(0, 2));   // 單批：摘要列已含全部數字，不重複列
-            show.forEach(function (b) { listBox.appendChild(batchLine(b, expanded)); });
+            // 單批：摘要列已含全部數字，不重複列；但這一批已有回廠紀錄（含管理員補登）時，直接把「M/D 回 N」列出來，不必點開才看得到
+            var singleWithRet = (list.length === 1 && list[0].returns && list[0].returns.length > 0);
+            var show = expanded ? list : (list.length === 1 ? (singleWithRet ? list : []) : list.slice(0, 2));
+            show.forEach(function (b) { listBox.appendChild(batchLine(b, expanded || singleWithRet)); });
             if (!expanded && list.length > 2) {
                 var more = document.createElement('div'); more.style.cssText = 'color:#2a7ae2;'; more.textContent = '＋' + (list.length - 2) + ' 批（點開）';
                 listBox.appendChild(more);
