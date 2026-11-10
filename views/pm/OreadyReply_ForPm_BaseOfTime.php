@@ -3366,6 +3366,17 @@ echo "</script>\n";
             return ocGrp(q) > g && q.outsource_date && ['ing', 'Q', 'P', 'E'].indexOf(String(q.processing_state || '')) !== -1 && ocDateVal(q.outsource_date) >= qd;
         });
     }
+    // 有新製程報工：報工過的最遠製程比目前製程更遠、而且那一關（或更後面）還沒有發包才算「新製程」；已經發包就不是新製程
+    function egHasNewProcReport(row) {
+        if (!row || !row.has_new_process_report) return false;
+        var rsn = parseInt(row.max_reported_sn, 10);
+        if (isNaN(rsn)) return true;
+        var procs = (window.ingActiveMap || {})[String(row.bom || '').trim()] || [];
+        var issued = procs.some(function (p) {
+            return parseInt(p.bom_sn, 10) >= rsn && p.outsource_date && ['ing', 'Q', 'P', 'E'].indexOf(String(p.processing_state || '')) !== -1;
+        });
+        return !issued;
+    }
     function _obNum(v) { v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
     function obBatchSummaryEl(m, extraScrap, ctx) {
         var box = document.createElement('div');
@@ -3387,11 +3398,23 @@ echo "</script>\n";
             var d = document.createElement('div');
             d.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
             var _canBtn = !!(ctx && ctx.can && b.outside > 0);
-            if (_canBtn) d.style.cssText = 'display:flex;align-items:center;gap:3px;';
+            // 已回廠的批次、而這一站狀態是QC待驗／待移轉：右側顯示「M/D QC待驗」（部分批次待驗、部分還在加工時分兩段顯示）
+            var _qcTag = !!(ctx && ctx.stQ && !(b.outside > 0) && b.ret > 0);
+            if (_canBtn || _qcTag) d.style.cssText = 'display:flex;align-items:center;gap:3px;';
             var done = (b.status === 'closed');
             var t = egVP(b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
                 + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.wd > 0 ? '・取回 ' + _obNum(b.wd) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
-            if (_canBtn) {
+            if (_qcTag) {
+                var _ts0 = document.createElement('span');
+                _ts0.style.cssText = 'flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;';
+                _ts0.textContent = t; d.appendChild(_ts0);
+                var _rl = (b.returns && b.returns.length) ? String(b.returns[b.returns.length - 1].date || '') : '', _rp = _rl.split('/');
+                var _md = _rp.length >= 3 ? parseInt(_rp[1], 10) + '/' + parseInt(_rp[2], 10) : (ctx.md || '');
+                var _qt = document.createElement('span');
+                _qt.style.cssText = 'flex:none;color:#fff;background:#337ab7;border-radius:3px;font-size:10px;line-height:1.4;padding:0 5px;';
+                _qt.textContent = (_md ? _md + ' ' : '') + 'QC待驗';
+                d.appendChild(_qt);
+            } else if (_canBtn) {
                 var _ts = document.createElement('span');
                 _ts.style.cssText = 'flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;';
                 _ts.textContent = t; d.appendChild(_ts);
@@ -3421,7 +3444,7 @@ echo "</script>\n";
             listBox.innerHTML = '';
             var _outL = list.filter(function (b) { return b.outside > 0; });
             // 單批：摘要列已含全部數字，不重複列；多批收合時先列還沒回廠的批次（才找得到可個別回廠的那一批）
-            var show = expanded ? list : (list.length === 1 ? [] : (ctx && ctx.can && _outL.length ? _outL : list.slice(0, 2)));
+            var show = expanded ? list : (list.length === 1 ? [] : (ctx && ctx.stQ && _outL.length ? list : (ctx && ctx.can && _outL.length ? _outL : list.slice(0, 2))));   // QC待驗的關卡：已回廠（待驗）與未回廠（加工中）兩段都列出
             show.forEach(function (b) { listBox.appendChild(batchLine(b, expanded)); });
             if (!expanded && list.length > 1 && list.length > show.length) {
                 var more = document.createElement('div'); more.style.cssText = 'color:#2a7ae2;'; more.textContent = '＋' + (list.length - show.length) + ' 批（點開）';
@@ -5898,7 +5921,7 @@ echo "</script>\n";
             tr.appendChild(tdDid); // <-- 將包含按鈕和連結的 td 加入 tr
 
             // --- 新增：有新製程報工 提示 ---
-            if (row.has_new_process_report) {
+            if (egHasNewProcReport(row)) {
                 tdDid.insertAdjacentHTML('beforeend', '<div style="color:red; font-weight:bold; font-size:11px; margin-top:2px;">有新製程報工!!</div>');
             }
 
@@ -6295,6 +6318,7 @@ echo "</script>\n";
                     }
                     // 分批回廠摘要（多批或部分回廠才有）
                     var _obm = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
+                    var _hideStChip = false;
                     // 移轉憑單已把這一站的貨全部移走（憑單合計 >= 本站發單數，且該序號只有一列）＝已移轉，
                     // 不再顯示「加工中」、外在廠商那邊的數量清為 0（廠商沒按回廠但憑單已證明貨已移轉）。
                     var _xferDone = ocXferDone(_proc, _activeProcs)
@@ -6313,7 +6337,9 @@ echo "</script>\n";
                             if (t.kind === 'remake' && !t.from_batch && String(t.proc_no || '') === String(_proc.process_no || '')) _exScrap += Number(t.main_qty) || 0;
                         });
                         var _bCan = !!(window.EG_OR_QTY_SETTABLE && (window.featMarkReturned || (window.displayPermissionCode !== 'D+R' && !window.isCRU && window.userStatus == 1)));
-                        _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap, { can: _bCan, open: function (b) {
+                        // 有批次還在外面（個別有加工中按鈕）時，不再另外顯示整關的狀態按鈕，免得同一關重複出現兩個加工中／QC待驗
+                        _hideStChip = !!(_bCan && _obm.batches.length > 1 && _obm.batches.some(function (b) { return (Number(b.outside) || 0) > 0; }));
+                        _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap, { can: _bCan, stQ: (String(_proc.processing_state || '') === 'Q' || String(_proc.processing_state || '') === 'P'), md: formatDateAsMd(_proc.QC_check_date || _proc.return_date || _proc.xfer_date), open: function (b) {
                             openOutsourceReturnModal(Object.assign({}, _proc, { maker_id_no: b.no || _proc.maker_id_no, maker_id: b.maker || _proc.maker_id, prefer_batch_id: b.id }), { bom: row.bom, bom_sn: _proc.bom_sn, d_id: row.d_id });
                         } }));
                     } else {
@@ -6337,7 +6363,9 @@ echo "</script>\n";
                     // qc_completed=1 且 processing_state='Q' → 前端認定為生管待移轉(P)
                     var _isQcCompletedQ = (_st === 'Q' && _proc.qc_completed == 1);
                     var _effectiveSt = _isQcCompletedQ ? 'P' : ((_xferDone || _qcMoot) ? 'E' : _st);
-                    if (_st === 'ing' && _iid !== '' && !_xferDone) {
+                    if (_hideStChip) {
+                        // 整關狀態按鈕由各批次自己的標示取代
+                    } else if (_st === 'ing' && _iid !== '' && !_xferDone) {
                         var _ingBtn = document.createElement('button');
                         _ingBtn.type = 'button';
                         _ingBtn.className = 'btn btn-xs btn-warning btn-return-style';
@@ -7232,6 +7260,15 @@ echo "</script>\n";
                                             datePrefix = formatDateAsMd(processInfo.QC_check_date) + ' ';
                                         }
                                         stateColor = '#28a745';
+                                    }
+                                    // 最後一關、發出去的貨已全數回廠：顯示「N PCS 待出貨」，不再標加工中
+                                    if (processInfo.processing_state === 'ing') {
+                                        var _om = (window.obBatchMap || {})[String(processInfo.bom_ing_fid)];
+                                        if (_om && _om.batches && _om.batches.length && (Number(_om.outside) || 0) <= 1e-9 && (Number(_om.ret) || 0) > 0) {
+                                            var _g9 = ocGrp(processInfo), _bm9 = String(row.bom || '').trim();
+                                            var _later9 = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === _bm9 && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > _g9; });
+                                            if (!_later9) { translatedState = _obNum((Number(_om.send) || 0) - (Number(_om.wd) || 0)) + 'PCS 待出貨'; stateColor = '#2E8B57'; }
+                                        }
                                     }
                                     tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${stateColor};">${datePrefix}${escapeHtml(translatedState)}</div>`;
                                 }
@@ -9500,7 +9537,7 @@ echo "</script>\n";
                         show = false;
                     }
                 } else if (filters.status === 'has_new_process_report') { // 新增：有新製程報工
-                    if (!row.has_new_process_report) show = false;
+                    if (!egHasNewProcReport(row)) show = false;
                 } else if (filters.status === 'qc_check_any') { // QC檢驗：QC有檢驗/完工紀錄且序號≧目前製程（原「今日QC檢驗」改版）
                     if (!getQcSyncInfo(row).hasQcAtOrBeyond) show = false;
                 } else if (filters.status === 'qc_date_pick') { // 指定日期QC檢驗
