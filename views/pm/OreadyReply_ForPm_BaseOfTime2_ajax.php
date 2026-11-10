@@ -236,7 +236,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_completed_bom')
                 INNER JOIN (
                     SELECT bom, bom_sn, MAX(transfer_id) AS max_id
                     FROM bom_ing_transfer_log
-                    WHERE bom IN ($ph)
+                    WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph)
                     GROUP BY bom, bom_sn
                 ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
                 WHERE tl.bom IN ($ph)
@@ -2109,7 +2109,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_process_price') {
             INNER JOIN (
                 SELECT bom_sn, MAX(transfer_id) AS max_id
                 FROM bom_ing_transfer_log
-                WHERE bom = ?
+                WHERE (price > 0 OR modified_unit_price > 0) AND bom = ?
                 GROUP BY bom_sn
             ) t2 ON t1.bom_sn = t2.bom_sn AND t1.transfer_id = t2.max_id
             WHERE t1.bom = ?

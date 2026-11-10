@@ -341,7 +341,7 @@ function ocq_fetch_prices($pdo, $bom_list) {
         FROM bom_ing_transfer_log tl
         INNER JOIN (
             SELECT bom, bom_sn, MAX(transfer_id) AS max_id
-            FROM bom_ing_transfer_log WHERE bom IN ($ph) GROUP BY bom, bom_sn
+            FROM bom_ing_transfer_log WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph) GROUP BY bom, bom_sn
         ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
         WHERE tl.bom IN ($ph)
     ");

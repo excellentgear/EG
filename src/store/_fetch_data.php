@@ -902,7 +902,7 @@ if (!empty($current_page_boms)) {
             INNER JOIN (
                 SELECT bom, bom_sn, MAX(transfer_id) AS max_id
                 FROM bom_ing_transfer_log
-                WHERE bom IN ($ph_tp)
+                WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph_tp)
                 GROUP BY bom, bom_sn
             ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
             LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from

@@ -907,7 +907,7 @@ if (!empty($all_boms)) {
             INNER JOIN (
                 SELECT bom, bom_sn, MAX(transfer_id) AS max_id
                 FROM bom_ing_transfer_log
-                WHERE bom IN ($ph_boms)
+                WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph_boms)
                 GROUP BY bom, bom_sn
             ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
             LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
@@ -931,7 +931,7 @@ if (!empty($all_boms)) {
                        ml.maker_id AS maker_name
                 FROM bom_ing_transfer_log tl
                 LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
-                WHERE tl.product_id IN ($ph_dids)
+                WHERE (tl.price > 0 OR tl.modified_unit_price > 0) AND tl.product_id IN ($ph_dids)
                 ORDER BY tl.product_id, tl.bom_sn, tl.transfer_date DESC, tl.transfer_id DESC
             ";
             $stmt_hist = $db->prepare($sql_hist);

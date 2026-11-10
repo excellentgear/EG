@@ -594,7 +594,7 @@ function ps_recent_boms(PDO $db, int $dId, int $n = 3): array {
         foreach ($ing->fetchAll(PDO::FETCH_ASSOC) as $r) $procs[$r['bom']][] = $r;
         $tl = $db->prepare("SELECT tl.bom, tl.bom_sn, tl.process_amount, tl.price, tl.modified_unit_price, tl.sqty
                             FROM bom_ing_transfer_log tl
-                            JOIN (SELECT bom, bom_sn, MAX(transfer_id) AS mx FROM bom_ing_transfer_log WHERE bom IN ($ph) GROUP BY bom, bom_sn) l
+                            JOIN (SELECT bom, bom_sn, MAX(transfer_id) AS mx FROM bom_ing_transfer_log WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph) GROUP BY bom, bom_sn) l
                               ON l.mx=tl.transfer_id");
         $tl->execute($bomNos);
         $amt = [];

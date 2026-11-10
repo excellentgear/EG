@@ -2221,7 +2221,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
         $rowErrors = [];         // 格式錯誤（會擋下整個匯入）
         $skippedNoTransferNo = 0;
         $skippedNoBomSn = [];    // 缺製程序號被跳過的單號（與舊功能相同：跳過並警告）
-        $skippedZeroPrice = 0;   // 單價 0/空白/負數：整列不寫入（生管/成本頁取「最新一筆」單價，0 價列會蓋掉正確單價）
+        $skippedZeroPrice = 0;   // 單價 0/空白/負數的列（2026-11-10 起也匯入，只計數提示）
         $numFields = ['加工金額','稅金','Price','移轉數量','損耗量','付款數量'];
 
         for ($r = 1; $r < count($data); $r++) {
@@ -2269,9 +2269,10 @@ if ($_GET['but'] == 'transfer_log_raw') {
                 continue;
             }
 
-            // 單價 0/空白/負數的列整筆跳過（不新增也不更新）——尚未計價的移轉不進系統
+            // 單價 0/空白的列也要匯入（2026-11-10 使用者指示）：移轉單(J-)本身就是自動判定 BOM 回廠日期的依據，
+            // 尚未計價不能因此不進系統。成本／單價相關程式一律只取單價>0 的列（見各處 price > 0 條件），0 價列不會影響成本。
             $priceVal = $g('Price');
-            if ($priceVal === null || (float)$priceVal <= 0) { $skippedZeroPrice++; continue; }
+            if ($priceVal === null || (float)$priceVal <= 0) { $skippedZeroPrice++; }  // 只計數，供匯入結果提示
 
             $rows[] = [
                 'bom'            => $bom,
@@ -2284,7 +2285,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
                 'product_id'     => $g('PRODUCTID'),
                 'transfer_qty'   => $g('移轉數量'),
                 'loss_qty'       => $g('損耗量'),
-                'price'          => $g('Price'),
+                'price'          => $g('Price') !== null ? $g('Price') : 0,
                 'process_amount' => $g('加工金額'),
                 'tax_amount'     => $g('稅金'),
                 'paid_qty'       => $g('付款數量'),
@@ -2303,7 +2304,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
             $more = count($rowErrors) > 10 ? "…等共 " . count($rowErrors) . " 個錯誤" : "";
             throw new Exception("資料驗證失敗，未匯入任何資料：\n" . implode("\n", $show) . $more);
         }
-        if (empty($rows)) throw new Exception("沒有可匯入的資料列" . ($skippedZeroPrice > 0 ? "（單價為 0 跳過 {$skippedZeroPrice} 列）" : ""));
+        if (empty($rows)) throw new Exception("沒有可匯入的資料列");
 
         // 帳款月份欄位先確認（ALTER TABLE 會隱式 commit，一定要在 beginTransaction 之前做）
         require_once '../../src/common/billing_month_lib.php';
@@ -2325,9 +2326,11 @@ if ($_GET['but'] == 'transfer_log_raw') {
         $insertStmt = $db->prepare("INSERT INTO `bom_ing_transfer_log`
             (`bom`, `bom_sn`, `maker_from`, `maker_to`, `sqty`, `transfer_date`, `transfer_no`, `product_id`, `transfer_qty`, `loss_qty`, `price`, `process_amount`, `tax_amount`, `paid_qty`, `invoice_date`, `invoice_ym`, `note`, `note2`, `changed_by`, `created_at`, `modified_at`)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        // 本次單價 0（尚未計價）時，不覆蓋原本已有的單價／金額／稅金／付款數量（避免 ERP 暫時回 0 把已計價的資料洗掉）
         $updateStmt = $db->prepare("UPDATE `bom_ing_transfer_log` SET
-            `sqty` = ?, `transfer_date` = IF(`edit_manual` = 1, `transfer_date`, ?), `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
-            `process_amount` = ?, `tax_amount` = ?, `paid_qty` = ?, `invoice_date` = ?,
+            `sqty` = ?, `transfer_date` = IF(`edit_manual` = 1, `transfer_date`, ?), `transfer_qty` = ?, `loss_qty` = ?,
+            `price` = IF(? > 0, ?, `price`),
+            `process_amount` = IF(? > 0, ?, `process_amount`), `tax_amount` = IF(? > 0, ?, `tax_amount`), `paid_qty` = IF(? > 0, ?, `paid_qty`), `invoice_date` = ?,
             `invoice_ym` = ?, `note` = IF(`edit_manual` = 1, `note`, ?), `note2` = IF(`edit_manual` = 1, `note2`, ?), `changed_by` = ?, `modified_at` = ?
             WHERE `transfer_no` = ?");
         $userStmt = $db->prepare("SELECT id FROM user WHERE user_cname = ?");
@@ -2353,8 +2356,10 @@ if ($_GET['but'] == 'transfer_log_raw') {
 
             if (isset($existingNos[$row['transfer_no']])) {
                 $updateStmt->execute([
-                    $row['sqty'], $row['transfer_date'], $row['transfer_qty'], $row['loss_qty'], $row['price'],
-                    $row['process_amount'], $row['tax_amount'], $row['paid_qty'], $row['invoice_date'],
+                    $row['sqty'], $row['transfer_date'], $row['transfer_qty'], $row['loss_qty'],
+                    $row['price'], $row['price'],
+                    $row['price'], $row['process_amount'], $row['price'], $row['tax_amount'], $row['price'], $row['paid_qty'],
+                    $row['invoice_date'],
                     $row['invoice_ym'], $row['note'], $row['note2'], $changed_by_id, $row['modified_at'],
                     $row['transfer_no'],
                 ]);
@@ -2400,7 +2405,8 @@ if ($_GET['but'] == 'transfer_log_raw') {
         $msg .= "
 帳款月份自動計算 {$bmStat['updated']} 筆"
               . ($bmStat['no_date'] > 0 ? "（{$bmStat['no_date']} 筆無法解析日期未計算）" : "") . "。";
-        if ($skippedZeroPrice > 0) $msg .= "\n單價為 0（尚未計價）跳過 {$skippedZeroPrice} 列未寫入。";
+        if ($skippedZeroPrice > 0) $msg .= "
+其中 {$skippedZeroPrice} 列單價為 0（尚未計價）：已匯入供回廠日期判定，成本與單價顯示不採用。";
         if ($skippedNoTransferNo > 0) $msg .= "\n單號空白跳過 {$skippedNoTransferNo} 列。";
         if (!empty($skippedNoBomSn)) {
             $msg .= "\n⚠️ 注意：單號 [" . implode(', ', $skippedNoBomSn) . "] 因缺少製程序號(移轉類別)未匯入。";
