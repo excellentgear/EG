@@ -6951,6 +6951,7 @@ echo "</script>\n";
                                     if (_sbm && _sbm.batches && _sbm.batches.length) {
                                         _sbShow = Object.assign({}, _sb, { sqty: Math.round(((Number(_sbm.send) || 0) - (Number(_sbm.wd) || 0)) * 1000) / 1000 });
                                         if (_sbm.xfer_all && _sb.processing_state === 'ing') _sbShow.processing_state = 'E';
+                                        else if (_sb.processing_state === 'N' && (Number(_sbm.send) || 0) > 0) _sbShow.processing_state = (Number(_sbm.outside) || 0) > 0 ? 'ing' : 'E'; // 補登了發單批次但製程狀態還是待發包
                                     }
                                     _sb = _sbShow;
                                     var _st  = _stMap[_sb.processing_state] || '';

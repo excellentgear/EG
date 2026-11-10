@@ -278,6 +278,12 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
     function eg_bom_outsource_batch_map(PDO $db, array $fids): array {
         $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
         if (!$fids) return [];
+        // 同一個 BOM 內「製程狀態還是待發包、但已補登了發單批次」的列（例如管理員補登）也要有批次資料，拆批欄才能顯示實際發單量
+        try {
+            $_in0 = implode(',', $fids);
+            $_ex = $db->query("SELECT DISTINCT b.bom_ing_fid FROM bom_ing_outsource_batch b JOIN bom_ing bi ON bi.bom_ing_fid=b.bom_ing_fid WHERE bi.bom IN (SELECT bom FROM bom_ing WHERE bom_ing_fid IN ($_in0))")->fetchAll(PDO::FETCH_COLUMN);
+            $fids = array_values(array_unique(array_merge($fids, array_map('intval', $_ex))));
+        } catch (Throwable $e) { /* 維持原範圍 */ }
         eg_bom_outsource_ensure_schema($db);
         $in = implode(',', $fids);
         $rows = $db->query("SELECT * FROM bom_ing_outsource_batch WHERE bom_ing_fid IN ($in) ORDER BY bom_ing_fid, batch_id")->fetchAll(PDO::FETCH_ASSOC);
