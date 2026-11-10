@@ -6996,7 +6996,7 @@ echo "</script>\n";
 
                             if (_splitBatches) {
                                 // ── 拆分批次顯示 ──────────────────────────────
-                                var _stMap = {N:'待發包',P:'待移轉',ing:'加工中',Q:'QC待驗',E:'已結',1:'已結',skip:'跳過'};
+                                var _stMap = {N:'待發包',P:'待移轉',ing:'加工中',Q:'QC待驗',E:'已移轉',1:'已移轉',skip:'跳過'}; // 已移轉＝貨已移到下一關（不是QC是否驗過，QC結果看後面的[允收]等標示）
                                 var _sHtml = '<div style="font-size:10.5px;font-weight:600;color:#444;margin-bottom:2px;">'
                                            + escapeHtml(processInfo.ProcessName||'')
                                            + ' <span style="color:#337ab7;font-weight:normal;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">拆'+_splitBatches.length+'批</span>'
@@ -7028,6 +7028,13 @@ echo "</script>\n";
                                     }
                                     _sb = _sbShow;
                                     if (_sbAdj[_si] != null && _sbAdj[_si] > 0) _sb = Object.assign({}, _sb, { sqty: _sbAdj[_si] });
+                                    // 廠商：這列自己沒登記廠商時（補登的發單批次），列出還有貨沒回廠的那幾批的廠商
+                                    var _sbMk = _sb.maker_id ? egVP(_sb.maker_id) : '';
+                                    if (!_sbMk && _sbm && _sbm.batches) {
+                                        var _mkSeen = {}, _mkList = [];
+                                        _sbm.batches.forEach(function (b) { var nm = egVP(b.maker || b.no || ''); if (nm && (Number(b.outside) || 0) > 0 && !_mkSeen[nm]) { _mkSeen[nm] = 1; _mkList.push(nm + ' ' + (Math.round((Number(b.outside) || 0) * 1000) / 1000)); } });
+                                        _sbMk = _mkList.join('、');
+                                    }
                                     // 加工中的批次：顯示還在廠商那邊、尚未回廠的數量
                                     var _sbOut = (_sbm && _sbm.batches && _sbm.batches.length && _sb.processing_state === 'ing') ? Math.round((Number(_sbm.outside) || 0) * 1000) / 1000 : null;
                                     var _st  = _stMap[_sb.processing_state] || '';
@@ -7047,7 +7054,7 @@ echo "</script>\n";
                                     _sHtml += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                            +  '<strong style="color:#337ab7;">' + escapeHtml(_lbl) + '</strong>'
                                            +  (_sbOut != null ? ' <span title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
-                                           +  (_sb.maker_id ? '<br><span style="color:#555;">' + escapeHtml(egVP(_sb.maker_id)) + '</span>' : '')
+                                           +  (_sbMk ? '<br><span style="color:#555;">' + escapeHtml(_sbMk) + '</span>' : '')
                                            +  (_od ? '<span style="color:#aaa;"> '+_od+'</span>' : '')
                                            +  (_rd ? '<span style="color:#2a7ae2;"> 回:'+_rd+'</span>' : '')
                                            +  (_st ? ' <span style="color:'+_sc+';font-size:9px;">['+_st+']</span>' : '')
