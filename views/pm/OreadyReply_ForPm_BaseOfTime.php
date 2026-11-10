@@ -6143,6 +6143,32 @@ echo "</script>\n";
                     });
                     if (kept.length) _displayProcs = kept;
                 })();
+                // 還有貨在廠商那邊沒回廠的關卡（加工中／QC待驗／待移轉）一定要顯示，不論發包日是不是最新
+                (function () {
+                    var have = {}; _displayProcs.forEach(function (p) { have[String(p.bom_ing_fid)] = true; });
+                    var extra = _activeProcs.filter(function (p) {
+                        if (have[String(p.bom_ing_fid)] || !p.outsource_date || ['ing', 'Q', 'P'].indexOf(String(p.processing_state)) < 0) return false;
+                        var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                        if (ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || (m && m.xfer_all)) return false;
+                        return m && m.batches && m.batches.length ? (Number(m.outside) || 0) > 1e-9 : true;
+                    });
+                    if (!extra.length) return;
+                    _displayProcs = _displayProcs.concat(extra);
+                    _displayProcs.sort(function (a, b) { return (ocGrp(a) - ocGrp(b)) || String(a.batch_label || '').localeCompare(String(b.batch_label || '')); });
+                })();
+                // 數量標頭：這一關只發了一部分時，顯示實際已發數量（製令總數放在提示裡），不要讓 715 看起來像已全數發出
+                (function () {
+                    var grps = {}; _displayProcs.forEach(function (p) { grps[ocGrp(p)] = true; });
+                    if (Object.keys(grps).length !== 1) return;
+                    var sent = 0, seen = {}, ok = true;
+                    _displayProcs.forEach(function (p) {
+                        var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                        if (!m || !m.batches || !m.batches.length) { ok = false; return; }
+                        if (!seen[p.bom_ing_fid]) { seen[p.bom_ing_fid] = 1; sent += (Number(m.send) || 0) - (Number(m.wd) || 0); }
+                    });
+                    var sp = _qtyHdr.querySelector('span');
+                    if (ok && sp && sent > 0 && sent < _qtyTotal) { sp.textContent = (Math.round(sent * 1000) / 1000) + ''; _qtyHdr.title = '製令總數 ' + _qtyTotal + '，這一關實際已發出 ' + (Math.round(sent * 1000) / 1000); }
+                })();
                 _displayProcs.forEach(function(_proc, _pi) {
                     var _pDiv = document.createElement('div');
                     // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
@@ -7049,6 +7075,8 @@ echo "</script>\n";
                                 //    QC待驗(Q)／待移轉(P)／已移轉(E) 都顯示；Q 原本把 return_date
                                 //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
+                                // QC待驗但後序關卡已發包：QC待驗清單不會列這筆（與「發單日」欄同一條規則 ocQcMoot），這裡也不再標 QC待驗
+                                if (_dynRawSt === 'Q' && ocQcMoot(processInfo, _activeProcs)) _dynRawSt = 'E';
                                 // 加工中(ing)等其他狀態：沒有回廠日期、但已有移轉憑單，也以移轉憑單日期認定並顯示「M/D 回(移轉)」
                                 if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1'
                                     || (!processInfo.return_date && processInfo.xfer_date && _dynRawSt !== 'skip')) {
@@ -7063,7 +7091,7 @@ echo "</script>\n";
 
                                 if (isCurrentProcess) {
                                     let datePrefix = '';
-                                    var translatedState = translateProcessingState(processInfo.processing_state);
+                                    var translatedState = translateProcessingState(_dynRawSt === 'E' && processInfo.processing_state === 'Q' ? 'E' : processInfo.processing_state); // 後序關卡已發包的QC待驗不再標QC待驗
                                     var stateColor = '#555';
                                     if (processInfo.processing_state === 'ing') {
                                         stateColor = 'orange';
