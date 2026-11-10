@@ -287,7 +287,7 @@ if (!function_exists('eg_bom_xfer_from_map')) {
             $alias = [];
             foreach ($db->query("SELECT bom, alias_sn, target_sn FROM bom_sn_alias WHERE bom IN ($qb)")->fetchAll(PDO::FETCH_ASSOC) as $a) $alias[$a['bom']][(int)$a['alias_sn']] = (int)$a['target_sn'];
             $tf = [];
-            foreach ($db->query("SELECT t.bom, t.bom_sn, t.maker_from, t.transfer_date, COALESCE(ml.maker_id, t.maker_from) AS nm FROM bom_ing_transfer_log t LEFT JOIN maker_list ml ON ml.maker_id_no=t.maker_from WHERE t.bom IN ($qb) ORDER BY t.transfer_date, t.transfer_id")->fetchAll(PDO::FETCH_ASSOC) as $t) {
+            foreach ($db->query("SELECT t.bom, t.bom_sn, t.maker_from, t.transfer_date, COALESCE(NULLIF(t.transfer_qty,0), t.sqty) AS q, COALESCE(ml.maker_id, t.maker_from) AS nm FROM bom_ing_transfer_log t LEFT JOIN maker_list ml ON ml.maker_id_no=t.maker_from WHERE t.bom IN ($qb) ORDER BY t.transfer_date, t.transfer_id")->fetchAll(PDO::FETCH_ASSOC) as $t) {
                 $sn = (int)$t['bom_sn']; $sn = $alias[$t['bom']][$sn] ?? $sn;
                 $tf[$t['bom']][$sn][] = $t;
             }
@@ -297,8 +297,9 @@ if (!function_exists('eg_bom_xfer_from_map')) {
                 $names = [];
                 foreach ($list as $t) { $n = trim((string)$t['nm']); if ($n !== '' && !in_array($n, $names, true)) $names[] = $n; }
                 if (!$names) continue;
+                $qsum = 0.0; foreach ($list as $t) $qsum += (float)$t['q'];
                 $d = !empty($list[0]['transfer_date']) ? date('Y/m/d', strtotime($list[0]['transfer_date'])) : '';
-                $out[(int)$x['bom_ing_fid']] = ['batches' => [], 'xfer_from' => implode('、', $names), 'xfer_date' => $d];
+                $out[(int)$x['bom_ing_fid']] = ['batches' => [], 'xfer_from' => implode('、', $names), 'xfer_date' => $d, 'xfer_qty' => $qsum];
             }
         } catch (Throwable $e) { return []; }
         return $out;

@@ -936,6 +936,7 @@ foreach ($raw_ps_rows as $_iam_item) {
         'ProcessName'      => $_iam_item['ProcessName'] ?? '',
         'processing_state' => $_iam_xo ? 'E' : $_iam_state,
         'outsource_date'   => $_iam_xo ? $_iam_fmt($_iam_item['xfer_date']) : $_iam_fmt($_iam_item['outsource_date'] ?? null),
+        'xfer_only'        => $_iam_xo ? 1 : 0,
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）

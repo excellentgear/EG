@@ -802,6 +802,7 @@ foreach ($raw_ps_list as $_iam_item) {
         'ProcessName'      => $_iam_item['ProcessName'] ?? '',
         'processing_state' => $_iam_xo ? 'E' : $_iam_state,
         'outsource_date'   => $_iam_xo ? $_iam_fmt($_iam_item['xfer_date']) : $_iam_fmt($_iam_item['outsource_date'] ?? null),
+        'xfer_only'        => $_iam_xo ? 1 : 0,
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'finish_report_date' => $_iam_fmt($_iam_item['finish_report_date'] ?? null),
         'xfer_qty'         => isset($_iam_item['xfer_qty']) ? (float)$_iam_item['xfer_qty'] : 0, // 移轉憑單合計數量（>=本站發單數且該序號只有一列→前端認定已移轉，不再顯示加工中）
@@ -3245,6 +3246,7 @@ echo "</script>\n";
                 ProcessName:      item.ProcessName || '',
                 processing_state: _xo ? 'E' : st,
                 outsource_date:   _xo ? _nd(item.xfer_date) : _nd(item.outsource_date),
+                xfer_only:        _xo ? 1 : 0,
                 return_date:      _nd(item.return_date),
                 finish_report_date: _nd(item.finish_report_date),
                 xfer_date:        _nd(item.xfer_date),
@@ -5999,6 +6001,12 @@ echo "</script>\n";
 
             // 取本 BOM 的所有進行中製程（ingActiveMap 由 PHP 及 AJAX 刷新後建立）
             var _activeProcs = (window.ingActiveMap || {})[String(row.bom || '').trim()] || [];
+            // 沒發包、只有移轉憑單的關卡（xfer_only）：已移轉數量小於目前剩餘良品數＝還有貨沒移出去，要顯示「未發」數量
+            var _scrapQQ0 = 0;
+            (Array.isArray(row.qq_details) ? row.qq_details : []).forEach(function (d) { if (d && /報廢/.test(String(d.QC_ps || ''))) _scrapQQ0 += Number(d.QC_QQ_sqty) || 0; });
+            var _remPre = _qtyTotal - (Math.max(_qtyScrap, _scrapQQ0) < _qtyTotal ? Math.max(_qtyScrap, _scrapQQ0) : 0);
+            function _xoQty(p) { var m = (window.obBatchMap || {})[String(p.bom_ing_fid)]; return Number(m && m.xfer_qty) || Number(p.xfer_qty) || 0; }
+            function _xoPartial(p) { return !!(p && Number(p.xfer_only) === 1 && _xoQty(p) < _remPre - 1e-9); }
             var _lastBtnRow = null; // 記錄最後一個狀態按鈕列
 
             if (_activeProcs.length === 0) {
@@ -6096,6 +6104,7 @@ echo "</script>\n";
                     (function () {
                         var kept = _displayProcs.filter(function (p) {
                             var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
+                            if (_xoPartial(p)) return true;
                             var done = p.processing_state === 'E' || ocXferDone(p, _activeProcs) || !!(m && m.xfer_all && p.processing_state === 'ing');
                             if (!done) return true;
                             return !_activeProcs.some(function (q) { return ocGrp(q) > ocGrp(p) && q.outsource_date; });
@@ -6142,7 +6151,8 @@ echo "</script>\n";
                 (function () {
                     var kept = _displayProcs.filter(function (p) {
                         var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
-                        var done = p.processing_state === 'E' || ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || !!(m && m.xfer_all && p.processing_state === 'ing');
+                        if (_xoPartial(p)) return true;
+                            var done = p.processing_state === 'E' || ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || !!(m && m.xfer_all && p.processing_state === 'ing');
                         if (!done) return true;
                         return !_activeProcs.some(function (q) { return ocGrp(q) > ocGrp(p) && q.outsource_date; });
                     });
@@ -6152,7 +6162,7 @@ echo "</script>\n";
                 (function () {
                     var have = {}; _displayProcs.forEach(function (p) { have[String(p.bom_ing_fid)] = true; });
                     var extra = _activeProcs.filter(function (p) {
-                        if (have[String(p.bom_ing_fid)] || !p.outsource_date || ['ing', 'Q', 'P'].indexOf(String(p.processing_state)) < 0) return false;
+                        if (have[String(p.bom_ing_fid)] || !p.outsource_date || (String(p.processing_state) === 'Q' && p.QC_check) || (['ing', 'Q', 'P'].indexOf(String(p.processing_state)) < 0 && !_xoPartial(p))) return false;
                         var m = (window.obBatchMap || {})[String(p.bom_ing_fid)];
                         if (ocXferDone(p, _activeProcs) || ocQcMoot(p, _activeProcs) || (m && m.xfer_all)) return false;
                         return m && m.batches && m.batches.length ? (Number(m.outside) || 0) > 1e-9 : true;
@@ -6252,7 +6262,12 @@ echo "</script>\n";
                     } else {
                         // 沒有分批摘要的關卡：發包數和上方剩餘數量不同時，一定要顯示發包數
                         var _sendN = Math.round(_sendQtyOf(_proc) * 1000) / 1000;
-                        if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
+                        if (_xoPartial(_proc)) {
+                            var _xq = _xoQty(_proc), _xd = document.createElement('div');
+                            _xd.style.cssText = 'font-size:11px;line-height:1.25;color:#B8431F;font-weight:bold;';
+                            _xd.textContent = '未發 ' + (Math.round((_remainQty - _xq) * 1000) / 1000) + '・已移 ' + _xq;
+                            _pDiv.appendChild(_xd);
+                        } else if (_sendN > 0 && Math.abs(_sendN - _remainQty) > 1e-9) {
                             var _sdv = document.createElement('div');
                             _sdv.style.cssText = 'font-size:11px;line-height:1.25;color:#6B4423;';
                             _sdv.textContent = '發包 ' + _sendN;
@@ -6354,7 +6369,7 @@ echo "</script>\n";
                         _aBtn.type = 'button';
                         if (_effectiveSt === 'Q') { _aBtn.className = 'btn btn-primary btn-xs btn-return-style'; _aBtn.textContent = 'QC待驗'; }
                         else if (_effectiveSt === 'P') { _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待移轉'; }
-                        else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = '已移轉'; }
+                        else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = _xoPartial(_proc) ? '部分移轉' : '已移轉'; }
                         // Gentelella 的 .btn 自帶 margin-bottom:5px，在這種一行一顆的小按鈕上
                         // 只會讓狀態列平白高 5px（外觀不變，純粹是下方留白）
                         _aBtn.style.marginBottom = '0';
