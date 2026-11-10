@@ -17469,6 +17469,10 @@ echo "</script>\n";
                                 <small style="color: red; font-size: 12px; margin-left: 10px;">(今日休假: <?php echo htmlspecialchars(implode(', ', $users_on_leave_names)); ?>)</small>
                             <?php endif; ?>
                             </h3>
+                            <?php if ($permission_code === 'A'): ?>
+                                <?php require_once __DIR__ . '/../../src/common/transfer_erp_lib.php'; ?>
+                                <small style="display:block;color:#8a6a45;font-size:11px;margin-top:2px;" title="移轉紀錄 ERP 匯入：這個編號以後的新製令，同序號可分批發包（每批各留一列）；更早的舊製令維持原本做法">B-<?php echo (int)transferErpBatchFrom($db); ?> 起適用分批新規則</small>
+                            <?php endif; ?>
                         </div>
                     </div>
 
