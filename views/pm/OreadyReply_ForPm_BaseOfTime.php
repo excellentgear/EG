@@ -3367,7 +3367,7 @@ echo "</script>\n";
         });
     }
     function _obNum(v) { v = Number(v) || 0; return (Math.round(v * 1000) / 1000).toString(); }
-    function obBatchSummaryEl(m, extraScrap) {
+    function obBatchSummaryEl(m, extraScrap, ctx) {
         var box = document.createElement('div');
         box.className = 'ob-batch-sum';
         box.style.cssText = 'margin-top:3px;font-size:11px;line-height:1.25;color:#6B4423;cursor:pointer;';
@@ -3386,10 +3386,25 @@ echo "</script>\n";
         function batchLine(b, withDetail) {
             var d = document.createElement('div');
             d.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            var _canBtn = !!(ctx && ctx.can && b.outside > 0);
+            if (_canBtn) d.style.cssText = 'display:flex;align-items:center;gap:3px;';
             var done = (b.status === 'closed');
             var t = egVP(b.maker || b.no || '未指定廠商') + ' ' + _obNum(b.send) + '：回 ' + _obNum(b.ret)
                 + (b.outside > 0 ? '・外 ' + _obNum(b.outside) : '') + (b.wd > 0 ? '・取回 ' + _obNum(b.wd) : '') + (b.scrap > 0 ? '・廢 ' + _obNum(b.scrap) : '') + (done ? ' ✔' : '');
-            d.textContent = t;
+            if (_canBtn) {
+                var _ts = document.createElement('span');
+                _ts.style.cssText = 'flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;';
+                _ts.textContent = t; d.appendChild(_ts);
+                // 多批發包：每個還沒回廠的批次各有一顆「加工中」按鈕，可個別回廠
+                var _bb = document.createElement('button');
+                _bb.type = 'button'; _bb.textContent = '加工中';
+                _bb.title = '個別回廠：' + egVP(b.maker || b.no || '') + '　送 ' + _obNum(b.send) + '，還在外 ' + _obNum(b.outside);
+                _bb.style.cssText = 'flex:none;margin:0;border:0;border-radius:3px;background:#F0A24B;color:#5a2d0c;font-size:10px;line-height:1.4;padding:0 5px;cursor:pointer;';
+                _bb.onclick = function (ev) { ev.stopPropagation(); ctx.open(b); };
+                d.appendChild(_bb);
+            } else {
+                d.textContent = t;
+            }
             d.title = t + (b.send_date ? '（發單 ' + b.send_date + '）' : '');
             if (withDetail && b.returns && b.returns.length) {
                 var det = document.createElement('div');
@@ -3404,10 +3419,12 @@ echo "</script>\n";
         var listBox = document.createElement('div');
         function render(expanded) {
             listBox.innerHTML = '';
-            var show = expanded ? list : (list.length === 1 ? [] : list.slice(0, 2));   // 單批：摘要列已含全部數字，不重複列
+            var _outL = list.filter(function (b) { return b.outside > 0; });
+            // 單批：摘要列已含全部數字，不重複列；多批收合時先列還沒回廠的批次（才找得到可個別回廠的那一批）
+            var show = expanded ? list : (list.length === 1 ? [] : (ctx && ctx.can && _outL.length ? _outL : list.slice(0, 2)));
             show.forEach(function (b) { listBox.appendChild(batchLine(b, expanded)); });
-            if (!expanded && list.length > 2) {
-                var more = document.createElement('div'); more.style.cssText = 'color:#2a7ae2;'; more.textContent = '＋' + (list.length - 2) + ' 批（點開）';
+            if (!expanded && list.length > 1 && list.length > show.length) {
+                var more = document.createElement('div'); more.style.cssText = 'color:#2a7ae2;'; more.textContent = '＋' + (list.length - show.length) + ' 批（點開）';
                 listBox.appendChild(more);
             }
         }
@@ -6280,7 +6297,10 @@ echo "</script>\n";
                         (Array.isArray(row.qab_tags) ? row.qab_tags : []).forEach(function (t) {
                             if (t.kind === 'remake' && !t.from_batch && String(t.proc_no || '') === String(_proc.process_no || '')) _exScrap += Number(t.main_qty) || 0;
                         });
-                        _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap));
+                        var _bCan = !!(window.EG_OR_QTY_SETTABLE && (window.featMarkReturned || (window.displayPermissionCode !== 'D+R' && !window.isCRU && window.userStatus == 1)));
+                        _pDiv.appendChild(obBatchSummaryEl(_obm, _exScrap, { can: _bCan, open: function (b) {
+                            openOutsourceReturnModal(Object.assign({}, _proc, { maker_id_no: b.no || _proc.maker_id_no, maker_id: b.maker || _proc.maker_id, prefer_batch_id: b.id }), { bom: row.bom, bom_sn: _proc.bom_sn, d_id: row.d_id });
+                        } }));
                     } else {
                         // 沒有分批摘要的關卡：發包數和上方剩餘數量不同時，一定要顯示發包數
                         var _sendN = Math.round(_sendQtyOf(_proc) * 1000) / 1000;
@@ -12429,7 +12449,7 @@ echo "</script>\n";
                 }
                 _ormBatches = Array.isArray(r.open_batches) ? r.open_batches : (ob ? [ob] : []);
                 var _keepSel = (document.getElementById('orm-batch') || {}).value;
-                _ormFillBatchSelect(_keepSel);
+                _ormFillBatchSelect(_keepSel || proc.prefer_batch_id);
                 if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? '本站已發出的批次都已回廠結清。' : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
                     _ormRenderStatus();
