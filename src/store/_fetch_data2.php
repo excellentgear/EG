@@ -737,8 +737,18 @@ if (!empty($current_page_boms)) {
     $all_active_per_key = [];
     $all_split_per_key  = [];
     $fd = function($v) { return (!empty($v) && $v !== '0000-00-00 00:00:00') ? date('Y/m/d', strtotime($v)) : null; };
+    $_snAlias = []; $_snHave = [];
+    foreach ($raw_ps_rows as $_r) $_snHave[$_r['bom'] . '_' . $_r['bom_sn']] = true;
+    try {
+        $_aq = $db->prepare("SELECT bom, alias_sn, target_sn FROM bom_sn_alias WHERE bom IN ($ph_boms)");
+        $_aq->execute(array_values($current_page_boms));
+        foreach ($_aq->fetchAll(PDO::FETCH_ASSOC) as $_a) {
+            if ((int)$_a['alias_sn'] !== (int)$_a['target_sn'] && isset($_snHave[$_a['bom'] . '_' . (int)$_a['target_sn']])) $_snAlias[$_a['bom'] . '_' . (int)$_a['alias_sn']] = (int)$_a['target_sn'];
+        }
+    } catch (Throwable $_e) { $_snAlias = []; }
     foreach ($raw_ps_rows as $r) {
-        $key = $r['bom'] . '_' . $r['bom_sn'];
+        $isAliasRow = isset($_snAlias[$r['bom'] . '_' . (int)$r['bom_sn']]);
+        $key = $r['bom'] . '_' . ($isAliasRow ? $_snAlias[$r['bom'] . '_' . (int)$r['bom_sn']] : $r['bom_sn']);
         $batch_entry = [
             'batch_label'      => $r['batch_label'] ?? null,
             'sqty'             => $r['sqty'],
@@ -759,6 +769,7 @@ if (!empty($current_page_boms)) {
         if (!empty($r['batch_label'])) {
             $all_split_per_key[$key][] = $batch_entry;
         }
+        if ($isAliasRow) continue;
         $t = strtotime($r['Modified_At'] ?: $r['Created_At']);
         if (!isset($ps_map[$key]) || $t > strtotime($ps_map[$key]['Modified_At'] ?: $ps_map[$key]['Created_At'])) {
             $ps_map[$key] = $r;
@@ -780,6 +791,9 @@ if (!empty($current_page_boms)) {
     }
     unset($entry);
     $bom_ps_list = array_values($ps_map);
+    $_cnt = [];
+    foreach ($bom_ps_list as $_it) $_cnt[$_it['bom']] = ($_cnt[$_it['bom']] ?? 0) + 1;
+    if ($_cnt) $bom_ps_list_max = max($_cnt);
 }
 
 $all_process_types = $conn->getAll("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo");

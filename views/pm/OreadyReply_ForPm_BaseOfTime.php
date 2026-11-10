@@ -664,9 +664,23 @@ if (!empty($all_boms)) {
     $all_active_per_key  = []; // [bom_sn_key => [active batches]] 供拆分顯示
     $counts_per_bom      = [];
 
+    // 管理員在「管理員修正」把 SN25 這類額外 SN 設為「同一關」(bom_sn_alias)：併進目標 SN 那一欄（批次一起顯示），不另佔一欄。
+    // ⚠ 這段同時存在 _fetch_data.php／_fetch_data2.php，三處要一致。
+    $_snAlias = []; $_snHave = [];
+    foreach ($raw_ps_list as $_r) $_snHave[$_r['bom'] . '_' . $_r['bom_sn']] = true;
+    try {
+        $_aq = $db->prepare("SELECT bom, alias_sn, target_sn FROM bom_sn_alias WHERE bom IN ($placeholders_ps)");
+        $_aq->execute(array_values($all_boms));
+        foreach ($_aq->fetchAll(PDO::FETCH_ASSOC) as $_a) {
+            if ((int)$_a['alias_sn'] !== (int)$_a['target_sn'] && isset($_snHave[$_a['bom'] . '_' . (int)$_a['target_sn']])) $_snAlias[$_a['bom'] . '_' . (int)$_a['alias_sn']] = (int)$_a['target_sn'];
+        }
+    } catch (Throwable $_e) { $_snAlias = []; }
+
     foreach ($raw_ps_list as $row) {
         $b   = $row['bom'];
         $sn  = $row['bom_sn'];
+        $isAliasRow = isset($_snAlias[$b . '_' . (int)$sn]);
+        if ($isAliasRow) $sn = $_snAlias[$b . '_' . (int)$sn];
         $key = $b . '_' . $sn;
 
         $fmt_d = function($v) {
@@ -702,6 +716,7 @@ if (!empty($all_boms)) {
         }
 
         // Logic to pick latest if duplicate exists (mimicking the original SQL aggregation)
+        if ($isAliasRow) continue; // 併入的 SN 只提供批次，代表列一律用目標 SN 自己的列
         $row_time = strtotime($row['Modified_At'] ?: $row['Created_At']);
         if (isset($processed_ps_map[$key])) {
             $existing      = $processed_ps_map[$key];
@@ -7096,6 +7111,23 @@ echo "</script>\n";
                             var _qsNote = document.createElement('div');
                             _qsNote.style.cssText = 'font-size:10px;line-height:1.3;color:#a0522d;margin-top:1px;';
                             _qsNote.textContent = _qcSyncReasons[String(processInfo.bom_ing_fid)].join('、');
+                            // 顯示成：「10/16 QC補報 允收」換行「有報工紀錄」（只改文字，不影響判定與按鈕）
+                            try {
+                                var _qcR = String(processInfo.QC_check || '').trim();
+                                var _qcD = String(processInfo.QC_check_date || '').trim();
+                                var _qcRMap = { ok: '允收', ng: '不合格', AOD: '特採', QQ: '異常' };
+                                var _qcDm = _qcD.match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+                                var _qcDTxt = _qcDm ? (parseInt(_qcDm[2], 10) + '/' + parseInt(_qcDm[3], 10)) : '';
+                                var _qcRTxt = _qcRMap[_qcR] || _qcR;
+                                var _qcTypeMap = { '有線上檢驗紀錄': '線上檢驗', '有QC補報檢驗紀錄': 'QC補報', '有簡易檢驗紀錄': '簡易檢驗', '有檢驗紀錄': '檢驗' };
+                                var _qcLines = [], _qcOther = [];
+                                _qcSyncReasons[String(processInfo.bom_ing_fid)].forEach(function (r) {
+                                    if (_qcTypeMap[r]) _qcLines.push([_qcDTxt, _qcTypeMap[r], _qcRTxt].filter(Boolean).join(' '));
+                                    else _qcOther.push(r);
+                                });
+                                _qsNote.style.whiteSpace = 'pre-line';
+                                _qsNote.textContent = _qcLines.concat(_qcOther).join('\n');
+                            } catch (e) {}
                             _qsBtnRow.appendChild(_qsNote);
                             tdDynamicProcess.appendChild(_qsBtnRow);
                         }
