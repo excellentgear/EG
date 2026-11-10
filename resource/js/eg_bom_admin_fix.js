@@ -228,9 +228,22 @@
     }
     function load(keepMsg, ok) {
         var body = drawer.querySelector('#egaf-body'), sc = body.scrollTop;
+        // 重畫會整塊換掉內容：先記下分支檢視內層捲動位置與游標所在欄位，畫完還原，避免儲存後畫面跳走、焦點遺失
+        var fm0 = body.querySelector('.flw-main'), fmT = fm0 ? fm0.scrollTop : 0, fmL = fm0 ? fm0.scrollLeft : 0, bL = body.scrollLeft, fk = null;
+        try {
+            var ae = document.activeElement, row = ae && body.contains(ae) && ae.closest ? ae.closest('.it') : null;
+            if (row && ae.className) fk = { k: row.getAttribute('data-k'), id: row.getAttribute('data-id'), cls: String(ae.className).split(/\s+/).filter(function (c) { return /^f-/.test(c); })[0] };
+        } catch (e0) {}
         post({ action: 'baf_list' }, function (r) {
             if (!r.success) { body.innerHTML = '<div style="color:#b8431f;">' + esc(r.message || '讀取失敗') + '</div>'; return; }
-            DATA = r; render(); body.scrollTop = sc;
+            DATA = r; render(); body.scrollTop = sc; body.scrollLeft = bL;
+            var fm1 = body.querySelector('.flw-main'); if (fm1) { fm1.scrollTop = fmT; fm1.scrollLeft = fmL; }
+            if (fk && fk.cls) {
+                try {
+                    var tr = body.querySelector('.it[data-k="' + fk.k + '"][data-id="' + fk.id + '"] .' + fk.cls);
+                    if (tr && !tr.disabled && !tr.readOnly) tr.focus({ preventScroll: true });
+                } catch (e1) {}
+            }
             if (keepMsg) msg(keepMsg, ok);
         });
     }
