@@ -330,16 +330,49 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                                          LEFT JOIN user u ON u.id = a.uploaded_by
                                          WHERE a.status='active' AND ot.d_id_ID IN ($phD2) AND ($catCond)");
                 $oStmt->execute(array_merge($dids, $showOtherIds));
+                // 多頁文件若已指定「這個料號的原圖／其他標籤在第幾頁」，這裡也只列那幾頁
+                // （與「訂單／報價」分頁同一套資料：order_attachment_pages／order_attachment_tag_pages）；
+                // 沒有指定頁的檔案完全維持原樣。表不存在＝沒人用過，略過。
+                $pgOrigin = []; $pgTag = [];
+                try {
+                    foreach ($pdo2->query("SELECT filename, order_oo, part_no, pages FROM order_attachment_pages")->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+                        $pgOrigin[$pr['order_oo'] . '|' . $pr['filename']][(string)$pr['part_no']] = $pr['pages'];
+                    }
+                } catch (Exception $_pe) {}
+                try {
+                    foreach ($pdo2->query("SELECT filename, order_oo, category_id, part_no, pages FROM order_attachment_tag_pages")->fetchAll(PDO::FETCH_ASSOC) as $tr) {
+                        $pgTag[$tr['order_oo'] . '|' . $tr['filename']][(int)$tr['category_id']][(string)$tr['part_no']] = $tr['pages'];
+                    }
+                } catch (Exception $_pe) {}
                 foreach ($oStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;   // 價格類文件同樣要擋
                     $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
                     $catNames = [];
                     foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) { if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid]; }
+                    $oUrl = '../../src/store/Order_Attachment_API.php?action=download&id=' . (int)$r['id'];
+                    $oName = $r['original_name'] ?: $r['filename'];
+                    $pgKey = $r['Order_oo'] . '|' . $r['filename'];
+                    $pgList = [];
+                    foreach ($dids as $dd) { if (isset($pgOrigin[$pgKey][(string)$dd])) $pgList[] = $pgOrigin[$pgKey][(string)$dd]; }
+                    $pgLabel = '原圖';
+                    if (!$pgList) {
+                        foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) {
+                            $cid = (int)$cid;
+                            if (!in_array($cid, $showOtherIds, true) || !isset($pgTag[$pgKey][$cid])) continue;
+                            foreach ($dids as $dd) { if (isset($pgTag[$pgKey][$cid][(string)$dd])) $pgList[] = $pgTag[$pgKey][$cid][(string)$dd]; }
+                            if ($pgList) { $pgLabel = $cats[$cid] ?? ''; break; }
+                        }
+                    }
+                    if ($pgList) {
+                        $pgStr = implode(',', $pgList);
+                        $oUrl  .= '&pages=' . rawurlencode($pgStr);
+                        $oName .= '（' . $pgLabel . ' 第' . $pgStr . '頁）';
+                    }
                     $result[] = [
                         'id'             => 'o' . $r['id'],
                         'filename'       => $r['filename'],
-                        'display_name'   => $r['original_name'] ?: $r['filename'],
-                        'url'            => '../../src/store/Order_Attachment_API.php?action=download&id=' . (int)$r['id'],
+                        'display_name'   => $oName,
+                        'url'            => $oUrl,
                         'can_dl'         => bvCanDl($pdo2, $r['filename'], $r['category_ids']) ? 1 : 0,
                         'ext'            => $ext,
                         'type'           => in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image' : ($ext === 'pdf' ? 'pdf' : 'other'),
