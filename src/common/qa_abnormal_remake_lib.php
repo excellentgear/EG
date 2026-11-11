@@ -198,7 +198,7 @@ function qab_remake_first_proc(PDO $db, string $bom): int
     return (int)$st->fetchColumn();
 }
 
-/** 業務部門裡「今天有上班（沒請假）且沒有公出」的人，隨機挑一位；沒有符合的回 0 */
+/** 業務部門裡「今天有上班（沒請假）且沒有公出」的主管（職稱階級有設定者），隨機挑一位；沒有符合的回 0 */
 function qab_remake_pick_sales_on_duty(PDO $db): int
 {
     require_once __DIR__ . '/org_role_lib.php';
@@ -206,8 +206,14 @@ function qab_remake_pick_sales_on_duty(PDO $db): int
     require_once __DIR__ . '/person_schedule_lib.php';
     $salesDept = array_map('intval', eg_org_dept_ids($db, 'sales_dept'));
     if (!$salesDept) return 0;
+    // 只挑「主管」：在業務部門擔任「職稱階級管理」(position_level) 有設定階級的職務者；組員、助理等未設階級的不算
+    require_once __DIR__ . '/unit_supervisor_lib.php';
+    $lv = eg_unit_position_levels($db);
     $ids = [];
-    foreach (eg_people_list($db, ['dept_ids' => $salesDept]) as $p) $ids[(int)$p['id']] = 1;
+    foreach (eg_people_list($db, ['dept_ids' => $salesDept, 'all_posts' => true]) as $p) {
+        if (!in_array((int)$p['dept_id'], $salesDept, true)) continue;   // 該職務要真的屬於業務部門（兼任別處的不算）
+        if (isset($lv[(int)$p['position_id']])) $ids[(int)$p['id']] = 1;
+    }
     $ids = array_keys($ids);
     if (!$ids) return 0;
     $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
@@ -226,7 +232,7 @@ function qab_remake_pick_sales_on_duty(PDO $db): int
 
 /**
  * 自動開立的報廢異常單，若製令第一關是 138 客供料：NG 品交回客戶、不用補做 → 自動回填「不補」，
- * 回填人（畫面上的簽章）＝當天有上班且沒公出的任一位業務。找不到人就維持待業務回覆。
+ * 回填人（畫面上的簽章）＝當天有上班且沒公出的任一位業務主管（職稱階級管理有設定者，組員不算）。找不到人就維持待業務回覆。
  * @return bool 已自動回填
  */
 function qab_remake_auto_skip(PDO $db, array $o): bool
