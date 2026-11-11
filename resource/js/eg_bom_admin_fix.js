@@ -79,6 +79,13 @@
             + '#egaf-drawer .dd{font-weight:bold;margin:10px 0 4px;color:#7a4a10;border-bottom:1px dotted #E4D3BC;}'
             + '#egaf-drawer .it{border:1px solid #EEE0CC;border-radius:4px;padding:5px 8px;margin-bottom:5px;background:#FFFCF7;}'
             + '#egaf-drawer .it.dirty{background:#FFF1C9;border-color:#E8B54A;}'
+            + '#egaf-drawer .gf{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;margin:2px 10px 2px 0;}'
+            + '#egaf-drawer .gf b{font-weight:bold;}'
+            + '#egaf-drawer .gf input{border-radius:3px;height:26px;font-weight:bold;}'
+            + '#egaf-drawer .gf-s b,#egaf-drawer .gf-s input{color:#B42318;} #egaf-drawer .gf-s input{background:#FDE3E0;border:1px solid #E08A80;}'
+            + '#egaf-drawer .gf-w b,#egaf-drawer .gf-w input{color:#5C4A32;} #egaf-drawer .gf-w input{background:#F1E6D2;border:1px solid #C9B28A;}'
+            + '#egaf-drawer .gf-sh b,#egaf-drawer .gf-sh input{color:#7A4A00;} #egaf-drawer .gf-sh input{background:#FFE9A8;border:1px solid #E0B040;}'
+            + '#egaf-drawer .gf-bm b,#egaf-drawer .gf-bm input{color:#8A3200;} #egaf-drawer .gf-bm input{background:#FFD9B8;border:1px solid #E69A5A;}'
             + '#egaf-drawer .it .k{display:inline-block;color:#fff;border-radius:3px;padding:0 6px;font-size:11px;line-height:18px;margin-right:6px;}'
             + '#egaf-drawer .it input{padding:0 3px;height:24px;font-size:12px;border:1px solid #d8c8b0;border-radius:3px;}'
             + '#egaf-drawer .it .row2{margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;}'
@@ -130,7 +137,7 @@
             + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
             + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <label style="margin:0 8px 0 0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定日期／數量；取消勾選才能改（改了會同步更新移轉憑單）"><input type="checkbox" id="egaf-lock" checked style="height:auto;"> 鎖定ERP移轉憑單</label><button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
             + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
-            + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> <span title="發單數比實際送到廠商手上的多。不開異常單，只記進異常統計">發單短少</span> <input type="number" min="0" step="any" id="egaf-nr-sh" style="width:60px;"> <span title="發出去的料本身不良。與報廢一樣自動開異常單">發料不良</span> <input type="number" min="0" step="any" id="egaf-nr-bm" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
+            + '<div class="nw" id="egaf-nw-ret"><span class="gf"><b>發單批次</b><select id="egaf-nr-b" style="max-width:200px;"></select></span><span class="gf"><b>回廠</b><input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"></span><span class="gf gf-s"><b>報廢</b><input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"></span><span class="gf gf-w"><b>取回</b><input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"></span><span class="gf gf-sh" title="發單數比實際送到廠商手上的多。不開異常單，只記進異常統計"><b>發單短少</b><input type="number" min="0" step="any" id="egaf-nr-sh" style="width:60px;"></span><span class="gf gf-bm" title="發出去的料本身不良。與報廢一樣自動開異常單"><b>發料不良</b><input type="number" min="0" step="any" id="egaf-nr-bm" style="width:60px;"></span><span class="gf"><b>日期</b><input type="date" id="egaf-nr-d" style="width:125px;"></span> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
             + '<div id="egaf-msg" style="min-height:16px;font-size:12px;font-weight:bold;margin-top:3px;"></div></div>'
             + '<div class="b" id="egaf-body"></div>';
         document.body.appendChild(drawer);
@@ -153,7 +160,7 @@
             }
         });
         drawer.querySelector('#egaf-v-flow').onclick = function () { viewMode = 'flow'; render(); };
-        drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; delete drawer.querySelector('#egaf-ns-q').dataset.t; delete drawer.querySelector('#egaf-nr-r').dataset.t; render(); };
+        drawer.querySelector('#egaf-st').onchange = function () { stationFilter = this.value; ['#egaf-nr-s', '#egaf-nr-w', '#egaf-nr-sh', '#egaf-nr-bm'].forEach(function (id) { drawer.querySelector(id).value = ''; }); delete drawer.querySelector('#egaf-ns-q').dataset.t; delete drawer.querySelector('#egaf-nr-r').dataset.t; render(); };
         drawer.querySelector('#egaf-new-send').onclick = function () { toggleNw('egaf-nw-send'); };
         drawer.querySelector('#egaf-new-ret').onclick = function () { toggleNw('egaf-nw-ret'); };
         drawer.querySelector('#egaf-body').addEventListener('input', function (e) {
@@ -566,7 +573,7 @@
               + '<span style="color:#888;">已回 ' + nz(x.return_qty) + '／廢 ' + nz(x.scrap_qty) + '／取回 ' + nz(x.withdraw_qty) + '</span></div>';
         } else if (x.kind === 'return') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '') + '</span>' + (x.note ? ' <span style="color:#999;">（' + esc(x.note) + '）</span>' : '')
-              + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60) + ' 發單短少 ' + inp('f-sh', nz(x.short_qty), 55) + ' 發料不良 ' + inp('f-bm', nz(x.badmat_qty), 55)
+              + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + '<span class="gf"><b>回廠</b>' + inp('f-r', nz(x.return_qty), 60) + '</span>' + '<span class="gf gf-s"><b>報廢</b>' + inp('f-s', nz(x.scrap_qty), 60) + '</span>' + '<span class="gf gf-w"><b>取回</b>' + inp('f-w', nz(x.withdraw_qty), 60) + '</span>' + '<span class="gf gf-sh"><b>發單短少</b>' + inp('f-sh', nz(x.short_qty), 60) + '</span>' + '<span class="gf gf-bm"><b>發料不良</b>' + inp('f-bm', nz(x.badmat_qty), 60) + '</span>'
               + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>'
               + '<div style="font-size:11px;color:#a67c3d;margin-top:2px;">回廠＝實際良品回來的數量，<b>不含報廢</b>；回廠＋報廢＋取回＋發單短少＋發料不良 ＝ 該批發單數（例：發20、報廢1，則回廠19）；發料不良與報廢一樣會自動開異常單，發單短少只記進異常統計</div>';
         } else if (x.kind === 'qc') {
@@ -664,7 +671,7 @@
         var pick = null;
         ['#egaf-ns-q', '#egaf-nr-r'].forEach(function (id) { drawer.querySelector(id).addEventListener('input', function (e) { if (e.isTrusted) this.dataset.t = '1'; }); });
         ['#egaf-nr-s', '#egaf-nr-w', '#egaf-nr-sh', '#egaf-nr-bm'].forEach(function (id) { drawer.querySelector(id).addEventListener('input', autoFill); });
-        drawer.querySelector('#egaf-nr-b').addEventListener('change', function () { var r = drawer.querySelector('#egaf-nr-r'); delete r.dataset.t; autoFill(); });
+        drawer.querySelector('#egaf-nr-b').addEventListener('change', function () { ['#egaf-nr-s', '#egaf-nr-w', '#egaf-nr-sh', '#egaf-nr-bm'].forEach(function (id) { drawer.querySelector(id).value = ''; }); var r = drawer.querySelector('#egaf-nr-r'); delete r.dataset.t; autoFill(); });
         makerPicker(drawer.querySelector('#egaf-mk'), function (p) { pick = p; });
         drawer.querySelector('#egaf-ns-go').onclick = function () {
             if (!stationFilter) { msg('請先在「製程」下拉選一個製程，再新增發單', false); return; }

@@ -12555,7 +12555,7 @@ echo "</script>\n";
         if (ex) ex.remove();
         if (!document.getElementById('orm-nospin-css')) {   // 數字欄位不要上下增減鈕（按了會一直往上/下跳）
             var _nsp = document.createElement('style'); _nsp.id = 'orm-nospin-css';
-            _nsp.textContent = '#outsource-return-modal input[type=number]::-webkit-inner-spin-button,#outsource-return-modal input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}#outsource-return-modal input[type=number]{-moz-appearance:textfield;appearance:textfield;}';
+            _nsp.textContent = '#outsource-return-modal input[type=number]::-webkit-inner-spin-button,#outsource-return-modal input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}#outsource-return-modal input[type=number]{-moz-appearance:textfield;appearance:textfield;}#outsource-return-modal #orm-scrap-qty{background:#FDE3E0;color:#B42318;border:1px solid #E08A80;font-weight:bold;}#outsource-return-modal label:has(+ #orm-scrap-qty){color:#B42318;font-weight:bold;}#outsource-return-modal #orm-withdraw-qty{background:#F1E6D2;color:#5C4A32;border:1px solid #C9B28A;font-weight:bold;}#outsource-return-modal label:has(+ #orm-withdraw-qty){color:#5C4A32;font-weight:bold;}#outsource-return-modal #orm-short-qty{background:#FFE9A8;color:#7A4A00;border:1px solid #E0B040;font-weight:bold;}#outsource-return-modal label:has(+ #orm-short-qty){color:#7A4A00;font-weight:bold;}#outsource-return-modal #orm-badmat-qty{background:#FFD9B8;color:#8A3200;border:1px solid #E69A5A;font-weight:bold;}#outsource-return-modal label:has(+ #orm-badmat-qty){color:#8A3200;font-weight:bold;}';
             document.head.appendChild(_nsp);
         }
         var overlay = document.createElement('div');
