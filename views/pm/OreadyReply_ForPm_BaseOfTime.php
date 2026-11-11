@@ -4084,6 +4084,73 @@ echo "</script>\n";
             });
         }
 
+        // 客戶篩選：輸入即列出吻合客戶供點選；只剩一筆吻合時自動帶入（停筆 500ms／Enter／Tab／離開欄位）
+        if (customerFilterEl) {
+            const box = document.createElement('div');
+            box.style.cssText = 'display:none;position:fixed;z-index:10600;background:#fff;border:1px solid #D9B98A;border-radius:6px;box-shadow:0 4px 14px rgba(90,60,20,.25);max-height:260px;overflow-y:auto;min-width:180px;';
+            document.body.appendChild(box);
+            let autoTimer = null;
+            const matches = () => {
+                const q = customerFilterEl.value.trim().toLowerCase();
+                if (!q) return [];
+                return (availableCustomers || []).filter(v => String(v).toLowerCase().includes(q));
+            };
+            const hide = () => { box.style.display = 'none'; };
+            const pick = (v) => {
+                clearTimeout(autoTimer);
+                customerFilterEl.value = v;
+                hide();
+                customerFilterEl.dispatchEvent(new Event('input', { bubbles: true }));
+            };
+            const show = () => {
+                const m = matches();
+                if (!m.length || (m.length === 1 && m[0] === customerFilterEl.value.trim())) { hide(); return; }
+                box.innerHTML = '';
+                m.slice(0, 50).forEach(v => {
+                    const d = document.createElement('div');
+                    d.textContent = v;
+                    d.style.cssText = 'padding:5px 10px;cursor:pointer;color:#5A3A12;font-size:13px;line-height:18px;';
+                    d.addEventListener('mouseenter', () => d.style.background = '#F7E0BD');
+                    d.addEventListener('mouseleave', () => d.style.background = '');
+                    d.addEventListener('mousedown', e => { e.preventDefault(); pick(v); });
+                    box.appendChild(d);
+                });
+                if (m.length > 50) {
+                    const t = document.createElement('div');
+                    t.textContent = '還有 ' + (m.length - 50) + ' 筆，請再輸入更多字';
+                    t.style.cssText = 'padding:4px 10px;color:#9A7B4F;font-size:12px;';
+                    box.appendChild(t);
+                }
+                const r = customerFilterEl.getBoundingClientRect();
+                box.style.left = r.left + 'px';
+                box.style.top = (r.bottom + 2) + 'px';
+                box.style.width = Math.max(r.width, 180) + 'px';
+                box.style.display = 'block';
+            };
+            customerFilterEl.addEventListener('input', function() {
+                show();
+                clearTimeout(autoTimer);
+                autoTimer = setTimeout(() => {
+                    const m = matches();
+                    if (m.length === 1 && m[0] !== customerFilterEl.value.trim() && document.activeElement === customerFilterEl) pick(m[0]);
+                }, 500);
+            });
+            customerFilterEl.addEventListener('focus', show);
+            customerFilterEl.addEventListener('blur', () => setTimeout(() => {
+                hide();
+                const m = matches();
+                if (m.length === 1 && m[0] !== customerFilterEl.value.trim()) pick(m[0]);
+            }, 180));
+            customerFilterEl.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                    const m = matches();
+                    if (m.length === 1 && m[0] !== customerFilterEl.value.trim()) { if (e.key === 'Enter') e.preventDefault(); pick(m[0]); }
+                } else if (e.key === 'Escape') hide();
+            });
+            window.addEventListener('scroll', hide, true);
+            window.addEventListener('resize', hide);
+        }
+
         const vendorFilterEl = document.getElementById("vendor-filter");
         if (vendorFilterEl) {
             vendorFilterEl.addEventListener('focus', function() { // 當輸入框被點擊或聚焦時 (datalist 展開)
@@ -18037,7 +18104,7 @@ echo "</script>\n";
                                         <div class="all-filters">
 
                                             <!-- 客戶 -->
-                                            <input type="text" id="customer-filter" list="customerList" placeholder="全部客戶">
+                                            <input type="text" id="customer-filter" autocomplete="off" placeholder="全部客戶">
                                             <button type="button" id="btn-prev-customer" title="上一個客戶" style="padding: 0 6px; height: 26px; font-size: 10px;">&lt;</button>
                                             <button type="button" id="btn-next-customer" title="下一個客戶" style="padding: 0 6px; height: 26px; font-size: 10px;">&gt;</button>
                                             <datalist id="customerList"></datalist>
