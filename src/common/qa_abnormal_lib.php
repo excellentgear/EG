@@ -4005,7 +4005,12 @@ function qab_outsource_batch_auto_open(PDO $db, int $batchId, int $uid): array
         $st = $db->prepare("SELECT scrap_qty, badmat_qty FROM bom_ing_outsource_batch WHERE batch_id=?");
         $st->execute([$batchId]);
         $b = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$b || ((float)$b['scrap_qty'] <= 0 && (float)$b['badmat_qty'] <= 0)) return $out;
+        if (!$b) return $out;
+        if ((float)$b['scrap_qty'] <= 0 && (float)$b['badmat_qty'] <= 0) {
+            // 報廢／發料不良被改回 0（例如管理員修正）：先前「廠商提報」自動開立的異常單已不成立，一併作廢
+            $out['msg'] = qab_retire_outsource_auto_order($db, $batchId, $uid);
+            return $out;
+        }
         $ab = qab_auto_open_from_outsource_return($db, $batchId, $uid);
         $out['ab'] = $ab;
         if ($ab && !empty($ab['no'])) {
@@ -4018,6 +4023,48 @@ function qab_outsource_batch_auto_open(PDO $db, int $batchId, int $uid): array
         error_log('qab_outsource_batch_auto_open batch=' . $batchId . ': ' . $e->getMessage());
     }
     return $out;
+}
+
+/**
+ * 這一批加工單流水帳的報廢／發料不良已歸零 → 作廢先前由它自動開立的異常單（軟刪除，可由異常單管理員還原）。
+ * 只處理「系統自動開立且沒有人工處理過」的單（未結案且品管未確認，或系統快速決策自動結案者）；
+ * 人工已判定／已結案的單不動，只回提醒文字請人工確認。回傳接在回應訊息後面的文字。
+ */
+function qab_retire_outsource_auto_order(PDO $db, int $batchId, int $uid): string
+{
+    $st = $db->prepare("SELECT * FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL AND auto_opened=1 ORDER BY id");
+    $st->execute([$batchId]);
+    $msgs = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $o) {
+        $id = (int)$o['id'];
+        $quick = (int)($o['quick_mode'] ?? 0) === 1;
+        $untouched = empty($o['is_closed']) && (empty($o['qc_review_at']) || $quick);
+        $quickClosed = !empty($o['is_closed']) && $quick;
+        if (!$untouched && !$quickClosed) {
+            $msgs[] = '異常單 ' . $o['abnormal_order_no'] . ' 已由人工處理，未自動作廢，請自行確認';
+            continue;
+        }
+        $reason = '外包回廠報廢／發料不良數量已改為 0，系統自動作廢';
+        $snap = json_encode([
+            'no' => $o['abnormal_order_no'], 'fill_date' => $o['fill_date'], 'client' => $o['client_name'],
+            'part_no' => $o['part_no'], 'bom_no' => $o['bom_no'], 'ir_no' => $o['ir_no'],
+            'phenomenon' => mb_substr((string)$o['abnormal_phenomenon'], 0, 500),
+            'is_closed' => (int)$o['is_closed'], 'scrap_no' => $o['scrap_no'],
+            'report_ids' => [], 'qc_form_id' => 0,
+        ], JSON_UNESCAPED_UNICODE);
+        $own = !$db->inTransaction();
+        if ($own) $db->beginTransaction();
+        try {
+            $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NOW(), deleted_by=?, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$uid, $uid, $id]);
+            $nm = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $nm->execute([$uid]);
+            $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,snapshot,acted_by,acted_name) VALUES (?,?,'delete',?,?,?,?)")
+               ->execute([$id, $o['abnormal_order_no'], $reason, $snap, $uid, (string)$nm->fetchColumn()]);
+            if ($own) $db->commit();
+        } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
+        if (function_exists('qab_retire_pending_notices')) { try { qab_retire_pending_notices($db, $id, 'gm', $uid); } catch (Throwable $e) {} }
+        $msgs[] = '異常單 ' . $o['abnormal_order_no'] . ' 已自動作廢（報廢數量歸零）';
+    }
+    return $msgs ? '；' . implode('；', $msgs) : '';
 }
 
 /** 舊名稱相容：改為呼叫 qab_outsource_batch_auto_open()，只回異常單。 */
@@ -4035,7 +4082,20 @@ function qab_bom_decision_tags(PDO $db, array $bomNos): array
     $bomNos = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $bomNos)), function ($v) { return $v !== ''; })));
     if (!$bomNos) return $out;
     // 報廢後業務回填的「補做／不補／待回覆」標籤（2026-11-05）
-    try { foreach (qab_remake_tags_for_boms($db, $bomNos) as $k => $list) foreach ($list as $t) $out[(string)$k][] = $t; } catch (Throwable $e) {}
+    try {
+        foreach (qab_remake_tags_for_boms($db, $bomNos) as $k => $list) {
+            // 補件標籤（主行「報廢 x數量」＋子行「待業務確認補件／補做／不補 單號」）已經代表這張異常單，
+            // 同一張單的「決策」標籤就不要再重複顯示一次（否則畫面出現兩筆一樣的報廢）
+            $rid = [];
+            foreach ($list as $t) if ((int)($t['id'] ?? 0) > 0) $rid[(int)$t['id']] = true;
+            if ($rid && !empty($out[(string)$k])) {
+                $out[(string)$k] = array_values(array_filter($out[(string)$k], function ($t) use ($rid) {
+                    return !(($t['kind'] ?? '') === 'decision' && isset($rid[(int)($t['id'] ?? 0)]));
+                }));
+            }
+            foreach ($list as $t) $out[(string)$k][] = $t;
+        }
+    } catch (Throwable $e) {}
     try {
         $in = implode(',', array_fill(0, count($bomNos), '?'));
         $st = $db->prepare("SELECT bi.bom AS k, b.scrap_qty, b.badmat_qty, b.short_qty, b.updated_at, bi.bom_sn, pn.ProcessName,

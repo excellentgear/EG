@@ -2696,6 +2696,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                 if ($nc) $resp['abnormal_order'] = ['id' => $nc['id'], 'no' => $nc['no'], 'existed' => !empty($nc['existed']),
                     'auto_closed' => (int)($nc['auto_closed'] ?? 0), 'vendor_pending' => (int)($nc['vendor_pending'] ?? 0), 'scrap_no' => (string)($nc['scrap_no'] ?? '')];
                 if ($ao['err'] !== '') { $resp['abnormal_error'] = $ao['err']; $resp['message'] = (string)($resp['message'] ?? '') . $ao['msg']; }
+                elseif (!$nc && $ao['msg'] !== '') { $resp['message'] = (string)($resp['message'] ?? '') . $ao['msg']; }   // 報廢歸零時自動作廢先前開立的異常單
             }
         } catch (Throwable $e) { $resp['abnormal_error'] = $e->getMessage(); $resp['message'] = (string)($resp['message'] ?? '') . '；⚠ 異常單未能自動開立：' . $e->getMessage(); }
         echo json_encode($resp);
@@ -2775,9 +2776,14 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
             echo json_encode(['success'=>true,'message'=>'已儲存' . (isset($bmAo) ? $bmAo['msg'] : '')]);
         } elseif ($act === 'baf_delete') {
             if ($kind === 'send') ber_delete_batch($db, $fid, $id, $uid, true);
-            elseif ($kind === 'return') ber_delete_return($db, $fid, $id, $uid, true);
+            elseif ($kind === 'return') {
+                $dBid = (int)$db->query("SELECT batch_id FROM bom_ing_outsource_return WHERE return_id=" . (int)$id)->fetchColumn();
+                ber_delete_return($db, $fid, $id, $uid, true);
+                require_once '../../src/common/qa_abnormal_lib.php';
+                $dAo = $dBid > 0 ? qab_outsource_batch_auto_open($db, $dBid, $uid) : ['msg' => ''];   // 刪掉報廢那筆 → 自動作廢先前開立的異常單
+            }
             else throw new Exception('這種紀錄不能刪除');
-            echo json_encode(['success'=>true,'message'=>'已刪除']);
+            echo json_encode(['success'=>true,'message'=>'已刪除' . (isset($dAo) ? $dAo['msg'] : '')]);
         } elseif ($act === 'baf_add_send') {
             ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker'] ?? '')), $fl('send_qty'), $d, $uid, true); // 管理員補發單不受發單數上限擋，超過會在「總數異常」紅字提示
             // 主畫面製程格讀的是 bom_ing.outsource_date／return_date；補登只寫批次表時格子不會顯示 → 只在欄位仍是空的時候補上（不覆蓋既有值、不改狀態）
@@ -2839,8 +2845,11 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
             $bmAo = qab_outsource_batch_auto_open($db, $bmBid, $uid);
             echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改' . $bmAo['msg']]);
         } elseif ($act === 'ber_delete_return') {
+            $dBid = (int)$db->query("SELECT batch_id FROM bom_ing_outsource_return WHERE return_id=" . (int)($_POST['return_id'] ?? 0))->fetchColumn();
             ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid, $force);
-            echo json_encode(['success'=>true,'message'=>'回廠紀錄已刪除']);
+            require_once '../../src/common/qa_abnormal_lib.php';
+            $dAo = $dBid > 0 ? qab_outsource_batch_auto_open($db, $dBid, $uid) : ['msg' => ''];   // 刪掉報廢那筆 → 自動作廢先前開立的異常單
+            echo json_encode(['success'=>true,'message'=>'回廠紀錄已刪除' . $dAo['msg']]);
         } elseif ($act === 'ber_add_batch') {
             ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), (float)($_POST['send_qty'] ?? 0), trim((string)($_POST['send_date'] ?? '')), $uid);
             echo json_encode(['success'=>true,'message'=>'已補登移送批次']);
