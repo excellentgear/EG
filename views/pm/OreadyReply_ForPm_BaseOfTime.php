@@ -11715,7 +11715,7 @@ echo "</script>\n";
 <div style="padding:16px;">
   <div style="display:flex;align-items:center;margin-bottom:12px;">
     <label style="width:60px;flex-shrink:0;font-size:13px;">移轉日：</label>
-    <div class="datetest" style="flex:1;"><input type="text" id="qtr-date-${fid}" class="form-control transfer-datepicker" value="${escapeHtml(todayStr)}" placeholder="請選擇日期" style="width:100%;"></div>
+    <div class="datetest" style="flex:1;"><input type="date" id="qtr-date-${fid}" class="form-control" value="${escapeHtml(todayStr)}" style="width:100%;"></div>
   </div>
   <div style="display:flex;align-items:flex-start;margin-bottom:4px;">
     <label style="width:60px;flex-shrink:0;font-size:13px;padding-top:6px;">廠商：</label>
@@ -11748,7 +11748,6 @@ echo "</script>\n";
   <button id="qtr-confirm-${fid}" class="btn btn-primary">確認移轉</button>
 </div></div>`;
         document.body.appendChild(overlay);
-        try{$('#qtr-date-'+fid).datepicker({format:'yyyy-mm-dd',autoclose:true,language:'zh-TW',todayHighlight:true});}catch(e){}
 
         // ── 發單數量（分批發單）：預設帶入「本站尚未發單的總數」；超過本站未發量會擋下、超過上一關可領量只提示（確認後可送出）──
         var _qtyAvail = null;
@@ -14226,7 +14225,7 @@ echo "</script>\n";
                             <label class="control-label col-sm-3">移轉日：</label>
                             <div class="col-sm-5">
                                 <div class="datetest">
-                                    <input type="text" class="form-control transfer-datepicker" id="transfer-date-${proc.bom_ing_fid}" placeholder="請選擇日期">
+                                    <input type="date" class="form-control" id="transfer-date-${proc.bom_ing_fid}">
                                 </div>
                             </div>
                         </div>
