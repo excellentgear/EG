@@ -315,7 +315,8 @@ function ocq_fetch_processes($pdo, $bom_list) {
         SELECT bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName, bi.bom_ing_fid, bi.processing_state,
                DATE_FORMAT(bi.outsource_date,'%Y-%m-%d') AS outsource_date,
                DATE_FORMAT(bi.return_date,'%Y-%m-%d') AS return_date,
-               ml.maker_id AS maker_id
+               ml.maker_id AS maker_id,
+               bi.QC_check, bi.qc_completed, bi.batch_label, bi.sqty
         FROM bom_ing bi
         INNER JOIN (
             SELECT bom, bom_sn, MAX(bom_ing_fid) AS max_fid
@@ -329,7 +330,43 @@ function ocq_fetch_processes($pdo, $bom_list) {
     $proc_map = []; $max_count = 0;
     foreach ($sp->fetchAll(PDO::FETCH_ASSOC) as $p) { $proc_map[$p['bom']][] = $p; }
     foreach ($proc_map as $ps) { if (count($ps) > $max_count) $max_count = count($ps); }
+    // 拆批（同一關有 batch_label 的多列）：與 BOM總覽「拆N批」同一份資料，掛在該關 split_batches 底下
+    try {
+        $sb = $pdo->prepare("SELECT bi.bom, bi.bom_sn, bi.bom_ing_fid, bi.batch_label, bi.sqty, bi.processing_state, bi.QC_check, bi.qc_completed,
+                   DATE_FORMAT(bi.outsource_date,'%Y-%m-%d') AS outsource_date, DATE_FORMAT(bi.return_date,'%Y-%m-%d') AS return_date,
+                   ml.maker_id AS maker_id
+            FROM bom_ing bi LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
+            WHERE bi.bom IN ($ph) AND bi.batch_label IS NOT NULL AND bi.batch_label <> ''
+            ORDER BY bi.bom, CAST(bi.bom_sn AS UNSIGNED), bi.batch_label");
+        $sb->execute($bom_list);
+        $split = [];
+        foreach ($sb->fetchAll(PDO::FETCH_ASSOC) as $r) $split[$r['bom']][(string)$r['bom_sn']][] = $r;
+        foreach ($proc_map as $bm => &$ps) {
+            foreach ($ps as &$p) {
+                $k = (string)$p['bom_sn'];
+                if (!empty($split[$bm][$k]) && count($split[$bm][$k]) > 1) $p['split_batches'] = $split[$bm][$k];
+            }
+            unset($p);
+        }
+        unset($ps);
+    } catch (Throwable $e) { error_log('ocq split_batches: ' . $e->getMessage()); }
     return [$proc_map, $max_count];
+}
+
+// 分批回廠明細＋異常單決策標籤（報廢／發料不良／發單短少）：與 BOM總覽同一支共用函式，失敗不影響清單
+function ocq_fetch_extras($pdo, $bom_list, $proc_map) {
+    $ob = []; $tags = [];
+    try {
+        require_once __DIR__ . '/../../src/common/bom_outsource_lib.php';
+        $fids = [];
+        foreach ($proc_map as $ps) foreach ($ps as $p) { $fids[] = (int)$p['bom_ing_fid']; foreach (($p['split_batches'] ?? []) as $sb) $fids[] = (int)$sb['bom_ing_fid']; }
+        $ob = eg_bom_outsource_batch_map($pdo, $fids);
+    } catch (Throwable $e) { error_log('ocq ob_batch_map: ' . $e->getMessage()); }
+    try {
+        require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+        $tags = qab_bom_decision_tags($pdo, $bom_list);
+    } catch (Throwable $e) { error_log('ocq qab_tags: ' . $e->getMessage()); }
+    return [$ob ?: (object)[], $tags];
 }
 
 // 批量撈最新單價（每 bom+bom_sn 取最新一筆），比照既有 search_completed_bom
@@ -1671,8 +1708,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($rows as $r0) $rows_by_bom[$r0['bom']] = $r0;
             $bind_map = ocq_bind_map($pdo, $bom_list, $rows_by_bom);
             ocq_attach_delivery($rows, $bind_map);
+            list($ob_batch_map, $qab_tags_map) = ocq_fetch_extras($pdo, $bom_list, $proc_map);
             foreach ($rows as &$row) {
                 $row['processes'] = $proc_map[$row['bom']] ?? [];
+                $row['qab_tags']  = $qab_tags_map[(string)$row['bom']] ?? [];
                 $row['has_file']  = $file_map[$row['bom']] ?? null;   // true/false；null＝快取還沒建好、無法判定
                 $bi = $bind_map[$row['bom']] ?? [];
                 $row['bound_orders'] = $bi['orders'] ?? [];
@@ -1682,7 +1721,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             unset($row);
 
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'page_size' => $page_size,
-                'rows' => $rows, 'max_process_count' => $max_count, 'price_map' => $price_map,
+                'rows' => $rows, 'max_process_count' => $max_count, 'price_map' => $price_map, 'ob_batch_map' => $ob_batch_map,
                 'bom_cache_refresh' => $cache_stale, 'limit_max' => OCQ_LIST_MAX]);
         } elseif ($action === 'get_print') {
             list($whereSql, $params) = ocq_build_filter($_POST);
@@ -2718,6 +2757,64 @@ function delivCellHtml(item){
     }).join('');
 }
 
+/* 製程格補充顯示：與 BOM總覽（OreadyReply_ForPm_BaseOfTime.php）同一套——拆N批／分N批各批次、
+   QC 結果、本關報廢／發料不良／發單短少。資料來自後端 ocq_fetch_extras（同一支共用函式）。 */
+function ocqNum(v){ v = Number(v) || 0; return (Math.round(v*1000)/1000).toString(); }
+function ocqMd(s){ var m = String(s||'').match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m ? (parseInt(m[2],10)+'/'+parseInt(m[3],10)) : ''; }
+function ocqProcExtras(p, item){
+    var h = '', ST = {N:'待發包',P:'待移轉',ing:'加工中',Q:'QC待驗',E:'已移轉',1:'已移轉',skip:'跳過'};
+    var BOX = 'border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;';
+    var splits = p.split_batches || null;
+    var m = (window.OCQ_OB || {})[String(p.bom_ing_fid)];
+    if (splits && splits.length > 1) {
+        h += '<div style="font-size:10.5px;"><span style="color:#337ab7;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;line-height:1.4;">拆'+splits.length+'批</span></div>';
+        splits.forEach(function(b){
+            var mb = (window.OCQ_OB || {})[String(b.bom_ing_fid)], qty = b.sqty;
+            if (mb && mb.batches && mb.batches.length) qty = Math.min((Number(mb.send)||0) - (Number(mb.wd)||0), Number(b.sqty)||Infinity);
+            var od = ocqMd(b.outsource_date), rd = ocqMd(b.return_date);
+            var qc = b.qc_completed == 1 ? '<span style="color:#28a745;font-size:9px;line-height:1.4;"> [QC完工]</span>'
+                   : (b.QC_check ? '<span style="color:'+(b.QC_check==='ok'?'#28a745':(b.QC_check==='ng'?'#c00':'#e67e00'))+';font-size:9px;line-height:1.4;"> ['+({ok:'允收',ng:'驗退',QQ:'異常',AOD:'特採'}[b.QC_check]||b.QC_check)+']</span>' : '');
+            h += '<div style="'+BOX+'"><strong style="color:#337ab7;">'+esc(b.batch_label)+'</strong> '+esc(ocqNum(qty))+' pcs'
+               + (b.maker_id ? '<br><span style="color:#555;line-height:1.4;">'+esc(b.maker_id)+'</span>' : '')
+               + (od ? '<span style="color:#aaa;line-height:1.4;"> '+od+'</span>' : '') + (rd ? '<span style="color:#2a7ae2;line-height:1.4;"> 回:'+rd+'</span>' : '')
+               + (ST[b.processing_state] ? ' <span style="color:#888;font-size:9px;line-height:1.4;">['+ST[b.processing_state]+']</span>' : '') + qc + '</div>';
+        });
+    } else if (m && m.batches && m.batches.length) {
+        h += '<div style="font-size:10.5px;"><span style="color:#337ab7;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;line-height:1.4;">分'+m.batches.length+'批</span></div>';
+        m.batches.forEach(function(b){
+            var out = Number(b.outside) || 0, last = (b.returns && b.returns.length) ? b.returns[b.returns.length-1].date : '';
+            var od = ocqMd(b.send_date), rd = ocqMd(last);
+            var st = out > 1e-9 ? '<span style="color:#1a7a1a;font-size:9px;line-height:1.4;">[加工中]</span>' : (b.xfer ? '<span style="color:#888;font-size:9px;line-height:1.4;">[已移轉]</span>' : '<span style="color:#2a7ae2;font-size:9px;line-height:1.4;">[已回]</span>');
+            h += '<div style="'+BOX+'">'
+               + (out > 1e-9 ? '<span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;line-height:1.4;" title="送出 '+ocqNum(b.send)+'">未回 '+ocqNum(out)+' pcs</span>' : ocqNum(b.send)+' pcs')
+               + ((Number(b.scrap)||0) > 0 ? ' <span style="color:#8A2A16;font-weight:bold;line-height:1.4;">廢 '+ocqNum(b.scrap)+'</span>' : '')
+               + (b.maker ? '<br><span style="color:#555;line-height:1.4;">'+esc(b.maker)+'</span>' : '')
+               + (od && rd ? '<span style="color:#2a7ae2;line-height:1.4;"> '+od+'~'+rd+'</span>' : (od ? '<span style="color:#aaa;line-height:1.4;"> '+od+'</span>' : '') + (rd ? '<span style="color:#2a7ae2;line-height:1.4;"> 回:'+rd+'</span>' : ''))
+               + ' ' + st + '</div>';
+        });
+    }
+    // QC 結果（單批製程；拆批已在各批次顯示）
+    if (!(splits && splits.length > 1)) {
+        if (p.qc_completed == 1) h += '<div style="color:#28a745;font-size:10px;line-height:1.4;">[QC完工]</div>';
+        else if (p.QC_check) h += '<div style="color:'+(p.QC_check==='ok'?'#28a745':(p.QC_check==='ng'?'#c00':'#e67e00'))+';font-size:10px;line-height:1.4;">['+({ok:'允收',ng:'驗退',QQ:'異常',AOD:'特採'}[p.QC_check]||esc(p.QC_check))+']</div>';
+    }
+    // 本關的報廢／發料不良／發單短少（異常單決策標籤，依製程序號對應；每種各一行）
+    var q = {};
+    (Array.isArray(item.qab_tags) ? item.qab_tags : []).forEach(function(t){
+        if (t.kind === 'remake') {
+            if (String(t.proc_no||'') === String(p.process_no||'')) q['報廢'] = (q['報廢']||0) + (Number(t.main_qty)||0);
+            return;
+        }
+        if ((t.kind !== 'decision' && t.kind !== 'vendor_scrap') || Number(t.sn) !== Number(p.bom_sn)) return;
+        var nm = String(t.name||''), k = nm.indexOf('報廢') >= 0 ? '報廢' : ((nm === '發料不良' || nm === '發單短少') ? nm : '');
+        if (k) q[k] = (q[k]||0) + (Number(t.qty)||0);
+    });
+    ['報廢','發料不良','發單短少'].forEach(function(k){
+        if (q[k] > 0) h += '<div style="font-size:10px;line-height:1.4;color:#8A2A16;font-weight:bold;background:#FBE0DA;border-radius:3px;padding:0 4px;margin-top:2px;white-space:nowrap;" title="本關：'+k+' '+ocqNum(q[k])+'">⚠ '+k+' '+ocqNum(q[k])+'</div>';
+    });
+    return h;
+}
+
 function rowToTr(item, maxProc, priceMap){
     var cc = item.priority_type==='E' ? 'circle_red' : (item.priority_type==='U' ? 'circle_y' : 'circle_green');
     var closedInfo = '<div class="ocq-sub">' + (item.closed_by_name ? '結：'+esc(item.closed_by_name)+'　' : '')
@@ -2790,6 +2887,7 @@ function rowToTr(item, maxProc, priceMap){
             // 回廠日依使用者指定寫成「日期 回」（日期在前），不是「回廠:日期」
             if (p.return_date) cell += '<div style="color:#2a7ae2;font-weight:bold;">'+esc(egFmtDate(p.return_date))+' 回</div>';
         }
+        cell += ocqProcExtras(p, item);
         if (pv > 0) cell += '<div style="color:#0a6;font-size:10px;">$'+fmtPrice(pv)+'</div>';
         tds += '<td class="t-left">'+cell+'</td>';
     }
@@ -2945,6 +3043,7 @@ function loadList(page){
         if (!res.rows.length){
             $('#ocqTbody').html('<tr><td colspan="'+colCount+'" class="ocq-empty">查無符合條件的已完工BOM</td></tr>');
         } else {
+            window.OCQ_OB = res.ob_batch_map || {};
             $('#ocqTbody').html(res.rows.map(function(r){ return rowToTr(r, res.max_process_count||0, res.price_map||{}); }).join(''));
         }
         renderPager(res.total, res.page, res.page_size);
