@@ -110,12 +110,15 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
         $params = $boms;
     }
 
-    // 最後一道製程（同 bom_sn 有重複列時取 bom_ing_fid 最大者）
+    /* 最後一道製程（同 bom_sn 有重複列時取 bom_ing_fid 最大者）。
+       完工量：ERP 結案＝整張 sqty；最後一關已移轉(E)＝該關 sqty；
+       否則＝最後一關「已回廠」的數量（與 BOM 總覽「N PCS 待出貨」同一口徑，2026-11-11 使用者要求）——
+       包裝等最後一關常常整批回廠了狀態卻還停在加工中，只認 E 會讓可出量一直是 0。 */
     $sql = "
         SELECT b.bom,
                CASE WHEN b.processing_state = '1' THEN b.sqty
                     WHEN bl.processing_state = 'E' THEN bl.sqty
-                    ELSE 0 END                       AS done_qty,
+                    ELSE COALESCE(lr.ret, 0) END     AS done_qty,
                COALESCE(sm.shipped, 0)               AS shipped_qty,
                CASE WHEN b.processing_state = '1' THEN 1 ELSE 0 END AS erp_closed
         FROM bom b
@@ -127,6 +130,14 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
             JOIN (SELECT bom, bom_sn, MAX(bom_ing_fid) AS mf FROM bom_ing GROUP BY bom, bom_sn) dd
               ON dd.bom = bi.bom AND dd.bom_sn = bi.bom_sn AND dd.mf = bi.bom_ing_fid
         ) bl ON bl.bom = b.bom
+        LEFT JOIN (
+            SELECT bi.bom, SUM(ob.return_qty) AS ret
+            FROM bom_ing bi
+            JOIN (SELECT bom, MAX(bom_sn) AS msn FROM bom_ing GROUP BY bom) mx2
+              ON mx2.bom = bi.bom AND mx2.msn = bi.bom_sn
+            JOIN bom_ing_outsource_batch ob ON ob.bom_ing_fid = bi.bom_ing_fid
+            GROUP BY bi.bom
+        ) lr ON lr.bom = b.bom
         LEFT JOIN (SELECT m.bom, SUM(m.shipped_qty) AS shipped
                    FROM is_bom_map m
                    JOIN is_list il ON il.IS_id = m.IS_id      -- 出貨明細被刪掉時，殘留的分配列不可再算成「已出」
@@ -830,12 +841,24 @@ function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): a
         $cand = $ordersByKey[$key] ?? [];
         $hit  = null;
 
+        /* 挑訂單（2026-11-11 使用者回報「自動帶入的訂單根本是錯的」）：
+           單純 FIFO 會先吃到多年前「出貨從沒回填過、所以看起來還有剩」的舊訂單
+           （例：2026 年單價 135 的出貨被推到 2019 年單價 300、只剩 40 支的訂單）。
+           改成在「下單日不晚於出貨日、還有剩餘量」的候選中依序比：
+           ①單價相同 ②剩餘量放得下整筆出貨 ③下單日早者（FIFO）。 */
+        $bestIdx = null; $bestRank = null;
         foreach ($cand as $idx => $o) {
+            $o = $ordersByKey[$key][$idx];
             if ($o['left'] <= 0) continue;
             if ($o['order_date'] > $s['ship_date']) continue;   // 不可出在下單之前
-            $ordersByKey[$key][$idx]['left'] = $o['left'] - (int)$s['Qty'];
-            $hit = $o;
-            break;
+            $pm   = (abs((float)$o['unit_price'] - (float)$s['Unit_price']) < 0.01) ? 0 : 1;
+            $fits = ((int)$o['left'] >= (int)$s['Qty']) ? 0 : 1;
+            $rank = [$pm, $fits];
+            if ($bestRank === null || $rank < $bestRank) { $bestRank = $rank; $bestIdx = $idx; }
+        }
+        if ($bestIdx !== null) {
+            $hit = $ordersByKey[$key][$bestIdx];
+            $ordersByKey[$key][$bestIdx]['left'] = $hit['left'] - (int)$s['Qty'];
         }
 
         if (!$hit) {
