@@ -1786,9 +1786,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             echo json_encode(['success' => true, 'processes' => $processes]);
         } elseif ($action === 'get_options') {
-            $stmtC = $pdo->query("SELECT DISTINCT $OCQ_CLIENT_DISP AS nm $OCQ_FROM
+            $stmtC = $pdo->query("SELECT DISTINCT $OCQ_CLIENT_DISP AS nm, COALESCE($OCQ_CLIENT_ID,'') AS cid $OCQ_FROM
                 WHERE b.processing_state='1' AND $OCQ_CLIENT_DISP IS NOT NULL AND $OCQ_CLIENT_DISP <> '' ORDER BY nm");
-            $customers = $stmtC->fetchAll(PDO::FETCH_COLUMN);
+            $customers = $stmtC->fetchAll(PDO::FETCH_ASSOC);
 
             $stmtS = $pdo->query("SELECT DISTINCT u_sales_primary.user_cname AS nm $OCQ_FROM
                 WHERE b.processing_state='1' AND u_sales_primary.user_cname IS NOT NULL AND u_sales_primary.user_cname <> '' ORDER BY nm");
@@ -3029,7 +3029,13 @@ var _ocqCustAutoTimer = null;
     function matches(){
         var q = $.trim($in.val()).toLowerCase();
         if (!q) return [];
-        return OCQ_CUSTOMERS.filter(function(v){ return String(v).toLowerCase().indexOf(q) !== -1; });
+        return OCQ_CUSTOMERS.filter(function(c){
+            return String(c.nm).toLowerCase().indexOf(q) !== -1 || String(c.cid||'').toLowerCase().indexOf(q) !== -1;
+        }).map(function(c){ return c.nm; }).filter(function(v,i,a){ return a.indexOf(v) === i; });
+    }
+    function label(v){
+        var ids = OCQ_CUSTOMERS.filter(function(c){ return c.nm === v && c.cid; }).map(function(c){ return c.cid; });
+        return v + (ids.length ? '　('+ids[0]+')' : '');
     }
     function hide(){ $box.hide(); }
     function pick(v){
@@ -3041,7 +3047,7 @@ var _ocqCustAutoTimer = null;
         if (!m.length || (m.length === 1 && m[0] === $.trim($in.val()))) { hide(); return; }
         var q = $.trim($in.val());
         $box.html(m.slice(0, 50).map(function(v){
-            return '<div class="ocq-cust-opt" data-v="'+esc(v)+'" style="padding:5px 10px;cursor:pointer;color:#5A3A12;font-size:13px;line-height:18px;">'+esc(v)+'</div>';
+            return '<div class="ocq-cust-opt" data-v="'+esc(v)+'" style="padding:5px 10px;cursor:pointer;color:#5A3A12;font-size:13px;line-height:18px;">'+esc(label(v))+'</div>';
         }).join('') + (m.length > 50 ? '<div style="padding:4px 10px;color:#9A7B4F;font-size:12px;">還有 '+(m.length-50)+' 筆，請再輸入更多字</div>' : ''));
         var r = $in[0].getBoundingClientRect();
         $box.css({left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180)}).show();
