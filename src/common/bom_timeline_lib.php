@@ -68,6 +68,8 @@ if (!function_exists('eg_bom_timeline')) {
                      'clear_outsource_date' => '清除發包日', 'admin_set_dates' => '管理員改日期', 'return' => '回廠'];
         foreach ($db->query("SELECT * FROM bom_ing_event WHERE bom_ing_fid IN ($in) ORDER BY event_id")->fetchAll(PDO::FETCH_ASSOC) as $e) {
             $fid = (int)$e['bom_ing_fid'];
+            // 管理員修正／補登類紀錄不在此顯示（會讓現場人員看起來很混亂，查證請看稽核紀錄）
+            if (in_array($e['event_type'], ['qc_edit', 'transfer_edit', 'send_edit', 'send_backfill', 'return_edit', 'return_backfill', 'batch_meta_edit', 'admin_set_dates'], true)) continue;
             if ($e['event_type'] === 'return' && !empty($hasRet[$fid])) continue; // 已由回廠明細呈現
             $lb = $evLabels[$e['event_type']] ?? $e['event_type'];
             $txt = $pname($fid) . '：' . $lb . (!empty($e['affected_qty']) ? ' ' . $n($e['affected_qty']) . ' 件' : '') . (!empty($e['event_note']) ? '（' . $e['event_note'] . '）' : '');
@@ -128,7 +130,8 @@ if (!function_exists('eg_bom_timeline')) {
         $oq = $db->prepare("SELECT bol.*, u.user_cname FROM bom_operation_log bol LEFT JOIN user u ON u.id = bol.operator_id WHERE bol.bom = ? ORDER BY bol.id");
         $oq->execute([$bom]);
         foreach ($oq->fetchAll(PDO::FETCH_ASSOC) as $o) {
-            $lb = $opL[$o['operation_type']] ?? $o['operation_type'];
+            if (!isset($opL[$o['operation_type']])) continue; // 系統自動／管理員類操作（如 auto_close_shipped）不顯示
+            $lb = $opL[$o['operation_type']];
             $add($o['operated_at'], 0, 'op', $lb, 'BOM ' . $lb, (string)($o['user_cname'] ?? ''));
         }
         // 人員姓名補齊（Created_By／issued_by 可能是代號）
