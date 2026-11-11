@@ -195,7 +195,7 @@ switch ($action) {
         /* BOM總覽「客戶」欄出貨紀錄的深連結（2026-11-11）：指定日期區間＋同料號、同客戶，
            不套期間切法、客戶篩選與出貨性質篩選（BOM總覽列的是全部性質）。比對規則唯一實作 bom_ship_match_lib.php */
         $deep = null;
-        if ($action === 'list_ship' && trim((string)($_REQUEST['ship_pno'] ?? '')) !== '') {
+        if ($action === 'list_ship' && (trim((string)($_REQUEST['ship_pno'] ?? '')) !== '' || trim((string)($_REQUEST['ship_no'] ?? '')) !== '')) {
             $dFrom = (string)($_REQUEST['ship_from'] ?? ''); $dTo = (string)($_REQUEST['ship_to'] ?? '');
             $okD = function ($d) { return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d) !== false; };
             if (!$okD($dFrom) || !$okD($dTo) || $dFrom > $dTo) siErr('出貨日期區間不正確');
@@ -206,7 +206,10 @@ switch ($action) {
             $allSt = ['NULL'];
             foreach ($db->query("SELECT sale_type_id FROM is_sale_type") as $x) $allSt[] = (string)$x['sale_type_id'];
             $rows = si_fetch_ship($db, $dFrom, $dTo, ['sale_types' => $allSt, 'resolver' => $resolve]);
+            // ship_no：BOM總覽客戶欄「✔ 已綁定出貨單」點進來＝只列這一張出貨單（已確定是綁定的，不再比料號客戶）
+            $deep['no'] = trim((string)($_REQUEST['ship_no'] ?? ''));
             $rows = array_values(array_filter($rows, function ($r) use ($deep) {
+                if ($deep['no'] !== '') return $r['no'] === $deep['no'];
                 return $r['pno'] === $deep['pno'] && eg_bom_ship_row_match(['d_setting_id' => $r['pid'], 'Client_name' => $r['craw']], $deep['sid'], $deep['client']);
             }));
             $p['clients'] = [];
@@ -232,6 +235,19 @@ switch ($action) {
         usort($rows, function ($a, $b) { return strcmp($b['dt'], $a['dt']); });
         $total = count($rows);
         $rows = array_slice($rows, ($page - 1) * $per, $per);
+        if ($action === 'list_ship' && $rows) {
+            // 這一頁的出貨單綁定了哪些訂單／製令（訂單口徑 ship_order_bind_lib、製令口徑 bom_bound_ship_lib，皆唯一實作）
+            require_once __DIR__ . '/../common/ship_order_bind_lib.php';
+            require_once __DIR__ . '/../common/bom_bound_ship_lib.php';
+            $ids  = array_map(fn($r) => (int)$r['id'], $rows);
+            $ordB = sob_ship_bindings($db, $ids);
+            $bomB = eg_ship_bound_boms($db, $ids);
+            foreach ($rows as &$r) {
+                $r['bind_orders'] = array_map(fn($o) => ['oo' => (string)($o['order_oo'] ?? ''), 'short' => eg_bbs_short_no((string)($o['order_oo'] ?? '')), 'qty' => (int)($o['qty'] ?? 0)], $ordB[(int)$r['id']] ?? []);
+                $r['bind_boms']   = $bomB[(int)$r['id']] ?? [];
+            }
+            unset($r);
+        }
         siOut(['rows' => $rows, 'total' => $total, 'page' => $page, 'per' => $per, 'period' => $deep ? ['start' => $deep['from'], 'end' => $deep['to'], 'label' => '指定區間'] : $cur, 'deep' => $deep]);
     }
 

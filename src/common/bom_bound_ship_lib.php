@@ -110,6 +110,56 @@ if (!function_exists('eg_bom_bound_ships')) {
     }
 
     /**
+     * 反查：這些出貨單綁定到哪張製令（與 eg_bom_bound_ships 同一套規則，供出貨分析等以出貨為主的畫面）
+     * @return array IS_id => [['bom','qty','src'], …]
+     */
+    function eg_ship_bound_boms(PDO $db, array $isIds): array {
+        $isIds = array_values(array_unique(array_filter(array_map('intval', $isIds))));
+        if (!$isIds) return [];
+        $out = [];
+        $ph  = implode(',', array_fill(0, count($isIds), '?'));
+        try {
+            $st = $db->prepare("SELECT IS_id, bom, shipped_qty FROM is_bom_map WHERE IS_id IN ($ph)");
+            $st->execute($isIds);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['IS_id']][] = ['bom' => (string)$r['bom'], 'qty' => (int)$r['shipped_qty'], 'src' => 'bom'];
+            // 經由訂單：沒有 is_bom_map 分配的出貨 → 它綁的訂單 → 該訂單只綁一張製令
+            $rest = array_values(array_filter($isIds, fn($i) => !isset($out[$i])));
+            if ($rest) {
+                $ph2 = implode(',', array_fill(0, count($rest), '?'));
+                $st = $db->prepare("SELECT x.IS_id, x.Order_id, x.q, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d FROM (
+                                      SELECT IS_id, Order_id, shipped_qty q FROM shipment_order_map WHERE IS_id IN ($ph2)
+                                      UNION ALL
+                                      SELECT il2.IS_id, il2.Order_id, il2.Qty q FROM is_list il2
+                                      WHERE il2.IS_id IN ($ph2) AND il2.Order_id IS NOT NULL
+                                        AND NOT EXISTS (SELECT 1 FROM shipment_order_map s2 WHERE s2.IS_id = il2.IS_id)
+                                    ) x JOIN is_list il ON il.IS_id = x.IS_id");
+                $st->execute(array_merge($rest, $rest));
+                $links = $st->fetchAll(PDO::FETCH_ASSOC);
+                $oids = array_values(array_unique(array_map(fn($r) => (int)$r['Order_id'], $links)));
+                if ($oids) {
+                    $ph3 = implode(',', array_fill(0, count($oids), '?'));
+                    $st = $db->prepare("SELECT Order_id, bom FROM (
+                                          SELECT Order_id, bom FROM bom_order_process_map WHERE Order_id IN ($ph3)
+                                          UNION SELECT CAST(o_order_id AS UNSIGNED), bom FROM bom WHERE o_order_id IN ($ph3)
+                                        ) x");
+                    $st->execute(array_merge($oids, array_map('strval', $oids)));
+                    $ob = [];
+                    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $ob[(int)$r['Order_id']][(string)$r['bom']] = 1;
+                    foreach ($links as $r) {
+                        $bs = $ob[(int)$r['Order_id']] ?? [];
+                        if (count($bs) !== 1) continue;
+                        $bom = (string)array_key_first($bs);
+                        $bd  = eg_bbs_bom_date($bom);
+                        if ($bd !== '' && $r['d'] < $bd) continue;
+                        $out[(int)$r['IS_id']][] = ['bom' => $bom, 'qty' => (int)$r['q'], 'src' => 'order'];
+                    }
+                }
+            }
+        } catch (Throwable $e) { error_log('eg_ship_bound_boms: ' . $e->getMessage()); }
+        return $out;
+    }
+
+    /**
      * 良品數全數由綁定出貨單出完的製令 → 自動結案（processing_state='1'），留 bom_operation_log。
      * @param array $bound eg_bom_bound_ships() 的結果（呼叫端已算過就傳進來，不重算）
      * @return string[] 這次結案的製令

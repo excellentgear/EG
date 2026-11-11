@@ -2027,8 +2027,8 @@ var LIST_PAGE = { ship:1, return:1, order:1 };
 var SHIP_DEEP = (function(){
   try {
     var u = new URLSearchParams(location.search);
-    if (!u.get('ship_pno')) return null;
-    return { ship_pno:u.get('ship_pno'), ship_client:u.get('ship_client')||'', ship_pid:u.get('ship_pid')||'', ship_from:u.get('ship_from')||'', ship_to:u.get('ship_to')||'' };
+    if (!u.get('ship_pno') && !u.get('ship_no')) return null;
+    return { ship_pno:u.get('ship_pno'), ship_client:u.get('ship_client')||'', ship_pid:u.get('ship_pid')||'', ship_from:u.get('ship_from')||'', ship_to:u.get('ship_to')||'', ship_no:u.get('ship_no')||'' };
   } catch(e){ return null; }
 })();
 var SHIP_DEEP_SCROLLED = false;
@@ -2063,16 +2063,26 @@ function listReload(){
 }
 $('#listKw').on('input', function(){ LIST_PAGE = {ship:1,return:1,order:1}; if(DATA) listReload(); });
 
+/* 出貨單已綁定的訂單／製令（後端 ship_order_bind_lib＋bom_bound_ship_lib）：綠勾＋簡式訂單號、製令號；沒綁定標「未綁定」 */
+function shipBindHtml(x){
+  var o = x.bind_orders || [], b = x.bind_boms || [], s = '';
+  var st = 'display:block;font-size:11px;line-height:1.35;white-space:nowrap;';
+  o.forEach(function(v){ s += '<span style="'+st+'" title="已綁定訂單 '+esc(v.oo)+'（分配 '+v.qty+'）"><i class="fa fa-check" style="color:#2E8B57;"></i> 訂單 '+esc(v.short||v.oo)+'</span>'; });
+  b.forEach(function(v){ s += '<span style="'+st+'" title="已綁定製令 '+esc(v.bom)+'（'+v.qty+'）'+(v.src==='order'?'：經由訂單綁定':'')+'"><i class="fa fa-check" style="color:#2E8B57;"></i> 製令 '+esc(v.bom)+'</span>'; });
+  if (!s) s = '<span style="'+st+'color:var(--muted);">未綁定</span>';
+  return s;
+}
 function renderShipTable(r){
   var h=''; r.rows.forEach(function(x){
-    h += '<tr><td>'+dispDate(x.dt)+'</td><td>'+esc(x.no)+'</td><td>'+esc(x.cname)+(x.cbad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
+    h += '<tr><td>'+dispDate(x.dt)+'</td><td>'+esc(x.no)+shipBindHtml(x)+'</td><td>'+esc(x.cname)+(x.cbad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
        + '<td>'+pnoCell(x)+'</td><td>'+esc(x.spec)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
        + '<td class="n">'+money(x.amount)+(x.anomaly?(' <span class="badge-anom" title="'+esc(x.anomaly_reason)+'">'+(x.anomaly_confirmed?'已確認':'異常')+'</span>'):'')+'</td></tr>';
   });
   $('#tblShip tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">'+(r.deep?'這段期間沒有此料號、此客戶的出貨':'本期沒有出貨')+'</td></tr>');
   if (r.deep) {
-    $('#shipDeepBar').show().html('<i class="fa fa-filter"></i> 由 BOM總覽帶入：只列料號 <b>'+esc(r.deep.pno)+'</b>'
-      + (r.deep.client ? '、客戶 <b>'+esc(r.deep.client)+'</b>' : '') + '，出貨日期 <b>'+dispDate(r.deep.from)+'～'+dispDate(r.deep.to)+'</b>'
+    $('#shipDeepBar').show().html('<i class="fa fa-filter"></i> 由 BOM總覽帶入：'
+      + (r.deep.no ? '只列出貨單 <b>'+esc(r.deep.no)+'</b>' : '只列料號 <b>'+esc(r.deep.pno)+'</b>'
+      + (r.deep.client ? '、客戶 <b>'+esc(r.deep.client)+'</b>' : '')) + '，出貨日期 <b>'+dispDate(r.deep.from)+'～'+dispDate(r.deep.to)+'</b>'
       + '（共 '+r.total+' 筆；不受上方期間、客戶與出貨性質篩選影響） <button class="btn btn-xs btn-warm-o" onclick="shipDeepClear()">取消此篩選</button>');
     if (!SHIP_DEEP_SCROLLED) { SHIP_DEEP_SCROLLED = true; var el = document.getElementById('paneShip'); if (el) el.scrollIntoView({ block:'start' }); }
   } else { $('#shipDeepBar').hide(); }

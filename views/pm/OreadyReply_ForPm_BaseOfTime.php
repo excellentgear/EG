@@ -5590,8 +5590,19 @@ echo "</script>\n";
                     ln.style.whiteSpace = 'nowrap';
                     ln.title = '已綁定出貨單 ' + s.no + '（' + d.replace(/-/g, '.') + ' 出貨 ' + s.qty + '）';
                     ln.innerHTML = '<i class="fa fa-check" style="color:#2E8B57;margin-right:2px;"></i>'
-                        + '<span style="color:#0056b3;line-height:1.3;">' + escapeHtml(s.short || s.no) + '</span> '
+                        + '<span style="color:#0056b3;line-height:1.3;' + (window.canShipInsight ? 'text-decoration:underline;cursor:pointer;' : '') + '">' + escapeHtml(s.short || s.no) + '</span> '
                         + '<span style="line-height:1.3;">' + escapeHtml(dShow) + ' ×' + escapeHtml(String(s.qty)) + '</span>';
+                    // 有出貨分析檢視權限者：點一下另開出貨分析，只列這一張出貨單（與下方出貨紀錄同一種開法）
+                    if (window.canShipInsight && s.no) {
+                        ln.style.cursor = 'pointer';
+                        ln.title += '｜點擊另開出貨分析，只列此出貨單';
+                        ln.addEventListener('click', function (ev) {
+                            ev.stopPropagation();
+                            const q = new URLSearchParams({ ship_pid: String(row.d_setting_id || ''), ship_pno: String(row.d_id || ''),
+                                ship_client: String(row.Client_Name_Full || row.Client_Name || '').trim(), ship_from: d, ship_to: d, ship_no: String(s.no) });
+                            window.open('../Sales/Shipping_Insight.php?' + q.toString(), '_blank', 'noopener');
+                        });
+                    }
                     bsWrap.appendChild(ln);
                 });
                 if (row.bound_ships.ships.length > 5) {
