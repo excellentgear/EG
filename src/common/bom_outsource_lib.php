@@ -361,19 +361,24 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
         $logs = [];
         $lr = $db->query("SELECT batch_id, return_qty, scrap_qty, withdraw_qty, note, DATE_FORMAT(return_date,'%Y/%m/%d') d FROM bom_ing_outsource_return WHERE batch_id IN (" . implode(',', $bids) . ") ORDER BY return_id");
         foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'wd'=>(float)$l['withdraw_qty'], 'note'=>(string)($l['note'] ?? ''), 'date'=>$l['d']];
+        // 發料不良「尚未判定」的量：這一批沒有已結案且配發報廢單號的異常單＝還沒被認定報廢（已認定的，製令剩餘數已經扣過，不能重複扣）
+        $coveredB = [];
+        try {
+            foreach ($db->query("SELECT DISTINCT src_outsource_batch_id FROM qa_abnormal_order WHERE src_outsource_batch_id IN (" . implode(',', $bids) . ") AND deleted_at IS NULL AND is_closed=1 AND scrap_no IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $cb) $coveredB[(int)$cb] = true;
+        } catch (Throwable $e) {}
         $out = [];
         foreach ($need as $fid) {
-            $send = $ret = $scrap = $wdTot = $shortTot = $badTot = 0.0; $bl = [];
+            $send = $ret = $scrap = $wdTot = $shortTot = $badTot = $badOpen = 0.0; $bl = [];
             foreach ($by[$fid] as $b) {
                 $s = (float)$b['send_qty']; $rq = (float)$b['return_qty']; $sc = (float)$b['scrap_qty']; $wd = (float)($b['withdrawn_qty'] ?? 0);
-                $send += $s; $ret += $rq; $scrap += $sc; $wdTot += $wd; $shortTot += (float)($b['short_qty'] ?? 0); $badTot += (float)($b['badmat_qty'] ?? 0);
+                $send += $s; $ret += $rq; $scrap += $sc; $wdTot += $wd; $shortTot += (float)($b['short_qty'] ?? 0); $badTot += (float)($b['badmat_qty'] ?? 0); if (empty($coveredB[(int)$b['batch_id']])) $badOpen += (float)($b['badmat_qty'] ?? 0);
                 $bl[] = ['id'=>(int)$b['batch_id'], 'no'=>(string)($b['maker_id_no'] ?? ''), 'maker'=>(string)($b['maker_id'] ?? ''),
                          'send'=>$s, 'ret'=>$rq, 'scrap'=>$sc, 'wd'=>$wd, 'outside'=>max(0, $s - $rq - $sc - $wd), 'status'=>$b['status'],
                          'send_date'=>!empty($b['send_date']) ? date('Y/m/d', strtotime($b['send_date'])) : '',
                          'returns'=>$logs[(int)$b['batch_id']] ?? []];
             }
             $total = $sq[$fid] ?? $send;
-            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'short'=>$shortTot, 'badmat'=>$badTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot + $shortTot)), 'batches'=>$bl];
+            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'short'=>$shortTot, 'badmat'=>$badTot, 'badmat_open'=>$badOpen, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot + $shortTot)), 'batches'=>$bl];
         }
         // 與「管理員修正」分支檢視對齊：①同一關(SN，含管理員設定的併入)的多列 bom_ing 是同一關的不同發單列，
         // 關卡總量取該關最大的 sqty，不是各列相加；②批次的「回」若沒登錄回廠，改用分支檢視推出的「從這批移轉出去的憑單數量」。
