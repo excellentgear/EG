@@ -241,6 +241,12 @@ case 'match_candidates': {
     sq_out(sq_match_candidates($db, $isId, $same, (string)($src['kw'] ?? '')));
 }
 
+case 'match_scrap_boms': {
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可使用', 403);
+    $src = $_POST ?: $_GET;
+    sq_out(sq_match_scrap_boms($db, (int)($src['is_id'] ?? 0)));
+}
+
 case 'match_apply': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
     if (!$perms['canAdmin']) sq_err('僅出貨管理員可回填舊資料', 403);

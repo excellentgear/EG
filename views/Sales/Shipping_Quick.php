@@ -1521,6 +1521,7 @@ $('#btnPrintDn').on('click',function(){
  * ══════════════════════════════════════════════════════════ */
 if(CAN_ADMIN){
   var mtManual = {};   // is_id => 手動指定的訂單（覆蓋系統建議）
+  var mtScrap  = {};   // is_id => 報廢品歸還的製令 {bom, qty, _row}（不綁訂單，記在 is_bom_scrap_map）
   var mtParts  = [];   // 篩選用料號清單（含所屬客戶）
   var mtCandIs = 0;    // 目前正在改選的出貨明細 id
   var cdOrders = [];   // 候選跳窗當次列出的訂單
@@ -1676,6 +1677,9 @@ if(CAN_ADMIN){
       for(var k in mtManual){
         if(mtManual.hasOwnProperty(k) && !have[k] && mtManual[k]._row) lastMatch.push(mtManual[k]._row);
       }
+      for(var k2 in mtScrap){
+        if(mtScrap.hasOwnProperty(k2) && !have[k2] && mtScrap[k2]._row){ have[k2]=1; lastMatch.push(mtScrap[k2]._row); }
+      }
       lastMatch.sort(function(a,b){
         return a.ship_date===b.ship_date ? (a.is_id-b.is_id) : (a.ship_date<b.ship_date?-1:1); });
       var s=res.summary||{};
@@ -1704,7 +1708,7 @@ if(CAN_ADMIN){
     var show={};
     $('.mt-f:checked').each(function(){ show[this.value]=1; });
     // 手動指定過的列一律顯示，免得被篩選藏起來又不知道自己選過
-    var list=lastMatch.filter(function(p){ return show[p.confidence] || mtManual[p.is_id]; });
+    var list=lastMatch.filter(function(p){ return show[p.confidence] || mtManual[p.is_id] || mtScrap[p.is_id]; });
     if(!list.length){ $('#mtList').html('<div style="padding:14px;color:#8a6d45;">目前篩選條件下沒有資料。</div>');
       updateMtSel(); return; }
     var h='<table class="sq-t"><thead><tr><th style="width:32px;"><input type="checkbox" id="mtAll"></th>'
@@ -1713,20 +1717,25 @@ if(CAN_ADMIN){
         +'<th style="width:74px;">操作</th></tr></thead><tbody>';
     list.forEach(function(p0){
       var p   = eff(p0);
-      var has = (p.order_id||0) > 0;
-      var pill = p.manual                ? '<span class="pill mt-manual">手動</span>'
+      var sc  = mtScrap[p0.is_id];
+      var has = (p.order_id||0) > 0 || !!sc;
+      var pill = sc                      ? '<span class="pill mt-manual">報廢品</span>'
+               : p.manual                ? '<span class="pill mt-manual">手動</span>'
                : p0.confidence==='high'  ? '<span class="pill p-normal">高</span>'
                : p0.confidence==='mid'   ? '<span class="pill p-urgent">中</span>'
                : p0.confidence==='low'   ? '<span class="pill p-super">低</span>'
                :                           '<span class="pill p-none">無</span>';
-      var ckd = has && (p.manual || p0.confidence==='high');
+      var ckd = has && (sc || p.manual || p0.confidence==='high');
       h+='<tr'+(has?'':' class="noready"')+'>'
-        +'<td><input type="checkbox" class="mt-ck" data-is="'+p0.is_id+'" data-oid="'+(has?p.order_id:0)+'"'
+        +'<td><input type="checkbox" class="mt-ck" data-is="'+p0.is_id+'" data-oid="'+(has?(sc?-1:p.order_id):0)+'"'
         +(has?'':' disabled')+(ckd?' checked':'')+'></td>'
         +'<td>'+pill+'</td><td>'+esc(p0.is_number)+'</td><td>'+esc(p0.ship_date)+'</td>'
         +'<td class="l">'+esc(p0.client_name)+'</td><td class="l">'+esc(p0.product_id)+'</td>'
         +'<td class="r">'+nf(p0.ship_qty)+'</td><td class="r">'+np(p0.ship_price)+'</td>';
-      if(has){
+      if(sc){
+        h+='<td colspan="5" class="l"><b style="color:#B42318;">報廢品歸還</b>　製令 <b>'+esc(sc.bom)+'</b>　'
+          +esc(sc.first_name||'')+'（第一關 '+esc(sc.first_no)+'）　歸還 '+nf(p0.ship_qty)+' 件（不綁訂單、不算訂單已出量）</td>';
+      }else if(has){
         h+='<td><b>'+esc(p.order_oo||'—')+'</b>'
           +((p.manual && p.part_no && p.part_no!==p0.product_id)
               ? '<div class="mt-note">訂單料號：'+esc(p.part_no)+'</div>' : '')+'</td>'
@@ -1806,6 +1815,7 @@ if(CAN_ADMIN){
                  +(mtManual[s.is_id]?'（手動指定）':'（系統建議）')
                : '目前：<span style="color:#DD5138;">尚未指定</span>'));
 
+    loadScrapBoms(s);
     if(r.error){ $('#cdList').html('<div style="padding:14px;color:#DD5138;">'+esc(r.error)+'</div>');
       $('#cdCnt').text(''); return; }
     if(!os.length){
@@ -1842,11 +1852,38 @@ if(CAN_ADMIN){
       : '候選 '+nf(os.length)+' 張');
   }
 
+  /* 報廢品歸還：同客戶＋同料號的訂單所綁製令裡，第一關不是 170 材料、且有報廢品可退的 */
+  function loadScrapBoms(s){
+    $('#cdScrap').remove();
+    $.post(API+'?action=match_scrap_boms', {is_id: s.is_id}, function(r){
+      var bs=(r&&r.boms)||[]; if(!bs.length) return;
+      var h='<div id="cdScrap" style="background:#FBEBE4;border:1px solid #E4B3A0;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:12.5px;">'
+        +'<b style="color:#B42318;">這筆是報廢品歸還客戶？</b>（單價 0 的出貨常見；不綁訂單，記在製令的報廢品歸還）<br>';
+      bs.forEach(function(b,i){
+        var ok=b.elig && b.scrap_avail>=s.ship_qty;
+        h+='<div style="margin-top:4px;">製令 <b>'+esc(b.bom)+'</b>　第一關 '+esc(b.first_name||'')+'（'+esc(b.first_no)+'）　報廢 '+nf(b.scrap)+'／已還 '+nf(b.scrap_ret)+'／可退 <b>'+nf(b.scrap_avail)+'</b>　'
+          +(ok?'<button class="cd-scrap" data-i="'+i+'">選用</button>'
+               :'<span style="color:#DD5138;">'+(!b.elig?'第一關是 170 材料，報廢品不退客戶':'可退件數不足（出貨 '+nf(s.ship_qty)+' 件）')+'</span>')+'</div>';
+      });
+      $('#cdShip').after(h+'</div>');
+      window._cdScrapBoms=bs;
+    },'json');
+  }
+  $(document).on('click','.cd-scrap',function(){
+    var b=(window._cdScrapBoms||[])[parseInt($(this).data('i'),10)]; if(!b) return;
+    var base=null; lastMatch.forEach(function(p){ if(p.is_id===mtCandIs) base=p; });
+    mtScrap[mtCandIs]={bom:b.bom, first_no:b.first_no, first_name:b.first_name, _row:base};
+    delete mtManual[mtCandIs];
+    closeMask('mkCand'); renderMatch();
+    toast('已標記為 '+esc(b.bom)+' 的報廢品歸還');
+  });
+
   $(document).on('click','.cd-use',function(){
     var o = cdOrders[parseInt($(this).data('i'),10)];
     if(!o || !o.selectable) return;
     var base=null;
     lastMatch.forEach(function(p){ if(p.is_id===mtCandIs) base=p; });
+    delete mtScrap[mtCandIs];
     mtManual[mtCandIs] = {
       order_id:o.order_id, order_oo:o.order_oo, order_date:o.order_date,
       order_qty:o.order_qty, order_left:o.order_left, order_price:o.order_price,
@@ -1859,8 +1896,8 @@ if(CAN_ADMIN){
   });
 
   $('#btnCdClear').on('click',function(){
-    if(!mtManual[mtCandIs]){ closeMask('mkCand'); return; }
-    delete mtManual[mtCandIs];
+    if(!mtManual[mtCandIs] && !mtScrap[mtCandIs]){ closeMask('mkCand'); return; }
+    delete mtManual[mtCandIs]; delete mtScrap[mtCandIs];
     closeMask('mkCand'); renderMatch();
     toast('已改回系統建議');
   });
@@ -1869,6 +1906,7 @@ if(CAN_ADMIN){
     var pairs=[], manual=0;
     $('.mt-ck:checked').each(function(){
       var isId=parseInt($(this).data('is'),10)||0, oid=parseInt($(this).data('oid'),10)||0;
+      if(isId>0 && mtScrap[isId]){ pairs.push({is_id:isId, scrap_bom:mtScrap[isId].bom}); return; }
       if(isId>0 && oid>0){ pairs.push({is_id:isId, order_id:oid}); if(mtManual[isId]) manual++; }
     });
     if(!pairs.length){ toast('請先勾選要回填的資料', true); return; }
@@ -1880,7 +1918,7 @@ if(CAN_ADMIN){
       $b.prop('disabled',false).html('<i class="fa fa-check"></i> 回填勾選的資料');
       if(!r.ok){ toast(esc(r.error||'回填失敗'), true); return; }
       toast(esc(r.message));
-      mtManual = {};          // 已寫入的不再保留手動指定
+      mtManual = {}; mtScrap = {};          // 已寫入的不再保留手動指定
       mtRun();
       load();
     },'json').fail(function(){

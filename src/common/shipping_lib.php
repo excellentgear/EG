@@ -863,7 +863,9 @@ function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): a
     $didF   = (int)($opt['d_id'] ?? 0);
     $withNo = !empty($opt['with_unmatched']);   // 連「推不出對應」的也回傳，供人工指定
 
-    $w   = ["il.Order_id IS NULL", "il.d_setting_id IS NOT NULL", "il.Order_date BETWEEN ? AND ?"];
+    sq_scrap_ensure($db);
+    $w   = ["il.Order_id IS NULL", "il.d_setting_id IS NOT NULL", "il.Order_date BETWEEN ? AND ?",
+            "NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)"];   // 已登記為報廢品歸還的不再列入待回填
     $par = [$from, $to];
     if ($client !== '') { $w[] = "il.Client_name = ?";  $par[] = $client; }
     if ($didF   >  0)   { $w[] = "il.d_setting_id = ?"; $par[] = $didF; }
@@ -990,11 +992,13 @@ function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): a
  */
 function sq_match_filters(PDO $db, string $from, string $to): array
 {
+    sq_scrap_ensure($db);
     $st = $db->prepare("
         SELECT il.Client_name, il.d_setting_id, MAX(il.Product_id) AS product_id, COUNT(*) AS cnt
         FROM is_list il
         WHERE il.Order_id IS NULL AND il.d_setting_id IS NOT NULL
           AND il.Order_date BETWEEN ? AND ?
+          AND NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)
         GROUP BY il.Client_name, il.d_setting_id
         ORDER BY il.Client_name, product_id");
     $st->execute([$from, $to]);
@@ -1096,8 +1100,8 @@ function sq_match_candidates(PDO $db, int $isId, bool $samePart = true, string $
             'over_qty'    => ((int)$s['Qty'] > $left),          // 這筆出貨量超過剩餘量
             'late'        => ($o['order_date'] > $s['ship_date']), // 下單日晚於出貨日
             'closed'      => ((string)$o['Order_status'] === '9'),
-            // 已被其他出貨吃完＝不可選（照樣列出供確認）
-            'selectable'  => ($left > 0),
+            // 已被其他出貨吃完＝不可選（照樣列出供確認）；但出貨單價為 0（報廢品／補貨／贈品）不受剩餘量限制，仍可綁訂單
+            'selectable'  => ($left > 0 || (float)$s['Unit_price'] == 0.0),
         ];
     }
 
@@ -1112,9 +1116,71 @@ function sq_match_candidates(PDO $db, int $isId, bool $samePart = true, string $
     ], 'orders' => $orders];
 }
 
+/**
+ * 某筆出貨明細可以「歸還報廢品」的製令：同客戶＋同料號的訂單所綁的製令，且有已結案報廢單的報廢數。
+ * 回傳每張製令的第一關製程（138 客供料、170 材料…）與報廢品可退件數；第一關是 170 材料的不給選（報廢品不退客戶）。
+ */
+function sq_match_scrap_boms(PDO $db, int $isId): array
+{
+    sq_scrap_ensure($db);
+    $st = $db->prepare("SELECT Client_name, d_setting_id, Qty FROM is_list WHERE IS_id=?");
+    $st->execute([$isId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) return ['boms' => [], 'error' => '找不到這筆出貨明細'];
+    $did = (int)$s['d_setting_id'];
+    $q = $db->prepare("SELECT DISTINCT bom FROM (
+            SELECT m.bom FROM bom_order_process_map m JOIN order_track ot ON ot.Order_id=m.order_id
+             WHERE ot.Client_name=:c1 AND ot.d_id_ID=:d1
+            UNION
+            SELECT b.bom FROM bom b JOIN order_track ot ON ot.Order_id=b.o_order_id
+             WHERE ot.Client_name=:c2 AND ot.d_id_ID=:d2) x LIMIT 60");
+    $q->execute([':c1' => $s['Client_name'], ':d1' => $did, ':c2' => $s['Client_name'], ':d2' => $did]);
+    $boms = $q->fetchAll(PDO::FETCH_COLUMN);
+    if (!$boms) return ['boms' => [], 'ship_qty' => (int)$s['Qty']];
+    $am = sq_bom_avail_map($db, $boms);
+    $ph = implode(',', array_fill(0, count($boms), '?'));
+    $fp = $db->prepare("SELECT bi.bom, bi.process_no, pn.ProcessName FROM bom_ing bi
+                          JOIN (SELECT bom, MIN(bom_sn) AS msn FROM bom_ing WHERE bom IN ($ph) GROUP BY bom) m ON m.bom=bi.bom AND m.msn=bi.bom_sn
+                          LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no");
+    $fp->execute($boms);
+    $first = [];
+    foreach ($fp->fetchAll(PDO::FETCH_ASSOC) as $f) $first[$f['bom']] = $f;
+    $out = [];
+    foreach ($boms as $b) {
+        $a = $am[$b] ?? null;
+        if (!$a || (int)$a['scrap'] <= 0) continue;
+        $out[] = ['bom' => $b, 'scrap' => (int)$a['scrap'], 'scrap_ret' => (int)$a['scrap_ret'], 'scrap_avail' => (int)$a['scrap_avail'],
+                  'first_no' => (int)($first[$b]['process_no'] ?? 0), 'first_name' => (string)($first[$b]['ProcessName'] ?? ''),
+                  'elig' => !empty($a['scrap_elig'])];
+    }
+    return ['boms' => $out, 'ship_qty' => (int)$s['Qty']];
+}
+
+/** 把一筆（尚未綁訂單、尚未登記）的出貨明細登記為某製令的報廢品歸還。成功回 ''，失敗回原因。 */
+function sq_scrap_bind_one(PDO $db, int $isId, string $bom): string
+{
+    $st = $db->prepare("SELECT IS_id, Qty, Client_name, Order_id, d_setting_id FROM is_list WHERE IS_id=? FOR UPDATE");
+    $st->execute([$isId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) return '找不到出貨明細';
+    if ($s['Order_id'] !== null) return '已綁訂單';
+    $ex = $db->prepare("SELECT 1 FROM is_bom_scrap_map WHERE IS_id=?");
+    $ex->execute([$isId]);
+    if ($ex->fetchColumn()) return '已登記';
+    $cand = sq_match_scrap_boms($db, $isId);   // 同客戶＋同料號的訂單所綁製令才可選
+    $hit = null;
+    foreach ($cand['boms'] ?? [] as $c) if ($c['bom'] === $bom) $hit = $c;
+    if (!$hit || empty($hit['elig'])) return '製令不符或第一關是 170 材料';
+    $qty = (int)$s['Qty'];
+    if ($qty <= 0 || $qty > (int)$hit['scrap_avail']) return '數量超過報廢品可退';
+    $db->prepare("INSERT INTO is_bom_scrap_map (IS_id, bom, qty) VALUES (?,?,?)")->execute([$isId, $bom, $qty]);
+    return '';
+}
+
 /** 寫入回填結果（僅覆寫 Order_id 仍為 NULL 的列，避免蓋掉已正確的資料） */
 function sq_match_apply(PDO $db, array $pairs, string $userId): array
 {
+    sq_scrap_ensure($db);
     $applied = 0; $skipped = 0;
     try {
         $db->beginTransaction();
@@ -1130,6 +1196,12 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
         foreach ($pairs as $p) {
             $isId = (int)($p['is_id'] ?? 0);
             $oid  = (int)($p['order_id'] ?? 0);
+            $sb   = trim((string)($p['scrap_bom'] ?? ''));
+            if ($isId > 0 && $sb !== '') {   // 報廢品歸還：不綁訂單，記在 is_bom_scrap_map（第一關非 170 材料、數量不超過報廢品可退）
+                $r = sq_scrap_bind_one($db, $isId, $sb);
+                if ($r === '') $applied++; else $skipped++;
+                continue;
+            }
             if ($isId <= 0 || $oid <= 0) { $skipped++; continue; }
             $up->execute([':oid' => $oid, ':isid' => $isId]);
             if ($up->rowCount() > 0) { $applied++; $appliedIs[] = $isId; } else $skipped++;
