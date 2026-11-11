@@ -629,8 +629,13 @@ if (is_array($OreadyReply_list_base)) {
             } catch (PDOException $e) { error_log("_fetch_data max_reported_sn_map: " . $e->getMessage()); }
         }
 
+        // 已綁定出貨單＋良品全數出完自動結案（唯一實作 bom_bound_ship_lib.php，與主頁面初載同一份）
+        require_once __DIR__ . '/../common/bom_bound_ship_lib.php';
+        $bom_bound_ships_map = eg_bom_bound_ships($db, array_column($OreadyReply_list_base, 'bom'));
+        eg_bom_auto_close_shipped($db, array_keys($bom_bound_ships_map), $bom_bound_ships_map);
         foreach ($OreadyReply_list_base as $item) {
             $item['qq_details']        = $qq_details_map[$item['bom']] ?? [];
+            $item['bound_ships']       = $bom_bound_ships_map[$item['bom']] ?? null;
             $item['ok_details']        = $ok_details_map[$item['bom']] ?? [];
             $_qcs = $qc_summary_map[$item['bom']] ?? [];
             $item['qc_qq_qty']  = (float)($_qcs['qc_qq_qty']  ?? 0);

@@ -1423,9 +1423,15 @@ if (is_array($OreadyReply_list_base)) {
     }
     unset($item_ref); // 斷開引用
 
+    // 已綁定出貨單（客戶欄 ✔ 單號、發單日欄「待出貨」已出完就不顯示）；良品全數出完的製令順路自動結案
+    // 唯一實作 src/common/bom_bound_ship_lib.php（_fetch_data.php／_fetch_data2.php 同一份）
+    require_once __DIR__ . '/../../src/common/bom_bound_ship_lib.php';
+    $bom_bound_ships_map = eg_bom_bound_ships($db, array_column($OreadyReply_list_base, 'bom'));
+    eg_bom_auto_close_shipped($db, array_keys($bom_bound_ships_map), $bom_bound_ships_map);
     foreach ($OreadyReply_list_base as $item) {
         $item['OrderList'] = $order_list_map[$item['d_setting_id']] ?? [];
         $item['BoundOrderIds'] = $bom_bound_orders_map[$item['bom']] ?? []; // 這張BOM真正綁定的訂單ID（見上方 $bom_bound_orders_map 註解）
+        $item['bound_ships'] = $bom_bound_ships_map[$item['bom']] ?? null;
         $OreadyReply_list_final[] = $item;
     }
 }
@@ -3353,6 +3359,19 @@ echo "</script>\n";
     // ── 生管頁面的關卡認定輔助（2026-11-10）──────────────────────────────────
     function ocDateVal(s) { var m = String(s || '').match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : 0; }
     function ocGrp(p) { return Number(p.sn_grp != null ? p.sn_grp : p.bom_sn) || 0; }
+    /* 最後一關「待出貨」：發出去的貨全數回廠、後面沒有關卡。回傳 { ret, shipped, left } 或 null。
+       shipped＝這張製令已綁定出貨單的數量（後端 bom_bound_ship_lib.php），left＝還沒出的待出貨量。
+       left<=0＝已全數出貨：發單日欄不再顯示這一關與「待出貨」（2026-11-11 使用者要求）。 */
+    function ocLastShipInfo(row, proc) {
+        var m = (window.obBatchMap || {})[String(proc.bom_ing_fid)];
+        if (!(m && m.batches && m.batches.length && (Number(m.outside) || 0) <= 1e-9 && (Number(m.ret) || 0) > 0)) return null;
+        var g = ocGrp(proc), bm = String(row.bom || '').trim();
+        var later = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === bm && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > g; });
+        if (later) return null;
+        var ready = Math.max(0, (Number(m.send) || 0) - (Number(m.wd) || 0));
+        var shipped = Number(row.bound_ships && row.bound_ships.qty) || 0;
+        return { ret: ready, shipped: shipped, left: Math.max(0, ready - shipped) };
+    }
     // 這一站（這個廠商）發出去的貨，移轉憑單已經全部移走（憑單合計 >= 該廠商在這一關的發單量）→ 已移轉，不再算加工中
     function ocXferDone(p, procs) {
         if (!p || String(p.processing_state || '') !== 'ing' || Number(p.sn_cnt) !== 1) return false;
@@ -5556,6 +5575,33 @@ echo "</script>\n";
                 return new Date(`${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`);
             }
 
+            // --- 已綁定這張製令的出貨單：綠勾＋簡式單號（IS1150921003→1150921-3，同訂單號簡式）＋日期×數量 ---
+            // 資料由後端 bom_bound_ship_lib.php 算（只認確實綁定，不用料號猜）；同一筆不再出現在下方的「出 MM-DD x數量」
+            var _boundShipKeys = {};
+            if (row.bound_ships && Array.isArray(row.bound_ships.ships) && row.bound_ships.ships.length) {
+                const bsWrap = document.createElement('div');
+                bsWrap.style.cssText = 'font-size:10px;color:#555;margin-top:4px;line-height:1.3;';
+                const _thisYear = String(new Date().getFullYear());
+                row.bound_ships.ships.slice(0, 5).forEach(function (s) {
+                    _boundShipKeys[String(s.date) + '|' + String(s.qty)] = (_boundShipKeys[String(s.date) + '|' + String(s.qty)] || 0) + 1;
+                    var d = String(s.date || '');
+                    var dShow = d.substring(0, 4) === _thisYear ? d.substring(5).replace('-', '/') : d.replace(/-/g, '.');
+                    const ln = document.createElement('div');
+                    ln.style.whiteSpace = 'nowrap';
+                    ln.title = '已綁定出貨單 ' + s.no + '（' + d.replace(/-/g, '.') + ' 出貨 ' + s.qty + '）';
+                    ln.innerHTML = '<i class="fa fa-check" style="color:#2E8B57;margin-right:2px;"></i>'
+                        + '<span style="color:#0056b3;line-height:1.3;">' + escapeHtml(s.short || s.no) + '</span> '
+                        + '<span style="line-height:1.3;">' + escapeHtml(dShow) + ' ×' + escapeHtml(String(s.qty)) + '</span>';
+                    bsWrap.appendChild(ln);
+                });
+                if (row.bound_ships.ships.length > 5) {
+                    const more = document.createElement('div');
+                    more.textContent = '…另 ' + (row.bound_ships.ships.length - 5) + ' 張，共出 ' + row.bound_ships.qty;
+                    bsWrap.appendChild(more);
+                }
+                tdClient.appendChild(bsWrap);
+            }
+
             // --- 新增：顯示最近兩筆出貨紀錄 ---
             if (Array.isArray(row.shipment_history) && row.shipment_history.length > 0) {
                 const historyContainer = document.createElement('div');
@@ -5572,6 +5618,9 @@ echo "</script>\n";
 
                 // 過濾基準日之後的出貨紀錄
                 let filteredHistory = row.shipment_history.filter(shipment => {
+                    // 已在上方以「✔ 已綁定出貨單」列出的同一筆（同出貨日＋同數量）不重複顯示
+                    const _bk = String(shipment.shipment_iso_date) + '|' + String(shipment.Qty);
+                    if (_boundShipKeys[_bk] > 0) { _boundShipKeys[_bk]--; return false; }
                     // 修正：如果沒有基準日，則不過濾，顯示所有出貨紀錄（最多三筆）
                     // 這樣可以處理 BOM 和訂單都無法解析出日期的情況
                     if (!referenceDate) return true; 
@@ -6434,6 +6483,8 @@ echo "</script>\n";
                     } catch (_e) {}
                 })();
                 _displayProcs.forEach(function(_proc, _pi) {
+                    // 最後一關的待出貨量已全數由綁定出貨單出完：這一關不再顯示（出貨紀錄看客戶欄）
+                    if (String(_proc.processing_state || '') === 'ing') { var _lsi0 = ocLastShipInfo(row, _proc); if (_lsi0 && _lsi0.shipped > 0 && _lsi0.left <= 0) return; }
                     // 已全數回廠、只是還有數量沒發到下一關（沒有發單批次的關卡）：只顯示「回廠日（有QC檢驗＝最後一筆檢驗完成日）　未發<下一製程> N」
                     if (_xoPartial(_proc)) {
                         var _pm0 = (window.obBatchMap || {})[String(_proc.bom_ing_fid)];
@@ -7512,7 +7563,11 @@ echo "</script>\n";
                                         if (_om && _om.batches && _om.batches.length && (Number(_om.outside) || 0) <= 1e-9 && (Number(_om.ret) || 0) > 0) {
                                             var _g9 = ocGrp(processInfo), _bm9 = String(row.bom || '').trim();
                                             var _later9 = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === _bm9 && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > _g9; });
-                                            if (!_later9) { translatedState = _obNum((Number(_om.send) || 0) - (Number(_om.wd) || 0)) + 'PCS 待出貨'; stateColor = '#2E8B57'; }
+                                            if (!_later9) {
+                                                var _lsi9 = ocLastShipInfo(row, processInfo);
+                                                if (_lsi9 && _lsi9.shipped > 0 && _lsi9.left <= 0) { translatedState = '已全數出貨'; stateColor = '#2E8B57'; }
+                                                else { translatedState = _obNum(_lsi9 ? _lsi9.left : ((Number(_om.send) || 0) - (Number(_om.wd) || 0))) + 'PCS 待出貨'; stateColor = '#2E8B57'; }
+                                            }
                                         }
                                     }
                                     tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${stateColor};">${datePrefix}${escapeHtml(translatedState)}</div>`;
