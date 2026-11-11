@@ -171,9 +171,13 @@ function sob_sync_is_order(PDO $pdo, array $is_ids) {
         $sid = intval($r['IS_id']);
         if (!isset($primary[$sid])) $primary[$sid] = intval($r['Order_id']); // 已排序，第一筆即最大
     }
-    if (!$primary) return;
-    $upd = $pdo->prepare('UPDATE is_list SET Order_id = ? WHERE IS_id = ?');
-    foreach ($primary as $sid => $oid) $upd->execute([$oid, $sid]);
+    if ($primary) {
+        $upd = $pdo->prepare('UPDATE is_list SET Order_id = ? WHERE IS_id = ?');
+        foreach ($primary as $sid => $oid) $upd->execute([$oid, $sid]);
+    }
+    // 出貨單「已綁定確認」記號跟著綁定狀態走：ERP 匯入不會覆蓋有記號的列（is_bind_lock_lib.php）
+    require_once __DIR__ . '/is_bind_lock_lib.php';
+    isbl_sync($pdo, $is_ids, (int)($_SESSION['id'] ?? 0));
 }
 
 /**

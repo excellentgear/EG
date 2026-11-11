@@ -22,6 +22,9 @@ $__features = rf_load_user_features($db, (int)$id);
 $canClearIsList = rf_has_feature($__features, 'all') || rf_has_feature($__features, 'data_console_edit');
 // 「補資料」分頁（報價單 ERP 匯入、訂購單補資料）：僅系統管理員（使用者明確要求 2026-10-13）
 $isPageAdmin = rf_has_feature($__features, 'all');
+// 「ERP 差異確認」分頁：已綁定的出貨單在 ERP 匯入時內容不同或找不到，待系統管理員決定（is_bind_lock_lib.php，2026-11-11）
+$isErpDiffPending = 0;
+if ($isPageAdmin) { try { $isErpDiffPending = (int)$db->query("SELECT COUNT(*) FROM is_list_erp_diff WHERE status='pending'")->fetchColumn(); } catch (Throwable $e) {} }
 
 /* =====================================================================
  * 【待刪除清單 2026-07-28】以下 4 個舊上傳區塊已由 ERP 直接匯入取代，
@@ -309,6 +312,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                     <ul class="nav nav-tabs" id="uploadTabs" style="margin-bottom:12px">
                                         <li class="active"><a href="#tabErpImport" data-toggle="tab">ERP 匯入</a></li>
                                         <li><a href="#tabBackfill" data-toggle="tab">補資料 <small class="text-muted">(管理員)</small></a></li>
+                                        <li><a href="#tabIsDiff" data-toggle="tab" id="tabIsDiffLink">ERP 差異確認 <small class="text-muted">(管理員)</small><?php if ($isErpDiffPending > 0): ?> <span class="badge" id="iedBadge" style="background:#DD5138"><?= $isErpDiffPending ?></span><?php endif; ?></a></li>
                                     </ul>
                                     <?php endif; ?>
                                     <div class="tab-content" style="border:0;padding:0">
@@ -993,6 +997,14 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
                                     </div><!-- /tabBackfill -->
+                                    <div class="tab-pane" id="tabIsDiff">
+                                        <div style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:13px;color:#5a3a10;">
+                                            <b>已綁定出貨單的 ERP 差異</b>：出貨單一旦綁定訂單／製令／退貨／專案／對帳（人工或系統自動），ERP 出貨單匯入就<b>不會刪除、也不會覆蓋</b>它，出貨單 ID 不變，綁定才找得到。
+                                            匯入時若 ERP 的內容和系統裡的不同，或 ERP 檔案裡找不到這筆，會列在這裡：請逐欄勾選要採用 ERP 新內容的欄位後按「套用勾選的欄位」，或按「保留原資料」。
+                                            <br><span style="color:#8A3200">改「數量」時請留意：這張出貨單已分配給訂單的數量不會自動跟著改。</span>
+                                        </div>
+                                        <div id="iedList"><div class="text-muted" style="padding:10px">載入中…</div></div>
+                                    </div><!-- /tabIsDiff -->
 <?php endif; ?>
                                     </div><!-- /tab-content -->
                                 </div>
@@ -1204,7 +1216,10 @@ $(document).ready(function() {
                 html += '<tr><td>解析到的有效列數</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
                 html += '<tr><td>資料日期範圍</td><td>' + res.date_min + ' ～ ' + res.date_max + '</td></tr>';
                 html += '<tr class="danger"><td>將清除的舊資料</td><td><strong>' + res.existing_delete_count + ' 筆</strong>（' + res.date_min + ' ～ ' + res.date_max + ' 區間內，不影響此區間外的既有資料）</td></tr>';
-                html += '<tr><td>將新增的資料</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
+                html += '<tr><td>將新增的資料</td><td><strong>' + (res.insert_count != null ? res.insert_count : res.total_rows) + ' 筆</strong></td></tr>';
+                if (res.locked_count > 0)
+                    html += '<tr class="success"><td>已綁定的出貨單（保留不動）</td><td><strong>' + res.locked_count + ' 筆</strong>：不清除、不覆蓋、ID 不變（與 ERP 相同 ' + res.locked_same + ' 筆'
+                          + ((res.locked_changed + res.locked_missing) > 0 ? '；<span style="color:#DD5138">內容不同 ' + res.locked_changed + ' 筆、ERP 找不到 ' + res.locked_missing + ' 筆，匯入後列入「ERP 差異確認」分頁</span>' : '') + '）</td></tr>';
                 html += '<tr><td>料號綁定</td><td>' + res.bound_count + ' / ' + res.total_rows + ' 筆成功綁定（含客戶驗證）</td></tr>';
                 if (res.auto_create_count > 0)
                     html += '<tr class="warning"><td>將自動建立料號</td><td><strong>' + res.auto_create_count + ' 筆</strong>（確認匯入時建立，備註：匯入出貨單自動建立）</td></tr>';
@@ -1788,6 +1803,74 @@ $(document).ready(function() {
     });
 });
 </script>
+
+<?php if ($isPageAdmin): ?>
+<script>
+/* 「ERP 差異確認」分頁（2026-11-11）：已綁定出貨單的 ERP 差異逐欄決定，後端 src/store/IsErpDiff_API.php */
+(function () {
+    var API = '../../src/store/IsErpDiff_API.php', CSRF = '', LABELS = {}, ROWS = [];
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+    function fmt(f, v) {
+        if (v == null || v === '') return '<span class="text-muted">（空白）</span>';
+        if (f === 'Order_date') return esc(String(v).slice(0, 10).replace(/-/g, '.'));
+        return esc(v);
+    }
+    function load() {
+        $('#iedList').html('<div class="text-muted" style="padding:10px">載入中…</div>');
+        $.getJSON(API, { action: 'list' }, function (r) {
+            if (!r || !r.ok) { $('#iedList').html('<div class="alert alert-danger">' + esc((r && r.error) || '載入失敗') + '</div>'); return; }
+            CSRF = r.csrf; LABELS = r.labels || {}; ROWS = r.rows || [];
+            if (ROWS.length) $('#iedBadge').length ? $('#iedBadge').text(ROWS.length) : $('#tabIsDiffLink').append(' <span class="badge" id="iedBadge" style="background:#DD5138">' + ROWS.length + '</span>');
+            else $('#iedBadge').remove();
+            render();
+        }).fail(function (x) { $('#iedList').html('<div class="alert alert-danger">載入失敗（HTTP ' + x.status + '）</div>'); });
+    }
+    function render() {
+        if (!ROWS.length) { $('#iedList').html('<div class="alert alert-success" style="margin:0">目前沒有待決定的差異。</div>'); return; }
+        var h = '';
+        ROWS.forEach(function (d) {
+            var cur = d.cur || d.old || {};
+            var head = '<b>' + esc(d.is_number) + '</b>　' + fmt('Order_date', cur.Order_date) + '　' + esc(cur.Client_name || '') + '　料號 <b>' + esc(cur.Product_id || (d.old || {}).Product_id || '') + '</b>'
+                + '　<span class="text-muted" style="font-size:12px">出貨單 ID ' + d.is_id + '・匯入 ' + esc(String(d.created_at || '').slice(0, 16).replace(/-/g, '.')) + (d.created_name ? '・' + esc(d.created_name) : '') + '</span>';
+            h += '<div class="panel panel-default ied-item" data-id="' + d.id + '" style="margin-bottom:10px"><div class="panel-heading" style="padding:6px 10px;background:#FBEFD9">'
+               + (d.kind === 'missing' ? '<span class="label" style="background:#DD5138">ERP 檔案裡找不到</span> ' : '<span class="label" style="background:#F0A24B">內容不同</span> ') + head + '</div><div class="panel-body" style="padding:6px 10px">';
+            if (!d.cur) h += '<div class="alert alert-warning" style="margin:0 0 6px">這筆出貨單已經不在系統裡（可能已被刪除），只能保留／略過。</div>';
+            if (d.kind === 'missing') {
+                h += '<div style="font-size:13px">這張出貨單在系統裡有綁定，但這次匯入的 ERP 檔案涵蓋範圍內找不到它（可能 ERP 刪了、改了單號，或 ERP 資料有問題）。系統<b>不會自動刪除</b>；確認無誤請按「保留原資料」。若真的要刪除，請到快速出貨的近期出貨單刪除（會一併解除綁定）。</div>';
+            } else {
+                h += '<table class="table table-condensed table-bordered" style="font-size:13px;margin-bottom:6px"><thead><tr><th style="width:90px">欄位</th><th>系統目前</th><th>ERP 新內容</th><th style="width:70px;text-align:center">套用</th></tr></thead><tbody>';
+                (d.fields || []).forEach(function (f) {
+                    var warn = (f === 'Qty' && d.alloc_qty != null && Number(d.new[f]) < Number(d.alloc_qty)) ? '<div style="color:#DD5138;font-size:12px">已分配給訂單 ' + d.alloc_qty + '，比新數量多</div>' : '';
+                    h += '<tr><td>' + esc(LABELS[f] || f) + '</td><td>' + fmt(f, cur[f]) + '</td><td style="background:#FFF6E5">' + fmt(f, d.new[f]) + warn + '</td>'
+                       + '<td style="text-align:center"><input type="checkbox" class="ied-f" value="' + esc(f) + '" data-eg-skip></td></tr>';
+                });
+                h += '</tbody></table>';
+            }
+            h += '<div style="text-align:right">'
+               + (d.kind === 'changed' && d.cur ? '<button class="btn btn-xs btn-warning ied-apply">套用勾選的欄位</button> ' : '')
+               + '<button class="btn btn-xs btn-default ied-keep">保留原資料</button></div></div></div>';
+        });
+        $('#iedList').html(h);
+    }
+    $(document).on('click', '#iedList .ied-apply', function () {
+        var $p = $(this).closest('.ied-item'), fields = $p.find('.ied-f:checked').map(function () { return this.value; }).get();
+        if (!fields.length) { alert('請先勾選要套用 ERP 新內容的欄位'); return; }
+        if (!confirm('確定以 ERP 新內容覆蓋這 ' + fields.length + ' 個欄位？（出貨單 ID 不變，綁定照舊）')) return;
+        $.post(API, { action: 'apply', id: $p.data('id'), fields: JSON.stringify(fields), csrf: CSRF }, function (r) {
+            alert(r && r.ok ? r.message : ((r && r.error) || '套用失敗')); load();
+        }, 'json').fail(function (x) { alert('套用失敗：' + ((x.responseJSON && x.responseJSON.error) || ('HTTP ' + x.status))); load(); });
+    });
+    $(document).on('click', '#iedList .ied-keep', function () {
+        var $p = $(this).closest('.ied-item');
+        $.post(API, { action: 'keep', id: $p.data('id'), csrf: CSRF }, function (r) {
+            if (!(r && r.ok)) alert((r && r.error) || '處理失敗'); load();
+        }, 'json').fail(function (x) { alert('處理失敗：' + ((x.responseJSON && x.responseJSON.error) || ('HTTP ' + x.status))); load(); });
+    });
+    // 點開分頁當下才向後端要最新清單（點開即刷新）
+    $(document).on('shown.bs.tab', '#tabIsDiffLink', load);
+})();
+</script>
+<?php endif; ?>
 
 <!-- 移轉紀錄 ERP匯入預覽 Modal -->
 <div class="modal fade" id="transferErpImportModal" tabindex="-1" role="dialog">

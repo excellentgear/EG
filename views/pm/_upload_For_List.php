@@ -1115,16 +1115,25 @@ if (!function_exists('parseERPRowsFromSheet')) {
 // 未來期間既有資料（如 2023~現在）也一併清空，是誤刪；只清「即將被這份檔案取代」的區間才正確。
 if (!function_exists('commitERPRows')) {
     function commitERPRows($db, $validRows, $earliestDate, $latestDate, $userId) {
+        // 已綁定確認的出貨單（is_list.bind_locked）不刪、不改、IS_id 不動；ERP 內容不同的寫進待決定清單
+        // 由管理員在「更新資料」頁的「ERP 差異確認」分頁逐欄決定（2026-11-11，唯一實作 is_bind_lock_lib.php）
+        require_once __DIR__ . '/../../src/common/is_bind_lock_lib.php';
+        isbl_ensure_schema($db);   // DDL 一定要在交易外
+        $plan = isbl_plan($db, $validRows, $earliestDate, $latestDate);
+        $uidInt = (int)$userId;
+
         $db->beginTransaction();
+        isbl_mark($db, $plan['locked_ids'], $uidInt);   // 有綁定卻還沒有記號的，這次一併補上
 
         // is_bom_map（出貨-BOM對應）無 FK 約束需手動清，避免留下指向已刪 is_list 的孤兒列；
         // shipment_order_map 由 FK CASCADE 自動連鎖刪除、return_order_map.IS_id 由 FK SET NULL 自動處理。
-        $delMap = $db->prepare("DELETE FROM is_bom_map WHERE IS_id IN (SELECT IS_id FROM is_list WHERE Order_date BETWEEN ? AND ?)");
+        $delMap = $db->prepare("DELETE FROM is_bom_map WHERE IS_id IN (SELECT IS_id FROM is_list WHERE Order_date BETWEEN ? AND ? AND bind_locked=0)");
         $delMap->execute([$earliestDate, $latestDate]);
 
-        $del = $db->prepare("DELETE FROM is_list WHERE Order_date BETWEEN ? AND ?");
+        $del = $db->prepare("DELETE FROM is_list WHERE Order_date BETWEEN ? AND ? AND bind_locked=0");
         $del->execute([$earliestDate, $latestDate]);
         $deletedRows = $del->rowCount();
+        $validRows = $plan['insert'];
 
         $ins = $db->prepare("INSERT INTO is_list
             (Order_date, IS_number, Client_id, Client_name, Product_id, d_setting_id, Specification, Content,
@@ -1139,8 +1148,10 @@ if (!function_exists('commitERPRows')) {
             ]);
             $insertCount++;
         }
+        $diffCount = isbl_record_diffs($db, $plan, $uidInt);
         $db->commit();
-        return ['deleted' => $deletedRows, 'inserted' => $insertCount];
+        return ['deleted' => $deletedRows, 'inserted' => $insertCount, 'locked' => count($plan['locked_ids']),
+                'same' => $plan['same'], 'changed' => count($plan['changed']), 'missing' => count($plan['missing']), 'diffs' => $diffCount];
     }
 }
 
@@ -1244,7 +1255,8 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP') {
                 "ERP出貨單直接匯入完成。\n" .
                 "最早出貨日期：{$earliestDate}\n" .
                 "已清除 {$earliestDate} 起（含當日）的 {$result['deleted']} 筆舊資料\n" .
-                "新匯入 {$result['inserted']} 筆資料";
+                "新匯入 {$result['inserted']} 筆資料" .
+                (!empty($result['locked']) ? "\n已綁定的出貨單 {$result['locked']} 筆保留不動" . (!empty($result['diffs']) ? "，{$result['diffs']} 筆與 ERP 不同已列入「ERP 差異確認」待管理員決定" : '') : '');
             header("Location: Upload_List.php?message=oth"); exit;
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
@@ -1353,6 +1365,19 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Preview') {
         if ($zeroPricePct > 0.5)
             $warnings[] = "超過50%的單價為0（共 {$zeroPriceCnt} 筆），請確認單價欄位是否正確";
 
+        // 10b. 已綁定確認的出貨單：不清除、不覆蓋，內容不同的交管理員決定（is_bind_lock_lib.php）
+        require_once __DIR__ . '/../../src/common/is_bind_lock_lib.php';
+        $lockPlan = isbl_plan($db, $validRows, $earliestDate, $latestDate);
+        $lockedInRange = 0;
+        if ($lockPlan['locked_ids']) {
+            $q = $db->prepare("SELECT COUNT(*) FROM is_list WHERE Order_date BETWEEN ? AND ? AND IS_id IN (" . implode(',', array_map('intval', $lockPlan['locked_ids'])) . ")");
+            $q->execute([$earliestDate, $latestDate]);
+            $lockedInRange = (int)$q->fetchColumn();
+        }
+        $existingDeleteCount = max(0, (int)$existingDeleteCount - $lockedInRange);
+        if (count($lockPlan['changed']) + count($lockPlan['missing']) > 0)
+            $warnings[] = '已綁定的出貨單中有 ' . count($lockPlan['changed']) . ' 筆與 ERP 內容不同、' . count($lockPlan['missing']) . ' 筆在檔案裡找不到：一律不覆蓋，匯入後請管理員到「ERP 差異確認」分頁逐筆決定';
+
         // 11. 暫存至 Session
         $_SESSION['erp_import_rows']     = $validRows;
         $_SESSION['erp_import_earliest'] = $earliestDate;
@@ -1366,6 +1391,11 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Preview') {
             'date_min'              => $earliestDate,
             'date_max'              => $latestDate,
             'existing_delete_count' => $existingDeleteCount,
+            'locked_count'          => count($lockPlan['locked_ids']),
+            'locked_same'           => $lockPlan['same'],
+            'locked_changed'        => count($lockPlan['changed']),
+            'locked_missing'        => count($lockPlan['missing']),
+            'insert_count'          => count($lockPlan['insert']),
             'is_numbers_sample'     => array_values(array_slice($allISNums, 0, 5)),
             'bound_count'        => $boundCount,
             'auto_create_count'  => $autoCreateCount,
@@ -1398,6 +1428,8 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Commit') {
         $result = commitERPRows($db, $validRows, $earliestDate, $latestDate, $userId);
         $msg = "匯入完成！清除 {$result['deleted']} 筆舊資料，新增 {$result['inserted']} 筆";
         if ($newDCount > 0) $msg .= "，自動建立 {$newDCount} 筆新料號";
+        if (!empty($result['locked'])) $msg .= "。已綁定的出貨單 {$result['locked']} 筆保留不動（內容相同 {$result['same']} 筆）";
+        if (!empty($result['diffs'])) $msg .= "，其中 {$result['changed']} 筆與 ERP 內容不同、{$result['missing']} 筆在檔案裡找不到，已列入「ERP 差異確認」待管理員決定";
         recordUploadLog($db, 'upload_is_erp');
         echo json_encode([
             'success'          => true,

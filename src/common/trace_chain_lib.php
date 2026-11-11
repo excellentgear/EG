@@ -37,6 +37,17 @@ require_once __DIR__ . '/acc_lib.php';
  * 六種連結：type => [顯示名稱, 來源種類, 目標種類]
  * 種類代碼：quote 報價單 / order 訂單 / bom 製令 / ship 出貨單 / ret 退貨單
  */
+/** 綁定／解除涉及出貨單時，同步「已綁定確認」記號（ERP 匯入不覆蓋有記號的出貨單，見 is_bind_lock_lib.php） */
+function tc_isbl_sync(PDO $db, string $type, $fromId, $toId): void
+{
+    $types = tc_link_types();
+    if (!isset($types[$type])) return;
+    $isId = $types[$type][1] === 'ship' ? (int)$fromId : ($types[$type][2] === 'ship' ? (int)$toId : 0);
+    if ($isId <= 0) return;
+    require_once __DIR__ . '/is_bind_lock_lib.php';
+    isbl_sync($db, [$isId], (int)($_SESSION['id'] ?? 0));
+}
+
 function tc_link_types(): array
 {
     return [
@@ -839,6 +850,7 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '寫入失敗：' . $e->getMessage()];
     }
+    tc_isbl_sync($db, $type, $fromId, $toId);
     $amt = ($type === 'quote_order' && $qty <= 0) ? '不拆量' : (string)$qty;
     return ['success' => true, 'message' => "已建立對應：{$a['no']} → {$b['no']}（{$amt}）",
             'warn' => $warn];
@@ -957,5 +969,6 @@ function tc_unlink(PDO $db, string $type, $fromId, $toId, ?array $user = null, s
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '解除失敗：' . $e->getMessage()];
     }
+    tc_isbl_sync($db, $type, $fromId, $toId);
     return ['success' => true, 'message' => '已解除對應'];
 }

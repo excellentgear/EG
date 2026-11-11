@@ -689,6 +689,7 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
                     $userId,
                 ]);
                 $isId = (int)$db->lastInsertId();
+                $newIsIds[] = $isId;
 
                 // 製令扣帳：依前端帶回的分配結果；未帶則自動 FIFO 分配
                 $alloc = $it['boms'] ?? [];
@@ -708,6 +709,8 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '建立失敗：' . $e->getMessage()];
     }
+    // 快速出貨建立的出貨單本來就綁了訂單／製令：標上「已綁定確認」，ERP 匯入不會覆蓋（is_bind_lock_lib.php）
+    if (!empty($newIsIds)) { require_once __DIR__ . '/is_bind_lock_lib.php'; isbl_sync($db, $newIsIds, (int)$userId); }
 
     // 自動結案（交易外，失敗不影響已建立的出貨單）
     $closed = [];
@@ -1037,9 +1040,10 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
             $oid  = (int)($p['order_id'] ?? 0);
             if ($isId <= 0 || $oid <= 0) { $skipped++; continue; }
             $up->execute([':oid' => $oid, ':isid' => $isId]);
-            if ($up->rowCount() > 0) $applied++; else $skipped++;
+            if ($up->rowCount() > 0) { $applied++; $appliedIs[] = $isId; } else $skipped++;
         }
         $db->commit();
+        if (!empty($appliedIs)) { require_once __DIR__ . '/is_bind_lock_lib.php'; isbl_sync($db, $appliedIs, (int)$userId); }
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '回填失敗：' . $e->getMessage()];
