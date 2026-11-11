@@ -154,6 +154,25 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
     // 整張 BOM 口徑不分站（可出量本來就是整批的概念）；一次批次查完，不逐列各查一次（鐵律8效能考量）。
     $scrapMap = qab_bom_scrap_rows($db, array_column($rows, 'bom'));
 
+    // 報廢品歸還客戶（2026-11-11 使用者交辦）：第一關不是 170 材料（＝客供料）的製令，報廢品要還給客戶。
+    // 只在指定製令清單時才查（全域查詢不需要，省一次查詢）；歸還數量記在 is_bom_scrap_map，與良品出貨的 is_bom_map 分開，
+    // 這樣既有讀 is_bom_map 的程式（BOM總覽綁定出貨單、追溯對照、自動結案）完全不受影響。
+    $firstNo = []; $scrapRet = [];
+    if ($boms !== null && $rows) {
+        sq_scrap_ensure($db);
+        $ph2 = implode(',', array_fill(0, count($boms), '?'));
+        $fs = $db->prepare("SELECT bi.bom, bi.process_no FROM bom_ing bi
+                              JOIN (SELECT bom, MIN(bom_sn) AS msn FROM bom_ing WHERE bom IN ($ph2) GROUP BY bom) m
+                                ON m.bom = bi.bom AND m.msn = bi.bom_sn");
+        $fs->execute($boms);
+        foreach ($fs->fetchAll(PDO::FETCH_ASSOC) as $f) $firstNo[$f['bom']] = (int)$f['process_no'];
+        $rs = $db->prepare("SELECT m.bom, SUM(m.qty) AS q FROM is_bom_scrap_map m
+                              JOIN is_list il ON il.IS_id = m.IS_id
+                             WHERE m.bom IN ($ph2) GROUP BY m.bom");
+        $rs->execute($boms);
+        foreach ($rs->fetchAll(PDO::FETCH_ASSOC) as $f) $scrapRet[$f['bom']] = (int)$f['q'];
+    }
+
     $map = [];
     foreach ($rows as $r) {
         $done    = (int)$r['done_qty'];
@@ -161,14 +180,39 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
         if ($boms === null && $done <= 0) continue;   // 全域查詢時略過未完工，減少記憶體
         $scrap   = qab_bom_scrap_sum_rows($scrapMap[$r['bom']] ?? [], null);
         $done    = max(0, $done - $scrap);
+        $elig    = isset($firstNo[$r['bom']]) && $firstNo[$r['bom']] !== 170 && $firstNo[$r['bom']] !== 0;
+        $ret     = (int)($scrapRet[$r['bom']] ?? 0);
         $map[$r['bom']] = [
             'done'    => $done,
             'shipped' => $shipped,
             'avail'   => max(0, $done - $shipped),
             'closed'  => ((int)$r['erp_closed'] === 1),
+            'scrap'       => (int)$scrap,                                   // 已結案報廢單的報廢件數
+            'scrap_ret'   => $ret,                                          // 已歸還客戶的報廢品件數
+            'scrap_elig'  => $elig,                                         // 第一關不是 170 材料 → 報廢品要還客戶
+            'scrap_avail' => $elig ? max(0, (int)$scrap - $ret) : 0,        // 還可以歸還的報廢品件數
         ];
     }
     return $map;
+}
+
+/** 報廢品歸還明細表（出貨單明細 ↔ 製令 ↔ 歸還件數）。DDL 不可在交易中執行，所以交易內呼叫時略過。 */
+function sq_scrap_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done || $db->inTransaction()) return;
+    $ex = $db->query("SHOW TABLES LIKE 'is_bom_scrap_map'")->fetchColumn();
+    if (!$ex) {
+        $db->exec("CREATE TABLE IF NOT EXISTS is_bom_scrap_map (
+            id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            IS_id INT NOT NULL COMMENT '對應 is_list.IS_id（報廢品歸還的出貨明細）',
+            bom VARCHAR(30) NOT NULL COMMENT '對應 bom.bom',
+            qty INT NOT NULL DEFAULT 0 COMMENT '歸還客戶的報廢品件數',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_is_bom (IS_id, bom), KEY idx_bom (bom)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='報廢品歸還客戶（第一關非170材料的製令）'");
+    }
+    $done = true;
 }
 
 /* ============================================================
@@ -497,6 +541,10 @@ function sq_pending_orders(PDO $db, array $f): array
                 'shipped'   => $av['shipped'],
                 'avail'     => max(0, $canUse),
                 'closed'    => $av['closed'],
+                'scrap'       => (int)($av['scrap'] ?? 0),
+                'scrap_ret'   => (int)($av['scrap_ret'] ?? 0),
+                'scrap_elig'  => !empty($av['scrap_elig']),
+                'scrap_avail' => (int)($av['scrap_avail'] ?? 0),
                 'delivery'  => $b['delivery'],
                 'priority'  => $b['priority'],
                 'bom_ps'    => $b['bom_ps'],
@@ -645,6 +693,21 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
     foreach ($items as $i => $it) {
         $qty = (int)($it['qty'] ?? 0);
         if ($qty <= 0) continue;
+        if (!empty($it['scrap_return'])) {   // 報廢品歸還客戶：不掛訂單、單價 0，數量一律不可超過該製令「報廢品可退」
+            sq_scrap_ensure($db);
+            $alloc = array_values(array_filter((array)($it['boms'] ?? []), fn($a) => !empty($a['bom']) && (int)($a['qty'] ?? 0) > 0));
+            if (!$alloc) { $errors[] = "第" . ($i + 1) . "列報廢品歸還沒有指定製令，已略過"; continue; }
+            $am = sq_bom_avail_map($db, array_column($alloc, 'bom'));
+            $sumA = 0; $bad = '';
+            foreach ($alloc as $a) {
+                $sumA += (int)$a['qty'];
+                if ((int)$a['qty'] > (int)($am[$a['bom']]['scrap_avail'] ?? 0)) { $bad = $a['bom'] . ' 報廢品可退只剩 ' . (int)($am[$a['bom']]['scrap_avail'] ?? 0) . ' 件'; break; }
+            }
+            if ($bad !== '') return ['success' => false, 'message' => '報廢品歸還數量超過上限：' . $bad];
+            $it['qty'] = $sumA; $qty = $sumA; $it['boms'] = $alloc;
+            $it['order_id'] = null; $it['unit_price'] = 0;
+            if (trim((string)($it['note'] ?? '')) === '') $it['note'] = '報廢品歸還';
+        }
         $name = trim((string)($it['client_name'] ?? ''));
         $pid  = trim((string)($it['product_id'] ?? ''));
         if ($name === '') { $errors[] = "第" . ($i + 1) . "列缺少客戶，已略過"; continue; }
@@ -676,6 +739,10 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
              ON DUPLICATE KEY UPDATE shipped_qty = shipped_qty + VALUES(shipped_qty)"
         );
 
+        $insScrap = $db->prepare(
+            "INSERT INTO is_bom_scrap_map (IS_id, bom, qty) VALUES (?,?,?)
+             ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)"
+        );
         $shipments   = [];
         $ordersUsed  = [];
 
@@ -704,10 +771,12 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
 
                 // 製令扣帳：依前端帶回的分配結果；未帶則自動 FIFO 分配
                 $alloc = $it['boms'] ?? [];
-                if (!$alloc && $orderId) $alloc = sq_auto_allocate($db, $orderId, $it['qty']);
+                if (!$alloc && $orderId && empty($it['scrap_return'])) $alloc = sq_auto_allocate($db, $orderId, $it['qty']);
                 foreach ($alloc as $a) {
                     $bq = (int)($a['qty'] ?? 0);
-                    if ($bq > 0 && !empty($a['bom'])) $insMap->execute([$isId, $a['bom'], $bq]);
+                    if ($bq <= 0 || empty($a['bom'])) continue;
+                    if (!empty($it['scrap_return'])) $insScrap->execute([$isId, $a['bom'], $bq]);   // 報廢品歸還：記在獨立的表，不算良品出貨
+                    else $insMap->execute([$isId, $a['bom'], $bq]);
                 }
                 if ($orderId) $ordersUsed[$orderId] = true;
                 $cnt++;
@@ -1322,7 +1391,7 @@ function sq_delete_shipment(PDO $db, string $isNumber, ?array $isIds, array $use
     try {
         $db->beginTransaction();
         // 先清掉所有掛在這些明細底下的對應（外鍵不一定有，一律自己清）
-        foreach (['is_bom_map', 'is_order_map', 'ir_reship_map', 'return_order_map', 'shipment_order_map'] as $t) {
+        foreach (['is_bom_map', 'is_bom_scrap_map', 'is_order_map', 'ir_reship_map', 'return_order_map', 'shipment_order_map'] as $t) {
             try { $db->prepare("DELETE FROM $t WHERE IS_id IN ($ph)")->execute($ids); }
             catch (Throwable $e) { /* 該表不存在就略過 */ }
         }

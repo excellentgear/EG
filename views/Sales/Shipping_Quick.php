@@ -437,6 +437,13 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
           在列印對話框按取消也一樣會留紀錄。</li>
     </ul>
 
+    <h4>報廢品歸還客戶</h4>
+    <ul>
+      <li>第一關<b>不是 170 材料（客供料）</b>的製令，報廢品要還給客戶：展開製令明細，在「報廢品歸還」欄填件數（上限＝已結案報廢單的報廢數 − 已歸還數），再按「確認出貨」。</li>
+      <li>系統會另開一筆<b>單價 0、不掛訂單</b>的出貨明細（備註「報廢品歸還」），不會算進訂單的已出量，也不影響良品可出量。</li>
+      <li>第一關是 170 材料的製令，報廢品不退客戶，該欄顯示「—」。</li>
+    </ul>
+
     <h4>設定入口</h4>
     <ul>
       <li><b>AS文件編號</b>（列印頁尾右下角要印的編號）：工具列的「AS文件編號」按鈕，限出貨管理員。</li>
@@ -994,16 +1001,36 @@ function procCell(b){
   else if(p.next)             txt += '<span class="proc-next">下一關：'+esc(p.next)+'</span>';
   return txt;
 }
+/* 報廢品歸還（第一關非 170 材料的製令）：scrapSel 以「訂單|製令」為鍵，記下要歸還的件數 */
+var scrapSel = {};
+function scrapCell(r, b){
+  if(!b.scrap_elig) return '<span style="color:#a08a6a;" title="第一關是 170 材料，報廢品不退客戶">—</span>';
+  var k=r.order_id+'|'+b.bom, cur=scrapSel[k] ? scrapSel[k].qty : '';
+  var info='報廢 '+nf(b.scrap)+'／已還 '+nf(b.scrap_ret);
+  if(b.scrap_avail<=0) return '<span style="color:#8a6d45;font-size:11.5px;">'+info+'</span>';
+  return '<span style="font-size:11.5px;color:#8a6d45;">'+info+'　可退 <b style="color:#B5651D;">'+nf(b.scrap_avail)+'</b></span> '
+    +(CAN_EDIT?'<input type="number" min="0" max="'+b.scrap_avail+'" class="sc-in" data-oid="'+r.order_id+'" data-bom="'+esc(b.bom)+'" '
+      +'data-max="'+b.scrap_avail+'" value="'+esc(cur)+'" style="width:64px;" placeholder="件數">':'');
+}
+$(document).on('input change','.sc-in',function(){
+  var $i=$(this), oid=$i.data('oid'), bom=String($i.data('bom')), max=Number($i.data('max'))||0, v=parseInt($i.val(),10)||0;
+  var row=null; rows.forEach(function(r){ if(String(r.order_id)===String(oid)) row=r; });
+  if(v>max){ v=max; $i.val(max); toast('報廢品可退只剩 '+max+' 件', true); }
+  var k=oid+'|'+bom;
+  if(v>0 && row) scrapSel[k]={row:row, bom:bom, qty:v}; else delete scrapSel[k];
+});
 $(document).on('click','.bom-cell',function(){
   var $tr=$(this).closest('tr'), i=parseInt($tr.data('i'),10), r=rows[i];
   var $nx=$tr.next('.bom-row');
   if($nx.length){ $nx.remove(); return; }
   var h='<table><tr><th>製令</th><th>製令量</th><th>分配</th><th>完工</th><th>已出</th><th>可出</th>'
+      + '<th title="第一關不是 170 材料（客供料）的製令，報廢品要還給客戶；填數量後和良品一起按「確認出貨」，會另開一筆單價 0 的報廢品歸還明細">報廢品歸還</th>'
       + '<th>目前製程</th><th>交期</th><th>備註</th></tr>';
   (r.boms||[]).forEach(function(b){
     h+='<tr><td><b>'+esc(b.bom)+'</b> '+prioPill(b.priority)+(b.closed?' <span class="pill p-normal">ERP結案</span>':'')+'</td>'
       +'<td>'+nf(b.bom_qty)+'</td><td>'+nf(b.allocated)+'</td><td>'+nf(b.done)+'</td>'
       +'<td>'+nf(b.shipped)+'</td><td><b style="color:#8A5A2B;">'+nf(b.avail)+'</b></td>'
+      +'<td>'+scrapCell(r,b)+'</td>'
       +'<td>'+procCell(b)+'</td>'
       +'<td>'+esc(b.delivery||'—')+'</td><td>'+esc((b.bom_ps||'').substr(0,26))+'</td></tr>';
   });
@@ -1051,8 +1078,8 @@ $('#dFrom,#dTo').on('change',function(){ page=1; load(); });
  * ══════════════════════════════════════════════════════════ */
 function doShip(){
   if(!CAN_EDIT){ toast('無出貨登錄權限', true); return; }
-  var keys=Object.keys(sel);
-  if(!keys.length){ toast('請先勾選要出貨的項目', true); return; }
+  var keys=Object.keys(sel), scKeys=Object.keys(scrapSel);
+  if(!keys.length && !scKeys.length){ toast('請先勾選要出貨的項目（或在製令明細填報廢品歸還數量）', true); return; }
   if(!$('#shipDate').val()){ toast('請選擇出貨日期', true); return; }
 
   var groups={}, warn=[];
@@ -1063,6 +1090,10 @@ function doShip(){
     var gk=(r.client_id||'')+'|'+r.client_name;
     (groups[gk]=groups[gk]||{name:r.client_display, items:[]}).items.push(s);
   });
+  scKeys.forEach(function(k){
+    var c=scrapSel[k], r=c.row, gk=(r.client_id||'')+'|'+r.client_name;
+    (groups[gk]=groups[gk]||{name:r.client_display, items:[]}).items.push({row:r, qty:c.qty, note:'報廢品歸還', scrap:true, bom:c.bom});
+  });
 
   var h='<div style="font-size:13px;color:#5b3a1e;margin-bottom:8px;">出貨日期 <b>'+esc($('#shipDate').val())
       +'</b>，將建立 <b>'+Object.keys(groups).length+'</b> 張出貨單：</div>';
@@ -1072,7 +1103,16 @@ function doShip(){
       +'<div style="background:#F7E0BD;padding:5px 10px;font-weight:bold;color:#5b3a1e;">'+esc(g.name)+'</div>'
       +'<table class="sq-t" style="font-size:12.5px;"><tr><th>訂單</th><th>料號</th><th>數量</th><th>單價</th><th>金額</th><th>製令分配</th><th style="width:170px;">備註</th></tr>';
     g.items.forEach(function(s){
-      var r=s.row, a=s.qty*r.unit_price; sub+=a; q+=s.qty;
+      var r=s.row;
+      if(s.scrap){   // 報廢品歸還：不掛訂單、單價 0，另開一筆明細
+        q+=s.qty;
+        h+='<tr style="background:#FBEBE4;"><td><b style="color:#B42318;">報廢品歸還</b></td><td class="l">'+esc(r.d_id)+'</td>'
+          +'<td class="r">'+nf(s.qty)+'</td><td class="r">0</td><td class="r">0</td>'
+          +'<td class="l" style="font-size:11.5px;">'+esc(s.bom)+'×'+s.qty+'</td>'
+          +'<td><input type="text" class="note-in cf-note" data-scrap="'+esc(r.order_id+'|'+s.bom)+'" maxlength="100" value="'+esc(s.note||'')+'"></td></tr>';
+        return;
+      }
+      var a=s.qty*r.unit_price; sub+=a; q+=s.qty;
       var alloc=allocate(r, s.qty);
       h+='<tr><td>'+esc(r.order_oo||'—')+'</td><td class="l">'+esc(r.d_id)+'</td>'
         +'<td class="r">'+nf(s.qty)+'</td><td class="r">'+np(r.unit_price)+'</td>'
@@ -1098,6 +1138,8 @@ function doShip(){
 
 /* 備註打字當下就記回 sel：等到按下「建立」才讀 DOM，重新渲染過就會掉字 */
 $(document).on('input','#cfBody .cf-note',function(){
+  var sk=$(this).attr('data-scrap');
+  if(sk){ if(scrapSel[sk]) scrapSel[sk].note=this.value; return; }
   var s=sel[$(this).data('oid')]; if(s) s.note=this.value;
 });
 
@@ -1131,6 +1173,14 @@ $('#btnShipGo').on('click',function(){
       boms:         allocate(r, s.qty)
     });
   });
+  Object.keys(scrapSel).forEach(function(k){   // 報廢品歸還：不掛訂單、單價 0（後端再驗上限）
+    var c=scrapSel[k], r=c.row;
+    items.push({
+      scrap_return: 1, order_id: null, d_setting_id: r.d_setting_id, product_id: r.d_id, specification: r.specification,
+      client_id: r.client_id, client_name: r.client_name, qty: c.qty, unit_price: 0,
+      note: c.note || '報廢品歸還', boms: [{bom:c.bom, qty:c.qty}]
+    });
+  });
   $.post(API+'?action=create', {
     csrf: CSRF, ship_date: $('#shipDate').val(), items: JSON.stringify(items)
   }, function(res){
@@ -1140,7 +1190,7 @@ $('#btnShipGo').on('click',function(){
     var nos=Object.keys(res.shipments||{});
     toast('<b>'+esc(res.message)+'</b><br>單號：'+nos.map(esc).join('、'));
     if(res.errors && res.errors.length) toast(res.errors.map(esc).join('<br>'), true);
-    sel={}; load();
+    sel={}; scrapSel={}; load();
     /* 建立完直接跳出列印畫面（使用者要求）。一次建了好幾張時逐張各自開視窗排隊，
        不合併成一份（ai-rules/16 第三之五節），並稍微錯開避免瀏覽器把後面的當成彈出視窗擋掉。 */
     nos.forEach(function(no,i){ setTimeout(function(){ printShipNote(no); }, i*700); });
