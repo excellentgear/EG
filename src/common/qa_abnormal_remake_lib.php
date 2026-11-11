@@ -184,8 +184,62 @@ function qab_remake_ensure(PDO $db, int $orderId, int $actorUid = 0): void
                        $src['row'] ? (int)$src['row']['Order_id'] : null, $src['why'] !== '' ? $src['why'] : null,
                        $uids ? json_encode($uids) : null]);
         if ($ins->rowCount() < 1) return;   // 並發：別的請求已經建了
+        if (qab_remake_auto_skip($db, $o)) return;   // 客供料（第一關 138）的自動開立單：自動判定不補，不必再請業務回覆
         qab_remake_notify($db, $o, qab_remake_row($db, $orderId), $actorUid);
     } catch (Throwable $e) { error_log('qab_remake_ensure: ' . $e->getMessage()); }
+}
+
+/** 製令的第一關（最小 bom_sn）製程編號；查不到回 0 */
+function qab_remake_first_proc(PDO $db, string $bom): int
+{
+    if ($bom === '') return 0;
+    $st = $db->prepare("SELECT process_no FROM bom_ing WHERE bom=? ORDER BY bom_sn, bom_ing_fid LIMIT 1");
+    $st->execute([$bom]);
+    return (int)$st->fetchColumn();
+}
+
+/** 業務部門裡「今天有上班（沒請假）且沒有公出」的人，隨機挑一位；沒有符合的回 0 */
+function qab_remake_pick_sales_on_duty(PDO $db): int
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/person_schedule_lib.php';
+    $salesDept = array_map('intval', eg_org_dept_ids($db, 'sales_dept'));
+    if (!$salesDept) return 0;
+    $ids = [];
+    foreach (eg_people_list($db, ['dept_ids' => $salesDept]) as $p) $ids[(int)$p['id']] = 1;
+    $ids = array_keys($ids);
+    if (!$ids) return 0;
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+    $workday = true;
+    if (function_exists('eg_leave_is_workday')) { try { $workday = (bool)eg_leave_is_workday($db, $today); } catch (Throwable $e) {} }
+    if (!$workday) return 0;
+    $busy = eg_psched_for_users($db, $ids, $today);
+    $ok = [];
+    foreach ($ids as $u) {
+        $hit = false;
+        foreach ($busy[$u] ?? [] as $it) if (in_array($it['source'] ?? '', ['leave', 'trip'], true)) { $hit = true; break; }
+        if (!$hit) $ok[] = $u;
+    }
+    return $ok ? $ok[array_rand($ok)] : 0;
+}
+
+/**
+ * 自動開立的報廢異常單，若製令第一關是 138 客供料：NG 品交回客戶、不用補做 → 自動回填「不補」，
+ * 回填人（畫面上的簽章）＝當天有上班且沒公出的任一位業務。找不到人就維持待業務回覆。
+ * @return bool 已自動回填
+ */
+function qab_remake_auto_skip(PDO $db, array $o): bool
+{
+    try {
+        if (empty($o['auto_opened'])) return false;
+        $bom = trim((string)($o['bom_no'] ?? ''));
+        if ($bom === '' || qab_remake_first_proc($db, $bom) !== 138) return false;
+        $uid = qab_remake_pick_sales_on_duty($db);
+        if ($uid <= 0) return false;
+        qab_remake_respond($db, (int)$o['id'], $uid, 'skip', ['note' => '客供料NG品交回客戶，不用補'], true);
+        return true;
+    } catch (Throwable $e) { error_log('qab_remake_auto_skip: ' . $e->getMessage()); return false; }
 }
 
 function qab_remake_notify(PDO $db, array $o, ?array $row, int $actorUid): void
