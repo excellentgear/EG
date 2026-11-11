@@ -12724,6 +12724,8 @@ echo "</script>\n";
         function _ormAutoRet() {
             if (_ormRetTouched) return;
             var d = _ormOutsideOf(_ormOpenBatch), q = document.getElementById('orm-return-qty');
+            // 尚無流水帳批次時（d 為 null），以「依上一關帶入的預設值」當基準
+            if (d === null) { var _b = parseFloat(_ormInitRq); d = (_b > 0) ? _b : null; }
             if (d === null || !q) return;
             var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0, wq = parseFloat(document.getElementById('orm-withdraw-qty').value) || 0;
             q.value = _obNum(Math.max(0, d - sq - wq));
