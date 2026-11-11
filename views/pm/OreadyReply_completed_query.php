@@ -2181,7 +2181,7 @@ try {
                 <span>～</span>
                 <input type="date" id="fDateTo" max="9999-12-31">
                 <label style="white-space:nowrap;">客戶</label>
-                <input type="text" id="fCustomer" list="ocqCustomerList" placeholder="客戶名稱或代號" style="width:110px;">
+                <input type="text" id="fCustomer" autocomplete="off" placeholder="客戶名稱或代號" style="width:110px;">
                 <datalist id="ocqCustomerList"></datalist>
                 <label>業務</label>
                 <input type="text" id="fSales" list="ocqSalesList" placeholder="負責業務" style="width:90px;">
@@ -3020,10 +3020,63 @@ function refreshFacets(cb){
     });
 }
 
+// 客戶欄：輸入即列出吻合的客戶供點選；只剩一筆吻合時自動帶入（停筆 500ms 後，避免打字被打斷）
+var OCQ_CUSTOMERS = [];
+var _ocqCustAutoTimer = null;
+(function(){
+    var $in = $('#fCustomer');
+    var $box = $('<div id="ocqCustBox" style="display:none;position:fixed;z-index:10600;background:#fff;border:1px solid #D9B98A;border-radius:6px;box-shadow:0 4px 14px rgba(90,60,20,.25);max-height:260px;overflow-y:auto;min-width:180px;"></div>').appendTo('body');
+    function matches(){
+        var q = $.trim($in.val()).toLowerCase();
+        if (!q) return [];
+        return OCQ_CUSTOMERS.filter(function(v){ return String(v).toLowerCase().indexOf(q) !== -1; });
+    }
+    function hide(){ $box.hide(); }
+    function pick(v){
+        clearTimeout(_ocqCustAutoTimer);
+        $in.val(v); hide(); applyFilters();
+    }
+    function show(){
+        var m = matches();
+        if (!m.length || (m.length === 1 && m[0] === $.trim($in.val()))) { hide(); return; }
+        var q = $.trim($in.val());
+        $box.html(m.slice(0, 50).map(function(v){
+            return '<div class="ocq-cust-opt" data-v="'+esc(v)+'" style="padding:5px 10px;cursor:pointer;color:#5A3A12;font-size:13px;line-height:18px;">'+esc(v)+'</div>';
+        }).join('') + (m.length > 50 ? '<div style="padding:4px 10px;color:#9A7B4F;font-size:12px;">還有 '+(m.length-50)+' 筆，請再輸入更多字</div>' : ''));
+        var r = $in[0].getBoundingClientRect();
+        $box.css({left: r.left, top: r.bottom + 2, width: Math.max(r.width, 180)}).show();
+    }
+    $in.on('input focus', function(){
+        show();
+        clearTimeout(_ocqCustAutoTimer);
+        _ocqCustAutoTimer = setTimeout(function(){
+            var m = matches();
+            if (m.length === 1 && m[0] !== $.trim($in.val()) && $in.is(':focus')) pick(m[0]);
+        }, 500);
+    });
+    $in.on('blur', function(){
+        setTimeout(function(){
+            hide();
+            var m = matches();
+            if (m.length === 1 && m[0] !== $.trim($in.val())) pick(m[0]);
+        }, 180);
+    });
+    $in.on('keydown', function(e){
+        if (e.key === 'Enter' || e.key === 'Tab') {
+            var m = matches();
+            if (m.length === 1 && m[0] !== $.trim($in.val())) { if (e.key === 'Enter') e.preventDefault(); pick(m[0]); }
+        } else if (e.key === 'Escape') hide();
+    });
+    $box.on('mousedown', '.ocq-cust-opt', function(e){ e.preventDefault(); pick($(this).attr('data-v')); });
+    $box.on('mouseenter', '.ocq-cust-opt', function(){ $(this).css('background','#F7E0BD'); })
+        .on('mouseleave', '.ocq-cust-opt', function(){ $(this).css('background',''); });
+    $(window).on('scroll resize', hide);
+})();
+
 function loadOptions(){
     $.post('', { action: 'get_options' }, function(res){
         if (!res.success) return;
-        $('#ocqCustomerList').html((res.customers||[]).map(function(v){ return '<option value="'+esc(v)+'">'; }).join(''));
+        OCQ_CUSTOMERS = res.customers || [];
         $('#ocqSalesList').html((res.sales||[]).map(function(v){ return '<option value="'+esc(v)+'">'; }).join(''));
         $('#ocqVendorList').html((res.vendors||[]).map(function(v){ return '<option value="'+esc(v)+'">'; }).join(''));
     }, 'json');
