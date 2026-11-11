@@ -206,10 +206,13 @@ switch ($action) {
             $allSt = ['NULL'];
             foreach ($db->query("SELECT sale_type_id FROM is_sale_type") as $x) $allSt[] = (string)$x['sale_type_id'];
             $rows = si_fetch_ship($db, $dFrom, $dTo, ['sale_types' => $allSt, 'resolver' => $resolve]);
-            // ship_no：BOM總覽客戶欄「✔ 已綁定出貨單」點進來＝只列這一張出貨單（已確定是綁定的，不再比料號客戶）
-            $deep['no'] = trim((string)($_REQUEST['ship_no'] ?? ''));
+            // ship_no：BOM總覽客戶欄「✔ 已綁定出貨單」點進來＝只列這張出貨單裡「這一筆料號」那一列
+            // （一張出貨單常有好幾個料號；有帶 ship_isid＝出貨明細 IS_id 時以它精確比對，否則用單號＋料號）
+            $deep['no']   = trim((string)($_REQUEST['ship_no'] ?? ''));
+            $deep['isid'] = (int)($_REQUEST['ship_isid'] ?? 0);
             $rows = array_values(array_filter($rows, function ($r) use ($deep) {
-                if ($deep['no'] !== '') return $r['no'] === $deep['no'];
+                if ($deep['isid'] > 0) return (int)$r['id'] === $deep['isid'];
+                if ($deep['no'] !== '') return $r['no'] === $deep['no'] && ($deep['pno'] === '' || $r['pno'] === $deep['pno']);
                 return $r['pno'] === $deep['pno'] && eg_bom_ship_row_match(['d_setting_id' => $r['pid'], 'Client_name' => $r['craw']], $deep['sid'], $deep['client']);
             }));
             $p['clients'] = [];

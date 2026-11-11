@@ -5599,7 +5599,7 @@ echo "</script>\n";
                         ln.addEventListener('click', function (ev) {
                             ev.stopPropagation();
                             const q = new URLSearchParams({ ship_pid: String(row.d_setting_id || ''), ship_pno: String(row.d_id || ''),
-                                ship_client: String(row.Client_Name_Full || row.Client_Name || '').trim(), ship_from: d, ship_to: d, ship_no: String(s.no) });
+                                ship_client: String(row.Client_Name_Full || row.Client_Name || '').trim(), ship_from: d, ship_to: d, ship_no: String(s.no), ship_isid: String(s.is_id || '') });
                             window.open('../Sales/Shipping_Insight.php?' + q.toString(), '_blank', 'noopener');
                         });
                     }

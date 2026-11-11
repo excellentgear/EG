@@ -2028,7 +2028,7 @@ var SHIP_DEEP = (function(){
   try {
     var u = new URLSearchParams(location.search);
     if (!u.get('ship_pno') && !u.get('ship_no')) return null;
-    return { ship_pno:u.get('ship_pno'), ship_client:u.get('ship_client')||'', ship_pid:u.get('ship_pid')||'', ship_from:u.get('ship_from')||'', ship_to:u.get('ship_to')||'', ship_no:u.get('ship_no')||'' };
+    return { ship_pno:u.get('ship_pno'), ship_client:u.get('ship_client')||'', ship_pid:u.get('ship_pid')||'', ship_from:u.get('ship_from')||'', ship_to:u.get('ship_to')||'', ship_no:u.get('ship_no')||'', ship_isid:u.get('ship_isid')||'' };
   } catch(e){ return null; }
 })();
 var SHIP_DEEP_SCROLLED = false;
@@ -2081,7 +2081,7 @@ function renderShipTable(r){
   $('#tblShip tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">'+(r.deep?'這段期間沒有此料號、此客戶的出貨':'本期沒有出貨')+'</td></tr>');
   if (r.deep) {
     $('#shipDeepBar').show().html('<i class="fa fa-filter"></i> 由 BOM總覽帶入：'
-      + (r.deep.no ? '只列出貨單 <b>'+esc(r.deep.no)+'</b>' : '只列料號 <b>'+esc(r.deep.pno)+'</b>'
+      + (r.deep.no ? '只列出貨單 <b>'+esc(r.deep.no)+'</b>'+(r.deep.pno ? '、料號 <b>'+esc(r.deep.pno)+'</b>' : '') : '只列料號 <b>'+esc(r.deep.pno)+'</b>'
       + (r.deep.client ? '、客戶 <b>'+esc(r.deep.client)+'</b>' : '')) + '，出貨日期 <b>'+dispDate(r.deep.from)+'～'+dispDate(r.deep.to)+'</b>'
       + '（共 '+r.total+' 筆；不受上方期間、客戶與出貨性質篩選影響） <button class="btn btn-xs btn-warm-o" onclick="shipDeepClear()">取消此篩選</button>');
     if (!SHIP_DEEP_SCROLLED) { SHIP_DEEP_SCROLLED = true; var el = document.getElementById('paneShip'); if (el) el.scrollIntoView({ block:'start' }); }
