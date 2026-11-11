@@ -6331,16 +6331,30 @@ echo "</script>\n";
                 var _scrapQQ = 0;
                 (Array.isArray(row.qq_details) ? row.qq_details : []).forEach(function (d) { if (d && /報廢/.test(String(d.QC_ps || ''))) _scrapQQ += Number(d.QC_QQ_sqty) || 0; });
                 var _scrapAll = Math.max(_qtyScrap, _scrapQQ), _remainQty = _qtyTotal;
+                if (_scrapAll > 0 && _scrapAll < _qtyTotal) _remainQty = _qtyTotal - _scrapAll;   // 缺口計算用（短少／待判定不良另由 _lossUpTo 扣，這裡不可重複扣）
                 (function () {
                     var sp = _qtyHdr.querySelector('span');
                     if (!sp) return;
-                    if (_scrapAll > 0 && _scrapAll < _qtyTotal) {
-                        _remainQty = _qtyTotal - _scrapAll;
-                        sp.textContent = String(_remainQty);
+                    // 顯示用：另扣全部關卡的發單短少（遺失）＋尚未判定的發料不良（異常單結案後，判報廢已算進報廢、判重工／特採則回到流程，都不再扣）
+                    var _hShort = 0, _hBad = 0, _hSeen = {};
+                    _activeProcs.forEach(function (q) {
+                        var k = String(q.bom_ing_fid); if (_hSeen[k]) return; _hSeen[k] = 1;
+                        var mq = (window.obBatchMap || {})[k];
+                        if (mq) { _hShort += Number(mq.short) || 0; _hBad += Number(mq.badmat_open) || 0; }
+                    });
+                    var _hScrap = _scrapAll < _qtyTotal ? _scrapAll : 0;
+                    if (_hScrap + _hShort + _hBad > 0) {
+                        var _disp = Math.max(0, _qtyTotal - _hScrap - _hShort - _hBad);
+                        sp.textContent = String(_disp);
+                        var _parts = ['總 ' + _qtyTotal];
+                        if (_hScrap > 0) _parts.push('報廢 ' + _hScrap);
+                        if (_hShort > 0) _parts.push('短少 ' + _hShort);
+                        if (_hBad > 0) _parts.push('不良 ' + _hBad);
                         var _sd = document.createElement('div');
                         _sd.style.cssText = 'font-size:11px;line-height:1.25;color:#8a4a10;font-weight:normal;';
-                        _sd.textContent = '總 ' + _qtyTotal + '・報廢 ' + _scrapAll + '・剩餘 ' + _remainQty;
-                        _sd.title = '製令總數 ' + _qtyTotal + '，報廢合計 ' + _scrapAll + '（QC檢驗標示報廢＋異常單確認報廢），目前剩餘 ' + _remainQty;
+                        _sd.textContent = _parts.join('・');
+                        _sd.title = '製令總數 ' + _qtyTotal + (_hScrap > 0 ? '，報廢 ' + _hScrap + '（QC檢驗標示報廢＋異常單確認報廢）' : '')
+                            + (_hShort > 0 ? '，發單短少 ' + _hShort : '') + (_hBad > 0 ? '，發料不良尚未判定 ' + _hBad : '') + '，目前可用 ' + _disp;
                         _qtyHdr.appendChild(_sd);
                     } else {
                         sp.textContent = String(_qtyTotal);
@@ -7353,7 +7367,7 @@ echo "</script>\n";
                                     }
                                     _sHtml += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
                                            +  '<strong style="color:#337ab7;">' + escapeHtml(_lbl) + '</strong>'
-                                           +  (_sbOut != null ? ' <span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;" title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
+                                           +  (_sbOut != null ? ' <span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;line-height:1.4;" title="送出 ' + escapeHtml(String(_sb.sqty||'')) + '">未回 ' + escapeHtml(String(_sbOut)) + ' pcs</span>' : ' ' + escapeHtml(String(_sb.sqty||'')) + ' pcs')
                                            +  (_sbMk ? '<br><span style="color:#555;">' + escapeHtml(_sbMk) + '</span>' : '')
                                            +  (_od ? '<span style="color:#aaa;"> '+_od+'</span>' : '')
                                            +  (_rd ? '<span style="color:#2a7ae2;"> 回:'+_rd+'</span>' : '')
@@ -7379,7 +7393,7 @@ echo "</script>\n";
                                     var _bOut = Number(b.outside) || 0;
                                     var _bSt = _bOut > 1e-9 ? '<span style="color:#1a7a1a;font-size:9px;">[加工中]</span>' : (b.xfer ? '<span style="color:#888;font-size:9px;">[已移轉]</span>' : '<span style="color:#2a7ae2;font-size:9px;">[已回]</span>');
                                     _pH += '<div style="border-left:2px solid #c5d5f5;padding:1px 0 1px 5px;margin:2px 0;font-size:10px;line-height:1.4;">'
-                                        + (_bOut > 1e-9 ? '<span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;" title="送出 ' + _obNum(b.send) + '">未回 ' + _obNum(_bOut) + ' pcs</span>' : _obNum(b.send) + ' pcs')
+                                        + (_bOut > 1e-9 ? '<span style="background:#F0A24B;color:#5a2d0c;font-weight:bold;padding:0 4px;border-radius:3px;line-height:1.4;" title="送出 ' + _obNum(b.send) + '">未回 ' + _obNum(_bOut) + ' pcs</span>' : _obNum(b.send) + ' pcs')
                                         + (_bMk ? '<br><span style="color:#555;">' + escapeHtml(_bMk) + '</span>' : '')
                                         + (_bOd && _bRd ? '<span style="color:#2a7ae2;"> ' + _bOd + '~' + _bRd + '</span>'
                                             : (_bOd ? '<span style="color:#aaa;"> ' + _bOd + '</span>' : '') + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : ((Number(b.ret) || 0) > 1e-9 && _bOut <= 1e-9 ? '<span style="color:#2a7ae2;"> 回</span>' : '')))
@@ -7489,15 +7503,16 @@ echo "</script>\n";
                                     _isq[kk] = (_isq[kk] || 0) + (Number(t.qty) || 0);
                                 });
                                 var _isKeys = ['報廢', '發料不良', '發單短少'].filter(function (k) { return _isq[k] > 0; });
-                                if (_isKeys.length) {
+                                // 每一種異常各自一行、各自有 ⚠（使用者要求，不再用「・」串在同一行）
+                                _isKeys.forEach(function (k, _isI) {
                                     var _isDiv = document.createElement('div');
                                     _isDiv.className = 'station-issues';
-                                    _isDiv.style.cssText = 'font-size:10px;line-height:1.4;color:#8A2A16;font-weight:bold;background:#FBE0DA;border-radius:3px;padding:0 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;';
-                                    var _isTxt = _isKeys.map(function (k) { return k + ' ' + _obNum(_isq[k]); }).join('・');
+                                    _isDiv.style.cssText = 'font-size:10px;line-height:1.4;color:#8A2A16;font-weight:bold;background:#FBE0DA;border-radius:3px;padding:0 4px;margin-top:' + (_isI ? 1 : 2) + 'px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;';
+                                    var _isTxt = k + ' ' + _obNum(_isq[k]);
                                     _isDiv.textContent = '⚠ ' + _isTxt;
                                     _isDiv.title = '本關：' + _isTxt + '（發單短少不開異常單；發料不良／報廢由異常單判定）';
                                     tdDynamicProcess.appendChild(_isDiv);
-                                }
+                                });
                             } catch (_isE) { /* 顯示失敗不影響製程格 */ }
 
                             // ── 加工單價顯示（動態製程欄，A 或 C+D+R 才可見）──────────────
