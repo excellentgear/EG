@@ -12163,7 +12163,7 @@ echo "</script>\n";
                         showTemporaryMessage(response.message,true); _closeQtr();
                         if (_sendQtyParam !== '') {   // 只發一部分：不能用「整站換成這家廠商」的樂觀更新，直接重抓
                             isSelectFocused = false; isTextareaFocused = false; isUpdatingOrderId = false; isPriorityUpdating = false;
-                            fetchDataAndFilter();
+                            _refreshEditListAfterFetch(bom);
                             return;
                         }
                         var _newDate = transDate.replace(/-/g,'/');
@@ -12196,7 +12196,7 @@ echo "</script>\n";
                         // 清除所有 focus/update flag 確保 fetchDataAndFilter 不被跳過，再背景刷新
                         isSelectFocused = false; isTextareaFocused = false;
                         isUpdatingOrderId = false; isPriorityUpdating = false;
-                        fetchDataAndFilter();
+                        _refreshEditListAfterFetch(bom);
                     } else { alert('移轉失敗：'+(response.message||'未知錯誤')); $btn.prop('disabled',false).text('確認移轉'); }
                 },
                 error:function(){alert('與伺服器通訊失敗。');$btn.prop('disabled',false).text('確認移轉');}
@@ -12699,6 +12699,17 @@ echo "</script>\n";
     }
     // 回廠／報廢記錄成功後，連背後的 BOM 總覽主列表一起即時重抓（與 cancel_transfer 同一做法）。
     // 失敗只吞掉，不影響已成功的記錄。
+    // 發單(移轉)成功後：重抓資料完成才重畫「修改 BOM 資料」跳窗裡的製程列表（含回廠鈕、廠商），
+    // 否則該列表停在發單前的舊狀態（沒開著跳窗時 refreshEditModalProcessList 找不到容器會直接略過）。
+    function _refreshEditListAfterFetch(bom, bomSn) {
+        try {
+            if (bom && typeof refreshEditModalProcessList === 'function' && document.getElementById('dynamic-process-list-' + bom)) {
+                fetchDataAndFilter(function () { refreshEditModalProcessList(bom, bomSn); });
+            } else {
+                fetchDataAndFilter();
+            }
+        } catch (e) {}
+    }
     function _ormRefreshMain() {
         try { if (typeof fetchDataAndFilter === 'function') fetchDataAndFilter(); } catch (e) {}
     }
@@ -14568,8 +14579,7 @@ echo "</script>\n";
                             $('#transfer-qty-' + fid).val('');
                             isSelectFocused = false; isTextareaFocused = false;
                             isUpdatingOrderId = false; isPriorityUpdating = false;
-                            fetchDataAndFilter();
-                            if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                            _refreshEditListAfterFetch(rowData && rowData.bom, rowData && rowData.bom_sn);
                             return;
                         }
                         var _newDateFmt = transferDate.replace(/-/g, '/');
@@ -14600,7 +14610,7 @@ echo "</script>\n";
                         isSelectFocused = false; isTextareaFocused = false;
                         isUpdatingOrderId = false; isPriorityUpdating = false;
                         processAndRenderData();
-                        fetchDataAndFilter();
+                        _refreshEditListAfterFetch(rowData && rowData.bom, rowData && rowData.bom_sn);
                     } else {
                         alert('移轉失敗：' + (response.message || '未知錯誤'));
                         $button.prop('disabled', false).text('確認移轉');
