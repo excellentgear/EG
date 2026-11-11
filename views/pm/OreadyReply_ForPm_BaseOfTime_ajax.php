@@ -2691,11 +2691,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                 if ($bidOnly) $batch = ['batch_id' => $bidOnly];
             }
             if ($batch) {
-                $nc = qab_auto_open_from_outsource_return($db, (int)$batch['batch_id'], $uid);
+                $ao = qab_outsource_batch_auto_open($db, (int)$batch['batch_id'], $uid);
+                $nc = $ao['ab'];
                 if ($nc) $resp['abnormal_order'] = ['id' => $nc['id'], 'no' => $nc['no'], 'existed' => !empty($nc['existed']),
                     'auto_closed' => (int)($nc['auto_closed'] ?? 0), 'vendor_pending' => (int)($nc['vendor_pending'] ?? 0), 'scrap_no' => (string)($nc['scrap_no'] ?? '')];
+                if ($ao['err'] !== '') { $resp['abnormal_error'] = $ao['err']; $resp['message'] = (string)($resp['message'] ?? '') . $ao['msg']; }
             }
-        } catch (Throwable $e) { /* 自動開單失敗不影響回廠記錄本身已經成功 */ }
+        } catch (Throwable $e) { $resp['abnormal_error'] = $e->getMessage(); $resp['message'] = (string)($resp['message'] ?? '') . '；⚠ 異常單未能自動開立：' . $e->getMessage(); }
         echo json_encode($resp);
     } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
@@ -2764,13 +2766,13 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
                 ber_save_return($db, $fid, $id, $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid, true, $fl('short_qty'), $fl('badmat_qty'));
                 require_once '../../src/common/qa_abnormal_lib.php';
                 $bmBid = (int)$db->query("SELECT batch_id FROM bom_ing_outsource_return WHERE return_id=" . (int)$id)->fetchColumn();
-                $bmAb = $fl('badmat_qty') > 0 ? qab_auto_open_for_badmat($db, $bmBid, $uid) : null;
+                $bmAo = qab_outsource_batch_auto_open($db, $bmBid, $uid);
             } elseif ($kind === 'qc') {
                 baf_qc_save($db, $fid, $id, (int)($_POST['ok'] ?? 0), (int)($_POST['aod'] ?? 0), (int)($_POST['qq'] ?? 0), (int)($_POST['ng'] ?? 0), $d, $uid);
             } elseif ($kind === 'transfer') {
                 baf_transfer_save($db, $bom, $id, (int)($_POST['qty'] ?? 0), $d, $uid);
             } else { throw new Exception('這種紀錄不能在這裡修改'); }
-            echo json_encode(['success'=>true,'message'=>'已儲存' . (!empty($bmAb['no']) ? '；發料不良已開立／更新異常單 ' . $bmAb['no'] . '，品管會收到通知' : '')]);
+            echo json_encode(['success'=>true,'message'=>'已儲存' . (isset($bmAo) ? $bmAo['msg'] : '')]);
         } elseif ($act === 'baf_delete') {
             if ($kind === 'send') ber_delete_batch($db, $fid, $id, $uid, true);
             elseif ($kind === 'return') ber_delete_return($db, $fid, $id, $uid, true);
@@ -2797,8 +2799,8 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
                 }
             }
             require_once '../../src/common/qa_abnormal_lib.php';
-            $bmAb = $fl('badmat_qty') > 0 ? qab_auto_open_for_badmat($db, (int)($_POST['batch_id'] ?? 0), $uid) : null;
-            echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回' . (!empty($bmAb['no']) ? '；發料不良已開立／更新異常單 ' . $bmAb['no'] . '，品管會收到通知' : '')]);
+            $bmAo = qab_outsource_batch_auto_open($db, (int)($_POST['batch_id'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回' . $bmAo['msg']]);
         }
     } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
@@ -2832,7 +2834,10 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
         } elseif ($act === 'ber_save_return') {
             ber_save_return($db, $fid, (int)($_POST['return_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0),
                             (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, $force, (float)($_POST['short_qty'] ?? 0), (float)($_POST['badmat_qty'] ?? 0));
-            echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改']);
+            require_once '../../src/common/qa_abnormal_lib.php';
+            $bmBid = (int)$db->query("SELECT batch_id FROM bom_ing_outsource_return WHERE return_id=" . (int)($_POST['return_id'] ?? 0))->fetchColumn();
+            $bmAo = qab_outsource_batch_auto_open($db, $bmBid, $uid);
+            echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改' . $bmAo['msg']]);
         } elseif ($act === 'ber_delete_return') {
             ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid, $force);
             echo json_encode(['success'=>true,'message'=>'回廠紀錄已刪除']);
@@ -2842,8 +2847,8 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
         } elseif ($act === 'ber_add_return') {
             ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0), (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, (float)($_POST['short_qty'] ?? 0), (float)($_POST['badmat_qty'] ?? 0));
             require_once '../../src/common/qa_abnormal_lib.php';
-            $bmAb = (float)($_POST['badmat_qty'] ?? 0) > 0 ? qab_auto_open_for_badmat($db, (int)($_POST['batch_id'] ?? 0), $uid) : null;
-            echo json_encode(['success'=>true,'message'=>'已補登回廠紀錄' . (!empty($bmAb['no']) ? '；發料不良已開立／更新異常單 ' . $bmAb['no'] . '，品管會收到通知' : '')]);
+            $bmAo = qab_outsource_batch_auto_open($db, (int)($_POST['batch_id'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'已補登回廠紀錄' . $bmAo['msg']]);
         } elseif ($act === 'ber_admin_batch_meta') {
             ber_save_batch_meta($db, $fid, (int)($_POST['batch_id'] ?? 0), trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), trim((string)($_POST['send_date'] ?? '')), $uid);
             echo json_encode(['success'=>true,'message'=>'已修改廠商／送出日']);

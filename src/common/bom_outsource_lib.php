@@ -361,10 +361,11 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
         $logs = [];
         $lr = $db->query("SELECT batch_id, return_qty, scrap_qty, withdraw_qty, note, DATE_FORMAT(return_date,'%Y/%m/%d') d FROM bom_ing_outsource_return WHERE batch_id IN (" . implode(',', $bids) . ") ORDER BY return_id");
         foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'wd'=>(float)$l['withdraw_qty'], 'note'=>(string)($l['note'] ?? ''), 'date'=>$l['d']];
-        // 發料不良「尚未判定」的量：這一批沒有已結案且配發報廢單號的異常單＝還沒被認定報廢（已認定的，製令剩餘數已經扣過，不能重複扣）
+        // 發料不良「尚未判定」的量：這一批的異常單還沒結案＝還沒判定。已結案的不論判報廢（製令剩餘數已由報廢單號扣過，不能重複扣）
+        // 或判重工／特採（貨回到流程繼續做，不是損失），都不再當成待判定扣掉。
         $coveredB = [];
         try {
-            foreach ($db->query("SELECT DISTINCT src_outsource_batch_id FROM qa_abnormal_order WHERE src_outsource_batch_id IN (" . implode(',', $bids) . ") AND deleted_at IS NULL AND is_closed=1 AND scrap_no IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $cb) $coveredB[(int)$cb] = true;
+            foreach ($db->query("SELECT DISTINCT src_outsource_batch_id FROM qa_abnormal_order WHERE src_outsource_batch_id IN (" . implode(',', $bids) . ") AND deleted_at IS NULL AND is_closed=1")->fetchAll(PDO::FETCH_COLUMN) as $cb) $coveredB[(int)$cb] = true;
         } catch (Throwable $e) {}
         $out = [];
         foreach ($need as $fid) {

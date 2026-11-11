@@ -1718,7 +1718,7 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed, quick_mode FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
     $exist->execute([$batchId]);
     if ($row = $exist->fetch(PDO::FETCH_ASSOC)) {
-        if (empty($row['qc_review_at']) && empty($row['is_closed'])) {
+        if (empty($row['is_closed']) && (empty($row['qc_review_at']) || (int)$row['quick_mode'] === 1)) {   // 快速決策中（尚未決定）的單 qc_review_at 已被系統填上，仍要跟著更新數量
             $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=? WHERE id=?")
                ->execute([$scrapQty, $scrapQty, $scrapQty, (int)$row['id']]);
         } elseif (!empty($row['is_closed']) && (int)$row['quick_mode'] === 1) {
@@ -1774,6 +1774,12 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
 
     $db->prepare("UPDATE qa_abnormal_order SET src_outsource_batch_id=? WHERE id=?")->execute([$batchId, $id]);
 
+    // 含發料不良：要由品管判定（可能報廢、也可能重工／特採），不可自動核准成報廢——改走雙層快速決策通知第一層
+    if ($quick && $badmatQty > 0) {
+        $desc = $vendorTxt . '（製令 ' . (string)$ob['bom'] . '）回廠回報發料不良 ' . $badmatQty . ' 件' . ($scrapQty > $badmatQty ? '、報廢 ' . ($scrapQty - $badmatQty) . ' 件' : '') . '，請判定';
+        qab_quick_after_auto_open($db, $id, $createdBy, $desc, (string)$ob['bom'], (int)($ob['process_no'] ?? 0), $makerIdNo === '');
+        return ['id' => $id, 'no' => $created['no'], 'existed' => false, 'auto_closed' => 0, 'badmat' => $badmatQty];
+    }
     // 雙層快速決策已啟用：廠商提報報廢不必再走品管確認，由第一層（請假／整天外出則第二層）自動核准並結案
     if ($quick) {
         $res = qab_quick_auto_scrap($db, $id, $scrapQty, $createdBy, (string)$created['no'], $vendorTxt, (string)$ob['bom']);
@@ -3958,16 +3964,39 @@ function qab_vendor_report_tags(array $r, string $ts, string $abNo, int $abId, b
     return $out;
 }
 
-/** 這一批有「發料不良」回報時，自動開立（或更新）品質異常單並通知品管快速決策；沒有發料不良回傳 null，失敗只回 null 不擋呼叫端。 */
+/**
+ * 外包批次回廠資料存檔後（回廠／修改／補登／管理員修正，全部路徑共用這一支）：依「該批次 DB 內」的
+ * 報廢／發料不良數量決定要不要開立（或更新）品質異常單——不看這次 POST 的值（修改別的欄位、或分次
+ * 補登時 POST 的發料不良是 0，舊版就因此漏開）。失敗不擋呼叫端，但原因一定回傳給前端顯示。
+ * @return array ['ab'=>?array, 'err'=>string, 'msg'=>string(給回應訊息接在後面的文字)]
+ */
+function qab_outsource_batch_auto_open(PDO $db, int $batchId, int $uid): array
+{
+    $out = ['ab' => null, 'err' => '', 'msg' => ''];
+    if ($batchId <= 0 || $uid <= 0) return $out;
+    try {
+        $st = $db->prepare("SELECT scrap_qty, badmat_qty FROM bom_ing_outsource_batch WHERE batch_id=?");
+        $st->execute([$batchId]);
+        $b = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$b || ((float)$b['scrap_qty'] <= 0 && (float)$b['badmat_qty'] <= 0)) return $out;
+        $ab = qab_auto_open_from_outsource_return($db, $batchId, $uid);
+        $out['ab'] = $ab;
+        if ($ab && !empty($ab['no'])) {
+            $out['msg'] = '；' . ((float)$b['badmat_qty'] > 0 ? '發料不良' : '報廢') . '已' . (!empty($ab['existed']) ? '更新' : '開立') . '異常單 ' . $ab['no']
+                . (!empty($ab['auto_closed']) ? '（已自動核准結案）' : '，品管會收到通知');
+        }
+    } catch (Throwable $e) {
+        $out['err'] = $e->getMessage();
+        $out['msg'] = '；⚠ 異常單未能自動開立：' . $e->getMessage();
+        error_log('qab_outsource_batch_auto_open batch=' . $batchId . ': ' . $e->getMessage());
+    }
+    return $out;
+}
+
+/** 舊名稱相容：改為呼叫 qab_outsource_batch_auto_open()，只回異常單。 */
 function qab_auto_open_for_badmat(PDO $db, int $batchId, int $uid): ?array
 {
-    try {
-        if ($batchId <= 0 || $uid <= 0) return null;
-        $st = $db->prepare("SELECT badmat_qty FROM bom_ing_outsource_batch WHERE batch_id=?");
-        $st->execute([$batchId]);
-        if ((float)$st->fetchColumn() <= 0) return null;
-        return qab_auto_open_from_outsource_return($db, $batchId, $uid);
-    } catch (Throwable $e) { return null; }
+    return qab_outsource_batch_auto_open($db, $batchId, $uid)['ab'];
 }
 
 /** BOM總覽：每張製令的決策標籤 */
