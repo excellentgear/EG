@@ -768,6 +768,7 @@ function openFromBom(bomNo){
     rows.forEach(function(r, i){
       var b = (r.boms||[]).filter(function(x){ return String(x.bom) === bomNo; })[0];
       if (!b) return;
+      if (!window.SQ_PRE_PART && r.d_id) window.SQ_PRE_PART = String(r.d_id);   // 「舊資料訂單回填」打開時自動帶入這張製令的料號
       if (left === null) left = Math.max(0, (Number(b.done)||0) - (Number(b.shipped)||0));
       var q = Math.min(Number(b.avail)||0, Number(r.remain_qty)||0, left);
       if (q > 0 && CAN_EDIT) left -= q;
@@ -1562,6 +1563,12 @@ if(CAN_ADMIN){
       h+='<option value="'+k+'">'+esc(agg[k].product_id)+'（'+nf(agg[k].cnt)+'）</option>'; });
     $('#mtPart').html(h);
     $('#mtPart').val(cur && agg[cur] ? cur : '');
+    // 由 BOM總覽「待出貨」帶進來的製令：第一次打開回填工具時自動選起那個料號（之後使用者自己改就不再套用）
+    if (window.SQ_PRE_PART) {
+      var _pk = null;
+      keys.forEach(function(k){ if (_pk === null && String(agg[k].product_id) === window.SQ_PRE_PART) _pk = k; });
+      if (_pk !== null) { $('#mtPart').val(_pk); window.SQ_PRE_PART = ''; }
+    }
     /* 料號選項是「按了試算之後」才由後端撈回來填的，使用者常常在那之前就先打好料號。
        不重新快照的話，那個關鍵字會留在篩選框裡卻完全沒有作用——畫面上看起來有篩料號、
        清單卻是全部料號（2026-09-18 使用者回報「底下列的跟我篩選料號好像無關」）。
