@@ -7348,7 +7348,8 @@ echo "</script>\n";
                                 var _pm = window.obBatchMap[String(processInfo.bom_ing_fid)];
                                 var _pmSend = (Number(_pm.send) || 0) - (Number(_pm.wd) || 0) + (Number(_pm.short) || 0), _pmTot = Number(_pm.total) || Number(processInfo.sqty) || 0;   // 發單短少＝遺失，不是取回，不算缺口
                                 var _shortUp = 0, _badUp = 0; _activeProcs.forEach(function (q) { if (ocGrp(q) < ocGrp(processInfo)) { var mq0 = (window.obBatchMap || {})[String(q.bom_ing_fid)]; if (mq0) { _shortUp += Number(mq0.short) || 0; _badUp += Number(mq0.badmat) || 0; } } });   // 前面關卡短少遺失的，也不會到這一關
-                                _pmTot = Math.max(0, _pmTot - _shortUp);
+                                // 上一關的發料不良在異常單判定前，先不當作「還要到這一關」的貨（判定特採／重工後才會回到缺口）；已確認報廢的 _remainQty 已扣過，不重複扣
+                                _pmTot = Math.max(0, _pmTot - _shortUp - Math.max(0, _badUp - (Number(_scrapAll) || 0)));
                                 if (typeof _remainQty === 'number' && _remainQty > 0 && _pmTot > _remainQty) _pmTot = _remainQty; // 前面關卡已報廢的不算缺口（最多只有剩餘良品數可以發）
                                 var _pH = '<div style="font-size:10.5px;font-weight:600;color:#444;margin-bottom:2px;">' + escapeHtml(processInfo.ProcessName || '')
                                         + ' <span style="color:#337ab7;font-weight:normal;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">分' + _pm.batches.length + '批</span></div>';
@@ -7366,8 +7367,10 @@ echo "</script>\n";
                                         + ' ' + _bSt + '</div>';
                                 });
                                 // 本站廠商回報的問題（發單短少＝遺失；發料不良未必是報廢，要看異常單判定）：一行顯示，完整內容滑過看
-                                if ((Number(_pm.short) || 0) > 1e-9 || (Number(_pm.badmat) || 0) > 1e-9) {
-                                    var _rp = []; if ((Number(_pm.short) || 0) > 1e-9) _rp.push('短少 ' + _obNum(_pm.short)); if ((Number(_pm.badmat) || 0) > 1e-9) _rp.push('發料不良 ' + _obNum(_pm.badmat));
+                                var _pmScrapPure = Math.max(0, (Number(_pm.scrap) || 0) - (Number(_pm.badmat) || 0));
+                                if (_pmScrapPure > 1e-9 || (Number(_pm.short) || 0) > 1e-9 || (Number(_pm.badmat) || 0) > 1e-9) {
+                                    var _rp = []; if (_pmScrapPure > 1e-9) _rp.push('報廢 ' + _obNum(_pmScrapPure));
+                                    if ((Number(_pm.short) || 0) > 1e-9) _rp.push('短少 ' + _obNum(_pm.short)); if ((Number(_pm.badmat) || 0) > 1e-9) _rp.push('發料不良 ' + _obNum(_pm.badmat));
                                     _pH += '<div style="font-size:10px;line-height:1.4;color:#8A3200;font-weight:bold;background:#FFE9C9;border-radius:3px;padding:0 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;" title="廠商回報：' + escapeHtml(_rp.join('、')) + '（短少不開異常單；發料不良由異常單判定是否報廢）">⚠ ' + escapeHtml(_rp.join('・')) + '</div>';
                                 }
                                 if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) {
@@ -7388,7 +7391,7 @@ echo "</script>\n";
                                     }
                                     var _pgUnsent = Math.max(0, _pgAvail - _pmSend), _pgNotYet = Math.max(0, _pmTot - Math.max(_pgAvail, _pmSend));
                                     if (_pgUnsent > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgUnsent) + ' pcs 未發</div>';
-                                    if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關' + (_badUp > 1e-9 ? '（上一關回報發料不良 ' + _obNum(_badUp) + '，待異常單判定）' : '') + '</div>';
+                                    if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關' + '</div>';
                                 }
                                 tdDynamicProcess.innerHTML = _pH;
                             } else {

@@ -3958,6 +3958,18 @@ function qab_vendor_report_tags(array $r, string $ts, string $abNo, int $abId, b
     return $out;
 }
 
+/** 這一批有「發料不良」回報時，自動開立（或更新）品質異常單並通知品管快速決策；沒有發料不良回傳 null，失敗只回 null 不擋呼叫端。 */
+function qab_auto_open_for_badmat(PDO $db, int $batchId, int $uid): ?array
+{
+    try {
+        if ($batchId <= 0 || $uid <= 0) return null;
+        $st = $db->prepare("SELECT badmat_qty FROM bom_ing_outsource_batch WHERE batch_id=?");
+        $st->execute([$batchId]);
+        if ((float)$st->fetchColumn() <= 0) return null;
+        return qab_auto_open_from_outsource_return($db, $batchId, $uid);
+    } catch (Throwable $e) { return null; }
+}
+
 /** BOM總覽：每張製令的決策標籤 */
 function qab_bom_decision_tags(PDO $db, array $bomNos): array
 {
