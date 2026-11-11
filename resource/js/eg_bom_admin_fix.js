@@ -558,7 +558,8 @@
         } else if (x.kind === 'return') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '') + '</span>' + (x.note ? ' <span style="color:#999;">（' + esc(x.note) + '）</span>' : '')
               + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60)
-              + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>';
+              + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>'
+              + '<div style="font-size:11px;color:#a67c3d;margin-top:2px;">回廠＝實際良品回來的數量，<b>不含報廢</b>；回廠＋報廢＋取回 ＝ 該批發單數（例：發20、報廢1，則回廠19）</div>';
         } else if (x.kind === 'qc') {
             h += ' <span style="color:#7a4a10;">' + esc(x.result || '') + '</span><div class="row2">檢驗日 ' + inp('f-d', x.date, 125, 'date') + ' 允收 ' + inp('f-ok', x.ok, 55) + ' 特採 ' + inp('f-aod', x.aod, 55) + ' 異常 ' + inp('f-qq', x.qq, 55) + ' 驗退 ' + inp('f-ng', x.ng, 55) + '</div>';
         } else if (x.kind === 'transfer') {
