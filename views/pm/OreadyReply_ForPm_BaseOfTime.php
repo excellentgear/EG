@@ -12515,6 +12515,7 @@ echo "</script>\n";
           + '  <div style="flex:1;"><label style="font-size:12px;">廠商提報報廢</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
           + '  <div style="flex:1;"><label style="font-size:12px;" title="貨從廠商拿回來、沒有加工。上一關會退回「待移轉」，原發包日保留">取回不加工</label><input type="number" min="0" id="orm-withdraw-qty" class="form-control" value="0"></div>'
           + '</div>'
+          + '<div id="orm-ds-box" style="display:none;margin-bottom:10px;padding:8px 10px;background:#FFF3E2;border:1px solid #F0A24B;border-radius:6px;font-size:12px;color:#6B4423;"></div>'
           + '<div style="margin-bottom:10px;"><label style="font-size:12px;">回廠日</label><input type="date" id="orm-return-date" class="form-control" style="max-width:200px;" value="' + _ormToday() + '" max="' + _ormToday() + '"></div>'
           + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單；已啟用雙層快速決策時由第一層自動核准並結案（責任廠商未登記者不會自動結案）。</div>'
           + '<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">'
@@ -12656,6 +12657,29 @@ echo "</script>\n";
             _ormSyncFix();
         }
         ['orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormAutoRet); });
+        // 報廢 > 0 且此後（發單日期較晚）已有發單時，提供「自動修正此後數量」選項（是否適用由後端判定）
+        var _ormDsTimer = null;
+        function _ormDsRefresh() {
+            var box = document.getElementById('orm-ds-box'); if (!box) return;
+            var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
+            if (sq <= 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+            var sel = document.getElementById('orm-batch');
+            $.post('', { action: 'scrap_downstream_preview', bom_ing_fid: proc.bom_ing_fid, scrap_qty: sq, batch_id: (_ormBatches.length > 1 && sel && sel.value) ? sel.value : 0 }, function (r) {
+                if (!document.getElementById('orm-ds-box')) return;
+                if ((parseFloat(document.getElementById('orm-scrap-qty').value) || 0) !== sq) return;   // 已被改掉，等下一次
+                if (!r || !r.success || !r.show) { box.style.display = 'none'; box.innerHTML = ''; return; }
+                box.style.display = '';
+                if (!r.applicable) { box.innerHTML = '<span style="color:#8a6a45;">此後製程已有發單，但無法自動修正：' + escapeHtml(r.reason || '') + '</span>'; return; }
+                var h = '<label style="margin:0;font-weight:bold;cursor:pointer;"><input type="checkbox" id="orm-ds-chk" style="margin-right:6px;">同時自動修正此後製程的數量</label>'
+                      + '<div style="margin-top:4px;">依發單日期判定，只在後面發單數超過剩餘良品時才扣；修正發單＋回廠＋QC檢驗數（ERP 移轉憑單不動）：</div><ul style="margin:4px 0 0 18px;padding:0;">';
+                (r.items || []).forEach(function (it) {
+                    h += '<li>' + escapeHtml(it.station + (it.maker ? '（' + egVP(it.maker) + '）' : '')) + '：發單 ' + _obNum(it.send_old) + ' → <b>' + _obNum(it.send_new) + '</b>'
+                       + (it.ret_new !== it.ret_old ? '，回廠 ' + _obNum(it.ret_old) + ' → <b>' + _obNum(it.ret_new) + '</b>' : '') + (it.qc && it.qc.length ? '，QC 合格數同步扣除' : '') + '</li>';
+                });
+                box.innerHTML = h + '</ul>';
+            }, 'json');
+        }
+        document.getElementById('orm-scrap-qty').addEventListener('input', function () { clearTimeout(_ormDsTimer); _ormDsTimer = setTimeout(_ormDsRefresh, 350); });
         ['orm-return-qty', 'orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormSyncFix); });
         var _ormNote = null;   // 全部退回不加工時使用者填的說明（null＝不是從這個按鈕送出）
         document.getElementById('orm-all-withdraw').onclick = function () {
@@ -12716,7 +12740,8 @@ echo "</script>\n";
             var _noteSend = _ormNote; _ormNote = null;   // 只用一次
             var _selB = document.getElementById('orm-batch');
             var _bidSend = (_ormBatches.length > 1 && _selB && _selB.value) ? _selB.value : '';
-            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, return_date: rd, batch_id: _bidSend, note: _noteSend || '' }, function(r) {
+            var _dsChk = document.getElementById('orm-ds-chk'); var _dsSend = (_dsChk && _dsChk.checked && sq > 0) ? 1 : 0;
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, return_date: rd, batch_id: _bidSend, auto_fix_downstream: _dsSend, note: _noteSend || '' }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
                     document.getElementById('orm-return-qty').value = 0;

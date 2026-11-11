@@ -2519,6 +2519,26 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
 // >0 時自動呼叫 qab_auto_open_from_outsource_return() 開立品質異常單提醒品管，回傳 abnormal_order
 // 供前端顯示連結——這個自動開單**刻意不套用到 OreadyReply_ForPm_BaseOfTime2.php**（那頁仍呼叫
 // 它自己原本的 record_outsource_return，2026-10-07 使用者拍板不動那頁既有流程）。
+else if (isset($_POST['action']) && $_POST['action'] === 'scrap_downstream_preview') {
+    // 預覽：若這批報廢 N 件，此後哪些關卡的數量會被修正（只讀）
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    require_once '../../src/common/bom_scrap_downstream_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!(int)($_SESSION['id'] ?? 0)) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    try {
+        $fid = (int)($_POST['bom_ing_fid'] ?? 0); $bid = (int)($_POST['batch_id'] ?? 0);
+        if ($bid <= 0) { $lb = eg_bom_outsource_latest_open_batch($db, $fid); $bid = $lb ? (int)$lb['batch_id'] : 0; }
+        if (!$fid || !$bid) { echo json_encode(['success'=>true,'show'=>false]); exit; }
+        $pl = eg_scrap_ds_plan($db, $fid, $bid, max(0.0, (float)($_POST['scrap_qty'] ?? 0)));
+        echo json_encode(['success'=>true] + $pl);
+    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_return') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';
@@ -2641,6 +2661,16 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     }
                 } catch (Throwable $e) { /* 狀態轉換失敗不影響回廠記錄本身已成功 */ }
             }
+        }
+        // 2026-11-11 使用者交辦：廠商提報報廢時可選擇「同時自動修正此後製程的發單／回廠／QC檢驗數」（規則見 bom_scrap_downstream_lib.php）
+        if ($mode === 'add' && !empty($_POST['auto_fix_downstream']) && (float)($_POST['scrap_qty'] ?? 0) > 0 && isset($r) && is_array($r) && !empty($r['batch_id'])) {
+            try {
+                require_once '../../src/common/bom_scrap_downstream_lib.php';
+                $ds = eg_scrap_ds_apply($db, $fid, (int)$r['batch_id'], $uid);
+                $resp['downstream'] = $ds;
+                if (!empty($ds['ok'])) $resp['message'] .= '；' . $ds['message'];
+                else $resp['message'] .= '（此後數量未自動修正：' . $ds['message'] . '）';
+            } catch (Throwable $e) { $resp['message'] .= '（此後數量未自動修正：' . $e->getMessage() . '）'; }
         }
         // 2026-10-07 使用者交辦：本次報廢數量認定為外包廠商回報的報廢，應自動建立異常單提醒品管。
         // 失敗不可擋住回廠本身的記錄（已經成功寫進流水帳），開單失敗只在回應裡安靜略過。
