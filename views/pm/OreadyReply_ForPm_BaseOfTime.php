@@ -11761,7 +11761,11 @@ echo "</script>\n";
                 if (qty <= 0) { qHint.innerHTML = '<span style="color:#b8431f;">請輸入大於 0 的發單數量</span>'; return; }
                 if (qty > unsent + 1e-9) msg.push('<span style="color:#b8431f;font-weight:bold;">⚠ 超過本站尚未發單的 ' + nn(unsent) + ' 件，送出時系統會擋下。</span>');
                 else {
-                    msg.push('本站總量 ' + nn(a.stage_qty) + '，已發 ' + nn(a.sent) + '，這次發 ' + nn(qty) + (unsent - qty > 1e-9 ? '，發完尚餘 ' + nn(unsent - qty) + ' 件未發（之後可再發給其他廠商）。' : '，這次發完。'));
+                    var _cap = (a.prev_source !== 'fallback') ? Math.max(0, a.prev_qty - a.sent) : unsent;   // 上一關良品（已扣報廢）還能再發的量
+                    var _done = (unsent - qty <= 1e-9) || (qty >= _cap - 1e-9 && _cap < unsent - 1e-9);
+                    msg.push('本站總量 ' + nn(a.stage_qty) + '，已發 ' + nn(a.sent) + '，這次發 ' + nn(qty)
+                        + (_done ? ((unsent - qty > 1e-9) ? '，這次發完（上一關良品已全數發出；其餘 ' + nn(unsent - qty) + ' 件為報廢／短少，不會再有料）。' : '，這次發完。')
+                                 : '，發完尚餘 ' + nn(unsent - qty) + ' 件未發（之後可再發給其他廠商）。'));
                     if (a.prev_source !== 'fallback' && a.sent + qty > a.prev_qty + 1e-9)
                         msg.push('<span style="color:#8a5a12;font-weight:bold;">⚠ 上一關目前只有 ' + nn(a.prev_qty) + ' 件良品可領（' + escapeHtml(a.prev_label || '') + '），這次會超出 ' + nn(a.sent + qty - a.prev_qty) + ' 件；仍可送出，送出前會再確認。</span>');
                 }
@@ -11772,7 +11776,10 @@ echo "</script>\n";
                 var unsent = Math.max(0, Number(r.stage_qty) - Number(r.sent));
                 if (unsent <= 0) return;
                 _qtyAvail = { stage_qty: Number(r.stage_qty), sent: Number(r.sent), prev_qty: Number(r.prev_qty), prev_source: r.prev_source, prev_label: r.prev_label };
-                qIn.value = nn(unsent);
+                // 預設帶入：未發量與「上一關良品可領量（已扣報廢）」取小者，不會帶出超過實際良品的數字
+                var _def = unsent;
+                if (_qtyAvail.prev_source !== 'fallback') { var _cap0 = _qtyAvail.prev_qty - _qtyAvail.sent; if (_cap0 > 0 && _cap0 < unsent) _def = _cap0; }
+                qIn.value = nn(_def);
                 qRow.style.display = '';
                 check();
             }, 'json');
@@ -14533,6 +14540,11 @@ echo "</script>\n";
                 if (r.prev_source !== 'fallback') txt += '；上一關目前可領 ' + _obNum(r.prev_qty) + ' 件（' + r.prev_label + '）';
                 txt += '。留空＝整站一起發；填數量＝只發這一批，其餘之後再發給其他廠商。';
                 $hint.text(txt);
+                // 自動帶入發單數量：未發量與上一關良品可領量（已扣報廢）取小者；使用者已自行填寫則不覆蓋
+                var _un = Math.max(0, Number(r.stage_qty) - Number(r.sent)), _df = _un;
+                if (r.prev_source !== 'fallback') { var _c0 = Number(r.prev_qty) - Number(r.sent); if (_c0 > 0 && _c0 < _un) _df = _c0; }
+                var $q = $('#transfer-qty-' + fid);
+                if (_un > 0 && ($q.val() || '') === '') $q.val(Math.round(_df * 1000) / 1000);
             }, 'json').fail(function () { $hint.text(''); });
         });
 
