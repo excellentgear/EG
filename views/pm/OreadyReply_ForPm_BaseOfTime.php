@@ -4093,7 +4093,13 @@ echo "</script>\n";
             const matches = () => {
                 const q = customerFilterEl.value.trim().toLowerCase();
                 if (!q) return [];
-                return (availableCustomers || []).filter(v => String(v).toLowerCase().includes(q));
+                // 名稱或客戶代號任一吻合即列出（代號取自資料列 d_customer_id）
+                const idByName = {};
+                (typeof fullDataset !== 'undefined' ? fullDataset : []).forEach(r => {
+                    const n = String(r.client_name_display || r.Client_Name_Full || r.Client_Name || '').trim();
+                    if (n && r.d_customer_id && !idByName[n]) idByName[n] = String(r.d_customer_id);
+                });
+                return (availableCustomers || []).filter(v => String(v).toLowerCase().includes(q) || String(idByName[v] || '').toLowerCase().includes(q));
             };
             const hide = () => { box.style.display = 'none'; };
             const pick = (v) => {
