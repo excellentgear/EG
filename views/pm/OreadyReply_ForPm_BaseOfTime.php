@@ -1710,6 +1710,8 @@ echo "    window.canOpenOrderTrack = " . json_encode((bool)$oready_can_open_ot) 
 $oready_can_ship_insight = false;
 try { require_once __DIR__ . '/../../src/common/shipping_lib.php'; $oready_can_ship_insight = (bool)(sq_perms($db, sq_current_user($db))['canView'] ?? false); } catch (Throwable $e) {}
 echo "    window.canShipInsight = " . json_encode($oready_can_ship_insight) . ";\n";
+// 快速出貨（Shipping_Quick.php）的進入權限與該頁相同（shipping 模組 canView）：有權限「待出貨」鈕才可點
+echo "    window.canShipQuick = " . json_encode($oready_can_ship_insight) . ";\n";
 echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_returned) . "; // 功能碼 oready_mark_returned\n";
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
@@ -6565,8 +6567,18 @@ echo "</script>\n";
                             var later = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === bm && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > g; });
                             if (later) return;
                             _ingBtn.textContent = '待出貨'; _ingBtn.className = 'btn btn-xs btn-success btn-return-style';
-                            _ingBtn.onclick = function (e) { if (e) e.preventDefault(); return false; };
-                            _ingBtn.style.cursor = 'default'; _ingBtn.style.marginTop = '0'; _ingBtn.style.marginBottom = '0'; _ingBtn.title = '最後一關已全數回廠，等待出貨';
+                            _ingBtn.style.marginTop = '0'; _ingBtn.style.marginBottom = '0';
+                            if (window.canShipQuick) {
+                                // 有快速出貨權限：另開快速出貨，自動勾選綁這張製令的訂單並帶入可出數量（已出完則列出綁定的出貨單）
+                                var _shipBom = String(row.bom || '').trim();
+                                _ingBtn.style.cursor = 'pointer'; _ingBtn.style.opacity = '1';
+                                _ingBtn.title = '最後一關已全數回廠：點擊開啟快速出貨（自動帶入此製令綁定的訂單與可出數量）';
+                                _ingBtn.onclick = function (e) { if (e) { e.preventDefault(); e.stopPropagation(); } window.open('../Sales/Shipping_Quick.php?bom=' + encodeURIComponent(_shipBom), '_blank', 'noopener'); return false; };
+                            } else {
+                                // 沒有快速出貨權限：按了沒有反應（使用者要求）
+                                _ingBtn.onclick = function (e) { if (e) e.preventDefault(); return false; };
+                                _ingBtn.style.cursor = 'default'; _ingBtn.title = '最後一關已全數回廠，等待出貨';
+                            }
                         })();
                         var _ingBtnRow = document.createElement('div');
                         _ingBtnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點

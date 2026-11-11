@@ -378,7 +378,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   <div class="m-body">
     <div class="sq-bar" style="margin-bottom:8px;">
       <label>出貨日</label><input type="date" id="rcFrom" style="width:145px;"> ~ <input type="date" id="rcTo" style="width:145px;">
-      <input type="text" id="rcKw" placeholder="單號／客戶／料號" style="width:200px;">
+      <input type="text" id="rcKw" placeholder="單號／客戶／料號／製令號" style="width:200px;">
       <button id="btnRcGo" class="btn-warm">查詢</button>
     </div>
     <div id="rcList"></div>
@@ -719,7 +719,7 @@ function init(){
     AS_CUR  = r.asdoc ? +r.asdoc.id : 0;
     paintAsDoc(r.asdoc);
     bindInputRules($(document));
-    load();
+    if (!(new URLSearchParams(location.search).get('bom'))) load();   // ?bom= 由 openFromBom() 自己載入，避免兩次查詢互相覆蓋勾選
     openFromUrl();
   }).fail(function(){ toast('無法連線到出貨 API', true); });
 }
@@ -730,6 +730,8 @@ function init(){
  * 這個跳窗預設只載入最近 14 天，舊單只帶單號會查不到而看起來像壞掉。 */
 function openFromUrl(){
   var p = new URLSearchParams(location.search);
+  var bomNo = (p.get('bom')||'').trim();
+  if (bomNo) { openFromBom(bomNo); return; }
   var no = (p.get('is_no')||'').trim();
   if(!no) return;
   var f = (p.get('from')||'').trim(), t = (p.get('to')||'').trim();
@@ -750,6 +752,50 @@ function openFromUrl(){
   }
   openMask('mkRecent');
   loadRecent();
+}
+
+/* BOM總覽「待出貨」深連結：?bom=製令號（2026-11-11）
+ * 以製令號搜尋待出貨清單（搜尋框本來就會把製令號解析成綁定的訂單），自動勾選綁了這張製令的訂單，
+ * 本次出貨數量＝這張製令分給該訂單、目前可出的量（不超過訂單未出量）；
+ * 這張製令已經沒有可出的量（都出完了）→ 改開「近期出貨單」列出綁了這張製令的出貨單。 */
+function openFromBom(bomNo){
+  $('#kw').val(bomNo);
+  $('#onlyReady').prop('checked', false);
+  $('#dFrom,#dTo').val('');
+  page = 1;
+  load(function(){
+    var n = 0, zero = [], left = null;   // left＝這張製令整張還能出多少（done−shipped），多張訂單共用，累計不可超過
+    rows.forEach(function(r, i){
+      var b = (r.boms||[]).filter(function(x){ return String(x.bom) === bomNo; })[0];
+      if (!b) return;
+      if (left === null) left = Math.max(0, (Number(b.done)||0) - (Number(b.shipped)||0));
+      var q = Math.min(Number(b.avail)||0, Number(r.remain_qty)||0, left);
+      if (q > 0 && CAN_EDIT) left -= q;
+      if (q > 0 && CAN_EDIT) { pick(i, true, q); n++; }
+      else {   // 訂單還沒出完、但系統判定這張製令可出 0：不猜數量，標出來並寫原因，讓使用者自己確認後勾選填寫
+        zero.push((r.order_oo||'') + (r.ready_note ? '（' + r.ready_note + '）' : ''));
+        $('#tbody tr[data-i="'+i+'"]').css('outline', '2px solid #F0A24B');
+      }
+    });
+    $('#sqFromBom').remove();
+    if (n > 0 || zero.length) {
+      $('#tbody').closest('table').before('<div id="sqFromBom" style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:6px 10px;margin:6px 0;font-size:12px;color:#6b4a1f;">'
+        + '<i class="fa fa-info-circle"></i> 由 BOM總覽帶入製令 <b>'+esc(bomNo)+'</b>：'
+        + (n > 0 ? '已自動勾選 '+n+' 張綁定訂單並帶入這張製令可出的數量，確認無誤後按下方出貨。' : '')
+        + (zero.length ? (n > 0 ? '另有' : '') + '綁定訂單 <b>'+esc(zero.join('、'))+'</b> 系統判定這張製令目前可出 0，未自動帶入數量（橘框標示），請確認後自行勾選並填寫本次出貨數量。' : '')
+        + (CAN_EDIT ? '' : '（您沒有出貨登錄權限，只能檢視）') + '</div>');
+      return;
+    }
+    // 沒有可出的量：列出已綁這張製令的出貨單
+    $('#rcFrom').val('2000-01-01'); $('#rcTo').val(new Date().toISOString().slice(0,10));
+    $('#rcKw').val(bomNo);
+    $('#rcFromAudit').remove();
+    $('#rcList').before('<div id="rcFromAudit" style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:12px;color:#6b4a1f;">'
+      + '<i class="fa fa-info-circle"></i> 由 BOM總覽帶入製令 <b>'+esc(bomNo)+'</b>：這張製令目前沒有可出貨的數量'
+      + (rows.length ? '' : '（綁定的訂單都已出完）') + '，以下是已綁定這張製令的出貨單。</div>');
+    openMask('mkRecent');
+    loadRecent();
+  });
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -781,7 +827,7 @@ $(document).on('click','#tbl thead th.sortable',function(){
   page=1; load();
 });
 
-function load(){
+function load(cb){
   $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');
   $.post(API+'?action=pending', filters(), function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
@@ -794,6 +840,7 @@ function load(){
     $('#stAmount').text(nf(Math.round(s.amount||0)));
     render();
     renderPager();
+    if (typeof cb === 'function') cb();
   }, 'json').fail(function(){ toast('查詢失敗（網路或伺服器錯誤）', true); });
 }
 

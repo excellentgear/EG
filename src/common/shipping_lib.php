@@ -362,7 +362,7 @@ function sq_order_ids_by_bom_kw(PDO $db, string $kw): array
         SELECT bopm.order_id AS oid FROM bom_order_process_map bopm WHERE bopm.bom LIKE ?
         UNION
         SELECT ot.Order_id AS oid FROM bom b
-        JOIN order_track ot ON ot.Order_oo = b.o_order_id
+        JOIN order_track ot ON ot.Order_id = b.o_order_id   -- bom.o_order_id 是 order_track.Order_id（整數主鍵），不是訂單編號
         WHERE b.bom LIKE ?
         LIMIT 2000");
     $st->execute([$like, $like]);
@@ -1048,6 +1048,28 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
             'message' => "已回填 {$applied} 筆" . ($skipped ? "，略過 {$skipped} 筆（已有訂單編號、客戶簡稱不符或資料已異動）" : '')];
 }
 
+/**
+ * 綁了這張製令（完全相符）的出貨單 IS_id：製令→綁定的訂單（bom_order_process_map＋bom.o_order_id）→
+ * 綁到這些訂單的出貨單（shipment_order_map、is_list.Order_id 兩種來源，見 ship_order_bind_lib.php）＋is_bom_map 直接綁定。
+ */
+function sq_is_ids_by_bom(PDO $db, string $bom): array
+{
+    $bom = trim($bom);
+    if ($bom === '') return [];
+    $st = $db->prepare("SELECT order_id FROM bom_order_process_map WHERE bom=? UNION SELECT o_order_id FROM bom WHERE bom=? AND o_order_id IS NOT NULL");
+    $st->execute([$bom, $bom]);
+    $oids = array_values(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
+    $ids = [];
+    $s2 = $db->prepare("SELECT IS_id FROM is_bom_map WHERE bom=?");
+    $s2->execute([$bom]);
+    foreach ($s2->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[(int)$v] = 1;
+    if ($oids) {
+        $in = implode(',', $oids);
+        foreach ($db->query("SELECT IS_id FROM shipment_order_map WHERE Order_id IN ($in) UNION SELECT IS_id FROM is_list WHERE Order_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[(int)$v] = 1;
+    }
+    return array_keys($ids);
+}
+
 /* ============================================================
  * 已出貨單查詢（當日／近期，供出貨後檢視與列印送貨單）
  * ============================================================ */
@@ -1059,7 +1081,11 @@ function sq_recent_shipments(PDO $db, array $f): array
     if (!empty($f['date_to']))   { $where[] = "il.Order_date <= :dt"; $params[':dt'] = $f['date_to']; }
     $kw = trim((string)($f['kw'] ?? ''));
     if ($kw !== '') {
-        $where[] = "(il.IS_number LIKE :kw OR il.Client_name LIKE :kw OR il.Product_id LIKE :kw)";
+        // 也可打製令號（完全相符）：列出綁了這張製令的出貨單（BOM總覽「待出貨」深連結用）。
+        // 先在 PHP 端解析出出貨單 id 再用 IN，不在 WHERE 裡放 OR 子查詢（實測會由毫秒級變十幾秒）
+        $bomIs = sq_is_ids_by_bom($db, $kw);
+        $where[] = "(il.IS_number LIKE :kw OR il.Client_name LIKE :kw OR il.Product_id LIKE :kw"
+                 . ($bomIs ? " OR il.IS_id IN (" . implode(',', $bomIs) . ")" : '') . ")";
         $params[':kw'] = '%' . $kw . '%';
     }
     $ws = $where ? 'WHERE ' . implode(' AND ', $where) : '';
