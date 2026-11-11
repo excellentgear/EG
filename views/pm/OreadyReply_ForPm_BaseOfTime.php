@@ -1706,6 +1706,10 @@ echo "    window.canManualClose = " . json_encode((bool)$can_manual_close) . "; 
 echo "    window.isRD = " . json_encode($display_permission_code === 'D+R') . "; // R+D受限業務：人工結案需二次輸入Y確認\n";
 // 純功能碼旗標（不含任何舊規則），JS端在各按鈕原本判斷式後面自行 OR，不取代原判斷式
 echo "    window.canOpenOrderTrack = " . json_encode((bool)$oready_can_open_ot) . "; // 有權限進入訂單追蹤：交期欄的訂單標示可點開\n";
+// 有出貨分析（Shipping_Insight.php）檢視權限者，客戶欄的出貨紀錄可點開（權限判定與該頁相同：shipping 模組 sq_perms）
+$oready_can_ship_insight = false;
+try { require_once __DIR__ . '/../../src/common/shipping_lib.php'; $oready_can_ship_insight = (bool)(sq_perms($db, sq_current_user($db))['canView'] ?? false); } catch (Throwable $e) {}
+echo "    window.canShipInsight = " . json_encode($oready_can_ship_insight) . ";\n";
 echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_returned) . "; // 功能碼 oready_mark_returned\n";
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
@@ -5615,6 +5619,21 @@ echo "</script>\n";
                     historyLine.innerHTML = `出 ${displayDate} x${shipment.Qty}`; // DEBUG: ` <small style="color:#999;">(${shipment.shipment_iso_date})</small>`
                     historyContainer.appendChild(historyLine);
                 });
+                // 有出貨分析檢視權限者：點出貨紀錄＝另開出貨分析，篩選同料號、同客戶，日期區間＝畫面上這幾筆的最早～最晚出貨日
+                if (window.canShipInsight && closestThree.length) {
+                    const _sd = closestThree.map(s => String(s.shipment_iso_date || '')).filter(Boolean).sort();
+                    if (_sd.length) {
+                        historyContainer.style.cursor = 'pointer';
+                        historyContainer.style.textDecoration = 'underline dotted';
+                        historyContainer.title = '點擊另開出貨分析：只列此料號、此客戶 ' + _sd[0].replace(/-/g, '.') + '～' + _sd[_sd.length - 1].replace(/-/g, '.') + ' 的出貨紀錄';
+                        historyContainer.addEventListener('click', function (ev) {
+                            ev.stopPropagation();
+                            const q = new URLSearchParams({ ship_pid: String(row.d_setting_id || ''), ship_pno: String(row.d_id || ''),
+                                ship_client: String(row.Client_Name_Full || row.Client_Name || '').trim(), ship_from: _sd[0], ship_to: _sd[_sd.length - 1] });
+                            window.open('../Sales/Shipping_Insight.php?' + q.toString(), '_blank', 'noopener');
+                        });
+                    }
+                }
 
                 tdClient.appendChild(historyContainer);
             }

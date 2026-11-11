@@ -548,6 +548,7 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
       <button class="list-tab-btn" id="tabBtnCustomer" onclick="listSwitchTab('customer')"><i class="fa fa-users"></i> 客戶統計</button>
     </div>
     <div id="paneShip">
+      <div id="shipDeepBar" class="oa-note" style="display:none;margin-bottom:6px;"></div>
       <div class="tbl-wrap"><table class="oa-t" id="tblShip">
         <colgroup><col style="width:11%"><col style="width:11%"><col style="width:15%"><col style="width:13%"><col style="width:20%"><col style="width:8%"><col style="width:9%"><col style="width:13%"></colgroup>
         <thead><tr><th>出貨日期</th><th>出貨單號</th><th>客戶</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th></tr></thead>
@@ -2021,6 +2022,21 @@ cqFillRankYear();
  * ══════════════════════════════════════════════════════════ */
 var LIST_TAB = 'ship';
 var LIST_PAGE = { ship:1, return:1, order:1 };
+/* BOM總覽「客戶」欄出貨紀錄的深連結：?ship_pno=料號&ship_client=客戶&ship_pid=料號主檔id&ship_from=&ship_to=
+   出貨明細只列同料號、同客戶在這段日期內的出貨（不受上方期間／客戶／出貨性質篩選影響），可按「取消此篩選」回到一般檢視 */
+var SHIP_DEEP = (function(){
+  try {
+    var u = new URLSearchParams(location.search);
+    if (!u.get('ship_pno')) return null;
+    return { ship_pno:u.get('ship_pno'), ship_client:u.get('ship_client')||'', ship_pid:u.get('ship_pid')||'', ship_from:u.get('ship_from')||'', ship_to:u.get('ship_to')||'' };
+  } catch(e){ return null; }
+})();
+var SHIP_DEEP_SCROLLED = false;
+function shipDeepClear(){
+  SHIP_DEEP = null; $('#shipDeepBar').hide().empty();
+  try { history.replaceState(null, '', location.pathname); } catch(e){}
+  LIST_PAGE.ship = 1; listReload();
+}
 function listSwitchTab(tab){
   LIST_TAB = tab;
   $('.list-tab-btn').removeClass('active');
@@ -2034,10 +2050,12 @@ function listReload(){
   if(LIST_TAB === 'customer') { listLoadCustomer(); return; }
   var action = LIST_TAB === 'ship' ? 'list_ship' : (LIST_TAB === 'return' ? 'list_return' : 'list_order');
   var page = LIST_PAGE[LIST_TAB] || 1;
-  $.get(SI_API, { action:action, year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
-                  clients:JSON.stringify(Object.keys(CLI_SEL)), sale_types:JSON.stringify(stSelectedArr()),
-                  kw:$('#listKw').val(), page:page, per:50 }, function(r){
-    if(!r || !r.ok){ return; }
+  var q = { action:action, year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
+            clients:JSON.stringify(Object.keys(CLI_SEL)), sale_types:JSON.stringify(stSelectedArr()),
+            kw:$('#listKw').val(), page:page, per:50 };
+  if (SHIP_DEEP && LIST_TAB === 'ship') $.extend(q, SHIP_DEEP);
+  $.get(SI_API, q, function(r){
+    if(!r || !r.ok){ if(SHIP_DEEP && LIST_TAB === 'ship') $('#shipDeepBar').show().html('<span class="oa-warn">'+esc((r&&r.error)||'載入失敗')+'</span>'); return; }
     if(LIST_TAB === 'ship') renderShipTable(r);
     else if(LIST_TAB === 'return') renderReturnTable(r);
     else renderOrderTable(r);
@@ -2051,7 +2069,13 @@ function renderShipTable(r){
        + '<td>'+pnoCell(x)+'</td><td>'+esc(x.spec)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
        + '<td class="n">'+money(x.amount)+(x.anomaly?(' <span class="badge-anom" title="'+esc(x.anomaly_reason)+'">'+(x.anomaly_confirmed?'已確認':'異常')+'</span>'):'')+'</td></tr>';
   });
-  $('#tblShip tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">本期沒有出貨</td></tr>');
+  $('#tblShip tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">'+(r.deep?'這段期間沒有此料號、此客戶的出貨':'本期沒有出貨')+'</td></tr>');
+  if (r.deep) {
+    $('#shipDeepBar').show().html('<i class="fa fa-filter"></i> 由 BOM總覽帶入：只列料號 <b>'+esc(r.deep.pno)+'</b>'
+      + (r.deep.client ? '、客戶 <b>'+esc(r.deep.client)+'</b>' : '') + '，出貨日期 <b>'+dispDate(r.deep.from)+'～'+dispDate(r.deep.to)+'</b>'
+      + '（共 '+r.total+' 筆；不受上方期間、客戶與出貨性質篩選影響） <button class="btn btn-xs btn-warm-o" onclick="shipDeepClear()">取消此篩選</button>');
+    if (!SHIP_DEEP_SCROLLED) { SHIP_DEEP_SCROLLED = true; var el = document.getElementById('paneShip'); if (el) el.scrollIntoView({ block:'start' }); }
+  } else { $('#shipDeepBar').hide(); }
   renderPager('pagerShip', r, 'ship');
 }
 function renderReturnTable(r){

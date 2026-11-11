@@ -350,7 +350,7 @@ if (is_array($OreadyReply_list_base)) {
                     il.Qty, il.Specification,
                     DATE_FORMAT(il.Order_date, '%m/%d') AS formatted_date,
                     DATE_FORMAT(il.Order_date, '%Y-%m-%d') AS shipment_iso_date,
-                    il.Order_date
+                    il.Order_date, il.d_setting_id, TRIM(il.Client_name) AS Client_name
                 FROM is_list il
                 WHERE il.Product_id IN ({$placeholders_shipment})
                 ORDER BY il.Product_id, il.Order_date DESC
@@ -587,7 +587,9 @@ if (is_array($OreadyReply_list_base)) {
             $item['qc_aod_qty'] = (float)($_qcs['qc_aod_qty'] ?? 0);
             $item['qc_total']   = $item['qc_qq_qty'] + $item['qc_ok_qty'] + $item['qc_ng_qty'] + $item['qc_aod_qty'];
             // ✅ 關鍵修正：將 shipment_history 加入回傳，讓 10 秒刷新後客戶欄位仍能顯示最近出貨
-            $item['shipment_history']  = $shipment_history_map[$item['d_id']] ?? [];
+            // 只列同料號、同客戶的出貨（唯一實作 bom_ship_match_lib.php，與按需撈取同一套規則）
+            require_once __DIR__ . '/../common/bom_ship_match_lib.php';
+            $item['shipment_history']  = eg_bom_ship_filter($db, $shipment_history_map[$item['d_id']] ?? [], $item['d_setting_id'] ?? null, (string)($item['d_id'] ?? ''), (string)($item['Client_Name_Full'] ?? ($item['Client_Name'] ?? '')));
             $item['OrderList']         = $order_list_map[$item['d_id']] ?? [];
 
             // ✅【報工欄位計算】與主頁面邏輯一致

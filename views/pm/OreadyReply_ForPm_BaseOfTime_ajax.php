@@ -3179,9 +3179,16 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_row_details') {
     try {
         $result = ['success'=>true,'shipment_history'=>[],'qq_details'=>[],'ok_details'=>[]];
         if (!empty($d_id)) {
-            $s=$db->prepare("SELECT Product_id,Qty,Specification,DATE_FORMAT(Order_date,'%Y-%m-%d') AS formatted_date,DATE_FORMAT(Order_date,'%Y-%m-%d') AS shipment_iso_date FROM is_list WHERE Product_id=? ORDER BY Order_date DESC LIMIT 20");
+            // 出貨紀錄只列「同料號、同客戶」的（2026-11-11 使用者要求客戶也要相同；同一個料號文字常掛在好幾家客戶底下）：
+            // 製令有料號主檔 id 就以主檔 id 比對（主檔本身綁定客戶），沒有才用料號文字＋客戶名稱
+            require_once '../../src/common/bom_ship_match_lib.php';
+            $bq = $db->prepare("SELECT d_setting_id, TRIM(Client_Name) AS cn FROM bom WHERE bom=? LIMIT 1");
+            $bq->execute([$bom]);
+            $br = $bq->fetch(PDO::FETCH_ASSOC) ?: ['d_setting_id' => null, 'cn' => ''];
+            $cn = (string)($br['cn'] ?? '');
+            $s=$db->prepare("SELECT Product_id,Qty,Specification,DATE_FORMAT(Order_date,'%Y-%m-%d') AS formatted_date,DATE_FORMAT(Order_date,'%Y-%m-%d') AS shipment_iso_date,d_setting_id,TRIM(Client_name) AS Client_name FROM is_list WHERE Product_id=? ORDER BY Order_date DESC LIMIT 200");
             $s->execute([$d_id]);
-            $result['shipment_history']=$s->fetchAll(PDO::FETCH_ASSOC);
+            $result['shipment_history'] = array_slice(eg_bom_ship_filter($db, $s->fetchAll(PDO::FETCH_ASSOC), $br['d_setting_id'], $d_id, $cn), 0, 20);
         }
         $s2=$db->prepare("SELECT bi.bom,qc.bom_ing_fid_ref,qc.QC_check,DATE_FORMAT(qc.QC_check_date,'%c/%e') AS qc_date_formatted,qc.QC_check_date,qc.QC_QQ_sqty,qc.QC_ps,bi.bom_sn,pn.ProcessName,bi.QC_ps AS bQC_ps,bi.QC_ps2 AS bQC_ps2 FROM QC_check qc LEFT JOIN bom_ing bi ON qc.bom_ing_fid_ref=bi.bom_ing_fid LEFT JOIN process_no pn ON bi.process_no=pn.ProcessNo WHERE bi.bom=? AND qc.QC_check='QQ' ORDER BY bi.bom_sn DESC,qc.QC_check_date DESC");
         $s2->execute([$bom]); $result['qq_details']=$s2->fetchAll(PDO::FETCH_ASSOC);

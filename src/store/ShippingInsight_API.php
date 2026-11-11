@@ -192,7 +192,25 @@ switch ($action) {
         $per  = max(10, min(200, (int)($_REQUEST['per'] ?? 50)));
         $resolve = cqa_client_resolver($db);
 
-        if ($action === 'list_ship') {
+        /* BOM總覽「客戶」欄出貨紀錄的深連結（2026-11-11）：指定日期區間＋同料號、同客戶，
+           不套期間切法、客戶篩選與出貨性質篩選（BOM總覽列的是全部性質）。比對規則唯一實作 bom_ship_match_lib.php */
+        $deep = null;
+        if ($action === 'list_ship' && trim((string)($_REQUEST['ship_pno'] ?? '')) !== '') {
+            $dFrom = (string)($_REQUEST['ship_from'] ?? ''); $dTo = (string)($_REQUEST['ship_to'] ?? '');
+            $okD = function ($d) { return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d) !== false; };
+            if (!$okD($dFrom) || !$okD($dTo) || $dFrom > $dTo) siErr('出貨日期區間不正確');
+            require_once __DIR__ . '/../common/bom_ship_match_lib.php';
+            $dPno = trim((string)$_REQUEST['ship_pno']); $dCli = trim((string)($_REQUEST['ship_client'] ?? ''));
+            $deep = ['from' => $dFrom, 'to' => $dTo, 'pno' => $dPno, 'client' => $dCli,
+                     'sid' => eg_bom_ship_sid($db, (int)($_REQUEST['ship_pid'] ?? 0), $dPno, $dCli)];
+            $allSt = ['NULL'];
+            foreach ($db->query("SELECT sale_type_id FROM is_sale_type") as $x) $allSt[] = (string)$x['sale_type_id'];
+            $rows = si_fetch_ship($db, $dFrom, $dTo, ['sale_types' => $allSt, 'resolver' => $resolve]);
+            $rows = array_values(array_filter($rows, function ($r) use ($deep) {
+                return $r['pno'] === $deep['pno'] && eg_bom_ship_row_match(['d_setting_id' => $r['pid'], 'Client_name' => $r['craw']], $deep['sid'], $deep['client']);
+            }));
+            $p['clients'] = [];
+        } elseif ($action === 'list_ship') {
             $rows = si_fetch_ship($db, $cur['start'], $cur['end'], ['sale_types' => si_sale_types_whitelist($db, $p['sale_types']), 'resolver' => $resolve]);
         } elseif ($action === 'list_return') {
             $rows = si_fetch_return($db, $cur['start'], $cur['end'], ['resolver' => $resolve]);
@@ -214,7 +232,7 @@ switch ($action) {
         usort($rows, function ($a, $b) { return strcmp($b['dt'], $a['dt']); });
         $total = count($rows);
         $rows = array_slice($rows, ($page - 1) * $per, $per);
-        siOut(['rows' => $rows, 'total' => $total, 'page' => $page, 'per' => $per, 'period' => $cur]);
+        siOut(['rows' => $rows, 'total' => $total, 'page' => $page, 'per' => $per, 'period' => $deep ? ['start' => $deep['from'], 'end' => $deep['to'], 'label' => '指定區間'] : $cur, 'deep' => $deep]);
     }
 
     /* ── 客戶統計（該期間逐客戶彙總，供「客戶統計」分頁）──────────── */

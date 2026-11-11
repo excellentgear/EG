@@ -150,6 +150,7 @@ function si_fetch_ship(PDO $db, string $from, string $to, array $opt = []): arra
             'ckey'    => $c['key'], 'cname' => $c['name'], 'cid' => (string)$c['cid'], 'cbad' => $c['unmatched'] ? 1 : 0,
             'pid'     => (int)($r['d_setting_id'] ?? 0),
             'pno'     => trim((string)$r['Product_id']) ?: '（未填料號）',
+            'craw'    => trim((string)$r['Client_name']),   // 出貨單上原本的客戶名稱（BOM總覽深連結比對同客戶用）
             'spec'    => (string)($r['Specification'] ?? ''),
             'qty'     => $qty, 'price' => $price, 'amount' => $amt,
             'order_id'=> (int)($r['Order_id'] ?? 0),
