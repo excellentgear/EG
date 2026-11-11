@@ -7082,14 +7082,15 @@ echo "</script>\n";
                             d.style.cssText = 'margin-bottom:3px;white-space:normal;word-break:break-all;';
                             d.innerHTML = '<span style="' + QT_BTN + 'background:' + t.bg + ';color:' + t.fg + ';">' + escapeHtml(t.main_name || '報廢') + '</span> '
                                 + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + (t.proc_name ? escapeHtml(t.proc_name) + ' ' : '') + 'x' + (t.main_qty || 0)
-                                + '<div style="margin:2px 0 0 12px;color:#6B4423;">└ ' + escapeHtml(t.sub) + '</div>';
+                                + '<div style="margin:2px 0 0 12px;color:#6B4423;">└ ' + (t.sub_no !== undefined ? escapeHtml(t.sub_text || '') + qabNoLink(t, t.sub_no) : escapeHtml(t.sub)) + '</div>';
                             if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
                             _qtBox.appendChild(d);
                             return;
                         }
                         d.innerHTML ='<span style="' + QT_BTN + 'background:' + t.bg + ';color:' + t.fg + ';">' + escapeHtml(t.name || '') + '</span> '
                             + '<span style="color:#999;">' + escapeHtml(t.md || '') + '</span> ' + escapeHtml(t.process || '') + ' x' + (t.qty || 0)
-                            + (t.who ? ' (' + escapeHtml(t.who) + ')' : '');
+                            + (t.who ? ' (' + escapeHtml(t.who) + ')' : '')
+                            + (t.no && t.id ? ' ' + qabNoLink(t, String(t.no).split('｜')[0]) : '');
                         if (_qtIdx >= QT_FOLD) { d.className = 'qab-tag-extra'; d.style.display = 'none'; }
                         _qtBox.appendChild(d);
                     });
@@ -8055,6 +8056,15 @@ echo "</script>\n";
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+    // 異常單號：有檢視權限（後端標 can_open）才是連結並開新視窗；無權限只顯示文字，點擊無效
+    function qabNoLink(t, no) {
+        no = String(no || '');
+        if (!no) return '';
+        if (t && t.can_open && Number(t.id) > 0) {
+            return '<a href="../QA/qa_abnormal_form.php?id=' + Number(t.id) + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" style="text-decoration:underline;color:#337ab7;">' + escapeHtml(no) + '</a>';
+        }
+        return escapeHtml(no);
     }
 
 

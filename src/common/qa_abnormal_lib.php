@@ -3988,6 +3988,18 @@ function qab_bom_decision_tags(PDO $db, array $bomNos): array
         foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
         unset($list);
     } catch (Throwable $e) {}
+    // 異常單號可點開的權限標記：有權限才給 can_open（前端據此決定要不要變連結），無權限者點擊無效
+    try {
+        $perms = qab_perms($db, (int)($_SESSION['id'] ?? 0));
+        $viewCache = [];
+        foreach ($out as &$list2) foreach ($list2 as &$t) {
+            $oid = (int)($t['id'] ?? 0);
+            if ($oid <= 0) { $t['can_open'] = 0; continue; }
+            if (!isset($viewCache[$oid])) $viewCache[$oid] = qab_can_view_order($db, $perms, $oid) ? 1 : 0;
+            $t['can_open'] = $viewCache[$oid];
+        }
+        unset($list2, $t);
+    } catch (Throwable $e) {}
     return $out;
 }
 

@@ -1709,6 +1709,8 @@ function renderRemake(){
     $s.show();
     var h = '', atTxt = r.at ? (dispDate(String(r.at).substr(0, 10)) + ' ' + String(r.at).substr(11, 5)) : '';
     $('#rmSub').text(r.status === 'pending' ? '尚待業務回覆' : r.label);
+    if (r.status === 'pending') $('#rmSub').css({background:'#DD5138', color:'#fff', padding:'2px 8px', borderRadius:'10px', fontWeight:'600', marginLeft:'8px'});
+    else $('#rmSub').removeAttr('style');
     if (r.status === 'pending') {
         h += '<div class="note-box">本單已判定報廢 <b>' + r.scrap_qty + ' PCS</b>。請被通知的業務人員回填<b>需要補做幾 PCS，或不補</b>。'
            + '被通知：' + esc((r.notify_names || []).join('、') || '—') + '（其中一人回覆即可，其他人的通知會自動取消）。</div>';
@@ -1734,7 +1736,7 @@ function renderRemake(){
         h += '</div><div id="rmErr" style="color:var(--coral);font-size:12px;min-height:16px;"></div>'
            + '<button class="btn btn-warm btn-sm" id="btnRemakeGo"><i class="fa fa-check"></i> 送出回覆</button>';
         $('#rmBody').html(h);
-        $('input[name=rmMode][value=remake]').prop('checked', true);
+        $('#rmBody .rm-q').hide();   // 尚未選擇「補做／不補」前不預選、不顯示補做欄位
         return;
     }
     // 已回覆
@@ -1768,6 +1770,7 @@ $(document).on('click', '#btnRemakeGo', function(){
     var mode = $('input[name=rmMode]:checked').val(), r = D.remake || {};
     var data = { action:'remake_respond', csrf:CSRF, id:OID, mode:mode, note:$('#rmNote').val() };
     var msg = '';
+    if (!mode) msg = '請先選擇「補做」或「不補」';
     if (mode === 'remake') {
         data.qty = $.trim($('#rmQty').val());
         if (!/^[1-9]\d*$/.test(data.qty)) msg = '補做數量請填大於 0 的整數';
