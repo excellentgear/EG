@@ -1681,6 +1681,18 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     return ['id' => $id, 'no' => $created['no'], 'existed' => false, 'vendor_pending' => $vendorMissing ? 1 : 0, 'quick' => $quick ? 1 : 0];
 }
 
+/** BOM總覽自動開立異常單的開單人：員工編號 99991「生管公用」（使用者指定）；查不到該帳號回 0 */
+function qab_bom_auto_opener_uid(PDO $db): int
+{
+    static $uid = null;
+    if ($uid === null) {
+        $st = $db->prepare("SELECT id FROM user WHERE id=?");
+        $st->execute([99991]);
+        $uid = (int)$st->fetchColumn();
+    }
+    return $uid;
+}
+
 /**
  * 外包廠商回廠時回報報廢數量，自動開立品質異常單草稿提醒品管填寫（2026-10-07 使用者交辦）。
  * 比照 qab_auto_open_from_qc_ng() 同一套「草稿＋品管確認」模式與分類判定規則（廠內/廠外看
@@ -1697,6 +1709,10 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     qab_ensure_schema($db);
     if ($batchId <= 0) throw new Exception('缺少 batch_id');
     if ($createdBy <= 0) throw new Exception('缺少開單人');
+    // BOM總覽（外包回廠／補登／管理員修正）自動開立的單，開單人一律記為「生管公用」帳號（2026-11-11 使用者指定），
+    // 不記實際按存檔的人；帳號不存在時才退回操作者
+    $pmUid = qab_bom_auto_opener_uid($db);
+    if ($pmUid > 0) $createdBy = $pmUid;
 
     $st = $db->prepare("SELECT b.bom_ing_fid, b.maker_id_no, b.maker_id, b.scrap_qty AS total_scrap, b.badmat_qty AS total_badmat,
                                 bi.bom, bi.process_no
@@ -1712,15 +1728,26 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
 
     $scrapQty = (int)round($scrapTotal);
     $badmatQty = (int)round((float)($ob['total_badmat'] ?? 0));   // 其中發料不良的數量（含在報廢數內）
+    // 異常現象依「實際通報的類型」寫（2026-11-11 使用者要求：通報發料不良就寫發料不良，不可寫成「報廢／發料不良」這種模糊字樣）
+    $pureScrap = max(0, $scrapQty - $badmatQty);
+    $kinds = [];
+    if ($badmatQty > 0) $kinds[] = ['發料不良', $badmatQty];
+    if ($pureScrap > 0) $kinds[] = ['報廢', $pureScrap];
+    $kindTxt = implode('、', array_map(fn($k) => $k[0] === '報廢' ? '廠商提報報廢' : $k[0], $kinds));
+    $kindQtyTxt = implode('、', array_map(fn($k) => $k[0] . ' ' . $k[1] . ' 件', $kinds));
 
     // 同一批加工單流水帳不可重複自動開立——已經開過單的，若尚未被品管確認/結案，更新成最新
     // 累積報廢數量（分批累加時數字才不會停在第一次）；已確認或已結案一律不再覆蓋。
-    $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed, quick_mode FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
+    $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed, quick_mode, abnormal_phenomenon, auto_phenomenon_base FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
     $exist->execute([$batchId]);
     if ($row = $exist->fetch(PDO::FETCH_ASSOC)) {
         if (empty($row['is_closed']) && (empty($row['qc_review_at']) || (int)$row['quick_mode'] === 1)) {   // 快速決策中（尚未決定）的單 qc_review_at 已被系統填上，仍要跟著更新數量
             $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=? WHERE id=?")
                ->execute([$scrapQty, $scrapQty, $scrapQty, (int)$row['id']]);
+            // 通報類型變了（例如後來又補登發料不良）：異常現象沒被人改過（仍等於系統底稿）才跟著改
+            if ((int)$row['quick_mode'] === 1 && $kindTxt !== '' && (string)$row['abnormal_phenomenon'] === (string)$row['auto_phenomenon_base'] && (string)$row['abnormal_phenomenon'] !== $kindTxt) {
+                $db->prepare("UPDATE qa_abnormal_order SET abnormal_phenomenon=?, auto_phenomenon_base=? WHERE id=?")->execute([$kindTxt, $kindTxt, (int)$row['id']]);
+            }
         } elseif (!empty($row['is_closed']) && (int)$row['quick_mode'] === 1) {
             // 系統自動核准結案的廠商報廢單：同一批之後又累加報廢，同步更新數量（一批只留一張單，報廢量才不會漏扣）
             $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=?, updated_at=NOW() WHERE id=?")
@@ -1750,8 +1777,8 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     $vendorTxt = ($ob['maker_id'] !== null && $ob['maker_id'] !== '') ? (string)$ob['maker_id'] : '（未登記廠商）';
     $autoNote = mb_substr('外包廠商回廠回報報廢（' . $vendorTxt . '，累積報廢 ' . $scrapQty . ' 件' . ($badmatQty > 0 ? '，其中發料不良 ' . $badmatQty . ' 件' : '') . '）', 0, 255);
     $quick = qab_quick_ready($db);
-    $phenomenon = $quick ? ($badmatQty > 0 ? '廠商提報報廢／發料不良' : '廠商提報報廢')
-        : ($vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件' . ($badmatQty > 0 ? '（含發料不良 ' . $badmatQty . ' 件）' : '') . '，請確認不良原因並填寫異常原因分類。');
+    $phenomenon = $quick ? $kindTxt
+        : ($vendorTxt . ' 回廠時回報' . $kindQtyTxt . '，請確認不良原因並填寫異常原因分類。');
 
     $data = [
         'kind' => 'bom',
