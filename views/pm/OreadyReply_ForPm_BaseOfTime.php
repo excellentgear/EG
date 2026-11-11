@@ -12480,6 +12480,11 @@ echo "</script>\n";
 
         var ex = document.getElementById('outsource-return-modal');
         if (ex) ex.remove();
+        if (!document.getElementById('orm-nospin-css')) {   // 數字欄位不要上下增減鈕（按了會一直往上/下跳）
+            var _nsp = document.createElement('style'); _nsp.id = 'orm-nospin-css';
+            _nsp.textContent = '#outsource-return-modal input[type=number]::-webkit-inner-spin-button,#outsource-return-modal input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}#outsource-return-modal input[type=number]{-moz-appearance:textfield;appearance:textfield;}';
+            document.head.appendChild(_nsp);
+        }
         var overlay = document.createElement('div');
         overlay.id = 'outsource-return-modal';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:flex-start;z-index:10070;padding:40px 0;overflow-y:auto;';
@@ -12638,6 +12643,19 @@ echo "</script>\n";
         }
         _refreshStatus();
 
+        // 填「廠商提報報廢」或「取回不加工」時，本次回廠數量自動＝預設值（還在外面的量）− 報廢 − 取回；
+        // 使用者自己改過回廠數量就不再自動帶（以他填的為準）。
+        var _ormRetTouched = false;
+        document.getElementById('orm-return-qty').addEventListener('input', function (e) { if (e.isTrusted) _ormRetTouched = true; });
+        function _ormAutoRet() {
+            if (_ormRetTouched) return;
+            var d = _ormOutsideOf(_ormOpenBatch), q = document.getElementById('orm-return-qty');
+            if (d === null || !q) return;
+            var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0, wq = parseFloat(document.getElementById('orm-withdraw-qty').value) || 0;
+            q.value = _obNum(Math.max(0, d - sq - wq));
+            _ormSyncFix();
+        }
+        ['orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormAutoRet); });
         ['orm-return-qty', 'orm-scrap-qty', 'orm-withdraw-qty'].forEach(function (id) { document.getElementById(id).addEventListener('input', _ormSyncFix); });
         var _ormNote = null;   // 全部退回不加工時使用者填的說明（null＝不是從這個按鈕送出）
         document.getElementById('orm-all-withdraw').onclick = function () {

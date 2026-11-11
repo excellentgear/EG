@@ -68,7 +68,8 @@
     function ensure() {
         if (drawer) return drawer;
         var st = document.createElement('style');
-        st.textContent = '#egaf-drawer{position:fixed;top:0;left:0;height:100%;width:620px;max-width:96vw;background:#fff;z-index:10700;box-shadow:4px 0 18px rgba(0,0,0,.22);transform:translateX(-105%);transition:transform .22s ease;display:flex;flex-direction:column;font-size:13px;color:#4a3320;}'
+        st.textContent = '#egaf-drawer input[type=number]::-webkit-inner-spin-button,#egaf-drawer input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}#egaf-drawer input[type=number]{-moz-appearance:textfield;appearance:textfield;}'
+            + '#egaf-drawer{position:fixed;top:0;left:0;height:100%;width:620px;max-width:96vw;background:#fff;z-index:10700;box-shadow:4px 0 18px rgba(0,0,0,.22);transform:translateX(-105%);transition:transform .22s ease;display:flex;flex-direction:column;font-size:13px;color:#4a3320;}'
             + '#egaf-drawer.open{transform:translateX(0);}'
             + '#egaf-drawer .h{padding:10px 14px;border-bottom:1px solid #E4B3A0;background:#F6D9CC;display:flex;justify-content:space-between;align-items:center;gap:8px;}'
             + '#egaf-drawer .f{padding:8px 14px;border-bottom:1px solid #E4D3BC;background:#FDF3E3;}'
