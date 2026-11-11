@@ -405,6 +405,20 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
               <input type="number" id="tUrgentDays" class="form-control" min="0" placeholder="預設">
             </div></div>
           </div>
+          <div class="row" style="margin-top:8px;">
+            <div class="col-sm-12"><div class="form-group" style="margin-bottom:0;">
+              <label>間隔提醒（空白=不重複；第一次提醒後仍未完成，才開始每隔一段時間再提醒）</label>
+              <div style="display:flex; gap:5px; align-items:center;">
+                <span style="font-size:12px;color:#7A869A;">每隔</span>
+                <input type="number" id="tRepeatVal" class="form-control" min="1" style="width:70px;">
+                <select id="tRepeatUnit" class="form-control" style="width:75px;">
+                  <option value="1440">天</option>
+                  <option value="60">小時</option>
+                </select>
+                <span style="font-size:12px;color:#7A869A;">再提醒一次，直到完成或暫停（需先設定「期限提醒」）</span>
+              </div>
+            </div></div>
+          </div>
         </div>
 
         <div class="form-section">
@@ -455,6 +469,33 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
   </div>
 </div>
 
+<!-- ══ 製程中紀錄連動：完成並回覆 Modal ══ -->
+<div class="modal fade" id="linkedModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:560px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title" id="linkedTitle"><i class="fa fa-check-circle"></i> 完成並回覆製程中紀錄</h4></div>
+      <div class="modal-body">
+        <div style="background:#FDF1E3;border:1px solid #EADFCD;border-radius:4px;padding:8px 10px;margin-bottom:10px;font-size:12px;color:#6b5638;">
+          <b>製程中紀錄：</b><span id="lkQuestion" style="white-space:pre-wrap;"></span><br>
+          <span id="linkedHint">送出後會把這個回覆寫進該條製程中紀錄，並將它標記為「已處理」。</span></div>
+        <div class="form-group"><label>回覆內容 <span style="color:#DD5138;">*</span></label>
+          <textarea class="form-control" rows="4" id="lkContent" maxlength="2000"></textarea></div>
+        <div class="row">
+          <div class="col-xs-4"><label>回覆日期</label><input type="date" class="form-control" id="lkDate"></div>
+          <div class="col-xs-4"><label>回覆方式</label><select class="form-control" id="lkChannel"></select></div>
+          <div class="col-xs-4"><label>回覆者</label><input type="text" class="form-control" id="lkBy" maxlength="50"></div>
+        </div>
+        <div id="lkErr" style="color:#DD5138;font-size:12px;min-height:16px;margin-top:6px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-warning" id="btnLinkedOk"><i class="fa fa-check"></i> 送出並完成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ 急件天數設定 Modal ══ -->
 <div class="modal fade" id="settingModal" role="dialog" tabindex="-1">
   <div class="modal-dialog" style="width:400px;">
@@ -474,7 +515,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
             <!-- 只留這一欄：附圖已改走讀檔 API，不再靠 Apache /nas 別名直連，
                  「URL 前綴」已無作用（留著使用者會以為改它有效） -->
             <label style="font-size:12px; margin-bottom:2px;">附圖存放位置</label>
-            <input type="text" id="setNasDir" class="form-control input-sm" placeholder="例：\\excellentnas\生產課\BOM\ERP\個人工作">
+            <input type="text" id="setNasDir" class="form-control input-sm" placeholder="例：\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\個人工作">
           </div>
           <p style="color:#888;font-size:11px;margin:0;line-height:1.5;">
             可用網路路徑（<code>\\主機名\分享名\資料夾</code>）或磁碟機代號。<b>建議用網路路徑</b>——磁碟機代號是每台電腦各自對應的，換機或對應掉了就整批讀不到。<br>
@@ -546,6 +587,46 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
 </div>
 
 <!-- ══ 分享 / 複製 Modal ══ -->
+<div class="modal fade" id="postponeModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:460px;">
+    <div class="modal-content pt-modal">
+      <div class="modal-header pt-modal-header">
+        <button type="button" class="close" data-dismiss="modal" title="關閉">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-calendar-plus-o"></i> 延期</h4>
+      </div>
+      <div class="modal-body pt-modal-body">
+        <input type="hidden" id="pdTaskId">
+        <div id="pdTitle" style="font-weight:600;margin-bottom:8px;"></div>
+        <div class="form-group">
+          <label>新的期限 <span style="color:#DD5138;">*</span></label>
+          <input type="date" id="pdDeadline" class="form-control" max="9999-12-31">
+        </div>
+        <div class="form-group">
+          <label>期限提醒（預設沿用原設定，空白=不提醒）</label>
+          <div style="display:flex; gap:5px; align-items:center;">
+            <input type="number" id="pdRemindVal" class="form-control" min="1" style="width:70px;">
+            <select id="pdRemindUnit" class="form-control" style="width:75px;"><option value="1440">天</option><option value="60">小時</option></select>
+            <span style="font-size:12px;color:#7A869A;">前提醒</span>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label>間隔提醒（預設沿用原設定，空白=不重複）</label>
+          <div style="display:flex; gap:5px; align-items:center;">
+            <span style="font-size:12px;color:#7A869A;">每隔</span>
+            <input type="number" id="pdRepeatVal" class="form-control" min="1" style="width:70px;">
+            <select id="pdRepeatUnit" class="form-control" style="width:75px;"><option value="1440">天</option><option value="60">小時</option></select>
+          </div>
+        </div>
+        <div id="pdErr" style="color:#DD5138;font-size:12px;margin-top:8px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-warning" id="btnPostponeOk"><i class="fa fa-check"></i> 確定延期</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="shareModal" role="dialog" tabindex="-1" data-backdrop="static">
   <div class="modal-dialog" style="width:540px;">
     <div class="modal-content pt-modal">
@@ -730,6 +811,10 @@ function deadlineCell(r) {
         if (r.is_overdue == 1) {
             $tag.text('已逾期 ' + workdaysBetween(dl, today) + ' 工作天').addClass('deadline-urgent');
             $d.addClass('deadline-urgent');
+            if (r.is_shared != 1) {
+                $tag = $tag.add($('<div>').append($('<button type="button" class="btn btn-warning btn-xs pt-postpone-btn" style="margin-top:3px;" title="延後期限並重新設定提醒"><i class="fa fa-calendar-plus-o"></i> 延期</button>')
+                    .on('click', function (e) { e.stopPropagation(); openPostpone(r); })));
+            }
         } else {
             var remain = workdaysBetween(today, dl);
             $tag.text('剩 ' + remain + ' 工作天');
@@ -778,7 +863,7 @@ function stepFlowCell(r) {
             $node.attr('title', '到達：' + fmtDt(s.reached_at) + (s.planned_at ? '（預定 ' + fmtDate(s.planned_at) + '）' : ''));
             $node.append($('<div class="pt-step-time">').text(fmtDtShort(s.reached_at)));
             // 最後一個已到達者提供復原（僅未完成狀態；唯讀分享不可）
-            if (canReport && r.status == 0 && s.id === lastReachedId) {
+            if (canReport && r.status == 0 && s.id === lastReachedId && !r.src_item_id) {
                 $node.append($('<span class="step-undo">').text('復原').on('click', function (e) {
                     e.stopPropagation();
                     if (!confirm('取消「' + s.step_name + '」的到達回報？')) return;
@@ -792,6 +877,7 @@ function stepFlowCell(r) {
             $node.attr('title', (s.planned_at ? '預定 ' + fmtDate(s.planned_at) + '，' : '') + (canReport ? '點一下回報到達' : '（他人分享，唯讀）'));
             if (s.planned_at) $node.append($('<div class="pt-step-time">').text('預定 ' + fmtDateShort(s.planned_at)));
             if (canReport) $node.on('click', function () {
+                if (r.src_item_id) { openLinkedComplete(r, 'reply'); return; }   // 製程中紀錄連動：用回覆推進
                 if (!confirm('回報到達「' + s.step_name + '」？（會記錄現在時間）')) return;
                 apiPost('reach_step', { step_id: s.id }).done(function (res) {
                     if (!res.success) { alert(res.message || '回報失敗'); return; }
@@ -928,16 +1014,19 @@ $('#btnToggleAllItems').on('click', function () {
 });
 
 // 點料號開啟圖面/檔案跳窗（比照 bom_tracking 的 openBomFiles → part_viewer.php）
-function openPartDrawing(did, bom) {
-    if (!did && !bom) return;
+// 改開圖面查閱 bom_viewer.php（可直接用批圖編輯器）；pk＝料號主檔 d_id 整數，優先精確指定
+function openPartDrawing(did, bom, pk) {
+    if (!did && !bom && !pk) return;
     var w = screen.availWidth, h = screen.availHeight;
     var pw = Math.min(1400, Math.round(w * 0.85));
     var ph = Math.min(900, Math.round(h * 0.88));
     var pl = Math.round((w - pw) / 2), pt = Math.round((h - ph) / 2);
-    var url = did
-        ? '../pm/part_viewer.php?d_id=' + encodeURIComponent(did) + (bom ? '&bom=' + encodeURIComponent(bom) : '')
-        : '../pm/bom_viewer.php?bom=' + encodeURIComponent(bom);
-    var winName = did ? ('part_dv_' + did) : ('bom_viewer_' + bom);
+    var q = [];
+    if (pk) q.push('pk=' + encodeURIComponent(pk));
+    else if (did) q.push('d_id=' + encodeURIComponent(did));
+    if (bom) q.push('bom=' + encodeURIComponent(bom));
+    var url = '../pm/bom_viewer.php?' + q.join('&');
+    var winName = 'bom_viewer_' + (pk || did || bom);
     window.open(url, winName, 'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
 
@@ -1123,7 +1212,7 @@ function renderRows(rows) {
                 $line.append($('<span class="bind-badge bind-' + b.bind_type + '">').text(bindTypeName[b.bind_type] || b.bind_type));
                 if (b.bind_type === 'part') {
                     $line.append($('<a href="#" class="pt-part-link" title="點開圖面/檔案">').text(b.bind_label)
-                        .on('click', function (e) { e.preventDefault(); openPartDrawing(b.bind_label, null); }));
+                        .on('click', function (e) { e.preventDefault(); openPartDrawing(b.bind_label, null, /^\d+$/.test(String(b.bind_id)) ? b.bind_id : 0); }));
                 } else {
                     $line.append($('<span style="font-size:12px;color:#667;">').text(b.bind_label));
                 }
@@ -1162,7 +1251,38 @@ $('#ptaskTbody').on('dblclick', 'td.cell-edit', function () {
     if (r) openTaskModal(r.id);
 });
 
+// ── 延期：改期限並重新設定提醒（提醒/間隔預設沿用原設定）──
+function openPostpone(r) {
+    $('#pdTaskId').val(r.id);
+    $('#pdTitle').text(r.title);
+    $('#pdDeadline').val('');
+    var a = minToUi(r.remind_before_minutes); $('#pdRemindVal').val(a.val); $('#pdRemindUnit').val(a.unit);
+    var b = minToUi(r.remind_repeat_minutes); $('#pdRepeatVal').val(b.val); $('#pdRepeatUnit').val(b.unit);
+    $('#pdErr').text('');
+    $('#postponeModal').modal('show');
+}
+$('#btnPostponeOk').on('click', function () {
+    var dl = $('#pdDeadline').val();
+    if (!dl) { $('#pdErr').text('請選擇新的期限日期'); return; }
+    var rv = $('#pdRemindVal').val(), pv = $('#pdRepeatVal').val();
+    if (pv !== '' && rv === '') { $('#pdErr').text('要設定間隔提醒須先設定「期限提醒」'); return; }
+    var $btn = $(this).prop('disabled', true);
+    apiPost('postpone_task', {
+        id: $('#pdTaskId').val(), deadline: dl,
+        remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($('#pdRemindUnit').val(), 10),
+        remind_repeat_minutes: pv === '' ? '' : parseInt(pv, 10) * parseInt($('#pdRepeatUnit').val(), 10)
+    }).done(function (res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { $('#pdErr').text(res.message || '延期失敗'); return; }
+        $('#postponeModal').modal('hide');
+        toast('已延期至 ' + fmtDate(dl));
+        loadList();
+    }).fail(function () { $btn.prop('disabled', false); $('#pdErr').text('連線失敗，請稍後再試'); });
+});
+
 function setStatus(r, status) {
+    // 由製程中紀錄建立的任務：完成要填回覆（同步把該條製程中紀錄標記已處理）
+    if (status === 1 && r.src_item_id) { openLinkedComplete(r, 'complete'); return; }
     var name = { 0: '未完成', 1: '已完成', 2: '暫停' }[status];
     apiPost('set_status', { id: r.id, status: status }).done(function (res) {
         if (!res.success) { alert(res.message || '設定失敗'); return; }
@@ -1170,6 +1290,42 @@ function setStatus(r, status) {
         loadList();
     });
 }
+
+// ── 製程中紀錄連動：完成時填回覆 ────────────────────────────────────
+var linkedTask = null, linkedMode = 'complete';
+function openLinkedComplete(r, mode) {
+    linkedTask = r; linkedMode = mode || 'complete';
+    $('#linkedTitle').html(linkedMode === 'reply' ? '<i class="fa fa-reply"></i> 回覆製程中紀錄' : '<i class="fa fa-check-circle"></i> 完成並回覆製程中紀錄');
+    $('#linkedHint').text(linkedMode === 'reply' ? '送出後回覆會寫進該條製程中紀錄（不會標記已處理），進度會同步。' : '送出後會把這個回覆寫進該條製程中紀錄，並將它標記為「已處理」。');
+    $('#btnLinkedOk').html(linkedMode === 'reply' ? '<i class="fa fa-paper-plane"></i> 送出回覆' : '<i class="fa fa-check"></i> 送出並完成');
+    apiPost('link_info', { id: r.id }).done(function (res) {
+        if (!res.success) { alert(res.message || '讀取失敗'); return; }
+        if (linkedMode === 'reply' && !res.can_reply) { alert('您目前沒有回覆製程中紀錄的權限'); return; }
+        if (linkedMode === 'complete' && !res.can_resolve) { alert(res.resolve_msg ? ('完成會同時把製程中紀錄標記為「已處理」。\n' + res.resolve_msg + '。\n請改點進度的「回覆」。') : '完成會同時把製程中紀錄標記為「已處理」，您沒有這個權限。\n請改點進度的「回覆」，或請有權限的人處理。'); return; }
+        $('#lkQuestion').text(res.question || '');
+        $('#lkContent').val('');
+        $('#lkDate').val(res.today).attr('max', res.today);
+        $('#lkBy').val(res.user_name || '');
+        var $ch = $('#lkChannel').empty().append('<option value="">（不指定）</option>');
+        $.each(res.channels || {}, function (code, nm) { $ch.append($('<option>').val(code).text(nm)); });
+        $('#lkErr').text('');
+        $('#linkedModal').modal('show');
+        setTimeout(function () { $('#lkContent').focus(); }, 300);
+    });
+}
+$('#btnLinkedOk').on('click', function () {
+    var c = $.trim($('#lkContent').val());
+    if (!c) { $('#lkErr').text('請填寫回覆內容'); $('#lkContent').focus(); return; }
+    if (!$('#lkDate').val()) { $('#lkErr').text('請選擇回覆日期'); return; }
+    var $b = $(this).prop('disabled', true);
+    apiPost(linkedMode === 'reply' ? 'reply_linked' : 'complete_linked', { id: linkedTask.id, content: c, replied_on: $('#lkDate').val(),
+        reply_by: $.trim($('#lkBy').val()), channel: $('#lkChannel').val() }).done(function (res) {
+        $b.prop('disabled', false);
+        if (!res.success) { $('#lkErr').text(res.message || '送出失敗'); return; }
+        $('#linkedModal').modal('hide');
+        toast(linkedMode === 'reply' ? '已回覆，並同步到製程中紀錄' : '已完成，並同步回覆到製程中紀錄'); loadList();
+    }).fail(function () { $b.prop('disabled', false); $('#lkErr').text('送出失敗，請重試'); });
+});
 
 // ── 狀態卡切換 ───────────────────────────────────────────────────────
 $('.stat-card').on('click', function () {
@@ -1341,13 +1497,13 @@ function refreshModalHeaderButtons() {
 function openTaskModal(id) {
     $('#tId').val(id || 0);
     $('#taskModalTitle').html('<i class="fa fa-pencil-square-o"></i> ' + (id ? '編輯紀錄' : '新增紀錄'));
-    $('#tTitle, #tProposer, #tBindKw, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
+    $('#tTitle, #tProposer, #tBindKw, #tRemindVal, #tRepeatVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
     $('#tBindType').val(''); $('#tBindKw').prop('disabled', true);
     $('#tBindSug').hide().empty();
     selectedBinds = []; renderBindChips();
     $('#taskModal').removeClass('pt-readonly');   // 預設可編輯（擁有者）
     $('#btnSaveTask').show();
-    $('#tRemindUnit').val('1440');
+    $('#tRemindUnit').val('1440'); $('#tRepeatUnit').val('1440');
     $('#tReceived').val(new Date().toISOString().substring(0, 10));
     $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
     $('#stepEditor').empty();
@@ -1373,6 +1529,8 @@ function openTaskModal(id) {
             $('#tDeadline').val(dtToDateInput(t.deadline));
             var ui = minToUi(t.remind_before_minutes);
             $('#tRemindVal').val(ui.val); $('#tRemindUnit').val(ui.unit);
+            var rui = minToUi(t.remind_repeat_minutes);
+            $('#tRepeatVal').val(rui.val); $('#tRepeatUnit').val(rui.unit);
             $('#tUrgentDays').val(t.urgent_days == null ? '' : t.urgent_days);
             $('#tNote').val(t.note || '');
             selectedBinds = (t.binds || []).map(function (b) {
@@ -1720,6 +1878,7 @@ $('#btnSaveTask').on('click', function () {
         binds: JSON.stringify(selectedBinds),
         deadline: $('#tDeadline').val() || '',
         remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($('#tRemindUnit').val(), 10),
+        remind_repeat_minutes: $('#tRepeatVal').val() === '' ? '' : parseInt($('#tRepeatVal').val(), 10) * parseInt($('#tRepeatUnit').val(), 10),
         urgent_days: $('#tUrgentDays').val(),
         note: $('#tNote').val(),
         steps: JSON.stringify(steps),
