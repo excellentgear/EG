@@ -382,6 +382,13 @@ require_once '../../src/common/qc_container_lib.php'; // 容器選項與權限�
 require_once '../../src/common/order_bom_filter_tag_lib.php'; // BOM篩選標示（訂單輸入、BOM總覽即時帶入）
 eg_qc_container_ensure_schema($db); // bom_ing.pm_ps / pm_ps2（生管回報容器）
 $_oready_features = rf_load_user_features($db, $id);
+require_once '../../src/common/asdoc_page_lib.php';
+$oready_can_open_ot = false;
+try {
+    $oready_can_open_ot = ($id === 1)
+        || eg_asdoc_page_can_open($db, $id, '/EGsystem/src/store/_cleanNewOrder_Track.php')
+        || eg_asdoc_page_can_open($db, $id, '/EGsystem/src/store/_cleanOrder_Track_ate_only.php');
+} catch (Throwable $e) {}
 $can_manual_close = $can_manual_close || rf_has_feature($_oready_features, 'oready_manual_close');
 $can_create       = $can_create       || rf_has_feature($_oready_features, 'oready_create');
 $can_update        = $can_update       || rf_has_feature($_oready_features, 'oready_update');
@@ -1698,6 +1705,7 @@ echo "    window.isCRU = " . json_encode((bool)$_is_cru) . "; // 業務類權限
 echo "    window.canManualClose = " . json_encode((bool)$can_manual_close) . "; // 含D或A才可人工結案\n";
 echo "    window.isRD = " . json_encode($display_permission_code === 'D+R') . "; // R+D受限業務：人工結案需二次輸入Y確認\n";
 // 純功能碼旗標（不含任何舊規則），JS端在各按鈕原本判斷式後面自行 OR，不取代原判斷式
+echo "    window.canOpenOrderTrack = " . json_encode((bool)$oready_can_open_ot) . "; // 有權限進入訂單追蹤：交期欄的訂單標示可點開\n";
 echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_returned) . "; // 功能碼 oready_mark_returned\n";
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
@@ -5791,7 +5799,7 @@ echo "</script>\n";
                     // ✅ 訂單編號緊貼交期，小字樣式同 BOM 欄進度備註
                     wrap.innerHTML =
                         '<span style="color:#333;display:block;">' + escapeHtml(dateStr) + '×' + escapeHtml(String(displayQty)) + openQStr + '</span>' +
-                        '<span style="color:#0056b3;display:block;font-size:0.85em;margin-top:1px;line-height:1.2;white-space:nowrap;"><i class="fa fa-tag" style="margin-right:2px;font-size:9px;"></i>' + escapeHtml(ooLabel) + '</span>';
+                        '<span style="color:#0056b3;display:block;font-size:0.85em;margin-top:1px;line-height:1.2;white-space:nowrap;"><i class="fa fa-tag" style="margin-right:2px;font-size:9px;"></i>' + ((window.canOpenOrderTrack && _boundOrder.Order_oo) ? '<a href="../Sales/NewOrder_Track.php?kw=' + encodeURIComponent(String(_boundOrder.Order_oo).trim()) + '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;" title="另開視窗：在訂單追蹤篩選這張訂單">' + escapeHtml(ooLabel) + '</a>' : escapeHtml(ooLabel)) + '</span>';
                     tdDelivery.appendChild(wrap);
                 });
             } else {
