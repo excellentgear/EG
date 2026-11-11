@@ -2508,7 +2508,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
         $stSt = $db->prepare("SELECT processing_state, DATE_FORMAT(return_date,'%Y/%m/%d') rd FROM bom_ing WHERE bom_ing_fid=?");
         $stSt->execute([$fid]);
         $stRow = $stSt->fetch(PDO::FETCH_ASSOC) ?: [];
-        echo json_encode(['success'=>true, 'proc_state'=>(string)($stRow['processing_state'] ?? ''), 'proc_return_date'=>(string)($stRow['rd'] ?? ''), 'open_batch'=>$open, 'open_batches'=>$openList,
+        $isum = $db->prepare("SELECT COALESCE(SUM(short_qty),0) sh, COALESCE(SUM(badmat_qty),0) bm FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $isum->execute([$fid]);
+        $isumRow = $isum->fetch(PDO::FETCH_ASSOC) ?: ['sh'=>0,'bm'=>0];
+        echo json_encode(['success'=>true, 'short_total'=>(float)$isumRow['sh'], 'badmat_total'=>(float)$isumRow['bm'], 'proc_state'=>(string)($stRow['processing_state'] ?? ''), 'proc_return_date'=>(string)($stRow['rd'] ?? ''), 'open_batch'=>$open, 'open_batches'=>$openList,
                           'sent_total'=>(float)$sentTot->fetchColumn(), 'stage_qty'=>(float)$stQty->fetchColumn(),
                           'remaining_good_qty'=>eg_bom_outsource_remaining_good_qty($db, $fid),
                           'prev_qty'=>$prev['qty'], 'prev_source'=>$prev['source'], 'prev_label'=>$prev['label']]);

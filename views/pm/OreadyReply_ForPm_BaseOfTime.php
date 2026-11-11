@@ -7346,7 +7346,7 @@ echo "</script>\n";
                                 // ── 分批顯示（分批到／分批發包／分批回廠都算）：與「拆N批」同樣的逐批列示 ──
                                 var _pm = window.obBatchMap[String(processInfo.bom_ing_fid)];
                                 var _pmSend = (Number(_pm.send) || 0) - (Number(_pm.wd) || 0) + (Number(_pm.short) || 0), _pmTot = Number(_pm.total) || Number(processInfo.sqty) || 0;   // 發單短少＝遺失，不是取回，不算缺口
-                                var _shortUp = 0; _activeProcs.forEach(function (q) { if (ocGrp(q) < ocGrp(processInfo)) { var mq0 = (window.obBatchMap || {})[String(q.bom_ing_fid)]; if (mq0) _shortUp += Number(mq0.short) || 0; } });   // 前面關卡短少遺失的，也不會到這一關
+                                var _shortUp = 0, _badUp = 0; _activeProcs.forEach(function (q) { if (ocGrp(q) < ocGrp(processInfo)) { var mq0 = (window.obBatchMap || {})[String(q.bom_ing_fid)]; if (mq0) { _shortUp += Number(mq0.short) || 0; _badUp += Number(mq0.badmat) || 0; } } });   // 前面關卡短少遺失的，也不會到這一關
                                 _pmTot = Math.max(0, _pmTot - _shortUp);
                                 if (typeof _remainQty === 'number' && _remainQty > 0 && _pmTot > _remainQty) _pmTot = _remainQty; // 前面關卡已報廢的不算缺口（最多只有剩餘良品數可以發）
                                 var _pH = '<div style="font-size:10.5px;font-weight:600;color:#444;margin-bottom:2px;">' + escapeHtml(processInfo.ProcessName || '')
@@ -7364,6 +7364,11 @@ echo "</script>\n";
                                             : (_bOd ? '<span style="color:#aaa;"> ' + _bOd + '</span>' : '') + (_bRd ? '<span style="color:#2a7ae2;"> 回:' + _bRd + '</span>' : ((Number(b.ret) || 0) > 1e-9 && _bOut <= 1e-9 ? '<span style="color:#2a7ae2;"> 回</span>' : '')))
                                         + ' ' + _bSt + '</div>';
                                 });
+                                // 本站廠商回報的問題（發單短少＝遺失；發料不良未必是報廢，要看異常單判定）：一行顯示，完整內容滑過看
+                                if ((Number(_pm.short) || 0) > 1e-9 || (Number(_pm.badmat) || 0) > 1e-9) {
+                                    var _rp = []; if ((Number(_pm.short) || 0) > 1e-9) _rp.push('短少 ' + _obNum(_pm.short)); if ((Number(_pm.badmat) || 0) > 1e-9) _rp.push('發料不良 ' + _obNum(_pm.badmat));
+                                    _pH += '<div style="font-size:10px;line-height:1.4;color:#8A3200;font-weight:bold;background:#FFE9C9;border-radius:3px;padding:0 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;" title="廠商回報：' + escapeHtml(_rp.join('、')) + '（短少不開異常單；發料不良由異常單判定是否報廢）">⚠ ' + escapeHtml(_rp.join('・')) + '</div>';
+                                }
                                 if (_pmTot > 0 && _pmSend < _pmTot - 1e-9) {
                                     // 缺口分兩種：上一關已經回來、只是還沒發到這一關＝「未發」；上一關的貨還沒回來＝「未到此關」
                                     var _pg = ocGrp(processInfo), _pgPrev = -1;
@@ -7382,7 +7387,7 @@ echo "</script>\n";
                                     }
                                     var _pgUnsent = Math.max(0, _pgAvail - _pmSend), _pgNotYet = Math.max(0, _pmTot - Math.max(_pgAvail, _pmSend));
                                     if (_pgUnsent > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgUnsent) + ' pcs 未發</div>';
-                                    if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關</div>';
+                                    if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關' + (_badUp > 1e-9 ? '（上一關回報發料不良 ' + _obNum(_badUp) + '，待異常單判定）' : '') + '</div>';
                                 }
                                 tdDynamicProcess.innerHTML = _pH;
                             } else {
@@ -12617,6 +12622,7 @@ echo "</script>\n";
             var el = document.getElementById('orm-status'), b = _ormOpenBatch;
             if (!el || !b) return;
             var send = Number(b.send_qty) || 0, ret = Number(b.return_qty) || 0, scr = Number(b.scrap_qty) || 0, wd = Number(b.withdrawn_qty) || 0;
+            var shq = Number(b.short_qty) || 0, bmq = Number(b.badmat_qty) || 0;
             var out = Math.max(0, send - ret - scr - wd);
             function chip(label, val, hot) {
                 return '<div style="background:' + (hot ? '#FDE6C8' : '#FFF8EE') + ';border:1px solid ' + (hot ? '#F0A24B' : '#E4D3BC') + ';border-radius:6px;padding:3px 9px;text-align:left;min-width:0;">'
@@ -12626,7 +12632,7 @@ echo "</script>\n";
             el.style.cssText = 'margin-bottom:10px;';
             el.innerHTML = (b.maker_id ? '<div style="font-size:12px;color:#6B4423;margin-bottom:4px;">廠商：<b>' + escapeHtml(egVP(b.maker_id)) + '</b>' + (b.status === 'closed' ? '　<span style="color:#2a7a2a;">✔ 已結清</span>' : '') + '</div>' : '')
                 + '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;">'
-                + chip('送出', _obNum(send)) + chip('已回廠', _obNum(ret)) + chip('已報廢', _obNum(scr)) + chip('已取回', _obNum(wd))
+                + chip('送出', _obNum(send)) + chip('已回廠', _obNum(ret)) + chip('已報廢', _obNum(scr - bmq)) + (bmq > 0 ? chip('發料不良', _obNum(bmq)) : '') + chip('已取回', _obNum(wd - shq)) + (shq > 0 ? chip('發單短少', _obNum(shq)) : '')
                 + chip('還在外', _obNum(out), true) + '</div>' + _ormStaleNote;
             var allBtn = document.getElementById('orm-all-return');
             if (allBtn) { allBtn.style.display = out > 0 ? '' : 'none'; allBtn.textContent = '全數回廠（' + _obNum(out) + '）'; }
@@ -12709,7 +12715,7 @@ echo "</script>\n";
                     ? '<div style="margin-top:6px;font-size:12px;color:#b8431f;"><i class="fa fa-exclamation-triangle"></i> 此關卡在主畫面已標示為已移轉／已回廠' + (r.proc_return_date ? '（回廠日 ' + r.proc_return_date + '）' : '') + '，但<b>加工單流水帳尚未記錄回廠數量</b>，所以下方仍顯示「還在外」。要補記請按「全數回廠」或填寫回廠數量。</div>' : '';
                 var _keepSel = (document.getElementById('orm-batch') || {}).value;
                 _ormFillBatchSelect(_keepSel || proc.prefer_batch_id);
-                if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? '本站已發出的批次都已回廠結清。' : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
+                if (!ob) { el.textContent = (parseFloat(r.sent_total) || 0) > 0 ? ('本站已發出的批次都已回廠結清。' + ((parseFloat(r.short_total) || 0) > 0 ? ' 發單短少 ' + _obNum(r.short_total) + '。' : '') + ((parseFloat(r.badmat_total) || 0) > 0 ? ' 發料不良 ' + _obNum(r.badmat_total) + '。' : '')) : '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
                 else {
                     _ormRenderStatus();
                     var fixInp = document.getElementById('orm-scrap-fix');

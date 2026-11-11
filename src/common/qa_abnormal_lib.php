@@ -3943,6 +3943,21 @@ function qab_decision_tags(PDO $db, string $by, array $keys): array
     return $out;
 }
 
+/** 廠商回廠提報的標籤：報廢／發料不良／發單短少 分開顯示（發料不良含在報廢數內，但未必是報廢，可由異常單判定；發單短少不開異常單）。 */
+function qab_vendor_report_tags(array $r, string $ts, string $abNo, int $abId, bool $skipAb): array
+{
+    $scrapAll = (float)($r['scrap_qty'] ?? 0); $bm = (float)($r['badmat_qty'] ?? 0); $sh = (float)($r['short_qty'] ?? 0);
+    $base = ['kind' => 'vendor_scrap', 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '', 'process' => (string)($r['ProcessName'] ?? ''),
+             'who' => '廠商提報', 'no' => $abNo, 'id' => $abId, 'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts];
+    $out = [];
+    if (!$skipAb) {
+        if ($scrapAll - $bm > 1e-9) $out[] = ['name' => '報廢', 'qty' => (int)round($scrapAll - $bm), 'bg' => '#F8D7D0', 'fg' => '#8a2a16'] + $base;
+        if ($bm > 1e-9) $out[] = ['name' => '發料不良', 'qty' => (int)round($bm), 'bg' => '#FFD9B8', 'fg' => '#8A3200'] + $base;
+    }
+    if ($sh > 1e-9) $out[] = ['name' => '發單短少', 'qty' => (int)round($sh), 'bg' => '#FFE9A8', 'fg' => '#7A4A00', 'no' => '', 'id' => 0] + $base;
+    return $out;
+}
+
 /** BOM總覽：每張製令的決策標籤 */
 function qab_bom_decision_tags(PDO $db, array $bomNos): array
 {
@@ -3955,26 +3970,20 @@ function qab_bom_decision_tags(PDO $db, array $bomNos): array
     try { foreach (qab_remake_tags_for_boms($db, $bomNos) as $k => $list) foreach ($list as $t) $out[(string)$k][] = $t; } catch (Throwable $e) {}
     try {
         $in = implode(',', array_fill(0, count($bomNos), '?'));
-        $st = $db->prepare("SELECT bi.bom AS k, b.scrap_qty, b.updated_at, bi.bom_sn, pn.ProcessName,
+        $st = $db->prepare("SELECT bi.bom AS k, b.scrap_qty, b.badmat_qty, b.short_qty, b.updated_at, bi.bom_sn, pn.ProcessName,
                                    (SELECT o.abnormal_order_no FROM qa_abnormal_order o WHERE o.src_outsource_batch_id = b.batch_id AND o.deleted_at IS NULL ORDER BY o.id DESC LIMIT 1) AS ab_no,
                                    (SELECT o.id FROM qa_abnormal_order o WHERE o.src_outsource_batch_id = b.batch_id AND o.deleted_at IS NULL ORDER BY o.id DESC LIMIT 1) AS ab_id
                               FROM bom_ing_outsource_batch b
                               JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
                               LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                             WHERE bi.bom IN ($in) AND b.scrap_qty > 0");
+                             WHERE bi.bom IN ($in) AND (b.scrap_qty > 0 OR b.short_qty > 0)");
         $st->execute($bomNos);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $ts = (string)$r['updated_at'];
             // 該異常單已做出決策、決策標籤已顯示的就不再重複顯示廠商提報標籤
             $dup = false;
             if ((int)($r['ab_id'] ?? 0) > 0) foreach ($out[(string)$r['k']] ?? [] as $t) if ((int)($t['id'] ?? 0) === (int)$r['ab_id']) { $dup = true; break; }
-            if ($dup) continue;
-            $out[(string)$r['k']][] = [
-                'kind' => 'vendor_scrap', 'name' => '報廢', 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '',
-                'process' => (string)($r['ProcessName'] ?? ''), 'qty' => (int)round((float)$r['scrap_qty']), 'who' => '廠商提報',
-                'bg' => '#F8D7D0', 'fg' => '#8a2a16', 'no' => (string)($r['ab_no'] ?? ''), 'id' => (int)($r['ab_id'] ?? 0),
-                'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
-            ];
+            foreach (qab_vendor_report_tags($r, $ts, (string)($r['ab_no'] ?? ''), (int)($r['ab_id'] ?? 0), $dup) as $t) $out[(string)$r['k']][] = $t;
         }
         foreach ($out as &$list) usort($list, function ($a, $b) { return [$b['sn'], $b['ts']] <=> [$a['sn'], $a['ts']]; });
         unset($list);
@@ -3989,18 +3998,14 @@ function qab_qc_row_tags(PDO $db, array $fids): array
     if (!$fids) return [];
     $out = qab_decision_tags($db, 'fid', $fids);
     $in = implode(',', $fids);
-    $st = $db->query("SELECT b.bom_ing_fid AS k, b.scrap_qty, b.updated_at, bi.bom_sn, pn.ProcessName
+    $st = $db->query("SELECT b.bom_ing_fid AS k, b.scrap_qty, b.badmat_qty, b.short_qty, b.updated_at, bi.bom_sn, pn.ProcessName
                         FROM bom_ing_outsource_batch b
                         JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
                         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                       WHERE b.bom_ing_fid IN ($in) AND b.scrap_qty > 0");
+                       WHERE b.bom_ing_fid IN ($in) AND (b.scrap_qty > 0 OR b.short_qty > 0)");
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $ts = (string)$r['updated_at'];
-        $out[(string)$r['k']][] = [
-            'kind' => 'vendor_scrap', 'name' => '報廢', 'md' => $ts !== '' ? date('n/j', strtotime($ts)) : '',
-            'process' => (string)($r['ProcessName'] ?? ''), 'qty' => (int)round((float)$r['scrap_qty']), 'who' => '廠商提報',
-            'bg' => '#F8D7D0', 'fg' => '#8a2a16', 'no' => '', 'id' => 0, 'sn' => (int)($r['bom_sn'] ?? 0), 'ts' => $ts,
-        ];
+        foreach (qab_vendor_report_tags($r, $ts, '', 0, false) as $t) $out[(string)$r['k']][] = $t;
     }
     // 2026-11-02：決策＝重工、貨已退回廠商重工，等重工回廠後做「重工檢驗」——在待驗清單標出來
     try {
