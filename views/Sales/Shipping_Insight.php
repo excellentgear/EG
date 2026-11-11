@@ -2067,8 +2067,20 @@ $('#listKw').on('input', function(){ LIST_PAGE = {ship:1,return:1,order:1}; if(D
 function shipBindHtml(x){
   var o = x.bind_orders || [], b = x.bind_boms || [], s = '';
   var st = 'display:block;font-size:11px;line-height:1.35;white-space:nowrap;';
-  o.forEach(function(v){ s += '<span style="'+st+'" title="已綁定訂單 '+esc(v.oo)+'（分配 '+v.qty+'）"><i class="fa fa-check" style="color:#2E8B57;"></i> 訂單 '+esc(v.short||v.oo)+'</span>'; });
-  b.forEach(function(v){ s += '<span style="'+st+'" title="已綁定製令 '+esc(v.bom)+'（'+v.qty+'）'+(v.src==='order'?'：經由訂單綁定':'')+'"><i class="fa fa-check" style="color:#2E8B57;"></i> 製令 '+esc(v.bom)+'</span>'; });
+  var ln = 'color:#0056b3;text-decoration:underline;';
+  // 訂單：另開訂單追蹤，篩選此訂單編號＋此料號（同一個訂單編號常有好幾列）
+  o.forEach(function(v){
+    var u = '../Sales/NewOrder_Track.php?' + $.param({ kw:v.oo, part:x.pno||'' });
+    s += '<span style="'+st+'" title="已綁定訂單 '+esc(v.oo)+'（分配 '+v.qty+'）｜點擊另開訂單追蹤篩選此訂單與料號"><i class="fa fa-check" style="color:#2E8B57;"></i> 訂單 '
+       + '<a href="'+esc(u)+'" target="_blank" rel="noopener" style="'+ln+'">'+esc(v.oo)+'</a></span>';
+  });
+  // 製令：未完工另開 BOM總覽篩選此製令；已完工另開已完工查詢（BOM總覽不列已完工的）
+  b.forEach(function(v){
+    var u = v.closed ? '../pm/OreadyReply_completed_query.php?' + $.param({ boms:v.bom })
+                     : '../pm/OreadyReply_ForPm_BaseOfTime.php?' + $.param({ bom_filter:v.bom });
+    s += '<span style="'+st+'" title="已綁定製令 '+esc(v.bom)+'（'+v.qty+'）'+(v.src==='order'?'：經由訂單綁定':'')+'｜點擊另開'+(v.closed?'已完工查詢':'BOM總覽')+'篩選此製令"><i class="fa fa-check" style="color:#2E8B57;"></i> 製令 '
+       + '<a href="'+esc(u)+'" target="_blank" rel="noopener" style="'+ln+'">'+esc(v.bom)+'</a>'+(v.closed?' <span style="color:var(--muted);">已結案</span>':'')+'</span>';
+  });
   if (!s) s = '<span style="'+st+'color:var(--muted);">未綁定</span>';
   return s;
 }

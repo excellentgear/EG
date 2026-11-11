@@ -4070,6 +4070,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         }
     }
 
+
+    // 「其他資訊」欄：這張訂單已綁定的出貨單（一次查完一整頁；唯一實作 bom_bound_ship_lib.php；失敗不影響清單）
+    $ordShipMap = [];
+    try {
+        require_once __DIR__ . '/../../src/common/bom_bound_ship_lib.php';
+        $ordShipMap = eg_order_bound_ships($pdo, array_column($order_list, 'Order_id'));
+    } catch (Throwable $e) { $ordShipMap = []; }
+    // 有出貨分析檢視權限者，出貨單號可點開出貨分析（權限判定與該頁相同：shipping 模組 sq_perms）
+    $otCanShipInsight = false;
+    if ($ordShipMap) {
+        try { require_once __DIR__ . '/../../src/common/shipping_lib.php'; $otCanShipInsight = (bool)(sq_perms($pdo, sq_current_user($pdo))['canView'] ?? false); } catch (Throwable $e) {}
+    }
+
     // 3. 第二層緩衝區：專心抓取 HTML
     ob_start();
     if(count($order_list) > 0) {
@@ -4624,6 +4637,26 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 <?= $order['JIG'] ? safe_html($order['JIG']) : '' ?>
                             </div>
                         <?php endif; ?>
+                        <?php
+                        // 已綁定的出貨單：出貨量已達訂單數量＝顯示 OK，否則綠勾；有出貨分析權限者單號可點開（只列這張出貨單的這一筆料號）
+                        $_os = $ordShipMap[(int)$order['Order_id']] ?? null;
+                        if ($_os && $_os['ships']) {
+                            $_osDone = (int)$order['Qty'] > 0 && $_os['qty'] >= (int)$order['Qty'];
+                            $_osIcon = $_osDone
+                                ? '<span style="display:inline-block;font-size:9px;font-weight:bold;color:#fff;background:#2E8B57;border-radius:3px;padding:0 3px;line-height:1.4;margin-right:2px;" title="已綁定出貨合計 ' . (int)$_os['qty'] . '，已達訂單數量 ' . (int)$order['Qty'] . '">OK</span>'
+                                : '<i class="fa fa-check" style="color:#2E8B57;margin-right:2px;" title="已綁定出貨合計 ' . (int)$_os['qty'] . '／訂單 ' . (int)$order['Qty'] . '"></i>';
+                            foreach (array_slice($_os['ships'], 0, 5) as $_s) {
+                                $_d = $_s['date'];
+                                $_label = safe_html($_s['no']);
+                                if ($otCanShipInsight) {
+                                    $_u = '../Sales/Shipping_Insight.php?' . http_build_query(['ship_no' => $_s['no'], 'ship_isid' => $_s['is_id'], 'ship_pno' => $_s['pno'], 'ship_from' => $_d, 'ship_to' => $_d]);
+                                    $_label = '<a href="' . safe_html($_u) . '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;" title="點擊另開出貨分析，只列此出貨單的此筆料號">' . $_label . '</a>';
+                                }
+                                echo '<div title="已綁定出貨單" style="white-space:nowrap;">' . $_osIcon . $_label . ' <span>' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . '</span></div>';
+                            }
+                            if (count($_os['ships']) > 5) echo '<div>…另 ' . (count($_os['ships']) - 5) . ' 張，共出 ' . (int)$_os['qty'] . '</div>';
+                        }
+                        ?>
                         <div class="oc-chgbadge-slot" data-oid="<?= intval($order['Order_id']) ?>"></div>
                     </div>
                 </td>

@@ -110,6 +110,39 @@ if (!function_exists('eg_bom_bound_ships')) {
     }
 
     /**
+     * 這些訂單已綁定的出貨單（口徑同 ship_order_bind_lib：shipment_order_map 為準，
+     * 沒有分配紀錄的出貨才用 is_list.Order_id 全量），一次查完一整頁訂單。
+     * @return array Order_id => ['qty'=>int, 'ships'=>[['is_id','no','date','qty','pno'], …]]（出貨日新→舊）
+     */
+    function eg_order_bound_ships(PDO $db, array $orderIds): array {
+        $orderIds = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+        if (!$orderIds) return [];
+        $out = [];
+        try {
+            $ph = implode(',', array_fill(0, count($orderIds), '?'));
+            $st = $db->prepare("
+                SELECT x.Order_id, il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, il.Product_id, SUM(x.q) q
+                FROM (
+                    SELECT Order_id, IS_id, shipped_qty q FROM shipment_order_map WHERE Order_id IN ($ph)
+                    UNION ALL
+                    SELECT il2.Order_id, il2.IS_id, il2.Qty q FROM is_list il2
+                    WHERE il2.Order_id IN ($ph) AND NOT EXISTS (SELECT 1 FROM shipment_order_map s2 WHERE s2.IS_id = il2.IS_id)
+                ) x JOIN is_list il ON il.IS_id = x.IS_id
+                GROUP BY x.Order_id, il.IS_id, il.IS_number, d, il.Product_id
+                ORDER BY d DESC, il.IS_id DESC");
+            $st->execute(array_merge($orderIds, $orderIds));
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $o = (int)$r['Order_id'];
+                if (!isset($out[$o])) $out[$o] = ['qty' => 0, 'ships' => []];
+                $out[$o]['ships'][] = ['is_id' => (int)$r['IS_id'], 'no' => (string)$r['IS_number'], 'date' => (string)$r['d'],
+                                       'qty' => (int)$r['q'], 'pno' => (string)$r['Product_id']];
+                $out[$o]['qty'] += (int)$r['q'];
+            }
+        } catch (Throwable $e) { error_log('eg_order_bound_ships: ' . $e->getMessage()); }
+        return $out;
+    }
+
+    /**
      * 反查：這些出貨單綁定到哪張製令（與 eg_bom_bound_ships 同一套規則，供出貨分析等以出貨為主的畫面）
      * @return array IS_id => [['bom','qty','src'], …]
      */

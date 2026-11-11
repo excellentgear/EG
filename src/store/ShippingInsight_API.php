@@ -245,6 +245,17 @@ switch ($action) {
             $ids  = array_map(fn($r) => (int)$r['id'], $rows);
             $ordB = sob_ship_bindings($db, $ids);
             $bomB = eg_ship_bound_boms($db, $ids);
+            // 製令是否已結案：連結要分開（BOM總覽只列未完工；已完工的改連已完工查詢頁）
+            $bAll = []; foreach ($bomB as $lst) foreach ($lst as $x) $bAll[$x['bom']] = 1;
+            $bClosed = [];
+            if ($bAll) {
+                $phB = implode(',', array_fill(0, count($bAll), '?'));
+                $stB = $db->prepare("SELECT bom FROM bom WHERE bom IN ($phB) AND processing_state = '1'");
+                $stB->execute(array_keys($bAll));
+                foreach ($stB->fetchAll(PDO::FETCH_COLUMN) as $cb) $bClosed[$cb] = 1;
+            }
+            foreach ($bomB as &$lst) foreach ($lst as &$x) $x['closed'] = isset($bClosed[$x['bom']]);
+            unset($lst, $x);
             foreach ($rows as &$r) {
                 $r['bind_orders'] = array_map(fn($o) => ['oo' => (string)($o['order_oo'] ?? ''), 'short' => eg_bbs_short_no((string)($o['order_oo'] ?? '')), 'qty' => (int)($o['qty'] ?? 0)], $ordB[(int)$r['id']] ?? []);
                 $r['bind_boms']   = $bomB[(int)$r['id']] ?? [];
