@@ -130,7 +130,7 @@
             + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
             + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <label style="margin:0 8px 0 0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定日期／數量；取消勾選才能改（改了會同步更新移轉憑單）"><input type="checkbox" id="egaf-lock" checked style="height:auto;"> 鎖定ERP移轉憑單</label><button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
             + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
-            + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
+            + '<div class="nw" id="egaf-nw-ret">發單批次 <select id="egaf-nr-b" style="max-width:200px;"></select> 回廠 <input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"> 報廢 <input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"> 取回 <input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"> <span title="發單數比實際送到廠商手上的多。不開異常單，只記進異常統計">發單短少</span> <input type="number" min="0" step="any" id="egaf-nr-sh" style="width:60px;"> <span title="發出去的料本身不良。與報廢一樣自動開異常單">發料不良</span> <input type="number" min="0" step="any" id="egaf-nr-bm" style="width:60px;"> 日期 <input type="date" id="egaf-nr-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
             + '<div id="egaf-msg" style="min-height:16px;font-size:12px;font-weight:bold;margin-top:3px;"></div></div>'
             + '<div class="b" id="egaf-body"></div>';
         document.body.appendChild(drawer);
@@ -159,6 +159,14 @@
         drawer.querySelector('#egaf-body').addEventListener('input', function (e) {
             var it = e.target.closest && e.target.closest('.it'); if (!it || e.target.closest('.qs') || e.target.closest('.al')) return;
             it.classList.add('dirty'); updDn();
+            if (it.getAttribute('data-k') === 'return') {
+                var rEl = it.querySelector('.f-r');
+                if (e.target === rEl) { if (e.isTrusted) it.dataset.rt = '1'; }
+                else if (rEl && !it.dataset.rt && /(^| )f-(s|w|sh|bm)( |$)/.test(e.target.className)) {
+                    var o = 0; ['.f-s', '.f-w', '.f-sh', '.f-bm'].forEach(function (c) { var q = it.querySelector(c); o += q ? (parseFloat(q.value) || 0) : 0; });
+                    rEl.value = nz(Math.max(0, (parseFloat(it.getAttribute('data-tot')) || 0) - o));
+                }
+            }
         });
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && drawer.classList.contains('open') && !document.getElementById('egaf-pw')) close(); });
         bindNew();
@@ -187,14 +195,14 @@
         (DATA.batches || []).forEach(function (x) { if (String(x.batch_id) === String(id)) b = x; });
         if (!b) return '';
         var used = 0;
-        (DATA.rows || []).forEach(function (r) { if (r.kind === 'return' && String(r.batch_id) === String(id)) used += (parseFloat(r.return_qty) || 0) + (parseFloat(r.scrap_qty) || 0) + (parseFloat(r.withdraw_qty) || 0); });
+        (DATA.rows || []).forEach(function (r) { if (r.kind === 'return' && String(r.batch_id) === String(id)) used += (parseFloat(r.return_qty) || 0) + (parseFloat(r.scrap_qty) || 0) + (parseFloat(r.withdraw_qty) || 0) + (parseFloat(r.short_qty) || 0) + (parseFloat(r.badmat_qty) || 0); });
         var left = (parseFloat(b.send_qty) || 0) - used;
         return left > 0 ? nz(left) : '';
     }
     function autoFill() {
         var q = drawer.querySelector('#egaf-ns-q'), r = drawer.querySelector('#egaf-nr-r');
         if (q && !q.dataset.t) q.value = prevQty();
-        if (r && !r.dataset.t) r.value = leftOfBatch();
+        if (r && !r.dataset.t) { var lf = parseFloat(leftOfBatch()) || 0, ex = 0; ['#egaf-nr-s', '#egaf-nr-w', '#egaf-nr-sh', '#egaf-nr-bm'].forEach(function (id) { var e = drawer.querySelector(id); ex += e ? (parseFloat(e.value) || 0) : 0; }); r.value = lf > 0 ? nz(Math.max(0, lf - ex)) : ''; }
     }
     function dirtyCount() { return drawer ? drawer.querySelectorAll('.it.dirty').length : 0; }
     function updDn() { var n = dirtyCount(); drawer.querySelector('#egaf-dn').textContent = n ? n + ' 筆未儲存' : ''; }
@@ -551,16 +559,16 @@
         return '<div class="row2 al" style="background:#F3F3F3;border:1px dashed #bbb;padding:4px 6px;">SN ' + x.raw_sn + (x.orphan ? ' 不是這個 BOM 的製程（ERP 拆單產生）' : ' 已對應') + '，算同一關：<select class="al-sel" style="height:24px;font-size:12px;max-width:230px;">' + opts + '</select> <button class="btn btn-default btn-xs al-go" data-sn="' + x.raw_sn + '">儲存對應</button></div>';
     }
     function rowHtml(x, noAlias) {
-        var h = '<div class="it" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
+        var h = '<div class="it" data-tot="' + ((parseFloat(x.return_qty) || 0) + (parseFloat(x.scrap_qty) || 0) + (parseFloat(x.withdraw_qty) || 0) + (parseFloat(x.short_qty) || 0) + (parseFloat(x.badmat_qty) || 0)) + '" data-k="' + x.kind + '" data-id="' + x.id + '" data-f="' + x.fid + '" data-mn="' + esc(x.maker_no || '') + '" data-m="' + esc(x.maker || '') + '" data-fno="' + esc(x.from_no || '') + '" data-fname="' + esc(x.from || '') + '">'
             + '<span class="k" style="background:' + COLORS[x.kind] + ';">' + LABELS[x.kind] + '</span><b>' + esc(x.station || '') + '</b>';
         if (x.kind === 'send') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '未登記廠商') + '</span><div class="row2"><span class="gp">送出日 ' + inp('f-d', x.date, 125, 'date') + '</span><span class="gp"><button class="btn btn-danger btn-xs f-del">刪除</button></span><span class="gp nl">發單數 ' + inp('f-sq', nz(x.send_qty), 70) + '</span>'
               + '<span style="color:#888;">已回 ' + nz(x.return_qty) + '／廢 ' + nz(x.scrap_qty) + '／取回 ' + nz(x.withdraw_qty) + '</span></div>';
         } else if (x.kind === 'return') {
             h += ' <span style="color:#7a4a10;">' + esc(x.maker || '') + '</span>' + (x.note ? ' <span style="color:#999;">（' + esc(x.note) + '）</span>' : '')
-              + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60)
+              + '<div class="row2">日期 ' + inp('f-d', x.date, 125, 'date') + ' 回廠 ' + inp('f-r', nz(x.return_qty), 60) + ' 報廢 ' + inp('f-s', nz(x.scrap_qty), 60) + ' 取回 ' + inp('f-w', nz(x.withdraw_qty), 60) + ' 發單短少 ' + inp('f-sh', nz(x.short_qty), 55) + ' 發料不良 ' + inp('f-bm', nz(x.badmat_qty), 55)
               + '<span style="margin-left:auto;"><button class="btn btn-danger btn-xs f-del">刪除</button></span></div>'
-              + '<div style="font-size:11px;color:#a67c3d;margin-top:2px;">回廠＝實際良品回來的數量，<b>不含報廢</b>；回廠＋報廢＋取回 ＝ 該批發單數（例：發20、報廢1，則回廠19）</div>';
+              + '<div style="font-size:11px;color:#a67c3d;margin-top:2px;">回廠＝實際良品回來的數量，<b>不含報廢</b>；回廠＋報廢＋取回＋發單短少＋發料不良 ＝ 該批發單數（例：發20、報廢1，則回廠19）；發料不良與報廢一樣會自動開異常單，發單短少只記進異常統計</div>';
         } else if (x.kind === 'qc') {
             h += ' <span style="color:#7a4a10;">' + esc(x.result || '') + '</span><div class="row2">檢驗日 ' + inp('f-d', x.date, 125, 'date') + ' 允收 ' + inp('f-ok', x.ok, 55) + ' 特採 ' + inp('f-aod', x.aod, 55) + ' 異常 ' + inp('f-qq', x.qq, 55) + ' 驗退 ' + inp('f-ng', x.ng, 55) + '</div>';
         } else if (x.kind === 'transfer') {
@@ -584,7 +592,7 @@
         function v(c) { var e = it.querySelector('.' + c); return e ? e.value : ''; }
         d.date = v('f-d');
         if (k === 'send') { d.send_qty = v('f-sq'); d.maker_no = it.getAttribute('data-mn'); d.maker = it.getAttribute('data-m'); }
-        else if (k === 'return') { d.return_qty = v('f-r'); d.scrap_qty = v('f-s'); d.withdraw_qty = v('f-w'); }
+        else if (k === 'return') { d.return_qty = v('f-r'); d.scrap_qty = v('f-s'); d.withdraw_qty = v('f-w'); d.short_qty = v('f-sh'); d.badmat_qty = v('f-bm'); }
         else if (k === 'qc') { d.ok = v('f-ok'); d.aod = v('f-aod'); d.qq = v('f-qq'); d.ng = v('f-ng'); }
         else if (k === 'transfer') { d.qty = v('f-q'); }
         return d;
@@ -655,6 +663,7 @@
     function bindNew() {
         var pick = null;
         ['#egaf-ns-q', '#egaf-nr-r'].forEach(function (id) { drawer.querySelector(id).addEventListener('input', function (e) { if (e.isTrusted) this.dataset.t = '1'; }); });
+        ['#egaf-nr-s', '#egaf-nr-w', '#egaf-nr-sh', '#egaf-nr-bm'].forEach(function (id) { drawer.querySelector(id).addEventListener('input', autoFill); });
         drawer.querySelector('#egaf-nr-b').addEventListener('change', function () { var r = drawer.querySelector('#egaf-nr-r'); delete r.dataset.t; autoFill(); });
         makerPicker(drawer.querySelector('#egaf-mk'), function (p) { pick = p; });
         drawer.querySelector('#egaf-ns-go').onclick = function () {
@@ -667,7 +676,7 @@
             var sel = drawer.querySelector('#egaf-nr-b'), opt = sel.options[sel.selectedIndex];
             if (!opt) { msg('沒有可選的發單批次，請先新增發單', false); return; }
             post({ action: 'baf_add_return', fid: opt.getAttribute('data-f'), batch_id: sel.value, return_qty: drawer.querySelector('#egaf-nr-r').value, scrap_qty: drawer.querySelector('#egaf-nr-s').value,
-                   withdraw_qty: drawer.querySelector('#egaf-nr-w').value, date: drawer.querySelector('#egaf-nr-d').value },
+                   withdraw_qty: drawer.querySelector('#egaf-nr-w').value, short_qty: drawer.querySelector('#egaf-nr-sh').value, badmat_qty: drawer.querySelector('#egaf-nr-bm').value, date: drawer.querySelector('#egaf-nr-d').value },
                 function (r) { if (r.success) { delete drawer.querySelector('#egaf-nr-r').dataset.t; load('已新增', true); refreshMain(); } else msg(r.message, false); });
         };
     }

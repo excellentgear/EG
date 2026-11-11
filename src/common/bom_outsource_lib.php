@@ -63,6 +63,17 @@ if (!function_exists('eg_bom_outsource_ensure_schema')) {
             if (!$db->query("SHOW COLUMNS FROM bom_ing_outsource_return LIKE 'withdraw_qty'")->fetch()) {
                 $db->exec("ALTER TABLE bom_ing_outsource_return ADD COLUMN withdraw_qty DECIMAL(14,3) NOT NULL DEFAULT 0 COMMENT '本次取回不加工數量' AFTER scrap_qty");
             }
+            // 發單短少／發料不良（2026-11-11）：兩者都是「子集」標記——
+            //   發單短少 ⊂ withdrawn_qty（貨根本沒到廠商手上，不用重發，不開異常單，只記進異常統計）
+            //   發料不良 ⊂ scrap_qty（與報廢一樣自動開異常單）
+            // 所以既有「送出−回廠−報廢−取回＝還在外」等算式一律不必改；批次欄位為累計、逐次紀錄欄位為本次。
+            foreach (['bom_ing_outsource_batch', 'bom_ing_outsource_return'] as $_t) {
+                foreach (['short_qty' => '發單短少數量（含在取回數內）', 'badmat_qty' => '發料不良數量（含在報廢數內）'] as $_c => $_cm) {
+                    if (!$db->query("SHOW COLUMNS FROM $_t LIKE '$_c'")->fetch()) {
+                        $db->exec("ALTER TABLE $_t ADD COLUMN $_c DECIMAL(14,3) NOT NULL DEFAULT 0 COMMENT '$_cm'");
+                    }
+                }
+            }
             if (!$db->query("SHOW COLUMNS FROM bom_ing_outsource_return LIKE 'note'")->fetch()) {
                 $db->exec("ALTER TABLE bom_ing_outsource_return ADD COLUMN note VARCHAR(200) NULL COMMENT '說明（例如取回不加工的原因，選填）' AFTER return_date");
             }
@@ -125,8 +136,11 @@ if (!function_exists('eg_bom_outsource_record_return')) {
      * 找不到未結清流水帳時（例如舊資料在這支庫上線前就已經在跑），自動用 bom_ing.sqty 現場補開一筆，
      * 不會因為「補資料」擋住使用者操作。
      */
-    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid, ?string $return_date = null, ?int $batch_id = null, float $withdraw_qty_delta = 0, ?string $note = null): array {
+    function eg_bom_outsource_record_return(PDO $db, int $bom_ing_fid, float $return_qty_delta, float $scrap_qty_delta, $uid, ?string $return_date = null, ?int $batch_id = null, float $withdraw_qty_delta = 0, ?string $note = null, float $short_delta = 0, float $badmat_delta = 0): array {
         eg_bom_outsource_ensure_schema($db);
+        // 發單短少併入「取回」、發料不良併入「報廢」，其餘算式不變（子集標記另存 short_qty／badmat_qty）
+        $scrap_qty_delta += $badmat_delta;
+        $withdraw_qty_delta += $short_delta;
         $batch = null;
         if ($batch_id) {
             // 分批回廠：明確指定是哪一批（同時有好幾批在外時，不能用「最新一批」猜）
@@ -150,12 +164,12 @@ if (!function_exists('eg_bom_outsource_record_return')) {
         $newScrap  = (float)$batch['scrap_qty']  + $scrap_qty_delta;
         $newWd     = (float)($batch['withdrawn_qty'] ?? 0) + $withdraw_qty_delta;
         $closed = ($newReturn + $newScrap + $newWd) >= (float)$batch['send_qty'];
-        $upd = $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, status=?, updated_at=NOW() WHERE batch_id=?");
-        $upd->execute([$newReturn, $newScrap, $newWd, $closed ? 'closed' : 'open', $batch['batch_id']]);
+        $upd = $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, short_qty=short_qty+?, badmat_qty=badmat_qty+?, status=?, updated_at=NOW() WHERE batch_id=?");
+        $upd->execute([$newReturn, $newScrap, $newWd, $short_delta, $badmat_delta, $closed ? 'closed' : 'open', $batch['batch_id']]);
         try {
             $rd = ($return_date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $return_date)) ? $return_date : date('Y-m-d');
-            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NOW())")
-               ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $withdraw_qty_delta, $rd,
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, short_qty, badmat_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$batch['batch_id'], $bom_ing_fid, $return_qty_delta, $scrap_qty_delta, $withdraw_qty_delta, $short_delta, $badmat_delta, $rd,
                           ($note !== null && trim($note) !== '') ? mb_substr(trim($note), 0, 200) : null, is_numeric($uid) ? (int)$uid : null]);
         } catch (Exception $e) {}
         // 這一站所有批次都結清才算整站回廠完成（只有一批時等同原本行為）
@@ -193,7 +207,8 @@ if (!function_exists('eg_bom_outsource_all_closed')) {
 if (!function_exists('eg_bom_outsource_fully_sent')) {
     /** 這一站是否已把 sqty 全部發出去（分批發單時，還有沒發的量就不能算整站回廠完成）。沒有批次視為已全發（舊資料）。 */
     function eg_bom_outsource_fully_sent(PDO $db, int $bom_ing_fid): bool {
-        $st = $db->prepare("SELECT (SELECT COALESCE(SUM(send_qty - withdrawn_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f) s, (SELECT sqty FROM bom_ing WHERE bom_ing_fid=:f2) q, (SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f3) n");
+        eg_bom_outsource_ensure_schema($db);
+        $st = $db->prepare("SELECT (SELECT COALESCE(SUM(send_qty - withdrawn_qty + short_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f) s, (SELECT sqty FROM bom_ing WHERE bom_ing_fid=:f2) q, (SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=:f3) n");
         $st->execute([':f' => $bom_ing_fid, ':f2' => $bom_ing_fid, ':f3' => $bom_ing_fid]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r || (int)$r['n'] === 0) return true;
@@ -337,7 +352,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
         // 單批、整批在外、但這批只發了一部分（分批發單的第一批）也要顯示「已發 N／共 M」
         foreach ($by as $fid => $list) {
             if (in_array($fid, $need, true)) continue;
-            $sumSend = 0.0; foreach ($list as $b) $sumSend += (float)$b['send_qty'] - (float)($b['withdrawn_qty'] ?? 0);
+            $sumSend = 0.0; foreach ($list as $b) $sumSend += (float)$b['send_qty'] - (float)($b['withdrawn_qty'] ?? 0) + (float)($b['short_qty'] ?? 0);
             if (isset($sq[$fid]) && $sumSend < $sq[$fid] - 1e-9) $need[] = $fid;
         }
         if (!$need) return eg_bom_xfer_from_map($db, $fids);
@@ -348,17 +363,17 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
         foreach ($lr->fetchAll(PDO::FETCH_ASSOC) as $l) $logs[(int)$l['batch_id']][] = ['qty'=>(float)$l['return_qty'], 'scrap'=>(float)$l['scrap_qty'], 'wd'=>(float)$l['withdraw_qty'], 'note'=>(string)($l['note'] ?? ''), 'date'=>$l['d']];
         $out = [];
         foreach ($need as $fid) {
-            $send = $ret = $scrap = $wdTot = 0.0; $bl = [];
+            $send = $ret = $scrap = $wdTot = $shortTot = 0.0; $bl = [];
             foreach ($by[$fid] as $b) {
                 $s = (float)$b['send_qty']; $rq = (float)$b['return_qty']; $sc = (float)$b['scrap_qty']; $wd = (float)($b['withdrawn_qty'] ?? 0);
-                $send += $s; $ret += $rq; $scrap += $sc; $wdTot += $wd;
+                $send += $s; $ret += $rq; $scrap += $sc; $wdTot += $wd; $shortTot += (float)($b['short_qty'] ?? 0);
                 $bl[] = ['id'=>(int)$b['batch_id'], 'no'=>(string)($b['maker_id_no'] ?? ''), 'maker'=>(string)($b['maker_id'] ?? ''),
                          'send'=>$s, 'ret'=>$rq, 'scrap'=>$sc, 'wd'=>$wd, 'outside'=>max(0, $s - $rq - $sc - $wd), 'status'=>$b['status'],
                          'send_date'=>!empty($b['send_date']) ? date('Y/m/d', strtotime($b['send_date'])) : '',
                          'returns'=>$logs[(int)$b['batch_id']] ?? []];
             }
             $total = $sq[$fid] ?? $send;
-            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot)), 'batches'=>$bl];
+            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot + $shortTot)), 'batches'=>$bl];
         }
         // 與「管理員修正」分支檢視對齊：①同一關(SN，含管理員設定的併入)的多列 bom_ing 是同一關的不同發單列，
         // 關卡總量取該關最大的 sqty，不是各列相加；②批次的「回」若沒登錄回廠，改用分支檢視推出的「從這批移轉出去的憑單數量」。
@@ -647,5 +662,27 @@ if (!function_exists('eg_bom_outsource_prev_station_qty')) {
         $sqSt->execute([$bom, $targetSn]);
         $sqty = (float)$sqSt->fetchColumn();
         return ['qty' => $sqty, 'source' => 'fallback', 'label' => ($prevSn !== null && $prevSn !== false) ? '上一關尚無報工/檢驗紀錄，帶入發包量' : '第一關，帶入發包量'];
+    }
+}
+
+if (!function_exists('eg_bom_outsource_short_stats')) {
+    /**
+     * 異常統計用：期間內「發單短少」「發料不良」的逐次紀錄彙總（依回廠日）。
+     * 發單短少不開異常單，只能由這裡（流水帳逐次紀錄）查回來；發料不良另會開異常單。
+     * 回傳 ['short'=>總數, 'badmat'=>總數, 'rows'=>[[bom,process_no,maker,return_date,short_qty,badmat_qty],…]]
+     */
+    function eg_bom_outsource_short_stats(PDO $db, string $from, string $to): array {
+        eg_bom_outsource_ensure_schema($db);
+        $st = $db->prepare("SELECT bi.bom, bi.process_no, b.maker_id, DATE_FORMAT(r.return_date,'%Y-%m-%d') AS d, r.short_qty, r.badmat_qty
+                              FROM bom_ing_outsource_return r
+                              JOIN bom_ing_outsource_batch b ON b.batch_id=r.batch_id
+                              LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                             WHERE (r.short_qty>0 OR r.badmat_qty>0) AND r.return_date BETWEEN ? AND ?
+                             ORDER BY r.return_date, r.return_id");
+        $st->execute([$from, $to]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        $s = $m = 0.0;
+        foreach ($rows as $r) { $s += (float)$r['short_qty']; $m += (float)$r['badmat_qty']; }
+        return ['short' => $s, 'badmat' => $m, 'rows' => $rows];
     }
 }

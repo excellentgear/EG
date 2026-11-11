@@ -1698,7 +1698,7 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     if ($batchId <= 0) throw new Exception('缺少 batch_id');
     if ($createdBy <= 0) throw new Exception('缺少開單人');
 
-    $st = $db->prepare("SELECT b.bom_ing_fid, b.maker_id_no, b.maker_id, b.scrap_qty AS total_scrap,
+    $st = $db->prepare("SELECT b.bom_ing_fid, b.maker_id_no, b.maker_id, b.scrap_qty AS total_scrap, b.badmat_qty AS total_badmat,
                                 bi.bom, bi.process_no
                          FROM bom_ing_outsource_batch b
                          LEFT JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
@@ -1711,6 +1711,7 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     if (empty($ob['bom'])) throw new Exception('這筆加工單流水帳沒有連結到製令，無法自動開立異常單');
 
     $scrapQty = (int)round($scrapTotal);
+    $badmatQty = (int)round((float)($ob['total_badmat'] ?? 0));   // 其中發料不良的數量（含在報廢數內）
 
     // 同一批加工單流水帳不可重複自動開立——已經開過單的，若尚未被品管確認/結案，更新成最新
     // 累積報廢數量（分批累加時數字才不會停在第一次）；已確認或已結案一律不再覆蓋。
@@ -1747,10 +1748,10 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     }
 
     $vendorTxt = ($ob['maker_id'] !== null && $ob['maker_id'] !== '') ? (string)$ob['maker_id'] : '（未登記廠商）';
-    $autoNote = mb_substr('外包廠商回廠回報報廢（' . $vendorTxt . '，累積報廢 ' . $scrapQty . ' 件）', 0, 255);
+    $autoNote = mb_substr('外包廠商回廠回報報廢（' . $vendorTxt . '，累積報廢 ' . $scrapQty . ' 件' . ($badmatQty > 0 ? '，其中發料不良 ' . $badmatQty . ' 件' : '') . '）', 0, 255);
     $quick = qab_quick_ready($db);
-    $phenomenon = $quick ? '廠商提報報廢'
-        : ($vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件，請確認不良原因並填寫異常原因分類。');
+    $phenomenon = $quick ? ($badmatQty > 0 ? '廠商提報報廢／發料不良' : '廠商提報報廢')
+        : ($vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件' . ($badmatQty > 0 ? '（含發料不良 ' . $badmatQty . ' 件）' : '') . '，請確認不良原因並填寫異常原因分類。');
 
     $data = [
         'kind' => 'bom',

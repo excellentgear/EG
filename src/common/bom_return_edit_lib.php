@@ -65,11 +65,11 @@ if (!function_exists('ber_list')) {
             $retTotal += (float)$b['return_qty'];
             $out[] = ['batch_id' => (int)$b['batch_id'], 'maker' => (string)($b['maker_id'] ?? ''), 'send_qty' => (float)$b['send_qty'],
                 'send_date' => !empty($b['send_date']) ? substr($b['send_date'], 0, 10) : '', 'return_qty' => (float)$b['return_qty'],
-                'scrap_qty' => (float)$b['scrap_qty'], 'withdrawn_qty' => (float)($b['withdrawn_qty'] ?? 0), 'status' => $b['status'],
+                'scrap_qty' => (float)$b['scrap_qty'], 'withdrawn_qty' => (float)($b['withdrawn_qty'] ?? 0), 'short_qty' => (float)($b['short_qty'] ?? 0), 'badmat_qty' => (float)($b['badmat_qty'] ?? 0), 'status' => $b['status'],
                 'is_today' => (int)$b['is_today'] === 1, 'by_name' => (string)($b['issued_by_name'] ?? ''),
                 'returns' => array_map(function ($r) {
                     return ['return_id' => (int)$r['return_id'], 'return_qty' => (float)$r['return_qty'], 'scrap_qty' => (float)$r['scrap_qty'],
-                        'withdraw_qty' => (float)($r['withdraw_qty'] ?? 0), 'return_date' => (string)$r['rd'],
+                        'withdraw_qty' => (float)($r['withdraw_qty'] ?? 0), 'short_qty' => (float)($r['short_qty'] ?? 0), 'badmat_qty' => (float)($r['badmat_qty'] ?? 0), 'return_date' => (string)$r['rd'],
                         'is_today' => (int)$r['is_today'] === 1, 'by_name' => (string)($r['by_name'] ?? ''), 'note' => (string)($r['note'] ?? '')];
                 }, $by[(int)$b['batch_id']] ?? [])];
         }
@@ -126,10 +126,10 @@ if (!function_exists('ber_save_send')) {
             $sq = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=?");
             $sq->execute([$fid]);
             $stage = (float)$sq->fetchColumn();
-            $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
+            $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0) + COALESCE(short_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
             $sum->execute([$fid, $batchId]);
             $others = (float)$sum->fetchColumn();
-            if ($others + $newSend - (float)($b['withdrawn_qty'] ?? 0) > $stage + 1e-9) {
+            if ($others + $newSend - (float)($b['withdrawn_qty'] ?? 0) + (float)($b['short_qty'] ?? 0) > $stage + 1e-9) {
                 throw new Exception('各批移送數量合計不可超過這一站的發單數 ' . $stage);
             }
             $db->prepare("UPDATE bom_ing_outsource_batch SET send_qty=?, updated_at=NOW() WHERE batch_id=?")->execute([$newSend, $batchId]);
@@ -143,9 +143,11 @@ if (!function_exists('ber_save_send')) {
 
 if (!function_exists('ber_save_return')) {
     /** 修改某一次回廠紀錄的回廠／報廢／取回數量與回廠日。 */
-    function ber_save_return(PDO $db, int $fid, int $returnId, float $ret, float $scrap, float $wd, ?string $date, int $uid, bool $force = false): array {
+    function ber_save_return(PDO $db, int $fid, int $returnId, float $ret, float $scrap, float $wd, ?string $date, int $uid, bool $force = false, float $short = 0, float $badmat = 0): array {
         eg_bom_outsource_ensure_schema($db);
-        if ($ret < 0 || $scrap < 0 || $wd < 0) throw new Exception('數量不可為負數');
+        if ($ret < 0 || $scrap < 0 || $wd < 0 || $short < 0 || $badmat < 0) throw new Exception('數量不可為負數');
+        // 發單短少併入取回、發料不良併入報廢（子集標記另存），其餘算式不變
+        $scrap += $badmat; $wd += $short;
         if ($ret + $scrap + $wd <= 0) throw new Exception('回廠、報廢、取回至少要填一個（要整筆作廢請用刪除）');
         if ($date !== null && $date !== '') {
             $dt = DateTime::createFromFormat('Y-m-d', $date);
@@ -165,16 +167,18 @@ if (!function_exists('ber_save_return')) {
             $nr = (float)$b['return_qty'] - (float)$r['return_qty'] + $ret;
             $ns = (float)$b['scrap_qty']  - (float)$r['scrap_qty']  + $scrap;
             $nw = (float)($b['withdrawn_qty'] ?? 0) - (float)($r['withdraw_qty'] ?? 0) + $wd;
+            $nsh = max(0, (float)($b['short_qty'] ?? 0) - (float)($r['short_qty'] ?? 0) + $short);
+            $nbm = max(0, (float)($b['badmat_qty'] ?? 0) - (float)($r['badmat_qty'] ?? 0) + $badmat);
             if ($nr + $ns + $nw > (float)$b['send_qty'] + 1e-9) {
                 throw new Exception('回廠＋報廢＋取回合計 ' . ($nr + $ns + $nw) . ' 超過這批移送數量 ' . $b['send_qty']);
             }
             $tot = $db->prepare("SELECT COALESCE(SUM(return_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
             $tot->execute([$fid, $b['batch_id']]);
             if (!$force) ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
-            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, updated_at=NOW() WHERE batch_id=?")->execute([$nr, $ns, $nw, $b['batch_id']]);
-            $db->prepare("UPDATE bom_ing_outsource_return SET return_qty=?, scrap_qty=?, withdraw_qty=?, return_date=COALESCE(?,return_date) WHERE return_id=?")->execute([$ret, $scrap, $wd, $date, $returnId]);
+            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, short_qty=?, badmat_qty=?, updated_at=NOW() WHERE batch_id=?")->execute([$nr, $ns, $nw, $nsh, $nbm, $b['batch_id']]);
+            $db->prepare("UPDATE bom_ing_outsource_return SET return_qty=?, scrap_qty=?, withdraw_qty=?, short_qty=?, badmat_qty=?, return_date=COALESCE(?,return_date) WHERE return_id=?")->execute([$ret, $scrap, $wd, $short, $badmat, $date, $returnId]);
             ber_after_change($db, $fid, (int)$b['batch_id']);
-            ber_log($db, $fid, 'return_edit', '修改回廠紀錄#' . $returnId . '：回廠 ' . (float)$r['return_qty'] . '→' . $ret . '、報廢 ' . (float)$r['scrap_qty'] . '→' . $scrap . '、取回 ' . (float)($r['withdraw_qty'] ?? 0) . '→' . $wd, $uid);
+            ber_log($db, $fid, 'return_edit', '修改回廠紀錄#' . $returnId . '：回廠 ' . (float)$r['return_qty'] . '→' . $ret . '、報廢 ' . (float)$r['scrap_qty'] . '→' . $scrap . '、取回 ' . (float)($r['withdraw_qty'] ?? 0) . '→' . $wd . '（含發單短少 ' . (float)($r['short_qty'] ?? 0) . '→' . $short . '、發料不良 ' . (float)($r['badmat_qty'] ?? 0) . '→' . $badmat . '）', $uid);
             $db->commit();
             return ['batch_id' => (int)$b['batch_id']];
         } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
@@ -200,8 +204,8 @@ if (!function_exists('ber_delete_return')) {
             $tot = $db->prepare("SELECT COALESCE(SUM(return_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND batch_id<>?");
             $tot->execute([$fid, $b['batch_id']]);
             if (!$force) ber_check_return_floor($db, $fid, (float)$tot->fetchColumn() + $nr);
-            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=GREATEST(0,return_qty-?), scrap_qty=GREATEST(0,scrap_qty-?), withdrawn_qty=GREATEST(0,COALESCE(withdrawn_qty,0)-?), updated_at=NOW() WHERE batch_id=?")
-               ->execute([(float)$r['return_qty'], (float)$r['scrap_qty'], (float)($r['withdraw_qty'] ?? 0), $b['batch_id']]);
+            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=GREATEST(0,return_qty-?), scrap_qty=GREATEST(0,scrap_qty-?), withdrawn_qty=GREATEST(0,COALESCE(withdrawn_qty,0)-?), short_qty=GREATEST(0,short_qty-?), badmat_qty=GREATEST(0,badmat_qty-?), updated_at=NOW() WHERE batch_id=?")
+               ->execute([(float)$r['return_qty'], (float)$r['scrap_qty'], (float)($r['withdraw_qty'] ?? 0), (float)($r['short_qty'] ?? 0), (float)($r['badmat_qty'] ?? 0), $b['batch_id']]);
             $db->prepare("DELETE FROM bom_ing_outsource_return WHERE return_id=?")->execute([$returnId]);
             ber_after_change($db, $fid, (int)$b['batch_id']);
             ber_log($db, $fid, 'return_delete', '刪除當天回廠紀錄#' . $returnId . '（回廠 ' . (float)$r['return_qty'] . '、報廢 ' . (float)$r['scrap_qty'] . '、取回 ' . (float)($r['withdraw_qty'] ?? 0) . '）', $uid);
@@ -261,7 +265,7 @@ if (!function_exists('ber_add_batch')) {
             $sq->execute([$fid]);
             $stage = $sq->fetchColumn();
             if ($stage === false) throw new Exception('找不到這個製程');
-            $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+            $sum = $db->prepare("SELECT COALESCE(SUM(send_qty - COALESCE(withdrawn_qty,0) + COALESCE(short_qty,0)),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
             $sum->execute([$fid]);
             $have = (float)$sum->fetchColumn();
             if (!$force && $have + $send > (float)$stage + 1e-9) throw new Exception('各批移送數量合計不可超過這一站的發單數 ' . (float)$stage . '（目前已移送 ' . $have . '）');
@@ -275,9 +279,10 @@ if (!function_exists('ber_add_batch')) {
 
 if (!function_exists('ber_add_return')) {
     /** 補登一筆過去的回廠／報廢／取回。回廠量會自然計入 QC 待驗可驗量；不動製程狀態。 */
-    function ber_add_return(PDO $db, int $fid, int $batchId, float $ret, float $scrap, float $wd, ?string $date, int $uid): int {
+    function ber_add_return(PDO $db, int $fid, int $batchId, float $ret, float $scrap, float $wd, ?string $date, int $uid, float $short = 0, float $badmat = 0): int {
         eg_bom_outsource_ensure_schema($db);
-        if ($ret < 0 || $scrap < 0 || $wd < 0) throw new Exception('數量不可為負數');
+        if ($ret < 0 || $scrap < 0 || $wd < 0 || $short < 0 || $badmat < 0) throw new Exception('數量不可為負數');
+        $scrap += $badmat; $wd += $short;
         if ($ret + $scrap + $wd <= 0) throw new Exception('回廠、報廢、取回至少要填一個');
         $date = ber_check_past_date($date, '回廠日');
         $db->beginTransaction();
@@ -288,12 +293,12 @@ if (!function_exists('ber_add_return')) {
             if (!$b) throw new Exception('找不到這一批（請重新整理）');
             $nr = (float)$b['return_qty'] + $ret; $ns = (float)$b['scrap_qty'] + $scrap; $nw = (float)($b['withdrawn_qty'] ?? 0) + $wd;
             if ($nr + $ns + $nw > (float)$b['send_qty'] + 1e-9) throw new Exception('回廠＋報廢＋取回合計 ' . ($nr + $ns + $nw) . ' 超過這批移送數量 ' . $b['send_qty']);
-            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NOW())")
-               ->execute([$batchId, $fid, $ret, $scrap, $wd, $date, '補登', $uid ?: null]);
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, short_qty, badmat_qty, return_date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$batchId, $fid, $ret, $scrap, $wd, $short, $badmat, $date, '補登', $uid ?: null]);
             $rid = (int)$db->lastInsertId();
             $closed = ($nr + $ns + $nw) >= (float)$b['send_qty'] - 0.0000001;
-            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, status=?, updated_at=NOW() WHERE batch_id=?")
-               ->execute([$nr, $ns, $nw, $closed ? 'closed' : 'open', $batchId]);
+            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=?, scrap_qty=?, withdrawn_qty=?, short_qty=short_qty+?, badmat_qty=badmat_qty+?, status=?, updated_at=NOW() WHERE batch_id=?")
+               ->execute([$nr, $ns, $nw, $short, $badmat, $closed ? 'closed' : 'open', $batchId]);
             ber_log($db, $fid, 'return_backfill', '補登回廠紀錄#' . $rid . ' 批次#' . $batchId . '：回廠 ' . $ret . '、報廢 ' . $scrap . '、取回 ' . $wd . '（回廠日 ' . ($date ?? '-') . '）', $uid);
             $db->commit();
             return $rid;

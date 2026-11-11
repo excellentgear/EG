@@ -37,7 +37,8 @@ if (!function_exists('baf_list')) {
             $batches[] = ['batch_id' => (int)$b['batch_id'], 'fid' => $f, 'maker' => $mname, 'send_qty' => (float)$b['send_qty']];
             $rows[] = ['kind' => 'send', 'id' => (int)$b['batch_id'], 'fid' => $f, 'sn' => $proc[$f]['sn'], 'station' => $proc[$f]['label'], 'date' => $d,
                        'ts' => $d . ' 00:00:00', 'maker_no' => (string)($b['maker_id_no'] ?? ''), 'maker' => $mname, 'send_qty' => (float)$b['send_qty'],
-                       'return_qty' => (float)$b['return_qty'], 'scrap_qty' => (float)$b['scrap_qty'], 'withdraw_qty' => (float)($b['withdrawn_qty'] ?? 0), 'status' => $b['status']];
+                       'return_qty' => (float)$b['return_qty'], 'scrap_qty' => (float)$b['scrap_qty'] - (float)($b['badmat_qty'] ?? 0), 'withdraw_qty' => (float)($b['withdrawn_qty'] ?? 0) - (float)($b['short_qty'] ?? 0),
+                       'short_qty' => (float)($b['short_qty'] ?? 0), 'badmat_qty' => (float)($b['badmat_qty'] ?? 0), 'status' => $b['status']];
         }
         $mkb = [];
         foreach ($batches as $b) $mkb[$b['batch_id']] = $b['maker'];
@@ -46,7 +47,8 @@ if (!function_exists('baf_list')) {
             $d = !empty($r['return_date']) ? substr($r['return_date'], 0, 10) : substr((string)$r['created_at'], 0, 10);
             $rows[] = ['kind' => 'return', 'id' => (int)$r['return_id'], 'fid' => $f, 'sn' => $proc[$f]['sn'], 'station' => $proc[$f]['label'], 'date' => $d,
                        'ts' => $d . ' 12:00:00', 'batch_id' => (int)$r['batch_id'], 'maker' => $mkb[(int)$r['batch_id']] ?? '',
-                       'return_qty' => (float)$r['return_qty'], 'scrap_qty' => (float)$r['scrap_qty'], 'withdraw_qty' => (float)($r['withdraw_qty'] ?? 0), 'note' => (string)($r['note'] ?? '')];
+                       'return_qty' => (float)$r['return_qty'], 'scrap_qty' => (float)$r['scrap_qty'] - (float)($r['badmat_qty'] ?? 0), 'withdraw_qty' => (float)($r['withdraw_qty'] ?? 0) - (float)($r['short_qty'] ?? 0),
+                       'short_qty' => (float)($r['short_qty'] ?? 0), 'badmat_qty' => (float)($r['badmat_qty'] ?? 0), 'note' => (string)($r['note'] ?? '')];
         }
         foreach ($db->query("SELECT * FROM qc_check WHERE bom_ing_fid_ref IN ($in) ORDER BY qc_check_id")->fetchAll(PDO::FETCH_ASSOC) as $q) {
             $f = (int)$q['bom_ing_fid_ref'];

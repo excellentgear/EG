@@ -2505,7 +2505,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
         $sentTot->execute([$fid]);
         $stQty = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=?");
         $stQty->execute([$fid]);
-        echo json_encode(['success'=>true, 'open_batch'=>$open, 'open_batches'=>$openList,
+        $stSt = $db->prepare("SELECT processing_state, DATE_FORMAT(return_date,'%Y/%m/%d') rd FROM bom_ing WHERE bom_ing_fid=?");
+        $stSt->execute([$fid]);
+        $stRow = $stSt->fetch(PDO::FETCH_ASSOC) ?: [];
+        echo json_encode(['success'=>true, 'proc_state'=>(string)($stRow['processing_state'] ?? ''), 'proc_return_date'=>(string)($stRow['rd'] ?? ''), 'open_batch'=>$open, 'open_batches'=>$openList,
                           'sent_total'=>(float)$sentTot->fetchColumn(), 'stage_qty'=>(float)$stQty->fetchColumn(),
                           'remaining_good_qty'=>eg_bom_outsource_remaining_good_qty($db, $fid),
                           'prev_qty'=>$prev['qty'], 'prev_source'=>$prev['source'], 'prev_label'=>$prev['label']]);
@@ -2577,8 +2580,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
             $returnQty = (float)($_POST['return_qty'] ?? 0);
             $scrapQty  = (float)($_POST['scrap_qty'] ?? 0);
             $withdrawQty = (float)($_POST['withdraw_qty'] ?? 0);   // 取回不加工
-            if ($returnQty < 0 || $scrapQty < 0 || $withdrawQty < 0) { echo json_encode(['success'=>false,'message'=>'數量不可為負數']); exit; }
-            if ($returnQty <= 0 && $scrapQty <= 0 && $withdrawQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠、報廢、取回不加工數量至少要填一個']); exit; }
+            $shortQty  = (float)($_POST['short_qty'] ?? 0);    // 發單短少（不開異常單，只記進異常統計）
+            $badmatQty = (float)($_POST['badmat_qty'] ?? 0);   // 發料不良（與報廢一樣自動開異常單）
+            if ($returnQty < 0 || $scrapQty < 0 || $withdrawQty < 0 || $shortQty < 0 || $badmatQty < 0) { echo json_encode(['success'=>false,'message'=>'數量不可為負數']); exit; }
+            if ($returnQty <= 0 && $scrapQty <= 0 && $withdrawQty <= 0 && $shortQty <= 0 && $badmatQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠、報廢、取回不加工、發單短少、發料不良數量至少要填一個']); exit; }
             $retDate = trim((string)($_POST['return_date'] ?? ''));
             if ($retDate !== '') {
                 $dt = DateTime::createFromFormat('Y-m-d', $retDate);
@@ -2597,8 +2602,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
             }
             if ($chkB) {
                 $leftQ = (float)$chkB['send_qty'] - (float)$chkB['return_qty'] - (float)$chkB['scrap_qty'] - (float)($chkB['withdrawn_qty'] ?? 0);
-                if ($returnQty + $scrapQty + $withdrawQty > $leftQ + 1e-9) {
-                    echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢＋取回 '.($returnQty+$scrapQty+$withdrawQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'，已取回 '.($chkB['withdrawn_qty'] ?? 0).'）']); exit;
+                if ($returnQty + $scrapQty + $withdrawQty + $shortQty + $badmatQty > $leftQ + 1e-9) {
+                    echo json_encode(['success'=>false,'message'=>'本次回廠＋報廢＋取回＋短少＋發料不良 '.($returnQty+$scrapQty+$withdrawQty+$shortQty+$badmatQty).' 超過這批尚未回廠的數量 '.$leftQ.'（送出 '.$chkB['send_qty'].'，已回廠 '.$chkB['return_qty'].'，已報廢 '.$chkB['scrap_qty'].'，已取回 '.($chkB['withdrawn_qty'] ?? 0).'）']); exit;
                 }
             }
             if (!$chkB) {
@@ -2608,8 +2613,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
                     echo json_encode(['success'=>false,'message'=>'這一站已發出的批次都已回廠結清，但還有量未發單：請先到下一次「移轉」追加批次，或按「發單完成（其餘不再發）」']); exit;
                 }
             }
-            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null, $withdrawQty, (string)($_POST['note'] ?? ''));
-            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.($withdrawQty > 0 ? '、取回不加工 '.$withdrawQty : '').'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid, $retDate, $batchIdIn > 0 ? $batchIdIn : null, $withdrawQty, (string)($_POST['note'] ?? ''), $shortQty, $badmatQty);
+            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.($withdrawQty > 0 ? '、取回不加工 '.$withdrawQty : '').($shortQty > 0 ? '、發單短少 '.$shortQty : '').($badmatQty > 0 ? '、發料不良 '.$badmatQty : '').'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
             if ($r['closed']) $msg .= !empty($r['all_closed']) ? '，此批已結清。' : '，此批已結清（這一站還有其他批次在外）。';
             $resp = ['success'=>true, 'message'=>$msg, 'result'=>$r];
             // ── 取回不加工的狀態處理（使用者定案 2026-10-30）：取回的貨回到上一關「待移轉」；
@@ -2663,7 +2668,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
             }
         }
         // 2026-11-11 使用者交辦：廠商提報報廢時可選擇「同時自動修正此後製程的發單／回廠／QC檢驗數」（規則見 bom_scrap_downstream_lib.php）
-        if ($mode === 'add' && !empty($_POST['auto_fix_downstream']) && (float)($_POST['scrap_qty'] ?? 0) > 0 && isset($r) && is_array($r) && !empty($r['batch_id'])) {
+        if ($mode === 'add' && !empty($_POST['auto_fix_downstream']) && ((float)($_POST['scrap_qty'] ?? 0) + (float)($_POST['badmat_qty'] ?? 0)) > 0 && isset($r) && is_array($r) && !empty($r['batch_id'])) {
             try {
                 require_once '../../src/common/bom_scrap_downstream_lib.php';
                 $ds = eg_scrap_ds_apply($db, $fid, (int)$r['batch_id'], $uid);
@@ -2753,7 +2758,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
                 ber_save_send($db, $fid, $id, $fl('send_qty'), $uid);
                 ber_save_batch_meta($db, $fid, $id, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker'] ?? '')), $d, $uid);
             } elseif ($kind === 'return') {
-                ber_save_return($db, $fid, $id, $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid, true);
+                ber_save_return($db, $fid, $id, $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid, true, $fl('short_qty'), $fl('badmat_qty'));
             } elseif ($kind === 'qc') {
                 baf_qc_save($db, $fid, $id, (int)($_POST['ok'] ?? 0), (int)($_POST['aod'] ?? 0), (int)($_POST['qq'] ?? 0), (int)($_POST['ng'] ?? 0), $d, $uid);
             } elseif ($kind === 'transfer') {
@@ -2775,7 +2780,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
             $db->prepare("UPDATE bom_ing SET processing_state='ing' WHERE bom_ing_fid=? AND processing_state='N'")->execute([$fid]);
             echo json_encode(['success'=>true,'message'=>'已新增發單']);
         } else {
-            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid);
+            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), $fl('return_qty'), $fl('scrap_qty'), $fl('withdraw_qty'), $d, $uid, $fl('short_qty'), $fl('badmat_qty'));
             if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
                 $op = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND status='open'");
                 $op->execute([$fid]);
@@ -2818,7 +2823,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
             echo json_encode(['success'=>true,'message'=>'已將移送數量由 '.$r['old'].' 改為 '.$r['new']]);
         } elseif ($act === 'ber_save_return') {
             ber_save_return($db, $fid, (int)($_POST['return_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0),
-                            (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, $force);
+                            (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, $force, (float)($_POST['short_qty'] ?? 0), (float)($_POST['badmat_qty'] ?? 0));
             echo json_encode(['success'=>true,'message'=>'回廠紀錄已修改']);
         } elseif ($act === 'ber_delete_return') {
             ber_delete_return($db, $fid, (int)($_POST['return_id'] ?? 0), $uid, $force);
@@ -2827,7 +2832,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
             ber_add_batch($db, $fid, trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), (float)($_POST['send_qty'] ?? 0), trim((string)($_POST['send_date'] ?? '')), $uid);
             echo json_encode(['success'=>true,'message'=>'已補登移送批次']);
         } elseif ($act === 'ber_add_return') {
-            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0), (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid);
+            ber_add_return($db, $fid, (int)($_POST['batch_id'] ?? 0), (float)($_POST['return_qty'] ?? 0), (float)($_POST['scrap_qty'] ?? 0), (float)($_POST['withdraw_qty'] ?? 0), trim((string)($_POST['return_date'] ?? '')), $uid, (float)($_POST['short_qty'] ?? 0), (float)($_POST['badmat_qty'] ?? 0));
             echo json_encode(['success'=>true,'message'=>'已補登回廠紀錄']);
         } elseif ($act === 'ber_admin_batch_meta') {
             ber_save_batch_meta($db, $fid, (int)($_POST['batch_id'] ?? 0), trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), trim((string)($_POST['send_date'] ?? '')), $uid);
