@@ -324,7 +324,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 }
 
                 $oStmt = $pdo2->prepare("SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
-                                                COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo
+                                                COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo, ot.d_id AS part_text
                                          FROM order_attachments a
                                          JOIN order_track ot ON ot.Order_id = a.order_id
                                          LEFT JOIN user u ON u.id = a.uploaded_by
@@ -353,13 +353,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                     $oName = $r['original_name'] ?: $r['filename'];
                     $pgKey = $r['Order_oo'] . '|' . $r['filename'];
                     $pgList = [];
-                    foreach ($dids as $dd) { if (isset($pgOrigin[$pgKey][(string)$dd])) $pgList[] = $pgOrigin[$pgKey][(string)$dd]; }
+                    $ptx = (string)($r['part_text'] ?? ''); if ($ptx !== '' && isset($pgOrigin[$pgKey][$ptx])) $pgList[] = $pgOrigin[$pgKey][$ptx];
                     $pgLabel = '原圖';
                     if (!$pgList) {
                         foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) {
                             $cid = (int)$cid;
                             if (!in_array($cid, $showOtherIds, true) || !isset($pgTag[$pgKey][$cid])) continue;
-                            foreach ($dids as $dd) { if (isset($pgTag[$pgKey][$cid][(string)$dd])) $pgList[] = $pgTag[$pgKey][$cid][(string)$dd]; }
+                            if ($ptx !== '' && isset($pgTag[$pgKey][$cid][$ptx])) $pgList[] = $pgTag[$pgKey][$cid][$ptx];
                             if ($pgList) { $pgLabel = $cats[$cid] ?? ''; break; }
                         }
                     }
