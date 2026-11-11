@@ -373,7 +373,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                          'returns'=>$logs[(int)$b['batch_id']] ?? []];
             }
             $total = $sq[$fid] ?? $send;
-            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot + $shortTot)), 'batches'=>$bl];
+            $out[$fid] = ['send'=>$send, 'ret'=>$ret, 'scrap'=>$scrap, 'wd'=>$wdTot, 'short'=>$shortTot, 'outside'=>max(0, $send - $ret - $scrap - $wdTot), 'total'=>$total, 'unsent'=>max(0, $total - ($send - $wdTot + $shortTot)), 'batches'=>$bl];
         }
         // 與「管理員修正」分支檢視對齊：①同一關(SN，含管理員設定的併入)的多列 bom_ing 是同一關的不同發單列，
         // 關卡總量取該關最大的 sqty，不是各列相加；②批次的「回」若沒登錄回廠，改用分支檢視推出的「從這批移轉出去的憑單數量」。

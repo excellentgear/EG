@@ -7345,7 +7345,9 @@ echo "</script>\n";
                             } else if (((window.obBatchMap || {})[String(processInfo.bom_ing_fid)] || {}).batches && (window.obBatchMap[String(processInfo.bom_ing_fid)].batches || []).length) {
                                 // ── 分批顯示（分批到／分批發包／分批回廠都算）：與「拆N批」同樣的逐批列示 ──
                                 var _pm = window.obBatchMap[String(processInfo.bom_ing_fid)];
-                                var _pmSend = (Number(_pm.send) || 0) - (Number(_pm.wd) || 0), _pmTot = Number(_pm.total) || Number(processInfo.sqty) || 0;
+                                var _pmSend = (Number(_pm.send) || 0) - (Number(_pm.wd) || 0) + (Number(_pm.short) || 0), _pmTot = Number(_pm.total) || Number(processInfo.sqty) || 0;   // 發單短少＝遺失，不是取回，不算缺口
+                                var _shortUp = 0; _activeProcs.forEach(function (q) { if (ocGrp(q) < ocGrp(processInfo)) { var mq0 = (window.obBatchMap || {})[String(q.bom_ing_fid)]; if (mq0) _shortUp += Number(mq0.short) || 0; } });   // 前面關卡短少遺失的，也不會到這一關
+                                _pmTot = Math.max(0, _pmTot - _shortUp);
                                 if (typeof _remainQty === 'number' && _remainQty > 0 && _pmTot > _remainQty) _pmTot = _remainQty; // 前面關卡已報廢的不算缺口（最多只有剩餘良品數可以發）
                                 var _pH = '<div style="font-size:10.5px;font-weight:600;color:#444;margin-bottom:2px;">' + escapeHtml(processInfo.ProcessName || '')
                                         + ' <span style="color:#337ab7;font-weight:normal;font-size:9px;background:#e8f0fe;border-radius:8px;padding:1px 5px;">分' + _pm.batches.length + '批</span></div>';
