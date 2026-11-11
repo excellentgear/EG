@@ -1733,7 +1733,7 @@ function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $created
     $kinds = [];
     if ($badmatQty > 0) $kinds[] = ['發料不良', $badmatQty];
     if ($pureScrap > 0) $kinds[] = ['報廢', $pureScrap];
-    $kindTxt = implode('、', array_map(fn($k) => $k[0] === '報廢' ? '廠商提報報廢' : $k[0], $kinds));
+    $kindTxt = $kinds ? '廠商提報' . implode('、', array_map(fn($k) => $k[0], $kinds)) : '';   // 例：廠商提報發料不良／廠商提報報廢／廠商提報發料不良、報廢
     $kindQtyTxt = implode('、', array_map(fn($k) => $k[0] . ' ' . $k[1] . ' 件', $kinds));
 
     // 同一批加工單流水帳不可重複自動開立——已經開過單的，若尚未被品管確認/結案，更新成最新
