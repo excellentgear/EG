@@ -48,7 +48,7 @@ if (!$perms['canView'] && !$perms['canAdmin']) actErr('您沒有對帳進度追�
 if (empty($_SESSION['act_csrf'])) $_SESSION['act_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
+$WRITE = ['set_status', 'skip_set','settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
           'early_days_save', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete', 'fixed_add', 'fixed_stop'];
 if (in_array($action, $WRITE, true)) {
@@ -107,8 +107,23 @@ switch ($action) {
                 foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $stAt[$x['track_id'] . '|' . $x['to_status']] = $x['d'];
             }
         } catch (Throwable $e) {}
+        // 略過（此月不須對帳）：獨立旗標，顯示狀態一律改成 skipped
+        $skipMap = [];
+        try {
+            if (!empty($ids)) {
+                $q = $db->query("SELECT id, skipped_at, skipped_by_name, skipped_reason FROM acc_recon_track
+                                 WHERE skipped_at IS NOT NULL AND id IN (" . implode(',', $ids) . ")");
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $skipMap[(int)$x['id']] = $x;
+            }
+        } catch (Throwable $e) {}
         foreach ($allRows as &$_r) {
-            $le = $lastEdit[(string)($_r['party_id'] ?? '')] ?? null;
+            $sk = $skipMap[(int)$_r['track_id']] ?? null;
+            $_r['skipped'] = $sk ? 1 : 0;
+            $_r['skipped_at'] = $sk ? $sk['skipped_at'] : null;
+            $_r['skipped_by'] = $sk ? $sk['skipped_by_name'] : null;
+            $_r['skipped_reason'] = $sk ? $sk['skipped_reason'] : null;
+            if ($sk) $_r['card_status'] = 'skipped';
+            $le =$lastEdit[(string)($_r['party_id'] ?? '')] ?? null;
             $_r['settle_by'] = $le['by'] ?? null; $_r['settle_at'] = $le['at'] ?? null;
             $_r['status_at'] = ((string)$_r['status'] !== '') ? ($stAt[$_r['track_id'] . '|' . $_r['status']] ?? null) : null;
         }
@@ -123,7 +138,7 @@ switch ($action) {
 
         // 卡片／篩選一律依「顯示用狀態」(card_status) 分類：結帳日未到(not_due)／需對帳(need_recon)
         // 才是空白狀態真正的兩種意思，不是籠統的一個「未開始」桶。
-        $counts = array_merge(['not_due' => 0, 'early_recon' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
+        $counts = array_merge(['not_due' => 0, 'early_recon' => 0, 'need_recon' => 0, 'skipped' => 0], array_fill_keys(array_keys(act_statuses()), 0));
         foreach ($allRows as $r) $counts[$r['card_status']]++;
 
         $rows = $allRows;
@@ -154,6 +169,16 @@ switch ($action) {
         $note    = trim((string)($_POST['note'] ?? ''));
         if ($trackId <= 0) actErr('缺少追蹤資料');
         $r = act_set_status($db, $trackId, $to, $perms, $note !== '' ? $note : null);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
+    }
+
+    case 'skip_set': {
+        $trackId = (int)($_POST['track_id'] ?? 0);
+        $skip    = ((string)($_POST['skip'] ?? '1')) !== '0';
+        $reason  = trim((string)($_POST['reason'] ?? ''));
+        if ($trackId <= 0) actErr('缺少追蹤資料');
+        $r = act_set_skip($db, $trackId, $skip, $perms, $reason);
         if (!$r['success']) actErr($r['message']);
         actOut(['message' => $r['message']]);
     }

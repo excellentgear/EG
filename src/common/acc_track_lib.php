@@ -198,6 +198,28 @@ function act_ensure_schema(PDO $db): void
         $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES ('ap','processing','art_pm')")->execute();
     } catch (Throwable $e) {}
 
+    // 「略過」（此月份不須對這個客戶／廠商的帳）：不是狀態順序的一環，獨立旗標，記錄誰在何時略過
+    foreach ([
+        'skipped_at'      => "DATETIME NULL COMMENT '略過時間（NULL=未略過）'",
+        'skipped_by'      => "INT NULL",
+        'skipped_by_name' => "VARCHAR(50) NULL",
+        'skipped_reason'  => "VARCHAR(200) NULL",
+    ] as $col => $def) {
+        try {
+            $has = $db->query("SHOW COLUMNS FROM acc_recon_track LIKE '" . $col . "'")->fetch();
+            if (!$has) $db->exec("ALTER TABLE acc_recon_track ADD COLUMN {$col} {$def}");
+        } catch (Throwable $e) {}
+    }
+    // 略過權限：預設勾給生管（使用者要求），只種一次，之後管理員在設定矩陣取消勾選不會被蓋回來
+    try {
+        if (!act_param_get($db, 'skip_seeded', false)) {
+            $ins = $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES (?,?,?)");
+            $ins->execute(['ar', 'skip', 'art_pm']);
+            $ins->execute(['ap', 'skip', 'art_pm']);
+            act_param_save($db, 'skip_seeded', true, 'system');
+        }
+    } catch (Throwable $e) {}
+
     // 應收歸戶需要的兩個欄位（是否需要對帳單／提供方式）已由 master_data_management.php 建立，
     // 這裡只是保險：萬一先跑到這支而那邊還沒跑過，一樣要能用。
     try { $db->exec("ALTER TABLE customer_list ADD COLUMN need_recon_stmt  TINYINT(1)  NULL DEFAULT 0   COMMENT '是否需要對帳單'"); } catch (Throwable $e) {}
@@ -298,7 +320,7 @@ if (!function_exists('act_role_matrix_save')) {
 function act_role_matrix_save(PDO $db, array $rows): void
 {
     $validRoles = ['art_pm', 'art_sales', 'art_acc'];
-    $validStatus = array_keys(act_statuses());
+    $validStatus = array_merge(array_keys(act_statuses()), ['skip']);   // 'skip'＝略過按鈕的權限列
     $db->beginTransaction();
     try {
         $db->exec("DELETE FROM acc_recon_track_role_matrix");
@@ -577,6 +599,39 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
     return ['success' => true, 'message' => '已更新', 'from' => $row['status'], 'to' => $toStatus];
+}}
+
+if (!function_exists('act_set_skip')) {
+/**
+ * 略過／取消略過：此結帳月份不須對這個客戶／廠商的帳。權限＝矩陣的 'skip' 列（本頁管理員永遠可以）。
+ * 留紀錄：誰、何時（acc_recon_track.skipped_*，並寫進狀態歷程 to_status=skipped/unskipped）。
+ */
+function act_set_skip(PDO $db, int $trackId, bool $skip, array $perms, string $reason = ''): array
+{
+    $st = $db->prepare("SELECT * FROM acc_recon_track WHERE id=?");
+    $st->execute([$trackId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
+    if (!act_can_set_status($db, $perms, $row['side'], 'skip')) return ['success' => false, 'message' => '沒有略過的權限'];
+    $isSkipped = !empty($row['skipped_at']);
+    if ($skip === $isSkipped) return ['success' => true, 'message' => $skip ? '已經是略過狀態' : '本來就沒有略過'];
+    $now = date('Y-m-d H:i:s');
+    $by = $perms['uid'] ?? null; $byName = $perms['uname'] ?? '';
+    $db->beginTransaction();
+    try {
+        if ($skip) {
+            $db->prepare("UPDATE acc_recon_track SET skipped_at=?, skipped_by=?, skipped_by_name=?, skipped_reason=? WHERE id=?")
+               ->execute([$now, $by, $byName, $reason !== '' ? mb_substr($reason, 0, 200) : null, $trackId]);
+        } else {
+            $db->prepare("UPDATE acc_recon_track SET skipped_at=NULL, skipped_by=NULL, skipped_by_name=NULL, skipped_reason=NULL WHERE id=?")
+               ->execute([$trackId]);
+        }
+        $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
+                      VALUES (?,?,?,?,?,?,?)")
+           ->execute([$trackId, $row['status'] !== '' ? $row['status'] : null, $skip ? 'skipped' : 'unskipped', $by, $byName, $now, $reason !== '' ? $reason : null]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
+    return ['success' => true, 'message' => $skip ? '已略過' : '已取消略過'];
 }}
 
 if (!function_exists('act_allowed_next_statuses')) {
@@ -1114,9 +1169,10 @@ function act_period_status_counts(PDO $db, string $side, array $period): array
     $out = array_merge(['not_due' => 0, 'early_recon' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
     try {
         $today = act_today($db);
-        $st = $db->prepare("SELECT status, cutoff_date FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ?");
+        $st = $db->prepare("SELECT status, cutoff_date, skipped_at FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ?");
         $st->execute([$side, $bmFrom, $bmTo]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (!empty($r['skipped_at'])) { $out['skipped'] = ($out['skipped'] ?? 0) + 1; continue; }
             $key = ($r['status'] !== '') ? $r['status'] : act_card_status($db, '', $r['cutoff_date']);
             $out[$key] = ($out[$key] ?? 0) + 1;
         }

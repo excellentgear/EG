@@ -130,6 +130,8 @@ body { background:#F6F1EA; }
 .st-card[data-st="sent_to_acc"]  { border-top-color:#C77C1A; }
 .st-card[data-st="acc_received"] { border-top-color:#8B5A2B; }
 .st-card[data-st="acc_done"]     { border-top-color:#2E7D32; }
+.st-card[data-st="skipped"]      { border-top-color:#B9A88F; }
+.badge-skipped       { background:#E4D3BC; color:#6B4423; }
 .badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; line-height:16px; }
 .badge-not_due       { background:#D8CBB4; color:#5A4328; }
 .badge-early_recon   { background:var(--amber); color:#4E2C0B; }
@@ -524,6 +526,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <ul>
         <li>操作欄顯示目前這個人可以按的所有狀態（可能不只一個），可以跳過中間階段直接按較後面的狀態——跳過的階段日期會自動帶入與實際按下那格相同的時間，工作天數統計才算得出來。</li>
         <li>是否允許跳過順序，應收／應付可在「設定」分開開關，關閉後只能依序一步一步按。</li>
+        <li>「略過」鈕：此結帳月份不須對該客戶／廠商的帳時按下，會記錄是誰、什麼時候略過（可填原因），狀態顯示「已略過」；按「取消略過」可還原。誰可以略過由「設定→角色權限矩陣」最下面的「略過」列勾選（預設生管）。</li>
         <li>快速按鈕只有全站管理員才會看到全部狀態；本頁管理員（art_admin）與生管／業務／會計一樣，按鈕依「設定→角色權限矩陣」決定——本身兼任哪個角色就看得到該角色能按的狀態，若都沒有則該列不會出現任何快速按鈕。</li>
         <li>「改派」下拉選單（可回復到較早的狀態、或跳過順序被關閉時用來補按鈕涵蓋不到的狀態）只有全站管理員看得到。</li>
         <li>每個狀態能不能由哪個角色按，由管理員在「設定→角色權限矩陣」調整（同一個狀態可以同時勾生管與業務）。</li>
@@ -598,6 +601,8 @@ function statusLabel(k){
     if (k === 'not_due') return '未到結帳日';
     if (k === 'early_recon') return '可提早對帳';
     if (k === 'need_recon') return '需對帳';
+    if (k === 'skipped') return '已略過';
+    if (k === 'unskipped') return '取消略過';
     return (k==='' || k==null) ? '需對帳' : (STATUSES[k] || k);
 }
 /* 每頁筆數下拉：固定選項 5/10/20/50 之外，把管理員設定的預設值也插進去（如 6），並預選它 */
@@ -987,11 +992,16 @@ function renderListTbl(){
     pageRows.forEach(function(r){
         var targetType = isAr ? 'customer' : 'maker';
         var targetId = r.party_id || '';
-        var targets = allowedTargets(r);
+        var targets = r.skipped ? [] : allowedTargets(r);
         var btns = targets.map(function(s){
             return '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + s + '\')">' + esc(statusLabel(s)) + '</button>';
         }).join('');
-        if (PERMS.isAll) {
+        if (canSkip(r.side)) {
+            btns += r.skipped
+                ? ' <button class="btn btn-default row-btn" onclick="doSkip(' + r.track_id + ',0)">取消略過</button>'
+                : ' <button class="btn btn-default row-btn" title="此月份不須對此' + (isAr?'客戶':'廠商') + '的帳" onclick="doSkip(' + r.track_id + ',1)">略過</button>';
+        }
+        if (PERMS.isAll && !r.skipped) {
             // 使用者明確要求：本頁管理員(art_admin)不要有「改派」下拉——只有全站管理員(isAll)才看得到。
             // 已經有按鈕可以按的狀態就不在下拉選單裡重複出現；下拉只保留按鈕涵蓋不到的
             // （例如回復到較早狀態、或跳過順序被關閉時被按鈕排除掉的）
@@ -1017,6 +1027,9 @@ function renderListTbl(){
             tds.push('<td class="c">' + needBadge + '</td>');
             tds.push('<td class="c">' + esc(r.owner_name || '—') + '</td>');
         }
+        if (r.skipped) {
+            tds.push('<td class="c">' + statusBadge('skipped') + '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;" title="' + esc(r.skipped_reason||'') + '">' + esc(r.skipped_by||'') + ' ' + esc(String(r.skipped_at||'').substr(0,16).replace(/-/g,'.')) + ' 略過' + (r.skipped_reason ? '<br>' + esc(r.skipped_reason) : '') + '</div></td>');
+        } else
         tds.push('<td class="c">' + statusBadge(r.card_status) + (r.status_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(String(r.status_at).replace(/-/g,'.')) + '</div>' : '') + '</td>');
         tds.push('<td class="c">' + btns + '</td>');
         tds.push('<td class="c">' + settleBtn + '</td>');
@@ -1028,6 +1041,21 @@ function renderListTbl(){
     });
     document.getElementById('listTbl').querySelector('tbody').innerHTML = html;
     updateBatchBar();
+}
+function canSkip(side){
+    if (PERMS.isAll || PERMS.canAdmin) return true;
+    var allowed = (MATRIX[side] && MATRIX[side]['skip']) || [];
+    return (PERMS.isPm && allowed.indexOf('art_pm')>=0) || (PERMS.isSales && allowed.indexOf('art_sales')>=0) || (PERMS.isAcc && allowed.indexOf('art_acc')>=0);
+}
+function doSkip(trackId, on){
+    var reason = '';
+    if (on) {
+        reason = prompt('此月份不須對帳，確定略過？（會記錄你與時間）\n略過原因（可留空）：', '');
+        if (reason === null) return;
+    } else if (!confirm('確定取消略過？')) return;
+    api({action:'skip_set', track_id:trackId, skip:on?1:0, reason:reason}).done(function(r){
+        if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(true); }
+    });
 }
 function doSetStatus(trackId, to){
     api({action:'set_status', track_id:trackId, to_status:to}).done(function(r){
@@ -1265,6 +1293,11 @@ function renderMatrix(){
             }).join('');
             return '<tr><th>' + esc(STATUSES[st]) + '</th>' + cells + '</tr>';
         }).join('');
+        // 「略過」按鈕的權限列（勾選的角色可以按「略過／取消略過」）
+        var skipAllowed = (MATRIX[side] && MATRIX[side]['skip']) || [];
+        rows += '<tr><th>略過（此月不須對帳）</th>' + ROLE_CODES.map(function(rc){
+            return '<td><label><input type="checkbox" data-side="'+side+'" data-status="skip" data-role="'+rc[0]+'" '+(skipAllowed.indexOf(rc[0])>=0?'checked':'')+'> '+rc[1]+'</label></td>';
+        }).join('') + '</tr>';
         var html = '<h5 style="margin:10px 0 4px;">' + title + '</h5><table class="art-t matrix-tbl"><thead><tr><th>狀態</th>' +
             ROLE_CODES.map(function(rc){ return '<th>'+rc[1]+'</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
         document.getElementById('matrixWrap').insertAdjacentHTML('beforeend', html);
@@ -1432,7 +1465,7 @@ $(function(){
         ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
         DEFAULT_PER_PAGE = r.default_per_page || 6;
         EARLY_DAYS = (r.early_days === undefined) ? 5 : r.early_days;
-        CARD_ORDER = ['not_due', 'early_recon', 'need_recon'].concat(Object.keys(STATUSES));
+        CARD_ORDER = ['not_due', 'early_recon', 'need_recon'].concat(Object.keys(STATUSES)).concat(['skipped']);
         LIST_CARD_ORDER = ['all'].concat(CARD_ORDER);
         rebuildPerPageOptions();
         fillGranYear(r.years);
