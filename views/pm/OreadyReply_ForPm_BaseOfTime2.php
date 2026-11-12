@@ -1042,7 +1042,7 @@ if (is_array($OreadyReply_list_base)) {
                 DATE_FORMAT(il.Order_date, '%Y-%m-%d') AS shipment_iso_date, -- For JS logic 'YYYY-MM-DD'
                 il.Order_date -- Keep original Order_date for PHP sorting
             FROM is_list il
-            WHERE il.Product_id IN ({$placeholders})
+            WHERE il.Product_id IN ({$placeholders}) AND NOT EXISTS (SELECT 1 FROM is_bom_map ibm WHERE ibm.IS_id=il.IS_id) -- 已綁定任何製令的出貨不列入「未綁定出貨」；本製令綁定的另由「已綁定出貨單」顯示
             ORDER BY il.Product_id, il.Order_date DESC
         ";
 

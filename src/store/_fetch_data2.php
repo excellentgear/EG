@@ -352,7 +352,7 @@ if (is_array($OreadyReply_list_base)) {
                     DATE_FORMAT(il.Order_date, '%Y-%m-%d') AS shipment_iso_date,
                     il.Order_date, il.d_setting_id, TRIM(il.Client_name) AS Client_name
                 FROM is_list il
-                WHERE il.Product_id IN ({$placeholders_shipment})
+                WHERE il.Product_id IN ({$placeholders_shipment}) AND NOT EXISTS (SELECT 1 FROM is_bom_map ibm WHERE ibm.IS_id=il.IS_id) -- 已綁定任何製令的出貨不列入未綁定出貨
                 ORDER BY il.Product_id, il.Order_date DESC
             ";
             $stmt_shipment_history = $db->prepare($sql_shipment_history);
