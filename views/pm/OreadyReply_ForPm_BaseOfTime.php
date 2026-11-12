@@ -551,11 +551,11 @@ LEFT JOIN (
     INNER JOIN ( -- Subquery to find the latest effective date for each BOM
         -- 以移轉日(outsource_date)為準：未發單(null)的製程不列入比較，只顯示移轉日最新的製程
         SELECT bom, MAX(DATE(outsource_date)) AS max_effective_date
-        FROM bom_ing WHERE processing_state IN ('Q', 'P', 'ing', 'E') AND outsource_date IS NOT NULL AND is_schedule_split = 0 GROUP BY bom
+        FROM bom_ing WHERE processing_state IN ('Q', 'P', 'ing', 'E') AND outsource_date IS NOT NULL AND is_schedule_split = 0 AND bom IN (SELECT bom FROM bom WHERE d_id <> '' AND processing_state IS NULL) GROUP BY bom
     ) bi_latest ON bi_grouped.bom = bi_latest.bom AND bi_grouped.outsource_date IS NOT NULL AND DATE(bi_grouped.outsource_date) = bi_latest.max_effective_date
     LEFT JOIN maker_list ml ON ml.maker_id_no = bi_grouped.maker_id_no -- ✅ 新增 JOIN 以取得廠商中文名
     LEFT JOIN process_no pn ON pn.ProcessNo = bi_grouped.process_no -- 修正：在子查詢內 JOIN process_no
-    WHERE bi_grouped.processing_state IN ('Q', 'P', 'ing', 'E') AND bi_grouped.is_schedule_split = 0
+    WHERE bi_grouped.processing_state IN ('Q', 'P', 'ing', 'E') AND bi_grouped.is_schedule_split = 0 AND bi_grouped.bom IN (SELECT bom FROM bom WHERE d_id <> '' AND processing_state IS NULL) -- 只彙總本頁會列出的 BOM（效能）
     GROUP BY bi_grouped.bom -- 修正：僅依 bom 分組以合併所有最新製程
 ) bi ON bi.bom = b.bom
 
@@ -18242,6 +18242,9 @@ echo "</script>\n";
                                         <div class="input-group">
                                             <select id="oready-role-select" class="form-control"></select>
                                             <span class="input-group-btn">
+                            <?php if (!empty($oready_can_ship_insight)): ?>
+                                <a href="../Sales/Shipping_Quick.php" target="_blank" rel="noopener" class="btn btn-xs btn-default" style="float:right;margin-left:8px;" title="另開新分頁前往快速出貨"><i class="fa fa-truck"></i> 快速出貨 <i class="fa fa-external-link"></i></a>
+                            <?php endif; ?>
                                                 <button type="button" class="btn btn-default" id="oready-role-refresh" title="重新整理角色清單"><i class="fa fa-refresh"></i></button>
                                             </span>
                                         </div>

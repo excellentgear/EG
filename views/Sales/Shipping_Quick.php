@@ -300,6 +300,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <span class="sq-hint" style="margin-left:12px;">
         鍵盤：<kbd>/</kbd> 搜尋　<kbd>↑</kbd><kbd>↓</kbd> 選列　<kbd>空白</kbd> 勾選　<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 出貨
       </span>
+      <a href="Shipping_Insight.php" target="_blank" rel="noopener" class="sq-go-insight" title="另開新分頁前往出貨分析" style="margin-left:auto;display:inline-block;padding:4px 12px;border:1px solid #c9a77a;border-radius:4px;background:#fff;color:#7a4b12;font-size:13px;text-decoration:none;"><i class="fa fa-bar-chart"></i> 出貨分析 <i class="fa fa-external-link"></i></a>
     </div>
 
     <div class="sq-stat">

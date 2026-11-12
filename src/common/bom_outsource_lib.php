@@ -395,6 +395,17 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                 foreach ($boms as $bm) {
                     $hasT = $db->prepare("SELECT COUNT(*) FROM bom_ing_transfer_log WHERE bom=?"); $hasT->execute([$bm]);
                     if (!(int)$hasT->fetchColumn()) continue;
+                    // 效能：這個 BOM 的批次全都「已有回廠數且已回完」時，憑單推算（baf_list，每個 BOM 要算很久）不會改變任何數字，
+                    // 只需補上 xfer_all=false，直接略過（載入 BOM 總覽原本光這一段就要 0.8 秒以上）
+                    $_needInfer = false;
+                    foreach ($me as $fid => $x) {
+                        if ($x['bom'] !== $bm || !isset($out[$fid])) continue;
+                        foreach ($out[$fid]['batches'] as $_b0) { if ($_b0['ret'] <= 1e-9 || $_b0['outside'] > 1e-9) { $_needInfer = true; break 2; } }
+                    }
+                    if (!$_needInfer) {
+                        foreach ($me as $fid => $x) { if ($x['bom'] === $bm && isset($out[$fid])) $out[$fid]['xfer_all'] = false; }
+                        continue;
+                    }
                     $L = baf_list($db, $bm);
                     $byB = []; $byA = [];
                     foreach (($L['rows'] ?? []) as $r) {

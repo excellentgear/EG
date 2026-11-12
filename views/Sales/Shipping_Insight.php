@@ -231,10 +231,10 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
 
   <div class="page-title">
     <h3><i class="fa fa-truck" style="color:var(--blue-d);"></i> 出貨分析
-      <span class="role-tag">目前身分：<?= siEsc($roleLabel) ?></span>
       <a href="Shipping_Analysis_new.php" class="btn btn-xs btn-warm-o" style="font-weight:600;">
         <i class="fa fa-arrow-left"></i> 回出貨紀錄分析</a>
-      <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
+      <span class="role-tag" style="margin-left:auto;">目前角色：<?= siEsc($roleLabel) ?></span>
+      <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
     </h3>
   </div>
 
