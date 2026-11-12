@@ -1239,7 +1239,7 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     $cond = "il.Order_id IN ($in)";
     if ($dids) $cond .= " OR (il.Order_id IS NULL AND il.d_setting_id IN (" . implode(',', $dids) . "))";
     $q = $db->prepare("
-        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, il.Client_name, il.Product_id, il.Qty, il.Unit_price, il.Order_id,
+        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, il.Client_name, il.Product_id, il.Specification, il.Note, il.Qty, il.Unit_price, il.Order_id,
                COALESCE((SELECT SUM(m.shipped_qty) FROM is_bom_map m WHERE m.IS_id = il.IS_id), 0) AS alloc,
                COALESCE((SELECT SUM(m.shipped_qty) FROM is_bom_map m WHERE m.IS_id = il.IS_id AND m.bom = ?), 0) AS this_bom
         FROM is_list il
@@ -1253,7 +1253,7 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
         if ($bd !== '' && $r['d'] < $bd) continue;   // 出貨早於製令開立＝不可能是這張製令出的
         $left = (int)$r['Qty'] - (int)$r['alloc'];
         $out[] = ['is_id' => (int)$r['IS_id'], 'no' => (string)$r['IS_number'], 'date' => (string)$r['d'],
-                  'part' => (string)$r['Product_id'], 'qty' => (int)$r['Qty'], 'price' => (float)$r['Unit_price'],
+                  'part' => (string)$r['Product_id'], 'spec' => (string)$r['Specification'], 'note' => (string)$r['Note'], 'qty' => (int)$r['Qty'], 'price' => (float)$r['Unit_price'],
                   'order_oo' => $r['Order_id'] ? ($oo[(int)$r['Order_id']] ?? '') : '',
                   'has_order' => $r['Order_id'] !== null, 'alloc' => (int)$r['alloc'], 'this_bom' => (int)$r['this_bom'],
                   'left' => max(0, $left), 'selectable' => $left > 0 && (int)$r['this_bom'] === 0];
