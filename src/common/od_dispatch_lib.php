@@ -263,7 +263,7 @@ function od_chain(PDO $db, array $f): array
     // 條件要看整條製程鏈才判得出來，所以分批往後掃，湊滿一頁或掃完為止（單次最多掃 600 張 BOM，避免拖慢）
     $rows = []; $scanned = 0; $chunk = 40; $pos = $offset; $more = false;
     while (count($rows) < $limit && $scanned < 600) {
-        $st = $db->prepare("SELECT b.bom, b.d_id AS part_no, b.Client_Name AS client, b.sqty, b.priority_type, b.Delivery_date
+        $st = $db->prepare("SELECT b.bom, b.d_id AS part_no, b.d_setting_id AS did, b.Client_Name AS client, b.sqty, b.priority_type, b.Delivery_date
                               FROM bom b WHERE $sqlW ORDER BY b.bom DESC LIMIT $chunk OFFSET $pos");
         $st->execute($args);
         $boms = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -305,7 +305,8 @@ function od_bom_chain(PDO $db, string $bom): array
     }
     $qc = [];
     foreach ($db->query("SELECT bom_ing_fid_ref AS fid, COALESCE(SUM(QC_ok_sqty),0)+COALESCE(SUM(QC_aod_sqty),0) AS pass,
-                                COALESCE(SUM(QC_ok_sqty),0)+COALESCE(SUM(QC_aod_sqty),0)+COALESCE(SUM(QC_QQ_sqty),0)+COALESCE(SUM(QC_ng_sqty),0) AS insp
+                                COALESCE(SUM(QC_ok_sqty),0)+COALESCE(SUM(QC_aod_sqty),0)+COALESCE(SUM(QC_QQ_sqty),0)+COALESCE(SUM(QC_ng_sqty),0) AS insp,
+                                DATE_FORMAT(MAX(QC_check_date),'%c.%e') AS qd
                            FROM QC_check WHERE bom_ing_fid_ref IN ($in) GROUP BY bom_ing_fid_ref")->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $qc[(int)$r['fid']] = $r;
     }
@@ -340,7 +341,7 @@ function od_bom_chain(PDO $db, string $bom): array
             'bom_ing_fid' => $fid, 'bom_sn' => $sn, 'process_no' => (int)$r['process_no'], 'name' => (string)$r['ProcessName'],
             'ptype_id' => (int)$r['process_type_id'], 'ptype' => (string)$r['ptype_name'],
             'state' => $disp, 'raw_state' => $state, 'sqty' => $sqty, 'sent' => $sent, 'ret' => $ret, 'scrap' => $scrap,
-            'qc' => ['mode' => $qmode, 'insp' => (float)$pq['insp'], 'pass' => (float)$pq['pass'], 'ret' => $ret],
+            'qc' => ['mode' => $qmode, 'insp' => (float)$pq['insp'], 'pass' => (float)$pq['pass'], 'ret' => $ret, 'date' => (string)($pq['qd'] ?? '')],
             'excl_qc' => $excl, 'maker_no' => (string)$r['maker_id_no'], 'maker' => (string)$r['maker_id'],
             'remark' => trim((string)$r['ps']), 'remark2' => trim((string)$r['PS2']),
             'container' => od_container_text($r['pm_ps'], $r['pm_ps2'], $r['QC_ps'], $r['QC_ps2']),
@@ -366,6 +367,8 @@ function od_bom_chain(PDO $db, string $bom): array
         } else {
             $p = $prev;
             $passQty = $p['excl_qc'] ? max(0.0, $p['ret'] - $p['scrap']) : $p['qc']['pass'];
+            // 上一關已有回廠紀錄、但完全還沒做 QC 檢驗：以回廠良品數為可發量（避免有回廠卻被擋住發不了單）；一旦開始檢驗就改回只認已驗合格數
+            if (!$p['excl_qc'] && $p['qc']['insp'] <= 0 && $p['ret'] > 0) $passQty = max(0.0, $p['ret'] - $p['scrap']);
             $c['avail'] = max(0.0, min($passQty - $c['sent'], $c['remaining']));
         }
         if ($c['is_customer_material']) $c['avail'] = null;
@@ -418,7 +421,8 @@ function od_makers_decorate(array $rows): array
 function od_makers(PDO $db, string $q, int $ptype = 0): array
 {
     $q = trim($q);
-    $args = []; $w = "(m.status IS NULL OR m.status <> 'X') AND " . od_maker_cat_sql('m');
+    // 與 BOM 總覽移轉時的廠商清單同一口徑：不依廠商大類過濾，只排除已停用（status='X'）
+    $args = []; $w = "(m.status IS NULL OR m.status <> 'X')";
     if ($q !== '') { $w .= " AND (m.maker_id LIKE ? OR m.maker_id_no LIKE ? OR m.maker_id_all LIKE ?)"; array_push($args, "%$q%", "%$q%", "%$q%"); }
     $st = $db->prepare("SELECT m.maker_id_no, m.maker_id, m.m_tel, m.factory_address, m.internal, m.m_process_items, " . od_maker_items_sql('m') . " AS subs
                           FROM maker_list m WHERE $w ORDER BY m.maker_id LIMIT 80");
@@ -442,7 +446,7 @@ function od_common_makers(PDO $db, int $ptype, int $n = 6): array
     if ($ptype <= 0) return [];
     $st = $db->prepare("SELECT bi.maker_id_no, MAX(bi.maker_id) maker_id, COUNT(*) c, MAX(m.m_process_items) m_process_items, MAX(" . od_maker_items_sql('m') . ") subs
                           FROM bom_ing bi JOIN process_no pn ON pn.ProcessNo=bi.process_no JOIN maker_list m ON m.maker_id_no=bi.maker_id_no
-                         WHERE pn.process_type_id=? AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>'' AND (m.status IS NULL OR m.status<>'X') AND " . od_maker_cat_sql('m') . "
+                         WHERE pn.process_type_id=? AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>'' AND (m.status IS NULL OR m.status<>'X')
                          GROUP BY bi.maker_id_no ORDER BY c DESC LIMIT " . (int)$n);
     $st->execute([$ptype]);
     return od_makers_decorate($st->fetchAll(PDO::FETCH_ASSOC));
@@ -496,7 +500,7 @@ function od_issue(PDO $db, array $user, array $items, string $issueDate, int $fo
                           VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
                ->execute([$slipNo, $mk, $mi['maker_id'], $mi['addr'], $mi['m_tel'], $issueDate, $formatId ?: null, $twoPart ? 1 : 0, $uid, $uname]);
             $slipId = (int)$db->lastInsertId();
-            $n = 0;
+            $n = 0; $detail = [];
             foreach ($lines as $it) {
                 $fid = (int)($it['bom_ing_fid'] ?? 0);
                 $qty = (float)($it['qty'] ?? 0);
@@ -543,8 +547,10 @@ function od_issue(PDO $db, array $user, array $items, string $issueDate, int $fo
                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute([$slipId, ++$n, $row['bom'], $row['part_no'], $row['client'], $fid, $batchId, $row['process_no'], $row['ProcessName'], $qty, mb_substr(trim((string)($it['container'] ?? '')), 0, 60) ?: null, $price,
                               $due !== '' ? $due : null, mb_substr(trim((string)($it['remark'] ?? '')), 0, 200)]);
+                $detail[] = ['bom' => $row['bom'], 'part_no' => $row['part_no'], 'process' => $row['ProcessName'], 'qty' => $qty,
+                             'due' => $due, 'price' => $price];
             }
-            $slips[] = ['slip_id' => $slipId, 'slip_no' => $slipNo, 'maker' => $mi['maker_id'], 'lines' => $n];
+            $slips[] = ['slip_id' => $slipId, 'slip_no' => $slipNo, 'maker' => $mi['maker_id'], 'lines' => $n, 'detail' => $detail];
         }
         $db->commit();
     } catch (Throwable $e) {
@@ -634,6 +640,35 @@ function od_price_list(PDO $db, array $f): array
     $st = $db->prepare("SELECT p.*, pn.ProcessName, COALESCE(ml.maker_id,'') AS maker
                           FROM od_price p LEFT JOIN process_no pn ON pn.ProcessNo=p.process_no LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no
                          WHERE " . implode(' AND ', $w) . " ORDER BY p.created_at DESC, p.price_id DESC LIMIT 300");
+    $rows = [];
+    if (($f['kind'] ?? '') !== 'history') { $st->execute($a); $rows = $st->fetchAll(PDO::FETCH_ASSOC); }
+    // 舊有加工紀錄價格（製程移轉憑單，唯讀）：類型為「全部」或「加工紀錄」時併入
+    if (empty($f['kind']) || $f['kind'] === 'history') {
+        $rows = array_merge($rows, od_price_history_rows($db, $k, 300));
+    }
+    return $rows;
+}
+
+/** 舊有加工紀錄價格：取自製程移轉憑單（修改後單價優先），新到舊，唯讀 */
+function od_price_history_rows(PDO $db, string $kw, int $limit = 300): array
+{
+    $w = ["COALESCE(NULLIF(tl.modified_unit_price,0), tl.price) > 0"]; $a = [];
+    foreach (preg_split('/\s+/u', trim($kw)) as $t) {
+        if ($t === '') continue;
+        $w[] = "(b.d_id LIKE ? OR b.Client_Name LIKE ? OR COALESCE(ml.maker_id,tl.maker_from) LIKE ? OR tl.bom LIKE ? OR pn.ProcessName LIKE ?)";
+        array_push($a, "%$t%", "%$t%", "%$t%", "%$t%", "%$t%");
+    }
+    $st = $db->prepare("SELECT 0 AS price_id, 'history' AS kind, MAX(tl.bom) AS bom, MAX(b.d_id) AS part_no, MAX(b.Client_Name) AS client_name,
+                               MAX(pn.ProcessName) AS ProcessName, MAX(COALESCE(ml.maker_id, tl.maker_from)) AS maker, MAX(tl.transfer_qty) AS qty,
+                               MAX(COALESCE(NULLIF(tl.modified_unit_price,0), tl.price)) AS unit_price,
+                               DATE_FORMAT(MAX(tl.transfer_date),'%Y.%m.%d') AS note, '移轉憑單' AS created_by_name
+                          FROM bom_ing_transfer_log tl
+                          JOIN bom b ON b.bom = tl.bom
+                          LEFT JOIN bom_ing bi ON bi.bom = tl.bom AND bi.bom_sn = tl.bom_sn AND bi.is_schedule_split = 0
+                          LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                          LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
+                         WHERE " . implode(' AND ', $w) . "
+                         GROUP BY tl.transfer_id ORDER BY tl.transfer_date DESC, tl.transfer_id DESC LIMIT " . (int)$limit);
     $st->execute($a);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
