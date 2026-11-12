@@ -359,6 +359,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                        data-id="<?= $ev['id'] ?>"
                                        data-reftype="<?= htmlspecialchars($ev['ref_type'] ?? '', ENT_QUOTES) ?>"
                                        data-refid="<?= (int)($ev['ref_id'] ?? 0) ?>"
+                                       data-source="<?= htmlspecialchars((string)($ev['source'] ?? ''), ENT_QUOTES) ?>"
                                        data-needmode="<?= (int)($ev['need_mode'] ?? 1) ?>"
                                        data-foruid="<?= (int)($ev['for_uid'] ?? 0) ?>"
                                        data-forname="<?= htmlspecialchars((string)($ev['for_name'] ?? ''), ENT_QUOTES) ?>"
@@ -467,13 +468,14 @@ window.addEventListener('load', function(){
     try {
         if (typeof $ === 'undefined') return;
         var CATS = <?= json_encode($__nbCats, JSON_UNESCAPED_UNICODE) ?>;
-        function hit(c, rt, need){
+        function hit(c, rt, need, src){
             if (c.kind === 'todo' && need <= 1) return false;
             if (c.kind === 'info' && need > 1) return false;
             if (!c.src || !c.src.length) return true;
             for (var i = 0; i < c.src.length; i++) {
                 var p = c.src[i];
-                if (p === '(none)') { if (!rt) return true; }
+                if (p.indexOf('src:') === 0) { if (src === p.slice(4)) return true; }
+                else if (p === '(none)') { if (!rt) return true; }
                 else if (p.slice(-1) === '*') { if (rt.indexOf(p.slice(0, -1)) === 0) return true; }
                 else if (p === rt) return true;
             }
@@ -488,7 +490,7 @@ window.addEventListener('load', function(){
                 $items.each(function(){
                     var $a = $(this).find('a.notice-open').first(); if (!$a.length) return;
                     var rt = String($a.attr('data-reftype') || ''), need = parseInt($a.attr('data-needmode'), 10) || 1;
-                    if (!hit(c, rt, need)) return;
+                    if (!hit(c, rt, need, String($a.attr('data-source') || ''))) return;
                     n++;
                     $('<li class="notice-row nbcat-row"></li>').append($a.clone()).appendTo($list);
                 });

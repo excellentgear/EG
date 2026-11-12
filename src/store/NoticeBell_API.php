@@ -52,9 +52,15 @@ case 'list': {
     // 近 90 天各 ref_type 的通知數（讓管理員知道哪個來源有量）
     $cnt = [];
     foreach ($db->query("SELECT COALESCE(ref_type,'') rt, COUNT(*) c FROM live_event WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 90 DAY) GROUP BY ref_type")->fetchAll(PDO::FETCH_ASSOC) as $r) $cnt[$r['rt']] = (int)$r['c'];
+    // 沒有 ref_type 的舊式通知（例：訂單變更）改用「來源」欄位辨識
+    $scnt = [];
+    foreach ($db->query("SELECT source, COUNT(*) c FROM live_event WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 90 DAY) AND (ref_type IS NULL OR ref_type='') AND source IS NOT NULL AND source<>'' GROUP BY source")->fetchAll(PDO::FETCH_ASSOC) as $r) $scnt[$r['source']] = (int)$r['c'];
     $groups = [];
     $covered = [];
-    foreach (eg_nbell_source_groups() as $pat => $label) {
+    $known = eg_nbell_source_groups();
+    foreach ($scnt as $sn => $c) { if (!isset($known['src:' . $sn])) $known['src:' . $sn] = $sn . '（舊式通知）'; }
+    foreach ($known as $pat => $label) {
+        if (strpos($pat, 'src:') === 0) { $groups[] = ['key' => $pat, 'label' => $label, 'count90' => $scnt[substr($pat, 4)] ?? 0]; continue; }
         $n = 0;
         foreach ($cnt as $rt => $c) {
             $hit = ($pat === '(none)') ? ($rt === '') : (substr($pat, -1) === '*' ? strpos($rt, substr($pat, 0, -1)) === 0 : $rt === $pat);

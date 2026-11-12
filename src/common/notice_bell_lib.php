@@ -13,6 +13,7 @@
  *   'QA*'      ＝ref_type 以 QA 開頭（含 QAB_L1、QA_DECIDE…）
  *   'CAR'      ＝ref_type 完全等於 CAR
  *   '(none)'   ＝沒有 ref_type 的一般公告／通知
+ *   'src:訂單變更' ＝通知的「來源」欄位（live_event.source）等於該文字——沒有 ref_type 的舊式通知（如訂單變更）用這種
  */
 
 if (!function_exists('eg_nbell_ensure_schema')) {
@@ -67,6 +68,7 @@ if (!function_exists('eg_nbell_ensure_schema')) {
             'PURCHASE*'         => '申請採購',
             'BUSINESS_TRIP*'    => '公出單',
             'NOTICE_APPROVAL*'  => '公告簽核',
+            'src:訂單變更'      => '訂單變更通知',
             '(none)'            => '一般公告／通知（沒有來源頁面的）',
         ];
     }
@@ -78,7 +80,8 @@ if (!function_exists('eg_nbell_ensure_schema')) {
         foreach ((array)$src as $s) {
             $s = trim((string)$s);
             if ($s === '' || mb_strlen($s, 'UTF-8') > 60) continue;
-            if ($s !== '(none)' && !preg_match('/^[A-Za-z0-9_]+\*?$/', $s)) continue;
+            if (strpos($s, 'src:') === 0) { if (mb_strlen($s, 'UTF-8') < 5 || preg_match('/[[:cntrl:]]/', $s)) continue; }
+            elseif ($s !== '(none)' && !preg_match('/^[A-Za-z0-9_]+\*?$/', $s)) continue;
             $out[$s] = $s;
         }
         return array_values($out);
