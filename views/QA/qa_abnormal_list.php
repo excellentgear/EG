@@ -889,6 +889,7 @@ var NOTIFY_MAP = {}, NOTIFY_SEQ = 0;
 function notifyHtml(id){
     var l = NOTIFY_MAP[id];
     if (l === undefined) return '<span class="muted-help">載入通知資訊…</span>';
+    if (l === null) return '<span class="muted-help">通知資訊載入失敗，請重新整理</span>';
     if (!l.length) return '<span class="muted-help">尚無通知紀錄</span>';
     return l.map(function(x){
         return '<span class="nt nt-' + esc(x.state) + '"><b>' + esc(x.label) + '</b> ' + esc(x.name) + ' ' + esc(x.date) + ' <i>' + esc(x.status) + '</i></span>';
@@ -897,13 +898,14 @@ function notifyHtml(id){
 function loadNotify(rows){
     if (!$('#fNotify').prop('checked') || $('#fDeleted').prop('checked') || !rows.length) return;
     var seq = ++NOTIFY_SEQ;
-    $.post(API, { action:'notify_info', ids: rows.map(function(r){ return Number(r.id); }) }, function(res){
+    $.post(API, { action:'notify_info', csrf:CSRF, ids: rows.map(function(r){ return Number(r.id); }) }, function(res){
         if (seq !== NOTIFY_SEQ) return;
         var info = (res && res.success && res.info) || {};
-        rows.forEach(function(r){ NOTIFY_MAP[r.id] = info[r.id] || []; });
+        if (!res || !res.success) { rows.forEach(function(r){ if (NOTIFY_MAP[r.id] === undefined) NOTIFY_MAP[r.id] = null; }); }
+        else rows.forEach(function(r){ NOTIFY_MAP[r.id] = info[r.id] || []; });
         $('#lstBody td.ninfo').each(function(){ $(this).html(notifyHtml($(this).data('id'))); });
     }, 'json').fail(function(){
-        rows.forEach(function(r){ if (NOTIFY_MAP[r.id] === undefined) NOTIFY_MAP[r.id] = []; });
+        rows.forEach(function(r){ if (NOTIFY_MAP[r.id] === undefined) NOTIFY_MAP[r.id] = null; });
         $('#lstBody td.ninfo').each(function(){ $(this).html(notifyHtml($(this).data('id'))); });
     });
 }
