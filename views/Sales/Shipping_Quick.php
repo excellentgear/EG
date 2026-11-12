@@ -357,6 +357,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   <span>金額 <b id="dkAmt">0</b> 元</span>
   <span id="dkGroups" style="font-size:12px;opacity:.85;"></span>
   <span class="sp">
+    <button id="btnBindOld" style="display:none;"><i class="fa fa-link"></i> 綁定舊出貨單到製令</button>
     <button id="btnClear">清除選取</button>
     <button class="go" id="btnShip"><i class="fa fa-paper-plane"></i> 確認出貨 (Ctrl+Enter)</button>
   </span>
@@ -535,6 +536,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 <div class="sq-mask" id="mkBomBind"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-link"></i>&nbsp;綁定舊出貨單到製令 <span id="bbBom"></span><span class="m-close" data-close="mkBomBind">✕</span></div>
   <div class="m-body">
+    <div id="bbSw" style="margin-bottom:6px;"></div>
     <div id="bbOrderInfo" style="margin-bottom:8px;"></div>
     <div class="mt-note" style="margin-bottom:6px;">
       列出這張製令綁定的訂單（<span id="bbOrders"></span>）底下、<b>同客戶</b>的舊出貨明細：已綁這些訂單者，或尚未綁訂單但同料號者。
@@ -788,10 +790,32 @@ function bbBtn(bomNo){
   return CAN_ADMIN ? ' <button type="button" class="btn-bb" data-bom="'+esc(bomNo)+'" style="margin-left:8px;padding:2px 10px;border:1px solid #c9792a;background:#fff;color:#8a4b12;border-radius:4px;font-weight:bold;cursor:pointer;">'
     + '<i class="fa fa-link"></i> 綁定舊出貨單</button>' : '';
 }
-var BB = {bom:'', ships:[]};
-$(document).on('click','.btn-bb',function(){
-  BB.bom = String($(this).data('bom'));
-  $('#bbBom').text(BB.bom); $('#bbOrders').text(''); $('#bbList').html('<div style="padding:16px;color:#8a6d45;">查詢中…</div>');
+var BB = {bom:'', ships:[], alts:[], fromBom:false};
+$(document).on('click','.btn-bb',function(){ BB.fromBom = true; openBomBind(String($(this).data('bom')), []); });
+/* 一般快速出貨：只勾一筆訂單、且這張訂單的製令底下有「還沒綁訂單」的同料號舊出貨時，才出現底部的綁定鈕 */
+var bbProbeKey = '';
+function bbProbe(){
+  var ks = Object.keys(sel);
+  if (!CAN_ADMIN || ks.length !== 1) { bbProbeKey=''; $('#btnBindOld').hide().data('boms',[]); return; }
+  var s = sel[ks[0]], boms = (s.row.boms||[]).map(function(b){ return String(b.bom); }).filter(Boolean);
+  if (!boms.length) { $('#btnBindOld').hide(); return; }
+  var key = ks[0]+'|'+boms.join(','); bbProbeKey = key;
+  $('#btnBindOld').hide();
+  var hit = [], left = boms.length;
+  boms.forEach(function(b){
+    $.post(API+'?action=bom_bind_candidates',{bom:b},function(r){
+      if (r.ok && !r.error && (r.ships||[]).some(function(x){ return !x.has_order && x.selectable; })) hit.push(b);
+    },'json').always(function(){
+      if (--left === 0 && bbProbeKey === key && hit.length) $('#btnBindOld').data('boms',hit).show();
+    });
+  });
+}
+$('#btnBindOld').on('click',function(){ var b=$(this).data('boms')||[]; if(!b.length) return; BB.fromBom=false; openBomBind(b[0], b); });
+function openBomBind(bom, alts){
+  BB.bom = bom; BB.alts = alts||[];
+  $('#bbBom').text(BB.bom);
+  $('#bbSw').html(BB.alts.length>1 ? ('<span style="font-size:12.5px;">這張訂單有多張製令，切換：</span>'+BB.alts.map(function(b){
+    return '<button type="button" class="bb-sw" data-bom="'+esc(b)+'" style="margin:0 3px;padding:1px 8px;'+(b===bom?'font-weight:bold;background:#F0A24B;':'')+'">'+esc(b)+'</button>'; }).join('')) : ''); $('#bbOrders').text(''); $('#bbList').html('<div style="padding:16px;color:#8a6d45;">查詢中…</div>');
   openMask('mkBomBind');
   $.post(API+'?action=bom_bind_candidates',{bom:BB.bom},function(r){
     if(!r.ok || r.error){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
@@ -814,7 +838,8 @@ $(document).on('click','.btn-bb',function(){
     });
     $('#bbList').html(h+'</tbody></table>'); bbCount();
   },'json').fail(function(){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
-});
+}
+$(document).on('click','.bb-sw',function(){ openBomBind(String($(this).data('bom')), BB.alts); });
 function bbCount(){ $('#bbSel').text('已勾選 '+$('#bbList .bb-ck:checked').length+' 筆'); }
 $(document).on('change','#bbList .bb-ck',bbCount);
 $(document).on('click','#btnBbApply',function(){
@@ -828,7 +853,8 @@ $(document).on('click','#btnBbApply',function(){
   $.post(API+'?action=bom_bind_apply',{csrf:CSRF,bom:BB.bom,pairs:JSON.stringify(pairs)},function(r){
     $b.prop('disabled',false);
     if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
-    toast(esc(r.message)); closeMask('mkBomBind'); load(function(){ openFromBom(BB.bom); });
+    toast(esc(r.message)); closeMask('mkBomBind');
+    if (BB.fromBom) load(function(){ openFromBom(BB.bom); }); else { sel = {}; load(); }
   },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
 });
 
@@ -1047,6 +1073,7 @@ function updateDock(){
   $('#stSelAmt,#dkAmt').text(nf(Math.round(amt)));
   $('#dkGroups').text(g? '將建立 '+g+' 張出貨單（依客戶分開）':'');
   $('#dock').css('display', cnt?'flex':'none');
+  bbProbe();
   $('#chkAll').prop('checked', rows.length>0 && rows.every(function(r){ return !!sel[r.order_id]; }));
 }
 
