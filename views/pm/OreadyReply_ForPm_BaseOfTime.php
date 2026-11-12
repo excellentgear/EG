@@ -794,7 +794,7 @@ foreach ($raw_ps_list as $_iam_item) {
     // 'N'(待發包) 只在有 batch_label（拆分批次）時納入，確保拆批後的未發包批次也能顯示
     $_iam_has_label = !empty($_iam_item['batch_label']);
     // 沒發包（待發包）但這一關已有移轉憑單＝東西已加工完成回廠：當作已移轉，發單日欄才不會停在上一關的 QC待驗
-    $_iam_xo = ($_iam_state === 'N' && !$_iam_has_label && !empty($_iam_item['xfer_date']) && empty($_iam_item['outsource_date']));
+    $_iam_xo = (in_array($_iam_state, ['N', 'E'], true) && !$_iam_has_label && !empty($_iam_item['xfer_date']) && empty($_iam_item['outsource_date']));
     if (!in_array($_iam_state, ['Q', 'P', 'ing', 'E']) && !($_iam_state === 'N' && $_iam_has_label) && !$_iam_xo) continue;
     if (!empty($_iam_item['is_consumed'])) continue; // 已消耗批次不列入
     $_iam_bom = $_iam_item['bom'];
@@ -3246,7 +3246,7 @@ echo "</script>\n";
             if (!item || !item.bom) return;
             var st = item.processing_state || '';
             // 'N' 狀態只在有 batch_label（拆分批次）時納入
-            var _xo = (st === 'N' && !item.batch_label && item.xfer_date && !item.outsource_date); // 待發包但已有移轉憑單＝已加工回廠
+            var _xo = ((st === 'N' || st === 'E') && !item.batch_label && item.xfer_date && !item.outsource_date); // 待發包但已有移轉憑單＝已加工回廠
             if (['Q', 'P', 'ing', 'E'].indexOf(st) === -1 && !(st === 'N' && item.batch_label) && !_xo) return;
             var bom = String(item.bom);
             if (!map[bom]) map[bom] = [];
