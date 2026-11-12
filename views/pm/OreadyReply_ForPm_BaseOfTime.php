@@ -3423,7 +3423,9 @@ echo "</script>\n";
         box.appendChild(bar);
         var head = document.createElement('div');
         head.style.cssText = 'margin-top:1px;white-space:nowrap;';
-        head.textContent = (Number(m.unsent) > 0 ? '未發 ' + _obNum(m.unsent) + '・' : '') + '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (Number(m.wd) > 0 ? '・取回 ' + _obNum(m.wd) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
+        var _idleWd = (m.wd_idle !== undefined) ? (Number(m.wd_idle) || 0) : Math.min(Number(m.unsent) || 0, Number(m.wd) || 0);   // 取回的不算未發
+        var _unsentReal = Math.max(0, (Number(m.unsent) || 0) - _idleWd);
+        head.textContent = (_unsentReal > 1e-9 ? '未發 ' + _obNum(_unsentReal) + '・' : '') + '回 ' + _obNum(ret) + '／送 ' + _obNum(send) + (out > 0 ? '・外 ' + _obNum(out) : '') + (Number(m.wd) > 0 ? '・取回 ' + _obNum(m.wd) : '') + (scrap > 0 ? '・廢 ' + _obNum(scrap) : '');
         head.title = '分批回廠：已回廠 ' + _obNum(ret) + '，送出 ' + _obNum(send) + '，尚在外 ' + _obNum(out) + '，報廢 ' + _obNum(scrap) + '（點一下展開各批次）';
         box.appendChild(head);
         var list = m.batches || [];
@@ -7526,6 +7528,10 @@ echo "</script>\n";
                                         _pgAvail = Math.min(_pmTot, _pgRet);
                                     }
                                     var _pgUnsent = Math.max(0, _pgAvail - _pmSend), _pgNotYet = Math.max(0, _pmTot - Math.max(_pgAvail, _pmSend));
+                                    // 取回（含取回要改發別間）一律認定為「取回未加工」，不算未發
+                                    var _pgWdIdle = Math.min(_pgUnsent, Number(_pm.wd) || 0);
+                                    _pgUnsent -= _pgWdIdle;
+                                    if (_pgWdIdle > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;" title="取回的貨視為未加工（多半是取回有問題或要改發別間）">有 ' + _obNum(_pgWdIdle) + ' pcs 取回未加工</div>';
                                     if (_pgUnsent > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgUnsent) + ' pcs 未發</div>';
                                     if (_pgNotYet > 1e-9) _pH += '<div style="font-size:10px;line-height:1.4;color:#B8431F;font-weight:bold;">尚有 ' + _obNum(_pgNotYet) + ' pcs 未到此關' + '</div>';
                                 }

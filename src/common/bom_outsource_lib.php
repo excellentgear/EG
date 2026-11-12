@@ -460,7 +460,7 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                     if (!isset($out[$fid])) continue;
                     $bm = $x['bom']; $s = $eff($bm, (int)$x['bom_sn']); $g = $grp[$bm][$s] ?? null;
                     if (!$g) continue;
-                    if ($g['main'] !== $fid) { $out[$fid]['unsent'] = 0; continue; } // 同一關只在主列顯示一次，不重複
+                    if ($g['main'] !== $fid) { $out[$fid]['unsent'] = 0; $out[$fid]['wd_idle'] = 0; continue; } // 同一關只在主列顯示一次，不重複
                     $gSent = 0.0; foreach ($g['fids'] as $f) $gSent += $sent[$f] ?? 0.0;
                     $prevSn = null;
                     foreach (array_keys($grp[$bm]) as $k) if ($k < $s && ($prevSn === null || $k > $prevSn)) $prevSn = $k;
@@ -472,6 +472,9 @@ if (!function_exists('eg_bom_outsource_batch_map')) {
                         if ($has || $pr > 0) $avail = min($avail, $pr);
                     }
                     $out[$fid]['unsent'] = max(0, $avail - $gSent);
+                    // 取回的貨視為「取回未加工」，不是「未發」：缺口中屬於取回的那部分（已重新發出的取回量不會再算缺口）
+                    $gWd = 0.0; foreach ($g['fids'] as $f) $gWd += (float)($out[$f]['wd'] ?? 0);
+                    $out[$fid]['wd_idle'] = min($out[$fid]['unsent'], $gWd);
                     $out[$fid]['total'] = $g['total'];
                 }
             }
