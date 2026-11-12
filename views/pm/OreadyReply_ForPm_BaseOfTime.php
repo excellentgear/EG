@@ -18281,6 +18281,13 @@ echo "</script>\n";
                                             <a><input type="button" id="btn-search-completed" class="btn btn-xs btn-info" value="查詢已完工" style="margin-left: 5px;"></a>
                                             <a><input type="button" id="btn-search-completed-full" class="btn btn-xs btn-default" value="完整查詢(新分頁)" style="margin-left: 5px;" title="開新分頁查詢已完工資料，無筆數上限，含篩選/列印/匯出" onclick="window.open('OreadyReply_completed_query.php','_blank')"></a>
                                             <a><input type="button" id="btn-op-log" class="btn btn-xs btn-default" value="操作紀錄" style="margin-left: 5px;" title="查看BOM操作流水帳"></a>
+                                            <?php
+                                            // 批次發單入口（另設角色 od_issue；沒有角色的人完全看不到這顆按鈕，也不影響其他功能）
+                                            $__od_btn = false;
+                                            try { require_once '../../src/common/od_dispatch_lib.php'; $__odc = $conn->getPDO(); $__odp = od_perms($__odc, od_current_user($__odc)); $__od_btn = !empty($__odp['canIssue']); } catch (Throwable $__ode) {}
+                                            if ($__od_btn): ?>
+                                            <a><input type="button" id="btn-od-dispatch" class="btn btn-xs btn-warning" value="批次發單" style="margin-left: 5px;" title="一次挑多個製程，依廠商合併成外發加工單並列印" onclick="window.open('od_dispatch.php','_blank')"></a>
+                                            <?php endif; ?>
                                             <?php if ($can_create): ?>
                                             <a><input type="button" id="btn-create-bom" class="btn btn-xs btn-success" value="新增BOM" style="margin-left: 5px;"></a>
                                             <?php endif; ?>
