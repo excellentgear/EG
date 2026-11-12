@@ -918,8 +918,7 @@ $('#btnPbPreview').on('click',function(){
 });
 $('#btnPbApply').on('click',function(){
   if(!PB.ok) return;
-  if(!confirm('確定要依預覽的明細批次修改單價嗎？
-修改後會留下稽核紀錄；單價不是原單價的明細不受影響。')) return;
+  if(!confirm('確定要依預覽的明細批次修改單價嗎？\n修改後會留下稽核紀錄；單價不是原單價的明細不受影響。')) return;
   var $b=$(this).prop('disabled',true), d=pbParams(); d.csrf=CSRF;
   $.post(API+'?action=price_batch_apply',d,function(r){
     if(!r.ok){ $b.prop('disabled',false); $('#pbMsg').text(r.error||'修改失敗'); return; }
