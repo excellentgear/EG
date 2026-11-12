@@ -610,6 +610,22 @@ function sq_pending_orders(PDO $db, array $f): array
         ];
     }
 
+    // 料號底下還沒綁任何訂單的舊出貨單筆數（整頁一次批次查；清單在料號右側顯示單據圖示，點了開「綁定舊出貨單」）
+    $dids = array_values(array_unique(array_filter(array_map(fn($r) => (int)$r['d_setting_id'], $out))));
+    $unb = [];
+    if ($dids) {
+        try {
+            $qs = $db->query("SELECT il.d_setting_id, COUNT(DISTINCT il.IS_id) n FROM is_list il
+                WHERE il.d_setting_id IN (" . implode(',', $dids) . ") AND il.Order_id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM shipment_order_map so WHERE so.IS_id = il.IS_id)
+                  AND NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)
+                GROUP BY il.d_setting_id");
+            foreach ($qs->fetchAll(PDO::FETCH_ASSOC) as $u) $unb[(int)$u['d_setting_id']] = (int)$u['n'];
+        } catch (Throwable $e) { $unb = []; }
+    }
+    foreach ($out as &$r) $r['unbound_ship_cnt'] = $unb[(int)$r['d_setting_id']] ?? 0;
+    unset($r);
+
     if (!empty($f['only_ready'])) {
         $out = array_values(array_filter($out, fn($r) => $r['ready_qty'] > 0));
     }

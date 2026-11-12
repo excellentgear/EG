@@ -791,6 +791,7 @@ function bbBtn(bomNo){
     + '<i class="fa fa-link"></i> 綁定舊出貨單</button>' : '';
 }
 var BB = {bom:'', ships:[], alts:[], fromBom:false};
+$(document).on('click','.ub-ship',function(e){ e.stopPropagation(); if(!CAN_ADMIN) return; var b=String($(this).data('bom')||''); if(!b){ toast('這張訂單還沒有製令，無法綁定舊出貨單', true); return; } BB.fromBom=true; openBomBind(b, []); });
 $(document).on('click','.btn-bb',function(){ BB.fromBom = true; openBomBind(String($(this).data('bom')), []); });
 /* 一般快速出貨：只勾一筆訂單、且這張訂單的製令底下有「還沒綁訂單」的同料號舊出貨時，才出現底部的綁定鈕 */
 var bbProbeKey = '';
@@ -964,7 +965,7 @@ function render(){
       +'<td><input type="checkbox" class="ck"'+(s?' checked':'')+'></td>'
       +'<td class="l">'+esc(r.order_oo||'—')+pausedTag+'</td>'
       +'<td class="l">'+esc(r.client_display)+'</td>'
-      +'<td class="l">'+esc(r.d_id)+'</td>'
+      +'<td class="l">'+esc(r.d_id)+(r.unbound_ship_cnt>0?' <i class="fa fa-file-text-o ub-ship" data-bom="'+esc(((r.boms||[])[0]||{}).bom||'')+'" title="此料號有 '+r.unbound_ship_cnt+' 筆舊出貨單尚未綁訂單'+(CAN_ADMIN?'（點一下可綁定）':'')+'" style="color:#c9792a;cursor:pointer;"></i>':'')+'</td>'
       +'<td class="l" title="'+esc(descTxt)+'" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;">'
         + esc(descTxt.length>46 ? descTxt.substr(0,46)+'…' : descTxt)+'</td>'
       +'<td class="r">'+nf(r.order_qty)+'</td>'
