@@ -55,7 +55,29 @@ function od_ensure_schema(PDO $db): void
             maker_ids_json TEXT NULL COMMENT '指定這些廠商固定使用此格式（廠商代號陣列）',
             created_by INT NULL, created_at DATETIME NULL, updated_at DATETIME NULL
         ) COMMENT='外發單列印格式'");
+        $db->exec("CREATE TABLE IF NOT EXISTS od_price (
+            price_id INT AUTO_INCREMENT PRIMARY KEY,
+            d_id INT NULL COMMENT '料號主檔 d_setting.d_id（同名料號分屬不同客戶，一律以主檔 id 為準）',
+            part_no VARCHAR(60) NULL COMMENT '料號文字快照',
+            client_name VARCHAR(60) NULL,
+            process_no INT NOT NULL,
+            maker_id_no VARCHAR(11) NULL COMMENT '空＝不限廠商（老闆核定的一般價）',
+            unit_price DECIMAL(12,2) NOT NULL,
+            kind VARCHAR(10) NOT NULL DEFAULT 'approved' COMMENT 'approved=老闆核定／inquiry=廠商詢價結果（待核定）',
+            qty_note VARCHAR(60) NULL COMMENT '數量區間或條件說明',
+            valid_from DATE NULL, valid_to DATE NULL,
+            note VARCHAR(200) NULL,
+            status VARCHAR(8) NOT NULL DEFAULT 'active' COMMENT 'active / void',
+            approved_by VARCHAR(50) NULL, approved_at DATETIME NULL,
+            created_by INT NULL, created_by_name VARCHAR(50) NULL, created_at DATETIME NULL, updated_at DATETIME NULL,
+            KEY idx_part_proc (d_id, process_no), KEY idx_proc (process_no), KEY idx_maker (maker_id_no)
+        ) COMMENT='外包加工價格表（老闆核定價／廠商詢價結果），發單時自動帶入單價'");
     } catch (Throwable $e) { /* 呼叫端自行處理 */ }
+    try {
+        if (!$db->query("SHOW COLUMNS FROM od_slip_line LIKE 'unit_price'")->fetch()) {
+            $db->exec("ALTER TABLE od_slip_line ADD COLUMN unit_price DECIMAL(12,2) NULL COMMENT '發單單價（沒填＝NULL，不顯示 0；後續對帳再補）' AFTER qty");
+        }
+    } catch (Throwable $e) {}
     try {
         foreach ([['od_view', '批次發單檢閱'], ['od_issue', '批次發單（發單與列印）'], ['od_admin', '批次發單管理員']] as $r) {
             $db->prepare("INSERT IGNORE INTO roles (role_code, role_name, module) VALUES (?,?, 'od_dispatch')")->execute($r);
@@ -73,7 +95,7 @@ function od_ensure_schema(PDO $db): void
 function od_format_columns(): array
 {
     return ['no' => '項', 'bom' => 'BOM', 'part_no' => '料號', 'drawing_no' => '圖號', 'client' => '客戶',
-            'process' => '製程', 'qty' => '數量', 'due' => '交期', 'remark' => '備註'];
+            'process' => '製程', 'qty' => '數量', 'price' => '單價', 'amount' => '金額', 'due' => '交期', 'remark' => '備註'];
 }
 
 function od_format_default_config(): array
@@ -471,14 +493,20 @@ function od_issue(PDO $db, array $user, array $items, string $issueDate, int $fo
                                      outsource_date = ?, maker_id_no = ?, maker_id = ?, Modified_At = NOW(), Modified_By = ? WHERE bom_ing_fid = ?")
                        ->execute([$transferDt, $mk, $mi['maker_id'], (string)$uid, $fid]);
                 }
-                $batchId = eg_bom_outsource_open_batch($db, $fid, $mk, $mi['maker_id'], $qty, $issueDate, null,
+                $priceRaw = trim((string)($it['price'] ?? ''));
+                $price = null;
+                if ($priceRaw !== '') {
+                    if (!is_numeric($priceRaw) || (float)$priceRaw < 0) throw new Exception($label . '：單價格式不正確');
+                    $price = (float)$priceRaw > 0 ? round((float)$priceRaw, 2) : null; // 0 視為沒填，不顯示 0
+                }
+                $batchId = eg_bom_outsource_open_batch($db, $fid, $mk, $mi['maker_id'], $qty, $issueDate, $price,
                     '批次發單 ' . $slipNo, $uid, $uname);
                 $db->prepare("UPDATE bom_ing_outsource_batch SET batch_no=? WHERE batch_id=?")->execute([$slipNo, $batchId]);
                 $due = trim((string)($it['due_date'] ?? ''));
                 if ($due !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due)) throw new Exception('交期格式不正確');
-                $db->prepare("INSERT INTO od_slip_line (slip_id, sort_no, bom, part_no, client_name, bom_ing_fid, batch_id, process_no, process_name, qty, due_date, remark)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-                   ->execute([$slipId, ++$n, $row['bom'], $row['part_no'], $row['client'], $fid, $batchId, $row['process_no'], $row['ProcessName'], $qty,
+                $db->prepare("INSERT INTO od_slip_line (slip_id, sort_no, bom, part_no, client_name, bom_ing_fid, batch_id, process_no, process_name, qty, unit_price, due_date, remark)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                   ->execute([$slipId, ++$n, $row['bom'], $row['part_no'], $row['client'], $fid, $batchId, $row['process_no'], $row['ProcessName'], $qty, $price,
                               $due !== '' ? $due : null, mb_substr(trim((string)($it['remark'] ?? '')), 0, 200)]);
             }
             $slips[] = ['slip_id' => $slipId, 'slip_no' => $slipNo, 'maker' => $mi['maker_id'], 'lines' => $n];
@@ -489,6 +517,129 @@ function od_issue(PDO $db, array $user, array $items, string $issueDate, int $fo
         return ['ok' => false, 'message' => $e->getMessage()];
     }
     return ['ok' => true, 'message' => '已發單 ' . count($slips) . ' 張', 'slips' => $slips];
+}
+
+// ───────────────────────────── 外包加工價格 ─────────────────────────────
+/** 這張 BOM 的料號身分（d_setting.d_id 優先；沒綁的用料號文字＋客戶名稱比對） */
+function od_bom_part(PDO $db, string $bom): array
+{
+    $st = $db->prepare("SELECT d_setting_id, d_id AS part_no, Client_Name FROM bom WHERE bom=?");
+    $st->execute([$bom]);
+    $r = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+    $did = (int)($r['d_setting_id'] ?? 0);
+    if (!$did && !empty($r['part_no'])) {
+        $cn = (string)($r['Client_Name'] ?? '');
+        $q = $db->prepare("SELECT d.d_id FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                            WHERE d.D_Setting_Id=? AND (c.customer=? OR ?='') ORDER BY d.d_id DESC LIMIT 1");
+        $q->execute([$r['part_no'], $cn, $cn]);
+        $did = (int)$q->fetchColumn();
+    }
+    return ['d_id' => $did, 'part_no' => (string)($r['part_no'] ?? ''), 'client' => (string)($r['Client_Name'] ?? '')];
+}
+
+/** 同料號同製程的歷史加工單價（取自製程移轉憑單；修改後單價優先），新到舊 */
+function od_price_history(PDO $db, string $bom, int $processNo, int $limit = 10): array
+{
+    $pt = od_bom_part($db, $bom);
+    $w = []; $a = [$processNo];
+    if ($pt['d_id']) { $w[] = 'b.d_setting_id = ?'; $a[] = $pt['d_id']; }
+    if ($pt['part_no'] !== '') { $w[] = '(b.d_id = ? AND b.Client_Name = ?)'; array_push($a, $pt['part_no'], $pt['client']); }
+    if (!$w) return [];
+    $st = $db->prepare("SELECT tl.transfer_date AS d, tl.maker_from AS maker_no, COALESCE(ml.maker_id, tl.maker_from) AS maker,
+                               COALESCE(NULLIF(tl.modified_unit_price,0), tl.price) AS price, tl.transfer_qty AS qty, tl.bom
+                          FROM bom_ing_transfer_log tl
+                          JOIN bom b ON b.bom = tl.bom
+                          JOIN bom_ing bi ON bi.bom = tl.bom AND bi.bom_sn = tl.bom_sn
+                          LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
+                         WHERE bi.process_no = ? AND (" . implode(' OR ', $w) . ") AND COALESCE(NULLIF(tl.modified_unit_price,0), tl.price) > 0
+                         GROUP BY tl.transfer_id ORDER BY tl.transfer_date DESC, tl.transfer_id DESC LIMIT " . (int)$limit);
+    $st->execute($a);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 價格表中此料號＋製程的有效項目（含詢價），核定價優先、指定廠商優先於不限廠商、新到舊 */
+function od_price_table_for(PDO $db, string $bom, int $processNo): array
+{
+    $pt = od_bom_part($db, $bom);
+    if (!$pt['d_id']) return [];
+    $st = $db->prepare("SELECT p.*, COALESCE(ml.maker_id,'') AS maker FROM od_price p LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no
+                         WHERE p.d_id=? AND p.process_no=? AND p.status='active'
+                           AND (p.valid_from IS NULL OR p.valid_from<=CURDATE()) AND (p.valid_to IS NULL OR p.valid_to>=CURDATE())
+                         ORDER BY (p.kind='approved') DESC, (p.maker_id_no IS NOT NULL AND p.maker_id_no<>'') DESC, p.valid_from DESC, p.price_id DESC");
+    $st->execute([$pt['d_id'], $processNo]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 發單時自動帶入的單價：只用「老闆核定」價；指定了廠商就先找該廠商的專屬價，沒有再用不限廠商價 */
+function od_price_suggest(PDO $db, string $bom, int $processNo, string $makerNo = ''): array
+{
+    $tbl = od_price_table_for($db, $bom, $processNo);
+    $pick = null;
+    foreach ($tbl as $r) {
+        if ($r['kind'] !== 'approved') continue;
+        $mk = (string)$r['maker_id_no'];
+        if ($makerNo !== '' && $mk === $makerNo) { $pick = $r; break; }
+        if ($mk === '' && !$pick) $pick = $r;
+    }
+    $hist = od_price_history($db, $bom, $processNo, 6);
+    return ['approved' => $pick, 'table' => $tbl, 'history' => $hist, 'last' => $hist[0] ?? null];
+}
+
+function od_price_list(PDO $db, array $f): array
+{
+    od_ensure_schema($db);
+    $w = ["p.status='active'"]; $a = [];
+    if (!empty($f['void'])) $w = ['1=1'];
+    if (!empty($f['process_no'])) { $w[] = 'p.process_no=?'; $a[] = (int)$f['process_no']; }
+    if (!empty($f['kind']) && in_array($f['kind'], ['approved', 'inquiry'], true)) { $w[] = 'p.kind=?'; $a[] = $f['kind']; }
+    $k = trim((string)($f['kw'] ?? ''));
+    if ($k !== '') { $w[] = "(p.part_no LIKE ? OR p.client_name LIKE ? OR ml.maker_id LIKE ? OR p.note LIKE ?)"; array_push($a, "%$k%", "%$k%", "%$k%", "%$k%"); }
+    $st = $db->prepare("SELECT p.*, pn.ProcessName, COALESCE(ml.maker_id,'') AS maker
+                          FROM od_price p LEFT JOIN process_no pn ON pn.ProcessNo=p.process_no LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no
+                         WHERE " . implode(' AND ', $w) . " ORDER BY p.part_no, p.process_no, (p.kind='approved') DESC, p.valid_from DESC LIMIT 300");
+    $st->execute($a);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 新增／修改一筆價格。$in: price_id(0=新增), d_id, process_no, maker_id_no, unit_price, kind, qty_note, valid_from, valid_to, note */
+function od_price_save(PDO $db, array $user, array $in): array
+{
+    od_ensure_schema($db);
+    $did = (int)($in['d_id'] ?? 0);
+    $pno = (int)($in['process_no'] ?? 0);
+    $price = (float)($in['unit_price'] ?? 0);
+    $kind = ($in['kind'] ?? '') === 'inquiry' ? 'inquiry' : 'approved';
+    $mk = trim((string)($in['maker_id_no'] ?? ''));
+    if (!$did) return ['ok' => false, 'message' => '請從料號主檔選擇料號'];
+    if (!$pno) return ['ok' => false, 'message' => '請選擇製程'];
+    if ($price <= 0) return ['ok' => false, 'message' => '單價必須大於 0'];
+    if ($kind === 'inquiry' && $mk === '') return ['ok' => false, 'message' => '廠商詢價結果必須指定是哪一家廠商'];
+    foreach (['valid_from', 'valid_to'] as $k) {
+        $v = trim((string)($in[$k] ?? ''));
+        if ($v !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) return ['ok' => false, 'message' => '日期格式不正確'];
+    }
+    $vf = trim((string)($in['valid_from'] ?? '')) ?: null;
+    $vt = trim((string)($in['valid_to'] ?? '')) ?: null;
+    if ($vf && $vt && $vt < $vf) return ['ok' => false, 'message' => '有效迄日不可早於起日'];
+    if ($mk !== '' && !od_maker_info($db, $mk)) return ['ok' => false, 'message' => '找不到廠商'];
+    $ds = $db->prepare("SELECT d.D_Setting_Id, c.customer FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.d_id=?");
+    $ds->execute([$did]);
+    $d = $ds->fetch(PDO::FETCH_ASSOC);
+    if (!$d) return ['ok' => false, 'message' => '找不到料號主檔'];
+    $uid = (int)$user['id']; $un = (string)($user['user_cname'] ?? '');
+    $id = (int)($in['price_id'] ?? 0);
+    $vals = [$did, $d['D_Setting_Id'], (string)$d['customer'], $pno, $mk !== '' ? $mk : null, round($price, 2), $kind,
+             mb_substr(trim((string)($in['qty_note'] ?? '')), 0, 60), $vf, $vt, mb_substr(trim((string)($in['note'] ?? '')), 0, 200)];
+    if ($id > 0) {
+        $db->prepare("UPDATE od_price SET d_id=?, part_no=?, client_name=?, process_no=?, maker_id_no=?, unit_price=?, kind=?, qty_note=?, valid_from=?, valid_to=?, note=?, updated_at=NOW() WHERE price_id=?")
+           ->execute(array_merge($vals, [$id]));
+    } else {
+        $db->prepare("INSERT INTO od_price (d_id, part_no, client_name, process_no, maker_id_no, unit_price, kind, qty_note, valid_from, valid_to, note, created_by, created_by_name, created_at, updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute(array_merge($vals, [$uid, $un]));
+        $id = (int)$db->lastInsertId();
+    }
+    if ($kind === 'approved') $db->prepare("UPDATE od_price SET approved_by=?, approved_at=IFNULL(approved_at,NOW()) WHERE price_id=?")->execute([$un, $id]);
+    return ['ok' => true, 'price_id' => $id];
 }
 
 // ───────────────────────────── 單據讀取／列印 ─────────────────────────────

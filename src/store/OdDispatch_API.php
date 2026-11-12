@@ -37,12 +37,12 @@ if (!$P['uid']) jerr('帳號非在職狀態', 403);
 if (!$P['canView']) jerr('沒有批次發單權限，請洽管理員指派角色', 403);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
-$WRITE = ['issue', 'print_record', 'format_save', 'format_delete', 'format_default', 'asdoc_save'];
+$WRITE = ['issue', 'print_record', 'format_save', 'format_delete', 'format_default', 'asdoc_save', 'price_save', 'price_void', 'price_approve'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['od_csrf'], $tok))
         jerr('連線憑證失效，請重新整理頁面後再試 (CSRF)', 400, ['code' => 'CSRF']);
-    if (in_array($action, ['issue', 'print_record'], true) && !$P['canIssue']) jerr('需要「批次發單」角色才能發單與列印', 403);
+    if (in_array($action, ['issue', 'print_record', 'price_save', 'price_void', 'price_approve'], true) && !$P['canIssue']) jerr('需要「批次發單」角色才能發單與列印', 403);
     if (in_array($action, ['format_save', 'format_delete', 'format_default', 'asdoc_save'], true) && !$P['canAdmin']) jerr('需要批次發單管理員權限', 403);
 }
 
@@ -93,6 +93,48 @@ if ($action === 'issue') {
     $r = od_issue($db, $u, $items, (string)($_POST['issue_date'] ?? date('Y-m-d')), (int)($_POST['format_id'] ?? 0), !empty($_POST['two_part']) ? 1 : 0);
     if (!$r['ok']) jerr($r['message']);
     jout($r);
+}
+
+/* ───── 外包加工價格 ───── */
+if ($action === 'price_suggest') {      // items: [{bom, process_no, maker_no}] → 每列的核定價／歷史價
+    $items = json_decode((string)($_POST['items'] ?? $_GET['items'] ?? '[]'), true);
+    if (!is_array($items) || count($items) > 200) jerr('項目格式不正確');
+    $out = [];
+    foreach ($items as $k => $it) {
+        $r = od_price_suggest($db, (string)($it['bom'] ?? ''), (int)($it['process_no'] ?? 0), (string)($it['maker_no'] ?? ''));
+        $out[(string)($it['key'] ?? $k)] = ['approved' => $r['approved'] ? ['price' => (float)$r['approved']['unit_price'], 'maker' => $r['approved']['maker'], 'qty_note' => $r['approved']['qty_note']] : null,
+            'last' => $r['last'], 'inquiries' => count(array_filter($r['table'], fn($x) => $x['kind'] === 'inquiry'))];
+    }
+    jout(['suggest' => $out]);
+}
+if ($action === 'price_history') {
+    $r = od_price_suggest($db, (string)($_GET['bom'] ?? ''), (int)($_GET['process_no'] ?? 0), '');
+    jout(['table' => $r['table'], 'history' => od_price_history($db, (string)($_GET['bom'] ?? ''), (int)($_GET['process_no'] ?? 0), 15)]);
+}
+if ($action === 'price_list') {
+    jout(['prices' => od_price_list($db, ['process_no' => $_GET['process_no'] ?? 0, 'kind' => $_GET['kind'] ?? '', 'kw' => $_GET['kw'] ?? '', 'void' => $_GET['void'] ?? 0]),
+          'processes' => $db->query("SELECT ProcessNo AS no, ProcessName AS name FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC)]);
+}
+if ($action === 'part_search') {
+    $q = trim((string)($_GET['q'] ?? ''));
+    if ($q === '') jout(['parts' => []]);
+    $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id AS part_no, d.Drawing_No, COALESCE(c.customer,'') AS client FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                         WHERE d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ? ORDER BY d.d_id DESC LIMIT 30");
+    $st->execute(["%$q%", "%$q%"]);
+    jout(['parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+if ($action === 'price_save') {
+    $r = od_price_save($db, $u, $_POST);
+    if (!$r['ok']) jerr($r['message']);
+    jout($r);
+}
+if ($action === 'price_void') {
+    $db->prepare("UPDATE od_price SET status='void', updated_at=NOW() WHERE price_id=?")->execute([(int)($_POST['price_id'] ?? 0)]);
+    jout([]);
+}
+if ($action === 'price_approve') {   // 廠商詢價結果 → 老闆核定（核定後發單才會自動帶入）
+    $db->prepare("UPDATE od_price SET kind='approved', approved_by=?, approved_at=NOW(), updated_at=NOW() WHERE price_id=? AND status='active'")->execute([$P['name'], (int)($_POST['price_id'] ?? 0)]);
+    jout([]);
 }
 
 if ($action === 'slips') {
