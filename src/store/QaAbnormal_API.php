@@ -98,6 +98,14 @@ case 'list': {
                 'cats' => qab_cats($db, false), 'gm_label' => qab_gm_label($db)]);
 }
 
+/* 清單「顯示通知資訊」：唯讀，只回已發出通知的收件人與狀態（不影響 list） */
+case 'notify_info': {
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ids'] ?? [])))));
+    if (count($ids) > 1000) $ids = array_slice($ids, 0, 1000);
+    try { jout(true, ['info' => (object)qab_notify_info($db, $ids)]); }
+    catch (Throwable $e) { error_log('qab_notify_info: ' . $e->getMessage()); jout(true, ['info' => (object)[]]); }
+}
+
 /* ═══════════ 開單 ═══════════ */
 case 'create': {
     if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');

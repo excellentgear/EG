@@ -83,6 +83,12 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         table.lst thead th { background:var(--sand); color:var(--ink2); text-align:center; position:sticky; top:0; z-index:2; }
         table.lst td.c { text-align:center; }
         table.lst tbody tr:hover { background:#FFFDF8; }
+        table.lst td.ninfo { background:#FFFAF0; padding:3px 6px; line-height:1.55; }
+        .nt { display:inline-block; margin:1px 10px 1px 0; font-size:12px; color:var(--ink2); white-space:nowrap; }
+        .nt b { color:var(--ink); }
+        .nt i { font-style:normal; padding:0 5px; border-radius:3px; background:#F7E0BD; color:#6b4a1f; }
+        .nt-read i { background:#F0A24B; color:#fff; }
+        .nt-acted i { background:#8a5a2b; color:#fff; }
         .cat-tabs { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 0; border-bottom:2px solid var(--line); }
         .cat-tab { border:1px solid var(--line); border-bottom:0; border-radius:6px 6px 0 0; background:var(--sand); color:var(--ink2);
                    padding:5px 12px; font-size:13px; cursor:pointer; line-height:18px; }
@@ -255,6 +261,8 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                 <?php if ($perms['canCreate']): ?>
                 <button class="btn btn-warm btn-sm" id="btnNew"><i class="fa fa-plus"></i> 開立異常單</button>
                 <?php endif; ?>
+                <label class="fg" style="flex-direction:row;align-items:center;gap:4px;margin-bottom:0;" title="在每張單下方列出已發出的通知：誰、哪天、已通知／已讀／已回覆">
+                    <input type="checkbox" id="fNotify" checked> 顯示通知資訊</label>
                 <?php if ($perms['canAdmin']): ?>
                 <label class="fg" style="flex-direction:row;align-items:center;gap:4px;margin-bottom:0;">
                     <input type="checkbox" id="fDeleted"> 顯示已刪除</label>
@@ -796,33 +804,37 @@ function load(){
                    + (Number(r.vendor_pending) === 1 ? ' <span class="st st-s st-gm" style="background:#DD5138;color:#fff;" title="該製程站沒有登記廠商，已通知生管補登">廠商待補</span>' : '');
             var l3 = (r.src_qc_form_id && r.qc_bom_ing_fid ? '<a class="qc-rec-link" target="_blank" href="../QC/inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(r.qc_bom_ing_fid) + '&view_form=' + encodeURIComponent(r.src_qc_form_id) + '" title="開啟品管檢驗表 2.0 的這筆檢驗紀錄"><i class="fa fa-external-link"></i> 檢驗紀錄</a>' : '');
             var tagLines = [l1.trim(), l2.trim(), l3].filter(function(x){ return x; });
-            return '<tr>'
-                + '<td class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b>'
+            var info = $('#fNotify').prop('checked') && !$('#fDeleted').prop('checked');
+            var RS = info ? ' rowspan="2"' : '';
+            return '<tr' + (info ? ' class="nrow1"' : '') + '>'
+                + '<td' + RS + ' class="c"><b style="white-space:nowrap;">' + esc(r.abnormal_order_no) + '</b>'
                     + (tagLines.length ? '<br>' + tagLines.join('<br>') : '')
                     + '</td>'
-                + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
-                + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
-                + '<td>' + esc(r.client_name) + '</td>'
-                + '<td>' + bomIr + '</td>'
+                + '<td' + RS + ' class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
+                + '<td' + RS + '>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
+                + '<td' + RS + '>' + esc(r.client_name) + '</td>'
+                + '<td' + RS + '>' + bomIr + '</td>'
                 + '<td>' + (r.part_no ? '<a href="#" class="pv-open" data-pk="' + esc(r.part_d_id || '') + '" data-no="' + esc(r.part_no) + '" title="開啟圖面">' + esc(r.part_no) + '</a>' : '') + '</td>'
                 + '<td>' + esc((r.abnormal_phenomenon || '').substring(0, 60)) + '</td>'
-                + '<td>' + esc(r.responsible_unit) + '</td>'
-                + '<td>' + finalChips(r) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
-                + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
+                + '<td' + RS + '>' + esc(r.responsible_unit) + '</td>'
+                + '<td' + RS + '>' + finalChips(r) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
+                + '<td' + RS + ' class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
                     + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
                     + (Number(r.is_closed) === 1 && r.closed_at ? '<div class="muted-help" style="font-size:10.5px;line-height:1.25;margin-top:0;white-space:normal;">' + esc(r.closed_name || '') + ' 結案<br>' + esc(dispDate(r.closed_at)) + ' ' + esc(String(r.closed_at).substring(11, 16)) + '</div>' : '')
                 + '</td>'
-                + '<td class="c">'
+                + '<td' + RS + ' class="c">'
                 + (r.deleted_at
                     ? ('<span class="muted-help">' + esc(dispDate(r.deleted_at)) + ' 由 ' + esc(r.deleted_name || '') + ' 刪除</span>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm btn-xs act-restore" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '">還原</button>' : ''))
                     : ('<a href="qa_abnormal_form.php?id=' + r.id + '" class="btn btn-warm-o btn-xs">處理</a> '
                        + '<a href="qa_abnormal_print.php?id=' + r.id + '&auto=1" target="_blank" class="btn btn-warm-o btn-xs" title="開啟列印預覽"><i class="fa fa-print"></i></a>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '" data-auto="' + Number(r.auto_opened) + '"><i class="fa fa-trash-o"></i></button>' : '')))
-                + '</td></tr>';
+                + '</td></tr>'
+                + (info ? ('<tr class="nrow2"><td colspan="2" class="ninfo" data-id="' + r.id + '">' + notifyHtml(r.id) + '</td></tr>') : '');
         });
         LIST_ROWS = rows;
         renderTabs();
+        loadNotify(rows);
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
 }
 /* 類別名稱（列上標示用）：沒有類別的舊單一律標「未指定類別」，不混進某一類 */
@@ -871,6 +883,29 @@ function renderTabs(){
     } else {
         $('.lst-wrap').scrollTop(0);
     }
+}
+/* 通知資訊（勾選「顯示通知資訊」時才查；唯讀，查不到不影響清單） */
+var NOTIFY_MAP = {}, NOTIFY_SEQ = 0;
+function notifyHtml(id){
+    var l = NOTIFY_MAP[id];
+    if (l === undefined) return '<span class="muted-help">載入通知資訊…</span>';
+    if (!l.length) return '<span class="muted-help">尚無通知紀錄</span>';
+    return l.map(function(x){
+        return '<span class="nt nt-' + esc(x.state) + '"><b>' + esc(x.label) + '</b> ' + esc(x.name) + ' ' + esc(x.date) + ' <i>' + esc(x.status) + '</i></span>';
+    }).join('');
+}
+function loadNotify(rows){
+    if (!$('#fNotify').prop('checked') || $('#fDeleted').prop('checked') || !rows.length) return;
+    var seq = ++NOTIFY_SEQ;
+    $.post(API, { action:'notify_info', ids: rows.map(function(r){ return Number(r.id); }) }, function(res){
+        if (seq !== NOTIFY_SEQ) return;
+        var info = (res && res.success && res.info) || {};
+        rows.forEach(function(r){ NOTIFY_MAP[r.id] = info[r.id] || []; });
+        $('#lstBody td.ninfo').each(function(){ $(this).html(notifyHtml($(this).data('id'))); });
+    }, 'json').fail(function(){
+        rows.forEach(function(r){ if (NOTIFY_MAP[r.id] === undefined) NOTIFY_MAP[r.id] = []; });
+        $('#lstBody td.ninfo').each(function(){ $(this).html(notifyHtml($(this).data('id'))); });
+    });
 }
 /* 清單位置記憶（sessionStorage，壞掉或被停用時不影響清單運作） */
 var LIST_STATE_KEY = 'qab_list_state', LIST_RESTORE = null;
@@ -937,6 +972,7 @@ function syncYears(years){
 }
 $('#btnSearch').on('click', load);
 $('#fYear,#fMonth,#fClosed,#fSource,#fCat,#fDeleted').on('change', load);
+$('#fNotify').on('change', function(){ NOTIFY_MAP = {}; load(); });
 
 /* ───────── 刪除／還原（軟刪除，一律留紀錄） ───────── */
 // 2026-10-07 使用者交辦：自動開立的單背後還連著報工紀錄或線上檢驗紀錄，刪除容易造成資料

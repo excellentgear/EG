@@ -5093,4 +5093,103 @@ function qab_deduct_ensure_rows(PDO $db, int $id, int $uid): void
 }
 
 /* 報廢後業務回填補做／不補（2026-11-05）：與本檔互相呼叫，放在檔尾載入 */
+/**
+ * 清單「顯示通知資訊」用：每張異常單已發出的通知——誰、哪天、已通知／已讀／已回覆／已決策。
+ * 唯讀彙整（只讀 live_event／live_event_target／live_event_response／live_event_for_user），不寫任何資料。
+ *
+ * 「只要其中一人處理就好」的通知（相關單位意見＝回覆模式、待決策／待裁決／待裁示類）：
+ *   已經有人處理（回覆／決策）→ 只列處理的那位，同一則通知的其他人不再列出；
+ *   還沒人處理 → 列出所有被通知的人（都是已通知／已讀）。
+ * 其他通知（結果通知、請補登、請填寫…）逐人列出已讀狀態。
+ * 同一個「標籤＋人」重複的通知（例如決策通知發了兩則）只留狀態最進展的一筆。
+ * @return array [orderId => [['label','name','date'(m/d),'status','state'(notified|read|acted)], ...]]
+ */
+function qab_notify_info(PDO $db, array $orderIds): array
+{
+    $orderIds = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+    $out = [];
+    if (!$orderIds) return $out;
+    require_once __DIR__ . '/../push/push_send.php';
+    $in = implode(',', $orderIds);
+    $evs = $db->query("SELECT id, ref_type, ref_id, title, created_at FROM live_event
+                        WHERE ref_id IN ($in) AND ref_type IN ('QA','QAB_L1','QAB_VENDOR','QA_DECIDE','QA_DECIDE_F','QA_QC_REVIEW')
+                        ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$evs) return $out;
+    $eids = array_map('intval', array_column($evs, 'id'));
+    $ein = implode(',', $eids);
+    $modes = [];
+    foreach ($db->query("SELECT live_event_id, mode FROM live_event_target WHERE live_event_id IN ($ein)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $modes[(int)$r['live_event_id']][(string)$r['mode']] = 1;
+    }
+    $resp = [];
+    foreach ($db->query("SELECT live_event_id, user_id, read_at, signed_at, replied_at FROM live_event_response WHERE live_event_id IN ($ein)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $resp[(int)$r['live_event_id']][(int)$r['user_id']] = $r;
+    }
+    foreach ($db->query("SELECT live_event_id, user_id, read_at FROM live_event_for_user WHERE live_event_id IN ($ein)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $e = (int)$r['live_event_id']; $u = (int)$r['user_id'];
+        if (!isset($resp[$e][$u])) $resp[$e][$u] = ['read_at' => $r['read_at'], 'signed_at' => null, 'replied_at' => null];
+        elseif (empty($resp[$e][$u]['read_at'])) $resp[$e][$u]['read_at'] = $r['read_at'];
+    }
+    $recips = []; $allUsers = [];
+    foreach ($evs as $e) {
+        $eid = (int)$e['id'];
+        try { $recips[$eid] = array_map('intval', eg_push_event_recipients($db, $eid)); } catch (Throwable $ex) { $recips[$eid] = []; }
+        foreach ($recips[$eid] as $u) $allUsers[$u] = 1;
+        foreach (($resp[$eid] ?? []) as $u => $_) $allUsers[(int)$u] = 1;
+    }
+    $names = [];
+    if ($allUsers) {
+        foreach ($db->query("SELECT id, user_cname FROM `user` WHERE id IN (" . implode(',', array_keys($allUsers)) . ")")->fetchAll(PDO::FETCH_ASSOC) as $r) $names[(int)$r['id']] = (string)$r['user_cname'];
+    }
+    $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j', $t) : ''; };
+    $best = [];   // orderId => key(label|uid) => row
+    foreach ($evs as $e) {
+        $eid = (int)$e['id']; $oid = (int)$e['ref_id'];
+        $title = (string)$e['title'];
+        $isDecide = ($e['ref_type'] === 'QA_DECIDE' || $e['ref_type'] === 'QA_DECIDE_F' || $e['ref_type'] === 'QA_QC_REVIEW'
+                     || ($e['ref_type'] === 'QAB_L1' && preg_match('/待裁決|待決策|轉呈決策|轉回第一層/u', $title))
+                     || ($e['ref_type'] === 'QA' && preg_match('/待.*裁示/u', $title)));
+        $isReply = !empty($modes[$eid]['reply']) || !empty($modes[$eid]['sign']);
+        if ($isReply) $label = '單位意見';
+        elseif ($isDecide) $label = '待決策';
+        elseif (preg_match('/^品質異常單裁決：.*（(.+)）$/u', $title, $m)) $label = '決策' . $m[1];
+        else {
+            $label = trim(preg_replace('/[\x{1F000}-\x{1FFFF}\x{2600}-\x{27BF}]|Q\d{9,}-[A-Z]+|【[^】]*】|異常單|品質異常單/u', '', $title));
+            $label = preg_replace('/[（(][^）)]*[）)]?/u', '', $label);   // 結尾的（人名）等括號說明不放進標籤
+            $label = trim(preg_replace('/\s+/u', ' ', $label), " ：:（）()");
+            if (preg_match('/處置已判定/u', $title)) $label = '處置判定';
+            elseif (preg_match('/已回覆/u', $title)) $label = '回覆通知';
+            elseif (preg_match('/已結案/u', $title)) $label = '結案通知';
+            if ($label === '') $label = '通知';
+            if (mb_strlen($label, 'UTF-8') > 10) $label = mb_substr($label, 0, 10, 'UTF-8') . '…';
+        }
+        $rows = [];
+        foreach ($recips[$eid] as $u) {
+            $r = $resp[$eid][$u] ?? null;
+            $acted = false; $state = 'notified'; $dt = $e['created_at'];
+            if ($r) {
+                if ($isReply && !empty($r['replied_at'])) { $acted = true; $state = 'acted'; $dt = $r['replied_at']; }
+                elseif ($isDecide && !empty($r['signed_at'])) { $acted = true; $state = 'acted'; $dt = $r['signed_at']; }
+                elseif (!empty($r['read_at']) || (!$isReply && !$isDecide && !empty($r['signed_at']))) { $state = 'read'; $dt = $r['read_at'] ?: $r['signed_at']; }
+            }
+            $status = $state === 'acted' ? ($isReply ? '已回覆' : '已決策') : ($state === 'read' ? '已讀' : '已通知');
+            $rows[] = ['u' => $u, 'label' => $label, 'name' => $names[$u] ?? ('#' . $u), 'date' => $md($dt), 'status' => $status, 'state' => $state, 'acted' => $acted];
+        }
+        if (($isReply || $isDecide) && array_filter($rows, function ($x) { return $x['acted']; })) {
+            $rows = array_values(array_filter($rows, function ($x) { return $x['acted']; }));   // 一人處理即可：只留處理的人
+        }
+        $rank = ['notified' => 0, 'read' => 1, 'acted' => 2];
+        foreach ($rows as $x) {
+            $k = $x['label'] . '|' . $x['u'];
+            if (!isset($best[$oid][$k]) || $rank[$x['state']] >= $rank[$best[$oid][$k]['state']]) $best[$oid][$k] = $x;
+        }
+    }
+    foreach ($best as $oid => $list) {
+        $res = [];
+        foreach ($list as $x) $res[] = ['label' => $x['label'], 'name' => $x['name'], 'date' => $x['date'], 'status' => $x['status'], 'state' => $x['state']];
+        $out[$oid] = array_slice($res, 0, 40);
+    }
+    return $out;
+}
+
 require_once __DIR__ . '/qa_abnormal_remake_lib.php';
