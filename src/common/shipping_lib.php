@@ -1230,8 +1230,10 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     $oids = array_values(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
     if (!$oids) return ['error' => '這張製令尚未綁定訂單，請先到 BOM總覽綁訂單'];
     $in = implode(',', $oids);
-    $os = $db->query("SELECT Order_id, Order_oo, Client_name, d_id_ID, unit_price FROM order_track WHERE Order_id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
-    $clients = array_values(array_unique(array_column($os, 'Client_name')));
+    // 訂單的 Client_name 常是空字串（只有 Client_name_ID），要用客戶編號對回主檔，否則「同客戶」條件什麼都比對不到
+    $os = $db->query("SELECT ot.Order_id, ot.Order_oo, COALESCE(NULLIF(TRIM(ot.Client_name),''), cl.customer, '') AS Client_name, ot.d_id_ID, ot.unit_price
+                      FROM order_track ot LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID WHERE ot.Order_id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
+    $clients = array_values(array_unique(array_filter(array_column($os, 'Client_name'), 'strlen')));
     $dids    = array_values(array_unique(array_filter(array_map('intval', array_column($os, 'd_id_ID')))));
     $oo = []; $op = [];
     foreach ($os as $o) { $oo[(int)$o['Order_id']] = (string)$o['Order_oo']; $op[(int)$o['Order_id']] = (float)$o['unit_price']; }
@@ -1266,11 +1268,12 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     usort($out, fn($a, $b) => ((int)($b['selectable'] && $b['price_match'])) <=> ((int)($a['selectable'] && $a['price_match'])));
     // 製令綁定的訂單資訊（顯示在跳窗最上方供比對；品名規格與待出貨清單同一套 sq_desc_text）
     $oi = [];
-    $oRows = $db->query("SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Specification, ot.Qty, ot.unit_price,
+    $oRows = $db->query("SELECT ot.Order_id, ot.Order_oo, COALESCE(NULLIF(TRIM(ot.Client_name),''), cl2.customer, '') AS Client_name, ot.d_id, ot.d_id_ID, ot.Specification, ot.Qty, ot.unit_price,
                                 COALESCE(ot.Processing_items,'') AS proc, COALESCE(ds.Spec_No,'') AS part_spec,
                                 DATE_FORMAT(ot.Order_date,'%Y-%m-%d') od, DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') dd,
                                 COALESCE((SELECT SUM(Qty) FROM is_list WHERE Order_id = ot.Order_id),0) used
                          FROM order_track ot LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
+                         LEFT JOIN customer_list cl2 ON cl2.customer_id = ot.Client_name_ID
                          WHERE ot.Order_id IN ($in) ORDER BY ot.Order_date")->fetchAll(PDO::FETCH_ASSOC);
     $gm = eg_gear_spec_map($db, array_column($oRows, 'd_id_ID'));
     foreach ($oRows as $o) {
@@ -1295,7 +1298,8 @@ function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId): 
         $ins = $db->prepare("INSERT INTO is_bom_map (IS_id, bom, shipped_qty) VALUES (?,?,?)");
         $stO = $db->prepare("SELECT ot.Order_id FROM order_track ot
             JOIN (SELECT order_id FROM bom_order_process_map WHERE bom=:b1 UNION SELECT CAST(o_order_id AS UNSIGNED) FROM bom WHERE bom=:b2 AND o_order_id REGEXP '^[0-9]+\$') x ON x.order_id = ot.Order_id
-            JOIN is_list il ON il.IS_id = :i AND il.Client_name = ot.Client_name AND il.d_setting_id = ot.d_id_ID
+            LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
+            JOIN is_list il ON il.IS_id = :i AND il.Client_name = COALESCE(NULLIF(TRIM(ot.Client_name),''), cl.customer) AND il.d_setting_id = ot.d_id_ID
             ORDER BY ot.Order_date LIMIT 1");
         $upO = $db->prepare("UPDATE is_list SET Order_id = ? WHERE IS_id = ? AND Order_id IS NULL");
         foreach ($pairs as $p) {
