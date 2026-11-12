@@ -27,6 +27,10 @@ require_once __DIR__ . '/attach_lib.php';
 
 if (!defined('OCR_ATTACH_MAX_BYTES')) define('OCR_ATTACH_MAX_BYTES', 20 * 1024 * 1024); // 單檔 20MB
 if (!defined('OCR_ATTACH_DENY_EXT'))  define('OCR_ATTACH_DENY_EXT', ['php','php3','php4','php5','phtml','exe','bat','cmd','sh','vbs','js','jar','com','scr','ps1']);
+// 已確認的料號提示寫進業務備註時的行首記號：以此開頭的行「鎖定」，使用者無法在業務備註刪改（儲存時由後端併回）
+if (!defined('OCR_LOCK_MARK')) define('OCR_LOCK_MARK', '✔ ');
+// 待處理（尚未確認完成）的提醒行：同樣鎖定不可刪除，確認完成後換成 ✔ 行
+if (!defined('OCR_PEND_MARK')) define('OCR_PEND_MARK', '⚑ ');
 if (!defined('OCR_PS_MAX_LEN'))       define('OCR_PS_MAX_LEN', 150); // order_track.Order_ps 欄位長度上限
 
 // ── 資料表 ──────────────────────────────────────────────────────────────
@@ -76,6 +80,23 @@ function ocr_ensure_schema(PDO $db): bool {
             UNIQUE KEY uk_reminder_order (reminder_id, order_id),
             KEY idx_order (order_id, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客戶提醒×訂單 的處理紀錄（跳出過一次就不再重跳）'");
+
+        // 料號提示（2026-11-06）：製程中紀錄勾「提示」後，同一張表多一種「綁在料號」的提醒——
+        // part_d_id 有值＝料號提示（新訂單綁定該料號時跳窗），NULL＝原本的客戶提醒（全部既有資料）。
+        // 客戶提醒的所有查詢都加 part_d_id IS NULL，兩種互不干擾。MySQL 無 ADD COLUMN IF NOT EXISTS，先查再加。
+        $has = $db->query("SHOW COLUMNS FROM order_client_reminder LIKE 'part_d_id'")->fetch();
+        if (!$has) {
+            foreach ([
+                "ALTER TABLE order_client_reminder ADD COLUMN part_d_id INT NULL COMMENT '料號提示：d_setting.d_id；NULL=客戶提醒'",
+                "ALTER TABLE order_client_reminder ADD COLUMN src_item_id INT NULL COMMENT '料號提示：來源的製程中紀錄 eng_log_item.id'",
+                "ALTER TABLE order_client_reminder ADD COLUMN disabled_reason VARCHAR(500) NULL",
+                "ALTER TABLE order_client_reminder ADD COLUMN disabled_by INT NULL",
+                "ALTER TABLE order_client_reminder ADD COLUMN disabled_by_name VARCHAR(50) NULL",
+                "ALTER TABLE order_client_reminder ADD COLUMN disabled_at DATETIME NULL",
+                "ALTER TABLE order_client_reminder ADD INDEX idx_part (part_d_id, is_active)",
+                "ALTER TABLE order_client_reminder ADD INDEX idx_src_item (src_item_id)",
+            ] as $sqlA) { try { $db->exec($sqlA); } catch (Exception $eA) {} }
+        }
         $ok = true;
     } catch (Exception $e) { $ok = false; }
     return $ok;
@@ -111,7 +132,7 @@ function ocr_list_for_customer(PDO $db, string $customerId, bool $activeOnly = f
     $sql = "SELECT r.*,
                    (SELECT COUNT(*) FROM order_client_reminder_attach a WHERE a.reminder_id=r.id AND a.is_deleted=0) AS attach_count
               FROM order_client_reminder r
-             WHERE r.customer_id = ?" . ($activeOnly ? " AND r.is_active=1" : "") . "
+             WHERE r.customer_id = ? AND r.part_d_id IS NULL" . ($activeOnly ? " AND r.is_active=1" : "") . "
              ORDER BY r.is_active DESC, r.id DESC";
     $st = $db->prepare($sql);
     $st->execute([$customerId]);
@@ -261,12 +282,12 @@ function ocr_unacked_for_order(PDO $db, string $customerId, int $orderId): array
     if ($customerId === '') return [];
     if ($orderId > 0) {
         $st = $db->prepare("SELECT r.* FROM order_client_reminder r
-                              WHERE r.customer_id=? AND r.is_active=1
+                              WHERE r.customer_id=? AND r.is_active=1 AND r.part_d_id IS NULL
                                 AND NOT EXISTS (SELECT 1 FROM order_client_reminder_ack a WHERE a.reminder_id=r.id AND a.order_id=?)
                               ORDER BY r.id");
         $st->execute([$customerId, $orderId]);
     } else {
-        $st = $db->prepare("SELECT r.* FROM order_client_reminder r WHERE r.customer_id=? AND r.is_active=1 ORDER BY r.id");
+        $st = $db->prepare("SELECT r.* FROM order_client_reminder r WHERE r.customer_id=? AND r.is_active=1 AND r.part_d_id IS NULL ORDER BY r.id");
         $st->execute([$customerId]);
     }
     $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -275,11 +296,157 @@ function ocr_unacked_for_order(PDO $db, string $customerId, int $orderId): array
 }
 }
 
+// ── 料號提示（製程中紀錄勾「提示」產生，2026-11-06）────────────────────────
+if (!function_exists('ocr_unacked_part_for_order')) {
+/** 這個料號目前有效的提示中，這張訂單還沒處理過的（orderId<=0＝新增中訂單，全回）。 */
+function ocr_unacked_part_for_order(PDO $db, int $partDid, int $orderId, bool $includeShown = false): array {
+    ocr_ensure_schema($db);
+    if ($partDid <= 0) return [];
+    if ($orderId > 0) {
+        $st = $db->prepare("SELECT r.* FROM order_client_reminder r
+                             WHERE r.part_d_id=? AND r.is_active=1
+                               AND NOT EXISTS (SELECT 1 FROM order_client_reminder_ack a WHERE a.reminder_id=r.id AND a.order_id=?"
+                               . ($includeShown ? " AND a.status<>'shown'" : "") . ")
+                             ORDER BY r.id");
+        $st->execute([$partDid, $orderId]);
+    } else {
+        $st = $db->prepare("SELECT r.* FROM order_client_reminder r WHERE r.part_d_id=? AND r.is_active=1 ORDER BY r.id");
+        $st->execute([$partDid]);
+    }
+    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+}
+
+if (!function_exists('ocr_hint_open_map')) {
+/**
+ * 清單用：這批訂單中，「綁定的料號有啟用中的提示、這張訂單建立在提示之後、尚未轉生管、還沒確認/設為待處理」者。
+ * 回傳 Order_id => [['content'=>…,'need'=>是否要求確認],…]。涵蓋所有建單途徑（複製、匯入、跳窗沒處理就關掉…），不只靠選料號當下那一次跳窗。
+ */
+function ocr_hint_open_map(PDO $db, array $orderIds): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
+    if (!$ids) return [];
+    ocr_ensure_schema($db);
+    $out = [];
+    // 所有「綁定料號有啟用中提示」的訂單都列出（含已轉生管、建立在提示之前的）；need=true 才要求確認
+    // 停用的提示：從停用當下起不再套用到新訂單；停用之前就存在的訂單照舊顯示（不再要求確認）
+    $q = "SELECT o.Order_id, r.content, (r.is_active = 1 AND o.pmGet IS NULL AND (o.Order_status IS NULL OR o.Order_status <> 6) AND o.Created_At >= r.created_at) AS need
+            FROM order_track o
+            JOIN order_client_reminder r ON r.part_d_id = o.d_id_ID AND r.src_item_id IS NOT NULL
+                 AND (r.is_active = 1 OR o.Created_At < r.disabled_at)
+           WHERE o.Order_id IN (" . implode(',', $ids) . ")
+             AND NOT EXISTS (SELECT 1 FROM order_client_reminder_ack a WHERE a.reminder_id = r.id AND a.order_id = o.Order_id AND a.status <> 'shown')
+           ORDER BY r.id";
+    foreach ($db->query($q)->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['Order_id']][] = ['content' => (string)$r['content'], 'need' => (int)$r['need'] === 1];
+    return $out;
+}
+}
+
+if (!function_exists('ocr_hint_order_counts')) {
+/** 清單用：Order_id => 這張訂單適用的提示數（提示綁料號 ID；停用的只算「停用之前就存在」的訂單） */
+function ocr_hint_order_counts(PDO $db, array $orderIds): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
+    if (!$ids) return [];
+    ocr_ensure_schema($db);
+    $out = [];
+    foreach ($db->query("SELECT o.Order_id, COUNT(*) n FROM order_track o
+                          JOIN order_client_reminder r ON r.part_d_id = o.d_id_ID AND r.src_item_id IS NOT NULL
+                               AND (r.is_active = 1 OR o.Created_At < r.disabled_at)
+                         WHERE o.Order_id IN (" . implode(',', $ids) . ") GROUP BY o.Order_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['Order_id']] = (int)$r['n'];
+    }
+    return $out;
+}
+}
+
+if (!function_exists('ocr_hint_for_order')) {
+/** 這張訂單適用的料號提示（含已停用但訂單建立在停用之前的）；排除「來源就在這張訂單」的。 */
+function ocr_hint_for_order(PDO $db, int $orderId): array {
+    if ($orderId <= 0) return [];
+    ocr_ensure_schema($db);
+    $st = $db->prepare("SELECT r.id AS rid, r.content, r.is_active, r.src_item_id, r.created_by_name,
+                               DATE_FORMAT(r.created_at,'%Y-%m-%d') AS created_date,
+                               r.disabled_by_name, r.disabled_reason, DATE_FORMAT(r.disabled_at,'%Y-%m-%d %H:%i') AS disabled_at,
+                               i.log_id, i.created_by, src.Order_oo
+                          FROM order_track o
+                          JOIN order_client_reminder r ON r.part_d_id = o.d_id_ID AND r.src_item_id IS NOT NULL
+                               AND (r.is_active = 1 OR o.Created_At < r.disabled_at)
+                          JOIN eng_log_item i ON i.id = r.src_item_id AND i.voided_at IS NULL
+                          LEFT JOIN eng_log_bind b ON b.log_id = i.log_id AND b.bind_type = 'order'
+                          LEFT JOIN order_track src ON src.Order_id = b.bind_id
+                         WHERE o.Order_id = ? AND (b.bind_id IS NULL OR b.bind_id <> ?)
+                         ORDER BY r.is_active DESC, r.id DESC");
+    $st->execute([$orderId, (string)$orderId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+}
+
+if (!function_exists('ocr_hint_create')) {
+/** 由製程中紀錄項目建立一則料號提示；同一項目只會有一則（重複呼叫回傳既有的）。 */
+function ocr_hint_create(PDO $db, int $itemId, int $partDid, string $content, int $uid, string $uname): int {
+    ocr_ensure_schema($db);
+    $content = trim($content);
+    if ($content === '') throw new InvalidArgumentException('提示內容不可空白');
+    if (mb_strlen($content, 'UTF-8') > 500) $content = mb_substr($content, 0, 500, 'UTF-8');
+    $ex = $db->prepare("SELECT id FROM order_client_reminder WHERE src_item_id=? LIMIT 1");
+    $ex->execute([$itemId]);
+    if ($eid = $ex->fetchColumn()) return (int)$eid;
+    $p = $db->prepare("SELECT d_id, Customer_Id FROM d_setting WHERE d_id=?");
+    $p->execute([$partDid]);
+    $part = $p->fetch(PDO::FETCH_ASSOC);
+    if (!$part) throw new InvalidArgumentException('查無這個料號主檔，無法設為提示');
+    $db->prepare("INSERT INTO order_client_reminder
+        (customer_id, customer_name, content, is_active, part_d_id, src_item_id, created_by, created_by_name, created_at, updated_by, updated_by_name, updated_at)
+        VALUES (?,NULL,?,1,?,?,?,?,NOW(),?,?,NOW())")
+       ->execute([(string)($part['Customer_Id'] ?? ''), $content, $partDid, $itemId, ($uid ?: null), $uname, ($uid ?: null), $uname]);
+    return (int)$db->lastInsertId();
+}
+}
+
+if (!function_exists('ocr_hint_info')) {
+/** 一批製程中紀錄項目的提示狀態：itemId => [rule_id,is_active,disabled_by_name,disabled_at,disabled_reason] */
+function ocr_hint_info(PDO $db, array $itemIds): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $itemIds), fn($v) => $v > 0)));
+    if (!$ids) return [];
+    ocr_ensure_schema($db);
+    $out = [];
+    foreach ($db->query("SELECT id, src_item_id, is_active, disabled_by_name, disabled_reason,
+                                DATE_FORMAT(disabled_at,'%Y-%m-%d %H:%i') AS disabled_at
+                           FROM order_client_reminder WHERE src_item_id IN (" . implode(',', $ids) . ")")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['src_item_id']] = ['rule_id' => (int)$r['id'], 'is_active' => (int)$r['is_active'],
+            'disabled_by_name' => (string)$r['disabled_by_name'], 'disabled_at' => (string)$r['disabled_at'],
+            'disabled_reason' => (string)$r['disabled_reason']];
+    }
+    return $out;
+}
+}
+
+if (!function_exists('ocr_hint_set_active')) {
+/** 停用（備註選填，記錄是誰、什麼時候）／重新啟用。點下去當下以資料庫現況為準，不一致就擋下請重新整理。 */
+function ocr_hint_set_active(PDO $db, int $itemId, bool $active, string $note, int $uid, string $uname): void {
+    ocr_ensure_schema($db);
+    $st = $db->prepare("SELECT id, is_active FROM order_client_reminder WHERE src_item_id=? LIMIT 1");
+    $st->execute([$itemId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) throw new InvalidArgumentException('這一筆不是提示，請重新整理');
+    $note = trim($note);
+    if (mb_strlen($note, 'UTF-8') > 500) throw new InvalidArgumentException('備註請控制在 500 字以內');
+    if ($active) {
+        if ((int)$r['is_active']) throw new InvalidArgumentException('這則提示已經是啟用狀態，請重新整理看最新狀態');
+        $db->prepare("UPDATE order_client_reminder SET is_active=1, updated_by=?, updated_by_name=?, updated_at=NOW() WHERE id=?")
+           ->execute([($uid ?: null), $uname, (int)$r['id']]);
+        return;
+    }
+    if (!(int)$r['is_active']) throw new InvalidArgumentException('這則提示已經被停用了，請重新整理看最新狀態');
+    $db->prepare("UPDATE order_client_reminder SET is_active=0, disabled_reason=?, disabled_by=?, disabled_by_name=?, disabled_at=NOW(),
+                  updated_by=?, updated_by_name=?, updated_at=NOW() WHERE id=?")
+       ->execute([($note === '' ? null : $note), ($uid ?: null), $uname, ($uid ?: null), $uname, (int)$r['id']]);
+}
+}
+
 // ── 摘要文字（插入業務備註用，受 Order_ps 欄位長度限制） ───────────────────
 if (!function_exists('ocr_summary_text')) {
-function ocr_summary_text(string $content, string $uname, string $dateShort): string {
-    $prefix = '【客戶提醒待處理】';
-    $suffix = '（' . $uname . ' ' . $dateShort . ' 設為待處理）';
+function ocr_summary_text(string $content, string $uname, string $dateShort, string $prefix = '【客戶提醒待處理】', string $word = '設為待處理'): string {
+    $suffix = '（' . $uname . ' ' . $dateShort . ' ' . $word . '）';
     $room = OCR_PS_MAX_LEN - mb_strlen($prefix, 'UTF-8') - mb_strlen($suffix, 'UTF-8') - 1; // -1 給換行
     if ($room < 5) $room = 5;
     $snippet = $content;
@@ -315,6 +482,79 @@ function ocr_ack_confirm(PDO $db, int $reminderId, int $orderId, int $uid, strin
 }
 }
 
+if (!function_exists('ocr_ps_lock_merge')) {
+/**
+ * 業務備註儲存時呼叫：把資料庫裡既有的鎖定行（✔ 開頭）原樣併回最前面，並剔除使用者送來的 ✔ 行
+ * （既防刪除也防偽造／重複）。沒有鎖定行時，只是剔除送來的 ✔ 行。
+ */
+function ocr_ps_lock_merge(PDO $db, int $orderId, ?string $posted): ?string {
+    if ($posted === null) return null;
+    $locked = [];
+    if ($orderId > 0) {
+        $st = $db->prepare("SELECT Order_ps FROM order_track WHERE Order_id=?");
+        $st->execute([$orderId]);
+        foreach (preg_split('/
+|
+|/', (string)($st->fetchColumn() ?: '')) as $ln) {
+            if (strncmp($ln, OCR_LOCK_MARK, strlen(OCR_LOCK_MARK)) === 0 || strncmp($ln, OCR_PEND_MARK, strlen(OCR_PEND_MARK)) === 0) $locked[] = $ln;
+        }
+    }
+    $rest = [];
+    foreach (preg_split('/
+|
+|/', $posted) as $ln) {
+        if (strncmp($ln, OCR_LOCK_MARK, strlen(OCR_LOCK_MARK)) !== 0 && strncmp($ln, OCR_PEND_MARK, strlen(OCR_PEND_MARK)) !== 0) $rest[] = $ln;
+    }
+    $restTxt = trim(implode("
+", $rest), "
+");
+    return implode("
+", array_merge($locked, $restTxt === '' ? [] : [$restTxt]));
+}
+}
+
+if (!function_exists('ocr_ps_split')) {
+/** 列表用：把業務備註拆成 [鎖定行陣列, 其餘可編輯文字] */
+function ocr_ps_split(string $ps): array {
+    $locked = []; $rest = [];
+    foreach (preg_split('/
+|
+|/', $ps) as $ln) {
+        if (strncmp($ln, OCR_LOCK_MARK, strlen(OCR_LOCK_MARK)) === 0) $locked[] = substr($ln, strlen(OCR_LOCK_MARK));
+        elseif (strncmp($ln, OCR_PEND_MARK, strlen(OCR_PEND_MARK)) === 0) $locked[] = substr($ln, strlen(OCR_PEND_MARK));   // 待處理行（以「【」開頭，畫面另標示）
+        else $rest[] = $ln;
+    }
+    return [$locked, trim(implode("
+", $rest), "
+")];
+}
+}
+
+if (!function_exists('ocr_hint_ps_append')) {
+/**
+ * 料號提示「確認」後，把已確認的提示摘要接在業務備註下方（客戶提醒的確認維持純表態，不動備註）。
+ * 回傳更新後的 Order_ps；不是料號提示／已寫過／欄位放不下 → 回傳 null（不動備註）。
+ */
+function ocr_hint_ps_append(PDO $db, int $reminderId, int $orderId, string $uname, bool $force = false): ?string {
+    $rem = ocr_get($db, $reminderId);
+    if (!$rem || (empty($rem['part_d_id']) && !$force) || $orderId <= 0) return null;
+    $st = $db->prepare("SELECT Order_ps FROM order_track WHERE Order_id=?");
+    $st->execute([$orderId]);
+    $cur = $st->fetchColumn();
+    if ($cur === false) return null;
+    $cur = (string)($cur ?: '');
+    $tag = OCR_LOCK_MARK;
+    $head = mb_substr(trim((string)$rem['content']), 0, 8, 'UTF-8');
+    if (mb_strpos($cur, $tag . $head, 0, 'UTF-8') !== false) return $cur;   // 同一則已寫過，不重複
+    $dateShort = (string)$db->query("SELECT DATE_FORMAT(NOW(),'%m/%d')")->fetchColumn();
+    $new = $cur . ($cur !== '' ? "
+" : '') . ocr_summary_text((string)$rem['content'], $uname, $dateShort, $tag, '確認');
+    if (mb_strlen($new, 'UTF-8') > OCR_PS_MAX_LEN) return null;
+    $db->prepare("UPDATE order_track SET Order_ps=? WHERE Order_id=?")->execute([$new, $orderId]);
+    return $new;
+}
+}
+
 if (!function_exists('ocr_ack_pending')) {
 /**
  * 設為待處理：寫 ack、並把摘要插入 order_track.Order_ps（原內容下方）。
@@ -339,9 +579,10 @@ function ocr_ack_pending(PDO $db, int $reminderId, int $orderId, int $uid, strin
         $cur = (string)($st->fetchColumn() ?: '');
         $dateShort = date('m/d');
         try { $dateShort = (string)$db->query("SELECT DATE_FORMAT(NOW(),'%m/%d')")->fetchColumn(); } catch (Exception $e) {}
-        $summary = ocr_summary_text((string)$rem['content'], $uname, $dateShort);
+        $summary = ocr_summary_text((string)$rem['content'], $uname, $dateShort,
+            !empty($rem['part_d_id']) ? '【料號提示待處理】' : '【客戶提醒待處理】');
         $sep = ($cur !== '') ? "\n" : '';
-        $newVal = $cur . $sep . $summary;
+        $newVal = $cur . $sep . OCR_PEND_MARK . $summary;   // 鎖定行，不可從備註欄刪除；確認完成後換成 ✔ 行
         $inserted = true; $reason = '';
         if (mb_strlen($newVal, 'UTF-8') > OCR_PS_MAX_LEN) {
             // 原內容已經太滿，連精簡摘要都塞不下：不動業務備註，但 ack/待確認狀態照樣成立
@@ -371,6 +612,31 @@ function ocr_ack_resolve(PDO $db, int $ackId, int $uid, string $uname): bool {
     if ((string)$a['status'] !== 'pending') throw new Exception('這筆紀錄目前不是待處理狀態，可能已被其他人處理過，請重新整理頁面');
     $db->prepare("UPDATE order_client_reminder_ack SET status='resolved', resolved_by=?, resolved_by_name=?, resolved_at=NOW() WHERE id=? AND status='pending'")
        ->execute([($uid ?: null), $uname, $ackId]);
+    // 把業務備註裡「【客戶提醒／料號提示待處理】…」那行換成鎖定的「✔ …（誰 日期 確認）」（不可刪、顯示已確認資料）
+    try {
+        $rem = ocr_get($db, (int)$a['reminder_id']);
+        $oid = (int)$a['order_id'];
+        if ($rem && $oid > 0) {
+            $head = mb_substr(trim((string)$rem['content']), 0, 8, 'UTF-8');
+            $pfxs = ['【料號提示待處理】' . $head, '【客戶提醒待處理】' . $head];
+            $s = $db->prepare("SELECT Order_ps FROM order_track WHERE Order_id=?");
+            $s->execute([$oid]);
+            $cur = $s->fetchColumn();
+            if ($cur !== false) {
+                $keep = [];
+                foreach (preg_split('/\r\n|\r|\n/', (string)($cur ?: '')) as $ln) {
+                    $t = (strncmp($ln, OCR_PEND_MARK, strlen(OCR_PEND_MARK)) === 0) ? substr($ln, strlen(OCR_PEND_MARK)) : $ln;
+                    $hit = false;
+                    foreach ($pfxs as $pf) { if (mb_strpos($t, $pf, 0, 'UTF-8') === 0) { $hit = true; break; } }
+                    if ($hit) continue;
+                    $keep[] = $ln;
+                }
+                $db->prepare("UPDATE order_track SET Order_ps=? WHERE Order_id=?")
+                   ->execute([trim(implode("\n", $keep), "\n"), $oid]);
+                ocr_hint_ps_append($db, (int)$a['reminder_id'], $oid, $uname, true);
+            }
+        }
+    } catch (Exception $e) {}
     return true;
 }
 }
@@ -397,25 +663,3 @@ function ocr_pending_exists_sql(string $orderAlias = 'ot'): string {
     return "EXISTS (SELECT 1 FROM order_client_reminder_ack _ocra WHERE _ocra.order_id = {$orderAlias}.Order_id AND _ocra.status='pending')";
 }
 }
-    // 料號提示：把業務備註裡「【料號提示待處理】…」那行換成鎖定的「✔ …（誰 日期 確認）」（與直接按確認的呈現相同、不可刪）
-    try {
-        $rem = ocr_get($db, (int)$a['reminder_id']);
-        $oid = (int)$a['order_id'];
-        if ($rem && !empty($rem['part_d_id']) && $oid > 0) {
-            $head = mb_substr(trim((string)$rem['content']), 0, 8, 'UTF-8');
-            $pfx  = '【料號提示待處理】' . $head;
-            $s = $db->prepare("SELECT Order_ps FROM order_track WHERE Order_id=?");
-            $s->execute([$oid]);
-            $cur = $s->fetchColumn();
-            if ($cur !== false) {
-                $keep = [];
-                foreach (preg_split('/\r\n|\r|\n/', (string)($cur ?: '')) as $ln) {
-                    if (mb_strpos($ln, $pfx, 0, 'UTF-8') === 0) continue;
-                    $keep[] = $ln;
-                }
-                $db->prepare("UPDATE order_track SET Order_ps=? WHERE Order_id=?")
-                   ->execute([trim(implode("\n", $keep), "\n"), $oid]);
-                ocr_hint_ps_append($db, (int)$a['reminder_id'], $oid, $uname);
-            }
-        }
-    } catch (Exception $e) {}

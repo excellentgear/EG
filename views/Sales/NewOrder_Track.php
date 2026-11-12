@@ -4640,7 +4640,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if ($_hi['need']): ?><div class="ps-hint-open" title="製程中紀錄對這個料號設的提示，需先確認"><i class="fa fa-bell"></i> 料號提示待確認：<?= safe_html($_hi['content']) ?> <button type="button" class="btn btn-xs btn-warning" style="padding:0 5px;font-size:11px;" onclick="ocrOpenHintForOrder(<?= (int)$order['Order_id'] ?>, <?= (int)$order['d_id_ID'] ?>)">確認</button></div>
                         <?php else: ?><div class="ps-hint-info" title="製程中紀錄對這個料號設的提示"><i class="fa fa-bell-o"></i> 料號提示：<?= safe_html($_hi['content']) ?></div><?php endif; ?>
                     <?php endforeach; ?>
-                    <?php foreach ($_psLocked as $_pl): ?><div class="ps-locked" title="已確認的料號提示，不可刪除"><i class="fa fa-check-circle"></i> <?= safe_html($_pl) ?></div><?php endforeach; ?>
+                    <?php foreach ($_psLocked as $_pl): $_plPend = (mb_strpos($_pl, '【', 0, 'UTF-8') === 0); ?><div class="ps-locked" title="<?= $_plPend ? '待處理的提醒，不可刪除；確認完成後會顯示為已確認' : '已確認的提醒／提示，不可刪除' ?>"><i class="fa <?= $_plPend ? 'fa-clock-o' : 'fa-check-circle' ?>"<?= $_plPend ? ' style="color:#D9822B;"' : '' ?>></i> <?= safe_html($_pl) ?></div><?php endforeach; ?>
                     <div class="textarea-wrap">
                         <textarea class="table-textarea" name="Order_ps" <?= $can_update ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($_psRest) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($_psRest) ?></textarea>
                         <span class="note-more-hint" title="內容超過5行，點擊欄位可展開查看全文"><i class="fa fa-ellipsis-h"></i> 還有更多</span>
@@ -4892,7 +4892,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                     $_u = '../Sales/Shipping_Insight.php?' . http_build_query(['ship_no' => $_s['no'], 'ship_isid' => $_s['is_id'], 'ship_pno' => $_s['pno'], 'ship_from' => $_d, 'ship_to' => $_d]);
                                     $_label = '<a href="' . safe_html($_u) . '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;" title="點擊另開出貨分析，只列此出貨單的此筆料號">' . $_label . '</a>';
                                 }
-                                echo '<div title="已綁定出貨單" style="white-space:nowrap;">' . $_osIcon . $_label . ' <span style="line-height:1.3;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . '</span></div>';
+                                echo '<div title="已綁定出貨單" style="white-space:nowrap;">' . $_osIcon . $_label . ' <span style="line-height:1.5;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . '</span></div>';
                             }
                             if (count($_os['ships']) > 5) echo '<div>…另 ' . (count($_os['ships']) - 5) . ' 張，共出 ' . (int)$_os['qty'] . '</div>';
                         }
@@ -4904,7 +4904,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 $_u = '../Sales/Shipping_Insight.php?' . http_build_query(['ship_no' => $_s['no'], 'ship_isid' => $_s['is_id'], 'ship_pno' => $_s['pno'], 'ship_from' => $_d, 'ship_to' => $_d]);
                                 $_label = '<a href="' . safe_html($_u) . '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;">' . $_label . '</a>';
                             }
-                            echo '<div style="white-space:nowrap;" title="報廢品歸還客戶（製令 ' . safe_html($_s['bom']) . '），不計入訂單出貨量"><i class="fa fa-undo" style="color:#B8860B;margin-right:2px;"></i>' . $_label . ' <span style="line-height:1.3;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . ' 報廢歸還</span></div>';
+                            echo '<div style="white-space:nowrap;" title="報廢品歸還客戶（製令 ' . safe_html($_s['bom']) . '），不計入訂單出貨量"><i class="fa fa-undo" style="color:#B8860B;margin-right:2px;"></i>' . $_label . ' <span style="line-height:1.5;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . ' 報廢歸還</span></div>';
                         }
                         ?>
                         <div class="oc-chgbadge-slot" data-oid="<?= intval($order['Order_id']) ?>"></div>
