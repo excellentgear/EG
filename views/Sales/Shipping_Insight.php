@@ -1034,6 +1034,7 @@ var COMPANY  = <?= json_encode($COMPANY, JSON_UNESCAPED_UNICODE) ?>;
 var SALE_TYPES = <?= json_encode($saleTypes, JSON_UNESCAPED_UNICODE) ?>;
 
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
+function np(n){ var v=Number(n)||0; return v.toLocaleString('en-US',{maximumFractionDigits:4}); }   // 單價：小數點後非 0 的都顯示（最多 4 位），整數不補 .00
 function nf(n){ n=Number(n)||0; return n.toLocaleString('en-US'); }
 function nf1(n){ n=Number(n)||0; return n.toLocaleString('en-US',{maximumFractionDigits:1}); }
 function money(n){ return nf(Math.round(Number(n)||0)); }
@@ -2087,7 +2088,7 @@ function shipBindHtml(x){
 function renderShipTable(r){
   var h=''; r.rows.forEach(function(x){
     h += '<tr><td>'+dispDate(x.dt)+'</td><td>'+esc(x.no)+shipBindHtml(x)+'</td><td>'+esc(x.cname)+(x.cbad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
-       + '<td>'+pnoCell(x)+'</td><td>'+esc(x.spec)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
+       + '<td>'+pnoCell(x)+'</td><td>'+esc(x.spec)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+np(x.price)+'</td>'
        + '<td class="n">'+money(x.amount)+(x.anomaly?(' <span class="badge-anom" title="'+esc(x.anomaly_reason)+'">'+(x.anomaly_confirmed?'已確認':'異常')+'</span>'):'')+'</td></tr>';
   });
   $('#tblShip tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">'+(r.deep?'這段期間沒有此料號、此客戶的出貨':'本期沒有出貨')+'</td></tr>');
@@ -2103,7 +2104,7 @@ function renderShipTable(r){
 function renderReturnTable(r){
   var h=''; r.rows.forEach(function(x){
     h += '<tr><td>'+dispDate(x.dt)+'</td><td>'+esc(x.no)+'</td><td>'+esc(x.cname)+(x.cbad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
-       + '<td>'+pnoCell(x)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
+       + '<td>'+pnoCell(x)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+np(x.price)+'</td>'
        + '<td class="n">'+money(x.amount)+'</td><td>'+esc(x.reason)+'</td></tr>';
   });
   $('#tblReturn tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:var(--muted);">本期沒有退貨</td></tr>');
@@ -2113,7 +2114,7 @@ function orderStatusText(s){ return s==='6' ? '暫停/取消' : (s==='9' ? '已�
 function renderOrderTable(r){
   var h=''; r.rows.forEach(function(x){
     h += '<tr><td>'+dispDate(x.odate)+'</td><td>'+esc(x.no)+'</td><td>'+esc(x.cname)+(x.cbad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
-       + '<td>'+pnoCell(x)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
+       + '<td>'+pnoCell(x)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+np(x.price)+'</td>'
        + '<td class="n">'+(x.haspx?money(x.amount):'<span style="color:var(--muted);">未開價</span>')+'</td>'
        + '<td>'+dispDate(x.ddate)+'</td><td>'+orderStatusText(x.status)+'</td></tr>';
   });
@@ -2280,7 +2281,7 @@ function anomLoad(){
     $('#anomByType').html(bh);
     var h=''; r.rows.forEach(function(x){
       h += '<tr><td><input type="checkbox" class="anom-cb" data-id="'+x.id+'"></td><td>'+dispDate(x.dt)+'</td>'
-         + '<td>'+esc(x.cname)+'</td><td>'+esc(x.pno)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+nf(x.price)+'</td>'
+         + '<td>'+esc(x.cname)+'</td><td>'+esc(x.pno)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+np(x.price)+'</td>'
          + '<td class="n">'+money(x.amount)+'</td><td>'+esc(x.st_name)+'</td><td>'+esc(x.anomaly_reason)+'</td></tr>';
     });
     $('#tblAnomaly tbody').html(h||'<tr><td colspan="9" style="text-align:center;color:var(--muted);">沒有異常</td></tr>');
