@@ -2839,7 +2839,10 @@ function qab_quick_auto_scrap(PDO $db, int $id, int $scrapQty, int $createdBy, s
     if (!qab_auto_close_allowed($o)) {
         $db->prepare("UPDATE qa_abnormal_order SET vendor_pending=1 WHERE id=?")->execute([$id]);
         try {
-            qab_quick_notify($db, $id, $c['l1_users'], '廠商提報報廢（廠商未登記，未自動結案）：' . $no,
+            // 快速決策的兩層（第一層＋第二層）一併通知
+            $both = $c['l1_users'];
+            try { $both = array_merge($both, qab_quick_l2_pool($db)['ids']); } catch (Throwable $e2) {}
+            qab_quick_notify($db, $id, $both, '廠商提報報廢（廠商未登記，未自動結案）：' . $no,
                 '製令 ' . $bomNo . ' 回報報廢 ' . $scrapQty . ' 件，但這一站沒有登記加工廠商，系統不會自動核准結案。請補登廠商後再處理。', $createdBy);
         } catch (Throwable $e) {}
         return ['auto_closed' => 0, 'vendor_pending' => 1];
@@ -2863,9 +2866,13 @@ function qab_quick_auto_scrap(PDO $db, int $id, int $scrapQty, int $createdBy, s
     $cl = qab_close_order($db, $id, $actor, true);
     try {
         $tg = $scrapAct ?: ['notify_users' => [], 'notify_depts' => []];
-        qab_quick_notify($db, $id, qab_quick_result_targets($db, $o, $tg),
+        // 快速決策的兩層（第一層＋第二層）一定要收到：系統代為核准，兩層都該知道結果（不再扣掉代為核准的那一位）
+        $targets = qab_quick_result_targets($db, $o, $tg);
+        $targets = array_merge($targets, $c['l1_users']);
+        try { $targets = array_merge($targets, qab_quick_l2_pool($db)['ids']); } catch (Throwable $e2) {}
+        qab_quick_notify($db, $id, $targets,
             '廠商提報報廢已自動核准結案：' . $no,
-            $vendorTxt . '（製令 ' . $bomNo . '）提報報廢 ' . $scrapQty . ' 件，已自動核准結案，報廢單號 ' . ($cl['scrap_no'] ?: '—') . '。', $actor);
+            $vendorTxt . '（製令 ' . $bomNo . '）提報報廢 ' . $scrapQty . ' 件，已自動核准結案，報廢單號 ' . ($cl['scrap_no'] ?: '—') . '。', 0);
     } catch (Throwable $e) {}
     return ['auto_closed' => 1, 'vendor_pending' => 0, 'scrap_no' => $cl['scrap_no']];
 }
