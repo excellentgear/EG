@@ -194,6 +194,12 @@ function getEmployees() {
             }
         }
 
+        // 唯讀者（無新增/修改權限）不給登入帳號、學歷、備註（後端遮蔽）
+        $_pm = empPagePerm();
+        if (strpos($_pm, 'A') === false && strpos($_pm, 'U') === false && strpos($_pm, 'C') === false) {
+            foreach ($data as $k => $_e) foreach (['user_uname', 'highest_education', 'second_education', 'remark'] as $_f) $data[$k][$_f] = '';
+        }
+
         echo json_encode(['status' => 'success', 'data' => $data]);
     } catch (PDOException $e) {
         echo json_encode(['status' => 'error', 'message' => '資料庫查詢失敗: ' . $e->getMessage()]);

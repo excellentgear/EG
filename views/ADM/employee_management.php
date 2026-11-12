@@ -139,6 +139,8 @@ if ($hrUserPerm === 'R') {
     <!-- Custom Theme Style -->
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
+        /* 唯讀者：列表不顯示登入帳號／最高學歷／備註 */
+        table.emp-masked .emp-col-priv { display:none; }
         /* 唯讀檢視員工資料：隱藏個人資訊（登入帳號/密碼/電話/學歷）與所有編輯按鈕 */
         #employeeModal.emp-viewonly .emp-personal, #employeeModal.emp-viewonly #btn-save-employee,
         #employeeModal.emp-viewonly #btn-add-concurrent, #employeeModal.emp-viewonly .btn-clear-concurrent,
@@ -302,20 +304,20 @@ if ($hrUserPerm === 'R') {
                                     </div>
                                 </div>
 
-                                <table class="table table-striped table-hover">
+                                <table class="table table-striped table-hover<?php echo (strpos((string)$hrUserPerm,'A')===false && strpos((string)$hrUserPerm,'U')===false && strpos((string)$hrUserPerm,'C')===false) ? ' emp-masked' : ''; ?>">
                                     <thead>
                                         <tr>
                                             <th>員工編號</th>
-                                            <th>登入帳號</th>
+                                            <th class="emp-col-priv">登入帳號</th>
                                             <th>姓名</th>
                                             <th>主部門 / 職稱</th>
                                             <th>性別</th>
-                                            <th>最高學歷</th>
+                                            <th class="emp-col-priv">最高學歷</th>
                                             <th>到職日</th>
                                             <th>特休天數</th>
                                             <th>兼任職務</th>
                                             <th>狀態</th>
-                                            <th>備註</th>
+                                            <th class="emp-col-priv">備註</th>
                                             <th title="目前是否有登入中的連線；可強制切斷">連線</th>
                                         </tr>
                                     </thead>
@@ -957,13 +959,13 @@ $(document).ready(function() {
 
                     var row = `<tr${rowClass} data-id="${escapeHtml(emp.id)}" data-action="edit" data-main-dept="${escapeHtml(emp.main_department_id || '')}" data-concurrent-depts="${escapeHtml(emp.concurrent_department_ids || '')}" style="cursor: pointer;" title="連點兩下編輯">
                         <td>${escapeHtml(emp.id)}</td> <!-- 員工編號 -->
-                        <td>${escapeHtml(emp.user_uname)}</td> <!-- 登入帳號 -->
+                        <td class="emp-col-priv">${escapeHtml(emp.user_uname)}</td> <!-- 登入帳號 -->
                         <td>${escapeHtml(emp.user_cname)}</td>
                         <td>${escapeHtml(emp.main_department_name || '-')} / ${escapeHtml(emp.main_position_name || '-')}</td>
                         <td>
                             ${genderLabel}
                         </td>
-                        <td>${eduLabel}</td>
+                        <td class="emp-col-priv">${eduLabel}</td>
                         <td>${escapeHtml(emp.hire_date || '')}</td>
                         <td>${escapeHtml(displayAnnualLeave)} 天${emp.annual_leave_note
                             ? `<div style="font-size:11px;line-height:15px;color:#8a6d3b;margin-top:2px;">${escapeHtml(emp.annual_leave_note)}</div>`
@@ -972,7 +974,7 @@ $(document).ready(function() {
                             ${emp.concurrent_positions ? emp.concurrent_positions.split('; ').map(escapeHtml).join('<br>') : '<i class="text-muted">無</i>'}
                         </td>
                         <td>${statusLabel}</td>
-                        <td>${escapeHtml(remarkText)}</td>
+                        <td class="emp-col-priv">${escapeHtml(remarkText)}</td>
                         <td class="conn-cell" data-uid="${escapeHtml(emp.id)}"><span class="conn-off">—</span></td>
                     </tr>`;
                     tableBody.append(row);
