@@ -736,7 +736,8 @@ function empRequireOps() {
 /** 目前線上狀態：[user_id => 最後活動時間戳]（給列表顯示在線/離線） */
 function getOnlineStatus() {
     require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
-    empRequirePerm(false);
+    // 唯讀者也可看連線狀態（只讀）：有任何本頁權限即可
+    if (empPagePerm() === '') { http_response_code(403); echo json_encode(['status' => 'error', 'message' => '您沒有權限執行此操作。'], JSON_UNESCAPED_UNICODE); exit; }
     $map = eg_session_online_map();
     $out = [];
     foreach ($map as $uid => $ts) $out[(string)$uid] = date('Y-m-d H:i:s', $ts);
