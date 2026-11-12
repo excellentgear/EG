@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/bom_outsource_lib.php';
+require_once __DIR__ . '/qc_container_lib.php';
 
 if (!defined('OD_CUSTOMER_MATERIAL_PROCESS')) define('OD_CUSTOMER_MATERIAL_PROCESS', 138); // 客供料：實收數量可多於或少於 BOM，不套用數量上限
 
@@ -74,6 +75,11 @@ function od_ensure_schema(PDO $db): void
         ) COMMENT='外包加工價格表（老闆核定價／廠商詢價結果），發單時自動帶入單價'");
     } catch (Throwable $e) { /* 呼叫端自行處理 */ }
     try {
+        if (!$db->query("SHOW COLUMNS FROM od_slip_line LIKE 'container'")->fetch()) {
+            $db->exec("ALTER TABLE od_slip_line ADD COLUMN container VARCHAR(60) NULL COMMENT '容器（預設由 BOM 製程列的容器回報帶入，發單時可改）' AFTER qty");
+        }
+    } catch (Throwable $e) {}
+    try {
         if (!$db->query("SHOW COLUMNS FROM od_slip_line LIKE 'unit_price'")->fetch()) {
             $db->exec("ALTER TABLE od_slip_line ADD COLUMN unit_price DECIMAL(12,2) NULL COMMENT '發單單價（沒填＝NULL，不顯示 0；後續對帳再補）' AFTER qty");
         }
@@ -101,7 +107,7 @@ function od_ensure_schema(PDO $db): void
 function od_format_columns(): array
 {
     return ['no' => '項', 'bom' => 'BOM', 'part_no' => '料號', 'drawing_no' => '圖號', 'client' => '客戶',
-            'process' => '製程', 'qty' => '數量', 'price' => '單價', 'amount' => '金額', 'due' => '交期', 'remark' => '備註'];
+            'process' => '製程', 'qty' => '數量', 'container' => '容器', 'price' => '單價', 'amount' => '金額', 'due' => '交期', 'remark' => '備註'];
 }
 
 function od_format_default_config(): array
@@ -129,7 +135,7 @@ function od_format_normalize(array $c): array
         'paper' => $paper,
         'rows_per_page' => max(3, min(40, (int)($c['rows_per_page'] ?? $d['rows_per_page']))),
         'cols' => $cols,
-        'footer_text' => mb_substr(trim((string)($c['footer_text'] ?? '')), 0, 300),
+        'footer_text' => mb_substr(trim(str_replace("\r", '', (string)($c['footer_text'] ?? ''))), 0, 500),   // 可多行
         'two_part' => !empty($c['two_part']) ? 1 : 0,
         'show_total' => array_key_exists('show_total', $c) ? (empty($c['show_total']) ? 0 : 1) : 1,
         'show_sign' => array_key_exists('show_sign', $c) ? (empty($c['show_sign']) ? 0 : 1) : 1,
@@ -196,6 +202,22 @@ function od_add_workdays(PDO $db, string $from, int $days): string
 }
 
 // ───────────────────────────── BOM 製程一覽 ─────────────────────────────
+/** 容器文字（例「3 PP箱、2 紙箱」）。生管回報（pm_ps）優先，沒有才用 QC 回報（QC_ps）；代碼轉名稱走 qc_container_lib */
+function od_container_text($pm1, $pm2, $qc1, $qc2): string
+{
+    foreach ([[$pm1, $pm2], [$qc1, $qc2]] as $pair) {
+        $out = [];
+        foreach ($pair as $v) {
+            $v = trim((string)$v);
+            if ($v === '') continue;
+            $p = eg_qc_container_parse($v);
+            $out[] = $p ? ($p['qty'] . ' ' . $p['name']) : $v;
+        }
+        if ($out) return implode('、', $out);
+    }
+    return '';
+}
+
 /**
  * 篩選出 BOM 並攤開每個製程的「發單／回廠／QC」狀態。
  * $f: bom, part, client, process_type_id, urgent(U/E), qc_mode(any_returned|qc_full|qc_partial|no_qc|none), limit, offset
@@ -262,7 +284,7 @@ function od_chain(PDO $db, array $f): array
 function od_bom_chain(PDO $db, string $bom): array
 {
     $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, bi.sqty, bi.processing_state, bi.maker_id_no, bi.maker_id,
-                               bi.outsource_date, bi.return_date, bi.qc_completed, bi.ps, bi.PS2, bi.is_schedule_split,
+                               bi.outsource_date, bi.return_date, bi.qc_completed, bi.ps, bi.PS2, bi.is_schedule_split, bi.QC_ps, bi.QC_ps2, bi.pm_ps, bi.pm_ps2,
                                pn.ProcessName, pn.process_type_id, pn.is_exclude_qc, pt.process_type AS ptype_name
                           FROM bom_ing bi
                           LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
@@ -321,10 +343,17 @@ function od_bom_chain(PDO $db, string $bom): array
             'qc' => ['mode' => $qmode, 'insp' => (float)$pq['insp'], 'pass' => (float)$pq['pass'], 'ret' => $ret],
             'excl_qc' => $excl, 'maker_no' => (string)$r['maker_id_no'], 'maker' => (string)$r['maker_id'],
             'remark' => trim((string)$r['ps']), 'remark2' => trim((string)$r['PS2']),
+            'container' => od_container_text($r['pm_ps'], $r['pm_ps2'], $r['QC_ps'], $r['QC_ps2']),
             'is_customer_material' => ((int)$r['process_no'] === OD_CUSTOMER_MATERIAL_PROCESS),
             'avail' => 0.0, 'suggest' => false,
         ];
     }
+    // 容器：這一站沒填就沿用前面最近一站的（實測 1943 個多站 BOM 中 1687 個各站相同）
+    $lastCt = '';
+    foreach ($chain as $i => &$cc) {
+        if ($cc['container'] !== '') $lastCt = $cc['container']; else $cc['container'] = $lastCt;
+    }
+    unset($cc);
     // 可發量：上一個「非跳過」製程的 已驗合格數（免驗者用回廠良品數），且不超過本站 BOM 總量－已發；
     //        第一關（非客供料）＝本站未發量；客供料（製程 138）實收數量可多於或少於 BOM，不設上限（avail=null）
     $prev = null;
@@ -510,9 +539,9 @@ function od_issue(PDO $db, array $user, array $items, string $issueDate, int $fo
                 $db->prepare("UPDATE bom_ing_outsource_batch SET batch_no=? WHERE batch_id=?")->execute([$slipNo, $batchId]);
                 $due = trim((string)($it['due_date'] ?? ''));
                 if ($due !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due)) throw new Exception('交期格式不正確');
-                $db->prepare("INSERT INTO od_slip_line (slip_id, sort_no, bom, part_no, client_name, bom_ing_fid, batch_id, process_no, process_name, qty, unit_price, due_date, remark)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                   ->execute([$slipId, ++$n, $row['bom'], $row['part_no'], $row['client'], $fid, $batchId, $row['process_no'], $row['ProcessName'], $qty, $price,
+                $db->prepare("INSERT INTO od_slip_line (slip_id, sort_no, bom, part_no, client_name, bom_ing_fid, batch_id, process_no, process_name, qty, container, unit_price, due_date, remark)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                   ->execute([$slipId, ++$n, $row['bom'], $row['part_no'], $row['client'], $fid, $batchId, $row['process_no'], $row['ProcessName'], $qty, mb_substr(trim((string)($it['container'] ?? '')), 0, 60) ?: null, $price,
                               $due !== '' ? $due : null, mb_substr(trim((string)($it['remark'] ?? '')), 0, 200)]);
             }
             $slips[] = ['slip_id' => $slipId, 'slip_no' => $slipNo, 'maker' => $mi['maker_id'], 'lines' => $n];

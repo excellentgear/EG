@@ -112,10 +112,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
         .slip-prev .pg { box-sizing:border-box; position:relative; background:#fff; color:#000; font-family:"MingLiU","Noto Sans TC",monospace; font-size:12px; border:1px solid #bbb; margin:0 0 8px; overflow:hidden; zoom:.8; }
         .slip-prev .t1 { text-align:center; font-size:16px; font-weight:bold; } .slip-prev .t2 { text-align:center; font-size:14px; margin-bottom:4px; }
         .slip-prev .cp { font-size:11px; border:1px solid #000; padding:0 4px; }
-        .slip-prev table { border-collapse:collapse; width:100%; } .slip-prev table.hd td { vertical-align:top; border:0; padding:0 2px; }
+        .slip-prev table { border-collapse:collapse; width:100%; } .slip-prev table.shd td { vertical-align:top; border:0; padding:0 2px; }
         .slip-prev .vname { font-size:15px; font-weight:bold; } .slip-prev td.mt { text-align:right; width:45%; }
         .slip-prev table.ln { margin-top:4px; } .slip-prev table.ln th, .slip-prev table.ln td { border:1px solid #000; padding:1px 4px; font-size:12px; background:#fff; color:#000; white-space:nowrap; }
-        .slip-prev .ft { margin-top:4px; } .slip-prev .ft2 { font-size:11px; margin-top:2px; }
+        .slip-prev .ft { margin-top:6px; } .slip-prev .ft2 { font-size:11px; margin-top:4px; white-space:pre-line; }
         .slip-prev .bt { position:absolute; left:9mm; right:9mm; bottom:4mm; display:flex; justify-content:space-between; font-size:10px; }
         .od-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10500; align-items:center; justify-content:center; }
         .od-mask.on { display:flex; }
@@ -455,7 +455,7 @@ $('#btnToList').on('click',function(){
     $.each(sel,function(i,c){
       if(LINES.some(function(x){return x.fid===c.bom_ing_fid;}))return;
       add.push({fid:c.bom_ing_fid,bom:b.bom,part:b.part_no,client:b.client,name:c.name,pno:c.process_no,sn:c.bom_sn,ptype:c.ptype_id,ptypeName:c.ptype,
-        qty:v,price:'',priceAuto:false,sug:null,lim:L.lim,first:L.first,maker_no:c.maker_no||'',maker:c.maker||'',flag:false,remark:[c.remark,c.remark2].filter(function(x){return x;}).join(' '),due:'',sel:false});
+        qty:v,price:'',priceAuto:false,sug:null,ct:c.container||'',lim:L.lim,first:L.first,maker_no:c.maker_no||'',maker:c.maker||'',flag:false,remark:[c.remark,c.remark2].filter(function(x){return x;}).join(' '),due:'',sel:false});
     });
   });
   if(bad){alert(bad);return;}
@@ -487,14 +487,15 @@ function isCommon(l,no){var f=false;$.each(COMMON[l.ptype]||[],function(i,m){if(
 function renderList(){
   ensureCommon(function(){
     renderTray();
-    var h='<tr><th></th><th><input type="checkbox" id="selAll"></th><th>BOM／料號</th><th>製程</th><th>廠商</th><th class="num">發包數量</th><th class="num">單價</th><th>交期</th><th>備註（BOM_ING）</th><th></th></tr>';
+    var h='<tr><th></th><th><input type="checkbox" id="selAll"></th><th>BOM／料號</th><th>製程</th><th>廠商</th><th class="num">發包數量</th><th>容器</th><th class="num">單價</th><th>交期</th><th>備註（BOM_ING）</th><th></th></tr>';
     var order=LINES.map(function(l,i){return i;}).sort(function(a,b){var A=LINES[a],B=LINES[b];return (A.ptypeName||'').localeCompare(B.ptypeName||'')||A.bom.localeCompare(B.bom)||A.sn-B.sn;});
     var last=null;
     $.each(order,function(k,i){var l=LINES[i];
-      if(l.ptypeName!==last){last=l.ptypeName;h+='<tr class="grp"><td colspan="10">▼ '+esc(l.ptypeName||'未分類')+'（相同大類排在一起，預設同一廠商）</td></tr>';}
+      if(l.ptypeName!==last){last=l.ptypeName;h+='<tr class="grp"><td colspan="11">▼ '+esc(l.ptypeName||'未分類')+'（相同大類排在一起，預設同一廠商）</td></tr>';}
       var tag=l.maker_no?'<span class="vtag'+(l.flag?' x':'')+'">'+esc(l.maker)+(l.flag?'　非此製程廠商':'')+'</span>':'<span class="vtag none">尚未指定</span>';
       h+='<tr draggable="true" data-i="'+i+'"><td>⠿</td><td><input type="checkbox" class="rowSel"'+(l.sel?' checked':'')+'></td><td>'+esc(l.bom)+' '+esc(l.part)+'</td><td>'+esc(snL(l.sn)+' '+l.name)+'</td><td>'+tag+'</td>'
         +'<td class="num"><input type="number" min="0" step="any" class="rowQty" value="'+esc(l.qty)+'"><div class="warn rowErr"></div></td>'
+        +'<td><input class="rm rowCt" style="width:96px" maxlength="60" placeholder="容器" value="'+esc(l.ct)+'"></td>'
         +'<td class="num">'+priceCell(l)+'</td>'
         +'<td><input type="date" class="rowDue" value="'+esc(l.due)+'"></td><td><input class="rm rowRm" maxlength="200" value="'+esc(l.remark)+'"></td>'
         +'<td><button class="btn-o sm rowDel">移除</button></td></tr>';});
@@ -557,6 +558,7 @@ function validRow($q){
 $(document).on('input','.rowQty',function(){validRow($(this));});
 $(document).on('focus click','.rowQty',function(){var t=this;setTimeout(function(){t.select();},0);});
 $(document).on('input','.rowDue',function(){LINES[+$(this).closest('tr').data('i')].due=$(this).val();});
+$(document).on('input','.rowCt',function(){LINES[+$(this).closest('tr').data('i')].ct=$(this).val();});
 $(document).on('input','.rowRm',function(){LINES[+$(this).closest('tr').data('i')].remark=$(this).val();});
 $(document).on('change','.rowSel',function(){LINES[+$(this).closest('tr').data('i')].sel=this.checked;});
 $(document).on('change','#selAll',function(){var c=this.checked;$.each(LINES,function(i,l){l.sel=c;});$('.rowSel').prop('checked',c);});
@@ -618,14 +620,14 @@ function renderSlipPrev(){
   var f=curFmt(),h='';
   $.each(groups(),function(i,g){
     var pay={slip:{slip_no:'（確認發單後配號）',maker_id:g.name,maker_addr:'（取自廠商主檔）',maker_tel:'',issue_date:$('#issueDate').val(),issued_by_name:META.perms.name,
-      lines:$.map(g.lines,function(l,k){return {sort_no:k+1,bom:l.bom,part_no:l.part,client_name:l.client,process_name:l.name,qty:l.qty,unit_price:l.price,due_date:l.due,remark:l.remark};})},
-      config:f.config,company:'（本公司全名）',form_name:META.asdoc?META.asdoc.doc_name:'外發加工單',doc_no:META.asdoc?META.asdoc.doc_no:'',columns:META.columns};
+      lines:$.map(g.lines,function(l,k){return {sort_no:k+1,bom:l.bom,part_no:l.part,client_name:l.client,process_name:l.name,qty:l.qty,unit_price:l.price,container:l.ct,due_date:l.due,remark:l.remark};})},
+      config:f.config,company:META.company||'（本公司全名）',form_name:META.asdoc?META.asdoc.doc_name:'外發加工單',doc_no:META.asdoc?META.asdoc.doc_no:'',columns:META.columns};
     h+='<div class="slipbox"><div class="hd"><span>'+esc(g.name)+'　'+g.lines.length+' 列／合計 '+fmtQ(g.lines.reduce(function(a,l){return a+num(l.qty);},0))+' 件</span></div><div class="slip-prev">'+slipBody(pay,0,1,false)+'</div></div>';
   });
   $('#slipPrev').html(h||'<div class="hint">沒有資料</div>');sizePrev($('#slipPrev'),f.config);
 }
 function doIssue(thenPrint){
-  var items=$.map(LINES,function(l){return {bom_ing_fid:l.fid,qty:num(l.qty),maker_no:l.maker_no,price:l.price,due_date:l.due,remark:l.remark};});
+  var items=$.map(LINES,function(l){return {bom_ing_fid:l.fid,qty:num(l.qty),maker_no:l.maker_no,price:l.price,container:l.ct,due_date:l.due,remark:l.remark};});
   if(!confirm('確認發單？將寫入 '+items.length+' 個製程的發包資料（發包日、廠商、狀態轉加工中），依廠商分成 '+groupCount()+' 張單。'))return;
   $('#btnIssueOnly,#btnIssuePrint').prop('disabled',true);
   $.post(API,{action:'issue',csrf:CSRF,items:JSON.stringify(items),issue_date:$('#issueDate').val(),format_id:curFmt().format_id,two_part:$('#twoPart').is(':checked')?1:0},function(r){
@@ -653,19 +655,19 @@ function slipBody(p,pageIdx,pages,forPrint,copyLabel){
     var last=ci===chunks.length-1;
     h+='<div class="pg'+(forPrint?'':' pgprev')+'">';
     h+='<div class="t1">'+esc(p.company)+'</div><div class="t2">'+esc(p.form_name)+(copyLabel?'　<span class="cp">'+esc(copyLabel)+'</span>':'')+'</div>';
-    h+='<table class="hd"><tr><td class="vn"><div class="vname">'+esc(s.maker_id)+'</div><div>'+(s.maker_addr?'地址：'+esc(s.maker_addr):'')+'</div><div>'+(s.maker_tel?'電話：'+esc(s.maker_tel):'')+'</div></td>'
+    h+='<table class="shd"><tr><td class="vn"><div class="vname">'+esc(s.maker_id)+'</div><div>'+(s.maker_addr?'地址：'+esc(s.maker_addr):'')+'</div><div>'+(s.maker_tel?'電話：'+esc(s.maker_tel):'')+'</div></td>'
       +'<td class="mt">單號：'+esc(s.slip_no)+'<br>發單日：'+esc(fd(s.issue_date))+'　發單人：'+esc(s.issued_by_name||'')+(chunks.length>1?'<br>第 '+(ci+1)+' / '+chunks.length+' 頁（同廠商續頁）':'')+'</td></tr></table>';
     h+='<table class="ln"><tr>';$.each(cols,function(k,c){h+='<th>'+esc(C[c])+'</th>';});h+='</tr>';
     $.each(ch,function(k,l){h+='<tr>';$.each(cols,function(j,c){var v='';
       if(c==='no')v=l.sort_no;else if(c==='bom')v=l.bom;else if(c==='part_no')v=l.part_no;else if(c==='drawing_no')v=l.drawing_no||'';else if(c==='client')v=l.client_name;
-      else if(c==='process')v=l.process_name;else if(c==='qty')v=fmtQ(l.qty);
+      else if(c==='process')v=l.process_name;else if(c==='qty')v=fmtQ(l.qty)+' PCS';else if(c==='container')v=l.container||'';
       else if(c==='price')v=num(l.unit_price)>0?fmtP(l.unit_price):'';else if(c==='amount')v=num(l.unit_price)>0?String(Math.round(num(l.unit_price)*num(l.qty)*100)/100):'';else if(c==='due')v=l.due_date?fd(l.due_date).slice(5):'';else if(c==='remark')v=l.remark;
       h+='<td'+((c==='qty'||c==='price'||c==='amount')?' style="text-align:right"':'')+'>'+esc(v)+'</td>';});h+='</tr>';});
     h+='</table>';
     if(last){
       var tot=0;$.each(lines,function(i,l){tot+=num(l.qty);});
-      h+='<div class="ft">'+(cfg.show_total?'合計 '+fmtQ(tot)+' 件　　':'')+(cfg.show_sign?'收貨簽收：__________　　':'')+'</div>';
       if(cfg.footer_text)h+='<div class="ft2">'+esc(cfg.footer_text)+'</div>';
+      h+='<div class="ft">'+(cfg.show_total?'合計 '+fmtQ(tot)+' PCS　　':'')+(cfg.show_sign?'收貨簽收：__________　　':'')+'</div>';
     }
     h+='<div class="bt"><span>'+(chunks.length>1?'第 '+(ci+1)+' 頁／共 '+chunks.length+' 頁':'')+'</span><span>'+esc(p.doc_no||'')+'</span></div></div>';
   });
@@ -678,9 +680,9 @@ function paperCss(cfg){
 }
 var PCSS='body{margin:0;font-family:"MingLiU","Noto Sans TC","Microsoft JhengHei",monospace;color:#000;font-size:12px}.pg{box-sizing:border-box;page-break-after:always;position:relative;overflow:hidden}'
  +'.t1{text-align:center;font-size:16px;font-weight:bold}.t2{text-align:center;font-size:14px;margin-bottom:4px}.cp{font-size:11px;border:1px solid #000;padding:0 4px}'
- +'table{border-collapse:collapse;width:100%}table.hd td{vertical-align:top;border:0;padding:0 2px}.vname{font-size:15px;font-weight:bold}td.mt{text-align:right;width:45%}'
+ +'table{border-collapse:collapse;width:100%}table.shd td{vertical-align:top;border:0;padding:0 2px}.vname{font-size:15px;font-weight:bold}td.mt{text-align:right;width:45%}'
  +'table.ln{margin-top:4px}table.ln th,table.ln td{border:1px solid #000;padding:1px 4px;font-size:12px}table.ln th{font-weight:bold}'
- +'.ft{margin-top:4px}.ft2{font-size:11px;margin-top:2px}.bt{position:absolute;left:9mm;right:9mm;bottom:4mm;display:flex;justify-content:space-between;font-size:10px}';
+ +'.ft{margin-top:6px}.ft2{font-size:11px;margin-top:4px;white-space:pre-line}.bt{position:absolute;left:9mm;right:9mm;bottom:4mm;display:flex;justify-content:space-between;font-size:10px}';
 function printSlips(ids){
   var w=window.open('','_blank');if(!w){alert('瀏覽器擋住了列印視窗，請允許本站的彈出視窗後再按一次。');return;}
   w.document.write('<html><body style="font-family:sans-serif">準備列印中…</body></html>');
@@ -715,13 +717,13 @@ function fmtPreview(){
   if(!FMT||!$('#fmtPrev').length)return;
   var cfg={paper:$('#fmP').val(),rows_per_page:+$('#fmR').val()||8,cols:FMT.config.cols,footer_text:$('#fmF').val(),two_part:$('#fm2').is(':checked')?1:0,show_total:$('#fmT').is(':checked')?1:0,show_sign:$('#fmS').is(':checked')?1:0};
   var sample=[['B-1151103012','OB321500200','熱處理',492,12.5,'11/19','硬度 HRC58-62'],['B-1151103012','OB321500200','倒角',492,3,'11/19',''],['B-1151105004','OB321500310','熱處理',197,'','11/19','']];
-  var lines=$.map(sample,function(x,k){return {sort_no:k+1,bom:x[0],part_no:x[1],drawing_no:'',client_name:'範例客戶',process_name:x[2],qty:x[3],unit_price:x[4],due_date:'2026-'+x[5].replace('/','-'),remark:x[6]};});
+  var lines=$.map(sample,function(x,k){return {sort_no:k+1,bom:x[0],part_no:x[1],drawing_no:'',client_name:'範例客戶',process_name:x[2],qty:x[3],unit_price:x[4],due_date:'2026-'+x[5].replace('/','-'),remark:x[6],container:k===0?'3 PP箱':''};});
   var pay={slip:{slip_no:'D1151112-001（範例）',maker_id:'範例廠商',maker_addr:'台中市○○區○○路 123 號',maker_tel:'04-2xxx-xxxx',issue_date:META.today,issued_by_name:META.perms.name,lines:lines},
     config:cfg,company:META.company||'（本公司全名）',form_name:META.asdoc?META.asdoc.doc_name:'外發加工單',doc_no:META.asdoc?META.asdoc.doc_no:'',columns:META.columns};
   var h=slipBody(pay,0,1,false,cfg.two_part?'廠商聯':'');
   $('#fmtPrev').html(h);sizePrev($('#fmtPrev'),cfg);
 }
-$(document).on('input change','#fmtForm input,#fmtForm select',fmtPreview);
+$(document).on('input change','#fmtForm input,#fmtForm select,#fmtForm textarea',fmtPreview);
 
 /* ───── ④ 格式設定（管理員） ───── */
 function loadFmtTab(){if(!META.perms.canAdmin)return;renderFmtList();}
@@ -739,7 +741,7 @@ function editFmt(f){
    +'<div class="fld"><b>紙張</b><select id="fmP" class="od-inp"><option value="continuous">中一刀 9.5"×5.5"（點陣）</option><option value="a4p">A4 直式</option><option value="a5l">A5 橫式</option></select></div>'
    +'<div class="fld"><b>每頁列數</b><input id="fmR" type="number" min="3" max="40" class="od-inp" style="width:70px;" value="'+cfg.rows_per_page+'"> <span class="hint">同廠商超過才續頁，每頁都印表頭</span></div>'
    +'<div class="fld"><b>欄位（勾選＋排序）</b><div id="fmCols"></div></div>'
-   +'<div class="fld"><b>表尾文字</b><input id="fmF" class="od-inp" size="46" maxlength="300" value="'+esc(cfg.footer_text)+'"></div>'
+   +'<div class="fld"><b>表尾文字</b><textarea id="fmF" class="od-inp" rows="3" cols="46" maxlength="500" placeholder="可多行；印在明細表格下方、合計與簽收之上">'+esc(cfg.footer_text)+'</textarea></div>'
    +'<div class="fld"><b>其他</b><label><input type="checkbox" id="fmT"'+(cfg.show_total?' checked':'')+'> 印合計</label> <label><input type="checkbox" id="fmS"'+(cfg.show_sign?' checked':'')+'> 印收貨簽收欄</label> <label><input type="checkbox" id="fm2"'+(+cfg.two_part?' checked':'')+'> 預設印成兩聯</label></div>'
    +'<div class="fld"><b>預覽</b><span class="hint">依目前設定即時更新（範例資料）；紙張與列數都會反映</span></div><div id="fmtPrev" class="slip-prev" style="overflow:auto;"></div>'
    +'<div style="margin-top:10px;"><button class="btn-o pri" id="fmSave">儲存格式</button> '+(f.format_id&&!+f.is_default?'<button class="btn-o" id="fmDef">設為預設</button> <button class="btn-o" id="fmDel">刪除</button>':'')+'</div><div class="err" id="fmErr"></div>';
