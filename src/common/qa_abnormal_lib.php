@@ -5161,7 +5161,8 @@ function qab_notify_info(PDO $db, array $orderIds): array
             elseif (preg_match('/已回覆/u', $title)) $label = '回覆通知';
             elseif (preg_match('/已結案/u', $title)) $label = '結案通知';
             if ($label === '') $label = '通知';
-            if (mb_strlen($label, 'UTF-8') > 10) $label = mb_substr($label, 0, 10, 'UTF-8') . '…';
+            $label = str_replace(['自動核准', '自動核可', '自動'], ['核准', '核准', ''], $label);   // 畫面不顯示「自動」字樣
+            if (mb_strlen($label, 'UTF-8') > 16) $label = mb_substr($label, 0, 16, 'UTF-8') . '…';
         }
         $rows = [];
         foreach ($recips[$eid] as $u) {

@@ -84,7 +84,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         table.lst td.c { text-align:center; }
         table.lst tbody tr:hover { background:#FFFDF8; }
         table.lst td.ninfo { background:#FFFAF0; padding:3px 6px; line-height:1.55; }
-        .nt { display:inline-block; margin:1px 10px 1px 0; font-size:12px; color:var(--ink2); white-space:nowrap; }
+        .nt { display:block; margin:1px 0; font-size:12px; color:var(--ink2); }
         .nt b { color:var(--ink); }
         .nt i { font-style:normal; padding:0 5px; border-radius:3px; background:#F7E0BD; color:#6b4a1f; }
         .nt-read i { background:#F0A24B; color:#fff; }
@@ -891,8 +891,15 @@ function notifyHtml(id){
     if (l === undefined) return '<span class="muted-help">載入通知資訊…</span>';
     if (l === null) return '<span class="muted-help">通知資訊載入失敗，請重新整理</span>';
     if (!l.length) return '<span class="muted-help">尚無通知紀錄</span>';
-    return l.map(function(x){
-        return '<span class="nt nt-' + esc(x.state) + '"><b>' + esc(x.label) + '</b> ' + esc(x.name) + ' ' + esc(x.date) + ' <i>' + esc(x.status) + '</i></span>';
+    /* 同標籤、同日期、同狀態的人合併成一行（人名用「、」串接） */
+    var groups = [], idx = {};
+    l.forEach(function(x){
+        var k = [x.label, x.date, x.status, x.state].join('|');
+        if (idx[k] === undefined) { idx[k] = groups.length; groups.push({ label:x.label, date:x.date, status:x.status, state:x.state, names:[] }); }
+        if (groups[idx[k]].names.indexOf(x.name) < 0) groups[idx[k]].names.push(x.name);
+    });
+    return groups.map(function(g){
+        return '<span class="nt nt-' + esc(g.state) + '"><b>' + esc(g.label) + '</b> ' + esc(g.names.join('、')) + ' ' + esc(g.date) + ' <i>' + esc(g.status) + '</i></span>';
     }).join('');
 }
 function loadNotify(rows){
