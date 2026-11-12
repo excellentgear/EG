@@ -294,6 +294,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <button id="btnChain"><i class="fa fa-sitemap"></i> 追溯對照</button>
       <?php if ($perms['canAdmin']): ?>
       <button id="btnMatch"><i class="fa fa-link"></i> 舊資料訂單回填</button>
+      <button id="btnPriceBatch" title="選定料號與期間，把出貨明細的單價 A 全部改成 B；原本不是 A 的不受影響"><i class="fa fa-pencil-square-o"></i> 批次改單價</button>
       <button id="btnAsPick" title="出貨單列印時，頁尾右下角要印哪一份 AS 文件的編號">
         <i class="fa fa-file-text-o"></i> AS文件編號：<b id="asdocShow">尚未綁定</b></button>
       <?php endif; ?>
@@ -549,6 +550,31 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <span id="bbSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
     <button id="btnBbApply" class="btn-warm" style="background:var(--sq-acc);color:#fff;font-weight:bold;"><i class="fa fa-link"></i> 綁定勾選的出貨明細</button>
     <button data-close="mkBomBind">取消</button>
+  </div>
+</div></div>
+<?php endif; ?>
+
+<?php if ($perms['canAdmin']): ?>
+<!-- 批次修改出貨單價：料號＋期間內把單價 A 改成 B（非 A 的不動） -->
+<div class="sq-mask" id="mkPriceBatch"><div class="sq-modal">
+  <div class="m-head"><i class="fa fa-pencil-square-o"></i>&nbsp;批次修改出貨單價<span class="m-close" data-close="mkPriceBatch">✕</span></div>
+  <div class="m-body">
+    <div class="mt-note" style="margin-bottom:8px;">選定<b>料號</b>與<b>出貨期間</b>，把單價等於「原單價」的出貨明細全部改成「新單價」；<b>單價不是原單價的明細完全不動</b>。
+      只改單價欄位，出貨單號與綁定（訂單／製令）都不受影響，每一筆都會留稽核紀錄。請先按「預覽」確認要改的明細。</div>
+    <div class="sq-bar" style="flex-wrap:wrap;gap:8px;">
+      <label>料號</label><input type="text" id="pbPart" style="width:230px;" placeholder="完整料號（與出貨明細的料號相同）">
+      <label>客戶</label><select id="pbClient" style="max-width:170px;"><option value="">全部</option></select>
+      <label>出貨日</label><input type="date" id="pbFrom" style="width:140px;"> ~ <input type="date" id="pbTo" style="width:140px;">
+      <label>原單價 A</label><input type="text" id="pbOld" style="width:90px;" inputmode="decimal">
+      <label>新單價 B</label><input type="text" id="pbNew" style="width:90px;" inputmode="decimal">
+      <button id="btnPbPreview" class="go"><i class="fa fa-search"></i> 預覽</button>
+    </div>
+    <div id="pbMsg" style="margin:8px 0;color:#b4412c;font-weight:600;"></div>
+    <div id="pbResult" style="max-height:340px;overflow:auto;"></div>
+  </div>
+  <div class="m-foot" style="padding:10px 14px;text-align:right;">
+    <button id="btnPbApply" class="go" disabled><i class="fa fa-check"></i> 確認修改</button>
+    <button data-close="mkPriceBatch">關閉</button>
   </div>
 </div></div>
 <?php endif; ?>
@@ -868,6 +894,37 @@ $(document).on('click','#btnBbApply',function(){
     // 從料號／其他篩選條件進來綁定的，綁完保留使用者原本的篩選，不跳成製令編號
     if (BB.fromBom && String($('#kw').val()||'').trim() === BB.bom) load(function(){ openFromBom(BB.bom); }); else { sel = {}; load(); }
   },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
+});
+
+/* ── 批次修改出貨單價（僅出貨管理員）────────────────────────────── */
+var PB = {ok:false};
+function pbParams(){ return {part:$.trim($('#pbPart').val()), client_name:$('#pbClient').val()||'', date_from:$('#pbFrom').val(), date_to:$('#pbTo').val(),
+  old_price:String($('#pbOld').val()).replace(/,/g,''), new_price:String($('#pbNew').val()).replace(/,/g,'')}; }
+$('#btnPriceBatch').on('click',function(){
+  var $c=$('#pbClient'); if($c.find('option').length<=1){ $('#clientSel option').each(function(){ if(this.value) $c.append($('<option>').val($(this).text().replace(/（\d+）$/,'')).text($(this).text())); }); }
+  PB.ok=false; $('#btnPbApply').prop('disabled',true); $('#pbMsg,#pbResult').empty(); openMask('mkPriceBatch');
+});
+$('#pbPart,#pbClient,#pbFrom,#pbTo,#pbOld,#pbNew').on('input change',function(){ PB.ok=false; $('#btnPbApply').prop('disabled',true); });
+$('#btnPbPreview').on('click',function(){
+  $('#pbMsg').text(''); $('#pbResult').empty(); PB.ok=false; $('#btnPbApply').prop('disabled',true);
+  $.post(API+'?action=price_batch_preview',pbParams(),function(r){
+    if(!r.ok){ $('#pbMsg').text(r.error||'預覽失敗'); return; }
+    var h='<div style="margin-bottom:6px;">期間內該料號共 <b>'+r.scope+'</b> 筆出貨明細；單價為 <b>'+np(r.old_price)+'</b> 的有 <b style="color:#b4412c;">'+r.count+'</b> 筆（將改為 <b>'+np(r.new_price)+'</b>），其餘 <b>'+r.other+'</b> 筆單價不同、不會修改。</div>';
+    if(r.count){ h+='<table class="sq-t"><thead><tr><th>出貨單號</th><th>出貨日</th><th>客戶</th><th>數量</th><th>單價</th><th></th><th>修改後</th></tr></thead><tbody>';
+      r.rows.forEach(function(x){ h+='<tr><td>'+esc(x.IS_number)+'</td><td>'+esc(x.d)+'</td><td>'+esc(x.Client_name)+'</td><td class="r">'+nf(x.Qty)+'</td><td class="r">'+np(x.Unit_price)+'</td><td>→</td><td class="r"><b>'+np(r.new_price)+'</b></td></tr>'; });
+      h+='</tbody></table>'; PB.ok=true; $('#btnPbApply').prop('disabled',false); }
+    $('#pbResult').html(h);
+  },'json').fail(function(x){ var m='預覽失敗'; try{m=JSON.parse(x.responseText).error||m;}catch(e){} $('#pbMsg').text(m); });
+});
+$('#btnPbApply').on('click',function(){
+  if(!PB.ok) return;
+  if(!confirm('確定要依預覽的明細批次修改單價嗎？
+修改後會留下稽核紀錄；單價不是原單價的明細不受影響。')) return;
+  var $b=$(this).prop('disabled',true), d=pbParams(); d.csrf=CSRF;
+  $.post(API+'?action=price_batch_apply',d,function(r){
+    if(!r.ok){ $b.prop('disabled',false); $('#pbMsg').text(r.error||'修改失敗'); return; }
+    PB.ok=false; $('#pbResult').empty(); $('#pbMsg').css('color','#2e7d32').text(r.message); load();
+  },'json').fail(function(x){ $b.prop('disabled',false); var m='修改失敗'; try{m=JSON.parse(x.responseText).error||m;}catch(e){} $('#pbMsg').text(m); });
 });
 
 function openFromBom(bomNo){

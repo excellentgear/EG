@@ -273,6 +273,20 @@ case 'match_apply': {
     sq_out(sq_match_apply($db, $pairs, (string)$uid));
 }
 
+/* ── 批次修改出貨單價：料號＋期間內把單價 A 改成 B（非 A 的不動）；僅出貨管理員 ── */
+case 'price_batch_preview':
+case 'price_batch_apply': {
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可批次修改單價', 403);
+    $apply = ($action === 'price_batch_apply');
+    if ($apply) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+        if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    }
+    $r = sq_price_batch($db, $_POST ?: $_GET, $apply, ['id' => $uid, 'name' => $uname]);
+    if (!$r['success']) sq_err($r['message']);
+    sq_out($r);
+}
+
 /* ── 追溯鏈：某客戶底下有資料的料號 ──────────────────────────────────── */
 case 'chain_parts': {
     $src = $_POST ?: $_GET;

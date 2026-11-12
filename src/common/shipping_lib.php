@@ -1701,3 +1701,68 @@ function sq_print_meta(PDO $db, ?string $bizDate = null): array
         'asdoc_no' => $docNo,
     ];
 }
+
+/* ============================================================
+ * 批次修改出貨單價（料號＋期間內，把單價 A 改成 B；非 A 的完全不動）
+ * 2026-11-12 使用者交辦：ERP 單價欄位原為整數，匯入的小數單價被四捨五入，需要事後更正。
+ * 只 UPDATE is_list.Unit_price（IS_id 不變，綁定不受影響），每筆留稽核紀錄。
+ * ============================================================ */
+function sq_price_batch_rows(PDO $db, string $part, string $clientName, string $from, string $to, float $oldP): array
+{
+    $sql = "SELECT IS_id, IS_number, DATE_FORMAT(Order_date,'%Y-%m-%d') d, Client_name, Product_id, Qty, Unit_price, bind_locked
+            FROM is_list WHERE Product_id = ? AND Order_date BETWEEN ? AND ?";
+    $args = [$part, $from, $to];
+    if ($clientName !== '') { $sql .= " AND TRIM(Client_name) = ?"; $args[] = $clientName; }
+    $sql .= " ORDER BY Order_date, IS_id";
+    $st = $db->prepare($sql); $st->execute($args);
+    $all = $st->fetchAll(PDO::FETCH_ASSOC);
+    $hit = []; $other = 0;
+    foreach ($all as $r) {
+        if (abs((float)$r['Unit_price'] - $oldP) < 0.00005) $hit[] = $r; else $other++;
+    }
+    return ['hit' => $hit, 'other' => $other, 'scope' => count($all)];
+}
+
+function sq_price_batch(PDO $db, array $in, bool $apply, array $user): array
+{
+    $part = trim((string)($in['part'] ?? ''));
+    $cn   = trim((string)($in['client_name'] ?? ''));
+    $from = trim((string)($in['date_from'] ?? ''));
+    $to   = trim((string)($in['date_to'] ?? ''));
+    if ($part === '') return ['success' => false, 'message' => '請輸入料號'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) || $from > $to)
+        return ['success' => false, 'message' => '請選擇正確的期間（起日不可晚於迄日）'];
+    if (!is_numeric($in['old_price'] ?? null) || !is_numeric($in['new_price'] ?? null))
+        return ['success' => false, 'message' => '原單價與新單價都必須是數字'];
+    $oldP = round((float)$in['old_price'], 4); $newP = round((float)$in['new_price'], 4);
+    if ($oldP < 0 || $newP < 0) return ['success' => false, 'message' => '單價不可為負數'];
+    if (abs($oldP - $newP) < 0.00005) return ['success' => false, 'message' => '新單價與原單價相同，不需要修改'];
+
+    $res = sq_price_batch_rows($db, $part, $cn, $from, $to, $oldP);
+    $rows = $res['hit'];
+    $out = ['success' => true, 'rows' => $rows, 'count' => count($rows), 'other' => $res['other'], 'scope' => $res['scope'],
+            'old_price' => $oldP, 'new_price' => $newP];
+    if (!$apply) return $out;
+    if (!$rows) return ['success' => false, 'message' => '期間內找不到單價為 ' . $oldP . ' 的出貨明細'];
+
+    $db->beginTransaction();
+    try {
+        $up = $db->prepare("UPDATE is_list SET Unit_price = ? WHERE IS_id = ? AND ABS(Unit_price - ?) < 0.00005");
+        $n = 0;
+        foreach ($rows as $r) {
+            $up->execute([$newP, (int)$r['IS_id'], $oldP]);
+            if ($up->rowCount() > 0) {
+                $n++;
+                sq_audit($db, 'update', 'is_list_price', (string)$r['IS_id'], (string)$r['IS_number'],
+                         ['Unit_price' => ['before' => $oldP, 'after' => $newP], 'reason' => '批次修改出貨單價'], $user);
+            }
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '修改失敗：' . $e->getMessage()];
+    }
+    $out['updated'] = $n;
+    $out['message'] = "已將 {$n} 筆出貨明細的單價由 {$oldP} 改為 {$newP}（其他單價的 {$res['other']} 筆不受影響）";
+    return $out;
+}
