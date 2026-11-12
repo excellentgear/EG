@@ -80,3 +80,22 @@ if (!function_exists('emp_mgmt_has_role')) {
         return $c !== '' && $c !== 'A';
     }
 }
+
+if (!function_exists('emp_mgmt_perm_label')) {
+    /** 標頭顯示的權限名稱：全站管理員／HR管理員／HR／唯讀；沒有角色者（舊制頁面權限）顯示中文說明 */
+    function emp_mgmt_perm_label(PDO $pdo, int $uid, string $perm): string {
+        try {
+            $f = rf_resolve_features($pdo, $uid);
+            if (in_array('all', $f, true)) return '全站管理員';
+            if (in_array('emp_admin', $f, true)) return 'HR管理員';
+            if (in_array('emp_edit', $f, true)) return 'HR';
+            if (in_array('emp_view', $f, true)) return '唯讀';
+        } catch (Throwable $e) {}
+        if (strpos($perm, 'A') !== false) return '完整權限';
+        if ($perm === 'R') return '唯讀';
+        $m = ['C' => '新增', 'U' => '修改', 'D' => '刪除', 'R' => '檢視'];
+        $out = [];
+        foreach (str_split($perm) as $c) if (isset($m[$c]) && $c !== 'R') $out[] = $m[$c];
+        return $out ? implode('、', $out) : $perm;
+    }
+}

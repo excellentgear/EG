@@ -250,6 +250,12 @@ function getEmployeeDetails() {
             return;
         }
 
+        // 沒有新增/修改權限者（唯讀）不給個人資訊：登入帳號、電話、學歷（後端遮蔽，非只藏畫面）
+        $_pm = empPagePerm();
+        if (strpos($_pm, 'A') === false && strpos($_pm, 'U') === false && strpos($_pm, 'C') === false) {
+            foreach (['user_uname', 'phone', 'highest_education', 'second_education'] as $_k) unset($data[$_k]);
+        }
+
         // 獲取主職務
         $stmt_main = $db->prepare("SELECT department_id, position_id FROM user_department_position_map WHERE user_id = ? AND is_main = 1");
         $stmt_main->execute([$id]);

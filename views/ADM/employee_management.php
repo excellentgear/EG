@@ -139,6 +139,12 @@ if ($hrUserPerm === 'R') {
     <!-- Custom Theme Style -->
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
+        /* 唯讀檢視員工資料：隱藏個人資訊（登入帳號/密碼/電話/學歷）與所有編輯按鈕 */
+        #employeeModal.emp-viewonly .emp-personal, #employeeModal.emp-viewonly #btn-save-employee,
+        #employeeModal.emp-viewonly #btn-add-concurrent, #employeeModal.emp-viewonly .btn-clear-concurrent,
+        #employeeModal.emp-viewonly #btn-delete-in-modal, #employeeModal.emp-viewonly #btn-revoke-perm,
+        #employeeModal.emp-viewonly #btn-restore-perm { display:none !important; }
+        #employeeModal.emp-viewonly input, #employeeModal.emp-viewonly select { pointer-events:none; background:#f5f1ea; }
         /* ── 使用說明（全站統一，照抄 views/pm/vendor_audit.php）────────────── */
         .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
             background:#F0A24B; color:#fff; cursor:pointer; margin-left:auto; }
@@ -242,7 +248,7 @@ if ($hrUserPerm === 'R') {
             <div class="">
                 <div class="page-title" style="display:flex; align-items:center;">
                     <div class="title_left">
-                        <h3>員工資料管理 <small>(權限：<?php echo htmlspecialchars($hrUserPerm); ?>)</small></h3>
+                        <h3>員工資料管理 <small>(權限：<?php echo htmlspecialchars(function_exists('emp_mgmt_perm_label') ? emp_mgmt_perm_label($conn, (int)$id, (string)$hrUserPerm) : (string)$hrUserPerm); ?>)</small></h3>
                     </div>
                     <button type="button" class="page-help-btn" id="btnPageHelp">使用說明</button>
                 </div>
@@ -344,7 +350,7 @@ if ($hrUserPerm === 'R') {
                                     <label for="user_id_input">員工編號 (ID)</label>
                                     <input type="text" class="form-control" id="user_id_input" name="id" required>
                                 </div>
-                                <div class="col-md-4 form-group">
+                                <div class="col-md-4 form-group emp-personal">
                                     <label for="user_uname">登入帳號</label>
                                     <input type="text" class="form-control" id="user_uname" name="user_uname" required>
                                 </div>
@@ -354,7 +360,7 @@ if ($hrUserPerm === 'R') {
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-4 form-group">
+                                <div class="col-md-4 form-group emp-personal">
                                     <label for="password">密碼</label>
                                     <input type="password" class="form-control" id="password" name="password" placeholder="新增時必填，編輯時留空則不修改">
                                     <input type="hidden" name="user_password" id="user_password">
@@ -367,13 +373,13 @@ if ($hrUserPerm === 'R') {
                                         <option value="F">女</option>
                                     </select>
                                 </div>
-                                <div class="col-md-4 form-group">
+                                <div class="col-md-4 form-group emp-personal">
                                     <label for="phone">連絡電話</label>
                                     <input type="text" class="form-control" id="phone" name="phone">
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-6 form-group">
+                                <div class="col-md-6 form-group emp-personal">
                                     <label for="highest_education">最高學歷（選填）</label>
                                     <select class="form-control" id="highest_education" name="highest_education">
                                         <option value="">請選擇</option>
@@ -385,7 +391,7 @@ if ($hrUserPerm === 'R') {
                                         <option value="phd">博士</option>
                                     </select>
                                 </div>
-                                <div class="col-md-6 form-group">
+                                <div class="col-md-6 form-group emp-personal">
                                     <label for="second_education">次高學歷（選填）</label>
                                     <select class="form-control" id="second_education" name="second_education">
                                         <option value="">請選擇</option>
@@ -535,7 +541,7 @@ if ($hrUserPerm === 'R') {
                             <!-- 職務調動＋在職狀態的歷史紀錄（含補登過去資料；ai-rules/14 P1） -->
                             <button type="button" class="btn btn-default pull-left" id="btn-history" style="display: none; margin-left: 8px;">異動紀錄</button>
                             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-                            <button type="submit" class="btn btn-primary">儲存</button>
+                            <button type="submit" class="btn btn-primary" id="btn-save-employee">儲存</button>
                         </div>
                     </form>
                 </div>
@@ -1237,6 +1243,10 @@ $(document).ready(function() {
         var modal = $(this);
         var form = modal.find('form');
         form[0].reset();
+        // 唯讀檢視模式（無新增/修改權限者雙擊列開啟）：只在這一次開啟有效
+        var viewOnly = !!modal.data('viewOnly');
+        modal.removeData('viewOnly').toggleClass('emp-viewonly', viewOnly);
+        modal.find('input,select').prop('disabled', viewOnly);
         $('#user_status option[value="99"]').prop('disabled', true); $('#user_status').css('pointer-events','').attr('tabindex',0);
         modal.find('#user_id').val('');
 
@@ -1269,7 +1279,7 @@ $(document).ready(function() {
             $('#btn-revoke-perm').hide();
             $('#btn-history').hide();
         } else {
-            modal.find('.modal-title').text('編輯員工資料');
+            modal.find('.modal-title').text(viewOnly ? '員工資料（唯讀）' : '編輯員工資料');
             modal.find('#user_id_input').prop('readonly', true);
             modal.find('#user_uname').prop('readonly', false);
             modal.find('#password').prop('required', false);
@@ -1604,7 +1614,8 @@ $(document).ready(function() {
             // $(this) 是 tr 元素，已在 loadEmployees 中設定 data-id 和 data-action="edit"
             $('#employeeModal').modal('show', $(this));
         } else {
-            alert('您沒有權限編輯員工資料');
+            // 唯讀者：開啟唯讀檢視（後端同樣不回傳登入帳號/電話/學歷）
+            $('#employeeModal').data('viewOnly', true).modal('show', $(this));
         }
     });
 
