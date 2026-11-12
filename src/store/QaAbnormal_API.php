@@ -825,6 +825,8 @@ case 'save_disposition': {
         $db->prepare("UPDATE qa_abnormal_order SET disp_by_deputy=? WHERE id=?")->execute([qab_user_in_decider($db, $uid, 'decider') ? 0 : 1, $id]);
         $res['order'] = qab_order($db, $id);
         try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, $quickL2 ? '第二層' : '決策者'); } catch (Throwable $e) {}
+    } elseif (!$bfMode) {
+        try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, '決策者'); } catch (Throwable $e) {}
     }
     if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（處置方式改為非報廢，收回暫時保留的報廢單號）');
     $optMap = qab_option_map($db);
@@ -852,6 +854,8 @@ case 'save_gm': {
         ]);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     if (!empty($o['quick_mode']) && !$bfMode) {
+        try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, qab_gm_label($db)); } catch (Throwable $e) {}
+    } elseif (!$bfMode) {
         try { qab_quick_notify_decision($db, $id, array_column($itemsIn, 'opt_id'), $uid, qab_gm_label($db)); } catch (Throwable $e) {}
     }
     // 2026-11-02：裁示含「需矯正」且還沒有矯正單 → 自動開立並連結（本張與拆出的子單）

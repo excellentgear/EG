@@ -864,9 +864,32 @@ function renderTabs(){
         h = (by[k] || []).map(ROW_HTML).join('');
     }
     $('#lstBody').html(h);
-    $('.lst-wrap').scrollTop(0);
+    if (LIST_RESTORE) {   // 從處理頁回來：回到離開時的分頁與捲動位置（只還原一次）
+        var rs = LIST_RESTORE; LIST_RESTORE = null;
+        $('.lst-wrap').scrollTop(rs.wrap || 0);
+        window.scrollTo(0, rs.win || 0);
+    } else {
+        $('.lst-wrap').scrollTop(0);
+    }
 }
-$(document).on('click', '.cat-tab', function(){ CUR_TAB = String($(this).data('tab')); renderTabs(); });
+/* 清單位置記憶（sessionStorage，壞掉或被停用時不影響清單運作） */
+var LIST_STATE_KEY = 'qab_list_state', LIST_RESTORE = null;
+function listStateSave(){
+    try { sessionStorage.setItem(LIST_STATE_KEY, JSON.stringify({ tab:CUR_TAB, wrap:$('.lst-wrap').scrollTop() || 0, win:window.pageYOffset || 0, t:Date.now() })); } catch(e){}
+}
+function listStateLoad(){
+    try {
+        var s = JSON.parse(sessionStorage.getItem(LIST_STATE_KEY) || 'null');
+        sessionStorage.removeItem(LIST_STATE_KEY);
+        if (s && s.tab && (Date.now() - Number(s.t || 0)) < 6 * 3600 * 1000) { CUR_TAB = String(s.tab); LIST_RESTORE = s; }
+    } catch(e){}
+}
+$(document).on('click', '.cat-tab', function(){ CUR_TAB = String($(this).data('tab')); LIST_RESTORE = null; renderTabs(); });
+$(document).on('click', '#lstBody a[href^="qa_abnormal_form.php"], #lstBody a.btn[href^="qa_abnormal_print.php"]', listStateSave);
+/* 用瀏覽器上一頁回來時頁面可能是舊的快取畫面（新開的單不會出現在「尚未處理」）→ 重新載入清單並回到原位置 */
+window.addEventListener('pageshow', function(ev){
+    if (ev.persisted) { listStateLoad(); load(); }
+});
 /* 依類別分區：每一區一條標題列（類別名稱＋張數＋未結案數＋單號後綴詞）。
    分區順序照管理員設定的排序，沒有類別的舊單一律排在最後獨立一區——
    **不要把它們混進某一類**，那會讓使用者以為它們已經分好類了。 */
@@ -1904,7 +1927,7 @@ $(function(){
         function(r){ $('#n_client').val(r.customer || ''); $('#n_client_id').val(r.customer_id || ''); $('#newErr').text(''); });
     nCatRulesHtml();
     nApplyCatBinds();
-    <?php if ($perms['canView']): ?>load(); loadPending(); irPrefillFromUrl();<?php endif; ?>
+    <?php if ($perms['canView']): ?>listStateLoad(); load(); loadPending(); irPrefillFromUrl();<?php endif; ?>
 });
 </script>
 <!-- 右下角提醒：還沒決策／處理完忘了結案／等我回填補做（2026-11-05） -->

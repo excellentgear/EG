@@ -2724,8 +2724,11 @@ function qab_quick_result_targets(PDO $db, array $o, array $action): array
 function qab_quick_notify_decision(PDO $db, int $orderId, array $optIds, int $actorUid, string $whoText): void
 {
     $o = qab_order($db, $orderId);
-    if (!$o || empty($o['quick_mode'])) return;
-    qab_quick_retire_notices($db, $orderId);
+    if (!$o) return;
+    // 2026-11-12：一般（非快速決策）單做完處置／裁示，也要照裁決項目設定通知部門與人員（原本只有快速決策單才會發）。
+    // 非快速決策單只有「對應到裁決項目」時才發，對應不到就維持原本不通知，不改變既有行為。
+    $isQuick = !empty($o['quick_mode']);
+    if ($isQuick) qab_quick_retire_notices($db, $orderId);
     $optMap = qab_option_map($db);
     $c = qab_quick_cfg($db);
     $raw = qab_setting_get($db, 'quick_cfg', []);
@@ -2744,6 +2747,7 @@ function qab_quick_notify_decision(PDO $db, int $orderId, array $optIds, int $ac
             }
         }
     }
+    if (!$names && !$isQuick) return;
     if (!$names) {
         $targets = [(int)$o['created_by']];
         foreach ($optIds as $oi) if (isset($optMap[(int)$oi])) $names[] = $optMap[(int)$oi]['name'];
