@@ -61,24 +61,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
         .btn-o:disabled { opacity:.5; cursor:not-allowed; }
 
         .lg { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12px; margin-bottom:6px; }
-        .pc { display:inline-flex; flex-direction:column; border:2px solid #CDB89B; border-radius:5px; padding:3px 9px; min-width:88px; font-size:12px; cursor:pointer; user-select:none; background:#fff; color:#3E2B1A; line-height:1.35; }
+        .pc { display:inline-flex; flex-direction:column; border:2px solid #CDB89B; border-radius:5px; padding:1px 8px; min-width:84px; font-size:12px; cursor:pointer; user-select:none; background:#fff; color:#3E2B1A; line-height:1.2; }
         .lg .pc { min-width:0; cursor:default; display:inline-block; }
         .pc i { font-style:normal; font-weight:700; }
-        .pc small { font-size:10.5px; opacity:.9; display:block; line-height:1.35; }
+        .pc small { font-size:10.5px; opacity:.9; display:block; line-height:1.2; }
         .pc.s-partial { background:#FBEBC0; color:#4a2c0a; }
         .pc.s-done { background:#E3F0D3; color:#2f6b1f; border-color:#A9C47C; }
         .pc.s-skip { background:#F1ECE4; color:#8A7F72; border-style:dashed; cursor:default; }
         .pc.sug { border-color:transparent; background-image:linear-gradient(90deg,#2F6FB5 50%,transparent 50%),linear-gradient(180deg,#2F6FB5 50%,transparent 50%),linear-gradient(270deg,#2F6FB5 50%,transparent 50%),linear-gradient(0deg,#2F6FB5 50%,transparent 50%); background-size:12px 3px,3px 12px,12px 3px,3px 12px; background-position:0 0,100% 0,100% 100%,0 100%; background-repeat:repeat-x,repeat-y,repeat-x,repeat-y; animation:odcw .7s linear infinite; }
         @keyframes odcw { to { background-position:12px 0,100% 12px,calc(100% - 12px) 100%,0 calc(100% - 12px); } }
         @media (prefers-reduced-motion:reduce) { .pc.sug { animation:none; } }
-        .pc.sel { background-color:#DCE9F5; background-image:none; color:#1f3a56; border:3px solid #2F6FB5; padding:0 7px; animation:none; }
+        .pc.sel { padding-top:0; padding-bottom:0; background-color:#DCE9F5; background-image:none; color:#1f3a56; border:3px solid #2F6FB5; padding:0 7px; animation:none; }
         .pc.sel::after { content:"✓ 已選取"; font-size:10px; font-weight:700; }
         .pc small.qcl { font-weight:700; color:#2f6b1f; }
         .pc small.qcl.qp { color:#111; }
-        .bomcard { border:1px solid #EADFC8; border-radius:6px; padding:8px 10px; margin-bottom:8px; background:#fff; }
-        .bh { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-bottom:6px; font-size:13px; }
-        .chain { display:flex; flex-wrap:wrap; gap:6px; }
-        .qtybox { margin-top:8px; padding:6px 10px; background:#FDF3E3; border:1px solid #E4D3BC; border-radius:5px; font-size:13px; }
+        .bomcard { border:1px solid #EADFC8; border-radius:6px; padding:4px 8px; margin-bottom:5px; background:#fff; }
+        .bh { display:flex; flex-wrap:wrap; gap:2px 10px; align-items:center; margin-bottom:3px; font-size:13px; line-height:1.25; }
+        .bh .btn-o.sm { height:22px; }
+        .chain { display:flex; flex-wrap:wrap; gap:4px; }
+        .qtybox { margin-top:5px; padding:4px 10px; background:#FDF3E3; border:1px solid #E4D3BC; border-radius:5px; font-size:13px; }
         .qtybox input { width:90px; text-align:right; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; }
         .qtybox input.bad, .od-tbl input.bad { border:2px solid #DD5138; background:#FDE8E2; }
         .warn { color:#B8431F; font-size:12px; }
@@ -98,6 +99,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
         .tray { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:8px; border:1px dashed #d98a33; border-radius:6px; background:#FDF3E3; margin-bottom:8px; }
         .vchip { border:1px solid #d98a33; background:#fff; border-radius:14px; padding:3px 12px; font-size:13px; cursor:pointer; font-weight:700; color:#5b3a1e; }
         .vchip.drop { background:#F0A24B; color:#fff; }
+        .vchip.armed { background:#2F6FB5; color:#fff; border-color:#2F6FB5; }
+        .od-tbl tr.armed-row { cursor:copy; }
         .vchip small { font-weight:normal; color:#8a6d45; margin-left:4px; }
         .vtag { padding:0 8px; border-radius:9px; background:#fff; border:1px solid #d98a33; font-size:12px; }
         .vtag.x { border-color:#DD5138; color:#DD5138; }
@@ -162,7 +165,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
                 <label>客戶<input id="fClient" size="10"></label>
                 <label>製程大類<select id="fType" data-eg-filter="輸入製程大類篩選…"><option value="">全部</option></select></label>
                 <label>上一關回廠／QC進度<select id="fQc">
-                    <option value="any_returned">已有回廠可發（QC全部或部分完成皆可）</option>
+                    <option value="issuable">可以發單的（預設）</option>
+                    <option value="any_returned">已有回廠的（QC全部或部分完成皆可）</option>
                     <option value="all">全部</option><option value="qc_full">本批QC全數檢驗完成</option>
                     <option value="qc_partial">本批QC部分檢驗完成</option><option value="no_qc">回廠後尚未檢驗</option>
                     <option value="none">尚未發單的製程</option></select></label>
@@ -187,7 +191,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
             <h4>發單清單：把製程指派給廠商</h4>
             <div class="fld"><b>發單日</b><input type="date" id="issueDate" class="od-inp"> <span class="hint">交期預設＝發單日＋5 個工作日（依公司行事曆，可逐列修改）</span></div>
             <div class="tray" id="tray"><span class="hint">加入製程後這裡會出現常用廠商</span></div>
-            <div class="hint" style="margin-bottom:6px;">把列拖到廠商上，或先勾列再點廠商。選到不是這個製程大類歷史上用過的廠商，會標紅色「非此製程廠商」提醒，但允許發單。</div>
+            <div class="hint" style="margin-bottom:6px;">把列拖到廠商上；或先勾列再點廠商；<b>也可以先點廠商，再逐列點下去指派</b>。<span id="armHint" class="warn"></span><br>選到不是這個製程大類歷史上用過的廠商，會標紅色「非此製程廠商」提醒，但允許發單。</div>
             <div class="tw"><table class="od-tbl" id="listTbl"></table></div>
           </div>
           <div class="od-bar"><span id="listInfo"></span>
@@ -253,7 +257,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
 </div></div></div>
 
 <!-- 其他廠商搜尋 -->
-<div class="od-mask" id="mkMask"><div class="od-modal" style="width:560px;"><div class="od-mhd"><span>選擇廠商（可指派給已勾選的列）</span><span class="x" data-close>&times;</span></div>
+<div class="od-mask" id="mkMask"><div class="od-modal" style="width:720px;"><div class="od-mhd"><span>選擇廠商（只列加工廠與客戶；右側為廠商主檔設定的加工項目）</span><span class="x" data-close>&times;</span></div>
 <div class="od-mbd"><input id="mkQ" class="od-inp" style="width:100%;" placeholder="輸入廠商編號或名稱…"><div id="mkList" style="margin-top:8px;"></div></div></div></div>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -269,7 +273,7 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 <?php if ($perms['canView']): ?>
 (function(){
 var API='../../src/store/OdDispatch_API.php', META=null, CSRF='';
-var CHAIN=[], CHAINTOTAL=0, OFFSET=0;      // ① 查詢結果
+var CHAIN=[], CHAINTOTAL=0, OFFSET=0, MORE=false, ARMED=null, EXTRA=[];      // ① 查詢結果
 var SELQ={};                                // bomIndex -> 使用者改過的發單量
 var LINES=[];                               // ② 發單清單
 var ISSUED=[];                              // ③ 已發的單
@@ -330,14 +334,14 @@ function renderChain(){
     h+='</div><div class="qtyslot"></div></div>';
   });
   $('#chainBox').html(h||'<div class="hint">沒有符合的 BOM。</div>');
-  $('#moreBox').html(CHAIN.length<CHAINTOTAL?'<button class="btn-o" id="btnMore">再載入更多（已載入 '+CHAIN.length+' / 共 '+CHAINTOTAL+' 張 BOM，篩選後的結果不含未載入的）</button>':'');
+  $('#moreBox').html(MORE?'<button class="btn-o" id="btnMore">再載入更多（已列出 '+CHAIN.length+' 張；BOM 共 '+CHAINTOTAL+' 張，依條件往後掃描）</button>':(CHAIN.length?'<span class="hint">已列出全部符合條件的 BOM（共 '+CHAIN.length+' 張）</span>':''));
   refreshSel();
 }
 function search(reset){
   if(reset){OFFSET=0;CHAIN=[];SELQ={};}
   get({action:'chain',part:$('#fPart').val(),bom:$('#fBom').val(),client:$('#fClient').val(),process_type_id:$('#fType').val(),
        urgent:$('#fUrg').val(),qc_mode:$('#fQc').val(),limit:30,offset:OFFSET},function(r){
-    $.each(r.rows,function(i,b){CHAIN.push(b);});CHAINTOTAL=r.total;OFFSET+=30;renderChain();});
+    $.each(r.rows,function(i,b){CHAIN.push(b);});CHAINTOTAL=r.total;OFFSET=r.next_offset;MORE=!!r.more;renderChain();});
 }
 $('#btnSearch').on('click',function(){search(true);});
 $('#fPart,#fBom,#fClient').on('keydown',function(e){if(e.which===13)search(true);});
@@ -420,9 +424,12 @@ function ensureCommon(cb){
 function renderTray(){
   var seen={},h='';
   $.each(LINES,function(i,l){$.each(COMMON[l.ptype]||[],function(j,m){if(seen[m.maker_id_no])return;seen[m.maker_id_no]=1;
-    h+='<span class="vchip" data-no="'+esc(m.maker_id_no)+'" data-nm="'+esc(m.maker_id)+'">'+esc(m.maker_id)+'<small>'+esc(l.ptypeName)+'常用</small></span>';});});
+    h+='<span class="vchip" data-no="'+esc(m.maker_id_no)+'" data-nm="'+esc(m.maker_id)+'" title="'+esc(m.items||'')+'">'+esc(m.maker_id)+'<small>'+esc(l.ptypeName)+'常用'+(m.items?'・'+esc(m.items.length>14?m.items.slice(0,14)+'…':m.items):'')+'</small></span>';});});
+  $.each(EXTRA,function(i,m){if(seen[m.no])return;seen[m.no]=1;h+='<span class="vchip" data-no="'+esc(m.no)+'" data-nm="'+esc(m.nm)+'">'+esc(m.nm)+'<small>已加入</small></span>';});
   h+='<span class="vchip" id="mkOther" style="border-style:dashed;">＋其他廠商…</span>';
   $('#tray').html(h);
+  $('#tray .vchip[data-no]').each(function(){if(ARMED&&String($(this).data('no'))===ARMED.no)$(this).addClass('armed');});
+  $('#armHint').text(ARMED?'已選廠商「'+ARMED.nm+'」：直接點下方的列（或勾選的列再點廠商）即可指派，再點一次廠商取消。':'');
 }
 function isCommon(l,no){var f=false;$.each(COMMON[l.ptype]||[],function(i,m){if(m.maker_id_no===no)f=true;});return f;}
 function renderList(){
@@ -464,8 +471,14 @@ $('#issueDate').on('change',function(){ // 發單日改了，交期跟著重算�
 });
 function assign(rows,no,nm){$.each(rows,function(i,l){l.maker_no=no;l.maker=nm;l.flag=!isCommon(l,no)&&!l._other;});}
 $(document).on('click','#tray .vchip[data-no]',function(){
-  var rows=LINES.filter(function(l){return l.sel;});if(!rows.length){alert('請先勾選要指派的列，或直接把列拖到廠商上。');return;}
-  assign(rows,String($(this).data('no')),String($(this).data('nm')));renderList();
+  var no=String($(this).data('no')),nm=String($(this).data('nm'));
+  var rows=LINES.filter(function(l){return l.sel;});
+  if(rows.length){assign(rows,no,nm);ARMED=null;renderList();return;}
+  ARMED=(ARMED&&ARMED.no===no)?null:{no:no,nm:nm};renderList();   // 沒勾列：先選廠商，之後逐列點下去指派
+});
+$(document).on('click','#listTbl tr[data-i]',function(e){
+  if(!ARMED||$(e.target).is('input,button,a'))return;
+  assign([LINES[+$(this).data('i')]],ARMED.no,ARMED.nm);renderList();
 });
 var dragI=null;
 $(document).on('dragstart','#listTbl tr[draggable]',function(){dragI=+$(this).data('i');});
@@ -478,12 +491,17 @@ var mkT=null;$('#mkQ').on('input',function(){clearTimeout(mkT);var q=$(this).val
 function loadMk(q){
   var pt=0;$.each(LINES,function(i,l){if(l.sel&&!pt)pt=l.ptype;});if(!pt&&LINES.length)pt=LINES[0].ptype;
   get({action:'makers',q:q,ptype:pt},function(r){
-    var h='';$.each(r.makers,function(i,m){h+='<div style="padding:4px 0;border-bottom:1px solid #EADFC8;"><button class="btn-o sm mkPick" data-no="'+esc(m.maker_id_no)+'" data-nm="'+esc(m.maker_id)+'">選用</button> <b>'+esc(m.maker_id)+'</b> <span class="hint">'+esc(m.maker_id_no)+(m.internal?'　廠內':'')+(m.used_for_type>0?'　此製程大類用過 '+m.used_for_type+' 次':'')+'</span></div>';});
+    var h='';$.each(r.makers,function(i,m){h+='<div style="padding:4px 0;border-bottom:1px solid #EADFC8;display:flex;gap:8px;align-items:baseline;"><button class="btn-o sm mkPick" data-no="'+esc(m.maker_id_no)+'" data-nm="'+esc(m.maker_id)+'">選用</button><b style="white-space:nowrap;">'+esc(m.maker_id)+'</b><span class="hint" style="white-space:nowrap;">'+esc(m.maker_id_no)+(m.internal?'　廠內':'')+(m.used_for_type>0?'　此製程大類用過 '+m.used_for_type+' 次':'')+'</span><span style="color:#8A5A2B;font-size:12px;">'+esc(m.items||'')+'</span></div>';});
     $('#mkList').html(h||'<span class="hint">查無廠商</span>');});
 }
 $(document).on('click','.mkPick',function(){
-  var rows=LINES.filter(function(l){return l.sel;});if(!rows.length){alert('請先勾選要指派的列。');return;}
-  assign(rows,String($(this).data('no')),String($(this).data('nm')));$('#mkMask').removeClass('on');renderList();
+  var no=String($(this).data('no')),nm=String($(this).data('nm'));
+  if(!EXTRA.some(function(m){return m.no===no;}))EXTRA.push({no:no,nm:nm});   // 挑過的廠商加進廠商盤，之後免再搜尋
+  var rows=LINES.filter(function(l){return l.sel;});
+  $('#mkMask').removeClass('on');
+  if(rows.length){var fl=!isCommon(rows[0],no);assign(rows,no,nm);if(fl)$.each(rows,function(i,l){l.flag=!isCommon(l,no);});ARMED=null;}
+  else{ARMED={no:no,nm:nm};}   // 沒勾列：先選好廠商，再逐列點下去指派
+  renderList();
 });
 $('#btnToSlips').on('click',function(){
   if(!LINES.length){alert('發單清單是空的');return;}

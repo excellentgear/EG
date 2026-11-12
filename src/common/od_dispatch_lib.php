@@ -197,29 +197,37 @@ function od_chain(PDO $db, array $f): array
 
     $limit = max(1, min(100, (int)($f['limit'] ?? 30)));
     $offset = max(0, (int)($f['offset'] ?? 0));
-    $st = $db->prepare("SELECT b.bom, b.d_id AS part_no, b.Client_Name AS client, b.sqty, b.priority_type, b.Delivery_date
-                          FROM bom b WHERE $sqlW ORDER BY b.bom DESC LIMIT $limit OFFSET $offset");
-    $st->execute($args);
-    $boms = $st->fetchAll(PDO::FETCH_ASSOC);
-    $rows = [];
-    foreach ($boms as $b) {
-        $b['chain'] = od_bom_chain($db, (string)$b['bom']);
-        $rows[] = $b;
+    $qm = (string)($f['qc_mode'] ?? 'issuable');
+    $match = function ($r) use ($qm) {
+        if ($qm === '' || $qm === 'all') return true;
+        foreach ($r['chain'] as $c) {
+            if ($qm === 'issuable' && !empty($c['issuable'])) return true;
+            if ($qm === 'any_returned' && $c['ret'] > 0 && $c['state'] !== 'skip') return true;
+            if ($qm === 'qc_full' && $c['qc']['mode'] === 'full') return true;
+            if ($qm === 'qc_partial' && $c['qc']['mode'] === 'partial') return true;
+            if ($qm === 'no_qc' && $c['ret'] > 0 && $c['qc']['mode'] === 'none') return true;
+            if ($qm === 'none' && $c['sent'] <= 0 && $c['state'] === 'none') return true;
+        }
+        return false;
+    };
+    // 條件要看整條製程鏈才判得出來，所以分批往後掃，湊滿一頁或掃完為止（單次最多掃 600 張 BOM，避免拖慢）
+    $rows = []; $scanned = 0; $chunk = 40; $pos = $offset; $more = false;
+    while (count($rows) < $limit && $scanned < 600) {
+        $st = $db->prepare("SELECT b.bom, b.d_id AS part_no, b.Client_Name AS client, b.sqty, b.priority_type, b.Delivery_date
+                              FROM bom b WHERE $sqlW ORDER BY b.bom DESC LIMIT $chunk OFFSET $pos");
+        $st->execute($args);
+        $boms = $st->fetchAll(PDO::FETCH_ASSOC);
+        if (!$boms) { $more = false; $pos = $total; break; }
+        foreach ($boms as $i => $b) {
+            $b['chain'] = od_bom_chain($db, (string)$b['bom']);
+            $pos++; $scanned++;
+            if ($match($b)) $rows[] = $b;
+            if (count($rows) >= $limit) break;
+        }
+        $more = $pos < $total;
+        if (count($boms) < $chunk) break;
     }
-    $qm = (string)($f['qc_mode'] ?? '');
-    if ($qm !== '' && $qm !== 'all') {
-        $rows = array_values(array_filter($rows, function ($r) use ($qm) {
-            foreach ($r['chain'] as $c) {
-                if ($qm === 'any_returned' && $c['ret'] > 0 && $c['state'] !== 'skip') return true;
-                if ($qm === 'qc_full' && $c['qc']['mode'] === 'full') return true;
-                if ($qm === 'qc_partial' && $c['qc']['mode'] === 'partial') return true;
-                if ($qm === 'no_qc' && $c['ret'] > 0 && $c['qc']['mode'] === 'none') return true;
-                if ($qm === 'none' && $c['sent'] <= 0 && $c['state'] === 'none') return true;
-            }
-            return false;
-        }));
-    }
-    return ['rows' => $rows, 'total' => $total];
+    return ['rows' => $rows, 'total' => $total, 'next_offset' => $pos, 'more' => $more && $pos < $total];
 }
 
 /** 單張 BOM 的製程鏈（依 bom_sn；同一 bom_sn 有多列＝拆批，彙總成一格） */
@@ -289,20 +297,24 @@ function od_bom_chain(PDO $db, string $bom): array
             'avail' => 0.0, 'suggest' => false,
         ];
     }
-    // 可發量：上一個「非跳過」製程的 已驗合格數（免驗者用回廠良品數）；第一關／客供料不設上限
+    // 可發量：上一個「非跳過」製程的 已驗合格數（免驗者用回廠良品數），且不超過本站 BOM 總量－已發；
+    //        第一關（非客供料）＝本站未發量；客供料（製程 138）實收數量可多於或少於 BOM，不設上限（avail=null）
     $prev = null;
     foreach ($chain as $i => &$c) {
+        $c['remaining'] = max(0.0, $c['sqty'] - $c['sent']);
+        $c['issuable'] = false;
         if ($c['state'] === 'skip') continue;
         if ($prev === null) {
-            $c['avail'] = null; // 第一關：不設上限
+            $c['avail'] = $c['remaining'];
         } else {
             $p = $prev;
             $passQty = $p['excl_qc'] ? max(0.0, $p['ret'] - $p['scrap']) : $p['qc']['pass'];
-            $c['avail'] = max(0.0, $passQty - $c['sent']);
+            $c['avail'] = max(0.0, min($passQty - $c['sent'], $c['remaining']));
         }
         if ($c['is_customer_material']) $c['avail'] = null;
-        if (!$suggested && $c['state'] === 'none' && ($prev === null || $c['avail'] > 0)) { $c['suggest'] = true; $suggested = true; }
         if ($c['state'] === 'done') $c['avail'] = 0.0;
+        $c['issuable'] = ($c['state'] !== 'done') && $c['remaining'] > 1e-9 && ($c['avail'] === null || $c['avail'] > 1e-9);
+        if (!$suggested && $c['state'] === 'none' && $c['issuable']) { $c['suggest'] = true; $suggested = true; }
         $prev = $c;
     }
     unset($c);
@@ -320,15 +332,41 @@ function od_maker_info(PDO $db, string $makerNo): ?array
     return $r;
 }
 
+/** 只列「加工廠」與「客戶」大類的廠商（主檔管理的大類；直接欄位或由小類反推皆算）。名稱取自大類主檔，不寫死 id。 */
+function od_maker_cat_sql(string $m = 'm'): string
+{
+    $ids = "(SELECT main_cat_id FROM dict_maker_main_category WHERE main_cat_name IN ('加工廠','客戶'))";
+    return "($m.main_category_id IN $ids OR EXISTS (SELECT 1 FROM maker_sub_category_mapping mmp JOIN maker_category_hierarchy mch ON mch.sub_cat_id=mmp.sub_cat_id
+             WHERE mmp.maker_id_no=$m.maker_id_no AND mch.main_cat_id IN $ids))";
+}
+
+/** 廠商的「加工項目」文字（主檔小類名稱＋自填加工項目說明），顯示在挑廠商清單 */
+function od_maker_items_sql(string $m = 'm'): string
+{
+    return "(SELECT GROUP_CONCAT(sc.sub_cat_name SEPARATOR '、') FROM maker_sub_category_mapping mp JOIN dict_maker_sub_category sc ON sc.sub_cat_id=mp.sub_cat_id WHERE mp.maker_id_no=$m.maker_id_no)";
+}
+
+function od_makers_decorate(array $rows): array
+{
+    foreach ($rows as &$r) {
+        $parts = array_filter([trim((string)($r['subs'] ?? '')), trim((string)($r['m_process_items'] ?? ''))]);
+        $r['items'] = implode('；', $parts);
+        unset($r['subs'], $r['m_process_items']);
+    }
+    unset($r);
+    return $rows;
+}
+
 /** 廠商搜尋（編號或名稱）；有傳 process_type_id 時標出「此製程大類歷史上用過」的常用廠商 */
 function od_makers(PDO $db, string $q, int $ptype = 0): array
 {
     $q = trim($q);
-    $args = []; $w = "(status IS NULL OR status <> 'X')";
-    if ($q !== '') { $w .= " AND (maker_id LIKE ? OR maker_id_no LIKE ? OR maker_id_all LIKE ?)"; array_push($args, "%$q%", "%$q%", "%$q%"); }
-    $st = $db->prepare("SELECT maker_id_no, maker_id, m_tel, factory_address, internal FROM maker_list WHERE $w ORDER BY maker_id LIMIT 60");
+    $args = []; $w = "(m.status IS NULL OR m.status <> 'X') AND " . od_maker_cat_sql('m');
+    if ($q !== '') { $w .= " AND (m.maker_id LIKE ? OR m.maker_id_no LIKE ? OR m.maker_id_all LIKE ?)"; array_push($args, "%$q%", "%$q%", "%$q%"); }
+    $st = $db->prepare("SELECT m.maker_id_no, m.maker_id, m.m_tel, m.factory_address, m.internal, m.m_process_items, " . od_maker_items_sql('m') . " AS subs
+                          FROM maker_list m WHERE $w ORDER BY m.maker_id LIMIT 80");
     $st->execute($args);
-    $out = $st->fetchAll(PDO::FETCH_ASSOC);
+    $out = od_makers_decorate($st->fetchAll(PDO::FETCH_ASSOC));
     $used = [];
     if ($ptype > 0) {
         $u = $db->prepare("SELECT bi.maker_id_no, COUNT(*) c FROM bom_ing bi JOIN process_no pn ON pn.ProcessNo=bi.process_no
@@ -341,14 +379,16 @@ function od_makers(PDO $db, string $q, int $ptype = 0): array
     return $out;
 }
 
-/** 某製程大類歷史上最常用的前 N 家廠商（廠商盤用） */
+/** 某製程大類歷史上最常用的前 N 家廠商（廠商盤用；同樣只列加工廠／客戶大類） */
 function od_common_makers(PDO $db, int $ptype, int $n = 6): array
 {
     if ($ptype <= 0) return [];
-    $st = $db->prepare("SELECT bi.maker_id_no, MAX(bi.maker_id) maker_id, COUNT(*) c FROM bom_ing bi JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                         WHERE pn.process_type_id=? AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>'' GROUP BY bi.maker_id_no ORDER BY c DESC LIMIT " . (int)$n);
+    $st = $db->prepare("SELECT bi.maker_id_no, MAX(bi.maker_id) maker_id, COUNT(*) c, MAX(m.m_process_items) m_process_items, MAX(" . od_maker_items_sql('m') . ") subs
+                          FROM bom_ing bi JOIN process_no pn ON pn.ProcessNo=bi.process_no JOIN maker_list m ON m.maker_id_no=bi.maker_id_no
+                         WHERE pn.process_type_id=? AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>'' AND (m.status IS NULL OR m.status<>'X') AND " . od_maker_cat_sql('m') . "
+                         GROUP BY bi.maker_id_no ORDER BY c DESC LIMIT " . (int)$n);
     $st->execute([$ptype]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    return od_makers_decorate($st->fetchAll(PDO::FETCH_ASSOC));
 }
 
 // ───────────────────────────── 發單 ─────────────────────────────
