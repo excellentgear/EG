@@ -797,21 +797,29 @@ $(document).on('click','.btn-bb',function(){ BB.fromBom = true; openBomBind(Stri
 var bbProbeKey = '';
 function bbProbe(){
   var ks = Object.keys(sel);
-  if (!CAN_ADMIN || ks.length !== 1) { bbProbeKey=''; $('#btnBindOld').hide().data('boms',[]); return; }
-  var s = sel[ks[0]], boms = (s.row.boms||[]).map(function(b){ return String(b.bom); }).filter(Boolean);
-  if (!boms.length) { $('#btnBindOld').hide(); return; }
-  var key = ks[0]+'|'+boms.join(','); bbProbeKey = key;
   $('#btnBindOld').hide();
+  if (!CAN_ADMIN || ks.length !== 1) { bbProbeKey=''; $('#sqBindOldBar').remove(); return; }
+  var s = sel[ks[0]], boms = (s.row.boms||[]).map(function(b){ return String(b.bom); }).filter(Boolean);
+  if (!boms.length) { $('#sqBindOldBar').remove(); return; }
+  var key = ks[0]+'|'+boms.join(','); bbProbeKey = key;
+  $('#sqBindOldBar').remove();
   var hit = [], left = boms.length;
   boms.forEach(function(b){
     $.post(API+'?action=bom_bind_candidates',{bom:b},function(r){
       if (r.ok && !r.error && (r.ships||[]).some(function(x){ return !x.has_order && x.selectable; })) hit.push(b);
     },'json').always(function(){
-      if (--left === 0 && bbProbeKey === key && hit.length) $('#btnBindOld').data('boms',hit).show();
+      if (--left === 0 && bbProbeKey === key && hit.length && !$('#sqFromBom').length) {
+        // 與 BOM總覽／完工BOM 帶入時相同位置（表格上方的橘色提示條）與相同樣式的按鈕
+        $('#sqBindOldBar').remove();
+        $('#tbody').closest('table').before('<div id="sqBindOldBar" style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:6px 10px;margin:6px 0;font-size:12px;color:#6b4a1f;">'
+          + '<i class="fa fa-info-circle"></i> 這張訂單的製令底下，有尚未綁訂單的同料號舊出貨單。'
+          + '<button type="button" class="btn-bb-sel" style="margin-left:8px;padding:2px 10px;border:1px solid #c9792a;background:#fff;color:#8a4b12;border-radius:4px;font-weight:bold;cursor:pointer;"><i class="fa fa-link"></i> 綁定舊出貨單</button></div>');
+        $('#sqBindOldBar').data('boms', hit);
+      }
     });
   });
 }
-$('#btnBindOld').on('click',function(){ var b=$(this).data('boms')||[]; if(!b.length) return; BB.fromBom=false; openBomBind(b[0], b); });
+$(document).on('click','.btn-bb-sel',function(){ var b=$('#sqBindOldBar').data('boms')||[]; if(!b.length) return; BB.fromBom=false; openBomBind(b[0], b); });
 function openBomBind(bom, alts){
   BB.bom = bom; BB.alts = alts||[];
   $('#bbBom').text(BB.bom);
