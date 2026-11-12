@@ -1707,12 +1707,16 @@ function sq_print_meta(PDO $db, ?string $bizDate = null): array
  * 2026-11-12 使用者交辦：ERP 單價欄位原為整數，匯入的小數單價被四捨五入，需要事後更正。
  * 只 UPDATE is_list.Unit_price（IS_id 不變，綁定不受影響），每筆留稽核紀錄。
  * ============================================================ */
-function sq_price_batch_rows(PDO $db, string $part, string $clientName, string $from, string $to, float $oldP): array
+function sq_price_batch_rows(PDO $db, int $dId, string $from, string $to, float $oldP): array
 {
+    // 以料號主檔 id 歸戶（同一個料號文字常掛在好幾家客戶底下）；d_setting_id 還是空的舊資料，退回「料號文字＋客戶名稱」
+    $dq = $db->prepare("SELECT d.D_Setting_Id, TRIM(c.customer) cn FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.d_id=?");
+    $dq->execute([$dId]); $dm = $dq->fetch(PDO::FETCH_ASSOC);
+    if (!$dm) return ['hit' => [], 'other' => 0, 'scope' => 0];
     $sql = "SELECT IS_id, IS_number, DATE_FORMAT(Order_date,'%Y-%m-%d') d, Client_name, Product_id, Qty, Unit_price, bind_locked
-            FROM is_list WHERE Product_id = ? AND Order_date BETWEEN ? AND ?";
-    $args = [$part, $from, $to];
-    if ($clientName !== '') { $sql .= " AND TRIM(Client_name) = ?"; $args[] = $clientName; }
+            FROM is_list WHERE Order_date BETWEEN ? AND ?
+            AND (d_setting_id = ? OR (d_setting_id IS NULL AND Product_id = ? AND TRIM(Client_name) = ?))";
+    $args = [$from, $to, $dId, (string)$dm['D_Setting_Id'], (string)$dm['cn']];
     $sql .= " ORDER BY Order_date, IS_id";
     $st = $db->prepare($sql); $st->execute($args);
     $all = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -1725,11 +1729,10 @@ function sq_price_batch_rows(PDO $db, string $part, string $clientName, string $
 
 function sq_price_batch(PDO $db, array $in, bool $apply, array $user): array
 {
-    $part = trim((string)($in['part'] ?? ''));
-    $cn   = trim((string)($in['client_name'] ?? ''));
+    $dId  = (int)($in['d_id'] ?? 0);
     $from = trim((string)($in['date_from'] ?? ''));
     $to   = trim((string)($in['date_to'] ?? ''));
-    if ($part === '') return ['success' => false, 'message' => '請輸入料號'];
+    if ($dId <= 0) return ['success' => false, 'message' => '請先從清單選擇要修改的料號'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) || $from > $to)
         return ['success' => false, 'message' => '請選擇正確的期間（起日不可晚於迄日）'];
     if (!is_numeric($in['old_price'] ?? null) || !is_numeric($in['new_price'] ?? null))
@@ -1738,7 +1741,7 @@ function sq_price_batch(PDO $db, array $in, bool $apply, array $user): array
     if ($oldP < 0 || $newP < 0) return ['success' => false, 'message' => '單價不可為負數'];
     if (abs($oldP - $newP) < 0.00005) return ['success' => false, 'message' => '新單價與原單價相同，不需要修改'];
 
-    $res = sq_price_batch_rows($db, $part, $cn, $from, $to, $oldP);
+    $res = sq_price_batch_rows($db, $dId, $from, $to, $oldP);
     $rows = $res['hit'];
     $out = ['success' => true, 'rows' => $rows, 'count' => count($rows), 'other' => $res['other'], 'scope' => $res['scope'],
             'old_price' => $oldP, 'new_price' => $newP];

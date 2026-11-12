@@ -273,6 +273,19 @@ case 'match_apply': {
     sq_out(sq_match_apply($db, $pairs, (string)$uid));
 }
 
+/* ── 批次改單價：搜尋料號主檔（回料號、圖號、客戶，選定後以主檔 id 歸戶）── */
+case 'price_part_search': {
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可使用', 403);
+    $kw = trim((string)(($_POST ?: $_GET)['kw'] ?? ''));
+    if ($kw === '') sq_out(['parts' => []]);
+    $like = '%' . addcslashes($kw, '%_\\') . '%';
+    $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id part, d.Drawing_No, TRIM(c.customer) client
+                        FROM d_setting d LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                        WHERE d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ? ORDER BY d.D_Setting_Id, d.d_id LIMIT 20");
+    $st->execute([$like, $like]);
+    sq_out(['parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
 /* ── 批次修改出貨單價：料號＋期間內把單價 A 改成 B（非 A 的不動）；僅出貨管理員 ── */
 case 'price_batch_preview':
 case 'price_batch_apply': {

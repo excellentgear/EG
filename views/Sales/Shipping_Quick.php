@@ -561,12 +561,16 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   <div class="m-body">
     <div class="mt-note" style="margin-bottom:8px;">選定<b>料號</b>與<b>出貨期間</b>，把單價等於「原單價」的出貨明細全部改成「新單價」；<b>單價不是原單價的明細完全不動</b>。
       只改單價欄位，出貨單號與綁定（訂單／製令）都不受影響，每一筆都會留稽核紀錄。請先按「預覽」確認要改的明細。</div>
-    <div class="sq-bar" style="flex-wrap:wrap;gap:8px;">
-      <label>料號</label><input type="text" id="pbPart" style="width:230px;" placeholder="完整料號（與出貨明細的料號相同）">
-      <label>客戶</label><select id="pbClient" style="max-width:170px;"><option value="">全部</option></select>
-      <label>出貨日</label><input type="date" id="pbFrom" style="width:140px;"> ~ <input type="date" id="pbTo" style="width:140px;">
-      <label>原單價 A</label><input type="text" id="pbOld" style="width:90px;" inputmode="decimal">
-      <label>新單價 B</label><input type="text" id="pbNew" style="width:90px;" inputmode="decimal">
+    <div style="position:relative;margin-bottom:8px;">
+      <label style="white-space:nowrap;">料號　</label>
+      <input type="text" id="pbPart" style="width:320px;" placeholder="輸入料號或圖號搜尋，從清單點選" autocomplete="off">
+      <span id="pbPicked" style="margin-left:10px;font-weight:600;color:#5b3a1e;"></span>
+      <div id="pbSug" style="display:none;position:absolute;left:46px;top:32px;z-index:20;background:#fff;border:1px solid #d9c3a0;border-radius:4px;max-height:240px;overflow:auto;min-width:480px;box-shadow:0 4px 12px rgba(0,0,0,.15);"></div>
+    </div>
+    <div class="sq-bar" style="gap:6px 16px;">
+      <span style="white-space:nowrap;"><label>出貨日　</label><input type="date" id="pbFrom" style="width:140px;"> ~ <input type="date" id="pbTo" style="width:140px;"></span>
+      <span style="white-space:nowrap;"><label>原單價 A　</label><input type="text" id="pbOld" style="width:90px;" inputmode="decimal"></span>
+      <span style="white-space:nowrap;"><label>新單價 B　</label><input type="text" id="pbNew" style="width:90px;" inputmode="decimal"></span>
       <button id="btnPbPreview" class="go"><i class="fa fa-search"></i> 預覽</button>
     </div>
     <div id="pbMsg" style="margin:8px 0;color:#b4412c;font-weight:600;"></div>
@@ -897,14 +901,30 @@ $(document).on('click','#btnBbApply',function(){
 });
 
 /* ── 批次修改出貨單價（僅出貨管理員）────────────────────────────── */
-var PB = {ok:false};
-function pbParams(){ return {part:$.trim($('#pbPart').val()), client_name:$('#pbClient').val()||'', date_from:$('#pbFrom').val(), date_to:$('#pbTo').val(),
+var PB = {ok:false, d_id:0, t:null};
+function pbParams(){ return {d_id:PB.d_id, date_from:$('#pbFrom').val(), date_to:$('#pbTo').val(),
   old_price:String($('#pbOld').val()).replace(/,/g,''), new_price:String($('#pbNew').val()).replace(/,/g,'')}; }
+function pbReset(){ PB.ok=false; $('#btnPbApply').prop('disabled',true); }
 $('#btnPriceBatch').on('click',function(){
-  var $c=$('#pbClient'); if($c.find('option').length<=1){ $('#clientSel option').each(function(){ if(this.value) $c.append($('<option>').val($(this).text().replace(/（\d+）$/,'')).text($(this).text())); }); }
-  PB.ok=false; $('#btnPbApply').prop('disabled',true); $('#pbMsg,#pbResult').empty(); openMask('mkPriceBatch');
+  PB.d_id=0; $('#pbPart').val(''); $('#pbPicked').text(''); $('#pbSug').hide(); pbReset(); $('#pbMsg,#pbResult').empty(); openMask('mkPriceBatch');
 });
-$('#pbPart,#pbClient,#pbFrom,#pbTo,#pbOld,#pbNew').on('input change',function(){ PB.ok=false; $('#btnPbApply').prop('disabled',true); });
+$('#pbPart').on('input',function(){
+  PB.d_id=0; $('#pbPicked').text(''); pbReset();
+  var kw=$.trim($(this).val()); clearTimeout(PB.t);
+  if(!kw){ $('#pbSug').hide(); return; }
+  PB.t=setTimeout(function(){
+    $.post(API+'?action=price_part_search',{kw:kw},function(r){
+      if(!r.ok) return;
+      var h=''; (r.parts||[]).forEach(function(p){ h+='<div class="pb-opt" data-id="'+p.d_id+'" data-part="'+esc(p.part)+'" data-client="'+esc(p.client||'')+'" style="padding:5px 10px;cursor:pointer;border-bottom:1px solid #f0e4d0;white-space:nowrap;"><b>'+esc(p.part)+'</b>　'+esc(p.Drawing_No||'')+'　<span style="color:#8a5a1c;">'+esc(p.client||'（無客戶）')+'</span>　<span style="color:#aaa;">#'+p.d_id+'</span></div>'; });
+      $('#pbSug').html(h||'<div style="padding:8px 10px;color:#999;">查無符合的料號</div>').show();
+    },'json');
+  },250);
+});
+$(document).on('click','.pb-opt',function(){
+  PB.d_id=parseInt($(this).data('id'),10)||0; $('#pbPart').val($(this).data('part'));
+  $('#pbPicked').text('客戶：'+($(this).data('client')||'（無客戶）')+'　（料號主檔 #'+PB.d_id+'）'); $('#pbSug').hide(); pbReset();
+});
+$('#pbFrom,#pbTo,#pbOld,#pbNew').on('input change',pbReset);
 $('#btnPbPreview').on('click',function(){
   $('#pbMsg').text(''); $('#pbResult').empty(); PB.ok=false; $('#btnPbApply').prop('disabled',true);
   $.post(API+'?action=price_batch_preview',pbParams(),function(r){
