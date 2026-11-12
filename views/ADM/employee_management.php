@@ -29,6 +29,7 @@ $id = $currentUser['id'];
 $current_script_path = $_SERVER['PHP_SELF'];
 
 $hrUserPerm = null; // Resulting permission string
+$empRoleHolder = false; // 被指派 HR／唯讀角色者：強制登出、異動紀錄寫入只認 A
 $page_url_editable = '';
 $page_url_readonly = '';
 
@@ -95,6 +96,7 @@ try {
 try {
     require_once '../../src/common/emp_mgmt_role_lib.php';
     $_empRoleChars = emp_mgmt_role_chars($conn, (int)$id);
+    $empRoleHolder = emp_mgmt_has_role($conn, (int)$id);
     if ($_empRoleChars !== '') {
         $hrUserPerm = emp_mgmt_merge_perm($hrUserPerm, $_empRoleChars);
         // 沒有頁面資料列也要有網址可判斷唯讀導向（page_info 查不到時維持原樣不導向）
@@ -988,7 +990,7 @@ $(document).ready(function() {
      * 僅供判斷該不該踢，不可拿來當出勤紀錄。
      * ============================================================== */
     const ME_ID    = <?php echo (int)$currentUser['id']; ?>;
-    const CAN_KICK = <?php echo ($hrUserPerm !== 'R') ? 'true' : 'false'; ?>;   // 唯讀者不給踢人
+    const CAN_KICK = <?php echo (strpos((string)$hrUserPerm,'A') !== false || (!$empRoleHolder && $hrUserPerm !== 'R')) ? 'true' : 'false'; ?>;   // 唯讀者不給踢人
 
     function refreshOnlineStatus() {
         callApi('get_online_status', 'GET', {}, function(res) {
@@ -1658,7 +1660,7 @@ $(document).ready(function() {
                                 backfill: '補登', resign: '離職', reinstate: '復職' };
     const STATUS_HIST_LABEL = { 0: '離職', 1: '在職（復職）', 2: '留職停薪', 3: '育嬰留停' };
     const isSuperAdmin = window.currentUserId === 1; // 超級管理員固定 id=1，補登異動紀錄一律放行，方便補足/修正資料
-    const canEditHist = window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U') || isSuperAdmin;
+    const canEditHist = window.hrUserPerm.includes('A') || (!<?php echo $empRoleHolder ? 'true' : 'false'; ?> && window.hrUserPerm.includes('U')) || isSuperAdmin;
 
     $('#btn-history').on('click', function() {
         const userId = $(this).data('id');

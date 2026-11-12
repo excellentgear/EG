@@ -704,6 +704,23 @@ function empRequirePerm($needAdmin = false) {
     }
 }
 
+/**
+ * 強制登出某人／異動紀錄寫入：HR管理員(A)可；HR、唯讀角色一律不可；沒被指派 HR/唯讀角色者維持原本判定。
+ */
+function empRequireOps() {
+    global $db;
+    $perm = empPagePerm();
+    $ok = strpos($perm, 'A') !== false;
+    if (!$ok && !emp_mgmt_has_role($db, (int)($_SESSION['id'] ?? 0))) {
+        $ok = ($perm !== '' && $perm !== 'R');
+    }
+    if (!$ok) {
+        http_response_code(403);
+        echo json_encode(['status' => 'error', 'message' => '此操作需要「HR管理員」權限。'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
 /** 目前線上狀態：[user_id => 最後活動時間戳]（給列表顯示在線/離線） */
 function getOnlineStatus() {
     require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
@@ -719,7 +736,7 @@ function getOnlineStatus() {
 function forceLogout() {
     global $db;
     require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
-    empRequirePerm(false);
+    empRequireOps();
 
     $id = (int)($_POST['id'] ?? 0);
     if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。'], JSON_UNESCAPED_UNICODE); return; }
@@ -945,6 +962,7 @@ function _qabResyncAfterPositionChange(PDO $db): string {
 
 function backfillPositionHistory() {
     global $db;
+    empRequireOps();
     $id = (int)($_POST['id'] ?? 0);
     $kind = trim((string)($_POST['change_kind'] ?? 'transfer'));
     $eff = trim((string)($_POST['effective_date'] ?? ''));
@@ -1049,6 +1067,7 @@ function backfillPositionHistory() {
 /** 刪除補登的職務異動列（source='manual' 限定；系統異動當下自動寫的不可刪，刪除前寫 audit_log） */
 function deletePositionHistory() {
     global $db;
+    empRequireOps();
     $hid = (int)($_POST['hist_id'] ?? 0);
     if ($hid <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供紀錄 ID。']); return; }
     try {
@@ -1082,6 +1101,7 @@ function deletePositionHistory() {
 /** 補登在職狀態紀錄（離職/復職/留停/育嬰；remark 加 [補登:操作者] 前綴以便辨識與刪除） */
 function backfillStatusHistory() {
     global $db;
+    empRequireOps();
     $id = (int)($_POST['id'] ?? 0);
     $status = (string)($_POST['status'] ?? '');
     $start = trim((string)($_POST['start_date'] ?? ''));
@@ -1120,6 +1140,7 @@ function backfillStatusHistory() {
 /** 刪除補登的在職狀態列（remark 前綴 [補登 者限定；系統寫入的不可刪） */
 function deleteStatusHistory() {
     global $db;
+    empRequireOps();
     $hid = (int)($_POST['hist_id'] ?? 0);
     if ($hid <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供紀錄 ID。']); return; }
     try {

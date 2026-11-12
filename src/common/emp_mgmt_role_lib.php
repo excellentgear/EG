@@ -72,3 +72,11 @@ if (!function_exists('emp_mgmt_merge_perm')) {
         return implode('', $all);
     }
 }
+
+if (!function_exists('emp_mgmt_has_role')) {
+    /** 是否被指派 HR／唯讀（非管理級）角色。有 → 強制登出與異動紀錄寫入一律只看 A；沒有 → 維持原本（舊制）判定 */
+    function emp_mgmt_has_role(PDO $pdo, int $uid): bool {
+        $c = emp_mgmt_role_chars($pdo, $uid);
+        return $c !== '' && $c !== 'A';
+    }
+}
