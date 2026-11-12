@@ -535,6 +535,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 <div class="sq-mask" id="mkBomBind"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-link"></i>&nbsp;綁定舊出貨單到製令 <span id="bbBom"></span><span class="m-close" data-close="mkBomBind">✕</span></div>
   <div class="m-body">
+    <div id="bbOrderInfo" style="margin-bottom:8px;"></div>
     <div class="mt-note" style="margin-bottom:6px;">
       列出這張製令綁定的訂單（<span id="bbOrders"></span>）底下、<b>同客戶</b>的舊出貨明細：已綁這些訂單者，或尚未綁訂單但同料號者。
       勾選並填入「分給這張製令的數量」後按綁定；尚未綁訂單的出貨會一併補上訂單編號。綁定的單號一律是正式 IS 單號。
@@ -795,6 +796,11 @@ $(document).on('click','.btn-bb',function(){
   $.post(API+'?action=bom_bind_candidates',{bom:BB.bom},function(r){
     if(!r.ok || r.error){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
     BB.ships = r.ships||[];
+    var oh='<table class="sq-t" style="background:#FFF7E8;"><thead><tr><th>訂單號</th><th>客戶</th><th>料號</th><th>品名規格</th><th>訂購</th><th>已出</th><th>未出</th><th>單價</th><th>金額</th><th>下單日</th><th>交期</th></tr></thead><tbody>';
+    (r.order_info||[]).forEach(function(o){
+      oh+='<tr><td><b>'+esc(o.oo)+'</b></td><td>'+esc(o.client)+'</td><td>'+esc(o.part)+'</td><td style="white-space:normal;max-width:260px;">'+esc(o.spec)+'</td><td>'+nf(o.qty)+'</td><td>'+nf(o.used)+'</td><td>'+nf(Math.max(0,o.qty-o.used))+'</td><td>'+np(o.price)+'</td><td>'+nf(Math.round(o.price*o.qty))+'</td><td>'+esc(String(o.order_date).replace(/-/g,'.'))+'</td><td>'+esc(String(o.delivery).replace(/-/g,'.'))+'</td></tr>';
+    });
+    $('#bbOrderInfo').html('<div style="font-weight:bold;color:#5b3a1e;margin-bottom:3px;"><i class="fa fa-file-text-o"></i> 這張製令綁定的訂單</div>'+oh+'</tbody></table>');
     $('#bbOrders').text((r.orders||[]).join('、')+'；訂單單價 '+(r.order_prices||[]).map(function(v){return np(v);}).join('、'));
     if(!BB.ships.length){ $('#bbList').html('<div style="padding:16px;color:#8a6d45;">沒有可綁定的舊出貨明細（同客戶、已綁這些訂單或同料號尚未綁訂單者）。</div>'); bbCount(); return; }
     var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>規格</th><th>備註</th><th>訂單</th><th>出貨量</th><th>出貨單價</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';

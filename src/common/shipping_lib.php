@@ -1264,7 +1264,22 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     }
     // 建議選擇（可選且單價相符）排最前面，其餘維持日期新→舊
     usort($out, fn($a, $b) => ((int)($b['selectable'] && $b['price_match'])) <=> ((int)($a['selectable'] && $a['price_match'])));
-    return ['bom' => $bom, 'orders' => array_values($oo), 'order_prices' => array_values($op), 'ships' => $out];
+    // 製令綁定的訂單資訊（顯示在跳窗最上方供比對；品名規格與待出貨清單同一套 sq_desc_text）
+    $oi = [];
+    $oRows = $db->query("SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Specification, ot.Qty, ot.unit_price,
+                                COALESCE(ot.Processing_items,'') AS proc, COALESCE(ds.Spec_No,'') AS part_spec,
+                                DATE_FORMAT(ot.Order_date,'%Y-%m-%d') od, DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') dd,
+                                COALESCE((SELECT SUM(Qty) FROM is_list WHERE Order_id = ot.Order_id),0) used
+                         FROM order_track ot LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
+                         WHERE ot.Order_id IN ($in) ORDER BY ot.Order_date")->fetchAll(PDO::FETCH_ASSOC);
+    $gm = eg_gear_spec_map($db, array_column($oRows, 'd_id_ID'));
+    foreach ($oRows as $o) {
+        $gear = $o['d_id_ID'] !== null ? ($gm[(int)$o['d_id_ID']] ?? '') : '';
+        $oi[] = ['oo' => (string)$o['Order_oo'], 'client' => (string)$o['Client_name'], 'part' => (string)$o['d_id'],
+                 'spec' => sq_desc_text($o['part_spec'], $gear, $o['proc'], $o['Specification']),
+                 'qty' => (int)$o['Qty'], 'used' => (int)$o['used'], 'price' => (float)$o['unit_price'], 'order_date' => (string)$o['od'], 'delivery' => (string)$o['dd']];
+    }
+    return ['bom' => $bom, 'order_info' => $oi, 'orders' => array_values($oo), 'order_prices' => array_values($op), 'ships' => $out];
 }
 
 /** 把舊出貨明細綁到這張製令（is_bom_map）；尚未綁訂單者一併補上製令綁定的訂單（同客戶＋同料號才補）。 */
