@@ -797,11 +797,12 @@ $(document).on('click','.btn-bb',function(){
     BB.ships = r.ships||[];
     $('#bbOrders').text((r.orders||[]).join('、'));
     if(!BB.ships.length){ $('#bbList').html('<div style="padding:16px;color:#8a6d45;">沒有可綁定的舊出貨明細（同客戶、已綁這些訂單或同料號尚未綁訂單者）。</div>'); bbCount(); return; }
-    var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>訂單</th><th>出貨量</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
+    var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>規格</th><th>備註</th><th>訂單</th><th>出貨量</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
     BB.ships.forEach(function(s,i){
       var dis = !s.selectable, note = s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : '');
       h += '<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':'')+'"><td><input type="checkbox" class="bb-ck"'+(dis?' disabled':'')+'></td>'
         + '<td><b>'+esc(s.no)+'</b></td><td>'+esc(String(s.date).replace(/-/g,'.'))+'</td><td>'+esc(s.part)+'</td>'
+        + '<td style="max-width:240px;white-space:normal;">'+esc(s.spec||'')+'</td><td style="max-width:200px;white-space:normal;">'+esc(s.note||'')+'</td>'
         + '<td>'+(s.order_oo?esc(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
         + '<td><input type="number" class="bb-q" min="1" max="'+s.left+'" value="'+s.left+'" style="width:90px;"'+(dis?' disabled':'')+'></td></tr>';
     });
