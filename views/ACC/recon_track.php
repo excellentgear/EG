@@ -996,7 +996,7 @@ function renderListTbl(){
         var btns = targets.map(function(s){
             return '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + s + '\')">' + esc(statusLabel(s)) + '</button>';
         }).join('');
-        if (canSkip(r.side)) {
+        if (canSkip(r.side) && (r.skipped || r.status === '')) {   // 已點選過狀態的不顯示略過；已略過的保留「取消略過」
             btns += r.skipped
                 ? ' <button class="btn btn-default row-btn" onclick="doSkip(' + r.track_id + ',0)">取消略過</button>'
                 : ' <button class="btn btn-default row-btn" title="此月份不須對此' + (isAr?'客戶':'廠商') + '的帳" onclick="doSkip(' + r.track_id + ',1)">略過</button>';

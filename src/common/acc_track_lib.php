@@ -614,6 +614,7 @@ function act_set_skip(PDO $db, int $trackId, bool $skip, array $perms, string $r
     if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
     if (!act_can_set_status($db, $perms, $row['side'], 'skip')) return ['success' => false, 'message' => '沒有略過的權限'];
     $isSkipped = !empty($row['skipped_at']);
+    if ($skip && !$isSkipped && (string)$row['status'] !== '') return ['success' => false, 'message' => '已經點選過狀態的不能略過，請重新整理頁面'];
     if ($skip === $isSkipped) return ['success' => true, 'message' => $skip ? '已經是略過狀態' : '本來就沒有略過'];
     $now = date('Y-m-d H:i:s');
     $by = $perms['uid'] ?? null; $byName = $perms['uname'] ?? '';
