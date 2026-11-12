@@ -394,7 +394,36 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                     </ul>
                 </li>
 
-
+                <?php
+                // ── 分類鈴鐺（管理員在 views/admin/notice_bell_setting.php 設定；只影響顯示）──
+                // 沒有設定任何分類（或表不存在、查詢失敗）時完全不輸出，主鈴鐺行為不變。
+                // DOM 順序反過來輸出：這個 navbar 是向右浮動，後輸出的在左邊，所以設定順序「左→右」要倒著印。
+                $__nbCats = [];
+                try {
+                    @include_once __DIR__ . '/../../src/common/notice_bell_lib.php';
+                    if (function_exists('eg_nbell_active')) $__nbCats = eg_nbell_active((new DBConnection())->getPDO());
+                } catch (Throwable $e) { $__nbCats = []; }
+                foreach (array_reverse($__nbCats) as $__c) { ?>
+                <li role="presentation" class="dropdown nbcat-li">
+                    <a href="javascript:;" class="dropdown-toggle info-number notice-toggle" data-toggle="dropdown" aria-expanded="false" title="<?= htmlspecialchars($__c['name'], ENT_QUOTES) ?>">
+                        <i class="fa <?= htmlspecialchars($__c['icon'], ENT_QUOTES) ?>"></i>
+                        <span id="nbcat_badge_<?= (int)$__c['id'] ?>" class="notice-badge" style="display:none;">0</span>
+                    </a>
+                    <ul class="dropdown-menu notice-dropdown" role="menu">
+                        <li class="notice-head">
+                            <span class="notice-head-title"><i class="fa <?= htmlspecialchars($__c['icon'], ENT_QUOTES) ?>"></i> <?= htmlspecialchars($__c['name'], ENT_QUOTES) ?></span>
+                            <span id="nbcat_count_<?= (int)$__c['id'] ?>" class="notice-head-count" style="display:none;"></span>
+                        </li>
+                        <li class="notice-scroll">
+                            <ul class="notice-list" id="nbcat_list_<?= (int)$__c['id'] ?>"></ul>
+                            <ul class="notice-list"><li id="nbcat_empty_<?= (int)$__c['id'] ?>" class="notice-empty"><i class="fa fa-check-circle"></i> 這個分類目前沒有新通知</li></ul>
+                        </li>
+                        <li class="notice-foot">
+                            <a href="../liveEvent/my_todo.php" style="font-weight:700;"><i class="fa fa-inbox"></i> 我的待辦（可多選批次處理） <i class="fa fa-angle-right"></i></a>
+                        </li>
+                    </ul>
+                </li>
+                <?php } ?>
 
             </ul>
             <?php } ?>
@@ -428,6 +457,52 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         </div>
     </div>
 </div>
+
+<?php if (!empty($__nbCats)) { ?>
+<script>
+/* 分類鈴鐺：從主鈴鐺（#menu1）的未讀清單依條件「複製」出分類檢視，只影響顯示。
+   點擊沿用主鈴鐺的 .notice-open 處理；已讀／回覆後主鈴鐺移除該列，這裡由 MutationObserver 自動重建。
+   整段包 try/catch：任何錯誤都不影響主鈴鐺。 */
+window.addEventListener('load', function(){
+    try {
+        if (typeof $ === 'undefined') return;
+        var CATS = <?= json_encode($__nbCats, JSON_UNESCAPED_UNICODE) ?>;
+        function hit(c, rt, need){
+            if (c.kind === 'todo' && need <= 1) return false;
+            if (c.kind === 'info' && need > 1) return false;
+            if (!c.src || !c.src.length) return true;
+            for (var i = 0; i < c.src.length; i++) {
+                var p = c.src[i];
+                if (p === '(none)') { if (!rt) return true; }
+                else if (p.slice(-1) === '*') { if (rt.indexOf(p.slice(0, -1)) === 0) return true; }
+                else if (p === rt) return true;
+            }
+            return false;
+        }
+        function rebuild(){
+            var $items = $('#menu1 li[id^="notice_item_"]');
+            CATS.forEach(function(c){
+                var $list = $('#nbcat_list_' + c.id); if (!$list.length) return;
+                $list.empty();
+                var n = 0;
+                $items.each(function(){
+                    var $a = $(this).find('a.notice-open').first(); if (!$a.length) return;
+                    var rt = String($a.attr('data-reftype') || ''), need = parseInt($a.attr('data-needmode'), 10) || 1;
+                    if (!hit(c, rt, need)) return;
+                    n++;
+                    $('<li class="notice-row nbcat-row"></li>').append($a.clone()).appendTo($list);
+                });
+                if (n > 0) { $('#nbcat_badge_' + c.id).text(n).show(); $('#nbcat_count_' + c.id).text(n + ' 則未讀').show(); $('#nbcat_empty_' + c.id).hide(); }
+                else { $('#nbcat_badge_' + c.id).hide(); $('#nbcat_count_' + c.id).hide(); $('#nbcat_empty_' + c.id).show(); }
+            });
+        }
+        rebuild();
+        var list = document.querySelector('#menu1 .notice-list');
+        if (list && window.MutationObserver) new MutationObserver(rebuild).observe(list, { childList: true });
+    } catch (e) { if (window.console) console.error('nbcat', e); }
+});
+</script>
+<?php } ?>
 
 <!-- 共用帳號代成員確認：需輸入該員工本人密碼（ai-rules/13；避免已讀名單記成共用帳號而失真） -->
 <div class="modal fade" id="sharedPwModal" tabindex="-1" role="dialog" aria-hidden="true">
