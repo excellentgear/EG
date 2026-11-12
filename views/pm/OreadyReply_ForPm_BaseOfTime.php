@@ -18242,9 +18242,6 @@ echo "</script>\n";
                                         <div class="input-group">
                                             <select id="oready-role-select" class="form-control"></select>
                                             <span class="input-group-btn">
-                            <?php if (!empty($oready_can_ship_insight)): ?>
-                                <a href="../Sales/Shipping_Quick.php" target="_blank" rel="noopener" class="btn btn-xs btn-default" style="float:right;margin-left:8px;" title="另開新分頁前往快速出貨"><i class="fa fa-truck"></i> 快速出貨 <i class="fa fa-external-link"></i></a>
-                            <?php endif; ?>
                                                 <button type="button" class="btn btn-default" id="oready-role-refresh" title="重新整理角色清單"><i class="fa fa-refresh"></i></button>
                                             </span>
                                         </div>
