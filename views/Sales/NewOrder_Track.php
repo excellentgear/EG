@@ -167,6 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'drop_zone'          => $row['drop_zone'] ?? '',
                 'Containers'         => $row['Containers'] ?? '',
                 'Order_ps'           => $row['Order_ps'] ?? '',
+                'bom_filter_tag'     => $row['bom_filter_tag'] ?? '',
                 'ate'                => $row['ate'] ?? '',
                 'orderindate'        => $row['orderindate'] ?? '',
                 'orderDdate'         => $row['orderDdate'] ?? '',
@@ -1357,7 +1358,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (!empty($global)) {
                 // 與主列表同一套：LIKE 掃全部可見欄位、多關鍵字皆須命中（此查詢未 join customer_list）
-                $gFields = ['ot.d_id','ot.Client_name','ot.Processing_items','ot.Order_ps','ot.ateNote',
+                $gFields = ['ot.d_id','ot.Client_name','ot.Processing_items','ot.Order_ps','ot.bom_filter_tag','ot.ateNote',
                             'u.user_cname','ot.Order_oo','ot.C_order','ot.Containers','ot.Sample',
                             'ot.JIG','ot.Order_date'];
                 $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
@@ -1950,7 +1951,20 @@ require_once __DIR__ . '/../../src/common/order_client_reminder_lib.php';
 // 會自動種好，稽核製程則由管理員在「設定」跳窗自己加；**「存檔必選」預設關閉**，
 // 所以在管理員真的去開啟之前，畫面只是多出一排可點的標籤，不影響任何人的既有操作。
 require_once __DIR__ . '/../../src/common/order_as_tag_lib.php';
+require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';   // ot_is_admin()（本頁其他地方是在各自區塊內才載入，這裡的管理員按鈕要在頁面主體用到）
+require_once __DIR__ . '/../../src/common/order_client_mismatch_lib.php';   // 客戶與料號主檔客戶不一致：篩選＋診斷（僅管理員）
 ot_astag_ensure_schema($db);
+require_once __DIR__ . '/../../src/common/order_mill_pin_lib.php';   // 製程快捷鈕「銑3孔+打PIN」＋對手件訂單（唯一實作）
+omp_ensure_schema($db);
+$OMP_CFG = omp_cfg($db);
+$OMP_CFG['clients'] = [];
+try {
+    foreach ($OMP_CFG['client_ids'] as $__oc) {
+        $__ost = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id = ?");
+        $__ost->execute([$__oc]);
+        if ($__or = $__ost->fetch(PDO::FETCH_ASSOC)) $OMP_CFG['clients'][] = ['id' => (string)$__or['customer_id'], 'name' => (string)$__or['customer']];
+    }
+} catch (Throwable $e) {}
 $AS_TAG_REQUIRE = ot_astag_require_save($db);
 // 清單那一欄的標籤名稱對照（含停用的定義，否則停用之後舊訂單會顯示空白）
 $AS_TAG_LABELS  = ot_astag_label_map($db);
@@ -2513,6 +2527,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                 $odaIds = [];
                 foreach ($items as $x0) if (!empty($x0['src_rule_id'])) $odaIds[] = (int)$x0['id'];
                 $odaMeta = $odaIds ? oda_item_meta($pdo, $odaIds) : [];
+                // 料號提示（製程中紀錄勾「提示」，2026-11-06）：啟用／停用狀態與停用者、時間、備註
+                $hintIds = [];
+                foreach ($items as $x0) if (!empty($x0['is_hint'])) $hintIds[] = (int)$x0['id'];
+                $hintMeta = $hintIds ? ocr_hint_info($pdo, $hintIds) : [];
                 // 已連動個人工作紀錄（製程中紀錄轉出的）：只回「幾筆／我有沒有」，不洩漏別人的個人工作內容
                 $lkMap = [];
                 try {
@@ -2545,12 +2563,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                         $x['can_void'] = $proc_delete && ($x['is_mine'] || $IS_OT_RBAC_ADMIN);
                     }
                     $x['can_edit'] = ($x['is_mine'] && $proc_edit) ? 1 : 0;
+                    $x['is_hint'] = (int)($x['is_hint'] ?? 0);
+                    $x['hint'] = $hintMeta[(int)$x['id']] ?? null;
+                    $x['can_hint_toggle'] = ($x['is_hint'] && $kind === 'process' && $proc_edit && ($x['is_mine'] || $can_design_qa_void || $IS_OT_RBAC_ADMIN)) ? 1 : 0;
                     $x['can_resolve_item'] = ($kind === 'process' && ptl_resolve_denied($pdo, $logId, (int)$x['id'], (int)$id) !== null) ? 0 : 1;
                 }
                 unset($x);
             }
         }
-        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By, pmGet, ate FROM order_track WHERE Order_id=?");
+        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, d_id_ID, Client_name, Created_By, pmGet, ate FROM order_track WHERE Order_id=?");
         $ordSt->execute([$oid]);
         $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
         $bizDefault = el_order_business_default($pdo, $ord);
@@ -2576,6 +2597,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
             'can_ask' => ($kind === 'process') ? (bool)$proc_ask : true, 'can_ps' => ($kind === 'process') ? (bool)$proc_ps : true,
             'can_resolve' => ($kind === 'process') ? (bool)($can_design_qa_resolve && $proc_reply) : $can_design_qa_resolve, 'can_oda_confirm' => (bool)($can_oda_confirm && ($OT_IS_ADMIN_ANY || ot_own_design_order($ord['ate'] ?? 0))),
             'can_add' => ($kind === 'process') ? (bool)$proc_edit :  (bool)($can_design_qa && ot_own_design_order($ord['ate'] ?? 0)), 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
+            'part_hints' => ($kind === 'process') ? array_map(function ($h) use ($id, $proc_edit, $can_design_qa_void, $IS_OT_RBAC_ADMIN) {
+                $h['can_toggle'] = ($proc_edit && ((int)$h['created_by'] === (int)$id || $can_design_qa_void || $IS_OT_RBAC_ADMIN)) ? 1 : 0;
+                return $h;
+            }, ocr_hint_for_order($pdo, $oid)) : [],
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
     } catch (Exception $e) {
@@ -2597,7 +2622,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         // （2026-10-06 新增，見 ate_q_list 同一段註解，兩種案件各自獨立不互相影響）。
         $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
         $logType = ($kind === 'process') ? 'order_process' : 'order_note';
-        $chkOrd = $pdo->prepare("SELECT ate FROM order_track WHERE Order_id=?");
+        $chkOrd = $pdo->prepare("SELECT ate, d_id, d_id_ID, Client_name_ID FROM order_track WHERE Order_id=?");
         $chkOrd->execute([$oid]);
         $chkRow = $chkOrd->fetch(PDO::FETCH_ASSOC);
         if (!$chkRow) throw new Exception('查無此訂單');
@@ -2612,6 +2637,25 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         }
         $rows = json_decode((string)($_POST['items'] ?? '[]'), true);
         if (!is_array($rows) || !$rows) throw new Exception('請至少填寫一條內容');
+        // 料號提示（2026-11-06）：製程中紀錄勾「提示」的列，建立後之後的新訂單綁定這個料號時會跳窗
+        // 要求業務確認（唯一實作 order_client_reminder_lib.php 的 ocr_hint_*）。建表／補欄位是 DDL，
+        // 一定要在 beginTransaction 之前做（DDL 會隱式 commit）。
+        $hintPart = 0; $hintBy = '';
+        if ($kind === 'process') {
+            $anyHint = false;
+            foreach ($rows as $r0) { if (is_array($r0) && !empty($r0['is_hint'])) { $anyHint = true; break; } }
+            if ($anyHint) {
+                el_ensure_schema($pdo); ocr_ensure_schema($pdo);
+                $hintPart = (int)($chkRow['d_id_ID'] ?? 0);
+                if ($hintPart <= 0 && trim((string)($chkRow['d_id'] ?? '')) !== '') {
+                    $hp = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id=? LIMIT 1");
+                    $hp->execute([trim((string)$chkRow['d_id']), trim((string)($chkRow['Client_name_ID'] ?? ''))]);
+                    $hintPart = (int)$hp->fetchColumn();
+                }
+                if ($hintPart <= 0) throw new Exception('這張訂單尚未綁定料號主檔，無法設為「提示」（提示是依料號比對新訂單的）');
+                $hintBy = (string)$pdo->query("SELECT user_cname FROM `user` WHERE id=" . (int)$id)->fetchColumn();
+            }
+        }
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         $todayL = substr($nowL, 0, 10);
         $pdo->beginTransaction();
@@ -2623,8 +2667,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
             if (!is_array($r)) continue;
             // created_by 一律用登入者，不採信前端送的值（作廢權限要靠它判「這是不是我寫的」）
             $r['created_by'] = (int)$id;
+            $isHintRow = ($kind === 'process' && !empty($r['is_hint']));
+            if ($isHintRow) { $r['is_note'] = 1; $r['target_type'] = ''; $r['target_id'] = ''; $r['target_label'] = ''; $r['target_contact'] = ''; }   // 提示＝已處理的備註，免對象、免回覆
             $newItemId = el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
             $created++;
+            if ($isHintRow) {
+                $pdo->prepare("UPDATE eng_log_item SET is_hint=1 WHERE id=?")->execute([(int)$newItemId]);
+                ocr_hint_create($pdo, (int)$newItemId, $hintPart, (string)($r['question'] ?? ''), (int)$id, $hintBy);
+                $r['reply_content'] = '';   // 提示不建立回覆
+            }
             ate_q_file_bind($pdo, $logId, 'item', (int)$newItemId, $r['file_ids'] ?? [], (int)$id);   // 附件轉正（2026-10-16）
             // 製程中紀錄「新增紀錄」可以順便一併填回覆（使用者拍板：單一／分開兩種建立方式
             // 都要能用，避免先收到狀況、還沒有結果時無法紀錄）——有填「回覆內容」才真的建立
@@ -2741,6 +2792,31 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
         echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow, 'order_id' => (int)$oidR, 'flags' => ate_q_flags($pdo, (int)$oidR)]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 料號提示的停用／重新啟用（2026-11-06）：記錄停用的人、時間與備註（選填）；唯一實作 ocr_hint_set_active()。
+// 權限：製程中紀錄編輯權＋（本人建立／可作廢他人紀錄／全站管理員），與列表上按鈕的顯示條件同一規則。
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_hint_toggle') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        $logId  = (int)($_POST['log_id'] ?? 0);
+        $itemId = (int)($_POST['id'] ?? 0);
+        if ($m = ot_qa_deny($pdo, $logId, '', 'edit')) throw new Exception($m);
+        $st = $pdo->prepare("SELECT created_by, is_hint FROM eng_log_item WHERE id=? AND log_id=?");
+        $st->execute([$itemId, $logId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row || !(int)$row['is_hint']) throw new Exception('查無這則提示，請重新整理');
+        if (el_log_type_of($pdo, $logId) !== 'order_process') throw new Exception('只有製程中紀錄的提示可以停用');
+        $isMine = !empty($row['created_by']) && (int)$row['created_by'] === (int)$id;
+        if (!$isMine && !$can_design_qa_void && !$IS_OT_RBAC_ADMIN) throw new Exception('只能停用自己建立的提示（他人的請洽管理員）');
+        $byName = (string)$pdo->query("SELECT user_cname FROM `user` WHERE id=" . (int)$id)->fetchColumn();
+        ocr_hint_set_active($pdo, $itemId, !empty($_POST['active']), (string)($_POST['note'] ?? ''), (int)$id, $byName);
+        echo json_encode(['success' => true]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -3034,7 +3110,7 @@ if (isset($_POST['action']) && strncmp((string)$_POST['action'], 'oda_', 4) === 
         if (!$can_oda_manage) throw new InvalidArgumentException('沒有設定設計提醒的權限');
         if ($actOda === 'oda_rule_list') {
             echo json_encode(['success' => true, 'rows' => oda_rule_rows($pdo), 'can_delete' => $OT_IS_ADMIN_ANY,
-                              'kinds' => oda_kinds()]);
+                              'kinds' => oda_kinds(), 'tags' => dt_list($pdo, false)]);
         } elseif ($actOda === 'oda_part_search') {
             $q = trim((string)($_POST['q'] ?? ''));
             $cid = trim((string)($_POST['customer_id'] ?? ''));
@@ -3296,6 +3372,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $params[':as_tag_id']    = (int)$_asM[1];
         $params[':as_tag_scope'] = $_asM[2];
     }
+    // BOM篩選標示篩選（2026-10-28）：'' ＝不篩；有值＝完全相同的標示（標示是下拉選出來的，不做模糊比對）
+    $bom_tag_filter = trim((string)($_POST['bom_tag'] ?? ''));
+    if ($bom_tag_filter !== '') {
+        $whereClauses[] = "ot.bom_filter_tag = :bom_tag_filter";
+        $params[':bom_tag_filter'] = $bom_tag_filter;
+    }
+    // 客戶與料號主檔客戶不一致篩選（2026-10-28，僅管理員；後端同規則把關，非管理員送這個參數一律忽略）
+    $client_mismatch_on = (string)($_POST['client_mismatch'] ?? '') === '1' && ot_is_admin($pdo, (int)($_SESSION['id'] ?? 0));
+    if ($client_mismatch_on) {
+        $whereClauses[] = ot_client_mismatch_sql('ot');
+    }
     // 半高卡片第一優先篩選（優先於 status 篩選）
     if ($order_status_filter === 'unfinished') {
         $whereClauses[] = "(ot.Order_status IS NULL)";
@@ -3321,12 +3408,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         // 全表搜尋一律用 LIKE 掃全部可見欄位。
         // 【禁止改回 ngram FULLTEXT】MATCH ... AGAINST('+"RC105-N03-A"') 對含「-」的料號回傳 0 筆
         // （ngram 把 - 當分隔字元，片語比對不成立），LIKE 才找得到；本表僅約 8500 列，LIKE 全掃夠快。
-        $gFields = ['ot.d_id','ot.Client_name','cl.customer','ot.Processing_items','ot.Order_ps',
+        $gFields = ['ot.d_id','ot.Client_name','cl.customer','ot.Processing_items','ot.Order_ps','ot.bom_filter_tag',
                     'ot.ateNote','u.user_cname','ot.Order_oo','ot.C_order','ot.Containers',
                     'ot.Sample','ot.JIG','ot.Order_date'];
         // 多個關鍵字＝每個字都要命中（可命中不同欄位）
         $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
         foreach ($gTokens as $ti => $tk) {
+            // 「無附件」（2026-11-09）：與列表上的「無附件」標示同一判定＝訂單自己沒有 active 的訂單附件
+            // （不看料號附件；一次綁多張訂單者每張都有自己的列）。可寫「無附件」或「x無附件」，其他關鍵字照常。
+            if (preg_match('/^[xX×✕]?無附件$/u', $tk)) {
+                $whereClauses[] = "NOT EXISTS (SELECT 1 FROM order_attachments oa_g WHERE oa_g.order_id = ot.Order_id AND oa_g.status='active')";
+                continue;
+            }
             $ors = [];
             foreach ($gFields as $fi => $f) {
                 $ph = ":g{$ti}_{$fi}";
@@ -3592,6 +3685,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     // 既有的圖面／報價／附件判斷，查詢失敗時維持空陣列＝不顯示徽章，不影響任何既有功能。
     $own_draw_map    = [];
     $own_draw_ready  = false;
+    $order_att_set   = [];      // Order_id(int) => true＝訂單建立時有上傳訂單附件（2026-11-09）
+    $no_ordatt_ready = false;   // 查詢成功才敢說「沒有附件」
     $stock_map     = [];   // d_id string => ['qty_single'=>N,'qty_combo'=>N,'locs'=>'…']
     $gear_map        = [];   // d_id_ID int  => gear_spec_str
     $drawing_no_map  = [];   // d_id_ID int  => Drawing_No string
@@ -3667,6 +3762,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 foreach ($qR->fetchAll(PDO::FETCH_ASSOC) as $rR) { $ocr_pending_map[(int)$rR['order_id']] = (int)$rR['cnt']; }
             }
         } catch (Exception $eR) { $ocr_pending_map = []; }
+    }
+
+    // 料號提示（綁料號 ID）：Order_id => 適用的提示數，決定製程中紀錄圖示是否帶提示
+    $hint_order_cnt = [];
+    if (!empty($order_list)) { try { $hint_order_cnt = ocr_hint_order_counts($pdo, array_column($order_list, 'Order_id')); } catch (Throwable $eH2) {} }
+    // 料號提示待確認（2026-11-06）：Order_id => 提示內容[]（整頁一次查完；失敗當作沒有）
+    $hint_open_map = [];
+    if (!empty($order_list)) {
+        try { $hint_open_map = ocr_hint_open_map($pdo, array_column($order_list, 'Order_id')); } catch (Throwable $eH) { $hint_open_map = []; }
     }
 
     if (!empty($order_list)) {
@@ -3809,6 +3913,46 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             ];
                         }
                         if ($__ncInput) $new_case_override_map = ul_orders_new_case_map($pdo, $__ncInput);
+                        // 2026-11-10 補強：bom.d_id 是料號「文字」，同名料號在不同客戶底下會共用同一批 BOM
+                        // （例 RC-120：泳建有 BOM、瑞陽沒有任何資料，瑞陽的訂單卻被判成非新案件）。
+                        // 只把「判定為非新案件」的訂單再檢查一次：該料號文字的每一筆 BOM 都能判出客戶、
+                        // 沒有任何一筆能判定屬於這張訂單的客戶 → 對這個客戶而言沒有製令紀錄＝新案件。
+                        // 只會把 false 改成 true（單一客戶料號、或有綁定該客戶的 BOM 者完全不受影響）。
+                        $__ncCheck = [];
+                        foreach ($new_case_override_map as $__oid => $__isNew) {
+                            if ($__isNew) continue;
+                            $__ncCheck[(int)$__oid] = $__ncInput[(int)$__oid]['d_id'];
+                        }
+                        if ($__ncCheck) {
+                            require_once __DIR__ . '/../../src/common/bom_client_lib.php';
+                            $__allBoms = [];
+                            foreach (array_unique(array_values($__ncCheck)) as $__p) {
+                                foreach (($bom_by_did[$__p] ?? []) as $__b) $__allBoms[] = $__b;
+                            }
+                            $__bomCust = eg_bom_client_resolve($pdo, $__allBoms);
+                            $__ordIds = array_keys($__ncCheck);
+                            $__ph = implode(',', array_fill(0, count($__ordIds), '?'));
+                            $__st = $pdo->prepare("SELECT ot.Order_id, cl.customer FROM order_track ot
+                                LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
+                                LEFT JOIN customer_list cl ON cl.customer_id = COALESCE(ds.Customer_Id, ot.Client_name_ID)
+                                WHERE ot.Order_id IN ($__ph)");
+                            $__st->execute($__ordIds);
+                            $__ordCust = [];
+                            foreach ($__st->fetchAll(PDO::FETCH_ASSOC) as $__r) $__ordCust[(int)$__r['Order_id']] = (string)$__r['customer'];
+                            foreach ($__ncCheck as $__oid => $__p) {
+                                $oc = $__ordCust[$__oid] ?? '';
+                                if ($oc === '') continue;
+                                $boms = $bom_by_did[$__p] ?? [];
+                                if (!$boms) continue;
+                                // 判不出客戶的舊 BOM（料號文字掛多家客戶、也沒綁訂單）無法證明屬於這個客戶，
+                                // 與圖面查閱「此客戶（無資料）」口徑一致：不算這個客戶的製令紀錄。
+                                $anyMine = false;
+                                foreach ($boms as $__b) {
+                                    if (($__bomCust[$__b] ?? null) === $oc) { $anyMine = true; break; }
+                                }
+                                if (!$anyMine) $new_case_override_map[$__oid] = true;
+                            }
+                        }
                     } catch (Throwable $__ncE) { $new_case_override_map = []; }
                 }
 
@@ -3889,6 +4033,23 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $own_draw_ready = true;   // 查詢成功才敢說「沒有」；失敗或沒設定自家圖標籤時一律不顯示徽章
                 }
             } catch (Throwable $__eO) { $own_draw_map = []; $own_draw_ready = false; }
+        }
+
+        // 訂單無附件偵測（2026-11-09）：只看「訂單建立時上傳的訂單附件」（order_attachments，以訂單 Order_id 判定），
+        // 與料號有沒有附件完全無關。同一訂單編號一次上傳、綁定多張訂單者，每張被綁的訂單都有自己的一列（apply_parts／
+        // 共用同步都是一單一列），所以逐張 Order_id 查就涵蓋「一次綁多筆」。整頁一次查完；查詢失敗（表未建）時
+        // $no_ordatt_ready=false＝一律不顯示徽章，避免誤判，不影響任何既有功能。
+        $order_att_set = [];
+        $no_ordatt_ready = false;
+        $__ooIds = array_values(array_unique(array_filter(array_map('intval', array_column($order_list, 'Order_id')))));
+        if (!empty($__ooIds)) {
+            try {
+                $__phOo = implode(',', array_fill(0, count($__ooIds), '?'));
+                $__stOo = $pdo->prepare("SELECT DISTINCT order_id FROM order_attachments WHERE status='active' AND order_id IN ($__phOo)");
+                $__stOo->execute($__ooIds);
+                foreach ($__stOo->fetchAll(PDO::FETCH_COLUMN) as $__oid) { $order_att_set[(int)$__oid] = true; }
+                $no_ordatt_ready = true;
+            } catch (Throwable $__eOo) { $order_att_set = []; $no_ordatt_ready = false; }
         }
 
         // 是否有「報價資料 / 其他附件」：bom_viewer.php 是三分頁（圖面／報價資料／其他附件），
@@ -4070,6 +4231,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         }
     }
 
+    // 異常單報廢後業務回填的「補做／不補」標籤（原訂單與補做出來的新訂單都標，2026-11-05；失敗不影響清單）
+    $qabRmkMap = [];
+    try {
+        require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+        $qabRmkMap = qab_remake_tags_for_orders($pdo, array_column($order_list, 'Order_id'));
+    } catch (Throwable $e) { $qabRmkMap = []; }
+
+    // 「銑3孔+打PIN」對手件訂單：業務備註下方純顯示（不寫入備註；失敗不影響清單）
+    $ompPairMap = [];
+    try { $ompPairMap = omp_pairs_for_orders($pdo, array_column($order_list, 'Order_id')); } catch (Throwable $e) { $ompPairMap = []; }
 
     // 「其他資訊」欄：這張訂單已綁定的出貨單（一次查完一整頁；唯一實作 bom_bound_ship_lib.php；失敗不影響清單）
     $ordShipMap = [];
@@ -4077,6 +4248,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         require_once __DIR__ . '/../../src/common/bom_bound_ship_lib.php';
         $ordShipMap = eg_order_bound_ships($pdo, array_column($order_list, 'Order_id'));
     } catch (Throwable $e) { $ordShipMap = []; }
+    $ordScrapMap = [];
+    try { $ordScrapMap = eg_order_scrap_returns($pdo, array_column($order_list, 'Order_id')); } catch (Throwable $e) { $ordScrapMap = []; }
     // 有出貨分析檢視權限者，出貨單號可點開出貨分析（權限判定與該頁相同：shipping 模組 sq_perms）
     $otCanShipInsight = false;
     if ($ordShipMap) {
@@ -4197,6 +4370,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     if ($_has_ordatt) $_file_kinds[] = '訂單附件';
                     if ($_has_att)    $_file_kinds[] = '其他附件';
                     $_file_tip   = $_has_files ? ('點擊查閱：' . implode('／', $_file_kinds)) : '';
+                    // 訂單建立時沒上傳附件（2026-11-09）：不分是否已轉生管，一律標示；料號本身有沒有附件不影響判定
+                    $_no_ordatt  = $no_ordatt_ready && empty($order_att_set[(int)$order['Order_id']]);
+                    $_noatt_css  = $_no_ordatt ? 'background:#FFE9A8;color:#7A4B00;border-radius:3px;padding:0 3px;font-weight:700;' : '';
                     $_dn_total   = ($_part_dn ? $_part_dn['count'] : 0) + ($_cust_dn ? $_cust_dn['count'] : 0);
                     $_dn_img     = ($_part_dn && $_part_dn['has_img']) || ($_cust_dn && $_cust_dn['has_img']);
                     // 庫存摘要
@@ -4215,9 +4391,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <div style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;min-width:0;">
                         <i class="fa fa-copy copy-icon" title="複製" onclick="copyToClipboard('<?= safe_html($order['d_id']) ?>', this)" style="flex-shrink:0;"></i>
                         <?php if ($_has_files): ?>
-                        <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>', <?= (int)($order['d_id_ID'] ?? 0) ?>)"><?= safe_html($order['d_id']) ?></span>
+                        <span class="part-link" style="cursor:pointer;<?= $_noatt_css ?>" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>', <?= (int)($order['d_id_ID'] ?? 0) ?>)"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
-                        <span class="part-nolink" style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
+                        <span class="part-nolink" style="color:#555;cursor:default;<?= $_noatt_css ?>" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($order['assembly_parent_order_id'])):
                             $_asm_src = $asmSrcMap[(int)$order['assembly_parent_order_id']] ?? null;
@@ -4260,7 +4436,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         // 完全不動上面既有的「設計備註」按鈕與欄位（嚴禁影響現有使用者）。
                         $_procRow  = $ate_proc_map[(int)$order['Order_id']] ?? null;
                         $_procOpen = $_procRow ? (int)$_procRow['open_count'] : 0;
-                        if (($_procRow && ($proc_view || !$PROC_NEW)) || (!empty($order['pmGet_formatted']) && $proc_edit)):
+                        $_hintCnt = (int)($hint_order_cnt[(int)$order['Order_id']] ?? 0);   // 提示綁料號 ID：同料號的訂單圖示都帶提示
+                        if (($_procRow && ($proc_view || !$PROC_NEW)) || $proc_edit || ($_hintCnt > 0 && $proc_view)):   // 2026-11-06：建立訂單就能記製程中紀錄，不必等轉生管
                             if ($_procRow):
                                 // 對象名稱一律問 ot_dn_target_meta()（唯一實作），不寫死對照表
                                 $_procTMap = ot_dn_target_meta();
@@ -4279,6 +4456,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 $_procTitle = '新增製程中紀錄（轉生管後的處理紀錄，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
                                 $_procCss = 'background:#f7f7f7;border:1px dashed #ccc;color:#999;';
                             endif;
+                            if ($_hintCnt > 0) {
+                                $_procTitle .= '｜此料號有 ' . $_hintCnt . ' 則提示（綁定料號ID）';
+                                if (!$_procRow || $_procOpen == 0) $_procCss = 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;';
+                            }
                         ?>
                         <button type="button" class="btn btn-xs" data-proc-q-order="<?= (int)$order['Order_id'] ?>"
                             style="padding:0 4px;font-size:10px;line-height:16px;<?= $_procCss ?>flex-shrink:0;"
@@ -4288,6 +4469,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 if ($_procRow) {
                                     echo $_procOpen > 0 ? $_procOpen : '<i class="fa fa-check" style="font-size:8px;margin-left:1px;"></i>';
                                 }
+                                if ($_hintCnt > 0) echo '<i class="fa fa-bell" style="font-size:9px;margin-left:2px;color:#DD5138;"></i>' . $_hintCnt;
                             ?>
                         </button>
                         <?php endif; ?>
@@ -4320,6 +4502,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <span style="background:#FFF3E2;color:#C77C1A;border:1px solid #F0A24B;border-radius:3px;padding:0 4px;font-size:9px;line-height:14px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
                               title="這個料號還沒有加工圖面（附件裡找不到掛「自家圖」標籤的檔案）。管理員可在料號主檔→類別字典設定→附件類別標籤設定，決定哪些標籤算加工圖面"><i class="fa fa-times" style="font-size:8px;margin-right:2px;"></i>加工圖</span>
                         <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($_no_ordatt): ?>
+                        <span style="background:#FFE9A8;color:#7A4B00;border:1px solid #E0A526;border-radius:3px;padding:0 4px;font-size:9px;line-height:14px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
+                              title="這張訂單建立時沒有上傳附件（只看訂單附件，不看料號附件；同訂單編號一次綁定多筆訂單的附件也算有附件）"><i class="fa fa-times" style="font-size:8px;margin-right:2px;"></i>無附件</span>
                         <?php endif; ?>
                         <?php if ($_stk_t > 0): ?>
                         <button type="button" class="btn btn-xs"
@@ -4408,8 +4594,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php
                     $_gear_spec = $gear_map[(int)($order['d_id_ID'] ?? 0)] ?? '';
                     if (!empty($_gear_spec)): ?>
-                    <div style="overflow:hidden;max-width:100%;margin-top:-8px;line-height:1.25;" title="<?= safe_html($_gear_spec) ?>">
-                        <span style="display:block;white-space:pre-line;font-size:11px;color:#888;font-family:Consolas,monospace;letter-spacing:.5px;"><?= safe_html($_gear_spec) ?></span>
+                    <div style="overflow:hidden;max-width:100%;margin-top:-1px;line-height:1.05;" title="<?= safe_html($_gear_spec) ?>">
+                        <span style="display:block;white-space:pre-line;font-size:11px;line-height:1.05;color:#888;font-family:Consolas,monospace;letter-spacing:.5px;"><?= safe_html($_gear_spec) ?></span>
+                        <?php if (!empty($show_gear_tool) && (int)($order['d_id_ID'] ?? 0) > 0): ?><a href="javascript:void(0)" onclick="event.stopPropagation();if(window.openGearTool)openGearTool({dId:<?= (int)$order['d_id_ID'] ?>});" style="font-size:10px;color:#2980b9;letter-spacing:0;" title="開啟齒輪計算，並帶入此料號主檔設定的齒輪規格（多組時可選擇）"><i class="fa fa-calculator"></i> 帶入齒輪計算</a><?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+                    <?php
+                    // BOM篩選標示（2026-10-28）：有填才顯示，緊貼在料號／齒輪規格下方（沒填的訂單完全不變）
+                    $_bomFilterTag = trim((string)($order['bom_filter_tag'] ?? ''));
+                    if ($_bomFilterTag !== ''): ?>
+                    <div data-bom-tag-chip="1" style="line-height:1.2;padding-left:21px;margin-top:<?= !empty($_gear_spec) ? '1' : '0' ?>px;" title="BOM篩選標示：<?= safe_html($_bomFilterTag) ?>（BOM總覽用來篩選）">
+                        <span style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:top;background:#FBEBD0;border:1px solid #F0A24B;border-radius:2px;padding:0 4px;font-size:10px;line-height:14px;color:#8A5A1E;"># <?= safe_html($_bomFilterTag) ?></span>
                     </div>
                     <?php endif; ?>
                 </td>
@@ -4440,10 +4635,55 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 ?>
                 <td class="col-qty" style="color:#27ae60;"><?= $can_view_amount ? $upDisplay : '' ?></td>
                 <td>
+                    <?php [$_psLocked, $_psRest] = ocr_ps_split((string)($order['Order_ps'] ?? '')); ?>
+                    <?php foreach (($hint_open_map[(int)$order['Order_id']] ?? []) as $_hi): ?>
+                        <?php if ($_hi['need']): ?><div class="ps-hint-open" title="製程中紀錄對這個料號設的提示，需先確認"><i class="fa fa-bell"></i> 料號提示待確認：<?= safe_html($_hi['content']) ?> <button type="button" class="btn btn-xs btn-warning" style="padding:0 5px;font-size:11px;" onclick="ocrOpenHintForOrder(<?= (int)$order['Order_id'] ?>, <?= (int)$order['d_id_ID'] ?>)">確認</button></div>
+                        <?php else: ?><div class="ps-hint-info" title="製程中紀錄對這個料號設的提示"><i class="fa fa-bell-o"></i> 料號提示：<?= safe_html($_hi['content']) ?></div><?php endif; ?>
+                    <?php endforeach; ?>
+                    <?php foreach ($_psLocked as $_pl): ?><div class="ps-locked" title="已確認的料號提示，不可刪除"><i class="fa fa-check-circle"></i> <?= safe_html($_pl) ?></div><?php endforeach; ?>
                     <div class="textarea-wrap">
-                        <textarea class="table-textarea" name="Order_ps" <?= $can_update ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($order['Order_ps']) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($order['Order_ps']) ?></textarea>
+                        <textarea class="table-textarea" name="Order_ps" <?= $can_update ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($_psRest) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($_psRest) ?></textarea>
                         <span class="note-more-hint" title="內容超過5行，點擊欄位可展開查看全文"><i class="fa fa-ellipsis-h"></i> 還有更多</span>
                     </div>
+                    <?php if (!empty($ompPairMap[(int)$order['Order_id']])): $__omp = $ompPairMap[(int)$order['Order_id']]; ?>
+                    <div style="margin-top:3px;font-size:11px;line-height:1.5;color:#8C5A2B;" title="此為系統顯示，不是備註內容">
+                        <i class="fa fa-link"></i> <?= $__omp['role'] === 'main' ? '對手件' : '主件' ?>：<?= safe_html($__omp['other_part']) ?>（<?= safe_html($__omp['other_oo']) ?>）
+                    </div>
+                    <?php endif; ?>
+                    <?php
+                    /* 異常單報廢後業務回填：原訂單上只留精簡的一兩行；補做出來的新訂單內容已寫在業務備註，不重複顯示。
+                       行數超過 5 行先收合，點一下展開（比照設計備註的「還有更多」）。 */
+                    $__rk = array_values(array_filter(($qabRmkMap[(int)$order['Order_id']] ?? []), function ($t) { return empty($t['is_new']); }));
+                    if ($__rk):
+                        $__rkLines = 0; foreach ($__rk as $__t) $__rkLines += 1 + (trim((string)$__t['note']) !== '' ? 1 : 0);
+                    ?>
+                    <?php if ($__rkLines > 5 && empty($GLOBALS['__qab_rmk_css'])): $GLOBALS['__qab_rmk_css'] = 1; ?><style>.qab-rmk-fold{max-height:7.5em;overflow:hidden;cursor:pointer}.qab-rmk-fold.qab-open{max-height:none}.qab-rmk-fold.qab-open .qab-rmk-more{display:none}</style><?php endif; ?>
+                    <div class="qab-rmk-wrap<?= $__rkLines > 5 ? ' qab-rmk-fold' : '' ?>" style="margin-top:3px;font-size:11px;line-height:1.5;"<?= $__rkLines > 5 ? ' onclick="this.classList.toggle(&quot;qab-open&quot;)" title="點擊展開／收合"' : '' ?>>
+                    <?php foreach ($__rk as $__qt):
+                        $__nm = (string)$__qt['name'];
+                        if (mb_strpos($__nm, '報廢補做') === 0) $__res = '補 ' . trim(mb_substr($__nm, 4));
+                        elseif (mb_strpos($__nm, '報廢不補') === 0) $__res = '不補' . mb_substr($__nm, 4);
+                        else $__res = '';
+                        $__tail = trim(($__res !== '' ? $__qt['who'] . ' ' : '') . ($__res !== '' ? $__qt['md'] : ''));
+                    ?>
+                    <div><a href="../QA/qa_abnormal_form.php?id=<?= (int)$__qt['id'] ?>" target="_blank" rel="noopener" title="開啟異常單"><?= safe_html($__qt['process']) ?></a> <?= $__res !== '' ? '→ ' . safe_html($__res) . ' ' . safe_html($__tail) : '<span style="color:#DD5138;">待業務回覆</span>' ?></div>
+                    <?php if (trim((string)$__qt['note']) !== ''): ?><div style="color:#8C5A2B;">備註：<?= safe_html($__qt['note']) ?></div><?php endif; ?>
+                    <?php endforeach; ?>
+                    <?php if ($__rkLines > 5): ?><div class="qab-rmk-more" style="color:#999;"><i class="fa fa-ellipsis-h"></i> 還有更多</div><?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+                    <?php
+                    // 客戶與料號不一致：篩選啟用時（僅管理員）把「我判斷的原因＋建議處理」列在業務備註下方，
+                    // 純顯示、不是備註內容，不會被存進訂單（沒開篩選時完全不輸出）。
+                    if (!empty($client_mismatch_on)):
+                        $_cmDiag = ot_client_mismatch_diagnose($pdo, $order);
+                        if ($_cmDiag): ?>
+                    <div style="margin-top:4px;padding:4px 6px;border:1px solid #DD5138;border-left-width:4px;border-radius:3px;background:#FDF0EC;font-size:11px;line-height:1.35;color:#7A2A1A;white-space:normal;word-break:break-word;" title="<?= safe_html($_cmDiag['why']) ?>">
+                        <b>⚠ <?= safe_html($_cmDiag['type']) ?>｜<?= safe_html($_cmDiag['title']) ?></b><br>
+                        <span style="color:#555;line-height:1.35;">原因：<?= safe_html($_cmDiag['why']) ?></span><br>
+                        <b>建議：</b><?= safe_html($_cmDiag['advice']) ?>
+                    </div>
+                    <?php endif; endif; ?>
                     <?php
                     // 客戶提醒「待處理」的完成按鈕（2026-09-23）：只有這張訂單真的有待處理中的
                     // 提醒才會出現，比照設計備註「已處理」按鈕同一種做法——沒有提醒的訂單完全
@@ -4652,9 +4892,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                     $_u = '../Sales/Shipping_Insight.php?' . http_build_query(['ship_no' => $_s['no'], 'ship_isid' => $_s['is_id'], 'ship_pno' => $_s['pno'], 'ship_from' => $_d, 'ship_to' => $_d]);
                                     $_label = '<a href="' . safe_html($_u) . '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;" title="點擊另開出貨分析，只列此出貨單的此筆料號">' . $_label . '</a>';
                                 }
-                                echo '<div title="已綁定出貨單" style="white-space:nowrap;">' . $_osIcon . $_label . ' <span>' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . '</span></div>';
+                                echo '<div title="已綁定出貨單" style="white-space:nowrap;">' . $_osIcon . $_label . ' <span style="line-height:1.3;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . '</span></div>';
                             }
                             if (count($_os['ships']) > 5) echo '<div>…另 ' . (count($_os['ships']) - 5) . ' 張，共出 ' . (int)$_os['qty'] . '</div>';
+                        }
+                        // 報廢品歸還客戶（不掛訂單、不計入出貨合計，只依製令連回）
+                        foreach (($ordScrapMap[(int)$order['Order_id']] ?? []) as $_s) {
+                            $_d = $_s['date'];
+                            $_label = safe_html($_s['no']);
+                            if ($otCanShipInsight) {
+                                $_u = '../Sales/Shipping_Insight.php?' . http_build_query(['ship_no' => $_s['no'], 'ship_isid' => $_s['is_id'], 'ship_pno' => $_s['pno'], 'ship_from' => $_d, 'ship_to' => $_d]);
+                                $_label = '<a href="' . safe_html($_u) . '" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;">' . $_label . '</a>';
+                            }
+                            echo '<div style="white-space:nowrap;" title="報廢品歸還客戶（製令 ' . safe_html($_s['bom']) . '），不計入訂單出貨量"><i class="fa fa-undo" style="color:#B8860B;margin-right:2px;"></i>' . $_label . ' <span style="line-height:1.3;">' . safe_html(str_replace('-', '.', substr($_d, 5))) . ' ×' . (int)$_s['qty'] . ' 報廢歸還</span></div>';
                         }
                         ?>
                         <div class="oc-chgbadge-slot" data-oid="<?= intval($order['Order_id']) ?>"></div>
@@ -5060,6 +5310,9 @@ foreach($dCounts as $c) {
         .ate-q-alert-badge { background:#C98A1B; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
         .ate-q-alert-ok { background:#8a9a7a; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
         .ate-q-alert-wait { background:#DD5138; color:#fff; border-radius:3px; font-size:10px; line-height:1.5; padding:0 5px; display:inline-block; margin-right:4px; }
+        .ps-hint-open { color:#a8321f; background:#FDE6E0; border:1px solid #DD5138; border-radius:3px; padding:2px 5px; font-size:12px; line-height:1.4; margin-bottom:3px; max-width:260px; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
+        .ps-hint-info { color:#8a5a2b; background:#FFF3E2; border:1px solid #F0A24B; border-radius:3px; padding:2px 5px; font-size:12px; line-height:1.4; margin-bottom:3px; max-width:260px; white-space:normal; word-break:break-word; overflow-wrap:anywhere; }
+        .ps-locked { color:#1e7e34; font-size:12px; line-height:1.4; margin-bottom:2px; white-space:normal; word-break:break-word; overflow-wrap:anywhere; max-width:260px; } .ps-locked .fa { color:#27ae60; }
         .ate-q-oda-banner { background:#FFF3E2; border:1px solid #F0A24B; border-left:5px solid #DD5138; border-radius:4px; padding:8px 12px; margin-bottom:10px; color:#8a4b12; font-size:13px; }
         .ate-q-oda-banner ol { margin:6px 0 0; padding-left:22px; font-size:12px; color:#6b5638; }
         .ate-q-oda-banner.gate { background:#FDE6E0; border-color:#DD5138; color:#a8321f; animation:odaShake .4s 2; }
@@ -5073,7 +5326,7 @@ foreach($dCounts as $c) {
         .oda-form { border:1px solid #EADFCD; background:#fff; border-radius:8px; padding:14px 16px; margin-bottom:14px; box-shadow:0 1px 3px rgba(107,86,56,.08); }
         .oda-form-title { font-weight:700; color:#8a5a2b; font-size:14px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #F1E8D9; }
         .oda-sec-label { font-size:12px; color:#8a7355; font-weight:600; margin-bottom:6px; }
-        .oda-kinds { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+        .oda-kinds { display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin-bottom:12px; }
         .oda-kindbtn { text-align:left; background:#FAF6EF; border:1px solid #D8CBB8; border-radius:6px; padding:8px 10px; color:#6b5638; cursor:pointer; transition:all .15s; }
         .oda-kindbtn b { display:block; font-size:13px; margin-bottom:2px; }
         .oda-kindbtn small { display:block; font-size:11px; color:#8a7355; line-height:1.4; }
@@ -5348,11 +5601,13 @@ foreach($dCounts as $c) {
         /* Part Link */
         .part-link {
             cursor: pointer;
-            text-decoration: none;
-            border-bottom: 1px dashed #007bff;
+            /* 虛線底線改用文字底線：原本 border-bottom 會貼在行高 28px 的盒子最底下，離文字太遠、還會貼到下方標示；
+               文字底線緊貼字體下方，版面高度與下方內容位置完全不變（2026-10-28 使用者要求） */
+            text-decoration: underline dashed #007bff;
+            text-underline-offset: 2px;
             transition: all 0.2s;
         }
-        .part-link:hover { border-bottom-style: solid; color: #0056b3; }
+        .part-link:hover { text-decoration-style: solid; color: #0056b3; }
         .copy-icon {
             color: #adb5bd;
             cursor: pointer;
@@ -5506,7 +5761,7 @@ foreach($dCounts as $c) {
                             ?>
                             <h3>訂單追蹤 <small>(權限：<?= safe_html($_perm_label) ?>)</small></h3>
                         </div>
-                        <button id="btnPageHelp" class="page-help-btn" style="float:right;margin:14px 0 0 8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
+                        <button id="btnPageHelp" class="page-help-btn" style="float:right;margin:10px 0 0 8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
                     </div>
                     <div class="clearfix"></div>
 
@@ -5795,7 +6050,32 @@ foreach($dCounts as $c) {
                                          原本在 .filter-bar 內用 margin-left:auto 推到最右側，跟一整排按鈕搶同一行的空間；
                                          搬到這裡之後是獨立一行、只跟表格本身對齊，篩選列不再需要為它預留寬度。
                                          id 與被填入的 HTML（res.pagination）完全不變，JS 端（含 MutationObserver）不必改。 */ ?>
-                                <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
+                                <?php
+                                // BOM篩選標示篩選（2026-10-28）：放在表格上方這一列的左側（原本這裡是空的），
+                                // 不佔用上面已經很擠的篩選按鈕列。完全沒有任何訂單填過標示時整個不輸出，沒用到的人畫面不變。
+                                $_bomTagOpts = [];
+                                try {
+                                    $_bomTagOpts = $db->query("SELECT bom_filter_tag, COUNT(*) c FROM order_track WHERE bom_filter_tag IS NOT NULL AND bom_filter_tag <> '' AND (Order_status IS NULL OR Order_status <> '9') GROUP BY bom_filter_tag ORDER BY bom_filter_tag LIMIT 300")->fetchAll(PDO::FETCH_ASSOC);
+                                } catch (Throwable $e) { $_bomTagOpts = []; }
+                                ?>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                    <div>
+                                    <?php if ($_bomTagOpts): ?>
+                                        <select id="filter-bom-tag" class="form-control input-sm" style="width:auto;max-width:240px;display:inline-block;" title="依訂單上填的「BOM篩選標示」篩選（BOM總覽也用同一個標示）">
+                                            <option value="">--全部BOM篩選標示--</option>
+                                            <?php foreach ($_bomTagOpts as $_bt): ?>
+                                            <option value="<?= safe_html($_bt['bom_filter_tag']) ?>"><?= safe_html($_bt['bom_filter_tag']) ?>（<?= (int)$_bt['c'] ?>）</option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    <?php endif; ?>
+                                    <?php if (ot_is_admin($db, (int)($_SESSION['id'] ?? 0))): ?>
+                                        <?php /* 客戶與料號主檔客戶不一致篩選（2026-10-28，僅管理員）：按下只列出這批訂單，
+                                                 並在每張的「業務備註」下方列出原因與建議處理；不改任何資料。後端同規則把關。 */ ?>
+                                        <button type="button" id="filter-client-mismatch" class="btn btn-danger btn-xs" style="margin:0 0 0 6px;" title="找出『訂單客戶』與『料號主檔客戶』不一致的訂單（僅管理員可見），並列出原因與建議處理">
+                                            <i class="fa fa-exclamation-triangle"></i> 客戶與料號不一致 (<?= (int)ot_client_mismatch_count($db) ?>)
+                                        </button>
+                                    <?php endif; ?>
+                                    </div>
                                     <div id="pagination-container" style="display:flex; align-items:center; white-space:nowrap;"></div>
                                 </div>
                                 <!-- 2026-07-31 使用者要求：頁面完整顯示、禁用左右拉桿——overflow-x 改 hidden，
@@ -5996,9 +6276,25 @@ foreach($dCounts as $c) {
                                     </div>
 
                                     <!-- Row 4: 製程(1/2) | 數量(1/4) | 單價(1/4) -->
-                                    <div class="col-xs-6 form-group" style="padding:0 5px;">
-                                        <label class="ctrl-label">製程 <span class="text-danger">*</span></label>
+                                    <div class="col-xs-6 form-group" style="padding:0 5px;position:relative;">
+                                        <label class="ctrl-label">製程 <span class="text-danger">*</span>
+                                            <?php /* 銑3孔+打PIN（2026-10-28）：只有管理員綁定過的客戶才會出現；齒輪＝管理員設定 */ ?>
+                                            <button type="button" id="btn-mill-pin" class="btn btn-xs" style="display:none;margin-left:4px;padding:0 6px;font-size:11px;background:#F0A24B;color:#4A2A0A;border:1px solid #D98A2B;" title="把「銑3孔+打PIN」帶入製程，並同時建立對手件訂單">銑3孔+打PIN</button>
+                                            <?php if (!empty($OT_IS_ADMIN_ANY) || ot_is_admin($db, (int)($_SESSION['id'] ?? 0))): ?>
+                                            <button type="button" id="btn-mill-pin-cfg" class="btn btn-xs btn-default" style="margin-left:3px;padding:0 3px;" title="設定哪些客戶會出現「銑3孔+打PIN」按鈕、對手件預設單價"><i class="fa fa-cog"></i></button>
+                                            <?php endif; ?>
+                                        </label>
                                         <input type="text" class="form-control input-sm" name="Process" id="process_input" placeholder="製程">
+                                        <div id="mill-pin-box" style="display:none;margin-top:4px;padding:5px 7px;background:#FDF1DF;border:1px solid #F0A24B;border-radius:3px;font-size:11px;color:#4A2A0A;">
+                                            <input type="hidden" name="mill_pin_on" id="mill_pin_on" value="0">
+                                            <input type="hidden" name="mill_pin_mate_d_id" id="mill_pin_mate_pk" value="">
+                                            <div id="mill-pin-info" style="display:none;"></div>
+                                            <label style="margin:0 0 2px;font-weight:600;">對手件料號 <span class="text-danger">*</span>
+                                                <a href="javascript:void(0)" id="mill-pin-cancel" style="margin-left:6px;font-weight:normal;color:#DD5138;">取消此設定</a></label>
+                                            <input type="text" class="form-control input-sm" id="mill_pin_mate_input" placeholder="同客戶的對手件料號（輸入後從清單選取）" autocomplete="off">
+                                            <div id="mill-pin-suggest" class="autocomplete-suggestions"></div>
+                                            <div style="margin-top:2px;line-height:1.4;">存檔時會同時建立對手件訂單：內容與本單相同，製程只有「銑3孔+打PIN」，單價為管理員設定值。</div>
+                                        </div>
                                     </div>
                                     <div class="col-xs-3 form-group" style="padding:0 5px;">
                                         <label class="ctrl-label">數量 <span class="text-danger">*</span></label>
@@ -6062,6 +6358,16 @@ foreach($dCounts as $c) {
                                     <div class="col-xs-12 form-group" style="padding:0 5px;">
                                         <label class="ctrl-label">業務備註</label>
                                         <textarea class="form-control input-sm" name="Order_ps" rows="2" placeholder="業務備註"></textarea>
+                                    </div>
+
+                                    <!-- Row 8: BOM篩選標示（非必填；BOM 綁定此訂單後，BOM總覽自動帶入並用來篩選） -->
+                                    <div class="col-xs-12 form-group" style="padding:0 5px;">
+                                        <label class="ctrl-label">BOM篩選標示 <span style="color:#999;font-weight:normal;font-size:11px;">（非必填，BOM總覽用來篩選）</span></label>
+                                        <div style="display:flex;gap:6px;align-items:center;">
+                                            <input type="text" class="form-control input-sm" name="bom_filter_tag" maxlength="50" placeholder="BOM篩選標示" autocomplete="off" style="flex:1;">
+                                            <?php /* 只在編輯既有訂單時出現：單獨存標示，不必走整張訂單存檔（見 save_bom_filter_tag 說明） */ ?>
+                                            <button type="button" id="btn-save-bom-tag" class="btn btn-info btn-xs" style="display:none;margin:0;white-space:nowrap;" title="只儲存這個標示，不影響訂單其他欄位">儲存標示</button>
+                                        </div>
                                     </div>
                                 </div>
                             </form>
@@ -6281,6 +6587,26 @@ foreach($dCounts as $c) {
     </div>
 
     <!-- 拆批管理 Modal -->
+    <?php /* 銑3孔+打PIN 設定（管理員）：自製遮罩不用 bootstrap modal，避免疊在訂單視窗上關閉後底層捲動被鎖 */ ?>
+    <div id="omp-cfg-mask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
+        <div style="background:#fff;width:520px;max-width:96vw;border-radius:4px;padding:16px 18px;box-shadow:0 6px 24px rgba(0,0,0,.3);">
+            <h4 style="margin:0 0 10px;">「銑3孔+打PIN」按鈕設定</h4>
+            <div style="font-size:12px;color:#666;margin-bottom:8px;">只有下列客戶在新增／編輯訂單時，製程欄旁才會出現「銑3孔+打PIN」按鈕。</div>
+            <div style="position:relative;">
+                <input type="text" id="omp-cfg-search" class="form-control input-sm" placeholder="輸入客戶代碼或名稱，從清單選取後加入" autocomplete="off">
+                <div id="omp-cfg-suggest" class="autocomplete-suggestions"></div>
+            </div>
+            <div id="omp-cfg-chips" style="margin:8px 0;min-height:24px;"></div>
+            <div style="margin-top:6px;"><label style="font-weight:600;font-size:12px;">對手件訂單預設單價（元）</label>
+                <input type="text" id="omp-cfg-price" class="form-control input-sm" style="width:140px;" autocomplete="off"></div>
+            <div id="omp-cfg-msg" style="min-height:18px;font-size:12px;margin-top:6px;"></div>
+            <div style="text-align:right;margin-top:6px;">
+                <button type="button" class="btn btn-default btn-sm" id="omp-cfg-cancel">取消</button>
+                <button type="button" class="btn btn-primary btn-sm" id="omp-cfg-save">儲存</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal fade" id="splitModal" tabindex="-1" role="dialog">
         <div class="modal-dialog" style="width:650px;max-width:95%;" role="document">
             <div class="modal-content">
@@ -6578,7 +6904,7 @@ foreach($dCounts as $c) {
         <div class="modal-dialog" role="document" style="max-width:560px;">
             <div class="modal-content">
                 <div class="modal-header" style="background:#DD5138;color:#fff;border-radius:8px 8px 0 0;">
-                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-exclamation-circle"></i> 客戶提醒 － <span id="ocr-popup-cname">-</span></h4>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-exclamation-circle"></i> <span id="ocr-popup-title">客戶提醒</span> － <span id="ocr-popup-cname">-</span></h4>
                     <div style="font-size:11px;opacity:.9;margin-top:2px;">請逐筆按「確認」或「設為待處理」</div>
                 </div>
                 <div class="modal-body" style="padding:14px;max-height:65vh;overflow-y:auto;">
@@ -7066,6 +7392,186 @@ foreach($dCounts as $c) {
         window.canUpdate = <?= json_encode($can_update) ?>;
         window.canDelete = <?= json_encode($can_delete) ?>;
         window.OT_IS_ADMIN = <?= json_encode((bool)$OT_IS_ADMIN_ANY) ?>;
+        window.OMP_CFG = <?= json_encode($OMP_CFG, JSON_UNESCAPED_UNICODE) ?>;   // 銑3孔+打PIN 設定
+        // ═════════════════════════════════════════════════════════════════
+        // 製程快捷鈕「銑3孔+打PIN」＋對手件訂單（2026-10-28；後端唯一實作 src/common/order_mill_pin_lib.php）
+        // 只有管理員綁定過的客戶才會出現這顆鈕；沒有綁定任何客戶＝畫面完全沒有變化。
+        // ═════════════════════════════════════════════════════════════════
+        var OMP_LABEL = '銑3孔+打PIN';
+        var ompHadFocus = false, ompLastPk = null, ompLastOid = null, ompPair = null;
+        function ompEsc(s) { return $('<div>').text(s == null ? '' : s).html(); }
+        function ompHasLabel() { return ($('#process_input').val() || '').indexOf(OMP_LABEL) !== -1; }
+        function ompResetBox() {
+            $('#mill_pin_on').val('0'); $('#mill_pin_mate_pk').val('');
+            $('#mill_pin_mate_input').val('').show(); $('#mill-pin-suggest').hide().empty();
+            $('#mill-pin-cancel').show(); $('#mill-pin-info').hide().empty();
+            $('#mill-pin-box').hide();
+        }
+        function millPinReset() { ompPair = null; ompLastOid = null; ompResetBox(); }
+        function ompShowPair(p) {
+            ompPair = p;
+            if (!p) { ompResetBox(); return; }
+            var txt = (p.role === 'main')
+                ? '已與訂單 ' + ompEsc(p.mate_oo) + '（對手件 ' + ompEsc(p.mate_part) + '）結合：製程只有「' + OMP_LABEL + '」。'
+                : '本訂單是「' + OMP_LABEL + '」對手件，與訂單 ' + ompEsc(p.main_oo) + '（' + ompEsc(p.main_part) + '）結合。';
+            $('#mill_pin_on').val('0');
+            $('#mill_pin_mate_input').hide(); $('#mill-pin-suggest').hide(); $('#mill-pin-cancel').hide();
+            $('#mill-pin-info').html('<i class="fa fa-link"></i> ' + txt).show();
+            $('#mill-pin-box').show();
+        }
+        function ompRefresh() {
+            var pk = String($('#selected_customer_pk').val() || '');
+            var inCfg = pk !== '' && (window.OMP_CFG.client_ids || []).indexOf(pk) !== -1;
+            var oid = String($('#hidden_Order_id').val() || '');
+            if (oid !== ompLastOid) {
+                ompLastOid = oid;
+                ompPair = null; ompResetBox();
+                if (oid) {
+                    $.post('../../src/store/_NewOrder_Track.php', { action: 'millpin_info', order_id: oid }, function(r) {
+                        if (String($('#hidden_Order_id').val() || '') === oid && r && r.success && r.pair) ompShowPair(r.pair);
+                    }, 'json');
+                }
+            }
+            $('#btn-mill-pin').toggle(inCfg && !(ompPair && ompPair.role === 'mate'));
+            // 客戶換成沒開放的：收起尚未存檔的對手件設定，免得送出被後端擋下
+            if (!inCfg && !ompPair && $('#mill_pin_on').val() === '1') ompResetBox();
+        }
+        function millPinClick() {
+            if (ompPair) { showToast('這張訂單已與對手件訂單結合，不會重複建立。'); return; }
+            var $in = $('#process_input'), el = $in[0], v = $in.val() || '';
+            if (v.indexOf(OMP_LABEL) === -1) {
+                if (ompHadFocus && typeof el.selectionStart === 'number') {
+                    var a = el.selectionStart, b = el.selectionEnd;
+                    $in.val(v.slice(0, a) + OMP_LABEL + v.slice(b));
+                    var pos = a + OMP_LABEL.length; el.setSelectionRange(pos, pos);
+                } else {
+                    $in.val(v + OMP_LABEL);
+                }
+            }
+            $('#mill_pin_on').val('1'); $('#mill-pin-box').show(); $('#mill_pin_mate_input').focus();
+        }
+        function millPinCancel() {
+            var $in = $('#process_input');
+            $in.val(($in.val() || '').split(OMP_LABEL).join('').replace(/\s{2,}/g, ' ').trim());
+            ompResetBox();
+        }
+        // 存檔前檢查：按過鈕卻把文字刪了＝不需要對手件；文字還在就一定要有對手件料號
+        function millPinValidate() {
+            if ($('#mill_pin_on').val() !== '1') return true;
+            if (!ompHasLabel()) { ompResetBox(); return true; }
+            if (!$('#mill_pin_mate_pk').val()) {
+                showOrderAlert('使用「' + OMP_LABEL + '」必須輸入對手件料號（請從建議清單選取）。');
+                $('#mill-pin-box').show(); $('#mill_pin_mate_input').focus();
+                return false;
+            }
+            return true;
+        }
+        function millPinAfterSave(data) {
+            var mateId = data && data.mate_order_id;
+            millPinReset();
+            if (mateId) setTimeout(function() { showToast('已同時建立對手件訂單（製程：' + OMP_LABEL + '）。'); }, 700);
+            else if (data && data.message && data.message.indexOf('對手件訂單建立失敗') !== -1) setTimeout(function() { alert(data.message); }, 300);
+        }
+        // ── 管理員設定：哪些客戶會出現這顆鈕、對手件預設單價 ──
+        var ompCfgClients = [];
+        function ompCfgRender() {
+            var h = '';
+            ompCfgClients.forEach(function(c, i) {
+                h += '<span style="display:inline-block;background:#FDF1DF;border:1px solid #F0A24B;border-radius:10px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px;color:#4A2A0A;">'
+                   + ompEsc(c.name) + ' <small>(' + ompEsc(c.id) + ')</small> <a href="javascript:void(0)" data-i="' + i + '" class="omp-cfg-del" style="color:#DD5138;margin-left:2px;">&times;</a></span>';
+            });
+            $('#omp-cfg-chips').html(h || '<span style="color:#999;font-size:12px;">尚未綁定任何客戶（綁定前，新增訂單畫面不會出現此按鈕）</span>');
+        }
+        function millPinOpenCfg() {
+            ompCfgClients = ((window.OMP_CFG.clients) || []).map(function(c) { return { id: c.id, name: c.name }; });
+            $('#omp-cfg-price').val(window.OMP_CFG.price);
+            $('#omp-cfg-search').val(''); $('#omp-cfg-suggest').hide().empty(); $('#omp-cfg-msg').text('');
+            // 訂單視窗是 bootstrap modal，會把焦點強制拉回視窗內部（enforceFocus）→ 放在視窗外的設定框輸入框點不進去；
+            // 所以開啟時把設定框搬進訂單視窗內（fixed 定位，畫面位置不變）
+            $('#omp-cfg-mask').appendTo('#newOrderModal');
+            ompCfgRender(); $('#omp-cfg-mask').css('display', 'flex');
+            setTimeout(function() { $('#omp-cfg-search').focus(); }, 50);
+        }
+        function millPinSaveCfg() {
+            var price = $.trim($('#omp-cfg-price').val());
+            if (price === '' || isNaN(price) || parseFloat(price) < 0) { $('#omp-cfg-msg').css('color', '#DD5138').text('單價必須是 0 以上的數字。'); return; }
+            $.post('../../src/store/_NewOrder_Track.php', {
+                action: 'millpin_cfg_save', price: price,
+                client_ids: JSON.stringify(ompCfgClients.map(function(c) { return c.id; }))
+            }, function(r) {
+                if (!r || !r.success) { $('#omp-cfg-msg').css('color', '#DD5138').text((r && r.message) || '儲存失敗'); return; }
+                window.OMP_CFG.client_ids = r.cfg.client_ids; window.OMP_CFG.price = r.cfg.price;
+                window.OMP_CFG.clients = ompCfgClients.slice();
+                $('#omp-cfg-mask').hide(); showToast('「' + OMP_LABEL + '」設定已儲存。'); ompRefresh();
+            }, 'json').fail(function() { $('#omp-cfg-msg').css('color', '#DD5138').text('儲存失敗（連線或權限問題）'); });
+        }
+        $(function() {
+            window.OMP_CFG = window.OMP_CFG || { client_ids: [], clients: [], price: 120 };
+            $('#process_input').on('focus click keyup', function() { ompHadFocus = true; })
+                .on('input', function() { if ($('#mill_pin_on').val() === '1' && !ompHasLabel()) ompResetBox(); });
+            $('#newOrderModal').on('show.bs.modal', function() { ompHadFocus = false; })
+                .on('hidden.bs.modal', function() { millPinReset(); });
+            $('#btn-mill-pin').on('click', millPinClick);
+            $('#mill-pin-cancel').on('click', millPinCancel);
+            $('#btn-mill-pin-cfg').on('click', millPinOpenCfg);
+            $('#omp-cfg-cancel').on('click', function() { $('#omp-cfg-mask').hide(); });
+            $('#omp-cfg-save').on('click', millPinSaveCfg);
+            $('#omp-cfg-chips').on('click', '.omp-cfg-del', function() { ompCfgClients.splice(parseInt($(this).data('i')), 1); ompCfgRender(); });
+            // 對手件料號：同客戶＋模糊搜尋（沿用本頁 search_data，客戶條件一定帶本訂單客戶）
+            var ompTimer = null;
+            $('#mill_pin_mate_input').on('input', function() {
+                $('#mill_pin_mate_pk').val('');
+                var term = $.trim($(this).val()), $s = $('#mill-pin-suggest');
+                clearTimeout(ompTimer);
+                if (term === '') { $s.hide().empty(); return; }
+                ompTimer = setTimeout(function() {
+                    $.post('', { action: 'search_data', type: 'part', term: term, customer_id: $('#selected_customer_pk').val() || '' }, function(res) {
+                        if (term !== $.trim($('#mill_pin_mate_input').val())) return;
+                        var self = String($('#selected_part_pk').val() || ''), h = '';
+                        ((res && res.data) || []).forEach(function(it) {
+                            if (String(it.d_id) === self) return;
+                            h += '<div class="suggestion-item" data-pk="' + ompEsc(it.d_id) + '" data-no="' + ompEsc(it.D_Setting_Id) + '">'
+                               + ompEsc(it.D_Setting_Id) + ' (' + ompEsc(it.Spec_No || '無規格') + ') - ' + ompEsc(it.Client_Name || '無客戶') + '</div>';
+                        });
+                        if (h) $s.html(h).show(); else $s.html('<div style="padding:6px 10px;color:#999;font-size:12px;">此客戶底下查無符合的料號</div>').show();
+                    }, 'json');
+                }, 200);
+            });
+            $('#mill-pin-suggest').on('click', '.suggestion-item', function() {
+                $('#mill_pin_mate_input').val($(this).data('no')); $('#mill_pin_mate_pk').val($(this).data('pk'));
+                $(this).parent().hide().empty();
+            });
+            $('#mill_pin_mate_input').on('blur', function() {
+                setTimeout(function() {
+                    if (!$('#mill_pin_mate_pk').val() && $('#mill_pin_mate_input').val() !== '') {
+                        $('#mill_pin_mate_input').val(''); $('#mill-pin-suggest').hide().empty();
+                        showToast('請從建議列表中選擇對手件料號。');
+                    }
+                }, 250);
+            });
+            // 設定視窗的客戶搜尋
+            var ompCfgTimer = null;
+            $('#omp-cfg-search').on('input', function() {
+                var term = $.trim($(this).val()), $s = $('#omp-cfg-suggest');
+                clearTimeout(ompCfgTimer);
+                if (term === '') { $s.hide().empty(); return; }
+                ompCfgTimer = setTimeout(function() {
+                    $.post('', { action: 'search_data', type: 'customer', term: term }, function(res) {
+                        var h = '';
+                        ((res && res.data) || []).forEach(function(it) {
+                            h += '<div class="suggestion-item" data-id="' + ompEsc(it.customer_id) + '" data-name="' + ompEsc(it.customer) + '">' + ompEsc(it.customer_id) + ' - ' + ompEsc(it.customer) + '</div>';
+                        });
+                        if (h) $s.html(h).show(); else $s.hide().empty();
+                    }, 'json');
+                }, 200);
+            });
+            $('#omp-cfg-suggest').on('click', '.suggestion-item', function() {
+                var id = String($(this).data('id'));
+                if (!ompCfgClients.some(function(c) { return c.id === id; })) ompCfgClients.push({ id: id, name: String($(this).data('name')) });
+                $('#omp-cfg-search').val(''); $(this).parent().hide().empty(); ompCfgRender();
+            });
+            setInterval(ompRefresh, 500);   // 客戶／訂單編號是程式直接塞值（不觸發事件），用輕量輪詢跟上
+        });
         window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
         window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
         window.OT_CAN_CHANGE_SETTING = <?= json_encode((bool)$can_order_change_setting) ?>; // 訂單變更設定（ot_order_change_setting）
@@ -7090,6 +7596,7 @@ foreach($dCounts as $c) {
         // 核心狀態變數
         // =====================================================================
         var currentPage = 1;
+        var clientMismatchOn = false;   // 客戶與料號不一致篩選（僅管理員）
         var currentFilters = { status: 'all', unbound: false, unbound_op: false, qty_over: false, pending_reminder: false };
         var isStatCardFilter = false;
         var lockedStats = null;
@@ -7139,7 +7646,9 @@ foreach($dCounts as $c) {
                 unbound_op:        currentFilters.unbound_op ? 1 : 0,
                 qty_over:          currentFilters.qty_over   ? 1 : 0,
                 pending_reminder:  currentFilters.pending_reminder ? 1 : 0,
-                as_tag:            ($('#filter-as-tag').val() || '')   // 稽核製程標籤篩選（2026-10-02）
+                as_tag:            ($('#filter-as-tag').val() || ''),   // 稽核製程標籤篩選（2026-10-02）
+                bom_tag:           ($('#filter-bom-tag').val() || ''),   // BOM篩選標示篩選（2026-10-28）
+                client_mismatch:   clientMismatchOn ? 1 : 0   // 客戶與料號不一致（僅管理員，後端另驗）
             }, function(res) {
                 if (!res.success) {
                     $('#orderTable tbody').html('<tr><td colspan="20" class="text-center text-danger">載入失敗: ' + (res.message || '未知錯誤') + '</td></tr>');
@@ -7162,7 +7671,9 @@ foreach($dCounts as $c) {
                             unbound_op: currentFilters.unbound_op ? 1 : 0,
                             qty_over:   currentFilters.qty_over   ? 1 : 0,
                             pending_reminder: currentFilters.pending_reminder ? 1 : 0,
-                            as_tag:   ($('#filter-as-tag').val() || '')   // 標籤篩選也要帶，否則卡片數字跳不出來的筆數對不起來
+                            as_tag:   ($('#filter-as-tag').val() || ''),   // 標籤篩選也要帶，否則卡片數字跳不出來的筆數對不起來
+                            bom_tag:  ($('#filter-bom-tag').val() || ''),
+                            client_mismatch: clientMismatchOn ? 1 : 0
                         }, function(r2) {
                             if (r2.success) {
                                 lockedStats = r2.stats;
@@ -7297,6 +7808,63 @@ foreach($dCounts as $c) {
                 lockedStats = null;
                 fetchTableData(1);
             });
+            // 只就地更新清單上那一列的標示小標籤（樣式與伺服器輸出的 chip 相同），不重新載入表格
+            function otUpdateBomTagChip(oid, tag) {
+                var $td = $('#orderTable tbody tr[data-orderid="' + oid + '"] td.col-part').first();
+                if (!$td.length) return;
+                var $chip = $td.children('[data-bom-tag-chip]');
+                if (!tag) { $chip.remove(); return; }
+                if (!$chip.length) {
+                    var hasSpec = $td.find('span[style*="pre-line"]').length > 0;
+                    $chip = $('<div data-bom-tag-chip="1" style="line-height:1.2;padding-left:21px;margin-top:' + (hasSpec ? '1' : '0') + 'px;"><span style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:top;background:#FBEBD0;border:1px solid #F0A24B;border-radius:2px;padding:0 4px;font-size:10px;line-height:14px;color:#8A5A1E;"></span></div>');
+                    $td.append($chip);
+                }
+                $chip.attr('title', 'BOM篩選標示：' + tag + '（BOM總覽用來篩選）').children('span').text('# ' + tag);
+            }
+            // 編輯訂單時單獨儲存 BOM篩選標示（不走整張訂單存檔，不受客戶／料號一致性檢查影響）
+            $('#btn-save-bom-tag').on('click', function() {
+                var oid = $('#hidden_Order_id').val();
+                if (!oid) return;
+                var $b = $(this).prop('disabled', true);
+                $.post('../../src/store/_NewOrder_Track.php', {
+                    action: 'save_bom_filter_tag', Order_id: oid,
+                    bom_filter_tag: $('#newOrderForm input[name="bom_filter_tag"]').val()
+                }, function(res) {
+                    if (res && res.success) {
+                        $('#newOrderForm input[name="bom_filter_tag"]').val(res.tag || '');
+                        showToast('BOM篩選標示已儲存');
+                        otUpdateBomTagChip(oid, res.tag || '');   // 只更新這一列的標示，不重載整個表格（避免畫面閃動）
+                    } else {
+                        alert((res && res.message) || '儲存失敗');
+                    }
+                }, 'json').fail(function(xhr) {
+                    var m = '儲存失敗';
+                    try { m = JSON.parse(xhr.responseText).message || m; } catch (e) {}
+                    alert(m);
+                }).always(function() { $b.prop('disabled', false); });
+            });
+            // 客戶與料號不一致篩選（僅管理員；按鈕不存在時綁定不會有作用）
+            $('#filter-client-mismatch').on('click', function() {
+                clientMismatchOn = !clientMismatchOn;
+                $(this).toggleClass('active', clientMismatchOn).css('box-shadow', clientMismatchOn ? '0 0 0 3px #F0A24B' : '');
+                if (clientMismatchOn) {
+                    // 預設畫面是「處理中」卡片：不一致的訂單多半不在裡面（含已結案／暫停），所以開啟時一律回到「全部訂單」範圍，
+                    // 否則按了會看到「找不到符合的資料」。關閉時不強制改回原卡片，使用者自己點卡片即可。
+                    currentFilters.status = 'all';
+                    currentStatusCardFilter = null;
+                    $('.stat-card').removeClass('active');
+                    $('.stat-card.card-all').addClass('active');
+                }
+                isStatCardFilter = false;
+                lockedStats = null;
+                fetchTableData(1);
+            });
+            // BOM篩選標示篩選（2026-10-28）：選項不存在時（沒有任何訂單填過標示）這個元素根本不輸出，綁定不會有作用
+            $('#filter-bom-tag').on('change', function() {
+                isStatCardFilter = false;
+                lockedStats = null;
+                fetchTableData(1);
+            });
 
             // ── 文字篩選（防抖） ────────────────────────────────────────────
             var debounceTimer;
@@ -7356,6 +7924,8 @@ foreach($dCounts as $c) {
                 $('#filter-part').val('');
                 $('#filter-global').val('');
                 $('#filter-as-tag').val('');          // 稽核製程標籤篩選（2026-10-02）
+                $('#filter-bom-tag').val('');         // BOM篩選標示篩選（2026-10-28）
+                clientMismatchOn = false; $('#filter-client-mismatch').removeClass('active').css('box-shadow', '');
                 currentFilters.status = 'all';
                 currentFilters.unbound = false;
                 currentFilters.unbound_op = false;
@@ -7871,6 +8441,7 @@ foreach($dCounts as $c) {
                 } else {
                     $('#part-drawing-no-badge').hide();
                 }
+                var _partChanged = (partTxt !== _lastLoadedPart);
                 loadQuotesAndHistory(partTxt);
                 if (_partChanged) loadPartStock(partTxt);   // 料號沒變就不重載（避免點欄位時庫存面板一直重畫跳動）
             } else if (partTxt !== '') {
@@ -7878,6 +8449,7 @@ foreach($dCounts as $c) {
                 $('#part-id-missing').show();
                 $('#btn-quick-add-part').show();
                 $('#part-drawing-no-badge').hide();
+                var _partChanged = (partTxt !== _lastLoadedPart);
                 loadQuotesAndHistory(partTxt);
                 if (_partChanged) loadPartStock(partTxt);   // 料號沒變就不重載（避免點欄位時庫存面板一直重畫跳動）
             } else {
@@ -7911,6 +8483,8 @@ foreach($dCounts as $c) {
 
             // 客戶提醒：圖示顯示/計數 + 選定/變更客戶當下跳窗（2026-09-23）
             ocrMaybeCheckOnChange(custPk);
+            // 料號提示：新訂單綁定／換成這個料號時，若有製程中紀錄設的「提示」，跳窗要求業務確認（2026-11-06）
+            ocrMaybeCheckPartOnChange(partPk);
             // 稽核製程標籤：客戶換掉時重算可選選項並要求重新確認（2026-10-02）
             astagMaybeOnClientChange(custPk);
         }
@@ -7933,6 +8507,7 @@ foreach($dCounts as $c) {
 
         // 開單當下先「認帳」目前這個客戶，避免單純開單/開單後沒改客戶時誤跳窗
         function ocrOnCustomerLoaded(custId) {
+            window.ocrLastCheckedPart = null;   // 料號由 editOrder()/新增模式另外呼叫 ocrOnPartLoaded() 認帳
             window.ocrLastCheckedCustomer = custId || '';
             window.ocrPendingDecisions = [];
         }
@@ -7947,6 +8522,32 @@ foreach($dCounts as $c) {
             $.post('../../src/store/ClientReminder_API.php', { action: 'unacked', customer_id: custPk, order_id: orderId || 0 }, function(res) {
                 if (!res || !res.success || !res.rows || !res.rows.length) return;
                 ocrOpenPopup(res.rows, orderId);
+            }, 'json');
+        }
+
+        // 料號提示（2026-11-06）：觸發時機與客戶提醒相同——只有「選定／換掉料號」當下才跳，單純開單不跳。
+        // 提示由製程中紀錄勾「提示」產生，綁在料號主檔 d_id；確認／設為待處理沿用客戶提醒同一套 ack
+        // （設為待處理會把摘要接在業務備註下方、列入「訂單待確認」）。
+        window.ocrLastCheckedPart = null;
+        // 清單上「料號提示待確認」的「確認」鈕：開同一個跳窗（包含跳窗曾開過但沒處理完的）
+        function ocrOpenHintForOrder(orderId, partPk) {
+            $.post('../../src/store/ClientReminder_API.php', { action: 'unacked_part', part_d_id: partPk, order_id: orderId, include_shown: 1 }, function(res) {
+                if (!res || !res.success || !res.rows || !res.rows.length) { showToast('這張訂單沒有待確認的提示，已重新整理'); refreshOrderTable(); return; }
+                ocrOpenPopup(res.rows, orderId);
+            }, 'json');
+        }
+        function ocrOnPartLoaded(partPk) { window.ocrLastCheckedPart = String(partPk || ''); }
+        function ocrMaybeCheckPartOnChange(partPk) {
+            partPk = (partPk && partPk !== '0') ? String(partPk) : '';
+            if (partPk === window.ocrLastCheckedPart) return;
+            window.ocrLastCheckedPart = partPk;
+            if (!partPk) return;
+            var orderId = $('#hidden_Order_id').val();
+            $.post('../../src/store/ClientReminder_API.php', { action: 'unacked_part', part_d_id: partPk, order_id: orderId || 0 }, function(res) {
+                if (!res || !res.success || !res.rows || !res.rows.length) return;
+                var open = function() { ocrOpenPopup(res.rows, orderId); };
+                // 客戶提醒視窗正開著時，等它處理完再開，避免兩個視窗疊在一起
+                if ($('#clientReminderPopupModal').hasClass('in')) { $('#clientReminderPopupModal').one('hidden.bs.modal', open); } else { open(); }
             }, 'json');
         }
 
@@ -7975,12 +8576,14 @@ foreach($dCounts as $c) {
 
         // ── 選定客戶跳窗：逐筆確認/設為待處理，必須都處理完才能關閉 ───────────
         function ocrOpenPopup(rows, orderId) {
-            $('#ocr-popup-cname').text($('#client_name_input').val() || '-');
+            var isPartHint = !!(rows.length && rows[0].part_d_id);
+            $('#ocr-popup-title').text(isPartHint ? '料號提示（製程中紀錄）' : '客戶提醒');
+            $('#ocr-popup-cname').text(isPartHint ? ($('#part_id_input').val() || '-') : ($('#client_name_input').val() || '-'));
             var $list = $('#ocr-popup-list').empty();
             var remaining = rows.length;
             $('#ocr-popup-close').hide();
             rows.forEach(function(r) {
-                var $item = $('<div>').attr('data-rid', r.id).css({
+                var $item = $('<div>').attr('data-rid', r.id).attr('data-parthint', r.part_d_id ? 1 : 0).css({
                     'border': '1px solid #eee', 'border-radius': '4px', 'padding': '8px 10px', 'margin-bottom': '8px', 'background': '#fffaf5'
                 });
                 $item.html(
@@ -8018,8 +8621,8 @@ foreach($dCounts as $c) {
             if (orderId) {
                 $.post('../../src/store/ClientReminder_API.php', { action: 'ack', reminder_id: reminderId, order_id: orderId, status: status }, function(res) {
                     if (!res || !res.success) { alert((res && res.message) || '操作失敗'); finish(false); return; }
-                    if (status === 'pending') {
-                        // 業務備註可能已被系統插入摘要，同步目前開著的編輯視窗（只認訂單編輯彈窗那一個，
+                    if (status === 'pending' || res.order_ps) {
+                        // 業務備註可能已被系統插入摘要（料號提示的「確認」也會寫入），同步目前開著的編輯視窗（只認訂單編輯彈窗那一個，
                         // 不可用不限範圍的選擇器，清單裡每一列也有一個同名 textarea，選錯會改到別筆）
                         if (String($('#hidden_Order_id').val()) === String(orderId)) {
                             var ta = document.querySelector('#newOrderForm textarea[name="Order_ps"]');
@@ -8034,8 +8637,9 @@ foreach($dCounts as $c) {
                 // commit_new 補寫（ocr_ack_pending() 那時才把摘要插入業務備註，且只會插入一次）。
                 // 刻意不在這裡先手動把摘要塞進畫面上的業務備註欄——那樣送出訂單時等於把摘要跟著
                 // 存進 DB 一次，commit_new 事後又用同一則提醒的內容再插入一次，會變成重複兩段。
+                var isPartHintItem = !!$(btn).closest('[data-rid]').data('parthint');
                 window.ocrPendingDecisions.push({ reminder_id: reminderId, status: status });
-                finish(true, status === 'pending' ? '（存檔成功後會自動加進業務備註）' : '');
+                finish(true, (status === 'pending' || isPartHintItem) ? '（存檔成功後會自動加進業務備註）' : '');
             }
         }
 
@@ -8357,7 +8961,6 @@ foreach($dCounts as $c) {
         function openQuickAddCustomer() {
             $('#qac_id').val('');
             $('#qac_name').val($('#client_name_input').val()); // 預填已輸入的名稱
-                var _partChanged = (partTxt !== _lastLoadedPart);
             $('#qac_addr').val('');
             $('#qac-error').hide();
             $('#quickAddCustomerModal').modal('show');
@@ -8365,7 +8968,6 @@ foreach($dCounts as $c) {
         function submitQuickAddCustomer() {
             var id   = $('#qac_id').val().trim();
             var name = $('#qac_name').val().trim();
-                var _partChanged = (partTxt !== _lastLoadedPart);
             var addr = $('#qac_addr').val().trim();
             if (!id || !name) { $('#qac-error').text('客戶代碼與名稱均為必填').show(); return; }
             $.post('', { action:'quick_add_customer', customer_id:id, customer_name:name, customer_addr:addr }, function(res) {
@@ -10004,7 +10606,7 @@ foreach($dCounts as $c) {
                      target_contact: '', is_note: false };
         }
 
-        function ateQOpen(orderId, kind) {
+        function ateQOpen(orderId, kind, onLoaded) {
             ATE_Q.orderId = orderId;
             ATE_Q.kind = (kind === 'process') ? 'process' : 'note';
             $.post('', { action: 'ate_q_list', order_id: orderId, kind: ATE_Q.kind }, function(res) {
@@ -10022,6 +10624,7 @@ foreach($dCounts as $c) {
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
+                ATE_Q.partHints = res.part_hints || [];
                 ATE_Q.replyState = {}; ATE_Q.replyFiles = {};
                 ATE_Q.channels = res.channels || {};
                 ATE_Q.targets = res.targets || {};
@@ -10052,6 +10655,7 @@ foreach($dCounts as $c) {
                 ateQEnsureCandidates('user', function() {
                     ateQRenderItems();
                     ateQRedrawComposer();
+                    if (typeof onLoaded === 'function') onLoaded();
                 });
             }, 'json').fail(function() { showToast('讀取失敗，請重新整理後再試'); });
         }
@@ -10132,7 +10736,8 @@ foreach($dCounts as $c) {
             if (ATE_Q.kind === 'note' && pend.length) {
                 var gated = !!ATE_Q.gate;
                 var bh = '<div class="ate-q-oda-banner' + (gated ? ' gate' : '') + '"><b><i class="fa fa-exclamation-triangle"></i> '
-                       + (gated ? '審圖／轉生管已被擋下：' : '') + '尚有 ' + pend.length + ' 項設計提醒需按「已確認」，全部確認後才能按【審圖】或【轉生管】</b><ol>';
+                       + (gated ? '審圖／轉生管已被擋下：' : '') + '尚有 ' + pend.length + ' 項設計提醒需按「已確認」，全部確認後才能按【審圖】或【轉生管】'
+                       + ((gated && ATE_Q.gate.action) ? '<br><span style="font-weight:normal;">全部確認後，系統會自動繼續剛剛按的【' + (ATE_Q.gate.action === 'review' ? '審圖' : '轉生管') + '】</span>' : '') + '</b><ol>';
                 pend.forEach(function(it) { bh += '<li>' + escapeHtml(String(it.question || '').substring(0, 80)) + '</li>'; });
                 $bn.html(bh + '</ol>').show();
             } else { $bn.hide().empty(); }
@@ -10154,6 +10759,25 @@ foreach($dCounts as $c) {
                      +    '<div class="ate-q-void-list"' + (ATE_Q.showVoided ? '' : ' style="display:none;"') + '>';
                 dead.forEach(function(it) { html += ateQItemHtml(it); });
                 html += '</div></div>';
+            }
+            // 同料號其他訂單設的提示（綁料號 ID，2026-11-06）：放在最上面；停用只影響停用之後建立的訂單
+            if (ATE_Q.kind === 'process' && ATE_Q.partHints && ATE_Q.partHints.length) {
+                var ph = '<div class="ate-q-alert-note" style="background:#FFF3E2;border:1px solid #F0A24B;border-radius:4px;padding:6px 8px;margin-bottom:8px;"><b><i class="fa fa-bell-o"></i> 此料號的提示（綁定料號ID，同料號的訂單都會看到）</b>';
+                ATE_Q.partHints.forEach(function(h) {
+                    var on = String(h.is_active) === '1';
+                    ph += '<div style="margin-top:5px;' + (on ? '' : 'opacity:.65;') + '">' + (on ? '' : '<span class="ate-q-note-badge">已停用（僅停用前建立的訂單仍顯示）</span> ') + escapeHtml(h.content || '')
+                        + '<div style="font-size:11px;color:#8a7a62;">' + escapeHtml(h.created_by_name || '') + ' ' + escapeHtml(h.created_date || '') + ' 建立'
+                        + (h.Order_oo ? '（來源訂單 ' + escapeHtml(h.Order_oo) + '）' : '')
+                        + (!on ? '；' + escapeHtml(h.disabled_by_name || '') + ' 於 ' + escapeHtml(odaFmtDt(h.disabled_at)) + ' 停用' + (h.disabled_reason ? '，備註：' + escapeHtml(h.disabled_reason) : '') : '') + '</div>';
+                    if (String(h.can_toggle) === '1') {
+                        ph += on ? '<button type="button" class="btn btn-xs btn-danger-o" onclick="ateQHintToggleBox(' + h.src_item_id + ')"><i class="fa fa-pause-circle"></i> 停用此提示</button>'
+                                   + '<div id="ate-q-hintbox-' + h.src_item_id + '" style="display:none;margin-top:4px;"><input type="text" class="form-control" id="ate-q-hintnote-' + h.src_item_id + '" maxlength="500" placeholder="停用備註（選填）">'
+                                   + '<button type="button" class="btn btn-xs btn-danger-o" style="margin-top:4px;" onclick="ateQHintSet(' + h.src_item_id + ',0,' + h.log_id + ')">確認停用</button></div>'
+                                 : '<button type="button" class="btn btn-xs btn-default" onclick="ateQHintSet(' + h.src_item_id + ',1,' + h.log_id + ')"><i class="fa fa-play-circle"></i> 重新啟用</button>';
+                    }
+                    ph += '</div>';
+                });
+                html = ph + '</div>' + html;
             }
             $('#ate-q-items-wrap').html(html);
         }
@@ -10408,14 +11032,16 @@ foreach($dCounts as $c) {
             // 系統提醒（設計提醒規則自動產生，2026-10-14）：淺黃底、標「系統提醒」，
             // 「已確認／取消確認」取代「已處理」，每一次都記錄是誰、什麼時候
             var al = it.alert || null;
+            // 規則已停用且這一條沒確認過＝免確認：不顯示待確認、不給回覆／確認鈕
+            var alOff = !!(al && al.rule_off && !al.confirmed);
             // 製程中紀錄的回覆／追問／PS 權限各自獨立：還在待回覆只有「回覆」；已回覆／已處理後三種各看各的權限
             var _stDone = (it.status === 'resolved' || it.status === 'dropped' || it.status === 'answered');
             var _canAnyReply = (ATE_Q.kind !== 'process') ? true
                 : (_stDone ? (ATE_Q.canReply !== false || ATE_Q.canAsk !== false || ATE_Q.canPs !== false) : (ATE_Q.canReply !== false));
-            var actions = (frozenView || noteView || voidView || !_canAnyReply) ? ''
+            var actions = (frozenView || noteView || voidView || alOff || !_canAnyReply) ? ''
                 : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> '
                   + ((!al && (it.status === 'resolved' || it.status === 'dropped' || it.status === 'answered')) ? (ATE_Q.kind === 'process' ? ((ATE_Q.canReply !== false ? '回覆／' : '') + (ATE_Q.canAsk !== false ? '追問／' : '') + (ATE_Q.canPs !== false ? 'PS' : '')).replace(/／$/, '') : '追問／PS補充') : '回覆') + '</button>';
-            if (al && ATE_Q.canOdaConfirm && !frozenView && !voidView) {
+            if (al && !alOff && ATE_Q.canOdaConfirm && !frozenView && !voidView) {
                 actions += al.confirmed
                     ? '<button type="button" class="ate-q-btn" onclick="odaConfirm(' + it.id + ',false)"><i class="fa fa-undo"></i> 取消確認</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="odaConfirm(' + it.id + ',true)"><i class="fa fa-check"></i> 已確認</button>';
@@ -10505,6 +11131,29 @@ foreach($dCounts as $c) {
             // 的 target_type 本來就是空的（建立時被清掉），不再額外顯示一次「PS」對象文字，
             // 否則會變成「備註 PS」兩個字樣重複出現。
             var noteBadge = it.is_note ? '<span class="ate-q-note-badge" title="備註：不列入待處理問題計數"><i class="fa fa-sticky-note-o"></i> 備註</span>' : '';
+            // 料號提示（2026-11-06）：啟用中／已停用（誰、何時、備註）＋停用／重新啟用鈕
+            var hintHtml = '';
+            if (it.is_hint) {
+                var hi = it.hint || {};
+                var hOn = (hi.is_active !== 0);
+                noteBadge = '<span class="ate-q-note-badge" style="background:#F0A24B;color:#5a3a12;" title="之後新訂單綁定這個料號時，會跳窗要求業務確認"><i class="fa fa-bell-o"></i> 提示'
+                          + (hOn ? '・啟用中' : '・已停用') + '</span>';
+                if (!hOn) {
+                    hintHtml += '<div class="ate-q-alert-note"><i class="fa fa-pause-circle"></i> ' + escapeHtml(hi.disabled_by_name || '')
+                              + ' 於 ' + escapeHtml(odaFmtDt(hi.disabled_at)) + ' 停用'
+                              + (hi.disabled_reason ? '　備註：' + escapeHtml(hi.disabled_reason) : '') + '</div>';
+                }
+                if (it.can_hint_toggle && !voidView) {
+                    hintHtml += '<div style="margin-top:4px;">'
+                        + (hOn ? '<button type="button" class="btn btn-xs btn-danger-o" onclick="ateQHintToggleBox(' + it.id + ')"><i class="fa fa-pause-circle"></i> 停用此提示</button>'
+                               : '<button type="button" class="btn btn-xs btn-default" onclick="ateQHintSet(' + it.id + ',1)"><i class="fa fa-play-circle"></i> 重新啟用</button>')
+                        + '<div id="ate-q-hintbox-' + it.id + '" style="display:none;margin-top:6px;">'
+                        +   '<input type="text" class="form-control" id="ate-q-hintnote-' + it.id + '" maxlength="500" placeholder="停用備註（選填）">'
+                        +   '<button type="button" class="btn btn-xs btn-danger-o" style="margin-top:4px;" onclick="ateQHintSet(' + it.id + ',0)">確認停用</button> '
+                        +   '<button type="button" class="btn btn-xs btn-default" style="margin-top:4px;" onclick="ateQHintToggleBox(' + it.id + ')">取消</button>'
+                        + '</div></div>';
+                }
+            }
             var targetSpan = it.is_note ? '' : '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>';
             // 作廢徽章與說明列：誰、什麼時候、為什麼——這三件事一定要印出來，不然事後沒人
             // 知道這一條為什麼被作廢，等於又變成一條看不懂的紀錄
@@ -10536,7 +11185,7 @@ foreach($dCounts as $c) {
                 alertHead = '<span class="ate-q-alert-badge" title="由「設計提醒規則」自動產生"><i class="fa fa-bell"></i> 系統提醒'
                           + (al.kind_label ? '・' + escapeHtml(al.kind_label) : '') + '</span>'
                           + (al.confirmed ? '<span class="ate-q-alert-ok"><i class="fa fa-check"></i> 已確認</span>'
-                                          : '<span class="ate-q-alert-wait">待確認</span>');
+                                          : (alOff ? '<span class="ate-q-alert-ok" style="background:#EAD9BF;color:#6b4a1f;"><i class="fa fa-pause-circle"></i> 規則已停用，免確認</span>' : '<span class="ate-q-alert-wait">待確認</span>'));
                 if (al.rule_off) alertInfo += '<div class="ate-q-alert-note"><i class="fa fa-pause-circle"></i> 這則提醒的規則已停用（已產生的保留，不再新增）</div>';
                 if (al.confirmed && al.last) {
                     alertInfo += '<div class="ate-q-alert-note"><i class="fa fa-check-circle"></i> '
@@ -10545,7 +11194,7 @@ foreach($dCounts as $c) {
                 if (al.history && al.history.length > 1 || (al.history && al.history.length === 1 && !al.confirmed)) {
                     var hh = '';
                     al.history.forEach(function(h) {
-                        hh += '<div>' + (h.action === 'confirm' ? '✔ 確認' : '↩ 取消確認') + '　' + escapeHtml(h.by_name || '') + '　' + escapeHtml(odaFmtDt(h.at)) + '</div>';
+                        hh += '<div>' + (h.action === 'confirm' ? '✔ 確認' : (h.action === 'rule_off' ? '⏸ 規則停用，免確認' : (h.action === 'rule_on' ? '▶ 規則重新啟用' : '↩ 取消確認'))) + '　' + escapeHtml(h.by_name || '') + '　' + escapeHtml(odaFmtDt(h.at)) + '</div>';
                     });
                     alertInfo += '<details class="ate-q-alert-hist"><summary>確認紀錄（' + al.history.length + '）</summary>' + hh + '</details>';
                 }
@@ -10564,6 +11213,7 @@ foreach($dCounts as $c) {
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
                 + ateQFilesView(it.files)
                 + alertInfo
+                + hintHtml
                 + voidInfo
                 + repliesHtml
                 + (actions ? '<div class="ate-q-item-actions">' + actions + '</div>' : '')
@@ -10572,6 +11222,15 @@ foreach($dCounts as $c) {
                 + taskBoxHtml
                 + voidBoxHtml
                 + '</div>';
+        }
+        function ateQHintToggleBox(itemId) { $('#ate-q-hintbox-' + itemId).toggle(); }
+        function ateQHintSet(itemId, on, srcLogId) {
+            $.post('', { action: 'ate_q_hint_toggle', log_id: srcLogId || ATE_Q.logId, id: itemId, active: on ? 1 : 0,
+                         note: on ? '' : $.trim($('#ate-q-hintnote-' + itemId).val() || '') }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); ateQOpen(ATE_Q.orderId, ATE_Q.kind); return; }
+                showToast(on ? '已重新啟用此提示' : '已停用此提示');
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
+            }, 'json').fail(function() { showToast('操作失敗，請重試'); });
         }
         function ateQToTask(itemId) {
             var dl = $('#ate-q-taskdl-' + itemId).val(), rm = $('#ate-q-taskrm-' + itemId).val();
@@ -10627,12 +11286,33 @@ foreach($dCounts as $c) {
         // 並在最上方列出「需確認的項目」（見 ateQRenderItems 的 #ate-q-oda-banner）
         // 被擋下的醒目橫幅在跳窗關閉時才解除（期間重繪不會變回一般樣式）
         $(document).on('hidden.bs.modal', '#ate-q-modal', function() { ATE_Q.gate = null; });
-        function odaGate(orderId, data, $cell, oldHtml) {
+        // action：被擋下的是哪個動作（'review'＝審圖、'pm'＝轉生管），先暫存起來；等這張訂單所有系統提醒都按完
+        // 「已確認」後自動接著執行（2026-11-06 使用者要求）。中途關掉視窗＝放棄，不會自動執行。
+        function odaGate(orderId, data, $cell, oldHtml, action) {
             if ($cell && oldHtml !== undefined) $cell.html(oldHtml);
             ATE_Q.gate = data;
+            ATE_Q.gate.action = action || '';
+            ATE_Q.gate.orderId = orderId;
             var n = (data.items || []).length;
-            if (typeof showToast === 'function') showToast('⚠ 尚有 ' + n + ' 項設計提醒需先確認，已為您開啟設計備註');
+            var nm = (action === 'review') ? '審圖' : (action === 'pm' ? '轉生管' : '');
+            if (typeof showToast === 'function') showToast('⚠ 尚有 ' + n + ' 項設計提醒需先確認，已為您開啟設計備註' + (nm ? '（全部確認後會自動繼續【' + nm + '】）' : ''));
             ateQOpen(orderId);
+        }
+        // 確認完一則提醒、清單重新載入後呼叫：若已沒有待確認的系統提醒，就自動接著執行暫存的動作
+        function odaGateResume() {
+            var g = ATE_Q.gate;
+            if (!g || !g.action || String(g.orderId) !== String(ATE_Q.orderId)) return;
+            var pend = (ATE_Q.items || []).filter(function(it) {
+                return it.alert && !it.alert.confirmed && !it.alert.rule_off && !it.voided_at && it.status !== 'resolved' && it.status !== 'dropped';
+            });
+            if (pend.length) return;
+            var act = g.action, oid = g.orderId;
+            ATE_Q.gate = null;
+            $('#ate-q-modal').modal('hide');
+            setTimeout(function() {
+                if (typeof showToast === 'function') showToast('提醒已全部確認，自動繼續【' + (act === 'review' ? '審圖' : '轉生管') + '】');
+                if (act === 'review') updateInReview(oid); else if (act === 'pm') updatePmGet(oid);
+            }, 350);
         }
         function odaFmtDt(s) {
             if (!s) return '';
@@ -10643,13 +11323,23 @@ foreach($dCounts as $c) {
             $.post('', { action: on ? 'oda_confirm' : 'oda_unconfirm', id: itemId }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); ateQOpen(ATE_Q.orderId, ATE_Q.kind); return; }
                 ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
-                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind, on ? odaGateResume : undefined);   // 確認後若是被審圖／轉生管擋下來的，全部確認完自動繼續
                 if (typeof fetchTableData === 'function') fetchTableData(currentPage);   // 上方卡片數字一併更新
             }, 'json').fail(function() { showToast('操作失敗，請重試'); });
         }
 
         var ODA = { rows: [], kinds: {}, canDelete: false, editId: 0, cust: null, part: null, partPk: 0 };
-        function odaKindNeedsCust(k) { return k !== 'part'; }
+        function odaKindNeedsCust(k) { return k !== 'part' && k !== 'tag'; }
+        function odaKindNeedsTag(k) { return k === 'tag' || k === 'cust_tag'; }
+        // 設計提示標籤下拉：只列啟用中的標籤，編輯時目前選的那個（就算已停用）一律保留
+        function odaTagFill(selId) {
+            var h = '<option value="">請選擇設計提示標籤</option>';
+            (ODA.tags || []).forEach(function(t) {
+                if (!t.is_active && String(t.id) !== String(selId)) return;
+                h += '<option value="' + t.id + '"' + (String(t.id) === String(selId) ? ' selected' : '') + '>' + escapeHtml(t.name) + (t.is_active ? '' : '（已停用）') + '</option>';
+            });
+            $('#oda-tag').html(h);
+        }
         function odaKindNeedsPart(k) { return k === 'part' || k === 'cust_part'; }
         function odaRulesOpen(btn) {
             var $b = $(btn);
@@ -10659,6 +11349,7 @@ foreach($dCounts as $c) {
             odaFormReset();
             $('#odaRulesModal').modal('show');
             odaRulesLoad();
+            // （odaRulesLoad 完成後會重填標籤下拉）
         }
         function odaFormReset() {
             ODA.editId = 0;
@@ -10666,6 +11357,7 @@ foreach($dCounts as $c) {
             $('#oda-cust-input').val(ODA.cust ? ODA.cust.name : '').prop('disabled', false);
             $('#oda-part-input').val(ODA.part ? ODA.part.label : '');
             $('#oda-kw').val(''); $('#oda-kwmode').val('any'); $('#oda-content').val('').prop('disabled', false);
+            odaTagFill('');
             $('#oda-cust-sug, #oda-part-sug').empty();
             $('#oda-form-title').text('新增提醒規則'); $('#oda-form-err').text('');
             $('#oda-form-cancel').hide();
@@ -10679,11 +11371,19 @@ foreach($dCounts as $c) {
             $('#oda-modes .oda-modebtn').removeClass('on').filter('[data-mode="' + ($('#oda-kwmode').val() || 'any') + '"]').addClass('on');
             $('#oda-row-cust').toggle(odaKindNeedsCust(k));
             $('#oda-row-part').toggle(odaKindNeedsPart(k));
-            $('#oda-row-kw').toggle(k === 'cust_kw');
-            var tips = { customer: '該客戶所有尚未轉生管的訂單，都會出現這則提醒。',
+            $('#oda-row-tag').toggle(odaKindNeedsTag(k));
+            $('#oda-row-kw').toggle(k === 'cust_kw' || k === 'cust_prefix');
+            $('#oda-modes').css('visibility', k === 'cust_prefix' ? 'hidden' : '');
+            $('#oda-kw-label').html(k === 'cust_prefix'
+                ? '料號開頭 <small>該客戶的料號文字「開頭」符合即提示，多組用逗號分隔（任一組符合）</small>'
+                : '關鍵字 <small>比對料號規格（Spec No.），固定模糊比對、不分大小寫</small>');
+            $('#oda-kw').attr('placeholder', k === 'cust_prefix' ? '例：OB32，RC10' : '多組用逗號分隔，例：淬火，滲碳');
+            var tips = { cust_prefix: '該客戶、且料號開頭符合設定的尚未轉生管訂單（客戶吻合，開頭相同者都會提示）。', customer: '該客戶所有尚未轉生管的訂單，都會出現這則提醒。',
                          part: '使用這個料號的所有尚未轉生管訂單，都會出現這則提醒。',
                          cust_kw: '該客戶、且料號規格（Spec No.）包含關鍵字的尚未轉生管訂單（模糊比對）。',
-                         cust_part: '該客戶底下這個料號的尚未轉生管訂單。' };
+                         cust_part: '該客戶底下這個料號的尚未轉生管訂單。',
+                         tag: '料號主檔勾了這個「設計提示標籤」的尚未轉生管訂單（不分客戶）。',
+                         cust_tag: '該客戶、且料號主檔勾了這個「設計提示標籤」的尚未轉生管訂單。' };
             $('#oda-kind-tip').text(tips[k] || '');
         }
         function odaRulesLoad() {
@@ -10691,6 +11391,8 @@ foreach($dCounts as $c) {
             $.post('', { action: 'oda_rule_list' }, function(res) {
                 if (!res || !res.success) { $('#oda-rule-list').html('<div class="alert alert-danger" style="margin:0;">' + escapeHtml((res && res.message) || '載入失敗') + '</div>'); return; }
                 ODA.rows = res.rows || []; ODA.kinds = res.kinds || {}; ODA.canDelete = !!res.can_delete;
+                ODA.tags = res.tags || [];
+                odaTagFill($('#oda-tag').val() || '');
                 odaRulesRender();
             }, 'json').fail(function() { $('#oda-rule-list').html('<div class="alert alert-danger" style="margin:0;">連線失敗，請重試</div>'); });
         }
@@ -10698,6 +11400,8 @@ foreach($dCounts as $c) {
             var parts = [];
             if (r.customer_name) parts.push('客戶：' + r.customer_name);
             if (r.part_label) parts.push('料號：' + r.part_label);
+            if (r.tag_name) parts.push('設計提示標籤：' + r.tag_name);
+            if (r.kind === 'cust_prefix') parts.push('料號開頭「' + (r.keywords_arr || []).join('」或「') + '」');
             if (r.kind === 'cust_kw') parts.push('規格含「' + (r.keywords_arr || []).join(r.kw_mode === 'all' ? '」且「' : '」或「') + '」');
             return parts.join('　');
         }
@@ -10726,6 +11430,7 @@ foreach($dCounts as $c) {
             ODA.cust = r.customer_id ? { id: r.customer_id, name: r.customer_name || '' } : null;
             ODA.part = r.part_d_id ? { id: parseInt(r.part_d_id, 10), label: r.part_label || '' } : null;
             $('#oda-kind').val(r.kind);
+            odaTagFill(r.tag_id || '');
             $('#oda-cust-input').val(ODA.cust ? ODA.cust.name : '');
             $('#oda-part-input').val(ODA.part ? ODA.part.label : '');
             $('#oda-kw').val((r.keywords_arr || []).join('，')); $('#oda-kwmode').val(r.kw_mode || 'any');
@@ -10796,11 +11501,13 @@ foreach($dCounts as $c) {
             var k = $('#oda-kind').val(), err = '';
             if (odaKindNeedsCust(k) && !ODA.cust) err = '請從清單點選客戶（直接打字不算綁定）';
             else if (odaKindNeedsPart(k) && !ODA.part) err = '請從清單點選料號（直接打字不算綁定）';
-            else if (k === 'cust_kw' && !$('#oda-kw').val().trim()) err = '請至少輸入一組關鍵字（多組用逗號分隔）';
+            else if (odaKindNeedsTag(k) && !$('#oda-tag').val()) err = '請選擇設計提示標籤';
+            else if ((k === 'cust_kw' || k === 'cust_prefix') && !$('#oda-kw').val().trim()) err = (k === 'cust_prefix' ? '請至少輸入一組料號開頭' : '請至少輸入一組關鍵字') + '（多組用逗號分隔）';
             else if (!$('#oda-content').prop('disabled') && !$('#oda-content').val().trim()) err = '請填寫提醒內容';
             $('#oda-form-err').text(err);
             if (err) return;
             var d = { action: 'oda_rule_save', id: ODA.editId, kind: k, customer_id: ODA.cust ? ODA.cust.id : '', part_d_id: ODA.part ? ODA.part.id : 0,
+                      tag_id: odaKindNeedsTag(k) ? $('#oda-tag').val() : 0,
                       keywords: $('#oda-kw').val(), kw_mode: $('#oda-kwmode').val(), content: $('#oda-content').val() };
             $('#oda-save').prop('disabled', true);
             $.post('', d, function(res) {
@@ -11071,14 +11778,15 @@ foreach($dCounts as $c) {
         // composer（此時 state 就是 r，直接讀寫 r.is_note，不另存一份），回覆選擇器不開放
         // （回覆是對既有問題的回覆，不是在建立新的備註項目）。存進 ATE_Q.tpNoteToggle[ns]
         // 讓 ateQTpRedraw() 局部重繪時不必重新傳一次。
-        function ateQTpRegister(ns, state, onChange, allowSelf, noteToggle, dateFn) {
+        function ateQTpRegister(ns, state, onChange, allowSelf, noteToggle, dateFn, hintToggle) {
             ATE_Q.tpDate = ATE_Q.tpDate || {};
+            ATE_Q.tpHintToggle = ATE_Q.tpHintToggle || {}; ATE_Q.tpHintToggle[ns] = !!hintToggle;
             if (dateFn) ATE_Q.tpDate[ns] = dateFn; else delete ATE_Q.tpDate[ns];
             ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; ATE_Q.tpAllowSelf[ns] = !!allowSelf;
             ATE_Q.tpNoteToggle[ns] = !!noteToggle;
         }
 
-        function ateQTpButtonsHtml(ns, st, allowSelf, noteToggle) {
+        function ateQTpButtonsHtml(ns, st, allowSelf, noteToggle, hintToggle) {
             // 按鈕一律由 ATE_Q.targets（管理員維護的 eng_log_target，只含啟用中的、照設定的
             // 排序）產生，不再寫死四種（2026-10-12 使用者要求可以增減對象）。
             var opts = [];
@@ -11105,6 +11813,13 @@ foreach($dCounts as $c) {
                       + 'title="設定後這一條只是記錄內容，不列入待處理問題計數" '
                       + 'onclick="ateQNoteToggleClick(\'' + ns + '\')"><i class="fa fa-sticky-note-o"></i> 備註(PS)</button>';
             }
+            // 提示（2026-11-06）：只有製程中紀錄的新增列才有。勾了＝這一筆是「提示」，送出即視為已處理，
+            // 之後新訂單綁定這個料號時會跳窗要求業務確認；本質上是備註（免對象、免回覆），所以按下時同步打開備註狀態
+            if (hintToggle) {
+                html += '<button type="button" class="ate-tp-btn ate-tp-note-btn' + (st.is_hint ? ' active' : '') + '" '
+                      + 'title="之後有新訂單綁定這個料號時，會跳出這則提示要求業務確認，並寫進業務備註" '
+                      + 'onclick="ateQHintToggleClick(\'' + ns + '\')"><i class="fa fa-bell-o"></i> 提示</button>';
+            }
             html += '</div>';
             return html;
         }
@@ -11117,6 +11832,7 @@ foreach($dCounts as $c) {
         function ateQNoteToggleClick(ns) {
             var st = ATE_Q.tpState[ns]; if (!st) return;
             st.is_note = !st.is_note;
+            if (!st.is_note) st.is_hint = false;   // 備註關掉，提示也一併取消（提示必為備註）
             if (st.is_note) {
                 st._savedTp = { target_type: st.target_type, target_id: st.target_id, target_label: st.target_label,
                                  target_post: st.target_post, target_contact: st.target_contact };
@@ -11126,6 +11842,32 @@ foreach($dCounts as $c) {
                 st.target_label = st._savedTp.target_label; st.target_post = st._savedTp.target_post;
                 st.target_contact = st._savedTp.target_contact;
                 delete st._savedTp;
+            }
+            var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
+        }
+
+        // 切換「提示」：提示＝已處理的備註（免對象、免回覆），所以開啟時沿用備註的「記住對象再清空」，關閉時還原
+        function ateQHintToggleClick(ns) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            if (!st.is_hint) {
+                st.is_hint = true;
+                if (!st.is_note) {
+                    st.is_note = true;
+                    st._savedTp = { target_type: st.target_type, target_id: st.target_id, target_label: st.target_label,
+                                     target_post: st.target_post, target_contact: st.target_contact };
+                    st.target_type = ''; st.target_id = ''; st.target_label = ''; st.target_post = ''; st.target_contact = '';
+                }
+            } else {
+                st.is_hint = false;
+                if (st.is_note) {
+                    st.is_note = false;
+                    if (st._savedTp) {
+                        st.target_type = st._savedTp.target_type; st.target_id = st._savedTp.target_id;
+                        st.target_label = st._savedTp.target_label; st.target_post = st._savedTp.target_post;
+                        st.target_contact = st._savedTp.target_contact;
+                        delete st._savedTp;
+                    }
+                }
             }
             var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
@@ -11214,22 +11956,6 @@ foreach($dCounts as $c) {
                 $('#ate-tcfg-nname').val('');
                 var mx = 0; (res.rows || []).forEach(function(r) { mx = Math.max(mx, parseInt(r.sort_order, 10) || 0); });
                 $('#ate-tcfg-nsort').val(mx + 10);
-        // 確認完一則提醒、清單重新載入後呼叫：若已沒有待確認的系統提醒，就自動接著執行暫存的動作
-        function odaGateResume() {
-            var g = ATE_Q.gate;
-            if (!g || !g.action || String(g.orderId) !== String(ATE_Q.orderId)) return;
-            var pend = (ATE_Q.items || []).filter(function(it) {
-                return it.alert && !it.alert.confirmed && !it.alert.rule_off && !it.voided_at && it.status !== 'resolved' && it.status !== 'dropped';
-            });
-            if (pend.length) return;
-            var act = g.action, oid = g.orderId;
-            ATE_Q.gate = null;
-            $('#ate-q-modal').modal('hide');
-            setTimeout(function() {
-                if (typeof showToast === 'function') showToast('提醒已全部確認，自動繼續【' + (act === 'review' ? '審圖' : '轉生管') + '】');
-                if (act === 'review') updateInReview(oid); else if (act === 'pm') updatePmGet(oid);
-            }, 350);
-        }
                 ateQTargetCfgApply(res);
                 showToast('已新增「' + name + '」');
             }, 'json').fail(function() { showToast('新增失敗，請重試'); });
@@ -11265,6 +11991,7 @@ foreach($dCounts as $c) {
         function ateQTpBodyHtml(ns, st) {
             // 備註(PS) 開啟時不需要指定對象，不渲染下拉/搜尋，只留一行灰字說明
             // （2026-10-08 使用者要求：按下備註左側的對象按鈕與下方挑選欄一併變灰、不用選）。
+            if (st.is_hint) return '<span class="ate-tp-note-hint">提示：送出後視為已處理；之後新訂單綁定此料號時，會跳窗要求業務確認</span>';
             if (st.is_note) return '<span class="ate-tp-note-hint">備註不需要指定對象</span>';
             // 2026-10-12：底下一律依「挑選方式」(pick) 分流，不是依 code——管理員新增的對象
             // code 不會叫 user/maker/customer，寫死 code 的話新對象永遠長不出挑選介面。
@@ -11323,7 +12050,8 @@ foreach($dCounts as $c) {
         function ateQTpHtml(ns, st) {
             var allowSelf = !!ATE_Q.tpAllowSelf[ns];
             var noteToggle = !!ATE_Q.tpNoteToggle[ns];
-            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st, allowSelf, noteToggle) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
+            var hintToggle = !!(ATE_Q.tpHintToggle && ATE_Q.tpHintToggle[ns]);
+            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st, allowSelf, noteToggle, hintToggle) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
         }
 
         function ateQTpRedraw(ns) {
@@ -11512,7 +12240,7 @@ foreach($dCounts as $c) {
             var ns = 'new' + idx, rns = 'newReply' + idx;
             // 回報來源：不開放「本人」快選（誰提出不一定是自己）；2026-10-28 開放「備註(PS)」切換鈕，
             // 可直接建立純備註（只留說明、不需對象、不列入待處理計數；後端 el_item_upsert 本來就支援 is_note）
-            ateQTpRegister(ns, r, ateQRedrawComposer, false, true);
+            ateQTpRegister(ns, r, ateQRedrawComposer, false, true, null, true);
             ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer, true, false,
                 function() { return (ATE_Q.rows[idx] && ATE_Q.rows[idx].reply_date) || ATE_Q.today || ''; });  // 回覆者：開放「本人」快選
             var delBtn = ATE_Q.rows.length > 1
@@ -11599,7 +12327,7 @@ foreach($dCounts as $c) {
                 } else if (r.target_type && !r.target_id) { bad = true; return; }
                 var row = { question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label,
                             target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at,
-                            is_note: r.is_note ? 1 : 0 };
+                            is_note: r.is_note ? 1 : 0, is_hint: (ATE_Q.kind === 'process' && r.is_hint) ? 1 : 0 };
                 // 製程中紀錄：回覆內容有填才一併建立第一筆回覆，留白只建立這筆紀錄本身
                 if (ATE_Q.kind === 'process' && !r.is_note) {
                     var rc = $.trim(r.reply_content || '');
@@ -11860,7 +12588,7 @@ foreach($dCounts as $c) {
                         else alert(data.message);
                     }
                 } else if (data.code === 'ODA_UNCONFIRMED') {
-                    odaGate(orderId, data, cell, oldCellHtml);   // 還有未確認的設計提醒：擋下並開出設計備註要求確認
+                    odaGate(orderId, data, cell, oldCellHtml, 'review');   // 還有未確認的設計提醒：擋下並開出設計備註要求確認，確認完自動繼續審圖
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -11904,7 +12632,7 @@ foreach($dCounts as $c) {
                         else alert(data.message);
                     }
                 } else if (data.code === 'ODA_UNCONFIRMED') {
-                    odaGate(orderId, data, cell, oldCellHtml);   // 還有未確認的設計提醒：擋下並開出設計備註要求確認
+                    odaGate(orderId, data, cell, oldCellHtml, 'pm');   // 還有未確認的設計提醒：擋下並開出設計備註要求確認，確認完自動繼續轉生管
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -12104,10 +12832,12 @@ foreach($dCounts as $c) {
         // --- New Order Modal Functions ---
         function openNewOrderModal() {
             $('#newOrderForm')[0].reset();
+            $('#btn-save-bom-tag').hide();   // 新增模式沒有既有訂單可單獨存標示
             $('#op-cust-diff-hint').hide().empty();
             window._cuOrig = null; otResetClientUnlock();   // 新增模式客戶本來就可自由輸入，不帶著上一張訂單的解鎖狀態
             astagOnOrderLoaded('', 0, '');   // 稽核製程標籤：新增模式尚未選客戶（廠內治具要等選到本公司才出現）
             ocrOnCustomerLoaded('');   // 客戶提醒：新增模式尚未選定任何客戶
+            ocrOnPartLoaded('');       // 料號提示：新增模式尚未綁定料號
             $('#orig_client_pk,#orig_part_pk').val('');
             $('#hidden_Order_id').val('');
             _psOrdLast = ''; try { if (window.EGPartSimilar) EGPartSimilar.resetOnce(); } catch (e) {}   // 新訂單：類似料號提示重來
@@ -13402,6 +14132,7 @@ foreach($dCounts as $c) {
                 $('#orig_part_pk').val(data.d_id_ID || '');
                 // 客戶提醒：開單當下先「認帳」目前這個客戶，單純開單或沒改客戶不會跳窗（2026-09-23）
                 ocrOnCustomerLoaded(data.Client_name_ID || '');
+                ocrOnPartLoaded(data.d_id_ID || '');   // 料號提示：開單當下已綁的料號先認帳，不跳窗
                 // 稽核製程標籤：帶入這張訂單原本的標籤，並依它的客戶算出可選選項（2026-10-02）
                 astagOnOrderLoaded(data.Client_name_ID || '', data.as_tag_id || 0, data.as_tag_scope || '');
                 $('#selected_part_drawing_no').val(data.Drawing_No || '');
@@ -13427,6 +14158,8 @@ foreach($dCounts as $c) {
                 form.find('input[name="drop_zone"]').val(data.drop_zone || '');
                 form.find('input[name="Containers"]').val(data.Containers || '');
                 form.find('textarea[name="Order_ps"]').val(data.Order_ps || '');
+                form.find('input[name="bom_filter_tag"]').val(data.bom_filter_tag || '');
+                $('#btn-save-bom-tag').show();   // 編輯既有訂單：可單獨儲存標示
                 if (data.orderindate)    form.find('input[name="orderindate"]').val(data.orderindate);
                 if (data.orderDdate)     form.find('input[name="orderDdate"]').val(data.orderDdate);
                 if (data.ate)            form.find('select[name="ate"]').val(data.ate);
@@ -14245,6 +14978,8 @@ foreach($dCounts as $c) {
                 form.find('input[name="drop_zone"]').val(data.drop_zone || '');
                 form.find('input[name="Containers"]').val(data.Containers || '');
                 form.find('textarea[name="Order_ps"]').val(data.Order_ps || '');
+                form.find('input[name="bom_filter_tag"]').val(data.bom_filter_tag || '');
+                $('#btn-save-bom-tag').hide();   // 複製＝新增訂單，沒有既有訂單可單獨存標示
                 if (data.orderindate)    form.find('input[name="orderindate"]').val(data.orderindate);
                 if (data.orderDdate)     form.find('input[name="orderDdate"]').val(data.orderDdate);
                 if (data.ate)            form.find('select[name="ate"]').val(data.ate);
@@ -14369,6 +15104,7 @@ foreach($dCounts as $c) {
             // 稽核製程標籤（2026-10-02）：必選開關由管理員控制、換客戶後要重新確認；
             // 後端 _NewOrder_Track.php 用同一套規則再擋一次（鐵律8）
             if (!astagValidateBeforeSave()) return;
+            if (!millPinValidate()) return;   // 銑3孔+打PIN：對手件料號必填
 
             var formData = new FormData(document.getElementById('newOrderForm'));
             var orderId = $('#hidden_Order_id').val();
@@ -14418,6 +15154,7 @@ foreach($dCounts as $c) {
                     }
 
                     var newOrderId = (data && data.new_order_id) ? data.new_order_id : null;
+                    millPinAfterSave(data);   // 銑3孔+打PIN：清狀態並提示已建立對手件訂單
 
                     // 客戶提醒：新增中的訂單在跳窗上做的決定，存檔成功拿到訂單編號後一次補寫（2026-09-23）
                     if (newOrderId && window.ocrPendingDecisions && window.ocrPendingDecisions.length) {
@@ -14513,7 +15250,7 @@ foreach($dCounts as $c) {
                     doDeleteOrder(msg);
                 });
 
-            function doDeleteOrder(confirmMsg) {
+            function doDeleteOrder(confirmMsg, delPair, qabReason) {
             if (confirm(confirmMsg)) {
                 // 鎖定按鈕
                 $('#btn-save, #btn-save-copy, #btn-delete').prop('disabled', true);
@@ -14521,7 +15258,7 @@ foreach($dCounts as $c) {
                 $.ajax({
                     url: '../../src/store/_NewOrder_Track.php',
                     type: 'POST',
-                    data: { del_order_track: 1, Order_id: orderId },
+                    data: { del_order_track: 1, Order_id: orderId, delete_pair: delPair ? 1 : 0, qab_reason: qabReason || '' },
                     success: function(response) {
                         var data = response;
                         if (typeof response === 'string') {
@@ -14529,8 +15266,21 @@ foreach($dCounts as $c) {
                         }
                         
                         if (data && data.success === false) {
-                            alert('刪除失敗：' + (data.message || '未知錯誤'));
                             $('#btn-save, #btn-save-copy, #btn-delete').prop('disabled', false);
+                            // 異常單報廢後自動建立的補做訂單：刪除要填原因，刪除後該異常單改顯示「報廢不補」
+                            if (data.code === 'QAB_REMAKE_REASON') {
+                                var qabWhy = prompt(data.message + '\n\n請輸入刪除原因：');
+                                if (qabWhy && qabWhy.trim()) doDeleteOrder('再次確認：要刪除這張補做訂單嗎？此動作無法復原。', delPair, qabWhy.trim());
+                                return;
+                            }
+                            // 銑3孔+打PIN 結合中的訂單：讓使用者選「兩張一起刪」或先去改製程
+                            if (data.code === 'MILLPIN_PAIR') {
+                                if (confirm(data.message + '\n\n按「確定」＝兩張訂單一起刪除（本單與 ' + data.other_oo + '）。\n按「取消」＝先不刪；請先把其中一張訂單的製程改成不含「銑3孔+打PIN」，解除結合後即可單獨刪除。')) {
+                                    doDeleteOrder('再次確認：要同時刪除這兩張訂單嗎？此動作無法復原。', 1);
+                                }
+                                return;
+                            }
+                            alert('刪除失敗：' + (data.message || '未知錯誤'));
                             return;
                         }
 
@@ -14541,7 +15291,7 @@ foreach($dCounts as $c) {
                             refreshOrderTable();
                         });
                         
-                        showToast((d_id ? d_id : '該筆') + ' 資料已刪除');
+                        showToast((d_id ? d_id : '該筆') + (data && data.deleted_pair ? ' 與對手件訂單已一併刪除' : ' 資料已刪除'));
                         
                         // 解鎖按鈕 (雖然 Modal 關閉了，但為了下次開啟)
                         $('#btn-save, #btn-save-copy, #btn-delete').prop('disabled', false);
@@ -16060,6 +16810,9 @@ foreach($dCounts as $c) {
                         <button type="button" class="oda-kindbtn" data-kind="part" onclick="odaPickKind('part')"><b><i class="fa fa-cube"></i> 料號</b><small>使用該料號的未轉生管訂單</small></button>
                         <button type="button" class="oda-kindbtn" data-kind="cust_kw" onclick="odaPickKind('cust_kw')"><b><i class="fa fa-search"></i> 客戶＋關鍵字</b><small>該客戶、規格含關鍵字的訂單</small></button>
                         <button type="button" class="oda-kindbtn" data-kind="cust_part" onclick="odaPickKind('cust_part')"><b><i class="fa fa-link"></i> 客戶＋料號</b><small>該客戶底下指定料號的訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="cust_prefix" onclick="odaPickKind('cust_prefix')"><b><i class="fa fa-font"></i> 客戶＋料號開頭</b><small>該客戶、料號開頭相同的訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="tag" onclick="odaPickKind('tag')"><b><i class="fa fa-tags"></i> 設計提示標籤</b><small>料號勾了該標籤的訂單</small></button>
+                        <button type="button" class="oda-kindbtn" data-kind="cust_tag" onclick="odaPickKind('cust_tag')"><b><i class="fa fa-tag"></i> 客戶＋設計提示標籤</b><small>該客戶、料號勾了該標籤的訂單</small></button>
                     </div>
                     <div class="oda-grid">
                         <div class="oda-field" id="oda-row-cust"><label>客戶</label>
@@ -16070,7 +16823,10 @@ foreach($dCounts as $c) {
                             <input type="text" id="oda-part-input" class="form-control" autocomplete="off" placeholder="輸入料號或規格，從清單點選（已選客戶時只列該客戶的料號）" oninput="odaSearch('part')">
                             <div id="oda-part-sug" class="oda-sug"></div>
                         </div>
-                        <div class="oda-field oda-field-wide" id="oda-row-kw"><label>關鍵字 <small>比對料號規格（Spec No.），固定模糊比對、不分大小寫</small></label>
+                        <div class="oda-field" id="oda-row-tag" style="display:none;"><label>設計提示標籤 <small>在主檔管理「新建／編輯料號」勾選並設定</small></label>
+                            <select id="oda-tag" class="form-control"><option value="">請選擇設計提示標籤</option></select>
+                        </div>
+                        <div class="oda-field oda-field-wide" id="oda-row-kw"><label id="oda-kw-label">關鍵字 <small>比對料號規格（Spec No.），固定模糊比對、不分大小寫</small></label>
                             <div class="oda-kwline">
                                 <input type="text" id="oda-kw" class="form-control" autocomplete="off" placeholder="多組用逗號分隔，例：淬火，滲碳">
                                 <div class="oda-modes" id="oda-modes">

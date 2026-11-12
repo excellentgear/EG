@@ -1720,6 +1720,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 已綁定這張製令的出貨單（唯一實作 bom_bound_ship_lib.php，與 BOM總覽同一份）
             $ship_map = [];
             try { require_once __DIR__ . '/../../src/common/bom_bound_ship_lib.php'; $ship_map = eg_bom_bound_ships($pdo, $bom_list); } catch (Throwable $e) {}
+            // 報廢品歸還客戶的出貨（is_bom_scrap_map，不計入出貨量，只顯示）
+            $scrap_ret = [];
+            try {
+                if ($bom_list) {
+                    $phS = implode(',', array_fill(0, count($bom_list), '?'));
+                    $stS = $pdo->prepare("SELECT m.bom, il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, m.qty
+                        FROM is_bom_scrap_map m JOIN is_list il ON il.IS_id = m.IS_id WHERE m.bom IN ($phS) ORDER BY il.Order_date DESC");
+                    $stS->execute($bom_list);
+                    foreach ($stS->fetchAll(PDO::FETCH_ASSOC) as $rS) {
+                        $no = (string)$rS['IS_number'];
+                        $short = preg_match('~^[A-Za-z]{2}(\d{7})(\d{3})$~', trim($no), $mm) ? $mm[1] . '-' . (int)$mm[2] : $no;
+                        $scrap_ret[(string)$rS['bom']][] = ['is_id' => (int)$rS['IS_id'], 'no' => $no, 'short' => $short, 'date' => (string)$rS['d'], 'qty' => (int)$rS['qty']];
+                    }
+                }
+            } catch (Throwable $e) {}
             list($ob_batch_map, $qab_tags_map) = ocq_fetch_extras($pdo, $bom_list, $proc_map);
             foreach ($rows as &$row) {
                 $row['processes'] = $proc_map[$row['bom']] ?? [];
@@ -1730,6 +1745,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $row['is_stock']     = !empty($bi['stock']);
                 $row['legacy_order'] = $bi['legacy'] ?? null;
                 $row['bound_ships']  = $ship_map[$row['bom']] ?? null;
+                $row['scrap_returns'] = $scrap_ret[(string)$row['bom']] ?? [];
             }
             unset($row);
 
@@ -2760,12 +2776,12 @@ function bindCellHtml(item){
         h += '<div class="ocq-bind-no" title="未綁定訂單（你沒有綁定訂單的權限）">未綁訂單</div>';
     }
     // 已綁定這張製令的出貨單：簡式單號＋日期×數量；有出貨分析權限者點一下另開並只列該張出貨單
-    if (item.bound_ships !== undefined) OCQ_SHIPS[item.bom] = item.bound_ships;
+    if (item.bound_ships !== undefined) OCQ_SHIPS[item.bom] = { ships: (item.bound_ships && item.bound_ships.ships) || [], qty: item.bound_ships ? item.bound_ships.qty : 0, scrap: item.scrap_returns || [] };
     var bs = OCQ_SHIPS[item.bom];
-    if (bs && Array.isArray(bs.ships) && bs.ships.length) {
+    if (bs && ((bs.ships && bs.ships.length) || (bs.scrap && bs.scrap.length))) {
         var yr = String(new Date().getFullYear());
         h += '<div style="font-size:10.5px;color:#555;margin-top:3px;line-height:1.35;">';
-        bs.ships.slice(0, 5).forEach(function(s){
+        (bs.ships||[]).slice(0, 5).forEach(function(s){
             var d = String(s.date || ''), ds = d.substring(0,4) === yr ? d.substring(5).replace('-','/') : d.replace(/-/g,'.');
             var no = esc(s.short || s.no);
             if (OCQ_CAN_SHIP && s.no) {
@@ -2777,7 +2793,16 @@ function bindCellHtml(item){
             h += '<div style="white-space:nowrap;" title="已綁定出貨單 '+esc(s.no)+'（'+esc(d.replace(/-/g,'.'))+' 出貨 '+esc(String(s.qty))+'）"><i class="fa fa-truck" style="color:#2E8B57;margin-right:2px;"></i>'
                + no + ' ' + esc(ds) + ' ×' + esc(String(s.qty)) + '</div>';
         });
-        if (bs.ships.length > 5) h += '<div>…另 ' + (bs.ships.length - 5) + ' 張，共出 ' + esc(String(bs.qty)) + '</div>';
+        if ((bs.ships||[]).length > 5) h += '<div>…另 ' + (bs.ships.length - 5) + ' 張，共出 ' + esc(String(bs.qty)) + '</div>';
+        (bs.scrap || []).forEach(function(s){
+            var d = String(s.date || ''), ds = d.substring(0,4) === yr ? d.substring(5).replace('-','/') : d.replace(/-/g,'.');
+            var no = esc(s.short || s.no);
+            if (OCQ_CAN_SHIP && s.no) {
+                var q = new URLSearchParams({ ship_no: String(s.no), ship_isid: String(s.is_id || ''), ship_from: d, ship_to: d });
+                no = '<a href="../Sales/Shipping_Insight.php?'+esc(q.toString())+'" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;">'+no+'</a>';
+            }
+            h += '<div style="white-space:nowrap;" title="報廢品歸還客戶，不計入出貨量"><i class="fa fa-undo" style="color:#B8860B;margin-right:2px;"></i>' + no + ' ' + esc(ds) + ' ×' + esc(String(s.qty)) + ' 報廢歸還</div>';
+        });
         h += '</div>';
     }
     return h;
