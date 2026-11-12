@@ -115,7 +115,7 @@ function si_fetch_ship(PDO $db, string $from, string $to, array $opt = []): arra
     $stCond    = cqa_sale_type_sql($saleTypes);
 
     $sql = "SELECT isl.IS_id, isl.IS_number, isl.Order_date, isl.Client_id, isl.Client_name,
-                   isl.d_setting_id, isl.Product_id, isl.Specification, isl.Qty, isl.Unit_price,
+                   isl.d_setting_id, isl.Product_id, isl.Specification, isl.Content, isl.Qty, isl.Unit_price,
                    isl.Order_id, isl.Note, isl.sale_type, isl.anomaly_confirmed,
                    ist.sale_type_name, ist.is_count, ist.exclude_anomaly, ist.exclude_when_nonzero
               FROM is_list isl
@@ -151,7 +151,7 @@ function si_fetch_ship(PDO $db, string $from, string $to, array $opt = []): arra
             'pid'     => (int)($r['d_setting_id'] ?? 0),
             'pno'     => trim((string)$r['Product_id']) ?: '（未填料號）',
             'craw'    => trim((string)$r['Client_name']),   // 出貨單上原本的客戶名稱（BOM總覽深連結比對同客戶用）
-            'spec'    => (string)($r['Specification'] ?? ''),
+            'spec'    => trim((string)($r['Specification'] ?? '') . ' ' . (string)($r['Content'] ?? '')),   // 匯入時空格右側（製程）存在 Content
             'qty'     => $qty, 'price' => $price, 'amount' => $amt,
             'order_id'=> (int)($r['Order_id'] ?? 0),
             'note'    => (string)($r['Note'] ?? ''),
