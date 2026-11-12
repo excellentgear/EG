@@ -1145,6 +1145,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // BOM 管理員修正面板（與 BOM總覽同一份後端：src/common/bom_admin_fix_api.php，自帶管理員與操作確認密碼檢查）
+    if (in_array($action, ['baf_check','baf_alias_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+        require __DIR__ . '/../../src/common/bom_admin_fix_api.php';
+    }
+
     header('Content-Type: application/json');
 
     // ── 快速綁定四個動作的後端守門（鐵律8：前端把按鈕藏起來不算守門）──────────────────────
@@ -2608,6 +2613,7 @@ try {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_bom_admin_fix.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_admin_fix.js') ?>"></script>
 <script src="../../resource/js/eg_bom_timeline.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_timeline.js') ?>"></script>
     <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
@@ -2915,7 +2921,11 @@ function rowToTr(item, maxProc, priceMap){
     var actBtn = (OCQ_ADMIN.isAdmin && OCQ_ADMIN.unlocked)
         ? ' <button type="button" class="ocq-act-btn" data-bom="'+esc(item.bom)+'" title="展開/收合這筆BOM的報工/出貨紀錄，核對發包/回廠日" style="border:1px solid #D8BE93;background:#fff;color:#a0521f;border-radius:3px;font-size:11px;padding:0 4px;cursor:pointer;"><i class="fa fa-history"></i> 報工/出貨</button>'
         : '';
-    var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure>'+bomText+actBtn+closedInfo+'</td>';
+    // 管理員修正（與 BOM總覽同一支 EGBomAdminFix；面板內自行要求操作確認密碼）
+    var fixBtn = OCQ_ADMIN.isAdmin
+        ? ' <button type="button" class="ocq-fix-btn" data-bom="'+esc(item.bom)+'" title="管理員修正：列出這個BOM的發單／回廠／QC檢驗／移轉憑單／異常單，可直接修改數量與日期（需操作確認密碼）" style="border:1px solid #E4B3A0;background:#fff;color:#b8431f;border-radius:3px;font-size:11px;padding:0 4px;cursor:pointer;"><i class="fa fa-wrench"></i> 管理員修正</button>'
+        : '';
+    var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure>'+bomText+actBtn+fixBtn+closedInfo+'</td>';
     // 料號文字本身＝點一下開圖面查閱（bom_viewer）；文字以外的空白處維持雙擊帶入篩選
     var didText = item.d_id
         ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" data-pk="'+(parseInt(item.d_setting_id,10)||0)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
@@ -2955,6 +2965,11 @@ function rowToTr(item, maxProc, priceMap){
             if (p.return_date) cell += '<div style="color:#2a7ae2;font-weight:bold;">'+esc(egFmtDate(p.return_date))+' 回</div>';
         }
         cell += ocqProcExtras(p, item);
+        // 最後一關：還有未出貨量且有快速出貨權限 → 與 BOM總覽「待出貨」鈕相同，另開快速出貨綁定出貨單
+        if (OCQ_CAN_SHIP && i === procs.length - 1) {
+            var _shipped = Number(OCQ_SHIPS[item.bom] && OCQ_SHIPS[item.bom].qty) || 0;
+            if (_shipped < (Number(item.Qty) || 0)) cell += '<div style="margin-top:3px;"><a class="btn btn-xs btn-success" href="../Sales/Shipping_Quick.php?bom='+encodeURIComponent(item.bom)+'" target="_blank" rel="noopener" title="另開快速出貨（自動帶入此製令綁定的訂單與可出數量）">待出貨</a></div>';
+        }
         if (pv > 0) cell += '<div style="color:#0a6;font-size:10px;">$'+fmtPrice(pv)+'</div>';
         tds += '<td class="t-left">'+cell+'</td>';
     }
@@ -3016,6 +3031,9 @@ $('#ocqAdminSubmit').on('click', function(){
 
 // 報工/出貨紀錄：展開在該筆 BOM「下方」同一張表格內（不用跳窗，才能邊看紀錄邊在上面改日期）；
 // 收合起來的內容留著不清掉，再點開不用重打一次 API。
+window.fetchDataAndFilter = function(){ loadList(typeof curPage !== 'undefined' ? curPage : 1); };
+window.showTemporaryMessage = function(t){ if (typeof showToast === 'function') showToast(t); };
+$(document).on('click', '.ocq-fix-btn', function(){ if (window.EGBomAdminFix) window.EGBomAdminFix.open(String($(this).data('bom')), ''); });
 $(document).on('click', '.ocq-act-btn', function(){
     var $tr = $(this).closest('tr');
     var $actRow = $tr.next('.ocq-act-row');
