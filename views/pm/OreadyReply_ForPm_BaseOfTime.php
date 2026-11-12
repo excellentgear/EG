@@ -3364,11 +3364,18 @@ echo "</script>\n";
        left<=0＝已全數出貨：發單日欄不再顯示這一關與「待出貨」（2026-11-11 使用者要求）。 */
     function ocLastShipInfo(row, proc) {
         var m = (window.obBatchMap || {})[String(proc.bom_ing_fid)];
-        if (!(m && m.batches && m.batches.length && (Number(m.outside) || 0) <= 1e-9 && (Number(m.ret) || 0) > 0)) return null;
+        var _hasBatch = !!(m && m.batches && m.batches.length);
+        var _xferReady = null;   // 沒有發包批次（只有移轉憑單／直接按已移轉）的最後一關：以移轉憑單數量（沒有憑單才用本站數量）認定已回廠
+        if (!_hasBatch) {
+            if (String(proc.processing_state || '') !== 'E') return null;
+            var _sq = Number(proc.sqty) || 0, _xq = Number(proc.xfer_qty) || 0;
+            _xferReady = _xq > 0 ? (_sq > 0 ? Math.min(_sq, _xq) : _xq) : _sq;
+            if (!(_xferReady > 0)) return null;
+        } else if (!((Number(m.outside) || 0) <= 1e-9 && (Number(m.ret) || 0) > 0)) return null;
         var g = ocGrp(proc), bm = String(row.bom || '').trim();
         var later = (Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === bm && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > g; });
         if (later) return null;
-        var ready = Math.max(0, (Number(m.send) || 0) - (Number(m.wd) || 0));
+        var ready = _hasBatch ? Math.max(0, (Number(m.send) || 0) - (Number(m.wd) || 0)) : _xferReady;
         var shipped = Number(row.bound_ships && row.bound_ships.qty) || 0;
         return { ret: ready, shipped: shipped, left: Math.max(0, ready - shipped) };
     }
