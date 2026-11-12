@@ -5590,7 +5590,7 @@ echo "</script>\n";
                     ln.style.whiteSpace = 'nowrap';
                     ln.title = '已綁定出貨單 ' + s.no + '（' + d.replace(/-/g, '.') + ' 出貨 ' + s.qty + '）';
                     ln.innerHTML = '<i class="fa fa-check" style="color:#2E8B57;margin-right:2px;"></i>'
-                        + '<span style="color:#0056b3;line-height:1.3;' + (window.canShipInsight ? 'text-decoration:underline;cursor:pointer;' : '') + '">' + escapeHtml(s.short || s.no) + '</span> '
+                        + '<span style="color:#0056b3;line-height:1.3;' + (window.canShipInsight ? 'text-decoration:underline;cursor:pointer;' : '') + '">' + escapeHtml(s.no || s.short) + '</span> '
                         + '<span style="line-height:1.3;">' + escapeHtml(dShow) + ' ×' + escapeHtml(String(s.qty)) + '</span>';
                     // 有出貨分析檢視權限者：點一下另開出貨分析，只列這一張出貨單（與下方出貨紀錄同一種開法）
                     if (window.canShipInsight && s.no) {
@@ -6710,10 +6710,27 @@ echo "</script>\n";
                         else if (_effectiveSt === 'P') { _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待移轉'; }
                         else if (_xoPartial(_proc) && _obm && _obm.batches && _obm.batches.length && (Number(_obm.outside) || 0) > 1e-9) { _aBtn.className = 'btn btn-warning btn-xs btn-return-style'; _aBtn.textContent = '加工中'; } // 還有批次沒回廠
                         else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = '已移轉'; }
+                        // 最後一關（包裝等）已移轉、貨全數回廠且還有沒出的量：與加工中全數回廠同樣顯示「待出貨」並可開快速出貨
+                        var _lastShipE = null;
+                        if (_effectiveSt === 'E') { try { var _lsE = ocLastShipInfo(row, _proc); if (_lsE && _lsE.left > 0) _lastShipE = _lsE; } catch (e) {} }
+                        if (_lastShipE) {
+                            _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待出貨';
+                            if (window.canShipQuick) {
+                                var _shipBomE = String(row.bom || '').trim();
+                                _aBtn.style.cursor = 'pointer';
+                                _aBtn.title = '最後一關已全數回廠：點擊開啟快速出貨（自動帶入此製令綁定的訂單與可出數量）';
+                                _aBtn.onclick = function (e) { if (e) { e.preventDefault(); e.stopPropagation(); } window.open('../Sales/Shipping_Quick.php?bom=' + encodeURIComponent(_shipBomE), '_blank', 'noopener'); return false; };
+                            } else {
+                                _aBtn.style.cursor = 'default'; _aBtn.title = '最後一關已全數回廠，等待出貨';
+                                _aBtn.onclick = function (e) { if (e) e.preventDefault(); return false; };
+                            }
+                        }
                         // Gentelella 的 .btn 自帶 margin-bottom:5px，在這種一行一顆的小按鈕上
                         // 只會讓狀態列平白高 5px（外觀不變，純粹是下方留白）
                         _aBtn.style.marginBottom = '0';
-                        if (window.isCRU && !window.featTransfer) {
+                        if (_lastShipE) {
+                            // 待出貨鈕的點擊行為已在上面設定好，不要被「已移轉」的預設行為覆蓋
+                        } else if (window.isCRU && !window.featTransfer) {
                             _aBtn.title = '無執行權限 (C+R+U 業務受限)';
                             _aBtn.style.cursor = 'not-allowed'; _aBtn.style.opacity = '0.6';
                             _aBtn.onclick = function(e) { e.preventDefault(); return false; };

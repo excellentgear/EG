@@ -2789,7 +2789,7 @@ function bindCellHtml(item){
         h += '<div style="font-size:10.5px;color:#555;margin-top:3px;line-height:1.35;">';
         (bs.ships||[]).slice(0, 5).forEach(function(s){
             var d = String(s.date || ''), ds = d.substring(0,4) === yr ? d.substring(5).replace('-','/') : d.replace(/-/g,'.');
-            var no = esc(s.short || s.no);
+            var no = esc(s.no || s.short);
             if (OCQ_CAN_SHIP && s.no) {
                 var q = new URLSearchParams({ ship_pid: String(item.d_setting_id || ''), ship_pno: String(item.d_id || ''),
                     ship_client: String(item.Client_Name_Full || item.Client_Name || '').trim(), ship_from: d, ship_to: d,
@@ -2802,7 +2802,7 @@ function bindCellHtml(item){
         if ((bs.ships||[]).length > 5) h += '<div>…另 ' + (bs.ships.length - 5) + ' 張，共出 ' + esc(String(bs.qty)) + '</div>';
         (bs.scrap || []).forEach(function(s){
             var d = String(s.date || ''), ds = d.substring(0,4) === yr ? d.substring(5).replace('-','/') : d.replace(/-/g,'.');
-            var no = esc(s.short || s.no);
+            var no = esc(s.no || s.short);
             if (OCQ_CAN_SHIP && s.no) {
                 var q = new URLSearchParams({ ship_no: String(s.no), ship_isid: String(s.is_id || ''), ship_from: d, ship_to: d });
                 no = '<a href="../Sales/Shipping_Insight.php?'+esc(q.toString())+'" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;">'+no+'</a>';

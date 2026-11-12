@@ -241,6 +241,22 @@ case 'match_candidates': {
     sq_out(sq_match_candidates($db, $isId, $same, (string)($src['kw'] ?? '')));
 }
 
+/* ── 製令綁定舊出貨單（BOM總覽／完工BOM「待出貨」進來，已有訂單編號者）── */
+case 'bom_bind_candidates': {
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可綁定舊出貨單', 403);
+    $src = $_POST ?: $_GET;
+    sq_out(sq_bom_bind_candidates($db, (string)($src['bom'] ?? '')));
+}
+
+case 'bom_bind_apply': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可綁定舊出貨單', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    $pairs = json_decode($_POST['pairs'] ?? '[]', true);
+    if (!is_array($pairs) || !$pairs) sq_err('沒有要綁定的資料');
+    sq_out(sq_bom_bind_apply($db, (string)($_POST['bom'] ?? ''), $pairs, (string)$uid));
+}
+
 case 'match_scrap_boms': {
     if (!$perms['canAdmin']) sq_err('僅出貨管理員可使用', 403);
     $src = $_POST ?: $_GET;

@@ -530,6 +530,23 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <button data-close="mkCand">取消</button>
   </div>
 </div></div>
+
+<!-- 製令綁定舊出貨單（由 BOM總覽／完工BOM「待出貨」進來，製令已有訂單編號） -->
+<div class="sq-mask" id="mkBomBind"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-link"></i>&nbsp;綁定舊出貨單到製令 <span id="bbBom"></span><span class="m-close" data-close="mkBomBind">✕</span></div>
+  <div class="m-body">
+    <div class="mt-note" style="margin-bottom:6px;">
+      列出這張製令綁定的訂單（<span id="bbOrders"></span>）底下、<b>同客戶</b>的舊出貨明細：已綁這些訂單者，或尚未綁訂單但同料號者。
+      勾選並填入「分給這張製令的數量」後按綁定；尚未綁訂單的出貨會一併補上訂單編號。綁定的單號一律是正式 IS 單號。
+    </div>
+    <div id="bbList" style="max-height:48vh;overflow:auto;"></div>
+  </div>
+  <div class="m-foot">
+    <span id="bbSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
+    <button id="btnBbApply" class="btn-warm" style="background:var(--sq-acc);color:#fff;font-weight:bold;"><i class="fa fa-link"></i> 綁定勾選的出貨明細</button>
+    <button data-close="mkBomBind">取消</button>
+  </div>
+</div></div>
 <?php endif; ?>
 
 <!-- 追溯對照：報價單 → 訂單 → 製令 → 出貨單 → 退貨單 →(重出)出貨單 -->
@@ -765,6 +782,49 @@ function openFromUrl(){
  * 以製令號搜尋待出貨清單（搜尋框本來就會把製令號解析成綁定的訂單），自動勾選綁了這張製令的訂單，
  * 本次出貨數量＝這張製令分給該訂單、目前可出的量（不超過訂單未出量）；
  * 這張製令已經沒有可出的量（都出完了）→ 改開「近期出貨單」列出綁了這張製令的出貨單。 */
+/* 橫幅上的「綁定舊出貨單」鈕（出貨管理員才有）：製令已有訂單編號時，不必走「舊資料訂單回填」，直接把舊出貨綁到這張製令 */
+function bbBtn(bomNo){
+  return CAN_ADMIN ? ' <button type="button" class="btn-bb" data-bom="'+esc(bomNo)+'" style="margin-left:8px;padding:2px 10px;border:1px solid #c9792a;background:#fff;color:#8a4b12;border-radius:4px;font-weight:bold;cursor:pointer;">'
+    + '<i class="fa fa-link"></i> 綁定舊出貨單</button>' : '';
+}
+var BB = {bom:'', ships:[]};
+$(document).on('click','.btn-bb',function(){
+  BB.bom = String($(this).data('bom'));
+  $('#bbBom').text(BB.bom); $('#bbOrders').text(''); $('#bbList').html('<div style="padding:16px;color:#8a6d45;">查詢中…</div>');
+  openMask('mkBomBind');
+  $.post(API+'?action=bom_bind_candidates',{bom:BB.bom},function(r){
+    if(!r.ok || r.error){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
+    BB.ships = r.ships||[];
+    $('#bbOrders').text((r.orders||[]).join('、'));
+    if(!BB.ships.length){ $('#bbList').html('<div style="padding:16px;color:#8a6d45;">沒有可綁定的舊出貨明細（同客戶、已綁這些訂單或同料號尚未綁訂單者）。</div>'); bbCount(); return; }
+    var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>訂單</th><th>出貨量</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
+    BB.ships.forEach(function(s,i){
+      var dis = !s.selectable, note = s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : '');
+      h += '<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':'')+'"><td><input type="checkbox" class="bb-ck"'+(dis?' disabled':'')+'></td>'
+        + '<td><b>'+esc(s.no)+'</b></td><td>'+esc(String(s.date).replace(/-/g,'.'))+'</td><td>'+esc(s.part)+'</td>'
+        + '<td>'+(s.order_oo?esc(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
+        + '<td><input type="number" class="bb-q" min="1" max="'+s.left+'" value="'+s.left+'" style="width:90px;"'+(dis?' disabled':'')+'></td></tr>';
+    });
+    $('#bbList').html(h+'</tbody></table>'); bbCount();
+  },'json').fail(function(){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
+});
+function bbCount(){ $('#bbSel').text('已勾選 '+$('#bbList .bb-ck:checked').length+' 筆'); }
+$(document).on('change','#bbList .bb-ck',bbCount);
+$(document).on('click','#btnBbApply',function(){
+  var pairs=[]; $('#bbList tbody tr').each(function(){
+    if(!$(this).find('.bb-ck').is(':checked')) return;
+    pairs.push({is_id:BB.ships[$(this).data('i')].is_id, qty:parseInt($(this).find('.bb-q').val(),10)||0});
+  });
+  if(!pairs.length){ toast('請先勾選要綁定的出貨明細', true); return; }
+  if(!confirm('將 '+pairs.length+' 筆舊出貨明細綁定到製令 '+BB.bom+'？\n綁定後會計入這張製令已出貨量。')) return;
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=bom_bind_apply',{csrf:CSRF,bom:BB.bom,pairs:JSON.stringify(pairs)},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
+    toast(esc(r.message)); closeMask('mkBomBind'); load(function(){ openFromBom(BB.bom); });
+  },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
+});
+
 function openFromBom(bomNo){
   $('#kw').val(bomNo);
   $('#onlyReady').prop('checked', false);
@@ -791,7 +851,7 @@ function openFromBom(bomNo){
         + '<i class="fa fa-info-circle"></i> 由 BOM總覽帶入製令 <b>'+esc(bomNo)+'</b>：'
         + (n > 0 ? '已自動勾選 '+n+' 張綁定訂單並帶入這張製令可出的數量，確認無誤後按下方出貨。' : '')
         + (zero.length ? (n > 0 ? '另有' : '') + '綁定訂單 <b>'+esc(zero.join('、'))+'</b> 系統判定這張製令目前可出 0，未自動帶入數量（橘框標示），請確認後自行勾選並填寫本次出貨數量。' : '')
-        + (CAN_EDIT ? '' : '（您沒有出貨登錄權限，只能檢視）') + '</div>');
+        + (CAN_EDIT ? '' : '（您沒有出貨登錄權限，只能檢視）') + bbBtn(bomNo) + '</div>');
       return;
     }
     // 沒有可出的量：列出已綁這張製令的出貨單
@@ -800,7 +860,7 @@ function openFromBom(bomNo){
     $('#rcFromAudit').remove();
     $('#rcList').before('<div id="rcFromAudit" style="background:#F7E0BD;border:1px solid #F0A24B;border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:12px;color:#6b4a1f;">'
       + '<i class="fa fa-info-circle"></i> 由 BOM總覽帶入製令 <b>'+esc(bomNo)+'</b>：這張製令目前沒有可出貨的數量'
-      + (rows.length ? '' : '（綁定的訂單都已出完）') + '，以下是已綁定這張製令的出貨單。</div>');
+      + (rows.length ? '' : '（綁定的訂單都已出完）') + '，以下是已綁定這張製令的出貨單。' + bbBtn(bomNo) + '</div>');
     openMask('mkRecent');
     loadRecent();
   });
