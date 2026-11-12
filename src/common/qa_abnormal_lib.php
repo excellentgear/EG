@@ -5146,6 +5146,8 @@ function qab_notify_info(PDO $db, array $orderIds): array
     foreach ($evs as $e) {
         $eid = (int)$e['id']; $oid = (int)$e['ref_id'];
         $title = (string)$e['title'];
+        // 通知標題欄位被資料庫從中間截斷時，結尾會留下半個中文字（非法 UTF-8），整包 JSON 會編碼失敗 → 先去掉殘字
+        $t2 = @iconv('UTF-8', 'UTF-8//IGNORE', $title); if ($t2 !== false) $title = $t2;
         $isDecide = ($e['ref_type'] === 'QA_DECIDE' || $e['ref_type'] === 'QA_DECIDE_F' || $e['ref_type'] === 'QA_QC_REVIEW'
                      || ($e['ref_type'] === 'QAB_L1' && preg_match('/待裁決|待決策|轉呈決策|轉回第一層/u', $title))
                      || ($e['ref_type'] === 'QA' && preg_match('/待.*裁示/u', $title)));
@@ -5160,6 +5162,7 @@ function qab_notify_info(PDO $db, array $orderIds): array
             if (preg_match('/處置已判定/u', $title)) $label = '處置判定';
             elseif (preg_match('/已回覆/u', $title)) $label = '回覆通知';
             elseif (preg_match('/已結案/u', $title)) $label = '結案通知';
+            elseif (preg_match('/^廠商提報報廢已/u', $title)) $label = '廠商提報報廢結案';
             if ($label === '') $label = '通知';
             $label = str_replace(['自動核准', '自動核可', '自動'], ['核准', '核准', ''], $label);   // 畫面不顯示「自動」字樣
             if (mb_strlen($label, 'UTF-8') > 16) $label = mb_substr($label, 0, 16, 'UTF-8') . '…';
