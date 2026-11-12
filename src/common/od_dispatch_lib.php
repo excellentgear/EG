@@ -78,6 +78,12 @@ function od_ensure_schema(PDO $db): void
             $db->exec("ALTER TABLE od_slip_line ADD COLUMN unit_price DECIMAL(12,2) NULL COMMENT '發單單價（沒填＝NULL，不顯示 0；後續對帳再補）' AFTER qty");
         }
     } catch (Throwable $e) {}
+    try {   // od_price 改版（製令價格／報價詢價）：補欄位；kind 舊值 approved→bom、inquiry→quote
+        if (!$db->query("SHOW COLUMNS FROM od_price LIKE 'bom'")->fetch()) {
+            $db->exec("ALTER TABLE od_price ADD COLUMN bom VARCHAR(30) NULL COMMENT '製令價格所屬 BOM' AFTER kind, ADD COLUMN qty DECIMAL(14,3) NULL COMMENT '製令＝BOM 製程數量／報價詢價＝詢價數量' AFTER bom, MODIFY process_no INT NULL");
+            $db->exec("UPDATE od_price SET kind=IF(kind='inquiry','quote','bom') WHERE kind IN ('approved','inquiry')");
+        }
+    } catch (Throwable $e) {}
     try {
         foreach ([['od_view', '批次發單檢閱'], ['od_issue', '批次發單（發單與列印）'], ['od_admin', '批次發單管理員']] as $r) {
             $db->prepare("INSERT IGNORE INTO roles (role_code, role_name, module) VALUES (?,?, 'od_dispatch')")->execute($r);
@@ -557,88 +563,109 @@ function od_price_history(PDO $db, string $bom, int $processNo, int $limit = 10)
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 價格表中此料號＋製程的有效項目（含詢價），核定價優先、指定廠商優先於不限廠商、新到舊 */
+/**
+ * 價格表（od_price）兩種來源：
+ *   kind='bom'   製令價格：生管選定某張 BOM 的某個製程、指定廠商後輸入價格。綁料號ID＋製程ID＋廠商ID，並記錄 BOM
+ *                （同料號每一批加工數量與日期不同，報價也不同，所以以 BOM 為單位）。發單時同 BOM＋同製程＋同廠商自動帶入。
+ *   kind='quote' 報價詢價：報價階段的廠商詢價結果，只綁料號ID、數量、廠商ID、價格、備註（不綁製程與 BOM），只當參考顯示。
+ */
+/** 這張 BOM 對應的價格表項目（此 BOM 此製程的製令價格優先，其後是同料號其他 BOM 的同製程價格、再來是報價詢價），新到舊 */
 function od_price_table_for(PDO $db, string $bom, int $processNo): array
 {
     $pt = od_bom_part($db, $bom);
     if (!$pt['d_id']) return [];
-    $st = $db->prepare("SELECT p.*, COALESCE(ml.maker_id,'') AS maker FROM od_price p LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no
-                         WHERE p.d_id=? AND p.process_no=? AND p.status='active'
-                           AND (p.valid_from IS NULL OR p.valid_from<=CURDATE()) AND (p.valid_to IS NULL OR p.valid_to>=CURDATE())
-                         ORDER BY (p.kind='approved') DESC, (p.maker_id_no IS NOT NULL AND p.maker_id_no<>'') DESC, p.valid_from DESC, p.price_id DESC");
-    $st->execute([$pt['d_id'], $processNo]);
+    $st = $db->prepare("SELECT p.*, COALESCE(ml.maker_id,'') AS maker, pn.ProcessName FROM od_price p
+                          LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no LEFT JOIN process_no pn ON pn.ProcessNo=p.process_no
+                         WHERE p.d_id=? AND p.status='active' AND ((p.kind='bom' AND p.process_no=?) OR p.kind='quote')
+                         ORDER BY (p.kind='bom' AND p.bom=?) DESC, (p.kind='bom') DESC, p.created_at DESC, p.price_id DESC");
+    $st->execute([$pt['d_id'], $processNo, $bom]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 發單時自動帶入的單價：只用「老闆核定」價；指定了廠商就先找該廠商的專屬價，沒有再用不限廠商價 */
+/** 發單時自動帶入：同一張 BOM＋同製程＋同廠商的製令價格（廠商沒指定或沒有符合的就不帶，改顯示參考） */
 function od_price_suggest(PDO $db, string $bom, int $processNo, string $makerNo = ''): array
 {
     $tbl = od_price_table_for($db, $bom, $processNo);
     $pick = null;
-    foreach ($tbl as $r) {
-        if ($r['kind'] !== 'approved') continue;
-        $mk = (string)$r['maker_id_no'];
-        if ($makerNo !== '' && $mk === $makerNo) { $pick = $r; break; }
-        if ($mk === '' && !$pick) $pick = $r;
+    if ($makerNo !== '') {
+        foreach ($tbl as $r) { if ($r['kind'] === 'bom' && $r['bom'] === $bom && (string)$r['maker_id_no'] === $makerNo) { $pick = $r; break; } }
     }
     $hist = od_price_history($db, $bom, $processNo, 6);
-    return ['approved' => $pick, 'table' => $tbl, 'history' => $hist, 'last' => $hist[0] ?? null];
+    $quotes = array_values(array_filter($tbl, fn($x) => $x['kind'] === 'quote'));
+    return ['approved' => $pick, 'table' => $tbl, 'quotes' => $quotes, 'history' => $hist, 'last' => $hist[0] ?? null];
 }
 
 function od_price_list(PDO $db, array $f): array
 {
     od_ensure_schema($db);
     $w = ["p.status='active'"]; $a = [];
-    if (!empty($f['void'])) $w = ['1=1'];
-    if (!empty($f['process_no'])) { $w[] = 'p.process_no=?'; $a[] = (int)$f['process_no']; }
-    if (!empty($f['kind']) && in_array($f['kind'], ['approved', 'inquiry'], true)) { $w[] = 'p.kind=?'; $a[] = $f['kind']; }
+    if (!empty($f['kind']) && in_array($f['kind'], ['bom', 'quote'], true)) { $w[] = 'p.kind=?'; $a[] = $f['kind']; }
     $k = trim((string)($f['kw'] ?? ''));
-    if ($k !== '') { $w[] = "(p.part_no LIKE ? OR p.client_name LIKE ? OR ml.maker_id LIKE ? OR p.note LIKE ?)"; array_push($a, "%$k%", "%$k%", "%$k%", "%$k%"); }
+    if ($k !== '') { $w[] = "(p.part_no LIKE ? OR p.client_name LIKE ? OR ml.maker_id LIKE ? OR p.bom LIKE ? OR p.note LIKE ?)"; array_push($a, "%$k%", "%$k%", "%$k%", "%$k%", "%$k%"); }
     $st = $db->prepare("SELECT p.*, pn.ProcessName, COALESCE(ml.maker_id,'') AS maker
                           FROM od_price p LEFT JOIN process_no pn ON pn.ProcessNo=p.process_no LEFT JOIN maker_list ml ON ml.maker_id_no=p.maker_id_no
-                         WHERE " . implode(' AND ', $w) . " ORDER BY p.part_no, p.process_no, (p.kind='approved') DESC, p.valid_from DESC LIMIT 300");
+                         WHERE " . implode(' AND ', $w) . " ORDER BY p.created_at DESC, p.price_id DESC LIMIT 300");
     $st->execute($a);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 新增／修改一筆價格。$in: price_id(0=新增), d_id, process_no, maker_id_no, unit_price, kind, qty_note, valid_from, valid_to, note */
+/** 挑 BOM（新增製令價格用）：編號或料號模糊搜尋，只列未完工的 */
+function od_bom_search(PDO $db, string $q): array
+{
+    $q = trim($q);
+    if ($q === '') return [];
+    $st = $db->prepare("SELECT bom, d_id AS part_no, Client_Name AS client, sqty FROM bom
+                         WHERE (processing_state IS NULL OR processing_state<>'1') AND (bom LIKE ? OR d_id LIKE ?) ORDER BY bom DESC LIMIT 20");
+    $st->execute(["%$q%", "%$q%"]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * 新增／修改一筆價格。
+ * kind=bom  ：bom、process_no（必須是該 BOM 的製程）、maker_id_no、unit_price、note；料號ID由 BOM 推得（不採信前端）
+ * kind=quote：d_id、qty、maker_id_no、unit_price、note
+ */
 function od_price_save(PDO $db, array $user, array $in): array
 {
     od_ensure_schema($db);
-    $did = (int)($in['d_id'] ?? 0);
-    $pno = (int)($in['process_no'] ?? 0);
+    $kind = ($in['kind'] ?? '') === 'quote' ? 'quote' : 'bom';
     $price = (float)($in['unit_price'] ?? 0);
-    $kind = ($in['kind'] ?? '') === 'inquiry' ? 'inquiry' : 'approved';
     $mk = trim((string)($in['maker_id_no'] ?? ''));
-    if (!$did) return ['ok' => false, 'message' => '請從料號主檔選擇料號'];
-    if (!$pno) return ['ok' => false, 'message' => '請選擇製程'];
     if ($price <= 0) return ['ok' => false, 'message' => '單價必須大於 0'];
-    if ($kind === 'inquiry' && $mk === '') return ['ok' => false, 'message' => '廠商詢價結果必須指定是哪一家廠商'];
-    foreach (['valid_from', 'valid_to'] as $k) {
-        $v = trim((string)($in[$k] ?? ''));
-        if ($v !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) return ['ok' => false, 'message' => '日期格式不正確'];
+    if ($mk === '' || !od_maker_info($db, $mk)) return ['ok' => false, 'message' => '請從清單選擇廠商'];
+    $note = mb_substr(trim((string)($in['note'] ?? '')), 0, 200);
+    $bom = null; $pno = null; $qty = null; $did = 0;
+    if ($kind === 'bom') {
+        $bom = trim((string)($in['bom'] ?? '')); $pno = (int)($in['process_no'] ?? 0);
+        if ($bom === '') return ['ok' => false, 'message' => '請先選擇 BOM'];
+        $chk = $db->prepare("SELECT bi.sqty FROM bom_ing bi WHERE bi.bom=? AND bi.process_no=? LIMIT 1");
+        $chk->execute([$bom, $pno]);
+        $sq = $chk->fetchColumn();
+        if ($sq === false) return ['ok' => false, 'message' => '這張 BOM 沒有這個製程'];
+        $did = od_bom_part($db, $bom)['d_id'];
+        if (!$did) return ['ok' => false, 'message' => '這張 BOM 的料號沒有綁定到料號主檔，無法建立價格'];
+        $qty = (float)$sq;
+    } else {
+        $did = (int)($in['d_id'] ?? 0);
+        $qty = (float)($in['qty'] ?? 0);
+        if (!$did) return ['ok' => false, 'message' => '請從料號主檔選擇料號'];
+        if ($qty <= 0) return ['ok' => false, 'message' => '請輸入詢價數量'];
     }
-    $vf = trim((string)($in['valid_from'] ?? '')) ?: null;
-    $vt = trim((string)($in['valid_to'] ?? '')) ?: null;
-    if ($vf && $vt && $vt < $vf) return ['ok' => false, 'message' => '有效迄日不可早於起日'];
-    if ($mk !== '' && !od_maker_info($db, $mk)) return ['ok' => false, 'message' => '找不到廠商'];
     $ds = $db->prepare("SELECT d.D_Setting_Id, c.customer FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.d_id=?");
     $ds->execute([$did]);
     $d = $ds->fetch(PDO::FETCH_ASSOC);
     if (!$d) return ['ok' => false, 'message' => '找不到料號主檔'];
     $uid = (int)$user['id']; $un = (string)($user['user_cname'] ?? '');
     $id = (int)($in['price_id'] ?? 0);
-    $vals = [$did, $d['D_Setting_Id'], (string)$d['customer'], $pno, $mk !== '' ? $mk : null, round($price, 2), $kind,
-             mb_substr(trim((string)($in['qty_note'] ?? '')), 0, 60), $vf, $vt, mb_substr(trim((string)($in['note'] ?? '')), 0, 200)];
+    $vals = [$did, $d['D_Setting_Id'], (string)$d['customer'], $pno, $mk, round($price, 2), $kind, $bom, $qty, $note];
     if ($id > 0) {
-        $db->prepare("UPDATE od_price SET d_id=?, part_no=?, client_name=?, process_no=?, maker_id_no=?, unit_price=?, kind=?, qty_note=?, valid_from=?, valid_to=?, note=?, updated_at=NOW() WHERE price_id=?")
+        $db->prepare("UPDATE od_price SET d_id=?, part_no=?, client_name=?, process_no=?, maker_id_no=?, unit_price=?, kind=?, bom=?, qty=?, note=?, updated_at=NOW() WHERE price_id=?")
            ->execute(array_merge($vals, [$id]));
     } else {
-        $db->prepare("INSERT INTO od_price (d_id, part_no, client_name, process_no, maker_id_no, unit_price, kind, qty_note, valid_from, valid_to, note, created_by, created_by_name, created_at, updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute(array_merge($vals, [$uid, $un]));
+        $db->prepare("INSERT INTO od_price (d_id, part_no, client_name, process_no, maker_id_no, unit_price, kind, bom, qty, note, created_by, created_by_name, created_at, updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")->execute(array_merge($vals, [$uid, $un]));
         $id = (int)$db->lastInsertId();
     }
-    if ($kind === 'approved') $db->prepare("UPDATE od_price SET approved_by=?, approved_at=IFNULL(approved_at,NOW()) WHERE price_id=?")->execute([$un, $id]);
     return ['ok' => true, 'price_id' => $id];
 }
 

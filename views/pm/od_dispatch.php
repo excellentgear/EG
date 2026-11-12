@@ -109,6 +109,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
         .slipbox { border:1px solid #d98a33; border-radius:6px; padding:8px; background:#FDF3E3; margin-bottom:10px; }
         .slipbox .hd { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:6px; font-weight:bold; color:#5b3a1e; }
         .slip-prev { background:#fff; color:#222; border:1px solid #999; padding:8px 12px; font-family:"MingLiU","Noto Sans TC",monospace; font-size:12px; overflow-x:auto; }
+        .slip-prev .pg { box-sizing:border-box; position:relative; background:#fff; color:#000; font-family:"MingLiU","Noto Sans TC",monospace; font-size:12px; border:1px solid #bbb; margin:0 0 8px; overflow:hidden; zoom:.8; }
+        .slip-prev .t1 { text-align:center; font-size:16px; font-weight:bold; } .slip-prev .t2 { text-align:center; font-size:14px; margin-bottom:4px; }
+        .slip-prev .cp { font-size:11px; border:1px solid #000; padding:0 4px; }
+        .slip-prev table { border-collapse:collapse; width:100%; } .slip-prev table.hd td { vertical-align:top; border:0; padding:0 2px; }
+        .slip-prev .vname { font-size:15px; font-weight:bold; } .slip-prev td.mt { text-align:right; width:45%; }
+        .slip-prev table.ln { margin-top:4px; } .slip-prev table.ln th, .slip-prev table.ln td { border:1px solid #000; padding:1px 4px; font-size:12px; background:#fff; color:#000; white-space:nowrap; }
+        .slip-prev .ft { margin-top:4px; } .slip-prev .ft2 { font-size:11px; margin-top:2px; }
+        .slip-prev .bt { position:absolute; left:9mm; right:9mm; bottom:4mm; display:flex; justify-content:space-between; font-size:10px; }
         .od-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10500; align-items:center; justify-content:center; }
         .od-mask.on { display:flex; }
         .od-modal { background:#fff; border-radius:6px; box-shadow:0 6px 32px rgba(0,0,0,.25); width:760px; max-width:96vw; max-height:90vh; display:flex; flex-direction:column; }
@@ -217,13 +225,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
         <!-- ⑥ 加工價格表 -->
         <div class="od-pane" id="p6">
           <div class="od-card">
-            <h4>外包加工價格表（老闆核定價／廠商詢價結果）</h4>
-            <div class="hint" style="margin-bottom:6px;">生管先在這裡建立老闆核定的加工價格，發單時依「料號＋製程（＋廠商）」自動帶入單價；廠商詢價結果也可先記在這裡，等老闆核定後才會自動帶入（詢價價只當參考顯示）。指定廠商的價格優先於不限廠商的價格。</div>
+            <h4>外包加工價格表</h4>
+            <div class="hint" style="margin-bottom:6px;">
+              <b>製令價格</b>：選定某張 BOM → 點該 BOM 的製程 → 模糊篩選廠商 → 輸入價格與備註。綁定料號 ID、製程 ID、廠商 ID，並記錄 BOM（每批加工數量與日期不同，報價也不同）。發單時<b>同一張 BOM＋同製程＋同廠商</b>會自動帶入單價。<br>
+              <b>報價詢價</b>：報價階段廠商回覆的詢價，只綁料號、數量、廠商、價格與備註，發單時只列為參考，不會自動帶入。
+            </div>
             <div class="od-filters">
-              <label>料號／客戶／廠商／備註<input id="pKw" size="18"></label>
-              <label>製程<select id="pProc" data-eg-filter="輸入製程篩選…"><option value="">全部</option></select></label>
-              <label>類型<select id="pKind"><option value="">全部</option><option value="approved">老闆核定</option><option value="inquiry">廠商詢價（待核定）</option></select></label>
-              <button class="btn-o pri" id="pSearch">查詢</button><button class="btn-o" id="pNew">＋ 新增價格</button>
+              <label>料號／客戶／廠商／BOM／備註<input id="pKw" size="20"></label>
+              <label>類型<select id="pKind"><option value="">全部</option><option value="bom">製令價格</option><option value="quote">報價詢價</option></select></label>
+              <button class="btn-o pri" id="pSearch">查詢</button>
+              <button class="btn-o" id="pNewBom">＋ 新增製令價格</button><button class="btn-o" id="pNewQuote">＋ 新增報價詢價</button>
             </div>
             <div class="tw"><table class="od-tbl" id="priceTbl"></table></div>
           </div>
@@ -273,18 +284,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '批次發�
 </div></div></div>
 
 <!-- 價格編輯 -->
-<div class="od-mask" id="prMask"><div class="od-modal" style="width:640px;"><div class="od-mhd"><span id="prTitle">新增價格</span><span class="x" data-close>&times;</span></div>
+<div class="od-mask" id="prMask"><div class="od-modal" style="width:660px;"><div class="od-mhd"><span id="prTitle">新增價格</span><span class="x" data-close>&times;</span></div>
 <div class="od-mbd">
-  <div class="fld"><b>料號</b><input id="prPartQ" class="od-inp" size="26" placeholder="輸入料號或圖號後點選"><span id="prPartSel" class="hint"></span></div>
-  <div id="prPartList" style="margin-left:104px;"></div>
-  <div class="fld"><b>製程</b><select id="prProc" class="od-inp" data-eg-filter="輸入製程篩選…"></select></div>
-  <div class="fld"><b>廠商</b><input id="prMakerQ" class="od-inp" size="22" placeholder="不填＝不限廠商（詢價必填）"><span id="prMakerSel" class="hint"></span></div>
+  <div id="prBomBox">
+    <div class="fld"><b>BOM</b><input id="prBomQ" class="od-inp" size="26" placeholder="輸入 BOM 編號或料號後點選"><span id="prBomSel" class="hint"></span></div>
+    <div id="prBomList" style="margin-left:104px;"></div>
+    <div class="fld"><b>製程</b><span id="prProcBox" class="hint">請先選擇 BOM，再點要報價的製程</span></div>
+  </div>
+  <div id="prQuoteBox">
+    <div class="fld"><b>料號</b><input id="prPartQ" class="od-inp" size="26" placeholder="輸入料號或圖號後點選"><span id="prPartSel" class="hint"></span></div>
+    <div id="prPartList" style="margin-left:104px;"></div>
+    <div class="fld"><b>詢價數量</b><input id="prQty" type="number" min="0" step="any" class="od-inp" style="width:110px;text-align:right;"> 件</div>
+  </div>
+  <div class="fld"><b>廠商</b><input id="prMakerQ" class="od-inp" size="22" placeholder="輸入廠商編號或名稱，從清單點選"><span id="prMakerSel" class="hint"></span></div>
   <div id="prMakerList" style="margin-left:104px;"></div>
   <div class="fld"><b>單價</b><input id="prPrice" type="number" min="0" step="0.01" class="od-inp" style="width:110px;text-align:right;"> 元／件</div>
-  <div class="fld"><b>類型</b><label><input type="radio" name="prKind" value="approved" checked> 老闆核定價</label> <label><input type="radio" name="prKind" value="inquiry"> 廠商詢價結果（待核定）</label></div>
-  <div class="fld"><b>數量／條件</b><input id="prQty" class="od-inp" size="26" maxlength="60" placeholder="例：100 件以上"></div>
-  <div class="fld"><b>有效期間</b><input type="date" id="prFrom" class="od-inp"> ～ <input type="date" id="prTo" class="od-inp"> <span class="hint">留空＝不限</span></div>
-  <div class="fld"><b>備註</b><input id="prNote" class="od-inp" size="40" maxlength="200"></div>
+  <div class="fld"><b>備註</b><input id="prNote" class="od-inp" size="44" maxlength="200"></div>
   <div class="err" id="prErr"></div>
 </div><div class="od-mft"><button class="btn-o" data-close>取消</button> <button class="btn-o pri" id="prSave">儲存</button></div></div></div>
 
@@ -494,7 +509,7 @@ function priceCell(l){
   var s=l.sug,tip='';
   if(s&&s.approved)tip+='<div class="hint">'+(l.priceAuto?'✓ 老闆核價 ':'核價 ')+fmtP(s.approved.price)+(s.approved.maker?'（'+esc(s.approved.maker)+'）':'')+'</div>';
   if(s&&s.last)tip+='<div class="hint"><a href="#" class="useLast" title="帶入此歷史價">上次 '+fmtP(s.last.price)+'</a>（'+esc(s.last.maker)+' '+esc(fd(s.last.d).slice(0,7))+'）</div>';
-  if(s&&s.inquiries>0)tip+='<div class="hint warn">有 '+s.inquiries+' 筆詢價待核定</div>';
+  if(s&&s.quotes>0)tip+='<div class="hint">有 '+s.quotes+' 筆報價詢價可參考</div>';
   return h+tip+'<div><a href="#" class="showHist hint">歷史價格</a></div>';
 }
 function fmtP(v){var n=num(v);return n?String(Math.round(n*100)/100):'';}
@@ -512,12 +527,17 @@ $(document).on('focus click','.rowPrice',function(){var t=this;setTimeout(functi
 $(document).on('click','.useLast',function(e){e.preventDefault();var l=LINES[+$(this).closest('tr').data('i')];l.price=fmtP(l.sug.last.price);l.priceAuto=false;renderList();});
 $(document).on('click','.showHist',function(e){
   e.preventDefault();var i=+$(this).closest('tr').data('i'),l=LINES[i];
-  $('#hsTitle').text('歷史加工價格　'+l.part+'　'+l.name);$('#hsBody').html('<span class="hint">載入中…</span>');openM('hsMask');
+  $('#hsTitle').text('參考價格　'+l.part+'　'+l.name);$('#hsBody').html('<span class="hint">載入中…</span>');openM('hsMask');
   get({action:'price_history',bom:l.bom,process_no:l.pno},function(r){
-    var h='<h4 style="margin:0 0 4px;">價格表（核定價／詢價）</h4>';
-    if(r.table.length){h+='<table class="od-tbl"><tr><th>類型</th><th>廠商</th><th class="num">單價</th><th>條件</th><th>有效期間</th><th></th></tr>';
-      $.each(r.table,function(k,t){h+='<tr><td>'+(t.kind==='approved'?'老闆核定':'廠商詢價')+'</td><td>'+esc(t.maker||'不限')+'</td><td class="num">'+fmtP(t.unit_price)+'</td><td>'+esc(t.qty_note||'')+'</td><td>'+esc((t.valid_from?fd(t.valid_from):'')+'～'+(t.valid_to?fd(t.valid_to):''))+'</td><td><button class="btn-o sm hsUse" data-i="'+i+'" data-p="'+fmtP(t.unit_price)+'">帶入</button></td></tr>';});h+='</table>';}
-    else h+='<div class="hint">價格表沒有這個料號＋製程的價格（可到「⑥ 加工價格表」建立）。</div>';
+    var bomRows=$.grep(r.table,function(t){return t.kind==='bom';}),quoteRows=$.grep(r.table,function(t){return t.kind==='quote';});
+    var h='<h4 style="margin:0 0 4px;">製令價格（同料號、同製程）</h4>';
+    if(bomRows.length){h+='<table class="od-tbl"><tr><th>BOM</th><th>廠商</th><th class="num">數量</th><th class="num">單價</th><th>備註</th><th></th></tr>';
+      $.each(bomRows,function(k,t){h+='<tr><td>'+esc(t.bom)+(t.bom===l.bom?' <span class="pill">本張</span>':'')+'</td><td>'+esc(t.maker)+'</td><td class="num">'+esc(fmtQ(t.qty))+'</td><td class="num">'+fmtP(t.unit_price)+'</td><td>'+esc(t.note||'')+'</td><td><button class="btn-o sm hsUse" data-i="'+i+'" data-p="'+fmtP(t.unit_price)+'">帶入</button></td></tr>';});h+='</table>';}
+    else h+='<div class="hint">沒有製令價格（可到「⑥ 加工價格表」建立）。</div>';
+    h+='<h4 style="margin:10px 0 4px;">報價詢價（同料號）</h4>';
+    if(quoteRows.length){h+='<table class="od-tbl"><tr><th>廠商</th><th class="num">詢價數量</th><th class="num">單價</th><th>備註</th><th></th></tr>';
+      $.each(quoteRows,function(k,t){h+='<tr><td>'+esc(t.maker)+'</td><td class="num">'+esc(fmtQ(t.qty))+'</td><td class="num">'+fmtP(t.unit_price)+'</td><td>'+esc(t.note||'')+'</td><td><button class="btn-o sm hsUse" data-i="'+i+'" data-p="'+fmtP(t.unit_price)+'">帶入</button></td></tr>';});h+='</table>';}
+    else h+='<div class="hint">沒有報價詢價紀錄。</div>';
     h+='<h4 style="margin:10px 0 4px;">歷史實際單價（取自製程移轉憑單，同料號同製程）</h4>';
     if(r.history.length){h+='<table class="od-tbl"><tr><th>日期</th><th>廠商</th><th class="num">單價</th><th class="num">數量</th><th>BOM</th><th></th></tr>';
       $.each(r.history,function(k,t){h+='<tr><td>'+esc(fd(t.d))+'</td><td>'+esc(t.maker)+'</td><td class="num">'+fmtP(t.price)+'</td><td class="num">'+esc(t.qty)+'</td><td>'+esc(t.bom)+'</td><td><button class="btn-o sm hsUse" data-i="'+i+'" data-p="'+fmtP(t.price)+'">帶入</button></td></tr>';});h+='</table>';}
@@ -602,7 +622,7 @@ function renderSlipPrev(){
       config:f.config,company:'（本公司全名）',form_name:META.asdoc?META.asdoc.doc_name:'外發加工單',doc_no:META.asdoc?META.asdoc.doc_no:'',columns:META.columns};
     h+='<div class="slipbox"><div class="hd"><span>'+esc(g.name)+'　'+g.lines.length+' 列／合計 '+fmtQ(g.lines.reduce(function(a,l){return a+num(l.qty);},0))+' 件</span></div><div class="slip-prev">'+slipBody(pay,0,1,false)+'</div></div>';
   });
-  $('#slipPrev').html(h||'<div class="hint">沒有資料</div>');
+  $('#slipPrev').html(h||'<div class="hint">沒有資料</div>');sizePrev($('#slipPrev'),f.config);
 }
 function doIssue(thenPrint){
   var items=$.map(LINES,function(l){return {bom_ing_fid:l.fid,qty:num(l.qty),maker_no:l.maker_no,price:l.price,due_date:l.due,remark:l.remark};});
@@ -688,6 +708,21 @@ function printSlips(ids){
   }
 }
 
+/* ───── 格式預覽（編輯時即時更新；③ 分張預覽共用同一套尺寸） ───── */
+var PAPER={continuous:[241,140],a4p:[210,297],a5l:[210,148]};
+function sizePrev($el,cfg){var d=PAPER[cfg.paper]||PAPER.continuous;$el.find('.pg').css({width:d[0]+'mm',height:d[1]+'mm',padding:cfg.paper==='a4p'?'12mm 12mm 14mm':'6mm 9mm 8mm'});}
+function fmtPreview(){
+  if(!FMT||!$('#fmtPrev').length)return;
+  var cfg={paper:$('#fmP').val(),rows_per_page:+$('#fmR').val()||8,cols:FMT.config.cols,footer_text:$('#fmF').val(),two_part:$('#fm2').is(':checked')?1:0,show_total:$('#fmT').is(':checked')?1:0,show_sign:$('#fmS').is(':checked')?1:0};
+  var sample=[['B-1151103012','OB321500200','熱處理',492,12.5,'11/19','硬度 HRC58-62'],['B-1151103012','OB321500200','倒角',492,3,'11/19',''],['B-1151105004','OB321500310','熱處理',197,'','11/19','']];
+  var lines=$.map(sample,function(x,k){return {sort_no:k+1,bom:x[0],part_no:x[1],drawing_no:'',client_name:'範例客戶',process_name:x[2],qty:x[3],unit_price:x[4],due_date:'2026-'+x[5].replace('/','-'),remark:x[6]};});
+  var pay={slip:{slip_no:'D1151112-001（範例）',maker_id:'範例廠商',maker_addr:'台中市○○區○○路 123 號',maker_tel:'04-2xxx-xxxx',issue_date:META.today,issued_by_name:META.perms.name,lines:lines},
+    config:cfg,company:META.company||'（本公司全名）',form_name:META.asdoc?META.asdoc.doc_name:'外發加工單',doc_no:META.asdoc?META.asdoc.doc_no:'',columns:META.columns};
+  var h=slipBody(pay,0,1,false,cfg.two_part?'廠商聯':'');
+  $('#fmtPrev').html(h);sizePrev($('#fmtPrev'),cfg);
+}
+$(document).on('input change','#fmtForm input,#fmtForm select',fmtPreview);
+
 /* ───── ④ 格式設定（管理員） ───── */
 function loadFmtTab(){if(!META.perms.canAdmin)return;renderFmtList();}
 function renderFmtList(){
@@ -706,14 +741,15 @@ function editFmt(f){
    +'<div class="fld"><b>欄位（勾選＋排序）</b><div id="fmCols"></div></div>'
    +'<div class="fld"><b>表尾文字</b><input id="fmF" class="od-inp" size="46" maxlength="300" value="'+esc(cfg.footer_text)+'"></div>'
    +'<div class="fld"><b>其他</b><label><input type="checkbox" id="fmT"'+(cfg.show_total?' checked':'')+'> 印合計</label> <label><input type="checkbox" id="fmS"'+(cfg.show_sign?' checked':'')+'> 印收貨簽收欄</label> <label><input type="checkbox" id="fm2"'+(+cfg.two_part?' checked':'')+'> 預設印成兩聯</label></div>'
+   +'<div class="fld"><b>預覽</b><span class="hint">依目前設定即時更新（範例資料）；紙張與列數都會反映</span></div><div id="fmtPrev" class="slip-prev" style="overflow:auto;"></div>'
    +'<div style="margin-top:10px;"><button class="btn-o pri" id="fmSave">儲存格式</button> '+(f.format_id&&!+f.is_default?'<button class="btn-o" id="fmDef">設為預設</button> <button class="btn-o" id="fmDel">刪除</button>':'')+'</div><div class="err" id="fmErr"></div>';
-  $('#fmtForm').html(h);$('#fmP').val(cfg.paper);renderFmCols();
+  $('#fmtForm').html(h);$('#fmP').val(cfg.paper);renderFmCols();fmtPreview();
 }
 function renderFmCols(){
   var C=META.columns,cols=FMT.config.cols,h='';
   $.each(cols,function(i,k){h+='<span class="chip on">'+esc(C[k])+' <a href="#" class="fmUp" data-k="'+k+'">↑</a> <a href="#" class="fmDn" data-k="'+k+'">↓</a> <a href="#" class="fmRm" data-k="'+k+'">×</a></span>';});
   h+='<br>';$.each(C,function(k,t){if(cols.indexOf(k)<0)h+='<span class="chip fmAdd" data-k="'+k+'">＋'+esc(t)+'</span>';});
-  $('#fmCols').html(h);
+  $('#fmCols').html(h);fmtPreview();
 }
 $(document).on('click','.fmUp,.fmDn,.fmRm',function(e){e.preventDefault();var k=$(this).data('k'),c=FMT.config.cols,i=c.indexOf(k);
   if($(this).hasClass('fmRm')){if(c.length<=1)return;c.splice(i,1);}else if($(this).hasClass('fmUp')&&i>0){c.splice(i,1);c.splice(i-1,0,k);}else if($(this).hasClass('fmDn')&&i<c.length-1){c.splice(i,1);c.splice(i+1,0,k);}
@@ -728,37 +764,50 @@ $(document).on('click','#fmDef',function(){post({action:'format_default',format_
 $(document).on('click','#fmDel',function(){if(!confirm('刪除此格式？（已印過的單據不受影響）'))return;post({action:'format_delete',format_id:FMT.format_id},function(r){META.formats=r.formats;renderFmtSel();FMT=null;renderFmtList();$('#fmtForm').html('<span class="hint">已刪除。</span>');});});
 
 /* ───── ⑥ 加工價格表 ───── */
-var PROCS=[],PR_PART=0,PR_MAKER='',PR_EDIT=0;
-function procOptions(){var o='';$.each(PROCS,function(i,p){o+='<option value="'+p.no+'">'+esc(p.name)+'（'+p.no+'）</option>';});return o;}
-function ensureProcs(cb){
-  if(PROCS.length)return cb();
-  get({action:'price_list'},function(r){PROCS=r.processes;var o=procOptions();$('#pProc').append(o);$('#prProc').html(o);cb();});
-}
+var PR_KIND='bom',PR_PART=0,PR_MAKER='',PR_EDIT=0,PR_BOM='',PR_PROC=0;
 function loadPrices(){
-  ensureProcs(function(){
-    get({action:'price_list',kw:$('#pKw').val(),process_no:$('#pProc').val(),kind:$('#pKind').val()},function(r){
-      var h='<tr><th>料號</th><th>客戶</th><th>製程</th><th>廠商</th><th class="num">單價</th><th>類型</th><th>條件</th><th>有效期間</th><th>備註</th><th>建立</th><th></th></tr>';
-      $.each(r.prices,function(i,p){h+='<tr><td>'+esc(p.part_no)+'</td><td>'+esc(p.client_name)+'</td><td>'+esc(p.ProcessName||p.process_no)+'</td><td>'+esc(p.maker||'不限')+'</td><td class="num"><b>'+fmtP(p.unit_price)+'</b></td>'
-        +'<td>'+(p.kind==='approved'?'<span class="pill">老闆核定</span>':'<span class="pill u">廠商詢價</span>')+'</td><td>'+esc(p.qty_note||'')+'</td><td>'+esc((p.valid_from?fd(p.valid_from):'')+'～'+(p.valid_to?fd(p.valid_to):''))+'</td><td>'+esc(p.note||'')+'</td><td>'+esc(p.created_by_name||'')+'</td>'
-        +'<td><button class="btn-o sm prEdit" data-i="'+i+'">編輯</button> '+(p.kind==='inquiry'?'<button class="btn-o sm prOk" data-id="'+p.price_id+'">核定</button> ':'')+'<button class="btn-o sm prVoid" data-id="'+p.price_id+'">作廢</button></td></tr>';});
-      window.__PRICES=r.prices;
-      $('#priceTbl').html(r.prices.length?h:'<tr><td class="hint">沒有符合的價格。</td></tr>');});
-  });
+  get({action:'price_list',kw:$('#pKw').val(),kind:$('#pKind').val()},function(r){
+    var h='<tr><th>類型</th><th>BOM</th><th>料號</th><th>客戶</th><th>製程</th><th>廠商</th><th class="num">數量</th><th class="num">單價</th><th>備註</th><th>建立</th><th></th></tr>';
+    $.each(r.prices,function(i,p){h+='<tr><td>'+(p.kind==='bom'?'<span class="pill">製令價格</span>':'<span class="pill u">報價詢價</span>')+'</td><td>'+esc(p.bom||'')+'</td><td>'+esc(p.part_no)+'</td><td>'+esc(p.client_name)+'</td><td>'+esc(p.ProcessName||'')+'</td><td>'+esc(p.maker)+'</td><td class="num">'+esc(fmtQ(p.qty))+'</td><td class="num"><b>'+fmtP(p.unit_price)+'</b></td><td>'+esc(p.note||'')+'</td><td>'+esc(p.created_by_name||'')+'</td>'
+      +'<td><button class="btn-o sm prEdit" data-i="'+i+'">編輯</button> <button class="btn-o sm prVoid" data-id="'+p.price_id+'">作廢</button></td></tr>';});
+    window.__PRICES=r.prices;
+    $('#priceTbl').html(r.prices.length?h:'<tr><td class="hint">沒有符合的價格。</td></tr>');});
 }
 $('#pSearch').on('click',loadPrices);
 $('#pKw').on('keydown',function(e){if(e.which===13)loadPrices();});
-function openPrice(p){
-  PR_EDIT=p?+p.price_id:0;PR_PART=p?+p.d_id:0;PR_MAKER=p?(p.maker_id_no||''):'';
-  $('#prTitle').text(p?'編輯價格':'新增價格');$('#prErr').text('');
-  $('#prPartQ').val(p?p.part_no:'');$('#prPartSel').text(p?('已選：'+p.part_no+'　'+(p.client_name||'')):'');$('#prPartList').empty();
-  $('#prProc').val(p?p.process_no:($('#prProc option').first().val()||''));
+function openPrice(kind,p){
+  PR_KIND=kind;PR_EDIT=p?+p.price_id:0;PR_PART=p?+p.d_id:0;PR_MAKER=p?(p.maker_id_no||''):'';PR_BOM=p?(p.bom||''):'';PR_PROC=p?+p.process_no:0;
+  $('#prTitle').text((p?'編輯':'新增')+(kind==='bom'?'製令價格':'報價詢價'));$('#prErr').text('');
+  $('#prBomBox').toggle(kind==='bom');$('#prQuoteBox').toggle(kind==='quote');
+  $('#prBomQ').val(PR_BOM);$('#prBomSel').text(PR_BOM?('已選：'+PR_BOM+(p?'　'+p.part_no+' '+(p.client_name||''):'')):'');$('#prBomList').empty();
+  $('#prProcBox').html(PR_BOM?'<span class="pill">'+esc(p&&p.ProcessName?p.ProcessName:'製程 '+PR_PROC)+'</span> <span class="hint">（要換製程請重新選 BOM）</span>':'請先選擇 BOM，再點要報價的製程');
+  $('#prPartQ').val(p&&kind==='quote'?p.part_no:'');$('#prPartSel').text(p&&kind==='quote'?('已選：'+p.part_no+'　'+(p.client_name||'')):'');$('#prPartList').empty();
+  $('#prQty').val(p&&kind==='quote'?p.qty:'');
   $('#prMakerQ').val(p?(p.maker||''):'');$('#prMakerSel').text(p&&p.maker?'已選：'+p.maker:'');$('#prMakerList').empty();
-  $('#prPrice').val(p?p.unit_price:'');$('input[name=prKind][value='+(p?p.kind:'approved')+']').prop('checked',true);
-  $('#prQty').val(p?p.qty_note:'');$('#prFrom').val(p?p.valid_from||'':'');$('#prTo').val(p?p.valid_to||'':'');$('#prNote').val(p?p.note:'');
+  $('#prPrice').val(p?p.unit_price:'');$('#prNote').val(p?p.note:'');
   openM('prMask');
 }
-$('#pNew').on('click',function(){ensureProcs(function(){openPrice(null);});});
-$(document).on('click','.prEdit',function(){var p=window.__PRICES[+$(this).data('i')];ensureProcs(function(){openPrice(p);});});
+$('#pNewBom').on('click',function(){openPrice('bom',null);});
+$('#pNewQuote').on('click',function(){openPrice('quote',null);});
+$(document).on('click','.prEdit',function(){var p=window.__PRICES[+$(this).data('i')];openPrice(p.kind,p);});
+/* BOM 搜尋 → 點選後列出該 BOM 的製程，點製程選定 */
+var pbT=null;
+$('#prBomQ').on('input',function(){
+  PR_BOM='';PR_PROC=0;$('#prBomSel').text('');$('#prProcBox').text('請先選擇 BOM，再點要報價的製程');clearTimeout(pbT);var q=$(this).val();
+  pbT=setTimeout(function(){
+    if(!$.trim(q)){$('#prBomList').empty();return;}
+    get({action:'bom_search',q:q},function(r){var h='';
+      $.each(r.boms,function(i,b){h+='<div><a href="#" class="pbPick" data-bom="'+esc(b.bom)+'">'+esc(b.bom)+'</a> <span class="hint">'+esc(b.part_no)+'　'+esc(b.client)+'　數量 '+esc(b.sqty)+'</span></div>';});
+      $('#prBomList').html(h||'<span class="hint">查無 BOM</span>');});
+  },250);
+});
+$(document).on('click','.pbPick',function(e){
+  e.preventDefault();PR_BOM=String($(this).data('bom'));$('#prBomQ').val(PR_BOM);$('#prBomSel').text('已選：'+PR_BOM);$('#prBomList').empty();
+  get({action:'bom_procs',bom:PR_BOM},function(r){var h='';
+    $.each(r.procs,function(i,c){if(c.state==='skip')return;h+='<span class="chip pbProc" data-no="'+c.process_no+'">'+esc(snL(c.bom_sn)+' '+c.name)+'</span>';});
+    $('#prProcBox').html(h||'<span class="hint">這張 BOM 沒有製程</span>');});
+});
+$(document).on('click','.pbProc',function(){PR_PROC=+$(this).data('no');$('.pbProc').removeClass('on');$(this).addClass('on');});
 var pqT=null;
 $('#prPartQ').on('input',function(){
   PR_PART=0;$('#prPartSel').text('');clearTimeout(pqT);var q=$(this).val();
@@ -787,16 +836,14 @@ $(document).on('click','.pmPick',function(e){
   e.preventDefault();PR_MAKER=String($(this).data('no'));$('#prMakerQ').val($(this).data('nm'));$('#prMakerSel').text('已選：'+$(this).data('nm'));$('#prMakerList').empty();
 });
 $('#prSave').on('click',function(){
-  var kind=$('input[name=prKind]:checked').val(),price=num($('#prPrice').val());
-  if(!PR_PART){$('#prErr').text('請從清單點選料號（不能只打字）');return;}
+  var price=num($('#prPrice').val());
+  if(PR_KIND==='bom'){if(!PR_BOM){$('#prErr').text('請先選擇 BOM（從清單點選）');return;}if(!PR_PROC){$('#prErr').text('請點選要報價的製程');return;}}
+  else{if(!PR_PART){$('#prErr').text('請從清單點選料號（不能只打字）');return;}if(num($('#prQty').val())<=0){$('#prErr').text('請輸入詢價數量');return;}}
+  if(!PR_MAKER){$('#prErr').text('請從清單點選廠商');return;}
   if(price<=0){$('#prErr').text('單價必須大於 0');return;}
-  if(kind==='inquiry'&&!PR_MAKER){$('#prErr').text('廠商詢價結果必須指定廠商（從清單點選）');return;}
-  if($.trim($('#prMakerQ').val())&&!PR_MAKER){$('#prErr').text('廠商請從清單點選，或清空代表不限廠商');return;}
-  post({action:'price_save',price_id:PR_EDIT,d_id:PR_PART,process_no:$('#prProc').val(),maker_id_no:PR_MAKER,unit_price:price,kind:kind,
-        qty_note:$('#prQty').val(),valid_from:$('#prFrom').val(),valid_to:$('#prTo').val(),note:$('#prNote').val()},
+  post({action:'price_save',price_id:PR_EDIT,kind:PR_KIND,bom:PR_BOM,process_no:PR_PROC,d_id:PR_PART,qty:$('#prQty').val(),maker_id_no:PR_MAKER,unit_price:price,note:$('#prNote').val()},
     function(){$('#prMask').removeClass('on');loadPrices();});
 });
-$(document).on('click','.prOk',function(){if(confirm('確定此詢價結果已經老闆核定？核定後發單會自動帶入這個單價。'))post({action:'price_approve',price_id:$(this).data('id')},loadPrices);});
 $(document).on('click','.prVoid',function(){if(confirm('作廢這筆價格？（不會影響已發出的單據）'))post({action:'price_void',price_id:$(this).data('id')},loadPrices);});
 
 /* ───── ⑤ 紀錄 ───── */

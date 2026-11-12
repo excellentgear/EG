@@ -37,12 +37,12 @@ if (!$P['uid']) jerr('帳號非在職狀態', 403);
 if (!$P['canView']) jerr('沒有批次發單權限，請洽管理員指派角色', 403);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
-$WRITE = ['issue', 'print_record', 'format_save', 'format_delete', 'format_default', 'asdoc_save', 'price_save', 'price_void', 'price_approve'];
+$WRITE = ['issue', 'print_record', 'format_save', 'format_delete', 'format_default', 'asdoc_save', 'price_save', 'price_void'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['od_csrf'], $tok))
         jerr('連線憑證失效，請重新整理頁面後再試 (CSRF)', 400, ['code' => 'CSRF']);
-    if (in_array($action, ['issue', 'print_record', 'price_save', 'price_void', 'price_approve'], true) && !$P['canIssue']) jerr('需要「批次發單」角色才能發單與列印', 403);
+    if (in_array($action, ['issue', 'print_record', 'price_save', 'price_void'], true) && !$P['canIssue']) jerr('需要「批次發單」角色才能發單與列印', 403);
     if (in_array($action, ['format_save', 'format_delete', 'format_default', 'asdoc_save'], true) && !$P['canAdmin']) jerr('需要批次發單管理員權限', 403);
 }
 
@@ -63,6 +63,7 @@ if ($action === 'meta') {
         'csrf' => $_SESSION['od_csrf'], 'perms' => ['canIssue' => $P['canIssue'], 'canAdmin' => $P['canAdmin'], 'name' => $P['name']],
         'formats' => odFormats($db), 'columns' => od_format_columns(), 'process_types' => $types,
         'today' => date('Y-m-d'), 'due_days' => 5, 'asdoc' => $doc,
+        'company' => (string)($db->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetchColumn() ?: ''),
         'asdoc_list' => $P['canAdmin'] ? eg_asdoc_list($db) : [],
     ]);
 }
@@ -102,8 +103,8 @@ if ($action === 'price_suggest') {      // items: [{bom, process_no, maker_no}] 
     $out = [];
     foreach ($items as $k => $it) {
         $r = od_price_suggest($db, (string)($it['bom'] ?? ''), (int)($it['process_no'] ?? 0), (string)($it['maker_no'] ?? ''));
-        $out[(string)($it['key'] ?? $k)] = ['approved' => $r['approved'] ? ['price' => (float)$r['approved']['unit_price'], 'maker' => $r['approved']['maker'], 'qty_note' => $r['approved']['qty_note']] : null,
-            'last' => $r['last'], 'inquiries' => count(array_filter($r['table'], fn($x) => $x['kind'] === 'inquiry'))];
+        $out[(string)($it['key'] ?? $k)] = ['approved' => $r['approved'] ? ['price' => (float)$r['approved']['unit_price'], 'maker' => $r['approved']['maker'], 'note' => $r['approved']['note']] : null,
+            'last' => $r['last'], 'quotes' => count($r['quotes'])];
     }
     jout(['suggest' => $out]);
 }
@@ -112,8 +113,13 @@ if ($action === 'price_history') {
     jout(['table' => $r['table'], 'history' => od_price_history($db, (string)($_GET['bom'] ?? ''), (int)($_GET['process_no'] ?? 0), 15)]);
 }
 if ($action === 'price_list') {
-    jout(['prices' => od_price_list($db, ['process_no' => $_GET['process_no'] ?? 0, 'kind' => $_GET['kind'] ?? '', 'kw' => $_GET['kw'] ?? '', 'void' => $_GET['void'] ?? 0]),
-          'processes' => $db->query("SELECT ProcessNo AS no, ProcessName AS name FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC)]);
+    jout(['prices' => od_price_list($db, ['kind' => $_GET['kind'] ?? '', 'kw' => $_GET['kw'] ?? ''])]);
+}
+if ($action === 'bom_search') { jout(['boms' => od_bom_search($db, (string)($_GET['q'] ?? ''))]); }
+if ($action === 'bom_procs') {
+    $bom = (string)($_GET['bom'] ?? '');
+    $ch = od_bom_chain($db, $bom);
+    jout(['procs' => array_map(fn($c) => ['process_no' => $c['process_no'], 'name' => $c['name'], 'bom_sn' => $c['bom_sn'], 'state' => $c['state'], 'sqty' => $c['sqty']], $ch)]);
 }
 if ($action === 'part_search') {
     $q = trim((string)($_GET['q'] ?? ''));
@@ -132,11 +138,6 @@ if ($action === 'price_void') {
     $db->prepare("UPDATE od_price SET status='void', updated_at=NOW() WHERE price_id=?")->execute([(int)($_POST['price_id'] ?? 0)]);
     jout([]);
 }
-if ($action === 'price_approve') {   // 廠商詢價結果 → 老闆核定（核定後發單才會自動帶入）
-    $db->prepare("UPDATE od_price SET kind='approved', approved_by=?, approved_at=NOW(), updated_at=NOW() WHERE price_id=? AND status='active'")->execute([$P['name'], (int)($_POST['price_id'] ?? 0)]);
-    jout([]);
-}
-
 if ($action === 'slips') {
     jout(['slips' => od_slips_list($db, ['from' => $_GET['from'] ?? '', 'to' => $_GET['to'] ?? '', 'kw' => $_GET['kw'] ?? '', 'limit' => $_GET['limit'] ?? 50])]);
 }
