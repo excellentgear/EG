@@ -1168,7 +1168,8 @@ if (is_array($OreadyReply_list_base)) {
                 il.Specification, -- Added
                 DATE_FORMAT(il.Order_date, '%Y-%m-%d') AS formatted_date, -- For display 'YYYY-MM-DD'
                 DATE_FORMAT(il.Order_date, '%Y-%m-%d') AS shipment_iso_date, -- For JS logic 'YYYY-MM-DD'
-                il.Order_date -- Keep original Order_date for PHP sorting
+                il.Order_date, -- Keep original Order_date for PHP sorting
+                il.d_setting_id, TRIM(il.Client_name) AS Client_name -- 同料號同客戶篩選用（eg_bom_ship_filter）
             FROM is_list il
             WHERE il.Product_id IN ({$placeholders})
             ORDER BY il.Product_id, il.Order_date DESC
@@ -1600,8 +1601,18 @@ try {
 // --- 將準備好的資料嵌入到 JavaScript ---
 // 移除重量級子陣列，改為前端按需 AJAX 撈取
 $OreadyReply_list_slim = [];
+require_once __DIR__ . '/../../src/common/bom_ship_match_lib.php';
 foreach ($OreadyReply_list_final ?: [] as $row) {
+    // 出貨紀錄（只列同料號同客戶，規則同 get_row_details／自動更新）一併帶在初載資料裡，載入就看得到有沒有出貨未綁定，
+    // 不必等背景按需撈取或 10 秒自動更新；與按需撈取一樣最多 20 筆，並只留畫面用得到的欄位以控制資料量
+    $__sh = [];
+    try {
+        foreach (array_slice(eg_bom_ship_filter($db, (array)($row['shipment_history'] ?? []), $row['d_setting_id'] ?? null, (string)($row['d_id'] ?? ''), (string)($row['Client_Name_Full'] ?? ($row['Client_Name'] ?? ''))), 0, 20) as $__s) {
+            $__sh[] = ['Product_id' => $__s['Product_id'] ?? null, 'Qty' => $__s['Qty'] ?? null, 'Specification' => $__s['Specification'] ?? null, 'formatted_date' => $__s['formatted_date'] ?? null, 'shipment_iso_date' => $__s['shipment_iso_date'] ?? null, 'd_setting_id' => $__s['d_setting_id'] ?? null, 'Client_name' => $__s['Client_name'] ?? null];
+        }
+    } catch (Throwable $e) { $__sh = []; }
     unset($row['shipment_history'], $row['qq_details'], $row['ok_details']);
+    $row['shipment_history'] = $__sh;
     $OreadyReply_list_slim[] = $row;
 }
 echo "<script>\n";
