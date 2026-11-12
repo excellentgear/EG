@@ -405,6 +405,7 @@ $EG_ROLE_MODULES = [
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'od_dispatch'         => ['prefix'=>'od',      'label'=>'批次發單',            'page'=>'od_dispatch.php'],
     'risk_mgmt'           => ['prefix'=>'rm',      'label'=>'風險與機會管理',      'page'=>'risk_mgmt.php'],
     'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
@@ -1744,6 +1745,14 @@ $_quotDepts = array_keys($_deptSet);
                          同部門找不到就沿部門樹往上一層找，一路找到最上層都沒有則該格免簽；「總經理確認」預設取組織角色綁定的
                          <strong>最高核准人員</strong>。名單內的人請假並設有代理人時，代理人可代簽（圖章加「代」字）。管理者固定擁有全部權限。',
                         rs_of('comm_mgmt'), rsu_of('comm_mgmt'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('od', 'od_dispatch', '批次發單', 'fa-truck', '#b06f27',
+                        '為每位使用者指派「<a href="../pm/od_dispatch.php" target="_blank" style="color:#b5762a;">批次發單</a>」頁（外發加工單）的角色。
+                         <strong>沒有指派角色就看不到也用不了本頁</strong>（與 BOM 總覽的「可移轉」權限分開管理）。<br>
+                         <strong>批次發單檢閱</strong>＝只能查看發單與列印紀錄；<strong>發單人員</strong>＝檢閱＋挑製程、指派廠商、發單、列印與重印；
+                         <strong>批次發單管理員</strong>＝發單人員＋列印格式設定（欄位順序／每頁列數／表尾／紙張）與 AS 文件綁定。<br>
+                         <span style="color:#b06f27;">發單的結果與 BOM 總覽的「發單」相同</span>（寫入發包日、廠商、狀態轉加工中、開一批流水帳）。管理者固定擁有全部權限。',
+                        rs_of('od_dispatch'), rsu_of('od_dispatch'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('rm', 'risk_mgmt', '風險與機會管理', 'fa-exclamation-triangle', '#b06f27',
                         '為每位使用者指派「<a href="../GM/risk_mgmt.php" target="_blank" style="color:#b5762a;">風險與機會管理</a>」頁（組織處境分析表、風險與機會因應措施管制表）的角色。

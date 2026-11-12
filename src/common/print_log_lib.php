@@ -224,6 +224,7 @@ if (!function_exists('eg_print_sources')) {
             'comm_mgmt'      => ['label' => '溝通管理－三份表單',   'page' => 'views/GM/communication_mgmt.php',      'kind' => 'form'],
             'risk_mgmt'      => ['label' => '風險與機會管理－各式表單', 'page' => 'views/GM/risk_mgmt.php',            'kind' => 'form'],
             'shipping_note'  => ['label' => '快速出貨－出貨單',     'page' => 'views/Sales/Shipping_Quick.php',       'kind' => 'form'],
+            'od_slip'        => ['label' => '批次發單－外發加工單', 'page' => 'views/pm/od_dispatch.php',            'kind' => 'form'],
             'sheet_form'     => ['label' => '表格模板－填寫單據',   'page' => 'views/ADM/sheet_form.php',            'kind' => 'form'],
             'leave_stats'    => ['label' => '請假系統－請假統計表',  'page' => 'views/ADM/leave_request.php',          'kind' => 'form'],
             'kpi_as'         => ['label' => 'KPI關鍵績效指標－年度總表／不符合標準明細', 'page' => 'views/news/KPI.php', 'kind' => 'form'],
