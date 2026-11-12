@@ -95,6 +95,7 @@ try {
 // 角色加成（2026-11-12）：與原本的頁面權限取聯集，只增不減；規則見 src/common/emp_mgmt_role_lib.php
 try {
     require_once '../../src/common/emp_mgmt_role_lib.php';
+    $empPdo = $conn; // 後面 include 會覆蓋 $conn，先留一份 PDO 給標頭用
     $_empRoleChars = emp_mgmt_role_chars($conn, (int)$id);
     $empRoleHolder = emp_mgmt_has_role($conn, (int)$id);
     if ($_empRoleChars !== '') {
@@ -250,7 +251,7 @@ if ($hrUserPerm === 'R') {
             <div class="">
                 <div class="page-title" style="display:flex; align-items:center;">
                     <div class="title_left">
-                        <h3>員工資料管理 <small>(權限：<?php echo htmlspecialchars(function_exists('emp_mgmt_perm_label') ? emp_mgmt_perm_label($conn, (int)$id, (string)$hrUserPerm) : (string)$hrUserPerm); ?>)</small></h3>
+                        <h3>員工資料管理 <small>(權限：<?php echo htmlspecialchars((isset($empPdo) && function_exists('emp_mgmt_perm_label')) ? emp_mgmt_perm_label($empPdo, (int)$id, (string)$hrUserPerm) : (string)$hrUserPerm); ?>)</small></h3>
                     </div>
                     <button type="button" class="page-help-btn" id="btnPageHelp">使用說明</button>
                 </div>
