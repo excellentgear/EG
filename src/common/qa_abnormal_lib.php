@@ -5114,7 +5114,7 @@ function qab_notify_info(PDO $db, array $orderIds): array
     $evs = $db->query("SELECT id, ref_type, ref_id, title, created_at FROM live_event
                         WHERE ref_id IN ($in) AND ref_type IN ('QA','QAB_L1','QAB_VENDOR','QA_DECIDE','QA_DECIDE_F','QA_QC_REVIEW')
                         ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-    if (!$evs) return $out;
+    if (!$evs) return qab_notify_info_legacy($db, $orderIds, []);
     $eids = array_map('intval', array_column($evs, 'id'));
     $ein = implode(',', $eids);
     $modes = [];
@@ -5189,6 +5189,57 @@ function qab_notify_info(PDO $db, array $orderIds): array
         foreach ($list as $x) $res[] = ['label' => $x['label'], 'name' => $x['name'], 'date' => $x['date'], 'status' => $x['status'], 'state' => $x['state']];
         $out[$oid] = array_slice($res, 0, 40);
     }
+    return qab_notify_info_legacy($db, $orderIds, $out);
+}
+
+/**
+ * 舊單／補資料的單沒有 live_event 通知（當時還沒有通知機制，或是補登的紙本）——
+ * 用單據本身留下的紀錄補齊「通知資訊」：相關單位意見輪次（沒有對應通知的）、處置決策、總經理裁示。
+ * 只補「畫面上還沒有同標籤同人」的項目，已有真通知的單不會重複。
+ */
+function qab_notify_info_legacy(PDO $db, array $orderIds, array $out): array
+{
+    try {
+        $in = implode(',', array_map('intval', $orderIds));
+        $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j', $t) : ''; };
+        $nm = [];
+        $uname = function ($u) use ($db, &$nm) {
+            $u = (int)$u; if ($u <= 0) return '';
+            if (!isset($nm[$u])) { $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$u]); $nm[$u] = (string)$st->fetchColumn(); }
+            return $nm[$u];
+        };
+        $has = function ($oid, $label, $name) use (&$out) {
+            foreach (($out[$oid] ?? []) as $x) if ($x['label'] === $label && $x['name'] === $name) return true;
+            return false;
+        };
+        $hasActed = function ($oid, $name) use (&$out) {
+            foreach (($out[$oid] ?? []) as $x) if ($x['state'] === 'acted' && $x['name'] === $name) return true;
+            return false;
+        };
+        // 單位意見輪次：沒有對應 live_event 通知的
+        $fl = $db->query("SELECT f.abnormal_order_id oid, f.dept_id, f.user_id, f.status, f.receive_date, f.return_date, f.replied_by, f.event_id, d.name dept_name
+                            FROM qa_abnormal_order_flow f LEFT JOIN department d ON d.id=f.dept_id
+                           WHERE f.abnormal_order_id IN ($in) AND (f.event_id IS NULL OR f.event_id NOT IN (SELECT id FROM live_event))
+                           ORDER BY f.round_no")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($fl as $f) {
+            $oid = (int)$f['oid'];
+            $who = $uname($f['replied_by'] ?: $f['user_id']) ?: (string)($f['dept_name'] ?? '');
+            if ($who === '' || $has($oid, '單位意見', $who)) continue;
+            $done = ($f['status'] === 'Returned');
+            $out[$oid][] = ['label' => '單位意見', 'name' => $who, 'date' => $md($done ? $f['return_date'] : $f['receive_date']),
+                            'status' => $done ? '已回覆' : '已通知', 'state' => $done ? 'acted' : 'notified'];
+        }
+        // 處置決策／總經理裁示
+        $os = $db->query("SELECT id, disp_decided_by, disp_decided_at, gm_decided_by, gm_decided_at FROM qa_abnormal_order WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($os as $o) {
+            $oid = (int)$o['id'];
+            foreach ([['處置決策', 'disp_decided_by', 'disp_decided_at'], ['總經理裁示', 'gm_decided_by', 'gm_decided_at']] as $k) {
+                $who = $uname($o[$k[1]]);
+                if ($who === '' || empty($o[$k[2]]) || $hasActed($oid, $who)) continue;
+                $out[$oid][] = ['label' => $k[0], 'name' => $who, 'date' => $md($o[$k[2]]), 'status' => '已決策', 'state' => 'acted'];
+            }
+        }
+    } catch (Throwable $e) { error_log('qab_notify_info_legacy: ' . $e->getMessage()); }
     return $out;
 }
 
