@@ -3335,7 +3335,7 @@ function renderShipSec(res) {
           + '<td>' + esc(r.part_no || '') + '</td>'
           + '<td>' + esc(r.Client_name || '') + '</td>'
           + '<td>' + num(r.Qty) + '</td>'
-          + '<td>' + (r.Unit_price === null ? '－' : esc(String(r.Unit_price))) + '</td>'
+          + '<td>' + (r.Unit_price === null ? '－' : esc(String(parseFloat(r.Unit_price)))) + '</td>'
           + '<td>' + (r.amount ? esc(String(r.amount)) : '－') + '</td>'
           + '<td>' + (r.Order_oo
                 ? esc(r.Order_oo) + (num(r.in_project) ? ' <span class="st st-approved">本專案</span>' : '')

@@ -6925,7 +6925,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Order_oo || '').html() + '</td>'
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Specification || '').html() + '</td>'
                         + '<td class="text-right">' + (s.shipped_qty || s.Qty || '') + '</td>'
-                        + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
+                        + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString('en-US',{maximumFractionDigits:4}) : '-') + '</td>'
                         + '<td>' + (s.Order_date || '') + '</td>'
                         + '<td><button type="button" class="btn btn-xs btn-danger btn-unbind-ship"'
                         + ' data-is-id="' + (s.IS_id || '') + '"'
@@ -7254,7 +7254,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     + '<td style="font-size:11px; color:#666; word-break:break-word;">' + esc(specParts.join(' / ') || '–')
                     + (s.Note ? '<div style="color:#888; font-size:10px;">' + esc(s.Note) + '</div>' : '') + '</td>'
                     + '<td class="text-center">' + shipQty + '</td>'
-                    + '<td class="text-center" style="white-space:nowrap;">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
+                    + '<td class="text-center" style="white-space:nowrap;">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString('en-US',{maximumFractionDigits:4}) : '-') + '</td>'
                     + '<td><input type="text" inputmode="numeric" class="form-control input-sm ms-qty" value="' + bindQty
                     + '" style="height:22px; padding:2px 4px; width:66px;" placeholder="數量" data-eg-skip></td>'
                     + '</tr>';

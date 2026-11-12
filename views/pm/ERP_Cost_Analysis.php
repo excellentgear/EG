@@ -4425,10 +4425,10 @@ function renderShipmentTables(candidates, mapped) {
         let btnHtml = remaining <= 0
             ? `<span class="text-muted" style="font-size:0.9em;">已被 ${c.mapped_orders} 綁定</span>`
             : `<button class="btn btn-xs btn-success btn-add-shipment" data-json='${JSON.stringify(c).replace(/'/g,"&#39;")}'><i class="fa fa-plus"></i></button>`;
-        $cand.append(`<tr><td>${c.IS_number}</td><td>${c.Specification||''}</td><td>${c.Unit_price||''}</td><td>${c.Order_date}</td><td>${c.Qty}</td><td>${btnHtml}</td></tr>`);
+        $cand.append(`<tr><td>${c.IS_number}</td><td>${c.Specification||''}</td><td>${c.Unit_price?parseFloat(c.Unit_price):''}</td><td>${c.Order_date}</td><td>${c.Qty}</td><td>${btnHtml}</td></tr>`);
     });
     mapped.forEach((m, i) => {
-        $map.append(`<tr data-is-id="${m.IS_id}"><td>${m.Order_date}</td><td>${m.IS_number}</td><td>${m.Specification||''}</td><td>${m.Qty||'-'}</td><td class="text-right">${m.Unit_price > 0 ? 'NT$'+Number(m.Unit_price).toLocaleString() : '-'}</td><td><input type="number" class="form-control input-sm map-qty" value="${m.shipped_qty}" style="width:80px;"></td><td><button class="btn btn-xs btn-danger btn-remove-shipment" data-index="${i}"><i class="fa fa-trash"></i></button></td></tr>`);
+        $map.append(`<tr data-is-id="${m.IS_id}"><td>${m.Order_date}</td><td>${m.IS_number}</td><td>${m.Specification||''}</td><td>${m.Qty||'-'}</td><td class="text-right">${m.Unit_price > 0 ? 'NT$'+Number(m.Unit_price).toLocaleString("en-US",{maximumFractionDigits:4}) : '-'}</td><td><input type="number" class="form-control input-sm map-qty" value="${m.shipped_qty}" style="width:80px;"></td><td><button class="btn btn-xs btn-danger btn-remove-shipment" data-index="${i}"><i class="fa fa-trash"></i></button></td></tr>`);
     });
     updateShipmentTotal();
 }

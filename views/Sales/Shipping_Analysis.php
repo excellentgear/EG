@@ -2487,7 +2487,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     },
                     { data: 'Specification', render: $.fn.dataTable.render.text() },
                     { data: 'Qty', className: 'text-right', render: $.fn.dataTable.render.number(',', '.', 0) },
-                    { data: 'Unit_price', className: 'text-right', render: $.fn.dataTable.render.number(',', '.', 0) },
+                    { data: 'Unit_price', className: 'text-right', render: function(d){ var v=Number(d)||0; return v.toLocaleString('en-US',{maximumFractionDigits:4}); } },
                     { data: null, className: 'text-right', render: function(data, type, row) { return $.fn.dataTable.render.number(',', '.', 0).display(row.Qty * row.Unit_price); } },
                     { data: 'Warehouse', render: $.fn.dataTable.render.text() },
                     { data: 'Note', render: $.fn.dataTable.render.text() }
@@ -3977,7 +3977,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Order_oo || '').html() + '</td>'
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Specification || '').html() + '</td>'
                         + '<td class="text-right">' + (s.shipped_qty || s.Qty || '') + '</td>'
-                        + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
+                        + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString('en-US',{maximumFractionDigits:4}) : '-') + '</td>'
                         + '<td>' + (s.Order_date || '') + '</td>'
                         + '<td><button type="button" class="btn btn-xs btn-danger btn-unbind-ship"'
                         + ' data-is-id="' + (s.IS_id || '') + '"'

@@ -826,7 +826,7 @@ function acc_audit_search(PDO $db, array $f): array
  * ============================================================ */
 
 /**
- * 各來源可線上修改的欄位白名單。應收單價是 int（資料表型別限制），不接受小數。
+ * 各來源可線上修改的欄位白名單。應收單價為 decimal(14,4)（2026-11-12 起由 int 改），接受最多 4 位小數。
  *
  * PURC（採購單）刻意回空陣列＝**不可從會計端線上改金額**：
  * purchase_request 的 subtotal/tax_amount/grand_total 是由 purchase_item 明細算出來的，
@@ -836,8 +836,8 @@ function acc_audit_search(PDO $db, array $f): array
 function acc_editable_fields(string $srcType): array
 {
     switch (strtoupper($srcType)) {
-        case 'IS':   return ['Qty' => 'int', 'Unit_price' => 'int', 'Note' => 'text'];
-        case 'IR':   return ['Qty' => 'int', 'Unit_price' => 'int', 'IR_ps' => 'text'];
+        case 'IS':   return ['Qty' => 'int', 'Unit_price' => 'dec4', 'Note' => 'text'];
+        case 'IR':   return ['Qty' => 'int', 'Unit_price' => 'dec4', 'IR_ps' => 'text'];
         case 'TLOG': return ['transfer_qty' => 'int', 'modified_unit_price' => 'dec',
                              'process_amount' => 'dec', 'tax_amount' => 'dec', 'note' => 'text'];
         case 'PURC': return [];
@@ -920,14 +920,14 @@ function acc_edit_doc(PDO $db, string $srcType, int $id, array $fields, string $
                 }
                 $new = (int)str_replace(',', '', $s);
             }
-        } elseif ($type === 'dec') {
+        } elseif ($type === 'dec' || $type === 'dec4') {
             $s = trim((string)$nv);
             if ($s === '') { $new = null; }
             else {
                 if (!is_numeric(str_replace(',', '', $s))) {
                     return ['success' => false, 'message' => "「{$col}」必須是數字"];
                 }
-                $new = round((float)str_replace(',', '', $s), 2);
+                $new = round((float)str_replace(',', '', $s), $type === 'dec4' ? 4 : 2);
             }
         } else {
             $new = trim((string)$nv);
@@ -4795,9 +4795,9 @@ function acc_recon_line_ref(PDO $db, string $srcType, int $srcId): array
             $out['checks'][] = $same
                 ? ['label' => '退貨單價', 'status' => 'ok', 'text' => '與同料號近期出貨單價一致']
                 : ['label' => '退貨單價', 'status' => 'warn',
-                   'text' => '退回單價 ' . number_format((float)$r['Unit_price'], 2)
+                   'text' => '退回單價 ' . rtrim(rtrim(number_format((float)$r['Unit_price'], 4, '.', ''), '0'), '.')
                            . ' 與同料號近期出貨單價不同（近期為 '
-                           . number_format((float)$ships[0]['Unit_price'], 2) . '），請確認是否為折讓價'];
+                           . rtrim(rtrim(number_format((float)$ships[0]['Unit_price'], 4, '.', ''), '0'), '.') . '），請確認是否為折讓價'];
         }
         $out['checks'][] = ['label' => '對帳影響', 'status' => 'na',
                             'text' => '退貨在對帳單上以負數計入，會直接扣減本月應收'];

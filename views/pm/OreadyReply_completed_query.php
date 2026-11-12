@@ -3075,7 +3075,7 @@ $(document).on('click', '.ocq-act-btn', function(){
             h += '<table class="ocq-act-tb"><thead><tr><th>出貨單號</th><th>出貨日期</th><th>客戶</th><th>料號</th><th>數量</th><th>單價</th></tr></thead><tbody>';
             res.shipments.forEach(function(s){
                 h += '<tr><td>'+esc(s.IS_number||'')+'</td><td>'+esc(egFmtDate(s.Order_date))+'</td><td>'+esc(s.Client_name||'')+'</td>'
-                   + '<td>'+esc(s.Product_id||'')+'</td><td>'+esc(s.Qty||0)+'</td><td>'+esc(s.Unit_price||0)+'</td></tr>';
+                   + '<td>'+esc(s.Product_id||'')+'</td><td>'+esc(s.Qty||0)+'</td><td>'+esc(parseFloat(s.Unit_price)||0)+'</td></tr>';
             });
             h += '</tbody></table>';
         }

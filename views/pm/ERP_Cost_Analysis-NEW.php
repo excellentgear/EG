@@ -3359,7 +3359,7 @@ function ajax(data, cb) {
         cb({ success: false, message: '連線失敗' });
     });
 }
-function fmt(v, dec) {
+function fmt(v, dec, maxDec) {
     if (v === null || v === '' || v === undefined) return '–';
     var n = parseFloat(v);
     if (isNaN(n)) return '–';
@@ -3367,7 +3367,7 @@ function fmt(v, dec) {
         return n.toLocaleString('zh-TW', { minimumFractionDigits: dec, maximumFractionDigits: dec });
     }
     // 自動省略尾部零 (最多2位小數)
-    return n.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    return n.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: (maxDec||2) });
 }
 function fmtDate(s) { return s ? s.substring(0,10) : '–'; }
 function marginClass(pct) {
@@ -5118,7 +5118,7 @@ function renderMarginAnalysis(data) {
                         html += '<td>' + esc(s.IS_number||'') + '</td>';
                         html += '<td>' + esc(s.ship_date||'') + '</td>';
                         html += '<td style="text-align:right;">' + fmt(s.Qty,0) + '</td>';
-                        html += '<td style="text-align:right;">NT$' + fmt(s.Unit_price) + '</td>';
+                        html += '<td style="text-align:right;">NT$' + fmt(s.Unit_price,undefined,4) + '</td>';
                         html += '<td style="text-align:right;font-weight:600;">NT$' + fmt(s.revenue) + '</td>';
                         html += '</tr>';
                     });
@@ -5258,7 +5258,7 @@ function renderBindShipList(ships) {
                 (s.Note ? '<div style="color:#888;font-size:10px;word-break:break-word;">' + esc(s.Note) + '</div>' : '') +
                 '</td>';
         html += '<td class="text-center">' + shipQty + '</td>';
-        html += '<td class="text-center" style="white-space:nowrap;">NT$' + fmt(s.Unit_price) + '</td>';
+        html += '<td class="text-center" style="white-space:nowrap;">NT$' + fmt(s.Unit_price,undefined,4) + '</td>';
         html += '<td><input type="text" inputmode="numeric" pattern="[0-9]*" class="form-control input-sm ship-bind-qty" value="' + bindQty +
                 '" style="height:22px;padding:2px 4px;width:62px;" placeholder="數量"></td>';
         html += '</tr>';
