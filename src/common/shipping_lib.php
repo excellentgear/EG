@@ -1264,8 +1264,14 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
                   'has_order' => $r['Order_id'] !== null, 'alloc' => (int)$r['alloc'], 'this_bom' => (int)$r['this_bom'],
                   'left' => max(0, $left), 'selectable' => $left > 0 && (int)$r['this_bom'] === 0];
     }
-    // 建議選擇（可選且單價相符）排最前面，其餘維持日期新→舊
-    usort($out, fn($a, $b) => ((int)($b['selectable'] && $b['price_match'])) <=> ((int)($a['selectable'] && $a['price_match'])));
+    // 排序：出貨日、出貨單號由新到舊；但「有任一明細可選且單價相符」的出貨單號整張置頂（同單號其他明細一起，避免漏看），
+    // 置頂區與其餘各自維持新→舊，同單號內單價相符者排前
+    $pinNo = [];
+    foreach ($out as $x) if ($x['selectable'] && $x['price_match']) $pinNo[$x['no']] = 1;
+    usort($out, function ($a, $b) use ($pinNo) {
+        return [isset($pinNo[$b['no']]) ? 1 : 0, $b['date'], $b['no'], (int)$b['price_match'], $b['is_id']]
+           <=> [isset($pinNo[$a['no']]) ? 1 : 0, $a['date'], $a['no'], (int)$a['price_match'], $a['is_id']];
+    });
     // 製令綁定的訂單資訊（顯示在跳窗最上方供比對；品名規格與待出貨清單同一套 sq_desc_text）
     $oi = [];
     $oRows = $db->query("SELECT ot.Order_id, ot.Order_oo, COALESCE(NULLIF(TRIM(ot.Client_name),''), cl2.customer, '') AS Client_name, ot.d_id, ot.d_id_ID, ot.Specification, ot.Qty, ot.unit_price,
