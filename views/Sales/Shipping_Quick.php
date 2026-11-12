@@ -312,7 +312,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 
     <div class="sq-pager">
       <span id="pgInfo" style="margin-right:auto;color:#8a6d45;"></span>
-      每頁 <select id="perPage"><option>5</option><option>10</option><option selected>20</option><option>50</option></select> 筆
+      每頁 <select id="perPage"><option>5</option><option selected>10</option><option>20</option><option>50</option></select> 筆
       <span id="pgBtns"></span>
     </div>
 
@@ -660,7 +660,7 @@ var AS_DOCS = [], AS_CUR = 0, AS_LABEL = '';
 var dtCache = null;          // 目前開著的出貨單明細（列印／刪除共用）
 var TODAY = '';             // 後端給的今天（不用瀏覽器時鐘，避免時區差一天）
 
-var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
+var CSRF = '', rows = [], page = 1, perPage = 10, total = 0;
 var sortBy = '', sortDir = 'asc';   // '' = 預設（可出貨優先、再依交期）
 var sel = {};              // order_id => {qty, row}
 var cur = -1;              // 目前鍵盤游標所在列 index
