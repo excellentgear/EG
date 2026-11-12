@@ -100,6 +100,15 @@ require_once __DIR__ . '/../../src/common/date_fmt_lib.php';   // 日期顯示�
 $ocq_bind_perm      = oready_resolve_can_bind($pdo, $id);
 $ocq_can_bind_part  = !empty($ocq_bind_perm['part']);
 $ocq_can_bind_order = !empty($ocq_bind_perm['order']);
+// 綁定欄的訂單／出貨單連結：權限判定與 BOM總覽相同（訂單追蹤進入權限、出貨分析 shipping canView）
+$ocq_can_open_ot = false; $ocq_can_ship_insight = false;
+try {
+    require_once __DIR__ . '/../../src/common/asdoc_page_lib.php';
+    $ocq_can_open_ot = ((int)$id === 1)
+        || eg_asdoc_page_can_open($pdo, $id, '/EGsystem/src/store/_cleanNewOrder_Track.php')
+        || eg_asdoc_page_can_open($pdo, $id, '/EGsystem/src/store/_cleanOrder_Track_ate_only.php');
+} catch (Throwable $e) {}
+try { require_once __DIR__ . '/../../src/common/shipping_lib.php'; $ocq_can_ship_insight = (bool)(sq_perms($pdo, sq_current_user($pdo))['canView'] ?? false); } catch (Throwable $e) {}
 
 // 管理員修正發包日／回廠日：跟 OreadyReply_ForPm_BaseOfTime.php 同一套權限碼（含 'A' 才算管理者），
 // 2026-09-24 使用者交辦——查已結案 BOM 順便修正當初漏填/填錯的發包回廠日，並能對照報工/出貨紀錄核對。
@@ -1708,6 +1717,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($rows as $r0) $rows_by_bom[$r0['bom']] = $r0;
             $bind_map = ocq_bind_map($pdo, $bom_list, $rows_by_bom);
             ocq_attach_delivery($rows, $bind_map);
+            // 已綁定這張製令的出貨單（唯一實作 bom_bound_ship_lib.php，與 BOM總覽同一份）
+            $ship_map = [];
+            try { require_once __DIR__ . '/../../src/common/bom_bound_ship_lib.php'; $ship_map = eg_bom_bound_ships($pdo, $bom_list); } catch (Throwable $e) {}
             list($ob_batch_map, $qab_tags_map) = ocq_fetch_extras($pdo, $bom_list, $proc_map);
             foreach ($rows as &$row) {
                 $row['processes'] = $proc_map[$row['bom']] ?? [];
@@ -1717,6 +1729,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $row['bound_orders'] = $bi['orders'] ?? [];
                 $row['is_stock']     = !empty($bi['stock']);
                 $row['legacy_order'] = $bi['legacy'] ?? null;
+                $row['bound_ships']  = $ship_map[$row['bom']] ?? null;
             }
             unset($row);
 
@@ -2600,6 +2613,9 @@ var OCQ_NAS_BASE = window.location.protocol + '//' + window.location.host + '/na
 var OCQ_BIND = { part: <?= $ocq_can_bind_part ? 'true' : 'false' ?>, order: <?= $ocq_can_bind_order ? 'true' : 'false' ?>,
                  csrf: <?= json_encode($ocq_csrf) ?> };
 var OCQ_CAN_BIND  = (OCQ_BIND.part || OCQ_BIND.order);
+var OCQ_CAN_OT    = <?= $ocq_can_open_ot ? 'true' : 'false' ?>;
+var OCQ_CAN_SHIP  = <?= $ocq_can_ship_insight ? 'true' : 'false' ?>;
+var OCQ_SHIPS     = {};   // bom → 已綁定出貨單（就地更新綁定欄時沿用）
 var OCQ_BASE_COLS = OCQ_CAN_BIND ? 7 : 6;
 
 // 管理員模式（2026-09-24）：isAdmin 由後端權限碼算好；unlocked 是「這一頁有沒有輸入過操作確認密碼」，
@@ -2727,8 +2743,13 @@ function bindCellHtml(item){
         var lines = orders.length
             ? orders.map(function(o){ return o.order_oo + (o.qty > 0 ? '×' + o.qty : ''); })
             : [item.legacy_order];
-        h += '<div class="ocq-bind-ok" title="已綁定訂單：'+esc(lines.join('、'))+'"><i class="fa fa-chain"></i> '
-           + lines.map(function(t, i){ return (i === 0 ? '' : '<div class="ocq-bind-more">') + esc(t) + (i === 0 ? '' : '</div>'); }).join('')
+        var oos = orders.length ? orders.map(function(o){ return o.order_oo; }) : [item.legacy_order];
+        h += '<div class="ocq-bind-ok" title="已綁定訂單：'+esc(lines.join('、'))+(OCQ_CAN_OT ? '｜點擊另開訂單追蹤並篩選' : '')+'"><i class="fa fa-chain"></i> '
+           + lines.map(function(t, i){
+               var tx = esc(t);
+               if (OCQ_CAN_OT && oos[i]) tx = '<a href="../Sales/NewOrder_Track.php?kw='+encodeURIComponent(String(oos[i]).trim())+'" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;">'+tx+'</a>';
+               return (i === 0 ? '' : '<div class="ocq-bind-more">') + tx + (i === 0 ? '' : '</div>');
+           }).join('')
            + '</div>';
     } else if (OCQ_BIND.order) {
         var needPart = !hasPart;
@@ -2737,6 +2758,27 @@ function bindCellHtml(item){
            + '<i class="fa fa-chain-broken"></i> 綁訂單</button></div>';
     } else {
         h += '<div class="ocq-bind-no" title="未綁定訂單（你沒有綁定訂單的權限）">未綁訂單</div>';
+    }
+    // 已綁定這張製令的出貨單：簡式單號＋日期×數量；有出貨分析權限者點一下另開並只列該張出貨單
+    if (item.bound_ships !== undefined) OCQ_SHIPS[item.bom] = item.bound_ships;
+    var bs = OCQ_SHIPS[item.bom];
+    if (bs && Array.isArray(bs.ships) && bs.ships.length) {
+        var yr = String(new Date().getFullYear());
+        h += '<div style="font-size:10.5px;color:#555;margin-top:3px;line-height:1.35;">';
+        bs.ships.slice(0, 5).forEach(function(s){
+            var d = String(s.date || ''), ds = d.substring(0,4) === yr ? d.substring(5).replace('-','/') : d.replace(/-/g,'.');
+            var no = esc(s.short || s.no);
+            if (OCQ_CAN_SHIP && s.no) {
+                var q = new URLSearchParams({ ship_pid: String(item.d_setting_id || ''), ship_pno: String(item.d_id || ''),
+                    ship_client: String(item.Client_Name_Full || item.Client_Name || '').trim(), ship_from: d, ship_to: d,
+                    ship_no: String(s.no), ship_isid: String(s.is_id || '') });
+                no = '<a href="../Sales/Shipping_Insight.php?'+esc(q.toString())+'" target="_blank" rel="noopener" style="color:#0056b3;text-decoration:underline;" title="另開出貨分析，只列此出貨單">'+no+'</a>';
+            }
+            h += '<div style="white-space:nowrap;" title="已綁定出貨單 '+esc(s.no)+'（'+esc(d.replace(/-/g,'.'))+' 出貨 '+esc(String(s.qty))+'）"><i class="fa fa-truck" style="color:#2E8B57;margin-right:2px;"></i>'
+               + no + ' ' + esc(ds) + ' ×' + esc(String(s.qty)) + '</div>';
+        });
+        if (bs.ships.length > 5) h += '<div>…另 ' + (bs.ships.length - 5) + ' 張，共出 ' + esc(String(bs.qty)) + '</div>';
+        h += '</div>';
     }
     return h;
 }
