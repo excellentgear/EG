@@ -1230,10 +1230,11 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     $oids = array_values(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
     if (!$oids) return ['error' => '這張製令尚未綁定訂單，請先到 BOM總覽綁訂單'];
     $in = implode(',', $oids);
-    $os = $db->query("SELECT Order_id, Order_oo, Client_name, d_id_ID FROM order_track WHERE Order_id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
+    $os = $db->query("SELECT Order_id, Order_oo, Client_name, d_id_ID, unit_price FROM order_track WHERE Order_id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
     $clients = array_values(array_unique(array_column($os, 'Client_name')));
     $dids    = array_values(array_unique(array_filter(array_map('intval', array_column($os, 'd_id_ID')))));
-    $oo = []; foreach ($os as $o) $oo[(int)$o['Order_id']] = (string)$o['Order_oo'];
+    $oo = []; $op = [];
+    foreach ($os as $o) { $oo[(int)$o['Order_id']] = (string)$o['Order_oo']; $op[(int)$o['Order_id']] = (float)$o['unit_price']; }
     if (!$clients) return ['error' => '找不到綁定訂單的客戶'];
     $cph = implode(',', array_fill(0, count($clients), '?'));
     $cond = "il.Order_id IN ($in)";
@@ -1252,13 +1253,18 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ($bd !== '' && $r['d'] < $bd) continue;   // 出貨早於製令開立＝不可能是這張製令出的
         $left = (int)$r['Qty'] - (int)$r['alloc'];
-        $out[] = ['is_id' => (int)$r['IS_id'], 'no' => (string)$r['IS_number'], 'date' => (string)$r['d'],
+        // 單價相符＝出貨單價等於它綁的訂單單價（尚未綁訂單者，與這張製令任一綁定訂單的單價相同）
+        $refs = $r['Order_id'] ? [$op[(int)$r['Order_id']] ?? 0.0] : array_values($op);
+        $pm = false; foreach ($refs as $rp) if ($rp > 0 && abs($rp - (float)$r['Unit_price']) < 0.01) $pm = true;
+        $out[] = ['price_match' => $pm, 'order_price' => $refs[0] ?? 0, 'is_id' => (int)$r['IS_id'], 'no' => (string)$r['IS_number'], 'date' => (string)$r['d'],
                   'part' => (string)$r['Product_id'], 'spec' => trim((string)$r['Specification'] . ' ' . (string)$r['Content']), 'note' => (string)$r['Note'], 'qty' => (int)$r['Qty'], 'price' => (float)$r['Unit_price'],
                   'order_oo' => $r['Order_id'] ? ($oo[(int)$r['Order_id']] ?? '') : '',
                   'has_order' => $r['Order_id'] !== null, 'alloc' => (int)$r['alloc'], 'this_bom' => (int)$r['this_bom'],
                   'left' => max(0, $left), 'selectable' => $left > 0 && (int)$r['this_bom'] === 0];
     }
-    return ['bom' => $bom, 'orders' => array_values($oo), 'ships' => $out];
+    // 建議選擇（可選且單價相符）排最前面，其餘維持日期新→舊
+    usort($out, fn($a, $b) => ((int)($b['selectable'] && $b['price_match'])) <=> ((int)($a['selectable'] && $a['price_match'])));
+    return ['bom' => $bom, 'orders' => array_values($oo), 'order_prices' => array_values($op), 'ships' => $out];
 }
 
 /** 把舊出貨明細綁到這張製令（is_bom_map）；尚未綁訂單者一併補上製令綁定的訂單（同客戶＋同料號才補）。 */

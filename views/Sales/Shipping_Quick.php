@@ -795,15 +795,15 @@ $(document).on('click','.btn-bb',function(){
   $.post(API+'?action=bom_bind_candidates',{bom:BB.bom},function(r){
     if(!r.ok || r.error){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
     BB.ships = r.ships||[];
-    $('#bbOrders').text((r.orders||[]).join('、'));
+    $('#bbOrders').text((r.orders||[]).join('、')+'；訂單單價 '+(r.order_prices||[]).map(function(v){return np(v);}).join('、'));
     if(!BB.ships.length){ $('#bbList').html('<div style="padding:16px;color:#8a6d45;">沒有可綁定的舊出貨明細（同客戶、已綁這些訂單或同料號尚未綁訂單者）。</div>'); bbCount(); return; }
-    var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>規格</th><th>備註</th><th>訂單</th><th>出貨量</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
+    var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>規格</th><th>備註</th><th>訂單</th><th>出貨量</th><th>出貨單價</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
     BB.ships.forEach(function(s,i){
-      var dis = !s.selectable, note = s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : '');
-      h += '<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':'')+'"><td><input type="checkbox" class="bb-ck"'+(dis?' disabled':'')+'></td>'
+      var dis = !s.selectable, rec = s.selectable && s.price_match, note = s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : '');
+      h += '<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':(rec?'background:#E3F2E6;':''))+'"><td><input type="checkbox" class="bb-ck"'+(dis?' disabled':'')+'></td>'
         + '<td><b>'+esc(s.no)+'</b></td><td>'+esc(String(s.date).replace(/-/g,'.'))+'</td><td>'+esc(s.part)+'</td>'
         + '<td style="max-width:240px;white-space:normal;">'+esc(s.spec||'')+'</td><td style="max-width:200px;white-space:normal;">'+esc(s.note||'')+'</td>'
-        + '<td>'+(s.order_oo?esc(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
+        + '<td>'+(s.order_oo?esc(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td style="white-space:nowrap;">'+np(s.price)+(rec?'<br><span style="background:#2E8B57;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;line-height:16px;">✔ 單價相符・建議</span>':'')+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
         + '<td><input type="number" class="bb-q" min="1" max="'+s.left+'" value="'+s.left+'" style="width:90px;"'+(dis?' disabled':'')+'></td></tr>';
     });
     $('#bbList').html(h+'</tbody></table>'); bbCount();
