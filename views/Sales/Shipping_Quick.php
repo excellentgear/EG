@@ -863,7 +863,9 @@ $(document).on('click','#btnBbApply',function(){
     $b.prop('disabled',false);
     if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
     toast(esc(r.message)); closeMask('mkBomBind');
-    if (BB.fromBom) load(function(){ openFromBom(BB.bom); }); else { sel = {}; load(); }
+    // 只有原本就是用這張製令編號在篩選（由 BOM 總覽帶入）才維持製令篩選；
+    // 從料號／其他篩選條件進來綁定的，綁完保留使用者原本的篩選，不跳成製令編號
+    if (BB.fromBom && String($('#kw').val()||'').trim() === BB.bom) load(function(){ openFromBom(BB.bom); }); else { sel = {}; load(); }
   },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
 });
 
