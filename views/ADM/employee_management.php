@@ -91,6 +91,18 @@ try {
     error_log("Permission check error: " . $e->getMessage());
 }
 
+// 角色加成（2026-11-12）：與原本的頁面權限取聯集，只增不減；規則見 src/common/emp_mgmt_role_lib.php
+try {
+    require_once '../../src/common/emp_mgmt_role_lib.php';
+    $_empRoleChars = emp_mgmt_role_chars($conn, (int)$id);
+    if ($_empRoleChars !== '') {
+        $hrUserPerm = emp_mgmt_merge_perm($hrUserPerm, $_empRoleChars);
+        // 沒有頁面資料列也要有網址可判斷唯讀導向（page_info 查不到時維持原樣不導向）
+    }
+} catch (Throwable $e) {
+    error_log('emp role merge: ' . $e->getMessage());
+}
+
 // 2. 判斷權限並導向
 if (empty($hrUserPerm)) {
     header("Location:../../src/store/Login.php?msg=" . urlencode("無權限檢視頁面"));

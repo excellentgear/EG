@@ -29,6 +29,8 @@ if (!function_exists('eg_role_page_r_modules')) {
             'form_signer'    => 'form_signer.php',
             'sheet_form'     => 'sheet_form.php',
             'ir_track'       => 'IR_Track.php',
+            // 員工資料管理（2026-11-12）：角色與原頁面權限取聯集，此處只在「完全沒有頁面／群組權限」時補 R 讓側欄出現
+            'emp_mgmt'       => 'employee_management.php',
         ];
     }
 }

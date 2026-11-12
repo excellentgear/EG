@@ -432,7 +432,14 @@ $EG_ROLE_MODULES = [
     'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
     'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
     'ir_track'            => ['prefix'=>'irt',     'label'=>'退貨追蹤',            'page'=>'IR_Track.php'],
+    'emp_mgmt'            => ['prefix'=>'emp',     'label'=>'員工資料管理',        'page'=>'employee_management.php'],
 ];
+
+// 員工資料管理的角色（HR管理員／HR／唯讀）：確保存在，下方角色指派區塊才列得出來
+try {
+    require_once __DIR__ . '/../../src/common/emp_mgmt_role_lib.php';
+    emp_mgmt_roles_ensure($conn_pdo);
+} catch (Throwable $_e) {}
 
 /** 模組代碼 → 中文名（查不到就回代碼本身，至少不會顯示空白） */
 if (!function_exists('eg_module_label')) {

@@ -677,7 +677,10 @@ function empPagePerm() {
         foreach ($found as $p) $chars = array_merge($chars, str_split((string)$p));
         $chars = array_unique($chars);
         sort($chars);
-        return $cache = implode('', $chars);
+        $pagePerm = implode('', $chars);
+        // 角色加成（與頁面一致，只增不減）；見 src/common/emp_mgmt_role_lib.php
+        require_once __DIR__ . '/../common/emp_mgmt_role_lib.php';
+        return $cache = emp_mgmt_merge_perm($pagePerm, emp_mgmt_role_chars($db, $uid));
     } catch (Throwable $e) {
         error_log('[force_logout] perm resolve failed: ' . $e->getMessage());
         return $cache = '';
