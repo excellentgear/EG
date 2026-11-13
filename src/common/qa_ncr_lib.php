@@ -191,7 +191,7 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
                                 LEFT JOIN customer_list cl ON cl.customer_id = c.customer_id
                                 LEFT JOIN maker_list m ON m.maker_id_no = c.maker_id_no
                                 LEFT JOIN d_setting ds ON ds.d_id = c.d_id
-                                WHERE DATE(COALESCE(c.found_date, c.fill_date)) BETWEEN ? AND ?");
+                                WHERE c.status<>'stopped' AND DATE(COALESCE(c.found_date, c.fill_date)) BETWEEN ? AND ?");
             $st->execute([$from, $to]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $who = $r['counterparty_type'] === 'maker' ? (string)($r['mname'] ?? '') : (string)($r['cname'] ?? '');

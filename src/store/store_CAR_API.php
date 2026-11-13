@@ -72,6 +72,18 @@ car_ensure_cause_cols($pdo);
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
+// 已停止的單據不可再做任何修改（唯一例外：刪除）。所有寫入端點都以 car_id 指到單據。
+if (in_array($action, ['assign','save_reply','sign_section','unsign_section','submit_reply','primary_sign','primary_reject',
+                       'final_decide','deduct_sign','bf_unlock','bf_lock','bf_sign','bf_save','update_order',
+                       'withdraw_application','resubmit_application','abandon_application',
+                       'upload_attachment','reorder_attachments'], true)) {
+    $__gid = (int)($_POST['car_id'] ?? 0);
+    if ($__gid > 0) {
+        $__gs = $pdo->prepare("SELECT status FROM car_order WHERE id = ?"); $__gs->execute([$__gid]);
+        if ($__gs->fetchColumn() === 'stopped') jfail('本單已被停止，不可再修改');
+    }
+}
+
 try {
     switch ($action) {
 
@@ -497,7 +509,8 @@ try {
 
         // 統計（依卡片語意）
         $stSql = "SELECT
-            COUNT(*) AS all_cnt,
+            SUM(CASE WHEN o.status <> 'stopped' THEN 1 ELSE 0 END) AS all_cnt,
+            SUM(CASE WHEN o.status = 'stopped' THEN 1 ELSE 0 END) AS stopped_cnt,
             SUM(CASE WHEN o.status IN ('applying','app_rejected') THEN 1 ELSE 0 END) AS pending_cnt,
             SUM(CASE WHEN o.status IN ('open','assigned','replying','pending_primary','pending_final') THEN 1 ELSE 0 END) AS unclosed_cnt,
             SUM(CASE WHEN o.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_cnt,
@@ -506,10 +519,13 @@ try {
         $sc = $st->fetch(PDO::FETCH_ASSOC) ?: [];
         $stats = ['all' => (int)($sc['all_cnt'] ?? 0), 'pending' => (int)($sc['pending_cnt'] ?? 0),
                   'unclosed' => (int)($sc['unclosed_cnt'] ?? 0),
-                  'rejected' => (int)($sc['rejected_cnt'] ?? 0), 'closed' => (int)($sc['closed_cnt'] ?? 0)];
+                  'rejected' => (int)($sc['rejected_cnt'] ?? 0), 'closed' => (int)($sc['closed_cnt'] ?? 0),
+                  'stopped' => (int)($sc['stopped_cnt'] ?? 0)];
 
-        // 卡片條件
+        // 卡片條件（「全部」不含已停止；已停止只有點「已停止」卡片才看得到）
         $where = $base;
+        if ($card === 'stopped') $where .= " AND o.status = 'stopped'";
+        else $where .= " AND o.status <> 'stopped'";
         if ($card === 'pending_open') $where .= " AND o.status IN ('applying','app_rejected')";
         elseif ($card === 'unclosed') $where .= " AND o.status IN ('open','assigned','replying','pending_primary','pending_final')";
         elseif ($card === 'rejected') $where .= " AND o.status = 'rejected'";
@@ -535,6 +551,7 @@ try {
                         o.d_id, o.drawing_no, o.resp_type, o.resp_dept_id, o.resp_display,
                         o.status, o.fill_date, o.created_by, o.created_by_name, o.reissue_of, o.reissue_seq,
                         o.assigned_to, o.assigned_to_name, o.assigned_at, o.created_at, o.stage_since,
+                        o.stopped_at, o.stopped_by_name, o.stopped_reason,
                         d.name AS resp_dept_name,
                         cc.customer AS customer_name, mk.maker_id AS maker_name
                  FROM car_order o
@@ -712,10 +729,15 @@ try {
                  'can_sign_primary' => (bool)$canSignPrimary, 'can_final' => (bool)$canFinal,
                  'can_deduct' => (bool)$canDeduct, 'can_see_deduct' => (bool)$canSeeDeduct,
                  'can_withdraw' => (bool)$canWithdraw,
+                 'can_stop' => (bool)((_carHas('all') || _carHas('car_manage_settings')) && !in_array($o['status'], ['stopped','closed'], true)),
                  'can_backfill' => (bool)$canBackfill, 'bf_on' => (bool)$bfOn,
                  'bf_ttl' => $bfOn ? car_bf_unlock_left($meId, $id) : 0,
                  'me_id' => $meId, 'me_name' => $me['name']];
 
+        if ($o['status'] === 'stopped') {   // 已停止：唯讀，所有操作權限一律關閉（只留看得到機密的判定）
+            foreach ($perm as $__k => $__v) if (strpos($__k, 'can_') === 0 && $__k !== 'can_see_deduct') $perm[$__k] = false;
+            $perm['bf_on'] = false;
+        }
         jout(['success' => true, 'order' => $o, 'labels' => $L, 'bf_slots' => car_bf_slots(),
               // 補資料的章格預設帶誰（主管簽核＝責任單位最高主管、總經理核准＝全站最高核准人員）
               'bf_defaults' => $bfOn ? car_bf_default_signers($pdo, $o) : null,
@@ -1786,6 +1808,27 @@ try {
         jout(['success' => true, 'message' => '已放棄申請（保留紀錄、停止提醒，日後仍可重新送出）']);
     }
 
+    // ── 停止單據（離職員工沒填完等情況）：不再通知、通知收回、不列入統計與列印 ──────────
+    case 'stop_order': {
+        if (!(_carHas('all') || _carHas('car_manage_settings'))) jerr('只有系統管理員或異常矯正單管理者可以停止單據', 403);
+        $id = (int)($_POST['car_id'] ?? 0);
+        $reason = trim($_POST['reason'] ?? '');
+        if (!$id) jfail('缺少 car_id');
+        if ($reason === '') jfail('請填寫停止原因（例如：開立人／回覆人已離職）');
+        if (mb_strlen($reason) > 500) jfail('停止原因最多 500 字');
+        $st = $pdo->prepare("SELECT id, car_no, status FROM car_order WHERE id = ?"); $st->execute([$id]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) jfail('查無此單');
+        if ($o['status'] === 'stopped') jfail('本單已經是停止狀態，請重新整理畫面');
+        if ($o['status'] === 'closed') jfail('已結案的單據不需要停止');
+        $pdo->prepare("UPDATE car_order SET status='stopped', stopped_prev_status=?, stopped_at=NOW(), stopped_by=?,
+                         stopped_by_name=?, stopped_reason=?, stage_since=NOW() WHERE id=? AND status<>'stopped'")
+            ->execute([$o['status'], (int)$me['id'], $me['name'], $reason, $id]);
+        car_log($pdo, $id, 'stop', (int)$me['id'], $me['name'], "停止單據（原狀態：" . (car_labels()['status'][$o['status']] ?? $o['status']) . "）：{$reason}");
+        $n = car_notify_retire_all($pdo, $id);
+        jout(['success' => true, 'message' => '已停止單據 ' . ($o['car_no'] ?: '（未配號）') . "，並收回 {$n} 則相關通知"]);
+    }
+
     // ── 刪除單據（需 car_delete 且為開立人本人；系統管理員例外；連同簽章/軌跡/附件記錄一併刪除）
     case 'delete_order': {
         if (!_carHas('car_delete')) jerr('您沒有刪除權限', 403);
@@ -1833,6 +1876,7 @@ try {
         elseif ($card === 'unclosed') $where .= " AND o.status IN ('open','assigned','replying','pending_primary','pending_final')";
         elseif ($card === 'rejected') $where .= " AND o.status='rejected'";
         elseif ($card === 'closed') $where .= " AND o.status='closed'";
+        $where .= " AND o.status <> 'stopped'";   // 已停止的單據不列入匯出
 
         // 以子查詢先套 WHERE/排序，再 JOIN 顯示欄位
         $st = $pdo->prepare(
@@ -1885,7 +1929,7 @@ try {
         // 扣款彙總為機密：僅扣款判定人員/最終決策者/系統管理員可見
         $canSeeDeduct = car_is_admin_deduct($pdo, (int)$me['id']) || car_is_final_decider($pdo, (int)$me['id']) || _carHas('all');
         $L = car_labels();
-        $byStatus = $pdo->query("SELECT status, COUNT(*) c FROM car_order GROUP BY status")->fetchAll(PDO::FETCH_ASSOC);
+        $byStatus = $pdo->query("SELECT status, COUNT(*) c FROM car_order WHERE status <> 'stopped' GROUP BY status")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($byStatus as &$r) { $r['label'] = $L['status'][$r['status']] ?? $r['status']; } unset($r);
         $byResp = $pdo->query(
             "SELECT COALESCE(o.resp_display, d.name, '（未指定）') AS name, COUNT(*) c,
@@ -1893,13 +1937,14 @@ try {
                     SUM(CASE WHEN o.status='rejected' THEN 1 ELSE 0 END) rejected_c,
                     SUM(COALESCE(o.deduct_amount,0)) deduct_sum
              FROM car_order o LEFT JOIN department d ON d.id = o.resp_dept_id
+             WHERE o.status <> 'stopped'
              GROUP BY COALESCE(o.resp_display, d.name, '（未指定）') ORDER BY c DESC LIMIT 50")->fetchAll(PDO::FETCH_ASSOC);
-        $bySource = $pdo->query("SELECT source_type, COUNT(*) c FROM car_order GROUP BY source_type")->fetchAll(PDO::FETCH_ASSOC);
+        $bySource = $pdo->query("SELECT source_type, COUNT(*) c FROM car_order WHERE status <> 'stopped' GROUP BY source_type")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($bySource as &$r) { $r['label'] = $L['source_type'][$r['source_type']] ?? $r['source_type']; } unset($r);
         $byMonth = $pdo->query(
             "SELECT DATE_FORMAT(created_at,'%Y-%m') m, COUNT(*) c,
                     SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) closed_c
-             FROM car_order GROUP BY m ORDER BY m DESC LIMIT 12")->fetchAll(PDO::FETCH_ASSOC);
+             FROM car_order WHERE status <> 'stopped' GROUP BY m ORDER BY m DESC LIMIT 12")->fetchAll(PDO::FETCH_ASSOC);
         if (!$canSeeDeduct) { foreach ($byResp as &$_r) { unset($_r['deduct_sum']); } unset($_r); }
         jout(['success' => true, 'by_status' => $byStatus, 'by_resp' => $byResp,
               'by_source' => $bySource, 'by_month' => $byMonth, 'show_deduct' => (bool)$canSeeDeduct]);

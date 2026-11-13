@@ -3572,7 +3572,7 @@ function prj_data_readiness(PDO $db, int $projectId): array
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $abnOf[(string)$x['bom_no']][] = (string)$x['abnormal_order_no'];
     } catch (Throwable $e) {}
     try {
-        $st = $db->prepare("SELECT bom_no, car_no FROM car_order WHERE bom_no IN ($ph)");
+        $st = $db->prepare("SELECT bom_no, car_no FROM car_order WHERE status<>'stopped' AND bom_no IN ($ph)");
         $st->execute($bomList);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $carOf[(string)$x['bom_no']][] = (string)$x['car_no'];
     } catch (Throwable $e) {}

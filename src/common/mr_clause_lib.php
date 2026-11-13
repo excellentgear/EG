@@ -163,7 +163,7 @@ function mr_clause_facts(PDO $db, int $dy, string $meetingDate, array $kpi): arr
     $miss = array_values(array_filter($kpi, function ($k) { return $k['miss'] > 0; }));
     $sumTxt = $kpi ? $dy . ' 年 KPI 有資料 ' . count($kpi) . ' 項，其中 ' . count($miss) . ' 項有月份未達標' . ($miss ? '（' . implode('、', array_map(function ($k) { return $k['name']; }, array_slice($miss, 0, 6))) . (count($miss) > 6 ? ' 等' : '') . '）' : '') : '';
     $f['objectives'] = $sumTxt; $f['policy'] = $sumTxt;
-    $car = $q1("SELECT COUNT(*) n FROM car_order WHERE YEAR(fill_date)=?", [$dy]);
+    $car = $q1("SELECT COUNT(*) n FROM car_order WHERE status<>'stopped' AND YEAR(fill_date)=?", [$dy]);
     $p = []; if (isset($car['n'])) $p[] = $dy . ' 年異常矯正處理單 ' . (int)$car['n'] . ' 張'; if (isset($qa['n'])) $p[] = '品質異常處理單 ' . (int)$qa['n'] . ' 張';
     $f['corrective'] = implode('；', $p);
     $f['env'] = ''; $f['protect'] = '';

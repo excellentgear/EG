@@ -3094,7 +3094,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_row_details') {
             $bq->execute([$bom]);
             $br = $bq->fetch(PDO::FETCH_ASSOC) ?: ['d_setting_id' => null, 'cn' => ''];
             $cn = (string)($br['cn'] ?? '');
-            $s=$db->prepare("SELECT Product_id,Qty,Specification,DATE_FORMAT(Order_date,'%Y-%m-%d') AS formatted_date,DATE_FORMAT(Order_date,'%Y-%m-%d') AS shipment_iso_date,d_setting_id,TRIM(Client_name) AS Client_name FROM is_list WHERE Product_id=? ORDER BY Order_date DESC LIMIT 200");
+            $s=$db->prepare("SELECT Product_id,Qty,Specification,DATE_FORMAT(Order_date,'%Y-%m-%d') AS formatted_date,DATE_FORMAT(Order_date,'%Y-%m-%d') AS shipment_iso_date,d_setting_id,TRIM(Client_name) AS Client_name FROM is_list WHERE Product_id=? AND NOT EXISTS (SELECT 1 FROM is_bom_map ibm WHERE ibm.IS_id=is_list.IS_id) ORDER BY Order_date DESC LIMIT 200");
             $s->execute([$d_id]);
             $result['shipment_history'] = array_slice(eg_bom_ship_filter($db, $s->fetchAll(PDO::FETCH_ASSOC), $br['d_setting_id'], $d_id, $cn), 0, 20);
         }
@@ -3417,7 +3417,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['delete_bom','de
     $blockDefs = [
         '出貨分配（出貨單綁定此 BOM）' => ["SELECT COUNT(*) FROM is_bom_map WHERE bom = ?", 'bom'],
         '品質異常處理單'               => ["SELECT COUNT(*) FROM qa_abnormal_bom WHERE bom_no = ?", 'bom'],
-        '異常矯正處理單'               => ["SELECT COUNT(*) FROM car_order WHERE bom_no = ?", 'bom'],
+        '異常矯正處理單'               => ["SELECT COUNT(*) FROM car_order WHERE status<>'stopped' AND bom_no = ?", 'bom'],
         '對帳底稿'                     => ["SELECT COUNT(*) FROM acc_recon_line WHERE bom = ?", 'bom'],
         '詢價單／詢價群組項目'         => ["SELECT (SELECT COUNT(*) FROM inq_doc_item WHERE bom = ?) + (SELECT COUNT(*) FROM inq_group_item WHERE bom = ?)", 'bom2'],
         '庫存異動／庫存品參照'         => ["SELECT (SELECT COUNT(*) FROM stock_transactions WHERE bom_ref = ?) + (SELECT COUNT(*) FROM stock_items WHERE bom_ref = ?)", 'bom2'],

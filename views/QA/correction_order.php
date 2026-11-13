@@ -136,6 +136,9 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .st-final{background:#FCF3CF;color:#9A7D0A;border:1px solid #F7DC6F;}
         .st-closed{background:#D5F5E3;color:#1E8449;border:1px solid #ABEBC6;}
         .st-rejected{background:#FADBD8;color:#922B21;border:1px solid #F1948A;}
+        .st-stopped{background:#E5E0DA;color:#5D4E43;border:1px solid #C9BFB5;}
+        tr.row-stopped td{ background:#F4F1EE !important; color:#8A7B6E; }
+        .car-stat[data-card="stopped"]{ border-left-color:#8A7B6E; } .car-stat[data-card="stopped"].active{ box-shadow:0 0 0 3px #8A7B6E; }
         .req::after{ content:" *"; color:#d9534f; }
         /* 使用說明（鐵律7：全站統一放頁首右上角、列印不印） */
         .page-help-btn{ margin-right:6px; }
@@ -227,6 +230,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         <div class="car-stat" data-card="unclosed"><i class="fa fa-cogs stat-icon"></i><div class="num" id="stat-unclosed">0</div><div class="lbl">已開立未結案</div></div>
         <div class="car-stat" data-card="rejected"><i class="fa fa-exclamation-circle stat-icon"></i><div class="num" id="stat-rejected">0</div><div class="lbl">不可結案</div></div>
         <div class="car-stat" data-card="closed"><i class="fa fa-check-circle stat-icon"></i><div class="num" id="stat-closed">0</div><div class="lbl">已結案</div></div>
+        <div class="car-stat" data-card="stopped" title="離職員工未填完而被停止的單據：不通知、不列入統計與列印"><i class="fa fa-ban stat-icon"></i><div class="num" id="stat-stopped">0</div><div class="lbl">已停止</div></div>
       </div>
 
       <div class="row"><div class="col-md-12"><div class="x_panel"><div class="x_content">
@@ -646,6 +650,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       <li><b>回覆</b>：回覆人逐段填寫並各自簽章，三段都簽好才能送出；要改內容先按該段的「修改（取消簽章）」。<br>
           <span class="text-muted">「異常原因分類」是三層的樹狀清單、<b>只能選一個</b>；「處置方式」也是單選。
           兩者的選單與<b>品質異常處理單共用同一份</b>（在異常單的設定頁維護），所以那邊加一層或改名，這裡跟著變。</span></li>
+      <li><b>停止單據</b>（系統管理員／異常矯正單管理者）：開立人或回覆人已離職、單據無人能填完時，開啟該單按「停止此單」並填原因。停止後：所有相關通知收回（視同已處理）、不再發任何通知與逾期提醒、不可再修改，且<b>不列入任何統計與列印／匯出</b>；只能在「已停止」卡片中查看。</li>
       <li><b>簽核／裁決</b>：主管簽核通過或退回重改 → 總經理裁決結案（填結案日與扣款）或不可結案（自動產生退件 R 單）。</li>
       <li><b>列印</b>：單據內「列印」為紙本版式；列表右上可印總表與匯出 CSV。</li>
     </ul>
@@ -756,7 +761,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       renderStats(r.stats); renderRows(r.rows); renderPager(r);
     }).fail(function(){ $('#carBody').html('<tr><td colspan="10" class="text-danger text-center">連線失敗</td></tr>'); });
   }
-  function renderStats(s){ s=s||{}; $('#stat-all').text(s.all||0); $('#stat-pending').text(s.pending||0); $('#stat-unclosed').text(s.unclosed||0); $('#stat-rejected').text(s.rejected||0); $('#stat-closed').text(s.closed||0); }
+  function renderStats(s){ s=s||{}; $('#stat-all').text(s.all||0); $('#stat-pending').text(s.pending||0); $('#stat-unclosed').text(s.unclosed||0); $('#stat-rejected').text(s.rejected||0); $('#stat-closed').text(s.closed||0); $('#stat-stopped').text(s.stopped||0); }
   // 簽章印章 SVG 產生（carStamp/stampRow）已抽成共用檔 resource/js/eg_stamp.js（EGStamp.stamp/.row）
   // isDeputy=true 時右下角加「代」字（代理人代簽）；注意：責任單位回覆人之三段簽章「禁止代理」——isDeputy 僅適用主管/總經理層級簽核。
   // 日期時間顯示格式 2026.07.08 16:31（共用：openView / renderDecision 皆使用）
@@ -862,7 +867,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     return esc(name);
   }
   function stBadge(st, lbl){
-    var m={applying:'st-applying',app_rejected:'st-apprej',open:'st-open',assigned:'st-assigned',replying:'st-replying',pending_primary:'st-primary',pending_final:'st-final',closed:'st-closed',rejected:'st-rejected',draft:'st-open'};
+    var m={applying:'st-applying',app_rejected:'st-apprej',open:'st-open',assigned:'st-assigned',replying:'st-replying',pending_primary:'st-primary',pending_final:'st-final',closed:'st-closed',rejected:'st-rejected',stopped:'st-stopped',draft:'st-open'};
     return '<span class="st-badge '+(m[st]||'st-open')+'">'+esc(lbl)+'</span>';
   }
   function wdCell(o){
@@ -882,6 +887,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         if((o.assigned_to|0) === ME_ID) rowCls = 'row-me-resp';
         else if((o.created_by|0) === ME_ID) rowCls = 'row-me-open';
       }
+      if(o.status==='stopped') rowCls = 'row-stopped';
       h += '<tr'+(rowCls?' class="'+rowCls+'"':'')+'>'
         + '<td>'+noCell+reissue+'</td>'
         + '<td>'+esc(o.source_label)+(o.source_no?'<br><small class="text-muted">'+esc(o.source_no)+'</small>':'')+'</td>'
@@ -1252,7 +1258,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       else if(o.status==='draft' && o.open_reject_reason){ appInfo += '<tr class="warning"><th>撤回</th><td colspan="3">'+esc(String(o.open_reject_reason).replace(/^撤回：/,''))+'（可修改後重新送出申請）</td></tr>'; }
       else if(o.open_approved_by_name){ appInfo += '<tr><th>核准成立</th><td colspan="3">'+esc(o.open_approved_by_name)+(o.open_approved_by_title?'（'+esc(o.open_approved_by_title)+'）':'')+' '+fmtDT(o.open_approved_at)+'</td></tr>'; }
 
+      if(o.status==='stopped'){ appInfo += '<tr class="warning"><th>已停止</th><td colspan="3">'+esc(o.stopped_by_name||'')+' 於 '+fmtDT(o.stopped_at)+' 停止（原狀態：'+esc((r.labels&&r.labels.status&&r.labels.status[o.stopped_prev_status])||o.stopped_prev_status||'')+'）<br>原因：'+esc(o.stopped_reason||'')+'<br><span class="text-muted">本單不再發送通知，不列入統計與列印。</span></td></tr>'; }
       var actions='';
+      if(perm.can_stop){
+        actions+='<div style="margin-bottom:8px;"><button class="btn btn-default btn-sm" id="btn-stop-order" title="開立人／回覆人已離職等無法完成的單據：停止後不再通知、不列入統計與列印"><i class="fa fa-ban"></i> 停止此單</button></div>';
+      }
       if(perm.can_approve){
         actions='<div class="car-warm"><b>開立申請待核准</b>（由 '+esc(o.created_by_name||'')+'／'+esc(o.opener_position_name||'')+' 提出）'
           +'<div><button class="btn btn-success btn-sm" id="btn-approve-open"><i class="fa fa-check"></i> 同意成立</button> '
@@ -1327,6 +1337,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         var reason=prompt('放棄原因（選填）')||'';
         api('abandon_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'放棄失敗'); }); });
+      if(perm.can_stop){ $('#btn-stop-order').on('click', function(){
+        var reason=prompt('停止原因（必填，例如：開立人／回覆人已離職）\n停止後：所有相關通知收回、不再通知，且不列入任何統計與列印。'); if(!reason||!reason.trim()) return;
+        if(!confirm('確定停止單據 '+(o.car_no||'（未配號）')+'？')) return;
+        api('stop_order',{car_id:o.id, reason:reason.trim()}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} })
+          .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'停止失敗'); }); }); }
       if(perm.can_withdraw){ $('#btn-withdraw').on('click', function(){
         var reason=prompt('撤回原因（必填）'); if(!reason) return;
         api('withdraw_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(o.id); fetchPage(state.page);} })
@@ -2156,6 +2171,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   }
   // 總表列印（依目前篩選）
   function printList(){
+    if(state.card==='stopped'){ alert('已停止的單據不列入列印清單'); return; }
     var f=curFilters(); f.all=1;
     api('load_page_data', f).done(function(r){
       if(!r||!r.success){ alert(r&&r.message||'載入失敗'); return; }
@@ -2202,7 +2218,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   }
   window.printStats = function(){ printShell('異常矯正處理單 統計表', $('#stats-body').html(), '', ''); };
   $(function(){
-    $('#btn-csv').on('click', function(){ window.location = API + '?action=export_csv&' + $.param(curFilters()); });
+    $('#btn-csv').on('click', function(){ if(state.card==='stopped'){ alert('已停止的單據不列入匯出'); return; } window.location = API + '?action=export_csv&' + $.param(curFilters()); });
     $('#btn-print-list').on('click', printList);
     $('#btn-stats').on('click', openStats);
     $('#btn-print-one').on('click', function(){ if(curViewId) printOrder(curViewId); });

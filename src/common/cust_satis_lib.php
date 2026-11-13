@@ -593,7 +593,7 @@ function cs_car_by_customer(PDO $db, string $from, string $to): array {
     $out = [];
     try {
         $st = $db->prepare("SELECT customer_id, COUNT(*) c FROM car_order
-                            WHERE counterparty_type='customer' AND customer_id IS NOT NULL AND customer_id<>''
+                            WHERE status<>'stopped' AND counterparty_type='customer' AND customer_id IS NOT NULL AND customer_id<>''
                               AND DATE(fill_date) BETWEEN ? AND ? GROUP BY customer_id");
         $st->execute([$from, $to]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['customer_id']] = (int)$r['c'];

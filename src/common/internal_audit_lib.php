@@ -3286,7 +3286,7 @@ function ia_year_checklist(PDO $db, int $year): array
         $q = $db->prepare("SELECT o.car_no, o.status FROM ia_check_item it
                              JOIN ia_check ck ON ck.check_id = it.check_id
                              JOIN car_order o ON o.id = it.car_id
-                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND it.car_id IS NOT NULL
+                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND it.car_id IS NOT NULL AND o.status<>'stopped'
                             ORDER BY o.car_no");
         $q->execute([$year]);
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {

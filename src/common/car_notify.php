@@ -20,6 +20,12 @@ function car_notify(PDO $pdo, int $carId, string $title, string $content, array 
         function ($u) use ($actorId) { return $u > 0 && $u !== $actorId; })));
     if (!$userIds) return null;
 
+    // 已停止的單據一律不再發任何通知（離職員工沒填完而被管理員停止）
+    try {
+        $sx = $pdo->prepare("SELECT status FROM car_order WHERE id = ?"); $sx->execute([$carId]);
+        if ($sx->fetchColumn() === 'stopped') return null;
+    } catch (Throwable $e) {}
+
     try {
         $pdo->prepare(
             "INSERT INTO live_event (eventdate, title, content, status, created_by, source, ref_type, ref_id, show_status_to_others)
@@ -126,6 +132,38 @@ function car_notify_retire(PDO $pdo, int $carId, string $titleRegex, int $byUser
             }
         }
     } catch (Throwable $e) {}
+}
+
+/**
+ * 單據被「停止」時：把這張單所有 CAR 通知一次收回（鈴鐺／置頂欄消失），
+ * 並把每位收件人視同已處理（已閱／已簽／已回覆），不再發送任何新通知。失敗不影響主流程。
+ */
+function car_notify_retire_all(PDO $pdo, int $carId): int {
+    $n = 0;
+    try {
+        $evs = $pdo->prepare("SELECT id FROM live_event WHERE ref_type='CAR' AND ref_id=?");
+        $evs->execute([$carId]);
+        foreach ($evs->fetchAll(PDO::FETCH_COLUMN) as $eid) {
+            $eid = (int)$eid;
+            $pdo->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                           WHERE id=? AND (enddate IS NULL OR enddate >= CURDATE())")->execute([$eid]);
+            $tg = $pdo->prepare("SELECT DISTINCT target_id FROM live_event_target WHERE live_event_id=? AND target_type='user'");
+            $tg->execute([$eid]);
+            foreach ($tg->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+                $rs = $pdo->prepare("SELECT id FROM live_event_response WHERE live_event_id=? AND user_id=? LIMIT 1");
+                $rs->execute([$eid, (int)$uid]);
+                if ($rid = $rs->fetchColumn()) {
+                    $pdo->prepare("UPDATE live_event_response SET read_at=COALESCE(read_at,NOW()),
+                                     signed_at=COALESCE(signed_at,NOW()), replied_at=COALESCE(replied_at,NOW()) WHERE id=?")->execute([$rid]);
+                } else {
+                    $pdo->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at, replied_at)
+                                   VALUES (?,?,NOW(),NOW(),NOW())")->execute([$eid, (int)$uid]);
+                }
+            }
+            $n++;
+        }
+    } catch (Throwable $e) {}
+    return $n;
 }
 
 /** 某單的首要決策者候選收件人（責任部門主管；廠商責任→生管主管） */

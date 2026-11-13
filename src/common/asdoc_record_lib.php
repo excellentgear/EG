@@ -99,7 +99,7 @@ function eg_asdoc_fill_rows(PDO $db, int $docId): array {
         $st->execute([$docId]);
         $mod = (string)($st->fetchColumn() ?: '');
         if ($mod === 'car') {
-            foreach ($db->query("SELECT id, car_no, fill_date, source_desc FROM car_order")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            foreach ($db->query("SELECT id, car_no, fill_date, source_desc FROM car_order WHERE status<>'stopped'")->fetchAll(PDO::FETCH_ASSOC) as $r)
                 $rows[] = ['src'=>'car', 'src_name'=>'異常矯正處理單(CAR)', 'id'=>(int)$r['id'],
                            'title'=>(string)$r['car_no'], 'rec_date'=>$r['fill_date'], 'person'=>'',
                            'note'=>(string)$r['source_desc'], 'status'=>'', 'can_preview'=>false,

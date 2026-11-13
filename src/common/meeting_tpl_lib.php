@@ -143,7 +143,7 @@ function meeting_tpl_source_text(PDO $db, string $src, string $meetingDate, arra
             case 'vendor': return meeting_tpl_text_vendor($db, $y);
             case 'mfg':    return meeting_tpl_text_mfg($db, $y, $from, $to, $mo, !empty($opt['full']));
             case 'car':
-                $r = $db->prepare("SELECT status, COUNT(*) n FROM car_order WHERE fill_date BETWEEN ? AND ? GROUP BY status");
+                $r = $db->prepare("SELECT status, COUNT(*) n FROM car_order WHERE status<>'stopped' AND fill_date BETWEEN ? AND ? GROUP BY status");
                 $r->execute([$from, $to]);
                 $m = $r->fetchAll(PDO::FETCH_KEY_PAIR);
                 $tot = array_sum($m); $cl = (int)($m['closed'] ?? 0);

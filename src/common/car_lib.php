@@ -57,6 +57,7 @@ function car_labels(): array {
             'pending_final'  => '待總經理裁決',
             'closed'         => '已結案',
             'rejected'       => '不可結案',
+            'stopped'        => '已停止',
         ],
     ];
 }
@@ -704,6 +705,22 @@ function car_ensure_cause_cols(PDO $pdo): void {
     try {
         $cols = [];
         foreach ($pdo->query("SHOW COLUMNS FROM car_order")->fetchAll(PDO::FETCH_ASSOC) as $c) $cols[$c['Field']] = 1;
+        /* 2026-11-13「停止」：離職員工沒填完的單據，管理員可停止——不再通知、不列入任何統計與列印。
+           status 加 'stopped'，停止當下的資訊記在 stopped_* 欄位（stopped_prev_status 供稽核回看）。 */
+        if (!isset($cols['stopped_at'])) {
+            $st0 = $pdo->query("SHOW COLUMNS FROM car_order LIKE 'status'")->fetch(PDO::FETCH_ASSOC);
+            if ($st0 && stripos((string)$st0['Type'], "'stopped'") === false) {
+                $pdo->exec("ALTER TABLE car_order MODIFY COLUMN status
+                            ENUM('draft','applying','app_rejected','open','assigned','replying','pending_primary','pending_final','closed','rejected','stopped')
+                            NOT NULL DEFAULT 'open'");
+            }
+            $pdo->exec("ALTER TABLE car_order
+                        ADD COLUMN stopped_at DATETIME NULL COMMENT '停止時間',
+                        ADD COLUMN stopped_by INT NULL COMMENT '停止人 user.id',
+                        ADD COLUMN stopped_by_name VARCHAR(50) NULL,
+                        ADD COLUMN stopped_reason VARCHAR(500) NULL COMMENT '停止原因',
+                        ADD COLUMN stopped_prev_status VARCHAR(20) NULL COMMENT '停止前的狀態'");
+        }
         if (!isset($cols['cause_cat_id'])) {
             $pdo->exec("ALTER TABLE car_order ADD COLUMN cause_cat_id INT NULL
                         COMMENT '異常原因分類(qa_cause_cat.cat_id)，單選；NULL 且有 cause_investigation=舊資料'

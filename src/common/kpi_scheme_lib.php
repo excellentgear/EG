@@ -605,7 +605,7 @@ function kps_purchase_ontime(PDO $db, int $year, int $month, array $a, array $ex
 function kps_car_ontime_rows(PDO $db, int $year, int $month): array {
     $ym = sprintf('%04d-%02d', $year, $month);
     $st = $db->prepare("SELECT id, car_no, correction_due, close_date FROM car_order
-                        WHERE correction_due IS NOT NULL AND DATE_FORMAT(correction_due,'%Y-%m')=?");
+                        WHERE status<>'stopped' AND correction_due IS NOT NULL AND DATE_FORMAT(correction_due,'%Y-%m')=?");
     $st->execute([$ym]);
     $rows = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
