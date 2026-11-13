@@ -326,7 +326,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 $oStmt = $pdo2->prepare("SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
                                                 COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo, ot.d_id AS part_text
                                          FROM order_attachments a
-                                         JOIN order_track ot ON ot.Order_id = a.order_id
+                                         JOIN order_track src ON src.Order_id = a.order_id
+                                         JOIN order_track ot ON ot.Order_oo = src.Order_oo
                                          LEFT JOIN user u ON u.id = a.uploaded_by
                                          WHERE a.status='active' AND ot.d_id_ID IN ($phD2) AND ($catCond)");
                 $oStmt->execute(array_merge($dids, $showOtherIds));
@@ -344,7 +345,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                         $pgTag[$tr['order_oo'] . '|' . $tr['filename']][(int)$tr['category_id']][(string)$tr['part_no']] = $tr['pages'];
                     }
                 } catch (Exception $_pe) {}
+                $seenOA = [];
                 foreach ($oStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    // 同訂單編號底下共用附件可能掛在多列（複製），同一份實體檔案只列一次
+                    $dk = $r['Order_oo'] . '|' . $r['filename'];
+                    if (isset($seenOA[$dk])) continue;
+                    $seenOA[$dk] = true;
                     if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;   // 價格類文件同樣要擋
                     $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
                     $catNames = [];
@@ -614,7 +620,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at,
                        ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Order_date, ot.Delivery_date, ot.Qty, ot.Client_name, ot.quote_no
                 FROM order_attachments a
-                JOIN order_track ot ON ot.Order_id = a.order_id
+                JOIN order_track src ON src.Order_id = a.order_id
+                JOIN order_track ot ON ot.Order_oo = src.Order_oo
                 LEFT JOIN user u ON u.id = a.uploaded_by
                 WHERE a.status='active' AND ot.d_id_ID IN ($ph)
                 ORDER BY a.uploaded_at DESC";
