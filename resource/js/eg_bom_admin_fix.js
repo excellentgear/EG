@@ -644,7 +644,7 @@
               + '<div class="row2" style="color:#666;">bom_ing #' + x.id + '　發單數 ' + nz(x.qty) + '　狀態 ' + esc(STATE_TXT[x.state] || x.state) + (x.batch_label ? '　批次 ' + esc(x.batch_label) : '') + '　發包日 ' + esc(x.od || '-') + '　回廠日 ' + esc(x.rd || '-')
               + '<span style="margin-left:auto;color:#aaa;">（ERP匯入的原始製程列，製程列表不顯示；僅供對照）</span></div>';
         } else {
-            h += '<div class="row2"><span>' + esc(x.no) + '　' + esc(x.text) + (x.ng ? '　不良 ' + nz(x.ng) : '') + '</span><span style="margin-left:auto;"><a href="../QA/qa_abnormal_form.php?id=' + x.id + '" target="_blank" class="btn btn-default btn-xs">開啟異常單</a></span></div>';
+            h += '<div class="row2"><span>' + esc(x.no) + '　' + esc(x.text) + (x.ng ? '　不良 ' + nz(x.ng) : '') + '</span><span style="margin-left:auto;"><a href="../QA/qa_abnormal_form.php?id=' + x.id + '" target="_blank" class="btn btn-default btn-xs">開啟異常單</a> <button class="btn btn-danger btn-xs f-del" title="刪除這張異常單（留刪除紀錄）；刪除提報報廢後若異常單還留著請在這裡刪">刪除</button></span></div>';
         }
         return h + '</div>';
     }
@@ -699,7 +699,7 @@
         var k = it.getAttribute('data-k'), id = it.getAttribute('data-id'), f = it.getAttribute('data-f');
         var dl = it.querySelector('.f-del');
         if (dl) dl.onclick = function () {
-            if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : '確定刪除這筆回廠／報廢／取回紀錄？')) return;
+            if (!confirm(k === 'send' ? '確定刪除這個發單批次（含它底下所有回廠紀錄）？' : (k === 'abnormal' ? '確定刪除這張異常單？（會留刪除紀錄；它連著的報工／檢驗連結一併解除）' : '確定刪除這筆回廠／報廢／取回紀錄？'))) return;
             post({ action: 'baf_delete', kind: k, id: id, fid: f }, function (r) { if (r.success) { toast('已刪除', true); load('已刪除', true); refreshMain(); } else msg(r.message, false); });
         };
         var ag = it.querySelector('.al-go');

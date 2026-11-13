@@ -532,3 +532,36 @@ if (!function_exists('baf_transfer_sync_to')) {
         return true;
     }
 }
+
+if (!function_exists('baf_abnormal_delete')) {
+    /**
+     * 管理員修正面板刪除「殘留異常單」（刪除提報報廢後，先前自動開立的異常單可能還留著）。
+     * 與異常單管理的 order_delete 同一套做法：軟刪除＋解除報工／線上檢驗連結＋寫 qa_abnormal_del_log（誰、何時、原因）。
+     * 只能刪屬於這個 BOM 的單；面板本身已限管理員＋操作確認密碼。
+     */
+    function baf_abnormal_delete(PDO $db, string $bom, int $id, int $uid): string {
+        require_once __DIR__ . '/qa_abnormal_lib.php';
+        $st = $db->prepare("SELECT * FROM qa_abnormal_order WHERE id=? AND bom_no=? AND deleted_at IS NULL");
+        $st->execute([$id, $bom]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) throw new Exception('找不到這張異常單（可能已被刪除，請重新整理）');
+        $rs = $db->prepare("SELECT report_id FROM pm_process_daily_report WHERE abnormal_order_id=?");
+        $rs->execute([$id]);
+        $rep = array_map('intval', $rs->fetchAll(PDO::FETCH_COLUMN));
+        $qcf = !empty($o['src_qc_form_id']) ? (int)$o['src_qc_form_id'] : 0;
+        $snap = json_encode(['no' => $o['abnormal_order_no'], 'fill_date' => $o['fill_date'], 'client' => $o['client_name'], 'part_no' => $o['part_no'], 'bom_no' => $o['bom_no'], 'ir_no' => $o['ir_no'],
+            'phenomenon' => mb_substr((string)$o['abnormal_phenomenon'], 0, 500), 'is_closed' => (int)$o['is_closed'], 'scrap_no' => $o['scrap_no'], 'report_ids' => $rep, 'qc_form_id' => $qcf], JSON_UNESCAPED_UNICODE);
+        $nm = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $nm->execute([$uid]);
+        $db->beginTransaction();
+        try {
+            $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NOW(), deleted_by=?, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$uid, $uid, $id]);
+            if ($rep) $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=NULL WHERE report_id IN (" . implode(',', $rep) . ")")->execute();
+            if ($qcf) $db->prepare("UPDATE qc_check_form SET abnormal_order_id=NULL, ncr_decision=NULL WHERE qc_form_id=?")->execute([$qcf]);
+            $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,snapshot,acted_by,acted_name) VALUES (?,?,'delete',?,?,?,?)")
+               ->execute([$id, $o['abnormal_order_no'], '管理員修正面板刪除（刪除提報報廢後的殘留異常單）', $snap, $uid, (string)$nm->fetchColumn()]);
+            $db->commit();
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+        try { qab_retire_pending_notices($db, $id, 'gm', $uid); qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0)); } catch (Throwable $e) {}
+        return (string)$o['abnormal_order_no'];
+    }
+}

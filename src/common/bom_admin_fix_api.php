@@ -50,6 +50,10 @@
             baf_alias_set($db, $bom, (int)($_POST['alias_sn'] ?? 0), (int)($_POST['target_sn'] ?? 0), $uid);
             echo json_encode(['success'=>true,'message'=>'已儲存SN對應']); exit;
         }
+        if ($act === 'baf_delete' && (string)($_POST['kind'] ?? '') === 'abnormal') {
+            $abNo = baf_abnormal_delete($db, $bom, (int)($_POST['id'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'已刪除異常單 ' . $abNo]); exit;
+        }
         $fid = (int)($_POST['fid'] ?? 0);
         $kind = (string)($_POST['kind'] ?? '');
         $id = (int)($_POST['id'] ?? 0);
