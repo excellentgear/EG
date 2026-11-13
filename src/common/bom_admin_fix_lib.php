@@ -24,7 +24,7 @@ if (!function_exists('baf_list')) {
             $sn = (isset($alias[$raw]) && isset($ord[$alias[$raw]]) && $alias[$raw] !== $raw) ? $alias[$raw] : $raw;
             $lab = $labOf[$sn] . ($sn !== $raw ? '（SN ' . $raw . '）' : '');
             $proc[(int)$p['bom_ing_fid']] = ['sn' => $sn, 'raw' => $raw, 'label' => $lab];
-            $stations[] = ['fid' => (int)$p['bom_ing_fid'], 'sn' => $sn, 'raw_sn' => $raw, 'label' => $lab, 'sqty' => (float)$p['sqty']];
+            $stations[] = ['fid' => (int)$p['bom_ing_fid'], 'sn' => $sn, 'raw_sn' => $raw, 'label' => $lab, 'sqty' => (float)$p['sqty'], 'process_no' => (int)$p['process_no'], 'process_name' => (string)$p['ProcessName']];
         }
         if (!$proc) return ['rows' => [], 'stations' => [], 'batches' => [], 'warn' => [], 'bom_sqty' => 0];
         $in = implode(',', array_keys($proc));
@@ -103,7 +103,40 @@ if (!function_exists('baf_list')) {
         $ord = fn($r) => (float)($r['sn'] ?? 0) + (in_array($r['kind'], ['send', 'ing'], true) ? 0 : 0.5);
         usort($rows, fn($a, $b) => strcmp(substr($a['ts'], 0, 10), substr($b['ts'], 0, 10)) ?: ($ord($a) <=> $ord($b)) ?: strcmp($a['ts'], $b['ts']));
         $chk = baf_check($db, $bom);
-        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows), 'bparent' => baf_bparent_get($db, $bom), 'sn_map' => baf_sn_map($db, $bom, $labOf, $alias)];
+        return ['rows' => $rows, 'stations' => $stations, 'batches' => $batches, 'warn' => $chk['items'], 'bom_sqty' => $chk['bom_sqty'], 'flow' => baf_flow($db, $bom, $rows), 'bparent' => baf_bparent_get($db, $bom), 'sn_map' => baf_sn_map($db, $bom, $labOf, $alias),
+                'process_options' => $db->query("SELECT ProcessNo AS no, ProcessName AS name FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC)];
+    }
+}
+
+if (!function_exists('baf_process_set')) {
+    /**
+     * 修正某一關的製程ID（發單／回廠／QC檢驗等紀錄本來就掛在 bom_ing_fid 上，所以紀錄不動，
+     * 只把「冠著製程編號」的欄位一併改成新的）：bom_ing、報工、排程、異常矯正單。
+     * 全部包在同一個交易內，每一處改了幾筆都寫進操作紀錄。
+     */
+    function baf_process_set(PDO $db, string $bom, int $fid, int $newNo, int $uid): array {
+        $pq = $db->prepare("SELECT ProcessName, process_type_id FROM process_no WHERE ProcessNo=?");
+        $pq->execute([$newNo]);
+        $np = $pq->fetch(PDO::FETCH_ASSOC);
+        if (!$np) throw new Exception('找不到這個製程ID ' . $newNo);
+        $cq = $db->prepare("SELECT process_no FROM bom_ing WHERE bom_ing_fid=? AND bom=?");
+        $cq->execute([$fid, $bom]);
+        $oldNo = $cq->fetchColumn();
+        if ($oldNo === false) throw new Exception('這個製程不屬於這個 BOM');
+        $oldNo = (int)$oldNo;
+        if ($oldNo === $newNo) throw new Exception('製程ID沒有變更');
+        $n = [];
+        $db->beginTransaction();
+        try {
+            $run = function (string $label, string $sql, array $args) use ($db, &$n) { $st = $db->prepare($sql); $st->execute($args); if ($st->rowCount() > 0) $n[] = $label . ' ' . $st->rowCount() . ' 筆'; };
+            $run('製程列', "UPDATE bom_ing SET process_no=? WHERE bom_ing_fid=?", [$newNo, $fid]);
+            $run('報工紀錄', "UPDATE pm_process_daily_report SET process_no=? WHERE bom_ing_fid=?", [$newNo, $fid]);
+            $run('排程', "UPDATE pm_process_schedule SET process_no=?, process_type_id=? WHERE bom_ing_fid=?", [$newNo, $np['process_type_id'], $fid]);
+            $run('異常矯正單', "UPDATE car_order SET process_no=?, process_name=? WHERE bom_ing_fid=?", [$newNo, (string)$np['ProcessName'], $fid]);
+            ber_log($db, $fid, 'process_edit', '管理員修正製程ID：' . $oldNo . ' → ' . $newNo . '（' . (string)$np['ProcessName'] . '）；連動 ' . ($n ? implode('、', $n) : '無'), $uid);
+            $db->commit();
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+        return ['old' => $oldNo, 'new' => $newNo, 'changed' => $n];
     }
 }
 

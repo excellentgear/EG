@@ -301,12 +301,35 @@
             html += rowHtml(x);
         });
         var body = drawer.querySelector('#egaf-body');
-        body.innerHTML = snBoxHtml() + '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
+        body.innerHTML = snBoxHtml() + procBoxHtml() + '<div style="color:#999;font-size:11px;margin-bottom:2px;">依日期由舊到新，顯示 ' + shown + ' / ' + rows.length + ' 筆；改完按右上角「儲存」。回廠日、檢驗日、移轉日不可晚於今天。</div>' + html
             + (shown ? '' : '<div style="color:#999;padding:12px;">沒有符合的紀錄</div>');
         body.querySelectorAll('.it').forEach(function (it) { bindRow(it); });
         bindSnBox(body);
+        bindProcBox(body);
         applyLock();
         updDn();
+    }
+    // 製程ID修正：某一關建錯製程時直接改（發單／回廠／檢驗紀錄掛在這一關上不動，冠著製程編號的欄位由後端一併更新）
+    function procBoxHtml() {
+        var sts = (DATA.stations || []).filter(function (s) { return !stationFilter || String(s.fid) === String(stationFilter); });
+        var opts = (DATA.process_options || []);
+        if (!sts.length || !opts.length) return '';
+        var rows = sts.map(function (s) {
+            return '<div style="margin:2px 0;">' + esc(s.label) + '　製程ID：<select class="pr-sel" data-f="' + s.fid + '" style="height:22px;font-size:12px;max-width:230px;">'
+                + opts.map(function (o) { return '<option value="' + o.no + '"' + (Number(o.no) === s.process_no ? ' selected' : '') + '>' + o.no + ' ' + esc(o.name || '') + '</option>'; }).join('')
+                + '</select> <button class="btn btn-default btn-xs pr-go" data-f="' + s.fid + '" data-old="' + s.process_no + '">儲存</button></div>';
+        }).join('');
+        return '<details style="margin-bottom:6px;border:1px dashed #E4B98A;border-radius:4px;padding:3px 8px;background:#FFFCF7;font-size:12px;"><summary style="cursor:pointer;font-weight:bold;color:#6B4423;">修正製程ID（這一關的製程設錯時使用；發單／回廠／檢驗紀錄保留，報工、排程、矯正單的製程編號一併更新）</summary>' + rows + '</details>';
+    }
+    function bindProcBox(root) {
+        root.querySelectorAll('.pr-go').forEach(function (btn) {
+            btn.onclick = function () {
+                var f = btn.getAttribute('data-f'), sel = root.querySelector('.pr-sel[data-f="' + f + '"]');
+                if (String(sel.value) === btn.getAttribute('data-old')) { msg('製程ID沒有變更', false); return; }
+                if (!confirm('確定把這一關的製程ID由 ' + btn.getAttribute('data-old') + ' 改成「' + sel.options[sel.selectedIndex].text + '」？\n（發單／回廠／檢驗紀錄不受影響，報工、排程、矯正單的製程編號會一併更新）')) return;
+                post({ action: 'baf_process_set', fid: f, process_no: sel.value }, function (r) { if (r.success) { toast(r.message, true); load(r.message, true); refreshMain(); } else msg(r.message, false); });
+            };
+        });
     }
     // ── 分支檢視：每關 → 發單批次 → 它的回廠與出去的移轉憑單 → 接到下一關哪個發單。流向是系統依日期＋數量推測的，可用下拉或拖放修正 ──
     function renderFlow() {

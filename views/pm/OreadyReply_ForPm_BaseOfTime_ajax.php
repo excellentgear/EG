@@ -2707,7 +2707,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
 // ── BOM 管理員修正面板（2026-11-06）：列出／就地修改 發單、回廠、報廢、取回、QC檢驗、移轉憑單。
 //    唯一實作 src/common/bom_admin_fix_lib.php（寫入走 bom_return_edit_lib.php 的 force 模式）；
 //    僅本頁管理員，且須先輸入操作確認密碼（$_SESSION['oready_admin_fix']）；每個動作都寫 bom_ing_event 留紀錄 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_process_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
     require __DIR__ . '/../../src/common/bom_admin_fix_api.php';
 }
 

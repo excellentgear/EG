@@ -1146,7 +1146,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // BOM 管理員修正面板（與 BOM總覽同一份後端：src/common/bom_admin_fix_api.php，自帶管理員與操作確認密碼檢查）
-    if (in_array($action, ['baf_check','baf_alias_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+    if (in_array($action, ['baf_check','baf_alias_set','baf_process_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
         require __DIR__ . '/../../src/common/bom_admin_fix_api.php';
     }
 

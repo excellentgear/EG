@@ -152,6 +152,10 @@ if (!function_exists('eg_bom_outsource_record_return')) {
             $batch = eg_bom_outsource_latest_open_batch($db, $bom_ing_fid);
         }
         if (!$batch) {
+            // 已經有批次、只是全部都結清了（例如管理員剛修正過）→ 不可再憑空補開一批，否則會多出重複的發單與回廠
+            $hasAny = $db->prepare("SELECT COUNT(*) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+            $hasAny->execute([$bom_ing_fid]);
+            if ((int)$hasAny->fetchColumn() > 0) throw new Exception('這一站的發單已全數回廠結清，沒有待回廠的批次（可能已被修正或他人處理），請重新整理頁面');
             $bi = $db->prepare("SELECT sqty, maker_id_no, maker_id, outsource_date FROM bom_ing WHERE bom_ing_fid=?");
             $bi->execute([$bom_ing_fid]);
             $row = $bi->fetch(PDO::FETCH_ASSOC) ?: [];

@@ -42,6 +42,10 @@
             baf_flow_alloc_set($db, $bom, (int)($_POST['transfer_id'] ?? 0), is_array($items) ? $items : [], $uid);
             echo json_encode(['success'=>true,'message'=>'已儲存拆分']); exit;
         }
+        if ($act === 'baf_process_set') {
+            $pr = baf_process_set($db, $bom, (int)($_POST['fid'] ?? 0), (int)($_POST['process_no'] ?? 0), $uid);
+            echo json_encode(['success'=>true,'message'=>'已修正製程ID ' . $pr['old'] . ' → ' . $pr['new'] . ($pr['changed'] ? '（' . implode('、', $pr['changed']) . '）' : '')]); exit;
+        }
         if ($act === 'baf_alias_set') {
             baf_alias_set($db, $bom, (int)($_POST['alias_sn'] ?? 0), (int)($_POST['target_sn'] ?? 0), $uid);
             echo json_encode(['success'=>true,'message'=>'已儲存SN對應']); exit;
