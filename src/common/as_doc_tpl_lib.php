@@ -31,7 +31,7 @@ require_once __DIR__ . '/date_fmt_lib.php';
 /** 頁尾左下的預設字樣（紙本上本來就印這一行） */
 define('ADT_FOOT_LEFT_DEFAULT', '(本文件不得擅自塗改或影印)');
 /** 制修訂紀錄表至少要有幾列（不足的補空白列，紙本留白給日後手寫） */
-define('ADT_REVLOG_MIN_ROWS', 14);
+define('ADT_REVLOG_MIN_ROWS', 20);   // 列高縮小後改 20 列，整張表的高度與整頁高度維持不變（與其他頁統一過的高度）
 
 /* ════════════════════════════════════════════════════════════════════════
    設定（逐份文件）
@@ -183,6 +183,12 @@ function adt_style_hdr_sizes(): array
             '9.5pt' => '9.5pt', '10pt' => '10pt', '10.5pt' => '10.5pt',
             '11pt' => '11pt', '12pt' => '12pt'];
 }
+/** 制修訂紀錄書上方公司名稱／標題的字級（2026-10-16 使用者要求加大，並可由管理員調整） */
+function adt_style_rev_sizes(): array
+{
+    return ['14pt' => '14pt', '16pt' => '16pt', '18pt' => '18pt', '20pt' => '20pt', '22pt' => '22pt',
+            '24pt' => '24pt', '26pt' => '26pt', '28pt' => '28pt', '32pt' => '32pt'];
+}
 /** 框線型式（使用者要求的「框線分類型式」） */
 function adt_style_borders(): array
 {
@@ -206,6 +212,10 @@ function adt_style_defaults(): array
 {
     return ['tbl_font' => '', 'tbl_font_en' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
             'hdr_size' => '',
+            // 制修訂紀錄書上方：公司名稱字級、標題字級、標題粗體／底線（預設比舊版大，標題加粗加底線）
+            'rev_co_size' => '18pt', 'rev_ttl_size' => '22pt', 'rev_ttl_bold' => '1', 'rev_ttl_ul' => '1',
+            // 全站預設發行單位（部門 id）；空＝文管中心（依名稱找）。個別文件仍可在「版面設定」另外指定
+            'issue_dept_id' => '',
             // 頁首公司名稱：two＝英文／中文上下兩行（原樣）、one＝同一行「英文 中文」
             'hdr_co_mode' => 'two',
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
@@ -214,6 +224,24 @@ function adt_style_defaults(): array
             'body_frame' => '0', 'body_pad' => '3mm',
             // 文字離左右框線的距離（單位：半形空格數，1 個空格＝6pt，與字級無關，編輯器與列印才一致）
             'body_gap' => '2'];
+}
+
+/**
+ * 沒有個別指定時的發行單位：公版設定裡的「預設發行單位」→ 沒設就是名叫「文管中心」的部門 → 都找不到才用文件自己的部門。
+ * （2026-10-16 使用者：發行單位一律固定顯示文管中心，要可由管理員設定）
+ */
+function adt_default_issue_dept(PDO $db, int $docDeptId): int
+{
+    $s = adt_style_get($db);
+    $id = (int)($s['issue_dept_id'] ?? 0);
+    if ($id > 0) return $id;
+    try {
+        $st = $db->prepare("SELECT id FROM department WHERE name='文管中心' ORDER BY id LIMIT 1");
+        $st->execute();
+        $x = (int)($st->fetchColumn() ?: 0);
+        if ($x > 0) return $x;
+    } catch (Throwable $e) {}
+    return $docDeptId;
 }
 
 /** 目前的公版設定（沒設定過就回預設＝與改版前外觀完全相同） */
@@ -258,6 +286,25 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         $v = trim((string)$in['hdr_size']);
         if (!array_key_exists($v, adt_style_hdr_sizes())) return ['ok' => false, 'msg' => '頁首字級不在可選清單內'];
         $new['hdr_size'] = $v;
+    }
+    foreach (['rev_co_size', 'rev_ttl_size'] as $k) {
+        if (array_key_exists($k, $in)) {
+            $v = trim((string)$in[$k]);
+            if (!array_key_exists($v, adt_style_rev_sizes())) return ['ok' => false, 'msg' => '制修訂紀錄書字級不在可選清單內'];
+            $new[$k] = $v;
+        }
+    }
+    foreach (['rev_ttl_bold', 'rev_ttl_ul'] as $k) {
+        if (array_key_exists($k, $in)) $new[$k] = !empty($in[$k]) ? '1' : '0';
+    }
+    if (array_key_exists('issue_dept_id', $in)) {
+        $v = (int)$in['issue_dept_id'];
+        if ($v > 0) {
+            $q = $db->prepare("SELECT COUNT(*) FROM department WHERE id=?");
+            $q->execute([$v]);
+            if (!(int)$q->fetchColumn()) return ['ok' => false, 'msg' => '選到的發行單位不存在'];
+        }
+        $new['issue_dept_id'] = $v > 0 ? (string)$v : '';
     }
     if (array_key_exists('hdr_co_mode', $in)) {
         $v = (string)$in['hdr_co_mode'];
@@ -344,6 +391,10 @@ function adt_style_css(PDO $db): string
     if ($s['tbl_size'] !== '')   $css[] = '--adt-tbl-size:' . $s['tbl_size'];
     if (($s['hdr_size'] ?? '') !== '') $css[] = '--adt-hdr-size:' . $s['hdr_size'];
     if ($s['tbl_weight'] !== '') $css[] = '--adt-tbl-weight:' . $s['tbl_weight'];
+    $css[] = '--adt-rev-co-size:' . ($s['rev_co_size'] !== '' ? $s['rev_co_size'] : '18pt');
+    $css[] = '--adt-rev-ttl-size:' . ($s['rev_ttl_size'] !== '' ? $s['rev_ttl_size'] : '22pt');
+    $css[] = '--adt-rev-ttl-weight:' . (($s['rev_ttl_bold'] ?? '1') === '0' ? 'normal' : 'bold');
+    $css[] = '--adt-rev-ttl-deco:' . (($s['rev_ttl_ul'] ?? '1') === '0' ? 'none' : 'underline');
     $css[] = '--adt-brd-style:' . $s['brd_style'];
     $css[] = '--adt-brd-w:' . $s['brd_w'];
     $css[] = '--adt-brd-color:' . $s['brd_color'];
@@ -399,15 +450,23 @@ function adt_context(PDO $db, int $versionId): ?array
 
     $vers = [];
     try {
-        $st = $db->prepare("SELECT version, revised_date, revised_pages, revised_summary
-                            FROM as_document_version WHERE doc_id=?
-                            ORDER BY revised_date ASC, id ASC");
-        $st->execute([$docId]);
+        try {
+            // 編輯中的草稿還不是正式的制修訂紀錄，不列（簽核完成定案後才會變成一列）
+            $st = $db->prepare("SELECT version, revised_date, revised_pages, revised_summary
+                                FROM as_document_version WHERE doc_id=? AND COALESCE(is_draft,0)=0
+                                ORDER BY revised_date ASC, id ASC");
+            $st->execute([$docId]);
+        } catch (Throwable $e0) {      // is_draft 欄位還沒建（還沒發生過草稿）
+            $st = $db->prepare("SELECT version, revised_date, revised_pages, revised_summary
+                                FROM as_document_version WHERE doc_id=?
+                                ORDER BY revised_date ASC, id ASC");
+            $st->execute([$docId]);
+        }
         $vers = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {}
 
     $cfg = adt_settings($db, $docId);
-    $issueDept = $cfg['issue_dept_id'] ?: (int)$v['department_id'];
+    $issueDept = $cfg['issue_dept_id'] ?: adt_default_issue_dept($db, (int)$v['department_id']);
 
     return [
         'version_id' => $versionId,
@@ -568,6 +627,14 @@ function adt_revlog_pages_html(array $ctx): array
             . '<tr><td colspan="4" class="adt-rev-cap">制　修　訂　紀　錄</td></tr>'
             . '<tr><th>文件版別</th><th>制修訂日期</th><th>制修訂頁次</th><th>制修訂摘要（增、減、改、廢項目）</th></tr>';
         $n = 0;
+        /* 摘要寫得長會換成好幾行，那一列就比一般列高。空白列是「撐到固定列數」用的，
+           真實紀錄多佔的行數要從空白列扣掉，否則整張表比一頁高，「發行單位／簽章」整塊被擠到下一張紙
+           （2026-10-16 補了一筆 6 項摘要的大改版後實際發生）。每行約 22 字是保守估計——估多了只是少幾格空白列，
+           估少了才會跑版。 */
+        $usedLines = 0;
+        foreach ($chunkVersions as $v) {
+            $usedLines += max(1, (int)ceil(mb_strlen((string)$v['revised_summary'], 'UTF-8') / 22));
+        }
         foreach ($chunkVersions as $v) {
             $h .= '<tr><td>' . adt_e($v['version']) . '</td>'
                 . '<td>' . adt_e($v['revised_date'] ? eg_fmt_date($v['revised_date']) : '') . '</td>'
@@ -578,7 +645,10 @@ function adt_revlog_pages_html(array $ctx): array
         // 只有「最後一頁」才補空白列撐到固定列數（紙本留白給日後手寫）；
         // 中間那幾頁本來就整頁 ADT_REVLOG_MIN_ROWS 筆都是真實紀錄、已經滿版，不必也不該再補
         if ($isLast) {
-            for (; $n < ADT_REVLOG_MIN_ROWS; $n++) {
+            /* 補到 ADT_REVLOG_MIN_ROWS - 2 列：實測 A4 預設邊界（上16／下18mm）下，20 列補滿時制修訂紀錄頁
+               比可印高度多出約 3mm，「發行單位／簽章」整塊被擠到下一張紙（2026-11-13 使用者實測，6 張紙）。
+               少兩列空白（約 13mm）換回安全餘裕；剩餘高度由 .adt-rev-mid 補成同一條直框線，外觀不變。 */
+            for ($k = $usedLines; $k < ADT_REVLOG_MIN_ROWS - 2; $k++) {
                 $h .= '<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
             }
         }
@@ -668,7 +738,7 @@ function adt_toc_html(array $ctx, array $pages, int $startNo): string
                 continue;
             }
             if ($depth <= 0 || empty($one[4])) continue;
-            $ptxt = trim(preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', strip_tags($one[4][0])));
+            $ptxt = trim(preg_replace('/[\s\x{00A0}\x{3000}]+/u', ' ', strip_tags($one[4][0])));   // 全形空白、NBSP 也當空白（Word 匯入常見）
             $lv = adt_toc_auto_level((string)($one[3][0] ?? ''), $ptxt, $tbl);
             if ($lv > 0 && $lv <= $depth) $items[] = ['lv' => $lv, 'txt' => $ptxt, 'page' => $startNo + $i];
         }
