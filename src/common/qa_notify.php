@@ -107,6 +107,7 @@ if (!function_exists('eg_qa_order_brief')) {
         $refParts = [];
         if (!empty($o['part_no'])) $refParts[] = '料號 ' . $o['part_no'];
         if (!empty($o['bom_no']))  $refParts[] = 'BOM ' . $o['bom_no'];
+        $o['src_fallback'] = ($srcDesc === '' && $refParts);   // 新式開單（沒有舊式來源）：檢視頁據此把 BOM／料號做成可點連結
         if ($srcDesc === '' && $refParts) $srcDesc = implode('｜', $refParts);
         $o['source_desc'] = $srcDesc;
         $o['ref_tag'] = $refParts ? implode('｜', $refParts) : '';   // 放通知標題用，一眼看得出是哪個 BOM／料號

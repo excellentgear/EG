@@ -102,6 +102,24 @@ $as = $db->prepare("SELECT id, field_type, file_name FROM qa_abnormal_attachment
 $as->execute([$orderId]);
 $atts = $as->fetchAll(PDO::FETCH_ASSOC);
 
+// 量測尺寸與實測值（只讀；沒有量測資料的單不顯示這一塊）
+$measures = []; $mCols = 0;
+try {
+    $ms = $db->prepare("SELECT dim_code, dim_name, vals, lim_lo, lim_hi FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
+    $ms->execute([$orderId]);
+    foreach ($ms->fetchAll(PDO::FETCH_ASSOC) as $m) {
+        $vals = json_decode((string)$m['vals'], true); if (!is_array($vals)) $vals = [];
+        $vals = array_values($vals);
+        $has = trim((string)$m['dim_name']) !== '' || array_filter($vals, function ($x) { return trim((string)$x) !== ''; });
+        if (!$has) continue;
+        $n = count($vals); while ($n > 0 && trim((string)$vals[$n - 1]) === '') $n--;
+        $mCols = max($mCols, $n);
+        $measures[] = ['dim_code' => (string)$m['dim_code'], 'dim_name' => (string)$m['dim_name'], 'vals' => $vals,
+                       'lim_lo' => $m['lim_lo'] !== null ? $m['lim_lo'] : null, 'lim_hi' => $m['lim_hi'] !== null ? $m['lim_hi'] : null];
+    }
+} catch (Throwable $e) { $measures = []; }
+if ($measures && $mCols < 1) $mCols = 1;
+
 $fw = $db->prepare("SELECT u.user_cname FROM qa_abnormal_follower f JOIN user u ON u.id=f.user_id WHERE f.abnormal_order_id=?");
 $fw->execute([$orderId]);
 $followers = $fw->fetchAll(PDO::FETCH_COLUMN);
@@ -171,8 +189,14 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
         <h3><i class="fa fa-file-text-o"></i> 異常單資訊</h3>
         <div class="grid">
             <div class="kv"><b>異常單號</b><?= h($order['abnormal_order_no']) ?></div>
+            <?php if (!empty($order['src_fallback']) && trim((string)$order['bom_no']) !== ''): ?>
+            <?php // 新式開單（BOM 製令）：來源只顯示 BOM 號碼，點開＝只有這一筆 BOM 的 BOM 總覽（頁面本身會依使用者權限把關）；異常種類欄改顯示料號，點開＝與異常單內點料號相同的圖面檢視 ?>
+            <div class="kv"><b>來　　源</b><?php if (preg_match('/^[A-Za-z0-9\-]{3,40}$/', $order['bom_no'])): ?><a href="../pm/OreadyReply_ForPm_BaseOfTime.php?bom_only=<?= h(rawurlencode($order['bom_no'])) ?>" target="_blank" rel="noopener" title="開新視窗：只有這一筆 BOM 的 BOM 總覽"><?= h($order['bom_no']) ?></a><?php else: ?><?= h($order['bom_no']) ?><?php endif; ?></div>
+            <div class="kv"><b>異常種類</b><?php if (trim((string)$order['part_no']) !== ''): ?><a href="../pm/part_viewer.php?<?= !empty($order['part_d_id']) ? 'pk=' . (int)$order['part_d_id'] : 'd_id=' . h(rawurlencode($order['part_no'])) ?>" target="_blank" rel="noopener" title="開新視窗：料號圖面"><?= h($order['part_no']) ?></a><?php else: ?>-<?php endif; ?></div>
+            <?php else: ?>
             <div class="kv"><b>來　　源</b><?= h($order['source_desc'] ?: $order['source_type']) ?></div>
             <div class="kv"><b>異常種類</b><?= h($order['abnormal_type_name'] ?: '-') ?></div>
+            <?php endif; ?>
             <div class="kv"><b>發生日期</b><?= h($order['occurrence_date'] ?: '-') ?></div>
             <div class="kv"><b>異常數量</b><?= $order['sqty'] !== null ? h($order['sqty']) : '-' ?></div>
             <div class="kv"><b>發現單位</b><?= h($order['found_unit'] ?: '-') ?></div>
@@ -187,6 +211,22 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
         <?php if ($order['defect_detail']): ?><div class="kv" style="margin-top:8px;"><b>原因說明</b><div class="longtext"><?= h($order['defect_detail']) ?></div></div><?php endif; ?>
         <?php if ($order['disposition_note']): ?><div class="kv" style="margin-top:8px;"><b>處置說明</b><div class="longtext"><?= h($order['disposition_note']) ?></div></div><?php endif; ?>
         <?php if ($order['qa_ps']): ?><div class="kv" style="margin-top:8px;"><b>品管備註</b><div class="longtext"><?= h($order['qa_ps']) ?></div></div><?php endif; ?>
+        <?php if ($measures): ?>
+        <div class="kv" style="margin-top:10px;"><b>量測尺寸與實測值</b>
+            <div class="tbl-scroll"><table>
+                <thead><tr><th>編號</th><th>量測尺寸</th><th>合格範圍</th><?php for ($i = 1; $i <= $mCols; $i++): ?><th><?= $i ?></th><?php endfor; ?></tr></thead>
+                <tbody>
+                <?php foreach ($measures as $m): $lo = $m['lim_lo']; $hi = $m['lim_hi']; ?>
+                <tr><td><?= h($m['dim_code']) ?></td><td><?= h($m['dim_name']) ?></td>
+                    <td><?= ($lo !== null || $hi !== null) ? h(($lo !== null ? rtrim(rtrim(number_format((float)$lo, 5, '.', ''), '0'), '.') : '') . ' ~ ' . ($hi !== null ? rtrim(rtrim(number_format((float)$hi, 5, '.', ''), '0'), '.') : '')) : '' ?></td>
+                    <?php for ($i = 0; $i < $mCols; $i++): $v = $m['vals'][$i] ?? ''; $bad = ($v !== '' && is_numeric($v) && (($lo !== null && (float)$v < (float)$lo) || ($hi !== null && (float)$v > (float)$hi))); ?>
+                    <td<?= $bad ? ' style="color:#e74c3c;font-weight:700;"' : '' ?>><?= h($v) ?></td>
+                    <?php endfor; ?></tr>
+                <?php endforeach; ?>
+                </tbody></table></div>
+            <div style="font-size:12px;color:var(--muted);margin-top:3px;">紅字＝超出合格範圍；相關附件在下方「附件」，可直接點開。</div>
+        </div>
+        <?php endif; ?>
         <?php if ($atts): ?>
         <div class="kv" style="margin-top:10px;"><b>附　　件</b><div>
             <?php foreach ($atts as $a): ?>
