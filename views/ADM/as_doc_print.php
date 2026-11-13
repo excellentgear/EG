@@ -209,6 +209,12 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
        改成可印區的實際高度（紙張扣掉上 16／下 18mm）：內容比一頁短時撐滿，
        比一頁長時 min-height 不會限制它變得更高、照樣自然換頁不受影響。 */
     .adt-page { width: auto; height: auto; min-height: <?= $printContentH ?>mm; margin: 0; padding: 0; box-shadow: none; }
+    /* 內容寬度一律固定＝紙張寬 − 左右各 15mm，並置中（不依賴列印對話框的「邊界」設定）。
+       列印對話框的邊界選「最小值／無」時會蓋掉 @page margin，內容區變成整張紙寬，
+       右側就貼到（或超出）印表機可印範圍而被切掉（2026-11-13 使用者實測：只有封面正常）。
+       固定寬度置中之後，邊界選預設／最小值／無，左右白邊都不會小於設計值以外的範圍。
+       max-width:100% 是保險：使用者把邊界調得比 15mm 還大時改成縮進可印區，不會溢出。 */
+    .adt-page { width: <?= $paperWH[0] - 30 ?>mm; max-width: 100%; margin-left: auto; margin-right: auto; box-sizing: border-box; }
 }
 </style>
 </head>
