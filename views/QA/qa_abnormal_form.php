@@ -294,6 +294,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>製令編號 <span id="bomReq" style="color:var(--coral);display:none;">*</span>
                                 <span class="muted-help">（主製令；綁了才能自動帶客戶、料號與扣款金額）</span></label>
                             <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
+                            <a href="#" id="bomLink" target="_blank" rel="noopener" style="display:none;font-size:12px;"><i class="fa fa-external-link"></i> 開啟 BOM 總覽（僅此製令）</a>
                             <div class="err" id="bomErr" style="display:none;"></div></div>
                         <div class="fld"><label>客退單號 (IR) <span id="irReq" style="color:var(--coral);display:none;">*</span></label>
                             <div class="ac-wrap"><input type="text" id="f_ir" autocomplete="off" placeholder="輸入單號／客戶／料號後從清單選"></div>
@@ -1451,6 +1452,9 @@ function render(){
     $('#f_client').val(o.client_name || '');
     $('#f_part').val(o.part_no || '');
     $('#f_bom').val(o.bom_no || '');
+    if (/^[A-Za-z0-9\-]{3,40}$/.test(o.bom_no || '')) {
+        $('#bomLink').attr('href', '../pm/OreadyReply_ForPm_BaseOfTime.php?bom_only=' + encodeURIComponent(o.bom_no)).show();
+    } else { $('#bomLink').hide().attr('href', '#'); }
     // 開單人員（編輯與結案後都顯示）；線上檢驗自動開立的單＝那張檢驗單的檢驗人員
     $('#openerName').text(o.created_name || ('#' + (o.created_by || '')));
     $('#openerSrc').text(Number(o.src_qc_form_id) ? '（線上檢驗自動開立・檢驗人員）' : (Number(o.auto_opened) ? '（系統自動開立）' : ''));

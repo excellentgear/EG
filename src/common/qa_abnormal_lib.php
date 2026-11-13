@@ -1148,6 +1148,12 @@ function qab_create_order(PDO $db, array $data): array
             $stv->execute([$bomNo, $respProcessNo]);
         }
         $vrow = $stv->fetch(PDO::FETCH_ASSOC);
+        if ($vrow) {   // 實際發包廠商優先（bom_ing 上的是製令預設廠商，常與實際發包不同）
+            $fidV = $respBomIngFid ?: (int)$db->query("SELECT bom_ing_fid FROM bom_ing WHERE bom=" . $db->quote($bomNo)
+                       . " AND process_no=" . (int)$respProcessNo . " ORDER BY bom_sn ASC LIMIT 1")->fetchColumn();
+            $actV = qab_actual_vendor_map($db, [$fidV]);
+            if (isset($actV[$fidV])) { $vrow['maker_id_no'] = $actV[$fidV]['maker_id_no']; $vrow['vendor_name'] = $actV[$fidV]['maker_id']; $vrow['internal'] = $actV[$fidV]['internal']; }
+        }
         $vendorNameForUnit = '';
         if ($vrow && $vrow['maker_id_no'] !== null && $vrow['maker_id_no'] !== '') {
             $respVendorId = mb_substr((string)$vrow['maker_id_no'], 0, 11);
@@ -1944,12 +1950,40 @@ function qab_bom_candidates(PDO $db, ?int $partDId, ?string $partNo, string $kw 
  * 這幾張製令裡有哪些製程（責任單位的製程下拉要從這裡挑），順便把**該製程的廠商**帶出來。
  * 製程先後一律用 bom_sn（processing_sequence 多數是 NULL，拿來排序會亂跳）。
  */
+/**
+ * 製程站「實際加工廠商」：bom_ing.maker_id_no 只是製令建立時預設的廠商，實際發包（含補登）記在
+ * bom_ing_outsource_batch，兩者常不同（B-1150703001 粗滾：bom_ing 是健發、實際發包是超正滾齒）。
+ * 有未撤回的發包批次就取最後一批的廠商，沒有才回 null（呼叫端退回 bom_ing 上的廠商）。
+ * @return array [bom_ing_fid => ['maker_id_no','maker_id','internal']]
+ */
+function qab_actual_vendor_map(PDO $db, array $fids): array
+{
+    $fids = array_values(array_unique(array_filter(array_map('intval', $fids))));
+    if (!$fids) return [];
+    $out = [];
+    try {
+        $in = implode(',', $fids);
+        $st = $db->query("SELECT b.bom_ing_fid, b.maker_id_no, ml.maker_id, ml.internal
+                          FROM bom_ing_outsource_batch b
+                          LEFT JOIN maker_list ml ON ml.maker_id_no = b.maker_id_no
+                          WHERE b.bom_ing_fid IN ($in) AND b.maker_id_no IS NOT NULL AND b.maker_id_no <> ''
+                            AND NOT (b.send_qty > 0 AND b.withdrawn_qty >= b.send_qty)
+                          ORDER BY b.bom_ing_fid, b.send_date ASC, b.batch_id ASC");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {   // 後面的蓋前面的＝最後一批
+            $out[(int)$r['bom_ing_fid']] = ['maker_id_no' => (string)$r['maker_id_no'],
+                                            'maker_id' => (string)($r['maker_id'] ?? ''),
+                                            'internal' => (int)($r['internal'] ?? 0)];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 function qab_bom_processes(PDO $db, array $bomNos): array
 {
     $bomNos = array_values(array_filter(array_map('trim', $bomNos)));
     if (!$bomNos) return [];
     $in = implode(',', array_fill(0, count($bomNos), '?'));
-    $st = $db->prepare("SELECT i.bom, i.bom_sn, i.process_no, i.maker_id_no, i.processing_state,
+    $st = $db->prepare("SELECT i.bom_ing_fid, i.bom, i.bom_sn, i.process_no, i.maker_id_no, i.processing_state,
                                pn.ProcessName, ml.maker_id AS vendor_name, ml.internal AS vendor_internal
                         FROM bom_ing i
                         LEFT JOIN process_no pn ON pn.ProcessNo = i.process_no
@@ -1958,7 +1992,13 @@ function qab_bom_processes(PDO $db, array $bomNos): array
                         ORDER BY i.bom, i.bom_sn");
     $st->execute($bomNos);
     $out = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    $rowsAll = $st->fetchAll(PDO::FETCH_ASSOC);
+    $act = qab_actual_vendor_map($db, array_column($rowsAll, 'bom_ing_fid'));
+    foreach ($rowsAll as $r) {
+        if (isset($act[(int)$r['bom_ing_fid']])) {   // 實際發包廠商優先
+            $a = $act[(int)$r['bom_ing_fid']];
+            $r['maker_id_no'] = $a['maker_id_no']; $r['vendor_name'] = $a['maker_id']; $r['vendor_internal'] = $a['internal'];
+        }
         $out[] = ['bom' => $r['bom'], 'bom_sn' => (int)$r['bom_sn'],
                   'process_no' => $r['process_no'] === null ? null : (int)$r['process_no'],
                   'process_name' => (string)$r['ProcessName'],
@@ -5070,10 +5110,13 @@ function qab_deduct_fill_missing(PDO $db, int $id, int $uid, bool $inTx = false)
         (order_id,kind,transfer_id,bom_no,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,note,included,sort_order,created_by)
         VALUES (?,'process',NULL,?,?,?,?,NULL,?,NULL,NULL,NULL,0,?,?)");
     $n = 0;
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    $fillRows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $act = qab_actual_vendor_map($db, array_column($fillRows, 'fid'));
+    foreach ($fillRows as $r) {
         $k = trim((string)$r['bom']) . '|' . (int)$r['bom_sn'];
         if (isset($have[$k])) continue;
         $have[$k] = 1;
+        if (isset($act[(int)$r['fid']])) { $r['mk'] = $act[(int)$r['fid']]['maker_id']; $r['internal'] = $act[(int)$r['fid']]['internal']; }
         $vn = trim((string)($r['mk'] ?? ''));
         if ($vn !== '' && (int)($r['internal'] ?? 0) === 1) $vn .= '（廠內）';
         $ins->execute([$id, $r['bom'], (int)$r['bom_sn'], (string)($r['ProcessName'] ?? ''), $vn, $defQty > 0 ? $defQty : null, (int)$r['bom_sn'], $uid]);
