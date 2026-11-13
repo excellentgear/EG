@@ -13061,17 +13061,9 @@ echo "</script>\n";
             $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq, withdraw_qty: wq, short_qty: shq, badmat_qty: bmq, return_date: rd, batch_id: _bidSend, auto_fix_downstream: _dsSend, note: _noteSend || '' }, function(r) {
                 showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
                 if (r.success) {
-                    document.getElementById('orm-return-qty').value = 0;
-                    document.getElementById('orm-scrap-qty').value = 0;
-                    document.getElementById('orm-withdraw-qty').value = 0;
-                    document.getElementById('orm-short-qty').value = 0; document.getElementById('orm-badmat-qty').value = 0;
-                    var ncEl = document.getElementById('orm-nc-result');
-                    if (ncEl) {
-                        if (r.abnormal_order && r.abnormal_order.no) {
-                            ncEl.innerHTML = ormNcHtml(r.abnormal_order);
-                        } else { ncEl.innerHTML = ''; }
-                    }
-                    _refreshStatus();
+                    // 記錄成功（確認記錄／全數回廠／全部退回不加工）一律自動關閉跳窗，並以 AJAX 更新前端資料
+                    overlay.remove();
+                    if (r.abnormal_order && r.abnormal_order.no) showTemporaryMessage('已自動開立品質異常單 ' + r.abnormal_order.no, true);
                     if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) {
                         refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
                     }
