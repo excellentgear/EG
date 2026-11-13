@@ -7640,6 +7640,14 @@ echo "</script>\n";
                                     if (!kk) return;
                                     _isq[kk] = (_isq[kk] || 0) + (Number(t.qty) || 0);
                                 });
+                                // 補報報廢／回廠報廢：標籤因同一張異常單已顯示為決策／補件標籤而被略過時，製程格仍要看得到這一關的廠商報廢與發料不良（取自批次回廠資料）
+                                var _om0 = (window.obBatchMap || {})[String(processInfo.bom_ing_fid)];
+                                if (_om0) {
+                                    var _bm0 = Number(_om0.badmat) || 0, _sc0 = (Number(_om0.scrap) || 0) - _bm0;
+                                    if (!_isq['報廢'] && _sc0 > 1e-9) _isq['報廢'] = _sc0;
+                                    if (!_isq['發料不良'] && _bm0 > 1e-9) _isq['發料不良'] = _bm0;
+                                    if (!_isq['發單短少'] && (Number(_om0.short) || 0) > 1e-9) _isq['發單短少'] = Number(_om0.short);
+                                }
                                 var _isKeys = ['報廢', '發料不良', '發單短少'].filter(function (k) { return _isq[k] > 0; });
                                 // 每一種異常各自一行、各自有 ⚠（使用者要求，不再用「・」串在同一行）
                                 _isKeys.forEach(function (k, _isI) {
@@ -12681,7 +12689,7 @@ echo "</script>\n";
                     if (!confirm('補報報廢 ' + sv + '、發料不良 ' + bv + ' 件？\n這批已回廠的數量會轉成報廢，這一站QC合格數與此後製程數量會自動修正，並自動開立／更新品質異常單；系統會記錄你的姓名與時間。')) return;
                     btn.disabled = true;
                     post({ action: 'ber_late_scrap', batch_id: w.getAttribute('data-b'), scrap_qty: sv, badmat_qty: bv },
-                         function (res) { btn.disabled = false; res.success ? load(res.message, true) : msg(res.message, false); });
+                         function (res) { btn.disabled = false; if (res.success) { load(res.message, true); _ormRefreshMain(); } else msg(res.message, false); });
                 };
             });
             // 廠商挑選：沿用本頁既有 search_maker（輸入編號或名稱，點選後帶入）
