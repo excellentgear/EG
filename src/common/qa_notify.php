@@ -103,7 +103,13 @@ if (!function_exists('eg_qa_order_brief')) {
                 if ($no = $s->fetchColumn()) $srcDesc = '退貨單 ' . $no;
             }
         } catch (Throwable $e) { /* 摘要非必要 */ }
+        // 新式開單（BOM／客退）把製令與料號直接存在單上，來源補充找不到時以它們為準
+        $refParts = [];
+        if (!empty($o['part_no'])) $refParts[] = '料號 ' . $o['part_no'];
+        if (!empty($o['bom_no']))  $refParts[] = 'BOM ' . $o['bom_no'];
+        if ($srcDesc === '' && $refParts) $srcDesc = implode('｜', $refParts);
         $o['source_desc'] = $srcDesc;
+        $o['ref_tag'] = $refParts ? implode('｜', $refParts) : '';   // 放通知標題用，一眼看得出是哪個 BOM／料號
 
         $resp = '';
         if ($o['responsible_type'] === 'vendor')    $resp = '廠商：' . ($o['vendor_name'] ?: $o['responsible_vendor_id']);
@@ -255,7 +261,7 @@ if (!function_exists('eg_qa_create_notice')) {
             foreach ($followers as $u) $targets[] = ['type'=>'user', 'id'=>$u, 'mode'=>'read'];
             if (empty($targets)) return ['event_id' => 0, 'followers' => $followers];
 
-            $title = '📋 品質異常單 ' . $o['abnormal_order_no'] . ' 請處理';
+            $title = '📋 品質異常單 ' . $o['abnormal_order_no'] . ' 請處理' . ($o['ref_tag'] ? '（' . $o['ref_tag'] . '）' : '');
             $lines = [];
             $lines[] = '異常單號：' . $o['abnormal_order_no'];
             if ($o['source_desc'])          $lines[] = '來　　源：' . $o['source_desc'];
@@ -349,7 +355,7 @@ if (!function_exists('eg_qa_sync_flow_reply')) {
             $ds->execute([$uid]);
             $myDepts = array_map('intval', $ds->fetchAll(PDO::FETCH_COLUMN));
 
-            $fs = $db->prepare("SELECT flow_id, dept_id, user_id, status FROM qa_abnormal_order_flow WHERE abnormal_order_id=?");
+            $fs = $db->prepare("SELECT flow_id, dept_id, user_id, status, event_id FROM qa_abnormal_order_flow WHERE abnormal_order_id=?");
             $fs->execute([$orderId]);
             $upd = $db->prepare("UPDATE qa_abnormal_order_flow
                                  SET status='Returned', user_id=COALESCE(user_id, ?),
@@ -360,7 +366,10 @@ if (!function_exists('eg_qa_sync_flow_reply')) {
                 if ($f['status'] === 'Returned') continue;
                 $mine = ((int)$f['user_id'] === $uid)
                      || (empty($f['user_id']) && in_array((int)$f['dept_id'], $myDepts, true));
-                if ($mine) $upd->execute([$uid, ($content !== null && trim($content) !== '' ? trim($content) : null), $f['flow_id']]);
+                if ($mine) {
+                    $upd->execute([$uid, ($content !== null && trim($content) !== '' ? trim($content) : null), $f['flow_id']]);
+                    if (!empty($f['event_id'])) eg_qa_retire_event($db, (int)$f['event_id'], $uid);   // 同部門其他人的待回覆通知收回
+                }
             }
         } catch (Throwable $e) {
             error_log('[qa_notify] sync flow reply failed: ' . $e->getMessage());
@@ -734,6 +743,28 @@ if (!function_exists('eg_qa_decision_allowed_users')) {
     }
 }
 
+if (!function_exists('eg_qa_retire_event')) {
+    /**
+     * 收回一則已發出的待回覆通知：同部門／同職稱有人回覆後，其他收件人的鈴鐺與待辦不該再掛著。
+     * enddate 設為昨天（通知頁只是不再列出，紀錄保留），並替回覆者補上已閱回簽。失敗不影響回覆本身。
+     */
+    function eg_qa_retire_event(PDO $db, int $eventId, int $actorUid = 0): void {
+        if ($eventId <= 0) return;
+        try {
+            $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([$eventId]);
+            if ($actorUid > 0) {
+                $rs = $db->prepare("SELECT id FROM live_event_response WHERE live_event_id=? AND user_id=?");
+                $rs->execute([$eventId, $actorUid]);
+                if ($rid = $rs->fetchColumn()) {
+                    $db->prepare("UPDATE live_event_response SET read_at=COALESCE(read_at,NOW()), signed_at=COALESCE(signed_at,NOW()), replied_at=COALESCE(replied_at,NOW()) WHERE id=?")->execute([$rid]);
+                } else {
+                    $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at, replied_at) VALUES (?,?,NOW(),NOW(),NOW())")->execute([$eventId, $actorUid]);
+                }
+            }
+        } catch (Throwable $e) { error_log('[qa_notify] retire event failed: ' . $e->getMessage()); }
+    }
+}
+
 if (!function_exists('eg_qa_notify_flow_return')) {
     /** 部門於異常單流程回覆歸還(flow_return)時 → 通知開單人＋追蹤人員 */
     function eg_qa_notify_flow_return(PDO $db, int $orderId, string $deptName, int $actorUid, string $content): void {
@@ -744,7 +775,7 @@ if (!function_exists('eg_qa_notify_flow_return')) {
             $recipients = eg_qa_reply_recipients($db, $o, $actorUid);
             if (empty($recipients)) return;
 
-            $title = '🔔 異常單 ' . $o['abnormal_order_no'] . ' 部門已回覆' . ($deptName ? '（' . $deptName . '）' : '');
+            $title = '🔔 異常單 ' . $o['abnormal_order_no'] . ' 部門已回覆' . ($deptName ? '（' . $deptName . '）' : '') . ($o['ref_tag'] ? '｜' . $o['ref_tag'] : '');
             $lines = ['異常單號：' . $o['abnormal_order_no'], ($deptName ?: '部門') . ' 已於 ' . date('Y-m-d H:i') . ' 回覆歸還。'];
             if (trim($content) !== '') $lines[] = '回覆內容：' . "\n" . trim($content);
 

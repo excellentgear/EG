@@ -717,7 +717,8 @@ case 'round_add': {
 
             $who = $q['userId'] > 0 ? '指定人員'
                  : ($q['posNames'] ? ($q['deptName'] . ' ' . implode('／', $q['posNames'])) : $q['deptName']);
-            $title = '【品質異常單 ' . $o['abnormal_order_no'] . '】請回覆相關單位意見';
+            $title = '【品質異常單 ' . $o['abnormal_order_no'] . '】請回覆相關單位意見'
+                   . (($o['bom_no'] || $o['part_no']) ? '（' . implode('｜', array_filter([$o['part_no'] ? '料號 ' . $o['part_no'] : '', $o['bom_no'] ? 'BOM ' . $o['bom_no'] : ''])) . '）' : '');
             $body  = "異常單號：{$o['abnormal_order_no']}\n"
                    . "客戶／料號：" . (($o['client_name'] ?: '—') . ' / ' . ($o['part_no'] ?: '—')) . "\n"
                    . "製令／客退單：" . (($o['bom_no'] ?: '—') . ' / ' . ($o['ir_no'] ?: '—')) . "\n"
@@ -751,6 +752,7 @@ case 'round_reply': {
 
     $db->prepare("UPDATE qa_abnormal_order_flow SET status='Returned', reply_content=?, replied_by=?, return_date=NOW(), receive_date=COALESCE(receive_date,NOW()) WHERE flow_id=?")
        ->execute([mb_substr($content, 0, 2000), $uid, $flowId]);
+    try { eg_qa_retire_event($db, (int)($row['event_id'] ?? 0), $uid); } catch (Throwable $e) {}   // 已有人回覆，同部門其他人的待回覆通知收回
     try { eg_qa_notify_flow_return($db, (int)$o['id'], (string)($row['department_name'] ?? ''), $uid, $content); } catch (Throwable $e) {}
     $log((int)$o['id'], 'round_reply', '', mb_substr($content, 0, 200));
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
@@ -765,6 +767,7 @@ case 'round_cancel': {
     if (!$row) jerr('找不到這一輪徵詢');
     if (($row['status'] ?? '') === 'Returned') jerr('已經回覆的那一輪不可取消（那是紀錄）');
     $db->prepare("DELETE FROM qa_abnormal_order_flow WHERE flow_id=?")->execute([$flowId]);
+    try { eg_qa_retire_event($db, (int)($row['event_id'] ?? 0), 0); } catch (Throwable $e) {}   // 徵詢取消，通知一併收回
     $log((int)$o['id'], 'round_cancel', (string)($row['department_name'] ?? ''), '');
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
 }
