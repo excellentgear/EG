@@ -192,6 +192,22 @@ if (!function_exists('eg_stamp_ensure_schema')) {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                   COMMENT='標記為不需要圖章的人員，避免「在職卻沒有圖章」的提示變成永久雜訊'");
             }
+            if (!$db->query("SHOW TABLES LIKE 'stamp_auto_rule'")->fetchColumn()) {
+                $db->exec("CREATE TABLE `stamp_auto_rule` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `dept_id` INT NOT NULL DEFAULT 0 COMMENT '0=任何部門；>0=新進人員屬於該部門（主職或兼任）才建',
+                    `template_id` INT NOT NULL COMMENT 'stamp_template.id',
+                    `holder_kind` VARCHAR(10) NOT NULL DEFAULT 'user' COMMENT 'user=個人章／user_dept=該部門的部門人員章',
+                    `created_by` VARCHAR(30) NULL,
+                    `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY `uk_rule` (`dept_id`,`template_id`,`holder_kind`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='新進員工自動建章設定'");
+                // 沿用上一版行為：任何新人都建「個人章」裡使用最多的模板
+                $tid = $db->query("SELECT p.id FROM stamp_template p JOIN stamp_type t ON t.id=p.type_id AND t.is_active=1
+                                   WHERE p.is_active=1 AND t.bind_targets='user'
+                                   ORDER BY (SELECT COUNT(*) FROM stamp_register r WHERE r.template_id=p.id AND r.status='active' AND r.dept_id IS NULL) DESC, p.id LIMIT 1")->fetchColumn();
+                if ($tid) $db->exec("INSERT INTO stamp_auto_rule (dept_id,template_id,holder_kind,created_by) VALUES (0," . (int)$tid . ",'user','system')");
+            }
         } catch (Throwable $e) {
             error_log('[stamp] ensure schema failed: ' . $e->getMessage());
         }
@@ -401,37 +417,56 @@ if (!function_exists('eg_stamp_rehire_on_reinstate')) {
     }
 }
 
+if (!function_exists('eg_stamp_auto_rules')) {
+    /** 新進員工自動建章規則（stamp_auto_rule）。dept_id=0＝任何部門；holder_kind=user 個人章／user_dept 部門人員章 */
+    function eg_stamp_auto_rules(PDO $db): array {
+        eg_stamp_ensure_schema($db);
+        return $db->query("SELECT a.id, a.dept_id, a.template_id, a.holder_kind,
+                                  IF(a.dept_id=0,'所有部門',d.name) AS dept_name, p.tpl_name, p.is_active AS tpl_active, t.type_name
+                           FROM stamp_auto_rule a
+                           LEFT JOIN department d ON d.id = a.dept_id
+                           LEFT JOIN stamp_template p ON p.id = a.template_id
+                           LEFT JOIN stamp_type t ON t.id = p.type_id
+                           ORDER BY a.dept_id<>0, d.sort_order, a.dept_id, a.id")->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
 if (!function_exists('eg_stamp_auto_create_for_new_user')) {
     /**
-     * 新進員工建立時自動核發個人章（HR 未必有圖章管理權限，所以不再要求跳轉到圖章管理頁）。
-     * 模板取「目前使用中、種類只綁個人的模板裡，已被最多人使用者」（現況＝本人簽章(圓)），不寫死 id；
-     * 核發日＝到職日（沒填用今天）。同持有對象＋同模板已有使用中就略過。失敗只記 log，絕不影響員工新增。
-     * @return array|null ['id'=>登記id,'tpl_name'=>..,'type_name'=>..,'issue_date'=>..]；沒建（略過/失敗）回 null
+     * 新進員工建立時，依「新進人員自動建章設定」（圖章管理→設定）自動核發圖章；核發日＝到職日（沒填用今天）。
+     * 規則 dept_id=0 對任何新人都適用；dept_id>0 只在此人屬於該部門（主職或兼任）時適用。
+     * 同持有對象＋同模板已有使用中就略過；失敗只記 log，絕不影響員工新增。
+     * @return array 建出來的 [['id','tpl_name','type_name','dept_name','issue_date'], ...]
      */
-    function eg_stamp_auto_create_for_new_user(PDO $db, int $userId, ?string $hireDate, string $operator = 'system'): ?array {
+    function eg_stamp_auto_create_for_new_user(PDO $db, int $userId, ?string $hireDate, string $operator = 'system'): array {
+        $made = [];
         try {
-            eg_stamp_ensure_schema($db);
-            if ($userId <= 0 || eg_stamp_holder_blocked($db, $userId)) return null;
-            $tpl = $db->query(
-                "SELECT p.id, p.type_id, p.tpl_name, t.type_name
-                 FROM stamp_template p JOIN stamp_type t ON t.id = p.type_id AND t.is_active = 1
-                 WHERE p.is_active = 1 AND t.bind_targets = 'user'
-                 ORDER BY (SELECT COUNT(*) FROM stamp_register r WHERE r.template_id = p.id AND r.status = 'active' AND r.dept_id IS NULL) DESC, p.id
-                 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-            if (!$tpl) return null;
+            if ($userId <= 0 || eg_stamp_holder_blocked($db, $userId)) return [];
             $issue = ($hireDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $hireDate)) ? $hireDate : (string)$db->query("SELECT CURDATE()")->fetchColumn();
-            $dup = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id = ? AND dept_id IS NULL AND position_id IS NULL AND template_id = ? AND status = 'active' LIMIT 1");
-            $dup->execute([$userId, (int)$tpl['id']]);
-            if ($dup->fetchColumn()) return null;
-            $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by)
-                          VALUES (?,NULL,NULL,?,?,?,'active','（新進員工建立時自動核發）',?)")
-               ->execute([$userId, (int)$tpl['type_id'], (int)$tpl['id'], $issue, $operator]);
-            return ['id' => (int)$db->lastInsertId(), 'tpl_name' => (string)$tpl['tpl_name'],
-                    'type_name' => (string)$tpl['type_name'], 'issue_date' => $issue];
+            $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id = ?");
+            $st->execute([$userId]);
+            $myDepts = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            $dup = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id = ? AND dept_id <=> ? AND position_id IS NULL AND template_id = ? AND status = 'active' LIMIT 1");
+            $ins = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by)
+                                 VALUES (?,?,NULL,?,?,?,'active','（新進員工建立時依設定自動核發）',?)");
+            foreach (eg_stamp_auto_rules($db) as $r) {
+                if ((int)$r['tpl_active'] !== 1) continue;
+                $rd = (int)$r['dept_id'];
+                if ($rd > 0 && !in_array($rd, $myDepts, true)) continue;
+                $deptId = $r['holder_kind'] === 'user_dept' ? $rd : null;
+                if ($r['holder_kind'] === 'user_dept' && $rd <= 0) continue;
+                $dup->execute([$userId, $deptId, (int)$r['template_id']]);
+                if ($dup->fetchColumn()) continue;
+                $tp = $db->prepare("SELECT type_id FROM stamp_template WHERE id = ?");
+                $tp->execute([(int)$r['template_id']]);
+                $ins->execute([$userId, $deptId, $tp->fetchColumn() ?: null, (int)$r['template_id'], $issue, $operator]);
+                $made[] = ['id' => (int)$db->lastInsertId(), 'tpl_name' => (string)$r['tpl_name'], 'type_name' => (string)$r['type_name'],
+                           'dept_name' => $deptId ? (string)$r['dept_name'] : '', 'issue_date' => $issue];
+            }
         } catch (Throwable $e) {
             error_log('[stamp] auto create for new user failed uid=' . $userId . ': ' . $e->getMessage());
-            return null;
         }
+        return $made;
     }
 }
 

@@ -588,7 +588,7 @@ function addOrUpdateEmployee($mode) {
             // 自動核發個人章（HR 未必有圖章管理權限）；建好就通知，沒建成才退回提醒去圖章管理頁
             $auto = eg_stamp_auto_create_for_new_user($db, (int)$id, $hire_date, (string)($_SESSION['user_cname'] ?? 'system'));
             if ($auto) {
-                $resp['stamp_auto_created'] = ['user_id' => (int)$id, 'name' => $user_cname] + $auto;
+                $resp['stamp_auto_created'] = ['user_id' => (int)$id, 'name' => $user_cname, 'items' => $auto];
             } else {
                 $resp['stamp_setup_notice'] = ['user_id' => (int)$id, 'name' => $user_cname];
             }

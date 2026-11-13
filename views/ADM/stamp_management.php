@@ -167,12 +167,13 @@ try {
 </div>
 
 <!-- 設定 Modal（種類管理／掃描章儲存路徑，跳窗內分頁） -->
-<div class="modal fade" id="settingsModal" tabindex="-1"><div class="modal-dialog" style="width:540px;"><div class="modal-content">
+<div class="modal fade" id="settingsModal" tabindex="-1"><div class="modal-dialog" style="width:640px;"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
     <h4 class="modal-title"><i class="fa fa-cog"></i> 圖章管理設定</h4></div>
   <div class="modal-body">
     <ul class="warm-tabs">
       <li class="active" data-stab="type"><i class="fa fa-tags"></i> 印章種類管理</li>
+      <li data-stab="auto" id="stabAuto" style="display:none;"><i class="fa fa-magic"></i> 新進人員自動建章</li>
       <li data-stab="asdoc"><i class="fa fa-bookmark-o"></i> 列印文件（AS 編號）</li>
       <li data-stab="base" id="stabBase" style="display:none;"><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑</li>
     </ul>
@@ -187,6 +188,18 @@ try {
         <label style="font-size:12px;font-weight:normal;"><input type="checkbox" class="newType-bt" value="dept"> 課室</label>
         <label style="font-size:12px;font-weight:normal;"><input type="checkbox" class="newType-bt" value="position"> 職稱</label>
         <button class="btn btn-primary btn-sm" id="btnTypeAdd" style="white-space:nowrap;"><i class="fa fa-plus"></i> 新增</button>
+      </div>
+    </div>
+    <div id="stab-auto" style="display:none;">
+      <p class="text-muted" style="font-size:12px;">新增員工時，系統依下表<strong>自動建立圖章登記</strong>，<strong>核發日期＝到職日</strong>（沒填到職日用當天），HR 不需要有圖章管理權限。<br>
+        <strong>所有部門</strong>＝任何新進人員都建（個人章）；指定部門＝新進人員<strong>屬於該部門（主職或兼任）</strong>才建。「部門人員章」會把該部門寫進登記，章面的 {部門} 才印得出來。<strong>沒有任何符合的規則時，新增員工後仍會提醒去圖章管理頁。</strong></p>
+      <table class="list"><thead><tr><th>部門</th><th>模板（種類）</th><th style="width:100px;">建立方式</th><th style="width:60px;">操作</th></tr></thead>
+        <tbody id="autoBody"></tbody></table>
+      <div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <select id="autoDept" class="form-control input-sm" style="width:150px;" data-eg-filter="輸入部門篩選…"></select>
+        <select id="autoTpl" class="form-control input-sm" style="width:190px;"></select>
+        <select id="autoKind" class="form-control input-sm" style="width:120px;"><option value="user">個人章</option><option value="user_dept">部門人員章</option></select>
+        <button class="btn btn-primary btn-sm" id="btnAutoAdd" style="white-space:nowrap;"><i class="fa fa-plus"></i> 新增規則</button>
       </div>
     </div>
     <div id="stab-base" style="display:none;">
@@ -649,6 +662,7 @@ function loadMeta(){
       updateAddKindUI();
       renderTypeMng();
     }
+    if(canManage){ $('#stabAuto').show(); }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
     AS_DOCS=m.as_docs||[]; AS_DOC=m.as_doc||null; renderAsDoc();
     if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); $('.reg-chk-col').show(); $('#batchDateBar').show(); $('#btnCheckIssueDate').show(); }
@@ -657,6 +671,32 @@ function loadMeta(){
     loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
   });
 }
+
+// ── 新進人員自動建章設定 ──
+function renderAutoRules(rows){
+  $('#autoBody').html(rows.length?rows.map(r=>`<tr><td>${esc(r.dept_name||'（部門已刪除）')}</td>
+    <td>${esc(r.tpl_name||'（模板已刪除）')}<span class="text-muted">（${esc(r.type_name||'')}）</span>${+r.tpl_active===1?'':' <span class="label label-default">已停用</span>'}</td>
+    <td>${r.holder_kind==='user_dept'?'部門人員章':'個人章'}</td>
+    <td><button class="btn btn-danger btn-xs auto-del" data-id="${r.id}"><i class="fa fa-trash"></i></button></td></tr>`).join('')
+    :'<tr><td colspan="4" class="text-muted">尚未設定：新增員工後不會自動建章。</td></tr>');
+}
+function loadAutoRules(){
+  $('#autoDept').html('<option value="0">所有部門</option>'+DEPTS.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+  $('#autoTpl').html(TPLS.map(t=>`<option value="${t.id}">${esc(t.tpl_name)}</option>`).join(''));
+  $.getJSON(API+'?action=auto_rule_list',r=>{ if(!r.ok){alert(r.error||'載入失敗');return;} renderAutoRules(r.rows||[]); });
+}
+$('#btnAutoAdd').on('click',function(){
+  const kind=$('#autoKind').val(), dept=$('#autoDept').val();
+  if(kind==='user_dept' && dept==='0'){alert('「部門人員章」請選擇指定部門');return;}
+  if(!$('#autoTpl').val()){alert('請選擇模板');return;}
+  $.post(API+'?action=auto_rule_save',{dept_id:dept,template_id:$('#autoTpl').val(),holder_kind:kind},r=>{
+    if(!r.ok){alert(r.error||'儲存失敗');return;} renderAutoRules(r.rows||[]);
+  },'json').fail(x=>alert((x.responseJSON&&x.responseJSON.error)||'儲存失敗'));
+});
+$(document).on('click','.auto-del',function(){
+  if(!confirm('刪除這條規則？（不影響已建立的圖章，只是之後新進人員不再自動建）'))return;
+  $.post(API+'?action=auto_rule_delete',{id:$(this).data('id')},r=>{ if(r.ok) renderAutoRules(r.rows||[]); },'json');
+});
 
 // ── 需留意的人員（新進沒圖章／復職待人工建立）──
 // 判定一律在後端 eg_stamp_attention_rows()，這裡只負責畫與動作（禁止在前端再寫一套判定）
@@ -744,7 +784,7 @@ $('.warm-tabs [data-tab]').on('click',function(){
 $('#settingsModal .warm-tabs [data-stab]').on('click',function(){
   $(this).addClass('active').siblings().removeClass('active');
   const t=$(this).data('stab');
-  $('#stab-type').toggle(t==='type'); $('#stab-base').toggle(t==='base'); $('#stab-asdoc').toggle(t==='asdoc');
+  $('#stab-type').toggle(t==='type'); $('#stab-auto').toggle(t==='auto'); if(t==='auto') loadAutoRules(); $('#stab-base').toggle(t==='base'); $('#stab-asdoc').toggle(t==='asdoc');
 });
 function baseState(base,ok){
   $('#baseState').html(base?('目前路徑：<code>'+esc(base)+'</code> '+(ok?'<span style="color:#26b99a;">✔ 可存取</span>':'<span style="color:#dd5138;">✘ 資料夾不存在（上傳時會嘗試自動建立）</span>')):'');

@@ -129,6 +129,41 @@ case 'attention': {
     jout(['ok'=>true, 'rows'=>eg_stamp_attention_rows($db), 'no_need'=>eg_stamp_no_need_list($db)]);
 }
 
+// ── 新進員工自動建章設定（哪個部門的新人要自動建哪些圖章；核發日＝到職日）──
+case 'auto_rule_list': {
+    needManage($canManage);
+    jout(['ok'=>true, 'rows'=>eg_stamp_auto_rules($db)]);
+}
+case 'auto_rule_save': {
+    needManage($canManage);
+    eg_stamp_ensure_schema($db);
+    $deptId = (int)($_POST['dept_id'] ?? 0);
+    $tplId  = (int)($_POST['template_id'] ?? 0);
+    $kind   = (string)($_POST['holder_kind'] ?? 'user');
+    if (!in_array($kind, ['user','user_dept'], true)) jerr('建立方式錯誤');
+    if ($kind === 'user_dept' && $deptId <= 0) jerr('「部門人員章」必須指定部門');
+    if ($deptId > 0) {
+        $st = $db->prepare("SELECT 1 FROM department WHERE id=?"); $st->execute([$deptId]);
+        if (!$st->fetchColumn()) jerr('部門不存在');
+    }
+    $st = $db->prepare("SELECT p.type_id, t.bind_targets, t.is_active FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id WHERE p.id=? AND p.is_active=1");
+    $st->execute([$tplId]);
+    $tp = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$tp) jerr('模板不存在或已停用');
+    if ($tp['type_id'] !== null && (int)$tp['is_active'] !== 1) jerr('此模板的印章種類已停用');
+    $bt = (string)($tp['bind_targets'] ?? '');
+    if ($bt !== '' && !in_array('user', explode(',', $bt), true)) jerr('此模板的種類不綁定個人，無法自動建給新進人員');
+    $db->prepare("INSERT IGNORE INTO stamp_auto_rule (dept_id,template_id,holder_kind,created_by) VALUES (?,?,?,?)")
+       ->execute([$deptId, $tplId, $kind, $cname]);
+    jout(['ok'=>true, 'rows'=>eg_stamp_auto_rules($db)]);
+}
+case 'auto_rule_delete': {
+    needManage($canManage);
+    eg_stamp_ensure_schema($db);
+    $db->prepare("DELETE FROM stamp_auto_rule WHERE id=?")->execute([(int)($_POST['id'] ?? 0)]);
+    jout(['ok'=>true, 'rows'=>eg_stamp_auto_rules($db)]);
+}
+
 case 'no_need_set': {
     needManage($canManage);
     $tuid = (int)($_POST['user_id'] ?? 0);

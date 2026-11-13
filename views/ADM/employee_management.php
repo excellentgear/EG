@@ -1582,8 +1582,16 @@ $(document).ready(function() {
                 // 新進人員：提醒去登記圖章
                 if (response.stamp_auto_created) {
                     var sa = response.stamp_auto_created;
-                    alert('「' + sa.name + '」已建立，並已自動建立圖章：\n　' + sa.type_name + '／' + sa.tpl_name
-                        + '（核發日期：' + String(sa.issue_date).replace(/-/g, '.') + '）\n\n不需要再到圖章管理頁處理。');
+                    var sl = (sa.items || []).map(function(x) {
+                        return '　- ' + x.type_name + '／' + x.tpl_name + (x.dept_name ? '（' + x.dept_name + '）' : '')
+                             + '，核發日期：' + String(x.issue_date).replace(/-/g, '.');
+                    });
+                    alert('「' + sa.name + '」已建立，並已依「新進人員自動建章設定」自動建立 ' + sl.length + ' 筆圖章：
+' + sl.join('
+')
+                        + '
+
+核發日期＝到職日。不需要再到圖章管理頁處理。');
                 }
                 if (response.stamp_setup_notice) notifyStampSetup(response.stamp_setup_notice);
                 // 復職：自動重新核發的結果＋要人工建立的清單
