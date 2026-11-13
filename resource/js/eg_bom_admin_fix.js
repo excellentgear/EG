@@ -315,16 +315,47 @@
         var opts = (DATA.process_options || []);
         if (!sts.length || !opts.length) return '';
         var rows = sts.map(function (s) {
-            return '<div style="margin:2px 0;">' + esc(s.label) + '　製程ID：<select class="pr-sel" data-f="' + s.fid + '" style="height:22px;font-size:12px;max-width:230px;">'
-                + opts.map(function (o) { return '<option value="' + o.no + '"' + (Number(o.no) === s.process_no ? ' selected' : '') + '>' + o.no + ' ' + esc(o.name || '') + '</option>'; }).join('')
-                + '</select> <button class="btn btn-default btn-xs pr-go" data-f="' + s.fid + '" data-old="' + s.process_no + '">儲存</button></div>';
+            var cur = opts.filter(function (o) { return Number(o.no) === s.process_no; })[0];
+            return '<div style="margin:2px 0;position:relative;">' + esc(s.label) + '　製程ID：<input type="text" class="pr-in" data-f="' + s.fid + '" data-no="' + s.process_no + '" data-eg-skip value="' + esc(cur ? cur.no + ' ' + (cur.name || '') : String(s.process_no)) + '" placeholder="輸入ID或名稱篩選；0開頭＝直接指定ID（01＝1）" style="height:22px;font-size:12px;width:230px;" autocomplete="off">'
+                + ' <button class="btn btn-default btn-xs pr-go" data-f="' + s.fid + '" data-old="' + s.process_no + '">儲存</button>'
+                + '<div class="pr-list" data-f="' + s.fid + '" style="display:none;position:absolute;left:0;top:100%;z-index:50;background:#fff;border:1px solid #E4B98A;max-height:190px;overflow:auto;min-width:260px;box-shadow:0 2px 6px rgba(0,0,0,.2);"></div></div>';
         }).join('');
         return '<details style="margin-bottom:6px;border:1px dashed #E4B98A;border-radius:4px;padding:3px 8px;background:#FFFCF7;font-size:12px;"><summary style="cursor:pointer;font-weight:bold;color:#6B4423;">修正製程ID（這一關的製程設錯時使用；發單／回廠／檢驗紀錄保留，報工、排程、矯正單的製程編號一併更新）</summary>' + rows + '</details>';
     }
     function bindProcBox(root) {
+        var opts = DATA.process_options || [];
+        function find(q) {
+            q = String(q || '').trim();
+            if (/^0\d*$/.test(q)) { var n = parseInt(q, 10); return opts.filter(function (o) { return Number(o.no) === n; }); } // 0 開頭＝直接指定ID
+            var ws = q.toLowerCase().split(/\s+/).filter(Boolean);
+            return opts.filter(function (o) { var h = (o.no + ' ' + (o.name || '')).toLowerCase(); return ws.every(function (x) { return h.indexOf(x) >= 0; }); });
+        }
+        root.querySelectorAll('.pr-in').forEach(function (inp) {
+            var list = root.querySelector('.pr-list[data-f="' + inp.getAttribute('data-f') + '"]');
+            function show() {
+                var m = find(inp.value === (inp.getAttribute('data-label') || '') ? '' : inp.value);
+                list.innerHTML = m.slice(0, 60).map(function (o) { return '<div class="pr-opt" data-no="' + o.no + '" style="padding:2px 8px;cursor:pointer;font-size:12px;">' + o.no + ' ' + esc(o.name || '') + '</div>'; }).join('') || '<div style="padding:4px 8px;color:#999;font-size:12px;">找不到符合的製程</div>';
+                list.style.display = 'block';
+                list.querySelectorAll('.pr-opt').forEach(function (d) {
+                    d.onmouseover = function () { d.style.background = '#F6D9CC'; }; d.onmouseout = function () { d.style.background = ''; };
+                    d.onmousedown = function (e) { e.preventDefault(); inp.setAttribute('data-no', d.getAttribute('data-no')); inp.value = d.textContent; inp.setAttribute('data-label', d.textContent); list.style.display = 'none'; };
+                });
+                if (m.length === 1 && /^0\d*$/.test(inp.value.trim())) { inp.setAttribute('data-no', m[0].no); } // 0開頭只有一筆＝已選定
+            }
+            inp.addEventListener('focus', function () { inp.select(); show(); });
+            inp.addEventListener('input', function () { inp.setAttribute('data-label', ''); show(); });
+            inp.addEventListener('blur', function () { setTimeout(function () { list.style.display = 'none'; }, 150); });
+            inp.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                var m = find(inp.value); if (m.length >= 1) { inp.setAttribute('data-no', m[0].no); inp.value = m[0].no + ' ' + (m[0].name || ''); inp.setAttribute('data-label', inp.value); list.style.display = 'none'; }
+            });
+        });
         root.querySelectorAll('.pr-go').forEach(function (btn) {
             btn.onclick = function () {
-                var f = btn.getAttribute('data-f'), sel = root.querySelector('.pr-sel[data-f="' + f + '"]');
+                var f = btn.getAttribute('data-f'), inp = root.querySelector('.pr-in[data-f="' + f + '"]');
+                var sel = { value: inp.getAttribute('data-no'), options: [{ text: inp.value }], selectedIndex: 0 };
+                if (!opts.some(function (o) { return String(o.no) === String(sel.value); })) { msg('請從清單選一個製程', false); return; }
                 if (String(sel.value) === btn.getAttribute('data-old')) { msg('製程ID沒有變更', false); return; }
                 if (!confirm('確定把這一關的製程ID由 ' + btn.getAttribute('data-old') + ' 改成「' + sel.options[sel.selectedIndex].text + '」？\n（發單／回廠／檢驗紀錄不受影響，報工、排程、矯正單的製程編號會一併更新）')) return;
                 post({ action: 'baf_process_set', fid: f, process_no: sel.value }, function (r) { if (r.success) { toast(r.message, true); load(r.message, true); refreshMain(); } else msg(r.message, false); });
