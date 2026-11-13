@@ -351,11 +351,11 @@ if ($hrUserPerm === 'R') {
                             <div class="row">
                                 <div class="col-md-4 form-group">
                                     <label for="user_id_input">員工編號 (ID)</label>
-                                    <input type="text" class="form-control" id="user_id_input" name="id" required>
+                                    <input type="text" class="form-control" id="user_id_input" name="id" required inputmode="numeric" pattern="[0-9]+" autocomplete="off" data-eg-hint="只能輸入數字" oninput="var v=this.value.replace(/[^0-9]/g,'');this.setCustomValidity('');if(v!==this.value){this.value=v;}" title="員工編號只能輸入數字">
                                 </div>
                                 <div class="col-md-4 form-group emp-personal">
                                     <label for="user_uname">登入帳號</label>
-                                    <input type="text" class="form-control" id="user_uname" name="user_uname" required>
+                                    <input type="text" class="form-control" id="user_uname" name="user_uname" required autocomplete="off" autocapitalize="off" spellcheck="false">
                                 </div>
                                 <div class="col-md-4 form-group">
                                     <label for="user_cname">中文姓名</label>
@@ -365,7 +365,7 @@ if ($hrUserPerm === 'R') {
                             <div class="row">
                                 <div class="col-md-4 form-group emp-personal">
                                     <label for="password">密碼</label>
-                                    <input type="password" class="form-control" id="password" name="password" placeholder="新增時必填，編輯時留空則不修改">
+                                    <input type="text" class="form-control" id="password" name="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="新增時必填，編輯時留空則不修改">
                                     <input type="hidden" name="user_password" id="user_password">
                                 </div>
                                 <div class="col-md-4 form-group">
