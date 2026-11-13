@@ -12617,6 +12617,9 @@ echo "</script>\n";
                 h += '<div class="bre-bf" data-b="' + b.batch_id + '" style="background:#FFFAF2;border-top:1px dashed #E4D3BC;padding:6px 10px;font-size:12px;">補登回廠　'
                   + '<input type="date" class="bf-d" max="' + _ormToday() + '" style="width:130px;"> 回廠 <input type="number" min="0" step="any" class="bf-r" style="width:65px;"> 報廢 <input type="number" min="0" step="any" class="bf-s" style="width:65px;"> 取回 <input type="number" min="0" step="any" class="bf-w" style="width:65px;"> '
                   + '<button class="btn btn-success btn-xs bf-go">補登</button></div>';
+                h += '<div class="bre-ls" data-b="' + b.batch_id + '" style="background:#FFF3E2;border-top:1px dashed #E4B3A0;padding:6px 10px;font-size:12px;" title="已全部回廠、事後才發現的報廢／來料不良：由這批已回廠數量轉成報廢，QC合格數與此後製程數量自動修正，並記錄補報人員與時間">補報報廢　'
+                  + '廠商提報報廢 <input type="number" min="0" step="1" class="ls-s" style="width:65px;"> 發料不良 <input type="number" min="0" step="1" class="ls-b" style="width:65px;"> '
+                  + '<button class="btn btn-warning btn-xs ls-go">補報報廢</button> <span style="color:#999;">（由已回廠數量轉入；QC合格數與此後製程自動修正）</span></div>';
                 h += '</div>';
             });
             h += '<div id="bre-newb" style="border:1px dashed #E4D3BC;border-radius:4px;padding:8px 10px;margin-bottom:10px;font-size:12px;background:#FFFAF2;"><b>補登移送批次</b>（同一關拆給不同廠商，每家一批）　'
@@ -12669,6 +12672,17 @@ echo "</script>\n";
                     var w = btn.closest('.bre-bf');
                     post({ action: 'ber_add_return', batch_id: w.getAttribute('data-b'), return_date: w.querySelector('.bf-d').value, return_qty: w.querySelector('.bf-r').value, scrap_qty: w.querySelector('.bf-s').value, withdraw_qty: w.querySelector('.bf-w').value },
                          function (res) { res.success ? load(res.message, true) : msg(res.message, false); });
+                };
+            });
+            box.querySelectorAll('.ls-go').forEach(function (btn) {
+                btn.onclick = function () {
+                    var w = btn.closest('.bre-ls'), sv = parseFloat(w.querySelector('.ls-s').value) || 0, bv = parseFloat(w.querySelector('.ls-b').value) || 0;
+                    if (sv < 0 || bv < 0 || sv + bv <= 0) { msg('請填寫要補報的報廢或發料不良數量', false); return; }
+                    if (!confirm('補報報廢 ' + sv + '、發料不良 ' + bv + ' 件？
+這批已回廠的數量會轉成報廢，這一站QC合格數與此後製程數量會自動修正，並自動開立／更新品質異常單；系統會記錄你的姓名與時間。')) return;
+                    btn.disabled = true;
+                    post({ action: 'ber_late_scrap', batch_id: w.getAttribute('data-b'), scrap_qty: sv, badmat_qty: bv },
+                         function (res) { btn.disabled = false; res.success ? load(res.message, true) : msg(res.message, false); });
                 };
             });
             // 廠商挑選：沿用本頁既有 search_maker（輸入編號或名稱，點選後帶入）

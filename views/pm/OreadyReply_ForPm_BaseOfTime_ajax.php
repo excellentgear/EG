@@ -2713,7 +2713,7 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf
 
 // ── 修改／刪除移送與回廠紀錄（2026-11-06）：唯一實作 src/common/bom_return_edit_lib.php；
 //    權限＝角色功能碼 oready_edit_return 或管理員（唯讀角色不可）；數量下限依報工／QC 已通報數量 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch','ber_add_batch','ber_add_return','ber_admin_batch_meta','ber_qc_save'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_save_send','ber_save_return','ber_delete_return','ber_delete_batch','ber_add_batch','ber_add_return','ber_late_scrap','ber_admin_batch_meta','ber_qc_save'], true)) {
     session_write_close();
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
@@ -2757,6 +2757,13 @@ else if (isset($_POST['action']) && in_array($_POST['action'], ['ber_list','ber_
             require_once '../../src/common/qa_abnormal_lib.php';
             $bmAo = qab_outsource_batch_auto_open($db, (int)($_POST['batch_id'] ?? 0), $uid);
             echo json_encode(['success'=>true,'message'=>'已補登回廠紀錄' . $bmAo['msg']]);
+        } elseif ($act === 'ber_late_scrap') {
+            require_once '../../src/common/bom_scrap_downstream_lib.php';
+            require_once '../../src/common/qa_abnormal_lib.php';
+            $lsBid = (int)($_POST['batch_id'] ?? 0);
+            $ls = eg_late_scrap_apply($db, $fid, $lsBid, (float)($_POST['scrap_qty'] ?? 0), (float)($_POST['badmat_qty'] ?? 0), $uid);
+            $lsAo = qab_outsource_batch_auto_open($db, $lsBid, $uid);
+            echo json_encode(['success'=>true,'message'=>$ls['message'] . $lsAo['msg']]);
         } elseif ($act === 'ber_admin_batch_meta') {
             ber_save_batch_meta($db, $fid, (int)($_POST['batch_id'] ?? 0), trim((string)($_POST['maker_no'] ?? '')), trim((string)($_POST['maker_name'] ?? '')), trim((string)($_POST['send_date'] ?? '')), $uid);
             echo json_encode(['success'=>true,'message'=>'已修改廠商／送出日']);

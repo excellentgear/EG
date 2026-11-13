@@ -151,3 +151,81 @@ if (!function_exists('eg_scrap_ds_apply')) {
         return ['ok' => true, 'message' => '已自動修正此後 ' . count($lines) . ' 關的數量', 'lines' => $lines];
     }
 }
+
+if (!function_exists('eg_late_scrap_apply')) {
+    /**
+     * 補報報廢（2026-11-13 使用者交辦）：已回廠結清的批次（含今天以前的 BOM），事後才發現／提報本關報廢或來料不良。
+     * ①把這批已回廠的數量轉成報廢（回廠數量減少、報廢＋發料不良增加；批次送出量不變）
+     * ②這一站 QC 檢驗總數若因此超過新的回廠數，從合格（OK）數扣掉（全良品或良品＋不良品都一樣只扣 OK）
+     * ③此後製程數量沿用 eg_scrap_ds_apply 自動修正（發單／回廠／QC）
+     * 新增一筆回廠紀錄（回廠 0、報廢 N）留下補報人員與日期時間，另寫 bom_ing_event。全部同一個交易。
+     */
+    function eg_late_scrap_apply(PDO $db, int $fid, int $batchId, float $scrap, float $badmat, int $uid): array {
+        eg_bom_outsource_ensure_schema($db);
+        if ($scrap < 0 || $badmat < 0) throw new Exception('數量不可為負數');
+        $x = $scrap + $badmat;
+        if ($x <= 0) throw new Exception('請填寫要補報的報廢或發料不良數量');
+        if (abs($x - round($x)) > 1e-9) throw new Exception('補報數量請填整數');
+        $db->beginTransaction();
+        try {
+            $bs = $db->prepare("SELECT * FROM bom_ing_outsource_batch WHERE batch_id=? AND bom_ing_fid=? FOR UPDATE");
+            $bs->execute([$batchId, $fid]);
+            $b = $bs->fetch(PDO::FETCH_ASSOC);
+            if (!$b) throw new Exception('找不到這一批（請重新整理）');
+            $ret = (float)$b['return_qty'];
+            $outside = max(0.0, (float)$b['send_qty'] - $ret - (float)$b['scrap_qty'] - (float)($b['withdrawn_qty'] ?? 0));
+            $cut = max(0.0, $x - $outside);          // 還在外面的先報廢，不夠的才從已回廠數量轉
+            if ($cut > $ret + 1e-9) throw new Exception('這批可轉成報廢的數量只有 ' . ($ret + $outside) . '（已回廠 ' . $ret . '、還在外面 ' . $outside . '），補報 ' . $x . ' 超過了');
+            $left = $cut;
+            if ($left > 1e-9) {
+                $rq = $db->prepare("SELECT return_id, return_qty FROM bom_ing_outsource_return WHERE batch_id=? AND return_qty>0 ORDER BY return_id DESC FOR UPDATE");
+                $rq->execute([$batchId]);
+                foreach ($rq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    if ($left <= 1e-9) break;
+                    $t = min($left, (float)$r['return_qty']);
+                    $db->prepare("UPDATE bom_ing_outsource_return SET return_qty=return_qty-? WHERE return_id=?")->execute([$t, $r['return_id']]);
+                    $left -= $t;
+                }
+            }
+            $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=return_qty-?, scrap_qty=scrap_qty+?, badmat_qty=badmat_qty+?, updated_at=NOW() WHERE batch_id=?")
+               ->execute([$cut, $x, $badmat, $batchId]);
+            $db->prepare("INSERT INTO bom_ing_outsource_return (batch_id, bom_ing_fid, return_qty, scrap_qty, withdraw_qty, short_qty, badmat_qty, return_date, note, created_by, created_at) VALUES (?,?,0,?,0,0,?,CURDATE(),?,?,NOW())")
+               ->execute([$batchId, $fid, $x, $badmat, '補報報廢（由已回廠數量轉入 ' . $cut . '）', $uid ?: null]);
+            ber_after_change($db, $fid, $batchId);
+            // 這一站 QC：檢驗總數超過新的回廠數時，超出的部分從合格數扣
+            $newRet = $ret - $cut;
+            $qcn = '';
+            $qq = $db->prepare("SELECT qc_check_id, QC_ok_sqty, QC_aod_sqty, QC_QQ_sqty, QC_ng_sqty FROM QC_check WHERE bom_ing_fid_ref=? ORDER BY qc_check_id DESC FOR UPDATE");
+            $qq->execute([(string)$fid]);
+            $qcRows = $qq->fetchAll(PDO::FETCH_ASSOC);
+            if ($qcRows) {
+                $tot = 0; foreach ($qcRows as $q) $tot += (int)$q['QC_ok_sqty'] + (int)$q['QC_aod_sqty'] + (int)$q['QC_QQ_sqty'] + (int)$q['QC_ng_sqty'];
+                $excess = (int)round(min($cut, $tot - $newRet));
+                $was = $excess;
+                foreach ($qcRows as $q) {
+                    if ($excess <= 0) break;
+                    $take = min($excess, (int)$q['QC_ok_sqty']);
+                    if ($take > 0) {
+                        $db->prepare("UPDATE QC_check SET QC_ok_sqty=QC_ok_sqty-? WHERE qc_check_id=?")->execute([$take, $q['qc_check_id']]);
+                        $excess -= $take;
+                    }
+                }
+                if ($excess > 0) throw new Exception('這一站 QC 檢驗的合格數不足以扣除 ' . $was . '，請到管理員修正面板手動調整 QC 檢驗數量');
+                if ($was > 0) $qcn = '；QC合格數同步扣 ' . $was;
+            }
+            ber_log($db, $fid, 'late_scrap', '補報報廢 批次#' . $batchId . '：報廢 ' . $scrap . '、發料不良 ' . $badmat . '（由已回廠轉 ' . $cut . '）' . $qcn, $uid);
+            // 此後製程
+            $plan = eg_scrap_ds_plan($db, $fid, $batchId, 0.0);
+            $lines = []; $dsMsg = '';
+            if (!empty($plan['applicable'])) {
+                $ds = eg_scrap_ds_apply($db, $fid, $batchId, $uid);
+                if (empty($ds['ok'])) throw new Exception('此後製程數量自動修正失敗：' . $ds['message']);
+                $lines = $ds['lines']; $dsMsg = '；' . $ds['message'];
+            } elseif (!empty($plan['show']) && !empty($plan['reason']) && strpos($plan['reason'], '不需要修正') === false) {
+                $dsMsg = '；⚠ 此後製程未自動修正：' . $plan['reason'];
+            }
+            $db->commit();
+            return ['message' => '已補報報廢 ' . $x . ' 件' . $qcn . $dsMsg, 'lines' => $lines];
+        } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
+    }
+}
