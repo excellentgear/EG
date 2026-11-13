@@ -1580,6 +1580,11 @@ $(document).ready(function() {
                 // 部門/職位異動影響到既有圖章：提示是否要去處理
                 if (response.stamp_dept_notice) notifyStampDeptChange(response.stamp_dept_notice);
                 // 新進人員：提醒去登記圖章
+                if (response.stamp_auto_created) {
+                    var sa = response.stamp_auto_created;
+                    alert('「' + sa.name + '」已建立，並已自動建立圖章：\n　' + sa.type_name + '／' + sa.tpl_name
+                        + '（核發日期：' + String(sa.issue_date).replace(/-/g, '.') + '）\n\n不需要再到圖章管理頁處理。');
+                }
                 if (response.stamp_setup_notice) notifyStampSetup(response.stamp_setup_notice);
                 // 復職：自動重新核發的結果＋要人工建立的清單
                 if (response.stamp_rehire_notice) notifyStampRehire(response.stamp_rehire_notice);

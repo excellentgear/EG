@@ -401,6 +401,40 @@ if (!function_exists('eg_stamp_rehire_on_reinstate')) {
     }
 }
 
+if (!function_exists('eg_stamp_auto_create_for_new_user')) {
+    /**
+     * 新進員工建立時自動核發個人章（HR 未必有圖章管理權限，所以不再要求跳轉到圖章管理頁）。
+     * 模板取「目前使用中、種類只綁個人的模板裡，已被最多人使用者」（現況＝本人簽章(圓)），不寫死 id；
+     * 核發日＝到職日（沒填用今天）。同持有對象＋同模板已有使用中就略過。失敗只記 log，絕不影響員工新增。
+     * @return array|null ['id'=>登記id,'tpl_name'=>..,'type_name'=>..,'issue_date'=>..]；沒建（略過/失敗）回 null
+     */
+    function eg_stamp_auto_create_for_new_user(PDO $db, int $userId, ?string $hireDate, string $operator = 'system'): ?array {
+        try {
+            eg_stamp_ensure_schema($db);
+            if ($userId <= 0 || eg_stamp_holder_blocked($db, $userId)) return null;
+            $tpl = $db->query(
+                "SELECT p.id, p.type_id, p.tpl_name, t.type_name
+                 FROM stamp_template p JOIN stamp_type t ON t.id = p.type_id AND t.is_active = 1
+                 WHERE p.is_active = 1 AND t.bind_targets = 'user'
+                 ORDER BY (SELECT COUNT(*) FROM stamp_register r WHERE r.template_id = p.id AND r.status = 'active' AND r.dept_id IS NULL) DESC, p.id
+                 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            if (!$tpl) return null;
+            $issue = ($hireDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $hireDate)) ? $hireDate : (string)$db->query("SELECT CURDATE()")->fetchColumn();
+            $dup = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id = ? AND dept_id IS NULL AND position_id IS NULL AND template_id = ? AND status = 'active' LIMIT 1");
+            $dup->execute([$userId, (int)$tpl['id']]);
+            if ($dup->fetchColumn()) return null;
+            $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by)
+                          VALUES (?,NULL,NULL,?,?,?,'active','（新進員工建立時自動核發）',?)")
+               ->execute([$userId, (int)$tpl['type_id'], (int)$tpl['id'], $issue, $operator]);
+            return ['id' => (int)$db->lastInsertId(), 'tpl_name' => (string)$tpl['tpl_name'],
+                    'type_name' => (string)$tpl['type_name'], 'issue_date' => $issue];
+        } catch (Throwable $e) {
+            error_log('[stamp] auto create for new user failed uid=' . $userId . ': ' . $e->getMessage());
+            return null;
+        }
+    }
+}
+
 if (!function_exists('eg_stamp_attention_rows')) {
     /**
      * 圖章管理頁的常駐提示：目前有哪些人「該有章卻沒有」。兩種來源合併成一份清單：

@@ -585,7 +585,13 @@ function addOrUpdateEmployee($mode) {
             ];
         }
         if ($mode === 'add' && !in_array((int)$state, EG_STAMP_BLOCKED_HOLDER_STATES, true)) {
-            $resp['stamp_setup_notice'] = ['user_id' => (int)$id, 'name' => $user_cname];
+            // 自動核發個人章（HR 未必有圖章管理權限）；建好就通知，沒建成才退回提醒去圖章管理頁
+            $auto = eg_stamp_auto_create_for_new_user($db, (int)$id, $hire_date, (string)($_SESSION['user_cname'] ?? 'system'));
+            if ($auto) {
+                $resp['stamp_auto_created'] = ['user_id' => (int)$id, 'name' => $user_cname] + $auto;
+            } else {
+                $resp['stamp_setup_notice'] = ['user_id' => (int)$id, 'name' => $user_cname];
+            }
         }
         echo json_encode($resp, JSON_UNESCAPED_UNICODE);
 
