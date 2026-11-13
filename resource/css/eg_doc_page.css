@@ -52,6 +52,11 @@
 /* 段落：間距要小，AS 文件是條列式的正式文件，不是網頁文章。
    這一條就是編輯器與列印版換頁位置對不對得上的關鍵。 */
 .eg-docbody p { margin: 0 0 4px; }
+/* 對齊用的固定寬度欄位（Word 匯入的「名稱　(編號)」那種 tab 對齊會變成 display:inline-block;width:N）：
+   inline-block 會繼承段落的 text-indent（條列段落是負縮排＝凸排），欄位裡的第一行就被往左拉，
+   「9.1」跑到欄位外面、和前一個字疊在一起（2026-11-13 使用者實測，同樣的問題在兩份文件重複出現）。
+   欄位內一律從頭開始排，不繼承段落縮排。編輯器、預覽、列印都套同一條規則，既有文件不必改資料。 */
+.eg-docbody span[style*="inline-block"] { text-indent: 0 !important; }
 
 .eg-docbody h1 { font-size: 18pt; margin: 0 0 10px; font-weight: normal; }
 .eg-docbody h2 { font-size: 15pt; margin: 14px 0 8px; font-weight: normal; }
