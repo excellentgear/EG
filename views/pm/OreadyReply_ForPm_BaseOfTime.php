@@ -12678,8 +12678,7 @@ echo "</script>\n";
                 btn.onclick = function () {
                     var w = btn.closest('.bre-ls'), sv = parseFloat(w.querySelector('.ls-s').value) || 0, bv = parseFloat(w.querySelector('.ls-b').value) || 0;
                     if (sv < 0 || bv < 0 || sv + bv <= 0) { msg('請填寫要補報的報廢或發料不良數量', false); return; }
-                    if (!confirm('補報報廢 ' + sv + '、發料不良 ' + bv + ' 件？
-這批已回廠的數量會轉成報廢，這一站QC合格數與此後製程數量會自動修正，並自動開立／更新品質異常單；系統會記錄你的姓名與時間。')) return;
+                    if (!confirm('補報報廢 ' + sv + '、發料不良 ' + bv + ' 件？\n這批已回廠的數量會轉成報廢，這一站QC合格數與此後製程數量會自動修正，並自動開立／更新品質異常單；系統會記錄你的姓名與時間。')) return;
                     btn.disabled = true;
                     post({ action: 'ber_late_scrap', batch_id: w.getAttribute('data-b'), scrap_qty: sv, badmat_qty: bv },
                          function (res) { btn.disabled = false; res.success ? load(res.message, true) : msg(res.message, false); });
