@@ -2676,7 +2676,7 @@ $(document).on('click', '[data-close="mAsRef"]', function () { AR.pickCb = null;
    ③ 只有編號      → 編號
    ④ 「名稱」（有「」或『』框住且與文件名稱完全相同）→ 名稱   例：「環境審查表」
    換成什麼 HTML 一律由後端 asref_build_many 組（名稱與編號以資料庫現況為準）。 */
-function arDetect(text, byNo, names, styles) {
+function arDetect(text, byNo, names, styles, blockAligned) {
     var out = [], used = [];
     function free(s, e) { for (var i = 0; i < used.length; i++) if (s < used[i][1] && e > used[i][0]) return false; return true; }
     function take(s, e, doc, mode, style) { used.push([s, e]); out.push({ s: s, e: e, doc: doc, mode: mode, style: style }); }
@@ -2694,7 +2694,14 @@ function arDetect(text, byNo, names, styles) {
             var end = ne, tail = text.substring(ne), tm = tail.match(/^[)）]/);
             if (tm) end += 1;
             var st = hp - doc.doc_name.length;
-            if (free(st, end)) { take(st, end, doc, 'both', styleBy(/^\{name\}/)); continue; }
+            /* 名稱與編號之間有排好的對齊（空白、tab、對齊用的空白標記）時，只把「編號」本身換成參照標記，
+               名稱與括號維持原樣——整段換成「名稱　(編號)」會吃掉那段對齊空白、整行版面跑掉
+               （2026-11-13 使用者實測：8.x、9.x 的編號欄位被打亂、前面還多出底色）。
+               只有名稱與編號之間是緊貼（只隔一個空白或括號）時才整段換成「名稱＋編號」。 */
+            /* blockAligned：這一段裡有「對齊用的空白標記」（空的 inline-block span，文字裡看不到它，所以由編輯器告知） */
+            var aligned = !!blockAligned || /[\s　]{2,}|\t/.test(text.substring(st + doc.doc_name.length, ns));
+            if (aligned) { if (free(ns, ne)) { take(ns, ne, doc, 'no', ''); continue; } }
+            else if (free(st, end)) { take(st, end, doc, 'both', styleBy(/^\{name\}/)); continue; }
         }
         // 後面緊接著名稱（編號＋名稱）
         var after = text.substring(ne), am = after.match(/^[\s　]*/), ap = am ? am[0].length : 0;
@@ -2718,7 +2725,7 @@ function arDetect(text, byNo, names, styles) {
     }
     return out;
 }
-function arAutoDetect(texts, done, keeps) {
+function arAutoDetect(texts, done, keeps, aligns) {
     arLoad(function () {
         var byNo = {}, names = [];
         AR.docs.forEach(function (d) {
@@ -2728,7 +2735,7 @@ function arAutoDetect(texts, done, keeps) {
         });
         var per = texts.map(function (t, i) {
             var kp = (keeps && keeps[i]) || [];
-            return arDetect(t, byNo, names, AR.styles).filter(function (x) {
+            return arDetect(t, byNo, names, AR.styles, aligns && aligns[i]).filter(function (x) {
                 return !kp.some(function (k) { return k[0] === x.s && k[1] === x.e; });   // 本來就是完整標記、沒變的不列
             });
         });
