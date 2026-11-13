@@ -54,7 +54,20 @@ try {
         echo json_encode(['success' => false, 'message' => '這種格式不支援旋轉（只支援圖片檔與 PDF）']);
         exit;
     }
-    $res = eg_rotate_file($r['fs'], $deg);
+    // 網址帶 &pages=（「原圖 第N頁」這類條目）＝只轉那幾頁，其他頁（別的料號的原圖）不動
+    $pages = null;
+    if ($r['ext'] === 'pdf') {
+        parse_str((string)parse_url($url, PHP_URL_QUERY), $q);
+        $spec = preg_replace('/[\s，、]+/u', ',', trim((string)($q['pages'] ?? '')));
+        if ($spec !== '' && preg_match('/^\d{1,4}(-\d{1,4})?(,\d{1,4}(-\d{1,4})?)*$/', $spec)) {
+            $pages = [];
+            foreach (explode(',', $spec) as $seg) {
+                $p = explode('-', $seg); $a = (int)$p[0]; $b = isset($p[1]) ? (int)$p[1] : $a;
+                for ($i = $a; $i <= $b && $i <= 2000; $i++) $pages[] = $i;
+            }
+        }
+    }
+    $res = eg_rotate_file($r['fs'], $deg, $pages);
     $res['mtime'] = (int)@filemtime($r['fs']);   // 前端拿來破快取
     echo json_encode($res);
 } catch (Throwable $e) {

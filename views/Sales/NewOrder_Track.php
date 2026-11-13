@@ -3417,7 +3417,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             // 「無附件」（2026-11-09）：與列表上的「無附件」標示同一判定＝訂單自己沒有 active 的訂單附件
             // （不看料號附件；一次綁多張訂單者每張都有自己的列）。可寫「無附件」或「x無附件」，其他關鍵字照常。
             if (preg_match('/^[xX×✕]?無附件$/u', $tk)) {
-                $whereClauses[] = "NOT EXISTS (SELECT 1 FROM order_attachments oa_g WHERE oa_g.order_id = ot.Order_id AND oa_g.status='active')";
+                $whereClauses[] = "NOT EXISTS (SELECT 1 FROM order_track oa_s JOIN order_attachments oa_g ON oa_g.order_id = oa_s.Order_id AND oa_g.status='active' WHERE oa_s.Order_oo = ot.Order_oo)";
                 continue;
             }
             $ors = [];
@@ -4045,7 +4045,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         if (!empty($__ooIds)) {
             try {
                 $__phOo = implode(',', array_fill(0, count($__ooIds), '?'));
-                $__stOo = $pdo->prepare("SELECT DISTINCT order_id FROM order_attachments WHERE status='active' AND order_id IN ($__phOo)");
+                // 同訂單編號底下任一列有 active 訂單附件就算有（附件常只掛在第一列，其他料號列沒有自己的附件紀錄）
+                $__stOo = $pdo->prepare("SELECT DISTINCT t.Order_id AS order_id FROM order_track t
+                                         JOIN order_track s ON s.Order_oo = t.Order_oo
+                                         JOIN order_attachments a ON a.order_id = s.Order_id AND a.status='active'
+                                         WHERE t.Order_id IN ($__phOo)");
                 $__stOo->execute($__ooIds);
                 foreach ($__stOo->fetchAll(PDO::FETCH_COLUMN) as $__oid) { $order_att_set[(int)$__oid] = true; }
                 $no_ordatt_ready = true;

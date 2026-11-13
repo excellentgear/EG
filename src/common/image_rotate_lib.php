@@ -35,7 +35,7 @@ function eg_rotate_norm_deg(int $deg): int {
  * @param int    $degCW  順時針度數：90 / 180 / 270（-90 等同 270）
  * @return array ['success'=>bool, 'message'=>string]
  */
-function eg_rotate_file(string $fsPath, int $degCW): array {
+function eg_rotate_file(string $fsPath, int $degCW, ?array $pages = null): array {
     $deg = eg_rotate_norm_deg($degCW);
     if ($deg === 0)          return ['success'=>false, 'message'=>'旋轉角度只接受 90／180／270 度'];
     if (!is_file($fsPath))   return ['success'=>false, 'message'=>'找不到檔案（可能已被移動或刪除）'];
@@ -73,7 +73,7 @@ function eg_rotate_file(string $fsPath, int $degCW): array {
     }
     $tmp = eg_rotate_tmp_path($ext);
     try {
-        $ok = ($ext === 'pdf') ? eg_rotate_pdf_to($fsPath, $tmp, $deg)
+        $ok = ($ext === 'pdf') ? eg_rotate_pdf_to($fsPath, $tmp, $deg, $pages)
                                : eg_rotate_image_to($fsPath, $tmp, $deg);
         if (!$ok || !is_file($tmp) || filesize($tmp) < 1) {
             @unlink($tmp);
@@ -244,7 +244,7 @@ function eg_rotate_image_to(string $src, string $dst, int $degCW): bool {
  * PDF：用 FPDI 匯入原頁面再旋轉（不轉點陣圖，畫質無損；見記憶 pdf_rasterize）。
  * 加密的 PDF FPDI 讀不動，會丟例外由呼叫端轉成看得懂的訊息。
  */
-function eg_rotate_pdf_to(string $src, string $dst, int $degCW): bool {
+function eg_rotate_pdf_to(string $src, string $dst, int $degCW, ?array $pages = null): bool {
     require_once __DIR__ . '/../../vendor/autoload.php';
     $pdf = new \setasign\Fpdi\Tcpdf\Fpdi();
     $pdf->setPrintHeader(false);
@@ -255,6 +255,12 @@ function eg_rotate_pdf_to(string $src, string $dst, int $degCW): bool {
         $tpl  = $pdf->importPage($i);
         $size = $pdf->getTemplateSize($tpl);
         $w = $size['width']; $h = $size['height'];
+        // 指定頁碼時只轉那幾頁，其餘頁原樣搬過去（多頁訂單 PDF 各料號原圖分開旋轉）
+        if ($pages !== null && !in_array($i, $pages, true)) {
+            $pdf->AddPage($w > $h ? 'L' : 'P', [$w, $h]);
+            $pdf->useTemplate($tpl, 0, 0, $w, $h);
+            continue;
+        }
         $swapped = ($degCW === 90 || $degCW === 270);
         $pageW = $swapped ? $h : $w;
         $pageH = $swapped ? $w : $h;
