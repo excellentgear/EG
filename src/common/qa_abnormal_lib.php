@@ -2645,6 +2645,28 @@ function qab_quick_names(PDO $db, array $ids): array
     return $m;
 }
 
+/**
+ * 已經做過處置決策（勾了處置方式或轉呈）之後，誰還能改：只有「當初做決策的人」、這張單指定的決策者、
+ * 以及這兩位的單位主管（eg_unit_supervisor），加上異常單管理員。其他同樣在可決策名單內的人不可以改別人的決策。
+ * 還沒做過決策、已結案（本來就不可改）都回 true／不在此管。畫面與 API 共用（鐵律8）。
+ */
+function qab_can_change_decision(PDO $db, array $o, int $uid, bool $isAdmin): bool
+{
+    require_once __DIR__ . '/unit_supervisor_lib.php';
+    if ($isAdmin) return true;
+    if (empty($o['disp_ids']) && empty($o['escalate_gm'])) return true;
+    $by = (int)($o['disp_decided_by'] ?? 0);
+    $designated = (int)($o['decider_user_id'] ?? 0);
+    if ($uid > 0 && ($uid === $by || $uid === $designated)) return true;
+    foreach (array_unique(array_filter([$by, $designated])) as $d) {
+        try {
+            $sup = eg_unit_supervisor($db, (int)$d, null, (string)($o['fill_date'] ?? ''));
+            if (!empty($sup['id']) && (int)$sup['id'] === $uid) return true;
+        } catch (Throwable $e) {}
+    }
+    return false;
+}
+
 /** 這張單的雙層快速決策狀態＋目前登入者能做什麼（畫面與 API 共用同一份判定，鐵律8） */
 function qab_quick_view(PDO $db, array $o, int $uid): array
 {
@@ -3782,7 +3804,7 @@ function qab_save_decision(PDO $db, int $id, string $which, array $items, string
     $atCol   = $which === 'disp' ? 'disp_decided_at'  : 'gm_decided_at';
     $noteVal = trim($note) !== '' ? mb_substr($note, 0, 2000) : null;
     $byVal   = $signBy ?: $actorUid;
-    $atVal   = $signAt !== '' ? $signAt : date('Y-m-d H:i:s');
+    $atVal   = $signAt !== '' ? $signAt : (string)$db->query('SELECT NOW()')->fetchColumn();   // 取資料庫時間（PHP 是 UTC，date() 會差 8 小時）
 
     // 只選一項＝不拆分，就地更新
     if (count($items) === 1) {
