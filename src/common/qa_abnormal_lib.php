@@ -2667,6 +2667,14 @@ function qab_can_change_decision(PDO $db, array $o, int $uid, bool $isAdmin): bo
     return false;
 }
 
+/** 決策送出後，基本資料（表頭）鎖定：沒有權限改決策的人一律不可再改（未決策前維持原本的開單人／有權責人員可改）。 */
+function qab_head_locked(PDO $db, array $o, int $uid, bool $isAdmin): bool
+{
+    if (!empty($o['is_closed'])) return false;   // 結案後的規則另有（qab_can_edit_form）
+    $decided = !empty($o['disp_ids']) || !empty($o['gm_ids']) || !empty($o['escalate_gm']);
+    return $decided && !qab_can_change_decision($db, $o, $uid, $isAdmin);
+}
+
 /** 這張單的雙層快速決策狀態＋目前登入者能做什麼（畫面與 API 共用同一份判定，鐵律8） */
 function qab_quick_view(PDO $db, array $o, int $uid): array
 {
