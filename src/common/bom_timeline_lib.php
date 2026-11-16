@@ -134,6 +134,11 @@ if (!function_exists('eg_bom_timeline')) {
             $lb = $opL[$o['operation_type']];
             $add($o['operated_at'], 0, 'op', $lb, 'BOM ' . $lb, (string)($o['user_cname'] ?? ''));
         }
+        // BOM 檢核（標示異常／回報／異常解決）
+        try {
+            require_once __DIR__ . '/bom_check_lib.php';
+            foreach (eg_bomchk_events($db, $bom) as $x) $add($x['ts'], 0, 'check', $x['label'], $x['text'], $x['who'], $x['tone']);
+        } catch (Throwable $eChk) { }
         // 人員姓名補齊（Created_By／issued_by 可能是代號）
         $ids = [];
         foreach ($ev as $e) if ($e['who'] !== '' && ctype_digit($e['who'])) $ids[$e['who']] = 1;
