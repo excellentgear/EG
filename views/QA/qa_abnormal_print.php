@@ -136,6 +136,15 @@ $procRows = []; $otherRows = [];
 foreach ($o['deducts'] as $dd) {
     if (($dd['kind'] ?? 'process') === 'other') $otherRows[] = $dd; else $procRows[] = $dd;
 }
+/* 扣款還沒確定（生管尚未填「通知扣款單號」）前，不印任何扣款資料（金額、明細、說明、數量、單價），
+   表格框線仍保留（紙本固定有這一塊，高度才一致），等生管確認後再印出內容。 */
+$deductConfirmed = trim((string)($o['deduct_notify_no'] ?? '')) !== '';
+if (!$deductConfirmed) {
+    $procRows = []; $otherRows = [];
+    $tot = ['process_rated' => null, 'total' => null] + (array)$tot;
+    $tot['process_rated'] = null; $tot['total'] = null;
+    $o['deduct_desc'] = ''; $o['deduct_qty'] = null; $o['deduct_unit_amt'] = null;
+}
 $procDesc = $o['deduct_desc'];
 if ($procRows) $procDesc = '見下方計入扣款的製程';   // 站名與金額明細已列在下方「計入扣款的製程」表格
 /* 製程說明會把每一站都列出來，站數一多就會撐高整列（紙本只有一列的高度）。
