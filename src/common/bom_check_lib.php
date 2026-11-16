@@ -81,11 +81,11 @@ if (!function_exists('eg_bomchk_can_report')) {
 }
 if (!function_exists('eg_bomchk_csrf')) {
     function eg_bomchk_csrf(): string {
-        if (empty($_SESSION['bom_chk_csrf'])) $_SESSION['bom_chk_csrf'] = bin2hex(random_bytes(16));
-        return $_SESSION['bom_chk_csrf'];
+        // 由登入 session id 推導（不寫回 session）：總覽頁在輸出前就關閉 session，存進去的 token 會遺失
+        return hash_hmac('sha256', 'bom_chk_csrf', (string)session_id());
     }
     function eg_bomchk_csrf_ok($t): bool {
-        return $t !== null && $t !== '' && hash_equals((string)($_SESSION['bom_chk_csrf'] ?? ''), (string)$t);
+        return $t !== null && $t !== '' && session_id() !== '' && hash_equals(eg_bomchk_csrf(), (string)$t);
     }
 }
 if (!function_exists('eg_bomchk_uname')) {
