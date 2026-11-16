@@ -43,8 +43,15 @@ if (!function_exists('eg_role_page_r_ensure')) {
     function eg_role_page_r_ensure(PDO $pdo, int $uid, string $module): bool {
         $map = eg_role_page_r_modules();
         if (!isset($map[$module]) || $uid <= 0) return false;
+        return eg_role_page_r_ensure_file($pdo, $uid, $map[$module]);
+    }
+}
+
+if (!function_exists('eg_role_page_r_ensure_file')) {
+    /** 同上，但直接指定頁面檔名（例如 as_schedule.php）。AS 負責人交接頁用它補頁面 R。 */
+    function eg_role_page_r_ensure_file(PDO $pdo, int $uid, string $file): bool {
+        if ($uid <= 0 || $file === '') return false;
         try {
-            $file = $map[$module];
             $st = $pdo->prepare("SELECT page_id, group_id FROM system_module_pages
                                  WHERE page_url LIKE ? ORDER BY page_id ASC LIMIT 1");
             $st->execute(['%/' . $file]);

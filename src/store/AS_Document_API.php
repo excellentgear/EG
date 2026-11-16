@@ -1917,6 +1917,8 @@ case 'tree_web_pages':
     jout(['status'=>'success','pages'=>$outp]);
 
 case 'save_tree_auto':
+    // 自動核准＝繞過簽核的設定，AS負責人（只有 settings 權）不可使用，限管理員（2026-11-16 交接頁）
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'結構總覽自動核准設定僅限 AS 管理員']);
     asSetSetting($db, 'as_doc_tree_auto_approve', ($_POST['auto'] ?? '0')==='1' ? '1' : '0');
     jout(['status'=>'success']);
 
