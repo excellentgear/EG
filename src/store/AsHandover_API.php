@@ -73,7 +73,7 @@ switch ($action) {
         $owners = ash_holders($db, 'asdoc_editor', $idx);
         $admins = ash_holders($db, 'asdoc_page_admin', $idx);
         $health = [];
-        foreach ($owners as $o) $health['o' . $o['id']] = ash_health($db, $o['id'], 'owner');
+        foreach ($owners as $o) $health['o' . $o['id']] = ash_health($db, $o['id'], 'owner') + ['name' => $o['name']];
         // 其他有 AS 管理員類角色、卻不是管理員身分的人（例如單獨被給了 doc_apply_admin）
         $strays = [];
         foreach (['doc_apply_admin', 'asched_admin', 'asdoc_backfill', 'ia_admin', 'type_id_ctrl_admin', 'sopsip_admin'] as $c) {

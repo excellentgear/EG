@@ -183,7 +183,7 @@ $(function(){
         });
         Object.keys(S.health).forEach(function(k){
             var h = S.health[k];
-            h.bad.forEach(function(b){ alerts.push('AS 負責人被給了不該有的權限：'+esc(b.code)+'（'+esc(b.why)+'）'); });
+            h.bad.forEach(function(b){ alerts.push('AS 負責人「'+esc(h.name||'')+'」被給了不該有的權限：'+esc(b.name)+'（'+esc(b.why)+'）'); });
         });
         if (S.owners.length > 1) alerts.push('目前有 '+S.owners.length+' 位 AS 負責人，負責人應只有一人。');
         if (S.owners.length === 0 && !S.state.paused_user_id) alerts.push('目前沒有 AS 負責人。');

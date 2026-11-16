@@ -399,11 +399,14 @@ if (!function_exists('ash_health')) {
     function ash_health(PDO $db, int $uid, string $preset): array {
         $plan = ash_plan($db, $uid, $preset);
         $bad = [];
+        $idx = ash_role_index($db); $pages = ash_pages($db);
+        $rn = fn($c) => $idx[$c]['name'] ?? $c;       // 一律顯示中文名稱，不給人看角色代碼
+        $pn = fn($f) => $pages[$f]['name'] ?? $f;
         if ($preset === 'owner') {
-            foreach ($plan['remove'] as $c) $bad[] = ['kind' => 'role', 'code' => $c, 'why' => '負責人不該持有管理員角色'];
-            foreach ($plan['page_strip_a'] as $f) $bad[] = ['kind' => 'page', 'code' => $f, 'why' => '該頁被給了 A（管理）權限，等於管理員'];
+            foreach ($plan['remove'] as $c) $bad[] = ['kind' => 'role', 'code' => $c, 'name' => $rn($c), 'why' => '負責人不該持有管理員角色'];
+            foreach ($plan['page_strip_a'] as $f) $bad[] = ['kind' => 'page', 'code' => $f, 'name' => $pn($f), 'why' => '該頁被給了 A（管理）權限，等於管理員'];
         }
-        $missing = array_merge($plan['add'], $plan['page_add']);
+        $missing = array_merge(array_map($rn, $plan['add']), array_map($pn, $plan['page_add']));
         return ['bad' => $bad, 'missing' => $missing, 'ok' => !$bad && !$missing];
     }
 }
