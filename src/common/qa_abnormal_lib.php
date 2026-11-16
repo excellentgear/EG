@@ -3602,6 +3602,32 @@ function qab_scrap_alloc(PDO $db, ?string $ymd = null): string
  * 只有 save_disposition／save_gm 這兩個會改變「最終決策」的動作才需要呼叫，其餘動作不影響最終決策。
  * @return string 被收回的單號；沒有動作則回傳空字串（方便呼叫端判斷要不要寫紀錄）
  */
+/**
+ * 決策不再是報廢（例如改成轉呈）、也沒有勾扣款時，撤回當初報廢自動帶入的扣款資料：
+ * 製程金額列、扣款數量。只在「還沒人確認過」時才動（沒有手動「其他」列、沒填通知扣款單號、
+ * 生管／會計都還沒簽），生管已經開始處理的單一律不碰。回傳撤回的列數，0＝沒動。
+ */
+function qab_deduct_withdraw(PDO $db, int $id): int
+{
+    try {
+        $o = qab_order($db, $id);
+        if (!$o || !empty($o['final']['is_scrap']) || !empty($o['gm_deduct'])) return 0;
+        if (trim((string)($o['deduct_notify_no'] ?? '')) !== '' || !empty($o['deduct_pm_at']) || !empty($o['deduct_appr_at']) || !empty($o['deduct_exec'])) return 0;
+        $oth = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_deduct WHERE order_id=? AND kind<>'process'");
+        $oth->execute([$id]);
+        if ((int)$oth->fetchColumn() > 0) return 0;
+        $del = $db->prepare("DELETE FROM qa_abnormal_deduct WHERE order_id=? AND kind='process'");
+        $del->execute([$id]);
+        $n = $del->rowCount();
+        $db->prepare("UPDATE qa_abnormal_order SET deduct_qty=NULL, deduct_unit_amt=NULL WHERE id=?")->execute([$id]);
+        if ($n > 0) {
+            $db->prepare("INSERT INTO qa_abnormal_edit_log (abnormal_order_id, action, reason, before_json, after_json, changed_by, changed_at) VALUES (?,?,?,?,?,NULL,NOW())")
+               ->execute([$id, 'deduct_withdraw', '決策不再是報廢，撤回自動帶入的扣款資料', $n . ' 列製程扣款', '']);
+        }
+        return $n;
+    } catch (Throwable $e) { error_log('qab_deduct_withdraw: ' . $e->getMessage()); return 0; }
+}
+
 function qab_scrap_no_sync(PDO $db, int $id): string
 {
     $o = qab_order($db, $id);
@@ -3618,6 +3644,8 @@ function qab_scrap_no_sync(PDO $db, int $id): string
             if (!$hasProc && !empty($o['bom_list'])) qab_deduct_autofill_apply($db, $id, (int)($o['disp_decided_by'] ?: $o['gm_decided_by'] ?: 0));
         } catch (Throwable $e) { error_log('qab deduct autofill: ' . $e->getMessage()); }
         qab_notify_deduct_fill($db, $o);
+    } else {
+        qab_deduct_withdraw($db, $id);   // 不再是報廢：撤回自動帶入、還沒人確認的扣款資料
     }
     // 判定報廢 → 請業務回填補做／不補；改回非報廢 → 尚未回覆的作廢（冪等，失敗不影響決策存檔）
     qab_remake_ensure($db, $id, (int)($o['disp_decided_by'] ?: $o['gm_decided_by'] ?: 0));
