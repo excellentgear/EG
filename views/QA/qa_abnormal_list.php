@@ -89,6 +89,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
         .nt i { font-style:normal; padding:0 5px; border-radius:3px; background:#F7E0BD; color:#6b4a1f; }
         .nt-read i { background:#F0A24B; color:#fff; }
         .nt-acted i { background:#8a5a2b; color:#fff; }
+        .nt-recalled { opacity:.65; text-decoration:line-through; } .nt-recalled i { background:#B8A58C; color:#fff; text-decoration:none; display:inline-block; }
         .cat-tabs { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 0; border-bottom:2px solid var(--line); }
         .cat-tab { border:1px solid var(--line); border-bottom:0; border-radius:6px 6px 0 0; background:var(--sand); color:var(--ink2);
                    padding:5px 12px; font-size:13px; cursor:pointer; line-height:18px; }

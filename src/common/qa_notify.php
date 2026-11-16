@@ -133,6 +133,35 @@ if (!function_exists('eg_qa_insert_event')) {
         if (defined('QAB_SILENT')) return 0;   // 測試用：整個不發任何通知（CLI 測試腳本才會 define，正式環境不會有）
         $refType = $opts['ref_type'] ?? 'QA';
         $refId   = (int)($opts['ref_id'] ?? $orderId);
+        /* 避免重複通知：同一張單、同類型、標題完全相同、收件人有重疊，且還沒有人處理（回簽／回覆）的舊通知，
+           先收回（結束日改昨天，資料保留）再發新的；收回的通知 id 記進編輯記錄，清單通知資訊標「已收回」。
+           失敗不影響發送。 */
+        try {
+            $old = $db->prepare("SELECT id, title FROM live_event WHERE ref_type=? AND ref_id=? AND title=? AND source='品質異常單'
+                                    AND (enddate IS NULL OR enddate >= CURDATE())");
+            $old->execute([$refType, $refId, $title]);
+            $newKeys = [];
+            foreach ($targets as $t) { $tid = (int)($t['id'] ?? 0); if ($tid > 0) $newKeys[(($t['type'] ?? '') === 'dept' ? 'dept' : 'user') . '-' . $tid] = 1; }
+            $recalled = [];
+            foreach ($old->fetchAll(PDO::FETCH_ASSOC) as $oe) {
+                $oid = (int)$oe['id'];
+                $acted = $db->prepare("SELECT COUNT(*) FROM live_event_response WHERE live_event_id=? AND (signed_at IS NOT NULL OR replied_at IS NOT NULL)");
+                $acted->execute([$oid]);
+                if ((int)$acted->fetchColumn() > 0) continue;   // 已有人處理過的是歷史，不動
+                $ot = $db->prepare("SELECT target_type, target_id FROM live_event_target WHERE live_event_id=?");
+                $ot->execute([$oid]);
+                $hit = false;
+                foreach ($ot->fetchAll(PDO::FETCH_ASSOC) as $x) if (isset($newKeys[$x['target_type'] . '-' . (int)$x['target_id']])) { $hit = true; break; }
+                if (!$hit) continue;
+                $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([$oid]);
+                $recalled[] = ['id' => $oid, 'title' => (string)$oe['title']];
+            }
+            if ($recalled && $refType !== 'QA_EDIT_REQ') {
+                $db->prepare("INSERT INTO qa_abnormal_edit_log (abnormal_order_id, action, reason, before_json, after_json, changed_by, changed_at)
+                              VALUES (?,?,?,?,?,?,NOW())")
+                   ->execute([$refId, 'notice_recall', '相同通知重發，收回原通知', '', json_encode($recalled, JSON_UNESCAPED_UNICODE), $createdBy ?: null]);
+            }
+        } catch (Throwable $e) { error_log('[qa_notify] dedupe failed: ' . $e->getMessage()); }
         $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, reply_deadline, show_status_to_others, ref_type, ref_id)
                       VALUES (CURDATE(), NULL, ?, ?, 0, ?, '品質異常單', ?, 1, ?, ?)")
            ->execute([$title, $content, ($createdBy ?: null), ($replyDeadline ?: null), $refType, $refId]);

@@ -3915,6 +3915,27 @@ function qab_retire_pending_notices(PDO $db, int $orderId, string $which, int $a
 
 
 /**
+ * 決策改成「轉呈」（或不再是報廢）時，收回先前因報廢決策發出、現在已不成立的通知：
+ * 裁決（報廢）結果、請填寫扣款確認、報廢補做待回覆。做法同其他收回（結束日改昨天，資料保留），
+ * 回傳被收回的通知 [['id','title'],...]，由呼叫端寫進編輯記錄；清單的通知資訊會據此標「已收回」。
+ */
+function qab_recall_scrap_notices(PDO $db, int $orderId): array
+{
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT id, title FROM live_event
+                             WHERE ref_id=? AND ref_type='QAB_L1' AND (enddate IS NULL OR enddate >= CURDATE())
+                               AND (title LIKE '品質異常單裁決：%（報廢）' OR title LIKE '%請填寫扣款確認：%' OR title LIKE '報廢補做待回覆：%')");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([(int)$r['id']]);
+            $out[] = ['id' => (int)$r['id'], 'title' => (string)$r['title']];
+        }
+    } catch (Throwable $e) { error_log('[qab] recall scrap notices failed: ' . $e->getMessage()); }
+    return $out;
+}
+
+/**
  * 這張 BOM 已經「結案配發報廐單號」的確認報廐數量——待包裝／BOM總覽／檢驗表的「良品數」、
  * 快速出貨的可出量，一律呼叫這支，不要各自寫一份加總（鐵律4）。
  *
@@ -5201,7 +5222,7 @@ function qab_notify_info(PDO $db, array $orderIds): array
     if ($allUsers) {
         foreach ($db->query("SELECT id, user_cname FROM `user` WHERE id IN (" . implode(',', array_keys($allUsers)) . ")")->fetchAll(PDO::FETCH_ASSOC) as $r) $names[(int)$r['id']] = (string)$r['user_cname'];
     }
-    $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j', $t) : ''; };
+    $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j H:i', $t) : ''; };
     /* 「已決策」後面接上實際決策內容（例：已決策-報廢／已決策-轉呈技術課主管裁示）。
        只取目前單上的決策結果；決策者改過決策（例如報廢後改轉呈）時顯示的是最新結果。 */
     $decTxt = [];
@@ -5218,6 +5239,12 @@ function qab_notify_info(PDO $db, array $orderIds): array
             if ((int)$r['gm_decided_by'] > 0 && !empty($on[$oid]['gm'])) $decTxt[$oid][(int)$r['gm_decided_by']] = implode('、', $on[$oid]['gm']);
         }
     } catch (Throwable $ex) { $decTxt = []; }
+    $recalled = [];   // 決策改變時被收回的通知（編輯記錄 notice_recall 留的 event id）
+    try {
+        foreach ($db->query("SELECT after_json FROM qa_abnormal_edit_log WHERE abnormal_order_id IN ($in) AND action='notice_recall'")->fetchAll(PDO::FETCH_COLUMN) as $nv) {
+            foreach ((array)json_decode((string)$nv, true) as $x) if (!empty($x['id'])) $recalled[(int)$x['id']] = 1;
+        }
+    } catch (Throwable $ex) {}
     $best = [];   // orderId => key(label|uid) => row
     foreach ($evs as $e) {
         $eid = (int)$e['id']; $oid = (int)$e['ref_id'];
@@ -5254,12 +5281,13 @@ function qab_notify_info(PDO $db, array $orderIds): array
             }
             $status = $state === 'acted' ? ($isReply ? '已回覆' : '已決策') : ($state === 'read' ? '已讀' : '已通知');
             if ($state === 'acted' && !$isReply && $isDecide && ($decTxt[$oid][$u] ?? '') !== '') $status .= '-' . $decTxt[$oid][$u];
+            if (isset($recalled[$eid]) && !$acted) { $status = '已收回'; $state = 'recalled'; }
             $rows[] = ['u' => $u, 'label' => $label, 'name' => $names[$u] ?? ('#' . $u), 'date' => $md($dt), 'status' => $status, 'state' => $state, 'acted' => $acted];
         }
         if (($isReply || $isDecide) && array_filter($rows, function ($x) { return $x['acted']; })) {
             $rows = array_values(array_filter($rows, function ($x) { return $x['acted']; }));   // 一人處理即可：只留處理的人
         }
-        $rank = ['notified' => 0, 'read' => 1, 'acted' => 2];
+        $rank = ['notified' => 0, 'read' => 1, 'recalled' => 1, 'acted' => 2];
         foreach ($rows as $x) {
             $k = $x['label'] . '|' . $x['u'];
             if (!isset($best[$oid][$k]) || $rank[$x['state']] >= $rank[$best[$oid][$k]['state']]) $best[$oid][$k] = $x;
@@ -5282,7 +5310,7 @@ function qab_notify_info_legacy(PDO $db, array $orderIds, array $out): array
 {
     try {
         $in = implode(',', array_map('intval', $orderIds));
-        $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j', $t) : ''; };
+        $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j H:i', $t) : ''; };
         $nm = [];
         $uname = function ($u) use ($db, &$nm) {
             $u = (int)$u; if ($u <= 0) return '';
