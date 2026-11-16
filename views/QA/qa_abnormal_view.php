@@ -17,6 +17,7 @@ if (!isset($_SESSION['id'])) {
 }
 include_once '../../src/common/DBConnection.php';
 require_once '../../src/common/qa_notify.php';
+require_once '../../src/common/qa_abnormal_lib.php';
 
 $conn = new DBConnection();
 $db   = $conn->getPDO();
@@ -39,6 +40,29 @@ if (!$order) {
     echo "<script>alert('找不到異常單');history.length>1?history.back():window.close();</script>";
     exit();
 }
+// ── 決策資訊（新式異常單：處置方式／裁示／決策者與時間／報廢單號／目前狀態），取自單據本身 ──
+$dec = null;
+try {
+    $qo = qab_order($db, (int)$order['id']);
+    if ($qo) {
+        $gmL = qab_gm_label($db);
+        $fmt = function ($dt) { $t = strtotime((string)$dt); return $t ? date('Y.m.d H:i', $t) : ''; };
+        $dispTxt = $qo['disp_names'] ? implode('、', $qo['disp_names']) : (!empty($qo['escalate_gm']) ? '轉呈' . $gmL . '裁示' : '');
+        $st = (array)($qo['status'] ?? []);
+        $stLabel = (string)($st['label'] ?? '');
+        if (($st['code'] ?? '') === 'gm') $stLabel = '待' . $gmL . '裁示';
+        $dec = [
+            'disp'    => $dispTxt,
+            'disp_by' => $qo['decided_name'] ? ($qo['decided_name'] . (!empty($qo['disp_by_deputy']) ? '（代）' : '') . ($qo['disp_decided_at'] ? '　' . $fmt($qo['disp_decided_at']) : '')) : '',
+            'gm'      => $qo['gm_names'] ? implode('、', $qo['gm_names']) : '',
+            'gm_by'   => !empty($qo['gm_decided_name']) ? ($qo['gm_decided_name'] . (!empty($qo['gm_by_deputy']) ? '（代）' : '') . ($qo['gm_decided_at'] ? '　' . $fmt($qo['gm_decided_at']) : '')) : '',
+            'gm_label'=> $gmL,
+            'scrap_no'=> (string)($qo['scrap_no'] ?? ''),
+            'status'  => $stLabel,
+            'gm_note' => (string)($qo['gm_note'] ?? ''),
+        ];
+    }
+} catch (Throwable $e) { $dec = null; }
 // 未帶 event 時用主通知（回覆回簽介面掛在主通知上）
 if (!$eventId) $eventId = (int)($order['notify_event_id'] ?? 0);
 
@@ -202,7 +226,15 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
             <div class="kv"><b>發現單位</b><?= h($order['found_unit'] ?: '-') ?></div>
             <div class="kv"><b>責任單位</b><?= h($order['resp_desc'] ?: '未指定') ?></div>
             <div class="kv"><b>5M+T 分類</b><?= h($order['defect_category'] ?: '-') ?></div>
+            <?php if ($dec): ?>
+            <?php if ($dec['status'] !== ''): ?><div class="kv"><b>目前狀態</b><span class="tag" style="background:#8a5a2b;"><?= h($dec['status']) ?></span></div><?php endif; ?>
+            <div class="kv"><b>處置方式</b><?= h($dec['disp'] ?: ($order['disposition'] ?: '待決策')) ?></div>
+            <?php if ($dec['disp_by'] !== ''): ?><div class="kv"><b>決 策 者</b><?= h($dec['disp_by']) ?></div><?php endif; ?>
+            <?php if ($dec['gm'] !== '' || $dec['gm_by'] !== ''): ?><div class="kv"><b><?= h($dec['gm_label']) ?>裁示</b><?= h($dec['gm'] ?: '—') ?><?= $dec['gm_by'] !== '' ? '（' . h($dec['gm_by']) . '）' : '' ?></div><?php endif; ?>
+            <?php if ($dec['scrap_no'] !== ''): ?><div class="kv"><b>報廢單號</b><?= h($dec['scrap_no']) ?></div><?php endif; ?>
+            <?php else: ?>
             <div class="kv"><b>處置方式</b><?= h($order['disposition'] ?: '-') ?></div>
+            <?php endif; ?>
             <div class="kv"><b>開 單 人</b><?= h($order['created_by_name'] ?: '-') ?><?= $order['created_at'] ? '（' . h($order['created_at']) . '）' : '' ?></div>
             <?php if ($followers): ?><div class="kv"><b>追蹤人員</b><?= h(implode('、', $followers)) ?></div><?php endif; ?>
             <?php if (!empty($order['is_closed'])): ?><div class="kv"><b>狀　　態</b><span class="tag" style="background:#8a9bab;">已結案</span></div><?php endif; ?>
