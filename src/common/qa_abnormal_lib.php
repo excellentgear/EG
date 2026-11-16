@@ -3866,6 +3866,21 @@ function qab_save_decision(PDO $db, int $id, string $which, array $items, string
 }
 
 /**
+ * 異常單被刪除：這張單所有仍有效的通知（待決策／待裁示／扣款確認／補登廠商／回覆結果…）一併收回，
+ * 免得別人的鈴鐺上還掛著一張已經不存在的單。QA_EDIT_REQ 的 ref_id 是「修改請求 id」不是單號，不在此處理。
+ * 只把有效期限設為昨天（不刪資料，通知紀錄與歷史仍保留）；失敗不影響刪除本身。
+ */
+function qab_retire_all_notices(PDO $db, int $orderId): void
+{
+    try {
+        $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_id=? AND ref_type LIKE 'QA%' AND ref_type <> 'QA_EDIT_REQ'
+                        AND (enddate IS NULL OR enddate >= CURDATE())")
+           ->execute([$orderId]);
+    } catch (Throwable $e) { error_log('[qab] retire all notices failed: ' . $e->getMessage()); }
+}
+
+/**
  * 任一人完成某階段決策（含管理員補簽／代簽）後，把該階段仍掛著的「待處理」通知全部收掉，
  * 避免同一件事其他收件人（另一位決策者、代理人、第二層…）鈴鐺／我的待辦還掛著已處理完的要求。
  * 只動「這張單、這個階段」的待處理類通知（enddate 設為昨天）並幫處理者補上已閱回簽；
@@ -5054,9 +5069,11 @@ function qab_notify_deduct_fill(PDO $db, array $o, bool $force = false): void
         $ids = qab_deduct_notify_ids($db);
         if (!$ids) { $db->prepare("UPDATE qa_abnormal_order SET deduct_notified_sig=? WHERE id=?")->execute([$prev !== '' ? $prev : null, $id]); return; }
         $no = (string)($o['abnormal_order_no'] ?? '');
-        $targets = array_map(function ($u) { return ['type' => 'user', 'id' => (int)$u, 'mode' => 'read']; }, $ids);
+        $targets = array_map(function ($u) { return ['type' => 'user', 'id' => (int)$u, 'mode' => 'sign']; }, $ids);   // 要填扣款＝要處理的待辦（回簽），鈴鐺才會歸在「只看待辦」
         eg_qa_insert_event($db, $id, ($prev !== '' ? '決策已更新，請填寫扣款確認：' : '請填寫扣款確認：') . $no,
-            '異常單 ' . $no . ' 已決策報廢，請到異常單的「扣款確認」填寫扣款金額與通知扣款單號' . ((int)($o['abn_total_qty'] ?? 0) > 0 ? '（異常總數 ' . (int)$o['abn_total_qty'] . ' PCS 已帶入數量）' : '') . '。',
+            ((string)($o['bom_no'] ?? '') !== '' ? $o['bom_no'] : '（未綁定）') . '　料號 ' . ((string)($o['part_no'] ?? '') !== '' ? $o['part_no'] : '—')
+            . '　NG×' . (($o['ng_qty'] ?? '') !== '' && $o['ng_qty'] !== null ? (float)$o['ng_qty'] + 0 : '—')
+            . '　異常單 ' . $no . ' 已決策報廢，請到異常單的「扣款確認」填寫扣款金額與通知扣款單號' . ((int)($o['abn_total_qty'] ?? 0) > 0 ? '（異常總數 ' . (int)$o['abn_total_qty'] . ' PCS 已帶入數量）' : '') . '。',
             $targets, null, 0, ['ref_type' => 'QAB_L1', 'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
     } catch (Throwable $e) { error_log('qab_notify_deduct_fill: ' . $e->getMessage()); }
 }
@@ -5129,7 +5146,7 @@ function qab_deduct_fill_missing(PDO $db, int $id, int $uid, bool $inTx = false)
 function qab_deduct_ensure_rows(PDO $db, int $id, int $uid): void
 {
     $o = qab_order($db, $id);
-    if (!$o || !empty($o['is_closed']) || !empty($o['deduct_appr_at']) || empty($o['bom_list'])) return;
+    if (!$o || !empty($o['deduct_appr_at']) || empty($o['bom_list'])) return;   // 已結案的報廢單仍要能填扣款（會計核准後才鎖）
     if (empty($o['final']['is_scrap']) && empty($o['gm_deduct'])) return;
     $has = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_deduct WHERE order_id=" . (int)$id . " AND kind='process'")->fetchColumn();
     if ($has === 0) qab_deduct_autofill_apply($db, $id, $uid); else qab_deduct_fill_missing($db, $id, $uid);
@@ -5185,6 +5202,22 @@ function qab_notify_info(PDO $db, array $orderIds): array
         foreach ($db->query("SELECT id, user_cname FROM `user` WHERE id IN (" . implode(',', array_keys($allUsers)) . ")")->fetchAll(PDO::FETCH_ASSOC) as $r) $names[(int)$r['id']] = (string)$r['user_cname'];
     }
     $md = function ($dt) { $t = strtotime((string)$dt); return $t ? date('n/j', $t) : ''; };
+    /* 「已決策」後面接上實際決策內容（例：已決策-報廢／已決策-轉呈技術課主管裁示）。
+       只取目前單上的決策結果；決策者改過決策（例如報廢後改轉呈）時顯示的是最新結果。 */
+    $decTxt = [];
+    try {
+        $optMap = qab_option_map($db);
+        $gmL = qab_gm_label($db);
+        $ost = $db->query("SELECT id, escalate_gm, disp_decided_by, gm_decided_by FROM qa_abnormal_order WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
+        $oo = $db->query("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in) AND kind IN ('disp','gm')")->fetchAll(PDO::FETCH_ASSOC);
+        $on = [];
+        foreach ($oo as $r) { $n = (string)($optMap[(int)$r['opt_id']]['name'] ?? ''); if ($n !== '') $on[(int)$r['order_id']][$r['kind']][] = $n; }
+        foreach ($ost as $r) {
+            $oid = (int)$r['id'];
+            if ((int)$r['disp_decided_by'] > 0) $decTxt[$oid][(int)$r['disp_decided_by']] = !empty($r['escalate_gm']) ? '轉呈' . $gmL . '裁示' : implode('、', $on[$oid]['disp'] ?? []);
+            if ((int)$r['gm_decided_by'] > 0 && !empty($on[$oid]['gm'])) $decTxt[$oid][(int)$r['gm_decided_by']] = implode('、', $on[$oid]['gm']);
+        }
+    } catch (Throwable $ex) { $decTxt = []; }
     $best = [];   // orderId => key(label|uid) => row
     foreach ($evs as $e) {
         $eid = (int)$e['id']; $oid = (int)$e['ref_id'];
@@ -5194,7 +5227,7 @@ function qab_notify_info(PDO $db, array $orderIds): array
         $isDecide = ($e['ref_type'] === 'QA_DECIDE' || $e['ref_type'] === 'QA_DECIDE_F' || $e['ref_type'] === 'QA_QC_REVIEW'
                      || ($e['ref_type'] === 'QAB_L1' && preg_match('/待裁決|待決策|轉呈決策|轉回第一層/u', $title))
                      || ($e['ref_type'] === 'QA' && preg_match('/待.*裁示/u', $title)));
-        $isReply = !empty($modes[$eid]['reply']) || !empty($modes[$eid]['sign']);
+        $isReply = (!empty($modes[$eid]['reply']) || !empty($modes[$eid]['sign'])) && !preg_match('/請填寫扣款確認/u', $title);   // 扣款確認通知維持原標籤，不歸成「單位意見」
         if ($isReply) $label = '單位意見';
         elseif ($isDecide) $label = '待決策';
         elseif (preg_match('/^品質異常單裁決：.*（(.+)）$/u', $title, $m)) $label = '決策' . $m[1];
@@ -5220,6 +5253,7 @@ function qab_notify_info(PDO $db, array $orderIds): array
                 elseif (!empty($r['read_at']) || (!$isReply && !$isDecide && !empty($r['signed_at']))) { $state = 'read'; $dt = $r['read_at'] ?: $r['signed_at']; }
             }
             $status = $state === 'acted' ? ($isReply ? '已回覆' : '已決策') : ($state === 'read' ? '已讀' : '已通知');
+            if ($state === 'acted' && !$isReply && $isDecide && ($decTxt[$oid][$u] ?? '') !== '') $status .= '-' . $decTxt[$oid][$u];
             $rows[] = ['u' => $u, 'label' => $label, 'name' => $names[$u] ?? ('#' . $u), 'date' => $md($dt), 'status' => $status, 'state' => $state, 'acted' => $acted];
         }
         if (($isReply || $isDecide) && array_filter($rows, function ($x) { return $x['acted']; })) {
