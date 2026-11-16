@@ -81,7 +81,7 @@ $canUse = ash_is_sys_admin($db, $uid) || eg_asdoc_is_admin($db, $uid);
     <div class="right_col" role="main">
         <div class="page-title">
             <h3><i class="fa fa-exchange"></i> AS負責人交接與權限</h3>
-            <a class="ah-btn" href="flow_map.php" style="line-height:28px;text-decoration:none"><i class="fa fa-sitemap"></i> AS 流程地圖</a>
+            <a class="ah-btn" href="../admin/flow_map.php" style="line-height:28px;text-decoration:none"><i class="fa fa-sitemap"></i> AS 流程地圖</a>
             <button class="page-help-btn" id="btnPageHelp" style="margin-left:0"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
 <?php if (!$canUse): ?>
