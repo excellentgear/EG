@@ -1149,6 +1149,8 @@ if (!function_exists('commitERPRows')) {
             $insertCount++;
         }
         $diffCount = isbl_record_diffs($db, $plan, $uidInt);
+        // 別名客戶（如「如陽科技」→「如陽」）：補客戶編號、料號主檔改指到該客戶的正式那筆
+        try { require_once __DIR__ . '/../../src/common/acc_lib.php'; acc_alias_apply_to_is_list($db); } catch (Throwable $e) { error_log('alias apply: '.$e->getMessage()); }
         $db->commit();
         return ['deleted' => $deletedRows, 'inserted' => $insertCount, 'locked' => count($plan['locked_ids']),
                 'same' => $plan['same'], 'changed' => count($plan['changed']), 'missing' => count($plan['missing']), 'diffs' => $diffCount];
@@ -1167,7 +1169,14 @@ if (!function_exists('lookupCustomerIdsByName')) {
             if ($name === '') continue;
             $stmt->execute([$name, $name]);
             $cid = $stmt->fetchColumn();
-            if ($cid !== false) $map[$name] = $cid;
+            if ($cid !== false) { $map[$name] = $cid; continue; }
+            // 找不到主檔簡稱／全名時，再查別名對照（例：出貨寫「如陽科技」、主檔是「如陽」）
+            try {
+                $al = $db->prepare("SELECT customer_id FROM acc_customer_alias WHERE alias_name = ? LIMIT 1");
+                $al->execute([$name]);
+                $acid = $al->fetchColumn();
+                if ($acid !== false && $acid !== '') $map[$name] = $acid;
+            } catch (Throwable $e) {}
         }
         return $map;
     }

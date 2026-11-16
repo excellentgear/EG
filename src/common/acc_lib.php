@@ -1846,6 +1846,46 @@ function acc_customer_guess(PDO $db, string $name, int $limit = 5): array
 }
 
 /**
+ * 別名套用到出貨明細（唯一實作）：
+ * ①補 is_list.Client_id（只補空的） ②把「匯入時因客戶對不上而自動建的無客戶料號主檔」改指到
+ *   同料號、同客戶的正式主檔（訂單用的是正式那筆，不改的話快速出貨認不出是同一個料號）。
+ * $alias 為空字串＝套用全部別名（匯入後／補舊資料用）。回傳 ['filled'=>補客戶編號筆數,'repointed'=>改指料號筆數]
+ */
+function acc_alias_apply_to_is_list(PDO $db, string $alias = ''): array
+{
+    $filled = 0; $repointed = 0;
+    $aliases = [];
+    foreach ($db->query("SELECT alias_name, customer_id FROM acc_customer_alias")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $a = trim((string)$r['alias_name']);
+        if ($a !== '' && ($alias === '' || $a === trim($alias))) $aliases[$a] = trim((string)$r['customer_id']);
+    }
+    $upC = $db->prepare("UPDATE is_list SET Client_id = ?
+                         WHERE TRIM(Client_name) = ? AND (Client_id IS NULL OR TRIM(Client_id) = '')");
+    $sel = $db->prepare("SELECT DISTINCT il.d_setting_id AS bad, good.d_id AS good
+                           FROM is_list il
+                           JOIN d_setting bad ON bad.d_id = il.d_setting_id
+                                              AND (bad.Customer_Id IS NULL OR TRIM(bad.Customer_Id) = '')
+                           JOIN d_setting good ON good.D_Setting_Id = bad.D_Setting_Id AND good.Customer_Id = ?
+                          WHERE TRIM(il.Client_name) = ?");
+    $rp = $db->prepare("UPDATE is_list SET d_setting_id = ?
+                         WHERE TRIM(Client_name) = ? AND d_setting_id = ?");
+    foreach ($aliases as $a => $cid) {
+        if ($cid === '') continue;
+        $upC->execute([$cid, $a]);
+        $filled += $upC->rowCount();
+        $sel->execute([$cid, $a]);
+        $pairs = [];
+        foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $x) $pairs[(int)$x['bad']][] = (int)$x['good'];
+        foreach ($pairs as $bad => $goods) {
+            if (count($goods) !== 1) continue;          // 同料號在該客戶下有多筆主檔＝無法判斷，不猜
+            $rp->execute([$goods[0], $a, $bad]);
+            $repointed += $rp->rowCount();
+        }
+    }
+    return ['filled' => $filled, 'repointed' => $repointed];
+}
+
+/**
  * 建立別名並回填歷史出貨的 is_list.Client_id（使用者 2026-08-28 指定：一律回填）。
  * 回填只補「原本是空的」那些列，不動金額、不動帳款月份，全程留稽核。
  */
@@ -1886,11 +1926,8 @@ function acc_customer_alias_bind(PDO $db, string $alias, string $customerId, ?ar
            ->execute([$alias, $customerId, $user ? (int)$user['id'] : null,
                       $user ? (string)$user['user_cname'] : null]);
 
-        $up = $db->prepare("UPDATE is_list SET Client_id = ?
-                            WHERE TRIM(Client_name) = ?
-                              AND (Client_id IS NULL OR TRIM(Client_id) = '')");
-        $up->execute([$customerId, $alias]);
-        $filled = $up->rowCount();
+        $ap = acc_alias_apply_to_is_list($db, $alias);
+        $filled = $ap['filled'];
         $db->commit();
 
         acc_audit($db, 'ACC_EDIT', 'customer_alias', $alias, $alias . ' → ' . $c['customer'],
