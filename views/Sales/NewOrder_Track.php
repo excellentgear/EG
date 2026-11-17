@@ -5766,6 +5766,11 @@ foreach($dCounts as $c) {
                             <h3>訂單追蹤 <small>(權限：<?= safe_html($_perm_label) ?>)</small></h3>
                         </div>
                         <button id="btnPageHelp" class="page-help-btn" style="float:right;margin:10px 0 0 8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
+                        <?php if (!empty($proc_view)): ?>
+                        <!-- 製程中紀錄（唯讀總覽，2026-11-17）：另開新分頁，依客戶／料號分組，不可編輯 -->
+                        <button type="button" id="btnProcLogView" class="page-help-btn" style="float:right;margin:10px 0 0 8px;"
+                                onclick="window.open('Process_Log_View.php','egProcLogView')" title="另開新分頁，唯讀檢視所有製程中紀錄（依客戶／料號分組，含 BOM 編號）"><i class="fa fa-wrench"></i> 製程中紀錄</button>
+                        <?php endif; ?>
                     </div>
                     <div class="clearfix"></div>
 
