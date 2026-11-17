@@ -3036,7 +3036,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_to_task') {
         if (!rf_has_module_role($pdo, (int)$id, 'personal_task')) throw new Exception('您尚未取得「個人工作紀錄」的使用權限，請先到個人工作紀錄頁申請');
         $rmIn = trim((string)($_POST['remind_before_minutes'] ?? ''));
         $r = ptl_create($pdo, (int)$id, (int)($_POST['log_id'] ?? 0), (int)($_POST['id'] ?? 0),
-                        (string)($_POST['deadline'] ?? ''), $rmIn === '' ? null : (int)$rmIn);
+                        (string)($_POST['deadline'] ?? ''), $rmIn === '' ? null : (int)$rmIn, mb_substr(trim((string)($_POST['note'] ?? '')), 0, 1000));
         echo json_encode(['success' => true, 'task_id' => $r['task_id'], 'existed' => $r['existed']]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -11082,13 +11082,14 @@ foreach($dCounts as $c) {
             }
             // 製程中紀錄轉個人工作紀錄：設定期限與提醒後自動建在 personal_task.php（完成狀態兩邊同步）
             var taskBoxHtml = '';
-            if (ATE_Q.kind === 'process' && ATE_Q.canReply !== false && !voidView && !al && !noteView && !it.linked_mine && it.status !== 'resolved' && it.status !== 'dropped') {
+            if (ATE_Q.kind === 'process' && ATE_Q.canReply !== false && !voidView && !al && !noteView && !it.linked_mine && it.status !== 'dropped') {
                 actions += '<button type="button" class="ate-q-btn" onclick="$(\'#ate-q-taskbox-' + it.id + '\').toggle()"><i class="fa fa-calendar-check-o"></i> 轉個人工作</button>';
                 taskBoxHtml = '<div class="ate-q-voidbox" id="ate-q-taskbox-' + it.id + '" style="display:none;">'
                     + '<div class="ate-q-voidbox-hint"><i class="fa fa-info-circle"></i> 會在「個人工作紀錄」自動建立一筆；那邊按完成時要填回覆，這一條會同步標記已處理，反之亦然。</div>'
                     + '期限：<input type="date" class="form-control" style="display:inline-block;width:auto;" id="ate-q-taskdl-' + it.id + '"> '
                     + '提醒：<select class="form-control" style="display:inline-block;width:auto;" id="ate-q-taskrm-' + it.id + '">'
                     +   '<option value="">不提醒</option><option value="0">期限當天</option><option value="1440">提前 1 天</option><option value="2880">提前 2 天</option><option value="10080">提前 7 天</option></select>'
+                    + '<div style="margin-top:4px;"><textarea class="form-control" rows="2" id="ate-q-tasknote-' + it.id + '" placeholder="備註（選填，例如：需改圖、需通知業務…，會寫進個人工作紀錄）"></textarea></div>'
                     + '<div class="ate-q-voiderr" id="ate-q-taskerr-' + it.id + '"></div>'
                     + '<button type="button" class="btn btn-xs btn-warm" onclick="ateQToTask(' + it.id + ')"><i class="fa fa-plus"></i> 建立</button> '
                     + '<button type="button" class="btn btn-xs btn-default" onclick="$(\'#ate-q-taskbox-' + it.id + '\').hide()">取消</button>'
@@ -11244,7 +11245,7 @@ foreach($dCounts as $c) {
         function ateQToTask(itemId) {
             var dl = $('#ate-q-taskdl-' + itemId).val(), rm = $('#ate-q-taskrm-' + itemId).val();
             if (rm !== '' && !dl) { $('#ate-q-taskerr-' + itemId).text('要設定提醒須先設定期限'); return; }
-            $.post('', { action: 'ate_q_to_task', log_id: ATE_Q.logId, id: itemId, deadline: dl, remind_before_minutes: rm }, function(res) {
+            $.post('', { action: 'ate_q_to_task', log_id: ATE_Q.logId, id: itemId, deadline: dl, remind_before_minutes: rm, note: $.trim($('#ate-q-tasknote-' + itemId).val() || '') }, function(res) {
                 if (!res || !res.success) { $('#ate-q-taskerr-' + itemId).text((res && res.message) || '建立失敗'); return; }
                 $('#ate-q-taskbox-' + itemId).hide();
                 showToast(res.existed ? '您已經建立過這一條的個人工作紀錄了' : '已建立個人工作紀錄（可到「個人工作紀錄」查看）');
@@ -11753,18 +11754,8 @@ foreach($dCounts as $c) {
             return (md ? md + ' ' : '') + (who ? who + ' ' : '') + '已處理完成';
         }
         function ateQResolve(itemId, status) {
-            if (status === 'resolved') {
-                var st = ATE_Q.replyState[itemId];
-                var content = ateQAutoResolveNote(st);
-                $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                             reply_to: (ATE_Q.kind === 'process' ? 0 : ''),
-                             content: content, replied_on: ATE_Q.today || '', resolve: 1 }, function(res) {
-                    if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
-                    ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
-                    ateQOpen(ATE_Q.orderId, ATE_Q.kind);
-                }, 'json').fail(function() { showToast('操作失敗，請重試'); });
-                return;
-            }
+            // 2026-11-17 使用者要求：按「已處理」只是確認整體完成，不再自動補「MM/DD ○○ 已處理完成」回覆訊息，
+            // 直接走 ate_q_resolve 只改狀態（權限與 ptl 檢查與原本回覆＋resolve 路徑相同）。
             $.post('', { action: 'ate_q_resolve', log_id: ATE_Q.logId, id: itemId, status: status }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
                 ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
