@@ -1083,10 +1083,15 @@ function priorLabel(months){
 }
 /* 應收獨立標記按鈕：給客戶對帳單／客戶提供對帳單／已收款（點一下標記、已標記再點一下取消） */
 var FLAG_DEFS = {given:'給客戶對帳單', recv:'客戶提供對帳單', paid:'已收款'};
+function canFlag(k){
+    if (PERMS.isAll || PERMS.canAdmin) return true;
+    var al = (MATRIX.ar && MATRIX.ar['flag_'+k]) || [];
+    return (PERMS.isPm && al.indexOf('art_pm')>=0) || (PERMS.isSales && al.indexOf('art_sales')>=0) || (PERMS.isAcc && al.indexOf('art_acc')>=0);
+}
 function flagBtns(r){
-    var can = PERMS.canAdmin || PERMS.isSales || PERMS.isAcc, fl = r.flags || {};
+    var fl = r.flags || {};
     return Object.keys(FLAG_DEFS).map(function(k){
-        var f = fl[k], on = !!f;
+        var f = fl[k], on = !!f, can = canFlag(k);
         var tip = on ? (FLAG_DEFS[k] + '：' + (f.by||'') + ' ' + String(f.at||'').replace(/-/g,'.') + '（再點一下取消）') : ('標記「' + FLAG_DEFS[k] + '」');
         return '<button class="flag-btn' + (on?' on':'') + '" ' + (can?'':'disabled ') + 'title="' + esc(tip) + '" onclick="doFlag(' + r.track_id + ',\'' + k + '\',' + (on?0:1) + ')">' + (on?'✓ ':'') + FLAG_DEFS[k] + (on ? ' <span style="font-size:10px;">' + esc(String(f.at||'').slice(5,10).replace('-','.')) + '</span>' : '') + '</button>';
     }).join('');
@@ -1353,6 +1358,13 @@ function renderMatrix(){
         rows += '<tr><th>略過（此月不須對帳）</th>' + ROLE_CODES.map(function(rc){
             return '<td><label><input type="checkbox" data-side="'+side+'" data-status="skip" data-role="'+rc[0]+'" '+(skipAllowed.indexOf(rc[0])>=0?'checked':'')+'> '+rc[1]+'</label></td>';
         }).join('') + '</tr>';
+        // 應收三個標記按鈕（給客戶對帳單／客戶提供對帳單／已收款）的權限列
+        if (side === 'ar') Object.keys(FLAG_DEFS).forEach(function(fk){
+            var al = (MATRIX.ar && MATRIX.ar['flag_'+fk]) || [];
+            rows += '<tr><th>按鈕：' + esc(FLAG_DEFS[fk]) + '</th>' + ROLE_CODES.map(function(rc){
+                return '<td><label><input type="checkbox" data-side="ar" data-status="flag_'+fk+'" data-role="'+rc[0]+'" '+(al.indexOf(rc[0])>=0?'checked':'')+'> '+rc[1]+'</label></td>';
+            }).join('') + '</tr>';
+        });
         var html = '<h5 style="margin:10px 0 4px;">' + title + '</h5><table class="art-t matrix-tbl"><thead><tr><th>狀態</th>' +
             ROLE_CODES.map(function(rc){ return '<th>'+rc[1]+'</th>'; }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
         document.getElementById('matrixWrap').insertAdjacentHTML('beforeend', html);

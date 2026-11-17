@@ -330,7 +330,7 @@ if (!function_exists('act_role_matrix_save')) {
 function act_role_matrix_save(PDO $db, array $rows): void
 {
     $validRoles = ['art_pm', 'art_sales', 'art_acc'];
-    $validStatus = array_merge(array_keys(act_statuses()), ['skip']);   // 'skip'＝略過按鈕的權限列
+    $validStatus = array_merge(array_keys(act_statuses()), ['skip', 'flag_given', 'flag_recv', 'flag_paid']);   // 'skip'＝略過按鈕；flag_*＝應收三個獨立標記按鈕的權限列
     $db->beginTransaction();
     try {
         $db->exec("DELETE FROM acc_recon_track_role_matrix");
@@ -812,11 +812,30 @@ function act_flags_map(PDO $db, array $trackIds): array
     return $out;
 }}
 
+if (!function_exists('act_flag_seed')) {
+/** 三個標記按鈕的預設權限（業務、會計）只種一次；之後管理員在「角色權限矩陣」怎麼改都不會被還原 */
+function act_flag_seed(PDO $db): void
+{
+    try {
+        if (act_param_get($db, 'flag_matrix_seeded', 0)) return;
+        $ins = $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES ('ar',?,?)");
+        foreach (['flag_given', 'flag_recv', 'flag_paid'] as $k) foreach (['art_sales', 'art_acc'] as $rc) $ins->execute([$k, $rc]);
+        act_param_save($db, 'flag_matrix_seeded', 1, '系統');
+    } catch (Throwable $e) {}
+}}
+
+if (!function_exists('act_can_flag')) {
+/** 這個人能不能按這個標記按鈕：本頁管理員永遠可以，其餘依角色權限矩陣（應收的 flag_* 列） */
+function act_can_flag(PDO $db, array $perms, string $flag): bool
+{
+    return act_can_set_status($db, $perms, 'ar', 'flag_' . $flag);
+}}
+
 if (!function_exists('act_flag_set')) {
 function act_flag_set(PDO $db, int $trackId, string $flag, bool $on, array $perms): array
 {
     if (!isset(act_flag_defs()[$flag])) return ['success' => false, 'message' => '不合法的標記'];
-    if (empty($perms['canAdmin']) && empty($perms['isSales']) && empty($perms['isAcc'])) return ['success' => false, 'message' => '沒有設定此標記的權限（需本頁管理員、業務或會計角色）'];
+    if (!act_can_flag($db, $perms, $flag)) return ['success' => false, 'message' => '沒有設定此標記的權限（請洽本頁管理員在「設定 → 角色權限矩陣」勾選）'];
     $st = $db->prepare("SELECT id, side, party_name, billing_month FROM acc_recon_track WHERE id=?");
     $st->execute([$trackId]);
     $row = $st->fetch(PDO::FETCH_ASSOC);

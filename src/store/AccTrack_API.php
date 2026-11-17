@@ -34,6 +34,7 @@ function actErr(string $msg, int $code = 400, array $extra = []) {
 $db = (new DBConnection())->getPDO();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 act_ensure_schema($db);
+act_flag_seed($db);
 
 $uid = (int)($_SESSION['id'] ?? 0);
 if (!$uid) actErr('未登入或連線已逾時，請重新登入', 401);
