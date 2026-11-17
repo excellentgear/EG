@@ -134,8 +134,39 @@ function aca_ensure_schema(PDO $db): void
             uploaded_at DATETIME NULL,
             KEY idx_allow (allow_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='折讓單附件（只存檔名，路徑即時組）'");
+        // 每列對應的原發票（字軌2碼英文大寫／號碼8碼／發票日期民國年3碼+MMDD）；MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加
+        $have = $db->query("SHOW COLUMNS FROM acc_allowance_item LIKE 'inv_track'")->fetchColumn();
+        if (!$have) {
+            $db->exec("ALTER TABLE acc_allowance_item
+                ADD COLUMN inv_track CHAR(2) NULL COMMENT '原發票字軌（2碼英文大寫）' AFTER tax_amount,
+                ADD COLUMN inv_no    CHAR(8) NULL COMMENT '原發票號碼（8碼數字）' AFTER inv_track,
+                ADD COLUMN inv_date  CHAR(7) NULL COMMENT '原發票日期（民國年3碼+MMDD）' AFTER inv_no");
+        }
+        // 證明單號碼的年月日與流水號所依的日期＝原發票日期（多筆取最早）；舊資料為 NULL，視同折讓日期
+        if (!$db->query("SHOW COLUMNS FROM acc_allowance LIKE 'no_date'")->fetchColumn()) {
+            $db->exec("ALTER TABLE acc_allowance ADD COLUMN no_date DATE NULL COMMENT '證明單號碼代碼(年月日/流水)所依日期＝原發票日期(多筆取最早)' AFTER allow_date");
+        }
     } catch (Throwable $e) { error_log('aca_ensure_schema: ' . $e->getMessage()); }
 }}
+
+/** 民國年3碼+MMDD（如 1150929）→ Y-m-d；不是真實存在的日期回 null */
+function aca_roc_to_date(string $s): ?string
+{
+    if (!preg_match('/^(\d{3})(\d{2})(\d{2})$/', $s, $m)) return null;
+    $y = (int)$m[1] + 1911;
+    return checkdate((int)$m[2], (int)$m[3], $y) ? sprintf('%04d-%02d-%02d', $y, $m[2], $m[3]) : null;
+}
+
+/** 發票資料驗證，回傳錯誤訊息或 null */
+function aca_invoice_check(string $track, string $no, string $date, string $allowDate): ?string
+{
+    if (!preg_match('/^[A-Z]{2}$/', $track)) return '發票字軌必須是 2 碼英文大寫';
+    if (!preg_match('/^\d{8}$/', $no)) return '發票號碼必須是 8 碼數字';
+    $d = aca_roc_to_date($date);
+    if (!$d) return '發票日期格式為民國年 3 碼＋月日 4 碼（例 1150929），且必須是存在的日期';
+    if ($d > $allowDate) return '發票日期不可晚於折讓日期';
+    return null;
+}
 
 /* ── 證明單號碼格式 ───────────────────────────────────────────── */
 function aca_param_get(PDO $db, string $key, $default)
@@ -264,9 +295,9 @@ function aca_next_seqs(PDO $db, string $cid, string $date, bool $lock = false): 
         $st = $db->prepare($sql . $suffix); $st->execute($p); return (int)$st->fetchColumn();
     };
     return [
-        'cm' => $q("SELECT COALESCE(MAX(seq_cm),0)+1 FROM acc_allowance WHERE customer_id=? AND DATE_FORMAT(allow_date,'%Y-%m')=?", [$cid, $ym]),
-        'm'  => $q("SELECT COALESCE(MAX(seq_m),0)+1  FROM acc_allowance WHERE DATE_FORMAT(allow_date,'%Y-%m')=?", [$ym]),
-        'y'  => $q("SELECT COALESCE(MAX(seq_y),0)+1  FROM acc_allowance WHERE YEAR(allow_date)=?", [(int)$y]),
+        'cm' => $q("SELECT COALESCE(MAX(seq_cm),0)+1 FROM acc_allowance WHERE customer_id=? AND DATE_FORMAT(COALESCE(no_date,allow_date),'%Y-%m')=?", [$cid, $ym]),
+        'm'  => $q("SELECT COALESCE(MAX(seq_m),0)+1  FROM acc_allowance WHERE DATE_FORMAT(COALESCE(no_date,allow_date),'%Y-%m')=?", [$ym]),
+        'y'  => $q("SELECT COALESCE(MAX(seq_y),0)+1  FROM acc_allowance WHERE YEAR(COALESCE(no_date,allow_date))=?", [(int)$y]),
     ];
 }
 
@@ -274,6 +305,28 @@ function aca_suggest_no(PDO $db, string $cid, string $date): string
 {
     $s = aca_next_seqs($db, $cid, $date);
     return aca_format_render(aca_format_get($db), $cid, $date, $s['cm'], $s['m'], $s['y']);
+}
+
+/** 一組發票日期（民國年字串）中最早的一天（Y-m-d）；都不合法回 null */
+function aca_min_inv_date(array $rocDates): ?string
+{
+    $best = null;
+    foreach ($rocDates as $r) { $d = aca_roc_to_date((string)$r); if ($d && ($best === null || $d < $best)) $best = $d; }
+    return $best;
+}
+
+/** 已開立折讓單的建議證明單號碼：日期用原發票日期（多筆取最早），沒有才退回折讓日期 */
+function aca_suggest_no_for_id(PDO $db, int $id): ?string
+{
+    $st = $db->prepare("SELECT customer_id, allow_date, no_date, seq_cm, seq_m, seq_y FROM acc_allowance WHERE allow_id=?");
+    $st->execute([$id]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) return null;
+    $q = $db->prepare("SELECT inv_date FROM acc_allowance_item WHERE allow_id=?");
+    $q->execute([$id]);
+    $date = aca_min_inv_date($q->fetchAll(PDO::FETCH_COLUMN)) ?: $a['allow_date'];
+    if ($a['no_date'] === $date) return aca_format_render(aca_format_get($db), $a['customer_id'], $date, (int)$a['seq_cm'], (int)$a['seq_m'], (int)$a['seq_y']);
+    return aca_suggest_no($db, $a['customer_id'], $date);
 }
 
 /* ── 異動記錄（只新增；單據、附件之後被刪除也查得到是誰何時改了什麼）──────────── */
@@ -297,13 +350,13 @@ function aca_log(PDO $db, int $allowId, string $action, $detail, ?array $user, ?
 function aca_log_list(PDO $db, array $f): array
 {
     aca_ensure_schema($db);
-    $w = ['1=1']; $p = [];
+    $w = ["action NOT IN ('create','attach_add')"]; $p = [];   // 只記錄修改與刪除，不記新增
     if (($kw = trim((string)($f['kw'] ?? ''))) !== '') {
         $w[] = '(allow_no LIKE ? OR customer_name LIKE ? OR by_name LIKE ? OR detail LIKE ? OR reason LIKE ?)';
         for ($i = 0; $i < 5; $i++) $p[] = "%$kw%";
     }
     if ((int)($f['allow_id'] ?? 0) > 0) { $w[] = 'allow_id=?'; $p[] = (int)$f['allow_id']; }
-    if (in_array(($f['action'] ?? ''), ['create', 'set_no', 'void', 'attach_add', 'attach_del', 'setting'], true)) { $w[] = 'action=?'; $p[] = $f['action']; }
+    if (in_array(($f['action'] ?? ''), ['update', 'set_no', 'void', 'attach_del', 'setting'], true)) { $w[] = 'action=?'; $p[] = $f['action']; }
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_from'] ?? ''))) { $w[] = 'at_time>=?'; $p[] = $f['date_from'] . ' 00:00:00'; }
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_to'] ?? '')))   { $w[] = 'at_time<=?'; $p[] = $f['date_to'] . ' 23:59:59'; }
     $where = implode(' AND ', $w);
@@ -360,7 +413,8 @@ function aca_search(PDO $db, array $f): array
     $words = $partKw === '' ? [] : preg_split('/\s+/u', $partKw);
 
     $rows = [];
-    $build = function (string $table, string $type) use ($db, $names, $words, $from, $to, $lim, &$rows) {
+    $docNo = trim((string)($f['doc_no'] ?? ''));
+    $build = function (string $table, string $type) use ($db, $names, $words, $docNo, $from, $to, $lim, &$rows) {
         if ($type === 'IS') {
             $sql = "SELECT IS_id id, IS_number no, DATE_FORMAT(Order_date,'%Y-%m-%d') d, Client_name cn,
                            Product_id part, Specification spec, Qty, Unit_price FROM is_list WHERE 1=1";
@@ -375,6 +429,7 @@ function aca_search(PDO $db, array $f): array
         $p = [];
         $cc = $type === 'IS' ? 'Client_name' : 'it.Client_name';
         if ($names !== null) { $sql .= " AND $cc IN (" . implode(',', array_fill(0, count($names), '?')) . ")"; $p = array_merge($p, $names); }
+        if ($docNo !== '') { $sql .= $type === 'IS' ? ' AND IS_number LIKE ?' : ' AND it.IR_no LIKE ?'; $p[] = '%' . $docNo . '%'; }
         foreach ($words as $w) {
             $sql .= ' AND (' . implode(' OR ', array_map(fn($c) => "$c LIKE ?", $partCols)) . ')';
             foreach ($partCols as $_) $p[] = '%' . $w . '%';
@@ -483,7 +538,10 @@ function aca_create(PDO $db, array $d, ?array $user): array
         if (!$c || trim((string)$c['customer_id']) !== $cid) {
             return ['success' => false, 'message' => "第 {$n} 筆（{$r['no']}）屬於「{$r['cn']}」，與折讓單客戶不同；一張折讓單只能開給同一個客戶"];
         }
-        $lines[] = ['type' => $type, 'r' => $r, 'qty' => $qty, 'price' => $price];
+        $it_track = strtoupper(trim((string)($it['inv_track'] ?? '')));
+        $it_no = trim((string)($it['inv_no'] ?? '')); $it_date = trim((string)($it['inv_date'] ?? ''));
+        if (($e = aca_invoice_check($it_track, $it_no, $it_date, $date)) !== null) return ['success' => false, 'message' => "第 {$n} 筆（{$r['no']}）：" . $e];
+        $lines[] = ['type' => $type, 'r' => $r, 'qty' => $qty, 'price' => $price, 'inv_track' => $it_track, 'inv_no' => $it_no, 'inv_date' => $it_date];
     }
 
     $net = 0.0; $taxSum = 0.0;
@@ -513,23 +571,24 @@ function aca_create(PDO $db, array $d, ?array $user): array
             $st->execute([$no]);
             if ($st->fetchColumn()) { $db->rollBack(); return ['success' => false, 'message' => "證明單號碼「{$no}」已被另一張折讓單使用"]; }
         }
-        $sq = aca_next_seqs($db, $cid, $date, true);
+        $noDate = aca_min_inv_date(array_column($lines, 'inv_date')) ?: $date;   // 號碼的年月與流水以原發票日期為準
+        $sq = aca_next_seqs($db, $cid, $noDate, true);
         $global = acc_global_cutoff($db);
         $bm = acc_bm_for($db, $date, $cust, $global);
         $db->prepare("INSERT INTO acc_allowance
             (allow_no, allow_date, billing_month, customer_id, customer_name, tax_rate, sales_amount, tax_amount, total_amount,
-             seq_cm, seq_m, seq_y, status, note, created_by, created_by_name, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'active', ?,?,?,NOW())")
+             seq_cm, seq_m, seq_y, status, note, created_by, created_by_name, created_at, no_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'active', ?,?,?,NOW(), ?)")
            ->execute([$no === '' ? null : $no, $date, $bm, $cid, $cust['customer'], $rate, $net, $taxSum, $net + $taxSum,
-                      $sq['cm'], $sq['m'], $sq['y'], $note, $user ? (int)$user['id'] : null, $user ? $user['user_cname'] : null]);
+                      $sq['cm'], $sq['m'], $sq['y'], $note, $user ? (int)$user['id'] : null, $user ? $user['user_cname'] : null, $noDate]);
         $aid = (int)$db->lastInsertId();
         $ins = $db->prepare("INSERT INTO acc_allowance_item
-            (allow_id, src_type, src_id, src_no, src_date, part_no, spec, src_qty, src_price, qty, unit_price, amount, tax_amount)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            (allow_id, src_type, src_id, src_no, src_date, part_no, spec, src_qty, src_price, qty, unit_price, amount, tax_amount, inv_track, inv_no, inv_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
         foreach ($lines as $ln) {
             $r = $ln['r'];
             $ins->execute([$aid, $ln['type'], (int)$r['id'], $r['no'], $r['d'], $r['part'], $r['spec'],
-                           (float)$r['Qty'], (float)$r['Unit_price'], $ln['qty'], $ln['price'], $ln['amount'], $ln['tax']]);
+                           (float)$r['Qty'], (float)$r['Unit_price'], $ln['qty'], $ln['price'], $ln['amount'], $ln['tax'], $ln['inv_track'], $ln['inv_no'], $ln['inv_date']]);
         }
         $db->commit();
     } catch (Throwable $e) {
@@ -538,9 +597,98 @@ function aca_create(PDO $db, array $d, ?array $user): array
     }
     acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $aid, $cust['customer'],
               ['action' => 'create', 'items' => count($lines), 'total' => $net + $taxSum, 'billing_month' => $bm], null, $user);
-    aca_log($db, $aid, 'create', ['明細' => count($lines) . ' 筆', '含稅合計' => $net + $taxSum, '帳款月份' => $bm, '折讓日期' => $date, '證明單號碼' => $no === '' ? '（未填）' : $no], $user);
     return ['success' => true, 'allow_id' => $aid, 'billing_month' => $bm, 'net' => $net, 'tax' => $taxSum, 'total' => $net + $taxSum,
             'message' => '已開立折讓單，含稅合計 ' . number_format($net + $taxSum) . '；將列入 ' . $bm . ' 帳款月份對帳'];
+}
+
+/**
+ * 修改已開立的折讓單（避免開錯）：折讓日期、稅率、備註，以及每筆明細的折讓數量／單價／原發票資料。
+ * 不增減明細（要換單據請作廢重開）。金額與營業稅、帳款月份依新值重算，每個異動欄位寫進異動記錄（舊→新）。
+ * $d: allow_date, tax_rate, note, items[]{item_id, qty, unit_price, inv_track, inv_no, inv_date}（必須涵蓋全部明細）
+ */
+function aca_update(PDO $db, int $id, array $d, ?array $user): array
+{
+    aca_ensure_schema($db);
+    $st = $db->prepare("SELECT * FROM acc_allowance WHERE allow_id=?");
+    $st->execute([$id]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) return ['success' => false, 'message' => '找不到折讓單'];
+    if ($a['status'] === 'void') return ['success' => false, 'message' => '此折讓單已作廢，不可修改'];
+    $st = $db->prepare("SELECT * FROM acc_allowance_item WHERE allow_id=? ORDER BY item_id");
+    $st->execute([$id]);
+    $old = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $old[(int)$r['item_id']] = $r;
+
+    $date = (string)($d['allow_date'] ?? $a['allow_date']);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) return ['success' => false, 'message' => '折讓日期格式不正確'];
+    if ($date > date('Y-m-d')) return ['success' => false, 'message' => '折讓日期不可晚於今天'];
+    $rate = (isset($d['tax_rate']) && $d['tax_rate'] !== '') ? (float)$d['tax_rate'] : (float)$a['tax_rate'];
+    if ($rate < 0 || $rate > 1) return ['success' => false, 'message' => '營業稅率必須介於 0～1（例如 0.05）'];
+    $note = mb_substr(trim((string)($d['note'] ?? '')), 0, 500);
+    $in = [];
+    foreach (($d['items'] ?? []) as $it) $in[(int)($it['item_id'] ?? 0)] = $it;
+    if (count($in) !== count($old) || array_diff_key($old, $in)) return ['success' => false, 'message' => '明細資料不完整，請重新整理後再修改'];
+
+    $new = []; $net = 0.0; $taxSum = 0.0;
+    foreach ($old as $iid => $o) {
+        $it = $in[$iid]; $n = count($new) + 1;
+        $qty = (float)($it['qty'] ?? 0); $price = (float)($it['unit_price'] ?? 0);
+        if ($qty <= 0) return ['success' => false, 'message' => "第 {$n} 筆（{$o['src_no']}）折讓數量必須大於 0"];
+        if ($price < 0) return ['success' => false, 'message' => "第 {$n} 筆（{$o['src_no']}）折讓單價不可為負數"];
+        $tr = strtoupper(trim((string)($it['inv_track'] ?? ''))); $no = trim((string)($it['inv_no'] ?? '')); $dt = trim((string)($it['inv_date'] ?? ''));
+        if (($e = aca_invoice_check($tr, $no, $dt, $date)) !== null) return ['success' => false, 'message' => "第 {$n} 筆（{$o['src_no']}）：" . $e];
+        $amt = round($qty * $price, 2); $tax = round($amt * $rate, 0);
+        $net += $amt; $taxSum += $tax;
+        $new[$iid] = ['qty' => $qty, 'price' => $price, 'amt' => $amt, 'tax' => $tax, 'tr' => $tr, 'no' => $no, 'dt' => $dt];
+    }
+
+    $cmap = acc_customer_by_name($db); $cust = null;
+    foreach ($cmap as $c) { if (trim((string)$c['customer_id']) === (string)$a['customer_id']) { $cust = $c; break; } }
+    $bm = $a['billing_month'];
+    if ($date !== $a['allow_date'] && $cust) $bm = acc_bm_for($db, $date, $cust, acc_global_cutoff($db));
+
+    $chg = [];
+    $fm = fn($v) => rtrim(rtrim(number_format((float)$v, 4, '.', ''), '0'), '.');
+    if ($date !== $a['allow_date']) $chg['折讓日期'] = [$a['allow_date'], $date];
+    if ($bm !== $a['billing_month']) $chg['帳款月份'] = [$a['billing_month'], $bm];
+    if (abs($rate - (float)$a['tax_rate']) > 0.00001) $chg['營業稅率'] = [$fm($a['tax_rate']), $fm($rate)];
+    if ($note !== (string)$a['note']) $chg['備註'] = [(string)$a['note'], $note];
+    foreach ($old as $iid => $o) {
+        $nw = $new[$iid]; $lb = $o['src_no'] . '：';
+        if (abs($nw['qty'] - (float)$o['qty']) > 0.0001)       $chg[$lb . '折讓數量'] = [$fm($o['qty']), $fm($nw['qty'])];
+        if (abs($nw['price'] - (float)$o['unit_price']) > 0.00001) $chg[$lb . '折讓單價'] = [$fm($o['unit_price']), $fm($nw['price'])];
+        if ($nw['tr'] !== (string)$o['inv_track']) $chg[$lb . '發票字軌'] = [(string)$o['inv_track'] ?: '（空白）', $nw['tr']];
+        if ($nw['no'] !== (string)$o['inv_no'])    $chg[$lb . '發票號碼'] = [(string)$o['inv_no'] ?: '（空白）', $nw['no']];
+        if ($nw['dt'] !== (string)$o['inv_date'])  $chg[$lb . '發票日期'] = [(string)$o['inv_date'] ?: '（空白）', $nw['dt']];
+    }
+    if (abs(($net + $taxSum) - (float)$a['total_amount']) > 0.001) $chg['含稅合計'] = [$fm($a['total_amount']), $fm($net + $taxSum)];
+    if (!$chg) return ['success' => true, 'message' => '沒有任何變更', 'changed' => 0];
+
+    try {
+        $db->beginTransaction();
+        $q = $db->prepare("SELECT COALESCE(SUM(i.qty),0) FROM acc_allowance_item i JOIN acc_allowance x ON x.allow_id=i.allow_id AND x.status='active'
+                           WHERE i.src_type=? AND i.src_id=? AND i.allow_id<>? FOR UPDATE");
+        foreach ($old as $iid => $o) {
+            $q->execute([$o['src_type'], $o['src_id'], $id]);
+            $remain = (float)$o['src_qty'] - (float)$q->fetchColumn();
+            if ($new[$iid]['qty'] - $remain > 0.0001) {
+                $db->rollBack();
+                return ['success' => false, 'message' => "{$o['src_no']} 尚可折讓數量只剩 " . $fm($remain) . "（原數量 " . $fm($o['src_qty']) . "、其他折讓單已折讓 " . $fm((float)$o['src_qty'] - $remain) . "），無法改成 " . $fm($new[$iid]['qty'])];
+            }
+        }
+        $up = $db->prepare("UPDATE acc_allowance_item SET qty=?, unit_price=?, amount=?, tax_amount=?, inv_track=?, inv_no=?, inv_date=? WHERE item_id=?");
+        foreach ($new as $iid => $nw) $up->execute([$nw['qty'], $nw['price'], $nw['amt'], $nw['tax'], $nw['tr'], $nw['no'], $nw['dt'], $iid]);
+        $noDate = aca_min_inv_date(array_column($new, 'dt')) ?: $date;
+        $db->prepare("UPDATE acc_allowance SET allow_date=?, billing_month=?, tax_rate=?, note=?, sales_amount=?, tax_amount=?, total_amount=?, no_date=?, modified_by_name=?, modified_at=NOW() WHERE allow_id=?")
+           ->execute([$date, $bm, $rate, $note, $net, $taxSum, $net + $taxSum, $noDate, $user ? $user['user_cname'] : null, $id]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '修改失敗：' . $e->getMessage()];
+    }
+    acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $id, $a['customer_name'], ['update' => $chg], null, $user);
+    aca_log($db, $id, 'update', $chg, $user);
+    return ['success' => true, 'changed' => count($chg), 'billing_month' => $bm, 'message' => '已儲存修改（' . count($chg) . ' 項異動，已記錄）' . ($bm !== $a['billing_month'] ? "；帳款月份改為 {$bm}" : '')];
 }
 
 /** 補填／修改證明單號碼 */
@@ -577,7 +725,14 @@ function aca_void(PDO $db, int $id, string $reason, ?array $user): array
     $db->prepare("UPDATE acc_allowance SET status='void', void_reason=?, voided_by_name=?, voided_at=NOW() WHERE allow_id=?")
        ->execute([mb_substr($reason, 0, 200), $user ? $user['user_cname'] : null, $id]);
     acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $id, $a['customer_name'], ['action' => 'void'], $reason, $user);
-    aca_log($db, $id, 'void', ['狀態' => ['有效', '已作廢（視同刪除，來源單據折讓數量釋出）']], $user, $reason);
+    $sn = $db->prepare("SELECT allow_no, allow_date, billing_month, total_amount, sales_amount, tax_amount, note FROM acc_allowance WHERE allow_id=?");
+    $sn->execute([$id]); $before = $sn->fetch(PDO::FETCH_ASSOC) ?: [];
+    $si = $db->prepare("SELECT src_no, qty, unit_price, amount, inv_track, inv_no, inv_date FROM acc_allowance_item WHERE allow_id=? ORDER BY item_id");
+    $si->execute([$id]);
+    $lines = array_map(fn($x) => $x['src_no'] . '　數量 ' . (float)$x['qty'] . '×單價 ' . (float)$x['unit_price'] . '＝' . (float)$x['amount'] . '　發票 ' . $x['inv_track'] . $x['inv_no'] . '（' . $x['inv_date'] . '）', $si->fetchAll(PDO::FETCH_ASSOC));
+    aca_log($db, $id, 'void', ['狀態' => ['有效', '已作廢（視同刪除，來源單據折讓數量釋出）'],
+        '刪除前資料' => '證明單號碼 ' . ($before['allow_no'] ?? '') . '｜折讓日期 ' . ($before['allow_date'] ?? '') . '｜帳款月份 ' . ($before['billing_month'] ?? '') . '｜未稅 ' . (float)($before['sales_amount'] ?? 0) . '｜營業稅 ' . (float)($before['tax_amount'] ?? 0) . '｜含稅 ' . (float)($before['total_amount'] ?? 0) . ($before['note'] ? '｜備註 ' . $before['note'] : ''),
+        '刪除前明細' => implode('；', $lines)], $user, $reason);
     return ['success' => true, 'message' => '已作廢，來源單據的折讓數量已釋出'];
 }
 
@@ -621,6 +776,14 @@ function aca_get(PDO $db, int $id): ?array
     $st = $db->prepare("SELECT * FROM acc_allowance_item WHERE allow_id=? ORDER BY item_id");
     $st->execute([$id]);
     $a['items'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 每筆明細「尚可折讓數量」（扣掉其他有效折讓單已折讓的；修改時的上限）
+    $q = $db->prepare("SELECT COALESCE(SUM(i.qty),0) FROM acc_allowance_item i JOIN acc_allowance x ON x.allow_id=i.allow_id AND x.status='active'
+                       WHERE i.src_type=? AND i.src_id=? AND i.allow_id<>?");
+    foreach ($a['items'] as &$_it) {
+        $q->execute([$_it['src_type'], $_it['src_id'], $id]);
+        $_it['remain_qty'] = max(0, (float)$_it['src_qty'] - (float)$q->fetchColumn());
+    }
+    unset($_it);
     $st = $db->prepare("SELECT file_id, orig_name, file_size, uploaded_by_name, uploaded_at FROM acc_allowance_file WHERE allow_id=? ORDER BY file_id");
     $st->execute([$id]);
     $a['files'] = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -659,7 +822,6 @@ function aca_attach_add(PDO $db, int $allowId, array $f, ?array $user): array
         return ['success' => false, 'message' => '附件登記失敗：' . $e->getMessage()];
     }
     $fid = (int)$db->lastInsertId();
-    aca_log($db, $allowId, 'attach_add', ['附件' => $orig, '大小' => (int)$f['size'] . ' bytes'], $user);
     return ['success' => true, 'file_id' => $fid];
 }
 

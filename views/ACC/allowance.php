@@ -216,21 +216,31 @@ body.mask-open{overflow:hidden;}
     <div class="sec">① 搜尋出貨單／退貨單明細（點一列加入；同一張折讓單只能是同一個客戶）</div>
     <div class="srch">
       <span style="position:relative;display:inline-block;"><input type="text" id="sCust" placeholder="輸入客戶ID或名稱，從清單選擇" style="width:300px;" autocomplete="off"></span>
-      <input type="text" id="sPart" placeholder="料號（可空白分隔多個關鍵字）" style="width:240px;">
+      <input type="text" id="sPart" placeholder="料號（可空白分隔多個關鍵字）" style="width:230px;">
+      <input type="text" id="sNo" placeholder="出貨單號／退貨單號" style="width:190px;">
       <select id="sSrc"><option value="all">出貨＋退貨</option><option value="IS">只看出貨單</option><option value="IR">只看退貨單</option></select>
       <input type="date" id="sFrom" title="起日"> ~ <input type="date" id="sTo" title="迄日">
       <button id="btnSrch"><i class="fa fa-search"></i> 搜尋</button>
       <span id="srchInfo" style="font-size:12px;color:var(--a-ink2);"></span>
     </div>
     <div class="al-box"><table class="a-t" id="tSrch">
-      <thead><tr><th>類別</th><th>單號</th><th>日期</th><th>客戶</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th><th>已折讓</th><th></th></tr></thead>
-      <tbody><tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號後按「搜尋」（兩者都不填＝列出最近的單據）</td></tr></tbody>
+      <thead><tr><th style="width:84px;"></th><th>類別</th><th>單號</th><th>日期</th><th>客戶</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th><th>已折讓</th></tr></thead>
+      <tbody><tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號／單號後按「搜尋」（都不填＝列出最近的單據）</td></tr></tbody>
     </table></div>
 
     <div class="sec">② 已選定的明細（折讓數量與單價可改；金額與營業稅自動計算）　<span id="selCust" style="color:var(--a-ink);font-weight:normal;"></span></div>
+    <div class="srch" style="background:#FFF7E8;border:1px solid var(--a-line);border-radius:6px;padding:8px 10px;">
+      <b style="color:var(--a-brand);">原發票資料　全部設成相同：</b>
+      字軌 <input type="text" id="bTrack" maxlength="2" style="width:64px;text-transform:uppercase;" placeholder="AB" autocomplete="off">
+      號碼 <input type="text" id="bNo" maxlength="8" style="width:120px;" placeholder="8碼數字" autocomplete="off">
+      發票日期 <input type="text" id="bDate" maxlength="7" style="width:110px;" placeholder="民國年MMDD" data-eg-hint="民國年3碼＋MMDD，例如 1150929" autocomplete="off">
+      <button type="button" id="btnBatchInv">套用到全部明細</button>
+      <span id="bErr" class="err" style="margin:0;"></span>
+      <span style="font-size:12px;color:var(--a-ink2);">套用後再改個別不同的那幾筆；之後新加入的明細也會自動帶入這組</span>
+    </div>
     <div class="al-box" style="max-height:340px;"><table class="a-t" id="tSel">
-      <thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>原數量</th><th>原單價</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th></th></tr></thead>
-      <tbody><tr><td colspan="11" style="color:#8a6d45;padding:14px;">尚未選定任何明細</td></tr></tbody>
+      <thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>原數量</th><th>原單價</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th>發票字軌</th><th>發票號碼</th><th>發票日期</th><th></th></tr></thead>
+      <tbody><tr><td colspan="14" style="color:#8a6d45;padding:14px;">尚未選定任何明細</td></tr></tbody>
     </table></div>
     <div id="selErr" class="err"></div>
     <div style="text-align:right;margin:6px 0;font-size:14px;color:var(--a-ink);">
@@ -260,7 +270,7 @@ body.mask-open{overflow:hidden;}
   <div class="m-body">
     <div class="srch">
       <input type="text" id="lKw" placeholder="證明單號碼／客戶／操作人／內容" style="width:260px;">
-      <select id="lAct"><option value="">全部動作</option><option value="create">建立</option><option value="set_no">修改證明單號碼</option><option value="void">作廢（刪除）</option><option value="attach_add">新增附件</option><option value="attach_del">刪除附件</option><option value="setting">設定變更</option></select>
+      <select id="lAct"><option value="">全部動作</option><option value="update">修改折讓內容</option><option value="set_no">修改證明單號碼</option><option value="void">作廢（刪除）</option><option value="attach_del">刪除附件</option><option value="setting">設定變更</option></select>
       <input type="date" id="lFrom"> ~ <input type="date" id="lTo">
       <button id="btnLogQ"><i class="fa fa-search"></i> 查詢</button>
       <span id="lInfo" style="font-size:12px;color:var(--a-ink2);margin-left:auto;"></span>
@@ -283,7 +293,7 @@ body.mask-open{overflow:hidden;}
 <div class="a-mask" id="mkDtl"><div class="a-modal mid">
   <div class="m-head"><i class="fa fa-file-text-o"></i>&nbsp;<span id="dTitle">折讓單</span><span class="m-close" data-close="mkDtl">✕</span></div>
   <div class="m-body" id="dBody"></div>
-  <div class="m-foot"><button data-close="mkDtl">關閉</button></div>
+  <div class="m-foot"><span id="dFootL" style="float:left;"></span><span id="dFootR"></span><button data-close="mkDtl">關閉</button></div>
 </div></div>
 
 <?php if ($perms['canAdmin']): ?>
@@ -329,8 +339,9 @@ body.mask-open{overflow:hidden;}
     <ul><li>折讓日期依客戶結帳日歸屬某個帳款月份。對帳進度追蹤該月份的客戶名稱旁會顯示「<b>有折讓</b>」，點開可看綁定的單據。</li>
     <li>雙擊該客戶看明細時，折讓項目會以<b>暖黃底色置頂</b>，並註明折讓日期與開立人員 —— 即使原出貨在已對帳的舊月份，這筆折讓也視為這個月份尚待對帳。</li></ul>
     <h4>異動記錄</h4>
-    <ul><li>建立、修改證明單號碼、作廢（折讓單不做實體刪除，作廢即視為刪除）、新增／刪除附件、設定變更，都會自動記錄<b>時間、操作人、改了什麼</b>；按「異動記錄」查全部，或在單張明細底部看該張的記錄。記錄不能修改或刪除。</li></ul>
+    <ul><li>只記錄<b>修改</b>與<b>刪除</b>（不記新增）：修改折讓內容／證明單號碼會記<b>修改前資料與修改後資料</b>，作廢（折讓單不做實體刪除，作廢即視為刪除）會記<b>刪除前的完整資料</b>，另有刪除附件、設定變更，都會自動記錄<b>時間、操作人、改了什麼</b>；按「異動記錄」查全部，或在單張明細底部看該張的記錄。記錄不能修改或刪除。</li></ul>
     <h4>證明單號碼格式</h4>
+    <p>建議編號的年月日與本月流水號以<b>原發票日期</b>為準（多筆發票時取最早的一天），不是折讓日期。</p>
     <ul><li>預設格式「客戶ID-西元年月-本月流水」（例 MR003C-202608-1）。會計管理員可在「證明單號碼格式設定」修改，只影響之後的建議編號。</li></ul>
     <h4>權限</h4>
     <ul><li>全站管理員：全部權限；本頁管理員：全部權限含修改號碼格式；會計：開立、補填號碼、附件、作廢，不可更動設定；唯讀：只能查詢。角色在「使用者權限設定」的「折讓單」區塊指派。</li></ul>
@@ -421,8 +432,8 @@ $('#fStatus,#fBm').on('change',function(){ page=1; load(); });
 function selKey(r){ return r.type+':'+r.src_id; }
 function resetNew(){
   SEL=[]; SELCUST=null;
-  $('#sCust,#sPart').val(''); CHOSEN_CID=''; ddHide(); $('#sSrc').val('all'); $('#sFrom,#sTo').val('');
-  $('#tSrch tbody').html('<tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號後按「搜尋」（兩者都不填＝列出最近的單據）</td></tr>');
+  $('#sCust,#sPart,#sNo').val(''); CHOSEN_CID=''; $('#bTrack,#bNo,#bDate').val(''); $('#bErr').text(''); ddHide(); $('#sSrc').val('all'); $('#sFrom,#sTo').val('');
+  $('#tSrch tbody').html('<tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號／單號後按「搜尋」（都不填＝列出最近的單據）</td></tr>');
   $('#srchInfo').text(''); $('#nDate').val(META.today); $('#nRate').val(META.tax_rate); $('#nNo,#nNote').val(''); $('#nFiles').val('');
   $('#nErr').text(''); renderSel();
 }
@@ -439,13 +450,13 @@ function renderSrch(rows){
     var inSel=SEL.some(function(s){return selKey(s)===selKey(r);});
     var blocked=r.full || !r.customer_id || (SELCUST && r.customer_id!==SELCUST);
     var why=r.full?'已全數折讓':(!r.customer_id?'客戶未建主檔':((SELCUST&&r.customer_id!==SELCUST)?'與已選客戶不同':''));
-    h+='<tr class="'+(inSel?'picked':'')+(r.full?' is-full':'')+'"><td><span class="pill '+(r.type==='IR'?'p-ret':'p-ship')+'">'+(r.type==='IR'?'退貨':'出貨')+'</span></td>'
+    h+='<tr class="'+(inSel?'picked':'')+(r.full?' is-full':'')+'"><td>'+(inSel?'<button class="btn-mini js-rm" data-k="'+esc(selKey(r))+'">取消</button>'
+        :(blocked?'<span style="color:#a08a6a;font-size:11px;">'+why+'</span>':'<button class="btn-mini js-add" data-i="'+i+'">加入</button>'))+'</td>'
+     +'<td><span class="pill '+(r.type==='IR'?'p-ret':'p-ship')+'">'+(r.type==='IR'?'退貨':'出貨')+'</span></td>'
      +'<td>'+esc(r.no)+boundTxt(r)+'</td><td>'+esc(dd(r.date))+'</td><td class="l">'+esc(r.customer)+(r.customer_id?'':' <span style="color:#DD5138;">(未建主檔)</span>')+'</td>'
      +'<td class="l">'+esc(r.part)+'</td><td class="l" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="'+esc(r.spec)+'">'+esc(r.spec)+'</td>'
      +'<td class="r">'+nf2(r.qty)+'</td><td class="r">'+nf2(r.unit_price)+'</td><td class="r">'+nf(r.amount)+'</td>'
-     +'<td class="r">'+(r.used_qty>0?nf2(r.used_qty):'')+'</td>'
-     +'<td>'+(inSel?'<button class="btn-mini js-rm" data-k="'+esc(selKey(r))+'">取消</button>'
-        :(blocked?'<span style="color:#a08a6a;font-size:11px;">'+why+'</span>':'<button class="btn-mini js-add" data-i="'+i+'">加入</button>'))+'</td></tr>';
+     +'<td class="r">'+(r.used_qty>0?nf2(r.used_qty):'')+'</td></tr>';
   });
   $('#tSrch tbody').html(h||'<tr><td colspan="11" style="color:#8a6d45;padding:14px;">沒有符合的單據</td></tr>');
 }
@@ -484,18 +495,18 @@ $(window).on('scroll resize',function(){ if($('#custDd').is(':visible')) ddPos()
 
 function doSearch(){
   $('#srchInfo').text('搜尋中…');
-  $.getJSON(API,{action:'search',customer:CHOSEN_CID?'':$('#sCust').val(),customer_id:CHOSEN_CID,part:$('#sPart').val(),src:$('#sSrc').val(),date_from:$('#sFrom').val(),date_to:$('#sTo').val()},function(r){
+  $.getJSON(API,{action:'search',customer:CHOSEN_CID?'':$('#sCust').val(),customer_id:CHOSEN_CID,part:$('#sPart').val(),doc_no:$('#sNo').val(),src:$('#sSrc').val(),date_from:$('#sFrom').val(),date_to:$('#sTo').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'搜尋失敗'),true); return; }
     $('#srchInfo').text('共 '+r.rows.length+' 筆'+(r.truncated?'（結果超過 300 筆，只顯示最近的，請加關鍵字縮小範圍）':''));
     renderSrch(r.rows);
   }).fail(function(x){ toast(esc(errMsg(x,'搜尋失敗')),true); });
 }
 $('#btnSrch').on('click',doSearch);
-$('#sPart').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
+$('#sPart,#sNo').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
 $('#tSrch').on('click','.js-add',function(){
   var r=LASTROWS[parseInt($(this).data('i'),10)]; if(!r) return;
   if(!SELCUST) SELCUST=r.customer_id;
-  SEL.push($.extend({},r,{use_qty:r.remain_qty>0?r.remain_qty:r.qty,use_price:r.unit_price}));
+  SEL.push($.extend({},r,{use_qty:r.remain_qty>0?r.remain_qty:r.qty,use_price:r.unit_price,inv_track:$('#bTrack').val(),inv_no:$('#bNo').val(),inv_date:$('#bDate').val()}));
   renderSel(); renderSrch(LASTROWS);
 });
 $('#tSrch').on('click','.js-rm',function(){ rmSel($(this).data('k')); });
@@ -506,6 +517,42 @@ $('#tSel').on('input','.in-q,.in-p',function(){
   if($(this).hasClass('in-q')) s.use_qty=$(this).val(); else s.use_price=$(this).val();
   calcRow(i); calcTotal();
 });
+/* 發票欄位：字軌2碼英文大寫／號碼8碼數字／日期民國年3碼+MMDD（輸入當下即過濾與檢查） */
+function cleanTrack(v){ return String(v||'').replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,2); }
+function cleanDigits(v,n){ return String(v||'').replace(/\D/g,'').slice(0,n); }
+function rocToIso(s){
+  var m=/^(\d{3})(\d{2})(\d{2})$/.exec(s); if(!m) return null;
+  var y=parseInt(m[1],10)+1911, mo=parseInt(m[2],10), d=parseInt(m[3],10), t=new Date(y,mo-1,d);
+  return (t.getFullYear()===y&&t.getMonth()===mo-1&&t.getDate()===d)?(y+'-'+m[2]+'-'+m[3]):null;
+}
+function invFieldErr(kind,v,adate){
+  if(kind==='t') return /^[A-Z]{2}$/.test(v)?'':'字軌需為 2 碼英文大寫';
+  if(kind==='n') return /^\d{8}$/.test(v)?'':'發票號碼需為 8 碼數字';
+  var iso=rocToIso(v); if(!iso) return '日期格式：民國年3碼＋MMDD（例 1150929），需為存在的日期';
+  var ad=adate||$('#nDate').val(); if(ad && iso>ad) return '發票日期不可晚於折讓日期';
+  return '';
+}
+function invErr(s){ return invFieldErr('t',s.inv_track||'')||invFieldErr('n',s.inv_no||'')||invFieldErr('d',s.inv_date||''); }
+$('#tSel').on('input','.in-it,.in-in,.in-id',function(){
+  var i=parseInt($(this).data('i'),10), s=SEL[i]; if(!s) return;
+  var kind=$(this).hasClass('in-it')?'t':($(this).hasClass('in-in')?'n':'d');
+  var v=kind==='t'?cleanTrack(this.value):cleanDigits(this.value,kind==='n'?8:7);
+  if(this.value!==v) this.value=v;
+  s[kind==='t'?'inv_track':(kind==='n'?'inv_no':'inv_date')]=v;
+  var er=invFieldErr(kind,v); $(this).toggleClass('bad',!!er&&v!=='').attr('title',er);
+});
+$('#bTrack').on('input',function(){ this.value=cleanTrack(this.value); });
+$('#bNo').on('input',function(){ this.value=cleanDigits(this.value,8); });
+$('#bDate').on('input',function(){ this.value=cleanDigits(this.value,7); });
+$('#btnBatchInv').on('click',function(){
+  var t=$('#bTrack').val(), n=$('#bNo').val(), d=$('#bDate').val();
+  var er=invFieldErr('t',t)||invFieldErr('n',n)||invFieldErr('d',d);
+  if(er){ $('#bErr').text(er); return; }
+  if(!SEL.length){ $('#bErr').text('尚未選定明細（之後加入的明細會自動帶入這組）'); return; }
+  $('#bErr').text(''); SEL.forEach(function(s){ s.inv_track=t; s.inv_no=n; s.inv_date=d; }); renderSel();
+  toast('已把發票資料套用到全部 '+SEL.length+' 筆明細，可再改個別不同的');
+});
+$('#nDate').on('change',function(){ $('#tSel .in-id').each(function(){ var er=invFieldErr('d',this.value); $(this).toggleClass('bad',!!er&&this.value!=='').attr('title',er); }); });
 function rate(){ var v=parseFloat($('#nRate').val()); return isNaN(v)?0:v; }
 function rowVals(s){ var q=parseFloat(s.use_qty)||0, p=parseFloat(s.use_price)||0, amt=Math.round(q*p*100)/100; return {q:q,p:p,amt:amt,tax:Math.round(amt*rate())}; }
 function rowErr(s){ var v=rowVals(s); if(v.q<=0) return '折讓數量要大於 0'; if(v.p<0) return '單價不可為負'; if(v.q-s.remain_qty>0.0001) return '超過尚可折讓數量 '+nf2(s.remain_qty); return ''; }
@@ -526,27 +573,34 @@ function renderSel(){
      +'<td class="l">'+esc(s.part)+'</td><td class="r">'+nf2(s.qty)+'</td><td class="r">'+nf2(s.unit_price)+'</td>'
      +'<td><input type="number" class="in-n in-q" data-i="'+i+'" step="any" value="'+esc(s.use_qty)+'"><div class="err c-err"></div></td>'
      +'<td><input type="number" class="in-n in-p" data-i="'+i+'" step="any" value="'+esc(s.use_price)+'"></td>'
-     +'<td class="r c-amt"></td><td class="r c-tax"></td><td><button class="btn-mini js-rm" data-k="'+esc(selKey(s))+'">移除</button></td></tr>';
+     +'<td class="r c-amt"></td><td class="r c-tax"></td>'
+     +'<td><input type="text" class="in-n in-it" data-i="'+i+'" maxlength="2" style="width:56px;text-align:center;text-transform:uppercase;" value="'+esc(s.inv_track||'')+'" autocomplete="off"></td>'
+     +'<td><input type="text" class="in-n in-in" data-i="'+i+'" maxlength="8" style="width:112px;text-align:center;" value="'+esc(s.inv_no||'')+'" autocomplete="off"></td>'
+     +'<td><input type="text" class="in-n in-id" data-i="'+i+'" maxlength="7" style="width:96px;text-align:center;" value="'+esc(s.inv_date||'')+'" autocomplete="off"></td>'
+     +'<td><button class="btn-mini js-rm" data-k="'+esc(selKey(s))+'">移除</button></td></tr>';
   });
-  $('#tSel tbody').html(h||'<tr><td colspan="11" style="color:#8a6d45;padding:14px;">尚未選定任何明細</td></tr>');
+  $('#tSel tbody').html(h||'<tr><td colspan="14" style="color:#8a6d45;padding:14px;">尚未選定任何明細</td></tr>');
+  $('#tSel .in-it,#tSel .in-in,#tSel .in-id').each(function(){ var k=$(this).hasClass('in-it')?'t':($(this).hasClass('in-in')?'n':'d'); var er=this.value===''?'':invFieldErr(k,this.value); $(this).toggleClass('bad',!!er).attr('title',er); });
   $('#selCust').text(SEL.length?('客戶：'+SELCUST+'　'+SEL[0].customer):'');
   SEL.forEach(function(s,i){ calcRow(i); }); calcTotal();
 }
 $('#nRate').on('input',function(){ SEL.forEach(function(s,i){ calcRow(i); }); calcTotal(); });
 $('#btnSug').on('click',function(){
   if(!SELCUST){ $('#nErr').text('請先選定明細（客戶由明細決定）'); return; }
-  $.getJSON(API,{action:'suggest_no',customer_id:SELCUST,allow_date:$('#nDate').val()},function(r){
-    if(r.ok){ $('#nNo').val(r.no); $('#nErr').text(''); } else $('#nErr').text(r.error||'');
+  // 號碼的年月日＝原發票日期（多筆取最早）；還沒填發票日期時才暫用折讓日期
+  var isos=SEL.map(function(s){ return rocToIso(s.inv_date||''); }).filter(Boolean).sort();
+  $.getJSON(API,{action:'suggest_no',customer_id:SELCUST,num_date:isos[0]||'',allow_date:$('#nDate').val()},function(r){
+    if(r.ok){ $('#nNo').val(r.no); $('#nErr').text(isos.length?'':'提醒：還沒填原發票日期，號碼暫以折讓日期的年月帶入；填好發票日期後請再按一次「帶入建議編號」'); } else $('#nErr').text(r.error||'');
   }).fail(function(x){ $('#nErr').text(errMsg(x)); });
 });
 $('#btnNew').on('click',function(){ resetNew(); });
 $('#btnCreate').on('click',function(){
   $('#nErr').text('');
   if(!SEL.length){ $('#nErr').text('請至少選一筆出貨單或退貨單明細'); return; }
-  for(var i=0;i<SEL.length;i++){ var e=rowErr(SEL[i]); if(e){ $('#nErr').text('第 '+(i+1)+' 筆（'+SEL[i].no+'）：'+e); return; } }
+  for(var i=0;i<SEL.length;i++){ var e=rowErr(SEL[i])||invErr(SEL[i]); if(e){ $('#nErr').text('第 '+(i+1)+' 筆（'+SEL[i].no+'）：'+e); return; } }
   if(!$('#nDate').val()){ $('#nErr').text('請選折讓日期'); return; }
   var payload={customer_id:SELCUST,allow_date:$('#nDate').val(),tax_rate:$('#nRate').val(),allow_no:$('#nNo').val(),note:$('#nNote').val(),
-    items:SEL.map(function(s){return {type:s.type,src_id:s.src_id,qty:s.use_qty,unit_price:s.use_price};})};
+    items:SEL.map(function(s){return {type:s.type,src_id:s.src_id,qty:s.use_qty,unit_price:s.use_price,inv_track:s.inv_track,inv_no:s.inv_no,inv_date:s.inv_date};})};
   var fd=new FormData(); fd.append('action','create'); fd.append('csrf',CSRF); fd.append('payload',JSON.stringify(payload));
   var files=$('#nFiles')[0].files; for(var j=0;j<files.length;j++) fd.append('files[]',files[j]);
   var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 開立中…');
@@ -560,35 +614,94 @@ $('#btnCreate').on('click',function(){
 
 /* ── 明細 ── */
 var CUR=null;
-function openDtl(id){
+function invCell(i){ return esc((i.inv_track||'')+(i.inv_no||''))+(i.inv_date?'<div style="font-size:11px;color:#8a6d45;">'+esc(String(i.inv_date).slice(0,3)+'.'+String(i.inv_date).slice(3,5)+'.'+String(i.inv_date).slice(5))+'</div>':''); }
+/* 檢視：合計與「含稅合計」各自一格 */
+function viewTable(a){
+  var h='<div class="sec">綁定的單據</div><div class="a-wrap"><table class="a-t"><thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>規格</th><th>原數量</th><th>原單價</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th>原發票</th></tr></thead><tbody>';
+  a.items.forEach(function(i){ h+='<tr><td><span class="pill '+(i.src_type==='IR'?'p-ret':'p-ship')+'">'+(i.src_type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(i.src_no)+'</td><td>'+esc(dd(i.src_date))+'</td><td class="l">'+esc(i.part_no)+'</td><td class="l wrap">'+esc(i.spec)+'</td><td class="r">'+nf2(i.src_qty)+'</td><td class="r">'+nf2(i.src_price)+'</td><td class="r">'+nf2(i.qty)+'</td><td class="r">'+nf2(i.unit_price)+'</td><td class="r">'+nf(i.amount)+'</td><td class="r">'+nf(i.tax_amount)+'</td><td style="white-space:nowrap;">'+invCell(i)+'</td></tr>'; });
+  h+='</tbody><tfoot><tr><td colspan="9" class="r"><b>合計</b></td><td class="r"><b>'+nf(a.sales_amount)+'</b></td><td class="r"><b>'+nf(a.tax_amount)+'</b></td><td></td></tr>'
+    +'<tr><td colspan="9" class="r"><b>含稅合計</b></td><td colspan="3" class="r" style="font-size:16px;"><b style="color:#DD5138;">'+nf(a.total_amount)+'</b></td></tr></tfoot></table></div>';
+  return h;
+}
+/* 修改模式 */
+function editHead(a){
+  return '<div class="info">客戶：<b>'+esc(a.customer_id)+'　'+esc(a.customer_name)+'</b>　（修改中：數量、單價、發票資料、折讓日期、稅率、備註可改；要換單據請作廢後重開）</div>'
+   +'<div class="frm" style="grid-template-columns:100px 220px 100px 160px 80px 1fr;"><label>折讓日期</label><input type="date" id="eDate" value="'+esc(a.allow_date)+'"><label>營業稅率</label><input type="number" id="eRate" step="0.01" min="0" max="1" value="'+Number(a.tax_rate)+'"><label>備註</label><input type="text" id="eNote" maxlength="500" value="'+esc(a.note||'')+'"></div><div id="eErr" class="err"></div>';
+}
+function editTable(a){
+  var h='<div class="sec">綁定的單據（修改數量／單價／原發票資料）</div><div class="a-wrap"><table class="a-t" id="tEdit"><thead><tr><th>類別</th><th>單號</th><th>料號</th><th>原數量</th><th>可折讓上限</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th>發票字軌</th><th>發票號碼</th><th>發票日期</th></tr></thead><tbody>';
+  a.items.forEach(function(i,k){
+    h+='<tr data-id="'+i.item_id+'" data-rem="'+Number(i.remain_qty)+'"><td><span class="pill '+(i.src_type==='IR'?'p-ret':'p-ship')+'">'+(i.src_type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(i.src_no)+'</td><td class="l">'+esc(i.part_no)+'</td><td class="r">'+nf2(i.src_qty)+'</td><td class="r">'+nf2(i.remain_qty)+'</td>'
+     +'<td><input type="number" class="in-n e-q" step="any" value="'+Number(i.qty)+'"></td><td><input type="number" class="in-n e-p" step="any" value="'+Number(i.unit_price)+'"></td><td class="r e-amt"></td><td class="r e-tax"></td>'
+     +'<td><input type="text" class="in-n e-it" maxlength="2" style="width:56px;text-align:center;text-transform:uppercase;" value="'+esc(i.inv_track||'')+'"></td>'
+     +'<td><input type="text" class="in-n e-in" maxlength="8" style="width:112px;text-align:center;" value="'+esc(i.inv_no||'')+'"></td>'
+     +'<td><input type="text" class="in-n e-id" maxlength="7" style="width:96px;text-align:center;" value="'+esc(i.inv_date||'')+'"></td></tr>';
+  });
+  h+='</tbody><tfoot><tr><td colspan="7" class="r"><b>合計</b></td><td class="r"><b id="eNet">0</b></td><td class="r"><b id="eTax">0</b></td><td colspan="3"></td></tr>'
+    +'<tr><td colspan="7" class="r"><b>含稅合計</b></td><td colspan="5" class="r" style="font-size:16px;"><b id="eTot" style="color:#DD5138;">0</b></td></tr></tfoot></table></div>';
+  return h;
+}
+function eRate(){ var v=parseFloat($('#eRate').val()); return isNaN(v)?0:v; }
+function eCalc(){
+  var net=0,tax=0,err='',ad=$('#eDate').val();
+  $('#tEdit tbody tr').each(function(){
+    var $r=$(this), q=parseFloat($r.find('.e-q').val())||0, p=parseFloat($r.find('.e-p').val())||0, rem=parseFloat($r.data('rem'))||0;
+    var amt=Math.round(q*p*100)/100, tx=Math.round(amt*eRate()); net+=amt; tax+=tx;
+    $r.find('.e-amt').text(nf(amt)); $r.find('.e-tax').text(nf(tx));
+    var qe=q<=0?'折讓數量要大於 0':(q-rem>0.0001?'超過可折讓上限 '+nf2(rem):''); $r.find('.e-q').toggleClass('bad',!!qe).attr('title',qe);
+    var ie=[['.e-it','t'],['.e-in','n'],['.e-id','d']].map(function(c){ var $x=$r.find(c[0]), er=invFieldErr(c[1],$x.val(),ad); $x.toggleClass('bad',!!er&&$x.val()!=='').attr('title',er); return er; }).filter(Boolean)[0]||'';
+    if(!err) err=qe?($r.children().eq(1).text()+'：'+qe):(ie?($r.children().eq(1).text()+'：'+ie):'');
+  });
+  $('#eNet').text(nf(net)); $('#eTax').text(nf(tax)); $('#eTot').text(nf(net+tax)); $('#eErr').text(err);
+  return err;
+}
+$(document).on('input change','#eDate,#eRate,#tEdit input',function(){
+  if($(this).hasClass('e-it')) this.value=cleanTrack(this.value);
+  if($(this).hasClass('e-in')) this.value=cleanDigits(this.value,8);
+  if($(this).hasClass('e-id')) this.value=cleanDigits(this.value,7);
+  eCalc();
+});
+$(document).on('click','#dEdit',function(){ openDtl(CUR.allow_id,true); });
+$(document).on('click','#dEditCancel',function(){ openDtl(CUR.allow_id,false); });
+$(document).on('click','#dEditSave',function(){
+  var er=eCalc(); if(er){ toast(esc(er),true); return; }
+  var items=$('#tEdit tbody tr').map(function(){ var $r=$(this); return {item_id:$r.data('id'),qty:$r.find('.e-q').val(),unit_price:$r.find('.e-p').val(),inv_track:$r.find('.e-it').val(),inv_no:$r.find('.e-in').val(),inv_date:$r.find('.e-id').val()}; }).get();
+  var payload={allow_date:$('#eDate').val(),tax_rate:$('#eRate').val(),note:$('#eNote').val(),items:items};
+  post('update',{id:CUR.allow_id,payload:JSON.stringify(payload)},function(r){ toast(esc(r.message)); openDtl(CUR.allow_id,false); load(); },function(m){ $('#eErr').text(m); toast(esc(m),true); });
+});
+var EDITING=false;
+function openDtl(id,edit){
+  EDITING=!!edit;
   $.getJSON(API,{action:'get',id:id},function(r){
     if(!r.ok){ toast(esc(r.error||'載入失敗'),true); return; }
     var a=CUR=r.allowance, v=a.status==='void';
     $('#dTitle').text('折讓單　'+a.customer_name+'　'+dd(a.allow_date)+(v?'（已作廢）':''));
-    var h='<div class="info">客戶：<b>'+esc(a.customer_id)+'　'+esc(a.customer_name)+'</b>　折讓日期：'+esc(dd(a.allow_date))+'　帳款月份：<b>'+esc(a.billing_month)+'</b>　營業稅率：'+(Number(a.tax_rate)*100)+'%'
+    var h=EDITING?editHead(a):'<div class="info">客戶：<b>'+esc(a.customer_id)+'　'+esc(a.customer_name)+'</b>　折讓日期：'+esc(dd(a.allow_date))+'　帳款月份：<b>'+esc(a.billing_month)+'</b>　營業稅率：'+(Number(a.tax_rate)*100)+'%'
       +'　開立：'+esc(a.created_by_name||'')+' '+esc(String(a.created_at||'').replace(/-/g,'.'))+(a.note?'<br>備註：'+esc(a.note):'')
-      +(v?'<br><b style="color:#DD5138;">已作廢</b>：'+esc(a.void_reason||'')+'（'+esc(a.voided_by_name||'')+' '+esc(String(a.voided_at||'').replace(/-/g,'.'))+'）':'')+'</div>';
+      +(v?'<br><b style="color:#DD5138;">已作廢</b>：'+esc(a.void_reason||'')+'（'+esc(a.voided_by_name||'')+' '+esc(String(a.voided_at||'').replace(/-/g,'.'))+'）':'')+(a.modified_by_name?'<br><span style="color:#8a6d45;">最後修改：'+esc(a.modified_by_name)+' '+esc(String(a.modified_at||'').replace(/-/g,'.'))+'</span>':'')+'</div>';
     h+='<div class="sec">折讓證明單號碼</div><div style="display:flex;gap:6px;align-items:center;">'
       +(CAN_EDIT&&!v?'<input type="text" id="dNo" maxlength="60" style="height:31px;width:340px;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;" value="'+esc(a.allow_no||'')+'" placeholder="電子發票網站提供的證明單號碼">'
         +'<button class="btn-mini" id="dNoSug" style="height:31px;">帶入建議</button><button class="btn-mini" id="dNoSave" style="height:31px;background:var(--a-acc);color:#fff;">儲存號碼</button>'
         :'<b>'+esc(a.allow_no||'（尚未填寫）')+'</b>')+'</div><div id="dNoErr" class="err"></div>';
-    h+='<div class="sec">綁定的單據</div><div class="a-wrap"><table class="a-t"><thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>規格</th><th>原數量</th><th>原單價</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th></tr></thead><tbody>';
-    a.items.forEach(function(i){ h+='<tr><td><span class="pill '+(i.src_type==='IR'?'p-ret':'p-ship')+'">'+(i.src_type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(i.src_no)+'</td><td>'+esc(dd(i.src_date))+'</td><td class="l">'+esc(i.part_no)+'</td><td class="l wrap">'+esc(i.spec)+'</td><td class="r">'+nf2(i.src_qty)+'</td><td class="r">'+nf2(i.src_price)+'</td><td class="r">'+nf2(i.qty)+'</td><td class="r">'+nf2(i.unit_price)+'</td><td class="r">'+nf(i.amount)+'</td><td class="r">'+nf(i.tax_amount)+'</td></tr>'; });
-    h+='</tbody><tfoot><tr><td colspan="9" class="r"><b>合計</b></td><td class="r"><b>'+nf(a.sales_amount)+'</b></td><td class="r"><b>'+nf(a.tax_amount)+'</b>　含稅 <b style="color:#DD5138;">'+nf(a.total_amount)+'</b></td></tr></tfoot></table></div>';
+    h+=EDITING?editTable(a):viewTable(a);
     h+='<div class="sec">附件</div><div id="dFiles">';
     (a.files||[]).forEach(function(f){ h+='<div style="margin:3px 0;"><i class="fa fa-paperclip"></i> <a href="'+API+'?action=attach_download&file_id='+f.file_id+'" target="_blank">'+esc(f.orig_name)+'</a> <span style="color:var(--a-ink2);font-size:12px;">'+esc(f.uploaded_by_name||'')+' '+esc(String(f.uploaded_at||'').substr(0,16).replace(/-/g,'.'))+'</span>'+(CAN_EDIT&&!v?' <button class="btn-mini js-fdel" data-f="'+f.file_id+'">刪除</button>':'')+'</div>'; });
     if(!(a.files||[]).length) h+='<span style="color:var(--a-ink2);">沒有附件</span>';
     h+='</div>';
     if(CAN_EDIT&&!v) h+='<div style="margin-top:8px;"><input type="file" id="dFile" multiple> <button class="btn-mini" id="dFileUp" style="height:28px;">上傳附件</button></div>'
-      +'<div style="margin-top:14px;"><button class="btn-mini" id="dVoid" style="height:30px;color:#DD5138;border-color:#DD5138;">作廢這張折讓單</button></div>';
+;
     h+='<div class="sec">異動記錄</div><div class="a-wrap"><table class="a-t"><thead><tr><th>時間</th><th>操作人</th><th>動作</th><th>折讓單</th><th>改了什麼</th><th>原因</th></tr></thead><tbody id="dLog"><tr><td colspan="6">載入中…</td></tr></tbody></table></div>';
     $('#dBody').html(h); openMask('mkDtl');
+    // 左下角：作廢；右側：修改／儲存
+    $('#dFootL').html(CAN_EDIT&&!v&&!EDITING?'<button type="button" id="dVoid" style="height:32px;padding:0 14px;border:1px solid #DD5138;border-radius:4px;background:#fff;color:#DD5138;cursor:pointer;">作廢這張折讓單</button>':'');
+    $('#dFootR').html(CAN_EDIT&&!v?(EDITING?'<button type="button" id="dEditCancel">取消修改</button><button type="button" class="go" id="dEditSave"><i class="fa fa-check"></i> 儲存修改</button>':'<button type="button" id="dEdit"><i class="fa fa-pencil"></i> 修改這張折讓單</button>'):'');
+    if(EDITING) eCalc();
     $.getJSON(API,{action:'log_list',allow_id:a.allow_id,per_page:100},function(lr){ if(lr.ok) $('#dLog').html(logRows(lr.rows)); });
   }).fail(function(x){ toast(esc(errMsg(x,'載入失敗')),true); });
 }
 $('#tbody').on('click','.js-dtl',function(){ openDtl($(this).data('id')); });
 $('#dBody').on('click','#dNoSug',function(){
-  $.getJSON(API,{action:'suggest_no',customer_id:CUR.customer_id,allow_date:CUR.allow_date},function(r){ if(r.ok) $('#dNo').val(r.no); });
+  $.getJSON(API,{action:'suggest_no',id:CUR.allow_id},function(r){ if(r.ok) $('#dNo').val(r.no); });
 });
 $('#dBody').on('click','#dNoSave',function(){
   post('set_no',{id:CUR.allow_id,allow_no:$('#dNo').val()},function(r){ toast(esc(r.message)); openDtl(CUR.allow_id); load(); },function(m){ $('#dNoErr').text(m); });
@@ -606,14 +719,14 @@ $('#dBody').on('click','.js-fdel',function(){
   if(!confirm('確定刪除這個附件？')) return;
   post('attach_del',{file_id:$(this).data('f')},function(){ openDtl(CUR.allow_id); load(); });
 });
-$('#dBody').on('click','#dVoid',function(){
+$(document).on('click','#dVoid',function(){
   var reason=prompt('作廢後，來源單據已折讓的數量會釋出，且不再列入對帳。\n請輸入作廢原因：','');
   if(reason===null) return; if(!reason.trim()){ toast('請填寫作廢原因',true); return; }
   post('void',{id:CUR.allow_id,reason:reason},function(r){ toast(esc(r.message)); closeMask('mkDtl'); load(); });
 });
 
 /* ── 異動記錄 ── */
-var ACT={create:'建立',set_no:'修改證明單號碼',void:'作廢（刪除）',attach_add:'新增附件',attach_del:'刪除附件',setting:'設定變更'};
+var ACT={create:'建立',update:'修改折讓內容',set_no:'修改證明單號碼',void:'作廢（刪除）',attach_add:'新增附件',attach_del:'刪除附件',setting:'設定變更'};
 function fmtDetail(s){
   var o=null; try{ o=JSON.parse(s); }catch(e){ return esc(s); }
   if(!o||typeof o!=='object') return esc(s);

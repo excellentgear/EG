@@ -35,7 +35,7 @@ aca_ensure_schema($db);
 if (empty($_SESSION['aca_csrf'])) $_SESSION['aca_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['create', 'set_no', 'void', 'format_save', 'attach_add', 'attach_del', 'attach_setting_save'];
+$WRITE = ['create', 'update', 'set_no', 'void', 'format_save', 'attach_add', 'attach_del', 'attach_setting_save'];
 if (in_array($action, $WRITE, true)) {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') aal_err('必須用 POST', 405);
     $tok = $_POST['csrf'] ?? '';
@@ -71,7 +71,7 @@ case 'attach_setting_save': {
 case 'search':
     $s = $_POST ?: $_GET;
     aal_out(aca_search($db, [
-        'customer' => aal_u8(trim((string)($s['customer'] ?? ''))), 'customer_id' => trim((string)($s['customer_id'] ?? '')), 'part' => aal_u8(trim((string)($s['part'] ?? ''))),
+        'customer' => aal_u8(trim((string)($s['customer'] ?? ''))), 'customer_id' => trim((string)($s['customer_id'] ?? '')), 'part' => aal_u8(trim((string)($s['part'] ?? ''))), 'doc_no' => aal_u8(trim((string)($s['doc_no'] ?? ''))),
         'date_from' => $s['date_from'] ?? '', 'date_to' => $s['date_to'] ?? '', 'src' => $s['src'] ?? 'all',
     ]));
 
@@ -79,7 +79,15 @@ case 'customer_suggest':
     aal_out(['customers' => aca_customer_suggest($db, aal_u8(trim((string)($_GET['kw'] ?? ''))))]);
 
 case 'suggest_no': {
-    $cid = trim((string)($_GET['customer_id'] ?? '')); $d = (string)($_GET['allow_date'] ?? date('Y-m-d'));
+    // 已開立的折讓單：依原發票日期（多筆取最早）帶號碼的年月；開立中：num_date＝選定明細裡最早的發票日期
+    if ((int)($_GET['id'] ?? 0) > 0) {
+        $no = aca_suggest_no_for_id($db, (int)$_GET['id']);
+        if ($no === null) aal_err('找不到折讓單', 404);
+        aal_out(['no' => $no]);
+    }
+    $cid = trim((string)($_GET['customer_id'] ?? ''));
+    $d = (string)($_GET['num_date'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) $d = (string)($_GET['allow_date'] ?? date('Y-m-d'));
     if ($cid === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) aal_err('缺少客戶或日期');
     aal_out(['no' => aca_suggest_no($db, $cid, $d)]);
 }
@@ -115,6 +123,14 @@ case 'get': {
     $a = aca_get($db, (int)($_GET['id'] ?? 0));
     if (!$a) aal_err('找不到折讓單', 404);
     aal_out(['allowance' => $a]);
+}
+
+case 'update': {
+    $d = json_decode((string)($_POST['payload'] ?? ''), true);
+    if (!is_array($d)) aal_err('資料格式錯誤');
+    $r = aca_update($db, (int)($_POST['id'] ?? 0), $d, $u);
+    if (empty($r['success'])) aal_err($r['message']);
+    aal_out($r);
 }
 
 case 'set_no': {
