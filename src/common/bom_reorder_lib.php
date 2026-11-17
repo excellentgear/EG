@@ -85,7 +85,7 @@ if (!function_exists('bro_groups')) {
         // 有回廠紀錄且全數回廠（回廠＋報廢＋取回 已涵蓋發出數量）也算這一關已完成
         try {
             require_once __DIR__ . '/bom_outsource_lib.php';
-            eg_bom_outsource_ensure_schema($db);
+            if (!$db->inTransaction()) eg_bom_outsource_ensure_schema($db);   // DDL 會隱式 commit，交易中不可呼叫
             $all = [];
             foreach ($fidsBySn as $f) foreach ($f as $x) $all[] = $x;
             $bm = $all ? eg_bom_outsource_batch_map($db, $all) : [];
@@ -294,6 +294,7 @@ if (!function_exists('bro_notify')) {
         if (!bro_can_decide($db, $req, $uid, $isAdmin)) return ['success' => false, 'message' => '您不是這張申請的審核人員'];
         $bom = $req['bom'];
         try {
+            try { require_once __DIR__ . '/bom_outsource_lib.php'; eg_bom_outsource_ensure_schema($db); } catch (Throwable $e0) {}   // DDL 一律在交易之前
             $db->beginTransaction();
             $lock = $db->prepare("SELECT status FROM bom_reorder_req WHERE req_id=? FOR UPDATE");
             $lock->execute([$reqId]);
