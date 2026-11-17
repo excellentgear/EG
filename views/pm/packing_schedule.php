@@ -381,6 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 3. 儲存包裝製程設定（多選）
         if ($action === 'save_packing_setting') {
+            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
             $nos = $_POST['process_nos'] ?? [];
             if (!is_array($nos)) $nos = [];
             $nos = array_values(array_unique(array_map('intval', $nos)));
@@ -651,6 +652,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 5b. 儲存預設模板項目（整批覆寫）
         if ($action === 'save_template') {
+            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
             $items = $_POST['items'] ?? [];
             if (!is_array($items)) $items = [];
             $pdo->beginTransaction();
@@ -1520,9 +1522,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <?php if ($PK_CAN_BACKFILL): ?>
                             <button class="btn btn-warning pull-right" id="btn-backfill" style="margin-right:8px;"><i class="fa fa-history"></i> 補登包裝紀錄</button>
                             <?php endif; ?>
-                            <button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button>
+                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button><?php endif; ?>
                             <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-print-setting-top" style="margin-right:8px;"><i class="fa fa-print"></i> 標籤／檢驗表列印設定</button><?php endif; ?>
-                            <button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button>
+                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button><?php endif; ?>
                             <button class="btn btn-default pull-right" id="btn-refresh" style="margin-right:8px;"><i class="fa fa-refresh"></i> 重新整理</button>
                         </div>
                     </div>
