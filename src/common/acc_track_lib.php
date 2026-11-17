@@ -46,6 +46,7 @@ require_once __DIR__ . '/billing_month_lib.php';
 require_once __DIR__ . '/kpi_as_lib.php';
 require_once __DIR__ . '/order_analysis_lib.php';   // oa_period_buckets()/oa_period_pick() 等：純日期計算，通用
 require_once __DIR__ . '/people_lib.php';           // eg_people_list()：負責人候選名單挑人，ai-rules/08 第五節鐵則
+require_once __DIR__ . '/acc_allowance_lib.php';   // 折讓單：有折讓的客戶要出現在該帳款月份的對帳清單
 
 if (!defined('ACT_MODULE'))      define('ACT_MODULE', 'acc_recon_track');
 if (!defined('ACT_PARAM_GROUP')) define('ACT_PARAM_GROUP', 'ACC_RECON_TRACK');
@@ -703,7 +704,9 @@ function act_ar_rows(PDO $db, string $billingMonth): array
     $zeroIds = act_zero_ship_customer_ids($db, $billingMonth, $cust);
     // 人工新增的對象：系統查無資料而未出現者才補列（金額留空）
     $manualSet = array_flip(act_manual_keys($db, 'ar', $billingMonth));
-    $extraKeys = array_values(array_unique(array_merge($zeroIds, array_keys($manualSet))));
+    // 本帳款月份有折讓單的客戶（折讓視為這個月份要對的項目，即使當月沒有出貨也要出現）
+    $allowMap = aca_recon_customer_map($db, $billingMonth);
+    $extraKeys = array_values(array_unique(array_merge($zeroIds, array_keys($manualSet), array_map('strval', array_keys($allowMap)))));
     foreach ($extraKeys as $key) {
         $key = (string)$key;
         if (in_array($key, $have, true)) continue;

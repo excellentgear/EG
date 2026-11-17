@@ -196,6 +196,9 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .opt-chk { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink); margin-right:16px; font-weight:normal; cursor:pointer; }
 .pool-ppl { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; max-height:160px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:8px; }
 .pool-ppl label { font-size:12px; font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; }
+.allow-badge{display:inline-block;margin-left:6px;padding:0 8px;border-radius:9px;font-size:11px;line-height:18px;background:#F0A24B;color:#fff !important;cursor:pointer;text-decoration:none !important;}
+.allow-badge:hover{background:#d98a33;}
+table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FFE9A8 !important;}
 </style>
 </head>
 <body class="nav-sm">
@@ -477,6 +480,18 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <div class="m-body">
       <p class="hint" id="dtlSub"></p>
       <div class="tbl-wrap" style="max-height:60vh;overflow:auto;"><table class="art-t" id="dtlTbl"><thead></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ 有折讓：此客戶此帳款月份綁定的折讓單與出貨／退貨單 ══════════ -->
+<div class="m-mask" id="allowMask">
+  <div class="m-win" style="width:1000px;max-width:96%;">
+    <div class="m-head"><span id="allowTitle">折讓單</span> <span class="x" data-close="allowMask">✕</span></div>
+    <div class="m-body">
+      <p class="hint" id="allowSub"></p>
+      <div id="allowBody" class="tbl-wrap" style="max-height:60vh;overflow:auto;"></div>
+      <p class="hint" style="margin-top:8px;">開立與維護折讓單請到 <a href="allowance.php" target="_blank">折讓單頁面</a>。</p>
     </div>
   </div>
 </div>
@@ -1018,7 +1033,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本帳款月份有 '+r.allow_cnt+' 張折讓單，點開看綁定的出貨／退貨單">有折讓'+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
@@ -1434,6 +1449,28 @@ $(function(){
     if (PERMS.canAdmin || PERMS.isPm || PERMS.isSales || PERMS.isAcc) { try { zc.checked = (localStorage.getItem('act_ap_zero') === '1'); } catch(e) {} }
     else { zc.disabled = true; zc.parentNode.title = '唯讀權限不能變更此選項'; }
     $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+    // 客戶名稱旁「有折讓」→ 跳窗列出綁定的折讓單與出貨／退貨單
+    $('#listTbl tbody').on('click', '.allow-badge', function(e){
+        e.stopPropagation();
+        var cid = $(this).attr('data-cid'), nm = $(this).attr('data-name'), bm = document.getElementById('fBm').value || defaultBm();
+        document.getElementById('allowTitle').textContent = nm + ' — ' + bm + ' 折讓單';
+        document.getElementById('allowSub').textContent = '載入中…';
+        document.getElementById('allowBody').innerHTML = '';
+        openMask('allowMask');
+        apiGet('allow_info', {party:cid, bm:bm}).done(function(r){
+            var as = (r && r.allowances) || [], dotd = function(x){ return String(x||'').replace(/-/g,'.'); }, h = '', cnt = 0;
+            as.forEach(function(a){
+                h += '<div style="margin:10px 0 4px;font-weight:bold;">折讓日期 ' + esc(dotd(a.allow_date)) + '　證明單號碼：' + esc(a.allow_no||'（尚未填）') + '　開立：' + esc(a.created_by_name||'') + '　含稅 ' + fmtMoney(a.total_amount) + (a.note ? '　備註：' + esc(a.note) : '') + '</div>'
+                   + '<table class="art-t"><thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th></tr></thead><tbody>';
+                (a.items||[]).forEach(function(i){ cnt++;
+                    h += '<tr class="allow-row"><td>' + (i.src_type==='IR'?'退貨單':'出貨單') + '</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.part_no) + '</td><td>' + esc(i.spec) + '</td><td class="n">' + Number(i.qty) + '</td><td class="n">' + fmtMoney(i.unit_price) + '</td><td class="n">' + fmtMoney(i.amount) + '</td></tr>';
+                });
+                h += '</tbody></table>';
+            });
+            document.getElementById('allowBody').innerHTML = h || '<p class="c">沒有折讓資料</p>';
+            document.getElementById('allowSub').textContent = '共 ' + as.length + ' 張折讓單、' + cnt + ' 筆綁定單據（折讓視為此帳款月份待對帳項目）';
+        }).fail(function(){ document.getElementById('allowSub').textContent = '載入失敗'; });
+    });
     // 雙擊列表列 → 跳窗顯示本結帳月份此客戶／廠商明細（資料同對帳作業 reconcile.php）
     $('#listTbl tbody').on('dblclick', 'tr.dtl-row', function(e){
         if ($(e.target).closest('button,select,input,a,.icon-btn').length) return;
@@ -1450,13 +1487,24 @@ $(function(){
             var d = (r && r.detail) || {}, items = d.items || [], h = '', n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; };
             var cols = isAr ? ['類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
             document.getElementById('dtlTbl').querySelector('thead').innerHTML = '<tr>' + cols.map(function(c){ return '<th>'+c+'</th>'; }).join('') + '</tr>';
+            var allows = (isAr && r.allowances) || [], allowTotal = 0, dotd = function(x){ return String(x||'').replace(/-/g,'.'); };
+            // 折讓視為本結帳月份待對帳的項目：置頂、暖黃底色，並註明何時折讓、誰開立
+            allows.forEach(function(a){
+                allowTotal -= Number(a.total_amount) || 0;
+                (a.items||[]).forEach(function(i){
+                    h += '<tr class="allow-row"><td>折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
+                       + '<td>已於 ' + esc(dotd(a.allow_date)) + ' 折讓｜開立：' + esc(a.created_by_name||'') + '｜證明單號碼：' + esc(a.allow_no||'（尚未填）') + '</td></tr>';
+                });
+            });
             items.forEach(function(it){
                 if (isAr) h += '<tr><td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
                 else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
             });
             document.getElementById('dtlTbl').querySelector('tbody').innerHTML = h || '<tr><td colspan="' + cols.length + '" class="c">沒有明細</td></tr>';
             var tot = isAr ? d.total_amt : d.total_amount;
-            document.getElementById('dtlSub').textContent = '共 ' + items.length + ' 筆' + (tot != null ? '，合計(含稅) ' + fmtMoney(tot) : '') + '（資料與對帳作業相同；雙擊列表任一列開啟）';
+            if (isAr && allows.length && tot != null) tot = Number(tot) + allowTotal;
+            var allowCnt = 0; allows.forEach(function(a){ allowCnt += (a.items||[]).length; });
+            document.getElementById('dtlSub').textContent = '共 ' + (items.length + allowCnt) + ' 筆' + (allowCnt ? '（含折讓 ' + allowCnt + ' 筆，置頂暖黃底）' : '') + (tot != null ? '，合計(含稅' + (allowCnt ? '，已扣折讓' : '') + ') ' + fmtMoney(tot) : '') + '（資料與對帳作業相同；雙擊列表任一列開啟）';
         }).fail(function(){ document.getElementById('dtlSub').textContent = '載入失敗'; });
     });
     apiGet('bootstrap', {}).done(function(r){

@@ -85,7 +85,20 @@ switch ($action) {
         $key  = trim((string)($_GET['party'] ?? ''));
         if ($key === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('缺少對象或結帳月份');
         $d = ($side === 'ar') ? acc_ar_detail($db, $key, $bm) : acc_ap_detail($db, $key, $bm);
-        actOut(['detail' => $d]);
+        $allow = [];
+        if ($side === 'ar') {
+            $cid = aca_customer_id_of($db, $key);
+            if ($cid !== null) $allow = aca_recon_rows($db, $cid, $bm);   // 折讓視為本月份待對帳項目，前端置頂顯示
+        }
+        actOut(['detail' => $d, 'allowances' => $allow]);
+    }
+
+    /* ── 客戶名稱旁「有折讓」點開：此客戶此帳款月份的折讓單與綁定的單據 ── */
+    case 'allow_info': {
+        $bm  = (string)($_GET['bm'] ?? '');
+        $cid = trim((string)($_GET['party'] ?? ''));
+        if ($cid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('缺少客戶或帳款月份');
+        actOut(['allowances' => aca_recon_rows($db, $cid, $bm)]);
     }
 
     /* ── 進度清單（單一結帳月份）────────────────────────────────── */
@@ -94,6 +107,16 @@ switch ($action) {
         $bm   = (string)($_GET['bm'] ?? date('Y-m'));
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
         $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm, !empty($_GET['zero']) && ($perms['canAdmin'] || $perms['isPm'] || $perms['isSales'] || $perms['isAcc']));
+        // 本帳款月份的折讓單（應收）：客戶名稱旁顯示「有折讓」，點開看綁定的出貨／退貨單
+        if ($side === 'ar') {
+            $allowMap = aca_recon_customer_map($db, $bm);
+            foreach ($allRows as &$_ar) {
+                $am = $allowMap[(string)($_ar['party_id'] ?? '')] ?? null;
+                $_ar['allow_cnt']   = $am ? $am['cnt'] : 0;
+                $_ar['allow_total'] = $am ? $am['total'] : 0;
+            }
+            unset($_ar);
+        }
         // 結帳日最後修改人／日期（顯示在結帳日下方）
         $lastEdit = act_settle_last_edit_map($db, $side === 'ar' ? 'customer' : 'maker');
         // 轉到「目前狀態」的日期：該追蹤列最後一次轉入目前狀態的紀錄
