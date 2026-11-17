@@ -82,14 +82,15 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 .a-pager select{height:26px;border:1px solid var(--a-line2);border-radius:4px;font-size:12px;}
 
 .a-wrap{overflow-x:auto;border:1px solid var(--a-line);border-radius:6px;background:#fff;}
-table.a-t{width:100%;border-collapse:collapse;font-size:13px;}
-table.a-t th,table.a-t td{border:1px solid #EADFC8;padding:4px 7px;white-space:nowrap;text-align:center;}
+table.a-t{width:100%;border-collapse:collapse;font-size:14px;}
+table.a-t th,table.a-t td{border:1px solid #EADFC8;padding:8px 10px;white-space:nowrap;text-align:center;}
 table.a-t thead th{position:sticky;top:0;z-index:2;background:var(--a-ok);color:var(--a-ink);font-weight:bold;}
 table.a-t td.l{text-align:left;}
 table.a-t td.r{text-align:right;}
 table.a-t td.wrap{white-space:normal;}
 table.a-t tbody tr:nth-child(even){background:#FFFCF6;}
-table.a-t tbody tr:hover{background:#FDF2E0;}
+table.a-t tbody tr:hover,table.a-t tbody tr:hover td{background:#FDF2E0 !important;}
+table.a-t tbody tr.picked,table.a-t tbody tr.picked td{background:#FCEBD2 !important;}
 table.a-t tr.is-void td{color:#a08a6a;text-decoration:line-through;}
 table.a-t tr.is-full td{color:#a08a6a;}
 table.a-t tr.picked{background:#FCEBD2 !important;}
@@ -104,12 +105,12 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 .a-mask{display:none;position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;
   background:rgba(60,40,20,.45);z-index:9999;overflow:auto;padding:30px 12px;}
 .a-mask.show{display:block;}
-.a-modal{background:#fff;border-radius:8px;width:1180px;max-width:100%;margin:0 auto;box-shadow:0 6px 30px rgba(0,0,0,.3);}
-.a-modal.mid{width:900px;}
+.a-modal{background:#fff;border-radius:8px;width:1560px;max-width:100%;margin:0 auto;box-shadow:0 6px 30px rgba(0,0,0,.3);}
+.a-modal.mid{width:1100px;}
 .a-modal.narrow{width:620px;}
 .a-modal .m-head{background:var(--a-ok);color:var(--a-ink);padding:9px 14px;font-weight:bold;border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .a-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
-.a-modal .m-body{padding:14px;max-height:72vh;overflow:auto;}
+.a-modal .m-body{padding:16px 18px;max-height:80vh;overflow:auto;font-size:14px;}
 .a-modal .m-foot{padding:10px 14px;border-top:1px solid var(--a-line);text-align:right;}
 .a-modal .m-foot button{height:32px;padding:0 14px;border:1px solid var(--a-line2);border-radius:4px;background:#fff;cursor:pointer;color:var(--a-ink);margin-left:5px;}
 .a-modal .m-foot button.go{background:var(--a-acc);color:#fff;border-color:var(--a-acc-d);font-weight:bold;}
@@ -117,14 +118,17 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 
 .sec{font-weight:bold;color:var(--a-brand);margin:10px 0 5px;font-size:14px;}
 .srch{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;}
-.srch input,.srch select{height:31px;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;font-size:13px;color:var(--a-ink);}
+.srch input,.srch select{height:36px;font-size:14px !important;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;font-size:13px;color:var(--a-ink);}
 .srch button{height:31px;padding:0 12px;border:1px solid var(--a-acc-d);border-radius:4px;background:var(--a-acc);color:#fff;font-weight:bold;cursor:pointer;}
-.box{border:1px solid var(--a-line);border-radius:6px;max-height:230px;overflow:auto;background:#fff;}
+.al-box{border:1px solid var(--a-line);border-radius:6px;max-height:360px;overflow:auto;background:#fff !important;padding:0;margin:0;box-shadow:none;}
+.al-box table.a-t{margin:0;background:#fff;}
+.al-box table.a-t tbody tr:nth-child(odd){background:#fff;}
+.al-box table.a-t tbody tr:nth-child(even){background:#FFFCF6;}
 .frm{display:grid;grid-template-columns:110px 1fr 110px 1fr;gap:8px 10px;align-items:center;font-size:13px;color:var(--a-ink);}
-.frm input,.frm select{height:31px;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;font-size:13px;color:var(--a-ink);width:100%;}
+.frm input,.frm select{height:36px;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;font-size:13px;color:var(--a-ink);width:100%;}
 .frm label{margin:0;font-weight:normal;}
 .frm .full{grid-column:2 / span 3;}
-.in-n{width:92px;height:26px;text-align:right;border:1px solid var(--a-line2);border-radius:4px;font-size:12.5px;padding:0 5px;color:var(--a-ink);-moz-appearance:textfield;appearance:textfield;}
+.in-n{width:120px;height:32px;text-align:right;border:1px solid var(--a-line2);border-radius:4px;font-size:12.5px;padding:0 5px;color:var(--a-ink);-moz-appearance:textfield;appearance:textfield;}
 .in-n::-webkit-outer-spin-button,.in-n::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .in-n.bad{border-color:var(--a-bad);background:#FDECE7;}
 .err{color:var(--a-bad);font-size:12px;margin-top:2px;}
@@ -204,13 +208,13 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
       <button id="btnSrch"><i class="fa fa-search"></i> 搜尋</button>
       <span id="srchInfo" style="font-size:12px;color:var(--a-ink2);"></span>
     </div>
-    <div class="box"><table class="a-t" id="tSrch">
+    <div class="al-box"><table class="a-t" id="tSrch">
       <thead><tr><th>類別</th><th>單號</th><th>日期</th><th>客戶</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th><th>已折讓</th><th></th></tr></thead>
       <tbody><tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號後按「搜尋」（兩者都不填＝列出最近的單據）</td></tr></tbody>
     </table></div>
 
     <div class="sec">② 已選定的明細（折讓數量與單價可改；金額與營業稅自動計算）　<span id="selCust" style="color:var(--a-ink);font-weight:normal;"></span></div>
-    <div class="box" style="max-height:260px;"><table class="a-t" id="tSel">
+    <div class="al-box" style="max-height:340px;"><table class="a-t" id="tSel">
       <thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>原數量</th><th>原單價</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th></th></tr></thead>
       <tbody><tr><td colspan="11" style="color:#8a6d45;padding:14px;">尚未選定任何明細</td></tr></tbody>
     </table></div>
