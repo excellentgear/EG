@@ -125,6 +125,50 @@ if (!function_exists('eg_bom_timeline')) {
             $add(!empty($t['transfer_date']) ? substr((string)$t['transfer_date'], 0, 10) . ' 12:00:00' : $t['created_at'], $sn, 'transfer', '移轉憑單',
                 '第' . ($ordOf[$sn] ?? $sn) . '關：移轉憑單 ' . ($t['transfer_no'] ?? '') . '，由「' . ($t['m_from'] ?: $t['maker_from']) . '」移轉' . ($t['m_to'] || $t['maker_to'] ? '至「' . ($t['m_to'] ?: $t['maker_to']) . '」' : '') . ' ' . $n($t['transfer_qty'] ?: $t['sqty']) . ' 件');
         }
+        // 包裝自主檢驗（packing_schedule.php）：防鏽／防撞（泡殼 ?入 x ?個）／容器（含編號）等文字資料
+        try {
+            $pq = $db->prepare("SELECT p.*, d.data_json FROM qc_packing_inspection p
+                                  LEFT JOIN qc_packing_inspection_data d ON d.packing_inspection_id = p.packing_inspection_id
+                                 WHERE p.bom = ? ORDER BY p.packing_inspection_id");
+            $pq->execute([$bom]);
+            foreach ($pq->fetchAll(PDO::FETCH_ASSOC) as $p) {
+                $d = json_decode((string)($p['data_json'] ?? ''), true);
+                if (!is_array($d)) $d = [];
+                $parts = [];
+                $rust = array_values(array_filter((array)($d['rust'] ?? []), 'strlen'));
+                if ($rust) {
+                    $rs = [];
+                    foreach ($rust as $v) $rs[] = ($v === '其他' && trim((string)($d['rust_other'] ?? '')) !== '') ? '其他：' . trim($d['rust_other']) : $v;
+                    $parts[] = '有防鏽 ' . implode('、', $rs);
+                }
+                $col = array_values(array_filter((array)($d['collision'] ?? []), 'strlen'));
+                if ($col) {
+                    $cs = [];
+                    foreach ($col as $v) {
+                        if ($v === '泡殼') {
+                            $a = trim((string)($d['collision_detail_1'] ?? '')); $b = trim((string)($d['collision_detail_2'] ?? ''));
+                            $cs[] = '泡殼 (' . ($a !== '' ? $a : '?') . '入 x ' . ($b !== '' ? $b : '?') . '個)';
+                        } elseif ($v === '其他' && trim((string)($d['collision_other'] ?? '')) !== '') {
+                            $cs[] = '其他：' . trim($d['collision_other']);
+                        } else $cs[] = $v;
+                    }
+                    $parts[] = '有防撞 ' . implode('、', $cs);
+                }
+                $cn = [];
+                foreach ((array)($d['rows'] ?? []) as $r) {
+                    if (!is_array($r)) continue;
+                    $no = trim((string)($r['no'] ?? ''));
+                    $cn[] = ($r['type'] ?? '') . ($no !== '' ? ' ' . $no . '號' : '') . ' x ' . ($r['qty'] ?? '');
+                }
+                if ($cn) $parts[] = '容器 ' . implode('、', $cn);
+                $closed = ($p['status'] ?? '') === 'closed';
+                $ts = ($closed && !empty($p['closed_at'])) ? $p['closed_at'] : ($p['inspection_date'] . ' 12:00:00');
+                $fid = (int)($p['bom_ing_fid'] ?? 0);
+                $add($ts, $snOf($fid), 'packing', $closed ? '包裝檢驗' : '包裝檢驗（暫存）',
+                    ($pname($fid) !== '' ? $pname($fid) . '：' : '') . '包裝自主檢驗' . ($closed ? '完成' : '暫存') . ($parts ? '｜' . implode('；', $parts) : ''),
+                    (string)($p['inspector'] ?: ($p['packer'] ?? '')), 'green');
+            }
+        } catch (Throwable $ePk) { error_log('bom_timeline packing: ' . $ePk->getMessage()); }
         // BOM 操作紀錄
         $opL = ['manual_close' => '人工結案', 'cancel_close' => '取消結案', 'transfer' => '移轉', 'create_bom' => '新增BOM', 'clear_outsource_date' => '清除發包日'];
         $oq = $db->prepare("SELECT bol.*, u.user_cname FROM bom_operation_log bol LEFT JOIN user u ON u.id = bol.operator_id WHERE bol.bom = ? ORDER BY bol.id");

@@ -294,6 +294,7 @@ function pk_default_inspector_info(PDO $pdo): ?array
 // 結果逐筆各自開視窗排隊（三之五）；版次依該筆紀錄自己的「檢驗日期」回推（三之四）。
 // =============================================================================
 define('PACKING_INSP_ASDOC_MODULE', 'packing_insp');
+define('PACKING_LABEL_ASDOC_MODULE', 'packing_label'); // 包裝標籤（70x50mm）頁尾右下 AS 編號綁定
 
 /** 首次啟用時預設綁定 3-SM-01-01（使用者指定），僅在「這個模組代碼完全還沒有任何設定值」時才寫入一次；
  *  管理員之後在「檢驗表列印設定」改過（含改成 0＝解除綁定），system_parameters 就已經有列，不會再被蓋回來。
@@ -1183,6 +1184,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'as_doc_id'    => eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE),
                 'as_doc'       => eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE),
                 'pack_no_rule' => pk_packno_rule($pdo),
+                'label_as_doc_id' => eg_asdoc_id($pdo, PACKING_LABEL_ASDOC_MODULE),
+                'label_as_doc'    => eg_asdoc_get($pdo, PACKING_LABEL_ASDOC_MODULE),
+            ]);
+            exit;
+        }
+
+        // 12b. 包裝標籤列印資料（70x50mm）：料號／製令／客戶一律以資料庫現況為準，不採信前端
+        if ($action === 'get_label_data') {
+            $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+            $q = $pdo->prepare("SELECT bi.bom, b.Client_Name, COALESCE(d.D_Setting_Id, b.d_id) AS part_no
+                                FROM bom_ing bi JOIN bom b ON bi.bom = b.bom
+                                LEFT JOIN d_setting d ON b.d_setting_id = d.d_id
+                                WHERE bi.bom_ing_fid = ? LIMIT 1");
+            $q->execute([$fid]);
+            $r = $q->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new Exception('查無此製程資料');
+            $lid = eg_asdoc_id($pdo, PACKING_LABEL_ASDOC_MODULE);
+            $today = date('Y-m-d');
+            echo json_encode(['success' => true,
+                'bom' => (string)$r['bom'], 'part_no' => (string)$r['part_no'], 'customer' => (string)$r['Client_Name'],
+                'company' => pk_company_name($pdo), 'date' => $today,
+                'doc_no_print' => $lid ? eg_asdoc_no_asof_id($pdo, $lid, $today) : '',
             ]);
             exit;
         }
@@ -1199,6 +1222,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
             }
             eg_asdoc_save($pdo, PACKING_INSP_ASDOC_MODULE, $docId, $user_cname);
+            if (isset($_POST['label_as_doc_id'])) {
+                $lblId = (int)$_POST['label_as_doc_id'];
+                if ($lblId) {
+                    $chk2 = $pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0");
+                    $chk2->execute([$lblId]);
+                    if (!$chk2->fetchColumn()) throw new Exception('選擇的標籤 AS 文件不存在或已刪除');
+                }
+                eg_asdoc_save($pdo, PACKING_LABEL_ASDOC_MODULE, $lblId, $user_cname);
+            }
             if (isset($_POST['pack_no_prefix']) || isset($_POST['pack_no_digits'])) {
                 $cur = pk_packno_rule($pdo);
                 $prefix = trim((string)($_POST['pack_no_prefix'] ?? $cur['prefix']));
@@ -1402,6 +1434,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .pkg-checkbox-group label { margin-right: 10px; cursor: pointer; }
         .pkg-other-input { display: inline-block; width: auto; margin-left: 5px; }
         .pkg-row { margin-bottom: 5px; }
+        .pkg-blister-in { display: inline-block !important; width: 64px !important; height: 30px; border: 1px solid #8c8c8c !important; background: #fff !important; vertical-align: middle; }
+        .pkg-no { display: inline-block; width: 70px !important; }
         .pkg-remove { color: #d9534f; cursor: pointer; margin-left: 5px; }
         .ng-value { background-color: #f2dede !important; color: #a94442; font-weight: bold; }
         .has-error-border { border-color: #a94442 !important; box-shadow: inset 0 1px 1px rgba(0,0,0,.075), 0 0 4px rgba(169,68,66,.6); }
@@ -1745,8 +1779,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <div class="pkg-checkbox-group">
                         <div style="margin-bottom:5px;">
                             <label><input type="checkbox" class="pkg-collision" value="泡殼"> 泡殼</label>
-                            (<input type="number" class="form-control input-sm pkg-collision-detail" style="width:50px;display:inline-block;" placeholder="入"> 入 x
-                            <input type="number" class="form-control input-sm pkg-collision-detail-2" style="width:50px;display:inline-block;" placeholder="個"> 個)
+                            ( <input type="number" min="0" class="form-control input-sm pkg-collision-detail pkg-blister-in" data-eg-skip> 入 x
+                            <input type="number" min="0" class="form-control input-sm pkg-collision-detail-2 pkg-blister-in" data-eg-skip> 個 )
                         </div>
                         <label><input type="checkbox" class="pkg-collision" value="隔板"> 隔板</label>
                         <label><input type="checkbox" class="pkg-collision" value="氣泡紙"> 氣泡紙</label>
@@ -1833,10 +1867,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
         <div class="pk-float-footer">
             <button type="button" class="btn btn-default" id="pkWindowCancel">取消</button>
+            <button type="button" class="btn btn-default" id="btn-print-label" style="float:left;"><i class="fa fa-tag"></i> 列印標籤</button>
             <button type="button" class="btn btn-default" id="btn-save-draft"><i class="fa fa-clock-o"></i> 暫存</button>
             <button type="button" class="btn btn-success" id="btn-save-pkg"><i class="fa fa-check"></i> 完成包裝</button>
         </div>
     </div>
+
+    <!-- 包裝標籤列印（70x50mm）：每箱數量自動算張數與餘數 -->
+    <div class="modal fade" id="labelModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-tag"></i> 列印包裝標籤（70 x 50 mm）</h4></div>
+        <div class="modal-body">
+            <div class="row">
+                <div class="col-sm-6"><label>總數量（可修改）</label>
+                    <input type="number" id="lb-total" class="form-control" min="1" data-eg-skip></div>
+                <div class="col-sm-6"><label>每箱數量（?入）<span class="text-danger">*</span></label>
+                    <input type="number" id="lb-per" class="form-control" min="1" data-eg-skip></div>
+            </div>
+            <div id="lb-calc" class="well well-sm" style="margin-top:10px;margin-bottom:0;">請輸入每箱數量</div>
+            <div id="lb-err" class="text-danger small" style="margin-top:6px;"></div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" id="lb-print"><i class="fa fa-print"></i> 列印</button></div>
+    </div></div></div>
 
     <?php if ($PK_CAN_BACKFILL): ?>
     <!-- 補登包裝紀錄：搜尋尚未有任何包裝紀錄的 BOM 製程 -->
@@ -1908,6 +1961,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <div style="margin:6px 0 10px;"><span id="pki-asdoc-label" style="font-weight:600;"></span></div>
             <button type="button" class="btn btn-default btn-sm" id="pki-asdoc-pick"><i class="fa fa-search"></i> 選擇 AS 文件</button>
             <button type="button" class="btn btn-link btn-sm" id="pki-asdoc-clear">解除綁定</button>
+
+            <hr>
+            <p class="text-muted" style="font-size:12px;"><strong>包裝標籤（70x50mm）</strong>右下角印的 AS 文件編號：</p>
+            <div style="margin:6px 0 10px;"><span id="pki-label-asdoc-label" style="font-weight:600;"></span></div>
+            <button type="button" class="btn btn-default btn-sm" id="pki-label-asdoc-pick"><i class="fa fa-search"></i> 選擇標籤 AS 文件</button>
+            <button type="button" class="btn btn-link btn-sm" id="pki-label-asdoc-clear">解除綁定</button>
 
             <hr>
             <p class="text-muted" style="font-size:12px;">印在表單右上角的<strong>單號</strong>（例：PK20161005001＝前綴＋包裝日期＋當天流水號3碼），於每筆紀錄<strong>第一次完成包裝結案時</strong>依下列編碼原則自動產生並永久保留；<strong>修改編碼原則不會改掉已經產生過的編號，只影響修改之後才結案的新紀錄</strong>。</p>
@@ -2602,12 +2661,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         });
 
+        // 泡殼「?入 x ?個」有填任何一格就自動勾選泡殼
+        $(document).on('input', '.pkg-blister-in', function () {
+            if ($(this).val() !== '') $('.pkg-collision[value="泡殼"]').prop('checked', true);
+        });
+
         // 容器列
         function addPkgRow(data) {
             data = data || {};
             var type = data.type || '';
             var owner = data.owner || 'customer';
             var qty = data.qty || '';
+            var cno = String(data.no == null ? '' : data.no).replace(/"/g, '&quot;');
             var known = ['鐵桶', '塑膠桶', '紙箱', '蝴蝶籠', '鐵架', '木箱'];
             var isOther = (type !== '' && known.indexOf(type) === -1);
             var name = 'owner_' + Math.floor(performance.now() * 1000);
@@ -2622,6 +2687,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="customer" ' + (owner === 'customer' ? 'checked' : '') + '> 客供</label> ' +
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="internal" ' + (owner === 'internal' ? 'checked' : '') + '> 超正</label> ' +
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="noprint" ' + (owner === 'noprint' ? 'checked' : '') + '> 無印刷</label> ' +
+                '<input type="text" class="form-control input-sm pkg-no" value="' + cno + '" maxlength="10" placeholder="?"> 號 ' +
                 '<label style="margin-left:10px;">數量:<span class="text-danger">*</span></label> ' +
                 '<input type="number" class="form-control input-sm pkg-qty" value="' + qty + '" style="width:80px;"> ' +
                 '<i class="fa fa-times pkg-remove"></i>' +
@@ -2747,7 +2813,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (type === '其他') type = $(this).find('.pkg-type-other').val();
                 var owner = $(this).find('input[type=radio]:checked').val();
                 var qty = $(this).find('.pkg-qty').val();
-                if (type && qty) rows.push({ type: type, owner: owner, qty: qty });
+                var no = $.trim($(this).find('.pkg-no').val() || '');
+                if (type && qty) rows.push({ type: type, owner: owner, qty: qty, no: no });
             });
 
             var rust = []; $('.pkg-rust:checked').each(function () { rust.push($(this).val()); });
@@ -3247,7 +3314,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<thead><tr><th>外觀檢驗項目</th><th>方式/工具</th><th>異常數量</th><th>處置狀況／備註</th></tr></thead><tbody>' + apTbody + '</tbody></table>';
 
             var rustTxt = (pd.rust || []).join('、') + (pd.rust_other ? ('　其他：' + pd.rust_other) : '');
-            var collisionTxt = (pd.collision || []).join('、') + (pd.collision_detail_1 || pd.collision_detail_2 ? ('（泡殼 ' + (pd.collision_detail_1 || 0) + ' 入 x ' + (pd.collision_detail_2 || 0) + ' 個）') : '') + (pd.collision_other ? ('　其他：' + pd.collision_other) : '');
+            var collisionTxt = (pd.collision || []).join('、') + (pd.collision_detail_1 || pd.collision_detail_2 ? ('（泡殼 ' + (pd.collision_detail_1 || '?') + ' 入 x ' + (pd.collision_detail_2 || '?') + ' 個）') : '') + (pd.collision_other ? ('　其他：' + pd.collision_other) : '');
             var protTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:84%"></colgroup>' +
                 '<tr><th>加強防銹</th><td class="tl">' + (rustTxt ? pkEsc(rustTxt) : '（無）') + '</td></tr>' +
                 '<tr><th>確認防撞</th><td class="tl">' + (collisionTxt ? pkEsc(collisionTxt) : '（無）') + '</td></tr>' +
@@ -3259,7 +3326,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var ctTbody = '';
             (pd.rows || []).forEach(function (r) {
                 var ownerName = { customer: '客供', internal: '超正', noprint: '無印刷' }[r.owner] || (r.owner || '');
-                ctTbody += '<tr><td>' + pkEsc(r.type || '') + '</td><td>' + pkEsc(ownerName) + '</td><td>' + fmtNum(r.qty) + '</td></tr>';
+                ctTbody += '<tr><td>' + pkEsc(r.type || '') + (r.no ? ' ' + pkEsc(r.no) + '號' : '') + '</td><td>' + pkEsc(ownerName) + '</td><td>' + fmtNum(r.qty) + '</td></tr>';
             });
             if (!ctTbody) ctTbody = '<tr><td colspan="3" style="padding:6px;color:#888;">無容器明細</td></tr>';
             var ctTbl = '<table class="p-tb"><colgroup><col style="width:34%"><col style="width:33%"><col style="width:33%"></colgroup>' +
@@ -3357,15 +3424,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json');
         });
 
+        // ── 包裝標籤列印（70x50mm，無框線；頁尾左＝本公司全名、右＝綁定的 AS 編號）──────────
+        function lbCalc() {
+            var total = parseInt($('#lb-total').val(), 10) || 0, per = parseInt($('#lb-per').val(), 10) || 0;
+            var $c = $('#lb-calc'), $e = $('#lb-err'); $e.text('');
+            if (total <= 0) { $c.text('請輸入總數量'); return null; }
+            if (per <= 0) { $c.text('請輸入每箱數量'); return null; }
+            var full = Math.floor(total / per), rem = total % per;
+            var txt = '滿箱 ' + full + ' 張（每張 ' + per + '）' + (rem ? '＋餘數 1 張（' + rem + '）' : '') + '，共 ' + (full + (rem ? 1 : 0)) + ' 張';
+            $c.text(txt);
+            if (full > 200) { $e.text('標籤超過 200 張，請確認每箱數量是否填對'); return null; }
+            return { full: full, rem: rem, per: per };
+        }
+        $('#btn-print-label').click(function () {
+            if (!currentRow) return;
+            var t = parseFloat($('#pkg-total-now').text()) || 0;
+            $('#lb-total').val(t > 0 ? t : ($('#f-order-qty').val() || ''));
+            $('#lb-per').val('');
+            lbCalc();
+            $('#labelModal').modal('show');
+            setTimeout(function () { $('#lb-per').focus(); }, 300);
+        });
+        $('#lb-total, #lb-per').on('input', lbCalc);
+        $('#lb-per').on('keydown', function (e) { if (e.which === 13) { e.preventDefault(); $('#lb-print').click(); } });
+        $('#lb-print').click(function () {
+            var c = lbCalc();
+            if (!c) { if (!$('#lb-err').text()) $('#lb-err').text('請填寫每箱數量'); return; }
+            var w = window.open('', '_blank');
+            if (!w) { alert('請允許彈出視窗以列印'); return; }
+            $.post(API, { action: 'get_label_data', bom_ing_fid: currentRow.bom_ing_fid }, function (res) {
+                if (!res.success) { w.close(); alert(res.message || '載入標籤資料失敗'); return; }
+                var d = String(res.date || '').replace(/-/g, '.');
+                var one = function (qty) {
+                    return '<div class="lb"><div class="ln">料號：' + pkEsc(res.part_no) + '</div><div class="ln">製令：' + pkEsc(res.bom) + '</div>' +
+                        '<div class="ln">客戶：' + pkEsc(res.customer) + '</div><div class="ln">本箱數量：' + qty + '</div>' +
+                        '<div class="ln">日期：' + d + '</div>' +
+                        '<div class="ft"><span class="co">' + pkEsc(res.company) + '</span><span class="no">' + pkEsc(res.doc_no_print || '') + '</span></div></div>';
+                };
+                var pages = '';
+                for (var i = 0; i < c.full; i++) pages += one(c.per);
+                if (c.rem) pages += one(c.rem);
+                var css = '@page{size:70mm 50mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#000}' +
+                    '.lb{width:70mm;height:50mm;padding:1.5mm 3mm 0;page-break-after:always;overflow:hidden;position:relative}.lb:last-child{page-break-after:auto}' +
+                    '.ln{font-size:13pt;line-height:6.6mm;height:6.6mm;white-space:nowrap;overflow:hidden}' +
+                    '.ft{position:absolute;left:3mm;right:3mm;bottom:1.5mm;border-top:0.8mm solid #000;padding-top:1mm;display:flex;justify-content:space-between;align-items:baseline;gap:2mm}' +
+                    '.co{font-size:8.5pt;font-weight:bold;letter-spacing:.5mm;white-space:nowrap;overflow:hidden}.no{font-size:8pt;white-space:nowrap}';
+                w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>包裝標籤 ' + pkEsc(res.bom) + '</title><style>' + css + '</style></head><body>' + pages +
+                    '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
+                w.document.close(); w.focus();
+                if (window.EGPrintLog) EGPrintLog.record({ source: 'packing_label', doc_name: '包裝標籤 ' + res.bom + '（' + (c.full + (c.rem ? 1 : 0)) + '張）', doc_kind: 'form', part_no: res.part_no });
+                $('#labelModal').modal('hide');
+            }, 'json').fail(function () { w.close(); alert('連線失敗'); });
+        });
+
         // ── 檢驗表列印設定（AS 文件編號綁定＋包裝日期編號規則）：限管理員 ─────────────────────
         <?php if ($PK_CAN_ADMIN): ?>
-        var PKI_PRINT_SET = { docs: [], docId: 0, doc: null };
+        var PKI_PRINT_SET = { docs: [], docId: 0, doc: null, lblId: 0, lblDoc: null };
         $('#btn-print-setting').click(function () {
             $.post(API, { action: 'print_setting_get' }, function (r) {
                 if (!r.success) { alert(r.message || '載入設定失敗'); return; }
                 PKI_PRINT_SET.docs = r.as_docs || [];
                 PKI_PRINT_SET.docId = parseInt(r.as_doc_id || 0) || 0;
                 PKI_PRINT_SET.doc = r.as_doc || null;
+                PKI_PRINT_SET.lblId = parseInt(r.label_as_doc_id || 0) || 0;
+                PKI_PRINT_SET.lblDoc = r.label_as_doc || null;
                 pkiRenderAsDocLabel();
                 var rule = r.pack_no_rule || { prefix: 'PK', digits: 3 };
                 $('#pki-packno-prefix').val(rule.prefix);
@@ -3377,7 +3499,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         function pkiRenderAsDocLabel() {
             var txt = (window.EGAsDoc && EGAsDoc.label) ? EGAsDoc.label(PKI_PRINT_SET.doc) : (PKI_PRINT_SET.doc ? PKI_PRINT_SET.doc.doc_no : '尚未綁定');
             $('#pki-asdoc-label').text(txt);
+            var t2 = (window.EGAsDoc && EGAsDoc.label) ? EGAsDoc.label(PKI_PRINT_SET.lblDoc) : (PKI_PRINT_SET.lblDoc ? PKI_PRINT_SET.lblDoc.doc_no : '尚未綁定');
+            $('#pki-label-asdoc-label').text(t2);
         }
+        $('#pki-label-asdoc-pick').click(function () {
+            EGAsDoc.open({
+                docs: PKI_PRINT_SET.docs, current: PKI_PRINT_SET.lblId, title: '包裝標籤－AS 文件編號綁定',
+                onSave: function (id, doc) { PKI_PRINT_SET.lblId = parseInt(id) || 0; PKI_PRINT_SET.lblDoc = doc || null; pkiRenderAsDocLabel(); }
+            });
+        });
+        $('#pki-label-asdoc-clear').click(function () { PKI_PRINT_SET.lblId = 0; PKI_PRINT_SET.lblDoc = null; pkiRenderAsDocLabel(); });
         function pkiRenderPacknoSample() {
             var prefix = ($('#pki-packno-prefix').val() || 'PK').trim();
             var digits = parseInt($('#pki-packno-digits').val(), 10) || 3;
@@ -3397,7 +3528,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var digits = parseInt($('#pki-packno-digits').val(), 10) || 3;
             if (!/^[A-Za-z0-9]{1,10}$/.test(prefix)) { alert('編號前綴只能是英數字，最多10字'); return; }
             if (digits < 1 || digits > 6) { alert('流水號位數需在 1~6 之間'); return; }
-            $.post(API, { action: 'print_setting_save', as_doc_id: PKI_PRINT_SET.docId, pack_no_prefix: prefix, pack_no_digits: digits }, function (r) {
+            $.post(API, { action: 'print_setting_save', as_doc_id: PKI_PRINT_SET.docId, label_as_doc_id: PKI_PRINT_SET.lblId, pack_no_prefix: prefix, pack_no_digits: digits }, function (r) {
                 if (!r.success) { alert(r.message || '儲存失敗'); return; }
                 $('#printSetModal').modal('hide');
             }, 'json');
