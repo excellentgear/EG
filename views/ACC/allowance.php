@@ -139,6 +139,14 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 .a-noperm{border:1.5px solid var(--a-line);background:var(--a-bg);border-radius:8px;padding:26px;color:var(--a-ink);}
 .a-hint{font-size:11.5px;color:var(--a-ink2);margin-top:5px;line-height:1.6;}
 .tok{display:inline-block;background:var(--a-ok);border-radius:4px;padding:0 6px;margin:2px 4px 2px 0;font-family:Consolas,monospace;cursor:pointer;}
+.tabs{display:flex;gap:4px;border-bottom:2px solid var(--a-line);margin:6px 0 10px;clear:both;}
+.tabbtn{height:40px;padding:0 20px;border:1px solid var(--a-line2);border-bottom:none;border-radius:8px 8px 0 0;background:var(--a-bg2);color:var(--a-ink);font-size:15px;cursor:pointer;margin-bottom:-2px;}
+.tabbtn:hover{background:var(--a-ok);}
+.tabbtn.on{background:var(--a-acc);color:#fff;border-color:var(--a-acc-d);font-weight:bold;}
+.a-modal.pane-box{width:100%;box-shadow:none;border:1px solid var(--a-line);}
+.pane-box .m-body{max-height:none;overflow:visible;}
+.pane-box .m-head{border-radius:8px 8px 0 0;}
+body.mask-open{overflow:hidden;}
 @media print{ .a-bar,.a-pager,.a-mask,.nav_menu,.left_col,footer{display:none !important;} .right_col{margin:0 !important;padding:0 !important;} }
 </style>
 </head>
@@ -157,6 +165,12 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     <div class="a-noperm"><h4><i class="fa fa-lock"></i> 沒有折讓單的使用權限</h4>
       <p>請洽管理者於「使用者權限設定」指派「折讓單」角色（本頁管理員／會計／唯讀）。</p></div>
 <?php else: ?>
+    <div class="tabs">
+      <button type="button" class="tabbtn on" data-pane="list"><i class="fa fa-list"></i> 折讓單清單</button>
+      <?php if ($perms['canEdit']): ?><button type="button" class="tabbtn" id="btnNew" data-pane="new"><i class="fa fa-plus"></i> 開立折讓單</button><?php endif; ?>
+      <button type="button" class="tabbtn" id="btnLog" data-pane="log"><i class="fa fa-history"></i> 異動記錄</button>
+    </div>
+    <div id="paneList">
     <div class="a-bar">
       <input type="text" id="fKw" placeholder="證明單號碼／客戶／單號／料號／備註" style="width:280px;">
       <label>帳款月份</label><input type="month" id="fBm" style="width:140px;">
@@ -165,8 +179,6 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b></span>
     </div>
     <div class="a-bar" style="background:var(--a-bg2);">
-      <?php if ($perms['canEdit']): ?><button id="btnNew" class="btn-warm"><i class="fa fa-plus"></i> 開立折讓單</button><?php endif; ?>
-      <button id="btnLog"><i class="fa fa-history"></i> 異動記錄</button>
       <?php if ($perms['canAdmin']): ?><button id="btnFmt"><i class="fa fa-cog"></i> 設定（號碼格式／附件位置）</button><?php endif; ?>
       <a href="recon_track.php" style="text-decoration:none;"><button type="button"><i class="fa fa-tasks"></i> 對帳進度追蹤</button></a>
     </div>
@@ -188,16 +200,11 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
         <tbody id="tbody"><tr><td colspan="12" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
       </table>
     </div>
-<?php endif; ?>
-  </div>
-  <?php include '../partPage/footer.html' ?>
-</div>
-</div>
-
-<?php if ($perms['canView']): ?>
+    </div><!-- /paneList -->
+<?php if ($perms['canEdit']): ?>
 <!-- 開立折讓單 -->
-<div class="a-mask" id="mkNew"><div class="a-modal">
-  <div class="m-head"><i class="fa fa-plus"></i>&nbsp;開立折讓單<span class="m-close" data-close="mkNew">✕</span></div>
+<div id="paneNew" class="pane" style="display:none;"><div class="a-modal pane-box">
+  <div class="m-head"><i class="fa fa-plus"></i>&nbsp;開立折讓單</div>
   <div class="m-body">
     <div class="sec">① 搜尋出貨單／退貨單明細（點一列加入；同一張折讓單只能是同一個客戶）</div>
     <div class="srch">
@@ -236,9 +243,35 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     <div id="nErr" class="err"></div>
     <div class="a-hint">折讓日期決定帳款月份：依該客戶的結帳日歸屬，並列入該月份的對帳進度追蹤（客戶名稱旁會顯示「有折讓」）。</div>
   </div>
-  <div class="m-foot"><button data-close="mkNew">取消</button><button class="go" id="btnCreate"><i class="fa fa-check"></i> 開立折讓單</button></div>
+  <div class="m-foot"><button data-pane="list">取消</button><button class="go" id="btnCreate"><i class="fa fa-check"></i> 開立折讓單</button></div>
 </div></div>
 
+<?php endif; ?>
+<!-- 異動記錄 -->
+<div id="paneLog" class="pane" style="display:none;"><div class="a-modal pane-box">
+  <div class="m-head"><i class="fa fa-history"></i>&nbsp;折讓單異動記錄</div>
+  <div class="m-body">
+    <div class="srch">
+      <input type="text" id="lKw" placeholder="證明單號碼／客戶／操作人／內容" style="width:260px;">
+      <select id="lAct"><option value="">全部動作</option><option value="create">建立</option><option value="set_no">修改證明單號碼</option><option value="void">作廢（刪除）</option><option value="attach_add">新增附件</option><option value="attach_del">刪除附件</option><option value="setting">設定變更</option></select>
+      <input type="date" id="lFrom"> ~ <input type="date" id="lTo">
+      <button id="btnLogQ"><i class="fa fa-search"></i> 查詢</button>
+      <span id="lInfo" style="font-size:12px;color:var(--a-ink2);margin-left:auto;"></span>
+    </div>
+    <div class="a-wrap"><table class="a-t"><thead><tr><th>時間</th><th>操作人</th><th>動作</th><th>折讓單</th><th>改了什麼</th><th>原因</th></tr></thead><tbody id="lBody"></tbody></table></div>
+    <div class="a-pager" style="margin-top:6px;"><span id="lBtns"></span></div>
+    <div class="a-hint">記錄只增不減：折讓單作廢後仍可在此查到是誰、何時、為什麼作廢；附件被刪也會留下檔名。</div>
+  </div>
+  <div class="m-foot"><button data-pane="list">關閉</button></div>
+</div></div>
+
+<?php endif; ?>
+  </div>
+  <?php include '../partPage/footer.html' ?>
+</div>
+</div>
+
+<?php if ($perms['canView']): ?>
 <!-- 折讓單明細 -->
 <div class="a-mask" id="mkDtl"><div class="a-modal mid">
   <div class="m-head"><i class="fa fa-file-text-o"></i>&nbsp;<span id="dTitle">折讓單</span><span class="m-close" data-close="mkDtl">✕</span></div>
@@ -272,24 +305,6 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
   <div class="m-foot"><button data-close="mkFmt">關閉</button></div>
 </div></div>
 <?php endif; ?>
-
-<!-- 異動記錄 -->
-<div class="a-mask" id="mkLog"><div class="a-modal">
-  <div class="m-head"><i class="fa fa-history"></i>&nbsp;折讓單異動記錄<span class="m-close" data-close="mkLog">✕</span></div>
-  <div class="m-body">
-    <div class="srch">
-      <input type="text" id="lKw" placeholder="證明單號碼／客戶／操作人／內容" style="width:260px;">
-      <select id="lAct"><option value="">全部動作</option><option value="create">建立</option><option value="set_no">修改證明單號碼</option><option value="void">作廢（刪除）</option><option value="attach_add">新增附件</option><option value="attach_del">刪除附件</option><option value="setting">設定變更</option></select>
-      <input type="date" id="lFrom"> ~ <input type="date" id="lTo">
-      <button id="btnLogQ"><i class="fa fa-search"></i> 查詢</button>
-      <span id="lInfo" style="font-size:12px;color:var(--a-ink2);margin-left:auto;"></span>
-    </div>
-    <div class="a-wrap"><table class="a-t"><thead><tr><th>時間</th><th>操作人</th><th>動作</th><th>折讓單</th><th>改了什麼</th><th>原因</th></tr></thead><tbody id="lBody"></tbody></table></div>
-    <div class="a-pager" style="margin-top:6px;"><span id="lBtns"></span></div>
-    <div class="a-hint">記錄只增不減：折讓單作廢後仍可在此查到是誰、何時、為什麼作廢；附件被刪也會留下檔名。</div>
-  </div>
-  <div class="m-foot"><button data-close="mkLog">關閉</button></div>
-</div></div>
 
 <!-- 使用說明 -->
 <div class="a-mask" id="helpUseMask"><div class="a-modal mid">
@@ -343,10 +358,18 @@ function nf2(n){ var v=Math.round((Number(n)||0)*100)/100; return v.toLocaleStri
 function dd(s){ return (window.egFmtDate && s) ? egFmtDate(s) : (s||''); }
 function toast(m,bad){ var $m=$('#msg').removeClass('ok bad').addClass(bad?'bad':'ok').html(m).stop(true,true).fadeIn(150);
   clearTimeout($m.data('t')); $m.data('t',setTimeout(function(){ $m.fadeOut(400); },bad?7000:3800)); }
-function openMask(id){ $('#'+id).addClass('show'); }
-function closeMask(id){ $('#'+id).removeClass('show'); }
+function syncBody(){ $('body').toggleClass('mask-open',$('.a-mask.show').length>0); }
+function openMask(id){ $('#'+id).addClass('show'); syncBody(); }
+function closeMask(id){ $('#'+id).removeClass('show'); syncBody(); }
+function showPane(n){
+  $('#paneList,#paneNew,#paneLog').hide();
+  $(n==='new'?'#paneNew':(n==='log'?'#paneLog':'#paneList')).show();
+  $('.tabbtn').removeClass('on'); $('.tabbtn[data-pane="'+n+'"]').addClass('on');
+  window.scrollTo(0,0);
+}
+$(document).on('click','[data-pane]',function(){ showPane($(this).data('pane')); });
 $(document).on('click','[data-close]',function(){ closeMask($(this).data('close')); });
-$(document).on('click','.a-mask',function(e){ if(e.target===this) $(this).removeClass('show'); });
+$(document).on('click','.a-mask',function(e){ if(e.target===this) closeMask(this.id); });
 $('#btnPageHelp').on('click',function(){ openMask('helpUseMask'); });
 function errMsg(x,d){ var m=d||'操作失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} return m; }
 function post(action,data,cb,fcb){
@@ -470,7 +493,7 @@ $('#btnSug').on('click',function(){
     if(r.ok){ $('#nNo').val(r.no); $('#nErr').text(''); } else $('#nErr').text(r.error||'');
   }).fail(function(x){ $('#nErr').text(errMsg(x)); });
 });
-$('#btnNew').on('click',function(){ resetNew(); openMask('mkNew'); });
+$('#btnNew').on('click',function(){ resetNew(); });
 $('#btnCreate').on('click',function(){
   $('#nErr').text('');
   if(!SEL.length){ $('#nErr').text('請至少選一筆出貨單或退貨單明細'); return; }
@@ -484,7 +507,7 @@ $('#btnCreate').on('click',function(){
   $.ajax({url:API,type:'POST',data:fd,processData:false,contentType:false,dataType:'json'}).done(function(r){
     $b.prop('disabled',false).html('<i class="fa fa-check"></i> 開立折讓單');
     if(!r.ok){ $('#nErr').text(r.error||'開立失敗'); return; }
-    closeMask('mkNew'); toast(esc(r.message)+((r.attach_fail&&r.attach_fail.length)?'<br>附件未上傳：'+esc(r.attach_fail.join('；')):''),!!(r.attach_fail&&r.attach_fail.length));
+    showPane('list'); toast(esc(r.message)+((r.attach_fail&&r.attach_fail.length)?'<br>附件未上傳：'+esc(r.attach_fail.join('；')):''),!!(r.attach_fail&&r.attach_fail.length));
     page=1; load();
   }).fail(function(x){ $b.prop('disabled',false).html('<i class="fa fa-check"></i> 開立折讓單'); $('#nErr').text(errMsg(x,'開立失敗')); });
 });
@@ -567,7 +590,7 @@ function loadLog(){
     $('#lBtns').html('<button '+(lPage<=1?'disabled':'')+' data-p="'+(lPage-1)+'">‹ 上一頁</button> <button '+(lPage>=pages?'disabled':'')+' data-p="'+(lPage+1)+'">下一頁 ›</button>');
   }).fail(function(x){ toast(esc(errMsg(x,'載入失敗')),true); });
 }
-$('#btnLog').on('click',function(){ lPage=1; loadLog(); openMask('mkLog'); });
+$('#btnLog').on('click',function(){ lPage=1; loadLog(); });
 $('#btnLogQ').on('click',function(){ lPage=1; loadLog(); });
 $('#lKw').on('keydown',function(e){ if(e.key==='Enter'){ lPage=1; loadLog(); } });
 $('#lBtns').on('click','button[data-p]',function(){ lPage=parseInt($(this).data('p'),10); loadLog(); });
