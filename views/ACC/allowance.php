@@ -427,6 +427,11 @@ function resetNew(){
   $('#nErr').text(''); renderSel();
 }
 var LASTROWS=[];
+/* 退貨單有綁定出貨單時，在單號下方以小字顯示 */
+function boundTxt(r){
+  if(r.type!=='IR'||!r.bound_is||!r.bound_is.length) return '';
+  return '<div style="font-size:11px;color:#8a6d45;line-height:1.3;">↳ 綁定出貨單 '+r.bound_is.map(function(b){ return esc(b.no)+'（'+nf2(b.qty)+'）'; }).join('、')+'</div>';
+}
 function renderSrch(rows){
   LASTROWS=rows;
   var h='';
@@ -435,7 +440,7 @@ function renderSrch(rows){
     var blocked=r.full || !r.customer_id || (SELCUST && r.customer_id!==SELCUST);
     var why=r.full?'已全數折讓':(!r.customer_id?'客戶未建主檔':((SELCUST&&r.customer_id!==SELCUST)?'與已選客戶不同':''));
     h+='<tr class="'+(inSel?'picked':'')+(r.full?' is-full':'')+'"><td><span class="pill '+(r.type==='IR'?'p-ret':'p-ship')+'">'+(r.type==='IR'?'退貨':'出貨')+'</span></td>'
-     +'<td>'+esc(r.no)+'</td><td>'+esc(dd(r.date))+'</td><td class="l">'+esc(r.customer)+(r.customer_id?'':' <span style="color:#DD5138;">(未建主檔)</span>')+'</td>'
+     +'<td>'+esc(r.no)+boundTxt(r)+'</td><td>'+esc(dd(r.date))+'</td><td class="l">'+esc(r.customer)+(r.customer_id?'':' <span style="color:#DD5138;">(未建主檔)</span>')+'</td>'
      +'<td class="l">'+esc(r.part)+'</td><td class="l" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="'+esc(r.spec)+'">'+esc(r.spec)+'</td>'
      +'<td class="r">'+nf2(r.qty)+'</td><td class="r">'+nf2(r.unit_price)+'</td><td class="r">'+nf(r.amount)+'</td>'
      +'<td class="r">'+(r.used_qty>0?nf2(r.used_qty):'')+'</td>'
@@ -517,7 +522,7 @@ function calcTotal(){
 function renderSel(){
   var h='';
   SEL.forEach(function(s,i){
-    h+='<tr><td><span class="pill '+(s.type==='IR'?'p-ret':'p-ship')+'">'+(s.type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(s.no)+'</td><td>'+esc(dd(s.date))+'</td>'
+    h+='<tr><td><span class="pill '+(s.type==='IR'?'p-ret':'p-ship')+'">'+(s.type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(s.no)+boundTxt(s)+'</td><td>'+esc(dd(s.date))+'</td>'
      +'<td class="l">'+esc(s.part)+'</td><td class="r">'+nf2(s.qty)+'</td><td class="r">'+nf2(s.unit_price)+'</td>'
      +'<td><input type="number" class="in-n in-q" data-i="'+i+'" step="any" value="'+esc(s.use_qty)+'"><div class="err c-err"></div></td>'
      +'<td><input type="number" class="in-n in-p" data-i="'+i+'" step="any" value="'+esc(s.use_price)+'"></td>'

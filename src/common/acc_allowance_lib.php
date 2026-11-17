@@ -402,6 +402,16 @@ function aca_search(PDO $db, array $f): array
                          WHERE a.status='active' GROUP BY i.src_type, i.src_id");
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $u) $used[$u['src_type'] . ':' . $u['src_id']] = $u;
     }
+    // 退貨單若綁定了出貨單（return_order_map.IS_id），帶出出貨單號供畫面小字顯示
+    $bound = [];
+    $irIds = array_map(fn($r) => (int)$r['id'], array_filter($rows, fn($r) => $r['type'] === 'IR'));
+    if ($irIds) {
+        $q = $db->query("SELECT m.IR_id, il.IS_number, SUM(m.return_qty) q FROM return_order_map m
+                         JOIN is_list il ON il.IS_id = m.IS_id
+                         WHERE m.IS_id IS NOT NULL AND m.IS_id > 0 AND m.IR_id IN (" . implode(',', $irIds) . ")
+                         GROUP BY m.IR_id, il.IS_number ORDER BY il.IS_number");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $b) $bound[(int)$b['IR_id']][] = ['no' => $b['IS_number'], 'qty' => (float)$b['q']];
+    }
     $out = [];
     foreach ($rows as $r) {
         $nm = trim((string)$r['cn']);
@@ -414,6 +424,7 @@ function aca_search(PDO $db, array $f): array
             'client_name' => $nm, 'customer_id' => $c['customer_id'] ?? null, 'customer' => $c['customer'] ?? $nm,
             'in_master' => (bool)$c, 'part' => $r['part'], 'spec' => $r['spec'],
             'qty' => $qty, 'unit_price' => $price, 'amount' => round($qty * $price, 2),
+            'bound_is' => $r['type'] === 'IR' ? ($bound[(int)$r['id']] ?? []) : [],
             'used_qty' => $u, 'remain_qty' => max(0, $qty - $u), 'full' => ($qty - $u) <= 0.0001,
         ];
     }
