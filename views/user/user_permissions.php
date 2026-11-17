@@ -399,6 +399,8 @@ $EG_ROLE_MODULES = [
     'vendor_audit'        => ['prefix'=>'vaud',    'label'=>'供應商稽核',          'page'=>'vendor_audit.php'],
     'equip_machine'       => ['prefix'=>'eqm',     'label'=>'機台設備一覽表',      'page'=>'equipment_machine_list.php'],
     'business_trip'       => ['prefix'=>'btrp',    'label'=>'公出單',              'page'=>'business_trip.php'],
+    'memo_request'        => ['prefix'=>'memo',    'label'=>'簽呈',                'page'=>'memo_request.php'],
+    'interview_record'    => ['prefix'=>'ivw',     'label'=>'訪談記錄',            'page'=>'interview_record.php'],
     'doc_apply'           => ['prefix'=>'dap',     'label'=>'文件制修申請單',      'page'=>'doc_apply.php'],
     'eng_change'          => ['prefix'=>'eng',     'label'=>'工程變更申請單',      'page'=>'eng_change.php'],
     'eng_log'             => ['prefix'=>'elog',    'label'=>'工程處理紀錄',        'page'=>'eng_log.php'],
@@ -427,7 +429,7 @@ $EG_ROLE_MODULES = [
     'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
     'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
-    'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝製程排程',        'page'=>'packing_schedule.php'],
+    'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝排程',        'page'=>'packing_schedule.php'],
     'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
     'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
     'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
@@ -1674,6 +1676,14 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('btrp', 'business_trip', '公出單', 'fa-sign-out', '#d99a4e',
                         '為每位使用者指派「公出單」頁（2-MM-01-06）的角色。<strong>所有在職員工不需要指派任何角色</strong>，就能開立／檢視／列印<strong>自己的</strong>公出單，並核准指派給自己的單（核准人＝公出人的單位主管，主管本人公出時自動改為最高核准人員，主管請假時依代理設定轉給代理人）。此處只指派兩種加值角色：<strong>公出單檢閱</strong>＝可查看全部人員的公出單（唯讀）；<strong>公出單管理員</strong>＝查全部＋代其他人開單、刪除、模組設定（AS 文件綁定／外訓是否自動產生／核准圖章／列印簽章三格來源）、從外訓場次批次帶入。<span style="color:#b06f27;">「是否需要主管簽核（免簽核）」僅系統管理者可改</span>。管理者固定擁有全部權限。',
                         rs_of('business_trip'), rsu_of('business_trip'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('memo', 'memo_request', '簽呈', 'fa-pencil-square-o', '#b06f27',
+                        '為每位使用者指派「簽呈」頁（2-MM-01-15）的角色。<strong>所有在職員工不需要指派任何角色</strong>，就能開立／檢視／列印<strong>自己的</strong>簽呈，並批示指派給自己的關卡（部門主管、總經理、會辦單位）。此處只指派兩種加值角色：<strong>簽呈檢閱</strong>＝可查看全部「一般」等級的簽呈（唯讀，<span style="color:#b06f27;">看不到機密／極機密</span>）；<strong>簽呈管理員</strong>＝查看全部（含機密）＋代其他人開單、修改編號、刪除、模組設定（AS 文件綁定／是否需總經理批示／簽核順序／批示圖章）。機密與極機密簽呈只有提簽人、簽核關卡上的人與管理員看得到。管理者固定擁有全部權限。',
+                        rs_of('memo_request'), rsu_of('memo_request'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ivw', 'interview_record', '訪談記錄', 'fa-comments-o', '#b06f27',
+                        '為每位使用者指派「訪談記錄」頁的角色。<strong>所有在職員工不需要指派角色</strong>，就能新增並查看<strong>自己經手</strong>（自己是訪談人或建立人）的訪談記錄；<strong>人事部門</strong>（組織角色綁定的人事部門成員）可看全部。此處只指派一種加值角色：<strong>訪談記錄管理員</strong>＝可看全部、重新開啟已完成記錄、刪除、設定訪談類型。<span style="color:#b06f27;">本頁屬行政人事紀錄，不編入 AS9100 品質文件。</span>管理者固定擁有全部權限。',
+                        rs_of('interview_record'), rsu_of('interview_record'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dap', 'doc_apply', '文件制修申請單', 'fa-file-text-o', '#b06f27',
                         '為每位使用者指派「文件制、修申請單」頁（2-DC-01-01）的角色。角色功能：<strong>文件制修申請單檢閱</strong>＝唯讀查看全部申請單與列印；

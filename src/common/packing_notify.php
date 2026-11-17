@@ -39,7 +39,7 @@ if (!function_exists('pk_packing_notify_closed')) {
         try {
             $pdo->prepare(
                 "INSERT INTO live_event (eventdate, title, content, status, created_by, source, ref_type, ref_id, show_status_to_others)
-                 VALUES (CURDATE(), ?, ?, 0, ?, '包裝製程排程', 'PACKING', NULL, 1)")
+                 VALUES (CURDATE(), ?, ?, 0, ?, '包裝排程', 'PACKING', NULL, 1)")
                 ->execute([$title, $msg, ($actorId ?: null)]);
             $eventId = (int)$pdo->lastInsertId();
 

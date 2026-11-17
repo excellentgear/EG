@@ -1,6 +1,6 @@
 <?php
 // c:\MAMP\htdocs\EGsystem\views\pm\packing_schedule.php
-// 包裝製程排程與檢驗回報頁（獨立於待加工排程 process_schedule_NOW.php）
+// 包裝排程與檢驗回報頁（獨立於待加工排程 process_schedule_NOW.php）
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
 require_once __DIR__ . '/../../src/common/role_features_helper.php';
@@ -1338,7 +1338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>包裝製程排程</title>
+    <title>包裝排程</title>
     <link href="../../resource/css/bootstrap.css" rel="stylesheet">
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
@@ -1499,7 +1499,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="">
                     <div class="page-title">
                         <div class="title_left">
-                            <h3>包裝製程排程 <small>Packing Schedule</small></h3>
+                            <h3>包裝排程 <small>Packing Schedule</small></h3>
                         </div>
                         <div class="title_right">
                             <button class="page-help-btn pull-right" id="btn-page-help" title="使用說明" style="margin-right:8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
@@ -1921,7 +1921,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <!-- 角色與功能設定（module=packing_schedule）；使用者與角色的對應請至 user_permissions.php 指派 -->
     <div class="modal fade" id="roleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-            <h4 class="modal-title"><i class="fa fa-key"></i> 包裝製程排程 — 角色與功能設定</h4></div>
+            <h4 class="modal-title"><i class="fa fa-key"></i> 包裝排程 — 角色與功能設定</h4></div>
         <div class="modal-body">
             <p class="text-muted" style="font-size:12px;">在此建立/命名角色並勾選其功能；使用者與角色的對應請至 <b>人員權限設定（user_permissions）</b>。系統管理員角色固定擁有全部權限，不可修改。一般包裝填寫（暫存/完成包裝）本頁維持全體登入者皆可使用，此處僅管理「補登舊資料」相關的進階權限。</p>
             <div class="row">
@@ -1992,7 +1992,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <!-- 使用說明 -->
     <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
         <div class="modal-dialog" role="document"><div class="modal-content">
-            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">包裝製程排程 — 使用說明</h4></div>
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">包裝排程 — 使用說明</h4></div>
             <div class="modal-body help-doc">
                 <p><strong>功能說明：</strong>依訂單交期排序待包裝的製程，可填寫外觀檢驗、防護、容器與出貨資訊，完成後自動通知生管安排出貨。</p>
                 <p><strong>操作步驟：</strong></p>
