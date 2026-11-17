@@ -71,9 +71,12 @@ case 'attach_setting_save': {
 case 'search':
     $s = $_POST ?: $_GET;
     aal_out(aca_search($db, [
-        'customer' => aal_u8(trim((string)($s['customer'] ?? ''))), 'part' => aal_u8(trim((string)($s['part'] ?? ''))),
+        'customer' => aal_u8(trim((string)($s['customer'] ?? ''))), 'customer_id' => trim((string)($s['customer_id'] ?? '')), 'part' => aal_u8(trim((string)($s['part'] ?? ''))),
         'date_from' => $s['date_from'] ?? '', 'date_to' => $s['date_to'] ?? '', 'src' => $s['src'] ?? 'all',
     ]));
+
+case 'customer_suggest':
+    aal_out(['customers' => aca_customer_suggest($db, aal_u8(trim((string)($_GET['kw'] ?? ''))))]);
 
 case 'suggest_no': {
     $cid = trim((string)($_GET['customer_id'] ?? '')); $d = (string)($_GET['allow_date'] ?? date('Y-m-d'));

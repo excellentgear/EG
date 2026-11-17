@@ -147,6 +147,13 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 .pane-box .m-body{max-height:none;overflow:visible;}
 .pane-box .m-head{border-radius:8px 8px 0 0;}
 body.mask-open{overflow:hidden;}
+.cust-dd{display:none;position:fixed;z-index:11000;background:#fff;border:1.5px solid var(--a-acc);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.25);max-height:340px;overflow:auto;min-width:380px;}
+.cust-dd .it{padding:8px 12px;cursor:pointer;font-size:14px;color:var(--a-ink);border-bottom:1px solid #F3E8D2;display:flex;gap:12px;}
+.cust-dd .it:last-child{border-bottom:none;}
+.cust-dd .it:hover,.cust-dd .it.on{background:var(--a-ok);}
+.cust-dd .cid{font-family:Consolas,monospace;color:var(--a-brand);font-weight:bold;min-width:76px;}
+.cust-dd .cfull{color:var(--a-ink2);font-size:12.5px;}
+.cust-dd .none{padding:10px 12px;color:var(--a-ink2);font-size:13px;}
 @media print{ .a-bar,.a-pager,.a-mask,.nav_menu,.left_col,footer{display:none !important;} .right_col{margin:0 !important;padding:0 !important;} }
 </style>
 </head>
@@ -208,7 +215,7 @@ body.mask-open{overflow:hidden;}
   <div class="m-body">
     <div class="sec">① 搜尋出貨單／退貨單明細（點一列加入；同一張折讓單只能是同一個客戶）</div>
     <div class="srch">
-      <input type="text" id="sCust" placeholder="客戶名稱或客戶ID" style="width:190px;">
+      <span style="position:relative;display:inline-block;"><input type="text" id="sCust" placeholder="輸入客戶ID或名稱，從清單選擇" style="width:300px;" autocomplete="off"></span>
       <input type="text" id="sPart" placeholder="料號（可空白分隔多個關鍵字）" style="width:240px;">
       <select id="sSrc"><option value="all">出貨＋退貨</option><option value="IS">只看出貨單</option><option value="IR">只看退貨單</option></select>
       <input type="date" id="sFrom" title="起日"> ~ <input type="date" id="sTo" title="迄日">
@@ -331,6 +338,7 @@ body.mask-open{overflow:hidden;}
 </div></div>
 <?php endif; ?>
 
+<div id="custDd" class="cust-dd"></div>
 <div class="a-msg" id="msg"></div>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
@@ -413,7 +421,7 @@ $('#fStatus,#fBm').on('change',function(){ page=1; load(); });
 function selKey(r){ return r.type+':'+r.src_id; }
 function resetNew(){
   SEL=[]; SELCUST=null;
-  $('#sCust,#sPart').val(''); $('#sSrc').val('all'); $('#sFrom,#sTo').val('');
+  $('#sCust,#sPart').val(''); CHOSEN_CID=''; ddHide(); $('#sSrc').val('all'); $('#sFrom,#sTo').val('');
   $('#tSrch tbody').html('<tr><td colspan="11" style="color:#8a6d45;padding:14px;">輸入客戶／料號後按「搜尋」（兩者都不填＝列出最近的單據）</td></tr>');
   $('#srchInfo').text(''); $('#nDate').val(META.today); $('#nRate').val(META.tax_rate); $('#nNo,#nNote').val(''); $('#nFiles').val('');
   $('#nErr').text(''); renderSel();
@@ -436,16 +444,49 @@ function renderSrch(rows){
   });
   $('#tSrch tbody').html(h||'<tr><td colspan="11" style="color:#8a6d45;padding:14px;">沒有符合的單據</td></tr>');
 }
+/* 客戶即時建議：輸入ID或名稱立即列出符合的客戶，點選（或 ↑↓＋Enter）後以該客戶搜尋 */
+var CHOSEN_CID='', ddT=null, ddItems=[], ddIdx=-1;
+function ddPos(){ var r=$('#sCust')[0].getBoundingClientRect(); $('#custDd').css({left:r.left,top:r.bottom+2,minWidth:Math.max(380,r.width)}); }
+function ddHide(){ $('#custDd').hide(); ddIdx=-1; }
+function ddRender(list){
+  ddItems=list; ddIdx=-1;
+  var h=list.map(function(c,i){ return '<div class="it" data-i="'+i+'"><span class="cid">'+esc(c.customer_id)+'</span><span>'+esc(c.customer)+(Number(c.is_inactive)?' <span style="color:#DD5138;font-size:12px;">(停用)</span>':'')+(c.customer_full&&c.customer_full!==c.customer?'<br><span class="cfull">'+esc(c.customer_full)+'</span>':'')+'</span></div>'; }).join('');
+  $('#custDd').html(h||'<div class="none">沒有符合的客戶</div>'); ddPos(); $('#custDd').show();
+}
+function ddQuery(){
+  var kw=$.trim($('#sCust').val());
+  $.getJSON(API,{action:'customer_suggest',kw:kw},function(r){ if(r.ok && kw===$.trim($('#sCust').val())) ddRender(r.customers||[]); });
+}
+function ddPick(i){
+  var c=ddItems[i]; if(!c) return;
+  CHOSEN_CID=c.customer_id; $('#sCust').val(c.customer_id+'　'+c.customer); ddHide(); doSearch();
+}
+$('#sCust').on('input',function(){ CHOSEN_CID=''; clearTimeout(ddT); ddT=setTimeout(ddQuery,150); })
+  .on('focus',function(){ if(!CHOSEN_CID) ddQuery(); })
+  .on('keydown',function(e){
+    var open=$('#custDd').is(':visible'), n=$('#custDd .it').length;
+    if(open && n && (e.key==='ArrowDown'||e.key==='ArrowUp')){
+      e.preventDefault(); ddIdx=(ddIdx+(e.key==='ArrowDown'?1:-1)+n)%n;
+      $('#custDd .it').removeClass('on').eq(ddIdx).addClass('on')[0].scrollIntoView({block:'nearest'});
+    } else if(e.key==='Enter'){
+      e.preventDefault(); e.stopImmediatePropagation();
+      if(open && n){ ddPick(ddIdx>=0?ddIdx:0); } else { doSearch(); }
+    } else if(e.key==='Escape'){ ddHide(); }
+  });
+$('#custDd').on('mousedown','.it',function(e){ e.preventDefault(); ddPick(parseInt($(this).data('i'),10)); });
+$(document).on('mousedown',function(e){ if(!$(e.target).closest('#custDd,#sCust').length) ddHide(); });
+$(window).on('scroll resize',function(){ if($('#custDd').is(':visible')) ddPos(); });
+
 function doSearch(){
   $('#srchInfo').text('搜尋中…');
-  $.getJSON(API,{action:'search',customer:$('#sCust').val(),part:$('#sPart').val(),src:$('#sSrc').val(),date_from:$('#sFrom').val(),date_to:$('#sTo').val()},function(r){
+  $.getJSON(API,{action:'search',customer:CHOSEN_CID?'':$('#sCust').val(),customer_id:CHOSEN_CID,part:$('#sPart').val(),src:$('#sSrc').val(),date_from:$('#sFrom').val(),date_to:$('#sTo').val()},function(r){
     if(!r.ok){ toast(esc(r.error||'搜尋失敗'),true); return; }
     $('#srchInfo').text('共 '+r.rows.length+' 筆'+(r.truncated?'（結果超過 300 筆，只顯示最近的，請加關鍵字縮小範圍）':''));
     renderSrch(r.rows);
   }).fail(function(x){ toast(esc(errMsg(x,'搜尋失敗')),true); });
 }
 $('#btnSrch').on('click',doSearch);
-$('#sCust,#sPart').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
+$('#sPart').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
 $('#tSrch').on('click','.js-add',function(){
   var r=LASTROWS[parseInt($(this).data('i'),10)]; if(!r) return;
   if(!SELCUST) SELCUST=r.customer_id;

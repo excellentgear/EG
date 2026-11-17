@@ -315,6 +315,18 @@ function aca_log_list(PDO $db, array $f): array
     return ['rows' => $st->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per_page' => $per];
 }
 
+/** 客戶輸入即時建議：客戶ID／簡稱／全名模糊比對，最多 20 筆（在用的優先） */
+function aca_customer_suggest(PDO $db, string $kw): array
+{
+    $kw = trim($kw);
+    $like = '%' . $kw . '%';
+    $st = $db->prepare("SELECT customer_id, customer, customer_full, COALESCE(is_inactive,0) is_inactive FROM customer_list
+                        WHERE (? = '' OR customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?)
+                        ORDER BY (customer_id = ?) DESC, (customer = ?) DESC, COALESCE(is_inactive,0), customer LIMIT 20");
+    $st->execute([$kw, $like, $like, $like, $kw, $kw]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
 /* ── 搜尋可折讓的出貨／退貨明細 ───────────────────────────────── */
 /**
  * 篩選：customer（客戶名稱或客戶ID 關鍵字）、part（料號／規格關鍵字）、date_from/date_to、src（all|IS|IR）。
@@ -324,6 +336,7 @@ function aca_search(PDO $db, array $f): array
 {
     aca_ensure_schema($db);
     $custKw = trim((string)($f['customer'] ?? ''));
+    $custId = trim((string)($f['customer_id'] ?? ''));   // 從建議清單選定的客戶：以編號精準比對
     $partKw = trim((string)($f['part'] ?? ''));
     $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_from'] ?? '')) ? $f['date_from'] : '';
     $to   = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_to'] ?? '')) ? $f['date_to'] : '';
@@ -332,7 +345,11 @@ function aca_search(PDO $db, array $f): array
 
     $cmap = acc_customer_by_name($db);   // 簡稱(含別名) => 客戶列
     $names = null;
-    if ($custKw !== '') {
+    if ($custId !== '') {
+        $names = [];
+        foreach ($cmap as $nm => $c) if (trim((string)$c['customer_id']) === $custId) $names[] = (string)$nm;
+        if (!$names) return ['rows' => [], 'truncated' => false];
+    } elseif ($custKw !== '') {
         $names = [];
         foreach ($cmap as $nm => $c) {
             if (mb_stripos((string)$nm, $custKw) !== false || mb_stripos((string)$c['customer_id'], $custKw) !== false
