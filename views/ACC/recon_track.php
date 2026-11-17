@@ -198,7 +198,11 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .pool-ppl label { font-size:12px; font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; }
 .allow-badge{display:inline-block;margin-left:6px;padding:0 8px;border-radius:9px;font-size:11px;line-height:18px;background:#F0A24B;color:#fff !important;cursor:pointer;text-decoration:none !important;}
 .allow-badge:hover{background:#d98a33;}
-table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FFE9A8 !important;}
+table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FBEBCB !important;}
+#allowBody table.art-t{table-layout:auto;width:100%;}
+#allowBody table.art-t td:nth-child(5),#allowBody table.art-t th:nth-child(5){min-width:300px;white-space:normal;}
+#allowBody table.art-t td:nth-child(6),#allowBody table.art-t th:nth-child(6){width:56px;min-width:0;}
+#allowBody .allow-head{padding:8px 14px;margin:12px 0 6px;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;}
 </style>
 </head>
 <body class="nav-sm">
@@ -1460,7 +1464,7 @@ $(function(){
         apiGet('allow_info', {party:cid, bm:bm}).done(function(r){
             var as = (r && r.allowances) || [], dotd = function(x){ return String(x||'').replace(/-/g,'.'); }, h = '', cnt = 0;
             as.forEach(function(a){
-                h += '<div style="margin:10px 0 4px;font-weight:bold;">折讓日期 ' + esc(dotd(a.allow_date)) + '　證明單號碼：' + esc(a.allow_no||'（尚未填）') + '　開立：' + esc(a.created_by_name||'') + '　含稅 ' + fmtMoney(a.total_amount) + (a.note ? '　備註：' + esc(a.note) : '') + '</div>'
+                h += '<div class="allow-head" style="font-weight:bold;">折讓日期 ' + esc(dotd(a.allow_date)) + '　證明單號碼：' + esc(a.allow_no||'（尚未填）') + '　開立：' + esc(a.created_by_name||'') + '　含稅 ' + fmtMoney(a.total_amount) + (a.note ? '　備註：' + esc(a.note) : '') + '</div>'
                    + '<table class="art-t"><thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th></tr></thead><tbody>';
                 (a.items||[]).forEach(function(i){ cnt++;
                     h += '<tr class="allow-row"><td>' + (i.src_type==='IR'?'退貨單':'出貨單') + '</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.part_no) + '</td><td>' + esc(i.spec) + '</td><td class="n">' + Number(i.qty) + '</td><td class="n">' + fmtMoney(i.unit_price) + '</td><td class="n">' + fmtMoney(i.amount) + '</td></tr>';
