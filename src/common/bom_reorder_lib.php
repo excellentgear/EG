@@ -56,7 +56,7 @@ if (!function_exists('bro_allow_sn_edit')) {
 
 if (!function_exists('bro_state_text')) {
     function bro_state_text(string $s): string {
-        $m = ['N' => '待發包', 'ing' => '加工中', 'Q' => 'QC待驗', 'P' => '待移轉', 'E' => '已移轉', '1' => '已完成', 'skip' => '略過'];
+        $m = ['N' => '待發包', 'ing' => '加工中', 'Q' => '已完成', 'P' => '已完成', 'E' => '已完成', '1' => '已完成', 'skip' => '略過'];
         return $m[$s] ?? ($s === '' ? '待發包' : $s);
     }
 }
