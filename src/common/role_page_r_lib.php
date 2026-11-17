@@ -31,6 +31,10 @@ if (!function_exists('eg_role_page_r_modules')) {
             'ir_track'       => 'IR_Track.php',
             // 員工資料管理（2026-11-12）：角色與原頁面權限取聯集，此處只在「完全沒有頁面／群組權限」時補 R 讓側欄出現
             'emp_mgmt'       => 'employee_management.php',
+            // 品質異常處理單（2026-11-16）：頁面權限全走 qab_perms()（角色＋組織綁定），不讀頁面 R/C/U/D 字母
+            'qa_abnormal'    => 'qa_abnormal_list.php',
+            // 折讓單（2026-11-17）：頁面權限全走 aca_perms()（角色），不讀頁面 R/C/U/D 字母
+            'acc_allowance'  => 'allowance.php',
         ];
     }
 }

@@ -35,12 +35,12 @@ aca_ensure_schema($db);
 if (empty($_SESSION['aca_csrf'])) $_SESSION['aca_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['create', 'set_no', 'void', 'format_save', 'attach_add', 'attach_del'];
+$WRITE = ['create', 'set_no', 'void', 'format_save', 'attach_add', 'attach_del', 'attach_setting_save'];
 if (in_array($action, $WRITE, true)) {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') aal_err('必須用 POST', 405);
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals($_SESSION['aca_csrf'], $tok)) aal_err('連線憑證失效，請重新整理頁面後再試 (CSRF)', 403);
-    if ($action === 'format_save') { if (empty($perms['canAdmin'])) aal_err('只有全站管理員或折讓單本頁管理員可以修改證明單號碼格式', 403); }
+    if ($action === 'format_save' || $action === 'attach_setting_save') { if (empty($perms['canAdmin'])) aal_err('只有全站管理員或折讓單本頁管理員可以修改證明單號碼格式', 403); }
     elseif (empty($perms['canEdit'])) aal_err('無折讓單編輯權限（需「折讓單-會計」或本頁管理員角色）', 403);
 }
 
@@ -51,7 +51,22 @@ case 'meta':
         'csrf' => $_SESSION['aca_csrf'], 'perms' => $perms, 'user' => (string)$u['user_cname'],
         'format' => aca_format_get($db), 'default_format' => ACA_DEFAULT_FMT, 'tokens' => aca_format_tokens(),
         'tax_rate' => acc_tax_rate($db), 'today' => date('Y-m-d'),
+        'attach' => !empty($perms['canAdmin']) ? aca_attach_setting_get($db) : null,
     ]);
+
+case 'log_list': {
+    $s = $_POST ?: $_GET;
+    aal_out(aca_log_list($db, [
+        'kw' => aal_u8(trim((string)($s['kw'] ?? ''))), 'allow_id' => $s['allow_id'] ?? 0, 'action' => $s['log_action'] ?? '',
+        'date_from' => $s['date_from'] ?? '', 'date_to' => $s['date_to'] ?? '', 'page' => $s['page'] ?? 1, 'per_page' => $s['per_page'] ?? 20,
+    ]));
+}
+
+case 'attach_setting_save': {
+    $r = aca_attach_setting_save($db, aal_u8((string)($_POST['dir'] ?? '')), $u);
+    if (empty($r['success'])) aal_err($r['message']);
+    aal_out($r);
+}
 
 case 'search':
     $s = $_POST ?: $_GET;
@@ -112,7 +127,7 @@ case 'void': {
 }
 
 case 'format_save': {
-    $r = aca_format_save($db, aal_u8((string)($_POST['format'] ?? '')), (string)$u['user_cname']);
+    $r = aca_format_save($db, aal_u8((string)($_POST['format'] ?? '')), (string)$u['user_cname'], $u);
     if (empty($r['success'])) aal_err($r['message']);
     aal_out($r);
 }
@@ -131,7 +146,9 @@ case 'attach_add': {
 
 case 'attach_del': {
     $fid = (int)($_POST['file_id'] ?? 0);
-    aal_out(aca_attach_delete($db, $fid));
+    $r = aca_attach_delete($db, $fid, $u);
+    if (empty($r['success'])) aal_err($r['message']);
+    aal_out($r);
 }
 
 case 'attach_download': {

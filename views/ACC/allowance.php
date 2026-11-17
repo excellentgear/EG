@@ -162,7 +162,8 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     </div>
     <div class="a-bar" style="background:var(--a-bg2);">
       <?php if ($perms['canEdit']): ?><button id="btnNew" class="btn-warm"><i class="fa fa-plus"></i> 開立折讓單</button><?php endif; ?>
-      <?php if ($perms['canAdmin']): ?><button id="btnFmt"><i class="fa fa-cog"></i> 證明單號碼格式設定</button><?php endif; ?>
+      <button id="btnLog"><i class="fa fa-history"></i> 異動記錄</button>
+      <?php if ($perms['canAdmin']): ?><button id="btnFmt"><i class="fa fa-cog"></i> 設定（號碼格式／附件位置）</button><?php endif; ?>
       <a href="recon_track.php" style="text-decoration:none;"><button type="button"><i class="fa fa-tasks"></i> 對帳進度追蹤</button></a>
     </div>
     <div class="a-stat">
@@ -244,8 +245,9 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 <?php if ($perms['canAdmin']): ?>
 <!-- 號碼格式設定 -->
 <div class="a-mask" id="mkFmt"><div class="a-modal narrow">
-  <div class="m-head"><i class="fa fa-cog"></i>&nbsp;證明單號碼格式設定<span class="m-close" data-close="mkFmt">✕</span></div>
+  <div class="m-head"><i class="fa fa-cog"></i>&nbsp;折讓單設定<span class="m-close" data-close="mkFmt">✕</span></div>
   <div class="m-body">
+    <div class="sec" style="margin-top:0;">證明單號碼格式</div>
     <div class="info">格式只決定「帶入建議編號」的內容，<b>已建立的折讓單證明單號碼不會被改動</b>。實際號碼以電子發票網站為準，仍可手動修改。</div>
     <div class="frm" style="grid-template-columns:90px 1fr;"><label>格式</label><input type="text" id="fFmt" maxlength="60"></div>
     <div id="fErr" class="err"></div>
@@ -254,10 +256,36 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     <div class="sec">預覽（以今天、客戶 MR003C 為例）</div>
     <div id="fPrev" style="font-family:Consolas,monospace;font-size:15px;color:var(--a-brand);"></div>
     <div class="a-hint">預設：<span id="fDef"></span>。流水號代碼可加「:位數」補零，例如 {CM_SEQ:2} 會產生 01、02…。</div>
+    <div style="text-align:right;margin-top:6px;"><button id="btnFmtDef" class="btn-mini" style="height:28px;">還原預設</button> <button class="btn-mini" id="btnFmtSave" style="height:28px;background:var(--a-acc);color:#fff;">儲存格式</button></div>
+
+    <div class="sec" style="margin-top:18px;border-top:1px solid var(--a-line);padding-top:10px;">附件儲存位置</div>
+    <div class="info">目前使用：<b id="aEff" style="word-break:break-all;"></b><br>預設位置：<span id="aDef" style="word-break:break-all;"></span>（全站附件根資料夾＋「折讓單」）<br>已上傳附件：<b id="aCnt">0</b> 個</div>
+    <input type="text" id="aDir" maxlength="240" style="width:100%;height:31px;border:1px solid var(--a-line2);border-radius:4px;padding:0 8px;" placeholder="自訂完整路徑；留空＝使用預設位置">
+    <div id="aErr" class="err"></div>
+    <div class="a-hint">換位置時，系統會先把已上傳的附件<b>複製</b>到新位置（舊位置的檔案不會刪除），全部複製成功才切換；資料庫只存檔名，所以之後再換位置也不會讀不到舊檔。</div>
+    <div style="text-align:right;margin-top:6px;"><button class="btn-mini" id="btnAttSave" style="height:28px;background:var(--a-acc);color:#fff;">儲存附件位置</button></div>
   </div>
-  <div class="m-foot"><button data-close="mkFmt">取消</button><button id="btnFmtDef">還原預設</button><button class="go" id="btnFmtSave"><i class="fa fa-check"></i> 儲存</button></div>
+  <div class="m-foot"><button data-close="mkFmt">關閉</button></div>
 </div></div>
 <?php endif; ?>
+
+<!-- 異動記錄 -->
+<div class="a-mask" id="mkLog"><div class="a-modal">
+  <div class="m-head"><i class="fa fa-history"></i>&nbsp;折讓單異動記錄<span class="m-close" data-close="mkLog">✕</span></div>
+  <div class="m-body">
+    <div class="srch">
+      <input type="text" id="lKw" placeholder="證明單號碼／客戶／操作人／內容" style="width:260px;">
+      <select id="lAct"><option value="">全部動作</option><option value="create">建立</option><option value="set_no">修改證明單號碼</option><option value="void">作廢（刪除）</option><option value="attach_add">新增附件</option><option value="attach_del">刪除附件</option><option value="setting">設定變更</option></select>
+      <input type="date" id="lFrom"> ~ <input type="date" id="lTo">
+      <button id="btnLogQ"><i class="fa fa-search"></i> 查詢</button>
+      <span id="lInfo" style="font-size:12px;color:var(--a-ink2);margin-left:auto;"></span>
+    </div>
+    <div class="a-wrap"><table class="a-t"><thead><tr><th>時間</th><th>操作人</th><th>動作</th><th>折讓單</th><th>改了什麼</th><th>原因</th></tr></thead><tbody id="lBody"></tbody></table></div>
+    <div class="a-pager" style="margin-top:6px;"><span id="lBtns"></span></div>
+    <div class="a-hint">記錄只增不減：折讓單作廢後仍可在此查到是誰、何時、為什麼作廢；附件被刪也會留下檔名。</div>
+  </div>
+  <div class="m-foot"><button data-close="mkLog">關閉</button></div>
+</div></div>
 
 <!-- 使用說明 -->
 <div class="a-mask" id="helpUseMask"><div class="a-modal mid">
@@ -274,6 +302,8 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     <h4>與對帳進度追蹤的關係</h4>
     <ul><li>折讓日期依客戶結帳日歸屬某個帳款月份。對帳進度追蹤該月份的客戶名稱旁會顯示「<b>有折讓</b>」，點開可看綁定的單據。</li>
     <li>雙擊該客戶看明細時，折讓項目會以<b>暖黃底色置頂</b>，並註明折讓日期與開立人員 —— 即使原出貨在已對帳的舊月份，這筆折讓也視為這個月份尚待對帳。</li></ul>
+    <h4>異動記錄</h4>
+    <ul><li>建立、修改證明單號碼、作廢（折讓單不做實體刪除，作廢即視為刪除）、新增／刪除附件、設定變更，都會自動記錄<b>時間、操作人、改了什麼</b>；按「異動記錄」查全部，或在單張明細底部看該張的記錄。記錄不能修改或刪除。</li></ul>
     <h4>證明單號碼格式</h4>
     <ul><li>預設格式「客戶ID-西元年月-本月流水」（例 MR003C-202608-1）。會計管理員可在「證明單號碼格式設定」修改，只影響之後的建議編號。</li></ul>
     <h4>權限</h4>
@@ -478,7 +508,9 @@ function openDtl(id){
     h+='</div>';
     if(CAN_EDIT&&!v) h+='<div style="margin-top:8px;"><input type="file" id="dFile" multiple> <button class="btn-mini" id="dFileUp" style="height:28px;">上傳附件</button></div>'
       +'<div style="margin-top:14px;"><button class="btn-mini" id="dVoid" style="height:30px;color:#DD5138;border-color:#DD5138;">作廢這張折讓單</button></div>';
+    h+='<div class="sec">異動記錄</div><div class="a-wrap"><table class="a-t"><thead><tr><th>時間</th><th>操作人</th><th>動作</th><th>折讓單</th><th>改了什麼</th><th>原因</th></tr></thead><tbody id="dLog"><tr><td colspan="6">載入中…</td></tr></tbody></table></div>';
     $('#dBody').html(h); openMask('mkDtl');
+    $.getJSON(API,{action:'log_list',allow_id:a.allow_id,per_page:100},function(lr){ if(lr.ok) $('#dLog').html(logRows(lr.rows)); });
   }).fail(function(x){ toast(esc(errMsg(x,'載入失敗')),true); });
 }
 $('#tbody').on('click','.js-dtl',function(){ openDtl($(this).data('id')); });
@@ -507,6 +539,35 @@ $('#dBody').on('click','#dVoid',function(){
   post('void',{id:CUR.allow_id,reason:reason},function(r){ toast(esc(r.message)); closeMask('mkDtl'); load(); });
 });
 
+/* ── 異動記錄 ── */
+var ACT={create:'建立',set_no:'修改證明單號碼',void:'作廢（刪除）',attach_add:'新增附件',attach_del:'刪除附件',setting:'設定變更'};
+function fmtDetail(s){
+  var o=null; try{ o=JSON.parse(s); }catch(e){ return esc(s); }
+  if(!o||typeof o!=='object') return esc(s);
+  return Object.keys(o).map(function(k){ var v=o[k];
+    return '<b>'+esc(k)+'</b>：'+(Array.isArray(v)?esc(v[0])+' <i class="fa fa-long-arrow-right"></i> '+esc(v[1]):esc(v)); }).join('<br>');
+}
+function logRows(rows){
+  return rows.map(function(l){
+    return '<tr><td>'+esc(dd(String(l.at_time).substr(0,10)))+' '+esc(String(l.at_time).substr(11,5))+'</td><td>'+esc(l.by_name||'')+'</td><td>'+esc(ACT[l.action]||l.action)+'</td>'
+      +'<td class="l">'+(l.allow_id>0?esc(l.customer_name||'')+'<br><span style="color:var(--a-ink2);font-size:12px;">'+esc(l.allow_no||'（無號碼）')+'　#'+l.allow_id+'</span>':'—')+'</td>'
+      +'<td class="l wrap" style="min-width:260px;">'+fmtDetail(l.detail||'')+'</td><td class="l wrap">'+esc(l.reason||'')+'</td></tr>';
+  }).join('')||'<tr><td colspan="6" style="padding:16px;color:#8a6d45;">沒有記錄</td></tr>';
+}
+var lPage=1;
+function loadLog(){
+  $.getJSON(API,{action:'log_list',kw:$('#lKw').val(),log_action:$('#lAct').val(),date_from:$('#lFrom').val(),date_to:$('#lTo').val(),page:lPage,per_page:20},function(r){
+    if(!r.ok){ toast(esc(r.error||'載入失敗'),true); return; }
+    $('#lBody').html(logRows(r.rows)); var pages=Math.max(1,Math.ceil(r.total/r.per_page));
+    $('#lInfo').text('共 '+r.total+' 筆，第 '+lPage+' / '+pages+' 頁');
+    $('#lBtns').html('<button '+(lPage<=1?'disabled':'')+' data-p="'+(lPage-1)+'">‹ 上一頁</button> <button '+(lPage>=pages?'disabled':'')+' data-p="'+(lPage+1)+'">下一頁 ›</button>');
+  }).fail(function(x){ toast(esc(errMsg(x,'載入失敗')),true); });
+}
+$('#btnLog').on('click',function(){ lPage=1; loadLog(); openMask('mkLog'); });
+$('#btnLogQ').on('click',function(){ lPage=1; loadLog(); });
+$('#lKw').on('keydown',function(e){ if(e.key==='Enter'){ lPage=1; loadLog(); } });
+$('#lBtns').on('click','button[data-p]',function(){ lPage=parseInt($(this).data('p'),10); loadLog(); });
+
 /* ── 格式設定 ── */
 function fmtPrev(){
   var f=$('#fFmt').val(), d=new Date(), pad=function(n,w){ n=String(n); while(n.length<w) n='0'+n; return n; };
@@ -515,7 +576,13 @@ function fmtPrev(){
       case 'CM_SEQ':return w?pad(1,w):'1'; case 'M_SEQ':return w?pad(3,w):'3'; case 'Y_SEQ':return w?pad(12,w):'12'; } return m; });
   $('#fPrev').text(out);
 }
+function fillAttach(a){ if(!a) return; $('#aEff').text(a.effective); $('#aDef').text(a.default); $('#aCnt').text(a.file_count); $('#aDir').val(a.custom||''); }
+$('#btnAttSave').on('click',function(){
+  $('#aErr').text('');
+  post('attach_setting_save',{dir:$('#aDir').val()},function(r){ META.attach=r.setting; fillAttach(r.setting); toast(esc(r.message)); },function(m){ $('#aErr').text(m); });
+});
 $('#btnFmt').on('click',function(){
+  fillAttach(META.attach); $('#aErr').text('');
   $('#fFmt').val(META.format); $('#fErr').text(''); $('#fDef').text(META.default_format);
   $('#fTok').html((META.tokens||[]).map(function(t){ return '<div><span class="tok" data-t="'+esc(t[0])+'">'+esc(t[0])+'</span> '+esc(t[1])+'</div>'; }).join(''));
   fmtPrev(); openMask('mkFmt');
@@ -524,7 +591,7 @@ $('#fTok').on('click','.tok',function(){ var el=$('#fFmt')[0]; el.value+=$(this)
 $('#fFmt').on('input',fmtPrev);
 $('#btnFmtDef').on('click',function(){ $('#fFmt').val(META.default_format); fmtPrev(); });
 $('#btnFmtSave').on('click',function(){
-  post('format_save',{format:$('#fFmt').val()},function(r){ META.format=r.format; closeMask('mkFmt'); toast('已儲存格式；已建立的折讓單證明單號碼不受影響'); },function(m){ $('#fErr').text(m); });
+  post('format_save',{format:$('#fFmt').val()},function(r){ META.format=r.format; toast('已儲存格式；已建立的折讓單證明單號碼不受影響'); },function(m){ $('#fErr').text(m); });
 });
 
 $.getJSON(API,{action:'meta'},function(r){

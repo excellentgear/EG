@@ -110,6 +110,20 @@ function aca_ensure_schema(PDO $db): void
             KEY idx_allow (allow_id),
             KEY idx_src (src_type, src_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='折讓單明細（綁定出貨／退貨單）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_allowance_log (
+            log_id     INT AUTO_INCREMENT PRIMARY KEY,
+            allow_id   INT NOT NULL DEFAULT 0 COMMENT '0＝與單張折讓單無關的設定變更',
+            allow_no   VARCHAR(60) NULL COMMENT '當下證明單號碼快照',
+            customer_name VARCHAR(100) NULL COMMENT '當下客戶名稱快照（單據之後被刪也查得到）',
+            action     VARCHAR(20) NOT NULL COMMENT 'create/set_no/void/attach_add/attach_del/setting',
+            detail     TEXT NULL COMMENT '改了什麼（JSON：欄位=>[舊,新]，或說明）',
+            reason     VARCHAR(200) NULL,
+            by_id      INT NULL,
+            by_name    VARCHAR(50) NULL,
+            at_time    DATETIME NOT NULL,
+            KEY idx_allow (allow_id, at_time),
+            KEY idx_time (at_time)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='折讓單異動記錄（建立／修改／作廢／附件／設定變更），只新增不修改不刪除'");
         $db->exec("CREATE TABLE IF NOT EXISTS acc_allowance_file (
             file_id     INT AUTO_INCREMENT PRIMARY KEY,
             allow_id    INT NOT NULL,
@@ -166,7 +180,7 @@ function aca_format_check(string $fmt): ?string
     return null;
 }
 
-function aca_format_save(PDO $db, string $fmt, string $by): array
+function aca_format_save(PDO $db, string $fmt, string $by, ?array $user = null): array
 {
     $fmt = trim($fmt);
     if (($e = aca_format_check($fmt)) !== null) return ['success' => false, 'message' => $e];
@@ -178,7 +192,49 @@ function aca_format_save(PDO $db, string $fmt, string $by): array
         $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by,updated_at)
                       VALUES (?,?,?,?,?,NOW())")->execute([ACA_PARAM_GROUP, 'no_format', $fmt, '折讓單證明單號碼建議格式', $by]);
     }
+    aca_log($db, 0, 'setting', ['證明單號碼格式' => $fmt], $user);
     return ['success' => true, 'format' => $fmt];
+}
+
+/* ── 附件儲存位置設定（system_settings.acc_allowance_attach_dir；空白＝預設「附件根資料夾\折讓單」）── */
+function aca_attach_setting_get(PDO $db): array
+{
+    $v = '';
+    try { $x = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='acc_allowance_attach_dir'")->fetchColumn(); $v = $x === false ? '' : trim((string)$x); } catch (Throwable $e) {}
+    $default = eg_attach_root($db) . '\折讓單\\';
+    $n = (int)$db->query("SELECT COUNT(*) FROM acc_allowance_file")->fetchColumn();
+    return ['custom' => $v, 'default' => $default, 'effective' => eg_attach_dir($db, 'acc_allowance_attach_dir', '折讓單'), 'file_count' => $n];
+}
+
+function aca_attach_setting_save(PDO $db, string $dir, ?array $user): array
+{
+    $dir = trim($dir);
+    $old = aca_attach_setting_get($db);
+    if ($dir !== '' && !preg_match('#^([A-Za-z]:[\\\\/]|\\\\\\\\)#', $dir)) return ['success' => false, 'message' => '請輸入完整路徑（磁碟機路徑，或 \\\\主機\共用資料夾\… 網路路徑）；留空＝使用預設位置'];
+    if (mb_strlen($dir) > 240) return ['success' => false, 'message' => '路徑過長'];
+    $sep = (strpos($dir, '\\') !== false) ? '\\' : '/';
+    $newEff = $dir === '' ? $old['default'] : (preg_match('#[/\\\\]$#', $dir) ? $dir : $dir . $sep);
+    $copied = 0; $failed = [];
+    if (strcasecmp(rtrim($newEff, '/\\'), rtrim($old['effective'], '/\\')) !== 0) {
+        if (!eg_attach_ensure_dir($newEff)) return ['success' => false, 'message' => '無法建立或存取這個資料夾，請確認路徑正確、伺服器有寫入權限'];
+        $probe = $newEff . '.write_test_' . bin2hex(random_bytes(3));
+        if (@file_put_contents($probe, 'x') === false) return ['success' => false, 'message' => '這個資料夾無法寫入，請確認權限'];
+        @unlink($probe);
+        // 既有附件只存檔名，換位置後會讀不到舊檔 → 先複製（不刪舊檔）到新位置，全部成功才切換設定
+        foreach ($db->query("SELECT file_name FROM acc_allowance_file")->fetchAll(PDO::FETCH_COLUMN) as $fn) {
+            $src = $old['effective'] . $fn;
+            if (!is_file($src)) { $failed[] = $fn; continue; }
+            if (is_file($newEff . $fn) || @copy($src, $newEff . $fn)) $copied++; else $failed[] = $fn;
+        }
+        if ($failed) return ['success' => false, 'message' => '有 ' . count($failed) . ' 個既有附件無法複製到新位置，未變更設定（' . implode('、', array_slice($failed, 0, 3)) . '…）'];
+    }
+    $by = $user ? $user['user_cname'] : '';
+    $st = $db->prepare("SELECT 1 FROM system_settings WHERE setting_key='acc_allowance_attach_dir'");
+    $st->execute();
+    if ($st->fetchColumn()) $db->prepare("UPDATE system_settings SET setting_value=?, updated_by_id=?, updated_by=? WHERE setting_key='acc_allowance_attach_dir'")->execute([$dir, $user ? (int)$user['id'] : null, $by]);
+    else $db->prepare("INSERT INTO system_settings (setting_key,setting_value,updated_by_id,updated_by) VALUES ('acc_allowance_attach_dir',?,?,?)")->execute([$dir, $user ? (int)$user['id'] : null, $by]);
+    aca_log($db, 0, 'setting', ['附件儲存位置' => [$old['effective'], $newEff], '已複製既有附件' => $copied . ' 個（舊位置的檔案未刪除）'], $user);
+    return ['success' => true, 'setting' => aca_attach_setting_get($db), 'message' => '已儲存附件位置' . ($copied ? "，並把 {$copied} 個既有附件複製到新位置（舊位置檔案未刪除）" : '')];
 }
 
 function aca_format_render(string $fmt, string $cid, string $date, int $cm, int $m, int $y): string
@@ -218,6 +274,45 @@ function aca_suggest_no(PDO $db, string $cid, string $date): string
 {
     $s = aca_next_seqs($db, $cid, $date);
     return aca_format_render(aca_format_get($db), $cid, $date, $s['cm'], $s['m'], $s['y']);
+}
+
+/* ── 異動記錄（只新增；單據、附件之後被刪除也查得到是誰何時改了什麼）──────────── */
+function aca_log(PDO $db, int $allowId, string $action, $detail, ?array $user, ?string $reason = null): void
+{
+    try {
+        $no = null; $cn = null;
+        if ($allowId > 0) {
+            $st = $db->prepare("SELECT allow_no, customer_name FROM acc_allowance WHERE allow_id=?");
+            $st->execute([$allowId]);
+            if ($r = $st->fetch(PDO::FETCH_ASSOC)) { $no = $r['allow_no']; $cn = $r['customer_name']; }
+        }
+        $db->prepare("INSERT INTO acc_allowance_log (allow_id, allow_no, customer_name, action, detail, reason, by_id, by_name, at_time)
+                      VALUES (?,?,?,?,?,?,?,?,NOW())")
+           ->execute([$allowId, $no, $cn, $action, is_string($detail) ? $detail : json_encode($detail, JSON_UNESCAPED_UNICODE),
+                      $reason !== null ? mb_substr($reason, 0, 200) : null, $user ? (int)$user['id'] : null, $user ? $user['user_cname'] : null]);
+    } catch (Throwable $e) { error_log('aca_log: ' . $e->getMessage()); }
+}
+
+/** 記錄查詢：kw（單號／客戶／操作人／內容）、allow_id、action、日期區間，後端分頁 */
+function aca_log_list(PDO $db, array $f): array
+{
+    aca_ensure_schema($db);
+    $w = ['1=1']; $p = [];
+    if (($kw = trim((string)($f['kw'] ?? ''))) !== '') {
+        $w[] = '(allow_no LIKE ? OR customer_name LIKE ? OR by_name LIKE ? OR detail LIKE ? OR reason LIKE ?)';
+        for ($i = 0; $i < 5; $i++) $p[] = "%$kw%";
+    }
+    if ((int)($f['allow_id'] ?? 0) > 0) { $w[] = 'allow_id=?'; $p[] = (int)$f['allow_id']; }
+    if (in_array(($f['action'] ?? ''), ['create', 'set_no', 'void', 'attach_add', 'attach_del', 'setting'], true)) { $w[] = 'action=?'; $p[] = $f['action']; }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_from'] ?? ''))) { $w[] = 'at_time>=?'; $p[] = $f['date_from'] . ' 00:00:00'; }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($f['date_to'] ?? '')))   { $w[] = 'at_time<=?'; $p[] = $f['date_to'] . ' 23:59:59'; }
+    $where = implode(' AND ', $w);
+    $per = max(5, min(100, (int)($f['per_page'] ?? 20))); $page = max(1, (int)($f['page'] ?? 1));
+    $st = $db->prepare("SELECT COUNT(*) FROM acc_allowance_log WHERE $where"); $st->execute($p);
+    $total = (int)$st->fetchColumn();
+    $st = $db->prepare("SELECT * FROM acc_allowance_log WHERE $where ORDER BY log_id DESC LIMIT $per OFFSET " . (($page - 1) * $per));
+    $st->execute($p);
+    return ['rows' => $st->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per_page' => $per];
 }
 
 /* ── 搜尋可折讓的出貨／退貨明細 ───────────────────────────────── */
@@ -415,6 +510,7 @@ function aca_create(PDO $db, array $d, ?array $user): array
     }
     acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $aid, $cust['customer'],
               ['action' => 'create', 'items' => count($lines), 'total' => $net + $taxSum, 'billing_month' => $bm], null, $user);
+    aca_log($db, $aid, 'create', ['明細' => count($lines) . ' 筆', '含稅合計' => $net + $taxSum, '帳款月份' => $bm, '折讓日期' => $date, '證明單號碼' => $no === '' ? '（未填）' : $no], $user);
     return ['success' => true, 'allow_id' => $aid, 'billing_month' => $bm, 'net' => $net, 'tax' => $taxSum, 'total' => $net + $taxSum,
             'message' => '已開立折讓單，含稅合計 ' . number_format($net + $taxSum) . '；將列入 ' . $bm . ' 帳款月份對帳'];
 }
@@ -437,6 +533,7 @@ function aca_set_no(PDO $db, int $id, string $no, ?array $user): array
        ->execute([$no, $user ? $user['user_cname'] : null, $id]);
     acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $id, $a['customer_name'],
               ['allow_no' => [$a['allow_no'], $no]], null, $user);
+    aca_log($db, $id, 'set_no', ['證明單號碼' => [$a['allow_no'] ?: '（空白）', $no]], $user);
     return ['success' => true, 'message' => '已儲存證明單號碼'];
 }
 
@@ -452,6 +549,7 @@ function aca_void(PDO $db, int $id, string $reason, ?array $user): array
     $db->prepare("UPDATE acc_allowance SET status='void', void_reason=?, voided_by_name=?, voided_at=NOW() WHERE allow_id=?")
        ->execute([mb_substr($reason, 0, 200), $user ? $user['user_cname'] : null, $id]);
     acc_audit($db, 'ACC_ALLOWANCE', 'acc_allowance', $id, $a['customer_name'], ['action' => 'void'], $reason, $user);
+    aca_log($db, $id, 'void', ['狀態' => ['有效', '已作廢（視同刪除，來源單據折讓數量釋出）']], $user, $reason);
     return ['success' => true, 'message' => '已作廢，來源單據的折讓數量已釋出'];
 }
 
@@ -532,7 +630,9 @@ function aca_attach_add(PDO $db, int $allowId, array $f, ?array $user): array
         @unlink($dir . $stored);
         return ['success' => false, 'message' => '附件登記失敗：' . $e->getMessage()];
     }
-    return ['success' => true, 'file_id' => (int)$db->lastInsertId()];
+    $fid = (int)$db->lastInsertId();
+    aca_log($db, $allowId, 'attach_add', ['附件' => $orig, '大小' => (int)$f['size'] . ' bytes'], $user);
+    return ['success' => true, 'file_id' => $fid];
 }
 
 function aca_attach_path(PDO $db, int $fileId): ?array
@@ -545,11 +645,16 @@ function aca_attach_path(PDO $db, int $fileId): ?array
     return is_file($p) ? ['path' => $p, 'name' => $r['orig_name']] : null;
 }
 
-function aca_attach_delete(PDO $db, int $fileId): array
+function aca_attach_delete(PDO $db, int $fileId, ?array $user = null): array
 {
+    $st = $db->prepare("SELECT allow_id, orig_name FROM acc_allowance_file WHERE file_id=?");
+    $st->execute([$fileId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['success' => false, 'message' => '找不到附件，請重新整理'];
     $info = aca_attach_path($db, $fileId);
     $db->prepare("DELETE FROM acc_allowance_file WHERE file_id=?")->execute([$fileId]);
     if ($info) @unlink($info['path']);
+    aca_log($db, (int)$row['allow_id'], 'attach_del', ['刪除附件' => $row['orig_name']], $user);
     return ['success' => true, 'message' => '已刪除附件'];
 }
 
