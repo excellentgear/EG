@@ -151,6 +151,14 @@ table.art-t td.c { text-align:center; }
 table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .tbl-wrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
 .tbl-wrap table.art-t th { position:sticky; top:0; z-index:2; }
+#listWrap table.art-t th { position:static; }
+.prior-btn{display:inline-block;margin-left:6px;padding:0 8px;border-radius:9px;font-size:11px;line-height:18px;background:#DD5138;color:#fff !important;cursor:pointer;text-decoration:none !important;}
+.prior-btn:hover{background:#c43f28;}
+.flag-btn{font-size:11px;padding:1px 8px;border-radius:10px;margin:1px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;}
+.flag-btn.on{background:#F0A24B;color:#fff;border-color:#d98a33;}
+.flag-btn:disabled{cursor:default;opacity:.85;}
+tr.mon-head td{background:#F7E0BD !important;font-weight:bold;color:#5b3a1e;text-align:left !important;}
+tr.mon-head.prior td{background:#FBE3DC !important;color:#7a2c17;}
 .row-btn { font-size:11px; padding:2px 9px; border-radius:10px; margin:1px; }
 .icon-btn { border:none; background:none; color:var(--brown); cursor:pointer; font-size:14px; padding:2px 4px; }
 .icon-btn:hover { color:var(--coral); }
@@ -282,7 +290,7 @@ table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FBEBC
           <button onclick="listPageNext()"><i class="fa fa-angle-right"></i></button>
         </div>
       </div>
-      <div class="tbl-wrap"><table class="art-t" id="listTbl"><thead></thead><tbody><tr><td class="c">請選擇結帳月份</td></tr></tbody></table></div>
+      <div class="tbl-wrap" id="listWrap" style="max-height:none;overflow:visible;"><table class="art-t" id="listTbl"><thead></thead><tbody><tr><td class="c">請選擇結帳月份</td></tr></tbody></table></div>
     </div>
   </div>
 
@@ -528,6 +536,12 @@ table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FBEBC
       <h4>這頁在做什麼</h4>
       <p>追蹤「這個月這家客戶/廠商的對帳作業，流程走到哪一關」——處理中 → 已對帳 → 已送會計 → 會計已接收 → 會計已處理。
       跟對帳底稿（reconcile.php，逐筆核對金額）完全分開，這裡只是流程進度看板。</p>
+      <h4>前月份未對帳、折讓與應收標記</h4>
+      <ul>
+        <li>客戶（廠商）名稱旁的紅色「<b>?月未對帳</b>」＝2026-10 起前面月份仍是空白或處理中、也沒略過的月份；點它（或雙擊該列）明細會<b>分月顯示</b>。</li>
+        <li>「<b>有折讓</b>」＝本帳款月份有折讓單，折讓項目在明細置頂、暖色底。</li>
+        <li>應收操作欄的「給客戶對帳單」「客戶提供對帳單」「已收款」是獨立標記，點一下標記（顯示日期）、再點取消，不影響狀態與工作天數統計；需本頁管理員、業務或會計角色。</li>
+      </ul>
       <h4>資料怎麼來</h4>
       <ul>
         <li>應收：選定結帳月份後，自動抓出該月有出貨紀錄的客戶（與出貨單、對帳作業同一套結帳日口徑）。</li>
@@ -991,7 +1005,7 @@ function renderListTbl(){
     if (isAr) cols.push('<th style="width:120px;">對帳單</th>');
     if (isAr) cols.push('<th style="width:85px;">負責人</th>');
     cols.push('<th style="width:95px;">狀態</th>');
-    cols.push('<th style="width:170px;">操作</th>');
+    cols.push('<th style="width:' + (isAr ? 250 : 170) + 'px;">操作</th>');
     cols.push('<th style="width:60px;">結帳日設定</th>');
     if (isAr) cols.push('<th style="width:60px;">臨時調整</th>');
     document.getElementById('listTbl').querySelector('thead').innerHTML = '<tr>' + cols.join('') + '</tr>';
@@ -1037,7 +1051,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本帳款月份有 '+r.allow_cnt+' 張折讓單，點開看綁定的出貨／退貨單">有折讓'+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本帳款月份有 '+r.allow_cnt+' 張折讓單，點開看綁定的出貨／退貨單">有折讓'+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + ((r.prior_unrecon && r.prior_unrecon.length) ? ' <a href="javascript:void(0)" class="prior-btn" title="前月份還沒對帳，點開分月查看明細">' + priorLabel(r.prior_unrecon) + '未對帳</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
@@ -1050,16 +1064,38 @@ function renderListTbl(){
             tds.push('<td class="c">' + statusBadge('skipped') + '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;" title="' + esc(r.skipped_reason||'') + '">' + esc(r.skipped_by||'') + ' ' + esc(String(r.skipped_at||'').substr(0,16).replace(/-/g,'.')) + ' 略過' + (r.skipped_reason ? '<br>' + esc(r.skipped_reason) : '') + '</div></td>');
         } else
         tds.push('<td class="c">' + statusBadge(r.card_status) + (r.status_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(String(r.status_at).replace(/-/g,'.')) + '</div>' : '') + '</td>');
+        if (isAr) btns += '<div>' + flagBtns(r) + '</div>';
         tds.push('<td class="c">' + btns + '</td>');
         tds.push('<td class="c">' + settleBtn + '</td>');
         if (isAr) {
             var exBtn = (targetId && (PERMS.canAdmin||PERMS.isSales)) ? '<button class="icon-btn" title="臨時結帳調整" onclick="openExMaskFor(\''+esc(targetId)+'\',\''+esc(r.party_name)+'\')"><i class="fa fa-calendar-plus-o"></i></button>' : '';
             tds.push('<td class="c">' + exBtn + '</td>');
         }
-        html += '<tr class="dtl-row" data-party="' + esc(r.party_id || '') + '" data-name="' + esc(r.party_name) + '" title="雙擊查看本結帳月份明細">' + tds.join('') + '</tr>';
+        html += '<tr class="dtl-row" data-key="' + esc(r.party_key || '') + '" data-party="' + esc(r.party_id || '') + '" data-name="' + esc(r.party_name) + '" title="雙擊查看本結帳月份明細">' + tds.join('') + '</tr>';
     });
     document.getElementById('listTbl').querySelector('tbody').innerHTML = html;
     updateBatchBar();
+}
+/* 前月份未對帳：「10月未對帳」「10、11月未對帳」（跨年的月份加上年份） */
+function priorLabel(months){
+    var by = (document.getElementById('fBm').value || '').slice(0,4);
+    return months.map(function(m){ return (m.slice(0,4)===by ? '' : m.slice(2,4)+'/') + parseInt(m.slice(5),10); }).join('、') + '月';
+}
+/* 應收獨立標記按鈕：給客戶對帳單／客戶提供對帳單／已收款（點一下標記、已標記再點一下取消） */
+var FLAG_DEFS = {given:'給客戶對帳單', recv:'客戶提供對帳單', paid:'已收款'};
+function flagBtns(r){
+    var can = PERMS.canAdmin || PERMS.isSales || PERMS.isAcc, fl = r.flags || {};
+    return Object.keys(FLAG_DEFS).map(function(k){
+        var f = fl[k], on = !!f;
+        var tip = on ? (FLAG_DEFS[k] + '：' + (f.by||'') + ' ' + String(f.at||'').replace(/-/g,'.') + '（再點一下取消）') : ('標記「' + FLAG_DEFS[k] + '」');
+        return '<button class="flag-btn' + (on?' on':'') + '" ' + (can?'':'disabled ') + 'title="' + esc(tip) + '" onclick="doFlag(' + r.track_id + ',\'' + k + '\',' + (on?0:1) + ')">' + (on?'✓ ':'') + FLAG_DEFS[k] + (on ? ' <span style="font-size:10px;">' + esc(String(f.at||'').slice(5,10).replace('-','.')) + '</span>' : '') + '</button>';
+    }).join('');
+}
+function doFlag(trackId, flag, on){
+    if (!on && !confirm('確定取消「' + FLAG_DEFS[flag] + '」標記？')) return;
+    api({action:'flag_set', track_id:trackId, flag:flag, on:on}).done(function(r){
+        if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(true); }
+    });
 }
 function canSkip(side){
     if (PERMS.isAll || PERMS.canAdmin) return true;
@@ -1475,42 +1511,61 @@ $(function(){
             document.getElementById('allowSub').textContent = '共 ' + as.length + ' 張折讓單、' + cnt + ' 筆綁定單據（折讓視為此帳款月份待對帳項目）';
         }).fail(function(){ document.getElementById('allowSub').textContent = '載入失敗'; });
     });
-    // 雙擊列表列 → 跳窗顯示本結帳月份此客戶／廠商明細（資料同對帳作業 reconcile.php）
-    $('#listTbl tbody').on('dblclick', 'tr.dtl-row', function(e){
-        if ($(e.target).closest('button,select,input,a,.icon-btn').length) return;
-        var $tr = $(this), isAr = (SIDE==='ar'), bm = document.getElementById('fBm').value || defaultBm();
+    // 明細跳窗：本結帳月份＋前月份仍未對帳的明細（分月顯示，資料同對帳作業 reconcile.php）
+    function detailSection(isAr, d, allows){
+        d = d || {}; allows = allows || [];
+        var items = d.items || [], h = '', cnt = 0, allowTotal = 0;
+        var n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; }, dotd = function(x){ return String(x||'').replace(/-/g,'.'); };
+        // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立
+        allows.forEach(function(a){
+            allowTotal -= Number(a.total_amount) || 0;
+            (a.items||[]).forEach(function(i){ cnt++;
+                h += '<tr class="allow-row"><td>折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
+                   + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
+            });
+        });
+        items.forEach(function(it){ cnt++;
+            if (isAr) h += '<tr><td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
+            else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
+        });
+        var tot = isAr ? d.total_amt : d.total_amount;
+        if (tot != null) tot = Number(tot) + (isAr ? allowTotal : 0);
+        return {h:h, cnt:cnt, tot:tot, allowCnt:(function(){ var c=0; allows.forEach(function(a){ c += (a.items||[]).length; }); return c; })()};
+    }
+    function openDetailFor($tr){
+        var isAr = (SIDE==='ar'), bm = document.getElementById('fBm').value || defaultBm();
         var key = isAr ? $tr.attr('data-name') : $tr.attr('data-party');
-        var nm = $tr.attr('data-name');
+        var nm = $tr.attr('data-name'), pkey = $tr.attr('data-key') || '';
         if (!key) { showToast('此對象未建立主檔編號，無法查詢明細'); return; }
         document.getElementById('dtlTitle').textContent = nm + ' — ' + bm + ' ' + (isAr?'應收':'應付') + '明細';
         document.getElementById('dtlSub').textContent = '載入中…';
         document.getElementById('dtlTbl').querySelector('thead').innerHTML = '';
         document.getElementById('dtlTbl').querySelector('tbody').innerHTML = '';
         openMask('dtlMask');
-        apiGet('detail', {side:SIDE, bm:bm, party:key}).done(function(r){
-            var d = (r && r.detail) || {}, items = d.items || [], h = '', n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; };
+        apiGet('detail', {side:SIDE, bm:bm, party:key, pkey:pkey}).done(function(r){
             var cols = isAr ? ['類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
             document.getElementById('dtlTbl').querySelector('thead').innerHTML = '<tr>' + cols.map(function(c){ return '<th>'+c+'</th>'; }).join('') + '</tr>';
-            var allows = (isAr && r.allowances) || [], allowTotal = 0, dotd = function(x){ return String(x||'').replace(/-/g,'.'); };
-            // 折讓視為本結帳月份待對帳的項目：置頂、暖黃底色，並註明何時折讓、誰開立
-            allows.forEach(function(a){
-                allowTotal -= Number(a.total_amount) || 0;
-                (a.items||[]).forEach(function(i){
-                    h += '<tr class="allow-row"><td>折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
-                       + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
-                });
-            });
-            items.forEach(function(it){
-                if (isAr) h += '<tr><td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
-                else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
+            var prior = (r && r.prior) || [], money = function(v){ return v != null ? fmtMoney(v) : '—'; };
+            var cur = detailSection(isAr, r && r.detail, isAr ? r.allowances : []);
+            var h = '', total = (cur.tot != null ? cur.tot : 0), cnt = cur.cnt;
+            if (prior.length) h += '<tr class="mon-head"><td colspan="' + cols.length + '">' + bm + '　本月　共 ' + cur.cnt + ' 筆　小計(含稅) ' + money(cur.tot) + '</td></tr>';
+            h += cur.h || (prior.length ? '<tr><td colspan="' + cols.length + '" class="c">本月沒有明細</td></tr>' : '');
+            prior.forEach(function(p){
+                var sec = detailSection(isAr, p.detail, isAr ? p.allowances : []);
+                total += (sec.tot != null ? sec.tot : 0); cnt += sec.cnt;
+                h += '<tr class="mon-head prior"><td colspan="' + cols.length + '">' + p.bm + '　⚠ 前月份未對帳　共 ' + sec.cnt + ' 筆　小計(含稅) ' + money(sec.tot) + '</td></tr>';
+                h += sec.h || '<tr><td colspan="' + cols.length + '" class="c">這個月沒有明細</td></tr>';
             });
             document.getElementById('dtlTbl').querySelector('tbody').innerHTML = h || '<tr><td colspan="' + cols.length + '" class="c">沒有明細</td></tr>';
-            var tot = isAr ? d.total_amt : d.total_amount;
-            if (isAr && allows.length && tot != null) tot = Number(tot) + allowTotal;
-            var allowCnt = 0; allows.forEach(function(a){ allowCnt += (a.items||[]).length; });
-            document.getElementById('dtlSub').textContent = '共 ' + (items.length + allowCnt) + ' 筆' + (allowCnt ? '（含折讓 ' + allowCnt + ' 筆，置頂暖黃底）' : '') + (tot != null ? '，合計(含稅' + (allowCnt ? '，已扣折讓' : '') + ') ' + fmtMoney(tot) : '') + '（資料與對帳作業相同；雙擊列表任一列開啟）';
+            document.getElementById('dtlSub').textContent = '共 ' + cnt + ' 筆' + (cur.allowCnt ? '（本月含折讓 ' + cur.allowCnt + ' 筆，暖色底）' : '')
+                + (prior.length ? '，另含 ' + prior.length + ' 個前月份未對帳（分月顯示）' : '') + '，合計(含稅' + (cur.allowCnt ? '，已扣折讓' : '') + ') ' + fmtMoney(total) + '（資料與對帳作業相同；雙擊列表任一列開啟）';
         }).fail(function(){ document.getElementById('dtlSub').textContent = '載入失敗'; });
+    }
+    $('#listTbl tbody').on('dblclick', 'tr.dtl-row', function(e){
+        if ($(e.target).closest('button,select,input,a,.icon-btn').length) return;
+        openDetailFor($(this));
     });
+    $('#listTbl tbody').on('click', '.prior-btn', function(e){ e.stopPropagation(); openDetailFor($(this).closest('tr')); });
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;

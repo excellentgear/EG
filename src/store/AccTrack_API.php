@@ -50,7 +50,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'skip_set','settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
-          'early_days_save', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete', 'fixed_add', 'fixed_stop'];
+          'early_days_save', 'flag_set', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete', 'fixed_add', 'fixed_stop'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['act_csrf'], $tok)) {
@@ -90,7 +90,25 @@ switch ($action) {
             $cid = aca_customer_id_of($db, $key);
             if ($cid !== null) $allow = aca_recon_rows($db, $cid, $bm);   // 折讓視為本月份待對帳項目，前端置頂顯示
         }
-        actOut(['detail' => $d, 'allowances' => $allow]);
+        // 前月份仍未對帳的明細（分月回傳，前端分月顯示）
+        $prior = [];
+        $pkey = trim((string)($_GET['pkey'] ?? ''));
+        if ($pkey !== '') {
+            foreach (act_prior_months_of($db, $side, $pkey, $bm) as $pm) {
+                $pd = ($side === 'ar') ? acc_ar_detail($db, $key, $pm) : acc_ap_detail($db, $key, $pm);
+                $pa = [];
+                if ($side === 'ar') { $pcid = aca_customer_id_of($db, $key); if ($pcid !== null) $pa = aca_recon_rows($db, $pcid, $pm); }
+                $prior[] = ['bm' => $pm, 'detail' => $pd, 'allowances' => $pa];
+            }
+        }
+        actOut(['detail' => $d, 'allowances' => $allow, 'prior' => $prior]);
+    }
+
+    /* ── 應收獨立標記：給客戶對帳單／客戶提供對帳單／已收款 ── */
+    case 'flag_set': {
+        $r = act_flag_set($db, (int)($_POST['track_id'] ?? 0), (string)($_POST['flag'] ?? ''), !empty($_POST['on']) && $_POST['on'] !== '0', $perms);
+        if (empty($r['success'])) actErr($r['message']);
+        actOut($r);
     }
 
     /* ── 客戶名稱旁「有折讓」點開：此客戶此帳款月份的折讓單與綁定的單據 ── */
@@ -116,6 +134,15 @@ switch ($action) {
                 $_ar['allow_total'] = $am ? $am['total'] : 0;
             }
             unset($_ar);
+        }
+        // 前月份仍未對帳（2026-10 起）：列表上以按鈕顯示「?月未對帳」
+        $pmap = act_prior_unrecon_map($db, $side, $bm);
+        foreach ($allRows as &$_pr) $_pr['prior_unrecon'] = $pmap[(string)($_pr['party_key'] ?? '')] ?? [];
+        unset($_pr);
+        if ($side === 'ar') {
+            $fmap = act_flags_map($db, array_column($allRows, 'track_id'));
+            foreach ($allRows as &$_fr) $_fr['flags'] = $fmap[(int)$_fr['track_id']] ?? new stdClass();
+            unset($_fr);
         }
         // 結帳日最後修改人／日期（顯示在結帳日下方）
         $lastEdit = act_settle_last_edit_map($db, $side === 'ar' ? 'customer' : 'maker');

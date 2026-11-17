@@ -122,6 +122,15 @@ function act_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='狀態變更歷程：供工作天數統計取「第一次抵達某狀態的時間」'");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_flag (
+            id        INT AUTO_INCREMENT PRIMARY KEY,
+            track_id  INT NOT NULL,
+            flag      VARCHAR(20) NOT NULL COMMENT 'given=給客戶對帳單 recv=客戶提供對帳單 paid=已收款',
+            flagged_at DATETIME NOT NULL,
+            by_id     INT NULL,
+            by_name   VARCHAR(50) NULL,
+            UNIQUE KEY uk_track_flag (track_id, flag)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='對帳進度追蹤（應收）：給客戶對帳單／客戶提供對帳單／已收款 的獨立標記（不影響狀態機與工作天數統計）'");
         $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_change_log (
             id              INT AUTO_INCREMENT PRIMARY KEY,
             target_type     ENUM('customer','maker') NOT NULL,
@@ -731,6 +740,106 @@ function act_ar_rows(PDO $db, string $billingMonth): array
         ];
     }
     return $out;
+}}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 前月份未對帳提醒（2026-11-17）
+ * 2026-09（含）以前已由批次設為已對帳，所以只往前看 2026-10 起、最多 6 個月；
+ * 「未對帳」＝狀態空白或處理中，且沒有被略過。
+ * ══════════════════════════════════════════════════════════════════ */
+if (!defined('ACT_UNRECON_FROM')) define('ACT_UNRECON_FROM', '2026-10');
+
+if (!function_exists('act_prior_months')) {
+function act_prior_months(string $bm): array
+{
+    $out = [];
+    for ($i = 1; $i <= 6; $i++) {
+        $m = date('Y-m', strtotime($bm . '-01 -' . $i . ' month'));
+        if ($m < ACT_UNRECON_FROM) break;
+        $out[] = $m;
+    }
+    return array_reverse($out);
+}}
+
+if (!function_exists('act_prior_unrecon_map')) {
+/** party_key => [未對帳的前月份…]。前月份從未被開過的話先補建追蹤列（與列表自己的 lazy create 同一支函式） */
+function act_prior_unrecon_map(PDO $db, string $side, string $bm): array
+{
+    $months = act_prior_months($bm);
+    if (!$months) return [];
+    foreach ($months as $m) {
+        $st = $db->prepare("SELECT COUNT(*) FROM acc_recon_track WHERE side=? AND billing_month=?");
+        $st->execute([$side, $m]);
+        if ((int)$st->fetchColumn() === 0) { try { $side === 'ar' ? act_ar_rows($db, $m) : act_ap_rows($db, $m, false); } catch (Throwable $e) {} }
+    }
+    $ph = implode(',', array_fill(0, count($months), '?'));
+    $st = $db->prepare("SELECT party_key, billing_month FROM acc_recon_track
+                        WHERE side=? AND billing_month IN ($ph) AND status IN ('','processing') AND skipped_at IS NULL
+                        ORDER BY billing_month");
+    $st->execute(array_merge([$side], $months));
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['party_key']][] = $r['billing_month'];
+    return $out;
+}}
+
+if (!function_exists('act_prior_months_of')) {
+/** 單一對象在 $bm 之前仍未對帳的月份 */
+function act_prior_months_of(PDO $db, string $side, string $partyKey, string $bm): array
+{
+    $months = act_prior_months($bm);
+    if (!$months) return [];
+    $ph = implode(',', array_fill(0, count($months), '?'));
+    $st = $db->prepare("SELECT billing_month FROM acc_recon_track WHERE side=? AND party_key=? AND billing_month IN ($ph)
+                        AND status IN ('','processing') AND skipped_at IS NULL ORDER BY billing_month");
+    $st->execute(array_merge([$side, $partyKey], $months));
+    return $st->fetchAll(PDO::FETCH_COLUMN);
+}}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 應收獨立標記：給客戶對帳單／客戶提供對帳單／已收款
+ * ══════════════════════════════════════════════════════════════════ */
+if (!function_exists('act_flag_defs')) {
+function act_flag_defs(): array { return ['given' => '給客戶對帳單', 'recv' => '客戶提供對帳單', 'paid' => '已收款']; }}
+
+if (!function_exists('act_flags_map')) {
+function act_flags_map(PDO $db, array $trackIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $trackIds))));
+    if (!$ids) return [];
+    $st = $db->query("SELECT track_id, flag, DATE_FORMAT(flagged_at,'%Y-%m-%d %H:%i') at, by_name FROM acc_recon_track_flag WHERE track_id IN (" . implode(',', $ids) . ")");
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['track_id']][$r['flag']] = ['at' => $r['at'], 'by' => $r['by_name']];
+    return $out;
+}}
+
+if (!function_exists('act_flag_set')) {
+function act_flag_set(PDO $db, int $trackId, string $flag, bool $on, array $perms): array
+{
+    if (!isset(act_flag_defs()[$flag])) return ['success' => false, 'message' => '不合法的標記'];
+    if (empty($perms['canAdmin']) && empty($perms['isSales']) && empty($perms['isAcc'])) return ['success' => false, 'message' => '沒有設定此標記的權限（需本頁管理員、業務或會計角色）'];
+    $st = $db->prepare("SELECT id, side, party_name, billing_month FROM acc_recon_track WHERE id=?");
+    $st->execute([$trackId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
+    if ($row['side'] !== 'ar') return ['success' => false, 'message' => '此標記只用於應收'];
+    $st = $db->prepare("SELECT id FROM acc_recon_track_flag WHERE track_id=? AND flag=?");
+    $st->execute([$trackId, $flag]);
+    $has = (bool)$st->fetchColumn();
+    if ($on && $has) return ['success' => false, 'message' => '已經標記過了，請重新整理'];
+    if (!$on && !$has) return ['success' => false, 'message' => '已經取消了，請重新整理'];
+    if ($on) {
+        $db->prepare("INSERT INTO acc_recon_track_flag (track_id,flag,flagged_at,by_id,by_name) VALUES (?,?,NOW(),?,?)")
+           ->execute([$trackId, $flag, $perms['uid'] ?? null, $perms['uname'] ?? '']);
+    } else {
+        $db->prepare("DELETE FROM acc_recon_track_flag WHERE track_id=? AND flag=?")->execute([$trackId, $flag]);
+    }
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('ACC_RECON_FLAG','acc_recon_track',?,?,?,?,?,NOW())")
+           ->execute([(string)$trackId, $row['party_name'] . ' ' . $row['billing_month'],
+                      json_encode(['changes' => [act_flag_defs()[$flag] => [$on ? '未標記' : '已標記', $on ? '已標記' : '已取消']]], JSON_UNESCAPED_UNICODE),
+                      $perms['uid'] ?? null, $perms['uname'] ?? '']);
+    } catch (Throwable $e) {}
+    return ['success' => true, 'message' => $on ? '已標記「' . act_flag_defs()[$flag] . '」' : '已取消「' . act_flag_defs()[$flag] . '」'];
 }}
 
 if (!function_exists('act_zero_ship_customer_ids')) {
