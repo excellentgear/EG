@@ -35,6 +35,17 @@ $canView = $isAdmin || $procNew || in_array('ot_edit', $feat, true);
 
 function plvEsc($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 
+/* 客戶挑選（ID 或名稱模糊搜尋，只讀） */
+if (($_POST['action'] ?? '') === 'cust') {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!$canView) { echo json_encode(['success' => false, 'data' => []]); exit; }
+    $k = '%' . trim((string)($_POST['keyword'] ?? '')) . '%';
+    $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE (customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?) ORDER BY customer LIMIT 20");
+    $st->execute([$k, $k, $k]);
+    echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /* ── 資料（POST action=list，只讀）────────────────────────────────────── */
 if (($_POST['action'] ?? '') === 'list') {
     header('Content-Type: application/json; charset=utf-8');
@@ -48,7 +59,7 @@ if (($_POST['action'] ?? '') === 'list') {
         $where = ["el.log_type='order_process'",
                   "EXISTS (SELECT 1 FROM eng_log_item i0 WHERE i0.log_id=el.id AND i0.voided_at IS NULL)"];
         $par = [];
-        if ($cust !== '') { $where[] = "ot.Client_name LIKE ?"; $par[] = '%' . $cust . '%'; }
+        if ($cust !== '') { $where[] = "(ot.Client_name LIKE ? OR ot.Client_name_ID LIKE ?)"; $par[] = '%' . $cust . '%'; $par[] = '%' . $cust . '%'; }
         if ($part !== '') { $where[] = "ot.d_id LIKE ?"; $par[] = '%' . $part . '%'; }
         if ($onlyOpen) $where[] = "EXISTS (SELECT 1 FROM eng_log_item i1 WHERE i1.log_id=el.id AND i1.voided_at IS NULL AND i1.is_note=0 AND i1.status NOT IN ('resolved','dropped'))";
         foreach (preg_split('/\s+/u', $kw, -1, PREG_SPLIT_NO_EMPTY) as $w) {
@@ -191,11 +202,10 @@ body { background:#F6F1EA; }
   <div class="plv-sticky">
   <div class="warm-panel">
     <div class="plv-bar">
-      <input type="text" id="fCust" placeholder="客戶" value="<?= plvEsc($initCust) ?>">
+      <span style="position:relative;display:inline-block;"><input type="text" id="fCust" placeholder="客戶（ID或名稱）" autocomplete="off" value="<?= plvEsc($initCust) ?>"><div id="fCustDd" style="display:none;position:absolute;top:100%;left:0;z-index:99;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 3px 8px rgba(0,0,0,.15);min-width:240px;max-height:240px;overflow-y:auto;font-size:12px;"></div></span>
       <input type="text" id="fPart" placeholder="料號" value="<?= plvEsc($initPart) ?>">
       <input type="text" id="fKw" placeholder="全文搜尋（訂單／BOM／問題／回覆）" style="width:260px;" value="<?= plvEsc($initKw) ?>">
       <label style="margin:0;font-weight:normal;"><input type="checkbox" id="fOpen"> 只看尚有未處理</label>
-      <button class="btn btn-sm btn-warning" id="btnGo"><i class="fa fa-search"></i> 查詢</button>
       <span id="plvCnt" class="plv-meta"></span>
     </div>
   </div>
@@ -279,8 +289,27 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
     });
     $('#plvBody').html(h);
   }
-  $('#btnGo').on('click', load);
-  $('#fCust,#fPart,#fKw').on('keydown', function(e){ if (e.which===13) { e.preventDefault(); load(); } });
+  // 輸入即時查詢（防抖 350ms）
+  var T = null;
+  function soon(){ clearTimeout(T); T = setTimeout(load, 350); }
+  $('#fCust,#fPart,#fKw').on('input', soon);
+  $('#fCust,#fPart,#fKw').on('keydown', function(e){ if (e.which===13) { e.preventDefault(); $('#fCustDd').hide(); load(); } });
+  // 客戶：ID／名稱模糊搜尋後列表挑選
+  var CT = null;
+  $('#fCust').on('input', function(){
+    clearTimeout(CT); var kw = $.trim($(this).val());
+    if (!kw) { $('#fCustDd').hide().empty(); return; }
+    CT = setTimeout(function(){
+      $.post('', {action:'cust', keyword:kw}, function(res){
+        if (!res || !res.data || !res.data.length) { $('#fCustDd').hide().empty(); return; }
+        $('#fCustDd').html(res.data.map(function(c){
+          return '<div class="plv-ci" data-n="'+esc(c.customer)+'" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;"><b style="color:#337ab7;">'+esc(c.customer_id)+'</b> <span style="margin-left:6px;">'+esc(c.customer)+'</span></div>';
+        }).join('')).show();
+      }, 'json');
+    }, 250);
+  });
+  $(document).on('click', '.plv-ci', function(){ $('#fCust').val($(this).data('n')); $('#fCustDd').hide().empty(); load(); });
+  $(document).on('click', function(e){ if (!$(e.target).closest('#fCust,#fCustDd').length) $('#fCustDd').hide(); });
   $('#fOpen').on('change', load);
   load();
 })();
