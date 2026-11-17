@@ -1497,7 +1497,7 @@ $(function(){
                 allowTotal -= Number(a.total_amount) || 0;
                 (a.items||[]).forEach(function(i){
                     h += '<tr class="allow-row"><td>折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
-                       + '<td>已於 ' + esc(dotd(a.allow_date)) + ' 折讓｜開立：' + esc(a.created_by_name||'') + '｜證明單號碼：' + esc(a.allow_no||'（尚未填）') + '</td></tr>';
+                       + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
                 });
             });
             items.forEach(function(it){
