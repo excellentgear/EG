@@ -61,6 +61,10 @@ if (!function_exists('bro_state_text')) {
     }
 }
 
+if (!function_exists('bro_state_label')) {
+    function bro_state_label(array $g): string { return !empty($g['done']) ? '已完成' : bro_state_text((string)$g['state']); }
+}
+
 if (!function_exists('bro_groups')) {
     /** 該 BOM 依 SN 分組、由小到大：[ ['sn','fid','process_no','name','state','sqty','qc_completed','QC_check','exclude_qc'] ] */
     function bro_groups(PDO $db, string $bom): array {
@@ -68,15 +72,31 @@ if (!function_exists('bro_groups')) {
                              FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
                             WHERE bi.bom = ? ORDER BY bi.bom_sn, bi.bom_ing_fid");
         $q->execute([$bom]);
-        $g = [];
+        $g = []; $fidsBySn = [];
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $sn = (int)$r['bom_sn'];
+            $fidsBySn[$sn][] = (int)$r['bom_ing_fid'];
             if (isset($g[$sn])) continue;
             $g[$sn] = ['sn' => $sn, 'fid' => (int)$r['bom_ing_fid'], 'process_no' => $r['process_no'], 'name' => (string)($r['ProcessName'] ?? ''),
                        'state' => (string)$r['processing_state'], 'sqty' => (float)$r['sqty'], 'qc_completed' => (int)$r['qc_completed'],
                        'QC_check' => $r['QC_check'], 'exclude_qc' => (int)$r['ex']];
         }
         ksort($g);
+        // 有回廠紀錄且全數回廠（回廠＋報廢＋取回 已涵蓋發出數量）也算這一關已完成
+        try {
+            require_once __DIR__ . '/bom_outsource_lib.php';
+            eg_bom_outsource_ensure_schema($db);
+            $all = [];
+            foreach ($fidsBySn as $f) foreach ($f as $x) $all[] = $x;
+            $bm = $all ? eg_bom_outsource_batch_map($db, $all) : [];
+            foreach ($g as $sn => &$row) {
+                $row['done'] = false;
+                $send = 0.0; $ret = 0.0; $out = 0.0;
+                foreach ($fidsBySn[$sn] as $f) if (isset($bm[$f])) { $send += (float)$bm[$f]['send']; $ret += (float)$bm[$f]['ret'] + (float)$bm[$f]['scrap']; $out += (float)$bm[$f]['outside']; }
+                if ($send > 0 && $ret > 0 && $out <= 1e-9) $row['done'] = true;
+            }
+            unset($row);
+        } catch (Throwable $e) { error_log('[bro] done: ' . $e->getMessage()); }
         return array_values($g);
     }
 }
@@ -229,7 +249,7 @@ if (!function_exists('bro_notify')) {
                   '申請：' . $desc, '申請人：' . $req, ($reason !== '' ? '備註：' . $reason : null),
                   '負責設計：' . ($des['primary'] ? bro_user_name($db, $des['primary']) : '（訂單未指定）') . '（設計／技術部門任一人皆可審核，一人決行後其他人的通知自動收回）',
                   '目前製程順序與狀態：'];
-        foreach ($groups as $g) $lines[] = '　SN' . $g['sn'] . ' ' . ($g['name'] !== '' ? $g['name'] : $g['process_no']) . '　' . bro_state_text($g['state']) . ($g['qc_completed'] ? '（QC完工）' : '');
+        foreach ($groups as $g) $lines[] = '　SN' . $g['sn'] . ' ' . ($g['name'] !== '' ? $g['name'] : $g['process_no']) . '　' . bro_state_label($g) . ($g['qc_completed'] ? '（QC完工）' : '');
         $title = '【換製程順序申請】' . $bom . '｜' . $info['part_no'] . '｜' . $desc;
         $eid = 0;
         try { $eid = bro_insert_event($db, $title, implode("\n", array_filter($lines, function ($x) { return $x !== null; })), array_keys($des['users']), $uid, $rid); } catch (Throwable $e) { error_log('[bro] event: ' . $e->getMessage()); }
