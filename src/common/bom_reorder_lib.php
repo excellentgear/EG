@@ -97,6 +97,23 @@ if (!function_exists('bro_groups')) {
             }
             unset($row);
         } catch (Throwable $e) { error_log('[bro] done: ' . $e->getMessage()); }
+        // 這一關已有移轉憑單（含「同一關」別名 SN）且移轉數量涵蓋本關數量＝貨已全數離開本關，也算已完成
+        try {
+            $tq = $db->prepare("SELECT bom_sn, SUM(COALESCE(NULLIF(transfer_qty,0), sqty)) AS q FROM bom_ing_transfer_log WHERE bom=? GROUP BY bom_sn");
+            $tq->execute([$bom]);
+            $tr = [];
+            foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $t) $tr[(int)$t['bom_sn']] = (float)$t['q'];
+            try {
+                $aq = $db->prepare("SELECT alias_sn, target_sn FROM bom_sn_alias WHERE bom=?");
+                $aq->execute([$bom]);
+                foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $a) if (isset($tr[(int)$a['alias_sn']])) { $tr[(int)$a['target_sn']] = ($tr[(int)$a['target_sn']] ?? 0) + $tr[(int)$a['alias_sn']]; }
+            } catch (Throwable $e2) {}
+            foreach ($g as $sn => &$row) {
+                if (!empty($row['done'])) continue;
+                if (($tr[$sn] ?? 0) > 0 && $row['sqty'] > 0 && $tr[$sn] >= $row['sqty'] - 1e-9) $row['done'] = true;
+            }
+            unset($row);
+        } catch (Throwable $e) { error_log('[bro] done xfer: ' . $e->getMessage()); }
         return array_values($g);
     }
 }
