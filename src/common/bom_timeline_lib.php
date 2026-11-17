@@ -146,8 +146,10 @@ if (!function_exists('eg_bom_timeline')) {
                     $cs = [];
                     foreach ($col as $v) {
                         if ($v === '泡殼') {
-                            $a = trim((string)($d['collision_detail_1'] ?? '')); $b = trim((string)($d['collision_detail_2'] ?? ''));
-                            $cs[] = '泡殼 (' . ($a !== '' ? $a : '?') . '入 x ' . ($b !== '' ? $b : '?') . '個)';
+                            $bl = (isset($d['blister']) && is_array($d['blister']) && $d['blister']) ? $d['blister'] : [['a' => $d['collision_detail_1'] ?? '', 'b' => $d['collision_detail_2'] ?? '']];
+                            $bs = [];
+                            foreach ($bl as $x) { $a = trim((string)($x['a'] ?? '')); $b = trim((string)($x['b'] ?? '')); $bs[] = ($a !== '' ? $a : '?') . '入 x ' . ($b !== '' ? $b : '?') . '個'; }
+                            $cs[] = '泡殼 (' . implode('、', $bs) . ')';
                         } elseif ($v === '其他' && trim((string)($d['collision_other'] ?? '')) !== '') {
                             $cs[] = '其他：' . trim($d['collision_other']);
                         } else $cs[] = $v;

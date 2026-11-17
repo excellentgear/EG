@@ -348,6 +348,15 @@ $pk_features = rf_load_user_features($pdo, $pk_uid);
 $PK_CAN_BACKFILL = rf_has_feature($pk_features, 'pk_backfill');
 $PK_CAN_BACKFILL_PACKER = rf_has_feature($pk_features, 'pk_backfill_change_packer');
 $PK_CAN_ADMIN = rf_has_feature($pk_features, 'pk_admin');
+// 頁首顯示目前登入者在本頁（module=packing_schedule）被指派的角色
+$PK_ROLE_LABEL = '一般使用者';
+try {
+    $rq = $pdo->prepare("SELECT r.role_name FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id WHERE ur.user_id = ? AND r.module = 'packing_schedule' ORDER BY r.role_id");
+    $rq->execute([$pk_uid]);
+    $rn = $rq->fetchAll(PDO::FETCH_COLUMN);
+    if ($rn) $PK_ROLE_LABEL = implode('、', $rn);
+    elseif ($PK_CAN_ADMIN) $PK_ROLE_LABEL = '管理者';
+} catch (Throwable $e) {}
 
 // =============================================================================
 // 後端 API
@@ -1435,6 +1444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .pkg-other-input { display: inline-block; width: auto; margin-left: 5px; }
         .pkg-row { margin-bottom: 5px; }
         .pkg-blister-in { display: inline-block !important; width: 64px !important; height: 30px; border: 1px solid #8c8c8c !important; background: #fff !important; vertical-align: middle; }
+        .pkg-blister-row { margin-bottom: 4px; }
         .pkg-no { display: inline-block; width: 70px !important; }
         .pkg-remove { color: #d9534f; cursor: pointer; margin-left: 5px; }
         .ng-value { background-color: #f2dede !important; color: #a94442; font-weight: bold; }
@@ -1502,6 +1512,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <h3>包裝排程 <small>Packing Schedule</small></h3>
                         </div>
                         <div class="title_right">
+                            <span class="pull-right" id="pk-role-badge" style="margin:6px 12px 0 4px;font-size:13px;color:#5b3a1e;background:#F7E0BD;border-radius:12px;padding:4px 12px;">目前角色：<b><?= htmlspecialchars($PK_ROLE_LABEL) ?></b></span>
                             <button class="page-help-btn pull-right" id="btn-page-help" title="使用說明" style="margin-right:8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
                             <?php if ($PK_CAN_ADMIN): ?>
                             <button class="btn btn-default pull-right" id="btn-role-setting" style="margin-right:8px;"><i class="fa fa-key"></i> 角色與功能設定</button>
@@ -1510,6 +1521,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <button class="btn btn-warning pull-right" id="btn-backfill" style="margin-right:8px;"><i class="fa fa-history"></i> 補登包裝紀錄</button>
                             <?php endif; ?>
                             <button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button>
+                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-print-setting-top" style="margin-right:8px;"><i class="fa fa-print"></i> 標籤／檢驗表列印設定</button><?php endif; ?>
                             <button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button>
                             <button class="btn btn-default pull-right" id="btn-refresh" style="margin-right:8px;"><i class="fa fa-refresh"></i> 重新整理</button>
                         </div>
@@ -1779,9 +1791,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <div class="pkg-checkbox-group">
                         <div style="margin-bottom:5px;">
                             <label><input type="checkbox" class="pkg-collision" value="泡殼"> 泡殼</label>
-                            ( <input type="number" min="0" class="form-control input-sm pkg-collision-detail pkg-blister-in" data-eg-skip> 入 x
-                            <input type="number" min="0" class="form-control input-sm pkg-collision-detail-2 pkg-blister-in" data-eg-skip> 個 )
+                            <button type="button" class="btn btn-default btn-xs" id="btn-add-blister"><i class="fa fa-plus"></i> 新增泡殼規格</button>
                         </div>
+                        <div id="pkg-blister-rows" style="margin-bottom:5px;"></div>
                         <label><input type="checkbox" class="pkg-collision" value="隔板"> 隔板</label>
                         <label><input type="checkbox" class="pkg-collision" value="氣泡紙"> 氣泡紙</label>
                         <label><input type="checkbox" class="pkg-collision" value="報紙"> 報紙</label>
@@ -2216,7 +2228,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('input[name="pkg-judgement"][value=""]').prop('checked', true);
             $('#pkg-judge-hint').text('');
             $('.pkg-rust, .pkg-collision').prop('checked', false).closest('label').removeClass('active');
-            $('.pkg-rust-other, .pkg-collision-other, .pkg-collision-detail, .pkg-collision-detail-2').val('').hide();
+            $('.pkg-rust-other, .pkg-collision-other').val('').hide();
+            $('#pkg-blister-rows').empty();
             $('#pkg-return-jig, #pkg-return-sample, #pkg-return-fixture, #pkg-shipment-desc, #pkg-pallet-qty, #pkg-actual-qty, #pkg-remark').val('');
             $('#pkg-ng-return-material, #pkg-ng-process-defect').val('');
             $('#pkg-ng-breakdown-hint').text('').removeClass('text-danger');
@@ -2470,8 +2483,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (pd.rust_other) $('.pkg-rust-other').val(pd.rust_other).show();
             (pd.collision || []).forEach(function (v) { $('.pkg-collision[value="' + v + '"]').prop('checked', true); });
             if (pd.collision_other) $('.pkg-collision-other').val(pd.collision_other).show();
-            $('.pkg-collision-detail').val(pd.collision_detail_1 || '');
-            $('.pkg-collision-detail-2').val(pd.collision_detail_2 || '');
+            $('#pkg-blister-rows').empty();
+            if (pd.blister && pd.blister.length) pd.blister.forEach(function (x) { addBlisterRow(x.a, x.b); });
+            else if (pd.collision_detail_1 || pd.collision_detail_2) addBlisterRow(pd.collision_detail_1, pd.collision_detail_2);
             $('#pkg-return-jig').val(pd.return_jig || '');
             $('#pkg-return-sample').val(pd.return_sample || '');
             $('#pkg-return-fixture').val(pd.return_fixture || '');
@@ -2661,10 +2675,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         });
 
-        // 泡殼「?入 x ?個」有填任何一格就自動勾選泡殼
+        // 泡殼「( ?入 x ?個 )」可增列；有填任何一格就自動勾選泡殼
+        function addBlisterRow(a, b) {
+            $('#pkg-blister-rows').append('<div class="pkg-blister-row">( <input type="number" min="0" class="form-control input-sm pkg-blister-in pkg-bl-a" value="' + (a == null ? '' : a) + '" data-eg-skip> 入 x ' +
+                '<input type="number" min="0" class="form-control input-sm pkg-blister-in pkg-bl-b" value="' + (b == null ? '' : b) + '" data-eg-skip> 個 ) <i class="fa fa-times pkg-remove-bl pkg-remove"></i></div>');
+        }
+        $('#btn-add-blister').click(function () { addBlisterRow(); $('#pkg-blister-rows .pkg-bl-a').last().focus(); $('.pkg-collision[value="泡殼"]').prop('checked', true); });
+        $(document).on('click', '.pkg-remove-bl', function () { $(this).closest('.pkg-blister-row').remove(); });
         $(document).on('input', '.pkg-blister-in', function () {
             if ($(this).val() !== '') $('.pkg-collision[value="泡殼"]').prop('checked', true);
         });
+        function collectBlisters() {
+            var out = [];
+            $('#pkg-blister-rows .pkg-blister-row').each(function () {
+                var a = $.trim($(this).find('.pkg-bl-a').val()), b = $.trim($(this).find('.pkg-bl-b').val());
+                if (a !== '' || b !== '') out.push({ a: a, b: b });
+            });
+            return out;
+        }
 
         // 容器列
         function addPkgRow(data) {
@@ -2859,8 +2887,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 rust: rust,
                 rust_other: $('.pkg-rust-other').val(),
                 collision: collision,
-                collision_detail_1: $('.pkg-collision-detail').val(),
-                collision_detail_2: $('.pkg-collision-detail-2').val(),
+                blister: collectBlisters(),
+                collision_detail_1: (collectBlisters()[0] || {}).a || '',
+                collision_detail_2: (collectBlisters()[0] || {}).b || '',
                 collision_other: $('.pkg-collision-other').val(),
                 return_jig: $('#pkg-return-jig').val(),
                 return_sample: $('#pkg-return-sample').val(),
@@ -3277,6 +3306,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json').fail(function () { alert('連線失敗'); if (onDone) onDone(); });
         }
 
+        function blisterTxt(pd) {
+            var bl = (pd.blister && pd.blister.length) ? pd.blister : ((pd.collision_detail_1 || pd.collision_detail_2) ? [{ a: pd.collision_detail_1, b: pd.collision_detail_2 }] : []);
+            if (!bl.length) return '';
+            return '（泡殼 ' + bl.map(function (x) { return (x.a || '?') + ' 入 x ' + (x.b || '?') + ' 個'; }).join('、') + '）';
+        }
         function pkiBuildPrintWindow(data, onDone) {
             var row = data.row || {}, hdr = row.header || {};
             var company = data.company || '';
@@ -3314,7 +3348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<thead><tr><th>外觀檢驗項目</th><th>方式/工具</th><th>異常數量</th><th>處置狀況／備註</th></tr></thead><tbody>' + apTbody + '</tbody></table>';
 
             var rustTxt = (pd.rust || []).join('、') + (pd.rust_other ? ('　其他：' + pd.rust_other) : '');
-            var collisionTxt = (pd.collision || []).join('、') + (pd.collision_detail_1 || pd.collision_detail_2 ? ('（泡殼 ' + (pd.collision_detail_1 || '?') + ' 入 x ' + (pd.collision_detail_2 || '?') + ' 個）') : '') + (pd.collision_other ? ('　其他：' + pd.collision_other) : '');
+            var collisionTxt = (pd.collision || []).join('、') + blisterTxt(pd) + (pd.collision_other ? ('　其他：' + pd.collision_other) : '');
             var protTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:84%"></colgroup>' +
                 '<tr><th>加強防銹</th><td class="tl">' + (rustTxt ? pkEsc(rustTxt) : '（無）') + '</td></tr>' +
                 '<tr><th>確認防撞</th><td class="tl">' + (collisionTxt ? pkEsc(collisionTxt) : '（無）') + '</td></tr>' +
@@ -3480,7 +3514,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // ── 檢驗表列印設定（AS 文件編號綁定＋包裝日期編號規則）：限管理員 ─────────────────────
         <?php if ($PK_CAN_ADMIN): ?>
         var PKI_PRINT_SET = { docs: [], docId: 0, doc: null, lblId: 0, lblDoc: null };
-        $('#btn-print-setting').click(function () {
+        $('#btn-print-setting, #btn-print-setting-top').click(function () {
             $.post(API, { action: 'print_setting_get' }, function (r) {
                 if (!r.success) { alert(r.message || '載入設定失敗'); return; }
                 PKI_PRINT_SET.docs = r.as_docs || [];
