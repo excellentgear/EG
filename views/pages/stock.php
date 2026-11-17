@@ -14,6 +14,7 @@ function safe_html($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8');
 // 只引入一次 DBConnection
 include_once '../../src/common/DBConnection.php';
 require_once '../../src/common/stock_notify.php';
+require_once '../../src/common/stock_inbound_lib.php';   // 成品入庫單（與包裝排程待入庫共用，2026-11-17）
 require_once '../../src/common/asdoc_lib.php';   // AS 文件編號綁定（ai-rules/16 第一之三節：後端唯一實作點）
 require_once '../../src/common/stock_roles_lib.php';   // 角色制：功能清單／預設角色／通知對象設定（2026-10-16；目前只建角色與設定，尚未用來判定權限）
 $conn   = new DBConnection();
@@ -4053,6 +4054,25 @@ LBLSQL;
     }
 
     // ── 取得部門（需求單用） ──
+    // ── 入庫單（來自包裝自主檢查表的成品入庫量；與包裝排程「待入庫」同一份資料）──
+    if ($_POST['action'] === 'inbound_list') {
+        try {
+            stk_need('stock_req_view');
+            $r = si_list($pdo, trim($_POST['status'] ?? ''), trim($_POST['kw'] ?? ''), max(1, intval($_POST['page'] ?? 1)), in_array(intval($_POST['per'] ?? 20), [10,20,50,100], true) ? intval($_POST['per']) : 20);
+            echo json_encode(['success'=>true] + $r);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+    if ($_POST['action'] === 'inbound_receive') {
+        try {
+            stk_need('stock_req_issue');
+            $splits = json_decode($_POST['splits'] ?? '[]', true) ?: [];
+            $r = si_receive($pdo, intval($_POST['packing_inspection_id'] ?? 0), $splits, trim($_POST['received_date'] ?? ''), (int)$userId, trim($_POST['remark'] ?? ''));
+            echo json_encode(['success'=>true] + $r);
+        } catch(Throwable $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'req_get_depts') {
         try { $rows=$pdo->query("SELECT id,name FROM department ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC); echo json_encode(['success'=>true,'depts'=>$rows]); }
         catch(Exception $e){ echo json_encode(['success'=>true,'depts'=>[]]); }
@@ -4333,7 +4353,7 @@ body{background:var(--bg);font-family:"Segoe UI","Roboto",Arial,sans-serif;color
 .right_col{background:var(--bg)!important;overflow-x:hidden!important;max-width:100%;box-sizing:border-box;}
 html,body,.main_container,.container.body{overflow-x:hidden!important;}
 /* 所有 tab 內容不超寬 */
-#tab-list,#tab-count,#tab-setting,#tab-analysis,#tab-req,#tab-report{max-width:100%;overflow-x:hidden;box-sizing:border-box;}
+#tab-list,#tab-count,#tab-setting,#tab-analysis,#tab-req,#tab-inb,#tab-report{max-width:100%;overflow-x:hidden;box-sizing:border-box;}
 /* 設定頁 grid */
 #tab-setting>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
 #count-tbl{width:100%;}
@@ -4540,6 +4560,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <button class="tab-btn" id="tab-btn-count" onclick="switchTab('count',this)" style="display:none;">📋 庫存盤點</button>
       <button class="tab-btn" id="tab-btn-setting" onclick="switchTab('setting',this)" style="display:none;">⚙️ 主資料設定</button>
       <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求單</button>
+      <button class="tab-btn" id="tab-btn-inb" data-stk-feat="stock_req_view" onclick="switchTab('inb',this)">📥 入庫單 <span id="inb-badge" class="badge" style="background:#F0A24B;display:none;"></span></button>
       <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 入出庫紀錄</button>
     </div>
     <button class="btn btn-sm btn-default" id="btn-role-cfg" style="display:none;border-radius:6px;font-weight:600;" onclick="openRoleCfg()" title="庫存管理的角色、功能與通知對象設定"><i class="fa fa-key"></i> 角色與通知設定</button>
@@ -5158,6 +5179,51 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         </div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 入庫單分頁 ══ -->
+<div id="tab-inb" style="display:none;">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-download"></i> 入庫單</h4>
+    <span class="text-muted" style="font-size:12px;">來源：包裝自主檢查表「成品入庫方式」的入庫數量；與包裝排程「待入庫」同步</span>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <div class="btn-group btn-group-sm" id="inb-status-btns">
+        <button type="button" class="btn btn-default inb-st" data-status="" onclick="setInbStatus('',this)">全部</button>
+        <button type="button" class="btn btn-primary inb-st" data-status="pending" onclick="setInbStatus('pending',this)">待入庫</button>
+        <button type="button" class="btn btn-default inb-st" data-status="partial" onclick="setInbStatus('partial',this)">部分入庫</button>
+        <button type="button" class="btn btn-default inb-st" data-status="done" onclick="setInbStatus('done',this)">已完成</button>
+      </div>
+      <div class="input-group input-group-sm" style="width:220px;">
+        <input type="text" id="inb-kw" class="form-control" placeholder="搜尋BOM/料號/客戶" oninput="clearTimeout(window._inbT);window._inbT=setTimeout(function(){loadInbound(1)},350)">
+        <span class="input-group-btn"><button class="btn btn-default" onclick="$('#inb-kw').val('');loadInbound(1)"><i class="fa fa-times"></i></button></span>
+      </div>
+    </div>
+  </div>
+  <div id="inb-pager" class="pg-btns" style="text-align:right;margin-bottom:6px;"></div>
+  <div style="overflow-x:auto;">
+  <table class="table tbl-sm" style="margin:0;">
+    <thead><tr><th>入庫日期(檢查表)</th><th>BOM號碼</th><th>客戶</th><th>料號</th><th class="text-right">應入庫數量</th><th>備註</th><th>目前狀態</th><th>入庫日期／儲位</th><th></th></tr></thead>
+    <tbody id="inb-body"><tr><td colspan="9" class="text-center text-muted">載入中...</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
+<!-- ══ Modal: 入庫 ══ -->
+<div class="modal fade" id="inbModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-download"></i> 成品入庫</h4></div>
+      <div class="modal-body" style="padding:14px;">
+        <div id="inb-info" style="margin-bottom:10px;"></div>
+        <div style="margin-bottom:8px;">入庫日期：<input type="date" id="inb-date" class="form-control input-sm" style="width:160px;display:inline-block;"></div>
+        <table class="table tbl-sm" style="margin:0 0 6px;"><thead><tr><th>入庫儲位</th><th style="width:120px;">數量</th><th style="width:36px;"></th></tr></thead><tbody id="inb-splits"></tbody></table>
+        <button class="btn btn-xs btn-default" onclick="inbAddRow()"><i class="fa fa-plus"></i> 拆到另一個儲位</button>
+        <span id="inb-sum" style="margin-left:12px;font-size:12px;"></span>
+        <div id="inb-err" class="text-danger" style="font-size:12px;margin-top:6px;"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button><button type="button" class="btn btn-primary" id="inb-save" onclick="inbSave()">確認入庫</button></div>
     </div>
   </div>
 </div>
@@ -8203,7 +8269,7 @@ function saveItemUnits(){
 
 // ── TAB 切換 ────────────────────────────────────
 function switchTab(tab, btn){
-    $('#tab-list,#tab-count,#tab-setting,#tab-req,#tab-report').hide();
+    $('#tab-list,#tab-count,#tab-setting,#tab-req,#tab-inb,#tab-report').hide();
     // 分析 tab 用 visibility 而非 display:none，讓 canvas 保持有尺寸
     $('#tab-analysis').css({'visibility':'hidden','position':'absolute','pointer-events':'none'});
     if(tab==='analysis'){
@@ -8217,6 +8283,7 @@ function switchTab(tab, btn){
     if(tab==='count'&&!G.countLoaded){loadCountSessions();G.countLoaded=true;}
     if(tab==='setting') loadSettingData();
     if(tab==='req'&&!G.reqLoaded){ showReqPermBadge(); loadRequisitions(); G.reqLoaded=true; }
+    if(tab==='inb'){ loadInbound(1); }
     if(tab==='report'&&!G.reportLoaded){initDailyReport();G.reportLoaded=true;}
 }
 
@@ -12874,6 +12941,65 @@ function debounce(fn, ms) {
     var t;
     return function() { var a=arguments, th=this; clearTimeout(t); t=setTimeout(function(){ fn.apply(th, a); }, ms); };
 }
+
+// ── 入庫單 ──────────────────────────────────────
+var INB={status:'pending',page:1,per:20,rows:{},locs:null,cur:null};
+var INB_ST={pending:'<span class="label label-warning">待入庫</span>',partial:'<span class="label label-info">部分入庫</span>',done:'<span class="label label-success">已完成</span>'};
+function setInbStatus(st,btn){ INB.status=st; $('.inb-st').removeClass('btn-primary').addClass('btn-default'); $(btn).removeClass('btn-default').addClass('btn-primary'); loadInbound(1); }
+function loadInbound(page){
+    INB.page=page||1;
+    ajx({action:'inbound_list',status:INB.status,kw:$('#inb-kw').val(),page:INB.page,per:INB.per},function(r){
+        if(!r.success){ $('#inb-body').html('<tr><td colspan="9" class="text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
+        var pend=(r.counts.pending||0)+(r.counts.partial||0);
+        $('#inb-badge').text(pend).toggle(pend>0);
+        if(!r.rows.length){ $('#inb-body').html('<tr><td colspan="9" class="text-center text-muted" style="padding:20px;">目前沒有符合的入庫單</td></tr>'); $('#inb-pager').html(''); return; }
+        INB.rows={}; var h='';
+        r.rows.forEach(function(x){
+            INB.rows[x.packing_inspection_id]=x;
+            var rc=(x.receipts||[]).map(function(a){ return esc(egFmtDate(a.received_date))+'　'+esc(a.location_code||'')+' × '+a.qty; }).join('<br>');
+            h+='<tr><td>'+esc(egFmtDate(x.inspection_date))+'</td><td>'+esc(x.bom)+'</td><td>'+esc(x.customer_name||'')+'</td><td>'+esc(x.part_no||'')+'</td>'
+              +'<td class="text-right">'+x.warehouse_qty+(x.received_qty>0?'<br><small class="text-muted">已入 '+x.received_qty+'／尚餘 '+x.remain_qty+'</small>':'')+'</td>'
+              +'<td>'+esc(x.note||'')+'</td><td>'+(INB_ST[x.st]||'')+'</td><td style="font-size:12px;">'+(rc||'—')+'</td>'
+              +'<td>'+(x.remain_qty>0&&hasF('stock_req_issue')?'<button class="btn btn-xs btn-primary" onclick="openInbound('+x.packing_inspection_id+')">入庫</button>':'')+'</td></tr>';
+        });
+        $('#inb-body').html(h);
+        var pages=Math.ceil(r.total/INB.per), p='';
+        if(pages>1){ for(var i=1;i<=pages;i++) p+='<button class="btn btn-xs '+(i===INB.page?'btn-primary':'btn-default')+'" onclick="loadInbound('+i+')">'+i+'</button> '; }
+        $('#inb-pager').html('共 '+r.total+' 筆　'+p);
+    });
+}
+function inbLocOpts(sel){
+    var h='<option value="">選擇儲位</option>';
+    (INB.locs||[]).forEach(function(l){ h+='<option value="'+l.location_id+'"'+(String(sel)===String(l.location_id)?' selected':'')+'>'+esc((l.area_name?l.area_name+' ':'')+l.location_code)+'</option>'; });
+    return h;
+}
+function inbAddRow(loc,qty){
+    $('#inb-splits').append('<tr><td><select class="form-control input-sm inb-loc" data-eg-filter="輸入儲位篩選…">'+inbLocOpts(loc)+'</select></td><td><input type="number" min="1" class="form-control input-sm inb-qty" value="'+(qty||'')+'" oninput="inbSum()"></td><td><button class="btn btn-xs btn-default" onclick="$(this).closest(\'tr\').remove();inbSum()">×</button></td></tr>');
+    inbSum();
+}
+function inbSum(){
+    var s=0; $('.inb-qty').each(function(){ s+=parseInt($(this).val())||0; });
+    var rem=INB.cur?INB.cur.remain_qty:0;
+    $('#inb-sum').html('合計 <strong>'+s+'</strong> ／ 尚未入庫 '+rem+(s>rem?' <span class="text-danger">（超過）</span>':''));
+}
+function openInbound(id){
+    var x=INB.rows[id]; if(!x) return; INB.cur=x;
+    $('#inb-err').text('');
+    $('#inb-info').html('<strong>'+esc(x.bom)+'</strong>　'+esc(x.customer_name||'')+'　'+esc(x.part_no||'')+'<br>應入庫 '+x.warehouse_qty+'，尚未入庫 <strong>'+x.remain_qty+'</strong>'+(x.note?'<br><span style="color:#b8651b;">備註：'+esc(x.note)+'</span>':''));
+    var d=new Date(); $('#inb-date').val(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
+    var go=function(){ $('#inb-splits').empty(); inbAddRow('',x.remain_qty); $('#inbModal').modal('show'); };
+    if(INB.locs) go(); else ajx({action:'get_locations',category_id:1,page:0},function(r){ INB.locs=(r&&r.data)||[]; go(); });
+}
+function inbSave(){
+    var sp=[]; $('#inb-splits tr').each(function(){ sp.push({location_id:$(this).find('.inb-loc').val(),qty:$(this).find('.inb-qty').val()}); });
+    $('#inb-save').prop('disabled',true);
+    ajx({action:'inbound_receive',packing_inspection_id:INB.cur.packing_inspection_id,received_date:$('#inb-date').val(),splits:JSON.stringify(sp)},function(r){
+        $('#inb-save').prop('disabled',false);
+        if(!r.success){ $('#inb-err').text(r.message||'入庫失敗'); return; }
+        $('#inbModal').modal('hide'); toast('已入庫 '+r.received+' 件','success'); loadInbound(INB.page);
+    });
+}
+
 function ajx(data,cb){ $.ajax({url:window.location.href,type:'POST',data:data,dataType:'json',success:cb,error:function(){ if(cb) cb({success:false,message:'網路錯誤'}); }}); }
 function esc(s){ if(s===null||s===undefined)return''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function fmt(n){ return parseInt(n||0).toLocaleString(); }

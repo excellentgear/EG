@@ -12,6 +12,7 @@ require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php'; // 報廐扣減�
 require_once __DIR__ . '/../../src/common/packing_process_lib.php'; // 「是不是包裝製程」的唯一實作 pk_packing_process_nos()（2026-09-24）
 require_once __DIR__ . '/../../src/common/asdoc_lib.php'; // 已結案檢驗表列印：AS 文件編號綁定（ai-rules/16 一之三，2026-09-24）
 require_once __DIR__ . '/../../src/common/print_log_lib.php'; // 列印紀錄（ai-rules/23）
+require_once __DIR__ . '/../../src/common/stock_inbound_lib.php'; // 待入庫清單（與庫存管理入庫單共用，2026-11-17）
 require_once __DIR__ . '/../../src/common/position_history_lib.php'; // 圖章部門/職稱依業務日期回推（ai-rules/22）
 
 ini_set('display_errors', 1);
@@ -1080,6 +1081,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
+        // 9z. 待入庫清單（資料與庫存管理「入庫單」同一份；本頁只看狀態，由新到舊）
+        if ($action === 'list_inbound') {
+            try {
+                $per = in_array(intval($_POST['per'] ?? 20), [10, 20, 50, 100], true) ? intval($_POST['per']) : 20;
+                $r = si_list($pdo, trim($_POST['status'] ?? ''), trim($_POST['kw'] ?? ''), max(1, intval($_POST['page'] ?? 1)), $per, true);
+                echo json_encode(['success' => true] + $r);
+            } catch (Exception $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
+            exit;
+        }
+
         // 10. 已結案清單（分頁＋篩選：BOM／料號合併成單一關鍵字欄位，日期區間預設本月，不限定年份）
         if ($action === 'list_closed') {
             $kwFilter = trim($_POST['kw'] ?? '');
@@ -1539,6 +1550,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <ul class="nav nav-tabs" id="pk-main-tabs" style="margin-bottom:0;">
                         <li class="active" data-tab="pending"><a href="#">待包裝 <span class="badge" id="tab-pending-count"></span></a></li>
                         <li data-tab="closed"><a href="#">已結案清單</a></li>
+                        <li data-tab="inbound"><a href="#">待入庫 <span class="badge" id="tab-inb-count" style="background:#F0A24B;"></span></a></li>
                     </ul>
 
                     <div class="row">
@@ -1570,6 +1582,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                             <tr><td colspan="8" class="text-center text-muted">載入中...</td></tr>
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+
+                            <div class="x_panel" id="pk-tab-inbound" style="border-top:0;display:none;">
+                                <div class="x_content">
+                                    <div class="row" style="margin-bottom:10px;">
+                                        <div class="col-md-3"><input type="text" id="inb-f-kw" class="form-control input-sm" placeholder="BOM／料號／客戶（輸入即自動查詢）"></div>
+                                        <div class="col-md-3">
+                                            <select id="inb-f-st" class="form-control input-sm" data-eg-filter="輸入狀態篩選…">
+                                                <option value="">全部狀態</option><option value="pending">待入庫</option><option value="partial">部分入庫</option><option value="done">已完成</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6 text-right"><span class="pk-count-badge" id="inb-count"></span></div>
+                                    </div>
+                                    <p class="text-muted"><i class="fa fa-info-circle"></i> 資料來自包裝自主檢查表「成品入庫方式」的入庫數量，由新到舊；實際入庫位置由倉庫在「庫存管理 → 入庫單」設定，兩邊即時同步。</p>
+                                    <table class="table pk-table">
+                                        <thead><tr><th width="110">入庫日期</th><th>BOM</th><th>客戶</th><th>料號</th><th width="90" class="text-right">數量</th><th>備註</th><th width="90">狀態</th><th>實際入庫日期／儲位</th></tr></thead>
+                                        <tbody id="inb-list"><tr><td colspan="8" class="text-center text-muted">請點「待入庫」分頁載入</td></tr></tbody>
+                                    </table>
+                                    <div class="text-right" id="inb-pager" style="margin-top:8px;"></div>
                                 </div>
                             </div>
 
@@ -3163,8 +3195,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $(this).addClass('active');
             $('#pk-tab-pending').toggle(tab === 'pending');
             $('#pk-tab-closed').toggle(tab === 'closed');
+            $('#pk-tab-inbound').toggle(tab === 'inbound');
             if (tab === 'closed') loadClosedList();
+            if (tab === 'inbound') loadInbound(1);
         });
+
+        // ---------- 待入庫（唯讀，狀態由庫存管理入庫單連動） ----------
+        var INB_TAG = {
+            pending: '<span class="label label-warning">待入庫</span>',
+            partial: '<span class="label label-info">部分入庫</span>',
+            done: '<span class="label label-success">已完成</span>'
+        };
+        function loadInbound(page) {
+            page = page || 1;
+            $.post(API, { action: 'list_inbound', page: page, per: 20, kw: $('#inb-f-kw').val(), status: $('#inb-f-st').val() }, function (res) {
+                if (!res.success) { $('#inb-list').html('<tr><td colspan="8" class="text-danger">' + pkEsc(res.message || '載入失敗') + '</td></tr>'); return; }
+                var c = res.counts || {};
+                var pend = (c.pending || 0) + (c.partial || 0);
+                $('#tab-inb-count').text(pend || '');
+                $('#inb-count').html('共 <strong>' + res.total + '</strong> 筆');
+                if (!res.rows.length) { $('#inb-list').html('<tr><td colspan="8" class="text-center text-muted" style="padding:20px;">查無資料</td></tr>'); $('#inb-pager').html(''); return; }
+                var h = '';
+                res.rows.forEach(function (r) {
+                    var rc = (r.receipts || []).map(function (a) { return pkEsc(egFmtDate(a.received_date)) + '　' + pkEsc(a.location_code || '') + ' × ' + a.qty; }).join('<br>');
+                    h += '<tr><td>' + egFmtDate(r.inspection_date) + '</td><td><span class="bom-code">' + pkEsc(r.bom) + '</span></td><td>' + pkEsc(r.customer_name || '') + '</td><td>' + pkEsc(r.part_no || '') + '</td>' +
+                        '<td class="text-right">' + fmtNum(r.warehouse_qty) + (r.received_qty > 0 && r.remain_qty > 0 ? '<br><small class="text-muted">尚餘 ' + r.remain_qty + '</small>' : '') + '</td>' +
+                        '<td>' + pkEsc(r.note || '') + '</td><td>' + (INB_TAG[r.st] || '') + '</td><td style="font-size:12px;">' + (rc || '—') + '</td></tr>';
+                });
+                $('#inb-list').html(h);
+                var pages = Math.ceil(res.total / 20), p = '';
+                for (var i = 1; pages > 1 && i <= pages; i++) p += '<button class="btn btn-xs ' + (i === page ? 'btn-primary' : 'btn-default') + ' inb-pg" data-p="' + i + '">' + i + '</button> ';
+                $('#inb-pager').html(p);
+            }, 'json');
+        }
+        $(document).on('click', '.inb-pg', function () { loadInbound($(this).data('p')); });
+        var inbT = null;
+        $('#inb-f-kw').on('input', function () { clearTimeout(inbT); inbT = setTimeout(function () { loadInbound(1); }, 350); });
+        $('#inb-f-st').on('change', function () { loadInbound(1); });
+        setTimeout(function () { $.post(API, { action: 'list_inbound', page: 1, per: 10, status: '' }, function (r) { if (r && r.success) { var c = r.counts || {}; $('#tab-inb-count').text(((c.pending || 0) + (c.partial || 0)) || ''); } }, 'json'); }, 800);
 
         // ---------- 已結案清單 ----------
         var clPage = 1;
