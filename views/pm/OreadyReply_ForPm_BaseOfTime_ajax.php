@@ -511,6 +511,34 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
     $user_id = $_SESSION['id'] ?? 'system_transfer';
     session_write_close();
 
+    // ── 發單前置檢查（2026-11-17）：上一關 QC 必須「已檢驗且按完工」才能發到這一關（管理員可確認後略過）；
+    //    整站發單（沒填數量）時，本站數量不可大於上一關良品數。
+    try {
+        require_once '../../src/common/role_features_helper.php';
+        require_once '../../src/common/bom_reorder_lib.php';
+        $_qcBlk = bro_prev_qc_block($db, (int)$bom_ing_fid);
+        if ($_qcBlk && !(!empty($_POST['qc_override']) && oready_resolve_is_admin($db, (int)$user_id, '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php'))) {
+            $response['message'] = $_qcBlk['message'];
+            $response['code'] = 'QC_BLOCK';
+            echo json_encode($response, JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if (!isset($_POST['send_qty']) || trim((string)$_POST['send_qty']) === '') {
+            require_once '../../src/common/bom_outsource_lib.php';
+            $_sq = $db->prepare("SELECT bom, bom_sn, sqty FROM bom_ing WHERE bom_ing_fid = ?");
+            $_sq->execute([(int)$bom_ing_fid]);
+            if ($_sr = $_sq->fetch(PDO::FETCH_ASSOC)) {
+                $_pv = eg_bom_outsource_prev_station_qty($db, (string)$_sr['bom'], (int)$_sr['bom_sn']);
+                if (($_pv['source'] ?? 'fallback') !== 'fallback' && (float)$_sr['sqty'] > (float)$_pv['qty'] + 1e-9 && empty($_POST['over_ok'])) {
+                    $response['message'] = '發單數 ' . (float)$_sr['sqty'] . ' 超過上一關目前可領的良品數 ' . (float)$_pv['qty'] . '（' . $_pv['label'] . '）。請在「發單數量」填入不超過上一關的數量，分批發單。';
+                    $response['code'] = 'QTY_OVER';
+                    echo json_encode($response, JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            }
+        }
+    } catch (Throwable $_e) { error_log('[transfer_process precheck] ' . $_e->getMessage()); }
+
     // ── 分批發單（2026-10-30）：可選的「發單數量」。留空＝照舊（整站一起發，完全不動流水帳）；
     //    有填：不可超過「上一關可領量」與「本站尚未發出的量」，記成流水帳的一批（第二批起不重設製程列的廠商／日期）。
     $sendQtyRaw = isset($_POST['send_qty']) ? trim((string)$_POST['send_qty']) : '';
@@ -2946,6 +2974,50 @@ else if (isset($_POST['action']) && $_POST['action'] === 'outsource_batch_split'
 // ── 回廠／報廢數量兩個全站開關：只有系統管理員可以改（2026-10-07）─────────
 // 比照 bv_save_default 同一套 system_parameters 讀寫慣例；只套用在本頁的回廠跳窗，
 // 刻意不影響 OreadyReply_ForPm_BaseOfTime2.php（那頁仍一律可用，不讀這兩個鍵）。
+// ── 換製程順序（申請→設計核准）／發單前 QC 檢查：邏輯全在 src/common/bom_reorder_lib.php ──────────────
+else if (isset($_POST['action']) && in_array($_POST['action'], ['transfer_precheck', 'reorder_info', 'reorder_request', 'reorder_records', 'reorder_marks', 'bom_reorder_setting_save'], true)) {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    require_once '../../src/common/bom_reorder_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if ($uid <= 0) { echo json_encode(['success' => false, 'message' => '未登入']); exit; }
+    $isAdm = oready_resolve_is_admin($db, $uid, '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php');
+    $act = $_POST['action'];
+    try {
+        if ($act === 'transfer_precheck') {
+            $blk = bro_prev_qc_block($db, (int)($_POST['bom_ing_fid'] ?? 0));
+            echo json_encode(['success' => true, 'blocked' => (bool)$blk, 'message' => $blk['message'] ?? '', 'is_admin' => $isAdm], JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'reorder_info') {
+            bro_ensure_schema($db);
+            $bom = trim((string)($_POST['bom'] ?? ''));
+            $p = $db->prepare("SELECT req_id FROM bom_reorder_req WHERE bom=? AND status='pending' LIMIT 1");
+            $p->execute([$bom]);
+            $ms = $db->prepare("SELECT bom_sn FROM bom_ing WHERE bom_ing_fid=? AND bom=?");
+            $ms->execute([(int)($_POST['bom_ing_fid'] ?? 0), $bom]);
+            $msn = $ms->fetchColumn();
+            echo json_encode(['success' => true, 'groups' => bro_groups($db, $bom), 'allow_sn_edit' => bro_allow_sn_edit($db), 'pending' => (int)$p->fetchColumn(), 'moved_sn' => $msn === false ? null : (int)$msn], JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'reorder_request') {
+            if (!oready_resolve_can_transfer($db, $uid, '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php')) { echo json_encode(['success' => false, 'message' => '無權限申請換製程順序']); exit; }
+            $newSn = (isset($_POST['new_sn']) && $_POST['new_sn'] !== '') ? (int)$_POST['new_sn'] : null;
+            echo json_encode(bro_submit($db, trim((string)$_POST['bom']), (int)$_POST['bom_ing_fid'], (int)$_POST['target_sn'], (string)$_POST['pos'], $newSn, trim((string)($_POST['reason'] ?? '')), $uid), JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'reorder_records') {
+            echo json_encode(['success' => true, 'records' => bro_records($db, trim((string)$_POST['bom']), (int)($_POST['bom_ing_fid'] ?? 0))], JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'reorder_marks') {
+            echo json_encode(['success' => true, 'marks' => (object)bro_marks($db)], JSON_UNESCAPED_UNICODE);
+        } else { // bom_reorder_setting_save
+            if (!$isAdm) { echo json_encode(['success' => false, 'message' => '只有系統管理員可以變更這個設定']); exit; }
+            $j = json_encode(['enabled' => !empty($_POST['allow_sn_edit'])]);
+            $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description) VALUES ('BOM_SETTING','reorder_allow_sn_edit',:v,'換製程順序時是否可自行輸入新 SN')
+                          ON DUPLICATE KEY UPDATE param_value=:v2")->execute([':v' => $j, ':v2' => $j]);
+            echo json_encode(['success' => true]);
+        }
+    } catch (Throwable $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
+    exit;
+}
+
 else if (isset($_POST['action']) && $_POST['action'] === 'oready_or_save_toggle') {
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';

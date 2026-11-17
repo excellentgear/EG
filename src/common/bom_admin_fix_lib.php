@@ -500,11 +500,24 @@ if (!function_exists('baf_sn_map')) {
         $q = $db->prepare("SELECT DISTINCT bom_sn FROM bom_ing_transfer_log WHERE bom=?");
         $q->execute([$bom]);
         $tsn = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        // 這個 BOM 沒有的 SN：移轉憑單沒有製程欄位，改用該 SN 憑單的「來源廠商」及其加工類別推出製程名稱
+        $hint = [];
+        try {
+            $hq = $db->prepare("SELECT t.bom_sn, ml.maker_id AS mk, (SELECT GROUP_CONCAT(s.sub_cat_name SEPARATOR '、') FROM maker_sub_category_mapping m JOIN dict_maker_sub_category s ON s.sub_cat_id=m.sub_cat_id WHERE m.maker_id_no=t.maker_from AND COALESCE(s.is_active,1)=1 AND s.sub_cat_group='PROCESS') AS cats
+                FROM bom_ing_transfer_log t LEFT JOIN maker_list ml ON ml.maker_id_no=t.maker_from WHERE t.bom=? ORDER BY t.transfer_id");
+            $hq->execute([$bom]);
+            foreach ($hq->fetchAll(PDO::FETCH_ASSOC) as $h) {
+                $sn = (int)$h['bom_sn'];
+                if (isset($hint[$sn])) continue;
+                $hint[$sn] = trim(($h['cats'] ?? '') !== '' ? $h['cats'] . '（' . $h['mk'] . '）' : (string)$h['mk']);
+            }
+        } catch (Throwable $e) {}
         $items = [];
         foreach (array_unique(array_merge($real, $tsn)) as $sn) {
             $isReal = in_array($sn, $real, true);
             if ($isReal && $sn % 10 === 0) continue;
-            $items[] = ['sn' => $sn, 'real' => $isReal, 'label' => $isReal ? $labOf[$sn] : 'SN ' . $sn . '（ERP 拆單，這個 BOM 沒有此製程）', 'target' => (int)($alias[$sn] ?? 0)];
+            $nm = ($hint[$sn] ?? '') !== '' ? ' ' . $hint[$sn] : '';
+            $items[] = ['sn' => $sn, 'real' => $isReal, 'label' => $isReal ? $labOf[$sn] : 'SN ' . $sn . $nm . '（ERP 拆單，這個 BOM 沒有此製程）', 'target' => (int)($alias[$sn] ?? 0)];
         }
         usort($items, fn($a, $b) => $a['sn'] <=> $b['sn']);
         $targets = [];

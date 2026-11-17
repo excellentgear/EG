@@ -429,6 +429,12 @@ if ($oready_feat_readonly) {
 }
 
 // --- 修改後的 PHP 資料準備邏輯 ---
+// 「只看這一張 BOM」（?bom_only=B-…，由發單頁等帶入）：在 SQL 就只撈這一張，整批資料都不必載入，開啟速度與資料量無關。
+// 自動更新（_fetch_data.php）也帶同一參數，否則 30 秒後會被換成全部 BOM。
+$bomOnlySql = '';
+if (isset($_GET['bom_only']) && preg_match('/^[A-Za-z0-9\-]{3,40}$/', (string)$_GET['bom_only'])) {
+    $bomOnlySql = " AND b.bom = '" . $_GET['bom_only'] . "' ";
+}
 // 1. 獲取基礎 BOM 資料 (移除 ol 的 JOIN，因為 OrderList 會單獨處理)
 $OreadyReply_list_base = $conn->getAll("SELECT 
     bi.bom_ing_id,
@@ -617,6 +623,7 @@ LEFT JOIN user u_sales_deputy ON u_sales_deputy.id = cs_deputy.user_id
 WHERE 
     b.d_id <> ''
     AND b.processing_state IS NULL
+" . $bomOnlySql . "
 
 ORDER BY
     vw.Created_At_end DESC,
@@ -911,13 +918,13 @@ if (!empty($all_boms)) {
     try {
         $sql_tl = "
             SELECT tl.bom, tl.bom_sn, tl.maker_from, tl.sqty, tl.transfer_date,
-                   tl.price, tl.modified_unit_price, tl.note,
+                   tl.price, tl.modified_unit_price, tl.process_amount, tl.note,
                    ml.maker_id AS maker_name
             FROM bom_ing_transfer_log tl
             INNER JOIN (
                 SELECT bom, bom_sn, MAX(transfer_id) AS max_id
                 FROM bom_ing_transfer_log
-                WHERE (price > 0 OR modified_unit_price > 0) AND bom IN ($ph_boms)
+                WHERE (price > 0 OR modified_unit_price > 0) AND (process_amount IS NULL OR process_amount >= 0) AND bom IN ($ph_boms)
                 GROUP BY bom, bom_sn
             ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
             LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
@@ -937,7 +944,7 @@ if (!empty($all_boms)) {
         try {
             $sql_hist = "
                 SELECT tl.bom, tl.bom_sn, tl.maker_from, tl.sqty, tl.transfer_date,
-                       tl.price, tl.modified_unit_price, tl.note, tl.product_id,
+                       tl.price, tl.modified_unit_price, tl.process_amount, tl.note, tl.product_id,
                        ml.maker_id AS maker_name
                 FROM bom_ing_transfer_log tl
                 LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
@@ -1729,8 +1736,13 @@ try { require_once __DIR__ . '/../../src/common/shipping_lib.php'; $oready_can_s
 echo "    window.canShipInsight = " . json_encode($oready_can_ship_insight) . ";\n";
 // 快速出貨（Shipping_Quick.php）的進入權限與該頁相同（shipping 模組 canView）：有權限「待出貨」鈕才可點
 echo "    window.canShipQuick = " . json_encode($oready_can_ship_insight) . ";\n";
+// 管理員認定的包裝製程（包裝排程→包裝製程設定）：最後一關是包裝時，按回廠後直接顯示待出貨
+$oready_pack_nos = [];
+try { require_once __DIR__ . '/../../src/common/packing_process_lib.php'; $oready_pack_nos = pk_packing_process_nos($db); } catch (Throwable $e) {}
+echo "    window.PACKING_PROCESS_NOS = " . json_encode(array_values($oready_pack_nos)) . ";\n";
 echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_returned) . "; // 功能碼 oready_mark_returned\n";
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
+try { require_once __DIR__ . '/../../src/common/bom_reorder_lib.php'; echo "    window.bomReorderMarks = " . json_encode((object)bro_marks($db), JSON_UNESCAPED_UNICODE) . "; // 換製程順序：申請中／已換過的製程\n"; } catch (Throwable $_bro) { echo "    window.bomReorderMarks = {};\n"; }
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
 echo "    window.featSeePrice = " . json_encode((bool)$oready_feat_view_price) . "; // 功能碼 oready_view_price\n";
 // 功能碼 oready_edit_qty（修改發單數）：管理員或持有該碼者；唯讀角色一律 false。後端 bom_qty_* 動作會再驗一次
@@ -1751,6 +1763,18 @@ echo "    window.canSetContainer = " . json_encode(eg_qc_container_can_settings(
 ";
 echo "    window.EG_QC_CTN_CSRF = " . json_encode(eg_qc_container_csrf()) . "; // 容器設定存檔用
 ";
+// BOM檢核（功能碼 oready_bom_check）：被標示的 BOM 所有人都看得到，標示／解決只有檢核者；後端 BomCheck_API.php 會再驗一次
+$_bchk = ['api' => '../../src/store/BomCheck_API.php', 'csrf' => '', 'canCheck' => false, 'canReport' => false, 'map' => new stdClass(), 'types' => []];
+try {
+    require_once '../../src/common/bom_check_lib.php';
+    $_bchk['csrf'] = eg_bomchk_csrf();
+    $_bchk['canCheck'] = eg_bomchk_can_check($db, (int)$id);
+    $_bchk['canReport'] = eg_bomchk_can_report($db, (int)$id);
+    $_bchkMap = eg_bomchk_open_map($db);
+    if ($_bchkMap) $_bchk['map'] = $_bchkMap;
+    $_bchk['types'] = eg_bomchk_types($db);
+} catch (Throwable $_bchkE) { error_log('bom_check init: ' . $_bchkE->getMessage()); }
+echo "    window.EG_BOM_CHECK = " . json_encode($_bchk, JSON_UNESCAPED_UNICODE) . "; // BOM檢核\n";
 echo "    window.oreadyIsAdmin = " . json_encode($permission_code === 'A') . "; // 目前權限=A者可開啟角色功能設定\n";
 echo "    window.globalWorkdaysList = " . json_encode($js_workdays_list_php) . "; // Workday list for JS\n";
 echo "    window.initialLightSettings = " . json_encode($light_settings_php) . ";\n";
@@ -3373,12 +3397,19 @@ echo "</script>\n";
     /* 最後一關「待出貨」：發出去的貨全數回廠、後面沒有關卡。回傳 { ret, shipped, left } 或 null。
        shipped＝這張製令已綁定出貨單的數量（後端 bom_bound_ship_lib.php），left＝還沒出的待出貨量。
        left<=0＝已全數出貨：發單日欄不再顯示這一關與「待出貨」（2026-11-11 使用者要求）。 */
+    /* 最後一關且是管理員認定的「包裝製程」（包裝排程→包裝製程設定）：按下回廠後（QC待驗／待移轉）直接視為已移轉＝待出貨（2026-11-12） */
+    function ocPackLastStage(row, proc) {
+        if (!proc || ['Q', 'P'].indexOf(String(proc.processing_state || '')) < 0) return false;
+        if ((window.PACKING_PROCESS_NOS || []).indexOf(parseInt(proc.process_no, 10)) < 0) return false;
+        var g = ocGrp(proc), bm = String(row.bom || '').trim();
+        return !(Array.isArray(window.bomPSList) ? window.bomPSList : []).some(function (q) { return q && String(q.bom || '').trim() === bm && parseInt(q.is_consumed || 0, 10) !== 1 && parseInt(q.bom_sn, 10) > g; });
+    }
     function ocLastShipInfo(row, proc) {
         var m = (window.obBatchMap || {})[String(proc.bom_ing_fid)];
         var _hasBatch = !!(m && m.batches && m.batches.length);
         var _xferReady = null;   // 沒有發包批次（只有移轉憑單／直接按已移轉）的最後一關：以移轉憑單數量（沒有憑單才用本站數量）認定已回廠
         if (!_hasBatch) {
-            if (String(proc.processing_state || '') !== 'E') return null;
+            if (String(proc.processing_state || '') !== 'E' && !ocPackLastStage(row, proc)) return null;
             var _sq = Number(proc.sqty) || 0, _xq = Number(proc.xfer_qty) || 0;
             _xferReady = _xq > 0 ? (_sq > 0 ? Math.min(_sq, _xq) : _xq) : _sq;
             if (!(_xferReady > 0)) return null;
@@ -4033,6 +4064,13 @@ echo "</script>\n";
             _oidBanner.innerHTML = '目前僅顯示訂單 #' + window.orderIdFilterParam + ' 已綁定的BOM　'
                 + '<a href="' + window.location.pathname + '" style="color:#DD5138;text-decoration:underline;">清除篩選顯示全部</a>';
             document.body.insertBefore(_oidBanner, document.body.firstChild);
+        }
+        if (urlParams.has("bom_only")) {
+            var _boBanner = document.createElement('div');
+            _boBanner.style.cssText = 'background:#F7E0BD;color:#6b4a1f;border-bottom:2px solid #F0A24B;padding:6px 14px;font-size:13px;text-align:center;';
+            _boBanner.innerHTML = '目前僅顯示 BOM ' + urlParams.get('bom_only').replace(/[<>&"]/g, '') + '　'
+                + '<a href="' + window.location.pathname + '" style="color:#DD5138;text-decoration:underline;">清除篩選顯示全部</a>';
+            document.body.insertBefore(_boBanner, document.body.firstChild);
         }
         // --- Global Search Filter Restore ---
         if (urlParams.has("global_search")) {
@@ -5300,6 +5338,7 @@ echo "</script>\n";
 
         // ⭐ 核心修正：在自動更新時，總是請求所有資料
         fetchUrl.searchParams.set('fetchAll', '1');
+        { var _bo = new URLSearchParams(window.location.search).get('bom_only'); if (_bo) fetchUrl.searchParams.set('bom_only', _bo); }
 
         if (isQcReportSortActive) {
             // 如果 isQcReportSortActive 為 true，在 URL 中加入排序參數
@@ -5401,6 +5440,8 @@ echo "</script>\n";
                         }
                         processAndRenderData();
                         console.log("✅ fetchDataAndFilter 完成 " + new Date().toLocaleTimeString());
+                        // BOM檢核：同步別人剛標示／回報／解決的異常，有變動才重畫（輸入中不重畫）
+                        if (window.EGBomCheck) EGBomCheck.refresh(function (changed) { if (changed && !isTextareaFocused && !isSelectFocused) processAndRenderData(); });
                     } else {
                         console.error("❌ fetch 回傳的資料格式不符預期:", response);
                         fullDataset = []; // 清空數據以防錯誤渲染
@@ -6171,6 +6212,9 @@ echo "</script>\n";
                 tdDid.appendChild(_ctnWrap);
             }
 
+            // ── BOM檢核：問題標示鈕／異常標示區（沒有被標示且沒開檢核模式時完全不動畫面）──
+            if (window.EGBomCheck) EGBomCheck.decorateRow(tr, row, tdClient, tdDid, (typeof _ctnWrap !== 'undefined' ? _ctnWrap : null));
+
             // --- 點一下料號欄（連結／按鈕以外）＝右側滑出此 BOM 相關紀錄；雙擊仍是帶入篩選（延遲區分）---
             tdDid.setAttribute('title', '點一下看此BOM相關紀錄；雙擊帶入篩選');
             tdDid.style.cursor = 'pointer';
@@ -6614,7 +6658,7 @@ echo "</script>\n";
                     var _iid = String(_proc.bom_ing_id  || '');
                     // qc_completed=1 且 processing_state='Q' → 前端認定為生管待移轉(P)
                     var _isQcCompletedQ = (_st === 'Q' && _proc.qc_completed == 1);
-                    var _effectiveSt = _isQcCompletedQ ? 'P' : ((_xferDone || _qcMoot) ? 'E' : _st);
+                    var _effectiveSt = _isQcCompletedQ ? 'P' : ((_xferDone || _qcMoot || ocPackLastStage(row, _proc)) ? 'E' : _st);
                     if (_hideStChip) {
                         // 整關狀態按鈕由各批次自己的標示取代
                     } else if (_st === 'ing' && _iid !== '' && !_xferDone) {
@@ -7396,7 +7440,9 @@ echo "</script>\n";
             tr.appendChild(tdProcessingState);
 
             // --- 14+ 動態製程欄位 ---
-            var _fmtP = function(v) { var f=parseFloat(v); return (f%1===0)?'$'+f.toFixed(0):'$'+f.toFixed(2); };
+            var _fmtP = function(v) { var f=parseFloat(v); var s=(f<0)?'-':''; f=Math.abs(f); return s+((f%1===0)?'$'+f.toFixed(0):'$'+f.toFixed(2)); };
+            // 扣款（退回／NG扣料錢）：移轉單的製程金額為負數時，單價顯示成負數（與品質異常處理單扣款確認同一判斷）
+            var _signedP = function(rec, p) { var f=parseFloat(p); if (!isNaN(f) && f>0 && rec && parseFloat(rec.process_amount) < 0) return -f; return p; };
             try {
                 if (window.bomPSList && Array.isArray(window.bomPSList) && window.maxCount > 0) {
                     var currentBom = (row.bom ? row.bom.toString().trim() : '');
@@ -7623,9 +7669,27 @@ echo "</script>\n";
                                         }
                                     }
                                     tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${stateColor};">${datePrefix}${escapeHtml(translatedState)}</div>`;
+                                } else if (isCurrentProcess && _hlE && _dynRawSt === 'E') {
+                                    // 目前這一關已移轉、下一關還沒發包：整排沒有任何狀態，補一行「（QC檢驗日）已移轉」讓人看得出走到哪、QC 已驗
+                                    var _eQcMd = (processInfo.QC_check_date && String(processInfo.QC_check_date).trim() !== '') ? formatDateAsMd(processInfo.QC_check_date) + ' ' : '';
+                                    var _eQcOk = String(processInfo.QC_check || '') === 'ok' ? '（QC允收）' : '';
+                                    tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: #555;" title="這一關已移轉，下一關尚未發包">${_eQcMd}已移轉${_eQcOk}</div>`;
+                                }
+                                // QC 檢驗結果：每一關只要有檢驗紀錄就顯示（檢驗日＋結果＋是否已按完工）；「已移轉」那行已含允收字樣者不重複
+                                if (processInfo.QC_check && !(isCurrentProcess && _hlE && _dynRawSt === 'E')) {
+                                    var _qcMap = {ok: '允收', ng: '驗退', QQ: '異常', AOD: '特採'};
+                                    var _qcCol = {ok: '#1a7a1a', ng: '#B8431F', QQ: '#B8431F', AOD: '#8a6a45'}[processInfo.QC_check] || '#555';
+                                    var _qcMd = processInfo.QC_check_date ? formatDateAsMd(processInfo.QC_check_date) + ' ' : '';
+                                    tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${_qcCol};" title="QC 檢驗結果">QC ${_qcMd}${escapeHtml(_qcMap[processInfo.QC_check] || String(processInfo.QC_check))}${processInfo.qc_completed == 1 ? '・已完工' : '・未完工'}</div>`;
                                 }
                             }
 
+                            // 換過製程順序（或申請中）的製程：左下角顯示交換圖示，滑過看說明
+                            try {
+                                var _roM = window.bomReorderMarks || {}, _roHit = null;
+                                String(processInfo.bom_ing_fid || '').split(',').forEach(function (x) { x = x.trim(); if (!_roHit && _roM[x]) _roHit = _roM[x]; });
+                                if (_roHit) tdDynamicProcess.innerHTML += '<div style="text-align:left;font-size:12px;line-height:1.2;margin-top:2px;color:' + (_roHit.st === 'pending' ? '#B8431F' : '#8a6a45') + ';" title="' + escapeHtml(_roHit.text || '') + '"><i class="fa fa-exchange"></i></div>';
+                            } catch (_roE) {}
                             // ── 本關的報廢／發料不良／發單短少（取自異常單決策標籤與廠商回報標籤，依製程序號 bom_sn 對應；每一關都顯示）──
                             try {
                                 var _isq = {};
@@ -7671,10 +7735,12 @@ echo "</script>\n";
                                 var _didKey = String(row.d_display || row.d_id || '');
                                 var _didKey2 = String(row.d_id || '');
                                 var _histBySn = [];
+                                // 本 BOM 自己的扣款（製程金額為負）也列在歷史裡（紅字）；本 BOM 的一般單價已由「本 BOM 最新」那列顯示
+                                var _histKeep = function(h){ return h.bom !== row.bom || parseFloat(h.process_amount) < 0; };
                                 if (_thm[_didKey] && _thm[_didKey][_bsn]) {
-                                    _histBySn = _thm[_didKey][_bsn].filter(function(h){ return h.bom !== row.bom; });
+                                    _histBySn = _thm[_didKey][_bsn].filter(_histKeep);
                                 } else if (_didKey2 && _didKey2 !== _didKey && _thm[_didKey2] && _thm[_didKey2][_bsn]) {
-                                    _histBySn = _thm[_didKey2][_bsn].filter(function(h){ return h.bom !== row.bom; });
+                                    _histBySn = _thm[_didKey2][_bsn].filter(_histKeep);
                                 }
 
                                 var _hasCurrentPrice = _pi && (_pi.modified_unit_price || _pi.price);
@@ -7688,7 +7754,7 @@ echo "</script>\n";
                                     _iconEl.style.cssText = 'display:block;cursor:pointer;margin-top:0;font-size:12px;line-height:1.2;';
 
                                     if (_hasCurrentPrice) {
-                                        var _rawPrice = _pi.modified_unit_price || _pi.price;
+                                        var _rawPrice = _signedP(_pi, _pi.modified_unit_price || _pi.price);
                                         var _priceLabel = _fmtP(_rawPrice);
                                         // span 的 line-height 一定要自己指定：全站規則 `td span{line-height:28px}`
                                         // 會把這一行撐成 28px，價格看起來就跟上面的回廠日期離很遠
@@ -7699,7 +7765,7 @@ echo "</script>\n";
 
                                     var _rows = [];
                                     if (_hasCurrentPrice) {
-                                        var _rawPrice2 = _pi.modified_unit_price || _pi.price;
+                                        var _rawPrice2 = _signedP(_pi, _pi.modified_unit_price || _pi.price);
                                         _rows.push({
                                             date: _pi.transfer_date ? String(_pi.transfer_date).substring(0, 10) : '',
                                             maker: _pi.maker_name || _pi.maker_from || '',
@@ -7711,7 +7777,7 @@ echo "</script>\n";
                                         });
                                     }
                                     _histBySn.forEach(function(h) {
-                                        var _hp = h.modified_unit_price || h.price;
+                                        var _hp = _signedP(h, h.modified_unit_price || h.price);
                                         if (!_hp) return;
                                         _rows.push({
                                             date: h.transfer_date ? String(h.transfer_date).substring(0, 10) : '',
@@ -7720,6 +7786,7 @@ echo "</script>\n";
                                             price: _fmtP(_hp),
                                             bom: h.bom || '',
                                             note: h.note || '',
+                                            isDeduct: parseFloat(h.process_amount) < 0,
                                             isCurrent: false
                                         });
                                     });
@@ -7735,7 +7802,7 @@ echo "</script>\n";
                                             '<th style="padding:1px 5px;">備註</th>' +
                                             '</tr>';
                                         _rows.forEach(function(r) {
-                                            var _rowStyle = r.isCurrent ? 'color:#0a6;font-weight:bold;' : 'color:#333;';
+                                            var _rowStyle = r.isDeduct ? 'color:#DD5138;' : (r.isCurrent ? 'color:#0a6;font-weight:bold;' : 'color:#333;');
                                             _tableHtml += '<tr style="' + _rowStyle + '">' +
                                                 '<td style="padding:1px 5px 1px 0;white-space:nowrap;">' + escapeHtml(r.date) + '</td>' +
                                                 '<td style="padding:1px 5px;white-space:nowrap;">' + escapeHtml(r.maker) + '</td>' +
@@ -7780,7 +7847,10 @@ echo "</script>\n";
                         }
                         // QC/生管製程不同步：此關是QC已檢驗/完工但目前製程還在前面的目標關 → 顯示快速移轉按鈕
                         // QC待驗／待移轉／已移轉＝已經回廠、前面也有發包資料，不需要再「快速移轉」
-                        if (processInfo && _canTransferRole && _qcSyncReasons[String(processInfo.bom_ing_fid)] && ['Q', 'P', 'E', '1'].indexOf(String(processInfo.processing_state || '')) < 0) {
+                        if (processInfo && _canTransferRole && _qcSyncReasons[String(processInfo.bom_ing_fid)] &&
+                            (['Q', 'P', 'E', '1'].indexOf(String(processInfo.processing_state || '')) < 0 ||
+                             // 報工的最遠製程已是 Q/P，但目前製程還停在前面（例：客供料還沒移轉）→ 仍要能快速移轉
+                             (['Q', 'P'].indexOf(String(processInfo.processing_state || '')) >= 0 && _qcSyncReasons[String(processInfo.bom_ing_fid)].indexOf('有報工紀錄') >= 0))) {
                             var _qsBtnRow = document.createElement('div');
                             _qsBtnRow.style.cssText = 'margin-top:3px;display:flex;justify-content:flex-end;';
                             var _qsBtn = document.createElement('button');
@@ -8129,8 +8199,8 @@ echo "</script>\n";
         const bomExistsBeforeFilter = fullDataset.find(item => item.bom === '0503001');
 
         // console.log("processAndRenderData - fullDataset 長度:", fullDataset.length, "使用的篩選條件:", filters); // <-- 新增 Log
-        const filteredDataset = filterData(fullDataset); // 1. 過濾完整數據
-
+        let filteredDataset = filterData(fullDataset); // 1. 過濾完整數據
+        if (window.EGBomCheck) filteredDataset = EGBomCheck.pin(filteredDataset); // BOM檢核：被標示異常的 BOM 置頂
 
         // If not active, the original server-side sort order is preserved.
 
@@ -9918,6 +9988,8 @@ echo "</script>\n";
                     if (!(isDropdownPleaseSelect && isNotStock && bomHasActualOrders)) {
                         show = false;
                     }
+                } else if (filters.status === "bom_check_flag") { // 檢核異常（BOM檢核角色才有此選項）
+                    if (!(window.EGBomCheck && EGBomCheck.isFlagged(row.bom))) show = false;
                 } else if (filters.status === "has_similar") { // 有類似料號（A/B 級；不論類似料號是否還有加工中的製令，只要這個料號本身有類似料號就列出）
                     if (!(window.simMap && window.simMap[String(row.d_setting_id || '')])) show = false;
                 } else if (filters.status === "has_bom_ing_ps") { // 有備註 (BOM 主檔備註)
@@ -10777,7 +10849,8 @@ echo "</script>\n";
         }
 
         // console.log("processAndRenderData - fullDataset 長度:", fullDataset.length, "使用的篩選條件:", filters); // <-- 新增 Log
-        const filteredDataset = filterData(fullDataset); // 1. 過濾完整數據
+        let filteredDataset = filterData(fullDataset); // 1. 過濾完整數據
+        if (window.EGBomCheck) filteredDataset = EGBomCheck.pin(filteredDataset); // BOM檢核：被標示異常的 BOM 置頂
         // console.log("processAndRenderData - filteredDataset 長度:", filteredDataset.length); // <-- 新增 Log
         const totalRecords = filteredDataset.length;
         const totalPages = Math.max(1, Math.ceil(totalRecords / recordsPerPage));
@@ -11751,6 +11824,13 @@ echo "</script>\n";
     </div>
   </div>` : '';
 
+        // ── 改製程順序（生管申請→設計部門核准後才真的更換）──
+        const _canReorder = _qtrAction === 'transfer_process' && fid !== '' && bom !== '' && ((!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer);
+        const _roBtnHtml = _canReorder ? `<button id="qtr-ro-${fid}" class="btn" style="margin-right:auto;background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="申請把這一關換到別的製程前面或後面，設計部門核准後才會更換">改順序</button>` : '';
+        const _roPanelHtml = _canReorder ? `
+  <div id="qtr-ro-panel-${fid}" style="display:none;margin-top:12px;padding:10px;border:1px solid #d9861f;background:#FDF3E3;border-radius:4px;">
+    <div id="qtr-ro-body-${fid}" style="font-size:12px;color:#7a4a10;line-height:1.6;">載入中…</div>
+  </div>` : '';
         const modalId='qtr-modal-'+fid; const ex=document.getElementById(modalId); if(ex)ex.remove();
         const overlay=document.createElement('div');
         overlay.id=modalId;
@@ -11785,11 +11865,15 @@ echo "</script>\n";
     <div id="qtr-qty-hint-${fid}" style="margin-left:72px;font-size:12px;line-height:1.5;margin-top:4px;"></div>
   </div>
   ${_qtrNoteHtml}
+  <div id="qtr-qcblk-${fid}" style="display:none;margin-top:10px;padding:8px 10px;border:1px solid #DD5138;background:#FBEBE4;color:#8a2d10;border-radius:4px;font-size:12px;font-weight:bold;line-height:1.5;"></div>
   ${_fwdPanelHtml}
   ${_etrPanelHtml}
   ${_codPanelHtml}
+  ${_roPanelHtml}
+  <div id="qtr-ro-rec-${fid}" style="display:none;margin-top:10px;font-size:11px;color:#6b4a2a;background:#FDF7EC;border:1px solid #E4D3BC;border-radius:4px;padding:6px 8px;line-height:1.6;"></div>
 </div>
 <div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:8px;">
+  ${_roBtnHtml}
   ${_codBtnHtml}
   ${_etrBtnHtml}
   ${_fwdBtnHtml}
@@ -12027,6 +12111,68 @@ echo "</script>\n";
         document.getElementById('qtr-close-'+fid).onclick=_closeQtr;
         document.getElementById('qtr-cancel-'+fid).onclick=_closeQtr;
 
+        // ── 上一關 QC 檢查：沒有 QC 檢驗並按完工，就不能發單到這一關（管理員可確認後強制）──
+        if (_qtrAction === 'transfer_process') {
+            $.post(_phpSelf, { action: 'transfer_precheck', bom_ing_fid: fid }, function (r) {
+                if (!r || !r.success || !r.blocked) return;
+                var box = document.getElementById('qtr-qcblk-' + fid), cb = document.getElementById('qtr-confirm-' + fid);
+                if (!box || !cb) return;
+                box.style.display = ''; box.textContent = '⚠ ' + r.message;
+                if (r.is_admin) { cb.setAttribute('data-qcov', '1'); box.textContent += '（管理員：仍可強制移轉）'; }
+                else cb.disabled = true;
+            }, 'json');
+        }
+        // ── 這一關的換順序申請紀錄（申請人／核准或退回／備註）──
+        if (_qtrAction === 'transfer_process') {
+            $.post(_phpSelf, { action: 'reorder_records', bom: bom, bom_ing_fid: fid }, function (r) {
+                var el = document.getElementById('qtr-ro-rec-' + fid);
+                if (!el || !r || !r.success || !r.records || !r.records.length) return;
+                el.style.display = '';
+                el.innerHTML = '<b>換順序紀錄</b><br>' + r.records.map(function (x) {
+                    var h = '申請：' + escapeHtml(x.requested_by) + ' ' + escapeHtml(x.requested_at.substr(0, 16)) + '　' + escapeHtml(x.desc) + (x.reason ? '（' + escapeHtml(x.reason) + '）' : '');
+                    if (x.status === 'pending') h += '<br>　<span style="color:#B8431F;">等待設計部門審核</span>';
+                    else h += '<br>　' + (x.status === 'approved' ? '核准' : '<span style="color:#B8431F;">退回</span>') + '：' + escapeHtml(x.decided_by) + ' ' + escapeHtml(x.decided_at.substr(0, 16)) + (x.decide_note ? '　' + escapeHtml(x.decide_note) : '');
+                    return h;
+                }).join('<hr style="margin:4px 0;">');
+            }, 'json');
+        }
+        if (_canReorder) {
+            document.getElementById('qtr-ro-' + fid).onclick = function () {
+                var panel = document.getElementById('qtr-ro-panel-' + fid), body = document.getElementById('qtr-ro-body-' + fid);
+                if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+                panel.style.display = ''; body.textContent = '載入中…';
+                $.post(_phpSelf, { action: 'reorder_info', bom: bom, bom_ing_fid: fid }, function (r) {
+                    if (!r || !r.success) { body.textContent = (r && r.message) || '讀取失敗'; return; }
+                    if (r.pending) { body.innerHTML = '這個 BOM 已有一張換順序申請正在等設計部門審核（#' + r.pending + '），審核完成前不能再申請。'; return; }
+                    var mv = r.moved_sn, free = !!r.allow_sn_edit, i = 0, opts = '';
+                    r.groups.forEach(function (g) { i++; if (g.sn === mv) return; opts += '<option value="' + g.sn + '">第 ' + i + ' 關　' + escapeHtml(g.name || g.process_no) + (free ? '' : '（SN ' + g.sn + '）') + '</option>'; });
+                    var me = r.groups.filter(function (g) { return g.sn === mv; })[0] || {};
+                    body.innerHTML = '把 <b>' + escapeHtml(me.name || me.process_no || '') + (free ? '' : '（SN ' + mv + '）') + '</b> 移到：'
+                        + '<div style="display:flex;gap:6px;margin:6px 0;"><select id="qtr-ro-tg-' + fid + '" class="form-control" style="flex:1;">' + opts + '</select>'
+                        + '<select id="qtr-ro-pos-' + fid + '" class="form-control" style="width:90px;"><option value="before">之前</option><option value="after">之後</option></select></div>'
+                        + (free ? '<div style="margin-bottom:6px;"><label style="margin:0;">新的 SN 號碼：</label><input type="number" min="1" id="qtr-ro-sn-' + fid + '" class="form-control" style="width:140px;display:inline-block;" placeholder="例如 25"> <span style="font-size:11px;">（必須介於新位置前後兩關的 SN 之間）</span></div>'
+                                : '<div style="font-size:11px;margin-bottom:6px;">核准後，原本這幾個 SN 號碼會依新順序重新分配。</div>')
+                        + '<input type="text" id="qtr-ro-note-' + fid + '" class="form-control" placeholder="備註／原因（選填）" style="margin-bottom:6px;">'
+                        + '<div style="font-size:11px;margin-bottom:6px;">送出後會通知此訂單的負責設計與設計／技術部門，<b>設計核准後</b>才會真的更換；結果會回報給你。</div>'
+                        + '<button type="button" id="qtr-ro-go-' + fid + '" class="btn btn-sm" style="background:#c0561f;border:1px solid #a4491a;color:#fff;">送出申請</button>';
+                    document.getElementById('qtr-ro-go-' + fid).onclick = function () {
+                        var gb = this, snEl = document.getElementById('qtr-ro-sn-' + fid);
+                        if (free && !(parseInt(snEl.value, 10) > 0)) { alert('請輸入新的 SN 號碼。'); return; }
+                        gb.disabled = true;
+                        $.post(_phpSelf, { action: 'reorder_request', bom: bom, bom_ing_fid: fid, target_sn: $('#qtr-ro-tg-' + fid).val(), pos: $('#qtr-ro-pos-' + fid).val(),
+                            new_sn: free ? snEl.value : '', reason: $('#qtr-ro-note-' + fid).val() }, function (res) {
+                            if (!res || !res.success) { alert((res && res.message) || '送出失敗'); gb.disabled = false; return; }
+                            alert(res.message);
+                            window.bomReorderMarks = window.bomReorderMarks || {};
+                            window.bomReorderMarks[fid] = { st: 'pending', text: '換順序申請中' };
+                            _closeQtr();
+                            try { processAndRenderData(); } catch (e) {}
+                        }, 'json').fail(function () { alert('與伺服器通訊失敗'); gb.disabled = false; });
+                    };
+                }, 'json');
+            };
+        }
+
         // ── 本關已移轉：展開二次確認 → 需輸入大寫 OK → 設 processing_state='E' ──
         if (_canMarkE) {
             const _etrBtn    = document.getElementById('qtr-etr-'+fid);
@@ -12212,8 +12358,10 @@ echo "</script>\n";
                 }
                 _sendQtyParam = (_qtyAvail.sent <= 0 && _q >= _un - 1e-9) ? '' : String(_q);
             }
+            var _qcOv = '';
+            if ($btn.attr('data-qcov')) { if (!confirm('上一關 QC 尚未檢驗並完工。\n管理員要強制移轉到這一關嗎？')) return; _qcOv = '1'; }
             $btn.prop('disabled',true).text('處理中...');
-            $.ajax({url:_phpSelf,type:'POST',data:{action:_qtrAction,bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName,send_qty:_sendQtyParam,over_ok:_overOk},dataType:'json',
+            $.ajax({url:_phpSelf,type:'POST',data:{action:_qtrAction,bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName,send_qty:_sendQtyParam,over_ok:_overOk,qc_override:_qcOv},dataType:'json',
                 success:function(response){
                     if(response.success){
                         showTemporaryMessage(response.message,true); _closeQtr();
@@ -14588,6 +14736,15 @@ echo "</script>\n";
             var fid = String(this.id).replace('transferProcessModal_', '');
             var $hint = $('#transfer-qty-hint-' + fid);
             $hint.text('載入可領量…');
+            // 上一關 QC 檢查（與前端列表點製程跳窗同一規則）：沒檢驗並完工不能發到這一關
+            var $cfm = $('#confirm-transfer-' + fid).prop('disabled', false).removeAttr('data-qcov');
+            $('#transfer-qcblk-' + fid).remove();
+            $.post(_phpSelf, { action: 'transfer_precheck', bom_ing_fid: fid }, function (pr) {
+                if (!pr || !pr.success || !pr.blocked) return;
+                var $b = $('<div id="transfer-qcblk-' + fid + '" style="margin:0 0 10px;padding:8px 10px;border:1px solid #DD5138;background:#FBEBE4;color:#8a2d10;border-radius:4px;font-size:12px;font-weight:bold;line-height:1.5;"></div>').text('⚠ ' + pr.message + (pr.is_admin ? '（管理員：仍可強制移轉）' : ''));
+                $('#transferProcessModal_' + fid + ' .modal-body').prepend($b);
+                if (pr.is_admin) $cfm.attr('data-qcov', '1'); else $cfm.prop('disabled', true);
+            }, 'json');
             $.post(_phpSelf, { action: 'get_send_avail', bom_ing_fid: fid }, function (r) {
                 if (!r || !r.success) { $hint.text(''); return; }
                 var txt = '本站總量 ' + _obNum(r.stage_qty) + '，已發 ' + _obNum(r.sent);
@@ -14622,6 +14779,8 @@ echo "</script>\n";
                 return;
             }
 
+            var _qcOv2 = '';
+            if ($button.attr('data-qcov')) { if (!confirm('上一關 QC 尚未檢驗並完工。\n管理員要強制移轉到這一關嗎？')) return; _qcOv2 = '1'; }
             $button.prop('disabled', true).text('處理中...');
 
             $.ajax({
@@ -14633,7 +14792,8 @@ echo "</script>\n";
                     transfer_date: transferDate,
                     maker_no: makerNo,
                     maker_name: makerName,
-                    send_qty: sendQtyVal
+                    send_qty: sendQtyVal,
+                    qc_override: _qcOv2
                 },
                 dataType: 'json',
                 success: function(response) {
@@ -18206,6 +18366,16 @@ echo "</script>\n";
                 <div class="">
 
                     <div class="page-title">
+                        <?php if (!empty($oready_can_ship_insight)): ?>
+                        <a href="../Sales/Shipping_Quick.php" target="_blank" rel="noopener" class="btn btn-xs btn-default" style="float:right;margin:10px 0 0 8px;" title="另開新分頁前往快速出貨"><i class="fa fa-truck"></i> 快速出貨 <i class="fa fa-external-link"></i></a>
+                        <?php endif; ?>
+                        <?php
+                        // 批次發單入口：能進入批次發單頁（檢閱以上角色）者才看得到；放在快速出貨左側
+                        $__od_top = false;
+                        try { require_once '../../src/common/od_dispatch_lib.php'; $__otc = $conn->getPDO(); $__otp = od_perms($__otc, od_current_user($__otc)); $__od_top = !empty($__otp['canView']); } catch (Throwable $__ote) {}
+                        if ($__od_top): ?>
+                        <a href="od_dispatch.php" target="_blank" rel="noopener" class="btn btn-xs btn-warning" style="float:right;margin:10px 0 0 8px;" title="另開新視窗前往批次發單"><i class="fa fa-truck"></i> 批次發單 <i class="fa fa-external-link"></i></a>
+                        <?php endif; ?>
                         <div class="title_left">
                             <h3>BOM 總覽
                             <?php if (!empty($permission_display_text)): ?>
@@ -18227,7 +18397,7 @@ echo "</script>\n";
                             </button>
                             <span id="current-customer-display" style="font-size: 14px; color: #555;"></span>
                             <?php if (!empty($users_on_leave_names)): ?>
-                                <small style="color: red; font-size: 12px; margin-left: 10px;">(今日休假: <?php echo htmlspecialchars(implode(', ', $users_on_leave_names)); ?>)</small>
+                                <small style="color: red; font-size: 12px; margin-left: 10px; white-space: nowrap;">(今日休假: <?php echo htmlspecialchars(implode(', ', $users_on_leave_names)); ?>)</small>
                             <?php endif; ?>
                             </h3>
                             <?php if ($permission_code === 'A'): ?>
@@ -18284,6 +18454,14 @@ echo "</script>\n";
                                     </label></div>
                                     <button type="button" class="btn btn-default btn-xs" id="oready-or-save">儲存回廠設定</button>
                                     <span id="oready-or-save-tip" style="font-size:11px;color:#2a8;margin-left:6px;display:none;">已儲存</span>
+                                    <hr>
+                                    <label>換製程順序（2026-11-17）</label>
+                                    <div class="checkbox"><label>
+                                        <input type="checkbox" id="oready-ro-sn" <?= (function_exists('bro_allow_sn_edit') ? bro_allow_sn_edit($db) : false) ? 'checked' : '' ?>>
+                                        允許自行輸入新的 SN 號碼（勾選：被移動的製程輸入新 SN；不勾：核准後把原本的 SN 號碼依新順序重新分配）
+                                    </label></div>
+                                    <button type="button" class="btn btn-default btn-xs" id="oready-ro-save">儲存換順序設定</button>
+                                    <span id="oready-ro-tip" style="font-size:11px;color:#2a8;margin-left:6px;display:none;">已儲存</span>
                                 </div>
                                 <div class="modal-footer">
                                     <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
@@ -18849,6 +19027,8 @@ echo "</script>\n";
     <!-- Custom Theme Scripts -->
     <script src="../../resource/js/custom.min.js?v=<?=$_av?>"></script>
     <script src="../../resource/js/eg_bom_timeline.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_timeline.js') ?>"></script>
+    <script src="../../resource/js/eg_bom_check.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_check.js') ?>"></script>
+    <script>if (window.EG_BOM_CHECK && window.EGBomCheck) EGBomCheck.init(window.EG_BOM_CHECK);</script>
     <script src="../../resource/js/eg_bom_admin_fix.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_bom_admin_fix.js') ?>"></script>
     <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script>
 
@@ -18945,6 +19125,17 @@ echo "</script>\n";
         };
         window.renderContainerCell = function(txtEl, btn, proc){
             var d = window.containerDisplay(proc);
+            // QC 檢驗後回報的容器視同已設定容器：目前顯示的這一關沒有容器資料時，
+            // 改取同一 BOM 最後（SN 最大）一個有容器資料的製程顯示（QC 常在前一關回報，之後製程才輪到顯示）
+            var _qcOnly = false;
+            if (!d.text) {
+                var _pl = ((window.ingActiveMap || {})[String(btn.getAttribute('data-bom') || proc.bom || '').trim()]) || [], _bf = null;
+                _pl.forEach(function(p){
+                    if (!(p.QC_ps || p.QC_ps2 || p.pm_ps || p.pm_ps2)) return;
+                    if (!_bf || parseInt(p.bom_sn || 0, 10) >= parseInt(_bf.bom_sn || 0, 10)) _bf = p;
+                });
+                if (_bf) { d = window.containerDisplay(_bf); d = { text: d.text, diff: d.diff, title: '第 ' + _bf.bom_sn + ' 關' + (_bf.ProcessName ? ' ' + _bf.ProcessName : '') + ' 回報的容器｜' + d.title }; _qcOnly = true; }
+            }
             txtEl.textContent = d.text;
             txtEl.title = d.title;
             txtEl.style.cssText = 'font-size:11px;line-height:1.2;white-space:nowrap;' +
@@ -18954,7 +19145,8 @@ echo "</script>\n";
             btn.setAttribute('data-p1', proc.pm_ps || '');
             btn.setAttribute('data-p2', proc.pm_ps2 || '');
             btn.textContent = '容器';
-            btn.classList.toggle('oready-ctn-empty', !proc.pm_ps && !proc.pm_ps2);
+            // 有 QC 回報（或其他關已回報）的容器＝視同已設定，不再用「尚未回報」的醒目樣式
+            btn.classList.toggle('oready-ctn-empty', !proc.pm_ps && !proc.pm_ps2 && !proc.QC_ps && !proc.QC_ps2 && !_qcOnly);
             btn.title = (proc.pm_ps || proc.pm_ps2) ? '修改生管回報的容器' : '回報容器';
             btn._txtEl = txtEl;
         };
@@ -19331,7 +19523,8 @@ echo "</script>\n";
             {code:'oready_view_price',         label:'查看加工單價'},
             {code:'oready_process_settings',   label:'製程設定 / 內製製程例外設定'},
             {code:'oready_edit_qty',           label:'修改發單數（更新視窗內鎖頭＋本人密碼；已有報工／移轉單時改少僅管理員可）'},
-            {code:'oready_edit_return',        label:'修改／刪除移送與回廠紀錄（BOM製程列表回廠鈕右側的修改圖示；回廠數量不可低於已報工／QC通報數量；僅當天建立的可刪除）'}
+            {code:'oready_edit_return',        label:'修改／刪除移送與回廠紀錄（BOM製程列表回廠鈕右側的修改圖示；回廠數量不可低於已報工／QC通報數量；僅當天建立的可刪除）'},
+            {code:'oready_bom_check',          label:'BOM檢核（可標示有問題的 BOM、解決異常、維護問題種類；被標示的 BOM 所有人都看得到並可回報）'}
         ];
         var OREADY_CODES = OREADY_FEATURES.map(function(f){ return f.code; });
         var _oreadyRoleCur = [];
@@ -19356,6 +19549,15 @@ echo "</script>\n";
                 window.EG_OR_QTY_ADJUSTABLE = adjustable;
                 $('#oready-or-save-tip').show();
                 setTimeout(function(){ $('#oready-or-save-tip').fadeOut(); }, 2000);
+            }, 'json').fail(function(){ $btn.prop('disabled', false); alert('與伺服器通訊失敗'); });
+        });
+
+        $(document).on('click', '#oready-ro-save', function(){
+            var $btn = $(this).prop('disabled', true);
+            $.post('', { action: 'bom_reorder_setting_save', allow_sn_edit: $('#oready-ro-sn').is(':checked') ? 1 : 0 }, function(res){
+                $btn.prop('disabled', false);
+                if (!res || !res.success) { alert((res && res.message) || '儲存失敗'); return; }
+                $('#oready-ro-tip').show(); setTimeout(function(){ $('#oready-ro-tip').fadeOut(); }, 2000);
             }, 'json').fail(function(){ $btn.prop('disabled', false); alert('與伺服器通訊失敗'); });
         });
 

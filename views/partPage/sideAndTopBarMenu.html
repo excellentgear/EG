@@ -114,6 +114,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                     ON resp.live_event_id = le.id
                    AND resp.user_id = IF(t.target_type='user' AND t.target_id <> ".(int)$id.", t.target_id, ".(int)$id.")
              WHERE (le.enddate IS NULL OR le.enddate >= CURDATE())
+               -- 品質異常單通知：該單已刪除／不存在就不再顯示（QA_EDIT_REQ 的 ref_id 是修改請求 id，不比對）
+               AND (le.ref_type IS NULL OR le.ref_type NOT LIKE 'QA%' OR le.ref_type = 'QA_EDIT_REQ'
+                    OR EXISTS (SELECT 1 FROM qa_abnormal_order qx WHERE qx.id = le.ref_id AND qx.deleted_at IS NULL))
                AND (
                     t.target_type = 'all'
                  OR (t.target_type = 'status' AND t.target_id IN (".$status_in."))
@@ -121,7 +124,8 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                  OR (t.target_type = 'user'   AND t.target_id IN (".$view_uid_in."))
                )
                AND (
-                    (t.mode = 'reply' AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR resp.replied_at IS NULL))
+                    -- 回覆+回簽：留言回覆或「僅回簽（不留言）」都算完成（畫面上寫明兩者皆可），不可只認留言
+                    (t.mode = 'reply' AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR (resp.replied_at IS NULL AND resp.signed_at IS NULL)))
                  OR (t.mode = 'sign'  AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR resp.signed_at IS NULL))
                  OR ((t.mode NOT IN ('sign','reply') OR (le.reply_deadline IS NOT NULL AND le.reply_deadline < CURDATE())) AND lr.id IS NULL)
                )
@@ -468,9 +472,13 @@ window.addEventListener('load', function(){
     try {
         if (typeof $ === 'undefined') return;
         var CATS = <?= json_encode($__nbCats, JSON_UNESCAPED_UNICODE) ?>;
-        function hit(c, rt, need, src){
-            if (c.kind === 'todo' && need <= 1) return false;
-            if (c.kind === 'info' && need > 1) return false;
+        // 待辦＝需回覆／回簽，或標題寫著「待…裁示／決策／簽核／核准／審核／確認」的通知（如品質異常單「待技術課主管裁示」，
+        // 系統以「僅閱讀」模式發出但仍需要人去處理）
+        function isTodo(need, title){ return need > 1 || /待[^，。]{0,12}(裁示|決策|決定|簽核|核准|審核|確認)/.test(title || ''); }
+        function hit(c, rt, need, src, title){
+            var todo = isTodo(need, title);
+            if (c.kind === 'todo' && !todo) return false;
+            if (c.kind === 'info' && todo) return false;
             if (!c.src || !c.src.length) return true;
             for (var i = 0; i < c.src.length; i++) {
                 var p = c.src[i];
@@ -483,6 +491,17 @@ window.addEventListener('load', function(){
         }
         function rebuild(){
             var $items = $('#menu1 li[id^="notice_item_"]');
+            // 已歸入任一分類鈴鐺的通知，主鈴鐺不再重複顯示（只隱藏，項目仍在 DOM 供分類複製與已讀移除使用）
+            $items.each(function(){
+                var $a = $(this).find('a.notice-open').first(); if (!$a.length) return;
+                var rt = String($a.attr('data-reftype') || ''), need = parseInt($a.attr('data-needmode'), 10) || 1, src = String($a.attr('data-source') || '');
+                var ttl = String($a.attr('data-title') || '');
+                var inCat = CATS.some(function(c){ return hit(c, rt, need, src, ttl); });
+                $(this).toggleClass('nbcat-hid', inCat).css('display', inCat ? 'none' : '');
+            });
+            var vis = $items.not('.nbcat-hid').length;
+            if (vis > 0) { $('#notice_badge').text(vis).show(); $('#notice_head_count').text(vis + ' 則未讀').show(); $('#notice_empty').hide(); }
+            else { $('#notice_badge').hide(); $('#notice_head_count').hide(); $('#notice_empty').show(); }
             CATS.forEach(function(c){
                 var $list = $('#nbcat_list_' + c.id); if (!$list.length) return;
                 $list.empty();
@@ -490,7 +509,7 @@ window.addEventListener('load', function(){
                 $items.each(function(){
                     var $a = $(this).find('a.notice-open').first(); if (!$a.length) return;
                     var rt = String($a.attr('data-reftype') || ''), need = parseInt($a.attr('data-needmode'), 10) || 1;
-                    if (!hit(c, rt, need, String($a.attr('data-source') || ''))) return;
+                    if (!hit(c, rt, need, String($a.attr('data-source') || ''), String($a.attr('data-title') || ''))) return;
                     n++;
                     $('<li class="notice-row nbcat-row"></li>').append($a.clone()).appendTo($list);
                 });
@@ -590,7 +609,7 @@ window.addEventListener('load', function(){
 
         function nmRemoveFromList() {
             $('#notice_item_' + nmId).remove();
-            var remain = $('#menu1 li[id^="notice_item_"]').length;
+            var remain = $('#menu1 li[id^="notice_item_"]').not('.nbcat-hid').length;
             if (remain > 0) { $('#notice_badge').text(remain).show(); $('#notice_head_count').text(remain + ' 則未讀').show(); }
             else { $('#notice_badge').hide(); $('#notice_head_count').hide(); $('#notice_empty').show(); }
         }
@@ -629,6 +648,12 @@ window.addEventListener('load', function(){
                 // 但若此通知要求回簽/回覆(need_mode>1)，動作完成前不可從置頂欄未讀清單移除
                 window.open('../QA/qa_abnormal_view.php?event=' + nmId);
                 if (parseInt($(this).data('needmode'), 10) <= 1) nmRemoveFromList();
+                return;
+            }
+            if (refType === 'BOM_REORDER' || refType === 'BOM_REORDER_RESULT') {
+                // BOM 換製程順序：開審核頁（設計核准/退回；結果通知只看）。待審通知在決行前不移除
+                window.open('../pm/bom_reorder_review.php?req=' + $(this).data('refid') + '&event=' + nmId);
+                if (refType === 'BOM_REORDER_RESULT') nmMarkRead(nmRemoveFromList);
                 return;
             }
             if (refType === 'CAR') {
@@ -795,6 +820,18 @@ window.addEventListener('load', function(){
                 // 頁面會自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)。
                 window.open('../ADM/business_trip.php?trip_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
                 if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'MEMO_APPROVAL') {
+                // 簽呈待批示：開簽呈頁帶 memo_approve，自動跳出批示視窗；批示完成前不移除(mode=sign)
+                window.open('../ADM/memo_request.php?memo_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'MEMO_RESULT') {
+                // 簽呈結果／回覆通知：純資訊型，開該張簽呈後標記已讀移除
+                window.open('../ADM/memo_request.php?memo_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
                 return;
             }
             if (refType === 'NOTICE_APPROVAL') {

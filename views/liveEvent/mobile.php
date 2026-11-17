@@ -169,6 +169,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (rt === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + $(this).data('id'); return; }
             // 異常矯正處理單 → 開單據頁並自動彈出該單填寫（當事人無檢閱權限也可開，open_id=ref_id=car_id）
             if (rt === 'CAR'){ location.href = '../QA/correction_order.php?open_id=' + $(this).data('refid'); return; }
+            if (rt === 'BOM_REORDER' || rt === 'BOM_REORDER_RESULT'){ location.href = '../pm/bom_reorder_review.php?req=' + $(this).data('refid') + '&event=' + $(this).data('id'); return; }
             if (rt === 'DWG'){ location.href = '../QC/drawing_change_log.php?ack=' + $(this).data('refid'); return; }
             if (rt === 'QAB_L1' || rt === 'QAB_VENDOR'){ location.href = '../QA/qa_abnormal_form.php?id=' + $(this).data('refid'); return; }
             // 處置判定/最終裁決 → 決策畫面（判定完成前不標已讀，任一決策者判定後全員自動消失）
@@ -207,6 +208,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             // 品質異常單通知（如舊推播連到本頁）→ 導向異常單檢視頁；修改請求/開放修改 → 品管合併檢驗頁
             if (e.ref_type === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + e.id; return; }
             if (e.ref_type === 'CAR'){ location.href = '../QA/correction_order.php?open_id=' + (e.ref_id || 0); return; }
+            if (e.ref_type === 'BOM_REORDER' || e.ref_type === 'BOM_REORDER_RESULT'){ location.href = '../pm/bom_reorder_review.php?req=' + (e.ref_id || 0) + '&event=' + e.id; return; }
             if (e.ref_type === 'DWG'){ location.href = '../QC/drawing_change_log.php?ack=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QAB_L1' || e.ref_type === 'QAB_VENDOR'){ location.href = '../QA/qa_abnormal_form.php?id=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_DECIDE' || e.ref_type === 'QA_DECIDE_F'){ location.href = '../QC/inspection_combined_prototype.php?decide_abnormal=' + (e.ref_id || 0); return; }
@@ -225,6 +227,9 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             // 走這裡的通用「回簽」只會把通知標成已回簽、通知單其實沒有被簽掉（比照 MEETING_APPROVAL 的既有判斷）。
             // 純資訊型的會議通知(MEETING_NOTICE_INFO)不必導頁，內容本身已含時間地點與會議要項，在這裡看完即可。
             // 表格模板單據待簽核／結果：一律導到填寫頁（待簽核的要在那裡按核准／退回，通用回簽只會標已讀、單據其實沒簽掉）
+            // 簽呈待批示／結果：一律導到簽呈頁（待批示的要在那裡核准／退回，通用回簽只會標已讀、簽呈其實沒簽掉）
+            if (e.ref_type === 'MEMO_APPROVAL'){ location.href = '../ADM/memo_request.php?memo_approve=' + (e.ref_id || 0) + '&event=' + e.id; return; }
+            if (e.ref_type === 'MEMO_RESULT'){ location.href = '../ADM/memo_request.php?memo_id=' + (e.ref_id || 0) + '&event=' + e.id; return; }
             if (e.ref_type === 'SHEET_FORM_APPROVAL'){ location.href = '../ADM/sheet_form.php?decide=' + (e.ref_id || 0) + '&event=' + e.id; return; }
             if (e.ref_type === 'SHEET_FORM_RESULT'){ location.href = '../ADM/sheet_form.php?inst=' + (e.ref_id || 0) + '&event=' + e.id; return; }
             if (e.ref_type === 'MEETING_NOTICE'){ location.href = '../ADM/meeting_record.php?notice=' + (e.ref_id || 0) + '&event=' + e.id; return; }

@@ -139,6 +139,14 @@ if (!function_exists('eg_bom_timeline')) {
             require_once __DIR__ . '/bom_check_lib.php';
             foreach (eg_bomchk_events($db, $bom) as $x) $add($x['ts'], 0, 'check', $x['label'], $x['text'], $x['who'], $x['tone']);
         } catch (Throwable $eChk) { }
+        // 換製程順序：誰在什麼時候申請、誰核准或退回（含備註）
+        try {
+            require_once __DIR__ . '/bom_reorder_lib.php';
+            foreach (bro_records($db, $bom) as $x) {
+                $add($x['requested_at'], 0, 'reorder', '申請換順序', $x['desc'] . ($x['reason'] !== '' ? '（' . $x['reason'] . '）' : ''), $x['requested_by'], 'yellow');
+                if ($x['status'] !== 'pending') $add($x['decided_at'], 0, 'reorder', $x['status'] === 'approved' ? '核准換順序' : '退回換順序', $x['desc'] . ($x['decide_note'] !== '' ? '｜備註：' . $x['decide_note'] : ''), $x['decided_by'], $x['status'] === 'approved' ? 'green' : 'red');
+            }
+        } catch (Throwable $eRo) { }
         // 人員姓名補齊（Created_By／issued_by 可能是代號）
         $ids = [];
         foreach ($ev as $e) if ($e['who'] !== '' && ctype_digit($e['who'])) $ids[$e['who']] = 1;
