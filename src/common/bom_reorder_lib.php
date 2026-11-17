@@ -177,7 +177,6 @@ if (!function_exists('bro_describe')) {
         foreach ($groups as $g) { $by[$g['sn']] = $g; }
         $lab = function ($sn) use ($by) { $g = $by[$sn] ?? null; return $g ? ('SN' . $sn . ' ' . ($g['name'] !== '' ? $g['name'] : $g['process_no'])) : ('SN' . $sn); };
         $t = $lab($movedSn) . ' 移到 ' . $lab($targetSn) . ($pos === 'before' ? ' 之前' : ' 之後');
-        if ($map) { $p = []; foreach ($map as $o => $n) $p[] = 'SN' . $o . '→SN' . $n; $t .= '（SN 變更：' . implode('、', $p) . '）'; }
         return $t;
     }
 }

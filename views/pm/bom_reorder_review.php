@@ -57,7 +57,8 @@ h2{margin:0 0 10px;font-size:18px;}
 .kv{margin:4px 0;line-height:1.6;} .kv b{display:inline-block;min-width:84px;color:#8a6a45;}
 a{color:#B8431F;}
 table{border-collapse:collapse;width:100%;font-size:13px;} th,td{border-bottom:1px solid #eee;padding:5px 6px;text-align:left;}
-tr.mv td{background:#FDEBD3;font-weight:bold;}
+tr.old td{background:#FBE3DC;} tr.old td .nm{text-decoration:line-through;text-decoration-color:#B8431F;}
+tr.new td{background:#E3EDD2;font-weight:bold;} .newb{display:inline-block;background:#F6C94A;color:#5a3d00;font-size:11px;font-weight:bold;padding:0 6px;border-radius:8px;}
 .st{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:bold;background:#F0A24B;color:#5a2d0c;}
 .st.approved{background:#8a6a45;color:#fff;} .st.rejected{background:#DD5138;color:#fff;}
 textarea{width:100%;box-sizing:border-box;min-height:60px;padding:6px;border:1px solid #d9c2a3;border-radius:4px;font-size:14px;}
@@ -70,7 +71,7 @@ button{padding:8px 18px;border:0;border-radius:4px;font-size:14px;font-weight:bo
   <div class="kv"><b>料號</b><a href="<?= $h($partLink) ?>" target="_blank" rel="noopener" title="開啟料號圖面"><?= $h($info['part_no'] ?? '') ?></a></div>
   <div class="kv"><b>數量</b><?= $h(rtrim(rtrim(number_format((float)($info['qty'] ?? 0), 3, '.', ''), '0'), '.')) ?></div>
   <?php if (!empty($info['order_oo'])): ?><div class="kv"><b>訂單</b><?= $h($info['order_oo']) ?></div><?php endif; ?>
-  <div class="kv"><b>申請內容</b><?= $h($brief['desc'] ?? '') ?></div>
+  <div class="kv"><b>申請內容</b><?= $h(preg_replace('/（SN 變更：.*）$/u', '', (string)($brief['desc'] ?? ''))) ?></div>
   <div class="kv"><b>申請人</b><?= $h($reqName) ?>　<?= $h(substr((string)$req['requested_at'], 0, 16)) ?></div>
   <?php if (trim((string)$req['reason']) !== ''): ?><div class="kv"><b>備註</b><?= $h($req['reason']) ?></div><?php endif; ?>
   <div class="kv"><b>負責設計</b><?= $h($des['primary'] ? bro_user_name($db, $des['primary']) : '（訂單未指定）') ?>　<span style="font-size:12px;color:#8a6a45;">設計／技術部門任一人皆可審核</span></div>
@@ -80,8 +81,28 @@ button{padding:8px 18px;border:0;border-radius:4px;font-size:14px;font-weight:bo
 </div>
 <div class="card"><b>目前製程順序與狀態</b>
   <table><tr><th>SN</th><th>製程</th><th>狀態</th><th>QC</th></tr>
-  <?php foreach ($groups as $g): ?>
-    <tr class="<?= (int)$g['sn'] === (int)$req['moved_sn'] && $req['status'] === 'pending' ? 'mv' : '' ?>"><td><?= (int)$g['sn'] ?></td><td><?= $h($g['name'] !== '' ? $g['name'] : $g['process_no']) ?></td>
+  <?php
+  // 申請中：舊位置（淺紅底＋刪除線，文字照常可讀）與新位置（暖綠底＋NEW）同時列出
+  $rows = [];
+  $mvSn = (int)$req['moved_sn'];
+  $showNew = false;
+  if ($req['status'] === 'pending') {
+      $plan = bro_plan($groups, $mvSn, (int)$req['target_sn'], (string)$req['pos'], $req['new_sn'] !== null, $req['new_sn'] !== null ? (int)$req['new_sn'] : null);
+      if ($plan['ok']) {
+          $showNew = true;
+          $ord = $plan['order']; $ix = array_search($mvSn, $ord, true);
+          $pred = $ix > 0 ? $ord[$ix - 1] : null;
+          $newSn = $plan['map'][$mvSn] ?? $mvSn;
+      }
+  }
+  $mvG = null; foreach ($groups as $g) if ((int)$g['sn'] === $mvSn) $mvG = $g;
+  if ($showNew && $pred === null) $rows[] = ['g' => $mvG, 'kind' => 'new', 'sn' => $newSn];
+  foreach ($groups as $g) {
+      $rows[] = ['g' => $g, 'kind' => ($showNew && (int)$g['sn'] === $mvSn) ? 'old' : '', 'sn' => $g['sn']];
+      if ($showNew && $pred !== null && (int)$g['sn'] === (int)$pred) $rows[] = ['g' => $mvG, 'kind' => 'new', 'sn' => $newSn];
+  }
+  foreach ($rows as $r): $g = $r['g']; ?>
+    <tr class="<?= $r['kind'] ?>"><td><?= (int)$r['sn'] ?></td><td><span class="nm"><?= $h($g['name'] !== '' ? $g['name'] : $g['process_no']) ?></span><?= $r['kind'] === 'new' ? ' <span class="newb">NEW</span>' : '' ?><?= $r['kind'] === 'old' ? ' <span style="font-size:11px;color:#B8431F;">（原位置）</span>' : '' ?></td>
     <td><?= $h(bro_state_text($g['state'])) ?></td><td><?= $g['qc_completed'] ? '已完工' : ($g['QC_check'] ? '已檢驗未完工' : '—') ?></td></tr>
   <?php endforeach; ?></table>
 </div>

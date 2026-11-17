@@ -7677,10 +7677,12 @@ echo "</script>\n";
                                 }
                                 // QC 檢驗結果：每一關只要有檢驗紀錄就顯示（檢驗日＋結果＋是否已按完工）；「已移轉」那行已含允收字樣者不重複
                                 if (processInfo.QC_check && !(isCurrentProcess && _hlE && _dynRawSt === 'E')) {
-                                    var _qcMap = {ok: '允收', ng: '驗退', QQ: '異常', AOD: '特採'};
-                                    var _qcCol = {ok: '#1a7a1a', ng: '#B8431F', QQ: '#B8431F', AOD: '#8a6a45'}[processInfo.QC_check] || '#555';
+                                    var _qcBad = (processInfo.QC_check === 'ng' || processInfo.QC_check === 'QQ');
                                     var _qcMd = processInfo.QC_check_date ? formatDateAsMd(processInfo.QC_check_date) + ' ' : '';
-                                    tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${_qcCol};" title="QC 檢驗結果">QC ${_qcMd}${escapeHtml(_qcMap[processInfo.QC_check] || String(processInfo.QC_check))}${processInfo.qc_completed == 1 ? '・已完工' : '・未完工'}</div>`;
+                                    var _qcDone = processInfo.qc_completed == 1;
+                                    // 已完工且合格＝綠勾 OK；不良＝紅 NG；其餘（特採、尚未完工）不給綠勾
+                                    var _qcTxt = _qcBad ? '<b>NG</b>' : (_qcDone ? '<span style="color:#1a7a1a;font-weight:bold;">&#10004;</span> OK' : (processInfo.QC_check === 'AOD' ? '特採' : 'OK'));
+                                    tdDynamicProcess.innerHTML += `<div style="font-size: 0.9em; color: ${_qcBad ? '#B8431F' : (_qcDone ? '#1a7a1a' : '#8a6a45')};" title="QC 檢驗結果：${_qcDone ? '已完工' : '尚未完工'}">QC ${_qcMd}${_qcTxt}</div>`;
                                 }
                             }
 
