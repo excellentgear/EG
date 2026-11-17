@@ -166,6 +166,7 @@ body { background:#F6F1EA; }
 </style>
 </head>
 <body class="nav-sm">
+<div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html'; ?>
 <div class="right_col" role="main">
   <div class="page-title">
@@ -192,6 +193,7 @@ body { background:#F6F1EA; }
   <div id="plvBody"><div class="plv-empty">載入中…</div></div>
 <?php endif; ?>
 </div>
+</div></div>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
