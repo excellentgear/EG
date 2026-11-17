@@ -348,6 +348,12 @@ $pk_features = rf_load_user_features($pdo, $pk_uid);
 $PK_CAN_BACKFILL = rf_has_feature($pk_features, 'pk_backfill');
 $PK_CAN_BACKFILL_PACKER = rf_has_feature($pk_features, 'pk_backfill_change_packer');
 $PK_CAN_ADMIN = rf_has_feature($pk_features, 'pk_admin');
+// 按鈕級功能碼（pk_admin 視同全部具備，既有管理員不受影響）
+$PK_CAN_SETTING = $PK_CAN_ADMIN || rf_has_feature($pk_features, 'pk_setting');           // 包裝製程設定
+$PK_CAN_TEMPLATE = $PK_CAN_ADMIN || rf_has_feature($pk_features, 'pk_template');         // 外觀檢驗模板
+$PK_CAN_PRINTSET = $PK_CAN_ADMIN || rf_has_feature($pk_features, 'pk_print_setting');    // 標籤／檢驗表列印設定
+$PK_CAN_UNLOCK = $PK_CAN_ADMIN || rf_has_feature($pk_features, 'pk_unlock');             // 解鎖修改已結案紀錄
+$PK_CAN_ROLE = $PK_CAN_ADMIN || rf_has_feature($pk_features, 'pk_role');                 // 角色與功能設定
 // 頁首顯示目前登入者在本頁（module=packing_schedule）被指派的角色
 $PK_ROLE_LABEL = '一般使用者';
 try {
@@ -381,7 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 3. 儲存包裝製程設定（多選）
         if ($action === 'save_packing_setting') {
-            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            if (!$PK_CAN_SETTING) throw new Exception('無權限，僅管理員可設定');
             $nos = $_POST['process_nos'] ?? [];
             if (!is_array($nos)) $nos = [];
             $nos = array_values(array_unique(array_map('intval', $nos)));
@@ -413,7 +419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 3c. 儲存「補登可指定包裝人員」的部門設定（可多選，含子部門；空＝不限制，僅管理員可設）
         if ($action === 'save_packer_dept_setting') {
-            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            if (!$PK_CAN_SETTING) throw new Exception('無權限，僅管理員可設定');
             $ids = $_POST['dept_ids'] ?? [];
             if (!is_array($ids)) $ids = [];
             $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
@@ -447,7 +453,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 3e. 儲存「補登預設檢驗人員」設定（僅管理員可設；補登時嚴禁自動變成正在操作補登的人，
         //    這個設定值就是取代方案——見 save_result 的 $isBackfill 分支）
         if ($action === 'save_default_inspector_setting') {
-            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            if (!$PK_CAN_SETTING) throw new Exception('無權限，僅管理員可設定');
             $defId = intval($_POST['inspector_id'] ?? 0);
             if ($defId) {
                 $du = $pdo->prepare("SELECT id FROM `user` WHERE id = ? LIMIT 1");
@@ -652,7 +658,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 5b. 儲存預設模板項目（整批覆寫）
         if ($action === 'save_template') {
-            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            if (!$PK_CAN_TEMPLATE) throw new Exception('無權限，僅管理員可設定');
             $items = $_POST['items'] ?? [];
             if (!is_array($items)) $items = [];
             $pdo->beginTransaction();
@@ -903,7 +909,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 已結案紀錄要改：僅管理員可操作，且要輸入操作確認密碼才算解鎖（鐵律8：不可只靠前端擋）
             $needPasswordNote = false;
             if ($cur && $cur['status'] === 'closed') {
-                if (!$PK_CAN_ADMIN) throw new Exception('此紀錄已結案鎖定，需管理員權限才能修改');
+                if (!$PK_CAN_UNLOCK) throw new Exception('此紀錄已結案鎖定，需管理員權限才能修改');
                 $pw = (string)($_POST['confirm_password'] ?? '');
                 if ($pw === '') throw new Exception('此紀錄已結案鎖定，請輸入操作確認密碼才能修改');
                 $vr = eg_confirm_password_verify_scoped($pdo, $pk_uid, $pw, 'pk_edit_closed');
@@ -1184,7 +1190,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $hdr->execute([(int)$row['bom_ing_fid']]);
             $row['header'] = $hdr->fetch(PDO::FETCH_ASSOC) ?: null;
 
-            echo json_encode(['success' => true, 'row' => $row, 'can_edit' => (bool)$PK_CAN_ADMIN]);
+            echo json_encode(['success' => true, 'row' => $row, 'can_edit' => (bool)$PK_CAN_UNLOCK]);
             exit;
         }
 
@@ -1225,7 +1231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         //      包裝日期編號的編碼原則（前綴／流水號位數）一併在此存檔——改了只影響「之後才結案」
         //      的新紀錄，已經配過號的既有紀錄一律不受影響（pk_packno_rule_save 本身不碰任何既有資料）。
         if ($action === 'print_setting_save') {
-            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            if (!$PK_CAN_PRINTSET) throw new Exception('無權限，僅管理員可設定');
             $docId = (int)($_POST['as_doc_id'] ?? 0);
             if ($docId) {
                 $chk = $pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0");
@@ -1516,15 +1522,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <div class="title_right">
                             <span class="pull-right" id="pk-role-badge" style="margin:6px 12px 0 4px;font-size:13px;color:#5b3a1e;background:#F7E0BD;border-radius:12px;padding:4px 12px;">目前角色：<b><?= htmlspecialchars($PK_ROLE_LABEL) ?></b></span>
                             <button class="page-help-btn pull-right" id="btn-page-help" title="使用說明" style="margin-right:8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
-                            <?php if ($PK_CAN_ADMIN): ?>
+                            <?php if ($PK_CAN_ROLE): ?>
                             <button class="btn btn-default pull-right" id="btn-role-setting" style="margin-right:8px;"><i class="fa fa-key"></i> 角色與功能設定</button>
                             <?php endif; ?>
                             <?php if ($PK_CAN_BACKFILL): ?>
                             <button class="btn btn-warning pull-right" id="btn-backfill" style="margin-right:8px;"><i class="fa fa-history"></i> 補登包裝紀錄</button>
                             <?php endif; ?>
-                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button><?php endif; ?>
-                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-print-setting-top" style="margin-right:8px;"><i class="fa fa-print"></i> 標籤／檢驗表列印設定</button><?php endif; ?>
-                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button><?php endif; ?>
+                            <?php if ($PK_CAN_SETTING): ?><button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button><?php endif; ?>
+                            <?php if ($PK_CAN_PRINTSET): ?><button class="btn btn-default pull-right" id="btn-print-setting-top" style="margin-right:8px;"><i class="fa fa-print"></i> 標籤／檢驗表列印設定</button><?php endif; ?>
+                            <?php if ($PK_CAN_TEMPLATE): ?><button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button><?php endif; ?>
                             <button class="btn btn-default pull-right" id="btn-refresh" style="margin-right:8px;"><i class="fa fa-refresh"></i> 重新整理</button>
                         </div>
                     </div>
@@ -1589,12 +1595,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                             <button class="btn btn-default btn-sm" id="btn-cl-reset">清除篩選(本月)</button>
                                             <button class="btn btn-default btn-sm" id="btn-cl-print"><i class="fa fa-print"></i> 列印已包裝明細</button>
                                             <button class="btn btn-default btn-sm" id="btn-cl-print-batch"><i class="fa fa-files-o"></i> 批次列印檢驗表</button>
-                                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default btn-sm" id="btn-print-setting"><i class="fa fa-cog"></i> 檢驗表列印設定</button><?php endif; ?>
+                                            <?php if ($PK_CAN_PRINTSET): ?><button class="btn btn-default btn-sm" id="btn-print-setting"><i class="fa fa-cog"></i> 檢驗表列印設定</button><?php endif; ?>
                                         </div>
                                     </div>
                                     <p class="text-muted" style="margin-bottom:10px;">
                                         <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號（同一欄，符合任一即列出）不限定年月份。
-                                        已結案紀錄鎖定不可修改，<?= $PK_CAN_ADMIN ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
+                                        已結案紀錄鎖定不可修改，<?= $PK_CAN_UNLOCK ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
                                         「列印已包裝明細」是清單彙總表；每一列右側 <i class="fa fa-print"></i> 或「批次列印檢驗表」印的是正式的包裝自主檢查表（依目前篩選結果逐筆各自列印）。
                                         <span class="pk-count-badge pull-right" id="cl-count"></span>
                                     </p>
@@ -1639,7 +1645,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="modal-body">
                     <p class="text-muted">選擇要視為「包裝製程」的製程編號，可多選。設定後此頁僅顯示這些製程的 BOM。</p>
                     <select id="setting-process" class="form-control" multiple style="width:100%;"></select>
-                    <?php if ($PK_CAN_ADMIN): ?>
+                    <?php if ($PK_CAN_SETTING): ?>
                     <hr>
                     <p class="text-muted">可指定的「包裝人員／檢驗人員」範圍（僅管理員可設定，兩者共用同一份範圍）：選擇部門，可多選，<strong>各部門一律含底下所有子部門</strong>；不選任何部門＝不限制，全公司在職人員皆可挑選。填寫檢驗表單時挑選檢驗人員、補登舊資料時挑選包裝人員，都只能從這裡設定的部門範圍中選擇（本人不受此限制，一律可選自己）。</p>
                     <select id="setting-packer-dept" class="form-control" multiple style="width:100%;"></select>
@@ -1931,7 +1937,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     </div>
     <?php endif; ?>
 
-    <?php if ($PK_CAN_ADMIN): ?>
+    <?php if ($PK_CAN_ROLE): ?>
     <!-- 角色與功能設定（module=packing_schedule）；使用者與角色的對應請至 user_permissions.php 指派 -->
     <div class="modal fade" id="roleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -1964,7 +1970,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     </div></div></div>
     <?php endif; ?>
 
-    <?php if ($PK_CAN_ADMIN): ?>
+    <?php if ($PK_CAN_PRINTSET): ?>
     <!-- 已結案檢驗表列印設定：AS 文件編號綁定（ai-rules/16 一之三，僅管理員可改） -->
     <div class="modal fade" id="printSetModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -2197,6 +2203,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var PK_CAN_BACKFILL = <?= $PK_CAN_BACKFILL ? 'true' : 'false' ?>;
         var PK_CAN_BACKFILL_PACKER = <?= $PK_CAN_BACKFILL_PACKER ? 'true' : 'false' ?>;
         var PK_CAN_ADMIN = <?= $PK_CAN_ADMIN ? 'true' : 'false' ?>;
+        var PK_CAN_SETTING = <?= $PK_CAN_SETTING ? 'true' : 'false' ?>;
+        var PK_CAN_UNLOCK = <?= $PK_CAN_UNLOCK ? 'true' : 'false' ?>;
         var PK_CUR_UID = <?= (int)$user_id ?>;
         var PK_CUR_UNAME = <?= json_encode($user_cname, JSON_UNESCAPED_UNICODE) ?>;
 
@@ -2959,7 +2967,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $.post(API, { action: 'get_packing_setting' }, function (r2) {
                     $sel.val((r2.process_nos || []).map(String));
                     $sel.select2({ dropdownParent: $('#settingModal'), placeholder: '選擇包裝製程...', width: '100%' });
-                    if (PK_CAN_ADMIN && $('#setting-packer-dept').length) {
+                    if (PK_CAN_SETTING && $('#setting-packer-dept').length) {
                         $.post(API, { action: 'list_departments' }, function (dres) {
                             var $dsel = $('#setting-packer-dept').empty();
                             if ($dsel.hasClass('select2-hidden-accessible')) $dsel.select2('destroy');
@@ -2984,7 +2992,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var vals = $('#setting-process').val() || [];
             $.post(API, { action: 'save_packing_setting', process_nos: vals }, function (res) {
                 if (!res.success) { alert('儲存失敗: ' + res.message); return; }
-                if (PK_CAN_ADMIN && $('#setting-packer-dept').length) {
+                if (PK_CAN_SETTING && $('#setting-packer-dept').length) {
                     var deptVals = $('#setting-packer-dept').val() || [];
                     $.post(API, { action: 'save_packer_dept_setting', dept_ids: deptVals }, function (dres) {
                         if (!dres.success) { alert('包裝人員部門設定儲存失敗: ' + dres.message); return; }
@@ -3213,7 +3221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         '<td class="text-right">' +
                             '<button class="btn btn-xs btn-default cl-view" data-id="' + r.packing_inspection_id + '" title="檢視"><i class="fa fa-eye"></i></button> ' +
                             '<button class="btn btn-xs btn-default cl-print" data-id="' + r.packing_inspection_id + '" title="列印檢驗表"><i class="fa fa-print"></i></button> ' +
-                            (PK_CAN_ADMIN ? '<button class="btn btn-xs btn-warning cl-unlock" data-id="' + r.packing_inspection_id + '" title="解鎖修改"><i class="fa fa-unlock"></i></button>' : '') +
+                            (PK_CAN_UNLOCK ? '<button class="btn btn-xs btn-warning cl-unlock" data-id="' + r.packing_inspection_id + '" title="解鎖修改"><i class="fa fa-unlock"></i></button>' : '') +
                         '</td>' +
                         '</tr>';
                 });
@@ -3514,7 +3522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         });
 
         // ── 檢驗表列印設定（AS 文件編號綁定＋包裝日期編號規則）：限管理員 ─────────────────────
-        <?php if ($PK_CAN_ADMIN): ?>
+        <?php if ($PK_CAN_PRINTSET): ?>
         var PKI_PRINT_SET = { docs: [], docId: 0, doc: null, lblId: 0, lblDoc: null };
         $('#btn-print-setting, #btn-print-setting-top').click(function () {
             $.post(API, { action: 'print_setting_get' }, function (r) {
@@ -3628,12 +3636,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <?php endif; ?>
 
         // ---------- 角色與功能設定 ----------
-        <?php if ($PK_CAN_ADMIN): ?>
+        <?php if ($PK_CAN_ROLE): ?>
         var ROLES_API = '../../src/store/Roles_API.php';
         var PK_FEATURES = [
             ['pk_backfill', '補登舊資料（開啟「補登包裝紀錄」搜尋與填寫）'],
             ['pk_backfill_change_packer', '補登時可指定其他人為包裝人員（否則只能填寫自己）'],
-            ['pk_admin', '管理員（解鎖修改已結案紀錄、管理角色與功能設定）']
+            ['pk_setting', '按鈕：包裝製程設定（含包裝人員部門範圍、預設檢驗人員）'],
+            ['pk_template', '按鈕：外觀檢驗模板（全系統共用的預設檢驗項目）'],
+            ['pk_print_setting', '按鈕：標籤／檢驗表列印設定（AS 文件編號綁定、包裝單號編碼）'],
+            ['pk_unlock', '按鈕：解鎖修改已結案紀錄（需操作確認密碼）'],
+            ['pk_role', '按鈕：角色與功能設定'],
+            ['pk_admin', '管理員（以上全部功能）']
         ];
         var curRole = null;
         function pkEsc(s) { return $('<div>').text(s == null ? '' : s).html(); }
