@@ -12131,7 +12131,7 @@ echo "</script>\n";
                 if (!el || !r || !r.success || !r.records || !r.records.length) return;
                 el.style.display = '';
                 el.innerHTML = '<b>換順序紀錄</b><br>' + r.records.map(function (x) {
-                    var h = '申請：' + escapeHtml(x.requested_by) + ' ' + escapeHtml(x.requested_at.substr(0, 16)) + '　' + escapeHtml(x.desc) + (x.reason ? '（' + escapeHtml(x.reason) + '）' : '');
+                    var h = '申請：' + escapeHtml(x.requested_by) + ' ' + escapeHtml(x.requested_at.substr(0, 16)) + '　' + escapeHtml(x.desc) + (x.reason ? '<br>備註：' + escapeHtml(x.reason) : '');
                     if (x.status === 'pending') h += '<br>　<span style="color:#B8431F;">等待設計部門審核</span>';
                     else h += '<br>　' + (x.status === 'approved' ? '核准' : '<span style="color:#B8431F;">退回</span>') + '：' + escapeHtml(x.decided_by) + ' ' + escapeHtml(x.decided_at.substr(0, 16)) + (x.decide_note ? '　' + escapeHtml(x.decide_note) : '');
                     return h;

@@ -320,7 +320,7 @@ if (!function_exists('bro_notify')) {
         $out = [];
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $b = json_decode((string)$r['brief_json'], true);
-            $out[] = ['req_id' => (int)$r['req_id'], 'desc' => $b['desc'] ?? '', 'status' => $r['status'], 'reason' => (string)$r['reason'],
+            $out[] = ['req_id' => (int)$r['req_id'], 'desc' => preg_replace('/（SN 變更：.*）$/u', '', (string)($b['desc'] ?? '')), 'status' => $r['status'], 'reason' => (string)$r['reason'],
                       'requested_by' => (string)$r['req_name'], 'requested_at' => (string)$r['requested_at'],
                       'decided_by' => (string)$r['dec_name'], 'decided_at' => (string)$r['decided_at'], 'decide_note' => (string)$r['decide_note'], 'moved_fid' => (int)$r['moved_fid']];
         }
