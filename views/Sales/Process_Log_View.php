@@ -61,7 +61,7 @@ if (($_POST['action'] ?? '') === 'list') {
             array_push($par, $lk, $lk, $lk, $lk, $lk, $lk);
         }
         $sql = "SELECT el.id AS log_id, CAST(b.bind_id AS UNSIGNED) AS order_id,
-                       ot.Order_oo, ot.d_id AS part_no, ot.Client_name,
+                       ot.Order_oo, ot.d_id AS part_no, ot.Client_name, ot.Processing_items, ot.Qty, ot.d_id_ID,
                        (SELECT MAX(COALESCE(i2.asked_at, i2.created_at)) FROM eng_log_item i2 WHERE i2.log_id=el.id) AS last_at
                 FROM eng_log el
                 JOIN eng_log_bind b ON b.log_id=el.id AND b.bind_type='order'
@@ -111,7 +111,7 @@ if (($_POST['action'] ?? '') === 'list') {
                           'who' => $names[(int)$it['created_by']] ?? '', 'replies' => $rp];
             }
             $out[] = ['order_id' => (int)$l['order_id'], 'order_no' => $l['Order_oo'], 'part' => $l['part_no'],
-                      'customer' => $l['Client_name'], 'boms' => $boms[$lid] ?? [], 'items' => $its];
+                      'customer' => $l['Client_name'], 'proc' => $l['Processing_items'], 'qty' => $l['Qty'], 'pk' => (int)$l['d_id_ID'], 'boms' => $boms[$lid] ?? [], 'items' => $its];
         }
         echo json_encode(['success' => true, 'logs' => $out, 'truncated' => count($logs) >= 300], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -162,6 +162,14 @@ body { background:#F6F1EA; }
 .plv-st.done { background:#d9cbb4; color:#6B4423; }
 .plv-st.note { background:#EFE3CF; color:#6B4423; }
 .plv-rp { margin:3px 0 0 14px; padding-left:8px; border-left:2px dotted var(--line); font-size:13px; white-space:pre-wrap; }
+.plv-sticky { position:sticky; top:0; z-index:50; background:#F6F1EA; padding-top:6px; margin-bottom:8px; }
+.plv-sticky .warm-panel { margin-bottom:6px; box-shadow:0 2px 6px rgba(74,53,36,.12); }
+.plv-pg { display:flex; justify-content:flex-end; align-items:center; gap:6px; margin:4px 0; }
+.plv-pg button { height:28px; min-width:30px; border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); border-radius:4px; }
+.plv-pg button:disabled { opacity:.4; cursor:default; }
+.plv-link { color:#8a5a2b; text-decoration:underline; cursor:pointer; }
+.plv-link:hover { color:var(--coral); }
+#plvTop { position:fixed; right:22px; bottom:22px; z-index:60; width:42px; height:42px; border-radius:50%; border:0; background:var(--amber-d); color:#fff; font-size:18px; display:none; box-shadow:0 2px 8px rgba(0,0,0,.3); }
 .plv-empty { text-align:center; color:var(--muted); padding:30px; }
 </style>
 </head>
@@ -180,6 +188,7 @@ body { background:#F6F1EA; }
     這裡只能<b>查看</b>，不能新增、編輯或回覆。每筆紀錄依「客戶 → 料號」分組；紀錄綁定的是<b>訂單</b>，
     並一併列出該訂單對應的 <b>BOM 編號</b>（BOM 還沒開出來的訂單會顯示「尚無 BOM」）。要新增或回覆請回訂單追蹤。
   </div>
+  <div class="plv-sticky">
   <div class="warm-panel">
     <div class="plv-bar">
       <input type="text" id="fCust" placeholder="客戶" value="<?= plvEsc($initCust) ?>">
@@ -190,7 +199,10 @@ body { background:#F6F1EA; }
       <span id="plvCnt" class="plv-meta"></span>
     </div>
   </div>
+  <div class="plv-pg" id="plvPg"></div>
+  </div>
   <div id="plvBody"><div class="plv-empty">載入中…</div></div>
+  <button type="button" id="plvTop" title="回頂端"><i class="fa fa-chevron-up"></i></button>
 <?php endif; ?>
 </div>
 </div></div>
@@ -207,24 +219,50 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 (function(){
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function dd(s){ return s ? (window.egFmtDate ? egFmtDate(String(s).substr(0,10)) : String(s).substr(0,10)) : ''; }
-  var ST = {open:'待處理', replied:'已回覆', resolved:'已處理', dropped:'不處理', waiting:'等待回覆'};
+  // 狀態：已回覆但尚未標記已處理＝「處理中」（使用者要求，2026-11-17；只改本唯讀頁的顯示）
+  var ST = {open:'待回覆', waiting:'待回覆', answered:'處理中', replied:'處理中', resolved:'已處理', dropped:'不處理'};
+  var PER = 5, PAGE = 1, LOGS = [];
+  function pop(url, name){ window.open(url, name, 'width=1280,height=820,scrollbars=yes,resizable=yes'); }
+  $(document).on('click', '.plv-link', function(){
+    var t = $(this).data('t'), v = $(this).data('v');
+    if (t === 'order') window.open('NewOrder_Track.php?kw=' + encodeURIComponent(v.no) + '&part=' + encodeURIComponent(v.part) + '&client=' + encodeURIComponent(v.cust), '_blank');
+    else if (t === 'bom') pop('../pm/OreadyReply_ForPm_BaseOfTime.php?bom_only=' + encodeURIComponent(v), 'plvBom');
+    else if (t === 'part') {
+      if (v.bom) pop('../pm/bom_viewer.php?bom=' + encodeURIComponent(v.bom), 'plvDraw');
+      else pop('../pm/bom_viewer.php?' + (v.pk ? 'pk=' + v.pk + '&' : '') + 'd_id=' + encodeURIComponent(v.part), 'plvDraw');
+    }
+  });
+  function dq(o){ return esc(JSON.stringify(o)); }
   function load(){
     $('#plvBody').html('<div class="plv-empty">載入中…</div>');
     $.post('', {action:'list', customer:$('#fCust').val(), part:$('#fPart').val(), kw:$('#fKw').val(), only_open:$('#fOpen').is(':checked')?1:0}, function(res){
       if (!res || !res.success) { $('#plvBody').html('<div class="plv-empty">'+esc(res&&res.message||'載入失敗')+'</div>'); return; }
-      render(res);
+      LOGS = res.logs || []; PAGE = 1; $('#plvCnt').text('共 ' + LOGS.length + ' 張訂單有製程中紀錄' + (res.truncated ? '（僅顯示前 300 張，請縮小條件）' : '')); render();
     }, 'json').fail(function(){ $('#plvBody').html('<div class="plv-empty">載入失敗，請重新整理</div>'); });
   }
-  function render(res){
-    var logs = res.logs || [], h = '', lastC = null, lastP = null;
-    $('#plvCnt').text('共 ' + logs.length + ' 張訂單有製程中紀錄' + (res.truncated ? '（僅顯示前 300 張，請縮小條件）' : ''));
-    if (!logs.length) { $('#plvBody').html('<div class="plv-empty">沒有符合條件的製程中紀錄</div>'); return; }
+  function pager(){
+    var n = Math.max(1, Math.ceil(LOGS.length / PER));
+    $('#plvPg').html('<span class="plv-meta">每頁 ' + PER + ' 筆　第 ' + PAGE + ' / ' + n + ' 頁</span>'
+      + '<button data-pg="first" ' + (PAGE<=1?'disabled':'') + '>«</button><button data-pg="prev" ' + (PAGE<=1?'disabled':'') + '>‹</button>'
+      + '<button data-pg="next" ' + (PAGE>=n?'disabled':'') + '>›</button><button data-pg="last" ' + (PAGE>=n?'disabled':'') + '>»</button>');
+  }
+  $(document).on('click', '#plvPg button', function(){
+    var n = Math.max(1, Math.ceil(LOGS.length / PER)), a = $(this).data('pg');
+    PAGE = a==='first'?1 : a==='prev'?Math.max(1,PAGE-1) : a==='next'?Math.min(n,PAGE+1) : n;
+    render(); window.scrollTo(0,0);
+  });
+  $(window).on('scroll', function(){ $('#plvTop').toggle($(window).scrollTop() > 200); });
+  $('#plvTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
+  function render(){
+    var logs = LOGS.slice((PAGE-1)*PER, PAGE*PER), h = '', lastC = null, lastP = null;
+    pager();
+    if (!LOGS.length) { $('#plvBody').html('<div class="plv-empty">沒有符合條件的製程中紀錄</div>'); return; }
     logs.forEach(function(l){
       var c = l.customer || '（未建客戶）', p = l.part || '（無料號）';
       if (c !== lastC) { h += '<div class="plv-cust"><i class="fa fa-user"></i> ' + esc(c) + '</div>'; lastC = c; lastP = null; }
-      if (p !== lastP) { h += '<div class="plv-part">' + esc(p) + '</div>'; lastP = p; }
-      h += '<div class="plv-ord"><div class="plv-ord-h">訂單 <b>' + esc(l.order_no || ('#'+l.order_id)) + '</b>　BOM：';
-      h += (l.boms && l.boms.length) ? l.boms.map(function(b){return '<span class="plv-bom">'+esc(b)+'</span>';}).join('') : '<span style="color:var(--coral)">尚無 BOM</span>';
+      if (p !== lastP) { h += '<div class="plv-part"><span class="plv-link" data-t="part" data-v="'+dq({bom:(l.boms&&l.boms[0])||'',pk:l.pk,part:l.part})+'" title="開啟圖面">' + esc(p) + '</span></div>'; lastP = p; }
+      h += '<div class="plv-ord"><div class="plv-ord-h">訂單 <b class="plv-link" data-t="order" data-v="'+dq({no:l.order_no,part:l.part,cust:l.customer})+'" title="另開分頁，篩選此筆訂單與料號">' + esc(l.order_no || ('#'+l.order_id)) + '</b>　製程：<b>' + esc(l.proc || '—') + '</b>　數量：<b>' + esc(l.qty == null ? '—' : l.qty) + '</b>　BOM：';
+      h += (l.boms && l.boms.length) ? l.boms.map(function(b){return '<span class="plv-bom plv-link" data-t="bom" data-v="'+esc(b)+'" title="另開視窗，只顯示此筆 BOM">'+esc(b)+'</span>';}).join('') : '<span style="color:var(--coral)">尚無 BOM</span>';
       h += '</div>';
       (l.items||[]).forEach(function(it){
         var isDone = (it.status==='resolved'||it.status==='dropped');
