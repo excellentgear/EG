@@ -72,11 +72,11 @@ button{padding:8px 18px;border:0;border-radius:4px;font-size:14px;font-weight:bo
   <div class="kv"><b>數量</b><?= $h(rtrim(rtrim(number_format((float)($info['qty'] ?? 0), 3, '.', ''), '0'), '.')) ?></div>
   <?php if (!empty($info['order_oo'])): ?><div class="kv"><b>訂單</b><?= $h($info['order_oo']) ?></div><?php endif; ?>
   <div class="kv"><b>申請內容</b><?= $h(preg_replace('/（SN 變更：.*）$/u', '', (string)($brief['desc'] ?? ''))) ?></div>
-  <div class="kv"><b>申請人</b><?= $h($reqName) ?>　<?= $h(substr((string)$req['requested_at'], 0, 16)) ?></div>
+  <div class="kv"><b>申請人</b><?= $h($reqName) ?>　<?= $h(str_replace('-', '.', substr((string)$req['requested_at'], 0, 10)) . substr((string)$req['requested_at'], 10, 6)) ?></div>
   <?php if (trim((string)$req['reason']) !== ''): ?><div class="kv"><b>備註</b><?= $h($req['reason']) ?></div><?php endif; ?>
   <div class="kv"><b>負責設計</b><?= $h($des['primary'] ? bro_user_name($db, $des['primary']) : '（訂單未指定）') ?>　<span style="font-size:12px;color:#8a6a45;">設計／技術部門任一人皆可審核</span></div>
   <?php if ($req['status'] !== 'pending'): ?>
-  <div class="kv"><b>審核</b><?= $h($decName) ?>　<?= $h(substr((string)$req['decided_at'], 0, 16)) ?></div>
+  <div class="kv"><b>審核</b><?= $h($decName) ?>　<?= $h(str_replace('-', '.', substr((string)$req['decided_at'], 0, 10)) . substr((string)$req['decided_at'], 10, 6)) ?></div>
   <?php if (trim((string)$req['decide_note']) !== ''): ?><div class="kv"><b>審核備註</b><?= $h($req['decide_note']) ?></div><?php endif; endif; ?>
 </div>
 <div class="card"><b>目前製程順序與狀態</b>
