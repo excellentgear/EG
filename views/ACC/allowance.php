@@ -8,7 +8,7 @@
  * 開立後，對帳進度追蹤（recon_track.php）該客戶會顯示「有折讓」，折讓視為下個帳款月份的對帳項目。
  *
  * 規則與計算一律在 src/common/acc_allowance_lib.php；資料走 src/store/AccAllowance_API.php。
- * 權限沿用 acc_perms()（roles module='accounting'）：檢閱／登錄（建立·填號·作廢）／管理員（改號碼格式）。
+ * 權限：aca_perms()（roles module='acc_allowance'）：全站管理員／本頁管理員(改設定)／會計(開立·填號·作廢)／唯讀。
  */
 session_start();
 if (!isset($_SESSION['userName'])) {
@@ -24,11 +24,11 @@ $db = (new DBConnection())->getPDO();
 acc_ensure_schema($db);
 aca_ensure_schema($db);
 $accUser = acc_current_user($db);
-$perms   = acc_perms($db, $accUser);
+$perms   = aca_perms($db, $accUser);
 $roleLbl = $perms['isAdmin'] ? '管理者'
-         : ($perms['canAdmin'] ? '會計管理員'
-         : ($perms['canEdit'] ? '會計登錄'
-         : ($perms['canView'] ? '會計檢閱' : '無權限')));
+         : ($perms['canAdmin'] ? '本頁管理員'
+         : ($perms['canEdit'] ? '會計'
+         : ($perms['canView'] ? '唯讀' : '無權限')));
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -150,8 +150,8 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     </div>
     <div class="clearfix"></div>
 <?php if (!$perms['canView']): ?>
-    <div class="a-noperm"><h4><i class="fa fa-lock"></i> 無會計模組檢閱權限</h4>
-      <p>請洽管理者於「使用者權限設定」指派「會計檢閱／會計登錄／會計管理員」角色。</p></div>
+    <div class="a-noperm"><h4><i class="fa fa-lock"></i> 沒有折讓單的使用權限</h4>
+      <p>請洽管理者於「使用者權限設定」指派「折讓單」角色（本頁管理員／會計／唯讀）。</p></div>
 <?php else: ?>
     <div class="a-bar">
       <input type="text" id="fKw" placeholder="證明單號碼／客戶／單號／料號／備註" style="width:280px;">
@@ -277,7 +277,7 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
     <h4>證明單號碼格式</h4>
     <ul><li>預設格式「客戶ID-西元年月-本月流水」（例 MR003C-202608-1）。會計管理員可在「證明單號碼格式設定」修改，只影響之後的建議編號。</li></ul>
     <h4>權限</h4>
-    <ul><li>會計檢閱：查詢；會計登錄：開立、補填號碼、附件、作廢；會計管理員：另可修改號碼格式。角色在「使用者權限設定」指派（模組 accounting）。</li></ul>
+    <ul><li>全站管理員：全部權限；本頁管理員：全部權限含修改號碼格式；會計：開立、補填號碼、附件、作廢，不可更動設定；唯讀：只能查詢。角色在「使用者權限設定」的「折讓單」區塊指派。</li></ul>
   </div></div>
 </div></div>
 <?php endif; ?>

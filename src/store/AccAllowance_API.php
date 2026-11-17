@@ -28,8 +28,8 @@ $db = (new DBConnection())->getPDO();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $u = acc_current_user($db);
 if (!$u) aal_err('未登入或連線已逾時，請重新登入', 401);
-$perms = acc_perms($db, $u);
-if (!$perms['canView']) aal_err('無會計模組檢閱權限', 403);
+$perms = aca_perms($db, $u);
+if (!$perms['canView']) aal_err('您沒有折讓單的使用權限，請洽管理員指派角色', 403);
 aca_ensure_schema($db);
 
 if (empty($_SESSION['aca_csrf'])) $_SESSION['aca_csrf'] = bin2hex(random_bytes(16));
@@ -40,8 +40,8 @@ if (in_array($action, $WRITE, true)) {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') aal_err('必須用 POST', 405);
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals($_SESSION['aca_csrf'], $tok)) aal_err('連線憑證失效，請重新整理頁面後再試 (CSRF)', 403);
-    if ($action === 'format_save') { if (empty($perms['canAdmin'])) aal_err('只有會計管理員可以修改證明單號碼格式', 403); }
-    elseif (empty($perms['canEdit'])) aal_err('無折讓單編輯權限（需會計登錄角色）', 403);
+    if ($action === 'format_save') { if (empty($perms['canAdmin'])) aal_err('只有全站管理員或折讓單本頁管理員可以修改證明單號碼格式', 403); }
+    elseif (empty($perms['canEdit'])) aal_err('無折讓單編輯權限（需「折讓單-會計」或本頁管理員角色）', 403);
 }
 
 switch ($action) {

@@ -13,6 +13,45 @@
  */
 require_once __DIR__ . '/acc_lib.php';
 require_once __DIR__ . '/attach_lib.php';
+require_once __DIR__ . '/role_features_helper.php';
+
+if (!defined('ACA_MODULE')) define('ACA_MODULE', 'acc_allowance');
+/* 折讓單自己的角色（roles.module='acc_allowance'；role_code 全站唯一）。全站管理員固定擁有全部權限，不需指派 */
+if (!defined('ACA_ROLES')) {
+    define('ACA_ROLES', [
+        'aal_admin' => '折讓單-本頁管理員（可修改設定）',
+        'aal_acc'   => '折讓單-會計（可開立、填號、附件、作廢；不可更動設定）',
+        'aal_view'  => '折讓單-唯讀',
+    ]);
+}
+
+/** 可重複執行；只在角色不存在時建立，事後改名或改勾選不會被還原 */
+function aca_ensure_roles(PDO $db): void
+{
+    try {
+        foreach (ACA_ROLES as $code => $name) {
+            $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? LIMIT 1");
+            $st->execute([$code]);
+            if (!$st->fetchColumn()) {
+                $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?,?)")->execute([$code, $name, ACA_MODULE]);
+                $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)")->execute([(int)$db->lastInsertId(), $code]);
+            }
+        }
+    } catch (Throwable $e) {}
+}
+
+/** 折讓單權限：全站管理員／本頁管理員(可改設定)／會計(可開立、不可改設定)／唯讀。鍵名與 acc_perms() 相容 */
+function aca_perms(PDO $db, ?array $u): array
+{
+    if (!$u) return ['isAdmin' => false, 'canAdmin' => false, 'canEdit' => false, 'canView' => false];
+    $uid = (int)$u['id'];
+    $feat = function_exists('rf_load_user_features_all') ? rf_load_user_features_all($db, $uid) : [];
+    $isAdmin = acc_perms($db, $u)['isAdmin'] || in_array('all', $feat, true);
+    $canAdmin = $isAdmin || in_array('aal_admin', $feat, true);
+    $canEdit  = $canAdmin || in_array('aal_acc', $feat, true);
+    $canView  = $canEdit  || in_array('aal_view', $feat, true);
+    return ['isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canEdit' => $canEdit, 'canView' => $canView];
+}
 
 if (!defined('ACA_PARAM_GROUP')) define('ACA_PARAM_GROUP', 'ACC_ALLOWANCE');
 if (!defined('ACA_DEFAULT_FMT')) define('ACA_DEFAULT_FMT', '{CID}-{YYYY}{MM}-{CM_SEQ}');
@@ -23,6 +62,7 @@ function aca_ensure_schema(PDO $db): void
     static $done = false;
     if ($done) return;
     $done = true;
+    aca_ensure_roles($db);
     try {
         $db->exec("CREATE TABLE IF NOT EXISTS acc_allowance (
             allow_id      INT AUTO_INCREMENT PRIMARY KEY,

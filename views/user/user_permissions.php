@@ -421,6 +421,7 @@ $EG_ROLE_MODULES = [
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
     'accounting'          => ['prefix'=>'acc',     'label'=>'會計',                'page'=>'recon_overview.php'],
     'acc_recon_track'     => ['prefix'=>'art',     'label'=>'對帳進度追蹤',        'page'=>'recon_track.php'],
+    'acc_allowance'       => ['prefix'=>'aal',     'label'=>'折讓單',              'page'=>'allowance.php'],
     'external_doc'        => ['prefix'=>'extdoc',  'label'=>'外來文件清單',        'page'=>'external_doc_list.php'],
     'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
     'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
@@ -1906,6 +1907,13 @@ $_quotDepts = array_keys($_deptSet);
                          <strong>對帳追蹤-生管</strong>／<strong>對帳追蹤-業務</strong>／<strong>對帳追蹤-會計</strong>＝能按哪個狀態依「設定→角色權限矩陣」逐一勾選（同一個狀態可以同時勾生管與業務），預設生管/業務可推進到已送會計、會計可接續到會計已處理。<br>
                          <span style="color:#b06f27;">結帳日還沒到之前不能操作</span>：狀態欄自動依結帳日顯示「未到結帳日」或「需對帳」，結帳日到了才會出現狀態按鈕（本頁管理員不受此限，方便補歷史資料）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         rs_of('acc_recon_track'), rsu_of('acc_recon_track'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('aal', 'acc_allowance', '折讓單', 'fa-file-text-o', '#C77C1A',
+                        '為每位使用者指派「<a href="../ACC/allowance.php" target="_blank" style="color:#b5762a;">折讓單</a>」頁（會計 &gt; 折讓單）的角色，<strong>與會計模組的角色各自獨立設定</strong>。<br>
+                         <strong>折讓單-本頁管理員</strong>＝全部功能，另可修改「證明單號碼格式」等設定；
+                         <strong>折讓單-會計</strong>＝可開立折讓單、填寫折讓證明單號碼、上傳附件、作廢，<span style="color:#b06f27;">不可更動設定</span>；
+                         <strong>折讓單-唯讀</strong>＝只能查詢與看明細附件。<strong>未被指派角色者無法進入本頁</strong>；全站管理員固定擁有全部權限。',
+                        rs_of('acc_allowance'), rsu_of('acc_allowance'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('inq', 'inquiry', '詢價單', 'fa-question-circle', '#B5762A',
                         '為每位使用者指派「詢價單」頁（生管 &gt; 詢價單，AS 3-OB-01-05）的操作角色，業務詢外包加工／生管詢外包材料／採購詢相關採購三部門共用這一頁。角色功能：<strong>詢價單檢視</strong>＝不屬於業務／生管／採購、但需要查看詢價歷史（例如比價參考）者額外指派；<strong>詢價單管理員</strong>＝綁定 AS 文件編號、設定各部門使用規則（是否允許非實際存在之料號／自訂規格）、可編輯或刪除任何人的詢價案與常用備註用語。'
