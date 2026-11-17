@@ -11085,7 +11085,7 @@ foreach($dCounts as $c) {
             if (ATE_Q.kind === 'process' && ATE_Q.canReply !== false && !voidView && !al && !noteView && !it.linked_mine && it.status !== 'dropped') {
                 actions += '<button type="button" class="ate-q-btn" onclick="$(\'#ate-q-taskbox-' + it.id + '\').toggle()"><i class="fa fa-calendar-check-o"></i> 轉個人工作</button>';
                 taskBoxHtml = '<div class="ate-q-voidbox" id="ate-q-taskbox-' + it.id + '" style="display:none;">'
-                    + '<div class="ate-q-voidbox-hint"><i class="fa fa-info-circle"></i> 會在「個人工作紀錄」自動建立一筆；那邊按完成時要填回覆，這一條會同步標記已處理，反之亦然。</div>'
+                    + '<div class="ate-q-voidbox-hint"><i class="fa fa-info-circle"></i> 會在「個人工作紀錄」自動建立一筆；那邊按完成時要填回覆，並會把這一條標記已處理；但這邊按「已處理」不會連動完成個人工作。</div>'
                     + '期限：<input type="date" class="form-control" style="display:inline-block;width:auto;" id="ate-q-taskdl-' + it.id + '"> '
                     + '提醒：<select class="form-control" style="display:inline-block;width:auto;" id="ate-q-taskrm-' + it.id + '">'
                     +   '<option value="">不提醒</option><option value="0">期限當天</option><option value="1440">提前 1 天</option><option value="2880">提前 2 天</option><option value="10080">提前 7 天</option></select>'

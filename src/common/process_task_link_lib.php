@@ -35,11 +35,8 @@ function ptl_sync_item(PDO $db, int $itemId, string $status): void
 {
     try {
         ptl_ensure($db);
-        if ($status === 'resolved' || $status === 'dropped') {
-            $db->prepare("UPDATE personal_task SET status=1, completed_at=NOW() WHERE src_item_id=? AND status<>1")->execute([$itemId]);
-        } elseif ($status === 'waiting') {
-            $db->prepare("UPDATE personal_task SET status=0, completed_at=NULL WHERE src_item_id=? AND status=1")->execute([$itemId]);
-        }
+        // 2026-11-17 使用者要求：製程中紀錄按「已處理」／退回待回覆，不再連動個人工作紀錄的完成狀態
+        // （已處理後仍可能有改圖等後續工作）。個人工作按完成仍會標記紀錄已處理（ptl_complete）。
         ptl_rebuild_steps($db, $itemId);
     } catch (Throwable $e) { error_log('ptl_sync_item: ' . $e->getMessage()); }
 }
