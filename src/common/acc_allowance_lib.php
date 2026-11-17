@@ -574,7 +574,9 @@ function aca_create(PDO $db, array $d, ?array $user): array
         $noDate = aca_min_inv_date(array_column($lines, 'inv_date')) ?: $date;   // 號碼的年月與流水以原發票日期為準
         $sq = aca_next_seqs($db, $cid, $noDate, true);
         $global = acc_global_cutoff($db);
-        $bm = acc_bm_for($db, $noDate, $cust, $global);   // 帳款月份依原發票日期（多筆取最早）歸屬，不是折讓日期
+        // 帳款月份＝原發票日期（多筆取最早）所在的月份，不管結帳日；沒有發票日期才依折讓日期與結帳日
+        $invMin = aca_min_inv_date(array_column($lines, 'inv_date'));
+        $bm = $invMin ? substr($invMin, 0, 7) : acc_bm_for($db, $date, $cust, $global);
         $db->prepare("INSERT INTO acc_allowance
             (allow_no, allow_date, billing_month, customer_id, customer_name, tax_rate, sales_amount, tax_amount, total_amount,
              seq_cm, seq_m, seq_y, status, note, created_by, created_by_name, created_at, no_date)
@@ -645,8 +647,9 @@ function aca_update(PDO $db, int $id, array $d, ?array $user): array
     $cmap = acc_customer_by_name($db); $cust = null;
     foreach ($cmap as $c) { if (trim((string)$c['customer_id']) === (string)$a['customer_id']) { $cust = $c; break; } }
     $bm = $a['billing_month'];
-    $billDate = aca_min_inv_date(array_column($new, 'dt')) ?: $date;   // 帳款月份依原發票日期（多筆取最早）
-    if ($cust) $bm = acc_bm_for($db, $billDate, $cust, acc_global_cutoff($db));
+    $invMin = aca_min_inv_date(array_column($new, 'dt'));   // 帳款月份＝原發票日期（多筆取最早）所在月份，不管結帳日
+    if ($invMin) $bm = substr($invMin, 0, 7);
+    elseif ($cust) $bm = acc_bm_for($db, $date, $cust, acc_global_cutoff($db));
 
     $chg = [];
     $fm = fn($v) => rtrim(rtrim(number_format((float)$v, 4, '.', ''), '0'), '.');
