@@ -106,7 +106,11 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
   background:rgba(60,40,20,.45);z-index:9999;overflow:auto;padding:30px 12px;}
 .a-mask.show{display:block;}
 .a-modal{background:#fff;border-radius:8px;width:1560px;max-width:100%;margin:0 auto;box-shadow:0 6px 30px rgba(0,0,0,.3);}
-.a-modal.mid{width:1100px;}
+.a-modal.mid{width:1320px;}
+.tight th,.tight td{padding:6px 5px !important;}
+.err:not(:empty){background:#FBE3DC;border-left:5px solid #DD5138;padding:8px 12px;font-size:15px;border-radius:4px;margin:6px 0;color:#7a2c17;}
+.pop-err{display:none;position:fixed;top:90px;left:50%;transform:translateX(-50%);z-index:12500;max-width:760px;min-width:360px;background:#FBE3DC;color:#7a2c17;border:2px solid #DD5138;border-left-width:8px;border-radius:8px;padding:18px 24px;font-size:18px;font-weight:bold;line-height:1.6;box-shadow:0 8px 30px rgba(0,0,0,.3);cursor:pointer;}
+.pop-err small{display:block;font-weight:normal;font-size:12px;color:#8a6d45;margin-top:4px;}
 .a-modal.narrow{width:620px;}
 .a-modal .m-head{background:var(--a-ok);color:var(--a-ink);padding:9px 14px;font-weight:bold;border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .a-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
@@ -133,7 +137,7 @@ table.a-t tr.picked{background:#FCEBD2 !important;}
 .in-n.bad{border-color:var(--a-bad);background:#FDECE7;}
 .err{color:var(--a-bad);font-size:12px;margin-top:2px;}
 .info{background:var(--a-bg2);border-left:5px solid var(--a-acc);color:var(--a-ink);padding:8px 12px;border-radius:4px;font-size:13px;margin-bottom:8px;line-height:1.6;}
-.a-msg{position:fixed;top:64px;right:18px;z-index:12000;min-width:250px;max-width:440px;padding:11px 15px;border-radius:6px;display:none;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.2);}
+.a-msg{position:fixed;top:64px;right:18px;z-index:12000;min-width:250px;max-width:480px;padding:14px 18px;border-radius:6px;display:none;font-size:16px;box-shadow:0 3px 12px rgba(0,0,0,.2);}
 .a-msg.ok{background:#F7E0BD;color:#5b3a1e;border-left:5px solid var(--a-acc);}
 .a-msg.bad{background:#FBE3DC;color:#7a2c17;border-left:5px solid var(--a-bad);}
 .a-noperm{border:1.5px solid var(--a-line);background:var(--a-bg);border-radius:8px;padding:26px;color:var(--a-ink);}
@@ -350,6 +354,7 @@ body.mask-open{overflow:hidden;}
 <?php endif; ?>
 
 <div id="custDd" class="cust-dd"></div>
+<div id="popErr" class="pop-err" title="點一下關閉"></div>
 <div class="a-msg" id="msg"></div>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
@@ -378,6 +383,9 @@ function dd(s){ return (window.egFmtDate && s) ? egFmtDate(s) : (s||''); }
 function toast(m,bad){ var $m=$('#msg').removeClass('ok bad').addClass(bad?'bad':'ok').html(m).stop(true,true).fadeIn(150);
   clearTimeout($m.data('t')); $m.data('t',setTimeout(function(){ $m.fadeOut(400); },bad?7000:3800)); }
 function syncBody(){ $('body').toggleClass('mask-open',$('.a-mask.show').length>0); }
+var popT=null;
+function popErr(m){ if(!m) return; $('#popErr').html(esc(m)+'<small>點一下關閉</small>').stop(true,true).fadeIn(120); clearTimeout(popT); popT=setTimeout(function(){ $('#popErr').fadeOut(300); },10000); }
+$(document).on('click','#popErr',function(){ $(this).fadeOut(150); });
 function openMask(id){ $('#'+id).addClass('show'); syncBody(); }
 function closeMask(id){ $('#'+id).removeClass('show'); syncBody(); }
 function showPane(n){
@@ -547,7 +555,7 @@ $('#bDate').on('input',function(){ this.value=cleanDigits(this.value,7); });
 $('#btnBatchInv').on('click',function(){
   var t=$('#bTrack').val(), n=$('#bNo').val(), d=$('#bDate').val();
   var er=invFieldErr('t',t)||invFieldErr('n',n)||invFieldErr('d',d);
-  if(er){ $('#bErr').text(er); return; }
+  if(er){ $('#bErr').text(er); popErr(er); return; }
   if(!SEL.length){ $('#bErr').text('尚未選定明細（之後加入的明細會自動帶入這組）'); return; }
   $('#bErr').text(''); SEL.forEach(function(s){ s.inv_track=t; s.inv_no=n; s.inv_date=d; }); renderSel();
   toast('已把發票資料套用到全部 '+SEL.length+' 筆明細，可再改個別不同的');
@@ -594,11 +602,12 @@ $('#btnSug').on('click',function(){
   }).fail(function(x){ $('#nErr').text(errMsg(x)); });
 });
 $('#btnNew').on('click',function(){ resetNew(); });
+function nFail(m){ $('#nErr').text(m); popErr(m); }
 $('#btnCreate').on('click',function(){
-  $('#nErr').text('');
-  if(!SEL.length){ $('#nErr').text('請至少選一筆出貨單或退貨單明細'); return; }
-  for(var i=0;i<SEL.length;i++){ var e=rowErr(SEL[i])||invErr(SEL[i]); if(e){ $('#nErr').text('第 '+(i+1)+' 筆（'+SEL[i].no+'）：'+e); return; } }
-  if(!$('#nDate').val()){ $('#nErr').text('請選折讓日期'); return; }
+  nFail('');
+  if(!SEL.length){ nFail('請至少選一筆出貨單或退貨單明細'); return; }
+  for(var i=0;i<SEL.length;i++){ var e=rowErr(SEL[i])||invErr(SEL[i]); if(e){ nFail('第 '+(i+1)+' 筆（'+SEL[i].no+'）：'+e); return; } }
+  if(!$('#nDate').val()){ nFail('請選折讓日期'); return; }
   var payload={customer_id:SELCUST,allow_date:$('#nDate').val(),tax_rate:$('#nRate').val(),allow_no:$('#nNo').val(),note:$('#nNote').val(),
     items:SEL.map(function(s){return {type:s.type,src_id:s.src_id,qty:s.use_qty,unit_price:s.use_price,inv_track:s.inv_track,inv_no:s.inv_no,inv_date:s.inv_date};})};
   var fd=new FormData(); fd.append('action','create'); fd.append('csrf',CSRF); fd.append('payload',JSON.stringify(payload));
@@ -606,10 +615,10 @@ $('#btnCreate').on('click',function(){
   var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 開立中…');
   $.ajax({url:API,type:'POST',data:fd,processData:false,contentType:false,dataType:'json'}).done(function(r){
     $b.prop('disabled',false).html('<i class="fa fa-check"></i> 開立折讓單');
-    if(!r.ok){ $('#nErr').text(r.error||'開立失敗'); return; }
+    if(!r.ok){ nFail(r.error||'開立失敗'); return; }
     showPane('list'); toast(esc(r.message)+((r.attach_fail&&r.attach_fail.length)?'<br>附件未上傳：'+esc(r.attach_fail.join('；')):''),!!(r.attach_fail&&r.attach_fail.length));
     page=1; load();
-  }).fail(function(x){ $b.prop('disabled',false).html('<i class="fa fa-check"></i> 開立折讓單'); $('#nErr').text(errMsg(x,'開立失敗')); });
+  }).fail(function(x){ $b.prop('disabled',false).html('<i class="fa fa-check"></i> 開立折讓單'); nFail(errMsg(x,'開立失敗')); });
 });
 
 /* ── 明細 ── */
@@ -629,13 +638,15 @@ function editHead(a){
    +'<div class="frm" style="grid-template-columns:100px 220px 100px 160px 80px 1fr;"><label>折讓日期</label><input type="date" id="eDate" value="'+esc(a.allow_date)+'"><label>營業稅率</label><input type="number" id="eRate" step="0.01" min="0" max="1" value="'+Number(a.tax_rate)+'"><label>備註</label><input type="text" id="eNote" maxlength="500" value="'+esc(a.note||'')+'"></div><div id="eErr" class="err"></div>';
 }
 function editTable(a){
-  var h='<div class="sec">綁定的單據（修改數量／單價／原發票資料）</div><div class="a-wrap"><table class="a-t" id="tEdit"><thead><tr><th>類別</th><th>單號</th><th>料號</th><th>原數量</th><th>可折讓上限</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th>發票字軌</th><th>發票號碼</th><th>發票日期</th></tr></thead><tbody>';
+  var h='<div class="sec">綁定的單據（修改數量／單價／原發票資料）</div>'
+   +'<div class="srch" style="background:#FFF7E8;border:1px solid var(--a-line);border-radius:6px;padding:8px 10px;"><b style="color:var(--a-brand);">原發票資料　全部設成相同：</b> 字軌 <input type="text" id="ebTrack" maxlength="2" style="width:60px;text-transform:uppercase;" autocomplete="off"> 號碼 <input type="text" id="ebNo" maxlength="8" style="width:110px;" autocomplete="off"> 發票日期 <input type="text" id="ebDate" maxlength="7" style="width:100px;" placeholder="民國年MMDD" autocomplete="off"> <button type="button" id="btnEBatch">套用到全部明細</button><span style="font-size:12px;color:var(--a-ink2);">套用後再改個別不同的那幾筆</span></div>'
+   +'<div class="a-wrap"><table class="a-t tight" id="tEdit"><thead><tr><th>類別</th><th>單號</th><th>料號</th><th>原數量</th><th>可折讓上限</th><th>折讓數量</th><th>折讓單價</th><th>金額</th><th>營業稅</th><th>發票字軌</th><th>發票號碼</th><th>發票日期</th></tr></thead><tbody>';
   a.items.forEach(function(i,k){
     h+='<tr data-id="'+i.item_id+'" data-rem="'+Number(i.remain_qty)+'"><td><span class="pill '+(i.src_type==='IR'?'p-ret':'p-ship')+'">'+(i.src_type==='IR'?'退貨':'出貨')+'</span></td><td>'+esc(i.src_no)+'</td><td class="l">'+esc(i.part_no)+'</td><td class="r">'+nf2(i.src_qty)+'</td><td class="r">'+nf2(i.remain_qty)+'</td>'
-     +'<td><input type="number" class="in-n e-q" step="any" value="'+Number(i.qty)+'"></td><td><input type="number" class="in-n e-p" step="any" value="'+Number(i.unit_price)+'"></td><td class="r e-amt"></td><td class="r e-tax"></td>'
-     +'<td><input type="text" class="in-n e-it" maxlength="2" style="width:56px;text-align:center;text-transform:uppercase;" value="'+esc(i.inv_track||'')+'"></td>'
-     +'<td><input type="text" class="in-n e-in" maxlength="8" style="width:112px;text-align:center;" value="'+esc(i.inv_no||'')+'"></td>'
-     +'<td><input type="text" class="in-n e-id" maxlength="7" style="width:96px;text-align:center;" value="'+esc(i.inv_date||'')+'"></td></tr>';
+     +'<td><input type="number" class="in-n e-q" step="any" style="width:66px;" value="'+Number(i.qty)+'"></td><td><input type="number" class="in-n e-p" step="any" style="width:84px;" value="'+Number(i.unit_price)+'"></td><td class="r e-amt"></td><td class="r e-tax"></td>'
+     +'<td><input type="text" class="in-n e-it" maxlength="2" style="width:50px;text-align:center;text-transform:uppercase;" value="'+esc(i.inv_track||'')+'"></td>'
+     +'<td><input type="text" class="in-n e-in" maxlength="8" style="width:100px;text-align:center;" value="'+esc(i.inv_no||'')+'"></td>'
+     +'<td><input type="text" class="in-n e-id" maxlength="7" style="width:84px;text-align:center;" value="'+esc(i.inv_date||'')+'"></td></tr>';
   });
   h+='</tbody><tfoot><tr><td colspan="7" class="r"><b>合計</b></td><td class="r"><b id="eNet">0</b></td><td class="r"><b id="eTax">0</b></td><td colspan="3"></td></tr>'
     +'<tr><td colspan="7" class="r"><b>含稅合計</b></td><td colspan="5" class="r" style="font-size:16px;"><b id="eTot" style="color:#DD5138;">0</b></td></tr></tfoot></table></div>';
@@ -661,13 +672,21 @@ $(document).on('input change','#eDate,#eRate,#tEdit input',function(){
   if($(this).hasClass('e-id')) this.value=cleanDigits(this.value,7);
   eCalc();
 });
+$(document).on('input','#ebTrack,#ebNo,#ebDate',function(){ this.value=this.id==='ebTrack'?cleanTrack(this.value):cleanDigits(this.value,this.id==='ebNo'?8:7); });
+$(document).on('click','#btnEBatch',function(){
+  var t=$('#ebTrack').val(), n=$('#ebNo').val(), d=$('#ebDate').val(), ad=$('#eDate').val();
+  var er=invFieldErr('t',t,ad)||invFieldErr('n',n,ad)||invFieldErr('d',d,ad);
+  if(er){ popErr(er); return; }
+  $('#tEdit .e-it').val(t); $('#tEdit .e-in').val(n); $('#tEdit .e-id').val(d); eCalc();
+  toast('已把發票資料套用到全部明細，可再改個別不同的');
+});
 $(document).on('click','#dEdit',function(){ openDtl(CUR.allow_id,true); });
 $(document).on('click','#dEditCancel',function(){ openDtl(CUR.allow_id,false); });
 $(document).on('click','#dEditSave',function(){
-  var er=eCalc(); if(er){ toast(esc(er),true); return; }
+  var er=eCalc(); if(er){ popErr(er); return; }
   var items=$('#tEdit tbody tr').map(function(){ var $r=$(this); return {item_id:$r.data('id'),qty:$r.find('.e-q').val(),unit_price:$r.find('.e-p').val(),inv_track:$r.find('.e-it').val(),inv_no:$r.find('.e-in').val(),inv_date:$r.find('.e-id').val()}; }).get();
   var payload={allow_date:$('#eDate').val(),tax_rate:$('#eRate').val(),note:$('#eNote').val(),items:items};
-  post('update',{id:CUR.allow_id,payload:JSON.stringify(payload)},function(r){ toast(esc(r.message)); openDtl(CUR.allow_id,false); load(); },function(m){ $('#eErr').text(m); toast(esc(m),true); });
+  post('update',{id:CUR.allow_id,payload:JSON.stringify(payload)},function(r){ toast(esc(r.message)); openDtl(CUR.allow_id,false); load(); },function(m){ $('#eErr').text(m); popErr(m); });
 });
 var EDITING=false;
 function openDtl(id,edit){
