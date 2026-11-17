@@ -57,7 +57,7 @@ h2{margin:0 0 10px;font-size:18px;}
 .kv{margin:4px 0;line-height:1.6;} .kv b{display:inline-block;min-width:84px;color:#8a6a45;}
 a{color:#B8431F;}
 table{border-collapse:collapse;width:100%;font-size:13px;} th,td{border-bottom:1px solid #eee;padding:5px 6px;text-align:left;}
-tr.old td{background:#FBE3DC;} tr.old td .nm{text-decoration:line-through;text-decoration-color:#B8431F;}
+tr.old td{background:#FBE3DC;text-decoration:line-through;text-decoration-color:#B8431F;}
 tr.new td{background:#E3EDD2;font-weight:bold;} .newb{display:inline-block;background:#F6C94A;color:#5a3d00;font-size:11px;font-weight:bold;padding:0 6px;border-radius:8px;}
 .st{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:bold;background:#F0A24B;color:#5a2d0c;}
 .st.approved{background:#8a6a45;color:#fff;} .st.rejected{background:#DD5138;color:#fff;}
@@ -102,9 +102,10 @@ button{padding:8px 18px;border:0;border-radius:4px;font-size:14px;font-weight:bo
       if ($showNew && $pred !== null && (int)$g['sn'] === (int)$pred) $rows[] = ['g' => $mvG, 'kind' => 'new', 'sn' => $newSn];
   }
   foreach ($rows as $r): $g = $r['g']; ?>
-    <tr class="<?= $r['kind'] ?>"><td><?= (int)$r['sn'] ?></td><td><span class="nm"><?= $h($g['name'] !== '' ? $g['name'] : $g['process_no']) ?></span><?= $r['kind'] === 'new' ? ' <span class="newb">NEW</span>' : '' ?><?= $r['kind'] === 'old' ? ' <span style="font-size:11px;color:#B8431F;">（原位置）</span>' : '' ?></td>
+    <tr class="<?= $r['kind'] ?>"><td><?= ($r['kind'] === 'new' && $req['new_sn'] === null) ? '<span style="font-size:11px;color:#8a6a45;font-weight:normal;" title="未開放自行輸入 SN，核准後系統依新順序自動重新編號">自動</span>' : (int)$r['sn'] ?></td><td><span class="nm"><?= $h($g['name'] !== '' ? $g['name'] : $g['process_no']) ?></span><?= $r['kind'] === 'new' ? ' <span class="newb">NEW</span>' : '' ?><?= $r['kind'] === 'old' ? ' <span style="font-size:11px;color:#B8431F;">（原位置）</span>' : '' ?></td>
     <td><?= $h(bro_state_text($g['state'])) ?></td><td><?= $g['qc_completed'] ? '已完工' : ($g['QC_check'] ? '已檢驗未完工' : '—') ?></td></tr>
   <?php endforeach; ?></table>
+  <?php if ($showNew && $req['new_sn'] === null): ?><div style="font-size:12px;color:#8a6a45;margin-top:6px;">未開放自行輸入 SN：畫面上的 SN 欄維持原有號碼組；核准後系統會依新順序自動重新編號（資料庫內 SN 隨之調整）。</div><?php endif; ?>
 </div>
 <?php if ($canDecide): ?>
 <div class="card">
