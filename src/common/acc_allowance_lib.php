@@ -748,8 +748,12 @@ function aca_list(PDO $db, array $f): array
     $kw = trim((string)($f['kw'] ?? ''));
     if ($kw !== '') {
         $w[] = "(a.allow_no LIKE ? OR a.customer_name LIKE ? OR a.customer_id LIKE ? OR a.note LIKE ?
-                 OR EXISTS (SELECT 1 FROM acc_allowance_item i WHERE i.allow_id=a.allow_id AND (i.src_no LIKE ? OR i.part_no LIKE ? OR i.spec LIKE ?)))";
-        for ($i = 0; $i < 7; $i++) $p[] = "%$kw%";
+                 OR EXISTS (SELECT 1 FROM acc_allowance_item i WHERE i.allow_id=a.allow_id AND (i.src_no LIKE ? OR i.part_no LIKE ? OR i.spec LIKE ? OR CONCAT(COALESCE(i.inv_track,''),COALESCE(i.inv_no,'')) LIKE ?)))";
+        for ($i = 0; $i < 8; $i++) $p[] = "%$kw%";
+    }
+    if (($inv = strtoupper(trim((string)($f['inv'] ?? '')))) !== '') {   // 發票號碼（字軌＋號碼，可只打一部分）
+        $w[] = "EXISTS (SELECT 1 FROM acc_allowance_item i WHERE i.allow_id=a.allow_id AND CONCAT(COALESCE(i.inv_track,''),COALESCE(i.inv_no,'')) LIKE ?)";
+        $p[] = '%' . $inv . '%';
     }
     if (preg_match('/^\d{4}-\d{2}$/', (string)($f['bm'] ?? ''))) { $w[] = 'a.billing_month=?'; $p[] = $f['bm']; }
     $s = (string)($f['status'] ?? '');
@@ -763,6 +767,7 @@ function aca_list(PDO $db, array $f): array
     $st->execute($p);
     [$total, $sum] = $st->fetch(PDO::FETCH_NUM);
     $st = $db->prepare("SELECT a.*, (SELECT COUNT(*) FROM acc_allowance_item i WHERE i.allow_id=a.allow_id) item_cnt,
+                               (SELECT GROUP_CONCAT(DISTINCT CONCAT(i.inv_track,i.inv_no) ORDER BY i.item_id SEPARATOR '、') FROM acc_allowance_item i WHERE i.allow_id=a.allow_id AND i.inv_no IS NOT NULL AND i.inv_no<>'') inv_list,
                                (SELECT COUNT(*) FROM acc_allowance_file x WHERE x.allow_id=a.allow_id) file_cnt
                         FROM acc_allowance a WHERE $where ORDER BY a.allow_date DESC, a.allow_id DESC
                         LIMIT $per OFFSET " . (($page - 1) * $per));

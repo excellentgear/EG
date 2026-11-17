@@ -114,7 +114,7 @@ case 'create': {
 case 'list': {
     $s = $_POST ?: $_GET;
     aal_out(aca_list($db, [
-        'kw' => aal_u8(trim((string)($s['kw'] ?? ''))), 'bm' => $s['bm'] ?? '', 'status' => $s['status'] ?? '',
+        'kw' => aal_u8(trim((string)($s['kw'] ?? ''))), 'inv' => trim((string)($s['inv'] ?? '')), 'bm' => $s['bm'] ?? '', 'status' => $s['status'] ?? '',
         'page' => $s['page'] ?? 1, 'per_page' => $s['per_page'] ?? 20,
     ]));
 }

@@ -184,6 +184,7 @@ body.mask-open{overflow:hidden;}
     <div id="paneList">
     <div class="a-bar">
       <input type="text" id="fKw" placeholder="證明單號碼／客戶／單號／料號／備註" style="width:280px;">
+      <input type="text" id="fInv" placeholder="發票號碼（如 AB12345678）" style="width:210px;text-transform:uppercase;" autocomplete="off">
       <label>帳款月份</label><input type="month" id="fBm" style="width:140px;">
       <select id="fStatus"><option value="">全部狀態</option><option value="active">有效</option><option value="nonumber">尚未填證明單號碼</option><option value="void">已作廢</option></select>
       <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
@@ -205,10 +206,10 @@ body.mask-open{overflow:hidden;}
     <div class="a-wrap">
       <table class="a-t" id="tbl">
         <thead><tr>
-          <th>折讓日期</th><th>帳款月份</th><th>客戶</th><th>證明單號碼</th><th>明細</th>
+          <th>折讓日期</th><th>帳款月份</th><th>客戶</th><th>證明單號碼</th><th>原發票</th><th>明細</th>
           <th>未稅</th><th>營業稅</th><th>含稅合計</th><th>附件</th><th>開立人</th><th>狀態</th><th>操作</th>
         </tr></thead>
-        <tbody id="tbody"><tr><td colspan="12" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="13" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
       </table>
     </div>
     </div><!-- /paneList -->
@@ -407,7 +408,7 @@ function post(action,data,cb,fcb){
 
 /* ── 清單 ── */
 function load(){
-  $.getJSON(API,{action:'list',kw:$('#fKw').val(),bm:$('#fBm').val(),status:$('#fStatus').val(),page:page,per_page:perPage},function(r){
+  $.getJSON(API,{action:'list',kw:$('#fKw').val(),inv:$('#fInv').val(),bm:$('#fBm').val(),status:$('#fStatus').val(),page:page,per_page:perPage},function(r){
     if(!r.ok){ toast(esc(r.error||'載入失敗'),true); return; }
     $('#stCount').text(nf(r.total)); $('#stSum').text(nf(r.sum_total));
     var h='';
@@ -416,12 +417,12 @@ function load(){
       h+='<tr class="'+(v?'is-void':'')+'"><td>'+esc(dd(a.allow_date))+'</td><td>'+esc(a.billing_month)+'</td>'
        +'<td class="l">'+esc(a.customer_id)+'　'+esc(a.customer_name)+'</td>'
        +'<td>'+(noNo?'<span class="pill p-nono">待填證明單號碼</span>':esc(a.allow_no))+'</td>'
-       +'<td>'+a.item_cnt+' 筆</td><td class="r">'+nf(a.sales_amount)+'</td><td class="r">'+nf(a.tax_amount)+'</td><td class="r"><b>'+nf(a.total_amount)+'</b></td>'
+       +'<td style="font-size:12px;">'+esc(a.inv_list||'—')+'</td><td>'+a.item_cnt+' 筆</td><td class="r">'+nf(a.sales_amount)+'</td><td class="r">'+nf(a.tax_amount)+'</td><td class="r"><b>'+nf(a.total_amount)+'</b></td>'
        +'<td>'+(a.file_cnt>0?'<i class="fa fa-paperclip"></i> '+a.file_cnt:'—')+'</td><td>'+esc(a.created_by_name||'')+'</td>'
        +'<td>'+(v?'<span class="pill p-void">已作廢</span>':'有效')+'</td>'
        +'<td><button class="btn-mini js-dtl" data-id="'+a.allow_id+'">明細／附件</button></td></tr>';
     });
-    $('#tbody').html(h||'<tr><td colspan="12" style="padding:20px;color:#8a6d45;">沒有符合的折讓單</td></tr>');
+    $('#tbody').html(h||'<tr><td colspan="13" style="padding:20px;color:#8a6d45;">沒有符合的折讓單</td></tr>');
     var pages=Math.max(1,Math.ceil(r.total/r.per_page));
     $('#pgInfo').text('共 '+r.total+' 筆，第 '+page+' / '+pages+' 頁');
     var b='<button '+(page<=1?'disabled':'')+' data-p="'+(page-1)+'">‹</button>';
@@ -433,7 +434,7 @@ function load(){
 $('#pgBtns').on('click','button[data-p]',function(){ page=parseInt($(this).data('p'),10); load(); });
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10); page=1; load(); });
 $('#btnSearch').on('click',function(){ page=1; load(); });
-$('#fKw').on('keydown',function(e){ if(e.key==='Enter'){ page=1; load(); } });
+$('#fKw,#fInv').on('keydown',function(e){ if(e.key==='Enter'){ page=1; load(); } });
 $('#fStatus,#fBm').on('change',function(){ page=1; load(); });
 
 /* ── 開立 ── */
