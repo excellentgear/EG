@@ -779,7 +779,7 @@ try {
                         </div>
                         <div class="form-group">
                             <label>所屬主項目 (Group) <small class="text-muted">(擇一)</small></label>
-                            <select class="form-control" name="group_id" id="module_group_id">
+                            <select class="form-control" name="group_id" id="module_group_id" data-eg-filter="輸入關鍵字篩選主項目…">
                                 <option value="">請選擇主項目</option>
                                 <?php foreach ($groups as $g): ?>
                                     <option value="<?= $g['group_id'] ?>"><?= htmlspecialchars($g['group_name']) ?></option>
@@ -788,7 +788,7 @@ try {
                         </div>
                         <div class="form-group">
                             <label>對應子頁面 (Page) <small class="text-muted">(擇一)</small></label>
-                            <select class="form-control" name="page_id" id="module_page_id">
+                            <select class="form-control" name="page_id" id="module_page_id" data-eg-filter="輸入關鍵字篩選子頁面（名稱或網址）…">
                                 <option value="">請選擇子頁面</option>
                                 <?php foreach ($pages as $p): ?>
                                     <option value="<?= $p['page_id'] ?>"><?= htmlspecialchars($p['page_name']) ?> (<?= htmlspecialchars($p['page_url']) ?>)</option>
@@ -814,6 +814,7 @@ try {
     <script src="../../resource/js/jquery.min.js"></script>
     <script src="../../resource/js/bootstrap.min.js"></script>
     <script src="../../resource/js/custom.min.js"></script>
+    <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
     <!-- DataTables -->
     <script src="../../resource/js/jquery.dataTables.min.js"></script>
     <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
