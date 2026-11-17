@@ -149,6 +149,9 @@ if (!isset($can_ingear_calc)) {
 (function(){
     'use strict';
     var tab = 'a', domInited = false;
+    // 繪圖目標：預設是本工具視窗內的 ig-zoom／ig-over／ig-prof；EGInGearDraw 會暫時改指到外部（花鍵分頁）的容器
+    var HOST = null;
+    function hostEl(id){ return (HOST && HOST[id]) || document.getElementById(id); }
 
     /* ───── 計算核心 ───── */
     function inv(a){ return Math.tan(a) - a; }
@@ -223,16 +226,9 @@ if (!isset($can_ingear_calc)) {
     function row(k, v, cls){ return '<tr><td class="k">' + k + '</td><td class="v ' + (cls || '') + '">' + v + '</td></tr>'; }
     function badge(j){ return '<span class="ig-badge ' + (j.lv === 0 ? 'ig-ok' : (j.lv === 1 ? 'ig-warn' : 'ig-ng')) + '">' + j.txt + '</span>'; }
 
-    function readGear(){
-        var m = pv('ig-m'), z = pv('ig-z'), al = pv('ig-al'), dt = pv('ig-dtip'), dr = pv('ig-droot'), be = pv('ig-beta'), msg = '';
-        bad('ig-m', false); bad('ig-z', false); bad('ig-al', false); bad('ig-dtip', false); bad('ig-droot', false); bad('ig-beta', false);
-        if (be === null) be = 0;
-        if (m === null && z === null) { $('ig-gerr').textContent = ''; return null; } // 剛開啟／清除後：先不報錯，等使用者輸入
-        if (m === null || m <= 0) { bad('ig-m', true); msg = '請輸入大於 0 的模數'; }
-        else if (z === null || z < 6 || Math.floor(z) !== z) { bad('ig-z', true); msg = '齒數需為 6 以上的整數'; }
-        else if (al === null || al <= 0 || al >= 45) { bad('ig-al', true); msg = '壓力角需介於 0～45 度之間'; }
-        else if (Math.abs(be) >= 60) { bad('ig-beta', true); msg = '螺旋角需介於 -60～60 度之間（直齒填 0）'; }
-        if (msg) { $('ig-gerr').textContent = msg; return null; }
+    // 由 模數／齒數／壓力角／螺旋角（度）／齒頂圓徑／齒根圓徑 建立幾何（留空的齒頂／齒根圓徑依標準齒高補）
+    function makeGear(m, z, al, be, dt, dr){
+        be = be || 0;
         var a = al * Math.PI / 180, bt = Math.abs(be) * Math.PI / 180, d, g, cb = Math.cos(bt);
         if (bt === 0) {
             d = m * z;
@@ -246,6 +242,23 @@ if (!isset($can_ingear_calc)) {
         g.dTip = (dt !== null && dt > 0) ? dt : d - 2 * m;
         g.dRoot = (dr !== null && dr > 0) ? dr : d + 2.5 * m;
         g.autoTip = !(dt !== null && dt > 0); g.autoRoot = !(dr !== null && dr > 0);
+        return g;
+    }
+
+    function readGear(){
+        var m = pv('ig-m'), z = pv('ig-z'), al = pv('ig-al'), dt = pv('ig-dtip'), dr = pv('ig-droot'), be = pv('ig-beta'), msg = '';
+        bad('ig-m', false); bad('ig-z', false); bad('ig-al', false); bad('ig-dtip', false); bad('ig-droot', false); bad('ig-beta', false);
+        if (be === null) be = 0;
+        if (m === null && z === null) { $('ig-gerr').textContent = ''; return null; } // 剛開啟／清除後：先不報錯，等使用者輸入
+        if (m === null || m <= 0) { bad('ig-m', true); msg = '請輸入大於 0 的模數'; }
+        else if (z === null || z < 6 || Math.floor(z) !== z) { bad('ig-z', true); msg = '齒數需為 6 以上的整數'; }
+        else if (al === null || al <= 0 || al >= 45) { bad('ig-al', true); msg = '壓力角需介於 0～45 度之間'; }
+        else if (Math.abs(be) >= 60) { bad('ig-beta', true); msg = '螺旋角需介於 -60～60 度之間（直齒填 0）'; }
+        if (msg) { $('ig-gerr').textContent = msg; return null; }
+        var g = makeGear(m, z, al, be, dt, dr), d = g.d;
+        // 留空＝不設定：自動算出的齒頂圓若落在基圓以下，不報錯，取剛好略大於基圓（漸開線起點）繼續計算
+        if (g.autoTip && g.dTip <= g.db) g.dTip = g.db * 1.0005;
+        if (g.autoRoot && g.dRoot <= g.dTip) g.dRoot = g.dTip + 2.25 * m;
         if (g.dTip <= g.db) { bad('ig-dtip', true); msg = '齒頂圓徑不可小於或等於基圓徑 Ø' + f(g.db, 3); }
         else if (g.dRoot <= g.dTip) { bad('ig-droot', true); msg = '齒根圓徑必須大於齒頂圓徑'; }
         $('ig-gerr').textContent = msg;
@@ -253,9 +266,64 @@ if (!isset($can_ingear_calc)) {
     }
 
     /* ───── 繪圖 ───── */
+    // 一個齒槽的輪廓（極座標，相對槽中心線的角度）：左齒面(齒頂→槽底)→槽底→右齒面(槽底→齒頂)。
+    // 內齒輪（g.rootForm 未設）：漸開線一路到齒根圓、槽底是齒根圓上的一小段弧（與原本畫法完全相同）。
+    // 內花鍵（g.rootForm＝flat 平底／fillet 圓弧）：30° 漸開線齒面在到齒根圓之前槽寬就收窄了，
+    //   齒面只畫到槽寬收窄到「槽底半徑」的位置，再接直壁槽到齒根圓；平底＝在齒根圓上收成平弧，圓弧＝半圓形槽底。
+    // 回傳 {pts:[[r,a]…], mid:槽底中心索引, ab:槽底附近的半角, bw:槽底寬(mm)}
+    function slotShape(g, e, N){
+        var rt = g.dTip / 2, rr = g.dRoot / 2, i, r, pts = [], mid;
+        function ps(r){ return Math.max(0, psiAt(g, e, r)); }
+        if (!g.rootForm) {
+            for (i = 0; i <= N; i++) { r = rt + (rr - rt) * i / N; pts.push([r, -ps(r)]); }
+            for (i = 1; i < 4; i++) pts.push([rr, -ps(rr) + 2 * ps(rr) * i / 4]);
+            mid = pts.length - 2;
+            for (i = N; i >= 0; i--) { r = rt + (rr - rt) * i / N; pts.push([r, ps(r)]); }
+            return { pts: pts, mid: mid, ab: ps(rr), bw: 2 * psiAt(g, e, rr) * rr };
+        }
+        var fillet = g.rootForm === 'fillet', rho = (fillet ? 0.3 : 0.15) * g.mn;
+        // 平底：槽寬收窄到 2·rho 就改直壁；槽底是平的，兩個底角各倒 R=0.16m 圓角（DIN 5480 刀具齒根圓角）
+        var rf = rr;
+        if (ps(rt) * rt <= rho) rf = rt;
+        else if (ps(rr) * rr < rho) { var lo = rt, hi = rr, k2; for (k2 = 0; k2 < 60; k2++) { var md = (lo + hi) / 2; if (ps(md) * md > rho) lo = md; else hi = md; } rf = lo; }
+        var af = ps(rf), rb = fillet ? Math.max(rf, rr - af * rf) : rr;
+        for (i = 0; i <= N; i++) { r = rt + (rf - rt) * i / N; pts.push([r, -ps(r)]); }
+        var flatMode = !fillet, wH = af * rf, Rc = flatMode ? Math.min(0.16 * g.mn, wH * 0.9, Math.max(0, (rr - rf) * 0.9)) : 0;
+        if (flatMode && Rc > 1e-6) {
+            var cx = rr - Rc, cy = -wH + Rc, th, k3, yy;
+            pts.push([Math.hypot(cx, wH), Math.atan2(-wH, cx)]);
+            for (k3 = 1; k3 <= 6; k3++) { th = Math.PI / 2 * k3 / 6; var px = cx + Rc * Math.sin(th), py = cy - Rc * Math.cos(th); pts.push([Math.hypot(px, py), Math.atan2(py, px)]); }
+            for (k3 = 1; k3 < 4; k3++) { yy = cy + 2 * (wH - Rc) * k3 / 4; pts.push([rr, Math.asin(Math.max(-1, Math.min(1, yy / rr)))]); }
+            mid = pts.length - 2;
+            for (k3 = 6; k3 >= 1; k3--) { th = Math.PI / 2 * k3 / 6; var qx = cx + Rc * Math.sin(th), qy = -(cy - Rc * Math.cos(th)); pts.push([Math.hypot(qx, qy), Math.atan2(qy, qx)]); }
+            pts.push([Math.hypot(cx, wH), Math.atan2(wH, cx)]);
+            for (i = N; i >= 0; i--) { r = rt + (rf - rt) * i / N; pts.push([r, ps(r)]); }
+            return { pts: pts, mid: Math.max(1, mid), ab: af, bw: 2 * wH };
+        }
+        if (rb > rf) pts.push([rb, -af]);
+        if (fillet) {
+            var rad = af * rb, u;
+            for (u = 1; u < 12; u++) { var th = Math.PI * u / 12, x = rb + rad * Math.sin(th), y = -rad * Math.cos(th); pts.push([Math.hypot(x, y), Math.atan2(y, x)]); if (u === 6) mid = pts.length - 1; }
+        } else {
+            for (i = 1; i < 4; i++) pts.push([rr, -af + 2 * af * i / 4]);
+            mid = pts.length - 2;
+        }
+        if (rb > rf) pts.push([rb, af]);
+        for (i = N; i >= 0; i--) { r = rt + (rf - rt) * i / N; pts.push([r, ps(r)]); }
+        return { pts: pts, mid: Math.max(1, mid), ab: af, bw: 2 * af * rf };
+    }
+
     function drawZoom(g, e, pins){ // pins: [{r, col, dash, lbl}]
         var W = 450, H = 245, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m;
         var x0 = rt - 0.9 * m, x1 = rr + 0.9 * m, s = W / (x1 - x0), N = 10, i, k;
+        // 短齒高時 (x1-x0) 很小、放大倍率過高，銷會大到佔滿畫面、看不出有沒有碰到兩側齒面：
+        // 銷直徑最多佔畫面高度 45%（銷圓心與兩個接觸點都要看得到），不足的寬度左右補空白置中
+        var pinD = 0, pj;
+        for (pj = 0; pj < pins.length; pj++) if (pins[pj] && pins[pj].r) pinD = Math.max(pinD, pins[pj].r.D);
+        if (pinD > 0) {
+            var s2 = Math.min(s, H * 0.45 / pinD);
+            if (s2 < s) { var ex = (W / s2 - (x1 - x0)) / 2; x0 -= ex; x1 += ex; s = s2; }
+        }
         function X(x){ return (x - x0) * s; }
         function Y(y){ return H / 2 - y * s; }
         function P(r, ph){ return X(r * Math.cos(ph)).toFixed(1) + ',' + Y(r * Math.sin(ph)).toFixed(1); }
@@ -268,20 +336,23 @@ if (!isset($can_ingear_calc)) {
         for (i = 12; i >= -12; i--) { ang = i * step * 0.2; rg.push(P(r2, ang)); }
         out += '<polygon points="' + rg.join(' ') + '" fill="#F7E0BD"/>';
         // 齒（兩側各一顆）
+        var S = slotShape(g, e, N);
         for (k = -1; k <= 0; k++) {
             var pc = k * step, pn = (k + 1) * step, t = [], r;
-            for (i = 0; i <= N; i++) { r = rr - (rr - rt) * i / N; t.push(P(r, pc + ps(r))); }
+            for (i = S.mid; i < S.pts.length; i++) t.push(P(S.pts[i][0], pc + S.pts[i][1]));
             for (i = 1; i <= 3; i++) t.push(P(rt, pc + ps(rt) + (pn - ps(rt) - (pc + ps(rt))) * i / 4));
-            for (i = 0; i <= N; i++) { r = rt + (rr - rt) * i / N; t.push(P(r, pn - ps(r))); }
-            t.push(P(r2, pn - ps(rr))); t.push(P(r2, pc + ps(rr)));
+            for (i = 0; i <= S.mid; i++) t.push(P(S.pts[i][0], pn + S.pts[i][1]));
+            t.push(P(r2, pn - S.ab)); t.push(P(r2, pc + S.ab));
             out += '<polygon points="' + t.join(' ') + '" fill="#F7E0BD"/>';
         }
         // 輪廓線：三個齒槽的兩側齒面＋槽底
         for (k = -1; k <= 1; k++) {
             var ph = k * step;
-            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + flank(ph, -1).join(' ') + '"/>';
-            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + flank(ph, 1).join(' ') + '"/>';
-            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + P(rr, ph - ps(rr)) + ' ' + P(rr, ph) + ' ' + P(rr, ph + ps(rr)) + '"/>';
+            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + S.pts.map(function(q){ return P(q[0], ph + q[1]); }).join(' ') + '"/>';
+            // 齒頂（小徑）圓弧：相鄰兩槽之間的齒頂面也要描線，不然齒頂只剩色塊邊界、看起來像斷掉
+            var ta = ph + ps(rt), tb = (k + 1) * step - ps(rt), tp = [];
+            for (i = 0; i <= 8; i++) tp.push(P(rt, ta + (tb - ta) * i / 8));
+            out += '<polyline fill="none" stroke="#6b4423" stroke-width="1.6" points="' + tp.join(' ') + '"/>';
         }
         // 基準虛線
         var lines = [[rt, '齒頂Ø' + f(g.dTip, 2), 12], [g.d / 2, '分度Ø' + f(g.d, 2), 24], [rr, '齒根Ø' + f(g.dRoot, 2), 12]];
@@ -304,17 +375,17 @@ if (!isset($can_ingear_calc)) {
             out += '<text x="' + cx.toFixed(1) + '" y="' + (cy + 15 + 12 * i).toFixed(1) + '" text-anchor="middle" font-size="10.5" fill="#333">' + pn2.lbl + '</text>';
         }
         out += '<text x="6" y="' + (H - 8) + '" font-size="10" fill="#6b4423">← 齒輪中心</text>';
-        $('ig-zoom').innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + out + '</svg>';
+        hostEl('ig-zoom').innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + out + '</svg>';
     }
 
     function drawOverview(g, e, q, col){
         var S = 188, c = S / 2, rr = g.dRoot / 2, rt = g.dTip / 2, Ro = rr * 1.1, s = (c - 6) / Ro, N = 5, i, k, pts = [], step = 2 * Math.PI / g.z;
         function PX(r, ph){ return (c + r * Math.cos(ph) * s).toFixed(1) + ',' + (c - r * Math.sin(ph) * s).toFixed(1); }
         function ps(r){ return Math.max(0, psiAt(g, e, r)); }
+        var SH = slotShape(g, e, N);
         for (k = 0; k < g.z; k++) {
             var pc = k * step, r;
-            for (i = 0; i <= N; i++) { r = rt + (rr - rt) * i / N; pts.push(PX(r, pc - ps(r))); }
-            for (i = N; i >= 0; i--) { r = rt + (rr - rt) * i / N; pts.push(PX(r, pc + ps(r))); }
+            for (i = 0; i < SH.pts.length; i++) pts.push(PX(SH.pts[i][0], pc + SH.pts[i][1]));
             var a1 = pc + ps(rt), a2 = pc + step - ps(rt);
             pts.push(PX(rt, a1 + (a2 - a1) / 3)); pts.push(PX(rt, a1 + 2 * (a2 - a1) / 3));
         }
@@ -331,28 +402,28 @@ if (!isset($can_ingear_calc)) {
             }
             out += '<text x="' + (c - 24) + '" y="' + (c - 6) + '" font-size="10.5" fill="#DD5138">M ' + f(q.M, 3) + '</text>';
         }
-        $('ig-over').innerHTML = '<svg width="' + S + '" height="' + S + '" viewBox="0 0 ' + S + ' ' + S + '">' + out + '</svg>';
+        hostEl('ig-over').innerHTML = '<svg width="' + S + '" height="' + S + '" viewBox="0 0 ' + S + ' ' + S + '">' + out + '</svg>';
     }
 
     // 齒形預覽：取 5 個齒槽（4 顆完整齒）的一小段輪廓，依真實極座標畫出，並畫出齒頂圓／分度圓／齒根圓，方便確認齒形有沒有怪異
     function drawProfile(g, e){
-        var host = $('ig-prof'); if (!host) return;
-        var W = 450, H = 170, pad = 22, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m, step = 2 * Math.PI / g.z, N = 14, i, k;
+        var host = hostEl('ig-prof'); if (!host) return;
+        var W = 450, H = g.rootForm ? 200 : 170, pad = 22, rt = g.dTip / 2, rr = g.dRoot / 2, m = g.m, step = 2 * Math.PI / g.z, N = 14, i, k;
         function psRaw(r){ return psiAt(g, e, r); }
         function ps(r){ return Math.max(0, psRaw(r)); }
-        var K = Math.min(2, Math.floor(g.z / 2) - 1 > 0 ? 2 : 1), half = (K + 0.5) * step, r2 = rr + 0.7 * m, pts = [], ph, r, a;
+        var SHP = slotShape(g, e, N);
+        var K = g.rootForm ? 2 : Math.min(2, Math.floor(g.z / 2) - 1 > 0 ? 2 : 1), half = (K + 0.5) * step, r2 = rr + 0.7 * m, pts = [], ph, r, a;
         // 輪廓（由左而右，ph 小→大）：每個齒槽 = 左齒面(齒頂→齒根)、槽底弧、右齒面(齒根→齒頂)，之後接齒頂弧到下一槽
         for (k = -K; k <= K; k++) {
             ph = k * step;
-            for (i = 0; i <= N; i++) { r = rt + (rr - rt) * i / N; pts.push([r, ph - ps(r)]); }
-            for (i = 1; i < 4; i++) pts.push([rr, ph - ps(rr) + 2 * ps(rr) * i / 4]);
-            for (i = N; i >= 0; i--) { r = rt + (rr - rt) * i / N; pts.push([r, ph + ps(r)]); }
+            for (i = 0; i < SHP.pts.length; i++) pts.push([SHP.pts[i][0], ph + SHP.pts[i][1]]);
             if (k < K) { var a1 = ph + ps(rt), a2 = (k + 1) * step - ps(rt); for (i = 1; i < 4; i++) pts.push([rt, a1 + (a2 - a1) * i / 4]); }
         }
         var aL = pts[0][1], aR = pts[pts.length - 1][1];
         var solid = pts.slice(), arc = [];
         for (i = 0; i <= 12; i++) solid.push([r2, aR + (aL - aR) * i / 12]);
-        function xy(p){ return [p[0] * Math.cos(p[1]), p[0] * Math.sin(p[1])]; }
+        // 內花鍵：把弧線轉成「橫向」（半徑方向朝上），圖框是寬的，齒形才能放大；內齒輪維持原本方向
+        function xy(p){ var cx0 = p[0] * Math.cos(p[1]), cy0 = p[0] * Math.sin(p[1]); return g.rootForm ? [cy0, cx0] : [cx0, cy0]; }
         function circ(rad){ var o = [], aa; for (aa = -half; aa <= half + 1e-9; aa += half / 30) o.push([rad, aa]); return o; }
         var all = solid.concat(circ(rt), circ(rr), circ(g.d / 2));
         var xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9, q;
@@ -375,7 +446,7 @@ if (!isset($can_ingear_calc)) {
         }
         host.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + out + '</svg>';
         // 齒形檢查：齒頂寬／槽底寬（弧長）。齒面在齒頂圓上交叉＝尖齒
-        var tipW = (step - 2 * psRaw(rt)) * rt, rootW = 2 * psRaw(rr) * rr, msg, col;
+        var tipW = (step - 2 * psRaw(rt)) * rt, rootW = SHP.bw, msg, col;
         if (tipW <= 0) { msg = '✗ 齒頂已成尖齒（齒面在齒頂圓內交叉），齒形異常'; col = '#DD5138'; }
         else if (rootW <= 0) { msg = '✗ 齒槽底寬為負值，齒形異常（齒槽寬或齒根圓徑不合理）'; col = '#DD5138'; }
         else if (tipW < 0.2 * g.mn) { msg = '⚠ 齒頂很窄（' + f(tipW, 3) + ' mm），接近尖齒'; col = '#E67E22'; }
@@ -481,6 +552,27 @@ if (!isset($can_ingear_calc)) {
         if (!g) { $('ig-res').innerHTML = ''; clearGraphics(); return; }
         if (tab === 'a') calcA(g); else calcB(g);
     }
+
+
+    /* ───── 對外：把同一套跨銷圖（跨銷徑／跨銷距／齒型）畫到別的容器（內花鍵分頁用）─────
+       o：{m 法向模數, z, al 法向壓力角(度), beta 螺旋角(度), x 轉位係數（花鍵標準表示法）, D 銷徑, dTip 齒頂(小)徑, dRoot 齒根(大)徑}
+       hosts：{zoom, over, prof} 三個容器元素。回傳 {M, ok, txt}（M＝跨銷距）或 null（算不出）。 */
+    window.EGInGearDraw = function(o, hosts){
+        try {
+            var g = makeGear(o.m, o.z, o.al, o.beta || 0, o.dTip, o.dRoot);
+            if (o.rootForm) g.rootForm = o.rootForm;   // 內花鍵：flat／fillet
+            if (!(g.dTip > g.db) || !(g.dRoot > g.dTip)) return null;
+            var e = eOf(g, o.x || 0), r = pinAt(g, e, o.D);
+            if (!r) return null;
+            var j = judge(g, r), col = colOf(j);
+            HOST = { 'ig-zoom': hosts.zoom, 'ig-over': hosts.over, 'ig-prof': hosts.prof };
+            try {
+                drawZoom(g, e, [{ r: r, col: col, lbl: '銷 Ø' + f(o.D, 3) }]);
+                drawOverview(g, e, r, col); drawProfile(g, e);
+            } finally { HOST = null; }
+            return { M: r.M, ok: j.lv === 0, lv: j.lv, txt: j.txt, range: usableRange(g, e, 1), rec: usableRange(g, e, 0) };
+        } catch (err) { HOST = null; return null; }
+    };
 
     /* ───── 對外函式 ───── */
     window.inGearUseStd = function(){
