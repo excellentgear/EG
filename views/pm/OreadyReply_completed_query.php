@@ -2056,6 +2056,7 @@ try {
         .ocq-tab.active { background: #F0A24B; color: #fff; border-color: #d98a33; font-weight: bold; }
         .ocq-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; clear: both;
             border: 1.5px solid #E8D5B5; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: #FDF8EF; }
+        .ocq-toolbar label { line-height: 1.15; text-align: center; }
         .ocq-toolbar label { margin: 0 0 0 6px; font-size: 13px; color: #5b3a1e; }
         .ocq-toolbar label:first-child { margin-left: 0; }
         .ocq-toolbar select, .ocq-toolbar input[type=text], .ocq-toolbar input[type=date], .ocq-toolbar button {
@@ -2266,11 +2267,11 @@ try {
                 <span id="yearHint" class="ocq-yhint"></span>
             </div>
             <div style="display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;align-items:center;width:100%;">
-                <label title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」" style="cursor:help;border-bottom:1px dotted #a06a1f;white-space:nowrap;">結案日期 <i class="fa fa-info-circle" style="color:#a06a1f;"></i></label>
+                <label title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」" style="cursor:help;border-bottom:1px dotted #a06a1f;white-space:nowrap;">結案<br>日期<i class="fa fa-info-circle" style="color:#a06a1f;"></i></label>
                 <input type="date" id="fDateFrom" max="9999-12-31">
                 <span>～</span>
                 <input type="date" id="fDateTo" max="9999-12-31">
-                <label style="white-space:nowrap;">客戶</label>
+                <label style="white-space:nowrap;">客<br>戶</label>
                 <input type="text" id="fCustomer" autocomplete="off" placeholder="客戶名稱或代號" style="width:110px;">
                 <datalist id="ocqCustomerList"></datalist>
                 <label>業務</label>
@@ -2284,7 +2285,7 @@ try {
                     <option value="E">特急件E</option>
                 </select>
                 <?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
-                <label style="white-space:nowrap;">綁定狀態</label>
+                <label style="white-space:nowrap;">綁定<br>狀態</label>
                 <select id="fBind" title="把「還沒綁好的」直接篩出來；篩完可直接按右邊的「自動綁定」整批處理">
                     <option value="">（全部）</option>
                     <option value="no_part">未綁料號</option>
