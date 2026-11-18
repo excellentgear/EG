@@ -110,7 +110,7 @@ if ($TI_PART === 'modals') { ?>
             <div class="ti-row"><label>詢價單號／日期／詢價人</label><div class="ti-cell"><input type="text" id="tiNo" class="w110 ro-auto" readonly><input type="text" id="tiDate" class="w110 ro-auto" readonly><input type="text" id="tiWho" class="w110 ro-auto" readonly></div></div>
             <div class="ti-row"><label>工件編號 Workpiece No.<small>輸入料號搜尋主檔並挑選＝綁定料號，客戶自動帶入</small></label>
                 <div class="ti-cell"><input type="text" id="tiPart" class="w160" placeholder="輸入料號或圖號搜尋…" autocomplete="off" style="width:260px;">
-                    <span id="tiPartTag" class="ti-bind" style="display:none;"></span>
+                    <span id="tiPartTag" class="ti-bind" style="display:none;"></span><span id="tiPartOk" title="已綁定主檔料號" style="display:none;color:#2e9d4f;font-size:20px;font-weight:bold;line-height:1;">✔</span>
                     <select id="tiGearSel" style="display:none;" title="這個料號有多組齒輪規格，選一組帶入"></select><div class="ti-err" id="tiErrPart"></div></div></div>
             <div class="ti-row"><label>客戶</label><div class="ti-cell"><input type="text" id="tiCust" style="width:260px;" placeholder="綁定料號後自動帶入"><span class="ti-unit" id="tiCustHint"></span></div></div>
             <div class="ti-row"><label>需求支數</label><div class="ti-cell"><input type="number" id="tiQty" class="w110" min="1" step="1" inputmode="numeric"><span class="ti-unit">支（選填）</span><div class="ti-err" id="tiErrQty"></div></div></div>
@@ -257,6 +257,8 @@ if ($TI_PART === 'modals') { ?>
         <p>可設定「交期前 N 天」提前提醒一次。<b>交期已過仍未到貨</b>的詢價單會<b>自動置頂並標紅</b>，清單上方也有提示列，並發出通知（建單人＋其單位主管：站內通知、推播、Telegram）；
         按「已到貨」或結案後自動取消置頂。</p>
         <h4>列印</h4>
+        <p><b>轉存 PDF</b>：按「轉存PDF」，版面與列印相同，<b>一家廠商存成一個 PDF 檔</b>，檔名＝廠商名稱_工件編號（檔名不能用的字元會自動略過）。有多家廠商時同樣可選全部或勾選。
+        若瀏覽器網址是 HTTPS，會讓您先選要存的資料夾；一般 http 內網網址瀏覽器不開放網頁直接選資料夾，檔案會存到瀏覽器的下載位置（要每次自己選位置，請在瀏覽器設定開啟「下載前詢問儲存位置」）。</p>
         <p>每張詢價單按「列印」，<b>一家廠商一頁</b>，頁首帶該廠商的聯絡人、電話、傳真；給廠商的版本不印客戶名稱。廠商有多家時，會先讓您選擇「全部列印」或勾選要印的廠商。
         列印版有公司抬頭、頁尾右下角的 AS 文件編號（沿用詢價單綁定、依詢價日回推版次），並留列印紀錄；「審核」欄預設隱藏，可由管理員設定是否顯示。</p>
         <h4>設定（刀具詢價管理員）</h4>
@@ -276,12 +278,12 @@ if ($TI_PART === 'modals') { ?>
 
 <!-- ══ 刀具詢價：列印選擇（多家廠商時） ══ -->
 <div class="iq-mask" id="tpMask"><div class="iq-modal" style="max-width:520px;">
-    <div class="m-head"><span>列印刀具詢價單</span><span class="m-close" onclick="closeMask('tpMask')">✕</span></div>
+    <div class="m-head"><span id="tpTitle">列印刀具詢價單</span><span class="m-close" onclick="closeMask('tpMask')">✕</span></div>
     <div class="m-body">
         <div id="tpInfo" style="font-size:12.5px;color:#8a6d45;margin-bottom:8px;"></div>
         <div style="margin-bottom:6px;"><button type="button" class="ti-mini" id="tpAll">全選</button> <button type="button" class="ti-mini" id="tpNone">全不選</button></div>
         <div id="tpList"></div>
-        <div class="ti-unit" style="margin-top:8px;display:block;">每家廠商各印一頁（頁首帶該廠商的聯絡人、電話、傳真）。「全部列印」不含已標記不採用的廠商。</div>
+        <div class="ti-unit" id="tpHint" style="margin-top:8px;display:block;">每家廠商各印一頁（頁首帶該廠商的聯絡人、電話、傳真）。「全部列印」不含已標記不採用的廠商。</div>
     </div>
     <div class="m-foot"><button onclick="closeMask('tpMask')">取消</button><button type="button" id="tpPrintAll">全部列印</button><button class="b-ok" id="tpPrintSel">列印勾選的</button></div>
 </div></div>
@@ -418,6 +420,7 @@ function renderList(rows, total){
       + '<span class="ti-st '+r.status+'">'+OVERALL[r.status]+'</span>'
       + '<span style="margin-left:auto;display:flex;gap:6px;">'
       + '<button class="ti-mini" data-act="print" data-id="'+r.id+'">列印</button>'
+      + '<button class="ti-mini" data-act="pdf" data-id="'+r.id+'" title="每家廠商存成一個 PDF 檔（檔名＝廠商名稱_工件編號）">轉存PDF</button>'
       + '<button class="ti-mini" data-act="edit" data-id="'+r.id+'">'+(canEdit?'編輯':'檢視')+'</button>'
       + (canEdit?'<button class="ti-mini" data-act="close" data-id="'+r.id+'" data-v="'+(r.is_closed?0:1)+'">'+(r.is_closed?'重新開啟':'結案')+'</button><button class="ti-mini" style="color:#DD5138;" data-act="del" data-id="'+r.id+'">刪除</button>':'')
       + '</span></div>';
@@ -445,6 +448,7 @@ $('#tList').on('click', '[data-act]', function(){
   var id = parseInt($(this).data('id'),10), act = $(this).data('act');
   if (act==='edit') openEdit(id);
   else if (act==='print') startPrint(id);
+  else if (act==='pdf') startPdf(id);
   else if (act==='vendor') openVendor(id, parseInt($(this).data('vid'),10));
   else if (act==='close') tpost('set_closed', {id:id, closed:$(this).data('v')}, function(){ loadList(T.page); });
   else if (act==='del') { if (confirm('確定刪除這張刀具詢價單？廠商回覆與附件會一併刪除，無法復原。')) tpost('delete', {id:id}, function(){ loadList(T.page); }); }
@@ -669,19 +673,19 @@ $('#tiPart').on('input', function(){
     var seq = ++PSEQ;
     $.getJSON(TAPI, {action:'part_search', kw:kw}, function(res){
       if (seq!==PSEQ || !res.success) return;
-      if (!res.rows.length) { showSug($i, '<div style="color:#999;cursor:default;">主檔查無此料號（可直接輸入文字，不綁定）</div>'); return; }
+      if (!res.rows.length) { showSug($i, '<div style="color:#999;cursor:default;">主檔查無此料號（必須是主檔內的料號才能儲存）</div>'); return; }
       showSug($i, res.rows.map(function(r){ return '<div data-pid="'+r.part_id+'" data-no="'+esc(r.part_no)+'"><b>'+esc(r.part_no)+'</b><small>'+esc(r.drawing_no)+'　'+esc(r.customer||'（未綁客戶）')+'　#'+r.part_id+'</small></div>'; }).join(''));
     });
   }, 250);
 });
 $('#tiSug').on('click', 'div[data-pid]', function(){ bindPart(parseInt($(this).data('pid'),10), String($(this).data('no'))); hideSug(); });
 function unbindPart(){
-  T.partId = 0; $('#tiPartTag').hide().empty(); $('#tiGearSel').hide().empty(); T.gears = [];
+  T.partId = 0; $('#tiPartOk').hide(); $('#tiPartTag').hide().empty(); $('#tiGearSel').hide().empty(); T.gears = [];
   $('#tiCust').prop('readonly', false).removeClass('ro-auto'); $('#tiCustHint').text('');
 }
 function bindPart(pid, no, keepValues){
   T.partId = pid; $('#tiPart').val(no);
-  $('#tiPartTag').html('已綁定 <b>'+esc(no)+'</b> #'+pid+' <span class="x" title="解除綁定">✕</span>').show();
+  $('#tiPartTag').html('已綁定 <b>'+esc(no)+'</b> #'+pid+' <span class="x" title="解除綁定">✕</span>').show(); $('#tiPartOk').show();
   $('#tiErrPart').removeClass('show');
   $.getJSON(TAPI, {action:'part_gear', part_id:pid}, function(res){
     if (!res.success || T.partId!==pid) return;
@@ -774,7 +778,7 @@ function resetForm(){
   $('#tiBody input[type=text],#tiBody input[type=number],#tiBody textarea').val(''); $('#tiPa').val(20);
   $('input[name=tiIo][value=ext]').prop('checked', true); $('#tiModT').val('M'); $('#tiHxDir').val('');
   $('input[name=tiHx][value=dec]').prop('checked', true); setHelix(null,'dec'); $('input[name=tiTt]').prop('checked', false);
-  $('#tiToolHint').text(''); $('#tiPartTag').hide(); $('#tiGearSel').hide(); $('#tiCust').prop('readonly', false).removeClass('ro-auto'); $('#tiCustHint').text('');
+  $('#tiToolHint').text(''); $('#tiPartTag').hide(); $('#tiPartOk').hide(); $('#tiGearSel').hide(); $('#tiCust').prop('readonly', false).removeClass('ro-auto'); $('#tiCustHint').text('');
   $('.ti-err').removeClass('show').text(''); $('.ti-bad').removeClass('ti-bad'); $('#tiAttMsg').text('');
   $('#tiBody :input').prop('disabled', false); $('#tiNo,#tiDate,#tiWho').prop('readonly', true); $('#tiSave').show();
   buildCalcRows(); setMeas('wk', false); buildTool('', {}, {}); fillCats($('#tiAttCat'), ['inquiry','drawing','other']); renderChips(); updModHint();
@@ -794,7 +798,7 @@ function openEdit(id){
     $('#tiTitle').text((T.canEdit?'編輯':'檢視')+'刀具詢價　'+r.inq_no);
     $('#tiNo').val(r.inq_no); $('#tiDate').val(egFmtDate(r.inq_date)); $('#tiWho').val(r.created_by_name);
     $('#tiPart').val(r.part_no); $('#tiCust').val(r.customer||''); $('#tiQty').val(nz(r.qty));
-    if (r.part_id) { T.partId = r.part_id; $('#tiPartTag').html('已綁定 <b>'+esc(r.part_no)+'</b> #'+r.part_id+' <span class="x" title="解除綁定">✕</span>').show(); $('#tiCust').prop('readonly', true).addClass('ro-auto'); $('#tiCustHint').text('（由料號自動帶入）');
+    if (r.part_id) { T.partId = r.part_id; $('#tiPartTag').html('已綁定 <b>'+esc(r.part_no)+'</b> #'+r.part_id+' <span class="x" title="解除綁定">✕</span>').show(); $('#tiPartOk').show(); $('#tiCust').prop('readonly', true).addClass('ro-auto'); $('#tiCustHint').text('（由料號自動帶入）');
       $.getJSON(TAPI, {action:'part_gear', part_id:r.part_id}, function(g){ if (g.success) { T.gears = g.gears||[]; if (!T.fwAuto && T.gears.length) { T.fwAuto = T.gears[0].face_width; recalc(); }
         var $g = $('#tiGearSel').empty(); if (T.gears.length>1) { T.gears.forEach(function(x,i){ $g.append('<option value="'+i+'">'+esc('帶入：'+(x.label||('齒型'+(i+1))))+'</option>'); }); $g.show(); } } }); }
     $('input[name=tiIo][value='+(r.gear_io||'ext')+']').prop('checked', true);
@@ -819,7 +823,11 @@ $('#tiSave').on('click', function(){
   VAL.forEach(function(v){ var m = check(v[0], v[1], v[2]); if (m) errs.push(m); });
   var m2 = checkTool(); if (m2) errs.push(m2);
   var partTxt = $.trim($('#tiPart').val());
-  if (!T.partId && !partTxt) { $('#tiErrPart').text('請綁定料號（或至少填寫料號文字）').addClass('show'); errs.push('請綁定料號'); }
+  if (!T.partId) {
+    $('#tiErrPart').text(partTxt ? '這個料號尚未從主檔挑選綁定：請從下拉清單點選料號（綁定後右側會出現綠色勾勾）' : '請輸入料號並從主檔清單挑選綁定').addClass('show');
+    alert('料號尚未綁定，無法儲存。\n\n請在「工件編號」欄輸入料號，並從下拉清單中點選主檔料號；綁定成功後右側會出現綠色 ✔。');
+    $('#tiPart').focus(); return;
+  }
   Object.keys(CALC).forEach(function(k){ var c = CALC[k]; if ((c.v!==null&&c.v<0)||(c.v2!==null&&c.v2<0)) errs.push(CALC_DEF[k].lb+'請填 0 以上的數字'); });
   if (errs.length) { alert('尚有欄位需要修正：\n・'+errs.slice(0,6).join('\n・')); return; }
   var s = params(), spec = {module_type:$('#tiModT').val(), module_val:$('#tiModV').val(), pa:$('#tiPa').val(), teeth:$('#tiZ').val(), x:$('#tiX').val(),
@@ -1070,7 +1078,7 @@ function startPrint(id){
     if (!res.success) { w.close(); alert(res.message||'取得資料失敗'); return; }
     var vs = res.inq.vendors;
     if (vs.length <= 1) { doPrint(id, [], w); return; }
-    w.close(); TP = {id:id, vendors:vs};
+    w.close(); TP = {id:id, vendors:vs, mode:'print'}; tpModeTexts('print');
     $('#tpInfo').html('詢價單 <b>'+esc(res.inq.inq_no)+'</b>　'+esc(res.inq.part_no)+'　共 '+vs.length+' 家廠商，請選擇要列印的廠商：');
     $('#tpList').html(vs.map(function(v){
       return '<label class="ti-ck" style="display:flex;padding:4px 0;"><input type="checkbox" class="tpck" value="'+v.vid+'"'+(v.is_void?'':' checked')+'> '+esc(v.vendor_id_no)+' '+esc(v.vendor_name)+(v.is_void?'（不採用）':'')+'</label>';
@@ -1080,18 +1088,93 @@ function startPrint(id){
 }
 $('#tpAll').on('click', function(){ $('#tpList .tpck').prop('checked', true); });
 $('#tpNone').on('click', function(){ $('#tpList .tpck').prop('checked', false); });
-$('#tpPrintAll').on('click', function(){
-  var ids = TP.vendors.filter(function(v){ return !v.is_void; }).map(function(v){ return v.vid; });
-  if (!ids.length) ids = TP.vendors.map(function(v){ return v.vid; });
+function tpModeTexts(mode){
+  var pdf = mode==='pdf';
+  $('#tpTitle').text(pdf ? '轉存 PDF（刀具詢價單）' : '列印刀具詢價單');
+  $('#tpPrintAll').text(pdf ? '全部轉存' : '全部列印'); $('#tpPrintSel').text(pdf ? '轉存勾選的' : '列印勾選的');
+  $('#tpHint').html(pdf ? '每家廠商存成<b>一個 PDF 檔</b>，檔名＝廠商名稱_工件編號（檔名不能用的字元會自動略過）。「全部轉存」不含已標記不採用的廠商。'
+                        : '每家廠商各印一頁（頁首帶該廠商的聯絡人、電話、傳真）。「全部列印」不含已標記不採用的廠商。');
+}
+function tpPick(all){
+  var ids;
+  if (all) { ids = TP.vendors.filter(function(v){ return !v.is_void; }).map(function(v){ return v.vid; }); if (!ids.length) ids = TP.vendors.map(function(v){ return v.vid; }); }
+  else { ids = $('#tpList .tpck:checked').map(function(){ return parseInt(this.value,10); }).get(); if (!ids.length) { alert('請至少勾選一家廠商'); return; } }
+  if (TP.mode === 'pdf') { closeMask('tpMask'); exportPdfs(TP.id, ids); return; }   // 轉存 PDF 不開新視窗；選資料夾要在使用者點擊當下呼叫
   var w = window.open('', '_blank'); if (!w) { alert('請允許彈出視窗'); return; }
   closeMask('tpMask'); doPrint(TP.id, ids, w);
-});
-$('#tpPrintSel').on('click', function(){
-  var ids = $('#tpList .tpck:checked').map(function(){ return parseInt(this.value,10); }).get();
-  if (!ids.length) { alert('請至少勾選一家廠商'); return; }
-  var w = window.open('', '_blank'); if (!w) { alert('請允許彈出視窗'); return; }
-  closeMask('tpMask'); doPrint(TP.id, ids, w);
-});
+}
+$('#tpPrintAll').on('click', function(){ tpPick(true); });
+$('#tpPrintSel').on('click', function(){ tpPick(false); });
+
+/* ───────── 轉存 PDF：一家廠商一個檔，檔名＝廠商名稱_工件編號 ───────── */
+function startPdf(id){
+  $.getJSON(TAPI, {action:'get', id:id}, function(res){
+    if (!res.success) { alert(res.message||'取得資料失敗'); return; }
+    var vs = res.inq.vendors;
+    if (vs.length <= 1) { exportPdfs(id, []); return; }
+    TP = {id:id, vendors:vs, mode:'pdf'}; tpModeTexts('pdf');
+    $('#tpInfo').html('詢價單 <b>'+esc(res.inq.inq_no)+'</b>　'+esc(res.inq.part_no)+'　共 '+vs.length+' 家廠商，請選擇要轉存的廠商：');
+    $('#tpList').html(vs.map(function(v){
+      return '<label class="ti-ck" style="display:flex;padding:4px 0;"><input type="checkbox" class="tpck" value="'+v.vid+'"'+(v.is_void?'':' checked')+'> '+esc(v.vendor_id_no)+' '+esc(v.vendor_name)+(v.is_void?'（不採用）':'')+'</label>';
+    }).join(''));
+    openMask('tpMask');
+  }).fail(function(){ alert('連線失敗'); });
+}
+function tpSafe(x){   // 檔名不能用的字元（\ / : * ? " < > | 與控制字元、零寬字元）一律略過
+  return String(x==null?'':x).replace(/[\\\/:*?"<>|\x00-\x1f]/g, '').replace(/[\u200b-\u200f\u2028\u2029\ufeff]/g, '').replace(/\s+/g, ' ').trim().replace(/^\.+|\.+$/g, '').trim();
+}
+function tpFileName(vendor, part, used){
+  var a = tpSafe(vendor), b = tpSafe(part), n = (a && b) ? a+'_'+b : (a || b || '刀具詢價單');
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(n)) n += '_';      // Windows 保留名稱
+  if (n.length > 120) n = n.slice(0, 120).trim();
+  var name = n+'.pdf', i = 2; while (used[name]) { name = n+'('+i+').pdf'; i++; }
+  used[name] = 1; return name;
+}
+function tpBusy(msg){
+  var $b = $('#tpBusy'); if (!msg) { $b.remove(); return; }
+  if (!$b.length) $b = $('<div id="tpBusy" style="position:fixed;left:50%;bottom:30px;transform:translateX(-50%);z-index:10000;background:#5b3a1e;color:#fff;border-radius:6px;padding:10px 20px;font-size:14px;box-shadow:0 4px 14px rgba(0,0,0,.3);"></div>').appendTo('body');
+  $b.text(msg);
+}
+function tpSaveBlob(dir, name, blob){
+  if (dir) return dir.getFileHandle(name, {create:true}).then(function(h){ return h.createWritable(); }).then(function(w){ return w.write(blob).then(function(){ return w.close(); }); });
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  return new Promise(function(r){ setTimeout(r, 600); });   // 連續下載之間留一點間隔，瀏覽器才不會擋掉後面的檔案
+}
+function exportPdfs(id, vids){
+  // 網頁要「讓使用者挑資料夾」只有在 HTTPS／localhost 才有這個功能；一般 http 內網網址瀏覽器不開放，改走一般下載
+  var canPick = !!(window.showDirectoryPicker && window.isSecureContext);
+  var dirP = canPick ? window.showDirectoryPicker({mode:'readwrite'}).catch(function(e){ return (e && e.name==='AbortError') ? 'cancel' : null; }) : Promise.resolve(null);
+  tpBusy('準備中…');
+  dirP.then(function(dir){
+    if (dir === 'cancel') { tpBusy(''); return; }
+    $.getJSON(TAPI, {action:'print_data', id:id, vids:vids.join(',')}).done(function(res){
+      if (!res.success) { tpBusy(''); alert(res.message||'取得列印資料失敗'); return; }
+      var vs = res.vendors.length ? res.vendors : [null], used = {}, saved = [], failed = [], i = 0;
+      var css = tpBaseCss() + tpFooterCss(res.as_no, false);
+      (function next(){
+        if (i >= vs.length) {
+          tpBusy('');
+          if (saved.length) tpost('print_log', {id:id, vids:vids.join(','), kind:'pdf'});
+          alert((saved.length ? '已轉存 '+saved.length+' 個 PDF：\n・'+saved.join('\n・') : '沒有成功轉存任何檔案')
+            + (saved.length && !dir ? '\n\n（目前網址不是 HTTPS，瀏覽器不開放網頁直接選資料夾，檔案已存到瀏覽器的下載位置。若要每次自己選存放位置，請到瀏覽器設定開啟「下載前詢問儲存位置」。）' : '')
+            + (failed.length ? '\n\n失敗：\n・'+failed.join('\n・') : ''));
+          return;
+        }
+        var v = vs[i++]; tpBusy('正在產生 PDF '+i+' / '+vs.length+'…');
+        var name = tpFileName(v ? v.vendor_name : '', res.inq.part_no, used);
+        fetch(TAPI, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:$.param({action:'pdf_render', csrf:CSRF, html:tpPage(res, v), css:css})})
+          .then(function(r){
+            if ((r.headers.get('Content-Type')||'').indexOf('application/pdf') < 0) return r.json().then(function(j){ throw new Error(j.message || '轉 PDF 失敗'); });
+            return r.blob();
+          })
+          .then(function(blob){ return tpSaveBlob(dir, name, blob); })
+          .then(function(){ saved.push(name); }, function(e){ failed.push((v ? v.vendor_name : '')+'：'+(e && e.message || e)); })
+          .then(next);
+      })();
+    }).fail(function(){ tpBusy(''); alert('連線失敗'); });
+  });
+}
 function doPrint(id, vids, w){
   $.getJSON(TAPI, {action:'print_data', id:id, vids:vids.join(',')}, function(res){
     if (!res.success) { w.close(); alert(res.message||'取得列印資料失敗'); return; }
@@ -1163,8 +1246,8 @@ function tpPage(res, v){
     + '<td style="width:'+cw+'"><div class="lb">簽收：</div></td></tr></table></div>';
   return h;
 }
-function tpWrite(w, title, bodyHtml, asNo, multi){
-  var css = printCss()
+function tpBaseCss(){
+  return printCss()
     + '.tp-sheet{page-break-after:always;}.tp-sheet:last-child{page-break-after:auto;}'
     + '.tp-sheet .tt{margin:6px 0;}.tp-sheet .co{font-size:19px;}'
     + '.sec{font-size:12.5px;font-weight:bold;background:#EFEFEF;border:1px solid #999;border-bottom:none;padding:2px 7px;margin-top:6px;}'
@@ -1173,12 +1256,16 @@ function tpWrite(w, title, bodyHtml, asNo, multi){
     + 'table.tp td.lb{background:#F7F7F7;font-weight:bold;width:21%;}'
     + 'table.tp td.chk{font-size:11px;width:33.33%;}'
     + 'table.sg td{height:62px;}';
+}
+function tpFooterCss(asNo, multi){   // 頁尾：AS 編號放右下；多頁時左下加頁碼
   var doc = String(asNo||'').replace(/[\'\\]/g, '');
-  var js = (multi ? ('var st=document.createElement("style");st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } @bottom-right{ content:\''+doc+'\'; font-size:9pt; color:#333; } }";document.head.appendChild(st);')
-                 : ('var st=document.createElement("style");st.textContent="@page{ @bottom-right{ content:\''+doc+'\'; font-size:9pt; color:#333; } }";document.head.appendChild(st);'))
-         + 'setTimeout(function(){window.print();},250);';
+  return multi ? "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; } @bottom-right{ content:'"+doc+"'; font-size:9pt; color:#333; } }"
+               : "@page{ @bottom-right{ content:'"+doc+"'; font-size:9pt; color:#333; } }";
+}
+function tpWrite(w, title, bodyHtml, asNo, multi){
+  var js = 'var st=document.createElement("style");st.textContent='+JSON.stringify(tpFooterCss(asNo, multi))+';document.head.appendChild(st);setTimeout(function(){window.print();},250);';
   w.document.open();
-  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+tpBaseCss()+'</style></head><body>'
     + bodyHtml + '<scr'+'ipt>window.onload=function(){'+js+'};</scr'+'ipt></body></html>');
   w.document.close();
 }

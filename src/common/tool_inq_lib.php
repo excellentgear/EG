@@ -625,7 +625,7 @@ function ti_save(PDO $db, array $P, array $perm, int $uid, string $uname): array
         if (!$pc) return [false, '綁定的料號不存在，請重新選擇', 0];
         $partText = $pc['part_no'];
     }
-    if ($partId <= 0 && $partText === '') return [false, '請綁定料號（或至少填寫料號文字）', 0];
+    if ($partId <= 0) return [false, '料號尚未綁定：請從主檔清單挑選料號後再儲存', 0];
     $custText = $partId > 0 ? '' : mb_substr(trim((string)($P['customer_text'] ?? '')), 0, 100);
     [$e, $qty] = ti_int($P['qty'] ?? null, 1, 99999999, '需求支數'); if ($e) return [false, $e, 0];
 
@@ -1202,6 +1202,72 @@ function ti_sub_type_for(PDO $db, string $kind, array $set): array {   // [sub_t
     $name = $kind === 'hob' ? '滾齒刀' : '插齒刀';
     foreach ($rows as $r) if (trim((string)$r['sub_type_name']) === $name) return [(int)$r['sub_type_id'], $name];
     return [0, ''];
+}
+
+/* ═══════════════ 轉存 PDF（一家廠商一個檔） ═══════════════
+ * 畫面照列印版面組好 HTML＋CSS，送到這裡由 headless Chrome（attachment_lib 既有的 eg_att_browser_pdf）印成 PDF。
+ * 因為 HTML 是使用者端送來的，**一律先過白名單清洗**：只留版面用的標籤與屬性，不收 script／iframe／外部連結／file: 等，
+ * 避免有人借這支轉檔去讀伺服器本機檔案或打內網（SSRF）。圖章用的 SVG 與 data:image 內嵌圖片（掃描章）有限度放行。
+ */
+function ti_pdf_clean_css(string $css): ?string {
+    if (strlen($css) > 60000) return null;
+    if (preg_match('/url\s*\(|@import|expression\s*\(|javascript:|behavior\s*:|<\/?\s*(style|script)|<!--/i', $css)) return null;
+    return $css;
+}
+function ti_pdf_clean_html(string $html): ?string {
+    if (strlen($html) > 700000) return null;
+    $okTags = array_flip(['div', 'span', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'b', 'strong', 'i', 'em', 'u', 'br', 'small', 'p', 'h1', 'h2', 'h3', 'h4', 'img',
+        'svg', 'g', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon', 'text', 'tspan', 'image', 'defs']);
+    $okAttr = array_flip(['class', 'style', 'colspan', 'rowspan', 'width', 'height', 'viewbox', 'd', 'fill', 'stroke', 'stroke-width', 'transform', 'x', 'y', 'x1', 'x2', 'y1', 'y2', 'cx', 'cy', 'r', 'rx', 'ry',
+        'points', 'font-size', 'font-family', 'font-weight', 'text-anchor', 'dominant-baseline', 'letter-spacing', 'opacity', 'fill-opacity', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin',
+        'textlength', 'lengthadjust', 'preserveaspectratio', 'fill-rule', 'stroke-dasharray', 'xmlns']);
+    $dataImg = '#^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$#';
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    libxml_use_internal_errors(true);
+    $dom->loadHTML('<' . '?xml encoding="utf-8"?><div id="ti-root">' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    $root = $dom->getElementById('ti-root');
+    if (!$root) return null;
+    $walk = function (DOMNode $n) use (&$walk, $okTags, $okAttr, $dataImg) {
+        $kids = [];
+        foreach ($n->childNodes as $c) $kids[] = $c;
+        foreach ($kids as $c) {
+            if ($c->nodeType === XML_COMMENT_NODE || $c->nodeType === XML_PI_NODE) { $n->removeChild($c); continue; }
+            if ($c->nodeType !== XML_ELEMENT_NODE) continue;
+            $tag = strtolower($c->nodeName);
+            if (!isset($okTags[$tag])) { $n->removeChild($c); continue; }   // script／iframe／object／link／form…整個移除
+            $drop = [];
+            foreach ($c->attributes as $a) {
+                $an = strtolower($a->nodeName); $av = (string)$a->nodeValue;
+                if (($an === 'href' || $an === 'xlink:href' || $an === 'src') && in_array($tag, ['image', 'img'], true) && preg_match($dataImg, $av)) continue;
+                if (!isset($okAttr[$an])) { $drop[] = $a->nodeName; continue; }
+                if ($an === 'xmlns') { if ($av !== 'http://www.w3.org/2000/svg') $drop[] = $a->nodeName; continue; }
+                if (preg_match('/url\s*\(|javascript:|file:|https?:|data:|expression\s*\(|@import/i', $av)) $drop[] = $a->nodeName;
+            }
+            foreach ($drop as $d) $c->removeAttribute($d);
+            $walk($c);
+        }
+    };
+    $walk($root);
+    $out = '';
+    foreach ($root->childNodes as $c) $out .= $dom->saveHTML($c);
+    return $out;
+}
+/** 回傳 PDF 內容；失敗回 null 並把原因放進 $err */
+function ti_pdf_render(string $html, string $css, ?string &$err = null): ?string {
+    require_once __DIR__ . '/attachment_lib.php';
+    $c = ti_pdf_clean_css($css);
+    if ($c === null) { $err = '版面樣式含不允許的內容'; return null; }
+    $h = ti_pdf_clean_html($html);
+    if ($h === null || trim(strip_tags($h)) === '') { $err = '列印內容為空或太大'; return null; }
+    $tmp = rtrim(sys_get_temp_dir(), '\\/') . DIRECTORY_SEPARATOR . 'tiq_' . bin2hex(random_bytes(6));
+    $htmlPath = $tmp . '.html'; $pdfPath = $tmp . '.pdf';
+    file_put_contents($htmlPath, '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' . $c . '</style></head><body>' . $h . '</body></html>');
+    $ok = eg_att_browser_pdf($htmlPath, $pdfPath, 60);
+    @unlink($htmlPath);
+    if (!$ok || !is_file($pdfPath)) { @unlink($pdfPath); $err = '伺服器轉 PDF 失敗（找不到瀏覽器或逾時），請改用「列印」另存 PDF'; return null; }
+    $bin = (string)file_get_contents($pdfPath); @unlink($pdfPath);
+    return (substr($bin, 0, 4) === '%PDF') ? $bin : null;
 }
 
 function ti_delete(PDO $db, int $id, array $perm): array {

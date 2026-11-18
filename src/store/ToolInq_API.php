@@ -81,6 +81,13 @@ case 'print_data': {
     if (!$vs && !$vids) $vs = $i['vendors'];   // 全部不採用時仍讓使用者印得出來
     jout(true, ['inq' => $i, 'vendors' => $vs, 'company' => inq_own_company($db), 'as_no' => eg_asdoc_no_asof($db, 'inquiry', $i['inq_date'])]);
 }
+case 'pdf_render': {   // 轉存 PDF：畫面組好的列印內容送來，清洗後交給 headless Chrome 印成 PDF
+    $err = null;
+    $bin = ti_pdf_render((string)($_POST['html'] ?? ''), (string)($_POST['css'] ?? ''), $err);
+    if ($bin === null) jerr($err ?: '轉 PDF 失敗');
+    header('Content-Type: application/pdf'); header('Content-Length: ' . strlen($bin)); header('Cache-Control: no-store');
+    echo $bin; exit;
+}
 case 'print_log': {   // ai-rules/23：每家廠商各留一筆列印紀錄
     $i = ti_get($db, (int)($_POST['id'] ?? 0));
     if ($i) {
@@ -89,7 +96,7 @@ case 'print_log': {   // ai-rules/23：每家廠商各留一筆列印紀錄
         if (!$targets) $targets = [['vid' => 0, 'vendor_name' => '']];
         foreach ($targets as $v) {
             eg_print_log_add($db, ['source' => 'inquiry', 'doc_kind' => 'form', 'ref_table' => 'tool_inq_vendor', 'ref_id' => (int)$v['vid'],
-                'doc_name' => '刀具詢價單 ' . $i['inq_no'] . ($v['vendor_name'] !== '' ? '　' . $v['vendor_name'] : ''), 'part_no' => (string)$i['part_no'], 'user_id' => $uid]);
+                'doc_name' => '刀具詢價單 ' . $i['inq_no'] . ($v['vendor_name'] !== '' ? '　' . $v['vendor_name'] : '') . (($_POST['kind'] ?? '') === 'pdf' ? '（轉存PDF）' : ''), 'part_no' => (string)$i['part_no'], 'user_id' => $uid]);
         }
     }
     jout(true);
