@@ -2056,6 +2056,7 @@ try {
         .ocq-tab.active { background: #F0A24B; color: #fff; border-color: #d98a33; font-weight: bold; }
         .ocq-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; clear: both;
             border: 1.5px solid #E8D5B5; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: #FDF8EF; }
+        .ocq-ab-bomin { width: 125px; height: 26px; font-size: 12.5px; padding: 0 6px; border: 1px solid #D8BE93; border-radius: 3px; background: #fff; color: #5b3a1e; }
         .ocq-toolbar label { line-height: 1.15; text-align: center; }
         .ocq-toolbar label { margin: 0 0 0 6px; font-size: 13px; color: #5b3a1e; }
         .ocq-toolbar label:first-child { margin-left: 0; }
@@ -3858,7 +3859,7 @@ function ocqAbManualHtml(res){
     (res.rows || []).forEach(function(r){
         h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no) + '" data-client="' + esc(r.bom_client || '') + '">'
            + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
-           + '<td>' + esc(r.bom)
+           + '<td><input type="text" readonly class="ocq-ab-bomin" value="' + esc(r.bom) + '">'
            + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div>'
            + ocqAbProcs(r.processes) + '</td>'
            + '<td>' + esc(r.part_no)
@@ -3922,7 +3923,7 @@ function ocqAbNomatchHtml(res){
         var canNew = !!(r.part_no && $.trim(r.part_no) !== '');
         h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no || '') + '" data-client="' + esc(r.bom_client || '') + '">'
            + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"' + (canNew ? '' : ' disabled title="這筆 BOM 沒有料號文字，建不了料號"') + '></td>'
-           + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div>' + ocqAbProcs(r.processes) + '</td>'
+           + '<td><input type="text" readonly class="ocq-ab-bomin" value="' + esc(r.bom) + '"><div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div>' + ocqAbProcs(r.processes) + '</td>'
            + '<td>' + (r.part_no ? esc(r.part_no) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + (r.bom_client ? esc(r.bom_client) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + esc(r.qty) + '</td>'
@@ -3987,6 +3988,7 @@ function ocqAbCkSync($pane){
     $pane.find('.ocq-ab-all').prop('checked', n > 0 && n === $ck.length);
     $ck.each(function(){ $(this).closest('tr').toggleClass('picked', this.checked); });
 }
+$('#ocqAbMask').on('focus click', 'input.ocq-ab-bomin', function(){ var el = this; setTimeout(function(){ el.select(); }, 0); });
 $('#ocqAbMask').on('change', '.ocq-ab-ck', function(){ ocqAbCkSync($(this).closest('.ocq-ab-pane')); });
 $('#ocqAbMask').on('change', '.ocq-ab-all', function(){
     var on = this.checked, $pane = $(this).closest('.ocq-ab-pane');
