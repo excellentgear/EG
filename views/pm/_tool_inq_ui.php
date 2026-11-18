@@ -50,7 +50,11 @@ if ($TI_PART === 'style') { ?>
 .ti-card-hd { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 12px; background:#FBF2DE; border-bottom:1px solid #E8D5B5; border-radius:6px 6px 0 0; }
 .ti-card-hd .no { font-weight:bold; color:#b5762a; font-size:13.5px; } .ti-card-hd .dt { font-size:11px; color:#999; display:block; }
 .ti-card-hd .part { font-weight:bold; color:#5b3a1e; font-size:14px; } .ti-card-hd .cust { font-size:12px; color:#8a6d45; }
-.ti-type { font-size:11px; font-weight:bold; color:#fff; background:#8A5A2B; border-radius:3px; padding:2px 8px; }
+.ti-type { font-size:11px; font-weight:bold; color:#fff; background:#8A5A2B; border-radius:3px; padding:2px 8px; white-space:nowrap; }
+.ti-tagpill { display:inline-block; font-size:12px; font-weight:bold; border-radius:10px; padding:1px 10px; line-height:1.5; }
+/* 刀種：滾刀＝琥珀橘、鉋齒刀＝赭紅；齒型：外齒＝淺砂（深棕字）、內齒＝深棕 */
+.ti-tag-hob { background:#D98A33; color:#fff; } .ti-tag-shaper { background:#A33F2A; color:#fff; }
+.ti-tag-ext { background:#F7E0BD; color:#5b3a1e; border:1px solid #D8BE93; } .ti-tag-int { background:#6B4423; color:#fff; }
 .ti-st { font-size:11px; border-radius:10px; padding:2px 10px; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
 .ti-st.waiting { background:#F7E0BD; } .ti-st.replied { background:#F0A24B; color:#fff; } .ti-st.ordered { background:#d98a33; color:#fff; } .ti-st.received { background:#8A5A2B; color:#fff; } .ti-st.closed, .ti-st.void, .ti-st.none { background:#e6dccb; color:#7a6446; }
 .ti-card-sum { padding:6px 12px; font-size:12.5px; color:#5b3a1e; }
@@ -107,7 +111,7 @@ if ($TI_PART === 'modals') { ?>
 
         <div class="ti-sec"><h5>工件規格 <small>有料號齒輪資料會自動帶入，皆可手動修改；齒頂徑～齒面寬可勾「已確認」或「標準」</small></h5>
             <div class="ti-row"><label>外齒輪 ／ 內齒輪<small>External / Internal Gear</small></label><div class="ti-cell">
-                <label class="ti-ck"><input type="radio" name="tiIo" value="ext" checked> 外齒</label><label class="ti-ck"><input type="radio" name="tiIo" value="int"> 內齒</label></div></div>
+                <label class="ti-ck"><input type="radio" name="tiIo" value="ext" checked> <span class="ti-tagpill ti-tag-ext">外齒</span></label><label class="ti-ck"><input type="radio" name="tiIo" value="int"> <span class="ti-tagpill ti-tag-int">內齒</span></label></div></div>
             <div class="ti-row"><label>模數<small>Module</small></label><div class="ti-cell">
                 <select id="tiModT" class="w80" style="width:80px"><option value="M">M</option><option value="CP">CP</option><option value="DP">DP</option></select>
                 <input type="number" id="tiModV" class="w110" step="any" min="0"><span class="ti-unit" id="tiModHint"></span><div class="ti-err" id="tiErrMod"></div></div></div>
@@ -126,7 +130,7 @@ if ($TI_PART === 'modals') { ?>
 
         <div class="ti-sec"><h5>刀具 <small>鉋齒刀或滾刀擇一（皆選填）</small></h5>
             <div class="ti-row"><label>刀具種類</label><div class="ti-cell">
-                <label class="ti-ck"><input type="radio" name="tiTt" value="shaper"> 鉋齒刀 Shaper</label><label class="ti-ck"><input type="radio" name="tiTt" value="hob"> 滾刀 HOB</label>
+                <label class="ti-ck"><input type="radio" name="tiTt" value="shaper"> <span class="ti-tagpill ti-tag-shaper">鉋齒刀 Shaper</span></label><label class="ti-ck"><input type="radio" name="tiTt" value="hob"> <span class="ti-tagpill ti-tag-hob">滾刀 HOB</span></label>
                 <button type="button" class="ti-mini" id="tiTtClr">清除選擇</button><span class="ti-unit" id="tiToolHint" style="color:#b5762a;"></span></div></div>
             <div id="tiToolWrap"></div>
         </div>
@@ -323,7 +327,6 @@ function renderPager(){
 }
 function specSum(r){
   var s = r.spec||{}, a=[];
-  if (r.gear_io) a.push(r.gear_io==='int'?'內齒':'外齒');
   if (s.module_val) a.push(s.module_type+s.module_val);
   if (s.teeth) a.push('z'+s.teeth);
   if (s.pa) a.push('α'+s.pa+'°');
@@ -346,7 +349,8 @@ function renderList(rows, total){
     var od = (r.overdue||[]); var $c = $('<div class="ti-card'+(od.length?' overdue':'')+'"></div>');
     var hd = '<div class="ti-card-hd"><div><span class="no">'+esc(r.inq_no)+'</span><span class="dt">'+esc(dt(r.inq_date))+'</span></div>'
       + '<div><span class="part">'+esc(r.part_no)+'</span><br><span class="cust">'+esc(r.customer||'（未填客戶）')+'</span></div>'
-      + (r.tool_type?'<span class="ti-type">'+TYPE_LB[r.tool_type]+'</span>':'')
+      + (r.gear_io?'<span class="ti-type ti-tag-'+(r.gear_io==='int'?'int':'ext')+'">'+(r.gear_io==='int'?'內齒':'外齒')+'</span>':'')
+      + (r.tool_type?'<span class="ti-type ti-tag-'+r.tool_type+'">'+TYPE_LB[r.tool_type]+'</span>':'')
       + (r.qty?'<span style="font-size:12px;">×'+r.qty+' 支</span>':'')
       + '<span style="font-size:12px;color:#8a6d45;">'+esc(r.created_by_name)+'</span>'
       + (od.length?'<span class="ti-pin">📌 交期逾期</span>':'')
