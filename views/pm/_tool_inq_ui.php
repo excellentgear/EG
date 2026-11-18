@@ -865,8 +865,8 @@ function tpPage(res, v){
     + '<div class="tt">刀　具　詢　價　單</div>'
     + '<table class="tp"><tr><td class="lb">廠商名稱：</td><td>'+esc(v?v.vendor_name:'')+'</td><td class="lb">詢價日期：</td><td>'+esc(egFmtDate(i.inq_date))+'</td></tr>'
     + '<tr><td class="lb">聯絡人員：</td><td>'+esc(v?v.contact:'')+'</td><td class="lb">單　　號：</td><td>'+esc(i.inq_no)+'</td></tr>'
-    + '<tr><td class="lb">聯絡電話：</td><td>'+esc(v?v.tel:'')+'</td><td class="lb">傳真號碼：</td><td>'+esc(v?v.fax:'')+'</td></tr>'
-    + '<tr><td class="lb">詢價人員：</td><td>'+esc(i.created_by_name)+'</td><td class="lb">需求支數：</td><td>'+(i.qty?esc(i.qty)+' 支':'')+'</td></tr></table>'
+    + '<tr><td class="lb">聯絡電話：</td><td>'+esc(v?v.tel:'')+'</td><td class="lb">詢價人員：</td><td>'+esc(i.created_by_name)+'</td></tr>'
+    + '<tr><td class="lb">傳真號碼：</td><td>'+esc(v?v.fax:'')+'</td><td class="lb">需求支數：</td><td>'+(i.qty?esc(i.qty)+' 支':'')+'</td></tr></table>'
     // 工件規格（客戶名稱不印在給廠商的詢價單上，只印工件編號）
     + '<div class="sec">工件規格　Workpiece</div><table class="tp">'
     + full('工件編號<br>Workpiece No.', esc(i.part_no))
