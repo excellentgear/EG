@@ -4851,6 +4851,37 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 </div>
 
 <!-- ═══ TAB: 領庫需求單 ═══ -->
+<!-- ══ 領庫印標籤分頁 ══ -->
+<div id="tab-olb" style="display:none;">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-tag"></i> 領庫印標籤 <small class="text-muted">（近 30 天出庫紀錄）</small></h4>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <input type="text" id="olb-client" class="form-control input-sm" style="width:190px;" placeholder="客戶ID或名稱（可模糊）" data-eg-skip>
+      <input type="text" id="olb-part" class="form-control input-sm" style="width:190px;" placeholder="料號（可模糊）" data-eg-skip>
+      <button class="btn btn-sm btn-warning" id="olb-print-btn" onclick="olbOpenPrint()" disabled><i class="fa fa-tag"></i> 列印標籤（<span id="olb-sel-cnt">0</span>）</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="table table-hover tbl-sm" style="margin:0;">
+      <thead><tr><th width="34"><input type="checkbox" id="olb-all"></th><th>出庫日期</th><th>客戶</th><th>料號</th><th>出庫數量</th><th>列印紀錄</th></tr></thead>
+      <tbody id="olb-tbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<div class="modal fade" id="olbModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-tag"></i> 列印領庫標籤（70 x 50 mm）</h4></div>
+  <div class="modal-body">
+    <p class="text-muted" style="font-size:12px;">總數量可修改；每箱數量留空＝整筆印 1 張。已印過的仍可重印，每次列印都會寫入列印紀錄。</p>
+    <table class="table table-condensed"><thead><tr><th>客戶</th><th>料號</th><th width="130">總數量</th><th width="130">每箱數量</th><th>張數</th></tr></thead><tbody id="olb-modal-body"></tbody></table>
+    <div id="olb-err" class="text-danger small"></div>
+  </div>
+  <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="olbDoPrint()"><i class="fa fa-print"></i> 列印</button></div>
+</div></div></div>
+<div class="modal fade" id="olbLogModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">列印紀錄</h4></div>
+  <div class="modal-body" id="olb-log-body"></div>
+</div></div></div>
+
 <div id="tab-req" style="display:none;">
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
     <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-clipboard"></i> 領庫需求單</h4>
@@ -5246,37 +5277,6 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     </div>
   </div>
 </div>
-
-<!-- ══ 領庫印標籤分頁 ══ -->
-<div id="tab-olb" style="display:none;">
-  <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
-    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-tag"></i> 領庫印標籤 <small class="text-muted">（近 30 天出庫紀錄）</small></h4>
-    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <input type="text" id="olb-client" class="form-control input-sm" style="width:190px;" placeholder="客戶ID或名稱（可模糊）" data-eg-skip>
-      <input type="text" id="olb-part" class="form-control input-sm" style="width:190px;" placeholder="料號（可模糊）" data-eg-skip>
-      <button class="btn btn-sm btn-warning" id="olb-print-btn" onclick="olbOpenPrint()" disabled><i class="fa fa-tag"></i> 列印標籤（<span id="olb-sel-cnt">0</span>）</button>
-    </div>
-  </div>
-  <div style="overflow-x:auto;">
-    <table class="table table-hover tbl-sm" style="margin:0;">
-      <thead><tr><th width="34"><input type="checkbox" id="olb-all"></th><th>出庫日期</th><th>客戶</th><th>料號</th><th>出庫數量</th><th>列印紀錄</th></tr></thead>
-      <tbody id="olb-tbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
-    </table>
-  </div>
-</div>
-<div class="modal fade" id="olbModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog modal-lg"><div class="modal-content">
-  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-tag"></i> 列印領庫標籤（70 x 50 mm）</h4></div>
-  <div class="modal-body">
-    <p class="text-muted" style="font-size:12px;">總數量可修改；每箱數量留空＝整筆印 1 張。已印過的仍可重印，每次列印都會寫入列印紀錄。</p>
-    <table class="table table-condensed"><thead><tr><th>客戶</th><th>料號</th><th width="130">總數量</th><th width="130">每箱數量</th><th>張數</th></tr></thead><tbody id="olb-modal-body"></tbody></table>
-    <div id="olb-err" class="text-danger small"></div>
-  </div>
-  <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="olbDoPrint()"><i class="fa fa-print"></i> 列印</button></div>
-</div></div></div>
-<div class="modal fade" id="olbLogModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog"><div class="modal-content">
-  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">列印紀錄</h4></div>
-  <div class="modal-body" id="olb-log-body"></div>
-</div></div></div>
 
 <!-- ══ 入庫單分頁 ══ -->
 <div id="tab-inb" style="display:none;">
