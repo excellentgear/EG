@@ -37,3 +37,5 @@ src/common/eng_change_remind_last_check.txt
 src/common/eng_change_autosign_last_check.txt
 erp_move_*.log
 views/pm/migrations/2026-11-03_erp_to_as9100/erp_move_*
+
+src/common/tool_inq_last_check.txt

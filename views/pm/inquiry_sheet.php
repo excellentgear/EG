@@ -200,6 +200,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .iq-set-row .lb { width:70px; font-weight:bold; color:#5b3a1e; }
         .iq-set-row label { font-weight:normal; margin:0 10px 0 0; display:inline; }
         .iq-bindtag { display:inline-block; background:#FDF3E3; color:#8A5A2B; border:1px solid #E0BE86; border-radius:4px; padding:1px 8px; font-size:12px; }
+<?php $TI_PART = 'style'; include __DIR__ . '/_tool_inq_ui.php'; ?>
     </style>
 </head>
 <body class="nav-sm">
@@ -221,6 +222,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
             <p>目前帳號不屬於業務／生管／採購部門，也未被指派檢視權限，無法使用本頁。如有需要請洽系統管理者。</p>
         </div>
 <?php else: ?>
+        <div class="ti-tabs"><button type="button" data-tab="gen" class="on">一般詢價</button><button type="button" data-tab="tool">刀具詢價</button></div>
+        <div id="paneGen">
         <div class="iq-toolbar">
             <label>年度</label>
             <select id="fYear"><option value="<?= date('Y') ?>" selected><?= date('Y') ?></option><option value="">全部</option></select>
@@ -238,6 +241,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
 
         <div class="iq-pager" id="pager"></div>
         <div id="gList"><div style="text-align:center;color:#999;padding:20px;">載入中…</div></div>
+        </div><!-- /paneGen -->
+<?php $TI_PART = 'pane'; include __DIR__ . '/_tool_inq_ui.php'; ?>
 <?php endif; ?>
     </div>
 </div>
@@ -457,11 +462,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <h4>列印</h4>
         <p>每張子單可以單獨列印，也可以在詢價案列表按「列印全部」把這個詢價案展開的所有子單一次印出（各佔一頁）。
         列印版會動態帶出公司全名、地址、電話、傳真，右下角印綁定的 AS 文件編號（依詢價日期回推版次）。</p>
+        <h4>刀具詢價（頁內「刀具詢價」分頁）</h4>
+        <p>業務專用的刀具詢價格式：工件規格（外齒／內齒、模數、壓力角、齒數、螺旋角…）＋刀具（<b>鉋齒刀或滾刀擇一</b>）＋特殊修整要求，皆為選填，只有「料號」要綁定或填寫。</p>
+        <p><b>綁定料號</b>：在「工件編號」輸入料號或圖號並從清單挑選＝綁定，<b>客戶自動帶入</b>（客戶只認料號主檔，不另存）。料號有齒輪規格就自動帶入模數／壓力角／齒數／螺旋角／齒寬；
+        綁到刀具料號（主檔管理「刀具規格設定」）會自動帶入刀種、外徑、長度、內徑、牙口數、材質、塗層。帶入後都可以手動修改；手動改料號文字會自動解除綁定。</p>
+        <p><b>自動計算欄位</b>：齒頂徑、齒底徑、全齒深、跨齒厚／跨齒數、跨銷值／跨銷徑，依模數、壓力角、齒數、螺旋角、轉位係數 x 即時算出（公式與齒輪計算工具相同，外齒與內齒不同）。
+        每一列可勾<b>已確認</b>（鎖住目前數值）、勾<b>標準</b>（印成「標準」），或直接改數字＝人工修改；按「↺ 自動」回到自動計算。齒面寬同樣可確認或手改。螺旋角可選十進位或度分秒，切換時自動換算。</p>
+        <p><b>廠商</b>：輸入廠商編號或名稱模糊搜尋後點選，可加多家。廠商回覆後按該廠商那一列的「回覆／下單」：填回覆日、單價、交期、下訂日，上傳<b>廠商報價單／刀圖</b>附件（附件必須先選類別）。
+        <b>交期提醒</b>：設定交期與「交期前 N 天」，到期前與逾期各通知一次（建單人＋其單位主管，站內通知／推播／Telegram），填了到貨日就停止。</p>
+        <p><b>管理員</b>：按「刀具選項設定」維護精度、材質、鍍層選項（已被詢價單選用的選項不可刪除但可改名），並設定牙口數、槽數的上限（需大於 0 且小於上限）。</p>
         <h4>權限</h4>
         <p>業務／生管／採購部門的人員可以建立並編輯自己部門的詢價案；管理員可以設定 AS 文件綁定與各部門使用規則，並可編輯任何詢價案。</p>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
+
+<?php $TI_PART = 'modals'; include __DIR__ . '/_tool_inq_ui.php'; ?>
 
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
@@ -1572,5 +1588,6 @@ $('#fKw').on('input', function(){ clearTimeout(kwDebounce); kwDebounce = setTime
 
 if (PERM.canView) { loadDeptSettings(function(){ loadList(1); loadAsDocCurrent(); }); }
 </script>
+<?php if ($perms['canView']) { $TI_PART = 'script'; include __DIR__ . '/_tool_inq_ui.php'; } ?>
 </body>
 </html>

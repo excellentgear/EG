@@ -90,6 +90,14 @@ try {
     error_log('[comm_ctrl] tick hook failed: ' . $e->getMessage());
 }
 
+// === 刀具詢價交期提醒 順路觸發（2026-11-18 新增；5 分鐘最多檢查一次，做法同溝通管制表）===
+try {
+    require_once __DIR__ . '/tool_inq_tick.php';
+    eg_tool_inq_tick();
+} catch (Throwable $e) {
+    error_log('[tool_inq] tick hook failed: ' . $e->getMessage());
+}
+
 // === 工程變更申請單「送出後 5 個工作天未完成」提醒申請人（2026-10-21 新增；一小時最多檢查一次）===
 try {
     require_once __DIR__ . '/eng_change_remind_tick.php';
