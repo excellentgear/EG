@@ -245,9 +245,18 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                     }
                 }
 
+                // 頁面檔名 → 角色模組（持有角色即可看到選單）；attach_dl 與主檔管理共用同一頁，不算
+                require_once __DIR__ . '/../../src/common/role_modules_lib.php';
+                $__eg_page_modules = [];
+                foreach (eg_role_modules() as $__mk => $__def) {
+                    if (($__def['page'] ?? '') === '' || $__mk === 'attach_dl') continue;
+                    $__eg_page_modules[$__def['page']][] = $__mk;
+                }
+                $page_url_by_id = [];
+                foreach ($pages_by_id as $__pid => $__pp) $page_url_by_id[$__pid] = $__pp['page_url'];
                 // 權限檢查函式
                 if (!function_exists('checkPagePerm')) {
-                    function checkPagePerm($module_code, $page_id, $perms) {
+                    function checkPagePerm($module_code, $page_id, $perms, $ctx = null) {
                         // 1. 單一頁面權限優先
                         if (isset($perms['page'][$page_id])) {
                             return true; // 只要有設定就顯示
@@ -256,7 +265,16 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                         if (isset($perms['group'][$module_code])) {
                             return true; // 只要有設定就顯示
                         }
-                        // 3. 預設無權限
+                        // 3. 角色機制（2026-11-18）：持有該頁所屬模組（roles.module）的任一角色就顯示，
+                        //    不需要另外在人員權限設定頁面 R。頁面→模組對照取自 role_modules_lib.php（唯一來源）。
+                        //    舊的 R/C/U/D 之後會移除，新頁面一律只靠角色。
+                        $__fn = $ctx ? basename((string)($ctx['url'][$page_id] ?? '')) : '';
+                        if ($__fn !== '' && !empty($ctx['mods'][$__fn])) {
+                            foreach ($ctx['mods'][$__fn] as $__m) {
+                                if (rf_has_module_role($ctx['pdo'], $ctx['uid'], $__m)) return true;
+                            }
+                        }
+                        // 4. 預設無權限
                         return false;
                     }
                 }
@@ -292,7 +310,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                             
                             foreach ($child_pages as $page) {
                                 // 使用新的權限檢查函式
-                                if (checkPagePerm($module_code, $page['page_id'], $user_perms)) {
+                                if (checkPagePerm($module_code, $page['page_id'], $user_perms, ['pdo'=>$pdo_for_menu,'uid'=>$id,'mods'=>$__eg_page_modules,'url'=>$page_url_by_id])) {
                                     $visible_pages[] = $page;
                                 }
                             }
