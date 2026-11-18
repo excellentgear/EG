@@ -108,12 +108,12 @@ if ($TI_PART === 'modals') { ?>
         <div class="ti-sec"><h5>工件規格 <small>有料號齒輪資料會自動帶入，皆可手動修改；齒頂徑～齒面寬可勾「已確認」或「標準」</small></h5>
             <div class="ti-row"><label>外齒輪 ／ 內齒輪<small>External / Internal Gear</small></label><div class="ti-cell">
                 <label class="ti-ck"><input type="radio" name="tiIo" value="ext" checked> 外齒</label><label class="ti-ck"><input type="radio" name="tiIo" value="int"> 內齒</label></div></div>
-            <div class="ti-row"><label>模數 ／ DP ／ 周節<small>Module / DP / CP</small></label><div class="ti-cell">
+            <div class="ti-row"><label>模數<small>Module</small></label><div class="ti-cell">
                 <select id="tiModT" class="w80" style="width:80px"><option value="M">M</option><option value="CP">CP</option><option value="DP">DP</option></select>
                 <input type="number" id="tiModV" class="w110" step="any" min="0"><span class="ti-unit" id="tiModHint"></span><div class="ti-err" id="tiErrMod"></div></div></div>
             <div class="ti-row"><label>壓力角<small>Pressure angle</small></label><div class="ti-cell"><input type="number" id="tiPa" class="w110" step="any" value="20"><span class="ti-unit">度</span><div class="ti-err" id="tiErrPa"></div></div></div>
             <div class="ti-row"><label>齒數<small>No. of teeth</small></label><div class="ti-cell"><input type="number" id="tiZ" class="w110" step="1" min="1"><div class="ti-err" id="tiErrZ"></div></div></div>
-            <div class="ti-row"><label>螺旋角 ／ 方向<small>Helix angle / Direction</small></label><div class="ti-cell">
+            <div class="ti-row"><label>螺旋角<small>Helix angle（未填＝0）</small></label><div class="ti-cell">
                 <label class="ti-ck"><input type="radio" name="tiHx" value="dec" checked> 十進位</label><label class="ti-ck"><input type="radio" name="tiHx" value="dms"> 度分秒</label>
                 <span id="tiHxDec"><input type="number" id="tiHxD" class="w110" step="any" min="0"> <span class="ti-unit">度</span></span>
                 <span id="tiHxDms" style="display:none;"><input type="number" id="tiHxDd" class="w80" min="0" step="1" style="width:64px"> °
@@ -134,8 +134,7 @@ if ($TI_PART === 'modals') { ?>
         <div class="ti-sec"><h5>特殊修整要求 <small>Special modification requirement</small></h5>
             <div class="ti-row"><label>倒角量<small>Semi-topping amount</small></label><div class="ti-cell"><input type="text" id="tiChamfer" class="w160" maxlength="60" placeholder="例：依設計"></div></div>
             <div class="ti-row"><label>放磨量<small>Stock removal</small></label><div class="ti-cell"><input type="text" id="tiStock" class="w160" maxlength="60"></div></div>
-            <div class="ti-row"><label>備註（刀具）<small>Remark</small></label><div class="ti-cell"><textarea id="tiToolRemark" maxlength="1000"></textarea></div></div>
-            <div class="ti-row"><label>備註（工件）<small>例：工件硬度 HRC29-32</small></label><div class="ti-cell"><textarea id="tiWorkRemark" maxlength="1000"></textarea></div></div>
+            <div class="ti-row"><label>備註<small>Remark（例：工件硬度 HRC29-32）</small></label><div class="ti-cell"><textarea id="tiToolRemark" maxlength="1000"></textarea></div></div>
         </div>
 
         <div class="ti-sec"><h5>詢價廠商 <small>輸入廠商編號／名稱模糊搜尋後點選；可多家</small></h5>
@@ -147,7 +146,6 @@ if ($TI_PART === 'modals') { ?>
                 <div class="ti-upl"><span class="ti-unit">類別（必選）</span><span class="ti-catbtns" id="tiAttCat" data-val=""></span>
                     <input type="file" id="tiAttFile"><input type="text" id="tiAttNote" placeholder="說明（選填）" style="width:180px;"><button type="button" class="ti-mini" id="tiAttBtn">上傳</button><span class="ti-unit" id="tiAttMsg"></span></div></div>
         </div>
-        <div class="ti-sec"><h5>備註</h5><div style="padding:8px 12px;"><textarea id="tiRemark" style="width:100%;min-height:60px;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;" maxlength="2000"></textarea></div></div>
     </div>
     <div class="m-foot"><button onclick="closeMask('tiMask')">取消</button><button class="b-ok" id="tiSave">儲存</button></div>
 </div></div>
@@ -425,7 +423,8 @@ function toDms(deg){
 }
 var HXDEG = null;   // 螺旋角真值（十進位度數）；十進位／度分秒兩種輸入共用，切換模式時從它換算
 function setHelix(deg, mode){
-  HXDEG = (deg===undefined||deg===null||isNaN(deg)) ? null : deg;
+  if (deg===undefined||deg===null||isNaN(deg)) deg = 0;   // 螺旋角未填＝0
+  HXDEG = deg;
   if (mode) $('input[name=tiHx][value='+mode+']').prop('checked', true);
   var dms = $('input[name=tiHx]:checked').val()==='dms';
   $('#tiHxDec').toggle(!dms); $('#tiHxDms').toggle(dms);
@@ -680,8 +679,7 @@ function openEdit(id){
     if (s.meas) setMeas(s.meas, true); else { MEAS_USER = false; defaultMeas(); }
     recalc();
     if (r.tool_type) { $('input[name=tiTt][value='+r.tool_type+']').prop('checked', true); var t = r.tool||{}; buildTool(r.tool_type, t, {accuracy_id:r.accuracy_id, material_id:r.material_id, coating_id:r.coating_id}); }
-    var sp = r.special||{}; $('#tiChamfer').val(sp.chamfer||''); $('#tiStock').val(sp.stock||''); $('#tiToolRemark').val(sp.tool_remark||''); $('#tiWorkRemark').val(sp.work_remark||'');
-    $('#tiRemark').val(r.remark||'');
+    var sp = r.special||{}; $('#tiChamfer').val(sp.chamfer||''); $('#tiStock').val(sp.stock||''); $('#tiToolRemark').val([sp.tool_remark, sp.work_remark, r.remark].filter(function(x){ return !!x; }).join('\n'));   // 舊資料的工件備註／詢價備註併入這一個
     T.vendors = r.vendors.map(function(v){ return {vendor_id:v.vendor_id_no, vendor_name:v.vendor_name, locked: !!(v.reply_date||v.unit_price!==null||v.order_date)}; });
     renderChips(); updModHint(); loadAtt();
     if (!T.canEdit) { $('#tiBody :input').prop('disabled', true); $('#tiSave').hide(); $('.ti-upl').hide(); }
@@ -699,13 +697,13 @@ $('#tiSave').on('click', function(){
   Object.keys(CALC).forEach(function(k){ var c = CALC[k]; if ((c.v!==null&&c.v<0)||(c.v2!==null&&c.v2<0)) errs.push(CALC_DEF[k].lb+'請填 0 以上的數字'); });
   if (errs.length) { alert('尚有欄位需要修正：\n・'+errs.slice(0,6).join('\n・')); return; }
   var s = params(), spec = {module_type:$('#tiModT').val(), module_val:$('#tiModV').val(), pa:$('#tiPa').val(), teeth:$('#tiZ').val(), x:$('#tiX').val(),
-      meas:MEAS, helix_mode:$('input[name=tiHx]:checked').val(), helix_deg:(helixDeg()===null?'':rnd(helixDeg(),6)), helix_dir:$('#tiHxDir').val()};
+      meas:MEAS, helix_mode:$('input[name=tiHx]:checked').val(), helix_deg:(helixDeg()===null?0:rnd(helixDeg(),6)), helix_dir:$('#tiHxDir').val()};
   Object.keys(CALC).forEach(function(k){ spec[k] = {st:CALC[k].st, v:CALC[k].v, v2:CALC[k].v2}; });
   var tool = readTool();
   var data = {id:T.cur?T.cur.id:0, part_id:T.partId, part_no_text:partTxt, customer_text:T.partId?'':$.trim($('#tiCust').val()), qty:$('#tiQty').val(),
       gear_io:$('input[name=tiIo]:checked').val(), spec:JSON.stringify(spec), tool_type:tool.type, tool:JSON.stringify(tool.t),
-      special:JSON.stringify({chamfer:$('#tiChamfer').val(), stock:$('#tiStock').val(), tool_remark:$('#tiToolRemark').val(), work_remark:$('#tiWorkRemark').val()}),
-      remark:$('#tiRemark').val(), vendors:JSON.stringify(T.vendors.map(function(v){ return v.vendor_id; })), temp_key:T.tempKey};
+      special:JSON.stringify({chamfer:$('#tiChamfer').val(), stock:$('#tiStock').val(), tool_remark:$('#tiToolRemark').val(), work_remark:''}),
+      remark:'', vendors:JSON.stringify(T.vendors.map(function(v){ return v.vendor_id; })), temp_key:T.tempKey};
   var $b = $(this).prop('disabled', true);
   tpost('save', data, function(res){ $b.prop('disabled', false); closeMask('tiMask'); loadList(T.page); }, function(res){ $b.prop('disabled', false); alert(res.message||'儲存失敗'); });
 });
@@ -782,7 +780,8 @@ $('#tBtnSet').on('click', function(){ renderSettings(); openMask('tsMask'); });
 function renderSettings(){
   tget('settings_get', {}, function(r){
     var h = '<div class="ti-sec"><h5>數值上限 <small>牙口數、槽數：需 &gt;0 且 &lt; 上限</small></h5><div class="ti-row"><label>牙口數上限</label><div class="ti-cell"><input type="number" id="tsStarts" class="w80" style="width:90px" min="2" value="'+r.settings.starts_max+'"></div></div>'
-      + '<div class="ti-row"><label>槽數上限</label><div class="ti-cell"><input type="number" id="tsSlots" class="w80" style="width:90px" min="2" value="'+r.settings.slots_max+'"><button type="button" class="ti-mini" id="tsLimSave">儲存上限</button></div></div></div>';
+      + '<div class="ti-row"><label>槽數上限</label><div class="ti-cell"><input type="number" id="tsSlots" class="w80" style="width:90px" min="2" value="'+r.settings.slots_max+'"></div></div>'
+      + '<div class="ti-row"><label>列印簽章欄<small>預設隱藏「審核」，只印經辦與簽收</small></label><div class="ti-cell"><label class="ti-ck"><input type="checkbox" id="tsReview"'+(r.settings.print_review?' checked':'')+'> 列印時顯示「審核」欄</label><button type="button" class="ti-mini" id="tsLimSave">儲存設定</button></div></div></div>';
     Object.keys(r.kinds).forEach(function(k){
       h += '<div class="ti-sec"><h5>'+r.kinds[k]+'選項 <small>已被詢價單選用的不可刪除、但可改名；也可取消「啟用」讓新單不再出現</small></h5><div style="padding:6px 12px;">';
       r.opts[k].forEach(function(o){
@@ -794,7 +793,7 @@ function renderSettings(){
     $('#tsBody').html(h);
   });
 }
-$('#tsBody').on('click', '#tsLimSave', function(){ tpost('setting_save', {starts_max:$('#tsStarts').val(), slots_max:$('#tsSlots').val()}, function(){ alert('已儲存'); tget('init', {}, function(r){ T.init = r; }); }); });
+$('#tsBody').on('click', '#tsLimSave', function(){ tpost('setting_save', {starts_max:$('#tsStarts').val(), slots_max:$('#tsSlots').val(), print_review:$('#tsReview').prop('checked')?1:0}, function(){ alert('已儲存'); tget('init', {}, function(r){ T.init = r; }); }); });
 $('#tsBody').on('click', '.osave', function(){
   var $r = $(this).closest('.ti-opt-row'), $a = $r.find('.oa'), act = $a.is(':checkbox') ? ($a.prop('checked')?1:0) : 1;
   tpost('opt_save', {opt_id:$r.data('id'), kind:$r.data('kind'), name:$r.find('.on').val(), is_active:act}, function(){ renderSettings(); tget('init', {}, function(r){ T.init = r; }); });
@@ -858,28 +857,29 @@ function tpPage(res, v){
   var stamp = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(i.created_by_name, egFmtDate(i.inq_date), false, null) : esc(i.created_by_name);
   var pair = function(l1,v1,l2,v2){ return '<tr><td class="lb">'+l1+'</td><td>'+(v1===undefined||v1===null?'':v1)+'</td><td class="lb">'+l2+'</td><td>'+(v2===undefined||v2===null?'':v2)+'</td></tr>'; };
   var full = function(l,val,h){ return '<tr><td class="lb">'+l+'</td><td colspan="3"'+(h?' style="height:'+h+'px;vertical-align:top;white-space:pre-wrap;"':'')+'>'+(val||'')+'</td></tr>'; };
-  var hx = (sp.helix_deg!==undefined && sp.helix_deg!==null && sp.helix_deg!=='') ? esc(sp.helix_deg)+'°'+(sp.helix_dir?' '+esc(sp.helix_dir):'') : esc(sp.helix_dir||'');
+  var hd = (sp.helix_deg!==undefined && sp.helix_deg!==null && sp.helix_deg!=='') ? parseFloat(sp.helix_deg) : 0;   // 未填顯示 0
+  var hx = esc(hd)+'°'+(hd>0 && sp.helix_dir ? ' '+esc(sp.helix_dir) : '');
   var meas = sp.meas || (i.gear_io==='int'?'pin':'wk');
   var h = '<div class="tp-sheet"><div class="co">'+esc(c.customer_full)+'</div>'
     + '<div class="addr">'+esc(c.customer_address)+'　電話：'+esc(c.customer_tel)+'　傳真：'+esc(c.customer_fax)+'</div>'
     + '<div class="tt">刀　具　詢　價　單</div>'
-    + '<table class="tp"><tr><td class="lb">廠商名稱：</td><td>'+esc(v?v.vendor_name:'')+'</td><td class="lb">單　　號：</td><td>'+esc(i.inq_no)+'</td></tr>'
-    + '<tr><td class="lb">聯絡人員：</td><td>'+esc(v?v.contact:'')+'</td><td class="lb">詢價人員：</td><td>'+esc(i.created_by_name)+'</td></tr>'
+    + '<table class="tp"><tr><td class="lb">廠商名稱：</td><td>'+esc(v?v.vendor_name:'')+'</td><td class="lb">詢價日期：</td><td>'+esc(egFmtDate(i.inq_date))+'</td></tr>'
+    + '<tr><td class="lb">聯絡人員：</td><td>'+esc(v?v.contact:'')+'</td><td class="lb">單　　號：</td><td>'+esc(i.inq_no)+'</td></tr>'
     + '<tr><td class="lb">聯絡電話：</td><td>'+esc(v?v.tel:'')+'</td><td class="lb">傳真號碼：</td><td>'+esc(v?v.fax:'')+'</td></tr>'
-    + '<tr><td class="lb">詢價日期：</td><td>'+esc(egFmtDate(i.inq_date))+'</td><td class="lb">需求支數：</td><td>'+(i.qty?esc(i.qty)+' 支':'')+'</td></tr></table>'
+    + '<tr><td class="lb">詢價人員：</td><td>'+esc(i.created_by_name)+'</td><td class="lb">需求支數：</td><td>'+(i.qty?esc(i.qty)+' 支':'')+'</td></tr></table>'
     // 工件規格（客戶名稱不印在給廠商的詢價單上，只印工件編號）
     + '<div class="sec">工件規格　Workpiece</div><table class="tp">'
     + full('工件編號<br>Workpiece No.', esc(i.part_no))
-    + pair('外齒／內齒<br>External / Internal', i.gear_io==='int'?'內齒 Internal':'外齒 External', '模數／DP／CP<br>Module / DP / CP', sp.module_val?esc(sp.module_type+' '+sp.module_val):'')
+    + pair('外齒／內齒<br>External / Internal', i.gear_io==='int'?'內齒 Internal':'外齒 External', '模數<br>Module', sp.module_val?esc(sp.module_type+' '+sp.module_val):'')
     + pair('壓力角<br>Pressure angle', sp.pa?esc(sp.pa)+'°':'', '齒數<br>No. of teeth', esc(nz(sp.teeth)))
-    + pair('螺旋角／方向<br>Helix angle / Direction', hx, '齒面寬<br>Face width', esc(tpCalc(sp,'fw',false)))
+    + pair('螺旋角<br>Helix angle', hx, '齒面寬<br>Face width', esc(tpCalc(sp,'fw',false)))
     + pair('齒頂徑<br>Out. Dia.', esc(tpCalc(sp,'da',false)), '齒底徑<br>Root dia.', esc(tpCalc(sp,'df',false)))
     + pair('全齒深<br>D+F', esc(tpCalc(sp,'depth',false)), meas==='pin'?'跨銷值／跨銷徑<br>Over pin value / pin dia.':'跨齒厚／跨齒數<br>Spanned t. thickness / tooth no.', esc(tpCalc(sp, meas==='pin'?'pin':'wk', true)))
     + '</table>';
   // 刀具
   if (i.tool_type) {
-    var chk = Object.keys(prof).map(function(k){ return '<td class="chk">'+(tl.profile===k?'☑':'☐')+' '+esc(prof[k])+'</td>'; });
-    h += '<div class="sec">'+(i.tool_type==='hob'?'滾刀　HOB':'鉋齒刀　Shaper')+'</div><table class="tp"><tr>'+chk.slice(0,3).join('')+'</tr><tr>'+chk.slice(3).join('')+'</tr></table><table class="tp">';
+    h += '<div class="sec">'+(i.tool_type==='hob'?'滾刀　HOB':'鉋齒刀　Shaper')+'</div><table class="tp">'
+      + (tl.profile && prof[tl.profile] ? full('齒型<br>Tooth profile', esc(prof[tl.profile])) : '');   // 六種齒型只印使用者選的那一項
     if (i.tool_type==='shaper') {
       var form = {disk:'盤式 Disk', bell:'鐘式 Bell', shank:'帶柄式 Shank'}[tl.form]||'';
       h += pair('盤式／鐘式／帶柄式<br>Disk / Bell / Shank', form, '外徑 Out. Dia.', tpMm(tl.od))
@@ -897,11 +897,13 @@ function tpPage(res, v){
   }
   h += '<div class="sec">特殊修整要求　Special modification requirement</div><table class="tp">'
     + pair('倒角量<br>Semi-topping amount', esc(spc.chamfer||''), '放磨量<br>Stock removal', esc(spc.stock||''))
-    + full('備註（刀具）<br>Remark', esc(spc.tool_remark||''), 34) + full('備註（工件）<br>Remark', esc(spc.work_remark||''), 34)
-    + full('詢價備註', esc(i.remark||''), 26);
+    + full('備註<br>Remark', esc([spc.tool_remark, spc.work_remark, i.remark].filter(function(x){ return !!x; }).join('\n')), 70);
   var atts = (i.attaches||[]).filter(function(a){ return !a.vid; }).map(function(a){ return esc(a.name); });
   if (atts.length) h += full('隨附資料', atts.join('、'));
-  h += '</table><table class="sg"><tr><td><div class="lb">經辦：</div><div class="sb">'+stamp+'</div></td><td><div class="lb">審核：</div></td><td><div class="lb">簽收：</div></td></tr></table></div>';
+  var showRev = !!(T.init && T.init.settings && T.init.settings.print_review), cw = showRev ? '33.33%' : '50%';
+  h += '</table><table class="sg"><tr><td style="width:'+cw+'"><div class="lb">經辦：</div><div class="sb">'+stamp+'</div></td>'
+    + (showRev ? '<td style="width:'+cw+'"><div class="lb">審核：</div></td>' : '')
+    + '<td style="width:'+cw+'"><div class="lb">簽收：</div></td></tr></table></div>';
   return h;
 }
 function tpWrite(w, title, bodyHtml, asNo, multi){

@@ -123,16 +123,16 @@ function ti_ensure_schema(PDO $db): void {
 /* ═══════════════ 設定與選項 ═══════════════ */
 function ti_settings(PDO $db): array {
     ti_ensure_schema($db);
-    $o = ['starts_max' => 10, 'slots_max' => 50];   // 牙口數／槽數：需 >0 且 <上限
+    $o = ['starts_max' => 10, 'slots_max' => 50, 'print_review' => 0];   // 牙口數／槽數：需 >0 且 <上限；print_review＝列印是否顯示「審核」欄（預設隱藏）
     try { foreach ($db->query("SELECT skey,sval FROM tool_inq_setting") as $r) if (isset($o[$r['skey']])) $o[$r['skey']] = (int)$r['sval']; } catch (Throwable $e) {}
     return $o;
 }
-function ti_settings_save(PDO $db, int $startsMax, int $slotsMax): array {
+function ti_settings_save(PDO $db, int $startsMax, int $slotsMax, int $printReview = 0): array {
     ti_ensure_schema($db);
     if ($startsMax < 2 || $startsMax > 999) return [false, '牙口數上限請填 2～999（需大於 1，因為牙口數必須 >0 且 <上限）'];
     if ($slotsMax < 2 || $slotsMax > 999) return [false, '槽數上限請填 2～999（需大於 1，因為槽數必須 >0 且 <上限）'];
     $st = $db->prepare("INSERT INTO tool_inq_setting (skey,sval) VALUES (?,?) ON DUPLICATE KEY UPDATE sval=VALUES(sval)");
-    $st->execute(['starts_max', $startsMax]); $st->execute(['slots_max', $slotsMax]);
+    $st->execute(['starts_max', $startsMax]); $st->execute(['slots_max', $slotsMax]); $st->execute(['print_review', $printReview ? 1 : 0]);
     return [true, ''];
 }
 /** 該選項被幾張詢價單選用（欄位固定，不吃前端輸入） */

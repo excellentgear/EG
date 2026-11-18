@@ -212,7 +212,7 @@ case 'settings_get': {
 }
 case 'setting_save': {
     tiReqAdmin($perm);
-    [$ok, $msg] = ti_settings_save($db, (int)($_POST['starts_max'] ?? 0), (int)($_POST['slots_max'] ?? 0));
+    [$ok, $msg] = ti_settings_save($db, (int)($_POST['starts_max'] ?? 0), (int)($_POST['slots_max'] ?? 0), !empty($_POST['print_review']) ? 1 : 0);
     if (!$ok) jerr($msg);
     jout(true);
 }
