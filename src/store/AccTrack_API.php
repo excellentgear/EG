@@ -35,6 +35,7 @@ $db = (new DBConnection())->getPDO();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 act_ensure_schema($db);
 act_flag_seed($db);
+act_defer_seed($db);
 
 $uid = (int)($_SESSION['id'] ?? 0);
 if (!$uid) actErr('未登入或連線已逾時，請重新登入', 401);
@@ -49,7 +50,7 @@ if (!$perms['canView'] && !$perms['canAdmin']) actErr('您沒有對帳進度追�
 if (empty($_SESSION['act_csrf'])) $_SESSION['act_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['set_status', 'skip_set','settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
+$WRITE = ['set_status', 'skip_set', 'defer_set', 'allow_confirm','settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
           'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
           'early_days_save', 'flag_set', 'owner_pool_add', 'owner_pool_remove', 'owner_set_batch', 'manual_add', 'manual_delete', 'fixed_add', 'fixed_stop'];
 if (in_array($action, $WRITE, true)) {
@@ -133,6 +134,8 @@ switch ($action) {
                 $am = $allowMap[(string)($_ar['party_id'] ?? '')] ?? null;
                 $_ar['allow_cnt']   = $am ? $am['cnt'] : 0;
                 $_ar['allow_total'] = $am ? $am['total'] : 0;
+                $_ar['allow_carry'] = $am ? $am['carry'] : 0;   // 其中「前期折讓」張數
+                $_ar['allow_todo']  = $am ? $am['todo'] : 0;    // 尚未確認的明細筆數
             }
             unset($_ar);
         }
@@ -167,7 +170,21 @@ switch ($action) {
                 foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $skipMap[(int)$x['id']] = $x;
             }
         } catch (Throwable $e) {}
+        // 延到下月對帳（應收）：獨立旗標
+        $defMap = [];
+        try {
+            if (!empty($ids)) {
+                $q = $db->query("SELECT id, deferred_at, deferred_by_name, deferred_reason FROM acc_recon_track
+                                 WHERE deferred_at IS NOT NULL AND id IN (" . implode(',', $ids) . ")");
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $defMap[(int)$x['id']] = $x;
+            }
+        } catch (Throwable $e) {}
         foreach ($allRows as &$_r) {
+            $df = $defMap[(int)$_r['track_id']] ?? null;
+            $_r['deferred'] = $df ? 1 : 0;
+            $_r['deferred_at'] = $df ? $df['deferred_at'] : null;
+            $_r['deferred_by'] = $df ? $df['deferred_by_name'] : null;
+            $_r['deferred_reason'] = $df ? $df['deferred_reason'] : null;
             $sk = $skipMap[(int)$_r['track_id']] ?? null;
             $_r['skipped'] = $sk ? 1 : 0;
             $_r['skipped_at'] = $sk ? $sk['skipped_at'] : null;
@@ -230,6 +247,25 @@ switch ($action) {
         $reason  = trim((string)($_POST['reason'] ?? ''));
         if ($trackId <= 0) actErr('缺少追蹤資料');
         $r = act_set_skip($db, $trackId, $skip, $perms, $reason);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
+    }
+
+    /* ── 延到下月對帳／取消（應收；權限＝矩陣 defer 列）── */
+    case 'defer_set': {
+        $trackId = (int)($_POST['track_id'] ?? 0);
+        $on      = ((string)($_POST['on'] ?? '1')) !== '0';
+        $reason  = trim((string)($_POST['reason'] ?? ''));
+        if ($trackId <= 0) actErr('缺少追蹤資料');
+        $r = act_set_defer($db, $trackId, $on, $perms, $reason);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['message' => $r['message']]);
+    }
+
+    /* ── 折讓明細已確認／取消（權限＝矩陣 allow_confirm 列）── */
+    case 'allow_confirm': {
+        if (!act_can_set_status($db, $perms, 'ar', 'allow_confirm')) actErr('沒有「折讓已確認」的權限（請洽本頁管理員在「設定 → 角色權限矩陣」勾選）', 403);
+        $r = aca_item_confirm($db, (int)($_POST['item_id'] ?? 0), (string)($_POST['bm'] ?? ''), ((string)($_POST['on'] ?? '1')) !== '0', $uid, $uname);
         if (!$r['success']) actErr($r['message']);
         actOut(['message' => $r['message']]);
     }

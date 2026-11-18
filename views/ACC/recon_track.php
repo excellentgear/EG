@@ -207,6 +207,13 @@ tr.mon-head.prior td{background:#FBE3DC !important;color:#7a2c17;}
 .allow-badge{display:inline-block;margin-left:6px;padding:0 8px;border-radius:9px;font-size:11px;line-height:18px;background:#F0A24B;color:#fff !important;cursor:pointer;text-decoration:none !important;}
 .allow-badge:hover{background:#d98a33;}
 table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FBEBCB !important;}
+table.art-t tr.allow-row.allow-ok td, table.art-t tr.allow-row.allow-ok:hover td{background:#EAF0CF !important;}   /* 已確認：暖淺綠 */
+.allow-cf{padding:1px 8px;font-size:11px;line-height:18px;border:1px solid #C9A56A;border-radius:10px;background:#fff;color:#6B4423;cursor:pointer;white-space:nowrap;}
+.allow-cf:hover{background:#FDF3DF;}
+.allow-cf.on{background:#9DB36A;border-color:#7F9650;color:#fff;}
+.allow-cf[disabled]{opacity:.5;cursor:not-allowed;}
+.allow-carry{display:inline-block;padding:0 6px;border-radius:8px;font-size:10px;line-height:16px;background:#E4D3BC;color:#6B4423;}
+.defer-note{font-size:10px;color:#B4691A;line-height:1.3;}
 #allowBody table.art-t{table-layout:auto;width:100%;}
 #allowBody table.art-t td:nth-child(5),#allowBody table.art-t th:nth-child(5){min-width:300px;white-space:normal;}
 #allowBody table.art-t td:nth-child(6),#allowBody table.art-t th:nth-child(6){width:56px;min-width:0;}
@@ -539,7 +546,8 @@ table.art-t tr.allow-row td, table.art-t tr.allow-row:hover td{background:#FBEBC
       <h4>前月份未對帳、折讓與應收標記</h4>
       <ul>
         <li>客戶（廠商）名稱旁的紅色「<b>?月未對帳</b>」＝2026-10 起前面月份仍是空白或處理中、也沒略過的月份；點它（或雙擊該列）明細會<b>分月顯示</b>。</li>
-        <li>「<b>有折讓</b>」＝本帳款月份有折讓單，折讓項目在明細置頂、暖色底。</li>
+        <li>「<b>有折讓</b>」＝本帳款月份有折讓單，折讓項目在明細置頂、暖色底。折讓開立<b>之後的每個月</b>都會繼續出現（標「前期折讓」，不計入該月金額），直到有人在明細按「<b>已確認</b>」（該列變暖淺綠），<b>確認月份之後</b>就不再顯示；要取消請回到確認的那個月。</li>
+        <li>「<b>延到下月對帳</b>」＝這個月先不對、跟下個月一起對（客戶偶爾兩個月一起對帳）。狀態不變，下個月的明細會連同本月一起顯示；下個月按到「已對帳」以上時，延後的月份自動一併跟著。「已確認」與「延到下月對帳」的權限在「設定 → 角色權限矩陣」（應收）勾選。</li>
         <li>應收操作欄的「給客戶對帳單」「客戶提供對帳單」「已收款」是獨立標記，點一下標記（顯示日期）、再點取消，不影響狀態與工作天數統計；需本頁管理員、業務或會計角色。</li>
       </ul>
       <h4>資料怎麼來</h4>
@@ -636,6 +644,8 @@ function statusLabel(k){
     if (k === 'need_recon') return '需對帳';
     if (k === 'skipped') return '已略過';
     if (k === 'unskipped') return '取消略過';
+    if (k === 'deferred') return '延到下月對帳';
+    if (k === 'undeferred') return '取消延後';
     return (k==='' || k==null) ? '需對帳' : (STATUSES[k] || k);
 }
 /* 每頁筆數下拉：固定選項 5/10/20/50 之外，把管理員設定的預設值也插進去（如 6），並預選它 */
@@ -1034,6 +1044,11 @@ function renderListTbl(){
                 ? ' <button class="btn btn-default row-btn" onclick="doSkip(' + r.track_id + ',0)">取消略過</button>'
                 : ' <button class="btn btn-default row-btn" title="此月份不須對此' + (isAr?'客戶':'廠商') + '的帳" onclick="doSkip(' + r.track_id + ',1)">略過</button>';
         }
+        if (isAr && !r.skipped && canMx('defer') && (r.deferred || r.status === '' || r.status === 'processing')) {   // 延到下月對帳（兩個月一起對）
+            btns += r.deferred
+                ? ' <button class="btn btn-default row-btn" onclick="doDefer(' + r.track_id + ',0)">取消延後</button>'
+                : ' <button class="btn btn-default row-btn" title="這個月先不對，跟下個月一起對帳" onclick="doDefer(' + r.track_id + ',1)">延到下月對帳</button>';
+        }
         if (PERMS.isAll && !r.skipped) {
             // 使用者明確要求：本頁管理員(art_admin)不要有「改派」下拉——只有全站管理員(isAll)才看得到。
             // 已經有按鈕可以按的狀態就不在下拉選單裡重複出現；下拉只保留按鈕涵蓋不到的
@@ -1051,7 +1066,7 @@ function renderListTbl(){
         var tds = [];
         if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
         tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
-        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本帳款月份有 '+r.allow_cnt+' 張折讓單，點開看綁定的出貨／退貨單">有折讓'+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + ((r.prior_unrecon && r.prior_unrecon.length) ? ' <a href="javascript:void(0)" class="prior-btn" title="前月份還沒對帳，點開分月查看明細">' + priorLabel(r.prior_unrecon) + '未對帳</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.allow_cnt>0 ? ' <a href="javascript:void(0)" class="allow-badge" data-cid="'+esc(r.party_id||'')+'" data-name="'+esc(r.party_name)+'" title="本月顯示 '+r.allow_cnt+' 張折讓單'+(r.allow_carry?'（其中 '+r.allow_carry+' 張是前期折讓）':'')+(r.allow_todo?'，尚有 '+r.allow_todo+' 筆未確認':'')+'，點開看綁定的出貨／退貨單">'+(r.allow_carry&&r.allow_carry===r.allow_cnt?'前期折讓':'有折讓')+(r.allow_cnt>1?' '+r.allow_cnt:'')+'</a>' : '') + ((r.prior_unrecon && r.prior_unrecon.length) ? ' <a href="javascript:void(0)" class="prior-btn" title="前月份還沒對帳，點開分月查看明細">' + priorLabel(r.prior_unrecon) + '未對帳</a>' : '') + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + (r.manual?' <span class="hint">(人工新增)</span>':'') + (r.fixed?' <span class="hint">(固定對帳)</span>':'') + ((r.zero_ship && !r.manual)?' <span class="hint">($0出貨)</span>':'') + ((r.manual && PERMS.canAdmin)?' <button class="icon-btn" title="刪除人工新增" onclick="manualDel(\''+r.side+'\',\''+esc(r.party_key)+'\')"><i class="fa fa-trash"></i></button>':'') + '</td>');
         tds.push('<td class="c">' + (r.cutoff_date||'—') + (r.settle_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(r.settle_by||'') + ' ' + esc(String(r.settle_at).replace(/-/g,'.')) + ' 修改</div>' : '') + '</td>');
         if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
         if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
@@ -1063,7 +1078,8 @@ function renderListTbl(){
         if (r.skipped) {
             tds.push('<td class="c">' + statusBadge('skipped') + '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;" title="' + esc(r.skipped_reason||'') + '">' + esc(r.skipped_by||'') + ' ' + esc(String(r.skipped_at||'').substr(0,16).replace(/-/g,'.')) + ' 略過' + (r.skipped_reason ? '<br>' + esc(r.skipped_reason) : '') + '</div></td>');
         } else
-        tds.push('<td class="c">' + statusBadge(r.card_status) + (r.status_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(String(r.status_at).replace(/-/g,'.')) + '</div>' : '') + '</td>');
+        tds.push('<td class="c">' + statusBadge(r.card_status) + (r.status_at ? '<div style="font-size:10px;color:#8a6d4b;line-height:1.3;">' + esc(String(r.status_at).replace(/-/g,'.')) + '</div>' : '')
+            + (r.deferred ? '<div class="defer-note" title="' + esc(r.deferred_reason||'') + '">⏭ 延到下月對帳<br>' + esc(r.deferred_by||'') + ' ' + esc(String(r.deferred_at||'').substr(0,16).replace(/-/g,'.')) + '</div>' : '') + '</td>');
         if (isAr) btns += '<div>' + flagBtns(r) + '</div>';
         tds.push('<td class="c">' + btns + '</td>');
         tds.push('<td class="c">' + settleBtn + '</td>');
@@ -1114,6 +1130,22 @@ function doSkip(trackId, on){
         if (reason === null) return;
     } else if (!confirm('確定取消略過？')) return;
     api({action:'skip_set', track_id:trackId, skip:on?1:0, reason:reason}).done(function(r){
+        if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(true); }
+    });
+}
+/* 應收矩陣上的功能權限（defer＝延到下月對帳、allow_confirm＝折讓已確認）；後端同規則再驗 */
+function canMx(key){
+    if (PERMS.isAll || PERMS.canAdmin) return true;
+    var al = (MATRIX.ar && MATRIX.ar[key]) || [];
+    return (PERMS.isPm && al.indexOf('art_pm')>=0) || (PERMS.isSales && al.indexOf('art_sales')>=0) || (PERMS.isAcc && al.indexOf('art_acc')>=0);
+}
+function doDefer(trackId, on){
+    var reason = '';
+    if (on) {
+        reason = prompt('這個月先不對帳，跟下個月一起對？（會記錄你與時間）\n原因（可留空）：', '');
+        if (reason === null) return;
+    } else if (!confirm('確定取消「延到下月對帳」？')) return;
+    api({action:'defer_set', track_id:trackId, on:on?1:0, reason:reason}).done(function(r){
         if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(true); }
     });
 }
@@ -1353,6 +1385,13 @@ function renderMatrix(){
             }).join('');
             return '<tr><th>' + esc(STATUSES[st]) + '</th>' + cells + '</tr>';
         }).join('');
+        // 應收：延到下月對帳、折讓明細已確認 的權限列
+        if (side === 'ar') [['defer','按鈕：延到下月對帳'],['allow_confirm','按鈕：折讓已確認']].forEach(function(x){
+            var al = (MATRIX.ar && MATRIX.ar[x[0]]) || [];
+            rows += '<tr><th>' + esc(x[1]) + '</th>' + ROLE_CODES.map(function(rc){
+                return '<td><label><input type="checkbox" data-side="ar" data-status="' + x[0] + '" data-role="'+rc[0]+'" '+(al.indexOf(rc[0])>=0?'checked':'')+'> '+rc[1]+'</label></td>';
+            }).join('') + '</tr>';
+        });
         // 「略過」按鈕的權限列（勾選的角色可以按「略過／取消略過」）
         var skipAllowed = (MATRIX[side] && MATRIX[side]['skip']) || [];
         rows += '<tr><th>略過（此月不須對帳）</th>' + ROLE_CODES.map(function(rc){
@@ -1512,7 +1551,7 @@ $(function(){
         apiGet('allow_info', {party:cid, bm:bm}).done(function(r){
             var as = (r && r.allowances) || [], dotd = function(x){ return String(x||'').replace(/-/g,'.'); }, h = '', cnt = 0;
             as.forEach(function(a){
-                h += '<div class="allow-head" style="font-weight:bold;">折讓日期 ' + esc(dotd(a.allow_date)) + '　證明單號碼：' + esc(a.allow_no||'（尚未填）') + '　開立：' + esc(a.created_by_name||'') + '　含稅 ' + fmtMoney(a.total_amount) + (a.note ? '　備註：' + esc(a.note) : '') + '</div>'
+                h += '<div class="allow-head" style="font-weight:bold;">' + (a.carried ? '<span class="allow-carry">前期折讓（帳款月份 ' + esc(a.billing_month) + '）</span> ' : '') + '折讓日期 ' + esc(dotd(a.allow_date)) + '　證明單號碼：' + esc(a.allow_no||'（尚未填）') + '　開立：' + esc(a.created_by_name||'') + '　含稅 ' + fmtMoney(a.total_amount) + (a.note ? '　備註：' + esc(a.note) : '') + '</div>'
                    + '<table class="art-t"><thead><tr><th>類別</th><th>單號</th><th>日期</th><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th>金額</th></tr></thead><tbody>';
                 (a.items||[]).forEach(function(i){ cnt++;
                     h += '<tr class="allow-row"><td>' + (i.src_type==='IR'?'退貨單':'出貨單') + '</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.part_no) + '</td><td>' + esc(i.spec) + '</td><td class="n">' + Number(i.qty) + '</td><td class="n">' + fmtMoney(i.unit_price) + '</td><td class="n">' + fmtMoney(i.amount) + '</td></tr>';
@@ -1528,23 +1567,43 @@ $(function(){
         d = d || {}; allows = allows || [];
         var items = d.items || [], h = '', cnt = 0, allowTotal = 0;
         var n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; }, dotd = function(x){ return String(x||'').replace(/-/g,'.'); };
-        // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立
+        var canCf = canMx('allow_confirm'), blank = isAr ? '<td></td>' : '';   // 應收明細最左多一欄「折讓確認」
+        // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立；
+        // 前期折讓（折讓單的帳款月份早於本月）只提醒、不計入本月合計；按「已確認」後該列變暖淺綠，確認月份之後不再顯示
         allows.forEach(function(a){
-            allowTotal -= Number(a.total_amount) || 0;
             (a.items||[]).forEach(function(i){ cnt++;
-                h += '<tr class="allow-row"><td>折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
+                if (!a.carried) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
+                var cfLater = !!i.confirm_bm && !Number(i.confirmed);   // 後端只回「確認月份 ≧ 本月」的明細，所以有確認月份又不是本月＝之後的月份才確認的
+                var cfBtn = Number(i.confirmed)
+                    ? '<button class="allow-cf on" ' + (canCf?'':'disabled ') + 'title="' + esc((i.confirm_by||'') + ' ' + String(i.confirm_at||'').replace(/-/g,'.') + ' 確認（再點一下取消）') + '" data-item="' + i.item_id + '" data-on="0">✓ 已確認</button>'
+                    : (cfLater ? '<span class="hint" title="' + esc(i.confirm_by||'') + '">' + esc(String(i.confirm_bm).slice(5).replace(/^0/,'')) + '月已確認</span>'
+                               : '<button class="allow-cf" ' + (canCf?'':'disabled title="沒有確認權限（請洽本頁管理員在角色權限矩陣勾選）" ') + 'data-item="' + i.item_id + '" data-on="1">已確認</button>');
+                h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + '"><td class="c">' + cfBtn + '</td><td>' + (a.carried ? '<span class="allow-carry" title="折讓單的帳款月份是 ' + esc(a.billing_month) + '，之後每月提醒到確認為止，不計入本月合計">前期折讓 ' + esc(a.billing_month) + '</span><br>' : '') + '折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
                    + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
             });
         });
         items.forEach(function(it){ cnt++;
-            if (isAr) h += '<tr><td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
+            if (isAr) h += '<tr>' + blank + '<td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
             else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
         });
         var tot = isAr ? d.total_amt : d.total_amount;
         if (tot != null) tot = Number(tot) + (isAr ? allowTotal : 0);
         return {h:h, cnt:cnt, tot:tot, allowCnt:(function(){ var c=0; allows.forEach(function(a){ c += (a.items||[]).length; }); return c; })()};
     }
+    var LAST_DTL_TR = null;
+    // 折讓明細「已確認」：按下當下先送後端（權限與狀態後端再驗），成功後重載明細與清單（badge 數字、前期折讓提示跟著更新）
+    $('#dtlTbl').on('click', '.allow-cf', function(e){
+        e.stopPropagation();
+        var $b = $(this), on = $b.attr('data-on') === '1', bm = document.getElementById('fBm').value || defaultBm();
+        if (!on && !confirm('確定取消這筆折讓的「已確認」？（取消後之後的月份會再顯示）')) return;
+        $b.prop('disabled', true);
+        api({action:'allow_confirm', item_id:$b.attr('data-item'), bm:bm, on:on?1:0}).done(function(r){
+            if (r && r.ok) { showToast(r.message||'已更新','success'); if (LAST_DTL_TR) openDetailFor(LAST_DTL_TR); loadList(true); }
+            else $b.prop('disabled', false);
+        }).fail(function(){ $b.prop('disabled', false); if (LAST_DTL_TR) openDetailFor(LAST_DTL_TR); });
+    });
     function openDetailFor($tr){
+        LAST_DTL_TR = $tr;
         var isAr = (SIDE==='ar'), bm = document.getElementById('fBm').value || defaultBm();
         var key = isAr ? $tr.attr('data-name') : $tr.attr('data-party');
         var nm = $tr.attr('data-name'), pkey = $tr.attr('data-key') || '';
@@ -1555,7 +1614,7 @@ $(function(){
         document.getElementById('dtlTbl').querySelector('tbody').innerHTML = '';
         openMask('dtlMask');
         apiGet('detail', {side:SIDE, bm:bm, party:key, pkey:pkey}).done(function(r){
-            var cols = isAr ? ['類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
+            var cols = isAr ? ['折讓確認','類別','單號','日期','規格','數量','單價','金額','備註'] : ['單號','日期','製程','BOM','數量','單價','金額','稅額','備註'];
             document.getElementById('dtlTbl').querySelector('thead').innerHTML = '<tr>' + cols.map(function(c){ return '<th>'+c+'</th>'; }).join('') + '</tr>';
             var prior = (r && r.prior) || [], money = function(v){ return v != null ? fmtMoney(v) : '—'; };
             var cur = detailSection(isAr, r && r.detail, isAr ? r.allowances : []);

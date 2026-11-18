@@ -220,6 +220,18 @@ function act_ensure_schema(PDO $db): void
             if (!$has) $db->exec("ALTER TABLE acc_recon_track ADD COLUMN {$col} {$def}");
         } catch (Throwable $e) {}
     }
+    // 「延到下月對帳」（客戶兩個月一起對帳）：獨立旗標，狀態仍留在空白／處理中，下個月的明細會連同本月一起顯示
+    foreach ([
+        'deferred_at'      => "DATETIME NULL COMMENT '延到下月對帳的時間（NULL=未延後）'",
+        'deferred_by'      => "INT NULL",
+        'deferred_by_name' => "VARCHAR(50) NULL",
+        'deferred_reason'  => "VARCHAR(200) NULL",
+    ] as $col => $def) {
+        try {
+            $has = $db->query("SHOW COLUMNS FROM acc_recon_track LIKE '" . $col . "'")->fetch();
+            if (!$has) $db->exec("ALTER TABLE acc_recon_track ADD COLUMN {$col} {$def}");
+        } catch (Throwable $e) {}
+    }
     // 略過權限：預設勾給生管（使用者要求），只種一次，之後管理員在設定矩陣取消勾選不會被蓋回來
     try {
         if (!act_param_get($db, 'skip_seeded', false)) {
@@ -330,7 +342,7 @@ if (!function_exists('act_role_matrix_save')) {
 function act_role_matrix_save(PDO $db, array $rows): void
 {
     $validRoles = ['art_pm', 'art_sales', 'art_acc'];
-    $validStatus = array_merge(array_keys(act_statuses()), ['skip', 'flag_given', 'flag_recv', 'flag_paid']);   // 'skip'＝略過按鈕；flag_*＝應收三個獨立標記按鈕的權限列
+    $validStatus = array_merge(array_keys(act_statuses()), ['skip', 'flag_given', 'flag_recv', 'flag_paid', 'defer', 'allow_confirm']);   // 'skip'＝略過按鈕；flag_*＝應收三個獨立標記按鈕；defer＝延到下月對帳；allow_confirm＝折讓明細已確認
     $db->beginTransaction();
     try {
         $db->exec("DELETE FROM acc_recon_track_role_matrix");
@@ -606,6 +618,20 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
         $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
                       VALUES (?,?,?,?,?,?,?)")
            ->execute([$trackId, $row['status'] !== '' ? $row['status'] : null, $toStatus, $perms['uid'] ?? null, $perms['uname'] ?? '', $now, $note]);
+        // 「延到下月對帳」的前面月份：這個月按到已對帳（含）以上時一併跟著（兩個月一起對的帳）
+        if ($toIdx >= 1 && $row['side'] === 'ar') {
+            $dq = $db->prepare("SELECT id, billing_month, status FROM acc_recon_track
+                                WHERE side=? AND party_key=? AND billing_month < ? AND deferred_at IS NOT NULL AND skipped_at IS NULL
+                                  AND status IN ('','processing')");
+            $dq->execute([$row['side'], $row['party_key'], $row['billing_month']]);
+            foreach ($dq->fetchAll(PDO::FETCH_ASSOC) as $d) {
+                $db->prepare("UPDATE acc_recon_track SET status=?, modified_at=?, modified_by=?, modified_by_name=? WHERE id=?")
+                   ->execute([$toStatus, $now, $perms['uid'] ?? null, $perms['uname'] ?? '', (int)$d['id']]);
+                $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
+                              VALUES (?,?,?,?,?,?,?)")
+                   ->execute([(int)$d['id'], $d['status'] !== '' ? $d['status'] : null, $toStatus, $perms['uid'] ?? null, $perms['uname'] ?? '', $now, '（延後對帳，隨 ' . $row['billing_month'] . ' 一併對帳）']);
+            }
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
     return ['success' => true, 'message' => '已更新', 'from' => $row['status'], 'to' => $toStatus];
@@ -822,6 +848,58 @@ function act_flag_seed(PDO $db): void
         foreach (['flag_given', 'flag_recv', 'flag_paid'] as $k) foreach (['art_sales', 'art_acc'] as $rc) $ins->execute([$k, $rc]);
         act_param_save($db, 'flag_matrix_seeded', 1, '系統');
     } catch (Throwable $e) {}
+}}
+
+if (!function_exists('act_defer_seed')) {
+/** 「延到下月對帳」「折讓已確認」的預設權限（業務；折讓確認另給會計）只種一次，管理員之後在角色權限矩陣怎麼改都不會被還原 */
+function act_defer_seed(PDO $db): void
+{
+    try {
+        if (act_param_get($db, 'defer_allow_seeded', 0)) return;
+        $ins = $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES ('ar',?,?)");
+        $ins->execute(['defer', 'art_sales']);
+        $ins->execute(['allow_confirm', 'art_sales']);
+        $ins->execute(['allow_confirm', 'art_acc']);
+        act_param_save($db, 'defer_allow_seeded', 1, '系統');
+    } catch (Throwable $e) {}
+}}
+
+if (!function_exists('act_set_defer')) {
+/**
+ * 延到下月對帳／取消延後（僅應收）。權限＝矩陣 'defer' 列（本頁管理員永遠可以）。
+ * 只有「還沒開始對帳（空白／處理中）且沒被略過」的才能延後；狀態不動，下個月的明細會連同本月一起顯示（act_prior_months_of）。
+ * 下個月把狀態按到已對帳以上時，延後的這個月會一併跟著（act_set_status 內連動）。
+ */
+function act_set_defer(PDO $db, int $trackId, bool $on, array $perms, string $reason = ''): array
+{
+    $st = $db->prepare("SELECT * FROM acc_recon_track WHERE id=?");
+    $st->execute([$trackId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
+    if ($row['side'] !== 'ar') return ['success' => false, 'message' => '延到下月對帳只用於應收'];
+    if (!act_can_set_status($db, $perms, 'ar', 'defer')) return ['success' => false, 'message' => '沒有「延到下月對帳」的權限（請洽本頁管理員在「設定 → 角色權限矩陣」勾選）'];
+    $isDef = !empty($row['deferred_at']);
+    if ($on === $isDef) return ['success' => false, 'message' => $on ? '已經是延後狀態，請重新整理' : '本來就沒有延後，請重新整理'];
+    if ($on) {
+        if (!in_array((string)$row['status'], ['', 'processing'], true) || !empty($row['skipped_at'])) {
+            return ['success' => false, 'message' => '這個月份已經對帳或被略過，不能再延後，請重新整理頁面'];
+        }
+    }
+    $now = date('Y-m-d H:i:s'); $by = $perms['uid'] ?? null; $byName = $perms['uname'] ?? '';
+    $db->beginTransaction();
+    try {
+        if ($on) {
+            $db->prepare("UPDATE acc_recon_track SET deferred_at=?, deferred_by=?, deferred_by_name=?, deferred_reason=? WHERE id=?")
+               ->execute([$now, $by, $byName, $reason !== '' ? mb_substr($reason, 0, 200) : null, $trackId]);
+        } else {
+            $db->prepare("UPDATE acc_recon_track SET deferred_at=NULL, deferred_by=NULL, deferred_by_name=NULL, deferred_reason=NULL WHERE id=?")->execute([$trackId]);
+        }
+        $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
+                      VALUES (?,?,?,?,?,?,?)")
+           ->execute([$trackId, $row['status'] !== '' ? $row['status'] : null, $on ? 'deferred' : 'undeferred', $by, $byName, $now, $reason !== '' ? $reason : null]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
+    return ['success' => true, 'message' => $on ? '已標記「延到下月對帳」，下個月的明細會連同本月一起顯示' : '已取消延後'];
 }}
 
 if (!function_exists('act_can_flag')) {

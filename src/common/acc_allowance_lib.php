@@ -142,6 +142,19 @@ function aca_ensure_schema(PDO $db): void
                 ADD COLUMN inv_no    CHAR(8) NULL COMMENT '原發票號碼（8碼數字）' AFTER inv_track,
                 ADD COLUMN inv_date  CHAR(7) NULL COMMENT '原發票日期（民國年3碼+MMDD）' AFTER inv_no");
         }
+        // 對帳進度追蹤：折讓明細「已確認」（每一筆明細一列；記在哪個帳款月份確認的，之後的月份就不再顯示）
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_allowance_confirm (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            item_id     INT NOT NULL,
+            allow_id    INT NOT NULL,
+            confirm_bm  CHAR(7) NOT NULL COMMENT '在哪個帳款月份的對帳確認的（含該月；之後月份不再顯示）',
+            by_id       INT NULL,
+            by_name     VARCHAR(50) NULL,
+            confirmed_at DATETIME NOT NULL,
+            UNIQUE KEY uk_item (item_id),
+            KEY idx_allow (allow_id),
+            KEY idx_bm (confirm_bm)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='折讓明細已確認：對帳人員確認這筆折讓已納入該月對帳，之後月份不再提醒'");
         // 證明單號碼的年月日與流水號所依的日期＝原發票日期（多筆取最早）；舊資料為 NULL，視同折讓日期
         if (!$db->query("SHOW COLUMNS FROM acc_allowance LIKE 'no_date'")->fetchColumn()) {
             $db->exec("ALTER TABLE acc_allowance ADD COLUMN no_date DATE NULL COMMENT '證明單號碼代碼(年月日/流水)所依日期＝原發票日期(多筆取最早)' AFTER allow_date");
@@ -858,32 +871,105 @@ function aca_attach_delete(PDO $db, int $fileId, ?array $user = null): array
 }
 
 /* ── 對帳進度追蹤整合（recon_track.php）──────────────────────────── */
-/** 某帳款月份「有折讓」的客戶：customer_id => ['cnt'=>筆數,'total'=>含稅合計] */
+/**
+ * 折讓明細在哪些帳款月份要出現（2026-11-18 使用者定案）：
+ *  ① 折讓單自己的帳款月份（原本就顯示）
+ *  ② 折讓日期所在月份起，之後每個月都顯示——開在 9/29 的折讓，9/25 以前就已經對完帳的人才不會不知道
+ *  ③ 但只要有人在某月按了「已確認」，那個月之後就不再顯示（確認當月仍顯示，底色變暖淺綠，可取消）
+ * 以下 SQL 片段（$bm 以 :bm 綁定）給 customer_map／recon_rows 共用，規則只此一份。
+ */
+function aca_recon_where(): string
+{
+    return "a.status='active' AND (a.billing_month = :bm OR (a.billing_month < :bm AND DATE_FORMAT(a.allow_date,'%Y-%m') <= :bm))
+            AND (c.item_id IS NULL OR c.confirm_bm >= :bm)";
+}
+
+/** 某帳款月份「有折讓」的客戶：customer_id => ['cnt'=>折讓單張數,'total'=>含稅合計,'carry'=>其中前期折讓張數,'todo'=>尚未確認的明細筆數] */
 function aca_recon_customer_map(PDO $db, string $bm): array
 {
     aca_ensure_schema($db);
-    $st = $db->prepare("SELECT customer_id, COUNT(*) cnt, SUM(total_amount) total FROM acc_allowance
-                        WHERE billing_month=? AND status='active' GROUP BY customer_id");
-    $st->execute([$bm]);
+    $st = $db->prepare("SELECT a.customer_id, a.allow_id, (a.billing_month <> :bm) carried,
+                               SUM(i.amount + i.tax_amount) total, SUM(c.item_id IS NULL) todo
+                        FROM acc_allowance a
+                        JOIN acc_allowance_item i ON i.allow_id = a.allow_id
+                        LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
+                        WHERE " . aca_recon_where() . "
+                        GROUP BY a.customer_id, a.allow_id, carried");
+    $st->execute([':bm' => $bm]);
     $out = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['customer_id']] = ['cnt' => (int)$r['cnt'], 'total' => (float)$r['total']];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $k = (string)$r['customer_id'];
+        $o = $out[$k] ?? ['cnt' => 0, 'total' => 0.0, 'carry' => 0, 'todo' => 0];
+        $o['cnt']++; $o['total'] += (float)$r['total']; $o['todo'] += (int)$r['todo'];
+        if ((int)$r['carried']) $o['carry']++;
+        $out[$k] = $o;
+    }
     return $out;
 }
 
-/** 某客戶某帳款月份的折讓單＋明細（對帳明細置頂顯示、折讓資料跳窗共用） */
+/**
+ * 某客戶某帳款月份要顯示的折讓單＋明細（對帳明細置頂顯示、折讓資料跳窗共用）。
+ * 每張折讓單多帶 carried（＝前期折讓：折讓單的帳款月份早於 $bm）；每筆明細多帶
+ * confirmed（此月確認）／confirm_bm／confirm_by／confirm_at（之後月份才確認的也會帶，供顯示「X 月已確認」）。
+ */
 function aca_recon_rows(PDO $db, string $customerId, string $bm): array
 {
     aca_ensure_schema($db);
-    $st = $db->prepare("SELECT * FROM acc_allowance WHERE customer_id=? AND billing_month=? AND status='active' ORDER BY allow_date, allow_id");
-    $st->execute([$customerId, $bm]);
+    $st = $db->prepare("SELECT DISTINCT a.* FROM acc_allowance a
+                        JOIN acc_allowance_item i ON i.allow_id = a.allow_id
+                        LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
+                        WHERE a.customer_id = :cid AND " . aca_recon_where() . " ORDER BY a.allow_date, a.allow_id");
+    $st->execute([':cid' => $customerId, ':bm' => $bm]);
     $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
-        $q = $db->prepare("SELECT * FROM acc_allowance_item WHERE allow_id=? ORDER BY item_id");
-        $q->execute([$a['allow_id']]);
-        $a['items'] = $q->fetchAll(PDO::FETCH_ASSOC);
+        $q = $db->prepare("SELECT i.*, c.confirm_bm, c.by_name AS confirm_by, DATE_FORMAT(c.confirmed_at,'%Y-%m-%d %H:%i') AS confirm_at
+                           FROM acc_allowance_item i LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
+                           WHERE i.allow_id=? AND (c.item_id IS NULL OR c.confirm_bm >= ?) ORDER BY i.item_id");
+        $q->execute([$a['allow_id'], $bm]);
+        $items = $q->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($items as &$it) $it['confirmed'] = ($it['confirm_bm'] !== null && $it['confirm_bm'] === $bm) ? 1 : 0;
+        unset($it);
+        $a['items'] = $items;
+        $a['carried'] = ($a['billing_month'] < $bm) ? 1 : 0;
         $out[] = $a;
     }
     return $out;
+}
+
+/**
+ * 折讓明細「已確認／取消確認」。權限由呼叫端先驗（act_can_set_status 矩陣 'allow_confirm'）。
+ * 已確認＝對帳人員確認這筆折讓已納入 $bm 這個月的對帳；之後的月份不再顯示。
+ * 取消只能在「確認的那個月」做（之後的月份已經看不到它了，要取消請回到當月）。
+ */
+function aca_item_confirm(PDO $db, int $itemId, string $bm, bool $on, ?int $uid, string $uname): array
+{
+    aca_ensure_schema($db);
+    if (!preg_match('/^\d{4}-\d{2}$/', $bm)) return ['success' => false, 'message' => '帳款月份格式不正確'];
+    $st = $db->prepare("SELECT i.item_id, i.allow_id, i.src_no, a.status, a.customer_name, a.allow_no
+                        FROM acc_allowance_item i JOIN acc_allowance a ON a.allow_id = i.allow_id WHERE i.item_id=?");
+    $st->execute([$itemId]);
+    $it = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$it) return ['success' => false, 'message' => '找不到這筆折讓明細，請重新整理'];
+    if ($it['status'] !== 'active') return ['success' => false, 'message' => '這張折讓單已作廢，請重新整理'];
+    $st = $db->prepare("SELECT confirm_bm, by_name FROM acc_allowance_confirm WHERE item_id=?");
+    $st->execute([$itemId]);
+    $cf = $st->fetch(PDO::FETCH_ASSOC);
+    if ($on) {
+        if ($cf) return ['success' => false, 'message' => '這筆已經由 ' . ($cf['by_name'] ?: '') . ' 於 ' . $cf['confirm_bm'] . ' 確認過了，請重新整理'];
+        $db->prepare("INSERT INTO acc_allowance_confirm (item_id,allow_id,confirm_bm,by_id,by_name,confirmed_at) VALUES (?,?,?,?,?,NOW())")
+           ->execute([$itemId, (int)$it['allow_id'], $bm, $uid, $uname]);
+    } else {
+        if (!$cf) return ['success' => false, 'message' => '這筆已經是未確認狀態，請重新整理'];
+        if ($cf['confirm_bm'] !== $bm) return ['success' => false, 'message' => '這筆是在 ' . $cf['confirm_bm'] . ' 確認的，請回到該月份再取消'];
+        $db->prepare("DELETE FROM acc_allowance_confirm WHERE item_id=?")->execute([$itemId]);
+    }
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('ACC_ALLOWANCE_CONFIRM','acc_allowance',?,?,?,?,?,NOW())")
+           ->execute([(string)$it['allow_id'], trim(($it['customer_name'] ?? '') . ' ' . ($it['allow_no'] ?? '')),
+                      json_encode(['changes' => [$it['src_no'] . ' 折讓確認（' . $bm . '）' => [$on ? '未確認' : '已確認', $on ? '已確認' : '已取消']]], JSON_UNESCAPED_UNICODE),
+                      $uid, $uname]);
+    } catch (Throwable $e) {}
+    return ['success' => true, 'message' => $on ? '已確認，之後的月份不再顯示這筆折讓' : '已取消確認'];
 }
 
 /** 以客戶簡稱／別名／客戶ID 找出客戶編號（對帳頁雙擊用的 key 是簡稱） */
