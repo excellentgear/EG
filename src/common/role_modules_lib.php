@@ -1,0 +1,84 @@
+<?php
+/**
+ * role_modules_lib.php — 角色模組對照表（唯一來源）
+ *
+ * roles.module 的代碼 → 中文名稱／區塊前綴／對應頁面檔名。
+ * 用在：①user_permissions.php 所有顯示模組名稱的地方 ②role_page_r_lib.php 指派角色時自動補頁面 R（側欄才會出現）。
+ * 新模組建了 roles.module 就必須在這裡登記一列；漏登記 ai-rules/tools/check_role_modules.php 會抓出來。
+ */
+if (!function_exists('eg_role_modules')) {
+    function eg_role_modules(): array {
+        return [
+    'quotation'           => ['prefix'=>'quot',    'label'=>'報價單',              'page'=>'quotation_list_NEW.php'],
+    'notice'              => ['prefix'=>'notice',  'label'=>'公告/通知',           'page'=>'createEvent.php'],
+    'homepage'            => ['prefix'=>'home',    'label'=>'首頁設定',            'page'=>'home_page_setting.php'],
+    'qc'                  => ['prefix'=>'qc',      'label'=>'品管檢驗表 2.0',      'page'=>'inspection_entry_v2.php'],
+    'car'                 => ['prefix'=>'car',     'label'=>'異常矯正單',          'page'=>'correction_order.php'],
+    'master_data'         => ['prefix'=>'mdata',   'label'=>'主檔管理',            'page'=>'master_data_management.php'],
+    'attach_dl'           => ['prefix'=>'adl',     'label'=>'附件下載權限',        'page'=>'master_data_management.php'],
+    'imgedit'             => ['prefix'=>'imgedit', 'label'=>'批圖編輯器',          'page'=>''],   // 未登記進選單（帶參數才進得去）
+    'review_form'         => ['prefix'=>'rvf',     'label'=>'審核表單',            'page'=>'review_form.php'],
+    'sheet_form'          => ['prefix'=>'sf',      'label'=>'表格模板',            'page'=>'sheet_form.php'],
+    'hr_form'             => ['prefix'=>'hrf',     'label'=>'人資職務表單',        'page'=>'hr_position_forms.php'],
+    'form_signer'         => ['prefix'=>'fsd',     'label'=>'表單簽核設計器',      'page'=>'form_signer.php'],
+    'drawing_rename'      => ['prefix'=>'drawren', 'label'=>'圖面改檔名',          'page'=>'drawing_rename.php'],
+    'bom_rename'          => ['prefix'=>'bomren',  'label'=>'叫料改檔名',          'page'=>'bom_rename.php'],
+    'oready'              => ['prefix'=>'oready',  'label'=>'生管BOM',             'page'=>'OreadyReply_ForPm_BaseOfTime.php'],
+    'bom_track'           => ['prefix'=>'bomtrk',  'label'=>'BOM追蹤',             'page'=>'bom_tracking.php'],
+    'order_profit'        => ['prefix'=>'profit',  'label'=>'訂單毛利分析',        'page'=>'Order_Profit_Analysis.php'],
+    'part_process_report' => ['prefix'=>'ppr',     'label'=>'料號製程履歷報告',    'page'=>'part_process_report.php'],
+    'stamp'               => ['prefix'=>'stamp',   'label'=>'圖章管理',            'page'=>'stamp_management.php'],
+    'kpi'                 => ['prefix'=>'kpi',     'label'=>'KPI績效指標',         'page'=>'kpi_main.php'],
+    'personal_task'       => ['prefix'=>'ptask',   'label'=>'個人工作紀錄',        'page'=>'personal_task.php'],
+    'roster'              => ['prefix'=>'roster',  'label'=>'輪值排班',            'page'=>'roster.php'],
+    'as_doc'              => ['prefix'=>'asdoc',   'label'=>'AS文件管理',          'page'=>'as_document_management.php'],
+    'db_backup'           => ['prefix'=>'dbbk',    'label'=>'資料庫備份',          'page'=>'db_backup.php'],
+    'data_console'        => ['prefix'=>'dc',      'label'=>'資料急救台',          'page'=>'data_console.php'],
+    'tool_calib'          => ['prefix'=>'tcal',    'label'=>'量測儀器校驗',        'page'=>'tool_calibration.php'],
+    'training'            => ['prefix'=>'train',   'label'=>'教育訓練',            'page'=>'training_record.php'],
+    'meeting'             => ['prefix'=>'meet',    'label'=>'會議紀錄',            'page'=>'meeting_record.php'],
+    'vendor_audit'        => ['prefix'=>'vaud',    'label'=>'供應商稽核',          'page'=>'vendor_audit.php'],
+    'equip_machine'       => ['prefix'=>'eqm',     'label'=>'機台設備一覽表',      'page'=>'equipment_machine_list.php'],
+    'business_trip'       => ['prefix'=>'btrp',    'label'=>'公出單',              'page'=>'business_trip.php'],
+    'memo_request'        => ['prefix'=>'memo',    'label'=>'簽呈',                'page'=>'memo_request.php'],
+    'interview_record'    => ['prefix'=>'ivw',     'label'=>'訪談記錄',            'page'=>'interview_record.php'],
+    'doc_apply'           => ['prefix'=>'dap',     'label'=>'文件制修申請單',      'page'=>'doc_apply.php'],
+    'eng_change'          => ['prefix'=>'eng',     'label'=>'工程變更申請單',      'page'=>'eng_change.php'],
+    'eng_log'             => ['prefix'=>'elog',    'label'=>'工程處理紀錄',        'page'=>'eng_log.php'],
+    'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
+    'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
+    'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'od_dispatch'         => ['prefix'=>'od',      'label'=>'批次發單',            'page'=>'od_dispatch.php'],
+    'risk_mgmt'           => ['prefix'=>'rm',      'label'=>'風險與機會管理',      'page'=>'risk_mgmt.php'],
+    'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],
+    'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
+    'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
+    'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],
+    'sop_sip'             => ['prefix'=>'sopsip',  'label'=>'作業標準書SOP／檢驗指導書SIP', 'page'=>'sop_sip.php'],
+    'control_plan'        => ['prefix'=>'cp',      'label'=>'管制計畫CP',          'page'=>'control_plan.php'],
+    'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
+    'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
+    'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
+    'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
+    'accounting'          => ['prefix'=>'acc',     'label'=>'會計',                'page'=>'recon_overview.php'],
+    'acc_recon_track'     => ['prefix'=>'art',     'label'=>'對帳進度追蹤',        'page'=>'recon_track.php'],
+    'acc_allowance'       => ['prefix'=>'aal',     'label'=>'折讓單',              'page'=>'allowance.php'],
+    'external_doc'        => ['prefix'=>'extdoc',  'label'=>'外來文件清單',        'page'=>'external_doc_list.php'],
+    'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
+    'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
+    'td_dev_eval'         => ['prefix'=>'tdev',    'label'=>'產品開發評估表',      'page'=>'td_dev_eval.php'],
+    'con_review'          => ['prefix'=>'cnrv',    'label'=>'合約訂單審查表',      'page'=>'con_review.php'],
+    'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
+    'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
+    'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
+    'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝排程',        'page'=>'packing_schedule.php'],
+    'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
+    'ps_v2'               => ['prefix'=>'psv2',    'label'=>'待加工排程V2.0',      'page'=>'process_schedule_V2.php'],
+    'stock'               => ['prefix'=>'stk',     'label'=>'庫存管理',            'page'=>'stock.php'],
+    'ir_track'            => ['prefix'=>'irt',     'label'=>'退貨追蹤',            'page'=>'IR_Track.php'],
+    'emp_mgmt'            => ['prefix'=>'emp',     'label'=>'員工資料管理',        'page'=>'employee_management.php'],
+    'inquiry'             => ['prefix'=>'inq',     'label'=>'詢價單',              'page'=>'inquiry_sheet.php'],
+    'dash_leave'          => ['prefix'=>'dlv',     'label'=>'首頁特休顯示',        'page'=>''],   // 首頁小工具，沒有獨立頁面
+        ];
+    }
+}

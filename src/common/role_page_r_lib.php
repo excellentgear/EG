@@ -39,13 +39,45 @@ if (!function_exists('eg_role_page_r_modules')) {
     }
 }
 
+if (!function_exists('eg_role_page_r_all')) {
+    /**
+     * 角色模組 → 頁面檔名（含自動判定）。2026-11-18：不再只靠上面那張手動清單。
+     * 原因：每個新模組都得記得回來登記一列，漏了就是「角色指派了、側欄卻沒有選項」（詢價單、
+     * 好幾個頁面都這樣）。現在凡是 role_modules_lib.php 登記過、有對應頁面的模組，
+     * 只要該頁面檔本身沒有讀 user_module_permissions 的 R/C/U/D 字母（讀字母的頁面補 R 會改變行為），
+     * 就一律視為「角色決定細部權限」，指派角色時自動補頁面 R。
+     */
+    function eg_role_page_r_all(): array {
+        static $cache = null;
+        if ($cache !== null) return $cache;
+        $map = eg_role_page_r_modules();
+        try {
+            require_once __DIR__ . '/role_modules_lib.php';
+            $root = realpath(__DIR__ . '/../../');
+            foreach (eg_role_modules() as $mod => $def) {
+                $page = (string)($def['page'] ?? '');
+                if ($page === '' || isset($map[$mod])) continue;
+                $hit = null;
+                foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root . '/views', FilesystemIterator::SKIP_DOTS)) as $fi) {
+                    if ($fi->getFilename() === $page) { $hit = $fi->getPathname(); break; }
+                }
+                if ($hit === null) continue;
+                $src = @file_get_contents($hit);
+                if ($src === false || strpos($src, 'user_module_permissions') !== false) continue;   // 讀字母的頁面不碰
+                $map[$mod] = $page;
+            }
+        } catch (Throwable $e) {}
+        return $cache = $map;
+    }
+}
+
 if (!function_exists('eg_role_page_r_ensure')) {
     /**
      * 該使用者在這個角色所屬模組的頁面還沒有任何權限列時，補一列頁面 R。
      * @return bool 有新增＝true
      */
     function eg_role_page_r_ensure(PDO $pdo, int $uid, string $module): bool {
-        $map = eg_role_page_r_modules();
+        $map = eg_role_page_r_all();
         if (!isset($map[$module]) || $uid <= 0) return false;
         return eg_role_page_r_ensure_file($pdo, $uid, $map[$module]);
     }
