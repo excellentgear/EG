@@ -1353,7 +1353,7 @@ try { $pdo->exec("CREATE TABLE IF NOT EXISTS system_settings (
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) COMMENT='系統全域設定'"); } catch(Exception $e){}
 // Pre-insert default NAS path if not exists
-try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('notes_nas_dir','Z:/BOM/ERP/技術/'),('notes_url_dir','/nas/ERP/技術/')"); } catch(Exception $e){}
+try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('notes_nas_dir','//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/技術/'),('notes_url_dir','/nas/ERP/技術/')"); } catch(Exception $e){}
 try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('default_settlement_mode','FIXED'),('default_settlement_day','25'),('default_payment_method','匯款'),('default_net_days','')"); } catch(Exception $e){}
 try { $pdo->exec("INSERT IGNORE INTO system_settings (setting_key,setting_value) VALUES ('vendor_default_settlement_mode','FIXED'),('vendor_default_settlement_day','25'),('vendor_default_payment_method','匯款'),('vendor_default_net_days',''),('cust_default_settlement_mode','FIXED'),('cust_default_settlement_day','25'),('cust_default_payment_method','匯款'),('cust_default_net_days','')"); } catch(Exception $e){}
 
@@ -1522,6 +1522,69 @@ function _get_setting($pdo, $key, $default='') {
 function _save_setting($pdo, $key, $value, $uid, $op) {
     try { $pdo->prepare("INSERT INTO system_settings (setting_key,setting_value,updated_by_id,updated_by,updated_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),updated_by_id=VALUES(updated_by_id),updated_by=VALUES(updated_by),updated_at=NOW()")->execute([$key,$value,$uid,$op]); } catch(Exception $e){}
 }
+// 料號(d_setting.d_id)的「額外」綁定表：除了訂單/生產/出貨/報價/退貨/庫存這幾個基本項目以外，
+// 其他頁面（PFMEA、產品開發評估表、SOP/SIP、型態識別、批圖編輯器工作檔…）綁定料號 ID 的整數欄位。
+// 唯一清單：重複料號的綁定檢查、刪除前阻擋、移轉綁定三處共用（新增一個綁定表只要在這裡加一列）。
+// [顯示名稱, 資料表, 欄位, 額外條件(可空)]
+function mdm_part_extra_binds(): array {
+    return [
+        ['批圖編輯器工作檔（暫存）', 'part_attachments', 'd_id', "deleted_at IS NULL AND filename LIKE '%.egwork.json'"],
+        ['附件（含批圖輸出圖）', 'part_attachments', 'd_id', "deleted_at IS NULL AND filename NOT LIKE '%.egwork.json'"],
+        ['附件相簿', 'part_attach_album', 'd_id', ''],
+        ['料號別名', 'd_setting_alias', 'd_id', ''],
+        ['專用/通用料號', 'd_setting_dedicated_part_map', 'd_id', ''],
+        ['專用機台', 'd_setting_machine_map', 'd_id', ''],
+        ['廠商單價', 'd_setting_vendor_map', 'd_id', ''],
+        ['標籤', 'item_label_map', 'd_id', ''],
+        ['齒輪參數', 'd_setting_gear', 'd_setting_id', ''],
+        ['料號形狀', 'd_setting_shape', 'd_id', ''],
+        ['料號刀具', 'd_setting_tool', 'd_setting_id', ''],
+        ['版次紀錄', 'd_setting_revision_log', 'd_id', ''],
+        ['QC進貨檢驗表', 'qc_check_form', 'd_id', ''],
+        ['檢驗標準版本', 'qc_inspection_version', 'd_id', ''],
+        ['圖面變更紀錄', 'qc_drawing_change', 'd_id', ''],
+        ['異常矯正處理單', 'car_order', 'd_id', ''],
+        ['品質異常處理單', 'qa_abnormal_order', 'part_d_id', ''],
+        ['工程變更', 'eng_change', 'd_id', ''],
+        ['工程處理紀錄索引', 'eng_log_index', 'part_d_id', ''],
+        ['PFMEA', 'pfmea_doc', 'part_d_id', ''],
+        ['PFMEA料號綁定', 'pfmea_part_binding', 'part_d_id', ''],
+        ['PFMEA要求選項', 'pfmea_requirement_option', 'part_d_id', ''],
+        ['產品開發評估表', 'td_dev_eval', 'part_d_id', ''],
+        ['產品開發評估表料號名稱', 'td_dev_eval_part_name', 'part_d_id', ''],
+        ['SOP/SIP', 'ss_doc', 'part_d_id', ''],
+        ['管制計畫', 'cp_doc', 'part_d_id', ''],
+        ['管制計畫家族', 'cp_family_part', 'part_d_id', ''],
+        ['型態識別文件管制表', 'type_id_ctrl_doc', 'part_d_id', ''],
+        ['設計提醒規則', 'order_design_alert_rule', 'part_d_id', ''],
+        ['申請採購(用途料號)', 'purchase_request', 'purpose_d_id', ''],
+        ['申請採購明細(用途料號)', 'purchase_request_item', 'purpose_d_id', ''],
+        ['KPI料號標準', 'kpi_part_standard', 'd_setting_id', ''],
+        ['KPI難度係數', 'kpi_difficulty_coefficient', 'd_setting_id', ''],
+        ['包裝外觀檢查項', 'pm_packing_appearance_item', 'd_id', ''],
+        ['ERP訂單匯入暫存', 'order_erp_import_stage', 'd_id_id', ''],
+        ['業務追蹤', 'sales_track', 'd_setting_id', ''],
+        ['工程處理紀錄綁定', 'eng_log_bind', 'bind_id', "bind_type='part'"],
+        ['個人工作綁定', 'personal_task_bind', 'bind_id', "bind_type='part'"],
+    ];
+}
+// 回傳 [d_id => ['附件 3筆', ...]]；單一 d_id 也可用（傳 [$id]）
+function mdm_part_extra_counts(PDO $pdo, array $ids): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    $out = [];
+    if (!$ids) return $out;
+    $in = implode(',', $ids);
+    foreach (mdm_part_extra_binds() as [$lab, $tb, $col, $w]) {
+        try {
+            $sql = "SELECT $col k, COUNT(*) n FROM $tb WHERE $col IN ($in)" . ($w !== '' ? " AND $w" : '') . " GROUP BY $col";
+            foreach ($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if ((int)$r['n'] > 0) $out[(int)$r['k']][] = $lab . ' ' . (int)$r['n'] . '筆';
+            }
+        } catch (Throwable $e) { /* 表尚未建立就略過 */ }
+    }
+    return $out;
+}
+
 function _get_operator($pdo, $uid) {
     try { $s=$pdo->prepare("SELECT user_cname FROM user WHERE id=?"); $s->execute([$uid]); $n=$s->fetchColumn(); return $n?:('uid:'.$uid); } catch(Exception $e){ return 'uid:'.$uid; }
 }
@@ -1976,6 +2039,9 @@ $can_edit_gear  = _mdPerm('gear', 'edit');
 $can_delete_gear= _mdPerm('gear', 'delete');
 $can_modify_existing_gear = _mdPerm('gear', 'modify_existing');
 $can_remove_part_labels   = _mdTagCan('edit_others');
+// 設計提示標籤（2026-11-10）：「設定標籤」與「料號勾選」分開授權
+$canDtagManage = _mdPerm('dtag', 'manage');
+$canDtagAssign = _mdPerm('dtag', 'assign');
 $can_tag_required_delete  = _mdPerm('tag', 'required_delete'); // 刪除「已指派給料號」的必填標籤——獨立細權限，與標籤定義本身是否必填(is_required)無關
 $can_part_attach = $is_admin || $_mdRbacAll
     || in_array('md_attach_upload', $_mdFeats, true)
@@ -2113,7 +2179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 設定值若沒帶結尾的 \（目前設定就是 …\ERP\技術），上傳會被寫成上一層的
     // 「技術20260908_xxx.png」——當下不報錯，但讀檔端點 NoteImage_API 是用
     // rtrim()+DIRECTORY_SEPARATOR 組路徑，永遠 404，附件看起來就是憑空消失。
-    $_nas_dir = rtrim(_get_setting($pdo, 'notes_nas_dir', 'Z:/BOM/ERP/技術/'), "/\\") . DIRECTORY_SEPARATOR;
+    $_nas_dir = rtrim(_get_setting($pdo, 'notes_nas_dir', '//excellentnas/AS9100維護/ERP AS9100文件(勿刪)/技術/'), "/\\") . DIRECTORY_SEPARATOR;
 
     // ─── 料號 ─────────────────────────────────────────────────────────────
     if ($_POST['action'] === 'list_parts') {
@@ -2137,9 +2203,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 第一段（分頁）查詢只會用到 kw_direct 這組參數，:kwm* 屬於 kw_parent_src_sql 不可帶入
             $params_kwd = [];
             $kw_direct_sql     = '1';    // 是否直接命中關鍵字（無關鍵字搜尋時恆為 1）
+            $kw_exact_sql      = '0';    // 是否與關鍵字完全吻合（只用於第一段排序）
             $kw_parent_src_sql = 'NULL'; // 命中關鍵字的所屬組合件料號清單（供前端標示「由組合件帶出」）
             if (!empty($kws)) {
-                $kw_ors = []; $kw_direct_ors = []; $kw_parent_ors = [];
+                $kw_ors = []; $kw_direct_ors = []; $kw_parent_ors = []; $kw_exact_ors = [];
                 foreach ($kws as $ki => $kw_i) {
                     $kk = ":kw$ki";
                     // 直接欄位命中，或身為「命中關鍵字之組合件」的子件（d_setting_bom 反查）亦納入
@@ -2181,6 +2248,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     require_once __DIR__ . '/../../src/common/attach_proc_lib.php';
                     $where .= eg_apc_filter_sql($pdo, $fattproc_raw, 'd');
                 } catch (Throwable $__ea) {}
+            }
+            // 設計提示標籤篩選：勾了任一個標籤的料號（多個＝任一符合）
+            $fdtags = array_values(array_filter(array_map('intval', explode(',', trim($_POST['filter_design_tags'] ?? '')))));
+            if ($fdtags) {
+                try {
+                    require_once __DIR__ . '/../../src/common/design_tag_lib.php';
+                    dt_ensure_schema($pdo);
+                    $where .= " AND EXISTS (SELECT 1 FROM d_setting_design_tag dtf WHERE dtf.d_id=d.d_id AND dtf.tag_id IN (" . implode(',', $fdtags) . "))";
+                } catch (Throwable $__edt) {}
             }
             if ($fgear > 0) {
                 $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear g WHERE g.d_setting_id=d.d_id AND g.Gear_Type=:fgear)";
@@ -2597,7 +2673,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             // 關鍵字搜尋＋預設排序時：直接命中的組合件置頂（使用者選了出貨排序則尊重其排序）
             if (!empty($kws) && !in_array($sort_by, ['ship_count_asc','ship_count_desc','ship_qty_asc','ship_qty_desc'], true)) {
-                $order_sql = 'ORDER BY (kw_direct=1 AND d.Is_Assembly=1) DESC, d.D_Setting_Id ASC, d.d_id ASC';
+                $order_sql = 'ORDER BY kw_exact DESC, (kw_direct=1 AND d.Is_Assembly=1) DESC, d.D_Setting_Id ASC, d.d_id ASC';
             }
 
             // 建立巢狀 REPLACE 表達式，用於 display_template 套用
@@ -2664,7 +2740,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                命中仍約 0.11 秒），第二段只對這一頁的列算重欄位，成本與命中總數無關。*/
             $need_ss_pg = in_array($sort_by, ['ship_count_asc','ship_count_desc','ship_qty_asc','ship_qty_desc'], true);
             $pgq = $pdo->prepare("
-                SELECT d.d_id, $kw_direct_sql AS kw_direct
+                SELECT d.d_id, $kw_direct_sql AS kw_direct, $kw_exact_sql AS kw_exact
                 FROM d_setting d
                 LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
                 " . ($need_ss_pg ? $ss_join : '') . "
@@ -2803,6 +2879,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if (!$__x) { $__r['shape_txt'] = ''; continue; }
                     $__bt = $__x['bore_nm'] . ($__x['dias'] ? ' Ø' . implode('→Ø', $__x['dias']) : '');
                     $__r['shape_txt'] = implode('｜', array_filter([$__x['outer_nm'] . ($__x['hub'] !== '' ? ' 凸出Ø' . $__x['hub'] : ''), $__bt, $__x['tail'] ?? '']));
+                }
+                unset($__r);
+            } catch (Throwable $__e) {}
+            // 設計提示標籤（清單規格欄下方顯示）：只有一次查詢，無標籤時零成本
+            try {
+                require_once __DIR__ . '/../../src/common/design_tag_lib.php';
+                $__dtl = [];
+                foreach (dt_list($pdo, false) as $__t) $__dtl[$__t['id']] = $__t;
+                $__ids = array_values(array_filter(array_map(fn($x) => (int)($x['d_id'] ?? 0), $rows)));
+                $__map = [];
+                if ($__dtl && $__ids) {
+                    $__q = $pdo->query("SELECT d_id, tag_id FROM d_setting_design_tag WHERE d_id IN (" . implode(',', $__ids) . ")");
+                    foreach ($__q->fetchAll(PDO::FETCH_ASSOC) as $__x) {
+                        $__tg = $__dtl[(int)$__x['tag_id']] ?? null;
+                        if ($__tg) $__map[(int)$__x['d_id']][] = $__tg;
+                    }
+                }
+                foreach ($rows as &$__r) {
+                    $__r['design_tags'] = [];
+                    foreach (($__map[(int)($__r['d_id'] ?? 0)] ?? []) as $__tg) $__r['design_tags'][] = ['id'=>$__tg['id'],'name'=>$__tg['name'],'bg'=>$__tg['bg'],'fg'=>$__tg['fg']];
+                    usort($__r['design_tags'], fn($a, $b) => ($__dtl[$a['id']]['sort_order'] ?? 0) <=> ($__dtl[$b['id']]['sort_order'] ?? 0));
                 }
                 unset($__r);
             } catch (Throwable $__e) {}
@@ -2997,6 +3094,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $row['part_sets'] = [];
                 foreach ($mySetIds as $sid) if (isset($myData[$sid])) $row['part_sets'][] = $myData[$sid];
             } catch (Exception $ex) { $row['part_sets'] = []; }
+            // 設計提示標籤：此料號勾選的標籤 id
+            try { require_once __DIR__ . '/../../src/common/design_tag_lib.php'; $row['design_tag_ids'] = dt_part_tag_ids($pdo, (int)$d_id); }
+            catch (Throwable $ex) { $row['design_tag_ids'] = []; }
             echo json_encode(['success'=>true,'data'=>$row], JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3097,6 +3197,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 設計提示標籤：清單／設定（設定要 mdata_dtag_manage，後端再擋一次）──────────
+    if ($_POST['action'] === 'design_tag_list') {
+        try {
+            require_once __DIR__ . '/../../src/common/design_tag_lib.php';
+            echo json_encode(['success'=>true,'tags'=>dt_list($pdo, false),'usage'=>dt_usage($pdo),
+                              'palette'=>dt_palette(),'can_manage'=>(bool)$canDtagManage,'can_assign'=>(bool)$canDtagAssign], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>'載入失敗']); }
+        exit;
+    }
+    if ($_POST['action'] === 'design_tag_save') {
+        try {
+            if (!$canDtagManage) throw new InvalidArgumentException('沒有設定設計提示標籤的權限');
+            require_once __DIR__ . '/../../src/common/design_tag_lib.php';
+            $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+            if (!is_array($items)) throw new InvalidArgumentException('資料格式不正確');
+            $tags = dt_save_all($pdo, $items, (int)$uid);
+            echo json_encode(['success'=>true,'tags'=>$tags,'usage'=>dt_usage($pdo),'message'=>'已儲存'], JSON_UNESCAPED_UNICODE);
+        } catch (InvalidArgumentException $e) {
+            echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('[design_tag_save] ' . $e->getMessage());
+            echo json_encode(['success'=>false,'message'=>'儲存失敗，請重新整理後再試']);
+        }
+        exit;
+    }
+
     // ── 複製標籤來源搜尋 ─────────────────────────────────────────────────────
     if ($_POST['action'] === 'search_parts_for_copy') {
         try {
@@ -3178,6 +3304,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $old_part_row = $old_q->fetch(PDO::FETCH_ASSOC) ?: [];
             }
 
+            require_once __DIR__ . '/../../src/common/design_tag_lib.php';
+            dt_ensure_schema($pdo);   // DDL 會隱式 commit，一定要在交易之前
             $pdo->beginTransaction();
 
             // NULL-safe: 空字串視為 NULL，避免 "" <=> NULL 失敗
@@ -3598,7 +3726,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
+            // ── 設計提示標籤：沒送欄位＝不動；沒有「勾選」權限一律忽略（鐵律8：後端再擋一次）──
+            if ($canDtagAssign && array_key_exists('design_tag_ids', $_POST)) {
+                $dtIds = json_decode((string)$_POST['design_tag_ids'], true);
+                dt_part_set($pdo, (int)$d_id, is_array($dtIds) ? $dtIds : []);
+            }
+
             $pdo->commit();
+            // ── 設計提示標籤剛變更：自動替此料號未轉生管的訂單補上設計備註的系統提醒（交易外，失敗不影響存檔）──
+            if ($canDtagAssign && array_key_exists('design_tag_ids', $_POST)) {
+                try { require_once __DIR__ . '/../../src/common/design_alert_lib.php'; oda_sync_part($pdo, (int)$d_id); } catch (Throwable $_oe) {}
+            }
             // ── 版次異動紀錄（交易外寫入，理由見上面 $rev_changed 那段的說明）──
             if (!empty($rev_changed)) {
                 try {
@@ -3686,6 +3824,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $chk->execute([$d_id]); $cnt=(int)$chk->fetchColumn();
                 if ($cnt>0) $blocks[] = "圖面變更紀錄 {$cnt} 筆";
             } catch (Exception $qe) {}
+            foreach ((mdm_part_extra_counts($pdo, [$d_id])[$d_id] ?? []) as $__x) { if (strpos($__x, '圖面變更紀錄') !== 0) $blocks[] = $__x; }
             if (!empty($blocks)) throw new Exception('此料號已有關聯資料，無法刪除：' . implode('、',$blocks));
             $pdo->prepare("DELETE FROM d_setting WHERE d_id=?")->execute([$d_id]);
             _log_audit($pdo,'delete','part',$del_row['D_Setting_Id']??$d_id,null,null,$uid,_get_operator($pdo,$uid));
@@ -3834,6 +3973,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute([$cid]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$row) throw new Exception('找不到客戶');
+            // 結帳模式／結帳日最後修改人與時間（與對帳進度追蹤共用同一份紀錄；查不到不影響其他資料）
+            $row['settle_last'] = null;
+            try {
+                $sl = $pdo->prepare("SELECT COALESCE(NULLIF(u.user_cname,''), l.changed_by_name) AS nm, DATE_FORMAT(l.changed_at,'%Y.%m.%d %H:%i') AS t
+                                     FROM acc_recon_track_change_log l LEFT JOIN user u ON u.id=l.changed_by
+                                     WHERE l.target_type='customer' AND l.target_id=? AND l.field IN ('settlement_mode','settlement_day')
+                                     ORDER BY l.id DESC LIMIT 1");
+                $sl->execute([$cid]);
+                $row['settle_last'] = $sl->fetch(PDO::FETCH_ASSOC) ?: null;
+            } catch (Throwable $e) {}
             // 聯絡人
             $sc = $pdo->prepare("SELECT * FROM customer_contacts WHERE customer_id=? ORDER BY sort_order, contact_id");
             $sc->execute([$cid]);
@@ -4026,6 +4175,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid,$customer_id]);
+                // 結帳模式／固定結帳日有變動 → 寫入「對帳進度追蹤」同一份修改紀錄（兩邊顯示的修改人與時間一致）。
+                // 紀錄失敗絕不影響主檔儲存。
+                try {
+                    foreach (['settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day] as $_sf=>$_sn) {
+                        $_so = $old_cust_row[$_sf] ?? null;
+                        if ((string)$_so === (string)$_sn) continue;
+                        $pdo->prepare("INSERT INTO acc_recon_track_change_log (target_type,target_id,field,old_value,new_value,changed_by,changed_by_name,changed_at)
+                                       VALUES ('customer',?,?,?,?,?,(SELECT COALESCE(NULLIF(user_cname,''),'') FROM user WHERE id=?),NOW())")
+                            ->execute([$customer_id,$_sf,$_so,$_sn,$uid,$uid]);
+                    }
+                } catch (Throwable $_le) {}
             }
             // 產業別小類 Delete-then-Insert
             $industry_subs = json_decode($_POST['industry_subs'] ?? '[]', true) ?: [];
@@ -4293,7 +4453,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $subId = intval($_POST['sub_type_id'] ?? 0);
             $exclude = intval($_POST['exclude_d_id'] ?? 0); // 排除自己當自己的治具
             $only  = trim($_POST['only'] ?? '');            // ''=兩種都列 / 'part' / 'set'
-            if ($kw === '' && $spec === '' && $subId <= 0) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
+            // 只看整組時不需任何條件即可列出（整組數量有限；其他情況候選量未知仍須給條件）
+            if ($only !== 'set' && $kw === '' && $spec === '' && $subId <= 0) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
             $rows = [];
 
             // ① 治具料號本身
@@ -5116,6 +5277,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $sets = implode(',', array_map(function($f){ return "$f=?"; }, explode(',',$fields)));
                 $pdo->prepare("UPDATE maker_list SET {$sets},Modified_By=?,Modified_At=NOW() WHERE maker_id_no=?")
                     ->execute(array_merge($vals,[$uid,$mid]));
+                // 結帳模式／固定結帳日變動 → 寫入對帳進度追蹤同一份修改紀錄（失敗不影響儲存）
+                try {
+                    foreach (['settlement_mode'=>$m_settlement_mode,'settlement_day'=>$m_settlement_day] as $_sf=>$_sn) {
+                        $_so = $old_maker_row[$_sf] ?? null;
+                        if ((string)$_so === (string)$_sn) continue;
+                        $pdo->prepare("INSERT INTO acc_recon_track_change_log (target_type,target_id,field,old_value,new_value,changed_by,changed_by_name,changed_at)
+                                       VALUES ('maker',?,?,?,?,?,(SELECT COALESCE(NULLIF(user_cname,''),'') FROM user WHERE id=?),NOW())")
+                            ->execute([$mid,$_sf,$_so,$_sn,$uid,$uid]);
+                    }
+                } catch (Throwable $_le) {}
             }
 
             // 同步小類映射：Delete-then-Insert（使用 varchar maker_id_no）
@@ -5231,6 +5402,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="退貨單 {$n} 筆";$counts['ir']=$n;}
             // 圖面變更紀錄（AS 2-PD-01-07）：見 delete_part 內同一段註解。表可能尚未建立，故包 try。
             try { $chk = $pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="圖面變更紀錄 {$n} 筆";$counts['dwg_change']=$n;} } catch (Exception $qe) {}
+            foreach ((mdm_part_extra_counts($pdo, [$d_id])[$d_id] ?? []) as $__x) { if (strpos($__x, '圖面變更紀錄') !== 0) $blocks[] = $__x; }
             echo json_encode(['success'=>true,'blocks'=>$blocks,'counts'=>$counts,'part'=>$part]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -5398,7 +5570,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             $pdo->prepare("UPDATE d_setting_bom  SET parent_d_id=?            WHERE parent_d_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE d_setting_bom  SET child_d_id=?             WHERE child_d_id=?")->execute([$tgt_id,$src_id]);
-            $pdo->prepare("UPDATE stock_items    SET d_id=?                   WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            // 庫存品項：d_id 是料號文字、d_setting_id 才是料號 ID，兩者都要換
+            $pdo->prepare("UPDATE stock_items    SET d_setting_id=?, d_id=?   WHERE d_setting_id=?")->execute([$tgt_id,$tds,$src_id]);
             $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=? WHERE d_setting_d_id=?")->execute([$tgt_id,$tds,$src_id]);
             // 圖面變更紀錄（AS 2-PD-01-07）改指向目標料號；表可能尚未建立，故包 try（缺表不影響其餘移轉）。
             // 註：qc_inspection_version（檢驗標準版本）刻意不自動搬——目標料號通常已有自己的生效版本，
@@ -5447,6 +5620,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ['d_setting_machine_type_map',  "UPDATE d_setting_machine_type_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
                 ['d_setting_machine_model_map', "UPDATE d_setting_machine_model_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
             ];
+            // 其他頁面綁定料號 ID 的整數欄位（清單見 mdm_part_extra_binds()，附件／別名等前面已搬過的略過）
+            $alreadyMoved = ['part_attachments','d_setting_alias','d_setting_dedicated_part_map','d_setting_machine_map','d_setting_vendor_map','item_label_map','d_setting_gear','qc_check_form','qc_drawing_change','sales_track'];
+            foreach (mdm_part_extra_binds() as [$xl, $xt, $xc, $xw]) {
+                if (in_array($xt, $alreadyMoved, true)) continue;
+                if ($xt === 'qc_inspection_version') {
+                    // 檢驗標準版本：目標料號已有生效中的版本時，搬過去的改為未生效，避免出現兩個 is_active=1（要用哪個由品管決定）
+                    try {
+                        $hasAct = $pdo->prepare("SELECT COUNT(*) FROM qc_inspection_version WHERE d_id=? AND is_active=1"); $hasAct->execute([$tgt_id]);
+                        if ((int)$hasAct->fetchColumn() > 0) $pdo->prepare("UPDATE qc_inspection_version SET is_active=0 WHERE d_id=?")->execute([$src_id]);
+                        $pdo->prepare("UPDATE qc_inspection_version SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+                    } catch (Throwable $ue) { $skipped[] = $xl; }
+                    continue;
+                }
+                try {
+                    if ($xt === 'eng_log_bind' || $xt === 'personal_task_bind') {
+                        $pdo->prepare("UPDATE $xt SET bind_id=?, bind_label=? WHERE bind_type='part' AND bind_id=?")->execute([(string)$tgt_id,$tds,(string)$src_id]);
+                    } else {
+                        $pdo->prepare("UPDATE $xt SET $xc=? WHERE $xc=?")->execute([$tgt_id,$src_id]);
+                    }
+                } catch (Throwable $ue) { $skipped[] = $xl; }
+            }
             foreach ($uniqueTables as [$label,$sql,$params]) {
                 try { $pdo->prepare($sql)->execute($params); }
                 catch (Throwable $ue) { $skipped[] = $label; }
@@ -5483,6 +5677,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         if (@rename($from, $to)) { $moved++; }
                         elseif (@copy($from, $to)) { @unlink($from); $moved++; }   // 跨磁碟時 rename 會失敗
                         else { $moveFail[] = $fn; }
+                    }
+                    // 批圖編輯器工作檔引用的底圖（img_*.png 等）不在 part_attachments 清單內，
+                    // 但工作檔 JSON 裡的網址是 part_file&d=<d_id>&f=檔名；整個來源資料夾剩下的檔案一併搬過去，
+                    // 再把搬過去的 .egwork.json 內的 d=來源 改成 d=目標，否則重開工作檔底圖會全部 404。
+                    if (is_dir($srcDir)) {
+                        foreach (scandir($srcDir) ?: [] as $fn) {
+                            if ($fn === '.' || $fn === '..' || !is_file($srcDir . DIRECTORY_SEPARATOR . $fn)) continue;
+                            $from = $srcDir . DIRECTORY_SEPARATOR . $fn; $to = $tgtDir . DIRECTORY_SEPARATOR . $fn;
+                            if (is_file($to)) continue;
+                            if (@rename($from, $to) || (@copy($from, $to) && @unlink($from))) $moved++;
+                            else $moveFail[] = $fn;
+                        }
+                    }
+                    foreach ($attachFiles as $fn) {
+                        if (substr($fn, -12) !== '.egwork.json') continue;
+                        $jf = $tgtDir . DIRECTORY_SEPARATOR . $fn;
+                        if (!is_file($jf)) continue;
+                        $js = @file_get_contents($jf);
+                        if ($js === false) continue;
+                        $js2 = str_replace('action=part_file&d=' . $src_id . '&', 'action=part_file&d=' . $tgt_id . '&', $js);
+                        if ($js2 !== $js) @file_put_contents($jf, $js2);
                     }
                 }
             }
@@ -5969,6 +6184,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    if ($_POST['action'] === 'gear_proc_allow_save') {
+        try {
+            if (!(_mdPerm('gear_type_dict', 'edit', $can_dict_part) || _mdPerm('gear_type_dict', 'add', $can_dict_part))) throw new Exception('無權限（需有「齒輪類型字典」編輯權限）');
+            require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+            $ty = array_filter(array_map('intval', explode(',', $_POST['types'] ?? '')));
+            $no = array_filter(array_map('intval', explode(',', $_POST['nos'] ?? '')));
+            eg_gear_proc_allow_save($pdo, $ty, $no, (string)($_SESSION['userName'] ?? ''));
+            echo json_encode(['success'=>true, 'data'=>eg_gear_proc_allow_get($pdo)]);
+        } catch (Throwable $e) { echo json_encode(['success'=>false, 'message'=>$e->getMessage()]); }
+        exit;
+    }
     if ($_POST['action'] === 'manage_gear_types') {
         try {
             $op = $_POST['op'];
@@ -6850,6 +7076,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $type = trim($_POST['type'] ?? '');
 
             if ($type === 'parts') {
+                // 顯示模式：all=料號相同即列出（客戶不同也列）／same=料號與客戶都相同（兩邊都無客戶也算相同）
+                //          same_or_none=客戶相同，或其中一筆沒有客戶（無客戶的會併入每個客戶組）
+                $dupMode = in_array(($_POST['mode'] ?? 'all'), ['all','same','same_or_none'], true) ? $_POST['mode'] : 'all';
                 // 料號完全重複（D_Setting_Id 相同）
                 $dup = $pdo->query("
                     SELECT D_Setting_Id, COUNT(*) AS cnt
@@ -6865,7 +7094,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $ph = implode(',', array_fill(0, count($ids), '?'));
                     $rs = $pdo->prepare("
                         SELECT s.d_id, s.D_Setting_Id, s.Spec_No, s.Revision, s.Issue_Date,
-                               s.Type, s.Remark, c.customer AS client_name
+                               s.Type, s.Remark, c.customer AS client_name, s.Customer_Id AS cust_id
                         FROM d_setting s
                         LEFT JOIN customer_list c ON c.customer_id=s.Customer_Id
                         WHERE s.D_Setting_Id IN ($ph)
@@ -6892,16 +7121,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         }
                     }
                 }
+                $extraCnt = mdm_part_extra_counts($pdo, $allDid);
+                foreach ($extraCnt as $k => $labs) { foreach ($labs as $lb) $relCnt[$k][] = $lb; }
                 $result = [];
                 foreach ($dup as $d) {
                     $partRows = $byKey[$d['D_Setting_Id']] ?? [];
-                    foreach ($partRows as &$pr) { $pr['relations'] = $relCnt[(int)$pr['d_id']] ?? []; }
+                    foreach ($partRows as &$pr) { $pr['relations'] = $relCnt[(int)$pr['d_id']] ?? []; $pr['cust_id'] = (string)($pr['cust_id'] ?? ''); }
                     unset($pr);
-                    $result[] = [
-                        'key'   => $d['D_Setting_Id'],
-                        'count' => (int)$d['cnt'],
-                        'rows'  => $partRows,
-                    ];
+                    $groups = [];
+                    if ($dupMode === 'all') {
+                        $groups[''] = $partRows;
+                    } elseif ($dupMode === 'same') {
+                        foreach ($partRows as $pr) $groups[$pr['cust_id']][] = $pr;
+                    } else {
+                        $named = array_values(array_unique(array_filter(array_column($partRows, 'cust_id'), fn($x) => $x !== '')));
+                        $none  = array_values(array_filter($partRows, fn($x) => $x['cust_id'] === ''));
+                        if (!$named) { $groups[''] = $none; }
+                        foreach ($named as $cid) {
+                            $groups[$cid] = array_merge(array_values(array_filter($partRows, fn($x) => $x['cust_id'] === $cid)), $none);
+                        }
+                    }
+                    foreach ($groups as $gRows) {
+                        if (count($gRows) < 2) continue;
+                        $result[] = [
+                            'key'   => $d['D_Setting_Id'],
+                            'count' => count($gRows),
+                            'rows'  => array_values($gRows),
+                        ];
+                    }
                 }
                 echo json_encode(['success'=>true,'data'=>$result,'type'=>'parts']);
 
@@ -7102,6 +7349,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $__n = (int)$__q->fetchColumn(); if ($__n > 0) $__blk[] = "{$__lab} {$__n} 筆";
             }
             try { $__q = $pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?"); $__q->execute([$d_id]); $__n=(int)$__q->fetchColumn(); if ($__n>0) $__blk[]="圖面變更紀錄 {$__n} 筆"; } catch (Exception $__qe) {}
+            foreach ((mdm_part_extra_counts($pdo, [$d_id])[$d_id] ?? []) as $__x) { if (strpos($__x, '圖面變更紀錄') !== 0) $__blk[] = $__x; }
             if ($__blk) throw new Exception('此料號已有關聯資料，無法直接刪除（請改用移轉）：' . implode('、', $__blk));
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
@@ -8641,6 +8889,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     #makers-table-wrap table { table-layout: fixed; width:100%; }
     #makers-table-wrap th, #makers-table-wrap td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #makers-table-wrap td:nth-child(2) { white-space: normal; word-break: break-all; }
+    #makers-table-wrap td:nth-child(4) { white-space: normal; word-break: break-all; }
 
 /* ── Badges & Tags ── */
 .badge-type { display:inline-block; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
@@ -8711,7 +8960,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .process-chip { display:inline-block; background:#e2e8f0; border-radius:4px; padding:2px 6px; font-size:11px; margin:1px; }
 /* ── Part label chips (in table + modal) ── */
 .part-label-chip { display:inline-block; background:#e8f5f2; color:#1ABB9C; border:1px solid #a8dfd4; border-radius:10px; padding:1px 8px; font-size:11px; font-weight:600; margin:1px 2px 1px 0; cursor:default; }
-#parts-table-wrap .part-label-chip { padding:0 6px; font-size:10.5px; }
+#parts-table-wrap .part-label-chip { padding:0 6px; font-size:10.5px; line-height:15px; margin:0 2px 2px 0; }   /* td span 全站 line-height:28px，要自己指定才會矮 */
 /* 料號圖面連結 */
 .part-drawing-link { cursor:pointer; color:var(--primary); border-bottom:1px dashed var(--primary); font-family:Consolas,monospace; transition:color .15s; }
 .part-drawing-link:hover { color:#1ABB9C; border-bottom-color:#1ABB9C; }
@@ -8872,6 +9121,14 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 body { background:#F6F1EA; }
 </style>
 <?php endif; ?>
+<?php if (!empty($_GET['part_embed'])): ?>
+<!-- ?part_embed=1 內嵌「新增料號」：報價單等頁面用 iframe 疊一層呼叫本頁的新增料號跳窗，
+     欄位與驗證永遠只有這一份（改這裡，呼叫端自動跟著變）。側欄／頂欄／清單一開始就藏起來。 -->
+<style>
+.left_col, .top_nav, .right_col { display:none !important; }
+html, body { background:transparent !important; }
+</style>
+<?php endif; ?>
 </head>
 
 <body class="nav-sm">
@@ -9007,6 +9264,10 @@ body { background:#F6F1EA; }
               ['mdata_tag_assign','新增標籤指派'],
               ['mdata_tag_edit_others','修改／移除他人指派的標籤'],
               ['mdata_tag_required_delete','刪除必填標籤']
+            ]},
+            { title: '設計提示標籤（料號視窗；訂單追蹤「設計提醒規則」可依標籤提示）', items: [
+              ['mdata_dtag_manage','設定標籤（新增／修改／停用／刪除／排序，齒輪圖示）'],
+              ['mdata_dtag_assign','料號勾選／取消勾選設計提示標籤']
             ]},
             { title: '整組（哪幾個治具／料號算一組）', items: [
               ['mdata_part_set_view','整組：檢視'],
@@ -9366,6 +9627,11 @@ body { background:#F6F1EA; }
                 <div class="filter-sub-row visible" id="parts-attproc-filter" style="align-items:center;flex-wrap:wrap;gap:4px;padding-bottom:4px;">
                     <span class="filter-group-label" title="料號附件上標的製程標籤；選大類會包含底下所有小類，選小類也會包含標整個大類的附件">附件製程</span>
                     <div id="parts-attproc-box" class="epp" style="min-width:260px;max-width:620px;"></div>
+                </div>
+                <!-- 設計提示標籤篩選（多選＝任一符合）；沒有任何啟用標籤時整列隱藏 -->
+                <div class="filter-sub-row" id="parts-dtag-filter" style="align-items:center;flex-wrap:wrap;gap:4px;padding-bottom:4px;">
+                    <span class="filter-group-label" title="料號視窗勾選的設計提示標籤；選多個＝符合任一個即列出">設計提示標籤</span>
+                    <span id="parts-dtag-box" style="display:inline-flex;flex-wrap:wrap;gap:4px;"></span>
                 </div>
                 <!-- 齒輪類型子篩（僅選 G 時出現） -->
                 <div class="filter-sub-row" id="parts-gear-filter">
@@ -9896,6 +10162,17 @@ body { background:#F6F1EA; }
             </div>
         </div>
     </div>
+    <!-- 設計提示標籤（2026-11-10）：標籤本身（文字／顏色／排序）由有「設定標籤」權限者按齒輪設定；
+         料號勾選需「勾選」權限（兩者在角色設定分開）。勾選結果隨「儲存」寫入此料號，
+         訂單追蹤的「設計提醒規則」可用標籤（或客戶＋標籤）當提示對象。 -->
+    <div class="col-md-6" id="pf-dtag-wrap">
+        <div class="form-group">
+            <label>設計提示標籤
+                <button type="button" id="pf-dtag-gear" class="btn btn-xs btn-link" style="display:none;padding:0 4px;color:#8A5A3B;" title="設定設計提示標籤（新增／修改／排序）" onclick="dtagOpenCfg()"><i class="fa fa-cog"></i></button>
+            </label>
+            <div id="pf-dtag-box" style="border:1px solid #E4D3BC;border-radius:4px;background:#FFF9F0;padding:8px 10px;min-height:38px;"></div>
+        </div>
+    </div>
     <!-- 所屬整組（2026-10-12 改版）：整組是獨立主檔（上方「整組」分頁），一組裡可以有好幾個
          治具/料號，而且**同一個料號可以同時屬於很多組**（像共用底板）。這一區只顯示「這支料號
          參與了哪幾組」並可就地加入／移出；建組、改組名、增刪成員、設機台都在整組分頁做。
@@ -10046,7 +10323,7 @@ body { background:#F6F1EA; }
 <?php endif; ?>
 
 <!-- ─ 標籤（依 Type 動態顯示）─ -->
-<!-- 外形／內孔分類（2026-10-21）：工件種類=G（齒輪）、J（治具）或 N（一般）時顯示；放在「標籤」區塊上方，緊湊排列，點選後輸入框直接出現並取得焦點 -->
+<!-- 外形／內孔分類（2026-10-21）：工件種類在「類別字典設定」勾選了外形／內孔功能時顯示（預設 G、J、N）；放在「標籤」區塊上方，緊湊排列，點選後輸入框直接出現並取得焦點 -->
 <div id="shape-section" style="display:none;margin:0 0 8px;padding:4px 8px;border:1px solid #EADFCD;border-radius:6px;background:#FFFCF7;">
     <div id="shape-form-box"></div>
 </div>
@@ -10070,10 +10347,10 @@ body { background:#F6F1EA; }
 $GEAR_SPEC_CFG = [
     'wrap_id' => 'gear-rows-wrap',
     'd_id_el' => 'pf-d_id',
-    'can'     => ['edit' => (bool)$can_edit_gear, 'delete' => (bool)$can_delete_gear, 'modify' => (bool)$can_modify_existing_gear],
+    'can'     => ['proc_allow' => (bool)($dictCapGear['edit'] || $dictCapGear['add']), 'edit' => (bool)$can_edit_gear, 'delete' => (bool)$can_delete_gear, 'modify' => (bool)$can_modify_existing_gear],
 ];
 include __DIR__ . '/_gear_spec_ui.php';
-eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wrap', 'can_edit' => (bool)$can_edit_gear]);
+eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wrap', 'can_edit' => (bool)$can_edit_gear, 'can_proc_allow' => (bool)($dictCapGear['edit'] || $dictCapGear['add'])]);
 ?>
 <!-- 齒輪外形／內孔分類（2026-10-21）：只在工件種類=G 時顯示（跟著齒輪規格區塊的顯示狀態走） -->
 <script>window.EG_SHAPE_DEFS = <?= json_encode(eg_shape_defs(), JSON_UNESCAPED_UNICODE) ?>;</script>
@@ -10470,7 +10747,8 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 ?>
 <div class="tab-pane" id="cust-tab-payment">
 <?php if ($mdSettleView): ?>
-<div class="form-section-title"><i class="fa fa-calendar-check-o"></i> 結帳設定<?= $mdSettleEdit ? '' : '（唯讀）' ?></div>
+<div class="form-section-title"><i class="fa fa-calendar-check-o"></i> 結帳設定<?= $mdSettleEdit ? '' : '（唯讀）' ?>
+    <span id="cf-settle-last" style="display:none;font-size:11px;font-weight:normal;color:#8a6d4b;margin-left:10px;"></span></div>
 <div class="row">
     <div class="col-md-3">
         <div class="form-group">
@@ -11186,7 +11464,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             <div style="flex:1;min-width:200px;">
                 <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:4px;">移轉至（目標）</div>
                 <div style="position:relative;">
-                    <input type="text" id="dpm-tgt-input" class="form-control input-sm" placeholder="輸入料號搜尋…" autocomplete="off" oninput="onDpmTgtInput(this.value)">
+                    <input type="text" id="dpm-tgt-input" class="form-control input-sm" placeholder="輸入料號搜尋…" autocomplete="off" oninput="onDpmTgtInput(this.value)" onfocus="if(!_dpm_tgt_d_id)onDpmTgtInput(this.value)">
                     <div id="dpm-tgt-dd" style="display:none;position:absolute;z-index:1060;width:100%;background:#fff;border:1px solid #ddd;max-height:160px;overflow-y:auto;border-radius:0 0 4px 4px;box-shadow:0 4px 8px rgba(0,0,0,.12);"></div>
                 </div>
                 <div id="dpm-tgt-info" style="background:#f0fdf5;border:1px solid #1ABB9C55;border-radius:4px;padding:8px;font-size:12px;min-height:60px;margin-top:6px;color:#aaa;">尚未選擇目標料號</div>
@@ -11421,7 +11699,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                      所以「URL 顯示路徑」已無作用（留著使用者會以為改它有效）。位置只由這一欄決定。 -->
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">備註圖片存放位置</label>
-                    <input type="text" id="dict-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;max-width:520px;font-family:monospace;" placeholder="例：\\excellentnas\生產課\BOM\ERP\技術" <?php if(!$can_dict_edit): ?>readonly style="background:#f5f5f5;"<?php endif; ?>>
+                    <input type="text" id="dict-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;max-width:520px;font-family:monospace;" placeholder="例：\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\技術" <?php if(!$can_dict_edit): ?>readonly style="background:#f5f5f5;"<?php endif; ?>>
                     <?php if ($can_dict_edit): ?>
                     <button type="button" class="btn btn-xs btn-warning" onclick="saveNasPathSetting()" style="white-space:nowrap;"><i class="fa fa-save"></i> 儲存設定</button>
                     <?php endif; ?>
@@ -12010,6 +12288,23 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 
 <!-- ═══ MODAL: 料號附件瀏覽器 ══════════════════════════════════════════ -->
 <!-- 組合圖「管理零件」（2026-10-12）：只建關聯不複製檔，零件可在別的料號底下 -->
+<!-- 設計提示標籤設定（齒輪）：自訂遮罩，不疊 bootstrap 第二層跳窗 -->
+<div id="dtagCfgMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:6px;width:560px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 30px rgba(0,0,0,.3);">
+    <div style="padding:12px 16px;background:#8A5A3B;color:#fff;border-radius:6px 6px 0 0;font-weight:bold;"><i class="fa fa-tags"></i> 設定設計提示標籤
+      <button type="button" onclick="dtagCloseCfg()" style="float:right;background:none;border:0;color:#fff;font-size:20px;line-height:1;">&times;</button></div>
+    <div style="padding:12px 16px;overflow:auto;">
+      <div style="font-size:12px;color:#8a6d3b;margin-bottom:8px;">每一組是一顆按鈕；拖曳左側 ☰ 排序、右側選顏色。已被料號或設計提醒規則使用的標籤不能刪除，請改取消「啟用」（新料號不再出現，已勾選的照常保留）。</div>
+      <div id="dtag-cfg-list"></div>
+      <button type="button" class="btn btn-sm btn-default" onclick="dtagAddRow()" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增一組</button>
+      <div id="dtag-cfg-err" style="color:#DD5138;font-size:12px;margin-top:6px;"></div>
+    </div>
+    <div style="padding:10px 16px;border-top:1px solid #eee;text-align:right;">
+      <button type="button" class="btn btn-default btn-sm" onclick="dtagCloseCfg()">取消</button>
+      <button type="button" class="btn btn-success btn-sm" id="dtag-cfg-save" onclick="dtagSaveCfg()"><i class="fa fa-save"></i> 儲存</button>
+    </div>
+  </div>
+</div>
 <div id="pavAsmMask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10600;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:8px;width:92%;max-width:680px;max-height:86vh;overflow:auto;padding:16px 20px;box-shadow:0 6px 28px rgba(0,0,0,.35);font-size:13px;">
     <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:10px;">
@@ -12029,6 +12324,11 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
       <button type="button" class="btn btn-default btn-sm" onclick="pavAsmSearch()"><i class="fa fa-search"></i> 搜尋</button>
     </div>
     <div id="pavAsmFound" style="margin-bottom:12px;"></div>
+    <div style="font-weight:bold;color:#8A5A2B;margin-bottom:4px;">或：直接補傳缺少的零件檔</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
+      <input type="file" id="pavAsmMissFiles" accept=".iam,.ipt" multiple style="flex:1;">
+      <button type="button" id="pavAsmMissBtn" class="btn btn-default btn-sm" onclick="pavAsmUploadMissing()"><i class="fa fa-upload"></i> 上傳並加入</button>
+    </div>
     <div style="display:flex;gap:8px;align-items:center;border-top:1px solid #eee;padding-top:10px;">
       <span id="pavAsmMsg" style="flex:1;color:#888;"></span>
       <button type="button" class="btn btn-success btn-sm" onclick="pavAsmLinkSel()"><i class="fa fa-link"></i> 加入勾選的零件</button>
@@ -12686,6 +12986,8 @@ var CAN_DELETE      = <?= json_encode($mdSettleEdit) ?>;   // 唯一用途：結
 var CAN_DELETE_ALL  = <?= json_encode($can_delete_all) ?>;   // 刪除廠商/客戶/料號/字典（A或CDRU）
 // 2026-10-07：料號／客戶／廠商本體CRUD三者已分開，新寫的JS一律改用下面這組，
 // 上面 CAN_CREATE/CAN_UPDATE/CAN_DELETE_ALL/CAN_SET_STATUS 僅為尚未逐一替換完的殘留呼叫端保留。
+var CAN_DTAG_MANAGE = <?= json_encode($canDtagManage) ?>;
+var CAN_DTAG_ASSIGN = <?= json_encode($canDtagAssign) ?>;
 var CAN_PART_ADD    = <?= json_encode($canPartAdd) ?>;
 var CAN_PART_EDIT   = <?= json_encode($canPartEdit) ?>;
 var CAN_PART_DELETE = <?= json_encode($canPartDelete) ?>;
@@ -14915,6 +15217,7 @@ function partsFilterPayload() {
           filter_sub:              _partsFilter.sub,
           filter_labels:           JSON.stringify(_partsFilter.labels||[]),
           filter_att_proc:         JSON.stringify(_attProcFilter||[]),
+          filter_design_tags:      (typeof DTAG !== 'undefined' ? DTAG.filter : []).join(','),
           filter_tool_kind:        _partsFilter.tool.kind,
           filter_tool_module:      _partsFilter.tool.module,
           filter_tool_type:        _partsFilter.tool.type,
@@ -15304,7 +15607,11 @@ function renderPartsTable(rows, total, pg, pages) {
                     labelsHtml += '<span class="part-label-chip"'+(chipStyle?' style="'+chipStyle+'"':'')+'>'+chip+'</span>';
                 });
             }
-            html += '<td style="font-size:12px;">'+escHtml(r.Spec_No||'—')+(labelsHtml?'<div style="margin-top:3px;">'+labelsHtml+'</div>':'')+'</td>';
+            var dtagHtml = '';
+            (r.design_tags || []).forEach(function(t) {
+                dtagHtml += '<span style="display:inline-block;background:' + t.bg + ';color:' + t.fg + ';border-radius:4px;padding:0 6px;margin:0 2px 2px 0;font-size:10.5px;line-height:15px;"><i class="fa fa-check"></i> ' + escHtml(t.name) + '</span>';
+            });
+            html += '<td style="font-size:12px;">'+escHtml(r.Spec_No||'—')+(labelsHtml?'<div style="margin-top:3px;">'+labelsHtml+'</div>':'')+(dtagHtml?'<div style="margin-top:3px;">'+dtagHtml+'</div>':'')+'</td>';
             html += '<td style="white-space:nowrap;">';
             if (r.Revision) html += '<code style="background:#f0f4f8;border-radius:3px;padding:1px 5px;">Rev.'+escHtml(r.Revision)+'</code>';
             else html += '<span style="color:#ccc;">—</span>';
@@ -16346,7 +16653,8 @@ function loadPartSubTypes(typeCode, selectedId) {
             chip.dataset.id = s.sub_type_id;
             chip.textContent = s.sub_type_name;
             chip.onclick = function() {
-                var isActive = this.style.background.includes('5856d6') && this.style.color === 'rgb(255, 255, 255)';
+                // 瀏覽器會把 #5856d6 正規化成 rgb(88, 86, 214)，用字串比對背景色永遠判不中而無法取消，只看文字色（與 syncPartSubChips 一致）
+                var isActive = this.style.color === 'rgb(255, 255, 255)';
                 if (isActive) {
                     this.style.cssText = 'display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;user-select:none;transition:all .15s;background:#eef2ff;color:#5856d6;border:1.5px solid #5856d655;';
                 } else {
@@ -16644,8 +16952,8 @@ function jigPickSearch() {
     var spec = document.getElementById('jp-spec').value.trim();
     var subId = document.getElementById('jp-sub').value;
     var only = (document.getElementById('jp-only')||{value:''}).value;
-    if (!kw && !spec && !subId) {
-        document.getElementById('jp-results').innerHTML = '<div style="padding:20px;text-align:center;color:#aaa;font-size:13px;">請輸入關鍵字或選擇篩選條件搜尋</div>';
+    if (!kw && !spec && !subId && only !== 'set') {
+        document.getElementById('jp-results').innerHTML = '<div style="padding:20px;text-align:center;color:#aaa;font-size:13px;">請輸入關鍵字或選擇篩選條件搜尋（或將類型選為「只看整組」直接列出全部整組）</div>';
         _jigPickResults = [];
         return;
     }
@@ -18086,6 +18394,9 @@ function openPartModal(d_id) {
                 if (window.EGPartShape) EGPartShape.form.set(d.shape || null);
                 PART_SETS = d.part_sets || [];
                 renderPartSets();
+                var _dtIds = d.design_tag_ids || [];
+                dtagSetSel(_dtIds);
+                dtagLoad(function(){ dtagSetSel(_dtIds); });
             });
             document.getElementById('pf-Is_Assembly').checked  = (d.Is_Assembly=='1');
             document.getElementById('pf-Remark').value         = d.Remark||'';
@@ -18135,6 +18446,7 @@ function openPartModal(d_id) {
         pfWlRefresh();
         pfAcReset();   // 清空 廠商 / 專用料號 / 專用機台 / 價格
         CUR_PART_DID = 0; PART_SETS = []; renderPartSets();   // 新增中還沒有 d_id，所屬整組一律收起來
+        dtagSetSel([]); dtagLoad(function(){ dtagSetSel([]); });
         if (window.EGPartShape) EGPartShape.form.set(null);
         _curPartIsAssembly = false;
         _loadPartTypeOptions('N', function(){ onTypeChange('N'); });
@@ -18212,6 +18524,172 @@ function _pfMissingRequiredLabels() {
     return miss;
 }
 
+// ══ 設計提示標籤（2026-11-10）══════════════════════════════════════════════
+var DTAG = { tags: [], sel: {}, palette: {}, loaded: false, cfg: [], filter: [] };
+function dtagEsc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function dtagSetSel(ids) {
+    DTAG.sel = {};
+    (ids || []).forEach(function(i){ DTAG.sel[parseInt(i,10)] = true; });
+    dtagRender();
+}
+// 按鈕樣式：整顆用標籤底色；選中時加深色外框（文字與底色不變、完整顯示）
+function dtagBtnStyle(t, on) {
+    return 'background:' + t.bg + ';color:' + t.fg + ';border-radius:4px;border:2px solid ' + (on ? '#2b1a0a' : 'transparent')
+         + ';' + (on ? 'font-weight:bold;box-shadow:0 0 0 1px #fff inset;' : '');
+}
+function dtagLoad(cb) {
+    api({ action: 'design_tag_list' }).done(function(r) {
+        if (r && r.success) { DTAG.tags = r.tags || []; DTAG.palette = r.palette || {}; DTAG.loaded = true; }
+        dtagRender(); dtagRenderFilter();
+        if (cb) cb();
+    });
+}
+function dtagRender() {
+    var g = document.getElementById('pf-dtag-gear');
+    if (g) g.style.display = CAN_DTAG_MANAGE ? '' : 'none';
+    var box = document.getElementById('pf-dtag-box');
+    if (!box) return;
+    // 啟用中的標籤＋此料號已勾選的（就算已停用也要看得到、才取消得掉）
+    var list = DTAG.tags.filter(function(t){ return t.is_active || DTAG.sel[t.id]; });
+    if (!list.length) {
+        box.innerHTML = '<span class="text-muted" style="font-size:12px;">' + (DTAG.loaded ? '尚未設定標籤' + (CAN_DTAG_MANAGE ? '，請按標題旁的齒輪新增' : '') : '載入中…') + '</span>';
+        return;
+    }
+    var rows = Math.ceil(list.length / 3);   // 由上到下、最多三欄
+    var h = '<div style="display:grid;grid-auto-flow:column;grid-template-rows:repeat(' + rows + ',auto);grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 6px;">';
+    list.forEach(function(t) {
+        var on = !!DTAG.sel[t.id];
+        h += '<button type="button" class="dtag-btn" data-id="' + t.id + '" ' + (CAN_DTAG_ASSIGN ? '' : 'disabled ')
+           + 'style="' + dtagBtnStyle(t, on) + 'padding:2px 6px;font-size:12px;line-height:1.3;text-align:center;white-space:normal;word-break:break-all;' + (CAN_DTAG_ASSIGN ? 'cursor:pointer;' : 'cursor:default;opacity:.85;') + '" title="'
+           + dtagEsc(t.name) + (t.is_active ? '' : '（已停用）') + '">' + (on ? '<i class="fa fa-check"></i> ' : '') + dtagEsc(t.name) + (t.is_active ? '' : '（停用）') + '</button>';
+    });
+    box.innerHTML = h + '</div>';
+}
+// 前端料號清單的標籤篩選（多選＝任一符合）
+function dtagRenderFilter() {
+    var row = document.getElementById('parts-dtag-filter'), box = document.getElementById('parts-dtag-box');
+    if (!row || !box) return;
+    var list = DTAG.tags.filter(function(t){ return t.is_active; });
+    DTAG.filter = DTAG.filter.filter(function(id){ return list.some(function(t){ return t.id === id; }); });
+    row.style.display = list.length ? 'flex' : 'none';
+    var h = '';
+    list.forEach(function(t) {
+        var on = DTAG.filter.indexOf(t.id) >= 0;
+        h += '<button type="button" class="dtag-fbtn" data-id="' + t.id + '" style="' + dtagBtnStyle(t, on) + 'padding:1px 8px;font-size:12px;line-height:1.3;cursor:pointer;">' + (on ? '<i class="fa fa-check"></i> ' : '') + dtagEsc(t.name) + '</button>';
+    });
+    box.innerHTML = h;
+}
+$(document).on('click', '.dtag-fbtn', function() {
+    var id = parseInt(this.getAttribute('data-id'), 10), i = DTAG.filter.indexOf(id);
+    if (i >= 0) DTAG.filter.splice(i, 1); else DTAG.filter.push(id);
+    dtagRenderFilter();
+    if (typeof loadParts === 'function') loadParts(1);
+});
+$(document).ready(function(){ dtagLoad(); });
+$(document).on('click', '.dtag-btn', function() {
+    if (!CAN_DTAG_ASSIGN) return;
+    var id = parseInt(this.getAttribute('data-id'), 10);
+    if (DTAG.sel[id]) delete DTAG.sel[id]; else DTAG.sel[id] = true;
+    dtagRender();
+});
+function dtagCollectIds() { return Object.keys(DTAG.sel).map(function(k){ return parseInt(k, 10); }); }
+// ── 設定視窗 ──
+function dtagSwatches(hex) {
+    return '<input type="color" class="dtag-colorpick" value="' + hex + '" title="從色表選顏色" style="width:34px;height:26px;padding:0;border:1px solid #c9b79c;vertical-align:middle;cursor:pointer;">';
+}
+function dtagCfgRowHtml(t, u) {
+    var used = !!(u && ((u.parts || 0) + (u.rules || 0) > 0));
+    var tip = used ? '已被 ' + (u.parts || 0) + ' 個料號、' + (u.rules || 0) + ' 則設計提醒規則使用，不能修改文字、停用或刪除' : '';
+    return '<div class="dtag-cfg-row" data-id="' + (t.id || 0) + '" data-used="' + (used ? 1 : 0) + '" data-tip="' + dtagEsc(tip) + '" data-color="' + (t.color_hex || '#F7E0BD') + '" style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">'
+        + '<span class="dtag-handle" style="cursor:grab;color:#8A5A3B;padding:0 4px;font-size:16px;" title="拖曳排序">☰</span>'
+        + '<input type="text" class="form-control input-sm dtag-name" maxlength="20" value="' + dtagEsc(t.name || '') + '" placeholder="標籤文字（20字內）" style="flex:1;min-width:100px;' + (used ? 'background:#f3ece0;' : '') + '" autocomplete="off"' + (used ? ' readonly title="' + dtagEsc(tip) + '"' : '') + '>'
+        + '<span class="dtag-swbox" style="white-space:nowrap;">' + dtagSwatches(t.color_hex || '#F7E0BD') + '</span>'
+        + '<span style="font-size:12px;white-space:nowrap;color:' + (used ? '#8A5A3B' : '#999') + ';">' + (used ? ((u.parts || 0) + (u.rules || 0)) + ' 筆已使用' : '未使用') + '</span>'
+        + '<label style="margin:0;font-weight:normal;white-space:nowrap;"><input type="checkbox" class="dtag-active"' + (t.is_active === 0 ? '' : ' checked') + '> 啟用</label>'
+        + '<button type="button" class="btn btn-xs btn-danger-o dtag-del" title="刪除"><i class="fa fa-times"></i></button>'
+        + '</div>';
+}
+function dtagSetRowColor($r, hex) {
+    $r.attr('data-color', hex);
+    $r.find('.dtag-colorpick').val(hex);
+    $r.find('.dtag-name').css({ background: hex, color: dtagFg(hex) });   // 名稱欄即時預覽按鈕底色
+}
+function dtagFg(hex) {
+    var r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#3E2200' : '#FFFFFF';
+}
+$(document).on('input change', '.dtag-colorpick', function() { dtagSetRowColor($(this).closest('.dtag-cfg-row'), this.value.toUpperCase()); });
+$(document).on('click', '.dtag-del', function() {
+    var $r = $(this).closest('.dtag-cfg-row');
+    if ($r.attr('data-used') === '1') { alert('「' + $r.find('.dtag-name').val() + '」' + $r.attr('data-tip')); return; }
+    $r.remove();
+});
+// 使用中的標籤：按「啟用」取消勾選時提示並擋下
+$(document).on('click', '.dtag-active', function(e) {
+    var $r = $(this).closest('.dtag-cfg-row');
+    if ($r.attr('data-used') === '1' && !this.checked) {
+        e.preventDefault(); this.checked = true;
+        alert('「' + $r.find('.dtag-name').val() + '」' + $r.attr('data-tip'));
+    }
+});
+function dtagOpenCfg() {
+    if (!CAN_DTAG_MANAGE) return;
+    $('#dtag-cfg-err').text('');
+    api({ action: 'design_tag_list' }).done(function(r) {
+        if (!r || !r.success) { showToast('載入失敗', 'error'); return; }
+        DTAG.palette = r.palette || {};
+        var h = '';
+        (r.tags || []).forEach(function(t) {
+            var u = (r.usage || {})[t.id] || {};
+            h += dtagCfgRowHtml(t, u);
+        });
+        $('#dtag-cfg-list').html(h || '<div class="text-muted" id="dtag-cfg-empty" style="font-size:12px;">尚未設定，請按「新增一組」。</div>');
+        $('#dtag-cfg-list .dtag-cfg-row').each(function(){ dtagSetRowColor($(this), $(this).attr('data-color')); });
+        var el = document.getElementById('dtag-cfg-list');
+        if (el && typeof Sortable !== 'undefined' && !el._sortable) {
+            el._sortable = Sortable.create(el, { handle: '.dtag-handle', animation: 120 });
+        }
+        // 放進 #partModal 裡面：bootstrap 跳窗的 enforceFocus 會把焦點搶回跳窗內，
+        // 遮罩在跳窗外面時輸入框就打不進字
+        var _mk = document.getElementById('dtagCfgMask');
+        var _pm = document.getElementById('partModal');
+        if (_pm && _mk.parentNode !== _pm) _pm.appendChild(_mk);
+        _mk.style.display = 'flex';
+    });
+}
+function dtagCloseCfg() { document.getElementById('dtagCfgMask').style.display = 'none'; }
+function dtagAddRow() {
+    $('#dtag-cfg-empty').remove();
+    var n = $('#dtag-cfg-list .dtag-cfg-row').length;
+    var $r = $(dtagCfgRowHtml({ id: 0, name: '', color_hex: (DTAG.palette[n % 8] || ['', '#F7E0BD'])[1], is_active: 1 }, null));
+    $('#dtag-cfg-list').append($r);
+    $r.find('.dtag-name').focus();
+}
+function dtagSaveCfg() {
+    var items = [];
+    $('#dtag-cfg-list .dtag-cfg-row').each(function() {
+        var $r = $(this);
+        items.push({ id: parseInt($r.attr('data-id'), 10) || 0, name: $r.find('.dtag-name').val().trim(),
+                     color_hex: $r.attr('data-color') || '#F7E0BD', is_active: $r.find('.dtag-active').prop('checked') ? 1 : 0 });
+    });
+    var names = {};
+    for (var i = 0; i < items.length; i++) {
+        if (!items[i].name) continue;
+        var k = items[i].name.toLowerCase();
+        if (names[k]) { $('#dtag-cfg-err').text('標籤「' + items[i].name + '」重複了'); return; }
+        names[k] = 1;
+    }
+    $('#dtag-cfg-err').text('');
+    $('#dtag-cfg-save').prop('disabled', true);
+    api({ action: 'design_tag_save', items: JSON.stringify(items) }).done(function(r) {
+        $('#dtag-cfg-save').prop('disabled', false);
+        if (!r || !r.success) { $('#dtag-cfg-err').text((r && r.message) || '儲存失敗'); return; }
+        DTAG.tags = r.tags || [];
+        dtagCloseCfg(); dtagRender(); dtagRenderFilter();
+        showToast('設計提示標籤已儲存', 'success');
+    }).fail(function(){ $('#dtag-cfg-save').prop('disabled', false); $('#dtag-cfg-err').text('連線失敗，請重試'); });
+}
+
 function submitPartForm() {
     collectGearRows();
     // Validate
@@ -18272,6 +18750,7 @@ function submitPartForm() {
         jig_general_map:    (document.getElementById('pf-jig-general-map')||{value:'[]'}).value,
         tool_spec:          JSON.stringify(collectToolSpec())
     };
+    if (CAN_DTAG_ASSIGN && DTAG.loaded) data.design_tag_ids = JSON.stringify(dtagCollectIds());   // 沒權限／沒載入＝不送＝後端不動
     if (!data.D_Setting_Id) { showToast('料號不可為空','error'); return; }
     if (!data.Customer_Id) { showToast('客戶為必填欄位','error'); var _ce=document.getElementById('pf-customer-display'); if(_ce){_ce.focus();_ce.select();} return; }
     var btn = document.querySelector('#partModal .btn-success');
@@ -18282,6 +18761,12 @@ function submitPartForm() {
             restore();
             if (r.success) {
                 showToast(r.message,'success');
+                // 內嵌模式（報價單 iframe 呼叫）：回報呼叫端，由它綁定並關閉；類似料號提示改由呼叫端處理
+                if (window.__PART_EMBED && r.d_id) {
+                    window.__PART_EMBED_SAVED = true;
+                    try { parent.postMessage({ type: 'eg_part_saved', d_id: r.d_id, part_no: data.D_Setting_Id, customer_id: data.Customer_Id }, location.origin); } catch (e) {}
+                    return;
+                }
                 $('#partModal').one('hidden.bs.modal', function(){ if (r.d_id) refreshPartAfterSave(r.d_id); else loadParts(partsCurrent); });
                 $('#partModal').modal('hide');
                 // 儲存（含標籤與齒輪規格）後自動確認有沒有類似料號（2026-10-16）；純輔助，失敗安靜略過
@@ -18331,6 +18816,10 @@ function showPartTransferSection() {
     document.getElementById('dpm-blocked').style.display = 'none';
     document.getElementById('dpm-transfer').style.display = '';
     document.getElementById('dpm-binding-report').innerHTML = '';
+    // 預設帶入被移轉的料號名稱，直接列出同名料號供挑選（可手動改字重新搜尋）
+    var ti = document.getElementById('dpm-tgt-input');
+    ti.value = _dpm_name || '';
+    onDpmTgtInput(ti.value);
 }
 
 var _dpmTgtTimer = null;
@@ -18343,8 +18832,9 @@ function onDpmTgtInput(val) {
     if (!val.trim()) { dd.style.display='none'; return; }
     _dpmTgtTimer = setTimeout(function() {
         api({ action:'get_part_transfer_info', kw:val.trim() }).done(function(r) {
-            if (!r.success || !r.data || !r.data.length) { dd.style.display='none'; return; }
-            dd.innerHTML = r.data.map(function(p) {
+            var list = (r.data || []).filter(function(p){ return parseInt(p.d_id,10) !== _dpm_d_id; });
+            if (!r.success || !list.length) { dd.innerHTML='<div style="padding:8px 10px;color:#aaa;font-size:12px;">查無其他符合的料號</div>'; dd.style.display='block'; return; }
+            dd.innerHTML = list.map(function(p) {
                 return '<div onclick="selectDpmTgt('+p.d_id+',\''+escAttr(p.D_Setting_Id)+'\',\''+escAttr(p.customer_name||'')+'\',\''+escAttr(p.bound_counts||'')+'\',this)" '
                     + 'style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f5f5f5;font-size:12px;">'
                     + '<strong>' + escHtml(p.D_Setting_Id) + '</strong>'
@@ -18414,8 +18904,22 @@ function doTransferPart() {
         showToast('請輸入大寫 OK 確認','error'); return;
     }
     api({ action:'transfer_part_binding', src_d_id:_dpm_d_id, tgt_d_id:_dpm_tgt_d_id }).done(function(r) {
-        if (r.success) { showToast(r.message,'success'); _afterPartOp(); }
-        else showToast(r.message,'error');
+        if (!r.success) { showToast(r.message,'error'); return; }
+        showToast(r.message,'success');
+        var srcId = _dpm_d_id;
+        _afterPartOp();
+        // 移轉完成後詢問是否刪除被移轉的來源料號
+        setTimeout(function(){
+            if (!confirmDeleteY('綁定資料已移轉完成。\n\n是否刪除被移轉的來源料號（d_id='+srcId+'）？\n此操作不可復原。')) return;
+            api({ action:'delete_part_by_id', d_id:srcId }).done(function(r2){
+                if (r2.success) {
+                    showToast('已刪除來源料號 d_id='+srcId,'success');
+                    var bt = document.querySelector('#dup-modal-body .dup-row[data-did="'+srcId+'"] button');
+                    if (bt) _dupRemoveRow(bt);
+                    loadParts(partsCurrent);
+                } else showToast('刪除失敗：'+r2.message,'error');
+            });
+        }, 300);
     });
 }
 
@@ -19206,6 +19710,13 @@ function openCustomerModal(customer_id, readonly) {
             document.getElementById('cf-settlement_day').value  = d.settlement_day||'25';
             onSettlementModeChange(mode);
             updateSettlementDayHint();
+            var slEl = document.getElementById('cf-settle-last');
+            if (slEl) {
+                if (d.settle_last && d.settle_last.t) {
+                    slEl.textContent = '最後修改：' + (d.settle_last.nm||'') + '　' + d.settle_last.t;
+                    slEl.style.display = '';
+                } else { slEl.textContent = ''; slEl.style.display = 'none'; }
+            }
             var cDay = d.settlement_day||'25';
             var cPay = d.payment_method||'匯款';
             var cNd  = (d.net_days !== null && d.net_days !== undefined && d.net_days !== '') ? String(d.net_days) : '';
@@ -19248,6 +19759,7 @@ function openCustomerModal(customer_id, readonly) {
         cidEl.readOnly = false; cidEl.style.background = '';
         document.getElementById('cf-settlement_mode').value = SYS_CUST_DEFAULT_SETTLEMENT_MODE || 'FIXED';
         document.getElementById('cf-settlement_day').value   = SYS_CUST_DEFAULT_SETTLEMENT_DAY  || '25';
+        var slEl0 = document.getElementById('cf-settle-last'); if (slEl0) { slEl0.textContent = ''; slEl0.style.display = 'none'; }
         document.getElementById('cf-payment_method').value   = SYS_CUST_DEFAULT_PAYMENT_METHOD  || '匯款';
         document.getElementById('cf-net_days').value         = SYS_CUST_DEFAULT_NET_DAYS || '';
         onSettlementModeChange(SYS_CUST_DEFAULT_SETTLEMENT_MODE || 'FIXED');
@@ -23073,6 +23585,8 @@ function _pavRenderList() {
     var firstPlain = -1;
     for (var i = 0; i < files.length; i++) {
         if (hasAlbumFile && _pavIsAlbumFile(files[i])) continue;
+        // 收進組合那一列的零件在清單上不顯示，也不可以被自動選成預設預覽（否則會預覽到最後補傳的零件）
+        if (_pavCompOf && _pavCompOf[String(files[i].id)]) continue;
         firstPlain = i; break;
     }
     if (firstPlain >= 0) pavSelectFile(firstPlain);
@@ -23863,10 +24377,46 @@ function pavAsmUploadGo() {
     }
 }
 
+/** 補傳缺少的零件檔：逐檔上傳（標籤沿用組合檔本身的標籤）後直接關聯到目前這個組合 */
+function pavAsmUploadMissing() {
+    var msg = document.getElementById('pavAsmMsg');
+    var files = Array.from(document.getElementById('pavAsmMissFiles').files || []);   // 直讀 input.files
+    if (!files.length) { msg.textContent = '請先選擇要補傳的零件檔'; return; }
+    var asm = (_pav.allFiles || []).filter(function (f) { return String(f.id) === String(_pavAsmEditId); })[0];
+    var cats = asm && asm.category_ids ? String(asm.category_ids) : '';
+    if (!cats) { msg.textContent = '找不到組合檔的類別標籤，請改用「上傳組合圖」'; return; }
+    var iss = asm && asm.issue_stamp_date ? String(asm.issue_stamp_date).substring(0, 10) : '';
+    var btn = document.getElementById('pavAsmMissBtn'); btn.disabled = true;
+    var ids = [], errs = [];
+    (function next(i) {
+        if (i >= files.length) {
+            var finish = function (n) {
+                btn.disabled = false;
+                document.getElementById('pavAsmMissFiles').value = '';
+                msg.textContent = '已補傳 ' + ids.length + ' 個' + (n ? '並加入組合' : '') + (errs.length ? '；失敗：' + errs.join('、') : '');
+                _pavLoadFiles(function () { _pavAsmRefreshList(); _pavAsmRender(); });
+            };
+            if (!ids.length) { btn.disabled = false; msg.textContent = '上傳失敗：' + errs.join('、'); return; }
+            $.post(PART_ATTACH_API_URL, { action: 'assembly_link', assembly_id: _pavAsmEditId, component_ids: JSON.stringify(ids) },
+                function (r) { finish(r && r.linked ? r.linked : 0); }, 'json').fail(function () { finish(0); });
+            return;
+        }
+        msg.textContent = '上傳中… (' + (i + 1) + '/' + files.length + ')';
+        var fd = new FormData();
+        fd.append('action', 'upload'); fd.append('d_id', _pav.dId); fd.append('category_ids', cats);
+        fd.append('issue_stamp_date', iss); fd.append('file', files[i]);
+        $.ajax({ url: PART_ATTACH_API_URL, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+            .done(function (r) { if (r && r.success) ids.push(r.id); else errs.push(files[i].name + (r && r.message ? '（' + r.message + '）' : '')); next(i + 1); })
+            .fail(function () { errs.push(files[i].name); next(i + 1); });
+    })(0);
+}
+
 /** 重新套用目前分頁的篩選並重畫清單（規則與 pavSwitchTab 同一套，不另寫第二份判斷） */
 function _pavAsmRefreshList() {
     var btn = document.querySelector('.pav-tab.active');
-    if (btn) { pavSwitchTab(btn, _pav.catId); return; }
+    // _pav.catId 只有點過分頁才會被設定，沒點過是 undefined → 會被當成某個標籤而篩出空清單，
+    // 所以一律以目前啟用的分頁按鈕上的 data-cat 為準
+    if (btn) { pavSwitchTab(btn, btn.getAttribute('data-cat') || '__all__'); return; }
     _pav.filteredFiles = (_pav.allFiles || []).filter(function (f) { return f.source !== 'quote'; });
     _pavRenderList();
 }
@@ -24038,9 +24588,31 @@ $(document).on('click', '#pav-3d-asm-all, #pav-3d-asm-none', function () {
 });
 $(document).on('input change', '#pav-3d-explode', function () {
     if (!_pav3dViewer) return;
+    // 剖面封頂／斷面線是以舊位置算好的獨立物件，拖曳中不會跟著零件移動（會留在原地變成白色殘影），
+    // 所以拖曳期間先隱藏，停手後重算（見下方）會重新長出新位置的封頂
+    if (_pav3dSectionState && _pav3dSectionState.capObjs) _pav3dSectionState.capObjs.forEach(function (o) { o.visible = false; });
     EG3DTools.setExplode(_pav3dViewer, (parseInt(this.value, 10) || 0) / 100);
-    // 零件被移動之後，剖面的封頂是依世界座標算的，必須重算一次才不會留在原位
-    if (_pav3dSectionState) { EG3DTools.updateSectionMode(_pav3dViewer, _pav3dSectionState, _pav3dSectionOpts); _pav3dSyncHLClip(); }
+    // 透視模式：邊線是另外畫的物件，讓它們即時跟著各自的零件平移（不重算幾何），
+    // 否則零件的深度會蓋住停在舊位置的邊線＝白色區塊；輪廓邊停手後重建透視時恢復
+    if (_pav3dHLState) EG3DTools.syncHiddenLineToMeshes(_pav3dViewer, _pav3dHLState);
+    // 零件移動只做上面那一行（很輕）；剖面封頂重算與透視邊線重建都很重（每次要掃全部三角形），
+    // 拖曳過程中每個 input 事件都做會明顯卡頓，所以改成「拖曳停下約 0.12 秒後只做一次」。
+    //  ‧剖面的封頂是依世界座標算的，零件移動後必須重算才不會留在原位
+    //  ‧透視（隱藏線）的邊線是以「建立當下的世界座標」另外畫的獨立物件，不會跟著零件移動，
+    //    不重建就會在原位置殘留一份線稿（殘影）
+    if (_pav3dSectionState || _pav3dHLState) {
+        clearTimeout(window._pav3dHeavyT);
+        var _v = _pav3dViewer;
+        window._pav3dHeavyT = setTimeout(function () {
+            if (_v !== _pav3dViewer) return;
+            if (_pav3dHLState) {
+                EG3DTools.clearHiddenLineMode(_v, _pav3dHLState);
+                _pav3dHLState = EG3DTools.setHiddenLineMode(_v);
+            }
+            if (_pav3dSectionState) EG3DTools.updateSectionMode(_v, _pav3dSectionState, _pav3dSectionOpts);
+            _pav3dSyncHLClip();
+        }, 120);
+    }
 });
 
 // ── 3D 透視（隱藏線）顯示（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
@@ -24160,6 +24732,45 @@ function pavOpenImageEditorFor3D() {
      ‧本頁在 views/pages/、編輯器在 views/Sales/，相對路徑不共用，一律換算成絕對 URL
      ‧**一定要帶 part_d_id（料號主檔 PK）**：同一個料號文字在主檔常有好幾筆（不同客戶），
        只帶文字的話編輯器的存檔下拉會出現兩個一模一樣的選項、存到別家去（記憶 2026-09-14）。 */
+/* 批圖編輯器存入附件後（BroadcastChannel 'eg_part_attach'），已開著的附件跳窗就地更新：
+   只在「跳窗開著且正是同一個料號主檔」時才動；重抓清單、保留原本的標籤分頁，
+   並定位到剛存的圖；沒開跳窗時只刷新料號列的附件欄。任何錯誤都吞掉，不影響現有操作。 */
+(function () {
+    if (typeof BroadcastChannel === 'undefined') return;
+    var bc;
+    try { bc = new BroadcastChannel('eg_part_attach'); } catch (e) { return; }
+    bc.onmessage = function (ev) {
+        try {
+            var m = ev.data || {};
+            if (m.type !== 'saved' || !m.d_id) return;
+            var dId = parseInt(m.d_id, 10);
+            if (typeof _refreshPartAttachCell === 'function') _refreshPartAttachCell(dId);
+            var $m = $('#partAttachViewModal');
+            if (!$m.hasClass('in') || String(_pav.dId) !== String(dId) || _pav.mode === 'quote') return;
+            var keepCat = _pav.catId, prevId = _pav.currentFile ? _pav.currentFile.id : 0;
+            _pavLoadFiles(function (files) {
+                _pavBuildCatTabs(files);
+                _pav.catId = 0;
+                _pav.filteredFiles = files.filter(function (f) { return f.source !== 'quote'; });
+                var target = null;
+                if (m.png_id) target = _pav.filteredFiles.find(function (f) { return String(f.id) === String(m.png_id); });
+                if (!target && keepCat && keepCat !== '__all__') {
+                    var btn = document.querySelector('#pav-cat-tabs .pav-tab[data-cat="' + keepCat + '"]');
+                    if (btn) pavSwitchTab(btn, String(keepCat));
+                    else _pavRenderList();
+                } else {
+                    _pavRenderList();
+                }
+                var idx = -1;
+                if (target) idx = _pav.filteredFiles.findIndex(function (f) { return f.id === target.id; });
+                else if (prevId) idx = _pav.filteredFiles.findIndex(function (f) { return String(f.id) === String(prevId); });
+                if (idx >= 0) pavSelectFile(idx);
+                if (target) showToast('批圖編輯器已輸出新圖，清單已更新');
+            });
+        } catch (e) { }
+    };
+})();
+
 function pavOpenImageEditor() {
     var f = _pav.currentFile;
     if (!f) { showToast('請先選一個檔案','error'); return; }
@@ -27683,12 +28294,13 @@ function executePartsBatch() {
 // ──────────── 自動除錯 (重複/相似檢測) ────────────
 // ═══════════════════════════════════════════════════
 var _dupType = '';
+var _dupPartMode = 'same_or_none';   // 重複料號顯示模式：all／same／same_or_none
 
 function openDupCheck(type) {
     _dupType = type;
     var titles = {parts:'重複料號',customers:'重複/相似客戶',makers:'重複/相似廠商'};
     var subtitles = {
-        parts:     '偵測：d_setting（D_Setting_Id 相同）　綁定檢查：訂單、生產批次、出貨單、報價單、退貨單、庫存',
+        parts:     '偵測：d_setting（D_Setting_Id 相同）　綁定檢查：訂單、生產批次、出貨單、報價單、退貨單、庫存，以及附件、批圖編輯器工作檔（暫存）、相簿、標籤、齒輪參數、PFMEA、產品開發評估表、SOP/SIP、管制計畫、型態識別文件、品質異常單、矯正單、工程變更、申請採購、KPI 等共 40 餘項（每列料號下方會列出實際有綁定的項目與筆數）',
         customers: '偵測：customer_list（名稱相同/相似）　綁定檢查：料號、訂單、出貨單、報價單、庫存',
         makers:    '偵測：maker_list（簡稱或全稱相同/相似）　綁定檢查：加工單'
     };
@@ -27696,7 +28308,7 @@ function openDupCheck(type) {
     document.getElementById('dup-modal-subtitle').textContent = subtitles[type]||'';
     document.getElementById('dup-modal-body').innerHTML = '<div style="text-align:center;padding:40px;color:#aaa;"><i class="fa fa-spinner fa-spin fa-2x"></i><br>分析中…</div>';
     $('#dupCheckModal').modal('show');
-    api({ action:'check_duplicates', type:type }).done(function(r) {
+    api({ action:'check_duplicates', type:type, mode:_dupPartMode }).done(function(r) {
         if (!r.success) { document.getElementById('dup-modal-body').innerHTML = '<div style="padding:20px;color:red;">'+escHtml(r.message)+'</div>'; return; }
         if (type === 'parts')     renderDupParts(r.data);
         if (type === 'customers') renderDupCustomers(r.exact, r.similar);
@@ -27704,16 +28316,28 @@ function openDupCheck(type) {
     }).fail(function(){ document.getElementById('dup-modal-body').innerHTML = '<div style="padding:20px;color:red;">網路錯誤</div>'; });
 }
 
+function dupModeSelectHtml() {
+    var opts = [['all','全部（料號相同，客戶不同也列出）'],['same','客戶也需相同（兩邊皆無客戶算相同）'],['same_or_none','客戶相同，或其中一筆無客戶']];
+    return '<div style="padding:10px 16px 0;display:flex;gap:8px;flex-wrap:wrap;"><select id="dup-part-mode" class="form-control input-sm" style="width:auto;" onchange="_dupPartMode=this.value;openDupCheck(&quot;parts&quot;)">'
+        + opts.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===_dupPartMode?' selected':'')+'>'+o[1]+'</option>'; }).join('')
+        + '</select></div>';
+}
 function renderDupParts(data) {
     var body = document.getElementById('dup-modal-body');
-    if (!data.length) { body.innerHTML = '<div style="padding:30px;text-align:center;color:#1ABB9C;"><i class="fa fa-check-circle fa-2x"></i><br><strong>沒有發現重複料號</strong></div>'; return; }
-    var html = '<div style="padding:12px 16px 4px;font-size:12px;color:#888;">共發現 <strong style="color:#e67e22;">'+data.length+'</strong> 組重複料號（料號相同、版次不同算重複）</div>';
+    if (!data.length) { body.innerHTML = dupModeSelectHtml() + '<div style="padding:30px;text-align:center;color:#1ABB9C;"><i class="fa fa-check-circle fa-2x"></i><br><strong>沒有發現重複料號</strong></div>'; return; }
+    var html = '<div style="padding:12px 16px 4px;font-size:12px;color:#888;">共發現 <strong id="dup-group-count" style="color:#e67e22;">'+data.length+'</strong> 組重複料號（料號相同、版次不同算重複）</div>';
+    html = dupModeSelectHtml() + html;
+    if (CAN_PART_DELETE) {
+        html = '<div style="padding:8px 16px 0;"><button type="button" class="btn btn-sm btn-warning" onclick="dupBulkMergeNoCustomer()" style="margin-right:6px;"><i class="fa fa-exchange"></i> 一次移轉並刪除「無客戶那筆」（僅兩筆：一筆有客戶、一筆無客戶）</button><button type="button" class="btn btn-sm btn-danger" onclick="dupBulkDeleteUnbound()"><i class="fa fa-trash"></i> 一次刪除「無綁定、且同料號已有資料者」</button>'
+             + ' <span style="font-size:11px;color:#888;">只刪完全沒有綁定的列，且該組內必須另有一筆有綁定資料；整組都沒綁定的不動。依目前篩選結果執行。</span></div>' + html;
+    }
+    html = '<div style="padding:10px 16px 0;"><input type="text" id="dup-part-filter" class="form-control input-sm" placeholder="輸入料號名稱篩選（非 ID，可部分比對）" oninput="dupFilterParts(this.value)" autocomplete="off"></div>' + html;
     data.forEach(function(g) {
-        html += '<div class="dup-group">';
+        html += '<div class="dup-group" data-key="'+escAttr(String(g.key||'').toLowerCase())+'">';
         html += '<div class="dup-group-header"><i class="fa fa-exclamation-triangle"></i> 料號：<strong>'+escHtml(g.key)+'</strong> — 共 '+g.count+' 筆</div>';
         g.rows.forEach(function(r) {
             var hasRel = r.relations && r.relations.length > 0;
-            html += '<div class="dup-row" data-did="'+r.d_id+'" style="flex-direction:column;align-items:stretch;gap:4px;">';
+            html += '<div class="dup-row" data-did="'+r.d_id+'" data-norel="'+(hasRel?0:1)+'" data-cust="'+(r.cust_id?1:0)+'" style="flex-direction:column;align-items:stretch;gap:4px;">';
             html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">';
             html += '<span style="font-family:Consolas;font-weight:700;color:var(--primary);min-width:110px;">'+escHtml(r.D_Setting_Id)+'</span>';
             html += '<span class="dup-field">版次：'+(r.Revision?escHtml(r.Revision):'<em style="color:#ccc">無</em>')+'</span>';
@@ -27749,6 +28373,99 @@ function renderDupParts(data) {
     body.innerHTML = html;
 }
 
+// 一次移轉＋刪除：目前畫面（含篩選）每一組「剛好兩筆，一筆有客戶、一筆無客戶」，
+// 把無客戶那筆的所有綁定移轉到有客戶那筆（含附件／批圖工作檔等），成功後刪除無客戶那筆
+function dupBulkMergeNoCustomer() {
+    var pairs = [];
+    document.querySelectorAll('#dup-modal-body .dup-group').forEach(function(g) {
+        if (g.style.display === 'none') return;
+        var rows = g.querySelectorAll('.dup-row');
+        if (rows.length !== 2) return;
+        var withC = null, noC = null;
+        rows.forEach(function(r) {
+            if (r.getAttribute('data-cust') === '1') withC = r; else noC = r;
+        });
+        if (!withC || !noC) return;
+        // 同一筆「無客戶」若同時出現在多個組（例如該料號共有 兩個不同客戶＋一筆無客戶），
+        // 不知道該併到哪個客戶，一律略過交給人工；整個料號必須只有這兩筆才處理
+        var srcId = noC.getAttribute('data-did'), tgtId = withC.getAttribute('data-did');
+        if (document.querySelectorAll('#dup-modal-body .dup-row[data-did="' + srcId + '"]').length !== 1) return;
+        if (document.querySelectorAll('#dup-modal-body .dup-row[data-did="' + tgtId + '"]').length !== 1) return;
+        pairs.push({ src: parseInt(noC.getAttribute('data-did'), 10), tgt: parseInt(withC.getAttribute('data-did'), 10), key: g.getAttribute('data-key') || '' });
+    });
+    if (!pairs.length) { showToast('目前沒有符合條件的組別（剛好兩筆，一筆有客戶、一筆無客戶）', 'info'); return; }
+    var sample = pairs.slice(0, 8).map(function(p){ return p.key + '：id=' + p.src + ' → id=' + p.tgt; }).join('\n');
+    if (!confirmDeleteY('將處理 ' + pairs.length + ' 組：把「無客戶那筆」的所有綁定資料（訂單、出貨、附件、批圖工作檔…）移轉到「有客戶那筆」，再刪除無客戶那筆。\n\n' + sample + (pairs.length > 8 ? '\n…等' : '') + '\n\n此操作不可復原，確定執行？')) return;
+    var ok = 0, fail = [], i = 0;
+    showToast('處理中…', 'info');
+    (function next() {
+        if (i >= pairs.length) {
+            showToast('完成 ' + ok + ' 組' + (fail.length ? '，' + fail.length + ' 組未完成（見下方提示，請手動處理）' : ''), fail.length ? 'error' : 'success');
+            if (fail.length) alert('以下料號未能完成，請手動處理：\n' + fail.join('\n'));
+            loadParts(partsCurrent);
+            return;
+        }
+        var p = pairs[i++];
+        api({ action:'transfer_part_binding', src_d_id:p.src, tgt_d_id:p.tgt }).done(function(r) {
+            if (!r.success) { fail.push(p.key + '（id=' + p.src + '）移轉失敗：' + r.message); next(); return; }
+            var warn = (r.message || '').indexOf('未能自動合併') >= 0 || (r.message || '').indexOf('失敗') >= 0;
+            api({ action:'delete_part_by_id', d_id:p.src }).done(function(r2) {
+                if (r2.success) {
+                    ok++;
+                    document.querySelectorAll('#dup-modal-body .dup-row[data-did="' + p.src + '"]').forEach(function(row) { _dupRemoveRow(row.querySelector('button') || row); });
+                } else fail.push(p.key + '（id=' + p.src + '）已移轉，但未刪除：' + r2.message + (warn ? '（移轉有略過項目）' : ''));
+            }).fail(function(){ fail.push(p.key + '（id=' + p.src + '）刪除時網路錯誤'); }).always(next);
+        }).fail(function(){ fail.push(p.key + '（id=' + p.src + '）網路錯誤'); next(); });
+    })();
+}
+
+// 一次刪除：目前畫面（含篩選）每一組內，「完全沒綁定」且「同組另有一筆有綁定資料」的列
+function dupBulkDeleteUnbound() {
+    var ids = [], names = {};
+    document.querySelectorAll('#dup-modal-body .dup-group').forEach(function(g) {
+        if (g.style.display === 'none') return;
+        var rows = g.querySelectorAll('.dup-row');
+        var hasBound = Array.prototype.some.call(rows, function(r){ return r.getAttribute('data-norel') === '0'; });
+        if (!hasBound) return;
+        var key = g.getAttribute('data-key') || '';
+        rows.forEach(function(r) {
+            if (r.getAttribute('data-norel') !== '1') return;
+            var id = parseInt(r.getAttribute('data-did'), 10);
+            if (id && ids.indexOf(id) < 0) { ids.push(id); names[id] = key; }
+        });
+    });
+    if (!ids.length) { showToast('目前沒有符合條件的料號（無綁定，且同組另有已綁定資料者）', 'info'); return; }
+    var sample = ids.slice(0, 8).map(function(i){ return names[i] + '（id=' + i + '）'; }).join('\n');
+    if (!confirmDeleteY('將刪除 ' + ids.length + ' 筆「完全沒有綁定、且同料號已有綁定資料」的重複料號：\n\n' + sample + (ids.length > 8 ? '\n…等' : '') + '\n\n此操作不可復原，確定刪除？')) return;
+    var ok = 0, fail = [], i = 0;
+    showToast('刪除中…', 'info');
+    (function next() {
+        if (i >= ids.length) {
+            showToast('已刪除 ' + ok + ' 筆' + (fail.length ? '，失敗 ' + fail.length + ' 筆（可能剛被綁定）' : ''), fail.length ? 'error' : 'success');
+            loadParts(partsCurrent);
+            return;
+        }
+        var id = ids[i++];
+        api({ action:'delete_part_by_id', d_id:id }).done(function(r) {
+            if (r.success) {
+                ok++;
+                // 即時把剛刪掉的那一列從畫面移除（整組只剩一筆時該組一併消失）
+                document.querySelectorAll('#dup-modal-body .dup-row[data-did="' + id + '"]').forEach(function(row) {
+                    var b = row.querySelector('button') || row;
+                    _dupRemoveRow(b);
+                });
+            } else fail.push(id);
+        }).fail(function(){ fail.push(id); }).always(next);
+    })();
+}
+
+function dupFilterParts(q) {
+    var ws = String(q||'').toLowerCase().split(' ').filter(Boolean);
+    document.querySelectorAll('#dup-modal-body .dup-group').forEach(function(g){
+        var k = g.getAttribute('data-key') || '';
+        g.style.display = ws.every(function(w){ return k.indexOf(w) >= 0; }) ? '' : 'none';
+    });
+}
 // ── 自動除錯：快速刪除（無綁定資料者）─ Y 確認 + 只移除該 row ──────────
 function _dupRemoveRow(btn) {
     var row   = btn.closest ? btn.closest('.dup-row')   : null;
@@ -27757,6 +28474,8 @@ function _dupRemoveRow(btn) {
     if (group) {
         var remaining = group.querySelectorAll('.dup-row').length;
         if (remaining <= 1) group.remove();
+        var cnt = document.getElementById('dup-group-count');
+        if (cnt) cnt.textContent = document.querySelectorAll('#dup-modal-body .dup-group').length;
         // 若整個 modal body 已無 dup-group，顯示全清訊息
         var body = document.getElementById('dup-modal-body');
         if (body && !body.querySelector('.dup-group') && !body.querySelector('.dup-pair')) {
@@ -29641,6 +30360,32 @@ $(function() {
         var viewCustomer = (params.get('view_customer') || '').trim();
         if (viewCustomer) {
             setTimeout(function() { openCustomerModal(viewCustomer, true); }, 300);
+        }
+
+        // ?part_embed=1&new_part_no=<料號>&new_customer=<客戶代碼>&new_customer_name=<客戶名稱>：
+        // 被其他頁面（報價單）以 iframe 呼叫時，直接開新增料號跳窗並預填；存檔成功／取消／無權限
+        // 一律用 postMessage 回報呼叫端。沒帶 part_embed 時本段完全不執行。
+        if (params.get('part_embed')) {
+            window.__PART_EMBED = true;
+            var _pe = function(o) { try { parent.postMessage(o, location.origin); } catch (e) {} };
+            setTimeout(function() {
+                if (!CAN_PART_ADD) { _pe({ type: 'eg_part_cancel', reason: 'noperm' }); return; }
+                openPartModal(null);
+                var pn = (params.get('new_part_no') || '').trim();
+                var cid = (params.get('new_customer') || '').trim();
+                var cnm = (params.get('new_customer_name') || '').trim();
+                var elP = document.getElementById('pf-D_Setting_Id');
+                if (elP && pn) { elP.value = pn; scheduleSpecSuggest(); }
+                if (cid) {
+                    document.getElementById('pf-Customer_Id').value = cid;
+                    document.getElementById('pf-customer-display').value = cnm ? (cnm + ' (' + cid + ')') : cid;
+                    document.getElementById('pf-cust-hint').textContent = '目前綁定：' + cid;
+                }
+                $('#partModal').one('hidden.bs.modal', function() {
+                    if (!window.__PART_EMBED_SAVED) _pe({ type: 'eg_part_cancel', reason: 'closed' });
+                });
+                _pe({ type: 'eg_part_ready' });
+            }, 400);
         }
     })();
 
