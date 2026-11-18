@@ -497,7 +497,13 @@ try {
     <div class="container body">
         <div class="main_container">
             <!-- side and top bar include -->
-            <?php include '../partPage/sideAndTopBarMenu.html' ?>
+            <?php
+            // 側欄 include 內會用同名變數（$groups/$pages/$modules）重新查詢並覆蓋，
+            // 導致本頁表格缺少「所屬主項目」且排序失效；include 前後保存/還原
+            $__smsKeep = ['groups' => $groups, 'pages' => $pages, 'modules' => $modules];
+            include '../partPage/sideAndTopBarMenu.html';
+            extract($__smsKeep);
+            ?>
             <!-- /side and top bar include -->
 
             <!-- page content -->
