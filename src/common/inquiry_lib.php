@@ -312,13 +312,13 @@ function inq_doc_prefix_save(PDO $db, string $prefix, int $uid): array {
 }
 
 /**
- * 子單單號＝前綴＋YYYYMMDD＋流水3碼（使用者明確要求，前綴可由管理員設定，預設 RFQ）。
+ * 子單單號＝前綴＋YYMMDD＋流水3碼（西元年只取後兩碼，使用者 2026-11-18 指定；原為 YYYYMMDD，舊單號不變；前綴可由管理員設定，預設 RFQ）。
  * **同一天所有子單共用同一組流水號，不分廠商**（使用者原話「子單也要依照規則跳號」）——
- * 同一次詢價展開給 3 家廠商，號碼就是連續的 RFQ20261008001/002/003，不是各廠商各自起跳。
+ * 同一次詢價展開給 3 家廠商，號碼就是連續的 RFQ261008001/002/003，不是各廠商各自起跳。
  */
 function inq_next_doc_no(PDO $db, string $date): string {
     $d = $date !== '' ? $date : date('Y-m-d');
-    $ymd = str_replace('-', '', substr($d, 0, 10));
+    $ymd = substr(str_replace('-', '', substr($d, 0, 10)), 2);   // YYMMDD：西元年後兩碼
     $prefix = inq_doc_prefix_get($db);
     $key = $prefix . $ymd;
     $db->prepare("INSERT INTO inq_doc_seq (seq_key, seq_no) VALUES (?, 1) ON DUPLICATE KEY UPDATE seq_no = seq_no + 1")

@@ -400,7 +400,7 @@ $__tRole = !empty($perms['isAdmin']) ? '管理者（可設定刀具詢價）'
             <button type="button" id="btnDocPrefix" class="btn">儲存</button>
             <span id="docPrefixPreview" style="font-size:12px;color:#8a6d45;"></span>
         </div>
-        <div class="iq-hint" style="margin:0 0 14px;">單號規則＝前綴＋YYYYMMDD＋流水3碼，<b>同一天所有廠商共用同一組流水號</b>（不分廠商各自起跳）。只影響之後新產生的單號，不會改掉已經存在的單號。</div>
+        <div class="iq-hint" style="margin:0 0 14px;">單號規則＝前綴＋YYMMDD（西元年後兩碼）＋流水3碼，<b>同一天所有廠商共用同一組流水號</b>（不分廠商各自起跳）。只影響之後新產生的單號，不會改掉已經存在的單號。</div>
         <label>各部門使用規則</label>
         <div id="deptSetRows"></div>
         <label style="margin-top:14px;display:block;">生管詢價建議的製程大項<span style="font-weight:normal;color:#999;">（軟性建議，勾選的會在挑選 BOM 製程時標「建議」優先顯示；沒勾的製程照樣可以選，只是不特別標示）</span></label>
@@ -1558,7 +1558,7 @@ function renderProcTypeRows(){
     });
 }
 function docPrefixPreviewText(prefix){
-    var d = new Date(), ymd = d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+    var d = new Date(), ymd = String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
     return '例如：' + (prefix||'RFQ') + ymd + '001';
 }
 $('#docPrefixInput').on('input', function(){ $('#docPrefixPreview').text(docPrefixPreviewText($(this).val())); });
