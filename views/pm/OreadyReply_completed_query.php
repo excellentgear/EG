@@ -4233,6 +4233,9 @@ function ocqNpOpen(rows){
         $('#ocqNpOne').toggle(one);
         $('#ocqNpAllCs').html(ocqCustOptions(''));
         $('#ocqNpAll').css('display', one ? 'none' : 'flex');
+        // 共用檔長出的篩選框會留著上次打的字，每次開啟都清掉
+        $('#ocqNpAll input[type=text]').val('').trigger('input');
+        $('#ocqNpAllCs').val('');
         $('#ocqNpSpec, #ocqNpRemark').val('');
         $('#ocqNpMsg').html('');
         $('#ocqNpRun').prop('disabled', false).text(one ? '建立並綁定' : '建立並綁定（' + rows.length + ' 筆）');
