@@ -1160,7 +1160,7 @@ function tpModeTexts(mode){
   var pdf = mode==='pdf';
   $('#tpTitle').text(pdf ? '轉存 PDF（刀具詢價單）' : '列印刀具詢價單');
   $('#tpPrintAll').text(pdf ? '全部轉存' : '全部列印'); $('#tpPrintSel').text(pdf ? '轉存勾選的' : '列印勾選的');
-  $('#tpHint').html(pdf ? '每家廠商存成<b>一個 PDF 檔</b>，檔名＝廠商名稱_工件編號（檔名不能用的字元會自動略過）。「全部轉存」不含已標記不採用的廠商。'
+  $('#tpHint').html(pdf ? '每家廠商存成<b>一個 PDF 檔</b>，檔名＝廠商名稱_工件編號（檔名不能用的字元會自動略過）。<br><b style="color:#C4442D;">選存放位置時：不能直接選「桌面」「下載」「文件」等系統資料夾，請先在裡面新增一個子資料夾，再選那個子資料夾。</b>「全部轉存」不含已標記不採用的廠商。'
                         : '每家廠商各印一頁（頁首帶該廠商的聯絡人、電話、傳真）。「全部列印」不含已標記不採用的廠商。');
 }
 function tpPick(all){
@@ -1215,10 +1215,10 @@ function exportPdfs(id, vids){
   // 網頁要「讓使用者挑資料夾」只有在 HTTPS／localhost 才有這個功能；一般 http 內網網址瀏覽器不開放，改走一般下載
   var canPick = !!(window.showDirectoryPicker && window.isSecureContext);
   var dirP = canPick ? window.showDirectoryPicker({mode:'readwrite', id:'tiqpdf'}).catch(function(e){ return (e && e.name==='AbortError') ? 'cancel' : null; }) : Promise.resolve(null);
-  tpBusy('準備中…');
+  tpBusy(canPick ? '請選擇存放 PDF 的資料夾：不能直接選「桌面」「下載」「文件」，請先在裡面新增一個子資料夾（例如「刀具詢價PDF」），再選那個子資料夾' : '準備中…');
   dirP.then(function(dir){
     if (dir === 'cancel') {   // 沒選資料夾（或選到被瀏覽器拒絕的系統資料夾而取消）：問要不要改用一般下載，不直接中斷
-      if (!confirm('未選擇存放資料夾。' + String.fromCharCode(10,10) + '要改用瀏覽器一般下載（存到下載資料夾）嗎？' + String.fromCharCode(10,10) + '（若要自己挑位置：請先在「下載」「桌面」「文件」底下新增一個子資料夾，再選那個子資料夾；Chrome 不接受系統資料夾本身。）')) { tpBusy(''); return; }
+      if (!confirm('沒有選到可用的資料夾。' + String.fromCharCode(10,10) + '原因：瀏覽器不允許直接選「桌面」「下載」「文件」等系統資料夾，需要選一個您自己新增的資料夾（例如在文件裡新增「刀具詢價PDF」）。' + String.fromCharCode(10,10) + '要改用瀏覽器一般下載（存到下載資料夾）嗎？按「取消」可重新操作。')) { tpBusy(''); return; }
       dir = null;
     }
     $.getJSON(TAPI, {action:'print_data', id:id, vids:vids.join(',')}).done(function(res){
