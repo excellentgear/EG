@@ -178,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Groups
             $groups = $db->query("SELECT g.*, GROUP_CONCAT(p.page_name ORDER BY p.sort_order SEPARATOR ', ') as bound_pages_list FROM system_module_groups g LEFT JOIN system_module_pages p ON g.group_id = p.group_id GROUP BY g.group_id ORDER BY g.sort_order ASC, g.group_id ASC")->fetchAll(PDO::FETCH_ASSOC);
             // Pages
-            $pages = $db->query("SELECT p.*, g.group_name AS current_group_name FROM system_module_pages p LEFT JOIN system_module_groups g ON p.group_id = g.group_id ORDER BY g.sort_order ASC, p.sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
+            $pages = $db->query("SELECT p.*, g.group_name AS current_group_name FROM system_module_pages p LEFT JOIN system_module_groups g ON p.group_id = g.group_id ORDER BY (p.group_id IS NULL OR g.group_id IS NULL) ASC, g.sort_order ASC, g.group_id ASC, p.sort_order ASC, p.page_id ASC")->fetchAll(PDO::FETCH_ASSOC);
             // Modules
             $sql_modules = "SELECT m.*, g.group_name, p.page_name, p.page_url AS module_url FROM system_modules m LEFT JOIN system_module_groups g ON m.group_id = g.group_id LEFT JOIN system_module_pages p ON m.page_id = p.page_id ORDER BY m.sort_order ASC, m.module_code ASC";
             $modules = $db->query($sql_modules)->fetchAll(PDO::FETCH_ASSOC);
@@ -395,7 +395,7 @@ try {
     
     // 取得 Pages
     // Join groups to get current group name for display
-    $pages = $db->query("SELECT p.*, g.group_name AS current_group_name FROM system_module_pages p LEFT JOIN system_module_groups g ON p.group_id = g.group_id ORDER BY g.sort_order ASC, p.sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $pages = $db->query("SELECT p.*, g.group_name AS current_group_name FROM system_module_pages p LEFT JOIN system_module_groups g ON p.group_id = g.group_id ORDER BY (p.group_id IS NULL OR g.group_id IS NULL) ASC, g.sort_order ASC, g.group_id ASC, p.sort_order ASC, p.page_id ASC")->fetchAll(PDO::FETCH_ASSOC);
     
     // 取得 Modules (包含關聯名稱)
     $sql_modules = "
