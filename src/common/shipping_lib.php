@@ -515,6 +515,15 @@ function sq_pending_orders(PDO $db, array $f): array
     }
     $progMap = sq_bom_progress_map($db, $undoneBoms);
 
+    // 刀具詢價「預留待出貨」：貨已到、已預留給這張訂單、還沒開出貨單的數量（tool_inq_alloc kind='hold'）。算進可出量並在畫面標出。
+    $toolHold = [];
+    try {
+        if ($orderIds) {
+            $hq = $db->query("SELECT order_id, SUM(qty) q FROM tool_inq_alloc WHERE kind='hold' AND order_id IN (" . implode(',', array_map('intval', $orderIds)) . ") GROUP BY order_id");
+            foreach ($hq->fetchAll(PDO::FETCH_ASSOC) as $h) $toolHold[(int)$h['order_id']] = (int)$h['q'];
+        }
+    } catch (Throwable $e) { $toolHold = []; }   // 刀具詢價模組沒啟用（沒有這張表）時完全不影響
+
     $out = [];
     foreach ($rows as $r) {
         $oid    = (int)$r['Order_id'];
@@ -556,7 +565,8 @@ function sq_pending_orders(PDO $db, array $f): array
                 'proc_full' => sq_progress_label($pg, true),    // 連狀態廠商日期（提示與 CSV 用）
             ];
         }
-        $ready = min($remain, $readyTotal);
+        $hold  = $toolHold[$oid] ?? 0;
+        $ready = min($remain, $readyTotal + $hold);
 
         /* 可出量為 0 的原因要講清楚：製令明明已完工、只是被別張出貨吃完了，
            畫面卻寫「無完工」＝使用者一定會以為系統壞掉（2026-09-17 使用者回報）。 */
@@ -598,6 +608,7 @@ function sq_pending_orders(PDO $db, array $f): array
             'shipped_qty'      => (int)$r['shipped_qty'],
             'remain_qty'       => $remain,
             'ready_qty'        => $ready,
+            'tool_hold'        => $hold,
             'unit_price'       => (float)$r['unit_price'],
             'order_date'       => $r['order_date'],
             'delivery_date'    => $r['delivery_date'],
@@ -761,6 +772,7 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
         );
         $shipments   = [];
         $ordersUsed  = [];
+        $holdConsume = [];
 
         foreach ($groups as $rows) {
             $isNumber = sq_next_is_number($db, $shipDate);
@@ -795,6 +807,7 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
                     else $insMap->execute([$isId, $a['bom'], $bq]);
                 }
                 if ($orderId) $ordersUsed[$orderId] = true;
+                if ($orderId && empty($it['scrap_return'])) $holdConsume[] = [$orderId, (int)$it['qty'], $isNumber];
                 $cnt++;
             }
             $shipments[$isNumber] = $cnt;
@@ -807,6 +820,11 @@ function sq_create_shipment(PDO $db, string $shipDate, array $items, string $use
     }
     // 快速出貨建立的出貨單本來就綁了訂單／製令：標上「已綁定確認」，ERP 匯入不會覆蓋（is_bind_lock_lib.php）
     if (!empty($newIsIds)) { require_once __DIR__ . '/is_bind_lock_lib.php'; isbl_sync($db, $newIsIds, (int)$userId); }
+    // 刀具詢價「預留待出貨」：這張訂單開了出貨單（不論從哪個入口），把預留依順序扣掉（刀具詢價自己開的出貨單另有處理，不走這裡）
+    if (!empty($holdConsume) && empty($GLOBALS['TI_SHIP_INTERNAL'])) {
+        try { require_once __DIR__ . '/tool_inq_lib.php'; foreach ($holdConsume as [$ho, $hq2, $hn]) ti_hold_consume($db, $ho, $hq2, $hn, (int)$userId); }
+        catch (Throwable $e) { error_log('[shipping] tool hold consume failed: ' . $e->getMessage()); }
+    }
 
     // 自動結案（交易外，失敗不影響已建立的出貨單）
     $closed = [];

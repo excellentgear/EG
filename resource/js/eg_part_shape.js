@@ -332,7 +332,9 @@
           if (harr && harr[hgi]) {
             harr[hgi][hs.getAttribute('data-hf')] = hs.value;
             // 最後一階有資料就自動多出一格（連續輸入，不必先決定幾階）
-            if (hgi === harr.length - 1 && (String(harr[hgi].d || '').trim() !== '' || String(harr[hgi].l || '').trim() !== '')) {
+            // 兩側不同時，沒勾「多階凸出」的那一側是單階，不可自動長出下一階（與 _hubTail 同一判定）
+            var hTwo = self.st.outer === 'both_sides' && !self.st.hub_same, hMk = !hTwo || !!(self.st.mside && self.st.mside[hsk]);
+            if (hMk && hgi === harr.length - 1 && (String(harr[hgi].d || '').trim() !== '' || String(harr[hgi].l || '').trim() !== '')) {
               harr.push({ d: '', l: '' });
               var hbox = self.el.querySelector('[data-hubrows="' + hsk + '"]');
               if (hbox) hbox.insertAdjacentHTML('beforeend', self._hubRow(hsk, harr.length - 1));

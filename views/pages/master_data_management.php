@@ -1492,6 +1492,9 @@ unset($_mdm_skip_migration);
 // ── 齒輪外形／內孔分類（2026-10-21）：不放在版本鎖內，建表本身已有存在檢查 ──
 require_once __DIR__ . '/../../src/common/part_shape_lib.php';
 eg_shape_ensure_table($pdo);
+// 客戶／廠商 別名與更名歷史、額外地址（2026-11-18）：建表與補欄位在這裡，不可放進 transaction 內
+require_once __DIR__ . '/../../src/common/party_name_lib.php';
+eg_party_ensure_schema($pdo);
 
 // ── 齒部外徑（da）計算式：唯一實作 ──────────────────────────────────────
 // 列表顯示的「齒部外徑」籤與「齒部外徑區間篩選」一律用這一支產生 SQL，
@@ -3850,7 +3853,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ck_ors = [];
                 foreach ($ckws as $ci => $ckw_i) {
                     $ck = ":ckw$ci";
-                    $ck_ors[] = "(customer_id LIKE $ck OR customer LIKE $ck OR customer_address LIKE $ck OR EXISTS (SELECT 1 FROM customer_industry_mapping cim WHERE cim.customer_id=customer_list.customer_id AND cim.note LIKE $ck))";
+                    $ck_ors[] = "(customer_id LIKE $ck OR customer LIKE $ck OR customer_full LIKE $ck OR customer_address LIKE $ck OR " . eg_party_alias_exists_sql('customer','customer_list.customer_id',$ck) . " OR EXISTS (SELECT 1 FROM customer_industry_mapping cim WHERE cim.customer_id=customer_list.customer_id AND cim.note LIKE $ck))";
                     $params[$ck] = "%$ckw_i%";
                 }
                 $where .= " AND (" . implode(" OR ", $ck_ors) . ")";
@@ -4009,6 +4012,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $se = $pdo->prepare("SELECT * FROM customer_settlement_exceptions WHERE customer_id=? ORDER BY target_year_month DESC LIMIT 12");
             $se->execute([$cid]);
             $row['settlement_exceptions'] = $se->fetchAll(PDO::FETCH_ASSOC);
+            $row += eg_party_load($pdo, 'customer', (string)$cid);
             echo json_encode(['success'=>true,'data'=>$row]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -4127,12 +4131,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (empty($customer))    throw new Exception('客戶名稱不可為空');
 
             $customer_grade = in_array($customer_grade, ['S','A','B','C','D']) ? $customer_grade : null;
+            $customer_fax2 = trim($_POST['customer_fax2'] ?? '');
+            $customer_zip  = trim($_POST['customer_zip'] ?? '');
 
             // 取舊資料用於 audit diff
             $old_cust_row = [];
             $old_sales_p_uid=0; $old_sales_p_name=''; $old_sales_d_uid=0; $old_sales_d_name='';
             if (!$is_new) {
-                $oq = $pdo->prepare("SELECT customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,need_recon_stmt,recon_provide_by FROM customer_list WHERE customer_id=?");
+                $oq = $pdo->prepare("SELECT customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_fax2,customer_zip,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,need_recon_stmt,recon_provide_by FROM customer_list WHERE customer_id=?");
                 $oq->execute([$customer_id]);
                 $old_cust_row = $oq->fetch(PDO::FETCH_ASSOC) ?: [];
                 // 取舊業務
@@ -4155,23 +4161,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ck->execute([$customer_id]);
                 if ($ck->fetch()) throw new Exception("客戶代碼「{$customer_id}」已存在");
                 $pdo->prepare("INSERT INTO customer_list
-                    (customer_id,customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,
+                    (customer_id,customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_fax2,customer_zip,customer_address,is_inactive,customer_grade,
                      settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,
                      bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,
                      confirmed_settlement,confirmed_payment,is_own_company,need_recon_stmt,recon_provide_by,est_date,Created_By,Created_At)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-                    ->execute([$customer_id,$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                    ->execute([$customer_id,$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_fax2,$customer_zip,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid]);
             } else {
                 if (!$canCustEdit) throw new Exception('無修改權限');
                 $pdo->prepare("UPDATE customer_list SET
-                    customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
+                    customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_fax2=?,customer_zip=?,customer_address=?,is_inactive=?,customer_grade=?,
                     settlement_mode=?,settlement_day=?,tax_id=?,quote_method=?,payment_method=?,net_days=?,allow_deduct=?,
                     bank_name=?,bank_branch=?,bank_account=?,billing_contact=?,shipping_req=?,invoice_email=?,billing_note=?,general_note=?,
                     confirmed_settlement=?,confirmed_payment=?,is_own_company=?,need_recon_stmt=?,recon_provide_by=?,est_date=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
-                    ->execute([$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
+                    ->execute([$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_fax2,$customer_zip,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid,$customer_id]);
@@ -4207,6 +4213,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $ins_c->execute([$customer_id,trim($c['name']??''),trim($c['department']??''),trim($c['title']??''),trim($c['phone_ext']??''),trim($c['mobile']??''),trim($c['email']??''),trim($c['note']??''),intval($c['is_primary']??0),$k]);
                 }
             }
+            // 更名歷史／手動別名／額外地址（2026-11-18）
+            $_pe_uname = _get_operator($pdo, $uid);
+            if (!$is_new) eg_party_record_rename($pdo,'customer',$customer_id,$old_cust_row['customer']??'',$old_cust_row['customer_full']??'',$customer,$customer_full,trim($_POST['rename_date']??''),(int)$uid,$_pe_uname);
+            if (array_key_exists('party_aliases',$_POST)) eg_party_save_manual_aliases($pdo,'customer',$customer_id,json_decode($_POST['party_aliases'],true)?:[],(int)$uid,$_pe_uname);
+            if (array_key_exists('party_addrs',$_POST))   eg_party_save_addrs($pdo,'customer',$customer_id,json_decode($_POST['party_addrs'],true)?:[]);
             // 產業別 Delete-then-Insert
             $pdo->prepare("DELETE FROM customer_industry_mapping WHERE customer_id=?")->execute([$customer_id]);
             if (!empty($industries)) {
@@ -4234,7 +4245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($is_new) {
                 _log_audit($pdo,'insert','customer',$customer_id,$customer,null,$uid,$op_name);
             } else {
-                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note,'need_recon_stmt'=>$need_recon_stmt,'recon_provide_by'=>$recon_provide_by];
+                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_fax2'=>$customer_fax2,'customer_zip'=>$customer_zip,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note,'need_recon_stmt'=>$need_recon_stmt,'recon_provide_by'=>$recon_provide_by];
                 $ch = _diff_rows($old_cust_row, $new_cust_arr, array_keys($new_cust_arr));
                 // 業務變動追蹤
                 if ($old_sales_p_uid !== $primary_uid) {
@@ -4911,7 +4922,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $mk_ors = [];
                 foreach ($mkws as $mki => $mkw_i) {
                     $mk = ":mkw$mki";
-                    $mk_ors[] = "(m.maker_id_no LIKE $mk OR m.maker_id LIKE $mk OR m.maker_id_all LIKE $mk OR m.m_category LIKE $mk OR m.m_process_items LIKE $mk
+                    $mk_ors[] = "(m.maker_id_no LIKE $mk OR m.maker_id LIKE $mk OR m.maker_id_all LIKE $mk OR " . eg_party_alias_exists_sql('maker','m.maker_id_no',$mk) . " OR m.m_category LIKE $mk OR m.m_process_items LIKE $mk
                                   OR EXISTS (SELECT 1 FROM dict_maker_main_category mc2 JOIN maker_category_hierarchy h2 ON h2.main_cat_id=mc2.main_cat_id JOIN maker_sub_category_mapping mp2 ON mp2.sub_cat_id=h2.sub_cat_id AND mp2.maker_id_no=m.maker_id_no WHERE mc2.main_cat_name LIKE $mk)
                                   OR EXISTS (SELECT 1 FROM dict_maker_sub_category ds2 JOIN maker_sub_category_mapping mp3 ON mp3.sub_cat_id=ds2.sub_cat_id AND mp3.maker_id_no=m.maker_id_no WHERE ds2.sub_cat_name LIKE $mk))";
                     $params[$mk] = "%$mkw_i%";
@@ -5174,6 +5185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $row['main_cat_process_tags'] = $ptq->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $ex) { $row['main_cat_process_tags'] = []; }
 
+            $row += eg_party_load($pdo, 'maker', (string)$mid);
             echo json_encode(['success'=>true,'data'=>$row]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -5192,6 +5204,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $factory_address = trim($_POST['factory_address'] ?? '');
             $billing_address = trim($_POST['billing_address'] ?? '');
             $postal_code     = trim($_POST['postal_code'] ?? '');
+            $m_fax2          = trim($_POST['m_fax2'] ?? '');
+            $factory_zip     = trim($_POST['factory_zip'] ?? '');
+            $billing_zip     = trim($_POST['billing_zip'] ?? '');
             $tax_id          = trim($_POST['tax_id'] ?? '');
             $contact_person  = trim($_POST['contact_person'] ?? '');
             $contact_title   = trim($_POST['contact_title'] ?? '');
@@ -5224,7 +5239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 取舊資料用於 audit diff（提前到這裡，因為下面的結帳/付款設定權限檢查也要用到舊值）
             $old_maker_row = [];
             if (!$is_new) {
-                $oqm = $pdo->prepare("SELECT maker_id,maker_id_all,m_tel,m_tel2,m_fax,m_category,status,invoice_address,factory_address,m_note,m_process_items,limit_dia,limit_len,internal,is_qualified,quality_rating,settlement_mode,settlement_day,payment_method,net_days FROM maker_list WHERE maker_id_no=?");
+                $oqm = $pdo->prepare("SELECT maker_id,maker_id_all,m_tel,m_tel2,m_fax,m_fax2,postal_code,factory_zip,billing_zip,m_category,status,invoice_address,factory_address,m_note,m_process_items,limit_dia,limit_len,internal,is_qualified,quality_rating,settlement_mode,settlement_day,payment_method,net_days FROM maker_list WHERE maker_id_no=?");
                 $oqm->execute([$mid]);
                 $old_maker_row = $oqm->fetch(PDO::FETCH_ASSOC) ?: [];
             }
@@ -5253,8 +5268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $limit_dia_max = trim($_POST['limit_dia_max'] ?? ''); $limit_dia_max = $limit_dia_max!=='' ? floatval($limit_dia_max) : null;
             $limit_len_min = trim($_POST['limit_len_min'] ?? ''); $limit_len_min = $limit_len_min!=='' ? floatval($limit_len_min) : null;
             $limit_len_max = trim($_POST['limit_len_max'] ?? ''); $limit_len_max = $limit_len_max!=='' ? floatval($limit_len_max) : null;
-            $fields = "maker_id,maker_id_all,m_tel,m_tel2,m_fax,invoice_address,factory_address,billing_address,postal_code,tax_id,contact_person,contact_title,email,m_category,m_process_items,limit_dia,limit_len,limit_dia_min,limit_dia_max,limit_len_min,limit_len_max,m_note,status,internal,main_category_id,settlement_mode,settlement_day,payment_method,net_days,confirmed_settlement,confirmed_payment,quality_rating,is_qualified,est_date";
-            $vals   = [$maker_id,$maker_all,$m_tel,$m_tel2,$m_fax,$invoice_address,$factory_address,$billing_address,$postal_code,$tax_id,$contact_person,$contact_title,$email,$m_category,$m_process_items,$limit_dia,$limit_len,$limit_dia_min,$limit_dia_max,$limit_len_min,$limit_len_max,$m_note,$status,$internal,$main_category_id,$m_settlement_mode,$m_settlement_day,$m_payment_method,$m_net_days,$m_confirmed_settlement,$m_confirmed_payment,$quality_rating,$is_qualified,$est_date];
+            $fields = "maker_id,maker_id_all,m_tel,m_tel2,m_fax,m_fax2,invoice_address,factory_address,billing_address,postal_code,factory_zip,billing_zip,tax_id,contact_person,contact_title,email,m_category,m_process_items,limit_dia,limit_len,limit_dia_min,limit_dia_max,limit_len_min,limit_len_max,m_note,status,internal,main_category_id,settlement_mode,settlement_day,payment_method,net_days,confirmed_settlement,confirmed_payment,quality_rating,is_qualified,est_date";
+            $vals   = [$maker_id,$maker_all,$m_tel,$m_tel2,$m_fax,$m_fax2,$invoice_address,$factory_address,$billing_address,$postal_code,$factory_zip,$billing_zip,$tax_id,$contact_person,$contact_title,$email,$m_category,$m_process_items,$limit_dia,$limit_len,$limit_dia_min,$limit_dia_max,$limit_len_min,$limit_len_max,$m_note,$status,$internal,$main_category_id,$m_settlement_mode,$m_settlement_day,$m_payment_method,$m_net_days,$m_confirmed_settlement,$m_confirmed_payment,$quality_rating,$is_qualified,$est_date];
 
             // 解析前端傳來的 sub_cats JSON（格式: [1,3,5] 整數陣列）
             $sub_cats_raw = trim($_POST['sub_cats'] ?? '[]');
@@ -5365,13 +5380,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
+            // 更名歷史／手動別名／額外地址（2026-11-18）
+            $_pe_uname = _get_operator($pdo, $uid);
+            if (!$is_new) eg_party_record_rename($pdo,'maker',$mid,$old_maker_row['maker_id']??'',$old_maker_row['maker_id_all']??'',$maker_id,$maker_all,trim($_POST['rename_date']??''),(int)$uid,$_pe_uname);
+            if (array_key_exists('party_aliases',$_POST)) eg_party_save_manual_aliases($pdo,'maker',$mid,json_decode($_POST['party_aliases'],true)?:[],(int)$uid,$_pe_uname);
+            if (array_key_exists('party_addrs',$_POST))   eg_party_save_addrs($pdo,'maker',$mid,json_decode($_POST['party_addrs'],true)?:[]);
+
             $pdo->commit();
             // ── audit log ──
             $op_name = _get_operator($pdo, $uid);
             if ($is_new) {
                 _log_audit($pdo,'insert','vendor',$mid,$maker_id,null,$uid,$op_name);
             } else {
-                $new_maker_arr = ['maker_id'=>$maker_id,'maker_id_all'=>$maker_all,'m_tel'=>$m_tel,'m_tel2'=>$m_tel2,'m_fax'=>$m_fax,'m_category'=>$m_category,'status'=>$status,'invoice_address'=>$invoice_address,'factory_address'=>$factory_address,'m_note'=>$m_note,'m_process_items'=>$m_process_items,'limit_dia'=>$limit_dia,'limit_len'=>$limit_len,'internal'=>$internal,'is_qualified'=>$is_qualified,'settlement_mode'=>$m_settlement_mode,'settlement_day'=>(string)$m_settlement_day,'payment_method'=>$m_payment_method,'net_days'=>(string)$m_net_days];
+                $new_maker_arr = ['maker_id'=>$maker_id,'maker_id_all'=>$maker_all,'m_tel'=>$m_tel,'m_tel2'=>$m_tel2,'m_fax'=>$m_fax,'m_fax2'=>$m_fax2,'postal_code'=>$postal_code,'factory_zip'=>$factory_zip,'billing_zip'=>$billing_zip,'m_category'=>$m_category,'status'=>$status,'invoice_address'=>$invoice_address,'factory_address'=>$factory_address,'m_note'=>$m_note,'m_process_items'=>$m_process_items,'limit_dia'=>$limit_dia,'limit_len'=>$limit_len,'internal'=>$internal,'is_qualified'=>$is_qualified,'settlement_mode'=>$m_settlement_mode,'settlement_day'=>(string)$m_settlement_day,'payment_method'=>$m_payment_method,'net_days'=>(string)$m_net_days];
                 $ch = _diff_rows($old_maker_row, $new_maker_arr, array_keys($new_maker_arr));
                 if (!empty($ch)) _log_audit($pdo,'update','vendor',$mid,$maker_id,$ch,$uid,$op_name);
             }
@@ -5475,6 +5496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("UPDATE acc_receipt SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE customer_account_terms SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE customer_contacts SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            eg_party_move($pdo,'customer',$src_id,$tgt_id);   // 別名／更名歷史／額外地址
             $pdo->prepare("UPDATE customer_settlement_exceptions SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE qc_tolerance_table SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE sales_track SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
@@ -5804,6 +5826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("UPDATE bom_ing_outsource_batch SET maker_id_no=?, maker_id=? WHERE maker_id_no=?")->execute([$tgt_id,$tgt['maker_id'],$src_id]);
             $pdo->prepare("UPDATE d_setting_vendor_map SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE maker_contacts SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            eg_party_move($pdo,'maker',$src_id,$tgt_id);
             $pdo->prepare("UPDATE maker_main_cat_process_tag SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE maker_proc_label_map SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE vendor_audit SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
@@ -10697,10 +10720,32 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     <label>客戶英文全名</label>
     <input type="text" class="form-control" id="cf-customer_full_en" name="customer_full_en" data-eg-hint="英文正式公司全名，非必填" maxlength="150">
 </div>
-<div class="form-group">
-    <label>地址</label>
-    <input type="text" class="form-control" id="cf-customer_address" name="customer_address" placeholder="地址" maxlength="100">
+<div id="cf-pe-alias"></div>
+<div class="row">
+    <div class="col-md-4 col-md-offset-4">
+        <div class="form-group">
+            <label>傳真2</label>
+            <input type="text" class="form-control" id="cf-customer_fax2" name="customer_fax2" placeholder="第二組傳真" maxlength="30">
+        </div>
+    </div>
 </div>
+<div class="row">
+    <div class="col-md-2">
+        <div class="form-group">
+            <label>郵遞區號</label>
+            <input type="text" class="form-control" id="cf-customer_zip" name="customer_zip" placeholder="000" maxlength="20">
+        </div>
+    </div>
+    <div class="col-md-10">
+        <div class="form-group">
+            <label>地址</label>
+            <input type="text" class="form-control" id="cf-customer_address" name="customer_address" placeholder="地址" maxlength="100">
+        </div>
+    </div>
+</div>
+<div id="cf-pe-addr"></div>
+<input type="hidden" id="cf-party_aliases" name="party_aliases" value="[]">
+<input type="hidden" id="cf-party_addrs" name="party_addrs" value="[]">
 <div class="form-section-title" style="margin-top:8px;"><i class="fa fa-tags"></i> 產業別（可多選）</div>
 <div id="cf-industry-wrap" style="padding:4px 0 4px;">
     <div style="display:flex;flex-wrap:wrap;gap:4px;" id="cf-industry-chips">
@@ -11034,6 +11079,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
         </div>
     </div>
 </div>
+<div id="mf-pe-alias"></div>
 <div class="row">
     <div class="col-md-3">
         <div class="form-group">
@@ -11084,22 +11130,28 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 <!-- ② 聯絡資訊 -->
 <div class="form-section-title"><i class="fa fa-phone"></i> 聯絡資訊</div>
 <div class="row">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="form-group">
             <label>電話1</label>
             <input type="text" class="form-control" id="mf-m_tel" name="m_tel" placeholder="電話" maxlength="50">
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="form-group">
             <label>電話2</label>
             <input type="text" class="form-control" id="mf-m_tel2" name="m_tel2" placeholder="電話2" maxlength="50">
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="form-group">
-            <label>傳真</label>
+            <label>傳真1</label>
             <input type="text" class="form-control" id="mf-m_fax" name="m_fax" placeholder="傳真" maxlength="50">
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="form-group">
+            <label>傳真2</label>
+            <input type="text" class="form-control" id="mf-m_fax2" name="m_fax2" placeholder="傳真2" maxlength="50">
         </div>
     </div>
 </div>
@@ -11122,7 +11174,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 <div class="row">
     <div class="col-md-2">
         <div class="form-group">
-            <label>郵遞區號</label>
+            <label>發票郵遞區號</label>
             <input type="text" class="form-control" id="mf-postal_code" name="postal_code" placeholder="000" maxlength="20">
         </div>
     </div>
@@ -11134,19 +11186,36 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
     </div>
 </div>
 <div class="row">
-    <div class="col-md-6">
+    <div class="col-md-2">
+        <div class="form-group">
+            <label>工廠郵遞區號</label>
+            <input type="text" class="form-control" id="mf-factory_zip" name="factory_zip" placeholder="000" maxlength="20">
+        </div>
+    </div>
+    <div class="col-md-10">
         <div class="form-group">
             <label>工廠地址</label>
             <input type="text" class="form-control" id="mf-factory_address" name="factory_address" placeholder="工廠地址" maxlength="255">
         </div>
     </div>
-    <div class="col-md-6">
+</div>
+<div class="row">
+    <div class="col-md-2">
+        <div class="form-group">
+            <label>帳單郵遞區號</label>
+            <input type="text" class="form-control" id="mf-billing_zip" name="billing_zip" placeholder="000" maxlength="20">
+        </div>
+    </div>
+    <div class="col-md-10">
         <div class="form-group">
             <label>帳單地址</label>
             <input type="text" class="form-control" id="mf-billing_address" name="billing_address" placeholder="帳單地址" maxlength="255">
         </div>
     </div>
 </div>
+<div id="mf-pe-addr"></div>
+<input type="hidden" id="mf-party_aliases" name="party_aliases" value="[]">
+<input type="hidden" id="mf-party_addrs" name="party_addrs" value="[]">
 <div class="form-group">
     <label>其他備註</label>
     <textarea class="form-control" id="mf-m_note" name="m_note" rows="2" placeholder="備用說明…" maxlength="255"></textarea>
@@ -12969,6 +13038,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
      依 CLAUDE.md UI 規則改載共用檔（禁止各頁自刻）；共用檔有 e.defaultPrevented 防護，
      與本頁既有的 keydown 處理可並存不會跳兩欄。 -->
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_party_extra.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_party_extra.js') ?>"></script>
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻） -->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
@@ -19682,7 +19752,7 @@ function openCustomerModal(customer_id, readonly) {
             var cidEl = document.getElementById('cf-customer_id');
             cidEl.value = d.customer_id; cidEl.readOnly = true; cidEl.style.background = '#f5f5f5';
             // Basic fields
-            ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_address','tax_id',
+            ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_fax2','customer_zip','customer_address','tax_id',
              'quote_method','payment_method','net_days','bank_name','bank_branch','bank_account',
              'billing_contact','invoice_email'].forEach(function(f){
                 var el = document.getElementById('cf-'+f);
@@ -19733,6 +19803,7 @@ function openCustomerModal(customer_id, readonly) {
             }
             // Contacts
             loadContactRows(d.contacts||[]);
+            if (window.EGPartyExtra) EGPartyExtra.load('cf', d);   // 別名／更名紀錄／其他地址
             // Industries
             var selIndustries = d.industries || [];
             var selSubs = d.industry_subs || [];
@@ -19775,6 +19846,7 @@ function openCustomerModal(customer_id, readonly) {
         document.getElementById('cf-est_date').value = _mdmTodayStr();
         populateSalesSelects('','');
         loadContactRows([]);
+        if (window.EGPartyExtra) EGPartyExtra.reset('cf');
         var mainNotesWrap = document.getElementById('cf-industry-main-notes-wrap');
         if (mainNotesWrap) mainNotesWrap.innerHTML = '';
         loadIndustryList(function(list){ renderIndustryCheckboxes(list, [], [], []); });
@@ -19800,7 +19872,12 @@ function submitCustomerForm() {
         customer_grade:   gv('cf-customer_grade'),
         customer_tel:     gv('cf-customer_tel'),
         customer_fax:     gv('cf-customer_fax'),
+        customer_fax2:    gv('cf-customer_fax2'),
+        customer_zip:     gv('cf-customer_zip'),
         customer_address: gv('cf-customer_address'),
+        party_aliases:    gv('cf-party_aliases'),
+        party_addrs:      gv('cf-party_addrs'),
+        rename_date:      gv('cf-rename_date'),
         is_inactive:      gc('cf-is_inactive'),
         settlement_mode:  gv('cf-settlement_mode'),
         settlement_day:   gv('cf-settlement_day'),
@@ -20516,7 +20593,7 @@ function openMakerModal(maker_id_no) {
             document.getElementById('mf-is_new').value = '0';
             var midEl = document.getElementById('mf-maker_id_no');
             midEl.value = d.maker_id_no; midEl.readOnly = true; midEl.style.background = '#f5f5f5';
-            var fields = ['maker_id','maker_id_all','m_tel','m_tel2','m_fax','invoice_address','factory_address','billing_address','postal_code','tax_id','contact_person','contact_title','email','m_category','m_process_items','limit_dia','limit_len','m_note'];
+            var fields = ['maker_id','maker_id_all','m_tel','m_tel2','m_fax','m_fax2','factory_zip','billing_zip','invoice_address','factory_address','billing_address','postal_code','tax_id','contact_person','contact_title','email','m_category','m_process_items','limit_dia','limit_len','m_note'];
             fields.forEach(function(f){ var el=document.getElementById('mf-'+f); if(el) el.value=(d[f]!==null&&d[f]!==undefined)?d[f]:''; });
             document.getElementById('mf-status').value          = d.status||'';
             document.getElementById('mf-internal').checked      = (d.internal==1);
@@ -20552,6 +20629,7 @@ function openMakerModal(maker_id_no) {
             }
             // 廠商聯絡人
             loadMakerContactRows(d.contacts || []);
+            if (window.EGPartyExtra) EGPartyExtra.load('mf', d);   // 別名／更名紀錄／其他地址
             // 歷史廠商編號
             document.getElementById('mf-aliases-section').style.display = '';
             document.getElementById('mf-alias-input').value = '';
@@ -20581,6 +20659,7 @@ function openMakerModal(maker_id_no) {
         _applyMakerPaymentDefaultHints(SYS_VENDOR_DEFAULT_SETTLEMENT_MODE, SYS_VENDOR_DEFAULT_SETTLEMENT_DAY, SYS_VENDOR_DEFAULT_PAYMENT_METHOD, SYS_VENDOR_DEFAULT_NET_DAYS, 0, 0);
         // 廠商聯絡人（新增時空）
         loadMakerContactRows([]);
+        if (window.EGPartyExtra) EGPartyExtra.reset('mf');
         document.getElementById('mf-aliases-section').style.display = 'none';
         var _notice = document.getElementById('mf-old-alias-notice');
         if (_notice) _notice.style.display = 'none';
@@ -20976,6 +21055,7 @@ function submitMakerForm() {
     syncMakerContactsHidden();   // 確保 maker_contacts / contact_person 等 hidden 欄位同步
     var data = { action:'save_maker' };
     document.querySelectorAll('#makerForm input,#makerForm select,#makerForm textarea').forEach(function(el) {
+        if (!el.name) return;   // 別名／額外地址元件內的輸入框沒有 name，只送它同步好的 hidden JSON
         if (el.type==='checkbox') data[el.name] = el.checked ? 1 : 0;
         else data[el.name] = el.value;  // 包含所有 hidden fields
     });

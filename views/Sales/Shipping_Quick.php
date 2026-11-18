@@ -1047,6 +1047,7 @@ function render(){
     /* 可出 0 的原因由後端判定（無製令／無完工／製令已出完）——
        一律寫「無完工」會讓「製令明明做完了、只是被別張出貨吃掉」看起來像系統壞掉。 */
     var readyTag  = r.ready_note ? ' <span class="pill p-none">'+esc(r.ready_note)+'</span>' : '';
+    if (r.tool_hold>0) readyTag += ' <span class="pill" style="background:#F7E0BD;color:#5b3a1e;border:1px solid #D8BE93;" title="刀具詢價已到貨，已預留給這張訂單、尚未開出貨單的數量">刀具已到貨 '+nf(r.tool_hold)+'</span>';
     var descTxt   = r.desc_full || r.specification || '';
     h+='<tr data-i="'+i+'" data-oid="'+r.order_id+'" class="'+(s?'on ':'')+(r.ready_qty>0?'':'noready')+'">'
       +'<td><input type="checkbox" class="ck"'+(s?' checked':'')+'></td>'

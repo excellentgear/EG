@@ -1559,6 +1559,16 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
             $c['alias_of'] = $alias;
             $map[$alias] = $c;
         }
+        // 客戶更名歷史／手動別名（party_name_alias）：舊名稱的出貨單、ERP 匯入也要對得到同一個客戶
+        try {
+            foreach ($db->query("SELECT party_id, alias_name FROM party_name_alias WHERE party_type='customer'")->fetchAll(PDO::FETCH_ASSOC) as $pa) {
+                $alias = trim((string)$pa['alias_name']); $cid = trim((string)$pa['party_id']);
+                if ($alias === '' || isset($map[$alias]) || !isset($byId[$cid])) continue;
+                $c = $byId[$cid];
+                $c['alias_of'] = $alias;
+                $map[$alias] = $c;
+            }
+        } catch (Throwable $e) {}   // 表尚未建立時略過
     } catch (Throwable $e) {}
     return $map;
 }
