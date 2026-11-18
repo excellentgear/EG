@@ -79,6 +79,9 @@ if ($TI_PART === 'style') { ?>
 .ti-catbtn { height:30px; padding:0 14px; border:1px solid #D8BE93; border-radius:15px; background:#fff; color:#8A5A2B; font-size:13px; cursor:pointer; }
 .ti-catbtn:hover { background:#F7E0BD; } .ti-catbtn.on { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
 .ti-stage { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 12px; background:#FDF8EF; border:1px dashed #D8BE93; border-radius:6px; margin:12px 0; font-size:13px; color:#5b3a1e; }
+#paneTool .iq-toolbar { flex-wrap:nowrap; }
+#paneTool .iq-toolbar input[type=text], #paneTool .iq-toolbar select { min-width:0; flex:0 1 auto; }
+#paneTool .iq-toolbar button, #paneTool .iq-toolbar label { flex:none; white-space:nowrap; }
 .ti-opt-row { display:flex; gap:6px; align-items:center; margin:4px 0; flex-wrap:wrap; }
 .ti-opt-row input[type=text] { height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 8px; width:170px; }
 @media (max-width:760px){ .ti-row { grid-template-columns:1fr; } }
@@ -92,7 +95,7 @@ if ($TI_PART === 'pane') { ?>
         <label>狀態</label><select id="tfStatus"><option value="">全部</option><option value="waiting">等待報價</option><option value="replied">尚未下訂</option><option value="ordered">尚未到貨</option><option value="received">已到貨</option><option value="pending">到貨待處理（未入庫／出貨）</option><option value="closed">已結案</option></select>
         <input type="text" id="tfCust" placeholder="客戶" style="width:120px;" title="客戶名稱（簡稱或全名）"><input type="text" id="tfPart" placeholder="料號／圖號" style="width:140px;"><input type="text" id="tfVendor" placeholder="廠商編號／名稱" style="width:140px;"><input type="text" id="tfKw" placeholder="其他：單號／建單人／備註" style="width:180px;">
         <label>每頁</label><select id="tfPsize"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
-        <?php if (!empty($perms['canToolAdmin'])): ?><button id="tBtnSet" type="button"><i class="fa fa-cog"></i> 刀具選項設定</button><?php endif; ?>
+        <?php if (!empty($perms['canToolAdmin'])): ?><button id="tBtnSet" type="button"><i class="fa fa-cog"></i> 設定</button><?php endif; ?>
         <?php if ($perms['canCreate'] || !empty($perms['canToolAdmin'])): ?><button id="tBtnNew" type="button" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增刀具詢價</button><?php endif; ?>
     </div>
     <div id="tOverdueBar" style="display:none;"></div>
@@ -277,6 +280,9 @@ if ($TI_PART === 'modals') { ?>
 </div></div>
 
 <!-- ══ 刀具詢價：列印選擇（多家廠商時） ══ -->
+<div class="iq-mask" id="tiPartEmbed" style="z-index:9600;"><div class="iq-modal" style="max-width:1000px;">
+    <div class="m-head"><span>新增料號（主檔管理）</span><span class="m-close" id="tiPartEmbedClose">✕</span></div>
+    <div style="padding:0;"><iframe id="tiPartEmbedFrame" style="width:100%;height:80vh;border:0;display:block;"></iframe></div></div></div>
 <div class="iq-mask" id="tpMask"><div class="iq-modal" style="max-width:520px;">
     <div class="m-head"><span id="tpTitle">列印刀具詢價單</span><span class="m-close" onclick="closeMask('tpMask')">✕</span></div>
     <div class="m-body">
@@ -673,10 +679,26 @@ $('#tiPart').on('input', function(){
     var seq = ++PSEQ;
     $.getJSON(TAPI, {action:'part_search', kw:kw}, function(res){
       if (seq!==PSEQ || !res.success) return;
-      if (!res.rows.length) { showSug($i, '<div style="color:#999;cursor:default;">主檔查無此料號（必須是主檔內的料號才能儲存）</div>'); return; }
-      showSug($i, res.rows.map(function(r){ return '<div data-pid="'+r.part_id+'" data-no="'+esc(r.part_no)+'"><b>'+esc(r.part_no)+'</b><small>'+esc(r.drawing_no)+'　'+esc(r.customer||'（未綁客戶）')+'　#'+r.part_id+'</small></div>'; }).join(''));
+      var mk = '<div data-create="1" data-term="'+esc(kw)+'" style="color:#8A5A2B;font-weight:bold;border-top:1px dashed #D8BE93;">＋ 建立新料號「'+esc(kw)+'」（建立後自動綁定）</div>';
+      if (!res.rows.length) { showSug($i, '<div style="color:#999;cursor:default;">主檔查無此料號（必須是主檔內的料號才能儲存）</div>'+mk); return; }
+      showSug($i, res.rows.map(function(r){ return '<div data-pid="'+r.part_id+'" data-no="'+esc(r.part_no)+'"><b>'+esc(r.part_no)+'</b><small>'+esc(r.drawing_no)+'　'+esc(r.customer||'（未綁客戶）')+'　#'+r.part_id+'</small></div>'; }).join('') + mk);
     });
   }, 250);
+});
+/* ── 快速建立料號（內嵌主檔管理「新增料號」，比照報價單；建立完成自動綁定回本欄位） ── */
+$('#tiSug').on('click', 'div[data-create]', function(){
+  var term = String($(this).data('term')||''); hideSug();
+  $('#tiPartEmbedFrame').attr('src', '../pages/master_data_management.php?' + $.param({part_embed:1, new_part_no:term}));
+  openMask('tiPartEmbed');
+});
+function closePartEmbed(){ closeMask('tiPartEmbed'); $('#tiPartEmbedFrame').attr('src','about:blank'); }
+$('#tiPartEmbedClose').on('click', closePartEmbed);
+window.addEventListener('message', function(e){
+  if (e.origin !== location.origin) return;
+  var fr = document.getElementById('tiPartEmbedFrame');
+  if (!fr || e.source !== fr.contentWindow || !e.data) return;
+  if (e.data.type === 'eg_part_saved' && e.data.d_id) { closePartEmbed(); bindPart(parseInt(e.data.d_id,10), String(e.data.part_no||'')); }
+  else if (e.data.type === 'eg_part_cancel') { closePartEmbed(); if (e.data.reason==='noperm') alert('您沒有在主檔新增料號的權限，請請有權限的人建立後再從清單挑選'); }
 });
 $('#tiSug').on('click', 'div[data-pid]', function(){ bindPart(parseInt($(this).data('pid'),10), String($(this).data('no'))); hideSug(); });
 function unbindPart(){
@@ -1083,11 +1105,15 @@ function startPrint(id){
     $('#tpList').html(vs.map(function(v){
       return '<label class="ti-ck" style="display:flex;padding:4px 0;"><input type="checkbox" class="tpck" value="'+v.vid+'"'+(v.is_void?'':' checked')+'> '+esc(v.vendor_id_no)+' '+esc(v.vendor_name)+(v.is_void?'（不採用）':'')+'</label>';
     }).join(''));
-    openMask('tpMask');
+    openMask('tpMask'); tpSync();
   }).fail(function(){ w.close(); alert('連線失敗'); });
 }
-$('#tpAll').on('click', function(){ $('#tpList .tpck').prop('checked', true); });
-$('#tpNone').on('click', function(){ $('#tpList .tpck').prop('checked', false); });
+$('#tpAll').on('click', function(){ $('#tpList .tpck').prop('checked', true); tpSync(); });
+$('#tpNone').on('click', function(){ $('#tpList .tpck').prop('checked', false); tpSync(); });
+/* 全部勾選＝只留「全部」；有取消任何一家＝只留「勾選的」（一個都沒勾時按鈕停用） */
+function tpSync(){ var n = $('#tpList .tpck').length, c = $('#tpList .tpck:checked').length, all = n>0 && c===n;
+  $('#tpPrintAll').toggle(all); $('#tpPrintSel').toggle(!all).prop('disabled', c===0); }
+$('#tpList').on('change', '.tpck', tpSync);
 function tpModeTexts(mode){
   var pdf = mode==='pdf';
   $('#tpTitle').text(pdf ? '轉存 PDF（刀具詢價單）' : '列印刀具詢價單');
@@ -1117,7 +1143,7 @@ function startPdf(id){
     $('#tpList').html(vs.map(function(v){
       return '<label class="ti-ck" style="display:flex;padding:4px 0;"><input type="checkbox" class="tpck" value="'+v.vid+'"'+(v.is_void?'':' checked')+'> '+esc(v.vendor_id_no)+' '+esc(v.vendor_name)+(v.is_void?'（不採用）':'')+'</label>';
     }).join(''));
-    openMask('tpMask');
+    openMask('tpMask'); tpSync();
   }).fail(function(){ alert('連線失敗'); });
 }
 function tpSafe(x){   // 檔名不能用的字元（\ / : * ? " < > | 與控制字元、零寬字元）一律略過
@@ -1136,12 +1162,14 @@ function tpBusy(msg){
   $b.text(msg);
 }
 function tpSaveBlob(dir, name, blob){
-  if (dir) return dir.getFileHandle(name, {create:true}).then(function(h){ return h.createWritable(); }).then(function(w){ return w.write(blob).then(function(){ return w.close(); }); });
+  if (dir) return dir.getFileHandle(name, {create:true}).then(function(h){ return h.createWritable(); }).then(function(w){ return w.write(blob).then(function(){ return w.close(); }); })
+    .catch(function(){ return tpSaveBlob(null, name, blob); });   // 資料夾寫不進去（權限被拒等）就退回一般下載，不讓檔案白做
   var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
   setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
   return new Promise(function(r){ setTimeout(r, 600); });   // 連續下載之間留一點間隔，瀏覽器才不會擋掉後面的檔案
 }
 function exportPdfs(id, vids){
+  // 挑資料夾時 Chrome 不接受「下載」「桌面」等系統資料夾本身，請在其底下新增一個子資料夾再選
   // 網頁要「讓使用者挑資料夾」只有在 HTTPS／localhost 才有這個功能；一般 http 內網網址瀏覽器不開放，改走一般下載
   var canPick = !!(window.showDirectoryPicker && window.isSecureContext);
   var dirP = canPick ? window.showDirectoryPicker({mode:'readwrite'}).catch(function(e){ return (e && e.name==='AbortError') ? 'cancel' : null; }) : Promise.resolve(null);
