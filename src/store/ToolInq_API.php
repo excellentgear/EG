@@ -137,6 +137,21 @@ case 'alloc_stock': {   // 到貨後入庫（選儲位與數量）
     if (!$ok) jerr($msg);
     jout(true, array_merge(['message' => $msg], $x));
 }
+case 'alloc_hold': {    // 預留待出貨（貨已到、還沒開出貨單）
+    [$ok, $msg, $x] = ti_alloc_hold($db, (int)($_POST['vid'] ?? 0), (int)($_POST['order_id'] ?? 0), (int)($_POST['qty'] ?? 0), (string)($_POST['date'] ?? ''), $uid, $perm);
+    if (!$ok) jerr($msg);
+    jout(true, array_merge(['message' => $msg], $x));
+}
+case 'alloc_hold_ship': {   // 預留轉出貨
+    [$ok, $msg, $x] = ti_alloc_hold_ship($db, (int)($_POST['alloc_id'] ?? 0), (string)($_POST['date'] ?? ''), $uid, $perm);
+    if (!$ok) jerr($msg);
+    jout(true, array_merge(['message' => $msg], $x));
+}
+case 'alloc_hold_cancel': {
+    [$ok, $msg, $x] = ti_alloc_hold_cancel($db, (int)($_POST['alloc_id'] ?? 0), $perm);
+    if (!$ok) jerr($msg);
+    jout(true, array_merge(['message' => $msg], $x));
+}
 case 'ship_orders': jout(true, ['rows' => ti_ship_orders($db, (int)($_GET['vid'] ?? 0), (string)($_GET['kw'] ?? ''))]);
 case 'alloc_ship': {    // 到貨後出貨（快速出貨，綁訂單）
     [$ok, $msg, $x] = ti_alloc_ship($db, (int)($_POST['vid'] ?? 0), (int)($_POST['order_id'] ?? 0), (int)($_POST['qty'] ?? 0), (string)($_POST['date'] ?? ''), $uid, $perm);
@@ -228,12 +243,12 @@ case 'att_download': {
 /* ---- 管理員設定：選項（精度／材質／鍍層）與牙口數、槽數上限 ---- */
 case 'settings_get': {
     tiReqAdmin($perm);
-    jout(true, ['opts' => ti_opts($db, true), 'settings' => ti_settings($db), 'kinds' => ti_opt_kinds(), 'locations' => ti_loc_rows($db)]);
+    jout(true, ['opts' => ti_opts($db, true), 'settings' => ti_settings($db), 'kinds' => ti_opt_kinds(), 'locations' => ti_loc_rows($db), 'sub_types' => ti_sub_type_rows($db)]);
 }
 case 'setting_save': {
     tiReqAdmin($perm);
     $in = [];
-    foreach (['starts_max', 'slots_max', 'print_review', 'spec_hob', 'spec_shaper', 'dup_mode', 'stock_locs'] as $k) if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
+    foreach (['starts_max', 'slots_max', 'print_review', 'sub_hob', 'sub_shaper', 'dup_mode', 'stock_locs'] as $k) if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
     [$ok, $msg] = ti_settings_save($db, $in);
     if (!$ok) jerr($msg);
     jout(true);
