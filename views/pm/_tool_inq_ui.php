@@ -11,6 +11,10 @@ $TI_PART = $TI_PART ?? '';
 if ($TI_PART === 'style') { ?>
 .ti-tabs { display:flex; gap:4px; border-bottom:2px solid #E8D5B5; margin:6px 0 10px; clear:both; }
 .ti-tabs button { height:34px; padding:0 18px; border:1px solid #E8D5B5; border-bottom:none; border-radius:6px 6px 0 0; background:#FDF8EF; color:#8A5A2B; font-size:14px; cursor:pointer; margin-bottom:-2px; }
+.ti-sub { display:flex; gap:6px; margin:4px 0 8px; }
+.ti-sub button { height:30px; padding:0 16px; border:1px solid #D8BE93; border-radius:15px; background:#fff; color:#8A5A2B; font-size:13px; cursor:pointer; }
+.ti-sub button.on { background:#8A5A2B; color:#fff; border-color:#8A5A2B; font-weight:bold; }
+.ti-dl td { vertical-align:top; } .ti-dl pre { white-space:pre-wrap; word-break:break-all; font-size:11.5px; background:#FDF8EF; border:1px solid #E8D5B5; border-radius:4px; padding:6px 8px; margin:4px 0; max-height:260px; overflow:auto; }
 .ti-tabs button.on { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
 .ti-sec { border:1px solid #E8D5B5; border-radius:6px; margin:12px 0; background:#fff; }
 .ti-sec > h5 { margin:0; padding:7px 12px; background:#FBF2DE; color:#8A5A2B; font-size:14px; font-weight:bold; border-bottom:1px solid #E8D5B5; border-radius:6px 6px 0 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -89,6 +93,8 @@ if ($TI_PART === 'style') { ?>
 
 if ($TI_PART === 'pane') { ?>
 <div id="paneTool" style="display:none;">
+    <div class="ti-sub"><button type="button" data-sub="main" class="on">詢價單</button><button type="button" data-sub="dellog">刪除紀錄</button></div>
+    <div id="tMain">
     <div class="iq-toolbar">
         <label>年度</label><select id="tfYear"><option value="<?= date('Y') ?>" selected><?= date('Y') ?></option><option value="">全部</option></select>
         <label>刀種</label><select id="tfType"><option value="">全部</option><option value="shaper">鉋齒刀</option><option value="hob">滾刀</option></select>
@@ -101,6 +107,12 @@ if ($TI_PART === 'pane') { ?>
     <div id="tOverdueBar" style="display:none;"></div>
     <div class="iq-pager" id="tPager"></div>
     <div id="tList"><div style="text-align:center;color:#999;padding:20px;">載入中…</div></div>
+    </div>
+    <div id="tDelPane" style="display:none;">
+        <div class="ti-unit" style="display:block;margin:6px 0;">被刪除的刀具詢價單會保留單據內容、刪除日期時間與刪除人員。刀具詢價管理員／管理員看得到全部，其他人只看得到自己建立的單。</div>
+        <div class="iq-pager" id="tDelPager"></div>
+        <div id="tDelList"></div>
+    </div>
 </div>
 <?php return; }
 
@@ -252,6 +264,7 @@ if ($TI_PART === 'modals') { ?>
         <p><b>預留待出貨</b>：貨已到但還沒開出貨單（客戶還沒要、或您沒有出貨權限）時，可選訂單與數量先「預留待出貨」。這筆數量會顯示在詢價清單（📦到貨未處理、待出貨 N），
         也會算進<b>快速出貨「待出貨」清單</b>該訂單的可出量並標出「刀具已到貨 N」；之後不論從詢價單或快速出貨開出貨單，系統都會自動把預留扣掉。預留可以「開立出貨單」或「取消預留」。清單上方狀態選「到貨待處理」可找出還沒入庫／出貨的。</p>
         <p><b>入庫</b>：選儲位與數量，寫進庫存管理的刀具庫存（可選的儲位由刀具詢價管理員在「刀具選項設定」勾選）。<b>出貨</b>：選訂單與數量，直接用「快速出貨」開立出貨單，<b>一定要綁定訂單</b>（預設列出這支刀具料號的待出貨訂單，也可用關鍵字搜尋其他訂單）。
+        <b>刪除</b>：刀具詢價管理員／管理員可刪除任何人的單，其他人只能刪自己建立的單；按下刪除後須輸入大寫 Y 才會刪除，刪除的單據內容、刪除時間與人員會保留在上方「刪除紀錄」分頁（管理員看全部，其他人只看自己建立的單）。
         已入庫或出貨的詢價單不能刪除、也不能取消到貨；入庫或出貨的調整請到庫存管理／快速出貨處理。</p>
         <h4>狀態與篩選</h4>
         <p>狀態分為：<b>等待報價</b>（還沒有廠商回覆）→ <b>尚未下訂</b>（已報價、尚未下單）→ <b>尚未到貨</b>（已下單、貨還沒到）→ <b>已到貨</b>；多家廠商時以進度最前面的那一家為準。
@@ -428,7 +441,7 @@ function renderList(rows, total){
       + '<button class="ti-mini" data-act="print" data-id="'+r.id+'">列印</button>'
       + '<button class="ti-mini" data-act="pdf" data-id="'+r.id+'" title="每家廠商存成一個 PDF 檔（檔名＝廠商名稱_工件編號）">轉存PDF</button>'
       + '<button class="ti-mini" data-act="edit" data-id="'+r.id+'">'+(canEdit?'編輯':'檢視')+'</button>'
-      + (canEdit?'<button class="ti-mini" data-act="close" data-id="'+r.id+'" data-v="'+(r.is_closed?0:1)+'">'+(r.is_closed?'重新開啟':'結案')+'</button><button class="ti-mini" style="color:#DD5138;" data-act="del" data-id="'+r.id+'">刪除</button>':'')
+      + (canEdit?'<button class="ti-mini" data-act="close" data-id="'+r.id+'" data-v="'+(r.is_closed?0:1)+'">'+(r.is_closed?'重新開啟':'結案')+'</button>':'') + ((PERM.canToolAdmin || r.created_by===PERM.uid)?'<button class="ti-mini" style="color:#DD5138;" data-act="del" data-id="'+r.id+'">刪除</button>':'')
       + '</span></div>';
     $c.append(hd);
     if (od.length) $c.append('<div class="ti-od-note">⚠ '+od.map(function(x){ return esc(x.vendor)+' 交期 '+esc(dt(x.due))+' 已逾期 '+x.days+' 天'; }).join('；')+'　（已置頂，到貨後自動取消）</div>');
@@ -457,9 +470,38 @@ $('#tList').on('click', '[data-act]', function(){
   else if (act==='pdf') startPdf(id);
   else if (act==='vendor') openVendor(id, parseInt($(this).data('vid'),10));
   else if (act==='close') tpost('set_closed', {id:id, closed:$(this).data('v')}, function(){ loadList(T.page); });
-  else if (act==='del') { if (confirm('確定刪除這張刀具詢價單？廠商回覆與附件會一併刪除，無法復原。')) tpost('delete', {id:id}, function(){ loadList(T.page); }); }
+  else if (act==='del') {
+    var ans = prompt('確定刪除這張刀具詢價單？廠商回覆與附件會一併刪除，無法復原（會保留刪除紀錄）。' + String.fromCharCode(10,10) + '請輸入大寫 Y 確認刪除：');
+    if (ans === null) return;
+    if (ans !== 'Y') { alert('必須輸入大寫 Y 才能刪除（目前輸入：' + ans + '），已取消。'); return; }
+    tpost('delete', {id:id, confirm:'Y'}, function(){ loadList(T.page); });
+  }
 });
 $('#tBtnNew').on('click', function(){ openNew(); });
+/* ───────── 刪除紀錄（頁內分頁） ───────── */
+var DL = {page:1, pages:1};
+$('.ti-sub button').on('click', function(){
+  var sub = $(this).data('sub'); $('.ti-sub button').removeClass('on'); $(this).addClass('on');
+  $('#tMain').toggle(sub==='main'); $('#tDelPane').toggle(sub==='dellog');
+  if (sub==='dellog') loadDelLog(1); else loadList(T.page);   // 切換就重新抓最新資料
+});
+function loadDelLog(pg){
+  $('#tDelList').html('<div style="text-align:center;color:#999;padding:20px;">載入中…</div>');
+  $.getJSON(TAPI, {action:'del_log', page:pg, per:10}, function(res){
+    if (!res.success) { $('#tDelList').html('<div style="padding:16px;color:#C4442D;">'+esc(res.message||'載入失敗')+'</div>'); return; }
+    DL.page = res.page; DL.pages = res.pages;
+    $('#tDelPager').html('共 '+res.total+' 筆　<button class="ti-mini" id="dlPrev"'+(res.page<=1?' disabled':'')+'>上一頁</button> 第 '+res.page+' / '+res.pages+' 頁 <button class="ti-mini" id="dlNext"'+(res.page>=res.pages?' disabled':'')+'>下一頁</button>');
+    if (!res.rows.length) { $('#tDelList').html('<div style="text-align:center;color:#999;padding:24px;">目前沒有刪除紀錄</div>'); return; }
+    $('#tDelList').html('<table class="ti-vt ti-dl"><tr><th>刪除時間</th><th>刪除人員</th><th>詢價單號</th><th>工件編號</th><th>客戶</th><th>建單人</th><th>單據內容</th></tr>' + res.rows.map(function(x){
+      var sn = x.snapshot||{}, i = sn.inq||{}, vs = sn.vendors||[];
+      var vt = vs.length ? '<table class="ti-vt"><tr><th>廠商</th><th>單價</th><th>下訂日</th><th>到貨日</th></tr>' + vs.map(function(v){ return '<tr><td>'+esc(v.vendor_id_no)+' '+esc(v.vendor_name)+'</td><td>'+esc(v.unit_price==null?'':v.unit_price)+'</td><td>'+esc(dt(v.order_date))+'</td><td>'+esc(dt(v.recv_date))+'</td></tr>'; }).join('') + '</table>' : '（無廠商）';
+      var raw = JSON.stringify({詢價單:i, 附件:sn.attach||[]}, null, 1);
+      return '<tr><td>'+esc(x.deleted_at)+'</td><td>'+esc(x.deleted_by_name)+'</td><td><b>'+esc(x.inq_no)+'</b></td><td>'+esc(x.part_no)+'</td><td>'+esc(x.customer)+'</td><td>'+esc(x.created_by_name)+'</td>'
+        + '<td><details><summary style="cursor:pointer;color:#8A5A2B;">查看內容（詢價日 '+esc(dt(i.inq_date))+'、需求 '+esc(i.qty==null?'':i.qty)+' 支、'+vs.length+' 家廠商）</summary>'+vt+'<pre>'+esc(raw)+'</pre></details></td></tr>';
+    }).join('') + '</table>');
+  });
+}
+$('#tDelPager').on('click', '#dlPrev', function(){ loadDelLog(DL.page-1); }).on('click', '#dlNext', function(){ loadDelLog(DL.page+1); });
 
 /* ───────── 計算（沿用齒輪計算工具同一套公式；外齒／內齒） ───────── */
 function inv(a){ return Math.tan(a)-a; }
@@ -1172,10 +1214,13 @@ function exportPdfs(id, vids){
   // 挑資料夾時 Chrome 不接受「下載」「桌面」等系統資料夾本身，請在其底下新增一個子資料夾再選
   // 網頁要「讓使用者挑資料夾」只有在 HTTPS／localhost 才有這個功能；一般 http 內網網址瀏覽器不開放，改走一般下載
   var canPick = !!(window.showDirectoryPicker && window.isSecureContext);
-  var dirP = canPick ? window.showDirectoryPicker({mode:'readwrite'}).catch(function(e){ return (e && e.name==='AbortError') ? 'cancel' : null; }) : Promise.resolve(null);
+  var dirP = canPick ? window.showDirectoryPicker({mode:'readwrite', id:'tiqpdf'}).catch(function(e){ return (e && e.name==='AbortError') ? 'cancel' : null; }) : Promise.resolve(null);
   tpBusy('準備中…');
   dirP.then(function(dir){
-    if (dir === 'cancel') { tpBusy(''); return; }
+    if (dir === 'cancel') {   // 沒選資料夾（或選到被瀏覽器拒絕的系統資料夾而取消）：問要不要改用一般下載，不直接中斷
+      if (!confirm('未選擇存放資料夾。' + String.fromCharCode(10,10) + '要改用瀏覽器一般下載（存到下載資料夾）嗎？' + String.fromCharCode(10,10) + '（若要自己挑位置：請先在「下載」「桌面」「文件」底下新增一個子資料夾，再選那個子資料夾；Chrome 不接受系統資料夾本身。）')) { tpBusy(''); return; }
+      dir = null;
+    }
     $.getJSON(TAPI, {action:'print_data', id:id, vids:vids.join(',')}).done(function(res){
       if (!res.success) { tpBusy(''); alert(res.message||'取得列印資料失敗'); return; }
       var vs = res.vendors.length ? res.vendors : [null], used = {}, saved = [], failed = [], i = 0;

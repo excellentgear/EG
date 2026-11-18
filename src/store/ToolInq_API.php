@@ -60,7 +60,7 @@ case 'list': {
 case 'get': {
     $i = ti_get($db, (int)($_GET['id'] ?? 0));
     if (!$i) jerr('查無此詢價單');
-    $i['can_edit'] = ti_can_edit($perm, $i);
+    $i['can_edit'] = ti_can_edit($perm, $i); $i['can_delete'] = ti_can_delete($perm, $i);
     jout(true, ['inq' => $i]);
 }
 
@@ -177,10 +177,11 @@ case 'set_closed': {
 }
 
 case 'delete': {
-    [$ok, $msg] = ti_delete($db, (int)($_POST['id'] ?? 0), $perm);
+    [$ok, $msg] = ti_delete($db, (int)($_POST['id'] ?? 0), $perm, (string)($_POST['confirm'] ?? ''));
     if (!$ok) jerr($msg);
     jout(true);
 }
+case 'del_log': jout(true, ti_del_log_list($db, $perm, (int)($_GET['page'] ?? 1), (int)($_GET['per'] ?? 10)));
 
 /* ---- 附件（鐵律5：DB 只存檔名，路徑讀取當下現場組；類別必選，後端同規則再擋） ---- */
 case 'att_list': {

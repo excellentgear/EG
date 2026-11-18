@@ -243,6 +243,10 @@ function ti_opt_delete(PDO $db, int $optId): array {
 }
 
 /* ═══════════════ 權限 ═══════════════ */
+/** 刪除：刀具詢價管理員／管理員可刪任一人的單，其他人只能刪自己建立的 */
+function ti_can_delete(array $perm, array $inq): bool {
+    return !empty($perm['canToolAdmin']) || ((int)($inq['created_by'] ?? 0) > 0 && (int)$inq['created_by'] === (int)($perm['uid'] ?? -1));
+}
 function ti_can_edit(array $perm, array $inq): bool {
     if (!empty($perm['canToolAdmin'])) return true;
     if ((int)($inq['created_by'] ?? 0) === (int)$perm['uid']) return true;
@@ -1270,19 +1274,45 @@ function ti_pdf_render(string $html, string $css, ?string &$err = null): ?string
     return (substr($bin, 0, 4) === '%PDF') ? $bin : null;
 }
 
-function ti_delete(PDO $db, int $id, array $perm): array {
+function ti_del_log_ensure(PDO $db): void {
+    $db->exec("CREATE TABLE IF NOT EXISTS tool_inq_del_log (
+        del_id INT AUTO_INCREMENT PRIMARY KEY, inq_id INT NOT NULL, inq_no VARCHAR(30) NOT NULL, part_no VARCHAR(100) NULL, customer VARCHAR(100) NULL,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL, snapshot_json LONGTEXT NULL COMMENT '刪除當下的單據內容（詢價單、廠商回覆、附件檔名）',
+        deleted_at DATETIME NOT NULL, deleted_by INT NOT NULL, deleted_by_name VARCHAR(50) NULL, KEY idx_at (deleted_at), KEY idx_cb (created_by)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刀具詢價刪除紀錄'");
+}
+/** 刪除紀錄清單：管理員看全部，其他人只看自己建立的單被刪的紀錄 */
+function ti_del_log_list(PDO $db, array $perm, int $page, int $per): array {
+    ti_del_log_ensure($db);
+    $w = !empty($perm['canToolAdmin']) ? '' : ' WHERE created_by=' . (int)$perm['uid'];
+    $total = (int)$db->query("SELECT COUNT(*) FROM tool_inq_del_log" . $w)->fetchColumn();
+    $per = max(5, min(50, $per)); $pages = max(1, (int)ceil($total / $per)); $page = max(1, min($pages, $page));
+    $rows = $db->query("SELECT * FROM tool_inq_del_log" . $w . " ORDER BY deleted_at DESC, del_id DESC LIMIT " . (($page - 1) * $per) . "," . $per)->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$x) { $x['snapshot'] = json_decode((string)$x['snapshot_json'], true) ?: []; unset($x['snapshot_json']); }
+    return ['rows' => $rows, 'total' => $total, 'page' => $page, 'pages' => $pages];
+}
+function ti_delete(PDO $db, int $id, array $perm, string $confirm = ''): array {
     $st = $db->prepare("SELECT * FROM tool_inq WHERE id=?"); $st->execute([$id]);
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return [false, '查無此詢價單'];
-    if (!ti_can_edit($perm, $r)) return [false, '您沒有刪除這張詢價單的權限'];
+    if (!ti_can_delete($perm, $r)) return [false, '您沒有刪除這張詢價單的權限（只有刀具詢價管理員／管理員可刪他人的單，其他人只能刪自己建立的單）'];
+    if ($confirm !== 'Y') return [false, '請輸入大寫 Y 確認刪除'];
     $o = $db->prepare("SELECT COUNT(*) FROM tool_inq_vendor WHERE inq_id=? AND order_date IS NOT NULL"); $o->execute([$id]);
     if ((int)$o->fetchColumn() > 0 && empty($perm['canToolAdmin'])) return [false, '已有廠商下訂，只有管理員可以刪除（避免訂單紀錄憑空消失）'];
     $al = $db->prepare("SELECT COUNT(*) FROM tool_inq_alloc WHERE vid IN (SELECT vid FROM tool_inq_vendor WHERE inq_id=?)"); $al->execute([$id]);
     if ((int)$al->fetchColumn() > 0) return [false, '已有入庫／出貨紀錄，不能刪除這張詢價單（庫存與出貨單會對不上）；請改用「結案」'];
     $files = $db->prepare("SELECT file_name FROM tool_inq_attach WHERE inq_id=?"); $files->execute([$id]);
     $names = $files->fetchAll(PDO::FETCH_COLUMN);
+    ti_del_log_ensure($db);   // DDL 一律在交易之外
+    $vs = $db->prepare("SELECT * FROM tool_inq_vendor WHERE inq_id=?"); $vs->execute([$id]);
+    $snap = ['inq' => $r, 'vendors' => $vs->fetchAll(PDO::FETCH_ASSOC), 'attach' => $names];
+    $pn = $db->prepare("SELECT COALESCE(d.D_Setting_Id,i.part_no_text) pn, COALESCE(c.customer,i.customer_text,'') cu FROM tool_inq i LEFT JOIN d_setting d ON d.d_id=i.part_id LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE i.id=?"); $pn->execute([$id]);
+    $pi = $pn->fetch(PDO::FETCH_ASSOC) ?: ['pn' => '', 'cu' => ''];
+    $cb = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $cb->execute([(int)$r['created_by']]); $cbn = (string)($cb->fetchColumn() ?: '');
     $db->beginTransaction();
     try {
+        $db->prepare("INSERT INTO tool_inq_del_log (inq_id, inq_no, part_no, customer, created_by, created_by_name, snapshot_json, deleted_at, deleted_by, deleted_by_name) VALUES (?,?,?,?,?,?,?,NOW(),?,?)")
+           ->execute([$id, $r['inq_no'], $pi['pn'], $pi['cu'], (int)$r['created_by'] ?: null, $cbn, json_encode($snap, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR), (int)$perm['uid'], (string)($perm['name'] ?? '')]);
         $db->prepare("DELETE FROM tool_inq_attach WHERE inq_id=?")->execute([$id]);
         $db->prepare("DELETE FROM tool_inq_vendor WHERE inq_id=?")->execute([$id]);
         $db->prepare("DELETE FROM tool_inq WHERE id=?")->execute([$id]);
