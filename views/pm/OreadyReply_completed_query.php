@@ -2061,7 +2061,7 @@ try {
         .ocq-toolbar select, .ocq-toolbar input[type=text], .ocq-toolbar input[type=date], .ocq-toolbar button {
             height: 30px; font-size: 13px; line-height: 1; padding: 0 8px; border: 1px solid #D8BE93;
             border-radius: 4px; background: #fff; color: #5b3a1e; }
-        .ocq-toolbar button { cursor: pointer; }
+        .ocq-toolbar button { cursor: pointer; white-space: nowrap; flex: 0 0 auto; }
         .ocq-toolbar button:hover { background: #F7E0BD; }
         .ocq-toolbar .btn-warm { background: #F0A24B; color: #fff; border-color: #d98a33; }
         .ocq-toolbar .btn-warm:hover { background: #d98a33; }
