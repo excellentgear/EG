@@ -113,6 +113,8 @@ function ti_ensure_schema(PDO $db): void {
         $db->exec("CREATE TABLE tool_inq_setting (skey VARCHAR(40) PRIMARY KEY, sval VARCHAR(100) NULL)
                    ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刀具詢價設定'");
     }
+    // 角色「刀具詢價管理員」（顯示在使用者權限設定頁的詢價單區塊）：只能改刀具詢價的設定，不能改一般詢價的設定
+    $db->exec("INSERT IGNORE INTO roles (role_code, role_name, module, is_system, note) VALUES ('tool_inquiry_admin','刀具詢價管理員','inquiry',0,'可更改刀具詢價的設定（選項、牙口數槽數上限、列印審核欄），不可更改一般詢價的設定')");
     if ($seedOpt) {   // 種子取自業務現行紙本（精度手寫 AA／A／B、材質 P5、鍍層「照工件需求」），管理員可再增修
         $ins = $db->prepare("INSERT IGNORE INTO tool_inq_opt (kind,name,sort_order) VALUES (?,?,?)");
         foreach ([['accuracy','AA',1],['accuracy','A',2],['accuracy','B',3],['material','P5',1],['coating','照工件需求',1]] as $r) $ins->execute($r);
@@ -186,7 +188,7 @@ function ti_opt_delete(PDO $db, int $optId): array {
 
 /* ═══════════════ 權限 ═══════════════ */
 function ti_can_edit(array $perm, array $inq): bool {
-    if (!empty($perm['canAdmin'])) return true;
+    if (!empty($perm['canToolAdmin'])) return true;
     if ((int)($inq['created_by'] ?? 0) === (int)$perm['uid']) return true;
     return in_array('sales', $perm['myDepts'] ?? [], true);   // 業務同事可互相接手
 }
@@ -544,7 +546,7 @@ function ti_save(PDO $db, array $P, array $perm, int $uid, string $uname): array
         $old = $st->fetch(PDO::FETCH_ASSOC);
         if (!$old) return [false, '查無此詢價單', 0];
         if (!ti_can_edit($perm, $old)) return [false, '您沒有編輯這張詢價單的權限', 0];
-    } elseif (empty($perm['canCreate'])) return [false, '您沒有新增詢價單的權限', 0];
+    } elseif (empty($perm['canCreate']) && empty($perm['canToolAdmin'])) return [false, '您沒有新增詢價單的權限', 0];
 
     $partId = (int)($P['part_id'] ?? 0);
     $partText = mb_substr(trim((string)($P['part_no_text'] ?? '')), 0, 100);
@@ -672,7 +674,7 @@ function ti_delete(PDO $db, int $id, array $perm): array {
     if (!$r) return [false, '查無此詢價單'];
     if (!ti_can_edit($perm, $r)) return [false, '您沒有刪除這張詢價單的權限'];
     $o = $db->prepare("SELECT COUNT(*) FROM tool_inq_vendor WHERE inq_id=? AND order_date IS NOT NULL"); $o->execute([$id]);
-    if ((int)$o->fetchColumn() > 0 && empty($perm['canAdmin'])) return [false, '已有廠商下訂，只有管理員可以刪除（避免訂單紀錄憑空消失）'];
+    if ((int)$o->fetchColumn() > 0 && empty($perm['canToolAdmin'])) return [false, '已有廠商下訂，只有管理員可以刪除（避免訂單紀錄憑空消失）'];
     $files = $db->prepare("SELECT file_name FROM tool_inq_attach WHERE inq_id=?"); $files->execute([$id]);
     $names = $files->fetchAll(PDO::FETCH_COLUMN);
     $db->beginTransaction();

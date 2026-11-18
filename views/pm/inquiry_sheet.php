@@ -20,7 +20,7 @@ $uid = (int)($_SESSION['id'] ?? 0);
 $perms = inq_perms($db, $uid);
 if (empty($_SESSION['inq_csrf'])) $_SESSION['inq_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['inq_csrf'];
-$roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單管理員' : ($perms['canCreate'] ? '可建立詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : ($perms['canView'] ? '檢視' : '無權限')));
+$roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單管理員' : (!empty($perms['canToolAdmin']) ? '刀具詢價管理員' : ($perms['canCreate'] ? '可建立詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : ($perms['canView'] ? '檢視' : '無權限'))));
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -211,8 +211,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">詢價單
                 <small style="color:#8a6d45;" id="hdrAsDocNo">3-OB-01-05　業務／生管／採購共用</small></h2>
-            <?php if ($perms['canAdmin']): ?><button id="btnSettings" class="page-set-btn" style="margin-left:auto;"><i class="fa fa-cog"></i> 模組設定</button><?php endif; ?>
-            <button id="btnPageHelp" class="page-help-btn" style="<?= $perms['canAdmin'] ? '' : 'margin-left:auto;' ?>"><i class="fa fa-question-circle"></i> 使用說明</button>
+            <span style="margin-left:auto;display:flex;align-items:center;">
+            <?php if ($perms['canAdmin']): ?><button id="btnSettings" class="page-set-btn"><i class="fa fa-cog"></i> 模組設定</button><?php endif; ?>
+            <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
+            </span>
         </div>
         <div class="clearfix"></div>
 
@@ -462,25 +464,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <h4>列印</h4>
         <p>每張子單可以單獨列印，也可以在詢價案列表按「列印全部」把這個詢價案展開的所有子單一次印出（各佔一頁）。
         列印版會動態帶出公司全名、地址、電話、傳真，右下角印綁定的 AS 文件編號（依詢價日期回推版次）。</p>
-        <h4>刀具詢價（頁內「刀具詢價」分頁）</h4>
-        <p>業務專用的刀具詢價格式：工件規格（外齒／內齒、模數、壓力角、齒數、螺旋角…）＋刀具（<b>鉋齒刀或滾刀擇一</b>）＋特殊修整要求，皆為選填，只有「料號」要綁定或填寫。</p>
-        <p><b>綁定料號</b>：在「工件編號」輸入料號或圖號並從清單挑選＝綁定，<b>客戶自動帶入</b>（客戶只認料號主檔，不另存）。料號有齒輪規格就自動帶入模數／壓力角／齒數／螺旋角／齒寬；
-        綁到刀具料號（主檔管理「刀具規格設定」）會自動帶入刀種、外徑、長度、內徑、牙口數、材質、塗層。帶入後都可以手動修改；手動改料號文字會自動解除綁定。</p>
-        <p><b>自動計算欄位</b>：齒頂徑、齒底徑、全齒深、跨齒厚／跨齒數、跨銷值／跨銷徑，依模數、壓力角、齒數、螺旋角、轉位係數 x 即時算出（公式與齒輪計算工具相同，外齒與內齒不同）。
-        每一列可勾<b>已確認</b>（鎖住目前數值）、勾<b>標準</b>（印成「標準」），或直接改數字＝人工修改；按「↺ 自動」回到自動計算。齒面寬同樣可確認或手改。螺旋角可選十進位或度分秒，切換時自動換算。</p>
-        <p><b>廠商與進度</b>：輸入廠商編號或名稱模糊搜尋後點選，可加多家。廠商回覆後按該廠商那一列的「回覆／下單」，依序處理：
-        <b>① 回覆內容</b>（回覆日預設今天、單價、交期天數可選「上班日」或「日曆日」，上傳<b>廠商報價單／刀圖</b>附件，附件類別用按鈕選擇且必選）→
-        <b>② 下訂</b>（按「下訂」才展開下訂日、交期與提醒天數，交期會依下訂日＋交期天數自動算出）→
-        <b>③ 已到貨</b>（按「已到貨」自動記錄今天為到貨日）。「不採用這家廠商」只是標記，紀錄保留但不計入進度、不再提醒。</p>
-        <p><b>狀態</b>：等待報價（還沒有廠商回覆）→ 尚未下訂（已報價、尚未下單）→ 尚未到貨（已下單、貨還沒到）→ 已到貨；多家廠商時以進度最前面的那一家為準，清單上方可依狀態篩選。
-        客戶、料號、廠商與其他關鍵字（單號／建單人／備註）是各自獨立的篩選欄位，可同時使用。</p>
-        <p><b>交期逾期</b>：交期已過、尚未到貨的詢價單會<b>自動置頂並標紅</b>，並發出通知（建單人＋其單位主管，站內通知／推播／Telegram）；按「已到貨」或結案後自動取消置頂。
-        另可設定「交期前 N 天」提前提醒一次。</p>
-        <p><b>列印</b>：每張詢價單可列印，<b>一家廠商一頁</b>，頁首帶該廠商的聯絡人、電話、傳真；給廠商的版本不印客戶名稱。廠商有多家時會先讓您選擇「全部列印」或勾選要印的廠商。
-        列印版有公司抬頭、頁尾右下角的 AS 文件編號（沿用詢價單綁定、依詢價日回推版次），並留列印紀錄。</p>
-        <p><b>管理員</b>：按「刀具選項設定」維護精度、材質、鍍層選項（已被詢價單選用的選項不可刪除但可改名），並設定牙口數、槽數的上限（需大於 0 且小於上限）。</p>
         <h4>權限</h4>
-        <p>業務／生管／採購部門的人員可以建立並編輯自己部門的詢價案；管理員可以設定 AS 文件綁定與各部門使用規則，並可編輯任何詢價案。</p>
+        <p>業務／生管／採購部門的人員可以建立並編輯自己部門的詢價案；管理員可以設定 AS 文件綁定與各部門使用規則，並可編輯任何詢價案。<b>「刀具詢價管理員」只能更改「刀具詢價」分頁的設定，不能更改本分頁（一般詢價）的設定。</b>刀具詢價的用法請切到「刀具詢價」分頁再按「使用說明」。</p>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>

@@ -81,8 +81,15 @@ if ($TI_PART === 'pane') { ?>
         <label>狀態</label><select id="tfStatus"><option value="">全部</option><option value="waiting">等待報價</option><option value="replied">尚未下訂</option><option value="ordered">尚未到貨</option><option value="received">已到貨</option><option value="closed">已結案</option></select>
         <input type="text" id="tfCust" placeholder="客戶" style="width:120px;" title="客戶名稱（簡稱或全名）"><input type="text" id="tfPart" placeholder="料號／圖號" style="width:140px;"><input type="text" id="tfVendor" placeholder="廠商編號／名稱" style="width:140px;"><input type="text" id="tfKw" placeholder="其他：單號／建單人／備註" style="width:180px;">
         <label>每頁</label><select id="tfPsize"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
-        <?php if ($perms['canAdmin']): ?><button id="tBtnSet" type="button"><i class="fa fa-cog"></i> 刀具選項設定</button><?php endif; ?>
-        <?php if ($perms['canCreate']): ?><button id="tBtnNew" type="button" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增刀具詢價</button><?php endif; ?>
+        <?php if (!empty($perms['canToolAdmin'])): ?><button id="tBtnSet" type="button"><i class="fa fa-cog"></i> 刀具選項設定</button><?php endif; ?>
+        <?php if ($perms['canCreate'] || !empty($perms['canToolAdmin'])): ?><button id="tBtnNew" type="button" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增刀具詢價</button><?php endif; ?>
+        <?php
+        $__tRole = !empty($perms['isAdmin']) ? '管理者（可設定刀具詢價）'
+            : (!empty($perms['canAdmin']) ? '詢價單管理員（含刀具詢價設定）'
+            : (!empty($perms['canToolAdmin']) ? '刀具詢價管理員（可設定刀具詢價）'
+            : (!empty($perms['canCreate']) ? '可建立刀具詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : '檢視')));
+        ?>
+        <span class="iq-role" title="目前使用者在刀具詢價的角色"<?= ($perms['canCreate'] || !empty($perms['canToolAdmin'])) ? '' : ' style="margin-left:auto;"' ?>><?= htmlspecialchars((string)($perms['name'] ?? '')) ?>　<?= htmlspecialchars($__tRole) ?></span>
     </div>
     <div id="tOverdueBar" style="display:none;"></div>
     <div class="iq-pager" id="tPager"></div>
@@ -185,6 +192,43 @@ if ($TI_PART === 'modals') { ?>
     <div class="m-body" id="tsBody" style="max-height:74vh;"></div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('tsMask')">關閉</button></div>
 </div></div>
+<!-- ══ 刀具詢價：使用說明（與一般詢價的說明分開；右上角「使用說明」依目前分頁開對應的視窗） ══ -->
+<div class="iq-mask" id="helpToolMask"><div class="iq-modal">
+    <div class="m-head"><span>使用說明　刀具詢價</span><span class="m-close" onclick="closeMask('helpToolMask')">✕</span></div>
+    <div class="m-body help-doc">
+        <h4>功能說明</h4>
+        <p>業務專用的刀具詢價單：記錄要詢價的刀具（<b>鉋齒刀或滾刀</b>）與工件規格，一次可問多家廠商，廠商回覆後回填單價、報價單與刀圖，再記錄下訂、交期與到貨。
+        除了「料號」外所有欄位都是選填。</p>
+        <h4>建立刀具詢價</h4>
+        <p><b>綁定料號</b>：在「工件編號」輸入料號或圖號並從清單挑選＝綁定，<b>客戶自動帶入</b>（客戶只認料號主檔，不另存；手動改料號文字會自動解除綁定）。
+        料號有齒輪規格就自動帶入模數／壓力角／齒數／螺旋角／齒寬；綁到<b>刀具料號</b>（主檔管理「刀具規格設定」）會自動帶入刀種、外徑、長度、內徑、牙口數、材質、塗層。帶入後都可以手動修改。</p>
+        <p><b>工件規格</b>：外齒／內齒擇一；模數可選 M、CP、DP；螺旋角可選十進位或度分秒（切換時自動換算，未填＝0）。</p>
+        <p><b>自動計算欄位</b>：齒頂徑、齒底徑、全齒深、跨齒厚／跨齒數、跨銷值／跨銷徑，依模數、壓力角、齒數、螺旋角、轉位係數 x 即時算出（公式與齒輪計算工具相同；外齒與內齒不同）。
+        跨齒厚與跨銷<b>擇一</b>（外齒預設跨齒厚、內齒預設跨銷）。每一列可勾<b>已確認</b>（鎖住目前數值）、勾<b>標準</b>（印成「標準」），或直接改數字＝人工修改（自動視為已確認）；按「↺ 自動」放棄修改、回到自動計算。齒面寬同樣可確認或手改。</p>
+        <p><b>刀具</b>：鉋齒刀或滾刀擇一，齒型六種擇一。滾刀有槽數、牙口數（未填＝1）、左右旋（不選＝無）；牙口數、槽數只能填正整數，且需大於 0、小於管理員設定的上限。精度、材質、鍍層由管理員維護選項。</p>
+        <p><b>附件</b>：圖面、規格書、刀圖等可在新增時直接上傳；每份附件必須先用按鈕選類別。</p>
+        <h4>廠商與進度</h4>
+        <p>輸入廠商編號或名稱模糊搜尋後點選，可加多家。廠商回覆後按該廠商那一列的「回覆／下單」，依序處理：
+        <b>① 廠商回覆內容</b>（回覆日預設今天、單價、交期天數可選「上班日」或「日曆日」，上傳<b>廠商報價單／刀圖</b>）→
+        <b>② 下訂</b>（按「下訂」才展開下訂日、交期與提醒天數；交期依下訂日＋交期天數自動算出）→
+        <b>③ 已到貨</b>（按「已到貨」自動記錄今天為到貨日）。「不採用這家廠商」只是標記：紀錄保留，但不計入進度、也不再提醒；已經回覆或有附件的廠商不能直接從名單移除，要用這個標記。</p>
+        <h4>狀態與篩選</h4>
+        <p>狀態分為：<b>等待報價</b>（還沒有廠商回覆）→ <b>尚未下訂</b>（已報價、尚未下單）→ <b>尚未到貨</b>（已下單、貨還沒到）→ <b>已到貨</b>；多家廠商時以進度最前面的那一家為準。
+        清單可依狀態、刀種、年度篩選；客戶、料號、廠商與其他關鍵字（單號／建單人／備註）是各自獨立的篩選欄位，可同時使用。</p>
+        <h4>交期逾期與提醒</h4>
+        <p>可設定「交期前 N 天」提前提醒一次。<b>交期已過仍未到貨</b>的詢價單會<b>自動置頂並標紅</b>，清單上方也有提示列，並發出通知（建單人＋其單位主管：站內通知、推播、Telegram）；
+        按「已到貨」或結案後自動取消置頂。</p>
+        <h4>列印</h4>
+        <p>每張詢價單按「列印」，<b>一家廠商一頁</b>，頁首帶該廠商的聯絡人、電話、傳真；給廠商的版本不印客戶名稱。廠商有多家時，會先讓您選擇「全部列印」或勾選要印的廠商。
+        列印版有公司抬頭、頁尾右下角的 AS 文件編號（沿用詢價單綁定、依詢價日回推版次），並留列印紀錄；「審核」欄預設隱藏，可由管理員設定是否顯示。</p>
+        <h4>設定（刀具詢價管理員）</h4>
+        <p>按「刀具選項設定」可維護精度、材質、鍍層選項（<b>已被詢價單選用的選項不可刪除，但可以改名或停用</b>），設定牙口數、槽數的上限，以及列印是否顯示「審核」欄。</p>
+        <h4>權限與角色</h4>
+        <p>工具列右側會顯示您目前的角色。業務（以及生管、採購）可以建立並編輯刀具詢價；<b>刀具詢價管理員</b>可以編輯所有刀具詢價單並更改上述刀具詢價設定，<b>但不能更改一般詢價的設定</b>（AS 文件綁定、各部門使用規則、單號前綴等）；詢價單管理員與系統管理者兩邊都可以。</p>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('helpToolMask')">我知道了</button></div>
+</div></div>
+
 <!-- ══ 刀具詢價：列印選擇（多家廠商時） ══ -->
 <div class="iq-mask" id="tpMask"><div class="iq-modal" style="max-width:520px;">
     <div class="m-head"><span>列印刀具詢價單</span><span class="m-close" onclick="closeMask('tpMask')">✕</span></div>
@@ -203,6 +247,7 @@ if ($TI_PART === 'script') { ?>
 <script>
 (function(){
 var TAPI = '../../src/store/ToolInq_API.php';
+var CUR_TAB = 'gen';
 var T = { init:null, page:1, pages:1, loaded:false, cur:null, tempKey:'', vendors:[], partId:0, gears:[], fwAuto:null, canEdit:true, vcur:null };
 var PI = Math.PI;
 var CALC = {}, CALC_DEF = {
@@ -230,12 +275,14 @@ function dt(v){ return v ? egFmtDate(v) : ''; }
 
 /* ───────── 分頁切換 ───────── */
 function showTab(tab){
+  CUR_TAB = tab;
   $('.ti-tabs button').removeClass('on').filter('[data-tab="'+tab+'"]').addClass('on');
   $('#paneGen').toggle(tab==='gen'); $('#paneTool').toggle(tab==='tool'); $('#btnSettings').toggle(tab==='gen');
   try { history.replaceState(null,'',location.pathname+(tab==='tool'?'?tab=tool':'')); } catch(e){}
   if (tab==='tool' && !T.loaded) { T.loaded = true; tget('init', {}, function(r){ T.init = r; fillYears(r.years); loadList(1); deepLink(); }); }
 }
 $('.ti-tabs button').on('click', function(){ showTab($(this).data('tab')); });
+$('#btnPageHelp').off('click').on('click', function(){ openMask(CUR_TAB==='tool' ? 'helpToolMask' : 'helpUseMask'); });   // 兩個分頁各有自己的使用說明
 function fillYears(ys){
   var $s = $('#tfYear'), cur = $s.val(); $s.empty();
   var thisY = String(new Date().getFullYear()), set = {}; set[thisY] = 1; (ys||[]).forEach(function(y){ set[y]=1; });
@@ -283,7 +330,7 @@ function renderList(rows, total){
   var $l = $('#tList').empty();
   if (!rows.length) { $l.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的刀具詢價單</div>'); return; }
   rows.forEach(function(r){
-    var canEdit = PERM.canAdmin || r.created_by===PERM.uid || (PERM.myDepts||[]).indexOf('sales')>=0;
+    var canEdit = PERM.canToolAdmin || r.created_by===PERM.uid || (PERM.myDepts||[]).indexOf('sales')>=0;
     var od = (r.overdue||[]); var $c = $('<div class="ti-card'+(od.length?' overdue':'')+'"></div>');
     var hd = '<div class="ti-card-hd"><div><span class="no">'+esc(r.inq_no)+'</span><span class="dt">'+esc(dt(r.inq_date))+'</span></div>'
       + '<div><span class="part">'+esc(r.part_no)+'</span><br><span class="cust">'+esc(r.customer||'（未填客戶）')+'</span></div>'

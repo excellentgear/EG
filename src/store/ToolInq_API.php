@@ -33,7 +33,7 @@ if (isset($_POST['action'])) {
     if (empty($_SESSION['inq_csrf']) || !hash_equals((string)$_SESSION['inq_csrf'], $tok)) jerr('連線憑證失效，請重新整理頁面後再試 (CSRF)', 'CSRF');
 }
 function tiJson($k) { $v = json_decode((string)($_POST[$k] ?? ''), true); return is_array($v) ? $v : []; }
-function tiReqAdmin($perm) { if (empty($perm['canAdmin'])) jerr('只有詢價單管理員可以設定', '', 403); }
+function tiReqAdmin($perm) { if (empty($perm['canToolAdmin'])) jerr('只有刀具詢價管理員（或詢價單管理員）可以設定', '', 403); }
 /** 附件權限：詢價單還在時＝能編輯該單的人；暫存中＝上傳者或管理員 */
 function tiAttCanEdit(PDO $db, array $a, array $perm, int $uid): bool {
     if ((int)$a['inq_id'] > 0) {
@@ -41,7 +41,7 @@ function tiAttCanEdit(PDO $db, array $a, array $perm, int $uid): bool {
         $i = $st->fetch(PDO::FETCH_ASSOC);
         return $i && ti_can_edit($perm, $i);
     }
-    return (int)$a['uploaded_by'] === $uid || !empty($perm['canAdmin']);
+    return (int)$a['uploaded_by'] === $uid || !empty($perm['canToolAdmin']);
 }
 
 switch ($action) {
@@ -195,7 +195,7 @@ case 'att_download': {
     $st = $db->prepare("SELECT * FROM tool_inq_attach WHERE att_id=?"); $st->execute([(int)($_GET['att_id'] ?? 0)]);
     $a = $st->fetch(PDO::FETCH_ASSOC);
     if (!$a) jerr('查無此附件');
-    if ((int)$a['inq_id'] <= 0 && (int)$a['uploaded_by'] !== $uid && empty($perm['canAdmin'])) jerr('無權下載此附件', '', 403);
+    if ((int)$a['inq_id'] <= 0 && (int)$a['uploaded_by'] !== $uid && empty($perm['canToolAdmin'])) jerr('無權下載此附件', '', 403);
     $path = ti_attach_dir($db) . basename((string)$a['file_name']);   // 鐵律5：路徑現場組
     if (!is_file($path)) jerr('檔案不存在（可能已被移除或 NAS 未連線）', '', 404);
     header('Content-Type: ' . ($a['mime'] ?: 'application/octet-stream'));

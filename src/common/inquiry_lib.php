@@ -208,7 +208,7 @@ function inq_user_dept_keys(PDO $db, int $uid): array {
 }
 
 function inq_perms(PDO $db, int $uid): array {
-    $none = ['uid'=>0,'name'=>'','isAdmin'=>false,'canAdmin'=>false,'canCreate'=>false,'canView'=>false,'myDepts'=>[]];
+    $none = ['uid'=>0,'name'=>'','isAdmin'=>false,'canAdmin'=>false,'canToolAdmin'=>false,'canCreate'=>false,'canView'=>false,'myDepts'=>[]];
     if ($uid <= 0) return $none;
     $st = $db->prepare("SELECT id, user_cname, user_uname, state, user_status FROM `user` WHERE id=?");
     $st->execute([$uid]);
@@ -231,10 +231,13 @@ function inq_perms(PDO $db, int $uid): array {
     // 管理員（含全站管理者）不受此限制，一律可新增任何部門身分的詢價單——使用者明確要求，
     // 避免管理員帳號本身不在這三個部門時完全無法測試/補登。
     $canCreate = $canAdmin || !empty($myDepts);
-    $canView   = $canCreate || $has(['inquiry_view']);
+    // 刀具詢價管理員：只管「刀具詢價」的設定（選項、牙口數／槽數上限、列印審核欄）與所有刀具詢價單；
+    // 一般詢價的設定仍只有 canAdmin（詢價單管理員／系統管理員）能改。
+    $canToolAdmin = $canAdmin || $has(['tool_inquiry_admin']);
+    $canView   = $canCreate || $canToolAdmin || $has(['inquiry_view']);
 
     return ['uid'=>$uid, 'name'=>(string)($u['user_cname'] ?: $u['user_uname']),
-            'isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canCreate'=>$canCreate, 'canView'=>$canView, 'myDepts'=>$myDepts];
+            'isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canToolAdmin'=>$canToolAdmin, 'canCreate'=>$canCreate, 'canView'=>$canView, 'myDepts'=>$myDepts];
 }
 
 /** 這筆詢價案／子單，這個人能不能編輯（本人、同來源部門的同事、或管理員） */
