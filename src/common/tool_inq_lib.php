@@ -95,6 +95,11 @@ function ti_ensure_schema(PDO $db): void {
             KEY idx_inq (inq_id), KEY idx_vid (vid), KEY idx_temp (temp_key)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刀具詢價附件'");
     }
+    // 交期天數的單位（2026-11-18 追加）：work＝上班日（依行事曆假日與補班）、cal＝日曆日。舊表補欄位前先確認，免得重複 ALTER。
+    if ($exists('tool_inq_vendor')) {
+        $cols = $db->query("SHOW COLUMNS FROM tool_inq_vendor LIKE 'lead_unit'")->fetchAll();
+        if (!$cols) $db->exec("ALTER TABLE tool_inq_vendor ADD COLUMN lead_unit VARCHAR(4) NOT NULL DEFAULT 'work' COMMENT 'work 上班日／cal 日曆日' AFTER lead_days");
+    }
     $seedOpt = false;
     if (!$exists('tool_inq_opt')) {
         $db->exec("CREATE TABLE tool_inq_opt (
@@ -314,6 +319,17 @@ function ti_int($v, int $min, ?int $max, string $label, ?int $exclMax = null): a
     if ($exclMax !== null && $n >= $exclMax) return [$label . '必須小於 ' . $exclMax . '（管理員設定的上限）', null];
     return ['', $n];
 }
+/** 下訂日＋交期天數＝交期。unit=work 只算上班日（行事曆假日、週末不算，補班日算），cal 直接加日曆日 */
+function ti_add_days(PDO $db, string $from, int $days, string $unit): string {
+    if ($unit !== 'work') return date('Y-m-d', strtotime($from . ' +' . $days . ' day'));
+    require_once __DIR__ . '/leave_lib.php';
+    $cur = strtotime($from); $n = 0; $guard = 0;
+    while ($n < $days && $guard++ < 4000) {
+        $cur = strtotime('+1 day', $cur);
+        if (eg_leave_is_workday($db, date('Y-m-d', $cur))) $n++;
+    }
+    return date('Y-m-d', $cur);
+}
 function ti_date_ok($v): bool { return is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) && checkdate((int)substr($v, 5, 2), (int)substr($v, 8, 2), (int)substr($v, 0, 4)); }
 
 /** 工件規格 → [錯誤, 正規化陣列] */
@@ -326,6 +342,7 @@ function ti_clean_spec(array $s): array {
     [$e, $v] = ti_int($s['teeth'] ?? null, 1, 99999, '齒數'); if ($e) return [$e, null]; $o['teeth'] = $v;
     $o['helix_mode'] = (($s['helix_mode'] ?? 'dec') === 'dms') ? 'dms' : 'dec';
     $o['helix_dir']  = in_array($s['helix_dir'] ?? '', ['RH', 'LH'], true) ? $s['helix_dir'] : '';
+    $o['meas'] = in_array($s['meas'] ?? '', ['wk', 'pin'], true) ? $s['meas'] : '';   // 跨齒厚／跨銷擇一
     $labels = ['da' => '齒頂徑', 'df' => '齒底徑', 'depth' => '全齒深', 'wk' => '跨齒厚／跨齒數', 'pin' => '跨銷值／跨銷徑', 'fw' => '齒面寬'];
     foreach (ti_calc_keys() as $k) {
         $c = is_array($s[$k] ?? null) ? $s[$k] : [];
@@ -337,6 +354,7 @@ function ti_clean_spec(array $s): array {
             [$e, $row['v']]  = ti_num($c['v'] ?? null, 0.0, 100000.0, $labels[$k], false);  if ($e) return [$e, null];
             [$e, $row['v2']] = ti_num($c['v2'] ?? null, 0.0, 100000.0, $labels[$k], false); if ($e) return [$e, null];
         }
+        if (in_array($k, ['wk', 'pin'], true) && $o['meas'] !== '' && $o['meas'] !== $k) $row = ['st' => 'auto', 'v' => null, 'v2' => null];   // 沒選的那一種不留資料
         $o[$k] = $row;
     }
     return ['', $o];
@@ -358,7 +376,8 @@ function ti_clean_tool(PDO $db, string $type, array $t, array $set): array {
         [$e, $v] = ti_int($t['teeth'] ?? null, 1, 99999, '齒數'); if ($e) return $fail($e); $o['teeth'] = $v;
     } else {
         [$e, $v] = ti_int($t['slots'] ?? null, 1, null, '槽數', $set['slots_max']);   if ($e) return $fail($e); $o['slots'] = $v;
-        [$e, $v] = ti_int($t['starts'] ?? null, 1, null, '牙口數', $set['starts_max']); if ($e) return $fail($e); $o['starts'] = $v;
+        $sr = ($t['starts'] ?? '') === '' ? '1' : $t['starts'];   // 牙口數未填＝1
+        [$e, $v] = ti_int($sr, 1, null, '牙口數', $set['starts_max']); if ($e) return $fail($e); $o['starts'] = $v;
         $o['hand'] = in_array($t['hand'] ?? '', ['LH', 'RH'], true) ? $t['hand'] : '';   // 不選＝無
         $o['helix_text'] = mb_substr(trim((string)($t['helix_text'] ?? '')), 0, 40);
     }
@@ -437,12 +456,18 @@ function ti_row(PDO $db, array $r, bool $full = true): array {
     $vs = $db->prepare("SELECT * FROM tool_inq_vendor WHERE inq_id=? ORDER BY vid"); $vs->execute([$id]);
     $o['vendors'] = array_map(function ($v) {
         $v['vid'] = (int)$v['vid']; $v['is_void'] = (int)$v['is_void']; $v['remind_days'] = (int)$v['remind_days'];
-        $v['lead_days'] = $v['lead_days'] !== null ? (int)$v['lead_days'] : null;
+        $v['lead_days'] = $v['lead_days'] !== null ? (int)$v['lead_days'] : null; $v['lead_unit'] = ($v['lead_unit'] ?? 'work') === 'cal' ? 'cal' : 'work';
         $v['unit_price'] = $v['unit_price'] !== null ? (float)$v['unit_price'] : null;
         $v['stage'] = ti_vendor_stage($v);
         return $v;
     }, $vs->fetchAll(PDO::FETCH_ASSOC));
     $o['status'] = ti_overall($r, $o['vendors']);
+    static $today = null; if ($today === null) $today = ti_now($db)['d'];
+    $o['overdue'] = [];
+    if (!(int)$r['is_closed']) foreach ($o['vendors'] as $v) {
+        if (in_array($v['stage'], ['void', 'received'], true) || empty($v['due_date']) || $v['due_date'] >= $today) continue;
+        $o['overdue'][] = ['vendor' => $v['vendor_name'], 'due' => $v['due_date'], 'days' => (int)floor((strtotime($today) - strtotime($v['due_date'])) / 86400)];
+    }
     $ac = $db->prepare("SELECT category, vid, COUNT(*) c FROM tool_inq_attach WHERE inq_id=? AND status='active' GROUP BY category, vid"); $ac->execute([$id]);
     $o['att_count'] = array_sum(array_map(function ($x) { return (int)$x['c']; }, $ac->fetchAll(PDO::FETCH_ASSOC)));
     if ($full) $o['attaches'] = ti_attaches($db, $id);
@@ -461,17 +486,35 @@ function ti_years(PDO $db): array {
 function ti_list(PDO $db, array $o): array {
     $w = []; $p = [];
     if (!empty($o['year']))   { $w[] = 'YEAR(i.inq_date)=?'; $p[] = (int)$o['year']; }
-    if (($o['status'] ?? '') === 'open')   $w[] = 'i.is_closed=0';
-    if (($o['status'] ?? '') === 'closed') $w[] = 'i.is_closed=1';
+    $vx = function ($cond) { return "EXISTS (SELECT 1 FROM tool_inq_vendor v WHERE v.inq_id=i.id AND v.is_void=0 AND {$cond})"; };
+    $recv = $vx('v.received_date IS NOT NULL'); $ord = $vx('v.order_date IS NOT NULL');
+    $rep = $vx('(v.reply_date IS NOT NULL OR v.unit_price IS NOT NULL)'); $any = $vx('1=1');
+    switch ($o['status'] ?? '') {
+        case 'open':     $w[] = 'i.is_closed=0'; break;
+        case 'closed':   $w[] = 'i.is_closed=1'; break;
+        case 'received': $w[] = "i.is_closed=0 AND $recv"; break;                                   // 已到貨
+        case 'ordered':  $w[] = "i.is_closed=0 AND NOT $recv AND $ord"; break;                      // 尚未到貨（已下訂）
+        case 'replied':  $w[] = "i.is_closed=0 AND NOT $recv AND NOT $ord AND $rep"; break;         // 尚未下訂（已報價）
+        case 'waiting':  $w[] = "i.is_closed=0 AND $any AND NOT $recv AND NOT $ord AND NOT $rep"; break;   // 等待報價
+    }
     if (in_array($o['tool_type'] ?? '', ['shaper', 'hob'], true)) { $w[] = 'i.tool_type=?'; $p[] = $o['tool_type']; }
-    $kw = trim((string)($o['kw'] ?? ''));
-    if ($kw !== '') {
-        foreach (preg_split('/\s+/u', $kw) as $k) {   // 多關鍵字：每個都要命中（可分散在不同欄位）
-            $like = '%' . $k . '%';
-            $w[] = "(i.inq_no LIKE ? OR i.part_no_text LIKE ? OR d.D_Setting_Id LIKE ? OR c.customer LIKE ? OR c.customer_full LIKE ? OR i.customer_text LIKE ?
-                     OR i.created_by_name LIKE ? OR EXISTS (SELECT 1 FROM tool_inq_vendor v WHERE v.inq_id=i.id AND (v.vendor_name LIKE ? OR v.vendor_id_no LIKE ?)))";
-            array_push($p, $like, $like, $like, $like, $like, $like, $like, $like, $like);
-        }
+    // 客戶／料號／廠商／其他 四種篩選各自獨立（互為 AND）；每一欄內多個關鍵字也要全部命中
+    $words = function ($v) { return array_values(array_filter(preg_split('/\s+/u', trim((string)$v)), 'strlen')); };
+    foreach ($words($o['customer'] ?? '') as $k) {
+        $like = '%' . $k . '%';
+        $w[] = "(c.customer LIKE ? OR c.customer_full LIKE ? OR i.customer_text LIKE ?)"; array_push($p, $like, $like, $like);
+    }
+    foreach ($words($o['part'] ?? '') as $k) {
+        $like = '%' . $k . '%';
+        $w[] = "(i.part_no_text LIKE ? OR d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?)"; array_push($p, $like, $like, $like);
+    }
+    foreach ($words($o['vendor'] ?? '') as $k) {
+        $like = '%' . $k . '%';
+        $w[] = "EXISTS (SELECT 1 FROM tool_inq_vendor v WHERE v.inq_id=i.id AND (v.vendor_name LIKE ? OR v.vendor_id_no LIKE ?))"; array_push($p, $like, $like);
+    }
+    foreach ($words($o['kw'] ?? '') as $k) {   // 其他：單號、建單人、備註
+        $like = '%' . $k . '%';
+        $w[] = "(i.inq_no LIKE ? OR i.created_by_name LIKE ? OR i.remark LIKE ?)"; array_push($p, $like, $like, $like);
     }
     $where = $w ? ' WHERE ' . implode(' AND ', $w) : '';
     $cnt = $db->prepare("SELECT COUNT(*) FROM tool_inq i LEFT JOIN d_setting d ON d.d_id=i.part_id LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id" . $where);
@@ -480,10 +523,13 @@ function ti_list(PDO $db, array $o): array {
     $psize = in_array((int)($o['psize'] ?? 10), [5, 10, 20, 50], true) ? (int)$o['psize'] : 10;
     $pages = max(1, (int)ceil($total / $psize));
     $page = min(max(1, (int)($o['page'] ?? 1)), $pages);
-    $st = $db->prepare(ti_select_sql() . $where . " ORDER BY i.inq_date DESC, i.id DESC LIMIT " . $psize . " OFFSET " . (($page - 1) * $psize));
+    $overdueSql = "EXISTS (SELECT 1 FROM tool_inq_vendor v WHERE v.inq_id=i.id AND v.is_void=0 AND v.received_date IS NULL AND v.due_date IS NOT NULL AND v.due_date<CURDATE())";
+    $st = $db->prepare(ti_select_sql() . $where . " ORDER BY (i.is_closed=0 AND $overdueSql) DESC, i.inq_date DESC, i.id DESC LIMIT " . $psize . " OFFSET " . (($page - 1) * $psize));
     $st->execute($p);
     $rows = array_map(function ($r) use ($db) { return ti_row($db, $r, false); }, $st->fetchAll(PDO::FETCH_ASSOC));
-    return ['rows' => $rows, 'page' => $page, 'pages' => $pages, 'total' => $total];
+    // 逾期總數不受篩選影響（清單上方提示列用）；到貨、結案或不採用的廠商自動不再計入＝自動取消置頂
+    $odn = (int)$db->query("SELECT COUNT(*) FROM tool_inq i WHERE i.is_closed=0 AND $overdueSql")->fetchColumn();
+    return ['rows' => $rows, 'page' => $page, 'pages' => $pages, 'total' => $total, 'overdue_total' => $odn];
 }
 
 /* ═══════════════ 寫入 ═══════════════ */
@@ -607,15 +653,16 @@ function ti_vendor_save(PDO $db, int $vid, array $P, array $perm): array {
     $remRaw = trim((string)($P['remind_days'] ?? '3')); if ($remRaw === '') $remRaw = '3';
     [$e, $rem] = ti_int($remRaw, 0, 60, '提醒天數'); if ($e) return [false, $e];
     $cur = in_array($P['currency'] ?? '', ti_currencies(), true) ? $P['currency'] : 'NTD';
-    if (!$due && $order && $lead !== null) $due = date('Y-m-d', strtotime($order . ' +' . $lead . ' day'));   // 交期未填：下訂日＋交期天數
+    $unit = (($P['lead_unit'] ?? 'work') === 'cal') ? 'cal' : 'work';
+    if (!$due && $order && $lead !== null) $due = ti_add_days($db, $order, $lead, $unit);   // 交期未填：下訂日＋交期天數
     $note = mb_substr(trim((string)($P['reply_note'] ?? '')), 0, 1000);
     $void = !empty($P['is_void']) ? 1 : 0;
     $now = ti_now($db);
     // 交期或提醒天數改了就重新計算提醒（清掉已發記錄）
     $reset = ($due !== $v['due_date'] || (int)$rem !== (int)$v['remind_days']);
-    $db->prepare("UPDATE tool_inq_vendor SET reply_date=?, currency=?, unit_price=?, lead_days=?, order_date=?, due_date=?, received_date=?, remind_days=?, reply_note=?, is_void=?, updated_at=?"
+    $db->prepare("UPDATE tool_inq_vendor SET reply_date=?, currency=?, unit_price=?, lead_days=?, lead_unit=?, order_date=?, due_date=?, received_date=?, remind_days=?, reply_note=?, is_void=?, updated_at=?"
                  . ($reset ? ", remind_sent_for=NULL, overdue_sent_for=NULL" : "") . " WHERE vid=?")
-       ->execute([$reply, $cur, $price, $lead, $order, $due, $recv, $rem ?? 3, $note, $void, $now['n'], $vid]);
+       ->execute([$reply, $cur, $price, $lead, $unit, $order, $due, $recv, $rem ?? 3, $note, $void, $now['n'], $vid]);
     return [true, ''];
 }
 
@@ -663,7 +710,7 @@ function ti_send_reminder(PDO $db, array $r, string $kind): void {
     $dueTx = str_replace('-', '.', (string)$r['due_date']);
     $days = (int)floor((strtotime((string)$r['due_date']) - strtotime(date('Y-m-d'))) / 86400);
     $when = $days > 0 ? ('還有 ' . $days . ' 天') : ($days === 0 ? '就是今天' : ('已逾期 ' . abs($days) . ' 天'));
-    $title = ($kind === 'overdue' ? '【交期逾期】' : '【交期將到】') . '刀具詢價 ' . $r['inq_no'] . '　' . $r['vendor_name'] . '　交期 ' . $dueTx;
+    $title = ($kind === 'overdue' ? '【交期逾期・已置頂】' : '【交期將到】') . '刀具詢價 ' . $r['inq_no'] . '　' . $r['vendor_name'] . '　交期 ' . $dueTx;
     $body = "詢價單：" . $r['inq_no'] . "（" . $r['part_no'] . ($r['customer'] ? '／' . $r['customer'] : '') . "）\n廠商：" . $r['vendor_name']
           . "\n下訂日：" . ($r['order_date'] ? str_replace('-', '.', $r['order_date']) : '（未填）') . "\n交期：" . $dueTx . '（' . $when . "）\n"
           . '到貨後請到「詢價單 → 刀具詢價 → 廠商回覆」填寫到貨日，提醒即停止。';

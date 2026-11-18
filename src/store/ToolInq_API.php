@@ -8,6 +8,8 @@ session_start();
 require_once __DIR__ . '/../common/_config.php';
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/tool_inq_lib.php';
+require_once __DIR__ . '/../common/asdoc_lib.php';
+require_once __DIR__ . '/../common/print_log_lib.php';
 
 function jout($ok, $data = []) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(array_merge(['success' => $ok], is_array($data) ? $data : ['message' => $data]), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = '', $http = 200) { if ($http !== 200) http_response_code($http); jout(false, ['message' => $msg, 'code' => $code]); }
@@ -51,7 +53,7 @@ case 'init': {   // 表單所需的全部下拉資料一次給
 
 case 'list': {
     $res = ti_list($db, ['year' => $_GET['year'] ?? '', 'status' => $_GET['status'] ?? '', 'tool_type' => $_GET['tool_type'] ?? '',
-                         'kw' => $_GET['kw'] ?? '', 'page' => $_GET['page'] ?? 1, 'psize' => $_GET['psize'] ?? 10]);
+                         'customer' => $_GET['customer'] ?? '', 'part' => $_GET['part'] ?? '', 'vendor' => $_GET['vendor'] ?? '', 'kw' => $_GET['kw'] ?? '', 'page' => $_GET['page'] ?? 1, 'psize' => $_GET['psize'] ?? 10]);
     jout(true, $res);
 }
 
@@ -60,6 +62,37 @@ case 'get': {
     if (!$i) jerr('查無此詢價單');
     $i['can_edit'] = ti_can_edit($perm, $i);
     jout(true, ['inq' => $i]);
+}
+
+/* ---- 列印：一家廠商一頁。vids＝指定印哪幾家（逗號分隔 vid）；沒給＝全部（不採用的廠商除外） ---- */
+case 'print_data': {
+    $i = ti_get($db, (int)($_GET['id'] ?? 0));
+    if (!$i) jerr('找不到這張詢價單');
+    $vids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['vids'] ?? '')))));
+    $vs = [];
+    foreach ($i['vendors'] as $v) {
+        if ($vids ? !in_array($v['vid'], $vids, true) : (int)$v['is_void']) continue;
+        $live = inq_vendor_snapshot($db, $v['vendor_id_no']) ?: [];   // 電話／傳真／聯絡人以廠商主檔現況為準，主檔沒有才退回建單當時的快照
+        $v['tel'] = (string)($live['contact_phone'] ?? $v['contact_phone']);
+        $v['fax'] = (string)($live['contact_fax'] ?? '');
+        $v['contact'] = (string)($live['contact_person'] ?? $v['contact_person']);
+        $vs[] = $v;
+    }
+    if (!$vs && !$vids) $vs = $i['vendors'];   // 全部不採用時仍讓使用者印得出來
+    jout(true, ['inq' => $i, 'vendors' => $vs, 'company' => inq_own_company($db), 'as_no' => eg_asdoc_no_asof($db, 'inquiry', $i['inq_date'])]);
+}
+case 'print_log': {   // ai-rules/23：每家廠商各留一筆列印紀錄
+    $i = ti_get($db, (int)($_POST['id'] ?? 0));
+    if ($i) {
+        $vids = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['vids'] ?? '')))));
+        $targets = array_values(array_filter($i['vendors'], function ($v) use ($vids) { return !$vids || in_array($v['vid'], $vids, true); }));
+        if (!$targets) $targets = [['vid' => 0, 'vendor_name' => '']];
+        foreach ($targets as $v) {
+            eg_print_log_add($db, ['source' => 'inquiry', 'doc_kind' => 'form', 'ref_table' => 'tool_inq_vendor', 'ref_id' => (int)$v['vid'],
+                'doc_name' => '刀具詢價單 ' . $i['inq_no'] . ($v['vendor_name'] !== '' ? '　' . $v['vendor_name'] : ''), 'part_no' => (string)$i['part_no'], 'user_id' => $uid]);
+        }
+    }
+    jout(true);
 }
 
 case 'part_search': jout(true, ['rows' => ti_part_search($db, (string)($_GET['kw'] ?? ''))]);
@@ -77,6 +110,12 @@ case 'save': {
     if (!$ok) jerr($msg);
     $i = ti_get($db, $id);
     jout(true, ['id' => $id, 'inq_no' => $i['inq_no']]);
+}
+
+case 'calc_due': {   // 下訂日＋交期天數（上班日／日曆日）→ 交期
+    $o = (string)($_GET['order'] ?? ''); $d = (string)($_GET['days'] ?? '');
+    if (!ti_date_ok($o) || !preg_match('/^\d{1,4}$/', $d)) jerr('請先填下訂日與交期天數');
+    jout(true, ['due' => ti_add_days($db, $o, (int)$d, ($_GET['unit'] ?? 'work') === 'cal' ? 'cal' : 'work')]);
 }
 
 case 'vendor_save': {
