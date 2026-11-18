@@ -124,6 +124,14 @@ case 'vendor_save': {
     jout(true);
 }
 
+case 'tool_part': {   // 下訂後填刀號：check／create／suffix／bind／unbind
+    $mode = (string)($_POST['mode'] ?? 'create');
+    if (!in_array($mode, ['check', 'create', 'suffix', 'bind', 'unbind'], true)) jerr('操作不正確');
+    [$ok, $msg, $x] = ti_tool_part_apply($db, (int)($_POST['vid'] ?? 0), (string)($_POST['tool_no'] ?? ''), $mode, (int)($_POST['d_id'] ?? 0), $uid, $perm);
+    if (!$ok && empty($x['conflict'])) jerr($msg);
+    jout($ok, array_merge(['message' => $msg], $x));
+}
+
 case 'set_closed': {
     $id = (int)($_POST['id'] ?? 0);
     $st = $db->prepare("SELECT * FROM tool_inq WHERE id=?"); $st->execute([$id]);
