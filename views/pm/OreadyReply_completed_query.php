@@ -1385,6 +1385,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $kind = in_array($_POST['kind'] ?? '', ['manual', 'nomatch'], true) ? $_POST['kind'] : 'manual';
             $page = max(1, intval($_POST['page'] ?? 1));
             $per  = 20;
+            // 主檔查無「一次建立全部可對應客戶者」要看全部分頁，回傳整份（上限 3000 筆，不補製程資訊）
+            $allRows = ($kind === 'nomatch' && !empty($_POST['all']));
+            if ($allRows) { $page = 1; $per = 3000; }
             $st = $pdo->prepare("SELECT b.bom, b.d_id, b.Client_Name, b.sqty,
                     DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date $OCQ_FROM $whereSql
                 ORDER BY $OCQ_EFFDATE DESC, b.bom DESC");
@@ -1411,8 +1414,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }, $c['candidates'])];
             }
             $total = count($hit);
+            $pageRows = array_slice($hit, ($page - 1) * $per, $per);
+            // 帶出每筆 BOM 的製程（依製程順序、去重），方便依製程判斷該對哪個客戶
+            if ($pageRows && !$allRows) {
+                $bl = array_column($pageRows, 'bom');
+                $ph = implode(',', array_fill(0, count($bl), '?'));
+                $sp = $pdo->prepare("SELECT bi.bom, CAST(bi.bom_sn AS UNSIGNED) AS sn,
+                        COALESCE(NULLIF(pn.ProcessName,''), bi.process_no) AS pname
+                    FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                    WHERE bi.bom IN ($ph) GROUP BY bi.bom, sn, pname ORDER BY bi.bom, sn");
+                $sp->execute($bl);
+                $pm = [];
+                foreach ($sp->fetchAll(PDO::FETCH_ASSOC) as $p) {
+                    if ($p['pname'] === null || $p['pname'] === '') continue;
+                    if (!in_array($p['pname'], $pm[$p['bom']] ?? [], true)) $pm[$p['bom']][] = $p['pname'];
+                }
+                foreach ($pageRows as &$pr) { $pr['processes'] = $pm[$pr['bom']] ?? []; }
+                unset($pr);
+            }
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'per' => $per,
-                'rows' => array_slice($hit, ($page - 1) * $per, $per)]);
+                'rows' => $pageRows]);
 
         } elseif ($action === 'autobind_apply') {
             // 實際寫入：前端分批送 BOM 清單過來。**每一筆都要在交易裡重新判定一次**——
@@ -1700,12 +1721,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 單次查詢筆數上限：超過就不撈資料、直接請使用者縮小範圍（使用者拍板，2026-09-11）。
             // 只擋「畫面清單」這一條路；列印／匯出／統整報表維持原本的 3000 筆確認視窗不變，
             // 才不會把既有「清除篩選後整批匯出」的用法弄壞。
-            if ($total > OCQ_LIST_MAX) {
-                echo json_encode(['success' => true, 'total' => $total, 'page' => 1, 'page_size' => $page_size,
-                    'rows' => [], 'max_process_count' => 0, 'price_map' => [],
-                    'blocked' => true, 'limit_max' => OCQ_LIST_MAX]);
-                exit;
-            }
+            // 2026-11-18：畫面清單改為伺服器端分頁＋前端預載前後頁，一次只撈一頁，不再擋總筆數
+            //（OCQ_LIST_MAX 常數保留給其他地方參考）。
 
             $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC LIMIT $page_size OFFSET $offset";
             $stmt = $pdo->prepare($sql);
@@ -2583,6 +2600,11 @@ try {
                 <div style="margin-top:4px;"><b>客戶一定要從主檔挑</b>（不給自由輸入）；系統會先用 BOM 的客戶名稱自動對應，
                     對到的會標成綠色，請確認過再建立。<b>同料號＋同客戶的主檔已經存在時不會重複建立</b>，會直接沿用那一筆。</div>
             </div>
+            <div id="ocqNpAll" style="display:none;margin:6px 0;padding:6px 8px;background:#FBF1DE;border:1px solid #E6CFA3;border-radius:4px;align-items:center;gap:8px;">
+                <label style="font-size:12.5px;color:#5b3a1e;white-space:nowrap;margin:0;">全部設為同一客戶</label>
+                <select id="ocqNpAllCs" data-eg-filter="輸入客戶名稱或代號篩選…" style="flex:1;height:26px;font-size:12.5px;"></select>
+                <button type="button" id="ocqNpAllApply" style="height:26px;padding:0 12px;border-radius:3px;font-size:12.5px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">套用到全部</button>
+            </div>
             <table class="ocq-ab-tb ocq-np-tb" id="ocqNpTb">
                 <thead><tr><th style="width:130px;">BOM</th><th style="width:230px;">料號（可修改）</th>
                     <th style="width:110px;">BOM 客戶</th><th>建立到客戶</th><th style="width:150px;">狀態</th></tr></thead>
@@ -3089,31 +3111,71 @@ function renderPager(total, page, pageSize){
     var pages = Math.max(1, Math.ceil(total / pageSize));
     var $p = $('#ocqPager').empty();
     $p.append('<span class="pg-info">第 ' + page + ' / ' + pages + ' 頁</span>');
-    var $prev = $('<button><i class="fa fa-chevron-left"></i></button>').prop('disabled', page<=1).on('click', function(){ loadList(page-1); });
+    var $prev = $('<button><i class="fa fa-chevron-left"></i></button>').prop('disabled', page<=1).on('click', function(){ loadList(page-1, true); });
     $p.append($prev);
     var from = Math.max(1, page-2), to = Math.min(pages, from+4);
     from = Math.max(1, Math.min(from, to-4));
     for (var i=from; i<=to; i++){
         var $b = $('<button>'+i+'</button>');
         if (i===page) $b.addClass('cur');
-        $b.on('click', (function(pn){ return function(){ loadList(pn); }; })(i));
+        $b.on('click', (function(pn){ return function(){ loadList(pn, true); }; })(i));
         $p.append($b);
     }
-    var $next = $('<button><i class="fa fa-chevron-right"></i></button>').prop('disabled', page>=pages).on('click', function(){ loadList(page+1); });
+    var $next = $('<button><i class="fa fa-chevron-right"></i></button>').prop('disabled', page>=pages).on('click', function(){ loadList(page+1, true); });
     $p.append($next);
 }
 
+// 分頁預載快取：只留「目前頁 ±2 頁」，離開範圍的頁面立刻丟掉。
+// 只有「按翻頁鈕」才會讀快取；其他任何觸發（改篩選、改每頁筆數、編輯後重載）一律清空重撈，
+// 才不會在改了資料後還看到舊內容。
+var _pgCache = { key: '', pages: {}, loading: {} };
+function pgKey(f){
+    var o = $.extend({}, f); delete o.page; delete o.action;
+    return JSON.stringify(o);
+}
+function pgTrim(center){
+    Object.keys(_pgCache.pages).forEach(function(k){ if (Math.abs(parseInt(k,10) - center) > 2) delete _pgCache.pages[k]; });
+}
+function pgPrefetch(f, center, total, pageSize){
+    var pages = Math.max(1, Math.ceil(total / pageSize));
+    var key = _pgCache.key;
+    var want = [];
+    for (var d = 1; d <= 2; d++){ want.push(center + d); if (center - d >= 1) want.push(center - d); }
+    want = want.filter(function(p){ return p >= 1 && p <= pages && !_pgCache.pages[p] && !_pgCache.loading[p]; });
+    (function next(){
+        var p = want.shift();
+        if (!p || _pgCache.key !== key || curPage !== center) return;   // 已換篩選或已翻到別頁，停止
+        _pgCache.loading[p] = true;
+        var g = $.extend({}, f, { page: p });
+        $.post('', g, function(res){
+            delete _pgCache.loading[p];
+            if (_pgCache.key !== key || !res || !res.success || Math.abs(p - curPage) > 2) return;
+            _pgCache.pages[p] = res;
+        }, 'json').always(function(){ delete _pgCache.loading[p]; next(); });
+    })();
+}
+
 var _listSeq = 0;
-function loadList(page){
+function loadList(page, useCache){
     page = page || 1;
     curPage = page;
     var f = curFilters();
     f.action = 'list';
     f.page = page;
     f.page_size = $('#pageSizeSel').val();
+    var key = pgKey(f);
+    if (!useCache || _pgCache.key !== key) { _pgCache = { key: key, pages: {}, loading: {} }; }
     var seq = ++_listSeq;
+    var hit = useCache ? _pgCache.pages[page] : null;
+    if (hit) { pgTrim(page); handleListRes(hit, seq, f); return; }
     $('#ocqTbody').html('<tr><td colspan="'+OCQ_BASE_COLS+'" class="ocq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
     $.post('', f, function(res){
+        if (res && res.success && !res.blocked) { pgTrim(page); _pgCache.pages[page] = res; }
+        handleListRes(res, seq, f);
+    }, 'json');
+}
+function handleListRes(res, seq, f){
+    {
         if (seq !== _listSeq) return;             // 已經有更新的一次查詢在跑，這份丟掉
         if (!res.success){ $('#ocqTbody').html('<tr><td colspan="'+OCQ_BASE_COLS+'" class="ocq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
         lastTotal = res.total;
@@ -3132,6 +3194,8 @@ function loadList(page){
             $('#ocqTbody').html(res.rows.map(function(r){ return rowToTr(r, res.max_process_count||0, res.price_map||{}); }).join(''));
         }
         renderPager(res.total, res.page, res.page_size);
+        // 畫面畫完後，背景依序預載前後各兩頁（第一次進來就是第 2、3 頁）
+        pgPrefetch(f, res.page, res.total, res.page_size);
 
         // BOM .xlsm 檔名快取還沒建好或已過期時，等畫面畫完才背景重建（掃 NAS 很慢，不可擋在查詢路徑上）。
         // 一次只發一輪；失敗也不提示，下次查詢會再試。
@@ -3140,7 +3204,7 @@ function loadList(page){
             $.post('', { action: 'bom_file_cache_refresh' })
              .always(function(){ window.__ocqBomCacheRefreshing = false; });
         }
-    }, 'json');
+    }
 }
 
 // 超過單次查詢筆數上限時顯示的內容：講清楚為什麼、並直接給可以馬上按的縮小範圍選項
@@ -3794,7 +3858,8 @@ function ocqAbManualHtml(res){
         h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no) + '" data-client="' + esc(r.bom_client || '') + '">'
            + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
            + '<td>' + esc(r.bom)
-           + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
+           + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div>'
+           + ocqAbProcs(r.processes) + '</td>'
            + '<td>' + esc(r.part_no)
            + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td><td class="cnd">';
         if (!r.candidates.length) {
@@ -3822,6 +3887,12 @@ function ocqAbManualHtml(res){
  * 勾選工具列（三個階段的清單共用同一條）。
  * $withApply＝有候選可套用的那張才長出「套用勾選的」；$withNew＝只有料號階段才有「建立新料號」。
  */
+/** 這筆 BOM 走過的製程（依製程順序），挑客戶時的判斷線索 */
+function ocqAbProcs(ps){
+    if (!ps || !ps.length) return '<div class="ocq-ab-sub">（無製程資料）</div>';
+    return '<div class="ocq-ab-sub" style="color:#8a4b12;" title="這筆 BOM 的製程">製程：'
+         + ps.map(function(x){ return esc(x); }).join('、') + '</div>';
+}
 function ocqAbBulkBar(kind, withApply, stage, applyLabel, hint){
     stage = stage || 'part';
     return '<div class="ocq-ab-bulk" data-kind="' + kind + '" data-stage="' + stage + '">'
@@ -3829,6 +3900,7 @@ function ocqAbBulkBar(kind, withApply, stage, applyLabel, hint){
          + '<span class="ocq-ab-sub ocq-ab-ckhint">' + (hint || '（挑好候選料號會自動幫你勾起來）') + '</span>'
          + '<span class="sp"></span>'
          + (withApply ? '<button type="button" class="ocq-ab-bulk-apply" disabled>' + (applyLabel || '套用勾選的（綁定已挑的主檔）') + '</button>' : '')
+         + (stage === 'part' && kind === 'nomatch' ? '<button type="button" class="ocq-ab-bulk-allnew" title="客戶能對應到客戶主檔的，整份清單（含其他頁）一次帶入建立視窗，確認後建立">客戶可對應者全部一次建立</button>' : '')
          + (stage === 'part' ? '<button type="button" class="sec ocq-ab-bulk-new" disabled>建立新料號並綁定</button>' : '')
          + '</div>';
 }
@@ -3849,7 +3921,7 @@ function ocqAbNomatchHtml(res){
         var canNew = !!(r.part_no && $.trim(r.part_no) !== '');
         h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no || '') + '" data-client="' + esc(r.bom_client || '') + '">'
            + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"' + (canNew ? '' : ' disabled title="這筆 BOM 沒有料號文字，建不了料號"') + '></td>'
-           + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
+           + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div>' + ocqAbProcs(r.processes) + '</td>'
            + '<td>' + (r.part_no ? esc(r.part_no) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + (r.bom_client ? esc(r.bom_client) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + esc(r.qty) + '</td>'
@@ -4159,6 +4231,8 @@ function ocqNpOpen(rows){
         });
         $('#ocqNpTb tbody').html(h);
         $('#ocqNpOne').toggle(one);
+        $('#ocqNpAllCs').html(ocqCustOptions(''));
+        $('#ocqNpAll').css('display', one ? 'none' : 'flex');
         $('#ocqNpSpec, #ocqNpRemark').val('');
         $('#ocqNpMsg').html('');
         $('#ocqNpRun').prop('disabled', false).text(one ? '建立並綁定' : '建立並綁定（' + rows.length + ' 筆）');
@@ -4167,10 +4241,23 @@ function ocqNpOpen(rows){
 }
 function ocqNpClose(){
     if (ocqNp.running) { if (!confirm('還在建立中，確定要關閉嗎？（已經建好的不會退回）')) return; }
+    ocqNp.bulkAll = false;
     $('#ocqNpMask').hide();
 }
 $('#ocqNpClose, #ocqNpCancel').on('click', ocqNpClose);
 $('#ocqNpMask').on('click', function(e){ if (e.target === this && !ocqNp.running) ocqNpClose(); });
+// 一次把所有尚未建立的列設成同一個客戶
+$('#ocqNpAllApply').on('click', function(){
+    var v = $('#ocqNpAllCs').val() || '';
+    if (!v) { $('#ocqNpMsg').html('<span class="ocq-bind-err">請先在左邊挑一個客戶</span>'); return; }
+    $('#ocqNpTb tbody tr').each(function(){
+        var r = ocqNp.rows[parseInt($(this).data('i'), 10)];
+        if (!r || r.done) return;
+        $(this).find('select.cs').val(v).removeClass('auto-hit');
+        $(this).find('td.st').html('<span style="color:#2f7a3f;">已套用</span>');
+    });
+    $('#ocqNpMsg').html('');
+});
 // 改了客戶就把「已自動對應」的綠底拿掉，免得看起來像系統挑的
 $('#ocqNpMask').on('change', 'select.cs', function(){ $(this).removeClass('auto-hit').closest('tr').find('td.st').html(''); });
 
@@ -4191,6 +4278,28 @@ $('#ocqAbMask').on('click', '.ocq-ab-bulk-new', function(){
     ocqNpOpen(rows);
 });
 
+// 主檔查無：BOM 客戶能對應到客戶主檔的，整份清單（含其他頁）一次帶進建立視窗；對不到客戶的不動，留給人工挑
+$('#ocqAbMask').on('click', '.ocq-ab-bulk-allnew', function(){
+    var $b = $(this).prop('disabled', true).text('讀取中…');
+    var f = curFilters(); f.action = 'autobind_list'; f.kind = 'nomatch'; f.all = 1; f.page = 1;
+    $.post('', f, function(res){
+        $b.prop('disabled', false).text('客戶可對應者全部一次建立');
+        if (!res || !res.success) { ocqAbMsg('讀取失敗，請重試', true); return; }
+        ocqCustLoad(function(){
+            var rows = [], skip = 0;
+            (res.rows || []).forEach(function(r){
+                var part = $.trim(r.part_no || '');
+                if (!part || !ocqCustGuess(r.bom_client)) { skip++; return; }
+                rows.push({ bom: String(r.bom), part: part, client: String(r.bom_client || '') });
+            });
+            if (!rows.length) { ocqAbMsg('沒有「客戶可對應到客戶主檔」的項目可以一次建立（共 ' + (res.total || 0) + ' 筆都需要人工挑客戶）', true); return; }
+            ocqNp.bulkAll = true;
+            ocqAbMsg('共 ' + rows.length + ' 筆客戶可自動對應，另有 ' + skip + ' 筆客戶對不到或沒有料號，留給人工處理。請在建立視窗確認後執行。');
+            ocqNpOpen(rows);
+        });
+    }, 'json').fail(function(){ $b.prop('disabled', false).text('客戶可對應者全部一次建立'); ocqAbMsg('讀取失敗，請重試', true); });
+});
+
 $('#ocqNpRun').on('click', function(){
     if (ocqNp.running) return;
     var jobs = [], blank = 0;
@@ -4203,11 +4312,6 @@ $('#ocqNpRun').on('click', function(){
     });
     if (blank) { $('#ocqNpMsg').html('<span class="ocq-bind-err">有 ' + blank + ' 筆的料號是空白的，請補上</span>'); return; }
     if (!jobs.length) { $('#ocqNpMsg').html('<span class="ocq-bind-err">沒有要建立的資料</span>'); return; }
-    var noCust = 0;
-    jobs.forEach(function(j){ if (!j.cust) noCust++; });
-    if (!confirm('即將建立 ' + jobs.length + ' 筆料號主檔，並立刻綁定對應的 BOM。\n\n'
-        + (noCust ? '其中 ' + noCust + ' 筆沒有指定客戶，會建成「沒有綁客戶」的料號。\n' : '')
-        + '同料號＋同客戶的主檔已經存在時不會重複建立，會直接沿用那一筆。\n確定要執行嗎？')) return;
 
     ocqNp.running = true;
     $('#ocqNpRun').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 建立中…');
@@ -4220,6 +4324,7 @@ $('#ocqNpRun').on('click', function(){
                                      : '已完成 ' + ok + ' 筆');
             ocqAbMsg('已建立並綁定 <b>' + ok + '</b> 筆料號' + (fail ? '，失敗 ' + fail + ' 筆' : ''), fail > 0);
             loadList(curPage);
+            if (ocqNp.bulkAll) { ocqNp.bulkAll = false; ocqAbLoadList('nomatch', 1); var $nn = $('#ocqAbNNomatch'); $nn.text(Math.max(0, (parseInt($nn.text(), 10) || 0) - ok)); }
             if (!fail) setTimeout(function(){ $('#ocqNpMask').hide(); }, 700);
             return;
         }
