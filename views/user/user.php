@@ -242,16 +242,16 @@ if ($isSuperadmin) {
                                         <div class="form-group">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12">舊密碼 <span class="required">*</span></label>
                                             <div class="col-md-9 col-sm-9 col-xs-12">
-                                                <input type="password" name="old_password" class="form-control"
-                                                       maxlength="20" required>
+                                                <input type="text" name="old_password" class="form-control"
+                                                       maxlength="20" autocomplete="off" required>
                                             </div>
                                         </div>
 
                                         <div class="form-group">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12">新密碼 <span class="required">*</span></label>
                                             <div class="col-md-9 col-sm-9 col-xs-12">
-                                                <input type="password" name="new_password" id="new_password"
-                                                       class="form-control" maxlength="20" required>
+                                                <input type="text" name="new_password" id="new_password"
+                                                       class="form-control" maxlength="20" autocomplete="off" required>
                                                 <span class="help-block" style="margin-bottom:0;">最多 20 個字元</span>
                                             </div>
                                         </div>
@@ -259,8 +259,8 @@ if ($isSuperadmin) {
                                         <div class="form-group">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12">確認新密碼 <span class="required">*</span></label>
                                             <div class="col-md-9 col-sm-9 col-xs-12">
-                                                <input type="password" name="confirm_password" id="confirm_password"
-                                                       class="form-control" maxlength="20" required>
+                                                <input type="text" name="confirm_password" id="confirm_password"
+                                                       class="form-control" maxlength="20" autocomplete="off" required>
                                             </div>
                                         </div>
 
