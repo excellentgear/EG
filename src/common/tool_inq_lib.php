@@ -626,7 +626,7 @@ function ti_save(PDO $db, array $P, array $perm, int $uid, string $uname): array
         $partText = $pc['part_no'];
     }
     if ($partId <= 0) return [false, '料號尚未綁定：請從主檔清單挑選料號後再儲存', 0];
-    $custText = $partId > 0 ? '' : mb_substr(trim((string)($P['customer_text'] ?? '')), 0, 100);
+    $custText = '';   // 客戶一律由綁定的料號主檔即時帶出，不接受手填
     [$e, $qty] = ti_int($P['qty'] ?? null, 1, 99999999, '需求支數'); if ($e) return [false, $e, 0];
 
     $io = in_array($P['gear_io'] ?? '', ['ext', 'int'], true) ? $P['gear_io'] : '';

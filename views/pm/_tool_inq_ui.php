@@ -112,7 +112,7 @@ if ($TI_PART === 'modals') { ?>
                 <div class="ti-cell"><input type="text" id="tiPart" class="w160" placeholder="輸入料號或圖號搜尋…" autocomplete="off" style="width:260px;">
                     <span id="tiPartTag" class="ti-bind" style="display:none;"></span><span id="tiPartOk" title="已綁定主檔料號" style="display:none;color:#2e9d4f;font-size:20px;font-weight:bold;line-height:1;">✔</span>
                     <select id="tiGearSel" style="display:none;" title="這個料號有多組齒輪規格，選一組帶入"></select><div class="ti-err" id="tiErrPart"></div></div></div>
-            <div class="ti-row"><label>客戶</label><div class="ti-cell"><input type="text" id="tiCust" style="width:260px;" placeholder="綁定料號後自動帶入"><span class="ti-unit" id="tiCustHint"></span></div></div>
+            <div class="ti-row"><label>客戶</label><div class="ti-cell"><input type="text" id="tiCust" class="ro-auto" readonly style="width:260px;" placeholder="綁定料號後自動帶入（不可自行輸入）"><span class="ti-unit" id="tiCustHint"></span></div></div>
             <div class="ti-row"><label>需求支數</label><div class="ti-cell"><input type="number" id="tiQty" class="w110" min="1" step="1" inputmode="numeric"><span class="ti-unit">支（選填）</span><div class="ti-err" id="tiErrQty"></div></div></div>
         </div>
 
@@ -681,7 +681,7 @@ $('#tiPart').on('input', function(){
 $('#tiSug').on('click', 'div[data-pid]', function(){ bindPart(parseInt($(this).data('pid'),10), String($(this).data('no'))); hideSug(); });
 function unbindPart(){
   T.partId = 0; $('#tiPartOk').hide(); $('#tiPartTag').hide().empty(); $('#tiGearSel').hide().empty(); T.gears = [];
-  $('#tiCust').prop('readonly', false).removeClass('ro-auto'); $('#tiCustHint').text('');
+  $('#tiCust').val('').prop('readonly', true).addClass('ro-auto'); $('#tiCustHint').text('');
 }
 function bindPart(pid, no, keepValues){
   T.partId = pid; $('#tiPart').val(no);
@@ -778,7 +778,7 @@ function resetForm(){
   $('#tiBody input[type=text],#tiBody input[type=number],#tiBody textarea').val(''); $('#tiPa').val(20);
   $('input[name=tiIo][value=ext]').prop('checked', true); $('#tiModT').val('M'); $('#tiHxDir').val('');
   $('input[name=tiHx][value=dec]').prop('checked', true); setHelix(null,'dec'); $('input[name=tiTt]').prop('checked', false);
-  $('#tiToolHint').text(''); $('#tiPartTag').hide(); $('#tiPartOk').hide(); $('#tiGearSel').hide(); $('#tiCust').prop('readonly', false).removeClass('ro-auto'); $('#tiCustHint').text('');
+  $('#tiToolHint').text(''); $('#tiPartTag').hide(); $('#tiPartOk').hide(); $('#tiGearSel').hide(); $('#tiCust').val('').prop('readonly', true).addClass('ro-auto'); $('#tiCustHint').text('');
   $('.ti-err').removeClass('show').text(''); $('.ti-bad').removeClass('ti-bad'); $('#tiAttMsg').text('');
   $('#tiBody :input').prop('disabled', false); $('#tiNo,#tiDate,#tiWho').prop('readonly', true); $('#tiSave').show();
   buildCalcRows(); setMeas('wk', false); buildTool('', {}, {}); fillCats($('#tiAttCat'), ['inquiry','drawing','other']); renderChips(); updModHint();
@@ -834,7 +834,7 @@ $('#tiSave').on('click', function(){
       meas:MEAS, helix_mode:$('input[name=tiHx]:checked').val(), helix_deg:(helixDeg()===null?0:rnd(helixDeg(),6)), helix_dir:$('#tiHxDir').val()};
   Object.keys(CALC).forEach(function(k){ spec[k] = {st:CALC[k].st, v:CALC[k].v, v2:CALC[k].v2}; });
   var tool = readTool();
-  var data = {id:T.cur?T.cur.id:0, part_id:T.partId, part_no_text:partTxt, customer_text:T.partId?'':$.trim($('#tiCust').val()), qty:$('#tiQty').val(),
+  var data = {id:T.cur?T.cur.id:0, part_id:T.partId, part_no_text:partTxt, customer_text:'', qty:$('#tiQty').val(),
       gear_io:$('input[name=tiIo]:checked').val(), spec:JSON.stringify(spec), tool_type:tool.type, tool:JSON.stringify(tool.t),
       special:JSON.stringify({chamfer:$('#tiChamfer').val(), stock:$('#tiStock').val(), tool_remark:$('#tiToolRemark').val(), work_remark:''}),
       remark:'', vendors:JSON.stringify(T.vendors.map(function(v){ return v.vendor_id; })), temp_key:T.tempKey};
