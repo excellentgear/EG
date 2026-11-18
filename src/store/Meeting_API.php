@@ -13,6 +13,7 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/meeting_lib.php';
 include_once $document_root . '/EGsystem/src/common/people_lib.php';
 include_once $document_root . '/EGsystem/src/common/person_schedule_lib.php';
+include_once $document_root . '/EGsystem/src/common/place_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -20,6 +21,7 @@ function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok
 try {
     $db = (new DBConnection())->getPDO();
     meeting_ensure_schema($db);
+    eg_place_ensure($db);
 } catch (Throwable $e) { jerr('DB連線失敗：'.$e->getMessage(), 500); }
 
 $u = meeting_current_user($db);
@@ -147,7 +149,7 @@ case 'meta': {
     if (!empty($perms['isAdmin'])) array_unshift($myRoles, '系統管理者');
     jout(['perms'=>$perms, 'my_roles'=>$myRoles, 'departments'=>$depts, 'years'=>$years, 'is_superadmin'=>meeting_is_superadmin($db, $uid),
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
-          'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
+          'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets, 'places'=>eg_place_list($db),
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
           'auto_submit'=>meeting_auto_submit_enabled($db),
@@ -161,6 +163,19 @@ case 'meta': {
           'stamp_template'=>$stTpl, 'approval_stamp_template'=>$apTpl,
           // 挑出席人員時要提示哪些行程來源（全站共用設定，定義與現值都由共用庫給，前端不寫死＝鐵律4）
           'sched_sources'=>eg_psched_sources(), 'sched_on'=>eg_psched_setting_get($db)]);
+}
+
+/* 共用地點選單（與訪談記錄共用）：填單的人可新增一個，管理員整批維護；使用中的不可改名／刪除 */
+case 'place_add': {
+    if (!$perms['canEdit'] && !$perms['canAdmin']) jerr('無新增權限', 403);
+    try { jout(['name'=>eg_place_add($db, (string)($_POST['name'] ?? ''))]); } catch (RuntimeException $e) { jerr($e->getMessage()); }
+}
+case 'place_save': {
+    if (!$perms['canAdmin']) jerr('僅管理員可維護地點選單', 403);
+    $rows = json_decode((string)($_POST['places'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('資料格式錯誤');
+    try { eg_place_save($db, $rows); } catch (RuntimeException $e) { jerr($e->getMessage()); } catch (Throwable $e) { jerr('儲存失敗：' . $e->getMessage(), 500); }
+    jout(['places'=>eg_place_list($db)]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */
@@ -746,6 +761,15 @@ case 'save': {
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 存檔本身也可能讓最後一個條件成立（最常見的是這次才指定主席）；交易外才做，避免自動送出的通知
     // 被存檔失敗的 rollback 一起回捲（通知已經推播出去就收不回來了）
+    // 行事曆連動：新建時若帶有來源事件（從行事曆帶入）就記下來；之後每次存檔都把時間／主題／出席人員回寫行事曆
+    $calId = (int)($_POST['cal_event_id'] ?? 0);
+    if ($calId > 0) {
+        $cq = $db->prepare("SELECT COUNT(*) FROM evenement WHERE id=? AND category_id=2");
+        $cq->execute([$calId]);
+        if ((int)$cq->fetchColumn() > 0)
+            $db->prepare("UPDATE meeting_record SET cal_event_id=? WHERE meeting_id=? AND cal_event_id IS NULL")->execute([$calId, $id]);
+    }
+    meeting_sync_calendar($db, $id);
     jout(['meeting_id'=>$id, 'auto_submitted'=>meeting_try_auto_submit($db, $id)]);
 }
 
@@ -1442,6 +1466,8 @@ case 'admin_backfill': {
             $sql = "UPDATE meeting_attendee SET signed=1, signed_at=CONCAT(?,' ',TIME(COALESCE(signed_at,NOW()))) WHERE meeting_id=?";
             $params = [$date, $id];
             if ($scope === 'attendee' && $targetId) { $sql .= " AND att_id=?"; $params[] = $targetId; }
+            // 已簽到者的日期不可被「補齊」覆蓋（2026-11-18 使用者回報）；只有明確指定某一位（改日期）才覆蓋
+            else { $sql .= " AND (signed=0 OR signed_at IS NULL)"; }
             $db->prepare($sql)->execute($params);
         }
 
@@ -1490,6 +1516,12 @@ case 'admin_backfill': {
                 $tUid = (int)($_POST['target_user_id'] ?? 0); // 只改單一簽名者的日期（同欄位內個別改日期）
                 foreach ($signers as $signer) {
                     if ($tUid && (int)$signer['user_id'] !== $tUid) continue;
+                    // 已確認過的人保留原本日期；只有明確指定單一簽名者（改日期）才覆蓋
+                    if (!$tUid) {
+                        $ex = $db->prepare("SELECT 1 FROM meeting_item_confirm WHERE item_id=? AND user_id=? LIMIT 1");
+                        $ex->execute([(int)$it['item_id'], $signer['user_id']]);
+                        if ($ex->fetchColumn()) continue;
+                    }
                     $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $signer['dept_id'], $dt]);
                 }
                 meeting_close_item_notice_if_done($db, (int)$it['item_id']); // 補齊後同樣要關掉還開著的回簽通知
@@ -1500,6 +1532,7 @@ case 'admin_backfill': {
         // 總經理一定要主席先核准過才能送出，所以 gm 階段查無紀錄時會先遞迴補上主席那關(同一個 $date)。
         $ensureAndApprove = function(string $lvl) use ($db, $id, $m, $date, &$ensureAndApprove) {
             $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
+            $wasApproved = $rec && $rec['status'] === 'approved';
             if (!$rec) {
                 if ($lvl === 'chair') {
                     if (!$m['chair_user_id']) jerr('尚未指定主席，無法補簽主席簽核');
@@ -1529,8 +1562,10 @@ case 'admin_backfill': {
                 $sg = $lvl === 'chair' ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']) : meeting_gm_signer_effective($db);
                 if ($sg && (int)$sg['id'] > 0 && (int)$rec['approver_id'] !== (int)$sg['id'])
                     $db->prepare("UPDATE approval_record SET approver_id=?, approver_name=? WHERE id=?")->execute([(int)$sg['id'], (string)$sg['name'], (int)$rec['id']]);
-                $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
-                   ->execute([$date, (int)$rec['id']]);
+                // 整場「補齊」不改已核准者的日期；單獨指定主席／總經理（改日期）才覆蓋
+                if (!($wasApproved && $scope === 'all'))
+                    $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
+                       ->execute([$date, (int)$rec['id']]);
             }
         };
         foreach (['chair','gm'] as $lvl) {

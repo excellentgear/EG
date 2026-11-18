@@ -32,6 +32,36 @@ const MEETING_DEFAULT_ROLE_FEATURES = [
 /* ============================================================
  * Schema（CREATE TABLE IF NOT EXISTS，比照 training_ensure_schema 慣例，每次 API 啟動時跑一次）
  * ============================================================ */
+/* 把會議記錄的日期／時間／主題／出席人員回寫到來源行事曆事件（行事曆事件 id 存在 meeting_record.cal_event_id）。
+   只動 category_id=2 的會議事件；出席人員整批與會議名單對齊（evenement_actor）。失敗只記 log，不影響會議存檔。 */
+function meeting_sync_calendar(PDO $db, int $meetingId): void {
+    try {
+        $q = $db->prepare("SELECT cal_event_id, subject, meeting_date, start_time, end_time FROM meeting_record WHERE meeting_id=?");
+        $q->execute([$meetingId]);
+        $m = $q->fetch(PDO::FETCH_ASSOC);
+        $eid = (int)($m['cal_event_id'] ?? 0);
+        if (!$m || $eid <= 0) return;
+        $chk = $db->prepare("SELECT COUNT(*) FROM evenement WHERE id=? AND category_id=2");
+        $chk->execute([$eid]);
+        if ((int)$chk->fetchColumn() === 0) return;
+        $s = $m['start_time'] ?: '09:00'; $e = $m['end_time'] ?: $s;
+        $ids = $db->prepare("SELECT DISTINCT user_id FROM meeting_attendee WHERE meeting_id=?");
+        $ids->execute([$meetingId]);
+        $uids = array_map('intval', $ids->fetchAll(PDO::FETCH_COLUMN));
+        $own = !$db->inTransaction();
+        if ($own) $db->beginTransaction();
+        $db->prepare("UPDATE evenement SET title=?, start=?, `end`=? WHERE id=?")
+           ->execute([$m['subject'], $m['meeting_date'].' '.$s.':00', $m['meeting_date'].' '.$e.':00', $eid]);
+        $db->prepare("DELETE FROM evenement_actor WHERE event_id=?")->execute([$eid]);
+        $ins = $db->prepare("INSERT INTO evenement_actor (event_id, user_id) VALUES (?,?)");
+        foreach ($uids as $u) if ($u > 0) $ins->execute([$eid, $u]);
+        if ($own) $db->commit();
+    } catch (Throwable $ex) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('meeting_sync_calendar: '.$ex->getMessage());
+    }
+}
+
 function meeting_ensure_schema(PDO $db): void {
     $db->exec("CREATE TABLE IF NOT EXISTS meeting_record (
         meeting_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -142,6 +172,12 @@ function meeting_ensure_schema(PDO $db): void {
         $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='mr_summary_json'")->fetchColumn();
         if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN mr_summary_json TEXT NULL COMMENT '管理審查結果摘要 {a,b,c,d,e}'");
+    } catch (Throwable $e) {}
+    /* 行事曆連動(2026-11-18)：從行事曆帶入建立的會議記錄記下來源事件 id，存檔時把時間／主題／出席人員回寫行事曆 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='cal_event_id'")->fetchColumn();
+        if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN cal_event_id INT NULL COMMENT '來源行事曆事件 evenement.id'");
     } catch (Throwable $e) {}
     /* 負責人確認方式(2026-10-15 使用者要求)：每個項目一個設定。
          onsite＝出席者當場簽章、未出席者收通知回簽(預設，與舊行為相同)
@@ -1096,7 +1132,25 @@ function meeting_submit_to_chair(PDO $db, array $m, int $byUid, string $byName):
         . ($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $byUid);
     if ($ev) eg_approval_set_live_event($db, $apId, $ev);
     $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    meeting_create_calendar_if_missing($db, $id);   // 送出後行事曆沒有這場會議就自動建立（手動送出與自動送出共用這一處）
     return '';
+}
+
+/** 會議記錄送出後，若尚未連結行事曆事件就自動建立一筆（類別＝會議、備註註明由會議紀錄自動建立），並同步出席人員。 */
+function meeting_create_calendar_if_missing(PDO $db, int $meetingId): void {
+    try {
+        $q = $db->prepare("SELECT cal_event_id, subject, meeting_date, start_time, end_time, location FROM meeting_record WHERE meeting_id=?");
+        $q->execute([$meetingId]);
+        $m = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$m || (int)($m['cal_event_id'] ?? 0) > 0) return;
+        $s = $m['start_time'] ?: '09:00'; $e = $m['end_time'] ?: $s;
+        $db->prepare("INSERT INTO evenement (title, category_id, start, `end`, allday, remark) VALUES (?,2,?,?,0,?)")
+           ->execute([$m['subject'], $m['meeting_date'].' '.$s.':00', $m['meeting_date'].' '.$e.':00',
+                      '由會議紀錄自動建立' . ($m['location'] ? '（地點：' . $m['location'] . '）' : '')]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("UPDATE meeting_record SET cal_event_id=? WHERE meeting_id=?")->execute([$eid, $meetingId]);
+        meeting_sync_calendar($db, $meetingId);
+    } catch (Throwable $ex) { error_log('meeting_create_calendar_if_missing: ' . $ex->getMessage()); }
 }
 
 /** 三個條件都到齊時自動送出主席簽核，並回報記錄人一聲（使用者要求：不必再手動按一次送簽核）。

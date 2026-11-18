@@ -322,8 +322,7 @@ foreach ($roleRows as $rr) {
             <div><label>結束時間 *</label><input type="text" id="edEnd" class="time-in" maxlength="5"
                     data-eg-hint="送出前必填。24 小時制，可直接打 1700 / 17，離開欄位自動轉成 17:00">
                 <div class="errmsg" id="errEdEnd"></div></div>
-            <div><label>地點 *</label><input type="text" id="edLoc" maxlength="100" list="edLocTags"
-                    data-eg-hint="送出前必填。可直接打字，或從曾用過的地點清單挑"><datalist id="edLocTags"></datalist>
+            <div><label>地點 * <a href="javascript:void(0)" id="btnPlaceMgr" style="display:none;font-size:12px;font-weight:normal;margin-left:6px;">管理地點</a></label><select id="edLoc" class="plsel" data-eg-filter="輸入地點名稱篩選…"></select>
                 <div class="errmsg" id="errEdLoc"></div></div>
             <div><label>主席（出席人員內選一位） *</label><select id="edChair"><option value="">請先加入出席人員</option></select></div>
             <div><label>記錄</label><input type="text" id="edRecorder" maxlength="50" class="ro-auto" readonly tabindex="-1" data-eg-skip title="自動帶入目前登入者，不可修改"></div>
@@ -475,7 +474,7 @@ foreach ($roleRows as $rr) {
                 <div style="grid-column:span 2;"><label>帶入的會議主題 *</label><input type="text" id="tpSubject" maxlength="100"></div>
             </div>
             <div class="grid3">
-                <div><label>地點</label><input type="text" id="tpLoc" maxlength="100"></div>
+                <div><label>地點</label><select id="tpLoc" class="plsel"></select></div>
                 <div><label>開始時間</label><input type="text" id="tpStart" class="time-in" maxlength="5" data-eg-hint="24 小時制；可直接打 0900 / 900 / 9"></div>
                 <div><label>結束時間</label><input type="text" id="tpEnd" class="time-in" maxlength="5" data-eg-hint="24 小時制；可直接打 1700 / 17"></div>
             </div>
@@ -505,6 +504,17 @@ foreach ($roleRows as $rr) {
     </div>
 </div></div>
 
+<!-- 共用地點選單管理（與訪談記錄共用；使用中的地點不可改名／刪除） -->
+<div class="mt-mask" id="placeMask"><div class="mt-modal">
+    <div class="m-head"><span>地點選單管理</span><span class="m-close" onclick="closeMask('placeMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;line-height:1.7;margin-bottom:8px;">會議紀錄與訪談記錄共用同一份地點。已被單據使用的地點不可改名或刪除，只能取消勾選（停用＝不再出現在新單）。</div>
+        <div id="placeMgrBox"></div>
+        <button type="button" class="b-att" id="btnPlaceAdd"><i class="fa fa-plus"></i> 新增地點</button>
+    </div>
+    <div class="m-foot"><button class="b-ok" id="btnPlaceOk">儲存</button><button onclick="closeMask('placeMask')">取消</button></div>
+</div></div>
+
 <!-- 常用設定管理（主題綁地點綁時間，管理員維護，套用後仍可自行修改） -->
 <div class="mt-mask" id="presetMask"><div class="mt-modal">
     <div class="m-head"><span>常用設定管理</span><span class="m-close" onclick="closeMask('presetMask')">✕</span></div>
@@ -515,7 +525,7 @@ foreach ($roleRows as $rr) {
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">
             <input type="text" id="pstSubject" placeholder="主題" style="flex:1 1 120px;">
-            <input type="text" id="pstLoc" placeholder="地點" style="flex:1 1 100px;">
+            <select id="pstLoc" class="plsel" style="flex:1 1 100px;"></select>
             <input type="text" id="pstStart" class="time-in" maxlength="5" placeholder="開始" style="width:66px;"
                    data-eg-hint="開始時間，24 小時制；可直接打 0900 / 900 / 9，離開欄位自動轉成 09:00">
             <input type="text" id="pstEnd" class="time-in" maxlength="5" placeholder="結束" style="width:66px;"
@@ -927,11 +937,63 @@ function loadMeta(cb){
     });
 }
 /* 常用設定：主題綁地點綁時間，套用後仍可自行修改；輸入框同時提供 datalist 建議（打字篩選＋手動輸入並存） */
+/* ===== 共用地點選單（與訪談記錄共用 eg_place）===== */
+var PLACE_SELS = '#edLoc,#tpLoc,#pstLoc';
+function fillPlaces(){
+    $(PLACE_SELS).each(function(){
+        var cur = $(this).val() || '', h = '<option value="">（請選擇）</option>', has = false;
+        (META.places||[]).forEach(function(p){ if (+p.is_active || p.name===cur) { h += '<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>'; if (p.name===cur) has = true; } });
+        if (cur && !has) h += '<option value="'+esc(cur)+'">'+esc(cur)+'</option>';
+        h += '<option value="__new">＋新增地點…</option>';
+        $(this).html(h).val(cur);
+    });
+    $('#btnPlaceMgr').toggle(!!(PERMS && PERMS.canAdmin));
+}
+function placeVal(sel, v){
+    v = v || ''; var $s = $(sel);
+    if (v && !$s.find('option').filter(function(){ return this.value===v; }).length) $s.find('option[value="__new"]').before('<option value="'+esc(v)+'">'+esc(v)+'</option>');
+    $s.val(v);
+}
+$(document).on('change', PLACE_SELS, function(){
+    var $s = $(this); if ($s.val() !== '__new') return;
+    var n = $.trim(prompt('新地點名稱：') || '');
+    if (!n) { $s.val(''); return; }
+    $.post(API, {action:'place_add', name:n}, function(res){
+        if (!res.ok) { alert(res.error||'新增失敗'); $s.val(''); return; }
+        META.places = META.places || [];
+        if (!META.places.some(function(p){ return p.name===res.name; })) META.places.push({name:res.name, is_active:1, used:0}); else META.places.forEach(function(p){ if (p.name===res.name) p.is_active=1; });
+        fillPlaces(); placeVal($s, res.name);
+    }, 'json');
+});
+var PLACES_EDIT = [];
+function renderPlaceMgr(){
+    var h = PLACES_EDIT.map(function(p,i){
+        return '<div class="pm-row" data-i="'+i+'" style="display:grid;grid-template-columns:1fr 64px 44px;gap:6px;align-items:center;margin-bottom:5px;"><input type="text" class="pmName" maxlength="100" value="'+esc(p.name)+'"'+(+p.used?' readonly title="已有單據使用，不可修改名稱"':'')+'>'
+            + '<label style="margin:0;"><input type="checkbox" class="pmAct" '+(+p.is_active?'checked':'')+'> 啟用</label>'
+            + (+p.used ? '<span title="已有單據使用，不可刪除（可取消勾選＝停用）" style="font-size:12px;color:#8a6d45;">'+p.used+'筆</span>' : '<a href="javascript:void(0)" class="pmDel" style="color:#DD5138;">✕</a>') + '</div>';
+    }).join('');
+    $('#placeMgrBox').html(h || '<div style="font-size:12px;color:#8a6d45;">還沒有地點</div>');
+}
+function collectPlaceMgr(){
+    var out = []; $('#placeMgrBox .pm-row').each(function(){ var i = +$(this).data('i'); out.push({place_id:(PLACES_EDIT[i]||{}).place_id||0, name:$.trim($(this).find('.pmName').val()), is_active:$(this).find('.pmAct').is(':checked')?1:0}); });
+    return out;
+}
+function syncPlaceMgr(){ var c = collectPlaceMgr(); PLACES_EDIT = c.map(function(p,i){ return $.extend({}, PLACES_EDIT[i]||{}, p); }); }
+$('#btnPlaceMgr').on('click', function(){ PLACES_EDIT = (META.places||[]).map(function(p){ return $.extend({}, p); }); renderPlaceMgr(); openMask('placeMask'); });
+$('#btnPlaceAdd').on('click', function(){ syncPlaceMgr(); PLACES_EDIT.push({place_id:0,name:'',is_active:1,used:0}); renderPlaceMgr(); });
+$(document).on('click', '.pmDel', function(){ var i = +$(this).closest('.pm-row').data('i'); syncPlaceMgr(); PLACES_EDIT.splice(i,1); renderPlaceMgr(); });
+$('#btnPlaceOk').on('click', function(){
+    $.post(API, {action:'place_save', places:JSON.stringify(collectPlaceMgr())}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        META.places = res.places||[]; fillPlaces(); closeMask('placeMask');
+    }, 'json');
+});
+
 function renderPresetUI(){
     var subj = {}, loc = {};
     PRESETS.forEach(function(p){ subj[p.subject]=1; if(p.location) loc[p.location]=1; });
     $('#edSubjectTags').html(Object.keys(subj).map(function(s){ return '<option value="'+esc(s)+'">'; }).join(''));
-    $('#edLocTags').html(Object.keys(loc).map(function(s){ return '<option value="'+esc(s)+'">'; }).join(''));
+    fillPlaces();
     var h = '<option value="">套用常用設定…</option>';
     PRESETS.forEach(function(p){
         var tm = p.start_time ? (p.start_time+(p.end_time?'~'+p.end_time:'')) : '';
@@ -943,7 +1005,7 @@ $('#edPreset').on('change', function(){
     var p = PRESETS.find(function(x){ return String(x.preset_id)===$('#edPreset').val(); });
     if (!p) return;
     $('#edSubject').val(p.subject);
-    if (p.location) $('#edLoc').val(p.location);
+    if (p.location) placeVal('#edLoc', p.location);
     if (p.start_time) $('#edStart').val(p.start_time);
     if (p.end_time) $('#edEnd').val(p.end_time);
     edTimeValidate();
@@ -1043,8 +1105,9 @@ function openCreate(noticeMode){
     ED_SAVED_AT = ''; edMarkClean();
 }
 /* 從行事曆挑選「今天」的會議類別事件，自動帶入日期/時間/主題/出席人員（使用者明確要求限當天；只在新增時提供，編輯既有記錄不覆蓋） */
-var CAL_EVENTS = [];
+var CAL_EVENTS = [], CAL_PICK_ID = 0;
 function loadCalendarMeetings(){
+    CAL_PICK_ID = 0;
     $.getJSON(API, {action:'calendar_meetings'}, function(res){
         if (!res.ok) return;
         CAL_EVENTS = res.events||[];
@@ -1060,6 +1123,7 @@ $('#edCalPick').on('change', function(){
     var ev = CAL_EVENTS.find(function(x){ return String(x.id)===$('#edCalPick').val(); });
     $(this).val('');
     if (!ev) return;
+    CAL_PICK_ID = +ev.id;
     $('#edSubject').val(ev.title);
     $('#edDate').val(String(ev.start).substr(0,10));
     $('#edStart').val(String(ev.start).substr(11,5));
@@ -1112,7 +1176,7 @@ function openEdit(id, keepSaved){
         mtSyncYear(m.meeting_date);        // 補舊年度的會議：清單年度要跟著切，關掉跳窗才找得到
         $('#edTitle').text('編輯會議紀錄');
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
-        $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); $('#edLoc').val(m.location||'');
+        $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); placeVal('#edLoc', m.location||'');
         $('#edRecorder').val(m.recorder_name||'');
         ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||'', alt_posts:a.alt_posts||'', signed:+a.signed===1?1:0}; });
         ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
@@ -1296,7 +1360,7 @@ $('#edTpl').on('change', function(){
         if (!r.ok){ alert(r.error||'套用失敗'); return; }
         var t = r.template;
         $('#edSubject').val(t.subject);
-        if (t.location) $('#edLoc').val(t.location);
+        if (t.location) placeVal('#edLoc', t.location);
         if (t.start_time) $('#edStart').val(t.start_time);
         if (t.end_time) $('#edEnd').val(t.end_time);
         edTimeValidate();
@@ -1349,7 +1413,7 @@ function tplEdit(id){
                        owner_depts:String(it.owner_depts||'').split(',').filter(Boolean).map(Number)}; }),
                   sync:t.sync||null}
              : {tpl_id:0, notice_depts:[], items:[], sync:null};
-    $('#tpName').val(t?t.name:''); $('#tpSubject').val(t?t.subject:''); $('#tpLoc').val(t&&t.location?t.location:'');
+    $('#tpName').val(t?t.name:''); $('#tpSubject').val(t?t.subject:''); placeVal('#tpLoc', t&&t.location?t.location:'');
     $('#tpStart').val(t&&t.start_time?t.start_time:''); $('#tpEnd').val(t&&t.end_time?t.end_time:''); $('#tpNotice').val(t&&t.notice_items?t.notice_items:'');
     $('#tplListBox,#tplCloseBtn').hide(); $('#tplEditBox,#tplBackBtn,#tplSaveBtn').show();
     $('#tplMgrTitle').text(t ? '編輯會議範本' : '新增會議範本');
@@ -2142,6 +2206,7 @@ function gatherPayload(){
         action:'save', meeting_id: EDIT_ID, subject: $('#edSubject').val(), meeting_date: $('#edDate').val(),
         start_time: $('#edStart').val(), end_time: $('#edEnd').val(), location: $('#edLoc').val(),
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
+        cal_event_id: EDIT_ID ? 0 : (CAL_PICK_ID||0),   // 從行事曆帶入的來源事件（存檔後後端會回寫行事曆時間／出席人員）
         tpl_id: EDIT_ID ? 0 : TPL_ID, mr_waive: JSON.stringify(MR_WAIVE),
         attendees: JSON.stringify(ATT),
         discussion_json: JSON.stringify(DISC.filter(function(r){ return $.trim(r.content||'')!==''; })),
@@ -2325,7 +2390,7 @@ function viewHtml(res){
            + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,dispDate(m.meeting_date),false,mStampSchema(),a.dept_name,a.position_name):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;" title="實際簽到時間(僅供稽核，蓋章日期一律採會議日期)">'+esc(String(a.signed_at||'').substr(0,16))+'</span>'
                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'attendee\','+a.att_id+')" style="font-size:11px;">[改日期/補簽]</a>':'')+'</span>'
-                : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
+                : '<span class="sign-row"><input type="text" autocomplete="off" name="sg_'+a.user_id+'_x" style="-webkit-text-security:disc;" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
                   + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();signAttendee('+m.meeting_id+','+a.user_id+');}">'
                   + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'attendee\','+a.att_id+')" style="font-size:11px;">[超管補簽]</a>':'')
                   + '</span>')+'</td></tr>';
@@ -2685,7 +2750,7 @@ function itemConfirmCellHtml(it){
         }
         inline += '<div class="item-confirm-box"><span style="font-size:11px;" title="本次有出席，可當場輸入本人密碼回簽">'
              + esc(s.dept_name ? (s.dept_name+'：') : '')+esc(s.user_name)+slotTag(s)+'（本次出席，可當場簽）</span>'
-             + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
+             + '<input type="text" autocomplete="off" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;-webkit-text-security:disc;" data-eg-skip'
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
              + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
     });
