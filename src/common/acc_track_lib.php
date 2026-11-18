@@ -596,6 +596,16 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
         if (empty($perms['canAdmin'])) return ['success' => false, 'message' => '沒有回復到較早狀態的權限（僅本頁管理員）'];
     }
 
+    // 退貨折讓還沒按「已確認」不能送會計（該筆退貨已用折讓扣過款，要先確認才不會重複扣或漏扣）
+    if ($row['side'] === 'ar' && $toIdx >= array_search('sent_to_acc', $order, true) && strpos((string)$row['party_key'], 'UNM:') !== 0) {
+        $todo = aca_unconfirmed_returns($db, (string)$row['party_key'], (string)$row['billing_month']);
+        if ($todo) {
+            $nos = implode('、', array_map(fn($x) => $x['src_no'], $todo));
+            return ['success' => false, 'blocked' => true,
+                    'message' => '【' . ($row['party_name'] ?: $row['party_key']) . '】的退貨折讓尚未確認（' . $nos . '），不能「已送會計」。請先雙擊該列開啟明細，在退貨折讓那一列按「已確認」。'];
+        }
+    }
+
     $now = date('Y-m-d H:i:s');
     $db->beginTransaction();
     try {

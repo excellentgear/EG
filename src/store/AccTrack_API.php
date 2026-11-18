@@ -136,6 +136,9 @@ switch ($action) {
                 $_ar['allow_total'] = $am ? $am['total'] : 0;
                 $_ar['allow_carry'] = $am ? $am['carry'] : 0;   // 其中「前期折讓」張數
                 $_ar['allow_todo']  = $am ? $am['todo'] : 0;    // 尚未確認的明細筆數
+                $_ar['allow_ret_todo'] = $am ? $am['ret_todo'] : 0;   // 尚未確認的退貨折讓（已送會計前要確認）
+                $_ar['allow_delta'] = $am ? $am['delta'] : 0;   // 折讓對本月應收的影響（出貨折讓已確認＝扣、退貨折讓＝排除該筆退貨扣款）
+                if ($am && abs($am['delta']) > 0.0001) $_ar['total_amt'] = (float)($_ar['total_amt'] ?? 0) + $am['delta'];
             }
             unset($_ar);
         }
@@ -228,7 +231,16 @@ switch ($action) {
                 $ownerFilter === 0 ? empty($r['owner_id']) : (int)($r['owner_id'] ?? 0) === $ownerFilter));
         }
 
-        actOut(['rows' => $rows, 'total' => count($rows), 'counts' => $counts, 'bm' => $bm, 'side' => $side]);
+        // 本月份尚未確認的退貨折讓（清單上方紅色提示：哪個客戶的哪幾筆退貨折讓還沒確認）
+        $retTodo = [];
+        if ($side === 'ar') {
+            foreach (aca_month_allowances($db, $bm) as $_a) foreach ($_a['items'] as $_it) {
+                if ($_it['src_type'] === 'IR' && $_it['confirm_bm'] === null) $retTodo[(string)$_a['customer_name']][] = $_it['src_no'];
+            }
+        }
+        $retTodoOut = [];
+        foreach ($retTodo as $_n => $_nos) $retTodoOut[] = ['customer' => $_n, 'nos' => $_nos];
+        actOut(['rows' => $rows, 'total' => count($rows), 'counts' => $counts, 'bm' => $bm, 'side' => $side, 'ret_allow_todo' => $retTodoOut]);
     }
 
     case 'set_status': {
@@ -237,7 +249,7 @@ switch ($action) {
         $note    = trim((string)($_POST['note'] ?? ''));
         if ($trackId <= 0) actErr('缺少追蹤資料');
         $r = act_set_status($db, $trackId, $to, $perms, $note !== '' ? $note : null);
-        if (!$r['success']) actErr($r['message']);
+        if (!$r['success']) actErr($r['message'], 400, !empty($r['blocked']) ? ['blocked' => true] : []);
         actOut(['message' => $r['message']]);
     }
 

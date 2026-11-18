@@ -213,6 +213,11 @@ table.art-t tr.allow-row.allow-ok td, table.art-t tr.allow-row.allow-ok:hover td
 .allow-cf.on{background:#9DB36A;border-color:#7F9650;color:#fff;}
 .allow-cf[disabled]{opacity:.5;cursor:not-allowed;}
 .allow-carry{display:inline-block;padding:0 6px;border-radius:8px;font-size:10px;line-height:16px;background:#E4D3BC;color:#6B4423;}
+table.art-t tr.ret-void td, table.art-t tr.ret-void:hover td{background:#F6D9D2 !important;text-decoration:line-through;color:#8a4b3a;}
+table.art-t tr.ret-void td b{text-decoration:none;display:inline-block;color:#B4411F;}
+.cf-who{font-size:10px;color:#6B4423;line-height:1.3;white-space:normal;}
+#retAllowBanner{display:none;margin:0 0 10px;padding:8px 12px;border:2px solid #DD5138;border-radius:6px;background:#FCE3DC;color:#8a2c14;font-size:13px;line-height:1.6;}
+#retAllowBanner.show{display:block;}
 .defer-note{font-size:10px;color:#B4691A;line-height:1.3;}
 #allowBody table.art-t{table-layout:auto;width:100%;}
 #allowBody table.art-t td:nth-child(5),#allowBody table.art-t th:nth-child(5){min-width:300px;white-space:normal;}
@@ -282,6 +287,7 @@ table.art-t tr.allow-row.allow-ok td, table.art-t tr.allow-row.allow-ok:hover td
           <button class="btn btn-sm btn-warm" id="btnManualAdd" onclick="openManualAdd()"><i class="fa fa-plus"></i> <span id="btnManualAddTxt">人工新增應收</span></button>
         </div>
       </h4>
+      <div id="retAllowBanner"></div>
       <div class="st-cards" id="stCards"></div>
       <div class="batch-bar" id="batchBar">
         <span><i class="fa fa-check-square-o"></i> 已選 <b id="batchCnt">0</b> 筆</span>
@@ -547,6 +553,7 @@ table.art-t tr.allow-row.allow-ok td, table.art-t tr.allow-row.allow-ok:hover td
       <ul>
         <li>客戶（廠商）名稱旁的紅色「<b>?月未對帳</b>」＝2026-10 起前面月份仍是空白或處理中、也沒略過的月份；點它（或雙擊該列）明細會<b>分月顯示</b>。</li>
         <li>「<b>有折讓</b>」＝本帳款月份有折讓單，折讓項目在明細置頂、暖色底。折讓開立<b>之後的每個月</b>都會繼續出現（標「前期折讓」，不計入該月金額），直到有人在明細按「<b>已確認</b>」（該列變暖淺綠），<b>確認月份之後</b>就不再顯示；要取消請回到確認的那個月。</li>
+        <li><b>出貨折讓</b>＝那筆貨還沒收款，開立後每個月都顯示，金額（含稅，扣除）算在你按下「已確認」的<b>那個對帳月份</b>（不是按下的日期）。<b>退貨折讓</b>＝那筆退貨已用折讓扣過款，只在退貨單自己的帳款月份提示，該月明細裡那筆退貨整列刪去線、淺紅底、不算金額；<b>退貨折讓沒確認就不能按「已送會計」</b>，清單上方會用紅框列出是哪些客戶。誰、何時按下已確認都會記錄並顯示在該列。</li>
         <li>「<b>延到下月對帳</b>」＝這個月先不對、跟下個月一起對（客戶偶爾兩個月一起對帳）。狀態不變，下個月的明細會連同本月一起顯示；下個月按到「已對帳」以上時，延後的月份自動一併跟著。「已確認」與「延到下月對帳」的權限在「設定 → 角色權限矩陣」（應收）勾選。</li>
         <li>應收操作欄的「給客戶對帳單」「客戶提供對帳單」「已收款」是獨立標記，點一下標記（顯示日期）、再點取消，不影響狀態與工作天數統計；需本頁管理員、業務或會計角色。</li>
       </ul>
@@ -711,6 +718,7 @@ function api(data){
         .fail(function(xhr){
             var r = {}; try { r = JSON.parse(xhr.responseText); } catch(e){}
             showToast(r.error || '發生錯誤', 'error');
+            if (r.blocked) alert(r.error);   // 被規則擋下（例如退貨折讓未確認）：再用對話框明顯提示
         });
 }
 function apiGet(action, params){
@@ -915,6 +923,15 @@ function manualSave(){
     });
 }
 
+/* 本月份還沒確認的退貨折讓：清單上方紅色提示（這些客戶按「已送會計」會被擋下） */
+function renderRetAllowBanner(list, bm){
+    var el = document.getElementById('retAllowBanner');
+    if (!list.length || SIDE !== 'ar') { el.className = ''; el.innerHTML = ''; return; }
+    el.innerHTML = '<b>⚠ ' + esc(bm) + ' 有 ' + list.length + ' 位客戶的退貨折讓尚未確認，不能按「已送會計」：</b><br>'
+        + list.map(function(x){ return esc(x.customer) + '（' + x.nos.map(esc).join('、') + '）'; }).join('　｜　')
+        + '<br><span style="font-size:12px;">請雙擊該客戶列開啟明細，在「退貨折讓」那一列按「已確認」。</span>';
+    el.className = 'show';
+}
 function loadList(keepPage){
     var bm = document.getElementById('fBm').value || defaultBm();
     var keepY = window.pageYOffset;
@@ -923,6 +940,7 @@ function loadList(keepPage){
     apiGet('list', {side:SIDE, bm:bm, zero:(SIDE==='ap' && document.getElementById('fZero').checked)?1:0, _:Date.now()}).done(function(r){
         if (!r || !r.ok) return;
         ALL_ROWS = r.rows;
+        renderRetAllowBanner(r.ret_allow_todo || [], bm);
         renderStCards(r.counts);
         rebuildOwnerFilterOptions();
         applyFilters(keepPage === true);
@@ -1568,22 +1586,32 @@ $(function(){
         var items = d.items || [], h = '', cnt = 0, allowTotal = 0;
         var n = function(v){ return '<td class="n">' + fmtMoney(v) + '</td>'; }, dotd = function(x){ return String(x||'').replace(/-/g,'.'); };
         var canCf = canMx('allow_confirm'), blank = isAr ? '<td></td>' : '';   // 應收明細最左多一欄「折讓確認」
-        // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立；
-        // 前期折讓（折讓單的帳款月份早於本月）只提醒、不計入本月合計；按「已確認」後該列變暖淺綠，確認月份之後不再顯示
+        // 折讓視為該帳款月份待對帳的項目：置頂、暖色底，並註明誰於何時開立；按「已確認」後該列變暖淺綠，確認月份之後不再顯示。
+        // 金額（一律以「對帳月份」計，不是按下去的日期）：出貨折讓＝在按下已確認的那個月扣掉折讓金額（含稅）；
+        // 退貨折讓＝該月對帳明細裡對應那筆退貨整列刪去線、淺紅底、不算金額（已用折讓扣過款，避免重複扣）。
+        var retVoid = {}, rate = Number(d.tax_rate) || 0;
+        allows.forEach(function(a){ (a.items||[]).forEach(function(i){ if (i.src_type==='IR') retVoid[i.src_id] = true; }); });
         allows.forEach(function(a){
             (a.items||[]).forEach(function(i){ cnt++;
-                if (!a.carried) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
+                var isRet = (i.src_type==='IR');
+                if (!isRet && Number(i.confirmed)) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
                 var cfLater = !!i.confirm_bm && !Number(i.confirmed);   // 後端只回「確認月份 ≧ 本月」的明細，所以有確認月份又不是本月＝之後的月份才確認的
+                var who = i.confirm_by ? esc(i.confirm_by) + ' ' + esc(String(i.confirm_at||'').replace(/-/g,'.')) : '';
                 var cfBtn = Number(i.confirmed)
-                    ? '<button class="allow-cf on" ' + (canCf?'':'disabled ') + 'title="' + esc((i.confirm_by||'') + ' ' + String(i.confirm_at||'').replace(/-/g,'.') + ' 確認（再點一下取消）') + '" data-item="' + i.item_id + '" data-on="0">✓ 已確認</button>'
-                    : (cfLater ? '<span class="hint" title="' + esc(i.confirm_by||'') + '">' + esc(String(i.confirm_bm).slice(5).replace(/^0/,'')) + '月已確認</span>'
+                    ? '<button class="allow-cf on" ' + (canCf?'':'disabled ') + 'title="再點一下取消確認" data-item="' + i.item_id + '" data-on="0">✓ 已確認</button><div class="cf-who">' + who + '</div>'
+                    : (cfLater ? '<span class="hint">' + esc(String(i.confirm_bm).slice(5).replace(/^0/,'')) + '月已確認</span><div class="cf-who">' + who + '</div>'
                                : '<button class="allow-cf" ' + (canCf?'':'disabled title="沒有確認權限（請洽本頁管理員在角色權限矩陣勾選）" ') + 'data-item="' + i.item_id + '" data-on="1">已確認</button>');
-                h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + '"><td class="c">' + cfBtn + '</td><td>' + (a.carried ? '<span class="allow-carry" title="折讓單的帳款月份是 ' + esc(a.billing_month) + '，之後每月提醒到確認為止，不計入本月合計">前期折讓 ' + esc(a.billing_month) + '</span><br>' : '') + '折讓（' + (i.src_type==='IR'?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
+                var tag = isRet
+                    ? '<span class="allow-carry" title="這筆退貨已用折讓單扣過款；只在退貨單自己的帳款月份提示，需按「已確認」。已送會計前必須確認">退貨折讓（已扣款）</span><br>'
+                    : (a.carried ? '<span class="allow-carry" title="折讓單的帳款月份是 ' + esc(a.billing_month) + '；每月提醒到按「已確認」為止，金額算在確認的那個對帳月份">前期折讓 ' + esc(a.billing_month) + '</span><br>' : '');
+                h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + '"><td class="c">' + cfBtn + '</td><td>' + tag + '折讓（' + (isRet?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
                    + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';
             });
         });
         items.forEach(function(it){ cnt++;
-            if (isAr) h += '<tr>' + blank + '<td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + '</td></tr>';
+            var voided = isAr && it.kind==='return' && retVoid[it.src_id];
+            if (voided) allowTotal += Math.round(-(Number(it.amount)||0) * (1 + rate));   // 排除這筆退貨的含稅扣款
+            if (isAr) h += '<tr' + (voided?' class="ret-void" title="這筆退貨已開折讓單扣款，不需做帳"':'') + '>' + blank + '<td>' + esc(it.sale_type || (it.kind==='return'?'退貨':'出貨')) + '</td><td>' + esc(it.no) + '</td><td>' + esc(it.date) + '</td><td>' + esc(it.spec) + '</td><td class="n">' + (it.qty||0) + '</td>' + n(it.unit_price) + n(it.amount) + '<td>' + esc(it.note) + (voided ? '<br><b>已開折讓，不需做帳</b>' : '') + '</td></tr>';
             else h += '<tr><td>' + esc(it.doc_no) + '</td><td>' + esc(it.d) + '</td><td>' + esc(it.process_name) + '</td><td>' + esc(it.bom) + '</td><td class="n">' + (it.transfer_qty||0) + '</td>' + n(it.unit_price) + n(it.process_amount) + n(it.tax_amount) + '<td>' + esc(it.note) + '</td></tr>';
         });
         var tot = isAr ? d.total_amt : d.total_amount;

@@ -872,66 +872,113 @@ function aca_attach_delete(PDO $db, int $fileId, ?array $user = null): array
 
 /* ── 對帳進度追蹤整合（recon_track.php）──────────────────────────── */
 /**
- * 折讓明細在哪些帳款月份要出現（2026-11-18 使用者定案）：
- *  ① 折讓單自己的帳款月份（原本就顯示）
- *  ② 折讓日期所在月份起，之後每個月都顯示——開在 9/29 的折讓，9/25 以前就已經對完帳的人才不會不知道
- *  ③ 但只要有人在某月按了「已確認」，那個月之後就不再顯示（確認當月仍顯示，底色變暖淺綠，可取消）
- * 以下 SQL 片段（$bm 以 :bm 綁定）給 customer_map／recon_rows 共用，規則只此一份。
+ * 折讓明細在哪些帳款月份要出現（2026-11-18 使用者定案，逐筆明細判定）：
+ *  ● 出貨折讓（src_type=IS）＝那筆貨還沒收款：折讓單的帳款月份、折讓日期所在月份起，之後每個月都顯示
+ *    （開在 9/29 的折讓，9/25 以前就已對完帳的人才不會不知道），直到有人按「已確認」；確認月份之後不再顯示。
+ *  ● 退貨折讓（src_type=IR）＝這筆退貨已經用折讓扣過款：只顯示在「退貨單自己的帳款月份」（該月對帳明細裡那筆退貨
+ *    會整列刪去線、淺紅底、不算金額），同樣要按「已確認」；之後的月份不再提示。
+ * 不管哪一種：確認月份（含）以前仍顯示，確認月份之後不顯示。規則只此一份（customer_map／recon_rows／送會計擋關共用）。
  */
-function aca_recon_where(): string
+function aca_customer_row(PDO $db, string $cid): ?array
 {
-    return "a.status='active' AND (a.billing_month = :bm OR (a.billing_month < :bm AND DATE_FORMAT(a.allow_date,'%Y-%m') <= :bm))
-            AND (c.item_id IS NULL OR c.confirm_bm >= :bm)";
+    static $cache = [];
+    if (array_key_exists($cid, $cache)) return $cache[$cid];
+    $found = null;
+    foreach (acc_customer_by_name($db) as $c) { if (trim((string)$c['customer_id']) === $cid) { $found = $c; break; } }
+    return $cache[$cid] = $found;
 }
 
-/** 某帳款月份「有折讓」的客戶：customer_id => ['cnt'=>折讓單張數,'total'=>含稅合計,'carry'=>其中前期折讓張數,'todo'=>尚未確認的明細筆數] */
-function aca_recon_customer_map(PDO $db, string $bm): array
+/** 退貨單（ir_track）所屬的帳款月份：手動指定優先，否則依該客戶結帳日（含臨時結帳日）算 */
+function aca_ir_bm(PDO $db, int $irId, string $customerId): ?string
+{
+    $st = $db->prepare("SELECT DATE_FORMAT(IR_date,'%Y-%m-%d') d, billing_month_override ovr FROM ir_track WHERE IR_id=?");
+    $st->execute([$irId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r || !$r['d']) return null;
+    $o = trim((string)$r['ovr']);
+    if (preg_match('/^\d{4}-\d{2}$/', $o)) return $o;
+    $c = aca_customer_row($db, $customerId);
+    return acc_billing_month_ex($r['d'], acc_cutoff_for($c, acc_global_cutoff($db)), acc_settle_ex_of($db, $c));
+}
+
+/**
+ * $bm 這個帳款月份要顯示的折讓單＋明細（$customerId=null＝全部客戶）。
+ * 每張折讓單多帶 carried（折讓單的帳款月份早於 $bm）；每筆明細多帶 confirmed（在 $bm 確認）／confirm_bm／confirm_by／confirm_at。
+ */
+function aca_month_allowances(PDO $db, string $bm, ?string $customerId = null): array
 {
     aca_ensure_schema($db);
-    $st = $db->prepare("SELECT a.customer_id, a.allow_id, (a.billing_month <> :bm) carried,
-                               SUM(i.amount + i.tax_amount) total, SUM(c.item_id IS NULL) todo
-                        FROM acc_allowance a
-                        JOIN acc_allowance_item i ON i.allow_id = a.allow_id
-                        LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
-                        WHERE " . aca_recon_where() . "
-                        GROUP BY a.customer_id, a.allow_id, carried");
-    $st->execute([':bm' => $bm]);
+    $sql = "SELECT a.*, i.item_id AS _iid, c.confirm_bm, c.by_name AS confirm_by, DATE_FORMAT(c.confirmed_at,'%Y-%m-%d %H:%i') AS confirm_at
+            FROM acc_allowance a
+            JOIN acc_allowance_item i ON i.allow_id = a.allow_id
+            LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
+            WHERE a.status='active' AND (c.item_id IS NULL OR c.confirm_bm >= :bm)
+              AND (i.src_type='IR' OR a.billing_month = :bm OR (a.billing_month < :bm AND DATE_FORMAT(a.allow_date,'%Y-%m') <= :bm))";
+    $p = [':bm' => $bm];
+    if ($customerId !== null) { $sql .= " AND a.customer_id = :cid"; $p[':cid'] = $customerId; }
+    $sql .= " ORDER BY a.allow_date, a.allow_id, i.item_id";
+    $st = $db->prepare($sql); $st->execute($p);
+    $q = $db->prepare("SELECT * FROM acc_allowance_item WHERE item_id=?");
     $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $k = (string)$r['customer_id'];
-        $o = $out[$k] ?? ['cnt' => 0, 'total' => 0.0, 'carry' => 0, 'todo' => 0];
-        $o['cnt']++; $o['total'] += (float)$r['total']; $o['todo'] += (int)$r['todo'];
-        if ((int)$r['carried']) $o['carry']++;
+        $iid = (int)$r['_iid'];
+        $q->execute([$iid]);
+        $it = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$it) continue;
+        if ($it['src_type'] === 'IR' && aca_ir_bm($db, (int)$it['src_id'], (string)$r['customer_id']) !== $bm) continue;   // 退貨折讓只在退貨單自己的月份
+        if ($it['src_type'] === 'IR') {   // 這筆退貨在該月對帳明細裡的含稅扣款（負數）；退貨折讓成立時整列刪去線、不算金額
+            $rq = $db->prepare("SELECT Qty*Unit_price FROM ir_track WHERE IR_id=?"); $rq->execute([(int)$it['src_id']]);
+            $it['ret_amount_incl'] = -round((float)$rq->fetchColumn() * (1 + acc_tax_rate($db)), 0);
+        }
+        $it['confirm_bm'] = $r['confirm_bm']; $it['confirm_by'] = $r['confirm_by']; $it['confirm_at'] = $r['confirm_at'];
+        $it['confirmed'] = ($r['confirm_bm'] !== null && $r['confirm_bm'] === $bm) ? 1 : 0;
+        $aid = (int)$r['allow_id'];
+        if (!isset($out[$aid])) {
+            $a = $r; foreach (['_iid', 'confirm_bm', 'confirm_by', 'confirm_at'] as $k) unset($a[$k]);
+            $a['items'] = []; $a['carried'] = ($a['billing_month'] < $bm) ? 1 : 0;
+            $out[$aid] = $a;
+        }
+        $out[$aid]['items'][] = $it;
+    }
+    return array_values($out);
+}
+
+/** 某帳款月份「有折讓」的客戶：customer_id => ['cnt'=>折讓單張數,'total'=>含稅合計,'carry'=>其中前期折讓張數,'todo'=>尚未確認的明細筆數,'ret_todo'=>尚未確認的退貨折讓筆數] */
+function aca_recon_customer_map(PDO $db, string $bm): array
+{
+    $out = [];
+    foreach (aca_month_allowances($db, $bm) as $a) {
+        $k = (string)$a['customer_id'];
+        $o = $out[$k] ?? ['cnt' => 0, 'total' => 0.0, 'carry' => 0, 'todo' => 0, 'ret_todo' => 0, 'delta' => 0.0];
+        $o['cnt']++; if ($a['carried']) $o['carry']++;
+        foreach ($a['items'] as $it) {
+            $o['total'] += (float)$it['amount'] + (float)$it['tax_amount'];
+            // 對本月應收金額的影響（以「對帳月份」計，不是按下去的日期）：出貨折讓＝在按下已確認的那個月扣掉折讓金額；退貨折讓＝排除對應那筆退貨扣款（加回）
+            if ($it['src_type'] === 'IS' && $it['confirmed']) $o['delta'] -= (float)$it['amount'] + (float)$it['tax_amount'];
+            if ($it['src_type'] === 'IR') $o['delta'] -= (float)($it['ret_amount_incl'] ?? 0);
+            if (!$it['confirmed'] && $it['confirm_bm'] === null) { $o['todo']++; if ($it['src_type'] === 'IR') $o['ret_todo']++; }
+        }
         $out[$k] = $o;
     }
     return $out;
 }
 
-/**
- * 某客戶某帳款月份要顯示的折讓單＋明細（對帳明細置頂顯示、折讓資料跳窗共用）。
- * 每張折讓單多帶 carried（＝前期折讓：折讓單的帳款月份早於 $bm）；每筆明細多帶
- * confirmed（此月確認）／confirm_bm／confirm_by／confirm_at（之後月份才確認的也會帶，供顯示「X 月已確認」）。
- */
+/** 某客戶某帳款月份要顯示的折讓單＋明細（對帳明細置頂顯示、折讓資料跳窗共用） */
 function aca_recon_rows(PDO $db, string $customerId, string $bm): array
 {
-    aca_ensure_schema($db);
-    $st = $db->prepare("SELECT DISTINCT a.* FROM acc_allowance a
-                        JOIN acc_allowance_item i ON i.allow_id = a.allow_id
-                        LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
-                        WHERE a.customer_id = :cid AND " . aca_recon_where() . " ORDER BY a.allow_date, a.allow_id");
-    $st->execute([':cid' => $customerId, ':bm' => $bm]);
+    return aca_month_allowances($db, $bm, $customerId);
+}
+
+/** 這個月份、這位客戶還沒按「已確認」的退貨折讓明細（「已送會計」前要全部確認，沒確認就擋下） */
+function aca_unconfirmed_returns(PDO $db, string $customerId, string $bm): array
+{
     $out = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
-        $q = $db->prepare("SELECT i.*, c.confirm_bm, c.by_name AS confirm_by, DATE_FORMAT(c.confirmed_at,'%Y-%m-%d %H:%i') AS confirm_at
-                           FROM acc_allowance_item i LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
-                           WHERE i.allow_id=? AND (c.item_id IS NULL OR c.confirm_bm >= ?) ORDER BY i.item_id");
-        $q->execute([$a['allow_id'], $bm]);
-        $items = $q->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($items as &$it) $it['confirmed'] = ($it['confirm_bm'] !== null && $it['confirm_bm'] === $bm) ? 1 : 0;
-        unset($it);
-        $a['items'] = $items;
-        $a['carried'] = ($a['billing_month'] < $bm) ? 1 : 0;
-        $out[] = $a;
+    foreach (aca_month_allowances($db, $bm, $customerId) as $a) {
+        foreach ($a['items'] as $it) {
+            if ($it['src_type'] === 'IR' && $it['confirm_bm'] === null) {
+                $out[] = ['src_no' => $it['src_no'], 'allow_no' => $a['allow_no'], 'amount' => (float)$it['amount'] + (float)$it['tax_amount'], 'customer_name' => $a['customer_name']];
+            }
+        }
     }
     return $out;
 }
