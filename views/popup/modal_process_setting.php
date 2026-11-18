@@ -18,6 +18,17 @@ $stmt_tabs->execute();
 $visible_tabs_json = $stmt_tabs->fetchColumn();
 $visible_tabs = $visible_tabs_json ? json_decode($visible_tabs_json, true) : [];
 
+// 「製程大類對應廠商」設定：目前只有加工排程管理 V2 讀這份設定，其他頁面載入本視窗時不顯示，避免設了卻沒作用
+$show_type_makers = (strpos((string)($_SERVER['HTTP_REFERER'] ?? ''), 'process_schedule_V2') !== false);
+$type_makers_cfg = [];
+$internal_makers = [];
+if ($show_type_makers) {
+    $tm_json = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group = 'PROCESS_SCHEDULE' AND param_key = 'type_makers'")->fetchColumn();
+    $tm = $tm_json ? json_decode($tm_json, true) : [];
+    if (is_array($tm)) $type_makers_cfg = $tm;
+    $internal_makers = $pdo->query("SELECT maker_id_no, maker_id FROM maker_list WHERE internal = 1 ORDER BY maker_id_no")->fetchAll(PDO::FETCH_ASSOC);
+}
+
 // Fetch tab font size settings
 $stmt_fonts = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group = 'PROCESS_SCHEDULE' AND param_key = 'tab_font_sizes'");
 $stmt_fonts->execute();
@@ -195,6 +206,45 @@ $ui_settings = ($row_ui && !empty($row_ui['param_value'])) ? json_decode($row_ui
             <div style="margin-top: 15px; text-align: right;">
                 <button type="button" class="btn btn-primary" id="btnSaveTabs">儲存分頁設定</button>
             </div>
+
+            <?php if ($show_type_makers): ?>
+            <hr>
+            <h4>製程大類對應廠商</h4>
+            <p class="text-muted" style="font-size:13px;">
+                原本待加工只依「製程所屬的製程大類」歸類。這裡可替大類指定廠商（可多個）：
+                製程大類不符、但<b>廠商符合</b>的待加工，也會列在該大類的「未指派」清單內（該卡片改列在此大類，並可指派到此大類的機台）。
+                未設定的大類維持原本邏輯。廠商限「廠內加工廠商」。
+            </p>
+            <div id="typeMakersBox">
+                <?php foreach ($process_types as $type):
+                    $tid = (string)$type['process_type_id'];
+                    $sel = isset($type_makers_cfg[$tid]) && is_array($type_makers_cfg[$tid]) ? $type_makers_cfg[$tid] : [];
+                ?>
+                <div class="tm-row" data-type-id="<?= htmlspecialchars($tid) ?>" style="display:flex; align-items:flex-start; gap:10px; padding:6px 0; border-bottom:1px solid #eee;">
+                    <div style="width:170px; flex:0 0 170px; padding-top:4px;"><b><?= htmlspecialchars($type['process_type']) ?></b> <span class="text-muted" style="font-size:12px;">ID:<?= htmlspecialchars($tid) ?></span></div>
+                    <div style="flex:1;">
+                        <div class="tm-chips" style="min-height:24px;">
+                            <?php foreach ($sel as $mk):
+                                $mname = $mk;
+                                foreach ($internal_makers as $im) { if ((string)$im['maker_id_no'] === (string)$mk) { $mname = $im['maker_id']; break; } }
+                            ?>
+                                <span class="label label-warning tm-chip" data-mk="<?= htmlspecialchars($mk) ?>" style="display:inline-block; margin:0 4px 4px 0; padding:4px 8px; font-size:12px;"><?= htmlspecialchars($mname) ?> (<?= htmlspecialchars($mk) ?>) <a href="#" class="tm-del" style="color:#fff; margin-left:4px;" title="移除">&times;</a></span>
+                            <?php endforeach; ?>
+                        </div>
+                        <select class="form-control input-sm tm-add" data-eg-filter="輸入廠商名稱或編號篩選…" style="max-width:320px;">
+                            <option value="">＋ 加入廠商…</option>
+                            <?php foreach ($internal_makers as $im): ?>
+                                <option value="<?= htmlspecialchars($im['maker_id_no']) ?>"><?= htmlspecialchars($im['maker_id']) ?> (<?= htmlspecialchars($im['maker_id_no']) ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <div style="margin-top: 15px; text-align: right;">
+                <button type="button" class="btn btn-primary" id="btnSaveTypeMakers">儲存廠商對應</button>
+            </div>
+            <?php endif; ?>
         </div>
 
         <!-- Tab 2: Process Type Management -->
@@ -323,6 +373,32 @@ $(function() {
         });
 
         submitSetting({ sub_action: 'save_tabs', visible_process_types: visible_tabs, font_sizes: JSON.stringify(font_sizes) });
+    });
+
+    // --- Tab 1b: 製程大類對應廠商 ---
+    $('#typeMakersBox').on('change', '.tm-add', function() {
+        var mk = $(this).val();
+        if (!mk) return;
+        var $row = $(this).closest('.tm-row');
+        if ($row.find('.tm-chip[data-mk="' + mk + '"]').length) { $(this).val(''); return; }
+        var label = $(this).find('option:selected').text();
+        var $chip = $('<span class="label label-warning tm-chip" style="display:inline-block; margin:0 4px 4px 0; padding:4px 8px; font-size:12px;"></span>').attr('data-mk', mk);
+        $chip.text(label + ' ').append('<a href="#" class="tm-del" style="color:#fff; margin-left:4px;" title="移除">&times;</a>');
+        $row.find('.tm-chips').append($chip);
+        $(this).val('');
+    });
+    $('#typeMakersBox').on('click', '.tm-del', function(e) {
+        e.preventDefault();
+        $(this).closest('.tm-chip').remove();
+    });
+    $('#btnSaveTypeMakers').click(function() {
+        var cfg = {};
+        $('#typeMakersBox .tm-row').each(function() {
+            var list = [];
+            $(this).find('.tm-chip').each(function() { list.push(String($(this).attr('data-mk'))); });
+            if (list.length) cfg[$(this).data('type-id')] = list;
+        });
+        submitSetting({ sub_action: 'save_type_makers', type_makers: JSON.stringify(cfg) });
     });
 
     // --- Tab 2: Process Type Management ---
