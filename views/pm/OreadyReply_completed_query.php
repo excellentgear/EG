@@ -2294,17 +2294,17 @@ try {
                 </select>
                 <?php endif; ?>
                 <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-                <button id="btnClear" title="清掉所有篩選條件，日期回到預設的近1年（要查全部歷史請按上方年份列的「全部年份」）"><i class="fa fa-eraser"></i> 清除篩選</button>
+                <button id="btnClear" title="清掉所有篩選條件，日期回到預設的近1年（要查全部歷史請按上方年份列的「全部年份」）"><i class="fa fa-eraser"></i> 清除</button>
                 <?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
-                <button id="btnAutoBind" style="margin-left:auto;" title="把目前篩選範圍內還沒綁好的 BOM 一次處理：①綁料號 ②綁訂單 ③綁報價單，指得出唯一一筆的可以整批自動綁，指不出來的列出來讓你逐筆判定"><i class="fa fa-magic"></i> 自動綁定</button>
+                <button id="btnAutoBind" style="margin-left:auto;" title="把目前篩選範圍內還沒綁好的 BOM 一次處理：①綁料號 ②綁訂單 ③綁報價單，指得出唯一一筆的可以整批自動綁，指不出來的列出來讓你逐筆判定"><i class="fa fa-magic"></i> 綁定</button>
                 <button id="btnPrint"><i class="fa fa-print"></i> 列印</button>
                 <?php else: ?>
                 <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
                 <?php endif; ?>
-                <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
-                <button id="btnSummary"><i class="fa fa-bar-chart"></i> 統整報表(PDF)</button>
+                <button id="btnExportCsv" title="匯出CSV"><i class="fa fa-file-excel-o"></i> CSV</button>
+                <button id="btnSummary" title="統整報表(PDF)"><i class="fa fa-bar-chart"></i> 報表</button>
                 <?php if ($ocq_is_admin): ?>
-                <button id="btnAdminUnlock" title="輸入操作確認密碼後 15 分鐘內，可直接修正下方製程列的發包日/回廠日，並查看該BOM的報工/出貨紀錄核對"><i class="fa fa-unlock-alt"></i> 管理員模式</button>
+                <button id="btnAdminUnlock" title="輸入操作確認密碼後 15 分鐘內，可直接修正下方製程列的發包日/回廠日，並查看該BOM的報工/出貨紀錄核對"><i class="fa fa-unlock-alt"></i> 管理</button>
                 <?php endif; ?>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
