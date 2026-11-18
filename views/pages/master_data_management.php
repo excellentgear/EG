@@ -10675,6 +10675,10 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
             <label>傳真</label>
             <input type="text" class="form-control" id="cf-customer_fax" name="customer_fax" placeholder="傳真" maxlength="30">
         </div>
+        <div class="form-group">
+            <label>傳真2</label>
+            <input type="text" class="form-control" id="cf-customer_fax2" name="customer_fax2" placeholder="第二組傳真" maxlength="30">
+        </div>
     </div>
     <div class="col-md-2">
         <div class="form-group">
@@ -10721,14 +10725,6 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     <input type="text" class="form-control" id="cf-customer_full_en" name="customer_full_en" data-eg-hint="英文正式公司全名，非必填" maxlength="150">
 </div>
 <div id="cf-pe-alias"></div>
-<div class="row">
-    <div class="col-md-4 col-md-offset-4">
-        <div class="form-group">
-            <label>傳真2</label>
-            <input type="text" class="form-control" id="cf-customer_fax2" name="customer_fax2" placeholder="第二組傳真" maxlength="30">
-        </div>
-    </div>
-</div>
 <div class="row">
     <div class="col-md-2">
         <div class="form-group">
