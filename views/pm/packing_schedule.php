@@ -2286,6 +2286,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             currentIsBackfillRecord = false;
             $('#f-backfill-fields').toggle(mode === 'backfill');
             setFormReadOnly(mode === 'view');
+            // 列印標籤：完成包裝（結案）儲存後才顯示，開啟已結案紀錄（檢視／解鎖修改）時才出現
+            $('#btn-print-label').toggle(mode === 'view' || mode === 'editClosed');
             // 檢驗人員：先套用預設值（一般填寫＝本人／補登＝管理員設定的預設檢驗人員，嚴禁自動變成
             // 正在操作補登的人），若這筆製程已有既有紀錄（暫存續編／已結案解鎖修改）稍後由
             // fillFromRecord() 依既有紀錄覆蓋
