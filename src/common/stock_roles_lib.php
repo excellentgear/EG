@@ -360,7 +360,7 @@ function stock_action_need(string $a, array $p): array {
         case 'apply_count_adjustments': return ['stock_count_apply'];
         case 'delete_count_session':    return ['stock_count_delete'];
         case 'get_analysis': case 'get_aging_detail': return ['stock_analysis'];
-        case 'get_daily_report': return ['stock_report'];
+        case 'get_daily_report': case 'get_out_label_list': case 'get_out_label_logs': case 'out_label_print_log': return ['stock_report'];
         case 'save_stock_group': return ['stock_group_create'];
         case 'group_adjust':     return ['stock_group_adjust'];
         case 'group_txn':        return ['stock_in', 'stock_out', 'stock_group_adjust'];

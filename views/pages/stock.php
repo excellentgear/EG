@@ -4285,6 +4285,69 @@ LBLSQL;
     }
 
     // ══════════════════════════════════════════════════════
+    //  領庫印標籤（近30天出庫紀錄 → 列印標籤＋列印紀錄）
+    // ══════════════════════════════════════════════════════
+    if (in_array($_POST['action'], ['get_out_label_list','get_out_label_logs','out_label_print_log'], true)) {
+        try {
+            // DDL 一律不在交易內執行
+            $pdo->exec("CREATE TABLE IF NOT EXISTS stock_out_label_log (
+                log_id INT AUTO_INCREMENT PRIMARY KEY,
+                txn_id INT NOT NULL,
+                total_qty DECIMAL(14,2) NOT NULL DEFAULT 0,
+                per_box DECIMAL(14,2) NULL,
+                label_cnt INT NOT NULL DEFAULT 1,
+                printed_by INT NULL,
+                printed_by_name VARCHAR(50) NULL,
+                printed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_txn (txn_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            $act = $_POST['action'];
+            if ($act === 'get_out_label_list') {
+                $cKw = trim((string)($_POST['client'] ?? '')); $pKw = trim((string)($_POST['part'] ?? ''));
+                $where = ["st.txn_type='out'", "st.txn_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)"]; $par = [];
+                foreach (preg_split('/\s+/u', $cKw, -1, PREG_SPLIT_NO_EMPTY) as $w) {
+                    $where[] = "(clp.customer LIKE ? OR clp.customer_full LIKE ? OR clp.customer_id LIKE ?)";
+                    array_push($par, "%$w%", "%$w%", "%$w%");
+                }
+                foreach (preg_split('/\s+/u', $pKw, -1, PREG_SPLIT_NO_EMPTY) as $w) {
+                    $where[] = "(dsp.D_Setting_Id LIKE ? OR st.d_id LIKE ?)";
+                    array_push($par, "%$w%", "%$w%");
+                }
+                $sql = "SELECT st.txn_id, st.txn_date, ABS(st.txn_qty) AS qty, COALESCE(dsp.D_Setting_Id, st.d_id) AS part_no,
+                               clp.customer_id AS client_id, clp.customer AS client_name,
+                               COALESCE(lg.cnt,0) AS print_cnt, ll.printed_at AS last_at, ll.printed_by_name AS last_by
+                        FROM stock_transactions st
+                        LEFT JOIN stock_items si ON si.stock_item_id=st.stock_item_id
+                        LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id
+                        LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id
+                        LEFT JOIN (SELECT txn_id, COUNT(*) AS cnt, MAX(log_id) AS last_id FROM stock_out_label_log GROUP BY txn_id) lg ON lg.txn_id=st.txn_id
+                        LEFT JOIN stock_out_label_log ll ON ll.log_id=lg.last_id
+                        WHERE ".implode(' AND ', $where)."
+                        ORDER BY st.txn_date DESC, st.txn_id DESC LIMIT 300";
+                $q = $pdo->prepare($sql); $q->execute($par);
+                echo json_encode(['success'=>true,'rows'=>$q->fetchAll(PDO::FETCH_ASSOC),'company'=>stock_req_company_name($pdo)]);
+            } elseif ($act === 'get_out_label_logs') {
+                $q = $pdo->prepare("SELECT printed_at, printed_by_name, total_qty, per_box, label_cnt FROM stock_out_label_log WHERE txn_id=? ORDER BY log_id DESC");
+                $q->execute([intval($_POST['txn_id'] ?? 0)]);
+                echo json_encode(['success'=>true,'rows'=>$q->fetchAll(PDO::FETCH_ASSOC)]);
+            } else {
+                $txn = intval($_POST['txn_id'] ?? 0);
+                $total = (float)($_POST['total_qty'] ?? 0);
+                $per = ($_POST['per_box'] ?? '') === '' ? null : (float)$_POST['per_box'];
+                $cnt = max(1, intval($_POST['label_cnt'] ?? 1));
+                if ($txn <= 0 || $total <= 0) throw new Exception('資料不完整');
+                $ck = $pdo->prepare("SELECT 1 FROM stock_transactions WHERE txn_id=? AND txn_type='out'"); $ck->execute([$txn]);
+                if (!$ck->fetchColumn()) throw new Exception('查無此出庫紀錄');
+                $nm = $pdo->prepare("SELECT user_cname FROM user WHERE id=?"); $nm->execute([$userId]);
+                $pdo->prepare("INSERT INTO stock_out_label_log (txn_id,total_qty,per_box,label_cnt,printed_by,printed_by_name) VALUES (?,?,?,?,?,?)")
+                    ->execute([$txn,$total,$per,$cnt,$userId,(string)$nm->fetchColumn()]);
+                echo json_encode(['success'=>true]);
+            }
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ══════════════════════════════════════════════════════
     //  每日入出庫紀錄表 AJAX
     // ══════════════════════════════════════════════════════
     if ($_POST['action'] === 'get_daily_report') {
@@ -4562,6 +4625,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <button class="tab-btn" id="tab-btn-req" data-stk-feat="stock_req_view" onclick="switchTab('req',this)">📋 領庫需求單</button>
       <button class="tab-btn" id="tab-btn-inb" data-stk-feat="stock_req_view" onclick="switchTab('inb',this)">📥 入庫單 <span id="inb-badge" class="badge" style="background:#F0A24B;display:none;"></span></button>
       <button class="tab-btn" id="tab-btn-report" data-stk-feat="stock_report" onclick="switchTab('report',this)">📊 入出庫紀錄</button>
+      <button class="tab-btn" id="tab-btn-olb" data-stk-feat="stock_report" onclick="switchTab('olb',this)">🏷️ 領庫印標籤</button>
     </div>
     <button class="btn btn-sm btn-default" id="btn-role-cfg" style="display:none;border-radius:6px;font-weight:600;" onclick="openRoleCfg()" title="庫存管理的角色、功能與通知對象設定"><i class="fa fa-key"></i> 角色與通知設定</button>
     <button class="btn btn-sm" id="btn-add-stock" style="background:var(--accent);color:#fff;border-radius:6px;font-weight:600;display:none;" onclick="openAddModal()"><i class="fa fa-plus"></i> 新增庫存</button>
@@ -5182,6 +5246,37 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     </div>
   </div>
 </div>
+
+<!-- ══ 領庫印標籤分頁 ══ -->
+<div id="tab-olb" style="display:none;">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+    <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-tag"></i> 領庫印標籤 <small class="text-muted">（近 30 天出庫紀錄）</small></h4>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <input type="text" id="olb-client" class="form-control input-sm" style="width:190px;" placeholder="客戶ID或名稱（可模糊）" data-eg-skip>
+      <input type="text" id="olb-part" class="form-control input-sm" style="width:190px;" placeholder="料號（可模糊）" data-eg-skip>
+      <button class="btn btn-sm btn-warning" id="olb-print-btn" onclick="olbOpenPrint()" disabled><i class="fa fa-tag"></i> 列印標籤（<span id="olb-sel-cnt">0</span>）</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="table table-hover tbl-sm" style="margin:0;">
+      <thead><tr><th width="34"><input type="checkbox" id="olb-all"></th><th>出庫日期</th><th>客戶</th><th>料號</th><th>出庫數量</th><th>列印紀錄</th></tr></thead>
+      <tbody id="olb-tbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<div class="modal fade" id="olbModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-tag"></i> 列印領庫標籤（70 x 50 mm）</h4></div>
+  <div class="modal-body">
+    <p class="text-muted" style="font-size:12px;">總數量可修改；每箱數量留空＝整筆印 1 張。已印過的仍可重印，每次列印都會寫入列印紀錄。</p>
+    <table class="table table-condensed"><thead><tr><th>客戶</th><th>料號</th><th width="130">總數量</th><th width="130">每箱數量</th><th>張數</th></tr></thead><tbody id="olb-modal-body"></tbody></table>
+    <div id="olb-err" class="text-danger small"></div>
+  </div>
+  <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button><button type="button" class="btn btn-primary" onclick="olbDoPrint()"><i class="fa fa-print"></i> 列印</button></div>
+</div></div></div>
+<div class="modal fade" id="olbLogModal" tabindex="-1" role="dialog" style="z-index:10100;"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">列印紀錄</h4></div>
+  <div class="modal-body" id="olb-log-body"></div>
+</div></div></div>
 
 <!-- ══ 入庫單分頁 ══ -->
 <div id="tab-inb" style="display:none;">
@@ -8269,7 +8364,7 @@ function saveItemUnits(){
 
 // ── TAB 切換 ────────────────────────────────────
 function switchTab(tab, btn){
-    $('#tab-list,#tab-count,#tab-setting,#tab-req,#tab-inb,#tab-report').hide();
+    $('#tab-list,#tab-count,#tab-setting,#tab-req,#tab-inb,#tab-report,#tab-olb').hide();
     // 分析 tab 用 visibility 而非 display:none，讓 canvas 保持有尺寸
     $('#tab-analysis').css({'visibility':'hidden','position':'absolute','pointer-events':'none'});
     if(tab==='analysis'){
@@ -8285,6 +8380,81 @@ function switchTab(tab, btn){
     if(tab==='req'&&!G.reqLoaded){ showReqPermBadge(); loadRequisitions(); G.reqLoaded=true; }
     if(tab==='inb'){ loadInbound(1); }
     if(tab==='report'&&!G.reportLoaded){initDailyReport();G.reportLoaded=true;}
+    if(tab==='olb') olbLoad();   // 每次切入都重抓（印過的紀錄會變動）
+}
+
+// ── 領庫印標籤 ─────────────────────────────────
+var OLB = { rows: [], company: '', timer: null };
+$(document).on('input', '#olb-client,#olb-part', function(){ clearTimeout(OLB.timer); OLB.timer = setTimeout(olbLoad, 350); });
+$(document).on('change', '#olb-all', function(){ $('.olb-chk').prop('checked', this.checked); olbSelCount(); });
+$(document).on('change', '.olb-chk', olbSelCount);
+function olbSelCount(){ var n=$('.olb-chk:checked').length; $('#olb-sel-cnt').text(n); $('#olb-print-btn').prop('disabled', !n); }
+function olbLoad(){
+    ajx({action:'get_out_label_list', client:$('#olb-client').val(), part:$('#olb-part').val()}, function(r){
+        if(!r.success){ $('#olb-tbody').html('<tr><td colspan="6" class="text-center text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
+        OLB.rows = r.rows||[]; OLB.company = r.company||'';
+        var h='';
+        OLB.rows.forEach(function(x,i){
+            var lg = parseInt(x.print_cnt)>0
+                ? '<a href="#" onclick="olbShowLog('+x.txn_id+');return false;">已印 '+x.print_cnt+' 次</a><span class="text-muted" style="font-size:12px;"> 最近 '+esc(String(x.last_at||'').substr(0,16).replace(/-/g,'.'))+' '+esc(x.last_by||'')+'</span>'
+                : '<span class="text-muted">未印</span>';
+            h+='<tr><td><input type="checkbox" class="olb-chk" data-i="'+i+'"></td><td>'+esc(String(x.txn_date||'').substr(0,10).replace(/-/g,'.'))+'</td><td>'+esc(x.client_name||'')+'</td><td>'+esc(x.part_no||'')+'</td><td>'+esc(fmt(x.qty))+'</td><td>'+lg+'</td></tr>';
+        });
+        $('#olb-tbody').html(h||'<tr><td colspan="6" class="text-center text-muted">近 30 天沒有符合的出庫紀錄</td></tr>');
+        $('#olb-all').prop('checked',false); olbSelCount();
+    });
+}
+function olbShowLog(id){
+    ajx({action:'get_out_label_logs', txn_id:id}, function(r){
+        var h='<table class="table table-condensed"><thead><tr><th>時間</th><th>列印人</th><th>總數</th><th>每箱</th><th>張數</th></tr></thead><tbody>';
+        (r.rows||[]).forEach(function(l){ h+='<tr><td>'+esc(String(l.printed_at).substr(0,16).replace(/-/g,'.'))+'</td><td>'+esc(l.printed_by_name||'')+'</td><td>'+fmt(l.total_qty)+'</td><td>'+(l.per_box?fmt(l.per_box):'—')+'</td><td>'+l.label_cnt+'</td></tr>'; });
+        $('#olb-log-body').html(h+'</tbody></table>'); $('#olbLogModal').modal('show');
+    });
+}
+function olbOpenPrint(){
+    var h='';
+    $('.olb-chk:checked').each(function(){
+        var i=$(this).data('i'), x=OLB.rows[i];
+        h+='<tr data-i="'+i+'"><td>'+esc(x.client_name||'')+'</td><td>'+esc(x.part_no||'')+'</td><td><input type="number" class="form-control input-sm olb-total" min="1" value="'+parseFloat(x.qty)+'" data-eg-skip></td><td><input type="number" class="form-control input-sm olb-per" min="1" data-eg-skip></td><td class="olb-cnt">1</td></tr>';
+    });
+    $('#olb-modal-body').html(h); $('#olb-err').text(''); $('#olbModal').modal('show');
+}
+function olbPlan(tr){
+    var t=parseFloat(tr.find('.olb-total').val())||0, p=parseFloat(tr.find('.olb-per').val())||0;
+    if(t<=0) return null;
+    if(p<=0) return {t:t,p:null,parts:[t]};
+    var parts=[], full=Math.floor(t/p), rem=Math.round((t-full*p)*100)/100;
+    for(var k=0;k<full;k++) parts.push(p);
+    if(rem>0) parts.push(rem);
+    return {t:t,p:p,parts:parts};
+}
+$(document).on('input', '.olb-total,.olb-per', function(){ var tr=$(this).closest('tr'), pl=olbPlan(tr); tr.find('.olb-cnt').text(pl?pl.parts.length:'—'); });
+function olbDoPrint(){
+    var jobs=[], bad='';
+    $('#olb-modal-body tr').each(function(){
+        var tr=$(this), pl=olbPlan(tr), x=OLB.rows[tr.data('i')];
+        if(!pl){ bad='請填寫總數量'; return false; }
+        if(pl.parts.length>200){ bad='標籤超過 200 張，請確認每箱數量'; return false; }
+        jobs.push({x:x,pl:pl});
+    });
+    if(bad){ $('#olb-err').text(bad); return; }
+    var w=window.open('','_blank'); if(!w){ alert('請允許彈出視窗以列印'); return; }
+    var pages='';
+    jobs.forEach(function(j){
+        var d=String(j.x.txn_date||'').substr(0,10).replace(/-/g,'.');
+        j.pl.parts.forEach(function(q){
+            pages+='<div class="lb"><div class="ln">料號：'+esc(j.x.part_no)+'</div><div class="ln">客戶：'+esc(j.x.client_name||'')+'</div><div class="ln">本箱數量：'+q+'</div><div class="ln">出庫日期：'+d+'</div><div class="ft"><span class="co">'+esc(OLB.company)+'</span></div></div>';
+        });
+    });
+    var css='@page{size:70mm 50mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#000}.lb{width:70mm;height:50mm;padding:1.5mm 3mm 0;page-break-after:always;overflow:hidden;position:relative}.lb:last-child{page-break-after:auto}.ln{font-size:13pt;line-height:7.5mm;height:7.5mm;white-space:nowrap;overflow:hidden}.ft{position:absolute;left:3mm;right:3mm;bottom:1.5mm;border-top:0.8mm solid #000;padding-top:1mm}.co{font-size:8.5pt;font-weight:bold;letter-spacing:.5mm;white-space:nowrap}';
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>領庫標籤</title><style>'+css+'</style></head><body>'+pages+'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
+    w.document.close(); w.focus();
+    jobs.forEach(function(j){
+        ajx({action:'out_label_print_log', txn_id:j.x.txn_id, total_qty:j.pl.t, per_box:j.pl.p===null?'':j.pl.p, label_cnt:j.pl.parts.length});
+        try{ if(window.EGPrintLog) EGPrintLog.record({source:'stock_doc', doc_name:'領庫標籤 '+j.x.part_no+'（'+j.pl.parts.length+'張）', doc_kind:'form', part_no:j.x.part_no}); }catch(e){}
+    });
+    $('#olbModal').modal('hide');
+    setTimeout(olbLoad, 800);
 }
 
 function showReqPermBadge(){
