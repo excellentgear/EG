@@ -21,6 +21,11 @@ $perms = inq_perms($db, $uid);
 if (empty($_SESSION['inq_csrf'])) $_SESSION['inq_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['inq_csrf'];
 $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單管理員' : (!empty($perms['canToolAdmin']) ? '刀具詢價管理員' : ($perms['canCreate'] ? '可建立詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : ($perms['canView'] ? '檢視' : '無權限'))));
+$__nm = htmlspecialchars((string)($perms['name'] ?? ''));
+$__tRole = !empty($perms['isAdmin']) ? '管理者（可設定刀具詢價）'
+    : (!empty($perms['canAdmin']) ? '詢價單管理員（含刀具詢價設定）'
+    : (!empty($perms['canToolAdmin']) ? '刀具詢價管理員（可設定刀具詢價）'
+    : (!empty($perms['canCreate']) ? '可建立刀具詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : '檢視')));
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -35,7 +40,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
         #sidebar-menu { visibility: hidden; }
-        .right_col .page-title { margin:8px 0 4px; overflow:hidden; clear:both; }
+        .right_col .page-title { margin:8px 0 4px; overflow:hidden; clear:both; height:auto; padding:0; }   /* 版型預設 height:65px＋padding:10px 會讓標題與下方分頁隔很遠 */
         .page-help-btn, .page-set-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
             background:#F0A24B; color:#fff; cursor:pointer; margin-left:8px; }
         .page-help-btn:hover, .page-set-btn:hover { background:#d98a33; }
@@ -212,6 +217,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
             <h2 style="margin:6px 0;">詢價單
                 <small style="color:#8a6d45;" id="hdrAsDocNo">3-OB-01-05　業務／生管／採購共用</small></h2>
             <span style="margin-left:auto;display:flex;align-items:center;">
+            <span class="iq-role" id="hdrRole" style="margin-right:8px;" data-gen="<?= $__nm ?>　<?= htmlspecialchars($roleLabel) ?>" data-tool="<?= $__nm ?>　<?= htmlspecialchars($__tRole) ?>" title="目前使用者在本分頁的角色"><?= $__nm ?>　<?= htmlspecialchars($roleLabel) ?></span>
             <?php if ($perms['canAdmin']): ?><button id="btnSettings" class="page-set-btn"><i class="fa fa-cog"></i> 模組設定</button><?php endif; ?>
             <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
             </span>
@@ -238,7 +244,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
             <input type="text" id="fKw" placeholder="關鍵字：廠商／料號／單號／規格…（輸入即時篩選）" style="width:240px;">
             <label style="font-weight:normal;"><input type="checkbox" id="chkShowNote" checked> 顯示備註</label>
             <?php if ($perms['canCreate']): ?><button id="btnNew" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增詢價</button><?php endif; ?>
-            <span class="iq-role"<?= $perms['canCreate'] ? '' : ' style="margin-left:auto;"' ?>><?= htmlspecialchars($roleLabel) ?></span>
         </div>
 
         <div class="iq-pager" id="pager"></div>

@@ -83,13 +83,6 @@ if ($TI_PART === 'pane') { ?>
         <label>每頁</label><select id="tfPsize"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
         <?php if (!empty($perms['canToolAdmin'])): ?><button id="tBtnSet" type="button"><i class="fa fa-cog"></i> 刀具選項設定</button><?php endif; ?>
         <?php if ($perms['canCreate'] || !empty($perms['canToolAdmin'])): ?><button id="tBtnNew" type="button" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增刀具詢價</button><?php endif; ?>
-        <?php
-        $__tRole = !empty($perms['isAdmin']) ? '管理者（可設定刀具詢價）'
-            : (!empty($perms['canAdmin']) ? '詢價單管理員（含刀具詢價設定）'
-            : (!empty($perms['canToolAdmin']) ? '刀具詢價管理員（可設定刀具詢價）'
-            : (!empty($perms['canCreate']) ? '可建立刀具詢價（' . implode('、', array_map('inq_dept_label', $perms['myDepts'])) . '）' : '檢視')));
-        ?>
-        <span class="iq-role" title="目前使用者在刀具詢價的角色"<?= ($perms['canCreate'] || !empty($perms['canToolAdmin'])) ? '' : ' style="margin-left:auto;"' ?>><?= htmlspecialchars((string)($perms['name'] ?? '')) ?>　<?= htmlspecialchars($__tRole) ?></span>
     </div>
     <div id="tOverdueBar" style="display:none;"></div>
     <div class="iq-pager" id="tPager"></div>
@@ -276,6 +269,7 @@ function dt(v){ return v ? egFmtDate(v) : ''; }
 /* ───────── 分頁切換 ───────── */
 function showTab(tab){
   CUR_TAB = tab;
+  $('#hdrRole').text($('#hdrRole').attr('data-'+tab));   // 角色顯示在頁首「使用說明」左側，依分頁顯示該分頁的角色
   $('.ti-tabs button').removeClass('on').filter('[data-tab="'+tab+'"]').addClass('on');
   $('#paneGen').toggle(tab==='gen'); $('#paneTool').toggle(tab==='tool'); $('#btnSettings').toggle(tab==='gen');
   try { history.replaceState(null,'',location.pathname+(tab==='tool'?'?tab=tool':'')); } catch(e){}
