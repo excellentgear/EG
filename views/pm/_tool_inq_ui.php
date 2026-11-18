@@ -58,6 +58,8 @@ if ($TI_PART === 'style') { ?>
 .ti-st { font-size:11px; border-radius:10px; padding:2px 10px; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
 .ti-st.waiting { background:#F7E0BD; } .ti-st.replied { background:#F0A24B; color:#fff; } .ti-st.ordered { background:#d98a33; color:#fff; } .ti-st.received { background:#8A5A2B; color:#fff; } .ti-st.closed, .ti-st.void, .ti-st.none { background:#e6dccb; color:#7a6446; }
 .ti-card-sum { padding:6px 12px; font-size:12.5px; color:#5b3a1e; }
+.ti-kv { display:inline-block; margin:1px 12px 1px 0; font-size:12.5px; color:#5b3a1e; white-space:nowrap; }
+.ti-kv .k { color:#8a6d45; font-size:11.5px; margin-right:4px; }
 .ti-vt { width:100%; border-collapse:collapse; font-size:12.5px; }
 .ti-vt th { background:#FDF8EF; color:#8A5A2B; text-align:left; padding:4px 8px; border-top:1px solid #EADFC8; font-weight:bold; }
 .ti-vt td { padding:4px 8px; border-top:1px solid #F3EADB; color:#5b3a1e; vertical-align:middle; } .ti-vt td span { line-height:1.3; }
@@ -180,7 +182,23 @@ if ($TI_PART === 'modals') { ?>
                 <button type="button" class="ti-mini" id="tvToolUnbind" style="display:none;">解除綁定</button>
                 <span class="ti-unit" id="tvToolMsg"></span></div></div>
         </div>
-        <div class="ti-stage" id="tvRecvBar" style="display:none;"><input type="hidden" id="tvRecv"><span id="tvRecvTxt"></span><button type="button" class="ti-mini warm" id="tvDoRecv" style="height:30px;">③ 已到貨</button><button type="button" class="ti-mini" id="tvUndoRecv" style="display:none;">取消到貨</button></div>
+        <div class="ti-stage" id="tvRecvBar" style="display:none;"><input type="hidden" id="tvRecv"><span id="tvRecvTxt"></span><span id="tvQtyWrap">到貨數量 <input type="number" id="tvRecvQty" step="1" min="1" style="width:90px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;"> 個　</span><button type="button" class="ti-mini warm" id="tvDoRecv" style="height:30px;">③ 已到貨</button><button type="button" class="ti-mini" id="tvUndoRecv" style="display:none;">取消到貨</button></div>
+        <div class="ti-sec" id="tvAllocSec" style="display:none;"><h5>④ 到貨處理 <small>一批到貨可以部分出貨、部分入庫</small></h5>
+            <div style="padding:8px 12px;" id="tvAllocSum"></div>
+            <div id="tvAllocAct">
+            <div class="ti-row"><label>入庫<small>選儲位與數量（可選的儲位由刀具詢價管理員設定）</small></label><div class="ti-cell">
+                <select id="tvLoc" style="min-width:260px;height:30px;border:1px solid #D8BE93;border-radius:4px;"></select>
+                <input type="number" id="tvStockQty" step="1" min="1" style="width:80px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;"> 個
+                <input type="date" id="tvStockDate" style="height:30px;border:1px solid #D8BE93;border-radius:4px;">
+                <button type="button" class="ti-mini warm" id="tvDoStock" style="height:30px;">入庫</button><span class="ti-unit" id="tvLocMsg"></span></div></div>
+            <div class="ti-row"><label>出貨<small>用快速出貨開立出貨單，一定要綁定訂單</small></label><div class="ti-cell" style="display:block;">
+                <div style="margin-bottom:5px;"><input type="text" id="tvOrdKw" placeholder="搜尋訂單號／客戶／料號（預設列出這支料號的訂單）" style="width:300px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;"> <button type="button" class="ti-mini" id="tvOrdSearch">搜尋</button></div>
+                <div style="margin-bottom:5px;"><select id="tvOrd" style="min-width:520px;max-width:100%;height:30px;border:1px solid #D8BE93;border-radius:4px;"></select></div>
+                <div>出貨數量 <input type="number" id="tvShipQty" step="1" min="1" style="width:80px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;"> 個　出貨日 <input type="date" id="tvShipDate" style="height:30px;border:1px solid #D8BE93;border-radius:4px;">
+                <button type="button" class="ti-mini warm" id="tvDoShip" style="height:30px;">開立出貨單</button></div></div></div>
+            </div>
+            <div style="padding:4px 12px 8px;" id="tvAllocList"></div>
+        </div>
         <div class="ti-sec"><h5>其他</h5><div class="ti-row"><label>不採用這家廠商</label><div class="ti-cell"><label class="ti-ck"><input type="checkbox" id="tvVoid"> 這次不採用這家廠商（例如報價太高、交期太長或婉拒）</label>
             <span class="ti-unit" style="width:100%;">勾選後這家的紀錄會保留，但不計入整張詢價的進度、也不再發交期提醒；已經回覆或有附件的廠商不能直接從詢價單移除，要用這個標記代替。</span></div></div></div>
         <div class="ti-sec"><h5>詢價單附件（唯讀）</h5><div style="padding:6px 12px;" id="tvInqAtt"></div></div>
@@ -217,9 +235,13 @@ if ($TI_PART === 'modals') { ?>
         <h4>刀號與刀具料號（下訂後）</h4>
         <p>下訂並儲存下訂日後，在「② 下訂」區填入<b>廠商的刀號</b>，按「建立料號並綁定」，系統會在主檔管理自動新建一筆<b>刀具料號</b>（工件種類 H，客戶為本公司），
         並把這張詢價單的刀具規格（刀種、模數、壓力角、牙口數、外徑－長度、內徑、類型、材質、塗層、備註）帶進「刀具規格設定」。</p>
-        <p><b>重複的處理</b>：建立前會先檢查①同一家廠商、同一個刀號是否已在別張詢價單建立過料號；②主檔是否已有同編號的刀具料號。
-        有的話<b>不會直接新建</b>，而是列出既有料號、規格與原因，讓您選擇：<b>「綁定這個」</b>（同一支刀重複採購時用，不會重複建立）或<b>「仍要新建」</b>（確定是不同的刀，刀號自動加後綴 -2、-3…）。
-        綁定後可按「解除綁定」更換（主檔裡的料號不會被刪除）。</p>
+        <p><b>重複的處理</b>：只有「<b>所有條件都相同</b>」（刀號、刀種、模數、壓力角、牙口數、外徑-長度、D+F、內徑、類型、材質、塗層、廠商）才算同一支刀，這時會列出既有料號讓您選「綁定這個」（同一支刀重複採購，不重複建立）或「確定是不同的刀，仍要新建」。
+        <b>只要有任何一項不同就視為不同的刀、一律建立新料號</b>（刀號被占用時自動加後綴 -2、-3…）。管理員可在設定把判定改成「一律新建」。綁定後可按「解除綁定」更換（主檔裡的料號不會被刪除）。</p>
+        <p><b>自動貼標籤與規格</b>：建立料號時同時建立「刀具規格設定」，並自動貼上主檔的標籤（模數、滾齒刀規格／插齒刀規格、材質（刀具）——材質、類型只有在主檔已有該選項時才會貼）。主檔「規格」欄填什麼，可在設定裡對應（滾刀＝滾齒刀、鉋齒刀＝插齒刀）。</p>
+        <h4>到貨後：入庫或出貨</h4>
+        <p>按「③ 已到貨」時填<b>到貨數量</b>。到貨後出現「④ 到貨處理」：一批貨可以<b>部分入庫、部分出貨</b>，每次處理的數量合計不能超過到貨數量。</p>
+        <p><b>入庫</b>：選儲位與數量，寫進庫存管理的刀具庫存（可選的儲位由刀具詢價管理員在「刀具選項設定」勾選）。<b>出貨</b>：選訂單與數量，直接用「快速出貨」開立出貨單，<b>一定要綁定訂單</b>（預設列出這支刀具料號的待出貨訂單，也可用關鍵字搜尋其他訂單）。
+        已入庫或出貨的詢價單不能刪除、也不能取消到貨；入庫或出貨的調整請到庫存管理／快速出貨處理。</p>
         <h4>狀態與篩選</h4>
         <p>狀態分為：<b>等待報價</b>（還沒有廠商回覆）→ <b>尚未下訂</b>（已報價、尚未下單）→ <b>尚未到貨</b>（已下單、貨還沒到）→ <b>已到貨</b>；多家廠商時以進度最前面的那一家為準。
         清單可依狀態、刀種、年度篩選；客戶、料號、廠商與其他關鍵字（單號／建單人／備註）是各自獨立的篩選欄位，可同時使用。</p>
@@ -241,7 +263,7 @@ if ($TI_PART === 'modals') { ?>
 <div class="iq-mask" id="tnMask" style="z-index:9500;"><div class="iq-modal" style="max-width:760px;">
     <div class="m-head"><span>這個刀號已有相同或相似的料號</span><span class="m-close" onclick="closeMask('tnMask')">✕</span></div>
     <div class="m-body"><div id="tnInfo" style="font-size:13px;margin-bottom:8px;"></div><div id="tnList"></div></div>
-    <div class="m-foot"><button onclick="closeMask('tnMask')">取消（改刀號）</button><button type="button" id="tnSuffix">仍要新建（刀號加後綴）</button></div>
+    <div class="m-foot"><button onclick="closeMask('tnMask')">取消（改刀號）</button><button type="button" id="tnSuffix">確定是不同的刀，仍要新建</button></div>
 </div></div>
 
 <!-- ══ 刀具詢價：列印選擇（多家廠商時） ══ -->
@@ -341,6 +363,35 @@ function toolSum(r){
   if (r.accuracy_name) a.push('精度'+r.accuracy_name); if (r.material_name) a.push(r.material_name); if (r.coating_name) a.push(r.coating_name);
   return a.join('　');
 }
+function kv(k, v){ return '<span class="ti-kv"><span class="k">'+esc(k)+'</span>'+esc(v)+'</span>'; }
+function calcTxt(c, two){
+  if (!c) return '—'; if (c.st==='standard') return '標準';
+  var a = c.v, b = c.v2; if (a===null||a===undefined||a==='') return '—';
+  return (two && b!==null && b!==undefined && b!=='') ? a+' ／ '+b : String(a);
+}
+function specHtml(r){   // 工件規格：模數、壓力角、齒數、螺旋角、齒頂徑、齒底徑、全齒深、跨量測、齒面寬（沒算出來的顯示「—」，一眼看得出缺哪一項）
+  var s = r.spec||{}, h = '';
+  h += kv('模數', s.module_val ? s.module_type+' '+s.module_val : '—');
+  h += kv('壓力角', s.pa ? s.pa+'°' : '—'); h += kv('齒數', s.teeth ? s.teeth : '—');
+  h += kv('螺旋角', (s.helix_deg ? s.helix_deg : 0)+'°'+(s.helix_deg && s.helix_dir ? ' '+s.helix_dir : ''));
+  h += kv('齒頂徑', calcTxt(s.da)) + kv('齒底徑', calcTxt(s.df)) + kv('全齒深', calcTxt(s.depth));
+  var meas = s.meas || (r.gear_io==='int' ? 'pin' : 'wk');
+  h += meas==='pin' ? kv('跨銷值／跨銷徑', calcTxt(s.pin, true)) : kv('跨齒厚／跨齒數', calcTxt(s.wk, true));
+  return h + kv('齒面寬', calcTxt(s.fw));
+}
+function toolHtml(r){   // 刀具規格：滾刀一定列出槽數、牙口數、左右旋；鉋齒刀一定列出齒數
+  var t = r.tool||{}, sp = r.special||{}, h = '';
+  if (t.profile && T.init && T.init.profiles[t.profile]) h += kv('齒型', T.init.profiles[t.profile].split(' ')[0]);
+  if (r.tool_type==='shaper') h += kv('型式', {disk:'盤式', bell:'鐘式', shank:'帶柄式'}[t.form] || '—');
+  h += kv('外徑', t.od ? t.od : '—') + kv('長度', t.len ? t.len : '—') + kv('孔徑', t.bore ? t.bore : '—');
+  if (r.tool_type==='shaper') h += kv('齒數', t.teeth ? t.teeth : '—');
+  else { h += kv('槽數', t.slots ? t.slots : '—') + kv('牙口數', t.starts ? t.starts : 1) + kv('左右旋', {LH:'左旋 LH', RH:'右旋 RH'}[t.hand] || '無'); if (t.helix_text) h += kv('螺旋角(PCD)', t.helix_text); }
+  h += kv('精度', r.accuracy_name || '—') + kv('材質', r.material_name || '—') + kv('鍍層', r.coating_name || '—');
+  if (sp.chamfer) h += kv('倒角量', sp.chamfer); if (sp.stock) h += kv('放磨量', sp.stock);
+  var rm = [sp.tool_remark, sp.work_remark, r.remark].filter(function(x){ return !!x; }).join(' ');
+  if (rm) h += kv('備註', rm.length > 40 ? rm.slice(0, 40)+'…' : rm);
+  return h;
+}
 function renderList(rows, total){
   var $l = $('#tList').empty();
   if (!rows.length) { $l.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的刀具詢價單</div>'); return; }
@@ -362,7 +413,9 @@ function renderList(rows, total){
       + '</span></div>';
     $c.append(hd);
     if (od.length) $c.append('<div class="ti-od-note">⚠ '+od.map(function(x){ return esc(x.vendor)+' 交期 '+esc(dt(x.due))+' 已逾期 '+x.days+' 天'; }).join('；')+'　（已置頂，到貨後自動取消）</div>');
-    $c.append('<div class="ti-card-sum">'+esc(specSum(r)||'（未填工件規格）')+'<br><span style="color:#8a6d45;">'+esc(toolSum(r)||'（未填刀具規格）')+'</span>'+(r.att_count?'　<span style="color:#8a6d45;">📎'+r.att_count+'</span>':'')+'</div>');
+    $c.append('<div class="ti-card-sum"><div>'+specHtml(r)+'</div>'
+      + (r.tool_type ? '<div style="margin-top:3px;padding-top:3px;border-top:1px dashed #EADFC8;">'+toolHtml(r)+'</div>' : '<div style="color:#999;margin-top:3px;">（未選刀具種類）</div>')
+      + (r.att_count ? '<span style="color:#8a6d45;font-size:12px;">📎'+r.att_count+'</span>' : '') + '</div>');
     if (r.vendors.length) {
       var t = '<table class="ti-vt"><tr><th>廠商</th><th>狀態</th><th>回覆日</th><th>單價</th><th>下訂日</th><th>交期</th><th></th></tr>';
       r.vendors.forEach(function(v){
@@ -776,9 +829,47 @@ var DUE_AUTO = true;   // 交期是系統依「下訂日＋交期天數」算的
 function vCan(){ return !!(T.vcur && T.vcur.inq.can_edit); }
 function paintRecv(){
   var r = $('#tvRecv').val();
-  if (r) { $('#tvRecvTxt').html('✔ 已到貨，到貨日 <b>'+esc(dt(r))+'</b>'); $('#tvDoRecv').hide(); $('#tvUndoRecv').toggle(vCan()); }
-  else { $('#tvRecvTxt').text('貨到了就按「已到貨」，系統自動記錄今天為到貨日並停止交期提醒：'); $('#tvDoRecv').toggle(vCan()); $('#tvUndoRecv').hide(); }
+  if (r) { $('#tvRecvTxt').html('✔ 已到貨，到貨日 <b>'+esc(dt(r))+'</b>　'); $('#tvDoRecv').hide(); $('#tvUndoRecv').toggle(vCan()); }
+  else { $('#tvRecvTxt').text('貨到了就填到貨數量並按「已到貨」，系統自動記錄今天為到貨日並停止交期提醒：'); $('#tvDoRecv').toggle(vCan()); $('#tvUndoRecv').hide(); }
 }
+/* ───── ④ 到貨處理：一批到貨可部分出貨（快速出貨，綁訂單）、部分入庫（選儲位與數量） ───── */
+function paintAlloc(){
+  var v = T.vcur.v, can = vCan(), a = v.alloc || {recv:0, stock:0, ship:0, remain:0, rows:[]}, on = !!v.received_date;
+  $('#tvAllocSec').toggle(on); if (!on) return;
+  var bound = !!v.tool_part_id;
+  $('#tvAllocSum').html('到貨 <b>'+a.recv+'</b> 個　已入庫 <b>'+a.stock+'</b>　已出貨 <b>'+a.ship+'</b>　<span class="'+(a.remain>0?'ti-late':'')+'">尚未處理 <b>'+a.remain+'</b></span>'
+    + (bound ? '' : '<br><span class="ti-late">請先在「② 下訂」填刀號並建立／綁定刀具料號，才能入庫或出貨。</span>'));
+  $('#tvAllocList').html(a.rows.length ? '<table class="ti-vt"><tr><th>日期</th><th>處理</th><th>數量</th><th>去向</th></tr>' + a.rows.map(function(x){
+    return '<tr><td>'+esc(dt(x.alloc_date))+'</td><td>'+(x.kind==='stock'?'入庫':'出貨')+'</td><td>'+x.qty+'</td><td>'+(x.kind==='stock' ? '儲位 '+esc(x.loc_code) : '出貨單 '+esc(x.is_number)+'（訂單 #'+x.order_id+'）')+'</td></tr>'; }).join('') + '</table>' : '');
+  var act = can && bound && a.remain > 0; $('#tvAllocAct').toggle(act); if (!act) return;
+  var locs = T.init.locs || [], $l = $('#tvLoc').empty();
+  locs.forEach(function(l){ $l.append('<option value="'+l.location_id+'">'+esc(l.label)+'</option>'); });
+  $('#tvLoc,#tvStockQty,#tvDoStock').prop('disabled', !locs.length);
+  $('#tvLocMsg').css('color','#C4442D').text(locs.length ? '' : '尚未設定可選儲位，請刀具詢價管理員到「刀具選項設定」勾選');
+  $('#tvStockQty,#tvShipQty').val(a.remain); $('#tvStockDate,#tvShipDate').val(todayStr()); $('#tvOrdKw').val(''); loadShipOrders('');
+}
+function loadShipOrders(kw){
+  tget('ship_orders', {vid:T.vcur.v.vid, kw:kw}, function(res){
+    var $s = $('#tvOrd').empty();
+    if (!res.rows.length) { $s.append('<option value="">'+(kw ? '查無符合的訂單' : '這支料號目前沒有待出貨的訂單，可用上方關鍵字搜尋其他訂單')+'</option>'); return; }
+    res.rows.forEach(function(o){
+      $s.append('<option value="'+o.Order_id+'" data-remain="'+o.remain+'">'+(o.same_part?'★ ':'')+esc('訂單 '+o.Order_oo+'｜'+o.client_display+'｜'+o.d_id+'｜訂 '+o.Qty+' 待出 '+o.remain+(o.delivery?'｜交期 '+o.delivery:''))+'</option>');
+    });
+    $s.trigger('change');
+  });
+}
+$('#tvOrd').on('change', function(){ var rm = parseInt($(this).find(':selected').data('remain'),10)||0, a = (T.vcur.v.alloc||{remain:0}); if (rm) $('#tvShipQty').val(Math.min(rm, a.remain)); });
+$('#tvOrdSearch').on('click', function(){ loadShipOrders($.trim($('#tvOrdKw').val())); });
+$('#tvDoStock').on('click', function(){
+  var q = parseInt($('#tvStockQty').val(),10), loc = parseInt($('#tvLoc').val(),10)||0;
+  if (!loc) { alert('請選擇儲位'); return; } if (!(q>=1)) { alert('請填入庫數量（大於 0 的整數）'); return; }
+  tpost('alloc_stock', {vid:T.vcur.v.vid, loc_id:loc, qty:q, date:$('#tvStockDate').val()}, function(res){ alert(res.message); refreshVendor(); });
+});
+$('#tvDoShip').on('click', function(){
+  var q = parseInt($('#tvShipQty').val(),10), oid = parseInt($('#tvOrd').val(),10)||0;
+  if (!oid) { alert('請選擇要綁定的訂單（出貨單一定要綁定訂單）'); return; } if (!(q>=1)) { alert('請填出貨數量（大於 0 的整數）'); return; }
+  tpost('alloc_ship', {vid:T.vcur.v.vid, order_id:oid, qty:q, date:$('#tvShipDate').val()}, function(res){ alert(res.message); refreshVendor(); });
+});
 function showOrder(on){
   $('#tvOrderSec').toggle(on); $('#tvOrderBar').toggle(!on && vCan()); $('#tvRecvBar').toggle(on); paintRecv();
 }
@@ -793,13 +884,13 @@ function openVendor(inqId, vid){
     $('#tvReply').val(v.reply_date || (can ? todayStr() : ''));   // 回覆日預設今天
     $('#tvPrice').val(nz(v.unit_price)); $('#tvLead').val(nz(v.lead_days)); $('#tvNote').val(v.reply_note||'');
     $('input[name=tvUnit][value='+(v.lead_unit||'work')+']').prop('checked', true);
-    $('#tvOrder').val(v.order_date||''); $('#tvDue').val(v.due_date||''); $('#tvRemind').val(v.remind_days); $('#tvRecv').val(v.received_date||''); $('#tvVoid').prop('checked', !!v.is_void);
+    $('#tvOrder').val(v.order_date||''); $('#tvDue').val(v.due_date||''); $('#tvRemind').val(v.remind_days); $('#tvRecv').val(v.received_date||''); $('#tvRecvQty').val(v.recv_qty||r.qty||1); $('#tvVoid').prop('checked', !!v.is_void);
     DUE_AUTO = !v.due_date;
     $('.ti-err').removeClass('show').text(''); $('#tvAttMsg').text('');
     $('#tvMask :input').not('#tvAttFile,#tvAttNote,#tvAttBtn').prop('disabled', !can); $('#tvSave').toggle(can); $('#tvMask .ti-upl').toggle(can);
     fillCats($('#tvAttCat'), ['quote','drawing','other']);
     $('#tvInqAtt').html(attHtml(r.attaches.filter(function(a){ return !a.vid; }), false));
-    showOrder(!!v.order_date); paintTool();
+    showOrder(!!v.order_date); paintTool(); paintAlloc();
     loadVAtt(); openMask('tvMask');
   });
 }
@@ -838,17 +929,18 @@ function toolPartCall(mode, dId, toolNo){
   tpost('tool_part', {vid:T.vcur.v.vid, tool_no:toolNo, mode:mode, d_id:dId||0}, function(res){
     closeMask('tnMask'); alert(res.message); refreshVendor();
   }, function(res){
-    if (res.conflict) showToolConflict(res.matches||[], toolNo); else alert(res.message||'操作失敗');
+    if (res.conflict) showToolConflict(res.matches||[], toolNo, res.others||0); else alert(res.message||'操作失敗');
   });
 }
-function showToolConflict(ms, toolNo){
+function showToolConflict(ms, toolNo, others){
   var r = T.vcur.inq;
-  $('#tnInfo').html('刀號「<b>'+esc(toolNo)+'</b>」在系統裡已有下列料號。<b>請確認是不是同一支刀</b>：是就「綁定這個」（不會重複建立），確定是不同的刀才用「仍要新建」（刀號會自動加後綴，例如 '+esc(toolNo)+'-2）。<br>'
-    + '這次詢價的刀具：<b>'+esc(toolSum(r)||'（未填刀具規格）')+'</b>');
-  $('#tnList').html('<table class="ti-vt"><tr><th>料號</th><th>客戶</th><th>主檔規格</th><th>為什麼列出</th><th></th></tr>'
+  $('#tnInfo').html('主檔已有一支料號，<b>刀號與所有規格條件都跟這次完全相同</b>（刀種、模數、壓力角、牙口數、外徑-長度、D+F、內徑、類型、材質、塗層、廠商）。<b>請確認是不是同一支刀</b>：是就「綁定這個」（不會重複建立）；確定是不同的刀才按「仍要新建」（刀號會自動加後綴，例如 '+esc(toolNo)+'-2）。'
+    + (others ? '<br><span style="color:#8a6d45;">另有 '+others+' 個同刀號但規格不同的料號，不視為同一支刀，這裡不列出。</span>' : '')
+    + '<br>這次詢價的刀具：<b>'+esc(toolSum(r)||'（未填刀具規格）')+'</b>');
+  $('#tnList').html('<table class="ti-vt"><tr><th>料號</th><th>客戶</th><th>主檔規格</th><th>說明</th><th></th></tr>'
     + ms.map(function(m){
         return '<tr><td><b>'+esc(m.part_no)+'</b> #'+m.d_id+'<br><small>'+esc(m.spec_no)+' '+esc(m.revision)+'</small></td><td>'+esc(m.customer)+'</td><td>'+esc(m.summary)+'</td>'
-          + '<td>'+(m.same_vendor_inq?'<span class="ti-late">同廠商同刀號</span><br><small>已用於 '+esc(m.same_vendor_inq)+'</small>':'')+(m.same_no?'<div>主檔已有同編號</div>':'')+'</td>'
+          + '<td><span class="ti-late">所有條件相同</span>'+(m.same_vendor_inq?'<br><small>同廠商已用於 '+esc(m.same_vendor_inq)+'</small>':'')+'</td>'
           + '<td><button type="button" class="ti-mini warm tnBind" data-d="'+m.d_id+'" style="height:28px;">綁定這個</button></td></tr>'; }).join('')
     + '</table>');
   $('#tnMask').data('tool', toolNo); openMask('tnMask');
@@ -865,7 +957,7 @@ $('#tvToolUnbind').on('click', function(){ if (confirm('解除這家廠商與刀
 function saveVendor(done){
   if ($('#tvErrPrice').hasClass('show')||$('#tvErrRemind').hasClass('show')) { alert('尚有欄位需要修正'); return; }
   var data = {vid:T.vcur.v.vid, reply_date:$('#tvReply').val(), currency:$('#tvCur').val(), unit_price:$('#tvPrice').val(), lead_days:$('#tvLead').val(), lead_unit:$('input[name=tvUnit]:checked').val(), reply_note:$('#tvNote').val(),
-      order_date:$('#tvOrder').val(), due_date:$('#tvDue').val(), remind_days:$('#tvRemind').val(), received_date:$('#tvRecv').val(), is_void:$('#tvVoid').prop('checked')?1:0};
+      order_date:$('#tvOrder').val(), due_date:$('#tvDue').val(), remind_days:$('#tvRemind').val(), received_date:$('#tvRecv').val(), recv_qty:$('#tvRecvQty').val(), is_void:$('#tvVoid').prop('checked')?1:0};
   $('#tvSave,#tvDoRecv,#tvUndoRecv').prop('disabled', true);
   tpost('vendor_save', data, function(){ $('#tvSave,#tvDoRecv,#tvUndoRecv').prop('disabled', false); closeMask('tvMask'); loadList(T.page); },
     function(res){ $('#tvSave,#tvDoRecv,#tvUndoRecv').prop('disabled', false); alert(res.message||'儲存失敗'); });
@@ -873,6 +965,7 @@ function saveVendor(done){
 $('#tvSave').on('click', function(){ saveVendor(); });
 $('#tvDoRecv').on('click', function(){   // ③ 已到貨：自動記錄今天為到貨日
   if (!$('#tvOrder').val()) { alert('請先填下訂日'); return; }
+  if (!(parseInt($('#tvRecvQty').val(),10) >= 1)) { alert('請填到貨數量（大於 0 的整數）'); return; }
   if (!confirm('確定這家廠商已到貨？系統會記錄今天（'+egFmtDate(todayStr())+'）為到貨日，並停止交期提醒。')) return;
   $('#tvRecv').val(todayStr()); paintRecv(); saveVendor();
 });
@@ -880,11 +973,41 @@ $('#tvUndoRecv').on('click', function(){ if (!confirm('取消到貨紀錄？交�
 
 /* ───────── 管理員：選項與上限設定 ───────── */
 $('#tBtnSet').on('click', function(){ renderSettings(); openMask('tsMask'); });
+var TS_LOCS = [], TS_SEL = {};
+function drawLocs(){
+  var kw = $.trim($('#tsLocKw').val()).toLowerCase(), only = $('#tsLocTool').prop('checked'), h = '', shown = 0;
+  TS_LOCS.forEach(function(l){
+    if (only && !l.is_tool && !TS_SEL[l.location_id]) return;      // 已勾選的一律顯示，免得篩選後看不到
+    if (kw && l.label.toLowerCase().indexOf(kw) < 0) return;
+    shown++;
+    h += '<label class="ti-ck" style="display:flex;padding:2px 0;"><input type="checkbox" class="tsLoc" value="'+l.location_id+'"'+(TS_SEL[l.location_id]?' checked':'')+'> '+esc(l.label)+(l.is_tool?' <span class="ti-badge">刀具類別</span>':'')+'</label>';
+  });
+  $('#tsLocList').html(h || '<span style="color:#999;font-size:12.5px;">沒有符合的儲位</span>');
+  $('#tsLocCnt').text('已選 '+Object.keys(TS_SEL).length+' 個儲位，目前顯示 '+shown+' 個');
+}
 function renderSettings(){
   tget('settings_get', {}, function(r){
-    var h = '<div class="ti-sec"><h5>數值上限 <small>牙口數、槽數：需 &gt;0 且 &lt; 上限</small></h5><div class="ti-row"><label>牙口數上限</label><div class="ti-cell"><input type="number" id="tsStarts" class="w80" style="width:90px" min="2" value="'+r.settings.starts_max+'"></div></div>'
-      + '<div class="ti-row"><label>槽數上限</label><div class="ti-cell"><input type="number" id="tsSlots" class="w80" style="width:90px" min="2" value="'+r.settings.slots_max+'"></div></div>'
-      + '<div class="ti-row"><label>列印簽章欄<small>預設隱藏「審核」，只印經辦與簽收</small></label><div class="ti-cell"><label class="ti-ck"><input type="checkbox" id="tsReview"'+(r.settings.print_review?' checked':'')+'> 列印時顯示「審核」欄</label><button type="button" class="ti-mini" id="tsLimSave">儲存設定</button></div></div></div>';
+    var st = r.settings;
+    TS_LOCS = r.locations || []; TS_SEL = {};
+    String(st.stock_locs||'').split(',').forEach(function(x){ x = parseInt(x,10); if (x>0) TS_SEL[x] = 1; });
+    var save = '<button type="button" class="ti-mini warm tsSaveAll" style="height:30px;">儲存設定</button>';
+    var h = '<div class="ti-sec"><h5>數值上限與列印 <small>牙口數、槽數：需 &gt;0 且 &lt; 上限</small></h5>'
+      + '<div class="ti-row"><label>牙口數上限</label><div class="ti-cell"><input type="number" id="tsStarts" class="w80" style="width:90px" min="2" value="'+st.starts_max+'"></div></div>'
+      + '<div class="ti-row"><label>槽數上限</label><div class="ti-cell"><input type="number" id="tsSlots" class="w80" style="width:90px" min="2" value="'+st.slots_max+'"></div></div>'
+      + '<div class="ti-row"><label>列印簽章欄<small>預設隱藏「審核」，只印經辦與簽收</small></label><div class="ti-cell"><label class="ti-ck"><input type="checkbox" id="tsReview"'+(st.print_review?' checked':'')+'> 列印時顯示「審核」欄</label></div></div>'
+      + '<div class="ti-row"><label>單號前綴<small>目前：'+esc(st.no_prefix)+'</small></label><div class="ti-cell"><span class="ti-unit">刀具詢價的單號前綴在「一般詢價 → 模組設定」設定（只有詢價單管理員可以改）</span></div></div>'
+      + '<div style="padding:6px 12px;">'+save+'</div></div>'
+      + '<div class="ti-sec"><h5>自動建立刀具料號 <small>下訂後填刀號時，在主檔管理建立料號</small></h5>'
+      + '<div class="ti-row"><label>滾刀 → 料號規格<small>主檔「規格」欄要填的字</small></label><div class="ti-cell"><input type="text" id="tsSpecHob" maxlength="50" style="width:160px;" value="'+esc(st.spec_hob)+'"></div></div>'
+      + '<div class="ti-row"><label>鉋齒刀 → 料號規格<small>主檔稱「插齒刀」</small></label><div class="ti-cell"><input type="text" id="tsSpecShaper" maxlength="50" style="width:160px;" value="'+esc(st.spec_shaper)+'"></div></div>'
+      + '<div class="ti-row"><label>重複判定<small>什麼情況才算同一支刀</small></label><div class="ti-cell" style="display:block;">'
+      + '<label class="ti-ck" style="display:flex;"><input type="radio" name="tsDup" value="strict"'+(st.dup_mode!=='always_new'?' checked':'')+'> 所有條件都相同才算同一支刀（刀號、規格、廠商全部相同才詢問是否綁定；有任何一項不同就直接新建）</label>'
+      + '<label class="ti-ck" style="display:flex;"><input type="radio" name="tsDup" value="always_new"'+(st.dup_mode==='always_new'?' checked':'')+'> 一律新建（不比對、不詢問，每次都建立新料號，刀號被占用時自動加後綴）</label></div></div>'
+      + '<div style="padding:6px 12px;">'+save+'</div></div>'
+      + '<div class="ti-sec"><h5>到貨入庫的可選儲位 <small>勾選後，詢價單的「入庫」只能選這些儲位（儲位資料來自庫存管理）</small></h5><div style="padding:6px 12px;">'
+      + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"><input type="text" id="tsLocKw" placeholder="輸入儲位名稱或區域篩選" style="height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;width:220px;">'
+      + '<label class="ti-ck"><input type="checkbox" id="tsLocTool" checked> 只列刀具類別可用的儲位</label><span class="ti-unit" id="tsLocCnt"></span>'+save+'</div>'
+      + '<div id="tsLocList" style="max-height:220px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;padding:4px 8px;"></div></div></div>';
     Object.keys(r.kinds).forEach(function(k){
       h += '<div class="ti-sec"><h5>'+r.kinds[k]+'選項 <small>已被詢價單選用的不可刪除、但可改名；也可取消「啟用」讓新單不再出現</small></h5><div style="padding:6px 12px;">';
       r.opts[k].forEach(function(o){
@@ -893,10 +1016,16 @@ function renderSettings(){
       });
       h += '<div class="ti-opt-row" data-id="0" data-kind="'+k+'"><input type="text" class="on" placeholder="新增'+r.kinds[k]+'選項" maxlength="60"><input type="hidden" class="oa" value="1"><button type="button" class="ti-mini osave warm">新增</button></div></div></div>';
     });
-    $('#tsBody').html(h);
+    $('#tsBody').html(h); drawLocs();
   });
 }
-$('#tsBody').on('click', '#tsLimSave', function(){ tpost('setting_save', {starts_max:$('#tsStarts').val(), slots_max:$('#tsSlots').val(), print_review:$('#tsReview').prop('checked')?1:0}, function(){ alert('已儲存'); tget('init', {}, function(r){ T.init = r; }); }); });
+$('#tsBody').on('input', '#tsLocKw', drawLocs).on('change', '#tsLocTool', drawLocs);
+$('#tsBody').on('change', '.tsLoc', function(){ var id = parseInt(this.value,10); if (this.checked) TS_SEL[id] = 1; else delete TS_SEL[id]; $('#tsLocCnt').text($('#tsLocCnt').text().replace(/已選 \d+ 個/, '已選 '+Object.keys(TS_SEL).length+' 個')); });
+$('#tsBody').on('click', '.tsSaveAll', function(){
+  tpost('setting_save', {starts_max:$('#tsStarts').val(), slots_max:$('#tsSlots').val(), print_review:$('#tsReview').prop('checked')?1:0,
+      spec_hob:$('#tsSpecHob').val(), spec_shaper:$('#tsSpecShaper').val(), dup_mode:$('input[name=tsDup]:checked').val(), stock_locs:Object.keys(TS_SEL).join(',')},
+    function(){ alert('已儲存'); tget('init', {}, function(r){ T.init = r; }); });
+});
 $('#tsBody').on('click', '.osave', function(){
   var $r = $(this).closest('.ti-opt-row'), $a = $r.find('.oa'), act = $a.is(':checkbox') ? ($a.prop('checked')?1:0) : 1;
   tpost('opt_save', {opt_id:$r.data('id'), kind:$r.data('kind'), name:$r.find('.on').val(), is_active:act}, function(){ renderSettings(); tget('init', {}, function(r){ T.init = r; }); });

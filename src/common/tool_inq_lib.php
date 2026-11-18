@@ -102,10 +102,23 @@ function ti_ensure_schema(PDO $db): void {
     }
     // 下訂後填的「刀號」與自動建立／綁定的刀具料號（主檔 d_setting Type=H）
     if ($exists('tool_inq_vendor')) {
-        foreach (['tool_no' => "VARCHAR(100) NULL COMMENT '廠商的刀號（下訂後填）'", 'tool_part_id' => "INT NULL COMMENT '建立／綁定的刀具料號 d_setting.d_id'"] as $col => $def) {
+        foreach (['tool_no' => "VARCHAR(100) NULL COMMENT '廠商的刀號（下訂後填）'", 'tool_part_id' => "INT NULL COMMENT '建立／綁定的刀具料號 d_setting.d_id'", 'recv_qty' => "INT NULL COMMENT '到貨數量（入庫＋出貨合計不可超過）'"] as $col => $def) {
             if (!$db->query("SHOW COLUMNS FROM tool_inq_vendor LIKE '{$col}'")->fetchAll()) $db->exec("ALTER TABLE tool_inq_vendor ADD COLUMN {$col} {$def}");
         }
         if (!$db->query("SHOW INDEX FROM tool_inq_vendor WHERE Key_name='idx_vendor_toolno'")->fetchAll()) $db->exec("ALTER TABLE tool_inq_vendor ADD KEY idx_vendor_toolno (vendor_id_no, tool_no)");
+    }
+    if (!$exists('tool_inq_alloc')) {
+        $db->exec("CREATE TABLE tool_inq_alloc (
+            alloc_id INT AUTO_INCREMENT PRIMARY KEY, vid INT NOT NULL,
+            kind VARCHAR(6) NOT NULL COMMENT 'stock 入庫／ship 出貨', qty INT NOT NULL,
+            location_id INT NULL, stock_item_id INT NULL, txn_id INT NULL,
+            order_id INT NULL, is_number VARCHAR(30) NULL, alloc_date DATE NULL,
+            created_by INT NULL, created_at DATETIME NULL, KEY idx_vid (vid)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刀具詢價—到貨後的入庫／出貨分配'");
+    }
+    if ($exists('tool_inq_setting')) {
+        $c = $db->query("SHOW COLUMNS FROM tool_inq_setting LIKE 'sval'")->fetch(PDO::FETCH_ASSOC);
+        if ($c && stripos((string)$c['Type'], 'varchar') !== false) $db->exec("ALTER TABLE tool_inq_setting MODIFY sval TEXT NULL");
     }
     $seedOpt = false;
     if (!$exists('tool_inq_opt')) {
@@ -132,16 +145,49 @@ function ti_ensure_schema(PDO $db): void {
 /* ═══════════════ 設定與選項 ═══════════════ */
 function ti_settings(PDO $db): array {
     ti_ensure_schema($db);
-    $o = ['starts_max' => 10, 'slots_max' => 50, 'print_review' => 0];   // 牙口數／槽數：需 >0 且 <上限；print_review＝列印是否顯示「審核」欄（預設隱藏）
-    try { foreach ($db->query("SELECT skey,sval FROM tool_inq_setting") as $r) if (isset($o[$r['skey']])) $o[$r['skey']] = (int)$r['sval']; } catch (Throwable $e) {}
+    // 牙口數／槽數：需 >0 且 <上限；print_review＝列印是否顯示「審核」欄；no_prefix＝單號前綴；
+    // spec_hob／spec_shaper＝自動建立刀具料號時「料號規格（Spec_No）」要填的字（滾刀＝滾齒刀、鉋齒刀＝插齒刀）；
+    // dup_mode＝strict（所有條件都相同才詢問是否綁定，否則一律新建）／always_new（一律新建）；stock_locs＝入庫可選儲位（location_id 逗號清單）
+    $o = ['starts_max' => 10, 'slots_max' => 50, 'print_review' => 0, 'no_prefix' => 'TI', 'spec_hob' => '滾齒刀', 'spec_shaper' => '插齒刀', 'dup_mode' => 'strict', 'stock_locs' => ''];
+    try { foreach ($db->query("SELECT skey,sval FROM tool_inq_setting") as $r) if (isset($o[$r['skey']])) $o[$r['skey']] = is_int($o[$r['skey']]) ? (int)$r['sval'] : (string)$r['sval']; } catch (Throwable $e) {}
     return $o;
 }
-function ti_settings_save(PDO $db, int $startsMax, int $slotsMax, int $printReview = 0): array {
+/** 儲存設定；$in 沒帶的鍵維持原值。回 [ok, 訊息] */
+function ti_settings_save(PDO $db, array $in): array {
     ti_ensure_schema($db);
-    if ($startsMax < 2 || $startsMax > 999) return [false, '牙口數上限請填 2～999（需大於 1，因為牙口數必須 >0 且 <上限）'];
-    if ($slotsMax < 2 || $slotsMax > 999) return [false, '槽數上限請填 2～999（需大於 1，因為槽數必須 >0 且 <上限）'];
+    $cur = ti_settings($db); $new = $cur;
+    foreach (['starts_max' => '牙口數', 'slots_max' => '槽數'] as $k => $lb) {
+        if (!array_key_exists($k, $in)) continue;
+        $n = (int)$in[$k];
+        if ($n < 2 || $n > 999) return [false, $lb . '上限請填 2～999（需大於 1，因為' . $lb . '必須 >0 且 <上限）'];
+        $new[$k] = $n;
+    }
+    if (array_key_exists('print_review', $in)) $new['print_review'] = !empty($in['print_review']) ? 1 : 0;
+    if (array_key_exists('no_prefix', $in)) {
+        $p = strtoupper(trim((string)$in['no_prefix']));
+        if (!preg_match('/^[A-Z0-9]{1,8}$/', $p)) return [false, '單號前綴只能是英文字母或數字，1～8 碼'];
+        $new['no_prefix'] = $p;
+    }
+    foreach (['spec_hob' => '滾刀', 'spec_shaper' => '鉋齒刀'] as $k => $lb) {
+        if (!array_key_exists($k, $in)) continue;
+        $t = trim((string)$in[$k]);
+        if ($t === '' || mb_strlen($t) > 50) return [false, $lb . '對應的「料號規格」請填 1～50 字'];
+        $new[$k] = $t;
+    }
+    if (array_key_exists('dup_mode', $in)) {
+        if (!in_array($in['dup_mode'], ['strict', 'always_new'], true)) return [false, '重複判定方式不正確'];
+        $new['dup_mode'] = $in['dup_mode'];
+    }
+    if (array_key_exists('stock_locs', $in)) {
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$in['stock_locs'])))));
+        if ($ids) {   // 只收庫存頁裡真的存在、啟用的儲位
+            $ok = array_map('intval', $db->query("SELECT location_id FROM stock_locations WHERE is_active=1 AND location_id IN (" . implode(',', $ids) . ")")->fetchAll(PDO::FETCH_COLUMN));
+            $ids = array_values(array_intersect($ids, $ok));
+        }
+        sort($ids); $new['stock_locs'] = implode(',', $ids);
+    }
     $st = $db->prepare("INSERT INTO tool_inq_setting (skey,sval) VALUES (?,?) ON DUPLICATE KEY UPDATE sval=VALUES(sval)");
-    $st->execute(['starts_max', $startsMax]); $st->execute(['slots_max', $slotsMax]); $st->execute(['print_review', $printReview ? 1 : 0]);
+    foreach ($new as $k => $v) $st->execute([$k, (string)$v]);
     return [true, ''];
 }
 /** 該選項被幾張詢價單選用（欄位固定，不吃前端輸入） */
@@ -406,7 +452,7 @@ function ti_clean_tool(PDO $db, string $type, array $t, array $set): array {
 
 /* ═══════════════ 單號 ═══════════════ */
 function ti_next_no(PDO $db, string $date): string {
-    $pre = 'TI' . date('ymd', strtotime($date));
+    $pre = ti_settings($db)['no_prefix'] . date('ymd', strtotime($date));   // 前綴（管理員可設定，預設 TI）＋YYMMDD＋流水3碼
     $st = $db->prepare("SELECT MAX(inq_no) FROM tool_inq WHERE inq_no LIKE ?"); $st->execute([$pre . '%']);
     $last = (string)$st->fetchColumn();
     $n = $last !== '' ? ((int)substr($last, strlen($pre))) + 1 : 1;
@@ -465,7 +511,7 @@ function ti_row(PDO $db, array $r, bool $full = true): array {
     $vs = $db->prepare("SELECT * FROM tool_inq_vendor WHERE inq_id=? ORDER BY vid"); $vs->execute([$id]);
     $o['vendors'] = array_map(function ($v) {
         $v['vid'] = (int)$v['vid']; $v['is_void'] = (int)$v['is_void']; $v['remind_days'] = (int)$v['remind_days'];
-        $v['lead_days'] = $v['lead_days'] !== null ? (int)$v['lead_days'] : null; $v['lead_unit'] = ($v['lead_unit'] ?? 'work') === 'cal' ? 'cal' : 'work'; $v['tool_part_id'] = !empty($v['tool_part_id']) ? (int)$v['tool_part_id'] : null; $v['tool_no'] = (string)($v['tool_no'] ?? '');
+        $v['lead_days'] = $v['lead_days'] !== null ? (int)$v['lead_days'] : null; $v['lead_unit'] = ($v['lead_unit'] ?? 'work') === 'cal' ? 'cal' : 'work'; $v['tool_part_id'] = !empty($v['tool_part_id']) ? (int)$v['tool_part_id'] : null; $v['recv_qty'] = $v['recv_qty'] !== null ? (int)$v['recv_qty'] : null; $v['tool_no'] = (string)($v['tool_no'] ?? '');
         $v['unit_price'] = $v['unit_price'] !== null ? (float)$v['unit_price'] : null;
         $v['stage'] = ti_vendor_stage($v);
         return $v;
@@ -479,7 +525,11 @@ function ti_row(PDO $db, array $r, bool $full = true): array {
     }
     $ac = $db->prepare("SELECT category, vid, COUNT(*) c FROM tool_inq_attach WHERE inq_id=? AND status='active' GROUP BY category, vid"); $ac->execute([$id]);
     $o['att_count'] = array_sum(array_map(function ($x) { return (int)$x['c']; }, $ac->fetchAll(PDO::FETCH_ASSOC)));
-    if ($full) $o['attaches'] = ti_attaches($db, $id);
+    if ($full) {
+        $o['attaches'] = ti_attaches($db, $id);
+        foreach ($o['vendors'] as &$vv) $vv['alloc'] = ti_alloc_summary($db, $vv['vid'], $vv['recv_qty']);
+        unset($vv);
+    }
     return $o;
 }
 function ti_select_sql(): string { return "SELECT i.*, d.D_Setting_Id part_no_live, c.customer customer_live, c.customer_full customer_full_live
@@ -656,6 +706,15 @@ function ti_vendor_save(PDO $db, int $vid, array $P, array $perm): array {
     if ($due && $order && $due < $order) return [false, '交期不可早於下訂日'];
     if ($recv && !$order) return [false, '請先填下訂日再填到貨日'];
     if ($recv && $order && $recv < $order) return [false, '到貨日不可早於下訂日'];
+    // 到貨數量：按「已到貨」時一併記錄（預設＝詢價單的需求支數，沒有就 1）；已有入庫／出貨紀錄時，不可取消到貨、也不可把數量改得比已處理的還少
+    $al = ti_alloc_summary($db, $vid, (int)$v['recv_qty']);
+    $recvQty = null;
+    if ($recv) {
+        $rqRaw = trim((string)($P['recv_qty'] ?? ''));
+        if ($rqRaw === '') { $iq = $db->prepare("SELECT qty FROM tool_inq WHERE id=?"); $iq->execute([(int)$v['inq_id']]); $rqRaw = (string)((int)$v['recv_qty'] ?: ((int)$iq->fetchColumn() ?: 1)); }
+        [$e, $recvQty] = ti_int($rqRaw, 1, 99999999, '到貨數量'); if ($e) return [false, $e];
+        if ($recvQty < $al['stock'] + $al['ship']) return [false, '到貨數量不可少於已入庫／已出貨的合計（' . ($al['stock'] + $al['ship']) . '）'];
+    } elseif ($al['stock'] + $al['ship'] > 0) return [false, '已有入庫／出貨紀錄，不能取消到貨'];
     [$e, $price] = ti_num($P['unit_price'] ?? null, 0.0, 99999999.0, '單價'); if ($e) return [false, $e];
     $leadRaw = trim((string)($P['lead_days'] ?? ''));
     [$e, $lead] = ti_int($leadRaw === '' ? null : $leadRaw, 0, 9999, '交期天數'); if ($e) return [false, $e];
@@ -669,9 +728,9 @@ function ti_vendor_save(PDO $db, int $vid, array $P, array $perm): array {
     $now = ti_now($db);
     // 交期或提醒天數改了就重新計算提醒（清掉已發記錄）
     $reset = ($due !== $v['due_date'] || (int)$rem !== (int)$v['remind_days']);
-    $db->prepare("UPDATE tool_inq_vendor SET reply_date=?, currency=?, unit_price=?, lead_days=?, lead_unit=?, order_date=?, due_date=?, received_date=?, remind_days=?, reply_note=?, is_void=?, updated_at=?"
+    $db->prepare("UPDATE tool_inq_vendor SET reply_date=?, currency=?, unit_price=?, lead_days=?, lead_unit=?, order_date=?, due_date=?, received_date=?, recv_qty=?, remind_days=?, reply_note=?, is_void=?, updated_at=?"
                  . ($reset ? ", remind_sent_for=NULL, overdue_sent_for=NULL" : "") . " WHERE vid=?")
-       ->execute([$reply, $cur, $price, $lead, $unit, $order, $due, $recv, $rem ?? 3, $note, $void, $now['n'], $vid]);
+       ->execute([$reply, $cur, $price, $lead, $unit, $order, $due, $recv, $recvQty, $rem ?? 3, $note, $void, $now['n'], $vid]);
     return [true, ''];
 }
 
@@ -702,25 +761,101 @@ function ti_tool_part_summary(PDO $db, int $dId): string {
     if ($t['starts_lh']) $a[] = '牙口LH' . $t['starts_lh'];
     return implode('　', array_filter($a, 'strlen'));
 }
-/** 回傳該刀號的重複／相似對象清單；沒有就是空陣列 */
-function ti_tool_part_matches(PDO $db, int $vid, string $vendorIdNo, string $toolNo): array {
-    $out = [];
+function ti_norm($v): string {   // 比較用：空值＝''、數字去尾零、文字不分大小寫
+    if ($v === null) return '';
+    $s = trim((string)$v);
+    if ($s === '') return '';
+    if (is_numeric($s)) return rtrim(rtrim(number_format((float)$s, 4, '.', ''), '0'), '.');
+    return mb_strtolower($s);
+}
+/** 這支主檔刀具和「這次詢價的刀具」不一樣的地方（空陣列＝所有條件都相同） */
+function ti_tool_diffs(PDO $db, int $dId, array $row, string $vendorIdNo, string $toolNo): array {
+    $d = [];
+    $n = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?"); $n->execute([$dId]);
+    if (ti_norm($n->fetchColumn()) !== ti_norm($toolNo)) $d[] = '刀號';
+    $st = $db->prepare("SELECT * FROM d_setting_tool WHERE d_setting_id=? ORDER BY tool_id LIMIT 1"); $st->execute([$dId]);
+    $t = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$t) { $d[] = '主檔尚無刀具規格'; return $d; }
+    foreach (['tool_kind' => '刀種', 'module_display' => '模數', 'pressure_angle' => '壓力角', 'starts_rh' => '牙口數RH', 'starts_lh' => '牙口數LH', 'od_length' => '外徑-長度', 'd_plus_f' => 'D+F',
+              'bore_dia' => '內徑', 'tool_type' => '類型', 'teeth' => '齒數', 'outer_dia' => '外徑', 'material' => '材質', 'coating' => '塗層'] as $k => $lb) {
+        if (ti_norm($t[$k] ?? null) !== ti_norm($row[$k] ?? null)) $d[] = $lb;
+    }
+    // 廠商：這支料號如果已有刀具詢價紀錄，必須包含這家廠商才算相同
+    $v = $db->prepare("SELECT DISTINCT vendor_id_no FROM tool_inq_vendor WHERE tool_part_id=?"); $v->execute([$dId]);
+    $vs = $v->fetchAll(PDO::FETCH_COLUMN);
+    if ($vs && !in_array($vendorIdNo, $vs, true)) $d[] = '廠商';
+    return $d;
+}
+/**
+ * 同刀號的候選料號（同廠商同刀號在別張詢價單綁定過的、主檔同編號的），每一個都比對「所有條件」：
+ * 刀號、刀種、模數、壓力角、牙口數、外徑-長度、D+F、內徑、類型、齒數、外徑、材質、塗層、廠商。全部相同才是 identical。
+ */
+function ti_tool_part_matches(PDO $db, int $vid, string $vendorIdNo, string $toolNo, array $row): array {
+    $ids = [];
     $q = $db->prepare("SELECT v.tool_part_id, i.inq_no, i.inq_date FROM tool_inq_vendor v JOIN tool_inq i ON i.id=v.inq_id
                        WHERE v.vendor_id_no=? AND v.tool_no=? AND v.vid<>? AND v.tool_part_id IS NOT NULL");
     $q->execute([$vendorIdNo, $toolNo, $vid]);
-    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['tool_part_id']]['same_vendor'] = $r['inq_no'] . '（' . $r['inq_date'] . '）';
-    $p = $db->prepare("SELECT d_id FROM d_setting WHERE Type IN ('H','OH') AND D_Setting_Id=?");
-    $p->execute([$toolNo]);
-    foreach ($p->fetchAll(PDO::FETCH_COLUMN) as $d) $out[(int)$d]['same_no'] = true;
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $ids[(int)$r['tool_part_id']]['same_vendor'] = $r['inq_no'] . '（' . $r['inq_date'] . '）';
+    $p = $db->prepare("SELECT d_id FROM d_setting WHERE Type IN ('H','OH') AND D_Setting_Id=?"); $p->execute([$toolNo]);
+    foreach ($p->fetchAll(PDO::FETCH_COLUMN) as $d) $ids[(int)$d]['same_no'] = true;
     $rows = [];
-    foreach ($out as $dId => $flags) {
+    foreach ($ids as $dId => $flags) {
         $r = $db->prepare("SELECT d.D_Setting_Id, d.Spec_No, d.Revision, c.customer FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.d_id=?");
         $r->execute([$dId]); $d = $r->fetch(PDO::FETCH_ASSOC);
         if (!$d) continue;
+        $diffs = ti_tool_diffs($db, $dId, $row, $vendorIdNo, $toolNo);
         $rows[] = ['d_id' => $dId, 'part_no' => $d['D_Setting_Id'], 'spec_no' => (string)$d['Spec_No'], 'revision' => (string)$d['Revision'], 'customer' => (string)($d['customer'] ?? ''),
-                   'summary' => ti_tool_part_summary($db, $dId), 'same_vendor_inq' => $flags['same_vendor'] ?? '', 'same_no' => !empty($flags['same_no'])];
+                   'summary' => ti_tool_part_summary($db, $dId), 'same_vendor_inq' => $flags['same_vendor'] ?? '', 'same_no' => !empty($flags['same_no']),
+                   'identical' => !$diffs, 'diffs' => $diffs];
     }
     return $rows;
+}
+/** 主檔標籤：自動建立「模數」「滾齒刀規格／插齒刀規格」「材質(刀具)」（寫法與主檔管理手動貼標籤相同：item_label_map＋item_sub_label_map）。回傳建立的標籤數；失敗只記 log，不影響料號。 */
+function ti_tool_labels_create(PDO $db, int $dId, array $r, int $uid): int {
+    $n = 0;
+    try {
+        $uname = (string)$db->query("SELECT user_cname FROM `user` WHERE id=" . (int)$uid)->fetchColumn();
+        $lid = function (string $name) use ($db) { $q = $db->prepare("SELECT label_id FROM dict_label WHERE label_name=? LIMIT 1"); $q->execute([$name]); return (int)$q->fetchColumn(); };
+        $sid = function (int $label, string $sub) use ($db) { $q = $db->prepare("SELECT sub_id FROM dict_label_sub WHERE label_id=? AND sub_name=? AND is_active=1 LIMIT 1"); $q->execute([$label, $sub]); return (int)$q->fetchColumn(); };
+        $opt = function (int $sub, string $val) use ($db) { $q = $db->prepare("SELECT COUNT(*) FROM dict_label_sub_option WHERE sub_id=? AND option_value=? AND is_active=1"); $q->execute([$sub, $val]); return (int)$q->fetchColumn() > 0; };
+        $addL = $db->prepare("INSERT INTO item_label_map (d_id,label_id,created_by,created_by_id,created_at) VALUES (?,?,?,?,NOW())");
+        $addS = $db->prepare("INSERT INTO item_sub_label_map (parent_map_id,sub_id,input_value,created_by,created_by_id,created_at) VALUES (?,?,?,?,?,NOW())");
+        $fmt = function ($v) { return is_numeric($v) ? rtrim(rtrim(number_format((float)$v, 4, '.', ''), '0'), '.') : (string)$v; };
+        $make = function (int $label, array $subs) use ($db, $dId, $uname, $uid, $addL, $addS, $sid, &$n) {   // $subs: [子標籤名 => 值（null＝只貼標籤不帶值）]
+            $items = [];
+            foreach ($subs as $name => $val) { $s = $sid($label, (string)$name); if ($s) $items[] = [$s, $val]; }
+            if (!$items) return;
+            $addL->execute([$dId, $label, $uname, $uid]); $map = (int)$db->lastInsertId();
+            foreach ($items as [$s, $val]) $addS->execute([$map, $s, $val === null ? null : (string)$val, $uname, $uid]);
+            $n++;
+        };
+        $db->beginTransaction();
+        if ($r['module_input_type'] && $r['module_value'] !== null && ($l = $lid('模數'))) $make($l, [(string)$r['module_input_type'] => $fmt($r['module_value'])]);
+        $spec = $r['tool_kind'] === 'hob' ? '滾齒刀規格' : '插齒刀規格';
+        if ($l = $lid($spec)) {
+            $subs = [];
+            if ($r['pressure_angle'] !== null) $subs['壓力角'] = $r['pressure_angle'];
+            if ($r['tool_kind'] === 'hob') {
+                if ($r['starts_rh']) $subs['牙口數-RH'] = $r['starts_rh'];
+                if ($r['starts_lh']) $subs['牙口數-LH'] = $r['starts_lh'];
+                if ($r['od_length']) $subs['外徑-長度'] = $r['od_length'];
+                if ($r['d_plus_f'] !== null) $subs['D+F'] = $fmt($r['d_plus_f']);
+                if ($r['bore_dia'] !== null) $subs['內徑'] = $fmt($r['bore_dia']);
+            } else {
+                if ($r['teeth']) $subs['齒數'] = $r['teeth'];
+                if ($r['outer_dia'] !== null) $subs['⌀'] = $fmt($r['outer_dia']);
+            }
+            if ($r['tool_type'] && ($ts = $sid($l, '類型')) && $opt($ts, (string)$r['tool_type'])) $subs['類型'] = $r['tool_type'];   // 類型是下拉選項，主檔沒有這個選項就不貼
+            if ($subs) $make($l, $subs);
+        }
+        if ($r['material'] && ($l = $lid('材質(刀具)')) && $sid($l, (string)$r['material'])) $make($l, [(string)$r['material'] => null]);   // 材質是主檔既有的選項才貼
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[tool_inq] labels failed: ' . $e->getMessage());
+        return 0;
+    }
+    return $n;
 }
 /** 詢價單的刀具規格 → d_setting_tool 欄位 */
 function ti_tool_row_from_inq(PDO $db, array $inq): array {
@@ -744,7 +879,10 @@ function ti_tool_row_from_inq(PDO $db, array $inq): array {
     return $row;
 }
 /**
- * mode: check＝只查重複不建立／create＝建立（有重複就回 conflict）／suffix＝刀號加後綴另建新料號／bind＝綁定到既有料號 $dId／unbind＝解除綁定（不刪料號）
+ * mode: create＝建立／suffix＝刀號加後綴另建（使用者在重複視窗確認「確定是不同的刀」）／bind＝綁定到既有料號 $dId／unbind＝解除綁定（不刪料號）
+ * 「相同刀具」的定義（使用者 2026-11-18 定案）：刀號與所有規格條件（刀種、模數、壓力角、牙口數、外徑-長度、D+F、內徑、類型、齒數、外徑、材質、塗層、廠商）全部相同才算；
+ * 只要有一項不同就視為不同的刀、一律建立新料號（刀號被占用時自動加後綴 -2、-3…），不會把資料併進不相干的料號。
+ * 管理員可把重複判定改成「一律新建」（dup_mode=always_new）：連完全相同也不詢問，每次都建立新料號。
  * 回 [ok, message, extra]
  */
 function ti_tool_part_apply(PDO $db, int $vid, string $toolNo, string $mode, int $dId, int $uid, array $perm): array {
@@ -762,34 +900,38 @@ function ti_tool_part_apply(PDO $db, int $vid, string $toolNo, string $mode, int
     $toolNo = ti_tool_no_clean($toolNo);
     if ($toolNo === '') return [false, '請填刀號', []];
     $inq = ti_get($db, (int)$v['inq_id']);
-    $matches = ti_tool_part_matches($db, $vid, (string)$v['vendor_id_no'], $toolNo);
+    if (!in_array($inq['tool_type'], ['hob', 'shaper'], true)) return [false, '請先在詢價單選擇刀具種類（鉋齒刀或滾刀），才能建立或綁定刀具料號', []];
+    $set = ti_settings($db);
+    $r = ti_tool_row_from_inq($db, $inq);
+    $cands = ti_tool_part_matches($db, $vid, (string)$v['vendor_id_no'], $toolNo, $r);
+    $ident = array_values(array_filter($cands, function ($c) { return $c['identical']; }));
+    $collide = false; foreach ($cands as $c) if ($c['same_no']) $collide = true;
 
-    if ($mode === 'bind') {
-        $ok = $db->prepare("SELECT d_id FROM d_setting WHERE d_id=? AND Type IN ('H','OH')"); $ok->execute([$dId]);
-        if (!$ok->fetchColumn()) return [false, '要綁定的刀具料號不存在', []];
+    if ($mode === 'bind') {   // 只能綁定「所有條件都相同」的料號
+        $ok = array_filter($ident, function ($c) use ($dId) { return (int)$c['d_id'] === $dId; });
+        if (!$ok) return [false, '這支料號與本次詢價的刀具有條件不同，不能視為同一支刀（請改用新建）', []];
         $db->prepare("UPDATE tool_inq_vendor SET tool_no=?, tool_part_id=? WHERE vid=?")->execute([$toolNo, $dId, $vid]);
         return [true, '已綁定到既有料號', ['d_id' => $dId]];
     }
-    if (!in_array($inq['tool_type'], ['hob', 'shaper'], true)) return [false, '請先在詢價單選擇刀具種類（鉋齒刀或滾刀），才能建立刀具料號', []];
-    if ($mode === 'check' || ($mode === 'create' && $matches)) {
-        return [$mode === 'check' && !$matches, $matches ? '這個刀號已有相同或相似的料號，請選擇處理方式' : '沒有重複', ['conflict' => (bool)$matches, 'matches' => $matches]];
+    if ($mode === 'create' && $ident && $set['dup_mode'] !== 'always_new') {
+        return [false, '有一支料號的刀號與所有條件都跟這次相同，請確認是不是同一支刀', ['conflict' => true, 'matches' => $ident, 'others' => count($cands) - count($ident)]];
     }
     $own = ti_own_customer_id($db);
     if ($own === '') return [false, '客戶主檔找不到「本公司」，無法建立刀具料號', []];
-    $partNo = $toolNo;
-    if ($mode === 'suffix') {   // 刀號加後綴：A-2、A-3…（主檔該編號未被使用的第一個）
+    $partNo = $toolNo; $note = '';
+    if ($mode === 'suffix' || $collide) {   // 刀號加後綴：A-2、A-3…（主檔該編號未被使用的第一個）
         $chk = $db->prepare("SELECT COUNT(*) FROM d_setting WHERE Type IN ('H','OH') AND D_Setting_Id=?");
         for ($n = 2; $n < 1000; $n++) { $chk->execute([$toolNo . '-' . $n]); if (!(int)$chk->fetchColumn()) { $partNo = $toolNo . '-' . $n; break; } }
         if ($partNo === $toolNo) return [false, '找不到可用的後綴，請改刀號', []];
+        if ($mode !== 'suffix') $note = '（刀號「' . $toolNo . '」已被規格不同的料號使用，已自動加後綴）';
     }
-    $r = ti_tool_row_from_inq($db, $inq);
+    $specNo = $inq['tool_type'] === 'hob' ? ($set['spec_hob'] !== '' ? $set['spec_hob'] : '滾齒刀') : ($set['spec_shaper'] !== '' ? $set['spec_shaper'] : '插齒刀');
     $db->beginTransaction();
     try {
-        // 交易內再確認一次（兩個人同時建立同一個刀號時，後到的會擋下）
         $dup = $db->prepare("SELECT COUNT(*) FROM d_setting WHERE Type IN ('H','OH') AND D_Setting_Id=? FOR UPDATE"); $dup->execute([$partNo]);
         if ((int)$dup->fetchColumn() > 0) throw new RuntimeException('主檔剛剛已有同編號的刀具料號，請重新操作');
         $db->prepare("INSERT INTO d_setting (D_Setting_Id, Spec_No, Revision, Type, Is_Assembly, Customer_Id, Remark, Created_By, Created_At) VALUES (?,?,?,'H',0,?,?,?,NOW())")
-           ->execute([$partNo, $inq['tool_type'] === 'hob' ? '滾齒刀' : '插齒刀', '', $own, '由刀具詢價 ' . $inq['inq_no'] . ' 建立（廠商 ' . $v['vendor_name'] . '　刀號 ' . $toolNo . '）', (string)$uid]);
+           ->execute([$partNo, $specNo, '', $own, '由刀具詢價 ' . $inq['inq_no'] . ' 建立（廠商 ' . $v['vendor_name'] . '　刀號 ' . $toolNo . '）', (string)$uid]);
         $newId = (int)$db->lastInsertId();
         $db->prepare("INSERT INTO d_setting_tool (d_setting_id, tool_kind, module_input_type, module_value, module_display, pressure_angle, starts_rh, starts_lh, od_length, d_plus_f, bore_dia, has_six_spline, tool_type, teeth, outer_dia, shaper_tag, material, coating, remark, Created_By, Created_At, Modified_By, Modified_At)
                       VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,NULL,?,?,?,?,NOW(),?,NOW())")
@@ -801,7 +943,140 @@ function ti_tool_part_apply(PDO $db, int $vid, string $toolNo, string $mode, int
         if ($db->inTransaction()) $db->rollBack();
         return [false, $e instanceof RuntimeException ? $e->getMessage() : ('建立料號失敗：' . $e->getMessage()), []];
     }
-    return [true, '已建立刀具料號「' . $partNo . '」並綁定', ['d_id' => $newId, 'part_no' => $partNo]];
+    $labels = ti_tool_labels_create($db, $newId, $r, $uid);   // 主檔標籤（模數、滾齒刀／插齒刀規格、材質）
+    return [true, '已建立刀具料號「' . $partNo . '」並綁定' . ($labels ? '，並自動貼上 ' . $labels . ' 組標籤與刀具規格' : '，並建立刀具規格') . $note, ['d_id' => $newId, 'part_no' => $partNo]];
+}
+
+/* ═══════════════ 到貨後：入庫（選儲位與數量）／出貨（快速出貨，綁訂單） ═══════════════
+ * 一批到貨可以「部分出貨、部分入庫」：到貨數量＝recv_qty，每次入庫或出貨記一筆 tool_inq_alloc，合計不可超過到貨數量。
+ * 入庫儲位只能選刀具詢價管理員在設定裡勾選的（stock_locations）；入庫寫法與庫存頁一致（stock_items item_type=20 刀具＋stock_transactions 'in'）。
+ * 出貨直接呼叫快速出貨的 sq_create_shipment()（一律要綁定訂單），不另寫一套出貨規則。
+ */
+function ti_stock_ids(PDO $db): array {
+    $s = ti_settings($db)['stock_locs'];
+    return array_values(array_filter(array_map('intval', explode(',', $s))));
+}
+/** 儲位清單。$ids＝只取這些（null＝全部啟用的）；每列帶區域名稱與「是否為刀具類別可用儲位」 */
+function ti_loc_rows(PDO $db, ?array $ids = null): array {
+    if ($ids !== null && !$ids) return [];
+    $w = 'l.is_active=1'; if ($ids !== null) $w .= ' AND l.location_id IN (' . implode(',', array_map('intval', $ids)) . ')';
+    $rows = $db->query("SELECT l.location_id, l.location_code, l.location_name, COALESCE(a.area_name,'') area_name,
+                               EXISTS (SELECT 1 FROM stock_category_locations c WHERE c.location_id=l.location_id AND c.category_id=20) is_tool
+                        FROM stock_locations l LEFT JOIN stock_areas a ON a.area_id=l.area
+                        WHERE $w ORDER BY a.sort_order, l.sort_order, l.location_code")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['location_id'] = (int)$r['location_id']; $r['is_tool'] = (int)$r['is_tool']; $r['label'] = trim(($r['area_name'] !== '' ? '[' . $r['area_name'] . '] ' : '') . $r['location_code'] . ($r['location_name'] ? '　' . $r['location_name'] : '')); }
+    return $rows;
+}
+function ti_alloc_summary(PDO $db, int $vid, ?int $recvQty): array {
+    $st = $db->prepare("SELECT a.*, COALESCE(l.location_code,'') loc_code FROM tool_inq_alloc a LEFT JOIN stock_locations l ON l.location_id=a.location_id WHERE a.vid=? ORDER BY a.alloc_id");
+    $st->execute([$vid]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC); $stock = 0; $ship = 0;
+    foreach ($rows as &$r) { $r['qty'] = (int)$r['qty']; if ($r['kind'] === 'stock') $stock += $r['qty']; else $ship += $r['qty']; }
+    return ['recv' => (int)$recvQty, 'stock' => $stock, 'ship' => $ship, 'remain' => max(0, (int)$recvQty - $stock - $ship), 'rows' => $rows];
+}
+/** 共同前置檢查：回 [錯誤, 廠商列, 詢價單, 剩餘可分配數量] */
+function ti_alloc_pre(PDO $db, int $vid, int $qty, string $date, array $perm): array {
+    $st = $db->prepare("SELECT v.*, i.created_by FROM tool_inq_vendor v JOIN tool_inq i ON i.id=v.inq_id WHERE v.vid=?"); $st->execute([$vid]);
+    $v = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$v) return ['查無此廠商列'];
+    if (!ti_can_edit($perm, $v)) return ['您沒有編輯這張詢價單的權限'];
+    if (empty($v['received_date'])) return ['請先按「已到貨」'];
+    if (empty($v['tool_part_id'])) return ['請先填刀號並建立／綁定刀具料號，才能入庫或出貨'];
+    if ($qty < 1) return ['數量必須是大於 0 的整數'];
+    if (!ti_date_ok($date)) return ['日期格式不正確'];
+    if ($date > ti_now($db)['d']) return ['日期不可晚於今天'];
+    $sum = ti_alloc_summary($db, $vid, (int)$v['recv_qty']);
+    if ($qty > $sum['remain']) return ['數量超過尚未處理的到貨數量（剩 ' . $sum['remain'] . '）'];
+    return ['', $v, ti_get($db, (int)$v['inq_id']), $sum['remain']];
+}
+function ti_alloc_stock(PDO $db, int $vid, int $locId, int $qty, string $date, int $uid, array $perm): array {
+    $p = ti_alloc_pre($db, $vid, $qty, $date, $perm);
+    if ($p[0] !== '') return [false, $p[0], []];
+    [, $v, $inq] = $p;
+    if (!in_array($locId, ti_stock_ids($db), true)) return [false, '這個儲位不在刀具詢價管理員設定的可選儲位內', []];
+    $part = $db->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id=?"); $part->execute([(int)$v['tool_part_id']]);
+    $pr = $part->fetch(PDO::FETCH_ASSOC);
+    if (!$pr) return [false, '綁定的刀具料號已不存在', []];
+    if (mb_strlen((string)$pr['D_Setting_Id']) > 30) return [false, '料號超過 30 字，庫存頁無法登錄，請先縮短刀號', []];
+    $own = ti_own_customer_id($db);
+    $db->beginTransaction();
+    try {
+        $l = $db->prepare("SELECT location_code FROM stock_locations WHERE location_id=? AND is_active=1"); $l->execute([$locId]);
+        $code = $l->fetchColumn();
+        if ($code === false) throw new RuntimeException('入庫儲位不存在或已停用');
+        $f = $db->prepare("SELECT stock_item_id, qty FROM stock_items WHERE item_type=20 AND is_active=1 AND location_id=? AND d_setting_id=? LIMIT 1 FOR UPDATE");
+        $f->execute([$locId, (int)$pr['d_id']]);
+        $it = $f->fetch(PDO::FETCH_ASSOC);
+        if ($it) {
+            $before = (int)$it['qty']; $itemId = (int)$it['stock_item_id'];
+            $db->prepare("UPDATE stock_items SET qty=qty+?, Modified_By=?, Modified_At=NOW() WHERE stock_item_id=?")->execute([$qty, $uid, $itemId]);
+        } else {
+            $before = 0;
+            $db->prepare("INSERT INTO stock_items (d_id,d_setting_id,item_type,storage_location,location_id,qty,client_name,client_id,stock_date,unit_id,vendor_id,vendor_name,remark1,Created_By)
+                          VALUES (?,?,20,?,?,?,?,?,?,1,?,?,?,?)")
+               ->execute([$pr['D_Setting_Id'], (int)$pr['d_id'], $code, $locId, $qty, $own !== '' ? '超正' : null, $own ?: null, $date, mb_substr((string)$v['vendor_id_no'], 0, 11), mb_substr((string)$v['vendor_name'], 0, 60), mb_substr('刀具詢價 ' . $inq['inq_no'], 0, 200), $uid]);
+            $itemId = (int)$db->lastInsertId();
+        }
+        $db->prepare("INSERT INTO stock_transactions (stock_item_id,d_id,txn_type,txn_qty,qty_before,qty_after,location_to,location_to_id,bom_ref,txn_date,remark,Created_By) VALUES (?,?,'in',?,?,?,?,?,NULL,?,?,?)")
+           ->execute([$itemId, $pr['D_Setting_Id'], $qty, $before, $before + $qty, $code, $locId, $date, mb_substr('刀具詢價入庫 ' . $inq['inq_no'] . '（' . $v['vendor_name'] . '）', 0, 300), $uid]);
+        $txn = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO tool_inq_alloc (vid, kind, qty, location_id, stock_item_id, txn_id, alloc_date, created_by, created_at) VALUES (?, 'stock', ?, ?, ?, ?, ?, ?, NOW())")
+           ->execute([$vid, $qty, $locId, $itemId, $txn, $date, $uid]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return [false, $e instanceof RuntimeException ? $e->getMessage() : ('入庫失敗：' . $e->getMessage()), []];
+    }
+    return [true, '已入庫 ' . $qty . ' 個到「' . $code . '」', []];
+}
+/** 這家廠商的刀具料號可以出貨的訂單（以該料號為品項、尚未出完的）；有關鍵字時另外搜尋所有未出完訂單 */
+function ti_ship_orders(PDO $db, int $vid, string $kw = ''): array {
+    $v = $db->prepare("SELECT tool_part_id FROM tool_inq_vendor WHERE vid=?"); $v->execute([$vid]);
+    $part = (int)$v->fetchColumn();
+    $w = ["(ot.Order_status IS NULL OR ot.Order_status NOT IN (6, 9))", "ot.Order_oo IS NOT NULL", "TRIM(ot.Order_oo) <> ''", "UPPER(REPLACE(TRIM(ot.Order_oo), '.', '')) NOT IN ('NA','N/A')"]; $p = [];
+    $kw = trim($kw);
+    if ($kw !== '') { $w[] = "(ot.Order_oo LIKE ? OR ot.d_id LIKE ? OR ot.Client_name LIKE ? OR ot.Specification LIKE ?)"; $l = '%' . $kw . '%'; array_push($p, $l, $l, $l, $l); }
+    else $w[] = "ot.d_id_ID = " . $part;
+    $st = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Specification, ot.Client_name, ot.Client_name_ID, ot.Qty, ot.unit_price,
+                               DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') delivery, COALESCE(cl.customer, ot.Client_name) client_display,
+                               COALESCE((SELECT SUM(il.Qty) FROM is_list il WHERE il.Order_id=ot.Order_id),0) shipped
+                        FROM order_track ot LEFT JOIN customer_list cl ON cl.customer_id=ot.Client_name_ID
+                        WHERE " . implode(' AND ', $w) . " HAVING ot.Qty - shipped > 0 ORDER BY ot.Delivery_date, ot.Order_id LIMIT 30");
+    $st->execute($p);
+    return array_map(function ($r) use ($part) {
+        $r['Order_id'] = (int)$r['Order_id']; $r['remain'] = (int)$r['Qty'] - (int)$r['shipped']; $r['same_part'] = ((int)$r['d_id_ID'] === $part);
+        return $r;
+    }, $st->fetchAll(PDO::FETCH_ASSOC));
+}
+function ti_alloc_ship(PDO $db, int $vid, int $orderId, int $qty, string $date, int $uid, array $perm): array {
+    $p = ti_alloc_pre($db, $vid, $qty, $date, $perm);
+    if ($p[0] !== '') return [false, $p[0], []];
+    [, $v, $inq] = $p;
+    require_once __DIR__ . '/shipping_lib.php';
+    $u = sq_current_user($db); $sp = sq_perms($db, $u);
+    if (empty($sp['canEdit'])) return [false, '您沒有出貨登錄權限（快速出貨）', []];
+    $o = null;
+    foreach (ti_ship_orders($db, $vid, '') as $r) if ($r['Order_id'] === $orderId) { $o = $r; break; }
+    // 非同料號的訂單（用關鍵字搜出來的）：再用訂單號精準取一次
+    if (!$o) {
+        $q = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Specification, ot.Client_name, ot.Client_name_ID, ot.Qty, ot.unit_price, COALESCE(cl.customer, ot.Client_name) client_display,
+                                  COALESCE((SELECT SUM(il.Qty) FROM is_list il WHERE il.Order_id=ot.Order_id),0) shipped
+                           FROM order_track ot LEFT JOIN customer_list cl ON cl.customer_id=ot.Client_name_ID
+                           WHERE ot.Order_id=? AND (ot.Order_status IS NULL OR ot.Order_status NOT IN (6,9))");
+        $q->execute([$orderId]); $o = $q->fetch(PDO::FETCH_ASSOC);
+        if ($o) $o['remain'] = (int)$o['Qty'] - (int)$o['shipped'];
+    }
+    if (!$o || $o['remain'] < 1) return [false, '找不到這張訂單，或訂單已出完', []];
+    if ($qty > $o['remain']) return [false, '數量超過訂單尚未出貨的數量（剩 ' . $o['remain'] . '）', []];
+    $item = ['order_id' => $orderId, 'd_setting_id' => $o['d_id_ID'] ?: null, 'product_id' => (string)$o['d_id'], 'specification' => (string)$o['Specification'],
+             'client_id' => (string)$o['Client_name_ID'], 'client_name' => (string)$o['client_display'], 'qty' => $qty, 'unit_price' => (float)$o['unit_price'],
+             'note' => '刀具詢價 ' . $inq['inq_no'], 'warehouse' => ''];
+    $r = sq_create_shipment($db, $date, [$item], (string)$uid);
+    if (empty($r['success'])) return [false, (string)($r['message'] ?? '建立出貨單失敗'), []];
+    $isNo = (string)(array_key_first($r['shipments']) ?? '');
+    $db->prepare("INSERT INTO tool_inq_alloc (vid, kind, qty, order_id, is_number, alloc_date, created_by, created_at) VALUES (?, 'ship', ?, ?, ?, ?, ?, NOW())")
+       ->execute([$vid, $qty, $orderId, $isNo, $date, $uid]);
+    return [true, '已開立出貨單 ' . $isNo . '（' . $qty . ' 個，訂單 ' . $o['Order_oo'] . '）', ['is_number' => $isNo]];
 }
 
 function ti_delete(PDO $db, int $id, array $perm): array {
@@ -811,6 +1086,8 @@ function ti_delete(PDO $db, int $id, array $perm): array {
     if (!ti_can_edit($perm, $r)) return [false, '您沒有刪除這張詢價單的權限'];
     $o = $db->prepare("SELECT COUNT(*) FROM tool_inq_vendor WHERE inq_id=? AND order_date IS NOT NULL"); $o->execute([$id]);
     if ((int)$o->fetchColumn() > 0 && empty($perm['canToolAdmin'])) return [false, '已有廠商下訂，只有管理員可以刪除（避免訂單紀錄憑空消失）'];
+    $al = $db->prepare("SELECT COUNT(*) FROM tool_inq_alloc WHERE vid IN (SELECT vid FROM tool_inq_vendor WHERE inq_id=?)"); $al->execute([$id]);
+    if ((int)$al->fetchColumn() > 0) return [false, '已有入庫／出貨紀錄，不能刪除這張詢價單（庫存與出貨單會對不上）；請改用「結案」'];
     $files = $db->prepare("SELECT file_name FROM tool_inq_attach WHERE inq_id=?"); $files->execute([$id]);
     $names = $files->fetchAll(PDO::FETCH_COLUMN);
     $db->beginTransaction();

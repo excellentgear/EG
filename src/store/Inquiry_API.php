@@ -11,6 +11,7 @@ require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/inquiry_lib.php';
 require_once __DIR__ . '/../common/asdoc_lib.php';
 require_once __DIR__ . '/../common/print_log_lib.php';
+require_once __DIR__ . '/../common/tool_inq_lib.php';
 
 function jout($ok, $data = []) { echo json_encode(array_merge(['success' => $ok], is_array($data) ? $data : ['message' => $data]), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = '') { jout(false, ['message' => $msg, 'code' => $code]); }
@@ -284,9 +285,36 @@ case 'doc_prefix_get': {
 }
 case 'doc_prefix_save': {
     if (!$perms['canAdmin']) jerr('沒有管理員權限');
+    $old = inq_doc_prefix_get($db);
     $res = inq_doc_prefix_save($db, (string)($_POST['prefix'] ?? ''), $uid);
     if (!$res['success']) jerr($res['message']);
+    $res['renamed'] = 0;
+    if (!empty($_POST['rename_old']) && $old !== $res['prefix']) {   // 選擇「同時把既有單號改成新前綴」：只換開頭的前綴，後面的日期與流水號不動
+        $len = strlen($old);
+        $st = $db->prepare("UPDATE inq_doc SET doc_no=CONCAT(?, SUBSTRING(doc_no, ?)) WHERE doc_no LIKE ?");
+        $st->execute([$res['prefix'], $len + 1, $old . '%']);
+        $res['renamed'] = $st->rowCount();
+        $db->prepare("UPDATE inq_doc_seq SET seq_key=CONCAT(?, SUBSTRING(seq_key, ?)) WHERE seq_key LIKE ?")->execute([$res['prefix'], $len + 1, $old . '%']);
+    }
     jout(true, $res);
+}
+/* ── 刀具詢價的單號前綴：放在一般詢價的模組設定（刀具詢價管理員不可更改，使用者 2026-11-18 指定） ── */
+case 'tool_prefix_get': {
+    jout(true, ['prefix' => ti_settings($db)['no_prefix']]);
+}
+case 'tool_prefix_save': {
+    if (!$perms['canAdmin']) jerr('沒有管理員權限');
+    $old = ti_settings($db)['no_prefix'];
+    [$ok, $msg] = ti_settings_save($db, ['no_prefix' => (string)($_POST['prefix'] ?? '')]);
+    if (!$ok) jerr($msg);
+    $new = ti_settings($db)['no_prefix']; $renamed = 0;
+    if (!empty($_POST['rename_old']) && $old !== $new) {
+        $len = strlen($old);
+        $st = $db->prepare("UPDATE tool_inq SET inq_no=CONCAT(?, SUBSTRING(inq_no, ?)) WHERE inq_no LIKE ?");
+        $st->execute([$new, $len + 1, $old . '%']);
+        $renamed = $st->rowCount();
+    }
+    jout(true, ['prefix' => $new, 'renamed' => $renamed]);
 }
 
 /* ── 備註常用用語：只要能新增詢價單就能新增/編輯/刪除自己設定的，管理員額外可管別人的 ── */

@@ -400,6 +400,14 @@ $__tRole = !empty($perms['isAdmin']) ? '管理者（可設定刀具詢價）'
             <button type="button" id="btnDocPrefix" class="btn">儲存</button>
             <span id="docPrefixPreview" style="font-size:12px;color:#8a6d45;"></span>
         </div>
+        <label style="display:flex;align-items:center;gap:5px;font-weight:normal;font-size:12px;margin:0 0 12px;"><input type="checkbox" id="docPrefixRename"> 同時把既有的子單單號也改成新前綴（日期與流水號不變）</label>
+        <label>刀具詢價單號前綴 <small style="color:#8a6d45;">（「刀具詢價」分頁的單號；刀具詢價管理員不可更改）</small></label>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <input type="text" id="toolPrefixInput" maxlength="8" style="width:100px;text-transform:uppercase;">
+            <button type="button" id="btnToolPrefix" class="btn">儲存</button>
+            <span id="toolPrefixPreview" style="font-size:12px;color:#8a6d45;"></span>
+        </div>
+        <label style="display:flex;align-items:center;gap:5px;font-weight:normal;font-size:12px;margin:0 0 14px;"><input type="checkbox" id="toolPrefixRename"> 同時把既有的刀具詢價單號也改成新前綴</label>
         <div class="iq-hint" style="margin:0 0 14px;">單號規則＝前綴＋YYMMDD（西元年後兩碼）＋流水3碼，<b>同一天所有廠商共用同一組流水號</b>（不分廠商各自起跳）。只影響之後新產生的單號，不會改掉已經存在的單號。</div>
         <label>各部門使用規則</label>
         <div id="deptSetRows"></div>
@@ -1563,9 +1571,21 @@ function docPrefixPreviewText(prefix){
 }
 $('#docPrefixInput').on('input', function(){ $('#docPrefixPreview').text(docPrefixPreviewText($(this).val())); });
 $('#btnDocPrefix').on('click', function(){
-    post('doc_prefix_save', {prefix:$('#docPrefixInput').val()}, function(res){
+    var ren = $('#docPrefixRename').prop('checked') ? 1 : 0;
+    if (ren && !confirm('確定把既有的子單單號前綴一併改成新的？（已印出的單據上仍是舊單號）')) return;
+    post('doc_prefix_save', {prefix:$('#docPrefixInput').val(), rename_old:ren}, function(res){
         $('#docPrefixInput').val(res.prefix);
-        $('#docPrefixPreview').text(docPrefixPreviewText(res.prefix));
+        $('#docPrefixPreview').text(docPrefixPreviewText(res.prefix) + (res.renamed ? '　已更新 '+res.renamed+' 張既有單號' : ''));
+        if (res.renamed) reloadList();
+    });
+});
+$('#toolPrefixInput').on('input', function(){ $('#toolPrefixPreview').text(docPrefixPreviewText($(this).val()||'TI')); });
+$('#btnToolPrefix').on('click', function(){
+    var ren = $('#toolPrefixRename').prop('checked') ? 1 : 0;
+    if (ren && !confirm('確定把既有的刀具詢價單號前綴一併改成新的？（已印出的單據上仍是舊單號）')) return;
+    post('tool_prefix_save', {prefix:$('#toolPrefixInput').val(), rename_old:ren}, function(res){
+        $('#toolPrefixInput').val(res.prefix);
+        $('#toolPrefixPreview').text(docPrefixPreviewText(res.prefix) + (res.renamed ? '　已更新 '+res.renamed+' 張既有單號' : ''));
     });
 });
 $('#btnSettings').on('click', function(){
@@ -1575,6 +1595,10 @@ $('#btnSettings').on('click', function(){
     $.getJSON(API, {action:'doc_prefix_get'}, function(res){
         $('#docPrefixInput').val(res.prefix);
         $('#docPrefixPreview').text(docPrefixPreviewText(res.prefix));
+    });
+    $.getJSON(API, {action:'tool_prefix_get'}, function(res){
+        $('#toolPrefixInput').val(res.prefix);
+        $('#toolPrefixPreview').text(docPrefixPreviewText(res.prefix));
     });
     openMask('setMask');
 });

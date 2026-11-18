@@ -48,7 +48,7 @@ switch ($action) {
 
 case 'init': {   // 表單所需的全部下拉資料一次給
     jout(true, ['opts' => ti_opts($db, false, true), 'settings' => ti_settings($db), 'profiles' => ti_profiles(),
-                'att_cats' => ti_att_cats(), 'currencies' => ti_currencies(), 'years' => ti_years($db), 'perm' => $perm]);
+                'att_cats' => ti_att_cats(), 'currencies' => ti_currencies(), 'years' => ti_years($db), 'perm' => $perm, 'locs' => ti_loc_rows($db, ti_stock_ids($db))]);
 }
 
 case 'list': {
@@ -130,6 +130,18 @@ case 'tool_part': {   // 下訂後填刀號：check／create／suffix／bind／u
     [$ok, $msg, $x] = ti_tool_part_apply($db, (int)($_POST['vid'] ?? 0), (string)($_POST['tool_no'] ?? ''), $mode, (int)($_POST['d_id'] ?? 0), $uid, $perm);
     if (!$ok && empty($x['conflict'])) jerr($msg);
     jout($ok, array_merge(['message' => $msg], $x));
+}
+
+case 'alloc_stock': {   // 到貨後入庫（選儲位與數量）
+    [$ok, $msg, $x] = ti_alloc_stock($db, (int)($_POST['vid'] ?? 0), (int)($_POST['loc_id'] ?? 0), (int)($_POST['qty'] ?? 0), (string)($_POST['date'] ?? ''), $uid, $perm);
+    if (!$ok) jerr($msg);
+    jout(true, array_merge(['message' => $msg], $x));
+}
+case 'ship_orders': jout(true, ['rows' => ti_ship_orders($db, (int)($_GET['vid'] ?? 0), (string)($_GET['kw'] ?? ''))]);
+case 'alloc_ship': {    // 到貨後出貨（快速出貨，綁訂單）
+    [$ok, $msg, $x] = ti_alloc_ship($db, (int)($_POST['vid'] ?? 0), (int)($_POST['order_id'] ?? 0), (int)($_POST['qty'] ?? 0), (string)($_POST['date'] ?? ''), $uid, $perm);
+    if (!$ok) jerr($msg);
+    jout(true, array_merge(['message' => $msg], $x));
 }
 
 case 'set_closed': {
@@ -216,11 +228,13 @@ case 'att_download': {
 /* ---- 管理員設定：選項（精度／材質／鍍層）與牙口數、槽數上限 ---- */
 case 'settings_get': {
     tiReqAdmin($perm);
-    jout(true, ['opts' => ti_opts($db, true), 'settings' => ti_settings($db), 'kinds' => ti_opt_kinds()]);
+    jout(true, ['opts' => ti_opts($db, true), 'settings' => ti_settings($db), 'kinds' => ti_opt_kinds(), 'locations' => ti_loc_rows($db)]);
 }
 case 'setting_save': {
     tiReqAdmin($perm);
-    [$ok, $msg] = ti_settings_save($db, (int)($_POST['starts_max'] ?? 0), (int)($_POST['slots_max'] ?? 0), !empty($_POST['print_review']) ? 1 : 0);
+    $in = [];
+    foreach (['starts_max', 'slots_max', 'print_review', 'spec_hob', 'spec_shaper', 'dup_mode', 'stock_locs'] as $k) if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
+    [$ok, $msg] = ti_settings_save($db, $in);
     if (!$ok) jerr($msg);
     jout(true);
 }
