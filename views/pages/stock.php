@@ -95,6 +95,7 @@ define('STOCK_REQ_ASDOC_MODULE', 'stock_req');
    三者共用同一套公司全名／版次回推／圖章邏輯，不另刻一份（鐵律4）。 */
 define('STOCK_LIST_ASDOC_MODULE', 'stock_list');
 define('STOCK_IN_ASDOC_MODULE',   'stock_in');
+define('STOCK_OUTLABEL_ASDOC_MODULE', 'stock_out_label');   // 領庫標籤（領庫印標籤分頁）
 
 /** 列印大標題＝本公司公司全名（發票用），唯一來源 customer_list.is_own_company=1，禁寫死（ai-rules/16 第一節） */
 function stock_req_company_name(PDO $pdo): string {
@@ -4222,6 +4223,8 @@ LBLSQL;
                 'as_doc_list'   => eg_asdoc_get($pdo, STOCK_LIST_ASDOC_MODULE),
                 'as_doc_in_id'  => eg_asdoc_id($pdo, STOCK_IN_ASDOC_MODULE),
                 'as_doc_in'     => eg_asdoc_get($pdo, STOCK_IN_ASDOC_MODULE),
+                'as_doc_lbl_id' => eg_asdoc_id($pdo, STOCK_OUTLABEL_ASDOC_MODULE),
+                'as_doc_lbl'    => eg_asdoc_get($pdo, STOCK_OUTLABEL_ASDOC_MODULE),
                 'stamp_tpls'   => stock_req_stamp_tpl_options($pdo),
                 'stamp_tpl_id' => stock_req_stamp_tpl_id($pdo),
             ]);
@@ -4242,8 +4245,10 @@ LBLSQL;
             $hasInF    = array_key_exists('as_doc_in_id',   $_POST);
             $docListId = $hasListF ? intval($_POST['as_doc_list_id']) : null;
             $docInId   = $hasInF   ? intval($_POST['as_doc_in_id'])   : null;
+            $hasLblF   = array_key_exists('as_doc_lbl_id', $_POST);
+            $docLblId  = $hasLblF  ? intval($_POST['as_doc_lbl_id'])  : null;
             // 三個綁定共用同一段存在性檢查（鐵律8：前端擋過了後端仍要再擋一次）
-            foreach ([$docId, $docListId, $docInId] as $__d) {
+            foreach ([$docId, $docListId, $docInId, $docLblId] as $__d) {
                 if (!$__d) continue;   // null（沒送）與 0（取消綁定）都不必檢查存在性
                 $chk=$pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0"); $chk->execute([$__d]);
                 if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
@@ -4255,6 +4260,7 @@ LBLSQL;
             eg_asdoc_save($pdo, STOCK_REQ_ASDOC_MODULE,  $docId, $_SESSION['userName'] ?? '');
             if ($hasListF) eg_asdoc_save($pdo, STOCK_LIST_ASDOC_MODULE, (int)$docListId, $_SESSION['userName'] ?? '');
             if ($hasInF)   eg_asdoc_save($pdo, STOCK_IN_ASDOC_MODULE,   (int)$docInId,   $_SESSION['userName'] ?? '');
+            if ($hasLblF)  eg_asdoc_save($pdo, STOCK_OUTLABEL_ASDOC_MODULE, (int)$docLblId, $_SESSION['userName'] ?? '');
             $ex=$pdo->prepare("SELECT id FROM system_parameters WHERE param_group='STOCK_REQ' AND param_key='req_stamp_tpl_id' LIMIT 1"); $ex->execute();
             $rid=$ex->fetchColumn();
             if ($rid) $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $_SESSION['userName'] ?? '', $rid]);
@@ -4325,7 +4331,16 @@ LBLSQL;
                         WHERE ".implode(' AND ', $where)."
                         ORDER BY st.txn_date DESC, st.txn_id DESC LIMIT 300";
                 $q = $pdo->prepare($sql); $q->execute($par);
-                echo json_encode(['success'=>true,'rows'=>$q->fetchAll(PDO::FETCH_ASSOC),'company'=>stock_req_company_name($pdo)]);
+                $rowsL = $q->fetchAll(PDO::FETCH_ASSOC);
+                // AS 編號依「出庫日期」回推當時版次（ai-rules/16 三之四）
+                $lblDocId = eg_asdoc_id($pdo, STOCK_OUTLABEL_ASDOC_MODULE); $noCache = [];
+                foreach ($rowsL as &$rw) {
+                    $dk = substr((string)$rw['txn_date'], 0, 10);
+                    if (!isset($noCache[$dk])) $noCache[$dk] = $lblDocId ? (string)eg_asdoc_no_asof_id($pdo, $lblDocId, $dk) : '';
+                    $rw['doc_no_print'] = $noCache[$dk];
+                }
+                unset($rw);
+                echo json_encode(['success'=>true,'rows'=>$rowsL,'company'=>stock_req_company_name($pdo)]);
             } elseif ($act === 'get_out_label_logs') {
                 $q = $pdo->prepare("SELECT printed_at, printed_by_name, total_qty, per_box, label_cnt FROM stock_out_label_log WHERE txn_id=? ORDER BY log_id DESC");
                 $q->execute([intval($_POST['txn_id'] ?? 0)]);
@@ -4858,7 +4873,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <input type="text" id="olb-client" class="form-control input-sm" style="width:190px;" placeholder="客戶ID或名稱（可模糊）" data-eg-skip>
       <input type="text" id="olb-part" class="form-control input-sm" style="width:190px;" placeholder="料號（可模糊）" data-eg-skip>
-      <button class="btn btn-sm btn-warning" id="olb-print-btn" onclick="olbOpenPrint()" disabled><i class="fa fa-tag"></i> 列印標籤（<span id="olb-sel-cnt">0</span>）</button>
+<?php if (stk_can('stock_req_print_setting')): ?>      <button class="btn btn-sm btn-default" onclick="openReqPrintSetting()" title="綁定領庫標籤的 AS 文件編號"><i class="fa fa-cog"></i> 列印設定</button>
+<?php endif; ?>      <button class="btn btn-sm btn-warning" id="olb-print-btn" onclick="olbOpenPrint()" disabled><i class="fa fa-tag"></i> 列印標籤（<span id="olb-sel-cnt">0</span>）</button>
     </div>
   </div>
   <div style="overflow-x:auto;">
@@ -5231,6 +5247,15 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
             <span id="rps-asdoc-in-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
             <button class="btn btn-sm btn-default" onclick="pickStockAsDoc('in')"><i class="fa fa-search"></i> 選擇 AS 文件</button>
             <button class="btn btn-sm btn-default" onclick="clearStockAsDoc('in')"><i class="fa fa-times"></i> 取消綁定</button>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-weight:700;">④ 領庫標籤</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">領庫印標籤分頁。編號印在標籤右下角，業務日期＝該筆出庫日期。</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="rps-asdoc-lbl-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
+            <button class="btn btn-sm btn-default" onclick="pickStockAsDoc('lbl')"><i class="fa fa-search"></i> 選擇 AS 文件</button>
+            <button class="btn btn-sm btn-default" onclick="clearStockAsDoc('lbl')"><i class="fa fa-times"></i> 取消綁定</button>
           </div>
         </div>
         <div style="margin-bottom:6px;">
@@ -8443,10 +8468,10 @@ function olbDoPrint(){
     jobs.forEach(function(j){
         var d=String(j.x.txn_date||'').substr(0,10).replace(/-/g,'.');
         j.pl.parts.forEach(function(q){
-            pages+='<div class="lb"><div class="ln">料號：'+esc(j.x.part_no)+'</div><div class="ln">客戶：'+esc(j.x.client_name||'')+'</div><div class="ln">本箱數量：'+q+'</div><div class="ln">出庫日期：'+d+'</div><div class="ft"><span class="co">'+esc(OLB.company)+'</span></div></div>';
+            pages+='<div class="lb"><div class="ln">料號：'+esc(j.x.part_no)+'</div><div class="ln">客戶：'+esc(j.x.client_name||'')+'</div><div class="ln">本箱數量：'+q+'</div><div class="ln">出庫日期：'+d+'</div><div class="ft"><span class="co">'+esc(OLB.company)+'</span><span class="no">'+esc(j.x.doc_no_print||'')+'</span></div></div>';
         });
     });
-    var css='@page{size:70mm 50mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#000}.lb{width:70mm;height:50mm;padding:1.5mm 3mm 0;page-break-after:always;overflow:hidden;position:relative}.lb:last-child{page-break-after:auto}.ln{font-size:13pt;line-height:7.5mm;height:7.5mm;white-space:nowrap;overflow:hidden}.ft{position:absolute;left:3mm;right:3mm;bottom:1.5mm;border-top:0.8mm solid #000;padding-top:1mm}.co{font-size:8.5pt;font-weight:bold;letter-spacing:.5mm;white-space:nowrap}';
+    var css='@page{size:70mm 50mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#000}.lb{width:70mm;height:50mm;padding:1.5mm 3mm 0;page-break-after:always;overflow:hidden;position:relative}.lb:last-child{page-break-after:auto}.ln{font-size:13pt;line-height:7.5mm;height:7.5mm;white-space:nowrap;overflow:hidden}.ft{position:absolute;left:3mm;right:3mm;bottom:1.5mm;border-top:0.8mm solid #000;padding-top:1mm;display:flex;justify-content:space-between;align-items:baseline;gap:2mm}.co{font-size:8.5pt;font-weight:bold;letter-spacing:.5mm;white-space:nowrap;overflow:hidden}.no{font-size:8pt;white-space:nowrap}';
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>領庫標籤</title><style>'+css+'</style></head><body>'+pages+'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
     w.document.close(); w.focus();
     jobs.forEach(function(j){
@@ -12520,7 +12545,8 @@ function openReqPrintSetting(){
         REQ_PRINT_SET.docs=r.as_docs||[]; REQ_PRINT_SET.docId=parseInt(r.as_doc_id||0)||0; REQ_PRINT_SET.doc=r.as_doc||null;
         REQ_PRINT_SET.listId=parseInt(r.as_doc_list_id||0)||0; REQ_PRINT_SET.listDoc=r.as_doc_list||null;
         REQ_PRINT_SET.inId  =parseInt(r.as_doc_in_id  ||0)||0; REQ_PRINT_SET.inDoc  =r.as_doc_in  ||null;
-        renderReqAsDocLabel(); renderStockAsDocLabel('list'); renderStockAsDocLabel('in');
+        REQ_PRINT_SET.lblId=parseInt(r.as_doc_lbl_id||0)||0; REQ_PRINT_SET.lblDoc=r.as_doc_lbl||null;
+        renderReqAsDocLabel(); renderStockAsDocLabel('list'); renderStockAsDocLabel('in'); renderStockAsDocLabel('lbl');
         var $s=$('#rps-stamp-tpl').html('<option value="0">（用系統預設印章）</option>');
         (r.stamp_tpls||[]).forEach(function(t){
             $s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
@@ -12541,7 +12567,8 @@ function pickReqAsDoc(){
 function clearReqAsDoc(){ REQ_PRINT_SET.docId=0; REQ_PRINT_SET.doc=null; renderReqAsDocLabel(); }
 
 // 倉庫庫存表／入庫單的綁定（kind='list'|'in'）——與領庫需求單共用同一個挑選器與同一次儲存
-function stockAsDocKey(kind){ return kind==='list'?{id:'listId',doc:'listDoc',el:'#rps-asdoc-list-label',title:'倉庫庫存表'}
+function stockAsDocKey(kind){ if(kind==='lbl') return {id:'lblId',doc:'lblDoc',el:'#rps-asdoc-lbl-label',title:'領庫標籤'};
+    return kind==='list'?{id:'listId',doc:'listDoc',el:'#rps-asdoc-list-label',title:'倉庫庫存表'}
                                                   :{id:'inId',  doc:'inDoc',  el:'#rps-asdoc-in-label',  title:'入庫單'}; }
 function renderStockAsDocLabel(kind){
     var k=stockAsDocKey(kind), d=REQ_PRINT_SET[k.doc];
@@ -12557,7 +12584,7 @@ function clearStockAsDoc(kind){ var k=stockAsDocKey(kind); REQ_PRINT_SET[k.id]=0
 
 function saveReqPrintSetting(){
     ajx({action:'req_print_setting_save', as_doc_id:REQ_PRINT_SET.docId,
-         as_doc_list_id:REQ_PRINT_SET.listId||0, as_doc_in_id:REQ_PRINT_SET.inId||0,
+         as_doc_list_id:REQ_PRINT_SET.listId||0, as_doc_in_id:REQ_PRINT_SET.inId||0, as_doc_lbl_id:REQ_PRINT_SET.lblId||0,
          stamp_tpl_id:parseInt($('#rps-stamp-tpl').val()||0)||0}, function(r){
         if(!r.success){ toast(r.message||'儲存失敗','error'); return; }
         toast('列印設定已儲存','success');
