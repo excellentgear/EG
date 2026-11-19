@@ -23541,6 +23541,19 @@ function _pavRenderList() {
         _pavRenderQuoteGroupList(files, wrap);
         return;
     }
+    // ── 有發行章日期的附件依發行日由新到舊排序（2026-11-19 使用者要求）──────
+    // 就地排序同一個陣列（filteredFiles），pavSelectFile(idx) 的索引才會與畫面一致；
+    // 沒有發行日的排在後面並維持原本順序（Array.sort 為穩定排序）。
+    if (files && files.length > 1) {
+        var _issKey = function(f){ return f && f.issue_stamp_date ? String(f.issue_stamp_date).substring(0,10) : ''; };
+        files.sort(function(a, b){
+            var ka = _issKey(a), kb = _issKey(b);
+            if (ka && kb) return ka < kb ? 1 : (ka > kb ? -1 : 0);
+            if (ka) return -1;
+            if (kb) return 1;
+            return 0;
+        });
+    }
     // ── 相簿標籤（如產品照片）：左側列相簿（資料夾），右側九宮格 ──────
     if (_pavIsAlbumTab()) { _pavRenderAlbumList(); return; }
     if (!files.length) {
