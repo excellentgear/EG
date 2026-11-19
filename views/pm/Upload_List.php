@@ -137,7 +137,7 @@ function lastUpdateBadge($info, $color = '#555') {
     <!-- <link href="../../resource/css/pages.css" rel="stylesheet"> -->
 
     <!-- 日期選單用 -->
-    <link rel="stylesheet" href="http://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
 </head>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 <style>

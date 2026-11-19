@@ -169,7 +169,7 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
     <link href="../../resource/css/green.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
 
-    <link rel="stylesheet" href="http://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
 
     <link href='../../resource/css/fullcalendar.css' rel='stylesheet' />
 
@@ -696,7 +696,7 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
     <!-- 1. 必須最先載入 jQuery -->
     <script src="../../resource/js/jquery.min.js"></script>
     <!-- 2. 接著載入依賴 jQuery 的插件 -->
-    <script src="http://code.jquery.com/ui/1.11.4/jquery-ui.js"></script>
+    <script src="../../resource/js/jquery-ui.min.js?v=<?= @filemtime(__DIR__."/../../resource/js/jquery-ui.min.js") ?>"></script>
     <!-- Bootstrap -->
     <script src="../../resource/js/bootstrap.min.js"></script>
     <!-- 修正：Moment.js 必須在 FullCalendar 之前載入 -->

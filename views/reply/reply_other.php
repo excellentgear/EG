@@ -211,7 +211,7 @@ if ($_GET['msg']=='oth') {
     <!-- <link href="../../resource/css/pages.css" rel="stylesheet"> -->
 
     <!-- 日期選單用 -->
-    <link rel="stylesheet" href="http://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
 </head>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
 <style>
@@ -962,7 +962,7 @@ if ($_GET['msg']=='oth') {
 <script src="../../resource/js/custom.min.js"></script>
 
 <!-- 以下日期選單用 -->
-    <script src="http://code.jquery.com/ui/1.11.4/jquery-ui.js"></script>
+    <script src="../../resource/js/jquery-ui.min.js?v=<?= @filemtime(__DIR__."/../../resource/js/jquery-ui.min.js") ?>"></script>
     <script>
         $(function() {
             $("#datepicker").datepicker({
