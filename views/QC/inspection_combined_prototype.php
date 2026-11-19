@@ -256,10 +256,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $good_qty = (int)$ctx['sqty'];
             $outsource_scrap_qty = 0;
             $outsource_scrap_vendors = '';
+            $outsource_withdrawn_qty = 0;
+            $outsource_reports = [];
+            try { $outsource_reports = eg_bom_outsource_reports($pdo, (int)$fid); } catch (Throwable $e) {}
             try {
                 $confirmedScrap = qab_bom_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']);
                 $outsource_scrap_qty = (int)round(eg_bom_outsource_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']));
-                $good_qty = max(0, (int)$ctx['sqty'] - $confirmedScrap - $outsource_scrap_qty);
+                $outsource_withdrawn_qty = (int)round(eg_bom_outsource_withdrawn_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']));
+                $good_qty = max(0, (int)$ctx['sqty'] - $confirmedScrap - $outsource_scrap_qty - $outsource_withdrawn_qty);
                 if ($outsource_scrap_qty > 0) {
                     $outsource_scrap_vendors = eg_bom_outsource_scrap_vendors_text($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']);
                 }
@@ -269,7 +273,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 還在外面的不能驗（東西還沒回來）；全部回齊或沒有批次（舊資料）則維持原本的算法。
             $partial_ret = null; $partial_send = null;
             try {
-                $pbSt = $pdo->prepare("SELECT COALESCE(SUM(return_qty),0) r, COALESCE(SUM(send_qty),0) s, COALESCE(SUM(status='open'),0) o, COUNT(*) n FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?");
+                $pbSt = $pdo->prepare("SELECT COALESCE(SUM(return_qty),0) r, COALESCE(SUM(send_qty),0) s, COALESCE(SUM(status='open'),0) o, COUNT(*) n FROM bom_ing_outsource_batch WHERE bom_ing_fid = ? AND rework_order_id IS NULL");
                 $pbSt->execute([$fid]);
                 $pb = $pbSt->fetch(PDO::FETCH_ASSOC);
                 if ($pb && (int)$pb['n'] > 0 && (int)$pb['o'] > 0 && (float)$pb['r'] < (float)$pb['s']) {
@@ -321,7 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // 2026-11-02：這一站有「決策重工、等重工檢驗」的異常單 → 前端標示重工檢驗（沒有就是 null，其餘行為不變）
             $reworkCtx = null;
-            try { $reworkCtx = qab_rework_open_for_fid($pdo, $fid); } catch (Throwable $e) {}
+            try { $reworkCtx = qab_rework_open_for_fid($pdo, $fid, (int)($_POST['rework_order_id'] ?? 0)); } catch (Throwable $e) {}
             echo json_encode([
                 'success' => true,
                 'context' => [
@@ -337,6 +341,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // 給畫面提示用，讓品管知道「是被誰扣的」，不用在良品數對不上時去翻資料庫找廠商
                     'outsource_scrap_qty'     => $outsource_scrap_qty,
                     'outsource_scrap_vendors' => $outsource_scrap_vendors,
+                    'outsource_withdrawn_qty' => $outsource_withdrawn_qty,   // 取回不加工（含發單短少），已從良品上限扣除
+                    'outsource_reports'       => $outsource_reports,         // 廠商回廠回報的所有狀況，檢驗畫面最上方顯示
                     'process'     => $process,
                     'maker'       => trim((string)($ctx['maker_id'] ?? '')),  // 這一站登記的廠商（ai-rules 說明見下方 buildPrintHtml，2026-09-24）
                     'batch_label' => $ctx['batch_label'],  // 拆批時的批次代號，同製程有多批送驗要能分辨是哪一批
@@ -453,8 +459,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $container_1 = $qcCtnCheck($container_1);
             $container_2 = $qcCtnCheck($container_2);
             // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
-            $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST','REWORK'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
+            // 重工檢驗（2026-11-17）：只有檢驗性質明確選「重工」才綁異常單；後端自己確認這一站真的有待重工檢驗的異常單，
+            // 送驗數不可超過「重工批次已回廠、尚未檢驗」的件數，避免跟一般檢驗重複計算同一批貨
+            $reworkBind = 0;
+            if ($insp_kind === 'REWORK') {
+                $rwOpen = qab_rework_open_for_fid($pdo, $fid, (int)($_POST['rework_order_id'] ?? 0));
+                if (!$rwOpen || (int)$rwOpen['id'] !== (int)($_POST['rework_order_id'] ?? 0)) throw new Exception('這一站目前沒有待重工檢驗的異常單，請重新整理頁面');
+                if ($incoming_qty <= 0) throw new Exception('重工檢驗的送驗數必須大於 0');
+                if ($incoming_qty > $rwOpen['ready']) throw new Exception('重工檢驗送驗數不可超過重工批次已回廠、尚未檢驗的 ' . $rwOpen['ready'] . ' 件（異常單 ' . $rwOpen['no'] . '，判定重工 ' . $rwOpen['qty'] . ' 件、已回廠 ' . $rwOpen['returned'] . ' 件、已檢驗 ' . $rwOpen['inspected'] . ' 件）');
+                $reworkBind = (int)$rwOpen['id'];
+            }
             // 多面分段檢驗（首件＋該製程大類有勾）：由後端自己判斷，不採信前端；
             // 這種檢驗單一律不同步標準（只是某一面的片段，同步會把其他面的標準項目停用）
             $faceMode = ($insp_kind === 'FIRST') && qc_face_enabled($pdo, $fid);
@@ -627,13 +643,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
             // 重工檢驗：後端自己確認這一站真的有待重工檢驗的異常單才記，不採信前端送來的id
-            if ((int)($_POST['rework_order_id'] ?? 0) > 0) {
-                try {
-                    $rwOpen = qab_rework_open_for_fid($pdo, $fid);
-                    if ($rwOpen && $rwOpen['id'] === (int)$_POST['rework_order_id']) {
-                        $pdo->prepare("UPDATE qc_check_form SET rework_of_order_id=? WHERE qc_form_id=?")->execute([$rwOpen['id'], $qc_form_id]);
-                    }
-                } catch (Throwable $e) {}
+            if ($reworkBind > 0) {
+                $pdo->prepare("UPDATE qc_check_form SET rework_of_order_id=? WHERE qc_form_id=?")->execute([$reworkBind, $qc_form_id]);
             }
 
             // --- 2c-2. 本張檢驗單使用的量具（2026-09-16：綁在整張單，不綁到個別檢驗項目）---
@@ -975,7 +986,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 沒送 insp_kind＝舊呼叫端，維持原本內容不動；首件/末件一律全檢＝抽驗數強制等於送驗數
             // （SHIP 出貨檢驗理論上不會走這條修改路徑存檔，但仍列進白名單，避免萬一改到時被靜默降級成 NORMAL）
             $hasInspKind = array_key_exists('insp_kind', $_POST);
-            $insp_kind = $hasInspKind && in_array($_POST['insp_kind'], ['FIRST','LAST','SHIP'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            $insp_kind = $hasInspKind && in_array($_POST['insp_kind'], ['FIRST','LAST','SHIP','REWORK'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($hasInspKind && in_array($insp_kind, ['FIRST','LAST'], true) && $incoming_qty > 0) $sample_qty = $incoming_qty;
 
             $h = $pdo->prepare("SELECT * FROM qc_check_form WHERE qc_form_id=?");
@@ -2003,13 +2014,14 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
 
 <!-- 異常單處置決策 Modal（首要判定 / 最終裁決；由決策通知點入 ?decide_abnormal=N） -->
 <div class="modal fade" id="qaDecideModal" tabindex="-1" role="dialog" data-backdrop="static">
-    <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-dialog" style="width:1180px;max-width:96vw;"><div class="modal-content">
         <div class="modal-header" style="background:#c77c1a;color:#fff;border-radius:6px 6px 0 0;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
             <h4 class="modal-title"><i class="fa fa-gavel"></i> <span id="qadm_title">處置判定</span> — <span id="qadm_no"></span></h4>
         </div>
-        <div class="modal-body" style="max-height:66vh;overflow-y:auto;">
-            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;">
+        <div class="modal-body" style="max-height:82vh;overflow-y:auto;">
+            <iframe id="qadm_frame" src="about:blank" style="width:100%;height:52vh;border:1px solid #ddd;border-radius:6px;margin-bottom:10px;background:#fff;"></iframe>
+            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;display:none;">
                 <tr><th style="width:100px;background:#f8f9fa;">開單人</th><td id="qadm_creator"></td></tr>
                 <tr><th style="background:#f8f9fa;">來源</th><td id="qadm_src"></td></tr>
                 <tr><th style="background:#f8f9fa;">異常現象</th><td id="qadm_phen" style="white-space:pre-line;"></td></tr>
@@ -2134,7 +2146,7 @@ $(function(){
             $('#qadm_src').text(o.source_desc || '');
             $('#qadm_phen').text(o.phenomenon || '');
             $('#qadm_detail').text(o.defect_detail || '');
-            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id);
+            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id); $('#qadm_frame').attr('src', '../QA/qa_abnormal_view.php?embed=1&id=' + o.id);
             if (r.stage === 'final'){
                 $('#qadm_title').text('最終裁決');
                 $('#qadm_opt_label').html('最終裁決 <small class="text-muted">（寫入總經理裁示欄位）</small>');

@@ -1053,6 +1053,33 @@ try {
             $primaryAllowed = eg_qa_decision_allowed_users($db, $orderId, 'primary');
             $stage = !empty($finalAllowed) ? 'final' : (!empty($primaryAllowed) ? 'primary' : '');
             $allowedIds = $stage === 'final' ? $finalAllowed : $primaryAllowed;
+            // 決策重點：異常製程／廠商／數量／附件／量測尺寸
+            $procName = '';
+            try {
+                if (!empty($o['resp_process_no'])) {
+                    $ps = $db->prepare("SELECT ProcessName FROM process_no WHERE ProcessNo=? LIMIT 1");
+                    $ps->execute([$o['resp_process_no']]);
+                    $procName = (string)$ps->fetchColumn();
+                }
+            } catch (Throwable $e) {}
+            $procTxt = trim(($o['resp_process_no'] ? $o['resp_process_no'] . ' ' : '') . $procName);
+            if ($procTxt === '' && !empty($o['resp_process_manual'])) $procTxt = (string)$o['resp_process_manual'];
+            $vendorTxt = (string)($o['vendor_name'] ?? '');
+            if ($vendorTxt === '' && !empty($o['resp_vendor_manual'])) $vendorTxt = (string)$o['resp_vendor_manual'];
+            $atts = []; $meas = [];
+            try {
+                $as = $db->prepare("SELECT id, file_name FROM qa_abnormal_attachments WHERE abnormal_order_id=? ORDER BY id");
+                $as->execute([$orderId]);
+                foreach ($as->fetchAll(PDO::FETCH_ASSOC) as $a) $atts[] = ['id' => (int)$a['id'], 'name' => (string)$a['file_name']];
+                $ms = $db->prepare("SELECT dim_code, dim_name, vals, lim_lo, lim_hi FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
+                $ms->execute([$orderId]);
+                foreach ($ms->fetchAll(PDO::FETCH_ASSOC) as $m) {
+                    $vals = json_decode((string)$m['vals'], true); if (!is_array($vals)) $vals = [];
+                    $vals = array_values(array_filter($vals, function ($x) { return trim((string)$x) !== ''; }));
+                    if (trim((string)$m['dim_name']) === '' && !$vals) continue;
+                    $meas[] = ['code' => (string)$m['dim_code'], 'name' => (string)$m['dim_name'], 'vals' => $vals, 'lo' => $m['lim_lo'], 'hi' => $m['lim_hi']];
+                }
+            } catch (Throwable $e) {}
             echo json_encode([
                 'success' => true,
                 'stage' => $stage, // ''=目前無待決策
@@ -1064,6 +1091,10 @@ try {
                     'disposition' => $o['disposition'], 'disposition_note' => $o['disposition_note'],
                     'gm_decision' => $o['gm_decision'], 'gm_note' => $o['gm_note'],
                     'created_by_name' => $o['created_by_name'],
+                    'bom_no' => (string)($o['bom_no'] ?? ''), 'part_no' => (string)($o['part_no'] ?? ''),
+                    'batch_qty' => $o['batch_qty'], 'insp_qty' => $o['insp_qty'], 'ng_qty' => $o['ng_qty'],
+                    'proc' => $procTxt, 'vendor' => $vendorTxt, 'resp_desc' => (string)($o['resp_desc'] ?? ''),
+                    'attachments' => $atts, 'measures' => $meas,
                 ],
             ], JSON_UNESCAPED_UNICODE);
             break;

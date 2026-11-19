@@ -199,6 +199,9 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
         .toast{ position:fixed; left:50%; bottom:30px; transform:translateX(-50%); background:rgba(0,0,0,.85); color:#fff; padding:11px 20px; border-radius:24px; font-size:14px; z-index:100; display:none; }
         .m-loading{ text-align:center; color:var(--muted); padding:20px; }
     </style>
+    <?php if (!empty($_GET['embed'])): ?>
+    <style>#sec-decide{display:none !important;} body{padding-top:0 !important;}</style>
+    <?php endif; ?>
 </head>
 <body>
 <div class="m-top">

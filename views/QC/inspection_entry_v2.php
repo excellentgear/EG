@@ -1304,6 +1304,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .ctx-bar .ki-btn { border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); border-radius:12px;
                         padding:2px 10px; font-size:12px; font-weight:bold; cursor:pointer; }
     .ctx-bar .ki-btn.on { background:var(--amber-d); color:#fff; }
+    .ctx-bar .ki-btn.rw { border-color:#DD5138; color:#DD5138; }
+    .ctx-bar .ki-btn.rw.on { background:#DD5138; color:#fff; }
+    .ctx-bar .ki-btn:disabled { opacity:.45; cursor:not-allowed; }
+    .insp-kind-badge.ikb-rework { background:#DD5138; color:#fff; }
 
     /* ---------- 檢視切換 ---------- */
     .view-switch { display:inline-flex; border:1px solid var(--line); border-radius:20px; overflow:hidden; background:#fff; }
@@ -1739,6 +1743,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     <i class="fa fa-calendar"></i> <b>補資料</b>已設定：<span id="bf-stage-text"></span>（存檔時會一併套用）
                     <a href="#" id="bf-stage-clear" class="pull-right">清除</a>
                 </div>
+
+                <!-- 廠商回廠回報的所有狀況（報廢／發料不良／取回／發單短少／備註），品管檢驗前確認用 -->
+                <div id="vendor-report-box" class="warm-panel" style="display:none;padding:8px 12px;border-left:4px solid var(--amber-d);"></div>
 
                 <!-- 批次 / 歷程（預設收合，不佔填寫版面） -->
                 <div class="warm-panel" style="padding:8px 12px;">
@@ -2821,13 +2828,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
 <!-- 異常單處置決策 Modal（首要判定 / 最終裁決；由決策通知點入 ?decide_abnormal=N） -->
 <div class="modal fade" id="qaDecideModal" tabindex="-1" role="dialog" data-backdrop="static">
-    <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-dialog" style="width:1180px;max-width:96vw;"><div class="modal-content">
         <div class="modal-header" style="background:#c77c1a;color:#fff;border-radius:6px 6px 0 0;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
             <h4 class="modal-title"><i class="fa fa-gavel"></i> <span id="qadm_title">處置判定</span> — <span id="qadm_no"></span></h4>
         </div>
-        <div class="modal-body" style="max-height:66vh;overflow-y:auto;">
-            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;">
+        <div class="modal-body" style="max-height:82vh;overflow-y:auto;">
+            <iframe id="qadm_frame" src="about:blank" style="width:100%;height:52vh;border:1px solid #ddd;border-radius:6px;margin-bottom:10px;background:#fff;"></iframe>
+            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;display:none;">
                 <tr><th style="width:100px;background:#f8f9fa;">開單人</th><td id="qadm_creator"></td></tr>
                 <tr><th style="background:#f8f9fa;">來源</th><td id="qadm_src"></td></tr>
                 <tr><th style="background:#f8f9fa;">異常現象</th><td id="qadm_phen" style="white-space:pre-line;"></td></tr>
@@ -2952,7 +2960,7 @@ $(function(){
             $('#qadm_src').text(o.source_desc || '');
             $('#qadm_phen').text(o.phenomenon || '');
             $('#qadm_detail').text(o.defect_detail || '');
-            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id);
+            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id); $('#qadm_frame').attr('src', '../QA/qa_abnormal_view.php?embed=1&id=' + o.id);
             if (r.stage === 'final'){
                 $('#qadm_title').text('最終裁決');
                 $('#qadm_opt_label').html('最終裁決 <small class="text-muted">（寫入總經理裁示欄位）</small>');
@@ -4803,9 +4811,9 @@ $(function(){
     // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
     function applyInspKindUI(){
         // 出貨檢驗（SHIP）不屬於單一製程，首件/末件是製程層級的概念，兩者互斥，SHIP 模式下 #kind-box 根本不會被畫出來
-        var full = state.inspKind==='FIRST' || state.inspKind==='LAST';
+        var full = state.inspKind==='FIRST' || state.inspKind==='LAST' || state.inspKind==='REWORK';
         $('#kind-box .ki-btn').removeClass('on').filter('[data-kind="'+state.inspKind+'"]').addClass('on');
-        $('#inp-sample').prop('readonly', full).attr('title', full?'首件/末件為全數檢驗，抽驗數已鎖定＝送驗數':'');
+        $('#inp-sample').prop('readonly', full).attr('title', full?'首件/末件/重工為全數檢驗，抽驗數已鎖定＝送驗數':'');
         if(full){
             var qty=parseInt($('#inp-qty').val())||0;
             if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
@@ -4819,7 +4827,8 @@ $(function(){
         // 只對新建的檢驗單生效（修改／檢視既有紀錄、臨時檢驗單不動數量）。
         if(ctx && !ctx.adhoc && !state.editFormId && !state.viewFormId && prevKind!==state.inspKind){
             if(state.inspKind==='FIRST' || state.inspKind==='LAST'){ $('#inp-qty').val(1); }
-            else if(prevKind==='FIRST' || prevKind==='LAST'){ $('#inp-qty').val(pendingSummary().left); }
+            else if(state.inspKind==='REWORK'){ $('#inp-qty').val((ctx.rework&&ctx.rework.ready)||0); }   // 重工檢驗：預設＝重工回廠待驗件數（上限）
+            else if(prevKind==='FIRST' || prevKind==='LAST' || prevKind==='REWORK'){ $('#inp-qty').val(pendingSummary().left); }
             updateQtyLive(); updateSuggestSampleLive();
         }
         applyInspKindUI();
@@ -4829,7 +4838,10 @@ $(function(){
     });
     // 首件/末件模式下，送驗數一改，全檢件數要跟著變
     $('#inp-qty').on('input', function(){
-        if(state.inspKind!=='FIRST' && state.inspKind!=='LAST') return;
+        if(state.inspKind==='REWORK' && ctx.rework && (parseInt($(this).val())||0) > (ctx.rework.ready||0)){
+            $(this).val(ctx.rework.ready||0); (typeof toast==='function') && toast('重工檢驗送驗數不可超過已回廠待驗的 '+(ctx.rework.ready||0)+' 件');
+        }
+        if(state.inspKind!=='FIRST' && state.inspKind!=='LAST' && state.inspKind!=='REWORK') return;
         var qty=parseInt($(this).val())||0;
         if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
     });
@@ -5150,7 +5162,7 @@ $(function(){
     }
 
     function loadContext(fid){
-        $.post(API, { action:'load_context', bom_ing_fid:fid }, function(res){
+        $.post(API, { action:'load_context', bom_ing_fid:fid, rework_order_id:(new URLSearchParams(location.search).get('rework_order_id')||'') }, function(res){
             if(!res.success){
                 if(res.no_view){
                     state.canView=false;
@@ -5207,6 +5219,14 @@ $(function(){
             renderBfStageBanner();
             $('#main-area').show(); $('#dock').show(); syncDockPad();
             $('#inp-qty').val(ctx.order_qty || 0); updateQtyLive();
+            // 從 BOM 總覽「重工」回廠紀錄點進來（?rework_order_id=異常單id）：自動選「重工」檢驗性質，送驗數帶入已回廠待驗件數
+            var _rwq = new URLSearchParams(location.search).get('rework_order_id');
+            if(_rwq && ctx.rework && String(ctx.rework.id)===String(_rwq)){
+                if((ctx.rework.ready||0)>0){
+                    state.inspKind='REWORK'; $('#inp-qty').val(ctx.rework.ready); updateQtyLive();
+                    setSampleN(ctx.rework.ready); $('#inp-sample').val(ctx.rework.ready).data('prev', ctx.rework.ready);
+                } else { alert('異常單 '+ctx.rework.no+' 的重工貨目前還沒有回廠待檢驗的數量（已發 '+ctx.rework.issued+'、已回 '+ctx.rework.returned+'、已驗 '+ctx.rework.inspected+'）。'); }
+            } else if(_rwq && !ctx.rework){ alert('這筆重工異常單已無待檢驗數量（可能已檢驗完成）。'); }
             $('#inp-sample').val(state.sampleN);
             $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid');
             $('#insp-quantity-1,#insp-quantity-2').val('').removeClass('ctn-invalid');
@@ -5398,6 +5418,7 @@ $(function(){
             b.rounds.forEach(function(r){
                 // 多面分段檢驗：同一顆分好幾面送驗，送驗數只算一次（不然每多驗一面就多扣一次「尚未檢驗」）
                 if(r.face_code && r.piece_no){ if(seenPiece[r.piece_no]) return; seenPiece[r.piece_no]=1; }
+                if(r.insp_kind==='REWORK') return;   // 重工檢驗是重驗「原批次裡已判不良的那幾件」，不再佔用一般待驗數量（避免重複計算）
                 if(r.insp_kind==='FIRST' || r.insp_kind==='LAST') used += (r.incoming_qty||0);
                 else lastNormal=r;
             });
@@ -5412,11 +5433,25 @@ $(function(){
         if(no){ $('#insp-no-chip-text').text(no); $('#insp-no-chip').show(); }
         else { $('#insp-no-chip').hide(); $('#insp-no-chip-text').text(''); }
     }
+    // 廠商回廠回報的所有狀況：放在「批次與檢驗歷程」上方；沒有任何異常回報（只有正常回廠）就不顯示
+    function renderVendorReports(){
+        var rows=(ctx.outsource_reports||[]).filter(function(r){ return r.scrap_qty>0||r.withdraw_qty>0||r.short_qty>0||r.badmat_qty>0||r.note; });
+        var $b=$('#vendor-report-box');
+        if(!rows.length){ $b.hide().empty(); return; }
+        var h='<div style="font-weight:bold;color:var(--ink2);margin-bottom:4px;"><i class="fa fa-truck"></i> 廠商回報狀況（共 '+rows.length+' 筆）</div>'+
+              '<table class="table table-condensed" style="margin:0;font-size:12px;"><thead><tr><th>日期</th><th>廠商</th><th>發出</th><th>回廠</th><th>報廢</th><th>發料不良</th><th>取回不加工</th><th>發單短少（我方少發）</th><th>備註</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            function n(v,hot){ return v>0 ? '<b'+(hot?' style="color:#DD5138;"':'')+'>'+v+'</b>' : '<span class="muted-help">0</span>'; }
+            h+='<tr><td>'+esc(r.date||'')+'</td><td>'+esc(r.maker||'')+'</td><td>'+r.send_qty+'</td><td>'+r.return_qty+'</td><td>'+n(r.scrap_qty,1)+'</td><td>'+n(r.badmat_qty,1)+'</td><td>'+n(Math.max(0,r.withdraw_qty-r.short_qty),1)+'</td><td>'+n(r.short_qty,1)+'</td><td>'+esc(r.note||'')+'</td></tr>';
+        });
+        $b.html(h+'</tbody></table>').show();
+    }
     function renderCtxBar(){
         setInspNoChip('');   // 開始填寫新的一輪，編號要存檔後才會產生
         var partCell = ctx.part_no
             ? '<a href="javascript:void(0)" class="cv" id="lnk-part-drawing" title="點擊開啟圖檔預覽">'+esc(ctx.part_no)+' <i class="fa fa-picture-o"></i></a>'
             : '<span class="cv">—</span>';
+        renderVendorReports();
         var ps=pendingSummary();
         $('#ctx-bar').show().html(
             '<div><b>料號</b>'+partCell+'</div>'+
@@ -5441,14 +5476,17 @@ $(function(){
                 // 回報的（使用者交辦：扣了數量品管卻不知道原因/找不到人問，一定要連廠商一起顯示）。
                 : '<div><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good-(ctx.outsource_scrap_qty||0))+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件'+((ctx.outsource_scrap_qty||0)>0?('；已扣外包回廠報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）'):'')+'">'+pendingGridHtml(ps)+'</span>'+
                   ((ctx.outsource_scrap_qty||0)>0 ? '<span style="margin-left:6px;font-size:11px;color:var(--amber-d);"><i class="fa fa-truck"></i> 已扣外包報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）</span>' : '')+
+                  ((ctx.outsource_withdrawn_qty||0)>0 ? '<span style="margin-left:6px;font-size:11px;color:var(--amber-d);"><i class="fa fa-truck"></i> 已扣取回／發單短少 '+ctx.outsource_withdrawn_qty+' 件</span>' : '')+
                   '<span id="ctx-pending-warn" style="'+(ps.left<=0?'':'display:none;')+'color:var(--coral);font-weight:bold;font-size:12px;margin-left:6px;"><i class="fa fa-exclamation-triangle"></i> 無待驗數量</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv" id="ctx-sample-live">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
                 ['NORMAL','FIRST','LAST'].map(function(k){
                     var lbl = k==='NORMAL'?'一般':(k==='FIRST'?'首件':'末件');
                     return '<button type="button" class="ki-btn" data-kind="'+k+'">'+lbl+'</button>';
-                }).join('')+'</span>'+
-                (ctx.rework ? '<span style="margin-left:8px;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;">第'+esc(ctx.rework.round||1)+'次重工</span>' : '')+
+                }).join('')+
+                // 重工檢驗：這一站有異常單判定重工才出現；重工批次還沒回廠時按鈕停用並說明（送驗數上限＝已回廠待驗件數，不與一般檢驗重複計算）
+                (ctx.rework ? '<button type="button" class="ki-btn rw" data-kind="REWORK"'+((ctx.rework.ready||0)>0?'':' disabled')+' title="'+((ctx.rework.ready||0)>0?'檢驗重工回廠的貨，送驗數上限 '+ctx.rework.ready+' 件':'重工貨尚未回廠（'+({issue:'生管尚未重工發單',out:'廠商加工中',back:'',done:''}[ctx.rework.stage]||'')+'），回廠登錄後才能做重工檢驗')+'">重工</button>' : '')+'</span>'+
+                (ctx.rework ? '<span style="margin-left:8px;background:#DD5138;color:#fff;border-radius:3px;padding:1px 8px;font-weight:bold;" title="異常單 '+esc(ctx.rework.no||'')+'">第'+esc(ctx.rework.round||1)+'次重工：判定 '+esc(ctx.rework.qty)+'、已發 '+esc(ctx.rework.issued)+'、已回 '+esc(ctx.rework.returned)+'、已驗 '+esc(ctx.rework.inspected)+'</span>' : '')+
                 '</span></div>')+
             // 本批送驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
             // 這裡就跟著更新（updateQtyLive，不必整列重畫）——2026-10-06 使用者要求，
@@ -5628,7 +5666,8 @@ $(function(){
             '<span class="'+o.cls+'" style="cursor:pointer;display:block;" data-id="'+r.qc_form_id+'" data-fid="'+(r.bom_ing_fid||0)+'">'+
             '<b>'+esc(o.type)+'</b> ／ '+(o.bom?esc(o.bom)+' ／ ':'')+esc(r.part_no||'—')+
             (r.insp_kind==='FIRST' ? ' <span class="insp-kind-badge ikb-first" style="margin-top:0;">首件</span>' :
-             r.insp_kind==='LAST'  ? ' <span class="insp-kind-badge ikb-last" style="margin-top:0;">末件</span>' : '')+
+             r.insp_kind==='LAST'  ? ' <span class="insp-kind-badge ikb-last" style="margin-top:0;">末件</span>' :
+             r.insp_kind==='REWORK' ? ' <span class="insp-kind-badge ikb-rework" style="margin-top:0;">重工</span>' : '')+
             '　'+res+' <span class="muted-help">　建立：'+dotDT(r.created_at,16)+' '+esc(r.created_by||'')+
             (editedText(r)?'　<span style="color:var(--amber-d);">'+esc(editedText(r))+'</span>':'')+'</span>'+
             '<br><span class="muted-help">製程：'+esc(o.procs||'—')+'　廠商：'+esc(o.maker||'—')+'</span></span></div>';
@@ -5811,6 +5850,7 @@ $(function(){
     function inspKindBadge(kind){
         if(kind==='FIRST') return '<br><span class="insp-kind-badge ikb-first">首件</span>';
         if(kind==='LAST')  return '<br><span class="insp-kind-badge ikb-last">末件</span>';
+        if(kind==='REWORK') return '<br><span class="insp-kind-badge ikb-rework">重工</span>';
         return '';
     }
     function buildBatchesFromHistory(history){
@@ -6018,7 +6058,7 @@ $(function(){
     // 永遠不會動到正在填寫的新一輪，跳窗裡也沒有任何輸入框，不可能被改到。
     function qcViewMetaHtml(h, tools){
         var toolsTxt=(tools||[]).map(function(t){ return t.label||t.no||''; }).filter(function(s){ return s!==''; }).join('、');
-        var kindTxt = h.insp_kind==='FIRST'?'首件':(h.insp_kind==='LAST'?'末件':(h.insp_kind==='SHIP'?'出貨檢驗':'一般'));
+        var kindTxt = h.insp_kind==='FIRST'?'首件':(h.insp_kind==='LAST'?'末件':(h.insp_kind==='SHIP'?'出貨檢驗':(h.insp_kind==='REWORK'?'重工':'一般')));
         var ctnTxt=[h.container_1_disp,h.container_2_disp].filter(function(s){ return s; }).join('、');
         var ncr='';
         if(h.check_result==='NG'){
@@ -6137,7 +6177,7 @@ $(function(){
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'',
                               approved_name:h.approved_name||'', approved_at:h.approved_at||'' };
             state.sampleN=h.sample_qty||state.sampleN;
-            state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST'||h.insp_kind==='SHIP') ? h.insp_kind : 'NORMAL';
+            state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST'||h.insp_kind==='SHIP'||h.insp_kind==='REWORK') ? h.insp_kind : 'NORMAL';
             if(ctx) ctx.ship = (h.insp_kind==='SHIP');
             $('#inp-qty').val(h.incoming_qty||0); updateQtyLive();
             $('#inp-sample').val(state.sampleN);
@@ -7089,6 +7129,10 @@ $(function(){
             return;
         }
 
+        // 漏選提醒：這一站有重工貨已回廠待檢驗，卻用「一般」存檔 → 確認是不是要改選「重工」，避免重工貨被當一般檢驗而重複計算數量
+        if(state.inspKind==='NORMAL' && ctx.rework && (ctx.rework.ready||0)>0 && !state.editFormId){
+            if(!confirm('這一站有異常單 '+ctx.rework.no+' 的重工貨已回廠、尚未檢驗（'+ctx.rework.ready+' 件）。\n\n目前檢驗性質是「一般」。如果這張單是在驗重工貨，請按「取消」改選上方「重工」；若確定是驗其他貨品，按「確定」繼續存檔。')) return;
+        }
         var b=state.batches[state.curBatch];
         // 本輪容器（2026-10-06）：跟允收彙總讀同一支 readContainerFields()（含「只設一個自動搬到
         // 容器1」正規化），容器1/2本身一起存到這一筆qc_check_form，「批次與檢驗歷程」才查得到
@@ -7098,7 +7142,7 @@ $(function(){
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), update_std:($('#chk-save-std').is(':checked') && !faceOn())?'1':'0',
-            insp_kind:state.inspKind, rework_order_id:((ctx&&ctx.rework&&ctx.rework.id)||''), face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||''),
+            insp_kind:state.inspKind, rework_order_id:((state.inspKind==='REWORK'&&ctx&&ctx.rework&&ctx.rework.id)||''), face_code:(faceFields().face_code||''), piece_no:(faceFields().piece_no||''),
             container_1:ctnFields.containers[0], qty_1:ctnFields.quantities[0],
             container_2:ctnFields.containers[1], qty_2:ctnFields.quantities[1],
             items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
