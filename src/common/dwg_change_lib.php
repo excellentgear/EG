@@ -617,6 +617,11 @@ function dwg_log_revision(PDO $pdo, int $dId, ?string $oldRev, ?string $newRev,
                           string $source = 'manual', ?int $changeId = null,
                           int $byId = 0, string $byName = '', string $note = ''): bool {
     dwg_ensure_schema($pdo);
+    // 廠內版次沒有帶入時（主檔手動改版次、附件自動更新版次）自動由此料號最新自家圖的發行日帶出：
+    // 變更後＝最新一版的發行日、變更前＝再往前一版（同一天視同同一版）。沒有自家圖就維持空白。
+    if ($intOld === null && $intNew === null && in_array($source, ['manual','attach'], true)) {
+        try { $pr = dwg_internal_rev_pair($pdo, $dId); $intOld = $pr['old_date']; $intNew = $pr['new_date']; } catch (Throwable $_e) {}
+    }
     $revSame = trim((string)$oldRev) === trim((string)$newRev);
     $intSame = trim((string)$intOld) === trim((string)$intNew);
     if ($revSame && $intSame) return false;
