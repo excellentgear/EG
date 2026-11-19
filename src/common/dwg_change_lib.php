@@ -630,6 +630,59 @@ function dwg_log_revision(PDO $pdo, int $dId, ?string $oldRev, ?string $newRev,
     } catch (Throwable $e) { return false; }
 }
 
+/**
+ * 版次比較（2026-11-19）：$a 是否「明確比」$b 新。無法判定一律回 null（呼叫端視為不動）。
+ * 版次寫法五花八門（A、AB、1、A-04、2_1、114.11.26、橘盒…），所以只在「同樣結構」時才比：
+ * 以英數連續段拆開（分隔符號忽略），段數與每段的類型（字母／數字）必須完全一致，
+ * 再逐段比——數字段比數值、字母段先比長度再比字母（A<Z<AA<AB）。結構不同就不猜。
+ */
+function dwg_rev_newer(string $a, string $b): ?bool {
+    $tok = function (string $s): array {
+        if (!preg_match_all('/[A-Za-z]+|[0-9]+/', strtoupper(trim($s)), $m)) return [];
+        return $m[0];
+    };
+    $ta = $tok($a); $tb = $tok($b);
+    if (!$ta || !$tb || count($ta) !== count($tb)) return null;
+    for ($i = 0; $i < count($ta); $i++) {
+        $da = ctype_digit($ta[$i]); $db = ctype_digit($tb[$i]);
+        if ($da !== $db) return null;
+        if ($da) { $c = (int)$ta[$i] <=> (int)$tb[$i]; }
+        else     { $c = strlen($ta[$i]) <=> strlen($tb[$i]); if ($c === 0) $c = strcmp($ta[$i], $tb[$i]); }
+        if ($c !== 0) return $c > 0;
+    }
+    return false;   // 完全相同
+}
+
+/**
+ * 附件版次比料號主檔版次新時，自動把料號主檔版次更新成附件的版次（使用者要求 2026-11-19）。
+ * 保守規則：①作廢標籤的附件不算 ②主檔版次是空的就直接帶入 ③兩邊結構不同（無法判定新舊）不動
+ * ④只升不降。更新時留下版次異動紀錄（來源 attach）。回傳 ['old'=>,'new'=>] 或 null（沒更新）。
+ */
+function dwg_sync_part_rev_from_attach(PDO $pdo, int $attachId, int $byId = 0, string $byName = ''): ?array {
+    try {
+        $st = $pdo->prepare("SELECT d_id, revision, category_ids FROM part_attachments WHERE id=?");
+        $st->execute([$attachId]);
+        $a = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$a) return null;
+        $rev = trim((string)($a['revision'] ?? ''));
+        if ($rev === '') return null;
+        $obs = dwg_obsolete_cat_ids($pdo);
+        $cats = array_filter(array_map('intval', explode(',', (string)($a['category_ids'] ?? ''))));
+        if ($obs && array_intersect($cats, $obs)) return null;
+        $dId = (int)$a['d_id'];
+        $cs = $pdo->prepare("SELECT Revision FROM d_setting WHERE d_id=?");
+        $cs->execute([$dId]);
+        $cur = $cs->fetchColumn();
+        if ($cur === false) return null;
+        $cur = trim((string)$cur);
+        if ($cur !== '' && dwg_rev_newer($rev, $cur) !== true) return null;
+        $pdo->prepare("UPDATE d_setting SET Revision=?, Modified_By=?, Modified_At=NOW() WHERE d_id=?")
+            ->execute([$rev, mb_substr($byName, 0, 50), $dId]);
+        dwg_log_revision($pdo, $dId, $cur, $rev, null, null, 'attach', null, $byId, $byName, '附件版次較新，自動更新料號版次');
+        return ['old' => $cur, 'new' => $rev];
+    } catch (Throwable $e) { return null; }
+}
+
 /** 某料號的版次異動紀錄（含同料號的其他 d_setting——圖是同一張，版次歷程要看整組） */
 function dwg_revision_log_list(PDO $pdo, int $dId): array {
     dwg_ensure_schema($pdo);

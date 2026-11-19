@@ -232,6 +232,7 @@ switch ($action) {
             $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,quote_no,maker_no,uploaded_by,uploaded_by_id,dl_is_customer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                 ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $upQuoteNo, $upMakerNo, $uploadedByName, $uploadedById, $upDlCust]);
             $newAttachId = (int)$pdo->lastInsertId();
+            $revUp = dwg_sync_part_rev_from_attach($pdo, $newAttachId, $uploadedById, (string)$uploadedByName);
             if ($upProcSel) { try { eg_apc_save($pdo, $newAttachId, $upProcSel); } catch (Throwable $_ap) {} }
             // DWG 上傳成功就背景觸發一次轉檔（不等它跑完，不拖慢這次上傳的回應）——
             // 之後使用者點開預覽多半已經轉好，直接命中快取；唯一轉檔實作見 dwg_preview_lib
@@ -247,7 +248,7 @@ switch ($action) {
             }
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
             echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
-                              'dwg_verdict'=>$dwgVerdict]);
+                              'dwg_verdict'=>$dwgVerdict,'part_rev_updated'=>$revUp]);
         } catch (Exception $e) {
             @unlink($dir . $fname);
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
@@ -926,7 +927,8 @@ switch ($action) {
         $vals[] = $id;
         $pdo->prepare("UPDATE part_attachments SET " . implode(',', $sets) . " WHERE id=?")->execute($vals);
         if ($mProcSel !== null) { try { eg_apc_save($pdo, (int)$id, $mProcSel); } catch (Throwable $_ap) {} }
-        echo json_encode(['success'=>true]);
+        $revUp = dwg_sync_part_rev_from_attach($pdo, (int)$id, $uploadedById, (string)$uploadedByName);
+        echo json_encode(['success'=>true,'part_rev_updated'=>$revUp]);
         break;
 
     // ── 這個料號可以綁定的報價單清單（2026-09-08）────────────────────
