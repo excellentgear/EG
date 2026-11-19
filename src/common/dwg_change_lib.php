@@ -641,14 +641,17 @@ function dwg_rev_newer(string $a, string $b): ?bool {
         if (!preg_match_all('/[A-Za-z]+|[0-9]+/', strtoupper(trim($s)), $m)) return [];
         return $m[0];
     };
+    // 開頭是底線的（_1、_2）是另一種寫法，不跟一般版次混比
+    if ((substr(trim($a), 0, 1) === '_') !== (substr(trim($b), 0, 1) === '_')) return null;
     $ta = $tok($a); $tb = $tok($b);
-    // 分隔符號的排列也要一致（「_3」與「1」「A-04」與「A04」寫法不同，不猜新舊）
-    $skel = function (string $s): string { return preg_replace('/[A-Za-z0-9]+/', '#', strtoupper(trim($s))); };
-    if ($skel($a) !== $skel($b)) return null;
-    if (!$ta || !$tb || count($ta) !== count($tb)) return null;
-    for ($i = 0; $i < count($ta); $i++) {
+    if (!$ta || !$tb) return null;
+    $n = max(count($ta), count($tb));
+    for ($i = 0; $i < $n; $i++) {
+        // 一邊沒有這一段（A 對 A1）＝沒有小改版，比有的舊
+        if (!isset($ta[$i])) return false;
+        if (!isset($tb[$i])) return true;
         $da = ctype_digit($ta[$i]); $db = ctype_digit($tb[$i]);
-        if ($da !== $db) return null;
+        if ($da !== $db) return null;   // 同一位置一邊字母一邊數字（A 對 1），不猜
         if ($da) { $c = (int)$ta[$i] <=> (int)$tb[$i]; }
         else     { $c = strlen($ta[$i]) <=> strlen($tb[$i]); if ($c === 0) $c = strcmp($ta[$i], $tb[$i]); }
         if ($c !== 0) return $c > 0;
