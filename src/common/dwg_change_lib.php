@@ -608,6 +608,20 @@ function dwg_internal_rev_pair(PDO $pdo, int $dId, array $catIds = [], ?string $
     return $out;
 }
 
+/** 某客戶版次對應的發行日：同料號（含 sibling）附件中版次相同者的發行章日期（取最新一筆，作廢者也算）。查不到回 null */
+function dwg_int_date_for_rev(PDO $pdo, int $dId, string $rev): ?string {
+    $rev = trim($rev);
+    if ($rev === '') return null;
+    $dIds = dwg_sibling_d_ids($pdo, $dId);
+    $st = $pdo->prepare("SELECT issue_stamp_date FROM part_attachments
+        WHERE d_id IN (" . implode(',', array_fill(0, count($dIds), '?')) . ")
+          AND deleted_at IS NULL AND issue_stamp_date IS NOT NULL AND UPPER(TRIM(revision)) = UPPER(?)
+        ORDER BY issue_stamp_date DESC, id DESC LIMIT 1");
+    $st->execute(array_merge($dIds, [$rev]));
+    $v = $st->fetchColumn();
+    return $v ? (string)$v : null;
+}
+
 /**
  * 寫一筆料號版次異動紀錄（使用者要求：主檔「版次」旁邊要看得到誰改的、何時改的、對應哪一天的廠內版次）。
  * 只記錄「真的有變」的異動；客戶版次與廠內版次都沒動就不寫，免得清單被無意義的列灌滿。
@@ -620,7 +634,12 @@ function dwg_log_revision(PDO $pdo, int $dId, ?string $oldRev, ?string $newRev,
     // 廠內版次沒有帶入時（主檔手動改版次、附件自動更新版次）自動由此料號最新自家圖的發行日帶出：
     // 變更後＝最新一版的發行日、變更前＝再往前一版（同一天視同同一版）。沒有自家圖就維持空白。
     if ($intOld === null && $intNew === null && in_array($source, ['manual','attach'], true)) {
-        try { $pr = dwg_internal_rev_pair($pdo, $dId); $intOld = $pr['old_date']; $intNew = $pr['new_date']; } catch (Throwable $_e) {}
+        try {
+            // 優先依「版次相同的附件」的發行日對應（含已作廢的舊版附件：AA 版圖雖然作廢，它的發行日仍是 AA 版的日期）
+            $intNew = dwg_int_date_for_rev($pdo, $dId, (string)$newRev);
+            $intOld = dwg_int_date_for_rev($pdo, $dId, (string)$oldRev);
+            if ($intNew === null && $intOld === null) { $pr = dwg_internal_rev_pair($pdo, $dId); $intOld = $pr['old_date']; $intNew = $pr['new_date']; }
+        } catch (Throwable $_e) {}
     }
     $revSame = trim((string)$oldRev) === trim((string)$newRev);
     $intSame = trim((string)$intOld) === trim((string)$intNew);
