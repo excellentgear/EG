@@ -642,6 +642,9 @@ function dwg_rev_newer(string $a, string $b): ?bool {
         return $m[0];
     };
     $ta = $tok($a); $tb = $tok($b);
+    // 分隔符號的排列也要一致（「_3」與「1」「A-04」與「A04」寫法不同，不猜新舊）
+    $skel = function (string $s): string { return preg_replace('/[A-Za-z0-9]+/', '#', strtoupper(trim($s))); };
+    if ($skel($a) !== $skel($b)) return null;
     if (!$ta || !$tb || count($ta) !== count($tb)) return null;
     for ($i = 0; $i < count($ta); $i++) {
         $da = ctype_digit($ta[$i]); $db = ctype_digit($tb[$i]);
