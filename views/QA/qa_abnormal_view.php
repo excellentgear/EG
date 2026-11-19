@@ -103,7 +103,10 @@ try {
     $rchk->execute([$uid]);
     $isReadonlyViewer = (bool)$rchk->fetchColumn();
 } catch (Throwable $e) { /* RBAC 表不存在時視為非管理者 */ }
-if (!$isCreator && !$isFollower && !$isTarget && !$isAdmin && !$isReadonlyViewer) {
+// 具新版「品質異常處理單」模組權限（檢視／決策／管理等）或與該單有關者亦可進入
+$hasQabAccess = false;
+try { $hasQabAccess = qab_can_view_order($db, qab_perms($db, $uid), (int)$orderId); } catch (Throwable $e) { $hasQabAccess = false; }
+if (!$isCreator && !$isFollower && !$isTarget && !$isAdmin && !$isReadonlyViewer && !$hasQabAccess) {
     // 注意：無權限時只顯示訊息，不設 lastpage、不導回登入頁（避免登入死循環）
     echo '<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>無權檢視</title></head>'
        . '<body style="font-family:Microsoft JhengHei,Arial;background:#f4f7f9;color:#34495e;text-align:center;padding:60px 20px;">'
@@ -212,11 +215,11 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
     <div class="sec">
         <h3><i class="fa fa-file-text-o"></i> 異常單資訊</h3>
         <div class="grid">
-            <div class="kv"><b>異常單號</b><?= h($order['abnormal_order_no']) ?></div>
+            <div class="kv"><b>異常單號</b><a href="qa_abnormal_form.php?id=<?= (int)$order['id'] ?>" target="_blank" rel="noopener" title="開新視窗：異常單處理頁"><?= h($order['abnormal_order_no']) ?></a></div>
             <?php if (!empty($order['src_fallback']) && trim((string)$order['bom_no']) !== ''): ?>
             <?php // 新式開單（BOM 製令）：來源只顯示 BOM 號碼，點開＝只有這一筆 BOM 的 BOM 總覽（頁面本身會依使用者權限把關）；異常種類欄改顯示料號，點開＝與異常單內點料號相同的圖面檢視 ?>
             <div class="kv"><b>來　　源</b><?php if (preg_match('/^[A-Za-z0-9\-]{3,40}$/', $order['bom_no'])): ?><a href="../pm/OreadyReply_ForPm_BaseOfTime.php?bom_only=<?= h(rawurlencode($order['bom_no'])) ?>" target="_blank" rel="noopener" title="開新視窗：只有這一筆 BOM 的 BOM 總覽"><?= h($order['bom_no']) ?></a><?php else: ?><?= h($order['bom_no']) ?><?php endif; ?></div>
-            <div class="kv"><b>異常種類</b><?php if (trim((string)$order['part_no']) !== ''): ?><a href="../pm/part_viewer.php?<?= !empty($order['part_d_id']) ? 'pk=' . (int)$order['part_d_id'] : 'd_id=' . h(rawurlencode($order['part_no'])) ?>" target="_blank" rel="noopener" title="開新視窗：料號圖面"><?= h($order['part_no']) ?></a><?php else: ?>-<?php endif; ?></div>
+            <div class="kv"><b>異常種類</b><?php if (trim((string)$order['part_no']) !== ''): ?><a href="../pm/part_viewer.php?<?= (preg_match('/^[A-Za-z0-9\-]{3,40}$/', trim((string)$order['bom_no']))) ? 'd_id=' . h(rawurlencode($order['part_no'])) . '&bom=' . h(rawurlencode(trim((string)$order['bom_no']))) : (!empty($order['part_d_id']) ? 'pk=' . (int)$order['part_d_id'] : 'd_id=' . h(rawurlencode($order['part_no']))) ?>" target="_blank" rel="noopener" title="開新視窗：料號圖面"><?= h($order['part_no']) ?></a><?php else: ?>-<?php endif; ?></div>
             <?php else: ?>
             <div class="kv"><b>來　　源</b><?= h($order['source_desc'] ?: $order['source_type']) ?></div>
             <div class="kv"><b>異常種類</b><?= h($order['abnormal_type_name'] ?: '-') ?></div>
@@ -290,6 +293,44 @@ $statusMap  = ['Pending'=>['待送交','#8a9bab'], 'Received'=>['處理中','#c7
     </div>
     <?php endif; ?>
 
+    <?php
+    // ── 在通知頁直接決策（與處理頁同一支 API，決策後自動回寫異常單） ──
+    $decPanel = ['show' => false];
+    try {
+        $qoD = qab_order($db, (int)$order['id']);
+        $permsD = qab_perms($db, $uid);
+        if ($qoD && empty($qoD['is_closed']) && empty($qoD['split_children']) && empty($qoD['disp_ids']) && empty($qoD['gm_ids']) && empty($qoD['escalate_gm'])
+            && !(!empty($qoD['auto_opened']) && empty($qoD['qc_review_by']))) {
+            $qvD = qab_quick_view($db, $qoD, $uid);
+            if (!empty($qoD['quick_mode'])) {
+                if (!empty($qvD['can']['decide']) || !empty($qvD['can']['escalate'])) $decPanel = ['show' => true, 'mode' => 'quick', 'actions' => $qvD['actions'], 'esc' => !empty($qvD['can']['escalate'])];
+            } elseif (qab_can_decide_order($db, $permsD, $qoD)) {
+                $decPanel = ['show' => true, 'mode' => 'normal', 'opts' => array_values(array_filter(qab_options($db, 'disp'), function ($x) { return empty($x['is_escalate']); })), 'gm' => qab_gm_label($db)];
+            }
+        }
+    } catch (Throwable $e) { $decPanel = ['show' => false]; }
+    if (!isset($_SESSION['qab_csrf']) || $_SESSION['qab_csrf'] === '') $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
+    ?>
+    <?php if ($decPanel['show']): ?>
+    <div class="sec" id="sec-decide">
+        <h3><i class="fa fa-gavel"></i> 決策 <small style="color:var(--muted);font-weight:400;">（在這裡決策會直接回寫到異常單；要拆分數量請到異常單處理頁）</small></h3>
+        <div id="dec-opts" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <?php if ($decPanel['mode'] === 'quick'): foreach ($decPanel['actions'] as $a): ?>
+            <button type="button" class="m-btn m-btn-primary dec-q" data-act="<?= h($a['key']) ?>"><?= h($a['name']) ?></button>
+        <?php endforeach; if ($decPanel['esc']): ?><button type="button" class="m-btn dec-q" data-act="escalate" style="background:#fff3df;color:#c77c1a;">轉呈決策</button><?php endif; ?>
+        <?php else: foreach ($decPanel['opts'] as $o2): ?>
+            <label style="border:1px solid #d9c9b0;border-radius:6px;padding:6px 12px;cursor:pointer;background:#fff;"><input type="radio" name="dec-opt" value="<?= (int)$o2['opt_id'] ?>"> <?= h($o2['name']) ?></label>
+        <?php endforeach; ?>
+            <label style="border:1px dashed #c77c1a;border-radius:6px;padding:6px 12px;cursor:pointer;background:#fff;"><input type="radio" name="dec-opt" value="escalate"> 整批轉呈<?= h($decPanel['gm']) ?>裁示</label>
+        <?php endif; ?>
+        </div>
+        <label class="lbl">處置說明<?= $decPanel['mode'] === 'quick' ? '（選填）' : '' ?></label>
+        <textarea id="dec-note" class="m-ta" placeholder="處置說明…"></textarea>
+        <?php if ($decPanel['mode'] !== 'quick'): ?><br><button type="button" class="m-btn m-btn-primary" id="dec-submit"><i class="fa fa-check"></i> 送出決策</button><?php endif; ?>
+        <div id="dec-msg" style="color:#e74c3c;margin-top:6px;"></div>
+    </div>
+    <?php endif; ?>
+
     <!-- 我的處理（通知回覆回簽） -->
     <?php if ($eventId): ?>
     <div class="sec" id="sec-action">
@@ -346,6 +387,31 @@ $(function(){
             toast(IS_CLOSED ? '已結案' : '已取消結案');
         }, 'json').fail(function(){ $b.prop('disabled', false); alert('連線失敗'); });
     });
+
+    // ── 通知頁直接決策：走處理頁同一支 API，成功後重新載入 ──
+    var QAB_API = '../../src/store/QaAbnormal_API.php', QAB_CSRF = <?= json_encode((string)$_SESSION['qab_csrf']) ?>;
+    function decPost(data, $b){
+        data.csrf = QAB_CSRF; data.id = ORDER_ID;
+        $('#dec-msg').text(''); if ($b) $b.prop('disabled', true);
+        $.post(QAB_API, data, function(r){
+            if (r && r.success){ toast('已決策，已回寫異常單'); setTimeout(function(){ location.reload(); }, 600); }
+            else { if ($b) $b.prop('disabled', false); $('#dec-msg').text((r && r.message) || '決策失敗'); }
+        }, 'json').fail(function(){ if ($b) $b.prop('disabled', false); $('#dec-msg').text('連線失敗，請稍後再試'); });
+    }
+    $('#dec-submit').on('click', function(){
+        var v = $('input[name=dec-opt]:checked').val();
+        if (!v){ $('#dec-msg').text('請先選擇一個決策選項'); return; }
+        var note = $('#dec-note').val();
+        if (v === 'escalate'){ if (!confirm('確定整批轉呈裁示？')) return; decPost({ action:'save_disposition', escalate_gm:1, disposition_note:note }, $(this)); return; }
+        if (!confirm('確定以「' + $.trim($('input[name=dec-opt]:checked').parent().text()) + '」決策？送出後會通知相關人員。')) return;
+        decPost({ action:'save_disposition', items: JSON.stringify([{ opt_id: parseInt(v, 10) }]), disposition_note:note }, $(this));
+    });
+    $(document).on('click', '.dec-q', function(){
+        var name = $.trim($(this).text());
+        if (!confirm('確定要「' + name + '」？送出後會通知相關人員。')) return;
+        decPost({ action:'quick_decide', act:$(this).data('act'), note:$('#dec-note').val() }, $(this));
+    });
+    var DECIDE_PENDING = <?= $decPanel['show'] ? 'true' : 'false' ?>;
 
     if (!EVENT_ID) return;
 
@@ -417,6 +483,7 @@ $(function(){
             else h += '<button class="m-btn m-btn-primary act" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
         } else if (mode === 'sign'){
             if (done) h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已回簽</div>';
+            else if (DECIDE_PENDING) h += '<div class="todo">這是待決策通知，請在上方「決策」區選擇決策選項（回簽不等於決策）。</div>';
             else h += '<button class="m-btn m-btn-primary act" data-act="sign"><i class="fa fa-pencil-square-o"></i> 回簽</button>';
         } else {
             if (done){
