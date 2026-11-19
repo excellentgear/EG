@@ -1062,9 +1062,20 @@ $(function(){
         // 新建時料號還沒選＝先把自動帶值清乾淨（推導欄位鐵則：算不出來就清空，不留舊值）
         if (!row) { $('#f-customer').val(''); $('#f-intold,#f-intnew').val(''); }
         $('#ver-hint').toggle(!row);
-        $('#detailModal').modal('hide');
-        $('#editModal').modal('show');
+        // Bootstrap 3 不支援疊窗：明細跳窗還在淡出時就開登錄跳窗，淡出結束會把 body 的 modal-open 拿掉，
+        // 登錄跳窗就捲不動（看不到底下的欄位與按鈕）。一律等明細完全關閉後再開，並補回 modal-open。
+        var $dm = $('#detailModal');
+        if ($dm.hasClass('in')) {
+            $dm.one('hidden.bs.modal', function(){
+                $('#editModal').modal('show');
+                $('body').addClass('modal-open');
+            });
+            $dm.modal('hide');
+        } else {
+            $('#editModal').modal('show');
+        }
     }
+    $('#editModal').on('shown.bs.modal', function(){ $('body').addClass('modal-open'); });
     /* 僅記錄，不通知簽收：勾了就把簽收對象整區淡化點不動（送出時也不會帶名單上去），
        並把主要按鈕的字改成講清楚「不會通知」——按鈕上寫著「並通知簽收」卻一封都不發是最難解釋的狀況。 */
     function applyNoAck(){
