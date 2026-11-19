@@ -553,7 +553,7 @@ table.art-t tr.ret-void td b{text-decoration:none;display:inline-block;color:#B4
       <ul>
         <li>客戶（廠商）名稱旁的紅色「<b>?月未對帳</b>」＝2026-10 起前面月份仍是空白或處理中、也沒略過的月份；點它（或雙擊該列）明細會<b>分月顯示</b>。</li>
         <li>「<b>有折讓</b>」＝本帳款月份有折讓單，折讓項目在明細置頂、暖色底。折讓開立<b>之後的每個月</b>都會繼續出現（標「前期折讓」，不計入該月金額），直到有人在明細按「<b>已確認</b>」（該列變暖淺綠），<b>確認月份之後</b>就不再顯示；要取消請回到確認的那個月。</li>
-        <li><b>出貨折讓</b>＝那筆貨還沒收款，開立後每個月都顯示，金額（含稅，扣除）算在你按下「已確認」的<b>那個對帳月份</b>（不是按下的日期）。<b>退貨折讓</b>＝那筆退貨已用折讓扣過款，只在退貨單自己的帳款月份提示，該月明細裡那筆退貨整列刪去線、淺紅底、不算金額；<b>退貨折讓沒確認就不能按「已送會計」</b>，清單上方會用紅框列出是哪些客戶。誰、何時按下已確認都會記錄並顯示在該列。</li>
+        <li><b>出貨折讓</b>＝那筆貨還沒收款，開立後每個月都顯示，金額（含稅，扣除）算在你按下「已確認」的<b>那個對帳月份</b>（不是按下的日期）。<b>退貨折讓</b>＝那筆退貨已用折讓扣過款，在退貨單自己的帳款月份提示；之後的月份沒確認會繼續顯示（標「前期退貨折讓」，同樣擋「已送會計」），已確認的在下一個月再顯示一次供核對；該月明細裡那筆退貨整列刪去線、淺紅底、不算金額；<b>退貨折讓沒確認就不能按「已送會計」</b>，清單上方會用紅框列出是哪些客戶。誰、何時按下已確認都會記錄並顯示在該列。</li>
         <li>「<b>延到下月對帳</b>」＝這個月先不對、跟下個月一起對（客戶偶爾兩個月一起對帳）。狀態不變，下個月的明細會連同本月一起顯示；下個月按到「已對帳」以上時，延後的月份自動一併跟著。「已確認」與「延到下月對帳」的權限在「設定 → 角色權限矩陣」（應收）勾選。</li>
         <li>應收操作欄的「給客戶對帳單」「客戶提供對帳單」「已收款」是獨立標記，點一下標記（顯示日期）、再點取消，不影響狀態與工作天數統計；需本頁管理員、業務或會計角色。</li>
       </ul>
@@ -1590,19 +1590,19 @@ $(function(){
         // 金額（一律以「對帳月份」計，不是按下去的日期）：出貨折讓＝在按下已確認的那個月扣掉折讓金額（含稅）；
         // 退貨折讓＝該月對帳明細裡對應那筆退貨整列刪去線、淺紅底、不算金額（已用折讓扣過款，避免重複扣）。
         var retVoid = {}, rate = Number(d.tax_rate) || 0;
-        allows.forEach(function(a){ (a.items||[]).forEach(function(i){ if (i.src_type==='IR') retVoid[i.src_id] = true; }); });
+        allows.forEach(function(a){ (a.items||[]).forEach(function(i){ if (i.src_type==='IR' && Number(i.ret_here)) retVoid[i.src_id] = true; }); });
         allows.forEach(function(a){
             (a.items||[]).forEach(function(i){ cnt++;
                 var isRet = (i.src_type==='IR');
                 if (!isRet && Number(i.confirmed)) allowTotal -= (Number(i.amount)||0) + (Number(i.tax_amount)||0);
-                var cfLater = !!i.confirm_bm && !Number(i.confirmed);   // 後端只回「確認月份 ≧ 本月」的明細，所以有確認月份又不是本月＝之後的月份才確認的
+                var cfLater = !!i.confirm_bm && !Number(i.confirmed);   // 不是本月確認的：之後的月份確認（confirm_rel=later），或退貨折讓在上月已確認（prev）
                 var who = i.confirm_by ? esc(i.confirm_by) + ' ' + esc(String(i.confirm_at||'').replace(/-/g,'.')) : '';
                 var cfBtn = Number(i.confirmed)
                     ? '<button class="allow-cf on" ' + (canCf?'':'disabled ') + 'title="再點一下取消確認" data-item="' + i.item_id + '" data-on="0">✓ 已確認</button><div class="cf-who">' + who + '</div>'
-                    : (cfLater ? '<span class="hint">' + esc(String(i.confirm_bm).slice(5).replace(/^0/,'')) + '月已確認</span><div class="cf-who">' + who + '</div>'
+                    : (cfLater ? '<span class="hint" style="color:#5E7A2C;font-weight:bold;">✓ ' + esc(String(i.confirm_bm).slice(5).replace(/^0/,'')) + '月已確認</span><div class="cf-who">' + who + '</div>'
                                : '<button class="allow-cf" ' + (canCf?'':'disabled title="沒有確認權限（請洽本頁管理員在角色權限矩陣勾選）" ') + 'data-item="' + i.item_id + '" data-on="1">已確認</button>');
                 var tag = isRet
-                    ? '<span class="allow-carry" title="這筆退貨已用折讓單扣過款；只在退貨單自己的帳款月份提示，需按「已確認」。已送會計前必須確認">退貨折讓（已扣款）</span><br>'
+                    ? (Number(i.ret_here) ? '<span class="allow-carry" title="這筆退貨已用折讓單扣過款；需按「已確認」，已送會計前必須確認">退貨折讓（已扣款）</span><br>' : '<span class="allow-carry" title="退貨在 ' + esc(i.ir_bm||'') + ' 月；折讓單的帳款月份是 ' + esc(a.billing_month) + '。沒確認會每月提醒（也不能已送會計），確認後下一個月仍會顯示一次">前期退貨折讓（退貨 ' + esc(i.ir_bm||'') + '）</span><br>')
                     : (a.carried ? '<span class="allow-carry" title="折讓單的帳款月份是 ' + esc(a.billing_month) + '；每月提醒到按「已確認」為止，金額算在確認的那個對帳月份">前期折讓 ' + esc(a.billing_month) + '</span><br>' : '');
                 h += '<tr class="allow-row' + (Number(i.confirmed)?' allow-ok':'') + '"><td class="c">' + cfBtn + '</td><td>' + tag + '折讓（' + (isRet?'退貨':'出貨') + '）</td><td>' + esc(i.src_no) + '</td><td>' + esc(dotd(i.src_date)) + '</td><td>' + esc(i.spec) + '</td><td class="n">-' + Number(i.qty) + '</td>' + n(i.unit_price) + n(-Number(i.amount))
                    + '<td style="white-space:normal;">' + esc(a.created_by_name||'') + ' 於 ' + esc(dotd(a.allow_date)) + ' 開立折讓<br>' + esc(a.allow_no||'（證明單號碼尚未填）') + '</td></tr>';

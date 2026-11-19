@@ -912,9 +912,9 @@ function aca_month_allowances(PDO $db, string $bm, ?string $customerId = null): 
             FROM acc_allowance a
             JOIN acc_allowance_item i ON i.allow_id = a.allow_id
             LEFT JOIN acc_allowance_confirm c ON c.item_id = i.item_id
-            WHERE a.status='active' AND (c.item_id IS NULL OR c.confirm_bm >= :bm)
+            WHERE a.status='active' AND (c.item_id IS NULL OR c.confirm_bm >= :bm OR (i.src_type='IR' AND c.confirm_bm >= :prev))
               AND (i.src_type='IR' OR a.billing_month = :bm OR (a.billing_month < :bm AND DATE_FORMAT(a.allow_date,'%Y-%m') <= :bm))";
-    $p = [':bm' => $bm];
+    $p = [':bm' => $bm, ':prev' => date('Y-m', strtotime($bm . '-01 -1 month'))];
     if ($customerId !== null) { $sql .= " AND a.customer_id = :cid"; $p[':cid'] = $customerId; }
     $sql .= " ORDER BY a.allow_date, a.allow_id, i.item_id";
     $st = $db->prepare($sql); $st->execute($p);
@@ -925,13 +925,22 @@ function aca_month_allowances(PDO $db, string $bm, ?string $customerId = null): 
         $q->execute([$iid]);
         $it = $q->fetch(PDO::FETCH_ASSOC);
         if (!$it) continue;
-        if ($it['src_type'] === 'IR' && aca_ir_bm($db, (int)$it['src_id'], (string)$r['customer_id']) !== $bm) continue;   // 退貨折讓只在退貨單自己的月份
+        $it['ir_bm'] = null;
+        if ($it['src_type'] === 'IR') {
+            // 退貨折讓：退貨單自己的帳款月份一定顯示；之後的月份（折讓開立月份起）沒確認就每月提醒、已確認的在確認後的下一個月再顯示一次（SQL 已限制）
+            $irBm = aca_ir_bm($db, (int)$it['src_id'], (string)$r['customer_id']);
+            $it['ir_bm'] = $irBm;
+            if ($irBm === null || $irBm > $bm) continue;
+            if ($irBm < $bm && substr((string)$r['allow_date'], 0, 7) > $bm) continue;
+        }
         if ($it['src_type'] === 'IR') {   // 這筆退貨在該月對帳明細裡的含稅扣款（負數）；退貨折讓成立時整列刪去線、不算金額
             $rq = $db->prepare("SELECT Qty*Unit_price FROM ir_track WHERE IR_id=?"); $rq->execute([(int)$it['src_id']]);
             $it['ret_amount_incl'] = -round((float)$rq->fetchColumn() * (1 + acc_tax_rate($db)), 0);
         }
         $it['confirm_bm'] = $r['confirm_bm']; $it['confirm_by'] = $r['confirm_by']; $it['confirm_at'] = $r['confirm_at'];
         $it['confirmed'] = ($r['confirm_bm'] !== null && $r['confirm_bm'] === $bm) ? 1 : 0;
+        $it['confirm_rel'] = $r['confirm_bm'] === null ? '' : ($r['confirm_bm'] === $bm ? 'here' : ($r['confirm_bm'] < $bm ? 'prev' : 'later'));
+        $it['ret_here'] = ($it['src_type'] === 'IR' && $it['ir_bm'] === $bm) ? 1 : 0;   // 退貨單就在本月：對應退貨整列刪去線、排除該筆扣款
         $aid = (int)$r['allow_id'];
         if (!isset($out[$aid])) {
             $a = $r; foreach (['_iid', 'confirm_bm', 'confirm_by', 'confirm_at'] as $k) unset($a[$k]);
@@ -955,7 +964,7 @@ function aca_recon_customer_map(PDO $db, string $bm): array
             $o['total'] += (float)$it['amount'] + (float)$it['tax_amount'];
             // 對本月應收金額的影響（以「對帳月份」計，不是按下去的日期）：出貨折讓＝在按下已確認的那個月扣掉折讓金額；退貨折讓＝排除對應那筆退貨扣款（加回）
             if ($it['src_type'] === 'IS' && $it['confirmed']) $o['delta'] -= (float)$it['amount'] + (float)$it['tax_amount'];
-            if ($it['src_type'] === 'IR') $o['delta'] -= (float)($it['ret_amount_incl'] ?? 0);
+            if ($it['src_type'] === 'IR' && $it['ret_here']) $o['delta'] -= (float)($it['ret_amount_incl'] ?? 0);
             if (!$it['confirmed'] && $it['confirm_bm'] === null) { $o['todo']++; if ($it['src_type'] === 'IR') $o['ret_todo']++; }
         }
         $out[$k] = $o;
