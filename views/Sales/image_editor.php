@@ -934,10 +934,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             $pdo->commit();
+            // 輸出圖版次比料號主檔新時，自動更新主檔版次（與料號附件上傳同一支唯一實作；失敗不影響存檔）
+            $revUp = null;
+            try { $revUp = dwg_sync_part_rev_from_attach($pdo, (int)$pngId, (int)$uid, (string)$userName); } catch (Throwable $_r) {}
             // part_no／customer 回傳給前端在狀態列寫明「存進了哪一筆主檔」——同名料號有好幾筆時，
             // 使用者要能當場看見存到的是哪一家，而不是事後到附件清單才發現存錯
             echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n,
-                              'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict,
+                              'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict, 'part_rev_updated' => $revUp,
                               'd_id' => $dId, 'part_no' => (string)$partRow['D_Setting_Id'],
                               'customer_name' => (string)($partRow['customer_name'] ?? '')], JSON_UNESCAPED_UNICODE);
         } elseif ($act === 'auto_dwg_change') {
@@ -1823,7 +1826,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <input type="checkbox" id="frame-clip" checked onchange="onFrameClipToggle()"> 圖框裁切
             </label>
 <?php if ($show_gear_tool): ?>
-            <button class="tb-btn" onclick="openGearTool()" title="開啟齒輪計算工具：預設停靠在畫布右緣的側邊面板（可拖左緣調寬、按面板上的「浮出」變回可拖曳的獨立視窗）。與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-calculator"></i> 齒輪</button>
+            <button class="tb-btn" onclick="openIsoTool()" title="開啟 ISO 286 公差配合：輸入公稱尺寸，選孔（大寫 H7、F7…）或軸（小寫 h6、g6…）公差帶，自動顯示上下偏差與最大／最小值，可一鍵帶入「Ø32F7+0.050^+0.025」文字（最大／最小值不帶入）"><i class="fa fa-calculator"></i> ISO</button>
+<?php endif; ?>
+<?php if ($show_gear_tool): ?>
+            <button class="tb-btn" onclick="openGearToolForPart()" title="開啟齒輪計算工具：預設停靠在畫布右緣的側邊面板（可拖左緣調寬、按面板上的「浮出」變回可拖曳的獨立視窗）。與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-calculator"></i> 齒輪</button>
 <?php endif; ?>
 <?php if ($can_grind3d): ?>
             <button class="tb-btn" onclick="openGrind3D()" title="開啟砂輪/刀具干涉 3D 模擬：齒輪計算「出尾計算」的 3D 版本，可拖曳旋轉、含砂輪傾角。輸入砂輪外徑／刃寬／側面角／傾角與工件齒底徑／肩部尺寸，直接算出砂輪最靠近肩部又不會撞到的極限位置、該位置的出尾長度，以及任意位置「還能再靠近幾 mm／必須往外退幾 mm」，壓到肩部的部分在 3D 上以紅色標示。注意出尾計算的 2D 公式只在砂輪傾角 0 時成立，有傾角時要以這裡的結果為準。也可以從齒輪計算工具的「出尾計算」分頁右側開啟（那樣會自動帶入已填好的尺寸）"><i class="fa fa-cube"></i> 砂輪/刀具干涉3D</button>
@@ -2464,7 +2470,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 </div>
 
 <!-- PDF 轉圖：多頁時讓使用者指定要開哪幾頁（單頁 PDF 直接開，不跳窗） -->
-<div class="modal-mask" id="pdfpage-modal">
+<div class="modal-mask" id="pdfpage-modal" onkeydown="if(event.key==='Enter'&&!event.isComposing&&event.target.tagName!=='BUTTON'){event.preventDefault();event.stopPropagation();confirmPdfPages();}">
     <div class="modal-box">
         <h3><i class="fa fa-file-pdf-o"></i> PDF 轉成圖檔開啟</h3>
         <div class="modal-body">
@@ -3299,7 +3305,9 @@ canvas.on('mouse:up', function (opt) {
 
 /* 連續工具：畫完不切回選取，可一直畫（同球標邏輯）；Esc 或 V 回選取工具 */
 const CONTINUOUS_TOOLS = ['maskrect', 'masklasso', 'rect', 'ellipse', 'line', 'dimdist', 'dimcircle'];
+let lastDrawnObj = null;   // 連續工具剛畫完、尚未選取的那一個物件：畫完才改線型時，改的是它而不是只改下一個
 function finishNewObject(o) {
+    lastDrawnObj = o;
     if (CONTINUOUS_TOOLS.includes(currentTool)) {
         canvas.requestRenderAll();
         pushState();
@@ -3538,7 +3546,7 @@ function rebuildArrowGroup(g, opts) {
                 const lp = obj.calcLinePoints();
                 const pt = (idx === 1) ? { x: lp.x1, y: lp.y1 } : { x: lp.x2, y: lp.y2 };
                 return fabric.util.transformPoint(pt,
-                    fabric.util.multiplyTransformMatrices(obj.canvas.viewportTransform, obj.calcTransformMatrix()));
+                    fabric.util.multiplyTransformMatrices((obj.canvas || canvas).viewportTransform, obj.calcTransformMatrix()));
             },
             actionHandler: function (eventData, transform, x, y) {
                 const line = transform.target;
@@ -3589,6 +3597,54 @@ function rebuildArrowGroup(g, opts) {
                 p2.x - ox, p2.y - oy);
         }
         return true;
+    };
+})();
+/* 折線端點箭頭：arrowEnds = 'end'（只有最後一點）/'both'（頭尾都有）。
+   箭頭是「折線自己畫的」不是另一個群組成員，所以折彎、加節點、圓滑、改粗細改色都照常運作，
+   箭頭永遠貼著頭尾節點、方向取該端最後一小段線。線段在箭頭處縮短，粗線才不會從尖端旁露出來。
+   有箭頭時不用快取（三角頭可能超出折線外框，快取會把它裁掉）。 */
+(function installPolyArrowEnds() {
+    const origRender = fabric.Polyline.prototype.commonRender;
+    const origCache = fabric.Polyline.prototype.shouldCache;
+    fabric.Polyline.prototype.shouldCache = function () {
+        if (this.arrowEnds && this.arrowEnds !== 'none' && this.type === 'polyline') return false;
+        return origCache.apply(this, arguments);
+    };
+    fabric.Polyline.prototype.commonRender = function (ctx) {
+        const ae = this.arrowEnds;
+        const pts = this.points;
+        if (!ae || ae === 'none' || this.type !== 'polyline' || !pts || pts.length < 2 || isNaN(pts[pts.length - 1].y)) {
+            return origRender.call(this, ctx);
+        }
+        const ox = this.pathOffset.x, oy = this.pathOffset.y;
+        const hl = arrowHeadLen(this.strokeWidth || 3);
+        const n = pts.length;
+        const trimmed = pts.map(p => ({ x: p.x, y: p.y }));
+        const heads = [];
+        const addHead = (tip, from, idx) => {
+            const dx = tip.x - from.x, dy = tip.y - from.y, len = Math.hypot(dx, dy);
+            if (!(len > 0.5)) return;
+            const ux = dx / len, uy = dy / len;
+            const bx = tip.x - ux * hl, by = tip.y - uy * hl;
+            heads.push([tip, { x: bx - uy * hl / 2, y: by + ux * hl / 2 }, { x: bx + uy * hl / 2, y: by - ux * hl / 2 }]);
+            if (len > hl) trimmed[idx] = { x: tip.x - ux * hl * 0.9, y: tip.y - uy * hl * 0.9 };
+        };
+        addHead(pts[n - 1], pts[n - 2], n - 1);
+        if (ae === 'both') addHead(pts[0], pts[1], 0);
+        ctx.save();
+        ctx.fillStyle = this.stroke || '#000';
+        heads.forEach(h => {
+            ctx.beginPath();
+            ctx.moveTo(h[0].x - ox, h[0].y - oy);
+            ctx.lineTo(h[1].x - ox, h[1].y - oy);
+            ctx.lineTo(h[2].x - ox, h[2].y - oy);
+            ctx.closePath();
+            ctx.fill();
+        });
+        ctx.restore();
+        this.points = trimmed;
+        try { return origRender.call(this, ctx); }
+        finally { this.points = pts; }
     };
 })();
 /* 倒圓角描繪：把折線/多邊形的每個轉角切成半徑 r 的圓弧（用二次貝茲曲線，控制點＝原本的尖角）。
@@ -3650,7 +3706,7 @@ function polyPointPositionHandler(i) {
         if (!p || !poly.canvas) return new fabric.Point(-99999, -99999);
         const pt = { x: p.x - poly.pathOffset.x, y: p.y - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
-            fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
+            fabric.util.multiplyTransformMatrices((poly.canvas || canvas).viewportTransform, poly.calcTransformMatrix()));
     };
 }
 function polyMidPositionHandler(i) {
@@ -3659,7 +3715,7 @@ function polyMidPositionHandler(i) {
         if (!a || !b || !poly.canvas) return new fabric.Point(-99999, -99999);
         const pt = { x: (a.x + b.x) / 2 - poly.pathOffset.x, y: (a.y + b.y) / 2 - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
-            fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
+            fabric.util.multiplyTransformMatrices((poly.canvas || canvas).viewportTransform, poly.calcTransformMatrix()));
     };
 }
 function polyPointActionHandler(i) {
@@ -3750,7 +3806,12 @@ function buildPolyEditControls(poly) {
             }
         });
     }
-    return controls;
+    // fabric 命中判定是「後加入的控制點優先」：把「＋」排在前面、實心節點排後面，
+    // 兩者重疊（線段很短／縮得很小）時抓到的是節點本身，不會誤觸「＋」而一直插入新節點、線段跳來跳去
+    const ordered = {};
+    Object.keys(controls).filter(k => k[0] === 'm').forEach(k => { ordered[k] = controls[k]; });
+    Object.keys(controls).filter(k => k[0] === 'p').forEach(k => { ordered[k] = controls[k]; });
+    return ordered;
 }
 /* ── 直線選取＝直接出現頭尾兩個端點圓點，拖曳即改線段長短/方向（不再是一般物件的整體縮放）──
    拖端點時把線攤平回 angle=0/scale=1 再用絕對座標重設 x1..y2（fabric.Line 的 _set 會自動重算外框），
@@ -3761,7 +3822,7 @@ function lineEndPositionHandler(which) {
     return function (dim, finalMatrix, o) {
         if (!o.canvas) return new fabric.Point(-99999, -99999);   // 已被移出畫布的殘留選取
         const p = anyLineEndpoints(o)[which];
-        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), o.canvas.viewportTransform);
+        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), (o.canvas || canvas).viewportTransform);
     };
 }
 function lineEndActionHandler(which) {
@@ -3827,7 +3888,7 @@ function dimStubPositionHandler(side) {
     return function (dim, finalMatrix, g) {
         if (!g.canvas) return new fabric.Point(-99999, -99999);
         const tip = dimStubTip(g, side);
-        return fabric.util.transformPoint(new fabric.Point(tip.x, tip.y), g.canvas.viewportTransform);
+        return fabric.util.transformPoint(new fabric.Point(tip.x, tip.y), (g.canvas || canvas).viewportTransform);
     };
 }
 function dimStubActionHandler(side) {
@@ -3889,7 +3950,7 @@ function dimEndPositionHandler(which) {
     return function (dim, finalMatrix, g) {
         if (!g.canvas) return new fabric.Point(-99999, -99999);
         const p = trueArrowEndpoints(g)[which];
-        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), g.canvas.viewportTransform);
+        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), (g.canvas || canvas).viewportTransform);
     };
 }
 function dimEndActionHandler(which) {
@@ -3970,12 +4031,18 @@ function toEditablePolyline(obj) {
         canvas.add(poly);
         return poly;
     }
-    if (obj.type !== 'line') return null;
-    const pts = lineAbsEndpoints(obj);
+    // 箭頭群組（單/雙箭頭）：轉成折線並把箭頭記在折線自己身上（arrowEnds），這樣箭頭也能折彎
+    const isArrowGrp = obj.type === 'group' && obj.isArrowGroup && !obj.dimKind && !obj.isDimGuide;
+    if (obj.type !== 'line' && !isArrowGrp) return null;
+    const pts = isArrowGrp ? trueArrowEndpoints(obj) : lineAbsEndpoints(obj);
+    const srcLine = isArrowGrp ? obj.getObjects().find(c => c.type === 'line') : obj;
+    if (!srcLine) return null;
+    const nTri = isArrowGrp ? obj.getObjects().filter(c => c.type === 'triangle').length : 0;
     const poly = new fabric.Polyline([{ x: pts[0].x, y: pts[0].y }, { x: pts[1].x, y: pts[1].y }], {
-        stroke: obj.stroke, strokeWidth: obj.strokeWidth, strokeDashArray: obj.strokeDashArray || null,
+        stroke: srcLine.stroke, strokeWidth: srcLine.strokeWidth, strokeDashArray: srcLine.strokeDashArray || null,
         fill: 'transparent', strokeUniform: true, strokeLineCap: 'round', strokeLineJoin: 'round'
     });
+    if (nTri) poly.arrowEnds = (nTri >= 2) ? 'both' : 'end';
     canvas.remove(obj);
     canvas.add(poly);
     return poly;
@@ -3996,6 +4063,22 @@ canvas.on('selection:cleared', function (e) {
 canvas.on('selection:updated', function (e) {
     (e && e.deselected || []).forEach(o => { if (o.__pointEditing) { exitPointEdit(o); canvas.requestRenderAll(); } });
 });
+/* 節點編輯的座標換算（官方範例）只在「沒旋轉、沒翻轉、沒縮放」時才正確；折線帶著角度（例如 180°）、
+   翻轉或縮放時，拖一個端點錨點會算錯，整條線就在畫面上亂跳。進入編輯前先把這些變形烙進節點座標，
+   物件本身歸零（外觀完全不變）。 */
+function bakePolyTransform(poly) {
+    if (!poly || !poly.points || !poly.canvas) return;
+    const noXf = !poly.angle && poly.scaleX === 1 && poly.scaleY === 1 && !poly.flipX && !poly.flipY;
+    if (noXf) return;
+    const m = poly.calcTransformMatrix();
+    const abs = poly.points.map(p => fabric.util.transformPoint({ x: p.x - poly.pathOffset.x, y: p.y - poly.pathOffset.y }, m));
+    if (abs.some(p => !isFinite(p.x) || !isFinite(p.y))) return;
+    poly.set({ angle: 0, scaleX: 1, scaleY: 1, flipX: false, flipY: false });
+    poly.points = abs.map(p => ({ x: p.x, y: p.y }));
+    poly._setPositionDimensions({});
+    poly.dirty = true;
+    poly.setCoords();
+}
 function togglePointEdit() {
     const obj = canvas.getActiveObject();
     if (!obj) return;
@@ -4008,6 +4091,7 @@ function togglePointEdit() {
     }
     const poly = toEditablePolyline(obj);
     if (!poly) { toast('只有直線、折線、矩形、不規則遮蓋可以編輯端點'); return; }
+    bakePolyTransform(poly);
     poly.__pointEditing = true;
     poly.objectCaching = false;       // 編輯中即時重繪，節點拖曳才不會殘影
     poly.hasBorders = false;
@@ -4031,6 +4115,7 @@ function togglePolyClosed() {
         strokeLineCap: obj.strokeLineCap, strokeLineJoin: obj.strokeLineJoin
     });
     np.curved = obj.curved;
+    np.arrowEnds = obj.arrowEnds;
     const idx = canvas.getObjects().indexOf(obj);
     canvas.remove(obj);
     canvas.add(np);
@@ -4062,9 +4147,16 @@ function togglePolySmooth() {
     fabric.Text.prototype._render = function (ctx) {
         origRender.call(this, ctx);
         if (this.doubleUnderline && this.underline) {
-            this.offsets = { underline: 0.24, linethrough: this.offsets.linethrough, overline: this.offsets.overline };
-            this._renderTextDecoration(ctx, 'underline');
-            delete this.offsets;   // 還原回 prototype 上的預設值（0.10）
+            const baseOff = this.offsets || fabric.Text.prototype.offsets || {};
+            this.offsets = { underline: 0.24, linethrough: baseOff.linethrough, overline: baseOff.overline };
+            try {
+                this._renderTextDecoration(ctx, 'underline');
+            } catch (e) {
+                // 第二條底線畫失敗不可連累整個文字物件（本體已畫完，略過即可）
+                console.warn('[EGdraw] 雙底線繪製失敗已略過：', e && e.message);
+            } finally {
+                delete this.offsets;   // 還原回 prototype 上的預設值（0.10），出錯也一定要還原
+            }
         }
     };
 })();
@@ -4244,6 +4336,25 @@ function insertSym(s) {
         return;
     }
     toast('請先雙擊要編輯的文字（或用文字工具點畫布）再按符號');
+}
+/* ISO 公差配合工具帶入：「Ø32F7+0.050^+0.025」。編輯中→插游標處；選取文字→附加；否則在視圖中央建立文字並轉成上下公差小字 */
+window.egIsoInsert = function (str) {
+    const obj = canvas.getActiveObject();
+    if (obj && (obj.isEditing || ((obj.type === 'i-text' || obj.type === 'text') && !obj.merged))) { insertSym(str); return; }
+    const c = viewCenter();
+    const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
+    const t = new fabric.IText(str, {
+        left: c.x, top: c.y, fontSize: size, fill: document.getElementById('p-textcolor').value,
+        fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif'
+    });
+    if (!isFinite(t.width) || !isFinite(t.height)) { toast('文字建立失敗，未插入'); return; }
+    canvas.add(t);
+    convertToTolGroup(t);
+};
+/* 齒輪計算：有鎖定／帶入的料號主檔時，開啟後自動帶入該料號的齒輪規格（多組可選）；沒有就與原本相同 */
+function openGearToolForPart() {
+    const d = (typeof pfLockedDid !== 'undefined' && pfLockedDid) || PRELOAD_PART_D_ID || 0;
+    openGearTool(d ? { dId: d } : undefined);
 }
 function nlInsertSym(s) {
     const ta = document.getElementById('nl-text');
@@ -6102,7 +6213,7 @@ function enterGroup(g) {
 canvas.on('mouse:dblclick', function (opt) {
     const t = opt.target;
     if (!t || currentTool !== 'select' || t.__pointEditing) return;
-    if (['line', 'polyline', 'polygon', 'rect'].includes(t.type) && !t.isDimGuide) {
+    if ((['line', 'polyline', 'polygon', 'rect'].includes(t.type) || (t.type === 'group' && t.isArrowGroup && !t.dimKind)) && !t.isDimGuide) {
         canvas.setActiveObject(t);
         togglePointEdit();
     }
@@ -6294,8 +6405,21 @@ canvas.on('object:moving', function (e) {
     src.clone(function (cl) {
         cl.set({ left, top });   // 複製品留在原位（src 已經被拖走了）
         reissueDimIds(cl);
-        canvas.add(cl);
-        cl.moveTo(canvas.getObjects().indexOf(src));  // 複製品墊在原件下方，使用者拖走的是原件
+        if (cl.type === 'activeSelection') {
+            // 多選（例如標註線＋C0.5 文字）：選取框本身不能直接丟進畫布，
+            // 子物件座標是相對於選取框的，直接 add 會讓文字消失、線段位移；
+            // 與 Ctrl+D 相同：逐一放回畫布並還原成絕對座標（不碰使用者正在拖的原件）
+            try {
+                cl.canvas = canvas;
+                cl.forEachObject(o => canvas.add(o));
+                cl.setCoords();
+                cl.destroy();
+            } catch (e) { console.warn('[EGdraw] Alt 複製多選例外：', e); }
+            canvas.requestRenderAll();
+        } else {
+            canvas.add(cl);
+            cl.moveTo(canvas.getObjects().indexOf(src));  // 複製品墊在原件下方，使用者拖走的是原件
+        }
         pushState();
     }, SNAP_PROPS);
 });
@@ -6515,6 +6639,17 @@ function pasteInternalOrCross() {
     if (crossIsNewer && cross.objs && cross.objs.length) {
         // 跨視窗貼上：優先還原成可編輯的向量物件（保留顏色/線型/文字內容等），不是扁平化圖片
         fabric.util.enlivenObjects(cross.objs, function (objs) {
+            if (cross.regroup && objs.length > 1) {
+                // 複製時選取的是「雙擊進入群組」拆出來的多選（例如公差疊字）：貼上時重新組回一個群組，不要散成好幾個
+                objs.forEach(o => { o.set({ left: (o.left || 0) + 20, top: (o.top || 0) + 20 }); reissueDimIds(o); o.setCoords(); });
+                const g = new fabric.Group(objs);
+                Object.assign(g, cross.regroup);
+                canvas.add(g); g.setCoords();
+                canvas.setActiveObject(g);
+                canvas.requestRenderAll();
+                pushState();
+                return;
+            }
             objs.forEach(o => { o.set({ left: (o.left || 0) + 20, top: (o.top || 0) + 20 }); reissueDimIds(o); canvas.add(o); o.setCoords(); });
             if (objs.length > 1) canvas.setActiveObject(new fabric.ActiveSelection(objs, { canvas }));
             else if (objs[0]) canvas.setActiveObject(objs[0]);
@@ -6535,6 +6670,10 @@ function pasteInternalOrCross() {
                 cl.canvas = canvas;
                 cl.forEachObject(o => canvas.add(o));
                 cl.setCoords();
+                if (internalClipRegroup && cl.size() > 1) {
+                    const g = cl.toGroup();
+                    if (g) { Object.assign(g, internalClipRegroup); canvas.setActiveObject(g); canvas.requestRenderAll(); pushState(); return; }
+                }
             } else canvas.add(cl);
             canvas.setActiveObject(cl);
             canvas.requestRenderAll();
@@ -6544,6 +6683,7 @@ function pasteInternalOrCross() {
     }
     return false;
 }
+let internalClipRegroup = null;   // 複製的是「進入群組」拆出的多選時，記下原群組屬性，貼上時組回群組
 
 /* Ctrl+C：內部複製（同視窗貼上用，保留完整 Fabric 物件）＋ 寫入跨視窗剪貼簿（把選取內容序列化成向量
    JSON，讓另一個視窗貼上時能重建成可編輯物件，不是扁平化圖片；序列化太大寫不進 localStorage 才退回
@@ -6569,11 +6709,13 @@ function serializeSelectionForClip(obj, cb) {
 function copySelection() {
     const obj = canvas.getActiveObject();
     if (!obj) return false;
+    internalClipRegroup = (obj.type === 'activeSelection' && obj._regroupProps) ? obj._regroupProps : null;
     obj.clone(function (cl) { internalClip = cl; internalClipTs = Date.now(); }, SNAP_PROPS);
     const ts = Date.now();
+    const regroup = internalClipRegroup;
     serializeSelectionForClip(obj, function (arr) {
         try {
-            localStorage.setItem(CLIP_KEY, JSON.stringify({ ts, objs: arr }));
+            localStorage.setItem(CLIP_KEY, JSON.stringify({ ts, objs: arr, regroup }));
             return;
         } catch (e) { /* 向量 JSON 太大，往下退回扁平化圖片 */ }
         try {
@@ -6588,6 +6730,7 @@ function copySelection() {
 function duplicateSelection() {
     const obj = canvas.getActiveObject();
     if (!obj) return;
+    const regroupP = (obj.type === 'activeSelection' && obj._regroupProps) ? obj._regroupProps : null;
     obj.clone(function (cl) {
         cl.set({ left: cl.left + 20, top: cl.top + 20 });
         reissueDimIds(cl);
@@ -6595,12 +6738,150 @@ function duplicateSelection() {
             cl.canvas = canvas;
             cl.forEachObject(o => canvas.add(o));
             cl.setCoords();
+            if (regroupP && cl.size() > 1) {
+                const g = cl.toGroup();
+                if (g) { Object.assign(g, regroupP); canvas.setActiveObject(g); canvas.requestRenderAll(); pushState(); return; }
+            }
         } else canvas.add(cl);
         canvas.setActiveObject(cl);
         canvas.requestRenderAll();
         pushState();
     }, SNAP_PROPS);
 }
+
+/* 齒輪計算工具「畫到圖面」：工具算好漸開線齒形（已縮成示意大小的點座標），這裡畫成一組向量線條，
+   放在目前畫面中央並選取，之後可拖角縮放、改線色線粗；Alt＋雙擊可進群組個別調整 */
+/* 自動標註尺寸（CAD 式）：尺寸界線固定在特徵上，使用者只能拖「有標示的那一端」（尺寸線的橘色圓點），
+   上下／左右移動就是調整標註離零件多遠；箭頭、尺寸線、文字跟著走，界線自動拉長縮短 */
+function gearDimItems(o, ox, oy, color) {
+    const HL = 9, fs = 18, items = [];
+    const ln = (x1, y1, x2, y2, w) => new fabric.Line([ox + x1, oy + y1, ox + x2, oy + y2], { stroke: color, strokeWidth: w || 1, strokeUniform: true });
+    const txt = (x, y, str, ang) => new fabric.Text(str, { left: ox + x, top: oy + y, originX: 'center', originY: 'center', fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif', angle: ang || 0 });
+    if (o.kind === 't') { if (o.lx != null) items.push(ln(o.lx, o.ly, o.x, o.y, 0.8)); items.push(txt(o.x, o.y, o.text)); }
+    else if (o.kind === 'h') {
+        const sg = (o.y >= o.e1) ? 1 : -1;
+        items.push(ln(o.x1 + HL, o.y, o.x2 - HL, o.y, 1.2));
+        items.push(arrowHeadTri(ox + o.x2, oy + o.y, 0, HL, color), arrowHeadTri(ox + o.x1, oy + o.y, 180, HL, color));
+        items.push(ln(o.x1, o.e1, o.x1, o.y + sg * 6, 0.8), ln(o.x2, o.e2, o.x2, o.y + sg * 6, 0.8));
+        items.push(txt((o.x1 + o.x2) / 2, o.y + sg * 13, o.text));
+    } else if (o.kind === 'v') {
+        const sg = (o.x >= o.e1) ? 1 : -1;
+        items.push(ln(o.x, o.y1 + HL, o.x, o.y2 - HL, 1.2));
+        items.push(arrowHeadTri(ox + o.x, oy + o.y2, 90, HL, color), arrowHeadTri(ox + o.x, oy + o.y1, -90, HL, color));
+        if (Math.abs(o.x - o.e1) > 1) items.push(ln(o.e1, o.y1, o.x + sg * 6, o.y1, 0.8), ln(o.e2, o.y2, o.x + sg * 6, o.y2, 0.8));
+        items.push(txt(o.x + sg * 13, (o.y1 + o.y2) / 2, o.text, -90));
+    } else return null;
+    return items;
+}
+function gearMakeDim(o, ox, oy, color) {
+    const items = gearDimItems(o, ox, oy, color);
+    if (!items) return null;
+    const g = new fabric.Group(items, {});
+    g.merged = true; g.autoDim = true;
+    g.dimSpec = JSON.parse(JSON.stringify(o)); g.dimOrigin = { x: ox, y: oy }; g.dimColor = color;
+    return g;
+}
+function gearDimRebuild(g) {
+    const sp = g.dimSpec, org = g.dimOrigin;
+    const tx = g.getObjects().find(c => c.type === 'text');
+    if (tx) sp.text = tx.text;   // 使用者改過的文字保留
+    const items = gearDimItems(sp, org.x, org.y, g.dimColor || '#000000');
+    if (!items) return false;
+    const tmp = new fabric.Group(items, {});
+    g._objects.forEach(c => { c.group = null; });
+    g._objects = tmp._objects;
+    g._objects.forEach(c => { c.group = g; });
+    g.set({ left: tmp.left, top: tmp.top, width: tmp.width, height: tmp.height, scaleX: 1, scaleY: 1, angle: 0 });
+    g.dirty = true; g.setCoords();
+    return true;
+}
+function gearDimControls() {
+    return {
+        dimoff: new fabric.Control({
+            positionHandler: function (dim, fm, g) {
+                if (!g.canvas || !g.dimSpec) return new fabric.Point(-99999, -99999);
+                const sp = g.dimSpec, o = g.dimOrigin;
+                const pt = (sp.kind === 'h') ? { x: o.x + (sp.x1 + sp.x2) / 2, y: o.y + sp.y } : { x: o.x + sp.x, y: o.y + (sp.y1 + sp.y2) / 2 };
+                return fabric.util.transformPoint(new fabric.Point(pt.x, pt.y), g.canvas.viewportTransform);
+            },
+            actionHandler: function (ev, tr, x, y) {
+                const g = tr.target, sp = g.dimSpec, o = g.dimOrigin;
+                if (!sp || !isFinite(x) || !isFinite(y)) return false;
+                if (sp.kind === 'h') sp.y = y - o.y; else sp.x = x - o.x;
+                return gearDimRebuild(g);
+            },
+            cursorStyle: 'move', actionName: 'moveDim',
+            render: function (ctx, left, top) {
+                ctx.save(); ctx.fillStyle = '#F0A24B'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
+            }
+        })
+    };
+}
+function refreshGearDimControls(e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__gdimCtl) { delete o.controls; delete o.__gdimCtl; } });
+    const obj = canvas.getActiveObject();
+    if (obj && obj.autoDim && obj.dimSpec && (obj.dimSpec.kind === 'h' || obj.dimSpec.kind === 'v') && !obj.__gdimCtl) {
+        obj.controls = gearDimControls();
+        obj.lockScalingX = obj.lockScalingY = obj.lockRotation = true;   // 不能縮放旋轉，拖曳＝只調整標示那一端
+        obj.__gdimCtl = true;
+    }
+}
+canvas.on('object:moving', function (e) {   // 直接拖標註本體：尺寸線跟著游標走，尺寸界線與特徵固定不動
+    const g = e.target;
+    if (!g || !g.autoDim || !g.dimSpec || (g.dimSpec.kind !== 'h' && g.dimSpec.kind !== 'v') || !e.e) return;
+    const pt = canvas.getPointer(e.e);
+    if (g.dimSpec.kind === 'h') g.dimSpec.y = pt.y - g.dimOrigin.y; else g.dimSpec.x = pt.x - g.dimOrigin.x;
+    gearDimRebuild(g);
+    canvas.requestRenderAll();
+});
+canvas.on('selection:created', refreshGearDimControls);
+canvas.on('selection:updated', refreshGearDimControls);
+canvas.on('selection:cleared', function (e) { ((e && e.deselected) || []).forEach(o => { if (o.__gdimCtl) { delete o.controls; delete o.__gdimCtl; } }); });
+window.egGearDrawHook = function (geo) {
+    const list = geo.rings.map(rg => {
+        if (rg.kind === 'text') return { text: rg.text, x: rg.x, y: rg.y, size: rg.size };
+        const W = { pitch: 1.5, bore: 2, hole: 2, cut: 3.5, cutline: 1.5 };
+        const D = { pitch: 'dashdot', pcd: 'dashdot', center: 'dashdot', tip: 'dashed', root: 'dashed', hidden: 'dashed' };
+        return { pts: rg.pts, closed: rg.closed, w: W[rg.kind] || 1, dash: D[rg.kind] || null, fill: rg.kind === 'arrow' };
+    });
+    list.push({ pts: geo.outline.pts, closed: geo.outline.closed, w: 2 });
+    window.egGearDrawItems(list, geo.desc, geo.dims);
+};
+/* items：[{pts:[{x,y}], closed, w(線粗), dash:'dashdot'|'dashed'|null}]，座標以圖形中心為原點 */
+window.egGearDrawItems = function (list, desc, dims) {
+    const color = '#000000';   // 一律預設黑色（不跟著目前工具的外框色，之後要改色再用上方屬性列）
+    const items = list.map(it => {
+        if (it.text) return new fabric.Text(it.text, { left: it.x, top: it.y, originX: 'center', originY: 'center', fontSize: it.size || 22, fill: color, fontFamily: 'Arial' });
+        const cls = it.closed ? fabric.Polygon : fabric.Polyline;
+        return new cls(it.pts.map(q => ({ x: q.x, y: q.y })), {
+            stroke: color, fill: it.fill ? color : 'transparent', strokeUniform: true, strokeLineJoin: 'round', objectCaching: false,
+            strokeWidth: it.w, strokeDashArray: it.dash ? dashArrayFor(it.dash, it.w) : null
+        });
+    });
+    const geo = { desc: desc };
+    const g = new fabric.Group(items, {});
+    g.merged = true;
+    const c = fabric.util.transformPoint(new fabric.Point(canvas.getWidth() / 2, canvas.getHeight() / 2), fabric.util.invertTransform(canvas.viewportTransform));
+    g.setPositionByOrigin(c, 'center', 'center');
+    g.setCoords();
+    canvas.add(g);
+    // 自動標註尺寸：每一個尺寸都是獨立物件（可單獨選取、刪除、Alt＋雙擊進入改文字）
+    if (dims && dims.length) {
+        try {
+            const first = g.getObjects()[0], ptsF = list[0].pts;
+            let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+            ptsF.forEach(q => { mnx = Math.min(mnx, q.x); mxx = Math.max(mxx, q.x); mny = Math.min(mny, q.y); mxy = Math.max(mxy, q.y); });
+            const ab = fabric.util.transformPoint(first.getCenterPoint(), g.calcTransformMatrix());
+            const ox = ab.x - (mnx + mxx) / 2, oy = ab.y - (mny + mxy) / 2;
+            dims.forEach(d => { const dg = gearMakeDim(d, ox, oy, color); if (dg) canvas.add(dg); });
+        } catch (err) { console.warn('[EGdraw] 自動標註尺寸失敗：', err); }
+    }
+    canvas.setActiveObject(g);
+    canvas.requestRenderAll();
+    pushState();
+    toast('已畫出' + (geo.desc || '齒形') + '：拖角縮放對齊圖面；線色線粗可在上方屬性列改');
+};
 
 /* ── 框選複製（把區域合成影像變新圖塊；白底視為透明，貼上時不蓋住下面的東西） ── */
 function doCropCopy(x, y, w, h) {
@@ -6627,7 +6908,64 @@ function doCropCopy(x, y, w, h) {
    只壓到框線一部分的物件無法切一半，保持原樣不動（也不會烙進切塊）。
    切下來的內容白底視為透明，拖到新位置不會蓋住下面的東西。
    用完停留在此工具可連續框選，按 Esc 或切換其他工具才離開 ── */
+/* 框選範圍只壓到一部分的「畫上去的線條形狀」（圓/橢圓/矩形/直線/折線/手繪線）：向量物件沒辦法只切掉一半，
+   以前是整個原封不動帶走，使用者框住圓的一段想刪／搬那一段，圓卻完好如初（2026-11-19 回報）。
+   這裡先把它們就地轉成透明背景的圖片（像「壓平選取」，外觀不變），之後就能和底圖一樣真正挖空那一段。
+   文字、標籤、群組、標註不動（維持整個帶走）。 */
+const CROP_FLATTEN_TYPES = ['ellipse', 'circle', 'rect', 'line', 'polyline', 'polygon', 'path'];
+function flattenPartialShapes(x, y, w, h, done) {
+    const inside = contentObjectsInRect(x, y, w, h);
+    // 已鎖定的線條形狀（例如鎖住的圓）原本被框選搬移完全跳過，使用者框住它卻挖不掉：
+    // 鎖定的也納入（不論完整在框內或只壓到一部分），轉成圖後維持鎖定
+    const targets = canvas.getObjects().filter(o => {
+        if (o.id === '__artboard' || o.visible === false || o.isDimGuide) return false;
+        if (!CROP_FLATTEN_TYPES.includes(o.type) || o.labelSpec || o.dimKind || o.isArrowGroup) return false;
+        const br = o.getBoundingRect(true, true);
+        if (br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h) return false;
+        return o.locked || inside.indexOf(o) === -1;
+    });
+    if (!targets.length) { done(); return; }
+    let left = targets.length;
+    const fin = () => { if (--left <= 0) done(); };
+    targets.forEach(o => {
+        const b = o.getBoundingRect(true, true);
+        const mult = Math.min(4, 8192 / Math.max(b.width, b.height, 1));
+        {
+            // 不用物件自己的 toDataURL：它算外框的方式和畫布上的 getBoundingRect 差一點點，
+            // 貼回去圖會縮一圈（線被裁細、位置偏）。改成「只留這一個物件、整張畫布照原範圍輸出」，
+            // 輸出範圍就是貼回去的範圍，像素完全對齊
+            let url = null;
+            const all = canvas.getObjects().concat([artboard]);
+            const vis = all.map(a => a.visible !== false);
+            const prevBg = canvas.backgroundColor;
+            try {
+                all.forEach(a => { a.visible = (a === o); });
+                canvas.backgroundColor = null;
+                url = exportRegionCanvasEl(b.left, b.top, b.width, b.height, mult).toDataURL('image/png');
+            } catch (e) { console.warn('[EGdraw] 框選前壓平形狀失敗：', e); }
+            finally { all.forEach((a, i) => { a.visible = vis[i]; }); canvas.backgroundColor = prevBg; }
+            if (!url || url.length < 100) { fin(); return; }
+            fabric.Image.fromURL(url, function (img) {
+                if (img && img.width && canvas.getObjects().indexOf(o) !== -1) {
+                    const idx = canvas.getObjects().indexOf(o);
+                    img.transparentBg = true;
+                    img.set({ left: b.left, top: b.top, scaleX: b.width / img.width, scaleY: b.height / img.height });
+                    if (o.locked) { img.locked = true; img.selectable = false; img.evented = false; }   // 鎖定的維持鎖定
+                    img.setCoords();
+                    canvas.remove(o);
+                    canvas.add(img);
+                    img.moveTo(idx);
+                }
+                fin();
+            });
+        }
+    });
+}
 function doCropMove(x, y, w, h) {
+    canvas.discardActiveObject();
+    flattenPartialShapes(x, y, w, h, function () { doCropMoveCore(x, y, w, h); });
+}
+function doCropMoveCore(x, y, w, h) {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     const bgObjs = backgroundImagesInRect(x, y, w, h);
@@ -7646,6 +7984,12 @@ async function pfSave() {
             : '已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
               (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''))
             + '｜' + savedWhere);
+        // 通知已開著的「主檔管理→附件跳窗」就地更新清單（同源分頁才收得到；失敗不影響存檔）
+        try {
+            const bc = new BroadcastChannel('eg_part_attach');
+            bc.postMessage({ type: 'saved', d_id: String(res.d_id || d), png_id: res.png_id || 0, no_workfile: !!noWorkfile });
+            bc.close();
+        } catch (eBc) { }
         status.style.color = '#7ed957';
         status.innerHTML = '<i class="fa fa-check-circle"></i> 已於 ' + savedAt + ' 儲存成功' + (noWorkfile ? '（僅圖片）' : '（圖片＋工作檔）')
                          + '<br>存入：' + escHtml(savedWhere);
@@ -7769,10 +8113,11 @@ function refreshPropbar() {
     if (currentTool === 'select') {
         document.getElementById('sec-stroke').classList.toggle('show', isStrokeable(obj));
         // 選到直線/箭頭時顯示「端點」下拉並回填目前模式，改選＝就地互換（見 p-line-ends change 監聽）
-        const canEnds = !!obj && isLineLike(obj) && !obj.dimKind && !obj.isDimGuide;
+        const isPolyLn = !!obj && obj.type === 'polyline';
+        const canEnds = !!obj && ((isLineLike(obj) && !obj.dimKind && !obj.isDimGuide) || isPolyLn);
         document.getElementById('wrap-line-ends').style.display = canEnds ? '' : 'none';
         if (canEnds) {
-            document.getElementById('p-line-ends').value = (obj.type === 'line') ? 'none'
+            document.getElementById('p-line-ends').value = isPolyLn ? (obj.arrowEnds || 'none') : (obj.type === 'line') ? 'none'
                 : (obj.getObjects().filter(c => c.type === 'triangle').length >= 2 ? 'both' : 'end');
         }
     }
@@ -7812,7 +8157,7 @@ function refreshPropbar() {
     }
     document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
     const epBtn = document.getElementById('btn-edit-points');
-    epBtn.style.display = (['line', 'polyline', 'polygon', 'rect'].includes(obj.type) && !obj.isDimGuide) ? '' : 'none';
+    epBtn.style.display = ((['line', 'polyline', 'polygon', 'rect'].includes(obj.type) || (obj.type === 'group' && obj.isArrowGroup && !obj.dimKind)) && !obj.isDimGuide) ? '' : 'none';
     epBtn.textContent = obj.__pointEditing ? '完成編輯' : '編輯端點';
     // 圓角滑桿：矩形（native rx/ry）與封閉/折線圖形（cornerRadius）可倒圓角
     const canCorner = ['rect', 'polygon', 'polyline'].includes(obj.type) && !obj.isDimGuide;
@@ -8033,7 +8378,9 @@ document.getElementById('p-width').addEventListener('change', function () {
 document.getElementById('p-line-style').addEventListener('change', function () {
     const v = this.value;
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.strokeDashArray = dashArrayFor(v, canvas.freeDrawingBrush.width || 3);
-    const obj = canvas.getActiveObject();
+    let obj = canvas.getActiveObject();
+    // 連續畫圖工具畫完後物件沒有被選取：此時改線型，順便套用到「剛畫完的那一個」（同時仍記成下一個的預設）
+    if (!obj && lastDrawnObj && canvas.getObjects().includes(lastDrawnObj) && currentTool !== 'select') obj = lastDrawnObj;
     const n = eachInSelection(obj, o => {
         if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
             o.set('strokeDashArray', dashArrayFor(v, o.strokeWidth || 3)); o.dirty = true; return true;
@@ -8045,6 +8392,13 @@ document.getElementById('p-line-style').addEventListener('change', function () {
 /* 端點下拉：選取既有直線/箭頭時改選＝就地互換（線↔單箭頭↔雙箭頭，保留顏色/粗細/線型與位置） */
 document.getElementById('p-line-ends').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
+    if (obj && obj.type === 'polyline') {   // 折線：箭頭記在折線自己身上，直接改屬性即可
+        obj.arrowEnds = (this.value === 'none') ? null : this.value;
+        obj.dirty = true;
+        canvas.requestRenderAll();
+        pushState();
+        return;
+    }
     if (!obj || !isLineLike(obj) || obj.dimKind || obj.isDimGuide) return;
     const line = (obj.type === 'line') ? obj : obj.getObjects().find(c => c.type === 'line');
     if (!line) return;
@@ -8349,6 +8703,8 @@ function deleteSelection() {
     const removed = (obj.type === 'activeSelection') ? obj.getObjects().slice() : [obj];
     removed.forEach(o => canvas.remove(o));
     canvas.discardActiveObject();
+    // 舊版 Alt+拖曳複製多選時，會把「選取框」本身當成一般物件丟進畫布而成為刪不掉的殘影：一併清掉
+    canvas.getObjects().slice().forEach(o => { if (o.type === 'activeSelection' || (o.group && o.group.type === 'activeSelection' && o.group !== obj)) canvas.remove(o); });
     // 角度標註整組連動刪除：刪標示→隱藏中的輔助線一併刪；刪輔助線→標示與另一條也一併刪
     const daIds = new Set(removed.map(o => o.dimAngleId).filter(Boolean));
     if (daIds.size) canvas.getObjects().slice().forEach(o => { if (o.dimAngleId && daIds.has(o.dimAngleId)) canvas.remove(o); });
@@ -8388,12 +8744,12 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
         }
     });
 }
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'cornerRadius', 'transparentBg', 'isLabelBgRect', 'distDir', 'distExtLeft', 'distExtRight', '__dimStubSide'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'arrowEnds', 'cornerRadius', 'transparentBg', 'isLabelBgRect', 'distDir', 'distExtLeft', 'distExtRight', '__dimStubSide', 'autoDim', 'dimSpec', 'dimOrigin', 'dimColor'];
 /* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
    未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
 let __egErrToasted = false;
 window.addEventListener('error', function (ev) {
-    console.warn('[EGdraw] 未攔截例外：', ev.message, ev.filename, ev.lineno);
+    console.warn('[EGdraw] 未攔截例外：', ev.message, ev.filename, ev.lineno, ev.error && ev.error.stack);
     if (!__egErrToasted) {
         __egErrToasted = true;
         toast('偵測到程式例外（畫面可能出現殘影或卡頓）：' + (ev.message || '不明錯誤') + '——建議儲存後重新整理，並回報這則訊息');
@@ -9850,6 +10206,10 @@ include __DIR__ . '/_keyway_tool_ui.php';
 // 內齒計算工具（2026-10-21 新增，獨立外掛檔、純前端；權限同齒輪計算＝$show_gear_tool）
 $INGEAR_TOOL_PDO = $pdo ?? null;
 include __DIR__ . '/_ingear_tool_ui.php';
+// ISO 286 公差配合工具（獨立外掛檔、純前端；權限同齒輪計算）
+$ISO_TOOL_PDO = $pdo ?? null;
+$iso_tool_dock_offset = '#label-lib';   // 標籤庫開著時 ISO 面板往左讓開，不遮住標籤庫
+include __DIR__ . '/_iso_fit_tool_ui.php';
 ?>
 </body>
 </html>
