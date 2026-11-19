@@ -2828,14 +2828,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
 <!-- 異常單處置決策 Modal（首要判定 / 最終裁決；由決策通知點入 ?decide_abnormal=N） -->
 <div class="modal fade" id="qaDecideModal" tabindex="-1" role="dialog" data-backdrop="static">
-    <div class="modal-dialog" style="width:1180px;max-width:96vw;"><div class="modal-content">
+    <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header" style="background:#c77c1a;color:#fff;border-radius:6px 6px 0 0;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
             <h4 class="modal-title"><i class="fa fa-gavel"></i> <span id="qadm_title">處置判定</span> — <span id="qadm_no"></span></h4>
         </div>
-        <div class="modal-body" style="max-height:82vh;overflow-y:auto;">
-            <iframe id="qadm_frame" src="about:blank" style="width:100%;height:52vh;border:1px solid #ddd;border-radius:6px;margin-bottom:10px;background:#fff;"></iframe>
-            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;display:none;">
+        <div class="modal-body" style="max-height:66vh;overflow-y:auto;">
+            <table class="table table-bordered" style="font-size:13px;margin-bottom:10px;">
                 <tr><th style="width:100px;background:#f8f9fa;">開單人</th><td id="qadm_creator"></td></tr>
                 <tr><th style="background:#f8f9fa;">來源</th><td id="qadm_src"></td></tr>
                 <tr><th style="background:#f8f9fa;">異常現象</th><td id="qadm_phen" style="white-space:pre-line;"></td></tr>
@@ -2953,6 +2952,8 @@ $(function(){
                 return;
             }
             if (!r.allowed){ alert('您不是此階段的決策者或其代理人，無法判定。'); return; }
+            // 直接改開異常單完整頁面（頁內即可決策）
+            window.location.replace('../QA/qa_abnormal_view.php?id=' + qaDecideAb); return;
             qadmStage = r.stage;
             var o = r.order;
             $('#qadm_no').text(o.no || '');
@@ -2960,7 +2961,7 @@ $(function(){
             $('#qadm_src').text(o.source_desc || '');
             $('#qadm_phen').text(o.phenomenon || '');
             $('#qadm_detail').text(o.defect_detail || '');
-            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id); $('#qadm_frame').attr('src', '../QA/qa_abnormal_view.php?embed=1&id=' + o.id);
+            $('#qadm_view').attr('href', '../QA/qa_abnormal_view.php?id=' + o.id);
             if (r.stage === 'final'){
                 $('#qadm_title').text('最終裁決');
                 $('#qadm_opt_label').html('最終裁決 <small class="text-muted">（寫入總經理裁示欄位）</small>');
