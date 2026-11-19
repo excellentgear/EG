@@ -702,7 +702,7 @@ if (!empty($all_boms)) {
         if ($_fk) {
             try {
                 // 實際發單批次可能全掛在其中一筆 bom_ing 底下，所以以「群組＋廠商」加總，再分給同廠商的那一筆
-                foreach ($db->query("SELECT bom_ing_fid, maker_id_no, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', array_keys($_fk)) . ") GROUP BY bom_ing_fid, maker_id_no")->fetchAll(PDO::FETCH_ASSOC) as $_s) {
+                foreach ($db->query("SELECT bom_ing_fid, maker_id_no, SUM(send_qty) s FROM bom_ing_outsource_batch WHERE bom_ing_fid IN (" . implode(',', array_keys($_fk)) . ") AND rework_order_id IS NULL GROUP BY bom_ing_fid, maker_id_no")->fetchAll(PDO::FETCH_ASSOC) as $_s) {
                     $_kk = $_fk[(int)$_s['bom_ing_fid']] . '|' . $_s['maker_id_no'];
                     $_mergedSendQty[$_kk] = ($_mergedSendQty[$_kk] ?? 0) + ($_s['s'] + 0);
                 }
@@ -1769,7 +1769,12 @@ try {
     require_once '../../src/common/bom_check_lib.php';
     $_bchk['csrf'] = eg_bomchk_csrf();
     $_bchk['canCheck'] = eg_bomchk_can_check($db, (int)$id);
-    $_bchk['canReport'] = eg_bomchk_can_report($db, (int)$id);
+    // 純 R（檢閱）權限者也不可回報：除了「唯讀」角色，另要求本頁至少有一項可異動的權限（舊版 CRUD 或細項功能碼）
+    $_bchkWritable = ($user_status == 1) || !empty($can_create) || !empty($can_update) || !empty($can_delete)
+        || !empty($oready_feat_mark_returned) || !empty($oready_feat_transfer) || !empty($oready_feat_batch)
+        || !empty($oready_feat_process_settings) || $_bchk['canCheck'];
+    $_bchk['canReport'] = $_bchkWritable && eg_bomchk_can_report($db, (int)$id);
+    $_bchk['reportToken'] = $_bchk['canReport'] ? eg_bomchk_report_token() : '';
     $_bchkMap = eg_bomchk_open_map($db);
     if ($_bchkMap) $_bchk['map'] = $_bchkMap;
     $_bchk['types'] = eg_bomchk_types($db);
@@ -3447,6 +3452,22 @@ echo "</script>\n";
         return (procs || []).some(function (q) {
             return ocGrp(q) > g && q.outsource_date && ['ing', 'Q', 'P', 'E'].indexOf(String(q.processing_state || '')) !== -1 && ocDateVal(q.outsource_date) >= qd;
         });
+    }
+    // QC已檢驗／完工、但生管這關仍是「加工中」（沒按已回廠）→ 等生管移轉。後序關卡已發包或憑單已移走則不算。
+    function ocQcDoneWaiting(p, procs) {
+        if (!p || String(p.processing_state || '') !== 'ing') return false;
+        var qd = String(p.QC_check_date || '').trim();
+        var hasQc = (p.QC_check && String(p.QC_check).trim() !== '') || (qd !== '' && qd.indexOf('0000') !== 0) || p.qc_completed == 1;
+        if (!hasQc) return false;
+        if (ocXferDone(p, procs)) return false;
+        var g = ocGrp(p);
+        return !(procs || []).some(function (q) {
+            return q !== p && ocGrp(q) > g && q.outsource_date && ['ing', 'Q', 'P', 'E'].indexOf(String(q.processing_state || '')) !== -1;
+        });
+    }
+    function ocRowQcDoneWaiting(row) {
+        var procs = (window.ingActiveMap || {})[String((row && row.bom) || '').trim()] || [];
+        return procs.some(function (p) { return ocQcDoneWaiting(p, procs); });
     }
     // 有新製程報工：報工過的最遠製程比目前製程更遠、而且那一關（或更後面）還沒有發包才算「新製程」；已經發包就不是新製程
     function egHasNewProcReport(row) {
@@ -6653,6 +6674,19 @@ echo "</script>\n";
                             _pDiv.appendChild(_sdv);
                         }
                     }
+                    // 重工批次（異常單判定重工後的重新發單）：獨立標示，每一次回廠日都記錄（逐次回廠紀錄），不混進一般發單／回廠數量
+                    if (_obm && Array.isArray(_obm.rework_batches)) {
+                        _obm.rework_batches.forEach(function (rb) {
+                            var _rd = document.createElement('div');
+                            _rd.style.cssText = 'font-size:11px;line-height:1.3;color:#fff;background:#DD5138;border-radius:3px;padding:0 6px;margin-top:2px;font-weight:bold;display:inline-block;';
+                            var _rr = (rb.returns || []).filter(function (x) { return (Number(x.qty) || 0) > 0 || (Number(x.scrap) || 0) > 0; }).map(function (x) { return (Number(x.qty) || 0) + '(' + String(x.date || '').slice(5) + ')'; }).join('＋');
+                            _rd.style.cursor = 'pointer';
+                            _rd.addEventListener('click', function (ev) { ev.stopPropagation(); window.open('../QC/inspection_entry_v2.php?bom_ing_fid=' + encodeURIComponent(_proc.bom_ing_fid) + '&rework_order_id=' + encodeURIComponent(rb.order_id), '_blank'); });
+                            _rd.textContent = '重工 ' + (rb.order_no ? rb.order_no + ' ' : '') + '發' + (Number(rb.send) || 0) + (rb.send_date ? '(' + rb.send_date.slice(5) + ')' : '') + ' 回' + (_rr || '0') + ((Number(rb.outside) || 0) > 0 ? ' 在外' + (Number(rb.outside) || 0) : '');
+                            _rd.title = '重工批次：' + (rb.maker || '') + '　發 ' + rb.send + '　已回 ' + rb.ret + (rb.scrap > 0 ? '　報廢 ' + rb.scrap : '') + '　（不計入本站一般發單／回廠數量）　點一下開啟重工檢驗（自動帶入異常單與本筆BOM製程）';
+                            _pDiv.appendChild(_rd);
+                        });
+                    }
                     var _st  = String(_proc.processing_state || '');
                     var _fid = String(_proc.bom_ing_fid || '');
                     var _iid = String(_proc.bom_ing_id  || '');
@@ -6714,6 +6748,17 @@ echo "</script>\n";
                         _ingBtnRow.appendChild(_ingBtn);
                         _pDiv.appendChild(_ingBtnRow);
                         _lastBtnRow = _ingBtnRow;
+                        // QC已檢驗／完工但這關還是加工中：顯示QC結果並提示生管確認回廠移轉
+                        if (ocQcDoneWaiting(_proc, _activeProcs)) {
+                            var _qcNg = (_proc.QC_check === 'ng');
+                            var _qcMd = formatDateAsMd(_proc.QC_check_date || _proc.qc_completed_at);
+                            var _qcTip = document.createElement('div');
+                            _qcTip.className = 'bv-qcwait';
+                            _qcTip.style.cssText = 'font-size:11px;line-height:1.25;font-weight:bold;margin-top:1px;text-align:right;color:' + (_qcNg ? '#DD5138' : '#B8431F') + ';';
+                            _qcTip.textContent = 'QC ' + (_qcMd ? _qcMd + ' ' : '') + (_qcNg ? '✗NG' : '✓OK') + (_proc.sqty && !_qcNg ? ' ' + _proc.sqty + 'pcs' : '') + '　QC已檢驗，請生管確認回廠移轉';
+                            _qcTip.title = '品管已有檢驗' + (_proc.qc_completed == 1 ? '／完工' : '') + '紀錄，但這一關在生管端仍是「加工中」，請生管確認回廠並移轉';
+                            _pDiv.appendChild(_qcTip);
+                        }
                     } else if (_st === 'N' && _proc.batch_label) {
                         // 拆分批次尚未發包（N 狀態）→ 顯示待發包標籤
                         var _nRow = document.createElement('div');
@@ -6817,10 +6862,13 @@ echo "</script>\n";
                             // QC 已完成，待移轉（依 QC_check 決定顏色：ng→紅，其餘→綠）
                             var _batchOkTip = (_proc.QC_check_date ? _proc.QC_check_date + ' ' : '') + (_proc.sqty ? _proc.sqty + ' pcs' : '') + (_proc.QC_ps ? ' ('+_proc.QC_ps+')' : '');
                             var _isNg = (_proc.QC_check === 'ng');
-                            _batchLightsHtml = _isNg
+                            // 沒有任何檢驗結果（QC_check 空）＝回廠後還沒檢驗，不可亮綠燈寫「允收 N pcs」（2026-11-17）
+                            _batchLightsHtml = (!_isNg && !_proc.QC_check)
+                                ? '<figure class="circle_gray" style="margin-left:5px;margin-right:3px;" title="回廠後尚未檢驗"></figure>'
+                                : _isNg
                                 ? '<figure class="circle_red" style="margin-left:5px;margin-right:3px;cursor:pointer;" data-toggle="popover" data-placement="top" data-container="body" data-trigger="hover" title="判定NG" data-content="' + escapeHtml(_batchOkTip) + '"></figure>'
                                 : '<figure class="circle_greenS" style="margin-left:5px;margin-right:3px;cursor:pointer;" data-toggle="popover" data-placement="top" data-container="body" data-trigger="hover" title="允收" data-content="' + escapeHtml(_batchOkTip) + '"></figure>';
-                            if (_proc.sqty) _batchLightsHtml += '<small>' + _proc.sqty + '</small>';
+                            if (_proc.sqty && (_isNg || _proc.QC_check)) _batchLightsHtml += '<small>' + _proc.sqty + '</small>';
                         }
                         if (_batchLightsHtml) {
                             var _batchSpan = document.createElement('span');
@@ -8489,7 +8537,7 @@ echo "</script>\n";
         // 製程
         if (filters.pti && !window._matchPti(row, filters.pti)) show = false;
         // 狀態
-        if (filters.status && row.processing_state !== filters.status) show = false;
+        if (filters.status && row.processing_state !== filters.status && !(filters.status === 'P' && ocRowQcDoneWaiting(row))) show = false;
 
         // 發單數 (包含比較符；Qty 或 sqty 均可)
         if (filters.order) {
@@ -10018,7 +10066,8 @@ echo "</script>\n";
                     const isUnbound = !row.d_setting_id || String(row.d_setting_id).trim() === '';
                     if (!isUnbound) show = false;
                 } else { // Regular processing_state filter (e.g., 'P', 'Q', 'ing', 'E')
-                    if (String(row.processing_state || '').trim() !== filters.status) {
+                    if (String(row.processing_state || '').trim() !== filters.status
+                        && !(filters.status === 'P' && ocRowQcDoneWaiting(row))) { // QC已檢驗但生管仍標加工中的，也算檢驗完成待移轉
                         show = false;
                     }
                 }
@@ -12930,6 +12979,9 @@ echo "</script>\n";
         } catch (e) {}
     }
     function _ormRefreshMain() {
+        // 與 markAsReturned 相同：使用者剛按完按鈕，文字框／下拉的「聚焦中」旗標可能還卡著，
+        // 不先放掉的話 fetchDataAndFilter 會直接跳過更新（畫面就停在舊狀態、也不報錯）
+        try { isSelectFocused = false; isTextareaFocused = false; isUpdatingOrderId = false; isPriorityUpdating = false; } catch (e) {}
         try { if (typeof fetchDataAndFilter === 'function') fetchDataAndFilter(); } catch (e) {}
     }
     function openOutsourceReturnModal(proc, rowData) {
@@ -13061,7 +13113,7 @@ echo "</script>\n";
             if (!row || !sel) return;
             if (_ormBatches.length < 2) { row.style.display = 'none'; sel.innerHTML = ''; _ormPickBatch(); return; }
             sel.innerHTML = _ormBatches.map(function (b) {
-                return '<option value="' + b.batch_id + '">' + escapeHtml(egVP(b.maker_id || b.maker_id_no || '未指定廠商') + '　送 ' + _obNum(b.send_qty) + '，還在外 ' + _obNum(b.outside)) + '</option>';
+                return '<option value="' + b.batch_id + '">' + escapeHtml(((Number(b.rework_order_id) > 0) ? '【重工】' : '') + egVP(b.maker_id || b.maker_id_no || '未指定廠商') + '　送 ' + _obNum(b.send_qty) + '，還在外 ' + _obNum(b.outside)) + '</option>';
             }).join('');
             if (prefer) sel.value = String(prefer);
             row.style.display = '';
