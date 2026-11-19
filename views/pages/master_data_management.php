@@ -25112,8 +25112,9 @@ function openRevisionLog() {
                      ? (escHtml(x.old_revision || '—') + ' → <b>' + escHtml(x.new_revision || '—') + '</b>')
                      : '<span style="color:#aaa;">未變更</span>';
             var intr = (x.int_old_revision || x.int_new_revision)
-                     ? ((x.int_old_revision ? egFmtDate(x.int_old_revision) : '（首次）') + ' → <b>'
-                        + (x.int_new_revision ? egFmtDate(x.int_new_revision) : '—') + '</b>')
+                     ? (x.int_old_revision
+                        ? (egFmtDate(x.int_old_revision) + ' → <b>' + (x.int_new_revision ? egFmtDate(x.int_new_revision) : '—') + '</b>')
+                        : '<b>' + (x.int_new_revision ? egFmtDate(x.int_new_revision) : '—') + '</b>')
                      : '<span style="color:#aaa;">未變更</span>';
             var src = x.change_no
                     ? ('<a href="../QC/drawing_change_log.php?id=' + x.change_id + '" target="_blank">圖面變更單 '
