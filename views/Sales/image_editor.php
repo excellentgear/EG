@@ -7130,7 +7130,7 @@ function doCropMoveCore(x, y, w, h) {
     canvas.requestRenderAll();
     const bgObjs = backgroundImagesInRect(x, y, w, h);
     const moved = contentObjectsInRect(x, y, w, h);   // 完整落在框內：烙進切塊並從原處移除
-    const carried = contentObjectsTouchingRect(x, y, w, h).filter(o => moved.indexOf(o) === -1);   // 只壓到一部分：原封不動一起帶走
+    const carried = contentObjectsTouchingRect(x, y, w, h).filter(o => moved.indexOf(o) === -1 && bgObjs.indexOf(o) === -1);   // 只壓到一部分：原封不動一起帶走（標籤圖改成挖空，不帶走）
     const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1 && moved.indexOf(o) === -1);
     const prevVis = others.map(o => o.visible !== false);
     others.forEach(o => { o.visible = false; });   // 只藏「部分壓框」與框外的物件；框內物件留著＝跟複製一樣烙進圖
@@ -7336,9 +7336,14 @@ function pointInPoly(px, py, pts) {
 /* 框選範圍內、屬於「底圖」的 fabric.Image（排除標籤/球標等其他物件與畫布本身） */
 function backgroundImagesInRect(x, y, w, h) {
     return canvas.getObjects().filter(o => {
-        if (o.type !== 'image' || o.id === '__artboard' || o.labelSpec || o.labelKind) return false;
+        if (o.type !== 'image' || o.id === '__artboard') return false;
         const br = o.getBoundingRect(true, true);
-        return !(br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h);
+        if (br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h) return false;
+        if (o.labelSpec || o.labelKind) {   // 標籤圖：只壓到一部分＝當底圖挖空那一塊（例如框掉標籤上的「G」再重新存成新標籤）；完整框住的走原本整個切走
+            const inside = br.left >= x - 2 && br.top >= y - 2 && br.left + br.width <= x + w + 2 && br.top + br.height <= y + h + 2;
+            return !inside;
+        }
+        return true;
     });
 }
 /* 把底圖在選取範圍內的部分真正挖空（燒進圖片像素填色），而不是疊一層遮板；
@@ -8624,13 +8629,23 @@ document.getElementById('p-textcolor').addEventListener('input', function () {
 document.getElementById('p-fontsize').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
     const v = Math.max(6, parseInt(this.value, 10) || 28);
-    let dimN = 0;   // 齒輪圖／剖面圖的自動標註：字級記在標註規格裡，改了要重畫那個標註（直接改文字物件會在下次拖標註時被洗回預設）
+    let dimN = 0;   // 齒輪圖／剖面圖的自動標註：字級記在標註規格裡
     if (obj) {
-        const sel = obj.type === 'activeSelection' ? obj.getObjects().slice() : [obj];
-        if (sel.some(o => o && o.autoDim && o.dimSpec)) {
-            if (obj.type === 'activeSelection') canvas.discardActiveObject();   // 先解除多選：多選時子物件座標是相對於選取框的，直接重畫會讓標註全部跳位
-            sel.forEach(o => { if (o && o.autoDim && o.dimSpec) { gearDimSyncOrigin(o); o.dimSpec.fs = v; if (gearDimRebuild(o, true)) dimN++; } });
-            if (obj.type === 'activeSelection') { try { canvas.setActiveObject(new fabric.ActiveSelection(sel, { canvas: canvas })); } catch (e) {} }
+        // 找出選取內所有自動標註（含被使用者「群組」進別的群組裡的）
+        const all = [];
+        (function walk(o) { if (!o) return; if (o.autoDim && o.dimSpec) { all.push(o); return; } if (o._objects) o._objects.forEach(walk); })(obj);
+        if (all.length) {
+            const top = all.filter(o => !o.group || o.group.type === 'activeSelection');   // 單獨存在的標註：可以重畫（連文字與尺寸線距離一起重排）
+            const nested = all.filter(o => top.indexOf(o) === -1);                         // 在群組裡的標註：座標不是畫布座標，不能重畫（會跳位），只改文字大小
+            const wasMulti = obj.type === 'activeSelection', sel = wasMulti ? obj.getObjects().slice() : null;
+            if (top.length && wasMulti) canvas.discardActiveObject();
+            top.forEach(o => { gearDimSyncOrigin(o); o.dimSpec.fs = v; if (gearDimRebuild(o, true)) dimN++; });
+            nested.forEach(o => {
+                o.dimSpec.fs = v;
+                const fixText = c => { if (c.type === 'text' || c.type === 'i-text') { c.set({ fontSize: v }); c.dirty = true; } else if (c._objects) c._objects.forEach(fixText); };
+                o._objects.forEach(fixText); o.dirty = true; let g = o.group; while (g) { g.dirty = true; g = g.group; } dimN++;
+            });
+            if (top.length && wasMulti) { try { canvas.setActiveObject(new fabric.ActiveSelection(sel, { canvas: canvas })); } catch (e) {} }
         }
     }
     if (dimN) { canvas.requestRenderAll(); pushState(); return; }
