@@ -3313,10 +3313,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                     var Pa = vert ? { x: 0, y: sg * c1 } : { x: sg * c1, y: 0 }, Pb = vert ? { x: 0, y: sg * c2 } : { x: sg * c2, y: 0 };
                     var dir = toCenter ? (vert ? { x: 0, y: -sg } : { x: -sg, y: 0 }) : (vert ? { x: dsg, y: 0 } : { x: 0, y: dsg }), nn = { x: -dir.y, y: dir.x };
                     rings.push({ pts: sc([Pa, Pb]), closed: false, kind: 'cut' });
-                    rings.push({ pts: sc([Pb, { x: Pb.x + dir.x * ah, y: Pb.y + dir.y * ah }]), closed: false, kind: 'cutline' });
-                    var tip = { x: Pb.x + dir.x * ah * 1.25, y: Pb.y + dir.y * ah * 1.25 }, bc = { x: Pb.x + dir.x * ah * 0.8, y: Pb.y + dir.y * ah * 0.8 };
+                    // 箭頭「比著」切割線（->|）：箭桿在切割線的後方、尖端頂到切割線端點，方向＝看過去的方向
+                    rings.push({ pts: sc([{ x: Pb.x - dir.x * ah * 1.25, y: Pb.y - dir.y * ah * 1.25 }, Pb]), closed: false, kind: 'cutline' });
+                    var tip = { x: Pb.x, y: Pb.y }, bc = { x: Pb.x - dir.x * ah * 0.45, y: Pb.y - dir.y * ah * 0.45 };
                     rings.push({ pts: sc([tip, { x: bc.x + nn.x * ah * 0.14, y: bc.y + nn.y * ah * 0.14 }, { x: bc.x - nn.x * ah * 0.14, y: bc.y - nn.y * ah * 0.14 }]), closed: true, kind: 'arrow' });
-                    var tp = sc([{ x: Pb.x + dir.x * ah * 1.9, y: Pb.y + dir.y * ah * 1.9 }])[0];
+                    var tp = sc([{ x: Pb.x - dir.x * ah * 1.9, y: Pb.y - dir.y * ah * 1.9 }])[0];
                     rings.push({ kind: 'text', text: 'A', x: tp.x, y: tp.y, size: 22 });
                 });
             }
@@ -4542,7 +4543,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         });
                     } catch (e) { console.warn('[gear3d] 線稿材質失敗', e); }
                     try {
-                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 0), 20) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 0), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
                         viewer.SetBackgroundColor(style === 'line' ? new OV.RGBAColor(255, 255, 255, 255) : new OV.RGBAColor(247, 243, 238, 255));
                     } catch (e) { console.warn('[gear3d] 樣式設定失敗', e); }
                     if (first) g3Fit(); else viewer.Render();   // 之後重畫不動相機，免得每次都被轉回預設角度
