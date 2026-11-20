@@ -49,6 +49,11 @@ $__here  = str_replace(chr(92), '/', __DIR__);
 if ($__droot !== '' && strpos($__here, $__droot) === 0) {
     $__gear_api_url = substr($__here, strlen($__droot)) . '/gear_tool_api.php';
 }
+// 3D 預覽用的函式庫網址（o3dv，點開才載入）：同樣推成網站絕對路徑
+$__gt3_dir  = __DIR__ . '/../../resource/js/';
+$__gt3_fs   = str_replace(chr(92), '/', (string)realpath($__gt3_dir));
+$__gt3_root = str_replace(chr(92), '/', (string)realpath($_SERVER['DOCUMENT_ROOT'] ?? ''));
+$__gt3_url  = ($__gt3_fs && $__gt3_root && strpos($__gt3_fs, $__gt3_root) === 0) ? substr($__gt3_fs, strlen($__gt3_root)) : '../../resource/js';
 ?>
 <?php if ($show_gear_tool): ?>
 <script>
@@ -214,6 +219,12 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         .gear-tab-btn.sp-tab.active { color:#5b2c6f; border-bottom-color:#6c3483; background:#fdf5ff; }
         .gear-tab-btn.sp-tab:not(:disabled):hover { color:#9b59b6; }
         .tab-beta-badge { display:inline-block; font-size:9px; font-weight:700; color:#fff; background:#e67e22; border-radius:3px; padding:0 3px; margin-left:4px; vertical-align:middle; line-height:14px; letter-spacing:0; }
+        #sp-int-gfx-panel { position:fixed; z-index:700; display:none; flex-direction:column; background:#fff; color:#333; border:1px solid #e0b27a; border-radius:6px 0 0 6px; box-shadow:-6px 0 18px rgba(0,0,0,.30); font-family:"Microsoft JhengHei","PingFang TC",sans-serif; font-size:12px; box-sizing:border-box; }
+        #sp-int-gfx-panel .gfxh { background:linear-gradient(135deg,#5b3a1a,#e67e22); color:#fff; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; border-radius:6px 0 0 0; }
+        #sp-int-gfx-panel .gfxh button { background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:4px; padding:1px 8px; cursor:pointer; }
+        #sp-int-gfx-panel .gfxb { padding:8px; overflow-y:auto; flex:1 1 auto; }
+        .sp-gfx svg { display:block; max-width:100%; height:auto; background:#fffdf9; border:1px solid #e3d3b8; border-radius:6px; }
+        .sp-gfx { overflow:hidden; }
         .sp-warn-box { background:#fffbea; border:1px solid #f5c518; border-radius:4px; padding:6px 10px; font-size:11px; color:#7d6608; margin-top:6px; }
         .sp-err-box  { background:#fff0f0; border:1px solid #f5c5c5; border-radius:4px; padding:6px 10px; font-size:11px; color:#c0392b; margin-top:6px; }
         .sp-est-badge   { display:inline-block; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; border-radius:3px; padding:1px 5px; font-size:10px; font-weight:700; }
@@ -302,6 +313,17 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         </div>
         <?php endif; ?>
     </div><!-- /hdr -->
+
+    <!-- 料號齒輪規格帶入：放在分頁列上方，不論目前在哪個分頁都看得到（多組規格時要在這裡選） -->
+    <div id="g-part-card" style="flex:0 0 auto;margin:0;padding:5px 10px;background:#FBF1E1;border-bottom:1px solid #F0D2A0;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <b style="font-size:11.5px;color:#5a3a12;white-space:nowrap;">料號齒輪規格帶入</b>
+            <input type="text" id="g-part-q" class="gear-input" placeholder="輸入料號搜尋（可不填）" autocomplete="off" style="flex:1;min-width:0;padding:2px 6px;">
+        </div>
+        <div id="g-part-res" style="display:none;margin-top:3px;border:1px solid #e3d3b8;border-radius:4px;background:#fff;max-height:150px;overflow-y:auto;"></div>
+        <div id="g-part-info" style="font-size:11px;color:#5a3a12;"></div>
+        <div id="g-part-gears"></div>
+    </div>
 
     <!-- 分頁 -->
     <div class="gear-tabs">
@@ -504,6 +526,102 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                             <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
                         </div>
                         <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
+                    </div>
+                    <!-- 把算好的齒形畫到圖面（只有批圖編輯器這類提供 egGearDrawHook 的頁面才會顯示） -->
+                    <div id="g-draw-block" style="display:none;margin-top:10px;padding:8px 10px;background:#fff8ee;border:1px solid #f0c98f;border-radius:5px;">
+                        <div style="font-size:11px;font-weight:700;color:#a35a00;margin-bottom:6px;"><i class="fa fa-pencil"></i> 把齒形畫到圖面（先按「計算齒輪」）</div>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;">
+                            <select id="g-draw-mode" class="gear-input" style="width:auto;" onchange="document.getElementById('g-draw-n-wrap').style.display=(this.value==='part')?'':'none'">
+                                <option value="full">整個齒輪外形</option>
+                                <option value="part" selected>局部（連續幾個齒）</option>
+                            </select>
+                            <span id="g-draw-n-wrap">齒數 <input type="number" id="g-draw-n" class="gear-input" style="width:56px;" value="4" min="1" max="12" step="1"></span>
+                            <label style="display:flex;align-items:center;gap:3px;"><input type="checkbox" id="g-draw-pitch"> 節圓</label>
+                            <label style="display:flex;align-items:center;gap:3px;"><input type="checkbox" id="g-draw-tip"> 齒頂圓</label>
+                            <label style="display:flex;align-items:center;gap:3px;"><input type="checkbox" id="g-draw-root"> 齒根圓</label>
+                            <button class="btn-gear-calc" type="button" onclick="gearDrawToCanvas()"><i class="fa fa-pencil"></i> 畫到圖面</button>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;font-size:12px;flex-wrap:wrap;">
+                            <span title="齒部端面外緣的倒角。0.5＝C0.5（45°）；R1＝圓角；1@30＝軸向距離 1、與軸線 30°（距端面多少、幾度導過去）；Ø66@30＝端面上 Ø66 處往中心、與端面 30° 導角。">齒端倒角 <input type="text" id="g-draw-c" class="gear-input" style="width:120px;" placeholder="0.5 / R1 / 1@30 / Ø66@30"></span>
+                            <select id="g-draw-cend" class="gear-input" style="width:auto;" title="倒角畫在齒部的哪一端（剖面圖左端＝第 1 段那一側）"><option value="both">兩端</option><option value="left">只有左端</option><option value="right">只有右端</option></select>
+                        </div>
+                        <div style="font-size:10px;color:#8a5a2b;margin-top:4px;line-height:1.5;">畫出來是一組向量線條（不含齒根圓角），尺寸只是示意，畫完自己拖角縮放對齊圖面；Alt＋雙擊可進入群組個別調整。</div>
+                        <div style="border-top:1px dashed #f0c98f;margin-top:8px;padding-top:6px;">
+                            <div style="font-size:11px;font-weight:700;color:#a35a00;margin-bottom:2px;">剖面圖（外形與內孔分開輸入）</div>
+                            <div style="font-size:11px;color:#6b4a1d;line-height:1.6;margin-bottom:4px;"><b>數字欄可直接打算式</b>（例：32-18.5-2+1、(40-14)/2，漏打開頭的括號也行：40-14)/2），按 Enter 或離開欄位就自動算出結果。想像零件橫放、軸線水平。<b>外形</b>與<b>內孔</b>各自由左到右分段，兩邊的分段位置不必對齊。每段填直徑與長度；<b>迄徑/錐度</b>留空＝直的；填數字＝該段右端的直徑；填 <b>1/10</b>（或 1:10）＝錐度、填 <b>3°</b>＝半錐角（預設往右變小，前面加「−」＝往右變大）（起徑漸變到迄徑）；左／右倒角填 C 值（45°）。外形有一段要選「齒部」（外徑留空自動用 da，節圓線只畫在這一段）。<button class="btn-gear-clr" type="button" style="padding:1px 8px;margin-left:4px;" onclick="gearSegExample()">帶入範例</button></div>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:4px 0 2px;">① 外形（外徑 × 長度，由左到右）　<label style="font-weight:400;"><input type="checkbox" id="g-taper-out" onchange="gearTaperApply()"> 有錐度段</label></div>
+                            <div class="g-seg-head" data-list="out" style="display:grid;grid-template-columns:62px repeat(4,minmax(0,1fr)) 72px;gap:3px 4px;font-size:10.5px;font-weight:600;color:#8a5a2b;"><span>段落</span><span>外徑</span><span class="g-th-taper" style="display:none;" title="迄徑，或錐度：1/10、1:10（每長度1/10的直徑變化）或 3°（半錐角）。預設往右變小，前面加 − 號＝往右變大">迄徑/錐度</span><span>長度</span><span title="倒角：0.5＝C0.5；R1＝圓角；1@30＝軸向1、與軸線30°；Ø60@30＝端面上Ø60處起、與端面30°">左倒角</span><span title="倒角：0.5＝C0.5；R1＝圓角；1@30＝軸向1、與軸線30°；Ø60@30＝端面上Ø60處起、與端面30°">右倒角</span><span></span></div>
+                            <div id="g-seg-list" data-kind="out"></div>
+                            <button class="btn-gear-clr" type="button" onclick="gearSegAdd('out')">＋ 外形再加一段（往右）</button>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">② 內孔（孔徑 × 長度，由左到右）　<label style="font-weight:400;">孔從 <select id="g-bore-align" class="gear-input" style="width:auto;padding:1px 2px;"><option value="left">左端面</option><option value="right">右端面</option></select> 起算（短於全長＝盲孔）</label>　<label style="font-weight:400;"><input type="checkbox" id="g-taper-bore" onchange="gearTaperApply()"> 有錐度段</label></div>
+                            <div class="g-seg-head" data-list="bore" style="display:grid;grid-template-columns:62px repeat(4,minmax(0,1fr)) 72px;gap:3px 4px;font-size:10.5px;font-weight:600;color:#8a5a2b;"><span>段落</span><span>孔徑</span><span class="g-th-taper" style="display:none;" title="迄徑，或錐度：1/10、1:10 或 3°（半錐角）。預設往右變小，前面加 − 號＝往右變大">迄徑/錐度</span><span>長度</span><span title="倒角：0.5＝C0.5；R1＝圓角；1@30＝軸向1、與軸線30°；Ø60@30＝端面上Ø60處起、與端面30°">左倒角</span><span title="倒角：0.5＝C0.5；R1＝圓角；1@30＝軸向1、與軸線30°；Ø60@30＝端面上Ø60處起、與端面30°">右倒角</span><span></span></div>
+                            <div id="g-bore-list" data-kind="bore"></div>
+                            <button class="btn-gear-clr" type="button" onclick="gearSegAdd('bore')">＋ 內孔再加一段（往右）</button>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">③ 內鍵槽（在內孔上方；寬與深會標在端面圖上）</div>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+                                <label><input type="checkbox" id="g-key-on"> 有內鍵槽</label>
+                                <select id="g-key-seg" class="gear-input" style="width:auto;" title="鍵槽開在哪一個內徑段上"><option value="-1">整個內孔</option></select>
+                                <span>寬 <input type="number" id="g-key-w" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="從孔壁往外多挖的深度">深 <input type="number" id="g-key-t" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="從所選內徑段的左端算起，空白＝0">起點 <input type="number" id="g-key-x" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="空白＝一直到所選內徑段結束">長度 <input type="number" id="g-key-l" class="gear-input" style="width:56px;" min="0" step="any" placeholder="貫穿"></span>
+                            </div>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">③＋ 外鍵槽（開在外徑上；畫在剖面圖上，位置固定在正上方）</div>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+                                <label><input type="checkbox" id="g-okey-on"> 有外鍵槽</label>
+                                <select id="g-okey-seg" class="gear-input" style="width:auto;" title="鍵槽開在哪一個外徑段上"></select>
+                                <span>寬 <input type="number" id="g-okey-w" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="從外徑表面往下的深度">深 <input type="number" id="g-okey-t" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="從所選外徑段的左端算起，空白＝0">起點 <input type="number" id="g-okey-x" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="空白＝一直到所選外徑段結束">長度 <input type="number" id="g-okey-l" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                            </div>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">④ 端面螺孔</div>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+                                <label><input type="checkbox" id="g-hole-on"> 有螺孔</label>
+                                <select id="g-hole-face" class="gear-input" style="width:auto;" title="螺孔開在哪一個端面"><option value="left">左端面</option><option value="right">右端面</option></select>
+                                <select id="g-hole-size" class="gear-input" style="width:auto;" title="粗牙螺紋規格（牙距自動帶入）"><option value="3,0.5">M3x0.5</option><option value="4,0.7">M4x0.7</option><option value="5,0.8" selected>M5x0.8</option><option value="6,1">M6x1</option><option value="8,1.25">M8x1.25</option><option value="10,1.5">M10x1.5</option><option value="12,1.75">M12x1.75</option></select>
+                                <span>數量 <input type="number" id="g-hole-n" class="gear-input" style="width:48px;" value="2" min="1" max="24" step="1"></span>
+                                <span title="第一個孔的角度（從正上方順時針量）。要每個孔角度不同，直接用逗號分開打，例：0,100,250（此時數量自動以個數為準）">角度 <input type="text" id="g-hole-ang" class="gear-input" style="width:84px;" value="0" placeholder="0 或 0,100,250">°</span>
+                                <span title="相鄰兩孔之間的夾角；空白＝平均分佈">孔間夾角 <input type="text" id="g-hole-step" class="gear-input" style="width:56px;" placeholder="平均">°</span>
+                                <span title="螺孔中心所在圓的直徑">分佈圓 PCD <input type="number" id="g-hole-pcd" class="gear-input" style="width:64px;" min="0" step="any"></span>
+                                <span>螺紋深 <input type="number" id="g-hole-depth" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="空白＝螺紋深＋半個螺紋外徑">鑽孔深 <input type="number" id="g-hole-drill" class="gear-input" style="width:56px;" min="0" step="any" placeholder="自動"></span>
+                            </div>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">⑤ 外徑徑向螺孔（可與端面螺孔並存）</div>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+                                <label><input type="checkbox" id="g-rad-on"> 有外徑螺孔</label>
+                                <select id="g-rad-size" class="gear-input" style="width:auto;"><option value="3,0.5">M3x0.5</option><option value="4,0.7">M4x0.7</option><option value="5,0.8" selected>M5x0.8</option><option value="6,1">M6x1</option><option value="8,1.25">M8x1.25</option><option value="10,1.5">M10x1.5</option><option value="12,1.75">M12x1.75</option></select>
+                                <span>數量 <input type="number" id="g-rad-n" class="gear-input" style="width:48px;" value="1" min="1" max="24" step="1"></span>
+                                <span title="第一個孔的角度（從正上方順時針量，0＝正上方）。要每個孔角度不同，直接用逗號分開打，例：0,100,250（此時數量自動以個數為準）">角度 <input type="text" id="g-rad-ang" class="gear-input" style="width:84px;" value="0" placeholder="0 或 0,100,250">°</span>
+                                <span title="相鄰兩孔之間的夾角；空白＝平均分佈">孔間夾角 <input type="text" id="g-rad-step" class="gear-input" style="width:56px;" placeholder="平均">°</span>
+                                <select id="g-rad-align" class="gear-input" style="width:auto;" title="是否把角度對到齒頂或齒底（依目前計算的齒數）"><option value="any">角度任意</option><option value="tip">對齊齒頂</option><option value="root">對齊齒底</option></select>
+                                <span title="孔中心在軸向（沿軸線方向）離左端面多遠。空白＝自動放在齒部那一段的正中央">軸向位置 <input type="number" id="g-rad-x" class="gear-input" style="width:64px;" min="0" step="any" placeholder="齒部中央"></span>
+                                <span>螺紋深 <input type="number" id="g-rad-depth" class="gear-input" style="width:56px;" min="0" step="any"></span>
+                                <span title="空白＝螺紋深＋半個螺紋外徑（只在「指定深度」時使用）">鑽孔深 <input type="number" id="g-rad-drill" class="gear-input" style="width:56px;" min="0" step="any" placeholder="自動"></span>
+                                <select id="g-rad-thru" class="gear-input" style="width:auto;" title="孔要鑽多深：指定深度＝用上面的螺紋深／鑽孔深；貫穿到內孔＝鑽穿這一側的壁到內徑為止；全部貫穿＝兩側的壁都鑽穿"><option value="depth">指定深度</option><option value="bore">貫穿到內孔</option><option value="all">全部貫穿（兩側）</option></select>
+                            </div>
+                            <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">⑥ 自動標註尺寸（標上去的每一個尺寸都是獨立物件，可單獨刪除、雙擊改文字）</div>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
+                                <label><input type="checkbox" id="g-dim-on" checked> 畫出尺寸標註</label>
+                                <label title="剖面圖上標示齒部兩端的倒角"><input type="checkbox" id="g-dim-ch-gear" checked> 標示齒端倒角</label>
+                                <label title="剖面圖上標示其他外形段的倒角／圓角"><input type="checkbox" id="g-dim-ch-out" checked> 標示外形倒角</label>
+                                <label title="剖面圖上標示內孔的倒角／圓角"><input type="checkbox" id="g-dim-ch-bore" checked> 標示內孔倒角</label>
+                                <label title="剖面圖是否畫出非 0/90/180/270° 角度的螺孔（虛線）"><input type="checkbox" id="g-show-obl" checked> 顯示斜角度螺孔</label>
+                                <span title="直接接在外徑尺寸後面。上下偏差堆疊用 ^，例：+0^-0.02（上排 +0、下排 -0.02）；對稱偏差直接打 ±0.02">外徑公差 <input type="text" id="g-tol-od" class="gear-input" style="width:84px;" placeholder="+0^-0.02 或 ±0.02"></span>
+                                <span title="直接接在孔徑尺寸後面。上下偏差堆疊用 ^，例：+0.027^0；對稱偏差直接打 ±0.01">孔徑公差 <input type="text" id="g-tol-id" class="gear-input" style="width:84px;" placeholder="+0.027^0 或 ±0.01"></span>
+                                <span title="直接接在長度尺寸後面。例：±0.1，或上下偏差堆疊 +0.1^-0.05">長度公差 <input type="text" id="g-tol-len" class="gear-input" style="width:84px;" placeholder="±0.1"></span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                                <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="g-draw-hatch" checked> 剖面線</label>
+                                <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="斜線之間的距離（畫面像素，數字越大越疏）">間距 <input type="number" id="g-draw-hatch-gap" class="gear-input" style="width:56px;" value="28" min="3" max="60" step="1"></label>
+                                <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="孔口、孔階的可見邊線（連接上下兩半的垂直線）"><input type="checkbox" id="g-draw-edge" checked> 孔口連線</label>
+                                <select id="g-view-side" class="gear-input" style="width:auto;" title="端面圖從哪一側的端面看過去（決定哪些圓看得到＝實線、被擋住＝虛線）"><option value="right">端面圖：從右端面看</option><option value="left">端面圖：從左端面看</option></select>
+                                <select id="g-cut-dir" class="gear-input" style="width:auto;" title="A-A 剖面切割線在端面圖上的畫法與看過去的方向。垂直線＝剖面切在上下方向（0°／180° 的孔會被切到）；水平線＝切在左右方向（90°／270° 的孔會被切到）"><option value="v-right">切割線垂直，箭頭朝右</option><option value="v-left">切割線垂直，箭頭朝左</option><option value="h-down">切割線水平，箭頭朝下</option><option value="h-up">切割線水平，箭頭朝上</option><option value="v-center">切割線垂直，箭頭指向中心線</option><option value="h-center">切割線水平，箭頭指向中心線</option></select>
+                                <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="端面圖也畫出內孔、鍵槽與螺孔"><input type="checkbox" id="g-draw-endbore" checked> 端面圖含孔／鍵槽／螺孔</label>
+                                <button class="btn-gear-calc" type="button" onclick="gearDrawSection()"><i class="fa fa-pencil"></i> 畫剖面圖</button>
+                                <button class="btn-gear-calc" type="button" onclick="gearDraw3D()" title="依目前的外形、內孔、倒角、鍵槽、螺孔、齒形（含螺旋角）產生可旋轉的 3D 模型"><i class="fa fa-cube"></i> 3D 預覽</button>
+                            </div>
+                        </div>
                     </div>
                 </div><!-- /right -->
             </div><!-- /two-col -->
@@ -1002,6 +1120,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 <!-- 左：輸入 -->
                 <div class="gear-col-left">
                     <div class="gear-section-title">內花鍵 輸入參數</div>
+                    <div class="sp-int-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:0 8px;">
                     <div class="gear-field-group">
                         <label>標準</label>
                         <select id="sp-int-std" class="gear-input" onchange="splineIntStdChange()">
@@ -1037,8 +1156,22 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         <input type="number" id="sp-int-bt" class="gear-input" step="any" placeholder="0">
                     </div>
                     <div class="gear-field-group">
-                        <label>轉位係數 x <small style="color:#999;">空白=0</small></label>
+                        <label>轉位係數 x <small style="color:#999;">同外花鍵／標準表示，空白=0</small></label>
                         <input type="number" id="sp-int-x" class="gear-input" step="any" placeholder="0">
+                    </div>
+                    <div id="sp-int-dnom-wrap" class="gear-field-group" style="display:none;">
+                        <label>基準直徑 d_B <small style="color:#999;">DIN5480，填了自動算 x</small></label>
+                        <input type="number" id="sp-int-dnom" class="gear-input" step="any" placeholder="例：55">
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <div class="gear-field-group" style="flex:1;">
+                            <label>小徑 di <small style="color:#999;">空白=公式</small></label>
+                            <input type="number" id="sp-int-di-in" class="gear-input" step="any" placeholder="圖面標準值">
+                        </div>
+                        <div class="gear-field-group" style="flex:1;">
+                            <label>大徑 Df <small style="color:#999;">空白=公式</small></label>
+                            <input type="number" id="sp-int-df-in" class="gear-input" step="any" placeholder="圖面標準值">
+                        </div>
                     </div>
                     <div class="gear-field-group">
                         <label>齒根形式</label>
@@ -1047,7 +1180,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                             <option value="fillet">圓弧 Fillet Root（hf*=1.50）</option>
                         </select>
                     </div>
-                    <div style="display:flex;gap:6px;">
+                    <div style="display:contents;">
                         <div class="gear-field-group" style="flex:1;">
                             <label>精度等級 <small style="color:#999;">4~7 / Q3~Q12</small></label>
                             <input type="text" id="sp-int-q" class="gear-input" placeholder="例：7">
@@ -1065,6 +1198,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         <label>測棒直徑 dp <small style="color:#999;">空白=1.68mn</small></label>
                         <input type="number" id="sp-int-dp" class="gear-input" step="any" placeholder="自動">
                     </div>
+                    </div><!-- /sp-int-grid -->
                     <div style="margin-top:6px;display:flex;gap:6px;">
                         <button class="btn-spline-calc" onclick="calcSplineInt()"><i class="fa fa-calculator"></i> 計算</button>
                         <button class="btn-gear-clr" onclick="clearSplineInt()">清除</button>
@@ -2767,7 +2901,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
 
         // 花鍵 內
         bindSeqEnter(['sp-int-mn','sp-int-pd','sp-int-z','sp-int-an','sp-int-bt',
-                      'sp-int-x','sp-int-q','sp-int-dp'], window.calcSplineInt);
+                      'sp-int-x','sp-int-dnom','sp-int-q','sp-int-dp'], window.calcSplineInt);
         // 花鍵 內：測棒換算
         bindSeqEnter(['sp-int-conv-dp2'], window.calcSplineConvInt);
 
@@ -2917,11 +3051,1341 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         });
     }
 
-    window.openGearTool = function() {
+    // ── 料號齒輪規格帶入（2026-11-11）：資料取自主檔管理設定的齒輪規格，唯讀查詢 ───────────
+    var _gpGears = [];
+    function gpEsc(t){ return escapeHtml(String(t == null ? '' : t)); }
+    window.gearLoadPart = function(dId, autoFill) {
+        var info = document.getElementById('g-part-info'), box = document.getElementById('g-part-gears');
+        if (!info || !box || !dId) return;
+        info.textContent = '讀取齒輪規格中…'; box.innerHTML = '';
+        gearAjax.post({action:'gear_part_specs', d_id: dId}, function(res){
+            if (!res || !res.success) { info.textContent = (res && res.message) || '讀取失敗'; return; }
+            _gpGears = res.gears || [];
+            var pn = res.part ? (res.part.D_Setting_Id || '') : '';
+            if (!_gpGears.length) { info.textContent = pn + '：主檔尚未設定齒輪規格'; return; }
+            info.innerHTML = '料號 <b>' + gpEsc(pn) + '</b>　共 ' + _gpGears.length + ' 組齒輪規格' + (_gpGears.length > 1 ? '，請選擇要帶入的一組：' : '');
+            var h = '';
+            _gpGears.forEach(function(g, i){
+                var dest = g.kind === 'int' ? '內花鍵' : (g.kind === 'ext' ? '外花鍵' : (g.kind === 'any' ? '' : '基本計算'));
+                var btns = (g.kind === 'any')
+                  ? '<button type="button" class="gear-preset-btn" data-gp-fill="' + i + '" data-gp-as="int"' + (g.fillable ? '' : ' disabled') + '>帶入內花鍵</button><button type="button" class="gear-preset-btn" data-gp-fill="' + i + '" data-gp-as="ext"' + (g.fillable ? '' : ' disabled') + '>帶入外花鍵</button>'
+                  : '<button type="button" class="gear-preset-btn" data-gp-fill="' + i + '"' + (g.fillable ? '' : ' disabled') + '>帶入' + (g.label ? ' ' + gpEsc(g.label) : '') + '→' + dest + '</button>';
+                h += '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap;">' + btns
+                  + '<span style="font-size:11.5px;font-family:Consolas,monospace;">' + (g.label ? gpEsc(g.label) + '：' : '') + gpEsc(g.summary || '—')
+                  + (g.type ? ' <span style="color:#888;">（' + gpEsc(g.type) + '）</span>' : '')
+                  + (g.fillable ? '' : ' <span style="color:#DD5138;">（缺模數或齒數，無法帶入）</span>') + '</span></div>';
+            });
+            box.innerHTML = h;
+            if (autoFill && _gpGears.length === 1 && _gpGears[0].fillable && _gpGears[0].kind !== 'any') window.gearFillBasic(0);
+        });
+    };
+    window.gearFillBasic = function(i, asKind) {
+        var g = _gpGears[i]; if (!g || !g.fillable) return;
+        function set(id, v){ var e = document.getElementById(id); if (e) e.value = v; }
+        var kind = asKind || g.kind;
+        if (kind === 'int' || kind === 'ext') {            // 花鍵：帶進對應的花鍵分頁（外／內）
+            var pre = 'sp-' + kind + '-';
+            if (g.std) set(pre + 'std', g.std);
+            if (g.std === 'ANSIB922') set(pre + 'pd', g.pd); else set(pre + 'mn', g.mod);
+            set(pre + 'z', g.teeth);
+            set(pre + 'an', g.pa || 30);
+            set(pre + 'x', g.x || '');
+            set(pre + 'bt', g.helix || '');
+            if (g.std === 'DIN5480' && g.dnom) set(pre + 'dnom', g.dnom);
+            if (g.q) set(pre + 'q', g.q);
+            if (g.fit) {   // 配合代號只收該分頁下拉有的選項（內：大寫 H/JS/K；外：小寫）
+                var fe = document.getElementById(pre + 'fit'), f1 = kind === 'int' ? g.fit.toUpperCase() : g.fit.toLowerCase();
+                if (fe) for (var o = 0; o < fe.options.length; o++) if (fe.options[o].value === f1) { fe.value = f1; break; }
+            }
+            if (kind === 'int' && window.splineIntStdChange) window.splineIntStdChange();
+            if (kind === 'ext' && window.splineExtStdChange) window.splineExtStdChange();
+            var tb = document.getElementById('gtab-sp-' + kind); if (tb) window.switchGearTab('sp-' + kind, tb);
+            var inf = document.getElementById('g-part-info');
+            if (inf) { var ds0 = inf.querySelectorAll('div'); for (var k0 = 0; k0 < ds0.length; k0++) ds0[k0].parentNode.removeChild(ds0[k0]);
+                inf.innerHTML += '<div style="color:#2e7d32;font-weight:700;">✔ 已帶入' + (kind === 'int' ? '內花鍵' : '外花鍵') + '分頁，可手動修改後按計算</div>'; }
+            return;
+        }
+        set('g-mn-unit', g.unit || 'M'); set('g-mn', g.mod); set('g-z', g.teeth);
+        var an = parseFloat(g.pa); if (isFinite(an) && an > 0) window.setAlphaN(an); else window.setAlphaN(20);
+        set('g-x', g.x || '');
+        var rd = document.getElementById('g-bt-mode-deg'); if (rd) rd.checked = true;
+        window.toggleBetaMode('deg'); set('g-bt', g.helix || '');
+        window.updateGearMnDisplay();
+        var info = document.getElementById('g-part-info');
+        if (info) info.innerHTML += '<div style="color:#2e7d32;font-weight:700;">✔ 已帶入' + (g.label ? ' ' + gpEsc(g.label) : '') + '（模數、齒數、壓力角、轉位係數、螺旋角），可手動修改後按「計算齒輪」</div>';
+        var st = info && info.querySelector('div'); // 只保留最新一則提示
+        if (info) { var ds = info.querySelectorAll('div'); for (var k = 0; k < ds.length - 1; k++) ds[k].parentNode.removeChild(ds[k]); }
+    };
+    var _gpTimer = null;
+    function gpInit() {
+        var card = document.getElementById('g-part-card'); if (!card || card.getAttribute('data-gp') === '1') return;
+        card.setAttribute('data-gp', '1');
+        var q = document.getElementById('g-part-q'), res = document.getElementById('g-part-res');
+        q.addEventListener('input', function(){
+            clearTimeout(_gpTimer);
+            var v = q.value.trim();
+            if (!v) { res.style.display = 'none'; return; }
+            _gpTimer = setTimeout(function(){
+                gearAjax.post({action:'gear_part_search', q: v}, function(r){
+                    var rows = (r && r.rows) || [];
+                    if (!rows.length) { res.innerHTML = '<div style="padding:4px 8px;color:#999;font-size:11px;">查無已設定齒輪規格的料號</div>'; res.style.display = 'block'; return; }
+                    res.innerHTML = rows.map(function(x){
+                        return '<div data-gp-pick="' + x.d_id + '" style="padding:3px 8px;cursor:pointer;font-size:11.5px;border-bottom:1px solid #f1e6d3;">'
+                            + gpEsc(x.D_Setting_Id) + (x.Spec_No ? ' <span style="color:#888;">' + gpEsc(x.Spec_No) + '</span>' : '')
+                            + ' <span style="color:#b85c0d;">' + x.gear_cnt + ' 組</span></div>';
+                    }).join('');
+                    res.style.display = 'block';
+                });
+            }, 250);
+        });
+        card.addEventListener('click', function(e){
+            var t = e.target.closest ? e.target.closest('[data-gp-pick],[data-gp-fill]') : null; if (!t) return;
+            if (t.hasAttribute('data-gp-fill')) { window.gearFillBasic(parseInt(t.getAttribute('data-gp-fill'), 10), t.getAttribute('data-gp-as') || ''); return; }
+            res.style.display = 'none';
+            window.gearLoadPart(parseInt(t.getAttribute('data-gp-pick'), 10), true);
+        });
+    }
+
+    // opt.dId＝要帶入齒輪規格的料號主檔 d_id（呼叫端知道是哪個料號時才傳；沒傳＝與原本完全相同）
+    /* 齒形（漸開線）幾何：端面截形，齒中心線在上方。純數學，不碰任何畫面；
+       畫到圖面由呼叫頁提供 window.egGearDrawHook(幾何) 負責（批圖編輯器）。 */
+    window.gearDrawToCanvas = function() {
+        var p = _baseParams;
+        if (!p) { alert('請先按「計算齒輪」'); return; }
+        if (!window.gearEvalAll()) { alert('有數字欄的算式無法計算（紅框處），請修改'); return; }
+        if (typeof window.egGearDrawHook !== 'function') return;
+        var z = p.z, mn = p.mn, x = p.x || 0, an = p.alpha_n, at = p.alpha_t;
+        var mt = mn / Math.cos(p.beta || 0);
+        var r = mt * z / 2, rb = r * Math.cos(at), ra = p.da / 2;
+        var rf = ((p.df != null) ? p.df : (mt * z - 2 * mn * (1.25 - x))) / 2;
+        var internal = !!p.internal;
+        var ri = p.da / 2, RfI = (mt * z + 2 * mn * (1.25 - x)) / 2, Router = 0;
+        if (internal) {
+            var og = readSegs('g-seg-list', true).filter(function (q) { return q.gear && q.D1 > 0; })[0];
+            if (!og) { alert('內齒輪請在「外形」的齒部填外徑（內齒的外圓）'); return; }
+            Router = og.D1 / 2;
+            if (!(Router > RfI) || !(ri < RfI)) { alert('內齒輪外徑必須大於齒根圓（' + (2 * RfI).toFixed(2) + '）'); return; }
+        } else if (!(ra > rf) || !(rb > 0)) { alert('齒頂圓必須大於齒根圓，請確認轉位係數與外徑'); return; }
+        var rView = internal ? Router : ra, rTip = internal ? ri : ra, rRoot = internal ? RfI : rf;
+        var r0 = Math.max(rb, rf);
+        var s = mt * Math.PI / 2 + 2 * x * mn * Math.tan(an);       // 節圓上的端面齒厚
+        var hp = s / (2 * r);
+        var invAt = inv(at);
+        function phi(rr) { var a = Math.acos(Math.min(1, rb / rr)); return Math.max(0, hp + invAt - inv(a)); }
+        function P(rr, th) { return { x: rr * Math.sin(th), y: -rr * Math.cos(th) }; }
+        var pitchAng = 2 * Math.PI / z, phi0 = phi(r0), phiTip = phi(ra);
+        var NF = 14, NT = 6, NR = 6;
+        function arc(rr, a1, a2, n, pts) { for (var i = 0; i <= n; i++) pts.push(P(rr, a1 + (a2 - a1) * i / n)); }
+        function tooth(tc, pts) {
+            for (var i = 0; i <= NF; i++) { var rr = r0 + (ra - r0) * i / NF; pts.push(P(rr, tc - phi(rr))); }
+            arc(ra, tc - phiTip, tc + phiTip, NT, pts);
+            for (var j = NF; j >= 0; j--) { var r2 = r0 + (ra - r0) * j / NF; pts.push(P(r2, tc + phi(r2))); }
+        }
+        var full = (document.getElementById('g-draw-mode').value === 'full');
+        var nShow = Math.max(1, Math.min(12, parseInt(document.getElementById('g-draw-n').value, 10) || 4));
+        if (!full && nShow >= z) full = true;
+        var pts = [], ringSpan = null, first = 0;
+        if (internal) {
+            var rlo = Math.max(ri, rb * 1.0001);
+            var hsI = (mt * Math.PI / 2 - 2 * x * mn * Math.tan(an)) / (2 * r);      // 節圓上齒槽半角（近似）
+            var phiT = function (rr) { return Math.max(0, Math.PI / z - (hsI + invAt - inv(Math.acos(Math.min(1, rb / rr))))); };
+            var toothI = function (tc, arr) {
+                var ii;
+                for (ii = 0; ii <= NF; ii++) { var r1 = RfI + (rlo - RfI) * ii / NF; arr.push(P(r1, tc - phiT(r1))); }
+                arc(rlo, tc - phiT(rlo), tc + phiT(rlo), NT, arr);
+                for (ii = NF; ii >= 0; ii--) { var r2 = RfI + (rlo - RfI) * ii / NF; arr.push(P(r2, tc + phiT(r2))); }
+            };
+            var phR = phiT(RfI);
+            if (full) {
+                for (var ti0 = 0; ti0 < z; ti0++) { var tcI = ti0 * pitchAng; toothI(tcI, pts); arc(RfI, tcI + phR, tcI + pitchAng - phR, NR, pts); }
+            } else {
+                first = -(nShow - 1) / 2 * pitchAng;
+                arc(RfI, first - pitchAng / 2, first - phR, NR, pts);
+                for (var tk = 0; tk < nShow; tk++) { var tcJ = first + tk * pitchAng; toothI(tcJ, pts); arc(RfI, tcJ + phR, tcJ + pitchAng - phR, NR, pts); }
+                ringSpan = [first - pitchAng * 1.2, first + (nShow - 1) * pitchAng + pitchAng * 1.2];
+            }
+        } else if (full) {
+            for (var i = 0; i < z; i++) {
+                var tc = i * pitchAng;
+                if (rf < r0) pts.push(P(rf, tc - phi0));
+                tooth(tc, pts);
+                if (rf < r0) pts.push(P(rf, tc + phi0));
+                arc(rf, tc + phi0, tc + pitchAng - phi0, NR, pts);
+            }
+        } else {
+            first = -(nShow - 1) / 2 * pitchAng;      // 以第 0 齒為中央，左右對稱
+            arc(rf, first - pitchAng / 2, first - phi0, NR, pts);
+            for (var k = 0; k < nShow; k++) {
+                var tc2 = first + k * pitchAng;
+                if (rf < r0) pts.push(P(rf, tc2 - phi0));
+                tooth(tc2, pts);
+                if (rf < r0) pts.push(P(rf, tc2 + phi0));
+                arc(rf, tc2 + phi0, tc2 + pitchAng - phi0, NR, pts);
+            }
+            ringSpan = [first - pitchAng * 1.2, first + (nShow - 1) * pitchAng + pitchAng * 1.2];
+        }
+        // 縮放：整圈 → 外徑約 520px；局部 → 全部齒的寬度約 460px（只是示意大小，畫完自己拉到對齊）
+        var scale = full ? (520 / (2 * rView)) : (460 / (nShow * Math.PI * mt));
+        function sc(a) { return a.map(function (q) { return { x: q.x * scale, y: q.y * scale }; }); }
+        var rings = [];
+        function ring(rr, kind) {
+            var a = [];
+            if (full) { arc(rr, 0, 2 * Math.PI, 120, a); a.pop(); }
+            else arc(rr, ringSpan[0], ringSpan[1], 40, a);
+            rings.push({ pts: sc(a), closed: full, kind: kind });
+        }
+        if (document.getElementById('g-draw-pitch').checked) ring(r, 'pitch');
+        if (document.getElementById('g-draw-tip').checked) ring(rTip, 'tip');
+        if (document.getElementById('g-draw-root').checked) ring(rRoot, 'root');
+        if (internal) ring(Router, 'bore');   // 內齒：外圓
+        var chG = parseCham(document.getElementById('g-draw-c').value, ra, false);
+        if (chG && chG.bad) { alert('齒端倒角格式不對（例：0.5、R1、1@30、Ø66@30）'); return; }
+        var cham = chG ? chG.rd : 0;
+        if (!internal && cham > 0 && ra - cham > rf) {   // 端面圖上的倒角線：齒頂外圓往內縮倒角量
+            var rrc = ra - cham, phc = phi(rrc), tcs = [], ti;
+            if (full) { for (ti = 0; ti < z; ti++) tcs.push(ti * pitchAng); }
+            else { for (ti = 0; ti < nShow; ti++) tcs.push(first + ti * pitchAng); }
+            tcs.forEach(function (tcc) { var aa = []; arc(rrc, tcc - phc, tcc + phc, 6, aa); rings.push({ pts: sc(aa), closed: false, kind: 'chamfer' }); });
+        }
+        // 端面圖：內孔（含鍵槽缺口）與端面螺孔（螺紋小徑整圈粗線、外徑 3/4 圈細線、分佈圓一點鏈線）
+        if (document.getElementById('g-draw-endbore').checked) {
+            var bsegs = readSegs('g-bore-list', false), kyp = keyParams(), hlp = holeParams();
+            if (kyp === false || hlp === false) return;
+            var TAU = 2 * Math.PI, bi;
+            // 視角：從左或右端面看過去（決定哪些圓看得到＝實線、哪些被擋住＝虛線）
+            var osegs = readSegs('g-seg-list', true).filter(function (q) { return q.L > 0; });
+            var viewRight = (document.getElementById('g-view-side').value === 'right');
+            var totalL = 0; osegs.forEach(function (q) { totalL += q.L; });
+            var boreTot = 0; bsegs.forEach(function (q) { boreTot += q.L || 0; });
+            var bx0v = (document.getElementById('g-bore-align').value === 'right') ? totalL - boreTot : 0, bEndv = bx0v + boreTot;
+            var faceBore = null;   // 開口在所看那一面的孔段
+            if (bsegs.length) {
+                if (!viewRight && bx0v <= 1e-6) faceBore = bsegs[0];
+                if (viewRight && (bEndv >= totalL - 1e-6)) faceBore = bsegs[bsegs.length - 1];
+            }
+            var rbF = faceBore && faceBore.D1 > 0 ? (viewRight ? (faceBore.D2 || faceBore.D1) : faceBore.D1) / 2 : 0;
+            var kseg = (kyp && kyp.si >= 0 && bsegs[kyp.si]) ? bsegs[kyp.si] : faceBore;
+            var rKey = kseg ? ((kseg === faceBore ? rbF : (kseg.D1 > 0 ? Math.max(kseg.D1, kseg.D2 || kseg.D1) / 2 : 0))) : 0;
+            var notchPts = function (rr, withKey) {
+                var pp = [];
+                if (withKey && kyp && kyp.w < 2 * rr) {
+                    var ka = Math.asin((kyp.w / 2) / rr);
+                    for (bi = 0; bi <= 90; bi++) pp.push(P(rr, ka + (TAU - 2 * ka) * bi / 90));
+                    pp.push({ x: -kyp.w / 2, y: -(rr + kyp.t) }); pp.push({ x: kyp.w / 2, y: -(rr + kyp.t) });
+                } else { for (bi = 0; bi < 120; bi++) pp.push(P(rr, TAU * bi / 120)); }
+                return pp;
+            };
+            if (!internal && rbF > 0) rings.push({ pts: sc(notchPts(rbF, kyp && kseg === faceBore)), closed: true, kind: 'bore' });
+            if (!internal && kyp && kseg && kseg !== faceBore && rKey > 0) rings.push({ pts: sc(notchPts(rKey, true)), closed: true, kind: (faceBore && rKey <= rbF + 1e-9) ? 'bore' : 'hidden' });   // 透過孔看得到＝實線，被擋住＝虛線   // 開在較深的內徑段：被擋住畫虛線
+            // 已填剖面資料：其他孔階／外形階段、中心線、剖面切割線（A-A）
+            if (bsegs.length || osegs.length) {
+                var circ = function (rr) { var c = []; for (var ci = 0; ci < 120; ci++) c.push(P(rr, TAU * ci / 120)); return c; };
+                var rbView = internal ? ri : rbF, rMaxEnd = rView;
+                bsegs.forEach(function (q) {
+                    if (q === faceBore || !(q.D1 > 0) || (kyp && q === kseg)) return;
+                    var rr = Math.max(q.D1, q.D2 || q.D1) / 2;
+                    if (rbView > 0 && Math.abs(rr - rbView) < 1e-6) return;
+                    // 開口那面有孔：比它小的孔段透過孔看得到＝實線；比較大的被材料擋住＝虛線；沒有開口那面＝全部被擋住
+                    rings.push({ pts: sc(circ(rr)), closed: true, kind: (rbView > 0 && rr < rbView) ? 'bore' : 'hidden' });
+                });
+                var gIdx = -1; osegs.forEach(function (q, qi) { if (q.gear) gIdx = qi; });
+                osegs.forEach(function (q, qi) {
+                    if (q.gear || !(q.D1 > 0)) return;
+                    var rr = Math.max(q.D1, q.D2 || q.D1) / 2;
+                    rMaxEnd = Math.max(rMaxEnd, rr);
+                    if (Math.abs(rr - rView) < 1e-6) return;
+                    var nearer = (gIdx < 0) ? true : (viewRight ? qi > gIdx : qi < gIdx);   // 比齒部更靠近觀看這一側
+                    // 在齒部前面的外形看得到＝實線；在後面：比齒小被擋住＝虛線，比齒大會露出來＝實線
+                    rings.push({ pts: sc(circ(rr)), closed: true, kind: (nearer || rr > rView) ? 'bore' : 'hidden' });
+                });
+                var cx1 = rMaxEnd * 1.18;
+                rings.push({ pts: sc([{ x: -cx1, y: 0 }, { x: cx1, y: 0 }]), closed: false, kind: 'center' });
+                rings.push({ pts: sc([{ x: 0, y: -cx1 }, { x: 0, y: cx1 }]), closed: false, kind: 'center' });
+                // 剖面切割線 A-A：兩端粗線＋箭頭（箭頭方向＝看過去的方向）＋字母；垂直線或水平線可選
+                var cdir = document.getElementById('g-cut-dir').value, vert = cdir.charAt(0) === 'v';
+                var dsg = (cdir === 'v-right' || cdir === 'h-down') ? 1 : -1, toCenter = cdir.indexOf('center') > 0;
+                var c1 = rMaxEnd * 1.12, c2 = rMaxEnd * 1.36, ah = rMaxEnd * 0.2;
+                [-1, 1].forEach(function (sg) {
+                    var Pa = vert ? { x: 0, y: sg * c1 } : { x: sg * c1, y: 0 }, Pb = vert ? { x: 0, y: sg * c2 } : { x: sg * c2, y: 0 };
+                    var dir = toCenter ? (vert ? { x: 0, y: -sg } : { x: -sg, y: 0 }) : (vert ? { x: dsg, y: 0 } : { x: 0, y: dsg }), nn = { x: -dir.y, y: dir.x };
+                    rings.push({ pts: sc([Pa, Pb]), closed: false, kind: 'cut' });
+                    rings.push({ pts: sc([Pb, { x: Pb.x + dir.x * ah, y: Pb.y + dir.y * ah }]), closed: false, kind: 'cutline' });
+                    var tip = { x: Pb.x + dir.x * ah * 1.25, y: Pb.y + dir.y * ah * 1.25 }, bc = { x: Pb.x + dir.x * ah * 0.8, y: Pb.y + dir.y * ah * 0.8 };
+                    rings.push({ pts: sc([tip, { x: bc.x + nn.x * ah * 0.14, y: bc.y + nn.y * ah * 0.14 }, { x: bc.x - nn.x * ah * 0.14, y: bc.y - nn.y * ah * 0.14 }]), closed: true, kind: 'arrow' });
+                    var tp = sc([{ x: Pb.x + dir.x * ah * 1.9, y: Pb.y + dir.y * ah * 1.9 }])[0];
+                    rings.push({ kind: 'text', text: 'A', x: tp.x, y: tp.y, size: 22 });
+                });
+            }
+            var rdp = radParams(); if (rdp === false) return;
+            if (rdp) {   // 外徑徑向螺孔：端面看不到孔口，畫成被擋住的虛線＋中心線
+                var Rr = rView, cumx = 0;
+                readSegs('g-seg-list', true).forEach(function (q) {
+                    if (!(q.L > 0)) return;
+                    var dq = q.D1 > 0 ? q.D1 : (q.gear ? p.da : 0);
+                    if (rdp.x >= cumx && rdp.x <= cumx + q.L && dq > 0) Rr = dq / 2;
+                    cumx += q.L;
+                });
+                var boreHere = 0, bcum = bx0v;   // 這個軸向位置的孔半徑（孔深到孔壁就停）
+                bsegs.forEach(function (q) { var xs0 = bcum, xe0 = bcum + (q.L || 0); bcum = xe0; if (rdp.x >= xs0 && rdp.x <= xe0 && q.D1 > 0) boreHere = q.D1 / 2; });
+                var ddE = Math.min(rdp.dd, Rr - boreHere), thr = rdp.dd >= Rr - boreHere - 1e-6;
+                if (rdp.thru === 'bore') { ddE = Math.max(0, Rr - boreHere); thr = true; }
+                else if (rdp.thru === 'all') { ddE = 2 * Rr; thr = true; }
+                rdp.angles.forEach(function (aDeg) {
+                    var th = aDeg * Math.PI / 180, ux = Math.sin(th), uy = -Math.cos(th), nx = Math.cos(th), ny = Math.sin(th);
+                    var ddH = ddE;   // 孔正對內鍵槽：螺孔只打到鍵槽頂（不穿過鍵槽）
+                    if (kyp && boreHere > 0 && Math.abs(boreHere * Math.sin(th)) < kyp.w / 2 + rdp.D / 2 && Math.cos(th) > 0) ddH = Math.min(ddH, Math.max(0, Rr - boreHere - kyp.t));
+                    [-1, 1].forEach(function (sg) {
+                        [rdp.dm / 2, rdp.D / 2].forEach(function (hh) {   // 每邊兩條：螺紋小徑＋大徑
+                            var o1 = sg * hh;
+                            rings.push({ pts: sc([{ x: ux * Rr + nx * o1, y: uy * Rr + ny * o1 }, { x: ux * (Rr - ddH) + nx * o1, y: uy * (Rr - ddH) + ny * o1 }]), closed: false, kind: 'hidden' });
+                        });
+                    });
+                    rings.push({ pts: sc([{ x: ux * (Rr + Rr * 0.08), y: uy * (Rr + Rr * 0.08) }, { x: ux * (Rr - ddE - (thr ? 0 : rdp.cone)), y: uy * (Rr - ddE - (thr ? 0 : rdp.cone)) }]), closed: false, kind: 'center' });
+                });
+            }
+            var angDims = [];   // 角度標示：獨立的標註物件（兩端有箭頭、可拖曳調整半徑），數字一律正值
+            var angArc = function (aDeg, rA, nomDeg) {   // 弧畫在實際位置；數字標使用者輸入的名義角度（對齊齒頂後弧與數字可能差一點）
+                var av = ((aDeg + 180) % 360 + 360) % 360 - 180;
+                if (Math.abs(av) < 0.01) return;
+                var nv = (nomDeg == null) ? av : ((nomDeg + 180) % 360 + 360) % 360 - 180;
+                angDims.push({ kind: 'a', r: rA * scale, a0: 0, a1: av, text: fmtDim(Math.abs(nv)) + '°' });
+            };
+            if (typeof rdp !== 'undefined' && rdp) rdp.angles.forEach(function (aDeg, ai) { angArc(aDeg, Rr * (0.42 + 0.07 * ai), rdp.nomAngles ? rdp.nomAngles[ai] : null); });
+            if (hlp) {
+                var pcp = []; for (bi = 0; bi < 120; bi++) pcp.push(P(hlp.Rp, TAU * bi / 120));
+                rings.push({ pts: sc(pcp), closed: true, kind: 'pcd' });
+                for (var hi = 0; hi < hlp.angles.length; hi++) {
+                    var th = hlp.angles[hi] * Math.PI / 180, hcx = hlp.Rp * Math.sin(th), hcy = -hlp.Rp * Math.cos(th), cmn = [], cmj = [], aa;
+                    for (bi = 0; bi < 48; bi++) { aa = TAU * bi / 48; cmn.push({ x: hcx + hlp.dm / 2 * Math.cos(aa), y: hcy + hlp.dm / 2 * Math.sin(aa) }); }
+                    for (bi = 0; bi <= 36; bi++) { aa = TAU * 0.75 * bi / 36; cmj.push({ x: hcx + hlp.D / 2 * Math.cos(aa), y: hcy + hlp.D / 2 * Math.sin(aa) }); }
+                    rings.push({ pts: sc(cmn), closed: true, kind: 'hole' });
+                    rings.push({ pts: sc(cmj), closed: false, kind: 'holethin' });
+                }
+                hlp.angles.forEach(function (aDeg, ai) { angArc(aDeg, hlp.Rp * (0.5 - 0.06 * ai)); });
+            }
+        }
+        var dimsEnd = [];
+        if (document.getElementById('g-dim-on').checked && typeof angDims !== 'undefined') angDims.forEach(function (q) { dimsEnd.push(q); });
+        if (document.getElementById('g-dim-on').checked && !internal && typeof kyp !== 'undefined' && kyp && rKey > 0) {   // 內鍵槽：寬、與孔徑加深度的總高
+            var kTop = -(rKey + kyp.t) * scale, kbot = rKey * scale, kw2 = kyp.w / 2 * scale;
+            dimsEnd.push({ kind: 'h', x1: -kw2, x2: kw2, y: kTop - 26, e1: kTop, e2: kTop, text: fmtDim(kyp.w) });
+            dimsEnd.push({ kind: 'v', x: -(rKey * scale) - 30, y1: kTop, y2: kbot, e1: -kw2, e2: 0, text: fmtDim(2 * rKey + kyp.t) });
+        }
+        if (document.getElementById('g-dim-on').checked && full) {
+            var tOD2 = dimTol('g-tol-od'), RR = rView * scale;
+            dimsEnd.push({ kind: 'v', x: RR * 1.32, y1: -RR, y2: RR, e1: 0, e2: 0, text: 'Ø' + fmtDim(2 * rView) + (tOD2 ? ' ' + tOD2 : '') });
+        }
+        window.egGearDrawHook({ dims: dimsEnd, outline: { pts: sc(pts), closed: full }, rings: rings,
+            desc: '齒形 m' + mt.toFixed(3) + ' z' + z + (full ? '' : '（局部 ' + nShow + ' 齒）') });
+    };
+    /* ── 剖面圖：外形（外徑×長度）與內孔（孔徑×長度）各自由左到右分段，兩邊分段位置不必對齊。
+       另可加鍵槽（內孔上方）與端面螺孔。純幾何，畫到圖面交給呼叫頁的 hook（egGearDrawItems） ── */
+    function segRowHtml(kind, isGear, v) {
+        v = v || {};
+        var st = 'class="gear-input" style="width:100%;min-width:0;padding:3px 3px;" step="any" min="0"';
+        function inp(f, ph) {
+            if (f === 'D2' || f === 'cL' || f === 'cR') return '<input type="text" class="gear-input" style="width:100%;min-width:0;padding:3px 3px;' + (f === 'D2' ? 'display:none;' : '') + '" data-f="' + f + '" placeholder="' + ph + '" value="' + (v[f] != null ? v[f] : '') + '">';
+            return '<input type="text" inputmode="decimal" data-expr="1" ' + st + ' data-f="' + f + '" placeholder="' + ph + '" value="' + (v[f] != null ? v[f] : '') + '">';
+        }
+        function chamCell(f) {
+            return '<span style="display:flex;align-items:center;gap:1px;min-width:0;">' + inp(f, 'C/R/角') +
+                '<input type="checkbox" data-f="' + f + 'lab" title="在圖上標示這個倒角（取消勾選＝只畫倒角、不標文字）"' + ((v[f + 'lab'] === false) ? '' : ' checked') + ' style="flex:0 0 auto;margin:0;"></span>';
+        }
+        var head = (kind === 'out')
+            ? '<label style="display:flex;flex-direction:column;line-height:1.2;white-space:nowrap;cursor:pointer;"><b class="g-seg-no">第1段</b><span><input type="radio" name="g-seg-gear"' + (isGear ? ' checked' : '') + '> 齒部</span></label>'
+            : '<b class="g-seg-no">第1段</b>';
+        return '<div class="g-seg" style="display:grid;grid-template-columns:62px repeat(4,minmax(0,1fr)) 72px;gap:3px 4px;align-items:center;margin-bottom:3px;font-size:11px;">' +
+            head +
+            inp('D', kind === 'out' ? (isGear ? '自動da' : '外徑') : '孔徑') + inp('D2', '迄徑/錐度') + inp('L', '長度') + inp('cL', 'C/R/角') + inp('cR', 'C/R/角') +
+            '<span style="display:flex;gap:2px;">' +
+            '<button type="button" class="btn-gear-clr" style="padding:1px 4px;" onclick="gearSegMove(this,-1)" title="往左移（變成前一段）">←</button>' +
+            '<button type="button" class="btn-gear-clr" style="padding:1px 4px;" onclick="gearSegMove(this,1)" title="往右移（變成後一段）">→</button>' +
+            '<button type="button" class="btn-gear-clr" style="padding:1px 4px;" onclick="gearSegDel(this)" title="刪除這一段">×</button></span></div>';
+    }
+    function taperOn(kind) { var e = document.getElementById(kind === 'bore' ? 'g-taper-bore' : 'g-taper-out'); return !!(e && e.checked); }
+    window.gearTaperApply = function () {
+        ['out', 'bore'].forEach(function (kind) {
+            var on = taperOn(kind), cols = on ? '62px repeat(5,minmax(0,1fr)) 72px' : '62px repeat(4,minmax(0,1fr)) 72px';
+            var box = segListEl(kind); if (!box) return;
+            Array.prototype.forEach.call(box.querySelectorAll('.g-seg'), function (r) {
+                r.style.gridTemplateColumns = cols;
+                var d = r.querySelector('[data-f=D2]'); d.style.display = on ? '' : 'none'; if (!on) d.value = '';
+            });
+            var head = document.querySelector('.g-seg-head[data-list="' + kind + '"]');
+            if (head) { head.style.gridTemplateColumns = cols; var th = head.querySelector('.g-th-taper'); if (th) th.style.display = on ? '' : 'none'; }
+        });
+    };
+    // 算式：支援 + - * / ( ) × ÷ x；括號不成對時自動補（40-14)/2 → (40-14)/2）
+    function evalExpr(str) {
+        var t = String(str == null ? '' : str)
+            .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+            .replace(/[（]/g, '(').replace(/[）]/g, ')').replace(/[＋]/g, '+').replace(/[－−]/g, '-').replace(/[．]/g, '.')
+            .replace(/[×xX＊]/g, '*').replace(/[÷／]/g, '/').replace(/\s+/g, '');
+        if (!t || /^[0-9.]+$/.test(t)) return undefined;   // 空白或單純數字：不處理
+        if (!/^[0-9+\-*/().]+$/.test(t)) return NaN;
+        var op = (t.match(/\(/g) || []).length, cl = (t.match(/\)/g) || []).length;
+        if (cl > op) t = new Array(cl - op + 1).join('(') + t; else if (op > cl) t += new Array(op - cl + 1).join(')');
+        var v;
+        try { v = Function('"use strict";return (' + t + ')')(); } catch (e) { return NaN; }
+        return isFinite(v) ? Math.round(v * 1e6) / 1e6 : NaN;
+    }
+    window.gearEvalInput = function (el) {
+        var r = evalExpr(el.value);
+        if (r === undefined) { el.style.borderColor = ''; return true; }
+        if (isNaN(r)) { el.style.borderColor = '#DD5138'; return false; }
+        el.value = String(r); el.style.borderColor = ''; return true;
+    };
+    window.gearEvalAll = function () {
+        var ok = true;
+        Array.prototype.forEach.call(document.querySelectorAll('#g-draw-block [data-expr]'), function (el) { if (!window.gearEvalInput(el)) ok = false; });
+        return ok;
+    };
+    function segListEl(kind) { return document.getElementById(kind === 'bore' ? 'g-bore-list' : 'g-seg-list'); }
+    function refreshKeySelects() {
+        function fill(id, listId, first) {
+            var sel = document.getElementById(id); if (!sel) return;
+            var keep = sel.value, html = first || '', rows = document.querySelectorAll('#' + listId + ' .g-seg');
+            for (var i = 0; i < rows.length; i++) { var d = rows[i].querySelector('[data-f=D]').value; html += '<option value="' + i + '">第' + (i + 1) + '段' + (d ? ' Ø' + d : '') + '</option>'; }
+            sel.innerHTML = html;
+            if (Array.prototype.some.call(sel.options, function (o) { return o.value === keep; })) sel.value = keep;
+        }
+        fill('g-key-seg', 'g-bore-list', '<option value="-1">整個內孔</option>');
+        fill('g-okey-seg', 'g-seg-list', '');
+    }
+    window.gearRefreshKeySelects = refreshKeySelects;
+    function segRenumber() {
+        refreshKeySelects();
+        ['g-seg-list', 'g-bore-list'].forEach(function (id) {
+            var rs = document.querySelectorAll('#' + id + ' .g-seg');
+            for (var i = 0; i < rs.length; i++) rs[i].querySelector('.g-seg-no').textContent = '第' + (i + 1) + '段';
+        });
+    }
+    window.gearSegAdd = function (kind) {
+        kind = (kind === 'bore') ? 'bore' : 'out';
+        var box = segListEl(kind); if (!box) return;
+        box.insertAdjacentHTML('beforeend', segRowHtml(kind, kind === 'out' && box.children.length === 0));
+        segRenumber(); window.gearTaperApply();
+    };
+    window.gearSegDel = function (btn) {
+        var row = btn.closest('.g-seg'), box = row.parentNode;
+        var isOut = box.id === 'g-seg-list';
+        if (isOut && box.children.length <= 1) return;
+        var wasGear = isOut && row.querySelector('input[type=radio]').checked;
+        box.removeChild(row);
+        if (wasGear) box.children[0].querySelector('input[type=radio]').checked = true;
+        segRenumber();
+    };
+    window.gearSegMove = function (btn, dir) {
+        var row = btn.closest('.g-seg'), box = row.parentNode;
+        if (dir < 0 && row.previousElementSibling) box.insertBefore(row, row.previousElementSibling);
+        else if (dir > 0 && row.nextElementSibling) box.insertBefore(row.nextElementSibling, row);
+        segRenumber();
+    };
+    window.gearSegInit = function () {
+        var o = segListEl('out'), b = segListEl('bore');
+        // 外徑和計算出的齒輪外徑相同的那一段，自動認定為齒部（之後仍可手動改選）
+        if (o && !o.__autoGear) {
+            o.__autoGear = true;
+            o.addEventListener('input', function (e) {
+                var t = e.target;
+                if (!t || t.getAttribute('data-f') !== 'D' || !_baseParams || _baseParams.internal) return;
+                var v = parseFloat(t.value);
+                if (v > 0 && Math.abs(v - _baseParams.da) < 0.0051) { var rd = t.closest('.g-seg').querySelector('input[type=radio]'); if (rd) rd.checked = true; }
+            });
+        }
+        // 輸入框按 Enter＝跳到下一個輸入框
+        var blk = document.getElementById('g-draw-block');
+        if (blk && !blk.__exprInit) {   // 靜態數字欄一律改成文字欄，才能打算式
+            blk.__exprInit = true;
+            Array.prototype.forEach.call(blk.querySelectorAll('input[type=number]'), function (el) { el.type = 'text'; el.setAttribute('inputmode', 'decimal'); el.setAttribute('data-expr', '1'); });
+            blk.addEventListener('change', function (e) {
+                var t = e.target;
+                if (t && t.getAttribute && t.getAttribute('data-expr')) window.gearEvalInput(t);
+                if (t && t.closest && t.closest('#g-seg-list,#g-bore-list')) refreshKeySelects();
+            });
+        }
+        if (blk && !blk.__enterNav) {
+            blk.__enterNav = true;
+            blk.addEventListener('keydown', function (e) {
+                // 段落表格：↑↓＝同一欄往上／往下一列；最後一列按↓自動新增一列；空白的最後一列按↑自動移除
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    var ta = e.target, rowA = ta && ta.closest ? ta.closest('.g-seg') : null;
+                    if (!rowA || ta.tagName !== 'INPUT' || ta.type === 'radio') return;
+                    var fA = ta.getAttribute('data-f'); if (!fA) return;
+                    e.preventDefault();
+                    if (ta.getAttribute('data-expr')) window.gearEvalInput(ta);
+                    var boxA = rowA.parentNode, kindA = boxA.id === 'g-bore-list' ? 'bore' : 'out', tgt, newRowA = false;
+                    if (e.key === 'ArrowDown') {
+                        tgt = rowA.nextElementSibling;
+                        if (!tgt) { window.gearSegAdd(kindA); tgt = boxA.lastElementChild; newRowA = true; }
+                    } else {
+                        tgt = rowA.previousElementSibling;
+                        if (!tgt) return;
+                        var emptyRow = true;
+                        Array.prototype.forEach.call(rowA.querySelectorAll('input:not([type=radio]):not([type=checkbox])'), function (el) { if (String(el.value).trim() !== '') emptyRow = false; });
+                        if (!rowA.nextElementSibling && emptyRow && (kindA === 'bore' || boxA.children.length > 1)) {
+                            var wasG = kindA === 'out' && rowA.querySelector('input[type=radio]').checked;
+                            boxA.removeChild(rowA);
+                            if (wasG && boxA.children.length) boxA.children[0].querySelector('input[type=radio]').checked = true;
+                            segRenumber();
+                        }
+                    }
+                    var nxA = tgt.querySelector('[data-f=' + (newRowA ? 'D' : fA) + ']');
+                    if (nxA) { nxA.focus(); if (nxA.select) nxA.select(); }
+                    return;
+                }
+                if (e.key !== 'Enter') return;
+                var t = e.target;
+                if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'SELECT') || t.type === 'checkbox' || t.type === 'radio' || t.type === 'button') return;
+                e.preventDefault();
+                if (t.getAttribute('data-expr')) window.gearEvalInput(t);
+                var list = Array.prototype.slice.call(blk.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=button]),select')).filter(function (el) { return el.offsetParent !== null && !el.disabled; });
+                var nx = list[list.indexOf(t) + 1];
+                if (nx) { nx.focus(); if (nx.select && nx.tagName === 'INPUT') nx.select(); }
+            });
+        }
+        if (o && !o.children.length) { window.gearSegAdd('out'); window.gearSegAdd('out'); }
+        if (b && !b.children.length) window.gearSegAdd('bore');
+        window.gearTaperApply();
+    };
+    window.gearSegExample = function () {
+        var o = segListEl('out'), b = segListEl('bore'); if (!o || !b) return;
+        o.innerHTML = segRowHtml('out', true, { L: 18.5 }) + segRowHtml('out', false, { D: 40, L: 25, cR: 1 });
+        b.innerHTML = segRowHtml('bore', false, { D: 14, L: 43.5, cL: 0.5, cR: 0.5 });
+        segRenumber(); window.gearTaperApply();
+        function setv(id, val) { var e = document.getElementById(id); if (e) e.value = val; }
+        setv('g-draw-c', '0.5'); setv('g-draw-cend', 'both');
+        document.getElementById('g-key-on').checked = true; setv('g-key-w', 5); setv('g-key-t', 2.3);
+        document.getElementById('g-hole-on').checked = true; setv('g-hole-face', 'right'); setv('g-hole-pcd', 28); setv('g-hole-depth', 8); setv('g-hole-n', 2);
+    };
+    // 迄徑／錐度欄：空白＝同起徑；純數字＝迄徑；1/10 或 1:10＝錐度（直徑變化÷長度）；3°＝半錐角；負號＝往右變大
+    function d2of(s) {
+        var t = String(s.D2raw == null ? '' : s.D2raw).replace(/\s+/g, '').replace(/[－−]/g, '-');
+        if (!t) return s.D1;
+        var neg = false; if (t.charAt(0) === '-') { neg = true; t = t.slice(1); }
+        var dD;
+        if (/°$|deg$/i.test(t)) { var ang = parseFloat(t); if (!(ang >= 0 && ang < 89)) return NaN; dD = 2 * s.L * Math.tan(ang * Math.PI / 180); }
+        else if (/[\/:]/.test(t)) { var q = t.split(/[\/:]/), a = parseFloat(q[0]), b = parseFloat(q[1]); if (!(a >= 0) || !(b > 0)) return NaN; dD = s.L * a / b; }
+        else { var vv = parseFloat(t); return (vv > 0 && !neg) ? vv : NaN; }
+        return neg ? s.D1 + dD : s.D1 - dD;
+    }
+    function readSegs(listId, isOut) {
+        var out = [], rows = document.querySelectorAll('#' + listId + ' .g-seg');
+        for (var i = 0; i < rows.length; i++) {
+            (function (row, i) {
+                function f(k) { var v = parseFloat(row.querySelector('[data-f=' + k + ']').value); return isNaN(v) ? null : v; }
+                var s = { no: i + 1, D1: f('D'), D2raw: taperOn(listId === 'g-bore-list' ? 'bore' : 'out') ? row.querySelector('[data-f=D2]').value : '', L: f('L'), cLraw: row.querySelector('[data-f=cL]').value, cRraw: row.querySelector('[data-f=cR]').value,
+                          labL: (function () { var c = row.querySelector('[data-f=cLlab]'); return c ? c.checked : true; })(), labR: (function () { var c = row.querySelector('[data-f=cRlab]'); return c ? c.checked : true; })(),
+                          gear: isOut && row.querySelector('input[type=radio]').checked };
+                if (!isOut && s.D1 == null && s.L == null) return;   // 內孔：整列空白＝略過
+                s.D2 = (s.D1 > 0 && s.L > 0) ? d2of(s) : null;
+                out.push(s);
+            })(rows[i], i);
+        }
+        return out;
+    }
+    function holeParams() {
+        if (!document.getElementById('g-hole-on').checked) return null;
+        var sz = document.getElementById('g-hole-size').value.split(',');
+        var D = parseFloat(sz[0]), P = parseFloat(sz[1]);
+        var pcd = parseFloat(document.getElementById('g-hole-pcd').value), td = parseFloat(document.getElementById('g-hole-depth').value);
+        if (!(pcd > 0) || !(td > 0)) { alert('螺孔請填分佈圓 PCD 與螺紋深'); return false; }
+        var dd = parseFloat(document.getElementById('g-hole-drill').value);
+        if (!(dd > 0)) dd = td + D * 0.5;
+        if (dd < td) dd = td;
+        var n0 = Math.max(1, parseInt(document.getElementById('g-hole-n').value, 10) || 1);
+        var angles = anglesFrom(document.getElementById('g-hole-ang').value, n0, document.getElementById('g-hole-step').value).map(function (a) { return ((a % 360) + 360) % 360; });
+        return { D: D, P: P, dm: D - 1.0825 * P, Rp: pcd / 2, td: td, dd: dd, cone: (D - 1.0825 * P) / 2 / Math.tan(59 * Math.PI / 180),
+                 n: angles.length, angles: angles, face: document.getElementById('g-hole-face').value, label: 'M' + D + 'x' + P };
+    }
+    function okeyParams() {
+        if (!document.getElementById('g-okey-on').checked) return null;
+        var w = parseFloat(document.getElementById('g-okey-w').value), t = parseFloat(document.getElementById('g-okey-t').value), l = parseFloat(document.getElementById('g-okey-l').value);
+        if (!(w > 0) || !(t > 0)) { alert('外鍵槽請填寬與深'); return false; }
+        var si = parseInt(document.getElementById('g-okey-seg').value, 10); if (isNaN(si) || si < 0) si = 0;
+        return { w: w, t: t, x: parseFloat(document.getElementById('g-okey-x').value) || 0, l: (l > 0 ? l : null), si: si };
+    }
+    function keyParams() {
+        if (!document.getElementById('g-key-on').checked) return null;
+        var w = parseFloat(document.getElementById('g-key-w').value), t = parseFloat(document.getElementById('g-key-t').value);
+        if (!(w > 0) || !(t > 0)) { alert('鍵槽請填寬與深'); return false; }
+        var x = parseFloat(document.getElementById('g-key-x').value) || 0, l = parseFloat(document.getElementById('g-key-l').value);
+        var si = parseInt(document.getElementById('g-key-seg').value, 10); if (isNaN(si)) si = -1;
+        return { w: w, t: t, x: x, l: (l > 0 ? l : null), si: si };
+    }
+    // 倒角輸入格式：0.5＝C0.5（45°）；R1＝圓角；1@30＝軸向 1、與軸線 30°；Ø60@30＝端面上 Ø60 處起、與端面 30°
+    function parseCham(txt, Rc, bore) {
+        var t = String(txt == null ? '' : txt).replace(/\s+/g, '').replace(/[Øøφ⌀]/g, 'D');
+        if (!t) return null;
+        var m;
+        if ((m = /^R(\d*\.?\d+)$/i.exec(t))) { var rr = parseFloat(m[1]); return rr > 0 ? { ax: rr, rd: rr, fillet: rr, label: 'R' + fmtDim(rr) } : null; }
+        if ((m = /^D(\d*\.?\d+)@(\d*\.?\d+)°?$/i.exec(t))) {
+            var D = parseFloat(m[1]), th = parseFloat(m[2]), rd = bore ? D / 2 - Rc : Rc - D / 2;
+            if (!(rd > 0) || !(th > 0 && th < 90)) return { bad: true };
+            return { ax: rd * Math.tan(th * Math.PI / 180), rd: rd, fillet: 0, label: 'Ø' + fmtDim(D) + '×' + fmtDim(th) + '°' };
+        }
+        if ((m = /^C?(\d*\.?\d+)@(\d*\.?\d+)°?$/i.exec(t))) {
+            var L = parseFloat(m[1]), th2 = parseFloat(m[2]);
+            if (!(L > 0 && th2 > 0 && th2 < 90)) return { bad: true };
+            return { ax: L, rd: L * Math.tan(th2 * Math.PI / 180), fillet: 0, label: fmtDim(L) + '×' + fmtDim(th2) + '°' };
+        }
+        if ((m = /^C?(\d*\.?\d+)$/i.exec(t))) { var c = parseFloat(m[1]); return c > 0 ? { ax: c, rd: c, fillet: 0, label: 'C' + fmtDim(c) } : null; }
+        return { bad: true };
+    }
+    function clampCh(ch, maxAx, maxRd) {
+        if (!ch || ch.bad) return null;
+        var k = Math.min(1, maxAx / ch.ax, maxRd / ch.rd);
+        return (k < 1) ? { ax: ch.ax * k, rd: ch.rd * k, fillet: ch.fillet ? ch.fillet * k : 0, label: ch.label } : ch;
+    }
+    function arcPts(cx, cy, r, a0, a1, n) {   // 圓弧取樣（角度為弧度，數學座標）
+        var o = []; for (var i = 0; i <= n; i++) { var a = a0 + (a1 - a0) * i / n; o.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+        return o;
+    }
+    function fmtDim(v) { return String(Math.round(v * 1000) / 1000); }
+    function dimTol(id) { var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; }
+    // 角度清單：含逗號＝逐孔指定；否則「起始角＋孔間夾角（空白＝平均分佈）」
+    function anglesFrom(txt, n, stepTxt) {
+        var t = String(txt == null ? '' : txt).trim(), out = [], k;
+        if (/[,，]/.test(t)) { t.split(/[,，]/).forEach(function (x) { var v = parseFloat(x); if (!isNaN(v)) out.push(v); }); return out.length ? out : [0]; }
+        var a0 = parseFloat(t) || 0, st = parseFloat(stepTxt); if (isNaN(st) || st === 0) st = 360 / n;
+        for (k = 0; k < n; k++) out.push(a0 + st * k);
+        return out;
+    }
+    function cutBaseAngle() { var v = document.getElementById('g-cut-dir').value; return v.charAt(0) === 'h' ? 90 : 0; }
+    function angNear(a, t) { var d = (((a - t) % 360) + 360) % 360; return d < 0.01 || d > 359.99; }
+    function radParams() {
+        if (!document.getElementById('g-rad-on').checked) return null;
+        var sz = document.getElementById('g-rad-size').value.split(','), D = parseFloat(sz[0]), P = parseFloat(sz[1]);
+        var n0 = Math.max(1, parseInt(document.getElementById('g-rad-n').value, 10) || 1), align = document.getElementById('g-rad-align').value;
+        var xp = parseFloat(document.getElementById('g-rad-x').value), td = parseFloat(document.getElementById('g-rad-depth').value);
+        if (!(xp > 0)) {   // 空白＝齒部那一段的正中央（沒有齒部就放全長中央）
+            var cum = 0, gc = null, tot = 0;
+            readSegs('g-seg-list', true).forEach(function (q) { if (q.L > 0) { if (q.gear && gc == null) gc = cum + q.L / 2; cum += q.L; } });
+            tot = cum; xp = (gc != null) ? gc : tot / 2;
+            if (!(xp > 0)) { alert('外徑螺孔請先填外形各段長度，或直接填軸向位置'); return false; }
+        }
+        if (!(td > 0)) { alert('外徑螺孔請填螺紋深'); return false; }
+        var dd = parseFloat(document.getElementById('g-rad-drill').value); if (!(dd > 0)) dd = td + D * 0.5; if (dd < td) dd = td;
+        var pz = _baseParams ? 360 / _baseParams.z : 0;
+        var nomA = anglesFrom(document.getElementById('g-rad-ang').value, n0, document.getElementById('g-rad-step').value);
+        var angles = nomA.map(function (a) {
+            if (align !== 'any' && pz > 0) { var q = a / pz; a = (align === 'tip' ? Math.round(q) : Math.round(q - 0.5) + 0.5) * pz; }   // 齒中心＝0°、整數倍齒距；齒底＝半個齒距處
+            return ((a % 360) + 360) % 360;
+        });
+        var dm = D - 1.0825 * P;
+        return { D: D, P: P, dm: dm, n: angles.length, angles: angles, nomAngles: nomA, x: xp, td: td, dd: dd, thru: document.getElementById('g-rad-thru').value, cone: dm / 2 / Math.tan(59 * Math.PI / 180), label: 'M' + D + 'x' + P };
+    }
+    window.gearDrawSection = function () {
+        var p = _baseParams;
+        if (typeof window.egGearDrawItems !== 'function') return;
+        if (!window.gearEvalAll()) { alert('有數字欄的算式無法計算（紅框處），請修改'); return; }
+        var eps = 1e-9;
+        var outer = readSegs('g-seg-list', true), bore = readSegs('g-bore-list', false);
+        if (!outer.length) { alert('外形請至少填一段'); return; }
+        var cGtxt = String(document.getElementById('g-draw-c').value || '').trim(), cend = document.getElementById('g-draw-cend').value;
+        var x = 0, gearIdx = -1, i;
+        for (i = 0; i < outer.length; i++) {
+            var s = outer[i];
+            if (s.gear && !(s.D1 > 0)) {
+                if (!p) { alert('請先按「計算齒輪」，齒部外徑才會自動帶入'); return; }
+                if (p.internal) { alert('內齒輪的齒部外徑要自己填（外形第 ' + s.no + ' 段）'); return; }
+                s.D1 = p.da;
+            }
+            if (!(s.D1 > 0) || !(s.L > 0)) { alert('外形第 ' + s.no + ' 段請填外徑與長度'); return; }
+            s.D2 = d2of(s);
+            if (!(s.D2 > 0)) { alert('外形第 ' + s.no + ' 段的迄徑／錐度格式不對（例：20、1/10、3°）'); return; }
+            s.R1 = s.D1 / 2; s.R2 = s.D2 / 2;
+            if (s.gear) { gearIdx = i; s.cLraw = (cGtxt && cend !== 'right') ? cGtxt : ''; s.cRraw = (cGtxt && cend !== 'left') ? cGtxt : ''; s.labL = s.labR = document.getElementById('g-dim-ch-gear').checked; } else { s.labL = s.labR = document.getElementById('g-dim-ch-out').checked; }
+            s.chL = parseCham(s.cLraw, s.R1, false); s.chR = parseCham(s.cRraw, s.R2, false);
+            if ((s.chL && s.chL.bad) || (s.chR && s.chR.bad)) { alert('外形第 ' + s.no + ' 段的倒角格式不對（例：0.5、R1、1@30、Ø66@30）'); return; }
+            s.xs = x; x += s.L; s.xe = x;
+        }
+        var total = x, maxR = 0; outer.forEach(function (s) { maxR = Math.max(maxR, s.R1, s.R2); });
+        var boreTotal = 0;
+        for (i = 0; i < bore.length; i++) {
+            var b = bore[i];
+            if (!(b.D1 > 0) || !(b.L > 0)) { alert('內孔第 ' + b.no + ' 段請填孔徑與長度'); return; }
+            b.D2 = d2of(b);
+            if (!(b.D2 > 0)) { alert('內孔第 ' + b.no + ' 段的迄徑／錐度格式不對（例：20、1/10、3°）'); return; }
+            b.r1 = b.D1 / 2; b.r2 = b.D2 / 2; boreTotal += b.L;
+            b.chL = parseCham(b.cLraw, b.r1, true); b.chR = parseCham(b.cRraw, b.r2, true);
+            b.labL = b.labR = document.getElementById('g-dim-ch-bore').checked;
+            if ((b.chL && b.chL.bad) || (b.chR && b.chR.bad)) { alert('內孔第 ' + b.no + ' 段的倒角格式不對（例：0.5、R1、1@30、Ø20@30）'); return; }
+        }
+        if (boreTotal > total + 1e-6) { alert('內孔總長（' + boreTotal + '）不能超過外形總長（' + total + '）'); return; }
+        var bx0 = (document.getElementById('g-bore-align').value === 'right') ? total - boreTotal : 0, bx = bx0;
+        bore.forEach(function (b) { b.xs = bx; bx += b.L; b.xe = bx; });
+        var bEnd = bx0 + boreTotal;
+        var key = keyParams(); if (key === false) return;
+        if (key && !bore.length) { alert('有鍵槽時請先填內孔'); return; }
+        if (key) {
+            if (key.si >= 0 && bore[key.si]) { key.k0 = bore[key.si].xs + key.x; key.k1 = key.l ? key.k0 + key.l : bore[key.si].xe; }
+            else { key.k0 = key.x; key.k1 = key.l ? key.x + key.l : bEnd; }
+        }
+        var hole = holeParams(); if (hole === false) return;
+        var rad = radParams(); if (rad === false) return;
+        var okey = okeyParams(); if (okey === false) return;
+        function radO(s, xx) { return s.R1 + (s.R2 - s.R1) * (xx - s.xs) / s.L; }
+        function radB(b, xx) { return b.r1 + (b.r2 - b.r1) * (xx - b.xs) / b.L; }
+        function boreRadAt(xx) { var rr = 0; bore.forEach(function (b) { if (xx >= b.xs - eps && xx <= b.xe + eps) rr = radB(b, xx); }); return rr; }
+        if (rad) {   // 孔深：指定深度（不超過壁厚）／貫穿到內孔／全部貫穿（兩側的壁都鑽穿）
+            var rsgW = null; outer.forEach(function (s) { if (rad.x >= s.xs - eps && rad.x <= s.xe + eps) rsgW = s; });
+            rad.wall0 = rsgW ? radO(rsgW, rad.x) - boreRadAt(rad.x) : Infinity;
+            rad.all = (rad.thru === 'all');
+        }
+        // 孔剛好開在內鍵槽上（0°、軸向範圍與寬度都蓋得住）：壁厚要再扣掉鍵槽深度，孔只鑽到鍵槽頂端，不延伸到內孔
+        function radKeyAdj(angle) {
+            return (rad && key && angNear(angle, 0) && key.k0 <= rad.x - rad.dm / 2 + eps && key.k1 >= rad.x + rad.dm / 2 - eps && key.w >= rad.dm - 1e-6) ? key.t : 0;
+        }
+        function radDepth(angle) {
+            var wall = rad.wall0 - radKeyAdj(angle);
+            var dd = (rad.thru !== 'depth' && isFinite(wall)) ? wall : rad.dd;
+            var thr = (rad.thru !== 'depth') || dd >= wall - 1e-6;
+            dd = Math.min(dd, wall);
+            return { dd: dd, td: Math.min(rad.td, dd), through: thr };
+        }
+        var showObl = document.getElementById('g-show-obl').checked;
+        function isCardinal(a) { var m = ((a % 90) + 90) % 90; return m < 0.01 || m > 89.99; }
+        function radCuts(base) {   // 這個切面（base 角度）有沒有切到外徑螺孔
+            return !!rad && (rad.angles.some(function (a) { return angNear(a, base); }) || (rad.all && rad.angles.some(function (a) { return angNear(a + 180, base); })));
+        }
+        // 螺孔位置檢查（要落在該端面的材料上，不能壓到孔或超出外徑）
+        if (hole) {
+            var fx = (hole.face === 'left') ? 0 : total;
+            var oR = (hole.face === 'left') ? outer[0].R1 : outer[outer.length - 1].R2;
+            var bR = 0;
+            if (bore.length) {
+                if (hole.face === 'left' && bx0 <= eps) bR = bore[0].r1 + (bore[0].chL ? bore[0].chL.rd : 0);
+                if (hole.face === 'right' && bEnd >= total - eps) bR = bore[bore.length - 1].r2 + (bore[bore.length - 1].chR ? bore[bore.length - 1].chR.rd : 0);
+            }
+            if (hole.Rp - hole.dm / 2 <= bR || hole.Rp + hole.dm / 2 >= oR) { alert('螺孔分佈圓位置不在端面材料上（需在內孔與外徑之間）'); return; }
+            if (hole.dd + hole.cone >= total) { alert('螺孔太深，超過零件長度'); return; }
+        }
+        function holePts(face, sign) {   // sign=+1 上半、-1 下半（鏡射用）；回傳沿「該端面由下往上」的點序
+            var s = (face === 'left') ? 1 : -1, f = (face === 'left') ? 0 : total, Rp = hole.Rp;
+            var pts = [[f, Rp - hole.dm / 2], [f + s * hole.dd, Rp - hole.dm / 2], [f + s * (hole.dd + hole.cone), Rp], [f + s * hole.dd, Rp + hole.dm / 2], [f, Rp + hole.dm / 2]];
+            return pts;
+        }
+        // 內孔輪廓（右→左），倒角只畫在「孔口」與「孔階的材料角」
+        function boreRev() {
+            var bp = [], n = bore.length, j;
+            function pb(px, py) { bp.push([px, py]); }
+            for (j = n - 1; j >= 0; j--) {
+                var b = bore[j];
+                var lOK = (j === 0 && bx0 <= eps) || (j > 0 && bore[j - 1].r2 > b.r1 + eps);
+                var rOK = (j === n - 1 && bEnd >= total - eps) || (j < n - 1 && b.r2 < bore[j + 1].r1 - eps);
+                b.ecl = lOK ? clampCh(b.chL, b.L / 2, 1e9) : null; b.ecr = rOK ? clampCh(b.chR, b.L / 2, 1e9) : null;
+                var q;
+                if (b.ecr && b.ecr.fillet) { arcPts(b.xe - b.ecr.ax, b.r2 + b.ecr.rd, b.ecr.fillet, 0, -Math.PI / 2, 8).forEach(function (a) { pb(a[0], a[1]); }); }
+                else if (b.ecr) { pb(b.xe, b.r2 + b.ecr.rd); pb(b.xe - b.ecr.ax, radB(b, b.xe - b.ecr.ax)); }
+                else pb(b.xe, b.r2);
+                if (b.ecl && b.ecl.fillet) { arcPts(b.xs + b.ecl.ax, b.r1 + b.ecl.rd, b.ecl.fillet, -Math.PI / 2, -Math.PI, 8).forEach(function (a) { pb(a[0], a[1]); }); }
+                else if (b.ecl) { pb(b.xs + b.ecl.ax, radB(b, b.xs + b.ecl.ax)); pb(b.xs, b.r1 + b.ecl.rd); }
+                else pb(b.xs, b.r1);
+            }
+            return bp;
+        }
+        // 鍵槽範圍內：頂線＝孔壁（不含倒角）＋槽深，倒角不跟著搬到槽頂，改畫在孔壁線（見下方 chamfer 線）
+        function keyRoofY(xx, yy, t) {
+            for (var jb = 0; jb < bore.length; jb++) { var bb = bore[jb]; if (xx >= bb.xs - eps && xx <= bb.xe + eps) return Math.min(yy, radB(bb, xx)) + t; }
+            return yy + t;
+        }
+        function applyKey(pts, k0, k1, t) {
+            var out = [], a, b, cuts, j, xa, xb, ins, ya, yb;
+            function yAt(a, b, xx) { return Math.abs(b[0] - a[0]) < eps ? a[1] : a[1] + (b[1] - a[1]) * (xx - a[0]) / (b[0] - a[0]); }
+            for (var q = 0; q < pts.length - 1; q++) {
+                a = pts[q]; b = pts[q + 1];
+                if (Math.abs(a[0] - b[0]) < eps) {   // 垂直段（孔階）：整段同進同出
+                    var inside = a[0] > k0 + eps && a[0] < k1 - eps, off = inside ? t : 0;
+                    out.push([a[0], a[1] + off]); out.push([b[0], b[1] + off]); continue;
+                }
+                cuts = [a[0], b[0]];
+                [k0, k1].forEach(function (k) { if ((a[0] - k) * (b[0] - k) < 0) cuts.push(k); });
+                cuts.sort(function (u, v) { return a[0] > b[0] ? v - u : u - v; });
+                for (j = 0; j < cuts.length - 1; j++) {
+                    xa = cuts[j]; xb = cuts[j + 1];
+                    ins = ((xa + xb) / 2 > k0 + eps && (xa + xb) / 2 < k1 - eps);
+                    ya = ins ? keyRoofY(xa, yAt(a, b, xa), t) : yAt(a, b, xa); yb = ins ? keyRoofY(xb, yAt(a, b, xb), t) : yAt(a, b, xb);
+                    out.push([xa, ya]); out.push([xb, yb]);
+                }
+            }
+            return out;
+        }
+        function halfPoly(withKey, side) {
+            var pts = [], bp = null;
+            outer.forEach(function (s, i) {
+                var lEx = (i === 0) || outer[i - 1].R2 < s.R1 - eps, rEx = (i === outer.length - 1) || outer[i + 1].R1 < s.R2 - eps;
+                var chl = lEx ? clampCh(s.chL, s.L / 2, s.R1) : null, chr = rEx ? clampCh(s.chR, s.L / 2, s.R2) : null;
+                s.chLe = chl; s.chRe = chr;
+                if (chl && chl.fillet) { arcPts(s.xs + chl.ax, s.R1 - chl.rd, chl.fillet, Math.PI, Math.PI / 2, 8).forEach(function (a) { pts.push(a); }); }
+                else if (chl) { pts.push([s.xs, s.R1 - chl.rd]); pts.push([s.xs + chl.ax, radO(s, s.xs + chl.ax)]); }
+                else pts.push([s.xs, s.R1]);
+                if (chr && chr.fillet) { arcPts(s.xe - chr.ax, s.R2 - chr.rd, chr.fillet, Math.PI / 2, 0, 8).forEach(function (a) { pts.push(a); }); }
+                else if (chr) { pts.push([s.xe - chr.ax, radO(s, s.xe - chr.ax)]); pts.push([s.xe, s.R2 - chr.rd]); }
+                else pts.push([s.xe, s.R2]);
+            });
+            // 外徑徑向螺孔（剖面剛好切到 0°＝上半、180°＝下半時才挖缺口）
+            if (rad) {
+                var hit = radCuts(side === 'up' ? cutBaseAngle() : cutBaseAngle() + 180);
+                if (hit) {
+                    var x1 = rad.x - rad.dm / 2, x2 = rad.x + rad.dm / 2, sg0 = null;
+                    outer.forEach(function (s) { if (rad.x >= s.xs - eps && rad.x <= s.xe + eps) sg0 = s; });
+                    if (!sg0 || x1 < sg0.xs || x2 > sg0.xe) { alert('外徑螺孔位置要落在同一段外形的直徑面上（不可跨段或壓到倒角）'); throw 'stop'; }
+                    var inside = pts.some(function (q) { return q[0] > x1 + eps && q[0] < x2 - eps; });
+                    if (inside) { alert('外徑螺孔位置不能壓到倒角或階梯'); throw 'stop'; }
+                    var idx = 0; while (idx < pts.length && pts[idx][0] <= x1 + eps) idx++;
+                    var y1 = radO(sg0, x1), y2 = radO(sg0, x2), yc = radO(sg0, rad.x);
+                    var dpt = radDepth(side === 'up' ? cutBaseAngle() : cutBaseAngle() + 180);
+                    if (dpt.through) pts.splice(idx, 0, [x1, y1], [x1, y1 - dpt.dd], [x2, y2 - dpt.dd], [x2, y2]);
+                    else pts.splice(idx, 0, [x1, y1], [x1, y1 - dpt.dd], [rad.x, yc - dpt.dd - rad.cone], [x2, y2 - dpt.dd], [x2, y2]);
+                }
+            }
+            // 外鍵槽（正上方，剖面看得到的那一邊）；位置從所選外徑段的左端算起
+            if (okey && side === 'up') {
+                var ksg = outer[okey.si] || outer[0], k1 = ksg.xs + okey.x, k2 = okey.l ? k1 + okey.l : ksg.xe;
+                if (k2 > ksg.xe + eps) { alert('外鍵槽超出所選外徑段（第 ' + ksg.no + ' 段）'); throw 'stop'; }
+                if (pts.some(function (q) { return q[0] > k1 + eps && q[0] < k2 - eps; })) { alert('外鍵槽位置不能壓到倒角或階梯'); throw 'stop'; }
+                var ki = 0; while (ki < pts.length && pts[ki][0] <= k1 + eps) ki++;
+                pts.splice(ki, 0, [k1, radO(ksg, k1)], [k1, radO(ksg, k1) - okey.t], [k2, radO(ksg, k2) - okey.t], [k2, radO(ksg, k2)]);
+                okey.k1 = k1; okey.k2 = k2; okey.seg = ksg;
+            }
+            // 右端面（由上往下）
+            var holeHere = hole && hole.angles.some(function (a) { return angNear(a, side === 'up' ? cutBaseAngle() : cutBaseAngle() + 180); });
+            if (holeHere && hole.face === 'right') holePts('right').reverse().forEach(function (q) { pts.push(q); });
+            if (!bore.length) { pts.push([total, 0]); }
+            else {
+                if (bEnd < total - eps) { pts.push([total, 0]); pts.push([bEnd, 0]); }
+                bp = boreRev();
+                if (withKey && key) bp = applyKey(bp, key.k0, key.k1, key.t);
+                bp.forEach(function (q) { pts.push(q); });
+                if (bx0 > eps) { pts.push([bx0, 0]); pts.push([0, 0]); }
+            }
+            if (!bore.length) pts.push([0, 0]);
+            // 左端面（由下往上）
+            if (holeHere && hole.face === 'left') holePts('left').forEach(function (q) { pts.push(q); });
+            var ded = [];
+            pts.forEach(function (q) { var l = ded[ded.length - 1]; if (!l || Math.abs(l[0] - q[0]) > eps || Math.abs(l[1] - q[1]) > eps) ded.push(q); });
+            return ded;
+        }
+        var up, lo;
+        try { up = halfPoly(true, 'up'); lo = halfPoly(false, 'lo').map(function (q) { return [q[0], -q[1]]; }); }
+        catch (err) { if (err === 'stop') return; throw err; }
+        var sc = 520 / Math.max(total, 2 * maxR);
+        var items = [];
+        function toPx(a) { return a.map(function (q) { return { x: (q[0] - total / 2) * sc, y: -q[1] * sc }; }); }
+        items.push({ pts: toPx(up), closed: true, w: 2 });
+        items.push({ pts: toPx(lo), closed: true, w: 2 });
+        // 剖面線：45°，每個半邊各自掃描（斜線與多邊形邊求交，兩兩配對）
+        if (document.getElementById('g-draw-hatch').checked) {
+            var hgap = Math.max(3, Math.min(60, parseFloat(document.getElementById('g-draw-hatch-gap').value) || 28));
+            var step = hgap / sc * Math.SQRT2;
+            [up, lo].forEach(function (poly) {
+                var cmin = Infinity, cmax = -Infinity;
+                poly.forEach(function (q) { var u = q[1] - q[0]; if (u < cmin) cmin = u; if (u > cmax) cmax = u; });
+                for (var cv = cmin + step / 2 + 0.00137; cv < cmax; cv += step) {
+                    var xs = [];
+                    for (var e = 0; e < poly.length; e++) {
+                        var a = poly[e], b2 = poly[(e + 1) % poly.length];
+                        var ua = a[1] - a[0], ub = b2[1] - b2[0];
+                        if ((ua - cv) * (ub - cv) < 0) { var t = (cv - ua) / (ub - ua); xs.push([a[0] + t * (b2[0] - a[0]), a[1] + t * (b2[1] - a[1])]); }
+                    }
+                    xs.sort(function (m, n) { return m[0] - n[0]; });
+                    for (var k = 0; k + 1 < xs.length; k += 2) items.push({ pts: toPx([xs[k], xs[k + 1]]), closed: false, w: 0.8 });
+                }
+            });
+        }
+        // 孔口／孔階連接線：內孔遠側壁的可見邊，上下兩半之間的垂直線
+        if (bore.length && document.getElementById('g-draw-edge').checked) {
+            var edges = {};
+            function addEdge(xx, span) { var k = Math.round(xx * 1e6); if (!(span > 0)) return; if (!edges[k] || edges[k][1] < span) edges[k] = [xx, span]; }
+            for (i = 0; i <= bore.length; i++) {
+                var left = bore[i - 1], right = bore[i];
+                var xx = left ? left.xe : right.xs;
+                var spanL = left ? left.r2 + (left.ecr ? left.ecr.rd : 0) : 0, spanR = right ? right.r1 + (right.ecl ? right.ecl.rd : 0) : 0;
+                if (i === 0 || i === bore.length || Math.abs((left ? left.r2 : 0) - (right ? right.r1 : 0)) > eps) addEdge(xx, Math.max(spanL, spanR));
+            }
+            bore.forEach(function (b) {
+                if (b.ecl) addEdge(b.xs + b.ecl.ax, radB(b, b.xs + b.ecl.ax));
+                if (b.ecr) addEdge(b.xe - b.ecr.ax, radB(b, b.xe - b.ecr.ax));
+            });
+            Object.keys(edges).forEach(function (k) { var e = edges[k]; items.push({ pts: toPx([[e[0], e[1]], [e[0], -e[1]]]), closed: false, w: 2 }); });
+        }
+        // 中心線（一點鏈線）與齒部節圓線
+        var ext = Math.max(total, 2 * maxR) * 0.06;
+        items.push({ pts: toPx([[-ext, 0], [total + ext, 0]]), closed: false, w: 1, dash: 'dashdot' });
+        if (gearIdx >= 0 && p && !p.internal) {
+            var rp = (p.mn / Math.cos(p.beta || 0)) * p.z / 2, gs = outer[gearIdx];
+            [rp, -rp].forEach(function (yy) { items.push({ pts: toPx([[gs.xs - ext / 2, yy], [gs.xe + ext / 2, yy]]), closed: false, w: 1, dash: 'dashdot' }); });
+        }
+        // 螺孔：螺紋外徑細線、螺紋終止線、中心線（上下兩半各一個，孔在最上與最下位置）
+        if (hole) {
+            var sg = (hole.face === 'left') ? 1 : -1, f0 = (hole.face === 'left') ? 0 : total;
+            [1, -1].forEach(function (sy) {
+                if (!hole.angles.some(function (a) { return angNear(a, sy > 0 ? cutBaseAngle() : cutBaseAngle() + 180); })) return;
+                var Rp = hole.Rp * sy, hd = hole.D / 2, hm = hole.dm / 2, xt = f0 + sg * hole.td;
+                items.push({ pts: toPx([[f0, Rp + hd], [xt, Rp + hd]]), closed: false, w: 2 });
+                items.push({ pts: toPx([[f0, Rp - hd], [xt, Rp - hd]]), closed: false, w: 2 });
+                items.push({ pts: toPx([[xt, Rp + hm], [xt, Rp + hd]]), closed: false, w: 2 });
+                items.push({ pts: toPx([[xt, Rp - hm], [xt, Rp - hd]]), closed: false, w: 2 });
+                items.push({ pts: toPx([[f0 - sg * ext / 2, Rp], [f0 + sg * (hole.dd + hole.cone + ext / 2), Rp]]), closed: false, w: 1, dash: 'dashdot' });
+            });
+            hole.angles.forEach(function (a) {   // 沒落在切面上的孔：畫成被擋住的虛線
+                if (angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
+                if (!showObl && !isCardinal(a)) return;
+                var yc2 = hole.Rp * Math.cos((a - cutBaseAngle()) * Math.PI / 180), hm2 = hole.dm / 2, xe2 = f0 + sg * hole.dd;
+                items.push({ pts: toPx([[f0, yc2 + hm2], [xe2, yc2 + hm2]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[f0, yc2 - hm2], [xe2, yc2 - hm2]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[xe2, yc2 - hm2], [xe2, yc2 + hm2]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[f0 - sg * ext / 2, yc2], [xe2, yc2]]), closed: false, w: 1, dash: 'dashdot' });
+            });
+        }
+        if (rad) {
+            var rsg = null; outer.forEach(function (s) { if (rad.x >= s.xs - eps && rad.x <= s.xe + eps) rsg = s; });
+            [['up', 1, cutBaseAngle()], ['lo', -1, cutBaseAngle() + 180]].forEach(function (q) {
+                if (!radCuts(q[2]) || !rsg) return;
+                var sy = q[1], Ro = radO(rsg, rad.x), hd = rad.D / 2, hm = rad.dm / 2, dq = radDepth(q[2]), yt = Ro - dq.td;
+                [-1, 1].forEach(function (sx) {
+                    items.push({ pts: toPx([[rad.x + sx * hd, Ro * sy], [rad.x + sx * hd, yt * sy]]), closed: false, w: 2 });
+                    items.push({ pts: toPx([[rad.x + sx * hm, yt * sy], [rad.x + sx * hd, yt * sy]]), closed: false, w: 2 });
+                });
+                items.push({ pts: toPx([[rad.x, (Ro + ext / 2) * sy], [rad.x, (Ro - dq.dd - (dq.through ? 0 : rad.cone) - ext / 2) * sy]]), closed: false, w: 1, dash: 'dashdot' });
+                var yo = Math.sqrt(Math.max(0, Ro * Ro - hm * hm));   // 孔口遠側邊緣：在外圓柱面稍下方的一條線
+                items.push({ pts: toPx([[rad.x - hm, yo * sy], [rad.x + hm, yo * sy]]), closed: false, w: 2 });
+            });
+            // 沒有落在切面上的孔：剖面圖上畫成被擋住的虛線（依角度投影到上下方向）
+            rad.angles.forEach(function (a) {
+                if (!rsg || angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
+                if (!showObl && !isCardinal(a)) return;
+                var dq2 = radDepth(a), cs = Math.cos((a - cutBaseAngle()) * Math.PI / 180), Ro2 = radO(rsg, rad.x), yA = Ro2 * cs, yB = (Ro2 - dq2.dd) * cs, hx1 = rad.x - rad.dm / 2, hx2 = rad.x + rad.dm / 2;
+                items.push({ pts: toPx([[hx1, yA], [hx1, yB]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[hx2, yA], [hx2, yB]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[hx1, yB], [hx2, yB]]), closed: false, w: 1, dash: 'dashed' });
+                items.push({ pts: toPx([[rad.x, yA + (yA >= 0 ? ext / 2 : -ext / 2)], [rad.x, yB]]), closed: false, w: 1, dash: 'dashdot' });
+                var ell = [];   // 孔口與外圓柱面相交的曲線（投影後是略帶弧度的橢圓）
+                for (var q2 = 0; q2 < 36; q2++) {
+                    var ph = q2 / 36 * 2 * Math.PI, py = (rad.dm / 2) * Math.sin(ph), dxx = (rad.dm / 2) * Math.cos(ph);
+                    var dl = Math.asin(Math.max(-1, Math.min(1, py / Ro2)));
+                    ell.push([rad.x + dxx, Ro2 * Math.cos((a - cutBaseAngle()) * Math.PI / 180 + dl)]);
+                }
+                items.push({ pts: toPx(ell), closed: true, w: 1, dash: 'dashed' });
+            });
+        }
+        if (key && bore.length) {   // 內鍵槽：剖面看得到槽的邊線（槽寬邊緣落在孔壁稍下方）
+            var kbs = (key.si >= 0 && bore[key.si]) ? bore[key.si] : bore[0], rK0 = radB(kbs, (key.k0 + key.k1) / 2);
+            if (key.w / 2 < rK0) { var yE = Math.sqrt(rK0 * rK0 - key.w * key.w / 4); items.push({ pts: toPx([[key.k0, yE], [key.k1, yE]]), closed: false, w: 2 }); }
+            bore.forEach(function (bb) {   // 內孔倒角（落在鍵槽範圍內的）畫在孔壁線上
+                if (bb.ecl && !bb.ecl.fillet && bb.xs >= key.k0 - eps && bb.xs + bb.ecl.ax <= key.k1 + eps) items.push({ pts: toPx([[bb.xs, bb.r1 + bb.ecl.rd], [bb.xs + bb.ecl.ax, radB(bb, bb.xs + bb.ecl.ax)]]), closed: false, w: 2 });
+                if (bb.ecr && !bb.ecr.fillet && bb.xe <= key.k1 + eps && bb.xe - bb.ecr.ax >= key.k0 - eps) items.push({ pts: toPx([[bb.xe, bb.r2 + bb.ecr.rd], [bb.xe - bb.ecr.ax, radB(bb, bb.xe - bb.ecr.ax)]]), closed: false, w: 2 });
+            });
+        }
+        if (okey && okey.seg) {   // 外鍵槽：槽寬邊緣在外圓柱面上，被切面擋住＝虛線
+            var Ro3 = radO(okey.seg, okey.k1);
+            if (okey.w / 2 < Ro3) { var yO = Math.sqrt(Ro3 * Ro3 - okey.w * okey.w / 4); items.push({ pts: toPx([[okey.k1, yO], [okey.k2, yO]]), closed: false, w: 1, dash: 'dashed' }); }
+        }
+        if (gearIdx >= 0 && p && p.internal) {   // 內齒：齒根圓（大徑）細虛線
+            var rfi = ((p.mn / Math.cos(p.beta || 0)) * p.z + 2 * p.mn * (1.25 - (p.x || 0))) / 2, gsi = outer[gearIdx];
+            [rfi, -rfi].forEach(function (yy) { items.push({ pts: toPx([[gsi.xs, yy], [gsi.xe, yy]]), closed: false, w: 1, dash: 'dashed' }); });
+        }
+        var dims = [];
+        if (document.getElementById('g-dim-on').checked) {
+            var tOD = dimTol('g-tol-od'), tID = dimTol('g-tol-id'), tLN = dimTol('g-tol-len');
+            var PX = function (xm) { return (xm - total / 2) * sc; }, PY = function (ym) { return -ym * sc; };
+            var yb = maxR * sc, seen = {};
+            var withTol = function (txt, tol) { return txt + (tol ? ' ' + tol : ''); };
+            // 長度：每一段外形一條，全長一條（只有一段時只標全長）
+            var lvl1 = yb + 32, lvl2 = yb + 68;
+            if (outer.length > 1) outer.forEach(function (sg) { dims.push({ kind: 'h', x1: PX(sg.xs), x2: PX(sg.xe), y: lvl1, e1: sg.R1 * sc, e2: sg.R2 * sc, text: withTol(fmtDim(sg.L), tLN) }); });
+            dims.push({ kind: 'h', x1: PX(0), x2: PX(total), y: (outer.length > 1) ? lvl2 : lvl1, e1: outer[0].R1 * sc, e2: outer[outer.length - 1].R2 * sc, text: withTol(fmtDim(total), tLN) });
+            if (bore.length && (bore.length > 1 || Math.abs(boreTotal - total) > eps)) {   // 內孔深度（每一段，再加總深）
+                var lvlB = ((outer.length > 1) ? lvl2 : lvl1) + 36;
+                bore.forEach(function (bg) { dims.push({ kind: 'h', x1: PX(bg.xs), x2: PX(bg.xe), y: lvlB, e1: bg.r1 * sc, e2: bg.r2 * sc, text: withTol(fmtDim(bg.L), tLN) }); });
+                if (bore.length > 1) dims.push({ kind: 'h', x1: PX(bore[0].xs), x2: PX(bore[bore.length - 1].xe), y: lvlB + 36, e1: bore[0].r1 * sc, e2: bore[bore.length - 1].r2 * sc, text: withTol(fmtDim(boreTotal), tLN) });
+            }
+            // 直徑：在左半邊的標在左側（尺寸界線從該段左端面引出），在右半邊的標在右側（從右端面引出）；兩側各自由近到遠排開
+            var nL = 0, nR = 0;
+            outer.forEach(function (sg) {
+                var dd = 2 * Math.max(sg.R1, sg.R2), key = fmtDim(dd);
+                if (seen['o' + key]) return; seen['o' + key] = 1;
+                var onLeft = outer.length > 1 && ((sg.xs + sg.xe) / 2 < total / 2);
+                var xx = onLeft ? PX(0) - 34 - (nL++) * 34 : PX(total) + 34 + (nR++) * 34, ee = onLeft ? PX(sg.xs) : PX(sg.xe);
+                dims.push({ kind: 'v', x: xx, y1: -dd / 2 * sc, y2: dd / 2 * sc, e1: ee, e2: ee, text: withTol('Ø' + key, tOD) });
+            });
+            bore.forEach(function (bg) {   // 孔徑：標在孔內，箭頭直接頂到孔壁（不用尺寸界線）
+                var dd = 2 * Math.max(bg.r1, bg.r2), key = fmtDim(dd);
+                if (seen['b' + key]) return; seen['b' + key] = 1;
+                var xx = PX((bg.xs + bg.xe) / 2);
+                dims.push({ kind: 'v', x: xx, y1: -dd / 2 * sc, y2: dd / 2 * sc, e1: xx, e2: xx, text: withTol('Ø' + key, tID) });
+            });
+            if (okey && okey.seg) {
+                var yTop = -radO(okey.seg, okey.k1) * sc;
+                dims.push({ kind: 'h', x1: PX(okey.k1), x2: PX(okey.k2), y: -yb - 24, e1: yTop, e2: yTop, text: fmtDim(okey.k2 - okey.k1) });
+                dims.push({ kind: 't', x: PX((okey.k1 + okey.k2) / 2), y: -yb - 56, text: '外鍵槽 寬' + fmtDim(okey.w) + ' 深' + fmtDim(okey.t) });
+            }
+            // 倒角
+            outer.forEach(function (sg) {   // 倒角：從倒角中點拉出引線再寫文字（只標真的有削到的角）
+                if (sg.chLe && sg.labL !== false) { var lx = PX(sg.xs + sg.chLe.ax / 2), ly = -(sg.R1 - sg.chLe.rd / 2) * sc; dims.push({ kind: 't', x: lx - 28, y: ly - 30, lx: lx, ly: ly, text: sg.chLe.label }); }
+                if (sg.chRe && sg.labR !== false) { var rx = PX(sg.xe - sg.chRe.ax / 2), ry = -(sg.R2 - sg.chRe.rd / 2) * sc; dims.push({ kind: 't', x: rx + 28, y: ry - 30, lx: rx, ly: ry, text: sg.chRe.label }); }
+            });
+            bore.forEach(function (bg) {
+                if (bg.ecl && bg.labL !== false) { var lx2 = PX(bg.xs + bg.ecl.ax / 2), ly2 = -(bg.r1 + bg.ecl.rd / 2) * sc; dims.push({ kind: 't', x: lx2 + 36, y: -(bg.r1 * sc) + 26, lx: lx2, ly: ly2, text: bg.ecl.label }); }
+                if (bg.ecr && bg.labR !== false) { var rx2 = PX(bg.xe - bg.ecr.ax / 2), ry2 = -(bg.r2 + bg.ecr.rd / 2) * sc; dims.push({ kind: 't', x: rx2 - 36, y: -(bg.r2 * sc) + 26, lx: rx2, ly: ry2, text: bg.ecr.label }); }
+            });
+            if (hole) {
+                var hsg = (hole.face === 'left') ? 1 : -1, hfx = (hole.face === 'left') ? 0 : total;
+                dims.push({ kind: 't', x: PX(hfx) + hsg * 50, y: -yb - 44, text: hole.n + '-' + hole.label + ' ↧' + fmtDim(hole.td) });
+            }
+            if (rad) {
+                var rsg2 = null; outer.forEach(function (sg) { if (rad.x >= sg.xs - eps && rad.x <= sg.xe + eps) rsg2 = sg; });
+                if (rsg2) dims.push({ kind: 't', x: PX(rad.x), y: -yb - 66, text: rad.n + '-' + rad.label + ' ↧' + fmtDim(rad.td) });
+            }
+        }
+        window.egGearDrawItems(items, '齒輪剖面圖（外形 ' + outer.length + ' 段' + (bore.length ? '、內孔 ' + bore.length + ' 段' : '') + (key ? '、鍵槽' : '') + (hole ? '、' + hole.n + '-' + hole.label + '螺孔' : '') + '，全長 ' + total + ' mm）', dims);
+    };
+    /* ══════════════════════════════════════════════════════════════════════
+       3D 預覽：用同一份外形／內孔／倒角／鍵槽／螺孔資料，以 o3dv（站上既有的 3D 檢視器）即時產生模型。
+       做法：剖面輪廓（x,r）繞軸迴轉；齒部再依漸開線齒形（含螺旋角扭轉）調整半徑；
+       鍵槽直接挖在孔壁／外圓柱面的半徑函數上；螺孔先用深色圓盤標示位置（不做布林運算）。
+       o3dv 的 Mesh.AddVertex 只收 Coord3D 物件、三角形繞法決定法向量方向（見砂輪干涉 3D 元件的註解）。 */
+    var G3_LIB = '<?= $__gt3_url ?>/o3dv.min.js';
+    var g3State = 0, g3Queue = [];
+    function g3Libs(cb) {
+        if (g3State === 2) { cb(true); return; }
+        if (g3State === 3) { cb(false); return; }
+        g3Queue.push(cb);
+        if (g3State === 1) return;
+        g3State = 1;
+        function done() { var q = g3Queue; g3Queue = []; q.forEach(function (f) { f(g3State === 2); }); }
+        if (typeof OV !== 'undefined' && OV.EmbeddedViewer) { g3State = 2; done(); return; }
+        var sc = document.createElement('script');
+        sc.src = G3_LIB;
+        sc.onload = function () { g3State = (typeof OV !== 'undefined' && OV.EmbeddedViewer) ? 2 : 3; done(); };
+        sc.onerror = function () { g3State = 3; done(); };
+        document.head.appendChild(sc);
+    }
+    function g3Phong(r, g, b) {
+        var m = new OV.PhongMaterial();
+        m.color = new OV.RGBColor(r, g, b);
+        m.ambient = new OV.RGBColor(Math.round(r * 0.45), Math.round(g * 0.45), Math.round(b * 0.45));
+        m.specular = new OV.RGBColor(40, 40, 40);
+        m.shininess = 0.25;
+        return m;
+    }
+
+    /* 收集資料（與剖面圖同一套解析與驗證） */
+    function g3Data() {
+        var p = _baseParams;
+        if (!p) { alert('請先按「計算齒輪」'); return null; }
+        if (p.internal) { alert('3D 預覽目前只支援外齒輪'); return null; }
+        if (!window.gearEvalAll()) { alert('有數字欄的算式無法計算（紅框處），請修改'); return null; }
+        var eps = 1e-9, i;
+        var outer = readSegs('g-seg-list', true), bore = readSegs('g-bore-list', false);
+        if (!outer.length) { alert('外形請至少填一段'); return null; }
+        var cGtxt = String(document.getElementById('g-draw-c').value || '').trim(), cend = document.getElementById('g-draw-cend').value;
+        var x = 0, gs = null;
+        for (i = 0; i < outer.length; i++) {
+            var s = outer[i];
+            if (s.gear && !(s.D1 > 0)) s.D1 = p.da;
+            if (!(s.D1 > 0) || !(s.L > 0)) { alert('外形第 ' + s.no + ' 段請填外徑與長度'); return null; }
+            s.D2 = d2of(s);
+            if (!(s.D2 > 0)) { alert('外形第 ' + s.no + ' 段的迄徑／錐度格式不對'); return null; }
+            s.R1 = s.D1 / 2; s.R2 = s.D2 / 2;
+            if (s.gear) { gs = s; s.cLraw = (cGtxt && cend !== 'right') ? cGtxt : ''; s.cRraw = (cGtxt && cend !== 'left') ? cGtxt : ''; }
+            s.chL = parseCham(s.cLraw, s.R1, false); s.chR = parseCham(s.cRraw, s.R2, false);
+            if ((s.chL && s.chL.bad) || (s.chR && s.chR.bad)) { alert('外形第 ' + s.no + ' 段的倒角格式不對'); return null; }
+            s.xs = x; x += s.L; s.xe = x;
+        }
+        var total = x, boreTotal = 0;
+        for (i = 0; i < bore.length; i++) {
+            var b = bore[i];
+            if (!(b.D1 > 0) || !(b.L > 0)) { alert('內孔第 ' + b.no + ' 段請填孔徑與長度'); return null; }
+            b.D2 = d2of(b);
+            if (!(b.D2 > 0)) { alert('內孔第 ' + b.no + ' 段的迄徑／錐度格式不對'); return null; }
+            b.r1 = b.D1 / 2; b.r2 = b.D2 / 2; boreTotal += b.L;
+            b.chL = parseCham(b.cLraw, b.r1, true); b.chR = parseCham(b.cRraw, b.r2, true);
+            if ((b.chL && b.chL.bad) || (b.chR && b.chR.bad)) { alert('內孔第 ' + b.no + ' 段的倒角格式不對'); return null; }
+        }
+        if (boreTotal > total + 1e-6) { alert('內孔總長（' + boreTotal + '）不能超過外形總長（' + total + '）'); return null; }
+        var bx0 = (document.getElementById('g-bore-align').value === 'right') ? total - boreTotal : 0, bx = bx0;
+        bore.forEach(function (bb) { bb.xs = bx; bx += bb.L; bb.xe = bx; });
+        var key = keyParams(); if (key === false) return null;
+        if (key && !bore.length) { alert('有鍵槽時請先填內孔'); return null; }
+        if (key) {
+            if (key.si >= 0 && bore[key.si]) { key.k0 = bore[key.si].xs + key.x; key.k1 = key.l ? key.k0 + key.l : bore[key.si].xe; }
+            else { key.k0 = key.x; key.k1 = key.l ? key.x + key.l : bx0 + boreTotal; }
+        }
+        var okey = okeyParams(); if (okey === false) return null;
+        if (okey) { var os = outer[okey.si] || outer[0]; okey.k1 = os.xs + okey.x; okey.k2 = okey.l ? okey.k1 + okey.l : os.xe; }
+        var hole = holeParams(); if (hole === false) return null;
+        var rad = radParams(); if (rad === false) return null;
+        return { p: p, outer: outer, bore: bore, total: total, bx0: bx0, bEnd: bx0 + boreTotal, gear: gs, key: key, okey: okey, hole: hole, rad: rad };
+    }
+
+    /* 剖面輪廓（x,r）：外輪廓左→右、右端面、內孔右→左、左端面；每個點帶標籤 o 外 / b 孔 / f 端面軸線 */
+    function g3Profile(d) {
+        var outer = d.outer, bore = d.bore, total = d.total, bx0 = d.bx0, bEnd = d.bEnd, eps = 1e-9, pts = [];
+        function pu(px, py, tag) { var l = pts[pts.length - 1]; if (!l || Math.abs(l[0] - px) > eps || Math.abs(l[1] - py) > eps) pts.push([px, py, tag]); }
+        function radO(sg, xx) { return sg.R1 + (sg.R2 - sg.R1) * (xx - sg.xs) / sg.L; }
+        function radB(bg, xx) { return bg.r1 + (bg.r2 - bg.r1) * (xx - bg.xs) / bg.L; }
+        outer.forEach(function (sg, i) {
+            var lEx = (i === 0) || outer[i - 1].R2 < sg.R1 - eps, rEx = (i === outer.length - 1) || outer[i + 1].R1 < sg.R2 - eps;
+            var chl = lEx ? clampCh(sg.chL, sg.L / 2, sg.R1) : null, chr = rEx ? clampCh(sg.chR, sg.L / 2, sg.R2) : null;
+            if (chl && chl.fillet) arcPts(sg.xs + chl.ax, sg.R1 - chl.rd, chl.fillet, Math.PI, Math.PI / 2, 8).forEach(function (a) { pu(a[0], a[1], 'o'); });
+            else if (chl) { pu(sg.xs, sg.R1 - chl.rd, 'o'); pu(sg.xs + chl.ax, radO(sg, sg.xs + chl.ax), 'o'); }
+            else pu(sg.xs, sg.R1, 'o');
+            if (chr && chr.fillet) arcPts(sg.xe - chr.ax, sg.R2 - chr.rd, chr.fillet, Math.PI / 2, 0, 8).forEach(function (a) { pu(a[0], a[1], 'o'); });
+            else if (chr) { pu(sg.xe - chr.ax, radO(sg, sg.xe - chr.ax), 'o'); pu(sg.xe, sg.R2 - chr.rd, 'o'); }
+            else pu(sg.xe, sg.R2, 'o');
+        });
+        if (!bore.length) { pu(total, 0, 'f'); pu(0, 0, 'f'); return pts; }
+        if (bEnd < total - eps) { pu(total, 0, 'f'); pu(bEnd, 0, 'f'); }
+        var n = bore.length, j;
+        for (j = n - 1; j >= 0; j--) {
+            var bg = bore[j];
+            var lOK = (j === 0 && bx0 <= eps) || (j > 0 && bore[j - 1].r2 > bg.r1 + eps);
+            var rOK = (j === n - 1 && bEnd >= total - eps) || (j < n - 1 && bg.r2 < bore[j + 1].r1 - eps);
+            var el = lOK ? clampCh(bg.chL, bg.L / 2, 1e9) : null, er = rOK ? clampCh(bg.chR, bg.L / 2, 1e9) : null;
+            if (er && er.fillet) arcPts(bg.xe - er.ax, bg.r2 + er.rd, er.fillet, 0, -Math.PI / 2, 8).forEach(function (a) { pu(a[0], a[1], 'b'); });
+            else if (er) { pu(bg.xe, bg.r2 + er.rd, 'b'); pu(bg.xe - er.ax, radB(bg, bg.xe - er.ax), 'b'); }
+            else pu(bg.xe, bg.r2, 'b');
+            if (el && el.fillet) arcPts(bg.xs + el.ax, bg.r1 + el.rd, el.fillet, -Math.PI / 2, -Math.PI, 8).forEach(function (a) { pu(a[0], a[1], 'b'); });
+            else if (el) { pu(bg.xs + el.ax, radB(bg, bg.xs + el.ax), 'b'); pu(bg.xs, bg.r1 + el.rd, 'b'); }
+            else pu(bg.xs, bg.r1, 'b');
+        }
+        if (bx0 > eps) { pu(bx0, 0, 'f'); pu(0, 0, 'f'); }
+        return pts;
+    }
+
+    /* 齒形半徑函數：相對齒中心的夾角 u（0..齒距/2）→ 半徑（漸開線，含齒根圓）*/
+    function g3ToothLut(p) {
+        var z = p.z, mn = p.mn, x = p.x || 0, an = p.alpha_n, at = p.alpha_t, mt = mn / Math.cos(p.beta || 0);
+        var r = mt * z / 2, rb = r * Math.cos(at), ra = p.da / 2;
+        var rf = ((p.df != null) ? p.df : (mt * z - 2 * mn * (1.25 - x))) / 2;
+        var r0 = Math.max(rb, rf), s = mt * Math.PI / 2 + 2 * x * mn * Math.tan(an), hp = s / (2 * r), invAt = inv(at);
+        function phi(rr) { return Math.max(0, hp + invAt - inv(Math.acos(Math.min(1, rb / rr)))); }
+        var phi0 = phi(r0), phiTip = phi(ra), half = Math.PI / z, M = 600, lut = new Float64Array(M + 1), k;
+        for (k = 0; k <= M; k++) {
+            var u = half * k / M, rr;
+            if (u >= phi0) rr = rf;
+            else if (u <= phiTip) rr = ra;
+            else {   // phi 隨半徑遞減：二分法反求半徑
+                var lo = r0, hi = ra;
+                for (var it = 0; it < 30; it++) { var mid = (lo + hi) / 2; if (phi(mid) > u) lo = mid; else hi = mid; }
+                rr = (lo + hi) / 2;
+            }
+            lut[k] = rr;
+        }
+        return { lut: lut, M: M, half: half, pitch: 2 * half, ra: ra, rf: rf, rp: r, tanb: Math.tan(p.beta || 0) };
+    }
+
+    function g3Build(d, style) {
+        var eps = 1e-9, TAU = 2 * Math.PI;
+        var model = new OV.Model();
+        var line = (style === 'line');
+        var mBody = model.AddMaterial(line ? g3Phong(250, 250, 250) : g3Phong(196, 190, 182));
+        var mDark = model.AddMaterial(g3Phong(48, 48, 54));
+        var mesh = new OV.Mesh(); if (mesh.SetName) mesh.SetName('齒輪');
+        var pts = g3Profile(d), np = pts.length, i, area = 0;
+        for (i = 0; i < np; i++) { var q0 = pts[i], q1 = pts[(i + 1) % np]; area += (q0[0] * q1[1] - q1[0] * q0[1]) / 2; }
+        var flip = area < 0;
+        var gs = d.gear, tooth = (gs) ? g3ToothLut(d.p) : null, z = d.p.z;
+        var NT = Math.max(180, Math.min(1800, z * 20));
+        // 角度取樣：均勻＋鍵槽邊緣各一對（槽內／槽外），讓槽壁是直的
+        var th = [], k;
+        for (k = 0; k < NT; k++) th.push(-Math.PI + TAU * k / NT);
+        var dl = 1e-5;
+        function addEdgeAng(a) { th.push(a - dl, a + dl, -a - dl, -a + dl); }
+        var aBore = 0, aOut = 0;
+        if (d.key) { var rkb = (d.key.si >= 0 && d.bore[d.key.si]) ? d.bore[d.key.si].r1 : d.bore[0].r1; if (d.key.w / 2 < rkb) { aBore = Math.asin(d.key.w / 2 / rkb); addEdgeAng(aBore); } }
+        if (d.okey) { var ro = (d.outer[d.okey.si] || d.outer[0]).R1; if (d.okey.w / 2 < ro) { aOut = Math.asin(d.okey.w / 2 / ro); addEdgeAng(aOut); } }
+        th = th.filter(function (a) { return a >= -Math.PI && a < Math.PI; }).sort(function (a, b) { return a - b; });
+        var tu = [th[0]]; for (k = 1; k < th.length; k++) if (th[k] - tu[tu.length - 1] > 1e-9) tu.push(th[k]);
+        th = tu;
+        function wrap(a) { a = a % TAU; if (a > Math.PI) a -= TAU; if (a <= -Math.PI) a += TAU; return a; }
+        function gearR(t, xx) {
+            var tt = t - tooth.tanb * (xx - gs.xs) / tooth.rp;
+            var u = ((tt % tooth.pitch) + tooth.pitch) % tooth.pitch;
+            if (u > tooth.half) u = tooth.pitch - u;
+            return tooth.lut[Math.min(tooth.M, Math.round(u / tooth.half * tooth.M))];
+        }
+        function onBoreWall(xx, rE) {
+            for (var q = 0; q < d.bore.length; q++) {
+                var bg = d.bore[q];
+                if (d.key && d.key.si >= 0 && d.bore[d.key.si] !== bg) continue;
+                if (xx >= bg.xs - eps && xx <= bg.xe + eps && Math.abs(rE - (bg.r1 + (bg.r2 - bg.r1) * (xx - bg.xs) / bg.L)) < 1e-6) return true;
+            }
+            return false;
+        }
+        function onOuterWall(xx, rE) {
+            var sg = d.outer[d.okey.si] || d.outer[0];
+            return xx >= sg.xs - eps && xx <= sg.xe + eps && Math.abs(rE - (sg.R1 + (sg.R2 - sg.R1) * (xx - sg.xs) / sg.L)) < 1e-6;
+        }
+        function radiusAt(t, xx, rE, tag) {
+            var r = rE;
+            if (gs && (tag === 'o' || tag === 'f') && xx >= gs.xs - eps && xx <= gs.xe + eps && rE > tooth.rf + 1e-6) {
+                var w = Math.max(0, Math.min(1, (rE - tooth.rf) / (tooth.ra - tooth.rf)));
+                r = rE + w * (gearR(t, xx) - tooth.ra);
+            }
+            if (tag === 'b' && d.key && xx >= d.key.k0 && xx <= d.key.k1 && aBore > 0 && Math.abs(wrap(t)) <= aBore && onBoreWall(xx, rE)) r += d.key.t;
+            if (tag === 'o' && d.okey && xx >= d.okey.k1 && xx <= d.okey.k2 && aOut > 0 && Math.abs(wrap(t)) <= aOut && onOuterWall(xx, rE)) r -= d.okey.t;
+            return r;
+        }
+        function tri(a, b, c, cv) {
+            if (a === b || b === c || a === c) return;
+            var t = flip ? new OV.Triangle(a, c, b) : new OV.Triangle(a, b, c);
+            t.SetMaterial(mBody); t.SetCurve(cv);
+            mesh.AddTriangle(t);
+        }
+        var nTw = (gs && Math.abs(tooth.tanb) > 1e-6) ? Math.max(2, Math.min(24, Math.ceil(Math.abs(tooth.tanb * gs.L / tooth.rp) / 0.12))) : 1;
+        for (i = 0; i < np; i++) {
+            var A = pts[i], B = pts[(i + 1) % np], tag = (A[2] === B[2] && (A[2] === 'o' || A[2] === 'b')) ? A[2] : 'f';
+            if (A[1] < 1e-9 && B[1] < 1e-9) continue;               // 軸線上的邊
+            var dx = B[0] - A[0], dr = B[1] - A[1], flat = Math.abs(dr) < 1e-9 && Math.abs(dx) > 1e-9;
+            var ts = [0, 1];
+            if (flat) {
+                var xa = Math.min(A[0], B[0]), xb = Math.max(A[0], B[0]);
+                var cuts = [];
+                if (tag === 'o' && gs && xa >= gs.xs - eps && xb <= gs.xe + eps) for (k = 1; k < nTw; k++) cuts.push(xa + (xb - xa) * k / nTw);
+                if (tag === 'b' && d.key) { cuts.push(d.key.k0 - 1e-5, d.key.k0 + 1e-5, d.key.k1 - 1e-5, d.key.k1 + 1e-5); }
+                if (tag === 'o' && d.okey) { cuts.push(d.okey.k1 - 1e-5, d.okey.k1 + 1e-5, d.okey.k2 - 1e-5, d.okey.k2 + 1e-5); }
+                cuts.forEach(function (cx) { if (cx > xa + 1e-7 && cx < xb - 1e-7) ts.push((cx - A[0]) / dx); });
+                ts.sort(function (a, b) { return a - b; });
+            }
+            var rows = [];
+            ts.forEach(function (tt) {
+                var xx = A[0] + dx * tt, rE = A[1] + dr * tt, row = [];
+                if (rE < 1e-9) { var ap = mesh.AddVertex(new OV.Coord3D(xx, 0, 0)); for (k = 0; k < th.length; k++) row.push(ap); }
+                else for (k = 0; k < th.length; k++) { var rr = radiusAt(th[k], xx, rE, tag); row.push(mesh.AddVertex(new OV.Coord3D(xx, rr * Math.cos(th[k]), rr * Math.sin(th[k])))); }
+                rows.push(row);
+            });
+            var cv = (tag === 'o' && gs && (A[0] + B[0]) / 2 >= gs.xs && (A[0] + B[0]) / 2 <= gs.xe && flat) ? 0 : (i + 1);
+            for (var j = 0; j < rows.length - 1; j++) for (k = 0; k < th.length; k++) {
+                var k2 = (k + 1) % th.length;
+                var a0 = rows[j][k], a1 = rows[j + 1][k], b1 = rows[j + 1][k2], b0 = rows[j][k2];
+                tri(a0, a1, b1, cv); tri(a0, b1, b0, cv);
+            }
+        }
+        var im = model.AddMesh(mesh), nd = new OV.Node(); nd.AddMeshIndex(im); model.GetRootNode().AddChildNode(nd);
+        // 螺孔：深色圓盤標示孔口位置
+        var dm = new OV.Mesh(); if (dm.SetName) dm.SetName('螺孔');
+        function disc(c, e1, e2, rr) {
+            var cv0 = dm.AddVertex(new OV.Coord3D(c[0], c[1], c[2])), ring = [], n = 28;
+            for (var q = 0; q < n; q++) { var a = TAU * q / n; ring.push(dm.AddVertex(new OV.Coord3D(c[0] + rr * (Math.cos(a) * e1[0] + Math.sin(a) * e2[0]), c[1] + rr * (Math.cos(a) * e1[1] + Math.sin(a) * e2[1]), c[2] + rr * (Math.cos(a) * e1[2] + Math.sin(a) * e2[2])))); }
+            for (q = 0; q < n; q++) {
+                var t1 = new OV.Triangle(cv0, ring[q], ring[(q + 1) % n]); t1.SetMaterial(mDark); t1.SetCurve(0); dm.AddTriangle(t1);
+                var t2 = new OV.Triangle(cv0, ring[(q + 1) % n], ring[q]); t2.SetMaterial(mDark); t2.SetCurve(0); dm.AddTriangle(t2);
+            }
+        }
+        var haveDisc = false;
+        function surfR(t, xx) {   // 外表面半徑（含齒形）
+            var sg = null; d.outer.forEach(function (s) { if (xx >= s.xs - eps && xx <= s.xe + eps) sg = s; });
+            if (!sg) return 0;
+            return radiusAt(t, xx, sg.R1 + (sg.R2 - sg.R1) * (xx - sg.xs) / sg.L, 'o');
+        }
+        if (d.rad) d.rad.angles.forEach(function (a) {
+            var t = a * Math.PI / 180, R = surfR(t, d.rad.x) + 0.05;
+            disc([d.rad.x, R * Math.cos(t), R * Math.sin(t)], [1, 0, 0], [0, -Math.sin(t), Math.cos(t)], d.rad.dm / 2); haveDisc = true;
+            if (d.rad.thru === 'all') { var t2 = t + Math.PI, R2 = surfR(t2, d.rad.x) + 0.05; disc([d.rad.x, R2 * Math.cos(t2), R2 * Math.sin(t2)], [1, 0, 0], [0, -Math.sin(t2), Math.cos(t2)], d.rad.dm / 2); }
+        });
+        function boreRAt(xx) { var rr = 0; d.bore.forEach(function (bg) { if (xx >= bg.xs - eps && xx <= bg.xe + eps) rr = bg.r1 + (bg.r2 - bg.r1) * (xx - bg.xs) / bg.L; }); return rr; }
+        if (d.rad && d.rad.thru !== 'depth') d.rad.angles.forEach(function (a) {   // 貫穿到內孔：孔壁內側也要看得到孔口
+            [a * Math.PI / 180, (d.rad.thru === 'all') ? a * Math.PI / 180 + Math.PI : null].forEach(function (t) {
+                if (t == null) return;
+                var rbv = boreRAt(d.rad.x); if (rbv <= 0) return;
+                var cover = d.key && Math.abs(wrap(t)) < 1e-6 && d.key.k0 <= d.rad.x - d.rad.dm / 2 && d.key.k1 >= d.rad.x + d.rad.dm / 2 && d.key.w >= d.rad.dm;
+                var Rb = rbv + (cover ? d.key.t : 0) - 0.05;
+                disc([d.rad.x, Rb * Math.cos(t), Rb * Math.sin(t)], [1, 0, 0], [0, -Math.sin(t), Math.cos(t)], d.rad.dm / 2); haveDisc = true;
+            });
+        });
+        if (d.hole) d.hole.angles.forEach(function (a) {
+            var t = a * Math.PI / 180, f0 = (d.hole.face === 'left') ? -0.05 : d.total + 0.05;
+            disc([f0, d.hole.Rp * Math.cos(t), d.hole.Rp * Math.sin(t)], [0, 1, 0], [0, 0, 1], d.hole.dm / 2); haveDisc = true;
+        });
+        if (haveDisc) { var im2 = model.AddMesh(dm), nd2 = new OV.Node(); nd2.AddMeshIndex(im2); model.GetRootNode().AddChildNode(nd2); }
+        OV.FinalizeModel(model, function () { return line ? new OV.RGBColor(250, 250, 250) : new OV.RGBColor(196, 190, 182); });
+        return model;
+    }
+
+    var G3_VW = null, G3_OBJ = null;
+    function g3Win() {
+        var w = document.getElementById('gear3d-win');
+        if (w) return w;
+        w = document.createElement('div');
+        w.id = 'gear3d-win';
+        w.style.cssText = 'position:fixed;left:80px;top:70px;width:780px;height:580px;z-index:10600;background:#fbf7f1;border:2px solid #8a5a2b;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);display:none;flex-direction:column;overflow:hidden;';
+        w.innerHTML = '<div id="gear3d-hdr" style="background:#8a5a2b;color:#fff;padding:6px 10px;display:flex;align-items:center;gap:8px;cursor:move;font-size:13px;"><i class="fa fa-cube"></i><b>齒輪 3D 預覽</b><span style="flex:1"></span>' +
+            '<select id="gear3d-style" style="font-size:12px;border-radius:4px;border:0;padding:1px 4px;"><option value="solid">實體</option><option value="line">線稿（白底黑邊）</option></select>' +
+            '<button type="button" id="gear3d-insert" style="background:#F0A24B;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="把目前的 3D 畫面轉成圖片放到批圖畫布上">放到圖面</button>' +
+            '<button type="button" id="gear3d-refit" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">重設視角</button>' +
+            '<button type="button" id="gear3d-close" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">關閉</button></div>' +
+            '<div id="gear3d-host" style="flex:1 1 auto;min-height:0;position:relative;"></div>' +
+            '<div style="font-size:11px;color:#6b4a1d;padding:4px 10px;background:#fff8ee;border-top:1px solid #f0c98f;">左鍵拖曳＝旋轉，滾輪＝縮放，右鍵拖曳＝平移。螺孔以深色圓盤標示孔口位置（不做挖孔）。</div>';
+        document.body.appendChild(w);
+        document.getElementById('gear3d-close').onclick = function () { w.style.display = 'none'; };
+        document.getElementById('gear3d-refit').onclick = function () { g3Fit(); };
+        document.getElementById('gear3d-style').onchange = function () { g3Render(); };
+        document.getElementById('gear3d-insert').onclick = function () {
+            if (!G3_VW) return;
+            var url = G3_VW.GetViewer().GetImageAsDataUrl(1400, 1000, false);
+            if (typeof window.egGearInsertImage === 'function') window.egGearInsertImage(url);
+            else alert('這個頁面不能把 3D 圖片放到畫布');
+        };
+        var hdr = document.getElementById('gear3d-hdr'), sx, sy, sl, st, drag = false;
+        hdr.addEventListener('mousedown', function (e) { if (e.target.tagName === 'BUTTON') return; drag = true; sx = e.clientX; sy = e.clientY; sl = w.offsetLeft; st = w.offsetTop; e.preventDefault(); });
+        document.addEventListener('mousemove', function (e) { if (drag) { w.style.left = (sl + e.clientX - sx) + 'px'; w.style.top = (st + e.clientY - sy) + 'px'; } });
+        document.addEventListener('mouseup', function () { drag = false; });
+        return w;
+    }
+    function g3Fit() {
+        if (!G3_VW) return;
+        var viewer = G3_VW.GetViewer(), sph = viewer.GetBoundingSphere(function () { return true; });
+        if (sph) { viewer.AdjustClippingPlanesToSphere(sph); viewer.SetUpVector(OV.Direction.Y, false); viewer.FitSphereToWindow(sph, false); }
+        viewer.Render();
+    }
+    var G3_LAST = null;
+    function g3Render() {
+        var d = G3_LAST; if (!d) return;
+        g3Libs(function (ok) {
+            if (!ok) { alert('3D 元件載入失敗（找不到 o3dv.min.js）'); return; }
+            var w = g3Win(); w.style.display = 'flex';
+            var style = document.getElementById('gear3d-style').value, model;
+            try { model = g3Build(d, style); } catch (e) { console.warn('[gear3d]', e); alert('3D 模型建立失敗：' + (e && e.message ? e.message : e)); return; }
+            var host = document.getElementById('gear3d-host');
+            if (!G3_VW) {
+                host.innerHTML = '';
+                G3_VW = new OV.EmbeddedViewer(host, {
+                    backgroundColor: new OV.RGBAColor(247, 243, 238, 255),
+                    defaultColor: new OV.RGBColor(196, 190, 182),
+                    edgeSettings: new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1)
+                });
+                setTimeout(function () { if (G3_VW && G3_VW.Resize) G3_VW.Resize(); }, 150);
+            }
+            OV.ConvertModelToThreeObject(model, new OV.ModelToThreeConversionParams(), new OV.ModelToThreeConversionOutput(), {
+                onModelLoaded: function (obj) {
+                    var viewer = G3_VW.GetViewer(), old = G3_OBJ, first = !old;
+                    viewer.SetMainObject(obj); G3_OBJ = obj;
+                    if (old && OV.DisposeThreeObjects) { try { OV.DisposeThreeObjects(old); } catch (e) {} }
+                    try {
+                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(25, 25, 25), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+                        viewer.SetBackgroundColor(style === 'line' ? new OV.RGBAColor(255, 255, 255, 255) : new OV.RGBAColor(247, 243, 238, 255));
+                    } catch (e) { console.warn('[gear3d] 樣式設定失敗', e); }
+                    if (first) g3Fit(); else viewer.Render();   // 之後重畫不動相機，免得每次都被轉回預設角度
+                },
+                onTextureLoaded: function () { if (G3_VW) G3_VW.GetViewer().Render(); }
+            });
+        });
+    }
+    window.gearDraw3D = function () {
+        var d = g3Data(); if (!d) return;
+        G3_LAST = d; g3Render();
+    };
+    window.openGearTool = function(opt) {
         ensureGearDom();
         var w = document.getElementById('gear-tool-window');
         if (!w) return;
         w.style.display = _gearDocked ? 'flex' : 'block';
+        var _drawBlk = document.getElementById('g-draw-block');
+        if (_drawBlk) _drawBlk.style.display = (typeof window.egGearDrawHook === 'function') ? '' : 'none';
+        if (window.gearSegInit) window.gearSegInit();
         // 初始化載入資料（首次開啟）
         if (_mnTable.length === 0 && _daTable.length === 0) {
             gearAjax.post({action:'gear_init'}, function(res){
@@ -2936,6 +4400,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             }, 'json');
         }
         if (!_splineInited) { _splineInited = true; initSplineTool(); }
+        gpInit();
+        if (opt && typeof opt === 'object' && opt.dId) window.gearLoadPart(parseInt(opt.dId, 10), true);
         // 游標定位到法向模數
         setTimeout(function(){ var el=document.getElementById('g-mn'); if(el) el.focus(); }, 80);
         // 圖示動畫
@@ -3462,8 +4928,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         // 外花鍵：Wk_upper=Wk_nom+es, Wk_lower=Wk_nom+es-T; 同樣套用於 M
         var Wk_upper = (Wk_nom !== null) ? gRound(Wk_nom + tol.upperDev, 4) : null;
         var Wk_lower = (Wk_nom !== null) ? gRound(Wk_nom + tol.upperDev - tol.tol, 4) : null;
-        var M_upper  = (M_nom !== null)  ? gRound(M_nom  + tol.upperDev, 4) : null;
-        var M_lower  = (M_nom !== null)  ? gRound(M_nom  + tol.upperDev - tol.tol, 4) : null;
+        var M_upper  = (M_nom !== null && !tol.isEst) ? gRound(M_nom  + tol.upperDev, 4) : null;   // 公差資料庫查無＝只有估算值，不顯示以免誤用
+        var M_lower  = (M_nom !== null && !tol.isEst) ? gRound(M_nom  + tol.upperDev - tol.tol, 4) : null;
 
         // 存結果供配合驗算
         _splineExtResult = {standard:standard, mn:mn, z:z, alpha_n:alpha_n, alpha_t:alpha_t,
@@ -3507,7 +4973,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         }
         var tolEl = document.getElementById('sp-ext-tol-src');
         if (tolEl) tolEl.innerHTML = tol.isEst
-            ? '<span class="sp-est-badge">估算</span> 公差以 ISO 286-1 IT 公式估算，請依標準文件核對'
+            ? '<span class="sp-est-badge">未顯示公差</span> 公差資料庫查無此標準／精度／配合組合，為避免誤用不顯示 M 公差；請至「公差資料庫」輸入標準值'
             : '<span class="sp-exact-badge">標準值</span> 使用公差資料庫中的精確值';
 
         // 清除換算欄
@@ -3535,6 +5001,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (!dp2 || dp2 <= 0) { alert('請填寫新測棒直徑 dp2'); return; }
         var M2 = calcM(r.x, r.mn, r.z, r.alpha_n, r.beta, dp2);
         if (typeof M2 === 'string') { alert('計算異常：' + M2); return; }
+        if (r.tol.isEst) { setOut('sp-ext-conv-m-up', '—'); setOut('sp-ext-conv-m-dn', '—'); return; }
         setOut('sp-ext-conv-m-up', fmtNum(gRound(M2 + r.tol.upperDev, 4), 4), 'val-ok');
         setOut('sp-ext-conv-m-dn', fmtNum(gRound(M2 + r.tol.upperDev - r.tol.tol, 4), 4), 'val-ok');
     };
@@ -3546,6 +5013,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var isAnsi = (std === 'ANSIB922');
         document.getElementById('sp-int-mn-wrap').style.display = isAnsi ? 'none' : '';
         document.getElementById('sp-int-pd-wrap').style.display = isAnsi ? '' : 'none';
+        document.getElementById('sp-int-dnom-wrap').style.display = (std === 'DIN5480') ? '' : 'none';
     };
 
     window.calcSplineInt = function() {
@@ -3570,7 +5038,16 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var cos_b   = Math.cos(beta);
         var mt      = mn / cos_b;
         var alpha_t = Math.atan(Math.tan(alpha_n) / cos_b);
-        var x_int   = (gFloat('sp-int-x') !== null) ? gFloat('sp-int-x') : 0;
+        // 輸入的 x 採花鍵標準表示法（與外花鍵、圖面、DIN 5480 相同）；
+        // 下方內花鍵公式採「內齒輪」符號慣例（x 為負號相反），故內部取負。
+        var x_spl = (gFloat('sp-int-x') !== null) ? gFloat('sp-int-x') : 0;
+        var d_B   = (standard === 'DIN5480') ? (gFloat('sp-int-dnom') || 0) : 0;
+        var dinShort = (standard === 'DIN5480' && d_B > 0);   // 選 DIN 5480 並填基準直徑＝短齒高算法
+        if (d_B > 0) {   // DIN 5480：d_B = m·z + 2·x·m（勾選「短齒高算法」時改用 x＝(d_B−m·z−1.1m)／2m）
+            x_spl = dinShort ? gRound((d_B - mt * z - 1.1 * mn) / (2 * mn), 4) : gRound((d_B - mt * z) / (2 * mn), 4);
+            var xEl = document.getElementById('sp-int-x'); if (xEl) xEl.value = x_spl;
+        }
+        var x_int   = -x_spl;
         var root_form = gVal('sp-int-root');
         var hf_star = (root_form === 'fillet') ? 1.5 : 1.25;
         var quality  = gVal('sp-int-q') || '7';
@@ -3581,6 +5058,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var d  = mt * z;
         var di = d - 2 * mn * (1 + x_int);          // 小徑（齒頂）
         var Df = d + 2 * mn * (hf_star - x_int);     // 大徑（齒根）
+        // 圖面／標準有給小徑、大徑時以輸入值為準（DIN 5480 等短齒高花鍵的公式值與標準表不同）；留空＝沿用公式
+        if (dinShort) { di = d_B - 2 * mn; Df = (root_form === 'fillet') ? d_B + 0.2 * mn : d_B; }   // DIN 5480 短齒高（選用）
+        var di_in = gFloat('sp-int-di-in'), Df_in = gFloat('sp-int-df-in');
+        if (di_in && di_in > 0) di = di_in;
+        if (Df_in && Df_in > 0) Df = Df_in;
         var db = d * Math.cos(alpha_t);
         var h  = (Df - di) / 2;
 
@@ -3618,8 +5100,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         // 公差
         var tol = getSplineTol(mn, d, quality, fit_code, standard, false);
         // 內花鍵：M_lower = M_nom + EI, M_upper = M_nom + EI + T
-        var M_lower = (M_nom !== null) ? gRound(M_nom + tol.upperDev, 4) : null;
-        var M_upper = (M_nom !== null) ? gRound(M_nom + tol.upperDev + tol.tol, 4) : null;
+        var M_lower = (M_nom !== null && !tol.isEst) ? gRound(M_nom + tol.upperDev, 4) : null;   // 查無資料庫值＝不顯示估算公差
+        var M_upper = (M_nom !== null && !tol.isEst) ? gRound(M_nom + tol.upperDev + tol.tol, 4) : null;
 
         _splineIntResult = {standard:standard, mn:mn, z:z, alpha_n:alpha_n, alpha_t:alpha_t,
             beta:beta, x:x_int, root_form:root_form, d:d, di:di, Df:Df, db:db, h:h,
@@ -3654,15 +5136,113 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         }
         var tolEl = document.getElementById('sp-int-tol-src');
         if (tolEl) tolEl.innerHTML = tol.isEst
-            ? '<span class="sp-est-badge">估算</span> 公差以 ISO 286-1 IT 公式估算，請依標準文件核對'
+            ? '<span class="sp-est-badge">未顯示公差</span> 公差資料庫查無此標準／精度／配合組合，為避免誤用不顯示 M 公差；請至「公差資料庫」輸入標準值'
             : '<span class="sp-exact-badge">標準值</span> 使用公差資料庫中的精確值';
 
         setOut('sp-int-conv-m-lo',''); setOut('sp-int-conv-m-up','');
         updateSplineFitBtn();
+        drawSplineIntGfx({m:mn, z:z, al:an_deg, beta:bt_deg, x:x_spl, D:dp_used, dTip:di, dRoot:Df, rootForm:(root_form === 'fillet' ? 'fillet' : 'flat'), ok:(di > db && M_nom !== null)});
     };
+
+    // 內花鍵圖示：沿用「內齒計算」的繪圖（同一套幾何與判定）。圖示放在齒輪計算視窗「左側」另一個面板，
+    // 方便一邊看圖一邊在右邊改數字；內齒工具沒載入或算不出就不顯示。
+    var _gfxObs = false;
+    function gfxPanel() {
+        var p = document.getElementById('sp-int-gfx-panel');
+        if (!p) {
+            p = document.createElement('div'); p.id = 'sp-int-gfx-panel';
+            p.innerHTML = '<div class="gfxh" title="拖曳標題列可移動視窗；雙擊標題列回到齒輪視窗左側"><b>內花鍵圖示：跨銷徑／跨銷距／齒型</b><button type="button" onclick="closeSplineIntGfx()">✕</button></div>'
+                + '<div class="gfxb"><div id="sp-int-g-msg" style="font-size:11px;margin-bottom:6px;"></div>'
+                + '<div id="sp-int-g-zoom" class="sp-gfx"></div>'
+                + '<div style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;"><div id="sp-int-g-over" class="sp-gfx" style="flex:0 0 150px;width:150px;"></div><div id="sp-int-g-prof" class="sp-gfx" style="flex:1 1 0;min-width:0;"></div></div></div>';
+            document.body.appendChild(p);
+            // 標題列可拖曳：拖過之後保留使用者放的位置，雙擊標題列才回到自動貼齊齒輪視窗左側
+            var hd = p.querySelector('.gfxh');
+            hd.style.cursor = 'move';
+            hd.addEventListener('mousedown', function(e){
+                if (e.target.tagName === 'BUTTON') return;
+                var sx = e.clientX, sy = e.clientY, sl = p.offsetLeft, st = p.offsetTop;
+                function mv(ev){
+                    p.setAttribute('data-drag', '1');
+                    p.style.left = Math.max(0, Math.min(window.innerWidth - 80, sl + ev.clientX - sx)) + 'px';
+                    p.style.top = Math.max(0, Math.min(window.innerHeight - 40, st + ev.clientY - sy)) + 'px';
+                }
+                function up(){ document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); }
+                document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+                e.preventDefault();
+            });
+            hd.addEventListener('dblclick', function(){ p.removeAttribute('data-drag'); placeSplineIntGfx(); });
+        }
+        if (!_gfxObs) {
+            _gfxObs = true;
+            var mo = new MutationObserver(placeSplineIntGfx);
+            ['gear-tool-window', 'gear-pane-sp-int'].forEach(function(id){
+                var el = document.getElementById(id); if (el) mo.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
+            });
+            if (GEAR_DOCK_OFFSET_SEL) { var oe = document.querySelector(GEAR_DOCK_OFFSET_SEL); if (oe) mo.observe(oe, { attributes: true, attributeFilter: ['class', 'style'] }); }
+            window.addEventListener('resize', placeSplineIntGfx);
+        }
+        return p;
+    }
+    // 頁面左側選單（訂單追蹤頁等）佔掉的寬度：圖示面板不可被它蓋住
+    function gfxMinLeft() {
+        var sb = document.querySelector('.left_col');
+        return (sb && sb.offsetParent !== null) ? Math.max(0, Math.round(sb.getBoundingClientRect().right)) : 0;
+    }
+    function placeSplineIntGfx() {
+        var p = document.getElementById('sp-int-gfx-panel'); if (!p) return;
+        var win = document.getElementById('gear-tool-window'), pane = document.getElementById('gear-pane-sp-int');
+        var show = p.getAttribute('data-show') === '1' && win && win.style.display && win.style.display !== 'none'
+                   && pane && pane.classList.contains('active');
+        if (!show) { p.style.display = 'none'; restoreGearFloat(); return; }
+        // 浮動視窗（訂單追蹤頁）：視窗置中又很寬，左邊放不下圖示面板 → 第一次顯示圖示時把視窗縮窄並靠右，關閉圖示時還原
+        if (!win.classList.contains('gear-docked') && !win.getAttribute('data-gfx-shift')) {
+            win.setAttribute('data-gfx-shift', '1');
+            win._gfxOrig = { left: win.style.left, top: win.style.top, transform: win.style.transform, width: win.style.width };
+            var vw = window.innerWidth, need = 548 + gfxMinLeft();
+            var ww = Math.max(640, Math.min(1280, vw - need - 8));
+            win.style.width = ww + 'px'; win.style.transform = 'none'; win.style.left = Math.max(0, vw - ww - 6) + 'px';
+        }
+        var r = win.getBoundingClientRect();
+        var ml = gfxMinLeft();
+        var w = Math.max(320, Math.min(540, r.left - 8 - ml));
+        p.style.width = w + 'px'; p.style.height = r.height + 'px';
+        if (p.getAttribute('data-drag') !== '1') { p.style.top = r.top + 'px'; p.style.left = Math.max(ml, r.left - w - 2) + 'px'; }
+        p.style.display = 'flex';
+    }
+    function restoreGearFloat() {
+        var win = document.getElementById('gear-tool-window');
+        if (!win || !win.getAttribute('data-gfx-shift')) return;
+        win.removeAttribute('data-gfx-shift');
+        var o = win._gfxOrig; if (!o) return;
+        win.style.width = o.width; win.style.transform = o.transform; win.style.left = o.left; win.style.top = o.top;
+    }
+    window.closeSplineIntGfx = function() { var p = document.getElementById('sp-int-gfx-panel'); if (p) { p.setAttribute('data-show', '0'); p.removeAttribute('data-drag'); p.style.display = 'none'; } restoreGearFloat(); };
+    function drawSplineIntGfx(o) {
+        var p = document.getElementById('sp-int-gfx-panel');
+        if (!o || !o.ok || typeof window.EGInGearDraw !== 'function') { if (p) { p.setAttribute('data-show', '0'); p.style.display = 'none'; } restoreGearFloat(); return; }
+        p = gfxPanel();
+        var z1 = document.getElementById('sp-int-g-zoom'), o1 = document.getElementById('sp-int-g-over'), p1 = document.getElementById('sp-int-g-prof');
+        var msg = document.getElementById('sp-int-g-msg');
+        z1.innerHTML = ''; o1.innerHTML = ''; p1.innerHTML = ''; msg.innerHTML = '';
+        var r = window.EGInGearDraw({m:o.m, z:o.z, al:o.al, beta:o.beta, x:o.x, D:o.D, dTip:o.dTip, dRoot:o.dRoot, rootForm:o.rootForm}, {zoom:z1, over:o1, prof:p1});
+        if (!r) { p.setAttribute('data-show', '0'); p.style.display = 'none'; return; }
+        var rg = r.range ? r.range[0].toFixed(2) + ' ~ ' + r.range[1].toFixed(2) + ' mm' : '無（此齒形找不到可用的跨銷徑）';
+        var rc = r.rec ? r.rec[0].toFixed(2) + ' ~ ' + r.rec[1].toFixed(2) + ' mm' : '無';
+        msg.innerHTML = '<div style="margin-bottom:4px;padding:4px 8px;background:#FBF1E1;border:1px solid #F0D2A0;border-radius:4px;color:#5a3a12;"><b>適合使用的跨銷徑範圍：<span style="color:#b85c0d;font-size:14px;">' + rg + '</span></b>'
+            + '<div style="font-size:10.5px;">建議範圍（不靠近齒頂／齒根）：' + rc + '　目前測棒 Ø' + escGear(String(o.D)) + '</div></div>';
+        msg.innerHTML += '<span style="color:' + (r.lv === 0 ? '#5a3a12' : (r.lv === 1 ? '#b85c0d' : '#DD5138')) + ';font-weight:700;">' + escGear(r.txt) + '</span>';
+        p.setAttribute('data-show', '1');
+        placeSplineIntGfx();
+    }
 
     window.clearSplineInt = function() {
         _splineIntResult = null;
+        drawSplineIntGfx(null);
+        // 輸入欄一併清空（含 DIN5480 自動算出的 x）；標準與下拉選項維持不動
+        ['sp-int-mn','sp-int-pd','sp-int-z','sp-int-an','sp-int-bt','sp-int-x','sp-int-dnom','sp-int-di-in','sp-int-df-in','sp-int-q','sp-int-dp','sp-int-conv-dp2'].forEach(function(id){
+            var el = document.getElementById(id); if (el) el.value = '';
+        });
         ['sp-int-out-d','sp-int-out-di','sp-int-out-Df','sp-int-out-db','sp-int-out-h',
          'sp-int-out-dp-used','sp-int-out-dp-max','sp-int-out-dk','sp-int-out-m-nom','sp-int-out-m-lo','sp-int-out-m-up',
          'sp-int-conv-m-lo','sp-int-conv-m-up'].forEach(function(id){setOut(id,'');});
@@ -3680,6 +5260,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (!dp2 || dp2 <= 0) { alert('請填寫新測棒直徑 dp2'); return; }
         var M2 = calcMInt(r.x, r.mn, r.z, r.alpha_n, r.beta, dp2);
         if (typeof M2 === 'string') { alert('計算異常：' + M2); return; }
+        if (r.tol.isEst) { setOut('sp-int-conv-m-lo', '—'); setOut('sp-int-conv-m-up', '—'); return; }
         setOut('sp-int-conv-m-lo', fmtNum(gRound(M2 + r.tol.upperDev, 4), 4), 'val-ok');
         setOut('sp-int-conv-m-up', fmtNum(gRound(M2 + r.tol.upperDev + r.tol.tol, 4), 4), 'val-ok');
     };
@@ -3755,7 +5336,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         setOut('sp-fit-z',  ext.z);
         setOut('sp-fit-an', fmtNum(alpha_n*180/PI,2)+'°');
         setOut('sp-fit-x-ext', fmtNum(x_ext,4));
-        setOut('sp-fit-x-int', fmtNum(x_int,4));
+        setOut('sp-fit-x-int', fmtNum(-x_int,4));   // 顯示為標準表示法（與外花鍵同號）
         setOut('sp-fit-j-nom', fmtNum(j_nom,5));
         setOut('sp-fit-j-min', fmtNum(j_min,5), j_min>=0?'val-ok':'val-err');
         setOut('sp-fit-j-max', fmtNum(j_max,5), j_max>=0?'val-ok':'val-err');

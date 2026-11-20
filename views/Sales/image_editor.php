@@ -6756,7 +6756,18 @@ function duplicateSelection() {
 function gearDimItems(o, ox, oy, color) {
     const HL = 9, fs = 18, items = [];
     const ln = (x1, y1, x2, y2, w) => new fabric.Line([ox + x1, oy + y1, ox + x2, oy + y2], { stroke: color, strokeWidth: w || 1, strokeUniform: true });
-    const txt = (x, y, str, ang) => new fabric.Text(str, { left: ox + x, top: oy + y, originX: 'center', originY: 'center', fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif', angle: ang || 0 });
+    const txt = (x, y, str, ang) => {
+        const style = { fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif' };
+        if (TOL_INPUT_RE.test(String(str))) {   // 含「上^下」的公差：上下堆疊的小字
+            let tg = null;
+            try { tg = makeTolGroup(String(str), style); } catch (e) { tg = null; }
+            if (tg && isFinite(tg.width) && isFinite(tg.height)) {
+                tg.set({ originX: 'center', originY: 'center', left: ox + x, top: oy + y, angle: ang || 0 });
+                return tg;
+            }
+        }
+        return new fabric.Text(str, Object.assign({ left: ox + x, top: oy + y, originX: 'center', originY: 'center', angle: ang || 0 }, style));
+    };
     if (o.kind === 't') { if (o.lx != null) items.push(ln(o.lx, o.ly, o.x, o.y, 0.8)); items.push(txt(o.x, o.y, o.text)); }
     else if (o.kind === 'h') {
         const sg = (o.y >= o.e1) ? 1 : -1;
@@ -6770,8 +6781,33 @@ function gearDimItems(o, ox, oy, color) {
         items.push(arrowHeadTri(ox + o.x, oy + o.y2, 90, HL, color), arrowHeadTri(ox + o.x, oy + o.y1, -90, HL, color));
         if (Math.abs(o.x - o.e1) > 1) items.push(ln(o.e1, o.y1, o.x + sg * 6, o.y1, 0.8), ln(o.e2, o.y2, o.x + sg * 6, o.y2, 0.8));
         items.push(txt(o.x + sg * 13, (o.y1 + o.y2) / 2, o.text, -90));
+    } else if (o.kind === 'a') {   // 角度標註：圓心在原點，從 a0 到 a1（度，從正上方順時針），兩端箭頭
+        const rr = o.r, P = a => ({ x: rr * Math.sin(a * Math.PI / 180), y: -rr * Math.cos(a * Math.PI / 180) });
+        const n = Math.max(6, Math.ceil(Math.abs(o.a1 - o.a0) / 4)), pp = [];
+        for (let k = 0; k <= n; k++) pp.push(P(o.a0 + (o.a1 - o.a0) * k / n));
+        items.push(new fabric.Polyline(pp.map(q => ({ x: ox + q.x, y: oy + q.y })), { stroke: color, strokeWidth: 1.2, strokeUniform: true, fill: 'transparent', objectCaching: false }));
+        const sgn = o.a1 >= o.a0 ? 1 : -1;
+        [[o.a1, sgn], [o.a0, -sgn]].forEach(q => {   // 箭頭沿弧的切線方向、尖端在弧的端點
+            const pe = P(q[0]), ta = q[0] * Math.PI / 180, tx = Math.cos(ta) * q[1], ty = Math.sin(ta) * q[1];
+            items.push(arrowHeadTri(ox + pe.x, oy + pe.y, Math.atan2(ty, tx) * 180 / Math.PI, HL, color));
+        });
+        const pm = P((o.a0 + o.a1) / 2), nl = Math.hypot(pm.x, pm.y) || 1;
+        items.push(txt(pm.x + pm.x / nl * 16, pm.y + pm.y / nl * 16, o.text));
     } else return null;
     return items;
+}
+/* 標註的「原點」（特徵所在的場景座標）要跟著標註本身的搬移一起更新：圖形或標註被拖到別處之後，
+   再拖標註時才會從目前位置算起，不會跳回圖形剛產生的地方。以標註中心的絕對座標變化量為準。 */
+function gearAbsCenter(g) {
+    const c = g.getCenterPoint();
+    return g.group ? fabric.util.transformPoint(c, g.group.calcTransformMatrix()) : c;
+}
+function gearDimSyncOrigin(g) {
+    if (!g || !g.dimOrigin) return;
+    const c = gearAbsCenter(g);
+    if (!g.__dimBase) { g.__dimBase = { x: c.x, y: c.y }; return; }
+    const dx = c.x - g.__dimBase.x, dy = c.y - g.__dimBase.y;
+    if (dx || dy) { g.dimOrigin = { x: g.dimOrigin.x + dx, y: g.dimOrigin.y + dy }; g.__dimBase = { x: c.x, y: c.y }; }
 }
 function gearMakeDim(o, ox, oy, color) {
     const items = gearDimItems(o, ox, oy, color);
@@ -6779,12 +6815,13 @@ function gearMakeDim(o, ox, oy, color) {
     const g = new fabric.Group(items, {});
     g.merged = true; g.autoDim = true;
     g.dimSpec = JSON.parse(JSON.stringify(o)); g.dimOrigin = { x: ox, y: oy }; g.dimColor = color;
+    g.__dimBase = (function () { const c = g.getCenterPoint(); return { x: c.x, y: c.y }; })();
     return g;
 }
-function gearDimRebuild(g) {
+function gearDimRebuild(g, keepSpecText) {
     const sp = g.dimSpec, org = g.dimOrigin;
-    const tx = g.getObjects().find(c => c.type === 'text');
-    if (tx) sp.text = tx.text;   // 使用者改過的文字保留
+    const tx = g.getObjects().find(c => c.type === 'text' || (c.labelSpec && c.labelSpec.kind === 'tol'));
+    if (tx && !keepSpecText) sp.text = tx.labelSpec ? tx.labelSpec.text : tx.text;   // 使用者改過的文字保留
     const items = gearDimItems(sp, org.x, org.y, g.dimColor || '#000000');
     if (!items) return false;
     const tmp = new fabric.Group(items, {});
@@ -6793,6 +6830,7 @@ function gearDimRebuild(g) {
     g._objects.forEach(c => { c.group = g; });
     g.set({ left: tmp.left, top: tmp.top, width: tmp.width, height: tmp.height, scaleX: 1, scaleY: 1, angle: 0 });
     g.dirty = true; g.setCoords();
+    const cc = gearAbsCenter(g); g.__dimBase = { x: cc.x, y: cc.y };
     return true;
 }
 function gearDimControls() {
@@ -6801,13 +6839,16 @@ function gearDimControls() {
             positionHandler: function (dim, fm, g) {
                 if (!g.canvas || !g.dimSpec) return new fabric.Point(-99999, -99999);
                 const sp = g.dimSpec, o = g.dimOrigin;
-                const pt = (sp.kind === 'h') ? { x: o.x + (sp.x1 + sp.x2) / 2, y: o.y + sp.y } : { x: o.x + sp.x, y: o.y + (sp.y1 + sp.y2) / 2 };
+                let pt;
+                if (sp.kind === 'h') pt = { x: o.x + (sp.x1 + sp.x2) / 2, y: o.y + sp.y };
+                else if (sp.kind === 'v') pt = { x: o.x + sp.x, y: o.y + (sp.y1 + sp.y2) / 2 };
+                else { const am = (sp.a0 + sp.a1) / 2 * Math.PI / 180; pt = { x: o.x + sp.r * Math.sin(am), y: o.y - sp.r * Math.cos(am) }; }
                 return fabric.util.transformPoint(new fabric.Point(pt.x, pt.y), g.canvas.viewportTransform);
             },
             actionHandler: function (ev, tr, x, y) {
                 const g = tr.target, sp = g.dimSpec, o = g.dimOrigin;
                 if (!sp || !isFinite(x) || !isFinite(y)) return false;
-                if (sp.kind === 'h') sp.y = y - o.y; else sp.x = x - o.x;
+                if (sp.kind === 'h') sp.y = y - o.y; else if (sp.kind === 'v') sp.x = x - o.x; else sp.r = Math.max(10, Math.hypot(x - o.x, y - o.y));
                 return gearDimRebuild(g);
             },
             cursorStyle: 'move', actionName: 'moveDim',
@@ -6821,23 +6862,41 @@ function gearDimControls() {
 function refreshGearDimControls(e) {
     ((e && e.deselected) || []).forEach(o => { if (o.__gdimCtl) { delete o.controls; delete o.__gdimCtl; } });
     const obj = canvas.getActiveObject();
-    if (obj && obj.autoDim && obj.dimSpec && (obj.dimSpec.kind === 'h' || obj.dimSpec.kind === 'v') && !obj.__gdimCtl) {
+    if (obj && obj.autoDim && obj.dimSpec && (obj.dimSpec.kind === 'h' || obj.dimSpec.kind === 'v' || obj.dimSpec.kind === 'a') && !obj.__gdimCtl) {
         obj.controls = gearDimControls();
         obj.lockScalingX = obj.lockScalingY = obj.lockRotation = true;   // 不能縮放旋轉，拖曳＝只調整標示那一端
         obj.__gdimCtl = true;
     }
 }
+canvas.on('mouse:down', function (opt) { const g = opt.target; if (g && g.autoDim && g.dimSpec) gearDimSyncOrigin(g); });
+canvas.on('mouse:dblclick', function (opt) {   // 雙擊標註＝自己輸入這一個標註的文字／公差（+0.027^0 上下堆疊、±0.02 都可以）
+    const g = opt.target;
+    if (!g || !g.autoDim || !g.dimSpec || (opt.e && opt.e.altKey)) return;
+    const tx = g.getObjects().find(c => c.type === 'text' || (c.labelSpec && c.labelSpec.kind === 'tol'));
+    const cur = tx ? (tx.labelSpec ? tx.labelSpec.text : tx.text) : (g.dimSpec.text || '');
+    const v = prompt('標註文字（可直接加公差：Ø14 +0.027^0＝上下堆疊，或 Ø14 ±0.02）', cur);
+    if (v == null) return;
+    g.dimSpec.text = v;
+    gearDimRebuild(g, true);
+    canvas.requestRenderAll();
+    pushState();
+});
+canvas.on('object:modified', function (e) {
+    const tg = e.target; if (!tg) return;
+    (tg.type === 'activeSelection' ? tg.getObjects() : [tg]).forEach(o => { if (o && o.autoDim && o.dimSpec) gearDimSyncOrigin(o); });
+});
 canvas.on('object:moving', function (e) {   // 直接拖標註本體：尺寸線跟著游標走，尺寸界線與特徵固定不動
     const g = e.target;
-    if (!g || !g.autoDim || !g.dimSpec || (g.dimSpec.kind !== 'h' && g.dimSpec.kind !== 'v') || !e.e) return;
+    if (!g || !g.autoDim || !g.dimSpec || (g.dimSpec.kind !== 'h' && g.dimSpec.kind !== 'v' && g.dimSpec.kind !== 'a') || !e.e) return;
     const pt = canvas.getPointer(e.e);
-    if (g.dimSpec.kind === 'h') g.dimSpec.y = pt.y - g.dimOrigin.y; else g.dimSpec.x = pt.x - g.dimOrigin.x;
+    if (g.dimSpec.kind === 'h') g.dimSpec.y = pt.y - g.dimOrigin.y; else if (g.dimSpec.kind === 'v') g.dimSpec.x = pt.x - g.dimOrigin.x; else g.dimSpec.r = Math.max(10, Math.hypot(pt.x - g.dimOrigin.x, pt.y - g.dimOrigin.y));
     gearDimRebuild(g);
     canvas.requestRenderAll();
 });
 canvas.on('selection:created', refreshGearDimControls);
 canvas.on('selection:updated', refreshGearDimControls);
 canvas.on('selection:cleared', function (e) { ((e && e.deselected) || []).forEach(o => { if (o.__gdimCtl) { delete o.controls; delete o.__gdimCtl; } }); });
+window.egGearInsertImage = function (url) { addImageFromURL(url, 0); };   // 齒輪 3D 預覽的「放到圖面」
 window.egGearDrawHook = function (geo) {
     const list = geo.rings.map(rg => {
         if (rg.kind === 'text') return { text: rg.text, x: rg.x, y: rg.y, size: rg.size };
