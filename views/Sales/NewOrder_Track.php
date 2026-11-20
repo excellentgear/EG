@@ -5050,35 +5050,9 @@ $stats = [
     'unfinished'   => $initResult['unfinished'] ?? 0,
 ];
 
-// 2. 列表 SQL (強制加上 LIMIT 0, 50，首次進網頁只渲染 50 筆)
-$dataSql = "SELECT 
-    ot.*, 
-    CONCAT(DATE_FORMAT(ot.Order_date, '%y'), 'y/', DATE_FORMAT(ot.Order_date, '%c/%e')) AS Order_date_formatted, 
-    CONCAT(DATE_FORMAT(ot.Delivery_date, '%y'), 'y/', DATE_FORMAT(ot.Delivery_date, '%c/%e')) AS Delivery_date_formatted, 
-    DATE_FORMAT(ot.ateGet, '%c/%e') AS ateGet_formatted, 
-    DATE_FORMAT(ot.pmGet, '%c/%e') AS pmGet_formatted, 
-    DATE_FORMAT(ot.Created_At, '%c/%e') AS Created_At_formatted, 
-    DATE_FORMAT(ot.in_review, '%c/%e') AS in_review_formatted, 
-    u.user_cname, 
-    creator.user_cname AS creator_name 
-FROM order_track ot 
-LEFT JOIN user u ON u.id = ot.ate 
-LEFT JOIN user AS creator ON creator.id = ot.Created_By 
-WHERE (ot.parent_order_id IS NULL OR ot.parent_order_id = 0) " . ($selectedYear !== 'ALL' ? "AND YEAR(ot.Order_date) = " . intval($selectedYear) : "") . " 
-ORDER BY (ot.is_urgent = 1 AND ot.pmGet IS NULL) DESC, ot.Order_date DESC, ot.Created_At DESC LIMIT 0, 50";
-
-$order_list = $conn->getPDO()->query($dataSql)->fetchAll(PDO::FETCH_ASSOC);
-
-// 3. 取得設計師當月件數 (獨立查詢，避免複雜迴圈)
-$orderCountsByDesignerMonth = [];
-$designerCountYear = ($selectedYear !== 'ALL') ? intval($selectedYear) : intval(date('Y'));
-$designerSql = "SELECT u.user_cname, DATE_FORMAT(ot.ateGet, '%c') AS month, COUNT(*) as count FROM order_track ot JOIN user u ON u.id = ot.ate WHERE YEAR(ot.ateGet) = :year AND ot.ate IS NOT NULL AND ot.ateGet IS NOT NULL GROUP BY u.user_cname, month";
-$dStmt = $conn->getPDO()->prepare($designerSql);
-$dStmt->execute([':year' => $designerCountYear]);
-$dCounts = $dStmt->fetchAll(PDO::FETCH_ASSOC);
-foreach($dCounts as $c) {
-    $orderCountsByDesignerMonth[$c['user_cname']][(int)$c['month']] = $c['count'];
-}
+// （2026-11-20）原本這裡還會查「列表 50 筆」與「設計師當月件數」，但首次載入一律由
+// fetchTableData(1) 以 AJAX 取列表（見 $(document).ready），這兩份結果在 HTML 裡完全沒被使用，
+// 只是白白多花約 150ms，已移除。列表與設計師件數的唯一來源是上方 load_page_data。
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
