@@ -4039,7 +4039,12 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         }
         if (key && bore.length) {   // 內鍵槽：剖面看得到槽的邊線（槽寬邊緣落在孔壁稍下方）
             var kbs = (key.si >= 0 && bore[key.si]) ? bore[key.si] : bore[0], rK0 = radB(kbs, (key.k0 + key.k1) / 2);
-            if (key.w / 2 < rK0) { var yE = Math.sqrt(rK0 * rK0 - key.w * key.w / 4); items.push({ pts: toPx([[key.k0, yE], [key.k1, yE]]), closed: false, w: 2 }); }
+            if (key.w / 2 < rK0) { var yE = Math.sqrt(rK0 * rK0 - key.w * key.w / 4); var xa = key.k0, xb = key.k1;   // 孔壁線只畫在倒角以內：倒角範圍內那一段由斜的倒角線取代，不能再有水平線凸出去
+                bore.forEach(function (bq) {
+                    if (bq.ecl && !bq.ecl.fillet && Math.abs(bq.xs - key.k0) < eps) xa = Math.max(xa, bq.xs + bq.ecl.ax);
+                    if (bq.ecr && !bq.ecr.fillet && Math.abs(bq.xe - key.k1) < eps) xb = Math.min(xb, bq.xe - bq.ecr.ax);
+                });
+                if (xb > xa) items.push({ pts: toPx([[xa, yE], [xb, yE]]), closed: false, w: 2 }); }
             // 鍵槽邊緣（孔壁上、離中心線 w/2 的那條遠側線）的高度：yK(半徑)＝√(半徑²−(w/2)²)。倒角也要跟著這個高度走
             var yK = function (rr) { return Math.sqrt(Math.max(0, rr * rr - key.w * key.w / 4)); };
             var kRoof = function (xx) { return radB(kbs, xx) + key.t; };
