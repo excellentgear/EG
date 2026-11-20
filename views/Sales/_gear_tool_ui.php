@@ -4377,7 +4377,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         // 從右端面看時順時針＝−z，從左端面看＝+z，所以右端面視角要把角度取負號，孔的方向才跟端面圖一致
         var sgn3 = (d.viewRight === false) ? 1 : -1;
         var dm = new OV.Mesh(); if (dm.SetName) dm.SetName('螺孔');
-        var mHole = line ? model.AddMaterial(g3Phong(215, 215, 215, true)) : mDark;
+        var mHole = line ? model.AddMaterial(g3Phong(0, 0, 0, true)) : mDark;   // 線稿：孔口只畫成黑色細環（輪廓線），中間保持白底
         function discOn(xc, t, rr, rfn, off) {   // 圓盤貼在半徑函數 rfn(角度,x) 的表面上，off＝離表面的距離（外正內負）
             var R0 = rfn(t, xc), n = 36, ring = [], q, a;
             var cv0 = dm.AddVertex(new OV.Coord3D(xc, (R0 + off) * Math.cos(t), (R0 + off) * Math.sin(t)));
@@ -4386,6 +4386,23 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var u = rr * Math.cos(a), sx = rr * Math.sin(a), ph = Math.asin(Math.max(-1, Math.min(1, sx / Math.max(R0, 1e-6))));
                 var RR = rfn(t + ph, xc + u) + off;
                 ring.push(dm.AddVertex(new OV.Coord3D(xc + u, RR * Math.cos(t + ph), RR * Math.sin(t + ph))));
+            }
+            if (line) {   // 線稿：細環（外緣 rr、內緣 rr−0.18）
+                var ring2 = [];
+                for (q = 0; q < n; q++) {
+                    a = TAU * q / n;
+                    var u2 = (rr - 0.18) * Math.cos(a), sx2 = (rr - 0.18) * Math.sin(a), ph2 = Math.asin(Math.max(-1, Math.min(1, sx2 / Math.max(R0, 1e-6))));
+                    var RR2 = rfn(t + ph2, xc + u2) + off;
+                    ring2.push(dm.AddVertex(new OV.Coord3D(xc + u2, RR2 * Math.cos(t + ph2), RR2 * Math.sin(t + ph2))));
+                }
+                for (q = 0; q < n; q++) {
+                    var q2 = (q + 1) % n;
+                    [[ring[q], ring[q2], ring2[q]], [ring[q2], ring2[q2], ring2[q]]].forEach(function (tv) {
+                        var ta = new OV.Triangle(tv[0], tv[1], tv[2]); ta.SetMaterial(mHole); ta.SetCurve(0); dm.AddTriangle(ta);
+                        var tb = new OV.Triangle(tv[0], tv[2], tv[1]); tb.SetMaterial(mHole); tb.SetCurve(0); dm.AddTriangle(tb);
+                    });
+                }
+                return;
             }
             for (q = 0; q < n; q++) {
                 var t1 = new OV.Triangle(cv0, ring[q], ring[(q + 1) % n]); t1.SetMaterial(mHole); t1.SetCurve(0); dm.AddTriangle(t1);
@@ -4525,7 +4542,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         });
                     } catch (e) { console.warn('[gear3d] 線稿材質失敗', e); }
                     try {
-                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 0), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 0), 20) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
                         viewer.SetBackgroundColor(style === 'line' ? new OV.RGBAColor(255, 255, 255, 255) : new OV.RGBAColor(247, 243, 238, 255));
                     } catch (e) { console.warn('[gear3d] 樣式設定失敗', e); }
                     if (first) g3Fit(); else viewer.Render();   // 之後重畫不動相機，免得每次都被轉回預設角度
