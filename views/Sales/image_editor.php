@@ -6912,6 +6912,49 @@ canvas.on('selection:cleared', function (e) { ((e && e.deselected) || []).forEac
 window.egGearInsertImage = function (url) { addImageFromURL(url, 0); };   // 齒輪 3D 預覽的「放到圖面」
 
 // 一次畫出端面圖＋剖面圖，依第一角法／第三角法排列（proj＝third 或 first；cutDir＝端面圖上剖面箭頭的方向，決定剖面圖是從哪一側看過去的視圖）
+
+// ── 追蹤最近一次畫出的端面圖／剖面圖，設定（剖面線、箭頭方向…）改了就自動重畫、位置保留 ──
+window.__gv = { end: [], sec: [], paired: false };
+window.egGearTrack = function (kind, fn) {
+    const before = canvas.getObjects().slice();
+    const r = fn();
+    const added = canvas.getObjects().filter(o => before.indexOf(o) < 0);
+    if (added.length) window.__gv[kind] = added;
+    return r;
+};
+window.egGearRedraw = function (align) {
+    const gv = window.__gv || {}, alive = o => o && o.canvas === canvas;
+    const E = (gv.end || []).filter(alive), S = (gv.sec || []).filter(alive);
+    if (!E.length && !S.length) return false;
+    const centerOf = set => {
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        set.forEach(o => { const r = o.getBoundingRect(true, true); x1 = Math.min(x1, r.left); y1 = Math.min(y1, r.top); x2 = Math.max(x2, r.left + r.width); y2 = Math.max(y2, r.top + r.height); });
+        return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+    };
+    const shift = (set, dx, dy) => set.forEach(o => { o.set({ left: o.left + dx, top: o.top + dy }); o.setCoords(); if (o.autoDim && o.dimSpec) gearDimSyncOrigin(o); });
+    canvas.discardActiveObject();
+    const cdir = (document.getElementById('g-cut-dir') || {}).value, al = align || (document.getElementById('g-align') || {}).value || 'auto';
+    if (E.length && S.length && gv.paired) {
+        const c0 = centerOf(E);
+        E.concat(S).forEach(o => canvas.remove(o));
+        window.egGearDrawViews('third', cdir, al);
+        const E2 = (window.__gv.end || []).filter(alive), S2 = (window.__gv.sec || []).filter(alive);
+        if (E2.length) { const c1 = centerOf(E2); shift(E2.concat(S2), c0.x - c1.x, c0.y - c1.y); }
+    } else {
+        const redo = (set, kind, fnName) => {
+            if (!set.length) return;
+            const c0 = centerOf(set);
+            set.forEach(o => canvas.remove(o));
+            window[fnName]();
+            const N = (window.__gv[kind] || []).filter(alive);
+            if (N.length) { const c1 = centerOf(N); shift(N, c0.x - c1.x, c0.y - c1.y); }
+        };
+        redo(E, 'end', 'gearDrawToCanvas');
+        redo(S, 'sec', 'gearDrawSection');
+    }
+    canvas.requestRenderAll(); pushState();
+    return true;
+};
 window.egGearDrawViews = function (proj, cutDir, align) {
     const snap = () => canvas.getObjects().slice();
     const diff = (a, b) => b.filter(o => a.indexOf(o) < 0);
@@ -6926,15 +6969,16 @@ window.egGearDrawViews = function (proj, cutDir, align) {
     window.gearDrawSection(); const b2 = snap(), B = diff(b1, b2);
     if (!B.length) return;
     canvas.discardActiveObject();
+    window.__gv.paired = true;
     const ra = rectOf(A), rb = rectOf(B), ca = mainOf(A).getCenterPoint(), cb = mainOf(B).getCenterPoint(), gap = 90;
     // 剖面箭頭方向＝看過去的方向；看到的是「與箭頭反側」的視圖：箭頭朝右＝左視圖、朝左＝右視圖、朝下＝俯視圖、朝上＝仰視圖
-    const d = String(cutDir || 'v-right'), third = proj !== 'first';
+    const d = String(cutDir || 'v-right'), third = true;   // 位置只看箭頭方向：箭頭朝右＝剖面圖在左、朝左＝在右、朝下＝在上、朝上＝在下
     let side;   // 剖面圖放在端面圖的哪一邊
-    if (d === 'v-right') side = third ? 'left' : 'right';
-    else if (d === 'v-left') side = third ? 'right' : 'left';
-    else if (d === 'h-down') side = third ? 'top' : 'bottom';
-    else if (d === 'h-up') side = third ? 'bottom' : 'top';
-    else side = third ? 'left' : 'right';
+    if (d === 'v-right') side = 'left';
+    else if (d === 'v-left') side = 'right';
+    else if (d === 'h-down') side = 'top';
+    else if (d === 'h-up') side = 'bottom';
+    else side = 'left';
     // 對齊方式：auto＝依投影法與剖面箭頭方向；h＝水平並排（中心軸線同一高度）；v＝垂直上下排（中心線同一垂直線）；none＝不移動（各畫在畫面中央，自己拖）
     const al = String(align || 'auto');
     if (al === 'h' && (side === 'top' || side === 'bottom')) side = third ? 'left' : 'right';
@@ -6947,7 +6991,7 @@ window.egGearDrawViews = function (proj, cutDir, align) {
     else { dy = ra.y2 + gap - rb.y1; dx = ca.x - cb.x; }
     B.forEach(o => { o.set({ left: o.left + dx, top: o.top + dy }); o.setCoords(); if (o.autoDim && o.dimSpec) gearDimSyncOrigin(o); });
     canvas.requestRenderAll(); pushState();
-    toast((third ? '第三角法' : '第一角法') + '：剖面圖放在端面圖' + ({ left: '左', right: '右', top: '上', bottom: '下' })[side] + '側');
+    toast('剖面圖放在端面圖' + ({ left: '左', right: '右', top: '上', bottom: '下' })[side] + '側');
 };
 window.egGearDrawHook = function (geo) {
     const list = geo.rings.map(rg => {
