@@ -3718,7 +3718,9 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         for (k = 0; k < n; k++) out.push(a0 + st * k);
         return out;
     }
-    function cutBaseAngle() { var v = document.getElementById('g-cut-dir').value; return v.charAt(0) === 'h' ? 90 : 0; }
+    function cutIsH() { return document.getElementById('g-cut-dir').value.charAt(0) === 'h'; }
+    // 切面通過的孔／鍵槽角度：垂直切割線＝0°；水平切割線朝上＝看到上方（0°）的鍵槽與孔（在視圖正中央）；朝下＝看下半，上方的鍵槽與孔不存在，只剩 90°／270° 方向的孔
+    function cutBaseAngle() { var v = document.getElementById('g-cut-dir').value; return (v.charAt(0) === 'h' && v !== 'h-up') ? 90 : 0; }
     function angNear(a, t) { var d = (((a - t) % 360) + 360) % 360; return d < 0.01 || d > 359.99; }
     function radParams() {
         if (!document.getElementById('g-rad-on').checked) return null;
@@ -3785,6 +3787,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         bore.forEach(function (b) { b.xs = bx; bx += b.L; b.xe = bx; });
         var bEnd = bx0 + boreTotal;
         var key = keyParams(); if (key === false) return;
+        if (document.getElementById('g-cut-dir').value === 'h-down') key = null;   // 由上往下看、保留下半：上方的內鍵槽在被切掉的那一半，不會出現
         if (key && !bore.length) { alert('有鍵槽時請先填內孔'); return; }
         if (key) {
             if (key.si >= 0 && bore[key.si]) { key.k0 = bore[key.si].xs + key.x; key.k1 = key.l ? key.k0 + key.l : bore[key.si].xe; }
@@ -4003,7 +4006,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             });
             hole.angles.forEach(function (a) {   // 沒落在切面上的孔：畫成被擋住的虛線
                 if (angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
-                if ((!showObl && !isCardinal(a)) || cutBaseAngle() === 90) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
+                if ((!showObl && !isCardinal(a)) || cutIsH()) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
                 var yc2 = hole.Rp * Math.cos((a - cutBaseAngle()) * Math.PI / 180), hm2 = hole.dm / 2, xe2 = f0 + sg * hole.dd;
                 items.push({ pts: toPx([[f0, yc2 + hm2], [xe2, yc2 + hm2]]), closed: false, w: 1, dash: 'dashed' });
                 items.push({ pts: toPx([[f0, yc2 - hm2], [xe2, yc2 - hm2]]), closed: false, w: 1, dash: 'dashed' });
@@ -4027,7 +4030,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             // 沒有落在切面上的孔：剖面圖上畫成被擋住的虛線（依角度投影到上下方向）
             rad.angles.forEach(function (a) {
                 if (!rsg || angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
-                if ((!showObl && !isCardinal(a)) || cutBaseAngle() === 90) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
+                if ((!showObl && !isCardinal(a)) || cutIsH()) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
                 var dq2 = radDepth(a), cs = Math.cos((a - cutBaseAngle()) * Math.PI / 180), Ro2 = radO(rsg, rad.x), yA = Ro2 * cs, yB = (Ro2 - dq2.dd) * cs, hx1 = rad.x - rad.dm / 2, hx2 = rad.x + rad.dm / 2;
                 items.push({ pts: toPx([[hx1, yA], [hx1, yB]]), closed: false, w: 1, dash: 'dashed' });
                 items.push({ pts: toPx([[hx2, yA], [hx2, yB]]), closed: false, w: 1, dash: 'dashed' });
@@ -4133,13 +4136,25 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 if (rsg2) dims.push({ kind: 't', x: PX(rad.x), y: -yb - 66, text: rad.n + '-' + rad.label + ' ↧' + fmtDim(rad.td) });
             }
         }
-        if (cutBaseAngle() === 90) {   // 水平切割線：剖面圖放在端面圖上／下方，軸線要轉成垂直（投影對齊：寬度與端面圖同向），座標 x↔y 互換
-            items.forEach(function (it) { if (it.pts) it.pts = it.pts.map(function (q) { return { x: q.y, y: q.x }; }); if (it.text) { var tx = it.x; it.x = it.y; it.y = tx; } });
+        var cdir0 = document.getElementById('g-cut-dir').value;
+        if (cutIsH()) {   // 水平切割線：剖面圖放在端面圖上／下方，軸線要轉成垂直（投影對齊：寬度與端面圖同向），座標 x↔y 互換
+            var fy = (cdir0 === 'h-up') ? -1 : 1;   // 朝上：整個視圖上下鏡射（左端在下）
+            items.forEach(function (it) { if (it.pts) it.pts = it.pts.map(function (q) { return { x: q.y, y: fy * q.x }; }); if (it.text) { var tx = it.x; it.x = it.y; it.y = fy * tx; } });
             dims = dims.map(function (q) {
                 var r = JSON.parse(JSON.stringify(q));
-                if (q.kind === 'h') return { kind: 'v', x: q.y, y1: q.x1, y2: q.x2, e1: q.e1, e2: q.e2, text: q.text };
-                if (q.kind === 'v') return { kind: 'h', y: q.x, x1: q.y1, x2: q.y2, e1: q.e1, e2: q.e2, text: q.text };
-                if (q.kind === 't') { r.x = q.y; r.y = q.x; if (q.lx != null) { r.lx = q.ly; r.ly = q.lx; } return r; }
+                if (q.kind === 'h') return { kind: 'v', x: q.y, y1: fy * q.x1, y2: fy * q.x2, e1: q.e1, e2: q.e2, text: q.text };
+                if (q.kind === 'v') return { kind: 'h', y: fy * q.x, x1: q.y1, x2: q.y2, e1: fy * q.e1, e2: fy * q.e2, text: q.text };
+                if (q.kind === 't') { r.x = q.y; r.y = fy * q.x; if (q.lx != null) { r.lx = q.ly; r.ly = fy * q.lx; } return r; }
+                return r;
+            });
+        }
+        if (cdir0 === 'v-right') {   // 箭頭朝右（看右側）：視圖左右鏡射，大外徑的尺寸在左側
+            items.forEach(function (it) { if (it.pts) it.pts = it.pts.map(function (q) { return { x: -q.x, y: q.y }; }); if (it.text) it.x = -it.x; });
+            dims = dims.map(function (q) {
+                var r = JSON.parse(JSON.stringify(q));
+                if (q.kind === 'h') { r.x1 = -q.x2; r.x2 = -q.x1; }
+                else if (q.kind === 'v') { r.x = -q.x; r.e1 = -q.e1; r.e2 = -q.e2; }
+                else if (q.kind === 't') { r.x = -q.x; if (q.lx != null) r.lx = -q.lx; }
                 return r;
             });
         }
