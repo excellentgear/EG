@@ -622,6 +622,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                                 <select id="g-cut-dir" class="gear-input" style="width:auto;" title="A-A 剖面切割線在端面圖上的畫法與看過去的方向。垂直線＝剖面切在上下方向（0°／180° 的孔會被切到）；水平線＝切在左右方向（90°／270° 的孔會被切到）"><option value="v-right">切割線垂直，箭頭朝右</option><option value="v-left">切割線垂直，箭頭朝左</option><option value="h-down">切割線水平，箭頭朝下</option><option value="h-up">切割線水平，箭頭朝上</option><option value="v-center">切割線垂直，箭頭指向中心線</option><option value="h-center">切割線水平，箭頭指向中心線</option></select>
                                 <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="端面圖也畫出內孔、鍵槽與螺孔"><input type="checkbox" id="g-draw-endbore" checked> 端面圖含孔／鍵槽／螺孔</label>
                                 <button class="btn-gear-calc" type="button" onclick="gearDrawSection()"><i class="fa fa-pencil"></i> 畫剖面圖</button>
+                                <select id="g-proj" class="gear-input" style="width:auto;" title="投影法：第三角法＝視圖放在觀看方向的同一側（美規、日本多用）；第一角法＝放在相反側（歐規、台灣常見）"><option value="third">第三角法</option><option value="first">第一角法</option></select>
+                                <button class="btn-gear-calc" type="button" onclick="if(window.egGearDrawViews)egGearDrawViews(document.getElementById('g-proj').value,document.getElementById('g-cut-dir').value)" title="一次畫出端面圖＋剖面圖，並依所選投影法與剖面箭頭方向排好位置（標註一起移動）"><i class="fa fa-th-large"></i> 畫成兩視圖</button>
                                 <button class="btn-gear-calc" type="button" onclick="gearDraw3D()" title="依目前的外形、內孔、倒角、鍵槽、螺孔、齒形（含螺旋角）產生可旋轉的 3D 模型"><i class="fa fa-cube"></i> 3D 預覽</button>
                             </div>
                         </div>
@@ -3558,7 +3560,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     // ══ 記憶設定（只存在這台電腦的瀏覽器 localStorage）══════════════════════
     // ① 預設值：⑥自動標註區與畫圖選項，使用者按「存為預設」後，每次開啟先套用
     // ② 依料號記憶：由料號開啟時，最後一次畫圖／畫剖面圖／3D 的全部數據（外形、內孔、倒角、鍵槽、螺孔…）
-    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
+    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-proj', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
     var _gearCurD = 0;
     function gmemGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
     function gmemSet(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { return false; } }

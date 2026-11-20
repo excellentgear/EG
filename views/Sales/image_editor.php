@@ -6910,6 +6910,40 @@ canvas.on('selection:created', refreshGearDimControls);
 canvas.on('selection:updated', refreshGearDimControls);
 canvas.on('selection:cleared', function (e) { ((e && e.deselected) || []).forEach(o => { if (o.__gdimCtl) { delete o.controls; delete o.__gdimCtl; } }); });
 window.egGearInsertImage = function (url) { addImageFromURL(url, 0); };   // 齒輪 3D 預覽的「放到圖面」
+
+// 一次畫出端面圖＋剖面圖，依第一角法／第三角法排列（proj＝third 或 first；cutDir＝端面圖上剖面箭頭的方向，決定剖面圖是從哪一側看過去的視圖）
+window.egGearDrawViews = function (proj, cutDir) {
+    const snap = () => canvas.getObjects().slice();
+    const diff = (a, b) => b.filter(o => a.indexOf(o) < 0);
+    const mainOf = set => set.find(o => !o.autoDim) || set[0];
+    const rectOf = set => {
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        set.forEach(o => { const r = o.getBoundingRect(true, true); x1 = Math.min(x1, r.left); y1 = Math.min(y1, r.top); x2 = Math.max(x2, r.left + r.width); y2 = Math.max(y2, r.top + r.height); });
+        return { x1, y1, x2, y2 };
+    };
+    const b0 = snap(); window.gearDrawToCanvas(); const b1 = snap(), A = diff(b0, b1);
+    if (!A.length) return;
+    window.gearDrawSection(); const b2 = snap(), B = diff(b1, b2);
+    if (!B.length) return;
+    canvas.discardActiveObject();
+    const ra = rectOf(A), rb = rectOf(B), ca = mainOf(A).getCenterPoint(), cb = mainOf(B).getCenterPoint(), gap = 90;
+    // 剖面箭頭方向＝看過去的方向；看到的是「與箭頭反側」的視圖：箭頭朝右＝左視圖、朝左＝右視圖、朝下＝俯視圖、朝上＝仰視圖
+    const d = String(cutDir || 'v-right'), third = proj !== 'first';
+    let side;   // 剖面圖放在端面圖的哪一邊
+    if (d === 'v-right') side = third ? 'left' : 'right';
+    else if (d === 'v-left') side = third ? 'right' : 'left';
+    else if (d === 'h-down') side = third ? 'top' : 'bottom';
+    else if (d === 'h-up') side = third ? 'bottom' : 'top';
+    else side = third ? 'left' : 'right';
+    let dx = 0, dy = 0;
+    if (side === 'left') { dx = ra.x1 - gap - rb.x2; dy = ca.y - cb.y; }
+    else if (side === 'right') { dx = ra.x2 + gap - rb.x1; dy = ca.y - cb.y; }
+    else if (side === 'top') { dy = ra.y1 - gap - rb.y2; dx = ca.x - cb.x; }
+    else { dy = ra.y2 + gap - rb.y1; dx = ca.x - cb.x; }
+    B.forEach(o => { o.set({ left: o.left + dx, top: o.top + dy }); o.setCoords(); if (o.autoDim && o.dimSpec) gearDimSyncOrigin(o); });
+    canvas.requestRenderAll(); pushState();
+    toast((third ? '第三角法' : '第一角法') + '：剖面圖放在端面圖' + ({ left: '左', right: '右', top: '上', bottom: '下' })[side] + '側');
+};
 window.egGearDrawHook = function (geo) {
     const list = geo.rings.map(rg => {
         if (rg.kind === 'text') return { text: rg.text, x: rg.x, y: rg.y, size: rg.size };
@@ -8538,9 +8572,14 @@ document.getElementById('p-fontsize').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
     const v = Math.max(6, parseInt(this.value, 10) || 28);
     let dimN = 0;   // 齒輪圖／剖面圖的自動標註：字級記在標註規格裡，改了要重畫那個標註（直接改文字物件會在下次拖標註時被洗回預設）
-    if (obj) (obj.type === 'activeSelection' ? obj.getObjects() : [obj]).forEach(o => {
-        if (o && o.autoDim && o.dimSpec) { gearDimSyncOrigin(o); o.dimSpec.fs = v; if (gearDimRebuild(o, true)) dimN++; }
-    });
+    if (obj) {
+        const sel = obj.type === 'activeSelection' ? obj.getObjects().slice() : [obj];
+        if (sel.some(o => o && o.autoDim && o.dimSpec)) {
+            if (obj.type === 'activeSelection') canvas.discardActiveObject();   // 先解除多選：多選時子物件座標是相對於選取框的，直接重畫會讓標註全部跳位
+            sel.forEach(o => { if (o && o.autoDim && o.dimSpec) { gearDimSyncOrigin(o); o.dimSpec.fs = v; if (gearDimRebuild(o, true)) dimN++; } });
+            if (obj.type === 'activeSelection') { try { canvas.setActiveObject(new fabric.ActiveSelection(sel, { canvas: canvas })); } catch (e) {} }
+        }
+    }
     if (dimN) { canvas.requestRenderAll(); pushState(); return; }
     const n = eachInSelection(obj, o => {
         if (o.type === 'i-text' || o.type === 'textbox') { o.set({ fontSize: v, scaleX: 1, scaleY: 1 }); o.setCoords(); o.dirty = true; return true; }
