@@ -4003,7 +4003,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             });
             hole.angles.forEach(function (a) {   // 沒落在切面上的孔：畫成被擋住的虛線
                 if (angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
-                if (!showObl && !isCardinal(a)) return;
+                if ((!showObl && !isCardinal(a)) || cutBaseAngle() === 90) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
                 var yc2 = hole.Rp * Math.cos((a - cutBaseAngle()) * Math.PI / 180), hm2 = hole.dm / 2, xe2 = f0 + sg * hole.dd;
                 items.push({ pts: toPx([[f0, yc2 + hm2], [xe2, yc2 + hm2]]), closed: false, w: 1, dash: 'dashed' });
                 items.push({ pts: toPx([[f0, yc2 - hm2], [xe2, yc2 - hm2]]), closed: false, w: 1, dash: 'dashed' });
@@ -4027,7 +4027,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             // 沒有落在切面上的孔：剖面圖上畫成被擋住的虛線（依角度投影到上下方向）
             rad.angles.forEach(function (a) {
                 if (!rsg || angNear(a, cutBaseAngle()) || angNear(a, cutBaseAngle() + 180)) return;
-                if (!showObl && !isCardinal(a)) return;
+                if ((!showObl && !isCardinal(a)) || cutBaseAngle() === 90) return;   // 水平切割線（由上往下看）：沒被切到的孔不畫虛線
                 var dq2 = radDepth(a), cs = Math.cos((a - cutBaseAngle()) * Math.PI / 180), Ro2 = radO(rsg, rad.x), yA = Ro2 * cs, yB = (Ro2 - dq2.dd) * cs, hx1 = rad.x - rad.dm / 2, hx2 = rad.x + rad.dm / 2;
                 items.push({ pts: toPx([[hx1, yA], [hx1, yB]]), closed: false, w: 1, dash: 'dashed' });
                 items.push({ pts: toPx([[hx2, yA], [hx2, yB]]), closed: false, w: 1, dash: 'dashed' });
@@ -4132,6 +4132,16 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var rsg2 = null; outer.forEach(function (sg) { if (rad.x >= sg.xs - eps && rad.x <= sg.xe + eps) rsg2 = sg; });
                 if (rsg2) dims.push({ kind: 't', x: PX(rad.x), y: -yb - 66, text: rad.n + '-' + rad.label + ' ↧' + fmtDim(rad.td) });
             }
+        }
+        if (cutBaseAngle() === 90) {   // 水平切割線：剖面圖放在端面圖上／下方，軸線要轉成垂直（投影對齊：寬度與端面圖同向），座標 x↔y 互換
+            items.forEach(function (it) { if (it.pts) it.pts = it.pts.map(function (q) { return { x: q.y, y: q.x }; }); if (it.text) { var tx = it.x; it.x = it.y; it.y = tx; } });
+            dims = dims.map(function (q) {
+                var r = JSON.parse(JSON.stringify(q));
+                if (q.kind === 'h') return { kind: 'v', x: q.y, y1: q.x1, y2: q.x2, e1: q.e1, e2: q.e2, text: q.text };
+                if (q.kind === 'v') return { kind: 'h', y: q.x, x1: q.y1, x2: q.y2, e1: q.e1, e2: q.e2, text: q.text };
+                if (q.kind === 't') { r.x = q.y; r.y = q.x; if (q.lx != null) { r.lx = q.ly; r.ly = q.lx; } return r; }
+                return r;
+            });
         }
         window.egGearDrawItems(items, '齒輪剖面圖（外形 ' + outer.length + ' 段' + (bore.length ? '、內孔 ' + bore.length + ' 段' : '') + (key ? '、鍵槽' : '') + (hole ? '、' + hole.n + '-' + hole.label + '螺孔' : '') + '，全長 ' + total + ' mm）', dims);
     };
