@@ -8648,13 +8648,14 @@ document.getElementById('p-fontsize').addEventListener('change', function () {
             if (top.length && wasMulti) { try { canvas.setActiveObject(new fabric.ActiveSelection(sel, { canvas: canvas })); } catch (e) {} }
         }
     }
-    if (dimN) { canvas.requestRenderAll(); pushState(); return; }
-    const n = eachInSelection(obj, o => {
+    const obj2 = dimN ? (canvas.getActiveObject() || obj) : obj;   // 標註已重畫、選取已重建：後面改其他文字（例如端面圖上的 A）要用新的選取
+    this.value = v;   // 套用後欄位不要被選取更新洗回第一個文字的大小
+    const n = eachInSelection(obj2, o => {
         if (o.type === 'i-text' || o.type === 'textbox') { o.set({ fontSize: v, scaleX: 1, scaleY: 1 }); o.setCoords(); o.dirty = true; return true; }
         if (o.type === 'text') { o.set({ fontSize: v }); o.dirty = true; let g = o.group; while (g) { g.dirty = true; g = g.group; } return true; }   // 標註裡的普通文字（齒輪圖／剖面圖的標註重新載入後已不是「自動標註」，也要能改字級）
         return false;
     });
-    if (n) { if (obj.type === 'group' || obj.type === 'activeSelection') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
+    if (n || dimN) { if (obj2.type === 'group' || obj2.type === 'activeSelection') obj2.dirty = true; canvas.requestRenderAll(); pushState(); }
 });
 document.getElementById('p-bold').addEventListener('change', function () {
     const obj = canvas.getActiveObject();

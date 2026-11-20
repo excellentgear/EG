@@ -4696,8 +4696,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         w.style.cssText = 'position:fixed;left:80px;top:70px;width:780px;height:580px;z-index:10600;background:#fbf7f1;border:2px solid #8a5a2b;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);display:none;flex-direction:column;overflow:hidden;';
         w.innerHTML = '<div id="gear3d-hdr" style="background:#8a5a2b;color:#fff;padding:6px 10px;display:flex;align-items:center;gap:8px;cursor:move;font-size:13px;"><i class="fa fa-cube"></i><b>齒輪 3D 預覽</b><span style="flex:1"></span>' +
             '<select id="gear3d-style" style="font-size:12px;border-radius:4px;border:0;padding:1px 4px;"><option value="solid">實體</option><option value="line">線稿（白底黑邊）</option></select>' +
-            '<button type="button" id="gear3d-lines" style="background:#F0A24B;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="依目前視角，由模型算出稜線與輪廓線、移除被擋住的線，畫成可編輯的向量線圖放到批圖畫布">放到圖面（線圖）</button>' +
-            '<button type="button" id="gear3d-insert" style="background:#F6D9AE;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="把目前的 3D 畫面轉成圖片放到批圖畫布上（舊做法）">圖片</button>' +
+            '<button type="button" id="gear3d-insert" style="background:#F0A24B;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="把目前的 3D 畫面轉成線稿圖片放到批圖畫布上（一律用線稿：白底黑邊）">放到圖面</button>' +
             '<button type="button" id="gear3d-refit" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">重設視角</button>' +
             '<button type="button" id="gear3d-close" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">關閉</button></div>' +
             '<div id="gear3d-host" style="flex:1 1 auto;min-height:0;position:relative;"></div>' +
@@ -4706,7 +4705,6 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         document.getElementById('gear3d-close').onclick = function () { w.style.display = 'none'; };
         document.getElementById('gear3d-refit').onclick = function () { g3Fit(); };
         document.getElementById('gear3d-style').onchange = function () { g3Render(); };
-        document.getElementById('gear3d-lines').onclick = function () { window.gearDraw3DLines(); };
         document.getElementById('gear3d-insert').onclick = function () {
             if (!G3_VW) return;
             if (typeof window.egGearInsertImage !== 'function') { alert('這個頁面不能把 3D 圖片放到畫布'); return; }
