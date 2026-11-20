@@ -3985,6 +3985,12 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             Object.keys(edges).forEach(function (k) {
                 var e = edges[k], eTop = e[1];   // 鍵槽範圍內，上半部的孔口連線只畫到鍵槽邊緣那條線，不要凸進槽裡
                 if (key && key.w / 2 < e[1] && e[0] >= key.k0 - eps && e[0] <= key.k1 + eps) eTop = Math.sqrt(e[1] * e[1] - key.w * key.w / 4);
+                if (keyUp && keyUp.w / 2 < e[1] && e[0] >= keyUp.k0 - eps && e[0] <= keyUp.k1 + eps) {   // 水平朝上：鍵槽處的倒角已被挖掉，孔口連線在槽寬範圍內要斷開
+                    var kh = keyUp.w / 2;
+                    items.push({ pts: toPx([[e[0], e[1]], [e[0], kh]]), closed: false, w: 2 });
+                    items.push({ pts: toPx([[e[0], -kh], [e[0], -e[1]]]), closed: false, w: 2 });
+                    return;
+                }
                 items.push({ pts: toPx([[e[0], eTop], [e[0], -e[1]]]), closed: false, w: 2 });
             });
         }
