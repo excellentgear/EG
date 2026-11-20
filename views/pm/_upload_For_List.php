@@ -2870,8 +2870,102 @@ if (!class_exists('BomHistChunkFilter')) {
         public function readCell($columnAddress, $row, $worksheetName = '') { return $row == 1 || ($row >= $this->a && $row <= $this->b); }
     }
 }
+// xlsx 串流解析（2026-11-20）：直接用 ZipArchive＋XMLReader 單次掃過 sheet XML，不經 PhpSpreadsheet 建立儲存格物件，
+// 5萬多列只要數秒、記憶體很小。回傳 [標頭列, 資料列產生器]；不是 xlsx（如舊 .xls）時回 null，由呼叫端退回舊做法。
+if (!function_exists('bomHistXlsxRows')) {
+    function bomHistColIdx($ref) {
+        $n = 0; $len = strlen($ref);
+        for ($i = 0; $i < $len; $i++) { $c = ord($ref[$i]); if ($c < 65 || $c > 90) break; $n = $n * 26 + ($c - 64); }
+        return $n - 1;
+    }
+    function bomHistXlsxRows($path) {
+        $zip = new ZipArchive();
+        if ($zip->open($path) !== true) return null;
+        if ($zip->locateName('xl/workbook.xml') === false) { $zip->close(); return null; }
+        // 第一張工作表的檔案位置
+        $sheetPath = 'xl/worksheets/sheet1.xml';
+        $wb = @simplexml_load_string($zip->getFromName('xl/workbook.xml'));
+        $rels = @simplexml_load_string((string)$zip->getFromName('xl/_rels/workbook.xml.rels'));
+        if ($wb && $rels) {
+            $wb->registerXPathNamespace('m', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+            $sheets = $wb->xpath('//m:sheets/m:sheet');
+            if ($sheets) {
+                $rid = (string)$sheets[0]->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'];
+                foreach ($rels->Relationship as $rel) if ((string)$rel['Id'] === $rid) {
+                    $t = (string)$rel['Target'];
+                    $sheetPath = ($t[0] === '/') ? ltrim($t, '/') : 'xl/' . $t;
+                }
+            }
+        }
+        // 共用字串
+        $ss = [];
+        if ($zip->locateName('xl/sharedStrings.xml') !== false) {
+            $x = new XMLReader(); $x->XML($zip->getFromName('xl/sharedStrings.xml'), null, LIBXML_COMPACT | LIBXML_PARSEHUGE);
+            while ($x->read()) {
+                if ($x->nodeType === XMLReader::ELEMENT && $x->localName === 'si') {
+                    $si = simplexml_import_dom($x->expand(new DOMDocument()))->children('http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+                    if (isset($si->t)) $txt = (string)$si->t;
+                    else { $txt = ''; foreach ($si->r as $run) $txt .= (string)$run->t; }
+                    $ss[] = $txt;
+                }
+            }
+            $x->close();
+        }
+        $stream = $zip->getStream($sheetPath);
+        if (!$stream) { $zip->close(); return null; }
+        $tmp = tempnam(sys_get_temp_dir(), 'bhx');
+        file_put_contents($tmp, $stream); fclose($stream); $zip->close();
+        return ['file' => $tmp, 'ss' => $ss];
+    }
+    function bomHistXlsxEach($info, $cb) {
+        $r = new XMLReader(); $r->open($info['file'], null, LIBXML_COMPACT | LIBXML_PARSEHUGE);
+        $ss = $info['ss'];
+        while ($r->read()) {
+            if ($r->nodeType !== XMLReader::ELEMENT || $r->localName !== 'row') continue;
+            $row = simplexml_import_dom($r->expand(new DOMDocument()))->children('http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+            $out = []; $max = -1; $auto = 0;
+            foreach ($row->c as $c0) {
+                $at = $c0->attributes(); $ref = (string)$at['r']; $t = (string)$at['t']; $c = $c0->children('http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+                $ci = $ref !== '' ? bomHistColIdx($ref) : $auto; $auto = $ci + 1;
+                $v = null;
+                if ($t === 'inlineStr') { $v = isset($c->is->t) ? (string)$c->is->t : ''; }
+                elseif (isset($c->v)) {
+                    $raw = (string)$c->v;
+                    $v = ($t === 's') ? ($ss[(int)$raw] ?? '') : $raw;
+                }
+                if ($v === null || $v === '') continue;
+                $out[$ci] = $v; if ($ci > $max) $max = $ci;
+            }
+            $arr = $max >= 0 ? array_fill(0, $max + 1, null) : [];
+            foreach ($out as $ci => $v) $arr[$ci] = $v;
+            if ($cb($arr) === false) break;
+        }
+        $r->close();
+    }
+}
 if (!function_exists('bomHistLoadGroupsChunked')) {
     function bomHistLoadGroupsChunked($path) {
+        $info = bomHistXlsxRows($path);
+        if ($info !== null) {
+            $header = null; $buf = []; $merged = [];
+            $flush = function () use (&$buf, &$header, &$merged) {
+                if (!$buf) return;
+                $g = parseBomErpRows(array_merge([$header], $buf)); $buf = [];
+                foreach ($g as $b => $grp) {
+                    if (!isset($merged[$b])) $merged[$b] = $grp;
+                    else $merged[$b]['rows'] = array_merge($merged[$b]['rows'], $grp['rows']);
+                }
+            };
+            bomHistXlsxEach($info, function ($arr) use (&$buf, &$header, $flush) {
+                if ($header === null) { $header = $arr; return true; }
+                $buf[] = $arr;
+                if (count($buf) >= 10000) $flush();
+                return true;
+            });
+            $flush();
+            @unlink($info['file']);
+            return $merged;
+        }
         $reader = IOFactory::createReaderForFile($path);
         $info = $reader->listWorksheetInfo($path);
         $totalRows = (int)($info[0]['totalRows'] ?? 0);
