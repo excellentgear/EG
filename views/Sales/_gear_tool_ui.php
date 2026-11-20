@@ -3348,13 +3348,13 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 });
             }
             var angDims = [];   // 角度標示：獨立的標註物件（兩端有箭頭、可拖曳調整半徑），數字一律正值
-            var angArc = function (aDeg, rA, nomDeg) {   // 弧畫在實際位置；數字標使用者輸入的名義角度（對齊齒頂後弧與數字可能差一點）
+            var angArc = function (aDeg, rA, nomDeg, eMm) {   // 弧畫在實際位置；數字標使用者輸入的名義角度（對齊齒頂後弧與數字可能差一點）
                 var av = ((aDeg + 180) % 360 + 360) % 360 - 180;
                 if (Math.abs(av) < 0.01) return;
                 var nv = (nomDeg == null) ? av : ((nomDeg + 180) % 360 + 360) % 360 - 180;
-                angDims.push({ kind: 'a', r: rA * scale, a0: 0, a1: av, text: fmtDim(Math.abs(nv)) + '°' });
+                angDims.push({ kind: 'a', r: rA * scale, a0: 0, a1: av, e: eMm ? eMm * scale : 0, text: fmtDim(Math.abs(nv)) + '°' });
             };
-            if (typeof rdp !== 'undefined' && rdp) rdp.angles.forEach(function (aDeg, ai) { angArc(aDeg, Rr * (0.42 + 0.07 * ai), rdp.nomAngles ? rdp.nomAngles[ai] : null); });
+            if (typeof rdp !== 'undefined' && rdp) rdp.angles.forEach(function (aDeg, ai) { angArc(aDeg, Rr * (0.42 + 0.07 * ai), rdp.nomAngles ? rdp.nomAngles[ai] : null, Rr * 1.05); });
             if (hlp) {
                 var pcp = []; for (bi = 0; bi < 120; bi++) pcp.push(P(hlp.Rp, TAU * bi / 120));
                 rings.push({ pts: sc(pcp), closed: true, kind: 'pcd' });
@@ -4036,9 +4036,23 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (key && bore.length) {   // 內鍵槽：剖面看得到槽的邊線（槽寬邊緣落在孔壁稍下方）
             var kbs = (key.si >= 0 && bore[key.si]) ? bore[key.si] : bore[0], rK0 = radB(kbs, (key.k0 + key.k1) / 2);
             if (key.w / 2 < rK0) { var yE = Math.sqrt(rK0 * rK0 - key.w * key.w / 4); items.push({ pts: toPx([[key.k0, yE], [key.k1, yE]]), closed: false, w: 2 }); }
-            bore.forEach(function (bb) {   // 內孔倒角（落在鍵槽範圍內的）畫在孔壁線上
-                if (bb.ecl && !bb.ecl.fillet && bb.xs >= key.k0 - eps && bb.xs + bb.ecl.ax <= key.k1 + eps) items.push({ pts: toPx([[bb.xs, bb.r1 + bb.ecl.rd], [bb.xs + bb.ecl.ax, radB(bb, bb.xs + bb.ecl.ax)]]), closed: false, w: 2 });
-                if (bb.ecr && !bb.ecr.fillet && bb.xe <= key.k1 + eps && bb.xe - bb.ecr.ax >= key.k0 - eps) items.push({ pts: toPx([[bb.xe, bb.r2 + bb.ecr.rd], [bb.xe - bb.ecr.ax, radB(bb, bb.xe - bb.ecr.ax)]]), closed: false, w: 2 });
+            // 鍵槽邊緣（孔壁上、離中心線 w/2 的那條遠側線）的高度：yK(半徑)＝√(半徑²−(w/2)²)。倒角也要跟著這個高度走
+            var yK = function (rr) { return Math.sqrt(Math.max(0, rr * rr - key.w * key.w / 4)); };
+            var kRoof = function (xx) { return radB(kbs, xx) + key.t; };
+            var kEnd = { 0: yK(rK0), 1: yK(rK0) };   // 鍵槽兩端：孔壁線在端面處的高度（有倒角時是倒角的最上端）
+            bore.forEach(function (bb) {   // 內孔倒角（落在鍵槽範圍內的）畫在孔壁線上，位置依鍵槽邊緣高度換算
+                if (bb.ecl && !bb.ecl.fillet && bb.xs >= key.k0 - eps && bb.xs + bb.ecl.ax <= key.k1 + eps) {
+                    items.push({ pts: toPx([[bb.xs, yK(bb.r1 + bb.ecl.rd)], [bb.xs + bb.ecl.ax, yK(radB(bb, bb.xs + bb.ecl.ax))]]), closed: false, w: 2 });
+                    if (Math.abs(bb.xs - key.k0) < eps) kEnd[0] = yK(bb.r1 + bb.ecl.rd);
+                }
+                if (bb.ecr && !bb.ecr.fillet && bb.xe <= key.k1 + eps && bb.xe - bb.ecr.ax >= key.k0 - eps) {
+                    items.push({ pts: toPx([[bb.xe, yK(bb.r2 + bb.ecr.rd)], [bb.xe - bb.ecr.ax, yK(radB(bb, bb.xe - bb.ecr.ax))]]), closed: false, w: 2 });
+                    if (Math.abs(bb.xe - key.k1) < eps) kEnd[1] = yK(bb.r2 + bb.ecr.rd);
+                }
+            });
+            // 鍵槽兩端的封閉線：從槽頂垂直連到孔壁線（貫穿到端面時，端面處也要有這條線，槽才是封閉的方框）
+            [[key.k0, kEnd[0]], [key.k1, kEnd[1]]].forEach(function (e) {
+                if (kRoof(e[0]) > e[1] + eps) items.push({ pts: toPx([[e[0], kRoof(e[0])], [e[0], e[1]]]), closed: false, w: 2 });
             });
         }
         if (okey && okey.seg) {   // 外鍵槽：槽寬邊緣在外圓柱面上，被切面擋住＝虛線
@@ -4073,11 +4087,14 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var xx = onLeft ? PX(0) - 34 - (nL++) * 34 : PX(total) + 34 + (nR++) * 34, ee = onLeft ? PX(sg.xs) : PX(sg.xe);
                 dims.push({ kind: 'v', x: xx, y1: -dd / 2 * sc, y2: dd / 2 * sc, e1: ee, e2: ee, text: withTol('Ø' + key, tOD) });
             });
+            var kyp0 = (typeof key !== 'undefined') ? key : null;
             bore.forEach(function (bg) {   // 孔徑：標在孔內，箭頭直接頂到孔壁（不用尺寸界線）
                 var dd = 2 * Math.max(bg.r1, bg.r2), key = fmtDim(dd);
                 if (seen['b' + key]) return; seen['b' + key] = 1;
                 var xx = PX((bg.xs + bg.xe) / 2);
-                dims.push({ kind: 'v', x: xx, y1: -dd / 2 * sc, y2: dd / 2 * sc, e1: xx, e2: xx, text: withTol('Ø' + key, tID) });
+                var yTopB = dd / 2;   // 這段孔上方有鍵槽時，箭頭頂到鍵槽邊緣那條線（實際量起來略小於標稱孔徑）
+                if (kyp0 && kyp0.w / 2 < yTopB && (kyp0.si < 0 || bore[kyp0.si] === bg) && (bg.xs + bg.xe) / 2 >= kyp0.k0 - eps && (bg.xs + bg.xe) / 2 <= kyp0.k1 + eps) yTopB = Math.sqrt(yTopB * yTopB - kyp0.w * kyp0.w / 4);
+                dims.push({ kind: 'v', x: xx, y1: -yTopB * sc, y2: dd / 2 * sc, e1: xx, e2: xx, text: withTol('Ø' + key, tID) });
             });
             if (okey && okey.seg) {
                 var yTop = -radO(okey.seg, okey.k1) * sc;
@@ -4270,6 +4287,14 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             if (u > tooth.half) u = tooth.pitch - u;
             return tooth.lut[Math.min(tooth.M, Math.round(u / tooth.half * tooth.M))];
         }
+        function wallAt(xx) {   // 鍵槽所在孔段在 xx 的孔壁半徑（不含倒角）
+            var rr = 0;
+            d.bore.forEach(function (bg) {
+                if (d.key && d.key.si >= 0 && d.bore[d.key.si] !== bg) return;
+                if (xx >= bg.xs - eps && xx <= bg.xe + eps) rr = bg.r1 + (bg.r2 - bg.r1) * (xx - bg.xs) / bg.L;
+            });
+            return rr;
+        }
         function onBoreWall(xx, rE) {
             for (var q = 0; q < d.bore.length; q++) {
                 var bg = d.bore[q];
@@ -4288,7 +4313,13 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var w = Math.max(0, Math.min(1, (rE - tooth.rf) / (tooth.ra - tooth.rf)));
                 r = rE + w * (gearR(t, xx) - tooth.ra);
             }
-            if (tag === 'b' && d.key && xx >= d.key.k0 && xx <= d.key.k1 && aBore > 0 && Math.abs(wrap(t)) <= aBore && onBoreWall(xx, rE)) r += d.key.t;
+            if (tag === 'b' && d.key && xx >= d.key.k0 && xx <= d.key.k1 && aBore > 0 && Math.abs(wrap(t)) <= aBore) {
+                var wl = wallAt(xx);   // 槽頂＝孔壁＋槽深；倒角的點也一併拉到槽頂（槽會切穿倒角）
+                if (onBoreWall(xx, rE)) r += d.key.t; else if (wl > 0 && rE > wl + 1e-6 && rE - wl < 3) r = wl + d.key.t;
+            }
+            if (tag === 'fi' && d.key && xx >= d.key.k0 - eps && xx <= d.key.k1 + eps && aBore > 0 && Math.abs(wrap(t)) <= aBore) {   // 貫穿到端面：端面內緣在槽寬範圍內也拉到槽頂，才是封閉的開口
+                var wl2 = wallAt(xx); if (wl2 > 0 && rE >= wl2 - 1e-6 && rE - wl2 < 3) r = wl2 + d.key.t;
+            }
             if (tag === 'o' && d.okey && xx >= d.okey.k1 && xx <= d.okey.k2 && aOut > 0 && Math.abs(wrap(t)) <= aOut && onOuterWall(xx, rE)) r -= d.okey.t;
             return r;
         }
@@ -4313,11 +4344,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 cuts.forEach(function (cx) { if (cx > xa + 1e-7 && cx < xb - 1e-7) ts.push((cx - A[0]) / dx); });
                 ts.sort(function (a, b) { return a - b; });
             }
-            var rows = [];
-            ts.forEach(function (tt) {
-                var xx = A[0] + dx * tt, rE = A[1] + dr * tt, row = [];
+            var rows = [], innerIdx = (tag === 'f' && Math.abs(dx) < 1e-9 && A[1] > 1e-9 && B[1] > 1e-9) ? (A[1] < B[1] ? 0 : 1) : -1;
+            ts.forEach(function (tt, tIdx) {
+                var xx = A[0] + dx * tt, rE = A[1] + dr * tt, row = [], rtag = (tIdx === innerIdx) ? 'fi' : tag;
                 if (rE < 1e-9) { var ap = mesh.AddVertex(new OV.Coord3D(xx, 0, 0)); for (k = 0; k < th.length; k++) row.push(ap); }
-                else for (k = 0; k < th.length; k++) { var rr = radiusAt(th[k], xx, rE, tag); row.push(mesh.AddVertex(new OV.Coord3D(xx, rr * Math.cos(th[k]), rr * Math.sin(th[k])))); }
+                else for (k = 0; k < th.length; k++) { var rr = radiusAt(th[k], xx, rE, rtag); row.push(mesh.AddVertex(new OV.Coord3D(xx, rr * Math.cos(th[k]), rr * Math.sin(th[k])))); }
                 rows.push(row);
             });
             var cv = (tag === 'o' && gs && (A[0] + B[0]) / 2 >= gs.xs && (A[0] + B[0]) / 2 <= gs.xe && flat) ? 0 : (i + 1);

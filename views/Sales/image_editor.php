@@ -6786,6 +6786,10 @@ function gearDimItems(o, ox, oy, color) {
         const n = Math.max(6, Math.ceil(Math.abs(o.a1 - o.a0) / 4)), pp = [];
         for (let k = 0; k <= n; k++) pp.push(P(o.a0 + (o.a1 - o.a0) * k / n));
         items.push(new fabric.Polyline(pp.map(q => ({ x: ox + q.x, y: oy + q.y })), { stroke: color, strokeWidth: 1.2, strokeUniform: true, fill: 'transparent', objectCaching: false }));
+        if (o.e > 0 && rr > o.e) [o.a0, o.a1].forEach(a => {   // 弧被拖到孔中心線的末端之外：延伸線（細線）從中心線末端接到弧外一點，中心線就「自動延長」到標註處
+            const p1 = { x: o.e * Math.sin(a * Math.PI / 180), y: -o.e * Math.cos(a * Math.PI / 180) }, p2 = { x: (rr + 6) * Math.sin(a * Math.PI / 180), y: -(rr + 6) * Math.cos(a * Math.PI / 180) };
+            items.push(new fabric.Line([ox + p1.x, oy + p1.y, ox + p2.x, oy + p2.y], { stroke: color, strokeWidth: 1, strokeUniform: true, selectable: false, evented: false }));
+        });
         const sgn = o.a1 >= o.a0 ? 1 : -1;
         [[o.a1, sgn], [o.a0, -sgn]].forEach(q => {   // 箭頭沿弧的切線方向、尖端在弧的端點
             const pe = P(q[0]), ta = q[0] * Math.PI / 180, tx = Math.cos(ta) * q[1], ty = Math.sin(ta) * q[1];
