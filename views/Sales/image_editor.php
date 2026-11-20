@@ -7300,7 +7300,7 @@ function whiteToTransparent(canvasEl, threshold) {
    排除底圖（走挖空）、鎖定/隱藏物件與標註輔助線 */
 function contentObjectsInRect(x, y, w, h) {
     return canvas.getObjects().filter(o => {
-        if (o.id === '__artboard' || o.locked || o.visible === false || o.isDimGuide) return false;
+        if (o.id === '__artboard' || o.visible === false || o.isDimGuide) return false;   // 鎖定的標籤／文字也納入：框選＝使用者明確框住它
         if (o.type === 'image' && !o.labelSpec && !o.labelKind) return false;   // 底圖另外走挖空流程
         const br = o.getBoundingRect(true, true);
         return br.left >= x - 2 && br.top >= y - 2 && br.left + br.width <= x + w + 2 && br.top + br.height <= y + h + 2;
@@ -7312,11 +7312,11 @@ function contentObjectsInRect(x, y, w, h) {
    文字還留在原地被白塊蓋住，看起來像「框選搬移壞掉」。 */
 function contentObjectsTouchingRect(x, y, w, h) {
     return canvas.getObjects().filter(o => {
-        if (o.id === '__artboard' || o.locked || o.visible === false || o.isDimGuide) return false;
+        if (o.id === '__artboard' || o.visible === false || o.isDimGuide) return false;   // 鎖定的標籤／文字也納入：框選＝使用者明確框住它
         if (o.type === 'image' && !o.labelSpec && !o.labelKind) return false;   // 底圖另外走挖空流程
         const br = o.getBoundingRect(true, true);
         return !(br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h);
-    });
+    }).map(o => { if (o.locked) { o.locked = false; o.selectable = true; o.evented = true; } return o; });   // 一起帶走的鎖定物件要能被多重選取，順便解鎖
 }
 /* 切塊圖與「一起帶走的物件」組成多重選取，放開滑鼠就能整組拖到新位置 */
 function selectSliceWithCarried(img, carried) {
