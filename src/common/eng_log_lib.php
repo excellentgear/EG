@@ -20,7 +20,8 @@
  * 關聯資料表：eng_log / _bind / _index / _item / _reply / _file / _step
  */
 
-require_once __DIR__ . '/car_lib.php';   // car_working_days_between()：工作天判定唯一實作，不重複寫
+require_once __DIR__ . '/car_lib.php';
+require_once __DIR__ . '/process_task_link_lib.php';   // 製程中紀錄↔個人工作紀錄完成狀態同步（el_item_set_status 內呼叫）   // car_working_days_between()：工作天判定唯一實作，不重複寫
 
 if (!function_exists('el_bind_types')) {
 
@@ -424,6 +425,9 @@ function el_ensure_schema(PDO $db): void
         // 值＝規則 id；NULL＝人工建立的一般問題項（全部既有資料）。系統提醒不算「批圖溝通中」。
         "ALTER TABLE eng_log_item ADD COLUMN src_rule_id INT NULL COMMENT '設計提醒規則 id，NULL=人工建立'",
         "ALTER TABLE eng_log_item ADD INDEX idx_src_rule (src_rule_id)",
+        // 料號提示（2026-11-06）：製程中紀錄勾「提示」的項目（同時是 is_note=1 的已處理紀錄），
+        // 提示本體在 order_client_reminder（src_item_id 指回這裡）。
+        "ALTER TABLE eng_log_item ADD COLUMN is_hint TINYINT NOT NULL DEFAULT 0 COMMENT '1=料號提示（製程中紀錄）'",
     ] as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS eng_log_step (
@@ -1128,6 +1132,7 @@ function el_item_set_status(PDO $db, int $logId, int $itemId, string $status, $c
         $db->prepare("UPDATE eng_log_item SET status=?, conclusion=?, updated_at=? WHERE id=? AND log_id=?")
            ->execute([$status, ($conclusion === '' ? null : $conclusion), $now, $itemId, $logId]);
     }
+    ptl_sync_item($db, $itemId, $status);   // 連結的個人工作紀錄同步完成／恢復
 }
 
 /**
@@ -1137,6 +1142,19 @@ function el_item_set_status(PDO $db, int $logId, int $itemId, string $status, $c
  * @param array $in 可用鍵：content/replied_on/reply_by/channel
  * @return array ['ids'=>新回覆id陣列, 'first_id'=>第一筆的id或0]
  */
+/** eng_log_reply.reply_to：0＝回覆主問題；>0＝回覆該則【追問】(eng_log_reply.id)；NULL＝舊資料（顯示沿用舊規則） */
+function el_reply_ensure_cols(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $has = false;
+        foreach ($db->query("SHOW COLUMNS FROM eng_log_reply")->fetchAll(PDO::FETCH_ASSOC) as $c) if ($c['Field'] === 'reply_to') $has = true;
+        if (!$has) $db->exec("ALTER TABLE eng_log_reply ADD COLUMN reply_to INT NULL COMMENT '0=回覆主問題 >0=回覆該則追問(reply.id) NULL=舊資料'");
+    } catch (Throwable $e) { error_log('el_reply_ensure_cols: ' . $e->getMessage()); }
+}
+
 function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $createdBy, string $now, string $today): array
 {
     if (!$itemIds) throw new InvalidArgumentException('請至少勾選一條問題');
@@ -1153,10 +1171,21 @@ function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $creat
     // 自己原本就有的「必選回覆方式」檢查也從未真的存檔成功過）。
     if ($channel !== '' && !isset(el_channels($db)[$channel])) $channel = '';
 
+    // reply_to：呼叫端有帶這個鍵才記（0=主問題／>0=某則追問）；沒帶＝舊呼叫端，維持 NULL（舊顯示規則）
+    el_reply_ensure_cols($db);
+    $replyTo = null;
+    if (array_key_exists('reply_to', $in) && $in['reply_to'] !== '' && $in['reply_to'] !== null) {
+        $replyTo = max(0, (int)$in['reply_to']);
+        if ($replyTo > 0) {   // 只能指向同一條問題底下的【追問】，否則一律視為回覆主問題
+            $okR = $db->prepare("SELECT 1 FROM eng_log_reply WHERE id=? AND log_id=? AND content LIKE '【追問】%'");
+            $okR->execute([$replyTo, $logId]);
+            if (!$okR->fetchColumn()) $replyTo = 0;
+        }
+    }
     $newIds = []; $firstId = 0;
     $chk = $db->prepare("SELECT id FROM eng_log_item WHERE id=? AND log_id=?");
-    $ins = $db->prepare("INSERT INTO eng_log_reply (item_id, log_id, replied_on, reply_by, channel, content, created_by, created_at)
-                         VALUES (?,?,?,?,?,?,?,?)");
+    $ins = $db->prepare("INSERT INTO eng_log_reply (item_id, log_id, replied_on, reply_by, channel, content, created_by, created_at, reply_to)
+                         VALUES (?,?,?,?,?,?,?,?,?)");
     $upd = $db->prepare("UPDATE eng_log_item SET status=CASE WHEN status='waiting' THEN 'answered' ELSE status END,
                          remind_sent=1, updated_at=? WHERE id=?");
     foreach ($itemIds as $iid) {
@@ -1164,13 +1193,14 @@ function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $creat
         $chk->execute([$iid, $logId]);
         if (!$chk->fetchColumn()) continue;      // 不屬於這筆案件的問題項一律略過
         $ins->execute([$iid, $logId, $repliedOn, ($replyBy === '' ? null : $replyBy),
-                       ($channel === '' ? null : $channel), $content, $createdBy, $now]);
+                       ($channel === '' ? null : $channel), $content, $createdBy, $now, $replyTo]);
         $rid = (int)$db->lastInsertId();
         $newIds[] = $rid;
         if ($firstId === 0) $firstId = $rid;
         $upd->execute([$now, $iid]);
     }
     if (!$newIds) throw new InvalidArgumentException('勾選的問題項不存在，請重新整理');
+    foreach ($itemIds as $iid) ptl_rebuild_steps($db, (int)$iid);   // 連結的個人工作紀錄進度同步
     return ['ids' => $newIds, 'first_id' => $firstId];
 }
 
@@ -1431,10 +1461,12 @@ function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = '
     // is_note=1（純備註）排除在外：那是使用者勾選「不列入問題」的紀錄，不算批圖溝通中。
     // 已作廢（voided_at IS NOT NULL）同理排除（2026-10-12）：被宣告不算數的一條不可以
     // 讓訂單一直掛在「批圖溝通中」。
-    return "EXISTS (SELECT 1 FROM eng_log_bind elb
+    // （2026-11-20）由逐列相關子查詢 EXISTS 改成 IN（集合只算一次再逐列比對）：訂單 3 萬筆時
+    // 統計查詢少掉數萬次索引查找；結果與 EXISTS 完全相同（已比對筆數與 Order_id 加總）。
+    return "{$orderAlias}.Order_id IN (SELECT CAST(elb.bind_id AS UNSIGNED) FROM eng_log_bind elb
         JOIN eng_log elg ON elg.id = elb.log_id
         JOIN eng_log_item eli ON eli.log_id = elb.log_id
-        WHERE elb.bind_type='order' AND elb.bind_id = CAST({$orderAlias}.Order_id AS CHAR)
+        WHERE elb.bind_type='order' AND elb.bind_id IS NOT NULL
         AND elg.log_type = '{$logType}'
         AND eli.is_note = 0
         AND eli.src_rule_id IS NULL
