@@ -6774,13 +6774,13 @@ function gearDimItems(o, ox, oy, color) {
         items.push(ln(o.x1 + HL, o.y, o.x2 - HL, o.y, 1.2));
         items.push(arrowHeadTri(ox + o.x2, oy + o.y, 0, HL, color), arrowHeadTri(ox + o.x1, oy + o.y, 180, HL, color));
         items.push(ln(o.x1, o.e1, o.x1, o.y + sg * 6, 0.8), ln(o.x2, o.e2, o.x2, o.y + sg * 6, 0.8));
-        items.push(txt((o.x1 + o.x2) / 2, o.y + sg * 13, o.text));
+        items.push(txt((o.x1 + o.x2) / 2, o.y + sg * (fs / 2 + 4), o.text));   // 文字離尺寸線的距離跟字級走，字放大也不會壓到線
     } else if (o.kind === 'v') {
         const sg = (o.x >= o.e1) ? 1 : -1;
         items.push(ln(o.x, o.y1 + HL, o.x, o.y2 - HL, 1.2));
         items.push(arrowHeadTri(ox + o.x, oy + o.y2, 90, HL, color), arrowHeadTri(ox + o.x, oy + o.y1, -90, HL, color));
         if (Math.abs(o.x - o.e1) > 1) items.push(ln(o.e1, o.y1, o.x + sg * 6, o.y1, 0.8), ln(o.e2, o.y2, o.x + sg * 6, o.y2, 0.8));
-        items.push(txt(o.x + sg * 13, (o.y1 + o.y2) / 2, o.text, -90));
+        items.push(txt(o.x + sg * (fs / 2 + 4), (o.y1 + o.y2) / 2, o.text, -90));
     } else if (o.kind === 'a') {   // 角度標註：圓心在原點，從 a0 到 a1（度，從正上方順時針），兩端箭頭
         const rr = o.r, P = a => ({ x: rr * Math.sin(a * Math.PI / 180), y: -rr * Math.cos(a * Math.PI / 180) });
         const n = Math.max(6, Math.ceil(Math.abs(o.a1 - o.a0) / 4)), pp = [];
@@ -6796,7 +6796,7 @@ function gearDimItems(o, ox, oy, color) {
             items.push(arrowHeadTri(ox + pe.x, oy + pe.y, Math.atan2(ty, tx) * 180 / Math.PI, HL, color));
         });
         const pm = P((o.a0 + o.a1) / 2), nl = Math.hypot(pm.x, pm.y) || 1;
-        items.push(txt(pm.x + pm.x / nl * 16, pm.y + pm.y / nl * 16, o.text));
+        items.push(txt(pm.x + pm.x / nl * (fs * 0.5 + 8), pm.y + pm.y / nl * (fs * 0.5 + 8), o.text));
     } else return null;
     return items;
 }
@@ -6815,7 +6815,7 @@ function gearDimSyncOrigin(g) {
     if (g.dimSpec && g.__dimBase && (Math.abs(ssx - 1) > 1e-4 || Math.abs(ssy - 1) > 1e-4)) {
         const sc = (ssx + ssy) / 2, b = g.__dimBase;
         g.dimOrigin = { x: c.x + sc * (g.dimOrigin.x - b.x), y: c.y + sc * (g.dimOrigin.y - b.y) };
-        ['x1', 'x2', 'y', 'e1', 'e2', 'y1', 'y2', 'x', 'r', 'e', 'e0'].forEach(k => { if (typeof g.dimSpec[k] === 'number') g.dimSpec[k] *= sc; });
+        ['x1', 'x2', 'y', 'e1', 'e2', 'y1', 'y2', 'x', 'r', 'e', 'e0', 'lx', 'ly'].forEach(k => { if (typeof g.dimSpec[k] === 'number') g.dimSpec[k] *= sc; });
         if (gearDimRebuild(g, true)) return;
     }
     if (!g.__dimBase) { g.__dimBase = { x: c.x, y: c.y }; return; }
