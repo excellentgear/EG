@@ -3795,6 +3795,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         }
         var hole = holeParams(); if (hole === false) return;
         var rad = radParams(); if (rad === false) return;
+        var keyUp = null, radUp = null;   // 水平切割線朝上：看上半部——鍵槽與 0° 螺孔在視圖正中央（從孔內往上看到的槽與孔口），剖面本身左右對稱
+        if (document.getElementById('g-cut-dir').value === 'h-up') { keyUp = key; key = null; radUp = rad; rad = null; }
         var okey = okeyParams(); if (okey === false) return;
         function radO(s, xx) { return s.R1 + (s.R2 - s.R1) * (xx - s.xs) / s.L; }
         function radB(b, xx) { return b.r1 + (b.r2 - b.r1) * (xx - b.xs) / b.L; }
@@ -3944,6 +3946,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var sc = 520 / Math.max(total, 2 * maxR);
         var items = [];
         function toPx(a) { return a.map(function (q) { return { x: (q[0] - total / 2) * sc, y: -q[1] * sc }; }); }
+        function toPxLine(a, dash) { items.push({ pts: toPx(a), closed: false, w: dash ? 1 : 2, dash: dash || null }); }
         items.push({ pts: toPx(up), closed: true, w: 2 });
         items.push({ pts: toPx(lo), closed: true, w: 2 });
         // 剖面線：45°，每個半邊各自掃描（斜線與多邊形邊求交，兩兩配對）
@@ -4136,6 +4139,19 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 if (rsg2) dims.push({ kind: 't', x: PX(rad.x), y: -yb - 66, text: rad.n + '-' + rad.label + ' ↧' + fmtDim(rad.td) });
             }
         }
+        if (keyUp && bore.length) {   // 孔內鍵槽：兩條槽邊線沿軸向＋兩端封閉線，在視圖正中央
+            var kw = keyUp.w / 2;
+            toPxLine([[keyUp.k0, kw], [keyUp.k1, kw]]); toPxLine([[keyUp.k0, -kw], [keyUp.k1, -kw]]);
+            toPxLine([[keyUp.k0, kw], [keyUp.k0, -kw]]); toPxLine([[keyUp.k1, kw], [keyUp.k1, -kw]]);
+        }
+        if (radUp) radUp.angles.forEach(function (a) {   // 0° 方向的外徑螺孔：孔口圓在視圖正中央
+            if (!angNear(a, 0)) return;
+            var c = [], r = radUp.dm / 2, ph; for (ph = 0; ph <= 48; ph++) c.push([radUp.x + r * Math.cos(2 * Math.PI * ph / 48), r * Math.sin(2 * Math.PI * ph / 48)]);
+            toPxLine(c);
+            var cm = [], r2 = radUp.D / 2; for (ph = 0; ph <= 36; ph++) cm.push([radUp.x + r2 * Math.cos(1.5 * Math.PI * ph / 36), r2 * Math.sin(1.5 * Math.PI * ph / 36)]);
+            toPxLine(cm);
+            toPxLine([[radUp.x - r2 * 1.3, 0], [radUp.x + r2 * 1.3, 0]], 'dashdot'); toPxLine([[radUp.x, -r2 * 1.3], [radUp.x, r2 * 1.3]], 'dashdot');
+        });
         var cdir0 = document.getElementById('g-cut-dir').value;
         if (cutIsH()) {   // 水平切割線：剖面圖放在端面圖上／下方，軸線要轉成垂直（投影對齊：寬度與端面圖同向），座標 x↔y 互換
             var fy = (cdir0 === 'h-up') ? -1 : 1;   // 朝上：整個視圖上下鏡射（左端在下）
@@ -4148,7 +4164,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 return r;
             });
         }
-        if (cdir0 === 'v-right') {   // 箭頭朝右（看右側）：視圖左右鏡射，大外徑的尺寸在左側
+        if (cdir0 === 'v-left') {   // 箭頭朝左：視圖左右鏡射（箭頭朝右維持原樣）
             items.forEach(function (it) { if (it.pts) it.pts = it.pts.map(function (q) { return { x: -q.x, y: q.y }; }); if (it.text) it.x = -it.x; });
             dims = dims.map(function (q) {
                 var r = JSON.parse(JSON.stringify(q));
