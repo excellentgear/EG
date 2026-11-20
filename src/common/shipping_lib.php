@@ -50,10 +50,32 @@ function sq_has_role(PDO $db, int $uid, array $codes): bool
     return (bool)$st->fetchColumn();
 }
 
+/**
+ * 本頁可個別指派給角色的功能清單（角色設定跳窗與後端判定共用的唯一登記表）。
+ * 角色歸屬 roles.module='shipping'，功能碼存 role_features。
+ * 規則：全站管理員、本頁管理員(shipping_admin)自動擁有全部；其他角色要在「角色設定」勾選才有。
+ */
+function sq_feature_list(): array
+{
+    return [
+        ['group' => '基本',     'code' => 'sq_view',          'label' => '檢視待出貨清單與近期出貨單'],
+        ['group' => '基本',     'code' => 'sq_edit',          'label' => '建立出貨單（含修改備註）'],
+        ['group' => '基本',     'code' => 'sq_delete',        'label' => '刪除出貨單（會把數量退回訂單）'],
+        ['group' => '綁定與回填', 'code' => 'sq_bind_bom',      'label' => '綁製令（訂單還沒有製令時綁定）'],
+        ['group' => '綁定與回填', 'code' => 'sq_bind_old_ship', 'label' => '綁定舊出貨單到製令（含報廢歸還設定）'],
+        ['group' => '綁定與回填', 'code' => 'sq_match',         'label' => '舊資料訂單回填'],
+        ['group' => '綁定與回填', 'code' => 'sq_chain_link',    'label' => '追溯對照：建立／解除對應'],
+        ['group' => '價格與設定', 'code' => 'sq_price_batch',   'label' => '批次改單價'],
+        ['group' => '價格與設定', 'code' => 'sq_asdoc',         'label' => '設定出貨單列印的 AS 文件編號'],
+    ];
+}
+
 function sq_perms(PDO $db, ?array $u): array
 {
     if (!$u) return ['isAdmin' => false, 'canAdmin' => false, 'canEdit' => false,
-                     'canView' => false, 'canDelete' => false];
+                     'canView' => false, 'canDelete' => false, 'canBindBom' => false,
+                     'canBindOldShip' => false, 'canMatch' => false, 'canChainLink' => false,
+                     'canPriceBatch' => false, 'canAsdoc' => false];
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
     if (!$isAdmin) {
@@ -62,14 +84,31 @@ function sq_perms(PDO $db, ?array $u): array
         $st->execute([$uid]);
         $isAdmin = (bool)$st->fetchColumn();
     }
+    /* 角色設定勾選的功能碼（自訂角色用）；解析失敗視為沒有，不影響既有四個內建角色 */
+    $feat = [];
+    try {
+        require_once __DIR__ . '/role_features_helper.php';
+        $feat = rf_resolve_features($db, $uid, SQ_MODULE);
+    } catch (Throwable $e) { $feat = []; }
+    $has = function (string $code) use ($feat): bool { return in_array($code, $feat, true); };
+
     $canAdmin = $isAdmin  || sq_has_role($db, $uid, ['shipping_admin']);
-    $canEdit  = $canAdmin || sq_has_role($db, $uid, ['shipping_edit']);
-    $canView  = $canEdit  || sq_has_role($db, $uid, ['shipping_view']);
+    $canEdit  = $canAdmin || sq_has_role($db, $uid, ['shipping_edit']) || $has('sq_edit');
+    $canView  = $canEdit  || sq_has_role($db, $uid, ['shipping_view']) || $has('sq_view')
+             || $has('sq_delete') || $has('sq_bind_bom') || $has('sq_bind_old_ship') || $has('sq_match')
+             || $has('sq_chain_link') || $has('sq_price_batch') || $has('sq_asdoc');
     /* 刪除出貨單是獨立角色、不含在管理員以下的階層裡：刪一張已出的貨會把數量退回訂單、
        還可能把已結案的訂單重新打開，不應該因為「有管理員角色」就順帶取得（使用者要求另開角色）。 */
-    $canDelete = $isAdmin || sq_has_role($db, $uid, ['shipping_delete']);
+    $canDelete = $isAdmin || sq_has_role($db, $uid, ['shipping_delete']) || $has('sq_delete');
+    /* 進階功能：全站管理員／本頁管理員自動全有（維持原本行為），其他角色逐項勾選 */
     return ['isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canEdit' => $canEdit,
-            'canView' => $canView, 'canDelete' => $canDelete];
+            'canView' => $canView, 'canDelete' => $canDelete,
+            'canBindBom'     => $canAdmin || $has('sq_bind_bom'),
+            'canBindOldShip' => $canAdmin || $has('sq_bind_old_ship'),
+            'canMatch'       => $canAdmin || $has('sq_match'),
+            'canChainLink'   => $canAdmin || $has('sq_chain_link'),
+            'canPriceBatch'  => $canAdmin || $has('sq_price_batch'),
+            'canAsdoc'       => $canAdmin || $has('sq_asdoc')];
 }
 
 /* ============================================================
@@ -482,8 +521,7 @@ function sq_pending_orders(PDO $db, array $f): array
                COALESCE(ds.Spec_No,'')                   AS part_spec,
                COALESCE(sh.sq, 0)                        AS shipped_qty
         FROM order_track ot
-        LEFT JOIN (SELECT Order_id, SUM(Qty) AS sq FROM is_list
-                   WHERE Order_id IS NOT NULL GROUP BY Order_id) sh ON sh.Order_id = ot.Order_id
+        LEFT JOIN (" . sq_shipped_by_order_sql() . ") sh ON sh.Order_id = ot.Order_id
         LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
         LEFT JOIN d_setting   ds ON ds.d_id = ot.d_id_ID
         WHERE " . implode(' AND ', $where) . "
@@ -889,8 +927,22 @@ function sq_auto_allocate(PDO $db, int $orderId, int $qty): array
  * 產生回填候選。同一 (客戶, 料號) 群組內，出貨依日期 FIFO 吃訂單剩餘量。
  * @return array ['pairs'=>[...], 'summary'=>[...]]
  */
+/**
+ * 出貨／訂單「同一個客戶」的比對鍵：客戶簡稱先經客戶主檔（含會計對帳設定的別名）歸戶，
+ * 例：出貨寫「如陽科技」、訂單是「如陽」→ 同一家（別名綁定在對帳頁的「對應到客戶主檔」）。對不到主檔的退回原名稱。
+ */
+function sq_client_key(array $known, string $name, $cidFallback = ''): string
+{
+    $name = trim($name);
+    if ($name !== '' && isset($known[$name])) return 'C' . trim((string)$known[$name]['customer_id']);
+    $c = trim((string)$cidFallback);
+    if ($name === '' && $c !== '' && $c !== '0') return 'C' . $c;
+    return 'N:' . $name;
+}
+
 function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): array
 {
+    require_once __DIR__ . '/acc_lib.php';
     /* 篩選：客戶簡稱（精確）／料號 id。這兩個鍵都是「整組 (客戶,料號) 保留或整組排除」，
        不會把同一組的出貨切成兩半，所以群組內 FIFO 的先後順序不受影響（日期區間才會）。 */
     $client = trim((string)($opt['client'] ?? ''));
@@ -899,14 +951,18 @@ function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): a
 
     sq_scrap_ensure($db);
     $w   = ["il.Order_id IS NULL", "il.d_setting_id IS NOT NULL", "il.Order_date BETWEEN ? AND ?",
-            "NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)"];   // 已登記為報廢品歸還的不再列入待回填
+            "NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)",   // 已登記為報廢品歸還的不再列入待回填
+            // 已經綁了製令（is_bom_map 分配量已涵蓋整筆）或已有訂單分配（is_order_map／shipment_order_map）的，算已綁定，不再列入
+            "COALESCE((SELECT SUM(m.shipped_qty) FROM is_bom_map m WHERE m.IS_id = il.IS_id),0) < il.Qty",
+            "NOT EXISTS (SELECT 1 FROM is_order_map om WHERE om.IS_id = il.IS_id)",
+            "NOT EXISTS (SELECT 1 FROM shipment_order_map so2 WHERE so2.IS_id = il.IS_id)"];
     $par = [$from, $to];
     if ($client !== '') { $w[] = "il.Client_name = ?";  $par[] = $client; }
     if ($didF   >  0)   { $w[] = "il.d_setting_id = ?"; $par[] = $didF; }
 
     $st = $db->prepare("
         SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS ship_date,
-               il.Client_name, il.Product_id, il.d_setting_id, il.Qty, il.Unit_price
+               il.Client_name, il.Client_id, il.Product_id, il.d_setting_id, il.Qty, il.Unit_price
         FROM is_list il
         WHERE " . implode(' AND ', $w) . "
         ORDER BY il.Order_date, il.IS_id");
@@ -919,30 +975,34 @@ function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): a
     // 取這批料號相關的訂單（含已結案，回填要涵蓋歷史）
     $dids = array_values(array_unique(array_map('intval', array_column($ships, 'd_setting_id'))));
     $ph   = implode(',', array_fill(0, count($dids), '?'));
+    // 同一個料號文字常有重複的料號主檔（匯入出貨時另建一筆沒有客戶的）→ 料號以「料號文字」為準，主檔 id 不同也算同料號
+    $parts = array_values(array_unique(array_filter(array_map(function ($x) { return trim((string)$x['Product_id']); }, $ships), 'strlen')));
+    $pph   = $parts ? implode(',', array_fill(0, count($parts), '?')) : "''";
+    $known = acc_customer_by_name($db);
     $so   = $db->prepare("
-        SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Qty,
+        SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.Client_name_ID, ot.d_id, ot.d_id_ID, ot.Qty,
                ot.unit_price, ot.Order_status,
                DATE_FORMAT(ot.Order_date,'%Y-%m-%d')    AS order_date,
                DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS delivery_date,
                COALESCE(sh.sq, 0) AS used_qty
         FROM order_track ot
-        LEFT JOIN (SELECT Order_id, SUM(Qty) AS sq FROM is_list
-                   WHERE Order_id IS NOT NULL GROUP BY Order_id) sh ON sh.Order_id = ot.Order_id
-        WHERE ot.d_id_ID IN ($ph)
+        LEFT JOIN (" . sq_shipped_by_order_sql() . ") sh ON sh.Order_id = ot.Order_id
+        WHERE (ot.d_id_ID IN ($ph)" . ($parts ? " OR TRIM(ot.d_id) IN ($pph)" : '') . ")
+          AND (ot.Order_status IS NULL OR ot.Order_status <> 6)   -- 暫停／取消的訂單不可當回填對象（9＝已結案仍保留，回填要涵蓋歷史）
         ORDER BY ot.Order_date, ot.Order_id");
-    $so->execute($dids);
+    $so->execute(array_merge($dids, $parts));
 
-    // 依 (客戶簡稱, 料號id) 分組
+    // 依 (客戶歸戶, 料號文字) 分組
     $ordersByKey = [];
     foreach ($so->fetchAll(PDO::FETCH_ASSOC) as $o) {
-        $key = $o['Client_name'] . '|' . (int)$o['d_id_ID'];
+        $key = sq_client_key($known, (string)$o['Client_name'], $o['Client_name_ID']) . '|' . trim((string)$o['d_id']);
         $o['left'] = max(0, (int)$o['Qty'] - (int)$o['used_qty']);
         $ordersByKey[$key][] = $o;
     }
 
     $pairs = [];
     foreach ($ships as $s) {
-        $key  = $s['Client_name'] . '|' . (int)$s['d_setting_id'];
+        $key  = sq_client_key($known, (string)$s['Client_name'], $s['Client_id'] ?? '') . '|' . trim((string)$s['Product_id']);
         $cand = $ordersByKey[$key] ?? [];
         $hit  = null;
 
@@ -1071,13 +1131,25 @@ function sq_match_candidates(PDO $db, int $isId, bool $samePart = true, string $
     $s = $st->fetch(PDO::FETCH_ASSOC);
     if (!$s) return ['ship' => null, 'orders' => [], 'error' => '找不到這筆出貨明細'];
 
+    require_once __DIR__ . '/acc_lib.php';
     $did = (int)$s['d_setting_id'];
-    $w   = ["ot.Client_name = :cn"];
-    $par = [':cn' => $s['Client_name']];
+    // 同一家客戶：出貨上的客戶簡稱經客戶主檔（含別名）歸戶後，列出該客戶所有寫法（如陽／如陽科技）
+    $known = acc_customer_by_name($db);
+    $ck = sq_client_key($known, (string)$s['Client_name']);
+    $names = [trim((string)$s['Client_name'])];
+    foreach ($known as $nm => $c) if ('C' . trim((string)$c['customer_id']) === $ck) $names[] = (string)$nm;
+    $names = array_values(array_unique(array_filter($names, 'strlen')));
+    $nph = []; $par = [];
+    foreach ($names as $i => $nm) { $nph[] = ':cn' . $i; $par[':cn' . $i] = $nm; }
+    $w = [$nph ? "ot.Client_name IN (" . implode(',', $nph) . ")" : "ot.Client_name = ''",
+          "(ot.Order_status IS NULL OR ot.Order_status <> 6)"];   // 暫停／取消的訂單不列入
     if ($samePart) {
-        if ($did <= 0) return ['ship' => $s, 'orders' => [], 'error' => '這筆出貨沒有綁料號id，無法用「相同料號」篩選'];
-        $w[] = "ot.d_id_ID = :did";
-        $par[':did'] = $did;
+        $pt = trim((string)$s['Product_id']);
+        if ($did <= 0 && $pt === '') return ['ship' => $s, 'orders' => [], 'error' => '這筆出貨沒有料號，無法用「相同料號」篩選'];
+        $pw = [];
+        if ($did > 0)  { $pw[] = "ot.d_id_ID = :did"; $par[':did'] = $did; }
+        if ($pt !== '') { $pw[] = "TRIM(ot.d_id) = :pt"; $par[':pt'] = $pt; }   // 料號主檔重複時，以料號文字為準
+        $w[] = '(' . implode(' OR ', $pw) . ')';
     }
     $kw = trim($kw);
     if ($kw !== '') {
@@ -1100,8 +1172,7 @@ function sq_match_candidates(PDO $db, int $isId, bool $samePart = true, string $
                DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS delivery_date,
                COALESCE(sh.sq, 0) AS used_qty
         FROM order_track ot
-        LEFT JOIN (SELECT Order_id, SUM(Qty) AS sq FROM is_list
-                   WHERE Order_id IS NOT NULL GROUP BY Order_id) sh ON sh.Order_id = ot.Order_id
+        LEFT JOIN (" . sq_shipped_by_order_sql() . ") sh ON sh.Order_id = ot.Order_id
         WHERE " . implode(' AND ', $w) . "
         ORDER BY ABS(DATEDIFF(ot.Order_date, :sd)), ot.Order_id
         LIMIT :lim");
@@ -1225,8 +1296,11 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
             UPDATE is_list il
               JOIN order_track ot ON ot.Order_id = :oid
                SET il.Order_id = ot.Order_id
-             WHERE il.IS_id = :isid AND il.Order_id IS NULL
-               AND ot.Client_name = il.Client_name");
+             WHERE il.IS_id = :isid AND il.Order_id IS NULL");
+        require_once __DIR__ . '/acc_lib.php';
+        $known = acc_customer_by_name($db);   // 客戶比對一律先歸戶（含別名）：出貨「如陽科技」與訂單「如陽」是同一家
+        $qIs = $db->prepare("SELECT Client_name, Client_id FROM is_list WHERE IS_id = ?");
+        $qOt = $db->prepare("SELECT Client_name, Client_name_ID FROM order_track WHERE Order_id = ?");
         foreach ($pairs as $p) {
             $isId = (int)($p['is_id'] ?? 0);
             $oid  = (int)($p['order_id'] ?? 0);
@@ -1237,6 +1311,9 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
                 continue;
             }
             if ($isId <= 0 || $oid <= 0) { $skipped++; continue; }
+            $qIs->execute([$isId]); $ri = $qIs->fetch(PDO::FETCH_ASSOC);
+            $qOt->execute([$oid]);  $ro = $qOt->fetch(PDO::FETCH_ASSOC);
+            if (!$ri || !$ro || sq_client_key($known, (string)$ri['Client_name'], $ri['Client_id']) !== sq_client_key($known, (string)$ro['Client_name'], $ro['Client_name_ID'])) { $skipped++; continue; }
             $up->execute([':oid' => $oid, ':isid' => $isId]);
             if ($up->rowCount() > 0) { $applied++; $appliedIs[] = $isId; } else $skipped++;
         }
@@ -1255,6 +1332,57 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
  * 製令綁定的訂單 → 同客戶、(已綁這些訂單 或 尚未綁訂單且同料號) 的出貨明細，
  * 排除報廢歸還、已全數分配給製令的出貨，並標出這張製令已綁的量。
  */
+/** 綁定舊出貨單視窗可標記的出貨性質（種類代碼 → 出貨性質名稱）；標記只是順便設定出貨性質，這筆仍可照常勾選綁定 */
+function sq_mark_kinds(): array
+{
+    return ['return' => '備註/歸還', 'ng' => '歸還(NG/來料不良)', 'jig' => '治具'];
+}
+
+/** 標記種類在畫面上的短名稱 */
+function sq_mark_label(string $kind): string
+{
+    return ['return' => '歸還', 'ng' => 'NG歸還', 'jig' => '治具'][$kind] ?? $kind;
+}
+
+/** 出貨性質名稱 → id（依名稱找，管理員改了 id 也不失效；找不到回 0） */
+function sq_sale_type_id_by_name(PDO $db, string $name): int
+{
+    try {
+        $st = $db->prepare("SELECT sale_type_id FROM is_sale_type WHERE sale_type_name = ? ORDER BY is_active DESC, sale_type_id LIMIT 1");
+        $st->execute([$name]);
+        return (int)$st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
+}
+
+/**
+ * 把一筆出貨明細設為「歸還」「NG歸還」或「治具」（改出貨性質）；$on=false 取消（只還原原本就是這兩種標記的）。
+ * 已綁定任何製令分配的不給設，避免製令已出貨量與出貨性質互相矛盾。
+ */
+function sq_ship_set_return(PDO $db, int $isId, bool $on, string $userId, string $kind = 'return'): array
+{
+    $kinds = sq_mark_kinds();
+    if (!isset($kinds[$kind])) return ['success' => false, 'message' => '不支援的標記種類'];
+    $typeId = sq_sale_type_id_by_name($db, $kinds[$kind]);
+    if ($typeId <= 0) return ['success' => false, 'message' => '找不到出貨性質「' . $kinds[$kind] . '」，請先在出貨性質設定建立'];
+    $all = array_values(array_filter(array_map(function ($n) use ($db) { return sq_sale_type_id_by_name($db, $n); }, $kinds)));
+    $st = $db->prepare("SELECT sale_type, (SELECT COUNT(*) FROM is_bom_map m WHERE m.IS_id = il.IS_id) AS maps FROM is_list il WHERE il.IS_id = ?");
+    $st->execute([$isId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return ['success' => false, 'message' => '找不到這筆出貨明細'];
+    if ($on) {
+        if ((int)$r['maps'] > 0) return ['success' => false, 'message' => '這筆已綁定製令，不能設為' . sq_mark_label($kind) . '（請先解除綁定）'];
+        $db->prepare("UPDATE is_list SET sale_type = ? WHERE IS_id = ?")->execute([$typeId, $isId]);
+    } else {
+        $db->prepare("UPDATE is_list SET sale_type = NULL WHERE IS_id = ? AND sale_type IN (" . implode(',', array_map('intval', $all)) . ")")->execute([$isId]);
+    }
+    $label = sq_mark_label($kind);
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, created_at) VALUES (?,?,?,?,?,?,NOW())")
+           ->execute(['update', 'is_list', (string)$isId, '出貨性質', '綁定舊出貨單視窗：' . ($on ? "設為{$label}（{$kinds[$kind]}）" : '取消標記'), (int)$userId]);
+    } catch (Throwable $e) { /* 稽核失敗不阻斷 */ }
+    return ['success' => true, 'kind' => $on ? $kind : '', 'message' => $on ? "已設為{$label}（出貨性質：{$kinds[$kind]}）" : '已取消標記'];
+}
+
 function sq_bom_bind_candidates(PDO $db, string $bom): array
 {
     $bom = trim($bom);
@@ -1273,19 +1401,34 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     foreach ($os as $o) { $oo[(int)$o['Order_id']] = (string)$o['Order_oo']; $op[(int)$o['Order_id']] = (float)$o['unit_price']; }
     if (!$clients) return ['error' => '找不到綁定訂單的客戶'];
     $cph = implode(',', array_fill(0, count($clients), '?'));
+    // 同一個料號文字常有重複的料號主檔（匯入出貨時另建一筆沒有客戶的）→ 尚未綁訂單的出貨單，料號主檔 id 或料號文字符合都算；
+    // 客戶名稱 ERP 常寫得比主檔長（如陽科技／如陽），所以出貨客戶「以訂單客戶簡稱開頭」也算同客戶
+    $specs = [];
+    if ($dids) {
+        $sq = $db->query("SELECT DISTINCT TRIM(D_Setting_Id) FROM d_setting WHERE d_id IN (" . implode(',', $dids) . ") AND TRIM(D_Setting_Id) <> ''");
+        $specs = array_values(array_filter($sq->fetchAll(PDO::FETCH_COLUMN), 'strlen'));
+    }
     $cond = "il.Order_id IN ($in)";
-    if ($dids) $cond .= " OR (il.Order_id IS NULL AND il.d_setting_id IN (" . implode(',', $dids) . "))";
+    $pparams = [];
+    $pcond = [];
+    if ($dids)  $pcond[] = "il.d_setting_id IN (" . implode(',', $dids) . ")";
+    if ($specs) { $pcond[] = "il.Product_id IN (" . implode(',', array_fill(0, count($specs), '?')) . ")"; $pparams = $specs; }
+    if ($pcond) $cond .= " OR (il.Order_id IS NULL AND (" . implode(' OR ', $pcond) . "))";
+    $clikes = [];
+    foreach ($clients as $c) $clikes[] = "il.Client_name LIKE ?";
     $q = $db->prepare("
-        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, il.Client_name, il.Product_id, il.Specification, il.Content, il.Note, il.Qty, il.Unit_price, il.Order_id,
+        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') d, il.Client_name, il.Product_id, il.Specification, il.Content, il.Note, il.Qty, il.Unit_price, il.Order_id, il.sale_type,
                COALESCE((SELECT SUM(m.shipped_qty) FROM is_bom_map m WHERE m.IS_id = il.IS_id), 0) AS alloc,
                COALESCE((SELECT SUM(m.shipped_qty) FROM is_bom_map m WHERE m.IS_id = il.IS_id AND m.bom = ?), 0) AS this_bom
         FROM is_list il
-        WHERE il.Client_name IN ($cph) AND ($cond)
+        WHERE (il.Client_name IN ($cph) OR " . implode(' OR ', $clikes) . ") AND ($cond)
           AND NOT EXISTS (SELECT 1 FROM is_bom_scrap_map sm WHERE sm.IS_id = il.IS_id)
         ORDER BY il.Order_date DESC, il.IS_id DESC LIMIT 200");
-    $q->execute(array_merge([$bom], $clients));
+    $q->execute(array_merge([$bom], $clients, array_map(function ($c) { return $c . '%'; }, $clients), $pparams));
     $bd = preg_match('~^B-(\d{3})(\d{2})(\d{2})~', $bom, $m) ? sprintf('%04d-%s-%s', (int)$m[1] + 1911, $m[2], $m[3]) : '';
     $out = [];
+    $markIds = [];
+    foreach (sq_mark_kinds() as $mk => $mn) { $mid = sq_sale_type_id_by_name($db, $mn); if ($mid > 0) $markIds[$mid] = $mk; }
     foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ($bd !== '' && $r['d'] < $bd) continue;   // 出貨早於製令開立＝不可能是這張製令出的
         $left = (int)$r['Qty'] - (int)$r['alloc'];
@@ -1296,22 +1439,36 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
                   'part' => (string)$r['Product_id'], 'spec' => trim((string)$r['Specification'] . ' ' . (string)$r['Content']), 'note' => (string)$r['Note'], 'qty' => (int)$r['Qty'], 'price' => (float)$r['Unit_price'],
                   'order_oo' => $r['Order_id'] ? ($oo[(int)$r['Order_id']] ?? '') : '',
                   'has_order' => $r['Order_id'] !== null, 'alloc' => (int)$r['alloc'], 'this_bom' => (int)$r['this_bom'],
-                  'left' => max(0, $left), 'selectable' => $left > 0 && (int)$r['this_bom'] === 0];
+                  'left' => max(0, $left), 'sale_kind' => ($markIds[(int)$r['sale_type']] ?? ''), 'returned' => isset($markIds[(int)$r['sale_type']]),
+                  'selectable' => $left > 0 && (int)$r['this_bom'] === 0];
     }
-    // 排序：出貨日、出貨單號由新到舊；但「有任一明細可選且單價相符」的出貨單號整張置頂（同單號其他明細一起，避免漏看），
-    // 置頂區與其餘各自維持新→舊，同單號內單價相符者排前
-    $pinNo = [];
-    foreach ($out as $x) if ($x['selectable'] && $x['price_match']) $pinNo[$x['no']] = 1;
-    usort($out, function ($a, $b) use ($pinNo) {
-        return [isset($pinNo[$b['no']]) ? 1 : 0, $b['date'], $b['no'], (int)$b['price_match'], $b['is_id']]
-           <=> [isset($pinNo[$a['no']]) ? 1 : 0, $a['date'], $a['no'], (int)$a['price_match'], $a['is_id']];
+    /* 建議（fifo）：單價相符、還可分配的出貨明細，依出貨日由舊到新（先出先綁）累加到這張製令還沒分配的量為止，
+       超過的不再標建議——不可以因為單價相符就把很晚才出的貨排在前面，早於它的出貨紀錄要先看。 */
+    $cap = 0;
+    try {
+        $cq = $db->prepare("SELECT sqty - COALESCE((SELECT SUM(shipped_qty) FROM is_bom_map WHERE bom = ?),0) FROM bom WHERE bom = ?");
+        $cq->execute([$bom, $bom]);
+        $cap = max(0, (int)$cq->fetchColumn());
+    } catch (Throwable $e) { $cap = 0; }
+    $chron = array_keys($out);
+    usort($chron, function ($x, $y) use ($out) { return [$out[$x]['date'], $out[$x]['no'], $out[$x]['is_id']] <=> [$out[$y]['date'], $out[$y]['no'], $out[$y]['is_id']]; });
+    foreach ($out as $k => $_) $out[$k]['fifo'] = false;
+    foreach ($chron as $k) {
+        if ($cap <= 0) break;
+        if (!$out[$k]['selectable'] || !$out[$k]['price_match']) continue;
+        $out[$k]['fifo'] = true;
+        $cap -= $out[$k]['left'];
+    }
+    // 排序：出貨日、出貨單號由新到舊，從上而下（不置頂、不分組）
+    usort($out, function ($a, $b) {
+        return [$b['date'], $b['no'], $b['is_id']] <=> [$a['date'], $a['no'], $a['is_id']];
     });
     // 製令綁定的訂單資訊（顯示在跳窗最上方供比對；品名規格與待出貨清單同一套 sq_desc_text）
     $oi = [];
     $oRows = $db->query("SELECT ot.Order_id, ot.Order_oo, COALESCE(NULLIF(TRIM(ot.Client_name),''), cl2.customer, '') AS Client_name, ot.d_id, ot.d_id_ID, ot.Specification, ot.Qty, ot.unit_price,
                                 COALESCE(ot.Processing_items,'') AS proc, COALESCE(ds.Spec_No,'') AS part_spec,
                                 DATE_FORMAT(ot.Order_date,'%Y-%m-%d') od, DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') dd,
-                                COALESCE((SELECT SUM(Qty) FROM is_list WHERE Order_id = ot.Order_id),0) used
+                                COALESCE((SELECT SUM(x.q) FROM (" . sq_shipped_rows_sql() . ") x WHERE x.Order_id = ot.Order_id),0) used
                          FROM order_track ot LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
                          LEFT JOIN customer_list cl2 ON cl2.customer_id = ot.Client_name_ID
                          WHERE ot.Order_id IN ($in) ORDER BY ot.Order_date")->fetchAll(PDO::FETCH_ASSOC);
@@ -1325,8 +1482,132 @@ function sq_bom_bind_candidates(PDO $db, string $bom): array
     return ['bom' => $bom, 'order_info' => $oi, 'orders' => array_values($oo), 'order_prices' => array_values($op), 'ships' => $out];
 }
 
+/**
+ * 訂單還沒有製令時，列出可以綁給這張訂單的製令（同客戶、同料號——料號主檔 id 或料號文字相同），
+ * 並依「製令開立日不早於下單日、離下單日最近、還有未分配量」排出建議順序。
+ * 寫入一律走 trace_chain_lib 的 tc_link('order_bom')，這裡只負責挑候選。
+ */
+function sq_order_bom_candidates(PDO $db, int $orderId): array
+{
+    require_once __DIR__ . '/acc_lib.php';
+    $st = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.Qty, ot.d_id, ot.d_id_ID, ot.Client_name, ot.Client_name_ID,
+                               DATE_FORMAT(ot.Order_date,'%Y-%m-%d') od
+                        FROM order_track ot WHERE ot.Order_id = ?");
+    $st->execute([$orderId]);
+    $o = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$o) return ['error' => '找不到這張訂單'];
+    $known = acc_customer_by_name($db);
+    $oc = sq_client_key($known, (string)$o['Client_name'], $o['Client_name_ID']);
+    $pt = trim((string)$o['d_id']);
+    $did = (int)$o['d_id_ID'];
+    if ($pt === '' && $did <= 0) return ['error' => '這張訂單沒有料號，無法找製令'];
+    $w = []; $par = [];
+    if ($did > 0) { $w[] = 'b.d_setting_id = ?'; $par[] = $did; }
+    if ($pt !== '') { $w[] = 'TRIM(b.d_id) = ?'; $par[] = $pt; }
+    $q = $db->prepare("SELECT b.bom, b.d_id, b.d_setting_id, b.Client_Name, b.sqty, b.o_order_id, b.processing_state,
+                              COALESCE((SELECT SUM(m.allocated_qty) FROM bom_order_process_map m WHERE m.bom = b.bom),0) AS alloc,
+                              (SELECT COUNT(*) FROM bom_order_process_map m WHERE m.bom = b.bom) AS maps,
+                              (SELECT GROUP_CONCAT(DISTINCT ot2.Order_oo ORDER BY ot2.Order_oo SEPARATOR '、')
+                                 FROM bom_order_process_map m JOIN order_track ot2 ON ot2.Order_id = m.order_id WHERE m.bom = b.bom) AS bound_oo,
+                              (SELECT Order_oo FROM order_track WHERE Order_id = CAST(b.o_order_id AS UNSIGNED)) AS legacy_oo
+                       FROM bom b WHERE (" . implode(' OR ', $w) . ")
+                       ORDER BY ABS(DATEDIFF(STR_TO_DATE(CONCAT(CAST(SUBSTRING(b.bom,3,3) AS UNSIGNED)+1911, SUBSTRING(b.bom,6,4)),'%Y%m%d'), ?)) , b.bom DESC LIMIT 300");   // 取離下單日最近的 300 張（只取最新 300 張會把舊訂單的製令整批切掉）
+    $par[] = ($o['od'] !== '' && $o['od'] !== null) ? $o['od'] : date('Y-m-d');
+    $q->execute($par);
+    $out = [];
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $b) {
+        if (sq_client_key($known, (string)$b['Client_Name']) !== $oc) continue;   // 客戶不同一律不列（tc_link 也會再擋）
+        $sq = (int)$b['sqty'];
+        $alloc = (int)$b['alloc'];
+        if ($alloc <= 0 && (int)$b['maps'] === 0 && (string)$b['o_order_id'] !== '' && (int)$b['o_order_id'] > 0) $alloc = $sq;   // 舊欄位上的綁定視同整張分出去
+        $left = max(0, $sq - $alloc);
+        $bd = preg_match('~^B-(\d{3})(\d{2})(\d{2})~', (string)$b['bom'], $m) ? sprintf('%04d-%s-%s', (int)$m[1] + 1911, $m[2], $m[3]) : '';
+        $gap = ($bd !== '' && $o['od'] !== '') ? (int)round((strtotime($bd) - strtotime($o['od'])) / 86400) : null;
+        $bound = trim((string)($b['bound_oo'] ?: ($b['legacy_oo'] ?? '')));
+        $out[] = ['bom' => (string)$b['bom'], 'bom_date' => $bd, 'sqty' => $sq, 'alloc' => $alloc, 'left' => $left,
+                  'part' => (string)$b['d_id'], 'bound_oo' => $bound, 'gap_days' => $gap,
+                  'before_order' => ($gap !== null && $gap < 0), 'done' => ((string)$b['processing_state'] === 'E' || (string)$b['processing_state'] === 'F')];
+    }
+    // 建議順序：還有未分配量 → 製令開立日不早於下單日 → 離下單日最近
+    usort($out, function ($a, $b) {
+        $ka = [$a['left'] > 0 ? 0 : 1, $a['before_order'] ? 1 : 0, $a['gap_days'] === null ? 99999 : abs($a['gap_days'])];
+        $kb = [$b['left'] > 0 ? 0 : 1, $b['before_order'] ? 1 : 0, $b['gap_days'] === null ? 99999 : abs($b['gap_days'])];
+        return $ka <=> $kb ?: strcmp($b['bom'], $a['bom']);
+    });
+    $oalloc = (int)$db->query("SELECT COALESCE(SUM(allocated_qty),0) FROM bom_order_process_map WHERE order_id = " . (int)$orderId)->fetchColumn();
+    $bs = $db->prepare("SELECT bom, allocated_qty FROM bom_order_process_map WHERE order_id = ? ORDER BY bom");
+    $bs->execute([$orderId]);
+    $bound = array_map(function ($r) { return ['bom' => (string)$r['bom'], 'qty' => (int)$r['allocated_qty']]; }, $bs->fetchAll(PDO::FETCH_ASSOC));
+    $first = true;
+    foreach ($out as &$r) { $r['suggest'] = ($first && $r['left'] > 0); if ($r['suggest']) $first = false; }
+    unset($r);
+    return ['order' => ['id' => (int)$o['Order_id'], 'oo' => (string)$o['Order_oo'], 'qty' => (int)$o['Qty'], 'part' => $pt,
+                        'client' => (string)$o['Client_name'], 'order_date' => (string)$o['od'], 'alloc' => $oalloc,
+                        'free' => max(0, (int)$o['Qty'] - $oalloc)],
+            'boms' => $out, 'bound' => $bound];
+}
+
+/**
+ * 一次替多張「還沒有製令」的訂單挑一對一的建議製令（只挑，不寫入）。
+ * 每張訂單沿用 sq_order_bom_candidates 的排序，取第一張「還有未分配量、且這次批次裡沒被別張訂單先拿走」的製令；
+ * 製令數量等於訂單數量＝exact（預設勾選），未分配量不足以涵蓋訂單＝partial（預設不勾，要綁請改用單筆視窗拆量）。
+ */
+function sq_order_bom_auto_preview(PDO $db, array $orderIds): array
+{
+    $orderIds = array_slice(array_values(array_unique(array_filter(array_map('intval', $orderIds)))), 0, 150);
+    $used = []; $rows = [];
+    foreach ($orderIds as $oid) {
+        $c = sq_order_bom_candidates($db, $oid);
+        if (!empty($c['error'])) { $rows[] = ['order_id' => $oid, 'error' => $c['error']]; continue; }
+        $o = $c['order'];
+        $row = ['order_id' => $oid, 'oo' => $o['oo'], 'client' => $o['client'], 'part' => $o['part'], 'qty' => $o['qty'],
+                'free' => $o['free'], 'order_date' => $o['order_date'], 'bom' => '', 'status' => 'none'];
+        if ($o['free'] <= 0) { $row['status'] = 'full'; $rows[] = $row; continue; }
+        foreach ($c['boms'] as $b) {
+            if ($b['left'] <= 0 || isset($used[$b['bom']])) continue;
+            $take = min($b['left'], $o['free']);
+            $row += ['bom_date' => $b['bom_date'], 'bom_qty' => $b['sqty'], 'bom_left' => $b['left'], 'gap_days' => $b['gap_days'],
+                     'before_order' => $b['before_order'], 'done' => $b['done']];
+            $row['bom'] = $b['bom']; $row['take'] = $take;
+            $row['status'] = ($b['left'] >= $o['free']) ? ($b['sqty'] === $o['qty'] ? 'exact' : 'cover') : 'partial';
+            $used[$b['bom']] = true;
+            break;
+        }
+        $rows[] = $row;
+    }
+    return ['rows' => $rows];
+}
+
+/** 批次綁定：items＝[{order_id,bom,qty}]，每筆各自走 sq_order_bom_bind（tc_link 驗證），某一筆失敗不影響其他筆。 */
+function sq_order_bom_bind_batch(PDO $db, array $items, array $user): array
+{
+    $ok = 0; $errs = [];
+    foreach (array_slice($items, 0, 150) as $it) {
+        $oid = (int)($it['order_id'] ?? 0);
+        $r = sq_order_bom_bind($db, $oid, [['bom' => $it['bom'] ?? '', 'qty' => (int)($it['qty'] ?? 0)]], $user);
+        if (!empty($r['success'])) $ok++; else $errs[] = '訂單 #' . $oid . '：' . implode('；', $r['errors'] ?: [$r['message']]);
+    }
+    return ['success' => $ok > 0, 'applied' => $ok, 'errors' => $errs,
+            'message' => ($ok ? "已綁定 {$ok} 張訂單的製令" : '沒有綁定任何訂單') . ($errs ? '；' . count($errs) . ' 筆失敗：' . implode('；', array_slice($errs, 0, 3)) : '')];
+}
+
+/** 把製令綁到訂單（訂單→製令，多對多拆量）：逐筆走 tc_link，客戶／數量規則都在那裡驗。 */
+function sq_order_bom_bind(PDO $db, int $orderId, array $pairs, array $user): array
+{
+    require_once __DIR__ . '/trace_chain_lib.php';
+    $ok = 0; $errs = [];
+    foreach ($pairs as $p) {
+        $bom = trim((string)($p['bom'] ?? '')); $qty = (int)($p['qty'] ?? 0);
+        if ($bom === '' || $qty <= 0) { $errs[] = ($bom ?: '（空）') . '：數量必須大於 0'; continue; }
+        $r = tc_link($db, 'order_bom', $orderId, $bom, $qty, $user);
+        if (!empty($r['success'])) $ok++; else $errs[] = $bom . '：' . ($r['message'] ?? '綁定失敗');
+    }
+    return ['success' => $ok > 0, 'applied' => $ok, 'errors' => $errs,
+            'message' => ($ok ? "已綁定 {$ok} 張製令" : '沒有綁定任何製令') . ($errs ? '；' . implode('；', $errs) : '')];
+}
+
 /** 把舊出貨明細綁到這張製令（is_bom_map）；尚未綁訂單者一併補上製令綁定的訂單（同客戶＋同料號才補）。 */
-function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId): array
+function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId, bool $force = false): array
 {
     $bom = trim($bom);
     $c = sq_bom_bind_candidates($db, $bom);
@@ -1339,13 +1620,17 @@ function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId): 
         $stO = $db->prepare("SELECT ot.Order_id FROM order_track ot
             JOIN (SELECT order_id FROM bom_order_process_map WHERE bom=:b1 UNION SELECT CAST(o_order_id AS UNSIGNED) FROM bom WHERE bom=:b2 AND o_order_id REGEXP '^[0-9]+\$') x ON x.order_id = ot.Order_id
             LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
-            JOIN is_list il ON il.IS_id = :i AND il.Client_name = COALESCE(NULLIF(TRIM(ot.Client_name),''), cl.customer) AND il.d_setting_id = ot.d_id_ID
+            LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
+            JOIN is_list il ON il.IS_id = :i AND il.Client_name LIKE CONCAT(COALESCE(NULLIF(TRIM(ot.Client_name),''), cl.customer), '%')
+                 AND (il.d_setting_id = ot.d_id_ID OR (TRIM(ds.D_Setting_Id) <> '' AND il.Product_id = TRIM(ds.D_Setting_Id)))
             ORDER BY ot.Order_date LIMIT 1");
         $upO = $db->prepare("UPDATE is_list SET Order_id = ? WHERE IS_id = ? AND Order_id IS NULL");
         foreach ($pairs as $p) {
             $id = (int)($p['is_id'] ?? 0); $qty = (int)($p['qty'] ?? 0);
             $s = $cand[$id] ?? null;
-            if (!$s || !$s['selectable'] || $qty <= 0 || $qty > $s['left']) { $skipped++; continue; }
+            /* 強制模式（整批加工價格的出貨被誤打成 1 批、數量永遠對不上時用）：略過「分配量不可超過出貨本身數量」，
+               只擋已綁過這張製令的；之後再把製令視為良品全數出完＋訂單結案。 */
+            if (!$s || $qty <= 0 || ($force ? (int)$s['this_bom'] > 0 : (!$s['selectable'] || $qty > $s['left']))) { $skipped++; continue; }
             if (!$s['has_order']) {
                 $stO->execute([':b1' => $bom, ':b2' => $bom, ':i' => $id]);
                 $oid = (int)$stO->fetchColumn();
@@ -1354,14 +1639,61 @@ function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId): 
             $ins->execute([$id, $bom, $qty]);
             $applied++; $ids[] = $id;
         }
+        $forceNote = '';
+        if ($force && $applied > 0) {
+            // 製令良品數（扣掉已確認報廢）還沒被綁定量涵蓋的差額，補在這次最後綁的一筆上＝認定良品全數出完
+            require_once __DIR__ . '/qa_abnormal_lib.php';
+            $bq = $db->prepare("SELECT sqty FROM bom WHERE bom = ?"); $bq->execute([$bom]);
+            $sqty = (int)$bq->fetchColumn();
+            $scrap = function_exists('qab_bom_scrap_qty') ? (int)qab_bom_scrap_qty($db, $bom, null) : 0;
+            $good = max(0, $sqty - $scrap);
+            $tq = $db->prepare("SELECT COALESCE(SUM(shipped_qty),0) FROM is_bom_map WHERE bom = ?"); $tq->execute([$bom]);
+            $gap = $good - (int)$tq->fetchColumn();
+            if ($gap > 0) {
+                $db->prepare("UPDATE is_bom_map SET shipped_qty = shipped_qty + ? WHERE bom = ? AND IS_id = ?")->execute([$gap, $bom, end($ids)]);
+                $forceNote = "（良品 {$good} 與綁定量差 {$gap}，已補在最後一筆）";
+            }
+            // 這張製令綁的訂單一併結案
+            $oq = $db->prepare("SELECT order_id FROM bom_order_process_map WHERE bom = ? UNION SELECT CAST(o_order_id AS UNSIGNED) FROM bom WHERE bom = ? AND o_order_id REGEXP '^[0-9]+\$'");
+            $oq->execute([$bom, $bom]);
+            $oids = array_values(array_filter(array_map('intval', $oq->fetchAll(PDO::FETCH_COLUMN))));
+            if ($oids) {
+                $db->prepare("UPDATE order_track SET Order_status = 9, Modified_At = NOW(), Modified_By = ?
+                              WHERE Order_id IN (" . implode(',', $oids) . ") AND (Order_status IS NULL OR Order_status NOT IN (6, 9))")->execute([$userId]);
+                $forceNote .= '；訂單已結案（' . count($oids) . ' 張）';
+            }
+        }
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
     }
     if ($ids) { require_once __DIR__ . '/is_bind_lock_lib.php'; isbl_sync($db, $ids, (int)$userId); }
+    if ($force && $ids) {   // 良品已全數涵蓋 → 製令自動結案（與一般綁定後的自動結案同一支）
+        try { require_once __DIR__ . '/bom_bound_ship_lib.php'; eg_bom_auto_close_shipped($db, [$bom], null, (int)$userId); } catch (Throwable $e) { error_log('force close bom: ' . $e->getMessage()); }
+    }
     return ['success' => true, 'applied' => $applied, 'skipped' => $skipped,
-            'message' => "已綁定 {$applied} 筆出貨明細到 {$bom}" . ($skipped ? "，略過 {$skipped} 筆（已綁定、數量超過可分配量或資料已異動）" : '')];
+            'message' => "已綁定 {$applied} 筆出貨明細到 {$bom}" . ($force ? '（強制綁定' . $forceNote . '）' : '') . ($skipped ? "，略過 {$skipped} 筆（已綁定、數量超過可分配量或資料已異動）" : '')];
+}
+
+/**
+ * 每張訂單「已出貨量」的唯一算法（2026-11-20）：
+ * 一張出貨單分給好幾張訂單時（追溯對照／出貨單綁定的分配表 is_order_map），已出量要依「各訂單分到的量」算，
+ * 不可以把整張出貨量記到 is_list.Order_id 那個「主要訂單」上——否則 382 支分給 181＋201 兩張訂單時，
+ * 201 那張會顯示已出 382、181 那張顯示已出 0（舊算法）。
+ * 沒有分配列的出貨單（只靠舊欄位 is_list.Order_id 綁定）仍整張算給那張訂單，所以沒用過分配表的資料結果不變。
+ */
+function sq_shipped_rows_sql(): string
+{
+    return "SELECT m.Order_id AS Order_id, m.allocated_qty AS q FROM is_order_map m
+            UNION ALL
+            SELECT il.Order_id, il.Qty FROM is_list il
+             WHERE il.Order_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM is_order_map m2 WHERE m2.IS_id = il.IS_id)";
+}
+function sq_shipped_by_order_sql(): string
+{
+    return "SELECT Order_id, SUM(q) AS sq FROM (" . sq_shipped_rows_sql() . ") t GROUP BY Order_id";
 }
 
 /**

@@ -82,7 +82,7 @@ case 'meta': {
         'warehouses' => $warehouses,
         'company'    => $pm['company'],
         'asdoc'      => $pm['asdoc'],
-        'as_docs'    => $perms['canAdmin'] ? eg_asdoc_list($db) : [],
+        'as_docs'    => $perms['canAsdoc'] ? eg_asdoc_list($db) : [],
     ]);
 }
 
@@ -191,7 +191,7 @@ case 'delete': {
 /* ── AS 文件編號綁定（列印頁尾右下角）───────────────────────────────── */
 case 'asdoc_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可變更 AS 文件綁定', 403);
+    if (!$perms['canAsdoc']) sq_err('無設定 AS 文件綁定的權限', 403);
     if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
 
     $docId = (int)($_POST['as_doc_id'] ?? 0);
@@ -207,6 +207,7 @@ case 'asdoc_save': {
 
 /* ── 舊資料回填：找出 Order_id 為空、可對應到訂單的出貨單 ────────────── */
 case 'match_preview': {
+    if (!$perms['canMatch']) sq_err('無舊資料訂單回填的權限', 403);
     $src  = $_POST ?: $_GET;
     $from = trim((string)($src['date_from'] ?? ''));
     $to   = trim((string)($src['date_to'] ?? ''));
@@ -222,6 +223,7 @@ case 'match_preview': {
 
 /* ── 回填工具的篩選來源（該區間內待回填的客戶／料號）────────────────── */
 case 'match_filters': {
+    if (!$perms['canMatch']) sq_err('無舊資料訂單回填的權限', 403);
     $src  = $_POST ?: $_GET;
     $from = trim((string)($src['date_from'] ?? ''));
     $to   = trim((string)($src['date_to'] ?? ''));
@@ -233,7 +235,7 @@ case 'match_filters': {
 
 /* ── 手動改選訂單：列出該筆出貨可綁的候選訂單（一律同客戶）──────────── */
 case 'match_candidates': {
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可回填舊資料', 403);
+    if (!$perms['canMatch']) sq_err('無舊資料訂單回填的權限', 403);
     $src  = $_POST ?: $_GET;
     $isId = (int)($src['is_id'] ?? 0);
     if ($isId <= 0) sq_err('缺少出貨明細 id');
@@ -243,29 +245,68 @@ case 'match_candidates': {
 
 /* ── 製令綁定舊出貨單（BOM總覽／完工BOM「待出貨」進來，已有訂單編號者）── */
 case 'bom_bind_candidates': {
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可綁定舊出貨單', 403);
+    if (!$perms['canBindOldShip']) sq_err('無綁定舊出貨單的權限', 403);
     $src = $_POST ?: $_GET;
     sq_out(sq_bom_bind_candidates($db, (string)($src['bom'] ?? '')));
 }
 
+case 'ship_mark_return': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canBindOldShip']) sq_err('無設定歸還的權限', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    sq_out(sq_ship_set_return($db, (int)($_POST['is_id'] ?? 0), !empty($_POST['on']), (string)$uid, (string)($_POST['kind'] ?? 'return')));
+}
+
 case 'bom_bind_apply': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可綁定舊出貨單', 403);
+    if (!$perms['canBindOldShip']) sq_err('無綁定舊出貨單的權限', 403);
     if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
     $pairs = json_decode($_POST['pairs'] ?? '[]', true);
     if (!is_array($pairs) || !$pairs) sq_err('沒有要綁定的資料');
-    sq_out(sq_bom_bind_apply($db, (string)($_POST['bom'] ?? ''), $pairs, (string)$uid));
+    sq_out(sq_bom_bind_apply($db, (string)($_POST['bom'] ?? ''), $pairs, (string)$uid, !empty($_POST['force'])));
+}
+
+/* ── 訂單還沒有製令：找可綁的製令並綁定（訂單→製令，走追溯對照同一套 tc_link）── */
+case 'order_bom_candidates': {
+    if (!$perms['canBindBom']) sq_err('無綁定製令的權限', 403);
+    $src = $_POST ?: $_GET;
+    sq_out(sq_order_bom_candidates($db, (int)($src['order_id'] ?? 0)));
+}
+
+case 'order_bom_bind': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canBindBom']) sq_err('無綁定製令的權限', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    $pairs = json_decode($_POST['pairs'] ?? '[]', true);
+    if (!is_array($pairs) || !$pairs) sq_err('沒有要綁定的製令');
+    sq_out(sq_order_bom_bind($db, (int)($_POST['order_id'] ?? 0), $pairs, is_array($u ?? null) ? $u : ['id' => $uid]));
+}
+
+case 'order_bom_auto_preview': {
+    if (!$perms['canBindBom']) sq_err('無綁定製令的權限', 403);
+    $ids = json_decode($_POST['order_ids'] ?? '[]', true);
+    if (!is_array($ids) || !$ids) sq_err('沒有訂單');
+    sq_out(sq_order_bom_auto_preview($db, $ids));
+}
+
+case 'order_bom_bind_batch': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canBindBom']) sq_err('無綁定製令的權限', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+    $items = json_decode($_POST['items'] ?? '[]', true);
+    if (!is_array($items) || !$items) sq_err('沒有要綁定的資料');
+    sq_out(sq_order_bom_bind_batch($db, $items, is_array($u ?? null) ? $u : ['id' => $uid]));
 }
 
 case 'match_scrap_boms': {
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可使用', 403);
+    if (!$perms['canMatch']) sq_err('無使用此功能的權限', 403);
     $src = $_POST ?: $_GET;
     sq_out(sq_match_scrap_boms($db, (int)($src['is_id'] ?? 0)));
 }
 
 case 'match_apply': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可回填舊資料', 403);
+    if (!$perms['canMatch']) sq_err('無舊資料訂單回填的權限', 403);
     if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
 
     $pairs = json_decode($_POST['pairs'] ?? '[]', true);
@@ -275,7 +316,7 @@ case 'match_apply': {
 
 /* ── 批次改單價：搜尋料號主檔（回料號、圖號、客戶，選定後以主檔 id 歸戶）── */
 case 'price_part_search': {
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可使用', 403);
+    if (!$perms['canPriceBatch']) sq_err('無使用此功能的權限', 403);
     $kw = trim((string)(($_POST ?: $_GET)['kw'] ?? ''));
     if ($kw === '') sq_out(['parts' => []]);
     $like = '%' . addcslashes($kw, '%_\\') . '%';
@@ -289,7 +330,7 @@ case 'price_part_search': {
 /* ── 批次修改出貨單價：料號＋期間內把單價 A 改成 B（非 A 的不動）；僅出貨管理員 ── */
 case 'price_batch_preview':
 case 'price_batch_apply': {
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可批次修改單價', 403);
+    if (!$perms['canPriceBatch']) sq_err('無批次修改單價的權限', 403);
     $apply = ($action === 'price_batch_apply');
     if ($apply) {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
@@ -308,6 +349,11 @@ case 'chain_parts': {
     sq_out(['parts' => tc_parts($db, $cli)]);
 }
 
+case 'chain_part_search': {
+    $src = $_POST ?: $_GET;
+    sq_out(['parts' => tc_part_search($db, (string)($src['q'] ?? ''))]);
+}
+
 /* ── 追溯鏈：載入一支料號的五個泳道與所有對應 ────────────────────────── */
 case 'chain_load': {
     $src = $_POST ?: $_GET;
@@ -321,15 +367,71 @@ case 'chain_load': {
         'all_client' => !empty($src['all_client']),
     ]);
     if (!empty($r['error'])) sq_err($r['error']);
-    $r['can_link'] = (bool)$perms['canAdmin'];
+    $r['can_link'] = (bool)$perms['canChainLink'];
     sq_out($r);
+}
+
+/* ── 出貨單綁定總覽（訂單列「出貨綁定」用）：這張訂單綁了哪些出貨單、每張出貨單分給哪些訂單，
+   以及同客戶同料號可改綁的候選訂單。寫入一律走 chain_link／chain_unlink（同一套 tc_link／tc_unlink）。── */
+case 'ship_bind_info': {
+    $src = $_POST ?: $_GET;
+    $oid = (int)($src['order_id'] ?? 0);
+    $isId = (int)($src['is_id'] ?? 0);
+    $ids = [];
+    if ($isId > 0) $ids[] = $isId;
+    elseif ($oid > 0) {
+        $q = $db->prepare("SELECT il.IS_id FROM is_list il LEFT JOIN is_order_map m ON m.IS_id=il.IS_id
+                            WHERE m.Order_id=? OR il.Order_id=? GROUP BY il.IS_id ORDER BY il.Order_date, il.IS_id LIMIT 40");
+        $q->execute([$oid, $oid]);
+        $ids = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+    } else sq_err('缺少訂單或出貨單');
+    $order = $oid > 0 ? tc_node($db, 'order', $oid) : null;
+    $ships = []; $client = $order ? trim((string)$order['client']) : ''; $part = $order ? trim((string)$order['part']) : '';
+    foreach ($ids as $id) {
+        $n = tc_node($db, 'ship', $id);
+        if (!$n) continue;
+        if ($client === '') { $client = trim((string)$n['client']); }
+        if ($part === '') { $part = trim((string)$n['part']); }
+        $dq = $db->prepare("SELECT Order_date, Order_id FROM is_list WHERE IS_id=?"); $dq->execute([$id]);
+        $d = $dq->fetch(PDO::FETCH_ASSOC);
+        $aq = $db->prepare("SELECT m.Order_id, m.allocated_qty, ot.Order_oo, ot.Qty FROM is_order_map m
+                              LEFT JOIN order_track ot ON ot.Order_id=m.Order_id WHERE m.IS_id=? ORDER BY m.allocated_qty DESC");
+        $aq->execute([$id]);
+        $al = []; $sum = 0;
+        foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $al[] = ['order_id' => (int)$r['Order_id'], 'oo' => (string)$r['Order_oo'], 'order_qty' => (int)$r['Qty'],
+                     'qty' => (int)$r['allocated_qty'], 'legacy' => false];
+            $sum += (int)$r['allocated_qty'];
+        }
+        if (!$al && (int)($d['Order_id'] ?? 0) > 0) { // 舊欄位綁定（分配表沒有列）：整張出貨量視為分給那張訂單
+            $o2 = tc_node($db, 'order', (int)$d['Order_id']);
+            if ($o2) { $al[] = ['order_id' => (int)$d['Order_id'], 'oo' => (string)$o2['no'], 'order_qty' => (int)$o2['qty'],
+                               'qty' => (int)$n['qty'], 'legacy' => true]; $sum = (int)$n['qty']; }
+        }
+        $ships[] = ['is_id' => $id, 'no' => (string)$n['no'], 'date' => (string)($d['Order_date'] ?? ''),
+                    'qty' => (int)$n['qty'], 'alloc' => $al, 'alloc_sum' => $sum];
+    }
+    $cands = [];
+    if ($client !== '' && $part !== '') {
+        $cq = $db->prepare("SELECT Order_id, Order_oo, Qty, Order_date FROM order_track
+                             WHERE (Client_name=? OR Client_name='' OR Client_name IS NULL) AND d_id=? AND (Order_status IS NULL OR Order_status<>6)
+                             ORDER BY Order_id DESC LIMIT 40");
+        $cq->execute([$client, $part]);
+        foreach ($cq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $used = tc_allocated($db, 'order_ship', 'order', (int)$r['Order_id']);
+            $cands[] = ['order_id' => (int)$r['Order_id'], 'oo' => (string)$r['Order_oo'], 'qty' => (int)$r['Qty'],
+                        'allocated' => $used, 'free' => max(0, (int)$r['Qty'] - $used), 'date' => (string)$r['Order_date']];
+        }
+        usort($cands, fn($a, $b) => $a['order_id'] <=> $b['order_id']);
+    }
+    sq_out(['order' => $order, 'ships' => $ships, 'candidates' => $cands, 'can_link' => (bool)$perms['canChainLink']]);
 }
 
 /* ── 追溯鏈：建立／解除一條對應（拖放綁定）──────────────────────────── */
 case 'chain_link':
 case 'chain_unlink': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
-    if (!$perms['canAdmin']) sq_err('僅出貨管理員可建立或解除對應', 403);
+    if (!$perms['canChainLink']) sq_err('無建立或解除對應的權限', 403);
     if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
 
     $type = trim((string)($_POST['type'] ?? ''));
@@ -343,6 +445,12 @@ case 'chain_unlink': {
         ? tc_link($db, $type, $from, $to, (int)($_POST['qty'] ?? 0), $u, $sk)
         : tc_unlink($db, $type, $from, $to, $u, $sk);
     if (empty($r['success'])) sq_err($r['message'] ?? '操作失敗');
+    // 解除「訂單→出貨單」後這張出貨單如果完全沒綁任何訂單，回報給畫面提醒（避免只做到一半）
+    if ($action === 'chain_unlink' && $type === 'order_ship') {
+        $oq = $db->prepare("SELECT COUNT(*) FROM is_order_map WHERE IS_id=?"); $oq->execute([(int)$to]);
+        $lq = $db->prepare("SELECT COALESCE(Order_id,0) FROM is_list WHERE IS_id=?"); $lq->execute([(int)$to]);
+        if ((int)$oq->fetchColumn() === 0 && (int)$lq->fetchColumn() === 0) $r['orphan_is_id'] = (int)$to;
+    }
     sq_out($r);
 }
 

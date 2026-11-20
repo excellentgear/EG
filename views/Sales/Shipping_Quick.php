@@ -23,8 +23,8 @@ include_once '../../src/common/shipping_lib.php';
 $db      = (new DBConnection())->getPDO();
 $sqUser  = sq_current_user($db);
 $perms   = sq_perms($db, $sqUser);
-$roleLbl = $perms['isAdmin'] ? '管理者'
-         : ($perms['canAdmin'] ? '出貨管理員'
+$roleLbl = $perms['isAdmin'] ? '全站管理員'
+         : ($perms['canAdmin'] ? '本頁管理員（出貨管理員）'
          : ($perms['canEdit'] ? '出貨登錄'
          : ($perms['canView'] ? '出貨檢閱' : '無權限')));
 ?>
@@ -292,11 +292,21 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <button id="btnPdf"><i class="fa fa-file-pdf-o"></i> 匯出PDF／列印</button>
       <button id="btnRecent"><i class="fa fa-history"></i> 近期出貨單</button>
       <button id="btnChain"><i class="fa fa-sitemap"></i> 追溯對照</button>
-      <?php if ($perms['canAdmin']): ?>
+      <?php if ($perms['canMatch']): ?>
       <button id="btnMatch"><i class="fa fa-link"></i> 舊資料訂單回填</button>
+      <?php endif; ?>
+      <?php if ($perms['canBindBom']): ?>
+      <button id="btnObBatch" title="把目前這一頁、還沒有製令的訂單，一次依建議綁上一對一的製令"><i class="fa fa-link"></i> 批次綁製令</button>
+      <?php endif; ?>
+      <?php if ($perms['canPriceBatch']): ?>
       <button id="btnPriceBatch" title="選定料號與期間，把出貨明細的單價 A 全部改成 B；原本不是 A 的不受影響"><i class="fa fa-pencil-square-o"></i> 批次改單價</button>
+      <?php endif; ?>
+      <?php if ($perms['canAsdoc']): ?>
       <button id="btnAsPick" title="出貨單列印時，頁尾右下角要印哪一份 AS 文件的編號">
         <i class="fa fa-file-text-o"></i> AS文件編號：<b id="asdocShow">尚未綁定</b></button>
+      <?php endif; ?>
+      <?php if ($perms['isAdmin']): ?>
+      <button id="btnRoleSet" title="設定本頁各功能要給哪些角色（僅全站管理員）"><i class="fa fa-key"></i> 角色設定</button>
       <?php endif; ?>
       <span class="sq-hint" style="margin-left:12px;">
         鍵盤：<kbd>/</kbd> 搜尋　<kbd>↑</kbd><kbd>↓</kbd> 選列　<kbd>空白</kbd> 勾選　<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 出貨
@@ -440,6 +450,38 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
           在列印對話框按取消也一樣會留紀錄。</li>
     </ul>
 
+    <h4>綁錯了怎麼修改（出貨單 ↔ 訂單）</h4>
+    <style>
+      .fx-wrap{border:1px solid #D8BE93;border-radius:6px;margin:6px 0 10px;background:#fff;font-size:12.5px;overflow:hidden;}
+      .fx-h{padding:5px 10px;background:#FFF1DA;color:#5b3a1e;}
+      .fx-h.bad{background:#FDECEA;} .fx-r{display:flex;gap:6px;align-items:center;padding:4px 10px;border-top:1px solid #F0E6D2;}
+      .fx-r span{flex:1;} .fx-in{display:inline-block;min-width:44px;padding:1px 6px;border:1px solid #bbb;border-radius:3px;text-align:right;background:#fff;}
+      .fx-b{display:inline-block;padding:0 7px;border:1px solid #c9792a;border-radius:3px;background:#FFF1DA;color:#8A5A2B;font-size:11.5px;line-height:19px;}
+      .fx-b.del{color:#B8431F;background:#fff;} .fx-b.go{background:#F0A24B;color:#fff;border-color:#F0A24B;}
+      .fx-cap{color:#8a6d45;font-size:12px;margin:2px 0 8px;}
+      .fx-step{display:inline-block;width:18px;height:18px;border-radius:50%;background:#F0A24B;color:#fff;text-align:center;line-height:18px;font-size:11px;font-weight:bold;margin-right:4px;}
+    </style>
+    <p><span class="fx-step">1</span>在訂單列的<b>「已出」數字下方</b>按 <span class="fx-b"><i class="fa fa-pencil"></i> 出貨綁定</span>（有「追溯對照綁定」權限者才可修改，其他人只能看）。</p>
+    <div class="fx-wrap">
+      <div class="fx-h"><b>IS1130217004</b>　2024.02.17　出貨 <b>382</b>　已分配 <b>382</b>　未分配 0</div>
+      <div class="fx-r"><span>OO1130215002（訂單量 181）</span><i class="fx-in">181</i><i class="fx-b">儲存量</i><i class="fx-b del">解除</i></div>
+      <div class="fx-r"><span>OO1130215002（訂單量 201）</span><i class="fx-in">201</i><i class="fx-b">儲存量</i><i class="fx-b del">解除</i></div>
+      <div class="fx-r" style="background:#FFFCF6;"><span>＋ 加綁到其他訂單 ▾</span><i class="fx-in">數量</i><i class="fx-b go">綁定</i></div>
+    </div>
+    <div class="fx-cap">↑ 一張出貨單分給兩筆訂單的樣子：各訂單各一列、各填各的數量，合計不可超過出貨量。</div>
+    <p><span class="fx-step">2</span><b>改數量</b>：直接改「分配量」按<b>儲存量</b>。<b>綁到別張訂單</b>：先<b>解除</b>，再用最下面一列「加綁到其他訂單」選同客戶同料號的另一筆、填數量、按<b>綁定</b>。</p>
+    <div class="fx-wrap">
+      <div class="fx-h bad"><b>IS1130217004</b>　出貨 382　已分配 0　未分配 382　<b style="color:#DD5138;">⚠ 目前沒有綁任何訂單，請在下面選訂單綁定</b></div>
+      <div class="fx-r" style="background:#FFFCF6;"><span>OO1130215002　訂單量 181　尚可分配 181 ▾</span><i class="fx-in">181</i><i class="fx-b go">綁定</i></div>
+    </div>
+    <div class="fx-cap">↑ 把最後一筆綁定解除後，這張出貨單會變紅色並提醒「目前沒有綁任何訂單」，視窗不會關，請接著補綁（在「追溯對照」解除時也會問你要不要馬上開這個視窗）。</div>
+    <p><span class="fx-step">3</span>關掉視窗後清單會自動重新載入，<b>已出／未出</b>會依各訂單<b>實際分到的量</b>重算。</p>
+    <ul>
+      <li>客戶不同的訂單不能綁；料號不同只會提醒；某筆訂單的未分配量不夠時系統會擋下並說明。</li>
+      <li>這個視窗與「追溯對照」「綁定舊出貨單到製令」是<b>同一份對應資料</b>，在哪裡改都一樣。</li>
+      <li>已出數量依「各訂單分到的量」計算，所以一張出貨單分給兩筆訂單時，兩筆訂單各自顯示分到的量，不會再把整張出貨量記在其中一筆上。</li>
+    </ul>
+
     <h4>報廢品歸還客戶</h4>
     <ul>
       <li>第一關<b>不是 170 材料（客供料）</b>的製令，報廢品要還給客戶：展開製令明細，在「報廢品歸還」欄填件數（上限＝已結案報廢單的報廢數 − 已歸還數），再按「確認出貨」。</li>
@@ -464,7 +506,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   <div class="m-foot"><button data-close="helpUseMask">關閉</button></div>
 </div></div>
 
-<?php if ($perms['canAdmin']): ?>
+<?php if ($perms['canMatch']): ?>
 <!-- 舊資料回填 -->
 <div class="sq-mask" id="mkMatch"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-link"></i>&nbsp;舊資料訂單回填<span class="m-close" data-close="mkMatch">✕</span></div>
@@ -534,6 +576,8 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   </div>
 </div></div>
 
+<?php endif; ?>
+<?php if ($perms['canBindOldShip']): ?>
 <!-- 製令綁定舊出貨單（由 BOM總覽／完工BOM「待出貨」進來，製令已有訂單編號） -->
 <div class="sq-mask" id="mkBomBind"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-link"></i>&nbsp;綁定舊出貨單到製令 <span id="bbBom"></span><span class="m-close" data-close="mkBomBind">✕</span></div>
@@ -548,13 +592,65 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   </div>
   <div class="m-foot">
     <span id="bbSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
+    <label style="float:left;margin:0 0 0 14px;line-height:32px;font-size:12.5px;color:#B8431F;" title="整批加工價格的出貨被打成 1 批、數量永遠對不上時用：不檢查數量，綁定後把這張製令視為良品全數出完、並結案這張製令綁定的訂單"><input type="checkbox" id="bbForce"> 強制綁定並結案（數量對不上也綁；視為良品全出完、訂單結案）</label>
     <button id="btnBbApply" class="btn-warm" style="background:var(--sq-acc);color:#fff;font-weight:bold;"><i class="fa fa-link"></i> 綁定勾選的出貨明細</button>
     <button data-close="mkBomBind">取消</button>
   </div>
 </div></div>
+
+<?php endif; ?>
+<?php if ($perms['canBindBom']): ?>
+<!-- 訂單還沒有製令：綁製令（訂單→製令，與「追溯對照」同一套分配） -->
+<div class="sq-mask" id="mkOrdBom"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-link"></i>&nbsp;綁定製令到訂單 <span id="obOo"></span><span class="m-close" data-close="mkOrdBom">✕</span></div>
+  <div class="m-body">
+    <div id="obInfo" style="margin-bottom:8px;"></div>
+    <div id="obBound"></div>
+    <div class="mt-note" style="margin-bottom:6px;">
+      列出<b>同客戶、同料號</b>（料號主檔或料號文字相同）的製令，系統依「還有未分配量 → 製令開立日不早於下單日 → 離下單日最近」排出建議（標「建議」）。
+      勾選並填入「分給這張訂單的數量」後按綁定；已分配完的製令照樣列出但不可選。這與「追溯對照」是同一套對應，在哪裡綁都一樣。
+    </div>
+    <div id="obList" style="max-height:48vh;overflow:auto;"></div>
+  </div>
+  <div class="m-foot">
+    <span id="obSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
+    <button id="btnObApply" class="btn-warm" style="background:var(--sq-acc);color:#fff;font-weight:bold;"><i class="fa fa-link"></i> 綁定勾選的製令</button>
+    <button data-close="mkOrdBom">取消</button>
+  </div>
+</div></div>
+
+<!-- 出貨綁定：這張訂單綁了哪些出貨單、每張出貨單分給哪些訂單（改量／解除／改綁，與「追溯對照」同一套分配） -->
+<div class="sq-mask" id="mkShipBind"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-link"></i>&nbsp;出貨單綁定 <span id="sbOo"></span><span class="m-close" data-close="mkShipBind">✕</span></div>
+  <div class="m-body">
+    <div class="mt-note" style="margin-bottom:8px;">
+      每張出貨單列出它<b>分給哪些訂單</b>。綁錯了可以<b>改分配量</b>、<b>解除</b>，或在最下面一列<b>加綁到同客戶同料號的其他訂單</b>。
+      一張出貨單同時涵蓋兩筆訂單時，就各綁一次、各填各的數量（合計不可超過出貨量）。這與「追溯對照」是同一套對應，在哪裡改都一樣。
+    </div>
+    <div id="sbBody"></div>
+  </div>
+  <div class="m-foot"><button data-close="mkShipBind">關閉</button></div>
+</div></div>
+
+<!-- 批次綁製令：目前這一頁沒有製令的訂單，一次依建議綁一對一 -->
+<div class="sq-mask" id="mkObBatch"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-link"></i>&nbsp;批次綁定製令到訂單<span class="m-close" data-close="mkObBatch">✕</span></div>
+  <div class="m-body">
+    <div class="mt-note" style="margin-bottom:6px;">
+      列出<b>目前這一頁</b>還沒有製令的訂單，每張依「還有未分配量 → 開立日不早於下單日 → 離下單日最近」挑一張建議製令，同一張製令不會被兩張訂單重複挑到。
+      <b>數量一致</b>（綠）預設勾選；製令數量比訂單多（可涵蓋）預設也勾；<b>製令量不夠</b>或沒找到的不預設勾選，請用該列「綁製令」單筆處理（可拆量）。請確認後再按綁定。
+    </div>
+    <div id="obbList" style="max-height:52vh;overflow:auto;"></div>
+  </div>
+  <div class="m-foot">
+    <span id="obbSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
+    <button id="btnObbApply" class="btn-warm" style="background:var(--sq-acc);color:#fff;font-weight:bold;"><i class="fa fa-link"></i> 綁定勾選的訂單</button>
+    <button data-close="mkObBatch">取消</button>
+  </div>
+</div></div>
 <?php endif; ?>
 
-<?php if ($perms['canAdmin']): ?>
+<?php if ($perms['canPriceBatch']): ?>
 <!-- 批次修改出貨單價：料號＋期間內把單價 A 改成 B（非 A 的不動） -->
 <div class="sq-mask" id="mkPriceBatch"><div class="sq-modal">
   <div class="m-head"><i class="fa fa-pencil-square-o"></i>&nbsp;批次修改出貨單價<span class="m-close" data-close="mkPriceBatch">✕</span></div>
@@ -589,6 +685,11 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <span style="font-weight:normal;font-size:12.5px;margin-left:8px;">報價單 → 訂單 → 製令 → 出貨單 → 退貨單 →(重出)出貨單</span>
     <span class="m-close" data-close="mkChain">✕</span></div>
   <div class="m-body">
+    <div class="sq-bar" style="background:#FFF7E8;">
+      <label><b>直接搜料號</b></label>
+      <input type="text" id="tcPartQ" style="width:260px;" placeholder="輸入料號關鍵字，不必先選客戶" autocomplete="off">
+      <span id="tcPartQMsg" style="font-size:12.5px;color:#8a6d45;">搜到後從「料號」下拉選一筆（會標出客戶），選好自動載入；也可以只用下方客戶→料號的方式。</span>
+    </div>
     <div class="sq-bar">
       <label>客戶</label>
       <select id="tcClient" style="width:190px;" data-eg-filter="輸入客戶簡稱或客戶ID篩選…" data-eg-filter-reset><option value="">請選擇客戶</option></select>
@@ -646,11 +747,58 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 </div></div>
 
 <!-- 角色說明 -->
+<?php if ($perms['isAdmin']): ?>
+<!-- 角色設定（僅全站管理員）：本頁各功能個別指派給角色；角色指派到人請至「使用者權限設定」 -->
+<div class="sq-mask" id="mkRoleSet"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-key"></i>&nbsp;快速出貨－角色設定<span class="m-close" data-close="mkRoleSet">✕</span></div>
+  <div class="m-body" style="padding:0;">
+    <div style="display:flex;height:440px;font-size:13px;">
+      <div style="width:230px;min-width:230px;border-right:1px solid var(--sq-line);display:flex;flex-direction:column;">
+        <div style="padding:8px 10px;border-bottom:1px solid var(--sq-line);display:flex;justify-content:space-between;align-items:center;">
+          <b style="font-size:12px;">角色清單</b>
+          <button type="button" id="rsAdd" style="height:26px;padding:0 10px;border:1px solid var(--sq-acc-d);background:var(--sq-acc);color:#fff;border-radius:4px;cursor:pointer;"><i class="fa fa-plus"></i> 新增</button>
+        </div>
+        <div id="rsList" style="flex:1;overflow-y:auto;"></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div id="rsHead" style="padding:8px 14px;border-bottom:1px solid var(--sq-line);font-weight:bold;color:#7a4b12;">← 請選擇角色</div>
+        <div id="rsBody" style="flex:1;overflow-y:auto;padding:10px 14px;">
+        <?php
+          $rsGrp = [];
+          foreach (sq_feature_list() as $f) $rsGrp[$f['group']][] = $f;
+          foreach ($rsGrp as $gname => $items): ?>
+          <div style="margin-bottom:12px;">
+            <div style="font-weight:bold;color:#8a5a2b;font-size:12px;border-bottom:1px dashed #e0d5c5;padding-bottom:3px;margin-bottom:6px;"><?= htmlspecialchars($gname) ?></div>
+            <?php foreach ($items as $f): ?>
+            <label style="display:block;font-weight:normal;cursor:pointer;margin:3px 0;">
+              <input type="checkbox" class="rs-cb" value="<?= htmlspecialchars($f['code']) ?>"> <?= htmlspecialchars($f['label']) ?>
+            </label>
+            <?php endforeach; ?>
+          </div>
+        <?php endforeach; ?>
+        </div>
+        <div id="rsFoot" style="padding:8px 14px;border-top:1px solid var(--sq-line);display:none;">
+          <small id="rsNote" style="float:left;line-height:30px;color:#8a6d45;"></small>
+          <button type="button" id="rsSave" style="height:30px;padding:0 14px;border:1px solid var(--sq-acc-d);background:var(--sq-acc);color:#fff;border-radius:4px;font-weight:bold;cursor:pointer;float:right;"><i class="fa fa-save"></i> 儲存角色設定</button>
+        </div>
+      </div>
+    </div>
+    <p style="font-size:12px;color:#8a6d45;padding:6px 14px;border-top:1px solid var(--sq-line);margin:0;line-height:1.7;">
+      <b>全站管理員</b>與<b>本頁管理員（出貨管理員）</b>自動擁有以下全部功能，不必勾選。其他角色（含自訂角色）請在此勾選要開放的功能；
+      「綁製令」「綁定舊出貨單到製令」「舊資料訂單回填」「批次改單價」可各自單獨指派。
+      角色指派給人員請至 <b>管理設定 → 使用者權限</b>（模組 shipping）。
+    </p>
+  </div>
+  <div class="m-foot"><button data-close="mkRoleSet">關閉</button></div>
+</div></div>
+<?php endif; ?>
+
 <div class="sq-mask" id="mkRole"><div class="sq-modal narrow">
   <div class="m-head">角色權限說明<span class="m-close" data-close="mkRole">✕</span></div>
   <div class="m-body" style="font-size:13.5px;color:#5b3a1e;line-height:1.9;">
-    <b>管理者</b>：固定擁有全部權限。<br>
-    <b>出貨管理員</b>：可出貨、可執行舊資料訂單回填。<br>
+    <b>全站管理員</b>：固定擁有全部權限，可在「角色設定」指定各功能給哪些角色。<br>
+    <b>本頁管理員（出貨管理員）</b>：可出貨，並自動擁有綁製令、綁定舊出貨單到製令、舊資料訂單回填、批次改單價、追溯對照綁定、AS 文件編號設定。<br>
+    <b>自訂角色</b>：由全站管理員在「角色設定」逐項勾選功能，綁製令／綁舊出貨單／回填／批次改單價可個別開放。<br>
     <b>出貨登錄</b>：可查詢待出貨清單並建立出貨單。<br>
     <b>出貨檢閱</b>：僅可查詢與匯出，不能建立出貨單。<br>
     <span style="color:#8a6d45;font-size:12.5px;">角色於「使用者權限設定」頁指派（模組 shipping）。</span>
@@ -685,7 +833,13 @@ $(document).ready(function () {
 var API   = '../../src/store/Shipping_API.php';
 var CAN_EDIT   = <?= $perms['canEdit']   ? 'true' : 'false' ?>;
 var CAN_ADMIN  = <?= $perms['canAdmin']  ? 'true' : 'false' ?>;
+var CAN_BIND_BOM  = <?= $perms['canBindBom']     ? 'true' : 'false' ?>;   // 綁製令
+var CAN_BIND_OLD  = <?= $perms['canBindOldShip'] ? 'true' : 'false' ?>;   // 綁定舊出貨單到製令
+var CAN_MATCH     = <?= $perms['canMatch']       ? 'true' : 'false' ?>;   // 舊資料訂單回填
+var CAN_PRICE     = <?= $perms['canPriceBatch']  ? 'true' : 'false' ?>;   // 批次改單價
+var CAN_IS_ADMIN  = <?= $perms['isAdmin']        ? 'true' : 'false' ?>;   // 全站管理員（角色設定）
 var CAN_DELETE = <?= $perms['canDelete'] ? 'true' : 'false' ?>;
+var CAN_CHAIN  = <?= $perms['canChainLink'] ? 'true' : 'false' ?>;   // 追溯對照／出貨綁定的建立與解除
 var COMPANY = {full:'', address:'', tel:'', fax:'', tax_id:''};   // 本公司抬頭（列印用，禁寫死）
 var AS_DOCS = [], AS_CUR = 0, AS_LABEL = '';
 var dtCache = null;          // 目前開著的出貨單明細（列印／刪除共用）
@@ -701,6 +855,8 @@ var lastMatch = [];
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function nf(n){ return (Number(n)||0).toLocaleString('en-US'); }
+/* 訂單號 → 新視窗開啟該筆訂單的訂單追蹤（NewOrder_Track.php?kw=訂單號） */
+function ooLink(oo){ oo=String(oo||'').trim(); if(!oo) return '—'; return '<a href="NewOrder_Track.php?kw='+encodeURIComponent(oo)+'" target="_blank" rel="noopener" class="oo-lnk" title="新視窗開啟此訂單的訂單追蹤" onclick="event.stopPropagation();" style="color:#B8431F;text-decoration:underline;">'+esc(oo)+'</a>'; }
 /* 小數尾 0 省略：3.50→3.5、3.00→3 */
 function np(n){ var v=Number(n)||0; return String(parseFloat(v.toFixed(4))); }
 function toast(m, bad){
@@ -818,18 +974,18 @@ function openFromUrl(){
  * 這張製令已經沒有可出的量（都出完了）→ 改開「近期出貨單」列出綁了這張製令的出貨單。 */
 /* 橫幅上的「綁定舊出貨單」鈕（出貨管理員才有）：製令已有訂單編號時，不必走「舊資料訂單回填」，直接把舊出貨綁到這張製令 */
 function bbBtn(bomNo){
-  return CAN_ADMIN ? ' <button type="button" class="btn-bb" data-bom="'+esc(bomNo)+'" style="margin-left:8px;padding:2px 10px;border:1px solid #c9792a;background:#fff;color:#8a4b12;border-radius:4px;font-weight:bold;cursor:pointer;">'
+  return CAN_BIND_OLD ? ' <button type="button" class="btn-bb" data-bom="'+esc(bomNo)+'" style="margin-left:8px;padding:2px 10px;border:1px solid #c9792a;background:#fff;color:#8a4b12;border-radius:4px;font-weight:bold;cursor:pointer;">'
     + '<i class="fa fa-link"></i> 綁定舊出貨單</button>' : '';
 }
 var BB = {bom:'', ships:[], alts:[], fromBom:false};
-$(document).on('click','.ub-ship',function(e){ e.stopPropagation(); if(!CAN_ADMIN) return; var b=String($(this).data('bom')||''); if(!b){ toast('這張訂單還沒有製令，無法綁定舊出貨單', true); return; } BB.fromBom=true; openBomBind(b, []); });
+$(document).on('click','.ub-ship',function(e){ e.stopPropagation(); if(!CAN_BIND_OLD) return; var b=String($(this).data('bom')||''); if(!b){ toast('這張訂單還沒有製令，無法綁定舊出貨單', true); return; } BB.fromBom=true; openBomBind(b, []); });
 $(document).on('click','.btn-bb',function(){ BB.fromBom = true; openBomBind(String($(this).data('bom')), []); });
 /* 一般快速出貨：只勾一筆訂單、且這張訂單的製令底下有「還沒綁訂單」的同料號舊出貨時，才出現底部的綁定鈕 */
 var bbProbeKey = '';
 function bbProbe(){
   var ks = Object.keys(sel);
   $('#btnBindOld').hide();
-  if (!CAN_ADMIN || ks.length !== 1) { bbProbeKey=''; $('#sqBindOldBar').remove(); return; }
+  if (!CAN_BIND_OLD || ks.length !== 1) { bbProbeKey=''; $('#sqBindOldBar').remove(); return; }
   var s = sel[ks[0]], boms = (s.row.boms||[]).map(function(b){ return String(b.bom); }).filter(Boolean);
   if (!boms.length) { $('#sqBindOldBar').remove(); return; }
   var key = ks[0]+'|'+boms.join(','); bbProbeKey = key;
@@ -850,6 +1006,210 @@ function bbProbe(){
     });
   });
 }
+/* ══ 出貨綁定（訂單列「出貨綁定」鈕）：改量／解除／加綁其他訂單。寫入一律走 chain_link／chain_unlink ══ */
+var SB = {oid:0, isId:0, focusIs:0, dirty:false};
+$(document).on('click','.btn-sb',function(e){ e.stopPropagation(); openShipBind(+$(this).data('oid')||0, 0); });
+function openShipBind(oid, isId){
+  SB.oid=oid; SB.isId=isId||0; SB.focusIs=SB.isId;
+  $('#sbOo').text(''); $('#sbBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
+  openMask('mkShipBind'); sbLoad();
+}
+function sbLoad(){
+  $.post(API+'?action=ship_bind_info',{order_id:SB.oid,is_id:SB.isId},function(r){
+    if(!r.ok){ $('#sbBody').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
+    if(r.order) $('#sbOo').html(ooLink(r.order.no)+'（訂單量 '+nf(r.order.qty)+'）');
+    else $('#sbOo').text('');
+    var can=r.can_link && CAN_CHAIN, cands=r.candidates||[], h='';
+    if(!(r.ships||[]).length) h='<div style="padding:16px;color:#8a6d45;">這張訂單目前沒有綁任何出貨單。</div>';
+    (r.ships||[]).forEach(function(sh){
+      var left=sh.qty-sh.alloc_sum, orphan=sh.alloc.length===0, hot=(SB.focusIs===sh.is_id);
+      h+='<div class="sb-card" data-is="'+sh.is_id+'" data-qty="'+sh.qty+'" style="margin-bottom:10px;border:1px solid '+(orphan?'#DD5138':'#D8BE93')+';border-radius:6px;'+(hot?'box-shadow:0 0 0 2px #F0A24B;':'')+'">'
+        +'<div style="padding:6px 10px;background:'+(orphan?'#FDECEA':'#FFF1DA')+';font-size:13px;"><b>'+esc(sh.no)+'</b>　'+esc(String(sh.date||'').substr(0,10).replace(/-/g,'.'))
+        +'　出貨 <b>'+nf(sh.qty)+'</b>　已分配 <b>'+nf(sh.alloc_sum)+'</b>　<span style="color:'+(left<0?'#DD5138':'#8A5A2B')+';">'+(left<0?'超出 '+nf(-left):'未分配 '+nf(left))+'</span>'
+        +(orphan?'　<b style="color:#DD5138;">⚠ 目前沒有綁任何訂單，請在下面選訂單綁定</b>':'')+'</div>'
+        +'<table class="sq-t" style="margin:0;"><thead><tr><th>訂單號</th><th>訂單量</th><th>分配量</th><th></th></tr></thead><tbody>';
+      sh.alloc.forEach(function(a){
+        h+='<tr data-oid="'+a.order_id+'"><td>'+esc(a.oo)+(a.order_id===SB.oid?' <span class="pill" style="background:#F0A24B;color:#fff;">本筆</span>':'')+(a.legacy?' <small title="舊欄位綁定，改量或解除時會一併搬進分配表">舊綁定</small>':'')+'</td>'
+          +'<td class="r">'+nf(a.order_qty)+'</td>'
+          +'<td><input type="number" class="sb-q" min="1" value="'+a.qty+'" style="width:90px;"'+(can?'':' disabled')+'></td>'
+          +'<td>'+(can?'<button type="button" class="sb-save">儲存量</button> <button type="button" class="sb-del" style="color:#B8431F;">解除</button>':'')+'</td></tr>';
+      });
+      if(can){
+        var opts=cands.filter(function(c){ return !sh.alloc.some(function(a){ return a.order_id===c.order_id; }); });
+        var defQ=Math.max(left,0);
+        h+='<tr class="sb-add"><td colspan="2"><select class="sb-sel" style="max-width:360px;"><option value="">加綁到其他訂單…</option>'
+          +opts.map(function(c){ return '<option value="'+c.order_id+'" data-free="'+c.free+'">'+esc(c.oo)+'　訂單量 '+c.qty+'　尚可分配 '+c.free+'　'+esc(String(c.date||'').substr(0,10).replace(/-/g,'.'))+'</option>'; }).join('')
+          +'</select></td><td><input type="number" class="sb-nq" min="1" value="'+(defQ||'')+'" style="width:90px;" placeholder="數量"></td><td><button type="button" class="sb-add-btn btn-warm" style="background:var(--sq-acc);color:#fff;">綁定</button></td></tr>';
+      }
+      h+='</tbody></table></div>';
+    });
+    $('#sbBody').html(h);
+    if(SB.focusIs){ var el=$('#sbBody .sb-card[data-is="'+SB.focusIs+'"]')[0]; if(el&&el.scrollIntoView) el.scrollIntoView({block:'nearest'}); }
+  },'json').fail(function(){ $('#sbBody').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
+}
+function sbDone(msg){ SB.dirty=true; toast(esc(msg||'已儲存')); sbLoad(); }
+$(document).on('click','#sbBody .sb-save',function(){
+  var $tr=$(this).closest('tr'), is=+$(this).closest('.sb-card').data('is'), oid=+$tr.data('oid'), q=parseInt($tr.find('.sb-q').val(),10)||0;
+  if(q<1){ toast('分配量必須大於 0', true); return; }
+  $.post(API+'?action=chain_link',{csrf:CSRF,type:'order_ship',from_id:oid,to_id:is,qty:q,src_kind:'map'},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; } sbDone(r.message);
+  },'json').fail(function(){ toast('儲存失敗', true); });
+});
+$(document).on('click','#sbBody .sb-del',function(){
+  var $c=$(this).closest('.sb-card'), $tr=$(this).closest('tr'), is=+$c.data('is'), oid=+$tr.data('oid'), last=$c.find('tr[data-oid]').length===1;
+  if(!confirm('確定解除這張出貨單與「'+$tr.find('td:first').text().replace(/本筆|舊綁定/g,'').trim()+'」的綁定？'+(last?'\n\n解除後這張出貨單將不綁任何訂單，請接著在同一張卡片下方選訂單重新綁定。':''))) return;
+  $.post(API+'?action=chain_unlink',{csrf:CSRF,type:'order_ship',from_id:oid,to_id:is,src_kind:'map'},function(r){
+    if(!r.ok){ toast(esc(r.error||'解除失敗'), true); return; }
+    if(r.orphan_is_id){ SB.focusIs=r.orphan_is_id; SB.isId=r.orphan_is_id; }
+    sbDone((r.message||'已解除')+(r.orphan_is_id?'；這張出貨單目前沒有綁任何訂單，請接著重新綁定':''));
+  },'json').fail(function(){ toast('解除失敗', true); });
+});
+$(document).on('change','#sbBody .sb-sel',function(){
+  var f=parseInt($(this).find('option:selected').data('free'),10)||0, $c=$(this).closest('.sb-card');
+  var allocated=0; $c.find('.sb-q').each(function(){ allocated+=parseInt($(this).val(),10)||0; });
+  var leftShip=Math.max((+$c.data('qty'))-allocated,0), v=Math.min(leftShip||f, f||leftShip);
+  $(this).closest('tr').find('.sb-nq').val(v>0?v:'');
+});
+$(document).on('click','#sbBody .sb-add-btn',function(){
+  var $tr=$(this).closest('tr'), is=+$(this).closest('.sb-card').data('is'), oid=parseInt($tr.find('.sb-sel').val(),10)||0, q=parseInt($tr.find('.sb-nq').val(),10)||0;
+  if(!oid){ toast('請先選要綁的訂單', true); return; }
+  if(q<1){ toast('數量必須大於 0', true); return; }
+  $.post(API+'?action=chain_link',{csrf:CSRF,type:'order_ship',from_id:oid,to_id:is,qty:q,src_kind:'map'},function(r){
+    if(!r.ok){ toast(esc(r.error||'綁定失敗'), true); return; }
+    SB.focusIs=0; sbDone(r.message+((r.warn&&r.warn.length)?'（'+r.warn.join('；')+'）':''));
+  },'json').fail(function(){ toast('綁定失敗', true); });
+});
+/* 關掉視窗時如果有改過，重新載入清單，已出／未出才會跟著變 */
+$(document).on('click','#mkShipBind [data-close]',function(){ if(SB.dirty){ SB.dirty=false; load(); } });
+
+var OB = {oid:0, boms:[], free:0};
+var BB_LABEL = {'return':'歸還','ng':'NG歸還','jig':'治具'};
+var BB_BTN = 'margin-top:2px;padding:0 6px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#FFF1DA;color:#8A5A2B;border-radius:3px;cursor:pointer;';
+$(document).on('click','.btn-ob',function(e){ e.stopPropagation(); if(!CAN_BIND_BOM) return; openOrdBom(+$(this).data('oid')||0); });
+function openOrdBom(oid){
+  OB.oid=oid; OB.boms=[]; $('#obOo').text(''); $('#obInfo').html(''); $('#obList').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>'); $('#obSel').text('');
+  openMask('mkOrdBom');
+  $.post(API+'?action=order_bom_candidates',{order_id:oid},function(r){
+    if(!r.ok || r.error){ $('#obList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
+    var o=r.order; OB.boms=r.boms||[]; OB.free=o.free;
+    $('#obOo').html(ooLink(o.oo));
+    /* 這張訂單目前已綁的製令：綁錯了可以直接在這裡解除，再從下面重選 */
+    var bh=(r.bound||[]).map(function(b){ return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;background:#F7E0BD;border:1px solid #F0A24B;border-radius:4px;"><b>'+esc(b.bom)+'</b>　'+nf(b.qty)+' 支 <button type="button" class="ob-unbind" data-bom="'+esc(b.bom)+'" style="margin-left:6px;padding:0 6px;border:1px solid #DD5138;background:#fff;color:#DD5138;border-radius:3px;cursor:pointer;">解除</button></span>'; }).join('');
+    $('#obBound').html(bh?('<div style="margin-bottom:8px;padding:6px 10px;background:#FFF1DA;border:1px solid #F0A24B;border-radius:6px;font-size:13px;">這張訂單<b>目前已綁</b>：'+bh+'<div style="font-size:12px;color:#8a6d45;">綁錯請先按「解除」，再從下面勾選正確的製令綁定。</div></div>'):'');
+    $('#obInfo').html('<table class="sq-t" style="background:#FFF7E8;"><thead><tr><th>訂單號</th><th>客戶</th><th>料號</th><th>訂購</th><th>已分配給製令</th><th>可再分配</th><th>下單日</th></tr></thead><tbody><tr><td><b>'+ooLink(o.oo)+'</b></td><td>'+esc(o.client||'—')+'</td><td>'+esc(o.part)+'</td><td>'+nf(o.qty)+'</td><td>'+nf(o.alloc)+'</td><td><b>'+nf(o.free)+'</b></td><td>'+esc(String(o.order_date).replace(/-/g,'.'))+'</td></tr></tbody></table>');
+    if(!OB.boms.length){ $('#obList').html('<div style="padding:16px;color:#8a6d45;">找不到同客戶、同料號的製令。請先到 BOM總覽「新增BOM」建立製令。</div>'); obCount(); return; }
+    var h='<table class="sq-t"><thead><tr><th></th><th>製令</th><th>開立日</th><th>與下單日相差</th><th>製令數量</th><th>已分配</th><th>未分配</th><th>已綁訂單</th><th>分給這張訂單</th></tr></thead><tbody>';
+    OB.boms.forEach(function(b,i){
+      var dis=b.left<=0, def=Math.min(b.left, o.free);
+      var gap=(b.gap_days==null)?'—':((b.gap_days>=0?'+':'')+b.gap_days+' 天'+(b.before_order?'（早於下單）':''));
+      h+='<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':(b.suggest?'background:#E3F2E6;':''))+'"><td><input type="checkbox" class="ob-ck"'+(dis?' disabled':'')+(b.suggest?' checked':'')+'></td>'
+        +'<td><b>'+esc(b.bom)+'</b>'+(b.suggest?' <span style="background:#2E8B57;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;line-height:16px;">建議</span>':'')+(b.done?' <small>已完工</small>':'')+'</td>'
+        +'<td>'+esc(String(b.bom_date).replace(/-/g,'.'))+'</td><td>'+esc(gap)+'</td><td>'+nf(b.sqty)+'</td><td>'+nf(b.alloc)+'</td><td>'+nf(b.left)+'</td><td>'+esc(b.bound_oo||'—')+'</td>'
+        +'<td><input type="number" class="ob-q" min="1" max="'+b.left+'" value="'+(dis?'':def)+'" style="width:90px;"'+(dis?' disabled':'')+'></td></tr>';
+    });
+    $('#obList').html(h+'</tbody></table>'); obCount();
+  },'json').fail(function(){ $('#obList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
+}
+$(document).on('click','.ob-unbind',function(){
+  var bom=String($(this).data('bom')); if(!confirm('確定解除這張訂單與製令 '+bom+' 的綁定？')) return;
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=chain_unlink',{csrf:CSRF,type:'order_bom',from_id:OB.oid,to_id:bom,src_kind:'map'},function(r){
+    if(!r.ok){ $b.prop('disabled',false); toast(esc(r.error||'解除失敗'), true); return; }
+    toast(esc(r.message||'已解除')); openOrdBom(OB.oid);
+  },'json').fail(function(){ $b.prop('disabled',false); toast('解除失敗', true); });
+});
+function obCount(){
+  var n=0,q=0; $('#obList tbody tr').each(function(){ if(!$(this).find('.ob-ck').is(':checked')) return; n++; q+=parseInt($(this).find('.ob-q').val(),10)||0; });
+  $('#obSel').html('已勾選 '+n+' 張'+(n?'　分給這張訂單合計 <b>'+nf(q)+'</b>'+(q>OB.free?'　<span style="color:#c0392b;">（超過訂單可再分配 '+nf(OB.free)+'）</span>':''):''));
+}
+$(document).on('change input','#obList .ob-ck,#obList .ob-q',obCount);
+/* 綁定製令視窗：按 Enter ＝ 按「綁定勾選的製令」（捕獲階段先處理，免得共用檔的 Enter 跳下一欄搶走；按在按鈕上時維持該按鈕原本行為） */
+/* 掛在 window 的捕獲階段：比共用檔 eg_input_rules.js（掛在 document）更早執行，才搶得到 Enter */
+window.addEventListener('keydown',function(e){
+  if(e.key!=='Enter' || e.isComposing) return;
+  var btn = $('#mkOrdBom').hasClass('show') ? '#btnObApply' : ($('#mkObBatch').hasClass('show') ? '#btnObbApply' : '');
+  if(!btn) return;
+  /* 視窗剛打開時焦點多半還停在頁面上開窗的那顆按鈕／body，不在視窗內，所以不限制 e.target 一定要在視窗裡 */
+  if($(e.target).closest('#mkOrdBom button,#mkObBatch button,.sq-mask.show:not(#mkOrdBom):not(#mkObBatch)').length) return;
+  if($(e.target).is('textarea')) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if(!$(btn).prop('disabled')) $(btn)[0].click();
+},true);
+$(document).on('click','#btnObApply',function(){
+  var pairs=[]; $('#obList tbody tr').each(function(){
+    if(!$(this).find('.ob-ck').is(':checked')) return;
+    pairs.push({bom:OB.boms[$(this).data('i')].bom, qty:parseInt($(this).find('.ob-q').val(),10)||0});
+  });
+  if(!pairs.length){ toast('請先勾選要綁定的製令', true); return; }
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=order_bom_bind',{csrf:CSRF,order_id:OB.oid,pairs:JSON.stringify(pairs)},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
+    toast(esc(r.message||'已綁定')); closeMask('mkOrdBom'); if(typeof load==='function') load(); else $('#btnQuery').click();
+  },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
+});
+/* ── 批次綁製令（一對一）：取目前這一頁所有「還沒有製令」的訂單 ── */
+var OBB = {rows:[]};
+$(document).on('click','#btnObBatch',function(){
+  if(!CAN_BIND_BOM) return;
+  var ids=[]; $('.btn-ob:not(.btn-ob-edit)').each(function(){ var v=+$(this).data('oid')||0; if(v && ids.indexOf(v)<0) ids.push(v); });
+  if(!ids.length){ toast('目前這一頁沒有「還沒有製令」的訂單', true); return; }
+  OBB.rows=[]; $('#obbSel').text(''); $('#obbList').html('<div style="padding:16px;color:#8a6d45;">配對中…（'+ids.length+' 張訂單）</div>');
+  openMask('mkObBatch');
+  $.post(API+'?action=order_bom_auto_preview',{order_ids:JSON.stringify(ids)},function(r){
+    if(!r.ok || r.error){ $('#obbList').html('<div style="padding:16px;color:#c0392b;">'+esc(r.error||'查詢失敗')+'</div>'); return; }
+    OBB.rows=r.rows||[];
+    var ST={exact:['數量一致','#2E8B57'],cover:['可涵蓋','#C9792A'],partial:['製令量不夠','#c0392b'],none:['找不到可用製令','#a2916f'],full:['已分配完','#a2916f']};
+    var h='<table class="sq-t"><thead><tr><th></th><th>訂單</th><th>客戶</th><th>料號</th><th>訂購</th><th>下單日</th><th>建議製令</th><th>開立日（相差）</th><th>製令數量／未分配</th><th>綁定數量</th><th>判定</th></tr></thead><tbody>';
+    OBB.rows.forEach(function(x,i){
+      if(x.error){ h+='<tr style="color:#a2916f;"><td></td><td colspan="10">訂單 #'+x.order_id+'：'+esc(x.error)+'</td></tr>'; return; }
+      var ok=x.status==='exact'||x.status==='cover', s=ST[x.status]||['',''];
+      var gap=(x.gap_days==null||!x.bom)?'':(String(x.bom_date).replace(/-/g,'.')+'（'+(x.gap_days>=0?'+':'')+x.gap_days+'天'+(x.before_order?'，早於下單':'')+'）');
+      h+='<tr data-i="'+i+'"'+(ok?'':' style="color:#8a6d45;background:#f6f1e7;"')+'><td><input type="checkbox" class="obb-ck"'+(x.bom?'':' disabled')+(ok?' checked':'')+'></td>'
+        +'<td><b>'+ooLink(x.oo)+'</b></td><td>'+esc(x.client||'—')+'</td><td>'+esc(x.part)+'</td><td>'+nf(x.qty)+'</td><td>'+esc(String(x.order_date).replace(/-/g,'.'))+'</td>'
+        +'<td>'+(x.bom?'<b>'+esc(x.bom)+'</b>'+(x.done?' <small>已完工</small>':''):'—')+'</td><td>'+esc(gap||'—')+'</td>'
+        +'<td>'+(x.bom?nf(x.bom_qty)+' ／ '+nf(x.bom_left):'—')+'</td>'
+        +'<td>'+(x.bom?'<input type="number" class="obb-q" min="1" max="'+x.take+'" value="'+x.take+'" style="width:80px;">':'—')+'</td>'
+        +'<td><span style="color:'+s[1]+';font-weight:bold;">'+s[0]+'</span></td></tr>';
+    });
+    $('#obbList').html(h+'</tbody></table>'); obbCount();
+  },'json').fail(function(){ $('#obbList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
+});
+function obbCount(){
+  /* 勾選與否一眼看得出來：勾選＝淺綠底；未勾＝明顯的灰褐底＋字色變淡（依勾選即時切換） */
+  $('#obbList tbody tr[data-i]').each(function(){
+    var on=$(this).find('.obb-ck').is(':checked');
+    $(this).children('td').css({background:on?'#DDEFE1':'#DCCFB8', color:on?'':'#7d6a4a'});
+  });
+  var n=$('#obbList .obb-ck:checked').length; $('#obbSel').html('已勾選 <b>'+n+'</b> 張訂單'); }
+$(document).on('change input','#obbList .obb-ck,#obbList .obb-q',obbCount);
+$(document).on('click','#btnObbApply',function(){
+  var items=[]; $('#obbList tbody tr').each(function(){
+    var $r=$(this); if(!$r.find('.obb-ck').is(':checked')) return;
+    var x=OBB.rows[$r.data('i')]; items.push({order_id:x.order_id, bom:x.bom, qty:parseInt($r.find('.obb-q').val(),10)||0});
+  });
+  if(!items.length){ toast('請先勾選要綁定的訂單', true); return; }
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=order_bom_bind_batch',{csrf:CSRF,items:JSON.stringify(items)},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
+    toast(esc(r.message||'已綁定'), (r.errors||[]).length>0); closeMask('mkObBatch'); if(typeof load==='function') load(); else $('#btnQuery').click();
+  },'json').fail(function(){ $b.prop('disabled',false); toast('綁定失敗（網路或伺服器錯誤）', true); });
+});
+$(document).on('click','.bb-ret',function(e){
+  e.stopPropagation();
+  var $b=$(this), $tr=$b.closest('tr'), i=+$tr.data('i'), s=BB.ships[i], on=+$b.data('on')===1, kind=String($b.data('kind')||'return');
+  $tr.find('.bb-ret').prop('disabled',true);
+  $.post(API+'?action=ship_mark_return',{csrf:CSRF,is_id:s.is_id,on:on?1:0,kind:kind},function(r){
+    if(!r.ok || r.success===false){ $tr.find('.bb-ret').prop('disabled',false); toast(esc(r.message||r.error||'設定失敗'), true); return; }
+    s.sale_kind=on?kind:''; s.returned=on; s.selectable=s.left>0 && !(s.this_bom>0);
+    var $td=$b.closest('td');
+    $td.find('.bb-rtag,.bb-ret,br').remove();
+    if(on) $td.append(' <span class="bb-rtag" style="background:#F0A24B;color:#5a2d0c;font-weight:bold;border-radius:3px;padding:0 5px;font-size:11px;">'+(BB_LABEL[kind]||'標記')+'</span> <button type="button" class="bb-ret" data-on="0" data-kind="'+kind+'" style="'+BB_BTN+'">取消標記</button>');
+    else    $td.append('<br>'+'<button type="button" class="bb-ret" data-on="1" data-kind="return" title="設為歸還＝出貨性質改為「備註/歸還」，不計入出貨量與這張製令的數量" style="'+BB_BTN+'">設為歸還</button> <button type="button" class="bb-ret" data-on="1" data-kind="ng" title="設為NG歸還＝出貨性質改為「歸還(NG/來料不良)」，不計入出貨量與這張製令的數量" style="'+BB_BTN+'">設為NG歸還</button> <button type="button" class="bb-ret" data-on="1" data-kind="jig" title="設為治具＝出貨性質改為「治具」，不當成這張製令的成品出貨" style="'+BB_BTN+'">設為治具</button>');
+    bbCount(); toast(esc(r.message||'已設定'));
+  },'json').fail(function(){ $tr.find('.bb-ret').prop('disabled',false); toast('設定失敗（網路或伺服器錯誤）', true); });
+});
 $(document).on('click','.btn-bb-sel',function(){ var b=$('#sqBindOldBar').data('boms')||[]; if(!b.length) return; BB.fromBom=false; openBomBind(b[0], b); });
 function openBomBind(bom, alts){
   BB.bom = bom; BB.alts = alts||[];
@@ -862,35 +1222,45 @@ function openBomBind(bom, alts){
     BB.ships = r.ships||[];
     var oh='<table class="sq-t" style="background:#FFF7E8;"><thead><tr><th>訂單號</th><th>客戶</th><th>料號</th><th>品名規格</th><th>訂購</th><th>已出</th><th>未出</th><th>單價</th><th>金額</th><th>下單日</th><th>交期</th></tr></thead><tbody>';
     (r.order_info||[]).forEach(function(o){
-      oh+='<tr><td><b>'+esc(o.oo)+'</b></td><td>'+esc(o.client)+'</td><td>'+esc(o.part)+'</td><td style="white-space:normal;max-width:260px;">'+esc(o.spec)+'</td><td>'+nf(o.qty)+'</td><td>'+nf(o.used)+'</td><td>'+nf(Math.max(0,o.qty-o.used))+'</td><td>'+np(o.price)+'</td><td>'+nf(Math.round(o.price*o.qty))+'</td><td>'+esc(String(o.order_date).replace(/-/g,'.'))+'</td><td>'+esc(String(o.delivery).replace(/-/g,'.'))+'</td></tr>';
+      oh+='<tr><td><b>'+ooLink(o.oo)+'</b></td><td>'+esc(o.client)+'</td><td>'+esc(o.part)+'</td><td style="white-space:normal;max-width:260px;">'+esc(o.spec)+'</td><td>'+nf(o.qty)+'</td><td>'+nf(o.used)+'</td><td>'+nf(Math.max(0,o.qty-o.used))+'</td><td>'+np(o.price)+'</td><td>'+nf(Math.round(o.price*o.qty))+'</td><td>'+esc(String(o.order_date).replace(/-/g,'.'))+'</td><td>'+esc(String(o.delivery).replace(/-/g,'.'))+'</td></tr>';
     });
     $('#bbOrderInfo').html('<div style="font-weight:bold;color:#5b3a1e;margin-bottom:3px;"><i class="fa fa-file-text-o"></i> 這張製令綁定的訂單</div>'+oh+'</tbody></table>');
     $('#bbOrders').text((r.orders||[]).join('、')+'；訂單單價 '+(r.order_prices||[]).map(function(v){return np(v);}).join('、'));
     if(!BB.ships.length){ $('#bbList').html('<div style="padding:16px;color:#8a6d45;">沒有可綁定的舊出貨明細（同客戶、已綁這些訂單或同料號尚未綁訂單者）。</div>'); bbCount(); return; }
     var h='<table class="sq-t"><thead><tr><th style="width:32px;"></th><th>出貨單號</th><th>出貨日</th><th>料號</th><th>規格</th><th>備註</th><th>訂單</th><th>出貨量</th><th>出貨單價</th><th>已分配</th><th style="width:110px;">分給本製令</th></tr></thead><tbody>';
     BB.ships.forEach(function(s,i){
-      var dis = !s.selectable, rec = s.selectable && s.price_match, note = s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : '');
+      var dis = !s.selectable, retd = !!s.returned, rec = s.selectable && (s.fifo===undefined ? s.price_match : s.fifo), note = retd ? ('已設為'+(BB_LABEL[s.sale_kind]||'標記')) : (s.this_bom>0 ? '已綁本製令 ×'+s.this_bom : (s.left<=0 ? '已全數分配' : ''));
       h += '<tr data-i="'+i+'" style="'+(dis?'color:#a2916f;background:#f6f1e7;':(rec?'background:#E3F2E6;':''))+'"><td><input type="checkbox" class="bb-ck"'+(dis?' disabled':'')+'></td>'
         + '<td><b>'+esc(s.no)+'</b></td><td>'+esc(String(s.date).replace(/-/g,'.'))+'</td><td>'+esc(s.part)+'</td>'
-        + '<td style="max-width:240px;white-space:normal;">'+esc(s.spec||'')+'</td><td style="max-width:200px;white-space:normal;">'+esc(s.note||'')+'</td>'
-        + '<td>'+(s.order_oo?esc(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td style="white-space:nowrap;">'+np(s.price)+(rec?'<br><span style="background:#2E8B57;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;line-height:16px;">✔ 單價相符・建議</span>':'')+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
+        + '<td style="max-width:240px;white-space:normal;">'+esc(s.spec||'')+'</td><td style="max-width:200px;white-space:normal;">'+esc(s.note||'')+(retd?' <span class="bb-rtag" style="background:#F0A24B;color:#5a2d0c;font-weight:bold;border-radius:3px;padding:0 5px;font-size:11px;">'+(BB_LABEL[s.sale_kind]||'標記')+'</span>':'')+(CAN_BIND_OLD&&s.this_bom<=0&&s.alloc<=0?(retd?' ':'<br>')+(retd?'<button type="button" class="bb-ret" data-on="0" data-kind="'+esc(s.sale_kind||'return')+'" style="'+BB_BTN+'">取消標記</button>':'<button type="button" class="bb-ret" data-on="1" data-kind="return" title="設為歸還＝出貨性質改為「備註/歸還」，不計入出貨量與這張製令的數量" style="'+BB_BTN+'">設為歸還</button> <button type="button" class="bb-ret" data-on="1" data-kind="ng" title="設為NG歸還＝出貨性質改為「歸還(NG/來料不良)」，不計入出貨量與這張製令的數量" style="'+BB_BTN+'">設為NG歸還</button> <button type="button" class="bb-ret" data-on="1" data-kind="jig" title="設為治具＝出貨性質改為「治具」，不當成這張製令的成品出貨" style="'+BB_BTN+'">設為治具</button>'):'')+'</td>'
+        + '<td>'+(s.order_oo?ooLink(s.order_oo):'<span style="color:#c9792a;">未綁訂單</span>')+'</td><td>'+nf(s.qty)+'</td><td style="white-space:nowrap;">'+np(s.price)+(rec?'<br><span style="background:#2E8B57;color:#fff;border-radius:3px;padding:0 5px;font-size:11px;line-height:16px;">✔ 單價相符・建議</span>':(s.price_match&&s.selectable?'<br><span style="color:#2E8B57;font-size:11px;">單價相符</span>':''))+'</td><td>'+nf(s.alloc)+(note?'<br><small>'+esc(note)+'</small>':'')+'</td>'
         + '<td><input type="number" class="bb-q" min="1" max="'+s.left+'" value="'+s.left+'" style="width:90px;"'+(dis?' disabled':'')+'></td></tr>';
     });
     $('#bbList').html(h+'</tbody></table>'); bbCount();
   },'json').fail(function(){ $('#bbList').html('<div style="padding:16px;color:#c0392b;">查詢失敗（網路或伺服器錯誤）</div>'); });
 }
 $(document).on('click','.bb-sw',function(){ openBomBind(String($(this).data('bom')), BB.alts); });
-function bbCount(){ $('#bbSel').text('已勾選 '+$('#bbList .bb-ck:checked').length+' 筆'); }
+function bbCount(){
+  var n=0, nr=0, ship=0, alloc=0;
+  $('#bbList tbody tr').each(function(){
+    if(!$(this).find('.bb-ck').is(':checked')) return;
+    n++; var s=BB.ships[$(this).data('i')]; if(s&&s.sale_kind==='return'){ nr++; return; } ship+=Number(s&&s.qty)||0; alloc+=parseInt($(this).find('.bb-q').val(),10)||0;
+  });
+  $('#bbSel').html('已勾選 '+n+' 筆' + (n?'　出貨量合計 <b>'+nf(ship)+'</b>　分給本製令合計 <b>'+nf(alloc)+'</b>'+(nr?'　<small style="color:#8a6d45;">（另有「歸還」'+nr+' 筆不列入合計）</small>':''):''));
+}
 $(document).on('change','#bbList .bb-ck',bbCount);
+$(document).on('input change','#bbList .bb-q',bbCount);
 $(document).on('click','#btnBbApply',function(){
   var pairs=[]; $('#bbList tbody tr').each(function(){
     if(!$(this).find('.bb-ck').is(':checked')) return;
     pairs.push({is_id:BB.ships[$(this).data('i')].is_id, qty:parseInt($(this).find('.bb-q').val(),10)||0});
   });
   if(!pairs.length){ toast('請先勾選要綁定的出貨明細', true); return; }
-  if(!confirm('將 '+pairs.length+' 筆舊出貨明細綁定到製令 '+BB.bom+'？\n綁定後會計入這張製令已出貨量。')) return;
+  var force=$('#bbForce').is(':checked');
+  if(!confirm(force ? ('強制綁定 '+pairs.length+' 筆出貨明細到製令 '+BB.bom+'？\n\n將不檢查數量，並視為這張製令的良品已全數出完：製令自動結案、它綁定的訂單一併結案。\n請確認出貨資料確實已出完。')
+                    : ('將 '+pairs.length+' 筆舊出貨明細綁定到製令 '+BB.bom+'？\n綁定後會計入這張製令已出貨量。'))) return;
   var $b=$(this).prop('disabled',true);
-  $.post(API+'?action=bom_bind_apply',{csrf:CSRF,bom:BB.bom,pairs:JSON.stringify(pairs)},function(r){
+  $.post(API+'?action=bom_bind_apply',{csrf:CSRF,bom:BB.bom,pairs:JSON.stringify(pairs),force:force?1:0},function(r){
     $b.prop('disabled',false);
     if(!r.ok || r.success===false){ toast(esc(r.message||r.error||'綁定失敗'), true); return; }
     toast(esc(r.message)); closeMask('mkBomBind');
@@ -1051,13 +1421,13 @@ function render(){
     var descTxt   = r.desc_full || r.specification || '';
     h+='<tr data-i="'+i+'" data-oid="'+r.order_id+'" class="'+(s?'on ':'')+(r.ready_qty>0?'':'noready')+'">'
       +'<td><input type="checkbox" class="ck"'+(s?' checked':'')+'></td>'
-      +'<td class="l">'+esc(r.order_oo||'—')+pausedTag+'</td>'
+      +'<td class="l">'+ooLink(r.order_oo)+pausedTag+'</td>'
       +'<td class="l">'+esc(r.client_display)+'</td>'
-      +'<td class="l">'+esc(r.d_id)+(r.unbound_ship_cnt>0?' <i class="fa fa-file-text-o ub-ship" data-bom="'+esc(((r.boms||[])[0]||{}).bom||'')+'" title="此料號有 '+r.unbound_ship_cnt+' 筆舊出貨單尚未綁訂單'+(CAN_ADMIN?'（點一下可綁定）':'')+'" style="color:#c9792a;cursor:pointer;"></i>':'')+'</td>'
+      +'<td class="l">'+esc(r.d_id)+(r.unbound_ship_cnt>0?' <i class="fa fa-file-text-o ub-ship" data-bom="'+esc(((r.boms||[])[0]||{}).bom||'')+'" title="此料號有 '+r.unbound_ship_cnt+' 筆舊出貨單尚未綁訂單'+(CAN_BIND_OLD?'（點一下可綁定）':'')+'" style="color:#c9792a;cursor:pointer;"></i>':'')+'</td>'
       +'<td class="l" title="'+esc(descTxt)+'" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;">'
         + esc(descTxt.length>46 ? descTxt.substr(0,46)+'…' : descTxt)+'</td>'
       +'<td class="r">'+nf(r.order_qty)+'</td>'
-      +'<td class="r">'+nf(r.shipped_qty)+'</td>'
+      +'<td class="r">'+nf(r.shipped_qty)+(r.shipped_qty>0?'<br><button type="button" class="btn-sb" data-oid="'+r.order_id+'" title="看這張訂單綁了哪些出貨單，綁錯了可改量、解除或改綁到同料號的其他訂單" style="margin-top:2px;padding:0 6px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;white-space:nowrap;"><i class="fa fa-pencil"></i> 出貨綁定</button>':'')+'</td>'
       +'<td class="r"><b>'+nf(r.remain_qty)+'</b></td>'
       +'<td class="r" style="color:'+(r.ready_qty>0?'#8A5A2B':'#a08a6a')+';"><b>'+nf(r.ready_qty)+'</b>'+readyTag+'</td>'
       +'<td><input type="number" class="qty-in" value="'+qty+'" min="0" max="'+r.remain_qty+'"'
@@ -1069,7 +1439,8 @@ function render(){
           ? '<span class="bom-cell">'+r.bom_count+' 張 '+prioPill((r.boms[0]||{}).priority)+'</span>'
             + (r.proc_brief ? '<br><span class="proc-brief" title="未完工製令的目前製程；點製令欄可看每一張的完整狀態">'
                               + esc(r.proc_brief)+'</span>' : '')
-          : '<span class="pill p-none">無</span>')+'</td>'
+            + (CAN_BIND_BOM?'<br><button type="button" class="btn-ob btn-ob-edit" data-oid="'+r.order_id+'" title="綁錯了？看這張訂單目前綁的製令，可解除後重新綁定" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#fff;color:#8A5A2B;border-radius:3px;cursor:pointer;"><i class="fa fa-pencil"></i> 改綁</button>':'')
+          : '<span class="pill p-none">無</span>'+(CAN_BIND_BOM?'<br><button type="button" class="btn-ob" data-oid="'+r.order_id+'" title="這張訂單還沒有製令：列出同客戶同料號的製令，依建議綁定" style="margin-top:3px;padding:0 7px;font-size:11px;line-height:18px;border:1px solid #c9792a;background:#FFF1DA;color:#8A5A2B;border-radius:3px;cursor:pointer;"><i class="fa fa-link"></i> 綁製令</button>':''))+'</td>'
       +'</tr>';
   });
   $('#tbody').html(h);
@@ -1702,7 +2073,7 @@ $('#btnPrintDn').on('click',function(){
 /* ══════════════════════════════════════════════════════════
  * 舊資料訂單回填
  * ══════════════════════════════════════════════════════════ */
-if(CAN_ADMIN){
+if(CAN_MATCH){
   var mtManual = {};   // is_id => 手動指定的訂單（覆蓋系統建議）
   var mtScrap  = {};   // is_id => 報廢品歸還的製令 {bom, qty, _row}（不綁訂單，記在 is_bom_scrap_map）
   var mtParts  = [];   // 篩選用料號清單（含所屬客戶）
@@ -2179,6 +2550,30 @@ $('#tcClient').on('change',function(){
   },'json').fail(function(){ toast('讀取料號失敗', true); });
 });
 
+/* 直接搜料號：不必先選客戶。結果寫進「料號」下拉（標出客戶），客戶留空＝只用料號查；只有一筆時自動載入 */
+var tcQTimer=null, tcQSeq=0;
+$('#tcPartQ').on('input',function(){
+  var q=$.trim($(this).val()); clearTimeout(tcQTimer);
+  if(q.length<2){ $('#tcPartQMsg').text('至少輸入 2 個字。'); return; }
+  tcQTimer=setTimeout(function(){
+    var seq=++tcQSeq;
+    $('#tcPartQMsg').text('搜尋中…');
+    $.post(API+'?action=chain_part_search',{q:q},function(r){
+      if(seq!==tcQSeq) return;
+      if(!r.ok){ $('#tcPartQMsg').text(r.error||'搜尋失敗'); return; }
+      var ps=r.parts||[];
+      tcClearBox('#tcClient'); tcClearBox('#tcPart');
+      $('#tcClient').val('');
+      var h='<option value="">'+(ps.length?'請選擇料號':'查無料號')+'</option>';
+      ps.forEach(function(p){ h+='<option value="'+p.d_id+'">'+esc(p.part_no)+'｜'+esc(p.client||'未綁客戶')+'</option>'; });
+      $('#tcPart').html(h); refilterSel('#tcPart');
+      $('#tcPartQMsg').text(ps.length?('找到 '+ps.length+(ps.length>=60?'+':'')+' 筆'+(ps.length>1?'，請從「料號」下拉選一筆（同料號可能分屬不同客戶）':'，已自動載入')):'查無符合的料號');
+      if(ps.length===1){ $('#tcPart').val(String(ps[0].d_id)); TC.limit=100; tcLoad(); }
+    },'json').fail(function(){ $('#tcPartQMsg').text('搜尋失敗'); });
+  },300);
+});
+$('#tcPart').on('change',function(){ if($('#tcPartQ').val() && $(this).val() && !$('#tcClient').val()){ TC.limit=100; tcLoad(); } });
+
 /* 清掉某個下拉的「打字篩選」關鍵字：那個框是共用檔插在 select 前面的 .eg-filter-box。
    不清掉的話關鍵字會一直卡在那裡，而「查無符合」的狀態下清單只剩目前選取的那一筆，
    看起來就是「這一欄再也換不掉」。 */
@@ -2478,8 +2873,75 @@ $('#btnTqDel').on('click',function(){
     $b.prop('disabled',false);
     if(!r.ok){ toast(esc(r.error||'解除失敗'), true); return; }
     toast(esc(r.message)); closeMask('mkTcQty'); tcLoad();
+    if(r.orphan_is_id && confirm('這張出貨單現在沒有綁任何訂單。\n要現在開啟「出貨單綁定」重新綁到正確的訂單嗎？')) openShipBind(0, r.orphan_is_id);
   },'json').fail(function(){ $b.prop('disabled',false); toast('解除失敗', true); });
 });
+
+/* ── 角色設定（僅全站管理員）：走全站共用 Roles_API，角色歸屬 module='shipping' ── */
+if(CAN_IS_ADMIN){
+  var RS_API='../../src/store/Roles_API.php', rsSel=0;
+  $('#btnRoleSet').on('click',function(){ openMask('mkRoleSet'); rsLoad(); });
+  function rsLoad(){
+    $('#rsList').html('<div style="padding:14px;color:#8a6d45;">載入中…</div>');
+    $.get(RS_API,{action:'get_roles',module:'shipping'},function(res){
+      if(!res.success){ $('#rsList').html('<div style="padding:14px;color:#B8431F;">載入失敗</div>'); return; }
+      var h='';
+      res.data.forEach(function(r){
+        var sys=(r.is_system==1);
+        h+='<div class="rs-item" data-id="'+r.role_id+'" data-sys="'+(sys?1:0)+'" data-name="'+esc(r.role_name)+'" style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0e6d6;display:flex;align-items:center;'+(rsSel==r.role_id?'background:#F7E0BD;font-weight:bold;':'')+'">'
+          +'<span style="flex:1;">'+esc(r.role_name)+(sys?' <span style="font-size:10px;background:#F0A24B;color:#5a2d0c;padding:0 4px;border-radius:3px;">系統</span>':'')+'</span>'
+          +(sys?'':'<button type="button" class="rs-ren" title="改名" style="border:0;background:none;cursor:pointer;color:#8a5a2b;"><i class="fa fa-pencil"></i></button>'
+                 +'<button type="button" class="rs-del" title="刪除" style="border:0;background:none;cursor:pointer;color:#B8431F;"><i class="fa fa-times"></i></button>')
+          +'</div>';
+      });
+      $('#rsList').html(h||'<div style="padding:14px;color:#8a6d45;">尚無角色</div>');
+    },'json');
+  }
+  function rsPick(id,sys,name){
+    rsSel=id;
+    $('#rsList .rs-item').css({background:'','font-weight':''}).filter('[data-id="'+id+'"]').css({background:'#F7E0BD','font-weight':'bold'});
+    $('#rsHead').text('設定功能：'+name); $('#rsFoot').show(); $('.rs-cb').prop('checked',false);
+    var locked=!!sys;
+    $('.rs-cb').prop('disabled',locked); $('#rsSave').prop('disabled',locked);
+    if(locked){ $('.rs-cb').prop('checked',true); $('#rsNote').text('系統角色擁有全部功能，不可修改'); return; }
+    $('#rsNote').text('');
+    $.get(RS_API,{action:'get_role_features',role_id:id},function(res){
+      if(res.success&&res.data) res.data.forEach(function(c){ $('.rs-cb[value="'+c+'"]').prop('checked',true); });
+    },'json');
+  }
+  $(document).on('click','#rsList .rs-item',function(){ rsPick(+$(this).data('id'),+$(this).data('sys'),String($(this).data('name'))); });
+  $(document).on('click','#rsList .rs-ren',function(e){
+    e.stopPropagation(); var $i=$(this).closest('.rs-item'), id=+$i.data('id'), old=String($i.data('name'));
+    var nm=prompt('修改角色名稱',old); if(nm===null) return; nm=$.trim(nm); if(!nm||nm===old) return;
+    $.post(RS_API,{action:'save_role',role_id:id,role_name:nm},function(r){
+      if(!r.success){ toast(esc(r.message||'修改失敗'),true); return; } toast('角色名稱已更新');
+      if(rsSel==id) $('#rsHead').text('設定功能：'+nm); rsLoad();
+    },'json');
+  });
+  $(document).on('click','#rsList .rs-del',function(e){
+    e.stopPropagation(); var $i=$(this).closest('.rs-item'), id=+$i.data('id'), nm=String($i.data('name'));
+    if(!confirm('刪除角色「'+nm+'」？\n此角色的功能設定將一併刪除，已指派此角色的人員會失去對應權限。')) return;
+    $.post(RS_API,{action:'delete_role',role_id:id},function(r){
+      if(!r.success){ toast(esc(r.message||'刪除失敗'),true); return; }
+      if(rsSel==id){ rsSel=0; $('#rsHead').text('← 請選擇角色'); $('#rsFoot').hide(); $('.rs-cb').prop('checked',false); }
+      rsLoad();
+    },'json');
+  });
+  $('#rsAdd').on('click',function(){
+    var nm=prompt('請輸入新角色名稱（例：業務助理、倉管）'); if(nm===null) return; nm=$.trim(nm);
+    if(!nm){ toast('角色名稱不可空白',true); return; }
+    $.post(RS_API,{action:'save_role',role_name:nm,module:'shipping'},function(r){
+      if(!r.success){ toast(esc(r.message||'新增失敗'),true); return; }
+      rsSel=r.role_id; rsLoad(); setTimeout(function(){ rsPick(+r.role_id,0,nm); },350);
+    },'json');
+  });
+  $('#rsSave').on('click',function(){
+    if(!rsSel) return; var codes=[]; $('.rs-cb:checked').each(function(){ codes.push($(this).val()); });
+    $.post(RS_API,{action:'save_role_features',role_id:rsSel,features:JSON.stringify(codes)},function(r){
+      toast(r.success?'角色設定已儲存':esc(r.message||'儲存失敗'),!r.success);
+    },'json');
+  });
+}
 
 $('#btnRoleHelp').on('click',function(){ openMask('mkRole'); });
 
