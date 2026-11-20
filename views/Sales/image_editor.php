@@ -8651,9 +8651,10 @@ document.getElementById('p-fontsize').addEventListener('change', function () {
     if (dimN) { canvas.requestRenderAll(); pushState(); return; }
     const n = eachInSelection(obj, o => {
         if (o.type === 'i-text' || o.type === 'textbox') { o.set({ fontSize: v, scaleX: 1, scaleY: 1 }); o.setCoords(); o.dirty = true; return true; }
+        if (o.type === 'text') { o.set({ fontSize: v }); o.dirty = true; let g = o.group; while (g) { g.dirty = true; g = g.group; } return true; }   // 標註裡的普通文字（齒輪圖／剖面圖的標註重新載入後已不是「自動標註」，也要能改字級）
         return false;
     });
-    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
+    if (n) { if (obj.type === 'group' || obj.type === 'activeSelection') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
 });
 document.getElementById('p-bold').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
