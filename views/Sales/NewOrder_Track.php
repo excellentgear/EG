@@ -7400,7 +7400,7 @@ foreach($dCounts as $c) {
         window.canCreate = <?= json_encode($can_create) ?>;
         window.canUpdate = <?= json_encode($can_update) ?>;
         window.canDelete = <?= json_encode($can_delete) ?>;
-        window.OT_IS_ADMIN = <?= json_encode((bool)$OT_IS_ADMIN_ANY) ?>;
+        window.OT_IS_ADMIN = <?= json_encode((bool)($OT_IS_ADMIN_ANY || ot_is_admin($conn->getPDO(), (int)($_SESSION['id'] ?? 0)))) ?>;
         window.OMP_CFG = <?= json_encode($OMP_CFG, JSON_UNESCAPED_UNICODE) ?>;   // 銑3孔+打PIN 設定
         // ═════════════════════════════════════════════════════════════════
         // 製程快捷鈕「銑3孔+打PIN」＋對手件訂單（2026-10-28；後端唯一實作 src/common/order_mill_pin_lib.php）
@@ -15056,8 +15056,8 @@ foreach($dCounts as $c) {
             var upperNo = rawNo.toUpperCase();
             $('input[name="OrderNo"]').val(upperNo);
             if (upperNo !== 'NA') {
-                // 管理員更新既有舊訂單時不限民國年（只能更新、不可新增）
-                var vr = validateOrderNo(upperNo, !!window.OT_IS_ADMIN && !!$('#hidden_Order_id').val() && !isCopy);
+                // 管理員不限民國年（修改／複製／新增皆可）
+                var vr = validateOrderNo(upperNo, !!window.OT_IS_ADMIN);
                 if (!vr.valid) {
                     showOrderAlert('訂單編號有誤：\n' + vr.msg); $('input[name="OrderNo"]').focus(); return;
                 }
@@ -15894,7 +15894,7 @@ foreach($dCounts as $c) {
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(ateget)) { errMsg = '料號 ' + label + ' 設計接收日格式錯誤，請用日曆選擇。'; return; }
                 if (!orderNo)  { errMsg = '料號 ' + label + ' 尚未填訂單編號。'; return; }
                 if (orderNo !== 'NA') {
-                    var vr = validateOrderNo(orderNo);
+                    var vr = validateOrderNo(orderNo, !!window.OT_IS_ADMIN);
                     if (!vr.valid) { errMsg = '料號 ' + label + ' 訂單編號有誤：' + vr.msg; return; }
                 }
                 var astagKey = $tr.find('.op-f-astag').val() || '';
