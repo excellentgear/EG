@@ -6809,6 +6809,15 @@ function gearAbsCenter(g) {
 function gearDimSyncOrigin(g) {
     if (!g || !g.dimOrigin) return;
     const c = gearAbsCenter(g);
+    // 標註被連同齒輪圖一起縮放過：把縮放比例烙進標註規格與原點，再以 1:1 重畫，
+    // 否則一拖標註就會依「未縮放」的原始尺寸重畫，跳回原本產生的位置與大小
+    const ssx = g.scaleX || 1, ssy = g.scaleY || 1;
+    if (g.dimSpec && g.__dimBase && (Math.abs(ssx - 1) > 1e-4 || Math.abs(ssy - 1) > 1e-4)) {
+        const sc = (ssx + ssy) / 2, b = g.__dimBase;
+        g.dimOrigin = { x: c.x + sc * (g.dimOrigin.x - b.x), y: c.y + sc * (g.dimOrigin.y - b.y) };
+        ['x1', 'x2', 'y', 'e1', 'e2', 'y1', 'y2', 'x', 'r', 'e', 'e0'].forEach(k => { if (typeof g.dimSpec[k] === 'number') g.dimSpec[k] *= sc; });
+        if (gearDimRebuild(g, true)) return;
+    }
     if (!g.__dimBase) { g.__dimBase = { x: c.x, y: c.y }; return; }
     const dx = c.x - g.__dimBase.x, dy = c.y - g.__dimBase.y;
     if (dx || dy) { g.dimOrigin = { x: g.dimOrigin.x + dx, y: g.dimOrigin.y + dy }; g.__dimBase = { x: c.x, y: c.y }; }
