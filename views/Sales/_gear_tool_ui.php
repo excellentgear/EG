@@ -610,6 +610,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                                 <span title="直接接在外徑尺寸後面。上下偏差堆疊用 ^，例：+0^-0.02（上排 +0、下排 -0.02）；對稱偏差直接打 ±0.02">外徑公差 <input type="text" id="g-tol-od" class="gear-input" style="width:84px;" placeholder="+0^-0.02 或 ±0.02"></span>
                                 <span title="直接接在孔徑尺寸後面。上下偏差堆疊用 ^，例：+0.027^0；對稱偏差直接打 ±0.01">孔徑公差 <input type="text" id="g-tol-id" class="gear-input" style="width:84px;" placeholder="+0.027^0 或 ±0.01"></span>
                                 <span title="直接接在長度尺寸後面。例：±0.1，或上下偏差堆疊 +0.1^-0.05">長度公差 <input type="text" id="g-tol-len" class="gear-input" style="width:84px;" placeholder="±0.1"></span>
+                                <button class="btn-gear-clr" type="button" style="padding:1px 8px;" onclick="gearDefaultsSave()" title="把本區（標註、剖面線、端面圖／切割線方向、公差）目前的設定存成預設，下次開啟、開新料號都先套用（只存在這台電腦的瀏覽器）">存為預設</button>
+                                <button class="btn-gear-clr" type="button" style="padding:1px 8px;" onclick="gearDefaultsClear()" title="清除自訂預設，下次開啟回到系統預設">還原系統預設</button>
                             </div>
                             <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
                                 <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="g-draw-hatch" checked> 剖面線</label>
@@ -3057,6 +3059,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     window.gearLoadPart = function(dId, autoFill) {
         var info = document.getElementById('g-part-info'), box = document.getElementById('g-part-gears');
         if (!info || !box || !dId) return;
+        _gearCurD = dId;
         info.textContent = '讀取齒輪規格中…'; box.innerHTML = '';
         gearAjax.post({action:'gear_part_specs', d_id: dId}, function(res){
             if (!res || !res.success) { info.textContent = (res && res.message) || '讀取失敗'; return; }
@@ -3150,6 +3153,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     /* 齒形（漸開線）幾何：端面截形，齒中心線在上方。純數學，不碰任何畫面；
        畫到圖面由呼叫頁提供 window.egGearDrawHook(幾何) 負責（批圖編輯器）。 */
     window.gearDrawToCanvas = function() {
+        window.gearMemSave();
         var p = _baseParams;
         if (!p) { alert('請先按「計算齒輪」'); return; }
         if (!window.gearEvalAll()) { alert('有數字欄的算式無法計算（紅框處），請修改'); return; }
@@ -3548,6 +3552,64 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (b && !b.children.length) window.gearSegAdd('bore');
         window.gearTaperApply();
     };
+
+    // ══ 記憶設定（只存在這台電腦的瀏覽器 localStorage）══════════════════════
+    // ① 預設值：⑥自動標註區與畫圖選項，使用者按「存為預設」後，每次開啟先套用
+    // ② 依料號記憶：由料號開啟時，最後一次畫圖／畫剖面圖／3D 的全部數據（外形、內孔、倒角、鍵槽、螺孔…）
+    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
+    var _gearCurD = 0;
+    function gmemGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+    function gmemSet(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { return false; } }
+    function gmemRead(ids) {
+        var o = {};
+        ids.forEach(function (id) { var el = document.getElementById(id); if (!el) return; o[id] = (el.type === 'checkbox') ? !!el.checked : el.value; });
+        return o;
+    }
+    function gmemWrite(o) {
+        Object.keys(o || {}).forEach(function (id) { var el = document.getElementById(id); if (!el) return; if (el.type === 'checkbox') el.checked = !!o[id]; else el.value = o[id]; });
+    }
+    window.gearDefaultsSave = function () {
+        if (gmemSet('eg_gear_defaults', gmemRead(GMEM_DEF_IDS))) { if (window.showToast) showToast('已存為預設（這台電腦）'); else alert('已存為預設（這台電腦）'); }
+        else alert('無法儲存（瀏覽器不允許寫入）');
+    };
+    window.gearDefaultsClear = function () {
+        try { localStorage.removeItem('eg_gear_defaults'); } catch (e) {}
+        alert('已清除自訂預設；重新整理頁面後回到系統預設。');
+    };
+    function gmemApplyDefaults() { var d = gmemGet('eg_gear_defaults'); if (d) gmemWrite(d); }
+    function gmemSegs(id) {
+        var rows = document.querySelectorAll('#' + id + ' .g-seg'), out = [];
+        Array.prototype.forEach.call(rows, function (r) {
+            var f = {}; Array.prototype.forEach.call(r.querySelectorAll('[data-f]'), function (el) { f[el.getAttribute('data-f')] = el.value; });
+            var rd = r.querySelector('input[type=radio]'); out.push({ f: f, gear: !!(rd && rd.checked) });
+        });
+        return out;
+    }
+    window.gearMemSave = function () {
+        if (!_gearCurD) return;
+        var blk = document.getElementById('g-draw-block'); if (!blk) return;
+        var ids = []; Array.prototype.forEach.call(blk.querySelectorAll('input[id],select[id]'), function (el) { if (el.id) ids.push(el.id); });
+        gmemSet('eg_gear_part_' + _gearCurD, { v: gmemRead(ids), out: gmemSegs('g-seg-list'), bore: gmemSegs('g-bore-list') });
+    };
+    function gmemRestoreSegs(kind, listId, arr) {
+        var box = segListEl(kind); if (!box || !arr || !arr.length) return;
+        box.innerHTML = '';
+        arr.forEach(function () { window.gearSegAdd(kind); });
+        var rows = document.querySelectorAll('#' + listId + ' .g-seg');
+        arr.forEach(function (a, i) {
+            var r = rows[i]; if (!r) return;
+            Object.keys(a.f).forEach(function (k) { var el = r.querySelector('[data-f=' + k + ']'); if (el) el.value = a.f[k]; });
+            var rd = r.querySelector('input[type=radio]'); if (rd) rd.checked = !!a.gear;
+        });
+        if (kind === 'out' && !box.querySelector('input[type=radio]:checked') && box.children[0]) box.children[0].querySelector('input[type=radio]').checked = true;
+    }
+    function gmemRestorePart(dId) {
+        var m = gmemGet('eg_gear_part_' + dId); if (!m) return false;
+        gmemRestoreSegs('out', 'g-seg-list', m.out); gmemRestoreSegs('bore', 'g-bore-list', m.bore);
+        window.gearTaperApply(); refreshKeySelects();
+        gmemWrite(m.v);   // 鍵槽段選單要在 refreshKeySelects 之後才設得到值
+        return true;
+    }
     window.gearSegExample = function () {
         var o = segListEl('out'), b = segListEl('bore'); if (!o || !b) return;
         o.innerHTML = segRowHtml('out', true, { L: 18.5 }) + segRowHtml('out', false, { D: 40, L: 25, cR: 1 });
@@ -3676,6 +3738,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         return { D: D, P: P, dm: dm, n: angles.length, angles: angles, nomAngles: nomA, x: xp, td: td, dd: dd, thru: document.getElementById('g-rad-thru').value, cone: dm / 2 / Math.tan(59 * Math.PI / 180), label: 'M' + D + 'x' + P };
     }
     window.gearDrawSection = function () {
+        window.gearMemSave();
         var p = _baseParams;
         if (typeof window.egGearDrawItems !== 'function') return;
         if (!window.gearEvalAll()) { alert('有數字欄的算式無法計算（紅框處），請修改'); return; }
@@ -4375,6 +4438,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         });
     }
     window.gearDraw3D = function () {
+        window.gearMemSave();
         var d = g3Data(); if (!d) return;
         G3_LAST = d; g3Render();
     };
@@ -4401,7 +4465,13 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         }
         if (!_splineInited) { _splineInited = true; initSplineTool(); }
         gpInit();
-        if (opt && typeof opt === 'object' && opt.dId) window.gearLoadPart(parseInt(opt.dId, 10), true);
+        if (!w.__defApplied) { w.__defApplied = true; gmemApplyDefaults(); }
+        if (!(opt && typeof opt === 'object' && opt.dId)) _gearCurD = 0;
+        if (opt && typeof opt === 'object' && opt.dId) {
+            _gearCurD = parseInt(opt.dId, 10) || 0;
+            window.gearLoadPart(_gearCurD, true);
+            if (_gearCurD && gmemRestorePart(_gearCurD) && window.showToast) showToast('已帶入此料號上次的畫圖設定');
+        }
         // 游標定位到法向模數
         setTimeout(function(){ var el=document.getElementById('g-mn'); if(el) el.focus(); }, 80);
         // 圖示動畫
