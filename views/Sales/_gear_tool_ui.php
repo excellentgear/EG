@@ -3352,9 +3352,9 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var av = ((aDeg + 180) % 360 + 360) % 360 - 180;
                 if (Math.abs(av) < 0.01) return;
                 var nv = (nomDeg == null) ? av : ((nomDeg + 180) % 360 + 360) % 360 - 180;
-                angDims.push({ kind: 'a', r: rA * scale, a0: 0, a1: av, e: eMm ? eMm * scale : 0, text: fmtDim(Math.abs(nv)) + '°' });
+                angDims.push({ kind: 'a', r: rA * scale, a0: 0, a1: av, e: eMm ? eMm * scale : 0, e0: (eMm && typeof rMaxEnd !== 'undefined') ? rMaxEnd * 1.18 * scale : 0, text: fmtDim(Math.abs(nv)) + '°' });
             };
-            if (typeof rdp !== 'undefined' && rdp) rdp.angles.forEach(function (aDeg, ai) { angArc(aDeg, Rr * (0.42 + 0.07 * ai), rdp.nomAngles ? rdp.nomAngles[ai] : null, Rr * 1.05); });
+            if (typeof rdp !== 'undefined' && rdp) rdp.angles.forEach(function (aDeg, ai) { angArc(aDeg, Rr * (0.42 + 0.07 * ai), rdp.nomAngles ? rdp.nomAngles[ai] : null, Rr * 1.08); });
             if (hlp) {
                 var pcp = []; for (bi = 0; bi < 120; bi++) pcp.push(P(hlp.Rp, TAU * bi / 120));
                 rings.push({ pts: sc(pcp), closed: true, kind: 'pcd' });
