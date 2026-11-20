@@ -4125,11 +4125,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         sc.onerror = function () { g3State = 3; done(); };
         document.head.appendChild(sc);
     }
-    function g3Phong(r, g, b) {
+    function g3Phong(r, g, b, flat) {   // flat＝線稿用：不受光照影響的均勻底色（只剩輪廓線，像一般工程圖）
         var m = new OV.PhongMaterial();
         m.color = new OV.RGBColor(r, g, b);
-        m.ambient = new OV.RGBColor(Math.round(r * 0.45), Math.round(g * 0.45), Math.round(b * 0.45));
-        m.specular = new OV.RGBColor(40, 40, 40);
+        m.ambient = flat ? new OV.RGBColor(r, g, b) : new OV.RGBColor(Math.round(r * 0.45), Math.round(g * 0.45), Math.round(b * 0.45));
+        m.specular = flat ? new OV.RGBColor(0, 0, 0) : new OV.RGBColor(40, 40, 40);
         m.shininess = 0.25;
         return m;
     }
@@ -4180,7 +4180,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (okey) { var os = outer[okey.si] || outer[0]; okey.k1 = os.xs + okey.x; okey.k2 = okey.l ? okey.k1 + okey.l : os.xe; }
         var hole = holeParams(); if (hole === false) return null;
         var rad = radParams(); if (rad === false) return null;
-        return { p: p, outer: outer, bore: bore, total: total, bx0: bx0, bEnd: bx0 + boreTotal, gear: gs, key: key, okey: okey, hole: hole, rad: rad };
+        return { p: p, outer: outer, bore: bore, total: total, bx0: bx0, bEnd: bx0 + boreTotal, gear: gs, key: key, okey: okey, hole: hole, rad: rad, viewRight: (document.getElementById('g-view-side').value === 'right') };
     }
 
     /* 剖面輪廓（x,r）：外輪廓左→右、右端面、內孔右→左、左端面；每個點帶標籤 o 外 / b 孔 / f 端面軸線 */
@@ -4244,7 +4244,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var eps = 1e-9, TAU = 2 * Math.PI;
         var model = new OV.Model();
         var line = (style === 'line');
-        var mBody = model.AddMaterial(line ? g3Phong(250, 250, 250) : g3Phong(196, 190, 182));
+        var mBody = model.AddMaterial(line ? g3Phong(252, 252, 252, true) : g3Phong(196, 190, 182));
         var mDark = model.AddMaterial(g3Phong(48, 48, 54));
         var mesh = new OV.Mesh(); if (mesh.SetName) mesh.SetName('齒輪');
         var pts = g3Profile(d), np = pts.length, i, area = 0;
@@ -4328,14 +4328,32 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             }
         }
         var im = model.AddMesh(mesh), nd = new OV.Node(); nd.AddMeshIndex(im); model.GetRootNode().AddChildNode(nd);
-        // 螺孔：深色圓盤標示孔口位置
+        // 螺孔：深色圓盤標示孔口位置。圓盤的每個點都貼在實際表面上（外圓柱／齒面／內孔壁），從孔的軸向看過去是正圓
+        // 角度方向：端面圖是「從所選端面看過去，由正上方順時針量」。3D 座標 y＝上、z 由 x 軸右手定則決定，
+        // 從右端面看時順時針＝−z，從左端面看＝+z，所以右端面視角要把角度取負號，孔的方向才跟端面圖一致
+        var sgn3 = (d.viewRight === false) ? 1 : -1;
         var dm = new OV.Mesh(); if (dm.SetName) dm.SetName('螺孔');
-        function disc(c, e1, e2, rr) {
+        var mHole = line ? model.AddMaterial(g3Phong(215, 215, 215, true)) : mDark;
+        function discOn(xc, t, rr, rfn, off) {   // 圓盤貼在半徑函數 rfn(角度,x) 的表面上，off＝離表面的距離（外正內負）
+            var R0 = rfn(t, xc), n = 36, ring = [], q, a;
+            var cv0 = dm.AddVertex(new OV.Coord3D(xc, (R0 + off) * Math.cos(t), (R0 + off) * Math.sin(t)));
+            for (q = 0; q < n; q++) {
+                a = TAU * q / n;
+                var u = rr * Math.cos(a), sx = rr * Math.sin(a), ph = Math.asin(Math.max(-1, Math.min(1, sx / Math.max(R0, 1e-6))));
+                var RR = rfn(t + ph, xc + u) + off;
+                ring.push(dm.AddVertex(new OV.Coord3D(xc + u, RR * Math.cos(t + ph), RR * Math.sin(t + ph))));
+            }
+            for (q = 0; q < n; q++) {
+                var t1 = new OV.Triangle(cv0, ring[q], ring[(q + 1) % n]); t1.SetMaterial(mHole); t1.SetCurve(0); dm.AddTriangle(t1);
+                var t2 = new OV.Triangle(cv0, ring[(q + 1) % n], ring[q]); t2.SetMaterial(mHole); t2.SetCurve(0); dm.AddTriangle(t2);
+            }
+        }
+        function disc(c, e1, e2, rr) {   // 端面螺孔：平的圓盤
             var cv0 = dm.AddVertex(new OV.Coord3D(c[0], c[1], c[2])), ring = [], n = 28;
             for (var q = 0; q < n; q++) { var a = TAU * q / n; ring.push(dm.AddVertex(new OV.Coord3D(c[0] + rr * (Math.cos(a) * e1[0] + Math.sin(a) * e2[0]), c[1] + rr * (Math.cos(a) * e1[1] + Math.sin(a) * e2[1]), c[2] + rr * (Math.cos(a) * e1[2] + Math.sin(a) * e2[2])))); }
             for (q = 0; q < n; q++) {
-                var t1 = new OV.Triangle(cv0, ring[q], ring[(q + 1) % n]); t1.SetMaterial(mDark); t1.SetCurve(0); dm.AddTriangle(t1);
-                var t2 = new OV.Triangle(cv0, ring[(q + 1) % n], ring[q]); t2.SetMaterial(mDark); t2.SetCurve(0); dm.AddTriangle(t2);
+                var t1 = new OV.Triangle(cv0, ring[q], ring[(q + 1) % n]); t1.SetMaterial(mHole); t1.SetCurve(0); dm.AddTriangle(t1);
+                var t2 = new OV.Triangle(cv0, ring[(q + 1) % n], ring[q]); t2.SetMaterial(mHole); t2.SetCurve(0); dm.AddTriangle(t2);
             }
         }
         var haveDisc = false;
@@ -4344,23 +4362,23 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             if (!sg) return 0;
             return radiusAt(t, xx, sg.R1 + (sg.R2 - sg.R1) * (xx - sg.xs) / sg.L, 'o');
         }
-        if (d.rad) d.rad.angles.forEach(function (a) {
-            var t = a * Math.PI / 180, R = surfR(t, d.rad.x) + 0.05;
-            disc([d.rad.x, R * Math.cos(t), R * Math.sin(t)], [1, 0, 0], [0, -Math.sin(t), Math.cos(t)], d.rad.dm / 2); haveDisc = true;
-            if (d.rad.thru === 'all') { var t2 = t + Math.PI, R2 = surfR(t2, d.rad.x) + 0.05; disc([d.rad.x, R2 * Math.cos(t2), R2 * Math.sin(t2)], [1, 0, 0], [0, -Math.sin(t2), Math.cos(t2)], d.rad.dm / 2); }
-        });
         function boreRAt(xx) { var rr = 0; d.bore.forEach(function (bg) { if (xx >= bg.xs - eps && xx <= bg.xe + eps) rr = bg.r1 + (bg.r2 - bg.r1) * (xx - bg.xs) / bg.L; }); return rr; }
+        if (d.rad) d.rad.angles.forEach(function (a) {
+            var t = sgn3 * a * Math.PI / 180;
+            discOn(d.rad.x, t, d.rad.dm / 2, surfR, 0.05); haveDisc = true;
+            if (d.rad.thru === 'all') discOn(d.rad.x, t + Math.PI, d.rad.dm / 2, surfR, 0.05);
+        });
         if (d.rad && d.rad.thru !== 'depth') d.rad.angles.forEach(function (a) {   // 貫穿到內孔：孔壁內側也要看得到孔口
-            [a * Math.PI / 180, (d.rad.thru === 'all') ? a * Math.PI / 180 + Math.PI : null].forEach(function (t) {
+            [sgn3 * a * Math.PI / 180, (d.rad.thru === 'all') ? sgn3 * a * Math.PI / 180 + Math.PI : null].forEach(function (t) {
                 if (t == null) return;
                 var rbv = boreRAt(d.rad.x); if (rbv <= 0) return;
                 var cover = d.key && Math.abs(wrap(t)) < 1e-6 && d.key.k0 <= d.rad.x - d.rad.dm / 2 && d.key.k1 >= d.rad.x + d.rad.dm / 2 && d.key.w >= d.rad.dm;
-                var Rb = rbv + (cover ? d.key.t : 0) - 0.05;
-                disc([d.rad.x, Rb * Math.cos(t), Rb * Math.sin(t)], [1, 0, 0], [0, -Math.sin(t), Math.cos(t)], d.rad.dm / 2); haveDisc = true;
+                var kt = cover ? d.key.t : 0;
+                discOn(d.rad.x, t, d.rad.dm / 2, function (tt, xx) { return boreRAt(xx) + kt; }, -0.05); haveDisc = true;
             });
         });
         if (d.hole) d.hole.angles.forEach(function (a) {
-            var t = a * Math.PI / 180, f0 = (d.hole.face === 'left') ? -0.05 : d.total + 0.05;
+            var t = sgn3 * a * Math.PI / 180, f0 = (d.hole.face === 'left') ? -0.05 : d.total + 0.05;
             disc([f0, d.hole.Rp * Math.cos(t), d.hole.Rp * Math.sin(t)], [0, 1, 0], [0, 0, 1], d.hole.dm / 2); haveDisc = true;
         });
         if (haveDisc) { var im2 = model.AddMesh(dm), nd2 = new OV.Node(); nd2.AddMeshIndex(im2); model.GetRootNode().AddChildNode(nd2); }
@@ -4388,9 +4406,13 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         document.getElementById('gear3d-style').onchange = function () { g3Render(); };
         document.getElementById('gear3d-insert').onclick = function () {
             if (!G3_VW) return;
-            var url = G3_VW.GetViewer().GetImageAsDataUrl(1400, 1000, false);
-            if (typeof window.egGearInsertImage === 'function') window.egGearInsertImage(url);
-            else alert('這個頁面不能把 3D 圖片放到畫布');
+            if (typeof window.egGearInsertImage !== 'function') { alert('這個頁面不能把 3D 圖片放到畫布'); return; }
+            var prevSt = document.getElementById('gear3d-style').value;
+            g3Render(function () {   // 放到圖面一律用線稿（白底黑邊、背景透明），跟圖面其他線圖一致
+                var url = G3_VW.GetViewer().GetImageAsDataUrl(1400, 1000, true);
+                if (prevSt !== 'line') g3Render(null, prevSt);
+                window.egGearInsertImage(url);
+            }, 'line');
         };
         var hdr = document.getElementById('gear3d-hdr'), sx, sy, sl, st, drag = false;
         hdr.addEventListener('mousedown', function (e) { if (e.target.tagName === 'BUTTON') return; drag = true; sx = e.clientX; sy = e.clientY; sl = w.offsetLeft; st = w.offsetTop; e.preventDefault(); });
@@ -4405,12 +4427,12 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         viewer.Render();
     }
     var G3_LAST = null;
-    function g3Render() {
+    function g3Render(cb, forceStyle) {
         var d = G3_LAST; if (!d) return;
         g3Libs(function (ok) {
             if (!ok) { alert('3D 元件載入失敗（找不到 o3dv.min.js）'); return; }
             var w = g3Win(); w.style.display = 'flex';
-            var style = document.getElementById('gear3d-style').value, model;
+            var style = forceStyle || document.getElementById('gear3d-style').value, model;
             try { model = g3Build(d, style); } catch (e) { console.warn('[gear3d]', e); alert('3D 模型建立失敗：' + (e && e.message ? e.message : e)); return; }
             var host = document.getElementById('gear3d-host');
             if (!G3_VW) {
@@ -4427,11 +4449,22 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                     var viewer = G3_VW.GetViewer(), old = G3_OBJ, first = !old;
                     viewer.SetMainObject(obj); G3_OBJ = obj;
                     if (old && OV.DisposeThreeObjects) { try { OV.DisposeThreeObjects(old); } catch (e) {} }
+                    if (style === 'line') try {   // 線稿：材質改成不受光照的均勻底色（emissive），畫面上只剩輪廓線
+                        obj.traverse(function (o3) {
+                            if (!o3.isMesh || !o3.material) return;
+                            (Array.isArray(o3.material) ? o3.material : [o3.material]).forEach(function (mt) {
+                                if (!mt.color || !mt.emissive) return;
+                                var v = mt.color.r; mt.emissive.setRGB(v, v, v); mt.color.setRGB(0, 0, 0);
+                                if (mt.specular) mt.specular.setRGB(0, 0, 0);
+                            });
+                        });
+                    } catch (e) { console.warn('[gear3d] 線稿材質失敗', e); }
                     try {
                         viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(25, 25, 25), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
                         viewer.SetBackgroundColor(style === 'line' ? new OV.RGBAColor(255, 255, 255, 255) : new OV.RGBAColor(247, 243, 238, 255));
                     } catch (e) { console.warn('[gear3d] 樣式設定失敗', e); }
                     if (first) g3Fit(); else viewer.Render();   // 之後重畫不動相機，免得每次都被轉回預設角度
+                    if (cb) cb();
                 },
                 onTextureLoaded: function () { if (G3_VW) G3_VW.GetViewer().Render(); }
             });
