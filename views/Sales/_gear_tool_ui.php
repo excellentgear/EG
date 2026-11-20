@@ -4454,7 +4454,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             }, 'line');
         };
         var hdr = document.getElementById('gear3d-hdr'), sx, sy, sl, st, drag = false;
-        hdr.addEventListener('mousedown', function (e) { if (e.target.tagName === 'BUTTON') return; drag = true; sx = e.clientX; sy = e.clientY; sl = w.offsetLeft; st = w.offsetTop; e.preventDefault(); });
+        hdr.addEventListener('mousedown', function (e) { if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' || e.target.tagName === 'OPTION') return;   // 下拉選單不能被拖曳處理擋掉（preventDefault 會讓它打不開）
+                drag = true; sx = e.clientX; sy = e.clientY; sl = w.offsetLeft; st = w.offsetTop; e.preventDefault(); });
         document.addEventListener('mousemove', function (e) { if (drag) { w.style.left = (sl + e.clientX - sx) + 'px'; w.style.top = (st + e.clientY - sy) + 'px'; } });
         document.addEventListener('mouseup', function () { drag = false; });
         return w;
