@@ -4618,7 +4618,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             else if (e.t.length >= 2) {
                 var t1 = e.t[0], t2 = e.t[1], n1 = [tn[t1 * 3], tn[t1 * 3 + 1], tn[t1 * 3 + 2]], n2 = [tn[t2 * 3], tn[t2 * 3 + 1], tn[t2 * 3 + 2]];
                 var d1 = n1[0] * f[0] + n1[1] * f[1] + n1[2] * f[2], d2 = n2[0] * f[0] + n2[1] * f[1] + n2[2] * f[2];
-                if ((d1 < -1e-4 && d2 > 1e-4) || (d1 > 1e-4 && d2 < -1e-4)) draw = true;   // 輪廓線：一面朝向、一面背向
+                if ((d1 < -1e-4 && d2 > 1e-4) || (d1 > 1e-4 && d2 < -1e-4)) {   // 輪廓線：一面朝向、一面背向
+                    var dd0 = Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2]));
+                    draw = (tc[t1] >= 1000 || tc[t2] >= 1000) ? Math.acos(dd0) > 9 * DEG : true;   // 齒面是平滑曲面，輪廓會隨視角在細分面間跳動而擠成一束雜線；只有真正的轉折才畫
+                }
                 else {
                     var dot = Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2])), ang = Math.acos(dot);
                     if (tc[t1] !== tc[t2]) draw = (tc[t1] >= 1000 && tc[t2] >= 1000) ? false : ang > 20 * DEG;   // 齒頂／齒面／齒根交界不從網格取（會呈鋸齒狀、每顆齒都多線），改由下面用螺旋線解析式畫
@@ -4630,7 +4633,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         if (cap.tooth && cap.gs) {   // 齒頂邊線與齒根交界：沿軸向的螺旋線，半徑取實際表面（含倒角）
             var th0 = cap.tooth, g0 = cap.gs, nSamp = Math.max(12, Math.min(160, Math.ceil(Math.abs(th0.tanb) * g0.L / th0.rp / 0.05) + 24)), TAU2 = 2 * Math.PI;
             for (var kk = 0; kk < cap.z; kk++) {
-                [[cap.utip], [-cap.utip], [cap.u0], [-cap.u0]].forEach(function (c) {
+                [[cap.utip], [-cap.utip]].forEach(function (c) {   // 只畫齒頂兩側邊線；齒根交界線在斜視角會擠成一束雜線，不畫
                     var run = [];
                     for (var si = 0; si <= nSamp; si++) {
                         var x3 = g0.xs + g0.L * si / nSamp, tt = kk * th0.pitch + c[0] + th0.tanb * (x3 - g0.xs) / th0.rp, rr = cap.surf(tt, x3);
