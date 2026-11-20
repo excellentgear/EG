@@ -1669,11 +1669,60 @@ function sq_bom_bind_apply(PDO $db, string $bom, array $pairs, string $userId, b
         return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
     }
     if ($ids) { require_once __DIR__ . '/is_bind_lock_lib.php'; isbl_sync($db, $ids, (int)$userId); }
+    // 沒勾「強制綁定並結案」時：綁完之後出貨數已 >= 訂購數的訂單照樣自動認定結案（判定與建立出貨單後的自動結案同一條界線）
+    $autoClosedOo = [];
+    if (!$force && $ids) {
+        try {
+            $oset = [];
+            $q1 = $db->query("SELECT Order_id FROM is_list WHERE Order_id IS NOT NULL AND IS_id IN (" . implode(',', array_map('intval', $ids)) . ")");
+            foreach ($q1->fetchAll(PDO::FETCH_COLUMN) as $v) $oset[(int)$v] = 1;
+            $q2 = $db->query("SELECT Order_id FROM is_order_map WHERE IS_id IN (" . implode(',', array_map('intval', $ids)) . ")");
+            foreach ($q2->fetchAll(PDO::FETCH_COLUMN) as $v) $oset[(int)$v] = 1;
+            $q3 = $db->prepare("SELECT order_id FROM bom_order_process_map WHERE bom = ? UNION SELECT CAST(o_order_id AS UNSIGNED) FROM bom WHERE bom = ? AND o_order_id REGEXP '^[0-9]+\$'");
+            $q3->execute([$bom, $bom]);
+            foreach ($q3->fetchAll(PDO::FETCH_COLUMN) as $v) if ((int)$v > 0) $oset[(int)$v] = 1;
+            $autoClosedOo = sq_auto_close_orders($db, array_keys($oset), (string)$userId);
+        } catch (Throwable $e) { error_log('bind auto close: ' . $e->getMessage()); }
+    }
     if ($force && $ids) {   // 良品已全數涵蓋 → 製令自動結案（與一般綁定後的自動結案同一支）
         try { require_once __DIR__ . '/bom_bound_ship_lib.php'; eg_bom_auto_close_shipped($db, [$bom], null, (int)$userId); } catch (Throwable $e) { error_log('force close bom: ' . $e->getMessage()); }
     }
     return ['success' => true, 'applied' => $applied, 'skipped' => $skipped,
-            'message' => "已綁定 {$applied} 筆出貨明細到 {$bom}" . ($force ? '（強制綁定' . $forceNote . '）' : '') . ($skipped ? "，略過 {$skipped} 筆（已綁定、數量超過可分配量或資料已異動）" : '')];
+            'message' => "已綁定 {$applied} 筆出貨明細到 {$bom}" . ($force ? '（強制綁定' . $forceNote . '）' : '') . ($autoClosedOo ? '，訂單已出滿自動結案：' . implode('、', $autoClosedOo) : '') . ($skipped ? "，略過 {$skipped} 筆（已綁定、數量超過可分配量或資料已異動）" : '')];
+}
+
+/**
+ * 出貨量 >= 訂購量的訂單自動結案（Order_status=9）。已出量依各訂單實際分到的量算（見 sq_shipped_rows_sql），
+ * 出貨性質設為「不計入」的（is_count=0）不算；暫停／取消／已結案的不動。
+ * @return array 這次被結案的訂單編號（Order_oo）
+ */
+function sq_auto_close_orders(PDO $db, array $orderIds, string $userId): array
+{
+    $done = [];
+    foreach (array_values(array_unique(array_map('intval', array_filter($orderIds)))) as $oid) {
+        try {
+            $st = $db->prepare("SELECT Order_oo, Qty FROM order_track WHERE Order_id = ? AND (Order_status IS NULL OR Order_status NOT IN (6, 9))");
+            $st->execute([$oid]);
+            $o = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$o || (int)$o['Qty'] <= 0) continue;
+            $cnt = "(ist.is_count IS NULL OR ist.is_count <> 0)";
+            $a = $db->prepare("SELECT COALESCE(SUM(m.allocated_qty),0) FROM is_order_map m
+                                 JOIN is_list il ON il.IS_id = m.IS_id
+                                 LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
+                                WHERE m.Order_id = ? AND $cnt");
+            $a->execute([$oid]);
+            $b = $db->prepare("SELECT COALESCE(SUM(il.Qty),0) FROM is_list il
+                                 LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
+                                WHERE il.Order_id = ? AND $cnt
+                                  AND NOT EXISTS (SELECT 1 FROM is_order_map m2 WHERE m2.IS_id = il.IS_id)");
+            $b->execute([$oid]);
+            if ((int)$a->fetchColumn() + (int)$b->fetchColumn() < (int)$o['Qty']) continue;
+            $db->prepare("UPDATE order_track SET Order_status = 9, Modified_At = NOW(), Modified_By = ? WHERE Order_id = ?")
+               ->execute([$userId, $oid]);
+            $done[] = (string)$o['Order_oo'];
+        } catch (Throwable $e) { /* 單筆失敗不阻斷其他訂單 */ }
+    }
+    return $done;
 }
 
 /**
