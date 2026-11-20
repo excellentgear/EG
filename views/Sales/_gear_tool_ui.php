@@ -4096,7 +4096,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             var yb = maxR * sc, seen = {};
             var withTol = function (txt, tol) { return txt + (tol ? ' ' + tol : ''); };
             // 長度：每一段外形一條，全長一條（只有一段時只標全長）
-            var lvl1 = yb + 32, lvl2 = yb + 68;
+            var fk = Math.max(1, (parseFloat((document.getElementById('g-dim-fs') || {}).value) || 18) / 18), lvl1 = yb + 32 * fk, lvl2 = yb + 68 * fk;   // 標註文字放大時，尺寸線間距跟著放大，字才不會壓到別條線
             if (outer.length > 1) outer.forEach(function (sg) { dims.push({ kind: 'h', x1: PX(sg.xs), x2: PX(sg.xe), y: lvl1, e1: sg.R1 * sc, e2: sg.R2 * sc, text: withTol(fmtDim(sg.L), tLN) }); });
             dims.push({ kind: 'h', x1: PX(0), x2: PX(total), y: (outer.length > 1) ? lvl2 : lvl1, e1: outer[0].R1 * sc, e2: outer[outer.length - 1].R2 * sc, text: withTol(fmtDim(total), tLN) });
             if (bore.length && (bore.length > 1 || Math.abs(boreTotal - total) > eps)) {   // 內孔深度（每一段，再加總深）
@@ -4110,7 +4110,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var dd = 2 * Math.max(sg.R1, sg.R2), key = fmtDim(dd);
                 if (seen['o' + key]) return; seen['o' + key] = 1;
                 var onLeft = outer.length > 1 && ((sg.xs + sg.xe) / 2 < total / 2);
-                var xx = onLeft ? PX(0) - 34 - (nL++) * 34 : PX(total) + 34 + (nR++) * 34, ee = onLeft ? PX(sg.xs) : PX(sg.xe);
+                var xx = onLeft ? PX(0) - 34 * fk - (nL++) * 34 * fk : PX(total) + 34 * fk + (nR++) * 34 * fk, ee = onLeft ? PX(sg.xs) : PX(sg.xe);
                 dims.push({ kind: 'v', x: xx, y1: -dd / 2 * sc, y2: dd / 2 * sc, e1: ee, e2: ee, text: withTol('Ø' + key, tOD) });
             });
             var kyp0 = (typeof key !== 'undefined') ? key : null;
