@@ -134,7 +134,7 @@
         drawer.innerHTML = '<div class="h"><strong id="egaf-title">管理員修正</strong><span style="white-space:nowrap;"><span id="egaf-dn" style="color:#b8431f;font-size:12px;margin-right:6px;"></span>'
             + '<button type="button" id="egaf-save" class="btn btn-warning btn-xs">儲存</button> <button type="button" id="egaf-saveend" class="btn btn-danger btn-xs">儲存並結束</button> '
             + '<button type="button" id="egaf-x" style="border:none;background:none;font-size:20px;cursor:pointer;color:#999;line-height:1;" title="關閉（不上鎖）">×</button></span></div>'
-            + '<div class="f"><div id="egaf-chips"></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
+            + '<div class="f"><div id="egaf-chips"></div><div style="margin:3px 0;font-size:12px;">BOM總數：<input type="number" id="egaf-bq" min="1" style="width:90px;height:24px;font-size:12px;" title="整張BOM的發單總數（bom.sqty）；改少且已有發單／回廠／QC時會再確認一次"> <button type="button" class="btn btn-default btn-xs" id="egaf-bq-save">修改BOM總數</button></div><div style="margin-top:2px;">製程：<select id="egaf-st" style="height:24px;font-size:12px;"></select> '
             + '<span style="margin-right:8px;"><button type="button" class="btn btn-default btn-xs" id="egaf-v-time">時間軸</button><button type="button" class="btn btn-default btn-xs" id="egaf-v-flow">分支</button></span> <label style="margin:0 8px 0 0;font-weight:normal;cursor:pointer;" title="ERP 匯入的移轉憑單，預設鎖定日期／數量；取消勾選才能改（改了會同步更新移轉憑單）"><input type="checkbox" id="egaf-lock" checked style="height:auto;"> 鎖定ERP移轉憑單</label><button type="button" class="btn btn-success btn-xs" id="egaf-new-send">＋新增發單</button> <button type="button" class="btn btn-success btn-xs" id="egaf-new-ret">＋新增回廠／報廢</button></div>'
             + '<div class="nw" id="egaf-nw-send">廠商 <input id="egaf-mk" autocomplete="off" style="width:190px;" placeholder="輸入編號或名稱，下方即時列出"> 數量 <input type="number" min="0" step="any" id="egaf-ns-q" style="width:70px;"> 送出日 <input type="date" id="egaf-ns-d" style="width:125px;"> <button type="button" class="btn btn-warning btn-xs" id="egaf-ns-go">新增</button></div>'
             + '<div class="nw" id="egaf-nw-ret"><span class="gf"><b>發單批次</b><select id="egaf-nr-b" style="max-width:200px;"></select></span><span class="gf"><b>回廠</b><input type="number" min="0" step="any" id="egaf-nr-r" style="width:60px;"></span><span class="gf gf-s"><b>報廢</b><input type="number" min="0" step="any" id="egaf-nr-s" style="width:60px;"></span><span class="gf gf-w"><b>取回</b><input type="number" min="0" step="any" id="egaf-nr-w" style="width:60px;"></span><span class="gf gf-sh" title="發單數比實際送到廠商手上的多。不開異常單，只記進異常統計"><b>發單短少</b><input type="number" min="0" step="any" id="egaf-nr-sh" style="width:60px;"></span><span class="gf gf-bm" title="發出去的料本身不良。與報廢一樣自動開異常單"><b>發料不良</b><input type="number" min="0" step="any" id="egaf-nr-bm" style="width:60px;"></span><span class="gf"><b>日期</b><input type="date" id="egaf-nr-d" style="width:125px;"></span> <button type="button" class="btn btn-warning btn-xs" id="egaf-nr-go">新增</button></div>'
@@ -273,6 +273,25 @@
         var fm1 = body.querySelector('.flw-main'); if (fm1 && fm0) { fm1.scrollTop = fT; fm1.scrollLeft = fL; }
     }
     function renderInner() {
+        (function () {
+            var bq = drawer.querySelector('#egaf-bq'), bb = drawer.querySelector('#egaf-bq-save');
+            if (bq && DATA && DATA.bom_qty != null && document.activeElement !== bq) { bq.value = DATA.bom_qty; bq.setAttribute('data-orig', DATA.bom_qty); }
+            if (bb && !bb._bound) {
+                bb._bound = true;
+                bb.onclick = function () {
+                    var nv = (bq.value || '').trim(), old = bq.getAttribute('data-orig');
+                    if (!/^[0-9]+$/.test(nv) || parseInt(nv, 10) < 1) { toast('BOM總數必須是 1 以上的整數', false); return; }
+                    if (nv === old) { toast('數量沒有變動', false); return; }
+                    var go = function (conf) {
+                        post({ action: 'baf_bom_qty_set', new_qty: nv, confirm_decrease: conf ? 1 : '' }, function (r) {
+                            if (r.code === 'NEED_CONFIRM') { if (w.confirm(r.message)) go(true); return; }
+                            if (r.success) { toast(r.message, true); load('已修改 BOM總數', true); refreshMain(); } else toast(r.message || '失敗', false);
+                        });
+                    };
+                    if (w.confirm('將 BOM總數由 ' + old + ' 改為 ' + nv + '？')) go(false);
+                };
+            }
+        })();
         var rows = DATA.rows || [], cnt = {};
         rows.forEach(function (x) { cnt[x.kind] = (cnt[x.kind] || 0) + 1; });
         drawer.querySelector('#egaf-chips').innerHTML = KINDS.map(function (k) {

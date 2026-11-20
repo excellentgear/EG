@@ -30,7 +30,32 @@
         if (empty($_SESSION['oready_admin_fix'])) { echo json_encode(['success'=>false,'need_unlock'=>true,'message'=>'請先輸入操作確認密碼']); exit; }
         $bom = trim((string)($_POST['bom'] ?? ''));
         if ($bom === '') { echo json_encode(['success'=>false,'message'=>'缺少 BOM']); exit; }
-        if ($act === 'baf_list') { echo json_encode(['success'=>true] + baf_list($db, $bom)); exit; }
+        if ($act === 'baf_list') { $__l = baf_list($db, $bom); $__q = $db->prepare("SELECT sqty FROM bom WHERE bom=?"); $__q->execute([$bom]); $__l['bom_qty'] = ($__v = $__q->fetchColumn()) === false ? null : (int)$__v; echo json_encode(['success'=>true] + $__l); exit; }
+        if ($act === 'baf_bom_qty_set') { // 修改 BOM 總數（bom.sqty）：規則同 BOM總覽的「修改發單數」，管理員＋操作確認密碼已驗
+            require_once __DIR__ . '/bom_qty_edit_lib.php';
+            $newRaw = trim((string)($_POST['new_qty'] ?? ''));
+            if (!preg_match('/^[0-9]+$/', $newRaw) || (int)$newRaw < 1 || (int)$newRaw > 99999999) { echo json_encode(['success'=>false,'message'=>'BOM總數必須是 1 以上的整數']); exit; }
+            $newQty = (int)$newRaw;
+            $st = $db->prepare("SELECT sqty FROM bom WHERE bom=?"); $st->execute([$bom]); $oldQ = $st->fetchColumn();
+            if ($oldQ === false) { echo json_encode(['success'=>false,'message'=>'找不到這張 BOM']); exit; }
+            $oldQty = (int)$oldQ;
+            if ($newQty === $oldQty) { echo json_encode(['success'=>false,'message'=>'數量沒有變動']); exit; }
+            $u = bqe_usage($db, $bom);
+            if ($newQty < $oldQty && $u['total'] > 0 && empty($_POST['confirm_decrease'])) {
+                echo json_encode(['success'=>false,'code'=>'NEED_CONFIRM','message'=>'這張 BOM 已有 ' . bqe_usage_text($u) . "。
+把 BOM總數由 {$oldQty} 改少為 {$newQty} 會影響這些既有資料，確定要改嗎？"], JSON_UNESCAPED_UNICODE); exit;
+            }
+            bqe_ensure_schema($db); // DDL 一定在交易之前
+            $nm = (string)($_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? $uid));
+            $db->beginTransaction();
+            $db->prepare("UPDATE bom SET sqty=?, Modified_At=NOW(), Modified_By=? WHERE bom=?")->execute([$newQty, $uid, $bom]);
+            $sy = $db->prepare("UPDATE bom_ing SET sqty=? WHERE bom=? AND sqty=?"); $sy->execute([$newQty, $bom, $oldQty]); $synced = $sy->rowCount();
+            $db->prepare("INSERT INTO bom_qty_change_log (bom,old_qty,new_qty,synced_ing_rows,usage_json,changed_by,changed_by_name,changed_at) VALUES (?,?,?,?,?,?,?,NOW())")->execute([$bom, $oldQty, $newQty, $synced, json_encode($u), $uid, $nm]);
+            $chg = json_encode([['field'=>'sqty','old'=>$oldQty,'new'=>$newQty]], JSON_UNESCAPED_UNICODE);
+            $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at) VALUES ('update','bom_sqty',?,?,?,?,?,NOW())")->execute([$bom, $bom, $chg, $uid, $nm]);
+            $db->commit();
+            echo json_encode(['success'=>true,'qty'=>$newQty,'synced'=>$synced,'message'=>"已將 BOM總數改為 {$newQty}"], JSON_UNESCAPED_UNICODE); exit;
+        }
         if ($act === 'baf_flow_set') {
             baf_flow_set($db, $bom, (int)($_POST['transfer_id'] ?? 0), (string)($_POST['field'] ?? ''), (int)($_POST['batch_id'] ?? -1), $uid);
             echo json_encode(['success'=>true,'message'=>'已儲存']); exit;
@@ -111,5 +136,5 @@
             $bmAo = qab_outsource_batch_auto_open($db, (int)($_POST['batch_id'] ?? 0), $uid);
             echo json_encode(['success'=>true,'message'=>'已新增回廠／報廢／取回' . $bmAo['msg']]);
         }
-    } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    } catch (Throwable $e) { if (isset($db) && $db instanceof PDO && $db->inTransaction()) $db->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;

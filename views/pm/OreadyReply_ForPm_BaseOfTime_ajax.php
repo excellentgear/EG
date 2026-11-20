@@ -554,7 +554,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
             $trow = $tr->fetch(PDO::FETCH_ASSOC);
             if (!$trow) throw new Exception('找不到這個製程');
             if (!in_array($trow['processing_state'], ['N', 'ing'], true)) throw new Exception('這一站目前不是「待發單／加工中」（狀態 ' . $trow['processing_state'] . '），無法分批發單，請重新整理');
-            $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid = ?");
+            $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid = ? AND rework_order_id IS NULL");
             $sentSt->execute([(int)$bom_ing_fid]);
             $sent = (float)$sentSt->fetchColumn();
             $stageQty = (float)$trow['sqty'];
@@ -2529,7 +2529,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') 
             $b['outside'] = max(0, (float)$b['send_qty'] - (float)$b['return_qty'] - (float)$b['scrap_qty'] - (float)($b['withdrawn_qty'] ?? 0));
             $openList[] = $b;
         }
-        $sentTot = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $sentTot = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND rework_order_id IS NULL");
         $sentTot->execute([$fid]);
         $stQty = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=?");
         $stQty->execute([$fid]);
@@ -2735,7 +2735,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_retur
 // ── BOM 管理員修正面板（2026-11-06）：列出／就地修改 發單、回廠、報廢、取回、QC檢驗、移轉憑單。
 //    唯一實作 src/common/bom_admin_fix_lib.php（寫入走 bom_return_edit_lib.php 的 force 模式）；
 //    僅本頁管理員，且須先輸入操作確認密碼（$_SESSION['oready_admin_fix']）；每個動作都寫 bom_ing_event 留紀錄 ──
-else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_process_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return'], true)) {
+else if (isset($_POST['action']) && in_array($_POST['action'], ['baf_check','baf_alias_set','baf_process_set','baf_flow_set','baf_flow_alloc','baf_bparent_set','baf_unlock','baf_lock','baf_list','baf_save','baf_delete','baf_add_send','baf_add_return','baf_bom_qty_set'], true)) {
     require __DIR__ . '/../../src/common/bom_admin_fix_api.php';
 }
 
@@ -2867,7 +2867,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_forward_info') {
         $n = $nx->fetch(PDO::FETCH_ASSOC);
         $next = null;
         if ($n) {
-            $ns = $db->prepare("SELECT COUNT(*) c, COALESCE(SUM(send_qty - withdrawn_qty),0) s FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+            $ns = $db->prepare("SELECT COUNT(*) c, COALESCE(SUM(send_qty - withdrawn_qty),0) s FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND rework_order_id IS NULL");
             $ns->execute([$n['bom_ing_fid']]);
             $x = $ns->fetch(PDO::FETCH_ASSOC);
             $sent = ((int)$x['c'] > 0) ? (float)$x['s'] : ((in_array($n['processing_state'], ['ing','Q','E'], true) || ($n['processing_state']==='P' && !empty($n['outsource_date']) && strpos((string)$n['outsource_date'],'0000-00-00')!==0)) ? (float)$n['sqty'] : 0.0);
@@ -2893,7 +2893,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_send_avail') {
         $st->execute([$fid]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) { echo json_encode(['success'=>false,'message'=>'找不到製程']); exit; }
-        $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=?");
+        $sentSt = $db->prepare("SELECT COALESCE(SUM(send_qty),0) FROM bom_ing_outsource_batch WHERE bom_ing_fid=? AND rework_order_id IS NULL");
         $sentSt->execute([$fid]);
         $prev = eg_bom_outsource_prev_station_qty($db, (string)$r['bom'], (int)$r['bom_sn']);
         echo json_encode(['success'=>true, 'stage_qty'=>(float)$r['sqty'], 'sent'=>(float)$sentSt->fetchColumn(), 'state'=>$r['processing_state'],
