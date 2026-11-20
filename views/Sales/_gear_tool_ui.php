@@ -4432,7 +4432,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 tri(a0, a1, b1, cq); tri(a0, b1, b0, cq);
             }
         }
-        if (cap) cap.mesh = mesh;
+        if (cap) { cap.mesh = mesh; cap.tooth = tooth; cap.gs = gs; cap.utip = utip; cap.u0 = u0t; cap.z = z; cap.surf = function (t, xx) { return surfR(t, xx); }; }
         var im = model.AddMesh(mesh), nd = new OV.Node(); nd.AddMeshIndex(im); model.GetRootNode().AddChildNode(nd);
         // 螺孔：深色圓盤標示孔口位置。圓盤的每個點都貼在實際表面上（外圓柱／齒面／內孔壁），從孔的軸向看過去是正圓
         // 角度方向：端面圖是「從所選端面看過去，由正上方順時針量」。3D 座標 y＝上、z 由 x 軸右手定則決定，
@@ -4615,12 +4615,29 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 if ((d1 < -1e-4 && d2 > 1e-4) || (d1 > 1e-4 && d2 < -1e-4)) draw = true;   // 輪廓線：一面朝向、一面背向
                 else {
                     var dot = Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2])), ang = Math.acos(dot);
-                    if (tc[t1] !== tc[t2]) draw = ang > ((tc[t1] >= 1000 && tc[t2] >= 1000) ? 0.8 : 20) * DEG;   // 齒面分區交界（齒根與齒面近乎相切）門檻要很低，否則齒根線會不見
+                    if (tc[t1] !== tc[t2]) draw = (tc[t1] >= 1000 && tc[t2] >= 1000) ? false : ang > 20 * DEG;   // 齒頂／齒面／齒根交界不從網格取（會呈鋸齒狀、每顆齒都多線），改由下面用螺旋線解析式畫
                     else draw = ang > 40 * DEG;   // 同一曲面群組內的尖銳折角（內鍵槽的槽壁與孔壁、槽頂）也要畫
                 }
             }
             if (draw) addSeg(e.a, e.b);
         });
+        if (cap.tooth && cap.gs) {   // 齒頂邊線與齒根交界：沿軸向的螺旋線，半徑取實際表面（含倒角）
+            var th0 = cap.tooth, g0 = cap.gs, nSamp = Math.max(12, Math.min(160, Math.ceil(Math.abs(th0.tanb) * g0.L / th0.rp / 0.05) + 24)), TAU2 = 2 * Math.PI;
+            for (var kk = 0; kk < cap.z; kk++) {
+                [[cap.utip], [-cap.utip], [cap.u0], [-cap.u0]].forEach(function (c) {
+                    var run = [];
+                    for (var si = 0; si <= nSamp; si++) {
+                        var x3 = g0.xs + g0.L * si / nSamp, tt = kk * th0.pitch + c[0] + th0.tanb * (x3 - g0.xs) / th0.rp, rr = cap.surf(tt, x3);
+                        var X = x3, Y = rr * Math.cos(tt), Z = rr * Math.sin(tt);
+                        var qu = X * rt[0] + Y * rt[1] + Z * rt[2], qv = X * up[0] + Y * up[1] + Z * up[2], qz = X * f[0] + Y * f[1] + Z * f[2];
+                        var px = sx(qu), py = sy(qv);
+                        if (vis(px, py, qz)) run.push([px, py]);
+                        else { for (var m = 1; m < run.length; m++) segs.push([run[m - 1][0], run[m - 1][1], run[m][0], run[m][1]]); run = []; }
+                    }
+                    for (var m2 = 1; m2 < run.length; m2++) segs.push([run[m2 - 1][0], run[m2 - 1][1], run[m2][0], run[m2][1]]);
+                });
+            }
+        }
         cap.rings.forEach(function (ring) {   // 孔口輪廓
             var P = ring.map(function (q) { return [sx(q[0] * rt[0] + q[1] * rt[1] + q[2] * rt[2]), sy(q[0] * up[0] + q[1] * up[1] + q[2] * up[2]), q[0] * f[0] + q[1] * f[1] + q[2] * f[2]]; });
             for (var m = 0; m < P.length; m++) {
