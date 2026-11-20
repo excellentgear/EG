@@ -622,8 +622,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                                 <select id="g-cut-dir" class="gear-input" style="width:auto;" title="A-A 剖面切割線在端面圖上的畫法與看過去的方向。垂直線＝剖面切在上下方向（0°／180° 的孔會被切到）；水平線＝切在左右方向（90°／270° 的孔會被切到）"><option value="v-right">切割線垂直，箭頭朝右</option><option value="v-left">切割線垂直，箭頭朝左</option><option value="h-down">切割線水平，箭頭朝下</option><option value="h-up">切割線水平，箭頭朝上</option><option value="v-center">切割線垂直，箭頭指向中心線</option><option value="h-center">切割線水平，箭頭指向中心線</option></select>
                                 <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="端面圖也畫出內孔、鍵槽與螺孔"><input type="checkbox" id="g-draw-endbore" checked> 端面圖含孔／鍵槽／螺孔</label>
                                 <button class="btn-gear-calc" type="button" onclick="gearDrawSection()"><i class="fa fa-pencil"></i> 畫剖面圖</button>
+                                <button class="btn-gear-calc" type="button" onclick="gearDrawSideTracked()" title="外形側視圖（正投影、只畫實線）：由齒形算出齒頂線、齒根交界線（螺旋齒會斜）、倒角與階梯交界、外徑螺孔外輪廓、外鍵槽邊線"><i class="fa fa-cube"></i> 畫外形側視圖</button>
+                                <select id="g-view2" class="gear-input" style="width:auto;" title="「畫成兩視圖」第二個視圖要畫哪一種"><option value="sec">兩視圖：端面＋剖面圖</option><option value="side">兩視圖：端面＋外形側視圖</option></select>
+                                <select id="g-proj" class="gear-input" style="width:auto;" title="投影法：只影響「外形側視圖」放在端面圖的哪一邊（剖面圖固定依箭頭方向）。第三角法＝視圖放在觀看方向同側；第一角法＝放相反側"><option value="third">第三角法</option><option value="first">第一角法</option></select>
                                 <select id="g-align" class="gear-input" style="width:auto;" title="兩個視圖的對齊方式：自動＝依投影法與剖面箭頭方向；水平對齊＝左右並排、中心軸線同一高度；垂直對齊＝上下排、中心線同一垂直線；不對齊＝不移動，自己拖"><option value="auto">對齊：自動</option><option value="h">水平對齊</option><option value="v">垂直對齊</option><option value="none">不對齊</option></select>
-                                <button class="btn-gear-calc" type="button" onclick="if(window.egGearDrawViews)egGearDrawViews('third',document.getElementById('g-cut-dir').value,document.getElementById('g-align').value)" title="一次畫出端面圖＋剖面圖，並依所選投影法與剖面箭頭方向排好位置（標註一起移動）"><i class="fa fa-th-large"></i> 畫成兩視圖</button>
+                                <button class="btn-gear-calc" type="button" onclick="if(window.egGearDrawViews)egGearDrawViews(document.getElementById('g-proj').value,document.getElementById('g-cut-dir').value,document.getElementById('g-align').value,document.getElementById('g-view2').value)" title="一次畫出端面圖＋剖面圖，並依所選投影法與剖面箭頭方向排好位置（標註一起移動）"><i class="fa fa-th-large"></i> 畫成兩視圖</button>
                                 <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="勾選時，改了剖面線、孔口連線、剖面箭頭方向、端面圖視角…這類設定，已畫出的端面圖／剖面圖會自動重畫並留在原位置（你手動拖過的標註位置會重設）"><input type="checkbox" id="g-autoredraw" checked> 設定變更時自動更新圖面</label>
                                 <button class="btn-gear-calc" type="button" onclick="gearDraw3D()" title="依目前的外形、內孔、倒角、鍵槽、螺孔、齒形（含螺旋角）產生可旋轉的 3D 模型"><i class="fa fa-cube"></i> 3D 預覽</button>
                             </div>
@@ -3561,7 +3564,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     // ══ 記憶設定（只存在這台電腦的瀏覽器 localStorage）══════════════════════
     // ① 預設值：⑥自動標註區與畫圖選項，使用者按「存為預設」後，每次開啟先套用
     // ② 依料號記憶：由料號開啟時，最後一次畫圖／畫剖面圖／3D 的全部數據（外形、內孔、倒角、鍵槽、螺孔…）
-    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-align', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
+    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-proj', 'g-view2', 'g-align', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
     var _gearCurD = 0;
     function gmemGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
     function gmemSet(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { return false; } }
@@ -4567,7 +4570,9 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     (function () {
         var o1 = window.gearDrawToCanvas, o2 = window.gearDrawSection;
         window.gearDrawToCanvas = function () { return window.egGearTrack ? window.egGearTrack('end', function () { return o1.apply(null, arguments); }) : o1.apply(null, arguments); };
-        window.gearDrawSection = function () { return window.egGearTrack ? window.egGearTrack('sec', function () { return o2.apply(null, arguments); }) : o2.apply(null, arguments); };
+        window.gearDrawSection = function () { return window.egGearTrack ? window.egGearTrack('sec', function () { return o2.apply(null, arguments); }, 'gearDrawSection') : o2.apply(null, arguments); };
+        var o3 = null;   // gearDrawSide 定義在後面，第一次呼叫時才包裝
+        window.gearDrawSideTracked = function () { var f = window.__gearSideRaw; return window.egGearTrack ? window.egGearTrack('sec', function () { return f(); }, 'gearDrawSideTracked') : f(); };
         var ids = ['g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-cut-dir', 'g-view-side', 'g-draw-endbore', 'g-show-obl', 'g-dim-on', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-align'], tm = null;
         document.addEventListener('change', function (e) {
             var t = e.target; if (!t || !t.id || ids.indexOf(t.id) < 0) return;
@@ -4575,6 +4580,78 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             clearTimeout(tm); tm = setTimeout(function () { try { window.egGearRedraw(); } catch (err) { console.warn('[gear] 自動重畫失敗', err); } }, 250);
         });
     })();
+
+    /* ── 外形側視圖（正投影，只畫實線）：由齒形與外形輪廓「算出」特徵線，不靠 3D 引擎猜 ──
+       視線垂直於軸線、從 +z 側看過來。畫的線：外形輪廓（含倒角、階梯的垂直交界線）、齒頂線與齒根交界線（螺旋齒會斜）、
+       外徑螺孔的外輪廓（橢圓，只畫看得到的那一半）、外鍵槽邊線。孔內、內鍵槽被擋住＝虛線，不畫。 */
+    window.gearDrawSide = function () {
+        window.gearMemSave && window.gearMemSave();
+        var d = g3Data(); if (!d) return;
+        if (typeof window.egGearDrawItems !== 'function') return;
+        var p = d.p, eps = 1e-9, total = d.total, TAU = 2 * Math.PI;
+        var maxR = 0; d.outer.forEach(function (sg) { maxR = Math.max(maxR, sg.R1, sg.R2); });
+        var sc = 520 / (2 * maxR);   // 與端面圖同一比例（整個齒輪外形模式）
+        var items = [];
+        function toPx(a) { return a.map(function (q) { return { x: (q[0] - total / 2) * sc, y: -q[1] * sc }; }); }
+        function add(a, w, dash) { if (a.length > 1) items.push({ pts: toPx(a), closed: false, w: w || 2, dash: dash || null }); }
+        // 1. 外形輪廓（上、下兩條）＋輪廓上每個轉折處的垂直交界線＋兩端面
+        var up = g3Profile(d).filter(function (q) { return q[2] === 'o'; }).map(function (q) { return [q[0], q[1]]; });
+        add(up, 2); add(up.map(function (q) { return [q[0], -q[1]]; }), 2);
+        up.forEach(function (q, i) {
+            if (!(q[1] > eps)) return;
+            var a = up[i - 1], b = up[i + 1], corner = (i === 0 || i === up.length - 1);
+            if (!corner && a && b) {
+                var a1 = Math.atan2(q[1] - a[1], q[0] - a[0]), a2 = Math.atan2(b[1] - q[1], b[0] - q[0]), da = Math.abs(a2 - a1);
+                if (da > Math.PI) da = TAU - da;
+                corner = da > 0.17;   // 轉折超過約 10° 才算特徵（圓角上的一連串小轉折不畫）
+            }
+            if (corner) add([[q[0], q[1]], [q[0], -q[1]]], 2);
+        });
+        // 2. 齒：齒頂兩側邊線與齒根交界線（螺旋齒沿軸向轉動）
+        if (d.gear && p.z > 0) {
+            var t = g3ToothLut(p), gs = d.gear, M = t.M, lut = t.lut, iT = 0, iR = M;
+            while (iT < M && lut[iT] >= t.ra - 1e-9) iT++;
+            while (iR > 0 && lut[iR] <= t.rf + 1e-9) iR--;
+            var ut = t.half * iT / M, u0 = t.half * iR / M;
+            var cl = clampCh(gs.chL, gs.L / 2, gs.R1), cr = clampCh(gs.chR, gs.L / 2, gs.R2);
+            var xa = gs.xs + (cl && !cl.fillet ? cl.ax : 0), xb = gs.xe - (cr && !cr.fillet ? cr.ax : 0), nS = Math.max(6, Math.ceil(Math.abs(t.tanb) * (xb - xa) / t.rp / 0.08) + 2);
+            for (var k = 0; k < p.z; k++) {
+                var th = TAU * k / p.z;
+                [[t.ra, ut], [t.ra, -ut], [t.rf, u0], [t.rf, -u0]].forEach(function (c) {
+                    var run = [];
+                    for (var i = 0; i <= nS; i++) {
+                        var xx = xa + (xb - xa) * i / nS, ang = th + c[1] + t.tanb * (xx - gs.xs) / t.rp;
+                        if (Math.sin(ang) > 0) run.push([xx, c[0] * Math.cos(ang)]);
+                        else { add(run, 1.2); run = []; }
+                    }
+                    add(run, 1.2);
+                });
+            }
+        }
+        // 3. 外徑螺孔外輪廓（只畫看得到的那一半）
+        if (d.rad) {
+            var rsg = null; d.outer.forEach(function (sg) { if (d.rad.x >= sg.xs - eps && d.rad.x <= sg.xe + eps) rsg = sg; });
+            if (rsg) d.rad.angles.forEach(function (a) {
+                var tt = a * Math.PI / 180, Rv = rsg.R1 + (rsg.R2 - rsg.R1) * (d.rad.x - rsg.xs) / rsg.L, hm = d.rad.dm / 2, run = [];
+                for (var q = 0; q <= 48; q++) {
+                    var ph = TAU * q / 48, ps = Math.asin(Math.max(-1, Math.min(1, hm * Math.sin(ph) / Rv))), ang = tt + ps;
+                    if (Math.sin(ang) > 0) run.push([d.rad.x + hm * Math.cos(ph), Rv * Math.cos(ang)]);
+                    else { add(run, 1.2); run = []; }
+                }
+                add(run, 1.2);
+            });
+        }
+        // 4. 外鍵槽邊線（槽在正上方：從側面看是槽寬邊緣的稜線與兩端）
+        if (d.okey) {
+            var osg = d.outer[d.okey.si] || d.outer[0], Ro = osg.R1 + (osg.R2 - osg.R1) * (d.okey.k1 - osg.xs) / osg.L;
+            if (d.okey.w / 2 < Ro) {
+                var yO = Math.sqrt(Ro * Ro - d.okey.w * d.okey.w / 4);
+                add([[d.okey.k1, yO], [d.okey.k2, yO]], 2);
+            }
+        }
+        window.egGearDrawItems(items, '齒輪外形側視圖（正投影，全長 ' + total + ' mm）', []);
+    };
+    window.__gearSideRaw = window.gearDrawSide;
     window.openGearTool = function(opt) {
         ensureGearDom();
         var w = document.getElementById('gear-tool-window');

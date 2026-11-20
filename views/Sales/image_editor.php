@@ -6915,11 +6915,11 @@ window.egGearInsertImage = function (url) { addImageFromURL(url, 0); };   // 齒
 
 // ── 追蹤最近一次畫出的端面圖／剖面圖，設定（剖面線、箭頭方向…）改了就自動重畫、位置保留 ──
 window.__gv = { end: [], sec: [], paired: false };
-window.egGearTrack = function (kind, fn) {
+window.egGearTrack = function (kind, fn, name) {
     const before = canvas.getObjects().slice();
     const r = fn();
     const added = canvas.getObjects().filter(o => before.indexOf(o) < 0);
-    if (added.length) window.__gv[kind] = added;
+    if (added.length) { window.__gv[kind] = added; if (name) window.__gv[kind + 'Fn'] = name; }
     return r;
 };
 window.egGearRedraw = function (align) {
@@ -6937,7 +6937,8 @@ window.egGearRedraw = function (align) {
     if (E.length && S.length && gv.paired) {
         const c0 = centerOf(E);
         E.concat(S).forEach(o => canvas.remove(o));
-        window.egGearDrawViews('third', cdir, al);
+        const v2 = gv.secFn === 'gearDrawSideTracked' ? 'side' : 'sec', pj = (document.getElementById('g-proj') || {}).value || 'third';
+        window.egGearDrawViews(pj, cdir, al, v2);
         const E2 = (window.__gv.end || []).filter(alive), S2 = (window.__gv.sec || []).filter(alive);
         if (E2.length) { const c1 = centerOf(E2); shift(E2.concat(S2), c0.x - c1.x, c0.y - c1.y); }
     } else {
@@ -6950,12 +6951,12 @@ window.egGearRedraw = function (align) {
             if (N.length) { const c1 = centerOf(N); shift(N, c0.x - c1.x, c0.y - c1.y); }
         };
         redo(E, 'end', 'gearDrawToCanvas');
-        redo(S, 'sec', 'gearDrawSection');
+        redo(S, 'sec', gv.secFn || 'gearDrawSection');
     }
     canvas.requestRenderAll(); pushState();
     return true;
 };
-window.egGearDrawViews = function (proj, cutDir, align) {
+window.egGearDrawViews = function (proj, cutDir, align, view2) {
     const snap = () => canvas.getObjects().slice();
     const diff = (a, b) => b.filter(o => a.indexOf(o) < 0);
     const mainOf = set => set.find(o => !o.autoDim) || set[0];
@@ -6966,7 +6967,9 @@ window.egGearDrawViews = function (proj, cutDir, align) {
     };
     const b0 = snap(); window.gearDrawToCanvas(); const b1 = snap(), A = diff(b0, b1);
     if (!A.length) return;
-    window.gearDrawSection(); const b2 = snap(), B = diff(b1, b2);
+    const side2 = view2 === 'side';
+    if (side2) window.gearDrawSideTracked(); else window.gearDrawSection();
+    const b2 = snap(), B = diff(b1, b2);
     if (!B.length) return;
     canvas.discardActiveObject();
     window.__gv.paired = true;
@@ -6979,6 +6982,7 @@ window.egGearDrawViews = function (proj, cutDir, align) {
     else if (d === 'h-down') side = 'top';
     else if (d === 'h-up') side = 'bottom';
     else side = 'left';
+    if (side2 && proj === 'first') side = ({ left: 'right', right: 'left', top: 'bottom', bottom: 'top' })[side];   // 外形側視圖才受投影法影響：第一角法放相反側
     // 對齊方式：auto＝依投影法與剖面箭頭方向；h＝水平並排（中心軸線同一高度）；v＝垂直上下排（中心線同一垂直線）；none＝不移動（各畫在畫面中央，自己拖）
     const al = String(align || 'auto');
     if (al === 'h' && (side === 'top' || side === 'bottom')) side = third ? 'left' : 'right';
@@ -8718,8 +8722,38 @@ function lockSelection() {
     canvas.requestRenderAll();
     updateLockUI();
     pushState();
-    toast('已鎖定 ' + targets.length + ' 個物件（點擊會穿透）。要解開請按屬性列右側「解鎖全部」');
+    toast('已鎖定 ' + targets.length + ' 個物件（點擊會穿透）。要解開請按屬性列右側「解鎖全部」；要連鎖定物件一起框選刪除，按住 Alt 拖曳框選');
 }
+/* Alt＋框選：連「已鎖定」的物件一起框選（選到的會同時解鎖），之後可直接按 Delete 刪除或搬移。
+   一般框選碰不到鎖定物件（那是鎖定的用意）；要刪掉鎖定的底圖／標籤時用這個，不必先「解鎖全部」。 */
+(function () {
+    let st = null;
+    canvas.on('mouse:down', function (opt) {
+        if (currentTool !== 'select' || !opt.e || !opt.e.altKey || opt.target) { st = null; return; }
+        const p = canvas.getPointer(opt.e); st = { x: p.x, y: p.y };
+    });
+    canvas.on('mouse:up', function (opt) {
+        if (!st || !opt.e) return;
+        const p = canvas.getPointer(opt.e), x1 = Math.min(st.x, p.x), y1 = Math.min(st.y, p.y), x2 = Math.max(st.x, p.x), y2 = Math.max(st.y, p.y);
+        st = null;
+        if (x2 - x1 < 4 && y2 - y1 < 4) return;
+        const hit = canvas.getObjects().filter(o => {
+            if (o === artboard || o.id === '__artboard' || o.isDimGuide || o.visible === false) return false;
+            const r = o.getBoundingRect(true, true);
+            const inside = r.left >= x1 - 1 && r.top >= y1 - 1 && r.left + r.width <= x2 + 1 && r.top + r.height <= y2 + 1;
+            const touch = !(r.left + r.width <= x1 || r.left >= x2 || r.top + r.height <= y1 || r.top >= y2);
+            return o.type === 'image' && !o.labelSpec && !o.labelKind ? inside : touch;   // 大張底圖要完整框住才算，其他碰到就算
+        });
+        if (!hit.length) { toast('框內沒有物件'); return; }
+        let un = 0;
+        hit.forEach(o => { if (o.locked || o.selectable === false || o.evented === false) { o.locked = false; o.selectable = true; o.evented = true; un++; } });
+        canvas.discardActiveObject();
+        const sel = hit.length === 1 ? hit[0] : new fabric.ActiveSelection(hit, { canvas: canvas });
+        canvas.setActiveObject(sel);
+        updateLockUI(); canvas.requestRenderAll(); refreshPropbar();
+        toast('已選取 ' + hit.length + ' 個物件' + (un ? '（其中 ' + un + ' 個原本鎖定，已解鎖）' : '') + '，按 Delete 可刪除');
+    });
+})();
 /* 座標被算壞（NaN/Infinity）的物件：看不見、選得到、每幀渲染出錯造成拖曳殘影——直接移除 */
 function purgePoisonedObjects() {
     let n = 0;
