@@ -4430,6 +4430,26 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         return model;
     }
 
+    // 線稿加粗加深：WebGL 的線寬固定 1 像素，所以把截圖裡偏暗的像素（線）轉成純黑，再往四周各擴 1 像素（再粗會讓螺旋齒的密集線條糊成一團）
+    function g3Bold(url, cb) {
+        var im = new Image();
+        im.onload = function () {
+            try {
+                var w = im.width, h = im.height, c = document.createElement('canvas'); c.width = w; c.height = h;
+                var x = c.getContext('2d'); x.drawImage(im, 0, 0);
+                var id = x.getImageData(0, 0, w, h), dk = x.createImageData(w, h), a = id.data, b = dk.data, i;
+                for (i = 0; i < a.length; i += 4) {
+                    if (a[i + 3] > 60 && (a[i] + a[i + 1] + a[i + 2]) / 3 < 170) { b[i] = 0; b[i + 1] = 0; b[i + 2] = 0; b[i + 3] = 255; }
+                }
+                var c2 = document.createElement('canvas'); c2.width = w; c2.height = h; c2.getContext('2d').putImageData(dk, 0, 0);
+                var offs = [[-1, 0], [1, 0], [0, -1], [0, 1], [0, 0]];
+                offs.forEach(function (o) { x.drawImage(c2, o[0], o[1]); });
+                cb(c.toDataURL('image/png'));
+            } catch (e) { console.warn('[gear3d] 線稿加粗失敗，使用原圖', e); cb(url); }
+        };
+        im.onerror = function () { cb(url); };
+        im.src = url;
+    }
     var G3_VW = null, G3_OBJ = null;
     function g3Win() {
         var w = document.getElementById('gear3d-win');
@@ -4455,7 +4475,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             g3Render(function () {   // 放到圖面一律用線稿（白底黑邊、背景透明），跟圖面其他線圖一致
                 var url = G3_VW.GetViewer().GetImageAsDataUrl(1400, 1000, true);
                 if (prevSt !== 'line') g3Render(null, prevSt);
-                window.egGearInsertImage(url);
+                g3Bold(url, function (u2) { window.egGearInsertImage(u2); });
             }, 'line');
         };
         var hdr = document.getElementById('gear3d-hdr'), sx, sy, sl, st, drag = false;
@@ -4505,7 +4525,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                         });
                     } catch (e) { console.warn('[gear3d] 線稿材質失敗', e); }
                     try {
-                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(25, 25, 25), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+                        viewer.SetEdgeSettings(style === 'line' ? new OV.EdgeSettings(true, new OV.RGBColor(0, 0, 0), 25) : new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
                         viewer.SetBackgroundColor(style === 'line' ? new OV.RGBAColor(255, 255, 255, 255) : new OV.RGBAColor(247, 243, 238, 255));
                     } catch (e) { console.warn('[gear3d] 樣式設定失敗', e); }
                     if (first) g3Fit(); else viewer.Render();   // 之後重畫不動相機，免得每次都被轉回預設角度
