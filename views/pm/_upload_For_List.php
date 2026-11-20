@@ -2847,6 +2847,139 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// BOM 歷史補匯（2026-11-20 新增，補「補資料」分頁、僅系統管理員）
+// 與 BOM ERP直接匯入的差異：①已存在的製令整張跳過（製令＋製程都不動）②新增的製令直接結案
+// （bom.processing_state='1'，與「BOM結案匯入」相同；製程 bom_ing 維持預設 'N'；closed_at 留空）
+// ③不產生 QC 檢驗紀錄表 ④可限定製令號碼範圍 ⑤不綁料號／客戶／訂單（客戶與料號由「已完工BOM查詢列印」
+// OreadyReply_completed_query.php 既有的自動綁定處理）。
+// 欄位解析沿用 parseBomErpRows()（與現有 BOM ERP匯入同一份 N.xlsx 格式）。
+// ══════════════════════════════════════════════════════════════════════════════
+if (!function_exists('bomHistAdminOnly')) {
+    function bomHistAdminOnly($db) {
+        require_once __DIR__ . '/../../src/common/role_features_helper.php';
+        $f = rf_load_user_features($db, (int)($_SESSION['id'] ?? 0));
+        if (!rf_has_feature($f, 'all')) { echo json_encode(['success' => false, 'message' => '僅系統管理員可使用歷史補匯']); exit; }
+    }
+}
+
+if (isset($_GET['but']) && $_GET['but'] === 'BOM_HIST_Preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(120); ini_set('memory_limit', '512M');
+    bomHistAdminOnly($db);
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => '請選擇要上傳的檔案']); exit;
+    }
+    try {
+        $from = trim((string)($_POST['bom_from'] ?? '')); $to = trim((string)($_POST['bom_to'] ?? ''));
+        foreach ([$from, $to] as $v) if ($v !== '' && !preg_match('/^B-\d{10}$/', $v)) { echo json_encode(['success' => false, 'message' => '製令號碼範圍格式要像 B-1120430999']); exit; }
+        $spreadsheet = IOFactory::load($_FILES['file']['tmp_name']);
+        $groups = parseBomErpRows($spreadsheet->getActiveSheet()->toArray());
+        if (empty($groups)) { echo json_encode(['success' => false, 'message' => '未找到有效資料列，請確認是否為 ERP BOM 原始檔']); exit; }
+
+        $outOfRange = 0;
+        if ($from !== '' || $to !== '') {
+            foreach ($groups as $b => $g) if (($from !== '' && strcmp($b, $from) < 0) || ($to !== '' && strcmp($b, $to) > 0)) { unset($groups[$b]); $outOfRange++; }
+        }
+        $existing = [];
+        foreach (array_chunk(array_keys($groups), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT bom FROM bom WHERE bom IN ($ph)"); $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) $existing[$b] = true;
+        }
+        $new = 0; $skip = 0; $ing = 0;
+        $minB = null; $maxB = null; $skipSample = [];
+        foreach ($groups as $b => $g) {
+            if (isset($existing[$b])) { $skip++; if (count($skipSample) < 8) $skipSample[] = $b; continue; }
+            $new++; $ing += count($g['rows']);
+            if ($minB === null || strcmp($b, $minB) < 0) $minB = $b;
+            if ($maxB === null || strcmp($b, $maxB) > 0) $maxB = $b;
+        }
+        $warnings = [];
+        if ($outOfRange) $warnings[] = "有 {$outOfRange} 張製令在你限定的號碼範圍外，已排除不匯入";
+
+        // 資料量大：不放進 session（每次請求都要讀寫），改存暫存檔，session 只記檔名
+        $oldF = $_SESSION['bom_hist_file'] ?? '';
+        if ($oldF !== '' && is_file($oldF)) @unlink($oldF);
+        $tmpF = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'bom_hist_' . (int)($_SESSION['id'] ?? 0) . '_' . bin2hex(random_bytes(4)) . '.ser';
+        if (@file_put_contents($tmpF, serialize($groups)) === false) { echo json_encode(['success' => false, 'message' => '無法寫入暫存檔']); exit; }
+        $_SESSION['bom_hist_file'] = $tmpF; $_SESSION['bom_hist_ts'] = time();
+        echo json_encode([
+            'success' => true, 'total' => count($groups), 'new_bom_count' => $new, 'skip_bom_count' => $skip,
+            'skip_sample' => $skipSample, 'new_ing_rows' => $ing,            'bom_min' => $minB, 'bom_max' => $maxB, 'warnings' => $warnings,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => '解析失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+if (isset($_GET['but']) && $_GET['but'] === 'BOM_HIST_Commit') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(300); ini_set('memory_limit', '512M');
+    bomHistAdminOnly($db);
+    // 分段作業：每次請求只處理 $limit 張製令（各自一個小交易），前端依 offset 連續呼叫並在段與段之間稍停，
+    // 避免一次長交易鎖住資料表、拖慢其他使用者。
+    $tmpF = $_SESSION['bom_hist_file'] ?? '';
+    if ($tmpF === '' || !is_file($tmpF) || time() - (int)($_SESSION['bom_hist_ts'] ?? 0) > 3600) {
+        echo json_encode(['success' => false, 'message' => '預覽資料已過期（超過60分鐘）或已匯入完成，請重新上傳檔案']); exit;
+    }
+    $offset = max(0, (int)($_POST['offset'] ?? 0));
+    $limit  = min(100, max(5, (int)($_POST['limit'] ?? 30)));
+    $allGroups = @unserialize((string)file_get_contents($tmpF));
+    if (!is_array($allGroups)) { echo json_encode(['success' => false, 'message' => '暫存資料毀損，請重新上傳檔案']); exit; }
+    $total = count($allGroups);
+    $groups = array_slice($allGroups, $offset, $limit, true);
+    unset($allGroups);
+    $userId = $_SESSION['id'] ?? 'excel_import';
+    $_SESSION['bom_hist_ts'] = time();
+    session_write_close();   // 分段期間不要鎖住本人其他頁面的 session
+    try {
+        $mk = [];
+        foreach ($groups as $grp) foreach ($grp['rows'] as $row) if ($row['maker_id_no'] !== null) $mk[$row['maker_id_no']] = true;
+        $makerNames = [];
+        foreach (array_chunk(array_keys($mk), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list WHERE maker_id_no IN ($ph)"); $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $makerNames[$r['maker_id_no']] = $r['maker_id'];
+        }
+        $db->beginTransaction();
+        $exists = $db->prepare("SELECT 1 FROM bom WHERE bom = ?");
+        $insBom = $db->prepare("INSERT INTO bom (bom, d_id, sqty, state, processing_state, Created_By, Created_At, Modified_By, Modified_At)
+                                VALUES (?, ?, ?, 'ing', '1', ?, NOW(), ?, NOW())");
+        $insIng = $db->prepare("INSERT INTO bom_ing (bom_ing_id, bom, process_no, maker_id_no, maker_id, sqty, bom_sn, processing_state, ps, Created_By, Created_At, Modified_By, Modified_At)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'N', ?, ?, NOW(), ?, NOW())");
+        $nb = 0; $ni = 0; $skip = 0;
+        foreach ($groups as $bom => $grp) {
+            $exists->execute([$bom]);
+            if ($exists->fetchColumn()) { $skip++; continue; }   // 已存在整張跳過（預覽後才有人新增的也一樣擋）
+            $sq = is_numeric(erpNum_erp($grp['sqty'])) ? (int)erpNum_erp($grp['sqty']) : null;
+            $insBom->execute([$bom, $grp['d_id'], $sq, $userId, $userId]); $nb++;
+            $right9 = substr($bom, -9);
+            foreach ($grp['rows'] as $row) {
+                $mid = $row['maker_id_no'] !== null ? ($makerNames[$row['maker_id_no']] ?? null) : null;
+                $cust = ((int)$row['process_no'] === 138);   // 與現有匯入相同：只有客供料把廠商寫進去
+                $insIng->execute([
+                    $right9 . '-' . $row['process_no'] . '-' . $row['bom_sn'] . '-' . $row['sqty'] . '-' . $row['maker_id_no'],
+                    $bom, $row['process_no'], $cust ? $row['maker_id_no'] : null, $cust ? $mid : null, $row['sqty'], $row['bom_sn'],
+                    bomErpCleanPs($row['ps']), $userId, $userId,
+                ]); $ni++;
+            }
+        }
+        $nextOffset = $offset + count($groups);
+        $done = $nextOffset >= $total;
+        if ($done) recordUploadLog($db, 'upload_bom_hist');
+        $db->commit();
+        if ($done) @unlink($tmpF);
+        echo json_encode(['success' => true, 'done' => $done, 'next_offset' => $nextOffset, 'total' => $total,
+            'new_bom_count' => $nb, 'new_ing_count' => $ni, 'skip_bom_count' => $skip]);
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => '匯入失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 移轉紀錄 ERP直接匯入 (SupQuery.xls.xlsx，2026-07-20新增)
 // 取代「更新_當天移送」VBA巨集＋人工上傳 s-OK 檔（but=u5）的流程：直接讀 ERP 匯出的移轉原始檔。
 // 對照規則由 BOM.xlsm VBA 原始碼（olevba抽出「更新_移送」）＋欄位剪貼模擬＋真實資料三重驗證定案：

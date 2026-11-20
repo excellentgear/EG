@@ -607,6 +607,28 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     </div><!-- /暖砂琥珀底 -->
+                                    <!-- BOM 歷史補匯：已存在的製令整張跳過、新增的直接結案 -->
+                                    <div style="background:#F7E0BD;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form id="form_bom_hist" class="form-horizontal form-label-left" novalidate onsubmit="return false">
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_bom_hist">
+                                                BOM <b>歷史補匯</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="text-muted" style="font-size:11px;">ERP 匯出的 BOM 原始檔（與「BOM ERP直接匯入」同一種 N.xlsx）<br>已存在的製令整張跳過；新增的直接結案、製程維持 N，不產生 QC 檢驗表、不綁料號／客戶／訂單</span>
+                                            </label>
+                                            <div class="col-md-5 col-sm-5 col-xs-12">
+                                                <div style="margin-bottom:4px">
+                                                    製令號碼範圍（選填）
+                                                    <input type="text" id="bom_hist_from" placeholder="B-1110101001" style="width:130px"> ~
+                                                    <input type="text" id="bom_hist_to" placeholder="B-1120430999" style="width:130px">
+                                                </div>
+                                                <div class="input-group">
+                                                    <input type="file" id="file_bom_hist" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn"><button type="button" id="btn_bom_hist_preview" class="btn btn-warning">解析並預覽</button></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </form>
+                                    </div>
                                     <!-- 訂購單補資料（ERP「客戶訂購單日報表」→ 暫存區 → 轉成正式訂單） -->
                                     <div style="background:#FBEBD2;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
                                     <form id="form_oei" class="form-horizontal form-label-left" novalidate onsubmit="return false">
@@ -659,7 +681,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <tbody id="oeiBody"><tr><td colspan="11" class="text-muted text-center">載入中…</td></tr></tbody>
                                         </table>
                                         </div>
-                                        <div class="text-muted" style="font-size:11px;margin-top:6px">「轉成正式訂單」會在訂單追蹤新增該筆（業務備註＝補訂單資料），轉入當下會再比對一次，已有相同明細的自動略過；「同單號已有此產品但內容不同」預設不勾選，確認是另一筆明細才勾選補入。</div>
+                                        <div class="text-muted" style="font-size:11px;margin-top:6px">「轉成正式訂單」會在訂單追蹤新增該筆（業務備註＝補訂單資料），轉入當下會再比對一次，已有相同明細的自動略過；「同單號已有此產品但內容不同」預設不勾選，勾選轉入＝<b>覆蓋修正既有那一筆訂單的數量／製程／單價，不會新增一筆</b>。</div>
                                     <div style="margin-top:6px"><a href="price_fill_compare.php" target="_blank" class="btn btn-sm btn-warning"><i class="fa fa-columns"></i> 補單價比對（左：補資料／ERP，右：訂單追蹤，可批次轉價格）</a></div>
                                     </div>
 
@@ -1678,6 +1700,76 @@ $(document).ready(function() {
         });
     });
 
+    // ── BOM 歷史補匯：兩步驟 AJAX（預覽 → 確認；已存在跳過、新增直接結案）──
+    $('#btn_bom_hist_preview').on('click', function() {
+        var f = document.getElementById('file_bom_hist');
+        if (!f || !f.files.length) { alert('請選擇檔案'); return; }
+        $('#bomHistBody').html('<div class="text-center" style="padding:20px"><i class="fa fa-spinner fa-spin fa-3x"></i><p style="margin-top:15px">正在解析檔案，請稍候...</p></div>');
+        $('#btnBomHistConfirm').hide().prop('disabled', false).text('確認匯入並結案');
+        $('#bomHistModal').modal('show');
+        var fd = new FormData();
+        fd.append('file', f.files[0]);
+        fd.append('bom_from', $.trim($('#bom_hist_from').val()));
+        fd.append('bom_to', $.trim($('#bom_hist_to').val()));
+        $.ajax({ url: '_upload_For_List.php?but=BOM_HIST_Preview', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json',
+            success: function(res) {
+                if (!res.success) { $('#bomHistBody').html('<div class="alert alert-danger">' + res.message + '</div>'); return; }
+                var h = '<table class="table table-condensed table-bordered" style="font-size:13px">';
+                h += '<tr><td>檔案內的製令</td><td><strong>' + res.total + ' 張</strong></td></tr>';
+                h += '<tr class="success"><td>將新增並直接結案</td><td><strong>' + res.new_bom_count + ' 張</strong>（製程 ' + res.new_ing_rows + ' 筆）' +
+                     (res.bom_min ? '<br><small>' + res.bom_min + ' ～ ' + res.bom_max + '</small>' : '') + '</td></tr>';
+                if (res.skip_bom_count > 0) h += '<tr class="warning"><td>已存在，整張跳過不動</td><td><strong>' + res.skip_bom_count + ' 張</strong>' +
+                     (res.skip_sample && res.skip_sample.length ? '<br><small>例：' + res.skip_sample.join('、') + (res.skip_bom_count > res.skip_sample.length ? '…' : '') + '</small>' : '') + '</td></tr>';
+                h += '</table>';
+                if (res.warnings && res.warnings.length) {
+                    h += '<div class="alert alert-warning" style="font-size:13px"><ul style="margin:0;padding-left:18px">';
+                    res.warnings.forEach(function(w) { h += '<li>' + w + '</li>'; });
+                    h += '</ul></div>';
+                }
+                h += '<div class="alert alert-danger" style="font-size:12px;margin-bottom:0"><strong>只新增、不修改任何既有製令。</strong>新增的製令直接結案（製程維持 N）、不產生 QC 檢驗表；客戶與料號請到「已完工BOM查詢列印」自動綁定。</div>';
+                $('#bomHistBody').html(h);
+                if (res.new_bom_count > 0) $('#btnBomHistConfirm').show();
+            },
+            error: function() { $('#bomHistBody').html('<div class="alert alert-danger">伺服器錯誤，請稍後再試</div>'); }
+        });
+    });
+    $('#btnBomHistConfirm').on('click', function() {
+        var $b = $(this).prop('disabled', true).text('匯入中...');
+        // 分段匯入：每段 30 張製令，段與段之間停 400ms，讓其他使用者的操作插得進來
+        var acc = { nb: 0, ni: 0, skip: 0 };
+        function showProg(off, total) {
+            var pct = total ? Math.min(100, Math.round(off * 100 / total)) : 0;
+            $('#bomHistBody').html('<div style="padding:20px"><p>資料量大，已自動分段匯入，請勿關閉視窗…（' + off + ' / ' + total + ' 張）</p>' +
+                '<div class="progress"><div class="progress-bar progress-bar-warning" style="width:' + pct + '%">' + pct + '%</div></div>' +
+                '<small>已新增 ' + acc.nb + ' 張、製程 ' + acc.ni + ' 筆、已存在跳過 ' + acc.skip + ' 張</small></div>');
+        }
+        function failMsg(m, off) {
+            $('#bomHistBody').html('<div class="alert alert-danger">' + m + '<br>已完成並寫入的部分（' + acc.nb + ' 張製令）不會回復；' +
+                '已存在的製令會被自動跳過，重新上傳同一個檔案即可接著補完。</div>');
+            $b.hide();
+        }
+        function step(off, retry) {
+            $.ajax({ url: '_upload_For_List.php?but=BOM_HIST_Commit', type: 'POST', dataType: 'json', data: { offset: off, limit: 30 },
+                success: function(res) {
+                    if (!res.success) { failMsg(res.message, off); return; }
+                    acc.nb += res.new_bom_count; acc.ni += res.new_ing_count; acc.skip += res.skip_bom_count;
+                    if (res.done) {
+                        $('#bomHistBody').html('<div class="alert alert-success">歷史補匯完成：新增並結案 ' + acc.nb + ' 張製令、' + acc.ni + ' 筆製程；已存在跳過 ' + acc.skip + ' 張</div>');
+                        $b.hide(); return;
+                    }
+                    showProg(res.next_offset, res.total);
+                    setTimeout(function() { step(res.next_offset, 0); }, 400);
+                },
+                error: function() {
+                    if (retry < 2) { setTimeout(function() { step(off, retry + 1); }, 1500); return; }   // 暫時性失敗：同一段重試（已存在者會跳過，不會重複）
+                    failMsg('伺服器錯誤，請稍後再試');
+                }
+            });
+        }
+        showProg(0, 0);
+        step(0, 0);
+    });
+
     // ── 報價單 ERP直接匯入：兩步驟 AJAX（預覽 → 確認，只新增不覆蓋既有單號）──
     $('#form_quotation_erp').on('submit', function(e) {
         e.preventDefault();
@@ -1939,6 +2031,23 @@ $(document).ready(function() {
             <div class="modal-footer" style="padding:10px 15px">
                 <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                 <button type="button" class="btn btn-danger" id="btnIRConfirm" style="display:none">確認匯入</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- BOM 歷史補匯預覽 Modal -->
+<div class="modal fade" id="bomHistModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document" style="width:600px">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:12px 15px">
+                <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1">&times;</button>
+                <h4 class="modal-title"><strong>BOM 歷史補匯確認</strong></h4>
+            </div>
+            <div class="modal-body" id="bomHistBody" style="padding:15px;max-height:70vh;overflow-y:auto"></div>
+            <div class="modal-footer" style="padding:10px 15px">
+                <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-danger" id="btnBomHistConfirm" style="display:none">確認匯入並結案</button>
             </div>
         </div>
     </div>
