@@ -4434,7 +4434,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             for (var j = 0; j < rows.length - 1; j++) for (k = 0; k < th.length; k++) {
                 var k2 = (k + 1) % th.length;
                 var a0 = rows[j][k], a1 = rows[j + 1][k], b1 = rows[j + 1][k2], b0 = rows[j][k2], cq = cv;
-                if (cv === 0 && tooth) { var tn = (k2 === 0) ? th[0] + TAU : th[k2]; cq = toothReg((th[k] + tn) / 2, (rowsX[j] + rowsX[j + 1]) / 2); }
+                if (cap && cv === 0 && tooth) { var tn = (k2 === 0) ? th[0] + TAU : th[k2]; cq = toothReg((th[k] + tn) / 2, (rowsX[j] + rowsX[j + 1]) / 2); }   // 只有擷取線圖時才分區；3D 預覽與截圖維持原本平滑群組
                 tri(a0, a1, b1, cq); tri(a0, b1, b0, cq);
             }
         }
@@ -4517,6 +4517,34 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         return model;
     }
 
+    // 非齒部外形（圓柱／圓錐）的上下側影線：3D 引擎只在面與面夾角大時才畫線，平滑的圓柱外徑沒有線，所以這兩條邊緣線要自己補
+    function g3ShotWithSilhouette(viewer, W, H) {
+        var url = viewer.GetImageAsDataUrl(W, H, true), d = G3_LAST;
+        try {
+            var dpr = window.devicePixelRatio || 1, old = viewer.GetImageSize();
+            viewer.ResizeRenderer(W / dpr, H / dpr); viewer.Render();   // 與截圖相同尺寸，投影才對得上
+            var cam = viewer.camera, V3 = cam.position.constructor, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+            var im = new Image(); var done = false;
+            var ex = cam.position.x, ey = cam.position.y, ez = cam.position.z, rho = Math.sqrt(ey * ey + ez * ez), base = Math.atan2(ez, ey);
+            var lines = [];
+            d.outer.forEach(function (sg) {
+                if (sg.gear) return;
+                [sg.R1, sg.R2].forEach(function () {});
+                [1, -1].forEach(function (sgn) {
+                    var pts = [];
+                    [[sg.xs, sg.R1], [sg.xe, sg.R2]].forEach(function (q) {
+                        var R = q[1]; if (!(R > 0) || R >= rho) return;
+                        var t = base + sgn * Math.acos(R / rho), p = new V3(q[0], R * Math.cos(t), R * Math.sin(t)).project(cam);
+                        pts.push([(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]);
+                    });
+                    if (pts.length === 2) lines.push(pts);
+                });
+            });
+            viewer.ResizeRenderer(old.width, old.height); viewer.Render();
+            window.__g3sil = { url: url, lines: lines, W: W, H: H };
+        } catch (e) { console.warn('[gear3d] 側影線失敗', e); window.__g3sil = null; }
+        return url;
+    }
     // 線稿加粗加深：WebGL 的線寬固定 1 像素，所以把截圖裡偏暗的像素（線）轉成純黑，再往四周各擴 1 像素（再粗會讓螺旋齒的密集線條糊成一團）
     function g3Bold(url, cb) {
         var im = new Image();
@@ -4524,6 +4552,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             try {
                 var w = im.width, h = im.height, c = document.createElement('canvas'); c.width = w; c.height = h;
                 var x = c.getContext('2d'); x.drawImage(im, 0, 0);
+                var sil = window.__g3sil; window.__g3sil = null;
+                if (sil && sil.url === url && sil.W === w) { x.strokeStyle = '#000'; x.lineWidth = 2; sil.lines.forEach(function (l) { x.beginPath(); x.moveTo(l[0][0], l[0][1]); x.lineTo(l[1][0], l[1][1]); x.stroke(); }); }
                 var id = x.getImageData(0, 0, w, h), dk = x.createImageData(w, h), a = id.data, b = dk.data, i;
                 for (i = 0; i < a.length; i += 4) {
                     if (a[i + 3] > 60 && (a[i] + a[i + 1] + a[i + 2]) / 3 < 170) { b[i] = 0; b[i + 1] = 0; b[i + 2] = 0; b[i + 3] = 255; }
@@ -4710,7 +4740,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             if (typeof window.egGearInsertImage !== 'function') { alert('這個頁面不能把 3D 圖片放到畫布'); return; }
             var prevSt = document.getElementById('gear3d-style').value;
             g3Render(function () {   // 放到圖面一律用線稿（白底黑邊、背景透明），跟圖面其他線圖一致
-                var url = G3_VW.GetViewer().GetImageAsDataUrl(1400, 1000, true);
+                var url = g3ShotWithSilhouette(G3_VW.GetViewer(), 1400, 1000);
                 if (prevSt !== 'line') g3Render(null, prevSt);
                 g3Bold(url, function (u2) { window.egGearInsertImage(u2); });
             }, 'line');
