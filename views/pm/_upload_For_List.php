@@ -2862,9 +2862,45 @@ if (!function_exists('bomHistAdminOnly')) {
     }
 }
 
+// 大檔分段讀取（2026-11-20）：整份 toArray() 在數萬列時會把記憶體吃光（5萬多列實測爆 512MB）。
+// 作法：每次只讀 1 萬列（讀取過濾器），逐段交給 parseBomErpRows() 再合併同一張製令。
+if (!class_exists('BomHistChunkFilter')) {
+    class BomHistChunkFilter implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
+        public $a = 1; public $b = 1;
+        public function readCell($columnAddress, $row, $worksheetName = '') { return $row == 1 || ($row >= $this->a && $row <= $this->b); }
+    }
+}
+if (!function_exists('bomHistLoadGroupsChunked')) {
+    function bomHistLoadGroupsChunked($path) {
+        $reader = IOFactory::createReaderForFile($path);
+        $info = $reader->listWorksheetInfo($path);
+        $totalRows = (int)($info[0]['totalRows'] ?? 0);
+        $flt = new BomHistChunkFilter();
+        $reader->setReadFilter($flt);
+        $step = 10000; $header = null; $merged = [];
+        for ($a = 2; $a <= max(2, $totalRows); $a += $step) {
+            $flt->a = $a; $flt->b = $a + $step - 1;
+            $ss = $reader->load($path);
+            $arr = $ss->getActiveSheet()->toArray();
+            $ss->disconnectWorksheets(); unset($ss);
+            if ($header === null) $header = $arr[0] ?? [];
+            $rows = array_merge([$header], array_slice($arr, $a - 1, $step));
+            unset($arr);
+            $g = parseBomErpRows($rows);
+            unset($rows);
+            foreach ($g as $b => $grp) {
+                if (!isset($merged[$b])) $merged[$b] = $grp;
+                else $merged[$b]['rows'] = array_merge($merged[$b]['rows'], $grp['rows']);
+            }
+            unset($g);
+        }
+        return $merged;
+    }
+}
+
 if (isset($_GET['but']) && $_GET['but'] === 'BOM_HIST_Preview') {
     header('Content-Type: application/json; charset=utf-8');
-    set_time_limit(120); ini_set('memory_limit', '512M');
+    set_time_limit(600); ini_set('memory_limit', '1024M');
     bomHistAdminOnly($db);
     if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         echo json_encode(['success' => false, 'message' => '請選擇要上傳的檔案']); exit;
@@ -2872,8 +2908,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_HIST_Preview') {
     try {
         $from = trim((string)($_POST['bom_from'] ?? '')); $to = trim((string)($_POST['bom_to'] ?? ''));
         foreach ([$from, $to] as $v) if ($v !== '' && !preg_match('/^B-\d{10}$/', $v)) { echo json_encode(['success' => false, 'message' => '製令號碼範圍格式要像 B-1120430999']); exit; }
-        $spreadsheet = IOFactory::load($_FILES['file']['tmp_name']);
-        $groups = parseBomErpRows($spreadsheet->getActiveSheet()->toArray());
+        $groups = bomHistLoadGroupsChunked($_FILES['file']['tmp_name']);
         if (empty($groups)) { echo json_encode(['success' => false, 'message' => '未找到有效資料列，請確認是否為 ERP BOM 原始檔']); exit; }
 
         $outOfRange = 0;
