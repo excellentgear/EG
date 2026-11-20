@@ -6,6 +6,8 @@
     require_once '../../src/common/confirm_password_lib.php';
     require_once '../../src/common/bom_admin_fix_lib.php';
     header('Content-Type: application/json; charset=utf-8');
+    // 呼叫頁的 $db 可能是 DBConnection 物件（已完工BOM查詢），要的是 PDO
+    if (isset($db) && !($db instanceof PDO)) { $db = ($db instanceof DBConnection) ? $db->getPDO() : null; }
     if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
     $uid = (int)($_SESSION['id'] ?? 0);
     if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
