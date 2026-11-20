@@ -4558,7 +4558,24 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 for (i = 0; i < a.length; i += 4) {
                     if (a[i + 3] > 60 && (a[i] + a[i + 1] + a[i + 2]) / 3 < 170) { b[i] = 0; b[i + 1] = 0; b[i + 2] = 0; b[i + 3] = 255; }
                 }
+                // 去掉零星的小短線（齒端倒角處冒出的小段）：相連的黑點少於一定數量就視為雜點
+                var lab = new Int32Array(w * h), stack = [], minPx = 70, ci, comp, pi2;
+                for (ci = 0; ci < w * h; ci++) {
+                    if (lab[ci] || b[ci * 4 + 3] === 0) continue;
+                    comp = []; stack.length = 0; stack.push(ci); lab[ci] = 1;
+                    while (stack.length) {
+                        pi2 = stack.pop(); comp.push(pi2);
+                        var px0 = pi2 % w, py0 = (pi2 / w) | 0;
+                        for (var ddy = -1; ddy <= 1; ddy++) for (var ddx = -1; ddx <= 1; ddx++) {
+                            var nx0 = px0 + ddx, ny0 = py0 + ddy; if (nx0 < 0 || ny0 < 0 || nx0 >= w || ny0 >= h) continue;
+                            var ni = ny0 * w + nx0; if (lab[ni] || b[ni * 4 + 3] === 0) continue;
+                            lab[ni] = 1; stack.push(ni);
+                        }
+                    }
+                    if (comp.length < minPx) comp.forEach(function (q) { b[q * 4 + 3] = 0; });
+                }
                 var c2 = document.createElement('canvas'); c2.width = w; c2.height = h; c2.getContext('2d').putImageData(dk, 0, 0);
+                x.clearRect(0, 0, w, h);   // 底圖（含雜點）清掉，只留過濾後的純黑線
                 var offs = [[-1, 0], [1, 0], [0, -1], [0, 1], [0, 0]];
                 offs.forEach(function (o) { x.drawImage(c2, o[0], o[1]); });
                 cb(c.toDataURL('image/png'));
