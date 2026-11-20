@@ -603,6 +603,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                             <div style="font-size:11px;font-weight:700;color:#8a5a2b;margin:8px 0 2px;">⑥ 自動標註尺寸（標上去的每一個尺寸都是獨立物件，可單獨刪除、雙擊改文字）</div>
                             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;">
                                 <label><input type="checkbox" id="g-dim-on" checked> 畫出尺寸標註</label>
+                                <span title="標註文字大小（畫出來之後，選取標註在上方「字級」也可以改）">文字大小 <input type="number" id="g-dim-fs" class="gear-input" style="width:52px;" value="18" min="8" max="80" step="1"></span>
                                 <label title="剖面圖上標示齒部兩端的倒角"><input type="checkbox" id="g-dim-ch-gear" checked> 標示齒端倒角</label>
                                 <label title="剖面圖上標示其他外形段的倒角／圓角"><input type="checkbox" id="g-dim-ch-out" checked> 標示外形倒角</label>
                                 <label title="剖面圖上標示內孔的倒角／圓角"><input type="checkbox" id="g-dim-ch-bore" checked> 標示內孔倒角</label>
@@ -3557,7 +3558,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     // ══ 記憶設定（只存在這台電腦的瀏覽器 localStorage）══════════════════════
     // ① 預設值：⑥自動標註區與畫圖選項，使用者按「存為預設」後，每次開啟先套用
     // ② 依料號記憶：由料號開啟時，最後一次畫圖／畫剖面圖／3D 的全部數據（外形、內孔、倒角、鍵槽、螺孔…）
-    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
+    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
     var _gearCurD = 0;
     function gmemGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
     function gmemSet(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { return false; } }

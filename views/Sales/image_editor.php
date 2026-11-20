@@ -6754,7 +6754,7 @@ function duplicateSelection() {
 /* 自動標註尺寸（CAD 式）：尺寸界線固定在特徵上，使用者只能拖「有標示的那一端」（尺寸線的橘色圓點），
    上下／左右移動就是調整標註離零件多遠；箭頭、尺寸線、文字跟著走，界線自動拉長縮短 */
 function gearDimItems(o, ox, oy, color) {
-    const HL = 9, fs = 18, items = [];
+    const HL = 9, fs = Math.max(6, Math.min(120, parseFloat(o.fs) || 18)), items = [];   // 標註文字大小：每個標註各自記在 dimSpec.fs，可事後改
     const ln = (x1, y1, x2, y2, w) => new fabric.Line([ox + x1, oy + y1, ox + x2, oy + y2], { stroke: color, strokeWidth: w || 1, strokeUniform: true });
     const txt = (x, y, str, ang) => {
         const style = { fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif' };
@@ -6946,7 +6946,8 @@ window.egGearDrawItems = function (list, desc, dims) {
             ptsF.forEach(q => { mnx = Math.min(mnx, q.x); mxx = Math.max(mxx, q.x); mny = Math.min(mny, q.y); mxy = Math.max(mxy, q.y); });
             const ab = fabric.util.transformPoint(first.getCenterPoint(), g.calcTransformMatrix());
             const ox = ab.x - (mnx + mxx) / 2, oy = ab.y - (mny + mxy) / 2;
-            dims.forEach(d => { const dg = gearMakeDim(d, ox, oy, color); if (dg) canvas.add(dg); });
+            const dfsEl = document.getElementById('g-dim-fs'), dfs = dfsEl ? (parseFloat(dfsEl.value) || 18) : 18;
+            dims.forEach(d => { d.fs = dfs; const dg = gearMakeDim(d, ox, oy, color); if (dg) canvas.add(dg); });
         } catch (err) { console.warn('[EGdraw] 自動標註尺寸失敗：', err); }
     }
     canvas.setActiveObject(g);
@@ -8536,6 +8537,11 @@ document.getElementById('p-textcolor').addEventListener('input', function () {
 document.getElementById('p-fontsize').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
     const v = Math.max(6, parseInt(this.value, 10) || 28);
+    let dimN = 0;   // 齒輪圖／剖面圖的自動標註：字級記在標註規格裡，改了要重畫那個標註（直接改文字物件會在下次拖標註時被洗回預設）
+    if (obj) (obj.type === 'activeSelection' ? obj.getObjects() : [obj]).forEach(o => {
+        if (o && o.autoDim && o.dimSpec) { gearDimSyncOrigin(o); o.dimSpec.fs = v; if (gearDimRebuild(o, true)) dimN++; }
+    });
+    if (dimN) { canvas.requestRenderAll(); pushState(); return; }
     const n = eachInSelection(obj, o => {
         if (o.type === 'i-text' || o.type === 'textbox') { o.set({ fontSize: v, scaleX: 1, scaleY: 1 }); o.setCoords(); o.dirty = true; return true; }
         return false;
