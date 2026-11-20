@@ -4274,7 +4274,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         return { lut: lut, M: M, half: half, pitch: 2 * half, ra: ra, rf: rf, rp: r, tanb: Math.tan(p.beta || 0) };
     }
 
-    function g3Build(d, style) {
+    function g3Build(d, style, cap) {
         var eps = 1e-9, TAU = 2 * Math.PI;
         var model = new OV.Model();
         var line = (style === 'line');
@@ -4349,6 +4349,20 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             var t = flip ? new OV.Triangle(a, c, b) : new OV.Triangle(a, b, c);
             t.SetMaterial(mBody); t.SetCurve(cv);
             mesh.AddTriangle(t);
+            if (cap) cap.tris.push(flip ? [a, c, b, cv] : [a, b, c, cv]);
+        }
+        // 齒面分區（供線稿取線）：齒頂／齒面／齒根交界才是真正的稜線，其餘細分面之間不該有線
+        var utip = 0, u0t = 0;
+        if (tooth) {
+            var iTi = 0, iRo = tooth.M;
+            while (iTi < tooth.M && tooth.lut[iTi] >= tooth.ra - 1e-9) iTi++;
+            while (iRo > 0 && tooth.lut[iRo] <= tooth.rf + 1e-9) iRo--;
+            utip = tooth.half * iTi / tooth.M; u0t = tooth.half * iRo / tooth.M;
+        }
+        function toothReg(t, xx) {
+            var tt = t - tooth.tanb * (xx - gs.xs) / tooth.rp, u = ((tt % tooth.pitch) + tooth.pitch) % tooth.pitch;
+            if (u > tooth.half) u = tooth.pitch - u;
+            return u <= utip + 1e-9 ? 1001 : (u < u0t - 1e-9 ? 1002 : 1003);
         }
         var nTw = (gs && Math.abs(tooth.tanb) > 1e-6) ? Math.max(2, Math.min(24, Math.ceil(Math.abs(tooth.tanb * gs.L / tooth.rp) / 0.12))) : 1;
         for (i = 0; i < np; i++) {
@@ -4365,20 +4379,22 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 cuts.forEach(function (cx) { if (cx > xa + 1e-7 && cx < xb - 1e-7) ts.push((cx - A[0]) / dx); });
                 ts.sort(function (a, b) { return a - b; });
             }
-            var rows = [], innerIdx = (tag === 'f' && Math.abs(dx) < 1e-9 && A[1] > 1e-9 && B[1] > 1e-9) ? (A[1] < B[1] ? 0 : 1) : -1;
+            var rows = [], rowsX = [], innerIdx = (tag === 'f' && Math.abs(dx) < 1e-9 && A[1] > 1e-9 && B[1] > 1e-9) ? (A[1] < B[1] ? 0 : 1) : -1;
             ts.forEach(function (tt, tIdx) {
                 var xx = A[0] + dx * tt, rE = A[1] + dr * tt, row = [], rtag = (tIdx === innerIdx) ? 'fi' : tag;
                 if (rE < 1e-9) { var ap = mesh.AddVertex(new OV.Coord3D(xx, 0, 0)); for (k = 0; k < th.length; k++) row.push(ap); }
                 else for (k = 0; k < th.length; k++) { var rr = radiusAt(th[k], xx, rE, rtag); row.push(mesh.AddVertex(new OV.Coord3D(xx, rr * Math.cos(th[k]), rr * Math.sin(th[k])))); }
-                rows.push(row);
+                rows.push(row); rowsX.push(xx);
             });
             var cv = (tag === 'o' && gs && (A[0] + B[0]) / 2 >= gs.xs && (A[0] + B[0]) / 2 <= gs.xe && flat) ? 0 : (i + 1);
             for (var j = 0; j < rows.length - 1; j++) for (k = 0; k < th.length; k++) {
                 var k2 = (k + 1) % th.length;
-                var a0 = rows[j][k], a1 = rows[j + 1][k], b1 = rows[j + 1][k2], b0 = rows[j][k2];
-                tri(a0, a1, b1, cv); tri(a0, b1, b0, cv);
+                var a0 = rows[j][k], a1 = rows[j + 1][k], b1 = rows[j + 1][k2], b0 = rows[j][k2], cq = cv;
+                if (cv === 0 && tooth) { var tn = (k2 === 0) ? th[0] + TAU : th[k2]; cq = toothReg((th[k] + tn) / 2, (rowsX[j] + rowsX[j + 1]) / 2); }
+                tri(a0, a1, b1, cq); tri(a0, b1, b0, cq);
             }
         }
+        if (cap) cap.mesh = mesh;
         var im = model.AddMesh(mesh), nd = new OV.Node(); nd.AddMeshIndex(im); model.GetRootNode().AddChildNode(nd);
         // 螺孔：深色圓盤標示孔口位置。圓盤的每個點都貼在實際表面上（外圓柱／齒面／內孔壁），從孔的軸向看過去是正圓
         // 角度方向：端面圖是「從所選端面看過去，由正上方順時針量」。3D 座標 y＝上、z 由 x 軸右手定則決定，
@@ -4387,14 +4403,16 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var dm = new OV.Mesh(); if (dm.SetName) dm.SetName('螺孔');
         var mHole = line ? model.AddMaterial(g3Phong(0, 0, 0, true)) : mDark;   // 線稿：孔口只畫成黑色細環（輪廓線），中間保持白底
         function discOn(xc, t, rr, rfn, off) {   // 圓盤貼在半徑函數 rfn(角度,x) 的表面上，off＝離表面的距離（外正內負）
-            var R0 = rfn(t, xc), n = 36, ring = [], q, a;
+            var R0 = rfn(t, xc), n = 36, ring = [], q, a, capRing = [];
             var cv0 = dm.AddVertex(new OV.Coord3D(xc, (R0 + off) * Math.cos(t), (R0 + off) * Math.sin(t)));
             for (q = 0; q < n; q++) {
                 a = TAU * q / n;
                 var u = rr * Math.cos(a), sx = rr * Math.sin(a), ph = Math.asin(Math.max(-1, Math.min(1, sx / Math.max(R0, 1e-6))));
                 var RR = rfn(t + ph, xc + u) + off;
                 ring.push(dm.AddVertex(new OV.Coord3D(xc + u, RR * Math.cos(t + ph), RR * Math.sin(t + ph))));
+                capRing.push([xc + u, RR * Math.cos(t + ph), RR * Math.sin(t + ph)]);
             }
+            if (cap && off > 0) cap.rings.push(capRing);
             if (line) {   // 線稿：細環（外緣 rr、內緣 rr−0.18）
                 var ring2 = [];
                 for (q = 0; q < n; q++) {
@@ -4475,6 +4493,135 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         im.onerror = function () { cb(url); };
         im.src = url;
     }
+
+    /* ── 3D → 2D 線圖（像 Inventor 的隱藏線移除、只留實線）──
+       ①沿用 3D 預覽同一份網格 ②只取「真正的稜線」：不同曲面群組交界（倒角、階梯、齒頂／齒面／齒根）、輪廓線（正反面交界）、孔口輪廓
+       ③用同一視角的深度緩衝（z-buffer）判斷被前面擋住的線並移除 ④相連的線段接成折線，一條線一個物件 */
+    function g3Lines(d, cam) {
+        var cap = { tris: [], mesh: null, rings: [] };
+        g3Build(d, 'line', cap);
+        var mesh = cap.mesh, nV = mesh.VertexCount(), i, k;
+        function nrm(v) { var l = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+        function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+        var f = nrm([cam.center.x - cam.eye.x, cam.center.y - cam.eye.y, cam.center.z - cam.eye.z]);
+        var rt = nrm(cross(f, [cam.up.x, cam.up.y, cam.up.z])), up = cross(rt, f);
+        // 焊接重複頂點（不同輪廓段各自建頂點）
+        var wmap = {}, wpos = [], wid = new Int32Array(nV), size = 0;
+        for (i = 0; i < nV; i++) {
+            var c = mesh.GetVertex(i), key = Math.round(c.x * 4000) + ',' + Math.round(c.y * 4000) + ',' + Math.round(c.z * 4000);
+            if (wmap[key] === undefined) { wmap[key] = wpos.length; wpos.push([c.x, c.y, c.z]); }
+            wid[i] = wmap[key];
+            size = Math.max(size, Math.abs(c.x), Math.abs(c.y), Math.abs(c.z));
+        }
+        // 投影：u＝右、v＝上、z＝深度（越小越近）
+        var nW = wpos.length, pu = new Float64Array(nW), pv = new Float64Array(nW), pz = new Float64Array(nW);
+        var umin = 1e18, umax = -1e18, vmin = 1e18, vmax = -1e18;
+        for (i = 0; i < nW; i++) {
+            var p3 = wpos[i];
+            pu[i] = p3[0] * rt[0] + p3[1] * rt[1] + p3[2] * rt[2]; pv[i] = p3[0] * up[0] + p3[1] * up[1] + p3[2] * up[2]; pz[i] = p3[0] * f[0] + p3[1] * f[1] + p3[2] * f[2];
+            umin = Math.min(umin, pu[i]); umax = Math.max(umax, pu[i]); vmin = Math.min(vmin, pv[i]); vmax = Math.max(vmax, pv[i]);
+        }
+        var scl = Math.min(1500 / Math.max(umax - umin, 1e-6), 1000 / Math.max(vmax - vmin, 1e-6)), W = Math.ceil((umax - umin) * scl) + 8, H = Math.ceil((vmax - vmin) * scl) + 8;
+        function sx(u) { return (u - umin) * scl + 4; }
+        function sy(v) { return (vmax - v) * scl + 4; }
+        // 三角形（焊接後）與面法線
+        var T = cap.tris, nT = T.length, tw = new Int32Array(nT * 3), tn = new Float32Array(nT * 3), tc = new Int32Array(nT);
+        for (i = 0; i < nT; i++) {
+            var t3 = T[i], w0 = wid[t3[0]], w1 = wid[t3[1]], w2 = wid[t3[2]];
+            tw[i * 3] = w0; tw[i * 3 + 1] = w1; tw[i * 3 + 2] = w2; tc[i] = t3[3];
+            var a = wpos[w0], b = wpos[w1], cc = wpos[w2], n = nrm(cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [cc[0] - a[0], cc[1] - a[1], cc[2] - a[2]]));
+            tn[i * 3] = n[0]; tn[i * 3 + 1] = n[1]; tn[i * 3 + 2] = n[2];
+        }
+        // z-buffer
+        var zb = new Float32Array(W * H); for (i = 0; i < zb.length; i++) zb[i] = 1e30;
+        for (i = 0; i < nT; i++) {
+            var A = tw[i * 3], B = tw[i * 3 + 1], C = tw[i * 3 + 2];
+            var x0 = sx(pu[A]), y0 = sy(pv[A]), x1 = sx(pu[B]), y1 = sy(pv[B]), x2 = sx(pu[C]), y2 = sy(pv[C]);
+            var den = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2); if (Math.abs(den) < 1e-9) continue;
+            var bx0 = Math.max(0, Math.floor(Math.min(x0, x1, x2))), bx1 = Math.min(W - 1, Math.ceil(Math.max(x0, x1, x2)));
+            var by0 = Math.max(0, Math.floor(Math.min(y0, y1, y2))), by1 = Math.min(H - 1, Math.ceil(Math.max(y0, y1, y2)));
+            for (var yy = by0; yy <= by1; yy++) for (var xx = bx0; xx <= bx1; xx++) {
+                var l0 = ((y1 - y2) * (xx - x2) + (x2 - x1) * (yy - y2)) / den, l1 = ((y2 - y0) * (xx - x2) + (x0 - x2) * (yy - y2)) / den, l2 = 1 - l0 - l1;
+                if (l0 < -0.02 || l1 < -0.02 || l2 < -0.02) continue;
+                var z = l0 * pz[A] + l1 * pz[B] + l2 * pz[C];
+                if (z < zb[yy * W + xx]) zb[yy * W + xx] = z;
+            }
+        }
+        var eps = Math.max(size, 1) * 0.012;
+        function vis(x, y, z) {
+            var ix = Math.round(x), iy = Math.round(y);
+            for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {   // 鄰近像素任一個深度夠近就算看得到（線貼著表面時避免被自己遮住）
+                var px = ix + dx, py = iy + dy; if (px < 0 || py < 0 || px >= W || py >= H) continue;
+                if (z <= zb[py * W + px] + eps) return true;
+            }
+            return false;
+        }
+        // 邊 → 相鄰三角形
+        var emap = {};
+        for (i = 0; i < nT; i++) for (k = 0; k < 3; k++) {
+            var ea = tw[i * 3 + k], eb = tw[i * 3 + (k + 1) % 3], ek = ea < eb ? ea + '_' + eb : eb + '_' + ea, e = emap[ek];
+            if (!e) emap[ek] = { a: ea, b: eb, t: [i] }; else e.t.push(i);
+        }
+        var segs = [];   // 可見線段 [x1,y1,x2,y2]（螢幕像素）
+        function addSeg(a, b) {
+            var xa = sx(pu[a]), ya = sy(pv[a]), xb = sx(pu[b]), yb = sy(pv[b]), za = pz[a], zb2 = pz[b];
+            if (vis(xa, ya, za) && vis(xb, yb, zb2) && vis((xa + xb) / 2, (ya + yb) / 2, (za + zb2) / 2)) segs.push([xa, ya, xb, yb]);
+        }
+        var DEG = Math.PI / 180;
+        Object.keys(emap).forEach(function (ek) {
+            var e = emap[ek], draw = false;
+            if (e.t.length === 1) draw = true;
+            else if (e.t.length >= 2) {
+                var t1 = e.t[0], t2 = e.t[1], n1 = [tn[t1 * 3], tn[t1 * 3 + 1], tn[t1 * 3 + 2]], n2 = [tn[t2 * 3], tn[t2 * 3 + 1], tn[t2 * 3 + 2]];
+                var d1 = n1[0] * f[0] + n1[1] * f[1] + n1[2] * f[2], d2 = n2[0] * f[0] + n2[1] * f[1] + n2[2] * f[2];
+                if ((d1 < -1e-4 && d2 > 1e-4) || (d1 > 1e-4 && d2 < -1e-4)) draw = true;   // 輪廓線：一面朝向、一面背向
+                else if (tc[t1] !== tc[t2]) {
+                    var dot = Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2])), ang = Math.acos(dot);
+                    draw = ang > ((tc[t1] >= 1000 && tc[t2] >= 1000) ? 5 : 20) * DEG;   // 齒面分區交界門檻低一些，倒角圓角的小轉折不畫
+                }
+            }
+            if (draw) addSeg(e.a, e.b);
+        });
+        cap.rings.forEach(function (ring) {   // 孔口輪廓
+            var P = ring.map(function (q) { return [sx(q[0] * rt[0] + q[1] * rt[1] + q[2] * rt[2]), sy(q[0] * up[0] + q[1] * up[1] + q[2] * up[2]), q[0] * f[0] + q[1] * f[1] + q[2] * f[2]]; });
+            for (var m = 0; m < P.length; m++) {
+                var p1 = P[m], p2 = P[(m + 1) % P.length];
+                if (vis(p1[0], p1[1], p1[2]) && vis(p2[0], p2[1], p2[2])) segs.push([p1[0], p1[1], p2[0], p2[1]]);
+            }
+        });
+        // 相連線段接成折線
+        var ends = {}, used = new Uint8Array(segs.length);
+        function ky(x, y) { return Math.round(x * 2) + ',' + Math.round(y * 2); }
+        segs.forEach(function (sg, idx) { [ky(sg[0], sg[1]), ky(sg[2], sg[3])].forEach(function (kk) { (ends[kk] = ends[kk] || []).push(idx); }); });
+        var polys = [];
+        for (i = 0; i < segs.length; i++) {
+            if (used[i]) continue; used[i] = 1;
+            var chain = [[segs[i][0], segs[i][1]], [segs[i][2], segs[i][3]]];
+            for (var dir = 0; dir < 2; dir++) {
+                for (var guard = 0; guard < 100000; guard++) {
+                    var tip = dir === 0 ? chain[chain.length - 1] : chain[0], nx = null, lst = ends[ky(tip[0], tip[1])] || [];
+                    for (var q = 0; q < lst.length; q++) {
+                        var sg2 = segs[lst[q]]; if (used[lst[q]]) continue;
+                        var s0 = ky(sg2[0], sg2[1]) === ky(tip[0], tip[1]);
+                        used[lst[q]] = 1; nx = s0 ? [sg2[2], sg2[3]] : [sg2[0], sg2[1]]; break;
+                    }
+                    if (!nx) break;
+                    if (dir === 0) chain.push(nx); else chain.unshift(nx);
+                }
+            }
+            polys.push(chain);
+        }
+        var cx = W / 2, cy = H / 2;
+        return polys.map(function (ch) { return { pts: ch.map(function (q) { return { x: q[0] - cx, y: q[1] - cy }; }), closed: false, w: 2 }; });
+    }
+    window.gearDraw3DLines = function () {
+        if (!G3_LAST || !G3_VW) { alert('請先按「3D 預覽」'); return; }
+        if (typeof window.egGearDrawItems !== 'function') { alert('這個頁面不能把線圖放到畫布'); return; }
+        var cam = G3_VW.GetViewer().GetCamera(), t0 = Date.now(), items;
+        try { items = g3Lines(G3_LAST, cam); } catch (e) { console.warn('[gear3d] 線圖計算失敗', e); alert('線圖計算失敗：' + (e && e.message ? e.message : e)); return; }
+        if (!items.length) { alert('沒有算出任何線'); return; }
+        window.egGearDrawItems(items, '齒輪 3D 線圖（依目前視角，只畫實線，' + items.length + ' 條，' + (Date.now() - t0) + ' ms）', []);
+    };
     var G3_VW = null, G3_OBJ = null;
     function g3Win() {
         var w = document.getElementById('gear3d-win');
@@ -4484,7 +4631,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         w.style.cssText = 'position:fixed;left:80px;top:70px;width:780px;height:580px;z-index:10600;background:#fbf7f1;border:2px solid #8a5a2b;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35);display:none;flex-direction:column;overflow:hidden;';
         w.innerHTML = '<div id="gear3d-hdr" style="background:#8a5a2b;color:#fff;padding:6px 10px;display:flex;align-items:center;gap:8px;cursor:move;font-size:13px;"><i class="fa fa-cube"></i><b>齒輪 3D 預覽</b><span style="flex:1"></span>' +
             '<select id="gear3d-style" style="font-size:12px;border-radius:4px;border:0;padding:1px 4px;"><option value="solid">實體</option><option value="line">線稿（白底黑邊）</option></select>' +
-            '<button type="button" id="gear3d-insert" style="background:#F0A24B;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="把目前的 3D 畫面轉成圖片放到批圖畫布上">放到圖面</button>' +
+            '<button type="button" id="gear3d-lines" style="background:#F0A24B;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="依目前視角，由模型算出稜線與輪廓線、移除被擋住的線，畫成可編輯的向量線圖放到批圖畫布">放到圖面（線圖）</button>' +
+            '<button type="button" id="gear3d-insert" style="background:#F6D9AE;color:#3a2a10;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;" title="把目前的 3D 畫面轉成圖片放到批圖畫布上（舊做法）">圖片</button>' +
             '<button type="button" id="gear3d-refit" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">重設視角</button>' +
             '<button type="button" id="gear3d-close" style="background:rgba(255,255,255,.2);color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;">關閉</button></div>' +
             '<div id="gear3d-host" style="flex:1 1 auto;min-height:0;position:relative;"></div>' +
@@ -4493,6 +4641,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         document.getElementById('gear3d-close').onclick = function () { w.style.display = 'none'; };
         document.getElementById('gear3d-refit').onclick = function () { g3Fit(); };
         document.getElementById('gear3d-style').onchange = function () { g3Render(); };
+        document.getElementById('gear3d-lines').onclick = function () { window.gearDraw3DLines(); };
         document.getElementById('gear3d-insert').onclick = function () {
             if (!G3_VW) return;
             if (typeof window.egGearInsertImage !== 'function') { alert('這個頁面不能把 3D 圖片放到畫布'); return; }
