@@ -3971,7 +3971,11 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 if (b.ecl) addEdge(b.xs + b.ecl.ax, radB(b, b.xs + b.ecl.ax));
                 if (b.ecr) addEdge(b.xe - b.ecr.ax, radB(b, b.xe - b.ecr.ax));
             });
-            Object.keys(edges).forEach(function (k) { var e = edges[k]; items.push({ pts: toPx([[e[0], e[1]], [e[0], -e[1]]]), closed: false, w: 2 }); });
+            Object.keys(edges).forEach(function (k) {
+                var e = edges[k], eTop = e[1];   // 鍵槽範圍內，上半部的孔口連線只畫到鍵槽邊緣那條線，不要凸進槽裡
+                if (key && key.w / 2 < e[1] && e[0] >= key.k0 - eps && e[0] <= key.k1 + eps) eTop = Math.sqrt(e[1] * e[1] - key.w * key.w / 4);
+                items.push({ pts: toPx([[e[0], eTop], [e[0], -e[1]]]), closed: false, w: 2 });
+            });
         }
         // 中心線（一點鏈線）與齒部節圓線
         var ext = Math.max(total, 2 * maxR) * 0.06;
@@ -4275,7 +4279,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var dl = 1e-5;
         function addEdgeAng(a) { th.push(a - dl, a + dl, -a - dl, -a + dl); }
         var aBore = 0, aOut = 0;
-        if (d.key) { var rkb = (d.key.si >= 0 && d.bore[d.key.si]) ? d.bore[d.key.si].r1 : d.bore[0].r1; if (d.key.w / 2 < rkb) { aBore = Math.asin(d.key.w / 2 / rkb); addEdgeAng(aBore); } }
+        if (d.key) { var rkb = (d.key.si >= 0 && d.bore[d.key.si]) ? d.bore[d.key.si].r1 : d.bore[0].r1; if (d.key.w / 2 < rkb) { aBore = Math.asin(d.key.w / 2 / rkb); addEdgeAng(aBore); addEdgeAng(Math.atan((d.key.w / 2) / (rkb + d.key.t))); } }
         if (d.okey) { var ro = (d.outer[d.okey.si] || d.outer[0]).R1; if (d.okey.w / 2 < ro) { aOut = Math.asin(d.okey.w / 2 / ro); addEdgeAng(aOut); } }
         th = th.filter(function (a) { return a >= -Math.PI && a < Math.PI; }).sort(function (a, b) { return a - b; });
         var tu = [th[0]]; for (k = 1; k < th.length; k++) if (th[k] - tu[tu.length - 1] > 1e-9) tu.push(th[k]);
@@ -4286,6 +4290,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             var u = ((tt % tooth.pitch) + tooth.pitch) % tooth.pitch;
             if (u > tooth.half) u = tooth.pitch - u;
             return tooth.lut[Math.min(tooth.M, Math.round(u / tooth.half * tooth.M))];
+        }
+        function slotR(t, rb) {   // 鍵槽是長方形：兩側壁互相平行（往外徑方向），槽頂是平的
+            var at = Math.abs(wrap(t)), w2 = d.key.w / 2, tr = Math.atan(w2 / (rb + d.key.t));
+            return (at <= tr) ? (rb + d.key.t) / Math.cos(at) : w2 / Math.sin(at);
         }
         function wallAt(xx) {   // 鍵槽所在孔段在 xx 的孔壁半徑（不含倒角）
             var rr = 0;
@@ -4315,10 +4323,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             }
             if (tag === 'b' && d.key && xx >= d.key.k0 && xx <= d.key.k1 && aBore > 0 && Math.abs(wrap(t)) <= aBore) {
                 var wl = wallAt(xx);   // 槽頂＝孔壁＋槽深；倒角的點也一併拉到槽頂（槽會切穿倒角）
-                if (onBoreWall(xx, rE)) r += d.key.t; else if (wl > 0 && rE > wl + 1e-6 && rE - wl < 3) r = wl + d.key.t;
+                if (onBoreWall(xx, rE) || (wl > 0 && rE > wl + 1e-6 && rE - wl < 3)) r = slotR(t, wl);
             }
             if (tag === 'fi' && d.key && xx >= d.key.k0 - eps && xx <= d.key.k1 + eps && aBore > 0 && Math.abs(wrap(t)) <= aBore) {   // 貫穿到端面：端面內緣在槽寬範圍內也拉到槽頂，才是封閉的開口
-                var wl2 = wallAt(xx); if (wl2 > 0 && rE >= wl2 - 1e-6 && rE - wl2 < 3) r = wl2 + d.key.t;
+                var wl2 = wallAt(xx); if (wl2 > 0 && rE >= wl2 - 1e-6 && rE - wl2 < 3) r = slotR(t, wl2);
             }
             if (tag === 'o' && d.okey && xx >= d.okey.k1 && xx <= d.okey.k2 && aOut > 0 && Math.abs(wrap(t)) <= aOut && onOuterWall(xx, rE)) r -= d.okey.t;
             return r;
