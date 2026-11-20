@@ -623,7 +623,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                                 <label style="font-size:12px;display:flex;align-items:center;gap:3px;" title="端面圖也畫出內孔、鍵槽與螺孔"><input type="checkbox" id="g-draw-endbore" checked> 端面圖含孔／鍵槽／螺孔</label>
                                 <button class="btn-gear-calc" type="button" onclick="gearDrawSection()"><i class="fa fa-pencil"></i> 畫剖面圖</button>
                                 <select id="g-proj" class="gear-input" style="width:auto;" title="投影法：第三角法＝視圖放在觀看方向的同一側（美規、日本多用）；第一角法＝放在相反側（歐規、台灣常見）"><option value="third">第三角法</option><option value="first">第一角法</option></select>
-                                <button class="btn-gear-calc" type="button" onclick="if(window.egGearDrawViews)egGearDrawViews(document.getElementById('g-proj').value,document.getElementById('g-cut-dir').value)" title="一次畫出端面圖＋剖面圖，並依所選投影法與剖面箭頭方向排好位置（標註一起移動）"><i class="fa fa-th-large"></i> 畫成兩視圖</button>
+                                <select id="g-align" class="gear-input" style="width:auto;" title="兩個視圖的對齊方式：自動＝依投影法與剖面箭頭方向；水平對齊＝左右並排、中心軸線同一高度；垂直對齊＝上下排、中心線同一垂直線；不對齊＝不移動，自己拖"><option value="auto">對齊：自動</option><option value="h">水平對齊</option><option value="v">垂直對齊</option><option value="none">不對齊</option></select>
+                                <button class="btn-gear-calc" type="button" onclick="if(window.egGearDrawViews)egGearDrawViews(document.getElementById('g-proj').value,document.getElementById('g-cut-dir').value,document.getElementById('g-align').value)" title="一次畫出端面圖＋剖面圖，並依所選投影法與剖面箭頭方向排好位置（標註一起移動）"><i class="fa fa-th-large"></i> 畫成兩視圖</button>
                                 <button class="btn-gear-calc" type="button" onclick="gearDraw3D()" title="依目前的外形、內孔、倒角、鍵槽、螺孔、齒形（含螺旋角）產生可旋轉的 3D 模型"><i class="fa fa-cube"></i> 3D 預覽</button>
                             </div>
                         </div>
@@ -3560,7 +3561,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     // ══ 記憶設定（只存在這台電腦的瀏覽器 localStorage）══════════════════════
     // ① 預設值：⑥自動標註區與畫圖選項，使用者按「存為預設」後，每次開啟先套用
     // ② 依料號記憶：由料號開啟時，最後一次畫圖／畫剖面圖／3D 的全部數據（外形、內孔、倒角、鍵槽、螺孔…）
-    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-proj', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
+    var GMEM_DEF_IDS = ['g-dim-on', 'g-dim-fs', 'g-proj', 'g-align', 'g-dim-ch-gear', 'g-dim-ch-out', 'g-dim-ch-bore', 'g-show-obl', 'g-tol-od', 'g-tol-id', 'g-tol-len', 'g-draw-hatch', 'g-draw-hatch-gap', 'g-draw-edge', 'g-view-side', 'g-cut-dir', 'g-draw-endbore'];
     var _gearCurD = 0;
     function gmemGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
     function gmemSet(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); return true; } catch (e) { return false; } }

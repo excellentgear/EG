@@ -6912,7 +6912,7 @@ canvas.on('selection:cleared', function (e) { ((e && e.deselected) || []).forEac
 window.egGearInsertImage = function (url) { addImageFromURL(url, 0); };   // 齒輪 3D 預覽的「放到圖面」
 
 // 一次畫出端面圖＋剖面圖，依第一角法／第三角法排列（proj＝third 或 first；cutDir＝端面圖上剖面箭頭的方向，決定剖面圖是從哪一側看過去的視圖）
-window.egGearDrawViews = function (proj, cutDir) {
+window.egGearDrawViews = function (proj, cutDir, align) {
     const snap = () => canvas.getObjects().slice();
     const diff = (a, b) => b.filter(o => a.indexOf(o) < 0);
     const mainOf = set => set.find(o => !o.autoDim) || set[0];
@@ -6935,6 +6935,11 @@ window.egGearDrawViews = function (proj, cutDir) {
     else if (d === 'h-down') side = third ? 'top' : 'bottom';
     else if (d === 'h-up') side = third ? 'bottom' : 'top';
     else side = third ? 'left' : 'right';
+    // 對齊方式：auto＝依投影法與剖面箭頭方向；h＝水平並排（中心軸線同一高度）；v＝垂直上下排（中心線同一垂直線）；none＝不移動（各畫在畫面中央，自己拖）
+    const al = String(align || 'auto');
+    if (al === 'h' && (side === 'top' || side === 'bottom')) side = third ? 'left' : 'right';
+    if (al === 'v' && (side === 'left' || side === 'right')) side = third ? 'top' : 'bottom';
+    if (al === 'none') { canvas.requestRenderAll(); pushState(); toast('已畫出端面圖與剖面圖（不對齊，疊在畫面中央，請自行拖開）'); return; }
     let dx = 0, dy = 0;
     if (side === 'left') { dx = ra.x1 - gap - rb.x2; dy = ca.y - cb.y; }
     else if (side === 'right') { dx = ra.x2 + gap - rb.x1; dy = ca.y - cb.y; }
