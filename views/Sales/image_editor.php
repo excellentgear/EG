@@ -6757,7 +6757,7 @@ function gearDimItems(o, ox, oy, color) {
     const HL = 9, fs = Math.max(6, Math.min(120, parseFloat(o.fs) || 18)), items = [];   // 標註文字大小：每個標註各自記在 dimSpec.fs，可事後改
     const ln = (x1, y1, x2, y2, w) => new fabric.Line([ox + x1, oy + y1, ox + x2, oy + y2], { stroke: color, strokeWidth: w || 1, strokeUniform: true });
     const txt = (x, y, str, ang) => {
-        const style = { fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif' };
+        const style = { fontSize: fs, fill: color, backgroundColor: '#ffffff', fontFamily: 'Arial, "Microsoft JhengHei", sans-serif', fontWeight: o.bold ? 'bold' : 'normal' };
         if (TOL_INPUT_RE.test(String(str))) {   // 含「上^下」的公差：上下堆疊的小字
             let tg = null;
             try { tg = makeTolGroup(String(str), style); } catch (e) { tg = null; }
@@ -8660,7 +8660,7 @@ document.getElementById('p-bold').addEventListener('change', function () {
     const obj = canvas.getActiveObject();
     const bold = this.checked;
     const n = eachInSelection(obj, o => {
-        if (o.type === 'i-text' || o.type === 'textbox') { o.set('fontWeight', bold ? 'bold' : 'normal'); o.dirty = true; return true; }
+        if (o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') { o.set('fontWeight', bold ? 'bold' : 'normal'); o.dirty = true; let g = o.group; while (g) { g.dirty = true; if (g.autoDim && g.dimSpec) g.dimSpec.bold = bold; g = g.group; } return true; }
         return false;
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }

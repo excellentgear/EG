@@ -4575,9 +4575,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                 var t1 = e.t[0], t2 = e.t[1], n1 = [tn[t1 * 3], tn[t1 * 3 + 1], tn[t1 * 3 + 2]], n2 = [tn[t2 * 3], tn[t2 * 3 + 1], tn[t2 * 3 + 2]];
                 var d1 = n1[0] * f[0] + n1[1] * f[1] + n1[2] * f[2], d2 = n2[0] * f[0] + n2[1] * f[1] + n2[2] * f[2];
                 if ((d1 < -1e-4 && d2 > 1e-4) || (d1 > 1e-4 && d2 < -1e-4)) draw = true;   // 輪廓線：一面朝向、一面背向
-                else if (tc[t1] !== tc[t2]) {
+                else {
                     var dot = Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2])), ang = Math.acos(dot);
-                    draw = ang > ((tc[t1] >= 1000 && tc[t2] >= 1000) ? 5 : 20) * DEG;   // 齒面分區交界門檻低一些，倒角圓角的小轉折不畫
+                    if (tc[t1] !== tc[t2]) draw = ang > ((tc[t1] >= 1000 && tc[t2] >= 1000) ? 0.8 : 20) * DEG;   // 齒面分區交界（齒根與齒面近乎相切）門檻要很低，否則齒根線會不見
+                    else draw = ang > 40 * DEG;   // 同一曲面群組內的尖銳折角（內鍵槽的槽壁與孔壁、槽頂）也要畫
                 }
             }
             if (draw) addSeg(e.a, e.b);
