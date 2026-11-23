@@ -477,7 +477,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                             <button class="btn-gear-m3" style="flex-shrink:0;white-space:nowrap;" onclick="calcCustM2X()" title="由客戶跨銷徑/球徑與 M 上下限反推轉位係數 x，自動代入上方轉位係數欄並執行計算"><i class="fa fa-undo"></i> 回推轉位</button>
                         </div>
                         <div id="g-cust-x-out" style="display:none;margin-top:6px;font-size:11px;color:#4a148c;font-family:'Consolas','Courier New',monospace;">
-                            回推 x：上限 <span id="g-cust-x-up" style="font-weight:700;">—</span>　下限 <span id="g-cust-x-dn" style="font-weight:700;">—</span>　中值 <span id="g-cust-x-mid" style="font-weight:700;color:#1e7e34;">—</span>（已代入轉位係數 x）
+                            回推 x：上限 <span id="g-cust-x-up" style="font-weight:700;">—</span>　下限 <span id="g-cust-x-dn" style="font-weight:700;">—</span>　採用 <span id="g-cust-x-mid" style="font-weight:700;color:#1e7e34;">—</span>（依客戶 M 上限回推，已代入轉位係數 x）
                         </div>
                         <div id="g-cust-warn" style="display:none;margin-top:6px;padding:5px 9px;background:#fffbea;border:1px solid #f39c12;border-radius:4px;font-size:11px;color:#856404;"></div>
                     </div>
@@ -522,8 +522,10 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
                                 <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 下/上限</span>
                                 <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
                             </div>
+                            <div class="gear-out-row" id="go-row-cust-wkrange" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶 M 下/上限→對應跨齒厚 Wk 下/上限</span><span class="gear-output-val val-ok" id="go-cust-wkrange" style="font-weight:700;color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-dprange" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;" id="go-cust-rh-dprange-lbl">客戶球徑 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-dprange" style="font-weight:700;color:#6a1b9a;">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-rh-m" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-cust-rh-m" style="font-weight:700;color:#6a1b9a;">—</span></div>
-                            <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;grid-column:1/-1;"><span class="gear-out-label" id="go-cust-rh-range-lbl" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
                         </div>
                         <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
                     </div>
@@ -2097,9 +2099,8 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
         var solve = _gearInternal ? solveXfromMInt : solveXfromM;
         var x_up = (M_up !== null) ? solve(M_up, mn, z, alpha_n, beta, custDp) : null;
         var x_dn = (M_dn !== null) ? solve(M_dn, mn, z, alpha_n, beta, custDp) : null;
-        var x_mid = (x_up !== null && x_dn !== null)
-            ? solve((M_up + M_dn) / 2, mn, z, alpha_n, beta, custDp)
-            : (x_up !== null ? x_up : x_dn);
+        // 代入轉位係數 x 一律以客戶 M 上限回推（沒填上限才退用下限）
+        var x_mid = (x_up !== null) ? x_up : x_dn;
         return { M_up:M_up, M_dn:M_dn, custDp:custDp, x_up:x_up, x_dn:x_dn, x_mid:x_mid };
     }
     // 顯示「回推 x 上/下/中值」明細
@@ -2112,20 +2113,42 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
     // 隱藏客戶回推明細與右側換算列（含客戶規格建議滾齒列）
     function hideCustOutputs() {
         ['g-cust-x-out','go-row-cust-m','go-cust-m-note',
-         'go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'].forEach(function(id){
+         'go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range',
+         'go-row-cust-wkrange','go-row-cust-rh-dprange'].forEach(function(id){
             var e = document.getElementById(id); if (e) e.style.display = 'none';
         });
     }
     // 右側顯示「客戶規格 建議滾齒」：依客戶 M 上限 → 我方跨齒厚 + 預留量 → 我方球徑 M（外齒專用，邏輯同 M5/基本計算）
     //    參數 allowVal/isBoss 由基本計算的預留量查表結果帶入；k、dp 皆用我方（基本計算）值
     function showCustRecHob(cb, mn, z, alpha_n, beta, inv_alpha_t, k, ourDp, allowVal, isBoss, mtolUp, mtolDn) {
-        var ids = ['go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'];
+        var ids = ['go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range','go-row-cust-wkrange','go-row-cust-rh-dprange'];
         // 內齒無「建議滾齒（跨齒厚）」概念 → 不顯示
         if (_gearInternal) { ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.style.display='none'; }); return; }
         // 以客戶 M 上限回推的 x 為基準（無上限則退用下限）
         var xBase = (cb.x_up !== null) ? cb.x_up : cb.x_dn;
         var A = mn * Math.cos(alpha_n) * (PI * (k - 0.5) + z * inv_alpha_t);
         var B = 2 * mn * Math.sin(alpha_n);
+        // 客戶 M 下/上限 → 對應跨齒厚 Wk 下/上限（Wk = A + B·x）
+        var wkR = document.getElementById('go-row-cust-wkrange');
+        if (wkR) {
+            var wkDn = (cb.x_dn !== null) ? fmtNum(gRound(A + B * cb.x_dn, 5), 5) : '—';
+            var wkUp = (cb.x_up !== null) ? fmtNum(gRound(A + B * cb.x_up, 5), 5) : '—';
+            setOut('go-cust-wkrange', wkDn + '  ~  ' + wkUp + '（k=' + k + '）', 'val-ok');
+            var wkE = document.getElementById('go-cust-wkrange'); if (wkE) wkE.style.color = '#6a1b9a';
+            wkR.style.display = '';
+        }
+        // 客戶球徑下的建議滾齒 M 下/上限（跨銷徑/球徑 = 客戶 dp，而非我方 dp）
+        var dpR = document.getElementById('go-row-cust-rh-dprange');
+        if (dpR) {
+            if (!isBoss && allowVal > 0 && Math.abs(B) > 1e-10) {
+                var rhWk2 = gRound(A + B * xBase + 0.02 + allowVal, 5);
+                gSetText('go-cust-rh-dprange-lbl', '建議滾齒 M 下/上限（客戶球徑 dp=' + fmtNum(cb.custDp, 3) + '）');
+                setOut('go-cust-rh-dprange',
+                    wkTolToMRange(rhWk2, mn, z, alpha_n, beta, inv_alpha_t, k, cb.custDp, mtolUp, mtolDn), 'val-ok');
+                var dpE = document.getElementById('go-cust-rh-dprange'); if (dpE) dpE.style.color = '#6a1b9a';
+                dpR.style.display = '';
+            } else dpR.style.display = 'none';
+        }
         if (isBoss) {
             setOut('go-cust-rh-wk', '需詢問BOSS', 'val-boss');
             setOut('go-cust-rh-m', '需詢問BOSS', 'val-boss');
@@ -2136,6 +2159,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             var rh_Wk = gRound(Wk_custmax + 0.02 + allowVal, 5);
             var x_rh = (rh_Wk - A) / B;
             var M_rh = calcM(x_rh, mn, z, alpha_n, beta, ourDp);  // 我方球徑
+            gSetText('go-cust-rh-range-lbl', '客戶規格 建議滾齒 M 下/上限（球徑 dp=' + fmtNum(ourDp, 3) + '）');
             setOut('go-cust-rh-wk', fmtNum(rh_Wk, 5), '');
             var wkEl = document.getElementById('go-cust-rh-wk'); if (wkEl) wkEl.style.color = '#6a1b9a';
             if (typeof M_rh === 'number') {
@@ -2154,7 +2178,7 @@ window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
             setOut('go-cust-rh-m', '（待查表）', 'val-warn');
             setOut('go-cust-rh-m-range', '—');
         }
-        ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.style.display=''; });
+        ids.slice(0, 3).forEach(function(i){ var e=document.getElementById(i); if(e) e.style.display=''; });
     }
     // 右側顯示「客戶規格→我方球徑 M 上/下限」：以客戶回推 x 套用我方球徑重算 M
     function showCustMineM(cb, mn, z, alpha_n, beta, ourDp) {
