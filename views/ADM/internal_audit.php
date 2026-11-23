@@ -4973,7 +4973,7 @@ function docNcBtn(it, no, r, ro){
     var dn = (it.doc_ncs||{})[no];
     if (dn && dn.nc_id) return '<span class="ia-op" onclick="openNc('+dn.nc_id+')">'+esc(dn.nc_no||'IA單')+'</span>';
     if (r === 'ng' && !ro && CAN_AUDIT)
-        return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+',''+String(no).replace(/'/g,'')+'')"><i class="fa fa-plus"></i> 開不符合單</span>';
+        return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+',\''+String(no).replace(/'/g,'')+'\')"><i class="fa fa-plus"></i> 開不符合單</span>';
     return '';
 }
 /** 某一條目前畫面上各份文件的判定 → {marks,result,evidence,remark}（整條判定與彙總文字由此推導） */
