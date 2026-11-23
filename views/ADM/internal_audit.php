@@ -1152,8 +1152,17 @@ $roleLabel = ia_role_label($perms);
             <label>種類<span style="color:#DD5138;">*</span></label>
             <div><select id="nkKind"></select>
                  <div id="nkKindHint" style="font-size:12px;color:#8a6d45;margin-top:3px;"></div></div>
-            <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
-            <div><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
+            <label id="nkDateLab">建立（稽核）日期<span style="color:#DD5138;">*</span></label>
+            <div id="nkDateWrap"><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
+            <!-- AS稽核查檢表：8 個過程群組（COP1~SP02）全部都要稽核，每個群組各設一個稽核日期，
+                 日期只能選「稽核通知單的稽核期間」內的日子（2026-11-23 使用者要求） -->
+            <label id="nkAsAllLab">各過程群組<br>稽核日期<span style="color:#DD5138;">*</span></label>
+            <div id="nkAsAllWrap" style="display:none;">
+                <div class="ia-hint" style="margin:0 0 6px;">AS稽核查檢表<b>每個過程群組都要稽核</b>，請為每一個群組選稽核日期；
+                    <b>只能選稽核通知單「稽核期間」內的日期</b>（沒有稽核通知單就選不到，請先建立通知單）。按「建立」會一次建出全部群組的查檢表。</div>
+                <div style="margin-bottom:6px;font-size:13px;">全部設為同一天：<select id="nkAsAllDay" style="min-width:200px;"></select></div>
+                <table class="ia-table" style="width:auto;"><tbody id="nkAsAllBody"></tbody></table>
+                <div class="err-msg" id="errNkAsAll"></div></div>
             <label>稽核員（兩位）</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select>
                 <select id="nkAuditor2" data-eg-filter="輸入人員姓名篩選…" style="margin-top:4px;"></select>
                 <div class="err-msg" id="errNkAuditor2"></div></div>
@@ -1194,7 +1203,7 @@ $roleLabel = ia_role_label($perms);
                  <span style="font-size:12px;color:#8a6d45;">　紙本表頭上的欄位，系統裡沒有來源可推，選填。</span></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
-        <div style="margin-top:10px;" class="nk-split">
+        <div style="margin-top:10px;" class="nk-split" id="nkSplit">
             <!-- 左欄：作業項目標籤（只有 AS 查檢表有）。條文原文看不出實務上在查什麼，
                  點一下就只勾該用途的條文。項目設在 AS 文件管理 → ⚙ 作業項目，條文題庫逐條挑對應。
                  2026-09-14 起依 AS 文件編號的部門代碼分類，並移到左側分割欄（原本平鋪在上方看不完）。 -->
@@ -3851,8 +3860,60 @@ function nkKindChanged(){
     }
     $('#nkYearShow').val(isKpi ? (kpiAuditYear($('#nkDate').val())+' 年度（去年整年）') : '');
     if (isAs) loadSrcChecks();
+    // AS稽核查檢表改成「8 個群組各設一個稽核日期」，不再逐項挑條文，也不用單一建立日期
+    $('#nkDateLab,#nkDateWrap').toggle(!isAs);
+    $('#nkAsAllLab,#nkAsAllWrap').toggle(isAs);
+    $('#nkSplit').toggle(!isAs);
+    $('#nkSrcLab,#nkSrcWrap').toggle(false);
+    if (isAs) nkAsRender();
     loadBank();
 }
+var NK_AS_DAYS = [];
+/** 可選日期＝本年度各稽核通知單「稽核期間」內的每一天；value＝件號id|日期 */
+function nkAsDayOpts(sel){
+    var h = '<option value="">（請選擇稽核日期）</option>';
+    NK_AS_DAYS.forEach(function(d){
+        h += '<option value="'+d.v+'"'+(String(sel)===d.v?' selected':'')+'>'+esc(dispDate(d.date)+'　'+d.label)+'</option>';
+    });
+    return h;
+}
+function nkAsRender(){
+    $('#nkAsAllBody').html('<tr><td class="ia-empty">載入中…</td></tr>');
+    var dfd = $.Deferred();
+    loadPgroups(function(){ dfd.resolve(); });
+    $.getJSON(API, {action:'case_list', year:YEAR}, function(res){
+        CASES = (res && res.rows) || CASES || [];
+        dfd.done(function(){
+            NK_AS_DAYS = [];
+            CASES.forEach(function(c){
+                nkCaseDays(c).forEach(function(day){
+                    NK_AS_DAYS.push({v:c.case_id+'|'+day, date:day, label:'件號 '+(c.case_no||c.case_id)});
+                });
+            });
+            NK_AS_DAYS.sort(function(a,b){ return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+            var h = '';
+            if (!NK_AS_DAYS.length) {
+                h = '<tr><td class="ia-empty" style="color:#C4442D;">'+YEAR+' 年度還沒有稽核通知單（或通知單沒填稽核期間），請先到「稽核通知單」建立。</td></tr>';
+            } else {
+                (PGROUPS||[]).forEach(function(g){
+                    h += '<tr data-code="'+esc(g.group_code)+'"><td style="padding:3px 8px;white-space:nowrap;"><b>'+esc(g.group_code)+'</b>　'+esc(g.group_name)+'</td>'
+                       + '<td style="padding:3px 8px;"><select class="nkAsDay" style="min-width:230px;">'+nkAsDayOpts('')+'</select></td></tr>';
+                });
+            }
+            $('#nkAsAllBody').html(h);
+            $('#nkAsAllDay').html(nkAsDayOpts(''));
+        });
+    });
+}
+$(document).on('change', '#nkAsAllDay', function(){
+    var v = $(this).val(); if (!v) return;
+    $('#nkAsAllBody .nkAsDay').val(v).first().trigger('change');
+});
+$(document).on('change', '.nkAsDay', function(){
+    // 稽核員下拉要依稽核日期當時的在職狀態重抓：取各群組日期中最早的一天
+    var ds = $('#nkAsAllBody .nkAsDay').map(function(){ return String($(this).val()||'').split('|')[1] || ''; }).get().filter(Boolean).sort();
+    if (ds.length) $('#nkDate').val(ds[0]).trigger('change');
+});
 $('#nkKind').on('change', nkKindChanged);
 $('#nkDate').on('change', function(){
     if ($('#nkKind').val()==='kpi') nkKindChanged();      // 稽核年度＝建立日期的前一年，日期一改要跟著換題庫
@@ -4613,6 +4674,7 @@ $('#nkNone').on('click', function(){
 });
 $('#btnCheckCreate').on('click', function(){
     clearErrs($('#checkNewMask'));
+    if ($('#nkKind').val() === 'as') { nkAsCreateAll(); return; }
     var kind = $('#nkKind').val(), ok = true;
     ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填建立（稽核）日期') && ok;
     // 篩選中被藏起來的項目仍然算數（否則使用者打了關鍵字就只會建出看得到的那幾題）
@@ -4678,6 +4740,40 @@ $('#btnCheckCreate').on('click', function(){
         loadChecks(); openCheck(res.check_id);
     }, 'json');
 });
+
+/* AS稽核查檢表：8 個過程群組全部都要建，每個群組各一個稽核日期（日期限稽核通知單的稽核期間內） */
+function nkAsCreateAll(){
+    $('#errNkAsAll,#errNkAuditor2').removeClass('on').text('');
+    var rows = $('#nkAsAllBody tr[data-code]').map(function(){
+        var v = String($(this).find('.nkAsDay').val()||'').split('|');
+        return {code:$(this).data('code'), case_id:v[0]||'', date:v[1]||''};
+    }).get();
+    if (!rows.length) { $('#errNkAsAll').addClass('on').text('沒有可選的稽核日期，請先建立稽核通知單'); return; }
+    var miss = rows.filter(function(r){ return !r.date; }).map(function(r){ return r.code; });
+    if (miss.length) { $('#errNkAsAll').addClass('on').text('以下群組還沒選稽核日期（全部都要稽核）：' + miss.join('、')); return; }
+    if (rows.some(function(r){ return r.date >= '2026-01-01'; })) {
+        if (!$('#nkAuditor').val() || !$('#nkAuditor2').val()) { $('#errNkAuditor2').addClass('on').text('每張查檢表至少要有兩位稽核員，請選兩位'); return; }
+        if (String($('#nkAuditor').val()).split(':')[0] === String($('#nkAuditor2').val()).split(':')[0]) { $('#errNkAuditor2').addClass('on').text('兩位稽核員不可以是同一個人'); return; }
+    }
+    var made = 0, fails = [], first = 0;
+    $('#btnCheckCreate').prop('disabled', true);
+    (function next(i){
+        if (i >= rows.length) {
+            $('#btnCheckCreate').prop('disabled', false);
+            closeMask('checkNewMask'); loadChecks();
+            iaToast('已建立 '+made+' 張過程群組 AS稽核查檢表'+(fails.length?('；失敗：'+fails.join('、')):''), 6500);
+            return;
+        }
+        var r = rows[i], g = (PGROUPS||[]).filter(function(x){ return x.group_code === r.code; })[0] || {};
+        $.post(API, {action:'check_create', kind:'as', check_date:r.date, auditor_key:$('#nkAuditor').val(),
+            auditor2_key:($('#nkAuditor2').val()||''), case_id:r.case_id,
+            title:r.code+' '+(g.group_name||''), src_check_ids:'[]', group_code:r.code, pick:'[]'}, function(res){
+            if (res && res.ok) { made++; if (!first) first = res.check_id; }
+            else fails.push(r.code+'（'+((res&&res.error)||'失敗')+'）');
+            next(i+1);
+        }, 'json').fail(function(){ fails.push(r.code); next(i+1); });
+    })(0);
+}
 
 /* ---- 查檢表填寫 ---- */
 var CHK = null;

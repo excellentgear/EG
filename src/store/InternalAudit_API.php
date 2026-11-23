@@ -1126,6 +1126,16 @@ case 'check_create': {
         $q->execute([$caseId]);
         if (!$q->fetchColumn()) jerr('稽核案件不存在');
     }
+    /* AS稽核查檢表的稽核日期只能落在某張稽核通知單的「稽核期間」內（2026-11-23 使用者要求；
+       前端只列期間內的日子，這裡同規則再擋一次＝鐵律8）。沒指定件號時自動歸到涵蓋該日的那一張。 */
+    if ($kind === 'as') {
+        $qs = $db->prepare("SELECT case_id FROM ia_case WHERE COALESCE(is_deleted,0)=0 AND audit_from IS NOT NULL
+                               AND audit_from<=? AND COALESCE(audit_to,audit_from)>=?" . ($caseId ? " AND case_id=?" : "") . " ORDER BY case_id LIMIT 1");
+        $qs->execute($caseId ? [$cd, $cd, $caseId] : [$cd, $cd]);
+        $hit = (int)$qs->fetchColumn();
+        if (!$hit) jerr('AS稽核查檢表的稽核日期必須落在稽核通知單的「稽核期間」內，' . $cd . ' 沒有對應的稽核通知單');
+        if (!$caseId) $caseId = $hit;
+    }
     // 流程順序（2026 年起）：事前會議完成後才能建立查檢表
     if (($gt = ia_flow_gate($db, $caseId ? (int)$db->query("SELECT year FROM ia_case WHERE case_id=" . (int)$caseId)->fetchColumn() : $year, 'check')) !== '') jerr($gt);
     // 注意：ia_check_build_items() 把「空的 pick」當成不篩選＝整份題庫全帶。
