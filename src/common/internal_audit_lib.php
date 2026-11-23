@@ -3335,6 +3335,14 @@ function ia_year_checklist(PDO $db, int $year): array
        直接比碼位就是正確順序，不必再另外維護一份排序表（三種查檢表的來源是
        IA_CHECK_KINDS，它的登記順序不等於流程順序，靠插入順序排會變成 ⑥⑤④）。
        PHP 8 的 usort 是穩定排序，所以同一個階段的兩列仍維持加入的先後。 */
+    // 流程順序鎖定（2026 年起）：還沒輪到的步驟標 blocked，畫面顯示「尚未開放」
+    $gateOf = ['meet_pre' => 'meet_pre', 'check_kpi' => 'check', 'check_system' => 'check', 'check_as' => 'check',
+               'check_type' => 'check', 'nc' => 'nc', 'car' => 'nc', 'meet_end' => 'meet_end', 'report' => 'report'];
+    foreach ($rows as &$gr) {
+        $gk = $gateOf[$gr['key'] ?? ''] ?? '';
+        $gr['blocked'] = $gk !== '' ? ia_flow_gate($db, $year, $gk) : '';
+    }
+    unset($gr);
     usort($rows, function ($a, $b) {
         $k = function ($x) { $c = mb_substr((string)$x['stage'], 0, 1, 'UTF-8'); return mb_ord($c, 'UTF-8') ?: 0; };
         return $k($a) <=> $k($b);
@@ -5530,4 +5538,55 @@ function ia_case_auditor_shortage(PDO $db, int $caseId): string
         $n = count(array_unique($ids));
     } catch (Throwable $e) { return ''; }
     return $n >= 2 ? '' : '稽核員至少要有兩位（陪檢員不算；稽核組長也是稽核員），目前只有 ' . $n . ' 位。';
+}
+
+/* ======================================================================
+ * 2026-11-23 老師建議：流程順序鎖定（2026 年起）
+ *   ②稽核通知單先開立（完成）→ ③事前會議完成 → ④⑤⑥查檢表一起進行 →
+ *   查檢表全部完成後才開 ⑦不符合通知單、⑨結束會議 → ⑩稽核報告表要等⑨完成。
+ * 唯一判定在這裡：總覽畫面標「尚未開放」、建立查檢表／開立 IA 單／建會議／送出報告表的 API 同規則再擋（鐵律8）。
+ * 2025 年以前的舊資料一律不套用（補歷史紙本不能被順序卡住）。
+ * @param string $step meet_pre|check|nc|meet_end|report
+ * @return string 空字串＝可以進行；否則是擋下的原因
+ * ====================================================================== */
+function ia_flow_gate(PDO $db, int $year, string $step): string
+{
+    if ($year < IA_ROUND_START_YEAR) return '';
+    $cases = []; $checks = [];
+    try {
+        $q = $db->prepare("SELECT * FROM ia_case WHERE year=? AND COALESCE(is_deleted,0)=0");
+        $q->execute([$year]); $cases = $q->fetchAll(PDO::FETCH_ASSOC);
+        $q = $db->prepare("SELECT status FROM ia_check WHERE year=? AND COALESCE(is_deleted,0)=0");
+        $q->execute([$year]); $checks = $q->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) { return ''; }
+    $meetDone = function (string $col) use ($db, $cases): bool {
+        foreach ($cases as $c) {
+            $mid = (int)($c[$col] ?? 0);
+            if (!$mid) continue;
+            try {
+                $q = $db->prepare("SELECT status FROM meeting_record WHERE meeting_id=?");
+                $q->execute([$mid]);
+                if ((string)$q->fetchColumn() === 'done') return true;
+            } catch (Throwable $e) {}
+        }
+        return false;
+    };
+    $caseOk = false;
+    foreach ($cases as $c) if (ia_case_is_done($c)) { $caseOk = true; break; }
+    $checksOk = $checks && !array_filter($checks, function ($s) { return (string)$s !== 'done'; });
+
+    switch ($step) {
+        case 'meet_pre':
+            return $caseOk ? '' : '要先開立（完成）②稽核通知單，才能進行事前會議。';
+        case 'check':
+            if (!$caseOk) return '要先開立（完成）②稽核通知單。';
+            return $meetDone('pre_meeting_id') ? '' : '③事前會議還沒完成，查檢表要等事前會議結束後才能開始。';
+        case 'nc':
+        case 'meet_end':
+            if (!$checks) return '還沒有任何查檢表（④⑤⑥），要先完成查檢表。';
+            return $checksOk ? '' : '查檢表（④⑤⑥）還有草稿尚未完成，全部檢查完才能進行下一步。';
+        case 'report':
+            return $meetDone('end_meeting_id') ? '' : '⑨結束會議還沒完成，稽核報告表要等結束會議之後才能送出。';
+    }
+    return '';
 }

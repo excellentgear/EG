@@ -2278,13 +2278,16 @@ function loadChecklist(){
                 miss += '</ul>';
             }
             var note = r.note ? '<div class="ck-note">'+esc(r.note)+'</div>' : '';
+            // 流程順序鎖定（2026 年起）：還沒輪到的步驟標「尚未開放」並說明要先完成什麼
+            var locked = !!(r.blocked && r.state === 'todo');
+            if (locked) { note = '<div class="ck-note" style="color:#C4442D;"><i class="fa fa-lock"></i> 尚未開放：'+esc(r.blocked)+'</div>'; r.label = ''; miss = ''; }
             var go = r.pane ? '<span class="ia-op ck-go" data-pane="'+esc(r.pane)+'"><i class="fa fa-arrow-right"></i> 開啟</span>' : '';
             b += '<tr class="ck-row-'+esc(r.state)+'">'
                + '<td>'+esc(r.stage||'')+'</td>'
                + '<td class="ck-no">'+esc(r.doc_no||'')+'</td>'
                + '<td>'+esc(r.doc_name||'')+'</td>'
                + '<td>'+esc(cnt)+'</td>'
-               + '<td><span class="ck-st ck-'+esc(r.state)+'">'+esc(CK_LABEL[r.state]||r.state)+'</span></td>'
+               + '<td><span class="ck-st ck-'+esc(r.state)+'">'+esc(locked ? '尚未開放' : (CK_LABEL[r.state]||r.state))+'</span></td>'
                + '<td class="l ck-cur"><div class="ck-label">'+esc(r.label||'')+'</div>'+note+miss+'</td>'
                + '<td>'+go+'</td></tr>';
         });

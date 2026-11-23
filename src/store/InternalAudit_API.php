@@ -1067,6 +1067,7 @@ case 'type_sample_create': {
     $picks = is_array($picks) ? $picks : [];
     if (!$picks) jerr('請先抽樣，並至少保留一筆要建立的料號');
     if (count($picks) > 50) jerr('一次最多建立 50 張');
+    if (($gt = ia_flow_gate($db, (int)substr($cd, 0, 4), 'check')) !== '') jerr($gt);
     $caseId = iaInt($_POST['case_id'] ?? '');
     if ($caseId) {
         $q = $db->prepare("SELECT 1 FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
@@ -1125,6 +1126,8 @@ case 'check_create': {
         $q->execute([$caseId]);
         if (!$q->fetchColumn()) jerr('稽核案件不存在');
     }
+    // 流程順序（2026 年起）：事前會議完成後才能建立查檢表
+    if (($gt = ia_flow_gate($db, $caseId ? (int)$db->query("SELECT year FROM ia_case WHERE case_id=" . (int)$caseId)->fetchColumn() : $year, 'check')) !== '') jerr($gt);
     // 注意：ia_check_build_items() 把「空的 pick」當成不篩選＝整份題庫全帶。
     // 所以空陣列一定要在這裡先擋掉，否則直打 API 送 pick=[] 會安靜地建出一張 71 題的全表（前端擋得住、後端也要擋＝鐵律8）。
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
@@ -1975,6 +1978,8 @@ case 'nc_create': {
     /* 稽核日期一律寫「本次稽核最後一天」（2026-11-23 老師建議，2026 年起；開立時自動帶入）。
        前端會先帶好，這裡是後端同規則再蓋一次（鐵律8），所以直打 API 也一樣。 */
     if ($caseId && ($rl = ia_case_round_last($db, $caseId)) !== '') $ad = $rl;
+    // 流程順序（2026 年起）：查檢表全部完成後才能開立不符合通知單
+    if (($gt = ia_flow_gate($db, (int)substr($ad, 0, 4), 'nc')) !== '') jerr($gt);
 
     $db->beginTransaction();
     try {
@@ -2514,6 +2519,7 @@ case 'report_submit': {
     iaReqAdmin($perms);
     $year = (int)($_POST['year'] ?? 0);
     $d = iaDate($_POST['biz_date'] ?? '') ?: $today;
+    if (($gt = ia_flow_gate($db, $year, 'report')) !== '') jerr($gt);
     /* AS稽核查檢表還沒建立就不給送出（2026-09-21 使用者要求）：
        稽核報告表是整個年度稽核的結案文件，AS 查檢表都還沒做就送出，報告表是空的。 */
     $asCnt = 0;
@@ -2590,6 +2596,7 @@ case 'meeting_create': {
     $st->execute([$cid]); $c = $st->fetch(PDO::FETCH_ASSOC);
     if (!$c) jerr('找不到這張稽核通知單', 404);
     $col = $kind === 'pre' ? 'pre_meeting_id' : 'end_meeting_id';
+    if (($gt = ia_flow_gate($db, (int)$c['year'], $kind === 'pre' ? 'meet_pre' : 'meet_end')) !== '') jerr($gt);
     if ((int)($c[$col] ?? 0)) {
         // 已建過就直接回傳既有的，不重複建立（點開即刷新鐵則：同一顆按鈕按兩次不該長出兩筆會議）
         $q = $db->prepare("SELECT meeting_id FROM meeting_record WHERE meeting_id=?");
