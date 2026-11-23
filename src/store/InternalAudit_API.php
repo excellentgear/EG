@@ -1135,7 +1135,10 @@ case 'check_create': {
     /* AS稽核查檢表依「過程群組」（COP1~SP02）的流程步驟建立（2026-11-23 老師建議）；
        沒有指定群組時維持舊的依條文勾選（舊資料與舊呼叫端相容）。 */
     $groupCode = ($kind === 'as') ? trim((string)($_POST['group_code'] ?? '')) : '';
-    if (!$groupCode && !$pick) jerr('請至少勾選一個要查核的項目');
+    // 產品型態稽核表一次建多個料號時，不逐項挑、整張管制表的項目全帶（空 pick＝不篩選）
+    $allItems = ($kind === 'type' && !empty($_POST['all_items']));
+    if ($allItems) $pick = [];
+    if (!$groupCode && !$pick && !$allItems) jerr('請至少勾選一個要查核的項目');
     /* 產品型態稽核表一定要指定「對哪一張型態識別文件管制表稽核」——沒有它就沒有題目，
        也印不出表頭的客戶與產品編號。前端擋一次、這裡同規則再擋一次（鐵律8）。 */
     $srcDocId = iaInt($_POST['src_doc_id'] ?? '');

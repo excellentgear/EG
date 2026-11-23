@@ -1190,6 +1190,9 @@ $roleLabel = ia_role_label($perms);
             <div id="nkTypeDocWrap">
                  <select id="nkTypeDoc" data-eg-filter="輸入料號／客戶／管制表編號篩選…" style="min-width:420px;"></select>
                  <div id="nkTypeDocInfo" class="ia-hint" style="display:none;margin-top:4px;"></div>
+                 <div style="margin-top:6px;font-size:12px;color:#8a6d45;"><b>一起建立其他料號</b>（可複選，一個料號一張查檢表；這些料號的項目一律全部帶入）</div>
+                 <select id="nkTypeMore" multiple size="6" style="min-width:420px;"></select>
+                 <div class="ia-hint" style="margin-top:2px;">按住 Ctrl（或 Shift）可多選；上面那一張用右邊清單挑項目，這裡選的料號全部項目都會帶入。</div>
                  <div class="err-msg" id="errNkTypeDoc"></div></div>
             <label id="nkOrderNoLab">訂單號碼</label>
             <div id="nkOrderNoWrap"><input type="text" id="nkOrderNo" style="width:220px;" data-eg-hint="例 P1150812003">
@@ -3793,7 +3796,8 @@ function delCheck(id){
 var BANK = [];
 $('#btnCheckNew').on('click', function(){
     var kh = '';
-    $.each(META.check_kinds||{}, function(k,v){ kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
+    // 系統稽核紀錄表暫時不開放新增（2026-11-23 使用者要求隱藏；既有資料照常可看、可列印）
+    $.each(META.check_kinds||{}, function(k,v){ if (k==='system') return; kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
     $('#nkKind').html(kh);
     // 清單上已經篩了種類就沿用（使用者多半是在那個種類的清單上按下「建立查檢表」）
     if ($('#checkKind').val()) $('#nkKind').val($('#checkKind').val());
@@ -3836,6 +3840,8 @@ function nkKindChanged(){
     $('#nkSrcLab').toggle(isAs);   $('#nkSrcWrap').toggle(isAs);
     // 產品型態稽核表專屬的兩個欄位（同樣不可以用 label 的 closest('div')，那是整個 .ia-form）
     $('#nkTypeDocLab').toggle(isType); $('#nkTypeDocWrap').toggle(isType);
+    if (isType && !$('#nkTitle').val()) $('#nkTitle').val('產品型態稽核表 查核');
+    else if (!isType && $('#nkTitle').val()==='產品型態稽核表 查核') $('#nkTitle').val('');
     $('#nkOrderNoLab').toggle(isType); $('#nkOrderNoWrap').toggle(isType);
     /* AS 查檢表不再顯示「所屬件號」下拉（2026-09-22 使用者要求）：
        下面的「自動判定來源」已經是逐張多選的系統稽核紀錄表，件號由它推導就好，
@@ -4070,6 +4076,13 @@ function fillTypeDocs(docs, cur){
                  + '　' + (d.doc_no||'') + '　（' + d.item_cnt + ' 項）') + '</option>';
     });
     $('#nkTypeDoc').html(h);
+    var keepMore = ($('#nkTypeMore').val() || []).map(String), hm = '';
+    (docs||[]).forEach(function(d){
+        hm += '<option value="'+d.id+'"'+(keepMore.indexOf(String(d.id))>=0?' selected':'')+'>'
+            + esc((d.part_no||'（無料號）') + '　' + (d.customer_name||'—')
+                  + '　' + (d.doc_no||'') + '　（' + d.item_cnt + ' 項）') + '</option>';
+    });
+    $('#nkTypeMore').html(hm);
     if (cur) {
         $('#nkTypeDocInfo').html('產品編號 <b>'+esc(cur.part_no||'—')+'</b>　客戶 <b>'+esc(cur.customer_name||'—')
             + '</b>　管制表編號 <b>'+esc(cur.doc_no||'—')+'</b>'
@@ -4609,10 +4622,16 @@ $('#btnCheckCreate').on('click', function(){
     ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填建立（稽核）日期') && ok;
     // 篩選中被藏起來的項目仍然算數（否則使用者打了關鍵字就只會建出看得到的那幾題）
     if (kind==='type') {
+        var more0 = ($('#nkTypeMore').val() || []);
         ok = fieldErr($('#nkTypeDoc'), 'errNkTypeDoc',
-                      $('#nkTypeDoc').val() ? '' : '請選擇要稽核的型態識別文件管制表') && ok;
+                      ($('#nkTypeDoc').val() || more0.length) ? '' : '請選擇要稽核的型態識別文件管制表') && ok;
     }
     var p = nkPicked(), picked = p.ids, real = p.real;
+    /* 產品型態稽核表可一次多個料號：沒有選主要那一張、只勾「一起建立」時，全部走「全項目帶入」 */
+    var typeMain = (kind==='type') ? ($('#nkTypeDoc').val() || '') : '';
+    var typeExtra = (kind==='type') ? ($('#nkTypeMore').val() || []).filter(function(v){ return String(v) !== String(typeMain); }) : [];
+    if (kind==='type' && !typeMain && typeExtra.length) { typeMain = typeExtra.shift(); real = 1; picked = []; }
+    var typeAll = (kind==='type' && !$('#nkTypeDoc').val());
     var grp = (kind === 'as') ? (NK_GROUP || '') : '';
     $('#errNkAuditor2').removeClass('on').text('');
     if (kind !== 'type' && $('#nkDate').val() >= '2026-01-01') {
@@ -4622,6 +4641,7 @@ $('#btnCheckCreate').on('click', function(){
     if (kind === 'as' && !grp) { $('#errNkPick').addClass('on').text('請先選擇過程群組（COP1～SP02），AS稽核查檢表依群組的流程步驟建立'); ok = false; }
     else if (!real && !grp) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
+    var firstOnly = typeAll ? '1' : '';       // 沒選主要那張＝第一個也全項目帶入
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
         auditor_key:$('#nkAuditor').val(), auditor2_key:($('#nkAuditor2').val()||''),
         // AS 是由勾選的系統稽核紀錄表推導所屬件號（畫面上沒有那個下拉）
@@ -4629,12 +4649,31 @@ $('#btnCheckCreate').on('click', function(){
         src_check_ids:(kind==='as'
             ? JSON.stringify($('#nkSrcList .nkSrcChk:checked').map(function(){ return +this.value; }).get())
             : '[]'),
-        src_doc_id:(kind==='type' ? ($('#nkTypeDoc').val()||'') : ''),
+        src_doc_id:(kind==='type' ? (typeMain||'') : ''),
         order_no:(kind==='type' ? $('#nkOrderNo').val() : ''),
-        group_code:grp,
+        group_code:grp, all_items:firstOnly,
         pick:JSON.stringify(picked)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
+        if (typeExtra.length) {
+            // 其餘料號：一個料號一張，各自全項目帶入；逐張建立，失敗的收集起來一起回報
+            var fails = [], made = 1, idx = 0;
+            (function next(){
+                if (idx >= typeExtra.length) {
+                    iaToast('已建立 '+made+' 張產品型態稽核表'+(fails.length?('；失敗：'+fails.join('、')):''), 6500);
+                    loadChecks(); openCheck(res.check_id); return;
+                }
+                var did = typeExtra[idx++];
+                $.post(API, {action:'check_create', kind:'type', check_date:$('#nkDate').val(),
+                    auditor_key:$('#nkAuditor').val(), auditor2_key:($('#nkAuditor2').val()||''),
+                    case_id:$('#nkCase').val(), title:$('#nkTitle').val(), src_doc_id:did,
+                    order_no:'', all_items:'1', pick:'[]'}, function(r2){
+                    if (r2 && r2.ok) made++; else fails.push('#'+did+(r2&&r2.error?'（'+r2.error+'）':''));
+                    next();
+                }, 'json').fail(function(){ fails.push('#'+did); next(); });
+            })();
+            return;
+        }
         if (res.applied) {
             /* 2026-09-22：AS稽核查檢表的內容改成一律唯讀，「請自行填寫」這句已經不成立
                （人工填不了），未判定就是留白、不影響結案。 */
@@ -7129,7 +7168,14 @@ function printCheck(id){
                   : '')
                + '稽核員: <span class="stamp-inline">'
                + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date)
-               + '</span></div></div></td></tr>';
+               + '</span>'
+               // 第二位稽核員也要蓋章（2026-11-23 使用者要求）
+               + (k.auditor2_id
+                  ? '　<span class="stamp-inline">'
+                    + stampHtml(m, sp(k.auditor2_id, k.auditor2_name, k.check_date), k.check_date)
+                    + '</span>'
+                  : '')
+               + '</div></div></td></tr>';
             h += '</tbody></table>';
             // 2026-08-27 使用者要求：右側已經印了稽核日期，標題就不要重複出現日期
             // （標題常被存成「系統稽核紀錄表 2024-12-16」，這裡把結尾的日期去掉）
@@ -7159,7 +7205,7 @@ function printCheck(id){
                       + 'table.ia-p .sig-note{font-size:11px;line-height:1.6;white-space:pre-wrap;text-align:left;}'
                       + 'table.ia-p .sig-who{white-space:nowrap;font-size:12px;}';
             iaPrintWindow(ckTitle, h, ckCss, m.doc_no, land, {topMm:8, fitTable:true});
-        }, [{id:k.auditor_id, date:k.check_date}]);
+        }, [{id:k.auditor_id, date:k.check_date}, {id:k.auditor2_id, date:k.check_date}]);
     });
 }
 $('#btnCheckPrint').on('click', function(){ if (CHK) printCheck(CHK.check_id); });
