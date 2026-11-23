@@ -1053,6 +1053,7 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span>
 <?php if ($perms['canAdmin']): ?>
             <button id="btnCaseTplSet" style="margin-left:10px;height:24px;font-size:12px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;"><i class="fa fa-object-group"></i> 帶入範本組合</button>
+            <button id="btnCaseGroups" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;" title="COP1~SP02 八大過程群組：每個群組選稽核日期，受稽單位自動帶入並標示稽核順序"><i class="fa fa-sitemap"></i> 依過程群組（COP1～SP02）分配日期</button>
 <?php endif; ?>
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
@@ -1806,6 +1807,21 @@ $roleLabel = ia_role_label($perms);
         </div>
     </div>
     <div class="ia-mfoot"><button data-close>取消</button><button id="btnTplSetSave" class="btn-warm">儲存</button></div>
+</div></div>
+
+<!-- ============================ 通知單：依過程群組分配日期 ============================ -->
+<div class="ia-mask" id="grpAssignMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-sitemap"></i> 依過程群組分配稽核日期</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">八大過程群組<b>全部都要稽核</b>，請為每個群組選稽核日期（<b>只能選上面「稽核期間」內的日子</b>）。
+        按「帶入」後，通知單的<b>受稽單位會依群組的流程文件自動帶出</b>（依 AS 文件編號的部門代碼），
+        「稽核起始主過程」會標示<b>第幾順位</b>，之後仍可逐列調整稽核員、陪檢員與時間。</div>
+        <div style="margin-bottom:6px;font-size:13px;">全部設為同一天：<select id="grpAllDay" style="min-width:160px;"></select></div>
+        <table class="ia-table" style="width:100%;"><thead><tr><th style="width:70px;">順位</th><th>過程群組</th><th>受稽單位（自動）</th><th style="width:160px;">稽核日期</th></tr></thead>
+        <tbody id="grpAssignBody"></tbody></table>
+        <div class="err-msg" id="errGrpAssign"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnGrpAssignOk" class="btn-warm">帶入通知單</button></div>
 </div></div>
 
 <!-- ============================ 通知單：挑範本組合帶入 ============================ -->
@@ -8234,6 +8250,71 @@ $('#btnCaseTplSet').on('click', function(){
     $('#tplSetPickBody').html(h);
     openMask('tplSetPickMask');
 });
+/* ---- 依過程群組（COP1~SP02）分配稽核日期，受稽單位自動帶入（2026-11-23 使用者要求） ---- */
+var GRP_UNITS = [];
+function grpDays(){
+    var f = $('#cFrom').val(), t = $('#cTo').val() || f, days = [];
+    if (!f) return days;
+    var cur = new Date(f + 'T00:00:00'), end = new Date(t + 'T00:00:00'), n = 0;
+    while (cur <= end && n < 31) {
+        days.push(cur.getFullYear()+'-'+('0'+(cur.getMonth()+1)).slice(-2)+'-'+('0'+cur.getDate()).slice(-2));
+        cur.setDate(cur.getDate()+1); n++;
+    }
+    return days;
+}
+function grpDayOpts(sel){
+    var h = '<option value="">（請選擇）</option>';
+    grpDays().forEach(function(d){ h += '<option value="'+d+'"'+(sel===d?' selected':'')+'>'+esc(dispDate(d))+'</option>'; });
+    return h;
+}
+$('#btnCaseGroups').on('click', function(){
+    if (!$('#cFrom').val()) { alert('請先填上面的「稽核期間」起日，日期只能選期間內的日子'); return; }
+    $.getJSON(API, {action:'pgroup_units'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        GRP_UNITS = res.groups || [];
+        var h = '';
+        GRP_UNITS.forEach(function(g){
+            h += '<tr data-code="'+esc(g.group_code)+'"><td><b>第 '+g.order+' 順位</b></td>'
+               + '<td class="l"><b>'+esc(g.group_code)+'</b>　'+esc(g.group_name)+'</td>'
+               + '<td class="l" style="font-size:12px;">'+(g.units.length ? g.units.map(function(u){ return esc(u.dept_name); }).join('、')
+                    : '<span style="color:#C4442D;">（流程文件沒有對應到部門，帶入後請自行選受稽單位）</span>')+'</td>'
+               + '<td><select class="grpDay" style="width:100%;">'+grpDayOpts('')+'</select></td></tr>';
+        });
+        $('#grpAssignBody').html(h);
+        $('#grpAllDay').html(grpDayOpts(''));
+        $('#errGrpAssign').removeClass('on').text('');
+        openMask('grpAssignMask');
+    });
+});
+$(document).on('change', '#grpAllDay', function(){ var v = $(this).val(); if (v) $('#grpAssignBody .grpDay').val(v); });
+$('#btnGrpAssignOk').on('click', function(){
+    var miss = [], pick = {};
+    $('#grpAssignBody tr').each(function(){
+        var c = $(this).data('code'), d = $(this).find('.grpDay').val();
+        if (!d) miss.push(c); else pick[c] = d;
+    });
+    if (miss.length) { $('#errGrpAssign').addClass('on').text('以下群組還沒選稽核日期（全部都要稽核）：' + miss.join('、')); return; }
+    // 原本沒填內容的空列先清掉；已經有填的列保留在最後，不覆蓋使用者的資料
+    var keep = CASE_ROWS.filter(function(r){
+        return String(r.start_process||'').trim() !== '' || r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
+            || r.audited_date || r.audited_time || r.improve_due;
+    });
+    var rows = [];
+    GRP_UNITS.forEach(function(g){
+        var label = g.group_code + ' ' + g.group_name + '（第' + g.order + '順位）';
+        var units = g.units.length ? g.units : [{dept_id:'', dept_name:''}];
+        units.forEach(function(u){
+            var r = newCaseRow();
+            r.start_process = label + (units.length > 1 ? ('－' + u.dept_name) : ''); r.dept_id = u.dept_id; r.audited_date = pick[g.group_code];
+            rows.push(r);
+        });
+    });
+    CASE_ROWS = rows.concat(keep);
+    renderCaseRows();
+    closeMask('grpAssignMask');
+    iaToast('已依 '+GRP_UNITS.length+' 個過程群組帶入 '+rows.length+' 列受稽單位', 4000);
+});
+
 /** 把整組範本一次加成受稽單位的列。
  *  已經在表格上的起始主過程不重複加（同一次稽核裡不可以重複，加了只會被擋在存檔前）；
  *  末尾那些「按 ↓ 加出來還沒填」的空列先拿掉，不然新列會被推到空列後面看起來很亂。 */

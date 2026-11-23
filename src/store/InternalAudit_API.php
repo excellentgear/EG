@@ -3107,6 +3107,10 @@ case 'pgroup_get': {
     iaReqView($perms);
     jout(['groups' => ia_pgroup_list($db), 'candidates' => ia_pgroup_candidates($db)]);
 }
+case 'pgroup_units': {
+    iaReqView($perms);
+    jout(['groups' => ia_pgroup_units($db)]);
+}
 case 'pgroup_clauses': {
     iaReqAudit($perms);
     $r = ia_pgroup_clause_ids($db, (string)($_GET['code'] ?? $_POST['code'] ?? ''));

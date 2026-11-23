@@ -5893,6 +5893,39 @@ function ia_pgroup_list(PDO $db): array
     return array_values($out);
 }
 
+/**
+ * 稽核通知單「依過程群組分配日期」用：8 個群組（COP1~SP02）各自的稽核順序，以及該群組要稽核的受稽單位。
+ * 受稽單位＝群組流程步驟裡的程序書與文件表單，**依 AS 文件編號第二段的部門代碼推導**（不另存一份對照表，
+ * 文件改綁或流程步驟改了，這裡跟著變），再收斂成受稽單位的代表部門（ia_unit_key_of_dept）。
+ * 回傳每個群組：order（第幾順位，依群組排序）、units[{dept_id,dept_name}]。
+ */
+function ia_pgroup_units(PDO $db): array
+{
+    $codeIds = ia_as_dept_code_ids($db);
+    $names = [];
+    try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $names[(int)$d['id']] = (string)$d['name']; }
+    catch (Throwable $e) {}
+    $out = []; $n = 0;
+    foreach (ia_pgroup_list($db) as $g) {
+        $n++; $seen = []; $units = [];
+        foreach ($g['steps'] as $s) {
+            $nos = [];
+            if (!empty($s['proc']['doc_no'])) $nos[] = $s['proc']['doc_no'];
+            foreach ($s['forms'] as $f) $nos[] = $f['doc_no'];
+            foreach ($nos as $no) {
+                $did = $codeIds[ia_doc_dept_code($no)] ?? 0;
+                if (!$did) continue;
+                $key = ia_unit_key_of_dept($db, (int)$did);
+                if (isset($seen[$key])) continue;
+                $seen[$key] = 1;
+                $units[] = ['dept_id' => $key, 'dept_name' => $names[$key] ?? ('#' . $key)];
+            }
+        }
+        $out[] = ['group_code' => $g['group_code'], 'group_name' => $g['group_name'], 'order' => $n, 'units' => $units];
+    }
+    return $out;
+}
+
 /** 可選的程序書（三段編號）與文件表單（四段編號）＋條文題庫，供設定畫面下拉 */
 function ia_pgroup_candidates(PDO $db): array
 {
