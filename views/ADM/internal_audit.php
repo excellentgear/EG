@@ -4936,41 +4936,66 @@ function asDocMarksOf(it){
     var m = it.doc_marks; if (typeof m === 'string') { try { m = JSON.parse(m); } catch(e){ m = {}; } }
     return m || {};
 }
-function asDocMarksHtml(it, ro){
-    var lines = asDocLines(it), marks = asDocMarksOf(it);
-    if (!lines.length) return '';
-    return lines.map(function(d, i){
-        var nm = 'd'+it.item_id+'_'+i, v = marks[d.no] || '';
-        return '<div class="ckDocLine" style="display:flex;gap:6px;align-items:center;margin:1px 0;">'
-          + '<span style="flex:1;">'+esc(d.text)+'</span>'
-          + '<label style="margin:0;font-weight:normal;white-space:nowrap;color:#2E7D32;"><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ok"'+(v==='ok'?' checked':'')+(ro?' disabled':'')+'> 合格</label>'
-          + '<label style="margin:0;font-weight:normal;white-space:nowrap;color:#C4442D;"><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ng"'+(v==='ng'?' checked':'')+(ro?' disabled':'')+'> 不合格</label></div>';
-    }).join('');
+/** 某份文件的判定：舊資料存的是 'ok'/'ng' 字串，新資料存 {r:判定,e:所見證據,m:備註} */
+function asDocMarkOf(it, no){
+    var v = asDocMarksOf(it)[no];
+    if (v && typeof v === 'object') return {r:v.r||'', e:v.e||'', m:v.m||''};
+    return {r:v||'', e:'', m:''};
 }
-/* 標記一份文件 → 重算整列判定與證據欄（只動這一列，不整張重畫，免得別列還沒存的字被洗掉） */
-$('#ckBody').on('change', '.ckDoc', function(){
-    var id = +$(this).data('id'), $tr = $(this).closest('tr'), it = null;
-    (CHK.items||[]).forEach(function(x){ if (+x.item_id === id) it = x; });
-    if (!it) return;
-    var marks = {}, ng = [], total = 0, okN = 0;
+/* AS稽核查檢表（過程群組版）：一條對應 N 份文件＝N 列，每份文件各自有合格／不合格、所見證據或建議、備註
+   （2026-11-23 使用者要求）。項次、標題、條文、程序書用 rowspan 合併。整條的判定由各份文件推導：
+   任何一份不合格＝不合格，全部合格＝合格。 */
+function stepRowsHtml(it, n, ro){
+    var lines = asDocLines(it);
+    if (!lines.length) lines = [{no:'', name:'', text:'（無對應文件）'}];
+    var rs = lines.length, rsA = ' rowspan="'+rs+'"';
+    var inp = 'width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;' + (ro?'background:#f5efe4;color:#6b5535;':'');
+    var h = '';
+    lines.forEach(function(d, i){
+        var v = asDocMarkOf(it, d.no), nm = 'd'+it.item_id+'_'+i;
+        h += '<tr data-item="'+it.item_id+'" class="ckDocRow'+(i===0?' ckFirst':'')+'" style="'+(i===0?'border-top:2px solid #C9A877;':'')+'">';
+        if (i === 0) {
+            h += '<td'+rsA+'>'+n+'</td><td class="l"'+rsA+' style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
+               + '<td class="l"'+rsA+' style="white-space:pre-line;font-size:12px;">'+esc(it.col_a||'')+'</td>'
+               + '<td class="l"'+rsA+' style="font-size:12px;">'+esc(it.col_d||'')+'</td>';
+        }
+        h += '<td class="l" style="font-size:12px;">'+esc(d.text)+'</td>'
+           + '<td><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ok"'+(v.r==='ok'?' checked':'')+(ro?' disabled':'')+'></td>'
+           + '<td><input type="radio" class="ckDoc" name="'+nm+'" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" value="ng"'+(v.r==='ng'?' checked':'')+(ro?' disabled':'')+'></td>'
+           + '<td><input type="text" class="ckDocF" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" data-f="e" value="'+esc(v.e)+'"'+(ro?' readonly':'')+' style="'+inp+'"></td>'
+           + '<td><input type="text" class="ckDocF" data-id="'+it.item_id+'" data-no="'+esc(d.no)+'" data-f="m" value="'+esc(v.m)+'"'+(ro?' readonly':'')+' style="'+inp+'">'
+           + (i===0 ? '<span class="ckNcCell">'+ncBtnHtml(it, ro)+'</span>' : '') + '</td></tr>';
+    });
+    return h;
+}
+/** 某一條目前畫面上各份文件的判定 → {marks,result,evidence,remark}（整條判定與彙總文字由此推導） */
+function stepItemState(it, $scope){
+    var marks = {}, ng = [], okN = 0, total = 0, ev = [], rm = [];
     asDocLines(it).forEach(function(d){
         total++;
-        var v = $tr.find('.ckDoc[data-no="'+d.no.replace(/"/g,'')+'"]:checked').val() || '';
-        if (v) marks[d.no] = v;
-        if (v === 'ng') ng.push(d.text);
-        if (v === 'ok') okN++;
+        var q = '[data-id="'+it.item_id+'"][data-no="'+d.no.replace(/"/g,'')+'"]';
+        var r = $scope.find('.ckDoc'+q+':checked').val() || '';
+        var e = String($scope.find('.ckDocF'+q+'[data-f="e"]').val()||'').trim();
+        var m = String($scope.find('.ckDocF'+q+'[data-f="m"]').val()||'').trim();
+        if (r || e || m) marks[d.no] = {r:r, e:e, m:m};
+        if (r === 'ng') ng.push(d.no);
+        if (r === 'ok') okN++;
+        if (e) ev.push((total>1||asDocLines(it).length>1 ? d.no+'：' : '')+e);
+        if (m) rm.push((asDocLines(it).length>1 ? d.no+'：' : '')+m);
     });
-    it.doc_marks = marks;
-    var res = ng.length ? 'ng' : (okN === total && total ? 'ok' : '');
-    it.result = res;
-    $tr.find('.ckR[value="ok"]').prop('checked', res==='ok');
-    $tr.find('.ckR[value="ng"]').prop('checked', res==='ng');
-    var $ev = $tr.find('.ckF[data-f="evidence"]'), cur = String($ev.val()||'');
-    // 證據欄：舊的「不合格：…」自動句整句換掉，使用者另外手寫的字保留
-    var rest = cur.replace(/^不合格文件：[^\n]*\n?/, '');
-    $ev.val((ng.length ? ('不合格文件：' + ng.join('；') + (rest ? '\n' : '')) : '') + rest);
-    $tr.find('td').last().find('.ia-op').remove();
-    var btn = ncBtnHtml(it, !CHK.can_edit); if (btn) $tr.find('td').last().append(btn);
+    return {marks:marks, result: ng.length ? 'ng' : (total && okN===total ? 'ok' : ''),
+            evidence: (ng.length ? ('不合格文件：'+ng.join('、')+(ev.length?'\n':'')) : '') + ev.join('\n'),
+            remark: rm.join('；')};
+}
+/* 標記／填寫某份文件 → 重算整條判定與開單鈕（只動這一條，不整張重畫，免得別列還沒存的字被洗掉） */
+$('#ckBody').on('change', '.ckDoc', function(){
+    var id = +$(this).data('id'), it = null;
+    (CHK.items||[]).forEach(function(x){ if (+x.item_id === id) it = x; });
+    if (!it) return;
+    var $rows = $('#ckBody tr[data-item="'+id+'"]');
+    var st = stepItemState(it, $rows);
+    it.result = st.result; it.doc_marks = st.marks;
+    var $cell = $rows.first().find('.ckNcCell'); $cell.html(ncBtnHtml(it, !CHK.can_edit));
     renderCheckAutoBar(!CHK.can_edit);
 });
 function renderCheckItems(){
@@ -5000,6 +5025,7 @@ function renderCheckItems(){
                    + 'padding:2px 4px;font-size:12px;'+lockCss+'">';
         // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
         var ncBtn = ncBtnHtml(it, ro);
+        if (stepMode) { h += stepRowsHtml(it, n, fro); return; }
         h += '<tr>';
         if (stepMode) {
             var pre = 'white-space:pre-line;';
@@ -5406,16 +5432,15 @@ function collectCheckItems(){
         map[id] = map[id] || {item_id:id};
         map[id].result = $(this).val();
     });
-    // AS稽核查檢表：各份文件各自的判定一併存
-    var dm = {};
-    $('#ckBody .ckDoc:checked').each(function(){
-        var id = $(this).data('id'); dm[id] = dm[id] || {};
-        dm[id][String($(this).data('no'))] = $(this).val();
-    });
-    $('#ckBody tr').has('.ckDoc').each(function(){
-        var id = $(this).find('.ckDoc').first().data('id');
+    // AS稽核查檢表（過程群組版）：每份文件各自的判定／所見證據／備註，整條判定與彙總文字由它推導
+    $('#ckBody tr.ckFirst').each(function(){
+        var id = +$(this).data('item'), it = null;
+        (CHK.items||[]).forEach(function(x){ if (+x.item_id === id) it = x; });
+        if (!it) return;
+        var st = stepItemState(it, $('#ckBody tr[data-item="'+id+'"]'));
         map[id] = map[id] || {item_id:id};
-        map[id].doc_marks = dm[id] || {};
+        map[id].doc_marks = st.marks; map[id].result = st.result;
+        map[id].evidence = st.evidence; map[id].remark = st.remark;
     });
     return Object.keys(map).map(function(k){ return map[k]; });
 }
@@ -7299,21 +7324,21 @@ function printCheck(id){
                 if (stepMode) {
                     /* 一條對應好幾份文件：每份文件各一列（劃線分隔），各自有合格／不合格（2026-11-23 使用者要求）。
                        項次、標題、條文、程序書、所見證據用 rowspan 合併成一格。 */
-                    var dl = asDocLines(it), dmk = asDocMarksOf(it), rs = Math.max(dl.length, 1);
+                    var dl = asDocLines(it), rs = Math.max(dl.length, 1);
                     var rsA = ' rowspan="'+rs+'"';
                     var lead = '<td'+rsA+'>'+n+'</td><td class="l"'+rsA+' style="font-weight:bold;">'+esc(it.col_c||'')+'</td>'
                       + '<td class="l pre"'+rsA+' style="font-size:11px;">'+esc(it.col_a||'')+'</td>'
                       + '<td class="l"'+rsA+' style="font-size:11px;">'+esc(it.col_d||'')+'</td>';
-                    var tail = '<td class="pre"'+rsA+'>'+esc(it.evidence||'')+'</td>';
                     if (!dl.length) {
-                        h += '<tr>'+lead+'<td></td><td>'+okM+'</td><td>'+ngM+'</td>'+tail+'</tr>';
+                        h += '<tr>'+lead+'<td></td><td>'+okM+'</td><td>'+ngM+'</td><td class="pre">'+esc(it.evidence||'')+'</td></tr>';
                     } else {
                         dl.forEach(function(d, di){
-                            var v = dmk[d.no] || (it.result==='ok' && !Object.keys(dmk).length ? 'ok' : '');
-                            h += '<tr>' + (di===0 ? lead : '')
+                            var dm = asDocMarkOf(it, d.no);
+                            if (!dm.r && it.result==='ok' && !Object.keys(asDocMarksOf(it)).length) dm.r = 'ok';
+                            h += '<tr class="docrow'+(di===0?' docfirst':'')+'">' + (di===0 ? lead : '')
                               + '<td class="l" style="font-size:11px;">'+esc(d.text)+'</td>'
-                              + '<td>'+(v==='ok'?'V':'')+'</td><td>'+(v==='ng'?'V':'')+'</td>'
-                              + (di===0 ? tail : '') + '</tr>';
+                              + '<td>'+(dm.r==='ok'?'V':'')+'</td><td>'+(dm.r==='ng'?'V':'')+'</td>'
+                              + '<td class="pre">'+esc(dm.e + (dm.m ? (dm.e?'　':'')+'（備註：'+dm.m+'）' : ''))+'</td></tr>';
                         });
                     }
                 } else if (k.kind==='as') {

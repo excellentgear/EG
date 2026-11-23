@@ -1630,7 +1630,13 @@ case 'check_save_items': {
                 $dm = is_array($it['doc_marks']) ? $it['doc_marks'] : (json_decode((string)$it['doc_marks'], true) ?: []);
                 $clean = [];
                 foreach ($dm as $no => $v) {
-                    if (in_array($v, ['ok', 'ng'], true) && preg_match('/^[\w\-\.]{1,40}$/', (string)$no)) $clean[(string)$no] = $v;
+                    if (!preg_match('/^[\w\-\.]{1,40}$/', (string)$no)) continue;
+                    if (is_array($v)) {      // 新格式：{r:判定, e:所見證據, m:備註}
+                        $r = in_array($v['r'] ?? '', ['ok', 'ng'], true) ? $v['r'] : '';
+                        $e = mb_substr(trim((string)($v['e'] ?? '')), 0, 300);
+                        $m = mb_substr(trim((string)($v['m'] ?? '')), 0, 300);
+                        if ($r !== '' || $e !== '' || $m !== '') $clean[(string)$no] = ['r' => $r, 'e' => $e, 'm' => $m];
+                    } elseif (in_array($v, ['ok', 'ng'], true)) $clean[(string)$no] = $v;
                 }
                 $db->prepare("UPDATE ia_check_item SET doc_marks=? WHERE item_id=? AND check_id=?")
                    ->execute([$clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null, $iid, $kid]);
