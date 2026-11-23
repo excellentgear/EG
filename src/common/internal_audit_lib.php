@@ -5777,19 +5777,22 @@ function ia_clause_group_procs_map(PDO $db): array
 /** 某條文三段編號（程序書）清單，唯一判定（附錄B 作業程序編號欄；1 開頭是手冊） */
 function ia_clause_proc_list(array $clause): array
 {
+    // 附錄B 的作業程序編號＋這一條「建立的文件、表單」（doc_ref）；程序書（三段）與表單（四段）都可指定，
+    // 1 開頭是手冊不算。受稽單位由編號第二段的部門代碼推導，表單與程序書同一套。
     $out = [];
-    foreach (ia_clause_doc_nos((string)($clause['proc_nos'] ?? '')) as $no)
-        if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}$/', $no)) $out[$no] = $no;
+    $src = trim((string)($clause['proc_nos'] ?? '') . ' ' . (string)($clause['doc_ref'] ?? ''));
+    foreach (ia_clause_doc_nos($src) as $no)
+        if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}(-\d{2})?$/', $no)) $out[$no] = $no;
     return array_values($out);
 }
 function ia_clause_group_procs_save(PDO $db, int $clauseId, string $code, array $procs): void
 {
     ia_pgroup_ensure($db);
-    $st = $db->prepare("SELECT proc_nos FROM ia_as_clause WHERE clause_id=?");
+    $st = $db->prepare("SELECT proc_nos, doc_ref FROM ia_as_clause WHERE clause_id=?");
     $st->execute([$clauseId]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) throw new RuntimeException('找不到這一條條文');
-    $ok = ia_clause_proc_list(['proc_nos' => $row['proc_nos']]);
+    $ok = ia_clause_proc_list($row);
     $has = $db->prepare("SELECT 1 FROM ia_clause_group WHERE clause_id=? AND group_code=?");
     $has->execute([$clauseId, $code]);
     if (!$has->fetchColumn()) throw new RuntimeException('這一條條文沒有勾 ' . $code . ' 這個過程群組');
