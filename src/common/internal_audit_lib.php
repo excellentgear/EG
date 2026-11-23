@@ -3240,21 +3240,22 @@ function ia_year_checklist(PDO $db, int $year): array
     }
 
     /* ── ④⑤⑥三種查檢表 ── */
-    $chkCnt = [];
+    $chkCnt = []; $chkDone = [];
     try {
-        $q = $db->prepare("SELECT kind, COUNT(*) c FROM ia_check WHERE year=? AND COALESCE(is_deleted,0)=0 GROUP BY kind");
+        $q = $db->prepare("SELECT kind, COUNT(*) c, SUM(status='done') d FROM ia_check WHERE year=? AND COALESCE(is_deleted,0)=0 GROUP BY kind");
         $q->execute([$year]);
-        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $chkCnt[(string)$r['kind']] = (int)$r['c'];
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) { $chkCnt[(string)$r['kind']] = (int)$r['c']; $chkDone[(string)$r['kind']] = (int)$r['d']; }
     } catch (Throwable $e) {}
     $stageOf = ['kpi' => '④查檢', 'system' => '⑤查檢', 'as' => '⑥查檢', 'type' => '⑥查檢'];
     foreach (array_keys(IA_CHECK_KINDS) as $k) {
         list($no, $nm) = $docOf($k);
         $n = (int)($chkCnt[$k] ?? 0);
+        $dn = (int)($chkDone[$k] ?? 0);   // 草稿不算完成（2026-11-23：只有一份測試用草稿卻顯示「已完成」）
         $add(['key' => 'check_' . $k, 'stage' => ($stageOf[$k] ?? '④查檢'),
               'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'check',
-              'have' => $n, 'need' => 1, 'done' => $n,
-              'label' => $n ? ('已建立 ' . $n . ' 份') : '尚未建立',
-              'missing' => $n ? [] : ['這一年還沒有' . $nm]]);
+              'have' => $n, 'need' => 1, 'done' => $dn,
+              'label' => $n ? ('已建立 ' . $n . ' 份' . ($dn < $n ? '，其中 ' . ($n - $dn) . ' 份尚未完成' : '')) : '尚未建立',
+              'missing' => $n ? ($dn < $n ? [($n - $dn) . ' 份還是草稿'] : []) : ['這一年還沒有' . $nm]]);
     }
 
     /* ── ⑦不符合通知單 ── */
