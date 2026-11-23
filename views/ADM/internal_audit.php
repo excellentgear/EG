@@ -1814,7 +1814,7 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mhead"><h4><i class="fa fa-sitemap"></i> 依過程群組分配稽核日期</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-hint">八大過程群組<b>全部都要稽核</b>，請為每個群組選稽核日期（<b>只能選上面「稽核期間」內的日子</b>）。
-        按「帶入」後，通知單的<b>受稽單位會依群組的流程文件自動帶出</b>（依 AS 文件編號的部門代碼），
+        按「帶入」後，通知單的<b>受稽單位會連動手冊附錄B 自動帶出</b>（群組→條文→附錄B 作業程序編號→程序書所屬部門，不寫死；附錄B 或條文的過程群組改了，下次開啟就是新結果），
         「稽核起始主過程」會標示<b>第幾順位</b>，之後仍可逐列調整稽核員、陪檢員與時間。</div>
         <div style="margin-bottom:6px;font-size:13px;">全部設為同一天：<select id="grpAllDay" style="min-width:160px;"></select></div>
         <table class="ia-table" style="width:100%;"><thead><tr><th style="width:70px;">順位</th><th>過程群組</th><th>受稽單位（自動）</th><th style="width:160px;">稽核日期</th></tr></thead>
@@ -8291,7 +8291,7 @@ $('#btnCaseGroups').on('click', function(){
             h += '<tr data-code="'+esc(g.group_code)+'"><td><b>第 '+g.order+' 順位</b></td>'
                + '<td class="l"><b>'+esc(g.group_code)+'</b>　'+esc(g.group_name)+'</td>'
                + '<td class="l" style="font-size:12px;">'+(g.units.length ? g.units.map(function(u){ return esc(u.dept_name); }).join('、')
-                    : '<span style="color:#C4442D;">（流程文件沒有對應到部門，帶入後請自行選受稽單位）</span>')+'</td>'
+                    : '<span style="color:#C4442D;">（附錄B 還沒有對應到部門的程序書，帶入後請自行選受稽單位）</span>')+'</td>'
                + '<td><select class="grpDay" style="width:100%;">'+grpDayOpts('')+'</select></td></tr>';
         });
         $('#grpAssignBody').html(h);

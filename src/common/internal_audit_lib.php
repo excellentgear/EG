@@ -5895,9 +5895,12 @@ function ia_pgroup_list(PDO $db): array
 
 /**
  * 稽核通知單「依過程群組分配日期」用：8 個群組（COP1~SP02）各自的稽核順序，以及該群組要稽核的受稽單位。
- * 受稽單位＝群組流程步驟裡的程序書與文件表單，**依 AS 文件編號第二段的部門代碼推導**（不另存一份對照表，
- * 文件改綁或流程步驟改了，這裡跟著變），再收斂成受稽單位的代表部門（ia_unit_key_of_dept）。
- * 回傳每個群組：order（第幾順位，依群組排序）、units[{dept_id,dept_name}]。
+ * **受稽單位完全連動手冊附錄B，不寫死任何部門**：
+ *   群組 →（條文題庫裡「過程群組」勾到這個群組的條文）→ 該條文在附錄B 的「作業程序編號」(proc_nos)
+ *   → 程序書編號第二段的部門代碼 → 部門（as_dept_code）→ 收斂成受稽單位代表部門。
+ * 附錄B 改了、條文題庫自動同步後，或過程群組的條文歸屬改了，這裡下一次開啟就是新結果。
+ * 手冊本身（1 開頭）不算程序書，不列入。
+ * 回傳每個群組：order（第幾順位）、units[{dept_id,dept_name}]、proc_nos（依據的程序書編號）。
  */
 function ia_pgroup_units(PDO $db): array
 {
@@ -5905,23 +5908,36 @@ function ia_pgroup_units(PDO $db): array
     $names = [];
     try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $names[(int)$d['id']] = (string)$d['name']; }
     catch (Throwable $e) {}
+    // 條文 → 附錄B 作業程序編號（只取啟用中的條文）
+    $procs = [];
+    foreach (ia_as_clauses($db, true) as $c) {
+        $nos = [];
+        foreach (ia_clause_doc_nos((string)($c['proc_nos'] ?? '')) as $no) {
+            if (preg_match('/^[2-9]-[A-Za-z]{2,3}-\d{2}$/', $no)) $nos[] = $no;   // 三段編號＝程序書；1 開頭是手冊
+        }
+        if ($nos) $procs[(int)$c['clause_id']] = $nos;
+    }
+    $gmap = ia_clause_groups_map($db);          // clause_id => [group_code,…]
+    $byGroup = [];
+    foreach ($gmap as $cid => $codes) {
+        if (empty($procs[$cid])) continue;
+        foreach ($codes as $code) foreach ($procs[$cid] as $no) $byGroup[$code][$no] = 1;
+    }
     $out = []; $n = 0;
     foreach (ia_pgroup_list($db) as $g) {
         $n++; $seen = []; $units = [];
-        foreach ($g['steps'] as $s) {
-            $nos = [];
-            if (!empty($s['proc']['doc_no'])) $nos[] = $s['proc']['doc_no'];
-            foreach ($s['forms'] as $f) $nos[] = $f['doc_no'];
-            foreach ($nos as $no) {
-                $did = $codeIds[ia_doc_dept_code($no)] ?? 0;
-                if (!$did) continue;
-                $key = ia_unit_key_of_dept($db, (int)$did);
-                if (isset($seen[$key])) continue;
-                $seen[$key] = 1;
-                $units[] = ['dept_id' => $key, 'dept_name' => $names[$key] ?? ('#' . $key)];
-            }
+        $nos = array_keys($byGroup[$g['group_code']] ?? []);
+        sort($nos);
+        foreach ($nos as $no) {
+            $did = $codeIds[ia_doc_dept_code($no)] ?? 0;
+            if (!$did) continue;
+            $key = ia_unit_key_of_dept($db, (int)$did);
+            if (isset($seen[$key])) continue;
+            $seen[$key] = 1;
+            $units[] = ['dept_id' => $key, 'dept_name' => $names[$key] ?? ('#' . $key)];
         }
-        $out[] = ['group_code' => $g['group_code'], 'group_name' => $g['group_name'], 'order' => $n, 'units' => $units];
+        $out[] = ['group_code' => $g['group_code'], 'group_name' => $g['group_name'], 'order' => $n,
+                  'units' => $units, 'proc_nos' => $nos];
     }
     return $out;
 }
