@@ -230,6 +230,11 @@ case 'meta': {
 }
 
 /* ============================ 設定 ============================ */
+case 'improve_due': {
+    iaReqView($perms);
+    jout(['date' => ia_improve_due($db, (string)($_GET['last'] ?? ''))]);
+}
+
 case 'save_setting': {
     iaReqAdmin($perms);
     $k = (string)($_POST['key'] ?? '');
@@ -237,6 +242,14 @@ case 'save_setting': {
     $v = (string)($_POST['value'] ?? '');
     if ($k === 'ia_remind_days') {
         if ($v !== '' && (!ctype_digit($v) || (int)$v > 365)) jerr('提醒天數請填 0~365 的整數');
+    }
+    if ($k === 'ia_unit_escorts') {
+        $j = json_decode($v, true);
+        if (!is_array($j)) jerr('預設陪檢員格式不正確');
+        foreach ($j as $dk => $keys) {
+            if (!ctype_digit((string)$dk) || !is_array($keys)) jerr('預設陪檢員格式不正確');
+            foreach ($keys as $kk) if (!preg_match('/^\d+:\d+:\d+$/', (string)$kk)) jerr('預設陪檢員的人員鍵不正確');
+        }
     }
     if ($k === 'ia_case_remark_tpl') {
         $v = str_replace("\r\n", "\n", $v);

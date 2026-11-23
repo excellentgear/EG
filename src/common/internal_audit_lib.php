@@ -88,6 +88,7 @@ const IA_SETTING_KEYS  = [
     // 不是列印漏印，是那張單的 end_meet_place 本來就空的——每開一張都要重打，忘了就印不出來）
     'ia_meeting_place',
     'ia_case_remark_tpl',
+    'ia_unit_escorts',    // 各受稽單位的預設陪檢員 JSON {受稽單位代表部門id:[職務鍵 uid:deptId:posId]}（新增通知單時自動帶入）
     'ia_auto_sign',
     'ia_report_notify',   // 稽核報告表送出後要通知誰：[{dept_id, position_id}] JSON（管理員設定）
     'ia_extra_years',     // 管理員登記「要補資料的舊年度」JSON 陣列（選單只列有資料的年度＋今年明年＋這裡登記的）
@@ -743,6 +744,23 @@ function ia_setting_save(PDO $db, string $key, string $val, string $byName): voi
                       VALUES (?,?,?,?,?,NOW())")
            ->execute([IA_SETTING_GROUP, $key, $json, '內部稽核模組設定', $byName]);
     }
+}
+
+/**
+ * 預定完成改善＝最後一天稽核日期往後一個月內的最後一個工作日（2026-11-23 使用者要求）。
+ * 例：最後稽核日 10/13 → 11/13；11/13 不是工作日就往前找到最近的工作日。工作日走請假系統同一套（含補班）。
+ */
+function ia_improve_due(PDO $db, string $lastAuditDate): string
+{
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $lastAuditDate)) return '';
+    if (!function_exists('eg_leave_is_workday')) require_once __DIR__ . '/leave_lib.php';
+    $d = new DateTime($lastAuditDate);
+    $d->modify('+1 month');
+    for ($i = 0; $i < 14; $i++) {
+        if (eg_leave_is_workday($db, $d->format('Y-m-d'))) break;
+        $d->modify('-1 day');
+    }
+    return $d->format('Y-m-d');
 }
 
 /** DB 當天（PHP date() 是 UTC、MySQL 是本地時間，混用會差一天） */

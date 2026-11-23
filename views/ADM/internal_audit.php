@@ -1053,7 +1053,8 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span>
 <?php if ($perms['canAdmin']): ?>
             <button id="btnCaseTplSet" style="margin-left:10px;height:24px;font-size:12px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;"><i class="fa fa-object-group"></i> 帶入範本組合</button>
-            <button id="btnCaseGroups" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;" title="COP1~SP02 八大過程群組：每個群組選稽核日期，受稽單位自動帶入並標示稽核順序"><i class="fa fa-sitemap"></i> 依過程群組（COP1～SP02）分配日期</button>
+            <button id="btnCaseGroups" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;" title="COP1~SP02 八大過程群組：每個群組選稽核日期，受稽單位自動帶入並標示稽核順序"><i class="fa fa-sitemap"></i> 重新帶入八大過程群組</button>
+            <button id="btnSaveEscortDef" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #b5762a;color:#8A5A2B;border-radius:4px;background:#fff;cursor:pointer;" title="把目前每個受稽單位選好的陪檢員存成預設，之後每次新增通知單自動帶入（只有內稽管理員存得了）"><i class="fa fa-save"></i> 存為各單位預設陪檢員</button>
 <?php endif; ?>
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
@@ -2817,6 +2818,12 @@ function openCase(id){
         $('#cMakerDate').val(META.today);
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
+        // 自動帶入八大過程群組（COP1~SP02）：每個群組的受稽單位各一列、順位與預設陪檢員都帶好，
+        // 使用者只要選日期與稽核員（2026-11-23 使用者要求）
+        $.getJSON(API, {action:'pgroup_units'}, function(g){
+            if (!g.ok || !(g.groups||[]).length || CASE_ID) return;
+            GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); renderCaseRows(); iaAutoDue();
+        });
         $('#btnCaseDelete').hide();
         applyCaseLock(null);
         teamHintForCase(META.today);
@@ -3268,6 +3275,8 @@ $(document).on('change','.cr', function(){
     var i = +$(this).closest('tr').data('i'), f = $(this).data('f');
     CASE_ROWS[i] = CASE_ROWS[i] || {};
     CASE_ROWS[i][f] = $(this).val();
+    if (f === 'improve_due') CASE_ROWS[i]._autoDue = false;     // 手動改過就不再被自動值覆蓋
+    if (f === 'audited_date') iaAutoDue();
     // 改了某一列的受稽時間 → 後面的自動順延（使用者可在表頭關掉）
     if (f === 'audited_time' && $('#cTimeCascade').is(':checked')) {
         var n = normTime($(this).val());
@@ -5638,9 +5647,22 @@ function ncRoundLast(caseId){
     var r = (CASES||[]).filter(function(c){ return String(c.case_id) === String(caseId); })[0];
     return (r && r.round_last && String(r.round_last) >= '2026-01-01') ? inputDate(r.round_last) : '';
 }
+/* 要求完成期限＝本次稽核最後一天往後一個月內的最後一個工作日（後端算；使用者手動改過就不覆蓋） */
+function ncAutoDue(force){
+    var last = ncRoundLast($('#nnCase').val()) || $('#nnDate').val() || '';
+    if (!last) return;
+    $.getJSON(API, {action:'improve_due', last:last}, function(res){
+        if (!res.ok || !res.date) return;
+        var $d = $('#nnDue');
+        if (force || !$d.val() || $d.data('auto')) { $d.val(res.date).data('auto', 1); }
+    });
+}
+$(document).on('input change', '#nnDue', function(e){ if (e.originalEvent) $(this).data('auto', 0); });
 $(document).on('change', '#nnCase', function(){
     var d = ncRoundLast($(this).val()); if (d) $('#nnDate').val(d);
+    ncAutoDue(true);
 });
+$(document).on('change', '#nnDate', function(){ ncAutoDue(false); });
 function openNcNewFill(pre){
     $('#nnCase,#nnDept,#nnAuditee,#nnType').prop('disabled', false);
     var typeH = '<option value="">（請選擇）</option>';
@@ -5650,7 +5672,8 @@ function openNcNewFill(pre){
     $('#nnFact').val(pre.fact||''); $('#nnClause').val(pre.clause_ref||'');
     $('#nnFormNo').val(pre.ref_form_no||'');
     // 要求完成期限＝該受稽單位在稽核通知單上填的「預定完成改善」（2026-09-18 使用者要求）
-    $('#nnDue').val(inputDate(pre.due_date||''));
+    $('#nnDue').val(inputDate(pre.due_date||'')).data('auto', 0);
+    ncAutoDue(true);      // 一律以「本次稽核最後一天＋一個月內最後工作日」為準
     // 受稽核單位：優先用查檢表帶來的部門 id，沒有才用名稱去猜
     $('#nnDept').html(deptOptions(pre.dept_id || guessDeptId(pre), '（請選擇）'));
     // 受稽核人：只列該受稽核單位的主管（2026-09-21 使用者要求），單位或日期一改就重抓
@@ -8314,6 +8337,59 @@ $('#btnCaseTplSet').on('click', function(){
 });
 /* ---- 依過程群組（COP1~SP02）分配稽核日期，受稽單位自動帶入（2026-11-23 使用者要求） ---- */
 var GRP_UNITS = [];
+/* 各受稽單位的「預設陪檢員」（設定一次，每次新增通知單自動帶入；稽核員則每次稽核各自挑） */
+function unitEscortDefaults(){
+    try { return JSON.parse((META.settings||{}).ia_unit_escorts || '{}') || {}; } catch(e){ return {}; }
+}
+/** 八大群組 → 通知單的列：一個群組的每個受稽單位一列，陪檢員帶該單位的預設（只帶目前還合格的人） */
+function buildGroupRows(groups, pick){
+    var def = unitEscortDefaults(), ok = {}, rows = [];
+    (META.escorts||[]).forEach(function(p){ ok[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1; });
+    groups.forEach(function(g){
+        var label = g.group_code + ' ' + g.group_name + '（第' + g.order + '順位）';
+        var units = g.units.length ? g.units : [{dept_id:'', dept_name:''}];
+        units.forEach(function(u){
+            var r = newCaseRow();
+            r.start_process = label + (units.length > 1 ? ('－' + u.dept_name) : '');
+            r.dept_id = u.dept_id; r.audited_date = (pick && pick[g.group_code]) || '';
+            r.escort_keys = (def[u.dept_id] || []).filter(function(k){ return ok[k]; });
+            rows.push(r);
+        });
+    });
+    return rows;
+}
+/* 預定完成改善＝最後一天稽核日期往後一個月內的最後一個工作日（後端算，含補班與假日）。
+   只填「還是空白、或上次也是自動帶的」列，使用者手動改過的不覆蓋。 */
+var DUE_TIMER = null;
+function iaAutoDue(){
+    clearTimeout(DUE_TIMER);
+    DUE_TIMER = setTimeout(function(){
+        var last = $('#cTo').val() || '';
+        CASE_ROWS.forEach(function(r){ if (r.audited_date && r.audited_date > last) last = r.audited_date; });
+        if (!last) last = $('#cFrom').val() || '';
+        if (!last) return;
+        $.getJSON(API, {action:'improve_due', last:last}, function(res){
+            if (!res.ok || !res.date) return;
+            CASE_ROWS.forEach(function(r){ if (!r.improve_due || r._autoDue) { r.improve_due = res.date; r._autoDue = true; } });
+            renderCaseRows();
+        });
+    }, 250);
+}
+$(document).on('change', '#cFrom, #cTo', function(){ if ($('#caseMask').hasClass('on')) iaAutoDue(); });
+$(document).on('click', '#btnSaveEscortDef', function(){
+    var def = unitEscortDefaults(), n = 0;
+    CASE_ROWS.forEach(function(r){
+        if (!r.dept_id || !(r.escort_keys||[]).length) return;
+        def[r.dept_id] = r.escort_keys.slice(); n++;
+    });
+    if (!n) { alert('目前沒有任何一列同時指定了受稽單位與陪檢員'); return false; }
+    $.post(API, {action:'save_setting', key:'ia_unit_escorts', value:JSON.stringify(def)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        META.settings = META.settings || {}; META.settings.ia_unit_escorts = JSON.stringify(def);
+        iaToast('已把 '+n+' 個受稽單位目前的陪檢員存為預設，下次新增通知單自動帶入', 4000);
+    }, 'json');
+    return false;
+});
 function grpDays(){
     var f = $('#cFrom').val(), t = $('#cTo').val() || f, days = [];
     if (!f) return days;
@@ -8361,18 +8437,9 @@ $('#btnGrpAssignOk').on('click', function(){
         return String(r.start_process||'').trim() !== '' || r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
             || r.audited_date || r.audited_time || r.improve_due;
     });
-    var rows = [];
-    GRP_UNITS.forEach(function(g){
-        var label = g.group_code + ' ' + g.group_name + '（第' + g.order + '順位）';
-        var units = g.units.length ? g.units : [{dept_id:'', dept_name:''}];
-        units.forEach(function(u){
-            var r = newCaseRow();
-            r.start_process = label + (units.length > 1 ? ('－' + u.dept_name) : ''); r.dept_id = u.dept_id; r.audited_date = pick[g.group_code];
-            rows.push(r);
-        });
-    });
+    var rows = buildGroupRows(GRP_UNITS, pick);
     CASE_ROWS = rows.concat(keep);
-    renderCaseRows();
+    renderCaseRows(); iaAutoDue();
     closeMask('grpAssignMask');
     iaToast('已依 '+GRP_UNITS.length+' 個過程群組帶入 '+rows.length+' 列受稽單位', 4000);
 });
