@@ -5761,7 +5761,7 @@ function ia_appendixb_parse(PDO $db): array
         $html = (string)$db->query("SELECT c.content_html FROM as_doc_content c
                                       JOIN as_document_version v ON v.id=c.version_id
                                       JOIN as_document d ON d.id=v.doc_id
-                                     WHERE d.doc_no='1-GM-01'
+                                     WHERE d.doc_no='1-GM-01' AND v.is_draft=0
                                      ORDER BY c.is_primary DESC, v.id DESC LIMIT 1")->fetchColumn();
     } catch (Throwable $e) {}
     if ($html === '') return [];
