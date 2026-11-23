@@ -5043,11 +5043,25 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 </div></div></div><!-- /right_col /main_container /container -->
 <div id="toast-wrap"></div>
 
+<!-- ══ Modal: 新增需求單 — 先選種類 ══ -->
+<div class="modal fade" id="crCatPickModal" tabindex="-1">
+  <div class="modal-dialog" style="width:720px;max-width:96%;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-clipboard"></i> 選擇需求單種類</h4></div>
+      <div class="modal-body">
+        <div class="text-muted" style="font-size:12px;margin-bottom:10px;">一張需求單只能有同一種類的料號，請先點選種類，再進入新增畫面。</div>
+        <div id="crCatPickGrid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">取消</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ Modal: 新增需求單 ══ -->
 <div class="modal fade" id="createReqModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-clipboard"></i> 新增領庫需求單</h4></div>
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><span id="cr-cat-badge" class="btn btn-warning btn-sm" style="float:right;margin-right:12px;margin-top:-2px;cursor:default;font-weight:700;"></span><h4 class="modal-title"><i class="fa fa-clipboard"></i> 新增領庫需求單</h4></div>
       <div class="modal-body">
         <div class="row">
           <div class="col-sm-4"><div class="form-group"><label>申請部門</label>
@@ -5074,7 +5088,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
             <input type="hidden" id="cr-filter-client-val">
             <div id="cr-client-ac" style="display:none;position:absolute;z-index:9999;background:#fff;border:1px solid #ddd;border-radius:4px;max-height:160px;overflow-y:auto;width:220px;box-shadow:0 2px 8px rgba(0,0,0,.12);top:100%;left:0;"></div>
           </div>
-          <select id="cr-filter-cat" class="form-control input-sm" style="flex:0 0 110px;" onchange="onCrCatChange()">
+          <select id="cr-filter-cat" style="display:none;" onchange="onCrCatChange()">
             <option value="">— 先選種類 —</option>
           </select>
           <input type="text" id="cr-item-search" class="form-control input-sm" placeholder="料號 / 備註搜尋" style="flex:1;min-width:120px;" oninput="searchReqItems()">
@@ -11527,10 +11541,27 @@ function collapseAllReq(){
     $('.req-expand-btn i').removeClass('fa-chevron-down fa-spinner fa-spin').addClass('fa-chevron-right');
 }
 
+// 第一步：先跳出種類選擇（大按鈕），選定後才開啟新增需求單
 function openCreateReqModal(){
+    var cats=(G.allCats||[]).filter(function(c){ return c.is_active===undefined||String(c.is_active)!=='0'; });
+    if(!cats.length){ toast('種類資料尚未載入，請稍後再試','error'); return; }
+    var h='';
+    cats.forEach(function(c){
+        h+='<button type="button" class="btn btn-default" style="padding:16px 6px;font-size:15px;font-weight:600;white-space:normal;" onclick="pickCrCat('+parseInt(c.category_id)+')">'+esc(c.category_name)+'</button>';
+    });
+    $('#crCatPickGrid').html(h);
+    $('#crCatPickModal').modal('show');
+}
+function pickCrCat(catId){
+    $('#crCatPickModal').one('hidden.bs.modal',function(){ openCreateReqModalWithCat(catId); }).modal('hide');
+}
+
+function openCreateReqModalWithCat(catId){
     _reqCreateItems = [];
     $('#cr-title,#cr-remark,#cr-item-search').val('');
-    $('#cr-filter-client,#cr-filter-client-val').val(''); $('#cr-client-ac').hide().empty(); $('#cr-filter-cat').val(''); _crCatPrev='';
+    $('#cr-filter-client,#cr-filter-client-val').val(''); $('#cr-client-ac').hide().empty(); $('#cr-filter-cat').val(String(catId)); _crCatPrev=String(catId);
+    var _cn=''; (G.allCats||[]).forEach(function(c){ if(parseInt(c.category_id)===catId) _cn=c.category_name; });
+    $('#cr-cat-badge').text(_cn||'—');
     $('#cr-item-results').hide().empty();
     $('#cr-user-display').val(CURRENT_USER_NAME||'—');
     renderCreateReqItems();
