@@ -447,13 +447,16 @@ function adr_scan_on_change(PDO $db, array $src): array
     // 來源文件現在的編號與名稱（參照標記要更新成**現況**，不是只換異動那一個欄位）
     $curNo = $kind === 'renumber' ? $newNo : $oldNo;
     $curName = $newName;
+    $curEn = null;
     if ($srcDocId > 0) {
         try {
-            $q = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=? LIMIT 1");
+            require_once __DIR__ . '/asdoc_lib.php'; eg_asdoc_ensure_name_en($db);
+            $q = $db->prepare("SELECT doc_no, doc_name, doc_name_en FROM as_document WHERE id=? LIMIT 1");
             $q->execute([$srcDocId]);
             if ($cur = $q->fetch(PDO::FETCH_ASSOC)) {
                 $curNo = (string)$cur['doc_no'];
                 $curName = (string)$cur['doc_name'];
+                $curEn = (string)($cur['doc_name_en'] ?? '');
             }
         } catch (Throwable $e) {}
     }
@@ -467,7 +470,7 @@ function adr_scan_on_change(PDO $db, array $src): array
         }
         // 參照標記（有 data-asdoc 的）一律用精準比對補上；改名只有這一條路
         if ($srcDocId > 0 && $kind !== 'obsolete') {
-            foreach (adr_span_hits($html, $srcDocId, $curNo, $curName) as $h) {
+            foreach (adr_span_hits($html, $srcDocId, $curNo, $curName, $curEn) as $h) {
                 /* renumber 時標記裡的舊編號也會被上面的字串比對抓到一次，
                    這裡用「現在寫的字」去重，同一處不會算兩次。 */
                 $dup = false;

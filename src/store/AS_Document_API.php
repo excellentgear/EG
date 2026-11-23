@@ -181,6 +181,13 @@ function asRemarkEnsure(PDO $db): void {
                        COMMENT '文件備註（富文字HTML，管理員維護，僅畫面顯示不列印）' AFTER doc_name");
         }
     } catch (Exception $e) { /* 無權限改結構時不擋主流程，備註功能自然不出現 */ }
+    // 英文名稱（+AS 可「名稱＋英文名稱」換行帶入）。MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加
+    try {
+        if (!$db->query("SHOW COLUMNS FROM as_document LIKE 'doc_name_en'")->fetch()) {
+            $db->exec("ALTER TABLE as_document ADD COLUMN doc_name_en VARCHAR(200) NULL
+                       COMMENT '文件英文名稱' AFTER doc_name");
+        }
+    } catch (Exception $e) {}
 }
 
 
@@ -633,11 +640,11 @@ case 'list_documents':
     if (!$incObsolete) $where[] = "d.is_obsolete = 0";
     if ($kw !== '')   {
         // 搜尋範圍：文件編號/名稱＋底下紀錄(附件)的標題/備註（備註可打 #標籤 供搜尋）
-        $where[] = "(d.doc_no LIKE ? OR d.doc_name LIKE ?
+        $where[] = "(d.doc_no LIKE ? OR d.doc_name LIKE ? OR d.doc_name_en LIKE ?
                      OR EXISTS (SELECT 1 FROM as_form_record fr2
                                 WHERE fr2.form_doc_id = d.id AND fr2.is_deleted = 0
                                   AND (fr2.title LIKE ? OR fr2.note LIKE ?)))";
-        $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%";
+        $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%";
     }
     if ($level!=='')  { $where[] = "d.doc_level = ?"; $params[]=$level; }
     if ($dept!=='')   { $where[] = "d.department_id = ?"; $params[]=(int)$dept; }
@@ -816,6 +823,7 @@ case 'get_document':
 case 'create_document':
     $doc_no  = trim($_POST['doc_no'] ?? '');
     $doc_name= trim($_POST['doc_name'] ?? '');
+    $doc_name_en = mb_substr(trim($_POST['doc_name_en'] ?? ''), 0, 200) ?: null;
     $doc_type= trim($_POST['doc_type'] ?? '');
     $level   = trim($_POST['doc_level'] ?? '');
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
@@ -858,11 +866,12 @@ case 'create_document':
     $applyExt = null;
     if ($hasApply) { $applyExt = asSafeExt($_FILES['apply_form']['name']); if(!$applyExt) jout(['status'=>'error','message'=>'申請單檔案類型不允許']); }
 
+    asRemarkEnsure($db);              // DDL，必須在 beginTransaction 之前
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
+        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_name_en,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,NOW(),NOW())")
+           ->execute([$doc_no,$doc_name,$doc_name_en,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
         $docId = (int)$db->lastInsertId();
 
         $dir = asDocDir($db, $docId);
@@ -1178,6 +1187,7 @@ case 'update_document_meta':
     $id = (int)($_POST['id'] ?? 0);
     $doc_no  = trim($_POST['doc_no'] ?? '');
     $doc_name= trim($_POST['doc_name'] ?? '');
+    $doc_name_en = mb_substr(trim($_POST['doc_name_en'] ?? ''), 0, 200) ?: null;
     $doc_type= trim($_POST['doc_type'] ?? '');
     $level   = trim($_POST['doc_level'] ?? '');
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
@@ -1200,17 +1210,20 @@ case 'update_document_meta':
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
 
     // 取更新前的編號與名稱（供子表單編號連動與「引用連動」用）
-    $oldNoStmt = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
+    asRemarkEnsure($db);
+    $oldNoStmt = $db->prepare("SELECT doc_no, doc_name, doc_name_en FROM as_document WHERE id=?");
     $oldNoStmt->execute([$id]);
-    $oldMeta = $oldNoStmt->fetch(PDO::FETCH_ASSOC) ?: ['doc_no' => '', 'doc_name' => ''];
+    $oldMeta = $oldNoStmt->fetch(PDO::FETCH_ASSOC) ?: ['doc_no' => '', 'doc_name' => '', 'doc_name_en' => ''];
+    $oldNameEn = trim((string)($oldMeta['doc_name_en'] ?? ''));
     $oldNo = (string)$oldMeta['doc_no'];
     $oldName2 = (string)$oldMeta['doc_name'];
     $cascade = ($_POST['cascade_children'] ?? '') === '1';
 
+    asRemarkEnsure($db);              // DDL，必須在 beginTransaction 之前
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
+        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_name_en=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
+           ->execute([$doc_no,$doc_name,$doc_name_en,$doc_type,$level,$dept,$parent,$id]);
 
         // 換編號時連動更新底下表單編號：舊前綴「oldNo-」換成「新編號-」（含遞迴子孫）；
         // cascade_dept=1 時子文件所屬部門一併改成本文件的新部門（換負責部門情境）
@@ -1250,10 +1263,12 @@ case 'update_document_meta':
                     'old_name' => $oldName2, 'new_name' => $doc_name,
                     'date' => $rdate, 'note' => $doc_name . ' 編號由 ' . $oldNo . ' 更正為 ' . $doc_no,
                 ]);
-            } elseif ($oldName2 !== '' && $oldName2 !== $doc_name) {
+            } elseif ($oldName2 !== '' && ($oldName2 !== $doc_name || $oldNameEn !== trim((string)$doc_name_en))) {
+                /* 英文名稱也算「改名」：內文裡「名稱＋英文名稱」格式的引用要跟著更新 */
                 $refScan2 = adr_scan_on_change($db, [
                     'kind' => 'rename', 'doc_id' => $id, 'old_no' => $doc_no,
-                    'old_name' => $oldName2, 'new_name' => $doc_name,
+                    'old_name' => $oldName2 . ($oldNameEn !== '' ? '／' . $oldNameEn : ''),
+                    'new_name' => $doc_name . (trim((string)$doc_name_en) !== '' ? '／' . trim((string)$doc_name_en) : ''),
                     'date' => $rdate,
                     'note' => '文件名稱由「' . $oldName2 . '」更正為「' . $doc_name . '」',
                 ]);

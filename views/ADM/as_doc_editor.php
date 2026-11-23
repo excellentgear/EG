@@ -356,6 +356,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         .ar-prev { font-weight:bold; color:#6B471A; background:#f0dfc4; padding:4px 10px; border-radius:3px; }
         /* 內文裡的參照標記：畫面上淡淡標起來，知道這段字跟哪份文件連著；列印一律不標 */
         .egrt-main .eg-asref { background:#FBE6C2; border-bottom:1px solid #E8890C; }
+        /* 名稱換行英文名稱時，兩行之間不要被內文的大行距撐開 */
+        .egrt-main .eg-asref { display:inline-block; line-height:1.2; vertical-align:top; }
         .egrt-main .eg-apref { border-bottom:1px dotted #8A5A2B; cursor:pointer; }
         /* 有綁定 AS 文件的字尾端多一個橘色「AS」小標＝有綁定；沒有底色也沒有小標＝只是普通文字。
            小標是 ::after 偽元素：不是內容的一部分，複製貼上與存檔都不會帶走，列印一律不顯示（下面 @media print 再關一次）。 */
@@ -363,7 +365,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
                                       border-radius:2px; padding:1px 2px; margin-left:2px; display:inline-block; position:relative; top:-3px; vertical-align:baseline;
                                       user-select:none; -webkit-user-select:none; }
         @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; }
-                       .eg-asref { background:none !important; border:none !important; }
+                       .eg-asref { background:none !important; border:none !important; display:inline-block; line-height:1.2; vertical-align:top; }
                        .eg-asref::after { content:none !important; display:none !important; } }
     </style>
 </head>
