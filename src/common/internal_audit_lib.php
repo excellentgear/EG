@@ -5590,3 +5590,124 @@ function ia_flow_gate(PDO $db, int $year, string $step): string
     }
     return '';
 }
+
+/* ======================================================================
+ * 2026-11-23 老師建議：過程導向查檢表（COP1~4、MP01~02、SP01~02 共 8 組）
+ * ----------------------------------------------------------------------
+ * 依航太品質手冊「附件C 品質管理系統流程圖」把二階程序書歸到 8 個過程群組。
+ * 每個群組的條文與文件表單**不另存一份**：條文題庫 ia_as_clause.doc_ref 本來就寫著
+ * 「這一條建立了哪些程序書、表單」（即附錄B 公司文件系統與 AS9100 條款對照），
+ * 群組只記「包含哪幾份程序書」，條文由 doc_ref 裡的文件編號（程序書編號或其底下的表單編號）反查。
+ * 預設歸屬依流程圖自動帶入一次，之後管理員可在設定跳窗自行增減。
+ * ====================================================================== */
+const IA_PGROUP_DEFAULTS = [
+    'COP1' => ['客戶需求與客戶滿意管理',   ['2-SM-01', '2-SM-02']],
+    'COP2' => ['新產品與製程工程管理',     ['2-TD-02', '2-GM-02', '2-TD-03', '2-TD-04', '2-GM-03', '2-TD-01', '2-QA-05']],
+    'COP3' => ['生產管理',                 ['2-PD-01', '2-PH-03', '2-QA-02', '2-QA-04', '2-QA-01']],
+    'COP4' => ['原物料管理',               ['3-OB-01', '2-QA-04', '2-WH-01', '2-PH-01']],
+    'MP01' => ['經營管理',                 ['2-GM-01', '2-GM-06', '2-GM-04', '2-GM-03', '2-QA-03', '2-GM-05']],
+    'MP02' => ['持續改善管理',             ['2-QA-05']],
+    'SP01' => ['資源管理',                 ['2-MM-01', '2-MM-02', '2-MM-03', '2-MM-05']],
+    'SP02' => ['品管輔助管理',             ['2-DC-01', '2-DC-02', '3-QA-01']],
+];
+
+function ia_pgroup_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_group (
+            group_code VARCHAR(10) NOT NULL PRIMARY KEY,
+            group_name VARCHAR(60) NOT NULL,
+            sort_order INT NOT NULL DEFAULT 0
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程導向查檢表的過程群組（COP/MP/SP）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_group_doc (
+            group_code VARCHAR(10) NOT NULL,
+            doc_id INT NOT NULL,
+            PRIMARY KEY (group_code, doc_id),
+            KEY idx_doc (doc_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='過程群組包含的程序書（as_document.id）'");
+        if ((int)$db->query("SELECT COUNT(*) FROM ia_process_group")->fetchColumn() === 0) {
+            $sort = 0;
+            $insG = $db->prepare("INSERT INTO ia_process_group (group_code, group_name, sort_order) VALUES (?,?,?)");
+            $insD = $db->prepare("INSERT IGNORE INTO ia_process_group_doc (group_code, doc_id) VALUES (?,?)");
+            $find = $db->prepare("SELECT id FROM as_document WHERE doc_no=? ORDER BY id LIMIT 1");
+            foreach (IA_PGROUP_DEFAULTS as $code => $def) {
+                $insG->execute([$code, $def[0], ++$sort * 10]);
+                foreach ($def[1] as $no) {
+                    $find->execute([$no]);
+                    if ($id = (int)$find->fetchColumn()) $insD->execute([$code, $id]);
+                }
+            }
+        }
+    } catch (Throwable $e) { error_log('ia_pgroup_ensure: ' . $e->getMessage()); }
+}
+
+/** 8 個群組＋各自包含的程序書（編號與名稱即時查 as_document） */
+function ia_pgroup_list(PDO $db): array
+{
+    ia_pgroup_ensure($db);
+    $out = [];
+    try {
+        foreach ($db->query("SELECT * FROM ia_process_group ORDER BY sort_order")->fetchAll(PDO::FETCH_ASSOC) as $g) {
+            $g['docs'] = [];
+            $out[$g['group_code']] = $g;
+        }
+        $q = $db->query("SELECT g.group_code, d.id, d.doc_no, d.doc_name FROM ia_process_group_doc g
+                           JOIN as_document d ON d.id=g.doc_id ORDER BY d.doc_no");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($out[$r['group_code']])) $out[$r['group_code']]['docs'][] = ['id' => (int)$r['id'], 'doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name']];
+        }
+    } catch (Throwable $e) {}
+    return array_values($out);
+}
+
+/** 可加入群組的程序書（二階／三階：編號只有三段，例 2-SM-01） */
+function ia_pgroup_candidates(PDO $db): array
+{
+    try {
+        return $db->query("SELECT id, doc_no, doc_name FROM as_document
+                            WHERE doc_no REGEXP '^[0-9]-[A-Z]{2}-[0-9]{2}$' ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+function ia_pgroup_save(PDO $db, string $code, array $docIds): void
+{
+    ia_pgroup_ensure($db);
+    $q = $db->prepare("SELECT 1 FROM ia_process_group WHERE group_code=?"); $q->execute([$code]);
+    if (!$q->fetchColumn()) throw new RuntimeException('過程群組不存在');
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM ia_process_group_doc WHERE group_code=?")->execute([$code]);
+        $ins = $db->prepare("INSERT IGNORE INTO ia_process_group_doc (group_code, doc_id)
+                             SELECT ?, id FROM as_document WHERE id=? AND doc_no REGEXP '^[0-9]-[A-Z]{2}-[0-9]{2}$'");
+        foreach (array_unique(array_map('intval', $docIds)) as $id) if ($id) $ins->execute([$code, $id]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+}
+
+/**
+ * 某過程群組對應的條文題庫 id（含所屬章節標題列，建查檢表時章節標題才會一起帶）。
+ * 條文的 doc_ref 裡出現「群組程序書編號」或「其底下的表單編號」（2-SM-01-01 以 2-SM-01 開頭）就算命中。
+ */
+function ia_pgroup_clause_ids(PDO $db, string $code): array
+{
+    ia_pgroup_ensure($db);
+    $q = $db->prepare("SELECT d.doc_no FROM ia_process_group_doc g JOIN as_document d ON d.id=g.doc_id WHERE g.group_code=?");
+    $q->execute([$code]);
+    $nos = array_flip(array_map('trim', $q->fetchAll(PDO::FETCH_COLUMN)));
+    if (!$nos) return ['ids' => [], 'clauses' => 0];
+    $ids = []; $lastHdr = 0; $hdrAdded = false; $n = 0;
+    foreach (ia_as_clauses($db) as $c) {
+        if ((int)$c['is_header']) { $lastHdr = (int)$c['clause_id']; $hdrAdded = false; continue; }
+        $hit = false;
+        if (preg_match_all('/\b([0-9]-[A-Z]{2}-[0-9]{2})(?:-[0-9]{2})?\b/', (string)($c['doc_ref'] ?? ''), $m)) {
+            foreach ($m[1] as $no) if (isset($nos[$no])) { $hit = true; break; }
+        }
+        if (!$hit) continue;
+        if ($lastHdr && !$hdrAdded) { $ids[] = $lastHdr; $hdrAdded = true; }
+        $ids[] = (int)$c['clause_id']; $n++;
+    }
+    return ['ids' => $ids, 'clauses' => $n];
+}

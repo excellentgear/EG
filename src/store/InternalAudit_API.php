@@ -3007,6 +3007,24 @@ case 'people_asof': {
 }
 
 
+/* ============================ 過程群組（COP／MP／SP）============================ */
+case 'pgroup_get': {
+    iaReqView($perms);
+    jout(['groups' => ia_pgroup_list($db), 'candidates' => ia_pgroup_candidates($db)]);
+}
+case 'pgroup_clauses': {
+    iaReqAudit($perms);
+    $r = ia_pgroup_clause_ids($db, (string)($_GET['code'] ?? $_POST['code'] ?? ''));
+    jout($r);
+}
+case 'pgroup_save': {
+    iaReqAdmin($perms);
+    $docs = json_decode((string)($_POST['doc_ids'] ?? '[]'), true);
+    try { ia_pgroup_save($db, (string)($_POST['code'] ?? ''), is_array($docs) ? $docs : []); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['saved' => true]);
+}
+
 /* ============================ 稽核範本 ============================ */
 case 'tpl_list': {
     iaReqView($perms);

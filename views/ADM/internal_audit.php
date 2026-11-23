@@ -397,6 +397,7 @@ $roleLabel = ia_role_label($perms);
             <button id="btnQualify"><i class="fa fa-user-plus"></i> 稽核員資格</button>
             <button id="btnTeam"><i class="fa fa-users"></i> 稽核小組</button>
             <button id="btnTplSetting"><i class="fa fa-clone"></i> 稽核範本</button>
+            <button id="btnPgroup"><i class="fa fa-th-large"></i> 過程群組</button>
             <button id="btnClauseBank"><i class="fa fa-list-ol"></i> AS條文題庫</button>
             <?php endif; ?>
             <span class="ia-role-badge">目前身分：<?= htmlspecialchars($roleLabel) ?>
@@ -1205,6 +1206,11 @@ $roleLabel = ia_role_label($perms);
             <div class="nk-main">
                 <!-- 已選的標籤另外列在這裡，方便確認自己挑了什麼（使用者 2026-09-14 要求） -->
                 <div class="nk-sel" id="nkTaskSel" style="display:none;"></div>
+                <div id="nkPgRow" style="display:none;margin-bottom:6px;padding:6px 8px;background:#FDF3E3;border:1px solid #E9C892;border-radius:4px;">
+                    <b style="color:#8A5A2B;font-size:13px;">依過程群組挑條文：</b>
+                    <span id="nkPgChips"></span>
+                    <button id="nkPgAll" type="button" style="height:26px;font-size:12px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;margin-left:6px;" title="COP1~SP02 每個群組各建一張 AS稽核查檢表（共 8 張，沒有對應條文的群組略過）">每個群組各建一張（共 8 張）</button>
+                </div>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                     <b style="color:#8A5A2B;font-size:14px;">這次要查的項目</b>
                     <input type="text" id="nkFilter" placeholder="輸入關鍵字篩選…" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 8px;font-size:13px;width:200px;">
@@ -1713,6 +1719,20 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mfoot"><button data-close>關閉</button><button id="btnTeamSave" class="btn-warm">儲存小組名單</button></div>
 </div></div>
 
+
+<!-- ============================ 過程群組設定（COP／MP／SP）============================ -->
+<div class="ia-mask" id="pgMask"><div class="ia-modal wide">
+    <div class="ia-mhead"><h4><i class="fa fa-th-large"></i> 過程群組設定（COP／MP／SP）</h4>
+        <span class="x" data-close style="margin-left:auto;">&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">依航太品質手冊「附件C 品質管理系統流程圖」，把程序書歸到 8 個過程群組。
+            AS稽核查檢表建立時可<b>依群組一次勾選對應的條文與文件表單</b>，也可「每個群組各建一張」共 8 張。
+            條文與表單由「AS條文題庫」每一條寫的文件編號自動反查（附錄B 條款對照），這裡只決定群組包含哪幾份程序書。
+            預設已依流程圖帶入，可自行增減；每個群組按「儲存」才生效。</div>
+        <div id="pgBody"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>關閉</button></div>
+</div></div>
 
 <!-- ============================ 稽核範本設定 ============================ -->
 <div class="ia-mask" id="tplMask"><div class="ia-modal wide">
@@ -4316,8 +4336,99 @@ function nkPicked(){
     });
     return {ids:ids, real:real};
 }
+/* ---- 過程群組（COP／MP／SP）：依群組一次勾選條文，或每個群組各建一張 ---- */
+var PGROUPS = null;
+function loadPgroups(cb){
+    if (PGROUPS) { if (cb) cb(); return; }
+    $.getJSON(API, {action:'pgroup_get'}, function(res){
+        if (!res.ok) return;
+        PGROUPS = res.groups || [];
+        var h = '';
+        PGROUPS.forEach(function(g){
+            h += '<button type="button" class="nkPgChip" data-code="'+esc(g.group_code)+'" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:12px;background:#fff;cursor:pointer;margin:0 3px;" title="'
+               + esc(g.group_name + '：' + (g.docs||[]).map(function(d){ return d.doc_no+' '+d.doc_name; }).join('、')) + '">'
+               + esc(g.group_code) + ' ' + esc(g.group_name) + '</button>';
+        });
+        $('#nkPgChips').html(h);
+        if (cb) cb();
+    });
+}
+$(document).on('click', '.nkPgChip', function(){
+    var code = $(this).data('code');
+    $.getJSON(API, {action:'pgroup_clauses', code:code}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        NK_CHECKED = {};
+        (res.ids||[]).forEach(function(id){ NK_CHECKED[+id] = true; });
+        renderBank();
+        iaToast(code + ' 對應 ' + (res.clauses||0) + ' 條條文，已勾選', 3000);
+    });
+});
+$(document).on('click', '#nkPgAll', function(){
+    var date = $('#nkDate').val();
+    if (!date) { alert('請先填建立（稽核）日期'); return; }
+    if (!confirm('要為 8 個過程群組各建一張 AS稽核查檢表嗎？\n（沒有對應條文的群組會略過）')) return;
+    var made = 0, skipped = [];
+    var srcIds = JSON.stringify($('#nkSrcList .nkSrcChk:checked').map(function(){ return +this.value; }).get());
+    var caseId = nkSrcCaseId();
+    (function next(i){
+        if (i >= PGROUPS.length) {
+            loadChecks(); closeMask('checkNewMask');
+            alert('已建立 ' + made + ' 張過程群組查檢表' + (skipped.length ? ('\n沒有對應條文而略過：' + skipped.join('、')) : ''));
+            return;
+        }
+        var g = PGROUPS[i];
+        $.getJSON(API, {action:'pgroup_clauses', code:g.group_code}, function(r){
+            if (!r.ok || !r.clauses) { skipped.push(g.group_code); next(i+1); return; }
+            $.post(API, {action:'check_create', kind:'as', check_date:date, auditor_key:$('#nkAuditor').val(),
+                case_id:caseId, title:g.group_code + ' ' + g.group_name, src_check_ids:srcIds, pick:JSON.stringify(r.ids)},
+                function(res){
+                    if (!res.ok) { alert(g.group_code + ' 建立失敗：' + (res.error||'')); return; }
+                    made++; next(i+1);
+                }, 'json');
+        });
+    })(0);
+});
+/* 設定跳窗 */
+$('#btnPgroup').on('click', function(){ PGROUPS = null; loadPgSettings(); openMask('pgMask'); });
+function loadPgSettings(){
+    $.getJSON(API, {action:'pgroup_get'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        var cands = res.candidates||[], h = '';
+        (res.groups||[]).forEach(function(g){
+            h += '<div class="pgBox" data-code="'+esc(g.group_code)+'" style="border:1px solid #E9C892;border-radius:6px;padding:8px 10px;margin-bottom:8px;">'
+               + '<b style="color:#8A5A2B;">'+esc(g.group_code)+'　'+esc(g.group_name)+'</b><div class="pgChips" style="margin:6px 0;">';
+            (g.docs||[]).forEach(function(d){
+                h += '<span class="nk-task pgDoc" data-id="'+d.id+'" style="margin:2px;">'+esc(d.doc_no+' '+d.doc_name)
+                   + ' <a href="javascript:void(0)" class="pgDel" style="color:#C4442D;">×</a></span>';
+            });
+            h += '</div><select class="pgAdd" data-eg-filter="輸入編號或名稱篩選…" style="min-width:260px;"><option value="">＋加入程序書…</option>';
+            cands.forEach(function(c){ h += '<option value="'+c.id+'">'+esc(c.doc_no+' '+c.doc_name)+'</option>'; });
+            h += '</select> <button class="pgSave" style="height:26px;">儲存</button></div>';
+        });
+        $('#pgBody').html(h);
+    });
+}
+$(document).on('click', '.pgDel', function(){ $(this).closest('.pgDoc').remove(); });
+$(document).on('change', '.pgAdd', function(){
+    var $b = $(this).closest('.pgBox'), id = $(this).val();
+    if (!id) return;
+    if (!$b.find('.pgDoc[data-id='+id+']').length) {
+        $b.find('.pgChips').append('<span class="nk-task pgDoc" data-id="'+id+'" style="margin:2px;">'+esc($(this).find('option:selected').text())
+            + ' <a href="javascript:void(0)" class="pgDel" style="color:#C4442D;">×</a></span>');
+    }
+    $(this).val('');
+});
+$(document).on('click', '.pgSave', function(){
+    var $b = $(this).closest('.pgBox');
+    var ids = $b.find('.pgDoc').map(function(){ return +$(this).data('id'); }).get();
+    $.post(API, {action:'pgroup_save', code:$b.data('code'), doc_ids:JSON.stringify(ids)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        PGROUPS = null; iaToast('已儲存 '+$b.data('code'));
+    }, 'json');
+});
 function renderBank(){
     var kind = $('#nkKind').val();
+    $('#nkPgRow').toggle(kind === 'as'); if (kind === 'as') loadPgroups();
     var kw = $('#nkFilter').val().trim().toLowerCase();
     renderTaskPanel();
     var HDRCNT = nkHdrPicked();      // 每章勾了幾題（標題列上顯示）
