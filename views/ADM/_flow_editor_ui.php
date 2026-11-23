@@ -166,6 +166,21 @@
         <button type="button" class="egf-btn" id="egfTxtB" title="圖形內文字靠下"><i class="fa fa-angle-down"></i></button>
         <button type="button" class="egf-btn" id="egfAsRef" style="display:none;font-weight:bold"
                 title="插入 AS 文件編號／名稱：先選一個圖形（或文字），插進去的文字會記住是哪一份 AS 文件；那份文件改了編號或名稱，下次打開這張流程圖會提示你更新"><i class="fa fa-plus"></i> AS</button>
+        <button type="button" class="egf-btn" id="egfAsAuto" style="display:none;font-weight:bold"
+                title="偵測AS：自動辨識整張流程圖裡每個圖形的文字，凡是寫著 AS 文件編號或名稱的，就記住是哪一份文件（文字不變），之後那份文件改編號或名稱會提示更新"><i class="fa fa-magic"></i> 偵測AS</button>
+        <button type="button" class="egf-btn" id="egfAsFill" style="display:none;font-weight:bold"
+                title="帶入相關文件：依這份文件內文「相關文件」「使用表單」兩節列出的 AS 文件，自動在流程圖左側／右側建立「文件」圖形並綁定文件編號與名稱（已經在圖上的不重複建立）"><i class="fa fa-files-o"></i> 帶入相關文件</button>
+        <span class="egf-lab">綁定</span>
+        <button type="button" class="egf-btn" id="egfBindProc" style="display:none;font-weight:bold"
+                title="綁定 AS 程序書：先點選「程序」的那個框再按。框裡會列出所選程序書的名稱（不顯示編號），對象改名後下次打開自動更新"><i class="fa fa-book"></i> 程序</button>
+        <button type="button" class="egf-btn" id="egfBindForm" style="display:none;font-weight:bold"
+                title="綁定 AS 表單：先點選「輸出」的那個框再按。框裡會列出所選表單的名稱（不顯示編號）"><i class="fa fa-file-text-o"></i> 表單</button>
+        <button type="button" class="egf-btn" id="egfBindDept" style="display:none;font-weight:bold"
+                title="綁定部門：先點選「人員」的那個框再按。選下層部門時，上面的課也會一起寫出（例如「資材課 生管組」）"><i class="fa fa-sitemap"></i> 部門</button>
+        <button type="button" class="egf-btn" id="egfBindKpi" style="display:none;font-weight:bold"
+                title="綁定 KPI：先點選「績效」的那個框再按。選 KPI 方案（KPI_new.php）的區塊，框裡會列出該區塊的指標名稱"><i class="fa fa-line-chart"></i> KPI</button>
+        <button type="button" class="egf-btn" id="egfBindAuto" style="display:none;font-weight:bold"
+                title="自動綁定：標題是「程序／輸出／人員／績效」的框，依這份文件的相關文件、使用表單、負責部門、中心文字對應的 KPI 區塊自動帶入"><i class="fa fa-magic"></i> 自動綁定</button>
         <span class="egf-sep"></span>
         <span class="egf-lab">連線</span>
         <select class="egf-num" id="egfConnKind" style="width:92px" data-eg-skip
@@ -207,10 +222,6 @@
               <span class="egf-ic egf-ic-term"></span><i>起訖</i></div>
             <div class="egf-tile" draggable="true" data-drag="doc"   title="文件／表單">
               <span class="egf-ic egf-ic-doc"></span><i>文件</i></div>
-            <div class="egf-tile" draggable="true" data-drag="text"  title="純文字說明">
-              <span class="egf-ic egf-ic-text">字</span><i>文字</i></div>
-          </div>
-          <div class="egf-pal-t">連線（在畫布上畫）</div>
             <div class="egf-tile" draggable="true" data-drag="circle" title="圓形（拉成長寬不同＝橢圓）">
               <span class="egf-ic egf-ic-circle"></span><i>圓形</i></div>
             <div class="egf-tile" draggable="true" data-drag="round" title="四周圓角的方形">
@@ -302,13 +313,13 @@
   // snap 預設 false：使用者要的是「放到想放的位置」，靠齊格線會讓圖形一直跳到 10px 的倍數
   var cv = null, nextId = 1, snap = false, hist = [], histAt = -1, quiet = false;
   var lineColor = '#333333', fillColor = '#ffffff', fontSize = 12;
-  var onSaveCb = null;
-  var GRID = 10;
-  // 用既有圖片當底圖時，畫布上限（等比例縮）：太大打開就要一直捲才看得到全貌
-  var exportPad = 36;
-  var EGF_BG_MAX_W = 1400, EGF_BG_MAX_H = 1000;
   var fontZh = '微軟正黑體', fontEn = 'Arial';
   function fontStack() { return '"' + fontEn + '","' + fontZh + '",sans-serif'; }
+  var onSaveCb = null;
+  var exportPad = 6;
+  var GRID = 10;
+  // 用既有圖片當底圖時，畫布上限（等比例縮）：太大打開就要一直捲才看得到全貌
+  var EGF_BG_MAX_W = 1400, EGF_BG_MAX_H = 1000;
 
   function el(id) { return d.getElementById(id); }
   function stat(msg) { var s = el('egfStat'); if (s) s.textContent = msg || '　'; }
@@ -400,22 +411,22 @@
       sh = new fabric.Polygon([{x:60,y:0},{x:120,y:34},{x:60,y:68},{x:0,y:34}], baseShapeOpts(x, y));
     } else if (kind === 'term') {
       sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 120, height: 44, rx: 22, ry: 22 }));
-    } else if (kind === 'doc') {
-      sh = new fabric.Polygon([{x:14,y:0},{x:134,y:0},{x:120,y:48},{x:0,y:48}], baseShapeOpts(x, y));
-    } else {
-      sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 50 }));
+    } else if (kind === 'circle') {
+      sh = new fabric.Ellipse(Object.assign(baseShapeOpts(x, y), { rx: 44, ry: 44 }));
+    } else if (kind === 'round') {
+      sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 60, rx: 14, ry: 14 }));
     } else if (kind === 'barrow') {
       // 粗箭頭（單向，指向右；要換方向就轉動它）
       sh = new fabric.Polygon([{x:0,y:14},{x:76,y:14},{x:76,y:0},{x:110,y:30},{x:76,y:60},{x:76,y:46},{x:0,y:46}], Object.assign(baseShapeOpts(x, y), { fill: lineColor }));
     } else if (kind === 'darrowb') {
       // 粗箭頭（雙向）
       sh = new fabric.Polygon([{x:0,y:30},{x:34,y:0},{x:34,y:14},{x:76,y:14},{x:76,y:0},{x:110,y:30},{x:76,y:60},{x:76,y:46},{x:34,y:46},{x:34,y:60}], Object.assign(baseShapeOpts(x, y), { fill: lineColor }));
-    } else if (kind === 'circle') {
-      sh = new fabric.Ellipse(Object.assign(baseShapeOpts(x, y), { rx: 44, ry: 44 }));
-    } else if (kind === 'round') {
-      sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 60, rx: 14, ry: 14 }));
     } else if (kind === 'tri') {
       sh = new fabric.Polygon([{x:50,y:0},{x:100,y:86},{x:0,y:86}], baseShapeOpts(x, y));
+    } else if (kind === 'doc') {
+      sh = new fabric.Polygon([{x:14,y:0},{x:134,y:0},{x:120,y:48},{x:0,y:48}], baseShapeOpts(x, y));
+    } else {
+      sh = new fabric.Rect(Object.assign(baseShapeOpts(x, y), { width: 130, height: 50 }));
     }
     sh.egRole = 'shape'; sh.egId = id; sh.egKind = kind;
     cv.add(sh);
@@ -508,10 +519,6 @@
                NE: {x: L + W * 0.75, y: T + H * 0.25}, SE: {x: L + W * 0.75, y: T + H * 0.75},
                SW: {x: L + W * 0.25, y: T + H * 0.75}, NW: {x: L + W * 0.25, y: T + H * 0.25} };
     }
-    if (sh.egKind === 'doc') {
-      // 平行四邊形：上下邊依傾斜量內縮，點才會貼在實際的邊上
-      var off = Math.min(W * 0.1, 14);
-      return { N: {x: cx + off / 2, y: T}, S: {x: cx - off / 2, y: T + H},
     if (sh.egKind === 'circle') {
       // 圓（橢圓）：四個方位點＋45 度的四個點，點才會貼在弧線上而不是外框角上
       var kx = 0.5 * Math.SQRT1_2 * W, ky = 0.5 * Math.SQRT1_2 * H;
@@ -526,6 +533,10 @@
                W: {x: L + W * 0.25, y: cy}, E: {x: L + W * 0.75, y: cy},
                NW: {x: L + W * 0.375, y: T + H * 0.25}, NE: {x: L + W * 0.625, y: T + H * 0.25} };
     }
+    if (sh.egKind === 'doc') {
+      // 平行四邊形：上下邊依傾斜量內縮，點才會貼在實際的邊上
+      var off = Math.min(W * 0.1, 14);
+      return { N: {x: cx + off / 2, y: T}, S: {x: cx - off / 2, y: T + H},
                E: {x: L + W - off / 2, y: cy}, W: {x: L + off / 2, y: cy},
                NE: {x: L + W, y: T}, SE: {x: L + W - off, y: T + H},
                SW: {x: L, y: T + H}, NW: {x: L + off, y: T} };
@@ -605,8 +616,31 @@
     if (t.type === 'activeSelection' && t.getObjects) t.getObjects().forEach(fn);
     else fn(t);
   }
+  /* 圓角矩形／起訖（膠囊）被拉伸時，fabric 預設是對整個物件做 scaleX/scaleY，
+     圓角會跟著被拉成橢圓（使用者 2026-10-28）。改成把縮放「烘」進寬高、scale 歸 1，
+     圓角半徑維持原本的大小（膠囊則維持半徑＝高度的一半）。已在群組（框選）裡的不動，
+     等取消框選後再處理。 */
+  function normalizeRect(o) {
+    if (!o || o.egRole !== 'shape' || o.type !== 'rect' || o.group) return false;
+    if (!(o.rx > 0 || o.ry > 0)) return false;
+    var sx = o.scaleX || 1, sy = o.scaleY || 1;
+    if (Math.abs(sx - 1) < 1e-6 && Math.abs(sy - 1) < 1e-6) return false;
+    var pill = o.ry >= o.height / 2 - 0.5;
+    var w = o.width * sx, h = o.height * sy;
+    var r = pill ? Math.min(w, h) / 2 : Math.min(o.rx, w / 2, h / 2);
+    o.set({ width: w, height: h, scaleX: 1, scaleY: 1, rx: r, ry: r });
+    o.setCoords();
+    return true;
+  }
+  function normalizeAllRects() {
+    var n = 0;
+    if (cv) cv.getObjects().forEach(function (o) { if (normalizeRect(o)) { syncLabel(o); n++; } });
+    return n;
+  }
+
   function syncMoved(o) {
     if (!o) return;
+    if (normalizeRect(o)) { /* 縮放已烘進寬高，下面照常同步文字與連線 */ }
     if (o.egRole === 'shape') { syncLabel(o); syncBoundConns(o); }
     else if (o.egRole === 'conn') syncConn(o);   // 箭頭不在群組裡，要自己重算位置
   }
@@ -837,10 +871,6 @@
            dv: '已由上到下等距排好（不重疊）', dh: '已由左到右等距排好（不重疊）' }[mode] || '已排列');
   }
 
-  /** 這種線要在哪幾端放箭頭 */
-  function connHeadKinds(kind) {
-    if (kind === 'darrow') return ['a', 'b'];
-    if (kind === 'rarrow') return ['a'];
   /** 整張圖等比縮放（圖形、圖內文字、獨立文字、連線的每個折點一起），以全部內容的中心為基準。
       字級跟著縮（最小 6），線寬不變。 */
   function scaleAll(k) {
@@ -1285,7 +1315,7 @@
      打開時再跟資料庫現況比對（asRefCheck），改過的就提示一鍵更新。
      挑文件的畫面刻意**由呼叫端提供**（opt.onPickAsRef）：那份清單與樣式設定是
      AS 文件模組的事，流程圖編輯器不該自己去打 AS 的 API（它也用在別的頁面）。 */
-  var onPickAsRefCb = null, onAsRefCheckCb = null;
+  var onPickAsRefCb = null, onAsRefCheckCb = null, onAsAutoCb = null, onAsFillCb = null;
 
   /** 目前選到的那一個「放得下文字」的物件（圖形→它的標籤；文字→本身） */
   function asRefTarget() {
@@ -1309,7 +1339,7 @@
     /* 一個物件可能引用好幾份文件（例如一個方框裡寫兩份表單），所以 egAsRef 是陣列。
        `at` 記的是插入當下的字串位置，更新文字時才知道要換哪一段。 */
     var list = (t.egAsRef && t.egAsRef.slice) ? t.egAsRef.slice() : [];
-    list.push({ doc_id: meta.doc_id, no: meta.no, name: meta.name,
+    list.push({ doc_id: meta.doc_id, no: meta.no, name: meta.name, en: meta.en || '',
                 mode: meta.mode, tpl: meta.tpl || '', text: meta.text, at: cur.length });
     t.egAsRef = list;
     var sh = shapeOf(t);
@@ -1318,6 +1348,271 @@
     cv.requestRenderAll();
     snapshot();
     stat('已插入「' + meta.text + '」（記住了是哪一份 AS 文件，之後那份文件改編號或改名會提示更新）');
+  }
+
+
+
+  /* 已綁定 AS 文件的圖形，右上角畫一個橘色「AS」小標（使用者 2026-10-16：按了偵測AS，圖上看不出是哪幾個有綁）。
+     只畫在編輯畫面上，輸出成圖片時一定要關掉（asMarksOn=false），不可以印進文件裡。 */
+  var asMarksOn = true;
+  function drawAsMarks() {
+    if (!asMarksOn || !cv) return;
+    var ctx = cv.contextContainer, vt = cv.viewportTransform;
+    if (!ctx || !vt) return;
+    ctx.save();
+    ctx.transform(vt[0], vt[1], vt[2], vt[3], vt[4], vt[5]);
+    cv.getObjects().forEach(function (o) {
+      var hasBind = o.egBind && o.egBind.ids && o.egBind.ids.length;
+      if ((!o.egAsRef || !o.egAsRef.length) && !hasBind) return;
+      var host = (o.egRole === 'label') ? (shapeOf(o) || o) : o;
+      var r = host.getBoundingRect(true, true);
+      var tag = 'AS';
+      if (hasBind) tag = ({ proc: 'AS', form: 'AS', dept: '部門', kpi: 'KPI' })[o.egBind.kind] || 'AS';
+      var w = tag.length > 2 ? 28 : 22, h = 13, x = r.left + r.width - w + 2, y = r.top - h / 2;
+      ctx.fillStyle = '#E8890C';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, 3); else ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(tag, x + w / 2, y + h / 2 + 0.5);
+    });
+    ctx.restore();
+  }
+
+  /** 偵測AS：逐個圖形／文字辨識裡面的 AS 文件編號或名稱，記住是哪一份文件（文字不改）。 */
+  function asAutoDetect() {
+    if (!onAsAutoCb) { stat('這個頁面沒有提供 AS 文件清單'); return; }
+    var objs = cv.getObjects().filter(function (o) { return (o.egRole === 'label' || o.egRole === 'text') && String(o.text || '').trim() !== ''; });
+    if (!objs.length) { stat('流程圖裡還沒有文字'); return; }
+    onAsAutoCb(objs.map(function (o) { return String(o.text); }), function (res) {
+      var n = 0;
+      objs.forEach(function (o, i) {
+        var ms = (res && res[i]) || [];
+        var list = (o.egAsRef && o.egAsRef.slice) ? o.egAsRef.slice() : [];
+        ms.forEach(function (m) {
+          var dup = list.some(function (r) { return String(r.doc_id) === String(m.doc_id); });
+          if (dup) return;
+          list.push({ doc_id: m.doc_id, no: m.no, name: m.name, mode: m.mode, tpl: m.tpl || '',
+                      text: String(o.text).substring(m.s, m.e), at: m.s });
+          n++;
+        });
+        if (list.length) o.egAsRef = list;
+      });
+      if (n) { snapshot(); cv.requestRenderAll(); stat('已辨識並綁定 ' + n + ' 處 AS 文件（文字沒有改；圖形右上角的橘色「AS」小標＝已綁定，不會印進文件）；可按「復原」取消'); }
+      else stat('沒有辨識到新的 AS 文件編號或名稱（已綁定過的不重複）');
+    });
+  }
+
+  /** 帶入相關文件：依文件內文「相關文件」「使用表單」兩節的 AS 文件，在左／右側建立「文件」圖形並綁定 */
+  function asFillDocs() {
+    if (!onAsFillCb) { stat('這個頁面沒有提供 AS 文件清單'); return; }
+    onAsFillCb(function (r) {
+      r = r || {};
+      var have = {};
+      asRefList().forEach(function (x) { have[String(x.doc_id)] = 1; });
+      var tpl = r.tpl || '{no}{name}';
+      var groups = [['related', r.related || [], 'L'], ['forms', r.forms || [], 'R']];
+      var total = 0, skipped = 0, made = [];
+      // 新圖形放在現有內容的下方（左欄／右欄各自往下排），免得蓋到已經畫好的流程
+      var maxB = 0;
+      cv.getObjects().forEach(function (o) { if (o.egRole === 'shape') maxB = Math.max(maxB, o.top + o.getScaledHeight()); });
+      var y0 = maxB ? snapv(maxB + 24) : 16, SW = 134 * 1.5, SH = 48 * 1.15, STEP = Math.round(SH + 12);
+      var needH = y0;
+      groups.forEach(function (g) {
+        var y = y0, rows = g[1].filter(function (d) { if (have[String(d.doc_id)]) { skipped++; return false; } return true; });
+        rows.forEach(function (dd) {
+          var x = g[2] === 'L' ? 12 : Math.max(12, LOGW - SW - 12);
+          var txt = asRefText('both', dd.no, dd.name, tpl);
+          var sh = addNode('doc', x, y, txt);
+          sh.set({ scaleX: 1.5, scaleY: 1.15 }); sh.setCoords();
+          var lb = labelOf(sh);
+          if (lb) lb.egAsRef = [{ doc_id: dd.doc_id, no: dd.no, name: dd.name, mode: 'both', tpl: tpl, text: txt, at: 0 }];
+          syncLabel(sh);
+          have[String(dd.doc_id)] = 1;
+          made.push(sh);
+          y += STEP; total++;
+        });
+        needH = Math.max(needH, y);
+      });
+      if (!total) { stat(skipped ? '相關文件／使用表單都已經在流程圖上了（' + skipped + ' 份已綁定）' : '在文件內文沒找到「相關文件」「使用表單」兩節列的 AS 文件'); return; }
+      if (LOGH < needH + 16) ensureCanvas(LOGW, needH + 16);
+      cv.discardActiveObject();
+      /* 新圖形放在現有內容下方，畫面多半停在最上面看不到＝像是「沒有建立」；
+         建完直接選取新圖形並把畫面捲到它們那裡（使用者 2026-10-19 回報） */
+      try {
+        if (made.length > 1) cv.setActiveObject(new fabric.ActiveSelection(made, { canvas: cv }));
+        else if (made.length === 1) cv.setActiveObject(made[0]);
+      } catch (e) {}
+      cv.requestRenderAll(); snapshot();
+      setTimeout(function () {
+        var host = d.querySelector('#egfWin .egf-canhost');
+        if (host && made.length) {
+          var top = Math.min.apply(null, made.map(function (m) { return m.top; }));
+          host.scrollTop = Math.max(0, Math.round(top * ZOOM) - 24);
+        }
+      }, 30);
+      stat('已建立 ' + total + ' 個「文件」圖形並綁定 AS 文件（右上角橘色「AS」小標＝已綁定）' + (skipped ? '（' + skipped + ' 份已在圖上，略過）' : '') + '；位置可以自己拖，可按「復原」取消');
+    });
+  }
+
+  /* ── 烏龜圖綁定：程序書／表單／部門／KPI 區塊（2026-10-28 使用者交辦）──
+     記在方框文字物件的 egBind={kind,head,ids,txt}。顯示的字一律由呼叫端（後端）依資料庫現況組出：
+       proc／form＝AS 文件名稱（不顯示編號）、dept＝部門（下層部門連上面的課一起寫）、kpi＝區塊底下的指標名稱。
+     txt 記「上次由綁定產生的文字」——打開時只有「使用者沒手動改過」的才自動換成最新，改過的不蓋。 */
+  var onBindCb = null;
+  var BIND_KIND = { proc: ['程序書', '程序'], form: ['表單', '輸出'], dept: ['部門', '人員'], kpi: ['KPI', '績效(KPI)'] };
+
+  function bindText(head, ids, map) {
+    var lines = [];
+    ids.forEach(function (id) { (map[String(id)] || []).forEach(function (l) { lines.push(l); }); });
+    var body = lines.map(function (l, i) { return (i + 1) + '. ' + l; }).join('\n');
+    return head ? (head + (body ? '\n' + body : '')) : body;
+  }
+  function bindHeadOf(txt) { return String(txt || '').split('\n')[0].replace(/^\s+|\s+$/g, ''); }
+  /* 第一行如果本身就是「1. xxx」的清單項目，這個物件是「只有清單、沒有標題」（Word 匯入的框，
+     標題「人員」是另一個獨立物件）——標題要留空，不然會把第一個項目當標題重複留著。 */
+  function bindHeadFromText(txt) {
+    var h = bindHeadOf(txt);
+    return /^\d+\s*[.．、]/.test(h) ? '' : h;
+  }
+  /** Word 匯入的框：標題（單獨一個文字物件）→ 它下方最近的那個編號清單物件 */
+  function bindIsTitle(o) {
+    // 真正的標題字：單獨一行、不是「1. xxx」清單項目、而且是「程序／輸出／人員／績效」之一
+    if (!o || o.egRole !== 'text') return false;
+    var t = String(o.text || '');
+    return t.indexOf('\n') < 0 && !/^\d+\s*[.．、]/.test(t.trim()) && !!bindKindOfHead(t.trim());
+  }
+  function bindListFor(hd) {
+    if (!bindIsTitle(hd)) return null;
+    var titles = cv.getObjects().filter(bindIsTitle);
+    var hc = hd.getCenterPoint(), best = null, bd = 1e12;
+    cv.getObjects().forEach(function (o) {
+      if (o === hd || o.egRole !== 'text') return;
+      if (!/^\d+\s*[.．、]/.test(bindHeadOf(o.text))) return;
+      var c = o.getCenterPoint(), dy = c.y - hc.y, dx = Math.abs(c.x - hc.x);
+      if (dy < 0 || dy > 220 || dx > 260) return;
+      // 這個清單上方最近的標題必須是 hd 本人，否則它是別的框（例如「輸出」）的清單
+      var own = null, od = 1e12;
+      titles.forEach(function (t) {
+        var tc = t.getCenterPoint(), ty = c.y - tc.y, tx = Math.abs(c.x - tc.x);
+        if (ty < 0 || tx > 260) return;
+        var d2 = ty * ty + tx * tx;
+        if (d2 < od) { od = d2; own = t; }
+      });
+      if (own !== hd) return;
+      var dd = dy * dy + dx * dx;
+      if (dd < bd) { bd = dd; best = o; }
+    });
+    return best;
+  }
+
+  /** 把綁定套進一個文字物件（label）：存 egBind 並重組文字 */
+  function bindApply(lb, kind, ids, map, head) {
+    if (head === undefined) head = (lb.egBind && typeof lb.egBind.head === 'string') ? lb.egBind.head : bindHeadFromText(lb.text);
+    var live = ids.filter(function (id) { return map[String(id)]; });
+    var txt = bindText(head, live, map);
+    var fill0 = (lb.egBind && lb.egBind.fill0) || lb.fill;
+    lb.set({ text: txt, fill: fill0 });          // 重新綁定＝回到原本的字色（紅字只代表「來源改了、尚未確認」）
+    lb.egBind = { kind: kind, head: head, ids: live, txt: txt, fill0: fill0 };
+    var sh = shapeOf(lb);
+    if (sh) syncLabel(sh);
+    return live.length;
+  }
+
+  function bindPick(kind) {
+    if (!onBindCb) { stat('這個頁面沒有提供綁定清單'); return; }
+    var lb = asRefTarget();
+    if (lb) { var lst0 = bindListFor(lb); if (lst0) lb = lst0; }      // 點到的是標題字（如「人員」）→ 改綁它下面的清單
+    if (!lb || (lb.egRole !== 'label' && lb.egRole !== 'text')) { stat('請先點選要綁定的那個方框（例如「程序」「輸出」「人員」「績效」的框）'); return; }
+    var cur = (lb.egBind && lb.egBind.kind === kind) ? lb.egBind.ids.slice() : [];
+    onBindCb.pick(kind, cur, function (ids) {
+      if (!ids || !ids.length) {
+        if (lb.egBind && lb.egBind.kind === kind) { delete lb.egBind; stat('已取消綁定（框裡的文字沒有動）'); cv.requestRenderAll(); snapshot(); }
+        return;
+      }
+      var hadOther = String(lb.text || '').split('\n').length > 1 && !(lb.egBind && lb.egBind.kind === kind);
+      if (hadOther && !w.confirm('這個框裡目前有其他內容，綁定後會換成綁定的清單（標題那一行保留）。\n\n確定要換嗎？')) return;
+      onBindCb.resolve(kind, ids, function (map) {
+        var n = bindApply(lb, kind, ids, map || {});
+        cv.setActiveObject(shapeOf(lb) || lb);
+        cv.requestRenderAll(); snapshot();
+        stat('已綁定「' + BIND_KIND[kind][0] + '」' + n + ' 項（框右上角有小標；對象改名後下次打開會自動更新）');
+      });
+    });
+  }
+
+  /** 框的標題行 → 該綁哪一種 */
+  function bindKindOfHead(h) {
+    if (/^(程序書?|作業程序)/.test(h)) return 'proc';
+    if (/^輸出/.test(h)) return 'form';
+    if (/^人員/.test(h)) return 'dept';
+    if (/^(績效|KPI)/i.test(h)) return 'kpi';
+    return '';
+  }
+
+  /** 自動帶入：找出標題是「程序／輸出／人員／績效」的框，各自依呼叫端算出的對象綁上去 */
+  function bindAuto() {
+    if (!onBindCb) { stat('這個頁面沒有提供綁定清單'); return; }
+    var slots = [], centerLb = null, bestD = 1e12, cx = LOGW / 2, cy = LOGH / 2;
+    cv.getObjects().forEach(function (o) {
+      if (o.egRole !== 'label' && o.egRole !== 'text') return;
+      var h = bindHeadOf(o.text), k = bindKindOfHead(h);
+      if (k && o.egRole === 'text') {                       // Word 匯入：標題與清單是兩個物件
+        var lst = bindListFor(o);
+        if (lst) slots.push({ lb: lst, kind: k });
+        else if (String(o.text).indexOf('\n') >= 0) slots.push({ lb: o, kind: k });
+        return;
+      }
+      if (o.egRole !== 'label') return;
+      if (k) { slots.push({ lb: o, kind: k }); return; }
+      var sh = shapeOf(o) || o, c = sh.getCenterPoint(), dd = Math.pow(c.x - cx, 2) + Math.pow(c.y - cy, 2);
+      if (dd < bestD && String(o.text || '').trim()) { bestD = dd; centerLb = o; }
+    });
+    if (!slots.length) { stat('沒找到標題是「程序」「輸出」「人員」「績效」的框（框第一行要是這幾個字；也可以先點一個框再按上面的單項綁定）'); return; }
+    onBindCb.auto({ center: centerLb ? String(centerLb.text) : '' }, function (res) {
+      res = res || {};
+      var jobs = slots.filter(function (s) { return (res[s.kind] || []).length; });
+      if (!jobs.length) { stat('依這份文件算不出可帶入的對象（相關文件／使用表單／負責部門都沒有資料，或中心文字對不到 KPI 區塊）'); return; }
+      var left = jobs.length, done = [];
+      jobs.forEach(function (s) {
+        var ids = res[s.kind];
+        onBindCb.resolve(s.kind, ids, function (map) {
+          var n = bindApply(s.lb, s.kind, ids, map || {});
+          done.push(BIND_KIND[s.kind][0] + ' ' + n + ' 項');
+          if (--left === 0) {
+            cv.requestRenderAll(); snapshot();
+            stat('已自動帶入並綁定：' + done.join('、') + '（想增減某一框，點選它再按上面對應的綁定鈕）；可按「復原」取消');
+          }
+        });
+      });
+    });
+  }
+
+  /** 打開時：依資料庫現況重組「沒被手動改過」的綁定文字 */
+  function bindRefresh() {
+    if (!onBindCb || !cv) return;
+    var groups = {};
+    cv.getObjects().forEach(function (o) {
+      if (o.egBind && o.egBind.ids && o.egBind.ids.length) {
+        (groups[o.egBind.kind] = groups[o.egBind.kind] || []).push(o);
+      }
+    });
+    Object.keys(groups).forEach(function (kind) {
+      var all = [];
+      groups[kind].forEach(function (o) { o.egBind.ids.forEach(function (id) { if (all.indexOf(id) < 0) all.push(id); }); });
+      onBindCb.resolve(kind, all, function (map) {
+        var changed = 0;
+        groups[kind].forEach(function (o) {
+          if (String(o.text) !== String(o.egBind.txt)) return;      // 使用者手動改過，不蓋
+          var before = o.text, f0 = o.egBind.fill0 || o.fill;
+          bindApply(o, kind, o.egBind.ids, map || {}, o.egBind.head);
+          if (before !== o.text) { o.set({ fill: '#DD5138' }); o.egBind.fill0 = f0; changed++; }
+        });
+        if (changed) { cv.requestRenderAll(); stat('有 ' + changed + ' 個「' + BIND_KIND[kind][0] + '」框的內容已依最新資料更新並標成紅字——請按下方「插入到文件」存回，並重新發行這份文件'); }
+      });
+    });
   }
 
   /** 這張流程圖引用到的全部 AS 文件（去重） */
@@ -1343,12 +1638,12 @@
       list.forEach(function (r) {
         var c = cur[String(r.doc_id)];
         if (!c) return;
-        var want = asRefText(r.mode, c.no, c.name, r.tpl);
+        var want = asRefText(r.mode, c.no, c.name, r.tpl, c.en);
         if (want === r.text) return;
         // 以「原本插進去的那段字」為準做取代；找不到就不動（使用者可能自己改過字）
         if (txt.indexOf(r.text) >= 0) {
           txt = txt.replace(r.text, want);
-          r.text = want; r.no = c.no; r.name = c.name;
+          r.text = want; r.no = c.no; r.name = c.name; r.en = c.en || '';
           changed = true; n++;
         }
       });
@@ -1363,7 +1658,9 @@
   }
 
   /** 與後端 eg_asdoc_insert_text() 同一套規則（只帶名稱時固定加「」） */
-  function asRefText(mode, no, name, tpl) {
+  function asRefText(mode, no, name, tpl, en) {
+    if (mode === 'name_en') return String(name || '') + (en ? '\n' + en : '');
+    if (mode === 'no_name_en') return (String(no || '') + ' ' + String(name || '')).trim() + (en ? '\n' + en : '');
     if (mode === 'no') return String(no || '');
     if (mode === 'name') return '「' + String(name || '') + '」';
     var t = tpl || '{name}　({no})';
@@ -1384,7 +1681,7 @@
         (o.egAsRef || []).forEach(function (r) {
           var c = cur[String(r.doc_id)];
           if (!c) { bad.push('（文件已被刪除）' + r.no + ' ' + r.name); return; }
-          var want = asRefText(r.mode, c.no, c.name, r.tpl);
+          var want = asRefText(r.mode, c.no, c.name, r.tpl, c.en);
           if (want !== r.text) bad.push(r.text + ' → ' + want);
         });
       });
@@ -1403,7 +1700,7 @@
    *  不然存回來的流程圖會被還原成預設尺寸，圖形跑到畫布外面 */
   function serialize() {
     var jo = cv.toJSON(['egRole', 'egId', 'egKind', 'egPA', 'egPB', 'egEnd', 'egHA', 'egVA', 'egCurve',
-                        'egAsRef']);
+                        'egAsRef', 'egBind']);
     jo.egW = LOGW;
     jo.egH = LOGH;
     return JSON.stringify(jo);
@@ -1457,6 +1754,33 @@
     // 縮放統一由 open() 的 afterLoad 處理（它在這之後才跑，在這裡縮會被它蓋掉）
   }
 
+  var bgExpect = [], bgMissing = false;
+  /** 底圖沒有載回來時：用工作檔記的網址再載一次（最多 3 次、不帶跨來源模式），還是不行就標記起來讓存檔被擋下 */
+  function bgRecover() {
+    var have = cv.getObjects().some(function (o) { return o.egRole === 'bg'; });
+    if (have || !bgExpect.length) { bgMissing = false; return; }
+    bgMissing = true;
+    stat('底圖載入中…');
+    var o0 = bgExpect[0], tries = 0;
+    (function go() {
+      tries++;
+      fabric.Image.fromURL(o0.src, function (img) {
+        if (!img || !img.width) {
+          if (tries < 3) { setTimeout(go, 600); return; }
+          stat('底圖載入失敗：請取消後重新開啟，不要在這個狀態存檔（會把底圖存丟）');
+          return;
+        }
+        img.set({ left: o0.left || 0, top: o0.top || 0, originX: o0.originX || 'left', originY: o0.originY || 'top',
+                  scaleX: o0.scaleX || 1, scaleY: o0.scaleY || 1, selectable: false, evented: false, hasControls: false });
+        img.egRole = 'bg';
+        cv.add(img); cv.sendToBack(img);
+        bgMissing = false;
+        cv.requestRenderAll();
+        stat('底圖已載入');
+      });
+    })();
+  }
+
   function restore(j, cb) {
     quiet = true;
     // 畫布尺寸要先套：loadFromJSON 不管它，不先設好的話圖形會跑到畫布外面
@@ -1489,6 +1813,7 @@
         if (o.egRole === 'bg')    { o.selectable = false; o.evented = false; cv.sendToBack(o); }
       });
       nextId = mx + 1;
+      bgRecover();
       /* 2026-10-15 之前的工作檔，連接線是 fabric.Line（只有兩端、加不了折點）。
          一打開就就地換成 Polyline，使用者不必重畫；egId／egKind／綁定／顏色全部沿用，
          箭頭物件本來就是另一個物件靠 egId 配對的，不必動。 */
@@ -1565,33 +1890,6 @@
     paintSwatches();
     var objs = cv.getActiveObjects();
     if (!objs.length) { stat('已選好顏色，接下來新增的圖形會用這個顏色'); return; }
-  var bgExpect = [], bgMissing = false;
-  /** 底圖沒有載回來時：用工作檔記的網址再載一次（最多 3 次、不帶跨來源模式），還是不行就標記起來讓存檔被擋下 */
-  function bgRecover() {
-    var have = cv.getObjects().some(function (o) { return o.egRole === 'bg'; });
-    if (have || !bgExpect.length) { bgMissing = false; return; }
-    bgMissing = true;
-    stat('底圖載入中…');
-    var o0 = bgExpect[0], tries = 0;
-    (function go() {
-      tries++;
-      fabric.Image.fromURL(o0.src, function (img) {
-        if (!img || !img.width) {
-          if (tries < 3) { setTimeout(go, 600); return; }
-          stat('底圖載入失敗：請取消後重新開啟，不要在這個狀態存檔（會把底圖存丟）');
-          return;
-        }
-        img.set({ left: o0.left || 0, top: o0.top || 0, originX: o0.originX || 'left', originY: o0.originY || 'top',
-                  scaleX: o0.scaleX || 1, scaleY: o0.scaleY || 1, selectable: false, evented: false, hasControls: false });
-        img.egRole = 'bg';
-        cv.add(img); cv.sendToBack(img);
-        bgMissing = false;
-        cv.requestRenderAll();
-        stat('底圖已載入');
-      });
-    })();
-  }
-
     objs.forEach(function (o) {
       if (o.egRole === 'handle') return;
       if (kind === 'line') {
@@ -1620,7 +1918,6 @@
     if (fabric.Polyline.prototype.__egHitPatched) return;
     var orig = fabric.Polyline.prototype.containsPoint;
     fabric.Polyline.prototype.containsPoint = function (point, absolute, calculate) {
-      bgRecover();
       if (this.egRole === 'conn' && point && this.points && this.points.length > 1) {
         /* ⚠ fabric 傳進來的 point 是「畫面座標」（含縮放位移），節點是場景座標，
            直接比對在縮放時永遠不會命中，要先反算回場景座標。 */
@@ -1757,6 +2054,7 @@
     patchConnHitArea();
     patchCurvedPoly();
     cv = new fabric.Canvas('egfCanvas', { backgroundColor: '#ffffff', preserveObjectStacking: true });
+    cv.on('after:render', drawAsMarks);
 
     cv.on('object:moving', function (e) {
       var o = e.target;
@@ -1787,7 +2085,36 @@
        線就是自由拖拉；只有在**拖連線端點**時才顯示附近圖形的錨點當提示，
        靠過去會吸附並記住綁定（之後移動圖形，線會跟著走）。 */
     cv.on('mouse:up', function () { clearGuides(); clearPortDots(); });
-    cv.on('object:scaling', function (e) { eachSel(e.target, syncMoved); });
+    /* 框選多個一起拉伸：fabric 會把群組的縮放乘到每個成員身上，獨立的文字物件（Word 匯入的
+       標題與清單）因此被壓扁／拉長。使用者要的是「只拉寬度，文字大小不變」，所以每個事件都把
+       文字成員的縮放反向抵銷（成員縮放＝原本縮放÷群組縮放），位置仍照群組比例移動；
+       取消框選時 fabric 把群組縮放乘回去，剛好回到原本的 1 倍。 */
+    cv.on('object:scaling', function (e) {
+      var t = e.target;
+      if (t && t.type === 'activeSelection' && t.getObjects) {
+        var gs = t.scaleX || 1, gt = t.scaleY || 1;
+        t.getObjects().forEach(function (c) {
+          if (c.egRole !== 'text' && c.egRole !== 'label') return;
+          if (!c.__egBase) c.__egBase = { x: c.scaleX || 1, y: c.scaleY || 1, w: c.width };
+          // 字的大小不變（縮放抵銷），但文字「框」的寬度跟著外框一起縮放：
+          // 另一側固定、這一側跟著動，文字在新的寬度裡重新換行
+          c.set({ scaleX: c.__egBase.x / gs, scaleY: c.__egBase.y / gt });
+          if (c.type === 'textbox') c.set({ width: Math.max(12, c.__egBase.w * gs) });
+        });
+      }
+      eachSel(t, syncMoved);
+    });
+    /* 原始縮放（__egBase）要一直留到「這組框選解散」才清：框選群組的縮放是累計的（拖第二次時
+       t.scaleY 仍含第一次），若每次放開滑鼠就清掉、下一次拖曳再用「已抵銷過的值」當基準，
+       就會多抵銷一次，取消框選後文字被拉長壓扁（使用者 2026-10-28「上下拉動後績效框文字變怪」）。 */
+    function clearEgBase() { cv.getObjects().forEach(function (o) { if (o.__egBase) delete o.__egBase; }); }
+    cv.on('mouse:up', function () {
+      var ao = cv.getActiveObject();
+      if (!ao || ao.type !== 'activeSelection') clearEgBase();
+    });
+    cv.on('selection:created', clearEgBase);
+    cv.on('selection:updated', clearEgBase);
+    cv.on('selection:cleared', clearEgBase);
     cv.on('object:modified', function (e) {
       var o = e.target;
       clearPortDots();
@@ -1798,7 +2125,10 @@
     });
     cv.on('selection:created', onSel);
     cv.on('selection:updated', onSel);
-    cv.on('selection:cleared', function () { nodeEditId = null; clearHandles(); syncNodeBtn(); });
+    cv.on('selection:cleared', function () {
+      nodeEditId = null; clearHandles(); syncNodeBtn();
+      if (normalizeAllRects()) { cv.requestRenderAll(); snapshot(); }
+    });
 
     function onSel() {
       clearHandles();
@@ -2302,6 +2632,9 @@
           if (!guideOn) clearGuides();
           stat(guideOn ? '已開啟對齊輔助線' : '已關閉對齊輔助線，拖曳不會再被吸過去');
           break;
+        case 'egfScaleDn': scaleAll(0.85); break;
+        case 'egfScaleUp': scaleAll(1 / 0.85); break;
+        case 'egfCenterAll': centerAll(); break;
         case 'egfResize': {
           var ww = Math.max(200, Math.min(2000, parseInt(el('egfCW').value, 10) || 760));
           var hh = Math.max(200, Math.min(3000, parseInt(el('egfCH').value, 10) || 560));
@@ -2350,6 +2683,13 @@
           onPickAsRefCb(asRefInsert);
           break;
         }
+        case 'egfBindProc': bindPick('proc'); break;
+        case 'egfBindForm': bindPick('form'); break;
+        case 'egfBindDept': bindPick('dept'); break;
+        case 'egfBindKpi':  bindPick('kpi');  break;
+        case 'egfBindAuto': bindAuto(); break;
+        case 'egfAsAuto': asAutoDetect(); break;
+        case 'egfAsFill': asFillDocs(); break;
         case 'egfAsUpd': {
           var cur = window.__egfAsCur;
           if (!cur) break;
@@ -2407,15 +2747,10 @@
       if (wr) wr.classList.remove('egf-drop');
     });
     /* Ctrl＋滾輪縮放（跟一般繪圖軟體一樣）。
-        case 'egfScaleDn': scaleAll(0.85); break;
-        case 'egfScaleUp': scaleAll(1 / 0.85); break;
-        case 'egfCenterAll': centerAll(); break;
        刻意要按著 Ctrl：不按的話滾輪要留給畫布捲動，圖一大就只能用捲軸找東西。 */
     var ck = el('egfConnKind');
     if (ck) ck.addEventListener('change', function () {
       var o = cv && cv.getActiveObject();
-        case 'egfScaleDn': scaleAll(0.85); break;
-        case 'egfScaleUp': scaleAll(1 / 0.85); break;
       if (o && o.egRole === 'conn') { setConnKind(o, ck.value); showHandles(o); snapshot(); stat('已換成' + ck.options[ck.selectedIndex].text); }
     });
 
@@ -2462,6 +2797,20 @@
       cv.requestRenderAll();
       snapshot();
     });
+    // 字體：中文／英文各一個下拉，組成 font-family 堆疊（英文字體在前：英數字用英文字體，漢字找不到字形時退到中文字體）
+    function applyFontPick() {
+      fontZh = el('egfFontZh').value; fontEn = el('egfFontEn').value;
+      var fam = fontStack();
+      cv.getActiveObjects().forEach(function (o) {
+        if (o.egRole === 'label' || o.egRole === 'text') o.set('fontFamily', fam);
+        if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) lb.set('fontFamily', fam); }
+      });
+      cv.getActiveObjects().forEach(function (o) { if (o.egRole === 'shape') syncLabel(o); });
+      cv.requestRenderAll();
+      snapshot();
+    }
+    el('egfFontZh').addEventListener('change', applyFontPick);
+    el('egfFontEn').addEventListener('change', applyFontPick);
     // 鍵盤：Delete 刪除、Ctrl+Z/Y 復原重做（在文字編輯中一律不攔）
     d.addEventListener('keydown', function (e) {
       if (!el('egfMask').classList.contains('open')) return;
@@ -2522,6 +2871,7 @@
 
   function doSave() {
     if (!cv) return;
+    if (bgMissing) { stat('底圖還沒載入（或載入失敗），先不要存：存下去會把底圖永遠存丟。請稍等一下再按，或取消後重新開啟。'); return; }
     clearHandles();
     clearPortDots();        // 連接點提示不可以被印進圖裡
     clearGuides();          // 對齊輔助線同理
@@ -2532,13 +2882,16 @@
     cv.discardActiveObject();
     cv.requestRenderAll();
     var objs = cv.getObjects().filter(function (o) {
-      return o.egRole !== 'handle' && o.egRole !== 'port' && o.egRole !== 'guide';
+      if (o.egRole === 'handle' || o.egRole === 'port' || o.egRole === 'guide') return false;
+      // 沒有文字的空文字物件看不見卻有大小，算進去會讓輸出多出一圈空白
+      if ((o.egRole === 'text' || o.egRole === 'label') && String(o.text || '').trim() === '') return false;
+      return true;
     });
     if (!objs.length) { stat('畫布是空的，沒有東西可以放進文件'); return; }
     /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
        （使用者：插入文件上時，應該依照實際大小插入，不是連旁邊畫布空白都插入）。
        取所有物件的外接矩形再留一點邊，並夾在畫布範圍內。 */
-    var PAD = exportPad;   // 四周留白（預設 36）：圖插進文件後旁邊要有空間可以加字；呼叫端可用 open({pad:n}) 改小，要讓圖緊貼時用
+    var PAD = exportPad;   // 四周留白（預設 6，自動貼齊內容）：圖插進文件後旁邊要有空間可以加字；呼叫端可用 open({pad:n}) 改小，要讓圖緊貼時用
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     objs.forEach(function (o) {
       var r = o.getBoundingRect(true, true);
@@ -2553,8 +2906,12 @@
     var ch = Math.ceil(maxY - minY + PAD * 2);
     if (!(cw > 0 && ch > 0)) { cx = 0; cy = 0; cw = LOGW; ch = LOGH; }
     // multiplier 2.5＝列印時不會鋸齒（列印是 300dpi 等級，螢幕 1x 印出來會糊）
-    var png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false,
-                             left: cx, top: cy, width: cw, height: ch });
+    asMarksOn = false;
+    var png;
+    try {
+      png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false,
+                           left: cx, top: cy, width: cw, height: ch });
+    } finally { asMarksOn = true; }
     var json = serialize();
     if (_z !== 1) { ZOOM = _z; applyZoom(); }     // 還原使用者原本的顯示縮放
     var cb = onSaveCb;
@@ -2565,22 +2922,12 @@
   function open(opt) {
     opt = opt || {};
     onSaveCb = opt.onSave || null;
+    exportPad = (typeof opt.pad === 'number' && opt.pad >= 0) ? opt.pad : 6;
     onPickAsRefCb = opt.onPickAsRef || null;
     onAsRefCheckCb = opt.onAsRefCheck || null;
-    // 字體：中文／英文各一個下拉，組成 font-family 堆疊（英文字體在前：英數字用英文字體，漢字找不到字形時退到中文字體）
-    function applyFontPick() {
-      fontZh = el('egfFontZh').value; fontEn = el('egfFontEn').value;
-      var fam = fontStack();
-      cv.getActiveObjects().forEach(function (o) {
-        if (o.egRole === 'label' || o.egRole === 'text') o.set('fontFamily', fam);
-        if (o.egRole === 'shape') { var lb = labelOf(o); if (lb) lb.set('fontFamily', fam); }
-      });
-      cv.getActiveObjects().forEach(function (o) { if (o.egRole === 'shape') syncLabel(o); });
-      cv.requestRenderAll();
-      snapshot();
-    }
-    el('egfFontZh').addEventListener('change', applyFontPick);
-    el('egfFontEn').addEventListener('change', applyFontPick);
+    onAsAutoCb = opt.onAsAuto || null;
+    onAsFillCb = opt.onAsFill || null;
+    onBindCb = opt.bind || null;
     window.__egfAsCur = null;
     el('egfMask').classList.add('open');
     if (!cv) { build(); bind(); }
@@ -2598,7 +2945,14 @@
       el('egfCH').value = LOGH;
       var ab = el('egfAsRef');
       if (ab) ab.style.display = onPickAsRefCb ? '' : 'none';
+      var ab2 = el('egfAsAuto'); if (ab2) ab2.style.display = onAsAutoCb ? '' : 'none';
+      var ab3 = el('egfAsFill'); if (ab3) ab3.style.display = onAsFillCb ? '' : 'none';
+      ['egfBindProc', 'egfBindForm', 'egfBindDept', 'egfBindKpi', 'egfBindAuto'].forEach(function (id) {
+        var b = el(id); if (b) b.style.display = onBindCb ? '' : 'none';
+      });
+      try { normalizeAllRects(); } catch (err) {}      // 以前被拉伸變形的圓角框，打開時順便修正
       try { asRefCheck(); } catch (err) {}
+      try { bindRefresh(); } catch (err) {}
       /* 不沿用上一次的縮放：先回 100%，**畫布比視窗大就自動縮到整張看得完**。
          從 Word 匯入的流程圖實測 666×575，比可視區大，固定 100% 的話
          一打開只看得到左上角一塊，下半張要捲才找得到（使用者 2026-10-15 回報）。 */
@@ -2641,7 +2995,6 @@
         cv.sendToBack(img);
         cv.requestRenderAll();
         afterLoad();
-    if (bgMissing) { stat('底圖還沒載入（或載入失敗），先不要存：存下去會把底圖永遠存丟。請稍等一下再按，或取消後重新開啟。'); return; }
       }, { crossOrigin: 'anonymous' });
     } else {
       cv.clear();
@@ -2663,4 +3016,3 @@
   w.EGFlow = { open: open, close: close, canvas: function () { return cv; } };
 })(window, document);
 </script>
-    exportPad = (typeof opt.pad === 'number' && opt.pad >= 0) ? opt.pad : 36;

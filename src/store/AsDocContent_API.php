@@ -683,16 +683,19 @@ case 'asref_build': {
     require_once __DIR__ . '/../common/asdoc_lib.php';
     $docId = (int)($_POST['doc_id'] ?? $_GET['doc_id'] ?? 0);
     $mode  = (string)($_POST['mode'] ?? $_GET['mode'] ?? 'both');
-    if (!in_array($mode, ['both', 'name', 'no'], true)) $mode = 'both';
+    if (!in_array($mode, ['both', 'name', 'name_en', 'no_name_en', 'no'], true)) $mode = 'both';
     $styleId = (string)($_POST['style'] ?? $_GET['style'] ?? '');
     $pre  = mb_substr(trim((string)($_POST['pre'] ?? $_GET['pre'] ?? '')), 0, 20);
     $post = mb_substr(trim((string)($_POST['post'] ?? $_GET['post'] ?? '')), 0, 20);
     if (preg_match('/[<>]/u', $pre . $post)) jerr('前後綴不可以含 < 或 >');
-    $st = $db->prepare("SELECT id, doc_no, doc_name, COALESCE(is_obsolete,0) obs
+    eg_asdoc_ensure_name_en($db);
+    $st = $db->prepare("SELECT id, doc_no, doc_name, doc_name_en, COALESCE(is_obsolete,0) obs
                         FROM as_document WHERE id=? AND is_deleted=0 LIMIT 1");
     $st->execute([$docId]);
     $d = $st->fetch(PDO::FETCH_ASSOC);
     if (!$d) jerr('找不到這份 AS 文件（可能已被刪除）');
+    if ($mode === 'name_en' && trim((string)$d['doc_name_en']) === '')
+        jerr('這份文件還沒有設定英文名稱，請先到「AS 文件管理」編輯文件填寫「文件英文名稱」');
     $tpl = '';
     if ($mode === 'both') {
         foreach (eg_asdoc_insert_styles($db) as $x) {
@@ -703,11 +706,12 @@ case 'asref_build': {
             $tpl = $all[0]['tpl'];
         }
     }
-    $span = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl);
+    $span = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl, (string)$d['doc_name_en']);
     $esc = fn($v) => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
     jout(true, [
         'html' => $esc($pre) . $span . $esc($post),
-        'text' => $pre . eg_asdoc_insert_text($mode, (string)$d['doc_no'], (string)$d['doc_name'], $tpl) . $post,
+        'text' => $pre . eg_asdoc_insert_text($mode, (string)$d['doc_no'], (string)$d['doc_name'], $tpl, (string)$d['doc_name_en']) . $post,
+        'en' => (string)$d['doc_name_en'],
         'obsolete' => (int)$d['obs'],
     ]);
 }
@@ -721,11 +725,12 @@ case 'asref_build_many': {
     if (!is_array($list) || !$list) jerr('沒有要替換的項目');
     $list = array_slice($list, 0, 500);
     $styles = eg_asdoc_insert_styles($db);
-    $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document WHERE id=? AND is_deleted=0 LIMIT 1");
+    eg_asdoc_ensure_name_en($db);
+    $st = $db->prepare("SELECT id, doc_no, doc_name, doc_name_en FROM as_document WHERE id=? AND is_deleted=0 LIMIT 1");
     $out = [];
     foreach ($list as $it) {
         $mode = (string)($it['mode'] ?? 'both');
-        if (!in_array($mode, ['both', 'name', 'no'], true)) $mode = 'both';
+        if (!in_array($mode, ['both', 'name', 'name_en', 'no_name_en', 'no'], true)) $mode = 'both';
         $st->execute([(int)($it['doc_id'] ?? 0)]);
         $d = $st->fetch(PDO::FETCH_ASSOC);
         if (!$d) { $out[] = null; continue; }
@@ -734,7 +739,7 @@ case 'asref_build_many': {
             $tpl = $styles[0]['tpl'];
             foreach ($styles as $x) if ($x['id'] === (string)($it['style'] ?? '')) { $tpl = $x['tpl']; break; }
         }
-        $out[] = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl);
+        $out[] = eg_asdoc_ref_span((int)$d['id'], (string)$d['doc_no'], (string)$d['doc_name'], $mode, $tpl, (string)$d['doc_name_en']);
     }
     jout(true, ['html' => $out]);
 }
@@ -750,10 +755,12 @@ case 'asref_resolve': {
     if (!$ids) jout(true, ['docs' => []]);
     $in = implode(',', $ids);
     $out = [];
-    foreach ($db->query("SELECT id, doc_no, doc_name, COALESCE(is_obsolete,0) obs
+    require_once __DIR__ . '/../common/asdoc_lib.php';
+    eg_asdoc_ensure_name_en($db);
+    foreach ($db->query("SELECT id, doc_no, doc_name, doc_name_en, COALESCE(is_obsolete,0) obs
                          FROM as_document WHERE is_deleted=0 AND id IN ($in)")
                 ->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $out[(string)$r['id']] = ['no' => (string)$r['doc_no'], 'name' => (string)$r['doc_name'],
+        $out[(string)$r['id']] = ['no' => (string)$r['doc_no'], 'name' => (string)$r['doc_name'], 'en' => (string)$r['doc_name_en'],
                                   'obsolete' => (int)$r['obs']];
     }
     jout(true, ['docs' => $out]);

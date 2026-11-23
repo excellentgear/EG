@@ -360,7 +360,7 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
         /* 有綁定 AS 文件的字尾端多一個橘色「AS」小標＝有綁定；沒有底色也沒有小標＝只是普通文字。
            小標是 ::after 偽元素：不是內容的一部分，複製貼上與存檔都不會帶走，列印一律不顯示（下面 @media print 再關一次）。 */
         .egrt-main .eg-asref::after { content:"AS"; font:bold 8px/1 sans-serif; color:#fff; background:#E8890C;
-                                      border-radius:2px; padding:1px 2px; margin-left:2px; vertical-align:super;
+                                      border-radius:2px; padding:1px 2px; margin-left:2px; display:inline-block; position:relative; top:-3px; vertical-align:baseline;
                                       user-select:none; -webkit-user-select:none; }
         @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; }
                        .eg-asref { background:none !important; border:none !important; }
@@ -653,6 +653,8 @@ $__editUrl = 'as_doc_editor.php?version_id=' . (int)$versionId;
           <span class="ar-lab">帶入</span>
           <label><input type="radio" name="arMode" value="both" checked data-eg-skip> 名稱＋編號</label>
           <label><input type="radio" name="arMode" value="name" data-eg-skip> 只有名稱</label>
+          <label><input type="radio" name="arMode" value="name_en" data-eg-skip> 名稱＋英文名稱（換行）</label>
+          <label><input type="radio" name="arMode" value="no_name_en" data-eg-skip> 編號 名稱＋英文名稱（換行）</label>
           <label><input type="radio" name="arMode" value="no" data-eg-skip> 只有編號</label>
         </div>
         <div class="ar-row" id="arStyleRow">
@@ -2609,14 +2611,16 @@ function arPrev() {
     var txt;
     if (mode === 'no') txt = AR.pick.doc_no;
     else if (mode === 'name') txt = '「' + AR.pick.doc_name + '」';
+    else if (mode === 'name_en') txt = AR.pick.doc_name + '\n' + (AR.pick.doc_name_en || '（尚未設定英文名稱）');
+    else if (mode === 'no_name_en') txt = AR.pick.doc_no + ' ' + AR.pick.doc_name + '\n' + (AR.pick.doc_name_en || '（尚未設定英文名稱）');
     else {
         var sid = $('#arStyle').val(), tpl = (AR.styles[0] || {}).tpl || '{name}　({no})';
         AR.styles.forEach(function (s) { if (s.id === sid) tpl = s.tpl; });
         txt = tpl.replace(/\{no\}/g, AR.pick.doc_no).replace(/\{name\}/g, AR.pick.doc_name);
     }
     txt = String($('#arPre').val() || '') + txt + String($('#arPost').val() || '');
-    $('#arPrev').text(txt);
-    $('#btnArInsert').prop('disabled', false);
+    $('#arPrev').text(txt).css('white-space', 'pre-line');
+    $('#btnArInsert').prop('disabled', (mode === 'name_en' || mode === 'no_name_en') && !(AR.pick.doc_name_en || '').trim());
 }
 /* ⚠ 關鍵字框只能綁 input，不能綁 change：打完字直接用滑鼠去點清單時，滑鼠按下去的瞬間
    輸入框失焦、觸發 change，清單被整個重畫，按下與放開落在不同的元素上，click 就不會發生——
@@ -2654,7 +2658,7 @@ $('#btnArInsert').on('click', function () {
                由流程圖編輯器自己記在物件的 egAsRef 上（見 _flow_editor_ui.php 的 asRefInsert）。 */
             var tpl = '';
             AR.styles.forEach(function (x) { if (x.id === sid) tpl = x.tpl; });
-            AR.pickCb({ doc_id: AR.pick.id, no: AR.pick.doc_no, name: AR.pick.doc_name,
+            AR.pickCb({ doc_id: AR.pick.id, no: AR.pick.doc_no, name: AR.pick.doc_name, en: r.en || '',
                         mode: mode, tpl: (mode === 'both' ? (tpl || (AR.styles[0] || {}).tpl || '') : ''),
                         text: r.text });
             AR.pickCb = null;

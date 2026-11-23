@@ -5793,7 +5793,7 @@ function ia_appendixb_parse(PDO $db): array
         $title = (string)$row[2];
         if ($title === '') continue;
         $hdr = (substr((string)$row[1], -1) === '.' && strpos($m[1], '.') === false);
-        preg_match_all('/\d-[A-Za-z]{2}-\d{2}/', (string)$row[4], $pm);
+        preg_match_all('/\d-[A-Za-z]{2}-\d{2}/', (string)$row[3] . ' ' . (string)$row[4], $pm);   // 程序書編號可能在名稱欄裡（綁定 AS 文件的參照標記）
         $out[] = ['no' => $m[1], 'title' => $title, 'is_header' => $hdr ? 1 : 0, 'proc_nos' => array_values(array_unique($pm[0]))];
     }
     return $out;

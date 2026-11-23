@@ -115,7 +115,7 @@ define('EG_RT_DOC_ATTRS', [
        為什麼要留這些屬性：被引用的那份文件改了編號或名稱時，純文字只能靠字串比對去找
        （名稱裡有標點或被換行拆開就找不到、而且完全不報錯），帶著 data-asdoc 才能精準反查。
        class 的值由 attrPat 鎖死成 eg-asref 一種，不是開放任意 class。 */
-    'span' => ['class','data-asdoc','data-asno','data-asname','data-asmode','data-astpl','data-apt'],
+    'span' => ['class','data-asdoc','data-asno','data-asname','data-asmode','data-asnameen','data-astpl','data-apt'],
 ]);
 
 /** 屬性值檢查：只收得下這幾種，其餘一律丟掉 */
@@ -129,7 +129,8 @@ define('EG_RT_DOC_ATTR_PAT', [
     'data-asdoc'  => '/^[1-9]\d{0,9}$/',
     'data-asno'   => '/^[0-9A-Za-z\-_.\/]{1,40}$/',
     'data-asname' => '/^[^<>\r\n]{1,120}$/u',
-    'data-asmode' => '/^(both|name|no)$/',
+    'data-asmode' => '/^(both|name|name_en|no_name_en|no)$/',
+    'data-asnameen' => '/^[^<>\r\n]{1,200}$/u',
     'data-astpl'  => '/^[^<>\r\n]{1,60}$/u',
     'data-sign'       => '/^[a-z_]{1,20}$/',
     'data-stamp-name' => '/^[^<>\r\n]{1,40}$/u',

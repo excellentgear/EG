@@ -41,13 +41,14 @@
   // span 的那一組＝AS 文件參照標記（見後端 EG_RT_DOC_ATTRS 的說明，兩邊必須一致）
   var DOC_ATTRS = { 'TD': ['colspan','rowspan','data-sign','data-stamp-name','data-stamp-dept','data-stamp-pos','data-stamp-date'], 'TH': ['colspan','rowspan'],
                     'IMG': ['data-asset'], 'COL': ['span'],
-                    'SPAN': ['class','data-asdoc','data-asno','data-asname','data-asmode','data-astpl','data-apt'] };
+                    'SPAN': ['class','data-asdoc','data-asno','data-asname','data-asmode','data-asnameen','data-astpl','data-apt'] };
   var DOC_ATTR_PAT = { 'colspan': /^([1-9]|[1-9]\d)$/, 'rowspan': /^([1-9]|[1-9]\d)$/,
                        'span': /^([1-9]|[1-9]\d)$/, 'data-asset': /^[1-9]\d{0,9}$/,
                        'class': /^eg-(asref|apref)$/, 'data-apt': /^[^<>\r\n]{1,120}$/, 'data-sign': /^[a-z_]{1,20}$/, 'data-stamp-name': /^[^<>\r\n]{1,40}$/, 'data-stamp-dept': /^[^<>\r\n]{0,40}$/, 'data-stamp-pos': /^[^<>\r\n]{0,40}$/, 'data-stamp-date': /^[0-9.\-\/]{0,12}$/, 'data-asdoc': /^[1-9]\d{0,9}$/,
                        'data-asno': /^[0-9A-Za-z\-_.\/]{1,40}$/,
                        'data-asname': /^[^<>\r\n]{1,120}$/,
-                       'data-asmode': /^(both|name|no)$/,
+                       'data-asmode': /^(both|name|name_en|no_name_en|no)$/,
+                       'data-asnameen': /^[^<>\r\n]{1,200}$/,
                        'data-astpl': /^[^<>\r\n]{1,60}$/ };
   // 可選字型：值是「字型堆疊」——中文字型一定要有英文後援，不然換一台電腦就印不出來
   var DOC_FONTS = [
@@ -288,6 +289,25 @@
        + '<span class="egrt-drop"><button type="button" class="egrt-btn egrt-tgl" data-pop="back" title="背景底色">'
        + '<i class="fa fa-paint-brush"></i><span class="egrt-ul" style="background:#F0A24B;"></span></button>' + swatches('back', BG_COLORS) + '</span>'
        + btn('removeFormat', 'eraser', '清除格式');
+    // 全文統一：一次設定所有頁面的中文字型／英數字型／字級（不必先選取）
+    var unOpt = function (list, first) {
+      return '<option value="">' + first + '</option>' + list.map(function (o) {
+        var v = (o instanceof Array) ? o[0] : o, t = (o instanceof Array) ? o[1] : o;
+        return v === '' ? '' : '<option value="' + escAttr(v) + '">' + escAttr(t) + '</option>';
+      }).join('');
+    };
+    h += '<span class="egrt-drop"><button type="button" class="egrt-btn egrt-tgl" data-pop="unify" style="width:auto;padding:0 6px;font-weight:bold;font-size:12px"'
+       + ' title="全文統一：一次把所有頁面的中文字型、英數字型、字級統一（不必先選取）。字級大大小小時用「依全文最常見字級」一鍵統一">'
+       + '<i class="fa fa-text-height"></i> 全文統一</button>'
+       + '<div class="egrt-pop egrt-pop-unify" style="width:230px;padding:8px">'
+       + '<div class="egrt-pf"><label>中文字型</label><select class="egrt-sel egrt-un-zh" data-eg-skip>' + unOpt(DOC_FONTS, '（不改）') + '</select></div>'
+       + '<div class="egrt-pf"><label>英數字型</label><select class="egrt-sel egrt-un-en" data-eg-skip>' + unOpt(EN_FONTS, '（不改／同中文）') + '</select></div>'
+       + '<div class="egrt-pf"><label>字級</label><select class="egrt-sel egrt-un-size" data-eg-skip>'
+       + '<option value="">（不改）</option><option value="__auto">依全文最常見字級（自動）</option>'
+       + DOC_SIZES.map(function (s) { return '<option value="' + s + '">' + s + '</option>'; }).join('') + '</select></div>'
+       + '<div style="font-size:11.5px;color:#8A5A2B;margin:4px 0">套用到所有頁面的正文；標題維持原本的階層大小，只統一字型。套用後無法用 Ctrl+Z 復原，請先存檔。</div>'
+       + '<div style="text-align:right"><button type="button" class="btn btn-xs btn-warning egrt-btn-un" data-cmd="egUnifyApply">套用到全部頁面</button></div>'
+       + '</div></span>';
     h += '<span class="egrt-br"></span>';
     // 第二排：對齊／縮排／清單／表格／插入
     h += btn('justifyLeft', 'align-left', '靠左') + btn('justifyCenter', 'align-center', '置中')
@@ -298,9 +318,13 @@
            + '段落開頭是 1. / 1.1 / 1.1.1 這種階層編號的，依「.」的段數自動排縮、'
            + '對齊數字後的內容，並在編號與文字之間補一個空格；'
            + '句尾是 (2-MM-01) 這種文件編號的連續幾段，括號也會對齊到同一欄')
-       + btn('egAlignParen', 'columns', '括號對齊：先用滑鼠選取要對齊的那幾列（例如 8.1～8.3 的相關文件清單），'
+       + '<button type="button" class="egrt-btn" data-cmd="egAlignParen" style="width:auto;padding:0 6px;font-weight:bold;font-size:12px;white-space:nowrap"'
+         + ' title="' + escAttr('括號對齊：先用滑鼠選取要對齊的那幾列（例如 8.1～8.3 的相關文件清單），'
            + '按這顆，每一列第一個「(」會對齊到同一欄；不動文字內容，AS 文件參照的標記也不會被破壞。'
-           + '想取消就把那幾列的括號前面退格刪掉再重按')
+           + '想取消就把那幾列的括號前面退格刪掉再重按') + '">|→( )</button>'
+       + btn('egRenum', 'list-ol', '重新編號：改好某一條的編號之後，把游標放在那一行再按這顆，'
+           + '它後面同一章節底下的編號會依序連號（例如改好 6.1.4.5 後，6.1.4.7 → 6.1.4.6，'
+           + '它底下的 6.1.4.7.1 → 6.1.4.6.1，到 6.1.5 為止）；只改段落開頭的編號，內文裡提到的編號不會動；替換前會先列出清單讓你確認')
        + '<span class="egrt-sep"></span>'
        // 上下對齊（作用在游標所在的表格儲存格；整張表選起來就整張套用）
        + btn('egVaTop', 'angle-up', '儲存格靠上')
@@ -335,6 +359,13 @@
          + ' title="插入 AS 文件編號／名稱：可打編號或名稱搜尋，也可以依部門與階別挑選；'
          + '插入後那份文件改了編號或名稱，這裡會自動提醒你確認">'
          + '<i class="fa fa-plus"></i> AS</button>';
+    /* 自動偵測 AS：先選取一段（可一次選很多行），系統自動辨識裡面的文件編號／名稱，
+       替換成「會連動的 AS 參照標記」。要有 opt.onAutoAsRef 才長出這顆鈕。 */
+    if (opt.onAutoAsRef)
+      h += '<button type="button" class="egrt-btn" data-cmd="egAsAuto" style="font-weight:bold;width:auto;padding:0 6px"'
+         + ' title="先選取一段文字（可一次選很多行），再按這顆：自動辨識裡面的 AS 文件編號與名稱，'
+         + '替換成會連動的參照（名稱＋編號、只有編號、「名稱」三種自動判斷），替換前會先列出清單讓你確認">'
+         + '<i class="fa fa-magic"></i> 偵測AS</button>';
     h += btn('egHr', 'minus', '水平線');
     h += '<span class="egrt-sep"></span>'
        + btn('egHardBreak', 'level-down', '強制換頁（像 Word 的「段落前分頁」）：游標所在的那一段（例如「8. 相關文件」標題）'
@@ -956,6 +987,10 @@
       '.egrt-btn{border:1px solid transparent;background:transparent;color:#6B471A;width:28px;height:26px;',
       'line-height:1;border-radius:3px;padding:0;margin:0 1px;vertical-align:middle;position:relative;}',
       '.egrt-btn:hover{background:#f2e6d4;border-color:#e4d3ba;}',
+      /* 唯讀：編輯工具列整個收起來，只留「一頁／雙頁」檢視切換；圖片浮動列也不給（那些全是修改動作） */
+      '.egrt-ro .egrt-bar .egrt-btn:not([data-view]),.egrt-ro .egrt-bar .egrt-sep,.egrt-ro .egrt-bar .egrt-drop,.egrt-ro .egrt-bar select,.egrt-ro .egrt-bar input{display:none !important;}',
+      '.egrt-ro .egrt-imgbar,.egrt-ro .egrt-ovbadge{display:none !important;}',
+      '.egrt-ro .egrt-main{cursor:default;}',
       '.egrt-btn.on{background:#e8d5b8;border-color:#d8c7b0;}',
       '.egrt-ul{position:absolute;left:5px;right:5px;bottom:3px;height:3px;border-radius:1px;}',
       '.egrt-sep{display:inline-block;width:1px;height:18px;background:#e4d3ba;margin:0 4px;vertical-align:middle;}',
@@ -1025,6 +1060,9 @@
          ⚠ 不能直接刪掉：.egrt-body（同一個元素也有）會把 7px 9px 帶回來。 */
       'max-height:none !important;padding:var(--adt-body-pad,0) calc(var(--adt-body-gap,0)*6pt);}',
       '.egrt-chrome{flex:0 0 auto;}',
+      /* 系統頁本體撐滿剩餘高度，大框底緣才會與正文頁（.egrt-main）同一條線 */
+      '.egrt-sysbody{flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;}',
+      '.egrt-sysbody>.adt-rev,.egrt-sysbody>.adt-cover{flex:1 1 auto;min-height:0;}',
       '.egrt-chrome *{cursor:default;}',
       // 系統頁（封面／制修訂紀錄書／目錄）：唯讀，標示「系統自動產生」
       '.egrt-sys .egrt-sheet{background:#fdfbf7;}',
@@ -1059,9 +1097,6 @@
       '.egrt-imgbar button{border:1px solid #e4d3ba;background:#faf6f0;color:#6B471A;font-size:11px;',
       'line-height:20px;height:22px;padding:0 6px;border-radius:3px;margin:0 1px;}',
       '.egrt-imgbar button:hover{background:#f2e6d4;}',
-      /* 系統頁本體撐滿剩餘高度，大框底緣才會與正文頁（.egrt-main）同一條線 */
-      '.egrt-sysbody{flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;}',
-      '.egrt-sysbody>.adt-rev,.egrt-sysbody>.adt-cover{flex:1 1 auto;min-height:0;}',
       '.egrt-imgbar .egrt-ib-del{color:#DD5138;}',
       '.egrt-handle{position:absolute;z-index:2299;width:12px;height:12px;background:#F0A24B;',
       'border:2px solid #fff;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);cursor:nwse-resize;}'
@@ -1101,6 +1136,7 @@
     var maxLen = opt.maxLen || 0;
     var paper = { size: opt.pageSize || 'A4', orient: opt.orientation || 'portrait' };
     var viewMode = (opt.viewMode === 'double') ? 'double' : 'single';
+    var readOnly = false;      // 唯讀：版面與編輯時完全一樣，但內容不可改（仍可選取複製）
 
     /* body ＝「目前作用中的那一頁」。
        刻意保留這個變數名並在焦點移動時改指向：這樣底下所有既有邏輯
@@ -1392,6 +1428,163 @@
       rememberRange();
       changed();
     }
+    /** 自動偵測 AS：以「段落」為單位把選取範圍內的文字串起來交給頁面辨識。
+     *  為什麼不是逐個文字節點：Word 匯入或手動編輯後，同一行的名稱與編號常被切在不同的 <span>／文字節點裡
+     *  （例如「人力資源管理程序」是一個標記、後面的「(2-MM-01)」是另一段），逐節點辨識永遠湊不成一對。
+     *  頁面回傳每段文字裡要替換的區間（s,e＝相對該段文字、html＝後端組好的參照標記），這裡只負責換 DOM。
+     *  已經是參照標記、但內容跟它記的設定對不上的（殘缺的標記，例如只剩名稱），先拆回普通文字再重新辨識。 */
+    function autoAsRef() {
+      var sel = w.getSelection(), rg = null;
+      if (sel && sel.rangeCount && host.contains(sel.getRangeAt(0).commonAncestorContainer)) rg = sel.getRangeAt(0).cloneRange();
+      else if (lastRange) rg = lastRange.cloneRange();
+      if (!rg || rg.collapsed) { alert('請先用滑鼠選取要辨識的段落（可一次選很多行），再按「偵測AS」'); return; }
+      var root = rg.commonAncestorContainer; if (root.nodeType === 3) root = root.parentNode;
+      // ① 殘缺的參照標記拆回普通文字（內容與記的模式／名稱／編號對不上才拆；完整的不動）
+      var squash = function (x) { return String(x || '').replace(/[\s　]+/g, ''); };
+      var broken = 0;
+      Array.prototype.slice.call(root.querySelectorAll('.eg-asref')).forEach(function (sp) {
+        if (!rg.intersectsNode(sp)) return;
+        var md = sp.getAttribute('data-asmode') || 'both', no = sp.getAttribute('data-asno') || '', nm = sp.getAttribute('data-asname') || '';
+        var tpl = sp.getAttribute('data-astpl') || '{name}　({no})';
+        var en = sp.getAttribute('data-asnameen') || '';
+        var want = md === 'no' ? no : (md === 'name' ? '「' + nm + '」' : (md === 'name_en' ? nm + en : (md === 'no_name_en' ? no + ' ' + nm + en : tpl.replace(/\{no\}/g, no).replace(/\{name\}/g, nm))));
+        if (squash(want) === squash(sp.textContent)) return;
+        while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+        sp.parentNode.removeChild(sp); broken++;
+      });
+      // 舊的複製貼上常把「標記底色」連同 style 一起帶過來，變成看起來像綁定、其實沒綁定的假底色，一併清掉
+      Array.prototype.slice.call(root.querySelectorAll('span[style*="background"]')).forEach(function (sp) {
+        if (!rg.intersectsNode(sp) || sp.classList.contains('eg-asref') || sp.closest('.eg-asref')) return;
+        var bg = (sp.style.backgroundColor || '').replace(/\s+/g, '').toLowerCase();
+        if (bg === 'rgb(253,244,230)' || bg === '#fdf4e6') { sp.style.backgroundColor = ''; if (!sp.getAttribute('style')) sp.removeAttribute('style'); broken++; }
+      });
+      // ② 收集文字節點（只收正文、略過仍然完整的參照標記），依段落分組
+      var groups = [], byBlock = [];
+      var tw = d.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
+      while ((n = tw.nextNode())) {
+        if (!rg.intersectsNode(n)) continue;
+        var pe = n.parentNode;
+        if (!pe || !pe.closest || !pe.closest('.egrt-main')) continue;   // 只收正文，不收頁首頁尾
+        var inSp = pe.closest('.eg-asref');      // 完整的參照標記也要算進段落文字（名稱與編號可能一個在標記裡、一個在外面）
+        var s0 = n === rg.startContainer ? rg.startOffset : 0;
+        var e0 = n === rg.endContainer ? rg.endOffset : n.nodeValue.length;
+        if (e0 <= s0) continue;
+        var blk = null, q = pe;
+        while (q && !q.classList.contains('egrt-main')) { if (/^(DIV|P|LI|TD|TH)$/.test(q.nodeName)) { blk = q; break; } q = q.parentNode; }
+        if (!blk) blk = pe;
+        var gi = byBlock.indexOf(blk);
+        if (gi < 0) { byBlock.push(blk); groups.push({ text: '', parts: [] }); gi = groups.length - 1; }
+        var g = groups[gi];
+        g.parts.push({ node: n, s: s0, e: e0, off: g.text.length, sp: inSp || null });
+        g.text += n.nodeValue.substring(s0, e0);
+      }
+      if (!groups.length) { alert('選取範圍內沒有文字'); return; }
+      // 完整標記各自佔的區間：辨識出來剛好等於它們的就不必再列、也不必換（沒變）
+      var keeps = groups.map(function (g) {
+        var m = [];
+        g.parts.forEach(function (pt) {
+          if (!pt.sp) return;
+          var e1 = pt.off + (pt.e - pt.s), f = null;
+          for (var k = 0; k < m.length; k++) if (m[k].sp === pt.sp) { f = m[k]; break; }
+          if (f) f.e = e1; else m.push({ sp: pt.sp, s: pt.off, e: e1 });
+        });
+        return m.map(function (x) { return [x.s, x.e]; });
+      });
+      // 該段有沒有「對齊用的空白標記」（空的 inline-block span）：有的話辨識時只換編號、不動名稱與對齊
+      var aligns = byBlock.map(function (b) {
+        return Array.prototype.some.call(b.querySelectorAll('span[style*="inline-block"]'), function (x) {
+          return !x.closest('.eg-asref');      // 不論空白標記或「名稱放在固定寬度欄位裡」，都是對齊用的
+        });
+      });
+      opt.onAutoAsRef(groups.map(function (g) { return g.text; }), function (res) {
+        var done = 0;
+        groups.forEach(function (g, i) {
+          var ms = ((res && res[i]) || []).slice().sort(function (a, b) { return b.s - a.s; });   // 由後往前換，前面的位置才不會跑掉
+          ms.forEach(function (m) {
+            var cov = g.parts.filter(function (pt) { return pt.off < m.e && pt.off + (pt.e - pt.s) > m.s; });
+            if (!cov.length || !cov[0].node.parentNode) return;
+            var tp = d.createElement('template'); tp.innerHTML = m.html;
+            // 蓋到的位置如果原本在舊標記裡面，先把那個舊標記拆掉（文字節點照舊，只是不再包在標記裡）
+            cov.forEach(function (pt) {
+              if (pt.sp && pt.sp.parentNode) {
+                var sp = pt.sp;
+                cov.concat(g.parts).forEach(function (o) { if (o.sp === sp) o.sp = null; });
+                while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+                sp.parentNode.removeChild(sp);
+              }
+            });
+            cov.forEach(function (pt, k) {
+              var v = pt.node.nodeValue;
+              var a = Math.max(m.s, pt.off) - pt.off + pt.s;               // 這個節點裡被蓋掉的起點
+              var z = Math.min(m.e, pt.off + (pt.e - pt.s)) - pt.off + pt.s;
+              if (k === 0) {
+                var after = (cov.length === 1) ? v.substring(z) : '';
+                pt.node.nodeValue = v.substring(0, a);
+                var ref = pt.node.nextSibling, par = pt.node.parentNode;
+                par.insertBefore(tp.content, ref);
+                if (after) par.insertBefore(d.createTextNode(after), ref);
+              } else {
+                pt.node.nodeValue = v.substring(0, a) + v.substring(z);
+              }
+            });
+            done++;
+          });
+        });
+        if (done || broken) afterEdit();
+      }, keeps, aligns);
+    }
+    /** 重新編號：以游標所在（或選取起點）那一段為基準，它**之後**同一個上層底下的編號依序連號。
+     *  為什麼不用「選取範圍」：每一頁是各自獨立的編輯區，滑鼠選取過不了頁，
+     *  而被牽動的編號常常跨頁（6.1.4.5 在上一頁底、6.1.4.7 在下一頁）。
+     *  範圍的終點＝遇到比基準更上層的編號（例如基準是 6.1.4.5，到 6.1.5 就停）或文件結尾。
+     *  規則：同層或較淺層 → 取上一條新編號的前幾段、最後一段 +1；剛好深一層 → 補 .1；其他（跳層）不動。
+     *  一層的「1.」「2.」常是某一條底下的子清單，不是章節，一律不動也不影響連號。 */
+    function renumberSelected() {
+      var sel = w.getSelection(), node = null;
+      if (sel && sel.rangeCount && host.contains(sel.getRangeAt(0).startContainer)) node = sel.getRangeAt(0).startContainer;
+      else if (lastRange) node = lastRange.startContainer;
+      var all = [], baseIdx = -1;
+      sheets().forEach(function (s) { blocksOf(s).forEach(function (c) { all.push(c); if (baseIdx < 0 && node && c.contains(node)) baseIdx = all.length - 1; }); });
+      var bm = baseIdx >= 0 ? numLabelMatch(all[baseIdx].textContent) : null;
+      if (!bm || bm.depth < 2) { w.alert('請先把游標放在「已經改好編號」的那一段（例如 6.1.4.5 那一行，要有 1.1 這種兩層以上的編號），再按「重新編號」；它後面同一章節底下的編號會依序連號。'); return; }
+      var prev = bm.num.split('.').map(function (x) { return parseInt(x, 10); }), baseDepth = bm.depth, changes = [];
+      for (var i = baseIdx + 1; i < all.length; i++) {
+        var b = all[i], m = numLabelMatch(b.textContent);
+        if (!m) continue;
+        if (m.depth < baseDepth) break;                            // 離開這個章節了
+        var parts = m.num.split('.').map(function (x) { return parseInt(x, 10); });
+        var np, k = parts.length;
+        if (k <= prev.length) np = prev.slice(0, k - 1).concat([prev[k - 1] + 1]);
+        else if (k === prev.length + 1) np = prev.concat([1]);
+        else { prev = parts; continue; }
+        prev = np;
+        var ns = np.join('.');
+        if (ns !== m.num) changes.push({ b: b, from: m.num, to: ns, text: (b.textContent || '').replace(/^[\s\u3000]*[\d.]+[\s\u3000]*/, '').slice(0, 14) });
+      }
+      if (!changes.length) { w.alert('基準 ' + bm.num + ' 之後的編號已經是連續的，不需要重新編號。'); return; }
+      var msg = '以 ' + bm.num + ' 為基準，將重新編號 ' + changes.length + ' 段：\n\n' + changes.slice(0, 25).map(function (c) { return c.from + ' → ' + c.to + '　' + c.text; }).join('\n')
+              + (changes.length > 25 ? '\n…另有 ' + (changes.length - 25) + ' 段' : '') + '\n\n確定嗎？';
+      if (!w.confirm(msg)) return;
+      var done = 0;
+      changes.forEach(function (c) { if (setLeadingNumber(c.b, c.from, c.to)) done++; });
+      if (done) afterEdit();
+    }
+    /** 把區塊開頭的編號文字換掉（編號可能被切在好幾個文字節點裡，所以逐節點改） */
+    function setLeadingNumber(block, oldNum, newNum) {
+      var tw = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null), nodes = [], n, full = '';
+      while ((n = tw.nextNode())) { nodes.push(n); full += n.nodeValue; if (full.length > 40) break; }
+      var ws = /^[\s　]*/.exec(full)[0].length;
+      if (full.substr(ws, oldNum.length) !== oldNum) return false;
+      var start = ws, end = ws + oldNum.length, pos = 0, put = false;
+      nodes.forEach(function (nd) {
+        var v = nd.nodeValue, ns = pos, ne = pos + v.length; pos = ne;
+        if (ne <= start || ns >= end) return;
+        var a = Math.max(start, ns) - ns, z = Math.min(end, ne) - ns;
+        nd.nodeValue = v.substring(0, a) + (put ? '' : newNum) + v.substring(z);
+        put = true;
+      });
+      return put;
+    }
     /** 字級：execCommand('fontSize') 只吃 1~7，所以先用 size=7 當記號標出選取範圍，
      *  再把那些 <font size="7"> 換成 <span style="font-size:14pt">（<font> 不在白名單、存檔會被脫殼）。
      *  這是處理「任意跨節點選取」最可靠的做法，自己用 range.surroundContents() 會在
@@ -1460,6 +1653,59 @@
       restoreRange();
       applyFontSize(Math.max(6, Math.min(72, curFontPt() + step)) + 'pt');
     }
+    /** 全文統一（使用者 2026-10-16：字大大小小、字型要能一次設定全部頁面）。
+     *  做法：把每個正文區裡「行內」的字型／字級宣告全部拿掉（那就是大大小小的來源），
+     *  再把統一值寫在區塊元素（p／li／td／th／div）上；標題不動字級，只統一字型。
+     *  沒有任何屬性的空 span 順手拆掉，免得檔案越存越肥。 */
+    function unifyDoc(zhStack, en, size) {
+      var BLK = 'p,li,td,th,div,h1,h2,h3,h4', n = 0, ptTxt = '';
+      var mains = sheets();
+      if (size === '__auto') {
+        var cnt = {};
+        mains.forEach(function (m) {
+          var tw = d.createTreeWalker(m, NodeFilter.SHOW_TEXT, null), t;
+          while ((t = tw.nextNode())) {
+            var len = t.textContent.replace(/\s/g, '').length;
+            if (!len || !t.parentNode || (t.parentNode.closest && t.parentNode.closest('h1,h2,h3,h4'))) continue;
+            var pt = Math.round((parseFloat(w.getComputedStyle(t.parentNode).fontSize) || 16) * 72 / 96);
+            cnt[pt] = (cnt[pt] || 0) + len;
+          }
+        });
+        var best = 0, bk = 0;
+        Object.keys(cnt).forEach(function (k) { if (cnt[k] > best) { best = cnt[k]; bk = k; } });
+        size = bk ? (bk + 'pt') : '';
+      }
+      ptTxt = size || '';
+      mains.forEach(function (m) {
+        // 1) 先算每個區塊要用的字型堆疊（只改英數時要保留它原本的中文字型）
+        var blocks = Array.prototype.slice.call(m.querySelectorAll(BLK));
+        var stacks = blocks.map(function (b) {
+          if (!zhStack && !en) return null;
+          if (zhStack) return composeFont(zhStack, en);
+          var fams = parseFams(w.getComputedStyle(b).fontFamily).filter(function (f) { return EN_NAMES.indexOf(f) < 0; });
+          return composeFont(fams.map(function (f) { return /^(serif|sans-serif|monospace|cursive|fantasy)$/.test(f) ? f : '"' + f + '"'; }).join(','), en);
+        });
+        // 2) 拿掉行內字型／字級
+        Array.prototype.slice.call(m.querySelectorAll('[style]')).forEach(function (el) {
+          if (zhStack || en) el.style.removeProperty('font-family');
+          if (size) el.style.removeProperty('font-size');
+          if (!el.getAttribute('style')) el.removeAttribute('style');
+        });
+        Array.prototype.slice.call(m.querySelectorAll('span')).forEach(function (sp) {
+          if (sp.attributes.length || !sp.parentNode) return;
+          while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp);
+          sp.parentNode.removeChild(sp);
+        });
+        // 3) 寫在區塊上
+        blocks.forEach(function (b, i) {
+          if (stacks[i]) b.style.fontFamily = stacks[i];
+          if (size && !/^H[1-4]$/.test(b.tagName)) b.style.fontSize = size;
+          n++;
+        });
+      });
+      autoPaginate();
+      return { n: n, pt: ptTxt };
+    }
     function syncSizeRead() {
       var sel = host.querySelector('.egrt-sel-size');
       if (sel) {
@@ -1525,6 +1771,15 @@
         d.body.appendChild(t); setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 3500); }
       if (cmd === 'egHardBreak') { var hb = toggleHardBreak(); if (!hb.ok) softTip(hb.msg); return; }
       if (cmd === 'egAlignParen') { var an = alignSelectedParen(); if (!an.n) softTip(an.msg); return; }
+      if (cmd === 'egUnifyApply') {
+        var uzh = host.querySelector('.egrt-un-zh').value, uen = host.querySelector('.egrt-un-en').value,
+            usz = host.querySelector('.egrt-un-size').value;
+        if (!uzh && !uen && !usz) { softTip('請先在下拉選要統一的項目（中文字型、英數字型或字級）'); return; }
+        if (!w.confirm('將把「所有頁面」的正文統一成你選的設定，且無法用 Ctrl+Z 復原。\n確定套用嗎？')) return;
+        var ur = unifyDoc(uzh, uen, usz);
+        softTip('已統一 ' + ur.n + ' 個段落' + (ur.pt ? '，字級 ' + ur.pt : ''));
+        return;
+      }
       if (cmd === 'egVaTop' || cmd === 'egVaMid' || cmd === 'egVaBot') {
         var va0 = cmd === 'egVaTop' ? 'top' : (cmd === 'egVaBot' ? 'bottom' : 'middle');
         if (!setCellVAlign(body, va0)) {
@@ -1582,6 +1837,8 @@
         // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
         if (cmd === 'egImage')     { rememberRange(); pendingRestore = true; if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
         if (cmd === 'egAsRef')     { rememberRange(); pendingRestore = true; if (opt.onInsertAsRef) opt.onInsertAsRef(insertHtml); return; }
+        if (cmd === 'egAsAuto')    { rememberRange(); autoAsRef(); return; }
+        if (cmd === 'egRenum')     { rememberRange(); renumberSelected(); return; }
         if (cmd === 'egFlow')      { rememberRange(); pendingRestore = true; if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
       }
       useCss(cmd);
@@ -1912,7 +2169,7 @@
       }
       var vb = t.closest('.egrt-btn[data-view]');
       if (vb) { closePops(); api.setViewMode(vb.getAttribute('data-view')); return; }
-      var btn = t.closest('.egrt-btn[data-cmd]');
+      var btn = t.closest('.egrt-btn[data-cmd],.egrt-btn-un[data-cmd]');
       if (btn) { closePops(); exec(btn.getAttribute('data-cmd')); }
     });
     d.addEventListener('click', function (e) {
@@ -1923,6 +2180,61 @@
     function bindSheet(el2) {
       if (!el2 || el2._egrtBound) return el2;
       el2._egrtBound = 1;
+
+      /* 表格欄寬拖曳（使用者 2026-10-16：表格欄位拉不寬）。
+         游標靠近儲存格右邊框 5px 內變成 ↔，按住左右拖：只動「這一欄與右邊那一欄」，表格總寬不變。
+         寬度寫在每一列對應的儲存格上（style width，白名單本來就放行；colgroup 不在白名單）。 */
+      function colEdgeCell(e) {
+        var c = e.target && e.target.closest ? e.target.closest('td,th') : null;
+        if (!c || !el2.contains(c)) return null;
+        var r = c.getBoundingClientRect();
+        return (r.right - e.clientX <= 5 && r.right - e.clientX >= -2) ? c : null;
+      }
+      function colStart(cell) {
+        var s = 0, n = cell.previousElementSibling;
+        while (n) { s += n.colSpan || 1; n = n.previousElementSibling; }
+        return s;
+      }
+      function colCells(tbl, startIdx, span) {
+        var out = [];
+        Array.prototype.slice.call(tbl.rows).forEach(function (row) {
+          Array.prototype.slice.call(row.cells).forEach(function (c) {
+            if (colStart(c) === startIdx && (c.colSpan || 1) === span && (c.rowSpan || 1) === 1) out.push(c);
+          });
+        });
+        return out;
+      }
+      el2.addEventListener('mousemove', function (e) {
+        if (e.buttons) return;
+        el2.style.cursor = colEdgeCell(e) ? 'col-resize' : '';
+      });
+      el2.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        var cell = colEdgeCell(e);
+        if (!cell) return;
+        var tbl = cell.closest('table'), nextCell = cell.nextElementSibling;
+        if (!tbl || !nextCell) return;           // 最後一欄的右邊沒有可讓出寬度的鄰欄
+        e.preventDefault();
+        var i0 = colStart(cell), s0 = cell.colSpan || 1, i1 = colStart(nextCell), s1 = nextCell.colSpan || 1;
+        var A = colCells(tbl, i0, s0), B = colCells(tbl, i1, s1);
+        var wA = cell.getBoundingClientRect().width, wB = nextCell.getBoundingClientRect().width, x0 = e.clientX;
+        // 先把整張表目前每一欄的實際寬度凍結成 px，拖動時才不會被瀏覽器重新分配
+        Array.prototype.slice.call(tbl.rows).forEach(function (row) {
+          Array.prototype.slice.call(row.cells).forEach(function (c) {
+            if ((c.colSpan || 1) === 1) c.style.width = Math.round(c.getBoundingClientRect().width * 10) / 10 + 'px';
+          });
+        });
+        function mv(ev) {
+          var dx = Math.max(-(wA - 30), Math.min(wB - 30, ev.clientX - x0));
+          A.forEach(function (c) { c.style.width = (Math.round((wA + dx) * 10) / 10) + 'px'; });
+          B.forEach(function (c) { c.style.width = (Math.round((wB - dx) * 10) / 10) + 'px'; });
+        }
+        function up() {
+          d.removeEventListener('mousemove', mv); d.removeEventListener('mouseup', up);
+          changed();
+        }
+        d.addEventListener('mousemove', mv); d.addEventListener('mouseup', up);
+      });
 
       // 貼上：一律先清洗再插入，避免把 Word/網頁的整片樣式、<script>、外部圖片帶進來
       el2.addEventListener('paste', function (e) {
@@ -2004,7 +2316,7 @@
         });
         el2.addEventListener('dblclick', function (e) {
           // 雙擊流程圖＝直接開編輯器（跟 Word 雙擊圖表一樣）
-          if (e.target && e.target.nodeName === 'IMG' && opt.onEditFlow) {
+          if (!readOnly && e.target && e.target.nodeName === 'IMG' && opt.onEditFlow) {
             var id = e.target.getAttribute('data-asset');
             if (!opt.assetKind || opt.assetKind(id) === 'flow') {
               opt.onEditFlow(id, function () { reloadAsset(id); });
@@ -2072,7 +2384,7 @@
 
       var s = d.createElement('div');
       s.className = 'egrt-body egrt-page egrt-main eg-docbody';
-      s.setAttribute('contenteditable', 'true');
+      s.setAttribute('contenteditable', readOnly ? 'false' : 'true');
       s.setAttribute('data-eg-skip', '');
       s.setAttribute('data-ph', opt.placeholder || '');
       s.innerHTML = (html === undefined || html === null || html === '') ? '<p><br></p>' : html;
@@ -2177,6 +2489,13 @@
       var sh = d.createElement('div');
       sh.className = 'egrt-sheet';
       wrap.appendChild(sh);
+      // 目錄算第 1 頁時要有頁首（後端給 hdr，結構只有 PHP 一份）
+      if (sp.hdr) {
+        var hd = d.createElement('div');
+        hd.className = 'egrt-chrome egrt-chrome-hdr';
+        hd.innerHTML = sp.hdr;
+        sh.appendChild(hd);
+      }
       var bd = d.createElement('div');
       // 刻意不叫 .egrt-main：那個 class 是「可編輯的正文區」，系統頁不能被算成正文頁
       bd.className = 'egrt-sysbody eg-docbody';
@@ -2528,13 +2847,6 @@
        這裡是為了救「之前就已經匯進來的舊內容」。 */
     function unwrapFrameTable(s) {
       var ks = blocksOf(s);
-      // 目錄算第 1 頁時要有頁首（後端給 hdr，結構只有 PHP 一份）
-      if (sp.hdr) {
-        var hd = d.createElement('div');
-        hd.className = 'egrt-chrome egrt-chrome-hdr';
-        hd.innerHTML = sp.hdr;
-        sh.appendChild(hd);
-      }
       if (ks.length !== 1) return false;
       var t = ks[0];
       if (!t || t.tagName !== 'TABLE') return false;
@@ -2550,7 +2862,9 @@
     }
 
     /** 把所有續表接回原表。回傳受影響的最前面那一頁（沒有就 -1） */
+    var unsplitMax = -1;       // 這次接回去的原表中，最後面那一頁（quick 回流要處理到這裡才不會漏拆）
     function unsplitTables() {
+      unsplitMax = -1;
       var conts = host.querySelectorAll('.egrt-main table[data-egrt-cont]');
       if (!conts.length) return -1;
       var ss = sheets(), minIdx = -1;
@@ -2562,6 +2876,7 @@
           tblRows(t).forEach(function (r) { tb.appendChild(r); });
           var os = org.closest('.egrt-main'), oi = ss.indexOf(os);
           if (oi >= 0 && (minIdx < 0 || oi < minIdx)) minIdx = oi;
+          if (oi > unsplitMax) unsplitMax = oi;
         }
         // 續表自己（連同幫它包的那層 div）整塊拿掉；空掉的頁由回流第③步清除
         var blk = t.closest('.egrt-main > *');
@@ -2691,6 +3006,14 @@
       if (!isDoc || reflowing) return;
       reflowing = true;
       var anchor = scrollAnchor();
+      /* 游標位置：回流會搬動列／區塊（含把續表接回再重拆），被搬動的節點一離開原位，選取就塌到父層，
+         使用者在表格裡打字就會「游標一直跳掉、無法連續輸入」。先記下，回流完再放回同一個字元位置。 */
+      var caret = null;
+      try {
+        var sel0 = w.getSelection();
+        if (sel0 && sel0.rangeCount && sel0.isCollapsed && host.contains(sel0.anchorNode))
+          caret = { n: sel0.anchorNode, o: sel0.anchorOffset };
+      } catch (e0) {}
       // 先把「之前被加長過」的頁還原成固定高度，不然量不出有沒有超出
       sheets().forEach(function (s) {
         var sh = sheetOf(s);
@@ -2707,10 +3030,10 @@
       var guard = 0, i = start;
       /* quick（打字後的延遲回流）：只動到目前這一頁往後，所以一旦某頁沒有往後推、
          後面的頁就跟改之前一樣穩定，不必把 80 幾頁逐頁量一遍（大文件卡頓的另一個主因）。 */
-      var touchedMax = start, movedPrev = true;
+      var touchedMax = Math.max(start, unsplitMax), movedPrev = true;
       // ① 往後推：超出的區塊搬到下一頁；只剩一張長表格就改「拆列」
       for (; i < sheets().length && guard < 4000; i++) {
-        if (quick && i > start && !movedPrev) break;
+        if (quick && i > start && i > unsplitMax && !movedPrev) break;
         var s = sheets()[i];
         movedPrev = false;
         while (!fitsPage(s) && guard++ < 4000) {
@@ -2757,6 +3080,20 @@
       trimBlanksBeforeHard();      // ①②搬動之後才會出現新的「強制換頁前的尾端空白」，要再清一次
       numberPages(); fitPages(); markOverflow();
       scrollRestore(anchor);
+      if (caret && caret.n && host.contains(caret.n)) {
+        try {
+          var sel1 = w.getSelection();
+          if (!(sel1 && sel1.rangeCount && sel1.isCollapsed && sel1.anchorNode === caret.n && sel1.anchorOffset === caret.o)) {
+            var ed = caret.n.nodeType === 1 ? caret.n : caret.n.parentNode;
+            ed = ed && ed.closest ? ed.closest('[contenteditable="true"]') : null;
+            if (ed && d.activeElement !== ed) ed.focus({ preventScroll: true });
+            var rg1 = d.createRange();
+            rg1.setStart(caret.n, Math.min(caret.o, caret.n.nodeType === 3 ? caret.n.length : caret.n.childNodes.length));
+            rg1.collapse(true);
+            sel1.removeAllRanges(); sel1.addRange(rg1);
+          }
+        } catch (e1) {}
+      }
       reflowing = false;
     }
 
@@ -3143,6 +3480,13 @@
         fitPages();
       },
       viewMode: function () { return viewMode; },
+      /** 唯讀：畫面與編輯時一樣（分頁、頁首頁尾、封面、制修訂紀錄書都照常），只是不能改。
+       *  contenteditable=false 仍然可以用滑鼠選取與複製；編輯工具列收起來，只留頁面檢視切換。 */
+      setReadOnly: function (on) {
+        readOnly = !!on;
+        host.classList.toggle('egrt-ro', readOnly);
+        sheets().forEach(function (m) { m.setAttribute('contenteditable', readOnly ? 'false' : 'true'); });
+      },
       pageCount: function () { return isDoc ? sheets().length : 1; },
       addPage: function () { var s = mkSheet(); numberPages(); fitPages(); changed(); s.focus(); body = s; return s; },
       refit: function () { fitForce = true; fitPages(); markOverflow(); },
@@ -3155,6 +3499,8 @@
         fitPages(); markOverflow();
       },
       autoPaginate: function () { autoPaginate(); },
+      /** 只重排、不標記「已修改」（載入完成後自動排一次用；呼叫端自己比對內容有沒有變） */
+      reflowQuiet: function () { reflow(0); },
       /** 工具列「依編號自動縮排」的無提示版本，供呼叫端（如匯入完成後）直接觸發 */
       autoNumIndent: function () { return autoNumIndent(); },
       /** 讓模組頁面在上傳/編輯完之後把圖插進來或重新載入 */

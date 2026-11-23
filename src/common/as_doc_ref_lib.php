@@ -244,10 +244,26 @@ function adr_find_hits(string $html, string $old, ?string $new): array
    ════════════════════════════════════════════════════════════════════════ */
 
 /** 依 mode／tpl 組出引用文字（與 eg_asdoc_insert_text() 同一套規則，那邊是唯一實作） */
-function adr_ref_text(string $mode, string $no, string $name, string $tpl = ''): string
+function adr_ref_text(string $mode, string $no, string $name, string $tpl = '', string $nameEn = ''): string
 {
     require_once __DIR__ . '/asdoc_lib.php';
-    return eg_asdoc_insert_text($mode, $no, $name, $tpl);
+    return eg_asdoc_insert_text($mode, $no, $name, $tpl, $nameEn);
+}
+
+/** 參照標記的文字比對：名稱與英文名稱之間的換行在 DOM 裡是 <br>（textContent 沒有換行字元），比對時把換行拿掉 */
+function adr_same_text(string $a, string $b): bool
+{
+    return str_replace(["\r", "\n"], '', $a) === str_replace(["\r", "\n"], '', $b);
+}
+
+/** 把標記裡的文字換掉：有換行的地方放 <br> */
+function adr_set_span_text(DOMDocument $doc, DOMElement $sp, string $text): void
+{
+    while ($sp->firstChild) $sp->removeChild($sp->firstChild);
+    foreach (explode("\n", $text) as $i => $line) {
+        if ($i > 0) $sp->appendChild($doc->createElement('br'));
+        $sp->appendChild($doc->createTextNode($line));
+    }
 }
 
 /** 把內文載成 DOM（本檔多處要用，收斂成一支） */
@@ -277,7 +293,7 @@ function adr_dom_html(DOMDocument $doc, DOMNode $root): string
  * 這份內文裡引用了某一份文件的參照標記，逐處列出「現在寫的」與「應該寫的」。
  * @return array [['page'=>int,'before'=>'','after'=>'','old'=>現在的字,'new'=>應該的字], …]
  */
-function adr_span_hits(string $html, int $docId, string $no, string $name): array
+function adr_span_hits(string $html, int $docId, string $no, string $name, ?string $nameEn = null): array
 {
     $out = [];
     if ($docId <= 0) return $out;
@@ -293,8 +309,8 @@ function adr_span_hits(string $html, int $docId, string $no, string $name): arra
             $cur  = (string)$sp->textContent;
             $mode = (string)$sp->getAttribute('data-asmode') ?: 'both';
             $tpl  = (string)$sp->getAttribute('data-astpl');
-            $want = adr_ref_text($mode, $no, $name, $tpl);
-            if ($want === $cur) continue;                   // 已經是對的，不必列
+            $want = adr_ref_text($mode, $no, $name, $tpl, $nameEn ?? (string)$sp->getAttribute('data-asnameen'));
+            if (adr_same_text($want, $cur)) continue;       // 已經是對的，不必列
             $out[] = ['page' => $i + 1, 'before' => '', 'after' => '',
                       'old' => $cur, 'new' => $want];
         }
@@ -306,7 +322,7 @@ function adr_span_hits(string $html, int $docId, string $no, string $name): arra
  * 把參照標記的文字與屬性更新成現況。
  * @return array ['html'=>新內文, 'count'=>換了幾處, 'pages'=>[頁碼,…]]
  */
-function adr_span_update(string $html, int $docId, string $no, string $name): array
+function adr_span_update(string $html, int $docId, string $no, string $name, ?string $nameEn = null): array
 {
     if ($docId <= 0 || $html === '') return ['html' => $html, 'count' => 0, 'pages' => []];
     $d = adr_dom($html);
@@ -318,14 +334,16 @@ function adr_span_update(string $html, int $docId, string $no, string $name): ar
         /** @var DOMElement $sp */
         $mode = (string)$sp->getAttribute('data-asmode') ?: 'both';
         $tpl  = (string)$sp->getAttribute('data-astpl');
-        $want = adr_ref_text($mode, $no, $name, $tpl);
-        if ((string)$sp->textContent === $want
+        $en   = $nameEn ?? (string)$sp->getAttribute('data-asnameen');
+        $want = adr_ref_text($mode, $no, $name, $tpl, $en);
+        if (adr_same_text((string)$sp->textContent, $want)
             && (string)$sp->getAttribute('data-asno') === $no
-            && (string)$sp->getAttribute('data-asname') === $name) continue;
-        while ($sp->firstChild) $sp->removeChild($sp->firstChild);
-        $sp->appendChild($doc->createTextNode($want));
+            && (string)$sp->getAttribute('data-asname') === $name
+            && (($mode !== 'name_en' && $mode !== 'no_name_en') || (string)$sp->getAttribute('data-asnameen') === $en)) continue;
+        adr_set_span_text($doc, $sp, $want);
         $sp->setAttribute('data-asno', $no);
         $sp->setAttribute('data-asname', $name);
+        if ($mode === 'name_en' || $mode === 'no_name_en') $sp->setAttribute('data-asnameen', $en);
         $cnt++;
     }
     if ($cnt === 0) return ['html' => $html, 'count' => 0, 'pages' => []];
@@ -560,8 +578,8 @@ function adr_mark_html(string $html, array $changes): array
             $tpl  = (string)$sp->getAttribute('data-astpl');
             $no   = (string)($ch['src_new_no'] ?: $sp->getAttribute('data-asno'));
             $nm   = (string)($ch['src_new_name'] ?: $sp->getAttribute('data-asname'));
-            $want = adr_ref_text($mode, $no, $nm, $tpl);
-            if ($want === $cur) continue;
+            $want = adr_ref_text($mode, $no, $nm, $tpl, (string)$sp->getAttribute('data-asnameen'));
+            if (adr_same_text($want, $cur)) continue;
             while ($sp->firstChild) $sp->removeChild($sp->firstChild);
             $d = $doc->createElement('del', $cur);  $d->setAttribute('class', 'adr-old');
             $n = $doc->createElement('ins', $want); $n->setAttribute('class', 'adr-new');
@@ -679,12 +697,13 @@ function adr_apply(PDO $db, int $versionId, array $changeIds, int $uid, string $
               （只做字串取代的話屬性會留著舊編號，下次比對又會再報一次）。 */
         if ($srcDoc > 0 && (string)$r['src_kind'] !== 'obsolete') {
             try {
-                $q = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=? LIMIT 1");
+                require_once __DIR__ . '/asdoc_lib.php'; eg_asdoc_ensure_name_en($db);
+                $q = $db->prepare("SELECT doc_no, doc_name, doc_name_en FROM as_document WHERE id=? LIMIT 1");
                 $q->execute([$srcDoc]);
                 $cur = $q->fetch(PDO::FETCH_ASSOC);
             } catch (Throwable $e) { $cur = null; }
             if ($cur) {
-                $sp = adr_span_update($html, $srcDoc, (string)$cur['doc_no'], (string)$cur['doc_name']);
+                $sp = adr_span_update($html, $srcDoc, (string)$cur['doc_no'], (string)$cur['doc_name'], (string)$cur['doc_name_en']);
                 if ($sp['count'] > 0) {
                     $html = $sp['html'];
                     $replaced += $sp['count'];

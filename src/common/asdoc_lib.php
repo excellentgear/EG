@@ -43,9 +43,22 @@ function eg_asdoc_list(PDO $db): array {
  * 刻意另開一支而不是改 eg_asdoc_list()：那一支是**綁定選擇器**在用的（全站 20 幾個
  * 呼叫端），欄位一多前端的篩選與顯示就得跟著改，沒必要冒這個險。
  */
-function eg_asdoc_list_full(PDO $db): array {
+/** 文件英文名稱欄位（DDL，不可在 transaction 內呼叫）。MySQL 沒有 ADD COLUMN IF NOT EXISTS，先查再加 */
+function eg_asdoc_ensure_name_en(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
     try {
-        $rows = $db->query("SELECT d.id, d.doc_no, d.doc_name, d.doc_level, d.doc_type,
+        if (!$db->query("SHOW COLUMNS FROM as_document LIKE 'doc_name_en'")->fetch()) {
+            $db->exec("ALTER TABLE as_document ADD COLUMN doc_name_en VARCHAR(200) NULL COMMENT '文件英文名稱' AFTER doc_name");
+        }
+    } catch (Throwable $e) {}
+}
+
+function eg_asdoc_list_full(PDO $db): array {
+    eg_asdoc_ensure_name_en($db);
+    try {
+        $rows = $db->query("SELECT d.id, d.doc_no, d.doc_name, d.doc_name_en, d.doc_level, d.doc_type,
                                    d.department_id, dp.name AS dept_name,
                                    COALESCE(d.is_obsolete,0) AS is_obsolete, d.current_version
                             FROM as_document d
@@ -145,8 +158,10 @@ function eg_asdoc_insert_styles_save(PDO $db, array $rows, int $uid): array {
  * @param string $mode  both＝名稱＋編號（走樣式樣板）／name＝只有名稱（自動加「」）／no＝只有編號
  * @param string $tpl   mode=both 時用的樣板（{name}/{no}）
  */
-function eg_asdoc_insert_text(string $mode, string $docNo, string $docName, string $tpl = ''): string {
-    $docNo = trim($docNo); $docName = trim($docName);
+function eg_asdoc_insert_text(string $mode, string $docNo, string $docName, string $tpl = '', string $nameEn = ''): string {
+    $docNo = trim($docNo); $docName = trim($docName); $nameEn = trim($nameEn);
+    if ($mode === 'name_en') return $nameEn === '' ? $docName : ($docName . "\n" . $nameEn);   // 名稱換行英文名稱
+    if ($mode === 'no_name_en') return trim($docNo . ' ' . $docName) . ($nameEn === '' ? '' : "\n" . $nameEn);
     if ($mode === 'no')   return $docNo;
     if ($mode === 'name') return '「' . $docName . '」';
     if ($tpl === '') $tpl = '{name}　({no})';
@@ -163,15 +178,18 @@ function eg_asdoc_insert_text(string $mode, string $docNo, string $docName, stri
  *
  * class 一律用 eg-asref（白名單已放行 data-asdoc/data-asno/data-asname/data-asmode/data-astpl）。
  */
-function eg_asdoc_ref_span(int $docId, string $docNo, string $docName, string $mode, string $tpl = ''): string {
-    $txt = eg_asdoc_insert_text($mode, $docNo, $docName, $tpl);
+function eg_asdoc_ref_span(int $docId, string $docNo, string $docName, string $mode, string $tpl = '', string $nameEn = ''): string {
+    $txt = eg_asdoc_insert_text($mode, $docNo, $docName, $tpl, $nameEn);
     $esc = function ($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); };
+    // 換行用 <br>（頁面一律用清洗後的 HTML 顯示，純文字換行字元會被瀏覽器當成空白）
+    $inner = implode('<br>', array_map($esc, explode("\n", $txt)));
     return '<span class="eg-asref" data-asdoc="' . (int)$docId . '"'
          . ' data-asno="' . $esc($docNo) . '"'
          . ' data-asname="' . $esc($docName) . '"'
+         . (($mode === 'name_en' || $mode === 'no_name_en') ? ' data-asnameen="' . $esc($nameEn) . '"' : '')
          . ' data-asmode="' . $esc($mode) . '"'
          . ($tpl !== '' ? ' data-astpl="' . $esc($tpl) . '"' : '')
-         . '>' . $esc($txt) . '</span>';
+         . '>' . $inner . '</span>';
 }
 
 /** 某模組綁定的 as_document.id（未綁定回 0） */
