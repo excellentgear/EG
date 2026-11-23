@@ -396,7 +396,7 @@ $roleLabel = ia_role_label($perms);
             <button id="btnUnitSetting"><i class="fa fa-sitemap"></i> 受稽單位</button>
             <button id="btnQualify"><i class="fa fa-user-plus"></i> 稽核員資格</button>
             <button id="btnTeam"><i class="fa fa-users"></i> 稽核小組</button>
-            <button id="btnTplSetting"><i class="fa fa-clone"></i> 稽核範本</button>
+            <!-- 稽核範本設定已取消（2026-11-23 使用者要求；舊範本資料保留不刪，只是不再提供入口） -->
             <button id="btnPgroup"><i class="fa fa-th-large"></i> 過程群組</button>
             <button id="btnClauseBank"><i class="fa fa-list-ol"></i> AS條文題庫</button>
             <?php endif; ?>
@@ -1052,7 +1052,6 @@ $roleLabel = ia_role_label($perms);
         </div>
         <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span>
 <?php if ($perms['canAdmin']): ?>
-            <button id="btnCaseTplSet" style="margin-left:10px;height:24px;font-size:12px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;"><i class="fa fa-object-group"></i> 帶入範本組合</button>
             <button id="btnCaseGroups" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #C4442D;color:#C4442D;border-radius:4px;background:#fff;cursor:pointer;" title="COP1~SP02 八大過程群組：每個群組選稽核日期，受稽單位自動帶入並標示稽核順序"><i class="fa fa-sitemap"></i> 重新帶入八大過程群組</button>
             <button id="btnSaveEscortDef" style="margin-left:6px;height:24px;font-size:12px;padding:0 10px;border:1px solid #b5762a;color:#8A5A2B;border-radius:4px;background:#fff;cursor:pointer;" title="把目前每個受稽單位選好的陪檢員存成預設，之後每次新增通知單自動帶入（只有內稽管理員存得了）"><i class="fa fa-save"></i> 存為各單位預設陪檢員</button>
 <?php endif; ?>
@@ -1077,7 +1076,7 @@ $roleLabel = ia_role_label($perms);
             </div>
             <div class="err-msg" id="cEscWarn" style="margin-bottom:4px;"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
-                <th style="width:170px;">帶入範本</th>
+                <th style="width:96px;">本日稽核<div style="font-weight:normal;font-size:11px;color:#8A5A2B;">依序勾選</div></th>
                 <th style="width:170px;">稽核起始主過程</th><th style="width:140px;">受稽單位</th>
                 <th style="width:165px;">稽核員</th><th style="width:165px;">陪檢員</th>
                 <!-- 全部同一天是常態（一天內跑完所有單位），所以直接在表頭給一個「全部」按鈕，
@@ -1095,9 +1094,6 @@ $roleLabel = ia_role_label($perms);
                                title="填開始時間，結束時間會自動算出來">
                         <button type="button" id="btnAllTime" title="從開始時間起，依每個單位需要的分鐘往下排">自動排</button>
                     </div>
-                </th>
-                <th style="width:150px;">預定完成改善
-                    <div class="ia-allday"><input type="date" id="cAllDue"><button type="button" id="btnAllDue" title="把這個日期套用到下面每一列">全部</button></div>
                 </th>
                 <th style="width:44px;"></th>
             </tr></thead><tbody id="cDeptBody" data-eg-row-add="caseRowAdd" data-eg-row-del="caseRowDel"></tbody></table></div>
@@ -2822,7 +2818,7 @@ function openCase(id){
         // 使用者只要選日期與稽核員（2026-11-23 使用者要求）
         $.getJSON(API, {action:'pgroup_units'}, function(g){
             if (!g.ok || !(g.groups||[]).length || CASE_ID) return;
-            GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); renderCaseRows(); iaAutoDue();
+            GRP_UNITS = g.groups; CASE_ROWS = buildGroupRows(g.groups, null); renderCaseRows();
         });
         $('#btnCaseDelete').hide();
         applyCaseLock(null);
@@ -3202,15 +3198,14 @@ function renderCaseRows(){
         var aList = (r.auditor_cands && r.auditor_cands.length) ? r.auditor_cands : (META.auditors||[]);
         var eList = (r.escort_cands  && r.escort_cands.length)  ? r.escort_cands  : (META.escorts||[]);
         h += '<tr data-i="'+i+'">'
-          + '<td><select class="cr" data-f="tpl_id" '+(ro?'disabled':'')+' data-eg-filter="輸入主過程或單位篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+tplOptions(r.tpl_id)+'</select></td>'
-          + '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
+          + '<td style="text-align:center;">'+grpCheckCell(i, r, ro)+'</td>'
+          + '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+((ro||grpCodeOf(r))?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
           + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
           + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
           + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
           + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'"'
-          + caseDateRangeAttr() + ' '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
+          + caseDateRangeAttr() + ' '+((ro||(grpCodeOf(r)&&!grpDone(r)))?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" data-eg-hint="直接輸入，例 13:15；或用表頭的「自動排」" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
-          + '<td><input type="date" class="cr" data-f="improve_due" value="'+esc(r.improve_due||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td>'+(ro?'':'<span class="ia-op danger" onclick="caseRowDel('+i+')"><i class="fa fa-times"></i></span>')+'</td>'
           + '</tr>';
     });
@@ -3275,8 +3270,6 @@ $(document).on('change','.cr', function(){
     var i = +$(this).closest('tr').data('i'), f = $(this).data('f');
     CASE_ROWS[i] = CASE_ROWS[i] || {};
     CASE_ROWS[i][f] = $(this).val();
-    if (f === 'improve_due') CASE_ROWS[i]._autoDue = false;     // 手動改過就不再被自動值覆蓋
-    if (f === 'audited_date') iaAutoDue();
     // 改了某一列的受稽時間 → 後面的自動順延（使用者可在表頭關掉）
     if (f === 'audited_time' && $('#cTimeCascade').is(':checked')) {
         var n = normTime($(this).val());
@@ -3396,7 +3389,7 @@ function caseRequiredCheck(){
     $('#cDeptBody tr').each(function(n){
         var $tr = $(this), i = +$tr.data('i'), src = CASE_ROWS[i] || {}, miss = [];
         [['start_process','稽核起始主過程'], ['dept_id','受稽單位'], ['audited_date','受稽日期'],
-         ['audited_time','時間'], ['improve_due','預定完成改善']].forEach(function(f){
+         ['audited_time','時間']].forEach(function(f){
             var $el = $tr.find('.cr[data-f=' + f[0] + ']');
             if (String($el.val() || '').trim() === '') { $el.addClass('err'); miss.push(f[1]); }
         });
@@ -3404,6 +3397,7 @@ function caseRequiredCheck(){
         if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
     });
+    var gm = grpCompleteMsg(); if (gm) bad.push(gm);
     var over = (typeof caseTimeOverrun === 'function') ? caseTimeOverrun() : '';
     var few = auditorShortMsg();
     if (few) bad.push(few);
@@ -8360,6 +8354,57 @@ function buildGroupRows(groups, pick){
 }
 /* 預定完成改善＝最後一天稽核日期往後一個月內的最後一個工作日（後端算，含補班與假日）。
    只填「還是空白、或上次也是自動帶的」列，使用者手動改過的不覆蓋。 */
+/* ---- 本日稽核：八大過程群組只能依順序勾選（2026-11-23 使用者要求） ----
+   勾選＝這個群組列為本日稽核的主過程（之後才能選日期）；後面的日期只能勾剩下還沒勾的；八項都要稽核完才能完成。 */
+function grpCodeOf(r){ var m = /^([A-Z]{2,3}\d{1,2})(?=\s|$)/.exec(String((r&&r.start_process)||'')); return m ? m[1] : ''; }
+function grpOrderList(){
+    var seen = [];
+    CASE_ROWS.forEach(function(r){ var c = grpCodeOf(r); if (c && seen.indexOf(c) < 0) seen.push(c); });
+    return seen;
+}
+function grpDone(r){ if (r.main_done === undefined) r.main_done = !!r.audited_date; return !!r.main_done; }
+function grpAllDone(code){ return CASE_ROWS.filter(function(r){ return grpCodeOf(r) === code; }).every(grpDone); }
+function grpAnyDone(code){ return CASE_ROWS.some(function(r){ return grpCodeOf(r) === code && grpDone(r); }); }
+function grpCanCheck(r){
+    var seen = grpOrderList(), idx = seen.indexOf(grpCodeOf(r));
+    for (var k = 0; k < idx; k++) if (!grpAllDone(seen[k])) return false;
+    return true;
+}
+function grpCanUncheck(r){
+    var seen = grpOrderList(), idx = seen.indexOf(grpCodeOf(r));
+    for (var k = idx + 1; k < seen.length; k++) if (grpAnyDone(seen[k])) return false;
+    return true;
+}
+function grpCheckCell(i, r, ro){
+    var c = grpCodeOf(r); if (!c) return '';
+    var on = grpDone(r), can = on ? grpCanUncheck(r) : grpCanCheck(r);
+    var tip = on ? (can ? '取消本日稽核' : '後面的群組已經勾選，要先取消後面的才能取消這個')
+                 : (can ? '勾選＝這個群組列為本日稽核的主過程' : '要依順序勾選：前面的群組還沒勾完');
+    return '<input type="checkbox" class="grpChk" data-i="'+i+'" '+(on?'checked ':'')+((ro||!can)?'disabled ':'')+'title="'+esc(tip)+'">';
+}
+$(document).on('change', '#cDeptBody .grpChk', function(){
+    var i = +$(this).data('i'), r = CASE_ROWS[i]; if (!r) return;
+    r.main_done = $(this).is(':checked');
+    if (!r.main_done) r.audited_date = '';
+    // 同一群組的各受稽單位列一起跟著勾（它們是同一個主過程）
+    var code = grpCodeOf(r);
+    CASE_ROWS.forEach(function(x){ if (x !== r && grpCodeOf(x) === code) { x.main_done = r.main_done; if (!x.main_done) x.audited_date = ''; } });
+    renderCaseRows();
+});
+/** 完成前：八項群組都要勾、都要有日期，且後面群組的日期不可早於前面的 */
+function grpCompleteMsg(){
+    var seen = grpOrderList(); if (!seen.length) return '';
+    var total = (GRP_UNITS && GRP_UNITS.length) ? GRP_UNITS.length : 8, miss = [], prev = '', bad = '';
+    if (seen.length < total) return '八大過程群組只列了 ' + seen.length + ' 項，8 項都必須稽核（請按「重新帶入八大過程群組」）';
+    seen.forEach(function(c){
+        if (!grpAllDone(c)) miss.push(c);
+        var d = ''; CASE_ROWS.forEach(function(r){ if (grpCodeOf(r) === c && r.audited_date && (!d || r.audited_date < d)) d = r.audited_date; });
+        if (d && prev && d < prev && !bad) bad = c + ' 的日期早於前面的群組';
+        if (d) prev = d;
+    });
+    if (miss.length) return '還有過程群組沒有勾選「本日稽核」：' + miss.join('、') + '（8 項都必須稽核）';
+    return bad ? ('稽核順序不對：' + bad) : '';
+}
 var DUE_TIMER = null;
 function iaAutoDue(){
     clearTimeout(DUE_TIMER);
@@ -8375,7 +8420,6 @@ function iaAutoDue(){
         });
     }, 250);
 }
-$(document).on('change', '#cFrom, #cTo', function(){ if ($('#caseMask').hasClass('on')) iaAutoDue(); });
 $(document).on('click', '#btnSaveEscortDef', function(){
     var def = unitEscortDefaults(), n = 0;
     CASE_ROWS.forEach(function(r){
@@ -8439,7 +8483,7 @@ $('#btnGrpAssignOk').on('click', function(){
     });
     var rows = buildGroupRows(GRP_UNITS, pick);
     CASE_ROWS = rows.concat(keep);
-    renderCaseRows(); iaAutoDue();
+    renderCaseRows();
     closeMask('grpAssignMask');
     iaToast('已依 '+GRP_UNITS.length+' 個過程群組帶入 '+rows.length+' 列受稽單位', 4000);
 });

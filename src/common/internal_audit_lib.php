@@ -2505,7 +2505,6 @@ function ia_case_required_missing(PDO $db, int $caseId): array
         if (!($pmap[(int)$r['cd_id']]['escort'] ?? []))                   $miss[] = '陪檢員';
         if (empty($r['audited_date']))                                    $miss[] = '受稽日期';
         if (trim((string)($r['audited_time'] ?? '')) === '')               $miss[] = '時間';
-        if (empty($r['improve_due']))                                      $miss[] = '預定完成改善';
         if ($miss) $out[] = '第 ' . ($n + 1) . ' 列（' . (trim((string)($r['dept_name'] ?? '')) ?: '未填單位') . '）：' . implode('、', $miss);
     }
 

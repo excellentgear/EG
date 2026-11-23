@@ -811,6 +811,11 @@ foreach ($depts as $di => $d) {
                              VALUES (?,?,?,?,?,?,?,?)");
         $nameSt = $db->prepare("SELECT name FROM department WHERE id=?");
         $i = 0;
+        // 預定完成改善欄位已從畫面取消（2026-11-23）：沒填就由「最後一天稽核日期＋一個月內最後工作日」自動帶，
+        // 稽核報告表與不符合通知單的要求完成期限仍讀得到這個值
+        $lastAud = (string)($at ?: '');
+        foreach ($depts as $d0) { $ad0 = iaDate($d0['audited_date'] ?? ''); if ($ad0 && $ad0 > $lastAud) $lastAud = $ad0; }
+        $autoDue = $lastAud ? ia_improve_due($db, $lastAud) : '';
         foreach ($depts as $di => $d) {
             $did = iaInt($d['dept_id'] ?? '');
             $dn  = trim((string)($d['dept_name'] ?? ''));
@@ -822,7 +827,7 @@ foreach ($depts as $di => $d) {
             $ins->execute([$cid, $i * 10, mb_substr(trim((string)($d['start_process'] ?? '')), 0, 150) ?: null,
                            $did, $dn ?: null,
                            iaDate($d['audited_date'] ?? ''), iaTime($d['audited_time'] ?? ''),
-                           iaDate($d['improve_due'] ?? '')]);
+                           iaDate($d['improve_due'] ?? '') ?: ($autoDue ?: null)]);
             $cdId = (int)$db->lastInsertId();
             // 人員的唯一寫入點（順便同步 ia_case_dept 上的顯示快取）
             ia_cd_people_set($db, $cdId, $cid, 'auditor', $people['auditor']);
