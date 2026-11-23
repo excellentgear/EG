@@ -2857,6 +2857,7 @@ function openCaseRender(c){
             audited_date:inputDate(d.audited_date), audited_time:d.audited_time||'',
             improve_due:inputDate(d.improve_due)
         }; });
+        CASE_ROWS = collapseGroupRows(CASE_ROWS);
         if (!CASE_ROWS.length) CASE_ROWS = [{}];
         renderCaseRows();
         renderCaseMeeting(c);
@@ -3196,13 +3197,15 @@ function renderCaseRows(){
     CASE_ROWS.forEach(function(r, i){
         // 有選範本就把候選縮到範本指定的部門範圍，沒選就是全部合格職務
         var aList = (r.auditor_cands && r.auditor_cands.length) ? r.auditor_cands : (META.auditors||[]);
-        var eList = (r.escort_cands  && r.escort_cands.length)  ? r.escort_cands  : (META.escorts||[]);
+        var eList = escortCandsFor(r);
         h += '<tr data-i="'+i+'">'
           + '<td style="text-align:center;">'+grpCheckCell(i, r, ro)+'</td>'
           + (grpCodeOf(r) && grpFirstIdx(r) !== i
               ? '<td style="text-align:center;color:#b5a07a;"><input type="hidden" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'">〃</td>'
               : '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+((ro||grpCodeOf(r))?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>')
-          + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
+          + ((grpCodeOf(r) && r.dept_ids)
+              ? '<td>'+deptCell(i, r, ro)+'</td>'
+              : '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>')
           + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
           + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
           + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'"'
@@ -3293,7 +3296,17 @@ function collectCaseRows(){
         r.auditor_keys = (src.auditor_keys||[]).slice();
         r.escort_keys  = (src.escort_keys||[]).slice();
         if (r.auditor_keys.length || r.escort_keys.length) any = true;
-        if (any) out.push(r);
+        if (!any) return;
+        if (grpCodeOf(src) && src.dept_ids) {        // 群組列：每個受稽單位各存一列（人員／日期／時間相同）
+            var ids = src.dept_ids.length ? src.dept_ids : [''];
+            ids.forEach(function(d){
+                var c = $.extend({}, r, {dept_id: d});
+                c.auditor_keys = r.auditor_keys.slice(); c.escort_keys = r.escort_keys.slice();
+                out.push(c);
+            });
+            return;
+        }
+        out.push(r);
     });
     return out;
 }
@@ -3395,6 +3408,7 @@ function caseRequiredCheck(){
             var $el = $tr.find('.cr[data-f=' + f[0] + ']');
             if (String($el.val() || '').trim() === '') { $el.addClass('err'); miss.push(f[1]); }
         });
+        if (src.dept_ids && grpCodeOf(src) && !src.dept_ids.length) { $tr.find('td').eq(2).addClass('err-cell'); miss.push('受稽單位'); }
         if (!(src.auditor_keys || []).length) { $tr.find('td').eq(3).addClass('err-cell'); miss.push('稽核員'); }
         if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
@@ -8342,15 +8356,16 @@ function buildGroupRows(groups, pick){
     var def = unitEscortDefaults(), ok = {}, rows = [];
     (META.escorts||[]).forEach(function(p){ ok[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1; });
     groups.forEach(function(g){
-        // 稽核起始主過程只顯示群組代號（COP1…SP02）；同一群組的各受稽單位各一列（陪檢員逐單位）
-        var units = g.units.length ? g.units : [{dept_id:'', dept_name:''}];
-        units.forEach(function(u){
-            var r = newCaseRow();
-            r.start_process = g.group_code;
-            r.dept_id = u.dept_id; r.audited_date = (pick && pick[g.group_code]) || '';
-            r.escort_keys = (def[u.dept_id] || []).filter(function(k){ return ok[k]; });
-            rows.push(r);
-        });
+        // 一個群組一列：稽核起始主過程只顯示代號（COP1…SP02），受稽單位自動帶入且可增減；
+        // 陪檢員＝該群組各單位預設陪檢員的合併
+        var r = newCaseRow(), esc0 = [];
+        r.start_process = g.group_code;
+        r.dept_ids = g.units.map(function(u){ return String(u.dept_id); }).filter(Boolean);
+        r.dept_id = r.dept_ids[0] || '';
+        r.audited_date = (pick && pick[g.group_code]) || '';
+        g.units.forEach(function(u){ esc0 = esc0.concat((def[u.dept_id] || []).filter(function(k){ return ok[k]; })); });
+        r.escort_keys = uniqKeys(esc0).slice(0, IA_PPL_MAX);
+        rows.push(r);
     });
     return rows;
 }
@@ -8364,6 +8379,83 @@ function grpOrderList(){
     CASE_ROWS.forEach(function(r){ var c = grpCodeOf(r); if (c && seen.indexOf(c) < 0) seen.push(c); });
     return seen;
 }
+/* ---- 一個過程群組一列、受稽單位可複選（2026-11-23 使用者要求）----
+   畫面上：COP1 → 業務課、技術課…（標籤，可增減）；存檔時每個受稽單位各存一列（人員／日期／時間相同），
+   重新打開時同一群組的列再合併回一列，所以資料表與舊資料都不必動。 */
+function unitName(key){
+    var n = '#' + key;
+    (META.units||[]).forEach(function(u){ if (String(u.key) === String(key)) n = u.name; });
+    return n;
+}
+function uniqKeys(list){
+    var seen = {}, out = [];
+    (list||[]).forEach(function(k){ var u = String(k).split(':')[0]; if (u && !seen[u]) { seen[u] = 1; out.push(k); } });
+    return out;
+}
+function collapseGroupRows(rows){
+    var out = [], idx = {};
+    rows.forEach(function(r){
+        var c = grpCodeOf(r);
+        if (!c) { out.push(r); return; }
+        if (idx[c] === undefined) { r.dept_ids = r.dept_id ? [String(r.dept_id)] : []; idx[c] = out.length; out.push(r); return; }
+        var f = out[idx[c]];
+        if (r.dept_id && f.dept_ids.indexOf(String(r.dept_id)) < 0) f.dept_ids.push(String(r.dept_id));
+        f.auditor_keys = uniqKeys((f.auditor_keys||[]).concat(r.auditor_keys||[]));
+        f.escort_keys  = uniqKeys((f.escort_keys||[]).concat(r.escort_keys||[]));
+        f.auditor_people = (f.auditor_people||[]).concat(r.auditor_people||[]);
+        f.escort_people  = (f.escort_people||[]).concat(r.escort_people||[]);
+    });
+    return out;
+}
+function deptCell(i, r, ro){
+    var ids = r.dept_ids || [], h = '<div class="ia-ppl">';
+    ids.forEach(function(k){
+        h += '<span class="ppl-chip"><span class="nm">'+esc(unitName(k))+'</span>'
+           + (ro?'':'<span class="x" onclick="caseDelUnit('+i+',\''+esc(k)+'\')">×</span>')+'</span>';
+    });
+    if (!ro) {
+        var opts = '<option value="">＋加入受稽單位</option>';
+        (META.units||[]).forEach(function(u){
+            if (ids.indexOf(String(u.key)) >= 0) return;
+            opts += '<option value="'+u.key+'">'+esc(u.name + (u.is_group ? ('（' + (u.members||[]).join('、') + '）') : ''))+'</option>';
+        });
+        h += '<select class="unit-add" data-i="'+i+'" data-eg-filter="輸入單位篩選…">'+opts+'</select>';
+    }
+    return h + '</div>';
+}
+/** 陪檢員只能從這一列「受稽單位」內的人挑（單位含下轄部門；沒選單位就沒有人可挑） */
+function escortCandsFor(r){
+    var ids = {};
+    var keys = (grpCodeOf(r) && r.dept_ids) ? r.dept_ids : (r.dept_id ? [r.dept_id] : []);
+    keys.forEach(function(k){
+        (META.units||[]).forEach(function(u){
+            if (String(u.key) === String(k)) (u.dept_ids||[u.key]).forEach(function(d){ ids[String(d)] = 1; });
+        });
+        ids[String(k)] = 1;
+    });
+    return (META.escorts||[]).filter(function(p){
+        var ds = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id];
+        return ds.some(function(d){ return ids[String(d)]; });
+    });
+}
+/** 單位增減後，已選的陪檢員若不在受稽單位內就移除 */
+function pruneEscorts(r){
+    var ok = {}; escortCandsFor(r).forEach(function(p){ ok[String(p.id)] = 1; });
+    r.escort_keys = (r.escort_keys||[]).filter(function(k){ return ok[String(k).split(':')[0]]; });
+}
+function caseDelUnit(i, key){
+    var r = CASE_ROWS[i]; if (!r) return;
+    r.dept_ids = (r.dept_ids||[]).filter(function(k){ return String(k) !== String(key); });
+    r.dept_id = r.dept_ids[0] || ''; pruneEscorts(r);
+    renderCaseRows();
+}
+$(document).on('change', '#cDeptBody .unit-add', function(){
+    var i = +$(this).data('i'), r = CASE_ROWS[i], v = $(this).val(); if (!r || !v) return;
+    r.dept_ids = r.dept_ids || [];
+    if (r.dept_ids.indexOf(String(v)) < 0) r.dept_ids.push(String(v));
+    r.dept_id = r.dept_ids[0] || ''; pruneEscorts(r);
+    renderCaseRows();
+});
 function grpFirstIdx(r){ var c = grpCodeOf(r); for (var k = 0; k < CASE_ROWS.length; k++) if (grpCodeOf(CASE_ROWS[k]) === c) return k; return -1; }
 function grpDone(r){ if (r.main_done === undefined) r.main_done = !!r.audited_date; return !!r.main_done; }
 function grpAllDone(code){ return CASE_ROWS.filter(function(r){ return grpCodeOf(r) === code; }).every(grpDone); }
