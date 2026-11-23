@@ -1747,6 +1747,8 @@ case 'check_delete': {
 /* ---- AS 條文題庫維護 ---- */
 case 'clause_list': {
     iaReqView($perms);
+    // 條文題庫以手冊附錄B 為準：每次開題庫自動同步（內容沒變就不寫），不必再手按同步
+    try { ia_appendixb_sync($db); } catch (Throwable $e) { error_log('ia_appendixb_sync: ' . $e->getMessage()); }
     $rows = ia_as_clauses($db, false);
     // 每一條帶上「可挑的作業項目（依它列的文件）」與「已挑的」——題庫畫面要一次畫得出來
     $picked = ia_clause_task_map($db, array_column($rows, 'clause_id'));
@@ -1754,6 +1756,9 @@ case 'clause_list': {
     foreach ($rows as &$r) {
         $r['groups'] = $gmap[(int)$r['clause_id']] ?? [];
         $r['doc_tasks'] = ia_clause_doc_tasks($db, $r['doc_ref'] ?? '');
+        // 唯讀顯示用：doc_ref 與附錄B 作業程序編號合併後的文件（編號＋名稱）
+        $r['docs_view'] = array_map(function($d){ return ['doc_no'=>$d['doc_no'],'doc_name'=>$d['doc_name']]; },
+                            ia_clause_doc_tasks($db, trim((string)($r['doc_ref'] ?? '') . ' ' . (string)($r['proc_nos'] ?? ''))));
         $r['tasks']     = $picked[(int)$r['clause_id']] ?? [];
     }
     unset($r);
@@ -1862,6 +1867,12 @@ case 'clause_save': {
     }
     $tasks = ia_clause_task_map($db, [$id])[$id] ?? [];
     jout(['clause_id' => $id, 'tasks' => $tasks, 'doc_tasks' => ia_clause_doc_tasks($db, $ref)]);
+}
+case 'clause_active': {
+    iaReqAdmin($perms);
+    $db->prepare("UPDATE ia_as_clause SET is_active=?, updated_at=NOW(), updated_by=? WHERE clause_id=?")
+       ->execute([!empty($_POST['is_active']) ? 1 : 0, $uname, (int)($_POST['clause_id'] ?? 0)]);
+    jout(['saved' => true]);
 }
 case 'clause_delete': {
     iaReqAdmin($perms);

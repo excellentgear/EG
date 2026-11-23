@@ -5805,38 +5805,63 @@ function ia_appendixb_sync(PDO $db): array
     ia_pgroup_ensure($db);
     $rows = ia_appendixb_parse($db);
     if (!$rows) throw new RuntimeException('找不到手冊「附錄B」的對照表（1-GM-01 目前版本的內容）');
+    /* 對應鍵＝附錄B 的「編號 Serial number」（條文編號），不是順序也不是名稱：
+       附錄B 刪列、插列或改名都不會讓已設定的過程群組對錯條文（2026-11-23 使用者要求）。 */
     $exist = [];
     foreach (ia_as_clauses($db, false) as $c) {
-        if (preg_match('/^\s*(\d+(?:\.\d+)*)\.?\s/u', (string)$c['clause_text'] . ' ', $m) && !isset($exist[$m[1]])) $exist[$m[1]] = (int)$c['clause_id'];
+        $no = trim((string)($c['clause_no'] ?? ''));
+        if ($no === '' && preg_match('/^\s*(\d+(?:\.\d+)*)/u', (string)$c['clause_text'], $m)) $no = $m[1];
+        if ($no !== '' && !isset($exist[$no])) $exist[$no] = $c;
     }
-    $upd = 0; $ins = 0;
+    $upd = 0; $ins = 0; $off = 0;
     $db->beginTransaction();
     try {
-        $u = $db->prepare("UPDATE ia_as_clause SET clause_text=?, clause_no=?, proc_nos=?, is_header=?, sort_order=?, updated_at=NOW(), updated_by='附錄B同步' WHERE clause_id=?");
+        $u = $db->prepare("UPDATE ia_as_clause SET clause_text=?, clause_no=?, proc_nos=?, is_header=?, sort_order=?, is_active=1, updated_at=NOW(), updated_by='附錄B同步' WHERE clause_id=?");
         $i = $db->prepare("INSERT INTO ia_as_clause (sort_order, is_header, clause_text, doc_ref, is_active, clause_no, proc_nos, updated_at, updated_by)
                            VALUES (?,?,?,?,1,?,?,NOW(),'附錄B同步')");
         $used = [];
         foreach ($rows as $n => $r) {
             $text = $r['no'] . ($r['is_header'] ? '.' : '') . ' ' . $r['title'];
             $procs = implode(' ', $r['proc_nos']);
+            $sort = ($n + 1) * 10;
             if (isset($exist[$r['no']])) {
-                $u->execute([$text, $r['no'], $procs ?: null, $r['is_header'], ($n + 1) * 10, $exist[$r['no']]]);
-                $used[$exist[$r['no']]] = 1; $upd++;
+                $c = $exist[$r['no']]; $cid = (int)$c['clause_id'];
+                $used[$cid] = 1;
+                $revive = ((int)($c['is_active'] ?? 1) === 0 && (string)($c['updated_by'] ?? '') === '附錄B停用');
+                // 內容完全沒變就不寫（開題庫就會自動同步，不要每次都洗 updated_at）
+                if (!$revive && (string)$c['clause_text'] === $text && (string)($c['clause_no'] ?? '') === (string)$r['no']
+                    && (string)($c['proc_nos'] ?? '') === $procs && (int)$c['is_header'] === (int)$r['is_header']
+                    && (int)$c['sort_order'] === $sort) continue;
+                $u->execute([$text, $r['no'], $procs ?: null, $r['is_header'], $sort, $cid]);
+                $upd++;
             } else {
-                $i->execute([($n + 1) * 10, $r['is_header'], $text, null, $r['no'], $procs ?: null]);
+                $i->execute([$sort, $r['is_header'], $text, null, $r['no'], $procs ?: null]);
                 $used[(int)$db->lastInsertId()] = 1; $ins++;
             }
         }
-        // 附錄B 沒有的舊條文排到最後，順序維持
+        // 附錄B 已經沒有的條文：停用（不刪，已設定的過程群組與舊查檢表的引用都保留；之後附錄B 又加回來會自動復原）
         $max = (count($rows) + 1) * 10;
         foreach (ia_as_clauses($db, false) as $c) {
             if (isset($used[(int)$c['clause_id']])) continue;
             $max += 10;
-            $db->prepare("UPDATE ia_as_clause SET sort_order=? WHERE clause_id=?")->execute([$max, (int)$c['clause_id']]);
+            $db->prepare("UPDATE ia_as_clause SET sort_order=?, is_active=0, updated_by=IF(is_active=1,'附錄B停用',updated_by) WHERE clause_id=?")
+               ->execute([$max, (int)$c['clause_id']]);
+            if ((int)($c['is_active'] ?? 1) === 1) $off++;
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    return ['updated' => $upd, 'inserted' => $ins, 'total' => count($rows)];
+    // 作業項目：尚未挑過的條文，預設帶它列的文件底下全部作業項目（之後固定顯示、不再人工挑）
+    try {
+        $picked = ia_clause_task_map($db, []);
+        foreach (ia_as_clauses($db, true) as $c) {
+            if ((int)$c['is_header'] === 1 || !empty($picked[(int)$c['clause_id']])) continue;
+            $ids = [];
+            foreach (ia_clause_doc_tasks($db, trim((string)($c['doc_ref'] ?? '') . ' ' . (string)($c['proc_nos'] ?? ''))) as $d)
+                foreach (($d['tasks'] ?? []) as $t) $ids[] = (int)$t['task_id'];
+            if ($ids) ia_clause_tasks_save($db, (int)$c['clause_id'], $ids, trim((string)($c['doc_ref'] ?? '') . ' ' . (string)($c['proc_nos'] ?? '')));
+        }
+    } catch (Throwable $e) {}
+    return ['updated' => $upd, 'inserted' => $ins, 'deactivated' => $off, 'total' => count($rows)];
 }
 
 /** 8 個群組＋各自的流程步驟（程序書／表單名稱即時查 as_document） */

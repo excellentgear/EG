@@ -990,18 +990,13 @@ $roleLabel = ia_role_label($perms);
 <!-- ============================ AS 條文題庫 ============================ -->
 <div class="ia-mask" id="clauseMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-list-ol"></i> AS 稽核查檢表　條文題庫</h4>
-        <button id="btnAppxSync" style="margin-left:auto;" title="依手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」帶入條文編號與名稱、作業程序編號，順序也依附錄B"><i class="fa fa-refresh"></i> 從手冊附錄B 同步</button>
-        <button id="btnClauseAdd" style="margin-left:6px;"><i class="fa fa-plus"></i> 新增條文</button>
+        <button id="btnAppxSync" style="margin-left:auto;" title="依手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」帶入條文編號與名稱、作業程序編號，順序也依附錄B"><i class="fa fa-refresh"></i> 立即同步手冊附錄B</button>
         <span class="x" data-close style="margin-left:10px;">&times;</span></div>
     <div class="ia-mbody">
-        <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，建一次每年沿用。勾「章節標題」的列在查檢表上只當分隔標題、不判定合格與否。
-        已被既有查檢表引用的條文按刪除會自動改成停用（不再出現在新表），舊表內容不受影響。<br>
-        <b>順序用拖的</b>：抓住左邊的 <i class="fa fa-bars"></i> 上下拖曳，放開就自動重新編號並存檔，不必手動輸入數字。
-        「建立的文件、表單」按<b>＋選文件</b>可以打編號或名稱模糊篩選後多選。<br>
-        <b>改完自動儲存</b>：文字欄位離開欄位、勾選框點下去當下就會存，右側會顯示「已儲存」，不必再按存檔鈕。<br>
-        <b>作業項目</b>＝這一條實務上在查哪幾件事（品管檢測／外包加工…）。項目本身設在
-        <b>AS 文件管理 → 該文件的 ⚙ → 作業項目</b>（一份文件可以有好幾個），這裡只挑「這一條對應到哪幾個」，
-        候選就是左欄那幾份文件底下的項目；勾好之後，<b>建立查檢表</b>可以直接用它一鍵挑題、<b>填寫查檢表</b>時每一列也看得到。</div>
+        <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，<b>內容全部由手冊 1-GM-01「附錄B 公司文件系統與 AS9100 條款對照」自動同步</b>（開啟本視窗就會同步）：
+        順序、標題列、品質管理系統要求、建立的文件／表單、作業項目都只能看、不能改，要改請改手冊附錄B。<br>
+        <b>對應依附錄B 的「編號 Serial number」</b>，不是依順序或名稱，所以附錄B 增刪列、改名、調順序，已設好的過程群組都不會對到別的條文；附錄B 已經沒有的條文會自動停用（不刪除），之後加回來會自動恢復。<br>
+        這裡<b>只需要設定「過程群組」</b>（這一條屬於 COP1～SP02 哪幾個過程）；改了立刻儲存。</div>
         <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
             <th style="width:64px;">順序</th><th style="width:70px;">標題列</th><th>品質管理系統要求</th>
             <th style="width:240px;">建立的文件、表單</th>
@@ -6519,18 +6514,29 @@ function loadClauses(){
 /* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
 function clauseRowHtml(c){
     c = c || {};
-    return '<tr data-id="'+(c.clause_id||'')+'" draggable="true">'
-      + '<td class="cl-drag" title="拖曳調整順序"><i class="fa fa-bars"></i> <span class="cl-seq"></span></td>'
-      + '<td><input type="checkbox" class="clF" data-f="is_header"'+(+c.is_header?' checked':'')+'></td>'
-      + '<td class="l"><textarea class="clF" data-f="clause_text" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.clause_text||'')+'</textarea></td>'
-      + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:34px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.doc_ref||'')+'</textarea>'
-      + '<span class="ia-op" style="margin-top:2px;" onclick="openDocPick(this)"><i class="fa fa-plus"></i> 選文件</span></td>'
-      + '<td class="l cl-task">'+clauseTaskHtml(c)+'</td>'
+    // 順序／標題列／品質管理系統要求／文件表單／作業項目全部由手冊附錄B 決定，只能看；只有過程群組與啟用可以改（2026-11-23 使用者要求）
+    var docs = (c.docs_view||[]).map(function(d){
+        return '<div title="'+esc(d.doc_name||'')+'">'+esc(d.doc_no)+' '+esc(d.doc_name||'')+'</div>';
+    }).join('') || '<span class="cl-task-hint">—</span>';
+    var tasks = (c.tasks||[]).map(function(t){ return '<span class="nk-task" style="margin:1px 3px 1px 0;">'+esc(t.task_name)+'</span>'; }).join('')
+              || '<span class="cl-task-hint">—</span>';
+    return '<tr data-id="'+(c.clause_id||'')+'"'+(+c.is_active?'':' style="opacity:.55;"')+'>'
+      + '<td><span class="cl-seq"></span></td>'
+      + '<td>'+(+c.is_header?'<i class="fa fa-check"></i>':'')+'</td>'
+      + '<td class="l" style="white-space:pre-wrap;">'+esc(c.clause_text||'')+'</td>'
+      + '<td class="l" style="font-size:12px;">'+docs+'</td>'
+      + '<td class="l cl-task">'+tasks+'</td>'
       + '<td class="cl-grp">'+clauseGroupHtml(c)+'</td>'
-      + '<td><input type="checkbox" class="clF" data-f="is_active"'+(c.clause_id===undefined||+c.is_active?' checked':'')+'></td>'
-      + '<td><span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span>'
-      + '<div class="cl-st"></div></td></tr>';
+      + '<td><input type="checkbox" class="clAct"'+(+c.is_active?' checked':'')+' title="附錄B已沒有的條文會自動停用"></td>'
+      + '<td><div class="cl-st"></div></td></tr>';
 }
+$('#clauseBody').on('change', '.clAct', function(){
+    var $tr = $(this).closest('tr');
+    $.post(API, {action:'clause_active', clause_id:$tr.data('id'), is_active:$(this).is(':checked')?1:''}, function(res){
+        $tr.css('opacity', $tr.find('.clAct').is(':checked') ? '' : .55);
+        $tr.find('.cl-st').text(res.ok?'已儲存':'儲存失敗');
+    }, 'json');
+});
 /* 條文所屬過程群組（COP1~SP02，可複選）：用下拉加入、標籤上的 × 移除，改了就直接存；標題列不用設 */
 var PG_CODES = ['COP1','COP2','COP3','COP4','MP01','MP02','SP01','SP02'];
 function clauseGroupChips(gs){
