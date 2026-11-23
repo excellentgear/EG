@@ -68,17 +68,33 @@ function oaEnabledCatIds(PDO $pdo): ?array {
 
 // 這份附件所屬的「訂單編號」底下目前有哪些料號（挑選跳窗的候選清單／後端守門都用這一份）。
 // 附件可能還在暫存批次(batch_key)階段（訂單都還沒建立），那時候料號由前端帶進來，這裡回空陣列。
-function oaSiblingParts(PDO $pdo, int $attId): array {
+function oaSiblingParts(PDO $pdo, int $attId, string $ooFallback = ''): array {
     try {
         $st = $pdo->prepare("SELECT ot.Order_oo FROM order_attachments a
                              JOIN order_track ot ON ot.Order_id = a.order_id WHERE a.id=?");
         $st->execute([$attId]);
         $oo = $st->fetchColumn();
+        if (!$oo) $oo = $ooFallback;   // 編輯中尚未存檔的暫存附件：用呼叫端帶來的訂單編號
         if (!$oo) return [];
         $st2 = $pdo->prepare("SELECT DISTINCT d_id FROM order_track WHERE Order_oo=? AND d_id<>'' ORDER BY d_id");
         $st2->execute([$oo]);
         return $st2->fetchAll(PDO::FETCH_COLUMN);
     } catch (Exception $e) { return []; }
+}
+
+// 編輯既有訂單時，剛上傳還沒存檔的暫存附件（order_id 為空）也要能做「頁面對應」：
+// 只有該附件的上傳者本人、且前端帶來的 order_id 真的存在時，才用那張訂單的訂單編號；其餘一律回空字串（維持原行為）。
+function oaTempOo(PDO $pdo, int $attId, int $uid): string {
+    $oid = intval($_POST['order_id'] ?? 0);
+    if ($oid <= 0 || $uid <= 0) return '';
+    try {
+        $st = $pdo->prepare("SELECT 1 FROM order_attachments WHERE id=? AND status='temp' AND order_id IS NULL AND uploaded_by=?");
+        $st->execute([$attId, $uid]);
+        if (!$st->fetchColumn()) return '';
+        $q = $pdo->prepare("SELECT Order_oo FROM order_track WHERE Order_id=?");
+        $q->execute([$oid]);
+        return (string)$q->fetchColumn();
+    } catch (Exception $e) { return ''; }
 }
 
 function oaFmtSize(int $bytes): string {
@@ -579,12 +595,13 @@ switch ($action) {
                              FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['order_oo'] === '') $row['order_oo'] = oaTempOo($pdo, $attId, (int)$uid);
         if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件，或這份附件還沒歸屬到訂單（請先存檔）']); break; }
         $mq = $pdo->prepare("SELECT part_no, pages FROM order_attachment_pages WHERE filename=? AND order_oo=?");
         $mq->execute([$row['filename'], $row['order_oo']]);
         echo json_encode(['success'=>true, 'order_oo'=>$row['order_oo'],
             'display_name'=>$row['original_name'] ?: $row['filename'],
-            'all_parts'=>oaSiblingParts($pdo, $attId),
+            'all_parts'=>oaSiblingParts($pdo, $attId, $row['order_oo']),
             'map'=>$mq->fetchAll(PDO::FETCH_KEY_PAIR)], JSON_UNESCAPED_UNICODE);
         break;
     }
@@ -599,8 +616,9 @@ switch ($action) {
                              FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['order_oo'] === '') $row['order_oo'] = oaTempOo($pdo, $attId, (int)$uid);
         if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
-        $all = oaSiblingParts($pdo, $attId);
+        $all = oaSiblingParts($pdo, $attId, $row['order_oo']);
         $clean = [];
         foreach ($in as $part => $spec) {
             $part = (string)$part;
@@ -644,6 +662,7 @@ switch ($action) {
         $st = $pdo->prepare("SELECT a.filename, COALESCE(ot.Order_oo,'') AS order_oo FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['order_oo'] === '') $row['order_oo'] = oaTempOo($pdo, $attId, (int)$uid);
         if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件，或這份附件還沒歸屬到訂單（請先存檔）']); break; }
         $maps = [];
         $mq = $pdo->prepare("SELECT category_id, part_no, pages FROM order_attachment_tag_pages WHERE filename=? AND order_oo=?");
@@ -662,10 +681,11 @@ switch ($action) {
         $st = $pdo->prepare("SELECT a.filename, a.category_ids, COALESCE(ot.Order_oo,'') AS order_oo FROM order_attachments a LEFT JOIN order_track ot ON ot.Order_id=a.order_id WHERE a.id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row && $row['order_oo'] === '') $row['order_oo'] = oaTempOo($pdo, $attId, (int)$uid);
         if (!$row || $row['order_oo'] === '') { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
         $has = array_map('intval', explode(',', (string)$row['category_ids']));
         $origId = oaOrigCatId($pdo);
-        $all = oaSiblingParts($pdo, $attId);
+        $all = oaSiblingParts($pdo, $attId, $row['order_oo']);
         $clean = [];
         foreach ($in as $cid => $pm) {
             $cid = (int)$cid;

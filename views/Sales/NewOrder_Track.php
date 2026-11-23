@@ -14302,7 +14302,8 @@ $stats = [
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 // 客戶訂單 PDF 內含多個料號的原圖：預覽縮圖、逐頁指定屬於哪個料號（只有已存檔、同訂單編號有多料號的 PDF 才給）
                 oaOriginPagesHtml(f) + oaTagPagesHtml(f, cats) +
-                ((f.status === 'active' && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
+                // 編輯既有訂單時，剛上傳還沒存檔的暫存附件（status=temp）也可立即做頁面對應（訂單編號已知；後端 oaTempOo 會再驗證）
+                (((f.status === 'active' || (f.status === 'temp' && !availableParts && (parseInt($('#hidden_Order_id').val()) || 0) > 0)) && /\.pdf$/i.test(f.filename || f.original_name || '') && showPart)
                     ? '<span class="oa-page-btn" style="cursor:pointer;color:#8a5a2b;font-size:10px;' + (oaHasAnyCat(cats, checkedIds) ? '' : 'display:none;') + '" title="預覽這份 PDF，依已勾選的標籤（原圖、規格書…），指定每一頁屬於哪個料號"><i class="fa fa-th"></i> 頁面對應</span>' : '') +
                 delHtml +
                 '</div>' +
@@ -14431,9 +14432,10 @@ $stats = [
             if (!cats.length) { showToast('請先勾選至少一個標籤', 'info'); return; }
             cats.sort(function(a, b) { return (b.orig ? 1 : 0) - (a.orig ? 1 : 0); }); // 原圖排最前
             // 點開即刷新：料號與既有對照一律跟後端要最新的（原圖走舊 action，其他標籤走 tag_page_map_get）
-            $.post(ORDER_ATTACH_API, { action: 'page_map_get', attachment_id: attId }, function(res) {
+            var opmOid = parseInt($('#hidden_Order_id').val()) || 0;
+            $.post(ORDER_ATTACH_API, { action: 'page_map_get', attachment_id: attId, order_id: opmOid }, function(res) {
                 if (!res.success) { showToast(res.message || '讀取失敗', 'info'); return; }
-                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_get', attachment_id: attId }, function(r2) {
+                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_get', attachment_id: attId, order_id: opmOid }, function(r2) {
                     var tmaps = (r2 && r2.success && r2.maps) ? r2.maps : {};
                     opm = { attId: attId, parts: res.all_parts || [], sets: {}, all: {}, cats: cats, cat: cats[0].id, active: (res.all_parts || [])[0] || '', numPages: 0, token: Date.now(), doc: null, focus: 0, bigTok: 0 };
                     cats.forEach(function(c) {
@@ -14574,13 +14576,13 @@ $stats = [
             }
             function saveTags(msg) {
                 if (!hasTag) { done(msg); return; }
-                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_save', attachment_id: opm.attId, maps: JSON.stringify(tagMaps) }, function(r) {
+                $.post(ORDER_ATTACH_API, { action: 'tag_page_map_save', attachment_id: opm.attId, order_id: (parseInt($('#hidden_Order_id').val()) || 0), maps: JSON.stringify(tagMaps) }, function(r) {
                     if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
                     done(r.message);
                 }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
             }
             if (origMap === null) { saveTags(); return; }
-            $.post(ORDER_ATTACH_API, { action: 'page_map_save', attachment_id: opm.attId, map: JSON.stringify(origMap) }, function(r) {
+            $.post(ORDER_ATTACH_API, { action: 'page_map_save', attachment_id: opm.attId, order_id: (parseInt($('#hidden_Order_id').val()) || 0), map: JSON.stringify(origMap) }, function(r) {
                 if (!r.success) { $('#opm-err').text(r.message || '儲存失敗').show(); return; }
                 saveTags(r.message);
             }, 'json').fail(function() { $('#opm-err').text('儲存失敗').show(); });
