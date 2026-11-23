@@ -2485,6 +2485,9 @@ function ia_case_required_missing(PDO $db, int $caseId): array
         if ($miss) $out[] = '第 ' . ($n + 1) . ' 列（' . (trim((string)($r['dept_name'] ?? '')) ?: '未填單位') . '）：' . implode('、', $miss);
     }
 
+    // 稽核員至少兩位，陪檢員不算（2026-11-23 老師建議，2026 年起）
+    if (($sh = ia_case_auditor_shortage($db, $caseId)) !== '') $out[] = $sh;
+
     /* 最後一個單位要在結束會議開始前 30 分鐘做完（2026-09-18 使用者回報：
        他把最後一列手動改成 15:30、每單位 60 分＝做到 16:30，已經超過 15:30，畫面卻沒有擋）。
        **只管與結束會議同一天的那幾列**，會議排在別天就沒有這個限制。
@@ -5409,4 +5412,90 @@ function ia_attach_del(PDO $db, int $attId): bool
     $db->prepare("UPDATE ia_attach SET is_deleted=1 WHERE att_id=?")->execute([$attId]);
     if (is_file($a['fs_path'])) @unlink($a['fs_path']);
     return true;
+}
+
+/* ======================================================================
+ * 2026-11-23 老師建議：同一次稽核的歸併、第N天、本次稽核最後一天
+ * ----------------------------------------------------------------------
+ * 「前後一個月內的稽核算同一次稽核」：同年度的通知單依稽核起日排序，
+ * 與前一群的最後稽核日相隔不超過 31 天就併成同一次；同一次裡依稽核起日排「第一天、第二天…」。
+ * 一律由日期即時推導，不存欄位（ia_case.seq_no 保留但不再當顯示依據，改了日期也不會對不起來）。
+ * 不符合通知單的稽核日期＝該次稽核最後一天（2026 年起適用，2025 年以前的舊單維持原樣）。
+ * ====================================================================== */
+const IA_ROUND_START_YEAR = 2026;
+const IA_ROUND_GAP_DAYS   = 31;
+const IA_NOTICE_LEAD_MONTHS = 3;
+
+function ia_round_cn(int $n): string
+{
+    $m = [1=>'一',2=>'二',3=>'三',4=>'四',5=>'五',6=>'六',7=>'七',8=>'八',9=>'九',10=>'十'];
+    return $m[$n] ?? (string)$n;
+}
+
+/** @return array<int,array> case_id => [round_no, day_no, day_cnt, round_last, label] */
+function ia_case_round_map(PDO $db, int $year): array
+{
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT case_id, audit_from, audit_to, notify_date FROM ia_case
+                             WHERE year=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$year]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) {
+        $r['f'] = (string)($r['audit_from'] ?: $r['notify_date']);
+        $r['t'] = (string)($r['audit_to'] ?: $r['f']);
+    }
+    unset($r);
+    usort($rows, function ($a, $b) { return strcmp($a['f'], $b['f']) ?: ((int)$a['case_id'] <=> (int)$b['case_id']); });
+    $groups = []; $gi = -1; $gEnd = '';
+    foreach ($rows as $r) {
+        if ($gi < 0 || strtotime($r['f']) - strtotime($gEnd) > IA_ROUND_GAP_DAYS * 86400) {
+            $gi++; $groups[$gi] = []; $gEnd = $r['t'];
+        }
+        $groups[$gi][] = $r;
+        if ($r['t'] > $gEnd) $gEnd = $r['t'];
+    }
+    foreach ($groups as $g => $list) {
+        $last = '';
+        foreach ($list as $r) if ($r['t'] > $last) $last = $r['t'];
+        $cnt = count($list);
+        foreach ($list as $d => $r) {
+            $label = '第' . ($g + 1) . '次' . ($cnt > 1 ? '　第' . ia_round_cn($d + 1) . '天' : '');
+            $out[(int)$r['case_id']] = ['round_no' => $g + 1, 'day_no' => $d + 1, 'day_cnt' => $cnt,
+                                        'round_last' => $last, 'label' => $label];
+        }
+    }
+    return $out;
+}
+
+/** 本次稽核最後一天；2026 年以前的舊單回傳 ''（不套用新規則） */
+function ia_case_round_last(PDO $db, int $caseId): string
+{
+    try {
+        $q = $db->prepare("SELECT year FROM ia_case WHERE case_id=?");
+        $q->execute([$caseId]);
+        $y = (int)$q->fetchColumn();
+    } catch (Throwable $e) { return ''; }
+    if ($y < IA_ROUND_START_YEAR) return '';
+    $m = ia_case_round_map($db, $y);
+    return (string)($m[$caseId]['round_last'] ?? '');
+}
+
+/** 稽核員至少兩位（陪檢員不算）。回傳說明，空字串＝合格；2026 年起適用。 */
+function ia_case_auditor_shortage(PDO $db, int $caseId): string
+{
+    try {
+        $q = $db->prepare("SELECT year, leader_id FROM ia_case WHERE case_id=?");
+        $q->execute([$caseId]);
+        $c = $q->fetch(PDO::FETCH_ASSOC);
+        if (!$c || (int)$c['year'] < IA_ROUND_START_YEAR) return '';
+        $q = $db->prepare("SELECT DISTINCT user_id FROM ia_case_dept_person
+                            WHERE case_id=? AND kind='auditor' AND user_id IS NOT NULL");
+        $q->execute([$caseId]);
+        $ids = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        if ((int)$c['leader_id']) $ids[] = (int)$c['leader_id'];
+        $n = count(array_unique($ids));
+    } catch (Throwable $e) { return ''; }
+    return $n >= 2 ? '' : '稽核員至少要有兩位（陪檢員不算；稽核組長也是稽核員），目前只有 ' . $n . ' 位。';
 }

@@ -1031,7 +1031,8 @@ $roleLabel = ia_role_label($perms);
                 <label>稽核件號</label><div><input type="text" id="cNo" readonly data-ro-always placeholder="存檔後依通知日期自動產生"></div>
                 <label>次別</label><div><input type="text" id="cSeq" readonly data-ro-always></div>
                 <label>通知日期<span style="color:#DD5138;">*</span></label>
-                <div><input type="date" id="cNotify"><div class="err-msg" id="errCNotify"></div></div>
+                <div><input type="date" id="cNotify"><div class="err-msg" id="errCNotify"></div>
+                    <div class="ia-hint" id="hintCLead" style="display:none;margin:4px 0 0;background:#FDF3E3;border-color:#E9C892;"></div></div>
                 <label>稽核組長</label><div><select id="cLeader" data-eg-filter="輸入人員姓名篩選…"></select></div>
                 <label>稽核起</label><div><input type="date" id="cFrom"></div>
                 <label>稽核迄</label><div><input type="date" id="cTo"><div class="err-msg" id="errCTo"></div></div>
@@ -2536,7 +2537,7 @@ function renderCases(){
         if (!meet) meet = '<span style="color:#a08356;">—</span>';
         h += '<tr>'
           + '<td>'+esc(r.case_no||'—')+'</td>'
-          + '<td>第'+esc(r.seq_no)+'次</td>'
+          + '<td>'+esc(r.seq_label||('第'+r.seq_no+'次'))+'</td>'
           + '<td>'+dispDate(r.notify_date)+'</td>'
           + '<td>'+(r.audit_from ? dispDate(r.audit_from)+'～'+dispDate(r.audit_to||r.audit_from) : '—')+'</td>'
           + '<td>'+esc(r.leader_name||'—')+'</td>'
@@ -2783,7 +2784,7 @@ function openCase(id){
 function openCaseRender(c){
     {
         $('#caseTitle').text('稽核通知單　'+(c.case_no||'')+'（'+(CASE_ST[c.status]||c.status)+'）');
-        $('#cNo').val(c.case_no||''); $('#cSeq').val('第'+c.seq_no+'次');
+        $('#cNo').val(c.case_no||''); $('#cSeq').val(c.seq_label||('第'+c.seq_no+'次')); CASE_ROUND_LAST = c.round_last||''; updateLeadHint();
         $('#cNotify').val(inputDate(c.notify_date)); $('#cFrom').val(inputDate(c.audit_from));
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
@@ -3302,6 +3303,31 @@ $(document).on('change', '#cFrom, #cTo, #cDeptBody input[data-f=audited_date]', 
    陪檢員／受稽日期／時間／預定完成改善，每一列都要填齊。
    **草稿存檔刻意不檢查**（現場本來就是邊排邊填），只有按「完成」＝這張單要發出去時才擋；
    後端 ia_case_required_missing() 用同一組規則再擋一次（鐵律8）。 */
+/* 2026-11-23 老師建議（2026 年起）：稽核通知單最好在稽核前三個月公布；只提醒不擋 */
+var CASE_ROUND_LAST = '';
+function leadShort(){
+    var n = $('#cNotify').val(), f = $('#cFrom').val();
+    if (!n || !f || f < '2026-01-01') return '';
+    var d = new Date(f + 'T00:00:00'); d.setMonth(d.getMonth() - 3);
+    var lim = d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+    return n > lim ? ('稽核通知單最好在稽核前三個月公布（' + dispDate(lim) + ' 以前），目前通知日期 ' + dispDate(n) + ' 晚了。') : '';
+}
+function updateLeadHint(){
+    var m = leadShort();
+    $('#hintCLead').toggle(!!m).text(m);
+}
+$(document).on('change input', '#cNotify,#cFrom', updateLeadHint);
+/* 稽核員至少兩位（陪檢員不算，稽核組長也是稽核員；2026 年起） */
+function auditorShortMsg(){
+    var f = $('#cFrom').val();
+    if (!f || f < '2026-01-01') return '';
+    var u = {};
+    function add(k){ var x = String(k||'').split(':')[0]; if (x) u[x] = 1; }
+    (CASE_ROWS||[]).forEach(function(r){ (r.auditor_keys||[]).forEach(add); });
+    add($('#cLeader').val());
+    var n = Object.keys(u).length;
+    return n >= 2 ? '' : '稽核員至少要有兩位（陪檢員不算，稽核組長也算稽核員），目前只有 ' + n + ' 位。';
+}
 function caseRequiredCheck(){
     $('#cDeptBody .cr').removeClass('err');
     $('#cDeptBody td').removeClass('err-cell');
@@ -3319,6 +3345,8 @@ function caseRequiredCheck(){
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
     });
     var over = (typeof caseTimeOverrun === 'function') ? caseTimeOverrun() : '';
+    var few = auditorShortMsg();
+    if (few) bad.push(few);
     if (!bad.length && !over) return true;
     $('#errCRequired').addClass('on').html(
         (bad.length ? ('這張通知單要發出去之前，下列必填欄位還沒填（已用紅色標出來）：<br>' + bad.join('<br>')) : '')
@@ -3349,6 +3377,10 @@ function caseSavePayload(){
 }
 $('#btnCaseSave').on('click', function(){
     if (!validateCase()) return;
+    var lm = leadShort();
+    if (lm && !confirm(lm + '
+
+仍要儲存嗎？')) return;
     $.post(API, caseSavePayload(), function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         // 稽核日期改過的話件號會跟著重編，要講出來（不然使用者只會覺得編號莫名其妙變了）
@@ -5124,12 +5156,20 @@ function openNcNew(pre){
     // 人員與職稱依這張單的稽核日期回推，回來才畫（清單沒到齊就畫＝空下拉）
     peopleAsof(pre.audit_date || META.today, function(){ openNcNewFill(pre); });
 }
+/* 不符合通知單的稽核日期＝本次稽核最後一天（2026 年起；開立時自動帶入，後端同規則再蓋一次） */
+function ncRoundLast(caseId){
+    var r = (CASES||[]).filter(function(c){ return String(c.case_id) === String(caseId); })[0];
+    return (r && r.round_last && String(r.round_last) >= '2026-01-01') ? inputDate(r.round_last) : '';
+}
+$(document).on('change', '#nnCase', function(){
+    var d = ncRoundLast($(this).val()); if (d) $('#nnDate').val(d);
+});
 function openNcNewFill(pre){
     $('#nnCase,#nnDept,#nnAuditee,#nnType').prop('disabled', false);
     var typeH = '<option value="">（請選擇）</option>';
     $.each(META.nc_types||{}, function(k,v){ typeH += '<option value="'+k+'">'+esc(v)+'</option>'; });
     $('#nnType').html(typeH); $('#nnCase').html(caseOptions(pre.case_id||''));
-    $('#nnDate').val(pre.audit_date || META.today);
+    $('#nnDate').val(ncRoundLast(pre.case_id) || pre.audit_date || META.today);
     $('#nnFact').val(pre.fact||''); $('#nnClause').val(pre.clause_ref||'');
     $('#nnFormNo').val(pre.ref_form_no||'');
     // 要求完成期限＝該受稽單位在稽核通知單上填的「預定完成改善」（2026-09-18 使用者要求）

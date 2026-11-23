@@ -517,7 +517,18 @@ case 'case_list': {
                    (SELECT COUNT(*) FROM ia_check k WHERE k.case_id=c.case_id AND COALESCE(k.is_deleted,0)=0) AS check_cnt
               FROM ia_case c WHERE " . implode(' AND ', $w) . " ORDER BY c.year DESC, c.seq_no DESC, c.case_id DESC";
     $st = $db->prepare($sql); $st->execute($p);
-    jout(['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+    $rowsOut = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 同一次稽核／第N天（2026-11-23 老師建議）：依日期即時推導，同年度算一次
+    $rmaps = [];
+    foreach ($rowsOut as &$ro) {
+        $y = (int)$ro['year'];
+        if (!isset($rmaps[$y])) $rmaps[$y] = ia_case_round_map($db, $y);
+        $ri = $rmaps[$y][(int)$ro['case_id']] ?? null;
+        $ro['seq_label'] = $ri['label'] ?? ('第' . $ro['seq_no'] . '次');
+        $ro['round_last'] = $ri['round_last'] ?? '';
+    }
+    unset($ro);
+    jout(['rows' => $rowsOut]);
 }
 
 case 'case_get': {
@@ -530,6 +541,9 @@ case 'case_get': {
     $st = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order, cd_id");
     $st->execute([$cid]);
     $c['depts'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    $rm = ia_case_round_map($db, (int)$c['year'])[$cid] ?? null;
+    $c['seq_label']  = $rm['label'] ?? ('第' . $c['seq_no'] . '次');
+    $c['round_last'] = $rm['round_last'] ?? '';
     // 稽核員／陪檢員可多位，人員一律由 ia_case_dept_person 帶出（舊資料會自動回退）
     $pmap = ia_cd_people_map($db, array_map(function ($d) { return (int)$d['cd_id']; }, $c['depts']), $c['depts']);
     foreach ($c['depts'] as &$_d) {
@@ -1957,6 +1971,10 @@ case 'nc_create': {
         $q->execute([$srcItem, $srcCode]);
         if ($dup = $q->fetchColumn()) jerr('這張訂單的這個檢核項目已經開過 ' . $dup . '，不重複開立', 409);
     }
+
+    /* 稽核日期一律寫「本次稽核最後一天」（2026-11-23 老師建議，2026 年起；開立時自動帶入）。
+       前端會先帶好，這裡是後端同規則再蓋一次（鐵律8），所以直打 API 也一樣。 */
+    if ($caseId && ($rl = ia_case_round_last($db, $caseId)) !== '') $ad = $rl;
 
     $db->beginTransaction();
     try {
