@@ -3199,7 +3199,9 @@ function renderCaseRows(){
         var eList = (r.escort_cands  && r.escort_cands.length)  ? r.escort_cands  : (META.escorts||[]);
         h += '<tr data-i="'+i+'">'
           + '<td style="text-align:center;">'+grpCheckCell(i, r, ro)+'</td>'
-          + '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+((ro||grpCodeOf(r))?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
+          + (grpCodeOf(r) && grpFirstIdx(r) !== i
+              ? '<td style="text-align:center;color:#b5a07a;"><input type="hidden" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'">〃</td>'
+              : '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+((ro||grpCodeOf(r))?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>')
           + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
           + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
           + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
@@ -8340,11 +8342,11 @@ function buildGroupRows(groups, pick){
     var def = unitEscortDefaults(), ok = {}, rows = [];
     (META.escorts||[]).forEach(function(p){ ok[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1; });
     groups.forEach(function(g){
-        var label = g.group_code + ' ' + g.group_name + '（第' + g.order + '順位）';
+        // 稽核起始主過程只顯示群組代號（COP1…SP02）；同一群組的各受稽單位各一列（陪檢員逐單位）
         var units = g.units.length ? g.units : [{dept_id:'', dept_name:''}];
         units.forEach(function(u){
             var r = newCaseRow();
-            r.start_process = label + (units.length > 1 ? ('－' + u.dept_name) : '');
+            r.start_process = g.group_code;
             r.dept_id = u.dept_id; r.audited_date = (pick && pick[g.group_code]) || '';
             r.escort_keys = (def[u.dept_id] || []).filter(function(k){ return ok[k]; });
             rows.push(r);
@@ -8362,6 +8364,7 @@ function grpOrderList(){
     CASE_ROWS.forEach(function(r){ var c = grpCodeOf(r); if (c && seen.indexOf(c) < 0) seen.push(c); });
     return seen;
 }
+function grpFirstIdx(r){ var c = grpCodeOf(r); for (var k = 0; k < CASE_ROWS.length; k++) if (grpCodeOf(CASE_ROWS[k]) === c) return k; return -1; }
 function grpDone(r){ if (r.main_done === undefined) r.main_done = !!r.audited_date; return !!r.main_done; }
 function grpAllDone(code){ return CASE_ROWS.filter(function(r){ return grpCodeOf(r) === code; }).every(grpDone); }
 function grpAnyDone(code){ return CASE_ROWS.some(function(r){ return grpCodeOf(r) === code && grpDone(r); }); }
@@ -8564,6 +8567,7 @@ function checkDupProcess(){
     $('#cDeptBody tr').each(function(){
         var v = String($(this).find('[data-f=start_process]').val()||'').trim().toLowerCase();
         if (v === '') return;
+        v += '|' + String($(this).find('[data-f=dept_id]').val()||'');     // 同一群組可有多個受稽單位，同群組＋同單位才算重複
         if (seen[v] !== undefined) { dup[seen[v]] = 1; dup[$(this).data('i')] = 1; }
         else seen[v] = $(this).data('i');
     });

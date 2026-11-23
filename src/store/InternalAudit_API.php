@@ -661,7 +661,7 @@ case 'case_save': {
 
         // ①同一張通知單裡，相同的稽核起始主過程不可重複
         if ($proc !== '') {
-            $k = mb_strtolower($proc);
+            $k = mb_strtolower($proc) . '|' . (int)iaInt($d['dept_id'] ?? '');   // 同群組可有多個受稽單位
             if (isset($seenProc[$k])) {
                 jerr('「' . $proc . '」在同一次稽核裡重複了（第 ' . ($seenProc[$k] + 1) . ' 列與第 ' . ($ri + 1) . ' 列）');
             }
