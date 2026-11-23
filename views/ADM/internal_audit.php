@@ -435,7 +435,7 @@ $roleLabel = ia_role_label($perms);
                 <th style="width:100px;">流程</th><th style="width:120px;">表單編號</th><th style="width:210px;">表單名稱</th>
                 <th style="width:80px;">份數</th><th style="width:92px;">狀態</th>
                 <th>目前情形／還缺什麼</th><th style="width:76px;">前往</th>
-            </tr></thead><tbody id="ckBody"></tbody></table></div>
+            </tr></thead><tbody id="ycBody"></tbody></table></div>
 
             <h4 style="font-size:15px;color:#8A5A2B;">即將到期／逾期的不符合改善</h4>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
@@ -2293,9 +2293,9 @@ function loadDash(){
    前端不再自己算一次「有沒有建、結案了沒」，否則兩邊遲早講出不同的答案（鐵律4）。 */
 var CK_LABEL = {ok:'已完成', doing:'進行中', todo:'尚未建立', warn:'要追蹤', na:'系統判不了'};
 function loadChecklist(){
-    $('#ckBody').html('<tr><td colspan="7" class="ia-empty">載入中…</td></tr>');
+    $('#ycBody').html('<tr><td colspan="7" class="ia-empty">載入中…</td></tr>');
     $.getJSON(API, {action:'year_checklist', year:YEAR}, function(res){
-        if (!res || !res.ok){ $('#ckBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>'); return; }
+        if (!res || !res.ok){ $('#ycBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>'); return; }
         var s = res.summary || {};
         $('#ckSum').text('已完成 '+(s.ok||0)+'　進行中 '+(s.doing||0)+'　尚未建立 '+(s.todo||0)
                         + ((s.warn||0) ? '　要追蹤 '+s.warn : '') + ((s.na||0) ? '　系統判不了 '+s.na : ''));
@@ -2323,9 +2323,9 @@ function loadChecklist(){
                + '<td class="l ck-cur"><div class="ck-label">'+esc(r.label||'')+'</div>'+note+miss+'</td>'
                + '<td>'+go+'</td></tr>';
         });
-        $('#ckBody').html(b || '<tr><td colspan="7" class="ia-empty">沒有資料</td></tr>');
+        $('#ycBody').html(b || '<tr><td colspan="7" class="ia-empty">沒有資料</td></tr>');
     }).fail(function(){
-        $('#ckBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>');
+        $('#ycBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>');
     });
 }
 $(document).on('click', '.ck-go', function(){ switchPane(String($(this).data('pane'))); });
@@ -4823,7 +4823,7 @@ function openCheck(id){
         var asLock = (CHK.kind === 'as');
         $('#btnCheckSave,#btnCheckDone').toggle(!ro);
         $('#btnCheckAddItem').toggle(!ro && !asLock);
-        $('#btnCheckAsReapply').toggle(asLock && !ro);
+        $('#btnCheckAsReapply').hide();
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
         renderCheckItems();
         renderCheckAutoBar(ro);
@@ -4912,7 +4912,7 @@ function renderCheckItems(){
     /* AS稽核查檢表＝全自動、內容一律唯讀（2026-09-22 使用者要求）：
        合格／不合格、所見證據或建議、備註一律由系統依「系統稽核紀錄表」帶入，欄位直接反灰，
        也不提供增列／刪列。要更新判定請按「重新自動判定」重新選一次來源（後端同規則再擋一次＝鐵律8）。 */
-    var lock = (k === 'as'), fro = ro || lock;
+    var lock = false, fro = ro;      // 2026-11-23 使用者要求：AS稽核查檢表由稽核員人工判定，不再自動帶入、不反灰
     var lockCss = fro ? 'background:#f5efe4;color:#6b5535;cursor:default;' : '';
     /* 過程群組（COP1~SP02）建立的 AS 查檢表：標題｜條文編號與名稱｜對應 AS 程序書｜對應 AS 文件（2026-11-23 老師建議） */
     var stepMode = (k === 'as') && (CHK.items||[]).some(function(x){ return x.ref_kind === 'as_step'; });
@@ -4980,7 +4980,7 @@ function renderCheckItems(){
         }
         // 結案前可以刪除某一列（已開過不符合通知單／矯正單的不給刪，那張單會變孤兒）
         // AS稽核查檢表整張表的內容都是系統帶的，連刪列都不給（題目要怎麼挑是建立當下決定的）
-        if (!fro && CAN_AUDIT && !it.nc_id && !it.car_id) {
+        if (!fro && CAN_AUDIT && !it.nc_id && !it.car_id && k !== 'as') {
             h = h.replace(/<\/td>$/, '<span class="ia-op danger" title="從這張查檢表刪除這一列"'
                 + ' onclick="delCheckItem(' + it.item_id + ',\'' + esc(String(it.col_b || it.col_a || '')).replace(/'/g, '') + '\')">'
                 + '<i class="fa fa-trash"></i></span></td>');
@@ -5021,7 +5021,6 @@ function ncBtnHtml(it, ro){
     /* AS稽核查檢表不開不符合通知單（2026-09-22 使用者要求）：那張表的不合格是從系統稽核紀錄表
        帶過來的，單要在**那一張**開才連得回真正查到問題的表單與違反條文；在這裡再開一張，
        同一件事會變成兩張單。已經有單號的仍然顯示得出來（點得進去看）。 */
-    if (k === 'as') return '';
     if (it.result==='ng' && !ro && CAN_AUDIT)
         return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
     return '';
@@ -5048,7 +5047,7 @@ function renderCheckAutoBar(ro){
     var msg = [];
     /* AS稽核查檢表：欄位全部反灰、不開不符合通知單，所以「還有幾項沒判定」「快去開單」這兩句
        在這裡都是誤導（人工什麼都做不了）。改成講清楚判定是哪裡來的、留白代表什麼、單要去哪開。 */
-    if (k === 'as') {
+    if (k === 'as' && false) {
         msg.push('本表<b>由系統依「系統稽核紀錄表」自動判定</b>：合格／不合格、所見證據或建議、備註'
             + '一律自動帶入，<b>欄位反灰不提供修改</b>。要更新判定請按下方「重新自動判定」重新選來源。');
         if (todo.length) msg.push('其中 <b>'+todo.length+'</b> 項<b>留白（未判定）</b>'
@@ -5320,7 +5319,6 @@ function collectCheckItems(){
     /* AS稽核查檢表的內容一律不由畫面回送（2026-09-22 使用者要求）：欄位是反灰唯讀的，
        這裡直接回空陣列＝存檔只會動表頭（標題／稽核日期／稽核人）。
        **收斂在這一處**，不要在各個呼叫端各自判斷一次，否則遲早有一條路把自動判定蓋掉。 */
-    if (CHK && CHK.kind === 'as') return [];
     var map = {};
     $('#ckBody .ckF').each(function(){
         var id = $(this).data('id');
